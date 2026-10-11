@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use wv_core::time::TimePoint;
 use wv_core::{World, WorldMeta};
 
+use crate::diagnostics::{derive_hints, Diagnostics};
 use crate::error::{IoError, IoResult};
 
 /// 加载 `maps/<id>/index.yaml` 下的全部地图节点（一层目录扫描）。
@@ -212,5 +213,26 @@ impl Project {
         // 触发引用完整性校验（失败即向上传播错误）。
         self.load_world()?;
         Ok(warnings)
+    }
+
+    /// **永不失败**的结构化诊断（ADR-0005）。
+    ///
+    /// 这是编辑器校验面板的入口，与 [`Self::validate`] 的区别：
+    ///
+    /// | | `validate()` | `diagnose()` |
+    /// |---|---|---|
+    /// | 悬空引用 | 返回 `Err`（**硬失败**） | 记为 `DiagLevel::Error` 条目 |
+    /// | 相遇未写事件 | 不产出 | 记为 `DiagLevel::Hint` 条目（**带定位锚点**）|
+    /// | 能否保存 | 有错误则不能 | **只要没有 Error 级就能存**（§7.5 V1）|
+    ///
+    /// 为什么需要它：`AGENTS.md` §7.5 V1 规定「校验只提示、不阻止」，
+    /// 但 `validate()` 的 `Err` 语义天然是硬阻断。两者共用同一套引用校验逻辑，
+    /// 避免「命令行说有问题、编辑器说没问题」。
+    ///
+    /// 载入失败（如 schema 版本不符）仍返回 `Err`——那不是数据质量问题，
+    /// 而是「根本读不了」，与本方法要处理的「能读但有瑕疵」不同。
+    pub fn diagnose(&self) -> IoResult<Diagnostics> {
+        let world = self.load_world()?;
+        Ok(derive_hints(&world))
     }
 }

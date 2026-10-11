@@ -29,7 +29,7 @@
 //! | **T2** | 无 `day` 的点 → 视为「顺序点」，由插值决定，**不参与校验** |
 //! | **T3** | 只填两端点的轨迹，其时间由两端点事件的时间范围给出 |
 
-use crate::{geometry::Point, id::Id, map::GeometryData, time::TimeSpan};
+use crate::{geometry::Point, id::Id, map::GeometryData, time::TimeSpan, time::TimelineQuery};
 
 /// 轨迹。对应 `tracks/<id>.yaml`。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -96,7 +96,8 @@ impl Track {
         if span <= 0.0 {
             return Some(p0);
         }
-        let u = (day - d0) as f32 / span;
+        // day_progress 自带 clamp 与 saturating_sub（wv-core/time.rs）。
+        let u = TimelineQuery::day_progress(day, d0, span);
         Some(Point {
             x: p0.x + (p1.x - p0.x) * u,
             y: p0.y + (p1.y - p0.y) * u,

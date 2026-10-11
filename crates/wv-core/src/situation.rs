@@ -139,6 +139,7 @@ mod tests {
             span: TimeSpan::new(from, to).unwrap(),
             place: None,
             participants: vec![],
+            narrative: None,
             outcome: None,
             effects: vec![],
         }

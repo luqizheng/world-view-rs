@@ -8,11 +8,13 @@
 //! - 二进制分块的读写与《二进制格式规格》绑定。
 
 pub mod binary;
+pub mod diagnostics;
 pub mod error;
 pub mod project;
 pub mod situation_io;
 pub mod terrain_bin;
 
+pub use diagnostics::{derive_hints, DiagAnchor, DiagLevel, Diagnostic, Diagnostics};
 pub use error::{IoError, IoResult};
 pub use project::Project;
 pub use terrain_bin::{

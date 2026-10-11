@@ -1,4 +1,11 @@
 //! 人物维度。每实体一文件（§5.4），对应 `characters/<id>.yaml`。
+//!
+//! ## 生卒：都是可选
+//!
+//! `born_at` / `died_at` **都是天数计数器**（`TimePoint`），
+//! 「康熙帝 1654-1722」里的年份由可插拔 `Calendar` 派生，不是存储值。
+//!
+//! 两者都**可留白**——留白是创作手段，不是数据缺失。
 
 use std::collections::HashMap;
 
@@ -21,6 +28,16 @@ pub struct Character {
     /// 出生时间（用于推算年龄）。天数计数器。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub born_at: Option<crate::time::TimePoint>,
+    /// 卒年（**可选**）。天数计数器，语义同 `born_at`。
+    ///
+    /// 2026-10-11 用户裁定：人物视图要显示「康熙帝(1654-1722)」，
+    /// 需要卒年。**刻意用 `Option` 而非必填**——绝大多数配角没有卒年，
+    /// 必填会逼出「填 0 或填个假年份」的噪声（同 `attributes` 用 map 的理由）。
+    ///
+    /// 显示层注意：`born_at` / `died_at` 是**天数计数器**，
+    /// 「1654 / 1722」这种年份由可插拔 `Calendar` 派生，不是存储值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub died_at: Option<crate::time::TimePoint>,
     /// 状态片段：位置、身份、能力等随时间变化的量。
     ///
     /// 注意「状态随时间变化」在本模型里的表达方式：

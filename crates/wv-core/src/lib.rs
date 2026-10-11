@@ -8,6 +8,7 @@
 //! - 历史状态以「带时间区间的状态片段」存储，不存「当前值」。
 
 pub mod distance;
+pub mod encounter;
 pub mod error;
 pub mod geometry;
 pub mod id;
@@ -17,7 +18,10 @@ pub mod time;
 pub mod track;
 pub mod unit;
 
+pub use character::Character;
+pub use encounter::{detect_encounter_hints, EncounterHint, EncounterInput, HintSeverity};
 pub use error::{CoreError, CoreResult};
+pub use event::Event;
 pub use id::{Id, IdError};
 pub use situation::{Situation, SituationStep};
 pub use time::{Calendar, TimePoint, TimeSpan};
