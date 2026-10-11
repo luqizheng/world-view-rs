@@ -93,10 +93,10 @@ impl Project {
 
     /// 加载完整世界。
     ///
-    /// 当前范围：元数据 + 时间轴 + 事件 + 人物 + 地图 + 距离图 + 事态 + 轨迹。
+    /// 当前范围：元数据 + 时间轴 + 事件 + 人物 + 地图 + 距离图 + 事态 + 单位 + 轨迹。
     /// 事态与轨迹加载后**立即做引用完整性校验**（`AGENTS.md` §7.2 硬约束）。
     pub fn load_world(&self) -> IoResult<World> {
-        use crate::situation_io::{load_dir, validate_situations_and_tracks};
+        use crate::situation_io::{load_dir, validate_situations_and_tracks, KnownIds};
 
         let timeline = {
             let path = self.root.join("timeline/axis.yaml");
@@ -116,6 +116,7 @@ impl Project {
         let situations: Vec<wv_core::situation::Situation> =
             load_dir(&self.root, "timeline/situations")?;
         let tracks: Vec<wv_core::track::Track> = load_dir(&self.root, "tracks")?;
+        let units: Vec<wv_core::unit::Unit> = load_dir(&self.root, "units")?;
         let maps: Vec<wv_core::map::MapNode> = load_maps(&self.root)?;
         let distances: wv_core::distance::DistanceGraph = {
             let path = self.root.join("distances/places.yaml");
@@ -140,13 +141,17 @@ impl Project {
         let map_ids: Vec<wv_core::Id> = maps.iter().map(|m| m.id.clone()).collect();
         let character_ids: Vec<wv_core::Id> = characters.iter().map(|c| c.id.clone()).collect();
         let place_ids: Vec<wv_core::Id> = distances.places.iter().map(|p| p.id.clone()).collect();
+        let unit_ids: Vec<wv_core::Id> = units.iter().map(|u| u.id.clone()).collect();
         validate_situations_and_tracks(
             &situations,
             &tracks,
-            &event_ids,
-            &map_ids,
-            &character_ids,
-            &place_ids,
+            KnownIds {
+                events: &event_ids,
+                maps: &map_ids,
+                characters: &character_ids,
+                places: &place_ids,
+                units: &unit_ids,
+            },
         )?;
 
         // 地形栅格：若地图声明了 raster，加载 terrain.bin。
@@ -165,6 +170,7 @@ impl Project {
             relations: Vec::new(),
             distances,
             situations,
+            units,
             tracks,
             terrain,
         })

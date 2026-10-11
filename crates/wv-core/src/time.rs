@@ -252,6 +252,28 @@ impl TimelineQuery {
         let t = TimePoint::from_day(t);
         spans.iter().filter(|(span, _)| span.contains(&t)).collect()
     }
+
+    /// day 空间插值（`ANIMATION_SPEC` §5.1）：过渡进度是 `current_day` 的**纯函数**。
+    ///
+    /// 返回 `clamp((current_day - boundary_day) / delta_day, 0.0, 1.0)`：
+    /// - `current_day < boundary_day` → `0.0`（尚未跨过边界）；
+    /// - `current_day >= boundary_day + delta_day` → `1.0`（过渡已完成）；
+    /// - `delta_day <= 0.0` → `0.0`（零长度段视为「未开始」，同时避免除零 panic）。
+    ///
+    /// 偏移量用 [`i64::saturating_sub`] 计算：极端输入（如 `current_day` 接近
+    /// `i64::MAX` 而 `boundary_day` 为负）下裸减法会 panic，饱和减法则把结果
+    /// 钳到 `i64::MAX` / `i64::MIN`，经下面的 `clamp(0,1)` 收敛为 `1.0` / `0.0`，
+    /// 语义正确。正常输入下 `saturating_sub` 与裸减法结果完全相同。
+    ///
+    /// 本函数**只做线性归一化**，不含 easing 曲线——`ease-out-cubic` 等是调用方
+    /// 在 day 参数上的可选加工（`ANIMATION_SPEC` §5.1 / §5.3），不进数据层。
+    pub fn day_progress(current_day: i64, boundary_day: i64, delta_day: f32) -> f32 {
+        if delta_day <= 0.0 {
+            return 0.0;
+        }
+        let offset = current_day.saturating_sub(boundary_day);
+        ((offset as f32) / delta_day).clamp(0.0, 1.0)
+    }
 }
 
 #[cfg(test)]
@@ -339,6 +361,59 @@ mod tests {
 
         let miss = TimelineQuery::at(&spans, 480);
         assert!(miss.is_empty());
+    }
+
+    #[test]
+    fn day_progress_interpolates_linearly_inside_band() {
+        // 段内中点：boundary=100, delta=10, current=105 → 0.5
+        let p = TimelineQuery::day_progress(105, 100, 10.0);
+        assert!((p - 0.5).abs() < 1e-6, "got {}", p);
+    }
+
+    #[test]
+    fn day_progress_clamps_before_boundary_to_zero() {
+        let p = TimelineQuery::day_progress(50, 100, 10.0);
+        assert_eq!(p, 0.0, "未跨过边界应返回 0.0");
+    }
+
+    #[test]
+    fn day_progress_clamps_after_band_to_one() {
+        let p = TimelineQuery::day_progress(9999, 100, 10.0);
+        assert_eq!(p, 1.0, "越过终点应返回 1.0");
+    }
+
+    #[test]
+    fn day_progress_zero_length_band_returns_zero_without_panic() {
+        // delta_day == 0.0：零长度段视为未开始，且不得除零 panic。
+        let p = TimelineQuery::day_progress(100, 100, 0.0);
+        assert_eq!(p, 0.0, "零长度段应返回 0.0");
+        // 负 delta 同样安全。
+        let q = TimelineQuery::day_progress(100, 100, -1.0);
+        assert_eq!(q, 0.0, "负 delta 应返回 0.0");
+    }
+
+    #[test]
+    fn day_progress_at_exact_boundaries() {
+        // 恰好等于起始边界 → 0.0
+        let start = TimelineQuery::day_progress(100, 100, 10.0);
+        assert_eq!(start, 0.0, "起点应返回 0.0");
+        // 恰好等于终点边界 → 1.0
+        let end = TimelineQuery::day_progress(110, 100, 10.0);
+        assert_eq!(end, 1.0, "终点应返回 1.0");
+    }
+
+    #[test]
+    fn day_progress_does_not_panic_on_extreme_day_values() {
+        // 用 black_box 从常量派生运行期值，避免编译器常量折叠掉溢出。
+        // 正向饱和：current 极大、boundary 极负 → 偏移饱和到 i64::MAX → 1.0。
+        let hi = std::hint::black_box(i64::MAX - 1);
+        let lo = std::hint::black_box(i64::MIN + 1);
+        let up = TimelineQuery::day_progress(hi, lo, 10.0);
+        assert_eq!(up, 1.0, "正向溢出应饱和为 1.0");
+
+        // 负向饱和：current 极负、boundary 极大 → 偏移饱和到 i64::MIN → 0.0。
+        let down = TimelineQuery::day_progress(lo, hi, 10.0);
+        assert_eq!(down, 0.0, "负向溢出应饱和为 0.0");
     }
 
     #[test]

@@ -1,0 +1,7 @@
+# 单位：沈砚（示例）· ADR-0004
+# 单人移动也建一个 Unit —— Character 与 Unit 分离，
+# Unit 通过 members **引用** Character，不复制角色本身。
+id: unit_shenyan
+name: 沈砚
+members:
+  - char_shenyan

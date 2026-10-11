@@ -15,12 +15,14 @@ pub mod map;
 pub mod situation;
 pub mod time;
 pub mod track;
+pub mod unit;
 
 pub use error::{CoreError, CoreResult};
 pub use id::{Id, IdError};
 pub use situation::{Situation, SituationStep};
 pub use time::{Calendar, TimePoint, TimeSpan};
 pub use track::{Track, Waypoint};
+pub use unit::Unit;
 
 /// 工程级元数据。对应工程根目录的 `world.yaml`。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -46,10 +48,13 @@ fn default_version() -> String {
     "0.1".to_string()
 }
 
-/// 顶层世界聚合：五个维度的统一入口。
+/// 顶层世界聚合：全部维度的统一入口。
 ///
-/// 注意：这是一个**只读快照**的聚合视图，而非可变的全局单例。
-/// 编辑操作通过 `wv-edit` 的命令产生新的聚合，而非原地修改。
+/// **关于可变性**（2026-10-11 用户裁定，见 `AGENTS.md` §2.1）：
+/// 本类型是**数据聚合**，不是「不可变」的承诺。`wv-app` 持有一个**可变工作副本**
+/// 并在其上驱动编辑流程，最终经 `wv-edit` 的 `EditCommand` 落到 YAML；
+/// **渲染层**对它的访问仍是只读的（`WorldProjection`）。
+/// 一句话：**「谁有权改」由持有者与编辑链决定，不由本类型决定。**
 #[derive(Debug, Clone, Default)]
 pub struct World {
     /// 工程元数据。
@@ -66,9 +71,11 @@ pub struct World {
     pub relations: Vec<relation::Relation>,
     /// 距离图。
     pub distances: distance::DistanceGraph,
-    /// 事态（事件的组织层，基线 §2.7）。
+    /// 事态（**归纳容器**：收拢事件与单位，基线 §1.1 / §2.7）。
     pub situations: Vec<situation::Situation>,
-    /// 轨迹（挂在事态节点上）。
+    /// 单位（在地图上独立运动的主体，ADR-0004）。
+    pub units: Vec<unit::Unit>,
+    /// 轨迹（运动的主体是 `unit`；事态节点通过 ID 引用，见 ADR-0004）。
     pub tracks: Vec<track::Track>,
     /// 主地形栅格网格。
     ///

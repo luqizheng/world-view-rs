@@ -17,6 +17,9 @@ steps:
   - event: evt_qingyun_founding
     focus: true
     pause_secs: 1.5
+# units：本事实涉及的单位（事态是归纳容器，ADR-0004）。
+units:
+  - unit_shenyan
 # maps：本事实涉及的图。
 maps:
   - world_main

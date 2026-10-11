@@ -36,6 +36,12 @@ pub struct Situation {
     /// 播放时锁定在本区间内循环（基线 §1.8）。
     #[serde(flatten)]
     pub span: TimeSpan,
+    /// 本事实涉及的**单位**（归纳容器，ADR-0004）。与 `steps` 平行。
+    ///
+    /// **不直接列角色**——角色只能经 `Unit.members` 间接进入；
+    /// 直接再列一份就是冗余（两个真相）。
+    #[serde(default)]
+    pub units: Vec<Id>,
     /// 可选的**叙事顺序**覆盖（D1 补充）：供倒叙 / 插叙编排。
     ///
     /// - `None`：按时间派生；
@@ -162,6 +168,7 @@ mod tests {
             // steps 刻意乱序——顺序必须由时间派生，而非列表位置。
             steps: vec![step("evt_c"), step("evt_a"), step("evt_b")],
             span: TimeSpan::new(100, 310).unwrap(),
+            units: vec![],
             narrative_order: None,
             maps: vec![],
             protagonist: None,
@@ -183,6 +190,7 @@ mod tests {
             summary: None,
             steps: vec![step("evt_b"), step("evt_a")],
             span: TimeSpan::new(100, 110).unwrap(),
+            units: vec![],
             narrative_order: None,
             maps: vec![],
             protagonist: None,
@@ -208,6 +216,7 @@ mod tests {
             summary: None,
             steps: vec![step("evt_a"), step("evt_b"), step("evt_c")],
             span: TimeSpan::new(100, 310).unwrap(),
+            units: vec![],
             // 倒叙：先讲 c，再讲 a；b 未被覆盖 → 追加其后。
             narrative_order: Some(vec![Id::new_unchecked("evt_c"), Id::new_unchecked("evt_a")]),
             maps: vec![],
@@ -230,6 +239,7 @@ mod tests {
             summary: None,
             steps: vec![step("evt_a"), step("evt_missing")],
             span: TimeSpan::new(100, 110).unwrap(),
+            units: vec![],
             narrative_order: None,
             maps: vec![],
             protagonist: None,

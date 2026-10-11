@@ -33,6 +33,9 @@ pub struct PointerOverUi {
 }
 
 /// 每帧开头更新「指针是否在 UI 上」。放在 `PreUpdate`。
+///
+/// **必须排在 `EguiPreUpdateSet::InitContexts` 之后**（见 gui.rs 的 `.after()`）：
+/// 否则首帧 egui 上下文尚未建立，`ctx_mut()` 会 panic 导致启动即崩溃。
 pub fn poll_egui_wants_input(mut contexts: EguiContexts, mut flag: ResMut<PointerOverUi>) {
     let ctx = contexts.ctx_mut();
     flag.wants_pointer = ctx.wants_pointer_input();

@@ -3,17 +3,23 @@
 //! `AGENTS.md` §3：YAML 是 source of truth，Bevy ECS 只是投影。
 //! 本模块的资源分三类：
 //!
-//! 1. [`WorldProjection`]：`World` 的只读快照（由 `wv-io` 加载，`wv-edit` 修改）。
+//! 1. [`WorldProjection`]：`World` 的**可变工作副本**（由 `wv-io` 加载，`wv-edit` 修改）。
+//!    注意：`wv-app` 持有它不违反 `AGENTS.md` §2.1——真正的 source of truth 是磁盘
+//!    YAML，这里只是编辑器的工作区；约束的是**改动路径**，一律经 `wv-edit` 的
+//!    `EditCommand` / `History`（§3.3），不得由 System 直接改。
 //! 2. [`PlaybackState`]：`current_day` 等**视图状态**（不是世界数据，基线 §2.14）。
 //! 3. [`ViewState`]：相机缩放、当前地图、视图模式、图层可见性。
 
 use bevy::prelude::*;
 use wv_core::World;
 
-/// 世界数据的投影。**渲染层只读它，不做任何时间比较**（`AGENTS.md` §3.2）。
+/// 世界的**可变工作副本**。渲染层**只读**它，且不做任何时间比较（`AGENTS.md` §3.2）。
 ///
 /// 所有「某时刻的世界状态」都必须经 [`wv_core::time::TimelineQuery::at`] 求出，
 /// 结果写入 [`super::projection`] 下的渲染资源，渲染 System 只读那些资源。
+///
+/// **写入路径**：只有编辑链（[`super::editing`]）可以改它，且必须把改动包成
+/// `wv-edit` 的 `EditCommand` 经 `History` 提交（§3.3），System 不得直接改。
 #[derive(Resource, Default)]
 pub struct WorldProjection {
     pub world: World,
@@ -237,9 +243,9 @@ impl Panel {
     /// 默认位置（首次打开 / 重置位置时用）。坐标单位是窗口逻辑像素。
     pub fn default_pos(self) -> [f32; 2] {
         match self {
-            Panel::MapTree => [12.0, 44.0],
+            Panel::MapTree => [12.0, 156.0], // 与 Brush 同列但纵向错开，避免完全重合
             Panel::Layers => [12.0, 300.0],
-            Panel::Brush => [12.0, 44.0], // 与 MapTree 同列，叠开时用户可拖
+            Panel::Brush => [12.0, 44.0],
             Panel::Minimap => [1000.0, 44.0],
             Panel::Timeline => [12.0, 620.0],
             Panel::Event => [320.0, 120.0],

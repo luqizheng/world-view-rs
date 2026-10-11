@@ -159,14 +159,25 @@ fn float_window(
 }
 
 /// 地图树面板（P-1）。S3 骨架只有单张图，先给出结构占位。
-pub fn panel_map_tree(mut contexts: EguiContexts, mut panels: ResMut<PanelState>, view: Res<ViewState>) {
+pub fn panel_map_tree(
+    mut contexts: EguiContexts,
+    mut panels: ResMut<PanelState>,
+    view: Res<ViewState>,
+) {
     let ctx: &mut egui::Context = contexts.ctx_mut();
-    float_window(ctx, &mut panels, Panel::MapTree, [200.0, 280.0], true, |ui| {
-        ui.label("World → Region → City → Interior");
-        ui.separator();
-        let _ = ui.selectable_label(true, format!("🌍 {}", view.current_map));
-        ui.weak("（子图层级在 S12 后展开）");
-    });
+    float_window(
+        ctx,
+        &mut panels,
+        Panel::MapTree,
+        [200.0, 280.0],
+        true,
+        |ui| {
+            ui.label("World → Region → City → Interior");
+            ui.separator();
+            let _ = ui.selectable_label(true, format!("🌍 {}", view.current_map));
+            ui.weak("（子图层级在 S12 后展开）");
+        },
+    );
 }
 
 /// 图层管理面板（P-2）。
@@ -176,14 +187,21 @@ pub fn panel_layers(
     mut view: ResMut<ViewState>,
 ) {
     let ctx: &mut egui::Context = contexts.ctx_mut();
-    float_window(&ctx, &mut panels, Panel::Layers, [200.0, 160.0], true, |ui| {
-        ui.checkbox(&mut view.terrain_visible, "地形");
-        ui.checkbox(&mut view.events_visible, "事件点");
-        ui.checkbox(&mut view.tracks_visible, "轨迹");
-        ui.checkbox(&mut view.roads_visible, "道路");
-        ui.separator();
-        ui.label(format!("缩放: {:.2}×", view.scale));
-    });
+    float_window(
+        ctx,
+        &mut panels,
+        Panel::Layers,
+        [200.0, 160.0],
+        true,
+        |ui| {
+            ui.checkbox(&mut view.terrain_visible, "地形");
+            ui.checkbox(&mut view.events_visible, "事件点");
+            ui.checkbox(&mut view.tracks_visible, "轨迹");
+            ui.checkbox(&mut view.roads_visible, "道路");
+            ui.separator();
+            ui.label(format!("缩放: {:.2}×", view.scale));
+        },
+    );
 }
 
 /// **地形设计器**（P-3，用户 1.1）：紧凑 Photoshop 式浮动窗。
@@ -197,7 +215,7 @@ pub fn panel_brush(
     grid: Res<GridConfig>,
 ) {
     let ctx: &mut egui::Context = contexts.ctx_mut();
-    float_window(&ctx, &mut panels, Panel::Brush, [176.0, 300.0], true, |ui| {
+    float_window(ctx, &mut panels, Panel::Brush, [176.0, 300.0], true, |ui| {
         ui.checkbox(&mut brush.enabled, "启用笔刷");
         ui.separator();
 
@@ -253,65 +271,81 @@ pub fn panel_minimap(
     grid: Res<GridConfig>,
 ) {
     let ctx: &mut egui::Context = contexts.ctx_mut();
-    float_window(&ctx, &mut panels, Panel::Minimap, [200.0, 260.0], true, |ui| {
-        // ---- 缩略图 ----
-        let side = 168.0;
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
-        let painter = ui.painter();
-        // 底（地表色，用美术 §1.4.2 的 core 令牌近似）
-        painter.rect_filled(rect, 2.0_f32, egui::Color32::from_rgb(0x2A, 0x2D, 0x33));
-        painter.rect_stroke(
-            rect,
-            2.0_f32,
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(0x4A, 0x4E, 0x57)),
-        );
-        // 视口矩形（由相机中心 + 缩放派生）
-        let half = 1.0 / view.scale.max(1e-4);
-        let cx = 0.5 + (view.camera_center.x / (grid.cell_size * 512.0)).clamp(-0.5, 0.5);
-        let cy = 0.5 + (view.camera_center.y / (grid.cell_size * 512.0)).clamp(-0.5, 0.5);
-        let vw = (half * 0.5).clamp(0.05, 1.0);
-        let vp = egui::Rect::from_center_size(
-            egui::pos2(rect.left() + rect.width() * cx, rect.top() + rect.height() * cy),
-            egui::vec2(rect.width() * vw, rect.height() * vw),
-        );
-        painter.rect_stroke(
-            vp,
-            1.0_f32,
-            egui::Stroke::new(1.5, egui::Color32::from_rgb(0xE8, 0xB3, 0x4D)),
-        );
-        // 点击小地图 → 把相机中心移过去
-        if response.clicked() {
-            if let Some(p) = response.interact_pointer_pos() {
-                let nx = (p.x - rect.left()) / rect.width() - 0.5;
-                let ny = (p.y - rect.top()) / rect.height() - 0.5;
-                view.camera_center = Vec2::new(
-                    nx * grid.cell_size * 512.0,
-                    ny * grid.cell_size * 512.0,
-                );
+    float_window(
+        ctx,
+        &mut panels,
+        Panel::Minimap,
+        [200.0, 260.0],
+        true,
+        |ui| {
+            // ---- 缩略图 ----
+            let side = 168.0;
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
+            let painter = ui.painter();
+            // 底（地表色，用美术 §1.4.2 的 core 令牌近似）
+            painter.rect_filled(rect, 2.0_f32, egui::Color32::from_rgb(0x2A, 0x2D, 0x33));
+            painter.rect_stroke(
+                rect,
+                2.0_f32,
+                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(0x4A, 0x4E, 0x57)),
+            );
+            // 视口矩形（由相机中心 + 缩放派生）
+            let half = 1.0 / view.scale.max(1e-4);
+            let cx = 0.5 + (view.camera_center.x / (grid.cell_size * 512.0)).clamp(-0.5, 0.5);
+            let cy = 0.5 + (view.camera_center.y / (grid.cell_size * 512.0)).clamp(-0.5, 0.5);
+            let vw = (half * 0.5).clamp(0.05, 1.0);
+            let vp = egui::Rect::from_center_size(
+                egui::pos2(
+                    rect.left() + rect.width() * cx,
+                    rect.top() + rect.height() * cy,
+                ),
+                egui::vec2(rect.width() * vw, rect.height() * vw),
+            );
+            painter.rect_stroke(
+                vp,
+                1.0_f32,
+                egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(0xE8, 0xB3, 0x4D)),
+            );
+            // 点击小地图 → 把相机中心移过去
+            if response.clicked() {
+                if let Some(p) = response.interact_pointer_pos() {
+                    let nx = (p.x - rect.left()) / rect.width() - 0.5;
+                    let ny = (p.y - rect.top()) / rect.height() - 0.5;
+                    view.camera_center =
+                        Vec2::new(nx * grid.cell_size * 512.0, ny * grid.cell_size * 512.0);
+                }
             }
-        }
-        ui.add_space(4.0);
+            ui.add_space(4.0);
 
-        // ---- 图层开关（用户 1.2 明确要求）----
-        ui.separator();
-        ui.strong("图层");
-        ui.checkbox(&mut view.terrain_visible, "地形");
-        ui.checkbox(&mut view.events_visible, "事件");
-        ui.checkbox(&mut view.tracks_visible, "轨迹");
-        ui.checkbox(&mut view.roads_visible, "道路");
-    });
+            // ---- 图层开关（用户 1.2 明确要求）----
+            ui.separator();
+            ui.strong("图层");
+            ui.checkbox(&mut view.terrain_visible, "地形");
+            ui.checkbox(&mut view.events_visible, "事件");
+            ui.checkbox(&mut view.tracks_visible, "轨迹");
+            ui.checkbox(&mut view.roads_visible, "道路");
+        },
+    );
 }
 
 /// 属性检查器（P-4）。
 pub fn panel_inspector(mut contexts: EguiContexts, mut panels: ResMut<PanelState>) {
     let ctx: &mut egui::Context = contexts.ctx_mut();
-    float_window(&ctx, &mut panels, Panel::Inspector, [260.0, 220.0], true, |ui| {
-        ui.weak("未选中对象");
-        ui.separator();
-        ui.label("在图上点选地块/事件/人物后，此处显示其全部属性。");
-        ui.add_space(4.0);
-        ui.weak("（选择系统属 S12 后）");
-    });
+    float_window(
+        ctx,
+        &mut panels,
+        Panel::Inspector,
+        [260.0, 220.0],
+        true,
+        |ui| {
+            ui.weak("未选中对象");
+            ui.separator();
+            ui.label("在图上点选地块/事件/人物后，此处显示其全部属性。");
+            ui.add_space(4.0);
+            ui.weak("（选择系统属 S12 后）");
+        },
+    );
 }
 
 /// 底部时间轴 + 播放控件（P-5，基线 §1.8）。
@@ -325,75 +359,86 @@ pub fn panel_timeline(
 ) {
     let ctx: &mut egui::Context = contexts.ctx_mut();
     let mut open_event = false;
-    float_window(&ctx, &mut panels, Panel::Timeline, [560.0, 150.0], true, |ui| {
-        ui.horizontal(|ui| {
-            let play_label = if playback.playing { "⏸ 暂停" } else { "▶ 播放" };
-            if ui.button(play_label).clicked() {
-                playback.playing = !playback.playing;
-            }
-            for s in [1.0f32, 5.0, 30.0] {
-                if ui
-                    .selectable_label(
-                        (playback.speed - s).abs() < f32::EPSILON,
-                        format!("{s:.0}天/秒"),
-                    )
-                    .clicked()
-                {
-                    playback.speed = s;
+    float_window(
+        ctx,
+        &mut panels,
+        Panel::Timeline,
+        [560.0, 150.0],
+        true,
+        |ui| {
+            ui.horizontal(|ui| {
+                let play_label = if playback.playing {
+                    "⏸ 暂停"
+                } else {
+                    "▶ 播放"
+                };
+                if ui.button(play_label).clicked() {
+                    playback.playing = !playback.playing;
                 }
-            }
-            ui.separator();
-            // **事件登记入口**（用户 1.4）
-            if ui.button("＋ 登记事件").clicked() {
-                open_event = true;
-            }
-            ui.separator();
-            let date = projection
-                .world
-                .timeline
-                .as_ref()
-                .map(|tl| tl.calendar.format(playback.current_day))
-                .unwrap_or_else(|| format!("@day{}", playback.current_day));
-            ui.label(date);
-        });
-
-        ui.add_space(4.0);
-
-        let mut day = playback.current_day as f64;
-        ui.horizontal(|ui| {
-            if ui.small_button("|◀").clicked() {
-                playback.current_day = playback.range_from;
-            }
-            if ui.small_button("◀").clicked() {
-                playback.current_day = (playback.current_day - 30).max(playback.range_from);
-            }
-            if ui.small_button("▶|").clicked() {
-                playback.current_day = playback.range_to;
-            }
-            ui.add(
-                egui::Slider::new(
-                    &mut day,
-                    (playback.range_from as f64)..=(playback.range_to as f64),
-                )
-                .show_value(false),
-            );
-        });
-        playback.current_day = day as i64;
-
-        let situations = &projection.world.situations;
-        if !situations.is_empty() {
-            ui.horizontal_wrapped(|ui| {
-                ui.label("事态:");
-                for sit in situations {
-                    if ui.selectable_label(false, &sit.name).clicked() {
-                        playback.range_from = sit.span.from;
-                        playback.range_to = sit.span.to.unwrap_or(sit.span.from + 365);
-                        playback.current_day = playback.range_from;
+                for s in [1.0f32, 5.0, 30.0] {
+                    if ui
+                        .selectable_label(
+                            (playback.speed - s).abs() < f32::EPSILON,
+                            format!("{s:.0}天/秒"),
+                        )
+                        .clicked()
+                    {
+                        playback.speed = s;
                     }
                 }
+                ui.separator();
+                // **事件登记入口**（用户 1.4）
+                if ui.button("＋ 登记事件").clicked() {
+                    open_event = true;
+                }
+                ui.separator();
+                let date = projection
+                    .world
+                    .timeline
+                    .as_ref()
+                    .map(|tl| tl.calendar.format(playback.current_day))
+                    .unwrap_or_else(|| format!("@day{}", playback.current_day));
+                ui.label(date);
             });
-        }
-    });
+
+            ui.add_space(4.0);
+
+            let mut day = playback.current_day as f64;
+            ui.horizontal(|ui| {
+                if ui.small_button("|◀").clicked() {
+                    playback.current_day = playback.range_from;
+                }
+                if ui.small_button("◀").clicked() {
+                    playback.current_day = (playback.current_day - 30).max(playback.range_from);
+                }
+                if ui.small_button("▶|").clicked() {
+                    playback.current_day = playback.range_to;
+                }
+                ui.add(
+                    egui::Slider::new(
+                        &mut day,
+                        (playback.range_from as f64)..=(playback.range_to as f64),
+                    )
+                    .show_value(false),
+                );
+            });
+            playback.current_day = day as i64;
+
+            let situations = &projection.world.situations;
+            if !situations.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("事态:");
+                    for sit in situations {
+                        if ui.selectable_label(false, &sit.name).clicked() {
+                            playback.range_from = sit.span.from;
+                            playback.range_to = sit.span.to.unwrap_or(sit.span.from + 365);
+                            playback.current_day = playback.range_from;
+                        }
+                    }
+                });
+            }
+        },
+    );
 
     if open_event {
         panels.set_visible(Panel::Event, true);
@@ -407,45 +452,66 @@ pub fn panel_situation(
     projection: Res<WorldProjection>,
 ) {
     let ctx: &mut egui::Context = contexts.ctx_mut();
-    float_window(&ctx, &mut panels, Panel::Situation, [300.0, 260.0], true, |ui| {
-        let sits = &projection.world.situations;
-        if sits.is_empty() {
-            ui.weak("暂无已登记事态");
-        } else {
-            for s in sits {
-                ui.group(|ui| {
-                    ui.strong(&s.name);
-                    let span = match s.span.to {
-                        Some(to) => format!("@day{} – @day{}", s.span.from, to),
-                        None => format!("@day{} – 至今", s.span.from),
-                    };
-                    ui.label(span);
-                });
+    float_window(
+        ctx,
+        &mut panels,
+        Panel::Situation,
+        [300.0, 260.0],
+        true,
+        |ui| {
+            let sits = &projection.world.situations;
+            if sits.is_empty() {
+                ui.weak("暂无已登记事态");
+            } else {
+                for s in sits {
+                    ui.group(|ui| {
+                        ui.strong(&s.name);
+                        let span = match s.span.to {
+                            Some(to) => format!("@day{} – @day{}", s.span.from, to),
+                            None => format!("@day{} – 至今", s.span.from),
+                        };
+                        ui.label(span);
+                    });
+                }
             }
-        }
-    });
+        },
+    );
 }
 
 /// 势力编辑（P-6）。
 pub fn panel_faction(mut contexts: EguiContexts, mut panels: ResMut<PanelState>) {
     let ctx: &mut egui::Context = contexts.ctx_mut();
-    float_window(&ctx, &mut panels, Panel::Faction, [280.0, 240.0], true, |ui| {
-        ui.weak("势力层未加载");
-        ui.separator();
-        ui.label("势力层 / 势力 / 归属关系");
-        ui.weak("（D5：几何绘制延后，模型在 S12 落地）");
-    });
+    float_window(
+        ctx,
+        &mut panels,
+        Panel::Faction,
+        [280.0, 240.0],
+        true,
+        |ui| {
+            ui.weak("势力层未加载");
+            ui.separator();
+            ui.label("势力层 / 势力 / 归属关系");
+            ui.weak("（D5：几何绘制延后，模型在 S12 落地）");
+        },
+    );
 }
 
 /// 校验面板（P-8）。
 pub fn panel_validation(mut contexts: EguiContexts, mut panels: ResMut<PanelState>) {
     let ctx: &mut egui::Context = contexts.ctx_mut();
-    float_window(&ctx, &mut panels, Panel::Validation, [300.0, 200.0], true, |ui| {
-        ui.weak("暂无校验问题");
-        ui.separator();
-        ui.label("四维校验：时间 / 引用 / 几何 / 一致性");
-        ui.weak("（引用完整性校验已落地，见 wv-io）");
-    });
+    float_window(
+        ctx,
+        &mut panels,
+        Panel::Validation,
+        [300.0, 200.0],
+        true,
+        |ui| {
+            ui.weak("暂无校验问题");
+            ui.separator();
+            ui.label("四维校验：时间 / 引用 / 几何 / 一致性");
+            ui.weak("（引用完整性校验已落地，见 wv-io）");
+        },
+    );
 }
 
 /// 人物登记（用户 1.4）。
@@ -455,16 +521,23 @@ pub fn panel_character(
     projection: Res<WorldProjection>,
 ) {
     let ctx: &mut egui::Context = contexts.ctx_mut();
-    float_window(&ctx, &mut panels, Panel::Character, [280.0, 240.0], true, |ui| {
-        let chars = &projection.world.characters;
-        if chars.is_empty() {
-            ui.weak("暂无已登记人物");
-        } else {
-            for c in chars {
-                ui.label(&c.name);
+    float_window(
+        ctx,
+        &mut panels,
+        Panel::Character,
+        [280.0, 240.0],
+        true,
+        |ui| {
+            let chars = &projection.world.characters;
+            if chars.is_empty() {
+                ui.weak("暂无已登记人物");
+            } else {
+                for c in chars {
+                    ui.label(&c.name);
+                }
             }
-        }
-    });
+        },
+    );
 }
 
 /// 事件登记（用户 1.4，可从时间轴进入）。
@@ -474,15 +547,19 @@ pub fn panel_event(
     projection: Res<WorldProjection>,
 ) {
     let ctx: &mut egui::Context = contexts.ctx_mut();
-    float_window(&ctx, &mut panels, Panel::Event, [300.0, 260.0], true, |ui| {
+    float_window(ctx, &mut panels, Panel::Event, [300.0, 260.0], true, |ui| {
         let events = &projection.world.events;
         if events.is_empty() {
             ui.weak("暂无已登记事件");
         } else {
             for e in events {
                 ui.group(|ui| {
-                    ui.strong(&e.id.as_str().to_string());
-                    ui.label(format!("@day{} – @day{}", e.span.from, e.span.to.unwrap_or(e.span.from)));
+                    ui.strong(e.id.as_str().to_string());
+                    ui.label(format!(
+                        "@day{} – @day{}",
+                        e.span.from,
+                        e.span.to.unwrap_or(e.span.from)
+                    ));
                 });
             }
         }
@@ -497,6 +574,4 @@ pub const TERRAIN_NAMES: [&str; 10] = [
 ];
 
 /// 地形图标（紧凑设计器用；emoji 保证跨系统可读，中文名作副标题）。
-pub const TERRAIN_ICONS: [&str; 10] = [
-    "🌊", "💧", "🏖", "🌾", "🌲", "⛰", "🏔", "❄", "🪵", "🛤",
-];
+pub const TERRAIN_ICONS: [&str; 10] = ["🌊", "💧", "🏖", "🌾", "🌲", "⛰", "🏔", "❄", "🪵", "🛤"];

@@ -11,16 +11,23 @@
 //! └── tracks/<id>.yaml              ← 轨迹
 //! ```
 //!
-//! ## 引用完整性（`AGENTS.md` §7.2 硬约束 / 基线 §2.21）
+//! ## 引用完整性（`AGENTS.md` §7.2 / 基线 §2.21）
 //!
 //! **悬空引用必须被检出并报错，不得静默忽略。** 本模块负责：
 //! 1. `SituationStep.event` 引用的 `EventId` 必须存在；
 //! 2. `Situation.narrative_order` 里的每个 `EventId` 必须存在（且必须属于本事的 steps）；
-//! 3. `SituationStep.tracks` / `Track` 引用的 `TrackId` 必须存在；
-//! 4. `Track.owner` / `Track.map` / `Waypoint.place` 引用的实体必须存在。
+//! 3. `SituationStep.tracks` 引用的 `TrackId` 必须存在；
+//! 4. `Track.unit` 引用的 `UnitId` 必须存在（ADR-0004：运动主体是**单位**，
+//!    不再是含糊的「角色或势力」）；
+//! 5. `Situation.units` 引用的 `UnitId` 必须存在（事态是归纳容器）；
+//! 6. `Track.map` / `Waypoint.place` 引用的实体必须存在。
 //!
 //! 报错必须是 `CoreError::DanglingReference { referrer, missing }`，
 //! 且信息里指出 YAML 字段路径（`AGENTS.md` §7.4 精神）。
+//!
+//! > ⚠️ **待裁（本轮未动）**：本函数返回 `Err` 会**阻断加载**；而 2026-10-11 的裁定
+//! > 「校验只提示、不阻止」（`AGENTS.md` §7.5）针对的是**编辑 / 保存**路径。
+//! > 「加载期硬失败」与「编辑期软提示」两种强度是否应统一，见 ADR-0004 §待裁。
 
 use std::path::Path;
 
@@ -60,25 +67,47 @@ pub fn load_dir<T: serde::de::DeserializeOwned>(root: &Path, sub: &str) -> IoRes
     Ok(out)
 }
 
+/// 校验所需的「已知 ID 集合」快照。
+///
+/// 用**命名结构体**而非位置参数：这些集合类型完全相同（都是 `&[Id]`），
+/// 位置参数一旦超过两三个，调用方传错顺序**编译器不会报错**——
+/// 把 `characters` 当 `maps` 传进来会静默通过。命名字段消除这个风险。
+#[derive(Debug, Clone, Copy)]
+pub struct KnownIds<'a> {
+    /// 已加载的事件 ID。
+    pub events: &'a [Id],
+    /// 已加载的地图 ID。
+    pub maps: &'a [Id],
+    /// 已加载的角色 ID。
+    pub characters: &'a [Id],
+    /// 已加载的地点 ID。
+    pub places: &'a [Id],
+    /// 已加载的单位 ID（ADR-0004）。
+    pub units: &'a [Id],
+}
+
 /// 校验事态与轨迹的引用完整性（基线 §2.21）。
 ///
-/// 传入已加载的 world 各部分（切片），返回错误或空。
+/// 传入已加载的 world 各部分，返回错误或空。
 pub fn validate_situations_and_tracks(
     situations: &[Situation],
     tracks: &[Track],
-    event_ids: &[Id],
-    map_ids: &[Id],
-    character_ids: &[Id],
-    place_ids: &[Id],
+    known: KnownIds<'_>,
 ) -> Result<(), CoreError> {
     let has = |ids: &[Id], id: &Id| ids.iter().any(|x| x == id);
 
+    let track_ids: Vec<Id> = tracks.iter().map(|t| t.id.clone()).collect();
+
     for track in tracks {
-        if !has(character_ids, &track.owner) && !map_ids.iter().any(|_| true) {
-            // owner 可以是角色或势力；势力集合当前未加载，允许（不误报）。
-            // 但若 owner 既非角色也非已知实体，这里保持宽松——势力属 S12。
+        // 运动主体必须是已知单位（ADR-0004）。旧口径允许「角色或势力」并保持宽松，
+        // 现已收敛为 Unit —— 悬空即报错（§7.2：不得静默忽略）。
+        if !has(known.units, &track.unit) {
+            return Err(CoreError::DanglingReference {
+                referrer: format!("track.{} (field `unit`)", track.id),
+                missing: track.unit.to_string(),
+            });
         }
-        if !has(map_ids, &track.map) {
+        if !has(known.maps, &track.map) {
             return Err(CoreError::DanglingReference {
                 referrer: format!("track.{} (field `map`)", track.id),
                 missing: track.map.to_string(),
@@ -86,7 +115,7 @@ pub fn validate_situations_and_tracks(
         }
         for (i, wp) in track.waypoints.iter().enumerate() {
             if let Some(place) = &wp.place {
-                if !has(place_ids, place) {
+                if !has(known.places, place) {
                     return Err(CoreError::DanglingReference {
                         referrer: format!("track.{}.waypoints[{i}].place", track.id),
                         missing: place.to_string(),
@@ -96,11 +125,9 @@ pub fn validate_situations_and_tracks(
         }
     }
 
-    let track_ids: Vec<Id> = tracks.iter().map(|t| t.id.clone()).collect();
-
     for sit in situations {
         for (i, step) in sit.steps.iter().enumerate() {
-            if !has(event_ids, &step.event) {
+            if !has(known.events, &step.event) {
                 return Err(CoreError::DanglingReference {
                     referrer: format!("situation.{} (field `steps[{i}].event`)", sit.id),
                     missing: step.event.to_string(),
@@ -119,7 +146,7 @@ pub fn validate_situations_and_tracks(
         // narrative_order 里的每个 ID 必须存在，且必须属于本事的 steps（基线 §2.21）。
         if let Some(order) = &sit.narrative_order {
             for (i, id) in order.iter().enumerate() {
-                if !has(event_ids, id) {
+                if !has(known.events, id) {
                     return Err(CoreError::DanglingReference {
                         referrer: format!("situation.{} (field `narrative_order[{i}]`)", sit.id),
                         missing: id.to_string(),
@@ -138,7 +165,7 @@ pub fn validate_situations_and_tracks(
         }
 
         for (i, map_id) in sit.maps.iter().enumerate() {
-            if !has(map_ids, map_id) {
+            if !has(known.maps, map_id) {
                 return Err(CoreError::DanglingReference {
                     referrer: format!("situation.{} (field `maps[{i}]`)", sit.id),
                     missing: map_id.to_string(),
@@ -146,8 +173,18 @@ pub fn validate_situations_and_tracks(
             }
         }
 
+        // 归纳容器持有的单位必须存在（ADR-0004）。
+        for (i, unit_id) in sit.units.iter().enumerate() {
+            if !has(known.units, unit_id) {
+                return Err(CoreError::DanglingReference {
+                    referrer: format!("situation.{} (field `units[{i}]`)", sit.id),
+                    missing: unit_id.to_string(),
+                });
+            }
+        }
+
         if let Some(protagonist) = &sit.protagonist {
-            if !has(character_ids, protagonist) {
+            if !has(known.characters, protagonist) {
                 return Err(CoreError::DanglingReference {
                     referrer: format!("situation.{} (field `protagonist`)", sit.id),
                     missing: protagonist.to_string(),
@@ -168,6 +205,70 @@ mod tests {
         Id::new_unchecked(s)
     }
 
+    /// 构造校验所需的 ID 集合；本模块测试只用到事件与单位两类。
+    fn known<'a>(events: &'a [Id], units: &'a [Id]) -> KnownIds<'a> {
+        KnownIds {
+            events,
+            maps: &[],
+            characters: &[],
+            places: &[],
+            units,
+        }
+    }
+
+    fn track(unit: &str, map: &str) -> Track {
+        Track {
+            id: id("track_t"),
+            unit: id(unit),
+            map: id(map),
+            span: TimeSpan::new(1, 10).unwrap(),
+            waypoints: vec![],
+            path: None,
+        }
+    }
+
+    #[test]
+    fn known_unit_passes_validation() {
+        let t = track("unit_a", "map_world");
+        let ok = validate_situations_and_tracks(
+            &[],
+            &[t],
+            KnownIds {
+                events: &[],
+                maps: &[id("map_world")],
+                characters: &[],
+                places: &[],
+                units: &[id("unit_a")],
+            },
+        );
+        assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn dangling_track_unit_is_reported() {
+        // ADR-0004：运动主体必须指向已知单位（旧口径的「角色或势力」已收敛为 Unit）。
+        let t = track("unit_missing", "map_world");
+        let err = validate_situations_and_tracks(
+            &[],
+            &[t],
+            KnownIds {
+                events: &[],
+                maps: &[id("map_world")],
+                characters: &[],
+                places: &[],
+                units: &[],
+            },
+        )
+        .unwrap_err();
+        match err {
+            CoreError::DanglingReference { referrer, missing } => {
+                assert!(referrer.contains("field `unit`"), "referrer={referrer}");
+                assert_eq!(missing, "unit_missing");
+            }
+            other => panic!("期望 DanglingReference，实际 {other:?}"),
+        }
+    }
+
     fn sit(steps: Vec<&str>, narrative: Option<Vec<&str>>) -> Situation {
         Situation {
             id: id("sit_x"),
@@ -184,6 +285,7 @@ mod tests {
                 })
                 .collect(),
             span: TimeSpan::new(1, 100).unwrap(),
+            units: vec![],
             narrative_order: narrative.map(|v| v.into_iter().map(id).collect()),
             maps: vec![],
             protagonist: None,
@@ -191,17 +293,44 @@ mod tests {
     }
 
     #[test]
+    fn dangling_situation_unit_is_reported() {
+        // ADR-0004：事态作为**归纳容器**持有的单位必须存在。
+        let events = vec![id("evt_a")];
+        let mut s = sit(vec!["evt_a"], None);
+        s.units = vec![id("unit_missing")];
+        let err = validate_situations_and_tracks(
+            &[s],
+            &[],
+            KnownIds {
+                events: &events,
+                maps: &[],
+                characters: &[],
+                places: &[],
+                units: &[],
+            },
+        )
+        .unwrap_err();
+        match err {
+            CoreError::DanglingReference { referrer, missing } => {
+                assert!(referrer.contains("units[0]"), "referrer={referrer}");
+                assert_eq!(missing, "unit_missing");
+            }
+            other => panic!("期望 DanglingReference，实际 {other:?}"),
+        }
+    }
+
+    #[test]
     fn valid_situation_passes_validation() {
         let events = vec![id("evt_a"), id("evt_b")];
         let s = sit(vec!["evt_a", "evt_b"], None);
-        assert!(validate_situations_and_tracks(&[s], &[], &events, &[], &[], &[]).is_ok());
+        assert!(validate_situations_and_tracks(&[s], &[], known(&events, &[])).is_ok());
     }
 
     #[test]
     fn dangling_step_event_is_reported() {
         let events = vec![id("evt_a")];
         let s = sit(vec!["evt_a", "evt_missing"], None);
-        let err = validate_situations_and_tracks(&[s], &[], &events, &[], &[], &[]).unwrap_err();
+        let err = validate_situations_and_tracks(&[s], &[], known(&events, &[])).unwrap_err();
         match err {
             CoreError::DanglingReference { referrer, missing } => {
                 assert!(referrer.contains("steps[1].event"), "referrer={referrer}");
@@ -215,7 +344,7 @@ mod tests {
     fn dangling_narrative_order_id_is_reported() {
         let events = vec![id("evt_a")];
         let s = sit(vec!["evt_a"], Some(vec!["evt_missing"]));
-        let err = validate_situations_and_tracks(&[s], &[], &events, &[], &[], &[]).unwrap_err();
+        let err = validate_situations_and_tracks(&[s], &[], known(&events, &[])).unwrap_err();
         match err {
             CoreError::DanglingReference { referrer, missing } => {
                 assert!(referrer.contains("narrative_order[0]"));
@@ -230,7 +359,7 @@ mod tests {
         // 事件存在，但不属于本事的 steps → 仍应报错（README §7.2 精神）。
         let events = vec![id("evt_a"), id("evt_b")];
         let s = sit(vec!["evt_a"], Some(vec!["evt_b"]));
-        let err = validate_situations_and_tracks(&[s], &[], &events, &[], &[], &[]).unwrap_err();
+        let err = validate_situations_and_tracks(&[s], &[], known(&events, &[])).unwrap_err();
         match err {
             CoreError::DanglingReference { referrer, .. } => {
                 assert!(
@@ -247,7 +376,7 @@ mod tests {
         let events = vec![id("evt_a")];
         let mut s = sit(vec!["evt_a"], None);
         s.maps = vec![id("map_missing")];
-        let err = validate_situations_and_tracks(&[s], &[], &events, &[], &[], &[]).unwrap_err();
+        let err = validate_situations_and_tracks(&[s], &[], known(&events, &[])).unwrap_err();
         match err {
             CoreError::DanglingReference { referrer, missing } => {
                 assert!(referrer.contains("maps[0]"));

@@ -28,6 +28,12 @@ pub struct TerrainTexture {
     pub size: u32,
     /// 上次上传后累计的脏矩形（像素坐标 `[x0,y0,x1,y1]`，半开）。
     pub dirty: Option<[u32; 4]>,
+    /// 当前纹理内容所用的视图模式。
+    ///
+    /// **仅供「模式是否真的变了」的比较**（基线 §2.11：不要每帧重建整图）。
+    /// 用 `Option` 是为了区分「尚未构建过」：`None` 表示纹理还从未按任一模式
+    /// 生成过——此时即使数据稍后才可用，也应重建一次。
+    pub last_mode: Option<ViewMode>,
 }
 
 impl TerrainTexture {
@@ -176,6 +182,7 @@ pub fn setup_terrain_texture(
         handle,
         size: data.width.max(1),
         dirty: None,
+        last_mode: Some(view.mode),
     });
 }
 
@@ -219,23 +226,45 @@ pub fn placeholder_terrain(w: u32, h: u32) -> TerrainData {
     }
 }
 
-/// 当视图模式变化时重建整张纹理（换的是眼镜，不是世界，基线 §1.10）。
+/// 当**视图模式真的变化**时重建整张纹理（换的是眼镜，不是世界，基线 §1.10）。
+///
+/// ## 为什么不能监听 `Res<ViewState>::is_changed()`（缺陷修复）
+///
+/// `ViewState` 是「大杂烩资源」：既有低频的 `mode`，也有**每帧无条件写入**的
+/// `cursor_world`（见 [`crate::camera::track_cursor_world`]）。对 `ResMut<T>` 的
+/// `deref_mut` 写入会标记资源 changed，于是**只要鼠标在地图上移动，
+/// `view.is_changed()` 每帧为真**，整张 512×512 纹理就被逐格重着色并重传 GPU。
+///
+/// 这违反基线 §2.11「不要每帧重建整图」，也违反 `AGENTS.md` §3.4 的拉动式刷新
+/// 原则（刷新应由「模式」这一语义输入驱动，而不是「整个 ViewState 资源」变化）。
+///
+/// 因此改为比较 `tex.last_mode` 与当前 `view.mode`，**只有模式字段真的变了才重建**。
+///
+/// ## 边界：首次地形可用
+///
+/// 若地形数据尚不可用（`terrain` 为 `None`），直接返回，**不写 `last_mode`**——
+/// 否则地形稍后加载完时，`last_mode` 已等于当前 mode，会误判「没变」而永不重建。
+/// `last_mode` 仅在**真正生成了纹理之后**才更新。
 pub fn rebuild_texture_on_mode_change(
     view: Res<ViewState>,
     projection: Res<WorldProjection>,
-    tex: ResMut<TerrainTexture>,
+    mut tex: ResMut<TerrainTexture>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    if !view.is_changed() {
+    // 只有模式字段真的变了才需要重建（不看整个 ViewState 资源）。
+    if tex.last_mode == Some(view.mode) {
         return;
     }
     let Some(data) = projection.world.terrain.as_ref() else {
+        // 地形尚未可用：不重建，也不置位 last_mode，等地形就绪后再走这里。
         return;
     };
     let image = image_from_terrain(data, view.mode);
     if let Some(img) = images.get_mut(&tex.handle) {
         *img = image;
     }
+    // 仅在实际重建后记录模式（保证纹理内容与 last_mode 一致）。
+    tex.last_mode = Some(view.mode);
 }
 
 /// 网格几何的默认配置（与纹理尺寸挂钩）。

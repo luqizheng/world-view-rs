@@ -19,7 +19,7 @@ use bevy_egui::EguiPlugin;
 use crate::camera;
 use crate::editing;
 use crate::projection;
-use crate::state::{BrushState, GridConfig, PlaybackState, ViewState, WorldProjection};
+use crate::state::{BrushState, GridConfig, PanelState, PlaybackState, ViewState, WorldProjection};
 use crate::terrain_view::{self, TerrainTexture};
 use crate::ui;
 use crate::AppConfig;
@@ -80,6 +80,7 @@ pub fn run(config: AppConfig) {
         .init_resource::<PlaybackState>()
         .init_resource::<ViewState>()
         .init_resource::<BrushState>()
+        .init_resource::<PanelState>()
         .init_resource::<GridConfig>()
         .init_resource::<projection::ProjectionFrame>()
         .init_resource::<camera::ActiveStroke>()
@@ -95,7 +96,12 @@ pub fn run(config: AppConfig) {
             )
                 .chain(),
         )
-        .add_systems(PreUpdate, camera::poll_egui_wants_input)
+        .add_systems(
+            PreUpdate,
+            // 必须排在 bevy_egui 建上下文之后：否则首帧 ctx_mut() 对未初始化
+            // 上下文调用会 panic（bevy_egui 0.32 lib.rs:437 的 expect）。
+            camera::poll_egui_wants_input.after(bevy_egui::EguiPreUpdateSet::InitContexts),
+        )
         .add_systems(
             Update,
             (
@@ -131,6 +137,10 @@ pub fn run(config: AppConfig) {
             Update,
             (
                 // 全部浮动面板（基线 §1.11 R1–R4：地图铺满，面板浮其上）。
+                //
+                // **必须 `.chain()`**：这些系统都要 `ResMut<PanelState>` 与
+                // `ResMut<ViewState>`，Bevy 无法并行调度同时可变借用同一资源的系统
+                // （否则运行期 panic：`could not access system parameter`）。
                 ui::top_bar,
                 ui::panel_map_tree,
                 ui::panel_layers,
@@ -143,7 +153,8 @@ pub fn run(config: AppConfig) {
                 ui::panel_faction,
                 ui::panel_inspector,
                 ui::panel_validation,
-            ),
+            )
+                .chain(),
         )
         .run();
 }
@@ -180,5 +191,6 @@ fn setup_terrain_texture_after_world(
         handle,
         size: data.width.max(1),
         dirty: None,
+        last_mode: Some(view.mode),
     });
 }

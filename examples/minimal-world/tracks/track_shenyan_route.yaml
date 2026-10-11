@@ -1,8 +1,9 @@
 # 轨迹：沈砚行程（示例）· schema v2
 # 演示 §2.7 / 动画规格 §1.2「逐段生长」：带 day 的锚点 → 线性插值。
 # 无独立「速度」参数——速度是段长 / 段时长的产物。
+# 运动主体是 **Unit**（ADR-0004），不是角色 —— 角色经 Unit.members 间接关联。
 id: track_shenyan_route
-owner: char_shenyan
+unit: unit_shenyan
 map: world_main
 # 轨迹时间区间（半开 [from, to)）。
 from: 107642

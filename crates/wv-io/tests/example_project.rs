@@ -145,6 +145,37 @@ fn example_project_loads_situations_and_tracks() {
 }
 
 #[test]
+fn example_project_loads_units() {
+    // ADR-0004：单位（Unit）必须能从示例工程加载，
+    // 且轨迹的**运动主体**指向它（不再是含糊的「角色或势力」）。
+    let project = Project::open(example_dir()).unwrap();
+    let world = project.load_world().expect("加载应成功");
+
+    assert_eq!(world.units.len(), 1, "示例应有 1 个单位");
+    let unit = &world.units[0];
+    assert_eq!(unit.id.as_str(), "unit_shenyan");
+    // 角色经 members **引用**进来，不复制角色本身（P2：两者分离）。
+    assert_eq!(
+        unit.members.iter().map(|m| m.as_str()).collect::<Vec<_>>(),
+        vec!["char_shenyan"]
+    );
+
+    assert_eq!(world.tracks.len(), 1);
+    assert_eq!(world.tracks[0].unit.as_str(), "unit_shenyan");
+}
+
+#[test]
+fn unit_yaml_round_trip() {
+    // 原则二：`load(save(w)) == w`。
+    let project = Project::open(example_dir()).unwrap();
+    let world = project.load_world().unwrap();
+
+    let text = serde_yaml::to_string(&world.units[0]).unwrap();
+    let back: wv_core::Unit = serde_yaml::from_str(&text).unwrap();
+    assert_eq!(world.units[0], back, "Unit round-trip 必须稳定");
+}
+
+#[test]
 fn situation_and_track_yaml_round_trip() {
     // S7：事态与轨迹的 YAML round-trip 必须稳定。
     let project = Project::open(example_dir()).unwrap();

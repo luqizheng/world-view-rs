@@ -72,6 +72,22 @@
 - **地图为主，其他东西都是浮在它上面的浮动面板**
 - 顶部是**项目 / 视图 / 日期 / 坐标**的信息显示
 
+#### E 组 · 2026-10-11 单位本体裁定（ADR-0004 的规格输入）
+
+| # | 议题 | 用户裁定 | 落点 |
+|---|---|---|---|
+| **Q1** | 会动的主体是谁 | 新增 **Unit（单位）**——**独立地在地图上移动** | ADR-0004 决策 1 |
+| **Q2** | 「相遇」怎么处理 | 相遇时才产生事件；相遇而**无事发生 = 啥事都没有**。作者**故意不写**时给**提示**（报错但允许存在，不阻止） | ADR-0004 决策 3 |
+| **Q3** | 事态是什么 | **group**——把一堆 **event / 人物 / unit 归纳**到一起；event 是「描述过程」 | ADR-0004 决策 4 |
+| **P1** | 事态是否嵌套 | 「可能是嵌套，但**找不到例子**，可以放弃」→ **预留不落地** | 待裁 U7 |
+| **P2** | Unit 与角色边界 | **两者分离**，Unit 通过 `members` 引用角色 | ADR-0004 决策 1 |
+| **P3** | 事态是否直接列角色 | **不要**——角色只能经 Unit 间接进入 | ADR-0004 决策 4 |
+| **L1** | 低缩放表现 | 缩小时显示「【四渡赤水】**正在发生**」，大地图上同时可见其它正在发生的事态 | 渲染规则（§1.11） |
+| **L2** | 人物视图 | 「康熙帝(1654-1722)」——需要**卒年** | 待裁 U5 |
+| **定位** | 校验与历史 | 校验**报错但允许存在**；**历史可重写**（作者「可以随便改」）；工具定位 = **协助整理设定的助手** | `AGENTS.md` §7.5 |
+
+> 用户原话逐条见 [`docs/adr/ADR-0004-unit-ontology.md`](adr/ADR-0004-unit-ontology.md)「用户原话」一节。
+
 ---
 
 ## 1. 设计篇（来源：游有方 · 创意总监）
@@ -169,15 +185,28 @@
 
 | 层 | 裁定 | 理由 |
 |---|---|---|
-| **数据形态** | **可以有分支**——节点引用应支持轻量父子关系，而非纯线性 | 史实本身有分支（主力渡河 / 后卫阻击是并行两支） |
+| **数据形态** | **保留**分支能力（轻量父子关系），但**当前结构尚未落地**——本轮只做线性，`SituationStep` 现无 `parent` 字段 | 史实本身有分支（主力渡河 / 后卫阻击是并行两支）；但**找不到具体实例**，不为假设的将来付成本（ADR-0004 P1） |
 | **UI 呈现（本轮）** | **只做线性主链**，分支只以「并行的多个节点」呈现，**不画分支树** | 一人开发，分支树编辑器成本极高 |
 | **条件（if/then）** | **本轮完全不进** | 条件表达式引擎本身仍是待裁问题（README §12-3） |
 
 ### 1.6 轨迹（Track）的数据形态
 
-**裁定：轨迹挂在「事态节点」上**（不是 Event 的属性，也不是 Character 的终身属性）。
+> **本节已于 2026-10-11 被 [`docs/adr/ADR-0004-unit-ontology.md`](adr/ADR-0004-unit-ontology.md) 修正。**
+> 原口径「轨迹挂在**事态节点**上」**不再成立**——轨迹归**单位（Unit）**，事态节点只**引用**它。
+> 被推翻的原论据（逐条核对）见 ADR-0004「被推翻的旧口径」一节。
 
-**为什么**：轨迹是「**在这个节点上，谁怎么动的**」——它需要同时知道：① 属于哪个事态节点（语境）② 谁在动（主体）③ 在哪张图（坐标系）。**只有事态节点同时持有这三个上下文。**
+**裁定：轨迹归「单位（Unit）」**——不是 Event 的属性，不是 Character 的终身属性，也不是事态节点的属性。
+
+**为什么**：**运动先于事态存在。** 一支队伍在地图上走，不因为「被写进某个事态」才开始动。事态只是把若干事件与单位**归纳**到一起的**容器（group）**，它**引用**轨迹，不**拥有**轨迹。
+
+| 关系 | 形态 |
+|---|---|
+| 轨迹的动者 | `Track.unit: Id`（指向 `Unit`） |
+| 事态 ⟷ 轨迹 | `SituationStep.tracks: Vec<Id>`——**多对多引用**，一条轨迹可被多个节点引用 |
+
+> **由此「跨节点的一段行军归谁」这个问题消失。**「土城 → 扎西 → 遵义」从头到尾就是**一条 Track**，一渡、二渡两个节点都引用它——不存在归属争议。
+
+**渲染推论**：播放某条事态时，只渲染**相关单位在该事态 `span` 内**的轨迹片段；轨迹自身的可见性由 `track.span` 与当前时刻的关系判定，**不由「某节点是否引用它」判定**（ADR-0004）。
 
 **时间戳三条规则**：
 
@@ -848,6 +877,14 @@ pub struct Situation {
     /// 事态包含的事件引用（**无序**，播放顺序由事件 `span.from` 升序派生）。
     #[serde(default)]
     pub steps: Vec<SituationStep>,
+    /// 事态的整体时间范围。**必须覆盖其全部节点的时间**（不变式 I5）。
+    /// 播放锁定在本区间内循环（§1.8）。
+    #[serde(flatten)]
+    pub span: TimeSpan,
+    /// 本事实涉及的**单位**（归纳容器，ADR-0004）。与 `steps` 平行。
+    /// **不直接列角色**——角色只能经 `Unit.members` 间接进入，避免「两个真相」。
+    #[serde(default)]
+    pub units: Vec<Id>,
     /// 可选的**叙事顺序**覆盖（D1 补充）：供倒叙/插叙编排。
     /// 为空时用时间派生；有值时按此列表顺序播放。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -868,17 +905,30 @@ pub struct SituationStep {
     pub pause_secs: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caption: Option<String>,
-    /// 本节挂载的轨迹（游有方语义：轨迹是「事态节点」的属性）。
+    /// 本节**引用**的轨迹（ADR-0004：轨迹归单位，事态节点只**引用**，可多对多）。
     #[serde(default)]
     pub tracks: Vec<Id>,
+}
+
+/// 单位。在地图上**独立运动的主体**（ADR-0004）。对应 `units/<id>.yaml`。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Unit {
+    pub id: Id,
+    pub name: String,
+    /// 归属主体（角色或势力）。**可无主**——如「中央红军」不隶属任何个人。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<Id>,
+    /// 成员角色 ID 列表。复合单位的领导 / 成员；单人单位填 1 个。
+    #[serde(default)]
+    pub members: Vec<Id>,
 }
 
 /// 轨迹。独立实体（避免 P4 复制——同一条轨迹被两条事态引用时不重复存储）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Track {
     pub id: Id,
-    /// 轨迹所属主体（角色或势力）。
-    pub owner: Id,
+    /// 运动主体：**单位**（`UnitId`），不是含糊的「角色或势力」（ADR-0004）。
+    pub unit: Id,
     /// 轨迹发生的地图（决定坐标系与 LOD）。
     pub map: Id,
     /// 轨迹的时间区间（半开 `[from, to)`）。
@@ -918,16 +968,20 @@ pub struct Waypoint {
 ### 2.8 引用关系图
 
 ```
-Character ──(owner)──→ Track ──(map)──→ MapNode
-    │                    │
-    │                    └──(waypoints[].place)──→ Place
-    │
-    └──(participants)──→ Event ──(place)──→ Place
-                          ↑
-                          │(steps[].event)
-                     Situation ──(maps)──→ MapNode
-                          │
-                          └──(protagonist)──→ Character
+Unit ──(unit)──→ Track ──(map)──→ MapNode
+ │                  │
+ │                  └──(waypoints[].place)──→ Place
+ │
+ ├──(owner)──→ Character / Faction
+ └──(members)──→ Character
+
+Character ──(participants)──→ Event ──(place)──→ Place
+                               ↑
+                               │(steps[].event)
+                          Situation ──(maps)──→ MapNode
+                               │
+                               ├──(protagonist)──→ Character
+                               └──(units)──→ Unit
 
 Faction ──(memberships[].to)──→ Faction / Character
     └──(territory: Vec<GeometrySpan>)──→ MapNode（经 span.map）
@@ -943,6 +997,8 @@ Faction ──(memberships[].to)──→ Faction / Character
 MyWorld/
 ├── campaigns/ 或 timeline/situations/    # 事态（推荐后者，与 events/ 平行）
 │   └── sit_four_crossings_chishui.yaml
+├── units/                               # 单位（ADR-0004）
+│   └── unit_shenyan.yaml
 ├── tracks/                              # 轨迹
 │   └── track_shenyan_01.yaml
 ├── factions/                            # 势力层
@@ -974,6 +1030,7 @@ steps:
     tracks: []
   - event: evt_cross_chishui_4
     focus: true
+units: [unit_hongjun]
 maps: [map_world, map_city_zunyi]
 protagonist: char_hongjun
 ```
@@ -982,7 +1039,7 @@ protagonist: char_hongjun
 
 ```yaml
 id: track_shenyan_01
-owner: char_shenyan
+unit: unit_shenyan
 map: map_world
 from: 100801
 to: 101065
@@ -1281,9 +1338,12 @@ cargo tree -p wv-core | grep -i bevy                     # 应为空（分层验
 | 项 | 内容 |
 |---|---|
 | **`narrative_order` 悬空 ID** | ❌ **加载期报错**（AGENTS §7.2）。**不忽略** |
+| **`Track.unit` 悬空 ID** | ❌ **加载期报错**（ADR-0004）。旧口径的 `Track.owner`（「角色或势力」）**校验被显式跳过**；收敛为 `unit` 后**必须严格校验** |
+| **`Situation.units` 悬空 ID** | ❌ **加载期报错**（ADR-0004：事态是**归纳容器**，其持有的单位必须存在） |
 | 理由 | ① 静默忽略会隐藏作者手滑 ② §7.2 是硬约束 ③ 与既有 `participants` / `place` 校验一致 |
 | 错误类型 | 复用 `CoreError::DanglingReference { referrer, missing }` |
 | 错误信息要求 | 必须指出 `situation_id` + 缺失的 `event_id` + **YAML 字段路径**（AGENTS §7.4 精神） |
+| ⚠️ **强度待裁** | 本表是**加载期硬失败**；§7.5「只提示、不阻止」针对**编辑 / 保存**。两者关系见 ADR-0004 §待裁 **U1** |
 
 **分层说明**：**校验在 `wv-io`（加载期）；排序在 `wv-core`（纯函数，信任已校验数据）。**
 
@@ -1430,9 +1490,11 @@ theme_packs/
 
 | 术语 | 英文 | 定义 | 所属维度 |
 |---|---|---|---|
-| **事态** | Situation | 一段时间内有始有终的一件大事，由**有序的事件节点**组成；节点可选挂**轨迹**。是事件的组织层，**不是** Event 的字段 | 事件 |
-| **事态节点** | SituationStep | 事态的组成单元，**引用**一个 `EventId`，可带「链视角注释」与**轨迹**；**不复制事件内容** | 事件 |
-| **轨迹** | Track | 某主体在某张地图上的一段运动记录（waypoint 点列，点可选带时间戳）。挂在**事态节点**上 | 事件 / 距离 |
+| **事态** | Situation | 一段有始有终的大事，**归纳容器 / group**：收拢若干事件节点（`steps`）与相关**单位**（`units`），节点可引用轨迹。是组织层，**不是** Event 的字段 | 事件 |
+| **事态节点** | SituationStep | 事态的组成单元，**引用**一个 `EventId`，可带「链视角注释」与**轨迹引用**；**不复制事件内容** | 事件 |
+| **单位** | Unit | 在地图上**独立运动的主体**（ADR-0004）。可引用角色 / 势力作 `owner`，也可**无主**（如「中央红军」）；`members` 列出成员角色。与 `Character` **分离**——单人移动也建 Unit | 事件 / 距离 |
+| **轨迹** | Track | 某个**单位**在某张地图上的一段运动记录（waypoint 点列，点可选带时间戳）。运动主体是 `Track.unit`；事态节点通过 ID **引用**它（**多对多**）——运动不归事态（ADR-0004 修正原「挂在事态节点上」口径） | 事件 / 距离 |
+| **相遇提示** | Encounter Hint | 多个单位在同一时间、同一地点出现、而作者**未写事件**时给出的**提示**（ADR-0004）。措辞是「此处可能是有意留白」——**永不报错、不阻止保存**；提示须**留痕可回访** | 编辑 |
 | **航点** | Waypoint | 轨迹上的一个点。二选一：引用 `PlaceId`（城市/室内推荐）或裸坐标 `(x,y)`（世界/区域荒野） | 距离 |
 | **播放** | Playback | 时间轴以固定速率自动推进；**锁定在某个事态的 `span` 内**。不是独立播放器实体 | 时间 |
 | **视图模式** | ViewMode | 地图基底的渲染方式 + 默认图层组合 + 可用工具集的三合一开关。四态：真实地形 / 色块地形 / 势力图 / 事件图 | 地理 |
@@ -1500,6 +1562,7 @@ theme_packs/
 | **势力层级 / FactionLevel** | ❌ **作废** | D2 裁定：不设层级枚举 |
 | **国境线 / 省份 / 贵族封地**（作为独立概念） | 🟡 **降级** | 改为「势力层」的示例，不再单独登记 |
 | **地图模式 / Map Mode** | ❌ **作废** | 统一称「视图模式」（避免混淆） |
+| **轨迹主体 `Track.owner`**（注释为「角色或势力」） | ❌ **作废** | ADR-0004：改用 **`Track.unit`（单位）**——旧口径二义，且「中央红军」这类无主主体无法表达 |
 
 ### 5.3 待裁术语（新增）
 
@@ -1527,9 +1590,10 @@ theme_packs/
 | Phase 4 | 严过关 · 质量监管 | 验收清单 + 风险定级 | ⬜ 待启动 |
 | 架构认领 3 项 | tech-architect | ① day 空间插值范式 ② 状态/动效共享参数独立降级的 shader 契约 ③ 抑制三分类落地 | 🟡 已发出 |
 | 美术闭环 2 项 | art-model-director | 性质纹理归属 / 描边层序→粗细规则 | 🟡 已催办 |
-| GLOSSARY 更新 | 主理人 | 按 §5.1 / §5.1b / §5.1c 登记新术语、作废、负向清单 | ⬜ 待办 |
-| ADR 撰写 | 主理人 | 势力层模型 + 事态本体 + 跨图引用（**三条硬约束必须写进 ADR**） | ⬜ 待办 |
-| README §12 更新 | 主理人 | 新增待裁项（带洞多边形 / 反向索引 / 双通道编码） | ⬜ 待办 |
+| GLOSSARY 更新 | 主理人 | 按 §5.1 / §5.1b / §5.1c 登记新术语、作废、负向清单 | ✅ 已完成 |
+| ADR 撰写 | 主理人 | 势力层模型 + 事态本体 + 跨图引用（**三条硬约束必须写进 ADR**） | ✅ 已完成（ADR-0001 ~ ADR-0004 + 索引） |
+| README §12 更新 | 主理人 | 新增待裁项（带洞多边形 / 反向索引 / 双通道编码） | ✅ 已完成 |
+| **单位本体落地**（ADR-0004） | 主理人 | `Unit` 实体 + `Track.unit` 已落地；**`Situation.units` 与相遇提示待补** | 🟡 部分完成 |
 
 ### 6.3 三条必须写进 ADR 的硬约束（来自创意总监）
 

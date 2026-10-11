@@ -121,8 +121,9 @@ fn grown_polyline(track: &wv_core::track::Track, day: i64, grid: &GridConfig) ->
         if day >= d1 {
             out.push(p1);
         } else {
-            // 部分生长。
-            let u = (day - d0) as f32 / (d1 - d0).max(1) as f32;
+            // 部分生长：进度归一化走 wv-core 纯函数（day 空间插值，动画 §5.1），
+            // 渲染层不自行比较时间点（AGENTS §3.2）。`d1 == d0`（同天锚点）→ 0.0。
+            let u = TimelineQuery::day_progress(day, d0, (d1 - d0) as f32);
             out.push(p0.lerp(p1, u));
             return out;
         }
