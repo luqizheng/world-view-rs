@@ -1,0 +1,7 @@
+# 关系网（示例）
+relations:
+  - a: char_shenyan
+    b: char_linwan
+    kind: mentor
+    weight: 0.8
+    note: 授业之恩

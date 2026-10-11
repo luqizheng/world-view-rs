@@ -1,0 +1,13 @@
+# 地点节点（示例）
+- id: city_qingyun
+  name: 青云城
+  map: world_main
+  facilities: []
+- id: village_heishui
+  name: 黑水村
+  map: world_main
+  facilities: []
+- id: pass_luoxia
+  name: 落霞关
+  map: world_main
+  facilities: []

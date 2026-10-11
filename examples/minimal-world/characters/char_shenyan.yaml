@@ -1,0 +1,32 @@
+# 角色：沈砚（示例）
+# 演示 §4.1：不存 current_place，只存区间化的 state_spans。
+id: char_shenyan
+name: 沈砚
+traits:
+  - 沉稳
+  - 多疑
+attributes:
+  门派: 青云宗
+born_at:
+  era: 1
+  year: 280
+  day: 15
+state_spans:
+  - from:
+      era: 1
+      year: 300
+      day: 1
+    to:
+      era: 1
+      year: 305
+      day: 1
+    place: city_qingyun
+    title: 外门弟子
+    power: 10.0
+  - from:
+      era: 1
+      year: 305
+      day: 2
+    place: village_heishui
+    title: 巡山执事
+    power: 35.0

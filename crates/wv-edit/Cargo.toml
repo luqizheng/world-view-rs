@@ -1,0 +1,11 @@
+[package]
+name = "wv-edit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "World View 编辑层：编辑命令、Undo/Redo、事务与脏数据集合"
+
+[dependencies]
+wv-core = { workspace = true }
+thiserror = { workspace = true }

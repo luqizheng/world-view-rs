@@ -1,0 +1,17 @@
+# Rust
+/target
+**/*.rs.bk
+
+# 编辑器 / IDE
+.vscode/
+.idea/
+*.swp
+
+# 工程快照目录（由应用生成，不进版本管理）
+/snapshots/
+examples/*/snapshots/
+
+# 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini

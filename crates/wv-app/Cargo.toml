@@ -1,0 +1,25 @@
+[package]
+name = "wv-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "World View 应用层：Bevy 渲染、UI、输入，转发编辑命令到 wv-edit"
+
+# 应用层默认只编译 CLI 部分，渲染/UI 需显式开启 `app` feature。
+# 原因：Bevy 依赖树庞大，阶段一（数据层打底）不应对其产生构建依赖。
+[features]
+default = []
+app = ["dep:bevy", "dep:bevy_egui"]
+
+[dependencies]
+wv-core = { workspace = true }
+wv-io = { workspace = true }
+wv-edit = { workspace = true }
+thiserror = { workspace = true }
+bevy = { workspace = true, optional = true }
+bevy_egui = { workspace = true, optional = true }
+
+[[bin]]
+name = "wv"
+path = "src/main.rs"

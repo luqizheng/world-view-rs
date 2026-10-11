@@ -1,0 +1,34 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/wv-core",
+    "crates/wv-io",
+    "crates/wv-edit",
+    "crates/wv-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+repository = "https://example.invalid/worldview-rs"
+description = "以地理为底、时间轴为骨、人物与事件为魂的单机世界编辑器"
+
+[workspace.dependencies]
+# 数据层（纯 Rust，不依赖 Bevy）
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+thiserror = "2"
+
+# 内部 crate
+wv-core = { path = "crates/wv-core" }
+wv-io = { path = "crates/wv-io" }
+wv-edit = { path = "crates/wv-edit" }
+wv-app = { path = "crates/wv-app" }
+
+# 渲染与 UI。默认不编译，需显式开启 `--features app`：
+# Bevy 体系体积大，阶段一/阶段二未开始前不应阻塞数据层开发。
+# 注意：workspace.dependencies 不支持 optional，optional 在各成员 crate 上声明。
+bevy = "0.15"
+bevy_egui = "0.32"

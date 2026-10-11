@@ -1,0 +1,35 @@
+# 世界地图索引（示例）
+# 演示 §5.2 时间区间存储：疆界不是「当前值」，而是带区间的状态片段。
+
+id: world_main
+name: 主世界
+level: world
+children: []
+extent:
+  width: 4096.0
+  height: 4096.0
+layers:
+  - id: layer_terrain
+    name: 地形
+    kind: terrain
+    visible: true
+    locked: false
+    opacity: 1.0
+    z: 0
+    source: terrain.bin
+  - id: layer_borders
+    name: 疆界
+    kind: border
+    visible: true
+    locked: false
+    opacity: 0.8
+    z: 10
+    source: borders.yaml
+  - id: layer_roads
+    name: 道路
+    kind: road
+    visible: true
+    locked: false
+    opacity: 0.9
+    z: 20
+    source: roads.yaml

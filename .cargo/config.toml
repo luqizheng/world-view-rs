@@ -1,0 +1,9 @@
+# 本地构建配置。
+#
+# 关闭增量编译的原因：本机 rustc 1.97.1 (8bab26f4f) 在 Windows + D 盘上
+# 对 wv-app 触发 ICE（rustc_metadata::rmeta::encoder::encode_metadata
+# 在写 incremental 目录时 panic，OS error 5 拒绝访问）。
+# 非增量编译实测正常。待 rustc 版本升级后可重新评估移除本配置。
+
+[build]
+incremental = false

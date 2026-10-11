@@ -1,0 +1,17 @@
+# 时间轴定义（示例）
+eras:
+  - id: era_first
+    name: 开元
+    order: 1
+    start:
+      era: 1
+      year: 1
+      day: 1
+days_per_year: 360
+anchors:
+  - id: anchor_founding
+    name: 青云城建城
+    at:
+      era: 1
+      year: 300
+      day: 1
