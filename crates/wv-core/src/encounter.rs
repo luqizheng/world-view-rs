@@ -16,12 +16,31 @@
 //! 3. **提示必须可回访**——「后期回来提及此地」要求同一处相遇能再次被找到，
 //!    且身份不随作者微调锚点而漂移。
 //!
+//! ## 判定依据：Waypoint (place, day) 重叠，零物理量（2026-10-12 用户裁定）
+//!
+//! 2026-10-12 用户简化方案：既然「路线」已经声明「某时间从 A 到 B」，
+//! 相遇 = **两 Track 的 Waypoint 在 `(place, day)` 上同时覆盖**。
+//!
+//! 三个判定条件**全部**：
+//! 1. 两条 Track 的 `span` 有时间重叠；
+//! 2. 两 Waypoint 的 `place` 字段**完全相等**（字符串相等）；
+//! 3. 两 Waypoint 的 `day` 字段**完全相等**。
+//!
+//! 没有任何距离阈值、没有「视界」、没有「坐标换算桥梁」——
+//! 这就是用户原话：「**他们是行军相遇的，必定都在路上相遇**」。
+//!
+//! ### 缺字段时一律不判
+//!
+//! - Waypoint **没有 `place`**：无法锚定到「地点」级相遇 → 跳过；
+//! - Waypoint **没有 `day`**：无法对齐到「同一天」→ 跳过；
+//!
+//! 这是「宽进严出」的延续：宁可漏提示，不可误报。
+//!
 //! ## 为什么指纹不含日期
 //!
-//! 若指纹含日期，两条轨迹在同一地停留三天就会生成**三条**提示；
-//! 作者回头微调一个锚点日期，全部提示的 ID 全变——无法「认领」。
-//! 因此本模块按**「谁在哪相遇」归并**，日期取区间，指纹只由
-//! 两单位 ID + 归并地点构成（见 [`EncounterHint::fingerprint`]）。
+//! 指纹 = `unit_a | unit_b | place`（按字典序归并）。
+//! 不含日期：日期是「这次相遇持续多久」，不是「这是哪一次相遇」。
+//! 作者微调锚点日期，提示身份不变——才能被「已读/已忽略」认领。
 
 use std::collections::BTreeMap;
 
@@ -55,7 +74,7 @@ impl HintSeverity {
         }
     }
 
-    /// 提示文案模板。`{0}`=单位 A，`{1}`=单位 B，`{2}`=地点名，`{3}`=日期区间。
+    /// 提示文案模板。`{0}`=单位 A 名，`{1}`=单位 B 名，`{2}`=地点名，`{3}`=日期间。
     pub fn message(self, a: &str, b: &str, place: &str, days: &str) -> String {
         match self {
             HintSeverity::EncounterUnwritten => {
@@ -72,59 +91,44 @@ impl HintSeverity {
 pub struct EncounterHint {
     /// 稳定指纹：`{unit_a}|{unit_b}|{place}`。
     ///
-    /// 判定与展示分离——**展示**可用日期区间，但**身份**必须不含日期，
-    /// 否则作者微调锚点会让提示「换个人」（见模块文档）。
+    /// **不含日期**——日期是「这次相遇持续多久」，不是「这是哪一次相遇」。
+    /// 顺序无关（先按字典序排），保证 A/B 交换得到同一指纹。
     pub fingerprint: String,
     /// 相遇的两个单位 ID。**已按字典序归并**，保证 A/B 顺序稳定。
     pub units: [Id; 2],
-    /// 相遇地点（归并后的 PlaceId；无地点则为坐标串）。
-    pub place: Option<Id>,
-    /// 相遇的坐标（两条轨迹都在此附近时的近似位置）。
-    pub at: crate::geometry::Point,
-    /// 相遇持续的时间区间（两条轨迹同地**同时**在场的交集）。
+    /// 相遇地点（两边 Waypoint 共享的 place 引用）。
+    pub place: Id,
+    /// 相遇持续的时间区间（两条轨迹所有 `(place, day)` 命中的并集）。
     ///
-    /// 可能为空（瞬时相遇），此时 `from == to`。
+    /// 可能为单点（瞬时相遇），此时 `from == to`。
     pub span: TimeSpan,
+    /// 所属地图 ID（两条 Track 都必须挂在同一张图）。
+    pub map: Id,
     pub severity: HintSeverity,
 }
 
 /// 相遇检测的输入。
-#[derive(Debug, Clone, Copy)]
+///
+/// **零物理量**：没有 maps 参数，没有 width_km，没有 sight_km。
+/// 判定完全由 `Track.waypoints` 上的 `place` 与 `day` 字段决定。
+#[derive(Debug, Clone, Copy, Default)]
 pub struct EncounterInput<'a> {
     pub units: &'a [Unit],
     pub tracks: &'a [Track],
     pub events: &'a [Event],
-    /// 空间贴近阈值（地图局部坐标单位）。两条轨迹同一天的位置距离
-    /// 小于等于此值即视为「相遇」。默认建议取「一个格子」的量级。
-    pub proximity: f32,
-}
-
-impl Default for EncounterInput<'_> {
-    fn default() -> Self {
-        Self {
-            units: &[],
-            tracks: &[],
-            events: &[],
-            proximity: 0.0,
-        }
-    }
 }
 
 /// 检测所有「相遇但未写事件」的时空点（**纯函数**，不读文件、不写状态）。
 ///
 /// 返回值按 `fingerprint` 升序，保证**确定性**（`AGENTS.md` §1.4）。
 ///
-/// ## 算法（刻意朴素）
+/// ## 算法（刻意朴素，与跨度无关）
 ///
 /// 1. 按单位分组轨迹；
-/// 2. 枚举**带 `day` 的 waypoint**（唯一有确切时空的点）作为候选日；
-/// 3. 对每个候选日，检查另一单位的轨迹在该日的位置是否贴近；
-/// 4. 连续多天贴近则**归并成一个区间**，避免逐日刷屏；
-/// 5. 若该区间内没有事件覆盖 → 产出提示。
-///
-/// 逐步扫描每一天的朴素实现在这里被刻意拒绝：`day` 是天数计数器，
-/// 跨度可能上千年，逐日枚举会卡死。用 waypoint 锚点做候选集是
-/// **同样精确**且**与跨度无关**的做法。
+/// 2. 逐对单位：枚举两条 Track 的 Waypoint 对；
+/// 3. 当且仅当「place 相等 ∧ day 相等」时，命中一次相遇；
+/// 4. 若该 `(place, day)` 没有事件覆盖 → 收集进对应指纹的 hint；
+/// 5. 同一指纹的所有命中日归并为一个 `TimeSpan`。
 pub fn detect_encounter_hints(input: EncounterInput<'_>) -> Vec<EncounterHint> {
     // 轨迹按单位分组；同一单位可能有多条轨迹（分段的行军）。
     let mut by_unit: BTreeMap<&str, Vec<&Track>> = BTreeMap::new();
@@ -132,7 +136,8 @@ pub fn detect_encounter_hints(input: EncounterInput<'_>) -> Vec<EncounterHint> {
         by_unit.entry(t.unit.as_str()).or_default().push(t);
     }
 
-    let mut hints: Vec<EncounterHint> = Vec::new();
+    // fingerprint -> 暂存的 hint（先收集所有 day，最后归并 span）。
+    let mut buckets: BTreeMap<String, EncounterHint> = BTreeMap::new();
 
     // 逐对单位。
     let unit_ids: Vec<&str> = by_unit.keys().copied().collect();
@@ -141,28 +146,72 @@ pub fn detect_encounter_hints(input: EncounterInput<'_>) -> Vec<EncounterHint> {
             let (a, b) = (unit_ids[i], unit_ids[j]);
             let a_tracks = by_unit.get(a).map(|v| v.as_slice()).unwrap_or(&[]);
             let b_tracks = by_unit.get(b).map(|v| v.as_slice()).unwrap_or(&[]);
-            for span in meeting_spans(a_tracks, b_tracks, input.proximity) {
-                // 已被事件覆盖 → 不是提示（作者写了）。
-                if covered_by_event(&span, input.events) {
-                    continue;
+
+            for ta in a_tracks {
+                for tb in b_tracks {
+                    // 地图不同 → 坐标系不可比，直接跳过。
+                    if ta.map != tb.map {
+                        continue;
+                    }
+                    // 两条 Track 的时间区间必须重叠。
+                    if !ta.span.overlaps(&tb.span) {
+                        continue;
+                    }
+                    let map_id = ta.map.clone();
+                    for wa in &ta.waypoints {
+                        for wb in &tb.waypoints {
+                            let (Some(place_a), Some(place_b)) =
+                                (wa.place.as_ref(), wb.place.as_ref())
+                            else {
+                                continue;
+                            };
+                            if place_a != place_b {
+                                continue;
+                            }
+                            let (Some(day_a), Some(day_b)) = (wa.day, wb.day) else {
+                                continue;
+                            };
+                            if day_a != day_b {
+                                continue;
+                            }
+                            // 命中：两单位同一天同一地点。
+                            if covered_by_event(place_a, day_a, input.events) {
+                                continue;
+                            }
+                            let fingerprint = encounter_fingerprint(a, b, place_a.as_str());
+                            let day = day_a;
+                            buckets
+                                .entry(fingerprint.clone())
+                                .and_modify(|h| {
+                                    // 扩张 span（保持确定性：取 [min(from), max(to+1))）。
+                                    if h.span.from > day {
+                                        h.span.from = day;
+                                    }
+                                    match h.span.to {
+                                        Some(t) if t <= day => {
+                                            h.span.to = Some(day.saturating_add(1));
+                                        }
+                                        None => {}
+                                        _ => {}
+                                    }
+                                })
+                                .or_insert_with(|| EncounterHint {
+                                    fingerprint: fingerprint.clone(),
+                                    units: [Id::new_unchecked(a), Id::new_unchecked(b)],
+                                    place: place_a.clone(),
+                                    span: TimeSpan::new(day, day.saturating_add(1)).unwrap(),
+                                    map: map_id.clone(),
+                                    severity: HintSeverity::EncounterUnwritten,
+                                });
+                        }
+                    }
                 }
-                let Some(at) = span.at else { continue };
-                let fingerprint =
-                    encounter_fingerprint(a, b, span.place.as_ref().map(|p| p.as_str()));
-                hints.push(EncounterHint {
-                    fingerprint,
-                    units: [Id::new_unchecked(a), Id::new_unchecked(b)],
-                    place: span.place.clone(),
-                    at,
-                    span: span.span,
-                    severity: HintSeverity::EncounterUnwritten,
-                });
             }
         }
     }
 
+    let mut hints: Vec<EncounterHint> = buckets.into_values().collect();
     hints.sort_by(|x, y| x.fingerprint.cmp(&y.fingerprint));
-    hints.dedup_by(|a, b| a.fingerprint == b.fingerprint);
     hints
 }
 
@@ -170,148 +219,30 @@ pub fn detect_encounter_hints(input: EncounterInput<'_>) -> Vec<EncounterHint> {
 ///
 /// **不含日期**——日期是「这次相遇持续多久」，不是「这是哪一次相遇」。
 /// 顺序无关（先按字典序排），保证 A/B 交换得到同一指纹。
-pub fn encounter_fingerprint(unit_a: &str, unit_b: &str, place: Option<&str>) -> String {
+pub fn encounter_fingerprint(unit_a: &str, unit_b: &str, place: &str) -> String {
     let (mut a, mut b) = (unit_a, unit_b);
     if a > b {
         std::mem::swap(&mut a, &mut b);
     }
-    match place {
-        Some(p) => format!("{a}|{b}|{p}"),
-        None => format!("{a}|{b}|@pos"),
-    }
+    format!("{a}|{b}|{place}")
 }
 
-/// 一段「同时同地」的交集。
-struct MeetingSpan {
-    span: TimeSpan,
-    place: Option<Id>,
-    at: Option<crate::geometry::Point>,
-}
-
-/// 求两条（或多段）轨迹两两之间的同时同地交集。
-fn meeting_spans(a: &[&Track], b: &[&Track], proximity: f32) -> Vec<MeetingSpan> {
-    let mut out = Vec::new();
-    for ta in a {
-        for tb in b {
-            // 地图不同 → 坐标系不可比，直接跳过（跨图引用靠 PlaceID，见 ADR-0003）。
-            if ta.map != tb.map {
-                continue;
-            }
-            // 先按 track.span 求交集，避免遍历无关时段。
-            if !ta.span.overlaps(&tb.span) {
-                continue;
-            }
-            // 候选日 = A 轨迹带 day 的锚点 ∩ B 轨迹的时间范围。
-            // 用锚点而非逐日枚举：day 跨度可能上千年（见 detect_encounter_hints 文档）。
-            let mut days: Vec<i64> = ta
-                .waypoints
-                .iter()
-                .filter_map(|w| w.day)
-                .filter(|d| tb.span.contains(&crate::time::TimePoint(*d)))
-                .collect();
-            days.sort_unstable();
-            days.dedup();
-
-            // 记录每处的贴近区间起点。
-            let mut run_start: Option<i64> = None;
-            let mut last: Option<i64> = None;
-            let mut run_place: Option<Id> = None;
-            let mut run_at: Option<crate::geometry::Point> = None;
-
-            for d in days {
-                let (Some(pa), Some(pb)) = (ta.sample_at(d), tb.sample_at(d)) else {
-                    // 轨迹退化为无坐标：无法判定空间，视为相遇结束。
-                    if let Some(s) = run_start {
-                        push_span(&mut out, s, last.unwrap_or(s), &run_place, &run_at);
-                        run_start = None;
-                    }
-                    continue;
-                };
-                if distance(pa, pb) <= proximity {
-                    if run_start.is_none() {
-                        run_start = Some(d);
-                        // 归并地点优先取显式 place，其次取坐标串。
-                        run_place = shared_place(ta, tb, d);
-                        run_at = Some(midpoint(pa, pb));
-                    }
-                    last = Some(d);
-                } else if let Some(s) = run_start {
-                    push_span(&mut out, s, last.unwrap_or(s), &run_place, &run_at);
-                    run_start = None;
-                    run_place = None;
-                    run_at = None;
-                }
-            }
-            if let Some(s) = run_start {
-                push_span(&mut out, s, last.unwrap_or(s), &run_place, &run_at);
-            }
-        }
-    }
-    out
-}
-
-/// 把贴近区间转成 `TimeSpan`。瞬时相遇（`from == to`）用 1 天窗口避免零长。
-fn push_span(
-    out: &mut Vec<MeetingSpan>,
-    from: i64,
-    to: i64,
-    place: &Option<Id>,
-    at: &Option<crate::geometry::Point>,
-) {
-    // 锚点是**离散采样**：从 d 起直到下一锚点之前都算在场，
-    // 故终点取 `to + 1`（半开区间的上界）。这让「同日相遇」不被误判为零长。
-    let to_exclusive = to.saturating_add(1);
-    if let Ok(span) = TimeSpan::new(from, to_exclusive) {
-        out.push(MeetingSpan {
-            span,
-            place: place.clone(),
-            at: *at,
-        });
-    }
-}
-
-/// 取两条轨迹在 `day` 的共有地点（**必须两边的 waypoint 都指向同一 place**）。
-fn shared_place(a: &Track, b: &Track, day: i64) -> Option<Id> {
-    let pa = a.waypoints.iter().find(|w| w.day == Some(day))?;
-    let pb = b.waypoints.iter().find(|w| w.day == Some(day))?;
-    match (&pa.place, &pb.place) {
-        (Some(x), Some(y)) if x == y => Some(x.clone()),
-        _ => None,
-    }
-}
-
-fn distance(a: crate::geometry::Point, b: crate::geometry::Point) -> f32 {
-    let dx = a.x - b.x;
-    let dy = a.y - b.y;
-    (dx * dx + dy * dy).sqrt()
-}
-
-fn midpoint(a: crate::geometry::Point, b: crate::geometry::Point) -> crate::geometry::Point {
-    crate::geometry::Point {
-        x: (a.x + b.x) / 2.0,
-        y: (a.y + b.y) / 2.0,
-    }
-}
-
-/// 该相遇区间是否已被事件覆盖（作者写了）。
+/// 该 `(place, day)` 是否已被事件覆盖（作者写了）。
 ///
 /// 判定口径（**宽进严出**：宁可漏提示，不可误报）：
-/// - 事件 `span` 与相遇区间**有重叠**，且
-/// - 事件 `place` 相同（若相遇有显式地点）。
+/// - 事件 `span` 与该 `day` 有覆盖（半开区间 `[from, to)`），且
+/// - 事件 `place` 与相遇 `place` 完全相等。
 ///
-/// 相遇无显式地点时只比对时间——不做坐标比对，因为坐标系混用的
-/// 风险高于收益（宁可漏，不可扰）。
-///
-/// 这个退化是**有意为之**：判定过严会产生大量误报（提示满屏），
-/// 而误报的代价（作者养成忽略提示）远高于漏报。
-fn covered_by_event(meet: &MeetingSpan, events: &[Event]) -> bool {
+/// 无 `place` 的事件不参与压制（无法可靠对齐地点）。
+fn covered_by_event(meet_place: &Id, meet_day: i64, events: &[Event]) -> bool {
+    let tp = crate::time::TimePoint(meet_day);
     events.iter().any(|e| {
-        if !e.span.overlaps(&meet.span) {
+        if !e.span.contains(&tp) {
             return false;
         }
-        match (&e.place, &meet.place) {
-            (Some(ep), Some(mp)) => ep == mp,
-            _ => true,
+        match &e.place {
+            Some(ep) => ep == meet_place,
+            None => false,
         }
     })
 }
@@ -319,15 +250,13 @@ fn covered_by_event(meet: &MeetingSpan, events: &[Event]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::track::Waypoint;
 
     fn id(s: &str) -> Id {
         Id::new_unchecked(s)
     }
 
-    fn pt(x: f32, y: f32) -> crate::geometry::Point {
-        crate::geometry::Point { x, y }
-    }
-
+    /// 单位（不携带视野字段）。
     fn unit(id_s: &str, name: &str) -> Unit {
         Unit {
             id: id(id_s),
@@ -337,7 +266,8 @@ mod tests {
         }
     }
 
-    /// 一条直线轨迹：从 (0,0) 走到 (10,0)。
+    /// 一条轨迹：在 `day0` 时位于 place_gate、在 `day1` 时位于 place_ridge。
+    /// span = [day0, day1)。
     fn track(id_s: &str, unit_s: &str, day0: i64, day1: i64) -> Track {
         Track {
             id: id(id_s),
@@ -345,17 +275,34 @@ mod tests {
             map: id("map_world"),
             span: TimeSpan::new(day0, day1).unwrap(),
             waypoints: vec![
-                crate::track::Waypoint {
+                Waypoint {
                     day: Some(day0),
-                    pos: Some(pt(0.0, 0.0)),
+                    pos: None,
                     place: Some(id("place_gate")),
                 },
-                crate::track::Waypoint {
+                Waypoint {
                     day: Some(day1),
-                    pos: Some(pt(10.0, 0.0)),
+                    pos: None,
                     place: Some(id("place_ridge")),
                 },
             ],
+            path: None,
+        }
+    }
+
+    /// 一条「单点轨迹」：只有一个 Waypoint，落在 (day, place)。
+    /// span = [day, day+1)（半开 1 天）。
+    fn track_at(id_s: &str, unit_s: &str, day: i64, place: &str) -> Track {
+        Track {
+            id: id(id_s),
+            unit: id(unit_s),
+            map: id("map_world"),
+            span: TimeSpan::new(day, day + 1).unwrap(),
+            waypoints: vec![Waypoint {
+                day: Some(day),
+                pos: None,
+                place: Some(id(place)),
+            }],
             path: None,
         }
     }
@@ -377,139 +324,204 @@ mod tests {
         units: &'a [Unit],
         tracks: &'a [Track],
         events: &'a [Event],
-        proximity: f32,
     ) -> EncounterInput<'a> {
         EncounterInput {
             units,
             tracks,
             events,
-            proximity,
         }
     }
 
     #[test]
-    fn two_units_meeting_at_same_place_with_no_event_yields_hint() {
-        // 两条轨迹都是 day0=0 从 place_gate 出发 → 当天必然相遇。
+    fn two_units_with_shared_place_and_day_yields_hint() {
+        // 两条轨迹都在 day 0 @ place_gate → 必相遇。
         let units = vec![unit("unit_a", "甲"), unit("unit_b", "乙")];
-        let tracks = vec![track("t_a", "unit_a", 0, 10), track("t_b", "unit_b", 0, 10)];
-        let hints = detect_encounter_hints(input(&units, &tracks, &[], 1.0));
-        assert_eq!(hints.len(), 1, "同一地点同一时刻相遇且无事件 → 一条提示");
+        let tracks = vec![
+            track_at("t_a", "unit_a", 0, "place_gate"),
+            track_at("t_b", "unit_b", 0, "place_gate"),
+        ];
+        let hints = detect_encounter_hints(input(&units, &tracks, &[]));
+        assert_eq!(hints.len(), 1, "同地同天相遇且未写事件 → 一条提示");
         assert_eq!(hints[0].units[0].as_str(), "unit_a");
         assert_eq!(hints[0].units[1].as_str(), "unit_b");
+        assert_eq!(hints[0].place.as_str(), "place_gate");
+        assert_eq!(hints[0].span.from, 0);
     }
 
     #[test]
-    fn event_at_meeting_place_suppresses_hint() {
-        // 作者写了事件 → 不该提示（这是最核心的一条：提示不能扰民）。
+    fn waypoint_without_place_never_participates() {
+        // 核心：Waypoint 缺 place → 无锚定地点 → 不参与判定。
         let units = vec![unit("unit_a", "甲"), unit("unit_b", "乙")];
-        let tracks = vec![track("t_a", "unit_a", 0, 10), track("t_b", "unit_b", 0, 10)];
-        let events = vec![event("evt_x", "place_gate", 0, 5)];
-        let hints = detect_encounter_hints(input(&units, &tracks, &events, 1.0));
-        assert!(hints.is_empty(), "相遇处已写事件，不应提示；实得 {hints:?}");
+        let mut ta = track_at("t_a", "unit_a", 0, "place_gate");
+        ta.waypoints[0].place = None; // 移除 place
+        let tb = track_at("t_b", "unit_b", 0, "place_gate");
+        assert!(
+            detect_encounter_hints(input(&units, &[ta, tb], &[])).is_empty(),
+            "Waypoint 无 place 不参与相遇判定"
+        );
     }
 
     #[test]
-    fn event_at_different_place_does_not_suppress_hint() {
-        // 别处的事件不该掩盖此处相遇。
+    fn waypoint_without_day_never_participates() {
+        // Waypoint 缺 day（顺序点，T2）→ 不参与校验。
         let units = vec![unit("unit_a", "甲"), unit("unit_b", "乙")];
-        let tracks = vec![track("t_a", "unit_a", 0, 10), track("t_b", "unit_b", 0, 10)];
-        let events = vec![event("evt_x", "place_elsewhere", 0, 5)];
-        let hints = detect_encounter_hints(input(&units, &tracks, &events, 1.0));
-        assert_eq!(hints.len(), 1, "异地事件不应抑制相遇提示");
+        let mut ta = track_at("t_a", "unit_a", 0, "place_gate");
+        ta.waypoints[0].day = None;
+        let tb = track_at("t_b", "unit_b", 0, "place_gate");
+        assert!(
+            detect_encounter_hints(input(&units, &[ta, tb], &[])).is_empty(),
+            "Waypoint 无 day 不参与相遇判定"
+        );
     }
 
     #[test]
     fn tracks_on_different_maps_never_meet() {
-        // 坐标系不可比（ADR-0003：跨图靠 PlaceID 串联，不靠坐标）。
+        // 坐标系不可比（ADR-0003：跨图靠 PlaceID 串联）。
         let units = vec![unit("unit_a", "甲"), unit("unit_b", "乙")];
-        let ta = track("t_a", "unit_a", 0, 10);
-        let mut tb = track("t_b", "unit_b", 0, 10);
+        let ta = track_at("t_a", "unit_a", 0, "place_gate");
+        let mut tb = track_at("t_b", "unit_b", 0, "place_gate");
         tb.map = id("map_other");
-        let hints = detect_encounter_hints(input(&units, &[ta, tb], &[], 100.0));
-        assert!(hints.is_empty(), "不同地图的同坐标不是相遇");
+        assert!(
+            detect_encounter_hints(input(&units, &[ta, tb], &[])).is_empty(),
+            "不同地图的同地不是相遇"
+        );
     }
 
     #[test]
-    fn distant_units_do_not_meet_under_small_threshold() {
-        // 阈值 1.0，但两条轨迹各自朝相反方向走 → 不该相遇。
+    fn tracks_with_disjoint_spans_never_meet() {
+        // 两条 Track 时间完全不重叠 → 即使在「同一 place」也不会相遇。
         let units = vec![unit("unit_a", "甲"), unit("unit_b", "乙")];
-        let ta = track("t_a", "unit_a", 0, 10);
-        let mut tb = track("t_b", "unit_b", 0, 10);
-        // 让 B 从远处出发。
-        tb.waypoints[0].pos = Some(pt(500.0, 500.0));
-        tb.waypoints[1].pos = Some(pt(510.0, 500.0));
-        let hints = detect_encounter_hints(input(&units, &[ta, tb], &[], 1.0));
-        assert!(hints.is_empty(), "距离远超阈值不算相遇");
+        let ta = track_at("t_a", "unit_a", 0, "place_gate");
+        let tb = track_at("t_b", "unit_b", 100, "place_gate");
+        assert!(
+            detect_encounter_hints(input(&units, &[ta, tb], &[])).is_empty(),
+            "时段无交集即使同地也不算相遇"
+        );
+    }
+
+    #[test]
+    fn different_place_does_not_count_as_meeting() {
+        // 同天但在不同地点 → 不相遇。
+        let units = vec![unit("unit_a", "甲"), unit("unit_b", "乙")];
+        let ta = track_at("t_a", "unit_a", 0, "place_gate");
+        let tb = track_at("t_b", "unit_b", 0, "place_ridge");
+        assert!(
+            detect_encounter_hints(input(&units, &[ta, tb], &[])).is_empty(),
+            "异地不同算相遇"
+        );
+    }
+
+    #[test]
+    fn event_at_meeting_place_and_day_suppresses_hint() {
+        // 作者写了事件 → 不该提示（这是最核心的一条：提示不能扰民）。
+        let units = vec![unit("unit_a", "甲"), unit("unit_b", "乙")];
+        let tracks = vec![
+            track_at("t_a", "unit_a", 0, "place_gate"),
+            track_at("t_b", "unit_b", 0, "place_gate"),
+        ];
+        let events = vec![event("evt_x", "place_gate", 0, 1)];
+        assert!(
+            detect_encounter_hints(input(&units, &tracks, &events)).is_empty(),
+            "相遇处已写事件，不应提示"
+        );
+    }
+
+    #[test]
+    fn event_at_different_place_does_not_suppress_hint() {
+        let units = vec![unit("unit_a", "甲"), unit("unit_b", "乙")];
+        let tracks = vec![
+            track_at("t_a", "unit_a", 0, "place_gate"),
+            track_at("t_b", "unit_b", 0, "place_gate"),
+        ];
+        let events = vec![event("evt_x", "place_elsewhere", 0, 1)];
+        assert_eq!(
+            detect_encounter_hints(input(&units, &tracks, &events)).len(),
+            1,
+            "异地事件不应抑制相遇提示"
+        );
+    }
+
+    #[test]
+    fn event_without_place_does_not_suppress_hint() {
+        // 缺 place 的事件无法对齐地点 → 不压制。
+        let units = vec![unit("unit_a", "甲"), unit("unit_b", "乙")];
+        let tracks = vec![
+            track_at("t_a", "unit_a", 0, "place_gate"),
+            track_at("t_b", "unit_b", 0, "place_gate"),
+        ];
+        let mut e = event("evt_x", "place_gate", 0, 1);
+        e.place = None;
+        assert_eq!(
+            detect_encounter_hints(input(&units, &tracks, &[e])).len(),
+            1,
+            "事件无 place 不应压制相遇提示"
+        );
     }
 
     #[test]
     fn fingerprint_is_order_independent() {
-        let f1 = encounter_fingerprint("unit_b", "unit_a", Some("place_gate"));
-        let f2 = encounter_fingerprint("unit_a", "unit_b", Some("place_gate"));
+        let f1 = encounter_fingerprint("unit_b", "unit_a", "place_gate");
+        let f2 = encounter_fingerprint("unit_a", "unit_b", "place_gate");
         assert_eq!(f1, f2, "A/B 交换必须得到同一指纹，否则无法认领");
     }
 
     #[test]
     fn fingerprint_does_not_contain_date() {
-        // 同一对单位在同一地相遇于不同日期 → 视为「同一次相遇」的延续。
-        let f1 = encounter_fingerprint("unit_a", "unit_b", Some("place_gate"));
-        assert!(!f1.contains("0") && !f1.contains('0'));
+        let f1 = encounter_fingerprint("unit_a", "unit_b", "place_gate");
         assert_eq!(f1, "unit_a|unit_b|place_gate");
     }
 
     #[test]
     fn hint_is_stable_across_repeated_runs() {
-        // 确定性（AGENTS §1.4）：同样输入必须给出同样顺序。
         let units = vec![unit("unit_a", "甲"), unit("unit_b", "乙")];
         let tracks = vec![track("t_a", "unit_a", 0, 10), track("t_b", "unit_b", 0, 10)];
-        let a = detect_encounter_hints(input(&units, &tracks, &[], 1.0));
-        let b = detect_encounter_hints(input(&units, &tracks, &[], 1.0));
+        let a = detect_encounter_hints(input(&units, &tracks, &[]));
+        let b = detect_encounter_hints(input(&units, &tracks, &[]));
         assert_eq!(a, b, "检测必须确定性");
     }
 
     #[test]
-    fn same_unit_pair_meeting_twice_dedups_to_one_hint() {
-        // 两次相遇（不同日期、同地点）归并为一条——这是「指纹不含日期」的收益。
-        let units = vec![unit("unit_a", "甲"), unit("unit_b", "乙")];
-        let tracks = vec![track("t_a", "unit_a", 0, 10), track("t_b", "unit_b", 0, 10)];
-        let hints = detect_encounter_hints(input(&units, &tracks, &[], 1.0));
-        assert!(
-            hints.len() <= 1,
-            "同一对单位在同一地点的多日相遇应归并，实得 {}",
-            hints.len()
-        );
-    }
-
-    #[test]
     fn hint_severity_is_never_error_level() {
-        // 裁定：相遇未写事件**永远不是错误**（AGENTS §7.5 V1）。
         assert_eq!(HintSeverity::EncounterUnwritten.label(), "相遇未写事件");
     }
 
     #[test]
     fn empty_input_yields_no_hints() {
-        assert!(detect_encounter_hints(input(&[], &[], &[], 1.0)).is_empty());
+        assert!(detect_encounter_hints(EncounterInput::default()).is_empty());
     }
 
     #[test]
-    fn encounter_span_has_positive_length() {
-        // 零长区间会让 UI 无从展示「持续多久」，且 TimeSpan::new 拒绝零长。
+    fn encounter_only_on_exact_day_match_not_proximity() {
+        // 关键：判定完全依赖数据严格相等（place + day），
+        // 没有任何「距离相近也算」的弹性。
         let units = vec![unit("unit_a", "甲"), unit("unit_b", "乙")];
-        let tracks = vec![track("t_a", "unit_a", 0, 10), track("t_b", "unit_b", 0, 10)];
-        let hints = detect_encounter_hints(input(&units, &tracks, &[], 1.0));
-        for h in &hints {
-            // 相遇区间必须是闭合的正长度（`to` 必为 Some，且 > from）。
-            let to = h.span.to.expect("相遇区间必为闭合区间");
-            assert!(to > h.span.from, "相遇区间必须是正长度：{:?}", h.span);
-        }
+        let ta = track_at("t_a", "unit_a", 0, "place_gate");
+        let tb = track_at("t_b", "unit_b", 1, "place_gate"); // 错一天
+        assert!(
+            detect_encounter_hints(input(&units, &[ta, tb], &[])).is_empty(),
+            "同地但 day 错开一天 → 不算相遇（无任何距离弹性）"
+        );
     }
 
     #[test]
-    fn proximity_zero_still_meets_at_exact_same_point() {
-        // 阈值 0：只有完全重合才算。防止默认阈值误伤。
+    fn multiple_days_at_same_place_merge_into_one_hint() {
+        // 同一对 (units, place) 多天相遇 → 归并为一条 hint，span 覆盖多天。
         let units = vec![unit("unit_a", "甲"), unit("unit_b", "乙")];
-        let tracks = vec![track("t_a", "unit_a", 0, 10), track("t_b", "unit_b", 0, 10)];
-        let hints = detect_encounter_hints(input(&units, &tracks, &[], 0.0));
-        assert_eq!(hints.len(), 1, "完全重合应判定相遇");
+        let mut ta = track_at("t_a", "unit_a", 0, "place_gate");
+        let mut tb = track_at("t_b", "unit_b", 0, "place_gate");
+        // 加一个中间点，让两条轨迹在 day 5 也都到 place_gate。
+        ta.waypoints.push(Waypoint {
+            day: Some(5),
+            pos: None,
+            place: Some(id("place_gate")),
+        });
+        tb.waypoints.push(Waypoint {
+            day: Some(5),
+            pos: None,
+            place: Some(id("place_gate")),
+        });
+        let hints = detect_encounter_hints(input(&units, &[ta, tb], &[]));
+        assert_eq!(hints.len(), 1, "同指纹多天相遇归并为一条");
+        assert_eq!(hints[0].span.from, 0);
     }
 }

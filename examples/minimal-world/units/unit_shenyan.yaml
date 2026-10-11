@@ -5,3 +5,6 @@ id: unit_shenyan
 name: 沈砚
 members:
   - char_shenyan
+# 2026-10-12 裁定（甲）：Unit **不携带视野字段**。
+# 相遇判定改为「两 Track 的 Waypoint 在 (place, day) 同时覆盖」，
+# 完全不需要「视野」这个感知参数。

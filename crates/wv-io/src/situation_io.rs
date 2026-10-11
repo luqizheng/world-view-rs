@@ -25,9 +25,14 @@
 //! 报错必须是 `CoreError::DanglingReference { referrer, missing }`，
 //! 且信息里指出 YAML 字段路径（`AGENTS.md` §7.4 精神）。
 //!
-//! > ⚠️ **待裁（本轮未动）**：本函数返回 `Err` 会**阻断加载**；而 2026-10-11 的裁定
-//! > 「校验只提示、不阻止」（`AGENTS.md` §7.5）针对的是**编辑 / 保存**路径。
-//! > 「加载期硬失败」与「编辑期软提示」两种强度是否应统一，见 ADR-0004 §待裁。
+//! ## 强度：**软失败**（2026-10-11 用户裁定 H5 甲）
+//!
+//! 本模块**返回问题清单**，不返回 `Result`。`Project::load_world()` 不再因
+//! 悬空引用而失败——作者可以正常进入工程、编辑、保存，问题在诊断面板中列出。
+//!
+//! 依据是 `AGENTS.md` §7.5 V1「校验只提示，不阻止」：**「报错但允许存在」**
+//! 是用户原话。旧实现（遇错即`Err`）在语义上是「报错且禁止存在，连看都看不到」，
+//! 超出裁定范围——那不是宽容，是让作者没有机会去改。
 
 use std::path::Path;
 
@@ -88,27 +93,41 @@ pub struct KnownIds<'a> {
 
 /// 校验事态与轨迹的引用完整性（基线 §2.21）。
 ///
-/// 传入已加载的 world 各部分，返回错误或空。
-pub fn validate_situations_and_tracks(
+/// ## 返回**全部**问题，而不是遇到第一个就停（2026-10-11 用户裁定 H5 甲）
+///
+/// 旧实现遇错即 `return Err`，导致作者一次只能看到**一个**悬空引用，
+/// 改一个再打开看下一个——这与「工具的职责是让作者看见问题」
+/// （`AGENTS.md` §7.5V1）相悖。现在**一次性检出全部**，
+/// 汇总为 [`Vec<CoreError>`]，由调用方决定如何呈现。
+///
+/// ## 硬失败 → 软失败
+///
+/// 本函数**不再让工程打不开**。`Project::load_world()` 不再传播这些错误；
+/// 它们被转成 `DiagLevel::Error` 级诊断（`crate::diagnostics`），
+/// 在校验面板里列出，作者可**正常进入、编辑、保存**。
+///
+/// 「报错但允许存在」——这是用户 2026-10-11 的原话。
+pub fn collect_situations_and_tracks_dangling(
     situations: &[Situation],
     tracks: &[Track],
     known: KnownIds<'_>,
-) -> Result<(), CoreError> {
+) -> Vec<CoreError> {
+    let mut dangling: Vec<CoreError> = Vec::new();
     let has = |ids: &[Id], id: &Id| ids.iter().any(|x| x == id);
 
     let track_ids: Vec<Id> = tracks.iter().map(|t| t.id.clone()).collect();
 
     for track in tracks {
         // 运动主体必须是已知单位（ADR-0004）。旧口径允许「角色或势力」并保持宽松，
-        // 现已收敛为 Unit —— 悬空即报错（§7.2：不得静默忽略）。
+        // 现已收敛为 Unit —— 悬空必须被**检出**（§7.2），但不阻断加载（§7.5V1）。
         if !has(known.units, &track.unit) {
-            return Err(CoreError::DanglingReference {
+            dangling.push(CoreError::DanglingReference {
                 referrer: format!("track.{} (field `unit`)", track.id),
                 missing: track.unit.to_string(),
             });
         }
         if !has(known.maps, &track.map) {
-            return Err(CoreError::DanglingReference {
+            dangling.push(CoreError::DanglingReference {
                 referrer: format!("track.{} (field `map`)", track.id),
                 missing: track.map.to_string(),
             });
@@ -116,7 +135,7 @@ pub fn validate_situations_and_tracks(
         for (i, wp) in track.waypoints.iter().enumerate() {
             if let Some(place) = &wp.place {
                 if !has(known.places, place) {
-                    return Err(CoreError::DanglingReference {
+                    dangling.push(CoreError::DanglingReference {
                         referrer: format!("track.{}.waypoints[{i}].place", track.id),
                         missing: place.to_string(),
                     });
@@ -128,14 +147,14 @@ pub fn validate_situations_and_tracks(
     for sit in situations {
         for (i, step) in sit.steps.iter().enumerate() {
             if !has(known.events, &step.event) {
-                return Err(CoreError::DanglingReference {
+                dangling.push(CoreError::DanglingReference {
                     referrer: format!("situation.{} (field `steps[{i}].event`)", sit.id),
                     missing: step.event.to_string(),
                 });
             }
             for (j, track_id) in step.tracks.iter().enumerate() {
                 if !has(&track_ids, track_id) {
-                    return Err(CoreError::DanglingReference {
+                    dangling.push(CoreError::DanglingReference {
                         referrer: format!("situation.{} (field `steps[{i}].tracks[{j}]`)", sit.id),
                         missing: track_id.to_string(),
                     });
@@ -146,14 +165,20 @@ pub fn validate_situations_and_tracks(
         // narrative_order 里的每个 ID 必须存在，且必须属于本事的 steps（基线 §2.21）。
         if let Some(order) = &sit.narrative_order {
             for (i, id) in order.iter().enumerate() {
+                // 「不存在」与「不属于本事的 steps」是**两个不同的问题**，
+                // 但后者的前提是前者成立。若ID 压根不存在，作者只需解决
+                // 「事件缺失」这一件事——再补一条「它不属于 steps」是**噪音**
+                // （同一个字段同一处悬空被报两次，作者会困惑该改哪儿）。
+                // 故此处 `continue`：不存在的 ID 只报一次。
                 if !has(known.events, id) {
-                    return Err(CoreError::DanglingReference {
+                    dangling.push(CoreError::DanglingReference {
                         referrer: format!("situation.{} (field `narrative_order[{i}]`)", sit.id),
                         missing: id.to_string(),
                     });
+                    continue;
                 }
                 if !sit.steps.iter().any(|s| &s.event == id) {
-                    return Err(CoreError::DanglingReference {
+                    dangling.push(CoreError::DanglingReference {
                         referrer: format!(
                             "situation.{} (field `narrative_order[{i}]`)：该事件不属于本事的 steps",
                             sit.id
@@ -166,7 +191,7 @@ pub fn validate_situations_and_tracks(
 
         for (i, map_id) in sit.maps.iter().enumerate() {
             if !has(known.maps, map_id) {
-                return Err(CoreError::DanglingReference {
+                dangling.push(CoreError::DanglingReference {
                     referrer: format!("situation.{} (field `maps[{i}]`)", sit.id),
                     missing: map_id.to_string(),
                 });
@@ -176,7 +201,7 @@ pub fn validate_situations_and_tracks(
         // 归纳容器持有的单位必须存在（ADR-0004）。
         for (i, unit_id) in sit.units.iter().enumerate() {
             if !has(known.units, unit_id) {
-                return Err(CoreError::DanglingReference {
+                dangling.push(CoreError::DanglingReference {
                     referrer: format!("situation.{} (field `units[{i}]`)", sit.id),
                     missing: unit_id.to_string(),
                 });
@@ -185,7 +210,7 @@ pub fn validate_situations_and_tracks(
 
         if let Some(protagonist) = &sit.protagonist {
             if !has(known.characters, protagonist) {
-                return Err(CoreError::DanglingReference {
+                dangling.push(CoreError::DanglingReference {
                     referrer: format!("situation.{} (field `protagonist`)", sit.id),
                     missing: protagonist.to_string(),
                 });
@@ -193,7 +218,7 @@ pub fn validate_situations_and_tracks(
         }
     }
 
-    Ok(())
+    dangling
 }
 
 #[cfg(test)]
@@ -227,48 +252,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn known_unit_passes_validation() {
-        let t = track("unit_a", "map_world");
-        let ok = validate_situations_and_tracks(
-            &[],
-            &[t],
-            KnownIds {
-                events: &[],
-                maps: &[id("map_world")],
-                characters: &[],
-                places: &[],
-                units: &[id("unit_a")],
-            },
-        );
-        assert!(ok.is_ok());
-    }
-
-    #[test]
-    fn dangling_track_unit_is_reported() {
-        // ADR-0004：运动主体必须指向已知单位（旧口径的「角色或势力」已收敛为 Unit）。
-        let t = track("unit_missing", "map_world");
-        let err = validate_situations_and_tracks(
-            &[],
-            &[t],
-            KnownIds {
-                events: &[],
-                maps: &[id("map_world")],
-                characters: &[],
-                places: &[],
-                units: &[],
-            },
-        )
-        .unwrap_err();
-        match err {
-            CoreError::DanglingReference { referrer, missing } => {
-                assert!(referrer.contains("field `unit`"), "referrer={referrer}");
-                assert_eq!(missing, "unit_missing");
-            }
-            other => panic!("期望 DanglingReference，实际 {other:?}"),
-        }
-    }
-
     fn sit(steps: Vec<&str>, narrative: Option<Vec<&str>>) -> Situation {
         Situation {
             id: id("sit_x"),
@@ -292,83 +275,104 @@ mod tests {
         }
     }
 
+    /// 断言「清单里恰好有一条且指向 `missing`」。
+    fn assert_one_dangling(errs: &[CoreError], referrer_needle: &str, missing: &str) {
+        assert_eq!(
+            errs.len(),
+            1,
+            "应恰好检出一条悬空引用，实得 {:?}",
+            errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        );
+        match &errs[0] {
+            CoreError::DanglingReference {
+                referrer,
+                missing: m,
+            } => {
+                assert!(
+                    referrer.contains(referrer_needle),
+                    "referrer={referrer} 应含 {referrer_needle}"
+                );
+                assert_eq!(m, missing);
+            }
+            other => panic!("期望 DanglingReference，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn known_unit_passes_validation() {
+        let t = track("unit_a", "map_world");
+        let errs = collect_situations_and_tracks_dangling(
+            &[],
+            &[t],
+            KnownIds {
+                events: &[],
+                maps: &[id("map_world")],
+                characters: &[],
+                places: &[],
+                units: &[id("unit_a")],
+            },
+        );
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn dangling_track_unit_is_reported() {
+        // ADR-0004：运动主体必须指向已知单位（旧口径的「角色或势力」已收敛为 Unit）。
+        let t = track("unit_missing", "map_world");
+        let errs = collect_situations_and_tracks_dangling(
+            &[],
+            &[t],
+            KnownIds {
+                events: &[],
+                maps: &[id("map_world")],
+                characters: &[],
+                places: &[],
+                units: &[],
+            },
+        );
+        assert_one_dangling(&errs, "field `unit`", "unit_missing");
+    }
+
     #[test]
     fn dangling_situation_unit_is_reported() {
         // ADR-0004：事态作为**归纳容器**持有的单位必须存在。
         let events = vec![id("evt_a")];
         let mut s = sit(vec!["evt_a"], None);
         s.units = vec![id("unit_missing")];
-        let err = validate_situations_and_tracks(
-            &[s],
-            &[],
-            KnownIds {
-                events: &events,
-                maps: &[],
-                characters: &[],
-                places: &[],
-                units: &[],
-            },
-        )
-        .unwrap_err();
-        match err {
-            CoreError::DanglingReference { referrer, missing } => {
-                assert!(referrer.contains("units[0]"), "referrer={referrer}");
-                assert_eq!(missing, "unit_missing");
-            }
-            other => panic!("期望 DanglingReference，实际 {other:?}"),
-        }
+        let errs = collect_situations_and_tracks_dangling(&[s], &[], known(&events, &[]));
+        assert_one_dangling(&errs, "units[0]", "unit_missing");
     }
 
     #[test]
     fn valid_situation_passes_validation() {
         let events = vec![id("evt_a"), id("evt_b")];
         let s = sit(vec!["evt_a", "evt_b"], None);
-        assert!(validate_situations_and_tracks(&[s], &[], known(&events, &[])).is_ok());
+        assert!(collect_situations_and_tracks_dangling(&[s], &[], known(&events, &[])).is_empty());
     }
 
     #[test]
     fn dangling_step_event_is_reported() {
         let events = vec![id("evt_a")];
         let s = sit(vec!["evt_a", "evt_missing"], None);
-        let err = validate_situations_and_tracks(&[s], &[], known(&events, &[])).unwrap_err();
-        match err {
-            CoreError::DanglingReference { referrer, missing } => {
-                assert!(referrer.contains("steps[1].event"), "referrer={referrer}");
-                assert_eq!(missing, "evt_missing");
-            }
-            other => panic!("期望 DanglingReference，实际 {other:?}"),
-        }
+        let errs = collect_situations_and_tracks_dangling(&[s], &[], known(&events, &[]));
+        assert_one_dangling(&errs, "steps[1].event", "evt_missing");
     }
 
     #[test]
     fn dangling_narrative_order_id_is_reported() {
         let events = vec![id("evt_a")];
         let s = sit(vec!["evt_a"], Some(vec!["evt_missing"]));
-        let err = validate_situations_and_tracks(&[s], &[], known(&events, &[])).unwrap_err();
-        match err {
-            CoreError::DanglingReference { referrer, missing } => {
-                assert!(referrer.contains("narrative_order[0]"));
-                assert_eq!(missing, "evt_missing");
-            }
-            other => panic!("期望 DanglingReference，实际 {other:?}"),
-        }
+        let errs = collect_situations_and_tracks_dangling(&[s], &[], known(&events, &[]));
+        assert_one_dangling(&errs, "narrative_order[0]", "evt_missing");
     }
 
     #[test]
     fn narrative_order_id_not_in_steps_is_reported() {
-        // 事件存在，但不属于本事的 steps → 仍应报错（README §7.2 精神）。
+        // 事件存在，但不属于本事的 steps → 仍应检出（README §7.2 精神）。
         let events = vec![id("evt_a"), id("evt_b")];
         let s = sit(vec!["evt_a"], Some(vec!["evt_b"]));
-        let err = validate_situations_and_tracks(&[s], &[], known(&events, &[])).unwrap_err();
-        match err {
-            CoreError::DanglingReference { referrer, .. } => {
-                assert!(
-                    referrer.contains("不属于本事的 steps"),
-                    "referrer={referrer}"
-                );
-            }
-            other => panic!("期望 DanglingReference，实际 {other:?}"),
-        }
+        let errs = collect_situations_and_tracks_dangling(&[s], &[], known(&events, &[]));
+        assert_one_dangling(&errs, "不属于本事的 steps", "evt_b");
     }
 
     #[test]
@@ -376,13 +380,70 @@ mod tests {
         let events = vec![id("evt_a")];
         let mut s = sit(vec!["evt_a"], None);
         s.maps = vec![id("map_missing")];
-        let err = validate_situations_and_tracks(&[s], &[], known(&events, &[])).unwrap_err();
-        match err {
-            CoreError::DanglingReference { referrer, missing } => {
-                assert!(referrer.contains("maps[0]"));
-                assert_eq!(missing, "map_missing");
-            }
-            other => panic!("期望 DanglingReference，实际 {other:?}"),
-        }
+        let errs = collect_situations_and_tracks_dangling(&[s], &[], known(&events, &[]));
+        assert_one_dangling(&errs, "maps[0]", "map_missing");
+    }
+
+    #[test]
+    fn all_dangling_references_are_collected_not_just_the_first() {
+        // H5 甲的核心：旧实现遇错即返回，作者一次只能看到一个。
+        // 现在必须**一次性**给出全部，否则「可见全部问题」只是空话。
+        let events = vec![id("evt_a")];
+        let mut s = sit(
+            vec!["evt_missing_1", "evt_missing_2"],
+            Some(vec!["evt_missing_3"]),
+        );
+        s.maps = vec![id("map_missing")];
+        s.units = vec![id("unit_missing")];
+        let errs = collect_situations_and_tracks_dangling(&[s], &[], known(&events, &[]));
+        assert_eq!(
+            errs.len(),
+            5,
+            "5 处悬空必须一次报全，实得 {}: {:?}",
+            errs.len(),
+            errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn dangling_across_tracks_and_situations_are_all_collected() {
+        let events = vec![id("evt_a")];
+        let mut t1 = track("unit_missing_a", "map_world");
+        t1.id = id("track_1");
+        let mut t2 = track("unit_missing_b", "map_world");
+        t2.id = id("track_2");
+        let mut s = sit(vec!["evt_missing"], None);
+        s.units = vec![id("unit_missing_c")];
+        let errs = collect_situations_and_tracks_dangling(
+            &[s],
+            &[t1, t2],
+            KnownIds {
+                events: &events,
+                maps: &[id("map_world")],
+                characters: &[],
+                places: &[],
+                units: &[],
+            },
+        );
+        assert_eq!(
+            errs.len(),
+            4,
+            "跨 track 与 situation 的悬空必须一次报全，实得 {:?}",
+            errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn collection_order_is_deterministic() {
+        // AGENTS §1.4：同样输入必须给出同样顺序的清单。
+        let events = vec![id("evt_a")];
+        let build = || {
+            let mut s = sit(vec!["evt_m1", "evt_m2"], None);
+            s.maps = vec![id("map_m")];
+            collect_situations_and_tracks_dangling(&[s], &[], known(&events, &[]))
+        };
+        let a: Vec<String> = build().iter().map(|e| e.to_string()).collect();
+        let b: Vec<String> = build().iter().map(|e| e.to_string()).collect();
+        assert_eq!(a, b, "悬空清单必须确定性");
     }
 }

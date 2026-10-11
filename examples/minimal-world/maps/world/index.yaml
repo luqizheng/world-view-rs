@@ -5,6 +5,8 @@ id: world_main
 name: 主世界
 level: world
 children: []
+# 2026-10-12 裁定（甲）：地图**不携带物理跨度字段**——
+# 相遇判定改为「Waypoint (place, day) 严格相等」，无需公里换算。
 extent:
   width: 4096.0
   height: 4096.0

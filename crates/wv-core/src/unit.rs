@@ -14,7 +14,7 @@
 //! |---|---|
 //! | `Track` 的动者 | **`Track.unit: Id`**（指向 `Unit`），不是含糊的「角色或势力」 |
 //! | 事态与轨迹 | **多对多引用**——`SituationStep.tracks: Vec<Id>`，一条轨迹可被多个节点引用 |
-//! | 事态与单位 | `Situation.units: Vec<Id>`（归纳容器，见 ADR-0004） |
+//! | 事态与单位 | `Situation.units: vec<Id>`（归纳容器，见 ADR-0004） |
 //!
 //! ## Unit 与 Character 的边界（用户裁定 P2：两者分离）
 //!
@@ -23,6 +23,15 @@
 //!
 //! - 单人移动也建一个 Unit，`members` 长度为 1；
 //! - 「红一军」这类复合单位，`members` 列出其领导人物。
+//!
+//! ## 2026-10-12 裁定（甲）：Unit 不携带视野字段
+//!
+//! 旧版曾加 `sight_km`（公里），用「两单位视界相交」判定相遇。
+//! 推翻理由：把「公里」塞进数据模型违反「world 不感知物理」的红线，
+//! 且 `Extent.width_km` 作为换算桥梁又引入两个新约束。已撤回。
+//!
+//! 替代方案：相遇 = 两 Track 的 Waypoint 在 `(place, day)` 上同时覆盖，
+//! 见 [`crate::encounter`] 模块。`Unit` 本身不参与判定逻辑。
 
 use crate::id::Id;
 

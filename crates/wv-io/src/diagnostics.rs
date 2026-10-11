@@ -20,6 +20,12 @@
 //!
 //! 二者共享同一套引用校验逻辑，避免「一个说有问题、另一个说没问题」。
 
+//! ## 2026-10-12 调整：相遇判定不再需要 maps
+//!
+//! 旧实现里 `EncounterInput` 带 `maps` 字段（用于取 `local_per_km` 做视界判定）；
+//! 2026-10-12 用户简化方案改为「两 Track 的 Waypoint 在 (place, day) 上同时覆盖」，
+//! 因此 `EncounterInput` 不再需要 maps 参数——见 [`wv_core::encounter`] 模块文档。
+
 use wv_core::encounter::{detect_encounter_hints, EncounterInput, HintSeverity};
 
 /// 诊断级别。
@@ -92,38 +98,38 @@ impl Diagnostics {
         self.items.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
         self.items.dedup_by(|a, b| a.fingerprint == b.fingerprint);
     }
+
+    /// 合并另一组诊断（用于「悬空引用」+「相遇提示」汇成一份面板）。
+    pub fn extend(&mut self, other: Diagnostics) {
+        self.items.extend(other.items);
+    }
 }
 
 /// 从已加载的世界派生**提示级**诊断（相遇检测）。
 ///
 /// 这是纯提示路径：**永不产生 `DiagLevel::Error`**，也永不失败。
+///
+/// ## 判定口径（2026-10-12）：Waypoint (place, day) 严格重叠
+///
+/// 判定完全由数据决定：两 Track 的 Waypoint 在 `(place, day)` 上同时覆盖。
+/// **不含任何距离阈值常量**——视野方案（ADR-0006 旧版）已撤。
 pub fn derive_hints(world: &wv_core::World) -> Diagnostics {
-    // 空间贴近阈值：地图局部坐标单位。取「相邻两格」的量级——
-    // 太大则两条不同路线被误判为相遇（扰民），太小则真相遇漏报。
-    // TODO(待裁): 阈值应随地图缩放级别自适应，而非硬编码。见 ADR-0005 §待裁 H2。
-    const PROXIMITY: f32 = 1.0;
-
-    let map_of = |track: &wv_core::Track| track.map.clone();
-
     let hints = detect_encounter_hints(EncounterInput {
         units: &world.units,
         tracks: &world.tracks,
         events: &world.events,
-        proximity: PROXIMITY,
     });
 
     let mut d = Diagnostics::default();
     for h in hints {
-        // 定位锚点：找到该单位的第一条轨迹所属地图。
-        let anchor = world
-            .tracks
-            .iter()
-            .find(|t| t.unit == h.units[0])
-            .map(|t| DiagAnchor {
-                map: map_of(t),
-                at: h.at,
-                day: h.span.from,
-            });
+        // 定位锚点：用该 hint 自带的 map 与 day。
+        // at 在 Waypoint (place, day) 严格判定里没有几何意义——
+        // 用 (0, 0) 作为占位（无 pos 字段时不再有意义）。
+        let anchor = Some(DiagAnchor {
+            map: h.map.clone(),
+            at: wv_core::geometry::Point { x: 0.0, y: 0.0 },
+            day: h.span.from,
+        });
 
         let unit_names: Vec<&str> = h
             .units
@@ -137,15 +143,9 @@ pub fn derive_hints(world: &wv_core::World) -> Diagnostics {
                     .unwrap_or_else(|| id.as_str())
             })
             .collect();
-        let place = h
-            .place
-            .as_ref()
-            .map(|p| p.as_str().to_string())
-            .unwrap_or_else(|| "某处".to_string());
+        let place = h.place.as_str().to_string();
         let days = match h.span.to {
-            Some(to) if to - h.span.from == 1 => {
-                format!("第 {} 天", h.span.from)
-            }
+            Some(to) if to - h.span.from == 1 => format!("第 {} 天", h.span.from),
             Some(to) => format!("第 {}–{} 天", h.span.from, to - 1),
             None => "至今".to_string(),
         };
@@ -160,7 +160,6 @@ pub fn derive_hints(world: &wv_core::World) -> Diagnostics {
             ),
             fingerprint: h.fingerprint,
             anchor,
-            // 便于 UI 分组渲染。
             severity: Some(h.severity),
         });
     }

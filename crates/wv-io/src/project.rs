@@ -95,9 +95,19 @@ impl Project {
     /// 加载完整世界。
     ///
     /// 当前范围：元数据 + 时间轴 + 事件 + 人物 + 地图 + 距离图 + 事态 + 单位 + 轨迹。
-    /// 事态与轨迹加载后**立即做引用完整性校验**（`AGENTS.md` §7.2 硬约束）。
+    ///
+    /// ## **加载不做引用把关**（2026-10-11 用户裁定 H5 甲）
+    ///
+    /// 本方法**只管把数据读进内存**，悬空引用**不会**让它失败——工程一定能打开。
+    /// 依据是 `AGENTS.md` §7.5V1「校验只提示，不阻止」：作者的裁定原话是
+    /// **「报错但允许存在」**。旧实现在这里`?` 传播悬空引用，
+    /// 语义上等于「报错且禁止存在，连看都看不到」——那不是宽容，
+    /// 是让作者**没有机会去改**。
+    ///
+    /// 把关入口是 [`Self::diagnose`]：悬空引用以 `DiagLevel::Error` 级诊断呈现，
+    /// 在校验面板里列出，作者可正常编辑、保存。
     pub fn load_world(&self) -> IoResult<World> {
-        use crate::situation_io::{load_dir, validate_situations_and_tracks, KnownIds};
+        use crate::situation_io::load_dir;
 
         let timeline = {
             let path = self.root.join("timeline/axis.yaml");
@@ -137,23 +147,12 @@ impl Project {
             }
         };
 
-        // 引用完整性校验（基线 §2.21）：悬空引用必须报错，不得静默忽略。
-        let event_ids: Vec<wv_core::Id> = events.iter().map(|e| e.id.clone()).collect();
-        let map_ids: Vec<wv_core::Id> = maps.iter().map(|m| m.id.clone()).collect();
-        let character_ids: Vec<wv_core::Id> = characters.iter().map(|c| c.id.clone()).collect();
-        let place_ids: Vec<wv_core::Id> = distances.places.iter().map(|p| p.id.clone()).collect();
-        let unit_ids: Vec<wv_core::Id> = units.iter().map(|u| u.id.clone()).collect();
-        validate_situations_and_tracks(
-            &situations,
-            &tracks,
-            KnownIds {
-                events: &event_ids,
-                maps: &map_ids,
-                characters: &character_ids,
-                places: &place_ids,
-                units: &unit_ids,
-            },
-        )?;
+        // 注意：这里**不做**引用完整性把关。校验是 `diagnose()` 的职责，
+        // 加载只负责「把数据读进来」。理由见本方法文档。
+        //
+        // 加载期**仍会失败**的情形仅限「数据压根读不出来」——文件缺失、
+        // YAML 语法错误、schema 版本过旧、栅格文件损坏。这些是 I/O 与格式问题，
+        // 不是「作者还没写完」，无法靠提示解决。
 
         // 地形栅格：若地图声明了 raster，加载 terrain.bin。
         let terrain = maps
@@ -196,12 +195,10 @@ impl Project {
         )
     }
 
-    /// 校验工程内部引用完整性。
+    /// 校验工程内部结构（**文字摘要**，供 `wv load <dir>` 与命令行用）。
     ///
-    /// 两级：
-    /// 1. 目录结构检查（本文档下方）；
-    /// 2. **引用完整性检查**（`AGENTS.md` §7.2 硬约束）——通过 `load_world()` 触发，
-    ///    悬空引用会以 `CoreError::DanglingReference` 报错。
+    /// 只报「目录结构缺失」这类**看得见的目录约定**问题。
+    /// **引用完整性不在这里把关** —— 见 [`Self::diagnose`]（那是唯一的把关入口）。
     pub fn validate(&self) -> IoResult<Vec<String>> {
         let expected = ["maps", "timeline", "characters", "relations", "distances"];
         let mut warnings = Vec::new();
@@ -210,29 +207,68 @@ impl Project {
                 warnings.push(format!("缺少预期目录: {dir}/"));
             }
         }
-        // 触发引用完整性校验（失败即向上传播错误）。
-        self.load_world()?;
         Ok(warnings)
     }
 
-    /// **永不失败**的结构化诊断（ADR-0005）。
+    /// 结构化诊断——**引用完整性的唯一把关入口**（ADR-0005 + ADR-0006）。
     ///
-    /// 这是编辑器校验面板的入口，与 [`Self::validate`] 的区别：
+    /// ## 强度模型（2026-10-11 用户裁定 H5 甲）
     ///
-    /// | | `validate()` | `diagnose()` |
+    /// | 级别 | 含义 | 对作者的影响 |
     /// |---|---|---|
-    /// | 悬空引用 | 返回 `Err`（**硬失败**） | 记为 `DiagLevel::Error` 条目 |
-    /// | 相遇未写事件 | 不产出 | 记为 `DiagLevel::Hint` 条目（**带定位锚点**）|
-    /// | 能否保存 | 有错误则不能 | **只要没有 Error 级就能存**（§7.5 V1）|
+    /// | `Error` | 悬空引用（数据真的坏了） | **不阻止**进入 / 编辑 / 保存，只列出 |
+    /// | `Hint` | 相遇却未写事件（可能有意的留白） | 只列出，**永不阻止** |
     ///
-    /// 为什么需要它：`AGENTS.md` §7.5 V1 规定「校验只提示、不阻止」，
-    /// 但 `validate()` 的 `Err` 语义天然是硬阻断。两者共用同一套引用校验逻辑，
-    /// 避免「命令行说有问题、编辑器说没问题」。
+    /// 「报错但允许存在」是用户原话。因此本方法**唯一的失败情形**是
+    /// 「数据压根读不出来」（YAML 语法错、schema 版本过旧、栅格损坏）——
+    /// 那是 I/O 问题，不是「作者还没写完」，提示解决不了。
     ///
-    /// 载入失败（如 schema 版本不符）仍返回 `Err`——那不是数据质量问题，
-    /// 而是「根本读不了」，与本方法要处理的「能读但有瑕疵」不同。
+    /// ## 与 [`Self::validate`] 的分工
+    ///
+    /// `validate()` 只看目录约定，返回文字；`diagnose()` 看**数据内容**，
+    /// 返回结构化条目（带稳定指纹与定位锚点，UI 才能做回访）。
+    /// 两者**不再共用**引用校验逻辑——因为把关点只剩这一个，没有分歧的可能。
     pub fn diagnose(&self) -> IoResult<Diagnostics> {
+        use crate::situation_io::{collect_situations_and_tracks_dangling, KnownIds};
+
         let world = self.load_world()?;
-        Ok(derive_hints(&world))
+
+        // 引用完整性 → Error 级诊断。**一次性检出全部**，不是遇到第一个就停。
+        let event_ids: Vec<wv_core::Id> = world.events.iter().map(|e| e.id.clone()).collect();
+        let map_ids: Vec<wv_core::Id> = world.maps.iter().map(|m| m.id.clone()).collect();
+        let character_ids: Vec<wv_core::Id> =
+            world.characters.iter().map(|c| c.id.clone()).collect();
+        let place_ids: Vec<wv_core::Id> = world
+            .distances
+            .places
+            .iter()
+            .map(|p| p.id.clone())
+            .collect();
+        let unit_ids: Vec<wv_core::Id> = world.units.iter().map(|u| u.id.clone()).collect();
+
+        let mut d = Diagnostics::default();
+        for err in collect_situations_and_tracks_dangling(
+            &world.situations,
+            &world.tracks,
+            KnownIds {
+                events: &event_ids,
+                maps: &map_ids,
+                characters: &character_ids,
+                places: &place_ids,
+                units: &unit_ids,
+            },
+        ) {
+            // 悬空引用的指纹取自错误文案本身——它已含 `referrer` 与 `missing`，
+            // 因此同一处悬空在多次诊断间保持同一指纹，可被「已读/已忽略」认领。
+            d.items.push(crate::diagnostics::error(
+                format!("dangling:{}", err),
+                err.to_string(),
+            ));
+        }
+
+        // 派生提示（相遇却未写事件）——**永不**产生 Error。
+        d.extend(derive_hints(&world));
+        d.dedup_by_fingerprint();
+        Ok(d)
     }
 }

@@ -212,9 +212,13 @@ fn track_sample_interpolates_between_waypoints() {
 }
 
 #[test]
-fn dangling_reference_in_situation_is_rejected_on_load() {
-    // AGENTS §7.2：悬空引用必须报错，不得静默忽略。
-    // 构造一个临时工程，事态引用不存在的事件。
+fn dangling_reference_does_not_block_loading_but_is_listed_as_error_diagnostic() {
+    // 裁定（2026-10-11 H5 甲）：悬空引用**报错但允许存在**。
+    // 依据 AGENTS §7.2（必须检出、不得静默忽略）+ §7.5 V1（不得阻止）。
+    //
+    // 旧实现在这里断言 `load_world().unwrap_err()`——**固化的是越权行为**：
+    // 工程根本打不开，作者连看到「哪一处悬空」的机会都没有。
+    // 现行为：加载成功，问题以 Error 级诊断列出。
     let tmp = std::env::temp_dir().join("wv_dangling_situation_probe");
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(tmp.join("timeline/situations")).unwrap();
@@ -231,12 +235,93 @@ fn dangling_reference_in_situation_is_rejected_on_load() {
     .unwrap();
 
     let project = Project::open(&tmp).unwrap();
-    let err = project.load_world().unwrap_err();
-    let msg = format!("{err}");
+
+    // ① 工程**必须能打开**——作者得有机会去改。
+    let world = project
+        .load_world()
+        .expect("悬空引用不得阻止加载（AGENTS §7.5 V1）");
+    assert_eq!(world.situations.len(), 1, "数据照常载入");
+
+    // ② 但必须**被检出并列出**（§7.2：不得静默忽略）。
+    let diags = project.diagnose().expect("诊断不得因悬空而失败");
+    let errors = diags.errors();
     assert!(
-        msg.contains("evt_missing"),
-        "错误信息应指出悬空引用 evt_missing, got: {msg}"
+        errors.iter().any(|e| e.message.contains("evt_missing")),
+        "悬空 evt_missing 必须被列为 Error 级诊断，got: {:?}",
+        diags.items
     );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn all_dangling_references_are_listed_in_one_diagnostic_pass() {
+    // 「让作者看见问题」要求**一次看见全部**，而不是改一个再看下一个。
+    let tmp = std::env::temp_dir().join("wv_dangling_multi_probe");
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("timeline/situations")).unwrap();
+    std::fs::create_dir_all(tmp.join("maps/world")).unwrap();
+    std::fs::write(
+        tmp.join("world.yaml"),
+        "name: probe\nversion: \"0.1\"\nschema_version: 2\nroot_map: world_main\ntimeline_range:\n  from: 1\n  to: 2\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("timeline/situations/sit_a.yaml"),
+        "id: sit_a\nname: a\nfrom: 1\nto: 2\nsteps:\n  - event: evt_missing_1\n  - event: evt_missing_2\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("timeline/situations/sit_b.yaml"),
+        "id: sit_b\nname: b\nfrom: 1\nto: 2\nsteps:\n  - event: evt_missing_3\n",
+    )
+    .unwrap();
+
+    let project = Project::open(&tmp).unwrap();
+    let diags = project.diagnose().unwrap();
+    let joined: Vec<&str> = diags.errors().iter().map(|e| e.message.as_str()).collect();
+    for needle in ["evt_missing_1", "evt_missing_2", "evt_missing_3"] {
+        assert!(
+            joined.iter().any(|m| m.contains(needle)),
+            "{needle} 必须出现在同一次诊断结果里；实得 {joined:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn dangling_diagnostic_fingerprints_are_stable_across_calls() {
+    // 「可回访」的前提：同一处悬空两次诊断必须同指纹，否则永远认领不掉。
+    let tmp = std::env::temp_dir().join("wv_dangling_fp_probe");
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("timeline/situations")).unwrap();
+    std::fs::create_dir_all(tmp.join("maps/world")).unwrap();
+    std::fs::write(
+        tmp.join("world.yaml"),
+        "name: probe\nversion: \"0.1\"\nschema_version: 2\nroot_map: world_main\ntimeline_range:\n  from: 1\n  to: 2\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("timeline/situations/sit_bad.yaml"),
+        "id: sit_bad\nname: bad\nfrom: 1\nto: 2\nsteps:\n  - event: evt_missing\n",
+    )
+    .unwrap();
+
+    let project = Project::open(&tmp).unwrap();
+    let a: Vec<String> = project
+        .diagnose()
+        .unwrap()
+        .items
+        .iter()
+        .map(|d| d.fingerprint.clone())
+        .collect();
+    let b: Vec<String> = project
+        .diagnose()
+        .unwrap()
+        .items
+        .iter()
+        .map(|d| d.fingerprint.clone())
+        .collect();
+    assert_eq!(a, b, "诊断指纹必须跨调用稳定");
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
@@ -281,25 +366,35 @@ fn diagnose_is_deterministic_across_calls() {
 
 #[test]
 fn encounter_hints_are_detected_when_two_units_share_a_place_unwritten() {
-    // 构造一个最小工程：两个单位的轨迹在同一天抵达同一地点，且**没有**事件。
+    // 2026-10-12 裁定（甲）：相遇 = 两 Track 的 Waypoint 在 (place, day) 上同时覆盖。
+    // 构造一个最小工程：两个单位的轨迹在 day 10 同时抵达 place_meeting，且**没有**事件。
     let tmp = std::env::temp_dir().join("wv_encounter_probe");
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(tmp.join("timeline/events")).unwrap();
     std::fs::create_dir_all(tmp.join("maps/main")).unwrap();
     std::fs::create_dir_all(tmp.join("units")).unwrap();
     std::fs::create_dir_all(tmp.join("tracks")).unwrap();
+    std::fs::create_dir_all(tmp.join("distances")).unwrap();
+    // 相遇地点必须在距离图中存在（waypoints[].place 受 §7.2 引用完整性约束）。
+    std::fs::write(
+        tmp.join("distances/places.yaml"),
+        "- id: place_meeting\n  name: 会合处\n  map: world_main\n  facilities: []\n",
+    )
+    .unwrap();
+    std::fs::write(tmp.join("distances/edges.yaml"), "[]\n").unwrap();
+    std::fs::write(tmp.join("distances/vehicles.yaml"), "[]\n").unwrap();
     std::fs::write(
         tmp.join("world.yaml"),
         "name: probe\nversion: \"0.1\"\nschema_version: 2\nroot_map: world_main\ntimeline_range:\n  from: 1\n  to: 100\n",
     )
     .unwrap();
-    // 地图（供轨迹引用）
+    // 地图（无 width_km——甲方案已撤）
     std::fs::write(
         tmp.join("maps/main/index.yaml"),
         "id: world_main\nname: 主图\nlevel: world\nchildren: []\nextent:\n  width: 4096.0\n  height: 4096.0\nlayers: []\n",
     )
     .unwrap();
-    // 两个单位
+    // 两个单位（无 sight_km——甲方案已撤）
     std::fs::write(
         tmp.join("units/index.yaml"),
         "units: [{id: unit_a, file: unit_a.yaml}, {id: unit_b, file: unit_b.yaml}]\n",
@@ -315,12 +410,12 @@ fn encounter_hints_are_detected_when_two_units_share_a_place_unwritten() {
         "id: unit_b\nname: 乙队\nmembers: []\n",
     )
     .unwrap();
-    // 两条轨迹：同一天（day 10）都在 (5,5) 附近
+    // 两条轨迹：都在 day 10 抵达 place_meeting
     for (tid, uid) in [("track_a", "unit_a"), ("track_b", "unit_b")] {
         std::fs::write(
             tmp.join(format!("tracks/{tid}.yaml")),
             format!(
-                "id: {tid}\nunit: {uid}\nmap: world_main\nfrom: 10\nto: 11\nwaypoints:\n  - day: 10\n    pos: {{x: 5.0, y: 5.0}}\n  - day: 10\n    pos: {{x: 5.0, y: 5.1}}\n"
+                "id: {tid}\nunit: {uid}\nmap: world_main\nfrom: 10\nto: 11\nwaypoints:\n  - day: 10\n    pos: {{x: 5.0, y: 5.0}}\n    place: place_meeting\n"
             ),
         )
         .unwrap();
@@ -331,7 +426,7 @@ fn encounter_hints_are_detected_when_two_units_share_a_place_unwritten() {
     let hints = diags.hints();
     assert!(
         !hints.is_empty(),
-        "两个单位同地同时且未写事件 → 应产生相遇提示"
+        "两个单位同地同天且未写事件 → 应产生相遇提示"
     );
     assert!(
         !diags.has_errors(),
@@ -372,7 +467,7 @@ fn encounter_hint_is_suppressed_when_an_event_already_covers_it() {
     .unwrap();
     std::fs::write(
         tmp.join("maps/main/index.yaml"),
-        "id: world_main\nname: 主图\nlevel: world\nchildren: []\nextent:\n  width: 4096.0\n  height: 4096.0\nlayers: []\n",
+        "id: world_main\nname: 主图\nlevel: world\nchildren: []\nextent:\n  width: 4096.0\n  height: 4096.0\n  width_km: 100.0\nlayers: []\n",
     )
     .unwrap();
     std::fs::write(
@@ -382,12 +477,12 @@ fn encounter_hint_is_suppressed_when_an_event_already_covers_it() {
     .unwrap();
     std::fs::write(
         tmp.join("units/unit_a.yaml"),
-        "id: unit_a\nname: 甲队\nmembers: []\n",
+        "id: unit_a\nname: 甲队\nmembers: []\nsight_km: 5.0\n",
     )
     .unwrap();
     std::fs::write(
         tmp.join("units/unit_b.yaml"),
-        "id: unit_b\nname: 乙队\nmembers: []\n",
+        "id: unit_b\nname: 乙队\nmembers: []\nsight_km: 5.0\n",
     )
     .unwrap();
     for (tid, uid) in [("track_a", "unit_a"), ("track_b", "unit_b")] {
@@ -412,6 +507,62 @@ fn encounter_hint_is_suppressed_when_an_event_already_covers_it() {
         diags.hints().is_empty(),
         "相遇处已写事件 → 不应再提示；got {:?}",
         diags.items
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn waypoint_without_place_never_produces_encounter_hint() {
+    // 2026-10-12 裁定（甲）：相遇判定完全依赖 Waypoint (place, day) 严格相等。
+    // Waypoint 缺 place → 无地点锚定 → 不参与判定。
+    let tmp = std::env::temp_dir().join("wv_noplace_probe");
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("timeline/events")).unwrap();
+    std::fs::create_dir_all(tmp.join("maps/main")).unwrap();
+    std::fs::create_dir_all(tmp.join("units")).unwrap();
+    std::fs::create_dir_all(tmp.join("tracks")).unwrap();
+    std::fs::write(
+        tmp.join("world.yaml"),
+        "name: probe\nversion: \"0.1\"\nschema_version: 2\nroot_map: world_main\ntimeline_range:\n  from: 1\n  to: 100\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("maps/main/index.yaml"),
+        "id: world_main\nname: 主图\nlevel: world\nchildren: []\nextent:\n  width: 4096.0\n  height: 4096.0\nlayers: []\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("units/index.yaml"),
+        "units: [{id: unit_a, file: unit_a.yaml}, {id: unit_b, file: unit_b.yaml}]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("units/unit_a.yaml"),
+        "id: unit_a\nname: 甲队\nmembers: []\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("units/unit_b.yaml"),
+        "id: unit_b\nname: 乙队\nmembers: []\n",
+    )
+    .unwrap();
+    // 两条轨迹：waypoints 全无 place → 不构成相遇
+    for (tid, uid) in [("track_a", "unit_a"), ("track_b", "unit_b")] {
+        std::fs::write(
+            tmp.join(format!("tracks/{tid}.yaml")),
+            format!(
+                "id: {tid}\nunit: {uid}\nmap: world_main\nfrom: 10\nto: 11\nwaypoints:\n  - day: 10\n    pos: {{x: 5.0, y: 5.0}}\n  - day: 10\n    pos: {{x: 5.0, y: 5.1}}\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    let project = Project::open(&tmp).unwrap();
+    let diags = project.diagnose().unwrap();
+    assert!(
+        diags.hints().is_empty(),
+        "Waypoint 无 place → 不参与相遇判定；实得 {:?}",
+        diags.hints()
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }

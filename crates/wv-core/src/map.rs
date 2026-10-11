@@ -83,6 +83,12 @@ pub enum LayerKind {
 }
 
 /// 地图绘制范围（世界坐标）。
+///
+/// **本结构只描述**几何范围（宽高）。轨迹走的是地图局部坐标（`Waypoint.pos`），
+/// 「局部坐标 ↔ 公里」的换算**不在数据层**——这是 2026-10-12 用户裁定（甲）。
+///
+/// 决定：相遇判定改为「两 Track 的 Waypoint 在 `(place, day)` 上同时覆盖」，
+/// 完全不依赖坐标距离与换算。`Extent` 因此不再携带 `width_km`，相关字段全部撤除。
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Extent {
     pub width: f32,
