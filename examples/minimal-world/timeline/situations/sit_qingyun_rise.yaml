@@ -1,0 +1,23 @@
+# 事态：青云立城（示例）· schema v2
+# 演示 §2.7 事态 = 事件之上的组织层；steps 无序，播放顺序由事件 span.from 升序派生。
+id: sit_qingyun_rise
+name: 青云立城
+summary: 青云宗立城与沈砚入宗的先后两事。
+# 事态整体时间范围，必须覆盖全部节点（不变式 I5）。half-open [from, to)。
+from: 107641
+to: 107660
+# steps 无序：这里故意先写入宗（晚）再写立城（早），验证「顺序由时间派生」，
+# 而非按 YAML 书写顺序。
+steps:
+  - event: evt_shenyan_join
+    focus: false
+    caption: 沈砚离村。
+    tracks:
+      - track_shenyan_route
+  - event: evt_qingyun_founding
+    focus: true
+    pause_secs: 1.5
+# maps：本事实涉及的图。
+maps:
+  - world_main
+protagonist: char_shenyan

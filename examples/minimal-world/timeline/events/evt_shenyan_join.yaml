@@ -1,0 +1,14 @@
+# 事件：沈砚入宗（示例）· schema v2
+# 与 evt_qingyun_founding 同属一条事态，演示「事态 = 引用多个事件」。
+id: evt_shenyan_join
+name: 沈砚入宗
+from: 107642        # 无仙 300 年 1 月 2 日
+to: 107645          # 无仙 300 年 1 月 5 日
+place: village_heishui
+participants:
+  - char_shenyan
+outcome: 沈砚自黑水村启程，入青云宗。
+effects:
+  - kind: set_title
+    character: char_shenyan
+    title: 内门弟子

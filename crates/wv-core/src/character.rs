@@ -18,7 +18,7 @@ pub struct Character {
     /// 不同作者的设定维度差异极大，硬编码字段会逼出「用不上但必须填」的噪声。
     #[serde(default)]
     pub attributes: HashMap<String, String>,
-    /// 出生时间（用于推算年龄）。
+    /// 出生时间（用于推算年龄）。天数计数器。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub born_at: Option<crate::time::TimePoint>,
     /// 状态片段：位置、身份、能力等随时间变化的量。

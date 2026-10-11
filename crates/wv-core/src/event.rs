@@ -3,7 +3,7 @@
 //! 事件是**状态变化的驱动源**：事件产生状态变化，
 //! 状态变化反过来约束事件的合理性（§3.4）。
 
-use crate::{id::Id, time::TimePoint, time::TimeSpan};
+use crate::{id::Id, time::TimeSpan};
 
 /// 历史事件。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -12,6 +12,8 @@ pub struct Event {
     pub name: String,
     /// 发生时间。用 `TimeSpan` 而非 `TimePoint`：
     /// 需要支持「持续一个月」「持续三年」这类事件，而非只有瞬时点。
+    ///
+    /// 半开语义 `[from, to)`：事件在其 `span` 内「正在发生」。
     #[serde(flatten)]
     pub span: TimeSpan,
     /// 发生地点。
@@ -40,8 +42,8 @@ pub enum Effect {
     MoveCharacter { character: Id, to: Id },
     /// 改变角色身份。
     SetTitle { character: Id, title: String },
-    /// 势力在某时间点起控制某区域。
-    ClaimRegion { region: Id, at: TimePoint },
+    /// 势力在某时间点起控制某区域。`at` 是天数计数器。
+    ClaimRegion { region: Id, at: i64 },
     /// 自定义效果，保留扩展口，但需在 GLOSSARY 登记语义。
     Custom { note: String },
 }

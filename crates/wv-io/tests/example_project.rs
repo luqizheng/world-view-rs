@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use wv_core::map::{Layer, LayerKind, MapLevel, MapNode};
-use wv_core::time::{TimePoint, TimeSpan, Timeline};
+use wv_core::time::{Calendar, TimeSpan, Timeline};
 use wv_core::WorldMeta;
 use wv_io::Project;
 
@@ -19,13 +19,35 @@ fn example_dir() -> PathBuf {
 fn example_project_opens_and_validates() {
     let project = Project::open(example_dir()).expect("示例工程应可打开");
     assert_eq!(project.meta().name, "最小示例世界");
-    assert_eq!(project.meta().schema_version, 1);
+    assert_eq!(project.meta().schema_version, 2);
 
     let warnings = project.validate().expect("校验不应报错");
     assert!(
         warnings.is_empty(),
         "示例工程应无结构警告, got {warnings:?}"
     );
+}
+
+#[test]
+fn v1_project_is_rejected_with_migration_guidance() {
+    // 基线 §2.16：schema 1 → 2 不做自动迁移，必须给出可操作的错误。
+    let tmp = std::env::temp_dir().join("wv_v1_project_probe");
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::fs::write(
+        tmp.join("world.yaml"),
+        "name: old\nversion: \"0.1\"\nschema_version: 1\nroot_map: world_main\ntimeline_range:\n  from: 1\n  to: 2\n",
+    )
+    .unwrap();
+
+    let err = Project::open(&tmp).unwrap_err();
+    match err {
+        wv_io::IoError::SchemaTooOld { found, current, .. } => {
+            assert_eq!(found, 1);
+            assert_eq!(current, 2);
+        }
+        other => panic!("期望 SchemaTooOld，实际 {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 #[test]
@@ -69,18 +91,17 @@ fn map_node_yaml_round_trips() {
 #[test]
 fn timeline_yaml_round_trips() {
     let timeline = Timeline {
-        eras: vec![wv_core::time::Era {
-            id: wv_core::Id::new_unchecked("era_first"),
-            name: "开元".into(),
-            order: 1,
-            start: Some(TimePoint::new(1, 1, 1)),
-        }],
-        days_per_year: 360,
-        months: vec![],
+        calendar: Calendar {
+            prefix: Some("无仙".into()),
+            start_year: 1,
+            days_per_year: 360,
+            days_per_month: 30,
+        },
+        timeline_range: TimeSpan::new(1, 180001).unwrap(),
         anchors: vec![wv_core::time::Anchor {
             id: wv_core::Id::new_unchecked("anchor_founding"),
             name: "青云城建城".into(),
-            at: TimePoint::new(1, 300, 1),
+            day: 107641,
         }],
     };
 
@@ -92,7 +113,7 @@ fn timeline_yaml_round_trips() {
 #[test]
 fn open_ended_span_omits_to_field_in_yaml() {
     // 开放区间序列化时不应写出 `to:` 空字段——否则 YAML 噪音大且 diff 脏。
-    let span = TimeSpan::open(TimePoint::new(1, 300, 1));
+    let span = TimeSpan::open(107641);
     let text = serde_yaml::to_string(&span).unwrap();
     assert!(!text.contains("to:"), "开放区间不应输出 to 字段: {text}");
 }
@@ -101,4 +122,89 @@ fn open_ended_span_omits_to_field_in_yaml() {
 fn missing_project_dir_is_reported() {
     let err = Project::open(example_dir().join("__not_here__"));
     assert!(matches!(err, Err(wv_io::IoError::NotAProject(_))));
+}
+
+#[test]
+fn example_project_loads_situations_and_tracks() {
+    // S7：事态 / 轨迹必须能从示例工程加载，并通过引用完整性校验。
+    let project = Project::open(example_dir()).unwrap();
+    let world = project.load_world().expect("加载应成功");
+
+    assert_eq!(world.situations.len(), 1, "示例应有 1 条事态");
+    assert_eq!(world.tracks.len(), 1, "示例应有 1 条轨迹");
+
+    let sit = &world.situations[0];
+    assert_eq!(sit.id.as_str(), "sit_qingyun_rise");
+    // 播放顺序由事件 span.from 升序派生（不按 YAML 书写顺序）。
+    let order = sit.playback_order(&world.events);
+    assert_eq!(
+        order.iter().map(|i| i.as_str()).collect::<Vec<_>>(),
+        vec!["evt_qingyun_founding", "evt_shenyan_join"],
+        "立城(107641) 应排在入宗(107642) 之前"
+    );
+}
+
+#[test]
+fn situation_and_track_yaml_round_trip() {
+    // S7：事态与轨迹的 YAML round-trip 必须稳定。
+    let project = Project::open(example_dir()).unwrap();
+    let world = project.load_world().unwrap();
+
+    let sit_text = serde_yaml::to_string(&world.situations[0]).unwrap();
+    let sit_back: wv_core::Situation = serde_yaml::from_str(&sit_text).unwrap();
+    assert_eq!(
+        world.situations[0], sit_back,
+        "Situation round-trip 必须稳定"
+    );
+
+    let track_text = serde_yaml::to_string(&world.tracks[0]).unwrap();
+    let track_back: wv_core::Track = serde_yaml::from_str(&track_text).unwrap();
+    assert_eq!(world.tracks[0], track_back, "Track round-trip 必须稳定");
+}
+
+#[test]
+fn track_sample_interpolates_between_waypoints() {
+    // S8：轨迹中点由带 day 的锚点纯函数线性插值求出。
+    let project = Project::open(example_dir()).unwrap();
+    let world = project.load_world().unwrap();
+    let track = &world.tracks[0];
+
+    let start = track.sample_at(107642).unwrap();
+    assert_eq!((start.x, start.y), (1280.0, 2048.0), "起点应为黑水村坐标");
+
+    let end = track.sample_at(107646).unwrap();
+    assert_eq!((end.x, end.y), (2048.0, 1536.0), "终点应为青云城坐标");
+
+    // 107644 是两个锚点之间的中间锚点，坐标应精确命中。
+    let mid = track.sample_at(107644).unwrap();
+    assert_eq!((mid.x, mid.y), (1792.0, 1920.0));
+}
+
+#[test]
+fn dangling_reference_in_situation_is_rejected_on_load() {
+    // AGENTS §7.2：悬空引用必须报错，不得静默忽略。
+    // 构造一个临时工程，事态引用不存在的事件。
+    let tmp = std::env::temp_dir().join("wv_dangling_situation_probe");
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("timeline/situations")).unwrap();
+    std::fs::create_dir_all(tmp.join("maps/world")).unwrap();
+    std::fs::write(
+        tmp.join("world.yaml"),
+        "name: probe\nversion: \"0.1\"\nschema_version: 2\nroot_map: world_main\ntimeline_range:\n  from: 1\n  to: 2\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("timeline/situations/sit_bad.yaml"),
+        "id: sit_bad\nname: bad\nfrom: 1\nto: 2\nsteps:\n  - event: evt_missing\n",
+    )
+    .unwrap();
+
+    let project = Project::open(&tmp).unwrap();
+    let err = project.load_world().unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("evt_missing"),
+        "错误信息应指出悬空引用 evt_missing, got: {msg}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
 }

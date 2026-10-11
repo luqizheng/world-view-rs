@@ -1,5 +1,6 @@
-# 角色：沈砚（示例）
+# 角色：沈砚（示例）· schema v2
 # 演示 §4.1：不存 current_place，只存区间化的 state_spans。
+# 时间字段是天数计数器；half-open [from, to)。
 id: char_shenyan
 name: 沈砚
 traits:
@@ -7,26 +8,14 @@ traits:
   - 多疑
 attributes:
   门派: 青云宗
-born_at:
-  era: 1
-  year: 280
-  day: 15
+born_at: 100441           # 无仙 280 年 1 月 15 日
 state_spans:
-  - from:
-      era: 1
-      year: 300
-      day: 1
-    to:
-      era: 1
-      year: 305
-      day: 1
+  - from: 107641          # 无仙 300 年 1 月 1 日
+    to: 109441            # 无仙 305 年 1 月 1 日（不含）
     place: city_qingyun
     title: 外门弟子
     power: 10.0
-  - from:
-      era: 1
-      year: 305
-      day: 2
+  - from: 109441          # 无仙 305 年 1 月 1 日
     place: village_heishui
     title: 巡山执事
     power: 35.0

@@ -7,7 +7,8 @@
 //! 2. 必须有 `format_version`，且版本策略需在《二进制格式规格》中固定；
 //! 3. 元数据必须使用二进制**引用**，不得内联进 YAML。
 //!
-//! TODO(阶段七): 接入 bincode / rkyv + zstd，实现分块读写。
+//! **实现已落地**：见 [`crate::terrain_bin`]（`terrain.bin` = 自描述头 + zstd(bincode)）。
+//! 本模块保留 [`RasterStore`] 这个抽象接口，供未来接入分块按需加载时扩展。
 
 use wv_core::map::RasterRef;
 

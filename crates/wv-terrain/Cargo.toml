@@ -1,0 +1,12 @@
+[package]
+name = "wv-terrain"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "World View 地形层：栅格网格、噪声生成、笔刷编辑（零第三方依赖）"
+
+# 零第三方依赖（基线 §2.18：手写 Perlin ~80 行，不用 noise crate）。
+# 关键：本 crate 与 wv-core **平行**，互不依赖（不构成环）。
+# 它也**不依赖 bevy / serde / 文件系统**——需要序列化时由 wv-io 转换。
+[dependencies]

@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/wv-core",
+    "crates/wv-terrain",
     "crates/wv-io",
     "crates/wv-edit",
     "crates/wv-app",
@@ -23,9 +24,14 @@ thiserror = "2"
 
 # 内部 crate
 wv-core = { path = "crates/wv-core" }
+wv-terrain = { path = "crates/wv-terrain" }
 wv-io = { path = "crates/wv-io" }
 wv-edit = { path = "crates/wv-edit" }
 wv-app = { path = "crates/wv-app" }
+
+# IO 层二进制分块（基线 §2.18：已批准，仅 wv-io 使用）。
+bincode = "1.3"
+zstd = "0.13"
 
 # 渲染与 UI。默认不编译，需显式开启 `--features app`：
 # Bevy 体系体积大，阶段一/阶段二未开始前不应阻塞数据层开发。

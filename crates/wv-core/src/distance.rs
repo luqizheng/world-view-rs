@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::{error::CoreError, id::Id, time::TimePoint};
+use crate::{error::CoreError, id::Id};
 
 /// 交通工具。对应 `distances/vehicles.yaml`。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -133,14 +133,14 @@ pub struct ScheduledJourney {
 /// 时间可行性校验结论（§10.3）。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Feasibility {
-    /// 可达，且在截止时间前到达。
+    /// 可达，且在截止时间前到达。`arrival` 为天数计数器。
     Reachable {
-        arrival: TimePoint,
+        arrival: i64,
         journey: ScheduledJourney,
     },
-    /// 可达但会迟到。
+    /// 可达但会迟到。`earliest_arrival` 为天数计数器。
     ArrivesLate {
-        earliest_arrival: TimePoint,
+        earliest_arrival: i64,
         delay_days: f32,
         journey: ScheduledJourney,
     },

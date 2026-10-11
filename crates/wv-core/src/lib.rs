@@ -12,11 +12,15 @@ pub mod error;
 pub mod geometry;
 pub mod id;
 pub mod map;
+pub mod situation;
 pub mod time;
+pub mod track;
 
 pub use error::{CoreError, CoreResult};
 pub use id::{Id, IdError};
-pub use time::{TimePoint, TimeSpan};
+pub use situation::{Situation, SituationStep};
+pub use time::{Calendar, TimePoint, TimeSpan};
+pub use track::{Track, Waypoint};
 
 /// 工程级元数据。对应工程根目录的 `world.yaml`。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -27,6 +31,10 @@ pub struct WorldMeta {
     #[serde(default = "default_version")]
     pub version: String,
     /// 数据 schema 版本，用于迁移判定。见 `AGENTS.md` 的 Schema 迁移纪律。
+    ///
+    /// 当前版本为 **2**（基线 §2.16：时间模型重做 + 事态/轨迹落地）。
+    /// v1 的时间模型是「纪元 + 年 + 日」字段式，v2 改为天数计数器；
+    /// **不做自动迁移**（信息不足时无法可靠换算），读到 v1 时给出可操作的错误指引。
     pub schema_version: u32,
     /// 地图树根节点 ID。
     pub root_map: Id,
@@ -58,6 +66,49 @@ pub struct World {
     pub relations: Vec<relation::Relation>,
     /// 距离图。
     pub distances: distance::DistanceGraph,
+    /// 事态（事件的组织层，基线 §2.7）。
+    pub situations: Vec<situation::Situation>,
+    /// 轨迹（挂在事态节点上）。
+    pub tracks: Vec<track::Track>,
+    /// 主地形栅格网格。
+    ///
+    /// 注意：`wv-core` **不认识** `wv_terrain::TerrainGrid`（不依赖 wv-terrain，基线 §2.1）。
+    /// 因此这里存的是**该网格的二进制投影** `terrain.bin` 的原始单元格数据，
+    /// 而不是 `TerrainGrid` 类型本身。`wv-io` 负责双向转换，`wv-edit` 在写命令时
+    /// 把网格投影回本字段。
+    ///
+    /// 之所以放在 `World` 上而非 ECS：地形是 P3 唯一进二进制的一等数据，
+    /// 必须与其它领域数据同处一个聚合快照中，才能被 Undo/快照一致地处理。
+    pub terrain: Option<terrain::TerrainData>,
+}
+
+/// 栅格地形的**中立数据表示**（与 `wv-terrain` 解耦的桥）。
+///
+/// `wv-io` 在 `TerrainData <-> TerrainGrid` 之间转换：
+/// - 读写 `terrain.bin` 时用 `TerrainData`；
+/// - 编辑时 `wv-edit` 把它转成 `TerrainGrid`，改完再转回。
+pub mod terrain {
+    /// 一格地形（与 `wv_terrain::TerrainCell` 布局一致）。
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+    pub struct TerrainCellData {
+        pub height: i16,
+        pub kind: u8,
+    }
+
+    /// 栅格地形数据。
+    #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    pub struct TerrainData {
+        pub width: u32,
+        pub height: u32,
+        /// 行优先的单元格。
+        pub cells: Vec<TerrainCellData>,
+    }
+
+    impl TerrainData {
+        pub fn cell_count(&self) -> usize {
+            self.cells.len()
+        }
+    }
 }
 
 pub mod character;

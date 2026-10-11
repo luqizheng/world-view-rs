@@ -8,4 +8,8 @@ description = "World View 编辑层：编辑命令、Undo/Redo、事务与脏数
 
 [dependencies]
 wv-core = { workspace = true }
+# D3 修正（基线 §2.1）：wv-edit **直接依赖** wv-terrain。
+# 理由：`PaintTerrainCommand::apply` 需调用 `wv_terrain::edit::paint`。
+# 这不违反依赖方向——wv-terrain 与 wv-core 平行，wv-edit 依赖平行的二者不构成环。
+wv-terrain = { workspace = true }
 thiserror = { workspace = true }

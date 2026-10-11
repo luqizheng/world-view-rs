@@ -1,17 +1,15 @@
-# 时间轴定义（示例）
-eras:
-  - id: era_first
-    name: 开元
-    order: 1
-    start:
-      era: 1
-      year: 1
-      day: 1
-days_per_year: 360
+# 时间轴定义（示例）· schema v2
+# 历法只负责显示换算：无仙 300 年 1 月 1 日 ↔ 第 107641 天。
+calendar:
+  prefix: 无仙
+  start_year: 1
+  days_per_year: 360
+  days_per_month: 30
+timeline_range:
+  from: 1
+  to: 180001
 anchors:
   - id: anchor_founding
     name: 青云城建城
-    at:
-      era: 1
-      year: 300
-      day: 1
+    # 无仙 300 年 1 月 1 日 = (300-1)*360 + (1-1)*30 + (1-1) + 1 = 107641
+    day: 107641

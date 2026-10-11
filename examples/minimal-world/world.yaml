@@ -1,17 +1,13 @@
 # 最小示例工程
 # 用途：验证 `wv load` / `wv validate` 与领域模型的 YAML round-trip。
-# 只包含工程索引；其余目录供阶段一加载器补齐。
+# schema v2（基线 §2.16）：时间点 = 天数计数器（1-based），不再用「纪元+年+日」字段式。
+# 历法换算（无仙 N 年 M 月 D 日）由 timeline/axis.yaml 的 calendar 派生。
 
 name: 最小示例世界
 version: "0.1"
-schema_version: 1
+schema_version: 2
 root_map: world_main
 timeline_range:
-  from:
-    era: 1
-    year: 1
-    day: 1
-  to:
-    era: 1
-    year: 500
-    day: 1
+  # 半开区间 [from, to)：时间轴覆盖第 1 天到第 180000 天。
+  from: 1
+  to: 180001

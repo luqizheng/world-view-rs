@@ -1,0 +1,339 @@
+//! 笔刷编辑：圆形软边涂抹、海拔升降、高斯衰减（基线 §1.13 / §1.14 / §2.4）。
+//!
+//! ## 本层的职责边界（基线 §2.2）
+//!
+//! - **不感知 Undo/Redo**：撤销由 `wv-edit` 记录 before/after 影响块完成；
+//!   本层是**纯函数 + 可变网格**，被调用时就地改网格。
+//! - **不感知笔刷光标**：光标是屏幕空间的视觉叠加层（特效规格 §3.1），不进数据。
+//!
+//! ## falloff 必须只有一份实现
+//!
+//! 特效规格 §3.1 硬契约：**笔刷光标的径向渐变曲线必须与本层的实际衰减函数一致**，
+//! 否则「可视与实际不符 = 工具失信」。因此衰减函数 [`falloff_weight`] 是本 crate
+//! 的公开 API，`wv-app` 画光标时**调用同一个函数**，禁止另写一份。
+
+use crate::{Height, TerrainGrid, TerrainKind};
+
+/// 笔刷形状与参数。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Brush {
+    /// 笔刷中心（图内局部坐标，世界单位）。
+    pub center: (f32, f32),
+    /// 影响半径 R（世界单位）。半径外权重为 0。
+    pub radius: f32,
+    /// 衰减软度。`0` = 硬边（半径内权重恒为 1）；`1` = 完全软边（高斯）。
+    pub softness: f32,
+    /// 本次涂抹要写入的地形类型。`None` 表示只改高度、不动类型（如海拔笔刷）。
+    pub kind: Option<TerrainKind>,
+    /// 本次要施加的高度增量（正=抬升，负=降低）。`0` 表示不动高度。
+    pub height_delta: f32,
+}
+
+impl Brush {
+    /// 一个只改地形的圆形软边笔刷。
+    pub fn paint(center: (f32, f32), radius: f32, kind: TerrainKind) -> Self {
+        Self {
+            center,
+            radius,
+            softness: 0.5,
+            kind: Some(kind),
+            height_delta: 0.0,
+        }
+    }
+
+    /// 一个只改高度的圈选笔刷（基线 §1.14 的羽化抬升）。
+    pub fn raise_lower(center: (f32, f32), radius: f32, amount: f32) -> Self {
+        Self {
+            center,
+            radius,
+            softness: 0.7,
+            kind: None,
+            height_delta: amount,
+        }
+    }
+}
+
+/// 一次笔触：一串连续的笔刷采样点。
+///
+/// 拖拽时鼠标未必每帧都落在整数格上，因此一个「笔触」是多个 [Brush] 的序列。
+/// 全部采样点都作用在同一个网格上，**后一个覆盖前一个的重叠区**。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stroke {
+    pub brushes: Vec<Brush>,
+}
+
+impl Stroke {
+    pub fn new() -> Self {
+        Self {
+            brushes: Vec::new(),
+        }
+    }
+
+    pub fn push(&mut self, brush: Brush) {
+        self.brushes.push(brush);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.brushes.is_empty()
+    }
+}
+
+impl Default for Stroke {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 衰减权重：`[0, 1]`，距中心越远越小，半径外为 0。
+///
+/// **这是全项目唯一的 falloff 实现**（特效规格 §3.1 硬契约）。
+///
+/// - `softness == 0` → 硬边：半径内 1、半径外 0；
+/// - `softness > 0` → 平滑过渡：`u = d / R`，`w = clamp((1 - u) / softness, 0, 1)`
+///   再套一次平滑曲线（ease）使边缘更自然。
+pub fn falloff_weight(distance: f32, radius: f32, softness: f32) -> f32 {
+    if radius <= 0.0 {
+        return 0.0;
+    }
+    let u = distance / radius;
+    if u >= 1.0 {
+        return 0.0;
+    }
+    let s = softness.clamp(0.0, 1.0);
+    if s <= f32::EPSILON {
+        return 1.0;
+    }
+    // 内圈（50% 强度半径 R * (1 - softness) 以内）恒为 1，外圈线性衰减到 0。
+    let inner = 1.0 - s;
+    if u <= inner {
+        return 1.0;
+    }
+    let t = (1.0 - u) / s; // 1 → 0
+                           // 平滑（smoothstep）让边缘更像自然羽化。
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// 在网格上施加一次笔刷（就地修改）。返回受影响的格数。
+///
+/// 本函数是 `wv-edit::PaintTerrainCommand::apply` 的落点（基线 §2.2 调用链）。
+pub fn paint(grid: &mut TerrainGrid, brush: &Brush, cell_size: f32) -> usize {
+    apply_brush(grid, brush, cell_size)
+}
+
+/// 在网格上施加一整个笔触。返回受影响的格数。
+pub fn apply_stroke(grid: &mut TerrainGrid, stroke: &Stroke, cell_size: f32) -> usize {
+    let mut touched = 0;
+    for brush in &stroke.brushes {
+        touched += apply_brush(grid, brush, cell_size);
+    }
+    touched
+}
+
+/// 单次笔刷的核心实现。
+fn apply_brush(grid: &mut TerrainGrid, brush: &Brush, cell_size: f32) -> usize {
+    if cell_size <= 0.0 || brush.radius <= 0.0 {
+        return 0;
+    }
+    // 笔刷覆盖的格范围（世界半径换算成格数，向上取整 + 1 格余量）。
+    let cell_radius = (brush.radius / cell_size).ceil() as i32 + 1;
+    let center_x = brush.center.0 / cell_size;
+    let center_y = brush.center.1 / cell_size;
+    let gx0 = center_x.floor() as i32 - cell_radius;
+    let gy0 = center_y.floor() as i32 - cell_radius;
+
+    let mut touched = 0;
+    for gy in gy0..=center_y.floor() as i32 + cell_radius {
+        for gx in gx0..=center_x.floor() as i32 + cell_radius {
+            // 格心世界坐标。
+            let wx = (gx as f32 + 0.5) * cell_size;
+            let wy = (gy as f32 + 0.5) * cell_size;
+            let dx = wx - brush.center.0;
+            let dy = wy - brush.center.1;
+            let d = (dx * dx + dy * dy).sqrt();
+            let w = falloff_weight(d, brush.radius, brush.softness);
+            if w <= 0.0 {
+                continue;
+            }
+            let Some(mut cell) = grid.get(gx, gy) else {
+                continue; // 越界格跳过（笔刷扫过边缘时的合法情形）
+            };
+            // 地形类型：超过 50% 权重才写入——避免软边把边缘涂成半吊子色块。
+            if let Some(kind) = brush.kind {
+                if w >= 0.5 {
+                    cell.kind = kind;
+                }
+            }
+            // 高度：按权重线性叠加（羽化抬升，基线 §1.14 / §2.4 高斯衰减的近亲）。
+            if brush.height_delta != 0.0 {
+                let delta = (brush.height_delta * w).round() as i32;
+                if delta != 0 {
+                    let new_h =
+                        (cell.height as i32 + delta).clamp(i16::MIN as i32, i16::MAX as i32);
+                    cell.height = new_h as Height;
+                }
+            }
+            grid.set(gx, gy, cell);
+            touched += 1;
+        }
+    }
+    touched
+}
+
+/// 选区升降（基线 §1.14 / §2.4）：高斯衰减 `h' = h + amount * exp(-d²/2σ²)`。
+///
+/// `amount` 为最大抬升量、`sigma` 为衰减带宽（世界单位）。
+/// 默认「羽化抬升」即本函数；`sigma → 0` 退化为整体平抬。
+pub fn raise_region(
+    grid: &mut TerrainGrid,
+    center: (f32, f32),
+    radius: f32,
+    amount: f32,
+    sigma: f32,
+    cell_size: f32,
+) -> usize {
+    if cell_size <= 0.0 || radius <= 0.0 || amount == 0.0 {
+        return 0;
+    }
+    let sigma = sigma.max(1e-3);
+    let cell_radius = (radius / cell_size).ceil() as i32 + 1;
+    let cx = center.0 / cell_size;
+    let cy = center.1 / cell_size;
+    let mut touched = 0;
+    for gy in (cy.floor() as i32 - cell_radius)..=(cy.floor() as i32 + cell_radius) {
+        for gx in (cx.floor() as i32 - cell_radius)..=(cx.floor() as i32 + cell_radius) {
+            let wx = (gx as f32 + 0.5) * cell_size;
+            let wy = (gy as f32 + 0.5) * cell_size;
+            let dx = wx - center.0;
+            let dy = wy - center.1;
+            let d2 = dx * dx + dy * dy;
+            let d = d2.sqrt();
+            if d > radius {
+                continue;
+            }
+            let w = (-d2 / (2.0 * sigma * sigma)).exp();
+            if w < 0.5 {
+                continue; // 权重不足半格高度，不足以改变一格
+            }
+            let Some(mut cell) = grid.get(gx, gy) else {
+                continue;
+            };
+            let delta = (amount * w).round() as i32;
+            if delta != 0 {
+                let new_h = (cell.height as i32 + delta).clamp(i16::MIN as i32, i16::MAX as i32);
+                cell.height = new_h as Height;
+                grid.set(gx, gy, cell);
+                touched += 1;
+            }
+        }
+    }
+    touched
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn falloff_is_one_at_center_and_zero_outside() {
+        assert_eq!(falloff_weight(0.0, 10.0, 0.5), 1.0);
+        assert_eq!(falloff_weight(10.0, 10.0, 0.5), 0.0);
+        assert_eq!(falloff_weight(999.0, 10.0, 0.5), 0.0);
+    }
+
+    #[test]
+    fn falloff_decreases_monotonically_outward() {
+        let radius = 20.0;
+        let mut prev = f32::INFINITY;
+        for i in 0..=20 {
+            let d = i as f32;
+            let w = falloff_weight(d, radius, 0.6);
+            assert!(
+                w <= prev + 1e-6,
+                "权重应随距离单调不增，d={d} w={w} prev={prev}"
+            );
+            prev = w;
+        }
+    }
+
+    #[test]
+    fn hard_brush_edge_is_inner_plateau() {
+        // softness=0 → 半径内恒为 1。
+        assert_eq!(falloff_weight(5.0, 10.0, 0.0), 1.0);
+        assert_eq!(falloff_weight(9.9, 10.0, 0.0), 1.0);
+        assert_eq!(falloff_weight(10.0, 10.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn paint_writes_terrain_kind_at_center() {
+        let mut g = TerrainGrid::new(20, 20);
+        // cell_size 1.0，中心 (10.5,10.5) → 格 (10,10)
+        let b = Brush::paint((10.5, 10.5), 5.0, 3);
+        let touched = paint(&mut g, &b, 1.0);
+        assert!(touched > 0, "应有格被涂抹");
+        assert_eq!(g.get(10, 10).unwrap().kind, 3, "中心格类型应被写入");
+        assert_eq!(g.get(0, 0).unwrap().kind, 0, "远角不应被涂");
+    }
+
+    #[test]
+    fn paint_outside_grid_is_safe() {
+        let mut g = TerrainGrid::new(10, 10);
+        let b = Brush::paint((-50.0, -50.0), 5.0, 1);
+        // 不 panic，且不产生改动。
+        paint(&mut g, &b, 1.0);
+        assert_eq!(g.get(0, 0).unwrap().kind, 0);
+    }
+
+    #[test]
+    fn raise_lower_adds_height_at_center() {
+        let mut g = TerrainGrid::new(20, 20);
+        let b = Brush::raise_lower((10.5, 10.5), 5.0, 10.0);
+        paint(&mut g, &b, 1.0);
+        let h_center = g.get(10, 10).unwrap().height;
+        assert_eq!(h_center, 10, "中心应抬升满额");
+        let h_edge = g.get(14, 10).unwrap().height;
+        assert!(h_edge < h_center, "边缘抬升应小于中心, edge={h_edge}");
+    }
+
+    #[test]
+    fn height_clamps_at_i16_bounds() {
+        let mut g = TerrainGrid::new(10, 10);
+        let b = Brush {
+            center: (5.5, 5.5),
+            radius: 3.0,
+            softness: 0.0,
+            kind: None,
+            height_delta: 100_000.0,
+        };
+        paint(&mut g, &b, 1.0);
+        assert_eq!(
+            g.get(5, 5).unwrap().height,
+            i16::MAX,
+            "高度应钳制到 i16 上限"
+        );
+    }
+
+    #[test]
+    fn raise_region_uses_gaussian_falloff() {
+        let mut g = TerrainGrid::new(40, 40);
+        // sigma = 5, amount = 100, radius = 20
+        raise_region(&mut g, (20.0, 20.0), 20.0, 100.0, 5.0, 1.0);
+        let center = g.get(20, 20).unwrap().height;
+        let mid = g.get(25, 20).unwrap().height; // d=5 → w=exp(-0.5)≈0.607
+        assert!(center > mid && mid > 0, "中心={center} 中距={mid}");
+        // 格心在 (20.5, 20.5) → d²=0.5 → 100*exp(-0.5/50)=99.0 → 99
+        assert_eq!(center, 99, "中心格按高斯权重应为 99，实际 {center}");
+        // 格心在 (25.5, 20.5) → d²=30.5 → 100*exp(-30.5/50)=100*0.5434=54.3 → 54
+        assert!((53..=56).contains(&mid), "高斯权重手算约 54，实际 {mid}");
+    }
+
+    #[test]
+    fn apply_stroke_accumulates_multiple_brushes() {
+        let mut g = TerrainGrid::new(30, 30);
+        let mut s = Stroke::new();
+        s.push(Brush::paint((5.5, 5.5), 3.0, 1));
+        s.push(Brush::paint((25.5, 25.5), 3.0, 2));
+        apply_stroke(&mut g, &s, 1.0);
+        assert_eq!(g.get(5, 5).unwrap().kind, 1);
+        assert_eq!(g.get(25, 25).unwrap().kind, 2);
+    }
+}

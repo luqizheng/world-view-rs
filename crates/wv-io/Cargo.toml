@@ -11,6 +11,10 @@ wv-core = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
+# 二进制分块（基线 §2.18：已批准，仅 wv-io 使用）。
+bincode = { workspace = true }
+zstd = { workspace = true }
 
 [dev-dependencies]
 serde_yaml = { workspace = true }
+wv-terrain = { workspace = true }

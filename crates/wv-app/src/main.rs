@@ -101,7 +101,47 @@ fn validate(dir: &str) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(feature = "app")]
 fn run_gui() {
-    // TODO(阶段二): Bevy + bevy_egui 骨架，加载工程，
-    // 显示地图树 / 角色列表 / 时间轴滑块。暂无地图渲染。
-    println!("GUI 骨架待实现（阶段二）");
+    // 工程目录解析优先级：
+    //   1. 显式参数 `wv gui <目录>`
+    //   2. 环境变量 `WV_PROJECT`（便于在 IDE / 任意目录下启动）
+    //   3. 从可执行文件位置向上寻找工程根（解决在 `target/debug` 下启动时
+    //      相对路径 `examples/minimal-world` 解析失败的问题）
+    //   4. 当前工作目录下的 `examples/minimal-world`（最后兜底）
+    let args: Vec<String> = std::env::args().collect();
+    let project_dir = args
+        .get(2)
+        .cloned()
+        .or_else(|| std::env::var("WV_PROJECT").ok())
+        .or_else(resolve_default_project)
+        .or_else(|| Some("examples/minimal-world".to_string()));
+    wv_app::gui::run(wv_app::AppConfig { project_dir });
+}
+
+/// 从可执行文件位置向上回溯，寻找含 `examples/minimal-world/world.yaml` 的工程根。
+///
+/// 覆盖两种典型布局：
+/// - `target/debug/wv.exe` → 上溯两级到工程根
+/// - `target/release/wv.exe` → 同上
+/// - 任意 `cargo run` 的工作目录（直接命中当前目录）
+#[cfg(feature = "app")]
+fn resolve_default_project() -> Option<String> {
+    const REL: &str = "examples/minimal-world";
+    const MARKER: &str = "examples/minimal-world/world.yaml";
+
+    // 先试当前工作目录。
+    if std::path::Path::new(MARKER).is_file() {
+        return Some(REL.to_string());
+    }
+
+    // 再从可执行文件所在目录逐级上溯。
+    let exe = std::env::current_exe().ok()?;
+    let mut dir = exe.parent()?;
+    for _ in 0..6 {
+        let candidate = dir.join(MARKER);
+        if candidate.is_file() {
+            return Some(dir.join(REL).to_string_lossy().into_owned());
+        }
+        dir = dir.parent()?;
+    }
+    None
 }

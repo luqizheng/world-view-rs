@@ -1,0 +1,18 @@
+# 轨迹：沈砚行程（示例）· schema v2
+# 演示 §2.7 / 动画规格 §1.2「逐段生长」：带 day 的锚点 → 线性插值。
+# 无独立「速度」参数——速度是段长 / 段时长的产物。
+id: track_shenyan_route
+owner: char_shenyan
+map: world_main
+# 轨迹时间区间（半开 [from, to)）。
+from: 107642
+to: 107646
+waypoints:
+  - day: 107642
+    pos: { x: 1280.0, y: 2048.0 }   # 黑水村
+    place: village_heishui
+  - day: 107644
+    pos: { x: 1792.0, y: 1920.0 }   # 途中
+  - day: 107646
+    pos: { x: 2048.0, y: 1536.0 }   # 青云城
+    place: city_qingyun
