@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>四渡赤水 · 行军路线图（1935.1—1935.5）</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; overflow:hidden;
+    font-family:"Microsoft YaHei","PingFang SC","Hiragino Sans GB",Arial,sans-serif; }
+  #map { position:absolute; left:0; top:0; right:0; bottom:0; width:100%; height:100vh; background:#eef2f6; }
+  .card { position:absolute; background:rgba(255,255,255,0.95); border:1px solid #e2e8f0;
+    border-radius:12px; box-shadow:0 8px 24px rgba(15,23,42,0.12); color:#1f2937;
+    -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px); }
+
+  #titleCard { top:14px; left:14px; width:334px; padding:14px 16px 12px; }
+  #titleCard h1 { margin:0 0 4px; font-size:19px; letter-spacing:1px; color:#111827; }
+  #titleCard .sub { font-size:11.5px; color:#64748b; line-height:1.55; }
+  #titleCard .tag { display:inline-block; margin-top:8px; padding:2px 9px; font-size:11px;
+    background:#fef2f2; color:#b91c1c; border:1px solid #fecaca; border-radius:999px; }
+
+  #legend { margin-top:10px; border-top:1px dashed #e2e8f0; padding-top:9px; }
+  .lg { display:flex; align-items:center; gap:9px; font-size:12.5px; color:#334155; margin:6px 0; }
+  .lg .line { width:28px; height:0; flex:none; }
+  .lg .dot { width:13px; height:13px; border-radius:50%; flex:none;
+    border:2px solid #fff; box-shadow:0 0 0 1px #cbd5e1; }
+  .lg .star { width:14px; height:14px; flex:none;
+    background:#ea580c; clip-path:polygon(50% 0,61% 35%,98% 35%,68% 57%,79% 91%,50% 70%,21% 91%,32% 57%,2% 35%,39% 35%); }
+
+  #phases { top:14px; right:14px; width:252px; padding:12px 12px 8px; max-height:66vh; overflow:auto; }
+  #phases h2 { margin:0 0 9px; font-size:13px; color:#0f172a; letter-spacing:.5px; }
+  .phase { border:1px solid #e8edf3; border-radius:9px; padding:8px 10px; margin-bottom:8px;
+    cursor:pointer; transition:.16s; background:#fff; }
+  .phase:hover { border-color:#c7d2fe; box-shadow:0 3px 10px rgba(37,99,235,.10); transform:translateY(-1px); }
+  .phase.active { border-color:#2563eb; background:#f5f8ff; }
+  .phase .row { display:flex; align-items:center; gap:8px; }
+  .phase .swatch { width:10px; height:10px; border-radius:3px; flex:none; }
+  .phase .nm { font-size:13.5px; font-weight:600; color:#111827; }
+  .phase .dt { font-size:11px; color:#94a3b8; margin-left:auto; }
+  .phase .txt { font-size:11.5px; color:#64748b; margin-top:5px; line-height:1.45; }
+
+  #detail { left:14px; bottom:46px; width:334px; padding:13px 15px 14px; display:none; }
+  #detail h3 { margin:0 0 7px; font-size:14.5px; color:#0f172a; }
+  #detail .d { font-size:12.5px; color:#475569; line-height:1.7; }
+  #detail .d b { color:#b91c1c; }
+  #detail .close { position:absolute; top:7px; right:11px; cursor:pointer; color:#94a3b8; font-size:15px; }
+
+  #foot { position:absolute; left:14px; bottom:12px; padding:6px 11px; font-size:11px; color:#64748b;
+    border-radius:8px; background:rgba(255,255,255,.92); border:1px solid #e2e8f0; }
+  #viewBtns { position:absolute; right:14px; bottom:12px; display:flex; gap:8px; }
+  #viewBtns button { font-size:12px; padding:7px 12px; border-radius:8px; cursor:pointer;
+    border:1px solid #cbd5e1; background:#fff; color:#334155; box-shadow:0 2px 8px rgba(15,23,42,.08); }
+  #viewBtns button:hover { background:#f1f5f9; border-color:#94a3b8; }
+  #loading { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    font-size:13px; color:#64748b; background:#fff; padding:10px 18px; border-radius:8px;
+    border:1px solid #e2e8f0; box-shadow:0 4px 14px rgba(15,23,42,.1); }
+</style>
+<script type="text/javascript">
+  window._TMapSecurityConfig = {
+    serviceHost: 'http://127.0.0.1:__WB_HTTP_PORT__/_TMapService/_wbt/__WB_TMAP_SECRET__',
+  };
+</script>
+<script src="https://map.qq.com/api/gljs?v=1.exp"></script>
+</head>
+<body>
+<div id="map"></div>
+<div id="loading">正在加载腾讯地图底图…</div>
+
+<div id="titleCard" class="card">
+  <h1>四渡赤水 · 行军路线图</h1>
+  <div class="sub">1935 年 1 月 — 5 月 ｜ 中央红军（红一方面军）在川滇黔边区的运动战</div>
+  <div class="tag">毛泽东：我军事生涯的“得意之笔”</div>
+  <div id="legend"></div>
+</div>
+
+<div id="phases" class="card">
+  <h2>渡河阶段（点击定位）</h2>
+  <div id="phaseList"></div>
+</div>
+
+<div id="detail" class="card">
+  <span class="close" onclick="window.__hideDetail()">✕</span>
+  <h3></h3>
+  <div class="d"></div>
+</div>
+
+<div id="viewBtns">
+  <button onclick="window.__viewCampaign()">赤水河战区</button>
+  <button onclick="window.__viewAll()">全程路线</button>
+</div>
+<div id="foot">底图 © 腾讯地图 ｜ 路线依公开党史资料整理，坐标为示意（WGS-84 → GCJ-02）</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ================= 1. 坐标系转换 WGS-84 → GCJ-02 ================= */
+  var PI = 3.1415926535897932384626;
+  var EE = 0.00669342162296594323;
+  var AA = 6378245.0;
+
+  function outOfChina(lng, lat) {
+    return (lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271);
+  }
+  function tLat(lng, lat) {
+    var r = -100 + 2 * lng + 3 * lat + 0.2 * lat * lat + 0.1 * lng * lat + 0.2 * Math.sqrt(Math.abs(lng));
+    r += (20 * Math.sin(6 * lng * PI) + 20 * Math.sin(2 * lng * PI)) * 2 / 3;
+    r += (20 * Math.sin(lat * PI) + 40 * Math.sin(lat / 3 * PI)) * 2 / 3;
+    r += (160 * Math.sin(lat / 12 * PI) + 320 * Math.sin(lat * PI / 30)) * 2 / 3;
+    return r;
+  }
+  function tLng(lng, lat) {
+    var r = 300 + lng + 2 * lat + 0.1 * lng * lng + 0.1 * lng * lat + 0.1 * Math.sqrt(Math.abs(lng));
+    r += (20 * Math.sin(6 * lng * PI) + 20 * Math.sin(2 * lng * PI)) * 2 / 3;
+    r += (20 * Math.sin(lng * PI) + 40 * Math.sin(lng / 3 * PI)) * 2 / 3;
+    r += (150 * Math.sin(lng / 12 * PI) + 300 * Math.sin(lng / 30 * PI)) * 2 / 3;
+    return r;
+  }
+  function gcj(lng, lat) {
+    if (outOfChina(lng, lat)) { return [lng, lat]; }
+    var dLat = tLat(lng - 105, lat - 35), dLng = tLng(lng - 105, lat - 35);
+    var rad = lat / 180 * PI, m = Math.sin(rad); m = 1 - EE * m * m;
+    var sm = Math.sqrt(m);
+    dLat = (dLat * 180) / ((AA * (1 - EE)) / (m * sm) * PI);
+    dLng = (dLng * 180) / (AA / sm * Math.cos(rad) * PI);
+    return [lng + dLng, lat + dLat];
+  }
+  function LL(lng, lat) { var g = gcj(lng, lat); return new TMap.LatLng(g[1], g[0]); }
+  function path(arr) { return arr.map(function (p) { return LL(p[0], p[1]); }); }
+
+  /* ================= 2. 地理数据（WGS-84） ================= */
+
+  // 赤水河干流（示意走向，作地理参照）
+  var CHISHUI_RIVER = [
+    [104.873, 27.441], [105.150, 27.520], [105.450, 27.560], [105.750, 27.600],
+    [106.100, 27.700], [106.384, 27.853], [106.250, 28.010], [106.150, 28.130],
+    [106.041, 28.135], [106.006, 28.273], [105.900, 28.430], [105.698, 28.589],
+    [105.830, 28.810]
+  ];
+
+  // 四条渡河路线 + 后续金沙江
+  var ROUTES = [
+    {
+      id: 'r1', key: 'p1', name: '一渡赤水', date: '1935.1.29', dir: '西渡', color: '#E63946',
+      path: [
+        [106.920, 27.710], [106.826, 28.138], [106.030, 28.290], [106.006, 28.273],
+        [105.813, 28.039], [105.445, 28.156], [105.048, 27.840]
+      ]
+    },
+    {
+      id: 'r2', key: 'p2', name: '二渡赤水', date: '1935.2.18—21', dir: '东渡', color: '#F08A24',
+      path: [
+        [105.048, 27.840], [105.400, 27.985], [106.041, 28.135], [106.150, 28.130],
+        [106.500, 28.230], [106.826, 28.138], [106.850, 28.010], [106.920, 27.710]
+      ]
+    },
+    {
+      id: 'r3', key: 'p3', name: '三渡赤水', date: '1935.3.16—17', dir: '西渡', color: '#1D6FD1',
+      path: [
+        [106.920, 27.710], [106.307, 27.717], [106.384, 27.853], [105.813, 28.039],
+        [105.445, 28.156]
+      ]
+    },
+    {
+      id: 'r4', key: 'p4', name: '四渡赤水', date: '1935.3.21—22', dir: '东渡', color: '#8B46D6',
+      path: [
+        [105.813, 28.039], [106.041, 28.135], [106.150, 28.130], [106.550, 27.620],
+        [106.740, 27.100], [106.630, 26.650]
+      ]
+    },
+    {
+      id: 'r5', key: 'p5', name: '巧渡金沙江', date: '1935.4—5', dir: '西进', color: '#2A9D8F', dashed: true,
+      path: [
+        [106.630, 26.650], [104.600, 25.700], [102.833, 25.040], [102.384, 26.290]
+      ]
+    }
+  ];
+
+  // 关键节点
+  var POIS = [
+    { name: '遵义',        type: 'city',     lng: 106.920, lat: 27.710, desc: '遵义会议会址。1935 年 1 月在此确立毛泽东在党和红军中的领导地位；红军由此北上，四渡赤水的出发地。' },
+    { name: '桐梓',        type: 'city',     lng: 106.826, lat: 28.138, desc: '一渡北上经此；二渡回师黔北时，2 月 24 日红一军团先头团攻占桐梓。' },
+    { name: '娄山关',      type: 'battle',   lng: 106.850, lat: 28.010, desc: '<b>2 月 26 日娄山关战斗</b>：红一、红三军团正面攻击加两翼迂回，歼黔军一部，取得长征以来首次大捷，为再占遵义打开通路。' },
+    { name: '鲁班场',      type: 'battle',   lng: 106.307, lat: 27.717, desc: '<b>3 月 15 日鲁班场战斗</b>：进攻周浑元纵队未果，红军主动撤出转向茅台，成为三渡赤水的直接前奏。' },
+    { name: '仁怀（中枢）', type: 'city',    lng: 106.402, lat: 27.792, desc: '仁怀市区，三渡赤水前后红军机动的枢纽地带。' },
+    { name: '茅台渡口',    type: 'crossing', lng: 106.384, lat: 27.853, desc: '<b>三渡赤水（3 月 16—17 日）</b>主渡口，含朱砂堡、羊山坳、银滩等渡点。红军白天大张旗鼓渡河、公开行军，意在调动敌军西向。' },
+    { name: '青杠坡',      type: 'battle',   lng: 106.030, lat: 28.290, desc: '<b>1 月 28 日青杠坡战斗</b>：与尾追川军激战，敌援续至、战局不利；毛泽东果断放弃北渡长江，改西渡赤水，拉开四渡赤水序幕。' },
+    { name: '土城渡口',    type: 'crossing', lng: 106.006, lat: 28.273, desc: '<b>一渡赤水（1 月 29 日拂晓）</b>主渡口（浑溪口、蔡家沱）。红军架浮桥连夜西渡，进入川南古蔺、叙永。' },
+    { name: '元厚渡口',    type: 'crossing', lng: 105.900, lat: 28.430, desc: '一渡赤水渡口之一，旧称猿猴场，位于赤水市元厚镇，红一军团主力渡河点。（坐标约）' },
+    { name: '二郎滩渡口',  type: 'crossing', lng: 106.150, lat: 28.130, desc: '<b>二渡、四渡赤水</b>重要侧翼渡口。渡河同时发生“二郎滩背水战”，并开仓分盐济民。两岸分属四川古蔺、贵州习水。' },
+    { name: '太平渡',      type: 'crossing', lng: 106.041, lat: 28.135, desc: '<b>二渡、四渡赤水</b>主渡口，全程唯一往返两次的渡口，军委纵队多由此渡河。' },
+    { name: '九溪口渡口',  type: 'crossing', lng: 106.078, lat: 28.120, desc: '二渡、四渡赤水渡口之一，位于古蔺太平镇九龙村，西距太平渡口约 5 公里。（坐标约）' },
+    { name: '古蔺',        type: 'city',     lng: 105.813, lat: 28.039, desc: '一渡、三渡后红军进入川南的活动区域。四渡前主力隐蔽集结于镇龙山、大村、铁厂、两河口一带。' },
+    { name: '叙永',        type: 'city',     lng: 105.445, lat: 28.156, desc: '川南重镇，古称永宁。一渡、三渡后红军均曾向此方向前进，寻机北渡长江。' },
+    { name: '扎西（威信）', type: 'base',    lng: 105.048, lat: 27.840, desc: '云南威信扎西镇。<b>2 月 9 日红军在此集结整编</b>为 16 个团；扎西会议在此前后召开。' },
+    { name: '乌江江口渡',  type: 'crossing', lng: 106.740, lat: 27.100, desc: '四渡赤水后，红军于 <b>3 月 31 日南渡乌江</b>，跳出合围圈。（坐标约）' },
+    { name: '贵阳',        type: 'city',     lng: 106.630, lat: 26.650, desc: '4 月初红军兵临贵阳，蒋介石急调滇军入黔“救驾”，红军虚晃一枪，随即西进云南。' },
+    { name: '昆明',        type: 'city',     lng: 102.833, lat: 25.040, desc: '红军大造进攻昆明声势（佯攻），迫使金沙江防线兵力回防，为巧渡金沙江创造战机。' },
+    { name: '皎平渡',      type: 'crossing', lng: 102.384, lat: 26.290, desc: '<b>5 月 1—9 日巧渡金沙江</b>主渡口（云南禄劝）。以 6 条船、36 名船工，9 天 9 夜渡过，彻底摆脱追堵。' }
+  ];
+
+  // 阶段说明
+  var PHASES = [
+    { key: 'p1', color: '#E63946', name: '一渡赤水', date: '1935.1.29',
+      txt: '西渡 · 土城、元厚',
+      d: '<b>西渡赤水河</b>。遵义会议后红军拟北渡长江，1 月 28 日青杠坡战斗失利，毛泽东果断放弃原计划，29 日拂晓由<b>土城浑溪口、元厚</b>等渡口西渡，进入川南古蔺、叙永，寻机北渡。' },
+    { key: 'p2', color: '#F08A24', name: '二渡赤水', date: '1935.2.18—21',
+      txt: '东渡 · 太平渡、二郎滩',
+      d: '<b>东渡赤水河，回师黔北</b>。红军在云南扎西整编后，乘黔北空虚杀回马枪，由<b>太平渡、二郎滩、九溪口</b>东渡，取桐梓、夺娄山关、再占遵义，5 天歼敌两个师又 8 个团。' },
+    { key: 'p3', color: '#1D6FD1', name: '三渡赤水', date: '1935.3.16—17',
+      txt: '西渡 · 茅台',
+      d: '<b>西渡赤水河，调敌西进</b>。红军在遵义地区徘徊诱敌，待敌军云集后于<b>茅台</b>及附近渡口西渡，白天大张旗鼓渡河行军，摆出北渡长江之势，把敌军主力牵向川南。' },
+    { key: 'p4', color: '#8B46D6', name: '四渡赤水', date: '1935.3.21—22',
+      txt: '东渡 · 太平渡、二郎滩',
+      d: '<b>东渡赤水河，跳出合围</b>。以 1 个团伪装主力诱敌西进，主力隐蔽迅速从<b>太平渡、二郎滩、九溪口</b>东渡，随即南下突破乌江、兵临贵阳、调出滇军，跳出数十万敌军包围圈。' },
+    { key: 'p5', color: '#2A9D8F', name: '巧渡金沙江', date: '1935.4—5',
+      txt: '西进 · 皎平渡',
+      d: '<b>佯攻昆明，实趋金沙江</b>。红军调出滇军后急进云南，5 月 1—9 日于<b>皎平渡</b>等渡口渡过金沙江，取得战略转移中具有决定意义的胜利。' }
+  ];
+
+  /* ================= 3. 图标（内联 SVG） ================= */
+  function pinSvg(color) {
+    var s = '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="36" viewBox="0 0 26 36">'
+      + '<path d="M13 1C6.4 1 1 6.4 1 13c0 8.6 12 21 12 21s12-12.4 12-21C25 6.4 19.6 1 13 1z" '
+      + 'fill="' + color + '" stroke="#ffffff" stroke-width="2"/>'
+      + '<circle cx="13" cy="12.6" r="4.4" fill="#ffffff"/></svg>';
+    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(s);
+  }
+  function dotSvg(color) {
+    var s = '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26">'
+      + '<circle cx="13" cy="13" r="11" fill="' + color + '" stroke="#ffffff" stroke-width="2.5"/>'
+      + '<circle cx="13" cy="13" r="4" fill="#ffffff"/></svg>';
+    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(s);
+  }
+  function starSvg(color) {
+    var s = '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30">'
+      + '<path d="M15 2 L18.6 11.2 L28.4 11.6 L20.7 17.7 L23.4 27.2 L15 21.6 L6.6 27.2 L9.3 17.7 '
+      + 'L1.6 11.6 L11.4 11.2 Z" fill="' + color + '" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round"/></svg>';
+    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(s);
+  }
+
+  var ICON = {
+    crossing: pinSvg('#B91C1C'),
+    city:     pinSvg('#2563EB'),
+    base:     pinSvg('#7C3AED'),
+    battle:   starSvg('#EA580C')
+  };
+  var TYPE_NAME = { crossing: '渡口', city: '城镇', base: '集结整编地', battle: '战斗遗址' };
+
+  /* ================= 4. 地图初始化 ================= */
+  var map = new TMap.Map('map', {
+    center: new TMap.LatLng(27.85, 106.10),
+    zoom: 9,
+    pitch: 0,
+    viewMode: '2D'
+  });
+
+  function hideLoading() {
+    var el = document.getElementById('loading');
+    if (el) { el.style.display = 'none'; }
+  }
+  try { map.on('tilesloaded', hideLoading); } catch (e) { /* noop */ }
+  setTimeout(hideLoading, 3500);
+
+  /* ---------- 图层：河流 ---------- */
+  var riverLayer = new TMap.MultiPolyline({
+    map: map,
+    styles: {
+      river: new TMap.PolylineStyle({
+        color: '#7FB8E0', width: 3, borderWidth: 0, lineCap: 'round',
+        dashArray: [8, 6]
+      })
+    },
+    geometries: [{ id: 'chishui', styleId: 'river', paths: path(CHISHUI_RIVER) }]
+  });
+
+  /* ---------- 图层：路线 ---------- */
+  var routeStyles = {};
+  ROUTES.forEach(function (r) {
+    var st = {
+      color: r.color, width: 5, borderWidth: 2, borderColor: '#ffffff', lineCap: 'round',
+      showArrow: true,
+      arrowOptions: { space: 70, fixedSize: 13 }
+    };
+    if (r.dashed) { st.dashArray = [10, 8]; }
+    routeStyles[r.id] = new TMap.PolylineStyle(st);
+  });
+  var routeLayer = new TMap.MultiPolyline({
+    map: map,
+    styles: routeStyles,
+    geometries: ROUTES.map(function (r) {
+      return { id: r.id, styleId: r.id, paths: path(r.path) };
+    })
+  });
+
+  /* ---------- 图层：高亮（选中路线加粗叠加） ---------- */
+  var hlLayer = new TMap.MultiPolyline({
+    map: map,
+    styles: {
+      hl: new TMap.PolylineStyle({ color: '#111827', width: 11, lineCap: 'round' }),
+      hl2: new TMap.PolylineStyle({ color: '#ffffff', width: 5, lineCap: 'round' })
+    },
+    geometries: []
+  });
+
+  /* ---------- 图层：节点 ---------- */
+  var markerLayer = new TMap.MultiMarker({
+    map: map,
+    styles: {
+      crossing: new TMap.MarkerStyle({ width: 24, height: 33, anchor: { x: 12, y: 33 }, src: ICON.crossing }),
+      city:     new TMap.MarkerStyle({ width: 21, height: 29, anchor: { x: 10, y: 29 }, src: ICON.city }),
+      base:     new TMap.MarkerStyle({ width: 22, height: 30, anchor: { x: 11, y: 30 }, src: ICON.base }),
+      battle:   new TMap.MarkerStyle({ width: 26, height: 26, anchor: { x: 13, y: 13 }, src: ICON.battle })
+    },
+    geometries: POIS.map(function (p, i) {
+      return {
+        id: 'poi' + i, styleId: p.type,
+        position: LL(p.lng, p.lat),
+        properties: { name: p.name, type: p.type, desc: p.desc, lng: p.lng, lat: p.lat }
+      };
+    })
+  });
+
+  /* ---------- 图层：地名标注 ---------- */
+  var labelLayer = new TMap.MultiLabel({
+    map: map,
+    styles: {
+      lb: new TMap.LabelStyle({
+        color: '#1f2937', size: 12, offset: { x: 0, y: -34 },
+        backgroundColor: 'rgba(255,255,255,0.88)', borderColor: '#cbd5e1',
+        borderWidth: 1, padding: '3px 6px'
+      }),
+      lbDark: new TMap.LabelStyle({
+        color: '#ffffff', size: 11, offset: { x: 0, y: -30 },
+        backgroundColor: 'rgba(185,28,28,0.9)', borderColor: '#ffffff',
+        borderWidth: 1, padding: '3px 6px'
+      })
+    },
+    geometries: POIS.map(function (p, i) {
+      return {
+        id: 'lb' + i,
+        styleId: (p.type === 'crossing') ? 'lbDark' : 'lb',
+        position: LL(p.lng, p.lat),
+        content: p.name
+      };
+    })
+  });
+
+  /* ================= 5. 交互 ================= */
+
+  // 视图定位（手工实现，避免依赖特定 fit API）
+  function fitTo(swLng, swLat, neLng, neLat, pad) {
+    pad = pad || 110;
+    var cLng = (swLng + neLng) / 2, cLat = (swLat + neLat) / 2;
+    var spanLng = Math.max(neLng - swLng, 1e-4);
+    var spanLat = Math.max(neLat - swLat, 1e-4);
+    var W = window.innerWidth, H = window.innerHeight;
+    var zLng = Math.log((360 * (W - pad)) / (256 * spanLng)) / Math.LN2;
+    var zLat = Math.log((360 * Math.cos(cLat * PI / 180) * (H - pad)) / (256 * spanLat)) / Math.LN2;
+    var z = Math.min(zLng, zLat);
+    z = Math.max(5, Math.min(15, z));
+    map.setCenter(new TMap.LatLng(cLat, cLng));
+    map.setZoom(z);
+  }
+
+  function boundsOf(points) {
+    var a = [Infinity, Infinity, -Infinity, -Infinity];
+    points.forEach(function (p) {
+      if (p[0] < a[0]) { a[0] = p[0]; }
+      if (p[1] < a[1]) { a[1] = p[1]; }
+      if (p[0] > a[2]) { a[2] = p[0]; }
+      if (p[1] > a[3]) { a[3] = p[1]; }
+    });
+    return a;
+  }
+
+  window.__viewCampaign = function () { fitTo(104.9, 27.55, 107.05, 28.65, 130); };
+  window.__viewAll = function () { fitTo(102.20, 24.85, 107.10, 28.75, 90); };
+
+  var detailEl = document.getElementById('detail');
+  var detailTitle = detailEl.querySelector('h3');
+  var detailBody = detailEl.querySelector('.d');
+
+  window.__hideDetail = function () {
+    detailEl.style.display = 'none';
+    hlLayer.setGeometries([]);
+    [].forEach.call(document.querySelectorAll('.phase'), function (el) { el.classList.remove('active'); });
+  };
+
+  function showDetail(title, html) {
+    detailTitle.innerHTML = title;
+    detailBody.innerHTML = html;
+    detailEl.style.display = 'block';
+  }
+
+  // 阶段列表
+  var phaseList = document.getElementById('phaseList');
+  var currentKey = null;
+
+  PHASES.forEach(function (ph, idx) {
+    var div = document.createElement('div');
+    div.className = 'phase';
+    div.setAttribute('data-key', ph.key);
+    div.innerHTML = '<div class="row">'
+      + '<span class="swatch" style="background:' + ph.color + '"></span>'
+      + '<span class="nm">' + ph.name + '</span>'
+      + '<span class="dt">' + ph.date + '</span></div>'
+      + '<div class="txt">' + ph.txt + '</div>';
+    div.addEventListener('click', function () { selectPhase(ph.key); });
+    phaseList.appendChild(div);
+  });
+
+  function selectPhase(key) {
+    var ph = null, rt = null;
+    PHASES.forEach(function (p) { if (p.key === key) { ph = p; } });
+    ROUTES.forEach(function (r) { if (r.key === key) { rt = r; } });
+    if (!ph || !rt) { return; }
+
+    currentKey = key;
+
+    // 高亮
+    hlLayer.setGeometries([
+      { id: 'hl-b', styleId: 'hl', paths: path(rt.path) },
+      { id: 'hl-f', styleId: 'hl2', paths: path(rt.path) }
+    ]);
+
+    // 定位
+    var b = boundsOf(rt.path);
+    fitTo(b[0] - 0.18, b[1] - 0.14, b[2] + 0.18, b[3] + 0.14, 190);
+
+    // 列表态
+    [].forEach.call(document.querySelectorAll('.phase'), function (el) {
+      el.classList.toggle('active', el.getAttribute('data-key') === key);
+    });
+
+    var siteTxt = {
+      p1: '土城（浑溪口）、元厚',
+      p2: '太平渡、二郎滩、九溪口',
+      p3: '茅台（朱砂堡、羊山坳、银滩等）',
+      p4: '太平渡、二郎滩、九溪口',
+      p5: '皎平渡（金沙江）'
+    }[key] || '';
+
+    showDetail(ph.name + '　<span style="font-size:12px;color:#94a3b8;font-weight:400">'
+      + ph.date + '　' + ph.dir + '</span>',
+      '<div style="margin-bottom:6px"><span style="color:#94a3b8">渡口：</span>' + siteTxt + '</div>'
+      + ph.d);
+  }
+
+  // 节点点击
+  markerLayer.on('click', function (evt) {
+    var pr = evt.geometry.properties;
+    hlLayer.setGeometries([]);
+    showDetail(pr.name + '　<span style="font-size:12px;color:#94a3b8;font-weight:400">'
+      + (TYPE_NAME[pr.type] || '') + '</span>',
+      '<div style="margin-bottom:6px;color:#94a3b8;font-size:11.5px">'
+      + '坐标 ' + pr.lng.toFixed(3) + '°E, ' + pr.lat.toFixed(3) + '°N</div>' + pr.desc);
+    map.setCenter(evt.geometry.position);
+    var z = (typeof map.getZoom === 'function') ? map.getZoom() : 11;
+    if (z < 11) { map.setZoom(11); }
+  });
+
+  /* ---------- 图例 ---------- */
+  var legendItems = [
+    { kind: 'line', color: '#E63946', text: '一渡赤水（西渡，1935.1.29）' },
+    { kind: 'line', color: '#F08A24', text: '二渡赤水（东渡，2.18—21）' },
+    { kind: 'line', color: '#1D6FD1', text: '三渡赤水（西渡，3.16—17）' },
+    { kind: 'line', color: '#8B46D6', text: '四渡赤水（东渡，3.21—22）' },
+    { kind: 'line', color: '#2A9D8F', text: '后续 · 巧渡金沙江（4—5 月）', dashed: true },
+    { kind: 'line', color: '#7FB8E0', text: '赤水河（地理参照）', dashed: true, thin: true },
+    { kind: 'dot', color: '#B91C1C', text: '渡口' },
+    { kind: 'dot', color: '#2563EB', text: '城镇' },
+    { kind: 'dot', color: '#7C3AED', text: '集结整编地' },
+    { kind: 'star', text: '战斗遗址' }
+  ];
+  var legendEl = document.getElementById('legend');
+  legendItems.forEach(function (it) {
+    var d = document.createElement('div');
+    d.className = 'lg';
+    var mark = '';
+    if (it.kind === 'line') {
+      var w = it.thin ? 2 : 4;
+      var style = 'border-top:' + w + 'px ' + (it.dashed ? 'dashed' : 'solid') + ' ' + it.color
+        + ';' + (it.thin ? '' : 'border-radius:3px;');
+      mark = '<span class="line" style="' + style + '"></span>';
+    } else if (it.kind === 'dot') {
+      mark = '<span class="dot" style="background:' + it.color + '"></span>';
+    } else {
+      mark = '<span class="star"></span>';
+    }
+    d.innerHTML = mark + '<span>' + it.text + '</span>';
+    legendEl.appendChild(d);
+  });
+
+  /* ---------- 初始视图 ---------- */
+  window.__viewCampaign();
+  setTimeout(window.__viewCampaign, 400);
+})();
+</script>
+</body>
+</html>

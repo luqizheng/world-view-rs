@@ -1,0 +1,2556 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>World View · 界面设计方案 v0.1（高保真交互原型）</title>
+<style>
+/* ============================================================================
+   World View UI Design System v0.1
+   ----------------------------------------------------------------------------
+   分层纪律（来自 ART_STYLE_SPEC v0.1 §1.4 / §1.3）：
+     Layer 0  world.*  28 色美术色板 —— 世界的颜色（地形/势力/事件/描线）
+     Layer 1  ui.*     界面外壳色 —— 工具自身的颜色（新增，见设计说明 §3）
+     Layer 2  theme    Theme Pack 可换：只改 world.*，不动 ui.*
+   本文件不修改任何 world.* 令牌；ui.* 是叠加的新层。
+   ========================================================================= */
+
+/* ---------- 1. 排版令牌 ---------- */
+:root{
+  --font-ui:"Inter","Segoe UI Variable","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  --font-mono:"JetBrains Mono","Cascadia Mono",Consolas,"SF Mono",monospace;
+
+  --fs-11:11px; --fs-12:12px; --fs-13:13px; --fs-14:14px;
+  --fs-16:16px; --fs-19:19px; --fs-24:24px; --fs-30:30px;
+
+  /* 间距：4px 基准 */
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px;
+  --sp-6:24px; --sp-8:32px; --sp-10:40px; --sp-12:48px;
+
+  /* 圆角 */
+  --r-sm:4px; --r-md:6px; --r-lg:10px; --r-xl:14px; --r-full:999px;
+
+  /* 动效 */
+  --t-fast:110ms cubic-bezier(.2,0,.2,1);
+  --t-base:180ms cubic-bezier(.2,0,.2,1);
+  --t-slow:320ms cubic-bezier(.2,0,.2,1);
+
+  /* 高度（8 级 elevation） */
+  --z-map:0; --z-panel:10; --z-topbar:40; --z-menu:60; --z-toast:70; --z-cmdk:80;
+
+  /* 命中区（a11y：可交互最小 28px，桌面紧凑但可点） */
+  --hit:28px;
+  --topbar-h:38px;
+}
+
+/* ---------- 2. 色彩令牌 · 暗色外壳（默认） ---------- */
+[data-theme="dark"]{
+  color-scheme:dark;
+  --ui-bg-app:#0F1116;        /* 窗口底 */
+  --ui-bg-map:#0B0D11;        /* 地图底衬（比面板更暗，让地图"沉下去"） */
+  --ui-bg-panel:#191C24;      /* 面板 */
+  --ui-bg-raised:#212530;     /* 面板内抬升块（输入框、卡片） */
+  --ui-bg-hover:#2A2F3C;      /* hover */
+  --ui-bg-active:#323847;     /* active/pressed */
+  --ui-bg-scrim:rgba(8,9,12,.72);
+  /* 浮在地图上的层专用底：比 scrim 更实，
+     因为地图最亮处是雪原 #E6ECEF，scrim .72 在其上仅 3.92:1（不合格）。
+     本值合成后为 6.57:1，且仍保留 blur 的通透感。 */
+  --ui-bg-float:rgba(20,23,29,.94);
+
+  --ui-bd-subtle:#272C37;     /* 1px 分隔线 */
+  --ui-bd-strong:#3A4152;     /* 面板描边 / 输入框 */
+
+  --ui-tx-1:#E9ECF3;          /* 主文本  14.0:1 */
+  --ui-tx-2:#A3ABB9;          /* 次文本   7.2:1 */
+  --ui-tx-3:#858D9C;          /* 弱文本   5.0:1 */
+  --ui-tx-on-accent:#0B0D11;
+
+  --ui-accent:#4C8DF6;        /* 交互主色 5.0:1 */
+  --ui-accent-hi:#6BA1F8;
+  --ui-accent-wash:rgba(76,141,246,.14);
+  --ui-accent-line:rgba(76,141,246,.42);
+
+  --ui-focus:#F2C14E;         /* 焦点环 = world.accent.select（金） */
+  --ui-focus-ring:rgba(242,193,78,.85); /* 选中描边 */
+  /* 选中态 wash 必须 .30 而非 .16 —— .16 时描边虽仍可见(6.35:1)，
+     但「选中底 vs 常态底」仅 1.42:1，用户难以感知"变了没有"。 */
+  --ui-sel-wash:rgba(242,193,78,.30);
+
+  /* 语义前景色 —— 暗色下用亮色系，亮色下必须换深色系（见亮色主题块）。
+     这些是「文字色」，不是色板色：色板色恒定不变，文字色随主题走。 */
+  --ui-ok-fg:#7FD593;
+  --ui-warn-fg:#E8C065;
+  --ui-err-fg:#F09A91;
+  --ui-ev-fg:#C9A0DC;
+
+  --ui-shadow-1:0 1px 2px rgba(0,0,0,.42);
+  --ui-shadow-2:0 4px 12px rgba(0,0,0,.44),0 1px 2px rgba(0,0,0,.4);
+  --ui-shadow-3:0 16px 40px rgba(0,0,0,.56),0 2px 8px rgba(0,0,0,.44);
+
+  --ui-grain:rgba(255,255,255,.022);
+}
+
+/* ---------- 3. 色彩令牌 · 亮色外壳 ---------- */
+[data-theme="light"]{
+  color-scheme:light;
+  --ui-bg-app:#EDEEF2;
+  --ui-bg-map:#E4E6EB;
+  --ui-bg-panel:#FBFBFD;
+  --ui-bg-raised:#F1F2F6;
+  --ui-bg-hover:#E7E9F0;
+  --ui-bg-active:#DBDEE8;
+  --ui-bg-scrim:rgba(30,32,38,.34);
+  /* 亮色：浮层需比暗色更实，因浅色地图区本身就高亮 */
+  --ui-bg-float:rgba(248,248,251,.93);
+
+  --ui-bd-subtle:#E1E4EC;
+  --ui-bd-strong:#C6CBD8;
+
+  --ui-tx-1:#1B1E26;          /* 13.9:1 */
+  --ui-tx-2:#525A69;          /*  7.1:1 */
+  --ui-tx-3:#6B7383;          /*  5.1:1 */
+  --ui-tx-on-accent:#FFFFFF;
+
+  --ui-accent:#2A6FD4;
+  --ui-accent-hi:#1F5CB8;
+  --ui-accent-wash:rgba(42,111,212,.10);
+  --ui-accent-line:rgba(42,111,212,.38);
+
+  --ui-focus:#8A5A00;         /* 焦点环 = world.accent.select 的深色替身 */
+  --ui-focus-ring:rgba(138,90,0,.90);
+  --ui-sel-wash:rgba(242,193,78,.70);   /* 浅底上金色 wash 天生难拉开，
+     底色只到 1.33:1，真正的可辨识度靠 3.39:1 的深色描边 —— 两者叠加足够 */
+
+  /* 亮色主题的语义前景色必须更深 —— 浅底上浅色文字必然失效。
+     上一轮只测了暗色，导致亮色下 .note.ok 仅 1.45:1、树选中项 1.06:1。 */
+  --ui-ok-fg:#186B33;        /* 5.37:1 on note 底 */
+  --ui-warn-fg:#7A4E00;      /* 5.99:1 */
+  --ui-err-fg:#992B22;       /* 6.03:1 */
+  --ui-ev-fg:#6D3388;        /* 5.70:1 on bdg 底 */
+
+  --ui-shadow-1:0 1px 2px rgba(20,24,34,.08);
+  --ui-shadow-2:0 4px 12px rgba(20,24,34,.10),0 1px 2px rgba(20,24,34,.06);
+  --ui-shadow-3:0 16px 40px rgba(20,24,34,.16),0 2px 8px rgba(20,24,34,.08);
+
+  --ui-grain:rgba(20,24,34,.016);
+}
+
+/* ---------- 4. 基础重置 ---------- */
+*,*::before,*::after{box-sizing:border-box;}
+html,body{height:100%;margin:0;}
+body{
+  font-family:var(--font-ui);
+  font-size:var(--fs-13);
+  line-height:1.5;
+  color:var(--ui-tx-1);
+  background:var(--ui-bg-app);
+  overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+}
+button,input,select,textarea{font:inherit;color:inherit;}
+:focus{outline:none;}
+:focus-visible{outline:2px solid var(--ui-focus);outline-offset:2px;border-radius:var(--r-sm);}
+::selection{background:var(--ui-accent-wash);}
+.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums;}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
+@media (prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;transition-duration:.001ms!important;}}
+
+/* 细滚动条 */
+*::-webkit-scrollbar{width:9px;height:9px;}
+*::-webkit-scrollbar-track{background:transparent;}
+*::-webkit-scrollbar-thumb{background:var(--ui-bd-strong);border-radius:var(--r-full);border:2px solid transparent;background-clip:padding-box;}
+*::-webkit-scrollbar-thumb:hover{background:var(--ui-tx-3);background-clip:padding-box;}
+
+/* ============================================================================
+   5. 应用骨架
+   ========================================================================= */
+#app{position:fixed;inset:0;display:flex;flex-direction:column;}
+
+/* ---------- 顶栏 ---------- */
+.topbar{
+  position:relative;z-index:var(--z-topbar);
+  height:var(--topbar-h);flex:none;
+  display:flex;align-items:center;gap:var(--sp-2);
+  padding:0 var(--sp-2) 0 var(--sp-3);
+  background:linear-gradient(180deg,var(--ui-bg-raised),var(--ui-bg-panel));
+  border-bottom:1px solid var(--ui-bd-subtle);
+  box-shadow:var(--ui-shadow-1);
+  user-select:none;
+}
+.brand{display:flex;align-items:center;gap:var(--sp-2);padding-right:var(--sp-2);}
+.brand-mark{
+  width:20px;height:20px;border-radius:var(--r-md);flex:none;
+  background:conic-gradient(from 210deg,#1E5A8A,#3E6B3A,#7FA85C,#E6ECEF,#D9C58F,#A89060,#1E5A8A);
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.34),0 1px 2px rgba(0,0,0,.3);
+}
+.brand-name{font-size:var(--fs-12);font-weight:650;letter-spacing:.02em;color:var(--ui-tx-1);}
+.brand-ver{font-size:var(--fs-11);color:var(--ui-tx-3);}
+
+.tb-div{width:1px;height:18px;background:var(--ui-bd-subtle);flex:none;margin:0 var(--sp-1);}
+.tb-spring{flex:1 1 auto;}
+
+/* 工程名（可改名） */
+.proj{
+  display:flex;align-items:center;gap:var(--sp-2);
+  height:var(--hit);padding:0 var(--sp-2) 0 var(--sp-2);
+  border-radius:var(--r-md);cursor:pointer;border:1px solid transparent;
+}
+.proj:hover{background:var(--ui-bg-hover);}
+.proj-ico{width:14px;height:14px;color:var(--ui-tx-3);flex:none;}
+.proj-txt{font-size:var(--fs-12);font-weight:600;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dirty{
+  width:7px;height:7px;border-radius:50%;flex:none;
+  background:#E8623C;box-shadow:0 0 0 2px rgba(232,98,60,.2);
+}
+.dirty[hidden]{display:none;}
+
+/* 分段控件（视图模式） */
+.seg{
+  display:flex;gap:2px;padding:2px;border-radius:var(--r-md);
+  background:var(--ui-bg-app);border:1px solid var(--ui-bd-subtle);
+}
+.seg-btn{
+  display:flex;align-items:center;gap:var(--sp-1);
+  height:22px;padding:0 var(--sp-2);
+  font-size:var(--fs-11);font-weight:550;letter-spacing:.01em;
+  color:var(--ui-tx-3);background:transparent;border:0;border-radius:var(--r-sm);
+  cursor:pointer;transition:background var(--t-fast),color var(--t-fast);
+  white-space:nowrap;
+}
+.seg-btn:hover{color:var(--ui-tx-1);background:var(--ui-bg-hover);}
+.seg-btn[aria-pressed="true"]{background:var(--ui-accent-wash);color:var(--ui-accent-hi);box-shadow:inset 0 0 0 1px var(--ui-accent-line);}
+.seg-dot{width:8px;height:8px;border-radius:2px;flex:none;}
+
+/* 顶栏读数（等宽数字，不跳动） */
+.readout{
+  display:flex;align-items:center;gap:var(--sp-2);
+  font-family:var(--font-mono);font-size:var(--fs-11);
+  color:var(--ui-tx-2);letter-spacing:.01em;white-space:nowrap;
+}
+.readout b{color:var(--ui-tx-1);font-weight:600;}
+.readout .k{color:var(--ui-tx-3);font-family:var(--font-ui);}
+
+/* 图标按钮 */
+.ib{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:var(--hit);height:var(--hit);flex:none;
+  border:1px solid transparent;border-radius:var(--r-md);
+  background:transparent;color:var(--ui-tx-2);cursor:pointer;
+  transition:background var(--t-fast),color var(--t-fast),border-color var(--t-fast);
+}
+.ib:hover{background:var(--ui-bg-hover);color:var(--ui-tx-1);}
+.ib:active{background:var(--ui-bg-active);}
+.ib[disabled]{opacity:.34;pointer-events:none;}
+.ib.on{background:var(--ui-accent-wash);color:var(--ui-accent-hi);border-color:var(--ui-accent-line);}
+.ib svg{width:15px;height:15px;}
+.ib.sm{width:22px;height:22px;}
+.ib.sm svg{width:13px;height:13px;}
+
+/* ============================================================================
+   6. 舞台 / 地图区
+   ========================================================================= */
+.stage{position:relative;flex:1 1 auto;min-height:0;background:var(--ui-bg-map);overflow:hidden;}
+#map{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab;}
+#map.drag{cursor:grabbing;}
+#map.paint{cursor:crosshair;}
+
+/* 地图上的 HUD 角标 */
+.map-hud{position:absolute;display:flex;gap:var(--sp-2);z-index:5;pointer-events:none;}
+.map-hud > *{pointer-events:auto;}
+.hud-tl{top:var(--sp-3);left:var(--sp-3);}
+.hud-tr{top:var(--sp-3);right:var(--sp-3);}
+.hud-bl{bottom:var(--sp-3);left:var(--sp-3);}
+.hud-br{bottom:var(--sp-3);right:var(--sp-3);}
+
+.hud-chip{
+  display:inline-flex;align-items:center;gap:var(--sp-1);
+  height:22px;padding:0 var(--sp-2);
+  border-radius:var(--r-sm);
+  background:var(--ui-bg-float);backdrop-filter:blur(10px) saturate(1.3);
+  border:1px solid var(--ui-bd-strong);
+  font-size:var(--fs-11);color:var(--ui-tx-2);
+}
+.hud-chip b{color:var(--ui-tx-1);font-family:var(--font-mono);font-weight:600;}
+
+.zoom-stack{
+  display:flex;flex-direction:column;align-items:center;gap:1px;
+  padding:3px;border-radius:var(--r-md);
+  background:var(--ui-bg-float);backdrop-filter:blur(10px);
+  border:1px solid var(--ui-bd-strong);box-shadow:var(--ui-shadow-2);
+}
+
+/* 地图加载 / 空 / 错误 状态覆盖层 */
+.overlay{
+  position:absolute;inset:0;z-index:6;display:none;
+  align-items:center;justify-content:center;
+  background:var(--ui-bg-scrim);backdrop-filter:blur(3px);
+}
+.overlay[data-on="1"]{display:flex;}
+.ov-card{
+  width:min(440px,86vw);padding:var(--sp-6);
+  background:var(--ui-bg-panel);border:1px solid var(--ui-bd-strong);
+  border-radius:var(--r-xl);box-shadow:var(--ui-shadow-3);text-align:center;
+}
+.ov-ico{width:38px;height:38px;margin:0 auto var(--sp-3);color:var(--ui-tx-3);}
+.ov-card h3{margin:0 0 var(--sp-2);font-size:var(--fs-16);font-weight:650;}
+.ov-card p{margin:0 0 var(--sp-4);font-size:var(--fs-12);color:var(--ui-tx-2);line-height:1.65;}
+.ov-actions{display:flex;gap:var(--sp-2);justify-content:center;}
+
+/* 骨架屏 */
+.skel-line{height:9px;border-radius:var(--r-full);background:linear-gradient(90deg,var(--ui-bg-raised),var(--ui-bg-hover),var(--ui-bg-raised));background-size:200% 100%;animation:shimmer 1.4s linear infinite;position:relative;}
+.skel-line::after{content:"";position:absolute;left:0;top:0;bottom:0;width:35%;border-radius:var(--r-full);background:var(--ui-bg-active);animation:slide 1.4s ease-in-out infinite;}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+@keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(320%)}}
+/* 降低动效偏好：动画全停时，加载态必须仍可辨识 —— 保留文字说明 */
+@media (prefers-reduced-motion:reduce){
+  .skel-line{animation:none;background:var(--ui-bg-raised);border:1px solid var(--ui-bd-strong);}
+  .skel-line::after{animation:none;display:none;}
+}
+
+/* ============================================================================
+   7. 浮动面板
+   ========================================================================= */
+.panel{
+  position:absolute;z-index:var(--z-panel);
+  display:flex;flex-direction:column;min-width:0;
+  background:var(--ui-bg-panel);
+  border:1px solid var(--ui-bd-strong);
+  border-radius:var(--r-lg);
+  box-shadow:var(--ui-shadow-2);
+  overflow:hidden;
+  transition:box-shadow var(--t-base);
+}
+.panel::before{ /* 顶部 1px 高光，给出"浮起"的实体感 */
+  content:"";position:absolute;inset:0 0 auto 0;height:1px;
+  background:linear-gradient(90deg,transparent,var(--ui-grain) 22%,var(--ui-grain) 78%,transparent);
+  pointer-events:none;
+}
+.panel.dragging{box-shadow:var(--ui-shadow-3);z-index:calc(var(--z-panel) + 5);}
+.panel.collapsed{flex:none;}
+/* 折叠后高度必须收缩到头部 —— 面板高度来自内联 style.height，
+   仅隐藏 .p-body 不会改变占位，仍会挡住地图。*/
+.panel.collapsed .p-body{display:none;}
+.panel.collapsed{height:30px !important;min-height:30px;}
+[data-density="compact"] .panel.collapsed{height:26px !important;min-height:26px;}
+
+.p-head{
+  display:flex;align-items:center;gap:var(--sp-2);
+  height:30px;flex:none;padding:0 var(--sp-1) 0 var(--sp-2);
+  cursor:grab;user-select:none;
+  border-bottom:1px solid var(--ui-bd-subtle);
+  background:linear-gradient(180deg,var(--ui-bg-raised),transparent);
+}
+.p-head:active{cursor:grabbing;}
+.p-grip{width:11px;height:11px;flex:none;color:var(--ui-tx-3);opacity:.6;}
+.p-ico{width:14px;height:14px;flex:none;color:var(--ui-accent);}
+.p-title{font-size:var(--fs-11);font-weight:650;letter-spacing:.05em;text-transform:uppercase;color:var(--ui-tx-2);flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.p-badge{
+  min-width:16px;height:16px;padding:0 4px;flex:none;
+  display:inline-flex;align-items:center;justify-content:center;
+  border-radius:var(--r-full);font-size:10px;font-weight:700;
+  background:var(--ui-bg-active);color:var(--ui-tx-2);font-family:var(--font-mono);
+}
+.p-badge.warn{background:rgba(197,151,31,.2);color:var(--ui-warn-fg);}
+.p-badge.err{background:rgba(181,69,58,.22);color:var(--ui-err-fg);}
+.p-body{
+  flex:1 1 auto;min-height:0;overflow:auto;
+  padding:var(--sp-2);
+  display:flex;flex-direction:column;gap:var(--sp-2);
+}
+.p-resize{position:absolute;right:0;bottom:0;width:14px;height:14px;cursor:nwse-resize;opacity:0;}
+.p-resize::after{content:"";position:absolute;right:3px;bottom:3px;width:6px;height:6px;border-right:1.5px solid var(--ui-bd-strong);border-bottom:1.5px solid var(--ui-bd-strong);border-radius:0 0 2px 0;}
+.panel:hover .p-resize{opacity:.9;}
+
+/* 面板内分组 */
+.grp{display:flex;flex-direction:column;gap:var(--sp-1);}
+.grp-h{
+  display:flex;align-items:center;gap:var(--sp-1);
+  font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ui-tx-3);padding:0 2px;
+}
+.grp-h::after{content:"";flex:1 1 auto;height:1px;background:var(--ui-bd-subtle);}
+
+/* ============================================================================
+   8. 控件
+   ========================================================================= */
+/* 按钮 */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:var(--sp-1);
+  height:26px;padding:0 var(--sp-3);
+  font-size:var(--fs-12);font-weight:550;
+  border-radius:var(--r-md);border:1px solid var(--ui-bd-strong);
+  background:var(--ui-bg-raised);color:var(--ui-tx-1);
+  cursor:pointer;white-space:nowrap;
+  transition:background var(--t-fast),border-color var(--t-fast),transform var(--t-fast);
+}
+.btn:hover{background:var(--ui-bg-hover);border-color:var(--ui-tx-3);}
+.btn:active{transform:translateY(1px);}
+.btn svg{width:13px;height:13px;}
+.btn-pri{background:var(--ui-accent);border-color:var(--ui-accent);color:var(--ui-tx-on-accent);font-weight:600;}
+.btn-pri:hover{background:var(--ui-accent-hi);border-color:var(--ui-accent-hi);}
+.btn-ghost{background:transparent;border-color:transparent;color:var(--ui-tx-2);}
+.btn-ghost:hover{background:var(--ui-bg-hover);color:var(--ui-tx-1);}
+.btn-danger{color:var(--ui-err-fg);border-color:rgba(181,69,58,.4);}
+.btn-danger:hover{background:rgba(181,69,58,.14);}
+.btn-block{width:100%;}
+
+/* 输入 */
+.field{display:flex;flex-direction:column;gap:3px;min-width:0;}
+.field-h{display:flex;align-items:center;gap:var(--sp-1);font-size:var(--fs-11);color:var(--ui-tx-2);font-weight:550;}
+.field-h .hint{margin-left:auto;color:var(--ui-tx-3);font-weight:400;font-family:var(--font-mono);font-size:10px;}
+.inp{
+  height:26px;padding:0 var(--sp-2);
+  background:var(--ui-bg-app);color:var(--ui-tx-1);
+  border:1px solid var(--ui-bd-strong);border-radius:var(--r-md);
+  font-size:var(--fs-12);min-width:0;width:100%;
+  transition:border-color var(--t-fast),box-shadow var(--t-fast);
+}
+.inp::placeholder{color:var(--ui-tx-3);}
+.inp:hover{border-color:var(--ui-tx-3);}
+.inp:focus{border-color:var(--ui-accent);box-shadow:0 0 0 3px var(--ui-accent-wash);}
+textarea.inp{height:auto;min-height:60px;padding:var(--sp-2);resize:vertical;line-height:1.6;}
+select.inp{cursor:pointer;appearance:none;
+  background-image:linear-gradient(45deg,transparent 50%,var(--ui-tx-3) 50%),linear-gradient(135deg,var(--ui-tx-3) 50%,transparent 50%);
+  background-position:calc(100% - 13px) 11px,calc(100% - 8px) 11px;
+  background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-right:var(--sp-6);}
+
+/* 开关 */
+.sw{display:flex;align-items:center;gap:var(--sp-2);cursor:pointer;min-height:22px;font-size:var(--fs-12);color:var(--ui-tx-2);}
+.sw:hover{color:var(--ui-tx-1);}
+.sw-track{
+  width:28px;height:16px;flex:none;border-radius:var(--r-full);
+  background:var(--ui-bg-active);border:1px solid var(--ui-bd-strong);
+  position:relative;transition:background var(--t-fast),border-color var(--t-fast);
+}
+.sw-track::after{
+  content:"";position:absolute;top:1px;left:1px;width:12px;height:12px;border-radius:50%;
+  background:var(--ui-tx-2);transition:transform var(--t-base),background var(--t-fast);
+}
+.sw input{position:absolute;opacity:0;width:0;height:0;}
+.sw input:checked + .sw-track{background:var(--ui-accent);border-color:var(--ui-accent);}
+.sw input:checked + .sw-track::after{transform:translateX(12px);background:#fff;}
+.sw input:focus-visible + .sw-track{outline:2px solid var(--ui-focus);outline-offset:2px;}
+
+/* 滑块 */
+.sl{display:flex;align-items:center;gap:var(--sp-2);}
+.sl input[type=range]{
+  flex:1 1 auto;height:16px;appearance:none;background:transparent;cursor:pointer;min-width:0;
+}
+.sl input[type=range]::-webkit-slider-runnable-track{height:3px;border-radius:var(--r-full);background:var(--ui-bg-active);}
+.sl input[type=range]::-webkit-slider-thumb{
+  appearance:none;width:13px;height:13px;margin-top:-5px;border-radius:50%;
+  background:var(--ui-tx-1);border:2px solid var(--ui-bg-panel);box-shadow:var(--ui-shadow-1);
+  transition:transform var(--t-fast);
+}
+.sl input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.15);}
+.sl input[type=range]:focus-visible::-webkit-slider-thumb{outline:2px solid var(--ui-focus);outline-offset:2px;}
+.sl-v{font-family:var(--font-mono);font-size:var(--fs-11);color:var(--ui-tx-2);min-width:46px;text-align:right;flex:none;}
+
+/* 分段小控件（紧凑） */
+.seg2{display:flex;gap:1px;padding:2px;background:var(--ui-bg-app);border:1px solid var(--ui-bd-subtle);border-radius:var(--r-md);}
+.seg2 button{
+  flex:1 1 0;min-width:0;height:20px;padding:0 var(--sp-1);
+  font-size:var(--fs-11);color:var(--ui-tx-3);background:transparent;border:0;border-radius:var(--r-sm);cursor:pointer;
+}
+.seg2 button:hover{color:var(--ui-tx-1);background:var(--ui-bg-hover);}
+.seg2 button[aria-pressed=true]{background:var(--ui-bg-active);color:var(--ui-tx-1);font-weight:600;}
+
+/* 行（检视器里的属性行） */
+.row{display:flex;align-items:center;gap:var(--sp-2);min-height:24px;font-size:var(--fs-12);}
+.row-k{color:var(--ui-tx-3);flex:none;min-width:52px;font-size:var(--fs-11);}
+.row-v{color:var(--ui-tx-1);flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+/* 树 */
+.tree{display:flex;flex-direction:column;gap:1px;}
+.tnode{
+  display:flex;align-items:center;gap:var(--sp-1);
+  height:24px;padding:0 var(--sp-1);border-radius:var(--r-sm);
+  font-size:var(--fs-12);color:var(--ui-tx-2);cursor:pointer;position:relative;
+  transition:background var(--t-fast),color var(--t-fast);
+}
+.tnode:hover{background:var(--ui-bg-hover);color:var(--ui-tx-1);}
+.tnode.sel{background:var(--ui-sel-wash);color:var(--ui-tx-1);font-weight:600;}
+.tnode.sel::before{content:"";position:absolute;left:0;top:4px;bottom:4px;width:2px;border-radius:var(--r-full);background:var(--ui-focus);}
+.tnode.d1{padding-left:var(--sp-4);}
+.tnode.d2{padding-left:var(--sp-6);}
+.tw{width:12px;height:12px;flex:none;color:var(--ui-tx-3);transition:transform var(--t-fast);}
+.tnode.open .tw{transform:rotate(90deg);}
+.tdot{width:7px;height:7px;border-radius:2px;flex:none;}
+.tlabel{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.tmeta{font-family:var(--font-mono);font-size:10px;color:var(--ui-tx-3);flex:none;}
+.tkids{display:none;flex-direction:column;gap:1px;}
+.tkids.open{display:flex;}
+
+/* 列表项（事件/事态） */
+.li{
+  display:flex;align-items:center;gap:var(--sp-2);
+  padding:var(--sp-1) var(--sp-2);border-radius:var(--r-md);
+  border:1px solid var(--ui-bd-subtle);background:var(--ui-bg-raised);
+  cursor:pointer;transition:border-color var(--t-fast),background var(--t-fast);
+}
+.li:hover{border-color:var(--ui-bd-strong);background:var(--ui-bg-hover);}
+.li.sel{border-color:var(--ui-accent-line);background:var(--ui-accent-wash);}
+.li-ico{width:16px;height:16px;flex:none;border-radius:var(--r-sm);display:grid;place-items:center;}
+.li-main{flex:1 1 auto;min-width:0;}
+.li-t{font-size:var(--fs-12);color:var(--ui-tx-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.li-s{font-size:10px;color:var(--ui-tx-3);font-family:var(--font-mono);}
+.li.empty{justify-content:center;color:var(--ui-tx-3);font-size:var(--fs-12);border-style:dashed;background:transparent;cursor:default;}
+/* 空状态：必须给出下一步动作，不能只有一句"暂无数据"（设计规范 §5.2） */
+.empty-state{
+  display:flex;flex-direction:column;align-items:center;gap:var(--sp-2);
+  padding:var(--sp-5) var(--sp-3);text-align:center;
+  border:1px dashed var(--ui-bd-strong);border-radius:var(--r-md);
+  background:var(--ui-bg-raised);
+}
+.empty-state svg{width:22px;height:22px;color:var(--ui-tx-3);}
+.empty-state p{margin:0;font-size:var(--fs-11);color:var(--ui-tx-2);line-height:1.6;}
+.empty-state p b{color:var(--ui-tx-1);font-weight:600;}
+.empty-state .btn{margin-top:var(--sp-1);}
+
+/* 徽标 */
+.bdg{
+  display:inline-flex;align-items:center;gap:3px;
+  height:17px;padding:0 6px;border-radius:var(--r-sm);
+  font-size:10px;font-weight:650;letter-spacing:.02em;
+  background:var(--ui-bg-active);color:var(--ui-tx-2);
+}
+.bdg.ok{background:rgba(63,155,78,.16);color:var(--ui-ok-fg);}
+.bdg.warn{background:rgba(197,151,31,.16);color:var(--ui-warn-fg);}
+.bdg.err{background:rgba(181,69,58,.18);color:var(--ui-err-fg);}
+.bdg.ev{background:rgba(192,139,216,.16);color:var(--ui-ev-fg);}
+
+/* 工具网格（笔刷 2 列） */
+.toolgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:var(--sp-1);}
+.tool{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+  height:44px;border-radius:var(--r-md);
+  border:1px solid var(--ui-bd-subtle);background:var(--ui-bg-raised);
+  cursor:pointer;transition:border-color var(--t-fast),background var(--t-fast),transform var(--t-fast);
+}
+.tool:hover{border-color:var(--ui-bd-strong);background:var(--ui-bg-hover);}
+.tool:active{transform:scale(.97);}
+.tool[aria-pressed=true]{border-color:var(--ui-focus);background:var(--ui-sel-wash);box-shadow:inset 0 0 0 1px var(--ui-focus-ring);}
+.tool-sw{width:16px;height:16px;border-radius:var(--r-sm);box-shadow:inset 0 0 0 1px rgba(0,0,0,.3);}
+.tool-n{font-size:10px;color:var(--ui-tx-2);}
+.tool[aria-pressed=true] .tool-n{color:var(--ui-tx-1);font-weight:600;}
+
+/* 提示条 */
+.note{
+  display:flex;gap:var(--sp-2);padding:var(--sp-2);
+  border-radius:var(--r-md);font-size:var(--fs-11);line-height:1.6;
+  background:var(--ui-bg-raised);border:1px solid var(--ui-bd-subtle);color:var(--ui-tx-2);
+}
+.note svg{width:14px;height:14px;flex:none;margin-top:1px;}
+.note.warn{background:rgba(197,151,31,.09);border-color:rgba(197,151,31,.28);color:var(--ui-warn-fg);}
+.note.err{background:rgba(181,69,58,.10);border-color:rgba(181,69,58,.32);color:var(--ui-err-fg);}
+.note.ok{background:rgba(63,155,78,.09);border-color:rgba(63,155,78,.28);color:var(--ui-ok-fg);}
+
+/* 快捷键键帽 */
+kbd{
+  display:inline-block;min-width:16px;padding:1px 4px;
+  font-family:var(--font-mono);font-size:10px;line-height:1.4;text-align:center;
+  color:var(--ui-tx-2);background:var(--ui-bg-app);
+  border:1px solid var(--ui-bd-strong);border-bottom-width:2px;border-radius:var(--r-sm);
+}
+
+/* ============================================================================
+   9. 时间轴（底部）
+   ========================================================================= */
+.timeline{
+  position:absolute;left:var(--sp-3);right:var(--sp-3);bottom:var(--sp-3);
+  z-index:var(--z-panel);
+  background:var(--ui-bg-panel);border:1px solid var(--ui-bd-strong);
+  border-radius:var(--r-lg);box-shadow:var(--ui-shadow-2);overflow:hidden;
+}
+.tl-bar{display:flex;align-items:center;gap:var(--sp-2);height:34px;padding:0 var(--sp-2);border-bottom:1px solid var(--ui-bd-subtle);}
+.play{
+  display:grid;place-items:center;width:24px;height:24px;flex:none;
+  border-radius:50%;border:1px solid var(--ui-bd-strong);background:var(--ui-bg-raised);
+  color:var(--ui-tx-1);cursor:pointer;transition:background var(--t-fast);
+}
+.play:hover{background:var(--ui-bg-hover);}
+.play svg{width:11px;height:11px;}
+.tl-date{font-family:var(--font-mono);font-size:var(--fs-12);font-weight:600;min-width:132px;}
+.tl-date .cal{color:var(--ui-tx-3);font-weight:400;font-family:var(--font-ui);font-size:var(--fs-11);}
+
+.tl-lanes{padding:var(--sp-2) var(--sp-2) var(--sp-1);display:flex;flex-direction:column;gap:3px;position:relative;}
+.lane{display:flex;align-items:center;gap:var(--sp-2);height:20px;}
+.lane-k{
+  width:56px;flex:none;font-size:10px;color:var(--ui-tx-3);
+  letter-spacing:.04em;text-transform:uppercase;font-weight:650;
+  display:flex;align-items:center;gap:3px;
+}
+.lane-k i{width:6px;height:6px;border-radius:2px;display:inline-block;}
+.lane-t{flex:1 1 auto;position:relative;height:100%;min-width:0;}
+.lane-t::before{ /* 基线刻度 */
+  content:"";position:absolute;left:0;right:0;top:50%;height:1px;background:var(--ui-bd-subtle);
+}
+.span{
+  position:absolute;top:50%;transform:translateY(-50%);
+  height:9px;border-radius:var(--r-full);cursor:pointer;
+  transition:filter var(--t-fast),box-shadow var(--t-fast);
+}
+.span:hover{filter:brightness(1.18);box-shadow:0 0 0 2px var(--ui-bg-panel),0 0 0 3px var(--ui-accent-line);}
+.span-lbl{
+  position:absolute;top:-15px;left:0;font-size:10px;color:var(--ui-tx-3);
+  white-space:nowrap;pointer-events:none;opacity:0;transition:opacity var(--t-fast);
+}
+.span:hover .span-lbl{opacity:1;}
+.tick{position:absolute;top:50%;transform:translate(-50%,-50%);width:1px;height:5px;background:var(--ui-bd-strong);}
+
+/* L4 世纪鸟瞰：按世纪聚合的柱状条 */
+.l4{display:flex;align-items:flex-end;gap:2px;height:22px;padding:0 1px;}
+.l4bar{flex:1 1 0;min-width:2px;border-radius:1px 1px 0 0;background:var(--ui-accent);opacity:.62;transition:opacity var(--t-fast);}
+.l4bar:hover{opacity:1;}
+
+/* 播放头 */
+/* 游标与拖拽热区：left 由 JS 按「轨道内容区实测宽度」计算，
+   不硬编码 56px+padding——避免与 lane-t 错位。
+   （v0.1 原实现用 `12 + 比例×全宽`，而 lane-t 前有 56px 标签列，
+     导致游标与事件条永远对不齐——已修）*/
+.tl-cursor{
+  position:absolute;top:0;bottom:0;width:1px;background:#E8623C;
+  pointer-events:none;z-index:3;
+}
+.tl-cursor::before{
+  content:"";position:absolute;top:-1px;left:-4px;
+  border-left:4.5px solid transparent;border-right:4.5px solid transparent;
+  border-top:6px solid #E8623C;
+}
+.tl-hit{position:absolute;top:0;bottom:0;cursor:ew-resize;}
+
+/* ============================================================================
+   10. 小地图
+   ========================================================================= */
+.mini{width:100%;aspect-ratio:1;display:block;border-radius:var(--r-md);background:var(--ui-bg-app);cursor:crosshair;border:1px solid var(--ui-bd-subtle);}
+
+/* ============================================================================
+   11. 状态栏
+   ========================================================================= */
+.statusbar{
+  position:relative;z-index:var(--z-topbar);
+  height:22px;flex:none;display:flex;align-items:center;gap:var(--sp-3);
+  padding:0 var(--sp-3);
+  background:var(--ui-bg-panel);border-top:1px solid var(--ui-bd-subtle);
+  font-size:var(--fs-11);color:var(--ui-tx-3);user-select:none;
+}
+.statusbar .mono{color:var(--ui-tx-2);}
+.sb-i{display:flex;align-items:center;gap:4px;}
+.sb-dot{width:6px;height:6px;border-radius:50%;background:#3F9B4E;}
+
+/* ============================================================================
+   12. 命令面板 / 菜单 / Toast
+   ========================================================================= */
+.scrim{position:fixed;inset:0;background:var(--ui-bg-scrim);z-index:var(--z-cmdk);display:none;}
+.scrim[data-on="1"]{display:block;}
+.cmdk{
+  position:fixed;z-index:calc(var(--z-cmdk) + 1);
+  top:14vh;left:50%;transform:translateX(-50%);
+  width:min(560px,92vw);display:none;
+  background:var(--ui-bg-panel);border:1px solid var(--ui-bd-strong);
+  border-radius:var(--r-xl);box-shadow:var(--ui-shadow-3);overflow:hidden;
+}
+.cmdk[data-on="1"]{display:block;}
+.cmdk-in{
+  display:flex;align-items:center;gap:var(--sp-2);
+  height:42px;padding:0 var(--sp-3);border-bottom:1px solid var(--ui-bd-subtle);
+}
+.cmdk-in svg{width:15px;height:15px;color:var(--ui-tx-3);flex:none;}
+.cmdk-in input{flex:1 1 auto;background:transparent;border:0;font-size:var(--fs-14);color:var(--ui-tx-1);}
+.cmdk-in input::placeholder{color:var(--ui-tx-3);}
+.cmdk-list{max-height:44vh;overflow:auto;padding:var(--sp-1);}
+.cmdk-g{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ui-tx-3);padding:var(--sp-2) var(--sp-2) var(--sp-1);}
+.cmdk-i{display:flex;align-items:center;gap:var(--sp-2);height:30px;padding:0 var(--sp-2);border-radius:var(--r-md);cursor:pointer;font-size:var(--fs-12);color:var(--ui-tx-2);}
+.cmdk-i svg{width:14px;height:14px;flex:none;color:var(--ui-tx-3);}
+.cmdk-i[aria-selected=true]{background:var(--ui-accent-wash);color:var(--ui-tx-1);}
+.cmdk-i[aria-selected=true] svg{color:var(--ui-accent-hi);}
+.cmdk-i .k{margin-left:auto;display:flex;gap:3px;}
+.cmdk-foot{display:flex;gap:var(--sp-4);padding:var(--sp-2) var(--sp-3);border-top:1px solid var(--ui-bd-subtle);font-size:10px;color:var(--ui-tx-3);}
+.cmdk-foot span{display:flex;align-items:center;gap:4px;}
+
+/* Toast */
+/* Toast —— 底部要避开时间轴（高约 114px + 12px 边距），
+   否则会盖住「日/事态/人物/世纪」切换按钮。 */
+.toasts{position:fixed;right:var(--sp-4);bottom:146px;z-index:var(--z-toast);display:flex;flex-direction:column;gap:var(--sp-2);align-items:flex-end;max-width:60vw;}
+.toast{
+  display:flex;align-items:center;gap:var(--sp-2);
+  padding:var(--sp-2) var(--sp-3);max-width:340px;
+  background:var(--ui-bg-raised);border:1px solid var(--ui-bd-strong);
+  border-radius:var(--r-md);box-shadow:var(--ui-shadow-2);
+  font-size:var(--fs-12);color:var(--ui-tx-1);
+  animation:tin var(--t-base) both;
+}
+.toast svg{width:14px;height:14px;flex:none;}
+.toast.ok svg{color:var(--ui-ok-fg);}
+.toast.warn svg{color:var(--ui-warn-fg);}
+@keyframes tin{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}
+
+/* 演示控制（原型专用，非产品界面） */
+.demo{
+  position:fixed;left:var(--sp-3);top:calc(var(--topbar-h) + var(--sp-3));z-index:var(--z-menu);
+  width:212px;background:var(--ui-bg-panel);border:1px solid var(--ui-bd-strong);
+  border-radius:var(--r-lg);box-shadow:var(--ui-shadow-3);overflow:hidden;
+}
+.demo-h{display:flex;align-items:center;gap:var(--sp-1);height:28px;padding:0 var(--sp-2);border-bottom:1px solid var(--ui-bd-subtle);font-size:var(--fs-11);font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ui-tx-2);}
+.demo-b{padding:var(--sp-2);display:flex;flex-direction:column;gap:var(--sp-2);}
+.demo-b .btn{width:100%;}
+
+/* ============================================================================
+   13. 密度变体（紧凑）
+   ========================================================================= */
+[data-density="compact"]{--topbar-h:32px;--hit:24px;--fs-12:11px;--fs-13:12px;}
+[data-density="compact"] .p-head{height:26px;}
+[data-density="compact"] .tl-bar{height:30px;}
+[data-density="compact"] .tnode{height:20px;}
+
+/* ============================================================================
+   14. 响应式：小窗降级
+   ========================================================================= */
+@media (max-width:1100px){ .demo{display:none;} }
+@media (max-width:900px){
+  .panel[data-opt="1"]{display:none;}
+  .readout .opt{display:none;}
+}
+
+/* ============================================================================
+   15. 项目管理菜单（顶栏工程名旁的下拉）
+   ========================================================================= */
+.pmenu-btn{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:18px;height:18px;flex:none;margin-left:-4px;
+  border:0;background:transparent;color:var(--ui-tx-3);cursor:pointer;border-radius:var(--r-sm);
+  transition:background var(--t-fast),color var(--t-fast);
+}
+.pmenu-btn:hover{background:var(--ui-bg-hover);color:var(--ui-tx-1);}
+.pmenu-btn[aria-expanded="true"]{background:var(--ui-accent-wash);color:var(--ui-accent-hi);}
+.pmenu-btn svg{width:10px;height:10px;}
+.pmenu-dd{
+  position:absolute;z-index:var(--z-menu);display:none;
+  top:calc(var(--topbar-h) + 4px);left:96px;
+  min-width:240px;max-width:320px;
+  background:var(--ui-bg-panel);border:1px solid var(--ui-bd-strong);
+  border-radius:var(--r-lg);box-shadow:var(--ui-shadow-3);
+  padding:var(--sp-1);overflow:hidden;
+}
+.pmenu-dd[data-on="1"]{display:block;}
+.pmenu-g{
+  font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ui-tx-3);padding:var(--sp-2) var(--sp-2) var(--sp-1);
+}
+.pmenu-i{
+  display:flex;align-items:center;gap:var(--sp-2);
+  height:30px;padding:0 var(--sp-2);border-radius:var(--r-md);
+  cursor:pointer;color:var(--ui-tx-2);font-size:var(--fs-12);
+  transition:background var(--t-fast),color var(--t-fast);
+}
+.pmenu-i:hover{background:var(--ui-bg-hover);color:var(--ui-tx-1);}
+.pmenu-i[aria-disabled="true"]{opacity:.45;pointer-events:none;}
+.pmenu-i svg{width:14px;height:14px;color:var(--ui-tx-3);flex:none;}
+.pmenu-i[aria-selected=true]{background:var(--ui-accent-wash);color:var(--ui-tx-1);}
+.pmenu-i[aria-selected=true] svg{color:var(--ui-accent-hi);}
+.pmenu-i .pmeta{margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--ui-tx-3);}
+.pmenu-i kbd{margin-left:auto;}
+.pmenu-i .k{margin-left:auto;display:flex;gap:3px;}
+.pmenu-sep{height:1px;background:var(--ui-bd-subtle);margin:var(--sp-1) 0;}
+.pmenu-foot{
+  padding:var(--sp-1) var(--sp-2);font-size:10px;color:var(--ui-tx-3);
+  border-top:1px solid var(--ui-bd-subtle);margin-top:var(--sp-1);
+  display:flex;gap:var(--sp-2);
+}
+.pmenu-foot kbd{font-size:10px;}
+
+/* ============================================================================
+   16. 面包屑（地图层级路径）
+   ========================================================================= */
+.crumb{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:6px var(--sp-3);
+  background:var(--ui-bg-float);backdrop-filter:blur(10px) saturate(1.3);
+  border:1px solid var(--ui-bd-strong);
+  border-radius:var(--r-full);box-shadow:var(--ui-shadow-2);
+  font-size:var(--fs-12);
+  pointer-events:auto;
+  transition:opacity var(--t-base);
+  position:relative;z-index:calc(var(--z-menu) + 1);  /* 浮于演示面板之上 */
+}
+.crumb-h{font-size:10px;color:var(--ui-tx-3);font-weight:700;letter-spacing:.04em;text-transform:uppercase;margin-right:2px;}
+.crumb-i{
+  padding:2px 6px;border-radius:var(--r-sm);
+  color:var(--ui-text-3);font-size:var(--fs-12);font-weight:400;
+  cursor:pointer;border:0;background:transparent;
+  transition:color var(--t-fast);
+}
+.crumb-i[disabled]{color:var(--ui-tx-1);font-weight:700;cursor:default;font-size:var(--fs-13);}
+.crumb-i:not([disabled]):hover{color:var(--ui-focus);text-decoration:underline;text-underline-offset:2px;}
+.crumb-sep{color:var(--ui-text-3);font-size:11px;user-select:none;}
+
+[role=breadcrumb][aria-disabled="true"] {display:none;}
+/* 双主题：--ui-text-3 在亮色需更深（背板颜色比 panel 浅），保持 5:1 对比 */
+[data-theme="light"] .crumb-i:not([disabled]){color:#5B6373;}
+[data-theme="light"] .crumb-sep{color:#5B6373;}
+
+/* ============================================================================
+   17. 钻入标记（菱形，城市/建筑）
+   ========================================================================= */
+.drill-layer{position:absolute;inset:0;pointer-events:none;z-index:calc(var(--z-panel) - 5);}  /* 在面板下但在地图元素上 */
+.drill-marker{
+  position:absolute;width:24px;height:24px;flex:none;
+  display:grid;place-items:center;
+  transform:translate(-50%,-50%);
+  pointer-events:auto;cursor:pointer;
+  background:transparent;border:0;padding:0;
+  transition:transform var(--t-fast);
+}
+.drill-marker:hover{transform:translate(-50%,-50%) scale(1.18);}
+.drill-marker:focus-visible{outline:2px solid var(--ui-focus);outline-offset:2px;border-radius:var(--r-sm);}
+.drill-diamond{
+  width:14px;height:14px;
+  background:var(--ui-accent);
+  border:1.5px solid var(--ui-bg-map);
+  transform:rotate(45deg);
+  box-shadow:0 1px 2px rgba(0,0,0,.4);
+}
+.drill-marker[data-kind="city"] .drill-diamond{width:14px;height:14px;}
+.drill-marker[data-kind="building"] .drill-diamond{
+  width:12px;height:12px;
+  position:relative;
+}
+.drill-marker[data-kind="building"] .drill-diamond::after{
+  content:"";position:absolute;left:50%;top:50%;
+  width:4px;height:4px;border-radius:50%;
+  background:var(--ui-bg-map);
+  transform:translate(-50%,-50%) rotate(-45deg);
+}
+.drill-marker[data-visited="1"] .drill-diamond{
+  background:var(--ui-text-3);
+}
+.drill-marker[data-visited="1"][data-kind="building"] .drill-diamond::after{
+  background:var(--ui-tx-1);
+}
+.drill-lbl{
+  position:absolute;top:18px;left:50%;transform:translateX(-50%);
+  padding:1px 6px;border-radius:var(--r-sm);
+  background:var(--ui-bg-float);backdrop-filter:blur(6px);
+  font-size:10px;color:var(--ui-tx-1);white-space:nowrap;
+  opacity:0;transition:opacity var(--t-fast);pointer-events:none;
+  border:1px solid var(--ui-bd-strong);
+}
+.drill-marker:hover .drill-lbl{opacity:1;}
+
+/* 沉浸模式下面包屑与钻入标记降至 60% 不透明 */
+[data-immersive="1"] .crumb,
+[data-immersive="1"] .drill-layer{
+  opacity:.6;
+}
+
+/* ============================================================================
+   18. 工程切换覆盖层（演示用）
+   ========================================================================= */
+.swp-overlay{
+  position:absolute;inset:0;z-index:7;display:none;
+  align-items:center;justify-content:center;
+  background:var(--ui-bg-scrim);backdrop-filter:blur(3px);
+}
+.swp-overlay[data-on="1"]{display:flex;}
+.swp-card{
+  width:min(420px,88vw);padding:var(--sp-5);
+  background:var(--ui-bg-panel);border:1px solid var(--ui-bd-strong);
+  border-radius:var(--r-xl);box-shadow:var(--ui-shadow-3);
+}
+.swp-card h3{margin:0 0 var(--sp-2);font-size:var(--fs-14);font-weight:650;}
+.swp-card p{margin:0 0 var(--sp-3);font-size:var(--fs-12);color:var(--ui-tx-2);line-height:1.6;}
+.swp-card .swp-actions{display:flex;gap:var(--sp-2);justify-content:flex-end;}
+</style>
+</head>
+<body>
+
+<!-- ===================== 图标精灵 ===================== -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<g id="i-map"><path d="M9 3 3 5v16l6-2 6 2 6-2V3l-6 2-6-2Z"/><path d="M9 3v18M15 5v16"/></g>
+<g id="i-folder"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></g>
+<g id="i-layers"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/></g>
+<g id="i-search"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></g>
+<g id="i-undo"><path d="M3 8h11a6 6 0 0 1 0 12H8"/><path d="m7 4-4 4 4 4"/></g>
+<g id="i-redo"><path d="M21 8H10a6 6 0 0 0 0 12h6"/><path d="m17 4 4 4-4 4"/></g>
+<g id="i-save"><path d="M5 3h11l3 3v15H5V3Z"/><path d="M8 3v6h7V3M8 21v-6h8v6"/></g>
+<g id="i-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/></g>
+<g id="i-moon"><path d="M20 14a8 8 0 1 1-10-10 7 7 0 0 0 10 10Z"/></g>
+<g id="i-play"><path d="M6 4l14 8-14 8V4Z" fill="currentColor" stroke="none"/></g>
+<g id="i-pause"><path d="M7 4h4v16H7zM13 4h4v16h-4z" fill="currentColor" stroke="none"/></g>
+<g id="i-skip-back"><path d="M18 5v14L7 12 18 5Z" fill="currentColor" stroke="none"/><path d="M6 5v14" stroke-width="2"/></g>
+<g id="i-skip-fwd"><path d="M6 5v14l11-7L6 5Z" fill="currentColor" stroke="none"/><path d="M18 5v14" stroke-width="2"/></g>
+<g id="i-plus"><path d="M12 5v14M5 12h14"/></g>
+<g id="i-minus"><path d="M5 12h14"/></g>
+<g id="i-x"><path d="m6 6 12 12M18 6 6 18"/></g>
+<g id="i-chev-r"><path d="m9 5 7 7-7 7"/></g>
+<g id="i-chev-d"><path d="m5 9 7 7 7-7"/></g>
+<g id="i-grip"><circle cx="9" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1.4" fill="currentColor" stroke="none"/></g>
+<g id="i-brush"><path d="M4 20s1-4 4-4 3 2 5 0 2-4 2-4"/><path d="M13 12 20 5a2 2 0 0 0-3-3l-7 7"/></g>
+<g id="i-person"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></g>
+<g id="i-flag"><path d="M5 21V4h14l-3 4 3 4H5"/></g>
+<g id="i-event"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></g>
+<g id="i-unit"><path d="M12 2 4 6v6c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10V6l-8-4Z"/></g>
+<g id="i-sit"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v16"/></g>
+<g id="i-note"><path d="M5 3h9l5 5v13H5V3Z"/><path d="M14 3v5h5"/></g>
+<g id="i-warn"><path d="M12 3 2 20h20L12 3Z"/><path d="M12 9v5m0 3h.01"/></g>
+<g id="i-err"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/></g>
+<g id="i-check"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></g>
+<g id="i-info"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/></g>
+<g id="i-cmd"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 8l-3 3 3 3M16 8l3 3-3 3M9 12h6"/></g>
+<g id="i-grid"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></g>
+<g id="i-eye"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="2.5"/></g>
+<g id="i-eye-off"><path d="M3 3l18 18M10.5 6.2A9.6 9.6 0 0 1 12 6c6.5 0 10 6 10 6a17 17 0 0 1-3.3 3.9M6.3 7.9A17 17 0 0 0 2 12s3.5 6 10 6c1.6 0 3-.4 4.2-1"/></g>
+<g id="i-lock"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></g>
+<g id="i-target"><circle cx="12" cy="12" r="8"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/></g>
+<g id="i-focus"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></g>
+<g id="i-settings"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M19 5l-2 2M7 17l-2 2"/></g>
+<g id="i-book"><path d="M4 4h7a3 3 0 0 1 3 3v13a3 3 0 0 0-3-3H4V4Z"/><path d="M20 4h-3a3 3 0 0 0-3 3v13a3 3 0 0 1 3-3h3V4Z"/></g>
+<g id="i-clock"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></g>
+<g id="i-export"><path d="M12 3v12m0 0-5-5m5 5 5-5"/><path d="M5 17v3a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3"/></g>
+</defs></svg>
+
+<div id="app">
+
+  <!-- ===================== 顶栏 ===================== -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <div>
+        <div class="brand-name">World View</div>
+      </div>
+      <span class="brand-ver">v0.1</span>
+    </div>
+
+    <div class="tb-div"></div>
+
+    <div class="proj" tabindex="0" role="button" title="点击重命名工程">
+      <svg class="proj-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-folder"/></svg>
+      <span class="proj-txt" id="projName">四渡赤水 · 行军图</span>
+      <span class="dirty" id="dirtyDot" title="有未保存改动"></span>
+      <button class="pmenu-btn" id="btnPmenu" aria-haspopup="menu" aria-expanded="false" aria-label="项目管理菜单" title="项目管理">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chev-d"/></svg>
+      </button>
+    </div>
+    <span class="bdg" id="savedBadge">已保存</span>
+
+    <!-- 项目管理下拉菜单 -->
+    <div class="pmenu-dd" id="pmenu" role="menu" aria-label="项目管理">
+      <div class="pmenu-g">最近工程</div>
+      <div class="pmenu-i" role="menuitem" data-pm="recent" data-pid="r1" aria-selected="true" tabindex="-1">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-folder"/></svg>
+        <span>四渡赤水 · 行军图</span><span class="pmeta">今天 11:42</span>
+      </div>
+      <div class="pmenu-i" role="menuitem" data-pm="recent" data-pid="r2" tabindex="-1">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-folder"/></svg>
+        <span>封神演义 · 架空</span><span class="pmeta">昨天 21:18</span>
+      </div>
+      <div class="pmenu-i" role="menuitem" data-pm="recent" data-pid="r3" tabindex="-1">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-folder"/></svg>
+        <span>贞观政要 · 大唐</span><span class="pmeta">10/09</span>
+      </div>
+      <div class="pmenu-sep"></div>
+      <div class="pmenu-i" role="menuitem" data-pm="new" tabindex="-1">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><use href="#i-plus"/></svg>
+        <span>新建工程</span><span class="k"><kbd>Ctrl</kbd>+<kbd>⇧</kbd>+<kbd>N</kbd></span>
+      </div>
+      <div class="pmenu-i" role="menuitem" data-pm="open" tabindex="-1">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-folder"/></svg>
+        <span>打开工程…</span><span class="k"><kbd>Ctrl</kbd>+<kbd>O</kbd></span>
+      </div>
+      <div class="pmenu-i" role="menuitem" data-pm="export" tabindex="-1">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><use href="#i-export"/></svg>
+        <span>导出…</span><span class="k"><kbd>Ctrl</kbd>+<kbd>E</kbd></span>
+      </div>
+      <div class="pmenu-i" role="menuitem" data-pm="saveas" tabindex="-1">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-save"/></svg>
+        <span>另存为…</span><span class="k"><kbd>Ctrl</kbd>+<kbd>⇧</kbd>+<kbd>S</kbd></span>
+      </div>
+      <div class="pmenu-sep"></div>
+      <div class="pmenu-i" role="menuitem" data-pm="close" tabindex="-1">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-x"/></svg>
+        <span>关闭工程</span><span class="k"><kbd>Ctrl</kbd>+<kbd>W</kbd></span>
+      </div>
+      <div class="pmenu-i" role="menuitem" data-pm="settings" tabindex="-1">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-settings"/></svg>
+        <span>项目设置</span>
+      </div>
+      <div class="pmenu-foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 执行</span><span><kbd>Esc</kbd> 关闭</span>
+      </div>
+    </div>
+
+    <div class="tb-div"></div>
+
+    <div class="seg" role="group" aria-label="视图模式">
+      <button class="seg-btn" data-mode="0" aria-pressed="true"><i class="seg-dot" style="background:#7FA85C"></i>真实地形</button>
+      <button class="seg-btn" data-mode="1" aria-pressed="false"><i class="seg-dot" style="background:#A89060"></i>色块地形</button>
+      <button class="seg-btn" data-mode="2" aria-pressed="false"><i class="seg-dot" style="background:#C4553F"></i>势力图</button>
+      <button class="seg-btn" data-mode="3" aria-pressed="false"><i class="seg-dot" style="background:#C08BD8"></i>事件图</button>
+    </div>
+
+    <div class="tb-spring"></div>
+
+    <button class="ib" id="btnUndo" title="撤销 (Ctrl+Z)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><use href="#i-undo"/></svg></button>
+    <button class="ib" id="btnRedo" title="重做 (Ctrl+Shift+Z)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><use href="#i-redo"/></svg></button>
+    <button class="ib" id="btnSave" title="保存 (Ctrl+S)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-save"/></svg></button>
+
+    <div class="tb-div"></div>
+
+    <button class="ib" id="btnCmd" title="命令面板 (Ctrl+K)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cmd"/></svg></button>
+    <button class="ib" id="btnTheme" title="切换明暗 (Ctrl+J)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sun" id="themeIcon"/></svg></button>
+
+    <div class="tb-div"></div>
+
+    <div class="readout">
+      <span class="k">日期</span><b id="roDate">无仙 3 年 5 月 12 日</b>
+    </div>
+    <div class="readout opt">
+      <span class="k">坐标</span><b id="roCoord">(412, 268)</b>
+    </div>
+    <div class="readout opt">
+      <span class="k">比例</span><b id="roScale">1:1000</b>
+    </div>
+  </header>
+
+  <!-- ===================== 舞台 ===================== -->
+  <div class="stage" id="stage">
+    <canvas id="map"></canvas>
+
+    <!-- 左上 HUD：面包屑（地图层级路径） + 当前事态 -->
+    <div class="map-hud hud-tl" style="flex-direction:column;align-items:flex-start">
+      <nav class="crumb" id="crumb" role="navigation" aria-label="地图层级路径">
+        <span class="crumb-h">层级</span>
+        <button class="crumb-i" id="crumbL0" disabled aria-current="true">世界地图</button>
+        <span class="crumb-sep" id="crumbS1" hidden>›</span>
+        <button class="crumb-i" id="crumbL1" hidden></button>
+        <span class="crumb-sep" id="crumbS2" hidden>›</span>
+        <button class="crumb-i" id="crumbL2" hidden></button>
+      </nav>
+      <div class="hud-chip" id="sitHud">
+        <span class="bdg ev">事态</span><b id="sitHudName">四渡赤水</b><span style="color:var(--ui-tx-3)" id="sitHudTail">正在发生</span>
+      </div>
+    </div>
+
+    <!-- 钻入标记层（菱形，城市/建筑） -->
+    <div class="drill-layer" id="drillLayer" aria-label="可钻入标记"></div>
+
+    <!-- 右上 HUD：视图控制 -->
+    <div class="map-hud hud-tr">
+      <div class="zoom-stack">
+        <button class="ib" id="zIn" title="放大 (+ / 滚轮)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><use href="#i-plus"/></svg></button>
+        <button class="ib" id="zOut" title="缩小 (−)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><use href="#i-minus"/></svg></button>
+        <button class="ib" id="zFit" title="全览 (F)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><use href="#i-focus"/></svg></button>
+        <button class="ib" id="btnImm" title="沉浸模式 (Ctrl+Shift+I — 不占用 Tab，Tab 保留给键盘焦点移动)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-eye-off"/></svg></button>
+      </div>
+    </div>
+
+    <!-- 状态覆盖层 -->
+    <div class="overlay" id="ovLoading"><div class="ov-card">
+      <div class="ov-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><use href="#i-map"/></svg></div>
+      <h3>正在生成地形</h3>
+      <div style="display:flex;flex-direction:column;gap:7px;margin-bottom:16px">
+        <div class="skel-line" style="width:82%"></div>
+        <div class="skel-line" style="width:64%"></div>
+        <div class="skel-line" style="width:73%"></div>
+      </div>
+      <p style="text-align:center">分形噪声生成海岸线与国境线 · 512 × 512</p>
+    </div></div>
+
+    <div class="overlay" id="ovEmpty"><div class="ov-card">
+      <div class="ov-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><use href="#i-map"/></svg></div>
+      <h3>这个工程还没有地图</h3>
+      <p>新建一张地图，或打开示例工程 <span class="mono">examples/minimal-world</span> 看看它长什么样。</p>
+      <div class="ov-actions">
+        <button class="btn btn-pri" data-demo="newmap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><use href="#i-plus"/></svg>新建地图</button>
+        <button class="btn" data-demo="open-sample">打开示例</button>
+      </div>
+    </div></div>
+
+    <div class="overlay" id="ovError"><div class="ov-card">
+      <div class="ov-ico" style="color:var(--ui-tx-on-accent);color:#F09A91"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><use href="#i-err"/></svg></div>
+      <h3>工程未加载</h3>
+      <p class="mono" style="font-size:11px;background:var(--ui-bg-app);padding:8px;border-radius:6px;text-align:left">
+examples/minimal-world 不存在或缺少 world.yaml</p>
+      <p style="margin-top:-6px">已按序尝试：① 命令行参数 → ② 环境变量 WV_PROJECT → ③ 从可执行文件逐级上溯 6 层 → ④ 当前工作目录。</p>
+      <div class="ov-actions">
+        <button class="btn btn-pri" data-demo="reload">重新加载</button>
+        <button class="btn" data-demo="browse">选择目录…</button>
+      </div>
+    </div></div>
+
+    <!-- ===================== 面板：世界树 ===================== -->
+    <section class="panel" data-panel="tree" style="left:12px;top:56px;width:216px;height:330px" aria-label="世界树">
+      <div class="p-head" data-drag>
+        <svg class="p-grip" viewBox="0 0 24 24"><use href="#i-grip"/></svg>
+        <svg class="p-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-layers"/></svg>
+        <span class="p-title">世界树</span>
+        <button class="ib sm" data-collapse title="折叠"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><use href="#i-minus"/></svg></button>
+      </div>
+      <div class="p-body">
+        <div class="tree">
+          <div class="tnode open sel" data-k="map">
+            <svg class="tw" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chev-r"/></svg>
+            <i class="tdot" style="background:#7FA85C"></i><span class="tlabel">地图</span><span class="tmeta">2</span>
+          </div>
+          <div class="tkids open" style="margin-left:0">
+            <div class="tnode d1 sel"><i class="tdot" style="background:#7FA85C"></i><span class="tlabel">川滇黔战区</span></div>
+            <div class="tnode d1"><i class="tdot" style="background:#3E8FBF"></i><span class="tlabel">金沙江流域</span></div>
+          </div>
+
+          <div class="tnode open" data-k="unit">
+            <svg class="tw" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chev-r"/></svg>
+            <svg style="width:12px;height:12px;color:var(--ui-tx-3)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-unit"/></svg>
+            <span class="tlabel">部队 Unit</span><span class="tmeta">3</span>
+          </div>
+          <div class="tkids open">
+            <div class="tnode d1 sel"><i class="tdot" style="background:#C4553F"></i><span class="tlabel">红一方面军</span><span class="tmeta">3万</span></div>
+            <div class="tnode d1"><i class="tdot" style="background:#8C8C94"></i><span class="tlabel">川军追击部队</span><span class="tmeta">12万</span></div>
+            <div class="tnode d1"><i class="tdot" style="background:#8C8C94"></i><span class="tlabel">黔军主力</span><span class="tmeta">8万</span></div>
+          </div>
+
+          <div class="tnode" data-k="char">
+            <svg class="tw" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chev-r"/></svg>
+            <svg style="width:12px;height:12px;color:var(--ui-tx-3)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-person"/></svg>
+            <span class="tlabel">人物</span><span class="tmeta">12</span>
+          </div>
+          <div class="tkids">
+            <div class="tnode d1"><span class="tlabel">毛泽东</span><span class="tmeta">1893—1976</span></div>
+            <div class="tnode d1"><span class="tlabel">周恩来</span><span class="tmeta">1898—1976</span></div>
+            <div class="tnode d1"><span class="tlabel">蒋介石</span><span class="tmeta">1887—1975</span></div>
+          </div>
+
+          <div class="tnode" data-k="sit">
+            <svg class="tw" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chev-r"/></svg>
+            <svg style="width:12px;height:12px;color:var(--ui-tx-3)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-sit"/></svg>
+            <span class="tlabel">事态</span><span class="tmeta">5</span>
+          </div>
+          <div class="tkids">
+            <div class="tnode d1"><i class="tdot" style="background:#C08BD8"></i><span class="tlabel">四渡赤水</span></div>
+            <div class="tnode d1"><i class="tdot" style="background:#9AA5B1"></i><span class="tlabel">巧渡金沙江</span></div>
+          </div>
+
+          <div class="tnode" data-k="story">
+            <svg class="tw" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chev-r"/></svg>
+            <svg style="width:12px;height:12px;color:var(--ui-tx-3)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-note"/></svg>
+            <span class="tlabel">故事</span><span class="tmeta">8</span>
+          </div>
+          <div class="tkids">
+            <div class="tnode d1"><span class="tlabel">未标注日期</span><span class="tmeta">3</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="p-resize" data-resize></div>
+    </section>
+
+    <!-- ===================== 面板：检视器 ===================== -->
+    <section class="panel" data-panel="insp" style="right:12px;top:56px;width:264px;height:392px" aria-label="属性检视器">
+      <div class="p-head" data-drag>
+        <svg class="p-grip" viewBox="0 0 24 24"><use href="#i-grip"/></svg>
+        <svg class="p-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-eye"/></svg>
+        <span class="p-title">检视器</span>
+        <span class="p-badge">Unit</span>
+        <button class="ib sm" data-collapse title="折叠"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><use href="#i-minus"/></svg></button>
+      </div>
+      <div class="p-body">
+        <div class="grp">
+          <div class="grp-h">身份</div>
+          <div class="field">
+            <label class="field-h" for="fName">名称 <span class="hint">id: unit_shenyan</span></label>
+            <input class="inp" id="fName" value="红一方面军" />
+          </div>
+          <div class="row"><span class="row-k">归属势力</span><span class="row-v">中共中央军委</span></div>
+          <div class="row"><span class="row-k">成员</span><span class="row-v">毛泽东、周恩来、朱德 …</span></div>
+          <div class="row"><span class="row-k">兵力</span><span class="row-v mono">30,000</span></div>
+        </div>
+
+        <div class="grp">
+          <div class="grp-h">外观</div>
+          <div class="row"><span class="row-k">色标</span><span class="row-v" style="display:flex;align-items:center;gap:6px">
+            <i style="width:12px;height:12px;border-radius:3px;background:#C4553F;display:inline-block"></i>玩家方暖红</span></div>
+          <div class="row"><span class="row-k">标记</span><span class="row-v">盾牌 + 方向流光</span></div>
+        </div>
+
+        <div class="grp">
+          <div class="grp-h">轨迹</div>
+          <div class="field">
+            <label class="field-h">轨迹样式 <span class="hint">ANIMATION §2</span></label>
+            <select class="inp"><option>逐段生长（默认）</option><option>整条显影</option><option>虚线推进</option></select>
+          </div>
+          <div class="field">
+            <label class="field-h">拐点停顿 <span class="hint mono">0.25 d</span></label>
+            <div class="sl"><input type="range" min="0" max="100" value="25"/><span class="sl-v">0.25 d</span></div>
+          </div>
+        </div>
+
+        <div class="grp">
+          <div class="grp-h">关联事态</div>
+          <div class="li sel" tabindex="0">
+            <span class="li-ico" style="background:rgba(192,139,216,.18);color:var(--ui-ev-fg)">
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><use href="#i-sit"/></svg></span>
+            <span class="li-main"><span class="li-t">四渡赤水</span><span class="li-s">第 29—130 天 · 8 个事件</span></span>
+          </div>
+          <div class="li" tabindex="0">
+            <span class="li-ico" style="background:rgba(154,165,177,.18);color:var(--ui-tx-2)">
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><use href="#i-flag"/></svg></span>
+            <span class="li-main"><span class="li-t">巧渡金沙江</span><span class="li-s">第 151—164 天</span></span>
+          </div>
+          <div class="grp-h" style="margin-top:var(--sp-1)">校验结果</div>
+          <div class="row"><span class="row-k"><span class="bdg ok">通过</span></span>
+            <span class="row-v">5 项检查 · 0 问题</span></div>
+        </div>
+
+        <div class="grp">
+          <div class="grp-h">校验</div>
+          <div class="note ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><use href="#i-check"/></svg>
+            <span>轨迹与「四渡赤水」事态的时间区间重叠正常，无断链。</span></div>
+        </div>
+
+        <div class="empty-state" id="inspEmpty" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><use href="#i-target"/></svg>
+          <p>在地图上点选<b>部队 / 事件 / 地块</b><br>此处显示它的全部属性</p>
+          <button class="btn btn-ghost" id="inspEmptyBtn">用命令面板查找 →</button>
+        </div>
+      </div>
+      <div class="p-resize" data-resize></div>
+    </section>
+
+    <!-- ===================== 面板：地形笔刷 ===================== -->
+    <section class="panel" data-panel="brush" data-opt="1" style="right:12px;top:458px;width:264px;height:300px" aria-label="地形笔刷">
+      <div class="p-head" data-drag>
+        <svg class="p-grip" viewBox="0 0 24 24"><use href="#i-grip"/></svg>
+        <svg class="p-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-brush"/></svg>
+        <span class="p-title">地形笔刷</span>
+        <label class="sw" style="margin-right:4px"><input type="checkbox" id="brushOn" checked/><span class="sw-track"></span></label>
+        <button class="ib sm" data-collapse title="折叠"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><use href="#i-minus"/></svg></button>
+      </div>
+      <div class="p-body">
+        <div class="toolgrid" id="toolGrid">
+          <button class="tool" data-t="0" aria-pressed="false"><i class="tool-sw" style="background:#1E5A8A"></i><span class="tool-n">深水</span></button>
+          <button class="tool" data-t="1" aria-pressed="false"><i class="tool-sw" style="background:#3E8FBF"></i><span class="tool-n">浅水</span></button>
+          <button class="tool" data-t="2" aria-pressed="false"><i class="tool-sw" style="background:#D9C58F"></i><span class="tool-n">沙滩</span></button>
+          <button class="tool" data-t="3" aria-pressed="true"><i class="tool-sw" style="background:#7FA85C"></i><span class="tool-n">草原</span></button>
+          <button class="tool" data-t="4" aria-pressed="false"><i class="tool-sw" style="background:#3E6B3A"></i><span class="tool-n">林地</span></button>
+          <button class="tool" data-t="5" aria-pressed="false"><i class="tool-sw" style="background:#A89060"></i><span class="tool-n">丘陵</span></button>
+          <button class="tool" data-t="6" aria-pressed="false"><i class="tool-sw" style="background:#7A6A5E"></i><span class="tool-n">山地</span></button>
+          <button class="tool" data-t="7" aria-pressed="false"><i class="tool-sw" style="background:#E6ECEF"></i><span class="tool-n">雪原</span></button>
+          <button class="tool" data-t="8" aria-pressed="false"><i class="tool-sw" style="background:#6B7A55"></i><span class="tool-n">沼泽</span></button>
+          <button class="tool" data-t="9" aria-pressed="false"><i class="tool-sw" style="background:#C9A87C"></i><span class="tool-n">道路</span></button>
+        </div>
+
+        <div class="field">
+          <label class="field-h">半径 <span class="hint" id="rHint">64 wu</span></label>
+          <div class="sl"><input type="range" id="rRange" min="8" max="600" value="64"/><span class="sl-v" id="rVal">64 wu</span></div>
+        </div>
+        <div class="field">
+          <label class="field-h">衰减软度 <span class="hint" id="sHint">0.35</span></label>
+          <div class="sl"><input type="range" id="sRange" min="0" max="100" value="35"/><span class="sl-v" id="sVal">0.35</span></div>
+        </div>
+
+        <div class="note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><use href="#i-info"/></svg>
+          <span>左键涂抹 · <kbd>[</kbd> <kbd>]</kbd> 改半径 · <kbd>X</kbd> 交换前景/背景 · 笔尖显示 falloff 双环</span></div>
+      </div>
+      <div class="p-resize" data-resize></div>
+    </section>
+
+    <!-- ===================== 面板：小地图 ===================== -->
+    <section class="panel" data-panel="mini" data-opt="1" style="left:12px;bottom:172px;width:216px" aria-label="小地图与图层">
+      <div class="p-head" data-drag>
+        <svg class="p-grip" viewBox="0 0 24 24"><use href="#i-grip"/></svg>
+        <svg class="p-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-target"/></svg>
+        <span class="p-title">导航</span>
+        <button class="ib sm" data-collapse title="折叠"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><use href="#i-minus"/></svg></button>
+      </div>
+      <div class="p-body">
+        <canvas class="mini" id="minimap" width="192" height="192"></canvas>
+        <div class="grp">
+          <div class="grp-h">图层</div>
+          <label class="sw"><input type="checkbox" checked data-layer="terrain"/><span class="sw-track"></span>地形</label>
+          <label class="sw"><input type="checkbox" checked data-layer="tracks"/><span class="sw-track"></span>轨迹</label>
+          <label class="sw"><input type="checkbox" checked data-layer="events"/><span class="sw-track"></span>事件点</label>
+          <label class="sw"><input type="checkbox" checked data-layer="units"/><span class="sw-track"></span>部队标记</label>
+          <label class="sw"><input type="checkbox" data-layer="forces"/><span class="sw-track"></span>势力边界</label>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== 时间轴 ===================== -->
+    <section class="timeline" id="timeline" aria-label="时间轴">
+      <div class="tl-bar">
+        <button class="ib sm" id="tFirst" title="回到起点 (Home)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><use href="#i-skip-back"/></svg></button>
+        <button class="play" id="tPlay" title="播放 / 暂停 (Space)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#i-play"/></svg></button>
+        <button class="ib sm" id="tLast" title="跳到终点 (End)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><use href="#i-skip-fwd"/></svg></button>
+        <span class="tl-date"><b id="tlDate">无仙 3 年 5 月 12 日</b> <span class="cal" id="tlCal">无仙历 · 360 天/年</span></span>
+        <div class="seg2" style="width:132px">
+          <button data-spd="1">1×</button><button data-spd="5" aria-pressed="true">5×</button><button data-spd="30">30×</button>
+        </div>
+        <div class="tb-div"></div>
+        <button class="btn btn-ghost" id="btnAddEvent"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><use href="#i-plus"/></svg>登记事件</button>
+        <div class="tb-spring"></div>
+        <div class="seg2" style="width:150px" id="zoomLvl">
+          <button data-l="0">日</button><button data-l="1" aria-pressed="true">事态</button><button data-l="2">人物</button><button data-l="3">世纪</button>
+        </div>
+      </div>
+      <div class="tl-lanes">
+        <div class="lane">
+          <span class="lane-k"><i style="background:#C08BD8"></i>事态</span>
+          <div class="lane-t" data-lane="sit">
+            <span class="span" style="left:2%;width:26%;background:#C08BD8" title="四渡赤水"><span class="span-lbl">四渡赤水</span></span>
+            <span class="span" style="left:38%;width:30%;background:#9AA5B1" title="巧渡金沙江"><span class="span-lbl">巧渡金沙江</span></span>
+            <span class="span" style="left:74%;width:18%;background:#6B8EA8" title="会师"><span class="span-lbl">会师</span></span>
+          </div>
+        </div>
+        <div class="lane">
+          <span class="lane-k"><i style="background:#C4553F"></i>部队</span>
+          <div class="lane-t" data-lane="unit">
+            <span class="span" style="left:4%;width:56%;background:#C4553F;height:5px" title="红一方面军 移动"></span>
+            <span class="span" style="left:44%;width:48%;background:#8C8C94;height:5px" title="川军追击"></span>
+          </div>
+        </div>
+        <div class="lane" data-lane="char" style="display:none">
+          <span class="lane-k"><i style="background:#9AA5B1"></i>人物</span>
+          <div class="lane-t">
+            <span class="span" style="left:2%;width:44%;background:#5C6B80;height:4px" title="毛泽东 1893—1976"><span class="span-lbl">毛泽东</span></span>
+            <span class="span" style="left:6%;width:44%;background:#5C6B80;height:4px" title="周恩来 1898—1976"></span>
+            <span class="span" style="left:0%;width:46%;background:#5C6B80;height:4px" title="蒋介石 1887—1975"><span class="span-lbl">蒋介石</span></span>
+          </div>
+        </div>
+        <div class="lane" data-lane="l4" style="display:none;height:24px">
+          <span class="lane-k"><i style="background:#4C8DF6"></i>世纪</span>
+          <div class="lane-t"><div class="l4" id="l4bars"></div></div>
+        </div>
+      </div>
+      <div class="tl-hit" id="tlHit"></div>
+      <div class="tl-cursor" id="tlCursor" style="left:23%"></div>
+    </section>
+  </div>
+
+  <!-- ===================== 状态栏 ===================== -->
+  <footer class="statusbar">
+    <span class="sb-i"><i class="sb-dot"></i>就绪</span>
+    <span class="sb-i"><span class="mono" id="sbEntities">Unit 3 · 人物 12 · 事态 5 · 事件 41</span></span>
+    <span class="tb-spring" style="flex:1"></span>
+    <span class="sb-i" id="sbSel">已选：红一方面军</span>
+    <span class="sb-i"><span class="mono" id="sbZoom">缩放 1.00×</span></span>
+    <span class="sb-i"><kbd>Ctrl</kbd>+<kbd>K</kbd> 命令</span>
+  </footer>
+</div>
+
+<!-- ===================== 演示控制（原型专用） ===================== -->
+<aside class="demo" aria-label="原型演示控制">
+  <div class="demo-h"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-settings"/></svg>演示控制</div>
+  <div class="demo-b">
+    <div class="grp">
+      <div class="grp-h">界面状态</div>
+      <div class="seg2" style="width:100%">
+        <button data-state="normal" aria-pressed="true">正常</button>
+        <button data-state="loading">加载</button>
+        <button data-state="empty">空</button>
+        <button data-state="error">错误</button>
+      </div>
+    </div>
+    <div class="grp">
+      <div class="grp-h">外壳</div>
+      <button class="btn" id="dTheme">切换明暗</button>
+      <button class="btn" id="dDensity">切换密度</button>
+    </div>
+    <div class="grp">
+      <div class="grp-h">对比度自检</div>
+      <div class="note ok" id="a11yBox"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><use href="#i-check"/></svg>
+        <span>主文本 14.0:1 · 次文本 7.2:1 · 弱文本 5.0:1 — 均达 WCAG AA</span></div>
+    </div>
+  </div>
+</aside>
+
+<!-- ===================== 命令面板 ===================== -->
+<div class="scrim" id="scrim"></div>
+<div class="cmdk" id="cmdk" role="dialog" aria-modal="true" aria-label="命令面板">
+  <div class="cmdk-in">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><use href="#i-search"/></svg>
+    <input id="cmdInput" placeholder="搜索命令、面板、对象…  例：笔刷 / 四渡赤水 / 撤销" autocomplete="off"/>
+    <kbd>Esc</kbd>
+  </div>
+  <div class="cmdk-list" id="cmdList"></div>
+  <div class="cmdk-foot">
+    <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 执行</span><span><kbd>Esc</kbd> 关闭</span>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script>
+"use strict";
+/* ==========================================================================
+   原型逻辑（仅用于演示，不代表最终实现）
+   ========================================================================== */
+
+/* ---------- toast ---------- */
+const toastBox = document.getElementById('toasts');
+const TOAST_MAX = 3;                 // 连点操作时不要堆成一片
+function toast(msg, kind){
+  const icons = {ok:'i-check', warn:'i-warn', err:'i-err'};
+  const el = document.createElement('div');
+  el.className = 'toast ' + (kind||'');
+  el.setAttribute('role','status');
+  el.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><use href="#'+(icons[kind]||'i-info')+'"/></svg><span>'+msg+'</span>';
+  toastBox.appendChild(el);
+  while (toastBox.children.length > TOAST_MAX) toastBox.firstElementChild.remove();
+  setTimeout(()=>{
+    el.style.transition='opacity .2s, transform .2s';
+    el.style.opacity='0'; el.style.transform='translateY(4px)';
+    setTimeout(()=>el.remove(),220);
+  }, 2600);
+}
+window.toast = toast;
+
+/* ---------- 状态切换 ---------- */
+function setDemoState(s){
+  ['ovLoading','ovEmpty','ovError'].forEach(id=>document.getElementById(id).dataset.on = '0');
+  if(s==='loading') document.getElementById('ovLoading').dataset.on='1';
+  if(s==='empty')   document.getElementById('ovEmpty').dataset.on='1';
+  if(s==='error')   document.getElementById('ovError').dataset.on='1';
+  document.querySelectorAll('[data-state]').forEach(b=>b.setAttribute('aria-pressed', b.dataset.state===s));
+}
+window.setDemoState = setDemoState;
+document.querySelectorAll('[data-state]').forEach(b=>b.addEventListener('click',()=>setDemoState(b.dataset.state)));
+
+/* ---------- 明暗 / 密度 ---------- */
+document.getElementById('btnTheme').addEventListener('click', toggleTheme);
+document.getElementById('dTheme').addEventListener('click', toggleTheme);
+/* 对比度自检 —— 不硬编码数字，运行时按 WCAG 公式实算。
+   （v0.1 把数字写死在 UI 里，换主题后就成了过期信息，误导读者） */
+function _lin(c){ c/=255; return c<=0.04045 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4); }
+function _lum([r,g,b]){ return 0.2126*_lin(r)+0.7152*_lin(g)+0.0722*_lin(b); }
+function _rgb(str){
+  const m = String(str).match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  return m ? [+m[1],+m[2],+m[3]] : null;
+}
+function _ratio(f,b){ const x=_lum(f),y=_lum(b); const hi=Math.max(x,y),lo=Math.min(x,y); return (hi+0.05)/(lo+0.05); }
+function a11yReport(){
+  const cs = getComputedStyle(document.documentElement);
+  const panel = _rgb(getComputedStyle(document.querySelector('.panel')).backgroundColor) || [0,0,0];
+  const t1 = _ratio(_rgb(cs.getPropertyValue('--ui-tx-1')), panel);
+  const t2 = _ratio(_rgb(cs.getPropertyValue('--ui-tx-2')), panel);
+  const t3 = _ratio(_rgb(cs.getPropertyValue('--ui-tx-3')), panel);
+  const box = document.getElementById('a11yBox');
+  const min = Math.min(t1,t2,t3);
+  box.className = 'note ' + (min>=4.5 ? 'ok' : 'warn');
+  box.querySelector('span').textContent =
+    `主文本 ${t1.toFixed(2)}:1 · 次文本 ${t2.toFixed(2)}:1 · 弱文本 ${t3.toFixed(2)}:1`
+    + (min>=4.5 ? ' — 均达 WCAG AA' : ` — 最低项未达 4.5:1`);
+}
+
+function toggleTheme(){
+  const cur = document.documentElement.dataset.theme;
+  const nx = cur==='dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = nx;
+  document.querySelector('#btnTheme use').setAttribute('href', nx==='dark' ? '#i-sun' : '#i-moon');
+  a11yReport();
+  draw(); drawMini();
+}
+let density = 'cozy';
+document.getElementById('dDensity').addEventListener('click', ()=>{
+  density = density==='cozy' ? 'compact' : 'cozy';
+  document.documentElement.dataset.density = density;
+  toast('面板密度：' + (density==='compact' ? '紧凑（顶栏 32px）' : '标准（顶栏 38px）'));
+  requestAnimationFrame(()=>{ layoutPanels(); setDay(currentDay); draw(); drawMini(); });
+});
+
+/* ---------- 面板：拖拽 / 折叠 / 缩放 ---------- */
+const STAGE = document.getElementById('stage');
+function layoutPanels(){
+  document.querySelectorAll('.panel').forEach(p=>{
+    const r = p.getBoundingClientRect(), s = STAGE.getBoundingClientRect();
+    let l = parseFloat(p.style.left||'0'), t = parseFloat(p.style.top||'0');
+    let w = r.width, h = r.height;
+    if(p.style.right && !p.style.left) l = s.width - parseFloat(p.style.right) - w;
+    if(p.style.bottom && !p.style.top) t = s.height - parseFloat(p.style.bottom) - h;
+    l = Math.max(4, Math.min(s.width - w - 4, l));
+    t = Math.max(4, Math.min(s.height - h - 4, t));
+    p.style.left = l+'px'; p.style.top = t+'px';
+    p.style.right='auto'; p.style.bottom='auto';
+    p.style.width = w+'px';
+    // 折叠态由 CSS 强制 30px，此处不得覆盖（否则折叠失效）
+    if(!p.classList.contains('collapsed')){
+      p.style.height = h+'px';
+      p.dataset.h = h+'px';                   // 记住高度供展开还原
+    }
+  });
+  document.querySelectorAll('.timeline').forEach(t=>{ t.style.left='12px'; t.style.right='12px'; t.style.bottom='12px'; });
+  resolveOverlap();
+  draw(); drawMini();
+}
+
+/* 面板重叠消解 —— 窗口变矮时手调的默认坐标必然失效（如 mini 上移撞 tree）。
+   这里按「已固定的面板」为界，把其余面板往下推，保证两两不重叠。 */
+function resolveOverlap(){
+  const sr = STAGE.getBoundingClientRect();
+  const vis = [...document.querySelectorAll('.panel')].filter(p=>{
+    const r = p.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && !p.classList.contains('collapsed');
+  });
+  // 左列（x < 中线）与右列分别处理
+  for (const col of ['left','right']){
+    const items = vis.filter(p=>{
+      const r = p.getBoundingClientRect();
+      const cx = r.left - sr.left;
+      return col === 'left' ? cx < sr.width * 0.4 : cx >= sr.width * 0.4;
+    }).sort((a,b)=> a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+    let guard = 0;
+    for (let i = 1; i < items.length && guard < 20; i++, guard++){
+      const prev = items[i-1].getBoundingClientRect();
+      const cur  = items[i].getBoundingClientRect();
+      const curTop = cur.top - sr.top;
+      if (curTop < prev.bottom - sr.top + 8){
+        items[i].style.top = (prev.bottom - sr.top + 8) + 'px';
+        // 推下去若超出舞台底边，改为压缩该面板高度而不是继续下移
+        const h = items[i].getBoundingClientRect().height;
+        const overflow = (items[i].getBoundingClientRect().bottom - sr.bottom);
+        if (overflow > 0){
+          items[i].style.height = Math.max(90, h - overflow) + 'px';
+          items[i].dataset.h = items[i].style.height;
+        }
+      }
+    }
+  }
+}
+window.addEventListener('resize', ()=>{ layoutPanels(); setDay(currentDay); });
+
+document.querySelectorAll('[data-drag]').forEach(h=>{
+  h.addEventListener('pointerdown', e=>{
+    if(e.target.closest('button,input,label,select')) return;
+    const p = h.closest('.panel');
+    const pr = p.getBoundingClientRect(), sr = STAGE.getBoundingClientRect();
+    const ox = e.clientX - pr.left, oy = e.clientY - pr.top;
+    p.classList.add('dragging');
+    h.setPointerCapture(e.pointerId);
+    const mv = ev=>{
+      const x = ev.clientX - sr.left - ox, y = ev.clientY - sr.top - oy;
+      p.style.left = Math.max(0, Math.min(sr.width - pr.width, x))+'px';
+      p.style.top  = Math.max(0, Math.min(sr.height - pr.height, y))+'px';
+      drawMini();
+    };
+    const up = ()=>{ p.classList.remove('dragging'); h.removeEventListener('pointermove',mv); h.removeEventListener('pointerup',up); };
+    h.addEventListener('pointermove',mv); h.addEventListener('pointerup',up);
+  });
+});
+document.querySelectorAll('[data-resize]').forEach(g=>{
+  g.addEventListener('pointerdown', e=>{
+    const p = g.closest('.panel'), pr = p.getBoundingClientRect();
+    g.setPointerCapture(e.pointerId);
+    const mv = ev=>{
+      p.style.width  = Math.max(170, ev.clientX - pr.left) + 'px';
+      p.style.height = Math.max(90,  ev.clientY - pr.top)  + 'px';
+      drawMini();
+    };
+    const up = ()=>{ g.removeEventListener('pointermove',mv); g.removeEventListener('pointerup',up); };
+    g.addEventListener('pointermove',mv); g.addEventListener('pointerup',up);
+  });
+});
+document.querySelectorAll('[data-collapse]').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    const p = b.closest('.panel');
+    // 折叠时记住当前高度，展开时还原 —— 否则面板高度会永久丢失
+    if (!p.dataset.h) p.dataset.h = p.getBoundingClientRect().height + 'px';
+    const now = p.classList.toggle('collapsed');
+    b.querySelector('use').setAttribute('href', now ? '#i-plus' : '#i-minus');
+    b.title = now ? '展开' : '折叠';
+    p.style.height = now ? '' : p.dataset.h;   // 折叠交由 CSS 接管，展开还原
+    requestAnimationFrame(()=>{ drawMini(); });
+  });
+});
+
+/* ---------- 树展开 ---------- */
+document.querySelectorAll('.tnode[data-k]').forEach(n=>{
+  n.addEventListener('click', ()=>{
+    const kids = n.nextElementSibling;
+    if(kids && kids.classList.contains('tkids')){ kids.classList.toggle('open'); n.classList.toggle('open'); }
+  });
+});
+document.querySelectorAll('.tnode').forEach(n=>{
+  n.addEventListener('click', ()=>{
+    document.querySelectorAll('.tnode').forEach(x=>{ if(x!==n){x.style.background='';x.style.fontWeight='';} });
+    if(!n.dataset.k){ n.style.background='var(--ui-sel-wash)'; n.style.fontWeight='600';
+      document.getElementById('sbSel').textContent = '已选：' + n.querySelector('.tlabel').textContent; }
+  });
+});
+
+/* ---------- 工具选择 ---------- */
+document.querySelectorAll('.tool').forEach(t=>{
+  t.addEventListener('click', ()=>{
+    document.querySelectorAll('.tool').forEach(x=>x.setAttribute('aria-pressed','false'));
+    t.setAttribute('aria-pressed','true');
+    canvas.classList.add('paint');
+    toast('笔刷：' + t.querySelector('.tool-n').textContent);
+  });
+});
+const rR=document.getElementById('rRange'), sR=document.getElementById('sRange');
+rR.addEventListener('input',()=>{document.getElementById('rVal').textContent=rR.value+' wu';document.getElementById('rHint').textContent=rR.value+' wu';});
+sR.addEventListener('input',()=>{const v=(sR.value/100).toFixed(2);document.getElementById('sVal').textContent=v;document.getElementById('sHint').textContent=v;});
+
+/* ---------- 图层开关 ---------- */
+const layerState = {terrain:true, tracks:true, events:true, units:true, forces:false};
+document.querySelectorAll('[data-layer]').forEach(cb=>{
+  cb.addEventListener('change',()=>{ layerState[cb.dataset.layer]=cb.checked; draw(); drawMini(); });
+});
+
+/* ---------- 视图模式 ---------- */
+let viewMode = 0;
+document.querySelectorAll('.seg-btn').forEach(b=>{
+  b.addEventListener('click',()=>{
+    document.querySelectorAll('.seg-btn').forEach(x=>x.setAttribute('aria-pressed','false'));
+    b.setAttribute('aria-pressed','true');
+    viewMode = +b.dataset.mode;
+    draw();
+    toast('视图：' + b.textContent.trim());
+  });
+});
+
+/* ==========================================================================
+   地形生成 + 地图渲染
+   ========================================================================== */
+const canvas = document.getElementById('map');
+const ctx = canvas.getContext('2d');
+
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function makeNoise(seed){
+  const rnd = mulberry32(seed);
+  const p = new Uint8Array(512);
+  const perm = new Uint8Array(256);
+  for(let i=0;i<256;i++) perm[i]=i;
+  for(let i=255;i>0;i--){const j=(rnd()*(i+1))|0;[perm[i],perm[j]]=[perm[j],perm[i]];}
+  for(let i=0;i<512;i++) p[i]=perm[i&255];
+  const grad=[[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]];
+  const fade=t=>t*t*t*(t*(t*6-15)+10);
+  const lerp=(a,b,t)=>a+(b-a)*t;
+  return function(x,y){
+    const X=Math.floor(x)&255, Y=Math.floor(y)&255;
+    const xf=x-Math.floor(x), yf=y-Math.floor(y);
+    const u=fade(xf), v=fade(yf);
+    const aa=p[p[X]+Y], ab=p[p[X]+Y+1], ba=p[p[X+1]+Y], bb=p[p[X+1]+Y+1];
+    const g=(h,dx,dy)=>{const gr=grad[h&7];return gr[0]*dx+gr[1]*dy;};
+    const x1=lerp(g(aa,xf,yf), g(ba,xf-1,yf), u);
+    const x2=lerp(g(ab,xf,yf-1), g(bb,xf-1,yf-1), u);
+    return lerp(x1,x2,v)*0.72;
+  };
+}
+function fbm(n,x,y,oct){let a=1,f=1,s=0,norm=0;for(let i=0;i<oct;i++){s+=a*n(x*f,y*f);norm+=a;a*=0.5;f*=2;}return s/norm;}
+
+/* ↓↓↓ world.* —— 与 crates/wv-app/src/palette.rs 逐值对应。
+   这 10 个色是「世界的颜色」，属 ART_STYLE_SPEC 权威域，**不要**为了迁就界面而改。
+   界面配色一律走 ui.* 令牌。 ↓↓↓ */
+const TERRAIN = ['#1E5A8A','#3E8FBF','#D9C58F','#7FA85C','#3E6B3A','#A89060','#7A6A5E','#E6ECEF','#6B7A55','#C9A87C'];
+const SIZE = 512;
+const n1 = makeNoise(20251011), n2 = makeNoise(31415);
+const height = new Float32Array(SIZE*SIZE);
+const moist  = new Float32Array(SIZE*SIZE);
+
+(function gen(){
+  for(let y=0;y<SIZE;y++) for(let x=0;x<SIZE;x++){
+    const i=y*SIZE+x, u=x/SIZE, v=y/SIZE;
+    const warp = fbm(n2,u*2.4,v*2.4,3)*0.42;
+    let e = fbm(n1, u*4.1+warp+11.3, v*4.1+warp+5.7, 6)*0.5+0.5;
+    // 大陆掩膜：中心高、边缘沉下去，并做径向扰动避免圆形感
+    const ang = Math.atan2(v-0.5, u-0.5);
+    const r = Math.hypot(u-0.5, v-0.5) * (1 + 0.22*fbm(n2,Math.cos(ang)*2+7, Math.sin(ang)*2+3, 3));
+    e = e - Math.max(0, r-0.30)*1.45;
+    height[i] = Math.max(0, Math.min(1, e));
+    moist[i]  = fbm(n1, u*6.2+41.5, v*6.2+19.2, 4)*0.5+0.5;
+  }
+})();
+
+function kindAt(h,m){
+  if(h<0.295) return 0;
+  if(h<0.355) return 1;
+  if(h<0.395) return 2;
+  if(h<0.545) return 3;
+  if(h<0.66)  return m>0.52?4:3;
+  if(h<0.735) return m>0.46?4:5;
+  if(h<0.845) return 5;
+  if(h<0.925) return 6;
+  return 7;
+}
+
+const offHi = document.createElement('canvas'); offHi.width=offHi.height=SIZE;
+const offFlat = document.createElement('canvas'); offFlat.width=offFlat.height=SIZE;
+(function paint(){
+  const ch=offHi.getContext('2d'), cf=offFlat.getContext('2d');
+  const dh=ch.createImageData(SIZE,SIZE), df=cf.createImageData(SIZE,SIZE);
+  for(let y=0;y<SIZE;y++) for(let x=0;x<SIZE;x++){
+    const i=y*SIZE+x, o=i*4;
+    const h=height[i], m=moist[i];
+    let k = kindAt(h,m);
+    // 沼泽：低洼 + 高湿
+    if(h>0.40 && h<0.50 && m>0.60) k=8;
+    const c = hex2rgb(TERRAIN[k]);
+    // 山体阴影（仅"真实地形"）
+    const hl = height[i - (x>0?1:0)] , hr = height[i + (x<SIZE-1?1:0)];
+    const hu = height[i - (y>0?SIZE:0)], hd = height[i + (y<SIZE-1?SIZE:0)];
+    const shade = 1 + ((hr-hl)*1.5 + (hd-hu)*1.1) * 1.5;
+    const s = Math.max(0.62, Math.min(1.42, shade));
+    dh.data[o]=Math.min(255,c[0]*s); dh.data[o+1]=Math.min(255,c[1]*s); dh.data[o+2]=Math.min(255,c[2]*s); dh.data[o+3]=255;
+    df.data[o]=c[0]; df.data[o+1]=c[1]; df.data[o+2]=c[2]; df.data[o+3]=255;
+  }
+  ch.putImageData(dh,0,0); cf.putImageData(df,0,0);
+})();
+function hex2rgb(h){return [parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)];}
+
+/* ---------- 相机 ---------- */
+const cam = {x:0.5, y:0.5, zoom:1.0};
+const view = {w:0, h:0, dpr:1};
+function resize(){
+  const r = STAGE.getBoundingClientRect();
+  view.dpr = Math.min(window.devicePixelRatio||1, 2);
+  view.w = r.width; view.h = r.height;
+  canvas.width = Math.round(r.width*view.dpr);
+  canvas.height = Math.round(r.height*view.dpr);
+}
+const tile = () => 128 * cam.zoom;
+
+/* ---------- 世界对象 ---------- */
+const TRACK = { points:[[0.18,0.30],[0.30,0.36],[0.42,0.33],[0.52,0.45],[0.60,0.52],[0.71,0.58],[0.83,0.70]], unit:'红一方面军' };
+const TRACK2= { points:[[0.22,0.18],[0.34,0.26],[0.46,0.38],[0.58,0.50],[0.70,0.60]], unit:'川军追击部队' };
+const EVENTS = [
+  {x:0.30,y:0.36,name:'青杠坡战斗',day:28,t:'battle'},
+  {x:0.42,y:0.33,name:'一渡赤水',day:29,t:'cross'},
+  {x:0.60,y:0.52,name:'二渡赤水',day:49,t:'cross'},
+  {x:0.52,y:0.45,name:'娄山关战斗',day:57,t:'battle'},
+  {x:0.60,y:0.52,name:'扎西整编',day:70,t:'base'},
+  {x:0.71,y:0.58,name:'三渡赤水',day:105,t:'cross'},
+  {x:0.83,y:0.70,name:'四渡赤水',day:110,t:'cross'},
+  {x:0.86,y:0.82,name:'巧渡金沙江',day:151,t:'cross'}
+];
+const FORCES = [
+  {name:'中央红军控制区',color:'#C4553F',pts:[[0.14,0.26],[0.34,0.22],[0.62,0.44],[0.78,0.66],[0.60,0.78],[0.28,0.52]]},
+  {name:'黔军防区',color:'#8C8C94',pts:[[0.40,0.12],[0.72,0.18],[0.86,0.46],[0.66,0.44],[0.50,0.30]]}
+];
+
+/* world.accent.event(渡) / world.accent.cursor(战) / world.accent.note(整) */
+const T_EVENT = {cross:'#C08BD8', battle:'#E8623C', base:'#9AA5B1'};
+
+/* ---------- 当前时间 ---------- */
+let currentDay = 110;
+let playing = false, speed = 5;
+const DAY0 = 1, DAY1 = 365;
+
+/* ---------- 渲染 ---------- */
+function w2s(wx,wy){ return {x:(wx-cam.x)*tile()+view.w/2, y:(wy-cam.y)*tile()+view.h/2}; }
+function s2w(sx,sy){ return {x:(sx-view.w/2)/tile()+cam.x, y:(sy-view.h/2)/tile()+cam.y}; }
+
+/* ---------- 画布取色：统一走 CSS 变量，避免 JS 里散落硬编码色 ---------- */
+function cssVar(name){
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+/** 地图上的文字色（按主题）—— 单一来源，切主题只改这里 */
+function mapTextColor(){ return cssVar('--ui-tx-1'); }
+
+function draw(){
+  if(!view.w) return;
+  ctx.save();
+  ctx.setTransform(view.dpr,0,0,view.dpr,0,0);
+  ctx.clearRect(0,0,view.w,view.h);
+  ctx.fillStyle = cssVar('--ui-bg-map');
+  ctx.fillRect(0,0,view.w,view.h);
+
+  const t = tile(), ox = (cam.x-0.5)*t + view.w/2, oy = (cam.y-0.5)*t + view.h/2;
+
+  /* --- 地形 --- */
+  ctx.imageSmoothingEnabled = true;
+  if(viewMode===3){
+    ctx.fillStyle='#E8E6E1'; ctx.fillRect(0,0,view.w,view.h);
+    ctx.globalAlpha=0.10;
+    ctx.drawImage(offFlat, ox, oy, t, t);
+    ctx.globalAlpha=1;
+  } else {
+    ctx.drawImage(viewMode===1 ? offFlat : offHi, ox, oy, t, t);
+  }
+
+  /* --- 势力 --- */
+  if(layerState.forces || viewMode===2){
+    FORCES.forEach(f=>{
+      ctx.beginPath();
+      f.pts.forEach((p,i)=>{ const s=w2s(p[0],p[1]); i?ctx.lineTo(s.x,s.y):ctx.moveTo(s.x,s.y); });
+      ctx.closePath();
+      if(viewMode===2){ ctx.globalAlpha=0.42; ctx.fillStyle=f.color; ctx.fill(); ctx.globalAlpha=1; }
+      ctx.lineWidth = 2; ctx.strokeStyle = f.color; ctx.setLineDash([7,5]); ctx.stroke(); ctx.setLineDash([]);
+    });
+  }
+
+  /* --- 河流（示意） --- */
+  if(viewMode!==3 && layerState.terrain){
+    ctx.beginPath();
+    const rp=[[0.06,0.42],[0.24,0.46],[0.40,0.44],[0.56,0.50],[0.72,0.55],[0.92,0.60]];
+    rp.forEach((p,i)=>{const s=w2s(p[0],p[1]); i?ctx.lineTo(s.x,s.y):ctx.moveTo(s.x,s.y);});
+    ctx.strokeStyle='rgba(63,143,191,.85)'; ctx.lineWidth=Math.max(1.4,t*0.006); ctx.lineCap='round'; ctx.stroke();
+  }
+
+  /* --- 轨迹：逐段生长（day 空间插值） --- */
+  if(layerState.tracks){
+    drawTrack(TRACK,  '#C4553F', currentDay, 29, 130);
+    drawTrack(TRACK2, 'rgba(140,140,148,.9)', currentDay, 28, 120);
+  }
+
+  /* --- 事件 --- */
+  if(layerState.events){
+    EVENTS.forEach(e=>{
+      const s = w2s(e.x,e.y);
+      const passed = currentDay >= e.day;
+      const r = viewMode===3 ? 13 : (t*0.022+5);
+      ctx.beginPath(); ctx.arc(s.x,s.y,r,0,7);
+      ctx.fillStyle = T_EVENT[e.t]; ctx.globalAlpha = passed?0.92:0.34; ctx.fill(); ctx.globalAlpha=1;
+      ctx.lineWidth=1.6; ctx.strokeStyle='rgba(255,255,255,.9)'; ctx.stroke();
+      // 常驻底环（状态，永不抑制）
+      ctx.beginPath(); ctx.arc(s.x,s.y,r+4,0,7);
+      ctx.lineWidth=1.4; ctx.strokeStyle = passed? T_EVENT[e.t] : 'rgba(150,155,165,.55)'; ctx.stroke();
+      if(viewMode===3 || t>150){
+        ctx.font='600 11px ' + cssVar('--font-ui');
+        ctx.fillStyle = mapTextColor();
+        ctx.textAlign='center';
+        ctx.fillText(e.name, s.x, s.y - r - 8);
+        ctx.textAlign='left';
+      }
+    });
+  }
+
+  /* --- 部队标记（仅世界级） --- */
+  if(layerState.units && mapState.level===0){
+    const progress = Math.max(0, Math.min(1, (currentDay-29)/101));
+    const idx = Math.floor(progress*(TRACK.points.length-1));
+    const p0=TRACK.points[idx], p1=TRACK.points[Math.min(TRACK.points.length-1,idx+1)];
+    const f=(progress*(TRACK.points.length-1))-idx;
+    const ux=p0[0]+(p1[0]-p0[0])*f, uy=p0[1]+(p1[1]-p0[1])*f;
+    const s=w2s(ux,uy);
+    ctx.save(); ctx.translate(s.x,s.y);
+    ctx.beginPath(); ctx.moveTo(0,-9); ctx.lineTo(8,7); ctx.lineTo(0,3); ctx.lineTo(-8,7); ctx.closePath();
+    ctx.fillStyle='#C4553F'; ctx.fill(); ctx.lineWidth=1.6; ctx.strokeStyle='rgba(255,255,255,.92)'; ctx.stroke();
+    ctx.restore();
+    ctx.font='600 11px ' + cssVar('--font-ui');
+    ctx.fillStyle = mapTextColor();
+    ctx.textAlign='center'; ctx.fillText('红一方面军', s.x, s.y+20); ctx.textAlign='left';
+  }
+
+  /* --- 层级专属绘制（世界/城市/建筑） --- */
+  drawLevelOverlay();
+
+  /* --- 笔刷光标（仅世界级） --- */
+  if(mouse.in && document.getElementById('brushOn').checked && !immersive && mapState.level===0){
+    const br = (+rR.value / SIZE) * t;
+    const soft = +sR.value/100;
+    ctx.beginPath(); ctx.arc(mouse.x,mouse.y,br,0,7);
+    ctx.lineWidth=1.6; ctx.strokeStyle='rgba(242,193,78,.95)'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(mouse.x,mouse.y,Math.max(2,br*(1-soft)),0,7);
+    ctx.setLineDash([4,4]); ctx.lineWidth=1.2; ctx.strokeStyle='rgba(242,193,78,.7)'; ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  /* --- LOD：缩小显示事态标签 --- */
+  if(t < 190){
+    let s, label;
+    if (mapState.level===0){
+      s = w2s(0.72,0.56); label = '四渡赤水 · 正在发生';
+    } else if (mapState.level===1 && mapState.cityId){
+      const c = CITIES.find(c=>c.id===mapState.cityId);
+      s = w2s(c.x, c.y); label = c.name + ' · 城区';
+    } else {
+      s = null; label = '';
+    }
+    if (s && label){
+      ctx.font='700 13px ' + cssVar('--font-ui');
+      const wpx = ctx.measureText(label).width+18;
+      ctx.fillStyle='rgba(192,139,216,.92)';
+      roundRect(ctx, s.x-wpx/2, s.y-14, wpx, 26, 13); ctx.fill();
+      ctx.fillStyle='#0B0D11'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(label, s.x, s.y);
+      ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+    }
+  }
+
+  /* --- 网格（缩放够大时） --- */
+  if(t>420){
+    ctx.strokeStyle='rgba(0,0,0,.10)'; ctx.lineWidth=1;
+    const g=64/SIZE*t;
+    for(let i=0;i<=SIZE;i+=64){ const x=ox+i/SIZE*t; ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,view.h);ctx.stroke(); }
+  }
+
+  ctx.restore();
+  document.getElementById('sbZoom').textContent='缩放 '+cam.zoom.toFixed(2)+'×';
+  document.getElementById('roScale').textContent='1:'+Math.round(1000/cam.zoom);
+  /* 同步钻入标记位置 —— 它们要跟随相机（与地图共用一套 w2s）*/
+  updateDrillPositions();
+}
+
+function drawTrack(tr,color,day,d0,d1){
+  const p = Math.max(0, Math.min(1, (day-d0)/Math.max(1,(d1-d0))));
+  if(p<=0) return;
+  const total = (tr.points.length-1);
+  const upto = p*total;
+  ctx.beginPath();
+  tr.points.forEach((pt,i)=>{
+    const s=w2s(pt[0],pt[1]);
+    if(i<=Math.floor(upto)){ i===0?ctx.moveTo(s.x,s.y):ctx.lineTo(s.x,s.y); }
+  });
+  const i0=Math.floor(upto), i1=Math.min(total,i0+1), f=upto-i0;
+  if(i1>i0){ const a=w2s(...tr.points[i0]), b=w2s(...tr.points[i1]);
+    ctx.lineTo(a.x+(b.x-a.x)*f, a.y+(b.y-a.y)*f); }
+  ctx.strokeStyle=color; ctx.lineWidth=Math.max(2,tile()*0.007); ctx.lineCap='round'; ctx.lineJoin='round';
+  ctx.stroke();
+  ctx.strokeStyle='rgba(255,255,255,.55)'; ctx.lineWidth=Math.max(1,tile()*0.0025); ctx.stroke();
+}
+function roundRect(c,x,y,w,h,r){
+  c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r);
+  c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath();
+}
+
+/* ---------- 小地图 ---------- */
+const mini = document.getElementById('minimap'), mctx = mini.getContext('2d');
+function drawMini(){
+  const s = mini.width;
+  mctx.clearRect(0,0,s,s);
+  mctx.drawImage(offFlat,0,0,s,s);
+  mctx.globalAlpha=.35; mctx.fillStyle='#000'; mctx.fillRect(0,0,s,s); mctx.globalAlpha=1;
+  if(layerState.tracks){
+    mctx.beginPath();
+    TRACK.points.forEach((p,i)=>{const x=p[0]*s,y=p[1]*s;i?mctx.lineTo(x,y):mctx.moveTo(x,y);});
+    mctx.strokeStyle='#C4553F'; mctx.lineWidth=1.6; mctx.stroke();
+  }
+  const vw = (view.w/ (128*cam.zoom)) * s, vh=(view.h/(128*cam.zoom))*s;
+  const vx = (cam.x-0.5)*s + s/2 - vw/2, vy=(cam.y-0.5)*s + s/2 - vh/2;
+  // 缩放较小时视口可能大于整幅地图 —— 必须裁剪，否则框会画到 minimap 外面
+  mctx.save();
+  mctx.beginPath(); mctx.rect(0,0,s,s); mctx.clip();
+  mctx.strokeStyle='rgba(0,0,0,.5)'; mctx.lineWidth=3; mctx.strokeRect(vx,vy,vw,vh);
+  mctx.strokeStyle='#F2C14E'; mctx.lineWidth=1.6; mctx.strokeRect(vx,vy,vw,vh);
+  mctx.restore();
+}
+mini.addEventListener('click', e=>{
+  const r = mini.getBoundingClientRect();
+  cam.x = (e.clientX - r.left) / r.width;
+  cam.y = (e.clientY - r.top)  / r.height;
+  draw(); drawMini();
+});
+
+/* ---------- 鼠标交互 ---------- */
+const mouse = {x:-1,y:-1,in:false,down:false,moved:false,lastX:0,lastY:0};
+canvas.addEventListener('pointerdown', e=>{ mouse.down=true; mouse.moved=false; mouse.lastX=e.clientX; mouse.lastY=e.clientY; canvas.setPointerCapture(e.pointerId); canvas.classList.add('drag'); });
+canvas.addEventListener('pointermove', e=>{
+  const r = canvas.getBoundingClientRect();
+  mouse.x=e.clientX-r.left; mouse.y=e.clientY-r.top; mouse.in=true;
+  const w = s2w(mouse.x,mouse.y);
+  document.getElementById('roCoord').textContent='('+Math.round(w.x*1000)+', '+Math.round(w.y*1000)+')';
+  if(mouse.down){
+    const dx=e.clientX-mouse.lastX, dy=e.clientY-mouse.lastY;
+    if(Math.abs(dx)+Math.abs(dy)>3) mouse.moved=true;
+    cam.x -= dx/(128*cam.zoom); cam.y -= dy/(128*cam.zoom);
+    mouse.lastX=e.clientX; mouse.lastY=e.clientY;
+    draw(); drawMini();
+  } else draw();
+});
+canvas.addEventListener('pointerup', e=>{
+  mouse.down=false; canvas.classList.remove('drag');
+  if(!mouse.moved){
+    const r=canvas.getBoundingClientRect();
+    const w=s2w(e.clientX-r.left, e.clientY-r.top);
+    const near = EVENTS.find(ev=>Math.hypot((ev.x-w.x),(ev.y-w.y))<0.03);
+    if(near){ toast(near.name + ' · 第 '+near.day+' 天', 'ok'); document.getElementById('sbSel').textContent='已选：'+near.name; }
+    else document.getElementById('sbSel').textContent='已选：（空）';
+  }
+});
+canvas.addEventListener('pointerleave', ()=>{mouse.in=false;draw();});
+canvas.addEventListener('wheel', e=>{
+  e.preventDefault();
+  const before = s2w(e.offsetX, e.offsetY);
+  cam.zoom = Math.max(0.35, Math.min(14, cam.zoom * (e.deltaY>0?0.9:1.111)));
+  const after = s2w(e.offsetX, e.offsetY);
+  cam.x += before.x-after.x; cam.y += before.y-after.y;
+  draw(); drawMini();
+},{passive:false});
+
+document.getElementById('zIn').onclick =()=>{cam.zoom=Math.min(14,cam.zoom*1.25);draw();drawMini();};
+document.getElementById('zOut').onclick=()=>{cam.zoom=Math.max(.35,cam.zoom/1.25);draw();drawMini();};
+document.getElementById('zFit').onclick=()=>{cam.x=.5;cam.y=.5;cam.zoom=1;draw();drawMini();toast('已全览地图');};
+
+/* ---------- 时间轴 ---------- */
+const tlCursor=document.getElementById('tlCursor'), tlHit=document.getElementById('tlHit');
+function dayToPct(d){ return (d-DAY0)/(DAY1-DAY0); }
+
+/* 轨道内容区（.lane-t）相对时间轴的实测偏移与宽度。
+   必须实测而非硬编码：标签列宽度（56px）与 padding 都可能随密度档变化。 */
+function trackMetrics(){
+  const tl = document.getElementById('timeline');
+  const lane = document.querySelector('.lane-t');
+  if(!lane) return {left:0, width:tl.clientWidth};
+  const a = lane.getBoundingClientRect(), b = tl.getBoundingClientRect();
+  return {left: a.left - b.left, width: a.width};
+}
+
+function setDay(d){
+  currentDay = Math.max(DAY0, Math.min(DAY1, Math.round(d)));
+  const m = trackMetrics();
+  tlCursor.style.left = (m.left + dayToPct(currentDay)*m.width)+'px';
+  tlHit.style.left   = m.left+'px';
+  tlHit.style.width  = m.width+'px';
+  const mm=Math.floor((currentDay-1)/30)+1, dd=(currentDay-1)%30+1, yy=Math.floor((currentDay-1)/360)+1;
+  const txt='无仙 '+yy+' 年 '+mm+' 月 '+dd+' 日';
+  document.getElementById('tlDate').textContent=txt;
+  document.getElementById('roDate').textContent=txt;
+  draw();
+}
+tlHit.addEventListener('pointerdown', e=>{
+  const mm = trackMetrics();
+  const move = ev=>{
+    const x = ev.clientX - tlHit.getBoundingClientRect().left;
+    setDay(DAY0 + Math.max(0, Math.min(1, x/mm.width))*(DAY1-DAY0));
+  };
+  move(e);
+  const up=()=>{window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',up);};
+  window.addEventListener('pointermove',move); window.addEventListener('pointerup',up);
+});
+const tPlay=document.getElementById('tPlay');
+tPlay.addEventListener('click', togglePlay);
+function togglePlay(){
+  playing=!playing;
+  tPlay.querySelector('use').setAttribute('href', playing?'#i-pause':'#i-play');
+  if(playing) loop();
+}
+let last=0;
+function loop(ts){
+  if(!playing) return;
+  if(!last) last=ts;
+  const dt=(ts-last)/1000; last=ts;
+  let d = currentDay + dt*speed;
+  if(d>=DAY1){ d=DAY1; playing=false; tPlay.querySelector('use').setAttribute('href','#i-play'); }
+  setDay(d);
+  requestAnimationFrame(loop);
+}
+document.querySelectorAll('[data-spd]').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('[data-spd]').forEach(x=>x.setAttribute('aria-pressed','false'));
+  b.setAttribute('aria-pressed','true'); speed=+b.dataset.spd;
+}));
+document.getElementById('tFirst').onclick=()=>{setDay(DAY0);};
+document.getElementById('tLast').onclick=()=>{setDay(DAY1);};
+document.getElementById('btnAddEvent').onclick=()=>toast('将在第 '+currentDay+' 天新建事件（原型演示）','ok');
+document.querySelectorAll('[data-l]').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('[data-l]').forEach(x=>x.setAttribute('aria-pressed','false'));
+  b.setAttribute('aria-pressed','true');
+  const l=b.dataset.l;
+  document.querySelector('[data-lane="sit"]').parentElement.style.display  = (l==='0'||l==='1')?'flex':'none';
+  document.querySelector('[data-lane="unit"]').parentElement.style.display= (l==='0'||l==='1')?'flex':'none';
+  document.querySelector('[data-lane="char"]').style.display=(l==='2')?'flex':'none';
+  document.querySelector('[data-lane="l4"]').style.display  =(l==='3')?'flex':'none';
+  draw();
+}));
+/* L4 世纪鸟瞰柱 */
+const l4=document.getElementById('l4bars');
+const rnd=mulberry32(7);
+let acc=0;
+for(let i=0;i<40;i++){ const b=document.createElement('i'); const v=0.18+rnd()*0.8; b.className='l4bar'; b.style.height=(v*100)+'%'; b.style.opacity=0.3+v*0.5; b.title='世纪 '+(i+1); l4.appendChild(b); }
+
+/* ---------- 撤销 / 保存 ---------- */
+let dirty=false, undoN=0;
+function markDirty(msg){
+  dirty=true; undoN++;
+  document.getElementById('dirtyDot').hidden=false;
+  const sb=document.getElementById('savedBadge'); sb.textContent='未保存';
+  sb.className='bdg warn';
+  document.getElementById('btnUndo').disabled=false;
+  document.getElementById('btnRedo').disabled=false;
+  if(msg) toast(msg);
+}
+document.getElementById('btnUndo').onclick=()=>{ if(undoN){undoN--;toast('已撤销');document.getElementById('btnUndo').disabled=undoN===0;} };
+document.getElementById('btnRedo').onclick=()=>toast('已重做');
+document.getElementById('btnSave').onclick=()=>{
+  dirty=false; document.getElementById('dirtyDot').hidden=true;
+  const sb=document.getElementById('savedBadge'); sb.textContent='已保存'; sb.className='bdg ok';
+  toast('已保存 · '+sb.previousElementSibling.textContent,'ok');
+};
+document.getElementById('fName').addEventListener('input',()=>markDirty());
+document.querySelector('.proj').addEventListener('click',()=>{
+  const n=prompt('工程名','四渡赤水 · 行军图'); if(n){document.getElementById('projName').textContent=n; markDirty('已重命名');}
+});
+
+/* ---------- 命令面板 ---------- */
+const CMDS = [
+  {g:'项目',ico:'i-folder',t:'打开最近工程 · 四渡赤水 · 行军图',k:[],fn:()=>{toast('已切换到「四渡赤水 · 行军图」','ok');}},
+  {g:'项目',ico:'i-plus',t:'新建工程',k:['Ctrl','⇧','N'],fn:()=>{toast('新建工程（原型演示）','ok');setDemoState('empty');}},
+  {g:'项目',ico:'i-folder',t:'打开工程…',k:['Ctrl','O'],fn:()=>toast('打开工程…（原型演示）')},
+  {g:'项目',ico:'i-export',t:'导出…',k:['Ctrl','E'],fn:()=>toast('导出…（原型演示）· 实际工程：导出 world.yaml + terrain.bin / 单图 PNG')},
+  {g:'项目',ico:'i-save',t:'另存为…',k:['Ctrl','⇧','S'],fn:()=>toast('另存为…（原型演示）')},
+  {g:'项目',ico:'i-x',t:'关闭工程',k:['Ctrl','W'],fn:()=>toast('请先保存再关闭','warn')},
+  {g:'项目',ico:'i-settings',t:'项目设置',k:[],fn:()=>toast('项目设置（原型演示）')},
+  {g:'视图',ico:'i-map',t:'切换到 真实地形',k:['1'],fn:()=>segPick(0)},
+  {g:'视图',ico:'i-grid',t:'切换到 色块地形',k:['2'],fn:()=>segPick(1)},
+  {g:'视图',ico:'i-flag',t:'切换到 势力图',k:['3'],fn:()=>segPick(2)},
+  {g:'视图',ico:'i-event',t:'切换到 事件图',k:['4'],fn:()=>segPick(3)},
+  {g:'视图',ico:'i-focus',t:'全览地图',k:['F'],fn:()=>document.getElementById('zFit').click()},
+  // 注意：沉浸模式**不能**占用裸 Tab。
+  // 裸 Tab 是键盘用户唯一的焦点移动键（WCAG 2.1.1），
+  // 拦截会导致纯键盘用户无法离开输入框。
+  {g:'视图',ico:'i-eye-off',t:'沉浸模式（仅地图）',k:['Ctrl','⇧','I'],fn:toggleImmersive},
+  {g:'导航',ico:'i-layers',t:'钻回世界地图',k:[],fn:()=>drillTo(0)},
+  {g:'导航',ico:'i-layers',t:'钻回遵义城',k:[],fn:()=>drillTo(1, 'zunyi')},
+  {g:'编辑',ico:'i-undo',t:'撤销',k:['Ctrl','Z'],fn:()=>document.getElementById('btnUndo').click()},
+  {g:'编辑',ico:'i-redo',t:'重做',k:['Ctrl','⇧','Z'],fn:()=>document.getElementById('btnRedo').click()},
+  {g:'编辑',ico:'i-save',t:'保存',k:['Ctrl','S'],fn:()=>document.getElementById('btnSave').click()},
+  {g:'编辑',ico:'i-plus',t:'新建 Unit',k:[],fn:()=>toast('新建 Unit（原型演示）')},
+  {g:'编辑',ico:'i-event',t:'登记事件',k:[],fn:()=>document.getElementById('btnAddEvent').click()},
+  {g:'面板',ico:'i-brush',t:'打开 地形笔刷',k:['B'],fn:()=>openPanel('brush')},
+  {g:'面板',ico:'i-target',t:'打开 导航 / 小地图',k:['N'],fn:()=>openPanel('mini')},
+  {g:'面板',ico:'i-layers',t:'打开 世界树',k:[],fn:()=>openPanel('tree')},
+  {g:'面板',ico:'i-eye',t:'打开 检视器',k:['I'],fn:()=>openPanel('insp')},
+  {g:'面板',ico:'i-grid',t:'重置所有面板位置',k:[],fn:()=>{location.reload();}},
+  {g:'时间',ico:'i-play',t:'播放 / 暂停',k:['Space'],fn:togglePlay},
+  {g:'时间',ico:'i-clock',t:'跳到起点',k:['Home'],fn:()=>setDay(DAY0)},
+  {g:'界面',ico:'i-sun',t:'切换明暗',k:['Ctrl','J'],fn:toggleTheme},
+  {g:'对象',ico:'i-flag',t:'跳转到 四渡赤水',k:[],fn:()=>{cam.x=0.72;cam.y=0.56;cam.zoom=3;setDay(110);draw();drawMini();}},
+  {g:'对象',ico:'i-flag',t:'跳转到 遵义城',k:[],fn:()=>{drillTo(1, 'zunyi');}}
+];
+function segPick(i){ document.querySelectorAll('.seg-btn')[i].click(); }
+function openPanel(n){
+  const p=document.querySelector('[data-panel="'+n+'"]');
+  if(!p) return;
+  p.classList.remove('collapsed');
+  p.querySelector('[data-collapse] use').setAttribute('href','#i-minus');
+  p.animate([{opacity:.3,transform:'scale(.97)'},{opacity:1,transform:'none'}],{duration:180});
+}
+const cmdk=document.getElementById('cmdk'), scrim=document.getElementById('scrim'), ci=document.getElementById('cmdInput'), cl=document.getElementById('cmdList');
+let cmdIdx=0, cmdFiltered=CMDS;
+function openCmd(){ cmdk.dataset.on='1'; scrim.dataset.on='1'; ci.value=''; renderCmds(CMDS); ci.focus(); }
+window.openCmd = openCmd;
+/* 供自动化验证脚本驱动（verify-render.mjs 的截图复位需要） */
+window.setDay = setDay;
+window.drillTo = drillTo;
+window.cam = cam;
+function closeCmd(){ cmdk.dataset.on='0'; scrim.dataset.on='0'; }
+function renderCmds(list){
+  cmdFiltered=list; cmdIdx=0;
+  cl.innerHTML='';
+  let lastG=null;
+  list.forEach((c,i)=>{
+    if(c.g!==lastG){ const g=document.createElement('div'); g.className='cmdk-g'; g.textContent=c.g; cl.appendChild(g); lastG=c.g; }
+    const d=document.createElement('div'); d.className='cmdk-i'; d.setAttribute('aria-selected', i===0?'true':'false');
+    d.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#'+c.ico+'"/></svg><span>'+c.t+'</span>'
+      + (c.k.length?'<span class="k">'+c.k.map(k=>'<kbd>'+k+'</kbd>').join('')+'</span>':'');
+    d.addEventListener('click',()=>{ c.fn(); closeCmd(); });
+    cl.appendChild(d);
+  });
+}
+ci.addEventListener('input',()=>{
+  const q=ci.value.trim().toLowerCase();
+  renderCmds(CMDS.filter(c=>!q || c.t.toLowerCase().includes(q) || c.g.includes(q)));
+});
+ci.addEventListener('keydown',e=>{
+  const items=[...cl.querySelectorAll('.cmdk-i')];
+  if(e.key==='ArrowDown'){ e.preventDefault(); cmdIdx=Math.min(items.length-1,cmdIdx+1); }
+  if(e.key==='ArrowUp'){ e.preventDefault(); cmdIdx=Math.max(0,cmdIdx-1); }
+  items.forEach((el,i)=>el.setAttribute('aria-selected', i===cmdIdx?'true':'false'));
+  if(cmdIdx>=0 && items[cmdIdx]) items[cmdIdx].scrollIntoView({block:'nearest'});
+  if(e.key==='Enter'){ e.preventDefault(); const c=cmdFiltered[cmdIdx]; if(c){c.fn();closeCmd();} }
+  if(e.key==='Escape') closeCmd();
+});
+document.querySelectorAll('[data-demo]').forEach(b=>b.addEventListener('click',()=>{
+  switch(b.dataset.demo){
+    case 'newmap':   toast('已创建新地图（原型演示）','ok'); setDemoState('normal'); break;
+    case 'browse':   toast('已打开文件选择器（原型演示）'); break;
+    case 'reload':   setDemoState('normal'); toast('工程已重新加载','ok'); break;
+    default:         setDemoState('normal');
+  }
+}));
+
+document.getElementById('inspEmptyBtn').addEventListener('click', openCmd);
+
+document.getElementById('btnCmd').onclick=openCmd;
+scrim.onclick=closeCmd;
+
+/* ---------- 快捷键 ---------- */
+document.addEventListener('keydown',e=>{
+  const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+  const mod = e.ctrlKey||e.metaKey;
+  if(e.key==='Escape'){
+    if (pmenuOpen){ closePmenu(); e.preventDefault(); return; }
+  }
+  if(mod && e.key.toLowerCase()==='k'){ e.preventDefault(); openCmd(); return; }
+  if(typing) return;
+  if(mod && e.key.toLowerCase()==='s'){ e.preventDefault(); document.getElementById('btnSave').click(); return; }
+  if(mod && e.shiftKey && e.key.toLowerCase()==='n'){ e.preventDefault(); openPmenu(); pmenu.querySelector('[data-pm="new"]').click(); return; }
+  if(mod && e.key.toLowerCase()==='o' && !e.shiftKey){ e.preventDefault(); openPmenu(); pmenu.querySelector('[data-pm="open"]').click(); return; }
+  if(mod && e.key.toLowerCase()==='e' && !e.shiftKey){ e.preventDefault(); openPmenu(); pmenu.querySelector('[data-pm="export"]').click(); return; }
+  if(mod && e.shiftKey && e.key.toLowerCase()==='s'){ e.preventDefault(); openPmenu(); pmenu.querySelector('[data-pm="saveas"]').click(); return; }
+  if(mod && e.key.toLowerCase()==='w'){ e.preventDefault(); openPmenu(); pmenu.querySelector('[data-pm="close"]').click(); return; }
+  if(mod && e.key.toLowerCase()==='p'){ e.preventDefault(); openPmenu(); return; }
+  if(mod && e.key.toLowerCase()==='j'){ e.preventDefault(); toggleTheme(); return; }
+  if(mod && e.key.toLowerCase()==='z'){ e.preventDefault(); (e.shiftKey?document.getElementById('btnRedo'):document.getElementById('btnUndo')).click(); return; }
+  if(mod && e.shiftKey && e.key.toLowerCase()==='i'){ e.preventDefault(); toggleImmersive(); return; }
+  if(mod) return;
+  switch(e.key){
+    case '1': segPick(0); break;
+    case '2': segPick(1); break;
+    case '3': segPick(2); break;
+    case '4': segPick(3); break;
+    case ' ': e.preventDefault(); togglePlay(); break;
+    case 'f': case 'F': document.getElementById('zFit').click(); break;
+    case 'b': case 'B': openPanel('brush'); break;
+    case 'n': case 'N': openPanel('mini'); break;
+    case 'i': case 'I': openPanel('insp'); break;
+    case 'Home': setDay(DAY0); break;
+    case 'End': setDay(DAY1); break;
+    case '[': rR.value=Math.max(8,+rR.value-8); rR.dispatchEvent(new Event('input')); break;
+    case ']': rR.value=Math.min(600,+rR.value+8); rR.dispatchEvent(new Event('input')); break;
+    case '+': case '=': cam.zoom=Math.min(14,cam.zoom*1.2); draw(); drawMini(); break;
+    case '-': cam.zoom=Math.max(.35,cam.zoom/1.2); draw(); drawMini(); break;
+    /* 面包屑的快捷钻回：Esc（已处理）、Backspace 也钻回上一级 */
+    case 'Backspace':
+      if (mapState.level===2) drillTo(1, mapState.cityId);
+      else if (mapState.level===1) drillTo(0);
+      break;
+  }
+});
+
+/* ---------- 启动 ---------- */
+window.addEventListener('load', ()=>{ resize(); layoutPanels(); setDay(110); renderCrumb(); renderDrill(); draw(); drawMini(); });
+new ResizeObserver(()=>{ resize(); draw(); drawMini(); renderDrill(); }).observe(STAGE);
+toast('原型已就绪 · Ctrl+K 命令面板 · 双击城市/建筑钻入');
+
+/* ==========================================================================
+   项目管理菜单（顶栏下拉）
+   ========================================================================== */
+const btnPmenu = document.getElementById('btnPmenu');
+const pmenu    = document.getElementById('pmenu');
+let pmenuOpen  = false;
+let pmenuIdx   = -1;
+let pmenuItems = ()=> [...pmenu.querySelectorAll('.pmenu-i')];
+
+function openPmenu(){
+  pmenuOpen = true; pmenu.dataset.on = '1'; btnPmenu.setAttribute('aria-expanded','true');
+  pmenuIdx = pmenuItems().findIndex(i=>i.getAttribute('aria-selected')==='true');
+  if (pmenuIdx<0) pmenuIdx = 0;
+  updatePmenuSel();
+}
+function closePmenu(){
+  pmenuOpen = false; pmenu.dataset.on = '0'; btnPmenu.setAttribute('aria-expanded','false');
+  pmenuItems().forEach(i=>i.setAttribute('aria-selected','false'));
+}
+function updatePmenuSel(){
+  pmenuItems().forEach((i,idx)=>i.setAttribute('aria-selected', idx===pmenuIdx?'true':'false'));
+}
+btnPmenu.addEventListener('click', e=>{ e.stopPropagation(); pmenuOpen ? closePmenu() : openPmenu(); });
+document.addEventListener('click', e=>{ if (pmenuOpen && !pmenu.contains(e.target) && !btnPmenu.contains(e.target)) closePmenu(); });
+
+pmenuItems().forEach((item, idx)=>{
+  item.addEventListener('click', ()=>{
+    const pm = item.dataset.pm;
+    const map = {
+      recent:   ()=>{
+        const name = item.querySelector('span').textContent;
+        closePmenu();
+        document.getElementById('projName').textContent = name;
+        toast('已切换到「'+name+'」','ok');
+        // 重置地图层级到世界（防止上次钻入遗留）
+        drillTo(0);
+        visited.clear();
+        renderDrill();
+        // 标记状态徽标
+        const sb = document.getElementById('savedBadge'); sb.textContent='已加载'; sb.className='bdg ok';
+        // 标记选中
+        pmenuItems().forEach(x=>x.setAttribute('aria-selected','false'));
+        item.setAttribute('aria-selected','true');
+      },
+      new:      ()=>{ closePmenu(); toast('新建工程（原型演示）','ok'); setDemoState('empty'); },
+      open:     ()=>{ closePmenu(); toast('打开工程…（原型演示）'); },
+      export:   ()=>{ closePmenu(); toast('导出…（原型演示）· 实际工程：导出 world.yaml + terrain.bin / 单图 PNG'); },
+      saveas:   ()=>{ closePmenu(); toast('另存为…（原型演示）'); },
+      close:    ()=>{ closePmenu(); toast('请先保存再关闭','warn'); },
+      settings: ()=>{ closePmenu(); toast('项目设置（原型演示）'); },
+    };
+    if (map[pm]) map[pm]();
+  });
+});
+
+/* ==========================================================================
+   地图层级（世界 / 城市 / 建筑）
+   --------------------------------------------------------------------------
+   数据模型（原型占位）：城市与建筑均为世界坐标 [0,1]² 内的"逻辑位置"，
+   真实工程下应改为 PlaceId 引用与 PlaceEdge 距离（基线 §1.6 既定）。
+   YAGNI：不预留第 4 级；想加 N+1 时以「数据结构补字段 + 视图分支」扩展，
+   与基线 §2.16 schema 版本纪律一致。
+   ========================================================================== */
+const CITIES = [
+  { id:'zunyi',    name:'遵义城',  x:0.55, y:0.45, blurb:'黔北重镇 · 红军长征途中最重要的转折点' },
+  { id:'tucheng',  name:'土城',    x:0.30, y:0.36, blurb:'青杠坡战斗地 · 一渡赤水西渡起点' },
+  { id:'maotai',   name:'茅台镇',  x:0.71, y:0.58, blurb:'三渡赤水渡口 · 红军补给处' },
+  { id:'loushan',  name:'娄山关',  x:0.52, y:0.45, blurb:'娄山关战斗 · 遵义会议后首胜' },
+];
+const BUILDINGS = {
+  zunyi: [
+    { id:'hq',    name:'指挥部',  x:0.5, y:0.5, blurb:'中共中央军委指挥所' },
+    { id:'conf',  name:'会议室',  x:0.6, y:0.4, blurb:'遵义会议原址' },
+    { id:'wall',  name:'城门',    x:0.7, y:0.6, blurb:'遵义城南门' },
+  ],
+  tucheng:  [ { id:'hq', name:'指挥所',  x:0.5, y:0.5, blurb:'土城战斗指挥部' } ],
+  maotai:   [ { id:'wharf', name:'茅台渡口', x:0.5, y:0.5, blurb:'三渡赤水渡口' } ],
+  loushan:  [ { id:'fort',  name:'关隘',     x:0.5, y:0.5, blurb:'娄山关主峰阵地' } ],
+};
+
+/* 楼层（建筑内）：演示用，简单 4 房间格局 */
+const FLOORS = {
+  hq: [
+    { id:'main',   name:'正厅',   x:0.4, y:0.45, w:0.30, h:0.30, blurb:'作战地图桌' },
+    { id:'side',   name:'耳房',   x:0.75, y:0.45, w:0.20, h:0.20, blurb:'机要室' },
+    { id:'yard',   name:'院中',   x:0.5,  y:0.78, w:0.50, h:0.15, blurb:'天井' },
+  ],
+  conf: [
+    { id:'hall', name:'会议厅', x:0.5, y:0.5, w:0.70, h:0.50, blurb:'遵义会议原址 · 20 人长桌' },
+  ],
+};
+
+/* 访问痕迹（已钻入过的节点；状态用「灰填充 + 内圈点」呈现） */
+const visited = new Set();
+
+let mapState = { level:0, cityId:null, buildingId:null };
+
+/* 面包屑 */
+const crumbL0=document.getElementById('crumbL0'), crumbL1=document.getElementById('crumbL1'), crumbL2=document.getElementById('crumbL2');
+const crumbS1=document.getElementById('crumbS1'), crumbS2=document.getElementById('crumbS2');
+
+function renderCrumb(){
+  // L0
+  crumbL0.disabled = (mapState.level===0);
+  // L1
+  if (mapState.level>=1){
+    const c = CITIES.find(c=>c.id===mapState.cityId);
+    crumbL1.hidden = false; crumbS1.hidden = false;
+    crumbL1.textContent = c ? c.name : '城市';
+    crumbL1.disabled = (mapState.level===1);
+  } else { crumbL1.hidden = true; crumbS1.hidden = true; }
+  // L2
+  if (mapState.level===2){
+    const c = CITIES.find(c=>c.id===mapState.cityId);
+    const b = c && BUILDINGS[c.id] && BUILDINGS[c.id].find(b=>b.id===mapState.buildingId);
+    crumbL2.hidden = false; crumbS2.hidden = false;
+    crumbL2.textContent = b ? b.name : '建筑';
+    crumbL2.disabled = true;
+  } else { crumbL2.hidden = true; crumbS2.hidden = true; }
+}
+crumbL0.addEventListener('click', ()=>{ if (!crumbL0.disabled) drillTo(0); });
+crumbL1.addEventListener('click', ()=>{ if (!crumbL1.disabled) drillTo(1, mapState.cityId); });
+crumbL2.addEventListener('click', ()=>{ if (!crumbL2.disabled) drillTo(2, mapState.cityId, mapState.buildingId); });
+
+/* 钻入/钻出（带 380ms 缓动过渡） */
+function drillTo(level, cityId=null, buildingId=null){
+  if (level===mapState.level && cityId===mapState.cityId && buildingId===mapState.buildingId) return;
+  // 计算目标 cam
+  let tx=.5, ty=.5, tz=1;
+  if (level===1 && cityId){
+    const c = CITIES.find(c=>c.id===cityId);
+    if (c){ tx=c.x; ty=c.y; tz=4.2; }
+  } else if (level===2 && cityId && buildingId){
+    const c = CITIES.find(c=>c.id===cityId);
+    const b = c && BUILDINGS[c.id] && BUILDINGS[c.id].find(b=>b.id===buildingId);
+    if (b){ tx=b.x; ty=b.y; tz=8.5; }
+    else if (c){ tx=c.x; ty=c.y; tz=4.2; }
+  } else if (level===0){
+    // 钻回世界：尝试聚焦当前所在城市/建筑
+    if (mapState.level>=1 && mapState.cityId){
+      const c = CITIES.find(c=>c.id===mapState.cityId);
+      if (c){ tx=c.x; ty=c.y; tz=1.4; }
+    }
+  }
+  // 标记已访问
+  if (level===0 && mapState.level===1 && mapState.cityId) visited.add('city:'+mapState.cityId);
+  if (level===1 && mapState.level===2 && mapState.cityId && mapState.buildingId) visited.add('building:'+mapState.cityId+':'+mapState.buildingId);
+  if (level===0 && mapState.level===2 && mapState.cityId && mapState.buildingId){ visited.add('building:'+mapState.cityId+':'+mapState.buildingId); visited.add('city:'+mapState.cityId); }
+  // 记录新层级
+  mapState.level = level;
+  mapState.cityId = (level>=1) ? cityId : null;
+  mapState.buildingId = (level===2) ? buildingId : null;
+  // 注意：钻入是导航动作，不修改工程数据 —— 不应触发 markDirty
+  // 动画过渡 cam（380ms ease-out）—— 与全站动效语言一致（cubic-bezier(.2,0,.2,1)）
+  animateCam(tx, ty, tz, 380);
+  // 同步面包屑与标记
+  renderCrumb();
+  renderDrill();
+  // 同步事件高亮（HUD）
+  const cityLabel = (mapState.level>=1) ? (CITIES.find(c=>c.id===mapState.cityId)||{}).name : null;
+  document.getElementById('sitHudName').textContent = cityLabel || '四渡赤水';
+  document.getElementById('sitHudTail').textContent = cityLabel ? '进入中' : '正在发生';
+  toast('进入层别 '+(level+1)+'/3', 'ok');
+}
+
+function easeOutCubic(t){ return 1 - Math.pow(1-t, 3); }
+function animateCam(toX, toY, toZ, ms){
+  const fromX = cam.x, fromY = cam.y, fromZ = cam.zoom;
+  const t0 = performance.now();
+  function step(ts){
+    const t = Math.min(1, (ts-t0)/ms);
+    const k = easeOutCubic(t);
+    cam.x = fromX + (toX-fromX)*k;
+    cam.y = fromY + (toY-fromY)*k;
+    cam.zoom = fromZ + (toZ-fromZ)*k;
+    draw(); drawMini();
+    if (t < 1) requestAnimationFrame(step);
+    else { /* 最终有命中，重画一次确保 z 覆盖全图 */ draw(); drawMini(); }
+  }
+  requestAnimationFrame(step);
+}
+
+/* 钻入标记层：渲染菱形（世界级渲染城市 / 城市级渲染建筑）
+   位置由 updateDrillPositions() 在每次 draw() 时按 w2s() 计算 —— 
+   跟随相机，与地图元素的视觉锚点保持一致。 */
+const drillLayer = document.getElementById('drillLayer');
+const drillData = [];   // 当前层级下所有钻入标记的「世界坐标 + 元数据」
+function renderDrill(){
+  drillLayer.innerHTML = '';
+  drillData.length = 0;
+  if (mapState.level===0){
+    CITIES.forEach(c=>{
+      drillData.push({ kind:'city', id:c.id, x:c.x, y:c.y, name:c.name });
+      const b = document.createElement('button');
+      b.className = 'drill-marker'; b.dataset.kind = 'city';
+      b.title = c.name + ' · 双击钻入';
+      b.innerHTML = '<i class="drill-diamond"></i><span class="drill-lbl">'+c.name+'</span>';
+      b.setAttribute('aria-label', '钻入 '+c.name);
+      if (visited.has('city:'+c.id)) b.dataset.visited = '1';
+      b.addEventListener('dblclick', e=>{ e.stopPropagation(); drillTo(1, c.id); });
+      drillLayer.appendChild(b);
+    });
+  } else if (mapState.level===1 && mapState.cityId){
+    const list = BUILDINGS[mapState.cityId] || [];
+    list.forEach(b=>{
+      drillData.push({ kind:'building', id:b.id, x:b.x, y:b.y, name:b.name });
+      const m = document.createElement('button');
+      m.className = 'drill-marker'; m.dataset.kind = 'building';
+      m.title = b.name + ' · 双击钻入';
+      m.innerHTML = '<i class="drill-diamond"></i><span class="drill-lbl">'+b.name+'</span>';
+      m.setAttribute('aria-label', '钻入 '+b.name);
+      if (visited.has('building:'+mapState.cityId+':'+b.id)) m.dataset.visited = '1';
+      m.addEventListener('dblclick', e=>{ e.stopPropagation(); drillTo(2, mapState.cityId, b.id); });
+      drillLayer.appendChild(m);
+    });
+  }
+  updateDrillPositions();
+  // 建筑内层不渲染钻入标记（v0.2 不预留第 4 级；想加时再补 FLOORS 数据）
+}
+
+/* 按当前相机把每个标记摆到屏幕坐标 */
+function updateDrillPositions(){
+  if (!view.w) return;
+  const markers = drillLayer.querySelectorAll('.drill-marker');
+  drillData.forEach((d, i)=>{
+    const s = w2s(d.x, d.y);
+    const m = markers[i]; if (!m) return;
+    // 视口外的不显示（避免干扰 + 性能）
+    const onScreen = s.x >= -8 && s.x <= view.w + 8 && s.y >= -8 && s.y <= view.h + 8;
+    m.style.left = s.x + 'px';
+    m.style.top  = s.y + 'px';
+    m.style.display = onScreen ? '' : 'none';
+  });
+}
+
+/* ==========================================================================
+   draw() 按层级走不同绘图路径
+   ========================================================================== */
+// 楼层绘制辅助：仅建筑级调用
+function drawFloor(rooms){
+  rooms.forEach(r=>{
+    const a = w2s(r.x - r.w/2, r.y - r.h/2);
+    const b = w2s(r.x + r.w/2, r.y + r.h/2);
+    ctx.save();
+    ctx.fillStyle = 'rgba(212,196,160,.18)';
+    ctx.strokeStyle = cssVar('--ui-accent');
+    ctx.lineWidth = Math.max(1.4, tile()*0.004);
+    ctx.beginPath();
+    ctx.rect(Math.min(a.x,b.x), Math.min(a.y,b.y), Math.abs(b.x-a.x), Math.abs(b.y-a.y));
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = mapTextColor();
+    ctx.font = '600 '+Math.max(10, tile()*0.025)+'px '+cssVar('--font-ui');
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(r.name, (a.x+b.x)/2, (a.y+b.y)/2);
+    ctx.restore();
+  });
+}
+function drawCityGrid(cityId){
+  const c = CITIES.find(c=>c.id===cityId);
+  if (!c) return;
+  const t = tile();
+  // 街区背景（圆形城区）
+  const s = w2s(c.x, c.y);
+  ctx.save();
+  const r = t * 0.34;
+  const grad = ctx.createRadialGradient(s.x, s.y, r*0.2, s.x, s.y, r);
+  grad.addColorStop(0, 'rgba(180,160,120,.34)');
+  grad.addColorStop(1, 'rgba(180,160,120,.04)');
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, 7); ctx.fill();
+  ctx.strokeStyle = 'rgba(232,220,192,.55)';
+  ctx.lineWidth = Math.max(1.2, t*0.0035);
+  ctx.setLineDash([6,5]); ctx.stroke(); ctx.setLineDash([]);
+  // 街道格网
+  ctx.strokeStyle = 'rgba(168,154,128,.4)';
+  ctx.lineWidth = 1;
+  for (let i=-3; i<=3; i++){
+    const x = s.x + i*(r/3);
+    ctx.beginPath(); ctx.moveTo(x, s.y - r); ctx.lineTo(x, s.y + r); ctx.stroke();
+    const y = s.y + i*(r/3);
+    ctx.beginPath(); ctx.moveTo(s.x - r, y); ctx.lineTo(s.x + r, y); ctx.stroke();
+  }
+  // 城市名 + 一句简介（顶部居中）
+  ctx.fillStyle = mapTextColor();
+  ctx.font = '700 '+Math.max(13, t*0.05)+'px '+cssVar('--font-ui');
+  ctx.textAlign='center'; ctx.textBaseline='top';
+  ctx.fillText(c.name, s.x, s.y - r - 24);
+  ctx.font = '400 '+Math.max(11, t*0.035)+'px '+cssVar('--font-ui');
+  ctx.fillStyle = cssVar('--ui-tx-3');
+  const text = ctx.measureText(c.blurb).width > r*2 ? c.blurb.slice(0,18)+'…' : c.blurb;
+  ctx.fillText(text, s.x, s.y - r - 6);
+  ctx.restore();
+}
+
+/* 在 draw() 末尾追加层级专属绘制（在 ctx.restore 之前调用） */
+function drawLevelOverlay(){
+  if (mapState.level===1 && mapState.cityId){
+    drawCityGrid(mapState.cityId);
+  } else if (mapState.level===2 && mapState.cityId && mapState.buildingId){
+    // 显示当前关卡房间
+    const list = FLOORS[mapState.buildingId] || [];
+    if (list.length) drawFloor(list);
+    // 退出指示器（无房间数据时显示文字提示）
+    else {
+      const t = tile();
+      ctx.save();
+      ctx.fillStyle = mapTextColor();
+      ctx.font = '600 '+Math.max(13, t*0.04)+'px '+cssVar('--font-ui');
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      const b = (BUILDINGS[mapState.cityId]||[]).find(x=>x.id===mapState.buildingId);
+      ctx.fillText((b?b.name:'建筑')+' · 室内布局待补', view.w/2, view.h/2);
+      ctx.font = '400 '+Math.max(11, t*0.025)+'px '+cssVar('--font-ui');
+      ctx.fillStyle = cssVar('--ui-tx-3');
+      ctx.fillText('点击面包屑上级可退出', view.w/2, view.h/2 + Math.max(18, t*0.06));
+      ctx.restore();
+    }
+  }
+}
+
+/* ---------- 沉浸模式 ---------- */
+let immersive = false;
+document.getElementById('btnImm').addEventListener('click', toggleImmersive);
+function toggleImmersive(){
+  immersive = !immersive;
+  /* 沉浸模式只隐「编辑面板」，保留时间轴与日期 chip——
+     它们是播放时的唯一时间锚点（设计规范 §6.4）。
+     若一并隐藏，作者播放时将无法判断当前处于第几天。 */
+  const hide = immersive ? '.panel, .demo' : '';
+  document.querySelectorAll('.panel, .timeline, .demo, .map-hud, .crumb, .drill-layer').forEach(el=>{
+    const shouldHide = !!el.matches(hide);
+    /* 时间轴保留但降到 55% —— 它是"看地图时的时间参照"，
+       但不该和地图抢视觉重心。 */
+    const dim = immersive && el.classList.contains('timeline');
+    el.style.transition = 'opacity .2s, transform .2s';
+    el.style.opacity = shouldHide ? '0' : (dim ? '.55' : '1');
+    el.style.pointerEvents = shouldHide ? 'none' : 'auto';
+    el.style.transform = shouldHide ? 'scale(.98)' : 'none';
+  });
+  document.getElementById('btnImm').classList.toggle('on', immersive);
+  toast(immersive ? '沉浸模式：仅地图。Tab 退出' : '已退出沉浸模式');
+}
+</script>
+</body>
+</html>
