@@ -12,7 +12,10 @@
 //! `gui.rs` 是 Bevy 装配层（相机、地形、投影）；界面外壳的装配与之正交，
 //! 拆开后两侧各自可测、可替换（D2：换 Theme Pack 不该动装配层）。
 
+use std::path::PathBuf;
+
 use bevy::prelude::*;
+use bevy::tasks::{AsyncComputeTaskPool, Task};
 use bevy_egui::EguiContexts;
 
 use crate::state::{DrillState, Panel, PanelState, RecentProjects, ViewState, WorldProjection};
@@ -32,12 +35,14 @@ pub fn register(app: &mut App) {
         .init_resource::<DrillState>()
         .init_resource::<RecentProjects>()
         .init_resource::<LayoutFile>()
+        .init_resource::<OpenProjectTask>()
         // 根图落位必须早于所有读 `DrillState` 的 UI 系统（同一 `Update` 里靠顺序保证）。
         .add_systems(
             PreUpdate,
             (
                 seed_drill_state,
                 hotkeys.after(bevy_egui::EguiPreUpdateSet::InitContexts),
+                poll_open_project_dialog,
             ),
         )
         .add_systems(
@@ -221,6 +226,94 @@ impl ShellNotice {
     }
 }
 
+/// 「打开工程…」对话框的进行中任务（v0.2 §A）。
+///
+/// 入口（菜单 / `Ctrl+O` / 命令面板）把用户想打开工程的意图交给 [`Self::spawn`]
+/// ——`rfd::AsyncFileDialog` 的 future 在 `AsyncComputeTaskPool` 上跑，不阻塞渲染。
+/// 每帧的 [`poll_open_project_dialog`] 拿这个资源判 `is_finished()`；用户关掉
+/// 对话框那一刻 `Task` 完成，`block_on` 拿到 `Option<PathBuf>`，再走
+/// [`load_project_into`]。
+///
+/// ## 为什么单独一个资源（不塞进 `CommandPalette`）
+///
+/// `pending` 是「下一个要执行的命令」，生命周期一帧；这里是要「等用户回话」，
+/// 跨帧存活，且同一时间只能有一个对话框在跑——独立的资源类型能让这两件事互不
+/// 污染，也方便测试时直接 `let mut t = OpenProjectTask::default();`。
+#[derive(Resource, Default)]
+pub struct OpenProjectTask {
+    task: Option<Task<Option<PathBuf>>>,
+}
+
+impl OpenProjectTask {
+    /// 起一个原生目录选择对话框。重复点击会**取消**上一次未完成的对话框
+    /// ——只保留最新的意图（与 macOS Finder、Windows 资源管理器的行为一致）。
+    pub fn spawn(&mut self) {
+        let pool = AsyncComputeTaskPool::get();
+        let task = pool.spawn(async move {
+            // `set_title` 让 Windows / macOS / Linux 三大平台都显示一致的话术；
+            // rfd 在 WASM 上 `pick_folder` 不支持（见 crate 文档），但本工程
+            // 不打 WASM，无需在该资源管理形式分支里设防。
+            rfd::AsyncFileDialog::new()
+                .set_title("选择工程目录（含 world.yaml 的目录）")
+                .pick_folder()
+                .await
+                .map(|h| h.path().to_path_buf())
+        });
+        // 旧任务直接 `drop`：它会自动取消（`Task<T>::Drop` 文档），
+        // 不会再回写到一个已被替换的 `task`，不会与新对话框争抢。
+        self.task = Some(task);
+    }
+
+    /// 每帧轮询一次：完成就 `block_on` 取结果，否则返回 `None`。
+    ///
+    /// `block_on` 只在用户关掉对话框的**那一帧**执行，瞬时阻塞可接受
+    /// （用户此刻正等着反馈，渲染线程卡几毫秒不显违和）。
+    fn take_if_finished(&mut self) -> Option<Option<PathBuf>> {
+        let task = self.task.as_ref()?;
+        if !task.is_finished() {
+            return None;
+        }
+        // `Task<T>` 实现了 `Future`（Unpin），可以直接 `block_on`。
+        let task = self.task.take()?;
+        Some(bevy::tasks::block_on(task))
+    }
+}
+
+/// 每帧看一眼「打开工程」对话框是否回来了（v0.2 §A）。
+///
+/// 顺序：在 `seed_drill_state` 之后、`hotkeys` 之后——`hotkeys` 可能
+/// 会在这一帧把 `OpenProjectTask::spawn` 叫起来，本系统再读同一个资源
+/// 至少要等到写入完成之后；同一 `PreUpdate` 内系统顺序由 `.after(...)` 声明，
+/// 这里靠「放在 `hotkeys` 之后」+「下一帧才 `block_on`」共同保证不读到半截状态。
+fn poll_open_project_dialog(
+    mut task: ResMut<OpenProjectTask>,
+    mut projection: ResMut<WorldProjection>,
+    mut drill: ResMut<DrillState>,
+    mut recents: ResMut<RecentProjects>,
+    mut notice: ResMut<ShellNotice>,
+    time: Res<Time>,
+) {
+    let Some(outcome) = task.take_if_finished() else {
+        return;
+    };
+    let frame = (time.elapsed_secs() * 60.0) as u64;
+    // 用户选了目录并确认。目录用 `display()` 直接给人类读——
+    // 这里不进 YAML，路径含空格 / 非 ASCII 时不要做 `as_ref` 路径切片，
+    // 否则 Windows 的 `\\?\` 前缀会被吞。
+    // 用户点了「取消」（`None`）：静默。不刷回执，免得状态栏常驻一条「已取消」。
+    if let Some(path) = outcome {
+        let dir = path.to_string_lossy().into_owned();
+        load_project_into(
+            &dir,
+            &mut projection,
+            &mut drill,
+            &mut recents,
+            &mut notice,
+            frame,
+        );
+    }
+}
+
 /// 从磁盘加载一个工程并替换当前工作副本（v0.2 §A「切换最近工程」）。
 ///
 /// 成功后必须同时做三件事，缺一不可：
@@ -264,15 +357,14 @@ fn load_project_into(
 ///
 /// ## 能力边界（如实回执，不假装成功）
 ///
-/// 本版本**没有文件对话框**：引入 `rfd` 之类的新依赖需要走 AGENTS §9 的审视
-/// （默认立场是拒绝），不在本次 UI 任务范围内。因此：
-///
 /// | 命令 | 现状 |
 /// |---|---|
+/// | 打开工程… | ✅ 原生目录选择对话框（`rfd`），加载走 [`wv_io::Project::open`] |
 /// | 打开最近工程 | ✅ 真加载（`wv_io::Project::open`） |
 /// | 新建工程 | ✅ 内存中新建空白工程（尚未落盘） |
 /// | 关闭工程 | ✅ 清空工作副本 |
-/// | 打开工程… / 另存为… | ⛔ 需要文件对话框 → 提示走「最近工程」或 `wv gui <目录>` |
+/// | 另存为… | ⛔ 需要文件对话框 → 提示走 `Ctrl+S`（v0.3 一起补） |
+/// | 导出… | ⛔ 导出格式未定（见 v0.2 §G） |
 /// | 项目设置 | ⛔ 面板未实现（v0.3） |
 /// | 保存 | ⛔ **`wv-io` 目前只有读取路径，没有 `save_world`** → 提示并保持脏标记 |
 ///
@@ -284,6 +376,7 @@ fn dispatch_project_command(
     drill: &mut DrillState,
     recents: &mut RecentProjects,
     notice: &mut ShellNotice,
+    open_task: &mut OpenProjectTask,
     frame: u64,
 ) -> bool {
     match id {
@@ -317,10 +410,10 @@ fn dispatch_project_command(
             true
         }
         CommandId::OpenProject => {
-            notice.info(
-                "打开工程需要文件对话框：本版本请从「最近工程」切换，或用 `wv gui <工程目录>` 启动",
-                frame,
-            );
+            // 发起系统目录选择对话框（不阻塞）；选完路径由
+            // `poll_open_project_dialog` 收口、复用 `OpenRecentProject` 的同一条
+            // `load_project_into` 加载路径——结果就只是「多了一条最近工程」。
+            open_task.spawn();
             true
         }
         CommandId::SaveProjectAs => {
@@ -377,6 +470,7 @@ fn apply_pending_commands(
     mut notice: ResMut<ShellNotice>,
     mut edit: ResMut<crate::editing::EditHistory>,
     mut tex: ResMut<crate::terrain_view::TerrainTexture>,
+    mut open_task: ResMut<OpenProjectTask>,
     time: Res<Time>,
 ) {
     let Some(id) = palette.pending.take() else {
@@ -392,6 +486,7 @@ fn apply_pending_commands(
         &mut drill,
         &mut recents,
         &mut notice,
+        &mut open_task,
         frame,
     ) {
         return;
@@ -538,5 +633,32 @@ mod tests {
         assert_eq!(c.theme, UiTheme::Light);
         c.theme = c.theme.toggled();
         assert_eq!(c.theme, UiTheme::Dark);
+    }
+
+    #[test]
+    fn open_project_task_is_idle_by_default() {
+        // 没有 `spawn()` 过的任务，轮询必须给 `None`，否则「打开工程」会被
+        // 默认状态误触发。
+        let mut t = OpenProjectTask::default();
+        assert!(t.task.is_none());
+        assert!(t.take_if_finished().is_none());
+    }
+
+    #[test]
+    fn open_project_task_does_not_block_when_dialog_is_still_open() {
+        // 模拟「对话框还开着」——用一个 pending 的 future 装进 task 槽位。
+        // `take_if_finished` 必须立刻返回 `None`，**不能**阻塞等它完成。
+        // `get_or_init`：裸单测没有 TaskPoolPlugin，`get()` 会 panic；
+        // 应用运行时 Bevy 已初始化，这里 init 是幂等的。
+        let pool = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
+        let pending = pool.spawn(async move { std::future::pending::<Option<PathBuf>>().await });
+        let mut t = OpenProjectTask {
+            task: Some(pending),
+        };
+        // 此刻 future 永远 pending，is_finished 一定为 false。
+        assert!(
+            t.take_if_finished().is_none(),
+            "未关闭的对话框不应让 UI 线程阻塞"
+        );
     }
 }

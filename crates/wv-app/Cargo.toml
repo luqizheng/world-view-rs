@@ -10,7 +10,7 @@ description = "World View 应用层：Bevy 渲染、UI、输入，转发编辑�
 # 原因：Bevy 依赖树庞大，阶段一（数据层打底）不应对其产生构建依赖。
 [features]
 default = []
-app = ["dep:bevy", "dep:bevy_egui"]
+app = ["dep:bevy", "dep:bevy_egui", "dep:rfd"]
 
 [dependencies]
 wv-core = { workspace = true }
@@ -22,6 +22,7 @@ serde = { workspace = true }
 serde_yaml = { workspace = true }
 bevy = { workspace = true, optional = true }
 bevy_egui = { workspace = true, optional = true }
+rfd = { workspace = true, optional = true }
 
 [[bin]]
 name = "wv"
