@@ -211,6 +211,14 @@ impl Project {
             .map(|r| crate::terrain_bin::read_terrain(&self.root, r))
             .transpose()?;
 
+        // 势力：路线图 S12（2026-10-12）。
+        // - `factions/`：每势力一个 YAML（§4.5）。
+        // - `geometry/faction/`：每势力几何一个 YAML（`GeometrySpan`）。
+        // 两个目录都**可缺失**——S12 是新维度，旧工程直接得空 Vec。
+        let factions: Vec<wv_core::Faction> = load_dir(&self.root, "factions")?;
+        let faction_geometry: Vec<wv_core::map::GeometrySpan> =
+            load_dir(&self.root, "geometry/faction")?;
+
         Ok(World {
             meta: Some(self.meta.clone()),
             maps,
@@ -223,6 +231,8 @@ impl Project {
             units,
             tracks,
             narrations,
+            factions,
+            faction_geometry,
             terrain,
         })
     }

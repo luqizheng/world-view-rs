@@ -213,6 +213,8 @@ pub fn run(config: AppConfig) {
             // 矢量叠加层（道路 + POI）：在 compute_projection 之后跑，
             // 把 frame.road_segments / frame.place_dots 写到 Mesh2d 实体。
             vector_layers::sync_vector_layers,
+            // 势力多边形叠加层（S12 v0.1）：在矢量层之后、地图外框之前。
+            faction_overlays::sync_faction_overlays,
             // 地图外框 + 1/4 幅面参考网格：在 sync_terrain_sprite 之后跑（外框需地形尺寸）。
             map_frame::sync_map_frame,
             // 笔刷光标：在 track_cursor_world 之后跑，屏幕恒定粗细。

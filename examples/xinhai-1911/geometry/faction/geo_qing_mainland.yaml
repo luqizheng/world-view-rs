@@ -1,0 +1,13 @@
+map: map_world
+owner: faction_qing
+from: 1
+to: 285
+geometry:
+  - 700.0
+  - 900.0
+  - 2200.0
+  - 900.0
+  - 2200.0
+  - 2400.0
+  - 700.0
+  - 2400.0

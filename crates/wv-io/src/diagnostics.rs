@@ -427,10 +427,7 @@ mod tests {
                 w: None,
                 h: None,
             }),
-            participants: who
-                .iter()
-                .map(|s| Id::new_unchecked(*s))
-                .collect(),
+            participants: who.iter().map(|s| Id::new_unchecked(*s)).collect(),
             narrative: None,
             outcome: None,
             effects: vec![],
@@ -483,7 +480,10 @@ mod tests {
         // fixture 中 A→B 实际需 30 天（10 km/h × 8 h/24 × 100 km），把 gap 调到 50。
         let w = world_with(
             fixture_graph(),
-            vec![ev("e1", 1, 5, "p_a", &["x"]), ev("e2", 55, 56, "p_b", &["x"])],
+            vec![
+                ev("e1", 1, 5, "p_a", &["x"]),
+                ev("e2", 55, 56, "p_b", &["x"]),
+            ],
         );
         let d = derive_hints(&w);
         let travel = d
@@ -547,10 +547,7 @@ mod tests {
     fn travel_feasibility_skipped_when_prev_to_open() {
         let mut e1 = ev("e1", 1, 5, "p_a", &["x"]);
         e1.span.to = None;
-        let w = world_with(
-            fixture_graph(),
-            vec![e1, ev("e2", 7, 8, "p_b", &["x"])],
-        );
+        let w = world_with(fixture_graph(), vec![e1, ev("e2", 7, 8, "p_b", &["x"])]);
         let d = derive_hints(&w);
         let travel = d
             .items
@@ -644,5 +641,37 @@ mod tests {
                 .map(|s| s.vehicle.as_str())
                 .collect::<Vec<_>>()
         );
+    }
+
+    /// 阶段 S12 v0.1：xinhai-1911 工程应加载 factions + faction_geometry 两层目录，
+    /// 且 `factions_at` 在关键日期能筛出应有的势力。
+    ///
+    /// 辛亥年（day 283，武昌起义）前后是关键断面：早期只有清廷，晚期清 + 革命并存。
+    #[test]
+    fn xinhai_loads_factions_and_geometry_at_key_days() {
+        let path = std::path::Path::new("../examples/xinhai-1911");
+        if !path.is_dir() {
+            return;
+        }
+        let project = crate::project::Project::open(path).expect("工程加载失败");
+        let world = project.load_world().expect("加载世界失败");
+        // 两层目录都应非空。
+        assert!(world.factions.len() >= 2, "示例工程应至少 2 个势力");
+        assert!(
+            world.faction_geometry.len() >= 2,
+            "示例工程应至少 2 段势力几何"
+        );
+        // 第 100 天：只有清廷。
+        let map = wv_core::id::Id::new_unchecked("map_world");
+        let early = wv_core::factions_at(&world, &map, 100);
+        assert_eq!(early.len(), 1, "起义前应只有清廷");
+        assert_eq!(early[0].0.id.as_str(), "faction_qing");
+        // 第 283 天：武昌起义，清 + 革命都生效。
+        let mid = wv_core::factions_at(&world, &map, 283);
+        assert_eq!(mid.len(), 2, "起义当日双方都生效");
+        // 第 300 天：清廷 [1, 285) 已结束，革命军（开放）仍在。
+        let late = wv_core::factions_at(&world, &map, 300);
+        assert_eq!(late.len(), 1, "清廷结束日之后只剩革命军");
+        assert_eq!(late[0].0.id.as_str(), "faction_rev");
     }
 }

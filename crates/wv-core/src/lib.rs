@@ -11,6 +11,7 @@ pub mod color;
 pub mod distance;
 pub mod encounter;
 pub mod error;
+pub mod faction;
 pub mod geometry;
 pub mod id;
 pub mod map;
@@ -24,6 +25,7 @@ pub use character::Character;
 pub use encounter::{detect_encounter_hints, EncounterHint, EncounterInput, HintSeverity};
 pub use error::{CoreError, CoreResult};
 pub use event::{Event, EventLocation};
+pub use faction::{factions_at, Faction};
 pub use id::{Id, IdError};
 pub use narration::Narration;
 pub use situation::{Situation, SituationStep};
@@ -86,6 +88,16 @@ pub struct World {
     pub tracks: Vec<track::Track>,
     /// 旁白（独立叙事实体，事件只存 ID 引用；2026-01 用户裁定）。
     pub narrations: Vec<narration::Narration>,
+    /// 势力本体（路线图 S12，2026-10-12）。
+    ///
+    /// §4.5 原则「每实体一文件」：每个势力一个 `factions/<id>.yaml`。
+    /// 势力占据地图的几何**不**内联在这里——见下方的 `faction_geometry`。
+    pub factions: Vec<faction::Faction>,
+    /// 势力的几何（含时间区间，§4.1 P6/P7）。
+    ///
+    /// `GeometrySpan.owner` 引用 `factions` 中的 `Faction.id`。
+    /// 想要「某时刻某地图上所有势力 + 多边形」走 [`crate::factions_at`]。
+    pub faction_geometry: Vec<map::GeometrySpan>,
     /// 主地形栅格网格。
     ///
     /// 注意：`wv-core` **不认识** `wv_terrain::TerrainGrid`（不依赖 wv-terrain，基线 §2.1）。

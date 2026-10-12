@@ -235,8 +235,13 @@ pub struct GeometrySpan {
 }
 
 /// 几何数据载体。具体编码是待裁问题，这里先给出最小可用表达。
+///
+/// **`#[serde(untagged)]` 选取**：YAML 写起来最自然——
+/// `geometry: [x0, y0, x1, y1, ...]`（裸数组）直接被识别为 `Polygon`。
+/// 外部标签（默认）会要求 `geometry: !polygon [...]` 或 `geometry: { polygon: [...] }`，
+/// 不可读且对作者不友好。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(untagged)]
 pub enum GeometryData {
     /// 点列坐标，扁平存储 `[x0, y0, x1, y1, ...]`。
     Points(Vec<f32>),

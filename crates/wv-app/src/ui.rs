@@ -1311,6 +1311,7 @@ pub fn panel_layers(
             ui.checkbox(&mut view.events_visible, "事件点");
             ui.checkbox(&mut view.tracks_visible, "轨迹");
             ui.checkbox(&mut view.roads_visible, "道路");
+            ui.checkbox(&mut view.factions_visible, "势力");
         },
     );
 }

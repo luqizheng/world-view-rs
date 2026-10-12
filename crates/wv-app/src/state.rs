@@ -141,6 +141,8 @@ pub struct ViewState {
     pub roads_visible: bool,
     /// 地点（POI）图层是否可见：锚定地点的点标（矢量图层底子）。
     pub places_visible: bool,
+    /// 势力多边形叠加层是否可见（S12）。
+    pub factions_visible: bool,
     /// 鼠标在地图上的世界坐标（顶栏坐标显示用）。
     pub cursor_world: Option<Vec2>,
     /// 当前地图 ID。
@@ -158,6 +160,7 @@ impl Default for ViewState {
             tracks_visible: true,
             roads_visible: true,
             places_visible: true,
+            factions_visible: true,
             cursor_world: None,
             current_map: "world_main".into(),
         }
