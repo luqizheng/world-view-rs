@@ -1810,11 +1810,36 @@ pub fn panel_validation(
                             ui.horizontal(|ui| {
                                 badge(ui, &shell, BadgeKind::Err, "E");
                                 ui.add_space(space::XS);
-                                ui.label(
-                                    egui::RichText::new(&err.message)
-                                        .size(shell.scale.small)
-                                        .color(shell.t1()),
-                                );
+                                // 阶段八 §A 延展：错误行与提示行**同形**——
+                                // 有 anchor 就可点。错误**不**阻止保存（V1 守约），
+                                // 但「让作者能跳过去看一眼」是与提示同级的体面。
+                                if let Some(anchor) = &err.anchor {
+                                    if ui
+                                        .add(
+                                            egui::Button::new(
+                                                egui::RichText::new(&err.message)
+                                                    .size(shell.scale.small)
+                                                    .color(shell.t1()),
+                                            )
+                                            .frame(false),
+                                        )
+                                        .clicked()
+                                    {
+                                        validation_actions::jump_to_anchor_now(
+                                            &projection,
+                                            &mut drill,
+                                            &mut view,
+                                            &mut playback,
+                                            anchor,
+                                        );
+                                    }
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new(&err.message)
+                                            .size(shell.scale.small)
+                                            .color(shell.t1()),
+                                    );
+                                }
                             });
                         }
                     });
