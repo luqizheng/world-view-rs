@@ -48,6 +48,7 @@ pub fn commit_stroke_on_release(
     mut projection: ResMut<WorldProjection>,
     mut tex: ResMut<TerrainTexture>,
     mut edit: ResMut<EditHistory>,
+    mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
 ) {
     if !buttons.just_released(MouseButton::Left) {
         return;
@@ -98,6 +99,8 @@ pub fn commit_stroke_on_release(
             // 增量重传（优化项 3d）：只标笔触影响矩形为脏，
             // `flush_terrain_texture` 会走 [`crate::terrain_view::patch_terrain_image`] 增量 patch。
             tex.mark_dirty(dirty_rect);
+            // 地形 cells 改了 → 派生诊断（事件位移 / 相遇）需要重算。
+            diagnostics.needs_diagnose = true;
         }
         Err(e) => {
             bevy::log::warn!("编辑命令失败: {e}");
@@ -261,6 +264,31 @@ pub fn apply_history_command(
         }),
         Err(e) => Err(format!("撤销/重做失败: {e}")),
     }
+}
+
+/// 阶段六收尾：刷新 `ProjectDiagnostics`。
+///
+/// **触发条件**：`ProjectDiagnostics::needs_diagnose` 为 true。
+/// 三个 set 点：`load_project_into`（加载后立刻灌过，标志被清回 false，
+/// 这里只在新工程/编辑/撤销时跑）、`commit_stroke_on_release`、
+/// `cmd_dispatch`（撤销/重做成功时）。
+///
+/// **何时跑**：Update 阶段，**早于**校验面板所在的 UI 帧。
+/// 这样面板当帧读到的就是新结果（避免半帧错位）。
+///
+/// **节流**：当前不做节流——`derive_hints` 在本工程规模（≤ 几百事件）单次
+/// 亚毫秒，无须防抖。若规模上来再加重算预算。
+pub fn refresh_project_diagnostics(
+    projection: Res<WorldProjection>,
+    mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
+) {
+    if !diagnostics.needs_diagnose {
+        return;
+    }
+    let d = wv_io::diagnostics::derive_hints(&projection.world);
+    diagnostics.last_count = d.items.len();
+    diagnostics.diagnostics = d;
+    diagnostics.needs_diagnose = false;
 }
 
 #[cfg(test)]

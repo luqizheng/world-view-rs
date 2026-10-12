@@ -309,6 +309,7 @@ fn poll_open_project_dialog(
             &mut drill,
             &mut recents,
             &mut notice,
+            &mut diagnostics,
             frame,
         );
     }
@@ -327,6 +328,7 @@ fn load_project_into(
     drill: &mut DrillState,
     recents: &mut RecentProjects,
     notice: &mut ShellNotice,
+    diagnostics: &mut crate::state::ProjectDiagnostics,
     frame: u64,
 ) {
     match wv_io::Project::open(dir).and_then(|p| p.load_world()) {
@@ -344,6 +346,13 @@ fn load_project_into(
             // §A：切工程要重置地图层级并清访问痕迹（`reset_to_world` 两者都做）。
             drill.reset_to_world();
             drill.ensure_root(&projection.world);
+            // 加载成功：立刻灌一次诊断，避免面板首帧空白。
+            // 系统链上 `refresh_project_diagnostics` 也会重算（并清 `needs_diagnose`），
+            // 但本帧若不立刻灌，UI 会先看到旧工程的诊断，视觉闪烁。
+            let d = wv_io::diagnostics::derive_hints(&projection.world);
+            diagnostics.last_count = d.items.len();
+            diagnostics.diagnostics = d;
+            diagnostics.needs_diagnose = false;
             notice.info(format!("已加载工程「{name}」"), frame);
         }
         Err(e) => {
@@ -377,6 +386,7 @@ fn dispatch_project_command(
     recents: &mut RecentProjects,
     notice: &mut ShellNotice,
     open_task: &mut OpenProjectTask,
+    diagnostics: &mut crate::state::ProjectDiagnostics,
     frame: u64,
 ) -> bool {
     match id {
@@ -385,7 +395,7 @@ fn dispatch_project_command(
             match list.get(*i as usize) {
                 Some(entry) => {
                     let dir = entry.dir.clone();
-                    load_project_into(&dir, projection, drill, recents, notice, frame);
+                    load_project_into(&dir, projection, drill, recents, notice, diagnostics, frame);
                 }
                 None => notice.error("最近工程列表已变化，请重开菜单", frame),
             }
@@ -397,6 +407,10 @@ fn dispatch_project_command(
             projection.dirty = true;
             projection.load_error = None;
             drill.reset_to_world();
+            // 新建空白工程：清空诊断并打上重算标（避免显示旧工程的提示）。
+            diagnostics.diagnostics = wv_io::diagnostics::Diagnostics::default();
+            diagnostics.last_count = 0;
+            diagnostics.needs_diagnose = true;
             notice.info("已新建空白工程（尚未落盘）", frame);
             true
         }
@@ -406,6 +420,10 @@ fn dispatch_project_command(
             projection.dirty = false;
             projection.load_error = None;
             drill.reset_to_world();
+            // 关闭工程：与新建同样清诊断。
+            diagnostics.diagnostics = wv_io::diagnostics::Diagnostics::default();
+            diagnostics.last_count = 0;
+            diagnostics.needs_diagnose = true;
             notice.info("已关闭工程", frame);
             true
         }
@@ -471,6 +489,7 @@ fn apply_pending_commands(
     mut edit: ResMut<crate::editing::EditHistory>,
     mut tex: ResMut<crate::terrain_view::TerrainTexture>,
     mut open_task: ResMut<OpenProjectTask>,
+    mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
     time: Res<Time>,
 ) {
     let Some(id) = palette.pending.take() else {
@@ -487,6 +506,7 @@ fn apply_pending_commands(
         &mut recents,
         &mut notice,
         &mut open_task,
+        &mut diagnostics,
         frame,
     ) {
         return;
@@ -527,7 +547,14 @@ fn apply_pending_commands(
                 &mut tex,
                 &playback,
             ) {
-                Ok(msg) => notice.info(msg, frame),
+                Ok(msg) => {
+                    // 撤销/重做后世界可能改——诊断需要重算。
+                    // `Ok(false)`（无可撤销/重做）时不动，避免无谓重算。
+                    if msg != "没有可撤销的操作" && msg != "没有可重做的操作" {
+                        diagnostics.needs_diagnose = true;
+                    }
+                    notice.info(msg, frame);
+                }
                 Err(msg) => notice.error(msg, frame),
             }
         }

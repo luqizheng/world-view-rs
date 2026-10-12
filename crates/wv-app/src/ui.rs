@@ -1577,9 +1577,13 @@ pub fn panel_validation(
     shell_cfg: Res<UiShellConfig>,
     layouts: Res<LayoutFile>,
     mut panels: ResMut<PanelState>,
+    diagnostics: Res<crate::state::ProjectDiagnostics>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let ctx: &mut egui::Context = contexts.ctx_mut();
+    let d = &diagnostics.diagnostics;
+    let n_errors = d.errors().len();
+    let n_hints = d.hints().len();
     float_window(
         ctx,
         &shell,
@@ -1588,7 +1592,14 @@ pub fn panel_validation(
         Panel::Validation,
         None,
         |ui| {
-            badge(ui, &shell, BadgeKind::Ok, "引用完整");
+            // 顶部状态条：错误用 Err 徽标，提示用 Warn 徽标。
+            if n_errors > 0 {
+                badge(ui, &shell, BadgeKind::Err, &format!("错误 {n_errors}"));
+            } else {
+                badge(ui, &shell, BadgeKind::Ok, "无错误");
+            }
+            ui.add_space(space::SM);
+            badge(ui, &shell, BadgeKind::Warn, &format!("提示 {n_hints}"));
             ui.add_space(space::SM);
             ui.label(
                 egui::RichText::new("四维校验：时间 / 引用 / 几何 / 一致性")
@@ -1601,6 +1612,67 @@ pub fn panel_validation(
                     .size(shell.scale.micro)
                     .color(shell.t3()),
             );
+            ui.add_space(space::SM);
+            // 错误列表（按指纹 dedup 后仍可能有 N 条同类）。
+            if n_errors > 0 {
+                ui.label(
+                    egui::RichText::new("错误")
+                        .size(shell.scale.small)
+                        .strong()
+                        .color(shell.t1()),
+                );
+                ui.add_space(space::XS);
+                egui::ScrollArea::vertical()
+                    .max_height(shell.row * 6.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for err in d.errors() {
+                            ui.horizontal(|ui| {
+                                badge(ui, &shell, BadgeKind::Err, "E");
+                                ui.add_space(space::XS);
+                                ui.label(
+                                    egui::RichText::new(&err.message)
+                                        .size(shell.scale.small)
+                                        .color(shell.t1()),
+                                );
+                            });
+                        }
+                    });
+                ui.add_space(space::SM);
+            }
+            // 提示列表（相遇提示 / 事件位移可行性等）。
+            if n_hints > 0 {
+                ui.label(
+                    egui::RichText::new("提示")
+                        .size(shell.scale.small)
+                        .strong()
+                        .color(shell.t1()),
+                );
+                ui.add_space(space::XS);
+                egui::ScrollArea::vertical()
+                    .max_height(shell.row * 8.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for h in d.hints() {
+                            ui.horizontal(|ui| {
+                                badge(ui, &shell, BadgeKind::Warn, "H");
+                                ui.add_space(space::XS);
+                                ui.label(
+                                    egui::RichText::new(&h.message)
+                                        .size(shell.scale.small)
+                                        .color(shell.t1()),
+                                );
+                            });
+                        }
+                    });
+            } else if n_errors == 0 {
+                ui.add_space(space::MD);
+                ui.label(
+                    egui::RichText::new("一切正常")
+                        .size(shell.scale.small)
+                        .color(shell.t3()),
+                );
+            }
         },
     );
 }

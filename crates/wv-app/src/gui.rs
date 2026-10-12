@@ -199,6 +199,8 @@ pub fn run(config: AppConfig) {
             // `ui_shell::hotkeys` 收（那里已经处理了「输入框聚焦时失效」），
             // 两处都听会导致一次按键应用两次。
             editing::flush_terrain_texture,
+            // 派生诊断刷新：在 flush 之后、UI 之前；面板本帧即可读新值。
+            editing::refresh_project_diagnostics,
             // 投影（时间 → 渲染资源）
             projection::advance_playback,
             projection::compute_projection,

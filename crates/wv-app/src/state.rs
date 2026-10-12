@@ -12,6 +12,7 @@
 
 use bevy::prelude::*;
 use wv_core::World;
+use wv_io::diagnostics::Diagnostics;
 
 /// 世界的**可变工作副本**。渲染层**只读**它，且不做任何时间比较（`AGENTS.md` §3.2）。
 ///
@@ -30,6 +31,30 @@ pub struct WorldProjection {
     /// 工程加载失败时的错误信息。**必须显式显示给用户**——
     /// 否则启动目录不对时会静默退化成空白占位地形，看起来像「崩溃」。
     pub load_error: Option<String>,
+}
+
+/// 当前工程的校验结果缓存（来自 `wv_io::diagnostics::derive_hints`）。
+///
+/// 为什么单独存一个资源而不是每次 UI 帧都算：
+/// `derive_hints` 会跑 N 个事件 × 距离 A*，**只读**世界即可，无副作用。
+/// 缓存层是为了让 UI 渲染零成本读，触发点收敛到「加载完成 / 编辑提交 / 撤销重做」。
+///
+/// **V1 守约**（AGENTS §7.5）：`Diagnostics` 把错误与提示在类型上分开，
+/// 校验面板据此只列、不阻止保存。错误仅在「数据坏了」时出现——本工程
+/// 加载期已硬失败（见 `wv_io::Project::load_world`），故面板里的错误主要
+/// 来自加载后的二次校验（如悬空引用）；提示包括相遇提示、事件位移可行性等。
+#[derive(Resource, Default)]
+pub struct ProjectDiagnostics {
+    /// 派生诊断项。空 = 还没跑过诊断（启动期）。
+    pub diagnostics: Diagnostics,
+    /// 最近一次诊断的项数。仅用于诊断自身的可见性展示（"X 项"计数）。
+    pub last_count: usize,
+    /// `true` = 需要重跑 [`wv_io::diagnostics::derive_hints`]。
+    ///
+    /// 由「加载完成 / 新建 / 编辑提交 / 撤销重做」四个点 set true，
+    /// 由 `refresh_project_diagnostics` system 在重算后清回 false。
+    /// UI 面板每帧**只读** `diagnostics`，不感知此标志。
+    pub needs_diagnose: bool,
 }
 
 /// 时间轴视图状态（基线 §2.14）。
