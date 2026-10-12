@@ -324,7 +324,9 @@ pub fn refresh_project_diagnostics(
     if !diagnostics.needs_diagnose {
         return;
     }
-    let d = wv_io::diagnostics::derive_hints(&projection.world);
+    // 错误 + 提示。复用 `wv-io` 的引用校验逻辑（与 `Project::diagnose` 共享底层），
+    // 但走的是**内存里的** `World` 而不是磁盘——编辑器不应当每帧都敲盘。
+    let d = crate::diagnostics_bridge::derive_diagnostics(&projection.world);
     diagnostics.last_count = d.items.len();
     diagnostics.diagnostics = d;
     diagnostics.needs_diagnose = false;

@@ -357,7 +357,8 @@ fn load_project_into(
             // 加载成功：立刻灌一次诊断，避免面板首帧空白。
             // 系统链上 `refresh_project_diagnostics` 也会重算（并清 `needs_diagnose`），
             // 但本帧若不立刻灌，UI 会先看到旧工程的诊断，视觉闪烁。
-            let d = wv_io::diagnostics::derive_hints(&projection.world);
+            // 走 `derive_diagnostics`（错误+提示），不只 `derive_hints`。
+            let d = crate::diagnostics_bridge::derive_diagnostics(&projection.world);
             diagnostics.last_count = d.items.len();
             diagnostics.diagnostics = d;
             diagnostics.needs_diagnose = false;

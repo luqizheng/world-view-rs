@@ -21,6 +21,8 @@ pub mod brush_cursor;
 #[cfg(feature = "app")]
 pub mod camera;
 #[cfg(feature = "app")]
+pub mod diagnostics_bridge;
+#[cfg(feature = "app")]
 pub mod drill;
 #[cfg(feature = "app")]
 pub mod editing;
