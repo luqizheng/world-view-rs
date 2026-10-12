@@ -563,6 +563,91 @@ impl DrillState {
         true
     }
 
+    /// 跨层级跳到任意地图（阶段八 §A：校验面板「点提示跳定位」）。
+    ///
+    /// 与 [`Self::enter`] 的区别：后者只允许当前图的直接子图；本方法允许
+    /// 跳到地图树里**任意**节点——从根 `world.meta.root_map` 出发，按
+    /// `children` 链做 BFS 找到目标，重写 `trail`。
+    ///
+    /// **为什么不**只调 `enter` 一连串：`enter` 拒绝越级，且每次 enter
+    /// 都要保证「child 是当前图的真子图」。跨层级跳转的语义是「我不在意
+    /// 现在在哪儿，给我算一条到目标图的最短路径」。
+    ///
+    /// 返回 `true` 当且仅当找到了目标（且 `trail` 被改写）；目标不在树里
+    /// 或树自身存在悬空引用时返回 `false`，trail 保持不变。
+    ///
+    /// **悬空引用处理**：BFS 沿途遇到 `children` 里的 id 在 `world.maps`
+    /// 里找不到时，**静默跳过**（V1 守约，与 `child_nodes` 同源）——作者
+    /// 已经在校验面板看到这条悬空了。
+    pub fn drill_to(&mut self, world: &World, target: &wv_core::id::Id) -> bool {
+        // 起点：根图。优先 meta.root_map，否则取第一个 level=World 的图。
+        let root_id = match &world.meta {
+            Some(m) => Some(m.root_map.clone()),
+            None => world
+                .maps
+                .iter()
+                .find(|m| m.level == wv_core::map::MapLevel::World)
+                .map(|m| m.id.clone()),
+        };
+        let Some(root) = root_id else {
+            return false;
+        };
+        if root == *target {
+            // 根图必须实际存在于 maps 里——否则即便 meta 指着它，也跳不过去。
+            if world.maps.iter().any(|m| m.id == *target) {
+                self.trail = vec![root];
+                return true;
+            } else {
+                return false;
+            }
+        }
+        // 目标必须实际存在于 maps 里——「被引用为子图 id」不等于「节点存在」。
+        // 悬空子图 id 已在 `derive_hints` 里被 V1 守约提示，本方法对此说「不跳」。
+        if !world.maps.iter().any(|m| m.id == *target) {
+            return false;
+        }
+        // BFS：维护「节点 → 父节点」反查表，结束后从 target 回溯得到路径。
+        let mut parent: std::collections::HashMap<wv_core::id::Id, wv_core::id::Id> =
+            std::collections::HashMap::new();
+        parent.insert(root.clone(), root.clone());
+        let mut frontier: Vec<wv_core::id::Id> = vec![root.clone()];
+        let mut found = false;
+        'bfs: while !frontier.is_empty() {
+            let mut next_frontier: Vec<wv_core::id::Id> = Vec::new();
+            for cur in &frontier {
+                let Some(node) = world.maps.iter().find(|m| &m.id == cur) else {
+                    continue; // 悬空引用：跳过（V1 守约）
+                };
+                for child in &node.children {
+                    if parent.contains_key(child) {
+                        continue; // 已访问
+                    }
+                    parent.insert(child.clone(), cur.clone());
+                    if child == target {
+                        found = true;
+                        break 'bfs;
+                    }
+                    next_frontier.push(child.clone());
+                }
+            }
+            frontier = next_frontier;
+        }
+        if !found {
+            return false;
+        }
+        // 回溯：从 target 一直走到根，reverse 得正向路径。
+        let mut path: Vec<wv_core::id::Id> = vec![target.clone()];
+        let mut cursor = target.clone();
+        while cursor != root {
+            let p = parent.get(&cursor).cloned().expect("BFS 已建反查表");
+            path.push(p.clone());
+            cursor = p;
+        }
+        path.reverse();
+        self.trail = path;
+        true
+    }
+
     /// 钻回上一级（`Backspace` / 面包屑上级）。返回是否发生了钻回。
     ///
     /// **钻出即计入访问痕迹**（v0.2 §B.2）：访问痕迹表示「进去过」，
@@ -995,5 +1080,77 @@ mod tests {
         };
         let shown = RecentProjects::default().visible(&projection);
         assert_eq!(shown[0].name, "minimal-world");
+    }
+
+    // -----------------------------------------------------------------------
+    // 阶段八 §A：DrillState::drill_to 跨层级跳转
+    // -----------------------------------------------------------------------
+
+    /// 直接跳到根图 = 单独把 trail 设为 `[root]`。
+    #[test]
+    fn drill_to_root_simplifies_trail() {
+        let w = demo_world();
+        let mut d = DrillState::default();
+        // 先把 trail 弄复杂（演示「重置」语义）。
+        d.drill_to(&w, &Id::new_unchecked("bld_yamen"));
+        assert_eq!(
+            d.depth(),
+            2,
+            "先到 bld_yamen 看 trail 是不是 [world, zunyi, yamen]"
+        );
+        // 再跳回根图。
+        assert!(d.drill_to(&w, &Id::new_unchecked("world_main")));
+        assert_eq!(d.depth(), 0);
+        assert_eq!(d.current().map(Id::as_str), Some("world_main"));
+    }
+
+    /// 跨层级跳到二级子图：trail 必须是 [root, mid, target]。
+    #[test]
+    fn drill_to_deep_target_builds_full_trail() {
+        let w = demo_world();
+        let mut d = DrillState::default();
+        assert!(d.drill_to(&w, &Id::new_unchecked("bld_yamen")));
+        let trail: Vec<&str> = d.trail().iter().map(Id::as_str).collect();
+        assert_eq!(trail, vec!["world_main", "city_zunyi", "bld_yamen"]);
+    }
+
+    /// 跳到兄弟子图：trail 重写为新分支。
+    #[test]
+    fn drill_to_sibling_switches_branch() {
+        let w = demo_world();
+        let mut d = DrillState::default();
+        // 先到 zunyi。
+        d.drill_to(&w, &Id::new_unchecked("city_zunyi"));
+        // 再到兄弟 chishui。
+        assert!(d.drill_to(&w, &Id::new_unchecked("city_chishui")));
+        let trail: Vec<&str> = d.trail().iter().map(Id::as_str).collect();
+        assert_eq!(trail, vec!["world_main", "city_chishui"]);
+    }
+
+    /// 目标不在树里 → 返回 false，trail 保持不变（V1 守约镜像）。
+    #[test]
+    fn drill_to_unknown_target_keeps_trail() {
+        let w = demo_world();
+        let mut d = DrillState::default();
+        d.drill_to(&w, &Id::new_unchecked("city_zunyi"));
+        let before: Vec<String> = d.trail().iter().map(|i| i.as_str().to_owned()).collect();
+        // 一个根本不在 maps 里的 id。
+        assert!(!d.drill_to(&w, &Id::new_unchecked("map_never_existed")));
+        let after: Vec<String> = d.trail().iter().map(|i| i.as_str().to_owned()).collect();
+        assert_eq!(before, after, "失败时 trail 保持原状");
+    }
+
+    /// 悬空引用（demo_world 里的 `city_ghost`）→ BFS 静默跳过，不影响其他分支的可达性。
+    #[test]
+    fn drill_to_with_dangling_child_in_path_still_works() {
+        let w = demo_world();
+        let mut d = DrillState::default();
+        // `world_main` 引用了 `city_ghost`（悬空），但 `city_zunyi` 是兄弟可达的。
+        assert!(
+            d.drill_to(&w, &Id::new_unchecked("city_zunyi")),
+            "悬空兄弟节点不应阻塞其他分支"
+        );
+        // 跳到 `city_ghost` 自身则失败（不在 maps 里）。
+        assert!(!d.drill_to(&w, &Id::new_unchecked("city_ghost")));
     }
 }

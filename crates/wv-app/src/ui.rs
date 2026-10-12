@@ -37,6 +37,7 @@ use crate::ui_cmdk::CommandPalette;
 use crate::ui_layout::LayoutFile;
 use crate::ui_theme::{color32, color32_alpha, mono, proportional, UiShellConfig};
 use crate::ui_tokens::{font_size, radius, space, BadgeTone, ShellPalette};
+use crate::validation_actions;
 
 /// 地形类型名（供笔刷面板与图例）。
 pub const TERRAIN_NAMES: [&str; 10] = [
@@ -1753,6 +1754,10 @@ pub fn panel_validation(
     layouts: Res<LayoutFile>,
     mut panels: ResMut<PanelState>,
     diagnostics: Res<crate::state::ProjectDiagnostics>,
+    projection: Res<WorldProjection>,
+    mut drill: ResMut<DrillState>,
+    mut view: ResMut<ViewState>,
+    mut playback: ResMut<crate::state::PlaybackState>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let ctx: &mut egui::Context = contexts.ctx_mut();
@@ -1832,11 +1837,36 @@ pub fn panel_validation(
                             ui.horizontal(|ui| {
                                 badge(ui, &shell, BadgeKind::Warn, "H");
                                 ui.add_space(space::XS);
-                                ui.label(
-                                    egui::RichText::new(&h.message)
-                                        .size(shell.scale.small)
-                                        .color(shell.t1()),
-                                );
+                                // 阶段八 §A：hint 行变可点。点击触发跳转
+                                // (drill_to + camera + day)。无 anchor 的提示
+                                // （如 `fingerprint` 派生但还没几何）退化为普通 label。
+                                if let Some(anchor) = &h.anchor {
+                                    if ui
+                                        .add(
+                                            egui::Button::new(
+                                                egui::RichText::new(&h.message)
+                                                    .size(shell.scale.small)
+                                                    .color(shell.t1()),
+                                            )
+                                            .frame(false),
+                                        )
+                                        .clicked()
+                                    {
+                                        validation_actions::jump_to_anchor_now(
+                                            &projection,
+                                            &mut drill,
+                                            &mut view,
+                                            &mut playback,
+                                            anchor,
+                                        );
+                                    }
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new(&h.message)
+                                            .size(shell.scale.small)
+                                            .color(shell.t1()),
+                                    );
+                                }
                             });
                         }
                     });
