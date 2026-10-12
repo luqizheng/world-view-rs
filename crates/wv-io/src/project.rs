@@ -108,6 +108,24 @@ fn save_meta(root: &Path, meta: &WorldMeta) -> IoResult<()> {
     Ok(())
 }
 
+/// 写时间轴定义 `timeline/axis.yaml`（阶段七 v0.5）。
+///
+/// 与 `world.yaml` 同级——是工程的**结构性单文件**，作者手改不会被覆盖
+/// （V1 守约镜像）：`timeline = None` 时**不**触碰磁盘上的 axis.yaml。
+///
+/// **不**走 dirty 路由：与 meta 同理，单文件、永远便宜，编辑触发的
+/// `dirty_set` 累计在元数据维度统一管理。
+fn save_timeline(root: &Path, timeline: &wv_core::time::Timeline) -> IoResult<()> {
+    let path = root.join("timeline").join("axis.yaml");
+    let text = serde_yaml::to_string(timeline).map_err(|source| IoError::Yaml {
+        path: path.display().to_string(),
+        source,
+    })?;
+    std::fs::create_dir_all(root.join("timeline"))?;
+    std::fs::write(&path, text)?;
+    Ok(())
+}
+
 /// 阶段七 v0.3：若 `terrain` 存在，写 `maps/<root_map>/terrain.bin`，并把
 /// 对应的 [`RasterRef`] 写回 root_map 节点的 `raster` 字段（后续 `save_maps`
 /// 把它序列化进 `index.yaml`）。
@@ -553,6 +571,12 @@ impl Project {
         save_meta(&self.root, meta_to_write)?;
         // 同步内存里的 Project.meta，避免同进程内对 `self.meta()` 的断言看到旧值。
         self.meta = meta_to_write.clone();
+        // 阶段七 v0.5：写 `timeline/axis.yaml`（若 world.timeline 存在）。
+        // 与 meta 同源逻辑：结构性单文件、永远便宜、`None` 不动既有 axis.yaml
+        //（V1 守约：作者手改的我们不擅自删）。
+        if let Some(timeline) = world.timeline.as_ref() {
+            save_timeline(&self.root, timeline)?;
+        }
         Ok(())
     }
 

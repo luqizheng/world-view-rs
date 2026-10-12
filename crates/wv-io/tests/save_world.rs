@@ -509,5 +509,111 @@ fn world_yaml_falls_back_to_project_meta_when_world_meta_missing() {
     assert_eq!(proj2.meta().name, "测试工程", "应 fallback 到 self.meta");
 }
 
+/// 阶段七 v0.5：`World.timeline` → `timeline/axis.yaml` 落盘。
+///
+/// 验证：
+/// 1. 写盘后 `timeline/axis.yaml` 存在且可被 loader 反序列化为 `Timeline`；
+/// 2. timeline_range / anchors / calendar 全部 round-trip；
+/// 3. 重开工程后 `world.timeline` 一致。
+#[test]
+fn timeline_axis_round_trips_via_save_and_load() {
+    use wv_core::time::{Anchor, Calendar, CalendarKind, TimeSpan, Timeline};
+
+    let tmp = TempDir::new("timeline_round_trip");
+    let dir = tmp.path();
+    let mut proj = build_min_project(dir, &[]).expect("建工程");
+    let mut world = proj.load_world().expect("load");
+    assert!(world.timeline.is_none(), "初始：timeline 为 None");
+
+    // 装一个完整 Timeline：calendar、range、两个 anchor。
+    let original = Timeline {
+        calendar: Calendar {
+            kind: CalendarKind::Gregorian,
+            prefix: Some("公元".into()),
+            start_year: 1840,
+            days_per_year: 365,
+            days_per_month: 30,
+        },
+        timeline_range: TimeSpan {
+            from: 1,
+            to: Some(36500),
+        },
+        anchors: vec![
+            Anchor {
+                id: Id::new_unchecked("anchor_start"),
+                name: "起点".into(),
+                day: 1,
+            },
+            Anchor {
+                id: Id::new_unchecked("anchor_mid"),
+                name: "中点".into(),
+                day: 18000,
+            },
+        ],
+    };
+    world.timeline = Some(original.clone());
+
+    // 全量写：触发 axis.yaml 落盘。
+    proj.save_world(&world, &[]).expect("save");
+
+    // 1) 落盘文件存在
+    let axis_path = dir.join("timeline").join("axis.yaml");
+    assert!(
+        axis_path.is_file(),
+        "axis.yaml 应已落盘: {}",
+        axis_path.display()
+    );
+
+    // 2) 文本可被 loader 反序列化
+    let text = std::fs::read_to_string(&axis_path).expect("读 axis.yaml");
+    let parsed: Timeline = serde_yaml::from_str(&text).expect("axis.yaml 应可反序列化为 Timeline");
+    assert_eq!(parsed.calendar.kind, CalendarKind::Gregorian);
+    assert_eq!(parsed.timeline_range.from, 1);
+    assert_eq!(parsed.timeline_range.to, Some(36500));
+    assert_eq!(parsed.anchors.len(), 2);
+    assert_eq!(parsed.anchors[0].id.as_str(), "anchor_start");
+    assert_eq!(parsed.anchors[1].day, 18000);
+
+    // 3) 重载：world.timeline 应与落盘前一致
+    let proj2 = Project::open(dir).expect("重开");
+    let world2 = proj2.load_world().expect("重载");
+    let t2 = world2.timeline.as_ref().expect("timeline 应被读回");
+    assert_eq!(t2, &original, "timeline 必须 byte-for-byte 一致");
+}
+
+/// 阶段七 v0.5：`timeline = None` 时不写 axis.yaml，也不删既有 axis.yaml。
+///
+/// 与 terrain.bin 的 V1 守约镜像——作者手改的单文件我们不擅自删。
+/// 模拟「作者编辑时清掉了世界模型里的时间轴，但磁盘上的文件还在」的场景：
+/// 加载后**手动**把 `world.timeline` 置为 None，再 save，断言磁盘文件不变。
+#[test]
+fn timeline_none_does_not_touch_existing_axis() {
+    let tmp = TempDir::new("timeline_none");
+    let dir = tmp.path();
+    let mut proj = build_min_project(dir, &[]).expect("建工程");
+    // 先手放一个 axis.yaml（模拟「作者手改了时间轴」）。
+    std::fs::create_dir_all(dir.join("timeline")).expect("mkdir timeline");
+    let hand_axis = dir.join("timeline").join("axis.yaml");
+    let hand_content = "calendar:\n  kind: simple\ntimeline_range:\n  from: 100\n  to: 200\n";
+    std::fs::write(&hand_axis, hand_content).expect("写手改 axis.yaml");
+    let mtime_before = std::fs::metadata(&hand_axis).unwrap().modified().unwrap();
+
+    // 加载 → 把 world.timeline 显式置 None（模拟「清掉时间轴」），再保存。
+    let mut world = proj.load_world().expect("load");
+    world.timeline = None; // 关键：与「无 axis.yaml」状态语义一致
+    proj.save_world(&world, &["factions".into()])
+        .expect("save（factions only，timeline=None）");
+
+    // axis.yaml 应未被触碰——mtime 保持。
+    let mtime_after = std::fs::metadata(&hand_axis).unwrap().modified().unwrap();
+    assert_eq!(
+        mtime_before, mtime_after,
+        "timeline=None 时不应触碰既有 axis.yaml（V1 守约）"
+    );
+    // 内容也保持。
+    let read = std::fs::read_to_string(&hand_axis).unwrap();
+    assert_eq!(read, hand_content, "axis.yaml 内容应原样保留");
+}
+
 #[allow(dead_code)]
 fn _silence_unused(_w: &World) {}
