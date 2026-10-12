@@ -85,6 +85,29 @@ fn save_maps(dir: &Path, maps: &[wv_core::map::MapNode]) -> IoResult<()> {
     Ok(())
 }
 
+/// 写工程元数据 `world.yaml`（阶段七 v0.4）。
+///
+/// `world.yaml` 是工程的**头部文件**——不写它，整个保存链路就是跛的：
+/// - `Project::open` 需要它才能定位元数据；
+/// - `root_map` 与 `timeline_range` 都在这里声明。
+///
+/// 因此本函数**不**走 dirty 路由：写 `world.yaml` 永远便宜（一个 YAML，
+/// 几十字节），任何编辑最终都要走到这一步。元数据本身的更新由上游命令
+/// （`EditCommand`）触发 `dirty_set` 累计；写盘时**总是**写。
+///
+/// 写完后必须**同步** `Project.meta`，否则同进程内的下一次 `open` 仍
+/// 看到旧值（虽然 `Project::open` 是 IO 的入口，但应用层可能基于
+/// `self.meta()` 做断言）。
+fn save_meta(root: &Path, meta: &WorldMeta) -> IoResult<()> {
+    let path = root.join("world.yaml");
+    let text = serde_yaml::to_string(meta).map_err(|source| IoError::Yaml {
+        path: path.display().to_string(),
+        source,
+    })?;
+    std::fs::write(&path, text)?;
+    Ok(())
+}
+
 /// 阶段七 v0.3：若 `terrain` 存在，写 `maps/<root_map>/terrain.bin`，并把
 /// 对应的 [`RasterRef`] 写回 root_map 节点的 `raster` 字段（后续 `save_maps`
 /// 把它序列化进 `index.yaml`）。
@@ -419,7 +442,7 @@ impl Project {
     ///
     /// 任一文件 IO 失败立即返回错误，**不**做事务回滚——已写的文件保留。
     /// v0.1 数据规模小，原子性不构成实际问题。
-    pub fn save_world(&self, world: &World, dirty_paths: &[String]) -> IoResult<()> {
+    pub fn save_world(&mut self, world: &World, dirty_paths: &[String]) -> IoResult<()> {
         // dirty 路由：未列出的目录**跳过**。注意空 Vec = "全量写"——这对应
         // "第一次落盘"或"开发者手动调 save_world"，区别于"编辑触发的增量写"。
         //
@@ -523,8 +546,13 @@ impl Project {
             )?;
             save_maps(&self.root.join("maps"), &updated_maps)?;
         }
-        // `timeline/axis.yaml` 是单文件，由 `meta.timeline_range` 决定。
-        // v0.1 暂不写——它不在 `World` 中（属于 `meta`），留作 v0.2。
+        // 阶段七 v0.4：写 `world.yaml`。这条**不**走 dirty 路由——
+        // meta 是工程头部，永远写；fall back 到 `self.meta`（处理「刚加载、
+        // world.meta 还没被任何命令填回」的边界）。
+        let meta_to_write = world.meta.as_ref().unwrap_or(&self.meta);
+        save_meta(&self.root, meta_to_write)?;
+        // 同步内存里的 Project.meta，避免同进程内对 `self.meta()` 的断言看到旧值。
+        self.meta = meta_to_write.clone();
         Ok(())
     }
 

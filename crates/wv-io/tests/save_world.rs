@@ -1,4 +1,4 @@
-//! 阶段七 v0.1：`Project::save_world` 集成测试。
+//! 阶段七 v0.1 / v0.2 / v0.3 / v0.4：`Project::save_world` 集成测试。
 //!
 //! 策略：在临时目录里手工拼一个最小工程（`world.yaml` + 一个 faction），
 //! 加载后修改，save，再加载一次，断言 round-trip 一致；另测增量写与删除传播。
@@ -19,7 +19,7 @@ use wv_core::id::Id;
 use wv_core::map::{GeometryData, GeometrySpan};
 use wv_core::terrain::{TerrainCellData, TerrainData};
 use wv_core::time::TimeSpan;
-use wv_core::{Color, Faction, World};
+use wv_core::{Color, Faction, World, WorldMeta};
 use wv_io::error::IoResult;
 use wv_io::Project;
 
@@ -97,7 +97,7 @@ level: world
 fn save_then_load_preserves_faction() {
     let tmp = TempDir::new("save_then_load");
     let dir = tmp.path();
-    let proj = build_min_project(dir, &[]).expect("建工程");
+    let mut proj = build_min_project(dir, &[]).expect("建工程");
     let mut world = proj.load_world().expect("初始加载");
 
     world.factions.push(Faction::new(
@@ -124,7 +124,7 @@ fn save_respects_dirty_paths_skips_other_dirs() {
         "Init",
         Color("#000000".into()),
     );
-    let proj = build_min_project(dir, &[f1]).expect("建工程");
+    let mut proj = build_min_project(dir, &[f1]).expect("建工程");
     let hand_path = dir.join("factions").join("faction_hand.yaml");
     std::fs::write(
         &hand_path,
@@ -155,7 +155,7 @@ fn removed_entity_propagates_to_disk() {
         "Drop",
         Color("#111111".into()),
     );
-    let proj = build_min_project(dir, &[f1, f2]).expect("建工程");
+    let mut proj = build_min_project(dir, &[f1, f2]).expect("建工程");
     let f_dir = dir.join("factions");
     assert!(f_dir.join("faction_keep.yaml").is_file());
     assert!(f_dir.join("faction_drop.yaml").is_file());
@@ -180,7 +180,7 @@ fn faction_geometry_round_trip_via_synthetic_id() {
     let tmp = TempDir::new("geo_round_trip");
     let dir = tmp.path();
     let f = Faction::new(Id::new_unchecked("f1"), "F1", Color("#222222".into()));
-    let proj = build_min_project(dir, &[f]).expect("建工程");
+    let mut proj = build_min_project(dir, &[f]).expect("建工程");
     let mut world = proj.load_world().expect("load");
     world.faction_geometry.push(GeometrySpan {
         map: Id::new_unchecked("map_main"),
@@ -220,7 +220,7 @@ fn full_dirty_rewrite_unchanged_entities() {
     let tmp = TempDir::new("full_dirty");
     let dir = tmp.path();
     let f = Faction::new(Id::new_unchecked("f1"), "F1", Color("#333333".into()));
-    let proj = build_min_project(dir, &[f]).expect("建工程");
+    let mut proj = build_min_project(dir, &[f]).expect("建工程");
     let world = proj.load_world().expect("load");
     proj.save_world(&world, &[]).expect("全量 save");
     let proj2 = Project::open(dir).expect("重开");
@@ -233,10 +233,10 @@ fn save_load_save_idempotent() {
     let tmp = TempDir::new("idempotent");
     let dir = tmp.path();
     let f = Faction::new(Id::new_unchecked("f1"), "F1", Color("#444444".into()));
-    let proj = build_min_project(dir, &[f]).expect("建工程");
+    let mut proj = build_min_project(dir, &[f]).expect("建工程");
     let w1 = proj.load_world().expect("load 1");
     proj.save_world(&w1, &[]).expect("save 1");
-    let proj2 = Project::open(dir).expect("open 2");
+    let mut proj2 = Project::open(dir).expect("open 2");
     let w2 = proj2.load_world().expect("load 2");
     proj2.save_world(&w2, &[]).expect("save 2");
     let w3 = Project::open(dir)
@@ -255,7 +255,7 @@ fn dirty_routing_leaves_unlisted_dirs_untouched() {
     let tmp = TempDir::new("dirty_routing");
     let dir = tmp.path();
     let f = Faction::new(Id::new_unchecked("f1"), "F1", Color("#555555".into()));
-    let proj = build_min_project(dir, &[f]).expect("建工程");
+    let mut proj = build_min_project(dir, &[f]).expect("建工程");
     // 写一个手改文件到 `characters/` 目录（dirty 列表不含它）。
     let char_dir = dir.join("characters");
     std::fs::create_dir_all(&char_dir).expect("mkdir characters");
@@ -288,7 +288,7 @@ fn empty_dirty_falls_back_to_full_rewrite() {
     let dir = tmp.path();
     let f1 = Faction::new(Id::new_unchecked("faction_a"), "A", Color("#AAAAAA".into()));
     let f2 = Faction::new(Id::new_unchecked("faction_b"), "B", Color("#BBBBBB".into()));
-    let proj = build_min_project(dir, &[f1.clone(), f2.clone()]).expect("建工程");
+    let mut proj = build_min_project(dir, &[f1.clone(), f2.clone()]).expect("建工程");
     let world = proj.load_world().expect("load");
     proj.save_world(&world, &[]).expect("全量 save");
     let proj2 = Project::open(dir).expect("重开");
@@ -309,7 +309,7 @@ fn empty_dirty_falls_back_to_full_rewrite() {
 fn terrain_bin_round_trip_via_save_and_load() {
     let tmp = TempDir::new("terrain_round_trip");
     let dir = tmp.path();
-    let proj = build_min_project_with_root_map(dir, &[]).expect("建工程");
+    let mut proj = build_min_project_with_root_map(dir, &[]).expect("建工程");
     let mut world = proj.load_world().expect("load");
     assert!(world.terrain.is_none(), "初始状态：terrain 为 None");
 
@@ -369,7 +369,7 @@ fn terrain_bin_round_trip_via_save_and_load() {
 fn terrain_bin_written_on_full_dirty_save() {
     let tmp = TempDir::new("terrain_full_dirty");
     let dir = tmp.path();
-    let proj = build_min_project_with_root_map(dir, &[]).expect("建工程");
+    let mut proj = build_min_project_with_root_map(dir, &[]).expect("建工程");
     let mut world = proj.load_world().expect("load");
     world.terrain = Some(TerrainData {
         width: 4,
@@ -388,7 +388,7 @@ fn terrain_bin_written_on_full_dirty_save() {
 fn terrain_none_does_not_touch_existing_bin() {
     let tmp = TempDir::new("terrain_none");
     let dir = tmp.path();
-    let proj = build_min_project(dir, &[]).expect("建工程");
+    let mut proj = build_min_project(dir, &[]).expect("建工程");
     // 先写一个 .bin（模拟「作者手放了一个地形」）。
     let bin = dir.join("maps").join("map_main");
     std::fs::create_dir_all(&bin).expect("mkdir maps/map_main");
@@ -407,6 +407,106 @@ fn terrain_none_does_not_touch_existing_bin() {
         mtime_before, mtime_after,
         "terrain=None 时不应触碰既有 .bin（V1 守约）"
     );
+}
+
+/// 阶段七 v0.4：`world.yaml`（工程元数据）随 `save_world` 落盘。
+///
+/// 验证三件事：
+/// 1. 写盘后磁盘上的 `world.yaml` 内容与 `World.meta` 一致；
+/// 2. 重开工程时 loader 拿到的 `Project::meta()` 与落盘前一致；
+/// 3. `Project::meta()` 内存视图被同步（避免「写盘后内存仍是旧值」的同进程脏读）。
+#[test]
+fn world_yaml_round_trips_via_save_and_load() {
+    let tmp = TempDir::new("world_yaml_round_trip");
+    let dir = tmp.path();
+    let mut proj = build_min_project(dir, &[]).expect("建工程");
+    let world = proj.load_world().expect("load");
+    let original = world.meta.as_ref().expect("应有 meta").clone();
+
+    // 改一个字段：name 改一改
+    let mut world2 = world.clone();
+    let mut meta = original.clone();
+    meta.name = "改名后的工程".into();
+    world2.meta = Some(meta.clone());
+
+    // 保存：即便 dirty 是空（全量写路径），world.yaml 也必须被刷新。
+    proj.save_world(&world2, &[]).expect("save");
+
+    // 1) 磁盘上的 world.yaml 应含新 name
+    let yaml_text = std::fs::read_to_string(dir.join("world.yaml")).expect("读 world.yaml");
+    assert!(
+        yaml_text.contains("改名后的工程"),
+        "world.yaml 应含新 name: {yaml_text}"
+    );
+
+    // 2) 重开：meta 字段应 round-trip
+    let proj2 = Project::open(dir).expect("重开");
+    let meta2 = proj2.meta().clone();
+    assert_eq!(meta2.name, "改名后的工程", "name 应 round-trip");
+    assert_eq!(
+        meta2.root_map.as_str(),
+        original.root_map.as_str(),
+        "root_map 不应被改"
+    );
+    assert_eq!(
+        meta2.schema_version, original.schema_version,
+        "schema_version 不应被改"
+    );
+
+    // 3) 内存里的 Project.meta 已被同步——`proj.meta().name` 已是新值
+    assert_eq!(
+        proj.meta().name,
+        "改名后的工程",
+        "Project.meta 内存视图应被同步"
+    );
+}
+
+/// 阶段七 v0.4：dirty 路由**不**作用于 `world.yaml`——它总是被写。
+///
+/// 理由：`world.yaml` 是工程的头部，几十字节，永远写比加 dirty 维度更省心。
+/// 这条测试用一个**只 factions 脏**的保存，断言 world.yaml 仍然被刷。
+#[test]
+fn world_yaml_always_written_even_on_focused_save() {
+    let tmp = TempDir::new("world_yaml_always");
+    let dir = tmp.path();
+    let mut proj = build_min_project(dir, &[]).expect("建工程");
+    // 先把 world.yaml 改成可识别的内容。
+    let sentinel_path = dir.join("world.yaml");
+    let original = std::fs::read_to_string(&sentinel_path).expect("读 world.yaml");
+    assert!(original.contains("测试工程"));
+
+    // 加载 → 触发一次「只 factions 脏」的保存。
+    let world = proj.load_world().expect("load");
+    proj.save_world(&world, &["factions".into()])
+        .expect("save factions only");
+
+    // world.yaml 应仍在且可解析。
+    let text_after = std::fs::read_to_string(&sentinel_path).expect("再读 world.yaml");
+    let parsed: WorldMeta =
+        serde_yaml::from_str(&text_after).expect("world.yaml 仍可解析为 WorldMeta");
+    assert_eq!(parsed.name, "测试工程", "name 应保持");
+    assert_eq!(parsed.schema_version, 2);
+}
+
+/// 阶段七 v0.4：`World.meta = None` 时落盘 fallback 到 `self.meta`。
+///
+/// 这是「刚加载、还没任何命令填回 `World.meta`」的边界——v0.4 之前 save
+/// 会跳过 meta，world.yaml 不被刷新；现在 fallback 到 `self.meta` 保证
+/// loader 需要的字段都在。
+#[test]
+fn world_yaml_falls_back_to_project_meta_when_world_meta_missing() {
+    let tmp = TempDir::new("world_yaml_fallback");
+    let dir = tmp.path();
+    let mut proj = build_min_project(dir, &[]).expect("建工程");
+    let mut world = proj.load_world().expect("load");
+    world.meta = None; // 模拟「world.meta 暂未填回」
+
+    proj.save_world(&world, &[])
+        .expect("save（world.meta=None）");
+
+    // loader 必须还能 open
+    let proj2 = Project::open(dir).expect("重开");
+    assert_eq!(proj2.meta().name, "测试工程", "应 fallback 到 self.meta");
 }
 
 #[allow(dead_code)]

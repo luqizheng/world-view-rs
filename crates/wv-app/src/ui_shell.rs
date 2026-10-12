@@ -593,7 +593,7 @@ fn apply_pending_commands(
             let dirty = edit.take_dirty();
             let n = dirty.len();
             match wv_io::Project::open(&dir) {
-                Ok(project) => match project.save_world(&projection.world, &dirty) {
+                Ok(mut project) => match project.save_world(&projection.world, &dirty) {
                     Ok(()) => {
                         projection.dirty = false;
                         let scope = if n == 0 {
