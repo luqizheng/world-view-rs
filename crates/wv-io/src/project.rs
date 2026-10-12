@@ -165,24 +165,27 @@ fn write_terrain_if_any(
 
 /// 写 `PlaceEdge` 列表到单文件 `distances/edges.yaml`。
 ///
-/// PlaceEdge 当前没有 `id` 字段，暂存单文件；等引入 id 后切到 `save_entities` 模式。
-fn save_placedges(path: &Path, edges: &[wv_core::distance::PlaceEdge]) -> IoResult<()> {
-    if edges.is_empty() {
-        // 边缘情形：作者把全部 edge 删了 → 删文件。
-        if path.is_file() {
-            std::fs::remove_file(path)?;
-        }
-        return Ok(());
+/// 读单文件列表（YAML），文件不存在时返回空 `Vec`。
+///
+/// 用于 `load_world` 的回退路径：阶段七 v0.1 的 `save_placedges` 把 edges
+/// 写成单文件 `distances/edges.yaml`，而 `load_dir("distances/edges")` 期待
+/// 目录形态——两者不对称会让 save→load 静默丢失所有 edges。loader 显式尝试
+/// 单文件回退，把对齐放在**读**而不是**写**侧，避免污染作者的新工程。
+///
+/// **泛型约束**：`T: serde::de::DeserializeOwned`——所有 `wv_core` 领域模型
+/// 都满足。`deserialize` 出错时映射成 `IoError::Yaml`，与 `load_dir` 行为一致。
+fn read_single_file_list<T>(path: &Path) -> IoResult<Vec<T>>
+where
+    T: serde::de::DeserializeOwned,
+{
+    if !path.is_file() {
+        return Ok(Vec::new());
     }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let text = serde_yaml::to_string(edges).map_err(|source| IoError::Yaml {
+    let text = std::fs::read_to_string(path)?;
+    serde_yaml::from_str(&text).map_err(|source| IoError::Yaml {
         path: path.display().to_string(),
         source,
-    })?;
-    std::fs::write(path, text)?;
-    Ok(())
+    })
 }
 
 /// 加载 `maps/<id>/index.yaml` 下的全部地图节点（一层目录扫描）。
@@ -342,27 +345,26 @@ impl Project {
             // 旧实现只读单文件 places.yaml、把 edges/vehicles 留空，导致
             // `DistanceGraph::shortest_journey` 退化为无路径。三个分量都从同目录
             // 各自读全——加载层不再持有距离维度的「结论」（AGENTS.md §4.2）。
-            let places: Vec<wv_core::distance::Place> = load_dir(&self.root, "distances/places")?;
-            let edges: Vec<wv_core::distance::PlaceEdge> = load_dir(&self.root, "distances/edges")?;
-            let vehicles: Vec<wv_core::distance::Vehicle> =
+            let mut places: Vec<wv_core::distance::Place> =
+                load_dir(&self.root, "distances/places")?;
+            let mut edges: Vec<wv_core::distance::PlaceEdge> =
+                load_dir(&self.root, "distances/edges")?;
+            let mut vehicles: Vec<wv_core::distance::Vehicle> =
                 load_dir(&self.root, "distances/vehicles")?;
-            // 兼容旧布局：单文件 `distances/places.yaml`。新工程一律用目录。
-            let (places, edges, vehicles) = if places.is_empty() {
-                let path = self.root.join("distances/places.yaml");
-                if path.is_file() {
-                    let text = std::fs::read_to_string(&path)?;
-                    let list: Vec<wv_core::distance::Place> =
-                        serde_yaml::from_str(&text).map_err(|source| IoError::Yaml {
-                            path: path.display().to_string(),
-                            source,
-                        })?;
-                    (list, edges, vehicles)
-                } else {
-                    (places, edges, vehicles)
-                }
-            } else {
-                (places, edges, vehicles)
-            };
+            // 兼容旧布局：单文件 `distances/{places,edges,vehicles}.yaml`。
+            // 阶段七 v0.1 的 `save_world` 把 edges 写成单文件（PlaceEdge 暂无
+            // id 字段，§4.4 不要求），所以**必须**让 loader 接受单文件回退，
+            // 否则 save→load 会**静默丢失**所有 edges。
+            // 新工程仍然推荐用目录形态（每实体一个 YAML，与 §4.5 一致）。
+            if places.is_empty() {
+                places = read_single_file_list(&self.root.join("distances/places.yaml"))?;
+            }
+            if edges.is_empty() {
+                edges = read_single_file_list(&self.root.join("distances/edges.yaml"))?;
+            }
+            if vehicles.is_empty() {
+                vehicles = read_single_file_list(&self.root.join("distances/vehicles.yaml"))?;
+            }
             wv_core::distance::DistanceGraph {
                 places,
                 edges,
@@ -535,13 +537,19 @@ impl Project {
             )?;
         }
         if wants("distances/edges") {
-            // PlaceEdge 无顶层 id——`key` 由 (from, to, terrain) 复合。
-            // v0.1 不为它造合成 id，存为单一文件 distances/edges.yaml。
-            // 等 PlaceEdge 引入 id 字段再切到每实体一文件。
-            save_placedges(
-                &self.root.join("distances/edges.yaml"),
+            // PlaceEdge 有 id 字段（自 ADR-0004 后），每实体一文件——与 §4.5 一致。
+            // 旧单文件 distances/edges.yaml 由 loader 的 read_single_file_list 回退。
+            save_entities(
+                &self.root.join("distances/edges"),
                 &world.distances.edges,
+                |e| e.id.as_str().to_string(),
             )?;
+            // 旧单文件清理：一旦开始写新格式，就把同名的旧单文件删掉，
+            // 避免留 cruft。下次 loader 不再走 fallback，路径彻底稳定。
+            let legacy = self.root.join("distances/edges.yaml");
+            if legacy.is_file() {
+                std::fs::remove_file(&legacy)?;
+            }
         }
         if wants("distances/vehicles") {
             save_entities(

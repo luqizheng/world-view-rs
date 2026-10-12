@@ -617,3 +617,175 @@ fn timeline_none_does_not_touch_existing_axis() {
 
 #[allow(dead_code)]
 fn _silence_unused(_w: &World) {}
+
+/// 阶段七实体对称性修复：PlaceEdge 切到每实体一文件后，
+/// save→load 必须能 round-trip 所有 edges（修复前 save→load 静默丢光）。
+#[test]
+fn place_edges_round_trip_per_file_format() {
+    use wv_core::distance::{Place, PlaceEdge, Vehicle};
+    let tmp = TempDir::new("edges_round_trip");
+    let dir = tmp.path();
+    let mut proj = build_min_project(dir, &[]).expect("建工程");
+    let mut world = proj.load_world().expect("load");
+    // 装 2 个 place、2 个 vehicle、2 条 edge。
+    world.distances.places.push(Place {
+        id: Id::new_unchecked("p_a"),
+        name: "A".into(),
+        map: None,
+        x: None,
+        y: None,
+        w: None,
+        h: None,
+    });
+    world.distances.places.push(Place {
+        id: Id::new_unchecked("p_b"),
+        name: "B".into(),
+        map: None,
+        x: None,
+        y: None,
+        w: None,
+        h: None,
+    });
+    world.distances.vehicles.push(Vehicle {
+        id: Id::new_unchecked("v_walk"),
+        name: "步行".into(),
+        instant: false,
+        speed_kmh: Some(5.0),
+        daily_hours: Some(10.0),
+        terrain_modifiers: Default::default(),
+        requires_endpoints: false,
+        requirements: vec![],
+    });
+    let edges = vec![
+        PlaceEdge {
+            id: Id::new_unchecked("e_a_b"),
+            a: Id::new_unchecked("p_a"),
+            b: Id::new_unchecked("p_b"),
+            distance_km: 100.0,
+            terrain: "plain".into(),
+            bidirectional: true,
+        },
+        PlaceEdge {
+            id: Id::new_unchecked("e_b_a"),
+            a: Id::new_unchecked("p_b"),
+            b: Id::new_unchecked("p_a"),
+            distance_km: 105.0,
+            terrain: "road".into(),
+            bidirectional: true,
+        },
+    ];
+    world.distances.edges = edges.clone();
+    // 存 + 重开 + 读。
+    proj.save_world(&world, &[]).expect("save");
+    // 每边一个 yaml。
+    assert!(dir
+        .join("distances")
+        .join("edges")
+        .join("e_a_b.yaml")
+        .is_file());
+    assert!(dir
+        .join("distances")
+        .join("edges")
+        .join("e_b_a.yaml")
+        .is_file());
+    // 旧单文件应被清掉。
+    assert!(
+        !dir.join("distances").join("edges.yaml").is_file(),
+        "旧单文件 edges.yaml 应被新格式写盘后清理"
+    );
+    let proj2 = Project::open(dir).expect("重开");
+    let w2 = proj2.load_world().expect("重载");
+    assert_eq!(w2.distances.edges.len(), 2);
+    let ids: Vec<&str> = w2.distances.edges.iter().map(|e| e.id.as_str()).collect();
+    assert!(ids.contains(&"e_a_b"));
+    assert!(ids.contains(&"e_b_a"));
+    // 内容也对。
+    let ab = w2
+        .distances
+        .edges
+        .iter()
+        .find(|e| e.id.as_str() == "e_a_b")
+        .unwrap();
+    assert_eq!(ab.distance_km, 100.0);
+    assert_eq!(ab.terrain, "plain");
+}
+
+/// 旧工程兼容性：手写一个 `distances/edges.yaml`（单文件旧格式），
+/// loader 必须仍能加载，作为迁移缓冲。
+#[test]
+fn place_edges_legacy_single_file_fallback_still_loads() {
+    let tmp = TempDir::new("edges_legacy");
+    let dir = tmp.path();
+    let proj = build_min_project(dir, &[]).expect("建工程");
+    // 手放一个旧单文件——模拟「升级前的老工程」。
+    std::fs::create_dir_all(dir.join("distances")).expect("mkdir distances");
+    let legacy = dir.join("distances").join("edges.yaml");
+    let content = r#"- id: e_legacy
+  a: p_a
+  b: p_b
+  distance_km: 50.0
+  terrain: river
+"#;
+    std::fs::write(&legacy, content).expect("写旧单文件");
+    // loader 必须能解析。
+    let w = proj.load_world().expect("load（带旧单文件）");
+    assert_eq!(w.distances.edges.len(), 1, "fallback 应读出 1 条 edge");
+    let e = &w.distances.edges[0];
+    assert_eq!(e.id.as_str(), "e_legacy");
+    assert_eq!(e.distance_km, 50.0);
+    assert_eq!(e.terrain, "river");
+}
+
+/// 旧 → 新迁移：先有旧单文件 → load → save → 重开 → 数据完整且旧文件已清。
+#[test]
+fn place_edges_migrate_from_single_file_to_directory() {
+    let tmp = TempDir::new("edges_migrate");
+    let dir = tmp.path();
+    let mut proj = build_min_project(dir, &[]).expect("建工程");
+    // 准备两个 place（旧单文件中的 edge 引用它们）。
+    std::fs::create_dir_all(dir.join("distances").join("places")).expect("mkdir");
+    std::fs::write(
+        dir.join("distances").join("places").join("p_a.yaml"),
+        "id: p_a\nname: A\n",
+    )
+    .expect("写 p_a");
+    std::fs::write(
+        dir.join("distances").join("places").join("p_b.yaml"),
+        "id: p_b\nname: B\n",
+    )
+    .expect("写 p_b");
+    // 旧单文件。
+    std::fs::write(
+        dir.join("distances").join("edges.yaml"),
+        "- id: e_legacy\n  a: p_a\n  b: p_b\n  distance_km: 12.0\n  terrain: plain\n",
+    )
+    .expect("写旧 edges.yaml");
+
+    // load → 看到旧数据。
+    let w = proj.load_world().expect("load");
+    assert_eq!(w.distances.edges.len(), 1);
+    // save → 写新格式 + 删旧文件。
+    proj.save_world(&w, &[]).expect("save");
+    assert!(
+        !dir.join("distances").join("edges.yaml").is_file(),
+        "旧文件应被清"
+    );
+    assert!(
+        dir.join("distances")
+            .join("edges")
+            .join("e_legacy.yaml")
+            .is_file(),
+        "新格式文件应被写"
+    );
+    // 重开 → 数据完整。
+    let proj2 = Project::open(dir).expect("重开");
+    let w2 = proj2.load_world().expect("重载");
+    assert_eq!(w2.distances.edges.len(), 1);
+    assert_eq!(w2.distances.edges[0].id.as_str(), "e_legacy");
+    // 字段齐全（防止漏字段）。
+    let e = &w2.distances.edges[0];
+    assert_eq!(e.a.as_str(), "p_a");
+    assert_eq!(e.b.as_str(), "p_b");
+    assert_eq!(e.distance_km, 12.0);
+    assert_eq!(e.terrain, "plain");
+}
