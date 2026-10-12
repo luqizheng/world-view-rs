@@ -309,6 +309,7 @@ fn setup_terrain_texture_after_world(
         size: data.width.max(1),
         res,
         dirty: None,
+        chunks_dirty: None,
         last_mode: Some(view.mode),
     });
 }

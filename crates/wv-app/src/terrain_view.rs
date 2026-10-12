@@ -254,7 +254,17 @@ pub struct TerrainTexture {
     /// 每逻辑格的纹理像素数（1 = 纯色平涂，>1 = 瓦片直铺）。
     pub res: u32,
     /// 上次上传后累计的脏矩形（像素坐标 `[x0,y0,x1,y1]`，半开）。
+    ///
+    /// 由 [`crate::editing::flush_terrain_texture`] 消费清零——它排在
+    /// [`crate::terrain_chunks::sync_terrain_chunks`] **之前**运行，
+    /// 因此 chunk 层另有一份副本（[`Self::chunks_dirty`]）。
     pub dirty: Option<[u32; 4]>,
+    /// chunk 层专用的脏矩形副本（逻辑格，半开）。
+    ///
+    /// 与 `dirty` 在 [`Self::mark_dirty`] / [`Self::mark_all_dirty`] 里同步标记，
+    /// 但由 [`crate::terrain_chunks::sync_terrain_chunks`] 消费清零。
+    /// 拆分原因：system 链上 flush 先于 chunks 跑，`dirty` 到 chunks 时已是 `None`。
+    pub chunks_dirty: Option<[u32; 4]>,
     /// 当前纹理内容所用的视图模式。
     ///
     /// **仅供「模式是否真的变了」的比较**（基线 §2.11：不要每帧重建整图）。
@@ -266,21 +276,29 @@ pub struct TerrainTexture {
 impl TerrainTexture {
     /// 标记整个纹理为脏（整图重传）。单位：逻辑格。
     pub fn mark_all_dirty(&mut self) {
-        self.dirty = Some([0, 0, self.size, self.size]);
+        let full = [0, 0, self.size, self.size];
+        self.dirty = Some(full);
+        self.chunks_dirty = Some(full);
     }
 
     /// 标记一个矩形为脏，与已有脏区取并集（增量重传）。单位：逻辑格。
     pub fn mark_dirty(&mut self, rect: [u32; 4]) {
-        self.dirty = Some(match self.dirty {
-            Some(cur) => [
-                cur[0].min(rect[0]),
-                cur[1].min(rect[1]),
-                cur[2].max(rect[2]),
-                cur[3].max(rect[3]),
-            ],
-            None => rect,
-        });
+        self.dirty = rect_union(self.dirty, rect);
+        self.chunks_dirty = rect_union(self.chunks_dirty, rect);
     }
+}
+
+/// 两个可选脏矩形取并集（`None` 视为空集）。
+fn rect_union(cur: Option<[u32; 4]>, rect: [u32; 4]) -> Option<[u32; 4]> {
+    Some(match cur {
+        Some(c) => [
+            c[0].min(rect[0]),
+            c[1].min(rect[1]),
+            c[2].max(rect[2]),
+            c[3].max(rect[3]),
+        ],
+        None => rect,
+    })
 }
 
 /// 把一个着色函数应用到一格，返回 sRGB 线性分量。
@@ -561,6 +579,7 @@ pub fn setup_terrain_texture(
         size: data.width.max(1),
         res,
         dirty: None,
+        chunks_dirty: None,
         last_mode: Some(view.mode),
     });
 }
@@ -643,6 +662,9 @@ pub fn rebuild_texture_on_mode_change(
     if let Some(img) = images.get_mut(&tex.handle) {
         *img = image;
     }
+    // 整图内容已整体替换：chunk 层需要全量重贴（不经 `dirty`，避免
+    // `flush_terrain_texture` 下帧再做一次重复的全图重建）。
+    tex.chunks_dirty = Some([0, 0, tex.size, tex.size]);
     // 仅在实际重建后记录模式（保证纹理内容与 last_mode 一致）。
     tex.last_mode = Some(view.mode);
 }

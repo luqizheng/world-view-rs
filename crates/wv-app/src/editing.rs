@@ -177,6 +177,35 @@ pub fn flush_terrain_texture(
     tex.dirty = None;
 }
 
+/// 逐格比较撤销/重做前后的地形 cells，返回变化格的包围盒（逻辑格，半开）。
+///
+/// 调用方保证两段 slices 等长（尺寸不一致由调用方退化为 `mark_all_dirty`）。
+/// 无变化时返回 `None`。
+fn terrain_diff_bbox(
+    before: &[wv_core::terrain::TerrainCellData],
+    after: &[wv_core::terrain::TerrainCellData],
+    w: u32,
+) -> Option<[u32; 4]> {
+    let mut x0 = u32::MAX;
+    let mut y0 = u32::MAX;
+    let mut x1 = 0u32;
+    let mut y1 = 0u32;
+    let mut any = false;
+    for (i, (b, a)) in before.iter().zip(after.iter()).enumerate() {
+        if b == a {
+            continue;
+        }
+        any = true;
+        let cx = (i as u32) % w;
+        let cy = (i as u32) / w;
+        x0 = x0.min(cx);
+        y0 = y0.min(cy);
+        x1 = x1.max(cx + 1);
+        y1 = y1.max(cy + 1);
+    }
+    any.then_some([x0, y0, x1, y1])
+}
+
 /// 执行一次撤销 / 重做，返回给用户看的结果说明。
 ///
 /// **唯一入口**：快捷键、命令面板、菜单都经此函数，避免「两处各写一遍」导致
@@ -194,6 +223,11 @@ pub fn apply_history_command(
     if playback.playing {
         return Err("播放中为只读：先暂停再撤销".into());
     }
+    // 撤销 dirty 追踪（v0.2）：撤销/重做前快照地形 cells，事后逐格 diff 出
+    // 变化包围盒，只把该矩形标脏——避免 `mark_all_dirty` 引发的整图重建。
+    // 512² 地形 ≈ 786KB 克隆 + 一次 O(N) 比较，亚毫秒级；换来的收益是
+    // 撤销一笔刷只重算笔刷包围盒而非整图（~80ms → <1ms）。
+    let before = projection.world.terrain.as_ref().map(|t| t.cells.clone());
     let result = if redo {
         edit.history.redo(&mut projection.world)
     } else {
@@ -202,7 +236,18 @@ pub fn apply_history_command(
     match result {
         Ok(true) => {
             projection.dirty = true;
-            tex.mark_all_dirty();
+            let after = projection.world.terrain.as_ref();
+            match (before, after) {
+                (Some(b), Some(a)) if b.len() == a.cells.len() => {
+                    // 有变化区域 → 增量重传该矩形；无地形变化（撤销的可能是
+                    // 非地形命令）→ 不动纹理。
+                    if let Some(rect) = terrain_diff_bbox(&b, &a.cells, a.width.max(1)) {
+                        tex.mark_dirty(rect);
+                    }
+                }
+                // 地形存在性或尺寸变了 → 全量重建。
+                _ => tex.mark_all_dirty(),
+            }
             Ok(if redo {
                 "已重做".into()
             } else {
@@ -304,5 +349,53 @@ mod tests {
         let stroke = TerrainStroke::new();
         let bbox = stroke_bbox_in_cells(&stroke, &grid);
         assert_eq!(bbox, [0, 0, 0, 0]);
+    }
+
+    // -----------------------------------------------------------------------
+    // v0.2：terrain_diff_bbox 单元测试
+    // -----------------------------------------------------------------------
+
+    use wv_core::terrain::TerrainCellData;
+
+    fn cell(kind: u8) -> TerrainCellData {
+        TerrainCellData { height: 0, kind }
+    }
+
+    /// 无变化 → None。
+    #[test]
+    fn diff_bbox_none_when_identical() {
+        let a = vec![cell(3), cell(4), cell(3), cell(4)];
+        let b = a.clone();
+        assert_eq!(terrain_diff_bbox(&a, &b, 2), None);
+    }
+
+    /// 单格变化 → 恰好包住该格的 1×1 矩形。
+    #[test]
+    fn diff_bbox_single_changed_cell() {
+        // 2×2：索引 3 = (1,1)。
+        let before = vec![cell(1), cell(1), cell(1), cell(1)];
+        let mut after = before.clone();
+        after[3] = cell(7);
+        assert_eq!(terrain_diff_bbox(&before, &after, 2), Some([1, 1, 2, 2]));
+    }
+
+    /// 多格分散变化 → 包围盒取并集。
+    #[test]
+    fn diff_bbox_scattered_changes_union() {
+        // 4×4：改 (0,0) 与 (3,2) → 包围盒 [0,0]-[4,3]。
+        let before = vec![cell(1); 16];
+        let mut after = before.clone();
+        after[0] = cell(2); // (0,0)
+        after[2 * 4 + 3] = cell(2); // (3,2)
+        assert_eq!(terrain_diff_bbox(&before, &after, 4), Some([0, 0, 4, 3]));
+    }
+
+    /// 高度变化也算变化（不只 kind）。
+    #[test]
+    fn diff_bbox_detects_height_change() {
+        let before = vec![cell(1); 4];
+        let mut after = before.clone();
+        after[1].height = 500;
+        assert_eq!(terrain_diff_bbox(&before, &after, 2), Some([1, 0, 2, 1]));
     }
 }

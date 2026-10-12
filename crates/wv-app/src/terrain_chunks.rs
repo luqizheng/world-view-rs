@@ -1,6 +1,6 @@
-//! 地形分块 + mip 链 + 视口拣选：治"放大糊"一刀。
+//! 地形分块 + mip 链 + 视口拣选 + 脏矩形驱动：治"放大糊"与"每帧全量重拷"两刀。
 //!
-//! ## 背景与动机（优化项 3a + 3b + 3c）
+//! ## 背景与动机（优化项 3a + 3b + 3c + 3e）
 //!
 //! 原 [`crate::terrain_view::sync_terrain_sprite`] 用**单张大 quad + 单张 `Image`** 画整张地形。
 //! 两个问题：
@@ -9,16 +9,21 @@
 //!    把它插值成模糊色块。这是**物理上限**，跟 mip 无关——**必须**用 mip 链。
 //! 2. **每帧画整图**——视口外的像素也被 GPU 填充，**浪费 fill rate**。
 //!
-//! ## 方案：分块 + mip + 视口拣选
+//! ## 方案：分块 + mip + 视口拣选 + 脏矩形驱动
 //!
-//! - **分块**（3a）：把 `tex.size` 按 `CHUNK_SIZE = 256` 像素切块；
+//! - **分块**（3a）：把 `tex.size` 按 `CHUNK_SIZE = 256` 逻辑格切块；
 //!   对 512² 地形 = 4 块，对 1024² = 16 块，对 4096² = 256 块。
-//! - **mip 链**（3b）：每块生成 3 级 mip（256 → 128 → 64），按 `view.scale` 阈值选：
+//! - **mip 链**（3b）：每块 spawn 时一次性生成 3 级 mip（逐级盒式 2×2 降采样），
+//!   按 `view.scale` 阈值选：
 //!   - `scale ≥ 0.5`（近看/正常）：mip0（原分辨率，锐利）；
 //!   - `scale < 0.5`（远观）：mip1（半分辨率，平滑）；
 //!   - `scale < 0.25`（更远观）：mip2（四分之一分辨率，更平滑）。
+//!   切换只换材质的纹理句柄，几何不动。
 //! - **视口拣选**（3c）：每帧根据 `view.camera_center` + `view.scale` + 窗口大小
 //!   算视口在世界空间的 AABB，**只 spawn 视口内 + 1 块边距**的块。视口外 despawn。
+//! - **脏矩形驱动**（3e）：稳态**不拷任何像素**——只有 `tex.chunks_dirty`
+//!   非空（笔刷编辑 / 撤销 / 模式切换）或新块 spawn 时才克隆整图源像素，
+//!   且只 patch 与脏矩形相交的块。整图 4096²×4B ≈ 67MB，每帧克隆不可接受。
 //!
 //! ## 与原 `TerrainTexture` 的关系
 //!
@@ -26,13 +31,16 @@
 //! 的 source of truth——`editing.rs` 的 `mark_dirty` / `mark_all_dirty` 仍对它生效。
 //! 本模块**只读**这个源，按需把对应矩形像素**复制**到本模块自己拥有的 chunk `Image`。
 //!
-//! **笔刷增量重传（3d）** 暂不实现（`mark_all_dirty` 仍会触发整图重建；
-//! `mark_dirty` 字段暂未在本模块消费）——留作下一刀专门讨论。
+//! ## 与 `dirty` / `chunks_dirty` 的分工
+//!
+//! system 链顺序：`flush_terrain_texture`（patch 整图，清 `dirty`）
+//! → `rebuild_texture_on_mode_change` → `sync_terrain_chunks`（本模块，清 `chunks_dirty`）。
+//! 两个字段由 `mark_dirty` 同步置位、各自消费者分别清零，互不干扰。
 //!
 //! ## 不动原则
 //!
 //! - **零 `wv-core` 改动**；
-//! - **零新依赖**（`Image::texture_descriptor` 用现有 API 改 mip 字段）；
+//! - **零新依赖**（mip 用 CPU 盒式降采样生成独立 `Image`，不走 GPU mip 语义）；
 //! - **零 `editing.rs` 改动**——笔刷系统继续对原 `TerrainTexture` 操作。
 
 #![cfg(feature = "app")]
@@ -43,7 +51,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use crate::state::{GridConfig, ViewState};
 use crate::terrain_view::TerrainTexture;
 
-/// 块边长（像素）。基线 §2.11：分块 256×256 上传。
+/// 块边长（逻辑格）。基线 §2.11：分块 256×256 上传。
 const CHUNK_SIZE: u32 = 256;
 /// mip 链级数（mip0 + mip1 + mip2）。3 级 = 256 / 128 / 64。
 const MIP_LEVELS: u32 = 3;
@@ -54,18 +62,21 @@ const VIEWPORT_MARGIN_CHUNKS: u32 = 1;
 /// 地形在 Z 轴的偏移：在所有矢量层之下。
 const TERRAIN_Z: f32 = 0.0;
 
-/// 一个 chunk 的状态：Mesh2d 实体 + 各级 mip 的 `Image` 句柄。
+/// 一个 chunk 的状态：Mesh2d 实体 + 各级 mip 的 `Image` 句柄 + 材质句柄。
 ///
-/// 复用机制：稳态每个可见 chunk 有 1 个实体 + 3 个 Image 句柄。
+/// 复用机制：稳态每个可见 chunk 有 1 个实体 + `MIP_LEVELS` 个 Image 句柄 + 1 个材质。
+/// 几何（mesh）对固定坐标不变，因此只在 spawn 时建一次；mip 切换只改材质纹理。
 #[derive(Component)]
-struct TerrainChunk {
-    /// 块在原图的逻辑索引（`[cx, cy]`，单位 = 块数）。
+pub struct TerrainChunk {
+    /// 块在原图的逻辑索引（`[cx, cy]`，单位 = 块数）。仅诊断用。
     _coord: [u32; 2],
     /// 当前选中的 mip 级（0..MIP_LEVELS）。随 `view.scale` 变化。
-    _current_mip: u32,
+    current_mip: u32,
     /// 各级 mip 的 `Image` 句柄（`mip_handles[i]` 是 mip_i 的 Image）。
-    /// 块创建时一次性建好，**不每帧重建**——笔刷更新时只 patch `mip_handles[0]`。
-    _mip_handles: Vec<Handle<Image>>,
+    /// 块创建时一次性建好；笔刷更新时 patch mip0 并重降采样 mip1/mip2。
+    mip_handles: Vec<Handle<Image>>,
+    /// 材质句柄——切 mip 时原地改它的 `texture` 字段，不新建材质资产。
+    material: Handle<ColorMaterial>,
 }
 
 /// 资源：当前所有 chunk 实体。
@@ -126,6 +137,11 @@ fn select_mip(scale: f32) -> u32 {
     mip.min(MIP_LEVELS - 1)
 }
 
+/// 两个半开矩形（`[x0, y0, x1, y1]`）是否相交。边贴边不算相交。
+fn rects_intersect(a: [u32; 4], b: [u32; 4]) -> bool {
+    a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1]
+}
+
 /// 视口在世界空间的 AABB（min, max），含 `VIEWPORT_MARGIN_CHUNKS` 块边距。
 ///
 /// 视口半宽（世界单位）= `window.width / 2 × view.scale`；半高同理。
@@ -158,70 +174,62 @@ fn chunk_visible(
         && cmax.y > viewport_min.y
 }
 
-/// 主 system：在 [`crate::terrain_view::sync_terrain_sprite`] 之后跑（接替它的角色）。
+/// 主 system：在 [`crate::editing::flush_terrain_texture`] 与
+/// [`crate::terrain_view::rebuild_texture_on_mode_change`] 之后跑。
 ///
 /// 输入：整图 `TerrainTexture` + `view.scale` / `view.camera_center` / 窗口大小。
-/// 输出：spawn / despawn / 改 `Mesh2d` 的 `MeshMaterial2d`（切 mip）/ 改 `Transform`。
+/// 输出：spawn / despawn chunk 实体；对已存在块按需 patch 像素或切 mip。
+///
+/// ## 每帧开销
+///
+/// 稳态（无编辑、无 spawn）：只做视口 AABB 与哈希查找，**零像素拷贝、零资产新建**。
+/// 笔刷提交后一帧：克隆整图源像素一次，patch 相交块，重建其 mip1/mip2。
 #[allow(clippy::too_many_arguments)]
 pub fn sync_terrain_chunks(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut images: ResMut<Assets<Image>>,
-    tex: Res<TerrainTexture>,
+    mut tex: ResMut<TerrainTexture>,
     grid: Res<GridConfig>,
     view: Res<ViewState>,
     windows: Query<&Window>,
     mut chunk_entities: ResMut<TerrainChunkEntities>,
+    mut q_chunks: Query<&mut TerrainChunk>,
 ) {
-    // 关闭图层 → 全部 despawn。
+    // 关闭图层 → 全部 despawn；丢掉待消费脏矩形（重开时 spawn 会拷最新像素）。
     if !view.terrain_visible {
         chunk_entities.despawn_all(&mut commands);
+        if tex.chunks_dirty.is_some() {
+            tex.chunks_dirty = None;
+        }
         return;
     }
     let Ok(window) = windows.get_single() else {
         return;
     };
-    // 拿源 Image（只读视图，复制像素用）。
-    // **关键**：复制到 owned Vec 后立刻释放 `images` 的不可变借用，
-    // 否则后面 `images.add(...)` 会与 `&source` 冲突。
-    let src_data: Vec<u8> = {
-        let Some(source) = images.get(&tex.handle) else {
-            return;
-        };
-        source.data.clone()
-    };
-    if src_data.is_empty() {
-        return;
-    }
     let size = tex.size;
     let cell_size = grid.cell_size;
     let [cw, ch] = chunk_grid(size);
+    let res = tex.res;
 
-    // 视口 AABB。
+    // 视口 AABB 与当前 mip 级。
     let (vp_min, vp_max) = viewport_world_aabb(
         view.camera_center,
         view.scale,
         Vec2::new(window.resolution.width(), window.resolution.height()),
     );
-
-    // 当前 mip。
     let mip_now = select_mip(view.scale);
-
-    // 块世界尺寸 = CHUNK_SIZE（逻辑格）× cell_size。
     let chunk_world_size = CHUNK_SIZE as f32 * cell_size;
-    // 源像素 stride = size × res × 4。
-    let res = tex.res;
 
-    // 1) 标记视口外 chunk 为待删除。
+    // 1) 视口外 chunk despawn。
     let mut to_despawn: Vec<[u32; 2]> = Vec::new();
     for &coord in chunk_entities.by_coord.keys() {
-        let [gx0, gy0, gx1, gy1] = chunk_cell_rect(coord, size);
+        let [gx0, gy0, _, _] = chunk_cell_rect(coord, size);
         let cmin = grid.origin + Vec2::new(gx0 as f32, gy0 as f32) * cell_size;
         if !chunk_visible(cmin, chunk_world_size, vp_min, vp_max) {
             to_despawn.push(coord);
         }
-        let _ = (gx1, gy1);
     }
     for coord in to_despawn {
         if let Some(e) = chunk_entities.by_coord.remove(&coord) {
@@ -229,68 +237,101 @@ pub fn sync_terrain_chunks(
         }
     }
 
-    // 2) 遍历 (cx, cy) 在视口内的块，spawn / 复用。
+    // 2) 收集视口内块；判断本帧是否需要源像素——有待 spawn 块，或有与 dirty 相交的块。
+    let pending_dirty = tex.chunks_dirty;
+    let mut visible: Vec<([u32; 2], [u32; 4])> = Vec::new();
+    let mut needs_src = false;
     for cy in 0..ch {
         for cx in 0..cw {
             let coord = [cx, cy];
-            let [gx0, gy0, gx1, gy1] = chunk_cell_rect(coord, size);
-            let cmin = grid.origin + Vec2::new(gx0 as f32, gy0 as f32) * cell_size;
+            let cells = chunk_cell_rect(coord, size);
+            let cmin = grid.origin + Vec2::new(cells[0] as f32, cells[1] as f32) * cell_size;
             if !chunk_visible(cmin, chunk_world_size, vp_min, vp_max) {
                 continue;
             }
-            // 块像素尺寸 = 块格数 × res。
-            let chunk_pix_w = (gx1 - gx0) * res;
-            let chunk_pix_h = (gy1 - gy0) * res;
-            // 复制源像素到本块 Image。
-            let chunk_pixels = copy_chunk_pixels(&src_data, size, res, gx0, gy0, gx1, gy1);
-            let image = build_chunk_image(chunk_pixels, chunk_pix_w, chunk_pix_h);
-
-            // mip0 的 handle。mip1/mip2 留作下一刀（当前只挂 mip0，3b 的"按 scale 切 mip"是 v0.1）。
-            let mip0_handle = images.add(image);
-
-            // 几何：Rectangle 边长 = 块像素 × cell_size。
-            let mesh_handle = meshes.add(Rectangle::new(chunk_world_size, chunk_world_size));
-            // 中心 = 块矩形世界中心。
-            let center = cmin + Vec2::splat(chunk_world_size * 0.5);
-
-            // 复用或新建。
-            if let Some(&entity) = chunk_entities.by_coord.get(&coord) {
-                // 改 mesh + material handle + transform。
-                let mat = materials.add(ColorMaterial {
-                    texture: Some(mip0_handle.clone()),
-                    ..default()
-                });
-                commands.entity(entity).insert((
-                    Mesh2d(mesh_handle),
-                    MeshMaterial2d(mat),
-                    Transform::from_translation(center.extend(TERRAIN_Z)),
-                ));
-                // 同步 current_mip 字段（用于未来按 mip 切 handle）。
-                commands.entity(entity).insert(TerrainChunk {
-                    _coord: coord,
-                    _current_mip: mip_now,
-                    _mip_handles: vec![mip0_handle],
-                });
-            } else {
-                let mat = materials.add(ColorMaterial {
-                    texture: Some(mip0_handle.clone()),
-                    ..default()
-                });
-                let entity = commands
-                    .spawn((
-                        Mesh2d(mesh_handle),
-                        MeshMaterial2d(mat),
-                        Transform::from_translation(center.extend(TERRAIN_Z)),
-                        TerrainChunk {
-                            _coord: coord,
-                            _current_mip: mip_now,
-                            _mip_handles: vec![mip0_handle],
-                        },
-                    ))
-                    .id();
-                chunk_entities.by_coord.insert(coord, entity);
+            if !chunk_entities.by_coord.contains_key(&coord)
+                || pending_dirty.is_some_and(|d| rects_intersect(d, cells))
+            {
+                needs_src = true;
             }
+            visible.push((coord, cells));
         }
+    }
+
+    // 源像素只在"确实要写"时克隆——整图 4096²×4B ≈ 67MB，每帧克隆不可接受。
+    let src_data: Option<Vec<u8>> = if needs_src {
+        match images.get(&tex.handle) {
+            Some(source) if !source.data.is_empty() => Some(source.data.clone()),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    // 需要像素但源未就绪：保留 chunks_dirty，下帧重试。
+    if needs_src && src_data.is_none() {
+        return;
+    }
+    let src = src_data.as_deref();
+
+    // 3) spawn / patch / 切 mip。
+    for (coord, cells) in visible {
+        let [gx0, gy0, gx1, gy1] = cells;
+        let cmin = grid.origin + Vec2::new(gx0 as f32, gy0 as f32) * cell_size;
+        let center = cmin + Vec2::splat(chunk_world_size * 0.5);
+
+        if let Some(&entity) = chunk_entities.by_coord.get(&coord) {
+            let Ok(mut chunk) = q_chunks.get_mut(entity) else {
+                continue;
+            };
+            // 3a) dirty 相交 → patch mip0 像素，并逐级重建 mip1/mip2。
+            if let (Some(dirty), Some(src)) = (pending_dirty, src) {
+                if rects_intersect(dirty, cells) {
+                    patch_chunk_mips(&mut images, &chunk, src, size, res, cells, dirty);
+                }
+            }
+            // 3b) mip 级随缩放切换——只换材质纹理句柄，几何与资产不动。
+            if chunk.current_mip != mip_now {
+                if let Some(mat) = materials.get_mut(&chunk.material) {
+                    mat.texture = chunk.mip_handles.get(mip_now as usize).cloned();
+                }
+                chunk.current_mip = mip_now;
+            }
+            continue;
+        }
+
+        // spawn：拷贝本块像素 + 建 mip 链 + 建几何与材质。
+        let Some(src) = src else { continue };
+        let chunk_pixels = copy_chunk_pixels(src, size, res, gx0, gy0, gx1, gy1);
+        let pw = (gx1 - gx0) * res;
+        let ph = (gy1 - gy0) * res;
+        let mip_handles: Vec<Handle<Image>> = build_mip_chain(chunk_pixels, pw, ph)
+            .into_iter()
+            .map(|img| images.add(img))
+            .collect();
+        let mesh_handle = meshes.add(Rectangle::new(chunk_world_size, chunk_world_size));
+        let material = materials.add(ColorMaterial {
+            texture: mip_handles.get(mip_now as usize).cloned(),
+            ..default()
+        });
+        let entity = commands
+            .spawn((
+                Mesh2d(mesh_handle),
+                MeshMaterial2d(material.clone()),
+                Transform::from_translation(center.extend(TERRAIN_Z)),
+                TerrainChunk {
+                    _coord: coord,
+                    current_mip: mip_now,
+                    mip_handles,
+                    material,
+                },
+            ))
+            .id();
+        chunk_entities.by_coord.insert(coord, entity);
+    }
+
+    // 4) 脏矩形已消费（只在确有写入时触碰资源，避免无谓的 changed 标记）。
+    if tex.chunks_dirty.is_some() {
+        tex.chunks_dirty = None;
     }
 }
 
@@ -325,11 +366,111 @@ fn copy_chunk_pixels(
     out
 }
 
-/// 由 RGBA8 像素构造一个 `Image`（mip 链级数 1——v0.1）。
+/// 盒式 2×2 降采样：`(w, h)` → `(max(w/2,1), max(h/2,1))`，每通道取 ≤4 个源像素平均。
 ///
-/// **mip 链（3b）** 留作 v0.2：本版本**只挂 mip0**，mip 切换逻辑（按 scale）
-/// 在下一刀把 `mip_handles` 真正填 3 个 level 之后再接。`MIP_LEVELS` 常量
-/// 已经为 v0.2 预留位置。
+/// 奇数尺寸向下取整（尾部像素被钳进邻近采样点）——mip 本就是近似，不追求可逆。
+fn downsample_box(src: &[u8], w: u32, h: u32) -> (Vec<u8>, u32, u32) {
+    let ow = (w / 2).max(1);
+    let oh = (h / 2).max(1);
+    let mut out = vec![0u8; (ow * oh * 4) as usize];
+    for y in 0..oh {
+        for x in 0..ow {
+            let mut acc = [0u32; 4];
+            let mut n = 0u32;
+            for dy in 0..2 {
+                for dx in 0..2 {
+                    let sx = (x * 2 + dx).min(w.saturating_sub(1));
+                    let sy = (y * 2 + dy).min(h.saturating_sub(1));
+                    let o = (sy * w + sx) as usize * 4;
+                    for (c, a) in acc.iter_mut().enumerate() {
+                        *a += src[o + c] as u32;
+                    }
+                    n += 1;
+                }
+            }
+            let o = (y * ow + x) as usize * 4;
+            for (c, a) in acc.iter().enumerate() {
+                out[o + c] = (a / n) as u8;
+            }
+        }
+    }
+    (out, ow, oh)
+}
+
+/// 由 mip0 像素生成完整 mip 链：mip0 原样，其后逐级 [`downsample_box`]。
+fn build_mip_chain(pixels: Vec<u8>, w: u32, h: u32) -> Vec<Image> {
+    let mut out = Vec::with_capacity(MIP_LEVELS as usize);
+    let (mut cur, mut cw, mut ch) = (pixels, w.max(1), h.max(1));
+    for _ in 0..MIP_LEVELS {
+        // 先算下一级再移交当前级所有权（末级多算的一次降采样仅 64²，可忽略）。
+        let next = downsample_box(&cur, cw, ch);
+        out.push(build_chunk_image(cur, cw, ch));
+        cur = next.0;
+        cw = next.1;
+        ch = next.2;
+    }
+    out
+}
+
+/// 把整图 dirty 矩形与本块的交集 patch 进本块 mip0，再逐级重建 mip1/mip2。
+///
+/// 只拷交集区域的像素行（开销 ∝ 笔刷面积）；mip1/mip2 从 patch 后的 mip0
+/// 全量重降采样——块 ≤ 256² 像素，这笔开销可忽略。
+#[allow(clippy::too_many_arguments)]
+fn patch_chunk_mips(
+    images: &mut Assets<Image>,
+    chunk: &TerrainChunk,
+    src: &[u8],
+    size: u32,
+    res: u32,
+    cells: [u32; 4],
+    dirty: [u32; 4],
+) {
+    let [gx0, gy0, gx1, gy1] = cells;
+    // 交集（逻辑格，半开）。
+    let ix0 = dirty[0].max(gx0);
+    let iy0 = dirty[1].max(gy0);
+    let ix1 = dirty[2].min(gx1);
+    let iy1 = dirty[3].min(gy1);
+    if ix0 >= ix1 || iy0 >= iy1 {
+        return;
+    }
+    let chunk_w_px = (gx1 - gx0) * res;
+    let chunk_h_px = (gy1 - gy0) * res;
+    let src_stride = (size * res) as usize * 4;
+    let (pw, ph) = ((ix1 - ix0) * res, (iy1 - iy0) * res);
+    // 块内像素起点。
+    let (px0, py0) = ((ix0 - gx0) * res, (iy0 - gy0) * res);
+
+    let Some(mip0) = chunk.mip_handles.first().and_then(|h| images.get_mut(h)) else {
+        return;
+    };
+    for row in 0..ph as usize {
+        let src_y = (iy0 * res) as usize + row;
+        let s = src_y * src_stride + (ix0 * res) as usize * 4;
+        let d = ((py0 as usize + row) * chunk_w_px as usize + px0 as usize) * 4;
+        let len = pw as usize * 4;
+        mip0.data[d..d + len].copy_from_slice(&src[s..s + len]);
+    }
+    // mip 链逐级重建（mip1 ← mip0，mip2 ← mip1）。
+    // `mip0` 的借用在此最后一次使用后结束，下面才能再次 `images.get_mut`。
+    let (mut px, mut w, mut h) = (mip0.data.clone(), chunk_w_px, chunk_h_px);
+    for level in 1..MIP_LEVELS {
+        let (dp, dw, dh) = downsample_box(&px, w, h);
+        let Some(handle) = chunk.mip_handles.get(level as usize) else {
+            break;
+        };
+        let Some(img) = images.get_mut(handle) else {
+            break;
+        };
+        img.data.clone_from(&dp);
+        px = dp;
+        w = dw;
+        h = dh;
+    }
+}
+
+/// 由 RGBA8 像素构造一个 `Image`（单级；mip 链由 [`build_mip_chain`] 组装）。
 fn build_chunk_image(pixels: Vec<u8>, w: u32, h: u32) -> Image {
     Image::new(
         Extent3d {
@@ -346,7 +487,8 @@ fn build_chunk_image(pixels: Vec<u8>, w: u32, h: u32) -> Image {
 
 #[cfg(test)]
 mod tests {
-    //! 测试覆盖纯计算：chunk 划分 / mip 选择 / 视口 AABB / 矩形复制。
+    //! 测试覆盖纯计算：chunk 划分 / mip 选择 / 视口 AABB / 矩形复制 /
+    //! 矩形相交 / 降采样 / mip 链 / 脏矩形 patch。
     //! ECS 行为由集成测试覆盖。
 
     use super::*;
@@ -390,6 +532,19 @@ mod tests {
         // scale < 0.25 → mip2
         assert_eq!(select_mip(0.1), 2);
         assert_eq!(select_mip(0.01), 2);
+    }
+
+    #[test]
+    fn rects_intersect_uses_half_open_semantics() {
+        // 部分重叠 → 相交。
+        assert!(rects_intersect([0, 0, 4, 4], [2, 2, 6, 6]));
+        // 包含 → 相交。
+        assert!(rects_intersect([0, 0, 8, 8], [2, 2, 4, 4]));
+        // 边贴边（半开区间）→ 不相交。
+        assert!(!rects_intersect([0, 0, 2, 2], [2, 0, 4, 2]));
+        assert!(!rects_intersect([0, 0, 2, 2], [0, 2, 2, 4]));
+        // 完全分离 → 不相交。
+        assert!(!rects_intersect([0, 0, 1, 1], [5, 5, 6, 6]));
     }
 
     #[test]
@@ -470,6 +625,138 @@ mod tests {
         let p11 = 3 * 4;
         assert_eq!(chunk[p11], 20);
         assert_eq!(chunk[p11 + 1], 20);
+    }
+
+    #[test]
+    fn downsample_box_averages_2x2_pixels() {
+        // 2×2 源 → 1×1：R = (100+200)/4 = 75，G = (100+200)/4 = 75。
+        let src: Vec<u8> = vec![
+            100, 0, 0, 255, //
+            200, 0, 0, 255, //
+            0, 100, 0, 255, //
+            0, 200, 0, 255,
+        ];
+        let (out, w, h) = downsample_box(&src, 2, 2);
+        assert_eq!((w, h), (1, 1));
+        assert_eq!(out, vec![75, 75, 0, 255]);
+    }
+
+    #[test]
+    fn downsample_box_halves_dimensions_with_floor() {
+        // 偶数尺寸对半。
+        let src = vec![7u8; (4 * 2 * 4) as usize];
+        let (_, w, h) = downsample_box(&src, 4, 2);
+        assert_eq!((w, h), (2, 1));
+        // 奇数尺寸向下取整，但至少为 1。
+        let src3 = vec![7u8; (3 * 3 * 4) as usize];
+        let (_, w3, h3) = downsample_box(&src3, 3, 3);
+        assert_eq!((w3, h3), (1, 1));
+    }
+
+    #[test]
+    fn build_mip_chain_produces_halving_levels() {
+        let pixels = vec![128u8; (8 * 8 * 4) as usize];
+        let chain = build_mip_chain(pixels, 8, 8);
+        assert_eq!(chain.len(), MIP_LEVELS as usize);
+        assert_eq!((chain[0].width(), chain[0].height()), (8, 8));
+        assert_eq!((chain[1].width(), chain[1].height()), (4, 4));
+        assert_eq!((chain[2].width(), chain[2].height()), (2, 2));
+    }
+
+    #[test]
+    fn patch_chunk_mips_updates_only_intersection() {
+        let mut images = Assets::<Image>::default();
+        let mut materials = Assets::<ColorMaterial>::default();
+        // 整图 4×4（res=1）：R = x*10，G = y*10。
+        let size = 4u32;
+        let mut src = vec![0u8; (4 * 4 * 4) as usize];
+        for y in 0..4usize {
+            for x in 0..4usize {
+                let i = (y * 4 + x) * 4;
+                src[i] = (x * 10) as u8;
+                src[i + 1] = (y * 10) as u8;
+                src[i + 3] = 255;
+            }
+        }
+        // chunk 覆盖整图 [0,0,4,4]，mip0 初始全 0。
+        let mip_handles = build_mip_chain(vec![0u8; 4 * 4 * 4], 4, 4)
+            .into_iter()
+            .map(|img| images.add(img))
+            .collect::<Vec<_>>();
+        let chunk = TerrainChunk {
+            _coord: [0, 0],
+            current_mip: 0,
+            mip_handles,
+            material: materials.add(ColorMaterial::default()),
+        };
+        // dirty = (1,1)-(3,3)：只 patch 像素 x∈{1,2}, y∈{1,2}。
+        patch_chunk_mips(
+            &mut images,
+            &chunk,
+            &src,
+            size,
+            1,
+            [0, 0, 4, 4],
+            [1, 1, 3, 3],
+        );
+        let mip0 = images.get(&chunk.mip_handles[0]).unwrap();
+        // 交集内 (2,2) → (20, 20)。
+        let o = (2 * 4 + 2) * 4;
+        assert_eq!(&mip0.data[o..o + 2], &[20, 20]);
+        // 交集外 (0,0) 与 (3,3) 仍是 0。
+        assert_eq!(&mip0.data[0..2], &[0, 0]);
+        let o33 = (3 * 4 + 3) * 4;
+        assert_eq!(&mip0.data[o33..o33 + 2], &[0, 0]);
+    }
+
+    #[test]
+    fn patch_chunk_mips_rebuilds_lower_mips_from_mip0() {
+        let mut images = Assets::<Image>::default();
+        let mut materials = Assets::<ColorMaterial>::default();
+        // 整图 4×4（res=1）：R = x*10，G = y*10。
+        let size = 4u32;
+        let mut src = vec![0u8; (4 * 4 * 4) as usize];
+        for y in 0..4usize {
+            for x in 0..4usize {
+                let i = (y * 4 + x) * 4;
+                src[i] = (x * 10) as u8;
+                src[i + 1] = (y * 10) as u8;
+                src[i + 3] = 255;
+            }
+        }
+        let mip_handles = build_mip_chain(vec![0u8; 4 * 4 * 4], 4, 4)
+            .into_iter()
+            .map(|img| images.add(img))
+            .collect::<Vec<_>>();
+        let chunk = TerrainChunk {
+            _coord: [0, 0],
+            current_mip: 0,
+            mip_handles,
+            material: materials.add(ColorMaterial::default()),
+        };
+        // 整块 dirty → mip0 变成 src 的完整拷贝。
+        patch_chunk_mips(
+            &mut images,
+            &chunk,
+            &src,
+            size,
+            1,
+            [0, 0, 4, 4],
+            [0, 0, 4, 4],
+        );
+        let mip0 = images.get(&chunk.mip_handles[0]).unwrap();
+        assert_eq!(mip0.data, src);
+        // mip1（2×2）左上 = mip0 (0..2, 0..2) 平均：R = (0+10+0+10)/4 = 5，G = (0+0+10+10)/4 = 5。
+        let mip1 = images.get(&chunk.mip_handles[1]).unwrap();
+        assert_eq!((mip1.width(), mip1.height()), (2, 2));
+        assert_eq!(&mip1.data[0..2], &[5, 5]);
+        // mip1 右下 = mip0 (2..4, 2..4) 平均：R = (20+30+20+30)/4 = 25，G = (20+20+30+30)/4 = 25。
+        let o = (1 * 2 + 1) * 4;
+        assert_eq!(&mip1.data[o..o + 2], &[25, 25]);
+        // mip2（1×1）= mip1 全图平均：R = (5+15+15+25)/4 = 15，G 同理 = 15。
+        let mip2 = images.get(&chunk.mip_handles[2]).unwrap();
+        assert_eq!((mip2.width(), mip2.height()), (1, 1));
+        assert_eq!(&mip2.data[0..2], &[15, 15]);
     }
 
     #[test]
