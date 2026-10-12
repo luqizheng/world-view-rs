@@ -39,7 +39,9 @@
 #![cfg(feature = "app")]
 
 use bevy::prelude::*;
-use bevy::render::mesh::{Indices, MeshVertexAttribute, RenderAssetUsages};
+use bevy::render::mesh::Indices;
+use bevy::render::mesh::MeshVertexAttribute;
+use bevy::render::render_asset::RenderAssetUsages;
 use bevy::render::render_resource::{PrimitiveTopology, VertexFormat};
 
 use crate::state::ViewState;
@@ -75,6 +77,7 @@ pub fn sync_faction_overlays(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     view: Res<ViewState>,
+    playback: Res<crate::state::PlaybackState>,
     projection: Res<crate::state::WorldProjection>,
     mut layer: ResMut<FactionOverlayEntities>,
 ) {
@@ -83,9 +86,9 @@ pub fn sync_faction_overlays(
         layer.despawn_all(&mut commands);
         return;
     }
-    let map = &view.current_map;
-    let day = view.current_day;
-    let overlays = factions_at(&projection.world, map, day);
+    let map_id = wv_core::id::Id::new_unchecked(&view.current_map);
+    let day = playback.current_day;
+    let overlays = factions_at(&projection.world, &map_id, day);
 
     // 整帧 despawn + 重建：势力几何在多 span / 多 (map, day) 下全变，
     // 缓存复用得不偿失。
@@ -189,7 +192,7 @@ mod tests {
                 VertexFormat::Float32x3,
             ))
             .expect("位置属性应存在");
-        let pos_vec: &Vec<[f32; 3]> = positions.as_float3().expect("应是 f32x3");
+        let pos_vec: &[[f32; 3]] = positions.as_float3().expect("应是 f32x3");
         assert_eq!(pos_vec.len(), 4, "正方形 = 4 顶点");
         // 索引：3 个三角形 × 3 顶点 = 9 索引。
         let indices = m.indices().expect("索引应存在");
@@ -201,7 +204,7 @@ mod tests {
         // 三角形是最小可画多边形：3 顶点 → 1 索引三角形。
         let tri = vec![0.0, 0.0, 1.0, 0.0, 0.5, 1.0];
         let m = build_polygon_mesh(&tri);
-        let pos_vec: &Vec<[f32; 3]> = m
+        let pos_vec: &[[f32; 3]] = m
             .attribute(MeshVertexAttribute::new(
                 "Vertex_Position",
                 0,

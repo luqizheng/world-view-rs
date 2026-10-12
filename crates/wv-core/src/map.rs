@@ -250,3 +250,13 @@ pub enum GeometryData {
     /// 引用外部几何文件。
     Ref(String),
 }
+
+impl GeometryData {
+    /// 顶点数：Points/Polygon 是 2D 平面 → `len() / 2`；Ref 引用外部 → 0。
+    pub fn point_count(&self) -> usize {
+        match self {
+            GeometryData::Points(v) | GeometryData::Polygon(v) => v.len() / 2,
+            GeometryData::Ref(_) => 0,
+        }
+    }
+}

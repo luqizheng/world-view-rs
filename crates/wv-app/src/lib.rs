@@ -27,6 +27,8 @@ pub mod editing;
 #[cfg(feature = "app")]
 pub mod faction_overlays;
 #[cfg(feature = "app")]
+pub mod faction_panel_actions;
+#[cfg(feature = "app")]
 pub mod fonts;
 #[cfg(feature = "app")]
 pub mod gui;

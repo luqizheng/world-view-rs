@@ -19,6 +19,7 @@ use bevy_egui::EguiPlugin;
 use crate::brush_cursor;
 use crate::camera;
 use crate::editing;
+use crate::faction_overlays;
 use crate::map_frame;
 use crate::projection;
 use crate::state::{BrushState, GridConfig, PanelState, PlaybackState, ViewState, WorldProjection};

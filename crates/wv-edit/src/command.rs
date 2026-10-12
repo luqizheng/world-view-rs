@@ -180,9 +180,371 @@ impl EditCommand for PaintTerrainCommand {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 势力编辑命令（S12 v0.2）
+// ---------------------------------------------------------------------------
+
+use wv_core::map::GeometrySpan;
+use wv_core::{Color, Faction};
+
+/// 受影响的目录相对路径，供 `DirtySet` 落盘聚合。
+///
+/// Faction 与 GeometrySpan 是 YAML 实体（§4.5），分别落在
+/// `factions/<id>.yaml` 与 `geometry/faction/<id>.yaml`；命令层无法知道
+/// 具体文件名（owner 字符串），只声明目录，IO 落盘时再具体化。
+fn faction_dirty_paths() -> Vec<String> {
+    vec!["factions".into(), "geometry/faction".into()]
+}
+
+/// 新增一个 `Faction`。
+///
+/// `apply` 在 `world.factions` 末尾追加；`revert` 移除（按 ID 定位）。
+#[derive(Debug)]
+pub struct AddFactionCommand {
+    pub faction: Faction,
+}
+
+impl AddFactionCommand {
+    pub fn new(faction: Faction) -> Self {
+        Self { faction }
+    }
+}
+
+impl EditCommand for AddFactionCommand {
+    fn label(&self) -> String {
+        format!("新增势力「{}」", self.faction.name)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        if world.factions.iter().any(|f| f.id == self.faction.id) {
+            return Err(EditError::Precondition(format!(
+                "势力 `{}` 已存在",
+                self.faction.id
+            )));
+        }
+        world.factions.push(self.faction.clone());
+        Ok(faction_dirty_paths())
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let pos = world
+            .factions
+            .iter()
+            .position(|f| f.id == self.faction.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Faction {}", self.faction.id)))?;
+        world.factions.remove(pos);
+        Ok(())
+    }
+}
+
+/// 删除一个 `Faction`（及其名下的所有 `GeometrySpan`——避免悬空几何）。
+///
+/// **为什么连带删几何**：保留悬空几何会导致 `factions_at` 永远跳过该 owner，
+/// 让作者误以为「数据没了」实则还在——更糟的是未来带洞多边形规则启用时，
+/// 悬空会让校验规则错乱。一并删、撤销时一并恢复，是最干净的语义。
+#[derive(Debug)]
+pub struct RemoveFactionCommand {
+    pub id: wv_core::Id,
+    /// `apply` 时缓存的 Faction 本体（用于 revert 还原）。
+    before_faction: std::sync::Mutex<Option<Faction>>,
+    /// `apply` 时缓存的、本 Faction 名下所有 GeometrySpan（用于 revert 还原）。
+    before_geos: std::sync::Mutex<Vec<GeometrySpan>>,
+}
+
+impl RemoveFactionCommand {
+    pub fn new(id: wv_core::Id) -> Self {
+        Self {
+            id,
+            before_faction: std::sync::Mutex::new(None),
+            before_geos: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl EditCommand for RemoveFactionCommand {
+    fn label(&self) -> String {
+        format!("删除势力「{}」", self.id)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let pos = world
+            .factions
+            .iter()
+            .position(|f| f.id == self.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Faction {}", self.id)))?;
+        // 缓存本体与所属几何。
+        let f = world.factions.remove(pos);
+        let geos: Vec<GeometrySpan> = world
+            .faction_geometry
+            .iter()
+            .filter(|g| g.owner == self.id)
+            .cloned()
+            .collect();
+        world.faction_geometry.retain(|g| g.owner != self.id);
+        *self
+            .before_faction
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = Some(f);
+        *self
+            .before_geos
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = geos;
+        Ok(faction_dirty_paths())
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let f = self
+            .before_faction
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("RemoveFaction 尚未 apply".into()))?;
+        let geos = self
+            .before_geos
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))?
+            .clone();
+        // 恢复几何（顺序不影响 `factions_at`，仅影响迭代顺序）。
+        for g in geos {
+            world.faction_geometry.push(g);
+        }
+        // 恢复 Faction 到原位（按 ID 排序语义不强——找首个能让 ID 升序的位置）。
+        let insert_at = world
+            .factions
+            .iter()
+            .position(|x| x.id > f.id)
+            .unwrap_or(world.factions.len());
+        world.factions.insert(insert_at, f);
+        Ok(())
+    }
+}
+
+/// 重命名 / 改色。
+///
+/// `apply` 缓存旧 `Faction` 全字段；`revert` 用缓存恢复。
+#[derive(Debug)]
+pub struct UpdateFactionCommand {
+    pub id: wv_core::Id,
+    pub new_name: String,
+    pub new_color: Color,
+    before: std::sync::Mutex<Option<Faction>>,
+}
+
+impl UpdateFactionCommand {
+    pub fn new(id: wv_core::Id, new_name: String, new_color: Color) -> Self {
+        Self {
+            id,
+            new_name,
+            new_color,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for UpdateFactionCommand {
+    fn label(&self) -> String {
+        format!("改势力「{}」", self.id)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let f = world
+            .factions
+            .iter_mut()
+            .find(|f| f.id == self.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Faction {}", self.id)))?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = Some(f.clone());
+        f.name = self.new_name.clone();
+        f.color = self.new_color.clone();
+        Ok(faction_dirty_paths())
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let prev = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("UpdateFaction 尚未 apply".into()))?;
+        let f = world
+            .factions
+            .iter_mut()
+            .find(|f| f.id == self.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Faction {}", self.id)))?;
+        *f = prev;
+        Ok(())
+    }
+}
+
+/// 替换/新增一个势力的几何（按 `(map, owner, span.from)` 视为同一实体的多版本）。
+///
+/// **同一性**：`GeometrySpan` 自身没有 `id` 字段（看 `map.rs`），但 路线图 §4.1
+/// 原则六要求「同一实体同一维度的状态片段不覆盖」——这里把 `(map, owner, from)`
+/// 三元组视为「实体的某次疆界变更」；`from` 相同 → 是同一次变更的更新（**只允许一
+/// 条**），不同 → 是不同次变更（多版本并存）。
+///
+/// `apply` 若发现同 `(map, owner, from)` 已存在 → 替换；否则追加。`revert` 用
+/// 缓存的"原位置 + 旧值"还原。
+#[derive(Debug)]
+pub struct UpsertFactionGeometryCommand {
+    pub span: GeometrySpan,
+    /// `apply` 时若发现已存在，原 span 的位置（用于 revert 还原顺序）。
+    before_index: std::sync::Mutex<Option<usize>>,
+    /// `apply` 时若发现已存在，原 span 的内容（用于 revert 还原值）。
+    before_existing: std::sync::Mutex<Option<GeometrySpan>>,
+}
+
+impl UpsertFactionGeometryCommand {
+    pub fn new(span: GeometrySpan) -> Self {
+        Self {
+            span,
+            before_index: std::sync::Mutex::new(None),
+            before_existing: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for UpsertFactionGeometryCommand {
+    fn label(&self) -> String {
+        format!("改势力「{}」在 {} 的疆界", self.span.owner, self.span.map)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        // 校验：owner 必须是已注册势力（V1 守约，悬空 owner 在 IO 加载时已经被
+        // `factions_at` 静默跳过；编辑器里**创建新几何**则强制要求先有势力）。
+        if !world.factions.iter().any(|f| f.id == self.span.owner) {
+            return Err(EditError::Precondition(format!(
+                "势力 `{}` 不存在；先创建势力再编辑几何",
+                self.span.owner
+            )));
+        }
+        let new_from = self.span.span.from;
+        let pos = world.faction_geometry.iter().position(|g| {
+            g.map == self.span.map && g.owner == self.span.owner && g.span.from == new_from
+        });
+        match pos {
+            Some(i) => {
+                let prev = world.faction_geometry[i].clone();
+                world.faction_geometry[i] = self.span.clone();
+                *self
+                    .before_index
+                    .lock()
+                    .map_err(|_| EditError::Precondition("锁中毒".into()))? = Some(i);
+                *self
+                    .before_existing
+                    .lock()
+                    .map_err(|_| EditError::Precondition("锁中毒".into()))? = Some(prev);
+            }
+            None => {
+                world.faction_geometry.push(self.span.clone());
+                *self
+                    .before_index
+                    .lock()
+                    .map_err(|_| EditError::Precondition("锁中毒".into()))? = None;
+            }
+        }
+        Ok(faction_dirty_paths())
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let idx = *self
+            .before_index
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))?;
+        match idx {
+            Some(i) => {
+                let prev = self
+                    .before_existing
+                    .lock()
+                    .map_err(|_| EditError::Precondition("锁中毒".into()))?
+                    .clone()
+                    .ok_or_else(|| EditError::Precondition("UpsertGeometry 尚未 apply".into()))?;
+                if i < world.faction_geometry.len() {
+                    world.faction_geometry[i] = prev;
+                } else {
+                    return Err(EditError::Precondition("revert 时几何位置越界".into()));
+                }
+            }
+            None => {
+                // 之前是追加；revert 时移除最后一条（apply 必是 push）。
+                if world
+                    .faction_geometry
+                    .last()
+                    .map(|g| g == &self.span)
+                    .unwrap_or(false)
+                {
+                    world.faction_geometry.pop();
+                } else {
+                    return Err(EditError::Precondition(
+                        "UpsertGeometry revert 找不到对应 span".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// 删除一个势力的某次几何（按 `(map, owner, from)` 定位）。
+///
+/// 与 `UpsertFactionGeometryCommand` 的同一性规则对称。
+#[derive(Debug)]
+pub struct RemoveFactionGeometryCommand {
+    pub map: wv_core::Id,
+    pub owner: wv_core::Id,
+    pub from: i64,
+    before: std::sync::Mutex<Option<(usize, GeometrySpan)>>,
+}
+
+impl RemoveFactionGeometryCommand {
+    pub fn new(map: wv_core::Id, owner: wv_core::Id, from: i64) -> Self {
+        Self {
+            map,
+            owner,
+            from,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for RemoveFactionGeometryCommand {
+    fn label(&self) -> String {
+        format!("删除「{}」的某次疆界", self.owner)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let pos = world
+            .faction_geometry
+            .iter()
+            .position(|g| g.map == self.map && g.owner == self.owner && g.span.from == self.from)
+            .ok_or_else(|| {
+                EditError::TargetMissing(format!(
+                    "GeometrySpan (map={}, owner={}, from={})",
+                    self.map, self.owner, self.from
+                ))
+            })?;
+        let prev = world.faction_geometry.remove(pos);
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = Some((pos, prev));
+        Ok(faction_dirty_paths())
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let (pos, prev) = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("RemoveGeometry 尚未 apply".into()))?;
+        let insert_at = pos.min(world.faction_geometry.len());
+        world.faction_geometry.insert(insert_at, prev);
+        Ok(())
+    }
+}
+
+// 把 `Color` / `GeometryData` 隐式导入给测试用——避免测试模块再加 use。
+#[allow(unused_imports)]
+use wv_core::{Color as _Color, Faction as _Faction};
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wv_core::map::GeometryData;
+    use wv_core::time::TimeSpan;
     use wv_core::Id;
 
     fn world_with_terrain(size: u32) -> World {
@@ -227,6 +589,184 @@ mod tests {
         assert!(matches!(
             cmd.apply(&mut world),
             Err(EditError::TerrainMismatch(_))
+        ));
+    }
+
+    // ---- 势力命令（S12 v0.2） ----
+
+    fn f(id: &str, name: &str) -> Faction {
+        Faction::new(
+            Id::new_unchecked(id),
+            name,
+            wv_core::color::Color("#112233".into()),
+        )
+    }
+
+    fn geo(map: &str, owner: &str, from: i64, to: Option<i64>) -> GeometrySpan {
+        GeometrySpan {
+            map: Id::new_unchecked(map),
+            owner: Id::new_unchecked(owner),
+            span: TimeSpan { from, to },
+            geometry: GeometryData::Polygon(vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0]),
+        }
+    }
+
+    #[test]
+    fn add_faction_apply_then_revert_removes() {
+        let mut w = World::default();
+        let cmd = AddFactionCommand::new(f("f1", "F1"));
+        let dirty = cmd.apply(&mut w).unwrap();
+        assert_eq!(w.factions.len(), 1);
+        assert!(dirty.contains(&"factions".to_string()));
+        cmd.revert(&mut w).unwrap();
+        assert!(w.factions.is_empty());
+    }
+
+    #[test]
+    fn add_faction_duplicate_id_is_precondition_error() {
+        let mut w = World::default();
+        AddFactionCommand::new(f("f1", "F1")).apply(&mut w).unwrap();
+        let err = AddFactionCommand::new(f("f1", "F1-again")).apply(&mut w);
+        assert!(matches!(err, Err(EditError::Precondition(_))));
+    }
+
+    #[test]
+    fn remove_faction_also_clears_its_geometry() {
+        let mut w = World::default();
+        AddFactionCommand::new(f("f1", "F1")).apply(&mut w).unwrap();
+        UpsertFactionGeometryCommand::new(geo("m", "f1", 1, Some(10)))
+            .apply(&mut w)
+            .unwrap();
+        UpsertFactionGeometryCommand::new(geo("m", "f1", 20, None))
+            .apply(&mut w)
+            .unwrap();
+        assert_eq!(w.faction_geometry.len(), 2);
+
+        let rm = RemoveFactionCommand::new(Id::new_unchecked("f1"));
+        rm.apply(&mut w).unwrap();
+        assert!(w.factions.is_empty(), "Faction 自身被删");
+        assert!(w.faction_geometry.is_empty(), "名下几何连带清空");
+
+        rm.revert(&mut w).unwrap();
+        assert_eq!(w.factions.len(), 1, "Faction 还原");
+        assert_eq!(w.faction_geometry.len(), 2, "几何还原");
+    }
+
+    #[test]
+    fn remove_faction_missing_is_target_error() {
+        let mut w = World::default();
+        let cmd = RemoveFactionCommand::new(Id::new_unchecked("ghost"));
+        assert!(matches!(
+            cmd.apply(&mut w),
+            Err(EditError::TargetMissing(_))
+        ));
+    }
+
+    #[test]
+    fn update_faction_round_trips_via_revert() {
+        let mut w = World::default();
+        AddFactionCommand::new(f("f1", "F1")).apply(&mut w).unwrap();
+        let upd = UpdateFactionCommand::new(
+            Id::new_unchecked("f1"),
+            "F1-Renamed".into(),
+            wv_core::color::Color("#FF0000".into()),
+        );
+        upd.apply(&mut w).unwrap();
+        assert_eq!(w.factions[0].name, "F1-Renamed");
+        assert_eq!(w.factions[0].color.as_str(), "#FF0000");
+        upd.revert(&mut w).unwrap();
+        assert_eq!(w.factions[0].name, "F1");
+        assert_eq!(w.factions[0].color.as_str(), "#112233");
+    }
+
+    #[test]
+    fn upsert_geometry_inserts_when_new() {
+        let mut w = World::default();
+        AddFactionCommand::new(f("f1", "F1")).apply(&mut w).unwrap();
+        let upsert = UpsertFactionGeometryCommand::new(geo("m", "f1", 1, Some(10)));
+        let dirty = upsert.apply(&mut w).unwrap();
+        assert_eq!(w.faction_geometry.len(), 1);
+        assert!(dirty.contains(&"geometry/faction".to_string()));
+        // revert：应能移除刚 push 的那条
+        upsert.revert(&mut w).unwrap();
+        assert!(w.faction_geometry.is_empty());
+    }
+
+    #[test]
+    fn upsert_geometry_replaces_when_same_key() {
+        // (map, owner, from) 一致 → 替换。`from` 不同的算作"另一版本" → 共存。
+        let mut w = World::default();
+        AddFactionCommand::new(f("f1", "F1")).apply(&mut w).unwrap();
+        UpsertFactionGeometryCommand::new(geo("m", "f1", 1, Some(10)))
+            .apply(&mut w)
+            .unwrap();
+        UpsertFactionGeometryCommand::new(geo("m", "f1", 1, Some(20)))
+            .apply(&mut w)
+            .unwrap();
+        assert_eq!(w.faction_geometry.len(), 1, "from 相同 → 替换");
+        assert_eq!(w.faction_geometry[0].span.to, Some(20));
+        UpsertFactionGeometryCommand::new(geo("m", "f1", 30, None))
+            .apply(&mut w)
+            .unwrap();
+        assert_eq!(w.faction_geometry.len(), 2, "from 不同 → 共存");
+    }
+
+    #[test]
+    fn upsert_geometry_revert_restores_replaced_value() {
+        let mut w = World::default();
+        AddFactionCommand::new(f("f1", "F1")).apply(&mut w).unwrap();
+        let original = geo("m", "f1", 1, Some(10));
+        UpsertFactionGeometryCommand::new(original.clone())
+            .apply(&mut w)
+            .unwrap();
+        let updated = geo("m", "f1", 1, Some(99));
+        let upd_cmd = UpsertFactionGeometryCommand::new(updated);
+        upd_cmd.apply(&mut w).unwrap();
+        assert_eq!(w.faction_geometry[0].span.to, Some(99));
+        upd_cmd.revert(&mut w).unwrap();
+        assert_eq!(w.faction_geometry[0].span.to, Some(10), "应恢复为 10");
+    }
+
+    #[test]
+    fn upsert_geometry_rejects_orphan_owner() {
+        let mut w = World::default();
+        // 没有 add Faction。
+        let cmd = UpsertFactionGeometryCommand::new(geo("m", "f_ghost", 1, Some(10)));
+        assert!(matches!(cmd.apply(&mut w), Err(EditError::Precondition(_))));
+    }
+
+    #[test]
+    fn remove_geometry_apply_then_revert_restores_at_original_index() {
+        let mut w = World::default();
+        AddFactionCommand::new(f("f1", "F1")).apply(&mut w).unwrap();
+        UpsertFactionGeometryCommand::new(geo("m", "f1", 1, Some(10)))
+            .apply(&mut w)
+            .unwrap();
+        UpsertFactionGeometryCommand::new(geo("m", "f1", 20, None))
+            .apply(&mut w)
+            .unwrap();
+        UpsertFactionGeometryCommand::new(geo("m", "f1", 30, None))
+            .apply(&mut w)
+            .unwrap();
+        // 删中间那条 (from=20)。
+        let rm =
+            RemoveFactionGeometryCommand::new(Id::new_unchecked("m"), Id::new_unchecked("f1"), 20);
+        rm.apply(&mut w).unwrap();
+        assert_eq!(w.faction_geometry.len(), 2);
+        assert!(w.faction_geometry.iter().all(|g| g.span.from != 20));
+        rm.revert(&mut w).unwrap();
+        assert_eq!(w.faction_geometry.len(), 3);
+        assert_eq!(w.faction_geometry[1].span.from, 20, "按原位置 1 还原");
+    }
+
+    #[test]
+    fn remove_geometry_missing_is_target_error() {
+        let mut w = World::default();
+        let cmd =
+            RemoveFactionGeometryCommand::new(Id::new_unchecked("m"), Id::new_unchecked("f1"), 999);
+        assert!(matches!(
+            cmd.apply(&mut w),
+            Err(EditError::TargetMissing(_))
         ));
     }
 }

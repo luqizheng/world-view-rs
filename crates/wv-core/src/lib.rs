@@ -22,6 +22,7 @@ pub mod track;
 pub mod unit;
 
 pub use character::Character;
+pub use color::Color;
 pub use encounter::{detect_encounter_hints, EncounterHint, EncounterInput, HintSeverity};
 pub use error::{CoreError, CoreResult};
 pub use event::{Event, EventLocation};

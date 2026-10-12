@@ -291,6 +291,7 @@ fn poll_open_project_dialog(
     mut drill: ResMut<DrillState>,
     mut recents: ResMut<RecentProjects>,
     mut notice: ResMut<ShellNotice>,
+    mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
     time: Res<Time>,
 ) {
     let Some(outcome) = task.take_if_finished() else {
