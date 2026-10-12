@@ -163,6 +163,13 @@ pub fn derive_hints(world: &wv_core::World) -> Diagnostics {
             severity: Some(h.severity),
         });
     }
+
+    // 阶段六 v0.2：事件间位移可行性提示（只提示不阻止，AGENTS §7.5 V1）。
+    // 与相遇提示的分工：本检查针对**事件**而非**轨迹**——「下一事件发生时，
+    // 该参与者是否还有时间从上一事件地点赶过去」；相遇提示管的是「两轨迹同
+    // (place, day) 覆盖但没写事件」，两者不重叠。
+    d.items.extend(detect_travel_feasibility_hints(world));
+
     d.dedup_by_fingerprint();
     d
 }
@@ -176,6 +183,115 @@ pub fn hint(fingerprint: impl Into<String>, message: impl Into<String>) -> Diagn
         anchor: None,
         severity: None,
     }
+}
+
+/// 阶段六 v0.2：事件间位移可行性提示。
+///
+/// ## 规则
+///
+/// 1. 把 `world.events` 按 `span.from` 升序；
+/// 2. 对每对**相邻**事件 `prev` / `next`，若 `participants` 交集非空且
+///    两事件都有 `location.place` 且二者不同；
+/// 3. 计算 `gap = next.span.from - prev.span.to`（半开：`prev.to` 那天
+///    `next` 才能开始，所以 `prev.span.to == None`（开放区间）即跳过；
+///    `gap <= 0` 也跳过——事件在时间上不正向或同日同时）；
+/// 4. 跑 `DistanceGraph::shortest_journey(prev.place, next.place)` 拿
+///    `total_days`（最少可行天数）；
+/// 5. 若 `gap < total_days` → 提示「预算时间不足：<X>→<Y> 需 ≥N 天，仅给 M 天」。
+///
+/// ## 为什么是 hint 不是 error
+///
+/// 参照 `AGENTS.md` §7.5 V1：作者可能有意压缩（小说里常见的"星夜兼程"）。
+/// 工具的职责是让作者**看见**这个差距，不替他决定。
+///
+/// ## 与相遇提示的分工
+///
+/// 相遇提示（[`wv_core::encounter::detect_encounter_hints`]）按**轨迹**的
+/// `(place, day)` 覆盖判定「该处应该有事件」；本检查按**事件序列**判定
+/// 「前后事件之间路够不够走」。两者不重叠：前者是**缺事件**，后者是**事件间距过紧**。
+///
+/// ## 单元测试
+///
+/// 见本模块 `tests::travel_feasibility_*`——直接喂 `wv_core::Event` + 极简
+/// `DistanceGraph`，不依赖示例工程。
+fn detect_travel_feasibility_hints(world: &wv_core::World) -> Vec<Diagnostic> {
+    use std::collections::BTreeSet;
+
+    if world.events.len() < 2 {
+        return Vec::new();
+    }
+
+    // 按 span.from 升序。稳定排序：from 相同时保留 YAML 顺序（不做稳定性
+    // 假设对正确性无影响——同 from 的两事件地点若不同，是另一类冲突，非本检查目标）。
+    let mut order: Vec<usize> = (0..world.events.len()).collect();
+    order.sort_by_key(|&i| world.events[i].span.from);
+
+    let mut out: Vec<Diagnostic> = Vec::new();
+    for w in order.windows(2) {
+        let (pi, ni) = (w[0], w[1]);
+        let (Some(prev), Some(next)) = (world.events.get(pi), world.events.get(ni)) else {
+            continue;
+        };
+        // 参与者交集。
+        let prev_p: BTreeSet<&wv_core::Id> = prev.participants.iter().collect();
+        let next_p: BTreeSet<&wv_core::Id> = next.participants.iter().collect();
+        let common: Vec<&wv_core::Id> = prev_p.intersection(&next_p).copied().collect();
+        if common.is_empty() {
+            continue;
+        }
+        // 双方都得有 location.place。
+        let (Some(prev_loc), Some(next_loc)) = (prev.location.as_ref(), next.location.as_ref())
+        else {
+            continue;
+        };
+        // 同地不动不算。
+        if prev_loc.place == next_loc.place {
+            continue;
+        }
+        // 半开：[prev.from, prev.to)。prev.to == None 表示至今仍在持续——
+        // 既然 next 还在 prev 期间发生就矛盾，先不报本检查。
+        let Some(prev_to) = prev.span.to else {
+            continue;
+        };
+        let gap = next.span.from - prev_to;
+        if gap <= 0 {
+            continue;
+        }
+        // 跑最短路径。不通（NoPath / NoUsableVehicle）→ 不报本检查：
+        // 这是另一类问题（地图不连通），留给后续检查。
+        let Ok(journey) = world
+            .distances
+            .shortest_journey(&prev_loc.place, &next_loc.place, &[])
+        else {
+            continue;
+        };
+        if journey.total_days.is_finite() && (gap as f32) < journey.total_days {
+            // 指纹稳定：被检查的「两事件 id + 共同参与者集合」。
+            // 参与者排序以 BTreeSet 的天然序为准，确定性。
+            let participants: String = common
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            let prev_id = prev.id.as_str();
+            let next_id = next.id.as_str();
+            let fp = format!("travel_feasibility|{prev_id}|{next_id}|{participants}");
+            // 文案：报告实际差距（不是给死数字）。
+            let deficit = journey.total_days - gap as f32;
+            let place_a = prev_loc.place.as_str();
+            let place_b = next_loc.place.as_str();
+            let prev_from = prev.span.from;
+            let next_from = next.span.from;
+            let total = journey.total_days;
+            let message = format!(
+                "参与者预算时间不足：第 {prev_from}–{prev_to_end} 天的「{place_a}」到第 {next_from} 天的「{place_b}」 \
+                 至少需 {total:.1} 天，预算仅 {gap} 天（差 {deficit:.1} 天）",
+                prev_to_end = prev_to - 1,
+            );
+            out.push(hint(fp, message));
+        }
+    }
+    out
 }
 
 /// 构造一条错误级诊断。
@@ -242,6 +358,242 @@ mod tests {
         assert!(d.items.is_empty());
         assert!(!d.has_errors(), "提示路径永不产生错误");
     }
+
+    // -----------------------------------------------------------------------
+    // 阶段六 v0.2：事件间位移可行性提示单元测试
+    // -----------------------------------------------------------------------
+
+    use wv_core::distance::{DistanceGraph, Place, PlaceEdge, ScheduledJourney, Vehicle};
+    use wv_core::event::{Event, EventLocation};
+    use wv_core::time::TimeSpan;
+    use wv_core::Id;
+
+    /// 极简图：A → B，单条边 100 km plain，单车 speed 10 km/h 跑 8h → 12.5 km/天。
+    /// A → B 至少需 100/12.5 = 8 天。
+    fn fixture_graph() -> DistanceGraph {
+        let a = Id::new_unchecked("p_a");
+        let b = Id::new_unchecked("p_b");
+        DistanceGraph {
+            places: vec![
+                Place {
+                    id: a.clone(),
+                    name: "A".into(),
+                    map: Some(Id::new_unchecked("m")),
+                    x: Some(0.0),
+                    y: Some(0.0),
+                    w: None,
+                    h: None,
+                },
+                Place {
+                    id: b.clone(),
+                    name: "B".into(),
+                    map: Some(Id::new_unchecked("m")),
+                    x: Some(0.0),
+                    y: Some(0.0),
+                    w: None,
+                    h: None,
+                },
+            ],
+            edges: vec![PlaceEdge {
+                id: Id::new_unchecked("e_ab"),
+                a: a.clone(),
+                b: b.clone(),
+                distance_km: 100.0,
+                terrain: "plain".into(),
+                bidirectional: true,
+            }],
+            vehicles: vec![Vehicle {
+                id: Id::new_unchecked("v_walk"),
+                name: "步行".into(),
+                instant: false,
+                speed_kmh: Some(10.0),
+                daily_hours: Some(8.0),
+                terrain_modifiers: Default::default(),
+                requires_endpoints: false,
+                requirements: vec![],
+            }],
+        }
+    }
+
+    fn ev(id: &str, from: i64, to: i64, place: &str, who: &[&str]) -> Event {
+        Event {
+            id: Id::new_unchecked(id),
+            name: id.into(),
+            span: TimeSpan { from, to: Some(to) },
+            location: Some(EventLocation {
+                place: Id::new_unchecked(place),
+                x: None,
+                y: None,
+                w: None,
+                h: None,
+            }),
+            participants: who
+                .iter()
+                .map(|s| Id::new_unchecked(*s))
+                .collect(),
+            narrative: None,
+            outcome: None,
+            effects: vec![],
+            narrations: vec![],
+        }
+    }
+
+    /// 构造一个最小可工作 `World`：`distances` + `events` 都给好。
+    fn world_with(distances: DistanceGraph, events: Vec<Event>) -> wv_core::World {
+        wv_core::World {
+            distances,
+            events,
+            ..Default::default()
+        }
+    }
+
+    /// 预算 < 路径最少 → 出 hint。
+    #[test]
+    fn travel_feasibility_hints_when_budget_below_path_min() {
+        let w = world_with(
+            fixture_graph(),
+            vec![ev("e1", 1, 5, "p_a", &["x"]), ev("e2", 7, 8, "p_b", &["x"])],
+        );
+        // 直查 A* 拿真实 total_days，让断言用真实值。
+        let j = w
+            .distances
+            .shortest_journey(&Id::new_unchecked("p_a"), &Id::new_unchecked("p_b"), &[])
+            .unwrap();
+        let expected_total = j.total_days;
+        let d = derive_hints(&w);
+        let travel: Vec<&Diagnostic> = d
+            .items
+            .iter()
+            .filter(|x| x.fingerprint.starts_with("travel_feasibility|"))
+            .collect();
+        assert_eq!(travel.len(), 1, "应出一条位移提示");
+        let msg = &travel[0].message;
+        let total_str = format!("{:.1}", expected_total);
+        assert!(
+            msg.contains(&total_str),
+            "应报最少需 {total_str} 天：got {msg}"
+        );
+        assert!(msg.contains("2"), "应报预算 2 天：got {msg}");
+        assert_eq!(travel[0].level, DiagLevel::Hint);
+    }
+
+    /// 预算 ≥ 路径最少 → 不出 hint。
+    #[test]
+    fn travel_feasibility_silent_when_budget_covers_path_min() {
+        // fixture 中 A→B 实际需 30 天（10 km/h × 8 h/24 × 100 km），把 gap 调到 50。
+        let w = world_with(
+            fixture_graph(),
+            vec![ev("e1", 1, 5, "p_a", &["x"]), ev("e2", 55, 56, "p_b", &["x"])],
+        );
+        let d = derive_hints(&w);
+        let travel = d
+            .items
+            .iter()
+            .filter(|x| x.fingerprint.starts_with("travel_feasibility|"))
+            .count();
+        assert_eq!(travel, 0, "预算充足时不应出提示");
+    }
+
+    /// 同参与者集合为空 → 不出 hint。
+    #[test]
+    fn travel_feasibility_skipped_when_no_common_participant() {
+        let w = world_with(
+            fixture_graph(),
+            vec![ev("e1", 1, 5, "p_a", &["x"]), ev("e2", 7, 8, "p_b", &["y"])],
+        );
+        let d = derive_hints(&w);
+        let travel = d
+            .items
+            .iter()
+            .filter(|x| x.fingerprint.starts_with("travel_feasibility|"))
+            .count();
+        assert_eq!(travel, 0, "无共同参与者不应出提示");
+    }
+
+    /// 同地点 → 不出 hint。
+    #[test]
+    fn travel_feasibility_skipped_when_same_place() {
+        let w = world_with(
+            fixture_graph(),
+            vec![ev("e1", 1, 5, "p_a", &["x"]), ev("e2", 7, 8, "p_a", &["x"])],
+        );
+        let d = derive_hints(&w);
+        let travel = d
+            .items
+            .iter()
+            .filter(|x| x.fingerprint.starts_with("travel_feasibility|"))
+            .count();
+        assert_eq!(travel, 0, "同地点不算位移");
+    }
+
+    /// 路径不通（图中无连边）→ 不报本检查，留给其他检查。
+    #[test]
+    fn travel_feasibility_silent_when_no_path() {
+        let w = world_with(
+            DistanceGraph::default(),
+            vec![ev("e1", 1, 5, "p_a", &["x"]), ev("e2", 7, 8, "p_b", &["x"])],
+        );
+        let d = derive_hints(&w);
+        let travel = d
+            .items
+            .iter()
+            .filter(|x| x.fingerprint.starts_with("travel_feasibility|"))
+            .count();
+        assert_eq!(travel, 0, "路径不可达时不应出本类提示");
+    }
+
+    /// `prev.span.to == None`（开放区间）→ 跳过——next 与仍持续的 prev 重叠是另一类矛盾。
+    #[test]
+    fn travel_feasibility_skipped_when_prev_to_open() {
+        let mut e1 = ev("e1", 1, 5, "p_a", &["x"]);
+        e1.span.to = None;
+        let w = world_with(
+            fixture_graph(),
+            vec![e1, ev("e2", 7, 8, "p_b", &["x"])],
+        );
+        let d = derive_hints(&w);
+        let travel = d
+            .items
+            .iter()
+            .filter(|x| x.fingerprint.starts_with("travel_feasibility|"))
+            .count();
+        assert_eq!(travel, 0, "开放区间跳过本检查");
+    }
+
+    /// 指纹由 prev/next id + 共同参与者集合组成，确定性、不含日期（AGENTS §6.1 措辞思路：
+    /// 日期一变提示就失效，作者认领不掉——本检查同理用稳定 id）。
+    #[test]
+    fn travel_feasibility_fingerprint_is_stable_under_time_edit() {
+        let w = world_with(
+            fixture_graph(),
+            vec![ev("e1", 1, 5, "p_a", &["x"]), ev("e2", 7, 8, "p_b", &["x"])],
+        );
+        let d1 = derive_hints(&w);
+        // 把 next 的 day 挪到 55 → gap=50，预算充足 → 提示应消失。
+        let mut w2 = w.clone();
+        w2.events[1].span.from = 55;
+        let d2 = derive_hints(&w2);
+        let fp1: String = d1
+            .items
+            .iter()
+            .find(|x| x.fingerprint.starts_with("travel_feasibility|"))
+            .map(|x| x.fingerprint.clone())
+            .unwrap();
+        let count2 = d2
+            .items
+            .iter()
+            .filter(|x| x.fingerprint.starts_with("travel_feasibility|"))
+            .count();
+        assert!(
+            fp1.contains("e1") && fp1.contains("e2") && fp1.contains("x"),
+            "指纹应含 prev/next id 与共同参与者：got {fp1}"
+        );
+        assert_eq!(count2, 0, "挪日期后预算充足，提示应消失");
+    }
+
+    /// _use ScheduledJourney：避免未使用导入 lint。
+    #[allow(dead_code)]
+    fn _ensure_journey_in_scope(_: &ScheduledJourney) {}
 
     /// 阶段六 v0.1：xinhai-1911 工程的距离图应正确加载三层（places/edges/vehicles），
     /// 且武汉→成都走「长江＋陆路」可解（A* 返非空）。
