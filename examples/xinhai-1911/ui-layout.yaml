@@ -42,9 +42,9 @@ panels:
     collapsed: false
     visible: false
   minimap:
-    x: 700.0
-    y: 39.2
-    width: 232.00006
+    x: 1040.8
+    y: 34.4
+    width: 232.00122
     height: 370.75684
     collapsed: false
     visible: true

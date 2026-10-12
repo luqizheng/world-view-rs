@@ -29,6 +29,11 @@ pub struct ProjectionFrame {
     pub track_heads: Vec<Vec2>,
     /// 本帧轨迹「空心起点」标记（推算 / 粗轨迹用空心，动画 §1.3）。
     pub track_hollow_starts: Vec<Vec2>,
+    /// 本帧道路层（矢量叠加）：每条地点边 `(PlaceEdge)` 的一段线（世界坐标端点对）。
+    ///
+    /// 只画**两端都锚定在当前地图**的边（`Place.map == 当前图 id` 且 `x/y` 齐备），
+    /// 与 [`crate::drill::resolve_markers`] 的「只画当前层级」口径一致。
+    pub road_segments: Vec<(Vec2, Vec2)>,
 }
 
 /// 计算本帧投影。**所有时间判断集中在这里**，且走 `wv-core` 的纯函数。
@@ -36,6 +41,7 @@ pub fn compute_projection(
     playback: Res<PlaybackState>,
     view: Res<ViewState>,
     grid: Res<GridConfig>,
+    drill: Res<crate::state::DrillState>,
     projection: Res<WorldProjection>,
     mut frame: ResMut<ProjectionFrame>,
 ) {
@@ -43,8 +49,9 @@ pub fn compute_projection(
     frame.track_polylines.clear();
     frame.track_heads.clear();
     frame.track_hollow_starts.clear();
+    frame.road_segments.clear();
 
-    if !view.events_visible && !view.tracks_visible {
+    if !view.events_visible && !view.tracks_visible && !view.roads_visible {
         return;
     }
 
@@ -90,11 +97,37 @@ pub fn compute_projection(
             }
         }
     }
+
+    // ---- 道路层：地点边（纯几何叠加，无时间语义，不涉 P7）----
+    if view.roads_visible {
+        if let Some(current) = drill.current_node(world) {
+            // 只取锚定在当前地图、且坐标齐备的地点（与标记层「只画当前层级」同口径）。
+            let find_place = |id: &wv_core::id::Id| -> Option<Vec2> {
+                let p = world
+                    .distances
+                    .places
+                    .iter()
+                    .find(|p| &p.id == id && p.map.as_ref() == Some(&current.id))?;
+                Some(world_to_view(p.x?, p.y?, &grid))
+            };
+            for edge in &world.distances.edges {
+                if let (Some(a), Some(b)) = (find_place(&edge.a), find_place(&edge.b)) {
+                    frame.road_segments.push((a, b));
+                }
+            }
+        }
+    }
 }
 
 /// 图内局部坐标 → 视图世界坐标（基线 §2.15 变换链）。
 fn world_to_view(x: f32, y: f32, grid: &GridConfig) -> Vec2 {
     Vec2::new(grid.origin.x + x, grid.origin.y + y)
+}
+
+/// [`world_to_view`] 的公开版本——供同 crate 的地名标注（`drill::update_place_labels`）
+/// 等叠加层复用，保证全项目只有一条坐标变换链。
+pub fn world_to_view_pub(x: f32, y: f32, grid: &GridConfig) -> Vec2 {
+    world_to_view(x, y, grid)
 }
 
 /// 生成「已生长」折线（动画 §1.2）：已知生长位置之前全亮，当前段线性插值到笔尖。
@@ -183,6 +216,13 @@ pub fn draw_map_gizmos(
             Vec2::new(max.x, y),
             palette::LINE_ON_DARK.with_alpha(0.35),
         );
+    }
+
+    // 道路：地点边直线（在事件/轨迹之下，视觉上先铺路网再叠动态要素）。
+    if view.roads_visible {
+        for (a, b) in &frame.road_segments {
+            gizmos.line_2d(*a, *b, palette::ACCENT_NOTE.with_alpha(0.9));
+        }
     }
 
     // 事件高点亮：常驻底环 + 内芯（特效 §4.2：状态永不抑制）。

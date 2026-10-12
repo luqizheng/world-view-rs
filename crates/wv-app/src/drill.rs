@@ -77,7 +77,14 @@ pub struct DrillClick {
 pub fn register(app: &mut App) {
     app.init_resource::<DrillClick>().add_systems(
         Update,
-        (drill_pick, drill_transition, draw_drill_markers).chain(),
+        (
+            drill_pick,
+            drill_transition,
+            draw_drill_markers,
+            // 地名标注在标记之后对齐（读同一份钻取状态，画在标记上方）。
+            update_place_labels,
+        )
+            .chain(),
     );
 }
 
@@ -502,6 +509,79 @@ pub fn draw_drill_markers(
                 color,
             );
         }
+    }
+}
+
+/// 地点名称标注（矢量图层的一部分）。
+///
+/// 用**对象池**：每帧把池内实体的位置/文案对齐到「当前地图的锚定地点」，
+/// 多余的隐藏、不够的补生——避免每帧 spawn/despawn 抖动（与纹理增量更新同一哲学）。
+#[derive(Component)]
+pub struct PlaceLabel;
+
+/// 地名文字的屏幕像素基准（v0.2 §B.2 的 12px 标记同量级，不抢标记视觉）。
+const LABEL_PX: f32 = 12.0;
+
+/// 更新当前层级的地名标注池。
+pub fn update_place_labels(
+    mut commands: Commands,
+    projection: Res<WorldProjection>,
+    drill: Res<DrillState>,
+    grid: Res<GridConfig>,
+    view: Res<ViewState>,
+    mut q: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut Text2d,
+            &mut TextFont,
+            &mut Visibility,
+        ),
+        With<PlaceLabel>,
+    >,
+) {
+    // 期望标注集：锚定在当前地图、坐标齐备的地点（与道路层同一可见口径）。
+    let mut wanted: Vec<(Vec2, &str)> = Vec::new();
+    if let Some(current) = drill.current_node(&projection.world) {
+        for p in &projection.world.distances.places {
+            if p.map.as_ref() == Some(&current.id) {
+                if let (Some(x), Some(y)) = (p.x, p.y) {
+                    // 放在锚点正上方（世界单位，随 cell_size 缩放与标记尺寸同尺度）。
+                    let pos = crate::projection::world_to_view_pub(x, y, &grid)
+                        + Vec2::new(0.0, grid.cell_size * 2.0);
+                    wanted.push((pos, p.name.as_str()));
+                }
+            }
+        }
+    }
+
+    // 文字尺寸按屏幕像素恒定（与 draw_drill_markers 的 screen_scale 口径一致）。
+    let font_size = LABEL_PX * view.scale.max(0.05);
+
+    let mut iter = q.iter_mut();
+    for (pos, name) in &wanted {
+        if let Some((_, mut tf, mut text, mut style, mut vis)) = iter.next() {
+            tf.translation = pos.extend(0.0);
+            // Bevy 0.15：字号在 TextFont 组件上，Text2d 只存内容。
+            *text = Text2d::new(*name);
+            style.font_size = font_size;
+            *vis = Visibility::Visible;
+        } else {
+            commands.spawn((
+                PlaceLabel,
+                Text2d::new(*name),
+                TextFont {
+                    font_size,
+                    ..Default::default()
+                },
+                Transform::from_translation(pos.extend(0.0)),
+                Visibility::Visible,
+            ));
+        }
+    }
+    // 池里多出来的实体隐藏（保留复用，不 despawn）。
+    for (_, mut _tf, mut _text, mut _style, mut vis) in iter {
+        *vis = Visibility::Hidden;
     }
 }
 

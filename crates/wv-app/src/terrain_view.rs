@@ -268,15 +268,71 @@ pub fn rebuild_texture_on_mode_change(
 }
 
 /// 网格几何的默认配置（与纹理尺寸挂钩）。
-pub fn sync_grid_config(tex: Res<TerrainTexture>, mut grid: ResMut<GridConfig>) {
+///
+/// 坐标口径统一到**地图 extent 坐标系**（`[0, extent]`）：Place、MapNode.icons、
+/// 事件落点全部以 extent 为参照；网格若自作主张把原点挪到 `-extent/2`，
+/// 地形四边形就会与所有标记错开半幅——主视口「看起来全黑」的根因之一。
+pub fn sync_grid_config(
+    tex: Res<TerrainTexture>,
+    projection: Res<WorldProjection>,
+    mut grid: ResMut<GridConfig>,
+) {
     if !tex.is_added() && !tex.is_changed() {
         return;
     }
-    // 让初始视图「整图入窗」：cell_size 使网格边长约为 1200 世界单位。
-    let target_world = 1200.0;
-    grid.cell_size = (target_world / tex.size as f32).max(0.5);
-    grid.origin = Vec2::new(
-        -(tex.size as f32 * grid.cell_size) / 2.0,
-        -(tex.size as f32 * grid.cell_size) / 2.0,
-    );
+    // 根图 extent 为世界尺寸权威；无索引时回退 4096²。
+    let extent = projection
+        .world
+        .meta
+        .as_ref()
+        .and_then(|m| {
+            projection
+                .world
+                .maps
+                .iter()
+                .find(|n| n.id == m.root_map)
+                .and_then(|n| n.extent.as_ref())
+        })
+        .map(|e| e.width.max(e.height))
+        .unwrap_or(4096.0);
+    // 纹理 size 格 × cell_size = extent，一格一格对齐地图。
+    grid.cell_size = (extent / tex.size as f32).max(0.01);
+    grid.origin = Vec2::ZERO;
+}
+
+/// 世界空间的地形四边形标记（防重复 spawn）。
+#[derive(Component)]
+pub struct TerrainSprite;
+
+/// 把地形纹理真正画进世界空间——此前纹理只被 egui 小地图消费，
+/// 主视口从未 spawn 过承载它的实体，「真实地形」模式下主视口永远全黑。
+///
+/// 每帧保证恰好一个 `TerrainSprite`：不存在则 spawn，句柄/尺寸变了就地更新
+/// （笔刷编辑与模式切换复用同一逻辑，不各自 spawn）。
+pub fn sync_terrain_sprite(
+    mut commands: Commands,
+    tex: Res<TerrainTexture>,
+    grid: Res<GridConfig>,
+    mut q: Query<(Entity, &mut Sprite, &mut Transform), With<TerrainSprite>>,
+) {
+    let size = tex.size as f32 * grid.cell_size;
+    let center = grid.origin + Vec2::splat(size * 0.5);
+    if let Ok((_, mut sprite, mut tf)) = q.get_single_mut() {
+        // Bevy 0.15：纹理句柄在 Sprite.image 字段里，不是独立组件。
+        if sprite.image != tex.handle {
+            sprite.image = tex.handle.clone();
+        }
+        sprite.custom_size = Some(Vec2::splat(size));
+        tf.translation = center.extend(0.0);
+    } else {
+        commands.spawn((
+            TerrainSprite,
+            Sprite {
+                image: tex.handle.clone(),
+                custom_size: Some(Vec2::splat(size)),
+                ..Default::default()
+            },
+            Transform::from_xyz(center.x, center.y, 0.0),
+        ));
+    }
 }

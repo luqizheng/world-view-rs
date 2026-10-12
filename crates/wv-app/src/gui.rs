@@ -196,6 +196,8 @@ pub fn run(config: AppConfig) {
             projection::compute_projection,
             terrain_view::rebuild_texture_on_mode_change,
             terrain_view::sync_grid_config,
+            // 地形四边形进世界空间（此前纹理只有 egui 小地图在用，主视口全黑）。
+            terrain_view::sync_terrain_sprite,
         )
             .chain(),
     )

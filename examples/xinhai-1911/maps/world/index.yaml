@@ -9,6 +9,15 @@ children:
 extent:
   width: 4096.0
   height: 4096.0
+# 地形栅格（AGENTS §5 唯一二进制例外）：gen_xinhai_terrain 示例生成，512² 网格。
+raster:
+  path: maps/map_world/terrain.bin
+  encoding: i16
+  width: 512
+  height: 512
+  chunk: 256
+  format_version: 1
+  checksum: f84c6933
 layers:
   - id: layer_terrain
     name: 地形
