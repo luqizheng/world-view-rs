@@ -322,6 +322,7 @@ cargo run -p wv-app --features app -- gui
 9. **反向索引失效策略：** 第一版按「**每次查询时重建**」实现（N 小时可接受）。（待裁：N 超过 1 万时是否改为增量维护。基线 §2.5 已标注 `TODO(阶段X)`。）
 10. **地形双通道编码：** I16 高度 + U8 类型两个通道，是否合并为单个 `terrain.bin` 文件。（涉及二进制格式设计与 `docs/BINARY_FORMAT_SPEC.md` 的对应条目。）
 11. **单位本体相关（`docs/adr/ADR-0004-unit-ontology.md` §待裁 U1–U7）：** 加载期硬失败 vs 编辑期软提示的强度统一（U1）／「相遇提示」的留痕与回访形态（U2）／`Situation.units` 落地时机（U3）／低 LOD 事态标签的防重叠（U4）／`Character.died_at` 卒年（U5）／`Event` 的「过程描述」字段（U6）／事态嵌套的落地条件（U7）。
+12. **地图上的空间落点（子图入口与标记）**：第一版按「**`MapNode.icons` 里带 `drill_into` 的图标即子图入口**」实现——锚点归**每个图标自己**所有（`IconSpec.anchor`，本图 `extent` 内的归一化 `[0,1]²`），`MapNode.children` 仍只存 `Id`，原则四「只存引用」不受影响。未声明 `anchor` 的图标按 `id` 确定性哈希摆位（同次运行稳定、可复现）。（待裁：(a) 哈希回退是否长期保留，还是最终应强制作者为每个子图显式声明 `anchor`——收敛点是 `wv-app` 的 `drill::resolve_markers` ② 分支，改动面可控；(b) 是否把「子图入口」从 `icons` 里拆成独立字段——当前 `icons` 同时承担「注释标记」与「钻入入口」两种语义。涉及 `docs/MAP_EDITOR_BASELINE_v1.md` §5 的坐标系统条目与 `docs/STYLE_SWAPPABLE_ARCHITECTURE.md` 的地图层级渲染条目。）
 
 ---
 

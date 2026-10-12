@@ -41,6 +41,39 @@ fn load_maps(root: &Path) -> IoResult<Vec<wv_core::map::MapNode>> {
     Ok(out)
 }
 
+/// 检出地图图标里 `drill_into` 指向不存在地图的悬空引用。
+///
+/// 与 [`crate::situation_io::collect_situations_and_tracks_dangling`] 同一套纪律：
+/// **一次性检出全部**，不按遇到第一个就停；结果交给
+/// [`Project::diagnose`] 呈现为 Error 级诊断，**不阻断加载**
+/// （`AGENTS.md` §7.5V1：校验只提示，不阻止）。
+///
+/// 为什么单独一个函数而不塞进 situation_io：那个模块管的是「事态/轨迹引用谁」，
+/// 而这里管的是「地图图标的钻入目标」，两条链路互不相干，混在一个函数里
+/// 会让签名和文档都越来越难读。
+pub fn collect_map_icons_dangling(world: &World) -> Vec<wv_core::CoreError> {
+    use wv_core::CoreError;
+
+    let map_ids: Vec<wv_core::Id> = world.maps.iter().map(|m| m.id.clone()).collect();
+    let has = |ids: &[wv_core::Id], id: &wv_core::Id| ids.iter().any(|x| x == id);
+
+    let mut out = Vec::new();
+    for map in &world.maps {
+        for icon in &map.icons {
+            let Some(target) = &icon.drill_into else {
+                continue;
+            };
+            if !has(&map_ids, target) {
+                out.push(CoreError::DanglingReference {
+                    referrer: format!("map.{}.icons[{}] (field `drill_into`)", map.id, icon.id),
+                    missing: target.to_string(),
+                });
+            }
+        }
+    }
+    out
+}
+
 /// 一个已定位的工程。持有根目录路径与已解析的元数据。
 #[derive(Debug, Clone)]
 pub struct Project {
@@ -247,7 +280,7 @@ impl Project {
         let unit_ids: Vec<wv_core::Id> = world.units.iter().map(|u| u.id.clone()).collect();
 
         let mut d = Diagnostics::default();
-        for err in collect_situations_and_tracks_dangling(
+        let mut dangling: Vec<wv_core::CoreError> = collect_situations_and_tracks_dangling(
             &world.situations,
             &world.tracks,
             KnownIds {
@@ -257,7 +290,10 @@ impl Project {
                 places: &place_ids,
                 units: &unit_ids,
             },
-        ) {
+        );
+        // 地图图标的 `drill_into` 悬空（README §12 第 12 条）。
+        dangling.extend(collect_map_icons_dangling(&world));
+        for err in dangling {
             // 悬空引用的指纹取自错误文案本身——它已含 `referrer` 与 `missing`，
             // 因此同一处悬空在多次诊断间保持同一指纹，可被「已读/已忽略」认领。
             d.items.push(crate::diagnostics::error(

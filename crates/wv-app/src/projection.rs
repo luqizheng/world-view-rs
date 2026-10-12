@@ -208,6 +208,9 @@ pub fn draw_map_gizmos(
 /// 笔刷光标 falloff 双环（VFX §3.1：外环实线=影响半径，内环虚线=50% 强度半径）。
 ///
 /// **属「状态」，永不抑制**（VFX §1.3 / 基线 §1.20）。光标用屏幕叠加，不写数据。
+///
+/// **只在世界级显示**（v0.2 §B：城市级/建筑级不显示笔刷光标）——下面那级没有地形
+/// 网格，光标画在那儿只会让人以为可以涂抹。
 pub fn draw_brush_cursor(
     mut gizmos: Gizmos,
     windows: Query<&Window>,
@@ -215,8 +218,9 @@ pub fn draw_brush_cursor(
     view: Res<ViewState>,
     brush: Res<BrushState>,
     grid: Res<GridConfig>,
+    drill: Res<crate::state::DrillState>,
 ) {
-    if !brush.enabled {
+    if !brush.enabled || drill.depth() > 0 {
         return;
     }
     let Ok(window) = windows.get_single() else {

@@ -6,7 +6,8 @@
 
 use std::path::PathBuf;
 
-use wv_core::map::{Layer, LayerKind, MapLevel, MapNode};
+use wv_core::color::Color;
+use wv_core::map::{IconShape, IconSpec, Layer, LayerKind, MapLevel, MapNode};
 use wv_core::time::{Calendar, TimeSpan, Timeline};
 use wv_core::WorldMeta;
 use wv_io::Project;
@@ -79,6 +80,24 @@ fn map_node_yaml_round_trips() {
             z: 10,
             source: Some("borders.yaml".into()),
         }],
+        icons: vec![
+            IconSpec {
+                id: wv_core::Id::new_unchecked("icon_port"),
+                anchor: Some([0.35, 0.62]),
+                shape: IconShape::Circle,
+                size: Some(18.0),
+                color: Some(Color("#7AB8FF".into())),
+                drill_into: None,
+            },
+            IconSpec {
+                id: wv_core::Id::new_unchecked("icon_qingyun"),
+                anchor: Some([0.62, 0.31]),
+                shape: IconShape::Diamond,
+                size: None,
+                color: None,
+                drill_into: Some(wv_core::Id::new_unchecked("region_north")),
+            },
+        ],
         extent: None,
         raster: None,
     };
@@ -86,6 +105,66 @@ fn map_node_yaml_round_trips() {
     let text = serde_yaml::to_string(&node).unwrap();
     let back: MapNode = serde_yaml::from_str(&text).unwrap();
     assert_eq!(node, back, "MapNode 的 YAML round-trip 必须稳定");
+
+    // 声明顺序是绘制顺序的一部分，round-trip 后必须逐位相等。
+    assert_eq!(
+        back.icons.iter().map(|i| i.shape).collect::<Vec<_>>(),
+        vec![IconShape::Circle, IconShape::Diamond],
+    );
+    // 颜色是透明新类型，round-trip 后必须是同一个字符串。
+    assert_eq!(
+        back.icons[0].color,
+        Some(Color("#7AB8FF".into())),
+        "颜色字符串在 YAML round-trip 后必须逐字相等"
+    );
+}
+
+#[test]
+fn icon_spec_yaml_defaults_are_applied_when_omitted() {
+    // `shape` / `anchor` / `size` / `color` / `drill_into` 都是可省的；
+    // 只写 `id` 的图标必须能加载，且形状落到 `Diamond`。
+    let text = "id: icon_marker\nanchor: [0.5, 0.5]\n";
+    let icon: IconSpec = serde_yaml::from_str(text).expect("最小图标声明应能反序列化");
+
+    assert_eq!(icon.id.as_str(), "icon_marker");
+    assert_eq!(icon.anchor, Some([0.5, 0.5]));
+    assert_eq!(
+        icon.shape,
+        IconShape::Diamond,
+        "未声明形状时应落到菱形缺省值"
+    );
+    assert_eq!(icon.size, None);
+    assert_eq!(icon.color, None);
+    assert_eq!(icon.drill_into, None);
+}
+
+#[test]
+fn icon_spec_yaml_accepts_named_shapes() {
+    for (name, shape) in [
+        ("diamond", IconShape::Diamond),
+        ("circle", IconShape::Circle),
+        ("cross", IconShape::Cross),
+        ("square", IconShape::Square),
+        ("star", IconShape::Star),
+    ] {
+        let text = format!("id: i_{name}\nshape: {name}\n");
+        let icon: IconSpec =
+            serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("`{name}` 应可解析: {e}"));
+        assert_eq!(icon.shape, shape, "YAML 名称 `{name}` 未映射到预期的形状");
+    }
+}
+
+#[test]
+fn icon_spec_with_dangling_drill_into_still_loads() {
+    // `AGENTS.md` §7.5V1：悬空引用只提示不阻止。数据层与反序列化层都不得因此失败；
+    // 把关在 `Project::diagnose()`。
+    let text = "id: icon_broken\ndrill_into: region_that_does_not_exist\n";
+    let icon: IconSpec = serde_yaml::from_str(text).expect("悬空引用不应让反序列化失败");
+    assert_eq!(
+        icon.drill_into,
+        Some(wv_core::Id::new_unchecked("region_that_does_not_exist")),
+        "悬空的 ID 必须原样保留，供诊断面板点出"
+    );
 }
 
 #[test]
@@ -285,6 +364,74 @@ fn all_dangling_references_are_listed_in_one_diagnostic_pass() {
             "{needle} 必须出现在同一次诊断结果里；实得 {joined:?}"
         );
     }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn dangling_icon_drill_into_is_listed_as_error_diagnostic() {
+    // README §12 第 12 条：`drill_into` 悬空同样「报错但允许存在」——
+    // 图标照常载入、照常画，诊断面板列出一行即可。
+    let tmp = std::env::temp_dir().join("wv_dangling_icon_probe");
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("maps/world")).unwrap();
+    std::fs::create_dir_all(tmp.join("maps/city_ok")).unwrap();
+    std::fs::write(
+        tmp.join("world.yaml"),
+        "name: probe\nversion: \"0.1\"\nschema_version: 2\nroot_map: world_main\ntimeline_range:\n  from: 1\n  to: 2\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("maps/world/index.yaml"),
+        "id: world_main\nname: 主世界\nlevel: world\nextent: { width: 1024.0, height: 1024.0 }\nicons:\n  - id: icon_city\n    anchor: [0.4, 0.5]\n    drill_into: city_ok\n  - id: icon_ghost\n    anchor: [0.6, 0.3]\n    drill_into: city_that_does_not_exist\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("maps/city_ok/index.yaml"),
+        "id: city_ok\nname: 青云城\nlevel: city\nparent: world_main\n",
+    )
+    .unwrap();
+
+    let project = Project::open(&tmp).unwrap();
+    // ① 工程必须能打开，图标必须照常载入——作者得有机会去改。
+    let world = project
+        .load_world()
+        .expect("悬空图标不得阻止加载（AGENTS §7.5 V1）");
+    assert_eq!(world.maps.len(), 2, "地图照常载入");
+    // 目录按名字排序（`city_ok` 在 `world` 前），所以不能靠下标取节点。
+    let world_map = world
+        .maps
+        .iter()
+        .find(|m| m.id.as_str() == "world_main")
+        .expect("world_main 必须载入");
+    assert_eq!(
+        world_map.icons.len(),
+        2,
+        "声明了两个图标，一个有效一个悬空，都不得被丢弃"
+    );
+
+    // ② 但必须被检出，且**只有**悬空的那一条被列出。
+    let diags = project.diagnose().expect("诊断不得因悬空而失败");
+    let errors: Vec<&str> = diags.errors().iter().map(|e| e.message.as_str()).collect();
+    let icon_errors: Vec<&str> = errors
+        .iter()
+        .filter(|m| m.contains("icon_"))
+        .copied()
+        .collect();
+    assert_eq!(
+        icon_errors.len(),
+        1,
+        "应恰有一条图标相关诊断；实得 {icon_errors:?}"
+    );
+    assert!(
+        icon_errors[0].contains("city_that_does_not_exist"),
+        "诊断必须点出缺失的目标；实得 {}",
+        icon_errors[0]
+    );
+    assert!(
+        icon_errors[0].contains("icon_ghost") && icon_errors[0].contains("world_main"),
+        "诊断必须带上地图 id 与图标 id，否则作者不知道该改哪个文件；实得 {}",
+        icon_errors[0]
+    );
     let _ = std::fs::remove_dir_all(&tmp);
 }
 

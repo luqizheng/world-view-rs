@@ -52,6 +52,11 @@
 | **沉浸模式** | Immersive Mode | 一键将所有浮动面板淡出至 10% 透明度，专注看地图 | 编辑 |
 | **世界坐标** | World Space | 工程唯一的全局参考系，`Extent.origin` 描述各图在其父图中的位置 | 地理 |
 | **图内局部坐标** | Local Space | 单张图内部的坐标，即 `GeometryData` 点列所用坐标系 | 地理 |
+| **地图图标** | Icon / IconSpec | 声明在 `MapNode.icons` 上、渲染在该图上的一个标记。字段：`id` / `anchor` / `shape` / `size` / `color` / `drill_into`。声明顺序即绘制顺序（无 `z`） | 地理 |
+| **图标锚点** | Icon Anchor | `IconSpec.anchor`：本图 `extent` 内的**归一化** `[0,1]²` 位置（左上原点、y 向下）。归一化使父图 `extent` 缩放时锚点不失效；缺省时渲染层按 `id` 哈希确定性摆位；越界值夹回 `[0,1]`，数据层不拒收 | 地理 |
+| **钻入入口** | Drill Entry | 带 `drill_into` 的图标 = 双击进入该子图的入口；`None` = 纯注释标记，只画不可点。悬空引用由 `diagnose` 报 Error 级诊断但不阻止加载 | 地理 |
+| **图标形状** | IconShape | 五种形状（菱形 / 圆形 / 十字 / 方形 / 四角星），缺省菱形（v0.2 §B.2 的钻入标记形状） | 地理 |
+| **显式颜色优先** | Explicit Color Wins | `IconSpec.color`（`#RRGGBB`，`wv-core::color::Color`）声明后**优先于主题色**——不再因「已访问」转灰 | 地理 |
 | **地形网格** | TerrainGrid | `wv-terrain` 的核心数据结构，承载高度场与地形类型 | 地理 |
 | **衰减权重** | Falloff | 笔刷/选区按距离衰减的影响系数（高斯），用于软边缘与选区升降 | 编辑 |
 | **主题包** | Theme Pack | 可整体替换的地图风格包（一个目录 + manifest + 5 类资产） | 美术 |
@@ -123,3 +128,4 @@
 | 地形双通道编码（含二进制分块格式） | 待裁（README §12-10） | I16 高度 + U8 类型两通道是否合并为一个 `terrain.bin`。基线 §5.3 原条目，与「二进制分块」格式版本策略合并登记 |
 | 带洞多边形 | 待裁（README §12-8） | 第一版不支持，作者用多 sub-span 近似；未来可加 `PolygonWithHoles` 变体 |
 | 反向索引失效策略 | 待裁（README §12-9） | 第一版「每次查询重建」，N 超 1 万时改增量 |
+| 地图空间落点 | 待裁（README §12-12） | 第一版锚点归 `IconSpec`（`children` 仍只存 `Id`）；待裁哈希回退是否长期保留、是否把「钻入入口」从 `icons` 拆成独立字段 |

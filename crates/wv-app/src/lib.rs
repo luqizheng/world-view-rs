@@ -19,6 +19,8 @@ pub struct AppConfig {
 #[cfg(feature = "app")]
 pub mod camera;
 #[cfg(feature = "app")]
+pub mod drill;
+#[cfg(feature = "app")]
 pub mod editing;
 #[cfg(feature = "app")]
 pub mod fonts;
@@ -34,3 +36,15 @@ pub mod state;
 pub mod terrain_view;
 #[cfg(feature = "app")]
 pub mod ui;
+#[cfg(feature = "app")]
+pub mod ui_cmdk;
+#[cfg(feature = "app")]
+pub mod ui_layout;
+#[cfg(feature = "app")]
+pub mod ui_shell;
+#[cfg(feature = "app")]
+pub mod ui_theme;
+#[cfg(feature = "app")]
+pub mod ui_time;
+#[cfg(feature = "app")]
+pub mod ui_tokens;

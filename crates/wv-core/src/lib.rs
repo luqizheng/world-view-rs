@@ -7,6 +7,7 @@
 //! - 本 crate 不得引入任何渲染/UI 依赖。
 //! - 历史状态以「带时间区间的状态片段」存储，不存「当前值」。
 
+pub mod color;
 pub mod distance;
 pub mod encounter;
 pub mod error;

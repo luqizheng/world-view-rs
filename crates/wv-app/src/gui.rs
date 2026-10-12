@@ -56,107 +56,119 @@ pub fn run(config: AppConfig) {
         None => Default::default(),
     };
 
-    App::new()
-        .add_plugins(
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "World View · 地图编辑器".into(),
-                        resolution: WindowResolution::new(1280.0, 800.0),
-                        ..Default::default()
-                    }),
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "World View · 地图编辑器".into(),
+                    resolution: WindowResolution::new(1280.0, 800.0),
                     ..Default::default()
-                })
-                // 编辑器是工具，不是游戏：图像用最近邻采样，避免色块被平滑成糊。
-                .set(ImagePlugin::default_nearest()),
+                }),
+                ..Default::default()
+            })
+            // 编辑器是工具，不是游戏：图像用最近邻采样，避免色块被平滑成糊。
+            .set(ImagePlugin::default_nearest()),
+    )
+    .add_plugins(EguiPlugin)
+    .insert_resource(WorldProjection {
+        world,
+        project_dir: config.project_dir.clone(),
+        dirty: false,
+        load_error,
+    })
+    .init_resource::<PlaybackState>()
+    .init_resource::<ViewState>()
+    .init_resource::<BrushState>()
+    .init_resource::<PanelState>()
+    .init_resource::<GridConfig>()
+    .init_resource::<projection::ProjectionFrame>()
+    .init_resource::<camera::ActiveStroke>()
+    .init_resource::<camera::PointerOverUi>()
+    .init_resource::<editing::EditHistory>()
+    .add_systems(
+        Startup,
+        (
+            // 字体必须最先装配：egui 面板首次渲染前需就位，否则中文是方块。
+            crate::fonts::setup_egui_fonts,
+            setup_camera,
+            setup_terrain_texture_after_world,
         )
-        .add_plugins(EguiPlugin)
-        .insert_resource(WorldProjection {
-            world,
-            project_dir: config.project_dir.clone(),
-            dirty: false,
-            load_error,
-        })
-        .init_resource::<PlaybackState>()
-        .init_resource::<ViewState>()
-        .init_resource::<BrushState>()
-        .init_resource::<PanelState>()
-        .init_resource::<GridConfig>()
-        .init_resource::<projection::ProjectionFrame>()
-        .init_resource::<camera::ActiveStroke>()
-        .init_resource::<camera::PointerOverUi>()
-        .init_resource::<editing::EditHistory>()
-        .add_systems(
-            Startup,
-            (
-                // 字体必须最先装配：egui 面板首次渲染前需就位，否则中文是方块。
-                crate::fonts::setup_egui_fonts,
-                setup_camera,
-                setup_terrain_texture_after_world,
-            )
-                .chain(),
+            .chain(),
+    )
+    .add_systems(
+        PreUpdate,
+        // 必须排在 bevy_egui 建上下文之后：否则首帧 ctx_mut() 对未初始化
+        // 上下文调用会 panic（bevy_egui 0.32 lib.rs:437 的 expect）。
+        camera::poll_egui_wants_input.after(bevy_egui::EguiPreUpdateSet::InitContexts),
+    )
+    .add_systems(
+        Update,
+        (
+            // 输入 → 视图状态
+            camera::camera_zoom,
+            camera::camera_pan,
+            camera::camera_pan_keys,
+            camera::brush_radius_scroll,
+            camera::track_cursor_world,
+            camera::collect_brush_stroke,
+            // 编辑（笔触 → 命令 → History）
+            editing::commit_stroke_on_release,
+            // 撤销 / 重做不再在这里单独监听 Ctrl+Z：快捷键统一由
+            // `ui_shell::hotkeys` 收（那里已经处理了「输入框聚焦时失效」），
+            // 两处都听会导致一次按键应用两次。
+            editing::flush_terrain_texture,
+            // 投影（时间 → 渲染资源）
+            projection::advance_playback,
+            projection::compute_projection,
+            terrain_view::rebuild_texture_on_mode_change,
+            terrain_view::sync_grid_config,
         )
-        .add_systems(
-            PreUpdate,
-            // 必须排在 bevy_egui 建上下文之后：否则首帧 ctx_mut() 对未初始化
-            // 上下文调用会 panic（bevy_egui 0.32 lib.rs:437 的 expect）。
-            camera::poll_egui_wants_input.after(bevy_egui::EguiPreUpdateSet::InitContexts),
+            .chain(),
+    )
+    .add_systems(
+        Update,
+        (
+            // 地图绘制必须在所有浮动面板**之前**执行，
+            // 保证地图是最底层、面板浮在其上（基线 §1.11 R1）。
+            projection::draw_map_gizmos,
+            projection::draw_brush_cursor,
+        ),
+    )
+    .add_systems(
+        Update,
+        (
+            // 全部浮动面板（基线 §1.11 R1–R4：地图铺满，面板浮其上）。
+            //
+            // **必须 `.chain()`**：这些系统都要 `ResMut<PanelState>` 与
+            // `ResMut<ViewState>`，Bevy 无法并行调度同时可变借用同一资源的系统
+            // （否则运行期 panic：`could not access system parameter`）。
+            ui::top_bar,
+            // 面包屑浮在地图上、压在面板之下（v0.2 §B.3）。
+            ui::breadcrumb,
+            ui::panel_map_tree,
+            ui::panel_layers,
+            ui::panel_brush,
+            ui::panel_minimap,
+            ui::panel_timeline,
+            ui::panel_event,
+            ui::panel_situation,
+            ui::panel_character,
+            ui::panel_faction,
+            ui::panel_inspector,
+            ui::panel_validation,
+            // 状态栏最后画：它读得到的 `ShellNotice` 已是本帧最终值。
+            ui::status_bar,
         )
-        .add_systems(
-            Update,
-            (
-                // 输入 → 视图状态
-                camera::camera_zoom,
-                camera::camera_pan,
-                camera::camera_pan_keys,
-                camera::brush_radius_scroll,
-                camera::track_cursor_world,
-                camera::collect_brush_stroke,
-                // 编辑（笔触 → 命令 → History）
-                editing::commit_stroke_on_release,
-                editing::handle_undo_redo_keys,
-                editing::flush_terrain_texture,
-                // 投影（时间 → 渲染资源）
-                projection::advance_playback,
-                projection::compute_projection,
-                terrain_view::rebuild_texture_on_mode_change,
-                terrain_view::sync_grid_config,
-            )
-                .chain(),
-        )
-        .add_systems(
-            Update,
-            (
-                // 地图绘制必须在所有浮动面板**之前**执行，
-                // 保证地图是最底层、面板浮在其上（基线 §1.11 R1）。
-                projection::draw_map_gizmos,
-                projection::draw_brush_cursor,
-            ),
-        )
-        .add_systems(
-            Update,
-            (
-                // 全部浮动面板（基线 §1.11 R1–R4：地图铺满，面板浮其上）。
-                //
-                // **必须 `.chain()`**：这些系统都要 `ResMut<PanelState>` 与
-                // `ResMut<ViewState>`，Bevy 无法并行调度同时可变借用同一资源的系统
-                // （否则运行期 panic：`could not access system parameter`）。
-                ui::top_bar,
-                ui::panel_map_tree,
-                ui::panel_layers,
-                ui::panel_brush,
-                ui::panel_minimap,
-                ui::panel_timeline,
-                ui::panel_event,
-                ui::panel_situation,
-                ui::panel_character,
-                ui::panel_faction,
-                ui::panel_inspector,
-                ui::panel_validation,
-            )
-                .chain(),
-        )
-        .run();
+            .chain(),
+    );
+
+    // 界面外壳（主题 / 快捷键 / 命令面板 / 布局持久化）与地图钻取（v0.2 §B）。
+    // 两者各自成模块并各自注册，`gui.rs` 只负责调用顺序（见各处模块文档）。
+    crate::ui_shell::register(&mut app);
+    crate::drill::register(&mut app);
+
+    app.run();
 }
 
 /// 2D 正交相机。初始缩放 1×（整图入窗，基线 §1.16）。

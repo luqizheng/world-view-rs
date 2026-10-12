@@ -13,7 +13,7 @@ use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 use bevy_egui::EguiContexts;
 
-use crate::state::{BrushState, GridConfig, ViewState};
+use crate::state::{BrushState, DrillState, GridConfig, ViewState, WorldProjection};
 
 /// 相机缩放范围（基线 §2.12：渲染层 0.1×–8.0×）。
 pub const SCALE_MIN: f32 = 0.1;
@@ -172,6 +172,18 @@ pub fn track_cursor_world(
 }
 
 /// 笔刷拾取：左键按下/拖拽时收集笔触点列（**不改世界**）。
+///
+/// 两条与地图钻取（v0.2 §B）的接口约定：
+///
+/// 1. **只在世界级落笔**。原型 `index.html:1837` 的判定是
+///    `brushOn && !immersive && mapState.level===0`——城市级/建筑级没有地形网格，
+///    在那里涂抹既无对象也易误解。
+/// 2. **点在钻入标记上不落笔**。原型里标记是独立的 DOM 元素、`dblclick` 自带
+///    `stopPropagation`，画布收不到那两下点击；Bevy 没有 DOM 挡刀，只能自己判，
+///    否则「双击钻入」会先在地上刷一笔。
+///
+/// Bevy 系统的参数即「依赖声明」，宽签名是框架惯例而非坏味道（同 `editing.rs`）。
+#[allow(clippy::too_many_arguments)]
 pub fn collect_brush_stroke(
     buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
@@ -179,9 +191,13 @@ pub fn collect_brush_stroke(
     view: Res<ViewState>,
     brush: Res<BrushState>,
     ui: Res<PointerOverUi>,
+    projection: Res<WorldProjection>,
+    drill: Res<DrillState>,
+    grid: Res<GridConfig>,
     mut stroke: ResMut<ActiveStroke>,
 ) {
-    if ui.wants_pointer || !brush.enabled {
+    if ui.wants_pointer || !brush.enabled || drill.depth() > 0 {
+        stroke.points.clear();
         return;
     }
     let Ok(window) = windows.get_single() else {
@@ -201,11 +217,16 @@ pub fn collect_brush_stroke(
     );
 
     if buttons.just_pressed(MouseButton::Left) {
+        if crate::drill::marker_hit(&projection.world, &drill, &grid, world).is_some() {
+            // 这一下是冲着标记去的：不落笔（见上文第 2 条）。
+            stroke.points.clear();
+            return;
+        }
         stroke.points.clear();
         stroke.points.push(world);
     } else if buttons.pressed(MouseButton::Left) {
         // 采样去抖：与上一点距离小于半格则不重复记录。
-        let cell = crate::state::GridConfig::default().cell_size;
+        let cell = grid.cell_size;
         if stroke
             .points
             .last()

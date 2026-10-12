@@ -18,6 +18,8 @@ wv-terrain = { workspace = true }
 wv-io = { workspace = true }
 wv-edit = { workspace = true }
 thiserror = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
 bevy = { workspace = true, optional = true }
 bevy_egui = { workspace = true, optional = true }
 

@@ -8,11 +8,16 @@
 //!
 //! ## Undo/Redo（S9）
 //!
-//! `Ctrl+Z` / `Ctrl+Shift+Z` 触发 [`History::undo`] / [`History::redo`]。
-//! 播放中禁止编辑与撤销（基线 §1.8 / V37）——播放中 `undo/redo` 与编辑命令全部禁用。
+//! `Ctrl+Z` / `Ctrl+Shift+Z` 由 `crate::ui_shell::hotkeys` 收键、经 `CommandPalette`
+//! 派发回本模块的 [`apply_history_command`] 执行——**这里不再自己听键盘**。
+//! 撤销/重做与编辑命令都服从同一条门禁：播放中一律拒绝（基线 §1.8 / V37），
+//! 因为播放中「当前世界」是时间游标的投影，改它等于改了一个并不存在的现在。
+//!
+//! 注意这个布局的另一个好处：快捷键只在「输入框未聚焦」时生效这件事，
+//! 只在一个地方处理一次（`ui_shell::hotkeys`），不会出现「两个系统都听同一组键」
+//! 导致一次按键应用两次的经典 bug。
 
 use bevy::prelude::*;
-use bevy_egui::EguiContexts;
 
 use crate::camera::ActiveStroke;
 use crate::state::{BrushState, GridConfig, PlaybackState, ViewState, WorldProjection};
@@ -121,39 +126,43 @@ pub fn flush_terrain_texture(
     tex.dirty = None;
 }
 
-/// Ctrl+Z / Ctrl+Shift+Z（S9）。
-pub fn handle_undo_redo_keys(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut contexts: EguiContexts,
-    mut edit: ResMut<EditHistory>,
-    mut projection: ResMut<WorldProjection>,
-    playback: Res<PlaybackState>,
-    mut tex: ResMut<TerrainTexture>,
-) {
-    if contexts.ctx_mut().wants_keyboard_input() {
-        return;
-    }
-    // 播放中只读：禁用撤销/重做（基线 V37）。
+/// 执行一次撤销 / 重做，返回给用户看的结果说明。
+///
+/// **唯一入口**：快捷键、命令面板、菜单都经此函数，避免「两处各写一遍」导致
+/// 同一次 `Ctrl+Z` 被应用两次（曾经 `handle_undo_redo_keys` 与界面快捷键各自
+/// 直接改历史，就是这个隐患）。
+///
+/// 播放中只读（基线 V37）：拒绝撤销并说明原因，而不是静默无反应。
+pub fn apply_history_command(
+    redo: bool,
+    edit: &mut EditHistory,
+    projection: &mut WorldProjection,
+    tex: &mut TerrainTexture,
+    playback: &PlaybackState,
+) -> Result<String, String> {
     if playback.playing {
-        return;
+        return Err("播放中为只读：先暂停再撤销".into());
     }
-    let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
-    if !ctrl || !keys.just_pressed(KeyCode::KeyZ) {
-        return;
-    }
-    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    let result = if shift {
+    let result = if redo {
         edit.history.redo(&mut projection.world)
     } else {
         edit.history.undo(&mut projection.world)
     };
     match result {
-        Ok(did) => {
-            if did {
-                projection.dirty = true;
-                tex.mark_all_dirty();
-            }
+        Ok(true) => {
+            projection.dirty = true;
+            tex.mark_all_dirty();
+            Ok(if redo {
+                "已重做".into()
+            } else {
+                "已撤销".into()
+            })
         }
-        Err(e) => bevy::log::warn!("撤销/重做失败: {e}"),
+        Ok(false) => Ok(if redo {
+            "没有可重做的操作".into()
+        } else {
+            "没有可撤销的操作".into()
+        }),
+        Err(e) => Err(format!("撤销/重做失败: {e}")),
     }
 }

@@ -241,20 +241,100 @@ impl Panel {
     }
 
     /// 默认位置（首次打开 / 重置位置时用）。坐标单位是窗口逻辑像素。
+    ///
+    /// **互不重叠**是硬要求（设计规格 §3.3，验证项 §9.3-1 由
+    /// [`crate::ui_layout::tests`] 自动把关）。布局规则：
+    ///
+    /// - 四列，列起点 `x = 12 / 332 / 652 / 972`，列宽由该列最宽面板决定
+    ///   （最右边界 1272 ≤ 1280，1280 宽窗口正好放下）；
+    /// - **底部 880 起是时间轴专用带**（§3.3 P-5「底部通栏」）——它是通栏，
+    ///   x 与所有面板相交，因此**其余面板必须全部止于 y = 880**，
+    ///   否则时间轴一开就压住它们。
+    ///
+    /// 用「预留带」而不是「让时间轴绕开面板」：通栏是规格语义，绕开就不是通栏了。
     pub fn default_pos(self) -> [f32; 2] {
         match self {
-            Panel::MapTree => [12.0, 156.0], // 与 Brush 同列但纵向错开，避免完全重合
-            Panel::Layers => [12.0, 300.0],
-            Panel::Brush => [12.0, 44.0],
-            Panel::Minimap => [1000.0, 44.0],
-            Panel::Timeline => [12.0, 620.0],
-            Panel::Event => [320.0, 120.0],
-            Panel::Situation => [320.0, 300.0],
-            Panel::Character => [320.0, 460.0],
-            Panel::Faction => [700.0, 120.0],
-            Panel::Inspector => [700.0, 300.0],
-            Panel::Validation => [700.0, 460.0],
+            Panel::MapTree => [12.0, 56.0],
+            Panel::Layers => [12.0, 398.0],
+            Panel::Brush => [12.0, 578.0],
+            Panel::Minimap => [332.0, 56.0],
+            Panel::Faction => [332.0, 368.0],
+            Panel::Event => [652.0, 56.0],
+            Panel::Situation => [652.0, 380.0],
+            Panel::Validation => [972.0, 56.0],
+            Panel::Inspector => [972.0, 308.0],
+            Panel::Character => [972.0, 560.0],
+            // 底部通栏（§3.3 P-5）。
+            Panel::Timeline => [12.0, 880.0],
         }
+    }
+
+    /// 默认尺寸 `[宽, 高]`（设计规格 §3.3「默认宽」列）。
+    pub fn default_size(self) -> [f32; 2] {
+        match self {
+            Panel::MapTree => [216.0, 330.0],
+            Panel::Layers => [216.0, 168.0],
+            Panel::Brush => [264.0, 300.0],
+            Panel::Minimap => [216.0, 300.0],
+            // 通栏：1280 − 12×2 = 1256。
+            Panel::Timeline => [1256.0, 180.0],
+            Panel::Event => [300.0, 312.0],
+            Panel::Situation => [300.0, 308.0],
+            Panel::Character => [280.0, 260.0],
+            Panel::Faction => [280.0, 300.0],
+            Panel::Inspector => [264.0, 240.0],
+            Panel::Validation => [300.0, 240.0],
+        }
+    }
+
+    /// 面板 id（`ui-layout.yaml` 的键）。
+    pub fn key(self) -> &'static str {
+        match self {
+            Panel::MapTree => "tree",
+            Panel::Layers => "layers",
+            Panel::Brush => "brush",
+            Panel::Inspector => "inspector",
+            Panel::Timeline => "timeline",
+            Panel::Faction => "faction",
+            Panel::Situation => "situation",
+            Panel::Validation => "validation",
+            Panel::Minimap => "minimap",
+            Panel::Character => "character",
+            Panel::Event => "event",
+        }
+    }
+
+    /// 面板头类型图标（§4.1：类型图标着 `ui.accent` 色）。
+    ///
+    /// 用几何字符而非 emoji：emoji 跨系统字形差异大（§4.5 的教训），
+    /// 且 `fonts.rs` 不打包字体，Linux 上可能缺字。
+    pub fn icon(self) -> &'static str {
+        match self {
+            Panel::MapTree => "◈",
+            Panel::Layers => "▤",
+            Panel::Brush => "◧",
+            Panel::Inspector => "◉",
+            Panel::Timeline => "═",
+            Panel::Faction => "◆",
+            Panel::Situation => "▣",
+            Panel::Validation => "△",
+            Panel::Minimap => "□",
+            Panel::Character => "◎",
+            Panel::Event => "○",
+        }
+    }
+
+    /// 是否「数据面板」（§9.2 `data_opt()`：小窗可隐藏，`<900px` 窗口默认收起）。
+    pub fn data_opt(self) -> bool {
+        matches!(
+            self,
+            Panel::Brush | Panel::Minimap | Panel::Layers | Panel::Validation
+        )
+    }
+
+    /// 首次启动的默认可见性（地图为主，D1：默认开的面板尽量少）。
+    pub fn default_visible(self) -> bool {
+        matches!(self, Panel::Brush | Panel::Minimap | Panel::Timeline)
     }
 }
 
@@ -304,5 +384,581 @@ impl PanelState {
     pub fn toggle(&mut self, p: Panel) {
         let v = !self.is_visible(p);
         self.set_visible(p, v);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 地图三级钻取（v0.2 §B）
+// ---------------------------------------------------------------------------
+
+/// 图层级别的显示名。
+///
+/// 放在 UI 层而不是给 `wv_core::map::MapLevel` 加 `label()`：数据层不该出现
+/// 面向作者的中文文案（AGENTS §2 依赖方向，文案是外壳关注点）。
+pub fn map_level_label(level: wv_core::map::MapLevel) -> &'static str {
+    use wv_core::map::MapLevel;
+    match level {
+        MapLevel::World => "世界",
+        MapLevel::Region => "区域",
+        MapLevel::City => "城市",
+        MapLevel::Interior => "建筑内",
+    }
+}
+
+/// 地图钻取状态（v0.2 §B「世界 → 城市 → 建筑内」三级）。
+///
+/// ## 为什么只存 `Id`
+///
+/// 钻取就是「沿地图层级往下走」，而层级关系在数据层**已经**是
+/// [`wv_core::map::MapNode::parent`] / [`wv_core::map::MapNode::children`] 的
+/// **ID 引用**（AGENTS 原则四：只存引用，不重复存储）。所以本结构只保留
+/// 一条 id 链，名字 / 范围 / 图层每帧现查——子图内容永不复制进 UI 状态，
+/// 否则父图里那份副本迟早与子图不一致。
+///
+/// ## 与 [`ViewState::current_map`] 的关系
+///
+/// `current_map` 是「当前图 id」的**单值**，表达不了「从哪来」，而面包屑需要完整路径。
+/// 故本结构升为**唯一真源**，`ViewState::current_map` 降级为派生镜像
+/// （[`DrillState::sync_view`]）。旧字段暂留是因为渲染/编辑链还在读它（3 处），
+/// 一次性改签名会把本次改动扩散到相机与笔刷系统。
+#[derive(Resource, Debug, Clone, Default)]
+pub struct DrillState {
+    /// 从根图到当前图的 id 链（含首尾）。空 = 世界尚未加载。
+    trail: Vec<wv_core::id::Id>,
+    /// 访问过的地图 id（**钻出时**写入）。用于钻入标记的「已访问」灰显。
+    visited: std::collections::BTreeSet<wv_core::id::Id>,
+    /// 上一帧的深度。深度一变就说明发生了钻取，相机需要做 zoom-to-bounds 过渡。
+    last_depth: usize,
+    /// 上一次钻取的起点（世界坐标 → 缩放），供过渡插值；`None` 表示没有待播的过渡。
+    pub transition_from: Option<(Vec2, f32)>,
+}
+
+impl DrillState {
+    /// 当前深度：根图为 `0`，每钻一层 +1。
+    pub fn depth(&self) -> usize {
+        self.trail.len().saturating_sub(1)
+    }
+
+    /// 当前地图 id。
+    pub fn current(&self) -> Option<&wv_core::id::Id> {
+        self.trail.last()
+    }
+
+    /// 完整 id 链（根 → 当前）。面包屑据此逐段取名。
+    ///
+    /// 只读暴露：路径的写入一律走 [`DrillState::enter`] / [`DrillState::up`] /
+    /// [`DrillState::jump_to`]，否则「只允许沿 `children` 走」这条不变式会失守。
+    pub fn trail(&self) -> &[wv_core::id::Id] {
+        &self.trail
+    }
+
+    /// 当前地图节点。
+    pub fn current_node<'w>(&self, world: &'w World) -> Option<&'w wv_core::map::MapNode> {
+        let id = self.current()?;
+        world.maps.iter().find(|m| &m.id == id)
+    }
+
+    /// 按 id 找节点。
+    pub fn node<'w>(
+        &self,
+        world: &'w World,
+        id: &wv_core::id::Id,
+    ) -> Option<&'w wv_core::map::MapNode> {
+        world.maps.iter().find(|m| &m.id == id)
+    }
+
+    /// 当前图**已解析**的子图节点（子图 id 悬空时静默跳过——D4/§7.5：
+    /// 悬空引用由校验面板列出，UI 不因此崩掉，也不能阻止作者保存）。
+    pub fn child_nodes<'w>(&self, world: &'w World) -> Vec<&'w wv_core::map::MapNode> {
+        let Some(node) = self.current_node(world) else {
+            return Vec::new();
+        };
+        node.children
+            .iter()
+            .filter_map(|cid| world.maps.iter().find(|m| &m.id == cid))
+            .collect()
+    }
+
+    /// 若路径为空（或根图变了）则落到 `world.meta.root_map`。
+    ///
+    /// 每帧调用是安全的：路径非空且仍在世界里时不动它。
+    pub fn ensure_root(&mut self, world: &World) {
+        // 根图优先取 `world.yaml` 的 `root_map`；工程没写 meta 时退而求其次，
+        // 找第一个 `level: world` 的图——总比把整个 UI 卡在「未加载地图」好。
+        let root = match &world.meta {
+            Some(m) => Some(m.root_map.clone()),
+            None => world
+                .maps
+                .iter()
+                .find(|m| m.level == wv_core::map::MapLevel::World)
+                .map(|m| m.id.clone()),
+        };
+        let Some(root) = root else {
+            return;
+        };
+        let still_valid = self
+            .current()
+            .map(|id| world.maps.iter().any(|m| &m.id == id))
+            .unwrap_or(false);
+        if self.trail.is_empty() || !still_valid {
+            self.trail.clear();
+            self.trail.push(root);
+            self.last_depth = 0;
+        }
+    }
+
+    /// 换工程 / 打开新工程时重置：回到世界、清访问痕迹（v0.2 §A）。
+    pub fn reset_to_world(&mut self) {
+        self.trail.clear();
+        self.visited.clear();
+        self.last_depth = 0;
+        self.transition_from = None;
+    }
+
+    /// 钻入某个子图。只有**当前图的直接子图**才能进入（拒绝越级，避免路径与
+    /// `children` 引用不一致）。返回是否发生了钻取。
+    pub fn enter(&mut self, world: &World, child: &wv_core::id::Id) -> bool {
+        let Some(node) = self.current_node(world) else {
+            return false;
+        };
+        if !node.children.iter().any(|c| c == child) {
+            return false;
+        }
+        self.trail.push(child.clone());
+        true
+    }
+
+    /// 钻回上一级（`Backspace` / 面包屑上级）。返回是否发生了钻回。
+    ///
+    /// **钻出即计入访问痕迹**（v0.2 §B.2）：访问痕迹表示「进去过」，
+    /// 所以是在离开时写入，而不是进入时——进入时写入会让刚钻进去的
+    /// 那一格立刻变灰，看起来像「已经看过了」。
+    pub fn up(&mut self) -> bool {
+        if self.trail.len() <= 1 {
+            return false;
+        }
+        if let Some(left) = self.trail.pop() {
+            self.visited.insert(left);
+        }
+        true
+    }
+
+    /// 跳到路径中的第 `index` 段（面包屑点击）。成功返回 `true`。
+    pub fn jump_to(&mut self, index: usize) -> bool {
+        if index + 1 >= self.trail.len() {
+            return false;
+        }
+        // 被跳过的中间层级全部计入访问痕迹。
+        for left in self.trail.drain(index + 1..) {
+            self.visited.insert(left);
+        }
+        true
+    }
+
+    /// 是否访问过（渲染「已访问」灰显标记）。
+    pub fn is_visited(&self, id: &wv_core::id::Id) -> bool {
+        self.visited.contains(id)
+    }
+
+    /// 深度是否刚刚变化（下一帧要播一次相机过渡）。
+    pub fn take_depth_change(&mut self) -> bool {
+        let d = self.depth();
+        if d == self.last_depth {
+            return false;
+        }
+        self.last_depth = d;
+        true
+    }
+
+    /// 把当前图 id 写回 [`ViewState::current_map`] 镜像。
+    pub fn sync_view(&self, view: &mut ViewState) {
+        if let Some(id) = self.current() {
+            view.current_map = id.as_str().to_owned();
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 最近工程（v0.2 §A 项目管理菜单）
+// ---------------------------------------------------------------------------
+
+/// 一个「最近打开」的工程条目。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentProject {
+    /// 工程根目录（`world.yaml` 所在目录）。
+    pub dir: String,
+    /// 显示名（`world.yaml` 的 `meta.name`）。
+    pub name: String,
+}
+
+/// 最近打开的工程列表。
+///
+/// ## 为什么是**会话内**列表
+///
+/// 跨会话记住「最近工程」需要一处**工程之外**的配置存放点，而 AGENTS §1 P2
+/// （目录即工程）明确禁止把状态写进注册表 / AppData / 全局配置。这里不擅自
+/// 开这个口子，只维持会话内的列表；当前打开的工程由
+/// [`WorldProjection::project_dir`] 提供，所以菜单永远至少有它一条。
+///
+/// 待决：是否落盘、落在哪里（`view.yaml` 的 `search_paths`？还是干脆不做），
+/// 见 `README.md` §12 待决清单的问题记录。
+#[derive(Resource, Debug, Default)]
+pub struct RecentProjects {
+    entries: Vec<RecentProject>,
+}
+
+/// 会话内最多记住几个最近工程（原型给的是 3 条，这里留一点余量）。
+pub const RECENT_PROJECTS_MAX: usize = 8;
+
+impl RecentProjects {
+    /// 已记录的工程（按最近使用排序）。
+    pub fn entries(&self) -> &[RecentProject] {
+        &self.entries
+    }
+
+    /// 置顶一个工程（按目录去重，超上限截断）。
+    pub fn remember(&mut self, dir: &str, name: &str) {
+        if dir.is_empty() {
+            return;
+        }
+        self.entries.retain(|e| e.dir != dir);
+        self.entries.insert(
+            0,
+            RecentProject {
+                dir: dir.to_owned(),
+                name: name.to_owned(),
+            },
+        );
+        self.entries.truncate(RECENT_PROJECTS_MAX);
+    }
+
+    /// 菜单 / 命令面板实际要显示的列表：会话记录 **∪** 当前工程。
+    ///
+    /// 当前工程放在最前——用户最可能想确认的就是「我现在开的是哪个」。
+    pub fn visible(&self, projection: &WorldProjection) -> Vec<RecentProject> {
+        let mut out: Vec<RecentProject> = Vec::new();
+        if let Some(dir) = projection.project_dir.as_deref() {
+            let name = projection
+                .world
+                .meta
+                .as_ref()
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| short_dir(dir));
+            out.push(RecentProject {
+                dir: dir.to_owned(),
+                name,
+            });
+        }
+        for e in &self.entries {
+            if !out.iter().any(|o| o.dir == e.dir) {
+                out.push(e.clone());
+            }
+        }
+        out
+    }
+}
+
+/// 目录末段（用于没有 `meta.name` 时兜底显示）。
+fn short_dir(dir: &str) -> String {
+    std::path::Path::new(dir)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| dir.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wv_core::id::Id;
+    use wv_core::map::{MapLevel, MapNode};
+    use wv_core::time::TimeSpan;
+    use wv_core::WorldMeta;
+
+    fn node(
+        id: &str,
+        name: &str,
+        level: MapLevel,
+        parent: Option<&str>,
+        children: &[&str],
+    ) -> MapNode {
+        MapNode {
+            id: Id::new_unchecked(id),
+            name: name.to_owned(),
+            level,
+            parent: parent.map(Id::new_unchecked),
+            children: children.iter().map(|c| Id::new_unchecked(*c)).collect(),
+            layers: Vec::new(),
+            icons: Vec::new(),
+            extent: None,
+            raster: None,
+        }
+    }
+
+    /// world_main ─┬─ city_zunyi ─── bld_yamen
+    ///             └─ city_chishui
+    /// 另有 `city_ghost` 被 `world_main` 引用但**没有对应节点**（悬空引用）。
+    fn demo_world() -> World {
+        let mut w = World {
+            meta: Some(WorldMeta {
+                name: "四渡赤水".into(),
+                version: "0.1".into(),
+                schema_version: 2,
+                root_map: Id::new_unchecked("world_main"),
+                timeline_range: TimeSpan::new(1, 180_001).expect("测试区间合法"),
+            }),
+            ..World::default()
+        };
+        w.maps = vec![
+            node(
+                "world_main",
+                "主世界",
+                MapLevel::World,
+                None,
+                &["city_zunyi", "city_chishui", "city_ghost"],
+            ),
+            node(
+                "city_zunyi",
+                "遵义城",
+                MapLevel::City,
+                Some("world_main"),
+                &["bld_yamen"],
+            ),
+            node(
+                "bld_yamen",
+                "府衙",
+                MapLevel::Interior,
+                Some("city_zunyi"),
+                &[],
+            ),
+            node(
+                "city_chishui",
+                "赤水城",
+                MapLevel::City,
+                Some("world_main"),
+                &[],
+            ),
+        ];
+        w
+    }
+
+    #[test]
+    fn ensure_root_lands_on_the_declared_root_map() {
+        let w = demo_world();
+        let mut d = DrillState::default();
+        d.ensure_root(&w);
+        assert_eq!(d.current().map(Id::as_str), Some("world_main"));
+        assert_eq!(d.depth(), 0, "根图深度应为 0");
+    }
+
+    #[test]
+    fn ensure_root_is_idempotent_and_keeps_the_current_map() {
+        let w = demo_world();
+        let mut d = DrillState::default();
+        d.ensure_root(&w);
+        d.enter(&w, &Id::new_unchecked("city_zunyi"));
+        // 每帧都会调 ensure_root，它不能把已经钻进去的路径打回根图。
+        d.ensure_root(&w);
+        d.ensure_root(&w);
+        assert_eq!(d.current().map(Id::as_str), Some("city_zunyi"));
+        assert_eq!(d.depth(), 1);
+    }
+
+    #[test]
+    fn drill_path_only_accepts_direct_children() {
+        let w = demo_world();
+        let mut d = DrillState::default();
+        d.ensure_root(&w);
+        // 越级：世界图不能直接跳进「府衙」（它是 city_zunyi 的子图）。
+        assert!(
+            !d.enter(&w, &Id::new_unchecked("bld_yamen")),
+            "越级钻入被拒绝"
+        );
+        assert_eq!(d.depth(), 0);
+        // 不存在的地图同样拒绝。
+        assert!(!d.enter(&w, &Id::new_unchecked("city_nowhere")));
+        // 直接子图可以。
+        assert!(d.enter(&w, &Id::new_unchecked("city_zunyi")));
+        assert_eq!(d.depth(), 1);
+    }
+
+    #[test]
+    fn up_returns_a_level_and_stops_at_the_root() {
+        let w = demo_world();
+        let mut d = DrillState::default();
+        d.ensure_root(&w);
+        d.enter(&w, &Id::new_unchecked("city_zunyi"));
+        d.enter(&w, &Id::new_unchecked("bld_yamen"));
+        assert_eq!(d.depth(), 2);
+        assert!(d.up());
+        assert_eq!(d.current().map(Id::as_str), Some("city_zunyi"));
+        assert!(d.up());
+        assert_eq!(d.current().map(Id::as_str), Some("world_main"));
+        assert!(!d.up(), "根图之上没有更上级");
+        assert_eq!(d.depth(), 0);
+    }
+
+    #[test]
+    fn drilling_out_is_what_marks_a_map_visited() {
+        let w = demo_world();
+        let yamen = Id::new_unchecked("bld_yamen");
+        let mut d = DrillState::default();
+        d.ensure_root(&w);
+        d.enter(&w, &Id::new_unchecked("city_zunyi"));
+        d.enter(&w, &yamen);
+        assert!(!d.is_visited(&yamen), "刚钻进去不该立刻算已访问");
+        d.up();
+        assert!(d.is_visited(&yamen), "钻出时应写入访问痕迹");
+    }
+
+    #[test]
+    fn breadcrumb_jump_marks_every_skipped_level_visited() {
+        let w = demo_world();
+        let mut d = DrillState::default();
+        d.ensure_root(&w);
+        d.enter(&w, &Id::new_unchecked("city_zunyi"));
+        d.enter(&w, &Id::new_unchecked("bld_yamen"));
+        // 点面包屑上的「世界」（index 0），跨过 city_zunyi 与 bld_yamen。
+        assert!(d.jump_to(0));
+        assert_eq!(d.current().map(Id::as_str), Some("world_main"));
+        assert!(d.is_visited(&Id::new_unchecked("city_zunyi")));
+        assert!(d.is_visited(&Id::new_unchecked("bld_yamen")));
+        // 点当前级（最后一段）是空操作。
+        assert!(!d.jump_to(0), "已在目标级，不应算成功");
+    }
+
+    #[test]
+    fn dangling_child_references_are_skipped_not_fatal() {
+        let w = demo_world();
+        let mut d = DrillState::default();
+        d.ensure_root(&w);
+        let kids = d.child_nodes(&w);
+        // world_main 声明了 3 个子图，其中 city_ghost 没有节点。
+        assert_eq!(kids.len(), 2, "悬空引用应被跳过");
+        assert_eq!(kids[0].name, "遵义城");
+        assert_eq!(kids[1].name, "赤水城");
+        // §7.5：悬空引用不阻止任何操作——现在仍然可以正常钻取。
+        assert!(d.enter(&w, &Id::new_unchecked("city_zunyi")));
+    }
+
+    #[test]
+    fn reset_to_world_clears_trail_and_visit_marks() {
+        let w = demo_world();
+        let mut d = DrillState::default();
+        d.ensure_root(&w);
+        d.enter(&w, &Id::new_unchecked("city_zunyi"));
+        d.enter(&w, &Id::new_unchecked("bld_yamen"));
+        d.up();
+        assert_eq!(d.depth(), 1);
+        d.reset_to_world();
+        assert_eq!(d.depth(), 0, "换工程后应回到世界（v0.2 §A）");
+        assert!(
+            !d.is_visited(&Id::new_unchecked("bld_yamen")),
+            "访问痕迹应清空"
+        );
+        assert!(d.trail.is_empty(), "重置后需要 ensure_root 重新落根");
+    }
+
+    #[test]
+    fn depth_change_is_reported_exactly_once() {
+        let w = demo_world();
+        let mut d = DrillState::default();
+        d.ensure_root(&w);
+        // 落根：0 → 0，没有变化。
+        assert!(!d.take_depth_change(), "落根不算钻取");
+        d.enter(&w, &Id::new_unchecked("city_zunyi"));
+        assert!(d.take_depth_change(), "钻入应报一次变化");
+        assert!(!d.take_depth_change(), "同一深度不该重复报");
+    }
+
+    #[test]
+    fn sync_view_mirrors_the_current_map_id() {
+        let w = demo_world();
+        let mut d = DrillState::default();
+        d.ensure_root(&w);
+        // 故意塞一个陈旧值：`sync_view` 的职责就是把它拉回真实层级。
+        let mut view = ViewState {
+            current_map: "stale".into(),
+            ..ViewState::default()
+        };
+        d.sync_view(&mut view);
+        assert_eq!(view.current_map, "world_main");
+        d.enter(&w, &Id::new_unchecked("city_zunyi"));
+        d.sync_view(&mut view);
+        assert_eq!(view.current_map, "city_zunyi");
+    }
+
+    #[test]
+    fn level_labels_are_chinese_and_cover_all_four_levels() {
+        use wv_core::map::MapLevel;
+        for l in [
+            MapLevel::World,
+            MapLevel::Region,
+            MapLevel::City,
+            MapLevel::Interior,
+        ] {
+            assert!(!map_level_label(l).is_empty());
+        }
+        assert_eq!(map_level_label(MapLevel::Interior), "建筑内");
+    }
+
+    #[test]
+    fn recent_projects_deduplicates_by_dir_and_keeps_most_recent_first() {
+        let mut r = RecentProjects::default();
+        r.remember("/w/a", "甲");
+        r.remember("/w/b", "乙");
+        r.remember("/w/a", "甲改");
+        let names: Vec<&str> = r.entries().iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["甲改", "乙"], "重复目录应置顶而不是追加");
+    }
+
+    #[test]
+    fn recent_projects_caps_the_list_and_ignores_empty_dirs() {
+        let mut r = RecentProjects::default();
+        for i in 0..(RECENT_PROJECTS_MAX + 5) {
+            r.remember(&format!("/w/{i}"), "x");
+        }
+        assert_eq!(r.entries().len(), RECENT_PROJECTS_MAX);
+        r.remember("", "无目录");
+        assert_eq!(r.entries().len(), RECENT_PROJECTS_MAX, "空目录不入表");
+    }
+
+    #[test]
+    fn visible_recent_projects_always_leads_with_the_open_project() {
+        let mut r = RecentProjects::default();
+        r.remember("/w/other", "别的工程");
+        let mut projection = WorldProjection::default();
+        // 还没打开任何工程：只有会话记录。
+        assert_eq!(r.visible(&projection).len(), 1);
+
+        projection.project_dir = Some("/w/current".into());
+        projection.world = demo_world();
+        let shown = r.visible(&projection);
+        assert_eq!(shown[0].dir, "/w/current");
+        assert_eq!(shown[0].name, "四渡赤水", "名字取 world.yaml 的 meta.name");
+        assert_eq!(shown[1].dir, "/w/other");
+    }
+
+    #[test]
+    fn visible_recent_projects_does_not_repeat_the_open_project() {
+        let r = {
+            let mut r = RecentProjects::default();
+            r.remember("/w/current", "四渡赤水");
+            r
+        };
+        let projection = WorldProjection {
+            project_dir: Some("/w/current".into()),
+            ..WorldProjection::default()
+        };
+        assert_eq!(r.visible(&projection).len(), 1, "当前工程不应出现两次");
+    }
+
+    #[test]
+    fn project_without_meta_name_falls_back_to_the_directory_leaf() {
+        let projection = WorldProjection {
+            project_dir: Some("/worlds/minimal-world".into()),
+            ..WorldProjection::default()
+        };
+        let shown = RecentProjects::default().visible(&projection);
+        assert_eq!(shown[0].name, "minimal-world");
     }
 }

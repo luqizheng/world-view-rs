@@ -3,7 +3,7 @@
 //! 原则四（多地图层级）：世界 → 区域 → 城市 → 建筑，逐层引用，不重复存储。
 //! 原则五（图层化编辑）：每层可独立开关、锁定、调透明度、调整顺序。
 
-use crate::{id::Id, time::TimeSpan};
+use crate::{color::Color, id::Id, time::TimeSpan};
 
 /// 地图层级。由粗到细。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -27,6 +27,15 @@ pub struct MapNode {
     /// 子地图 ID 列表。**只存引用，不复制子图内容**（原则四）。
     #[serde(default)]
     pub children: Vec<Id>,
+    /// 本图上显示的标记（地图图标）。
+    ///
+    /// **声明顺序即绘制顺序**（先声明的在下层）——同层无 `z` 字段，
+    /// 因为图标数量少、且叠放问题用调整声明顺序即可解决。
+    ///
+    /// 图标是**声明**，不是渲染结果：形状、尺寸、颜色都在这里定，
+    /// 由渲染层（`wv-app`）解释。见 README §12 第 12 条。
+    #[serde(default)]
+    pub icons: Vec<IconSpec>,
     /// 本图的图层清单。
     #[serde(default)]
     pub layers: Vec<Layer>,
@@ -36,6 +45,82 @@ pub struct MapNode {
     /// 地形/高度网格的二进制引用（原则三的唯一例外）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raster: Option<RasterRef>,
+}
+
+/// 地图图标的形状。
+///
+/// 数据层只存**形状的名字**，怎么画由渲染层决定——这是「数据与渲染分离」
+/// 在图标上的同一约束（`AGENTS.md` §3）。新增形状是**枚举扩展**，
+/// 不需要动任何已有 YAML（未声明时落到 [`IconShape::Diamond`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IconShape {
+    /// 菱形。v0.2 §B.2 给钻入标记定的形状，也作为所有图标的缺省值。
+    #[default]
+    Diamond,
+    /// 圆形。
+    Circle,
+    /// 十字。常用于标记地点 / 事件点。
+    Cross,
+    /// 方形。
+    Square,
+    /// 四角星。
+    Star,
+}
+
+/// 地图上显示的一个标记（图标）的声明。
+///
+/// ## 为什么锚点在这里，而不是在 `MapNode` 上
+///
+/// 早期做法是想给 `MapNode` 加一个「子图在父图上的位置」字段，
+/// 但那样**一个地图节点只能有一个落点**，而作者显然需要在同一张地图上
+/// 摆很多标记（城市、港口、隘口、事件点、钻入入口……）。
+///
+/// 把这些标记抽成独立的 `icons` 列表后，「子图落点」只是其中一种用法
+/// （带 `drill_into` 的图标），落点字段随之自然属于**每个图标自己**——
+/// 这也让 `children` 保持 `Vec<Id>` 不动，原则四「只存引用」完全不受影响。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct IconSpec {
+    /// 图标 ID。字符集同 [`crate::id::Id`]（`[A-Za-z0-9_]`）。
+    pub id: Id,
+
+    /// 在**本图 `extent`** 内的归一化位置，`[0,1]²`，左上角为原点、y 向下。
+    ///
+    /// 用归一化坐标而非世界单位，是为了父图 `extent` 缩放时锚点不失效——
+    /// 作者写一次 `0.35`，改 `extent` 不需要跟着改坐标。
+    ///
+    /// 缺省时渲染层用「ID 确定性哈希」摆位（同一次运行里稳定、可复现），
+    /// 代价是与真实地理布局无关。越界值（`<0` 或 `>1`）由渲染层夹回 `[0,1]`，
+    /// 数据层不拒收（`AGENTS.md` §7.5V1）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<[f32; 2]>,
+
+    /// 形状。未声明时用 [`IconShape::Diamond`]。
+    #[serde(default)]
+    pub shape: IconShape,
+
+    /// 标记的屏幕尺寸（像素）。
+    ///
+    /// 口径同 v0.2 §B.2 的 14 / 12——那是「整颗标记的宽度」，
+    /// 渲染层按半边长绘制。缺省时渲染层按目标层级选缺省值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<f32>,
+
+    /// 颜色，十六进制字符串（`"#RRGGBB"`）。
+    ///
+    /// **显式声明的颜色优先于主题色**——作者定了色就按作者的来，
+    /// 不再因为「已访问」而转灰。缺省时渲染层用主题界面蓝 / 已访问灰。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<Color>,
+
+    /// 双击钻入的目标子图。
+    ///
+    /// `Some(id)` = 这是一个**钻入入口**（可双击进入该子图）；
+    /// `None` = 纯注释标记，只画不可点。悬空引用由 `wv-io` 的
+    /// [`crate::project::Project::diagnose`] 检出为 Error 级诊断，
+    /// 但**不阻止**加载（`AGENTS.md` §7.5V1）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drill_into: Option<Id>,
 }
 
 /// 图层。原则五的操作单元。
