@@ -190,7 +190,7 @@ fn sync_roads(
     }
     // 共享 material：每条边一个 ColorMaterial 太浪费；同色复用即可。
     // 道路色来自 palette，不在 system 中写裸 hex。
-    let material = materials.add(palette::ACCENT_NOTE.with_alpha(0.9));
+    let material = materials.add(palette::ROAD_STROKE.with_alpha(0.9));
 
     for (i, (a, b)) in segments.iter().enumerate() {
         let spec = RoadMeshSpec::from_segment(*a, *b, view_scale);
@@ -261,8 +261,9 @@ fn sync_poi(
     let ring_thickness = (PIXEL_WIDTH * view_scale).max(f32::EPSILON);
     let ring_inner = (radius_outer - ring_thickness).max(f32::EPSILON);
 
-    let mat_outer = materials.add(palette::LINE_ON_DARK);
-    let mat_inner = materials.add(palette::LINE_ON_MID);
+    // 城市点 = 红芯白环（palette::PLACE_DOT / POI_RING，2026-11 Theme Pack）。
+    let mat_outer = materials.add(palette::POI_RING);
+    let mat_inner = materials.add(palette::PLACE_DOT);
 
     for (i, dot) in visible.iter().enumerate() {
         let pos3 = dot.pos.extend(POI_OUTER_Z);

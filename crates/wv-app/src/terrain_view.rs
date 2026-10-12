@@ -131,18 +131,12 @@ pub fn load_tile_atlas(config_rel: &str) -> Option<TileAtlas> {
 
 /// 有图集就插入 `TileAtlas` 资源并把像素一并返回（供启动时同步拼贴）；
 /// 失败静默回退纯色平涂（渲染侧不受影响，见模块文档）。
-pub fn ensure_atlas(commands: &mut Commands) -> Option<TileAtlas> {
-    match load_tile_atlas(TileAtlas::DEFAULT_CONFIG) {
-        Some(atlas) => {
-            info!("瓦片图集已加载（{}×{} 格）", atlas.cols, atlas.rows);
-            commands.insert_resource(atlas.clone());
-            Some(atlas)
-        }
-        None => {
-            warn!("瓦片图集加载失败，地形回退纯色平涂");
-            None
-        }
-    }
+///
+/// **JRPG 图集已弃用（2026-11 用户裁定）**：饱和纹理碎的 RPG 瓦片会淹没路线
+/// 与地标，全面改走「纯色平涂 + Theme Pack 色板」。`load_tile_atlas` 保留，
+/// 供未来接入其他图集包；当前一律返回 `None`。
+pub fn ensure_atlas(_commands: &mut Commands) -> Option<TileAtlas> {
+    None
 }
 
 /// 每格瓦片重采样的目标边长（像素）。
@@ -256,7 +250,7 @@ fn blit_block_tinted(
     // 淡化参数：out2 = (out1*keep_q2 + toward[ch]*(1-k)*256) >> 8。
     let (keep_q2, add2): (u32, [u32; 3]) = if soften {
         let Color::Srgba(t) = palette::SOFTEN_TOWARD else {
-            (256, [0; 3])
+            unreachable!("SOFTEN_TOWARD 应为 Srgba")
         };
         let k = palette::SOFTEN_KEEP;
         (
@@ -574,7 +568,7 @@ impl<'a> CellRenderer<'a> {
                 }
                 if differs(
                     kind0,
-                    self.data.cells[(ny as u32 * self.w + nx) as usize].kind,
+                    self.data.cells[(ny as u32 * self.w + nx as u32) as usize].kind,
                 ) {
                     return true;
                 }
@@ -612,7 +606,7 @@ impl<'a> CellRenderer<'a> {
         }
         if self.soften {
             let Color::Srgba(t) = palette::SOFTEN_TOWARD else {
-                return;
+                unreachable!("SOFTEN_TOWARD 应为 Srgba")
             };
             let k = palette::SOFTEN_KEEP;
             for (o, tc) in out.iter_mut().zip([t.red, t.green, t.blue]) {
@@ -1363,7 +1357,7 @@ mod tests {
         let raw = image_from_terrain(&data, ViewMode::Schematic, None, false);
         let soft = image_from_terrain(&data, ViewMode::Schematic, None, true);
         let Color::Srgba(t) = palette::SOFTEN_TOWARD else {
-            unreachable!()
+            unreachable!("SOFTEN_TOWARD 应为 Srgba")
         };
         let mut changed = 0usize;
         for (r, s) in raw.data.chunks_exact(4).zip(soft.data.chunks_exact(4)) {

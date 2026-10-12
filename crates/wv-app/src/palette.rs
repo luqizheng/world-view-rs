@@ -35,20 +35,28 @@ const fn hex(rgb: u32) -> Color {
 
 /// 地形基色（`core.*`）。索引即 `TerrainKind` 编号（0..10）。
 ///
-/// 顺序刻意与「色块地形」视图模式的默认图例一致：0 为最低（深水）→ 8 为最高（雪），
-/// 9 为道路。作者改 `kind` 编号即可换色，无需改代码。
+/// 「深海」Theme Pack（2026-11 用户指定色值）：远海深蓝 + 高饱和陆域色，
+/// 对比强烈、轮廓一眼可辨。顺序刻意与「色块地形」视图模式的默认图例一致：
+/// 0 为最低（深水）→ 8 为最高（雪），9 为道路。作者改 `kind` 编号即可换色，无需改代码。
 pub const CORE_TERRAIN: [Color; 10] = [
-    hex(0x1E5A8A), // 0 core.water_deep   深水
-    hex(0x3E8FBF), // 1 core.water_shallow 浅水
-    hex(0xD9C58F), // 2 core.sand         沙滩 / 荒原
-    hex(0x7FA85C), // 3 core.grass        草原 / 平原
-    hex(0x3E6B3A), // 4 core.forest       林地
-    hex(0xA89060), // 5 core.hill         丘陵
-    hex(0x7A6A5E), // 6 core.mountain     山地岩体
+    hex(0x1E3A5F), // 0 core.water_deep   深水（远海，30,58,95）
+    hex(0x4A90E2), // 1 core.water_shallow 浅水（近海，74,144,226）
+    hex(0xE8B86D), // 2 core.sand         沙 / 沙漠（232,184,109）
+    hex(0xCDE77F), // 3 core.grass        草原 / 平原（205,231,127）
+    hex(0x3E8E41), // 4 core.forest       森林（62,142,65）
+    hex(0xD4B483), // 5 core.hill         丘陵 / 荒原（212,180,131）
+    hex(0xA67C52), // 6 core.mountain     山地（166,124,82）
     hex(0xE6ECEF), // 7 core.snow         雪线 / 冰原
     hex(0x6B7A55), // 8 core.marsh        沼泽
-    hex(0xC9A87C), // 9 core.road         道路
+    hex(0x222222), // 9 core.road         道路 / 区域分界（34,34,34）
 ];
+
+/// 城市点位色（POI 内芯实心红点，2026-11 用户指定 192,57,43）。
+pub const PLACE_DOT: Color = hex(0xC0392B);
+/// 城市点外环（白环衬红点，保证在任何陆域色上可辨）。
+pub const POI_RING: Color = hex(0xFFFFFF);
+/// 道路描线（亮色地图上白色道路，对标 Google Maps）。
+pub const ROAD_STROKE: Color = hex(0xFFFFFF);
 
 /// 派系色（`faction.*`，已定的 2 个骨架值）。
 pub const FACTION_NEUTRAL: Color = hex(0x8C8C94); // 无主 / 未归属
