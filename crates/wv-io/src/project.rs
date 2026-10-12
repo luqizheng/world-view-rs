@@ -165,20 +165,35 @@ impl Project {
             load_dir(&self.root, "timeline/narrations")?;
         let maps: Vec<wv_core::map::MapNode> = load_maps(&self.root)?;
         let distances: wv_core::distance::DistanceGraph = {
-            let path = self.root.join("distances/places.yaml");
-            if path.is_file() {
-                let text = std::fs::read_to_string(&path)?;
-                let places: Vec<wv_core::distance::Place> =
-                    serde_yaml::from_str(&text).map_err(|source| IoError::Yaml {
-                        path: path.display().to_string(),
-                        source,
-                    })?;
-                wv_core::distance::DistanceGraph {
-                    places,
-                    ..Default::default()
+            // 阶段六 v0.1：`distances/` 目录下的 places / edges / vehicles 各自 YAML。
+            // 旧实现只读单文件 places.yaml、把 edges/vehicles 留空，导致
+            // `DistanceGraph::shortest_journey` 退化为无路径。三个分量都从同目录
+            // 各自读全——加载层不再持有距离维度的「结论」（AGENTS.md §4.2）。
+            let places: Vec<wv_core::distance::Place> = load_dir(&self.root, "distances/places")?;
+            let edges: Vec<wv_core::distance::PlaceEdge> = load_dir(&self.root, "distances/edges")?;
+            let vehicles: Vec<wv_core::distance::Vehicle> =
+                load_dir(&self.root, "distances/vehicles")?;
+            // 兼容旧布局：单文件 `distances/places.yaml`。新工程一律用目录。
+            let (places, edges, vehicles) = if places.is_empty() {
+                let path = self.root.join("distances/places.yaml");
+                if path.is_file() {
+                    let text = std::fs::read_to_string(&path)?;
+                    let list: Vec<wv_core::distance::Place> =
+                        serde_yaml::from_str(&text).map_err(|source| IoError::Yaml {
+                            path: path.display().to_string(),
+                            source,
+                        })?;
+                    (list, edges, vehicles)
+                } else {
+                    (places, edges, vehicles)
                 }
             } else {
-                Default::default()
+                (places, edges, vehicles)
+            };
+            wv_core::distance::DistanceGraph {
+                places,
+                edges,
+                vehicles,
             }
         };
 

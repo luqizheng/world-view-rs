@@ -1,0 +1,6 @@
+id: edge_yichang_chongqing
+a: place_yichang
+b: place_chongqing
+distance_km: 650.0
+terrain: waterway
+bidirectional: true

@@ -1,0 +1,6 @@
+id: edge_wuchang_internal
+a: place_chuwangtai
+b: place_qiyimen
+distance_km: 1.5
+terrain: plain
+bidirectional: true

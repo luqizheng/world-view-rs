@@ -1,0 +1,6 @@
+id: edge_chengdu_internal
+a: place_duyuanjie
+b: place_nanjiaochang
+distance_km: 2.0
+terrain: plain
+bidirectional: true

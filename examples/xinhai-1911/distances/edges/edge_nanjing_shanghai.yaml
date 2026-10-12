@@ -1,0 +1,6 @@
+id: edge_nanjing_shanghai
+a: place_nanjing
+b: place_shanghai
+distance_km: 300.0
+terrain: waterway
+bidirectional: true

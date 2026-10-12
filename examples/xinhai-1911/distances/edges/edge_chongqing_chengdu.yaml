@@ -1,0 +1,6 @@
+id: edge_chongqing_chengdu
+a: place_chongqing
+b: place_chengdu
+distance_km: 310.0
+terrain: plain
+bidirectional: true

@@ -1,0 +1,6 @@
+id: edge_xian_beijing
+a: place_xian
+b: place_beijing
+distance_km: 1100.0
+terrain: plain
+bidirectional: true

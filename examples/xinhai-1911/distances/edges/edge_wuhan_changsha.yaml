@@ -1,0 +1,6 @@
+id: edge_wuhan_changsha
+a: place_wuhan
+b: place_changsha
+distance_km: 360.0
+terrain: plain
+bidirectional: true

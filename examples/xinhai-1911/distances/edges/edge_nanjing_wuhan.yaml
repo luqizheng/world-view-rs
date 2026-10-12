@@ -1,0 +1,6 @@
+id: edge_nanjing_wuhan
+a: place_nanjing
+b: place_wuhan
+distance_km: 500.0
+terrain: waterway
+bidirectional: true

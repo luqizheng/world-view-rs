@@ -1,0 +1,6 @@
+id: edge_xian_chengdu
+a: place_xian
+b: place_chengdu
+distance_km: 720.0
+terrain: mountain
+bidirectional: true

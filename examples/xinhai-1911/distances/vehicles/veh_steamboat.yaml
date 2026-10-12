@@ -1,0 +1,10 @@
+id: veh_steamboat
+name: 轮船
+instant: false
+speed_kmh: 20.0
+daily_hours: 12.0
+terrain_modifiers:
+  waterway: 2.0
+  plain: 0.5
+  mountain: 0.2
+requirements: []

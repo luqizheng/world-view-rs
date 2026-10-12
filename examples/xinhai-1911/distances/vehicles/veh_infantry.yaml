@@ -1,0 +1,10 @@
+id: veh_infantry
+name: 步兵
+instant: false
+speed_kmh: 5.0
+daily_hours: 8.0
+terrain_modifiers:
+  plain: 1.0
+  mountain: 0.6
+  waterway: 0.3
+requirements: []

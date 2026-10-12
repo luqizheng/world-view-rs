@@ -1,0 +1,6 @@
+id: edge_changsha_guangzhou
+a: place_changsha
+b: place_guangzhou
+distance_km: 620.0
+terrain: plain
+bidirectional: true

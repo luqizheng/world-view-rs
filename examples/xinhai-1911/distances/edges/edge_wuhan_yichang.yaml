@@ -1,0 +1,6 @@
+id: edge_wuhan_yichang
+a: place_wuhan
+b: place_yichang
+distance_km: 320.0
+terrain: waterway
+bidirectional: true

@@ -242,4 +242,55 @@ mod tests {
         assert!(d.items.is_empty());
         assert!(!d.has_errors(), "提示路径永不产生错误");
     }
+
+    /// 阶段六 v0.1：xinhai-1911 工程的距离图应正确加载三层（places/edges/vehicles），
+    /// 且武汉→成都走「长江＋陆路」可解（A* 返非空）。
+    ///
+    /// 守住「加载层必须把距离三个分量都读全」这一收敛点——旧实现只读单文件 places.yaml，
+    /// edges/vehicles 始终为空，路径搜索退化。
+    #[test]
+    fn xinhai_loads_full_distance_graph_and_path_finds_jiangnan_route() {
+        let path = std::path::Path::new("../examples/xinhai-1911");
+        if !path.is_dir() {
+            // 在子 crate 工作目录外运行（如 IDE unit test）允许跳过。
+            return;
+        }
+        let project = crate::project::Project::open(path).expect("工程加载失败");
+        let world = project.load_world().expect("加载世界失败");
+        let g = &world.distances;
+        assert!(
+            !g.places.is_empty(),
+            "places 应从目录加载；空 = 加载器未生效"
+        );
+        assert!(!g.edges.is_empty(), "edges 应从目录加载；空 = 旧实现未替换");
+        assert!(
+            !g.vehicles.is_empty(),
+            "vehicles 应从目录加载；空 = 旧实现未替换"
+        );
+        // 武汉 → 成都：waterway + plain，A* 应至少给出一条路径。
+        let wuhan = wv_core::id::Id::new_unchecked("place_wuhan");
+        let chengdu = wv_core::id::Id::new_unchecked("place_chengdu");
+        let journey = g
+            .shortest_journey(&wuhan, &chengdu, &[])
+            .expect("武汉→成都应有路径");
+        assert!(
+            journey.total_days.is_finite() && journey.total_days > 0.0,
+            "总天数应有限且 > 0：got {}",
+            journey.total_days
+        );
+        // 武汉到宜昌是水路，工具轮船应被采用。
+        let uses_steamboat = journey
+            .legs
+            .iter()
+            .any(|s| s.vehicle.as_str() == "veh_steamboat");
+        assert!(
+            uses_steamboat,
+            "长江段应被 veh_steamboat 承担，实际工具列表 = {:?}",
+            journey
+                .legs
+                .iter()
+                .map(|s| s.vehicle.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
 }
