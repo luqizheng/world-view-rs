@@ -139,7 +139,8 @@ fn push_cmd(
     let mut tx = Transaction::new();
     tx.push(cmd);
     match edit.history.commit(&mut world.world, tx) {
-        Ok(_dirty) => {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
             world.dirty = true;
             // 提示：v0.2 暂不写盘（路线图阶段七），但 `dirty` 标记保证下
             // 次手动保存时一切就绪。

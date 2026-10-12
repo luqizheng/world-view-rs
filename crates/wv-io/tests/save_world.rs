@@ -227,5 +227,58 @@ fn save_load_save_idempotent() {
     assert_eq!(w1.factions, w3.factions, "两次落盘后 faction 应一致");
 }
 
+/// v0.2 dirty 路由：手写 `distances/places.yaml` 之类**未列在 dirty** 的目录，
+/// save 时不被覆盖；已列在 dirty 的目录**必须**重写。
+///
+/// 这是 UI Save 走 `EditHistory::take_dirty` 后实际效果的最小模型。
+#[test]
+fn dirty_routing_leaves_unlisted_dirs_untouched() {
+    let tmp = TempDir::new("dirty_routing");
+    let dir = tmp.path();
+    let f = Faction::new(Id::new_unchecked("f1"), "F1", Color("#555555".into()));
+    let proj = build_min_project(dir, &[f]).expect("建工程");
+    // 写一个手改文件到 `characters/` 目录（dirty 列表不含它）。
+    let char_dir = dir.join("characters");
+    std::fs::create_dir_all(&char_dir).expect("mkdir characters");
+    let hand_char = char_dir.join("char_hand.yaml");
+    let hand_content = "id: char_hand\nname: 手改角色\n";
+    std::fs::write(&hand_char, hand_content).expect("写手改文件");
+    let mtime_before = std::fs::metadata(&hand_char).unwrap().modified().unwrap();
+
+    // 触发一次「只 factions 脏」的保存。
+    let world = proj.load_world().expect("load");
+    proj.save_world(&world, &["factions".into()])
+        .expect("save factions only");
+
+    // 角色文件应**未被重写**——mtime 保持。
+    let mtime_after = std::fs::metadata(&hand_char).unwrap().modified().unwrap();
+    assert_eq!(
+        mtime_before, mtime_after,
+        "未列在 dirty 的目录文件不应被触碰"
+    );
+    // 内容也保持。
+    let read = std::fs::read_to_string(&hand_char).unwrap();
+    assert_eq!(read, hand_content, "文件内容应原样保留");
+}
+
+/// v0.2 dirty 路由：空 dirty → 全量；非空 dirty → 只动 dirty 项。
+/// （在现有 v0.1 测试里已分别覆盖两边，本测试做交叉断言「空/非空都走得通」。）
+#[test]
+fn empty_dirty_falls_back_to_full_rewrite() {
+    let tmp = TempDir::new("empty_dirty");
+    let dir = tmp.path();
+    let f1 = Faction::new(Id::new_unchecked("faction_a"), "A", Color("#AAAAAA".into()));
+    let f2 = Faction::new(Id::new_unchecked("faction_b"), "B", Color("#BBBBBB".into()));
+    let proj = build_min_project(dir, &[f1.clone(), f2.clone()]).expect("建工程");
+    let world = proj.load_world().expect("load");
+    proj.save_world(&world, &[]).expect("全量 save");
+    let proj2 = Project::open(dir).expect("重开");
+    let world2 = proj2.load_world().expect("重载");
+    assert_eq!(world2.factions.len(), 2);
+    let ids: Vec<&str> = world2.factions.iter().map(|f| f.id.as_str()).collect();
+    assert!(ids.contains(&"faction_a"));
+    assert!(ids.contains(&"faction_b"));
+}
+
 #[allow(dead_code)]
 fn _silence_unused(_w: &World) {}

@@ -29,9 +29,47 @@ use wv_edit::History;
 use wv_terrain::edit::{Brush, Stroke as TerrainStroke};
 
 /// 编辑历史（`wv-edit::History` 的应用层持有者）。
+///
+/// `dirty_set` 累计自上次 `take_dirty` / `clear_dirty` 以来**所有**已提交命令
+/// 返回的相对目录路径（如 `maps` / `distances/edges` / `geometry/faction`）。
+/// 阶段七 v0.2：Save 命令用这个集合把 `save_world(..., &dirty)` 喂进去，
+/// 避免每次保存都全目录重写。
+///
+/// 持久化模型：
+/// - 编辑（commit/redo）→ `record_dirty` 累加
+/// - 加载新工程（`load_project_into`）→ `clear_dirty` 重置
+/// - 保存成功 → `take_dirty` 排空
+/// - 撤销（undo）→ 当前版本暂**不**回滚 dirty 集合（接受一定过度写盘换取
+///   实现简单性；保存仍是幂等的 round-trip）
 #[derive(Resource, Default)]
 pub struct EditHistory {
     pub history: History,
+    pub dirty_set: std::collections::BTreeSet<String>,
+}
+
+impl EditHistory {
+    /// 把 `paths` 全部并入 dirty 集合。
+    pub fn record_dirty<I, S>(&mut self, paths: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        for p in paths {
+            self.dirty_set.insert(p.into());
+        }
+    }
+
+    /// 取出 dirty 集合并清空（原子）。
+    pub fn take_dirty(&mut self) -> Vec<String> {
+        let v: Vec<String> = self.dirty_set.iter().cloned().collect();
+        self.dirty_set.clear();
+        v
+    }
+
+    /// 不取，只清空（用于「加载新工程」之类的整体重置）。
+    pub fn clear_dirty(&mut self) {
+        self.dirty_set.clear();
+    }
 }
 
 /// 松手时把笔触转成命令并提交。
@@ -94,7 +132,8 @@ pub fn commit_stroke_on_release(
     let mut tx = Transaction::new();
     tx.push(Box::new(cmd));
     match edit.history.commit(&mut projection.world, tx) {
-        Ok(_dirty) => {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
             projection.dirty = true;
             // 增量重传（优化项 3d）：只标笔触影响矩形为脏，
             // `flush_terrain_texture` 会走 [`crate::terrain_view::patch_terrain_image`] 增量 patch。

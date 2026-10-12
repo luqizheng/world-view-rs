@@ -292,6 +292,7 @@ fn poll_open_project_dialog(
     mut recents: ResMut<RecentProjects>,
     mut notice: ResMut<ShellNotice>,
     mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
+    mut edit: ResMut<crate::editing::EditHistory>,
     time: Res<Time>,
 ) {
     let Some(outcome) = task.take_if_finished() else {
@@ -311,6 +312,7 @@ fn poll_open_project_dialog(
             &mut recents,
             &mut notice,
             &mut diagnostics,
+            &mut edit,
             frame,
         );
     }
@@ -330,6 +332,7 @@ fn load_project_into(
     recents: &mut RecentProjects,
     notice: &mut ShellNotice,
     diagnostics: &mut crate::state::ProjectDiagnostics,
+    edit: &mut crate::editing::EditHistory,
     frame: u64,
 ) {
     match wv_io::Project::open(dir).and_then(|p| p.load_world()) {
@@ -344,6 +347,10 @@ fn load_project_into(
             projection.project_dir = Some(dir.to_owned());
             projection.dirty = false;
             projection.load_error = None;
+            // 新工程：清空历史与 dirty 集合，避免旧工程的脏目录被误重写。
+            // 历史也清空——切工程后旧撤销栈没有意义（V2 守约：作者是新工程的主人）。
+            edit.history = Default::default();
+            edit.clear_dirty();
             // §A：切工程要重置地图层级并清访问痕迹（`reset_to_world` 两者都做）。
             drill.reset_to_world();
             drill.ensure_root(&projection.world);
@@ -388,6 +395,7 @@ fn dispatch_project_command(
     notice: &mut ShellNotice,
     open_task: &mut OpenProjectTask,
     diagnostics: &mut crate::state::ProjectDiagnostics,
+    edit: &mut crate::editing::EditHistory,
     frame: u64,
 ) -> bool {
     match id {
@@ -396,7 +404,16 @@ fn dispatch_project_command(
             match list.get(*i as usize) {
                 Some(entry) => {
                     let dir = entry.dir.clone();
-                    load_project_into(&dir, projection, drill, recents, notice, diagnostics, frame);
+                    load_project_into(
+                        &dir,
+                        projection,
+                        drill,
+                        recents,
+                        notice,
+                        diagnostics,
+                        edit,
+                        frame,
+                    );
                 }
                 None => notice.error("最近工程列表已变化，请重开菜单", frame),
             }
@@ -412,6 +429,9 @@ fn dispatch_project_command(
             diagnostics.diagnostics = wv_io::diagnostics::Diagnostics::default();
             diagnostics.last_count = 0;
             diagnostics.needs_diagnose = true;
+            // 新工程：清空编辑历史与 dirty 集合（与 `load_project_into` 同源）。
+            edit.history = Default::default();
+            edit.clear_dirty();
             notice.info("已新建空白工程（尚未落盘）", frame);
             true
         }
@@ -425,6 +445,8 @@ fn dispatch_project_command(
             diagnostics.diagnostics = wv_io::diagnostics::Diagnostics::default();
             diagnostics.last_count = 0;
             diagnostics.needs_diagnose = true;
+            edit.history = Default::default();
+            edit.clear_dirty();
             notice.info("已关闭工程", frame);
             true
         }
@@ -508,6 +530,7 @@ fn apply_pending_commands(
         &mut notice,
         &mut open_task,
         &mut diagnostics,
+        &mut edit,
         frame,
     ) {
         return;
@@ -559,21 +582,32 @@ fn apply_pending_commands(
                 Err(msg) => notice.error(msg, frame),
             }
         }
-        // 保存（阶段七 v0.1）：走 `wv_io::Project::save_world`。
-        // v0.1 用全量 dirty 列表 `&[]`——每个目录都全量重写。
-        // 后续接 wv-edit 的 dirty set 路由（v0.2）。
+        // 保存（阶段七 v0.2）：走 `wv_io::Project::save_world`，只重写 dirty
+        // 目录。`take_dirty` 原子取空集合；空 Vec 走全量路径（首次保存、
+        // 刚加载、刚撤销等场景）。失败不排空——脏标记仍在，下次保存能补上。
         CommandId::Save => {
             let Some(dir) = projection.project_dir.clone() else {
                 notice.error("当前没有工程目录，无法保存", frame);
                 return;
             };
+            let dirty = edit.take_dirty();
+            let n = dirty.len();
             match wv_io::Project::open(&dir) {
-                Ok(project) => match project.save_world(&projection.world, &[]) {
+                Ok(project) => match project.save_world(&projection.world, &dirty) {
                     Ok(()) => {
                         projection.dirty = false;
-                        notice.info(format!("已保存到 {dir}"), frame);
+                        let scope = if n == 0 {
+                            "全量".to_owned()
+                        } else {
+                            format!("{n} 个目录")
+                        };
+                        notice.info(format!("已保存到 {dir}（{scope}）"), frame);
                     }
-                    Err(e) => notice.error(format!("保存失败：{e}"), frame),
+                    Err(e) => {
+                        // 失败时把 dirty 放回，让下次保存能再试。
+                        edit.record_dirty(dirty);
+                        notice.error(format!("保存失败：{e}"), frame);
+                    }
                 },
                 Err(e) => notice.error(format!("打开工程目录失败：{e}"), frame),
             }
