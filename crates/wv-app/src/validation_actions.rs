@@ -34,6 +34,13 @@ pub fn jump_to_anchor_now(
     drill: &mut DrillState,
     view: &mut ViewState,
     playback: &mut PlaybackState,
+    cameras: &mut bevy::prelude::Query<
+        (
+            &mut bevy::prelude::Transform,
+            &mut bevy::prelude::OrthographicProjection,
+        ),
+        bevy::prelude::With<bevy::prelude::Camera2d>,
+    >,
     anchor: &DiagAnchor,
 ) -> bool {
     if !drill.drill_to(&projection.world, &anchor.map) {
@@ -41,8 +48,9 @@ pub fn jump_to_anchor_now(
     }
     // 同步 `current_map` 镜像。
     drill.sync_view(view);
-    // 把相机拨到 anchor.at——世界坐标。
+    // 把相机拨到 anchor.at——世界坐标（ViewState + 相机主真源一起写）。
     view.camera_center = bevy::prelude::Vec2::new(anchor.at.x, anchor.at.y);
+    crate::camera::apply_view_to_camera(view.camera_center, view.scale, cameras);
     // 时间轴拨到 anchor.day。
     playback.current_day = anchor.day;
     true

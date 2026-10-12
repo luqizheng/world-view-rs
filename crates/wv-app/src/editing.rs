@@ -204,7 +204,7 @@ pub fn flush_terrain_texture(
     // dirty 矩形 = 整图 → 走全图重建（模式切换 / 全图标记脏的场景）。
     let is_full = rect == [0, 0, w, h];
     if is_full {
-        let image = image_from_terrain(data, view.mode, atlas.as_deref());
+        let image = image_from_terrain(data, view.mode, atlas.as_deref(), view.terrain_soften);
         if let Some(img) = images.get_mut(&tex.handle) {
             *img = image;
         }
@@ -214,7 +214,15 @@ pub fn flush_terrain_texture(
     // 增量 patch：只重算 dirty 矩形内的 cell，原地写进 `image.data`。
     let res = tex.res;
     if let Some(img) = images.get_mut(&tex.handle) {
-        crate::terrain_view::patch_terrain_image(img, data, view.mode, atlas.as_deref(), rect, res);
+        crate::terrain_view::patch_terrain_image(
+            img,
+            data,
+            view.mode,
+            atlas.as_deref(),
+            rect,
+            res,
+            view.terrain_soften,
+        );
     }
     tex.dirty = None;
 }

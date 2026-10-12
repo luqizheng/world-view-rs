@@ -102,14 +102,18 @@ pub enum ViewMode {
     Faction,
     /// D. 事件图：极简底图 + 事件高亮。
     Event,
+    /// E. 轮廓图：黑底 + 海岸线 + 城市路线（2026-11 用户需求：
+    /// 地形纹理完全退场，只留水陆轮廓，要素对比度最大化）。
+    Coastline,
 }
 
 impl ViewMode {
-    pub const ALL: [ViewMode; 4] = [
+    pub const ALL: [ViewMode; 5] = [
         ViewMode::RealTerrain,
         ViewMode::Schematic,
         ViewMode::Faction,
         ViewMode::Event,
+        ViewMode::Coastline,
     ];
 
     /// 顶栏显示名。
@@ -119,6 +123,7 @@ impl ViewMode {
             ViewMode::Schematic => "色块地形",
             ViewMode::Faction => "势力图",
             ViewMode::Event => "事件图",
+            ViewMode::Coastline => "轮廓图",
         }
     }
 }
@@ -133,6 +138,12 @@ pub struct ViewState {
     pub camera_center: Vec2,
     /// 地形纹理是否可见（图层开关之一）。
     pub terrain_visible: bool,
+    /// **底图淡化**（2026-11 用户需求：路线/地标被高饱和地形纹理淹没的解法）。
+    ///
+    /// 开启后地形瓦片/纯色向亮灰去饱和混合（比例见 `palette::SOFTEN_KEEP`），
+    /// 所有视图模式生效——Google 地图式「底图永远比要素淡一档」。
+    /// 默认开：这正是本轮要修的「路线看不见」问题的默认答案。
+    pub terrain_soften: bool,
     /// 事件点图层是否可见。
     pub events_visible: bool,
     /// 轨迹图层是否可见。
@@ -156,6 +167,7 @@ impl Default for ViewState {
             scale: 1.0,
             camera_center: Vec2::ZERO,
             terrain_visible: true,
+            terrain_soften: true,
             events_visible: true,
             tracks_visible: true,
             roads_visible: true,
@@ -164,6 +176,65 @@ impl Default for ViewState {
             cursor_world: None,
             current_map: "world_main".into(),
         }
+    }
+}
+
+/// 视野层级（LOD，v0.3 优化项 A）。
+///
+/// `ViewState.scale` 的语义是**世界单位/屏幕像素**（与 `OrthographicProjection.scale`
+/// 一致）：值越大 = 拉得越远。三档阈值按「一张 4096² 世界图在 1600px 窗口里
+/// 全图视野 ≈ scale 5.1」标定：
+///
+/// | 档 | scale 范围 | 视野 | 渲染策略（Google 地图式） |
+/// |---|---|---|---|
+/// | [`LodTier::Edit`] | < 1.0 | 编辑级（局部放大） | 全细节 |
+/// | [`LodTier::Region`] | 1.0 – 3.0 | 省级 | 全细节 |
+/// | [`LodTier::Nation`] | ≥ 3.0 | 国家/世界级 | 只画城市点标（有范围的地点），其余要素降权 |
+///
+/// Google 地图对应物：每个缩放级别只画「该级别该出现的要素」。当前第一版
+/// 只做 POI 筛选（城市 vs 点标），道路按等级筛选等后续数据模型补 `rank` 再做。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LodTier {
+    /// 编辑级：放大看局部。
+    Edit,
+    /// 省级：中距离。
+    Region,
+    /// 国家级：拉到最远。
+    Nation,
+}
+
+/// 国家档阈值：scale ≥ 此值视为「世界级视野」。
+///
+/// 依据：4096² 世界 / 800px 窗口高 = 5.12（全图），3.0 ≈ 可见世界宽度的 60%。
+pub const LOD_NATION_SCALE: f32 = 3.0;
+/// 省级下限：scale < 此值视为「编辑级视野」。
+pub const LOD_REGION_SCALE: f32 = 1.0;
+
+/// 由视图缩放求当前视野层级。纯函数，渲染各系统共用同一口径。
+pub fn lod_tier(view_scale: f32) -> LodTier {
+    if view_scale >= LOD_NATION_SCALE {
+        LodTier::Nation
+    } else if view_scale >= LOD_REGION_SCALE {
+        LodTier::Region
+    } else {
+        LodTier::Edit
+    }
+}
+
+#[cfg(test)]
+mod lod_tests {
+    use super::*;
+
+    #[test]
+    fn lod_tier_splits_at_exact_thresholds() {
+        // 边界值：阈值本身归更高档（含闭区间语义）。
+        assert_eq!(lod_tier(LOD_NATION_SCALE), LodTier::Nation);
+        assert_eq!(lod_tier(LOD_REGION_SCALE), LodTier::Region);
+        assert_eq!(lod_tier(LOD_REGION_SCALE - 0.001), LodTier::Edit);
+        // 常规值。
+        assert_eq!(lod_tier(0.1), LodTier::Edit);
+        assert_eq!(lod_tier(1.5), LodTier::Region);
+        assert_eq!(lod_tier(5.12), LodTier::Nation);
     }
 }
 

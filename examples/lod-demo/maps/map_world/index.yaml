@@ -1,0 +1,25 @@
+id: map_world
+name: 主世界
+level: world
+children: []
+icons: []
+layers:
+- id: layer_terrain
+  name: 地形
+  kind: terrain
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+  source: maps/map_world/terrain.bin
+extent:
+  width: 4096.0
+  height: 4096.0
+raster:
+  path: maps/map_world/terrain.bin
+  encoding: i16
+  width: 1024
+  height: 1024
+  chunk: 256
+  format_version: 1
+  checksum: a593611b

@@ -29,91 +29,18 @@ use crate::ui;
 use crate::vector_layers::{self, VectorLayerEntities};
 use crate::AppConfig;
 
-/// 启动 GUI。`project_dir` 为 `None` 时用内置占位地形。
+/// 启动 GUI。`startup_project` 为 `None` 时进空编辑器（占位地形），
+/// `Some(dir)` 时启动后由 `ui_shell::startup_load` 在窗口内加载并显示进度/失败原因。
 pub fn run(config: AppConfig) {
-    // 加载工程（如果给了目录）。加载失败时**明确报告**并退化为占位地形。
-    //
-    // 注意：不要只写 `bevy::log::error!`——窗口刚创建时日志一闪而过，
-    // 用户会以为程序崩溃。这里同时（a）打印到 stderr，（b）存入资源供 UI 显示。
-    let mut load_error: Option<String> = None;
-    let world = match &config.project_dir {
-        Some(dir) => match wv_io::Project::open(dir) {
-            Ok(project) => match project.load_world() {
-                Ok(w) => w,
-                Err(e) => {
-                    let msg = format!("加载工程 `{dir}` 失败: {e}（已退化为空白占位地形）");
-                    eprintln!("[wv] 错误: {msg}");
-                    load_error = Some(msg);
-                    Default::default()
-                }
-            },
-            Err(e) => {
-                let msg = format!(
-                    "打开工程 `{dir}` 失败: {e}\n\
-                     提示: 若在 `target/debug` 下启动，请改用 `wv gui <工程目录>`，\
-                     或设置环境变量 `WV_PROJECT`，或在工程根目录下运行。"
-                );
-                eprintln!("[wv] 错误: {msg}");
-                load_error = Some(msg);
-                Default::default()
-            }
-        },
-        None => Default::default(),
-    };
+    // 注意：这里**不做任何工程加载**（用户裁定：启动不主动加载地图）。
+    // App 以空世界起步立刻开窗——首帧即是可交互的编辑器；
+    // `-m` 的加载请求经 [`crate::ui_shell::StartupLoadRequest`] 在运行期执行，
+    // 遮罩先画再阻塞加载，避免「白屏无反馈」。
 
-    // 初始相机对准根图中心、缩放到能看全整图（否则默认镜头停在原点，
-    // 地图内容全在视野外，用户看到一片黑）。
-    let root_id = world
-        .meta
-        .as_ref()
-        .map(|m| m.root_map.clone())
-        .unwrap_or_else(|| wv_core::Id::new_unchecked("world_main"));
-    let root_extent = world
-        .maps
-        .iter()
-        .find(|m| m.id == root_id)
-        .and_then(|m| m.extent.as_ref())
-        .map(|e| (e.width, e.height))
-        .unwrap_or((4096.0f32, 4096.0));
-    // `ViewState.scale` 的口径是「世界单位 / 像素」（screen_to_world 乘它），
-    // 所以 fit = 图宽 / 视口宽，取两轴较紧的一个。
-    // 初始取景优先**框住根图内容**（icons 包围盒 + 25% 边距）：大图幅上内容
-    // 只占一小块时，按整图 fit 会把内容挤成屏幕中心的一撮点、四周全是空黑。
-    let root_node = world.maps.iter().find(|m| m.id == root_id);
-    let content_box: Option<(Vec2, Vec2)> = root_node.and_then(|m| {
-        let (w, h) = m
-            .extent
-            .as_ref()
-            .map(|e| (e.width, e.height))
-            .unwrap_or((4096.0, 4096.0));
-        let pts: Vec<Vec2> = m
-            .icons
-            .iter()
-            // 注意口径：marker/Place 的世界坐标 = anchor 直接乘 extent（不做 y 翻转，
-            // 与 drill 标记一致）；这里只做取景，别自作聪明翻转。
-            .filter_map(|ic| ic.anchor.map(|a| Vec2::new(a[0] * w, a[1] * h)))
-            .collect();
-        (pts.len() >= 2).then(|| {
-            let lo = pts.iter().copied().fold(Vec2::MAX, Vec2::min);
-            let hi = pts.iter().copied().fold(Vec2::MIN, Vec2::max);
-            (lo, hi)
-        })
-    });
-    let (center, fit_scale) = match content_box {
-        Some((lo, hi)) => {
-            let size = hi - lo;
-            let margin = size.max_element() * 0.25 + 64.0;
-            let span = size + Vec2::splat(margin * 2.0);
-            (
-                (lo + hi) * 0.5,
-                (span.x / 1280.0).max(span.y / 800.0).max(1.0),
-            )
-        }
-        None => (
-            Vec2::splat(root_extent.0 * 0.5),
-            (root_extent.0 / 1280.0).max(root_extent.1 / 800.0).max(1.0),
-        ),
-    };
+    // 初始相机对准占位地形中心（根图 extent 缺省 4096²）。
+    // 真正按工程内容 fit 的逻辑在 [`fit_view_for_world`]，
+    // 运行期加载成功后会再次调用（相机 transform 才是主真源）。
+    let (center, fit_scale) = fit_view_for_world(&wv_core::World::default());
 
     let mut app = App::new();
     app.add_plugins(
@@ -130,28 +57,25 @@ pub fn run(config: AppConfig) {
             .set(ImagePlugin::default_nearest()),
     )
     .add_plugins(EguiPlugin)
-    // 播放范围取自工程 `timeline/axis.yaml` 的 `timeline_range`；
-    // 无 axis 或 `to` 缺省（开放区间）时保留默认值。
+    // 播放范围：空编辑器起步先用默认值（1..180_001）；
+    // 运行期加载工程成功后由 `startup_load` 按该工程 `timeline/axis.yaml` 重置。
     .insert_resource(PlaybackState {
-        range_from: world
-            .timeline
-            .as_ref()
-            .map(|t| t.timeline_range.from)
-            .unwrap_or(1),
-        range_to: world
-            .timeline
-            .as_ref()
-            .and_then(|t| t.timeline_range.to)
-            .unwrap_or(180_001),
+        range_from: 1,
+        range_to: 180_001,
         ..Default::default()
     })
-    // 初始相机对准根图中心、缩放到能看全整图。
+    // 空编辑器起步：世界一律为空，`-m` 的加载请求交给 `StartupLoadRequest`
+    // 在首帧遮罩之后执行（加载失败原因会以窗口内卡片展示）。
     .insert_resource(WorldProjection {
-        world,
-        project_dir: config.project_dir.clone(),
+        world: wv_core::World::default(),
+        project_dir: None,
         dirty: false,
-        load_error,
+        load_error: None,
     })
+    // CLI `-m <目录>` 带来的启动加载请求；`None` = 空编辑器。
+    .insert_resource(crate::ui_shell::StartupLoadRequest(
+        config.startup_project.clone(),
+    ))
     .insert_resource(ViewState {
         camera_center: center,
         scale: fit_scale,
@@ -164,7 +88,13 @@ pub fn run(config: AppConfig) {
     .init_resource::<camera::ActiveStroke>()
     .init_resource::<camera::PointerOverUi>()
     .init_resource::<editing::EditHistory>()
+    // 校验面板 / 笔触提交 / 撤销重做 / 打开工程都读写它（`ResMut` 访问
+    // 不存在的资源会在首帧 panic → 窗口无法显示）。`derive(Default)` 起步。
+    .init_resource::<crate::state::ProjectDiagnostics>()
     .init_resource::<VectorLayerEntities>()
+    // 势力多边形层（S12）：同属「每帧 despawn+spawn 的实体集合」资源，
+    // 漏 init 会在首帧 panic（`could not access system parameter`）。
+    .init_resource::<faction_overlays::FactionOverlayEntities>()
     .init_resource::<brush_cursor::BrushCursorEntities>()
     .init_resource::<map_frame::MapFrameEntities>()
     .init_resource::<terrain_chunks::TerrainChunkEntities>()
@@ -280,10 +210,16 @@ fn setup_camera(mut commands: Commands, view: Option<Res<ViewState>>) {
     commands.spawn((
         Camera2d,
         Transform::from_xyz(center.x, center.y, 0.0),
-        Projection::Orthographic(OrthographicProjection {
+        // 方案 C（矢量覆盖层抗锯齿）：4x MSAA。POI 圆环 / 道路条 / 地名底框
+        // 都是 Mesh2d，多边形边缘靠 MSAA 平滑——纹理内部的地形边界不受益
+        // （那由 terrain_view 的边界扰动负责），两者互补。
+        Msaa::Sample4,
+        // bevy 0.15 的 `Camera2d` require 的是独立的 `OrthographicProjection` 组件
+        // （`Projection` 枚举是 Camera3d 的），直接提供它才能覆盖默认的 scale=1.0。
+        OrthographicProjection {
             scale,
             ..OrthographicProjection::default_2d()
-        }),
+        },
     ));
 }
 
@@ -304,7 +240,8 @@ fn setup_terrain_texture_after_world(
         projection.world.terrain = Some(terrain_view::placeholder_terrain(512, 512));
     }
     let data = projection.world.terrain.clone().unwrap();
-    let image = terrain_view::image_from_terrain(&data, view.mode, atlas.as_ref());
+    let image =
+        terrain_view::image_from_terrain(&data, view.mode, atlas.as_ref(), view.terrain_soften);
     let res = atlas.map_or(1, |_| {
         terrain_view::tile_res_for(data.width.max(data.height))
     });
@@ -316,5 +253,107 @@ fn setup_terrain_texture_after_world(
         dirty: None,
         chunks_dirty: None,
         last_mode: Some(view.mode),
+        last_soften: view.terrain_soften,
     });
+}
+
+/// 按世界内容计算初始取景（中心 + 缩放）。
+///
+/// - 优先**框住根图内容**（icons 包围盒 + 25% 边距）：大图幅上内容只占
+///   一小块时，按整图 fit 会把内容挤成屏幕中心的一撮点、四周全是空黑；
+/// - 无内容/空世界时退回根图 extent（缺省 4096²）的中心。
+///
+/// Startup（`run` 装配）与运行期加载（`ui_shell::startup_load`）共用，
+/// 保证「加载工程后看到的取景」与「启动即加载」完全一致。
+pub(crate) fn fit_view_for_world(world: &wv_core::World) -> (Vec2, f32) {
+    let root_id = world
+        .meta
+        .as_ref()
+        .map(|m| m.root_map.clone())
+        .unwrap_or_else(|| wv_core::Id::new_unchecked("world_main"));
+    let root_extent = world
+        .maps
+        .iter()
+        .find(|m| m.id == root_id)
+        .and_then(|m| m.extent.as_ref())
+        .map(|e| (e.width, e.height))
+        .unwrap_or((4096.0f32, 4096.0));
+    // 口径：marker/Place 的世界坐标 = anchor 直接乘 extent（不做 y 翻转，
+    // 与 drill 标记一致）；这里只做取景，别自作聪明翻转。
+    let content_box: Option<(Vec2, Vec2)> =
+        world.maps.iter().find(|m| m.id == root_id).and_then(|m| {
+            let (w, h) = m
+                .extent
+                .as_ref()
+                .map(|e| (e.width, e.height))
+                .unwrap_or((4096.0, 4096.0));
+            let pts: Vec<Vec2> = m
+                .icons
+                .iter()
+                .filter_map(|ic| ic.anchor.map(|a| Vec2::new(a[0] * w, a[1] * h)))
+                .collect();
+            (pts.len() >= 2).then(|| {
+                let lo = pts.iter().copied().fold(Vec2::MAX, Vec2::min);
+                let hi = pts.iter().copied().fold(Vec2::MIN, Vec2::max);
+                (lo, hi)
+            })
+        });
+    fit_for_content(root_extent, content_box)
+}
+
+/// 纯几何部分：给定根图 extent 与内容包围盒，算 (center, scale)。
+///
+/// `ViewState.scale` 的口径是「世界单位 / 像素」（screen_to_world 乘它），
+/// 所以 fit = 图宽 / 视口宽，取两轴较紧的一个；缩放不小于 1（避免比像素还细）。
+fn fit_for_content(root_extent: (f32, f32), content_box: Option<(Vec2, Vec2)>) -> (Vec2, f32) {
+    match content_box {
+        Some((lo, hi)) => {
+            let size = hi - lo;
+            let margin = size.max_element() * 0.25 + 64.0;
+            let span = size + Vec2::splat(margin * 2.0);
+            (
+                (lo + hi) * 0.5,
+                (span.x / 1280.0).max(span.y / 800.0).max(1.0),
+            )
+        }
+        None => (
+            Vec2::splat(root_extent.0 * 0.5),
+            (root_extent.0 / 1280.0).max(root_extent.1 / 800.0).max(1.0),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod fit_view_tests {
+    use super::fit_for_content;
+    use bevy::math::Vec2;
+
+    #[test]
+    fn empty_world_falls_back_to_centered_4096_view() {
+        let (center, scale) = fit_for_content((4096.0, 4096.0), None);
+        assert_eq!(center, Vec2::splat(2048.0), "center {center:?}");
+        // 4096 / 800 = 5.12（取两轴较紧的一轴）。
+        assert!((scale - 5.12).abs() < 1e-4, "got {scale}");
+    }
+
+    #[test]
+    fn content_box_centers_the_view_with_25_percent_margin() {
+        // 内容 640×400 位于 (0,0)-(640,400)：
+        // margin = 640*0.25 + 64 = 224；span = (1088, 848)；
+        // scale = max(1088/1280, 848/800) = 1.06；center = (320, 200)。
+        let (center, scale) = fit_for_content(
+            (4096.0, 4096.0),
+            Some((Vec2::ZERO, Vec2::new(640.0, 400.0))),
+        );
+        assert_eq!(center, Vec2::new(320.0, 200.0), "center {center:?}");
+        assert!((scale - 1.06).abs() < 1e-4, "got {scale}");
+    }
+
+    #[test]
+    fn tiny_content_is_not_zoomed_past_one_to_one() {
+        // 内容只有 10×10：span ≈ 10 + 2*(2.5+64) = 143；两轴 fit 都 < 1，
+        // 缩放下限 1.0 兜底（世界单位 ≈ 像素时不再放大）。
+        let (_, scale) = fit_for_content((4096.0, 4096.0), Some((Vec2::ZERO, Vec2::splat(10.0))));
+        assert!((scale - 1.0).abs() < 1e-6, "got {scale}");
+    }
 }

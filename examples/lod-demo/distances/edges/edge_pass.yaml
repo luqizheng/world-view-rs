@@ -1,0 +1,6 @@
+id: edge_pass
+a: place_north_city
+b: place_pass
+distance_km: 90.0
+terrain: hill
+bidirectional: true

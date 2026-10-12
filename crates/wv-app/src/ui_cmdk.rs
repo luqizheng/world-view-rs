@@ -240,7 +240,7 @@ impl CommandRegistry {
 
         // 视图
         for (i, mode) in crate::state::ViewMode::ALL.iter().enumerate() {
-            let keys = ["1", "2", "3", "4"][i];
+            let keys = ["1", "2", "3", "4", "5"][i];
             push(
                 CommandId::SetViewMode(i as u8),
                 CommandGroup::View,
@@ -249,6 +249,7 @@ impl CommandRegistry {
                     crate::state::ViewMode::Schematic => "切换到色块地形视图",
                     crate::state::ViewMode::Faction => "切换到势力图视图",
                     crate::state::ViewMode::Event => "切换到事件图视图",
+                    crate::state::ViewMode::Coastline => "切换到轮廓图视图",
                 },
                 Some(keys),
             );

@@ -1,0 +1,16 @@
+calendar:
+  kind: simple
+  prefix: 新历
+  start_year: 1
+  days_per_year: 360
+  days_per_month: 30
+timeline_range:
+  from: 1
+  to: 180001
+anchors:
+- id: anchor_founding
+  name: 西陵城建城
+  day: 1
+- id: anchor_east_port
+  name: 东港开埠
+  day: 721

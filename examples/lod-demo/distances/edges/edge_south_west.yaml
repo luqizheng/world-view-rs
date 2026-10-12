@@ -1,0 +1,6 @@
+id: edge_south_west
+a: place_south_city
+b: place_west_city
+distance_km: 430.0
+terrain: plain
+bidirectional: true

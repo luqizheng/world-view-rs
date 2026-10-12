@@ -1,0 +1,6 @@
+id: edge_oasis
+a: place_west_city
+b: place_oasis
+distance_km: 170.0
+terrain: plain
+bidirectional: true

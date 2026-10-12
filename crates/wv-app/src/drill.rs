@@ -418,7 +418,7 @@ pub fn drill_transition(
     grid: Res<GridConfig>,
     mut drill: ResMut<DrillState>,
     mut view: ResMut<ViewState>,
-    mut camera: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+    mut camera: Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
     mut elapsed: Local<f32>,
 ) {
     let Ok((mut transform, mut cam_proj)) = camera.get_single_mut() else {
@@ -449,9 +449,8 @@ pub fn drill_transition(
 
     transform.translation.x = pos.x;
     transform.translation.y = pos.y;
-    if let Projection::Orthographic(ortho) = &mut *cam_proj {
-        ortho.scale = scale;
-    }
+    // `Camera2d` 用独立的 `OrthographicProjection` 组件（不是 `Projection` 枚举）。
+    cam_proj.scale = scale;
     view.scale = scale;
     view.camera_center = pos;
 
@@ -529,6 +528,7 @@ pub fn update_place_labels(
     drill: Res<DrillState>,
     grid: Res<GridConfig>,
     view: Res<ViewState>,
+    fonts: Res<crate::fonts::LoadedFonts>,
     mut q: Query<
         (
             Entity,
@@ -557,6 +557,8 @@ pub fn update_place_labels(
 
     // 文字尺寸按屏幕像素恒定（与 draw_drill_markers 的 screen_scale 口径一致）。
     let font_size = LABEL_PX * view.scale.max(0.05);
+    // CJK 字体（fonts.rs 在 Startup 注册）：缺省字体无中文字形，地名会成方块。
+    let cjk = fonts.cjk_font.clone();
 
     let mut iter = q.iter_mut();
     for (pos, name) in &wanted {
@@ -565,6 +567,10 @@ pub fn update_place_labels(
             // Bevy 0.15：字号在 TextFont 组件上，Text2d 只存内容。
             *text = Text2d::new(*name);
             style.font_size = font_size;
+            // TextFont.font 非 Option：缺 CJK 时回落内置字体（拉丁可用，中文方块）。
+            if let Some(f) = &cjk {
+                style.font = f.clone();
+            }
             *vis = Visibility::Visible;
         } else {
             commands.spawn((
@@ -572,6 +578,7 @@ pub fn update_place_labels(
                 Text2d::new(*name),
                 TextFont {
                     font_size,
+                    font: cjk.clone().unwrap_or_default(),
                     ..Default::default()
                 },
                 Transform::from_translation(pos.extend(0.0)),

@@ -1310,6 +1310,8 @@ pub fn panel_layers(
         None,
         |ui| {
             ui.checkbox(&mut view.terrain_visible, "地形");
+            // 底图淡化：把瓦片图集向纸面色拉，让路线/地标压得住底图。
+            ui.checkbox(&mut view.terrain_soften, "底图淡化");
             ui.checkbox(&mut view.places_visible, "地点");
             ui.checkbox(&mut view.events_visible, "事件点");
             ui.checkbox(&mut view.tracks_visible, "轨迹");
@@ -1384,6 +1386,7 @@ pub fn panel_minimap(
     mut view: ResMut<ViewState>,
     grid: Res<GridConfig>,
     tex: Res<crate::terrain_view::TerrainTexture>,
+    mut cameras: Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     // 小地图缩略图直接复用大地图的地形纹理（同一 Handle，零额外上传）。
@@ -1431,6 +1434,13 @@ pub fn panel_minimap(
                     let ny = (p.y - rect.top()) / rect.height() - 0.5;
                     view.camera_center =
                         Vec2::new(nx * grid.cell_size * 512.0, ny * grid.cell_size * 512.0);
+                    // 相机 Transform 是主真源：只写 ViewState 相机不动，
+                    // chunk 拣选却按新视口走 → 画面按假视口重裁（抖动重建）。
+                    crate::camera::apply_view_to_camera(
+                        view.camera_center,
+                        view.scale,
+                        &mut cameras,
+                    );
                 }
             }
             // 图层开关排到地形缩略图**两侧**：左侧 = 地点 / 轨迹，右侧 = 事件 / 道路；
@@ -1455,6 +1465,11 @@ pub fn panel_minimap(
                 ui.vertical(|ui| {
                     ui.checkbox(&mut view.events_visible, "事件");
                     ui.checkbox(&mut view.roads_visible, "道路");
+                });
+                ui.add_space(space::SM);
+                ui.vertical(|ui| {
+                    // 底图淡化：把瓦片图集向纸面色拉，让路线/地标压得住底图。
+                    ui.checkbox(&mut view.terrain_soften, "底图淡化");
                 });
             });
         },
@@ -1758,6 +1773,7 @@ pub fn panel_validation(
     mut drill: ResMut<DrillState>,
     mut view: ResMut<ViewState>,
     mut playback: ResMut<crate::state::PlaybackState>,
+    mut cameras: Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let ctx: &mut egui::Context = contexts.ctx_mut();
@@ -1830,6 +1846,7 @@ pub fn panel_validation(
                                             &mut drill,
                                             &mut view,
                                             &mut playback,
+                                            &mut cameras,
                                             anchor,
                                         );
                                     }
@@ -1882,6 +1899,7 @@ pub fn panel_validation(
                                             &mut drill,
                                             &mut view,
                                             &mut playback,
+                                            &mut cameras,
                                             anchor,
                                         );
                                     }

@@ -1,0 +1,6 @@
+id: edge_beacon
+a: place_south_city
+b: place_beacon
+distance_km: 80.0
+terrain: plain
+bidirectional: true

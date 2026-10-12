@@ -16,9 +16,12 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
-use bevy_egui::EguiContexts;
+use bevy_egui::{egui, EguiContexts};
 
-use crate::state::{DrillState, Panel, PanelState, RecentProjects, ViewState, WorldProjection};
+use crate::state::{
+    DrillState, Panel, PanelState, PlaybackState, RecentProjects, ViewState, WorldProjection,
+};
+use crate::terrain_view::{TerrainTexture, TileAtlas};
 use crate::ui_cmdk::{CommandId, CommandPalette};
 use crate::ui_layout::LayoutFile;
 use crate::ui_theme::UiShellConfig;
@@ -36,6 +39,8 @@ pub fn register(app: &mut App) {
         .init_resource::<RecentProjects>()
         .init_resource::<LayoutFile>()
         .init_resource::<OpenProjectTask>()
+        // CLI `-m` 的启动加载请求（`gui::run` 已注入值，这里只兜底默认）。
+        .init_resource::<StartupLoadRequest>()
         // 根图落位必须早于所有读 `DrillState` 的 UI 系统（同一 `Update` 里靠顺序保证）。
         .add_systems(
             PreUpdate,
@@ -52,6 +57,11 @@ pub fn register(app: &mut App) {
                 crate::ui::command_palette,
                 sync_drill_mirror,
                 persist_layout_on_change,
+                // 启动加载三件套：遮罩 / 错误卡片先画，`startup_load` 最后执行
+                // ——它可能阻塞整帧做磁盘加载，必须让遮罩先 present 一帧。
+                startup_load_overlay,
+                load_error_card,
+                startup_load,
             )
                 .chain(),
         );
@@ -279,6 +289,15 @@ impl OpenProjectTask {
     }
 }
 
+/// CLI `-m <目录>` 带来的启动加载请求。
+///
+/// 需求（用户裁定）：启动**不主动加载**任何地图——`None` = 空编辑器起步；
+/// `Some(dir)` = 启动后加载。由 [`startup_load`] 在遮罩画出并 present 之后
+/// 消费：直接在 `Startup` 里做阻塞加载，遮罩来不及画，「白屏无反馈」
+/// 只会从启动前挪到首帧前。
+#[derive(Resource, Debug, Default)]
+pub struct StartupLoadRequest(pub Option<String>);
+
 /// 每帧看一眼「打开工程」对话框是否回来了（v0.2 §A）。
 ///
 /// 顺序：在 `seed_drill_state` 之后、`hotkeys` 之后——`hotkeys` 可能
@@ -325,7 +344,7 @@ fn poll_open_project_dialog(
 /// 2. [`DrillState::reset_to_world`]——**重置地图层级回世界**，否则新工程的
 ///    路径里还留着旧工程的 id（§A 明确要求）；
 /// 3. 推进 [`RecentProjects`] 的顺序。
-fn load_project_into(
+pub(crate) fn load_project_into(
     dir: &str,
     projection: &mut WorldProjection,
     drill: &mut DrillState,
@@ -368,6 +387,199 @@ fn load_project_into(
             projection.load_error = Some(format!("打开工程 `{dir}` 失败: {e}"));
             notice.error(format!("打开工程失败：{e}"), frame);
         }
+    }
+}
+
+/// 启动加载遮罩：[`StartupLoadRequest`] 未消费期间全屏压暗 + 居中「正在加载」。
+///
+/// 用 [`EguiContexts::try_ctx_mut`] 而非 `ctx_mut`：主窗口销毁后同一帧
+/// 仍可能轮到本系统（bevy_egui 0.32 关窗路径的已知 panic），此时直接跳过，
+/// 不给关窗级联添新的触发点。
+fn startup_load_overlay(mut ctxs: EguiContexts, req: Res<StartupLoadRequest>) {
+    let Some(dir) = req.0.as_deref() else {
+        return;
+    };
+    let Some(ctx) = ctxs.try_ctx_mut() else {
+        return;
+    };
+    let screen = ctx.screen_rect();
+    egui::Area::new(egui::Id::new("wv_startup_load_dim"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(screen.min)
+        .show(ctx, |ui| {
+            ui.painter()
+                .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(150));
+        });
+    egui::Window::new("正在加载工程…")
+        .order(egui::Order::Foreground)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.with_layout(
+                egui::Layout::top_down_justified(egui::Align::Center),
+                |ui| {
+                    ui.add(egui::Spinner::new().size(32.0));
+                    ui.add_space(6.0);
+                    ui.label(dir);
+                },
+            );
+        });
+}
+
+/// 加载失败卡片：居中显示失败原因与下一步指引，点「知道了」关闭。
+///
+/// 需求（用户裁定）：加载失败**必须在窗口内显示原因**——控制台日志一闪
+/// 而过，用户只看到「没画出来」，无从知道是路径错了还是 YAML 坏了。
+/// 对话框打开工程失败（[`load_project_into`] 的失败分支）同样落到这里。
+fn load_error_card(mut ctxs: EguiContexts, mut projection: ResMut<WorldProjection>) {
+    let Some(err) = projection.load_error.clone() else {
+        return;
+    };
+    let Some(ctx) = ctxs.try_ctx_mut() else {
+        return;
+    };
+    egui::Window::new("工程加载失败")
+        .order(egui::Order::Foreground)
+        .collapsible(false)
+        .resizable(false)
+        .default_width(560.0)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.label(egui::RichText::new(&err).color(egui::Color32::LIGHT_RED));
+            ui.add_space(8.0);
+            ui.label("换一个工程：文件 → 打开工程…（Ctrl+O），或命令行 `wv gui -m <工程目录>`。");
+            ui.add_space(8.0);
+            if ui.button("知道了").clicked() {
+                projection.load_error = None;
+            }
+        });
+}
+
+/// 执行启动加载（`-m`）；帧 1 后才开始，给遮罩留出一帧 present。
+///
+/// 为什么不在 `Startup` 里做：Bevy 要等首帧渲染完成才 present——在 Startup
+/// 阻塞加载，用户看到的仍是白屏。帧 0 画遮罩 → present；帧 1 遮罩已在屏上，
+/// 这时才做真正（阻塞）的磁盘加载；帧 2 起显示加载结果 / 失败卡片。
+/// 空编辑器起步（无 `-m`）时顺带给一条一次性状态栏指引。
+#[allow(clippy::too_many_arguments)]
+fn startup_load(
+    mut req: ResMut<StartupLoadRequest>,
+    mut frames: Local<u32>,
+    mut hinted: Local<bool>,
+    mut projection: ResMut<WorldProjection>,
+    mut drill: ResMut<DrillState>,
+    mut recents: ResMut<RecentProjects>,
+    mut notice: ResMut<ShellNotice>,
+    mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
+    mut edit: ResMut<crate::editing::EditHistory>,
+    mut playback: ResMut<PlaybackState>,
+    mut view: ResMut<ViewState>,
+    mut tex: ResMut<TerrainTexture>,
+    atlas: Option<Res<TileAtlas>>,
+    mut images: ResMut<Assets<Image>>,
+    mut cameras: Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
+    time: Res<Time>,
+) {
+    *frames += 1;
+    if *frames < 2 {
+        return; // 帧 0/1：只让遮罩画。
+    }
+    let frame = (time.elapsed_secs() * 60.0) as u64;
+    let Some(dir) = req.0.take() else {
+        if !*hinted {
+            *hinted = true;
+            notice.info(
+                "未加载工程：文件 → 打开工程…（Ctrl+O），或 `wv gui -m <工程目录>`",
+                frame,
+            );
+        }
+        return;
+    };
+    *hinted = true;
+    load_project_into(
+        &dir,
+        &mut projection,
+        &mut drill,
+        &mut recents,
+        &mut notice,
+        &mut diagnostics,
+        &mut edit,
+        frame,
+    );
+    if projection.load_error.is_none() {
+        adopt_loaded_world(
+            &mut projection,
+            &mut playback,
+            &mut view,
+            &mut tex,
+            atlas.as_deref(),
+            &mut images,
+            &mut cameras,
+        );
+    }
+}
+
+/// 加载成功后的视图 / 纹理 / 播放接管——`gui::run` 里 Startup 装配的运行期等价物。
+///
+/// 三件事缺一不可：
+/// 1. `TerrainTexture` 整体重建：Startup 只按空世界建过一次纹理，
+///    `rebuild_texture_on_mode_change` 只认「模式变化」——换世界后若不换纹理，
+///    画面会永远停留在占位地形；
+/// 2. `ViewState` + 相机 transform 重新 fit：相机 transform 才是主真源
+///    （`setup_camera` 只在 Startup 跑一次），只写 ViewState 相机纹丝不动；
+/// 3. `PlaybackState` 按新工程 `timeline/axis.yaml` 重置，当前日回到起点
+///    （旧工程的播放日可能落在新范围之外）。
+fn adopt_loaded_world(
+    projection: &mut WorldProjection,
+    playback: &mut PlaybackState,
+    view: &mut ViewState,
+    tex: &mut TerrainTexture,
+    atlas: Option<&TileAtlas>,
+    images: &mut Assets<Image>,
+    cameras: &mut Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
+) {
+    // 地形保底（与 `setup_terrain_texture_after_world` 同一不变量：terrain 总是 Some）。
+    if projection.world.terrain.is_none() {
+        projection.world.terrain = Some(crate::terrain_view::placeholder_terrain(512, 512));
+    }
+    let data = projection.world.terrain.clone().unwrap();
+    let image =
+        crate::terrain_view::image_from_terrain(&data, view.mode, atlas, view.terrain_soften);
+    let res = atlas.map_or(1, |_| {
+        crate::terrain_view::tile_res_for(data.width.max(data.height))
+    });
+    *tex = TerrainTexture {
+        handle: images.add(image),
+        size: data.width.max(1),
+        res,
+        dirty: None,
+        chunks_dirty: None,
+        last_mode: Some(view.mode),
+        last_soften: view.terrain_soften,
+    };
+    // 整图内容已整体替换：chunk 层全量重贴。
+    tex.mark_all_dirty();
+    let (center, scale) = crate::gui::fit_view_for_world(&projection.world);
+    view.camera_center = center;
+    view.scale = scale;
+    playback.range_from = projection
+        .world
+        .timeline
+        .as_ref()
+        .map(|t| t.timeline_range.from)
+        .unwrap_or(1);
+    playback.range_to = projection
+        .world
+        .timeline
+        .as_ref()
+        .and_then(|t| t.timeline_range.to)
+        .unwrap_or(180_001);
+    playback.current_day = playback.range_from;
+    for (mut transform, mut proj) in cameras.iter_mut() {
+        transform.translation.x = center.x;
+        transform.translation.y = center.y;
+        proj.scale = scale;
     }
 }
 
@@ -514,6 +726,7 @@ fn apply_pending_commands(
     mut tex: ResMut<crate::terrain_view::TerrainTexture>,
     mut open_task: ResMut<OpenProjectTask>,
     mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
+    mut cameras: Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
     time: Res<Time>,
 ) {
     let Some(id) = palette.pending.take() else {
@@ -550,11 +763,18 @@ fn apply_pending_commands(
         CommandId::TogglePanel(p) => panels.toggle(p),
         CommandId::ResetPanelLayout => panels.reset_requested = true,
         CommandId::FitMap => {
-            view.camera_center = Vec2::ZERO;
-            view.scale = 1.0;
+            // FitMap 的语义 = 与启动/加载后相同的取景（`adopt_loaded_world`
+            // 同款 fit），而不是字面 ZERO/1.0——旧实现只写 ViewState，
+            // 相机从不跟随，语义从未真正生效过。
+            let (center, scale) = crate::gui::fit_view_for_world(&projection.world);
+            view.camera_center = center;
+            view.scale = scale;
+            crate::camera::apply_view_to_camera(center, scale, &mut cameras);
         }
         CommandId::Zoom(d) => {
             view.scale = (view.scale * if d > 0 { 1.25 } else { 0.8 }).clamp(0.1, 8.0);
+            // 缩放锚点 = 视口中心（命令无指针上下文，保持中心不动）。
+            crate::camera::apply_view_to_camera(view.camera_center, view.scale, &mut cameras);
         }
         CommandId::TogglePlay => playback.playing = !playback.playing,
         CommandId::JumpToStart => playback.current_day = playback.range_from,

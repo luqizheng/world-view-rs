@@ -1,0 +1,6 @@
+id: edge_ruin
+a: place_east_city
+b: place_ruin
+distance_km: 110.0
+terrain: plain
+bidirectional: true

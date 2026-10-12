@@ -1,0 +1,6 @@
+id: edge_ford
+a: place_west_city
+b: place_ford
+distance_km: 120.0
+terrain: plain
+bidirectional: true

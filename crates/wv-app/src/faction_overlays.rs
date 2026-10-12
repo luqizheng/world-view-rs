@@ -183,7 +183,7 @@ mod tests {
     }
 
     #[test]
-    fn build_polygon_mesh_square_has_three_triangles() {
+    fn build_polygon_mesh_square_fan_yields_two_triangles() {
         let m = build_polygon_mesh(&square());
         let positions = m
             .attribute(MeshVertexAttribute::new(
@@ -194,9 +194,9 @@ mod tests {
             .expect("位置属性应存在");
         let pos_vec: &[[f32; 3]] = positions.as_float3().expect("应是 f32x3");
         assert_eq!(pos_vec.len(), 4, "正方形 = 4 顶点");
-        // 索引：3 个三角形 × 3 顶点 = 9 索引。
+        // 扇形三角化：(n-2) = 2 个三角形 × 3 索引 = 6 索引。
         let indices = m.indices().expect("索引应存在");
-        assert_eq!(indices.len(), 9, "扇形 = (n-2) 三角形");
+        assert_eq!(indices.len(), 6, "扇形 = (n-2) 三角形，4 顶点应为 2 个");
     }
 
     #[test]

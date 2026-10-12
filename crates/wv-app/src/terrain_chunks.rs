@@ -280,23 +280,44 @@ pub fn sync_terrain_chunks(
         let center = cmin + Vec2::splat(chunk_world_size * 0.5);
 
         if let Some(&entity) = chunk_entities.by_coord.get(&coord) {
-            let Ok(mut chunk) = q_chunks.get_mut(entity) else {
+            // 3a-0) 尺寸失配检测：tex.size/res 随世界切换变化（如 `-m` 加载
+            // 1024 格工程，res 8→4）后，旧块的 mip 资产 extent 仍是旧 res 的。
+            // `patch_chunk_mips` 用 `Vec::clone_from` 写 mip（长度可变），会把
+            // 新 res 的数据塞进旧 extent 的 Image——GPU 上传即 panic
+            // （wgpu device.rs「range end index out of range」）。整块作废，
+            // 移出 by_coord 落到下方重生路径，按新尺寸重建。
+            let mip0_matches = q_chunks
+                .get(entity)
+                .ok()
+                .and_then(|c| c.mip_handles.first())
+                .and_then(|h| images.get(h))
+                .map(|mip0| {
+                    mip0.texture_descriptor.size.width == (gx1 - gx0) * res
+                        && mip0.texture_descriptor.size.height == (gy1 - gy0) * res
+                })
+                .unwrap_or(false);
+            if !mip0_matches {
+                commands.entity(entity).despawn();
+                chunk_entities.by_coord.remove(&coord);
+            } else {
+                let Ok(mut chunk) = q_chunks.get_mut(entity) else {
+                    continue;
+                };
+                // 3a) dirty 相交 → patch mip0 像素，并逐级重建 mip1/mip2。
+                if let (Some(dirty), Some(src)) = (pending_dirty, src) {
+                    if rects_intersect(dirty, cells) {
+                        patch_chunk_mips(&mut images, &chunk, src, size, res, cells, dirty);
+                    }
+                }
+                // 3b) mip 级随缩放切换——只换材质纹理句柄，几何与资产不动。
+                if chunk.current_mip != mip_now {
+                    if let Some(mat) = materials.get_mut(&chunk.material) {
+                        mat.texture = chunk.mip_handles.get(mip_now as usize).cloned();
+                    }
+                    chunk.current_mip = mip_now;
+                }
                 continue;
-            };
-            // 3a) dirty 相交 → patch mip0 像素，并逐级重建 mip1/mip2。
-            if let (Some(dirty), Some(src)) = (pending_dirty, src) {
-                if rects_intersect(dirty, cells) {
-                    patch_chunk_mips(&mut images, &chunk, src, size, res, cells, dirty);
-                }
             }
-            // 3b) mip 级随缩放切换——只换材质纹理句柄，几何与资产不动。
-            if chunk.current_mip != mip_now {
-                if let Some(mat) = materials.get_mut(&chunk.material) {
-                    mat.texture = chunk.mip_handles.get(mip_now as usize).cloned();
-                }
-                chunk.current_mip = mip_now;
-            }
-            continue;
         }
 
         // spawn：拷贝本块像素 + 建 mip 链 + 建几何与材质。

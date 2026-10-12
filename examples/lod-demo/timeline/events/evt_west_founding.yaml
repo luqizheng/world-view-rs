@@ -1,0 +1,9 @@
+id: evt_west_founding
+name: 西陵城建城
+from: 1
+to: 10
+location:
+  place: place_west_city
+participants: []
+outcome: 新历元年，西陵城依山而立。
+effects: []

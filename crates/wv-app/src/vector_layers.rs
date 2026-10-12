@@ -10,12 +10,20 @@
 //! - 道路：每条边一个细 `Rectangle` mesh，`Transform` 控制位置与旋转；
 //! - POI：每个点外层一个 `Annulus`（白环）+ 内层一个实心 `Circle`（深芯）。
 //!
-//! ## 线宽策略 A：屏幕恒定 1px
+//! ## 线宽策略 A：世界厚度 = `PIXEL_WIDTH / view.scale`
 //!
 //! 公式：`world_thickness = PIXEL_WIDTH / view.scale`。
-//! - 缩放为 0.1（远观）→ 世界厚度 = 10.0，地图上粗但只占 1 屏幕像素；
-//! - 缩放为 8.0（近看）→ 世界厚度 = 0.125，地图上看似消失但**屏幕视觉 1px**，
-//!   永远锐利，永远不糊。
+//! **语义勘误（2026-10-13）**：`view.scale` 是「世界单位/屏幕像素」，大 = 拉远。
+//! 该公式在 scale=1 时恰为屏幕 1px；拉远（scale 增大）时道路在屏幕上变细、
+//! 拉近时变粗——这对 LOD 反而是想要的（国家级路网退为细网纹）。
+//! 原文档「0.1=远观 / 屏幕恒定 1px」的表述是错的，此处按实现修正。
+//!
+//! ## LOD 分档（v0.3 优化项 A）
+//!
+//! 按 [`crate::state::lod_tier`] 分三档：国家级（`Nation`）只画城市级 POI
+//! （`PlaceDot.is_city`，即声明了 `w/h` 的地点），点标半径加「屏幕可见下限」
+//! 保证拉远仍可见——Google 地图式「低层级只画高级要素」的第一步。
+//! 道路按等级筛选待数据模型补 `rank` 字段后再做。
 //!
 //! ## 数据流
 //!
@@ -43,11 +51,16 @@ use bevy::math::primitives::{Annulus, Circle};
 use bevy::prelude::*;
 
 use crate::palette;
-use crate::projection::ProjectionFrame;
-use crate::state::{GridConfig, ViewState};
+use crate::projection::{PlaceDot, ProjectionFrame};
+use crate::state::{lod_tier, GridConfig, LodTier, ViewState};
 
 /// 屏幕线宽（像素）。放大无数倍也保持锐利。
 const PIXEL_WIDTH: f32 = 1.0;
+/// POI 点标在**屏幕上**的最小可见直径（像素）。
+///
+/// 世界半径仍按 `grid.cell_size` 取（近看不变）；拉远时世界半径换算到屏幕
+/// 会小于此值，此时用它兜底——否则国家级视野下点标缩成一个像素、不可见。
+const POI_MIN_SCREEN_PX: f32 = 3.0;
 
 /// 道路层在 Z 轴上的偏移：保证压在 POI 之下、地形之上。
 const ROAD_Z: f32 = 0.1;
@@ -137,10 +150,16 @@ pub fn sync_vector_layers(
             &mut materials,
             &frame.place_dots,
             view.scale,
+            lod_tier(view.scale),
             &grid,
             &mut layer,
         );
     }
+}
+
+/// LOD 筛选口径（纯函数）：国家级只保留城市级点标，其余档全保留。
+fn poi_kept_at_tier(dot: &PlaceDot, tier: LodTier) -> bool {
+    tier != LodTier::Nation || dot.is_city
 }
 
 fn despawn_all(commands: &mut Commands, entities: &mut Vec<Entity>) {
@@ -201,46 +220,53 @@ fn sync_roads(
 /// POI 层：每个点标 = 外环（`Annulus` 白环）+ 内芯（`Circle` 深色实心圆），
 /// 与原 `Gizmos` 视觉一致（白圈 + 深芯）。
 ///
-/// 外径 = `grid.cell_size * 0.9`（与原 `gizmos.circle_2d(r)` 同）；
-/// 内芯直径 = `grid.cell_size * 0.45`（原 r * 0.5）。
-/// POI 直径在**世界空间固定**——POI 是"标记"，不随 view.scale 缩放（导航地图惯例）。
-/// 仅外环的内/外半径差 = 屏幕 1px（`PIXEL_WIDTH / view_scale`）。
+/// 外径 = `grid.cell_size * 0.9`（世界空间固定，近看视觉不变），但不小于
+/// [`POI_MIN_SCREEN_PX`] 像素的世界换算值——拉远时点标保持屏幕可见
+/// （导航地图惯例是「屏幕尺寸下限」，不是纯世界固定）。
+/// 外环壁厚 = 屏幕 `PIXEL_WIDTH` px 的世界换算（`PIXEL_WIDTH * view_scale`，
+/// 原 `PIXEL_WIDTH / view_scale` 方向写反，scale≠1 时环会消失/糊成实心，已修正）。
+///
+/// LOD：`tier == Nation` 时只画 `is_city` 的点标（省级/编辑级全画）。
 fn sync_poi(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<ColorMaterial>,
-    positions: &[Vec2],
+    dots: &[PlaceDot],
     view_scale: f32,
+    tier: LodTier,
     grid: &GridConfig,
     layer: &mut VectorLayerEntities,
 ) {
+    // LOD 筛选（纯逻辑抽成 [`poi_kept_at_tier`] 便于单测）。
+    let visible: Vec<&PlaceDot> = dots.iter().filter(|d| poi_kept_at_tier(d, tier)).collect();
     let outer_layer = &mut layer.poi_outer;
     let inner_layer = &mut layer.poi_inner;
 
     // 数据少了：把多余实体 despawn。
-    if outer_layer.len() > positions.len() {
-        for e in outer_layer.drain(positions.len()..) {
+    if outer_layer.len() > visible.len() {
+        for e in outer_layer.drain(visible.len()..) {
             commands.entity(e).despawn();
         }
     }
-    if inner_layer.len() > positions.len() {
-        for e in inner_layer.drain(positions.len()..) {
+    if inner_layer.len() > visible.len() {
+        for e in inner_layer.drain(visible.len()..) {
             commands.entity(e).despawn();
         }
     }
 
-    let radius_outer = grid.cell_size * 0.9 * 0.5;
-    let radius_inner = grid.cell_size * 0.45 * 0.5;
-    // 屏幕 1px 对应的世界厚度：环的"壁厚" = 外径 - 内径。
-    let ring_thickness = (PIXEL_WIDTH / view_scale).max(f32::EPSILON);
+    // 世界半径为下限之一；拉远时屏幕可见性下限接管。
+    let radius_outer = (grid.cell_size * 0.9 * 0.5).max(POI_MIN_SCREEN_PX * view_scale);
+    let radius_inner = radius_outer * 0.5;
+    // 屏幕 1px 对应的世界厚度（随 scale 正比缩放，见函数文档勘误）。
+    let ring_thickness = (PIXEL_WIDTH * view_scale).max(f32::EPSILON);
     let ring_inner = (radius_outer - ring_thickness).max(f32::EPSILON);
 
     let mat_outer = materials.add(palette::LINE_ON_DARK);
     let mat_inner = materials.add(palette::LINE_ON_MID);
 
-    for (i, pos) in positions.iter().enumerate() {
-        let pos3 = pos.extend(POI_OUTER_Z);
-        let inner_pos3 = pos.extend(POI_INNER_Z);
+    for (i, dot) in visible.iter().enumerate() {
+        let pos3 = dot.pos.extend(POI_OUTER_Z);
+        let inner_pos3 = dot.pos.extend(POI_INNER_Z);
 
         // 外环 = Annulus（外圆减去内圆）= 完美白环。
         let existing_outer = outer_layer.get(i).copied();
@@ -335,5 +361,22 @@ mod tests {
         assert!(v.roads.is_empty());
         assert!(v.poi_outer.is_empty());
         assert!(v.poi_inner.is_empty());
+    }
+
+    /// LOD 筛选：国家级只留城市级点标；省级 / 编辑级全保留。
+    #[test]
+    fn nation_tier_keeps_only_city_pois() {
+        let city = PlaceDot {
+            pos: Vec2::ONE,
+            is_city: true,
+        };
+        let waypoint = PlaceDot {
+            pos: Vec2::ZERO,
+            is_city: false,
+        };
+        assert!(poi_kept_at_tier(&city, LodTier::Nation));
+        assert!(!poi_kept_at_tier(&waypoint, LodTier::Nation));
+        assert!(poi_kept_at_tier(&waypoint, LodTier::Region));
+        assert!(poi_kept_at_tier(&waypoint, LodTier::Edit));
     }
 }

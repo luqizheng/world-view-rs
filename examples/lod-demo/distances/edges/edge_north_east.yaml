@@ -1,0 +1,6 @@
+id: edge_north_east
+a: place_north_city
+b: place_east_city
+distance_km: 610.0
+terrain: hill
+bidirectional: true

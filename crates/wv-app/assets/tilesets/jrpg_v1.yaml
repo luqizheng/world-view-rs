@@ -3,10 +3,12 @@
 # 这是**渲染资产配置**（app 层资源），不是世界数据：世界数据的权威仍在工程 YAML。
 # 换图集 = 换这里的映射，代码零改动。
 #
-# cols/rows  : 图集的网格规格（本图 2048×2048，8 列 × 6 行）。
+# cols/rows  : 图集的网格规格（v2 为 2048×1536，8 列 × 6 行、每格 256px）。
 # inset_px   : 采样时从每格四边内缩的像素（避开黑色网格分隔线与 JPEG 溢边）。
 # tiles      : TerrainKind 编号 → [col, row]（0 起，左上原点）。缺项回退纯色平涂。
-atlas: tilesets/jrpg_atlas_v1.png
+# v2（2026-10-12）：scripts/gen_tile_atlas.py 生成——环面无缝噪声 + 伪光照，
+# 替换 v1 手工拼图（方案 D，边界质量配合 terrain_view 扰动合成）。v1 保留回滚。
+atlas: tilesets/jrpg_atlas_v2.png
 cols: 8
 rows: 6
 inset_px: 8

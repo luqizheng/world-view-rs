@@ -1,0 +1,6 @@
+id: edge_lighthouse
+a: place_east_city
+b: place_lighthouse
+distance_km: 150.0
+terrain: waterway
+bidirectional: true

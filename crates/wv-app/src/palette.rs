@@ -74,6 +74,33 @@ pub const ACCENT_NOTE: Color = hex(0x9AA5B1); // 「故事」便签（灰蓝）
 /// 视图模式 D（事件图）的极简底图色。取石灰色，中性、不抢事件高亮。
 pub const EVENT_VIEW_BACKDROP: Color = hex(0xE8E6E1);
 
+/// 视图模式 E（轮廓图）三色（2026-11 用户需求：黑底 + 海岸线）。
+/// 水面近黑、陆地深灰、海岸线中亮灰——黑底上白圈 POI 与强调色全高对比。
+pub const COAST_WATER: Color = hex(0x07090C); // 水面：近黑
+pub const COAST_LAND: Color = hex(0x1A1E24); // 陆地：深灰（与水可辨但不抢要素）
+pub const COAST_LINE: Color = hex(0x9AA5B1); // 海岸线：中亮灰（即 accent.note）
+
+/// 底图淡化的保留比例：`out = base*KEEP + SOFTEN_TOWARD*(1-KEEP)`。
+///
+/// 0.35 = 与势力图淡化同源（`shade_faded` 的 k=0.45 略再淡一档），
+/// 目标是「仍可辨山川骨架，但饱和度让位给路线与地标」。
+pub const SOFTEN_KEEP: f32 = 0.35;
+/// 底图淡化目标色：亮暖灰（纸面色），去饱和 + 提亮一并完成。
+pub const SOFTEN_TOWARD: Color = hex(0xEDE8DC);
+
+/// 底图淡化混合（所有视图模式共用的唯一实现；禁止散落重写）。
+pub fn soften_color(base: Color) -> Color {
+    let (Color::Srgba(b), Color::Srgba(t)) = (base, SOFTEN_TOWARD) else {
+        return base;
+    };
+    let k = SOFTEN_KEEP;
+    Color::srgb(
+        b.red * k + t.red * (1.0 - k),
+        b.green * k + t.green * (1.0 - k),
+        b.blue * k + t.blue * (1.0 - k),
+    )
+}
+
 /// 取地形基色；`kind` 越界时回退到沼泽色（可辨识，不是黑）。
 pub fn core_terrain(kind: u8) -> Color {
     CORE_TERRAIN
@@ -138,5 +165,45 @@ mod tests {
         assert!((c.red - 232.0 / 255.0).abs() < 1e-6);
         assert!((c.green - 98.0 / 255.0).abs() < 1e-6);
         assert!((c.blue - 60.0 / 255.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn soften_color_keeps_keep_ratio_toward_paper_gray() {
+        // 纯红 (255,0,0) × keep 0.35 + 纸面色 (237,232,220) × 0.65。
+        let Color::Srgba(t) = SOFTEN_TOWARD else {
+            panic!("应为 Srgba")
+        };
+        let out = soften_color(Color::srgb(1.0, 0.0, 0.0));
+        let Color::Srgba(o) = out else {
+            panic!("应为 Srgba")
+        };
+        let k = SOFTEN_KEEP;
+        assert!(
+            (o.red - (1.0 * k + t.red * (1.0 - k))).abs() < 1e-6,
+            "got {o:?}"
+        );
+        assert!((o.green - t.green * (1.0 - k)).abs() < 1e-6, "got {o:?}");
+        assert!((o.blue - t.blue * (1.0 - k)).abs() < 1e-6, "got {o:?}");
+    }
+
+    #[test]
+    fn soften_color_of_paper_gray_is_idempotent() {
+        // 目标色自身淡化后仍是目标色（混合的不动点）——保证连续两次淡化不漂白。
+        let out = soften_color(SOFTEN_TOWARD);
+        assert_eq!(out, SOFTEN_TOWARD);
+    }
+
+    #[test]
+    fn coastline_triple_is_dark_background_with_visible_line() {
+        // 轮廓图三色的约束：水最暗，陆地略亮，线最亮（黑底可辨）。
+        let f = |c: Color| -> [f32; 3] {
+            let Color::Srgba(s) = c else {
+                panic!("应为 Srgba")
+            };
+            [s.red, s.green, s.blue]
+        };
+        let lum = |c: Color| -> f32 { f(c).iter().sum::<f32>() / 3.0 };
+        assert!(lum(COAST_WATER) < lum(COAST_LAND));
+        assert!(lum(COAST_LAND) < lum(COAST_LINE));
     }
 }

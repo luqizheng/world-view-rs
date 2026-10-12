@@ -34,8 +34,21 @@ pub struct ProjectionFrame {
     /// 只画**两端都锚定在当前地图**的边（`Place.map == 当前图 id` 且 `x/y` 齐备），
     /// 与 [`crate::drill::resolve_markers`] 的「只画当前层级」口径一致。
     pub road_segments: Vec<(Vec2, Vec2)>,
-    /// 本帧地点（POI）点标位置（世界坐标），锚定在当前地图的地点。
-    pub place_dots: Vec<Vec2>,
+    /// 本帧地点（POI）点标（世界坐标），锚定在当前地图的地点。
+    ///
+    /// `is_city` = 该地点声明了矩形范围（`w/h` 齐备，如城市）；无范围的点标
+    /// （如关隘、渡口）为 `false`。国家级视野（[`crate::state::LodTier::Nation`]）
+    /// 只画 `is_city == true` 的点标——Google 地图式「低层级只画高级要素」。
+    pub place_dots: Vec<PlaceDot>,
+}
+
+/// 一个 POI 点标的渲染数据。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlaceDot {
+    /// 世界坐标（已含 `grid.origin` 偏移）。
+    pub pos: Vec2,
+    /// 是否为「城市级」地点（`Place.w/h` 齐备）。
+    pub is_city: bool,
 }
 
 /// 计算本帧投影。**所有时间判断集中在这里**，且走 `wv-core` 的纯函数。
@@ -120,12 +133,15 @@ pub fn compute_projection(
                     }
                 }
             }
-            // POI 点标：当前地图上的全部锚定地点。
+            // POI 点标：当前地图上的全部锚定地点；带「是否城市级」标记供 LOD 筛选。
             if view.places_visible {
                 for p in &world.distances.places {
                     if p.map.as_ref() == Some(&current.id) {
                         if let (Some(x), Some(y)) = (p.x, p.y) {
-                            frame.place_dots.push(world_to_view(x, y, &grid));
+                            frame.place_dots.push(PlaceDot {
+                                pos: world_to_view(x, y, &grid),
+                                is_city: p.w.is_some() && p.h.is_some(),
+                            });
                         }
                     }
                 }
@@ -253,11 +269,15 @@ pub fn draw_map_gizmos(
     // **已迁出 Gizmos**：同上路层理由（屏幕 1px 描线 + 抗锯齿圆）。
     // 现由 [`crate::vector_layers::sync_vector_layers`] 写 Circle / Ring mesh。
     if false && view.places_visible {
-        for pos in &frame.place_dots {
+        for dot in &frame.place_dots {
             let r = grid.cell_size * 0.9;
-            gizmos.circle_2d(Isometry2d::from_translation(*pos), r, palette::LINE_ON_DARK);
             gizmos.circle_2d(
-                Isometry2d::from_translation(*pos),
+                Isometry2d::from_translation(dot.pos),
+                r,
+                palette::LINE_ON_DARK,
+            );
+            gizmos.circle_2d(
+                Isometry2d::from_translation(dot.pos),
                 r * 0.5,
                 palette::LINE_ON_MID,
             );

@@ -44,3 +44,12 @@ bevy_egui = "0.32"
 # Windows / macOS 直接走 OS API，无需额外依赖。
 # AGENTS §9 审视通过：依赖面小、与 P1（单机可运行）不冲突、不污染数据层。
 rfd = "0.17"
+
+# [启动性能] debug 构建下对热点包开优化：地形纹理合成（wv-app）与图集 PNG
+# 解码（image）在无优化 debug 下合计阻塞主线程 >5s，触发 Windows「未响应」
+# （启动白屏）。只影响这两个包的编译产物，增量编译代价可接受。
+[profile.dev.package.wv-app]
+opt-level = 2
+
+[profile.dev.package.image]
+opt-level = 2

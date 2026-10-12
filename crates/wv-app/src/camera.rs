@@ -25,6 +25,25 @@ pub struct ActiveStroke {
     pub points: Vec<Vec2>,
 }
 
+/// 把 `ViewState` 的外部写点落到相机（主真源）。
+///
+/// 小地图点击 / FitMap / Zoom 命令 / 校验锚点跳转改的都是 `ViewState`，
+/// 但相机的 `Transform` / `OrthographicProjection` 才是渲染真源——
+/// 只写 ViewState 相机纹丝不动，且 chunk 视口拣选按假视口抖动
+/// （despawn/respawn 重建画面，表现为「render 很慢」）。凡是运行期
+/// 想改取景的入口，写完 ViewState 后必须经本函数同步相机。
+pub(crate) fn apply_view_to_camera(
+    center: Vec2,
+    scale: f32,
+    cameras: &mut Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
+) {
+    for (mut tf, mut ortho) in cameras.iter_mut() {
+        tf.translation.x = center.x;
+        tf.translation.y = center.y;
+        ortho.scale = scale;
+    }
+}
+
 /// egui 是否想要指针输入（读上一帧结果，基线 §2.13）。
 #[derive(Resource, Default)]
 pub struct PointerOverUi {
@@ -46,7 +65,7 @@ pub fn poll_egui_wants_input(mut contexts: EguiContexts, mut flag: ResMut<Pointe
 pub fn camera_zoom(
     mut scroll: EventReader<MouseWheel>,
     windows: Query<&Window>,
-    mut camera: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+    mut camera: Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
     mut view: ResMut<ViewState>,
     ui: Res<PointerOverUi>,
 ) {
@@ -70,7 +89,7 @@ pub fn camera_zoom(
         return;
     }
 
-    let Ok((mut transform, mut projection)) = camera.get_single_mut() else {
+    let Ok((mut transform, mut ortho)) = camera.get_single_mut() else {
         return;
     };
 
@@ -90,9 +109,8 @@ pub fn camera_zoom(
     let cursor_world_before =
         transform.translation.truncate() + cursor_ndc * (size * 0.5) * old_scale;
 
-    if let Projection::Orthographic(ortho) = &mut *projection {
-        ortho.scale = new_scale;
-    }
+    // `Camera2d` 用独立的 `OrthographicProjection` 组件（不是 `Projection` 枚举）。
+    ortho.scale = new_scale;
     view.scale = new_scale;
 
     let cursor_world_after =
