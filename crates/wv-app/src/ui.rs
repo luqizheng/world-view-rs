@@ -1429,17 +1429,30 @@ pub fn panel_minimap(
                         Vec2::new(nx * grid.cell_size * 512.0, ny * grid.cell_size * 512.0);
                 }
             }
+            // 图层开关排到地形缩略图**两侧**：左侧 = 地点 / 轨迹，右侧 = 事件 / 道路；
+            // "地形" 与 "图层" 标题共用顶部行，保持视觉对齐。
             ui.add_space(space::SM);
-            ui.label(
-                egui::RichText::new("图层")
-                    .size(shell.scale.micro)
-                    .color(shell.t2()),
-            );
-            ui.checkbox(&mut view.terrain_visible, "地形");
-            ui.checkbox(&mut view.places_visible, "地点");
-            ui.checkbox(&mut view.events_visible, "事件");
-            ui.checkbox(&mut view.tracks_visible, "轨迹");
-            ui.checkbox(&mut view.roads_visible, "道路");
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut view.terrain_visible, "地形");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new("图层")
+                            .size(shell.scale.micro)
+                            .color(shell.t2()),
+                    );
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.checkbox(&mut view.places_visible, "地点");
+                    ui.checkbox(&mut view.tracks_visible, "轨迹");
+                });
+                ui.add_space(space::SM);
+                ui.vertical(|ui| {
+                    ui.checkbox(&mut view.events_visible, "事件");
+                    ui.checkbox(&mut view.roads_visible, "道路");
+                });
+            });
         },
     );
 }
