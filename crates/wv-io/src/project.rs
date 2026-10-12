@@ -85,6 +85,43 @@ fn save_maps(dir: &Path, maps: &[wv_core::map::MapNode]) -> IoResult<()> {
     Ok(())
 }
 
+/// 阶段七 v0.3：若 `terrain` 存在，写 `maps/<root_map>/terrain.bin`，并把
+/// 对应的 [`RasterRef`] 写回 root_map 节点的 `raster` 字段（后续 `save_maps`
+/// 把它序列化进 `index.yaml`）。
+///
+/// 行为约束（与 `AGENTS.md` §5/§7.5 一致）：
+/// - `terrain = None` → **不** 触碰磁盘上的 .bin，也不修改 maps 列表（V1 守约：
+///   作者可能手改 .bin，工具不擅自删）；
+/// - root_map 不在 `maps` 里（异常状态）→ 跳过栅格写、maps 列表原样返回（让
+///   `save_maps` 报错而不是让本函数先 panic）；
+/// - root_map 存在但其原 `raster = None` → 新 `RasterRef` 替换进去（首次落盘）。
+fn write_terrain_if_any(
+    project_root: &Path,
+    maps: &[wv_core::map::MapNode],
+    terrain: Option<&wv_core::terrain::TerrainData>,
+    root_map_id: Option<&wv_core::Id>,
+) -> IoResult<Vec<wv_core::map::MapNode>> {
+    let Some(data) = terrain else {
+        return Ok(maps.to_vec());
+    };
+    let Some(root_id) = root_map_id else {
+        // 没 meta 就别瞎写——`save_world` 通常伴随 meta，没有就走默认路径。
+        return Ok(maps.to_vec());
+    };
+    // 写 .bin 并得到新的 RasterRef（自带校验和 + 尺寸）。
+    let new_raster = crate::terrain_bin::write_terrain(project_root, root_id.as_str(), data)?;
+    // 在 maps 列表中找到 root_map 并替换 raster 字段。
+    let mut out: Vec<wv_core::map::MapNode> = maps.to_vec();
+    if let Some(slot) = out.iter_mut().find(|m| m.id == *root_id) {
+        slot.raster = Some(new_raster);
+    } else {
+        // 异常：meta 指向不存在的 map。沿用 V1 守约：写盘已发生，但 index.yaml
+        // 拿不到新 raster。作者重开工程时会看到「meta 与 maps 不一致」的诊断。
+        // 不在这里主动删 .bin。
+    }
+    Ok(out)
+}
+
 /// 写 `PlaceEdge` 列表到单文件 `distances/edges.yaml`。
 ///
 /// PlaceEdge 当前没有 `id` 字段，暂存单文件；等引入 id 后切到 `save_entities` 模式。
@@ -385,8 +422,19 @@ impl Project {
     pub fn save_world(&self, world: &World, dirty_paths: &[String]) -> IoResult<()> {
         // dirty 路由：未列出的目录**跳过**。注意空 Vec = "全量写"——这对应
         // "第一次落盘"或"开发者手动调 save_world"，区别于"编辑触发的增量写"。
+        //
+        // **匹配语义**（v0.3 修订）：按**前缀**匹配，让 `maps/<id>/terrain.bin`
+        // 这样的具体路径能触发 `maps` 目录的全量重写。`wants("xxx")` ↔ true
+        // 当且仅当某个 dirty 路径与本目录**互为前缀**（即同一子树）。
+        // 这条规则同时拒绝跨子树的误命中：
+        // - `dirty=["factions"]` 不会触发 `wants("characters")`
+        // - `dirty=["geometry/faction"]` 不会触发 `wants("factions")`
         let full = dirty_paths.is_empty();
-        let wants = |p: &str| full || dirty_paths.iter().any(|d| d == p);
+        let wants = |p: &str| {
+            full || dirty_paths
+                .iter()
+                .any(|d| d == p || d.starts_with(p) || p.starts_with(d))
+        };
 
         if wants("factions") {
             save_entities(&self.root.join("factions"), &world.factions, |f| {
@@ -462,7 +510,18 @@ impl Project {
             )?;
         }
         if wants("maps") {
-            save_maps(&self.root.join("maps"), &world.maps)?;
+            // 阶段七 v0.3：把 `World.terrain` 写成 `maps/<root_map>/terrain.bin`，
+            // 并把更新后的 `RasterRef` 写回 root_map 的 `index.yaml`。
+            // 若 `world.terrain` 为 None 则不写（V1 守约：不动作者手改的 .bin）。
+            // 若 root_map 已在 maps 中找不到（异常状态），跳过栅格。
+            let root_map_id = world.meta.as_ref().map(|m| m.root_map.clone());
+            let updated_maps = write_terrain_if_any(
+                &self.root,
+                &world.maps,
+                world.terrain.as_ref(),
+                root_map_id.as_ref(),
+            )?;
+            save_maps(&self.root.join("maps"), &updated_maps)?;
         }
         // `timeline/axis.yaml` 是单文件，由 `meta.timeline_range` 决定。
         // v0.1 暂不写——它不在 `World` 中（属于 `meta`），留作 v0.2。

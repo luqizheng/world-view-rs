@@ -17,6 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use wv_core::id::Id;
 use wv_core::map::{GeometryData, GeometrySpan};
+use wv_core::terrain::{TerrainCellData, TerrainData};
 use wv_core::time::TimeSpan;
 use wv_core::{Color, Faction, World};
 use wv_io::error::IoResult;
@@ -72,6 +73,24 @@ root_map: map_main
         std::fs::write(f_dir.join(format!("{}.yaml", f.id.as_str())), text)?;
     }
     Project::open(dir)
+}
+
+/// 在 [`build_min_project`] 的基础上，再额外创建 `maps/map_main/index.yaml`
+/// —— 模拟「作者先把根地图摆好」的工程状态。这是 v0.3 地形落盘测试的
+/// 现实场景（root_map 没建好的工程谈不上「保存」）。
+fn build_min_project_with_root_map(
+    dir: &std::path::Path,
+    factions: &[Faction],
+) -> IoResult<Project> {
+    let proj = build_min_project(dir, factions)?;
+    let map_dir = dir.join("maps").join("map_main");
+    std::fs::create_dir_all(&map_dir)?;
+    let map_yaml = r#"id: map_main
+name: Main
+level: world
+"#;
+    std::fs::write(map_dir.join("index.yaml"), map_yaml)?;
+    Ok(proj)
 }
 
 #[test]
@@ -278,6 +297,116 @@ fn empty_dirty_falls_back_to_full_rewrite() {
     let ids: Vec<&str> = world2.factions.iter().map(|f| f.id.as_str()).collect();
     assert!(ids.contains(&"faction_a"));
     assert!(ids.contains(&"faction_b"));
+}
+
+/// 阶段七 v0.3：`World.terrain` → `maps/<root_map>/terrain.bin` 落盘。
+///
+/// 验证三件事：
+/// 1. 写盘后 `maps/map_main/terrain.bin` 文件存在；
+/// 2. root_map 的 `index.yaml` 里出现 `raster.path = "maps/map_main/terrain.bin"`；
+/// 3. 再加载能 round-trip 回 `World.terrain`。
+#[test]
+fn terrain_bin_round_trip_via_save_and_load() {
+    let tmp = TempDir::new("terrain_round_trip");
+    let dir = tmp.path();
+    let proj = build_min_project_with_root_map(dir, &[]).expect("建工程");
+    let mut world = proj.load_world().expect("load");
+    assert!(world.terrain.is_none(), "初始状态：terrain 为 None");
+
+    // 装一块 8×6 的栅格：每格 (height=i16, kind=u8) 写入。
+    let mut cells = Vec::with_capacity(8 * 6);
+    for y in 0..6i32 {
+        for x in 0..8i32 {
+            cells.push(TerrainCellData {
+                height: (x * 100 + y) as i16,
+                kind: ((x + y) % 5) as u8,
+            });
+        }
+    }
+    let data = TerrainData {
+        width: 8,
+        height: 6,
+        cells,
+    };
+    world.terrain = Some(data.clone());
+
+    // 触发 save。dirty 里含 `"maps/<map>/terrain.bin"` 这种细粒度路径，
+    // 验证 v0.3 的**前缀匹配**能让它驱动 `maps` 目录重写。
+    proj.save_world(&world, &["maps/map_main/terrain.bin".into()])
+        .expect("save 含 terrain");
+
+    // 1) .bin 落盘
+    let bin_path = dir.join("maps").join("map_main").join("terrain.bin");
+    assert!(
+        bin_path.is_file(),
+        "terrain.bin 应已落盘: {}",
+        bin_path.display()
+    );
+
+    // 2) root_map 的 index.yaml 应包含 raster 引用
+    let idx_path = dir.join("maps").join("map_main").join("index.yaml");
+    assert!(idx_path.is_file(), "index.yaml 应已落盘");
+    let idx_text = std::fs::read_to_string(&idx_path).expect("读 index.yaml");
+    assert!(
+        idx_text.contains("terrain.bin"),
+        "index.yaml 应引用 terrain.bin，实际：{idx_text}"
+    );
+
+    // 3) 重载：terrain 应 round-trip 回来
+    let proj2 = Project::open(dir).expect("重开");
+    let world2 = proj2.load_world().expect("重载");
+    let t2 = world2.terrain.as_ref().expect("terrain 应被读回");
+    assert_eq!(t2.width, 8);
+    assert_eq!(t2.height, 6);
+    assert_eq!(t2.cells.len(), 48);
+    assert_eq!(t2.cells, data.cells, "terrain 栅格必须 byte-for-byte 一致");
+}
+
+/// 阶段七 v0.3：地形随空 dirty 走「全量」路径也要落盘。
+///
+/// 第一次落盘（dirty=空 Vec）的场景：terrain 一样要被写出来。
+#[test]
+fn terrain_bin_written_on_full_dirty_save() {
+    let tmp = TempDir::new("terrain_full_dirty");
+    let dir = tmp.path();
+    let proj = build_min_project_with_root_map(dir, &[]).expect("建工程");
+    let mut world = proj.load_world().expect("load");
+    world.terrain = Some(TerrainData {
+        width: 4,
+        height: 4,
+        cells: vec![TerrainCellData { height: 0, kind: 0 }; 16],
+    });
+    proj.save_world(&world, &[]).expect("全量 save");
+    let bin = dir.join("maps").join("map_main").join("terrain.bin");
+    assert!(bin.is_file(), "全量路径也应写 terrain.bin");
+}
+
+/// 阶段七 v0.3：`terrain = None` 时不写 .bin，也不删既有 .bin（V1 守约）。
+///
+/// 这条规则保护作者的「手改 .bin」劳动——工具只在自己能确认的时候动它。
+#[test]
+fn terrain_none_does_not_touch_existing_bin() {
+    let tmp = TempDir::new("terrain_none");
+    let dir = tmp.path();
+    let proj = build_min_project(dir, &[]).expect("建工程");
+    // 先写一个 .bin（模拟「作者手放了一个地形」）。
+    let bin = dir.join("maps").join("map_main");
+    std::fs::create_dir_all(&bin).expect("mkdir maps/map_main");
+    let hand_bin = bin.join("terrain.bin");
+    std::fs::write(&hand_bin, b"author hand-edited bytes").expect("写手改 .bin");
+    let mtime_before = std::fs::metadata(&hand_bin).unwrap().modified().unwrap();
+
+    // 加载 → 不动 terrain → 触发一次 dirty=factions 的保存。
+    let world = proj.load_world().expect("load");
+    proj.save_world(&world, &["factions".into()])
+        .expect("save（factions only）");
+
+    // .bin 文件 mtime 应保持（save 不会去删/改它）。
+    let mtime_after = std::fs::metadata(&hand_bin).unwrap().modified().unwrap();
+    assert_eq!(
+        mtime_before, mtime_after,
+        "terrain=None 时不应触碰既有 .bin（V1 守约）"
+    );
 }
 
 #[allow(dead_code)]
