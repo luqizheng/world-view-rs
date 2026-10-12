@@ -137,7 +137,11 @@ pub fn advance_playback(time: Res<Time>, mut playback: ResMut<PlaybackState>) {
         return;
     }
     let dt = time.delta_secs();
-    playback.current_day += (playback.speed * dt) as i64;
+    // 先加小数进位再取整：60fps 下每帧增量不足 1 天，直接截断会永远推不动。
+    let add = playback.speed * dt + playback.carry;
+    let whole = add as i64;
+    playback.carry = add - whole as f32;
+    playback.current_day += whole;
     // 在范围内循环（播到头回绕，动画 §1.1）。
     if playback.current_day >= playback.range_to {
         playback.current_day = playback.range_from;
@@ -155,15 +159,31 @@ pub fn draw_map_gizmos(
     if !view.terrain_visible {
         return;
     }
-    // 地形四边形边框（描线色，线宽 = TILE_BASE/16 的屏幕近似）。
+    // 地图轮廓：边框用反白描线（深底上可见——LINE_ON_MID 是给浅底地形用的，
+    // 在深色空白工程上等于隐形），并补 1/4 幅面参考网格，避免「一片黑看不到图在哪」。
     let size = tex.size as f32 * grid.cell_size;
     let min = grid.origin;
     let max = grid.origin + Vec2::splat(size);
     gizmos.rect_2d(
         Isometry2d::from_translation((min + max) * 0.5),
         Vec2::splat(size),
-        palette::LINE_ON_MID,
+        palette::LINE_ON_DARK,
     );
+    let step = size / 4.0;
+    for i in 1..4 {
+        let x = min.x + step * i as f32;
+        gizmos.line_2d(
+            Vec2::new(x, min.y),
+            Vec2::new(x, max.y),
+            palette::LINE_ON_DARK.with_alpha(0.35),
+        );
+        let y = min.y + step * i as f32;
+        gizmos.line_2d(
+            Vec2::new(min.x, y),
+            Vec2::new(max.x, y),
+            palette::LINE_ON_DARK.with_alpha(0.35),
+        );
+    }
 
     // 事件高点亮：常驻底环 + 内芯（特效 §4.2：状态永不抑制）。
     if view.events_visible {

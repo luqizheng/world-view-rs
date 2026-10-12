@@ -66,6 +66,7 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
 | [ADR-0003](ADR-0003-cross-map-reference.md) | 跨地图引用（绝不复制子图内容） | 已接受（Accepted） | 跨地图事态只靠 `Place` 的 ID 层级串联，**绝不复制子图内容**（A3） | 基线 §1.7、§2.8、P4 |
 | [ADR-0004](ADR-0004-unit-ontology.md) | 单位本体（运动归 Unit，事态只是归纳容器） | 已接受（Accepted） | 新增**单位（Unit）**作为在地图上**独立运动**的主体，`Track.owner` 改为 `Track.unit`；事态是**归纳容器 / group**，**引用**运动而非拥有；「相遇却未写事件」只**提示**不报错（留白是创作手段） | 基线 §1.1 / §1.5 / **§1.6（修正其原口径）** / §2.7、用户裁定 Q1甲 / Q2乙 / Q3 / P1–P3、P4/P6/P7 |
 | [ADR-0005](ADR-0005-encounter-hint.md) | 相遇检测与「未写事件」提示 | 已接受（Accepted） | 相遇是**派生数据**（不建实体）；判定 = 时间重叠 + 空间贴近 + 未被覆盖三道门；候选日用 waypoint 锚点（**不逐日枚举**，跨千年史实会卡死）；指纹**不含日期** → 提示可认领、可回访定位；提示与错误在**类型层面**分开（`DiagLevel::{Hint, Error}`） | ADR-0004 §待裁 U4、AGENTS §7.5 V1、基线 §2.21 |
+| [ADR-0006](ADR-0006-gregorian-calendar.md) | 历法支持真公历（Calendar 双历制） | 已接受（Accepted） | `Calendar` 加判别字段 `kind`（缺省 `simple` 完全向后兼容）；`gregorian` 走 proleptic 公历（真实月长 + 闰年），天数计数器仍是唯一真相（P7 不动）；用 Hinnant 纯整数算法换算，**不引入 chrono** | 基线 §2.16、P3/P7、样例 xinhai-1911 |
 
 ---
 

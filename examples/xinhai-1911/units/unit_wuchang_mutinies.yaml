@@ -1,0 +1,5 @@
+# 单位：武昌起义新军（示例）· ADR-0004
+id: unit_wuchang_mutinies
+name: 武昌起义新军
+members:
+  - char_li_yuanhong

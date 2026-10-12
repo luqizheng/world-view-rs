@@ -1,0 +1,23 @@
+# 事态：帝国崩解（辛亥示例）· schema v2
+# I5：节点事件时间为 295..=408 → [283, 409) 覆盖。
+id: sit_empire_collapse
+name: 帝国崩解
+summary: 各省响应独立，南京光复奠定共和支点，终至清帝退位、帝制终结。
+from: 283
+to: 409
+steps:
+  - event: evt_provinces_respond
+    focus: false
+    caption: 首义半月，举省响应。
+  - event: evt_nanjing_recovery
+    focus: false
+    caption: 东南重镇光复。
+  - event: evt_qing_abdication
+    focus: true
+    pause_secs: 2.0
+    caption: 退位诏下，帝制落幕。
+units:
+  - unit_wuchang_mutinies
+maps:
+  - map_world
+protagonist: char_li_yuanhong

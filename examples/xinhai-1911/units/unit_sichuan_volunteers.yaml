@@ -1,0 +1,5 @@
+# 单位：四川保路同志军（示例）· ADR-0004
+id: unit_sichuan_volunteers
+name: 四川保路同志军
+members:
+  - char_pu_dianjun

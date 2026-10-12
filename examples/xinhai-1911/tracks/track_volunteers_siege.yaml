@@ -1,0 +1,12 @@
+# 轨迹：同志军围攻成都（示例）· schema v2
+id: track_volunteers_siege
+unit: unit_sichuan_volunteers
+map: map_city_chengdu
+from: 251             # 1911-09-08
+to: 283               # 1911-10-10（不含）
+waypoints:
+  - day: 251
+    pos: { x: 350.0, y: 650.0 }     # 南校场集结
+    place: place_nanjiaochang
+  - day: 255
+    pos: { x: 480.0, y: 500.0 }     # 逼近督院街

@@ -1,0 +1,14 @@
+# 轨迹：武昌起义夜进攻路线（示例）· schema v2
+# 起义门 → 楚望台军械库，一夜之间。
+id: track_wuchang_assault
+unit: unit_wuchang_mutinies
+map: map_city_wuchang
+from: 283             # 1911-10-10
+to: 285               # 1911-10-12（不含）
+waypoints:
+  - day: 283
+    pos: { x: 300.0, y: 700.0 }     # 起义门
+    place: place_qiyimen
+  - day: 284
+    pos: { x: 512.0, y: 420.0 }     # 楚望台军械库
+    place: place_chuwangtai

@@ -1,0 +1,21 @@
+# 事件：武昌起义（辛亥示例）· schema v2
+# 事件范围：楚望台军械库内自有子矩形（x/y/w/h 覆盖 Place 几何）。
+id: evt_wuchang_uprising
+name: 武昌起义
+from: 283             # 1911-10-10
+to: 284
+location:
+  place: place_chuwangtai
+  x: 512.0
+  y: 420.0
+  w: 20.0
+  h: 16.0
+participants:
+  - char_li_yuanhong
+narrative: 新军工程第八营于武昌城内举义，夺楚望台军械库，一夜之间光复武昌，推黎元洪为都督。
+outcome: 中华民国军政府鄂军都督府成立，各省响应之火自此点燃。
+effects:
+  - kind: custom
+    note: 首义成功，革命党取得第一个完整省政权
+narrations:
+  - nar_wuchang_uprising

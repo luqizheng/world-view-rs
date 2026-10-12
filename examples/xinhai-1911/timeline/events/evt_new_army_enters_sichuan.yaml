@@ -1,0 +1,16 @@
+# 事件：端方新军西调入川（辛亥示例）· schema v2
+id: evt_new_army_enters_sichuan
+name: 端方新军西调入川
+from: 258             # 1911-09-15
+to: 259
+location:
+  place: place_yichang
+participants:
+  - char_duanfang
+narrative: 清廷命端方率湖北新军第八镇一部自武汉溯江西上入川平乱，取道宜昌。
+outcome: 湖北新军西调，武汉防务空虚，为武昌起义埋下伏笔。
+effects:
+  - kind: custom
+    note: 湖北新军西调，武汉空虚
+narrations:
+  - nar_new_army_enters_sichuan

@@ -161,6 +161,8 @@ impl Project {
             load_dir(&self.root, "timeline/situations")?;
         let tracks: Vec<wv_core::track::Track> = load_dir(&self.root, "tracks")?;
         let units: Vec<wv_core::unit::Unit> = load_dir(&self.root, "units")?;
+        let narrations: Vec<wv_core::narration::Narration> =
+            load_dir(&self.root, "timeline/narrations")?;
         let maps: Vec<wv_core::map::MapNode> = load_maps(&self.root)?;
         let distances: wv_core::distance::DistanceGraph = {
             let path = self.root.join("distances/places.yaml");
@@ -205,6 +207,7 @@ impl Project {
             situations,
             units,
             tracks,
+            narrations,
             terrain,
         })
     }
@@ -293,6 +296,17 @@ impl Project {
         );
         // 地图图标的 `drill_into` 悬空（README §12 第 12 条）。
         dangling.extend(collect_map_icons_dangling(&world));
+        // 事件 → 旁白引用的悬空（旁白是独立实体，事件只存 ID；2026-01 用户裁定）。
+        for e in &world.events {
+            for nid in &e.narrations {
+                if !world.narrations.iter().any(|n| &n.id == nid) {
+                    dangling.push(wv_core::CoreError::DanglingReference {
+                        referrer: format!("event.{} (field `narrations`)", e.id),
+                        missing: nid.as_str().to_owned(),
+                    });
+                }
+            }
+        }
         for err in dangling {
             // 悬空引用的指纹取自错误文案本身——它已含 `referrer` 与 `missing`，
             // 因此同一处悬空在多次诊断间保持同一指纹，可被「已读/已忽略」认领。

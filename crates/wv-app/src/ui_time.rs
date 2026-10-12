@@ -66,6 +66,7 @@ mod tests {
     #[test]
     fn day_with_calendar_uses_calendar_format() {
         let c = wv_core::Calendar {
+            kind: wv_core::time::CalendarKind::Simple,
             prefix: Some("无仙".into()),
             start_year: 1,
             days_per_year: 360,
@@ -80,7 +81,7 @@ mod tests {
         // 跨月边界：第 1 年第 2 月第 1 天 = 30 + 1。
         assert_eq!(format_date_with(Some(&c), 31), "无仙 1 年 2 月 1 日");
         // 与 `to_day` 互为逆运算（手册 §7.2：用算出来的期望值断言）。
-        assert_eq!(c.to_day(3, 1, 1), 721);
+        assert_eq!(c.to_day(3, 1, 1), Some(721));
     }
 
     #[test]

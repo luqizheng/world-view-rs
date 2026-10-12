@@ -1,0 +1,18 @@
+# 事态：武昌首义（辛亥示例）· schema v2
+id: sit_wuchang_uprising
+name: 武昌首义
+summary: 新军举义夺楚望台，一夜光复武昌，推黎元洪为都督。
+from: 283
+to: 285
+steps:
+  - event: evt_wuchang_uprising
+    focus: true
+    pause_secs: 2.0
+    caption: 起义门开，楚望台易手。
+    tracks:
+      - track_wuchang_assault
+units:
+  - unit_wuchang_mutinies
+maps:
+  - map_city_wuchang
+protagonist: char_li_yuanhong

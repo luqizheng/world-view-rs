@@ -1,0 +1,21 @@
+# 交通工具（辛亥示例）
+- id: veh_infantry
+  name: 步兵
+  instant: false
+  speed_kmh: 5.0
+  daily_hours: 8.0
+  terrain_modifiers:
+    plain: 1.0
+    mountain: 0.6
+    waterway: 0.3
+  requirements: []
+- id: veh_steamboat
+  name: 轮船
+  instant: false
+  speed_kmh: 20.0
+  daily_hours: 12.0
+  terrain_modifiers:
+    waterway: 2.0
+    plain: 0.5
+    mountain: 0.2
+  requirements: []

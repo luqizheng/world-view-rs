@@ -137,11 +137,12 @@ mod tests {
             id: Id::new_unchecked(id),
             name: id.into(),
             span: TimeSpan::new(from, to).unwrap(),
-            place: None,
+            location: None,
             participants: vec![],
             narrative: None,
             outcome: None,
             effects: vec![],
+            narrations: vec![],
         }
     }
 

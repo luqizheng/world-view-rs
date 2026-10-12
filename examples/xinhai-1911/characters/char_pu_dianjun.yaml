@@ -1,0 +1,12 @@
+# 角色：蒲殿俊（示例）· schema v2
+id: char_pu_dianjun
+name: 蒲殿俊
+traits:
+  - 立宪派
+  - 四川谘议局议长
+attributes:
+  身份: 保路同志会会长
+state_spans:
+  - from: 168             # 1911-06-17 保路同志会成立
+    place: place_chengdu
+    title: 保路同志会会长

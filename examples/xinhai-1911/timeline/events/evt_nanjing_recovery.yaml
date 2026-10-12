@@ -1,0 +1,13 @@
+# 事件：南京光复（辛亥示例）· schema v2
+id: evt_nanjing_recovery
+name: 南京光复
+from: 336             # 1911-12-02
+to: 337
+location:
+  place: place_nanjing
+participants: []
+narrative: 江浙联军攻克南京，东南重镇光复，为革命政权定都提供了支点。
+outcome: 独立各省有了可与北京对峙的政治中心。
+effects: []
+narrations:
+  - nar_nanjing_recovery

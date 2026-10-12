@@ -1,0 +1,17 @@
+# 轨迹：端方新军西调入川（示例）· schema v2
+# 运动主体是 Unit（ADR-0004）。带 day 锚点 → 线性插值。
+id: track_new_army_west
+unit: unit_hubei_new_army
+map: map_world
+from: 258             # 1911-09-15
+to: 270               # 1911-09-27（不含）
+waypoints:
+  - day: 258
+    pos: { x: 1650.0, y: 1700.0 }   # 武汉
+    place: place_wuhan
+  - day: 263
+    pos: { x: 1500.0, y: 1850.0 }   # 宜昌
+    place: place_yichang
+  - day: 269
+    pos: { x: 1250.0, y: 1950.0 }   # 重庆
+    place: place_chongqing

@@ -1,0 +1,62 @@
+# 世界地图（辛亥示例）
+# P4：父图只存子图 Id（children），不复制子图内容。
+id: map_world
+name: 中华大地
+level: world
+children:
+  - map_city_wuchang
+  - map_city_chengdu
+extent:
+  width: 4096.0
+  height: 4096.0
+layers:
+  - id: layer_terrain
+    name: 地形
+    kind: terrain
+    visible: true
+    locked: false
+    opacity: 1.0
+    z: 0
+    source: terrain.bin
+# 城市标记：锚点 = distances/places.yaml 中同名 Place 的 (x,y) ÷ extent(4096)，归一化 [0,1]²。
+# 武汉 / 成都带 drill_into（双击钻入城市子图）；北京为帝都用四角星。
+icons:
+  - id: icon_beijing
+    anchor: [0.293, 0.269]
+    shape: star
+    size: 16.0
+    color: "#c8a24a"
+  - id: icon_chengdu
+    anchor: [0.220, 0.464]
+    drill_into: map_city_chengdu
+  - id: icon_chongqing
+    anchor: [0.305, 0.476]
+    shape: circle
+    size: 12.0
+  - id: icon_yichang
+    anchor: [0.366, 0.452]
+    shape: circle
+    size: 12.0
+  - id: icon_wuhan
+    anchor: [0.403, 0.415]
+    drill_into: map_city_wuchang
+  - id: icon_changsha
+    anchor: [0.415, 0.464]
+    shape: circle
+    size: 12.0
+  - id: icon_xian
+    anchor: [0.305, 0.342]
+    shape: circle
+    size: 12.0
+  - id: icon_nanjing
+    anchor: [0.464, 0.366]
+    shape: circle
+    size: 12.0
+  - id: icon_shanghai
+    anchor: [0.501, 0.391]
+    shape: circle
+    size: 12.0
+  - id: icon_guangzhou
+    anchor: [0.427, 0.562]
+    shape: circle
+    size: 12.0

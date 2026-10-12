@@ -1,0 +1,15 @@
+# 事件：清帝退位（辛亥示例）· schema v2
+id: evt_qing_abdication
+name: 清帝退位
+from: 408             # 1912-02-12
+to: 409
+location:
+  place: place_beijing
+participants: []
+narrative: 隆裕太后代六岁宣统帝颁退位诏书，授权袁世凯组织临时共和政府。
+outcome: 大清帝国终结，两千余年帝制落幕。
+effects:
+  - kind: custom
+    note: 帝制终结，亚洲第一个共和国成立
+narrations:
+  - nar_qing_abdication

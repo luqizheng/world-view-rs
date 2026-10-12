@@ -1,0 +1,12 @@
+# 示例工程：辛亥一九一一
+# 覆盖 1911 保路运动 → 武昌起义 → 清帝退位。
+# schema v2：时间点 = 天数计数器（1-based），公历换算由 timeline/axis.yaml 派生。
+
+name: 辛亥一九一一
+version: "0.1"
+schema_version: 2
+root_map: map_world
+timeline_range:
+  # 半开区间 [1, 425)：第 1 天 = 1911-01-01，第 424 天 = 1912-02-28。
+  from: 1
+  to: 425

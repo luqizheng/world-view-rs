@@ -1,0 +1,22 @@
+# 时间轴定义（辛亥示例）· schema v2
+# 公历历法（ADR-0006）：第 1 天 = start_year 年 1 月 1 日，真公历月长与闰年。
+calendar:
+  kind: gregorian
+  prefix: 公元
+  start_year: 1911
+timeline_range:
+  from: 1
+  to: 425
+anchors:
+  - id: anchor_railway_nationalization
+    name: 铁路国有诏下
+    # 1911-05-09 = 31+28+31+30+9 = 129
+    day: 129
+  - id: anchor_wuchang_uprising
+    name: 武昌起义
+    # 1911-10-10 = 31+28+31+30+31+30+31+31+30+10 = 283
+    day: 283
+  - id: anchor_abdication
+    name: 清帝退位
+    # 1912-02-12 = 365 + 31 + 12 = 408
+    day: 408

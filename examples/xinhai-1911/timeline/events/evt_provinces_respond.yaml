@@ -1,0 +1,13 @@
+# 事件：各省响应（辛亥示例）· schema v2
+id: evt_provinces_respond
+name: 湖南陕西等省响应
+from: 295             # 1911-10-22
+to: 296
+location:
+  place: place_changsha
+participants: []
+narrative: 武昌首义半月之内，湖南、陕西率先响应独立，随后山西、江西、云南等省相继光复。
+outcome: 清廷对南方及内陆各省的控制接连瓦解。
+effects: []
+narrations:
+  - nar_provinces_respond

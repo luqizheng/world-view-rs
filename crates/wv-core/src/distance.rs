@@ -81,6 +81,14 @@ fn default_true() -> bool {
 }
 
 /// 地点节点。对应 `distances/places.yaml`。
+///
+/// ## 双重身份（2026-01 修订）
+///
+/// 1. **距离图节点**——`PlaceEdge.a/b` 与路径搜索用它做稳定 ID，不需要几何；
+/// 2. **地图上的 icon + 范围**——用 `(map, x, y, w, h)` 定位。
+///
+/// `w/h` 可选：`None` = 地图上就是一个点 icon（如关隘），`Some` = 有矩形范围（如城市）。
+/// 这正对应用户原话：「有些在世界地图上它可能就是一个 icon，但是他是有范围的」。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Place {
     pub id: Id,
@@ -88,9 +96,40 @@ pub struct Place {
     /// 若该地点对应某张地图上的锚点，则引用其 ID。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub map: Option<Id>,
-    /// 该地点具备的设施标签，用于 `requires_endpoints` 判定。
-    #[serde(default)]
-    pub facilities: Vec<String>,
+    /// 中心点 X（地图局部坐标）。`None` 表示不锚定到地图。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f32>,
+    /// 中心点 Y（地图局部坐标）。`None` 表示不锚定到地图。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f32>,
+    /// 范围宽度（须与 `h` 成对出现）。`None` = 点 icon。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub w: Option<f32>,
+    /// 范围高度（须与 `w` 成对出现）。`None` = 点 icon。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h: Option<f32>,
+}
+
+impl Place {
+    /// 点是否落在地点的范围内（含边界）。
+    ///
+    /// - `w` / `h` 都是 `Some` → 矩形判定（含边界）；
+    /// - `w` / `h` 都是 `None` → 点判定（`EPS = 1e-3`）；
+    /// - `x` / `y` 缺失 → 恒 `false`（未锚定到地图，无从判定）。
+    ///
+    /// 用途：几何化校验（「单位进入了事件范围却没列为参与者」）。
+    pub fn contains(&self, px: f32, py: f32) -> bool {
+        let (Some(cx), Some(cy)) = (self.x, self.y) else {
+            return false;
+        };
+        match (self.w, self.h) {
+            (Some(w), Some(h)) => (px - cx).abs() <= w / 2.0 && (py - cy).abs() <= h / 2.0,
+            _ => {
+                const EPS: f32 = 1e-3;
+                (px - cx).abs() <= EPS && (py - cy).abs() <= EPS
+            }
+        }
+    }
 }
 
 /// 地点构成的图。原则以「图而非表」表达距离维度（§5.5）。
@@ -355,19 +394,28 @@ mod tests {
                     id: vid("city_qingyun"),
                     name: "青云城".into(),
                     map: None,
-                    facilities: vec![],
+                    x: None,
+                    y: None,
+                    w: None,
+                    h: None,
                 },
                 Place {
                     id: vid("village_heishui"),
                     name: "黑水村".into(),
                     map: None,
-                    facilities: vec![],
+                    x: None,
+                    y: None,
+                    w: None,
+                    h: None,
                 },
                 Place {
                     id: vid("pass_luoxia"),
                     name: "落霞关".into(),
                     map: None,
-                    facilities: vec![],
+                    x: None,
+                    y: None,
+                    w: None,
+                    h: None,
                 },
             ],
             edges: vec![
@@ -474,5 +522,119 @@ mod tests {
             .shortest_journey(&vid("nowhere"), &vid("pass_luoxia"), &[])
             .unwrap_err();
         assert!(matches!(err, CoreError::UnknownPlace(_)));
+    }
+
+    // ---- 几何：Place 的范围判定（2026-01 修订）----
+
+    /// 矩形地点：中心 (100, 200)，宽 40、高 20 → x ∈ [80, 120]，y ∈ [190, 210]。
+    fn rect_place() -> Place {
+        Place {
+            id: vid("city_rect"),
+            name: "rect city".into(),
+            map: Some(vid("map_world")),
+            x: Some(100.0),
+            y: Some(200.0),
+            w: Some(40.0),
+            h: Some(20.0),
+        }
+    }
+
+    fn point_place() -> Place {
+        Place {
+            id: vid("pass_point"),
+            name: "point pass".into(),
+            map: Some(vid("map_world")),
+            x: Some(10.0),
+            y: Some(20.0),
+            w: None,
+            h: None,
+        }
+    }
+
+    fn unanchored_place() -> Place {
+        Place {
+            id: vid("place_nomap"),
+            name: "unanchored".into(),
+            map: None,
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+        }
+    }
+
+    #[test]
+    fn rect_place_contains_interior_point() {
+        assert!(rect_place().contains(100.0, 200.0), "centre must be inside");
+        assert!(
+            rect_place().contains(81.0, 191.0),
+            "inner point must be inside"
+        );
+    }
+
+    #[test]
+    fn rect_place_contains_boundary_point() {
+        // 含边界：四个角（x=80/120，y=190/210）都必须算在内。
+        for (px, py) in [(80.0, 190.0), (120.0, 190.0), (80.0, 210.0), (120.0, 210.0)] {
+            assert!(
+                rect_place().contains(px, py),
+                "boundary point ({px}, {py}) must be accepted (inclusive bounds)"
+            );
+        }
+    }
+
+    #[test]
+    fn rect_place_rejects_point_just_outside_boundary() {
+        assert!(
+            !rect_place().contains(79.99, 200.0),
+            "just outside the left edge must be rejected"
+        );
+        assert!(
+            !rect_place().contains(100.0, 210.01),
+            "just outside the bottom edge must be rejected"
+        );
+    }
+
+    #[test]
+    fn point_place_matches_exact_coordinate_only() {
+        assert!(
+            point_place().contains(10.0, 20.0),
+            "point place hits its own coordinate"
+        );
+        assert!(
+            !point_place().contains(10.5, 20.0),
+            "point place must not hit a coordinate 0.5 away (EPS = 1e-3)"
+        );
+    }
+
+    #[test]
+    fn point_place_tolerates_sub_epsilon_drift() {
+        assert!(
+            point_place().contains(10.0005, 20.0),
+            "5e-4 drift is within EPS = 1e-3 and must still hit"
+        );
+    }
+
+    #[test]
+    fn unanchored_place_contains_nothing() {
+        assert!(
+            !unanchored_place().contains(0.0, 0.0),
+            "a place without x/y cannot be judged geometrically, so it is always false"
+        );
+    }
+
+    #[test]
+    fn half_given_extent_falls_back_to_point_judgement() {
+        // w 有、h 无 → 不构成矩形，退化为点判定（校验层另行报「必须成对」）。
+        let p = Place {
+            w: Some(40.0),
+            h: None,
+            ..rect_place()
+        };
+        assert!(p.contains(100.0, 200.0), "centre still hits");
+        assert!(
+            !p.contains(110.0, 200.0),
+            "w without h degrades to a point, so 110 must not hit"
+        );
     }
 }

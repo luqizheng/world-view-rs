@@ -56,6 +56,60 @@ pub fn run(config: AppConfig) {
         None => Default::default(),
     };
 
+    // 初始相机对准根图中心、缩放到能看全整图（否则默认镜头停在原点，
+    // 地图内容全在视野外，用户看到一片黑）。
+    let root_id = world
+        .meta
+        .as_ref()
+        .map(|m| m.root_map.clone())
+        .unwrap_or_else(|| wv_core::Id::new_unchecked("world_main"));
+    let root_extent = world
+        .maps
+        .iter()
+        .find(|m| m.id == root_id)
+        .and_then(|m| m.extent.as_ref())
+        .map(|e| (e.width, e.height))
+        .unwrap_or((4096.0f32, 4096.0));
+    // `ViewState.scale` 的口径是「世界单位 / 像素」（screen_to_world 乘它），
+    // 所以 fit = 图宽 / 视口宽，取两轴较紧的一个。
+    // 初始取景优先**框住根图内容**（icons 包围盒 + 25% 边距）：大图幅上内容
+    // 只占一小块时，按整图 fit 会把内容挤成屏幕中心的一撮点、四周全是空黑。
+    let root_node = world.maps.iter().find(|m| m.id == root_id);
+    let content_box: Option<(Vec2, Vec2)> = root_node.and_then(|m| {
+        let (w, h) = m
+            .extent
+            .as_ref()
+            .map(|e| (e.width, e.height))
+            .unwrap_or((4096.0, 4096.0));
+        let pts: Vec<Vec2> = m
+            .icons
+            .iter()
+            // 注意口径：marker/Place 的世界坐标 = anchor 直接乘 extent（不做 y 翻转，
+            // 与 drill 标记一致）；这里只做取景，别自作聪明翻转。
+            .filter_map(|ic| ic.anchor.map(|a| Vec2::new(a[0] * w, a[1] * h)))
+            .collect();
+        (pts.len() >= 2).then(|| {
+            let lo = pts.iter().copied().fold(Vec2::MAX, Vec2::min);
+            let hi = pts.iter().copied().fold(Vec2::MIN, Vec2::max);
+            (lo, hi)
+        })
+    });
+    let (center, fit_scale) = match content_box {
+        Some((lo, hi)) => {
+            let size = hi - lo;
+            let margin = size.max_element() * 0.25 + 64.0;
+            let span = size + Vec2::splat(margin * 2.0);
+            (
+                (lo + hi) * 0.5,
+                (span.x / 1280.0).max(span.y / 800.0).max(1.0),
+            )
+        }
+        None => (
+            Vec2::splat(root_extent.0 * 0.5),
+            (root_extent.0 / 1280.0).max(root_extent.1 / 800.0).max(1.0),
+        ),
+    };
+
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -71,14 +125,33 @@ pub fn run(config: AppConfig) {
             .set(ImagePlugin::default_nearest()),
     )
     .add_plugins(EguiPlugin)
+    // 播放范围取自工程 `timeline/axis.yaml` 的 `timeline_range`；
+    // 无 axis 或 `to` 缺省（开放区间）时保留默认值。
+    .insert_resource(PlaybackState {
+        range_from: world
+            .timeline
+            .as_ref()
+            .map(|t| t.timeline_range.from)
+            .unwrap_or(1),
+        range_to: world
+            .timeline
+            .as_ref()
+            .and_then(|t| t.timeline_range.to)
+            .unwrap_or(180_001),
+        ..Default::default()
+    })
+    // 初始相机对准根图中心、缩放到能看全整图。
     .insert_resource(WorldProjection {
         world,
         project_dir: config.project_dir.clone(),
         dirty: false,
         load_error,
     })
-    .init_resource::<PlaybackState>()
-    .init_resource::<ViewState>()
+    .insert_resource(ViewState {
+        camera_center: center,
+        scale: fit_scale,
+        ..Default::default()
+    })
     .init_resource::<BrushState>()
     .init_resource::<PanelState>()
     .init_resource::<GridConfig>()
@@ -171,12 +244,20 @@ pub fn run(config: AppConfig) {
     app.run();
 }
 
-/// 2D 正交相机。初始缩放 1×（整图入窗，基线 §1.16）。
-fn setup_camera(mut commands: Commands) {
+/// 2D 正交相机。若启动前已装配好 `ViewState`（fit 缩放 + 根图中心），
+/// 直接把它落到 Camera 的 transform / projection——**Camera 的 Transform 才是
+/// 相机主真源**，`ViewState.camera_center` 只是 pan/zoom 回写的镜像，
+/// 光写 ViewState 不动 transform 相机就还停在原点。
+fn setup_camera(mut commands: Commands, view: Option<Res<ViewState>>) {
+    let (center, scale) = view
+        .as_deref()
+        .map(|v| (v.camera_center, v.scale))
+        .unwrap_or((Vec2::ZERO, 1.0));
     commands.spawn((
         Camera2d,
+        Transform::from_xyz(center.x, center.y, 0.0),
         Projection::Orthographic(OrthographicProjection {
-            scale: 1.0,
+            scale,
             ..OrthographicProjection::default_2d()
         }),
     ));

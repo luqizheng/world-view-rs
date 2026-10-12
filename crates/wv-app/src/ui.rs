@@ -578,7 +578,7 @@ pub fn top_bar(
 
                 // 读数推到右端。
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    readout_segment(ui, &shell, &view, &playback);
+                    readout_segment(ui, &shell, &view, &playback, &projection);
                 });
             });
         });
@@ -657,7 +657,13 @@ fn view_mode_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
     }
 }
 
-fn readout_segment(ui: &mut egui::Ui, shell: &UiShell, view: &ViewState, playback: &PlaybackState) {
+fn readout_segment(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    view: &ViewState,
+    playback: &PlaybackState,
+    projection: &WorldProjection,
+) {
     // 比例尺（<1400px 隐藏）。
     if ui.available_width() > 400.0 {
         ui.label(
@@ -683,7 +689,7 @@ fn readout_segment(ui: &mut egui::Ui, shell: &UiShell, view: &ViewState, playbac
         ui.add_space(space::MD);
     }
     // 日期（只读镜像，§5.3 唯一真源是 playback.current_day）。
-    let date = crate::ui_time::format_date(playback.current_day);
+    let date = crate::ui_time::format_date_for(projection, playback.current_day);
     ui.label(
         egui::RichText::new(date)
             .size(shell.scale.small)
@@ -1096,10 +1102,13 @@ pub fn panel_timeline(
                 ui.add_space(space::MD);
                 // 日期（时间轴是唯一时间权威，§5.3）。
                 ui.label(
-                    egui::RichText::new(crate::ui_time::format_date(playback.current_day))
-                        .size(shell.scale.base)
-                        .color(shell.t1())
-                        .font(mono(shell.scale.base)),
+                    egui::RichText::new(crate::ui_time::format_date_for(
+                        &projection,
+                        playback.current_day,
+                    ))
+                    .size(shell.scale.base)
+                    .color(shell.t1())
+                    .font(mono(shell.scale.base)),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("＋ 登记事件").clicked() {
@@ -1369,8 +1378,12 @@ pub fn panel_minimap(
     mut panels: ResMut<PanelState>,
     mut view: ResMut<ViewState>,
     grid: Res<GridConfig>,
+    tex: Res<crate::terrain_view::TerrainTexture>,
 ) {
     let shell = UiShell::new(&shell_cfg);
+    // 小地图缩略图直接复用大地图的地形纹理（同一 Handle，零额外上传）。
+    // 注意先取 tex_id 再借 ctx（两者都要 &mut contexts，顺序反了过不了借用检查）。
+    let tex_id = contexts.add_image(tex.handle.clone());
     let ctx: &mut egui::Context = contexts.ctx_mut();
     float_window(
         ctx,
@@ -1385,6 +1398,9 @@ pub fn panel_minimap(
                 ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
             let painter = ui.painter();
             painter.rect_filled(rect, radius::CONTROL, shell.raised_bg());
+            // UV 取整张纹理：egui 没有 `Rect::RECT` 常量，用 [0,1]² 单位矩形。
+            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+            painter.image(tex_id, rect, uv, egui::Color32::WHITE);
             painter.rect_stroke(
                 rect,
                 radius::CONTROL,

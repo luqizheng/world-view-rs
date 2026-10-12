@@ -1,0 +1,8 @@
+# 人物索引（辛亥示例）
+characters:
+  - id: char_duanfang
+    file: char_duanfang.yaml
+  - id: char_pu_dianjun
+    file: char_pu_dianjun.yaml
+  - id: char_li_yuanhong
+    file: char_li_yuanhong.yaml

@@ -5,7 +5,8 @@ id: evt_qingyun_founding
 name: 青云城立城
 from: 107641        # 无仙 300 年 1 月 1 日
 to: 107650          # 无仙 300 年 1 月 10 日
-place: city_qingyun
+location:
+  place: city_qingyun
 participants:
   - char_shenyan
 outcome: 青云宗于落霞关北立城，始为一方宗门。

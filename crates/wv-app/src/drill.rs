@@ -192,6 +192,10 @@ pub fn resolve_markers(
     world: &wv_core::World,
     drill: &DrillState,
     grid: &GridConfig,
+    // 当前缩放（世界单位 / 屏幕像素）。图标像素尺寸按「屏幕像素」定义
+    // （v0.2 §B.2），旧实现隐含 1 世界单位 = 1 像素；缩放后必须乘回 zoom
+    // 才能保持屏幕大小恒定，否则整图缩小时标记缩成一个点。
+    screen_scale: f32,
 ) -> Vec<Marker> {
     let Some(current) = drill.current_node(world) else {
         return Vec::new();
@@ -213,10 +217,10 @@ pub fn resolve_markers(
         let target_level = level_of(target.as_ref());
         // 尺寸优先级：显式 `size` > 目标层级缺省 > 注释标记缺省。
         let half = match icon.size {
-            Some(px) => half_from_px(px, grid.cell_size),
+            Some(px) => half_from_px(px, grid.cell_size) * screen_scale,
             None => match target_level {
-                Some(level) => marker_half(grid.cell_size, level),
-                None => half_from_px(ANNOTATION_ICON_PX, grid.cell_size),
+                Some(level) => marker_half(grid.cell_size, level) * screen_scale,
+                None => half_from_px(ANNOTATION_ICON_PX, grid.cell_size) * screen_scale,
             },
         };
         if let Some(t) = &target {
@@ -247,7 +251,7 @@ pub fn resolve_markers(
             id: child.id.clone(),
             target: Some(child.id.clone()),
             center: origin + marker_local(current.extent, &child.id),
-            half: marker_half(grid.cell_size, child.level),
+            half: marker_half(grid.cell_size, child.level) * screen_scale,
             shape: IconShape::Diamond,
             color: None,
             dot: child.level == MapLevel::Interior,
@@ -265,15 +269,18 @@ pub fn marker_hit(
     drill: &DrillState,
     grid: &GridConfig,
     cursor: Vec2,
+    screen_scale: f32,
 ) -> Option<Id> {
     let mut best: Option<(Id, f32)> = None;
-    for marker in resolve_markers(world, drill, grid) {
+    for marker in resolve_markers(world, drill, grid, screen_scale) {
         // 纯注释标记只画不可点——它是作者的批注，不是导航入口。
         let Some(target) = marker.target else {
             continue;
         };
-        // 命中区不小于标记本身，也不小于 24×24 的方块下限。
-        let half = marker.half.max(grid.cell_size * HIT_CELLS * 0.5);
+        // 命中区不小于标记本身，也不小于 24×24 的方块下限（屏幕像素口径，随 zoom 换算）。
+        let half = marker
+            .half
+            .max(grid.cell_size * HIT_CELLS * 0.5 * screen_scale);
         let d = cursor - marker.center;
         if d.x.abs() <= half && d.y.abs() <= half {
             // 重叠时取最近的，避免摆位撞车后选中「不是最上面那个」。
@@ -381,7 +388,7 @@ pub fn drill_pick(
     if !is_double {
         return;
     }
-    if let Some(child) = marker_hit(&projection.world, &drill, &grid, world_pos) {
+    if let Some(child) = marker_hit(&projection.world, &drill, &grid, world_pos, view.scale) {
         drill.enter(&projection.world, &child);
     }
 }
@@ -466,12 +473,13 @@ pub fn draw_drill_markers(
     drill: Res<DrillState>,
     shell_cfg: Res<UiShellConfig>,
     grid: Res<GridConfig>,
+    view: Res<ViewState>,
 ) {
     let shell = crate::ui::UiShell::new(&shell_cfg);
     let accent = to_bevy_color(shell.accent());
     let visited = to_bevy_color(shell.t3());
 
-    for marker in resolve_markers(&projection.world, &drill, &grid) {
+    for marker in resolve_markers(&projection.world, &drill, &grid, view.scale) {
         let color = if let Some([r, g, b]) = marker.color {
             // 图标显式声明的颜色优先——作者定了色就按作者的来，已访问态也不覆盖它。
             Color::srgb_u8(r, g, b)
@@ -709,7 +717,7 @@ mod tests {
         let mut drill = DrillState::default();
         drill.ensure_root(&world);
         let grid = GridConfig::default();
-        let markers = resolve_markers(&world, &drill, &grid);
+        let markers = resolve_markers(&world, &drill, &grid, 1.0);
         assert_eq!(markers.len(), 1, "city_a 已被图标覆盖，不应再出现哈希标记");
         assert!(
             (markers[0].half - 20.0).abs() < 1e-3,
@@ -738,11 +746,11 @@ mod tests {
         let mut drill = DrillState::default();
         drill.ensure_root(&world);
         let grid = GridConfig::default();
-        let markers = resolve_markers(&world, &drill, &grid);
+        let markers = resolve_markers(&world, &drill, &grid, 1.0);
         assert_eq!(markers.len(), 1, "纯注释标记也要画出来");
         assert!(markers[0].target.is_none());
         assert!(
-            marker_hit(&world, &drill, &grid, markers[0].center).is_none(),
+            marker_hit(&world, &drill, &grid, markers[0].center, 1.0).is_none(),
             "纯注释标记必须被命中测试跳过"
         );
     }
@@ -766,7 +774,7 @@ mod tests {
         };
         let mut drill = DrillState::default();
         drill.ensure_root(&world);
-        let markers = resolve_markers(&world, &drill, &GridConfig::default());
+        let markers = resolve_markers(&world, &drill, &GridConfig::default(), 1.0);
         assert_eq!(markers.len(), 2, "一个显式图标 + 一个哈希回退标记");
         let targets: Vec<String> = markers
             .iter()
@@ -795,7 +803,7 @@ mod tests {
         };
         let mut drill = DrillState::default();
         drill.ensure_root(&world);
-        let markers = resolve_markers(&world, &drill, &GridConfig::default());
+        let markers = resolve_markers(&world, &drill, &GridConfig::default(), 1.0);
         assert_eq!(markers[0].shape, IconShape::Star, "形状必须原样传到渲染层");
         assert_eq!(
             markers[0].color,
@@ -823,7 +831,7 @@ mod tests {
         let grid = GridConfig::default();
         let mut drill = DrillState::default();
         drill.ensure_root(&world);
-        let marker = &resolve_markers(&world, &drill, &grid)[0];
+        let marker = &resolve_markers(&world, &drill, &grid, 1.0)[0];
         assert!(drill.enter(&world, &Id::new_unchecked("city_a")));
         let got = drill_target(&world, &drill, &grid).0;
         assert!(
@@ -844,16 +852,17 @@ mod tests {
         let mut drill = DrillState::default();
         drill.ensure_root(&world);
         let grid = GridConfig::default();
-        let markers = resolve_markers(&world, &drill, &grid);
+        let markers = resolve_markers(&world, &drill, &grid, 1.0);
         assert_eq!(markers.len(), 2, "世界级应有 2 个可钻入城市");
-        let hit = marker_hit(&world, &drill, &grid, markers[0].center);
+        let hit = marker_hit(&world, &drill, &grid, markers[0].center, 1.0);
         assert_eq!(hit, markers[0].target, "正中心必须命中");
         // 远离所有标记时不应命中。
         assert!(marker_hit(
             &world,
             &drill,
             &grid,
-            markers[0].center + Vec2::splat(900.0)
+            markers[0].center + Vec2::splat(900.0),
+            1.0
         )
         .is_none());
     }

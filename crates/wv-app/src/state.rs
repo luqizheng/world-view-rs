@@ -47,6 +47,9 @@ pub struct PlaybackState {
     /// 播放范围（锁定在某个事态的 span 内；无选中事态时为时间轴全range）。
     pub range_from: i64,
     pub range_to: i64,
+    /// 帧间小数进位。每帧增量 `speed*dt` 在 60fps 下不足 1 天，直接 `as i64`
+    /// 会截断成 0（播放永远推不动）；不足整天的零头攒在这里，攒满 1 天再入账。
+    pub carry: f32,
 }
 
 impl Default for PlaybackState {
@@ -57,6 +60,7 @@ impl Default for PlaybackState {
             playing: false,
             range_from: 1,
             range_to: 180001,
+            carry: 0.0,
         }
     }
 }
@@ -123,7 +127,7 @@ impl Default for ViewState {
             scale: 1.0,
             camera_center: Vec2::ZERO,
             terrain_visible: true,
-            events_visible: false,
+            events_visible: true,
             tracks_visible: true,
             roads_visible: true,
             cursor_world: None,

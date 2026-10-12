@@ -4,7 +4,8 @@ id: evt_shenyan_join
 name: 沈砚入宗
 from: 107642        # 无仙 300 年 1 月 2 日
 to: 107645          # 无仙 300 年 1 月 5 日
-place: village_heishui
+location:
+  place: village_heishui
 participants:
   - char_shenyan
 # narrative：过程描述（2026-10-11 新增）。写「怎么发生的」，outcome 写「留下了什么」。

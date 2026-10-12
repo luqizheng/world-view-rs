@@ -58,6 +58,10 @@
 | **图标形状** | IconShape | 五种形状（菱形 / 圆形 / 十字 / 方形 / 四角星），缺省菱形（v0.2 §B.2 的钻入标记形状） | 地理 |
 | **显式颜色优先** | Explicit Color Wins | `IconSpec.color`（`#RRGGBB`，`wv-core::color::Color`）声明后**优先于主题色**——不再因「已访问」转灰 | 地理 |
 | **地形网格** | TerrainGrid | `wv-terrain` 的核心数据结构，承载高度场与地形类型 | 地理 |
+| **矢量图层** | Vector Layer | 地图叠加层：地点标记、道路、边界、势力几何、事件点、文字标注。类比百度地图的「普通（矢量）地图」，与地形栅格图层分离、可独立开关（P5） | 地理 |
+| **地形栅格图层** | Terrain Raster Layer | 地图底图：由地形网格逐格渲染出的栅格图像。两种实现：纯色平涂（色块地形）或瓦片图集贴图 | 地理 |
+| **瓦片图集** | Tile Atlas / Tileset | 一张包含全部地形瓦片的美术图集图片；渲染时按 `f(kind, height, 邻居)` 查表选取瓦片 UV。仅存在于渲染层（`wv-app`），数据层不变 | 地理 |
+| **过渡瓦片** | Transition Tile / Autotiling | 依据邻居地形自动选择边缘融合瓦片的做法。第一版先直铺（每格整瓦），过渡瓦片为后续增强（README §12-14） | 地理 |
 | **衰减权重** | Falloff | 笔刷/选区按距离衰减的影响系数（高斯），用于软边缘与选区升降 | 编辑 |
 | **主题包** | Theme Pack | 可整体替换的地图风格包（一个目录 + manifest + 5 类资产） | 美术 |
 | **软件壳** | Locked Shell | 不替换的 UI 外壳（面板架构/字体/间距/图标语言） | 美术 |
@@ -87,6 +91,17 @@
 | **falloff 双环** | Falloff Dual Ring | 笔刷光标的内外衰减双环可视化——属**状态**，不降级 | 特效 §2 |
 | **即时非法反馈** | — | 非法操作「一动手即出现」的错误提示，不等松手 | 特效 §2 |
 | **day 空间插值** | Day-space Interpolation | `progress = clamp((current_day − boundary_day) / delta_day, 0, 1)`，过渡进度是 `current_day` 的**纯函数**。时间轴驱动动画的推荐范式 | 动画 §5.1 |
+
+## 历法 / 旁白 / 几何化术语（2026-01）
+
+> 来源：`docs/adr/ADR-0006-gregorian-calendar.md`（双历制）与 `examples/xinhai-1911/`（旁白实体、Place/Event 矩形几何化）。
+
+| 术语 | 英文 | 定义 | 所属维度 |
+|---|---|---|---|
+| **双历制** | CalendarKind | `Calendar.kind` 可插拔历法枚举：`simple`（缺省，days_per_year/days_per_month 均分）与 `gregorian`（真公历，Hinnant 整数算法，含闰年）。存储层永远是天数计数器，历法只管显示派生（ADR-0006） | 时间 |
+| **旁白** | Narration | 独立实体 `Narration{id,name,text,avatar?}`，存 `timeline/narrations/`，事件经 `Event.narrations` 多对多引用。承担过程叙述与因果链表达——**因果链用旁白文案 + 时间派生播放顺序表达，不设箭头字段**（ADR-0002 口径不变） | 事件 |
+| **事件落点** | EventLocation | `Event.location: {place, x?,y?,w?,h?}`——引用 PlaceId 并可带子矩形覆盖；全缺省时按 Place 中心点判定，容差 EPS=1e-3 | 事件 / 地理 |
+| **矩形地点** | Rectangular Place | `Place{x,y,w,h}`：w/h 均给出时为矩形（含边界），均缺省时为点图标；**w/h 必须成对** | 地理 |
 
 ## 设计上不做（负向清单）
 

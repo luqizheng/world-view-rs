@@ -1,0 +1,21 @@
+# 事件：成都血案（辛亥示例）· schema v2
+# 事件范围收窄到督院街（EventLocation 自带坐标覆盖，即成都城图局部坐标）。
+id: evt_chengdu_massacre
+name: 成都血案
+from: 250             # 1911-09-07
+to: 251
+location:
+  place: place_duyuanjie
+  x: 500.0
+  y: 480.0
+  w: 30.0
+  h: 25.0
+participants:
+  - char_pu_dianjun
+narrative: 四川总督赵尔丰诱捕蒲殿俊等保路领袖，民众赴督院街请愿要求放人，卫队开枪屠杀数十人。
+outcome: 血案激起全川同志军起义，成都遭围，清廷在四川的统治开始失控。
+effects:
+  - kind: custom
+    note: 同志军围城，四川局势失控
+narrations:
+  - nar_chengdu_massacre

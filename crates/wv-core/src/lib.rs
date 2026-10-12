@@ -14,6 +14,7 @@ pub mod error;
 pub mod geometry;
 pub mod id;
 pub mod map;
+pub mod narration;
 pub mod situation;
 pub mod time;
 pub mod track;
@@ -22,8 +23,9 @@ pub mod unit;
 pub use character::Character;
 pub use encounter::{detect_encounter_hints, EncounterHint, EncounterInput, HintSeverity};
 pub use error::{CoreError, CoreResult};
-pub use event::Event;
+pub use event::{Event, EventLocation};
 pub use id::{Id, IdError};
+pub use narration::Narration;
 pub use situation::{Situation, SituationStep};
 pub use time::{Calendar, TimePoint, TimeSpan};
 pub use track::{Track, Waypoint};
@@ -82,6 +84,8 @@ pub struct World {
     pub units: Vec<unit::Unit>,
     /// 轨迹（运动的主体是 `unit`；事态节点通过 ID 引用，见 ADR-0004）。
     pub tracks: Vec<track::Track>,
+    /// 旁白（独立叙事实体，事件只存 ID 引用；2026-01 用户裁定）。
+    pub narrations: Vec<narration::Narration>,
     /// 主地形栅格网格。
     ///
     /// 注意：`wv-core` **不认识** `wv_terrain::TerrainGrid`（不依赖 wv-terrain，基线 §2.1）。

@@ -1,0 +1,17 @@
+# 事件：铁路国有诏下（辛亥示例）· schema v2
+# from/to 是天数计数器；half-open [from, to)。
+id: evt_railway_nationalization
+name: 铁路国有诏下
+from: 129             # 1911-05-09
+to: 130
+location:
+  place: place_beijing
+participants:
+  - char_duanfang
+narrative: 清廷颁诏将川汉、粤汉铁路收归国有，借外债筑路，川粤湘鄂四省商办股权遭强夺。
+outcome: 诏下之日，四省绅民哗然，保路风潮自此而起。
+effects:
+  - kind: custom
+    note: 铁路国有引发四省保路运动，四川尤烈
+narrations:
+  - nar_railway_nationalization

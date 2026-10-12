@@ -171,6 +171,7 @@ fn icon_spec_with_dangling_drill_into_still_loads() {
 fn timeline_yaml_round_trips() {
     let timeline = Timeline {
         calendar: Calendar {
+            kind: wv_core::time::CalendarKind::Simple,
             prefix: Some("无仙".into()),
             start_year: 1,
             days_per_year: 360,
@@ -644,7 +645,7 @@ fn encounter_hint_is_suppressed_when_an_event_already_covers_it() {
     // 相遇处已写事件 → 应抑制提示。
     std::fs::write(
         tmp.join("timeline/events/evt_meet.yaml"),
-        "id: evt_meet\nname: 会面\nfrom: 10\nto: 11\nplace: place_meeting\nparticipants: []\n",
+        "id: evt_meet\nname: 会面\nfrom: 10\nto: 11\nlocation:\n  place: place_meeting\nparticipants: []\n",
     )
     .unwrap();
 

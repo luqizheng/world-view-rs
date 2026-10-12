@@ -1,0 +1,12 @@
+# 角色：黎元洪（示例）· schema v2
+id: char_li_yuanhong
+name: 黎元洪
+traits:
+  - 湖北新军
+  - 被动革命
+attributes:
+  身份: 湖北新军第二十一混成协协统
+state_spans:
+  - from: 283             # 1911-10-10 武昌起义夜被推为都督
+    place: place_wuhan
+    title: 湖北军政府都督

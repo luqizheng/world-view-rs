@@ -132,22 +132,40 @@ impl TimeSpan {
     }
 }
 
+/// 历法种类（ADR-0006）。缺省 `simple`，旧 YAML 完全兼容。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CalendarKind {
+    /// 整除历法：`days_per_year` × `days_per_month`（设定文学常用）。
+    #[default]
+    Simple,
+    /// 真公历（proleptic Gregorian）：真实月长 + 闰年，第 1 天 = `start_year` 年 1 月 1 日。
+    Gregorian,
+}
+
 /// 历法定义。`Timeline` 的一部分，**只负责显示换算，不参与求值**。
 ///
 /// 关键裁定（基线 §2.16）：**历法是显示层派生**。`TimePoint` 不知道历法，
 /// 需要显示「无仙 300 年 1 月 5 日」时，用本结构把计数器换成年月日。
+///
+/// 双历制（ADR-0006）：`kind` 缺省 [`CalendarKind::Simple`]，既有工程零改动；
+/// [`CalendarKind::Gregorian`] 用 proleptic 公历换算真实历史日期（月长表 + 闰年），
+/// 天数计数器仍是唯一真相（P7 不动）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Calendar {
+    /// 历法种类。缺省 `simple`。
+    #[serde(default)]
+    pub kind: CalendarKind,
     /// 纪年前缀，如 `无仙`。为空表示不显示年月日，只显示 `第 N 天`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<String>,
     /// 第 1 天对应的年份。默认 1。
     #[serde(default = "default_start_year")]
     pub start_year: i32,
-    /// 每年的天数。默认 360（便于设定文学中常见的整除历法）。
+    /// 每年的天数（仅 `simple`）。默认 360（便于设定文学中常见的整除历法）。
     #[serde(default = "default_days_per_year")]
     pub days_per_year: i64,
-    /// 每月的天数。默认 30。
+    /// 每月的天数（仅 `simple`）。默认 30。
     #[serde(default = "default_days_per_month")]
     pub days_per_month: i64,
 }
@@ -167,6 +185,7 @@ fn default_days_per_month() -> i64 {
 impl Default for Calendar {
     fn default() -> Self {
         Self {
+            kind: CalendarKind::Simple,
             prefix: None,
             start_year: 1,
             days_per_year: 360,
@@ -175,31 +194,105 @@ impl Default for Calendar {
     }
 }
 
+/// 公历月长表（平年）。索引 0 = 1 月。
+const GREGORIAN_MONTH_LENGTHS: [i64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/// proleptic 公历闰年判定。
+fn is_gregorian_leap_year(y: i64) -> bool {
+    y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)
+}
+
+/// Howard Hinnant `days_from_civil`：`(y, m, d)` → 自 1970-01-01 起的天数（可为负）。
+/// 纯整数算法，无外部依赖（ADR-0006）。
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400; // [0, 399]
+    let mp = (m + 9) % 12; // 3 月=0 … 2 月=11
+    let doy = (153 * mp + 2) / 5 + d - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    era * 146_097 + doe - 719_468
+}
+
+/// Howard Hinnant `civil_from_days`：自 1970-01-01 起的天数 → `(y, m, d)`。
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
 impl Calendar {
+    /// Gregorian 历第 1 天对应的 1970 纪元天数（即 `start_year` 年 1 月 1 日）。
+    fn gregorian_epoch(&self) -> i64 {
+        days_from_civil(self.start_year as i64, 1, 1)
+    }
+
     /// 把天数计数器换算成 `(年, 月, 日)`。
     ///
-    /// 换算规则（严格按 360 天/年、30 天/月）：
-    /// - `n = day - 1`（转 0-based）
-    /// - `year = start_year + n / days_per_year`
-    /// - `month = (n % days_per_year) / days_per_month + 1`
-    /// - `day_of_month = (n % days_per_month) + 1`
+    /// - `simple`（严格按 `days_per_year` / `days_per_month` 整除）：
+    ///   - `n = day - 1`（转 0-based）
+    ///   - `year = start_year + n / days_per_year`
+    ///   - `month = (n % days_per_year) / days_per_month + 1`
+    ///   - `day_of_month = (n % days_per_month) + 1`
+    /// - `gregorian`：proleptic 公历，含闰年（ADR-0006）。
     pub fn to_ymd(&self, day: i64) -> (i32, i64, i64) {
-        let n = (day - 1).max(0);
-        let year = self.start_year as i64 + n / self.days_per_year;
-        let month = (n % self.days_per_year) / self.days_per_month + 1;
-        let day_of_month = (n % self.days_per_month) + 1;
-        (year as i32, month, day_of_month)
+        match self.kind {
+            CalendarKind::Simple => {
+                let n = (day - 1).max(0);
+                let year = self.start_year as i64 + n / self.days_per_year;
+                let month = (n % self.days_per_year) / self.days_per_month + 1;
+                let day_of_month = (n % self.days_per_month) + 1;
+                (year as i32, month, day_of_month)
+            }
+            CalendarKind::Gregorian => {
+                let (y, m, d) = civil_from_days(self.gregorian_epoch() + day - 1);
+                (y as i32, m, d)
+            }
+        }
     }
 
     /// 把 `(年, 月, 日)` 换算回天数计数器。`to_ymd` 的逆运算。
-    pub fn to_day(&self, year: i32, month: i64, day_of_month: i64) -> i64 {
-        let years = year as i64 - self.start_year as i64;
-        years * self.days_per_year + (month - 1) * self.days_per_month + (day_of_month - 1) + 1
+    ///
+    /// 非法输入（月不在 1..=12、日超出当月长度——含闰年 2 月）返回 `None`。
+    pub fn to_day(&self, year: i32, month: i64, day_of_month: i64) -> Option<i64> {
+        match self.kind {
+            CalendarKind::Simple => {
+                let years = year as i64 - self.start_year as i64;
+                Some(
+                    years * self.days_per_year
+                        + (month - 1) * self.days_per_month
+                        + (day_of_month - 1)
+                        + 1,
+                )
+            }
+            CalendarKind::Gregorian => {
+                if !(1..=12).contains(&month) || day_of_month < 1 {
+                    return None;
+                }
+                let y = year as i64;
+                let len = if month == 2 && is_gregorian_leap_year(y) {
+                    29
+                } else {
+                    GREGORIAN_MONTH_LENGTHS[(month - 1) as usize]
+                };
+                if day_of_month > len {
+                    return None;
+                }
+                Some(days_from_civil(y, month, day_of_month) - self.gregorian_epoch() + 1)
+            }
+        }
     }
 
     /// 格式化一个时刻供显示。
     ///
-    /// - 有 `prefix`：`无仙 300 年 1 月 5 日`
+    /// - 有 `prefix`：`无仙 300 年 1 月 5 日` / `公元 1911 年 10 月 10 日`
     /// - 无 `prefix`：`第 100805 天`（**不显示年月日**，基线 §1.12）
     pub fn format(&self, day: i64) -> String {
         match &self.prefix {
@@ -419,6 +512,7 @@ mod tests {
     #[test]
     fn calendar_maps_day_counter_to_year_month_day() {
         let cal = Calendar {
+            kind: CalendarKind::Simple,
             prefix: Some("无仙".into()),
             start_year: 1,
             days_per_year: 360,
@@ -440,7 +534,7 @@ mod tests {
         let cal = Calendar::default();
         for day in [1i64, 30, 360, 361, 100805] {
             let (y, m, d) = cal.to_ymd(day);
-            assert_eq!(cal.to_day(y, m, d), day, "day {day} 往返不一致");
+            assert_eq!(cal.to_day(y, m, d), Some(day), "day {day} 往返不一致");
         }
     }
 
@@ -451,5 +545,106 @@ mod tests {
 
         cal.prefix = Some("无仙".into());
         assert_eq!(cal.format(1), "无仙 1 年 1 月 1 日");
+    }
+
+    // ---- Gregorian（ADR-0006，2026-01 用户裁定「公历，这不是幻想世界」）----
+
+    /// 公历历法：第 1 天 = 1911-01-01（辛亥样例同款）。
+    fn gregorian_1911() -> Calendar {
+        Calendar {
+            kind: CalendarKind::Gregorian,
+            prefix: Some("公元".into()),
+            start_year: 1911,
+            days_per_year: 365,
+            days_per_month: 30,
+        }
+    }
+
+    #[test]
+    fn gregorian_epoch_maps_day_one_to_january_first() {
+        assert_eq!(
+            gregorian_1911().to_ymd(1),
+            (1911, 1, 1),
+            "第 1 天必须是 start_year 元旦"
+        );
+    }
+
+    #[test]
+    fn gregorian_resolves_real_historical_dates() {
+        let cal = gregorian_1911();
+        // 手算锚点：1911-05-09 = 31+28+31+30 + 9 = 129（1911 平年）。
+        assert_eq!(cal.to_day(1911, 5, 9), Some(129), "铁路国有令");
+        // 1911-10-10 = 31+28+31+30+31+30+31+31+30 + 10 = 283。
+        assert_eq!(cal.to_day(1911, 10, 10), Some(283), "武昌起义");
+        assert_eq!(cal.to_ymd(283), (1911, 10, 10));
+    }
+
+    #[test]
+    fn gregorian_handles_leap_day_of_1912() {
+        let cal = gregorian_1911();
+        // 1912 是闰年（%4==0 且 %100!=0）：2 月有 29 天。
+        assert_eq!(
+            cal.to_day(1912, 2, 29),
+            Some(425),
+            "手算：1911 平年 365 天，1912 年内 31+29=60 → 365+60=425"
+        );
+        assert_eq!(cal.to_ymd(425), (1912, 2, 29));
+        // 1911 平年没有 2 月 29 日。
+        assert_eq!(cal.to_day(1911, 2, 29), None, "平年 2/29 必须被拒");
+    }
+
+    #[test]
+    fn gregorian_century_leap_rule_rejects_1900_but_accepts_2000() {
+        assert!(
+            !is_gregorian_leap_year(1900),
+            "世纪年 %100==0 但 %400!=0 → 平年"
+        );
+        assert!(is_gregorian_leap_year(2000), "%400==0 → 闰年");
+        assert!(is_gregorian_leap_year(1912), "普通 %4==0 → 闰年");
+        assert!(!is_gregorian_leap_year(1911), "普通 %4!=0 → 平年");
+    }
+
+    #[test]
+    fn gregorian_year_boundary_wraps_december_thirty_first() {
+        let cal = gregorian_1911();
+        assert_eq!(cal.to_ymd(365), (1911, 12, 31), "平年最后一天");
+        assert_eq!(cal.to_ymd(366), (1912, 1, 1), "次日跨年");
+    }
+
+    #[test]
+    fn gregorian_rejects_month_out_of_range_and_day_overflow() {
+        let cal = gregorian_1911();
+        assert_eq!(cal.to_day(1911, 0, 1), None, "月 0 非法");
+        assert_eq!(cal.to_day(1911, 13, 1), None, "月 13 非法");
+        assert_eq!(cal.to_day(1911, 4, 31), None, "4 月只有 30 天");
+        assert_eq!(cal.to_day(1911, 1, 0), None, "日 0 非法");
+    }
+
+    #[test]
+    fn gregorian_round_trips_every_day_of_the_sample_window() {
+        let cal = gregorian_1911();
+        for day in 1..=410 {
+            let (y, m, d) = cal.to_ymd(day);
+            assert_eq!(cal.to_day(y, m, d), Some(day), "公历 day {day} 往返不一致");
+        }
+    }
+
+    #[test]
+    fn gregorian_formats_with_chinese_era_prefix() {
+        assert_eq!(
+            gregorian_1911().format(283),
+            "公元 1911 年 10 月 10 日",
+            "样例主锚点的显示串"
+        );
+    }
+
+    #[test]
+    fn gregorian_day_difference_matches_real_calendar_distance() {
+        // 5/9 → 10/10 相隔 283-129 = 154 天（真实历法距离），360/30 近似会差成 151。
+        assert_eq!(
+            gregorian_1911().to_day(1911, 10, 10).unwrap()
+                - gregorian_1911().to_day(1911, 5, 9).unwrap(),
+            154
+        );
     }
 }

@@ -1,0 +1,16 @@
+# 事件：四川保路同志会成立（辛亥示例）· schema v2
+id: evt_sichuan_road_protection
+name: 四川保路同志会成立
+from: 168             # 1911-06-17
+to: 169
+location:
+  place: place_chengdu
+participants:
+  - char_pu_dianjun
+narrative: 蒲殿俊等在成都倡立四川保路同志会，以「破约保路」为纲，旬月间会众逾十万。
+outcome: 保路运动从绅商请愿扩展为全川民众风潮。
+effects:
+  - kind: custom
+    note: 四川保路运动全面铺开
+narrations:
+  - nar_sichuan_road_protection

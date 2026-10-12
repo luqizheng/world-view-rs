@@ -1,0 +1,32 @@
+# 事态：铁路危机（辛亥示例）· schema v2
+# I5：from/to 必须覆盖全部节点事件时间（129..=258 → [129, 284)）。
+id: sit_railway_crisis
+name: 铁路危机
+summary: 铁路国有诏下，四川保路请愿演成血案与围城，清廷调兵入川致武汉空虚。
+from: 129
+to: 284
+steps:
+  - event: evt_railway_nationalization
+    focus: false
+    caption: 诏下之日，四省哗然。
+  - event: evt_sichuan_road_protection
+    focus: false
+    caption: 保路同志会聚众十万。
+  - event: evt_chengdu_massacre
+    focus: true
+    pause_secs: 1.5
+    caption: 督院街枪响，全川蜂起。
+    tracks:
+      - track_volunteers_siege
+  - event: evt_new_army_enters_sichuan
+    focus: false
+    caption: 新军西调，武汉空虚。
+    tracks:
+      - track_new_army_west
+units:
+  - unit_hubei_new_army
+  - unit_sichuan_volunteers
+maps:
+  - map_world
+  - map_city_chengdu
+protagonist: char_pu_dianjun

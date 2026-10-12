@@ -1,0 +1,32 @@
+# 城市地图：武昌（辛亥示例）
+id: map_city_wuchang
+name: 武昌城
+level: city
+parent: map_world
+children: []
+extent:
+  width: 1024.0
+  height: 1024.0
+layers:
+  - id: layer_city_wuchang_terrain
+    name: 街巷
+    kind: terrain
+    visible: true
+    locked: false
+    opacity: 1.0
+    z: 0
+    source: terrain.bin
+# 要地标记：锚点 = Place (x,y) ÷ extent(1024)。十字 = 地点/事件点。
+icons:
+  - id: icon_chuwangtai
+    anchor: [0.500, 0.410]
+    shape: cross
+    size: 14.0
+  - id: icon_qiyimen
+    anchor: [0.293, 0.684]
+    shape: cross
+    size: 14.0
+  - id: icon_sheshan
+    anchor: [0.547, 0.342]
+    shape: cross
+    size: 14.0

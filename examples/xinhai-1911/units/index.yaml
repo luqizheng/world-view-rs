@@ -1,0 +1,8 @@
+# 单位索引（辛亥示例）
+units:
+  - id: unit_hubei_new_army
+    file: unit_hubei_new_army.yaml
+  - id: unit_sichuan_volunteers
+    file: unit_sichuan_volunteers.yaml
+  - id: unit_wuchang_mutinies
+    file: unit_wuchang_mutinies.yaml

@@ -45,6 +45,7 @@
 use std::collections::BTreeMap;
 
 use crate::event::Event;
+use crate::geometry::Point;
 use crate::id::Id;
 use crate::time::TimeSpan;
 use crate::track::Track;
@@ -175,7 +176,7 @@ pub fn detect_encounter_hints(input: EncounterInput<'_>) -> Vec<EncounterHint> {
                                 continue;
                             }
                             // 命中：两单位同一天同一地点。
-                            if covered_by_event(place_a, day_a, input.events) {
+                            if covered_by_event(place_a, wa.pos, day_a, input.events) {
                                 continue;
                             }
                             let fingerprint = encounter_fingerprint(a, b, place_a.as_str());
@@ -227,22 +228,39 @@ pub fn encounter_fingerprint(unit_a: &str, unit_b: &str, place: &str) -> String 
     format!("{a}|{b}|{place}")
 }
 
-/// 该 `(place, day)` 是否已被事件覆盖（作者写了）。
+/// 该 `(place, pos, day)` 是否已被事件覆盖（作者写了）。
 ///
 /// 判定口径（**宽进严出**：宁可漏提示，不可误报）：
-/// - 事件 `span` 与该 `day` 有覆盖（半开区间 `[from, to)`），且
-/// - 事件 `place` 与相遇 `place` 完全相等。
+/// - 事件 `span` 覆盖该 `day`（半开区间 `[from, to)`），且
+/// - 事件的 `location.place` 与该 `place` 相等；并且
+/// - 若事件**自带完整矩形**（`x/y/w/h` 齐全）且相遇点有坐标，
+///   则进一步要求坐标落在矩形内；否则退回「同一 Place 即视为覆盖」。
 ///
-/// 无 `place` 的事件不参与压制（无法可靠对齐地点）。
-fn covered_by_event(meet_place: &Id, meet_day: i64, events: &[Event]) -> bool {
+/// 无 `location` 的事件不参与压制（无法可靠对齐地点）。
+fn covered_by_event(
+    meet_place: &Id,
+    meet_pos: Option<Point>,
+    meet_day: i64,
+    events: &[Event],
+) -> bool {
     let tp = crate::time::TimePoint(meet_day);
     events.iter().any(|e| {
         if !e.span.contains(&tp) {
             return false;
         }
-        match &e.place {
-            Some(ep) => ep == meet_place,
-            None => false,
+        let Some(loc) = &e.location else {
+            return false;
+        };
+        if &loc.place != meet_place {
+            return false;
+        }
+        // 事件自带矩形 + 相遇点有坐标 → 精确几何判定。
+        match (loc.x, loc.y, loc.w, loc.h, meet_pos) {
+            (Some(cx), Some(cy), Some(w), Some(h), Some(p)) => {
+                (p.x - cx).abs() <= w / 2.0 && (p.y - cy).abs() <= h / 2.0
+            }
+            // 缺几何信息 → 无法证伪，按「已覆盖」处理（宁可漏提示）。
+            _ => true,
         }
     })
 }
@@ -250,6 +268,7 @@ fn covered_by_event(meet_place: &Id, meet_day: i64, events: &[Event]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::EventLocation;
     use crate::track::Waypoint;
 
     fn id(s: &str) -> Id {
@@ -312,11 +331,18 @@ mod tests {
             id: id(id_s),
             name: id_s.into(),
             span: TimeSpan::new(from, to).unwrap(),
-            place: Some(id(place)),
+            location: Some(EventLocation {
+                place: id(place),
+                x: None,
+                y: None,
+                w: None,
+                h: None,
+            }),
             participants: vec![],
             narrative: None,
             outcome: None,
             effects: vec![],
+            narrations: vec![],
         }
     }
 
@@ -450,7 +476,7 @@ mod tests {
             track_at("t_b", "unit_b", 0, "place_gate"),
         ];
         let mut e = event("evt_x", "place_gate", 0, 1);
-        e.place = None;
+        e.location = None;
         assert_eq!(
             detect_encounter_hints(input(&units, &tracks, &[e])).len(),
             1,

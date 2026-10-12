@@ -1,0 +1,13 @@
+# 角色：端方（示例）· schema v2
+id: char_duanfang
+name: 端方
+traits:
+  - 满洲镶白旗
+  - 新派督抚
+attributes:
+  身份: 清廷钦差大臣 / 川汉铁路督办
+born_at: 32862            # 1861 年（1911-1861+1 天计数按公历，只作显示参考）
+state_spans:
+  - from: 258             # 1911-09-15 奉命率新军西调入川
+    place: place_wuhan
+    title: 钦差大臣

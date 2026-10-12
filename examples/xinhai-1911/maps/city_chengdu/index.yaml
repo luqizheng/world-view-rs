@@ -1,0 +1,28 @@
+# 城市地图：成都（辛亥示例）
+id: map_city_chengdu
+name: 成都城
+level: city
+parent: map_world
+children: []
+extent:
+  width: 1024.0
+  height: 1024.0
+layers:
+  - id: layer_city_chengdu_terrain
+    name: 街巷
+    kind: terrain
+    visible: true
+    locked: false
+    opacity: 1.0
+    z: 0
+    source: terrain.bin
+# 要地标记：锚点 = Place (x,y) ÷ extent(1024)。十字 = 地点/事件点。
+icons:
+  - id: icon_duyuanjie
+    anchor: [0.488, 0.469]
+    shape: cross
+    size: 14.0
+  - id: icon_nanjiaochang
+    anchor: [0.342, 0.635]
+    shape: cross
+    size: 14.0

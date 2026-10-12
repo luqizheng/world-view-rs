@@ -217,7 +217,7 @@ pub fn collect_brush_stroke(
     );
 
     if buttons.just_pressed(MouseButton::Left) {
-        if crate::drill::marker_hit(&projection.world, &drill, &grid, world).is_some() {
+        if crate::drill::marker_hit(&projection.world, &drill, &grid, world, view.scale).is_some() {
             // 这一下是冲着标记去的：不落笔（见上文第 2 条）。
             stroke.points.clear();
             return;
