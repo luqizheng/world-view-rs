@@ -16,12 +16,16 @@ use bevy::prelude::*;
 use bevy::window::WindowResolution;
 use bevy_egui::EguiPlugin;
 
+use crate::brush_cursor;
 use crate::camera;
 use crate::editing;
+use crate::map_frame;
 use crate::projection;
 use crate::state::{BrushState, GridConfig, PanelState, PlaybackState, ViewState, WorldProjection};
+use crate::terrain_chunks;
 use crate::terrain_view::{self, TerrainTexture};
 use crate::ui;
+use crate::vector_layers::{self, VectorLayerEntities};
 use crate::AppConfig;
 
 /// 启动 GUI。`project_dir` 为 `None` 时用内置占位地形。
@@ -159,6 +163,10 @@ pub fn run(config: AppConfig) {
     .init_resource::<camera::ActiveStroke>()
     .init_resource::<camera::PointerOverUi>()
     .init_resource::<editing::EditHistory>()
+    .init_resource::<VectorLayerEntities>()
+    .init_resource::<brush_cursor::BrushCursorEntities>()
+    .init_resource::<map_frame::MapFrameEntities>()
+    .init_resource::<terrain_chunks::TerrainChunkEntities>()
     .add_systems(
         Startup,
         (
@@ -197,7 +205,16 @@ pub fn run(config: AppConfig) {
             terrain_view::rebuild_texture_on_mode_change,
             terrain_view::sync_grid_config,
             // 地形四边形进世界空间（此前纹理只有 egui 小地图在用，主视口全黑）。
-            terrain_view::sync_terrain_sprite,
+            // terrain_view::sync_terrain_sprite, // 已被 terrain_chunks 接替（优化项 3）
+            // 地形分块 + mip + 视口拣选（优化项 3a/3b/3c）。
+            terrain_chunks::sync_terrain_chunks,
+            // 矢量叠加层（道路 + POI）：在 compute_projection 之后跑，
+            // 把 frame.road_segments / frame.place_dots 写到 Mesh2d 实体。
+            vector_layers::sync_vector_layers,
+            // 地图外框 + 1/4 幅面参考网格：在 sync_terrain_sprite 之后跑（外框需地形尺寸）。
+            map_frame::sync_map_frame,
+            // 笔刷光标：在 track_cursor_world 之后跑，屏幕恒定粗细。
+            brush_cursor::sync_brush_cursor,
         )
             .chain(),
     )
@@ -275,16 +292,22 @@ fn setup_terrain_texture_after_world(
     mut projection: ResMut<WorldProjection>,
     view: Res<ViewState>,
 ) {
+    // 瓦片图集（README §12-14）：加载失败静默回退纯色平涂。
+    let atlas = terrain_view::ensure_atlas(&mut commands);
     if projection.world.terrain.is_none() {
         // 原型默认 512×512 占位（基线 §2.19：1024² 亦轻松 60 FPS）。
         projection.world.terrain = Some(terrain_view::placeholder_terrain(512, 512));
     }
     let data = projection.world.terrain.clone().unwrap();
-    let image = terrain_view::image_from_terrain(&data, view.mode);
+    let image = terrain_view::image_from_terrain(&data, view.mode, atlas.as_ref());
+    let res = atlas.map_or(1, |_| {
+        terrain_view::tile_res_for(data.width.max(data.height))
+    });
     let handle = images.add(image);
     commands.insert_resource(TerrainTexture {
         handle,
         size: data.width.max(1),
+        res,
         dirty: None,
         last_mode: Some(view.mode),
     });

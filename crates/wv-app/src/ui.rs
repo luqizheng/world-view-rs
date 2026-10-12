@@ -1307,6 +1307,7 @@ pub fn panel_layers(
         None,
         |ui| {
             ui.checkbox(&mut view.terrain_visible, "地形");
+            ui.checkbox(&mut view.places_visible, "地点");
             ui.checkbox(&mut view.events_visible, "事件点");
             ui.checkbox(&mut view.tracks_visible, "轨迹");
             ui.checkbox(&mut view.roads_visible, "道路");
@@ -1435,6 +1436,7 @@ pub fn panel_minimap(
                     .color(shell.t2()),
             );
             ui.checkbox(&mut view.terrain_visible, "地形");
+            ui.checkbox(&mut view.places_visible, "地点");
             ui.checkbox(&mut view.events_visible, "事件");
             ui.checkbox(&mut view.tracks_visible, "轨迹");
             ui.checkbox(&mut view.roads_visible, "道路");

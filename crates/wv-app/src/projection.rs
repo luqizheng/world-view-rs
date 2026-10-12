@@ -34,6 +34,8 @@ pub struct ProjectionFrame {
     /// 只画**两端都锚定在当前地图**的边（`Place.map == 当前图 id` 且 `x/y` 齐备），
     /// 与 [`crate::drill::resolve_markers`] 的「只画当前层级」口径一致。
     pub road_segments: Vec<(Vec2, Vec2)>,
+    /// 本帧地点（POI）点标位置（世界坐标），锚定在当前地图的地点。
+    pub place_dots: Vec<Vec2>,
 }
 
 /// 计算本帧投影。**所有时间判断集中在这里**，且走 `wv-core` 的纯函数。
@@ -50,8 +52,9 @@ pub fn compute_projection(
     frame.track_heads.clear();
     frame.track_hollow_starts.clear();
     frame.road_segments.clear();
+    frame.place_dots.clear();
 
-    if !view.events_visible && !view.tracks_visible && !view.roads_visible {
+    if !view.events_visible && !view.tracks_visible && !view.roads_visible && !view.places_visible {
         return;
     }
 
@@ -99,7 +102,7 @@ pub fn compute_projection(
     }
 
     // ---- 道路层：地点边（纯几何叠加，无时间语义，不涉 P7）----
-    if view.roads_visible {
+    if view.roads_visible || view.places_visible {
         if let Some(current) = drill.current_node(world) {
             // 只取锚定在当前地图、且坐标齐备的地点（与标记层「只画当前层级」同口径）。
             let find_place = |id: &wv_core::id::Id| -> Option<Vec2> {
@@ -110,9 +113,21 @@ pub fn compute_projection(
                     .find(|p| &p.id == id && p.map.as_ref() == Some(&current.id))?;
                 Some(world_to_view(p.x?, p.y?, &grid))
             };
-            for edge in &world.distances.edges {
-                if let (Some(a), Some(b)) = (find_place(&edge.a), find_place(&edge.b)) {
-                    frame.road_segments.push((a, b));
+            if view.roads_visible {
+                for edge in &world.distances.edges {
+                    if let (Some(a), Some(b)) = (find_place(&edge.a), find_place(&edge.b)) {
+                        frame.road_segments.push((a, b));
+                    }
+                }
+            }
+            // POI 点标：当前地图上的全部锚定地点。
+            if view.places_visible {
+                for p in &world.distances.places {
+                    if p.map.as_ref() == Some(&current.id) {
+                        if let (Some(x), Some(y)) = (p.x, p.y) {
+                            frame.place_dots.push(world_to_view(x, y, &grid));
+                        }
+                    }
                 }
             }
         }
@@ -189,39 +204,63 @@ pub fn draw_map_gizmos(
     view: Res<ViewState>,
     frame: Res<ProjectionFrame>,
 ) {
-    if !view.terrain_visible {
-        return;
-    }
-    // 地图轮廓：边框用反白描线（深底上可见——LINE_ON_MID 是给浅底地形用的，
-    // 在深色空白工程上等于隐形），并补 1/4 幅面参考网格，避免「一片黑看不到图在哪」。
-    let size = tex.size as f32 * grid.cell_size;
-    let min = grid.origin;
-    let max = grid.origin + Vec2::splat(size);
-    gizmos.rect_2d(
-        Isometry2d::from_translation((min + max) * 0.5),
-        Vec2::splat(size),
-        palette::LINE_ON_DARK,
-    );
-    let step = size / 4.0;
-    for i in 1..4 {
-        let x = min.x + step * i as f32;
-        gizmos.line_2d(
-            Vec2::new(x, min.y),
-            Vec2::new(x, max.y),
-            palette::LINE_ON_DARK.with_alpha(0.35),
+    let _ = &*tex; // suppress unused warning
+    if false {
+        if !view.terrain_visible {
+            return;
+        }
+        // 地图轮廓：边框用反白描线（深底上可见——LINE_ON_MID 是给浅底地形用的，
+        // 在深色空白工程上等于隐形），并补 1/4 幅面参考网格，避免「一片黑看不到图在哪」。
+        let size = tex.size as f32 * grid.cell_size;
+        let min = grid.origin;
+        let max = grid.origin + Vec2::splat(size);
+        gizmos.rect_2d(
+            Isometry2d::from_translation((min + max) * 0.5),
+            Vec2::splat(size),
+            palette::LINE_ON_DARK,
         );
-        let y = min.y + step * i as f32;
-        gizmos.line_2d(
-            Vec2::new(min.x, y),
-            Vec2::new(max.x, y),
-            palette::LINE_ON_DARK.with_alpha(0.35),
-        );
+        let step = size / 4.0;
+        for i in 1..4 {
+            let x = min.x + step * i as f32;
+            gizmos.line_2d(
+                Vec2::new(x, min.y),
+                Vec2::new(x, max.y),
+                palette::LINE_ON_DARK.with_alpha(0.35),
+            );
+            let y = min.y + step * i as f32;
+            gizmos.line_2d(
+                Vec2::new(min.x, y),
+                Vec2::new(max.x, y),
+                palette::LINE_ON_DARK.with_alpha(0.35),
+            );
+        }
     }
 
     // 道路：地点边直线（在事件/轨迹之下，视觉上先铺路网再叠动态要素）。
-    if view.roads_visible {
+    //
+    // **已迁出 Gizmos**：`Gizmos` 线宽是屏幕 1px 常量，放大后变粗、出现锯齿。
+    // 现由 [`crate::vector_layers::sync_vector_layers`] 写到世界空间 Mesh2d，
+    // 线宽随 `view.scale` 反比缩放（屏幕恒定 1px）。`if false` 保留原实现
+    // 作为回退开关——若新实现出问题，把 `false` 改 `true` 即可恢复。
+    if false && view.roads_visible {
         for (a, b) in &frame.road_segments {
             gizmos.line_2d(*a, *b, palette::ACCENT_NOTE.with_alpha(0.9));
+        }
+    }
+
+    // 地点（POI）点标：白圈 + 深芯（导航地图惯例；不占用任何强调色的语义）。
+    //
+    // **已迁出 Gizmos**：同上路层理由（屏幕 1px 描线 + 抗锯齿圆）。
+    // 现由 [`crate::vector_layers::sync_vector_layers`] 写 Circle / Ring mesh。
+    if false && view.places_visible {
+        for pos in &frame.place_dots {
+            let r = grid.cell_size * 0.9;
+            gizmos.circle_2d(Isometry2d::from_translation(*pos), r, palette::LINE_ON_DARK);
+            gizmos.circle_2d(
+                Isometry2d::from_translation(*pos),
+                r * 0.5,
+                palette::LINE_ON_MID,
+            );
         }
     }
 
@@ -271,6 +310,11 @@ pub fn draw_map_gizmos(
 ///
 /// **只在世界级显示**（v0.2 §B：城市级/建筑级不显示笔刷光标）——下面那级没有地形
 /// 网格，光标画在那儿只会让人以为可以涂抹。
+///
+/// **已迁出 Gizmos**：原实现用 `Gizmos` + 48 段短弧拼虚线，**段长世界空间
+/// 固定、相机放大后虚线变长、变实线**。现由 [`crate::brush_cursor::sync_brush_cursor`]
+/// 写 Mesh2d 实体（外环 `Annulus` + 虚线 24 段 `Rectangle` + 十字），屏幕 1px/3px
+/// 粗细由 `view.scale` 反比缩放保持恒定。`if false` 保留原实现作回退。
 pub fn draw_brush_cursor(
     mut gizmos: Gizmos,
     windows: Query<&Window>,
@@ -280,54 +324,61 @@ pub fn draw_brush_cursor(
     grid: Res<GridConfig>,
     drill: Res<crate::state::DrillState>,
 ) {
-    if !brush.enabled || drill.depth() > 0 {
-        return;
-    }
-    let Ok(window) = windows.get_single() else {
-        return;
-    };
-    let Some(cursor) = window.cursor_position() else {
-        return;
-    };
-    let Ok(transform) = camera.get_single() else {
-        return;
-    };
-    let world = crate::camera::screen_to_world(
-        cursor,
-        window.resolution.size(),
-        transform.translation,
-        view.scale,
-    );
+    if false {
+        if !brush.enabled || drill.depth() > 0 {
+            return;
+        }
+        let Ok(window) = windows.get_single() else {
+            return;
+        };
+        let Some(cursor) = window.cursor_position() else {
+            return;
+        };
+        let Ok(transform) = camera.get_single() else {
+            return;
+        };
+        let world = crate::camera::screen_to_world(
+            cursor,
+            window.resolution.size(),
+            transform.translation,
+            view.scale,
+        );
 
-    // 外环：实线，半径 = 真实笔刷半径（误差 0）。
-    gizmos.circle_2d(
-        Isometry2d::from_translation(world),
-        brush.radius,
-        palette::ACCENT_SELECT,
-    );
-    // 内环：50% 强度半径 R * (1 - softness)，虚线（用短弧近似）。
-    let inner = brush.radius * (1.0 - brush.softness).max(0.15);
-    draw_dashed_circle(
-        &mut gizmos,
-        world,
-        inner,
-        palette::ACCENT_SELECT.with_alpha(0.6),
-    );
-    // 中心十字。
-    let c = grid.cell_size * 0.5;
-    gizmos.line_2d(
-        world - Vec2::X * c,
-        world + Vec2::X * c,
-        palette::ACCENT_SELECT,
-    );
-    gizmos.line_2d(
-        world - Vec2::Y * c,
-        world + Vec2::Y * c,
-        palette::ACCENT_SELECT,
-    );
+        // 外环：实线，半径 = 真实笔刷半径（误差 0）。
+        gizmos.circle_2d(
+            Isometry2d::from_translation(world),
+            brush.radius,
+            palette::ACCENT_SELECT,
+        );
+        // 内环：50% 强度半径 R * (1 - softness)，虚线（用短弧近似）。
+        let inner = brush.radius * (1.0 - brush.softness).max(0.15);
+        draw_dashed_circle(
+            &mut gizmos,
+            world,
+            inner,
+            palette::ACCENT_SELECT.with_alpha(0.6),
+        );
+        // 中心十字。
+        let c = grid.cell_size * 0.5;
+        gizmos.line_2d(
+            world - Vec2::X * c,
+            world + Vec2::X * c,
+            palette::ACCENT_SELECT,
+        );
+        gizmos.line_2d(
+            world - Vec2::Y * c,
+            world + Vec2::Y * c,
+            palette::ACCENT_SELECT,
+        );
+    } // 关闭 `if false` 回退开关。
 }
 
 /// 用短弧拼出一圈虚线（原型阶段的虚线近似）。
+///
+/// **仅供 `draw_brush_cursor` 的 `if false` 回退分支调用**（[Gizmos] 旧实现）。
+/// `#[allow(dead_code)]` 防止被 clippy 误报——Gizmos 路径平时不走，但保留作为
+/// 一键回退。
+#[allow(dead_code)]
 fn draw_dashed_circle(gizmos: &mut Gizmos, center: Vec2, radius: f32, color: Color) {
     const SEGMENTS: usize = 48;
     for i in 0..SEGMENTS {

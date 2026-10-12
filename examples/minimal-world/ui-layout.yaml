@@ -1,0 +1,80 @@
+panels:
+  brush:
+    x: 12.0
+    y: 319.2
+    width: 280.0
+    height: 480.75684
+    collapsed: false
+    visible: true
+  character:
+    x: 972.0
+    y: 560.0
+    width: 280.0
+    height: 260.0
+    collapsed: false
+    visible: false
+  event:
+    x: 652.0
+    y: 56.0
+    width: 300.0
+    height: 312.0
+    collapsed: false
+    visible: false
+  faction:
+    x: 332.0
+    y: 368.0
+    width: 280.0
+    height: 300.0
+    collapsed: false
+    visible: false
+  inspector:
+    x: 972.0
+    y: 308.0
+    width: 264.0
+    height: 240.0
+    collapsed: false
+    visible: false
+  layers:
+    x: 12.0
+    y: 398.0
+    width: 216.0
+    height: 168.0
+    collapsed: false
+    visible: false
+  minimap:
+    x: 332.0
+    y: 56.0
+    width: 232.0
+    height: 391.75684
+    collapsed: false
+    visible: true
+  situation:
+    x: 652.0
+    y: 380.0
+    width: 300.0
+    height: 308.0
+    collapsed: false
+    visible: false
+  timeline:
+    x: 8.0
+    y: 660.8
+    width: 1272.0
+    height: 139.0
+    collapsed: false
+    visible: true
+  tree:
+    x: 12.0
+    y: 56.0
+    width: 216.0
+    height: 330.0
+    collapsed: false
+    visible: false
+  validation:
+    x: 972.0
+    y: 56.0
+    width: 300.0
+    height: 240.0
+    collapsed: false
+    visible: false
+theme: dark
+density: cozy

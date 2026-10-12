@@ -21,7 +21,7 @@ use bevy::prelude::*;
 
 use crate::camera::ActiveStroke;
 use crate::state::{BrushState, GridConfig, PlaybackState, ViewState, WorldProjection};
-use crate::terrain_view::{image_from_terrain, TerrainTexture};
+use crate::terrain_view::{image_from_terrain, TerrainTexture, TileAtlas};
 use wv_core::Id;
 use wv_edit::command::PaintTerrainCommand;
 use wv_edit::history::Transaction;
@@ -80,6 +80,9 @@ pub fn commit_stroke_on_release(
         });
     }
 
+    // 笔触世界包围盒（在构造 `cmd` 之前算——`stroke` move 给 cmd 后不可用）。
+    let dirty_rect = stroke_bbox_in_cells(&stroke, &grid);
+
     let cmd = PaintTerrainCommand::new(
         Id::new_unchecked(view.current_map.clone()),
         stroke,
@@ -92,10 +95,9 @@ pub fn commit_stroke_on_release(
     match edit.history.commit(&mut projection.world, tx) {
         Ok(_dirty) => {
             projection.dirty = true;
-            // 增量重传：标记受影响区域为脏（此处按笔触包围盒近似）。
-            // 由于统一走「重建全图」在原型阶段更稳，这里改为整图脏标记，
-            // 真正的分块 patch 留给 perf 迭代（S5 基线要求：不每帧重建）。
-            tex.mark_all_dirty();
+            // 增量重传（优化项 3d）：只标笔触影响矩形为脏，
+            // `flush_terrain_texture` 会走 [`crate::terrain_view::patch_terrain_image`] 增量 patch。
+            tex.mark_dirty(dirty_rect);
         }
         Err(e) => {
             bevy::log::warn!("编辑命令失败: {e}");
@@ -103,25 +105,74 @@ pub fn commit_stroke_on_release(
     }
 }
 
+/// 把 `stroke` 的所有 `Brush.center + radius` 转成**逻辑格**坐标的 AABB
+/// （半开 `[gx0,gy0,gx1,gy1]`）。钳到 `[0, ∞)`（具体上限由 `mark_dirty` 与 `size` 并集兜底）。
+fn stroke_bbox_in_cells(stroke: &TerrainStroke, grid: &GridConfig) -> [u32; 4] {
+    if stroke.brushes.is_empty() {
+        return [0, 0, 0, 0];
+    }
+    let cs = grid.cell_size.max(f32::EPSILON);
+    let mut gx0 = i32::MAX;
+    let mut gy0 = i32::MAX;
+    let mut gx1 = i32::MIN;
+    let mut gy1 = i32::MIN;
+    for b in &stroke.brushes {
+        let cx = (b.center.0 / cs) as i32;
+        let cy = (b.center.1 / cs) as i32;
+        let pad = (b.radius / cs).ceil() as i32 + 1;
+        gx0 = gx0.min(cx - pad);
+        gy0 = gy0.min(cy - pad);
+        gx1 = gx1.max(cx + pad);
+        gy1 = gy1.max(cy + pad);
+    }
+    [
+        gx0.max(0) as u32,
+        gy0.max(0) as u32,
+        gx1.max(0) as u32,
+        gy1.max(0) as u32,
+    ]
+}
+
 /// 把脏标记变为实际纹理更新（增量重传的出口）。
 ///
-/// **只在有脏标记时重建**——不是每帧重建整图（基线 §2.11）。
+/// **优化项 3d**：
+/// - 模式切换（`rebuild_texture_on_mode_change`）→ `tex.dirty = Some([0, 0, size, size])`
+///   仍走 [`image_from_terrain`] 全图重建；
+/// - 笔刷编辑 → `tex.dirty = Some(笔触包围盒)` 走 [`crate::terrain_view::patch_terrain_image`]
+///   原地 patch 像素（**关键性能提升**：512² 整图重算 ≈ 80 ms → 几十格 patch ≈ <1 ms）。
+///
+/// **为何不能直接靠修改 `image.data` 触发 GPU upload**：bevy 0.15 的 `Image` 资源
+/// 检测的是「资产添加/移除」，不是 `data` 字段写入——必须走 `Assets::get_mut` 拿到
+/// `&mut Image` 后 `patch_terrain_image` 原地改 `data`（已是 `&mut`），bevy 在下一帧
+/// 检测到 asset 变更时会上传。
 pub fn flush_terrain_texture(
     mut tex: ResMut<TerrainTexture>,
     projection: Res<WorldProjection>,
     view: Res<ViewState>,
+    atlas: Option<Res<TileAtlas>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    if tex.dirty.is_none() {
-        return;
-    }
+    let Some(rect) = tex.dirty else { return };
     let Some(data) = projection.world.terrain.as_ref() else {
         tex.dirty = None;
         return;
     };
-    let image = image_from_terrain(data, view.mode);
+    let w = data.width.max(1);
+    let h = data.height.max(1);
+    // dirty 矩形 = 整图 → 走全图重建（模式切换 / 全图标记脏的场景）。
+    let is_full = rect == [0, 0, w, h];
+    if is_full {
+        let image = image_from_terrain(data, view.mode, atlas.as_deref());
+        if let Some(img) = images.get_mut(&tex.handle) {
+            *img = image;
+        }
+        tex.dirty = None;
+        return;
+    }
+    // 增量 patch：只重算 dirty 矩形内的 cell，原地写进 `image.data`。
+    let res = tex.res;
     if let Some(img) = images.get_mut(&tex.handle) {
-        *img = image;
+        crate::terrain_view::patch_terrain_image(img, data, view.mode, atlas.as_deref(), rect, res);
     }
     tex.dirty = None;
 }
@@ -164,5 +215,94 @@ pub fn apply_history_command(
             "没有可撤销的操作".into()
         }),
         Err(e) => Err(format!("撤销/重做失败: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! 笔触包围盒 → dirty 矩形（优化项 3d 的入口算法）。
+    use super::*;
+    use wv_terrain::edit::Brush;
+
+    /// 单点笔触：包围盒 = 中心格 ± radius/cell_size + 1。
+    #[test]
+    fn single_point_bbox_includes_radius_padding() {
+        let grid = GridConfig {
+            cell_size: 10.0,
+            ..Default::default()
+        };
+        let mut stroke = TerrainStroke::new();
+        stroke.push(Brush {
+            center: (50.0, 50.0), // 格 (5, 5)
+            radius: 10.0,         // 1 格半径
+            softness: 0.0,
+            kind: None,
+            height_delta: 0.0,
+        });
+        let bbox = stroke_bbox_in_cells(&stroke, &grid);
+        // center = 5, pad = ceil(10/10) + 1 = 2
+        // → gx0 = 3, gx1 = 7；gy0 = 3, gy1 = 7
+        assert_eq!(bbox, [3, 3, 7, 7]);
+    }
+
+    /// 多点笔触：取并集包围盒。
+    #[test]
+    fn multi_point_bbox_is_union() {
+        let grid = GridConfig {
+            cell_size: 10.0,
+            ..Default::default()
+        };
+        let mut stroke = TerrainStroke::new();
+        stroke.push(Brush {
+            center: (10.0, 10.0), // 格 (1, 1)
+            radius: 5.0,
+            softness: 0.0,
+            kind: None,
+            height_delta: 0.0,
+        });
+        stroke.push(Brush {
+            center: (50.0, 50.0), // 格 (5, 5)
+            radius: 5.0,
+            softness: 0.0,
+            kind: None,
+            height_delta: 0.0,
+        });
+        let bbox = stroke_bbox_in_cells(&stroke, &grid);
+        // pad = ceil(5/10) + 1 = 1 + 1 = 2
+        // → gx0 = max(1-2, 5-2) = 0；gx1 = max(1+2, 5+2) = 7
+        assert_eq!(bbox, [0, 0, 7, 7]);
+    }
+
+    /// 钳到 [0, ∞)：负中心被 clamp。
+    #[test]
+    fn bbox_clamps_to_zero() {
+        let grid = GridConfig {
+            cell_size: 10.0,
+            ..Default::default()
+        };
+        let mut stroke = TerrainStroke::new();
+        stroke.push(Brush {
+            center: (5.0, 5.0), // 格 (0, 0) + radius 边距会到负
+            radius: 100.0,      // 远大于 cell_size
+            softness: 0.0,
+            kind: None,
+            height_delta: 0.0,
+        });
+        let bbox = stroke_bbox_in_cells(&stroke, &grid);
+        // gx0/gx1 在负值会被 clamp 到 0
+        assert_eq!(bbox[0], 0);
+        assert_eq!(bbox[1], 0);
+        // max 仍 = 0 + 10 + 1 = 11
+        assert_eq!(bbox[2], 11);
+        assert_eq!(bbox[3], 11);
+    }
+
+    /// 空 stroke → `[0, 0, 0, 0]`。
+    #[test]
+    fn empty_stroke_returns_zero_rect() {
+        let grid = GridConfig::default();
+        let stroke = TerrainStroke::new();
+        let bbox = stroke_bbox_in_cells(&stroke, &grid);
+        assert_eq!(bbox, [0, 0, 0, 0]);
     }
 }
