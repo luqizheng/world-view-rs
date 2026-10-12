@@ -28,8 +28,6 @@
 
 #![cfg(feature = "app")]
 
-use bevy::prelude::*;
-
 use crate::editing::EditHistory;
 use crate::state::{ViewState, WorldProjection};
 use wv_core::map::{GeometryData, GeometrySpan};

@@ -376,7 +376,7 @@ fn load_project_into(
 /// | 另存为… | ⛔ 需要文件对话框 → 提示走 `Ctrl+S`（v0.3 一起补） |
 /// | 导出… | ⛔ 导出格式未定（见 v0.2 §G） |
 /// | 项目设置 | ⛔ 面板未实现（v0.3） |
-/// | 保存 | ⛔ **`wv-io` 目前只有读取路径，没有 `save_world`** → 提示并保持脏标记 |
+/// | 保存 | ✅ 阶段七 v0.1：`wv_io::Project::save_world` 全量写，dirty 路由 v0.2 |
 ///
 /// 保存那条不是偷懒：数据落盘要处理「每实体一文件 + 引用完整性 + 二进制分块」
 /// 三件事（AGENTS §5/§4.5），不是一次 `serde_yaml::to_string` 能收尾的。
@@ -559,15 +559,23 @@ fn apply_pending_commands(
                 Err(msg) => notice.error(msg, frame),
             }
         }
-        // 保存：`wv-io` 尚无落盘 API，如实回执而不是假装写完（见函数文档表格）。
+        // 保存（阶段七 v0.1）：走 `wv_io::Project::save_world`。
+        // v0.1 用全量 dirty 列表 `&[]`——每个目录都全量重写。
+        // 后续接 wv-edit 的 dirty set 路由（v0.2）。
         CommandId::Save => {
-            if projection.project_dir.is_none() {
+            let Some(dir) = projection.project_dir.clone() else {
                 notice.error("当前没有工程目录，无法保存", frame);
-            } else {
-                notice.info(
-                    "保存尚未实现：wv-io 目前只有读取路径（缺 save_world），数据仍只在内存",
-                    frame,
-                );
+                return;
+            };
+            match wv_io::Project::open(&dir) {
+                Ok(project) => match project.save_world(&projection.world, &[]) {
+                    Ok(()) => {
+                        projection.dirty = false;
+                        notice.info(format!("已保存到 {dir}"), frame);
+                    }
+                    Err(e) => notice.error(format!("保存失败：{e}"), frame),
+                },
+                Err(e) => notice.error(format!("打开工程目录失败：{e}"), frame),
             }
         }
         // 其余工程 / 导航命令已在上面消费。

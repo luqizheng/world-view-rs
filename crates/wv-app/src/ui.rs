@@ -1711,7 +1711,6 @@ fn faction_card(
             // 新增几何。
             ui.horizontal(|ui| {
                 let mut from_buf = playback.current_day.to_string();
-                let mut to_open = true;
                 let mut to_buf = "".to_string();
                 ui.label("起 day：");
                 if ui.text_edit_singleline(&mut from_buf).changed() {

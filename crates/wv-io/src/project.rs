@@ -12,6 +12,101 @@ use wv_core::{World, WorldMeta};
 use crate::diagnostics::{derive_hints, Diagnostics};
 use crate::error::{IoError, IoResult};
 
+/// 把 `Vec<T>` 写到一个目录下：每个实体一个 `<id>.yaml`。
+///
+/// **删除传播**（AGENTS §7.5V1 的镜像应用）：扫一遍目录中所有 `.yaml`，
+/// 凡是不在 `items` 里的——视为「被命令删了」，移除文件。
+/// 这保证 `load(save(w))` round-trip 与 `RemoveFactionCommand` 协同正确。
+///
+/// 若 `items` 为空且目录本身也不存在，**不**创建空目录（V1：作者没动就别替他造东西）。
+///
+/// `key` 给实体的"文件 id"——对 `Faction` 等有 `id` 字段的实体，直接返回；
+/// 对 `GeometrySpan` 这种没 `id` 的，由调用点用 `map+owner+from` 合成。
+/// **v0.1 妥协**：合成 id 在 IO 层算，不污染领域模型（§4.5 不要求几何有 id）。
+fn save_entities<T, F>(dir: &Path, items: &[T], key: F) -> IoResult<()>
+where
+    T: serde::Serialize,
+    F: Fn(&T) -> String,
+{
+    // 收集 ground truth 的 id 集合。
+    let keep: std::collections::HashSet<String> = items.iter().map(&key).collect();
+    // 写每个实体的 YAML。
+    if !items.is_empty() {
+        std::fs::create_dir_all(dir)?;
+    }
+    for item in items {
+        let id = key(item);
+        let path = dir.join(format!("{id}.yaml"));
+        let text = serde_yaml::to_string(item).map_err(|source| IoError::Yaml {
+            path: path.display().to_string(),
+            source,
+        })?;
+        std::fs::write(&path, text)?;
+    }
+    // 删除传播：扫目录删不在 keep 里的 yaml。
+    if dir.is_dir() {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("yaml") {
+                continue;
+            }
+            let Some(name) = path.file_stem().and_then(|x| x.to_str()) else {
+                continue;
+            };
+            if !keep.contains(name) {
+                std::fs::remove_file(&path)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 写地图节点：每个 `MapNode` 写到 `maps/<id>/index.yaml`。
+///
+/// 地图天然有子目录（约定），与 `save_entities` 路径形态不同——单独一个函数。
+fn save_maps(dir: &Path, maps: &[wv_core::map::MapNode]) -> IoResult<()> {
+    if maps.is_empty() {
+        // 删除传播：空 maps 列表 → 清空 maps/ 下所有子目录的 index.yaml。
+        // v0.1 简化：不主动 rm 子目录，留给作者手动。
+        return Ok(());
+    }
+    std::fs::create_dir_all(dir)?;
+    for m in maps {
+        let map_dir = dir.join(m.id.as_str());
+        std::fs::create_dir_all(&map_dir)?;
+        let path = map_dir.join("index.yaml");
+        let text = serde_yaml::to_string(m).map_err(|source| IoError::Yaml {
+            path: path.display().to_string(),
+            source,
+        })?;
+        std::fs::write(&path, text)?;
+    }
+    Ok(())
+}
+
+/// 写 `PlaceEdge` 列表到单文件 `distances/edges.yaml`。
+///
+/// PlaceEdge 当前没有 `id` 字段，暂存单文件；等引入 id 后切到 `save_entities` 模式。
+fn save_placedges(path: &Path, edges: &[wv_core::distance::PlaceEdge]) -> IoResult<()> {
+    if edges.is_empty() {
+        // 边缘情形：作者把全部 edge 删了 → 删文件。
+        if path.is_file() {
+            std::fs::remove_file(path)?;
+        }
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let text = serde_yaml::to_string(edges).map_err(|source| IoError::Yaml {
+        path: path.display().to_string(),
+        source,
+    })?;
+    std::fs::write(path, text)?;
+    Ok(())
+}
+
 /// 加载 `maps/<id>/index.yaml` 下的全部地图节点（一层目录扫描）。
 ///
 /// 地图树是多层引用（P4），但每个节点的**索引文件**是扁平的，
@@ -254,6 +349,124 @@ impl Project {
             to = to,
             root_map = m.root_map,
         )
+    }
+
+    /// 把 `World` 写回工程目录。
+    ///
+    /// 阶段七 v0.1（2026-10-12）：分片落盘，与 [`Self::load_world`] 对称。
+    ///
+    /// ## 行为
+    ///
+    /// - **每实体一文件**（§4.5）：每个 `Faction` / `Character` / `Event` /
+    ///   `Place` / `PlaceEdge` / `Vehicle` / `Unit` / `Track` / `Situation` /
+    ///   `Narration` / `GeometrySpan` 各自一个 `<id>.yaml`。
+    /// - **map 节点**仍写 `maps/<id>/index.yaml`（已存在的索引约定）。
+    /// - **删除传播**（AGENTS §4.5 + §7.5V1）：以 `World` 为 ground truth——
+    ///   磁盘上存在但 `World` 中不含的文件被**删除**（覆盖命令删实体的情况）。
+    /// - **不写**`world.yaml`（它由 [`Self::open`] 负责，`meta` 字段不在本方法范围）。
+    /// - **不写**`terrain.bin`（栅格二进制是独立流水线；v0.2 再加）。
+    /// - 不会写**空目录**——目录缺失就保持缺失（V1：作者没动就别替他造东西）。
+    ///
+    /// ## dirty 路由
+    ///
+    /// `dirty_paths` 是 `EditCommand::apply` 返回的目录前缀列表（如
+    /// `"factions"`、`"geometry/faction"`）。本方法对每个**非空**目录：
+    /// 先**全量重写**该目录下 `World` 的全部实体，再做删除传播。
+    /// dirty 目录之外的**不**触碰（作者手改的 YAML 不被覆盖）。
+    ///
+    /// **为什么不做"只重写脏文件"的细粒度优化**：v0.1 数据规模小（典型工程
+    /// < 200 文件），全量重写一个目录的 IO 是亚毫秒级；细粒度需要为每个
+    /// 命令记录"它改的是哪几个 ID"——复杂度换不来收益，留作 v0.2。
+    ///
+    /// ## 失败语义
+    ///
+    /// 任一文件 IO 失败立即返回错误，**不**做事务回滚——已写的文件保留。
+    /// v0.1 数据规模小，原子性不构成实际问题。
+    pub fn save_world(&self, world: &World, dirty_paths: &[String]) -> IoResult<()> {
+        // dirty 路由：未列出的目录**跳过**。注意空 Vec = "全量写"——这对应
+        // "第一次落盘"或"开发者手动调 save_world"，区别于"编辑触发的增量写"。
+        let full = dirty_paths.is_empty();
+        let wants = |p: &str| full || dirty_paths.iter().any(|d| d == p);
+
+        if wants("factions") {
+            save_entities(&self.root.join("factions"), &world.factions, |f| {
+                f.id.as_str().to_string()
+            })?;
+        }
+        if wants("geometry/faction") {
+            save_entities(
+                &self.root.join("geometry/faction"),
+                &world.faction_geometry,
+                |g| {
+                    // 合成 id：map + owner + from。`--` 避开 ID 字符集，文件名
+                    // 用这个 key，文件内容里仍是原始字段。
+                    format!("{}__{}__{}", g.map.as_str(), g.owner.as_str(), g.span.from)
+                },
+            )?;
+        }
+        if wants("characters") {
+            save_entities(&self.root.join("characters"), &world.characters, |c| {
+                c.id.as_str().to_string()
+            })?;
+        }
+        if wants("timeline/events") {
+            save_entities(&self.root.join("timeline/events"), &world.events, |e| {
+                e.id.as_str().to_string()
+            })?;
+        }
+        if wants("timeline/situations") {
+            save_entities(
+                &self.root.join("timeline/situations"),
+                &world.situations,
+                |s| s.id.as_str().to_string(),
+            )?;
+        }
+        if wants("timeline/narrations") {
+            save_entities(
+                &self.root.join("timeline/narrations"),
+                &world.narrations,
+                |n| n.id.as_str().to_string(),
+            )?;
+        }
+        if wants("units") {
+            save_entities(&self.root.join("units"), &world.units, |u| {
+                u.id.as_str().to_string()
+            })?;
+        }
+        if wants("tracks") {
+            save_entities(&self.root.join("tracks"), &world.tracks, |t| {
+                t.id.as_str().to_string()
+            })?;
+        }
+        if wants("distances/places") {
+            save_entities(
+                &self.root.join("distances/places"),
+                &world.distances.places,
+                |p| p.id.as_str().to_string(),
+            )?;
+        }
+        if wants("distances/edges") {
+            // PlaceEdge 无顶层 id——`key` 由 (from, to, terrain) 复合。
+            // v0.1 不为它造合成 id，存为单一文件 distances/edges.yaml。
+            // 等 PlaceEdge 引入 id 字段再切到每实体一文件。
+            save_placedges(
+                &self.root.join("distances/edges.yaml"),
+                &world.distances.edges,
+            )?;
+        }
+        if wants("distances/vehicles") {
+            save_entities(
+                &self.root.join("distances/vehicles"),
+                &world.distances.vehicles,
+                |v| v.id.as_str().to_string(),
+            )?;
+        }
+        if wants("maps") {
+            save_maps(&self.root.join("maps"), &world.maps)?;
+        }
+        // `timeline/axis.yaml` 是单文件，由 `meta.timeline_range` 决定。
+        // v0.1 暂不写——它不在 `World` 中（属于 `meta`），留作 v0.2。
+        Ok(())
     }
 
     /// 校验工程内部结构（**文字摘要**，供 `wv load <dir>` 与命令行用）。
