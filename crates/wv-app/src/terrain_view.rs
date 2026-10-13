@@ -1198,6 +1198,8 @@ pub fn placeholder_terrain(w: u32, h: u32) -> TerrainData {
 /// 若地形数据尚不可用（`terrain` 为 `None`），直接返回，**不写 `last_mode`**——
 /// 否则地形稍后加载完时，`last_mode` 已等于当前 mode，会误判「没变」而永不重建。
 /// `last_mode` 仅在**真正生成了纹理之后**才更新。
+/// 系统参数即函数参数（Bevy 注入），7 个都是必要资源——与 sync_street_layers 同理由允许超参。
+#[allow(clippy::too_many_arguments)]
 pub fn rebuild_texture_on_mode_change(
     mut commands: Commands,
     view: Res<ViewState>,
@@ -2237,17 +2239,12 @@ mod tests {
         let data = small_terrain(3);
         let mut images = Assets::<Image>::default();
         let image = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
-        let tex = new_terrain_texture(
-            &mut images,
-            image,
-            &data,
-            None,
-            ViewMode::GoogleMap,
-            false,
-        );
-        let mut grid = GridConfig::default();
-        grid.cell_size = 2.0;
-        grid.raster_origin = Vec2::new(100.0, 200.0);
+        let tex = new_terrain_texture(&mut images, image, &data, None, ViewMode::GoogleMap, false);
+        let grid = GridConfig {
+            cell_size: 2.0,
+            raster_origin: Vec2::new(100.0, 200.0),
+            ..GridConfig::default()
+        };
 
         let mut world = World::new();
         let mut queue = bevy::ecs::world::CommandQueue::default();
@@ -2294,11 +2291,11 @@ mod tests {
         let (node, data) = active_terrain(&core, drill.current()).expect("世界图有地形");
         assert_eq!(node.id, world_id);
         let mut images = Assets::<Image>::default();
-        let image = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
+        let image = image_from_terrain(data, ViewMode::GoogleMap, None, false);
         let tex = new_terrain_texture(
             &mut images,
             image,
-            &data,
+            data,
             Some(world_id),
             ViewMode::GoogleMap,
             false,
@@ -2330,11 +2327,7 @@ mod tests {
             assert!(d.enter(&core, &city_id), "城市应是根图的直接子图");
         }
         schedule.run(&mut world);
-        assert_eq!(
-            count_fades(&mut world),
-            1,
-            "换图应生成一个淡出精灵"
-        );
+        assert_eq!(count_fades(&mut world), 1, "换图应生成一个淡出精灵");
 
         // 换模式：即时重建是既有行为，不再叠加淡出。
         world.resource_mut::<ViewState>().mode = ViewMode::Schematic;
