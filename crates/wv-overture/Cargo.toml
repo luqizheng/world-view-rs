@@ -7,9 +7,17 @@ license.workspace = true
 description = "World View 真实地理底图读取层（ADR-0007）：不落几何、只存引用"
 
 # 依赖面纪律（AGENTS.md §9）：
-# - 当前 **零**运行时第三方依赖（仅 `wv-core`），
-#   因为 `segment_length_m()` 是纯函数，不需要 Parquet 解析。
-# - Parquet / Arrow 读取作为 T5 实施期再决定（README §17 schema 升级策略）。
+# - 当前 **零**运行时第三方依赖（仅 `wv-core` + `thiserror`）。
+# - Parquet / Arrow 读取待选型：
+#   * `parquet` 53.x：兼容 MSRV 1.80（AGENTS §8），但解析 GeoParquet 需
+#     额外处理 WKB geometry 编码，体积不小；
+#   * `duckdb` ~1.20000.0：体积 ~30MB、编译时间 >5min；
+#   * 短期方案：CLI 在 `wv-overture fetch` 时调用 `overturemaps-py`（已有
+#     Python 依赖）下载并**转换**为 GeoJSON，再用标准库 `serde_json` 读取。
+# - 第一版采用「转换 GeoJSON」方案（最小依赖），README §17 §18 关闭条件
+#   待 Parquet 直读选型落地后再调整。
 [dependencies]
 wv-core = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
 thiserror = { workspace = true }

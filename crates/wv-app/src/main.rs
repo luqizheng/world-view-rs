@@ -3,8 +3,11 @@
 //! 阶段一交付物：`wv load <dir>` 打印世界摘要。
 //! GUI 入口在开启 `app` feature 后由 [`run_gui`] 提供。
 
+mod overture_cli;
+
 use std::process::ExitCode;
 
+use overture_cli::overture_command;
 use wv_io::Project;
 
 fn main() -> ExitCode {
@@ -36,6 +39,20 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some("raster-slice") => match raster_slice(&args[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(msg) => {
+                eprintln!("错误: {msg}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("overture") => match overture_command(&args[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(msg) => {
+                eprintln!("错误: {msg}");
+                ExitCode::FAILURE
+            }
+        },
         Some("gui") => {
             #[cfg(feature = "app")]
             {
@@ -66,11 +83,43 @@ fn print_help() {
          用法:\n  \
          wv load <工程目录>       加载工程并打印摘要\n  \
          wv validate <工程目录>   校验工程结构与引用完整性\n  \
+         wv raster-slice <工程目录> <map_id> [size]
+  \x20                  从来源图栅格切出该子图覆盖区域，
+  \x20                  采样落盘为 maps/<map_id>/terrain.bin（默认 512²）
+         wv overture fetch --bbox W,S,E,N --theme <places|transportation>\n  \
+         \x20                  [--release <TAG>] --out <GeoJSON 路径>\n  \
+         \x20                  下载 Overture Maps bbox 切片（GeoJSON）\n  \
+         \x20                  并按 ADR-0007 §理由（4）转为 PlaceEdgeCandidate 统计\n  \
          wv gui [-m <工程目录>]   启动图形界面（需 --features app）。\n  \
          \x20                        默认进空编辑器，不主动加载任何地图；\n  \
          \x20                        显式 `-m <目录>` 时启动后加载（失败原因在窗口内显示）\n  \
          wv --help                显示本帮助"
     );
+}
+
+/// 底图切片（README §12-24）：把来源图栅格中被子图覆盖的那块采样落盘。
+fn raster_slice(args: &[String]) -> Result<(), String> {
+    let Some(dir) = args.first() else {
+        return Err("用法: wv raster-slice <工程目录> <map_id> [size]".into());
+    };
+    let Some(map_id) = args.get(1) else {
+        return Err("缺少 <map_id>。用法: wv raster-slice <工程目录> <map_id> [size]".into());
+    };
+    let size: u32 = match args.get(2) {
+        Some(s) => s.parse().map_err(|_| format!("size {s} 不是正整数"))?,
+        None => 512,
+    };
+    let id = wv_core::Id::new(map_id).map_err(|e| format!("非法 map_id {map_id}: {e}"))?;
+    let mut project = Project::open(dir).map_err(|e| e.to_string())?;
+    let mut world = project.load_world().map_err(|e| e.to_string())?;
+    let data = wv_io::slice_terrain(&world, &id, size).map_err(|e| e.to_string())?;
+    world.set_terrain(id.clone(), data);
+    project
+        .save_world(&world, &[format!("maps/{map_id}/terrain.bin")])
+        .map_err(|e| e.to_string())?;
+    println!("已切片: maps/{map_id}/terrain.bin（{size}×{size}）");
+    println!("重新打开工程后，该图即使用自己的底图（继承退场）。");
+    Ok(())
 }
 
 fn load(dir: &str) -> Result<(), Box<dyn std::error::Error>> {

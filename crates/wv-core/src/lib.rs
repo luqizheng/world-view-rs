@@ -22,6 +22,7 @@ pub mod map;
 pub mod narration;
 pub mod overture_id;
 pub mod situation;
+pub mod street;
 pub mod time;
 pub mod track;
 pub mod unit;
@@ -39,6 +40,7 @@ pub use id::{Id, IdError};
 pub use narration::Narration;
 pub use overture_id::{OvertureId, OvertureIdError};
 pub use situation::{Situation, SituationStep};
+pub use street::{RoadClass, StreetLayer, StreetSegment};
 pub use time::{Calendar, TimePoint, TimeSpan};
 pub use track::{Track, Waypoint};
 pub use unit::Unit;
@@ -133,6 +135,16 @@ pub struct World {
     /// 全部读入，不做淘汰。将来引入懒加载时，本字段的**形状不必再改**——
     /// 撤掉的是「何时填、何时清」，不是键值结构。
     pub terrains: BTreeMap<Id, terrain::TerrainData>,
+
+    /// 街道矢量图层文档，键 = **图层 ID**（ADR-0010 待做第 3 项，2026-10-13）。
+    ///
+    /// 与 [`World::terrains`] 同构：磁盘真源仍是各 `Layer.source` 指向的
+    /// YAML 文件（几何不进 `index.yaml`，ADR-0010 决策 ⑤）；`World` 持有
+    /// 运行副本只为让 `wv-edit` 的命令有处可改、Undo 有处可回（P6 语义
+    /// 原样不变）。不存「当前图层」这类视图状态（P7）。
+    ///
+    /// **驻留策略同 §12-19**：加载时全读入、不淘汰——最易回退的形态。
+    pub streets: BTreeMap<Id, street::StreetLayer>,
 }
 
 impl World {
@@ -148,6 +160,20 @@ impl World {
         data: terrain::TerrainData,
     ) -> Option<terrain::TerrainData> {
         self.terrains.insert(map, data)
+    }
+
+    /// 取某个街道图层的文档（未加载/未声明则 `None`）。
+    pub fn street_of(&self, layer: &Id) -> Option<&street::StreetLayer> {
+        self.streets.get(layer)
+    }
+
+    /// 写入某个街道图层的文档，返回被替换掉的旧值（首次写入时为 `None`）。
+    pub fn set_streets(
+        &mut self,
+        layer: Id,
+        doc: street::StreetLayer,
+    ) -> Option<street::StreetLayer> {
+        self.streets.insert(layer, doc)
     }
 }
 

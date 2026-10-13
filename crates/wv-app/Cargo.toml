@@ -10,19 +10,25 @@ description = "World View 应用层：Bevy 渲染、UI、输入，转发编辑�
 # 原因：Bevy 依赖树庞大，阶段一（数据层打底）不应对其产生构建依赖。
 [features]
 default = []
-app = ["dep:bevy", "dep:bevy_egui", "dep:rfd"]
+app = ["dep:bevy", "dep:bevy_egui", "dep:rfd", "dep:icu_provider"]
 
 [dependencies]
 wv-core = { workspace = true }
 wv-terrain = { workspace = true }
 wv-io = { workspace = true }
 wv-edit = { workspace = true }
+wv-overture = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
 bevy = { workspace = true, optional = true }
 bevy_egui = { workspace = true, optional = true }
 rfd = { workspace = true, optional = true }
+# ICU4X 在 debug 构建且未开 `logging` feature 时，把 log::warn 别名成 std::eprintln
+# （icu_provider-2.3.1 src/lib.rs:192-203），导致字体断行告警以裸格式刷屏且无法用
+# EnvFilter 过滤。开启该 feature（已在依赖树内，无新二进制）让告警走 `log` facade，
+# 由 gui.rs 的 LogPlugin filter（icu_provider=off）静默。
+icu_provider = { version = "2.3", optional = true, features = ["logging"] }
 
 [[bin]]
 name = "wv"

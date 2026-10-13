@@ -18,7 +18,9 @@
 //! - README §15：决议 (a)–(f) 全部关闭；
 //! - README §16 §17 §18：等待本 crate 实施期逐条关闭。
 
+pub mod fetch;
 pub mod geometry;
+pub mod index;
 pub mod transportation;
 
 pub use geometry::{haversine_m, segment_length_m, GeoCoord};

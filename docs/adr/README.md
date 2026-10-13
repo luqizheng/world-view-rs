@@ -71,6 +71,7 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
 | [ADR-0008](ADR-0008-google-default-map-experience.md) | Google Default Map 式地图体验 | 已接受（Accepted） | 大地图默认改为离线 Google Default Map 视觉与交互：左键拖动平移、笔刷显式开启、近白底图 + 亚像素边界 + 道路 casing/fill + 红点白环 POI + 右下角导航控件；不接在线瓦片，数据 / 时间求值 / 图层架构不变 | P1 / P3 / P5 / P7、ART_STYLE_SPEC 地图风格部分、STYLE_SWAPPABLE_ARCHITECTURE |
 | [ADR-0009](ADR-0009-graded-tile-zoom-to-street.md) | 分级瓦片缩放（世界 → 街道） | 已接受（Accepted） | 「缩放到街道」用**离散级别 + 级间平滑插值**，不用无极连续缩放：级别由**图在层级树中的深度**派生（不扩 `MapLevel` 枚举）；`Extent` 加 `origin`（子图在父图中的落点，缺省 `(0,0)`），每图自带 `raster` 与自带原点以规避 `f32` 大坐标精度崩溃；坐标变换集中到 `wv_core::coord` 单一实现点 | P1 / P2 / P4 / P5 / P7、ADR-0007、ADR-0008、基线 §2.12 / §2.15、README §12-19 / §12-20 |
 | [ADR-0010](ADR-0010-street-vector-layer.md) | 街道矢量层（双供给 + 批量渲染） | 已接受（Accepted） | 街道**不与** `distance.edges`（城市间行程连线）合并，是独立的**地物图层**；一个供给接口两个实现（虚构 = 作者手绘落 YAML 图层文件，真实 = Overture 只存引用）；渲染从「一段 2 实体」改为批量/实例化 + `class` LOD + 视口裁剪；几何不进领域 YAML；`wv-overture` 为平行叶子 crate | P1 / P2 / P3 / P4 / P5、AGENTS §2.1 / §4.2 / §5 / §9、ADR-0007、ADR-0008、ADR-0009、README §12-21 |
+| [ADR-0011](ADR-0011-bevy-0-19-upgrade.md) | 渲染引擎升级到 Bevy 0.19 | 已接受（Accepted） | 引擎 0.15.3 → **0.19.1**、bevy_egui 0.32 → **0.42**（不跳 0.20）；**在 Phase 4 之前**一次做完，先建可回退点、独立提交可整体 revert；以编译器驱动迁移 + 官方迁移指南核对「能编译但行为变了」的部分；实测迁移面极小（全仓**零 `*Bundle` 用法**） | P1、AGENTS §7.1 / §8、ADR-0008 / ADR-0009 / ADR-0010 |
 
 ---
 
