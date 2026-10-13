@@ -119,11 +119,14 @@ impl PaintTerrainCommand {
         }
     }
 
-    /// 取回目标网格的**中立数据**。当前原型：世界持单张 `terrain`。
+    /// 取回目标网格的**中立数据**。
+    ///
+    /// 查的是**这张图自己的**栅格（`World.terrains` 按图 ID 索引，Phase 2 起
+    /// 每个图各有各的底图）。该图没有栅格时报 `TerrainMismatch`——不替作者
+    /// 凭空造一张，因为尺寸该由作者的地图范围决定。
     fn terrain<'a>(&self, world: &'a World) -> EditResult<&'a TerrainData> {
         world
-            .terrain
-            .as_ref()
+            .terrain_of(&self.map)
             .ok_or_else(|| EditError::TerrainMismatch(format!("地图 `{}` 无地形网格", self.map)))
     }
 }
@@ -158,8 +161,8 @@ impl EditCommand for PaintTerrainCommand {
             }
         }
         drop(before);
-        // ④ 写回中立数据
-        world.terrain = Some(from_grid(grid));
+        // ④ 写回中立数据（写回**这张图**的格子，不动别的图）
+        world.set_terrain(self.map.clone(), from_grid(grid));
 
         Ok(vec![format!("maps/{}/terrain.bin", self.map)])
     }
@@ -175,7 +178,7 @@ impl EditCommand for PaintTerrainCommand {
             grid.set(*gx, *gy, *cell);
         }
         drop(before);
-        world.terrain = Some(from_grid(grid));
+        world.set_terrain(self.map.clone(), from_grid(grid));
         Ok(())
     }
 }
@@ -547,37 +550,64 @@ mod tests {
     use wv_core::time::TimeSpan;
     use wv_core::Id;
 
+    /// 测试用的图 ID——`PaintTerrainCommand` 的栅格是**按图**查的。
+    const TEST_MAP: &str = "world_main";
+
+    fn test_map() -> Id {
+        Id::new_unchecked(TEST_MAP)
+    }
+
     fn world_with_terrain(size: u32) -> World {
         let grid = TerrainGrid::new(size, size);
         let data = from_grid(grid);
-        World {
-            terrain: Some(data),
-            ..Default::default()
-        }
+        let mut world = World::default();
+        world.set_terrain(test_map(), data);
+        world
     }
 
     #[test]
     fn paint_command_apply_then_revert_restores_grid() {
         let mut world = world_with_terrain(32);
-        let before_snapshot = world.terrain.clone().unwrap();
+        let before_snapshot = world.terrain_of(&test_map()).cloned().unwrap();
 
         let mut stroke = Stroke::new();
         stroke.push(wv_terrain::edit::Brush::paint((10.5, 10.5), 5.0, 3));
-        let cmd = PaintTerrainCommand::new(Id::new_unchecked("world_main"), stroke, 1.0);
+        let cmd = PaintTerrainCommand::new(test_map(), stroke, 1.0);
 
         let dirty = cmd.apply(&mut world).unwrap();
         assert!(!dirty.is_empty(), "应报告脏文件");
-        let after = world.terrain.clone().unwrap();
+        let after = world.terrain_of(&test_map()).cloned().unwrap();
         assert_ne!(before_snapshot, after, "apply 应改变地形");
         // 中心格类型被写为 3
         assert_eq!(after.cells[10 * 32 + 10].kind, 3);
 
         cmd.revert(&mut world).unwrap();
         assert_eq!(
-            world.terrain.clone().unwrap(),
+            world.terrain_of(&test_map()).cloned().unwrap(),
             before_snapshot,
             "revert 应完全还原"
         );
+    }
+
+    #[test]
+    fn painting_one_map_leaves_the_other_maps_grid_untouched() {
+        // Phase 2 的关键不变量：栅格按图存放，刷 A 城不能碰到 B 城。
+        let mut world = world_with_terrain(32);
+        let other = Id::new_unchecked("map_city_other");
+        world.set_terrain(other.clone(), from_grid(TerrainGrid::new(16, 16)));
+        let other_before = world.terrain_of(&other).cloned().unwrap();
+
+        let mut stroke = Stroke::new();
+        stroke.push(wv_terrain::edit::Brush::paint((10.5, 10.5), 5.0, 3));
+        let cmd = PaintTerrainCommand::new(test_map(), stroke, 1.0);
+        cmd.apply(&mut world).unwrap();
+
+        assert_eq!(
+            world.terrain_of(&other).cloned().unwrap(),
+            other_before,
+            "另一张图的栅格必须一个格都没动"
+        );
+        assert_eq!(world.terrains.len(), 2, "不应凭空多出或丢掉栅格");
     }
 
     #[test]

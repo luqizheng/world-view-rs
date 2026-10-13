@@ -93,8 +93,13 @@ impl Default for PlaybackState {
 /// 视图模式（基线 §1.10，D4 四态）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ViewMode {
-    /// A. 真实地形：高度图 + 法线光照 + 贴图。
+    /// G. Google Default Map：近白陆地 + 淡水 + 公园绿 + 白路灰缘。
+    ///
+    /// 作为默认模式，是因为地图浏览/整理是作者的高频入口；地形、JRPG 等专题
+    /// 视图仍是显式切换的分析工具。
     #[default]
+    GoogleMap,
+    /// A. 真实地形：高度图 + 法线光照 + 贴图。
     RealTerrain,
     /// B. 色块地形：每种地形一种颜色。
     Schematic,
@@ -107,30 +112,27 @@ pub enum ViewMode {
     /// F. 轮廓图：黑底 + 海岸线 + 城市路线（2026-11 用户需求：
     /// 地形纹理完全退场，只留水陆轮廓，要素对比度最大化）。
     Coastline,
-    /// G. 谷歌风：基于用户提交的 Google Maps style JSON 的低饱和暖调（羊皮纸）。
-    /// 色板落点见 [`crate::palette_google`]。
-    GoogleMap,
 }
 
 impl ViewMode {
     pub const ALL: [ViewMode; 6] = [
+        ViewMode::GoogleMap,
         ViewMode::RealTerrain,
         ViewMode::Schematic,
         ViewMode::Faction,
         ViewMode::Event,
         ViewMode::Coastline,
-        ViewMode::GoogleMap,
     ];
 
     /// 顶栏显示名。
     pub fn label(self) -> &'static str {
         match self {
+            ViewMode::GoogleMap => "地图",
             ViewMode::RealTerrain => "真实地形",
             ViewMode::Schematic => "色块地形",
             ViewMode::Faction => "势力图",
             ViewMode::Event => "事件图",
             ViewMode::Coastline => "轮廓图",
-            ViewMode::GoogleMap => "谷歌风",
             // JRPG 未进 ALL（见上方注释），但仍需在此给出 label 以免 match 报错。
             ViewMode::JRPG => "JRPG",
         }
@@ -269,7 +271,8 @@ impl Default for BrushState {
             radius: 96.0,
             softness: 0.5,
             painting: false,
-            enabled: true,
+            // Google 式默认手势是左键拖动平移；笔刷必须显式开启，避免一开图就误改。
+            enabled: false,
         }
     }
 }
@@ -874,6 +877,17 @@ mod tests {
     use wv_core::time::TimeSpan;
     use wv_core::WorldMeta;
 
+    #[test]
+    fn google_map_is_the_default_map_experience() {
+        assert_eq!(ViewMode::default(), ViewMode::GoogleMap);
+        assert_eq!(ViewMode::ALL[0], ViewMode::GoogleMap);
+    }
+
+    #[test]
+    fn brush_starts_disabled_so_left_drag_pans_the_map() {
+        assert!(!BrushState::default().enabled);
+    }
+
     fn node(
         id: &str,
         name: &str,
@@ -891,6 +905,7 @@ mod tests {
             icons: Vec::new(),
             extent: None,
             raster: None,
+            geographic_source: None,
         }
     }
 

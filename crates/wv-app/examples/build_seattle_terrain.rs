@@ -88,8 +88,9 @@ fn main() {
     assert_eq!(back, data, "terrain.bin round-trip 必须无损");
     let project = wv_io::project::Project::open(&seattle_root).expect("打开工程失败");
     let world = project.load_world().expect("加载世界失败");
+    // Phase 2：地形按图存，这里取那张声明的 raster 所属图（`map_world`）。
     assert_eq!(
-        world.terrain.as_ref(),
+        world.terrain_of(&wv_core::Id::new_unchecked("map_world")),
         Some(&data),
         "load_world 应带出同一份地形"
     );

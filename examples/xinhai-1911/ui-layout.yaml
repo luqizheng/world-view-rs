@@ -1,9 +1,9 @@
 panels:
   brush:
     x: 12.0
-    y: 319.2
+    y: 304.0
     width: 280.0
-    height: 480.75684
+    height: 495.75684
     collapsed: false
     visible: true
   character:

@@ -250,7 +250,7 @@ impl CommandRegistry {
                     crate::state::ViewMode::Faction => "切换到势力图视图",
                     crate::state::ViewMode::Event => "切换到事件图视图",
                     crate::state::ViewMode::Coastline => "切换到轮廓图视图",
-                    crate::state::ViewMode::GoogleMap => "切换到谷歌风视图",
+                    crate::state::ViewMode::GoogleMap => "切换到地图视图",
                     // JRPG 未进 ALL，理论上不可达；但保留分支以防后续再启用。
                     crate::state::ViewMode::JRPG => "切换到 JRPG 视图",
                 },

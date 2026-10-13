@@ -1,0 +1,15 @@
+[package]
+name = "wv-overture"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "World View 真实地理底图读取层（ADR-0007）：不落几何、只存引用"
+
+# 依赖面纪律（AGENTS.md §9）：
+# - 当前 **零**运行时第三方依赖（仅 `wv-core`），
+#   因为 `segment_length_m()` 是纯函数，不需要 Parquet 解析。
+# - Parquet / Arrow 读取作为 T5 实施期再决定（README §17 schema 升级策略）。
+[dependencies]
+wv-core = { workspace = true }
+thiserror = { workspace = true }

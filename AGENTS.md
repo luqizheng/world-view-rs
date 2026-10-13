@@ -202,6 +202,13 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
+**渲染层必须单独跑一遍**（2026-10-13 追加）：`wv-app` 的渲染 / UI 模块全部挂在 `#[cfg(feature = "app")]` 之下，而该 feature **不在默认 feature 里**，所以上面三条命令**根本不编译它们**——实测 `cargo test -p wv-app`（不带 feature）报 `0 passed`，改坏 `terrain_view.rs` / `vector_layers.rs` 之类的文件可以一路绿灯。因此：
+
+```bash
+cargo test -p wv-app --features app
+cargo clippy -p wv-app --all-targets --features app -- -D warnings
+```
+
 ### 7.2 必须写测试的场景
 
 | 场景 | 要求 |

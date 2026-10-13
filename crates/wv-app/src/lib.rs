@@ -73,3 +73,5 @@ pub mod ui_tokens;
 pub mod validation_actions;
 #[cfg(feature = "app")]
 pub mod vector_layers;
+#[cfg(feature = "app")]
+pub mod zoom_level;

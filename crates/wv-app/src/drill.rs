@@ -39,7 +39,7 @@
 
 use bevy::prelude::*;
 
-use crate::state::{DrillState, GridConfig, ViewState, WorldProjection};
+use crate::state::{lod_tier, DrillState, GridConfig, LodTier, ViewState, WorldProjection};
 use crate::ui_theme::UiShellConfig;
 use crate::ui_tokens::UiTheme;
 use wv_core::id::Id;
@@ -55,10 +55,7 @@ pub const DRILL_TRANSITION_SECS: f32 = 0.380;
 const HIT_CELLS: f32 = 3.0;
 
 /// 子图没有 `extent` 时的兜底尺寸（与示例工程的 4096×4096 一致）。
-const FALLBACK_EXTENT: Extent = Extent {
-    width: 4096.0,
-    height: 4096.0,
-};
+const FALLBACK_EXTENT: Extent = Extent::sized(4096.0, 4096.0);
 
 /// 双击判定的时间窗（秒）与位移容差（世界单位）。
 const DOUBLE_CLICK_SECS: f64 = 0.40;
@@ -75,17 +72,76 @@ pub struct DrillClick {
 
 /// 把钻取相关的资源与系统注册进 `App`。
 pub fn register(app: &mut App) {
-    app.init_resource::<DrillClick>().add_systems(
-        Update,
-        (
-            drill_pick,
-            drill_transition,
-            draw_drill_markers,
-            // 地名标注在标记之后对齐（读同一份钻取状态，画在标记上方）。
-            update_place_labels,
-        )
-            .chain(),
+    app.init_resource::<DrillClick>()
+        .init_resource::<crate::zoom_level::ZoomCrossRequest>()
+        .add_systems(
+            Update,
+            (
+                // 换级必须排在 `drill_transition` **之前**：它要吃掉本帧的
+                // 「深度刚变」标记，否则过渡会在滚轮换级时把相机飞向标记点
+                // （换级的锚点是指针，不是标记）。
+                apply_zoom_cross,
+                drill_pick,
+                drill_transition,
+                draw_drill_markers,
+                // 地名标注在标记之后对齐（读同一份钻取状态，画在标记上方）。
+                update_place_labels,
+            )
+                .chain(),
+        );
+}
+
+/// 消费滚轮换级请求：撞到当前级的边界后继续同向滚动 = 换到相邻级（ADR-0009 §2 决策 ⑤/⑦）。
+///
+/// ## 为什么换级**不改缩放**
+///
+/// 子图 `extent` 比父图小，故 `child.min < parent.min`——滚到父图内界时那个 scale
+/// 早已落在子图区间内（[`crate::zoom_level`] 的模块文档有推导）。所以换级只需换
+/// 「现在显示哪张图的哪一块」，相机一个像素都不用动，手感才是连续的。
+///
+/// ## 为什么吃掉深度变化标记
+///
+/// `drill_transition` 的语义是「双击/面包屑跳转 → 飞向目标标记」。滚轮换级的锚点
+/// 是**指针**（指针下的世界点必须原地不动），若也飞向标记，画面会从指针处滑走。
+/// 于是本系统在真正换了级之后把 `take_depth_change` 的标记拿走，并自己同步相机。
+#[allow(clippy::too_many_arguments)]
+fn apply_zoom_cross(
+    mut cross: ResMut<crate::zoom_level::ZoomCrossRequest>,
+    mut drill: ResMut<DrillState>,
+    projection: Res<WorldProjection>,
+    windows: Query<&Window>,
+    mut view: ResMut<ViewState>,
+    mut camera: Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
+) {
+    let Some(request) = cross.pending.take() else {
+        return;
+    };
+    let moved = match request {
+        // 继续往外：回到父级。根图再往外没有父级，`up()` 自己会拒绝。
+        crate::zoom_level::ZoomCross::Out => drill.up(),
+        // 继续往里：进到光标所在的那个子图（`enter` 只接受真子图，越级会被拒）。
+        crate::zoom_level::ZoomCross::Into(child) => drill.enter(&projection.world, &child),
+    };
+    if !moved {
+        return;
+    }
+    // 换级由本系统接管取景，不让 `drill_transition` 再飞一次。
+    drill.take_depth_change();
+
+    let window_size = windows
+        .get_single()
+        .map(|w| w.resolution.size())
+        .unwrap_or(Vec2::new(1280.0, 800.0));
+    let zoom = crate::zoom_level::level_zoom(
+        &projection.world,
+        drill.current(),
+        window_size,
+        Vec2::splat(crate::zoom_level::FALLBACK_MAP_SIZE),
     );
+    // 新级区间比旧级更宽（往外）或更深（往里），夹一下以防数据异常把 scale
+    // 留在新级之外；正常情况下 `clamp` 是恒等变换。
+    view.scale = zoom.clamp(view.scale);
+    crate::camera::apply_view_to_camera(view.camera_center, view.scale, &mut camera);
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +247,28 @@ pub fn icon_local(extent: Option<Extent>, icon: &IconSpec) -> Vec2 {
     }
 }
 
+/// 一张图在世界坐标里的**图帧原点**（`MapFrame.world_origin`）。
+///
+/// 与 `grid.origin` **不是一回事**，这是本模块此前最深的坑：
+///
+/// | 量 | 含义 | 今天的取值 |
+/// |---|---|---|
+/// | `grid.origin` | 当前显示的**栅格纹理**在世界里的原点 | 恒为根图栅格的 `(0,0)` |
+/// | 本函数 | **当前这张图**在世界里的位置 | 逐层累积，可由父图钻入图标派生 |
+///
+/// 旧代码把两者当成同一个（都取 `grid.origin`），于是 1024×1024 的城市图上
+/// 声明了 `anchor: [0.5, 0.5]` 的图标，落到了 4096² 世界帧的左上四分之一处。
+/// 坐标链的**唯一**实现点是 [`wv_core::coord`]（基线 §2.15），本函数只做类型转换。
+///
+/// 坐标链断掉（图不在工程列表里 / 无 `extent`）时退回 `grid.origin`——
+/// 摆位宁可回到旧行为，也不能让整层标记消失。
+fn map_origin(world: &wv_core::World, node: &MapNode, grid: &GridConfig) -> Vec2 {
+    match wv_core::resolve_frame_in(&world.maps, &node.id) {
+        Some(frame) => Vec2::new(frame.world_origin.x, frame.world_origin.y),
+        None => grid.origin,
+    }
+}
+
 /// 当前层级下所有标记（显式图标 + 没有图标的子图）。
 ///
 /// 顺序 = 先**父图 `icons` 的声明顺序**，再**`children` 顺序里还没被图标覆盖的子图**。
@@ -207,7 +285,7 @@ pub fn resolve_markers(
     let Some(current) = drill.current_node(world) else {
         return Vec::new();
     };
-    let origin = grid.origin;
+    let origin = map_origin(world, current, grid);
     let level_of = |target: Option<&Id>| {
         target.and_then(|t| world.maps.iter().find(|m| &m.id == t).map(|m| m.level))
     };
@@ -300,23 +378,57 @@ pub fn marker_hit(
     best.map(|(id, _)| id)
 }
 
-/// 相机在某一层级的目标位置与缩放。
+/// 相机在某一层级的目标**位置**（世界坐标）。
 ///
-/// 位置 = 当前图在**父图**里的标记落点（世界坐标）。这样「双击菱形钻入」之后
+/// 位置 = 当前图在**父图**里的标记落点。这样「双击菱形钻入」之后
 /// 视野落点与刚才点的位置一致，不会跳到一个和新画面无关的地方。
 /// 根图没有父图，落点取图心。
-pub fn drill_target(world: &wv_core::World, drill: &DrillState, grid: &GridConfig) -> (Vec2, f32) {
+///
+/// 缩放**不在**这里给：目标缩放必须落在**新一级的缩放区间**内（ADR-0009 §2⑤），
+/// 见 [`drill_fly_scale`]。早期的硬编码 `4.0` 在分级后可能越出子图区间，
+/// 于是双击进城后第一次滚轮会被 clamp 硬拽一下——那是本条拆开的原因。
+pub fn drill_target(world: &wv_core::World, drill: &DrillState, grid: &GridConfig) -> Vec2 {
     let Some(current) = drill.current_node(world) else {
-        return (Vec2::ZERO, 1.0);
+        return Vec2::ZERO;
     };
-    let (local, scale) = match &current.parent {
-        Some(pid) if drill.depth() > 0 => match world.maps.iter().find(|m| &m.id == pid) {
-            Some(parent) => (marker_local_for(parent, &current.id), 4.0),
-            None => (extent_center(current), 1.0),
-        },
-        _ => (extent_center(current), 1.0),
-    };
-    (grid.origin + local, scale)
+    // 从父图钻进来：落点 = **父图的图帧原点** + 本图在父图局部坐标里的落点
+    // （即父图上那个入口图标的位置）。**不是** `grid.origin`——后者是栅格纹理的
+    // 原点，见 `map_origin`。用错会让第二级起的钻取落点整体偏到世界帧左上角。
+    if drill.depth() > 0 {
+        if let Some(parent) = current
+            .parent
+            .as_ref()
+            .and_then(|pid| world.maps.iter().find(|m| &m.id == pid))
+        {
+            let parent_origin = map_origin(world, parent, grid);
+            return parent_origin + marker_local_for(parent, &current.id);
+        }
+    }
+    // 其余情形（首次进入、父图悬空）：把相机放到**本图自己的中心**。
+    let origin = map_origin(world, current, grid);
+    origin + extent_center(current)
+}
+
+/// 相机过渡的目标**缩放**：落在当前级别的缩放区间内（ADR-0009 §2⑤）。
+///
+/// - 根级：保持历史行为 `1.0`（点击面包屑回世界）。
+/// - 子级：`fit`（整幅子图铺满窗口），但**不把已经放大的视野拉远**；
+///   最后再 clamp 进本级区间，保证过渡终点一定合法。
+pub fn drill_fly_scale(
+    world: &wv_core::World,
+    drill: &DrillState,
+    window_size: Vec2,
+    from_scale: f32,
+) -> f32 {
+    if drill.depth() == 0 {
+        return 1.0;
+    }
+    let size = crate::zoom_level::map_size_of(
+        world,
+        drill.current(),
+        Vec2::splat(crate::zoom_level::FALLBACK_MAP_SIZE),
+    );
+    crate::zoom_level::fly_in_scale(size, window_size, from_scale)
 }
 
 /// 当前图在**父图**里的局部落点：优先用指向它的显式图标，没有就回退到哈希摆位。
@@ -414,6 +526,7 @@ pub fn drill_pick(
 pub fn drill_transition(
     time: Res<Time>,
     buttons: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window>,
     projection: Res<WorldProjection>,
     grid: Res<GridConfig>,
     mut drill: ResMut<DrillState>,
@@ -443,7 +556,12 @@ pub fn drill_transition(
     *elapsed += time.delta_secs();
     let k = (*elapsed / DRILL_TRANSITION_SECS).clamp(0.0, 1.0);
     let e = ease_out_cubic(k);
-    let (to_pos, to_scale) = drill_target(&projection.world, &drill, &grid);
+    let window_size = windows
+        .get_single()
+        .map(|w| w.resolution.size())
+        .unwrap_or(Vec2::new(1280.0, 800.0));
+    let to_pos = drill_target(&projection.world, &drill, &grid);
+    let to_scale = drill_fly_scale(&projection.world, &drill, window_size, from_scale);
     let pos = from_pos.lerp(to_pos, e);
     let scale = from_scale + (to_scale - from_scale) * e;
 
@@ -520,6 +638,16 @@ pub struct PlaceLabel;
 
 /// 地名文字的屏幕像素基准（v0.2 §B.2 的 12px 标记同量级，不抢标记视觉）。
 const LABEL_PX: f32 = 12.0;
+/// 地名标注层：高于势力面（0.3）与 POI（0.22），低于笔刷光标（0.9）。
+const LABEL_Z: f32 = 0.4;
+
+/// 当前 LOD 下是否保留地名标注。
+///
+/// Google 式地图在国家级视野只给“城市级”地点留标签；渡口、关隘等点状小地点
+/// 等用户拉近后再出现，避免世界图被一屏小字淹没。
+fn place_label_kept_at_tier(w: Option<f32>, h: Option<f32>, tier: LodTier) -> bool {
+    tier != LodTier::Nation || matches!((w, h), (Some(_), Some(_)))
+}
 
 /// 更新当前层级的地名标注池。
 #[allow(clippy::type_complexity)]
@@ -543,15 +671,16 @@ pub fn update_place_labels(
     >,
 ) {
     // 期望标注集：锚定在当前地图、坐标齐备的地点（与道路层同一可见口径）。
+    let tier = lod_tier(view.scale);
     let mut wanted: Vec<(Vec2, &str)> = Vec::new();
     if let Some(current) = drill.current_node(&projection.world) {
         for p in &projection.world.distances.places {
-            if p.map.as_ref() == Some(&current.id) {
+            if p.map.as_ref() == Some(&current.id) && place_label_kept_at_tier(p.w, p.h, tier) {
                 if let (Some(x), Some(y)) = (p.x, p.y) {
-                    // 放在锚点正上方（世界单位，随 cell_size 缩放与标记尺寸同尺度）。
-                    let pos = crate::projection::world_to_view_pub(x, y, &grid)
-                        + Vec2::new(0.0, grid.cell_size * 2.0);
-                    wanted.push((pos, p.name.as_str()));
+                    wanted.push((
+                        crate::projection::world_to_view_pub(x, y, &grid),
+                        p.name.as_str(),
+                    ));
                 }
             }
         }
@@ -559,10 +688,15 @@ pub fn update_place_labels(
 
     // 文字尺寸按屏幕像素恒定（与 draw_drill_markers 的 screen_scale 口径一致）。
     let font_size = LABEL_PX * view.scale.max(0.05);
+    // Text2d 默认以文字中心为 transform 原点；上移约一个字高，避免压住 POI。
+    let label_offset = font_size * 0.9;
+    for (pos, _) in &mut wanted {
+        pos.y += label_offset;
+    }
     // CJK 字体（fonts.rs 在 Startup 注册）：缺省字体无中文字形，地名会成方块。
     let cjk = fonts.cjk_font.clone();
-    // 文字色按视图模式走 palette：谷歌风 = Retro JSON 的 `labels.text.fill`
-    // 暖深棕（`#f2e9d8` 光晕描边暂缺——Text2d 描边需自定义 shader，后续再做）。
+    // 文字色按视图模式走 palette：Google Default Map 用深灰标签；Text2d
+    // 光晕描边需自定义 shader，后续再补白 halo。
     let label_color = match view.mode {
         crate::state::ViewMode::GoogleMap => crate::palette_google::GOOGLE_LABEL_FILL,
         _ => bevy::color::Color::WHITE,
@@ -571,7 +705,7 @@ pub fn update_place_labels(
     let mut iter = q.iter_mut();
     for (pos, name) in &wanted {
         if let Some((_, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
-            tf.translation = pos.extend(0.0);
+            tf.translation = pos.extend(LABEL_Z);
             // Bevy 0.15：字号在 TextFont 组件上，Text2d 只存内容。
             *text = Text2d::new(*name);
             style.font_size = font_size;
@@ -591,7 +725,7 @@ pub fn update_place_labels(
                     ..Default::default()
                 },
                 TextColor(label_color),
-                Transform::from_translation(pos.extend(0.0)),
+                Transform::from_translation(pos.extend(LABEL_Z)),
                 Visibility::Visible,
             ));
         }
@@ -675,10 +809,39 @@ pub fn accent_for(theme: UiTheme) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
     use wv_core::World;
+
+    #[test]
+    fn nation_tier_keeps_only_city_labels() {
+        assert!(place_label_kept_at_tier(
+            Some(12.0),
+            Some(8.0),
+            LodTier::Nation
+        ));
+        assert!(!place_label_kept_at_tier(None, None, LodTier::Nation));
+        assert!(!place_label_kept_at_tier(Some(12.0), None, LodTier::Nation));
+        assert!(place_label_kept_at_tier(None, None, LodTier::Region));
+        assert!(place_label_kept_at_tier(None, None, LodTier::Edit));
+    }
 
     fn node(id: &str, level: MapLevel, parent: Option<&str>, children: &[&str]) -> MapNode {
         node_with_icons(id, level, parent, children, &[])
+    }
+
+    /// 同上，但可指定 `extent`——用于验证「子图落点由父图钻入图标派生」。
+    fn node_of_size(
+        id: &str,
+        level: MapLevel,
+        parent: Option<&str>,
+        children: &[&str],
+        icons: &[IconSpec],
+        extent: Option<Extent>,
+    ) -> MapNode {
+        MapNode {
+            extent,
+            ..node_with_icons(id, level, parent, children, icons)
+        }
     }
 
     /// 同上，但父图带显式图标——用于验证 `anchor` / `shape` / `size` / `color` 的落点。
@@ -697,11 +860,9 @@ mod tests {
             children: children.iter().map(|c| Id::new_unchecked(*c)).collect(),
             layers: Vec::new(),
             icons: icons.to_vec(),
-            extent: Some(Extent {
-                width: 4096.0,
-                height: 4096.0,
-            }),
+            extent: Some(Extent::sized(4096.0, 4096.0)),
             raster: None,
+            geographic_source: None,
         }
     }
 
@@ -766,10 +927,7 @@ mod tests {
     fn explicit_anchor_places_the_marker_where_the_author_wrote_it() {
         // 归一化锚点：0.25 / 0.5 落在 1000×500 的图上就是 (250, 250)，不加 12% 边距。
         let at = icon_local(
-            Some(Extent {
-                width: 1000.0,
-                height: 500.0,
-            }),
+            Some(Extent::sized(1000.0, 500.0)),
             &icon("icon_a", Some([0.25, 0.5]), None),
         );
         assert!(
@@ -930,7 +1088,7 @@ mod tests {
         drill.ensure_root(&world);
         let marker = &resolve_markers(&world, &drill, &grid, 1.0)[0];
         assert!(drill.enter(&world, &Id::new_unchecked("city_a")));
-        let got = drill_target(&world, &drill, &grid).0;
+        let got = drill_target(&world, &drill, &grid);
         assert!(
             got.distance(marker.center) < 1e-3,
             "相机落点 {got} 必须与双击时看到的标记位置一致"
@@ -940,6 +1098,67 @@ mod tests {
         assert!(
             got.distance(hash) > 1.0,
             "相机落点与哈希位置重合，图标锚点未生效"
+        );
+    }
+
+    #[test]
+    fn city_markers_land_in_the_citys_own_region_of_the_world_frame() {
+        // 回归（本轮修复的可见 bug）：世界图 4096² 上用 anchor [0.5,0.5] 标记某城，
+        // 城自己的图是 1024² 且**没有**声明 origin。旧实现把城市图的图标按 1024²
+        // 归一化后直接画在世界帧的 (512,512)——即左上四分之一处。正确落点是
+        // 世界图上那个图标的位置 (2048,2048)：图标标记的是城市的**中心**，
+        // 城市图左上角因此落在 (2048-512, 2048-512) = (1536,1536)。
+        let world = World {
+            maps: vec![
+                node_with_icons(
+                    "world_main",
+                    MapLevel::World,
+                    None,
+                    &["city_wuhan"],
+                    &[icon("icon_wuhan", Some([0.5, 0.5]), Some("city_wuhan"))],
+                ),
+                node_of_size(
+                    "city_wuhan",
+                    MapLevel::City,
+                    Some("world_main"),
+                    &[],
+                    &[icon("icon_hankou", Some([0.5, 0.5]), None)],
+                    Some(Extent::sized(1024.0, 1024.0)),
+                ),
+            ],
+            ..Default::default()
+        };
+        let grid = GridConfig::default();
+        let mut drill = DrillState::default();
+        drill.ensure_root(&world);
+
+        // 世界级：城市图标按**世界** extent(4096) 归一化 → (2048,2048)。
+        let world_marker = &resolve_markers(&world, &drill, &grid, 1.0)[0];
+        assert!(
+            world_marker.center.distance(Vec2::new(2048.0, 2048.0)) < 1e-3,
+            "世界级图标应落在 (2048,2048)；实得 {}",
+            world_marker.center
+        );
+
+        assert!(
+            drill.enter(&world, &Id::new_unchecked("city_wuhan")),
+            "应当能钻入城市"
+        );
+
+        // 城市级：图标按**城市** extent(1024) 归一化，但原点必须上溯到城市在世界里的
+        // 位置 (1536,1536)，而不是 `grid.origin`(0,0) → (1536+512, 1536+512)。
+        let city_marker = &resolve_markers(&world, &drill, &grid, 1.0)[0];
+        assert!(
+            city_marker.center.distance(Vec2::new(2048.0, 2048.0)) < 1e-3,
+            "城市级图标应落在城市中心 (2048,2048)；实得 {}（旧实现在 (512,512)）",
+            city_marker.center
+        );
+
+        // 钻入落点 = 城市中心，与图标位置一致：双击看到哪，钻进去就停在哪。
+        let target = drill_target(&world, &drill, &grid);
+        assert!(
+            target.distance(Vec2::new(2048.0, 2048.0)) < 1e-3,
+            "钻入落点应为城市中心 (2048,2048)；实得 {target}"
         );
     }
 
@@ -965,21 +1184,65 @@ mod tests {
     }
 
     #[test]
-    fn drill_target_zooms_in_only_below_the_root() {
+    fn drill_target_moves_to_the_parents_marker_and_not_to_the_hash() {
         let world = world_with_hierarchy();
         let grid = GridConfig::default();
         let mut drill = DrillState::default();
         drill.ensure_root(&world);
-        assert_eq!(drill_target(&world, &drill, &grid).1, 1.0, "根图不放大");
-
-        assert!(drill.enter(&world, &Id::new_unchecked("city_a")));
-        assert_eq!(drill_target(&world, &drill, &grid).1, 4.0, "钻入后放大");
 
         // 落点 = 该城市在父图里的标记位置（不跳到无关坐标）。
+        assert!(drill.enter(&world, &Id::new_unchecked("city_a")));
         let parent = world.maps.iter().find(|m| m.id.as_str() == "world_main");
         let expect =
             grid.origin + marker_local(parent.and_then(|p| p.extent), &Id::new_unchecked("city_a"));
-        assert!(drill_target(&world, &drill, &grid).0.distance(expect) < 1e-3);
+        assert!(drill_target(&world, &drill, &grid).distance(expect) < 1e-3);
+    }
+
+    /// 过渡的目标缩放必须落在**新一级**的区间内：历史上硬编码的 `4.0` 在
+    /// 一座 1024 的城市（区间 `[0.016, 2.0]`）里是越界的，进城后第一次滚轮
+    /// 会被 clamp 硬拽一下，LOD / 比例尺读数也跟着矛盾。
+    #[test]
+    fn drill_fly_scale_stays_inside_the_child_levels_band() {
+        let window = Vec2::new(1280.0, 800.0);
+        let world = World {
+            maps: vec![
+                node_with_icons(
+                    "world_main",
+                    MapLevel::World,
+                    None,
+                    &["city_a"],
+                    &[icon("icon_city_a", Some([0.5, 0.5]), Some("city_a"))],
+                ),
+                node_of_size(
+                    "city_a",
+                    MapLevel::City,
+                    Some("world_main"),
+                    &[],
+                    &[],
+                    Some(Extent::sized(1024.0, 1024.0)),
+                ),
+            ],
+            ..Default::default()
+        };
+        let mut drill = DrillState::default();
+        drill.ensure_root(&world);
+
+        // 根级保持历史行为：回世界时缩放到 1.0。
+        assert_eq!(drill_fly_scale(&world, &drill, window, 5.12), 1.0);
+
+        assert!(drill.enter(&world, &Id::new_unchecked("city_a")));
+        let got = drill_fly_scale(&world, &drill, window, 5.12);
+        let band = crate::zoom_level::LevelZoom::for_map(Vec2::splat(1024.0), window);
+        assert!(
+            (band.min..=band.max).contains(&got),
+            "目标缩放 {got} 必须落在城市级区间 [{}, {}] 内",
+            band.min,
+            band.max
+        );
+        assert!(
+            (got - band.fit).abs() < 1e-4,
+            "应把整座城放进窗口，got {got}"
+        );
     }
 
     #[test]
@@ -1016,5 +1279,234 @@ mod tests {
         let gold = Color::srgb_u8(0xF2, 0xC1, 0x4E);
         assert_ne!(dark, gold);
         assert_ne!(light, gold);
+    }
+
+    // -----------------------------------------------------------------------
+    // 滚轮换级（ADR-0009 §2 决策 ⑤/⑦）：`camera_zoom` 只发请求，这里消费。
+    // -----------------------------------------------------------------------
+
+    /// 两级世界：世界 4096²、城市 1024²（城市区间整体位于世界区间内侧）。
+    fn two_level_world() -> World {
+        World {
+            maps: vec![
+                node_of_size(
+                    "world_main",
+                    MapLevel::World,
+                    None,
+                    &["city_a"],
+                    &[],
+                    Some(Extent::sized(4096.0, 4096.0)),
+                ),
+                node_of_size(
+                    "city_a",
+                    MapLevel::City,
+                    Some("world_main"),
+                    &[],
+                    &[],
+                    Some(Extent::sized(1024.0, 1024.0)),
+                ),
+            ],
+            ..Default::default()
+        }
+    }
+
+    /// 只装 `apply_zoom_cross` 的最小 App：资源齐全 + 一台相机 + 一个窗口。
+    fn zoom_cross_app(world: World) -> App {
+        let mut app = App::new();
+        app.init_resource::<DrillState>()
+            .init_resource::<ViewState>()
+            .init_resource::<GridConfig>()
+            .init_resource::<crate::zoom_level::ZoomCrossRequest>()
+            .insert_resource(WorldProjection {
+                world,
+                ..Default::default()
+            })
+            .add_systems(Update, apply_zoom_cross);
+        app.world_mut().spawn((
+            Camera2d,
+            Transform::default(),
+            OrthographicProjection::default_2d(),
+        ));
+        app.world_mut().spawn(Window::default());
+        app
+    }
+
+    /// 滚轮往外换级：回到父级，且**缩放与相机中心一个像素都不动**
+    /// （连续性来自「换级不改 scale」，见 `zoom_level.rs`），
+    /// 同时吃掉深度变化标记，避免 `drill_transition` 再飞一次。
+    #[test]
+    fn zoom_cross_out_steps_up_a_level_and_leaves_the_camera_alone() {
+        let mut app = zoom_cross_app(two_level_world());
+        {
+            let world = app.world().resource::<WorldProjection>().world.clone();
+            let mut drill = app.world_mut().resource_mut::<DrillState>();
+            drill.ensure_root(&world);
+            assert!(
+                drill.enter(&world, &Id::new_unchecked("city_a")),
+                "前置条件：应先站在城市级"
+            );
+            assert_eq!(drill.depth(), 1);
+        }
+        app.world_mut().resource_mut::<ViewState>().scale = 1.0;
+        app.world_mut().resource_mut::<ViewState>().camera_center = Vec2::new(1500.0, 1200.0);
+        app.world_mut()
+            .resource_mut::<crate::zoom_level::ZoomCrossRequest>()
+            .pending = Some(crate::zoom_level::ZoomCross::Out);
+
+        app.update();
+
+        let drill = app.world().resource::<DrillState>();
+        assert_eq!(drill.depth(), 0, "应回到世界级");
+        assert_eq!(drill.current(), Some(&Id::new_unchecked("world_main")));
+        let view = app.world().resource::<ViewState>();
+        assert!(
+            (view.scale - 1.0).abs() < 1e-6,
+            "换级不得改缩放，got {}",
+            view.scale
+        );
+        assert_eq!(
+            view.camera_center,
+            Vec2::new(1500.0, 1200.0),
+            "换级不得移动相机中心"
+        );
+        assert!(
+            !app.world_mut()
+                .resource_mut::<DrillState>()
+                .take_depth_change(),
+            "换级后不该给 drill_transition 留下深度变化标记"
+        );
+    }
+
+    /// 滚轮往里换级：进入到请求指定的子图，缩放同样不动。
+    #[test]
+    fn zoom_cross_into_enters_the_requested_child() {
+        let mut app = zoom_cross_app(two_level_world());
+        {
+            let world = app.world().resource::<WorldProjection>().world.clone();
+            app.world_mut()
+                .resource_mut::<DrillState>()
+                .ensure_root(&world);
+        }
+        app.world_mut().resource_mut::<ViewState>().scale = 1.0;
+        app.world_mut()
+            .resource_mut::<crate::zoom_level::ZoomCrossRequest>()
+            .pending = Some(crate::zoom_level::ZoomCross::Into(Id::new_unchecked(
+            "city_a",
+        )));
+
+        app.update();
+
+        let drill = app.world().resource::<DrillState>();
+        assert_eq!(drill.depth(), 1, "应进入城市级");
+        assert_eq!(drill.current(), Some(&Id::new_unchecked("city_a")));
+        let view = app.world().resource::<ViewState>();
+        assert!(
+            (view.scale - 1.0).abs() < 1e-6,
+            "换级不得改缩放，got {}",
+            view.scale
+        );
+    }
+
+    /// 根级再往外没有父级：请求被吃掉、状态不变，不留悬挂请求
+    /// （否则下一次往外滚动会莫名其妙地生效）。
+    #[test]
+    fn zoom_cross_out_at_the_root_is_consumed_and_ignored() {
+        let mut app = zoom_cross_app(two_level_world());
+        {
+            let world = app.world().resource::<WorldProjection>().world.clone();
+            app.world_mut()
+                .resource_mut::<DrillState>()
+                .ensure_root(&world);
+        }
+        app.world_mut()
+            .resource_mut::<crate::zoom_level::ZoomCrossRequest>()
+            .pending = Some(crate::zoom_level::ZoomCross::Out);
+
+        app.update();
+
+        assert_eq!(app.world().resource::<DrillState>().depth(), 0);
+        assert!(
+            app.world()
+                .resource::<crate::zoom_level::ZoomCrossRequest>()
+                .pending
+                .is_none(),
+            "无论是否真的换级，请求都必须被消费"
+        );
+    }
+
+    /// **端到端**：真滚一次滚轮（`camera_zoom` 生产请求 + `apply_zoom_cross` 消费）
+    /// → 真的从世界级进到城市级。
+    ///
+    /// 为什么必须在这里钉住：合成鼠标输入进不了 winit（实测 `SendInput` 双击
+    /// 无法触发钻取），所以「滚轮换级」这条核心行为在 GUI 里无法自动化验证，
+    /// 只能让生产端与消费端在同一 App 里真跑一遍。
+    #[test]
+    fn a_real_wheel_event_past_the_inner_limit_enters_the_child_level() {
+        let mut world = two_level_world();
+        // 世界图上给城市一个入口图标，摆在正中 (2048,2048)。
+        if let Some(node) = world
+            .maps
+            .iter_mut()
+            .find(|m| m.id.as_str() == "world_main")
+        {
+            node.icons
+                .push(icon("icon_city_a", Some([0.5, 0.5]), Some("city_a")));
+        }
+
+        let mut app = App::new();
+        app.init_resource::<DrillState>()
+            .init_resource::<ViewState>()
+            .init_resource::<GridConfig>()
+            .init_resource::<crate::zoom_level::ZoomCrossRequest>()
+            .init_resource::<crate::camera::PointerOverUi>()
+            .add_event::<MouseWheel>()
+            .insert_resource(WorldProjection {
+                world,
+                ..Default::default()
+            })
+            .add_systems(
+                Update,
+                (crate::camera::camera_zoom, apply_zoom_cross).chain(),
+            );
+
+        let world = app.world().resource::<WorldProjection>().world.clone();
+        app.world_mut()
+            .resource_mut::<DrillState>()
+            .ensure_root(&world);
+        // 相机停在城市图标上；指针在窗口正中，于是「指针处的世界坐标」也是 (2048,2048)。
+        app.world_mut().spawn((
+            Camera2d,
+            Transform::from_xyz(2048.0, 2048.0, 0.0),
+            OrthographicProjection::default_2d(),
+        ));
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(640.0, 360.0)));
+        let window_id = app.world_mut().spawn(window).id();
+
+        // 先把缩放踩到世界级内界。
+        let inner = crate::zoom_level::level_zoom(
+            &world,
+            Some(&Id::new_unchecked("world_main")),
+            Vec2::new(1280.0, 720.0),
+            Vec2::splat(crate::zoom_level::FALLBACK_MAP_SIZE),
+        )
+        .min;
+        app.world_mut().resource_mut::<ViewState>().scale = inner;
+
+        app.world_mut().send_event(MouseWheel {
+            unit: MouseScrollUnit::Line,
+            x: 0.0,
+            y: -1.0,
+            window: window_id,
+        });
+        app.update();
+
+        let drill = app.world().resource::<DrillState>();
+        assert_eq!(
+            drill.current(),
+            Some(&Id::new_unchecked("city_a")),
+            "内界上继续往里滚，应真的进入城市级"
+        );
+        assert_eq!(drill.depth(), 1);
     }
 }

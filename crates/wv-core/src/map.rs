@@ -3,7 +3,9 @@
 //! 原则四（多地图层级）：世界 → 区域 → 城市 → 建筑，逐层引用，不重复存储。
 //! 原则五（图层化编辑）：每层可独立开关、锁定、调透明度、调整顺序。
 
-use crate::{color::Color, id::Id, time::TimeSpan};
+use crate::{
+    color::Color, geographic_source::GeographicSourceV1, geometry::Point, id::Id, time::TimeSpan,
+};
 
 /// 地图层级。由粗到细。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -45,6 +47,12 @@ pub struct MapNode {
     /// 地形/高度网格的二进制引用（原则三的唯一例外）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raster: Option<RasterRef>,
+    /// 真实地理底图引用（ADR-0007）。
+    ///
+    /// `None` 即虚构地图，`Some(...)` 即声明本图引用 Overture Maps 真实资源。
+    /// 真假地图由 `Option` 的 `None`/`Some` 派生——**不**另设 `geographic_kind` 字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geographic_source: Option<GeographicSourceV1>,
 }
 
 /// 地图图标的形状。
@@ -142,6 +150,14 @@ pub struct Layer {
     #[serde(default)]
     pub z: i32,
     /// 本图层数据的来源文件（相对工程根目录）。
+    ///
+    /// TODO(阶段三·街道图层): 本字段目前是**声明了但没人读**的空壳——
+    /// 全仓没有任何生产代码读取 `source`，示例 `maps/world/index.yaml` 里写的
+    /// `kind: road, source: roads.yaml` 也没有对应的 `roads.yaml` 文件。
+    /// 「缩放到街道」要求把这条链路补齐（手绘路网落 YAML / 真实路网走
+    /// Overture 引用，两者共用同一段流接口），方案见 ADR-0010 与 README §12 第 21 条。
+    /// 在补齐之前，渲染层画的「道路」来自 `distance.edges`（城市间连线），
+    /// **不是**街道路网。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 }
@@ -155,6 +171,10 @@ fn default_opacity() -> f32 {
 }
 
 /// 图层类别。
+///
+/// TODO(阶段三·街道图层): [`LayerKind::Road`] 同为**未被消费**的枚举值——
+/// 生产代码里没有任何分支处理它（只有 `wv-io` 的测试构造过 `Border`）。
+/// 「缩放到街道」需要它真正对应一份街道路网几何，见 ADR-0010。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LayerKind {
@@ -174,10 +194,78 @@ pub enum LayerKind {
 ///
 /// 决定：相遇判定改为「两 Track 的 Waypoint 在 `(place, day)` 上同时覆盖」，
 /// 完全不依赖坐标距离与换算。`Extent` 因此不再携带 `width_km`，相关字段全部撤除。
+///
+/// ## 追加（2026-10-13）：补上 `origin`，层级坐标嵌套由此可还原
+///
+/// 上文的裁定（撤除 `width_km`）**不变**：地面尺度依然不是本结构的职责。
+/// 但「多地图层级」（原则四）在**坐标**上一直缺一环——子图只知道自己的宽高，
+/// 不知道自己落在父图的哪个位置，于是「子图的局部坐标」无法上溯为世界坐标。
+///
+/// `origin` 补的就是这一环：**本图左上角在父图局部坐标系中的位置**。
+/// 它是 `Option`，`None` 表示**作者没有声明**（既有 YAML 无需改动）：
+///
+/// - 世界层没有父图，落点恒为 `(0, 0)`；
+/// - 子图未声明 `origin` 时，由**父图上指向它的钻入图标**派生
+///   （图标标记的是子图的中心，故落点 = 图标点 − 本图 extent/2）——
+///   作者在世界图上摆的那个城市图标，本来就是「这座城市在哪」的**唯一**书面表达，
+///   不该要求他把同一个位置再写一遍。显式声明时以声明为准（多入口场景）。
+///   派生规则与全部优先级见 [`crate::coord::resolve_frame_in`]。
+///
+/// ```text
+/// map_world  extent { width: 4096, height: 4096 }              origin 缺省
+///   └ map_city extent { width: 1024, height: 1024, origin:(512, 256) }
+///       └ 该城某点局部 (100, 40) → 世界坐标 (512+100, 256+40) = (612, 296)
+/// ```
+///
+/// 变换算法**只有一个实现点**：`crate::coord`（见 `docs/MAP_EDITOR_BASELINE_v1.md`
+/// §2.15「禁止多 System 各写一遍」）。本结构只存参数，不做计算。
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Extent {
     pub width: f32,
     pub height: f32,
+    /// 本图左上角在**父图局部坐标系**中的位置；`None` = 未声明（见上文派生规则）。
+    ///
+    /// 未声明时序列化会跳过本字段（`skip_serializing_if`），
+    /// 不会给既有地图 YAML 平添噪声。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Point>,
+}
+
+impl Extent {
+    /// 零范围。用于「图未声明 `extent`」的情形——此时坐标链仍可还原**位置**
+    /// （`origin` 由父图图标派生或为 0），但归一化坐标（UV）退化。见 `crate::coord`。
+    pub const ZERO: Extent = Extent {
+        width: 0.0,
+        height: 0.0,
+        origin: None,
+    };
+
+    /// 声明宽高、**不**声明落点：位置交给父图钻入图标派生（见 [`crate::coord`]）。
+    pub const fn sized(width: f32, height: f32) -> Extent {
+        Extent {
+            width,
+            height,
+            origin: None,
+        }
+    }
+
+    /// 显式声明落点：本图左上角落在父图局部坐标 `origin` 处。
+    ///
+    /// 显式声明**优先于**从钻入图标派生——同一张子图有多个入口
+    /// （父图上有多个 `drill_into` 指向它）时，只有作者能决定以哪个为准。
+    pub const fn at(width: f32, height: f32, origin: Point) -> Extent {
+        Extent {
+            width,
+            height,
+            origin: Some(origin),
+        }
+    }
+
+    /// 落点，未声明时为 `(0, 0)`。**不含**任何派生逻辑——
+    /// 需要派生请走 [`crate::coord::resolve_frame_in`]。
+    pub fn origin_or_global(&self) -> Point {
+        self.origin.unwrap_or(Point::ORIGIN)
+    }
 }
 
 /// 二进制分块引用。

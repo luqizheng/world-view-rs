@@ -138,6 +138,7 @@ mod tests {
             layers: vec![],
             extent: None,
             raster: None,
+            geographic_source: None,
         }
     }
 

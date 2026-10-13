@@ -27,3 +27,12 @@ rfd = { workspace = true, optional = true }
 [[bin]]
 name = "wv"
 path = "src/main.rs"
+
+# 这些示例直接使用 app-only 渲染模块；无 feature 的 `--all-targets` 不应编译它们。
+[[example]]
+name = "render_map_modes"
+required-features = ["app"]
+
+[[example]]
+name = "build_seattle_terrain"
+required-features = ["app"]

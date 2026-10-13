@@ -7,15 +7,20 @@
 //! - 本 crate 不得引入任何渲染/UI 依赖。
 //! - 历史状态以「带时间区间的状态片段」存储，不存「当前值」。
 
+use std::collections::BTreeMap;
+
 pub mod color;
+pub mod coord;
 pub mod distance;
 pub mod encounter;
 pub mod error;
 pub mod faction;
+pub mod geographic_source;
 pub mod geometry;
 pub mod id;
 pub mod map;
 pub mod narration;
+pub mod overture_id;
 pub mod situation;
 pub mod time;
 pub mod track;
@@ -23,12 +28,16 @@ pub mod unit;
 
 pub use character::Character;
 pub use color::Color;
+pub use coord::{resolve_frame, resolve_frame_in, FrameNode, MapFrame};
 pub use encounter::{detect_encounter_hints, EncounterHint, EncounterInput, HintSeverity};
 pub use error::{CoreError, CoreResult};
 pub use event::{Event, EventLocation};
 pub use faction::{factions_at, Faction};
+pub use geographic_source::{GeographicSourceV1, LatLonBbox};
+pub use geometry::Point;
 pub use id::{Id, IdError};
 pub use narration::Narration;
+pub use overture_id::{OvertureId, OvertureIdError};
 pub use situation::{Situation, SituationStep};
 pub use time::{Calendar, TimePoint, TimeSpan};
 pub use track::{Track, Waypoint};
@@ -99,7 +108,7 @@ pub struct World {
     /// `GeometrySpan.owner` 引用 `factions` 中的 `Faction.id`。
     /// 想要「某时刻某地图上所有势力 + 多边形」走 [`crate::factions_at`]。
     pub faction_geometry: Vec<map::GeometrySpan>,
-    /// 主地形栅格网格。
+    /// 各图各自的**地形栅格**，键 = [`map::MapNode::id`]。
     ///
     /// 注意：`wv-core` **不认识** `wv_terrain::TerrainGrid`（不依赖 wv-terrain，基线 §2.1）。
     /// 因此这里存的是**该网格的二进制投影** `terrain.bin` 的原始单元格数据，
@@ -108,7 +117,38 @@ pub struct World {
     ///
     /// 之所以放在 `World` 上而非 ECS：地形是 P3 唯一进二进制的一等数据，
     /// 必须与其它领域数据同处一个聚合快照中，才能被 Undo/快照一致地处理。
-    pub terrain: Option<terrain::TerrainData>,
+    ///
+    /// **追加（2026-10-13，Phase 2）：单张 → 按图索引。**
+    /// 原先这里是 `terrain: Option<TerrainData>`——整个世界只能有一张栅格，
+    /// 于是「城市图有自己的底图」在数据模型里**无处可放**（`wv-io` 的加载器
+    /// 也只能取第一张声明了 `raster` 的图）。改为按图 ID 索引后：
+    ///
+    /// - 一张图 = 0 或 1 份栅格，与 `MapNode.raster` 一一对应（`raster` 只存
+    ///   **元数据**：路径/尺寸/编码/校验和；单元格数据在这里，仍是单一真源）；
+    /// - 它仍是 `World` 的字段，所以 Undo / 快照 / 脏路径的语义**原样不变**（P6）；
+    /// - 不新增「当前图」这类会随时间/视图变化的字段（P7 不受影响）。
+    ///
+    /// **驻留策略待裁**（README §12-19：全部常驻内存？还是按当前图懒加载 + 淘汰？）。
+    /// 当前实现选**最容易回退**的做法：`wv-io` 加载时把每张声明了 `raster` 的图
+    /// 全部读入，不做淘汰。将来引入懒加载时，本字段的**形状不必再改**——
+    /// 撤掉的是「何时填、何时清」，不是键值结构。
+    pub terrains: BTreeMap<Id, terrain::TerrainData>,
+}
+
+impl World {
+    /// 取某张图的地形栅格（未声明则 `None`）。
+    pub fn terrain_of(&self, map: &Id) -> Option<&terrain::TerrainData> {
+        self.terrains.get(map)
+    }
+
+    /// 写入某张图的地形栅格，返回被替换掉的旧值（首次写入时为 `None`）。
+    pub fn set_terrain(
+        &mut self,
+        map: Id,
+        data: terrain::TerrainData,
+    ) -> Option<terrain::TerrainData> {
+        self.terrains.insert(map, data)
+    }
 }
 
 /// 栅格地形的**中立数据表示**（与 `wv-terrain` 解耦的桥）。

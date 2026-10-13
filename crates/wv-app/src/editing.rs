@@ -20,7 +20,7 @@
 use bevy::prelude::*;
 
 use crate::camera::ActiveStroke;
-use crate::state::{BrushState, GridConfig, PlaybackState, ViewState, WorldProjection};
+use crate::state::{BrushState, DrillState, GridConfig, PlaybackState, ViewState, WorldProjection};
 use crate::terrain_view::{image_from_terrain, TerrainTexture, TileAtlas};
 use wv_core::Id;
 use wv_edit::command::PaintTerrainCommand;
@@ -190,12 +190,15 @@ fn stroke_bbox_in_cells(stroke: &TerrainStroke, grid: &GridConfig) -> [u32; 4] {
 pub fn flush_terrain_texture(
     mut tex: ResMut<TerrainTexture>,
     projection: Res<WorldProjection>,
+    drill: Res<DrillState>,
     view: Res<ViewState>,
     atlas: Option<Res<TileAtlas>>,
     mut images: ResMut<Assets<Image>>,
 ) {
     let Some(rect) = tex.dirty else { return };
-    let Some(data) = projection.world.terrain.as_ref() else {
+    // Phase 2：取**纹理正在显示的那张图**的地形（当前图或它向上继承到的祖先图）。
+    let Some(data) = crate::terrain_view::texture_terrain(&tex, &projection.world, drill.current())
+    else {
         tex.dirty = None;
         return;
     };
@@ -277,7 +280,12 @@ pub fn apply_history_command(
     // 变化包围盒，只把该矩形标脏——避免 `mark_all_dirty` 引发的整图重建。
     // 512² 地形 ≈ 786KB 克隆 + 一次 O(N) 比较，亚毫秒级；换来的收益是
     // 撤销一笔刷只重算笔刷包围盒而非整图（~80ms → <1ms）。
-    let before = projection.world.terrain.as_ref().map(|t| t.cells.clone());
+    //
+    // Phase 2：快照对象必须是**纹理正在显示的那张图**的地形（当前图或它继承到的
+    // 祖先图），否则 diff 出的矩形会落在另一张图上。cells 一并 clone 出来，
+    // 免得 `after` 借着 `tex` 而后面又要 `tex.mark_dirty`。
+    let before =
+        crate::terrain_view::texture_terrain(tex, &projection.world, None).map(|t| t.cells.clone());
     let result = if redo {
         edit.history.redo(&mut projection.world)
     } else {
@@ -286,12 +294,13 @@ pub fn apply_history_command(
     match result {
         Ok(true) => {
             projection.dirty = true;
-            let after = projection.world.terrain.as_ref();
+            let after = crate::terrain_view::texture_terrain(tex, &projection.world, None)
+                .map(|t| (t.width.max(1), t.cells.clone()));
             match (before, after) {
-                (Some(b), Some(a)) if b.len() == a.cells.len() => {
+                (Some(b), Some((w, a))) if b.len() == a.len() => {
                     // 有变化区域 → 增量重传该矩形；无地形变化（撤销的可能是
                     // 非地形命令）→ 不动纹理。
-                    if let Some(rect) = terrain_diff_bbox(&b, &a.cells, a.width.max(1)) {
+                    if let Some(rect) = terrain_diff_bbox(&b, &a, w) {
                         tex.mark_dirty(rect);
                     }
                 }

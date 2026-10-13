@@ -597,6 +597,7 @@ fn startup_load(
     if projection.load_error.is_none() {
         adopt_loaded_world(
             &mut projection,
+            &drill,
             &mut playback,
             &mut view,
             &mut tex,
@@ -617,8 +618,12 @@ fn startup_load(
 ///    （`setup_camera` 只在 Startup 跑一次），只写 ViewState 相机纹丝不动；
 /// 3. `PlaybackState` 按新工程 `timeline/axis.yaml` 重置，当前日回到起点
 ///    （旧工程的播放日可能落在新范围之外）。
+// 参数偏多：本函数是「加载成功后接管运行期资源」的清单，逐项对应一个资源，
+// 拆成结构体只是把同一份清单挪个地方，反而看不清谁被接管。
+#[allow(clippy::too_many_arguments)]
 fn adopt_loaded_world(
     projection: &mut WorldProjection,
+    drill: &DrillState,
     playback: &mut PlaybackState,
     view: &mut ViewState,
     tex: &mut TerrainTexture,
@@ -626,25 +631,24 @@ fn adopt_loaded_world(
     images: &mut Assets<Image>,
     cameras: &mut Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
 ) {
-    // 地形保底（与 `setup_terrain_texture_after_world` 同一不变量：terrain 总是 Some）。
-    if projection.world.terrain.is_none() {
-        projection.world.terrain = Some(crate::terrain_view::placeholder_terrain(512, 512));
-    }
-    let data = projection.world.terrain.clone().unwrap();
+    // 地形保底（与 `setup_terrain_texture_after_world` 同一不变量：总有底图可用）。
+    // Phase 2：底图按图存，取「当前图向上的第一张自带栅格」，都没有才塞占位。
+    let (map, data) = crate::terrain_view::active_terrain_or_placeholder(
+        &mut projection.world,
+        drill.current(),
+        512,
+    );
     let image =
         crate::terrain_view::image_from_terrain(&data, view.mode, atlas, view.terrain_soften);
-    let res = atlas.map_or(1, |_| {
-        crate::terrain_view::tile_res_for(data.width.max(data.height))
-    });
-    *tex = TerrainTexture {
-        handle: images.add(image),
-        size: data.width.max(1),
-        res,
-        dirty: None,
-        chunks_dirty: None,
-        last_mode: Some(view.mode),
-        last_soften: view.terrain_soften,
-    };
+    crate::terrain_view::replace_terrain_texture(
+        tex,
+        images,
+        image,
+        &data,
+        map,
+        view.mode,
+        view.terrain_soften,
+    );
     // 整图内容已整体替换：chunk 层全量重贴。
     tex.mark_all_dirty();
     let (center, scale) = crate::gui::fit_view_for_world(&projection.world);

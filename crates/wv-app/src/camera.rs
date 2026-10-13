@@ -15,9 +15,11 @@ use bevy_egui::EguiContexts;
 
 use crate::state::{BrushState, DrillState, GridConfig, ViewState, WorldProjection};
 
-/// 相机缩放范围（基线 §2.12：渲染层 0.1×–8.0×）。
-pub const SCALE_MIN: f32 = 0.1;
-pub const SCALE_MAX: f32 = 8.0;
+// 缩放区间不再用全局常量：它按**当前级**（`drill` 所在那张图的 `extent`）实时算，
+// 见 `crate::zoom_level` 与 ADR-0009 §2 决策 ⑤。历史上的
+// `SCALE_MIN = 0.1` / `SCALE_MAX = 8.0` 已删除——它们是单级地图时代的产物，
+// 在分级缩放里会把深处挡在门外（世界级的外界 8.0 与历史值逐值相同，
+// 由 `LEVEL_OVERVIEW` 标定保证，见 `zoom_level.rs`）。
 
 /// 正在拖拽的笔触（世界坐标点列）。松手时交给 `editing` 生成命令。
 #[derive(Resource, Default)]
@@ -62,11 +64,23 @@ pub fn poll_egui_wants_input(mut contexts: EguiContexts, mut flag: ResMut<Pointe
 }
 
 /// 滚轮缩放：锚点 = 鼠标指针（零惯性）。
+///
+/// 缩放区间按当前级实时算（`crate::zoom_level`），故需要 `projection`（读 `extent`）
+/// 与 `drill`（读「现在在哪一级」）。撞到级的边界后**继续同向滚动**表示「换级」，
+/// 本函数只把意图写进 [`crate::zoom_level::ZoomCrossRequest`]，真正的换级由
+/// [`crate::drill::apply_zoom_cross`] 执行（地图路径的写入口只有 `DrillState`）。
+///
+/// Bevy 系统的参数即「依赖声明」，宽签名是框架惯例而非坏味道（同 `drill.rs`）。
+#[allow(clippy::too_many_arguments)]
 pub fn camera_zoom(
     mut scroll: EventReader<MouseWheel>,
     windows: Query<&Window>,
     mut camera: Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
     mut view: ResMut<ViewState>,
+    projection: Res<WorldProjection>,
+    drill: Res<DrillState>,
+    grid: Res<GridConfig>,
+    mut cross: ResMut<crate::zoom_level::ZoomCrossRequest>,
     ui: Res<PointerOverUi>,
 ) {
     if ui.wants_pointer {
@@ -95,19 +109,45 @@ pub fn camera_zoom(
 
     let old_scale = view.scale;
     let factor = (1.0 + scroll_y * 0.12).clamp(0.5, 2.0);
-    let new_scale = (old_scale * factor).clamp(SCALE_MIN, SCALE_MAX);
-    if (new_scale - old_scale).abs() < f32::EPSILON {
-        return;
-    }
+    let size = window.resolution.size();
+    let zoom = crate::zoom_level::level_zoom(
+        &projection.world,
+        drill.current(),
+        size,
+        Vec2::splat(crate::zoom_level::FALLBACK_MAP_SIZE),
+    );
+    let new_scale = zoom.clamp(old_scale * factor);
 
     // 指针处的世界坐标在缩放前后保持不变（锚点 = 指针）。
-    let size = window.resolution.size();
     let cursor_ndc = Vec2::new(
         (cursor.x / size.x) * 2.0 - 1.0,
         -((cursor.y / size.y) * 2.0 - 1.0),
     );
     let cursor_world_before =
         transform.translation.truncate() + cursor_ndc * (size * 0.5) * old_scale;
+
+    // 撞界后继续同向滚动 = 请求换级。**必须在「值没变就返回」之前判**：
+    // 撞界时 `new_scale == old_scale`，恰恰是下面那个提前返回会吞掉的情形。
+    if factor > 1.0 && zoom.at_outer_limit(old_scale) {
+        // 继续往外：回到父级（世界级再往外没有父级，消费方会自行忽略）。
+        cross.pending = Some(crate::zoom_level::ZoomCross::Out);
+    } else if factor < 1.0 && zoom.at_inner_limit(old_scale) {
+        // 继续往里：光标所在的那个子图。用与双击同一套命中测试——不然
+        // 「双击能进的图，滚轮进不去」会让人以为坏了。
+        if let Some(child) = crate::drill::marker_hit(
+            &projection.world,
+            &drill,
+            &grid,
+            cursor_world_before,
+            old_scale,
+        ) {
+            cross.pending = Some(crate::zoom_level::ZoomCross::Into(child));
+        }
+    }
+
+    if (new_scale - old_scale).abs() < f32::EPSILON {
+        return;
+    }
 
     // `Camera2d` 用独立的 `OrthographicProjection` 组件（不是 `Projection` 枚举）。
     ortho.scale = new_scale;
@@ -127,13 +167,14 @@ pub fn camera_pan(
     mut motion: EventReader<bevy::input::mouse::MouseMotion>,
     mut camera: Query<&mut Transform, With<Camera2d>>,
     mut view: ResMut<ViewState>,
+    brush: Res<BrushState>,
     ui: Res<PointerOverUi>,
     windows: Query<&Window>,
 ) {
     if ui.wants_pointer {
         return;
     }
-    if !(buttons.pressed(MouseButton::Right) || buttons.pressed(MouseButton::Middle)) {
+    if !pan_button_pressed(&buttons, brush.enabled) {
         return;
     }
     let Ok(window) = windows.get_single() else {
@@ -155,6 +196,16 @@ pub fn camera_pan(
     transform.translation.y += world_delta.y;
     view.camera_center = transform.translation.truncate();
     let _ = window;
+}
+
+/// 当前按下的按钮是否应该平移地图。
+///
+/// 左键遵循 Google Maps 手势：默认拖动平移；只有作者显式启用笔刷时才让渡给
+/// 笔刷。右键 / 中键始终保留给平移，作为精确编辑时的逃生通道。
+fn pan_button_pressed(buttons: &ButtonInput<MouseButton>, brush_enabled: bool) -> bool {
+    buttons.pressed(MouseButton::Right)
+        || buttons.pressed(MouseButton::Middle)
+        || (!brush_enabled && buttons.pressed(MouseButton::Left))
 }
 
 /// 屏幕坐标 → 世界坐标（基线 §2.15 变换链，唯一实现）。
@@ -332,4 +383,201 @@ pub fn brush_radius_scroll(
     brush.radius = (brush.radius * factor).clamp(grid.cell_size * 2.0, 600.0);
     // grid 保持可变以允许后续同步其它参数。
     let _ = &mut grid;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::input::mouse::MouseScrollUnit;
+    use wv_core::id::Id;
+    use wv_core::map::{IconShape, IconSpec, MapLevel, MapNode};
+
+    /// Google 式地图的默认手势是左键拖拽平移；只有显式启用笔刷时左键才归笔刷。
+    #[test]
+    fn left_drag_pans_when_brush_is_disabled() {
+        let mut buttons = ButtonInput::<MouseButton>::default();
+        buttons.press(MouseButton::Left);
+        assert!(pan_button_pressed(&buttons, false));
+        assert!(!pan_button_pressed(&buttons, true));
+    }
+
+    /// 世界 4096²（`fit` 5.12 → 区间 `[0.064, 8.0]`）+ 一座 1024² 的城市，
+    /// 城市入口图标摆在世界图正中 (2048,2048)。
+    fn two_level_world() -> wv_core::World {
+        let icon = IconSpec {
+            id: Id::new_unchecked("icon_city_a"),
+            anchor: Some([0.5, 0.5]),
+            shape: IconShape::Diamond,
+            size: None,
+            color: None,
+            drill_into: Some(Id::new_unchecked("city_a")),
+        };
+        let node = |id: &str,
+                    level: MapLevel,
+                    parent: Option<&str>,
+                    children: &[&str],
+                    extent: f32,
+                    icons: Vec<IconSpec>| MapNode {
+            id: Id::new_unchecked(id),
+            name: id.to_owned(),
+            level,
+            parent: parent.map(Id::new_unchecked),
+            children: children.iter().map(|c| Id::new_unchecked(*c)).collect(),
+            layers: Vec::new(),
+            icons,
+            extent: Some(wv_core::map::Extent::sized(extent, extent)),
+            raster: None,
+            geographic_source: None,
+        };
+        wv_core::World {
+            maps: vec![
+                node(
+                    "map_world",
+                    MapLevel::World,
+                    None,
+                    &["city_a"],
+                    4096.0,
+                    vec![icon],
+                ),
+                node(
+                    "city_a",
+                    MapLevel::City,
+                    Some("map_world"),
+                    &[],
+                    1024.0,
+                    Vec::new(),
+                ),
+            ],
+            ..Default::default()
+        }
+    }
+
+    /// 一个只装了 `camera_zoom` 的 App：相机在世界图正中，指针停在窗口正中，
+    /// 于是「指针处的世界坐标」恰好是城市入口图标 (2048,2048)。
+    fn zoom_app(scale: f32) -> App {
+        let world = two_level_world();
+        let mut drill = DrillState::default();
+        drill.ensure_root(&world);
+
+        let mut app = App::new();
+        let view = ViewState {
+            scale,
+            ..Default::default()
+        };
+        app.init_resource::<PointerOverUi>()
+            .init_resource::<GridConfig>()
+            .init_resource::<crate::zoom_level::ZoomCrossRequest>()
+            .add_event::<MouseWheel>()
+            .insert_resource(view)
+            .insert_resource(drill)
+            .insert_resource(WorldProjection {
+                world,
+                ..Default::default()
+            })
+            .add_systems(Update, camera_zoom);
+
+        app.world_mut().spawn((
+            Camera2d,
+            Transform::from_xyz(2048.0, 2048.0, 0.0),
+            OrthographicProjection::default_2d(),
+        ));
+        let mut window = Window::default();
+        // `Window::default()` = 1280×720，正中即缩放锚点。
+        window.set_cursor_position(Some(Vec2::new(640.0, 360.0)));
+        let window_id = app.world_mut().spawn(window).id();
+        app.insert_resource(TestWindow(window_id));
+        app
+    }
+
+    #[derive(Resource)]
+    struct TestWindow(Entity);
+
+    /// 世界级区间。**必须**从 `zoom_level` 现算而不是写死常量：窗口尺寸决定了 `fit`
+    /// （`Window::default()` 是 1280×720，`fit = 4096/720 ≈ 5.688`，不是 800 高时的 5.12）。
+    fn world_band() -> crate::zoom_level::LevelZoom {
+        crate::zoom_level::level_zoom(
+            &two_level_world(),
+            Some(&Id::new_unchecked("map_world")),
+            Vec2::new(1280.0, 720.0),
+            Vec2::splat(crate::zoom_level::FALLBACK_MAP_SIZE),
+        )
+    }
+
+    fn scroll(app: &mut App, y: f32) {
+        let window = app.world().resource::<TestWindow>().0;
+        app.world_mut().send_event(MouseWheel {
+            unit: MouseScrollUnit::Line,
+            x: 0.0,
+            y,
+            window,
+        });
+    }
+
+    /// 已在**外界**还继续往外滚 = 请求上溯一级。
+    #[test]
+    fn camera_zoom_requests_a_step_out_at_the_outer_limit() {
+        let mut app = zoom_app(world_band().max);
+        scroll(&mut app, 1.0); // y > 0 → factor > 1 → 缩小（往外）
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<crate::zoom_level::ZoomCrossRequest>()
+                .pending,
+            Some(crate::zoom_level::ZoomCross::Out),
+            "踩在外界上继续往外滚，必须发出「上溯一级」的请求"
+        );
+    }
+
+    /// 已在**内界**且指针压在城市入口上时继续往里滚 = 请求进入该城。
+    #[test]
+    fn camera_zoom_requests_a_step_into_the_child_under_the_cursor() {
+        let mut app = zoom_app(world_band().min);
+        scroll(&mut app, -1.0); // y < 0 → factor < 1 → 放大（往里）
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<crate::zoom_level::ZoomCrossRequest>()
+                .pending,
+            Some(crate::zoom_level::ZoomCross::Into(Id::new_unchecked(
+                "city_a"
+            ))),
+            "指针在城市图标上继续往里滚，必须请求进入该城"
+        );
+    }
+
+    /// 区间**中间**的滚动只是缩放，不得换级——否则正常缩放会莫名换图。
+    #[test]
+    fn camera_zoom_does_not_cross_in_the_middle_of_the_band() {
+        let fit = world_band().fit;
+        let mut app = zoom_app(fit);
+        scroll(&mut app, -1.0);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<crate::zoom_level::ZoomCrossRequest>()
+                .pending,
+            None
+        );
+        let view = app.world().resource::<ViewState>();
+        assert!(view.scale < fit, "中间地带只缩放，got {}", view.scale);
+    }
+
+    /// 指针在面板上时不吃滚轮（面板自己要滚），也不得因此换级。
+    #[test]
+    fn camera_zoom_ignores_scroll_over_ui() {
+        let max = world_band().max;
+        let mut app = zoom_app(max);
+        app.world_mut()
+            .resource_mut::<PointerOverUi>()
+            .wants_pointer = true;
+        scroll(&mut app, 1.0);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<crate::zoom_level::ZoomCrossRequest>()
+                .pending,
+            None
+        );
+        assert_eq!(app.world().resource::<ViewState>().scale, max);
+    }
 }

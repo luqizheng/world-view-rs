@@ -22,9 +22,11 @@ use crate::editing;
 use crate::faction_overlays;
 use crate::map_frame;
 use crate::projection;
-use crate::state::{BrushState, GridConfig, PanelState, PlaybackState, ViewState, WorldProjection};
+use crate::state::{
+    BrushState, DrillState, GridConfig, PanelState, PlaybackState, ViewState, WorldProjection,
+};
 use crate::terrain_chunks;
-use crate::terrain_view::{self, TerrainTexture};
+use crate::terrain_view;
 use crate::ui;
 use crate::vector_layers::{self, VectorLayerEntities};
 use crate::AppConfig;
@@ -53,7 +55,7 @@ pub fn run(config: AppConfig) {
                 }),
                 ..Default::default()
             })
-            // 编辑器是工具，不是游戏：图像用最近邻采样，避免色块被平滑成糊。
+            // 全局保持最近邻采样；Google 模式的 chunk 纹理会单独切线性采样。
             .set(ImagePlugin::default_nearest()),
     )
     .add_plugins(EguiPlugin)
@@ -171,6 +173,8 @@ pub fn run(config: AppConfig) {
             // `ResMut<ViewState>`，Bevy 无法并行调度同时可变借用同一资源的系统
             // （否则运行期 panic：`could not access system parameter`）。
             ui::top_bar,
+            // Google 式贴边导航控件先画，浮动面板仍可在需要时覆盖它。
+            ui::map_controls,
             // 面包屑浮在地图上、压在面板之下（v0.2 §B.3）。
             ui::breadcrumb,
             ui::panel_map_tree,
@@ -225,36 +229,31 @@ fn setup_camera(mut commands: Commands, view: Option<Res<ViewState>>) {
 
 /// 地形纹理的初始化必须在 `WorldProjection` 就位之后。
 ///
-/// 保证地形数据存在：若工程没带 `terrain`，用占位地形填进世界，
-/// 这样笔刷编辑与纹理重建都有统一的数据源。
+/// 保证地形数据存在：若**当前图及其祖先**都没带栅格，用占位地形填进根图，
+/// 这样笔刷编辑与纹理重建都有统一的数据源（Phase 2：地形按图存，见
+/// [`terrain_view::active_terrain`]）。
 fn setup_terrain_texture_after_world(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut projection: ResMut<WorldProjection>,
+    drill: Res<DrillState>,
     view: Res<ViewState>,
 ) {
     // 瓦片图集（README §12-14）：加载失败静默回退纯色平涂。
     let atlas = terrain_view::ensure_atlas(&mut commands);
-    if projection.world.terrain.is_none() {
-        // 原型默认 512×512 占位（基线 §2.19：1024² 亦轻松 60 FPS）。
-        projection.world.terrain = Some(terrain_view::placeholder_terrain(512, 512));
-    }
-    let data = projection.world.terrain.clone().unwrap();
+    // 原型默认 512×512 占位（基线 §2.19：1024² 亦轻松 60 FPS）。
+    let (map, data) =
+        terrain_view::active_terrain_or_placeholder(&mut projection.world, drill.current(), 512);
     let image =
         terrain_view::image_from_terrain(&data, view.mode, atlas.as_ref(), view.terrain_soften);
-    let res = atlas.map_or(1, |_| {
-        terrain_view::tile_res_for(data.width.max(data.height))
-    });
-    let handle = images.add(image);
-    commands.insert_resource(TerrainTexture {
-        handle,
-        size: data.width.max(1),
-        res,
-        dirty: None,
-        chunks_dirty: None,
-        last_mode: Some(view.mode),
-        last_soften: view.terrain_soften,
-    });
+    commands.insert_resource(terrain_view::new_terrain_texture(
+        &mut images,
+        image,
+        &data,
+        map,
+        view.mode,
+        view.terrain_soften,
+    ));
 }
 
 /// 按世界内容计算初始取景（中心 + 缩放）。

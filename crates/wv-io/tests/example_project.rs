@@ -100,6 +100,7 @@ fn map_node_yaml_round_trips() {
         ],
         extent: None,
         raster: None,
+        geographic_source: None,
     };
 
     let text = serde_yaml::to_string(&node).unwrap();

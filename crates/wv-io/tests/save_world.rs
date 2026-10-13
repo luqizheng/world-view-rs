@@ -311,7 +311,7 @@ fn terrain_bin_round_trip_via_save_and_load() {
     let dir = tmp.path();
     let mut proj = build_min_project_with_root_map(dir, &[]).expect("建工程");
     let mut world = proj.load_world().expect("load");
-    assert!(world.terrain.is_none(), "初始状态：terrain 为 None");
+    assert!(world.terrains.is_empty(), "初始状态：一张栅格都没有");
 
     // 装一块 8×6 的栅格：每格 (height=i16, kind=u8) 写入。
     let mut cells = Vec::with_capacity(8 * 6);
@@ -328,7 +328,7 @@ fn terrain_bin_round_trip_via_save_and_load() {
         height: 6,
         cells,
     };
-    world.terrain = Some(data.clone());
+    world.set_terrain(Id::new_unchecked("map_main"), data.clone());
 
     // 触发 save。dirty 里含 `"maps/<map>/terrain.bin"` 这种细粒度路径，
     // 验证 v0.3 的**前缀匹配**能让它驱动 `maps` 目录重写。
@@ -355,11 +355,92 @@ fn terrain_bin_round_trip_via_save_and_load() {
     // 3) 重载：terrain 应 round-trip 回来
     let proj2 = Project::open(dir).expect("重开");
     let world2 = proj2.load_world().expect("重载");
-    let t2 = world2.terrain.as_ref().expect("terrain 应被读回");
+    let t2 = world2
+        .terrain_of(&Id::new_unchecked("map_main"))
+        .expect("terrain 应被读回");
     assert_eq!(t2.width, 8);
     assert_eq!(t2.height, 6);
     assert_eq!(t2.cells.len(), 48);
     assert_eq!(t2.cells, data.cells, "terrain 栅格必须 byte-for-byte 一致");
+}
+
+/// Phase 2（2026-10-13）：每张图各有各的底图，加载/落盘都按图 ID 走。
+///
+/// 这是「缩放到街道」（ADR-0009 决策 ③「每级自带栅格」）在 I/O 层的地基：
+/// 原先加载器只取**第一张**声明了 `raster` 的图，城市图就算自己声明了也读不到。
+///
+/// 验证四件事：
+/// 1. 一次 `load_world` 把**两张**图的栅格都读进来，键 = 图 ID；
+/// 2. 只脏了城市图时，**只有**城市图的 `.bin` 被写（不重写世界图那张）；
+/// 3. 全量落盘时两张都写；
+/// 4. 重载后两张各自 round-trip 回原来的格子，不串味。
+#[test]
+fn each_map_keeps_its_own_terrain_raster() {
+    let tmp = TempDir::new("per_map_terrain");
+    let dir = tmp.path();
+    let mut proj = build_min_project_with_root_map(dir, &[]).expect("建工程");
+
+    // 再手写一张城市图（`load_maps` 按 `maps/*/index.yaml` 收集）。
+    // 注意：它**不**声明 `raster`——首次落盘才由 `save_world` 补上。
+    let city_dir = dir.join("maps").join("map_city");
+    std::fs::create_dir_all(&city_dir).expect("mkdir maps/map_city");
+    std::fs::write(
+        city_dir.join("index.yaml"),
+        "id: map_city\nname: City\nlevel: city\nparent: map_main\nextent:\n  width: 64.0\n  height: 64.0\n",
+    )
+    .expect("写城市图 index.yaml");
+
+    let mut world = proj.load_world().expect("load");
+    assert_eq!(world.maps.len(), 2, "应加载到世界图与城市图两张");
+    assert!(world.terrains.is_empty(), "两张图都还没声明 raster");
+
+    let world_id = Id::new_unchecked("map_main");
+    let city_id = Id::new_unchecked("map_city");
+    let cell = |k: u8| vec![TerrainCellData { height: 7, kind: k }; 4];
+    world.set_terrain(
+        world_id.clone(),
+        TerrainData {
+            width: 2,
+            height: 2,
+            cells: cell(1),
+        },
+    );
+    world.set_terrain(
+        city_id.clone(),
+        TerrainData {
+            width: 2,
+            height: 2,
+            cells: cell(2),
+        },
+    );
+
+    // ② 只脏城市图：世界图的 .bin 不该出现。
+    proj.save_world(&world, &["maps/map_city/terrain.bin".into()])
+        .expect("增量保存");
+    let world_bin = dir.join("maps").join("map_main").join("terrain.bin");
+    let city_bin = dir.join("maps").join("map_city").join("terrain.bin");
+    assert!(
+        city_bin.is_file(),
+        "脏了的那张应落盘: {}",
+        city_bin.display()
+    );
+    assert!(
+        !world_bin.is_file(),
+        "没脏的那张不该被重写（否则每刷一笔都要把所有城市 zstd 一遍）"
+    );
+
+    // ③ 全量保存：两张都写。
+    proj.save_world(&world, &[]).expect("全量保存");
+    assert!(world_bin.is_file(), "全量路径应写出世界图栅格");
+
+    // ④ 重载：两张各自 round-trip，且键没串。
+    let proj2 = Project::open(dir).expect("重开");
+    let world2 = proj2.load_world().expect("重载");
+    assert_eq!(world2.terrains.len(), 2, "应读回两张栅格");
+    let back_world = world2.terrain_of(&world_id).expect("世界图栅格");
+    let back_city = world2.terrain_of(&city_id).expect("城市图栅格");
+    assert_eq!(back_world.cells, cell(1), "世界图栅格内容不得串味");
+    assert_eq!(back_city.cells, cell(2), "城市图栅格内容不得串味");
 }
 
 /// 阶段七 v0.3：地形随空 dirty 走「全量」路径也要落盘。
@@ -371,11 +452,14 @@ fn terrain_bin_written_on_full_dirty_save() {
     let dir = tmp.path();
     let mut proj = build_min_project_with_root_map(dir, &[]).expect("建工程");
     let mut world = proj.load_world().expect("load");
-    world.terrain = Some(TerrainData {
-        width: 4,
-        height: 4,
-        cells: vec![TerrainCellData { height: 0, kind: 0 }; 16],
-    });
+    world.set_terrain(
+        Id::new_unchecked("map_main"),
+        TerrainData {
+            width: 4,
+            height: 4,
+            cells: vec![TerrainCellData { height: 0, kind: 0 }; 16],
+        },
+    );
     proj.save_world(&world, &[]).expect("全量 save");
     let bin = dir.join("maps").join("map_main").join("terrain.bin");
     assert!(bin.is_file(), "全量路径也应写 terrain.bin");

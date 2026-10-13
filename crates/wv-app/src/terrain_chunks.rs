@@ -45,6 +45,7 @@
 
 #![cfg(feature = "app")]
 
+use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
@@ -77,6 +78,8 @@ pub struct TerrainChunk {
     mip_handles: Vec<Handle<Image>>,
     /// 材质句柄——切 mip 时原地改它的 `texture` 字段，不新建材质资产。
     material: Handle<ColorMaterial>,
+    /// 是否使用线性采样。Google 式底图需要平滑边界；专题色块图保持锐利。
+    linear_filter: bool,
 }
 
 /// 资源：当前所有 chunk 实体。
@@ -87,14 +90,6 @@ pub struct TerrainChunk {
 pub struct TerrainChunkEntities {
     /// 块坐标 → 实体。`coord` 是 `[cx, cy]`。
     by_coord: std::collections::HashMap<[u32; 2], Entity>,
-}
-
-impl TerrainChunkEntities {
-    fn despawn_all(&mut self, commands: &mut Commands) {
-        for (_, e) in self.by_coord.drain() {
-            commands.entity(e).despawn();
-        }
-    }
 }
 
 /// 计算地形按 `CHUNK_SIZE` 切块的二维网格尺寸。
@@ -180,6 +175,33 @@ fn pending_dirty_or_diag(_scale: f32) -> bool {
     false
 }
 
+/// Despawn 一个 chunk，并在实体消失后释放其独占 Image / Material 资产。
+///
+/// Bevy 的 `Assets` 删除不是引用计数；直接在 despawn 前同步移除可能让同一帧
+/// 的渲染仍拿着悬空句柄。这里把清理排队到 despawn 之后执行。
+fn despawn_chunk(commands: &mut Commands, entity: Entity, q_chunks: &Query<(&mut TerrainChunk, &Mesh2d)>) {
+    let Ok((chunk, mesh)) = q_chunks.get(entity) else {
+        return;
+    };
+    let image_handles = chunk.mip_handles.clone();
+    let material = chunk.material.clone();
+    let mesh_handle = mesh.0.clone();
+    commands.entity(entity).despawn();
+    commands.queue(move |world: &mut World| {
+        world.resource_mut::<Assets<Mesh>>().remove(&mesh_handle);
+    });
+    for handle in image_handles {
+        commands.queue(move |world: &mut World| {
+            world.resource_mut::<Assets<Image>>().remove(&handle);
+        });
+    }
+    commands.queue(move |world: &mut World| {
+        world
+            .resource_mut::<Assets<ColorMaterial>>()
+            .remove(&material);
+    });
+}
+
 /// 主 system：在 [`crate::editing::flush_terrain_texture`] 与
 /// [`crate::terrain_view::rebuild_texture_on_mode_change`] 之后跑。
 ///
@@ -201,11 +223,14 @@ pub fn sync_terrain_chunks(
     view: Res<ViewState>,
     windows: Query<&Window>,
     mut chunk_entities: ResMut<TerrainChunkEntities>,
-    mut q_chunks: Query<&mut TerrainChunk>,
+    mut q_chunks: Query<(&mut TerrainChunk, &Mesh2d)>,
 ) {
     // 关闭图层 → 全部 despawn；丢掉待消费脏矩形（重开时 spawn 会拷最新像素）。
     if !view.terrain_visible {
-        chunk_entities.despawn_all(&mut commands);
+        let entities: Vec<Entity> = chunk_entities.by_coord.drain().map(|(_, e)| e).collect();
+        for entity in entities {
+            despawn_chunk(&mut commands, entity, &q_chunks);
+        }
         if tex.chunks_dirty.is_some() {
             tex.chunks_dirty = None;
         }
@@ -215,6 +240,7 @@ pub fn sync_terrain_chunks(
         return;
     };
     let size = tex.size;
+    let google_mode = view.mode == crate::state::ViewMode::GoogleMap;
     let cell_size = grid.cell_size;
     let [cw, ch] = chunk_grid(size);
     let res = tex.res;
@@ -238,8 +264,8 @@ pub fn sync_terrain_chunks(
         }
     }
     for coord in to_despawn {
-        if let Some(e) = chunk_entities.by_coord.remove(&coord) {
-            commands.entity(e).despawn();
+        if let Some(entity) = chunk_entities.by_coord.remove(&coord) {
+            despawn_chunk(&mut commands, entity, &q_chunks);
         }
     }
 
@@ -295,18 +321,22 @@ pub fn sync_terrain_chunks(
             let mip0_matches = q_chunks
                 .get(entity)
                 .ok()
-                .and_then(|c| c.mip_handles.first())
+                .and_then(|(c, _)| c.mip_handles.first())
                 .and_then(|h| images.get(h))
                 .map(|mip0| {
                     mip0.texture_descriptor.size.width == (gx1 - gx0) * res
                         && mip0.texture_descriptor.size.height == (gy1 - gy0) * res
+                        && q_chunks
+                            .get(entity)
+                            .map(|(c, _)| c.linear_filter == google_mode)
+                            .unwrap_or(false)
                 })
                 .unwrap_or(false);
             if !mip0_matches {
-                commands.entity(entity).despawn();
                 chunk_entities.by_coord.remove(&coord);
+                despawn_chunk(&mut commands, entity, &q_chunks);
             } else {
-                let Ok(mut chunk) = q_chunks.get_mut(entity) else {
+                let Ok((mut chunk, _)) = q_chunks.get_mut(entity) else {
                     continue;
                 };
                 // 3a) dirty 相交 → patch mip0 像素，并逐级重建 mip1/mip2。
@@ -338,7 +368,7 @@ pub fn sync_terrain_chunks(
         let chunk_pixels = copy_chunk_pixels(src, size, res, gx0, gy0, gx1, gy1);
         let pw = (gx1 - gx0) * res;
         let ph = (gy1 - gy0) * res;
-        let mip_handles: Vec<Handle<Image>> = build_mip_chain(chunk_pixels, pw, ph)
+        let mip_handles: Vec<Handle<Image>> = build_mip_chain(chunk_pixels, pw, ph, google_mode)
             .into_iter()
             .map(|img| images.add(img))
             .collect();
@@ -357,6 +387,7 @@ pub fn sync_terrain_chunks(
                     current_mip: mip_now,
                     mip_handles,
                     material,
+                    linear_filter: google_mode,
                 },
             ))
             .id();
@@ -432,13 +463,13 @@ fn downsample_box(src: &[u8], w: u32, h: u32) -> (Vec<u8>, u32, u32) {
 }
 
 /// 由 mip0 像素生成完整 mip 链：mip0 原样，其后逐级 [`downsample_box`]。
-fn build_mip_chain(pixels: Vec<u8>, w: u32, h: u32) -> Vec<Image> {
+fn build_mip_chain(pixels: Vec<u8>, w: u32, h: u32, linear_filter: bool) -> Vec<Image> {
     let mut out = Vec::with_capacity(MIP_LEVELS as usize);
     let (mut cur, mut cw, mut ch) = (pixels, w.max(1), h.max(1));
     for _ in 0..MIP_LEVELS {
         // 先算下一级再移交当前级所有权（末级多算的一次降采样仅 64²，可忽略）。
         let next = downsample_box(&cur, cw, ch);
-        out.push(build_chunk_image(cur, cw, ch));
+        out.push(build_chunk_image(cur, cw, ch, linear_filter));
         cur = next.0;
         cw = next.1;
         ch = next.2;
@@ -520,8 +551,8 @@ fn patch_chunk_mips(
 }
 
 /// 由 RGBA8 像素构造一个 `Image`（单级；mip 链由 [`build_mip_chain`] 组装）。
-fn build_chunk_image(pixels: Vec<u8>, w: u32, h: u32) -> Image {
-    Image::new(
+fn build_chunk_image(pixels: Vec<u8>, w: u32, h: u32, linear_filter: bool) -> Image {
+    let mut image = Image::new(
         Extent3d {
             width: w.max(1),
             height: h.max(1),
@@ -531,7 +562,13 @@ fn build_chunk_image(pixels: Vec<u8>, w: u32, h: u32) -> Image {
         pixels,
         TextureFormat::Rgba8UnormSrgb,
         bevy::asset::RenderAssetUsages::RENDER_WORLD | bevy::asset::RenderAssetUsages::MAIN_WORLD,
-    )
+    );
+    image.sampler = if linear_filter {
+        ImageSampler::linear()
+    } else {
+        ImageSampler::nearest()
+    };
+    image
 }
 
 #[cfg(test)]
@@ -703,9 +740,33 @@ mod tests {
     }
 
     #[test]
+    fn chunk_sampler_follows_requested_filter_mode() {
+        use bevy::image::ImageFilterMode;
+        let pixels = vec![255u8; 4];
+        let linear = build_chunk_image(pixels.clone(), 1, 1, true).sampler;
+        let nearest = build_chunk_image(pixels, 1, 1, false).sampler;
+        let is_linear = matches!(
+            linear,
+            bevy::image::ImageSampler::Descriptor(bevy::image::ImageSamplerDescriptor {
+                mag_filter: ImageFilterMode::Linear,
+                ..
+            })
+        );
+        let is_nearest = matches!(
+            nearest,
+            bevy::image::ImageSampler::Descriptor(bevy::image::ImageSamplerDescriptor {
+                mag_filter: ImageFilterMode::Nearest,
+                ..
+            })
+        );
+        assert!(is_linear, "Google chunk 应使用线性采样");
+        assert!(is_nearest, "分析视图 chunk 应使用最近邻采样");
+    }
+
+    #[test]
     fn build_mip_chain_produces_halving_levels() {
         let pixels = vec![128u8; (8 * 8 * 4) as usize];
-        let chain = build_mip_chain(pixels, 8, 8);
+        let chain = build_mip_chain(pixels, 8, 8, false);
         assert_eq!(chain.len(), MIP_LEVELS as usize);
         assert_eq!((chain[0].width(), chain[0].height()), (8, 8));
         assert_eq!((chain[1].width(), chain[1].height()), (4, 4));
@@ -728,7 +789,7 @@ mod tests {
             }
         }
         // chunk 覆盖整图 [0,0,4,4]，mip0 初始全 0。
-        let mip_handles = build_mip_chain(vec![0u8; 4 * 4 * 4], 4, 4)
+        let mip_handles = build_mip_chain(vec![0u8; 4 * 4 * 4], 4, 4, false)
             .into_iter()
             .map(|img| images.add(img))
             .collect::<Vec<_>>();
@@ -737,6 +798,7 @@ mod tests {
             current_mip: 0,
             mip_handles,
             material: materials.add(ColorMaterial::default()),
+            linear_filter: false,
         };
         // dirty = (1,1)-(3,3)：只 patch 像素 x∈{1,2}, y∈{1,2}。
         patch_chunk_mips(
@@ -773,7 +835,7 @@ mod tests {
                 src[i + 3] = 255;
             }
         }
-        let mip_handles = build_mip_chain(vec![0u8; 4 * 4 * 4], 4, 4)
+        let mip_handles = build_mip_chain(vec![0u8; 4 * 4 * 4], 4, 4, false)
             .into_iter()
             .map(|img| images.add(img))
             .collect::<Vec<_>>();
@@ -782,6 +844,7 @@ mod tests {
             current_mip: 0,
             mip_handles,
             material: materials.add(ColorMaterial::default()),
+            linear_filter: false,
         };
         // 整块 dirty → mip0 变成 src 的完整拷贝。
         patch_chunk_mips(

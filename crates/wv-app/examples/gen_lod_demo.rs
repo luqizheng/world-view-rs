@@ -93,11 +93,10 @@ fn build_world(meta: WorldMeta) -> World {
             z: 0,
             source: Some("maps/map_world/terrain.bin".into()),
         }],
-        extent: Some(Extent {
-            width: 4096.0,
-            height: 4096.0,
-        }),
+        // 世界层没有父图，落点恒为 (0,0)（见 `Extent::origin` 文档）。
+        extent: Some(Extent::sized(4096.0, 4096.0)),
         raster: None, // save_world 的 write_terrain_if_any 会生成并回写
+        geographic_source: None,
     });
 
     // ---- 地形：西陆东海（1024²，确定性 Perlin）---------------------------
@@ -140,11 +139,14 @@ fn build_world(meta: WorldMeta) -> World {
             });
         }
     }
-    world.terrain = Some(wv_core::terrain::TerrainData {
-        width: w,
-        height: h,
-        cells,
-    });
+    world.set_terrain(
+        Id::new("map_world").unwrap(),
+        wv_core::terrain::TerrainData {
+            width: w,
+            height: h,
+            cells,
+        },
+    );
 
     // ---- 距离图：4 城（is_city）+ 6 点标（!is_city）--------------------
     // 城市有 w/h；点标只有锚点坐标（AGENTS §「双重身份」：None = 点 icon）。

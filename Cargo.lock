@@ -5927,6 +5927,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wv-overture"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+ "wv-core",
+]
+
+[[package]]
 name = "wv-terrain"
 version = "0.1.0"
 

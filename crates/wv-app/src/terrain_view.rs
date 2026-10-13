@@ -27,7 +27,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use crate::palette;
 use crate::palette_google;
 use crate::palette_jrpg;
-use crate::state::{GridConfig, ViewMode, ViewState, WorldProjection};
+use crate::state::{DrillState, GridConfig, ViewMode, ViewState, WorldProjection};
 use wv_core::terrain::TerrainData;
 
 // ---------------------------------------------------------------------------
@@ -171,7 +171,7 @@ fn tile_tint_for_mode(mode: ViewMode) -> TileTint {
         // 轮廓图（模式 E）同样不铺瓦片——只有水陆三色与海岸线。
         ViewMode::Event => TileTint::Identity,
         ViewMode::Coastline => TileTint::Identity,
-        // 谷歌风（ViewMode::GoogleMap）与色块地形同为「平铺色块」，Identity 保留原色。
+        // Google Default Map（ViewMode::GoogleMap）与色块地形同为平铺色块，Identity 保留原色。
         ViewMode::GoogleMap => TileTint::Identity,
         // JRPG 未进 ALL（隐藏态），仍给出 Identity 分支保持 match 穷尽。
         ViewMode::JRPG => TileTint::Identity,
@@ -317,6 +317,12 @@ pub struct TerrainTexture {
     pub last_mode: Option<ViewMode>,
     /// 当前纹理内容是否带底图淡化（与 `view.terrain_soften` 比较用）。
     pub last_soften: bool,
+    /// 当前纹理画的是**哪张图**的底图（`None` = 不属于任何图的占位纹理）。
+    ///
+    /// 与 `last_mode` 同职责：**只用于「要不要重建」的比较**。Phase 2 起
+    /// 底图随当前图变化（钻入一座自带地形的城市 → 纹理整体换成该城的地形），
+    /// 所以「模式没变」不再等于「不用重建」——换图也必须重建。
+    pub last_map: Option<wv_core::Id>,
 }
 
 impl TerrainTexture {
@@ -347,6 +353,173 @@ fn rect_union(cur: Option<[u32; 4]>, rect: [u32; 4]) -> Option<[u32; 4]> {
     })
 }
 
+/// 计算某视图下每逻辑格的纹理像素数。
+///
+/// 这是 `CellRenderer`、启动纹理资源与 chunk 拷贝的唯一分辨率口径。若在各处
+/// 重新推断，`TerrainTexture.res` 会与实际 `Image` 尺寸脱节，主视口 / minimap /
+/// 增量 patch 随之错位。
+pub(crate) fn terrain_res_for(
+    data: &TerrainData,
+    mode: ViewMode,
+    atlas: Option<&TileAtlas>,
+) -> u32 {
+    let cells = data.width.max(data.height).max(1);
+    if mode == ViewMode::GoogleMap {
+        // 小图至少 4px/格以抗锯齿；大图回落到 1px/格，维持 4096² 纹理预算。
+        let min_res = if cells <= 1024 { 4 } else { 1 };
+        (4096 / cells).clamp(min_res, 8)
+    } else {
+        atlas.map_or(1, |_| tile_res_for(cells))
+    }
+}
+
+/// 纹理当前承载的**哪张图的**地形数据。
+///
+/// 优先 `tex.last_map`（纹理内容与它严格一致），拿不到时退回
+/// [`active_terrain`]（`current` 由调用方给，没有就给 `None`）。
+///
+/// ## 为什么增量 patch / 撤销 diff 必须走这里
+///
+/// Phase 2 起底图按图存且可向上继承：城市视图可能显示的是**世界图**的地形。
+/// 若 patch / diff 固定读「当前图」的地形，而纹理里装的是父图的，就会拿另一张
+/// 图的 cells 去算矩形（尺寸都可能不同），把纹理改花。
+pub fn texture_terrain<'w>(
+    tex: &TerrainTexture,
+    world: &'w wv_core::World,
+    current: Option<&wv_core::id::Id>,
+) -> Option<&'w TerrainData> {
+    if let Some(map) = tex.last_map.as_ref() {
+        if let Some(data) = world.terrain_of(map) {
+            return Some(data);
+        }
+    }
+    active_terrain(world, current).map(|(_, data)| data)
+}
+
+/// 创建新的地形纹理资源。分辨率元数据从实际 Image 反推，避免第二套推断逻辑。
+///
+/// `map` = 这份地形属于哪张图（占位纹理传 `None`），记进 [`TerrainTexture::last_map`]。
+pub(crate) fn new_terrain_texture(
+    images: &mut Assets<Image>,
+    image: Image,
+    data: &TerrainData,
+    map: Option<wv_core::Id>,
+    mode: ViewMode,
+    soften: bool,
+) -> TerrainTexture {
+    let res = image.width() / data.width.max(1);
+    TerrainTexture {
+        handle: images.add(image),
+        size: data.width.max(1),
+        res,
+        dirty: None,
+        chunks_dirty: None,
+        last_mode: Some(mode),
+        last_soften: soften,
+        last_map: map,
+    }
+}
+
+/// 用新 Image 替换既有纹理资源。优先复用 Handle，项目切换 / 模式切换不再
+/// 保留一串旧整图 source；资产不存在时回退为新增。
+pub(crate) fn replace_terrain_texture(
+    tex: &mut TerrainTexture,
+    images: &mut Assets<Image>,
+    image: Image,
+    data: &TerrainData,
+    map: Option<wv_core::Id>,
+    mode: ViewMode,
+    soften: bool,
+) {
+    let res = image.width() / data.width.max(1);
+    let handle = if images.get_mut(&tex.handle).is_some() {
+        if let Some(old) = images.get_mut(&tex.handle) {
+            *old = image;
+        }
+        tex.handle.clone()
+    } else {
+        images.add(image)
+    };
+    *tex = TerrainTexture {
+        handle,
+        size: data.width.max(1),
+        res,
+        dirty: None,
+        chunks_dirty: None,
+        last_mode: Some(mode),
+        last_soften: soften,
+        last_map: map,
+    };
+}
+
+/// 当前视图应当渲染哪张图的底图：从当前图沿 `parent` 向上找**第一张自带栅格**的图。
+///
+/// ## 为什么是「向上继承」而不是「没有就空白」
+///
+/// 「缩放到街道」的目标是每张图都有自己的底图（ADR-0009 决策 ③），但工程是
+/// 渐进长出来的：作者建了一张城市图、还没给它刷地形时，城市视图下应当继续看到
+/// 父图（世界图）的那一块，而不是一片空白。于是规则定为：
+///
+/// - 当前图自带栅格 → 用它（**城市一旦有了 `terrain.bin`，纹理自动切过去**）；
+/// - 否则沿 `parent` 向上找最近的一张；
+/// - 都没有 → `None`（调用方用占位地形兜底）。
+///
+/// 返回的**来源图节点**同时也是 `grid.cell_size` / `grid.origin` 的唯一依据——
+/// 帧、尺寸、格子必须同源，否则地形四边形会和标记错开半幅（基线 §2.15 的老坑）。
+///
+/// 有环保护：最多走 `maps.len() + 1` 步。
+pub fn active_terrain<'w>(
+    world: &'w wv_core::World,
+    current: Option<&wv_core::id::Id>,
+) -> Option<(&'w wv_core::map::MapNode, &'w TerrainData)> {
+    let mut id = current?.clone();
+    for _ in 0..=world.maps.len() {
+        let node = world.maps.iter().find(|m| m.id == id)?;
+        if let Some(data) = world.terrain_of(&id) {
+            return Some((node, data));
+        }
+        id = node.parent.clone()?;
+    }
+    None
+}
+
+/// [`active_terrain`] 的「兜底版」：整个世界都没有地形时，给**根图**塞一张
+/// 占位地形并返回它。
+///
+/// 与 Phase 2 之前「`world.terrain = Some(placeholder)`」是同一行为，只是现在
+/// 有了明确的宿主（根图）。写入 `World` 而非每次现造，是为了让笔刷/撤销也有一个
+/// 稳定的落脚图，而不是一个「只存在于纹理里」的幽灵地形。
+///
+/// `placeholder_cells` = 兜底地形的边长（格）。各调用点原有口径不同
+/// （启动 64、工程加载后 512），故由调用方传入，保持既有行为不变。
+///
+/// **启动早期的坑**：`DrillState` 尚未 `ensure_root` 时 `current` 是 `None`，
+/// 这时必须退回**根图**再判断有没有地形——否则会把「当前图未知」误当成
+/// 「世界上没有地形」，用占位地形覆盖掉刚加载出来的真实地形。
+pub fn active_terrain_or_placeholder(
+    world: &mut wv_core::World,
+    current: Option<&wv_core::id::Id>,
+    placeholder_cells: u32,
+) -> (Option<wv_core::Id>, TerrainData) {
+    let root = world
+        .meta
+        .as_ref()
+        .map(|m| m.root_map.clone())
+        .or_else(|| world.maps.first().map(|m| m.id.clone()));
+    let start = current.cloned().or_else(|| root.clone());
+    if let Some((node, data)) = active_terrain(world, start.as_ref()) {
+        return (Some(node.id.clone()), data.clone());
+    }
+    let data = placeholder_terrain(placeholder_cells, placeholder_cells);
+    match root {
+        Some(root) => {
+            world.set_terrain(root.clone(), data.clone());
+            (Some(root), data)
+        }
+        None => (None, data),
+    }
+}
+
 /// 把一个着色函数应用到一格，返回 sRGB 线性分量。
 type Shader = fn(&TerrainData, u8) -> Color;
 
@@ -366,17 +539,17 @@ fn shade_for_mode(mode: ViewMode) -> Shader {
         // 轮廓图：水陆二分深色 + 海岸线（海岸线在边界格逐像素画，见
         // `write_coast_boundary_cell`；这里只管内部格的水/陆平涂）。
         ViewMode::Coastline => shade_coast,
-        // 谷歌风：羊皮纸暖调（色板见 palette_google）。
+        // Google Default Map：近白陆地 + 淡水 + 绿地（色板见 palette_google）。
         ViewMode::GoogleMap => shade_google,
     }
 }
 
 fn shade_google(_data: &TerrainData, kind: u8) -> Color {
-    // 谷歌风做「普通地图」折叠（2026-12 用户裁定：只要 Google 普通地图，
-    // 不渲染地形高低分带）。Google 普通地图的陆地是单一米色平涂；若把
+    // Google Default Map 做普通地图折叠（2026-10-13 用户裁定）：
+    // 不渲染地形高低分带。Google 普通地图的陆地是单一近白平涂；若把
     // Perlin 高度分带（沙/草/丘/山/雪）逐档着色，整图会退化成近色马赛克。
     // 折叠规则：水两档保留层次、森林作公园绿斑、沼泽保留湿绿，
-    // 其余陆上类一律折叠为陆地基色（`geometry` #d9c7a8）。
+    // 其余陆上类一律折叠为陆地基色（`GOOGLE_CORE_TERRAIN[2]` 近白陆色）。
     match kind {
         0 | 1 | 4 | 8 => palette_google::google_core_terrain(kind),
         _ => palette_google::GOOGLE_CORE_TERRAIN[2],
@@ -502,7 +675,7 @@ struct CellRenderer<'a> {
     shader: Shader,
     /// 底图淡化开关（`ViewState.terrain_soften` 的镜像）。
     soften: bool,
-    /// 边界扰动开关：谷歌风关闭（Google 普通地图的边界是干净的直线/平滑
+    /// 边界扰动开关：Google 模式关闭（Google 普通地图的边界是干净的直线/平滑
     /// 曲线；手绘感揉边与「普通地图」气质相悖）。
     wobble: bool,
     /// `kind → res² 瓦片块`（按需填充；`None` = 尚未尝试）。
@@ -525,7 +698,8 @@ impl<'a> CellRenderer<'a> {
         } else {
             atlas
         };
-        let res = atlas.map_or(1, |_| tile_res_for(w.max(h)));
+        // 事件图与轮廓图不铺瓦片；Google 模式无图集也使用亚像素分辨率。
+        let res = terrain_res_for(data, mode, atlas);
         let (hmin, hmax) = if mode == ViewMode::RealTerrain {
             data.cells.iter().fold((i16::MAX, i16::MIN), |(lo, hi), c| {
                 (lo.min(c.height), hi.max(c.height))
@@ -545,7 +719,7 @@ impl<'a> CellRenderer<'a> {
             shader: shade_for_mode(mode),
             // 轮廓图下淡化开关无效：黑底不能被纸面色洗掉（见测试
             // `coastline_mode_ignores_soften_flag`）。
-            // 谷歌风同样无效：色板已是最终观感，再向纸色淡化会把水色
+            // Google 模式同样无效：色板已是最终观感，再淡化会把水色
             // 洗成米糊、全图趋同（见测试 `google_mode_ignores_soften_flag`）。
             soften: soften && !matches!(mode, ViewMode::Coastline | ViewMode::GoogleMap),
             wobble: !matches!(mode, ViewMode::GoogleMap),
@@ -588,7 +762,7 @@ impl<'a> CellRenderer<'a> {
             if self.mode == ViewMode::Coastline {
                 is_water_kind(a) != is_water_kind(b)
             } else if self.mode == ViewMode::GoogleMap {
-                // 谷歌风下同色的陆上类不构成边界（沙/草/丘/山/雪已折叠为
+                // Google 模式下同色的陆上类不构成边界（沙/草/丘/山/雪已折叠为
                 // 同一陆色）——省掉无意义的逐像素超采样。
                 shade_google(self.data, a) != shade_google(self.data, b)
             } else {
@@ -928,30 +1102,27 @@ pub fn patch_terrain_image(
 }
 
 /// 启动时由工程的地形数据建纹理。若无地形，建一张占位（避免空句柄）。
+///
+/// Phase 2 起底图**属于某张图**：这里取「当前图向上的第一张自带栅格」，
+/// 并把来源图 id 记进 [`TerrainTexture::last_map`]。
 pub fn setup_terrain_texture(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
-    projection: Res<WorldProjection>,
+    mut projection: ResMut<WorldProjection>,
+    drill: Res<DrillState>,
     view: Res<ViewState>,
 ) {
     let atlas = ensure_atlas(&mut commands);
-    let data = projection
-        .world
-        .terrain
-        .clone()
-        .unwrap_or_else(|| placeholder_terrain(64, 64));
+    let (map, data) = active_terrain_or_placeholder(&mut projection.world, drill.current(), 64);
     let image = image_from_terrain(&data, view.mode, atlas.as_ref(), view.terrain_soften);
-    let res = atlas.map_or(1, |_| tile_res_for(data.width.max(data.height).max(1)));
-    let handle = images.add(image);
-    commands.insert_resource(TerrainTexture {
-        handle,
-        size: data.width.max(1),
-        res,
-        dirty: None,
-        chunks_dirty: None,
-        last_mode: Some(view.mode),
-        last_soften: view.terrain_soften,
-    });
+    commands.insert_resource(new_terrain_texture(
+        &mut images,
+        image,
+        &data,
+        map,
+        view.mode,
+        view.terrain_soften,
+    ));
 }
 
 /// 生成一张占位地形（无工程数据时的初始视图，用 Perlin 出的确定性场）。
@@ -1011,6 +1182,10 @@ pub fn placeholder_terrain(w: u32, h: u32) -> TerrainData {
 ///
 /// 因此改为比较 `tex.last_mode` 与当前 `view.mode`，**只有模式字段真的变了才重建**。
 ///
+/// Phase 2 补一条同类比较：`tex.last_map` 与「当前应有的来源图」。换图（钻入一座
+/// 自带地形的城市）与换模式一样是**语义输入变化**，必须重建；否则会继续画着
+/// 世界图的底图、而 `grid` 已按城市帧对齐，地形与标记错开整幅。
+///
 /// ## 边界：首次地形可用
 ///
 /// 若地形数据尚不可用（`terrain` 为 `None`），直接返回，**不写 `last_mode`**——
@@ -1019,28 +1194,40 @@ pub fn placeholder_terrain(w: u32, h: u32) -> TerrainData {
 pub fn rebuild_texture_on_mode_change(
     view: Res<ViewState>,
     projection: Res<WorldProjection>,
+    drill: Res<DrillState>,
     atlas: Option<Res<TileAtlas>>,
     mut tex: ResMut<TerrainTexture>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    // 模式或淡化开关任一真的变了才需要重建（不看整个 ViewState 资源）。
-    if tex.last_mode == Some(view.mode) && tex.last_soften == view.terrain_soften {
+    // 模式、淡化开关、来源图三者任一真的变了才需要重建（不看整个 ViewState 资源）。
+    let map_changed = match active_terrain(&projection.world, drill.current()) {
+        Some((node, _)) => tex.last_map.as_ref() != Some(&node.id),
+        None => false,
+    };
+    if !map_changed && tex.last_mode == Some(view.mode) && tex.last_soften == view.terrain_soften {
         return;
     }
-    let Some(data) = projection.world.terrain.as_ref() else {
+    let Some((node, data)) = active_terrain(&projection.world, drill.current()) else {
         // 地形尚未可用：不重建，也不置位 last_mode，等地形就绪后再走这里。
         return;
     };
     let image = image_from_terrain(data, view.mode, atlas.as_deref(), view.terrain_soften);
-    if let Some(img) = images.get_mut(&tex.handle) {
-        *img = image;
-    }
+    replace_terrain_texture(
+        &mut tex,
+        &mut images,
+        image,
+        data,
+        Some(node.id.clone()),
+        view.mode,
+        view.terrain_soften,
+    );
     // 整图内容已整体替换：chunk 层需要全量重贴（不经 `dirty`，避免
     // `flush_terrain_texture` 下帧再做一次重复的全图重建）。
     tex.chunks_dirty = Some([0, 0, tex.size, tex.size]);
     // 仅在实际重建后记录（保证纹理内容与记录一致）。
     tex.last_mode = Some(view.mode);
     tex.last_soften = view.terrain_soften;
+    tex.last_map = Some(node.id.clone());
 }
 
 /// 网格几何的默认配置（与纹理尺寸挂钩）。
@@ -1048,32 +1235,47 @@ pub fn rebuild_texture_on_mode_change(
 /// 坐标口径统一到**地图 extent 坐标系**（`[0, extent]`）：Place、MapNode.icons、
 /// 事件落点全部以 extent 为参照；网格若自作主张把原点挪到 `-extent/2`，
 /// 地形四边形就会与所有标记错开半幅——主视口「看起来全黑」的根因之一。
+///
+/// Phase 2：`extent` / `origin` 必须取自**纹理的实际来源图**（当前图或它向上继承
+/// 到的那张），而不是永远取根图。城市图自带 1024² 栅格时，格子边长与帧原点都要
+/// 跟着城市走；继续按世界图 4096² 算，城市地形会被拉到 1/4 大小并与标记错位。
 pub fn sync_grid_config(
     tex: Res<TerrainTexture>,
     projection: Res<WorldProjection>,
+    drill: Res<DrillState>,
     mut grid: ResMut<GridConfig>,
 ) {
     if !tex.is_added() && !tex.is_changed() {
         return;
     }
-    // 根图 extent 为世界尺寸权威；无索引时回退 4096²。
-    let extent = projection
-        .world
-        .meta
-        .as_ref()
-        .and_then(|m| {
+    // 来源图（纹理正在显示的那张）决定尺寸与帧；无来源时回退根图 / 4096²。
+    let source = active_terrain(&projection.world, drill.current()).map(|(node, _)| node);
+    let extent = source
+        .and_then(|n| n.extent.as_ref())
+        .map(|e| e.width.max(e.height))
+        .or_else(|| {
             projection
                 .world
-                .maps
-                .iter()
-                .find(|n| n.id == m.root_map)
-                .and_then(|n| n.extent.as_ref())
+                .meta
+                .as_ref()
+                .and_then(|m| {
+                    projection
+                        .world
+                        .maps
+                        .iter()
+                        .find(|n| n.id == m.root_map)
+                        .and_then(|n| n.extent.as_ref())
+                })
+                .map(|e| e.width.max(e.height))
         })
-        .map(|e| e.width.max(e.height))
         .unwrap_or(4096.0);
     // 纹理 size 格 × cell_size = extent，一格一格对齐地图。
     grid.cell_size = (extent / tex.size as f32).max(0.01);
-    grid.origin = Vec2::ZERO;
+    // 帧原点取来源图在世界坐标里的落点（`coord` 是唯一实现点，基线 §2.15）。
+    grid.origin = source
+        .and_then(|n| wv_core::resolve_frame_in(&projection.world.maps, &n.id))
+        .map(|f| Vec2::new(f.world_origin.x, f.world_origin.y))
+        .unwrap_or(Vec2::ZERO);
 }
 
 /// 世界空间的地形四边形标记（防重复 spawn）。
@@ -1423,16 +1625,64 @@ mod tests {
         assert_eq!(a.data, b.data, "轮廓图应忽略 soften 开关");
     }
 
-    /// 谷歌风下淡化开关无效：色板即最终观感，再向纸色淡化会把水色洗没。
+    /// Google 式底图不是一格一像素的硬边像素画；边界需要亚像素分辨率。
+    /// `TerrainTexture.res` 与图像分辨率必须同源，chunk / patch 才不会错位。
+    #[test]
+    fn terrain_res_helper_matches_generated_google_image_resolution() {
+        let data = placeholder_terrain(64, 64);
+        let expected =
+            image_from_terrain(&data, ViewMode::GoogleMap, None, false).width() / data.width;
+        let actual = terrain_res_for(&data, ViewMode::GoogleMap, None);
+        assert_eq!(
+            actual, expected,
+            "Google 64² 应为 {expected}px/格，实得 {actual}px/格"
+        );
+    }
+
+    /// Google 模式的增量 patch 必须使用与整图一致的 res，否则 debug 断言 / stride 错位。
+    #[test]
+    fn google_patch_uses_generated_texture_resolution() {
+        let mut data = placeholder_terrain(4, 4);
+        for c in &mut data.cells {
+            c.kind = 3;
+        }
+        let mut image = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
+        let res = image.width() / data.width;
+        data.cells[5].kind = 1;
+        patch_terrain_image(
+            &mut image,
+            &data,
+            ViewMode::GoogleMap,
+            None,
+            [1, 1, 2, 2],
+            res,
+            false,
+        );
+        assert!(image.width() > data.width, "patch 不应缩小纹理分辨率");
+    }
+
+    #[test]
+    fn google_mode_renders_with_subpixel_resolution() {
+        let data = placeholder_terrain(8, 8);
+        let img = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
+        assert!(
+            img.width() > data.width,
+            "Google 模式应提高纹理分辨率，实得 {}px / {}格",
+            img.width(),
+            data.width
+        );
+    }
+
+    /// Google 模式下淡化开关无效：色板即最终观感，再淡化会把水色洗没。
     #[test]
     fn google_mode_ignores_soften_flag() {
         let data = placeholder_terrain(8, 8);
         let a = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
         let b = image_from_terrain(&data, ViewMode::GoogleMap, None, true);
-        assert_eq!(a.data, b.data, "谷歌风应忽略 soften 开关");
+        assert_eq!(a.data, b.data, "Google 模式应忽略 soften 开关");
     }
 
-    /// 谷歌风「普通地图」折叠：陆上高度分带（沙/草/丘/山/雪/路）必须
+    /// Google「普通地图」折叠：陆上高度分带（沙/草/丘/山/雪/路）必须
     /// 折叠成同一陆色——否则 Perlin 分带会渲染成近色马赛克。
     #[test]
     fn google_mode_collapses_elevation_bands_into_one_land_color() {
@@ -1445,7 +1695,7 @@ mod tests {
         let Color::Srgba(land) = palette_google::GOOGLE_CORE_TERRAIN[2] else {
             unreachable!("GOOGLE_CORE_TERRAIN[2] 应为 Srgba")
         };
-        // 抽查内部格与边界位置的像素：全部应等于陆地基色 #d9c7a8。
+        // 抽查内部格与边界位置的像素：全部应等于 Google 近白陆色。
         for i in [0usize, 9, 27, 54, 63] {
             let (r, g, b) = (
                 img.data[i * 4] as f32 / 255.0,
@@ -1464,8 +1714,8 @@ mod tests {
         }
     }
 
-    /// 谷歌风折叠不能矫枉过正：水与森林保留独立色（普通地图的三要素：
-    /// 米色陆地 + 蓝色水域 + 绿色公园斑）。
+    /// Google 折叠不能矫枉过正：水与森林保留独立色（普通地图的三要素：
+    /// 近白陆地 + 淡水 + 绿色公园斑）。
     #[test]
     fn google_mode_keeps_water_and_forest_distinct_from_land() {
         let mut data = placeholder_terrain(8, 8);
@@ -1475,9 +1725,16 @@ mod tests {
         data.cells[9].kind = 1; // 浅水
         data.cells[18].kind = 4; // 森林
         let img = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
-        let px = |i: usize| [img.data[i * 4], img.data[i * 4 + 1], img.data[i * 4 + 2]];
-        assert_ne!(px(9), px(27), "浅水应与陆色不同");
-        assert_ne!(px(18), px(27), "森林应与陆色不同");
+        let res = img.width() / data.width;
+        let cell_center = |cell: usize| {
+            let (gx, gy) = (cell % data.width as usize, cell / data.width as usize);
+            let x = gx as u32 * res + res / 2;
+            let y = gy as u32 * res + res / 2;
+            let o = ((y * img.width() + x) * 4) as usize;
+            [img.data[o], img.data[o + 1], img.data[o + 2]]
+        };
+        assert_ne!(cell_center(9), cell_center(27), "浅水应与陆色不同");
+        assert_ne!(cell_center(18), cell_center(27), "森林应与陆色不同");
     }
 
     /// 淡化开关：Schematic 图开启后像素向纸面色靠近（数值断言附上下文）。
@@ -1524,5 +1781,182 @@ mod tests {
             false,
         );
         assert_eq!(full.data, patched.data, "轮廓图 patch 与全图应逐字节一致");
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 2：底图按图存 + 沿父图继承
+    // -----------------------------------------------------------------------
+
+    fn map_node(
+        id: &str,
+        parent: Option<&str>,
+        extent: Option<wv_core::map::Extent>,
+    ) -> wv_core::map::MapNode {
+        wv_core::map::MapNode {
+            id: wv_core::Id::new_unchecked(id),
+            name: id.to_owned(),
+            level: wv_core::map::MapLevel::City,
+            parent: parent.map(wv_core::Id::new_unchecked),
+            children: Vec::new(),
+            icons: Vec::new(),
+            layers: Vec::new(),
+            extent,
+            raster: None,
+            geographic_source: None,
+        }
+    }
+
+    fn small_terrain(kind: u8) -> TerrainData {
+        TerrainData {
+            width: 4,
+            height: 4,
+            cells: vec![wv_core::terrain::TerrainCellData { height: 7, kind }; 16],
+        }
+    }
+
+    fn two_level_world() -> wv_core::World {
+        let mut world = wv_core::World::default();
+        world.maps.push(map_node(
+            "map_world",
+            None,
+            Some(wv_core::map::Extent::sized(4096.0, 4096.0)),
+        ));
+        world.maps.push(map_node(
+            "map_city",
+            Some("map_world"),
+            Some(wv_core::map::Extent::sized(1024.0, 1024.0)),
+        ));
+        world
+    }
+
+    /// 城市没刷地形时，底图沿 `parent` 向上继承世界图那一块（不是空白）。
+    #[test]
+    fn active_terrain_falls_back_to_the_nearest_ancestor_with_a_raster() {
+        let mut world = two_level_world();
+        world.set_terrain(wv_core::Id::new_unchecked("map_world"), small_terrain(3));
+        let city = wv_core::Id::new_unchecked("map_city");
+        let (node, data) = active_terrain(&world, Some(&city)).expect("应继承世界图底图");
+        assert_eq!(node.id.as_str(), "map_world", "来源应是世界图");
+        assert_eq!(data.cells[0].kind, 3, "应取世界图的格数据");
+    }
+
+    /// 城市一旦自己刷了地形，就用自己的（继承只在缺失时兜底）。
+    #[test]
+    fn active_terrain_prefers_the_current_maps_own_raster() {
+        let mut world = two_level_world();
+        world.set_terrain(wv_core::Id::new_unchecked("map_world"), small_terrain(3));
+        world.set_terrain(wv_core::Id::new_unchecked("map_city"), small_terrain(5));
+        let city = wv_core::Id::new_unchecked("map_city");
+        let (node, data) = active_terrain(&world, Some(&city)).expect("应用城市自己的底图");
+        assert_eq!(node.id.as_str(), "map_city");
+        assert_eq!(data.cells[0].kind, 5);
+    }
+
+    /// 整条父链都没有栅格 → `None`（调用方用占位兜底，而不是误报某张图）。
+    #[test]
+    fn active_terrain_is_none_when_no_map_in_the_chain_has_a_raster() {
+        let world = two_level_world();
+        let city = wv_core::Id::new_unchecked("map_city");
+        assert!(active_terrain(&world, Some(&city)).is_none());
+    }
+
+    /// 兜底占位落在**根图**上，并真的写进世界（笔刷/撤销才有落脚图）。
+    #[test]
+    fn placeholder_terrain_lands_on_the_root_map_when_nothing_has_a_raster() {
+        let mut world = two_level_world();
+        let city = wv_core::Id::new_unchecked("map_city");
+        let (map, data) = active_terrain_or_placeholder(&mut world, Some(&city), 32);
+        assert_eq!(map.map(|m| m.as_str().to_owned()), Some("map_world".into()));
+        assert_eq!(data.width, 32, "占位地形按调用方给的格数生成");
+        assert!(
+            world
+                .terrain_of(&wv_core::Id::new_unchecked("map_world"))
+                .is_some(),
+            "占位地形应写进根图，而不是只存在于纹理里"
+        );
+    }
+
+    /// **启动早期的回归**：`DrillState` 还没 `ensure_root`（`current` 为 `None`）时，
+    /// 不能把「当前图未知」当成「世界上没有地形」而用占位覆盖真实地形。
+    #[test]
+    fn unknown_current_map_does_not_overwrite_existing_terrain() {
+        let mut world = two_level_world();
+        let root = wv_core::Id::new_unchecked("map_world");
+        world.set_terrain(root.clone(), small_terrain(3));
+        let (map, data) = active_terrain_or_placeholder(&mut world, None, 32);
+        assert_eq!(map.map(|m| m.as_str().to_owned()), Some("map_world".into()));
+        assert_eq!(data.cells[0].kind, 3, "应取回已有真实地形，而不是占位");
+        assert_eq!(
+            world.terrain_of(&root).map(|t| t.width),
+            Some(4),
+            "世界里的地形不能被占位覆盖"
+        );
+    }
+
+    /// 增量 patch / 撤销 diff 必须跟着**纹理手里的那张图**走：纹理显示世界图时，
+    /// 即使当前图是城市，也返回世界图的地形。
+    #[test]
+    fn texture_terrain_follows_the_map_the_texture_holds() {
+        let mut world = two_level_world();
+        world.set_terrain(wv_core::Id::new_unchecked("map_world"), small_terrain(3));
+        world.set_terrain(wv_core::Id::new_unchecked("map_city"), small_terrain(5));
+        let city = wv_core::Id::new_unchecked("map_city");
+        let mut tex = TerrainTexture {
+            handle: Handle::default(),
+            size: 4,
+            res: 1,
+            dirty: None,
+            chunks_dirty: None,
+            last_mode: None,
+            last_soften: false,
+            last_map: Some(wv_core::Id::new_unchecked("map_world")),
+        };
+        let data = texture_terrain(&tex, &world, Some(&city)).expect("应取世界图地形");
+        assert_eq!(
+            data.cells[0].kind, 3,
+            "纹理装了世界图，就不能拿城市格去 patch"
+        );
+        // 纹理换到城市后，同一调用应跟着换成城市的数据。
+        tex.last_map = Some(city.clone());
+        let data = texture_terrain(&tex, &world, Some(&city)).expect("应取城市地形");
+        assert_eq!(data.cells[0].kind, 5);
+    }
+
+    /// `last_map` 无效或缺失时退回「当前图向上的第一张」，不留空白。
+    #[test]
+    fn texture_terrain_falls_back_to_the_current_map_when_last_map_is_unknown() {
+        let mut world = two_level_world();
+        world.set_terrain(wv_core::Id::new_unchecked("map_world"), small_terrain(3));
+        let city = wv_core::Id::new_unchecked("map_city");
+        let tex = TerrainTexture {
+            handle: Handle::default(),
+            size: 4,
+            res: 1,
+            dirty: None,
+            chunks_dirty: None,
+            last_mode: None,
+            last_soften: false,
+            last_map: None,
+        };
+        let data = texture_terrain(&tex, &world, Some(&city)).expect("应退回继承口径");
+        assert_eq!(data.cells[0].kind, 3);
+    }
+
+    /// 纹理创建时记住来源图——`rebuild_texture_on_mode_change` 靠它判断「换图了」。
+    #[test]
+    fn terrain_texture_records_which_map_it_holds() {
+        let data = small_terrain(3);
+        let image = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
+        let mut images = Assets::<Image>::default();
+        let held = wv_core::Id::new_unchecked("map_city");
+        let tex = new_terrain_texture(
+            &mut images,
+            image,
+            &data,
+            Some(held.clone()),
+            ViewMode::GoogleMap,
+            false,
+        );
+        assert_eq!(tex.last_map.as_ref(), Some(&held));
     }
 }

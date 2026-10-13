@@ -4,6 +4,7 @@
 //! 读 `world.yaml` → 解析元数据 → 校验目录存在性 → 打印摘要。
 //! 完整加载（地图/人物/事件/距离）按里程碑逐步补齐。
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use wv_core::time::TimePoint;
@@ -126,41 +127,60 @@ fn save_timeline(root: &Path, timeline: &wv_core::time::Timeline) -> IoResult<()
     Ok(())
 }
 
-/// 阶段七 v0.3：若 `terrain` 存在，写 `maps/<root_map>/terrain.bin`，并把
-/// 对应的 [`RasterRef`] 写回 root_map 节点的 `raster` 字段（后续 `save_maps`
-/// 把它序列化进 `index.yaml`）。
+/// 阶段七 v0.3 / Phase 2：把 `World.terrains` 里**每张图各自的**栅格写成
+/// `maps/<map_id>/terrain.bin`，并把新的 [`RasterRef`] 写回那张图的 `raster`
+/// 字段（后续 `save_maps` 把它序列化进 `index.yaml`）。
 ///
 /// 行为约束（与 `AGENTS.md` §5/§7.5 一致）：
-/// - `terrain = None` → **不** 触碰磁盘上的 .bin，也不修改 maps 列表（V1 守约：
+/// - 某张图**没有**栅格 → **不**触碰它的 `.bin`，也不改它的 `raster`（V1 守约：
 ///   作者可能手改 .bin，工具不擅自删）；
-/// - root_map 不在 `maps` 里（异常状态）→ 跳过栅格写、maps 列表原样返回（让
-///   `save_maps` 报错而不是让本函数先 panic）；
-/// - root_map 存在但其原 `raster = None` → 新 `RasterRef` 替换进去（首次落盘）。
-fn write_terrain_if_any(
+/// - 栅格键指向一张**不存在的图**（异常状态）→ 跳过该键（不写 .bin、不 panic）。
+///   这是「meta/maps 与内存不一致」这一类问题，交给校验面板报，不在这里抢答；
+/// - 图存在但原 `raster = None` → 新 `RasterRef` 替换进去（首次落盘）。
+///
+/// **脏路径过滤**（`dirty_paths` / `full`）：只有被判为脏的那张图才重写
+/// `.bin`。否则「刷一笔城市地形」会把工程里**所有**城市的地形各 zstd 一遍
+/// （4096² 一图 ≈ 50 MB 原始数据），白白拖慢每一次落盘。
+fn write_terrains(
     project_root: &Path,
     maps: &[wv_core::map::MapNode],
-    terrain: Option<&wv_core::terrain::TerrainData>,
-    root_map_id: Option<&wv_core::Id>,
+    terrains: &BTreeMap<wv_core::Id, wv_core::terrain::TerrainData>,
+    dirty_paths: &[String],
+    full: bool,
 ) -> IoResult<Vec<wv_core::map::MapNode>> {
-    let Some(data) = terrain else {
+    if terrains.is_empty() {
         return Ok(maps.to_vec());
-    };
-    let Some(root_id) = root_map_id else {
-        // 没 meta 就别瞎写——`save_world` 通常伴随 meta，没有就走默认路径。
-        return Ok(maps.to_vec());
-    };
-    // 写 .bin 并得到新的 RasterRef（自带校验和 + 尺寸）。
-    let new_raster = crate::terrain_bin::write_terrain(project_root, root_id.as_str(), data)?;
-    // 在 maps 列表中找到 root_map 并替换 raster 字段。
+    }
     let mut out: Vec<wv_core::map::MapNode> = maps.to_vec();
-    if let Some(slot) = out.iter_mut().find(|m| m.id == *root_id) {
+    for (map_id, data) in terrains {
+        if !terrain_is_dirty(map_id, dirty_paths, full) {
+            continue;
+        }
+        let Some(slot) = out.iter_mut().find(|m| m.id == *map_id) else {
+            // 异常：有栅格却没有对应的图节点。不写 .bin，也不动 maps。
+            continue;
+        };
+        // 写 .bin 并得到新的 RasterRef（自带校验和 + 尺寸）。
+        let new_raster = crate::terrain_bin::write_terrain(project_root, map_id.as_str(), data)?;
         slot.raster = Some(new_raster);
-    } else {
-        // 异常：meta 指向不存在的 map。沿用 V1 守约：写盘已发生，但 index.yaml
-        // 拿不到新 raster。作者重开工程时会看到「meta 与 maps 不一致」的诊断。
-        // 不在这里主动删 .bin。
     }
     Ok(out)
+}
+
+/// 这张图的地形栅格这次落盘是否被触及。
+///
+/// `full`（首次落盘 / 手动全量写，即 `dirty_paths` 为空）→ 全部都要写；
+/// 否则按**脏路径前缀**匹配。要求分隔符，避免 `maps/map_city` 误命中
+/// `maps/map_city_wuchang/terrain.bin`。
+fn terrain_is_dirty(map_id: &wv_core::Id, dirty_paths: &[String], full: bool) -> bool {
+    if full {
+        return true;
+    }
+    let prefix = format!("maps/{}", map_id.as_str());
+    let sub = format!("{prefix}/");
+    dirty_paths
+        .iter()
+        .any(|d| d == &prefix || d.starts_with(&sub))
 }
 
 /// 写 `PlaceEdge` 列表到单文件 `distances/edges.yaml`。
@@ -420,12 +440,23 @@ impl Project {
         // YAML 语法错误、schema 版本过旧、栅格文件损坏。这些是 I/O 与格式问题，
         // 不是「作者还没写完」，无法靠提示解决。
 
-        // 地形栅格：若地图声明了 raster，加载 terrain.bin。
-        let terrain = maps
-            .iter()
-            .find_map(|m| m.raster.as_ref())
-            .map(|r| crate::terrain_bin::read_terrain(&self.root, r))
-            .transpose()?;
+        // 地形栅格：**每张**声明了 `raster` 的图各读自己的 `terrain.bin`。
+        //
+        // 追加（2026-10-13，Phase 2）：原先这里是
+        // `maps.iter().find_map(|m| m.raster.as_ref())`——只认**第一张**，
+        // 于是城市图即便在 `index.yaml` 里声明了自己的 `raster`，它的地形
+        // 也永远读不进来（这是「到达城市级别」的硬阻塞之一）。ADR-0009 决策 ③
+        // 要求「每级自带栅格」，故改为逐图读入，键 = 图 ID。
+        //
+        // 失败语义不变：仍然只在「数据压根读不出来」时失败（文件缺失/损坏/超限），
+        // 与上面列的三类一致——这是 I/O 与格式问题，不是「作者还没写完」。
+        let mut terrains: BTreeMap<wv_core::Id, wv_core::terrain::TerrainData> = BTreeMap::new();
+        for m in &maps {
+            if let Some(r) = m.raster.as_ref() {
+                let data = crate::terrain_bin::read_terrain(&self.root, r)?;
+                terrains.insert(m.id.clone(), data);
+            }
+        }
 
         // 势力：路线图 S12（2026-10-12）。
         // - `factions/`：每势力一个 YAML（§4.5）。
@@ -449,7 +480,7 @@ impl Project {
             narrations,
             factions,
             faction_geometry,
-            terrain,
+            terrains,
         })
     }
 
@@ -600,17 +631,12 @@ impl Project {
             )?;
         }
         if wants("maps") {
-            // 阶段七 v0.3：把 `World.terrain` 写成 `maps/<root_map>/terrain.bin`，
-            // 并把更新后的 `RasterRef` 写回 root_map 的 `index.yaml`。
-            // 若 `world.terrain` 为 None 则不写（V1 守约：不动作者手改的 .bin）。
-            // 若 root_map 已在 maps 中找不到（异常状态），跳过栅格。
-            let root_map_id = world.meta.as_ref().map(|m| m.root_map.clone());
-            let updated_maps = write_terrain_if_any(
-                &self.root,
-                &world.maps,
-                world.terrain.as_ref(),
-                root_map_id.as_ref(),
-            )?;
+            // 阶段七 v0.3 / Phase 2：把 `World.terrains` 里每张图的栅格写成
+            // `maps/<id>/terrain.bin`，并把更新后的 `RasterRef` 写回那张图的
+            // `index.yaml`。某张图没有栅格则不写（V1 守约：不动作者手改的 .bin）。
+            // 只有被判为脏的图才重写 .bin——见 `terrain_is_dirty`。
+            let updated_maps =
+                write_terrains(&self.root, &world.maps, &world.terrains, dirty_paths, full)?;
             save_maps(&self.root.join("maps"), &updated_maps)?;
         }
         // 阶段七 v0.4：写 `world.yaml`。这条**不**走 dirty 路由——

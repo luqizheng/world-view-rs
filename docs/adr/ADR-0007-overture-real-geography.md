@@ -22,7 +22,7 @@
 **采用 Overture Maps 作为真实地理底图的外部数据源，但只引入「**引用层**」——`wv-core` / `wv-io` / 持久模型层**不直接消费 GeoParquet 几何**。具体规则：**
 
 1. **`Place` 与 `Edge` 不承载 Overture 几何。** 真实世界要素以 `OvertureId`（GERS 字符串）与**可选**的 `bbox` 引用存在；几何走渲染层（`wv-app`）按需向本地 Parquet 切片查询。
-2. **`Map` 增加 `geographic_source` 元数据**，声明本地图**是否**引用真实地理、引用哪个 Overture 主题、用哪个 bbox。**仅作声明，不加载几何**。
+2. **`Map` 增加 `geographic_source: Option<GeographicSourceV1>` 元数据**，声明本地图**是否**引用真实地理、引用哪个 Overture 主题、用哪个 bbox。**仅作声明，不加载几何**。真假地图由 `Option` 的 `None` vs `Some` 派生，**不另设 `geographic_kind` 字段**（避免枚举扩张，参见 §「硬约束」同步注脚）。
 3. **新增独立 crate `wv-overture`**（`wv-io` 的同级、平行数据源模块）：
    - **不依赖 Bevy**（与 `wv-io` 同样约束）；
    - 负责「按 `Map.geographic_source` + bbox 下载/校验本地 Parquet 切片」；
@@ -78,10 +78,14 @@ Overture `transportation` segment **不带 `length` 字段**（2026-10-13 实测
 
 ```text
 # 一条 residential segment，geometry 含 3 段 4 点
-Haversine 计算长度 = 440.8 m  （即 0.44 km）
+# 端点（西雅图 downtown）：
+# (-122.34930, 47.62050) → (-122.34910, 47.62010)
+#                        → (-122.34880, 47.61970)
+#                        → (-122.34850, 47.61940)
+Haversine 计算长度 ≈ 137.0 m
 ```
 
-该值作为 `wv-overture::segment_length_m()` 第一版实现的回归测试用例。
+**CR-1 · 数值校准（2026-10-13）**：原文「440.8 m」是手算近似值，与上述 4 个真实端点的 Haversine 累加结果（**~137.0 m**）不一致。按 AGENTS.md §6.3「文档追写不改机制」保留原文不动，**追加**本校正说明：`wv-overture::geometry::tests::regression_segment_length_matches_seattle_residential_sample` 用同一组端点列锁定该 ~137 m 量级，作为 `segment_length_m()` 第一版实现的回归测试用例。
 
 **（5）所不存决定了「作者可写」。**
 
@@ -122,7 +126,7 @@ Haversine 计算长度 = 440.8 m  （即 0.44 km）
 
 | 项 | 状态 | 说明 |
 |---|---|---|
-| **`Place` 领域模型是否加 `geographic_kind: Real\|Enum(Reality)` 字段** | **待裁**（**本 ADR 新增发现**） | 同一工程同时含「虚构地图 + 西雅图真实地图」时，渲染与校验要区分对待。第一版枚举为 `enum GeographicOrigin.Real\|Fictional`，仅由 `Map.geographic_kind` 决定；不加载于 detail |
+| **`Place` 领域模型是否加 `geographic_kind: Real\|Enum(Reality)` 字段** | **已决议**（2026-10-13） | **否决**：不加 `Map.geographic_kind` 字段，由 `Map.geographic_source` 是否存在**派生**该属性（保留现有 P3 + §5 的「只存引用」纪律）。理由：(α) §6.2「待决问题显式化」——「是否真实地图」是渲染层派生态，不值得进领域字段；(β) `Map.geographic_source: Option<GeographicSourceV1>` 的 `Option` 已经是「真假」区别（`None` = 虚构，`Some` = 真实，字段本身即是开关）；(γ) `geographic_kind: enum` 与 P2 / §4.3「数据承载开放集」违反（新增枚举字段）。`Some(...)` 的具体内容（theme / bbox / data 路径）**只在 `Map.geographic_source` 内**承载，不抽公共 `GroundId` 类型。详见 §决策 (2) 同步注脚。 |
 | **`OvertureId` 字段名 + UUID 例外落地** | **已决议**（2026-10-13，**字段名 = `overture_id`**） | 字段名选 `overture_id`：与 Overture 源数据同名（作者一眼认出）、与 `Map.geographic_kind` 不撞语义、UI/CLI 可直接跳 Overture 文档。`gers_id` 因术语透明度差被否决、`real_world_id` 因与 `geographic_kind` 字段语义撞车被否决。UUID 例外见上文条款（独立 newtype + 类型隔离）。 |
 | **F. `class: footway` 是否独立分支**（Overture 实测发现） | **待裁**（**本 ADR 新增发现**） | 西雅图样本 77604 行 footway 占 50%。第一版默认过滤（不生成 `Place.y2`）；若「步行」成为独立 `Vehicle`，需独立 `PlaceEdge`（含 `footway_only: bool`），需检索器处理 |
 | **离线包发布** | **待裁**（**本 ADR 新增发现**） | 检索时是「在领域模型 + 外部 Parquet」两个源之间查——是否上索引？何时倒排？ |
