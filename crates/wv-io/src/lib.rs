@@ -12,11 +12,13 @@ pub mod diagnostics;
 pub mod error;
 pub mod project;
 pub mod situation_io;
+pub mod slice;
 pub mod terrain_bin;
 
 pub use diagnostics::{derive_hints, DiagAnchor, DiagLevel, Diagnostic, Diagnostics};
 pub use error::{IoError, IoResult};
 pub use project::Project;
+pub use slice::slice_terrain;
 pub use terrain_bin::{
     decode_terrain, encode_terrain, read_terrain, write_terrain, TERRAIN_FORMAT_VERSION,
 };

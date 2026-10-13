@@ -167,6 +167,10 @@ pub struct ViewState {
     pub factions_visible: bool,
     /// 鼠标在地图上的世界坐标（顶栏坐标显示用）。
     pub cursor_world: Option<Vec2>,
+    /// 主窗口逻辑尺寸——分级缩放区间（`zoom_level`）算 `fit` 需要它。
+    ///
+    /// 由 `camera::track_cursor_world` 每帧顺路刷新（不另开系统）。
+    pub window_size: Vec2,
     /// 当前地图 ID。
     pub current_map: String,
 }
@@ -185,6 +189,7 @@ impl Default for ViewState {
             places_visible: true,
             factions_visible: true,
             cursor_world: None,
+            window_size: Vec2::new(1280.0, 800.0),
             current_map: "world_main".into(),
         }
     }
@@ -278,19 +283,52 @@ impl Default for BrushState {
 }
 
 /// 网格几何参数（世界单位与格的换算，基线 §2.15 变换链的输入）。
+///
+/// ## 两套原点——先问「这份坐标属于哪个帧」，再挑字段
+///
+/// 视图空间**就是**根图坐标系（相机、[`crate::state::ViewState::cursor_world`]、
+/// `drill_target` 全在根帧，见 [`crate::drill`]）。坐标要落到视图空间时，
+/// 按数据来源选字段，不要顺手拿一个：
+///
+/// | 字段 | 含义 | 谁该用 |
+/// |---|---|---|
+/// | [`Self::raster_origin`] | 当前显示的**栅格纹理**的原点（栅格空间 `(0,0)` 的视图位置） | **地形**：笔刷拾取、chunk 摆位、小地图——它们换算的是**纹理格** |
+/// | [`Self::map_origin`] | **当前图**的图帧原点（本图局部 `(0,0)` 的视图位置） | **本图局部内容**：地点、街道与街道名、地图外框 |
+///
+/// 两者只在「当前图自带底图」时相等。子图**继承**父图底图时（ADR-0009 底图继承），
+/// 栅格仍是父图那一张、`raster_origin` 停在父图原点，而 `map_origin` 随当前图走：
+/// 1024² 的城市图用 `raster_origin` 换算自己的街道，整层会被画到 `(0..1024)`
+/// ——世界图左上角、视野外，也就是「钻进城看不到武昌」的根因。
 #[derive(Resource)]
 pub struct GridConfig {
     /// 每格世界边长。
     pub cell_size: f32,
-    /// 网格左上角在世界坐标中的位置。
-    pub origin: Vec2,
+    /// 栅格空间原点的视图位置（上表：**地形**专用）。
+    pub raster_origin: Vec2,
+    /// 当前图图帧原点的视图位置（上表：**本图局部内容**专用）。
+    pub map_origin: Vec2,
+    /// 当前图幅面（`extent` 的长边，与 `cell_size` 同口径的方形边长）：
+    /// 地图外框与 1/4 参考网格用。
+    pub map_size: f32,
+}
+
+impl GridConfig {
+    /// 本图局部坐标 → 视图空间。
+    ///
+    /// **本图局部内容（地点 / 街道 / 街道名 / 外框）一律走这里**——绕过去手写
+    /// `map_origin + local` 就等于把上面那张表丢在一边，而这条路已经错过一次。
+    pub fn map_to_view(&self, local: Vec2) -> Vec2 {
+        self.map_origin + local
+    }
 }
 
 impl Default for GridConfig {
     fn default() -> Self {
         Self {
             cell_size: 8.0,
-            origin: Vec2::ZERO,
+            raster_origin: Vec2::ZERO,
+            map_origin: Vec2::ZERO,
+            map_size: 4096.0,
         }
     }
 }
@@ -319,6 +357,8 @@ pub enum Panel {
     Validation,
     /// 小地图（用户 1.2 要求，含图层开关）。
     Minimap,
+    /// 指南针（临时替换小地图，显示地图朝向）。
+    Compass,
     /// 人物登记（用户 1.4 要求）。
     Character,
     /// 事件登记（用户 1.4 要求，可从时间轴进入）。
@@ -331,7 +371,7 @@ impl Panel {
         Panel::MapTree,
         Panel::Layers,
         Panel::Brush,
-        Panel::Minimap,
+        Panel::Compass,
         Panel::Timeline,
         Panel::Event,
         Panel::Situation,
@@ -353,6 +393,7 @@ impl Panel {
             Panel::Situation => "事态登记",
             Panel::Validation => "校验面板",
             Panel::Minimap => "小地图",
+            Panel::Compass => "指南针",
             Panel::Character => "人物登记",
             Panel::Event => "事件登记",
         }
@@ -376,6 +417,7 @@ impl Panel {
             Panel::Layers => [12.0, 398.0],
             Panel::Brush => [12.0, 578.0],
             Panel::Minimap => [332.0, 56.0],
+            Panel::Compass => [332.0, 56.0],
             Panel::Faction => [332.0, 368.0],
             Panel::Event => [652.0, 56.0],
             Panel::Situation => [652.0, 380.0],
@@ -394,6 +436,7 @@ impl Panel {
             Panel::Layers => [216.0, 168.0],
             Panel::Brush => [264.0, 300.0],
             Panel::Minimap => [216.0, 300.0],
+            Panel::Compass => [216.0, 300.0],
             // 通栏：1280 − 12×2 = 1256。
             Panel::Timeline => [1256.0, 180.0],
             Panel::Event => [300.0, 312.0],
@@ -417,6 +460,7 @@ impl Panel {
             Panel::Situation => "situation",
             Panel::Validation => "validation",
             Panel::Minimap => "minimap",
+            Panel::Compass => "compass",
             Panel::Character => "character",
             Panel::Event => "event",
         }
@@ -437,6 +481,7 @@ impl Panel {
             Panel::Situation => "▣",
             Panel::Validation => "△",
             Panel::Minimap => "□",
+            Panel::Compass => "◐",
             Panel::Character => "◎",
             Panel::Event => "○",
         }
@@ -446,13 +491,13 @@ impl Panel {
     pub fn data_opt(self) -> bool {
         matches!(
             self,
-            Panel::Brush | Panel::Minimap | Panel::Layers | Panel::Validation
+            Panel::Brush | Panel::Compass | Panel::Layers | Panel::Validation
         )
     }
 
     /// 首次启动的默认可见性（地图为主，D1：默认开的面板尽量少）。
     pub fn default_visible(self) -> bool {
-        matches!(self, Panel::Brush | Panel::Minimap | Panel::Timeline)
+        matches!(self, Panel::Brush | Panel::Compass | Panel::Timeline)
     }
 }
 
@@ -480,7 +525,8 @@ impl Default for PanelState {
             visible.insert(p, false);
         }
         visible.insert(Panel::Brush, true);
-        visible.insert(Panel::Minimap, true);
+        // visible.insert(Panel::Minimap, true); // TODO: 恢复小地图后取消注释
+        visible.insert(Panel::Compass, true);
         visible.insert(Panel::Timeline, true);
         Self {
             visible,
@@ -906,6 +952,7 @@ mod tests {
             extent: None,
             raster: None,
             geographic_source: None,
+            orientation: 0.0,
         }
     }
 

@@ -42,9 +42,7 @@ fn overture_id_yaml_rejects_invalid_uuid() {
     assert!(bad.is_err(), "非 hex 字符应被拒绝");
 
     // 大括号形式
-    let bad = serde_yaml::from_str::<OvertureId>(
-        "\"\\{2f099609-47e9-4c3e-bfeb-072ccd609a03\\}\"",
-    );
+    let bad = serde_yaml::from_str::<OvertureId>("\"\\{2f099609-47e9-4c3e-bfeb-072ccd609a03\\}\"");
     assert!(bad.is_err(), "大括号形式应被拒绝");
 }
 
@@ -54,7 +52,8 @@ fn overture_id_yaml_distinguishes_from_human_readable_id() {
     // 与 PlaceId: city_seattle 视觉显著区分。
     use wv_core::Id;
 
-    let yaml = "place:\n  id: city_seattle\n  overture_id: \"2f099609-47e9-4c3e-bfeb-072ccd609a03\"\n";
+    let yaml =
+        "place:\n  id: city_seattle\n  overture_id: \"2f099609-47e9-4c3e-bfeb-072ccd609a03\"\n";
 
     #[derive(serde::Deserialize, PartialEq, Debug)]
     struct Place {
@@ -164,8 +163,8 @@ fn geographic_source_yaml_handles_unsealed_bbox() {
 
 #[test]
 fn map_node_with_geographic_source_round_trips() {
-    use wv_core::Id;
     use wv_core::map::{MapLevel, MapNode};
+    use wv_core::Id;
 
     let node = MapNode {
         id: Id::new_unchecked("seattle_modern"),
@@ -188,6 +187,7 @@ fn map_node_with_geographic_source_round_trips() {
             data_path: "maps/seattle_modern/data/places.parquet".into(),
             release: Some("2026-09-23.0".into()),
         }),
+        orientation: 0.0,
     };
 
     let yaml = serde_yaml::to_string(&node).unwrap();
@@ -205,8 +205,8 @@ fn map_node_with_geographic_source_round_trips() {
 
 #[test]
 fn map_node_without_geographic_source_omits_field() {
-    use wv_core::Id;
     use wv_core::map::{MapLevel, MapNode};
+    use wv_core::Id;
 
     let node = MapNode {
         id: Id::new_unchecked("fictional_world"),
@@ -219,6 +219,7 @@ fn map_node_without_geographic_source_omits_field() {
         extent: None,
         raster: None,
         geographic_source: None, // 虚构地图
+        orientation: 0.0,
     };
 
     let yaml = serde_yaml::to_string(&node).unwrap();
@@ -237,8 +238,8 @@ fn map_node_without_geographic_source_omits_field() {
 fn map_node_round_trip_preserves_presence_signal() {
     // ADR-0007 §决策（2）：真假地图由 Option 的 None/Some 派生。
     // 同一字段「出现 / 缺失」本身就是真假信号——必须有测试守护。
-    use wv_core::Id;
     use wv_core::map::{MapLevel, MapNode};
+    use wv_core::Id;
 
     let real = MapNode {
         id: Id::new_unchecked("real_map"),
@@ -251,8 +252,10 @@ fn map_node_round_trip_preserves_presence_signal() {
         extent: None,
         raster: None,
         geographic_source: Some(GeographicSourceV1::default()),
+        orientation: 0.0,
     };
     let fictional = MapNode {
+        orientation: 0.0,
         id: Id::new_unchecked("fictional_map"),
         geographic_source: None,
         ..real.clone()

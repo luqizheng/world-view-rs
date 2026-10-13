@@ -313,6 +313,7 @@ impl CommandRegistry {
                     Panel::Layers => "显隐图层面板",
                     Panel::Brush => "显隐地形笔刷面板",
                     Panel::Minimap => "显隐小地图面板",
+                    Panel::Compass => "显隐指南针面板",
                     Panel::Timeline => "显隐时间轴",
                     Panel::Event => "显隐事件登记面板",
                     Panel::Situation => "显隐事态登记面板",

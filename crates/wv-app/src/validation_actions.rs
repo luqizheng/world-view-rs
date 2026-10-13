@@ -37,7 +37,7 @@ pub fn jump_to_anchor_now(
     cameras: &mut bevy::prelude::Query<
         (
             &mut bevy::prelude::Transform,
-            &mut bevy::prelude::OrthographicProjection,
+            &mut bevy::prelude::Projection,
         ),
         bevy::prelude::With<bevy::prelude::Camera2d>,
     >,

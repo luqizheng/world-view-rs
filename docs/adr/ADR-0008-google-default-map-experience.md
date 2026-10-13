@@ -69,3 +69,12 @@
 - **分辨率口径**：4–8 亚像素 / 逻辑格仅适用于不超过 1024 格的地图；更大的地图按 4096² 纹理预算回落到 1–4 亚像素 / 逻辑格。
 - **当前内存代价**：既有架构同时保留一张整图 source `Image`（供 minimap / CPU patch）与视口内 chunk `Image`（供主视口分块渲染）。Google 512² 地图在 4096² 分辨率下会持有 source + chunk 至少两份全分辨率 RGBA，再加 chunk mip 链；这不是单张 67MB 预算，而是约两倍以上的峰值内存。
 - **为何先接受该代价**：本轮目标是修正默认地图体验且不重构加载/分块架构；chunk 资产已在 despawn / 模式切换后释放，避免继续累积。后续优化方向是“低分辨率 minimap + 由 `TerrainData` 直接生成 chunk”，使主视口不再复制整图 source。
+
+## 8. 落地记录：屏幕像素 → 世界单位的换算方向（2026-10-14）
+
+本 ADR §2 的决策「道路 casing 6px + fill 3.5px，宽度按**屏幕像素**定义并随缩放换算」在首次落地时把换算方向写反了：渲染端一律写成 `world = stroke_px / view.scale`，而 `view.scale` 的单位是**世界单位/像素**（见 `ViewState::scale` 的文档、`terrain_chunks.rs` 的视口换算，以及标签 `font_size = LABEL_PX * view.scale`、POI 半径 `POI_MIN_SCREEN_PX * view.scale` 等按「乘」写且实机显示正确的既有代码），因此恒定屏幕宽度必须**乘** scale。
+
+- **实际效果**：屏幕宽度实际变成 `stroke_px / view.scale²`。世界级（scale ≈ 2.4）下 3.5px 的道路只有约 0.6px，几乎是一条发丝；深缩后（scale ≈ 0.07）同一条道路胀成占屏 40% 的巨带（实测 600px 以上白填充 + 每侧约 160px casing）。**这正是「地图上看不见街道」的直接根因**——不是颜色问题，而是线宽问题。
+- **修复**：`vector_layers.rs`（道路 / 街道 fill / 街道 casing / 橡皮筋预览）、`map_frame.rs`（外框 + 参考网格）、`brush_cursor.rs`（笔刷外环 / 内环虚线 / 十字）三处的 `px / view.scale` 统一改为 `px * view.scale`；`ui.rs` 小地图的视口取景框同步改为 `(窗口宽 × view.scale) / 底图世界宽度`，原 `1.0 / view.scale` 的量纲同样是反的（越深缩框越大，深缩时框占满整幅小地图）。
+- **判定依据**：同仓内 `brush_cursor.rs` 自相矛盾（同一文件里 `px / view.scale` 与「世界 × view_scale == 像素」两种口径并存），后者的方向才是对的。修复后 `world_thickness / view.scale == stroke_px` 恒定，`road_spec_screen_width_stays_constant_across_zoom` 与 `stroke_world_screen_width_stays_constant` 两个测试改为此断言（原 `..._inverts_with_view_scale` 两个测试断言的是错误方向，已随公式一并改写）。
+- **代价**：世界级视图下的城市连线由发丝线变为 3.5px fill + 6px casing 的醒目连线，城市层级内街道为 4.5px。若后续希望远观更含蓄，应新增**按 LOD 分级的线宽常量**（本 ADR 的 6/3.5px 是单一口径，不含分级），而不是再次反转换算方向。

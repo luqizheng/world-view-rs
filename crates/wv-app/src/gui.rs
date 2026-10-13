@@ -25,6 +25,7 @@ use crate::projection;
 use crate::state::{
     BrushState, DrillState, GridConfig, PanelState, PlaybackState, ViewState, WorldProjection,
 };
+use crate::streets;
 use crate::terrain_chunks;
 use crate::terrain_view;
 use crate::ui;
@@ -50,15 +51,24 @@ pub fn run(config: AppConfig) {
             .set(WindowPlugin {
                 primary_window: Some(Window {
                     title: "World View · 地图编辑器".into(),
-                    resolution: WindowResolution::new(1280.0, 800.0),
+                    resolution: WindowResolution::new(1280, 800),
                     ..Default::default()
                 }),
                 ..Default::default()
             })
             // 全局保持最近邻采样；Google 模式的 chunk 纹理会单独切线性采样。
-            .set(ImagePlugin::default_nearest()),
+            .set(ImagePlugin::default_nearest())
+            // icu_provider 对「中日文行断无字典模型」（parley 0.9 + icu_segmenter 2.3
+            // 的上游缺口，LineSegmenter 的 compiled_data 构造器不含 CJ 字典）每次
+            // 都 log::warn 一条并回退成整串不断行；编辑器中文标签极多，会每帧刷屏，
+            // 压到 error 级。回退行为对单行标签无害；长段落折行缺失见 ADR-0011。
+            .set(bevy::log::LogPlugin {
+                filter: "naga=warn,wgpu=error,icu_provider=off".into(),
+                level: bevy::log::Level::INFO,
+                ..Default::default()
+            }),
     )
-    .add_plugins(EguiPlugin)
+    .add_plugins(EguiPlugin::default())
     // 播放范围：空编辑器起步先用默认值（1..180_001）；
     // 运行期加载工程成功后由 `startup_load` 按该工程 `timeline/axis.yaml` 重置。
     .insert_resource(PlaybackState {
@@ -94,6 +104,8 @@ pub fn run(config: AppConfig) {
     // 不存在的资源会在首帧 panic → 窗口无法显示）。`derive(Default)` 起步。
     .init_resource::<crate::state::ProjectDiagnostics>()
     .init_resource::<VectorLayerEntities>()
+    .init_resource::<streets::StreetLayerCache>()
+    .init_resource::<streets::StreetEditorState>()
     // 势力多边形层（S12）：同属「每帧 despawn+spawn 的实体集合」资源，
     // 漏 init 会在首帧 panic（`could not access system parameter`）。
     .init_resource::<faction_overlays::FactionOverlayEntities>()
@@ -102,58 +114,77 @@ pub fn run(config: AppConfig) {
     .init_resource::<terrain_chunks::TerrainChunkEntities>()
     .add_systems(
         Startup,
-        (
-            // 字体必须最先装配：egui 面板首次渲染前需就位，否则中文是方块。
-            crate::fonts::setup_egui_fonts,
-            setup_camera,
-            setup_terrain_texture_after_world,
-        )
-            .chain(),
+        // 字体装配不在这里：bevy_egui 0.42 的主上下文要等 PreUpdate 的
+        // InitContexts 才创建，Startup 时 ctx_mut() 必然 Err（曾导致 egui
+        // 全程豆腐块）。见 fonts.rs 文档与下方 PreUpdate 注册。
+        (setup_camera, setup_terrain_texture_after_world).chain(),
     )
     .add_systems(
         PreUpdate,
         // 必须排在 bevy_egui 建上下文之后：否则首帧 ctx_mut() 对未初始化
         // 上下文调用会 panic（bevy_egui 0.32 lib.rs:437 的 expect）。
-        camera::poll_egui_wants_input.after(bevy_egui::EguiPreUpdateSet::InitContexts),
+        // 字体重试式装配同口径：上下文就绪的首帧执行一次（fonts.rs 文档）。
+        (
+            crate::fonts::setup_egui_fonts,
+            camera::poll_egui_wants_input,
+        )
+            .after(bevy_egui::EguiPreUpdateSet::InitContexts),
     )
     .add_systems(
         Update,
         (
-            // 输入 → 视图状态
-            camera::camera_zoom,
-            camera::camera_pan,
-            camera::camera_pan_keys,
-            camera::brush_radius_scroll,
-            camera::track_cursor_world,
-            camera::collect_brush_stroke,
-            // 编辑（笔触 → 命令 → History）
-            editing::commit_stroke_on_release,
-            // 撤销 / 重做不再在这里单独监听 Ctrl+Z：快捷键统一由
-            // `ui_shell::hotkeys` 收（那里已经处理了「输入框聚焦时失效」），
-            // 两处都听会导致一次按键应用两次。
-            editing::flush_terrain_texture,
-            // 派生诊断刷新：在 flush 之后、UI 之前；面板本帧即可读新值。
-            editing::refresh_project_diagnostics,
+            // 主链已顶满 20 参上限，拆一层嵌套元组（内层先 chain 成一个整体）。
+            (
+                // 输入 → 视图状态
+                camera::camera_zoom,
+                camera::camera_pan,
+                camera::camera_pan_keys,
+                camera::brush_radius_scroll,
+                camera::track_cursor_world,
+                camera::collect_brush_stroke,
+                // 编辑（笔触 → 命令 → History）
+                editing::commit_stroke_on_release,
+                streets::commit_street_click,
+                // 撤销 / 重做不再在这里单独监听 Ctrl+Z：快捷键统一由
+                // `ui_shell::hotkeys` 收（那里已经处理了「输入框聚焦时失效」），
+                // 两处都听会导致一次按键应用两次。
+                editing::flush_terrain_texture,
+                // 播放推进（时间 → 当前时刻）
+                projection::advance_playback,
+                // 纹理先于网格几何：`grid.cell_size` 取自纹理的来源图与格数。
+                terrain_view::rebuild_texture_on_mode_change,
+                // 网格几何（`raster_origin` / `map_origin` 两套原点）必须先于所有
+                // 消费它的系统：投影里的地点、街道、街道名、地图外框都按 `GridConfig`
+                // 换算，顺序反了就会拿上一帧的原点画一帧——钻取那一帧最明显。
+                terrain_view::sync_grid_config,
+            )
+                .chain(),
+            // 换级淡化：旧底图淡出精灵逐帧降透明、归零回收（ADR-0009 §2⑦）。
+            terrain_view::tick_basemap_fadeout,
             // 投影（时间 → 渲染资源）
-            projection::advance_playback,
             projection::compute_projection,
-            terrain_view::rebuild_texture_on_mode_change,
-            terrain_view::sync_grid_config,
-            // 地形四边形进世界空间（此前纹理只有 egui 小地图在用，主视口全黑）。
-            // terrain_view::sync_terrain_sprite, // 已被 terrain_chunks 接替（优化项 3）
             // 地形分块 + mip + 视口拣选（优化项 3a/3b/3c）。
             terrain_chunks::sync_terrain_chunks,
-            // 矢量叠加层（道路 + POI）：在 compute_projection 之后跑，
-            // 把 frame.road_segments / frame.place_dots 写到 Mesh2d 实体。
+            // 派生诊断刷新：在 flush 之后、UI 之前；面板本帧即可读新值。
+            editing::refresh_project_diagnostics,
+            // 街道图层缓存：当前图变化时重读（ADR-0010），先于 sync_vector_layers。
+            streets::reload_street_cache,
+            // 矢量叠加层（道路 + POI）：在 compute_projection 之后跑。
             vector_layers::sync_vector_layers,
+            // 街道名标注：消费同一份 StreetLayerCache，在街道画完之后对齐标签。
+            streets::update_street_labels,
             // 势力多边形叠加层（S12 v0.1）：在矢量层之后、地图外框之前。
             faction_overlays::sync_faction_overlays,
-            // 地图外框 + 1/4 幅面参考网格：在 sync_terrain_sprite 之后跑（外框需地形尺寸）。
+            // 地图外框 + 1/4 幅面参考网格（外框需地形尺寸）。
             map_frame::sync_map_frame,
-            // 笔刷光标：在 track_cursor_world 之后跑，屏幕恒定粗细。
-            brush_cursor::sync_brush_cursor,
         )
             .chain(),
+    )
+    // 主链已顶满 Bevy 系统元组的 20 参上限（all_tuples，bevy_ecs
+    // function_system.rs），笔刷光标单独注册、显式排在光标取世界坐标之后。
+    .add_systems(
+        Update,
+        brush_cursor::sync_brush_cursor.after(camera::track_cursor_world),
     )
     .add_systems(
         Update,
@@ -165,7 +196,11 @@ pub fn run(config: AppConfig) {
         ),
     )
     .add_systems(
-        Update,
+        // bevy_egui 0.42 起 pass 是独立调度（在 PostUpdate 的 EndPass 里
+        // `Context::run_ui` 内执行）：egui 首帧字体在该 pass 前就绪，
+        // 放 `Update` 会在第一帧 panic「No fonts available until first call
+        // to Context::run()」。世界系统留在 `Update`，先跑后画。
+        bevy_egui::EguiPrimaryContextPass,
         (
             // 全部浮动面板（基线 §1.11 R1–R4：地图铺满，面板浮其上）。
             //
@@ -180,7 +215,8 @@ pub fn run(config: AppConfig) {
             ui::panel_map_tree,
             ui::panel_layers,
             ui::panel_brush,
-            ui::panel_minimap,
+            // ui::panel_minimap, // TODO: 恢复小地图后取消注释
+            ui::panel_compass,
             ui::panel_timeline,
             ui::panel_event,
             ui::panel_situation,
@@ -218,12 +254,13 @@ fn setup_camera(mut commands: Commands, view: Option<Res<ViewState>>) {
         // 都是 Mesh2d，多边形边缘靠 MSAA 平滑——纹理内部的地形边界不受益
         // （那由 terrain_view 的边界扰动负责），两者互补。
         Msaa::Sample4,
-        // bevy 0.15 的 `Camera2d` require 的是独立的 `OrthographicProjection` 组件
-        // （`Projection` 枚举是 Camera3d 的），直接提供它才能覆盖默认的 scale=1.0。
-        OrthographicProjection {
+        // Bevy 0.16 起 `Camera2d` require 的是 `Projection` **枚举**组件
+        // （`OrthographicProjection` 自己不再是 Component）：要覆盖默认 scale=1.0
+        // 必须包一层 `Projection::Orthographic(..)`。改动出处见 ADR-0011。
+        Projection::Orthographic(OrthographicProjection {
             scale,
             ..OrthographicProjection::default_2d()
-        },
+        }),
     ));
 }
 

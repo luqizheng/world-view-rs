@@ -443,6 +443,67 @@ fn each_map_keeps_its_own_terrain_raster() {
     assert_eq!(back_city.cells, cell(2), "城市图栅格内容不得串味");
 }
 
+/// ADR-0010 待做第 3 项（2026-10-13）：街道文档按图层落 `Layer.source` 的
+/// YAML，脏路径走虚拟命名空间 `streets/<layer_id>`。
+///
+/// 验证四件事：
+/// 1. 虚拟脏路径能命中正确的落盘位置（`maps/<map>/<source>`）；
+/// 2. 只脏街道时不写任何 `terrain.bin`（虚拟路径不得误触发栅格重写）；
+/// 3. 全量落盘同样能写出街道文件；
+/// 4. 重载后 `World.streets` 按图层 ID round-trip 回来。
+#[test]
+fn street_layers_are_written_to_their_source_and_survive_reload() {
+    let tmp = TempDir::new("street_layer_io");
+    let dir = tmp.path();
+    let mut proj = build_min_project_with_root_map(dir, &[]).expect("建工程");
+
+    // 手写一张城市图，声明 Road 图层 + source。
+    let city_dir = dir.join("maps").join("map_city");
+    std::fs::create_dir_all(&city_dir).expect("mkdir maps/map_city");
+    std::fs::write(
+        city_dir.join("index.yaml"),
+        "id: map_city\nname: City\nlevel: city\nparent: map_main\nextent:\n  width: 64.0\n  height: 64.0\nlayers:\n  - id: layer_city_roads\n    name: Streets\n    kind: road\n    visible: true\n    source: maps/map_city/roads.yaml\n",
+    )
+    .expect("写城市图 index.yaml");
+
+    let mut world = proj.load_world().expect("load");
+    assert!(world.terrains.is_empty(), "无 raster，不写地形");
+
+    let layer_id = Id::new_unchecked("layer_city_roads");
+    let mut doc = wv_core::StreetLayer::new();
+    doc.push(wv_core::StreetSegment::straight(
+        wv_core::RoadClass::Primary,
+        1.0,
+        2.0,
+        3.0,
+        4.0,
+    ));
+    world.set_streets(layer_id.clone(), doc);
+
+    // ①② 虚拟脏路径增量保存：roads.yaml 出现，terrain.bin 不出现。
+    proj.save_world(&world, &["streets/layer_city_roads".into()])
+        .expect("增量保存");
+    let roads = city_dir.join("roads.yaml");
+    assert!(roads.is_file(), "街道文件应落盘: {}", roads.display());
+    assert!(
+        !city_dir.join("terrain.bin").is_file(),
+        "虚拟脏路径不得误触发地形重写"
+    );
+
+    // ④ 重载 round-trip。
+    let proj2 = Project::open(dir).expect("重开");
+    let world2 = proj2.load_world().expect("重载");
+    assert_eq!(world2.streets.len(), 1, "应读回 1 份街道文档");
+    let back = world2.street_of(&layer_id).expect("按图层 ID 读回");
+    assert_eq!(back.len(), 1);
+    assert_eq!(back.segments[0].class, wv_core::RoadClass::Primary);
+    assert_eq!(back.segments[0].points.len(), 2);
+    assert_eq!(
+        back.segments[0].points[1],
+        wv_core::geometry::Point::new(3.0, 4.0)
+    );
+}
+
 /// 阶段七 v0.3：地形随空 dirty 走「全量」路径也要落盘。
 ///
 /// 第一次落盘（dirty=空 Vec）的场景：terrain 一样要被写出来。

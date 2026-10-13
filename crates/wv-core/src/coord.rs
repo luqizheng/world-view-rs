@@ -320,6 +320,7 @@ mod tests {
             extent,
             raster: None,
             geographic_source: None,
+            orientation: 0.0,
         }
     }
 

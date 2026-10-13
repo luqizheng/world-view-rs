@@ -53,6 +53,30 @@ pub struct MapNode {
     /// 真假地图由 `Option` 的 `None`/`Some` 派生——**不**另设 `geographic_kind` 字段。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geographic_source: Option<GeographicSourceV1>,
+
+    /// 地图朝向（屏幕上的旋转角，单位：度）。
+    ///
+    /// **0.0 = 正北朝上**（地图顶边即北方）；正值 = 顺时针偏转（如 90.0 = 北方朝右）。
+    /// 未声明时由 serde 默认值补 0.0，既有 YAML 不受影响。
+    ///
+    /// ## 为什么在这里而不是在渲染层
+    ///
+    /// 地图朝向是**地图的属性**（作者决定这张图"北"朝哪），不是相机状态
+    /// （AGENTS §3：YAML 是 source of truth，渲染层只是投影）。
+    /// 指南针面板读取此字段以告诉用户"地图的正确方向"；若渲染层需要
+    /// 旋转地图，也只读这个值——**禁止**在渲染层另设一个"朝向"字段。
+    ///
+    /// ## 与 `Extent.origin` 的关系
+    ///
+    /// `origin` 描述**子图在父图中的位置**（平移），`orientation` 描述
+    /// **本图在屏幕上的旋转**（旋转）。两者独立，互不替代。
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub orientation: f32,
+}
+
+/// Serde `skip_serializing_if` 谓词：f32 零值不写出，保持既有 YAML 干净。
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
 }
 
 /// 地图图标的形状。

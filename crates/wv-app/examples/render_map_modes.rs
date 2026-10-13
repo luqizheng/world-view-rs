@@ -40,10 +40,19 @@ fn main() {
         let img = image_from_terrain(&data, mode, None, true);
         let (w, h) = (data.width as usize, data.height as usize);
         // atlas=None → res=1，每格 1 像素。
-        debug_assert_eq!(img.data.len(), w * h * 4);
+        debug_assert_eq!(
+            img.data.as_ref().expect("地形图必须有像素数据").len(),
+            w * h * 4
+        );
         let name = format!("{mode:?}");
         let path = out_dir.join(format!("{}.png", snake(&name)));
-        write_png(&path, w, h, &img.data).expect("写 PNG 失败");
+        write_png(
+            &path,
+            w,
+            h,
+            img.data.as_ref().expect("地形图必须有像素数据"),
+        )
+        .expect("写 PNG 失败");
         println!("已写出 {}", path.display());
     }
     println!("完成，共 {} 个模式", ViewMode::ALL.len());

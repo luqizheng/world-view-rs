@@ -6,7 +6,7 @@
 //!   地图编辑要「指哪打哪」，任何缓动都会让作者对不齐要素。
 //! - **缩放锚点 = 鼠标指针位置**（基线 §1.16 / §2.12）。
 //! - **输入冲突**：指针落在 egui 面板上时，地图不吃输入（基线 §2.13）。
-//!   查 `EguiContexts::ctx_mut().wants_pointer_input()`。
+//!   查 `EguiContexts::ctx_mut().egui_wants_pointer_input()`。
 //! - **不直接改世界**：笔刷拖拽只**收集笔触**，松手后由 [`crate::editing`] 生成命令。
 
 use bevy::input::mouse::MouseWheel;
@@ -27,22 +27,29 @@ pub struct ActiveStroke {
     pub points: Vec<Vec2>,
 }
 
+/// 写相机投影的缩放。非正交投影静默忽略（编辑器不会出现，且此处不该 panic）。
+pub(crate) fn set_ortho_scale(projection: &mut Projection, scale: f32) {
+    if let Projection::Orthographic(ortho) = projection {
+        ortho.scale = scale;
+    }
+}
+
 /// 把 `ViewState` 的外部写点落到相机（主真源）。
 ///
 /// 小地图点击 / FitMap / Zoom 命令 / 校验锚点跳转改的都是 `ViewState`，
-/// 但相机的 `Transform` / `OrthographicProjection` 才是渲染真源——
+/// 但相机的 `Transform` / 投影 `scale` 才是渲染真源——
 /// 只写 ViewState 相机纹丝不动，且 chunk 视口拣选按假视口抖动
 /// （despawn/respawn 重建画面，表现为「render 很慢」）。凡是运行期
 /// 想改取景的入口，写完 ViewState 后必须经本函数同步相机。
 pub(crate) fn apply_view_to_camera(
     center: Vec2,
     scale: f32,
-    cameras: &mut Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
+    cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
 ) {
-    for (mut tf, mut ortho) in cameras.iter_mut() {
+    for (mut tf, mut projection) in cameras.iter_mut() {
         tf.translation.x = center.x;
         tf.translation.y = center.y;
-        ortho.scale = scale;
+        set_ortho_scale(&mut projection, scale);
     }
 }
 
@@ -56,11 +63,15 @@ pub struct PointerOverUi {
 /// 每帧开头更新「指针是否在 UI 上」。放在 `PreUpdate`。
 ///
 /// **必须排在 `EguiPreUpdateSet::InitContexts` 之后**（见 gui.rs 的 `.after()`）：
-/// 否则首帧 egui 上下文尚未建立，`ctx_mut()` 会 panic 导致启动即崩溃。
+/// 否则首帧 egui 上下文尚未建立。bevy_egui 0.42 起 `ctx_mut()` 返回 `Result`
+/// （旧版是直接 panic），故这里按 `Err` 直接返回、保留上一帧的判定——
+/// 启动首帧的「指针不在 UI 上」是安全默认。
 pub fn poll_egui_wants_input(mut contexts: EguiContexts, mut flag: ResMut<PointerOverUi>) {
-    let ctx = contexts.ctx_mut();
-    flag.wants_pointer = ctx.wants_pointer_input();
-    flag.wants_keyboard = ctx.wants_keyboard_input();
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
+    flag.wants_pointer = ctx.egui_wants_pointer_input();
+    flag.wants_keyboard = ctx.egui_wants_keyboard_input();
 }
 
 /// 滚轮缩放：锚点 = 鼠标指针（零惯性）。
@@ -73,9 +84,9 @@ pub fn poll_egui_wants_input(mut contexts: EguiContexts, mut flag: ResMut<Pointe
 /// Bevy 系统的参数即「依赖声明」，宽签名是框架惯例而非坏味道（同 `drill.rs`）。
 #[allow(clippy::too_many_arguments)]
 pub fn camera_zoom(
-    mut scroll: EventReader<MouseWheel>,
+    mut scroll: MessageReader<MouseWheel>,
     windows: Query<&Window>,
-    mut camera: Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
+    mut camera: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     mut view: ResMut<ViewState>,
     projection: Res<WorldProjection>,
     drill: Res<DrillState>,
@@ -88,7 +99,7 @@ pub fn camera_zoom(
         scroll.clear();
         return;
     }
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
     let Some(cursor) = window.cursor_position() else {
@@ -103,7 +114,7 @@ pub fn camera_zoom(
         return;
     }
 
-    let Ok((mut transform, mut ortho)) = camera.get_single_mut() else {
+    let Ok((mut transform, mut ortho)) = camera.single_mut() else {
         return;
     };
 
@@ -149,8 +160,8 @@ pub fn camera_zoom(
         return;
     }
 
-    // `Camera2d` 用独立的 `OrthographicProjection` 组件（不是 `Projection` 枚举）。
-    ortho.scale = new_scale;
+    // `Camera2d` 的投影是 `Projection::Orthographic(..)`（0.19 起统一为枚举）。
+    set_ortho_scale(&mut ortho, new_scale);
     view.scale = new_scale;
 
     let cursor_world_after =
@@ -162,22 +173,26 @@ pub fn camera_zoom(
 }
 
 /// 平移：右键 / 中键拖拽（零惯性，当帧跟随）。
+/// 左键拖拽平移地图（右键/中键始终可平移；画笔或街道模式开启时左键让渡）。
+#[allow(clippy::too_many_arguments)]
 pub fn camera_pan(
     buttons: Res<ButtonInput<MouseButton>>,
-    mut motion: EventReader<bevy::input::mouse::MouseMotion>,
+    mut motion: MessageReader<bevy::input::mouse::MouseMotion>,
     mut camera: Query<&mut Transform, With<Camera2d>>,
     mut view: ResMut<ViewState>,
     brush: Res<BrushState>,
+    streets: Res<crate::streets::StreetEditorState>,
     ui: Res<PointerOverUi>,
     windows: Query<&Window>,
 ) {
     if ui.wants_pointer {
         return;
     }
-    if !pan_button_pressed(&buttons, brush.enabled) {
+    // 画街道模式下左键让渡给街道点取（与笔刷同一条手势让渡规则）。
+    if !pan_button_pressed(&buttons, brush.enabled || streets.enabled) {
         return;
     }
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
     let mut delta = Vec2::ZERO;
@@ -187,7 +202,7 @@ pub fn camera_pan(
     if delta == Vec2::ZERO {
         return;
     }
-    let Ok(mut transform) = camera.get_single_mut() else {
+    let Ok(mut transform) = camera.single_mut() else {
         return;
     };
     // 屏幕像素 → 世界单位：乘以 scale，且 y 轴反向。
@@ -228,13 +243,14 @@ pub fn track_cursor_world(
     camera: Query<&Transform, With<Camera2d>>,
     mut state: ResMut<ViewState>,
 ) {
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
-    let Ok(transform) = camera.get_single() else {
+    let Ok(transform) = camera.single() else {
         return;
     };
     let scale = state.scale;
+    state.window_size = window.resolution.size();
     state.cursor_world = window
         .cursor_position()
         .map(|c| screen_to_world(c, window.resolution.size(), transform.translation, scale));
@@ -269,13 +285,13 @@ pub fn collect_brush_stroke(
         stroke.points.clear();
         return;
     }
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
     let Some(cursor) = window.cursor_position() else {
         return;
     };
-    let Ok(transform) = camera.get_single() else {
+    let Ok(transform) = camera.single() else {
         return;
     };
     let world = screen_to_world(
@@ -299,7 +315,7 @@ pub fn collect_brush_stroke(
         if stroke
             .points
             .last()
-            .map_or(true, |p| p.distance(world) > cell * 0.5)
+            .is_none_or(|p| p.distance(world) > cell * 0.5)
         {
             stroke.points.push(world);
         }
@@ -312,9 +328,9 @@ pub fn brush_cursor_world(
     camera: Query<&Transform, With<Camera2d>>,
     view: Res<ViewState>,
 ) -> Option<Vec2> {
-    let window = windows.get_single().ok()?;
+    let window = windows.single().ok()?;
     let cursor = window.cursor_position()?;
-    let transform = camera.get_single().ok()?;
+    let transform = camera.single().ok()?;
     Some(screen_to_world(
         cursor,
         window.resolution.size(),
@@ -350,7 +366,7 @@ pub fn camera_pan_keys(
     if dir == Vec2::ZERO {
         return;
     }
-    let Ok(mut transform) = camera.get_single_mut() else {
+    let Ok(mut transform) = camera.single_mut() else {
         return;
     };
     let speed = 900.0 * view.scale; // 世界单位/秒
@@ -364,7 +380,7 @@ pub fn camera_pan_keys(
 /// Ctrl+滚轮 = 只缩放笔刷大小（基线 §1.16）。
 pub fn brush_radius_scroll(
     keys: Res<ButtonInput<KeyCode>>,
-    mut scroll: EventReader<MouseWheel>,
+    mut scroll: MessageReader<MouseWheel>,
     mut brush: ResMut<BrushState>,
     mut grid: ResMut<GridConfig>,
 ) {
@@ -428,6 +444,7 @@ mod tests {
             extent: Some(wv_core::map::Extent::sized(extent, extent)),
             raster: None,
             geographic_source: None,
+            orientation: 0.0,
         };
         wv_core::World {
             maps: vec![
@@ -467,7 +484,7 @@ mod tests {
         app.init_resource::<PointerOverUi>()
             .init_resource::<GridConfig>()
             .init_resource::<crate::zoom_level::ZoomCrossRequest>()
-            .add_event::<MouseWheel>()
+            .add_message::<MouseWheel>()
             .insert_resource(view)
             .insert_resource(drill)
             .insert_resource(WorldProjection {
@@ -479,7 +496,7 @@ mod tests {
         app.world_mut().spawn((
             Camera2d,
             Transform::from_xyz(2048.0, 2048.0, 0.0),
-            OrthographicProjection::default_2d(),
+            Projection::Orthographic(OrthographicProjection::default_2d()),
         ));
         let mut window = Window::default();
         // `Window::default()` = 1280×720，正中即缩放锚点。
@@ -505,11 +522,13 @@ mod tests {
 
     fn scroll(app: &mut App, y: f32) {
         let window = app.world().resource::<TestWindow>().0;
-        app.world_mut().send_event(MouseWheel {
+        app.world_mut().write_message(MouseWheel {
             unit: MouseScrollUnit::Line,
             x: 0.0,
             y,
             window,
+            // 0.19 起 `MouseWheel` 带触控板阶段字段；鼠标滚轮恒为 `Moved`。
+            phase: bevy::input::touch::TouchPhase::Moved,
         });
     }
 

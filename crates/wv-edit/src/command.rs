@@ -543,6 +543,190 @@ impl EditCommand for RemoveFactionGeometryCommand {
 #[allow(unused_imports)]
 use wv_core::{Color as _Color, Faction as _Faction};
 
+// ---------------------------------------------------------------------------
+// 街道编辑命令（ADR-0010 待做第 3 项，2026-10-13）
+// ---------------------------------------------------------------------------
+
+/// 追加一段手绘街道（虚构路网的供给入口，ADR-0010 决策 ②）。
+///
+/// 目标图层未加载时**静默新建空文档**再追加——不报错、不追问：街道文档在
+/// `World.streets` 里的首次出现往往就是作者画下的第一笔（V1：校验只提示，
+/// 编辑不设阻力）；磁盘上对应 `maps/<map>/<source>` 的 YAML，由 `wv-io` 在
+/// 落盘时按虚拟脏路径 `streets/<layer_id>` 聚合写出。
+#[derive(Debug)]
+pub struct AddStreetSegmentCommand {
+    /// 目标街道图层 ID（`World.streets` 的键）。
+    pub layer: wv_core::Id,
+    /// 要追加的段（折线 + 类别，本图局部坐标）。
+    pub segment: wv_core::StreetSegment,
+    /// `apply` 时缓存的追加前段数：revert 时把文档截回这个长度。
+    /// 用 `Mutex` 而非 `RefCell`，使命令可跨线程（与 [`PaintTerrainCommand`] 同款）。
+    before_len: std::sync::Mutex<Option<usize>>,
+}
+
+impl AddStreetSegmentCommand {
+    pub fn new(layer: wv_core::Id, segment: wv_core::StreetSegment) -> Self {
+        Self {
+            layer,
+            segment,
+            before_len: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for AddStreetSegmentCommand {
+    fn label(&self) -> String {
+        format!("画街道段（{:?}）", self.segment.class)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let mut doc = world.street_of(&self.layer).cloned().unwrap_or_default();
+        let before_len = doc.len();
+        doc.push(self.segment.clone());
+        world.set_streets(self.layer.clone(), doc);
+        *(self
+            .before_len
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?) = Some(before_len);
+        Ok(vec![format!("streets/{}", self.layer.as_str())])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let before_len = self
+            .before_len
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
+            .ok_or_else(|| EditError::Precondition("AddStreetSegment 尚未 apply".into()))?;
+        let mut doc = world.street_of(&self.layer).cloned().unwrap_or_default();
+        doc.segments.truncate(before_len);
+        world.set_streets(self.layer.clone(), doc);
+        Ok(())
+    }
+}
+
+/// 删除一段手绘街道（按索引）。
+///
+/// 与 [`AddStreetSegmentCommand`] 对偶：apply 缓存被删段，revert 把它插回
+/// 原索引。索引越界报 `Precondition`——UI 侧应在点击前用当前段数判断
+/// 可删性（按钮置灰），命令层保留兜底。
+#[derive(Debug)]
+pub struct DeleteStreetSegmentCommand {
+    /// 目标街道图层 ID（`World.streets` 的键）。
+    pub layer: wv_core::Id,
+    /// 要删除的段索引（`segments` 下标）。
+    pub index: usize,
+    /// `apply` 时缓存的被删段：revert 时插回 `index`。
+    before: std::sync::Mutex<Option<wv_core::StreetSegment>>,
+}
+
+impl DeleteStreetSegmentCommand {
+    pub fn new(layer: wv_core::Id, index: usize) -> Self {
+        Self {
+            layer,
+            index,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for DeleteStreetSegmentCommand {
+    fn label(&self) -> String {
+        format!("删除街道段 #{}", self.index)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let mut doc = world.street_of(&self.layer).cloned().unwrap_or_default();
+        if self.index >= doc.len() {
+            return Err(EditError::Precondition(format!(
+                "街道段索引 {} 越界（图层 `{}` 共 {} 段）",
+                self.index,
+                self.layer.as_str(),
+                doc.len()
+            )));
+        }
+        let removed = doc.segments.remove(self.index);
+        world.set_streets(self.layer.clone(), doc);
+        *(self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?) = Some(removed);
+        Ok(vec![format!("streets/{}", self.layer.as_str())])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let removed = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("DeleteStreetSegment 尚未 apply".into()))?;
+        let mut doc = world.street_of(&self.layer).cloned().unwrap_or_default();
+        let index = self.index.min(doc.segments.len());
+        doc.segments.insert(index, removed);
+        world.set_streets(self.layer.clone(), doc);
+        Ok(())
+    }
+}
+
+/// 设置地图朝向（屏幕旋转角，单位：度）。
+///
+/// `apply` 缓存旧值；`revert` 用缓存恢复。`0.0` = 正北朝上；
+/// 正值 = 顺时针偏转。命令层不校验范围——UI 侧应把值夹到 `[0, 360)`。
+///
+/// 脏路径：`maps/{id}/index.yaml`（地图节点落盘文件）。
+#[derive(Debug)]
+pub struct SetMapOrientationCommand {
+    pub map_id: wv_core::Id,
+    pub orientation: f32,
+    before: std::sync::Mutex<Option<f32>>,
+}
+
+impl SetMapOrientationCommand {
+    pub fn new(map_id: wv_core::Id, orientation: f32) -> Self {
+        Self {
+            map_id,
+            orientation,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for SetMapOrientationCommand {
+    fn label(&self) -> String {
+        format!("改地图「{}」朝向为 {:.1}°", self.map_id, self.orientation)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let node = world
+            .maps
+            .iter_mut()
+            .find(|m| m.id == self.map_id)
+            .ok_or_else(|| EditError::TargetMissing(format!("地图 {}", self.map_id)))?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))? = Some(node.orientation);
+        node.orientation = self.orientation;
+        Ok(vec![format!("maps/{}/index.yaml", self.map_id)])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let prev = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
+            .take()
+            .ok_or_else(|| EditError::Precondition("SetMapOrientation 尚未 apply".into()))?;
+        let node = world
+            .maps
+            .iter_mut()
+            .find(|m| m.id == self.map_id)
+            .ok_or_else(|| EditError::TargetMissing(format!("地图 {}", self.map_id)))?;
+        node.orientation = prev;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -798,5 +982,179 @@ mod tests {
             cmd.apply(&mut w),
             Err(EditError::TargetMissing(_))
         ));
+    }
+
+    // ---------------------- 街道命令（ADR-0010 ③） ----------------------
+
+    fn seg(class: wv_core::RoadClass) -> wv_core::StreetSegment {
+        wv_core::StreetSegment::straight(class, 10.0, 20.0, 30.0, 40.0)
+    }
+
+    const TEST_LAYER: &str = "layer_city_streets";
+
+    fn test_layer() -> Id {
+        Id::new_unchecked(TEST_LAYER)
+    }
+
+    #[test]
+    fn add_street_segment_then_revert_restores_the_document() {
+        let mut w = World::default();
+        let mut doc = wv_core::StreetLayer::new();
+        doc.push(seg(wv_core::RoadClass::Primary));
+        w.set_streets(test_layer(), doc);
+
+        let cmd = AddStreetSegmentCommand::new(test_layer(), seg(wv_core::RoadClass::Service));
+        let dirty = cmd.apply(&mut w).unwrap();
+        assert_eq!(
+            dirty,
+            vec![format!("streets/{}", TEST_LAYER)],
+            "脏路径应为虚拟命名空间 `streets/<layer>`"
+        );
+        assert_eq!(w.street_of(&test_layer()).unwrap().len(), 2);
+
+        cmd.revert(&mut w).unwrap();
+        assert_eq!(
+            w.street_of(&test_layer()).unwrap().len(),
+            1,
+            "revert 应截回追加前长度"
+        );
+        assert_eq!(
+            w.street_of(&test_layer()).unwrap().segments[0].class,
+            wv_core::RoadClass::Primary,
+            "被截掉的是新画的那段，旧段原样"
+        );
+    }
+
+    #[test]
+    fn drawing_on_an_unloaded_street_layer_creates_it_silently() {
+        let mut w = World::default();
+        let cmd = AddStreetSegmentCommand::new(test_layer(), seg(wv_core::RoadClass::Residential));
+        cmd.apply(&mut w).unwrap();
+        let doc = w.street_of(&test_layer()).expect("首次落笔应新建文档");
+        assert_eq!(doc.len(), 1);
+        assert_eq!(doc.segments[0].class, wv_core::RoadClass::Residential);
+    }
+
+    #[test]
+    fn reverting_before_apply_is_a_precondition_error() {
+        let mut w = World::default();
+        let cmd = AddStreetSegmentCommand::new(test_layer(), seg(wv_core::RoadClass::Path));
+        assert!(matches!(
+            cmd.revert(&mut w),
+            Err(EditError::Precondition(_))
+        ));
+    }
+
+    #[test]
+    fn two_street_commands_undo_independently() {
+        let mut w = World::default();
+        let a = AddStreetSegmentCommand::new(test_layer(), seg(wv_core::RoadClass::Primary));
+        let b = AddStreetSegmentCommand::new(test_layer(), seg(wv_core::RoadClass::Path));
+        a.apply(&mut w).unwrap();
+        b.apply(&mut w).unwrap();
+        assert_eq!(w.street_of(&test_layer()).unwrap().len(), 2);
+        b.revert(&mut w).unwrap();
+        assert_eq!(w.street_of(&test_layer()).unwrap().len(), 1);
+        a.revert(&mut w).unwrap();
+        assert_eq!(
+            w.street_of(&test_layer()).unwrap().len(),
+            0,
+            "逐条撤销后文档应为空"
+        );
+    }
+
+    #[test]
+    fn deleting_a_segment_then_reverting_restores_it_at_the_same_index() {
+        let mut w = World::default();
+        let mut doc = wv_core::StreetLayer::new();
+        doc.push(seg(wv_core::RoadClass::Primary));
+        doc.push(seg(wv_core::RoadClass::Path));
+        doc.push(seg(wv_core::RoadClass::Service));
+        w.set_streets(test_layer(), doc);
+
+        let cmd = DeleteStreetSegmentCommand::new(test_layer(), 1);
+        let dirty = cmd.apply(&mut w).unwrap();
+        assert_eq!(
+            dirty,
+            vec![format!("streets/{}", TEST_LAYER)],
+            "脏路径应为虚拟命名空间 `streets/<layer>`"
+        );
+        assert_eq!(w.street_of(&test_layer()).unwrap().len(), 2);
+        assert_eq!(
+            w.street_of(&test_layer()).unwrap().segments[1].class,
+            wv_core::RoadClass::Service,
+            "中间那段应被删掉"
+        );
+
+        cmd.revert(&mut w).unwrap();
+        let doc = w.street_of(&test_layer()).unwrap();
+        assert_eq!(doc.len(), 3, "revert 应把段插回原索引");
+        assert_eq!(
+            doc.segments[1].class,
+            wv_core::RoadClass::Path,
+            "插回的必须是原来那一段"
+        );
+    }
+
+    #[test]
+    fn deleting_an_out_of_range_segment_is_a_precondition_error() {
+        let mut w = World::default();
+        let mut doc = wv_core::StreetLayer::new();
+        doc.push(seg(wv_core::RoadClass::Primary));
+        w.set_streets(test_layer(), doc);
+
+        let cmd = DeleteStreetSegmentCommand::new(test_layer(), 1);
+        assert!(
+            matches!(cmd.apply(&mut w), Err(EditError::Precondition(_))),
+            "越界索引必须被拒绝而不是 panic"
+        );
+        assert_eq!(
+            w.street_of(&test_layer()).unwrap().len(),
+            1,
+            "失败的命令不得改动文档"
+        );
+    }
+
+    #[test]
+    fn set_map_orientation_applies_and_reverts() {
+        use wv_core::map::{MapLevel, MapNode};
+        use wv_core::Id;
+
+        let mut w = World::default();
+        w.maps.push(MapNode {
+            id: Id::new_unchecked("world_main"),
+            name: "主世界".into(),
+            level: MapLevel::World,
+            parent: None,
+            children: vec![],
+            icons: vec![],
+            layers: vec![],
+            extent: None,
+            raster: None,
+            geographic_source: None,
+            orientation: 0.0,
+        });
+
+        let cmd = SetMapOrientationCommand::new(Id::new_unchecked("world_main"), 90.0);
+        let dirty = cmd.apply(&mut w).unwrap();
+        assert_eq!(
+            dirty,
+            vec!["maps/world_main/index.yaml".to_string()],
+            "脏路径应为 maps/<id>/index.yaml"
+        );
+        assert_eq!(w.maps[0].orientation, 90.0, "apply 后朝向应为 90.0");
+
+        cmd.revert(&mut w).unwrap();
+        assert_eq!(w.maps[0].orientation, 0.0, "revert 后朝向应恢复为 0.0");
+    }
+
+    #[test]
+    fn set_map_orientation_missing_map_is_a_target_missing_error() {
+        let mut w = World::default();
+        let cmd = SetMapOrientationCommand::new(Id::new_unchecked("ghost_map"), 45.0);
+        assert!(
+            matches!(cmd.apply(&mut w), Err(EditError::TargetMissing(_))),
+            "不存在的地图必须报 TargetMissing"
+        );
     }
 }

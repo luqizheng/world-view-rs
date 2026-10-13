@@ -7,6 +7,13 @@ pub enum IoError {
     #[error("文件系统错误: {0}")]
     Fs(#[from] std::io::Error),
 
+    #[error("文件读取失败 `{path}`: {source}")]
+    ReadFile {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("YAML 解析失败于 `{path}`: {source}")]
     Yaml {
         path: String,

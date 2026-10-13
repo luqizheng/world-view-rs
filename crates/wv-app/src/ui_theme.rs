@@ -58,6 +58,15 @@ pub fn color32_alpha(c: Rgb, alpha: f32) -> egui::Color32 {
     c.to_color32_alpha(alpha)
 }
 
+/// 令牌是 `f32`，而 egui 0.36 的 `Margin` 用 `i8` 像素——内边距换算统一在这里收敛。
+pub fn margin_all(v: f32) -> egui::Margin {
+    egui::Margin::same(v.round() as i8)
+}
+
+/// 横纵内边距（同上）。
+pub fn margin_xy(x: f32, y: f32) -> egui::Margin {
+    egui::Margin::symmetric(x.round() as i8, y.round() as i8)
+}
 /// 由令牌生成 egui `Visuals`。
 ///
 /// 只配置**界面外壳**会用到的槽位；地图、世界高亮一律不经过 egui
@@ -96,21 +105,21 @@ pub fn build_visuals(palette: ShellPalette) -> egui::Visuals {
     v.widgets.active.bg_stroke = egui::Stroke::new(1.5_f32, color32(palette.accent));
 
     // 圆角阶梯。
-    v.window_rounding = egui::Rounding::same(radius::PANEL);
-    v.menu_rounding = egui::Rounding::same(radius::CONTROL);
+    v.window_corner_radius = egui::CornerRadius::from(radius::PANEL);
+    v.menu_corner_radius = egui::CornerRadius::from(radius::CONTROL);
 
     // 焦点环：亮色下必须是深琥珀而非金色（§7）。
     v.selection.stroke = egui::Stroke::new(1.0_f32, color32(palette.focus));
     v.popup_shadow = egui::epaint::Shadow {
-        offset: egui::vec2(0.0, 4.0),
-        blur: 12.0,
-        spread: 0.0,
+        offset: [0, 4],
+        blur: 12,
+        spread: 0,
         color: egui::Color32::from_black_alpha(90),
     };
     v.window_shadow = egui::epaint::Shadow {
-        offset: egui::vec2(0.0, 1.0),
-        blur: 2.0,
-        spread: 0.0,
+        offset: [0, 1],
+        blur: 2,
+        spread: 0,
         color: egui::Color32::from_black_alpha(107),
     };
 

@@ -49,8 +49,12 @@ pub struct GeoJSONFeature {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "PascalCase")]
 pub enum GeoJSONGeometry {
-    Point { coordinates: [f64; 2] },
-    LineString { coordinates: Vec<[f64; 2]> },
+    Point {
+        coordinates: [f64; 2],
+    },
+    LineString {
+        coordinates: Vec<[f64; 2]>,
+    },
     #[serde(other)]
     Other,
 }
@@ -115,10 +119,7 @@ fn sum_haversine(coords: &[GeoCoord]) -> f64 {
     if coords.len() < 2 {
         return 0.0;
     }
-    coords
-        .windows(2)
-        .map(|w| haversine_m(w[0], w[1]))
-        .sum()
+    coords.windows(2).map(|w| haversine_m(w[0], w[1])).sum()
 }
 
 /// 从字符串解析 GeoJSON FeatureCollection。

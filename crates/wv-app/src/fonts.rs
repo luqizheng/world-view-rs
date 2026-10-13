@@ -88,7 +88,14 @@ pub struct LoadedFonts {
     pub cjk_font: Option<Handle<Font>>,
 }
 
-/// 在 `Startup` 阶段把系统字体注入 egui **和** Bevy 文本资产表。
+/// 把系统字体注入 egui **和** Bevy 文本资产表。
+///
+/// **为什么是「重试式」而不是 `Startup`**（bevy_egui 0.42 回归修复）：
+/// `ctx.set_fonts` 需要主上下文已创建，而 0.42 的上下文在 `PreUpdate` 的
+/// `EguiPreUpdateSet::InitContexts` 才建立——`Startup` 里 `ctx_mut()` 必然
+/// `Err`，被静默跳过后 egui 全程豆腐块（Bevy 侧 `Text2d` 不受影响）。
+/// 故本系统注册在 `PreUpdate` 的 `InitContexts` 之后：上下文就绪的首帧执行
+/// 一次，未就绪就静默下帧再试；成功后 `LoadedFonts` 出现，此后早退零开销。
 ///
 /// 失败时**不 panic**：Bevy/egui 仍有内置默认字体（拉丁字符可用），
 /// 只是中文会显示为方块 —— 此时在日志中给出明确原因与处置建议。
@@ -96,7 +103,14 @@ pub fn setup_egui_fonts(
     mut contexts: EguiContexts,
     mut font_assets: ResMut<Assets<Font>>,
     mut commands: Commands,
+    loaded: Option<Res<LoadedFonts>>,
 ) {
+    if loaded.is_some() {
+        return; // 已装配过：一帧一次之后不再碰字体文件。
+    }
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return; // 上下文尚未创建：下帧再试（不会读到磁盘）。
+    };
     let mut loaded = LoadedFonts::default();
 
     let mut fonts = egui::FontDefinitions::default();
@@ -106,10 +120,10 @@ pub fn setup_egui_fonts(
         let key = "wv_cjk".to_owned();
         // 同一份字节再注册进 Bevy 的 `Assets<Font>`：画布地名标注（Text2d）
         // 与 egui 面板共用一个系统字体栈，避免两套渲染方框表现不一致。
-        match Font::try_from_bytes(bytes.clone()) {
-            Ok(f) => loaded.cjk_font = Some(font_assets.add(f)),
-            Err(e) => eprintln!("[wv] CJK 字体解析失败（画布中文将显示方块）: {e}"),
-        }
+        // Bevy 0.19：`Font::from_bytes` 不再校验/解析字节（交给 fontique），
+        // 因此不返回 `Result`——坏的字体要等真正排版时才暴露。
+        let f = Font::from_bytes(bytes.clone());
+        loaded.cjk_font = Some(font_assets.add(f));
         fonts.font_data.insert(
             key.clone(),
             Arc::new(egui::FontData {
@@ -156,7 +170,7 @@ pub fn setup_egui_fonts(
         debug!("等宽字体: {path}");
     }
 
-    contexts.ctx_mut().set_fonts(fonts);
+    ctx.set_fonts(fonts);
     commands.insert_resource(loaded);
 }
 

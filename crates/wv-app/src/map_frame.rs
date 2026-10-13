@@ -18,14 +18,18 @@
 //! ## 实现
 //!
 //! - **外框** = 4 段 `Rectangle`（顶 / 底 / 左 / 右），与道路同样公式
-//!   `world_thickness = 1.5 / view.scale`；
+//!   `world_thickness = 1.5 * view.scale`（`view.scale` 的单位是世界单位/像素，
+//!   恒定屏幕宽度必须**乘** scale）；
 //! - **参考网格** = 6 段 `Rectangle`（3 竖 + 3 横），等分四份。
 //!
 //! ## 数据来源
 //!
-//! 与原实现一致：`tex.size × grid.cell_size` 算外框尺寸，`grid.origin` 算起点。
-//! 仍读 `TerrainTexture` + `GridConfig`，**不修改 `ProjectionFrame`**——外框/网格
-//! 是**纯几何**而非"时间投影"，不参与 P7。
+//! **当前图**的图帧：[`GridConfig::map_origin`] 算起点、[`GridConfig::map_size`]
+//! 算幅面（`sync_grid_config` 已按当前图填好，与「缩放到全图」同口径）。
+//! 早先按 `tex.size × grid.cell_size` 取**栅格**的那一块：城市继承父图底图时，
+//! 城级画出来的是整幅世界图的框——外框与参考网格都指向「世界」，与城里的内容
+//! 对不上。外框/网格是**纯几何**而非"时间投影"，不参与 P7，也不修改
+//! `ProjectionFrame`。
 //!
 //! ## 不动原则
 //!
@@ -40,7 +44,6 @@ use bevy::prelude::*;
 
 use crate::palette;
 use crate::state::{GridConfig, ViewState};
-use crate::terrain_view::TerrainTexture;
 
 /// 屏幕像素描边。
 const STROKE_PX: f32 = 1.5;
@@ -90,7 +93,6 @@ pub fn sync_map_frame(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    tex: Res<TerrainTexture>,
     grid: Res<GridConfig>,
     view: Res<ViewState>,
     mut entities: ResMut<MapFrameEntities>,
@@ -100,12 +102,15 @@ pub fn sync_map_frame(
         return;
     }
 
-    // 地图外框的世界尺寸 / 中心。
-    let size = tex.size as f32 * grid.cell_size;
-    let min = grid.origin;
-    let max = grid.origin + Vec2::splat(size);
+    // 地图外框的世界尺寸 / 中心：画**当前图**的幅面（不是栅格那一块）。
+    let size = grid.map_size;
+    let min = grid.map_origin;
+    let max = grid.map_origin + size;
     let center = (min + max) * 0.5;
-    let stroke_world = (STROKE_PX / view.scale).max(f32::EPSILON);
+    // 屏幕像素 → 世界单位：`world = px * view.scale`（`view.scale` 的单位是
+    // 世界单位/像素），保证屏幕恒定 1.5px。历史上写成 `px / view.scale`，
+    // 量纲反了——近看时线条细到消失。
+    let stroke_world = (STROKE_PX * view.scale).max(f32::EPSILON);
 
     // ---- 外框：4 段 Rectangle ----
     // 顶 / 底：水平方向，长度 = size。
@@ -203,18 +208,19 @@ mod tests {
 
     use super::*;
 
-    /// 屏幕像素 → 世界单位：`world = px / view.scale`。
-    /// 屏幕视觉恒定。
+    /// 屏幕像素 → 世界单位：`world = px * view.scale`（`view.scale` 的单位是
+    /// 世界单位/像素）。屏幕视觉恒定 = `world / scale == px`。
     #[test]
-    fn stroke_world_inverts_with_view_scale() {
+    fn stroke_world_screen_width_stays_constant() {
         let px = 1.5_f32;
         let vs_out = 0.1_f32;
         let vs_in = 8.0_f32;
-        let w_out = (px / vs_out).max(f32::EPSILON);
-        let w_in = (px / vs_in).max(f32::EPSILON);
-        assert!((w_out * vs_out - px).abs() < 1e-4, "got {}", w_out);
-        assert!((w_in * vs_in - px).abs() < 1e-4, "got {}", w_in);
-        assert!(w_out > w_in);
+        let w_out = (px * vs_out).max(f32::EPSILON);
+        let w_in = (px * vs_in).max(f32::EPSILON);
+        assert!((w_out / vs_out - px).abs() < 1e-4, "got {}", w_out);
+        assert!((w_in / vs_in - px).abs() < 1e-4, "got {}", w_in);
+        // 近看（scale 大）的世界长度 ≫ 远观——屏幕宽度恒定为 px。
+        assert!(w_in > w_out, "近看世界长度应更大");
     }
 
     /// LOD 阈值：远观（scale > MAX）应隐藏，**不**应隐藏（MIN ≤ scale ≤ MAX）应显示，

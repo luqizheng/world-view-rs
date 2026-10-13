@@ -111,7 +111,7 @@ fn apply_zoom_cross(
     projection: Res<WorldProjection>,
     windows: Query<&Window>,
     mut view: ResMut<ViewState>,
-    mut camera: Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
+    mut camera: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
 ) {
     let Some(request) = cross.pending.take() else {
         return;
@@ -129,7 +129,7 @@ fn apply_zoom_cross(
     drill.take_depth_change();
 
     let window_size = windows
-        .get_single()
+        .single()
         .map(|w| w.resolution.size())
         .unwrap_or(Vec2::new(1280.0, 800.0));
     let zoom = crate::zoom_level::level_zoom(
@@ -249,23 +249,28 @@ pub fn icon_local(extent: Option<Extent>, icon: &IconSpec) -> Vec2 {
 
 /// 一张图在世界坐标里的**图帧原点**（`MapFrame.world_origin`）。
 ///
-/// 与 `grid.origin` **不是一回事**，这是本模块此前最深的坑：
+/// 这是全项目「图帧原点」的**唯一实现点**（类型转换层）：`GridConfig::map_origin`
+/// 由 [`crate::terrain_view::sync_grid_config`] 调它填、街道编辑（`streets`）
+/// 反向换算本图局部坐标也调它，谁都别再手搓 `resolve_frame_in`。
+///
+/// 与栅格原点**不是一回事**，这是本模块此前最深的坑：
 ///
 /// | 量 | 含义 | 今天的取值 |
 /// |---|---|---|
-/// | `grid.origin` | 当前显示的**栅格纹理**在世界里的原点 | 恒为根图栅格的 `(0,0)` |
+/// | `grid.raster_origin` | 当前显示的**栅格纹理**在世界里的原点 | 恒为根图栅格的 `(0,0)`（子图未自带底图时） |
 /// | 本函数 | **当前这张图**在世界里的位置 | 逐层累积，可由父图钻入图标派生 |
 ///
-/// 旧代码把两者当成同一个（都取 `grid.origin`），于是 1024×1024 的城市图上
-/// 声明了 `anchor: [0.5, 0.5]` 的图标，落到了 4096² 世界帧的左上四分之一处。
-/// 坐标链的**唯一**实现点是 [`wv_core::coord`]（基线 §2.15），本函数只做类型转换。
+/// 旧代码把两者当成同一个（都取栅格原点），于是 1024×1024 的城市图上
+/// 声明了 `anchor: [0.5, 0.5]` 的图标，落到了 4096² 世界帧的左上四分之一处；
+/// 后来标记层改用了本函数，但**街道 / 地点 / 外框没跟着改**（同一个坑只填了一半）。
+/// 坐标链的**唯一**数学实现点是 [`wv_core::coord`]（基线 §2.15），本函数只做类型转换。
 ///
-/// 坐标链断掉（图不在工程列表里 / 无 `extent`）时退回 `grid.origin`——
-/// 摆位宁可回到旧行为，也不能让整层标记消失。
-fn map_origin(world: &wv_core::World, node: &MapNode, grid: &GridConfig) -> Vec2 {
+/// 坐标链断掉（图不在工程列表里 / 无 `extent`）时退回 `grid.raster_origin`——
+/// 摆位宁可回到旧行为（「本图就是栅格那张图」），也不能让整层标记消失。
+pub(crate) fn map_origin(world: &wv_core::World, node: &MapNode, grid: &GridConfig) -> Vec2 {
     match wv_core::resolve_frame_in(&world.maps, &node.id) {
         Some(frame) => Vec2::new(frame.world_origin.x, frame.world_origin.y),
-        None => grid.origin,
+        None => grid.raster_origin,
     }
 }
 
@@ -370,7 +375,7 @@ pub fn marker_hit(
         if d.x.abs() <= half && d.y.abs() <= half {
             // 重叠时取最近的，避免摆位撞车后选中「不是最上面那个」。
             let dist = d.length_squared();
-            if best.as_ref().map_or(true, |(_, b)| dist < *b) {
+            if best.as_ref().is_none_or(|(_, b)| dist < *b) {
                 best = Some((target, dist));
             }
         }
@@ -392,7 +397,7 @@ pub fn drill_target(world: &wv_core::World, drill: &DrillState, grid: &GridConfi
         return Vec2::ZERO;
     };
     // 从父图钻进来：落点 = **父图的图帧原点** + 本图在父图局部坐标里的落点
-    // （即父图上那个入口图标的位置）。**不是** `grid.origin`——后者是栅格纹理的
+    // （即父图上那个入口图标的位置）。**不是** `grid.raster_origin`——后者是栅格纹理的
     // 原点，见 `map_origin`。用错会让第二级起的钻取落点整体偏到世界帧左上角。
     if drill.depth() > 0 {
         if let Some(parent) = current
@@ -479,7 +484,7 @@ pub fn drill_pick(
     if ui.wants_pointer || !buttons.just_pressed(MouseButton::Left) {
         return;
     }
-    let (Ok(window), Ok(transform)) = (windows.get_single(), camera.get_single()) else {
+    let (Ok(window), Ok(transform)) = (windows.single(), camera.single()) else {
         return;
     };
     let Some(cursor) = window.cursor_position() else {
@@ -531,10 +536,10 @@ pub fn drill_transition(
     grid: Res<GridConfig>,
     mut drill: ResMut<DrillState>,
     mut view: ResMut<ViewState>,
-    mut camera: Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
+    mut camera: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     mut elapsed: Local<f32>,
 ) {
-    let Ok((mut transform, mut cam_proj)) = camera.get_single_mut() else {
+    let Ok((mut transform, mut cam_proj)) = camera.single_mut() else {
         return;
     };
 
@@ -557,7 +562,7 @@ pub fn drill_transition(
     let k = (*elapsed / DRILL_TRANSITION_SECS).clamp(0.0, 1.0);
     let e = ease_out_cubic(k);
     let window_size = windows
-        .get_single()
+        .single()
         .map(|w| w.resolution.size())
         .unwrap_or(Vec2::new(1280.0, 800.0));
     let to_pos = drill_target(&projection.world, &drill, &grid);
@@ -567,8 +572,8 @@ pub fn drill_transition(
 
     transform.translation.x = pos.x;
     transform.translation.y = pos.y;
-    // `Camera2d` 用独立的 `OrthographicProjection` 组件（不是 `Projection` 枚举）。
-    cam_proj.scale = scale;
+    // 投影写回：`cam_proj` 是 `Projection` 枚举（`Camera2d` 的 require，见 ADR-0011）。
+    crate::camera::set_ortho_scale(&mut cam_proj, scale);
     view.scale = scale;
     view.camera_center = pos;
 
@@ -677,10 +682,8 @@ pub fn update_place_labels(
         for p in &projection.world.distances.places {
             if p.map.as_ref() == Some(&current.id) && place_label_kept_at_tier(p.w, p.h, tier) {
                 if let (Some(x), Some(y)) = (p.x, p.y) {
-                    wanted.push((
-                        crate::projection::world_to_view_pub(x, y, &grid),
-                        p.name.as_str(),
-                    ));
+                    // 地点坐标是本图局部 → 视图空间（`map_to_view`，非栅格原点）。
+                    wanted.push((grid.map_to_view(Vec2::new(x, y)), p.name.as_str()));
                 }
             }
         }
@@ -706,12 +709,12 @@ pub fn update_place_labels(
     for (pos, name) in &wanted {
         if let Some((_, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
             tf.translation = pos.extend(LABEL_Z);
-            // Bevy 0.15：字号在 TextFont 组件上，Text2d 只存内容。
+            // Bevy 0.19：字号是 `TextFont.font_size: FontSize`、字体是 `font: FontSource`。
             *text = Text2d::new(*name);
-            style.font_size = font_size;
+            style.font_size = font_size.into();
             // TextFont.font 非 Option：缺 CJK 时回落内置字体（拉丁可用，中文方块）。
             if let Some(f) = &cjk {
-                style.font = f.clone();
+                style.font = f.clone().into();
             }
             *color = TextColor(label_color);
             *vis = Visibility::Visible;
@@ -720,8 +723,8 @@ pub fn update_place_labels(
                 PlaceLabel,
                 Text2d::new(*name),
                 TextFont {
-                    font_size,
-                    font: cjk.clone().unwrap_or_default(),
+                    font_size: font_size.into(),
+                    font: cjk.clone().unwrap_or_default().into(),
                     ..Default::default()
                 },
                 TextColor(label_color),
@@ -839,6 +842,7 @@ mod tests {
         extent: Option<Extent>,
     ) -> MapNode {
         MapNode {
+            orientation: 0.0,
             extent,
             ..node_with_icons(id, level, parent, children, icons)
         }
@@ -863,6 +867,7 @@ mod tests {
             extent: Some(Extent::sized(4096.0, 4096.0)),
             raster: None,
             geographic_source: None,
+            orientation: 0.0,
         }
     }
 
@@ -1094,7 +1099,8 @@ mod tests {
             "相机落点 {got} 必须与双击时看到的标记位置一致"
         );
         // 反证：若与哈希回退位置重合，说明图标锚点根本没生效。
-        let hash = grid.origin + marker_local(Some(FALLBACK_EXTENT), &Id::new_unchecked("city_a"));
+        let hash =
+            grid.raster_origin + marker_local(Some(FALLBACK_EXTENT), &Id::new_unchecked("city_a"));
         assert!(
             got.distance(hash) > 1.0,
             "相机落点与哈希位置重合，图标锚点未生效"
@@ -1146,7 +1152,7 @@ mod tests {
         );
 
         // 城市级：图标按**城市** extent(1024) 归一化，但原点必须上溯到城市在世界里的
-        // 位置 (1536,1536)，而不是 `grid.origin`(0,0) → (1536+512, 1536+512)。
+        // 位置 (1536,1536)，而不是栅格原点 (0,0) → (1536+512, 1536+512)。
         let city_marker = &resolve_markers(&world, &drill, &grid, 1.0)[0];
         assert!(
             city_marker.center.distance(Vec2::new(2048.0, 2048.0)) < 1e-3,
@@ -1193,8 +1199,8 @@ mod tests {
         // 落点 = 该城市在父图里的标记位置（不跳到无关坐标）。
         assert!(drill.enter(&world, &Id::new_unchecked("city_a")));
         let parent = world.maps.iter().find(|m| m.id.as_str() == "world_main");
-        let expect =
-            grid.origin + marker_local(parent.and_then(|p| p.extent), &Id::new_unchecked("city_a"));
+        let expect = grid.raster_origin
+            + marker_local(parent.and_then(|p| p.extent), &Id::new_unchecked("city_a"));
         assert!(drill_target(&world, &drill, &grid).distance(expect) < 1e-3);
     }
 
@@ -1325,7 +1331,7 @@ mod tests {
         app.world_mut().spawn((
             Camera2d,
             Transform::default(),
-            OrthographicProjection::default_2d(),
+            Projection::Orthographic(OrthographicProjection::default_2d()),
         ));
         app.world_mut().spawn(Window::default());
         app
@@ -1459,7 +1465,7 @@ mod tests {
             .init_resource::<GridConfig>()
             .init_resource::<crate::zoom_level::ZoomCrossRequest>()
             .init_resource::<crate::camera::PointerOverUi>()
-            .add_event::<MouseWheel>()
+            .add_message::<MouseWheel>()
             .insert_resource(WorldProjection {
                 world,
                 ..Default::default()
@@ -1477,7 +1483,7 @@ mod tests {
         app.world_mut().spawn((
             Camera2d,
             Transform::from_xyz(2048.0, 2048.0, 0.0),
-            OrthographicProjection::default_2d(),
+            Projection::Orthographic(OrthographicProjection::default_2d()),
         ));
         let mut window = Window::default();
         window.set_cursor_position(Some(Vec2::new(640.0, 360.0)));
@@ -1493,11 +1499,12 @@ mod tests {
         .min;
         app.world_mut().resource_mut::<ViewState>().scale = inner;
 
-        app.world_mut().send_event(MouseWheel {
+        app.world_mut().write_message(MouseWheel {
             unit: MouseScrollUnit::Line,
             x: 0.0,
             y: -1.0,
             window: window_id,
+            phase: bevy::input::touch::TouchPhase::Moved,
         });
         app.update();
 

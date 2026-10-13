@@ -109,7 +109,7 @@ pub fn commit_stroke_on_release(
     let mut stroke = TerrainStroke::new();
     for p in active.points.drain(..) {
         // 世界坐标 → 图内局部坐标（反转 GridConfig 的 origin 偏移）。
-        let local = p - grid.origin;
+        let local = p - grid.raster_origin;
         stroke.push(Brush {
             center: (local.x, local.y),
             radius: brush.radius,
@@ -208,7 +208,7 @@ pub fn flush_terrain_texture(
     let is_full = rect == [0, 0, w, h];
     if is_full {
         let image = image_from_terrain(data, view.mode, atlas.as_deref(), view.terrain_soften);
-        if let Some(img) = images.get_mut(&tex.handle) {
+        if let Some(mut img) = images.get_mut(&tex.handle) {
             *img = image;
         }
         tex.dirty = None;
@@ -216,9 +216,9 @@ pub fn flush_terrain_texture(
     }
     // 增量 patch：只重算 dirty 矩形内的 cell，原地写进 `image.data`。
     let res = tex.res;
-    if let Some(img) = images.get_mut(&tex.handle) {
+    if let Some(mut img) = images.get_mut(&tex.handle) {
         crate::terrain_view::patch_terrain_image(
-            img,
+            &mut img,
             data,
             view.mode,
             atlas.as_deref(),

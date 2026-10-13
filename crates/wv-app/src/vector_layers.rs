@@ -32,6 +32,39 @@ const POI_MIN_SCREEN_PX: f32 = 5.0;
 const ROAD_CASING_Z: f32 = 0.09;
 /// 道路 fill 在 Z 轴上的偏移。
 const ROAD_Z: f32 = 0.1;
+/// 街道主干档（rank ≤ 2）宽度（屏幕像素）。
+const STREET_MAJOR_PX: f32 = 4.5;
+/// 街道次干 / 支路档宽度（屏幕像素）。
+const STREET_MINOR_PX: f32 = 2.75;
+/// 街道 casing 相对 fill 的外扩量（屏幕像素，两侧各半）。
+/// 与道路（casing 6.0 / fill 3.5）同一套「粗细差即路缘」的口径。
+const STREET_CASING_EXTRA_PX: f32 = 2.5;
+/// 街道矢量层 Z 偏移：压在 `distance.edges` 行程连线（ROAD_Z=0.1）之上、POI 之下。
+const STREET_MAJOR_Z: f32 = 0.11;
+const STREET_MINOR_Z: f32 = 0.115;
+/// 街道 casing 的 Z：紧贴在本档 fill 之下、上一档 fill 之上。
+///
+/// 街道必须画 casing：地图（GoogleMap）模式下 fill 是**白色**，而底图土地是
+/// `#f8f9fa`——只画白色 fill 等于白线落在近白底图上，肉眼不可见（用户实机反馈
+/// 「钻进武昌城看不到街道」的一半原因就是它）。casing 是浅灰 `#dadce0`，
+/// 靠它与 fill 的宽度差勾出可见路缘。
+const STREET_MAJOR_CASING_Z: f32 = 0.108;
+const STREET_MINOR_CASING_Z: f32 = 0.113;
+
+/// Z 序是**编译期**约束：底图 0.0 < 道路 fill < 主干 casing < 主干 fill < 支路 casing
+/// < 支路 fill。破了它就会出现「casing 被底图盖掉」或「casing 反压在 fill 上」，
+/// 两种表现都是街道在地图模式下不可见——正是这条约束要防的那个 bug。
+#[allow(clippy::assertions_on_constants)]
+const _: () = assert!(
+    ROAD_Z < STREET_MAJOR_CASING_Z
+        && STREET_MAJOR_CASING_Z < STREET_MAJOR_Z
+        && STREET_MAJOR_Z < STREET_MINOR_CASING_Z
+        && STREET_MINOR_CASING_Z < STREET_MINOR_Z,
+    "矢量层 Z 序被破坏：道路 fill < 主干 casing < 主干 fill < 支路 casing < 支路 fill"
+);
+/// 橡皮筋预览线：比街道细、压在最上（仍低于 POI 0.21）。
+const STREET_PREVIEW_PX: f32 = 1.75;
+const STREET_PREVIEW_Z: f32 = 0.12;
 /// POI 外环 / 内芯 Z 偏移。
 const POI_OUTER_Z: f32 = 0.21;
 const POI_INNER_Z: f32 = 0.22;
@@ -51,7 +84,12 @@ impl RoadMeshSpec {
         let length = delta.length().max(f32::EPSILON);
         let center = (a + b) * 0.5;
         let angle = delta.y.atan2(delta.x);
-        let world_thickness = (stroke_px / view_scale).max(f32::EPSILON);
+        // 屏幕像素 → 世界单位：`world = px * view_scale`。`view.scale` 的单位是
+        // **世界单位/像素**（见 `ViewState::scale` 的文档与 `terrain_chunks.rs` 的视口换算），
+        // 所以恒定的屏幕线宽必须**乘** scale。历史上这里写成 `px / view_scale`，
+        // 屏幕宽度实际变成 `stroke_px / scale²`：远观时细到几乎消失，深缩时胀成
+        // 占屏 40% 的巨带。
+        let world_thickness = (stroke_px * view_scale).max(f32::EPSILON);
         Self {
             center,
             length,
@@ -134,6 +172,16 @@ struct PoiInnerPool {
 pub struct VectorLayerEntities {
     road_casings: RoadLayerPool,
     roads: RoadLayerPool,
+    /// 街道矢量层（ADR-0010）：主干档（rank ≤ 2），画得粗、压在行程连线上。
+    street_major: RoadLayerPool,
+    /// 街道矢量层：次干/支路档，画得细。
+    street_minor: RoadLayerPool,
+    /// 街道主干档的 casing（浅灰路缘）：压在本档 fill 之下。
+    street_major_casing: RoadLayerPool,
+    /// 街道次干/支路档的 casing。
+    street_minor_casing: RoadLayerPool,
+    /// 街道编辑器的橡皮筋预览（上一落点 → 光标）。
+    street_preview: RoadLayerPool,
     poi_outer: PoiOuterPool,
     poi_inner: PoiInnerPool,
     road_materials: Vec<RoadMaterialSet>,
@@ -142,7 +190,9 @@ pub struct VectorLayerEntities {
     poi_material_mode: Option<crate::state::ViewMode>,
 }
 
-/// 每帧同步道路与 POI。系统只消费 `ProjectionFrame`，不修改世界数据。
+/// 每帧同步道路、街道与 POI。系统只消费 `ProjectionFrame` 与街道缓存，
+/// 不修改世界数据。
+#[allow(clippy::too_many_arguments)]
 pub fn sync_vector_layers(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -150,6 +200,8 @@ pub fn sync_vector_layers(
     view: Res<ViewState>,
     grid: Res<GridConfig>,
     frame: Res<ProjectionFrame>,
+    streets: Res<crate::streets::StreetLayerCache>,
+    editor: Res<crate::streets::StreetEditorState>,
     mut layer: ResMut<VectorLayerEntities>,
 ) {
     let road_materials_changed = ensure_road_materials(&mut materials, view.mode, &mut layer);
@@ -160,6 +212,14 @@ pub fn sync_vector_layers(
         layer.roads.mesh.despawn(&mut commands);
         layer.road_casings.specs.clear();
         layer.roads.specs.clear();
+        layer.street_major.mesh.despawn(&mut commands);
+        layer.street_minor.mesh.despawn(&mut commands);
+        layer.street_major_casing.mesh.despawn(&mut commands);
+        layer.street_minor_casing.mesh.despawn(&mut commands);
+        layer.street_major.specs.clear();
+        layer.street_minor.specs.clear();
+        layer.street_major_casing.specs.clear();
+        layer.street_minor_casing.specs.clear();
     } else {
         let (casing, fill) = layer
             .road_materials
@@ -172,7 +232,7 @@ pub fn sync_vector_layers(
             &mut meshes,
             &frame.road_segments,
             view.scale,
-            casing,
+            casing.clone(),
             GOOGLE_ROAD_CASING_PX,
             ROAD_CASING_Z,
             road_materials_changed,
@@ -183,11 +243,43 @@ pub fn sync_vector_layers(
             &mut meshes,
             &frame.road_segments,
             view.scale,
-            fill,
+            fill.clone(),
             GOOGLE_ROAD_FILL_PX,
             ROAD_Z,
             road_materials_changed,
             &mut layer.roads,
+        );
+        // 橡皮筋预览：画线中的「上一落点 → 光标」（编辑器反馈，与 roads_visible
+        // 无关——预览属于编辑会话，不属于图层可见性）。两端都是**视图空间**坐标
+        // （光标来自 `view.cursor_world`，落点由 `streets` 存同一空间），
+        // 不需要任何换算——历史上这里用 `grid.origin + (世界 − 本图帧原点)` 兜了
+        // 一圈，城级（继承底图）时那一圈会把预览推到视野外。
+        let preview: Vec<(Vec2, Vec2)> =
+            match (editor.enabled, editor.last_click, view.cursor_world) {
+                (true, Some(a), Some(b)) => vec![(a, b)],
+                _ => Vec::new(),
+            };
+        sync_road_strokes(
+            &mut commands,
+            &mut meshes,
+            &preview,
+            view.scale,
+            fill.clone(),
+            STREET_PREVIEW_PX,
+            STREET_PREVIEW_Z,
+            road_materials_changed,
+            &mut layer.street_preview,
+        );
+        sync_street_layers(
+            &mut commands,
+            &mut meshes,
+            &grid,
+            &streets,
+            view.scale,
+            casing,
+            fill,
+            road_materials_changed,
+            &mut layer,
         );
     }
 
@@ -226,10 +318,7 @@ fn ensure_road_materials(
     if !layer.road_materials.iter().any(|set| set.mode == mode) {
         let (casing_color, fill_color) = match mode {
             crate::state::ViewMode::GoogleMap => (GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL),
-            _ => (
-                palette::LINE_ON_MID.with_alpha(0.28),
-                palette::ROAD_STROKE,
-            ),
+            _ => (palette::LINE_ON_MID.with_alpha(0.28), palette::ROAD_STROKE),
         };
         layer.road_materials.push(RoadMaterialSet {
             mode,
@@ -262,6 +351,89 @@ fn ensure_poi_materials(
     }
     layer.poi_material_mode = Some(mode);
     true
+}
+
+/// 同步街道矢量层（ADR-0010 待做第 2 项）。
+///
+/// 路段流按 LOD 档筛过后分两档宽度画出；坐标变换与地点/连线同一条链
+/// （[`GridConfig::map_to_view`]，本图局部 → 视图空间），不另立换算。
+/// 缓存为空时两池照常走 `sync_road_strokes` 的空列表路径——既清干净又无资产泄漏。
+///
+/// **每档都画 casing + fill 两层**（与道路同一套口径）：只画 fill 时，地图模式下
+/// 白 fill 落在近白底图上等于不可见（casing 的浅灰才是肉眼看到的那条线）。
+#[allow(clippy::too_many_arguments)]
+fn sync_street_layers(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    grid: &GridConfig,
+    streets: &crate::streets::StreetLayerCache,
+    view_scale: f32,
+    casing: Handle<ColorMaterial>,
+    fill: Handle<ColorMaterial>,
+    material_changed: bool,
+    layer: &mut VectorLayerEntities,
+) {
+    let tier = lod_tier(view_scale);
+    let mut major: Vec<(Vec2, Vec2)> = Vec::new();
+    let mut minor: Vec<(Vec2, Vec2)> = Vec::new();
+    for (rank, segments) in crate::streets::street_streams(&streets.sources) {
+        if !crate::streets::street_kept_at_tier(rank, tier) {
+            continue;
+        }
+        // 本图局部坐标 → 视图空间（`GridConfig::map_to_view`，与地点同一条链；
+        // 城市继承父图底图时栅格原点不是本图帧原点，绝不能拿 `raster_origin` 顶替）。
+        let target = if rank <= 2 { &mut major } else { &mut minor };
+        target.extend(
+            segments
+                .iter()
+                .map(|(a, b)| (grid.map_to_view(*a), grid.map_to_view(*b))),
+        );
+    }
+    // casing 先画（Z 更低），fill 后画：两层的宽度差就是可见路缘。
+    sync_road_strokes(
+        commands,
+        meshes,
+        &major,
+        view_scale,
+        casing.clone(),
+        STREET_MAJOR_PX + STREET_CASING_EXTRA_PX,
+        STREET_MAJOR_CASING_Z,
+        material_changed,
+        &mut layer.street_major_casing,
+    );
+    sync_road_strokes(
+        commands,
+        meshes,
+        &major,
+        view_scale,
+        fill.clone(),
+        STREET_MAJOR_PX,
+        STREET_MAJOR_Z,
+        material_changed,
+        &mut layer.street_major,
+    );
+    sync_road_strokes(
+        commands,
+        meshes,
+        &minor,
+        view_scale,
+        casing,
+        STREET_MINOR_PX + STREET_CASING_EXTRA_PX,
+        STREET_MINOR_CASING_Z,
+        material_changed,
+        &mut layer.street_minor_casing,
+    );
+    sync_road_strokes(
+        commands,
+        meshes,
+        &minor,
+        view_scale,
+        fill,
+        STREET_MINOR_PX,
+        STREET_MINOR_Z,
+        material_changed,
+        &mut layer.street_minor,
+    );
 }
 
 /// 同步一层道路 stroke。规格不变时只更新 Transform，不新增 Mesh 资产。
@@ -348,7 +520,9 @@ fn sync_poi(
     let radius_inner = radius_outer * 0.52;
     let ring_thickness = (1.5 * view_scale).max(f32::EPSILON);
     let ring_inner = (radius_outer - ring_thickness).max(f32::EPSILON);
-    let mode = layer.poi_material_mode.expect("ensure_poi_materials 必须已初始化");
+    let mode = layer
+        .poi_material_mode
+        .expect("ensure_poi_materials 必须已初始化");
     let materials = layer
         .poi_materials
         .iter()
@@ -527,6 +701,45 @@ mod tests {
         );
     }
 
+    /// 街道与道路同口径：每档都必须有 casing，粗细差即路缘；且 Z 序要保证 casing
+    /// 既不被底图（Z=0.0）盖掉、也不越过自己那档 fill——地图模式下 fill 是白色，
+    /// 落在近白底图上唯一看得见的就是这层浅灰 casing。
+    #[test]
+    fn street_casing_is_thicker_than_its_fill_and_keeps_the_z_order() {
+        let (a, b) = (Vec2::ZERO, Vec2::X * 100.0);
+        for (tier, fill_px, fill_z, casing_z) in [
+            (
+                "主干",
+                STREET_MAJOR_PX,
+                STREET_MAJOR_Z,
+                STREET_MAJOR_CASING_Z,
+            ),
+            (
+                "支路",
+                STREET_MINOR_PX,
+                STREET_MINOR_Z,
+                STREET_MINOR_CASING_Z,
+            ),
+        ] {
+            let casing = RoadMeshSpec::from_segment(a, b, 1.0, fill_px + STREET_CASING_EXTRA_PX);
+            let fill = RoadMeshSpec::from_segment(a, b, 1.0, fill_px);
+            assert!(
+                casing.world_thickness > fill.world_thickness,
+                "{tier} 街道 casing 应厚于 fill：casing={} fill={}，期望 {}px > {}px",
+                casing.world_thickness,
+                fill.world_thickness,
+                fill_px + STREET_CASING_EXTRA_PX,
+                fill_px
+            );
+            assert!(
+                casing_z < fill_z,
+                "{tier} 街道 casing 的 Z（{casing_z}）必须低于自己那档 fill（{fill_z}）"
+            );
+        }
+        // 全序（底图 0.0 < 道路 fill < 主干 casing < …）由模块顶部的
+        // `const _: () = assert!(…)` 在**编译期**把关，这里不再重复。
+    }
+
     #[test]
     fn road_spec_midpoint_and_length_match_endpoints() {
         let a = Vec2::new(100.0, 200.0);
@@ -538,17 +751,18 @@ mod tests {
         assert!(spec.angle.abs() < 1e-4, "angle={}", spec.angle);
     }
 
-    /// 线宽公式：`world_thickness = stroke_px / view.scale`。
+    /// 线宽公式：`world_thickness = stroke_px * view.scale`，屏幕宽度恒定
+    /// （`world_thickness / view.scale == stroke_px`），不随缩放变化。
     #[test]
-    fn road_spec_thickness_inverts_with_view_scale() {
-        let s_zoomed_out = RoadMeshSpec::from_segment(Vec2::ZERO, Vec2::X, 0.1, 3.0);
-        let s_normal = RoadMeshSpec::from_segment(Vec2::ZERO, Vec2::X, 1.0, 3.0);
-        let s_zoomed_in = RoadMeshSpec::from_segment(Vec2::ZERO, Vec2::X, 8.0, 3.0);
-        assert!(s_zoomed_out.world_thickness > s_normal.world_thickness);
-        assert!(s_normal.world_thickness > s_zoomed_in.world_thickness);
-        assert!((s_zoomed_out.world_thickness * 0.1 - 3.0).abs() < 1e-4);
-        assert!((s_normal.world_thickness * 1.0 - 3.0).abs() < 1e-4);
-        assert!((s_zoomed_in.world_thickness * 8.0 - 3.0).abs() < 1e-4);
+    fn road_spec_screen_width_stays_constant_across_zoom() {
+        for scale in [0.1, 1.0, 8.0] {
+            let spec = RoadMeshSpec::from_segment(Vec2::ZERO, Vec2::X, scale, 3.0);
+            let screen_px = spec.world_thickness / scale;
+            assert!(
+                (screen_px - 3.0).abs() < 1e-4,
+                "scale={scale}: 屏幕宽度应恒为 3px，实得 {screen_px}px"
+            );
+        }
     }
 
     #[test]
@@ -596,6 +810,8 @@ mod tests {
             ..Default::default()
         });
         world.init_resource::<VectorLayerEntities>();
+        world.init_resource::<crate::streets::StreetLayerCache>();
+        world.init_resource::<crate::streets::StreetEditorState>();
 
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);
@@ -613,6 +829,57 @@ mod tests {
         assert_eq!(
             next_material_count, material_count,
             "第二帧 Material 资产应稳定：first={material_count} second={next_material_count}"
+        );
+    }
+
+    /// 回归（用户报告：钻入武昌城「看不到武昌」）：城市**继承**父图底图时，
+    /// 栅格原点仍是世界图原点 (0,0)，而街道坐标是**本图局部**坐标，必须按
+    /// **本图图帧原点**换算。曾用 `raster_origin` 换算，1024² 城市的街道被画到
+    /// (0..1024)——即世界图左上角，钻进去之后的视野之外，于是「一条街都看不到」。
+    #[test]
+    fn street_strokes_use_the_map_frame_origin_when_the_raster_is_inherited() {
+        // 城市图帧原点（由父图钻入图标派生）= (1536,1536)；显示的栅格仍是世界图 → (0,0)。
+        let map_origin = Vec2::new(1536.0, 1536.0);
+        let mut world = World::default();
+        world.insert_resource(Assets::<Mesh>::default());
+        world.insert_resource(Assets::<ColorMaterial>::default());
+        world.insert_resource(ViewState::default());
+        world.insert_resource(GridConfig {
+            cell_size: 4.0,
+            raster_origin: Vec2::ZERO,
+            map_origin,
+            map_size: 1024.0,
+        });
+        world.insert_resource(ProjectionFrame::default());
+        world.init_resource::<VectorLayerEntities>();
+        world.insert_resource(crate::streets::StreetLayerCache {
+            map_id: Some(wv_core::Id::new_unchecked("map_city")),
+            sources: vec![(
+                "maps/city_wuchang/roads.yaml".to_owned(),
+                wv_core::StreetLayer {
+                    segments: vec![wv_core::StreetSegment::straight(
+                        wv_core::RoadClass::Primary,
+                        100.0,
+                        200.0,
+                        300.0,
+                        200.0,
+                    )],
+                },
+            )],
+        });
+        world.init_resource::<crate::streets::StreetEditorState>();
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(sync_vector_layers);
+        schedule.run(&mut world);
+
+        let layer = world.resource::<VectorLayerEntities>();
+        assert_eq!(layer.street_major.specs.len(), 1, "应画出 1 段主干道");
+        let got = layer.street_major.specs[0].center;
+        let expect = map_origin + Vec2::new(200.0, 200.0);
+        assert!(
+            got.distance(expect) < 1e-3,
+            "街道中点应落在城市帧 {expect}；实得 {got}（若误用栅格原点会得到 (200,200)）"
         );
     }
 }

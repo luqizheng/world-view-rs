@@ -123,7 +123,7 @@ pub fn load_tile_atlas(config_rel: &str) -> Option<TileAtlas> {
     Some(TileAtlas {
         width: image.width(),
         height: image.height(),
-        rgba: image.data,
+        rgba: image.data.unwrap_or_default(),
         cols: cfg.cols,
         rows: cfg.rows,
         inset: cfg.inset_px,
@@ -433,7 +433,7 @@ pub(crate) fn replace_terrain_texture(
 ) {
     let res = image.width() / data.width.max(1);
     let handle = if images.get_mut(&tex.handle).is_some() {
-        if let Some(old) = images.get_mut(&tex.handle) {
+        if let Some(mut old) = images.get_mut(&tex.handle) {
             *old = image;
         }
         tex.handle.clone()
@@ -464,8 +464,10 @@ pub(crate) fn replace_terrain_texture(
 /// - 否则沿 `parent` 向上找最近的一张；
 /// - 都没有 → `None`（调用方用占位地形兜底）。
 ///
-/// 返回的**来源图节点**同时也是 `grid.cell_size` / `grid.origin` 的唯一依据——
-/// 帧、尺寸、格子必须同源，否则地形四边形会和标记错开半幅（基线 §2.15 的老坑）。
+/// 返回的**来源图节点**同时也是 `grid.cell_size` / `grid.raster_origin` 的唯一
+/// 依据——**栅格空间**的尺寸与原必须同源，否则地形四边形会和标记错开半幅
+/// （基线 §2.15 的老坑）。注意**本图局部内容**不看这张图，而看当前图的
+/// `grid.map_origin`（见 [`GridConfig`] 的两套原点表）。
 ///
 /// 有环保护：最多走 `maps.len() + 1` 步。
 pub fn active_terrain<'w>(
@@ -1096,7 +1098,12 @@ pub fn patch_terrain_image(
     // 只遍历 dirty 矩形内的格。
     for cy in gy0..gy1 {
         for cx in gx0..gx1 {
-            renderer.write_cell(&mut image.data, stride, cx, cy);
+            renderer.write_cell(
+                image.data.as_mut().expect("地形图必须有像素数据"),
+                stride,
+                cx,
+                cy,
+            );
         }
     }
 }
@@ -1192,9 +1199,11 @@ pub fn placeholder_terrain(w: u32, h: u32) -> TerrainData {
 /// 否则地形稍后加载完时，`last_mode` 已等于当前 mode，会误判「没变」而永不重建。
 /// `last_mode` 仅在**真正生成了纹理之后**才更新。
 pub fn rebuild_texture_on_mode_change(
+    mut commands: Commands,
     view: Res<ViewState>,
     projection: Res<WorldProjection>,
     drill: Res<DrillState>,
+    grid: Res<GridConfig>,
     atlas: Option<Res<TileAtlas>>,
     mut tex: ResMut<TerrainTexture>,
     mut images: ResMut<Assets<Image>>,
@@ -1211,6 +1220,13 @@ pub fn rebuild_texture_on_mode_change(
         // 地形尚未可用：不重建，也不置位 last_mode，等地形就绪后再走这里。
         return;
     };
+    // 换级淡化（ADR-0009 §2⑦ / README §12-25）：只有**换图**才淡出旧底图；
+    // 换模式/换淡化开关是「换眼镜」，保持既有的瞬时重建（淡化是 12-25 的收敛项）。
+    // 注意此刻 `grid` 仍是旧图的栅格口径（sync_grid_config 在本系统之后运行），
+    // 淡出精灵恰好盖住旧底图原本的位置与幅面。
+    if map_changed && tex.last_map.is_some() {
+        spawn_basemap_fadeout(&mut commands, &mut images, &tex, &grid);
+    }
     let image = image_from_terrain(data, view.mode, atlas.as_deref(), view.terrain_soften);
     replace_terrain_texture(
         &mut tex,
@@ -1230,25 +1246,115 @@ pub fn rebuild_texture_on_mode_change(
     tex.last_map = Some(node.id.clone());
 }
 
+// ---------------------------------------------------------------------------
+// 换级淡化（ADR-0009 §2⑦ / README §12-25）
+// ---------------------------------------------------------------------------
+
+/// 换级淡化时长（秒）：旧底图整幅淡出、露出新底图。
+///
+/// 第一版取 0.4s——比「闪一下」（<0.2s）有过渡感，比「拖沓」（>0.8s）短，
+/// 与常见地图应用的级间过渡同一量级。是否可调/可关注册于 README §12-25。
+pub const LEVEL_FADE_SECS: f32 = 0.4;
+
+/// 旧底图淡出精灵的 Z：盖住新 chunk 层（`TERRAIN_Z = 0.0`），
+/// 但在道路（`ROAD_Z = 0.1`）与全部矢量层之下——过渡只属于底图，
+/// 标记/街道/文字从第一帧起就画在新图的正确位置上。
+const FADEOUT_Z: f32 = 0.05;
+
+/// 换级时旧底图的淡出精灵标记（防重复 + 淡出系统的过滤口径）。
+#[derive(Component)]
+pub struct BasemapFadeOut {
+    /// 剩余不透明度 `1.0 → 0.0`；归零即 despawn。
+    pub alpha: f32,
+}
+
+/// 淡出步进（纯函数，便于测试）：返回下一帧 alpha，`None` = 已到 0，应 despawn。
+fn advance_fade(alpha: f32, dt: f32) -> Option<f32> {
+    let next = alpha - dt / LEVEL_FADE_SECS;
+    (next > 0.0).then_some(next)
+}
+
+/// 换级那一刻：把**旧底图像素**克隆成一份淡出资产并铺在新底图之上。
+///
+/// 为什么必须克隆：[`replace_terrain_texture`] 优先**复用旧句柄**原地覆写像素，
+/// 不克隆的话淡出精灵与主底图共用同一张 `Image`，旧画面会瞬间变成新画面。
+/// 克隆是一帧一次性开销（整图 memcpy），换级本来就伴随整图重建，可接受。
+///
+/// 摆位用调用时刻的 `grid`（此刻仍是**旧图**的栅格原点/格长——本系统排在
+/// [`sync_grid_config`] 之前），所以淡出精灵精确盖住旧底图原本的位置与幅面。
+fn spawn_basemap_fadeout(
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    tex: &TerrainTexture,
+    grid: &GridConfig,
+) {
+    let Some(old) = images.get(&tex.handle) else {
+        return;
+    };
+    let handle = images.add(old.clone());
+    let size = tex.size as f32 * grid.cell_size;
+    let center = grid.raster_origin + Vec2::splat(size * 0.5);
+    commands.spawn((
+        BasemapFadeOut { alpha: 1.0 },
+        Sprite {
+            image: handle,
+            custom_size: Some(Vec2::splat(size)),
+            color: Color::WHITE,
+            ..Default::default()
+        },
+        Transform::from_xyz(center.x, center.y, FADEOUT_Z),
+    ));
+}
+
+/// 淡出推进：逐帧降低旧底图精灵的不透明度，归零即回收实体。
+pub fn tick_basemap_fadeout(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut q: Query<(Entity, &mut Sprite, &mut BasemapFadeOut)>,
+) {
+    let dt = time.delta_secs();
+    for (entity, mut sprite, mut fade) in &mut q {
+        match advance_fade(fade.alpha, dt) {
+            Some(next) => {
+                fade.alpha = next;
+                sprite.color = Color::srgba(1.0, 1.0, 1.0, next);
+            }
+            None => {
+                commands.entity(entity).despawn();
+            }
+        }
+    }
+}
+
 /// 网格几何的默认配置（与纹理尺寸挂钩）。
 ///
 /// 坐标口径统一到**地图 extent 坐标系**（`[0, extent]`）：Place、MapNode.icons、
 /// 事件落点全部以 extent 为参照；网格若自作主张把原点挪到 `-extent/2`，
 /// 地形四边形就会与所有标记错开半幅——主视口「看起来全黑」的根因之一。
 ///
-/// Phase 2：`extent` / `origin` 必须取自**纹理的实际来源图**（当前图或它向上继承
-/// 到的那张），而不是永远取根图。城市图自带 1024² 栅格时，格子边长与帧原点都要
-/// 跟着城市走；继续按世界图 4096² 算，城市地形会被拉到 1/4 大小并与标记错位。
+/// 本系统维护 [`GridConfig`] 的**两套原点**（分工见该类型的文档表）：
+///
+/// - [`GridConfig::raster_origin`] / `cell_size` 取自**纹理的实际来源图**
+///   （当前图，或它向上继承到的那张）。城市图自带 1024² 栅格时，格子边长与
+///   栅格原点都要跟着城市走；继续按世界图 4096² 算，城市地形会被拉到 1/4
+///   大小并与标记错位。
+/// - [`GridConfig::map_origin`] / `map_size` 取自**当前图**（`drill.current()`），
+///   与底图继承自谁无关。街道 / 地点 / 地图外框都靠它落位。
+///
+/// 早退条件里的 `drill.is_changed()` 不是可选优化：钻入一座**继承**父图底图的
+/// 城市时纹理一个像素都没变（`tex` 不变），只有当前图变了；只看纹理就会漏掉
+/// 这次变化，`map_origin` 停在世界原点，整座城的街道被画到视野外——
+/// 「钻进武昌城看不到武昌」的根因。
 pub fn sync_grid_config(
     tex: Res<TerrainTexture>,
     projection: Res<WorldProjection>,
     drill: Res<DrillState>,
     mut grid: ResMut<GridConfig>,
 ) {
-    if !tex.is_added() && !tex.is_changed() {
+    if !tex.is_added() && !tex.is_changed() && !drill.is_changed() {
         return;
     }
-    // 来源图（纹理正在显示的那张）决定尺寸与帧；无来源时回退根图 / 4096²。
+    // 来源图（纹理正在显示的那张）决定尺寸与栅格原点；无来源时回退根图 / 4096²。
     let source = active_terrain(&projection.world, drill.current()).map(|(node, _)| node);
     let extent = source
         .and_then(|n| n.extent.as_ref())
@@ -1271,11 +1377,24 @@ pub fn sync_grid_config(
         .unwrap_or(4096.0);
     // 纹理 size 格 × cell_size = extent，一格一格对齐地图。
     grid.cell_size = (extent / tex.size as f32).max(0.01);
-    // 帧原点取来源图在世界坐标里的落点（`coord` 是唯一实现点，基线 §2.15）。
-    grid.origin = source
+    // 栅格原点取来源图在世界坐标里的落点（`coord` 是唯一实现点，基线 §2.15）。
+    grid.raster_origin = source
         .and_then(|n| wv_core::resolve_frame_in(&projection.world.maps, &n.id))
         .map(|f| Vec2::new(f.world_origin.x, f.world_origin.y))
         .unwrap_or(Vec2::ZERO);
+    // 图帧原点取**当前图**的落点（`drill::map_origin` 是唯一实现点），
+    // 幅面取当前图的 extent；两者都不看底图继承自谁。
+    let current = drill.current_node(&projection.world);
+    let map_origin = current
+        .map(|n| crate::drill::map_origin(&projection.world, n, &grid))
+        .unwrap_or(grid.raster_origin);
+    let map_size = current
+        .and_then(|n| n.extent.as_ref())
+        .map(|e| e.width.max(e.height))
+        // 没有 extent（内存造的图）→ 退回「栅格能盖住的范围」，与旧行为一致。
+        .unwrap_or(tex.size as f32 * grid.cell_size);
+    grid.map_origin = map_origin;
+    grid.map_size = map_size;
 }
 
 /// 世界空间的地形四边形标记（防重复 spawn）。
@@ -1299,8 +1418,9 @@ pub fn sync_terrain_sprite(
     let _ = &*tex; // suppress unused warning without moving Res
     if false {
         let size = tex.size as f32 * grid.cell_size;
-        let center = grid.origin + Vec2::splat(size * 0.5);
-        if let Ok((_, mut sprite, mut tf)) = q.get_single_mut() {
+        // 回退实现画的是**栅格**那一整块（`terrain_chunks` 当前实现同口径）。
+        let center = grid.raster_origin + Vec2::splat(size * 0.5);
+        if let Ok((_, mut sprite, mut tf)) = q.single_mut() {
             // Bevy 0.15：纹理句柄在 Sprite.image 字段里，不是独立组件。
             if sprite.image != tex.handle {
                 sprite.image = tex.handle.clone();
@@ -1455,7 +1575,12 @@ mod tests {
         };
         let img = image_from_terrain(&data, ViewMode::Schematic, Some(&atlas), false);
         let mut mixed = 0usize;
-        for px in img.data.chunks_exact(4) {
+        for px in img
+            .data
+            .as_ref()
+            .expect("地形图必须有像素数据")
+            .chunks_exact(4)
+        {
             let is_a = px[0] == 200 && px[2] == 0;
             let is_b = px[0] == 0 && px[2] == 200;
             if !is_a && !is_b {
@@ -1521,7 +1646,7 @@ mod tests {
         // res=1（无图集），像素维度 = 4×4 = 16 像素。
         let mut img = image_from_terrain(&data, ViewMode::Schematic, None, false);
         // 用 0 标记所有像素。
-        for px in img.data.iter_mut() {
+        for px in img.data.as_mut().expect("地形图必须有像素数据").iter_mut() {
             *px = 0;
         }
         // patch 矩形 (1,1)-(3,3) = 2×2 = 4 像素。
@@ -1536,10 +1661,14 @@ mod tests {
         );
         // 矩形外的像素仍是 0。
         // 索引 (0,0) → 像素 0..4。
-        assert_eq!(&img.data[0..4], &[0, 0, 0, 0], "矩形外像素应保持 0");
+        assert_eq!(
+            &img.data.as_ref().expect("地形图必须有像素数据")[0..4],
+            &[0, 0, 0, 0],
+            "矩形外像素应保持 0"
+        );
         // 矩形内的像素已被重写为某种 kind 颜色（不一定是 0）。
         // 索引 (1,1) → 像素 4..8。
-        let inner = &img.data[4..8];
+        let inner = &img.data.as_ref().expect("地形图必须有像素数据")[4..8];
         // 至少 R/G/B/A 不全 0（kind 至少 0 = 深水，对应色调非全 0）。
         let _ = inner; // 形态检查：跑完没崩。
     }
@@ -1550,7 +1679,7 @@ mod tests {
         let data = placeholder_terrain(4, 4);
         let mut img = image_from_terrain(&data, ViewMode::Schematic, None, false);
         // 把整图刷成 0xFF 哨兵值。
-        for px in img.data.iter_mut() {
+        for px in img.data.as_mut().expect("地形图必须有像素数据").iter_mut() {
             *px = 0xFF;
         }
         // patch 矩形 (1,1)-(2,2) = 1 像素。
@@ -1564,16 +1693,28 @@ mod tests {
             false,
         );
         // (0,0) 像素仍是 0xFF。
-        assert_eq!(img.data[0], 0xFF);
-        assert_eq!(img.data[1], 0xFF);
-        assert_eq!(img.data[2], 0xFF);
-        assert_eq!(img.data[3], 0xFF);
+        assert_eq!(img.data.as_ref().expect("地形图必须有像素数据")[0], 0xFF);
+        assert_eq!(img.data.as_ref().expect("地形图必须有像素数据")[1], 0xFF);
+        assert_eq!(img.data.as_ref().expect("地形图必须有像素数据")[2], 0xFF);
+        assert_eq!(img.data.as_ref().expect("地形图必须有像素数据")[3], 0xFF);
         // (3,3) 像素（最后 4 字节）仍是 0xFF。
-        let n = img.data.len();
-        assert_eq!(img.data[n - 4], 0xFF);
-        assert_eq!(img.data[n - 3], 0xFF);
-        assert_eq!(img.data[n - 2], 0xFF);
-        assert_eq!(img.data[n - 1], 0xFF);
+        let n = img.data.as_ref().expect("地形图必须有像素数据").len();
+        assert_eq!(
+            img.data.as_ref().expect("地形图必须有像素数据")[n - 4],
+            0xFF
+        );
+        assert_eq!(
+            img.data.as_ref().expect("地形图必须有像素数据")[n - 3],
+            0xFF
+        );
+        assert_eq!(
+            img.data.as_ref().expect("地形图必须有像素数据")[n - 2],
+            0xFF
+        );
+        assert_eq!(
+            img.data.as_ref().expect("地形图必须有像素数据")[n - 1],
+            0xFF
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1595,7 +1736,12 @@ mod tests {
             unreachable!()
         };
         let (mut n_water, mut n_land, mut n_line) = (0usize, 0usize, 0usize);
-        for px in img.data.chunks_exact(4) {
+        for px in img
+            .data
+            .as_ref()
+            .expect("地形图必须有像素数据")
+            .chunks_exact(4)
+        {
             let near = |t: bevy::color::Srgba| {
                 (px[0] as f32 / 255.0 - t.red).abs() < 0.02
                     && (px[1] as f32 / 255.0 - t.green).abs() < 0.02
@@ -1698,9 +1844,9 @@ mod tests {
         // 抽查内部格与边界位置的像素：全部应等于 Google 近白陆色。
         for i in [0usize, 9, 27, 54, 63] {
             let (r, g, b) = (
-                img.data[i * 4] as f32 / 255.0,
-                img.data[i * 4 + 1] as f32 / 255.0,
-                img.data[i * 4 + 2] as f32 / 255.0,
+                img.data.as_ref().expect("地形图必须有像素数据")[i * 4] as f32 / 255.0,
+                img.data.as_ref().expect("地形图必须有像素数据")[i * 4 + 1] as f32 / 255.0,
+                img.data.as_ref().expect("地形图必须有像素数据")[i * 4 + 2] as f32 / 255.0,
             );
             assert!(
                 (r - land.red).abs() < 0.01
@@ -1731,7 +1877,11 @@ mod tests {
             let x = gx as u32 * res + res / 2;
             let y = gy as u32 * res + res / 2;
             let o = ((y * img.width() + x) * 4) as usize;
-            [img.data[o], img.data[o + 1], img.data[o + 2]]
+            [
+                img.data.as_ref().expect("地形图必须有像素数据")[o],
+                img.data.as_ref().expect("地形图必须有像素数据")[o + 1],
+                img.data.as_ref().expect("地形图必须有像素数据")[o + 2],
+            ]
         };
         assert_ne!(cell_center(9), cell_center(27), "浅水应与陆色不同");
         assert_ne!(cell_center(18), cell_center(27), "森林应与陆色不同");
@@ -1747,7 +1897,18 @@ mod tests {
             unreachable!("SOFTEN_TOWARD 应为 Srgba")
         };
         let mut changed = 0usize;
-        for (r, s) in raw.data.chunks_exact(4).zip(soft.data.chunks_exact(4)) {
+        for (r, s) in raw
+            .data
+            .as_ref()
+            .expect("地形图必须有像素数据")
+            .chunks_exact(4)
+            .zip(
+                soft.data
+                    .as_ref()
+                    .expect("地形图必须有像素数据")
+                    .chunks_exact(4),
+            )
+        {
             if r == s {
                 continue;
             }
@@ -1803,6 +1964,7 @@ mod tests {
             extent,
             raster: None,
             geographic_source: None,
+            orientation: 0.0,
         }
     }
 
@@ -1958,5 +2120,229 @@ mod tests {
             false,
         );
         assert_eq!(tex.last_map.as_ref(), Some(&held));
+    }
+
+    /// 回归（用户报告：钻入武昌城「看不到武昌」）：城市**继承**父图底图时，钻入
+    /// 一次都不会让纹理变化，`GridConfig` 必须靠 `drill.is_changed()` 认出来，
+    /// 并把 `map_origin` 从世界原点切到城市图帧原点。
+    ///
+    /// 断言分两帧：第一帧在世界（图帧原点 == 栅格原点 == 0），第二帧钻入城市
+    /// （**不动纹理**）——此时栅格原点仍是世界图的 (0,0)，而图帧原点必须变成
+    /// 城市由父图图标派生的落点 (1536,1536)。
+    #[test]
+    fn grid_map_origin_follows_the_drilled_map_when_the_raster_is_inherited() {
+        let mut core = two_level_world();
+        // 助手把两张图都造 `City` 级；`ensure_root` 要认根图，标回 `World`。
+        core.maps[0].level = wv_core::map::MapLevel::World;
+        // 只有世界图有地形：城市继承它 → 纹理两帧都不变。
+        core.set_terrain(wv_core::Id::new_unchecked("map_world"), small_terrain(3));
+        {
+            let root = &mut core.maps[0];
+            root.children.push(wv_core::Id::new_unchecked("map_city"));
+            root.icons.push(wv_core::map::IconSpec {
+                id: wv_core::Id::new_unchecked("icon_city"),
+                anchor: Some([0.5, 0.5]),
+                shape: Default::default(),
+                size: None,
+                color: None,
+                drill_into: Some(wv_core::Id::new_unchecked("map_city")),
+            });
+        }
+        let city = wv_core::Id::new_unchecked("map_city");
+
+        let mut drill = DrillState::default();
+        drill.ensure_root(&core);
+        assert_eq!(
+            drill.current().map(|i| i.as_str().to_owned()),
+            Some("map_world".to_owned()),
+            "起始应落在根图"
+        );
+
+        let mut app = World::default();
+        app.insert_resource(TerrainTexture {
+            handle: Handle::default(),
+            size: 4,
+            res: 1,
+            dirty: None,
+            chunks_dirty: None,
+            last_mode: None,
+            last_soften: false,
+            // 纹理装的是世界图底图；钻入城市后**不会**重建（继承同一个来源）。
+            last_map: Some(wv_core::Id::new_unchecked("map_world")),
+        });
+        app.insert_resource(WorldProjection {
+            world: core.clone(),
+            ..Default::default()
+        });
+        app.insert_resource(drill);
+        app.insert_resource(GridConfig::default());
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(sync_grid_config);
+        schedule.run(&mut app);
+        assert_eq!(
+            app.resource::<GridConfig>().map_origin,
+            Vec2::ZERO,
+            "世界图上图帧原点与栅格原点重合于 (0,0)"
+        );
+
+        // 第二帧：只换当前图（钻入城市），纹理一个字都不动。
+        {
+            let mut d = app.resource_mut::<DrillState>();
+            assert!(d.enter(&core, &city), "城市应是根图的直接子图");
+        }
+        schedule.run(&mut app);
+
+        let grid = app.resource::<GridConfig>();
+        assert_eq!(grid.raster_origin, Vec2::ZERO, "继承的底图仍是世界图原点");
+        assert_eq!(
+            grid.map_origin,
+            Vec2::new(1536.0, 1536.0),
+            "城市图帧原点应由父图图标派生：2048 − 512 = 1536；实得 {}",
+            grid.map_origin
+        );
+        assert_eq!(
+            grid.map_size, 1024.0,
+            "幅面应取当前图（城市）的 extent，而不是世界图的 4096"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 换级淡化（ADR-0009 §2⑦ / README §12-25）
+    // -----------------------------------------------------------------------
+
+    /// 步进口径：0.4s 内走完，dt 超长一步到位；进度单调不增。
+    #[test]
+    fn fade_step_reaches_zero_within_the_declared_duration() {
+        // 60fps：0.4s ≈ 24 步走完（前 23 步仍有余量，第 24 步归零回收）。
+        let dt = 1.0 / 60.0;
+        let mut alpha = 1.0f32;
+        let mut steps = 0usize;
+        while let Some(next) = advance_fade(alpha, dt) {
+            assert!(next < alpha, "淡出必须单调递减：{alpha} → {next}");
+            alpha = next;
+            steps += 1;
+            assert!(steps < 100, "淡出迟迟不结束，卡在 {alpha}");
+        }
+        assert!(steps <= 24, "0.4s @60fps 至多 24 步走完，实得 {steps} 步");
+        // 一步一整个时长 → 直接归零。
+        assert_eq!(advance_fade(1.0, LEVEL_FADE_SECS), None);
+        // 零时长推进不动（不会变负）。
+        assert_eq!(advance_fade(1.0, 0.0), Some(1.0));
+    }
+
+    /// 淡出精灵必须**克隆**旧像素（复用句柄会被原地覆写）并盖住旧栅格幅面。
+    #[test]
+    fn fadeout_spawn_clones_pixels_and_covers_the_old_raster() {
+        let data = small_terrain(3);
+        let mut images = Assets::<Image>::default();
+        let image = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
+        let tex = new_terrain_texture(
+            &mut images,
+            image,
+            &data,
+            None,
+            ViewMode::GoogleMap,
+            false,
+        );
+        let mut grid = GridConfig::default();
+        grid.cell_size = 2.0;
+        grid.raster_origin = Vec2::new(100.0, 200.0);
+
+        let mut world = World::new();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            spawn_basemap_fadeout(&mut commands, &mut images, &tex, &grid);
+        }
+        queue.apply(&mut world);
+
+        let mut q = world.query::<(&BasemapFadeOut, &Sprite, &Transform)>();
+        let (fade, sprite, tf) = q.single(&world).expect("应生成一个淡出精灵");
+        assert_eq!(fade.alpha, 1.0, "初始不透明");
+        assert_eq!(
+            sprite.custom_size,
+            Some(Vec2::splat(8.0)),
+            "幅面 = 4 格 × cell_size 2.0"
+        );
+        assert_eq!(
+            tf.translation.truncate(),
+            Vec2::new(104.0, 204.0),
+            "中心 = 栅格原点 + 半幅"
+        );
+        assert_eq!(tf.translation.z, FADEOUT_Z);
+        // 克隆：句柄不同、内容一致，且旧句柄的像素未被动过。
+        assert_ne!(sprite.image, tex.handle, "淡出必须用克隆出的新句柄");
+        let old = images.get(&tex.handle).expect("旧资产还在");
+        let new = images.get(&sprite.image).expect("克隆资产已入库");
+        assert_eq!(old.data, new.data, "克隆像素应与旧底图逐字节一致");
+    }
+
+    /// 换图（换级）生成淡出精灵；换模式（换眼镜）不生成——淡化只属于 12-25。
+    #[test]
+    fn map_change_spawns_fadeout_but_mode_change_does_not() {
+        let mut core = two_level_world();
+        // `ensure_root` 只认 `level == World`（fixture 默认 City）：把根图升回来。
+        core.maps[0].level = wv_core::map::MapLevel::World;
+        let world_id = wv_core::Id::new_unchecked("map_world");
+        let city_id = wv_core::Id::new_unchecked("map_city");
+        core.set_terrain(world_id.clone(), small_terrain(3));
+        core.set_terrain(city_id.clone(), small_terrain(5));
+
+        let mut drill = DrillState::default();
+        drill.ensure_root(&core);
+        let (node, data) = active_terrain(&core, drill.current()).expect("世界图有地形");
+        assert_eq!(node.id, world_id);
+        let mut images = Assets::<Image>::default();
+        let image = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
+        let tex = new_terrain_texture(
+            &mut images,
+            image,
+            &data,
+            Some(world_id),
+            ViewMode::GoogleMap,
+            false,
+        );
+
+        let mut world = World::new();
+        world.insert_resource(ViewState::default());
+        world.insert_resource(WorldProjection {
+            world: core.clone(),
+            ..Default::default()
+        });
+        world.insert_resource(drill);
+        world.insert_resource(GridConfig::default());
+        world.insert_resource(tex);
+        world.insert_resource(images);
+
+        let count_fades = |world: &mut World| -> usize {
+            let mut q = world.query::<&BasemapFadeOut>();
+            q.iter(world).count()
+        };
+        let mut schedule = Schedule::default();
+        schedule.add_systems(rebuild_texture_on_mode_change);
+
+        // 换图：钻入自带地形的城市 → 应生成恰好一个淡出精灵。
+        // fixture 没接 children（`enter` 只认直接子图），这里补上引用。
+        core.maps[0].children.push(city_id.clone());
+        {
+            let mut d = world.resource_mut::<DrillState>();
+            assert!(d.enter(&core, &city_id), "城市应是根图的直接子图");
+        }
+        schedule.run(&mut world);
+        assert_eq!(
+            count_fades(&mut world),
+            1,
+            "换图应生成一个淡出精灵"
+        );
+
+        // 换模式：即时重建是既有行为，不再叠加淡出。
+        world.resource_mut::<ViewState>().mode = ViewMode::Schematic;
+        schedule.run(&mut world);
+        assert_eq!(
+            count_fades(&mut world),
+            1,
+            "换模式（换眼镜）不应生成第二个淡出精灵"
+        );
     }
 }

@@ -52,13 +52,20 @@ pub fn register(app: &mut App) {
         )
         .add_systems(
             Update,
+            // 世界侧派生状态：每帧先于 pass 里的 UI 刷新。
             (
                 apply_pending_commands,
-                crate::ui::command_palette,
                 sync_drill_mirror,
                 persist_layout_on_change,
-                // 启动加载三件套：遮罩 / 错误卡片先画，`startup_load` 最后执行
-                // ——它可能阻塞整帧做磁盘加载，必须让遮罩先 present 一帧。
+            ),
+        )
+        // bevy_egui 0.42：UI 系统进 pass 调度（见 gui.rs 同款注释）；
+        // `startup_load` 虽不碰 egui，但必须跟遮罩同调度并排在其后，
+        // 否则 Update 先阻塞加载、遮罩永远赶不上渲染。
+        .add_systems(
+            bevy_egui::EguiPrimaryContextPass,
+            (
+                crate::ui::command_palette,
                 startup_load_overlay,
                 load_error_card,
                 startup_load,
@@ -99,10 +106,10 @@ fn hotkeys(
     mut cfg: ResMut<UiShellConfig>,
     mut panels: ResMut<PanelState>,
 ) {
-    let Some(ctx) = contexts.try_ctx_mut() else {
+    let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
-    let wants_text = ctx.wants_keyboard_input();
+    let wants_text = ctx.egui_wants_keyboard_input();
     let input = ctx.input(|i| i.clone());
 
     // Esc：关闭命令面板（即使聚焦输入框也生效）。
@@ -486,10 +493,10 @@ fn startup_load_overlay(mut ctxs: EguiContexts, req: Res<StartupLoadRequest>) {
     let Some(dir) = req.0.as_deref() else {
         return;
     };
-    let Some(ctx) = ctxs.try_ctx_mut() else {
+    let Ok(ctx) = ctxs.ctx_mut() else {
         return;
     };
-    let screen = ctx.screen_rect();
+    let screen = ctx.viewport_rect();
     egui::Area::new(egui::Id::new("wv_startup_load_dim"))
         .order(egui::Order::Foreground)
         .fixed_pos(screen.min)
@@ -523,7 +530,7 @@ fn load_error_card(mut ctxs: EguiContexts, mut projection: ResMut<WorldProjectio
     let Some(err) = projection.load_error.clone() else {
         return;
     };
-    let Some(ctx) = ctxs.try_ctx_mut() else {
+    let Ok(ctx) = ctxs.ctx_mut() else {
         return;
     };
     egui::Window::new("工程加载失败")
@@ -565,7 +572,7 @@ fn startup_load(
     mut tex: ResMut<TerrainTexture>,
     atlas: Option<Res<TileAtlas>>,
     mut images: ResMut<Assets<Image>>,
-    mut cameras: Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
+    mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     time: Res<Time>,
 ) {
     *frames += 1;
@@ -629,7 +636,7 @@ fn adopt_loaded_world(
     tex: &mut TerrainTexture,
     atlas: Option<&TileAtlas>,
     images: &mut Assets<Image>,
-    cameras: &mut Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
+    cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
 ) {
     // 地形保底（与 `setup_terrain_texture_after_world` 同一不变量：总有底图可用）。
     // Phase 2：底图按图存，取「当前图向上的第一张自带栅格」，都没有才塞占位。
@@ -670,7 +677,7 @@ fn adopt_loaded_world(
     for (mut transform, mut proj) in cameras.iter_mut() {
         transform.translation.x = center.x;
         transform.translation.y = center.y;
-        proj.scale = scale;
+        crate::camera::set_ortho_scale(&mut proj, scale);
     }
 }
 
@@ -820,7 +827,7 @@ fn apply_pending_commands(
     mut tex: ResMut<crate::terrain_view::TerrainTexture>,
     mut open_task: ResMut<OpenProjectTask>,
     mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
-    mut cameras: Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
+    mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     time: Res<Time>,
 ) {
     let Some(id) = palette.pending.take() else {
@@ -866,7 +873,17 @@ fn apply_pending_commands(
             crate::camera::apply_view_to_camera(center, scale, &mut cameras);
         }
         CommandId::Zoom(d) => {
-            view.scale = (view.scale * if d > 0 { 1.25 } else { 0.8 }).clamp(0.1, 8.0);
+            // 命令没有指针上下文（锚点固定为视口中心），但**缩放上下限必须按当前级别取**：
+            // 固定 `0.1..8.0` 是单级时代的产物，分级后城市/街道级的区间完全不同
+            // （ADR-0009 §8 决策①）。窗口尺寸只影响区间宽度，取不到时按默认窗口。
+            let window_size = view.window_size;
+            let band = crate::zoom_level::level_zoom(
+                &projection.world,
+                drill.current(),
+                window_size,
+                Vec2::splat(crate::zoom_level::FALLBACK_MAP_SIZE),
+            );
+            view.scale = band.clamp(view.scale * if d > 0 { 1.25 } else { 0.8 });
             // 缩放锚点 = 视口中心（命令无指针上下文，保持中心不动）。
             crate::camera::apply_view_to_camera(view.camera_center, view.scale, &mut cameras);
         }
@@ -957,7 +974,7 @@ fn persist_layout_on_change(
     let Some(path) = crate::ui_layout::layout_path(project.project_dir.as_deref()) else {
         return;
     };
-    let Some(ctx) = contexts.try_ctx_mut() else {
+    let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
 
@@ -992,7 +1009,7 @@ fn persist_layout_on_change(
         return;
     }
     // 拖动中不落盘：松手后的帧自然还是 changed，届时再写（只写一次）。
-    if ctx.is_using_pointer() {
+    if ctx.egui_is_using_pointer() {
         return;
     }
     file.save(&path);

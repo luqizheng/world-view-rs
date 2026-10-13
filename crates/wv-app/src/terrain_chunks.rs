@@ -179,7 +179,11 @@ fn pending_dirty_or_diag(_scale: f32) -> bool {
 ///
 /// Bevy 的 `Assets` 删除不是引用计数；直接在 despawn 前同步移除可能让同一帧
 /// 的渲染仍拿着悬空句柄。这里把清理排队到 despawn 之后执行。
-fn despawn_chunk(commands: &mut Commands, entity: Entity, q_chunks: &Query<(&mut TerrainChunk, &Mesh2d)>) {
+fn despawn_chunk(
+    commands: &mut Commands,
+    entity: Entity,
+    q_chunks: &Query<(&mut TerrainChunk, &Mesh2d)>,
+) {
     let Ok((chunk, mesh)) = q_chunks.get(entity) else {
         return;
     };
@@ -236,7 +240,7 @@ pub fn sync_terrain_chunks(
         }
         return;
     }
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
     let size = tex.size;
@@ -258,7 +262,7 @@ pub fn sync_terrain_chunks(
     let mut to_despawn: Vec<[u32; 2]> = Vec::new();
     for &coord in chunk_entities.by_coord.keys() {
         let [gx0, gy0, _, _] = chunk_cell_rect(coord, size);
-        let cmin = grid.origin + Vec2::new(gx0 as f32, gy0 as f32) * cell_size;
+        let cmin = grid.raster_origin + Vec2::new(gx0 as f32, gy0 as f32) * cell_size;
         if !chunk_visible(cmin, chunk_world_size, vp_min, vp_max) {
             to_despawn.push(coord);
         }
@@ -277,7 +281,7 @@ pub fn sync_terrain_chunks(
         for cx in 0..cw {
             let coord = [cx, cy];
             let cells = chunk_cell_rect(coord, size);
-            let cmin = grid.origin + Vec2::new(cells[0] as f32, cells[1] as f32) * cell_size;
+            let cmin = grid.raster_origin + Vec2::new(cells[0] as f32, cells[1] as f32) * cell_size;
             if !chunk_visible(cmin, chunk_world_size, vp_min, vp_max) {
                 continue;
             }
@@ -293,7 +297,9 @@ pub fn sync_terrain_chunks(
     // 源像素只在"确实要写"时克隆——整图 4096²×4B ≈ 67MB，每帧克隆不可接受。
     let src_data: Option<Vec<u8>> = if needs_src {
         match images.get(&tex.handle) {
-            Some(source) if !source.data.is_empty() => Some(source.data.clone()),
+            Some(source) if source.data.as_ref().is_some_and(|d| !d.is_empty()) => {
+                source.data.clone()
+            }
             _ => None,
         }
     } else {
@@ -308,7 +314,7 @@ pub fn sync_terrain_chunks(
     // 3) spawn / patch / 切 mip。
     for (coord, cells) in visible {
         let [gx0, gy0, gx1, gy1] = cells;
-        let cmin = grid.origin + Vec2::new(gx0 as f32, gy0 as f32) * cell_size;
+        let cmin = grid.raster_origin + Vec2::new(gx0 as f32, gy0 as f32) * cell_size;
         let center = cmin + Vec2::splat(chunk_world_size * 0.5);
 
         if let Some(&entity) = chunk_entities.by_coord.get(&coord) {
@@ -354,7 +360,7 @@ pub fn sync_terrain_chunks(
                 }
                 // 3b) mip 级随缩放切换——只换材质纹理句柄，几何与资产不动。
                 if chunk.current_mip != mip_now {
-                    if let Some(mat) = materials.get_mut(&chunk.material) {
+                    if let Some(mut mat) = materials.get_mut(&chunk.material) {
                         mat.texture = chunk.mip_handles.get(mip_now as usize).cloned();
                     }
                     chunk.current_mip = mip_now;
@@ -507,7 +513,10 @@ fn patch_chunk_mips(
     // 块内像素起点。
     let (px0, py0) = ((ix0 - gx0) * res, (iy0 - gy0) * res);
 
-    let Some(mip0) = chunk.mip_handles.first().and_then(|h| images.get_mut(h)) else {
+    let Some(mip0_handle) = chunk.mip_handles.first() else {
+        return;
+    };
+    let Some(mut mip0) = images.get_mut(mip0_handle) else {
         return;
     };
     // TODO(诊断): patch 取证，验证后移除。
@@ -520,9 +529,9 @@ fn patch_chunk_mips(
             src[0],
             src[1],
             src[2],
-            mip0.data[0],
-            mip0.data[1],
-            mip0.data[2]
+            mip0.data.as_ref().expect("mip 像素数据")[0],
+            mip0.data.as_ref().expect("mip 像素数据")[1],
+            mip0.data.as_ref().expect("mip 像素数据")[2]
         );
     }
     for row in 0..ph as usize {
@@ -530,20 +539,27 @@ fn patch_chunk_mips(
         let s = src_y * src_stride + (ix0 * res) as usize * 4;
         let d = ((py0 as usize + row) * chunk_w_px as usize + px0 as usize) * 4;
         let len = pw as usize * 4;
-        mip0.data[d..d + len].copy_from_slice(&src[s..s + len]);
+        mip0.data.as_mut().expect("mip 像素数据")[d..d + len].copy_from_slice(&src[s..s + len]);
     }
     // mip 链逐级重建（mip1 ← mip0，mip2 ← mip1）。
     // `mip0` 的借用在此最后一次使用后结束，下面才能再次 `images.get_mut`。
-    let (mut px, mut w, mut h) = (mip0.data.clone(), chunk_w_px, chunk_h_px);
+    let (mut px, mut w, mut h) = (
+        mip0.data.clone().unwrap_or_default(),
+        chunk_w_px,
+        chunk_h_px,
+    );
+    // `AssetMut` 的借用活到析构（不像 `&mut` 那样随最后一次使用结束），
+    // 必须显式 drop，才能在同一帧里对本资产表再次 `get_mut`。
+    drop(mip0);
     for level in 1..MIP_LEVELS {
         let (dp, dw, dh) = downsample_box(&px, w, h);
         let Some(handle) = chunk.mip_handles.get(level as usize) else {
             break;
         };
-        let Some(img) = images.get_mut(handle) else {
+        let Some(mut img) = images.get_mut(handle) else {
             break;
         };
-        img.data.clone_from(&dp);
+        img.data = Some(dp.clone());
         px = dp;
         w = dw;
         h = dh;
@@ -813,11 +829,17 @@ mod tests {
         let mip0 = images.get(&chunk.mip_handles[0]).unwrap();
         // 交集内 (2,2) → (20, 20)。
         let o = (2 * 4 + 2) * 4;
-        assert_eq!(&mip0.data[o..o + 2], &[20, 20]);
+        assert_eq!(
+            &mip0.data.as_ref().expect("mip 像素数据")[o..o + 2],
+            &[20, 20]
+        );
         // 交集外 (0,0) 与 (3,3) 仍是 0。
-        assert_eq!(&mip0.data[0..2], &[0, 0]);
+        assert_eq!(&mip0.data.as_ref().expect("mip 像素数据")[0..2], &[0, 0]);
         let o33 = (3 * 4 + 3) * 4;
-        assert_eq!(&mip0.data[o33..o33 + 2], &[0, 0]);
+        assert_eq!(
+            &mip0.data.as_ref().expect("mip 像素数据")[o33..o33 + 2],
+            &[0, 0]
+        );
     }
 
     #[test]
@@ -857,20 +879,23 @@ mod tests {
             [0, 0, 4, 4],
         );
         let mip0 = images.get(&chunk.mip_handles[0]).unwrap();
-        assert_eq!(mip0.data, src);
+        assert_eq!(mip0.data.as_ref().expect("mip 像素数据"), &src);
         // mip1（2×2）左上 = mip0 (0..2, 0..2) 平均：R = (0+10+0+10)/4 = 5，G = (0+0+10+10)/4 = 5。
         let mip1 = images.get(&chunk.mip_handles[1]).unwrap();
         assert_eq!((mip1.width(), mip1.height()), (2, 2));
-        assert_eq!(&mip1.data[0..2], &[5, 5]);
+        assert_eq!(&mip1.data.as_ref().expect("mip 像素数据")[0..2], &[5, 5]);
         // mip1 右下 = mip0 (2..4, 2..4) 平均：R = (20+30+20+30)/4 = 25，G = (20+20+30+30)/4 = 25。
         // (row*2 + col) 的网格语义：第 1 行第 1 列的左上像素。
         #[allow(clippy::identity_op)]
         let o = (1 * 2 + 1) * 4;
-        assert_eq!(&mip1.data[o..o + 2], &[25, 25]);
+        assert_eq!(
+            &mip1.data.as_ref().expect("mip 像素数据")[o..o + 2],
+            &[25, 25]
+        );
         // mip2（1×1）= mip1 全图平均：R = (5+15+15+25)/4 = 15，G 同理 = 15。
         let mip2 = images.get(&chunk.mip_handles[2]).unwrap();
         assert_eq!((mip2.width(), mip2.height()), (1, 1));
-        assert_eq!(&mip2.data[0..2], &[15, 15]);
+        assert_eq!(&mip2.data.as_ref().expect("mip 像素数据")[0..2], &[15, 15]);
     }
 
     #[test]

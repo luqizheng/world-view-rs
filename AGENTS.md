@@ -202,6 +202,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
+> **渲染层追加命令（2026-10-13 用户裁定）**：`wv-app` 的渲染/UI 模块在
+> `#[cfg(feature = "app")]` 下，**上面三条命令都不编译它们**（对 wv-app 跑出
+> 0 个测试目标，§12-23 的发现）。下方两条渲染层命令已在 `.cargo/config.toml`
+> 配了同名别名 `cargo app-test` / `cargo app-clippy`，好敲好记。
+
 **渲染层必须单独跑一遍**（2026-10-13 追加）：`wv-app` 的渲染 / UI 模块全部挂在 `#[cfg(feature = "app")]` 之下，而该 feature **不在默认 feature 里**，所以上面三条命令**根本不编译它们**——实测 `cargo test -p wv-app`（不带 feature）报 `0 passed`，改坏 `terrain_view.rs` / `vector_layers.rs` 之类的文件可以一路绿灯。因此：
 
 ```bash

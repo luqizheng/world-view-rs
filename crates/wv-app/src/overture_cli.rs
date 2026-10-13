@@ -67,14 +67,24 @@ fn fetch_command(args: &[String]) -> Result<(), String> {
     let mut report = report_of(&cands);
     report.filtered = total_features.saturating_sub(cands.len());
     println!("Overture fetch 完成：");
-    println!("  模式:        {}", if parsed.in_path.is_some() { "仅转换" } else { "下载 + 转换" });
+    println!(
+        "  模式:        {}",
+        if parsed.in_path.is_some() {
+            "仅转换"
+        } else {
+            "下载 + 转换"
+        }
+    );
     if let Some(theme) = &parsed.theme {
         println!("  主题:        {theme}");
     }
     if let Some(bbox) = parsed.bbox {
         println!("  bbox:        {bbox:?}");
     }
-    println!("  release:     {}", parsed.release.as_deref().unwrap_or("latest"));
+    println!(
+        "  release:     {}",
+        parsed.release.as_deref().unwrap_or("latest")
+    );
     println!("  输入文件:    {}", input.display());
     println!(
         "  保留 PlaceEdgeCandidate: {}（过滤 {} 条）",
@@ -254,10 +264,7 @@ fn run_overturemaps(args: &FetchArgs) -> Result<(), String> {
         .theme
         .as_ref()
         .expect("FetchArgs::parse 应保证下载模式 theme 已设");
-    let bbox_str = format!(
-        "{},{},{},{}",
-        bbox.west, bbox.south, bbox.east, bbox.north
-    );
+    let bbox_str = format!("{},{},{},{}", bbox.west, bbox.south, bbox.east, bbox.north);
 
     // 确保父目录存在
     if let Some(parent) = args.out.parent() {
@@ -287,9 +294,11 @@ fn run_overturemaps(args: &FetchArgs) -> Result<(), String> {
 }
 
 /// 读 GeoJSON → `Vec<PlaceEdgeCandidate>`（不构建统计报告，让 caller 决定要不要 emit）。
-fn load_candidates(path: &Path) -> Result<Vec<wv_overture::transportation::PlaceEdgeCandidate>, String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("读 {} 失败: {e}", path.display()))?;
+fn load_candidates(
+    path: &Path,
+) -> Result<Vec<wv_overture::transportation::PlaceEdgeCandidate>, String> {
+    let text =
+        std::fs::read_to_string(path).map_err(|e| format!("读 {} 失败: {e}", path.display()))?;
     let fc = parse_geojson_str(&text).map_err(|e| format!("解析 {}：{e}", path.display()))?;
     Ok(parse_geojson_segments(&fc))
 }
@@ -426,9 +435,7 @@ impl IndexArgs {
 /// - 与 Overture 库可追溯；
 /// - 走 §4.4 ID 字符集（仅 `[A-Za-z0-9_]`）；
 /// - 不会与作者真 PlaceId 撞（用 `overture_` 前缀）。
-fn candidates_to_edge_yaml(
-    cands: &[wv_overture::transportation::PlaceEdgeCandidate],
-) -> String {
+fn candidates_to_edge_yaml(cands: &[wv_overture::transportation::PlaceEdgeCandidate]) -> String {
     let mut out = String::new();
     out.push_str("edges:\n");
     for (i, c) in cands.iter().enumerate() {
@@ -541,7 +548,12 @@ mod tests {
     #[test]
     fn fetch_args_rejects_missing_required_flag_in_download_mode() {
         // 下载模式（无 --in），三标志缺一即失败
-        let no_bbox = vec!["--theme".into(), "places".into(), "--out".into(), "x".into()];
+        let no_bbox = vec![
+            "--theme".into(),
+            "places".into(),
+            "--out".into(),
+            "x".into(),
+        ];
         assert!(FetchArgs::parse(&no_bbox).is_err(), "--bbox 必填");
 
         let no_theme = vec![
@@ -656,7 +668,12 @@ mod tests {
 
     #[test]
     fn fetch_args_defaults_emit_yaml_to_false() {
-        let v = vec!["--in".into(), "x.geojson".into(), "--out".into(), "y".into()];
+        let v = vec![
+            "--in".into(),
+            "x.geojson".into(),
+            "--out".into(),
+            "y".into(),
+        ];
         let parsed = FetchArgs::parse(&v).unwrap();
         assert!(!parsed.emit_yaml, "默认不 emit");
     }

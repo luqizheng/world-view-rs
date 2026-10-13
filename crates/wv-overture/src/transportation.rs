@@ -171,9 +171,17 @@ mod tests {
     #[test]
     fn end_to_end_residential_segment_becomes_road_place_edge() {
         // ADR-0007 §理由（4）回归用例：137 m 西雅图 downtown residential segment
-        let row = sample_segment("road", "residential", "50e76fae-ac7e-448a-b34d-fcb4db17b5ee");
+        let row = sample_segment(
+            "road",
+            "residential",
+            "50e76fae-ac7e-448a-b34d-fcb4db17b5ee",
+        );
         let cand = convert(&row, 137.0).expect("residential road 应被保留");
-        assert!((cand.distance_km - 0.137).abs() < 1e-4, "got {}", cand.distance_km);
+        assert!(
+            (cand.distance_km - 0.137).abs() < 1e-4,
+            "got {}",
+            cand.distance_km
+        );
         assert_eq!(cand.terrain, "road");
         assert_eq!(
             cand.overture_id.as_ref().unwrap().as_str(),
@@ -199,7 +207,11 @@ mod tests {
     #[test]
     fn end_to_end_rail_subtype_is_filtered_out() {
         let row = sample_segment("rail", "rail", "22222222-3333-4444-5555-666666666666");
-        assert_eq!(convert(&row, 1000.0), None, "rail 子类型不在 PlaceEdge 范畴");
+        assert_eq!(
+            convert(&row, 1000.0),
+            None,
+            "rail 子类型不在 PlaceEdge 范畴"
+        );
     }
 
     #[test]

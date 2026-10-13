@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use wv_core::time::TimePoint;
-use wv_core::{World, WorldMeta};
+use wv_core::{StreetLayer, World, WorldMeta};
 
 use crate::diagnostics::{derive_hints, Diagnostics};
 use crate::error::{IoError, IoResult};
@@ -181,6 +181,73 @@ fn terrain_is_dirty(map_id: &wv_core::Id, dirty_paths: &[String], full: bool) ->
     dirty_paths
         .iter()
         .any(|d| d == &prefix || d.starts_with(&sub))
+}
+
+/// 写**街道图层文档**到各 `Layer.source` 指向的 YAML（ADR-0010 待做第 3 项）。
+///
+/// 与 [`write_terrains`] 同款脏过滤，但脏路径走**虚拟命名空间**
+/// `streets/<layer_id>`：街道文件物理上在 `maps/<map_id>/<source>`，可若把
+/// 脏路径也写成这个形态，`terrain_is_dirty` 的 `maps/<map>/` 前缀匹配会把
+/// 「画一段街道」误判成「整张图的地形脏了」而白白重写 `.bin`。虚拟路径在
+/// 本函数内映射回真实文件；编辑命令只管发 `streets/<layer>`，不感知落盘位置。
+///
+/// 返回 `maps` 原样（街道几何不往 `index.yaml` 写任何元数据，ADR-0010 决策 ⑤）。
+fn write_streets_layers(
+    project_root: &Path,
+    maps: &[wv_core::map::MapNode],
+    streets: &BTreeMap<wv_core::Id, wv_core::StreetLayer>,
+    dirty_paths: &[String],
+    full: bool,
+) -> IoResult<Vec<wv_core::map::MapNode>> {
+    if streets.is_empty() {
+        return Ok(maps.to_vec());
+    }
+    for (layer_id, doc) in streets {
+        if !street_is_dirty(layer_id, dirty_paths, full) {
+            continue;
+        }
+        // 找到声明了这个图层的图与其 source 路径；找不到就跳过（不写盘、
+        // 不报错——「meta/maps 与内存不一致」类问题交给校验面板）。
+        let owner = maps.iter().find_map(|m| {
+            m.layers
+                .iter()
+                .find(|l| l.id == *layer_id && l.kind == wv_core::map::LayerKind::Road)
+                .and_then(|l| l.source.clone().map(|src| (m.id.clone(), src)))
+        });
+        let Some((_map_id, rel_path)) = owner else {
+            continue;
+        };
+        self::write_streets_at(project_root, &rel_path, doc)?;
+    }
+    Ok(maps.to_vec())
+}
+
+/// 这个街道图层这次落盘是否被触及。虚拟脏路径精确匹配 `streets/<layer_id>`。
+fn street_is_dirty(layer_id: &wv_core::Id, dirty_paths: &[String], full: bool) -> bool {
+    if full {
+        return true;
+    }
+    let expected = format!("streets/{}", layer_id.as_str());
+    dirty_paths.iter().any(|d| d == &expected)
+}
+
+/// [`Project::write_streets`](Project::write_streets) 的自由函数形态（无
+/// `&self` 依赖，供上面的落盘聚合复用）。
+fn write_streets_at(
+    project_root: &Path,
+    rel_path: &str,
+    doc: &wv_core::StreetLayer,
+) -> IoResult<()> {
+    let path = project_root.join(rel_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let text = serde_yaml::to_string(doc).map_err(|source| IoError::Yaml {
+        path: path.display().to_string(),
+        source,
+    })?;
+    std::fs::write(&path, text)?;
+    Ok(())
 }
 
 /// 写 `PlaceEdge` 列表到单文件 `distances/edges.yaml`。
@@ -458,6 +525,30 @@ impl Project {
             }
         }
 
+        // 街道图层：每个 `kind: road` 且声明了 `source` 的图层各读自己的 YAML
+        // （ADR-0010 待做第 3 项，2026-10-13）。键 = 图层 ID。
+        //
+        // 失败语义分级（V1：作者还没写完不算坏工程）：
+        // - `source` 指向的文件**不存在** → 跳过（文档留空，渲染层会兜底 +
+        //   提示）。既有工程里本就有悬空声明（如 minimal-world 的
+        //   `maps/world/index.yaml` 写了 `roads.yaml` 而文件从未创建），
+        //   不能因补齐读取链路就突然拒绝整个工程；
+        // - 文件存在但**读不出/解析不了** → 照旧报错（I/O 与格式问题）。
+        let mut streets: BTreeMap<wv_core::Id, wv_core::StreetLayer> = BTreeMap::new();
+        for m in &maps {
+            for l in &m.layers {
+                if l.kind == wv_core::map::LayerKind::Road {
+                    if let Some(src) = l.source.as_deref() {
+                        if !self.root.join(src).is_file() {
+                            continue;
+                        }
+                        let doc = self.load_streets(src)?;
+                        streets.insert(l.id.clone(), doc);
+                    }
+                }
+            }
+        }
+
         // 势力：路线图 S12（2026-10-12）。
         // - `factions/`：每势力一个 YAML（§4.5）。
         // - `geometry/faction/`：每势力几何一个 YAML（`GeometrySpan`）。
@@ -481,6 +572,7 @@ impl Project {
             factions,
             faction_geometry,
             terrains,
+            streets,
         })
     }
 
@@ -639,6 +731,13 @@ impl Project {
                 write_terrains(&self.root, &world.maps, &world.terrains, dirty_paths, full)?;
             save_maps(&self.root.join("maps"), &updated_maps)?;
         }
+        // 街道文档：落盘位置在 `maps/<map>/<source>`，但脏路径走**虚拟命名
+        // 空间** `streets/<layer>`（避免 `maps/<map>/` 前缀把地形误判脏，
+        // 见 `write_streets_layers`），所以路由也**独立于** `wants("maps")`：
+        // 只画一笔街道时不应触发 index.yaml / terrain.bin 的重写。
+        if wants("streets") || wants("maps") {
+            write_streets_layers(&self.root, &world.maps, &world.streets, dirty_paths, full)?;
+        }
         // 阶段七 v0.4：写 `world.yaml`。这条**不**走 dirty 路由——
         // meta 是工程头部，永远写；fall back 到 `self.meta`（处理「刚加载、
         // world.meta 还没被任何命令填回」的边界）。
@@ -657,6 +756,42 @@ impl Project {
 
     /// 校验工程内部结构（**文字摘要**，供 `wv load <dir>` 与命令行用）。
     ///
+    /// 读取一份街道图层文件（ADR-0010：`LayerKind::Road` 图层的
+    /// `Layer.source` 指向的 YAML，文档模型是 [`StreetLayer`]）。
+    ///
+    /// 路径相对工程根（与 `Layer.source` 的存储口径一致）。
+    /// 解析失败按惯例带路径报 [`IoError::Yaml`]；文件不存在则原样透传
+    /// 文件系统错误——调用方按 V1 自行决定「提示但不阻止」。
+    pub fn load_streets(&self, rel_path: &str) -> IoResult<StreetLayer> {
+        let path = self.root.join(rel_path);
+        let text = std::fs::read_to_string(&path).map_err(|source| IoError::ReadFile {
+            path: path.display().to_string(),
+            source,
+        })?;
+        serde_yaml::from_str(&text).map_err(|source| IoError::Yaml {
+            path: path.display().to_string(),
+            source,
+        })
+    }
+
+    /// 写入一份街道图层文件（[`Self::load_streets`] 的逆操作）。
+    ///
+    /// 父目录不存在则创建（街道编辑器首次保存 `maps/<id>/roads.yaml` 时
+    /// 该图的目录可能还没建过）。返回值是写入路径的显示形态，供调用方
+    /// 记日志 / 报告。
+    pub fn write_streets(&self, rel_path: &str, layer: &StreetLayer) -> IoResult<String> {
+        let path = self.root.join(rel_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let text = serde_yaml::to_string(layer).map_err(|source| IoError::Yaml {
+            path: path.display().to_string(),
+            source,
+        })?;
+        std::fs::write(&path, text)?;
+        Ok(path.display().to_string())
+    }
+
     /// 只报「目录结构缺失」这类**看得见的目录约定**问题。
     /// **引用完整性不在这里把关** —— 见 [`Self::diagnose`]（那是唯一的把关入口）。
     pub fn validate(&self) -> IoResult<Vec<String>> {

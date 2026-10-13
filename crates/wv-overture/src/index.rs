@@ -98,7 +98,12 @@ impl IndexedOvertures {
     /// 命中 label 直接复用（避免 §18「重复计算」顾虑）。
     ///
     /// `overwrite`：true 时覆盖已有 label；false 时追加。
-    pub fn register_bbox(&mut self, label: impl Into<String>, indices: Vec<usize>, overwrite: bool) {
+    pub fn register_bbox(
+        &mut self,
+        label: impl Into<String>,
+        indices: Vec<usize>,
+        overwrite: bool,
+    ) {
         let label = label.into();
         if overwrite {
             self.by_bbox.insert(label, indices);
@@ -191,8 +196,16 @@ impl Default for IndexBuilder {
 /// - `bbox.west ≤ point.lon ≤ bbox.east`
 /// - `bbox.south ≤ point.lat ≤ bbox.north`
 pub fn point_in_bbox(point: GeoCoord, bbox: LatLonBbox) -> bool {
-    let LatLonBbox { west, south, east, north } = bbox;
-    point.longitude >= west && point.longitude <= east && point.latitude >= south && point.latitude <= north
+    let LatLonBbox {
+        west,
+        south,
+        east,
+        north,
+    } = bbox;
+    point.longitude >= west
+        && point.longitude <= east
+        && point.latitude >= south
+        && point.latitude <= north
 }
 
 #[cfg(test)]
@@ -209,10 +222,7 @@ mod tests {
 
     #[test]
     fn build_stores_candidates_and_empty_by_id_when_no_overture_id() {
-        let cands = vec![
-            cand(0.1, "road", None),
-            cand(0.2, "road", None),
-        ];
+        let cands = vec![cand(0.1, "road", None), cand(0.2, "road", None)];
         let index = IndexedOvertures::build(cands);
         assert_eq!(index.len(), 2);
         assert!(!index.is_empty());
@@ -221,7 +231,11 @@ mod tests {
 
     #[test]
     fn get_returns_none_when_id_not_indexed() {
-        let cands = vec![cand(0.1, "road", Some("11111111-2222-3333-4444-555555555555"))];
+        let cands = vec![cand(
+            0.1,
+            "road",
+            Some("11111111-2222-3333-4444-555555555555"),
+        )];
         let index = IndexedOvertures::build(cands);
         let unknown = OvertureId::new("99999999-aaaa-bbbb-cccc-dddddddddddd").unwrap();
         assert!(index.get(&unknown).is_none());

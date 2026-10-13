@@ -1,0 +1,51 @@
+# 武昌城街道图层（演示数据，ADR-0010 双供给之「手绘 YAML」侧）
+# 坐标 = 本图局部（extent 1024²）；蛇山南沿 + 十字主干 + 环城示意。
+segments:
+  # 主干：横贯东西（蛇山南麓）
+  - class: primary
+    name: 中山路
+    points:
+      - {x: 60, y: 400}
+      - {x: 340, y: 396}
+      - {x: 512, y: 350}
+      - {x: 700, y: 390}
+      - {x: 964, y: 402}
+  # 主干：纵贯南北（起义门 → 楚望台）
+  - class: primary
+    name: 起义街
+    points:
+      - {x: 300, y: 700}
+      - {x: 296, y: 560}
+      - {x: 330, y: 470}
+      - {x: 352, y: 250}
+  # 次干
+  - class: secondary
+    name: 环山街
+    points:
+      - {x: 120, y: 300}
+      - {x: 260, y: 260}
+      - {x: 430, y: 250}
+  - class: secondary
+    points:
+      - {x: 512, y: 350}
+      - {x: 560, y: 480}
+      - {x: 548, y: 640}
+  # 支路网格（居民街道）
+  - class: residential
+    points: [{x: 150, y: 500}, {x: 450, y: 505}]
+  - class: residential
+    points: [{x: 150, y: 620}, {x: 460, y: 626}]
+  - class: residential
+    points: [{x: 620, y: 500}, {x: 900, y: 505}]
+  - class: residential
+    points: [{x: 640, y: 640}, {x: 880, y: 645}]
+  - class: residential
+    points: [{x: 700, y: 390}, {x: 706, y: 700}]
+  # 小巷
+  - class: service
+    points: [{x: 200, y: 120}, {x: 360, y: 118}]
+  - class: path
+    points:
+      - {x: 430, y: 250}
+      - {x: 470, y: 200}
+      - {x: 466, y: 120}

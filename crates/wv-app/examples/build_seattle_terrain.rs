@@ -104,7 +104,13 @@ fn main() {
     // 渲染谷歌风 PNG。
     let img = image_from_terrain(&data, ViewMode::GoogleMap, None, true);
     let out = root.join("target/map_preview/seattle_google.png");
-    write_png(&out, data.width as usize, data.height as usize, &img.data).expect("写 PNG 失败");
+    write_png(
+        &out,
+        data.width as usize,
+        data.height as usize,
+        img.data.as_ref().expect("地形图必须有像素数据"),
+    )
+    .expect("写 PNG 失败");
     println!("已写 {}", out.display());
 
     // 也渲染真实地形模式，供对照。
@@ -114,7 +120,7 @@ fn main() {
         &out_rt,
         data.width as usize,
         data.height as usize,
-        &img_rt.data,
+        img_rt.data.as_ref().expect("地形图必须有像素数据"),
     )
     .expect("写 PNG 失败");
     println!("已写 {}", out_rt.display());

@@ -10,7 +10,10 @@
 pub mod command;
 pub mod history;
 
-pub use command::{EditCommand, EditError, EditResult};
+pub use command::{
+    AddStreetSegmentCommand, DeleteStreetSegmentCommand, EditCommand, EditError, EditResult,
+    SetMapOrientationCommand,
+};
 pub use history::{History, Transaction};
 
 /// 脏数据集合：记录哪些文件在下次保存时需要写回。

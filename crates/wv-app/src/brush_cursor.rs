@@ -16,9 +16,10 @@
 //! ## 实现
 //!
 //! - **外环** = `Annulus::new(outer - thickness, outer)`，`outer = brush.radius`，
-//!   `thickness = 1.5 / view.scale`（屏幕 1.5px 描边）；
+//!   `thickness = 1.5 * view.scale`（屏幕 1.5px 描边；`view.scale` 的单位是
+//!   世界单位/像素，恒定屏幕宽度必须**乘** scale）；
 //! - **内环虚线** = 24 个 `Rectangle` mesh 拼接在半径 `inner = brush.radius * (1 - softness)`
-//!   的圆周上；**每段世界长度 = 3 / view.scale**（屏幕 3px），段间隙 = 段长——
+//!   的圆周上；**每段世界长度 = 3 * view.scale**（屏幕 3px），段间隙 = 段长——
 //!   与原 48 段（24 段亮 + 24 段暗）等价，但**段长随 view.scale 缩放**保持屏幕恒定；
 //! - **十字** = 2 个 `Rectangle` mesh，长度 12 屏幕 px 视觉，
 //!   粗细 1.5 屏幕 px。
@@ -116,14 +117,14 @@ pub fn sync_brush_cursor(
         entities.despawn_all(&mut commands);
         return;
     }
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
     let Some(cursor_screen) = window.cursor_position() else {
         entities.despawn_all(&mut commands);
         return;
     };
-    let Ok(camera_transform) = camera.get_single() else {
+    let Ok(camera_transform) = camera.single() else {
         return;
     };
     let cursor_world = screen_to_world(
@@ -133,10 +134,12 @@ pub fn sync_brush_cursor(
         view.scale,
     );
 
-    // ---- 屏幕恒定粗细（世界 = 像素 × view_scale，等价于 px / view_scale 反推）----
-    let stroke_world = (STROKE_PX / view.scale).max(f32::EPSILON);
-    let dash_world = (DASH_PX / view.scale).max(f32::EPSILON);
-    let cross_world = (CROSS_PX / view.scale).max(f32::EPSILON);
+    // ---- 屏幕恒定粗细：`world = 像素 × view.scale`（`view.scale` 的单位是
+    // 世界单位/像素）。历史上写成 `像素 / view.scale`，量纲反了——近看时光标
+    // 缩成看不见，深缩时胀成巨环。----
+    let stroke_world = (STROKE_PX * view.scale).max(f32::EPSILON);
+    let dash_world = (DASH_PX * view.scale).max(f32::EPSILON);
+    let cross_world = (CROSS_PX * view.scale).max(f32::EPSILON);
 
     let mat_select = materials.add(palette::ACCENT_SELECT);
     let mat_select_dim = materials.add(palette::ACCENT_SELECT.with_alpha(0.6));
@@ -238,20 +241,20 @@ mod tests {
 
     use super::*;
 
-    /// 屏幕像素 → 世界单位：`world = px / view_scale`。放大越大、世界越大；
-    /// 屏幕视觉始终 = px。
+    /// 屏幕像素 → 世界单位：`world = px * view_scale`（`view_scale` 的单位是
+    /// 世界单位/像素）。屏幕视觉始终 = `world / view_scale == px`。
     #[test]
-    fn screen_px_to_world_inverts_with_view_scale() {
+    fn screen_px_to_world_keeps_screen_px_constant() {
         let vs_out = 0.1_f32;
         let vs_in = 8.0_f32;
         let px = 3.0_f32;
-        let w_out = (px / vs_out).max(f32::EPSILON);
-        let w_in = (px / vs_in).max(f32::EPSILON);
-        // 屏幕等价：world * view_scale == px。
-        assert!((w_out * vs_out - px).abs() < 1e-4, "got {}", w_out);
-        assert!((w_in * vs_in - px).abs() < 1e-4, "got {}", w_in);
-        // 远观的世界长度 ≫ 近看（屏幕恒定 = 世界 / scale 反比）。
-        assert!(w_out > w_in, "远观世界长度应更大");
+        let w_out = (px * vs_out).max(f32::EPSILON);
+        let w_in = (px * vs_in).max(f32::EPSILON);
+        // 屏幕等价：world / view_scale == px。
+        assert!((w_out / vs_out - px).abs() < 1e-4, "got {}", w_out);
+        assert!((w_in / vs_in - px).abs() < 1e-4, "got {}", w_in);
+        // 近看（scale 大）的世界长度 ≫ 远观——屏幕宽度恒定为 px。
+        assert!(w_in > w_out, "近看世界长度应更大");
     }
 
     /// `BrushCursorEntities` 默认所有字段空。

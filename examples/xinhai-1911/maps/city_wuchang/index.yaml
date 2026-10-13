@@ -16,6 +16,14 @@ layers:
     opacity: 1.0
     z: 0
     source: terrain.bin
+  - id: layer_city_wuchang_streets
+    name: 街道
+    kind: road
+    visible: true
+    locked: false
+    opacity: 1.0
+    z: 1
+    source: maps/city_wuchang/roads.yaml
 # 要地标记：锚点 = Place (x,y) ÷ extent(1024)。十字 = 地点/事件点。
 icons:
   - id: icon_chuwangtai

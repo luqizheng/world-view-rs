@@ -101,6 +101,7 @@ fn map_node_yaml_round_trips() {
         extent: None,
         raster: None,
         geographic_source: None,
+        orientation: 0.0,
     };
 
     let text = serde_yaml::to_string(&node).unwrap();
@@ -118,6 +119,47 @@ fn map_node_yaml_round_trips() {
         Some(Color("#7AB8FF".into())),
         "颜色字符串在 YAML round-trip 后必须逐字相等"
     );
+}
+
+#[test]
+fn map_node_orientation_round_trips_and_defaults_to_zero() {
+    use wv_core::map::{MapLevel, MapNode};
+    use wv_core::Id;
+
+    // 未声明 orientation 的 YAML 反序列化后应为 0.0。
+    let text = "id: world_main\nname: 主世界\nlevel: world\n";
+    let node: MapNode = serde_yaml::from_str(text).expect("缺省 orientation 应能反序列化");
+    assert_eq!(node.orientation, 0.0, "缺省 orientation 应为 0.0");
+
+    // 序列化后不应出现 orientation 字段（skip_serializing_if）。
+    let yaml = serde_yaml::to_string(&node).unwrap();
+    assert!(
+        !yaml.contains("orientation"),
+        "0.0 的 orientation 不应写出到 YAML: {yaml}"
+    );
+
+    // 显式声明 orientation 的 round-trip。
+    let with_orient = MapNode {
+        id: Id::new_unchecked("world_main"),
+        name: "主世界".into(),
+        level: MapLevel::World,
+        parent: None,
+        children: vec![],
+        icons: vec![],
+        layers: vec![],
+        extent: None,
+        raster: None,
+        geographic_source: None,
+        orientation: 45.0,
+    };
+    let yaml2 = serde_yaml::to_string(&with_orient).unwrap();
+    assert!(
+        yaml2.contains("orientation: 45.0"),
+        "非零 orientation 必须写出: {yaml2}"
+    );
+
+    let back: MapNode = serde_yaml::from_str(&yaml2).unwrap();
+    assert_eq!(back.orientation, 45.0, "orientation round-trip 必须稳定");
 }
 
 #[test]

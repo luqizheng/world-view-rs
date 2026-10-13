@@ -71,10 +71,7 @@ pub fn segment_length_m(points: &[GeoCoord]) -> f64 {
     if points.len() < 2 {
         return 0.0;
     }
-    points
-        .windows(2)
-        .map(|w| haversine_m(w[0], w[1]))
-        .sum()
+    points.windows(2).map(|w| haversine_m(w[0], w[1])).sum()
 }
 
 #[cfg(test)]
@@ -110,10 +107,7 @@ mod tests {
         let needle = GeoCoord::new(-122.34930484786, 47.62050346772);
         let nearby = GeoCoord::new(-122.3493, 47.6240); // ~ 390 m 北
         let d = haversine_m(needle, nearby);
-        assert!(
-            d < 1000.0 && d > 100.0,
-            "应约 390 m，实得 {d:.1} m"
-        );
+        assert!(d < 1000.0 && d > 100.0, "应约 390 m，实得 {d:.1} m");
     }
 
     // ---- segment_length_m 回归用例 ----
@@ -168,15 +162,17 @@ mod tests {
             GeoCoord::new(-122.34850, 47.61940),
         ];
         let got = segment_length_m(&pts);
-        let expected = haversine_m(pts[0], pts[1])
-            + haversine_m(pts[1], pts[2])
-            + haversine_m(pts[2], pts[3]);
+        let expected =
+            haversine_m(pts[0], pts[1]) + haversine_m(pts[1], pts[2]) + haversine_m(pts[2], pts[3]);
         assert!(
             (got - expected).abs() < 1e-6,
             "应等于三段 Haversine 之和: got={got:.3}, expected={expected:.3}"
         );
         // 量级守护：西雅图 downtown 一条 residential 短路段应在 ~100-200 m。
         // 防止 `EARTH_RADIUS_M` 常量被误改（错一个数量级会立刻触发）。
-        assert!(got > 100.0 && got < 200.0, "应 ~137 m 量级，实得 {got:.3} m");
+        assert!(
+            got > 100.0 && got < 200.0,
+            "应 ~137 m 量级，实得 {got:.3} m"
+        );
     }
 }

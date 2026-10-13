@@ -45,7 +45,7 @@ pub struct ProjectionFrame {
 /// 一个 POI 点标的渲染数据。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlaceDot {
-    /// 世界坐标（已含 `grid.origin` 偏移）。
+    /// 视图空间坐标（本图局部经 [`GridConfig::map_to_view`] 换算而来）。
     pub pos: Vec2,
     /// 是否为「城市级」地点（`Place.w/h` 齐备）。
     pub is_city: bool,
@@ -95,19 +95,19 @@ pub fn compute_projection(
     // ---- 轨迹逐段生长 ----
     if view.tracks_visible {
         for track in &world.tracks {
-            let poly = grown_polyline(track, t, &grid);
+            let poly = grown_polyline(track, t);
             if poly.len() >= 2 {
                 frame.track_polylines.push(poly);
             }
             if let Some(head) = track.sample_at(t) {
-                frame.track_heads.push(world_to_view(head.x, head.y, &grid));
+                frame.track_heads.push(root_to_view(head.x, head.y));
             }
             // 空心起点：轨迹第一个有坐标的 waypoint 且其 day 为推算（None）或为粗轨迹。
             let hollow = track
                 .waypoints
                 .iter()
                 .find_map(|w| w.pos)
-                .map(|p| world_to_view(p.x, p.y, &grid));
+                .map(|p| root_to_view(p.x, p.y));
             if let Some(h) = hollow {
                 frame.track_hollow_starts.push(h);
             }
@@ -118,13 +118,14 @@ pub fn compute_projection(
     if view.roads_visible || view.places_visible {
         if let Some(current) = drill.current_node(world) {
             // 只取锚定在当前地图、且坐标齐备的地点（与标记层「只画当前层级」同口径）。
+            // 地点坐标是**本图局部**坐标 → `grid.map_to_view`（不是栅格原点）。
             let find_place = |id: &wv_core::id::Id| -> Option<Vec2> {
                 let p = world
                     .distances
                     .places
                     .iter()
                     .find(|p| &p.id == id && p.map.as_ref() == Some(&current.id))?;
-                Some(world_to_view(p.x?, p.y?, &grid))
+                Some(grid.map_to_view(Vec2::new(p.x?, p.y?)))
             };
             if view.roads_visible {
                 for edge in &world.distances.edges {
@@ -139,7 +140,7 @@ pub fn compute_projection(
                     if p.map.as_ref() == Some(&current.id) {
                         if let (Some(x), Some(y)) = (p.x, p.y) {
                             frame.place_dots.push(PlaceDot {
-                                pos: world_to_view(x, y, &grid),
+                                pos: grid.map_to_view(Vec2::new(x, y)),
                                 is_city: p.w.is_some() && p.h.is_some(),
                             });
                         }
@@ -150,25 +151,29 @@ pub fn compute_projection(
     }
 }
 
-/// 图内局部坐标 → 视图世界坐标（基线 §2.15 变换链）。
-fn world_to_view(x: f32, y: f32, grid: &GridConfig) -> Vec2 {
-    Vec2::new(grid.origin.x + x, grid.origin.y + y)
-}
-
-/// [`world_to_view`] 的公开版本——供同 crate 的地名标注（`drill::update_place_labels`）
-/// 等叠加层复用，保证全项目只有一条坐标变换链。
-pub fn world_to_view_pub(x: f32, y: f32, grid: &GridConfig) -> Vec2 {
-    world_to_view(x, y, grid)
+/// **根图帧**（世界）坐标 → 视图空间。
+///
+/// 视图空间**就是**根图坐标系（基线 §2.15：相机、`ViewState::cursor_world`、
+/// `drill_target` 全在根帧），所以这里是恒等映射；保留函数是为了把「这份数据
+/// 属于根帧」写在调用处，别让读者把它和随手一个 `Vec2::new` 混起来。
+/// 本图局部坐标（地点 / 街道）走 [`GridConfig::map_to_view`]。
+///
+/// 待决 §12-26：轨迹 waypoint 与事项事件的坐标**今天一律按根帧（世界）解释**，
+/// 数据里没有「这份坐标属于哪张图」的声明。世界级事件/轨迹因此天然正确；若将来
+/// 允许事件或轨迹按子图局部坐标书写，必须先加所属帧字段，再改这里——收敛点是
+/// 本函数与 `grown_polyline`，改动面可控。
+fn root_to_view(x: f32, y: f32) -> Vec2 {
+    Vec2::new(x, y)
 }
 
 /// 生成「已生长」折线（动画 §1.2）：已知生长位置之前全亮，当前段线性插值到笔尖。
-fn grown_polyline(track: &wv_core::track::Track, day: i64, grid: &GridConfig) -> Vec<Vec2> {
+fn grown_polyline(track: &wv_core::track::Track, day: i64) -> Vec<Vec2> {
     // 带时间戳且有坐标的锚点，按 day 升序。
     let mut anchors: Vec<(i64, Vec2)> = track
         .waypoints
         .iter()
         .filter_map(|w| w.day.zip(w.pos))
-        .map(|(d, p)| (d, world_to_view(p.x, p.y, grid)))
+        .map(|(d, p)| (d, root_to_view(p.x, p.y)))
         .collect();
     anchors.sort_by_key(|(d, _)| *d);
     if anchors.is_empty() {
@@ -227,9 +232,10 @@ pub fn draw_map_gizmos(
         }
         // 地图轮廓：边框用反白描线（深底上可见——LINE_ON_MID 是给浅底地形用的，
         // 在深色空白工程上等于隐形），并补 1/4 幅面参考网格，避免「一片黑看不到图在哪」。
-        let size = tex.size as f32 * grid.cell_size;
-        let min = grid.origin;
-        let max = grid.origin + Vec2::splat(size);
+        // 画的是**当前图**的幅面（与 `map_frame::sync_map_frame` 同口径，现由它接替）。
+        let size = grid.map_size;
+        let min = grid.map_origin;
+        let max = grid.map_origin + Vec2::splat(size);
         gizmos.rect_2d(
             Isometry2d::from_translation((min + max) * 0.5),
             Vec2::splat(size),
@@ -348,13 +354,13 @@ pub fn draw_brush_cursor(
         if !brush.enabled || drill.depth() > 0 {
             return;
         }
-        let Ok(window) = windows.get_single() else {
+        let Ok(window) = windows.single() else {
             return;
         };
         let Some(cursor) = window.cursor_position() else {
             return;
         };
-        let Ok(transform) = camera.get_single() else {
+        let Ok(transform) = camera.single() else {
             return;
         };
         let world = crate::camera::screen_to_world(

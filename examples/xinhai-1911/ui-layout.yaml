@@ -1,9 +1,9 @@
 panels:
   brush:
     x: 12.0
-    y: 304.0
-    width: 280.0
-    height: 495.75684
+    y: 239.1875
+    width: 264.0
+    height: 560.40625
     collapsed: false
     visible: true
   character:
@@ -44,10 +44,10 @@ panels:
   minimap:
     x: 332.0
     y: 56.0
-    width: 232.0
-    height: 332.75684
+    width: 216.0
+    height: 336.0
     collapsed: false
-    visible: true
+    visible: false
   situation:
     x: 652.0
     y: 380.0
@@ -56,10 +56,10 @@ panels:
     collapsed: false
     visible: false
   timeline:
-    x: 8.0
-    y: 660.8
-    width: 1272.0
-    height: 139.0
+    x: 12.0
+    y: 659.1875
+    width: 1256.0
+    height: 141.0
     collapsed: false
     visible: true
   tree:

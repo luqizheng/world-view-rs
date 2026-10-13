@@ -97,6 +97,7 @@ fn build_world(meta: WorldMeta) -> World {
         extent: Some(Extent::sized(4096.0, 4096.0)),
         raster: None, // save_world 的 write_terrain_if_any 会生成并回写
         geographic_source: None,
+        orientation: 0.0,
     });
 
     // ---- 地形：西陆东海（1024²，确定性 Perlin）---------------------------

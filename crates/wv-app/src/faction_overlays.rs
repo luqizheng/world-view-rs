@@ -38,10 +38,10 @@
 
 #![cfg(feature = "app")]
 
+use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::mesh::Indices;
 use bevy::render::mesh::MeshVertexAttribute;
-use bevy::render::render_asset::RenderAssetUsages;
 use bevy::render::render_resource::{PrimitiveTopology, VertexFormat};
 
 use crate::state::ViewState;

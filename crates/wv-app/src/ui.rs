@@ -178,6 +178,9 @@ struct MenuRow {
 ///
 /// 菜单内容顺序（与原型一致）：最近工程 → 工程操作 → 面板显隐。
 /// **保存 / 撤销不进这个菜单**：它们已有独立位置（§A）。
+///
+/// 开合状态存放在 egui memory（`Popup` 的 `OpenKind::Memory`）里，**只在点击工程名时打开**；
+/// 它不是一个「常驻浮层」——常驻会盖住左上角的面包屑（当前图名）。
 fn project_menu(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -194,7 +197,7 @@ fn project_menu(
         .unwrap_or_else(|| "（未命名工程）".to_owned());
     let dirty = projection.dirty;
     let popup_id = egui::Id::new("wv_project_menu");
-    let opened = ui.memory(|m| m.is_popup_open(popup_id));
+    let opened = egui::Popup::is_id_open(ui.ctx(), popup_id);
 
     // ── 触发器 ──
     let text = format!("◈ {name}{}", if dirty { " ●" } else { "" });
@@ -218,7 +221,9 @@ fn project_menu(
     );
     if resp.clicked() {
         state.selected = 0;
-        ui.memory_mut(|m| m.toggle_popup(popup_id));
+        // **不要**在这里再 toggle 一次：开合状态由下方 `from_toggle_button_response`
+        // 负责（它在点击帧写入 `SetOpenCommand::Toggle`）。两处都 toggle 会互相抵消，
+        // 菜单永远打不开——见 `Popup::show` 的 `OpenKind::Memory` 分支。
     }
 
     // ── 菜单内容 ──
@@ -270,21 +275,24 @@ fn project_menu(
             if let Some(r) = rows.get(state.selected) {
                 state.pending = Some(r.id);
             }
-            ui.memory_mut(|m| m.close_popup());
+            egui::Popup::close_all(ui.ctx());
         }
         if esc {
-            ui.memory_mut(|m| m.close_popup());
+            egui::Popup::close_all(ui.ctx());
         }
     }
     state.selected = state.selected.min(rows.len().saturating_sub(1));
 
     let mut clicked_id: Option<CommandId> = None;
-    egui::popup::popup_below_widget(
-        ui,
-        popup_id,
-        &resp,
-        egui::popup::PopupCloseBehavior::CloseOnClickOutside,
-        |ui| {
+    // **必须**用 `from_toggle_button_response`（= `open_memory(Toggle)`）而不是 `from_response`：
+    // egui 0.36 的 `Popup::from_response` 默认 `OpenKind::Open`——文档原话「The popup will be
+    // always open」，于是菜单会在启动第一帧就弹出来、再也关不掉（Esc 只影响 `Memory` 分支）。
+    // 旧 API `popup_below_widget(popup_id, …)` 是 memory 驱动的，0.36 换 API 时丢了这层语义，
+    // 属 ADR-0011 §5 记录的那类「迁移静默回归」。
+    egui::Popup::from_toggle_button_response(&resp)
+        .id(popup_id)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
             ui.set_min_width(268.0);
             // 分组标题与分隔线跟着行数据走：空分组不会留下孤立标题，
             // 增删命令也不需要同步改这里的计数（见 [`MenuRow::section`]）。
@@ -315,13 +323,12 @@ fn project_menu(
             ui.separator();
             if ui.button("重置所有面板位置").clicked() {
                 panels.reset_requested = true;
-                ui.memory_mut(|m| m.close_popup());
+                egui::Popup::close_all(ui.ctx());
             }
-        },
-    );
+        });
     if let Some(id) = clicked_id {
         state.pending = Some(id);
-        ui.memory_mut(|m| m.close_popup());
+        egui::Popup::close_all(ui.ctx());
     }
 }
 
@@ -406,7 +413,9 @@ pub fn breadcrumb(
     panels: Res<PanelState>,
 ) {
     let shell = UiShell::new(&shell_cfg);
-    let ctx: &mut egui::Context = contexts.ctx_mut();
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
     if drill.current().is_none() {
         return;
     }
@@ -434,11 +443,11 @@ pub fn breadcrumb(
         .order(egui::Order::Middle)
         .interactable(true)
         .show(ctx, |ui| {
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(shell.float_fill().gamma_multiply(alpha))
                 .stroke(egui::Stroke::new(1.0_f32, shell.border_subtle()))
-                .inner_margin(egui::Margin::symmetric(space::SM, space::XS))
-                .rounding(radius::CONTROL)
+                .inner_margin(crate::ui_theme::margin_xy(space::SM, space::XS))
+                .corner_radius(radius::CONTROL)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         for (i, (name, is_current)) in segments.iter().enumerate() {
@@ -545,6 +554,36 @@ pub fn badge(ui: &mut egui::Ui, shell: &UiShell, kind: BadgeKind, text: &str) {
 // 顶栏（§3.2 三段式）
 // ---------------------------------------------------------------------------
 
+/// 描边矩形（统一 `StrokeKind::Inside`）。
+///
+/// egui 0.36 给 `Painter::rect_stroke` 加了第 4 个参数 `StrokeKind`（描边画在
+/// 边界内 / 中 / 外）。本工程的矩形描边都是「选中框 / 视口框」，必须落在矩形**内部**
+/// 才不会被邻居裁切吞掉，故收敛成一个实现点。
+fn rect_stroke(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    corner_radius: impl Into<egui::CornerRadius>,
+    stroke: impl Into<egui::Stroke>,
+) {
+    painter.rect_stroke(rect, corner_radius, stroke, egui::StrokeKind::Inside);
+}
+/// 构造一个「视口根 `Ui`」。
+///
+/// egui 0.36 起，`Panel` / `CentralPanel` 收 `&mut Ui` 而不是 `&Context`
+/// （框架改成「一次 `Context::run_ui` 产生根 Ui，面板从根 Ui 里切条」）。
+/// bevy_egui 0.42 在 `run_ui` 里把根 Ui 丢弃了，所以顶栏/状态栏各自造一个：
+/// 两者的 `max_rect` 都是整个视口，各自从自己的 `PanelState` 取边条，
+/// 因此互不干扰（中间整块永远留给世界渲染，egui 不占）。
+fn root_ui(ctx: &egui::Context) -> egui::Ui {
+    egui::Ui::new(
+        ctx.clone(),
+        "wv_root".into(),
+        egui::UiBuilder::new()
+            .layer_id(egui::LayerId::background())
+            .max_rect(ctx.viewport_rect()),
+    )
+}
+
 /// 顶栏：身份 → 主控 → 读数。**唯一例外**的 `TopBottomPanel`（38px / 32px）。
 ///
 /// Bevy 系统的参数即「依赖声明」，宽签名是框架惯例而非坏味道（同 `editing.rs`）。
@@ -560,17 +599,20 @@ pub fn top_bar(
     mut panels: ResMut<PanelState>,
 ) {
     let shell = UiShell::new(&shell_cfg);
-    let ctx: &mut egui::Context = contexts.ctx_mut();
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
     let h = shell_cfg.density.top_bar_height();
     let recents = recents_res.visible(&projection);
-    egui::TopBottomPanel::top("wv_top_bar")
-        .exact_height(h)
+    let mut root = root_ui(ctx);
+    egui::Panel::top("wv_top_bar")
+        .exact_size(h)
         .frame(
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(color32(shell.palette.bg_panel))
-                .inner_margin(egui::Margin::symmetric(space::SM, 0.0)),
+                .inner_margin(crate::ui_theme::margin_xy(space::SM, 0.0)),
         )
-        .show(ctx, |ui| {
+        .show(&mut root, |ui| {
             ui.horizontal(|ui| {
                 // ── 身份 ──
                 identity_segment(ui, &shell, &projection, &recents, &mut panels, &mut menu);
@@ -723,10 +765,12 @@ pub fn map_controls(
     tex: Res<crate::terrain_view::TerrainTexture>,
     projection: Res<crate::state::WorldProjection>,
     windows: Query<&Window>,
-    mut cameras: Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
+    mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
 ) {
     let shell = UiShell::new(&shell_cfg);
-    let ctx = contexts.ctx_mut();
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
     // 地形笔刷只作用于世界图；钻入城市 / 建筑后强制回到拖动，避免“铅笔亮着却不能画”。
     let brush_available = drill.depth() == 0;
     if !brush_available {
@@ -735,7 +779,7 @@ pub fn map_controls(
     // 当前级的缩放区间与「全图」尺寸。**级由 drill 决定**（当前在哪张图），
     // 图没声明 extent 时以实际显示的栅格（格子尺寸 × 纹理边长）兜底。
     let window_size = windows
-        .get_single()
+        .single()
         .map(|w| w.resolution.size())
         .unwrap_or(Vec2::new(1280.0, 800.0));
     let raster_size = Vec2::splat(grid.cell_size * tex.size as f32);
@@ -755,11 +799,11 @@ pub fn map_controls(
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             ui.set_min_width(48.0);
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(control_bg)
                 .stroke(egui::Stroke::new(1.0_f32, control_border))
-                .rounding(egui::Rounding::same(10.0))
-                .inner_margin(egui::Margin::symmetric(5.0, 5.0))
+                .corner_radius(egui::CornerRadius::from(10.0))
+                .inner_margin(crate::ui_theme::margin_xy(5.0, 5.0))
                 .show(ui, |ui| {
                     let tool_label = if brush.enabled { "✏" } else { "✋" };
                     let mut tool_button = egui::Button::new(
@@ -827,11 +871,13 @@ pub fn map_controls(
                     if fit.clicked() {
                         // 「全图」= **当前级**那张图的全幅（不是底层栅格的全幅）：
                         // 中心取该图的图帧原点 + 半幅，缩放取它的 fit。
+                        // 图帧原点与 `grid.map_origin` 同源（`drill::map_origin` 是唯一
+                        // 实现点），但这里要的是**当帧**的值，直接解析一次比读资源更稳。
                         let frame_origin = drill
                             .current()
                             .and_then(|id| wv_core::resolve_frame_in(&projection.world.maps, id))
                             .map(|f| Vec2::new(f.world_origin.x, f.world_origin.y))
-                            .unwrap_or(grid.origin);
+                            .unwrap_or(grid.map_origin);
                         view.camera_center = frame_origin + level_map_size * 0.5;
                         set_map_scale(&mut view, &mut cameras, zoom.fit, zoom);
                     }
@@ -845,7 +891,7 @@ pub fn map_controls(
 /// 级之间的越界换级不在这里做——那样 `＋/－` 按钮会意外换图。
 fn set_map_scale(
     view: &mut ViewState,
-    cameras: &mut Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
+    cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     scale: f32,
     zoom: crate::zoom_level::LevelZoom,
 ) {
@@ -892,15 +938,18 @@ pub fn status_bar(
 ) {
     let shell = UiShell::new(&shell_cfg);
     let fresh = notice.is_fresh((time.elapsed_secs() * 60.0) as u64);
-    let ctx: &mut egui::Context = contexts.ctx_mut();
-    egui::TopBottomPanel::bottom("wv_status_bar")
-        .exact_height(22.0)
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
+    let mut root = root_ui(ctx);
+    egui::Panel::bottom("wv_status_bar")
+        .exact_size(22.0)
         .frame(
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(color32(shell.palette.bg_panel))
-                .inner_margin(egui::Margin::symmetric(space::SM, 0.0)),
+                .inner_margin(crate::ui_theme::margin_xy(space::SM, 0.0)),
         )
-        .show(ctx, |ui| {
+        .show(&mut root, |ui| {
             ui.horizontal(|ui| {
                 let w = &projection.world;
                 let summary = format!(
@@ -987,11 +1036,11 @@ pub fn float_window(
         .collapsible(true)
         .title_bar(true)
         .frame(
-            egui::Frame::window(&ctx.style())
+            egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
                 .fill(shell.panel_bg().gamma_multiply(alpha))
                 .stroke(egui::Stroke::new(1.0_f32, shell.border_strong()))
-                .inner_margin(egui::Margin::same(space::SM))
-                .rounding(radius::PANEL),
+                .inner_margin(crate::ui_theme::margin_all(space::SM))
+                .corner_radius(radius::PANEL),
         );
 
     win.show(ctx, |ui| {
@@ -1101,7 +1150,8 @@ pub fn list_item(
     let painter = ui.painter();
     if selected {
         painter.rect_filled(rect, radius::CONTROL, shell.active_bg());
-        painter.rect_stroke(
+        rect_stroke(
+            painter,
             rect,
             radius::CONTROL,
             egui::Stroke::new(1.0_f32, shell.accent()),
@@ -1149,7 +1199,8 @@ pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8) {
                 let painter = ui.painter();
                 if is_sel {
                     painter.rect_filled(rect, radius::CONTROL, shell.active_bg());
-                    painter.rect_stroke(
+                    rect_stroke(
+                        painter,
                         rect,
                         radius::CONTROL,
                         egui::Stroke::new(1.5_f32, shell.focus()),
@@ -1236,7 +1287,9 @@ pub fn panel_timeline(
     mut open_event: Local<bool>,
 ) {
     let shell = UiShell::new(&shell_cfg);
-    let ctx: &mut egui::Context = contexts.ctx_mut();
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
     if !panels.is_visible(Panel::Timeline) {
         return;
     }
@@ -1256,11 +1309,11 @@ pub fn panel_timeline(
         .resizable(true)
         .title_bar(false)
         .frame(
-            egui::Frame::window(&ctx.style())
+            egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
                 .fill(shell.panel_bg().gamma_multiply(alpha))
                 .stroke(egui::Stroke::new(1.0_f32, shell.border_strong()))
-                .inner_margin(egui::Margin::same(space::SM))
-                .rounding(radius::PANEL),
+                .inner_margin(crate::ui_theme::margin_all(space::SM))
+                .corner_radius(radius::PANEL),
         )
         .show(ctx, |ui| {
             // ── 播放控件 + 日期 + 层切换 ──
@@ -1439,7 +1492,9 @@ pub fn panel_map_tree(
     view: Res<ViewState>,
 ) {
     let shell = UiShell::new(&shell_cfg);
-    let ctx: &mut egui::Context = contexts.ctx_mut();
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
     float_window(
         ctx,
         &shell,
@@ -1476,7 +1531,9 @@ pub fn panel_layers(
     mut view: ResMut<ViewState>,
 ) {
     let shell = UiShell::new(&shell_cfg);
-    let ctx: &mut egui::Context = contexts.ctx_mut();
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
     float_window(
         ctx,
         &shell,
@@ -1497,17 +1554,24 @@ pub fn panel_layers(
     );
 }
 
-/// 地形笔刷（P-3）。
+/// 地形笔刷 + 街道编辑器面板（P-3 / ADR-0010 编辑器 UI）。
+#[allow(clippy::too_many_arguments)]
 pub fn panel_brush(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,
     layouts: Res<LayoutFile>,
     mut panels: ResMut<PanelState>,
     mut brush: ResMut<BrushState>,
+    mut streets: ResMut<crate::streets::StreetEditorState>,
+    mut projection: ResMut<crate::state::WorldProjection>,
+    drill: Res<crate::state::DrillState>,
+    mut edit: ResMut<crate::editing::EditHistory>,
     grid: Res<GridConfig>,
 ) {
     let shell = UiShell::new(&shell_cfg);
-    let ctx: &mut egui::Context = contexts.ctx_mut();
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
     float_window(
         ctx,
         &shell,
@@ -1543,6 +1607,52 @@ pub fn panel_brush(
                     .font(mono(shell.scale.small)),
             );
             ui.add(egui::Slider::new(&mut brush.softness, 0.0..=1.0).show_value(false));
+            ui.add_space(space::SM);
+            ui.label(
+                egui::RichText::new("街道")
+                    .size(shell.scale.micro)
+                    .color(shell.t2()),
+            );
+            ui.checkbox(&mut streets.enabled, "画街道模式（左键逐点连线，右键结束）");
+            if streets.enabled {
+                egui::ComboBox::from_label("类别")
+                    .selected_text(streets.class.label())
+                    .show_ui(ui, |ui| {
+                        for c in wv_core::RoadClass::ALL {
+                            ui.selectable_value(&mut streets.class, c, c.label());
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    ui.label("街道名");
+                    // 留空 = 下一笔无名（不产生标注）。
+                    ui.text_edit_singleline(&mut streets.name);
+                });
+                ui.label(
+                    egui::RichText::new(format!("已画 {} 段", streets.drawn))
+                        .size(shell.scale.small)
+                        .color(shell.t3())
+                        .font(mono(shell.scale.small)),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("结束连线").clicked() {
+                        streets.last_click = None;
+                    }
+                    // 撤销上一段：UI 只生成 `DeleteStreetSegmentCommand` 交给
+                    // History（§3.3）；可删性在这里判断，命令层兜底越界。
+                    let deletable = drill
+                        .current_node(&projection.world)
+                        .and_then(crate::streets::target_road_layer)
+                        .and_then(|l| projection.world.street_of(&l.id))
+                        .map_or(0, |d| d.len());
+                    if ui
+                        .add_enabled(deletable > 0, egui::Button::new("撤销上一段"))
+                        .clicked()
+                    {
+                        undo_last_street_segment(&mut projection, &drill, &mut edit);
+                        streets.drawn = streets.drawn.saturating_sub(1);
+                    }
+                });
+            }
             ui.add_space(space::XS);
             ui.label(
                 egui::RichText::new("拖动模式左键平移 · 笔刷模式左键涂抹 · Ctrl+滚轮改半径")
@@ -1551,6 +1661,35 @@ pub fn panel_brush(
             );
         },
     );
+}
+
+/// 撤销目标图层最后一段街道（面板按钮的落点；UI 不直接改世界）。
+fn undo_last_street_segment(
+    projection: &mut crate::state::WorldProjection,
+    drill: &crate::state::DrillState,
+    edit: &mut crate::editing::EditHistory,
+) {
+    let Some(node) = drill.current_node(&projection.world) else {
+        return;
+    };
+    let Some(layer) = crate::streets::target_road_layer(node) else {
+        return;
+    };
+    // 先读段数并结束借用，再把命令交给 History（commit 要 &mut World）。
+    let len = projection.world.street_of(&layer.id).map_or(0, |d| d.len());
+    if len == 0 {
+        return;
+    }
+    let cmd = wv_edit::DeleteStreetSegmentCommand::new(layer.id.clone(), len - 1);
+    let mut tx = wv_edit::Transaction::new();
+    tx.push(Box::new(cmd));
+    match edit.history.commit(&mut projection.world, tx) {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
+            projection.dirty = true;
+        }
+        Err(e) => bevy::log::warn!("删除街道段失败: {e}"),
+    }
 }
 
 /// 小地图 + 图层开关（P-4）。
@@ -1563,13 +1702,15 @@ pub fn panel_minimap(
     mut view: ResMut<ViewState>,
     grid: Res<GridConfig>,
     tex: Res<crate::terrain_view::TerrainTexture>,
-    mut cameras: Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
+    mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     // 小地图缩略图直接复用大地图的地形纹理（同一 Handle，零额外上传）。
     // 注意先取 tex_id 再借 ctx（两者都要 &mut contexts，顺序反了过不了借用检查）。
-    let tex_id = contexts.add_image(tex.handle.clone());
-    let ctx: &mut egui::Context = contexts.ctx_mut();
+    let tex_id = contexts.add_image(bevy_egui::EguiTextureHandle::Strong(tex.handle.clone()));
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
     float_window(
         ctx,
         &shell,
@@ -1586,25 +1727,35 @@ pub fn panel_minimap(
             // UV 取整张纹理：egui 没有 `Rect::RECT` 常量，用 [0,1]² 单位矩形。
             let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
             painter.image(tex_id, rect, uv, egui::Color32::WHITE);
-            painter.rect_stroke(
+            rect_stroke(
+                painter,
                 rect,
                 radius::CONTROL,
                 egui::Stroke::new(1.0_f32, shell.border_strong()),
             );
-            // 视口矩形。
-            let half = 1.0 / view.scale.max(1e-4);
-            let cx = 0.5 + (view.camera_center.x / (grid.cell_size * 512.0)).clamp(-0.5, 0.5);
-            let cy = 0.5 + (view.camera_center.y / (grid.cell_size * 512.0)).clamp(-0.5, 0.5);
-            let vw = (half * 0.5).clamp(0.05, 1.0);
+            // 视口矩形。底图世界宽度 = 格宽 × 栅格列数；可见世界宽度 = 窗口宽 ×
+            // view.scale（`view.scale` 的单位是世界单位/像素），两者相除即框占幅
+            // 的比例。历史上写成 `1.0 / view.scale`，量纲反了：越深缩框越大，
+            // 深缩时框占满整幅小地图，完全失去「我在哪」的指示作用。
+            let map_world = (grid.cell_size * tex.size as f32).max(f32::EPSILON);
+            let cx = 0.5 + ((view.camera_center.x / map_world) - 0.5).clamp(-0.5, 0.5);
+            let cy = 0.5 + ((view.camera_center.y / map_world) - 0.5).clamp(-0.5, 0.5);
+            let frac_x = ((view.window_size.x * view.scale) / map_world).clamp(0.05, 1.0);
+            let frac_y = ((view.window_size.y * view.scale) / map_world).clamp(0.05, 1.0);
             let vp = egui::Rect::from_center_size(
                 egui::pos2(
                     rect.left() + rect.width() * cx,
                     rect.top() + rect.height() * cy,
                 ),
-                egui::vec2(rect.width() * vw, rect.height() * vw),
+                egui::vec2(rect.width() * frac_x, rect.height() * frac_y),
             )
             .intersect(rect); // §C6：裁剪，不许画出边界
-            painter.rect_stroke(vp, radius::BADGE, egui::Stroke::new(1.5_f32, shell.focus()));
+            rect_stroke(
+                painter,
+                vp,
+                radius::BADGE,
+                egui::Stroke::new(1.5_f32, shell.focus()),
+            );
             if response.clicked() {
                 if let Some(p) = response.interact_pointer_pos() {
                     let nx = (p.x - rect.left()) / rect.width() - 0.5;
@@ -1653,7 +1804,182 @@ pub fn panel_minimap(
     );
 }
 
-/// 检视器（P-5）。
+/// 指南针（临时替换小地图，显示地图朝向）。
+///
+/// 圆形罗盘 + 可拖拽指针 + 数值输入。朝向 = 地图屏幕旋转角（度）：
+/// `0.0` = 正北朝上，正值 = 顺时针偏转。
+pub fn panel_compass(
+    mut contexts: EguiContexts,
+    shell_cfg: Res<UiShellConfig>,
+    layouts: Res<LayoutFile>,
+    mut panels: ResMut<PanelState>,
+    drill: Res<DrillState>,
+    mut projection: ResMut<WorldProjection>,
+    mut edit: ResMut<crate::editing::EditHistory>,
+) {
+    let shell = UiShell::new(&shell_cfg);
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
+    float_window(
+        ctx,
+        &shell,
+        &layouts,
+        &mut panels,
+        Panel::Compass,
+        None,
+        |ui| {
+            // 取当前地图朝向；无地图时显示空状态。
+            let Some(node) = drill.current_node(&projection.world) else {
+                empty_state(ui, &shell, "◐", "指南针", "尚未选择地图", "→ 地图树");
+                return;
+            };
+            let map_id = node.id.clone();
+            let mut orientation = node.orientation;
+
+            // ── 罗盘 ──
+            ui.add_space(space::SM);
+            let side = ui.available_width().min(168.0);
+            let (rect, resp) =
+                ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click_and_drag());
+            let painter = ui.painter();
+            let center = rect.center();
+            let r = side / 2.0 - 4.0;
+
+            // 底盘
+            painter.circle_filled(center, r, shell.raised_bg());
+            painter.circle_stroke(center, r, egui::Stroke::new(1.5, shell.border_strong()));
+
+            // 刻度环
+            for i in 0..72 {
+                let angle = (i as f32 * 5.0 - 90.0) * std::f32::consts::PI / 180.0;
+                let is_major = i % 18 == 0;
+                let len = if is_major { 8.0 } else { 4.0 };
+                let dir = egui::vec2(angle.sin(), -angle.cos());
+                let p0 = center + dir * (r - 2.0);
+                let p1 = center + dir * (r - 2.0 - len);
+                let col = if is_major { shell.t1() } else { shell.t3() };
+                painter.line_segment([p0, p1], egui::Stroke::new(1.0, col));
+            }
+
+            // N/E/S/W 标签
+            let label_r = r - 16.0;
+            for (label, deg) in [("N", 0.0), ("E", 90.0), ("S", 180.0), ("W", 270.0)] {
+                let angle = (deg - 90.0) * std::f32::consts::PI / 180.0;
+                let pos = center + egui::vec2(angle.sin(), -angle.cos()) * label_r;
+                let galley = painter.layout_no_wrap(
+                    label.to_string(),
+                    proportional(shell.scale.micro),
+                    shell.t2(),
+                );
+                painter.galley(pos - galley.size() / 2.0, galley, shell.t2());
+            }
+
+            // 指针（从中心指向朝向方向）
+            let theta = orientation * std::f32::consts::PI / 180.0;
+            let needle_len = r - 20.0;
+            let tip = center + egui::vec2(theta.sin(), -theta.cos()) * needle_len;
+            let tail = center + egui::vec2(-theta.sin(), theta.cos()) * (needle_len * 0.3);
+
+            // 指针杆
+            painter.line_segment([center, tip], egui::Stroke::new(2.5, shell.accent()));
+            // 指针尾
+            painter.line_segment([center, tail], egui::Stroke::new(2.0, shell.t2()));
+            // 指针尖（三角形用三条线段模拟）
+            let perp = egui::vec2(theta.cos(), theta.sin());
+            let tri_w = 7.0;
+            let tip_w = tip + perp * tri_w;
+            let tip_s = tip - perp * tri_w;
+            painter.line_segment([tip_w, tip], egui::Stroke::new(2.0, shell.accent()));
+            painter.line_segment([tip_s, tip], egui::Stroke::new(2.0, shell.accent()));
+
+            // 中心点
+            painter.circle_filled(center, 3.0, shell.accent());
+
+            // ── 拖拽逻辑 ──
+            if resp.dragged() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let dx = pos.x - center.x;
+                    let dy = pos.y - center.y;
+                    let deg = dx.atan2(-dy).to_degrees().rem_euclid(360.0);
+                    if (deg - orientation).abs() > 0.5 {
+                        orientation = deg;
+                        push_cmd(&mut projection, &mut edit, &map_id, deg);
+                    }
+                }
+            }
+
+            // ── 数值输入 + 标签 ──
+            ui.add_space(space::SM);
+            ui.horizontal_centered(|ui| {
+                ui.label(
+                    egui::RichText::new("朝向")
+                        .size(shell.scale.small)
+                        .color(shell.t2()),
+                );
+                let mut val_text = format!("{:.1}", orientation);
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut val_text)
+                            .font(mono(shell.scale.input))
+                            .min_size(egui::vec2(60.0, shell.hit)),
+                    )
+                    .changed()
+                {
+                    if let Ok(v) = val_text.parse::<f32>() {
+                        let v = v.rem_euclid(360.0);
+                        if v != orientation {
+                            orientation = v;
+                            push_cmd(&mut projection, &mut edit, &map_id, v);
+                        }
+                    }
+                }
+                ui.label(
+                    egui::RichText::new("°")
+                        .size(shell.scale.small)
+                        .color(shell.t2()),
+                );
+            });
+
+            // ── 快捷按钮 ──
+            ui.add_space(space::XS);
+            ui.horizontal_centered(|ui| {
+                for (label, val) in [
+                    ("N 0°", 0.0),
+                    ("E 90°", 90.0),
+                    ("S 180°", 180.0),
+                    ("W 270°", 270.0),
+                ] {
+                    if ui.button(label).clicked() && val != orientation {
+                        orientation = val;
+                        push_cmd(&mut projection, &mut edit, &map_id, val);
+                    }
+                }
+            });
+        },
+    );
+}
+
+/// 指南针内部：把朝向变化包成事务提交。
+fn push_cmd(
+    projection: &mut WorldProjection,
+    edit: &mut crate::editing::EditHistory,
+    map_id: &wv_core::Id,
+    orientation: f32,
+) {
+    let cmd = wv_edit::SetMapOrientationCommand::new(map_id.clone(), orientation);
+    let mut tx = wv_edit::Transaction::new();
+    tx.push(Box::new(cmd));
+    match edit.history.commit(&mut projection.world, tx) {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
+            projection.dirty = true;
+        }
+        Err(e) => {
+            bevy::log::warn!("设置地图朝向失败: {e}");
+        }
+    }
+}
 pub fn panel_inspector(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,
@@ -1661,7 +1987,9 @@ pub fn panel_inspector(
     mut panels: ResMut<PanelState>,
 ) {
     let shell = UiShell::new(&shell_cfg);
-    let ctx: &mut egui::Context = contexts.ctx_mut();
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
     float_window(
         ctx,
         &shell,
@@ -1693,7 +2021,9 @@ pub fn panel_situation(
     projection: Res<WorldProjection>,
 ) {
     let shell = UiShell::new(&shell_cfg);
-    let ctx: &mut egui::Context = contexts.ctx_mut();
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
     let count = projection.world.situations.len();
     let badge = if count == 0 {
         None
@@ -1751,7 +2081,9 @@ pub fn panel_faction(
     mut edit: ResMut<editing::EditHistory>,
 ) {
     let shell = UiShell::new(&shell_cfg);
-    let ctx: &mut egui::Context = contexts.ctx_mut();
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
     let map_id = wv_core::id::Id::new_unchecked(view.current_map.clone());
     float_window(
         ctx,
@@ -1948,10 +2280,12 @@ pub fn panel_validation(
     mut drill: ResMut<DrillState>,
     mut view: ResMut<ViewState>,
     mut playback: ResMut<crate::state::PlaybackState>,
-    mut cameras: Query<(&mut Transform, &mut OrthographicProjection), With<Camera2d>>,
+    mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
 ) {
     let shell = UiShell::new(&shell_cfg);
-    let ctx: &mut egui::Context = contexts.ctx_mut();
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
     let d = &diagnostics.diagnostics;
     let n_errors = d.errors().len();
     let n_hints = d.hints().len();
@@ -2109,7 +2443,9 @@ pub fn panel_character(
     projection: Res<WorldProjection>,
 ) {
     let shell = UiShell::new(&shell_cfg);
-    let ctx: &mut egui::Context = contexts.ctx_mut();
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
     let count = projection.world.characters.len();
     let badge = if count == 0 {
         None
@@ -2152,7 +2488,9 @@ pub fn panel_event(
     projection: Res<WorldProjection>,
 ) {
     let shell = UiShell::new(&shell_cfg);
-    let ctx: &mut egui::Context = contexts.ctx_mut();
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
     let count = projection.world.events.len();
     let badge = if count == 0 {
         None
@@ -2212,7 +2550,9 @@ pub fn command_palette(
     let shell = UiShell::new(&shell_cfg);
     // 「最近工程」是动态命令，每次绘制时按当前工程展开（v0.2 §C）。
     let recents = recents_res.visible(&projection);
-    let ctx: &mut egui::Context = contexts.ctx_mut();
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
     if !palette.open {
         return;
     }
@@ -2222,13 +2562,13 @@ pub fn command_palette(
         .fixed_pos(egui::pos2(0.0, 0.0))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
-            let rect = ctx.screen_rect();
+            let rect = ctx.viewport_rect();
             ui.allocate_rect(rect, egui::Sense::click());
             ui.painter()
                 .rect_filled(rect, 0.0, egui::Color32::from_black_alpha(120));
         });
 
-    let screen = ctx.screen_rect();
+    let screen = ctx.viewport_rect();
     let w = (screen.width() * 0.45).clamp(360.0, 560.0);
     let x = (screen.width() - w) * 0.5;
     let y = screen.height() * 0.22;
@@ -2239,11 +2579,11 @@ pub fn command_palette(
         .title_bar(false)
         .resizable(false)
         .frame(
-            egui::Frame::window(&ctx.style())
+            egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
                 .fill(shell.panel_bg())
                 .stroke(egui::Stroke::new(1.0_f32, shell.border_strong()))
-                .inner_margin(egui::Margin::same(space::MD))
-                .rounding(radius::MODAL),
+                .inner_margin(crate::ui_theme::margin_all(space::MD))
+                .corner_radius(radius::MODAL),
         )
         .show(ctx, |ui| {
             // 输入框（14px）。
@@ -2271,7 +2611,7 @@ pub fn command_palette(
                             let sel = palette.selected == i;
                             let row = ui.add_sized(
                                 egui::vec2(ui.available_width(), shell.row + space::XS),
-                                egui::SelectableLabel::new(sel, &cmd.label),
+                                egui::Button::selectable(sel, &cmd.label),
                             );
                             if row.clicked() {
                                 palette.selected = i;

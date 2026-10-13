@@ -66,8 +66,10 @@
 - **Phase 0（本次）**：本 ADR；`Extent.origin` + `wv_core::coord`（含 11 个测试，覆盖逐层累加、UV 按本图归一化、悬空父图、父链成环、未声明 `extent` 的退化、`load/save` 缺省兼容）；README §12 第 19、20 条待决登记；`LayerKind::Road` / `Layer.source` 补 `TODO(阶段三)` 标注（见 [ADR-0010](ADR-0010-street-vector-layer.md)）。
 - **Phase 1（本次完成）**：`wv-app` 的标记摆位与钻取落点统一走 `wv_core::coord`（消除 §1 第 3 条的分叉）。`Extent.origin` 的类型细化为 `Option<Point>`，并给出「未声明时由父图钻入图标派生」的口径，见下文 §6。
 - **Phase 2（本次完成）**：每图 `raster` 的加载与切换（解除 §1 第 1 条的单值限制）。`World.terrain` → `World.terrains: BTreeMap<Id, TerrainData>`；`wv-io` 逐图读、按脏路径逐图写；`wv-app` 的底图、`grid` 帧与笔刷/撤销全部改走「来源图」。缺省语义（无自带栅格时向上继承）见下文 §7。驻留策略 §12-19 **未收敛**，当前实现为「全量常驻」这一最易回退的形态。
+- **底图切片（2026-10-13 追加，README §12-24 便利功能落地）**：`wv raster-slice <工程> <map_id> [size]`——`wv_io::slice_terrain` 沿坐标链（`resolve_frame_in`，唯一实现点）把来源图栅格中被子图覆盖的区域最近邻采样成子图自己的 `TerrainData`（出界取海平面），落盘 `maps/<id>/terrain.bin` 并回写 `raster` 引用；切片后子图用自己的底图，§7 的继承退场。**不恢复 `width_km`**，地面尺度问题（§6-20）不受影响。
 - **Phase 3（本次完成）**：相机分级化（§2⑤）+ 换级过渡的**缩放**部分（§2⑦）。新增 `crates/wv-app/src/zoom_level.rs`（`LevelZoom` 区间、`map_size_of`、换级意图 `ZoomCross` / `ZoomCrossRequest`、钻取过渡目标 `fly_in_scale`）；`camera::SCALE_MIN` / `SCALE_MAX` 两个全局常量删除，缩放区间改为按**当前级**实时计算；滚轮在级边界上**继续同向滚动**即请求换级，由 `drill::apply_zoom_cross` 独家执行（`DrillState` 仍是地图路径的唯一写入口）。边界语义与钻取过渡目标见下文 §8。**验证**：`zoom_level` 的区间不变式与 `fly_in_scale`（16 项）、`camera_zoom` 的生产端（真发 `MouseWheel` 事件，4 项）、`apply_zoom_cross` 的消费端（3 项）、以及**生产端 + 消费端同 App 真跑一次滚轮**的端到端项（`a_real_wheel_event_past_the_inner_limit_enters_the_child_level`）——合成鼠标输入进不了 winit，GUI 里无法自动化验证这条行为，故以系统级测试代替。§2⑦ 的「**淡化**」部分**未做**（换级目前是整张重建的硬切换），已登记 README §12 第 25 条。
 - **街道几何本身**见 [ADR-0010](ADR-0010-street-vector-layer.md)。
+- **换级淡化（2026-10-14 追加，README §12-25 收敛）**：§2⑦ 的「淡化」部分落地——换图（换级/钻取）时旧底图以**淡出精灵**（克隆旧纹理像素的 `Sprite`，z=0.05，盖在分块底图之上、道路之下）在 `LEVEL_FADE_SECS = 0.4s` 内线性降透明至归零回收，新底图同帧即时重建并直接可见。要点：**只淡出旧图、不淡入新图**（新图延迟出现会违反「切换必须同一帧生效」的待裁边界）；**换模式 / 换 soften 是「换眼镜」，不触发淡化**（保持瞬时）；淡化只动透明度、无任何位移插值（§2⑦ 不变式守住）。实现：`terrain_view.rs` 的 `BasemapFadeOut` / `spawn_basemap_fadeout` / `advance_fade` / `tick_basemap_fadeout`，测试 ×3（步进时长、像素克隆与幅面、换图生成而换模式不生成）。
 
 ## 6. 追加（2026-10-13，同日）：`origin` 的未声明语义与落点派生
 
@@ -248,3 +250,73 @@ Phase 2 落地时 `World.terrain: Option<TerrainData>`（全局单张）变成�
 | C | 换级时播放一段位移插值（相机飞到子图中心） | §2⑦ 已否决；且换级的视觉预期是「原地放大」，飞走会让作者丢失上下文 |
 | D | 保留 `SCALE_MIN` / `SCALE_MAX` 常量并在其上乘级数 | 与 §2⑤ 冲突（区间必须按级算）；且乘级数会得到 10¹¹ 量级的荒谬跨度（见 §1 第 4 条） |
 | E | 钻取过渡继续用硬编码 `4.0` | 越出新级区间，过渡终点非法；已在 §8.1 第 3 条说明 |
+
+## 9. 追加（2026-10-14）：两套原点——栅格空间与图帧空间
+
+> 本节依 `AGENTS.md` §6.3「文档追写不改机制」**追加**，不修改上文任何结论。
+> §7「底图继承」的方向不变；这里补的是它落地后才显形的一环：**继承让
+> 「栅格原点」与「图帧原点」不再相等**，而在此之前渲染链上只有一个 `grid.origin`。
+
+### 9.1 处境：一个字段同时承担两个空间的原点
+
+§7 定下「没有自带栅格的图直接渲染最近祖先的栅格」之后，视图里出现**两个不同的零点**：
+
+- **栅格原点** `raster_origin`：当前**显示的那张栅格**在世界里的左上角。栅格属于某张祖先图，
+  故它恒等于根图图帧原点 `(0, 0)`。地形采样、笔刷、chunk 划分、小地图都必须用它。
+- **图帧原点** `map_origin`：**当前这张图**的 `extent` 左上角在世界里的位置，由 §6 的
+  `Extent.origin` 沿 `parent` 链累积（`wv_core::resolve_frame_in`）得到。地点、街道、
+  街道名、地图外框这些「本图局部坐标」内容必须用它。
+
+两者只在**当前图自带栅格**时相等——所以这个坑在世界级永远看不到，只在钻入「继承底图」的子图时
+整条链偏移 `map_origin − raster_origin`：
+
+- 实测（`examples/xinhai-1911`，武昌城 `map_city_wuchang` 1024² 且无自带 `terrain.bin`；父图世界图
+  4096² / 512² 栅格）：`map_origin = (1138.688, 1187.84)`、`raster_origin = (0, 0)` → 城级街道 /
+  地点 / 外框全被画到 `0..1024`，即**世界图左上角那一小块**，在视野之外。
+- 标记层（`MapNode.icons`）此前已改用图帧原点（`drill::map_origin` 的注释即此处），
+  因此症状是「城里的十字图标位置正确，街道与地名却不见了」——**同一个坑只修了一半**。
+
+### 9.2 决策
+
+| # | 决策 | 落地位置 |
+|---|---|---|
+| 1 | `GridConfig` 拆两套原点：`raster_origin`（原 `origin` **更名**）+ `map_origin`（新增），并加 `map_size`（当前图 `extent` 长边，`f32`，与 `cell_size` 同口径）；「本图局部 → 视图」的唯一换算是 `GridConfig::map_to_view` | `crates/wv-app/src/state.rs` |
+| 2 | 图帧原点的**唯一实现点**是 `drill::map_origin(world, node, grid)`（`resolve_frame_in` 累积原点；未声明时回退 `raster_origin`），`sync_grid_config` 与街道编辑路径都调它 | `crates/wv-app/src/drill.rs`、`terrain_view.rs`、`streets.rs` |
+| 3 | `sync_grid_config` 的早退条件加 `!drill.is_changed()`：继承底图时钻入**不改纹理**，只看纹理变化会漏掉换图 | `crates/wv-app/src/terrain_view.rs` |
+| 4 | 地形侧（笔刷、chunk、地形回退 sprite）一律用 `raster_origin`；本图局部侧（地点、街道、街道名、地图外框、编辑预览）一律用 `map_to_view` | `editing.rs`、`terrain_chunks.rs`、`vector_layers.rs`、`streets.rs`、`projection.rs`、`map_frame.rs` |
+| 5 | 视图空间**就是**根帧：轨迹 / 事件坐标不换算，函数改名 `root_to_view` 把「这份数据属于根帧」写在调用处；删掉原先两帧共用的 `world_to_view` / `world_to_view_pub` | `crates/wv-app/src/projection.rs` |
+| 6 | 系统顺序：`sync_grid_config` 前移到 `compute_projection` **之前**（消费方都读它）；`rebuild_texture_on_mode_change` 仍在 `sync_grid_config` 之前（`cell_size` 取自纹理尺寸） | `crates/wv-app/src/gui.rs` |
+
+### 9.3 理由
+
+- **改名而不是加别名**：混用两个原点是 bug 的**成因**，不是笔误；把 `origin` 保留成别名，
+  会让漏改的调用点照旧编译通过——那正是要避免的事。改名后每个调用点被迫表态「我要哪个空间」。
+- **图帧原点复用 `resolve_frame_in`**：§6 已把「父图局部 → 世界」的累积放进 `wv-core`，
+  渲染层复用同一条链，就不会长出第二套坐标系实现（与 §4.2「唯一换算入口」同类纪律）。
+- **两条回归线钉住**（均做过 RED 验证：去掉 `!drill.is_changed()`、或把 `map_to_view` 换回
+  `raster_origin`，测试都失败）：
+  `street_strokes_use_the_map_frame_origin_when_the_raster_is_inherited`（街道 mesh 落在
+  `map_origin + 局部坐标`）与 `grid_map_origin_follows_the_drilled_map_when_the_raster_is_inherited`
+  （换图当帧、纹理不变时 `map_origin` 仍更新）。
+- **实机复核**：修前钻入武昌城只有 3 个十字图标；修后同一次钻取可见地标文字（起义门 / 楚望台军械库 /
+  蛇山炮位）、地图外框与 1/4 参考网格、以及完整路网（11 段，含多段折线）——均在城级 1024 幅面内。
+
+### 9.4 代价
+
+1. **多两个字段要维护**：`map_origin` / `map_size` 必须在每次换图时更新；漏更新的症状是
+   「本图内容偏移」，且**只在继承底图时显形**（自带栅格的图上看不出来）。
+2. **`map_origin == raster_origin` 只是约定**：代码里无法用类型系统表达「仅当当前图自带栅格时二者相等」
+   （未引入 `enum RasterSpace::{Own, Inherited}`，见 §9.5 备选 C）。
+3. **根帧内容仍是隐含约定**：轨迹 / 事件坐标今天恒等映射（`root_to_view`），数据里没有所属帧声明
+   → 记为 README §12-26 待决。
+
+### 9.5 被否决的备选
+
+| # | 备选 | 否决理由 |
+|---|---|---|
+| A | 只修街道 / 地点，保留 `grid.origin` 单字段 | 正是本次的症状（标记层修好、其余没修）；下一个消费点会再踩一次同样的坑 |
+| B | `origin` 保留为 `raster_origin` 的别名（不改名） | 漏改的调用点静默编译通过，等于把 bug 留在编译期之外 |
+| C | 用 `enum` 区分 `Own` / `Inherited` 两种原点状态 | 表达力更强，但会把「当前图是否自带栅格」这一**数据侧**事实复制进渲染状态；今天两套原点都在 `sync_grid_config` 一处算齐，够用且改动面小——待它再次成为负担时再引入 |
+| D | 把街道坐标也当祖先栅格坐标（统一按栅格空间偏移） | 与 §6「图标锚点在**本图** `extent` 内归一化」的口径冲突：作者写的是本图坐标 |
+| E | 为继承底图的子图生成一份「偏移后的坐标副本」 | 复制子图内容而非引用 = P4 的同类错误；且每换一级都要重算 |
+

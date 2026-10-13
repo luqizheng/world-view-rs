@@ -52,6 +52,8 @@ pub mod projection;
 #[cfg(feature = "app")]
 pub mod state;
 #[cfg(feature = "app")]
+pub mod streets;
+#[cfg(feature = "app")]
 pub mod terrain_chunks;
 #[cfg(feature = "app")]
 pub mod terrain_view;

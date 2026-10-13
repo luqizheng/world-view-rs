@@ -110,7 +110,7 @@
 | 术语 | 英文 / 拼音 | 定义 | 所属维度 |
 |---|---|---|---|
 | **Google Default Map 式地图壳** | Google Default Map-style map shell | 离线模仿 Google 普通地图的信息层级与交互：近白陆地、淡水、公园绿、白路灰缘、红点白环 POI、左键拖动平移、贴边缩放控件；**不接入在线瓦片或专有数据**。首次出现：用户 2026-10-13 要求与 ADR-0008 | 地理 / UI |
-| **道路双层描边** | Road casing and fill | 道路用浅灰外缘（casing）与白色主体（fill）两层表示；两层宽度差形成 Google 式路缘。首次出现：ADR-0008 | 地理 / 渲染 |
+| **道路双层描边** | Road casing and fill | 道路用浅灰外缘（casing）与白色主体（fill）两层表示；两层宽度差形成 Google 式路缘。首次出现：ADR-0008。（2026-10-14 追记：**街道**自 ADR-0010 §5「街道双层描边」起同口径——两个宽度档各画 casing + fill 两层；此前只画 fill，地图模式下白 fill 落在近白土地上等于隐形） | 地理 / 渲染 |
 | **亚像素渲染** | Subpixel rendering | 每个逻辑地形格输出多个纹理像素，使水陆 / 绿地边界在放大与线性采样下得到平滑过渡；分辨率受 4096² 纹理预算约束。首次出现：ADR-0008 | 地理 / 渲染 |
 
 ## 缩放到街道：分级缩放与街道图层（2026-10）
@@ -124,10 +124,17 @@
 | **图原点** | Extent origin | `Extent.origin: Option<Point>`：本图左上角在**父图局部坐标系**中的位置。`None` = 作者未声明（序列化时跳过，既有 YAML 零迁移）。它补上了「多地图层级」在坐标上一直缺的一环。**派生**：未声明时由父图上指向本图的钻入图标反推（见下条）。首次出现：ADR-0009（§6 追加细化类型） + `crates/wv-core/src/map.rs` | 地理 |
 | **落点派生** | Origin derivation | 子图未声明 `Extent.origin` 时，用父图上第一个「`drill_into == 本图` 且显式声明 `anchor`」的图标反推落点：图标标记的是子图**中心**，故左上角 = 图标点 − 子图 `extent/2`。优先级：显式 `origin` ＞ 图标派生 ＞ `(0,0)`。理由：世界图上那个城市圆点本就是「城市在哪」的**唯一**书面表达，不该让作者把同一位置写两遍（原则四）。只认显式 `anchor`——哈希回退摆位是渲染层避免重叠的权宜，不决定世界坐标。首次出现：ADR-0009 §6 + `crates/wv-core/src/coord.rs` | 地理 |
 | **还原帧** | MapFrame | `wv_core::coord` 的逐层上溯结果：`{world_origin, extent}`。把上溯预先算好，供「图内局部坐标 ↔ 世界坐标 ↔ 归一化坐标（UV）」统一换算——**唯一实现点**（基线 §2.15 的「禁止多 System 各写一遍」由此可执行）。首次出现：ADR-0009 + `crates/wv-core/src/coord.rs` | 地理 |
+| **视图空间** | View space | 渲染与相机所用的**唯一**坐标系：**就是根图（世界）坐标系**（基线 §2.15）。相机、`ViewState::cursor_world`、钻取落点、所有 mesh 顶点都在此空间；本图局部坐标必须先经 `GridConfig::map_to_view` 换算进来，而根帧内容（轨迹 / 事项事件）是恒等映射（`projection::root_to_view`，所属帧仍待裁见 README §12-26）。首次出现：ADR-0009 §9 + `crates/wv-app/src/state.rs` | 地理 / 渲染 |
+| **栅格原点** | Raster origin | `GridConfig.raster_origin`：当前**显示的那张栅格**在世界里的左上角。栅格属于祖先图，故它恒为根图图帧原点 `(0,0)`。**地形专用**：栅格采样、笔刷、chunk 划分、小地图、地形回退 sprite。2026-10-14 由 `GridConfig.origin` **更名**而来（原名同时被当成图帧原点用，正是 ADR-0009 §9 那个偏移 bug 的成因）。首次出现：ADR-0009 §9 + `crates/wv-app/src/state.rs` | 地理 / 渲染 |
+| **图帧原点** | Map frame origin | `GridConfig.map_origin`：**当前这张图**的 `extent` 左上角在视图空间（= 世界）里的位置，由 `Extent.origin` 沿父链累积得到（`wv_core::resolve_frame_in`，见「还原帧」）。**本图局部内容专用**：地点、街道、街道名、地图外框、编辑预览；唯一换算是 `GridConfig::map_to_view(local)`。与栅格原点**只在当前图自带栅格时相等**——继承底图时二者相差一个图帧原点，混用会把本图内容整体画到视野之外（武昌城案例见 ADR-0009 §9）。首次出现：ADR-0009 §9 + `crates/wv-app/src/state.rs` | 地理 / 渲染 |
 | **街道矢量层** | Street vector layer | 街道**地物**图层（`Layer` 语义），与 `distance.edges` 的**城市间行程连线**是两个永不合并的语义层。渲染为批量/实例化的矢量线，按 `class` 做 LOD + 视口裁剪。首次出现：ADR-0010 | 地理 / 渲染 |
 | **双供给** | Dual supply | 街道几何的「一个接口、两个实现」：虚构世界 = 作者手绘落 YAML 图层文件；真实世界 = Overture Parquet **只存引用**。两者产出同一份路段流，渲染层不关心来源。首次出现：ADR-0010 | 地理 / 数据流 |
 | **路段流** | Road segment stream | 供给层交给渲染层的统一产物：点列 + `class` + 属性。**不含长度结论**——需要长度时由点列 Haversine 派生（§4.2）。首次出现：ADR-0010 | 地理 / 数据流 |
-| **来源图** | Source map (of the displayed raster) | 当前视图**实际**显示其栅格的那张图。当前图自带 `raster` 时就是它自己；否则是沿 `parent` 向上**最近**一张自带栅格的祖先。由 `DrillState` 的当前图推得，**不落进 `World`**（P7）；`grid.cell_size` / `grid.origin` 一律与来源图同源。首次出现：ADR-0009 §7 + `crates/wv-app/src/terrain_view.rs` | 地理 / 渲染 |
+| **街道类别** | Road class | 街道段的 12 类词汇（wv_core::street::RoadClass，命名对齐 Overture），虚构与真实路网共用；lod_rank() 是 LOD 分档的**唯一派生入口**。数据只存类别，线宽 / 颜色 / 档位由渲染层派生。首次出现：ADR-0010 §5 | 地理 / 数据 |
+| **街道名标注** | Street label | 有 `name` 的街道段在**编辑级视野**（LodTier::Edit）显示的中点文字标签；锚点 = `StreetSegment::polyline_midpoint()`（按累计长度取半程，折线弯曲也不钉端点）。无名段不产生任何标注——手绘的大多数小巷无名，命名不是门槛。首次出现：ADR-0010 §5（Phase 5 首片） | 地理 / 渲染 |
+| **底图切片** | Raster slicing | `wv raster-slice <工程> <map_id> [size]`：沿坐标链把来源图栅格被子图覆盖的那块**最近邻采样**成子图自己的 `terrain.bin`（出界取海平面，不镜像对侧）。是「按父图 bbox 一键生成子图栅格」的落地（README §12-24），切片后底图继承（ADR-0009 §7）对该图退场、精度升级为自身。首次出现：ADR-0009 §5 落地记录 | 地理 / 数据流 |
+| **虚拟脏路径** | Virtual dirty path | 街道编辑命令上报的落盘标记 `streets/<layer_id>`——不是真实文件路径，由 `wv-io` 落盘时映射回 `maps/<map>/<source>`。为什么绕一层：街道文件物理上在 `maps/<map>/` 下，若直接报真实路径，`terrain_is_dirty` 的 `maps/<map>/` 前缀匹配会把「画一笔街道」误判成「整张图地形脏了」而白白重写 `.bin`。首次出现：ADR-0010 §5（第 3 项） | 地理 / 数据流 |
+| **来源图** | Source map (of the displayed raster) | 当前视图**实际**显示其栅格的那张图。当前图自带 `raster` 时就是它自己；否则是沿 `parent` 向上**最近**一张自带栅格的祖先。由 `DrillState` 的当前图推得，**不落进 `World`**（P7）；`grid.cell_size` / `grid.raster_origin` 一律与来源图同源（**2026-10-14 更名**：原 `grid.origin` 即今天的 `raster_origin`；本图局部内容改走**图帧原点**，原字段一名两用是 ADR-0009 §9 那个偏移 bug 的成因）。首次出现：ADR-0009 §7 + `crates/wv-app/src/terrain_view.rs` | 地理 / 渲染 |
 | **底图继承** | Raster inheritance | 图没有自带栅格时，沿 `parent` 向上取最近一张来源图的地形**直接渲染**，不复制数据。理由：工程是渐进长出来的，城市还没刷地形时城市视图应继续看到父图那一块，而不是黑屏；城市一旦有了 `terrain.bin`，纹理自动切过去。代价：继承来的精度就是父图的精度（街道级会糊，README §12-24）。首次出现：ADR-0009 §7 | 地理 / 渲染 |
 | **级缩放区间** | Level zoom band | 一级允许的缩放范围，锚在「整幅图适配窗口」的尺度上：`fit = max(w/window.w, h/window.h)`、`min = fit/80`、`max = fit*1.5625`。**各区间的绝对数值有意重叠**（子图区间跨过父图内界），故换级时 `scale` 无需改动。由 `crates/wv-app/src/zoom_level.rs` 的 `LevelZoom` 承担；旧的全局常量 `SCALE_MIN=0.1` / `SCALE_MAX=8.0` 已删除。首次出现：ADR-0009 §8 + `crates/wv-app/src/zoom_level.rs` | 地理 / 渲染 |
 | **换级** | Level crossing | 滚轮在**当前级边界上继续同向滚动**所触发的层级切换：往外 → 上一级（`drill.up()`），往里 → 光标下的子图（`drill.enter()`）。触发条件因此是「已在边界 **且** 继续滚」，不是「进入区间」；意图经 `ZoomCrossRequest` 交给 `drill::apply_zoom_cross` 独家执行（地图路径的唯一写入口仍是 `DrillState`）。**连续性的证明**：子图 `fit` 更小 ⇒ `parent.min ≤ child.max`，故换级前后 `scale` 同值合法。首次出现：ADR-0009 §8 + `crates/wv-app/src/{camera,drill}.rs` | 地理 / 交互 |
@@ -164,7 +171,7 @@
 
 ## 待决术语（语义未收敛，暂缓冻结）
 
-> 现有 2 条 + 合并 `docs/MAP_EDITOR_BASELINE_v1.md` §5.3（待裁术语）的 3 条。（2026-10-13 陆续追加 ADR-0009 / ADR-0010 落地项 7 条：多级栅格驻留、地面尺度、街道几何存放与分片、多入口落点歧义、渲染层测试闸门、继承底图精度提示、换级淡化。）
+> 现有 2 条 + 合并 `docs/MAP_EDITOR_BASELINE_v1.md` §5.3（待裁术语）的 3 条。（2026-10-13 陆续追加 ADR-0009 / ADR-0010 落地项 7 条：多级栅格驻留、地面尺度、街道几何存放与分片、多入口落点歧义、渲染层测试闸门、继承底图精度提示、换级淡化。）（2026-10-14 追加 ADR-0009 §9 落地项 1 条：轨迹/事件坐标所属帧。）
 
 | 术语 | 状态 | 说明 |
 |---|---|---|
@@ -180,4 +187,6 @@
 | 多入口落点歧义 | 待裁（README §12-22） | 同一子图有多个钻入图标且都带 `anchor`、而子图未声明 `origin` 时取「第一个」；是否改为校验提示或定义入口优先级未定。「显式 `origin` 压过派生」这条优先级不动 |
 | 渲染层测试闸门 | 待裁（README §12-23） | §7.1 三条门槛命令都不编译 `wv-app` 的 `#[cfg(feature = "app")]` 模块（实测 `cargo test -p wv-app` = `0 passed`）。补 `--features app` 还是单列一条渲染层检查命令未定 |
 | 继承底图精度提示 | 待裁（README §12-24） | 底图向上继承后（ADR-0009 §7），世界图 4.9 m/格 放到街道级会糊。提示形式（校验面板 / 状态栏 / 地图树角标）与是否要「按父图 bbox 生成子图栅格骨架」未定。按 V1 只提示、不阻止 |
+| 换级视觉过渡 | 待裁（README §12-25） | `§2⑦` 的「淡化」未实现——今天换底图是整张纹理硬切换（`rebuild_texture_on_mode_change`）。淡化形式、时长、可否关闭未定；不得引入位移插值、不得延迟层级切换 |
+| 轨迹/事件坐标所属帧 | 待裁（README §12-26） | 视图空间就是根帧，轨迹 waypoint 与事项事件位置今天走恒等映射（`projection::root_to_view`），数据里没有「这份坐标属于哪张图」的声明。是否允许按子图局部坐标书写、城市内事件在父图视野下如何呈现未定 |
 | 换级淡化 | 待裁（README §12-25） | ADR-0009 §2⑦ 要求换级「只做缩放与淡化」，**淡化部分尚未实现**（今天是整张纹理重建的硬切换）。淡化形式、时长、可否关闭未定；**不得**引入位移插值，也**不得**延迟层级切换 |
