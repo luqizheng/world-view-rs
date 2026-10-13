@@ -602,7 +602,7 @@ fn startup_load(
         frame,
     );
     if projection.load_error.is_none() {
-        adopt_loaded_world(
+        adopt_world_snapshot(
             &mut projection,
             &drill,
             &mut playback,
@@ -615,20 +615,29 @@ fn startup_load(
     }
 }
 
-/// 加载成功后的视图 / 纹理 / 播放接管——`gui::run` 里 Startup 装配的运行期等价物。
+/// 工作副本整体替换后的视图 / 纹理 / 播放接管——**加载成功 / 关闭工程 / 新建工程**
+/// 三个入口共用（原 `adopt_loaded_world`，2026-10-14 收编，见下方回归说明）。
 ///
 /// 三件事缺一不可：
 /// 1. `TerrainTexture` 整体重建：Startup 只按空世界建过一次纹理，
-///    `rebuild_texture_on_mode_change` 只认「模式变化」——换世界后若不换纹理，
-///    画面会永远停留在占位地形；
+///    `rebuild_texture_on_mode_change` 只认「模式 / 来源图变化」——换世界后若不换
+///    纹理，画面会永远停留在旧底图上；
 /// 2. `ViewState` + 相机 transform 重新 fit：相机 transform 才是主真源
 ///    （`setup_camera` 只在 Startup 跑一次），只写 ViewState 相机纹丝不动；
 /// 3. `PlaybackState` 按新工程 `timeline/axis.yaml` 重置，当前日回到起点
 ///    （旧工程的播放日可能落在新范围之外）。
-// 参数偏多：本函数是「加载成功后接管运行期资源」的清单，逐项对应一个资源，
-// 拆成结构体只是把同一份清单挪个地方，反而看不清谁被接管。
+///
+/// ## 为什么关闭 / 新建也必须走这里（回归 2026-10-14：关闭工程「关了像没关」）
+///
+/// `rebuild_texture_on_mode_change` 在 `active_terrain` 为 `None`（空世界没有任何
+/// 图）时**故意早退不重建**（等地形就绪再建，见该函数文档）。而「关闭工程」恰好
+/// 把世界换成了空世界——于是旧工程的底图永远挂在屏上，用户看到的是「已关闭工程」
+/// 的回执 + 原封不动的旧地图。加载成功走 `last_map` 不一致触发重建，掩盖了这条
+/// 路径；关闭 / 新建没有任何触发器，只能在这里显式接管。
+// 参数偏多：本函数是「工作副本整体替换后接管运行期资源」的清单，逐项对应一个
+// 资源，拆成结构体只是把同一份清单挪个地方，反而看不清谁被接管。
 #[allow(clippy::too_many_arguments)]
-fn adopt_loaded_world(
+fn adopt_world_snapshot(
     projection: &mut WorldProjection,
     drill: &DrillState,
     playback: &mut PlaybackState,

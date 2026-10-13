@@ -47,7 +47,7 @@ panels:
     width: 216.0
     height: 336.0
     collapsed: false
-    visible: false
+    visible: true
   situation:
     x: 652.0
     y: 380.0
