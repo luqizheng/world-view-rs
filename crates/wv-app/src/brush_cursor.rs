@@ -45,7 +45,10 @@ use crate::palette;
 use crate::state::{BrushState, DrillState, ViewState};
 
 /// 屏幕像素描边（外环 / 十字线宽）。
-const STROKE_PX: f32 = 1.5;
+///
+/// 2.0px（2026-10-13 用户反馈「光标发糊」）：1.5px 在 MSAA4 下被采样稀释，
+/// 视觉上偏灰偏虚；2px 配合高细分圆环即可得到清晰的实线。
+const STROKE_PX: f32 = 2.0;
 /// 屏幕像素虚线段长 + 间隙（= 段长 = 间隙，循环）。
 const DASH_PX: f32 = 3.0;
 /// 虚线段数（24 = 24 段亮，24 段暗，合计 48 段周期——与原 48 段 Gizmos 一致）。
@@ -138,10 +141,14 @@ pub fn sync_brush_cursor(
     let mat_select = materials.add(palette::ACCENT_SELECT);
     let mat_select_dim = materials.add(palette::ACCENT_SELECT.with_alpha(0.6));
 
-    // ---- 外环（Annulus，屏幕 1.5px 描边）----
+    // ---- 外环（Annulus，屏幕 2px 描边）----
     let outer_radius = brush.radius;
     let annulus_inner = (outer_radius - stroke_world).max(f32::EPSILON);
-    let outer_handle = meshes.add(Annulus::new(annulus_inner, outer_radius));
+    // 细分 128 段（默认 32 段在大半径下圆环呈多边形 + 采样发糊，用户反馈「不清晰」）。
+    let outer_mesh = Annulus::new(annulus_inner, outer_radius)
+        .mesh()
+        .resolution(128);
+    let outer_handle = meshes.add(outer_mesh);
     let outer_transform = Transform::from_translation(cursor_world.extend(CURSOR_Z));
     if let Some(e) = entities.outer {
         commands

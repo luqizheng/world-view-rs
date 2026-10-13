@@ -25,6 +25,8 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::palette;
+use crate::palette_google;
+use crate::palette_jrpg;
 use crate::state::{GridConfig, ViewMode, ViewState, WorldProjection};
 use wv_core::terrain::TerrainData;
 
@@ -169,6 +171,10 @@ fn tile_tint_for_mode(mode: ViewMode) -> TileTint {
         // 轮廓图（模式 E）同样不铺瓦片——只有水陆三色与海岸线。
         ViewMode::Event => TileTint::Identity,
         ViewMode::Coastline => TileTint::Identity,
+        // 谷歌风（ViewMode::GoogleMap）与色块地形同为「平铺色块」，Identity 保留原色。
+        ViewMode::GoogleMap => TileTint::Identity,
+        // JRPG 未进 ALL（隐藏态），仍给出 Identity 分支保持 match 穷尽。
+        ViewMode::JRPG => TileTint::Identity,
     }
 }
 
@@ -351,6 +357,8 @@ fn shade_for_mode(mode: ViewMode) -> Shader {
         ViewMode::RealTerrain => shade_real,
         // 色块地形：纯色平涂。
         ViewMode::Schematic => shade_flat,
+        // JRPG 地图：JRPG 风格色板。
+        ViewMode::JRPG => shade_jrpg,
         // 势力图：原型阶段底色淡化地形（势力几何属 S12，本轮不画）。
         ViewMode::Faction => shade_faded,
         // 事件图：极简灰白底图。
@@ -358,7 +366,25 @@ fn shade_for_mode(mode: ViewMode) -> Shader {
         // 轮廓图：水陆二分深色 + 海岸线（海岸线在边界格逐像素画，见
         // `write_coast_boundary_cell`；这里只管内部格的水/陆平涂）。
         ViewMode::Coastline => shade_coast,
+        // 谷歌风：羊皮纸暖调（色板见 palette_google）。
+        ViewMode::GoogleMap => shade_google,
     }
+}
+
+fn shade_google(_data: &TerrainData, kind: u8) -> Color {
+    // 谷歌风做「普通地图」折叠（2026-12 用户裁定：只要 Google 普通地图，
+    // 不渲染地形高低分带）。Google 普通地图的陆地是单一米色平涂；若把
+    // Perlin 高度分带（沙/草/丘/山/雪）逐档着色，整图会退化成近色马赛克。
+    // 折叠规则：水两档保留层次、森林作公园绿斑、沼泽保留湿绿，
+    // 其余陆上类一律折叠为陆地基色（`geometry` #d9c7a8）。
+    match kind {
+        0 | 1 | 4 | 8 => palette_google::google_core_terrain(kind),
+        _ => palette_google::GOOGLE_CORE_TERRAIN[2],
+    }
+}
+
+fn shade_jrpg(_data: &TerrainData, kind: u8) -> Color {
+    palette_jrpg::jrpg_core_terrain(kind)
 }
 
 fn shade_flat(_data: &TerrainData, kind: u8) -> Color {
@@ -476,6 +502,9 @@ struct CellRenderer<'a> {
     shader: Shader,
     /// 底图淡化开关（`ViewState.terrain_soften` 的镜像）。
     soften: bool,
+    /// 边界扰动开关：谷歌风关闭（Google 普通地图的边界是干净的直线/平滑
+    /// 曲线；手绘感揉边与「普通地图」气质相悖）。
+    wobble: bool,
     /// `kind → res² 瓦片块`（按需填充；`None` = 尚未尝试）。
     blocks: [Option<Vec<u8>>; 10],
     /// `kind` 是否已尝试过建块（避免无映射 kind 被反复查）。
@@ -514,7 +543,12 @@ impl<'a> CellRenderer<'a> {
             atlas,
             res,
             shader: shade_for_mode(mode),
-            soften,
+            // 轮廓图下淡化开关无效：黑底不能被纸面色洗掉（见测试
+            // `coastline_mode_ignores_soften_flag`）。
+            // 谷歌风同样无效：色板已是最终观感，再向纸色淡化会把水色
+            // 洗成米糊、全图趋同（见测试 `google_mode_ignores_soften_flag`）。
+            soften: soften && !matches!(mode, ViewMode::Coastline | ViewMode::GoogleMap),
+            wobble: !matches!(mode, ViewMode::GoogleMap),
             blocks: std::array::from_fn(|_| None),
             tried: [false; 10],
         }
@@ -553,6 +587,10 @@ impl<'a> CellRenderer<'a> {
         let differs = |a: u8, b: u8| {
             if self.mode == ViewMode::Coastline {
                 is_water_kind(a) != is_water_kind(b)
+            } else if self.mode == ViewMode::GoogleMap {
+                // 谷歌风下同色的陆上类不构成边界（沙/草/丘/山/雪已折叠为
+                // 同一陆色）——省掉无意义的逐像素超采样。
+                shade_google(self.data, a) != shade_google(self.data, b)
             } else {
                 a != b
             }
@@ -657,12 +695,20 @@ impl<'a> CellRenderer<'a> {
                 }
                 // 靠线程度：2/2 分 = 1.0，3/1 分 = 0.5，4/0 分 = 0.0。
                 let strength = 1.0 - (n_water as f32 - 2.0).abs() / 2.0;
+                // 边界像素：strength > 0.8 时画描边（1px 线）
+                let is_boundary = strength > 0.8;
                 let base = if n_water >= n_land { water } else { land };
                 let o = ((cy * res + ty) * stride + cx * res + tx) as usize * 4;
                 for ch in 0..3 {
-                    pixels[o + ch] = (base[ch] * (1.0 - strength) + line[ch] * strength)
-                        .round()
-                        .clamp(0.0, 255.0) as u8;
+                    pixels[o + ch] = if is_boundary {
+                        // 边界像素直接用描边色（浅蓝）
+                        line[ch]
+                    } else {
+                        // 非边界用基础色（水/陆）
+                        base[ch]
+                    }
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
                 }
                 pixels[o + 3] = 255;
             }
@@ -692,7 +738,11 @@ impl<'a> CellRenderer<'a> {
             for tx in 0..res {
                 let ox = (cx * res + tx) as f32;
                 let oy = (cy * res + ty) as f32;
-                let (wx, wy) = wobble_px(ox, oy, res);
+                let (wx, wy) = if self.wobble {
+                    wobble_px(ox, oy, res)
+                } else {
+                    (0.0, 0.0)
+                };
                 let (mut r, mut g, mut b) = (0.0f32, 0.0f32, 0.0f32);
                 let mut c = [0.0f32; 3];
                 for s in SUBSAMPLES {
@@ -913,20 +963,23 @@ pub fn placeholder_terrain(w: u32, h: u32) -> TerrainData {
         for x in 0..w {
             let n = perlin.fbm(x as f64 * 0.045, y as f64 * 0.045, 5, 2.0, 0.5);
             // 归一化到 [0,1] 后分档到地形类型（水 → 雪）。
+            // 阈值偏陆地（2026-10-13 用户反馈）：fbm 归一化分布中位数偏下，
+            // 旧阈值（水 < 0.44）会让新建地图大半是海；现把水体压到 ~1/3，
+            // 「新建即陆地为主」，海岸线仍保留足够碎度供作者取舍。
             let t = ((n + 1.0) / 2.0).clamp(0.0, 1.0);
-            let kind = if t < 0.38 {
+            let kind = if t < 0.26 {
                 0 // 深水
-            } else if t < 0.44 {
+            } else if t < 0.33 {
                 1 // 浅水
-            } else if t < 0.52 {
+            } else if t < 0.44 {
                 2 // 沙
-            } else if t < 0.66 {
+            } else if t < 0.68 {
                 3 // 草
-            } else if t < 0.76 {
+            } else if t < 0.79 {
                 4 // 林
-            } else if t < 0.85 {
+            } else if t < 0.87 {
                 5 // 丘
-            } else if t < 0.93 {
+            } else if t < 0.94 {
                 6 // 山
             } else {
                 7 // 雪
@@ -1135,7 +1188,7 @@ mod tests {
         let res: u32 = 4;
         let block = sample_tile_block(&atlas, 0, 0, res);
         let mut dst = vec![0u8; (res * res * 4) as usize];
-        blit_block_tinted(&block, res, TileTint::Identity, &mut dst, res, 0, 0);
+        blit_block_tinted(&block, res, TileTint::Identity, false, &mut dst, res, 0, 0);
         // 实心格子盒式平均后仍是原色。
         for px in dst.chunks_exact(4) {
             assert_eq!(px, [200, 100, 0, 255]);
@@ -1148,7 +1201,7 @@ mod tests {
         let res: u32 = 2;
         let block = sample_tile_block(&atlas, 0, 0, res);
         let mut dst = vec![0u8; (res * res * 4) as usize];
-        blit_block_tinted(&block, res, TileTint::Fade, &mut dst, res, 0, 0);
+        blit_block_tinted(&block, res, TileTint::Fade, false, &mut dst, res, 0, 0);
         // 黑 × keep 0.45 + 灰 0.7×0.55 = 0.385 → 98。
         for px in dst.chunks_exact(4) {
             assert_eq!(px, [98, 98, 98, 255]);
@@ -1219,6 +1272,26 @@ mod tests {
         let a = image_from_terrain(&data, ViewMode::Schematic, Some(&atlas), false);
         let b = image_from_terrain(&data, ViewMode::Schematic, Some(&atlas), false);
         assert_eq!(a.data, b.data);
+    }
+
+    /// 新建地图的默认占位地形应以陆地为主（2026-10-13 用户反馈：
+    /// 旧阈值下 fbm 分布中位数偏下，开局大半是海）。
+    #[test]
+    fn placeholder_terrain_is_land_dominated() {
+        let data = placeholder_terrain(512, 512);
+        let water = data.cells.iter().filter(|c| c.kind <= 1).count();
+        let sand_or_land = data.cells.iter().filter(|c| c.kind >= 2).count();
+        let total = data.cells.len() as f32;
+        assert!(
+            water as f32 / total < 0.40,
+            "水体应不足 40%，实得 {:.1}%",
+            water as f32 / total * 100.0
+        );
+        assert!(
+            sand_or_land as f32 / total > 0.60,
+            "陆地应超过 60%，实得 {:.1}%",
+            sand_or_land as f32 / total * 100.0
+        );
     }
 
     #[test]
@@ -1348,6 +1421,63 @@ mod tests {
         let a = image_from_terrain(&data, ViewMode::Coastline, None, false);
         let b = image_from_terrain(&data, ViewMode::Coastline, None, true);
         assert_eq!(a.data, b.data, "轮廓图应忽略 soften 开关");
+    }
+
+    /// 谷歌风下淡化开关无效：色板即最终观感，再向纸色淡化会把水色洗没。
+    #[test]
+    fn google_mode_ignores_soften_flag() {
+        let data = placeholder_terrain(8, 8);
+        let a = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
+        let b = image_from_terrain(&data, ViewMode::GoogleMap, None, true);
+        assert_eq!(a.data, b.data, "谷歌风应忽略 soften 开关");
+    }
+
+    /// 谷歌风「普通地图」折叠：陆上高度分带（沙/草/丘/山/雪/路）必须
+    /// 折叠成同一陆色——否则 Perlin 分带会渲染成近色马赛克。
+    #[test]
+    fn google_mode_collapses_elevation_bands_into_one_land_color() {
+        let mut data = placeholder_terrain(8, 8);
+        for (i, c) in data.cells.iter_mut().enumerate() {
+            // 人为铺一条 kind 2..7 循环的高度分带（全是陆上类）。
+            c.kind = 2 + (i % 6) as u8;
+        }
+        let img = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
+        let Color::Srgba(land) = palette_google::GOOGLE_CORE_TERRAIN[2] else {
+            unreachable!("GOOGLE_CORE_TERRAIN[2] 应为 Srgba")
+        };
+        // 抽查内部格与边界位置的像素：全部应等于陆地基色 #d9c7a8。
+        for i in [0usize, 9, 27, 54, 63] {
+            let (r, g, b) = (
+                img.data[i * 4] as f32 / 255.0,
+                img.data[i * 4 + 1] as f32 / 255.0,
+                img.data[i * 4 + 2] as f32 / 255.0,
+            );
+            assert!(
+                (r - land.red).abs() < 0.01
+                    && (g - land.green).abs() < 0.01
+                    && (b - land.blue).abs() < 0.01,
+                "像素 {i} 应为陆色，实得 ({r:.3},{g:.3},{b:.3}) 期望 ({},{},{})",
+                land.red,
+                land.green,
+                land.blue
+            );
+        }
+    }
+
+    /// 谷歌风折叠不能矫枉过正：水与森林保留独立色（普通地图的三要素：
+    /// 米色陆地 + 蓝色水域 + 绿色公园斑）。
+    #[test]
+    fn google_mode_keeps_water_and_forest_distinct_from_land() {
+        let mut data = placeholder_terrain(8, 8);
+        for c in data.cells.iter_mut() {
+            c.kind = 3; // 草原（陆色）
+        }
+        data.cells[9].kind = 1; // 浅水
+        data.cells[18].kind = 4; // 森林
+        let img = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
+        let px = |i: usize| [img.data[i * 4], img.data[i * 4 + 1], img.data[i * 4 + 2]];
+        assert_ne!(px(9), px(27), "浅水应与陆色不同");
+        assert_ne!(px(18), px(27), "森林应与陆色不同");
     }
 
     /// 淡化开关：Schematic 图开启后像素向纸面色靠近（数值断言附上下文）。
