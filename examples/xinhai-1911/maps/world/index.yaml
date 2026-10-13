@@ -1,7 +1,9 @@
 # 世界地图（辛亥示例）
 # P4：父图只存子图 Id（children），不复制子图内容。
+# 标题明确时代范围（README §11 + 目录名 `xinhai-1911`）：1911 年清末中华大地，
+# 不是「通史中国」也不是「现代中国」。
 id: map_world
-name: 中华大地
+name: 1911 年中华大地
 level: world
 children:
   - map_city_wuchang
@@ -18,6 +20,19 @@ raster:
   chunk: 256
   format_version: 1
   checksum: f84c6933
+# 真实地理底图引用（ADR-0007）：只声明主题/bbox/路径，**不**把 Overture 几何写进本 yaml。
+# bbox 覆盖 1911 年清帝国内地 22 省核心区域（黑龙江至海南），不含蒙藏新。
+# （注意：本工程为示例，地形栅格仍是手写 Perlin 噪声，与 Overture 几何不一致——
+#   真实地理底图需另行 `wv raster-slice` 从父图栅格切出，参见 README §12-24。）
+geographic_source:
+  theme: places
+  bbox:
+    west: 100.0
+    south: 22.0
+    east: 122.0
+    north: 42.0
+  data_path: maps/map_world/data/places.geojson
+  release: 2026-09-23.0
 layers:
   - id: layer_terrain
     name: 地形

@@ -1,6 +1,8 @@
 # 示例工程：辛亥一九一一
 # 覆盖 1911 保路运动 → 武昌起义 → 清帝退位。
 # schema v2：时间点 = 天数计数器（1-based），公历换算由 timeline/axis.yaml 派生。
+# 历法（gregorian / start_year 1911）定义在 timeline/axis.yaml → `calendar` 字段
+# ——本文件不重复，遵从 §4.3「只存引用，不重复存储」（AGENTS.md）。
 
 name: 辛亥一九一一
 version: "0.1"
