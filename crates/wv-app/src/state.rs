@@ -98,22 +98,28 @@ pub enum ViewMode {
     RealTerrain,
     /// B. 色块地形：每种地形一种颜色。
     Schematic,
-    /// C. 势力图：颜色 = 势力，底色淡化地形。
+    /// C. JRPG 地图：JRPG 风格色板。
+    JRPG,
+    /// D. 势力图：颜色 = 势力，底色淡化地形。
     Faction,
-    /// D. 事件图：极简底图 + 事件高亮。
+    /// E. 事件图：极简底图 + 事件高亮。
     Event,
-    /// E. 轮廓图：黑底 + 海岸线 + 城市路线（2026-11 用户需求：
+    /// F. 轮廓图：黑底 + 海岸线 + 城市路线（2026-11 用户需求：
     /// 地形纹理完全退场，只留水陆轮廓，要素对比度最大化）。
     Coastline,
+    /// G. 谷歌风：基于用户提交的 Google Maps style JSON 的低饱和暖调（羊皮纸）。
+    /// 色板落点见 [`crate::palette_google`]。
+    GoogleMap,
 }
 
 impl ViewMode {
-    pub const ALL: [ViewMode; 5] = [
+    pub const ALL: [ViewMode; 6] = [
         ViewMode::RealTerrain,
         ViewMode::Schematic,
         ViewMode::Faction,
         ViewMode::Event,
         ViewMode::Coastline,
+        ViewMode::GoogleMap,
     ];
 
     /// 顶栏显示名。
@@ -124,6 +130,9 @@ impl ViewMode {
             ViewMode::Faction => "势力图",
             ViewMode::Event => "事件图",
             ViewMode::Coastline => "轮廓图",
+            ViewMode::GoogleMap => "谷歌风",
+            // JRPG 未进 ALL（见上方注释），但仍需在此给出 label 以免 match 报错。
+            ViewMode::JRPG => "JRPG",
         }
     }
 }

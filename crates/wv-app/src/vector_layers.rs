@@ -136,6 +136,7 @@ pub fn sync_vector_layers(
             &mut materials,
             &frame.road_segments,
             view.scale,
+            view.mode,
             &mut layer.roads,
         );
     }
@@ -150,6 +151,7 @@ pub fn sync_vector_layers(
             &mut materials,
             &frame.place_dots,
             view.scale,
+            view.mode,
             lod_tier(view.scale),
             &grid,
             &mut layer,
@@ -180,6 +182,7 @@ fn sync_roads(
     materials: &mut Assets<ColorMaterial>,
     segments: &[(Vec2, Vec2)],
     view_scale: f32,
+    mode: crate::state::ViewMode,
     layer: &mut Vec<Entity>,
 ) {
     // 数据少了：把多余的实体 despawn。
@@ -189,8 +192,14 @@ fn sync_roads(
         }
     }
     // 共享 material：每条边一个 ColorMaterial 太浪费；同色复用即可。
-    // 道路色来自 palette，不在 system 中写裸 hex。
-    let material = materials.add(palette::ROAD_STROKE.with_alpha(0.9));
+    // 道路色来自 palette，不在 system 中写裸 hex；谷歌风走 `palette_google`
+    // （用户 Retro JSON 的 `road.arterial`——陆色底上亮一档，白路是 Default 风，
+    // 与 Retro 暖调不搭）。
+    let road_color = match mode {
+        crate::state::ViewMode::GoogleMap => crate::palette_google::GOOGLE_ROAD_FILL,
+        _ => palette::ROAD_STROKE,
+    };
+    let material = materials.add(road_color.with_alpha(0.9));
 
     for (i, (a, b)) in segments.iter().enumerate() {
         let spec = RoadMeshSpec::from_segment(*a, *b, view_scale);
@@ -203,7 +212,12 @@ fn sync_roads(
         if let Some(entity) = existing {
             commands
                 .entity(entity)
-                .insert((Mesh2d(mesh_handle), transform));
+                // 复用路径也重插 material：视图模式切换时道路换色（handle 轻量）。
+                .insert((
+                    Mesh2d(mesh_handle),
+                    MeshMaterial2d(material.clone()),
+                    transform,
+                ));
         } else {
             let entity = commands
                 .spawn((
@@ -227,12 +241,14 @@ fn sync_roads(
 /// 原 `PIXEL_WIDTH / view_scale` 方向写反，scale≠1 时环会消失/糊成实心，已修正）。
 ///
 /// LOD：`tier == Nation` 时只画 `is_city` 的点标（省级/编辑级全画）。
+#[allow(clippy::too_many_arguments)]
 fn sync_poi(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<ColorMaterial>,
     dots: &[PlaceDot],
     view_scale: f32,
+    mode: crate::state::ViewMode,
     tier: LodTier,
     grid: &GridConfig,
     layer: &mut VectorLayerEntities,
@@ -261,9 +277,17 @@ fn sync_poi(
     let ring_thickness = (PIXEL_WIDTH * view_scale).max(f32::EPSILON);
     let ring_inner = (radius_outer - ring_thickness).max(f32::EPSILON);
 
-    // 城市点 = 红芯白环（palette::PLACE_DOT / POI_RING，2026-11 Theme Pack）。
-    let mat_outer = materials.add(palette::POI_RING);
-    let mat_inner = materials.add(palette::PLACE_DOT);
+    // 城市点 = 红芯白环（palette::PLACE_DOT / POI_RING，2026-11 Theme Pack）；
+    // 谷歌风 = 暖棕芯白环（palette_google——红点会跳出 Retro 的低饱和暖调）。
+    let (ring_color, dot_color) = match mode {
+        crate::state::ViewMode::GoogleMap => (
+            crate::palette_google::GOOGLE_POI_RING,
+            crate::palette_google::GOOGLE_PLACE_DOT,
+        ),
+        _ => (palette::POI_RING, palette::PLACE_DOT),
+    };
+    let mat_outer = materials.add(ring_color);
+    let mat_inner = materials.add(dot_color);
 
     for (i, dot) in visible.iter().enumerate() {
         let pos3 = dot.pos.extend(POI_OUTER_Z);
@@ -273,9 +297,11 @@ fn sync_poi(
         let existing_outer = outer_layer.get(i).copied();
         let annulus_handle = meshes.add(Annulus::new(ring_inner, radius_outer));
         if let Some(entity) = existing_outer {
-            commands
-                .entity(entity)
-                .insert((Mesh2d(annulus_handle), Transform::from_translation(pos3)));
+            commands.entity(entity).insert((
+                Mesh2d(annulus_handle),
+                MeshMaterial2d(mat_outer.clone()),
+                Transform::from_translation(pos3),
+            ));
         } else {
             let entity = commands
                 .spawn((
@@ -293,6 +319,7 @@ fn sync_poi(
         if let Some(entity) = existing_inner {
             commands.entity(entity).insert((
                 Mesh2d(inner_handle),
+                MeshMaterial2d(mat_inner.clone()),
                 Transform::from_translation(inner_pos3),
             ));
         } else {

@@ -1,0 +1,9 @@
+# 示例工程：西雅图（由真实 OpenStreetMap 数据反推的 kind 网格）
+# 用途：验证谷歌风渲染器——数据是真实地理，若渲染不像地图则是渲染问题。
+name: 西雅图 OSM
+version: "0.1"
+schema_version: 2
+root_map: map_world
+timeline_range:
+  from: 1
+  to: 2

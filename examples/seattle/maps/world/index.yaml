@@ -1,0 +1,25 @@
+# 西雅图世界地图（OSM z11 瓦片反推，256² 网格）
+id: map_world
+name: 西雅图
+level: world
+children: []
+extent:
+  width: 1280.0
+  height: 1280.0
+raster:
+  path: maps/map_world/terrain.bin
+  encoding: i16
+  width: 256
+  height: 256
+  chunk: 256
+  format_version: 1
+  checksum: 3591f905
+layers:
+  - id: layer_terrain
+    name: 地形
+    kind: terrain
+    visible: true
+    locked: false
+    opacity: 1.0
+    z: 0
+    source: terrain.bin

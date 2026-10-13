@@ -18,7 +18,7 @@
 //!   - `scale ≥ 0.5`（近看/正常）：mip0（原分辨率，锐利）；
 //!   - `scale < 0.5`（远观）：mip1（半分辨率，平滑）；
 //!   - `scale < 0.25`（更远观）：mip2（四分之一分辨率，更平滑）。
-//!   切换只换材质的纹理句柄，几何不动。
+//!     切换只换材质的纹理句柄，几何不动。
 //! - **视口拣选**（3c）：每帧根据 `view.camera_center` + `view.scale` + 窗口大小
 //!   算视口在世界空间的 AABB，**只 spawn 视口内 + 1 块边距**的块。视口外 despawn。
 //! - **脏矩形驱动**（3e）：稳态**不拷任何像素**——只有 `tex.chunks_dirty`
@@ -174,6 +174,12 @@ fn chunk_visible(
         && cmax.y > viewport_min.y
 }
 
+/// 分块日志开关位（诊断遗留，恒 false；保留函数签名避免无谓 churn）。
+#[allow(dead_code)]
+fn pending_dirty_or_diag(_scale: f32) -> bool {
+    false
+}
+
 /// 主 system：在 [`crate::editing::flush_terrain_texture`] 与
 /// [`crate::terrain_view::rebuild_texture_on_mode_change`] 之后跑。
 ///
@@ -307,6 +313,13 @@ pub fn sync_terrain_chunks(
                 if let (Some(dirty), Some(src)) = (pending_dirty, src) {
                     if rects_intersect(dirty, cells) {
                         patch_chunk_mips(&mut images, &chunk, src, size, res, cells, dirty);
+                        // Bevy 0.15：就地改 `Image` 数据不使既有 `ColorMaterial` 的
+                        // bindgroup 失效——GPU 上仍采样旧纹理。触碰材质资产强制
+                        // 重建 bindgroup，让本帧 patch 的像素真正上屏（模式切换 /
+                        // 笔刷提交共用此路径）。
+                        if materials.get_mut(&chunk.material).is_none() {
+                            continue;
+                        }
                     }
                 }
                 // 3b) mip 级随缩放切换——只换材质纹理句柄，几何与资产不动。
@@ -466,6 +479,21 @@ fn patch_chunk_mips(
     let Some(mip0) = chunk.mip_handles.first().and_then(|h| images.get_mut(h)) else {
         return;
     };
+    // TODO(诊断): patch 取证，验证后移除。
+    if false {
+        eprintln!(
+            "[diag] patch chunk {:?} cells={:?} dirty={:?} src_first={:02X}{:02X}{:02X} dst_first={:02X}{:02X}{:02X}",
+            chunk._coord,
+            cells,
+            dirty,
+            src[0],
+            src[1],
+            src[2],
+            mip0.data[0],
+            mip0.data[1],
+            mip0.data[2]
+        );
+    }
     for row in 0..ph as usize {
         let src_y = (iy0 * res) as usize + row;
         let s = src_y * src_stride + (ix0 * res) as usize * 4;
@@ -772,6 +800,8 @@ mod tests {
         assert_eq!((mip1.width(), mip1.height()), (2, 2));
         assert_eq!(&mip1.data[0..2], &[5, 5]);
         // mip1 右下 = mip0 (2..4, 2..4) 平均：R = (20+30+20+30)/4 = 25，G = (20+20+30+30)/4 = 25。
+        // (row*2 + col) 的网格语义：第 1 行第 1 列的左上像素。
+        #[allow(clippy::identity_op)]
         let o = (1 * 2 + 1) * 4;
         assert_eq!(&mip1.data[o..o + 2], &[25, 25]);
         // mip2（1×1）= mip1 全图平均：R = (5+15+15+25)/4 = 15，G 同理 = 15。

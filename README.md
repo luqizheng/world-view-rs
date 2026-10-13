@@ -326,6 +326,46 @@ cargo run -p wv-app --features app -- gui
 12. **地图上的空间落点（子图入口与标记）**：第一版按「**`MapNode.icons` 里带 `drill_into` 的图标即子图入口**」实现——锚点归**每个图标自己**所有（`IconSpec.anchor`，本图 `extent` 内的归一化 `[0,1]²`），`MapNode.children` 仍只存 `Id`，原则四「只存引用」不受影响。未声明 `anchor` 的图标按 `id` 确定性哈希摆位（同次运行稳定、可复现）。（待裁：(a) 哈希回退是否长期保留，还是最终应强制作者为每个子图显式声明 `anchor`——收敛点是 `wv-app` 的 `drill::resolve_markers` ② 分支，改动面可控；(b) 是否把「子图入口」从 `icons` 里拆成独立字段——当前 `icons` 同时承担「注释标记」与「钻入入口」两种语义。涉及 `docs/MAP_EDITOR_BASELINE_v1.md` §5 的坐标系统条目与 `docs/STYLE_SWAPPABLE_ARCHITECTURE.md` 的地图层级渲染条目。）
 13. **【已收敛 · 2026-01】U6「Event 的过程描述字段」**：原 U6 待裁已收敛为——`Event.narrative`（单句过程）+ `Narration` 独立实体（`timeline/narrations/`，多段旁白，`Event.narrations` 多对多引用）。因果链的可视化**用旁白文案 + 时间派生播放顺序表达，不设箭头字段**（ADR-0002 排序口径不变）。历法显示采用双历制 `CalendarKind{simple, gregorian}`（`docs/adr/ADR-0006-gregorian-calendar.md`）；Place/Event 落点矩形几何化见 GLOSSARY「事件落点 / 矩形地点」条目。示例工程 `examples/xinhai-1911/` 为上述能力的综合演示。
 14. **地形栅格图层的瓦片化（2026-10-11 提出）**：地图拆为**矢量图层**（地点/道路/边界/势力/事件叠加，类比百度矢量地图）与**地形栅格图层**（底图）两层。栅格底图升级为 **JRPG 瓦片图集**渲染：按 `f(kind, height, 邻居)` 查图集选瓦片。待裁：(a) 图集素材来源——先 AI 生成素材包验证管线，还是直接采用 CC0 素材（Kenney / 0x72）；(b) 默认底图策略——编辑模式默认色块、浏览模式默认瓦片是否成立；(c) 过渡瓦片（autotiling）的落地时机。第一版按「直铺整瓦、无过渡、图集路径可配置」实现，收敛点为 `wv-app` 渲染层的瓦片选择函数，`wv-core`/`wv-terrain` 不变。
+15. **真实地理底图引入路径（ADR-0007，2026-10-13 已接受）**：以 Overture Maps 作为真实地理底图（[外部资源](https://github.com/OvertureMaps)，非引入 OSM PBF 服务端转换）。决议：(a) ✅ 引入 Overture Maps 作为外部真实地理资源；(b) ✅ 领域模型 `Place` / `Edge` 只存 `OvertureId`（GERS 字符串）引用、**不落几何**；(c) ✅ 引入新平行 crate `wv-overture`（与 `wv-io` 同级、不依赖 Bevy）作为外部资源访问入口，而非 `wv-io` 子模块；(d) ✅ `Map.geographic_source` 元数据字段（声明主题/bbox/路径）走 `RasterRef` 风格声明、不开 P3 例外口子；(e) 待裁 `Map.geographic_kind: Real|Fictional` 区分真假混合场景；(f) ✅ 字段命名 = **`overture_id`**（`gers_id` 因术语透明度差被否决、`real_world_id` 因与 `geographic_kind` 字段语义撞车被否决） + **§4.4 UUID 例外条款落地**（GERS 实测为 hex UUID，**仅 `OvertureId` 类型豁免** `AGENTS.md` §4.4 字符集约束，领域其余 ID 仍受约束）。关闭条件：ADR-0007「已接受」后据决议删/改本条（§6.2 不允许未决问题静默通过）。
+
+    > **数据流注释（一次性投影，非同步）**——明确边界，避免误读为「同步嵌入 GPS」：
+    >
+    > ```text
+    > ┌─────────────────┐  bbox 切片下载      ┌────────────────┐
+    > │ Overture S3     │ ─────────────────► │ maps/<id>/data/ │
+    > │ (GeoParquet)    │   CLI 一次性触发   │ *.parquet      │
+    > └─────────────────┘                    └───────┬────────┘
+    >                                                │ 按 overture_id 查询（只读）
+    >                                                ▼
+    > ┌─────────────────────────────────────────────────────────────────┐
+    > │  wv-overture（运行时读取层，不写领域）                              │
+    > │  - 读 Parquet → Haversine → 几何/路径元数据                       │
+    > │  - segment_length_m() 工具函数（回归用例 440.8 m）                │
+    > └───────────────────────────────┬─────────────────────────────────┘
+    >                                 │ 单向注入（Overture → 领域字段）
+    >                                 ▼
+    > ┌─────────────────────────────────────────────────────────────────┐
+    > │  领域模型（YAML 落盘形式）                                          │
+    > │  PlaceEdge { distance_km: 0.44, terrain: "residential" }         │
+    > │  Place { id: "space_needle", overture_id: "2f099609-...",          │
+    > │          names: "Space Needle", basic_category: "landmark" }      │
+    > │                                                                 │
+    > │  ✅ 领域 YAML 里**没有几何坐标**                                  │
+    > │  ✅ 仅有自定义字段（distance_km、terrain）和引用（overture_id）   │
+    > └─────────────────────────────────────────────────────────────────┘
+    > ```
+    >
+    > **关键边界**：
+    > - Parquet 落在 `data/`，是「资源」不是「数据源同步」（**不**双向同步、**不**周期拉取）。
+    > - Overture 几何坐标（Lon/Lat 列）**一次性** Haversine → `distance_km`，落进领域 YAML 后**不再保留**坐标。
+    > - Overture `class` **一次性**转写 `terrain` 字符串，**不留** Overture 原值。
+    > - `overture_id` **保留**作为引用（跨版本稳定指向同一实体）。
+    > - **不会再写 Overture**——一进领域，不再回流 Overture 数据库。
+    > - **运行时仍可能读 Parquet**——校验面板 / 渲染层按 `overture_id` 查询，是「只读路径」不是「写路径」。
+    > - **不是几何投影**（WGS84→墨卡托那种）——是**语义意义**上的「转换」：GPS 坐标 → 领域距离参数，**不**是坐标系转换。
+16. **外部 Parquet 仅作资源、不入 P3 例外**：当 Overture Parquet 进 `maps/<id>/data/` 时，**领域 YAML 仍只存 `OvertureId` 引用**，Parquet 文件作为外部资源存在，**不开 P3 二进制例外口子**（地形栅格仍是 P3 例外的唯一受益者）。`Map.geographic_source.data` 走 `RasterRef` 风格声明路径。关闭条件：`wv-overture` 第一版能跑 fetch + 渲染层几何转换。
+17. **Parquet schema 升级策略**：Overture schema 升级时，`wv-overture` 转换表需同步；版本号如何存、迁移策略如何定（路径：`wv-overture` 内部 `overture_schema_version` 字段；不写入领域模型）。关闭条件：`wv-overture` 实现中明确版本号策略且 README/CLAUDE.md 已登记。
+18. **检索路径是「领域 + 外部 Parquet」双源**：是否上本地索引？何时倒排？是否按 bbox 切表？检索时是否需走 SPI（Service Provider Interface）以支持多源（Overture / 自建 / 未来 OSM 直采）？关闭条件：ADR-0007 接受且 `wv-overture` 实现中明确索引路径。
 
 ---
 

@@ -51,6 +51,8 @@ pub const CORE_TERRAIN: [Color; 10] = [
     hex(0x222222), // 9 core.road         道路 / 区域分界（34,34,34）
 ];
 
+/// 海岸线描边色（水陆边界浅蓝，2026-11 用户需求）。
+pub const COAST_LINE: Color = hex(0x4A90E2); // 浅水色，与近海一致
 /// 城市点位色（POI 内芯实心红点，2026-11 用户指定 192,57,43）。
 pub const PLACE_DOT: Color = hex(0xC0392B);
 /// 城市点外环（白环衬红点，保证在任何陆域色上可辨）。
@@ -86,7 +88,6 @@ pub const EVENT_VIEW_BACKDROP: Color = hex(0xE8E6E1);
 /// 水面近黑、陆地深灰、海岸线中亮灰——黑底上白圈 POI 与强调色全高对比。
 pub const COAST_WATER: Color = hex(0x07090C); // 水面：近黑
 pub const COAST_LAND: Color = hex(0x1A1E24); // 陆地：深灰（与水可辨但不抢要素）
-pub const COAST_LINE: Color = hex(0x9AA5B1); // 海岸线：中亮灰（即 accent.note）
 
 /// 底图淡化的保留比例：`out = base*KEEP + SOFTEN_TOWARD*(1-KEEP)`。
 ///
@@ -197,8 +198,32 @@ mod tests {
     #[test]
     fn soften_color_of_paper_gray_is_idempotent() {
         // 目标色自身淡化后仍是目标色（混合的不动点）——保证连续两次淡化不漂白。
+        // 用近似比较：f32 舍入会引入 ~1e-7 误差，不应用 ==。
         let out = soften_color(SOFTEN_TOWARD);
-        assert_eq!(out, SOFTEN_TOWARD);
+        let Color::Srgba(a) = out else {
+            unreachable!("soften_color 应返回 Srgba")
+        };
+        let Color::Srgba(b) = SOFTEN_TOWARD else {
+            unreachable!("SOFTEN_TOWARD 应为 Srgba")
+        };
+        assert!(
+            (a.red - b.red).abs() < 1e-6,
+            "R: got {:.8} want {:.8}",
+            a.red,
+            b.red
+        );
+        assert!(
+            (a.green - b.green).abs() < 1e-6,
+            "G: got {:.8} want {:.8}",
+            a.green,
+            b.green
+        );
+        assert!(
+            (a.blue - b.blue).abs() < 1e-6,
+            "B: got {:.8} want {:.8}",
+            a.blue,
+            b.blue
+        );
     }
 
     #[test]

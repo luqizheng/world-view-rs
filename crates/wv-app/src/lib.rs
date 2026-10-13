@@ -44,6 +44,10 @@ pub mod map_frame;
 #[cfg(feature = "app")]
 pub mod palette;
 #[cfg(feature = "app")]
+pub mod palette_google;
+#[cfg(feature = "app")]
+pub mod palette_jrpg;
+#[cfg(feature = "app")]
 pub mod projection;
 #[cfg(feature = "app")]
 pub mod state;
