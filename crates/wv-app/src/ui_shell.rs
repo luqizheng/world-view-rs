@@ -252,19 +252,42 @@ impl ShellNotice {
 #[derive(Resource, Default)]
 pub struct OpenProjectTask {
     task: Option<Task<Option<PathBuf>>>,
+    /// 这次对话框的**意图**：打开已有工程，还是给新工程挑保存位置。
+    /// 轮询收口时按它分流——两个意图共用同一个「等用户回话」的载体，
+    /// 但回话后的处理完全不同（加载 vs 创建+保存），不能混。
+    purpose: DialogPurpose,
+}
+
+/// 目录选择对话框的意图（v0.3 §B）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DialogPurpose {
+    /// 打开已有工程：选完走 [`load_project_into`]。
+    #[default]
+    Open,
+    /// 另存为 / 新工程首次保存：选完 `Project::create`（或 `open`）+ 全量保存。
+    SaveAs,
 }
 
 impl OpenProjectTask {
     /// 起一个原生目录选择对话框。重复点击会**取消**上一次未完成的对话框
     /// ——只保留最新的意图（与 macOS Finder、Windows 资源管理器的行为一致）。
     pub fn spawn(&mut self) {
+        self.spawn_for(DialogPurpose::Open);
+    }
+
+    /// 带意图起对话框（`SaveAs` 的标题话术与打开不同，见 [`DialogPurpose`]）。
+    pub fn spawn_for(&mut self, purpose: DialogPurpose) {
         let pool = AsyncComputeTaskPool::get();
+        let title = match purpose {
+            DialogPurpose::Open => "选择工程目录（含 world.yaml 的目录）",
+            DialogPurpose::SaveAs => "选择保存位置（将在此目录创建工程）",
+        };
         let task = pool.spawn(async move {
             // `set_title` 让 Windows / macOS / Linux 三大平台都显示一致的话术；
             // rfd 在 WASM 上 `pick_folder` 不支持（见 crate 文档），但本工程
             // 不打 WASM，无需在该资源管理形式分支里设防。
             rfd::AsyncFileDialog::new()
-                .set_title("选择工程目录（含 world.yaml 的目录）")
+                .set_title(title)
                 .pick_folder()
                 .await
                 .map(|h| h.path().to_path_buf())
@@ -272,6 +295,12 @@ impl OpenProjectTask {
         // 旧任务直接 `drop`：它会自动取消（`Task<T>::Drop` 文档），
         // 不会再回写到一个已被替换的 `task`，不会与新对话框争抢。
         self.task = Some(task);
+        self.purpose = purpose;
+    }
+
+    /// 完成后的意图（仅当有任务时才有意义）。
+    fn purpose(&self) -> DialogPurpose {
+        self.purpose
     }
 
     /// 每帧轮询一次：完成就 `block_on` 取结果，否则返回 `None`。
@@ -304,6 +333,7 @@ pub struct StartupLoadRequest(pub Option<String>);
 /// 会在这一帧把 `OpenProjectTask::spawn` 叫起来，本系统再读同一个资源
 /// 至少要等到写入完成之后；同一 `PreUpdate` 内系统顺序由 `.after(...)` 声明，
 /// 这里靠「放在 `hotkeys` 之后」+「下一帧才 `block_on`」共同保证不读到半截状态。
+#[allow(clippy::too_many_arguments)]
 fn poll_open_project_dialog(
     mut task: ResMut<OpenProjectTask>,
     mut projection: ResMut<WorldProjection>,
@@ -322,18 +352,74 @@ fn poll_open_project_dialog(
     // 这里不进 YAML，路径含空格 / 非 ASCII 时不要做 `as_ref` 路径切片，
     // 否则 Windows 的 `\\?\` 前缀会被吞。
     // 用户点了「取消」（`None`）：静默。不刷回执，免得状态栏常驻一条「已取消」。
-    if let Some(path) = outcome {
-        let dir = path.to_string_lossy().into_owned();
-        load_project_into(
-            &dir,
-            &mut projection,
-            &mut drill,
-            &mut recents,
-            &mut notice,
-            &mut diagnostics,
-            &mut edit,
-            frame,
-        );
+    let Some(path) = outcome else {
+        return;
+    };
+    match task.purpose() {
+        DialogPurpose::Open => {
+            let dir = path.to_string_lossy().into_owned();
+            load_project_into(
+                &dir,
+                &mut projection,
+                &mut drill,
+                &mut recents,
+                &mut notice,
+                &mut diagnostics,
+                &mut edit,
+                frame,
+            );
+        }
+        DialogPurpose::SaveAs => {
+            let dir = path.to_string_lossy().into_owned();
+            save_world_to_dir(&dir, &mut projection, &mut edit, &mut notice, frame);
+        }
+    }
+}
+
+/// 把当前工作副本落盘到指定目录（另存为 / 首次保存的共用收口）。
+///
+/// 目录里已有工程 → `Project::open`（往里写，不覆盖元数据）；
+/// 目录是空的（或不存在）→ `Project::create` 先立 `world.yaml` 再全量保存。
+/// 保存统一走空 dirty 表 = 全量路径——「另存为」必须把整个世界写过去，
+/// 增量路由只对「已在跟踪 dirty 的同一目录」有意义。
+fn save_world_to_dir(
+    dir: &str,
+    projection: &mut WorldProjection,
+    edit: &mut crate::editing::EditHistory,
+    notice: &mut ShellNotice,
+    frame: u64,
+) {
+    // 新工程的默认名：元数据里有就用，没有就「未命名工程」。
+    let default_name = projection
+        .world
+        .meta
+        .as_ref()
+        .map(|m| m.name.clone())
+        .unwrap_or_else(|| "未命名工程".to_owned());
+    let open_or_create = || -> Result<wv_io::Project, String> {
+        match wv_io::Project::open(dir) {
+            Ok(p) => Ok(p),
+            // NotAProject = 目录还没有 world.yaml → 视为「新位置」去创建；
+            // 其他错误（权限等）如实上报。
+            Err(e @ wv_io::IoError::NotAProject(_)) => {
+                wv_io::Project::create(dir, &default_name).map_err(|e2| e2.to_string())?;
+                let _ = e;
+                wv_io::Project::open(dir).map_err(|e2| e2.to_string())
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    };
+    match open_or_create() {
+        Ok(mut project) => match project.save_world(&projection.world, &[]) {
+            Ok(()) => {
+                projection.project_dir = Some(dir.to_owned());
+                projection.dirty = false;
+                edit.clear_dirty();
+                notice.info(format!("已保存到 {dir}"), frame);
+            }
+            Err(e) => notice.error(format!("保存失败：{e}"), frame),
+        },
+        Err(e) => notice.error(format!("保存失败：{e}"), frame),
     }
 }
 
@@ -344,6 +430,7 @@ fn poll_open_project_dialog(
 /// 2. [`DrillState::reset_to_world`]——**重置地图层级回世界**，否则新工程的
 ///    路径里还留着旧工程的 id（§A 明确要求）；
 /// 3. 推进 [`RecentProjects`] 的顺序。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn load_project_into(
     dir: &str,
     projection: &mut WorldProjection,
@@ -591,15 +678,16 @@ fn adopt_loaded_world(
 /// |---|---|
 /// | 打开工程… | ✅ 原生目录选择对话框（`rfd`），加载走 [`wv_io::Project::open`] |
 /// | 打开最近工程 | ✅ 真加载（`wv_io::Project::open`） |
-/// | 新建工程 | ✅ 内存中新建空白工程（尚未落盘） |
+/// | 新建工程 | ✅ 内存中新建空白工程（`Ctrl+S` 时引导选目录落盘） |
 /// | 关闭工程 | ✅ 清空工作副本 |
-/// | 另存为… | ⛔ 需要文件对话框 → 提示走 `Ctrl+S`（v0.3 一起补） |
+/// | 另存为… | ✅ 目录对话框 → `Project::create`/`open` + 全量保存（v0.3 §B） |
 /// | 导出… | ⛔ 导出格式未定（见 v0.2 §G） |
 /// | 项目设置 | ⛔ 面板未实现（v0.3） |
 /// | 保存 | ✅ 阶段七 v0.1：`wv_io::Project::save_world` 全量写，dirty 路由 v0.2 |
 ///
 /// 保存那条不是偷懒：数据落盘要处理「每实体一文件 + 引用完整性 + 二进制分块」
 /// 三件事（AGENTS §5/§4.5），不是一次 `serde_yaml::to_string` 能收尾的。
+#[allow(clippy::too_many_arguments)]
 fn dispatch_project_command(
     id: &CommandId,
     projection: &mut WorldProjection,
@@ -671,7 +759,9 @@ fn dispatch_project_command(
             true
         }
         CommandId::SaveProjectAs => {
-            notice.info("另存为需要文件对话框（本版本未接）；保存请用 Ctrl+S", frame);
+            // v0.3 §B：接上目录对话框——选完由 `poll_open_project_dialog`
+            // 的 SaveAs 分支收口（create-or-open + 全量保存）。
+            open_task.spawn_for(DialogPurpose::SaveAs);
             true
         }
         CommandId::ExportProject => {
@@ -808,7 +898,9 @@ fn apply_pending_commands(
         // 刚加载、刚撤销等场景）。失败不排空——脏标记仍在，下次保存能补上。
         CommandId::Save => {
             let Some(dir) = projection.project_dir.clone() else {
-                notice.error("当前没有工程目录，无法保存", frame);
+                // 新建工程还没目录：不再报死错，而是接「选保存位置」对话框
+                // （v0.3 §B）。这补上了「新建 → 首次保存」的断链。
+                open_task.spawn_for(DialogPurpose::SaveAs);
                 return;
             };
             let dirty = edit.take_dirty();
@@ -945,6 +1037,7 @@ mod tests {
         let pending = pool.spawn(async move { std::future::pending::<Option<PathBuf>>().await });
         let mut t = OpenProjectTask {
             task: Some(pending),
+            purpose: DialogPurpose::default(),
         };
         // 此刻 future 永远 pending，is_finished 一定为 false。
         assert!(

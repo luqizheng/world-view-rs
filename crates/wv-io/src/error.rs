@@ -20,6 +20,9 @@ pub enum IoError {
     #[error("工程目录 `{0}` 不存在或缺少 world.yaml")]
     NotAProject(String),
 
+    #[error("目标目录 `{0}` 已存在工程（world.yaml 已存在），拒绝覆盖创建")]
+    AlreadyAProject(String),
+
     #[error("schema 版本 {found} 超出本版本支持范围（当前 {current}），需要迁移")]
     SchemaTooNew { found: u32, current: u32 },
 

@@ -151,7 +151,7 @@ fn build_polygon_mesh(coords: &[f32]) -> Mesh {
         positions.push([coords[i * 2], coords[i * 2 + 1], 0.0]);
     }
     // 扇形索引。
-    let mut indices: Vec<u32> = Vec::with_capacity((n as usize - 2) * 3);
+    let mut indices: Vec<u32> = Vec::with_capacity((n - 2) * 3);
     for i in 1..(n as u32 - 1) {
         indices.push(0);
         indices.push(i);

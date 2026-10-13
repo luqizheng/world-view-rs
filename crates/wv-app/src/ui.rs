@@ -621,13 +621,15 @@ fn identity_segment(
 
 fn view_mode_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
     let total = ui.available_width();
-    // 分段控件：4 等分，窄窗下也不截断（§8 断点）。
-    let seg_w = (total * 0.30).clamp(220.0, 340.0);
+    // 分段控件：等分 `ViewMode::ALL`（当前 6 个模式，窄窗下不截断，§8 断点）。
+    // 宽度按分段数缩放，clamp 上下限保证每段仍有 ≥ 55px 可点区域。
+    let n = ViewMode::ALL.len() as f32;
+    let seg_w = (total * 0.40).clamp(n * 55.0, n * 85.0);
     let seg_h = shell.hit;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(seg_w, seg_h), egui::Sense::hover());
     let painter = ui.painter();
     painter.rect_filled(rect, radius::CONTROL, shell.raised_bg());
-    let seg_w_each = rect.width() / 4.0;
+    let seg_w_each = rect.width() / n;
     for (i, mode) in ViewMode::ALL.iter().enumerate() {
         let r = egui::Rect::from_min_max(
             egui::pos2(rect.min.x + seg_w_each * i as f32, rect.min.y),
@@ -1378,6 +1380,7 @@ pub fn panel_brush(
 }
 
 /// 小地图 + 图层开关（P-4）。
+#[allow(clippy::too_many_arguments)]
 pub fn panel_minimap(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,
@@ -1562,6 +1565,7 @@ pub fn panel_situation(
 }
 
 /// 势力层（P-7）。
+#[allow(clippy::too_many_arguments)]
 pub fn panel_faction(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,
@@ -1624,7 +1628,7 @@ pub fn panel_faction(
                 faction_card(
                     ui,
                     &shell,
-                    &f,
+                    f,
                     &view,
                     &playback,
                     &map_id,
@@ -1706,11 +1710,7 @@ fn faction_card(
                 for g in &geos {
                     let from = g.span.from;
                     ui.horizontal(|ui| {
-                        ui.label(format!(
-                            "[{}, {})",
-                            from,
-                            g.span.to.map(|t| t).unwrap_or(from + 1)
-                        ));
+                        ui.label(format!("[{}, {})", from, g.span.to.unwrap_or(from + 1)));
                         ui.label(format!("{} 顶点", g.geometry.point_count()));
                         if ui.small_button("删除").clicked() {
                             faction_panel_actions::remove_geometry_now(
@@ -1763,6 +1763,7 @@ fn faction_card(
 }
 
 /// 校验（P-8）。
+#[allow(clippy::too_many_arguments)]
 pub fn panel_validation(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,

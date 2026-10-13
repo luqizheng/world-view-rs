@@ -297,6 +297,47 @@ impl Project {
         &self.root
     }
 
+    /// 在空目录（或尚不存在的目录）里**新建**一个最小工程并落盘 `world.yaml`。
+    ///
+    /// 与 [`Self::open`] 对称：`open` 负责「读已有工程」，`create` 负责
+    /// 「白手起家」。编辑器「新建工程 → 首次保存」链路依赖本方法——
+    /// 旧实现里新建的空白工程 `project_dir = None`，`Ctrl+S` 直接报
+    /// 「没有工程目录」，链路在保存这一环断掉。
+    ///
+    /// ## 行为
+    ///
+    /// - 目录不存在则创建（含父目录）；已存在也允许（用户的空文件夹也算）。
+    /// - **拒绝覆盖**：若 `world.yaml` 已存在，返回 [`IoError::AlreadyAProject`]
+    ///   ——想往已有工程里写，请走 [`Self::open`] + [`Self::save_world`]。
+    /// - 元数据取最小合法集：`schema_version` 用当前版本、`root_map` 暂定
+    ///   `world`、`timeline_range` 给 `[0, 1]` 占位（作者随后可改）。
+    ///
+    /// 实体目录**不预建**——`save_world` 的 V1 守约是「作者没动就别替他
+    /// 造东西」，首次全量保存会按需创建。
+    pub fn create(root: impl AsRef<Path>, name: &str) -> IoResult<Self> {
+        let root = root.as_ref().to_path_buf();
+        let index = root.join("world.yaml");
+        if index.is_file() {
+            return Err(IoError::AlreadyAProject(root.display().to_string()));
+        }
+
+        std::fs::create_dir_all(&root)?;
+        let meta = WorldMeta {
+            name: name.to_owned(),
+            version: "0.1".to_owned(),
+            schema_version: crate::CURRENT_SCHEMA_VERSION,
+            root_map: wv_core::Id::new_unchecked("world"),
+            timeline_range: wv_core::TimeSpan::new(0, 1).map_err(IoError::Core)?,
+        };
+        let text = serde_yaml::to_string(&meta).map_err(|source| IoError::Yaml {
+            path: index.display().to_string(),
+            source,
+        })?;
+        std::fs::write(&index, text)?;
+
+        Ok(Self { root, meta })
+    }
+
     pub fn meta(&self) -> &WorldMeta {
         &self.meta
     }

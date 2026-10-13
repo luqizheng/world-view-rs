@@ -522,6 +522,7 @@ pub struct PlaceLabel;
 const LABEL_PX: f32 = 12.0;
 
 /// 更新当前层级的地名标注池。
+#[allow(clippy::type_complexity)]
 pub fn update_place_labels(
     mut commands: Commands,
     projection: Res<WorldProjection>,
@@ -535,6 +536,7 @@ pub fn update_place_labels(
             &mut Transform,
             &mut Text2d,
             &mut TextFont,
+            &mut TextColor,
             &mut Visibility,
         ),
         With<PlaceLabel>,
@@ -559,10 +561,16 @@ pub fn update_place_labels(
     let font_size = LABEL_PX * view.scale.max(0.05);
     // CJK 字体（fonts.rs 在 Startup 注册）：缺省字体无中文字形，地名会成方块。
     let cjk = fonts.cjk_font.clone();
+    // 文字色按视图模式走 palette：谷歌风 = Retro JSON 的 `labels.text.fill`
+    // 暖深棕（`#f2e9d8` 光晕描边暂缺——Text2d 描边需自定义 shader，后续再做）。
+    let label_color = match view.mode {
+        crate::state::ViewMode::GoogleMap => crate::palette_google::GOOGLE_LABEL_FILL,
+        _ => bevy::color::Color::WHITE,
+    };
 
     let mut iter = q.iter_mut();
     for (pos, name) in &wanted {
-        if let Some((_, mut tf, mut text, mut style, mut vis)) = iter.next() {
+        if let Some((_, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
             tf.translation = pos.extend(0.0);
             // Bevy 0.15：字号在 TextFont 组件上，Text2d 只存内容。
             *text = Text2d::new(*name);
@@ -571,6 +579,7 @@ pub fn update_place_labels(
             if let Some(f) = &cjk {
                 style.font = f.clone();
             }
+            *color = TextColor(label_color);
             *vis = Visibility::Visible;
         } else {
             commands.spawn((
@@ -581,13 +590,14 @@ pub fn update_place_labels(
                     font: cjk.clone().unwrap_or_default(),
                     ..Default::default()
                 },
+                TextColor(label_color),
                 Transform::from_translation(pos.extend(0.0)),
                 Visibility::Visible,
             ));
         }
     }
     // 池里多出来的实体隐藏（保留复用，不 despawn）。
-    for (_, mut _tf, mut _text, mut _style, mut vis) in iter {
+    for (_, mut _tf, mut _text, mut _style, mut _color, mut vis) in iter {
         *vis = Visibility::Hidden;
     }
 }
