@@ -343,6 +343,7 @@ fn create_map(
         extent: Some(Extent::sized(dialog.extent, dialog.extent)),
         raster: None,
         geographic_source: None,
+        unit_per_km: None,
         orientation: 0.0,
     };
     let n = dialog.grid_cells();
@@ -384,6 +385,7 @@ mod tests {
                 extent: None,
                 raster: None,
                 geographic_source: None,
+                unit_per_km: None,
                 orientation: 0.0,
             });
         }
@@ -450,6 +452,7 @@ mod tests {
             extent: None,
             raster: None,
             geographic_source: None,
+            unit_per_km: None,
             orientation: 0.0,
         });
         let mut dialog = NewMapDialog::default();

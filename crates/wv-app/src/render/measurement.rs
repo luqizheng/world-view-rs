@@ -92,12 +92,21 @@ const LABEL_PX: f32 = 10.0;
 #[derive(Component)]
 pub struct MeasureLabel;
 
+/// 折线标签的描边阴影（黑色，在主文字之后渲染——z=MEASURE_Z + 0.04）。
+///
+/// 与 [`MeasureLabel`] 1:1 配对 spawn：同一 pos + 同 text，黑色 + 1 屏幕 px
+/// 右下偏移。`z` 比主文字略低，避免遮挡文字本身。
+#[derive(Component)]
+pub struct MeasureLabelShadow;
+
 /// 测量叠加的渲染入口（**顶置**，无 LayerFrame 联动）。
 ///
 /// 把 cache + 草稿一起画：
 /// - 完成 measurement（committed）：折线 + 矩形外框 + 文字标签；
 /// - 草稿（draft）：同色减半，附加「末点 → 光标」的橡皮筋；
 /// - 长度 / 面积：纯函数（`wv_core::Measurement::total_length`）手算。
+/// - 文字标签带 **1px 描边**：每个标签实际 spawn 2 个 Text2d 实体——黑色阴影
+///   在主文字右下方 1 屏幕 px，白色主文字在上。
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::type_complexity)]
 pub fn render_measurements(
@@ -109,7 +118,9 @@ pub fn render_measurements(
     view: Res<ViewState>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
-    mut q: Query<
+    projection: Res<WorldProjection>,
+    drill: Res<DrillState>,
+    mut q_main: Query<
         (
             Entity,
             &mut Transform,
@@ -118,7 +129,28 @@ pub fn render_measurements(
             &mut TextColor,
             &mut Visibility,
         ),
-        (With<MeasureLabel>, Without<Camera2d>, Without<StreetLabel>),
+        (
+            With<MeasureLabel>,
+            Without<MeasureLabelShadow>,
+            Without<Camera2d>,
+            Without<StreetLabel>,
+        ),
+    >,
+    mut q_shadow: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut Text2d,
+            &mut TextFont,
+            &mut TextColor,
+            &mut Visibility,
+        ),
+        (
+            With<MeasureLabelShadow>,
+            Without<MeasureLabel>,
+            Without<Camera2d>,
+            Without<StreetLabel>,
+        ),
     >,
 ) {
     // 顶置不受 LayerFrame.z_offset 漂移影响——这是用户原话「最上层」的强约束。
@@ -133,6 +165,15 @@ pub fn render_measurements(
     // 顶置测量色：琥珀黄（避开主题 accent 蓝）。
     let color_done = bevy::color::Color::srgb(1.0, 0.78, 0.18);
 
+    // 当前图的 km 系数（真图走 bbox，虚构地图走自报）。
+    // 单位换算只读 [wv-core::MapNode::km_per_wu]，不写回、不进坐标链。
+    let km_factor: Option<f64> = (|| {
+        let node = drill.current_node(&projection.world)?;
+        let (kx, ky) = node.km_per_wu()?;
+        // 长度用均值（kx ≈ ky 的世界地图下够准）。
+        Some((kx + ky) * 0.5)
+    })();
+
     // ---- 期望标签集（位置 + 文本）----
     let mut wanted: Vec<(Vec2, String)> = Vec::new();
     for m in cache.measurements() {
@@ -146,7 +187,7 @@ pub fn render_measurements(
                     let b = Vec2::new(w[1].x, w[1].y);
                     let seg_len = (b - a).length();
                     let mid = grid.map_to_view((a + b) * 0.5);
-                    wanted.push((mid, format!("{:.1}", seg_len)));
+                    wanted.push((mid, format_length_label(seg_len, km_factor)));
                 }
                 // 总长标在第一段中点上方。
                 let first_mid = grid.map_to_view({
@@ -155,7 +196,10 @@ pub fn render_measurements(
                     (a + b) * 0.5
                 });
                 let above = first_mid + Vec2::new(0.0, label_world * 1.2);
-                wanted.push((above, format!("Σ {:.1}", m.total_length())));
+                wanted.push((
+                    above,
+                    format_total_length_label(m.total_length(), km_factor),
+                ));
             }
             MeasurementKind::Rectangle => {
                 if m.points.len() != 2 {
@@ -165,9 +209,8 @@ pub fn render_measurements(
                 let b = Vec2::new(m.points[1].x, m.points[1].y);
                 let dx = (b.x - a.x).abs();
                 let dy = (b.y - a.y).abs();
-                let area = dx * dy;
                 let mid = grid.map_to_view((a + b) * 0.5);
-                wanted.push((mid, format!("{:.1} × {:.1} = {:.1}", dx, dy, area)));
+                wanted.push((mid, format_rectangle_label(dx, dy, km_factor)));
             }
         }
     }
@@ -178,7 +221,7 @@ pub fn render_measurements(
             let b = w[1];
             let seg_len = (b - a).length();
             let mid = grid.map_to_view((a + b) * 0.5);
-            wanted.push((mid, format!("{:.1}", seg_len)));
+            wanted.push((mid, format_length_label(seg_len, km_factor)));
         }
         if measure.draft.len() >= 2 {
             let a = measure.draft[0];
@@ -191,7 +234,7 @@ pub fn render_measurements(
             let first_mid = grid.map_to_view((a + b) * 0.5);
             wanted.push((
                 first_mid + Vec2::new(0.0, label_world * 1.2),
-                format!("Σ {:.1}", total),
+                format_total_length_label(total, km_factor),
             ));
         }
     }
@@ -199,12 +242,19 @@ pub fn render_measurements(
     let font_size = label_world;
     let cjk = fonts.cjk_font.clone();
     let label_color = bevy::color::Color::WHITE;
+    let shadow_color = bevy::color::Color::srgba(0.0, 0.0, 0.0, 0.85);
+    // 描边偏移：屏幕 1 像素 → 世界单位 = `view.scale`（与 brush_cursor 同款口径）。
+    let shadow_offset = Vec2::new(view.scale, -view.scale);
 
-    // ---- 文字标签对象池 ----
-    let mut iter = q.iter_mut();
+    // ---- 文字标签对象池（主 + 描边）----
+    // 每个 wanted 标签需要 1 个 shadow + 1 个 main（共 2N 个实体）。
+    let mut iter_main = q_main.iter_mut();
+    let mut iter_shadow = q_shadow.iter_mut();
     for (pos, text) in &wanted {
         let text: &str = text.as_str();
-        if let Some((_, mut tf, mut t, mut style, mut color, mut vis)) = iter.next() {
+
+        // 1. 主文字（白色，z = MEASURE_Z + 0.05）
+        if let Some((_, mut tf, mut t, mut style, mut color, mut vis)) = iter_main.next() {
             tf.translation = pos.extend(MEASURE_Z + 0.05);
             tf.rotation = label_rot;
             *t = Text2d::new(text.to_string());
@@ -232,8 +282,43 @@ pub fn render_measurements(
                 Visibility::Visible,
             ));
         }
+
+        // 2. 描边阴影（黑色，1 像素右下方偏移，z = MEASURE_Z + 0.04）
+        let shadow_pos = pos + shadow_offset;
+        if let Some((_, mut tf, mut t, mut style, mut color, mut vis)) = iter_shadow.next() {
+            tf.translation = shadow_pos.extend(MEASURE_Z + 0.04);
+            tf.rotation = label_rot;
+            *t = Text2d::new(text.to_string());
+            style.font_size = font_size.into();
+            if let Some(f) = &cjk {
+                style.font = f.clone().into();
+            }
+            *color = TextColor(shadow_color);
+            *vis = Visibility::Visible;
+        } else {
+            commands.spawn((
+                MeasureLabelShadow,
+                Text2d::new(text.to_string()),
+                TextFont {
+                    font_size: font_size.into(),
+                    font: cjk.clone().unwrap_or_default().into(),
+                    ..Default::default()
+                },
+                TextColor(shadow_color),
+                Transform {
+                    translation: shadow_pos.extend(MEASURE_Z + 0.04),
+                    rotation: label_rot,
+                    ..Default::default()
+                },
+                Visibility::Visible,
+            ));
+        }
     }
-    for (_, mut _tf, mut _t, mut _s, mut _c, mut vis) in iter {
+    // 池里多出的实体隐藏（复用，不 despawn）。
+    for (_, mut _tf, mut _t, mut _s, mut _c, mut vis) in iter_main {
+        *vis = Visibility::Hidden;
+    }
+    for (_, mut _tf, mut _t, mut _s, mut _c, mut vis) in iter_shadow {
         *vis = Visibility::Hidden;
     }
 
@@ -541,6 +626,53 @@ pub fn commit_measurement_click(
 }
 
 // ---------------------------------------------------------------------------
+// 格式化辅助：长度 / 面积 / km 换算
+// ---------------------------------------------------------------------------
+
+/// 把 wu 长度按 `km_factor` 折算成 km。`wu < 0` 视为非法（不会发生）。
+#[inline]
+fn wu_to_km(wu: f32, km_factor: f64) -> f64 {
+    f64::from(wu) * km_factor
+}
+
+/// 单段长度标签（折线）。
+///
+/// 无 km： `"5.0"`
+/// 有 km： `"5.0 wu\n(8.2 km)"`（用换行让 km 显示在第二行，避免水平加宽）。
+pub(crate) fn format_length_label(wu: f32, km_factor: Option<f64>) -> String {
+    match km_factor {
+        None => format!("{wu:.1}"),
+        Some(k) => format!("{wu:.1} wu\n({:.2} km)", wu_to_km(wu, k)),
+    }
+}
+
+/// 总长标签（折线 Σ）。
+pub(crate) fn format_total_length_label(wu: f32, km_factor: Option<f64>) -> String {
+    match km_factor {
+        None => format!("Σ {wu:.1}"),
+        Some(k) => format!("Σ {wu:.1} wu\n({:.2} km)", wu_to_km(wu, k)),
+    }
+}
+
+/// 矩形标签：宽 × 高 = 面积（wu² 与 km² 同时显示）。
+pub(crate) fn format_rectangle_label(
+    width_wu: f32,
+    height_wu: f32,
+    km_factor: Option<f64>,
+) -> String {
+    let area_wu2 = width_wu * height_wu;
+    match km_factor {
+        None => format!("{width_wu:.1} × {height_wu:.1} = {area_wu2:.1}"),
+        Some(k) => {
+            let w_km = wu_to_km(width_wu, k);
+            let h_km = wu_to_km(height_wu, k);
+            let area_km2 = w_km * h_km;
+            format!("{width_wu:.1} × {height_wu:.1} wu\n= {area_wu2:.1} wu² ({area_km2:.3} km²)")
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 测试
 // ---------------------------------------------------------------------------
 
@@ -662,6 +794,48 @@ mod tests {
         };
         st.on_map_change(Some(&wv_core::Id::new_unchecked("m1")));
         assert_eq!(st.draft.len(), 1, "同图不清草稿");
+    }
+
+    #[test]
+    fn format_length_label_no_km() {
+        assert_eq!(format_length_label(5.0, None), "5.0");
+        assert_eq!(format_length_label(12.34, None), "12.3");
+    }
+
+    #[test]
+    fn format_length_label_with_km_uses_two_lines() {
+        // 8 wu，km_factor = 1.0 → 8.0 km。
+        let label = format_length_label(8.0, Some(1.0));
+        assert!(label.contains("wu"), "应显示 wu 单位: {label}");
+        assert!(label.contains("km"), "应显示 km 换算: {label}");
+        assert!(label.contains('\n'), "wu 与 km 应分两行: {label}");
+        assert!(label.contains("8.00"), "km 应保留 2 位小数: {label}");
+    }
+
+    #[test]
+    fn format_total_length_label_includes_sigma() {
+        let none = format_total_length_label(15.0, None);
+        assert!(none.starts_with('Σ') && none.contains("15.0"));
+        let some = format_total_length_label(15.0, Some(2.0));
+        assert!(some.starts_with('Σ'));
+        assert!(some.contains("km"));
+        assert!(some.contains("30.00"), "15 * 2.0 = 30 km");
+    }
+
+    #[test]
+    fn format_rectangle_label_no_km_uses_wu_squared() {
+        let s = format_rectangle_label(3.0, 4.0, None);
+        assert!(s.contains("3.0 × 4.0"), "应含宽 × 高: {s}");
+        assert!(s.contains("12.0"), "面积 12 wu²：{s}");
+    }
+
+    #[test]
+    fn format_rectangle_label_with_km_uses_both_units() {
+        // km_factor = 1.0：3 wu = 3 km，4 wu = 4 km，面积 12 km²。
+        let s = format_rectangle_label(3.0, 4.0, Some(1.0));
+        assert!(s.contains("wu"), "应含 wu: {s}");
+        assert!(s.contains("km²"), "应含 km²: {s}");
+        assert!(s.contains("12.000"), "面积 12.000 km²：{s}");
     }
 
     #[test]

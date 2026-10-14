@@ -69,6 +69,20 @@ pub struct MapNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geographic_source: Option<GeographicSourceV1>,
 
+    /// 「1 km = 多少 wu」（2026-10-14 用户需求：虚构地图自报尺度）。
+    ///
+    /// 与 §4.2「数据层不存换算结论」不冲突——`Extent` / `PlaceEdge` /
+    /// `Track.waypoint.pos` 都没动，本字段是**地图级声明**，仅供测量显示使用，
+    /// 不进入坐标链、不影响任何派生计算。
+    ///
+    /// - `None` = 作者未声明，渲染层只显示 wu；真图另有 `geographic_source` 路径。
+    /// - `Some(8.0)` = 「1 km = 8 wu」（例：把 8 wu/格 的栅格地图当成 1 km/格）。
+    ///
+    /// **不**参与坐标换算（写进 `MapNode` 只为「让作者能描述自己的世界」），
+    /// **不**进任何派生 / 验证 / 路径搜索逻辑——纯展示用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit_per_km: Option<f32>,
+
     /// 地图朝向（屏幕上的旋转角，单位：度）。
     ///
     /// **0.0 = 正北朝上**（地图顶边即北方）；正值 = 顺时针偏转（如 90.0 = 北方朝右）。
@@ -313,6 +327,38 @@ impl Extent {
     }
 }
 
+impl MapNode {
+    /// 「1 wu = 多少 km」的最长派生链（2026-10-14 测量显示用）。
+    ///
+    /// 优先级：
+    /// 1. **真实底图**：`geographic_source.bbox` 经纬度按 cos 修正（ADR-0007）。
+    /// 2. **虚构地图**：`unit_per_km` 显式声明（作者自报）。
+    /// 3. **未声明**：返回 `None`——调用方只显示 wu，不假装有 km。
+    ///
+    /// 返回 `(km_per_wu_x, km_per_wu_y)`。对**长度**取均值（x≈y 的世界地图下
+    /// 等价于真实尺度；对高纬度图存在轻微偏差，是可接受的近似）。
+    ///
+    /// **不**进任何坐标链 / 距离换算（与 `Extent` / `PlaceEdge` / `Track` 的
+    /// 单位无关），仅供「测量标签」的展示使用。
+    pub fn km_per_wu(&self) -> Option<(f64, f64)> {
+        if let Some(src) = &self.geographic_source {
+            // 真图：用 bbox + extent 折算（已实现，见 geographic_source 模块）。
+            if let Some(ext) = &self.extent {
+                return src.bbox.km_per_wu(ext);
+            }
+        }
+        if let Some(per_km) = self.unit_per_km {
+            if per_km <= 0.0 {
+                return None;
+            }
+            // 作者自报：x 与 y 用同一系数。`isotropic = 1.0 / per_km`。
+            let k = 1.0 / f64::from(per_km);
+            return Some((k, k));
+        }
+        None
+    }
+}
+
 /// 二进制分块引用。
 ///
 /// 原则三的**唯一例外**：超大地图的网格数组允许以二进制作为一等源格式。
@@ -397,3 +443,95 @@ impl GeometryData {
 pub mod coord;
 pub mod distance;
 pub mod unit;
+
+#[cfg(test)]
+mod km_per_wu_tests {
+    use super::*;
+    use crate::source::geographic_source::{GeographicSourceV1, LatLonBbox};
+    use crate::Id;
+
+    fn stub_node() -> MapNode {
+        MapNode {
+            id: Id::new_unchecked("world_main"),
+            name: "主世界".into(),
+            level: MapLevel::World,
+            parent: None,
+            children: Vec::new(),
+            icons: Vec::new(),
+            layers: Vec::new(),
+            extent: None,
+            raster: None,
+            geographic_source: None,
+            unit_per_km: None,
+            orientation: 0.0,
+        }
+    }
+
+    #[test]
+    fn km_per_wu_returns_none_when_neither_declared() {
+        let node = stub_node();
+        assert!(node.km_per_wu().is_none());
+    }
+
+    #[test]
+    fn km_per_wu_uses_unit_per_km_for_fictional_maps() {
+        // 「1 km = 8 wu」→ km/wu = 1/8 = 0.125。
+        let node = MapNode {
+            unit_per_km: Some(8.0),
+            ..stub_node()
+        };
+        let (kx, ky) = node.km_per_wu().expect("应有 km/wu");
+        assert!((kx - 0.125).abs() < 1e-9);
+        assert!((ky - 0.125).abs() < 1e-9);
+    }
+
+    #[test]
+    fn km_per_wu_rejects_non_positive_unit_per_km() {
+        let node = MapNode {
+            unit_per_km: Some(0.0),
+            ..stub_node()
+        };
+        assert!(node.km_per_wu().is_none(), "0.0 应被拒绝");
+        let node = MapNode {
+            unit_per_km: Some(-1.0),
+            ..stub_node()
+        };
+        assert!(node.km_per_wu().is_none(), "负数应被拒绝");
+    }
+
+    #[test]
+    fn km_per_wu_prefers_geographic_source_over_unit_per_km() {
+        // 同时声明两者 → 真实底图优先。
+        let node = MapNode {
+            unit_per_km: Some(8.0),
+            extent: Some(Extent::sized(1024.0, 1024.0)),
+            geographic_source: Some(GeographicSourceV1 {
+                theme: "places".into(),
+                bbox: LatLonBbox {
+                    west: -0.25,
+                    south: -0.25,
+                    east: 0.25,
+                    north: 0.25,
+                },
+                ..GeographicSourceV1::default()
+            }),
+            ..stub_node()
+        };
+        let (kx, _) = node.km_per_wu().expect("应走 geographic_source");
+        // 赤道 ±0.25° ≈ 55.566 km / 1024 wu ≈ 0.054 km/wu（远小于 1/8 = 0.125）
+        assert!(kx < 0.125, "真图系数应小于虚构地图自报: kx={kx}");
+    }
+
+    #[test]
+    fn km_per_wu_falls_back_to_unit_per_km_when_geographic_source_has_no_extent() {
+        // 有 geographic_source 但 extent 为空 → 不能折算，退回 unit_per_km。
+        let node = MapNode {
+            unit_per_km: Some(8.0),
+            extent: None,
+            geographic_source: Some(GeographicSourceV1::default()),
+            ..stub_node()
+        };
+        let (kx, _) = node.km_per_wu().expect("应退回 unit_per_km");
+        assert!((kx - 0.125).abs() < 1e-9);
+    }
+}

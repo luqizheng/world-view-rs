@@ -243,6 +243,7 @@ mod tests {
             extent: None,
             raster: None,
             geographic_source: None,
+            unit_per_km: None,
             orientation: 0.0,
         }
     }

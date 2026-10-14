@@ -898,6 +898,7 @@ mod tests {
             extent: Some(Extent::sized(4096.0, 4096.0)),
             raster: None,
             geographic_source: None,
+            unit_per_km: None,
             orientation: 0.0,
         }
     }

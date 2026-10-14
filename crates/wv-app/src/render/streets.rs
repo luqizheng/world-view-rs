@@ -490,6 +490,7 @@ mod tests {
             extent: Some(wv_core::map::Extent::sized(4096.0, 4096.0)),
             raster: None,
             geographic_source: None,
+            unit_per_km: None,
             orientation: 0.0,
         };
         let mut city = wv_core::map::MapNode {
@@ -591,6 +592,7 @@ mod tests {
             extent: Some(wv_core::map::Extent::sized(1024.0, 1024.0)),
             raster: None,
             geographic_source: None,
+            unit_per_km: None,
             orientation: 0.0,
         };
         world.maps = vec![city];
@@ -663,6 +665,7 @@ mod tests {
                 extent: Some(wv_core::map::Extent::sized(1024.0, 1024.0)),
                 raster: None,
                 geographic_source: None,
+                unit_per_km: None,
                 orientation: 0.0,
             }],
             ..wv_core::World::default()

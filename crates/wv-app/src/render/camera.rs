@@ -539,6 +539,7 @@ mod tests {
             extent: Some(wv_core::map::Extent::sized(extent, extent)),
             raster: None,
             geographic_source: None,
+            unit_per_km: None,
             orientation: 0.0,
         };
         wv_core::World {
