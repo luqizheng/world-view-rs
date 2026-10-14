@@ -1,8 +1,8 @@
-//! UI 样式快照：调色板 / 字号 / 圆角 / 间距的 egui 投影。
+﻿//! UI 样式快照：调色板 / 字号 / 圆角 / 间距的 egui 投影。
 //!
 //! ## 职责
 //! - `TERRAIN_NAMES` —— 地形类型名常量（10 种），供笔刷面板与图例。
-//! - `terrain_swatch` —— 地形色块（依 `crate::colors::core_terrain`）。
+//! - `terrain_swatch` —— 地形色块（依 `crate::theme::colors::core_terrain`）。
 //! - `UiShell` —— 每帧由 UI 系统装配的样式快照，避免到处传参。
 //!
 //! ## 边界（不做什么）
@@ -18,8 +18,8 @@
 
 use bevy_egui::egui;
 
-use crate::ui_theme::{color32, color32_alpha, UiShellConfig};
-use crate::ui_tokens::ShellPalette;
+use crate::theme::ui_theme::{color32, color32_alpha, UiShellConfig};
+use crate::theme::ui_tokens::ShellPalette;
 
 /// 地形类型名（供笔刷面板与图例）。
 pub const TERRAIN_NAMES: [&str; 10] = [
@@ -28,7 +28,7 @@ pub const TERRAIN_NAMES: [&str; 10] = [
 
 /// 地形色块索引 → `palette::CORE_TERRAIN` 同序（§4.5：色块就是地形本色）。
 pub fn terrain_swatch(kind: u8) -> egui::Color32 {
-    let c = crate::colors::core_terrain(kind);
+    let c = crate::theme::colors::core_terrain(kind);
     let bevy::prelude::Color::Srgba(s) = c else {
         return egui::Color32::GRAY;
     };
@@ -44,7 +44,7 @@ pub struct UiShell {
     /// 当前外壳令牌。
     pub palette: ShellPalette,
     /// 字号阶梯。
-    pub scale: crate::ui_theme::FontScale,
+    pub scale: crate::theme::ui_theme::FontScale,
     /// 面板头高度（密度）。
     pub head_h: f32,
     /// 命中区（密度）。
@@ -58,7 +58,7 @@ impl UiShell {
     pub fn new(cfg: &UiShellConfig) -> Self {
         Self {
             palette: cfg.palette(),
-            scale: crate::ui_theme::font_sizes(cfg.density),
+            scale: crate::theme::ui_theme::font_sizes(cfg.density),
             head_h: cfg.density.panel_head(),
             hit: cfg.density.hit(),
             row: cfg.density.row(),
@@ -114,7 +114,7 @@ impl UiShell {
         let (c, a) = self.palette.float_fill();
         color32_alpha(c, a)
     }
-    /// accent 实心底上的文字色（**不是**白色，见 [`crate::ui_tokens::ShellPalette::text_on_accent`]）。
+    /// accent 实心底上的文字色（**不是**白色，见 [`crate::theme::ui_tokens::ShellPalette::text_on_accent`]）。
     pub fn text_on_accent(&self) -> egui::Color32 {
         color32(self.palette.text_on_accent)
     }

@@ -15,12 +15,12 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use crate::editing;
-use crate::faction_panel_actions;
+use crate::edit::editing;
+use crate::edit::faction_panel_actions;
 use crate::state::{Panel, PanelState, PlaybackState, ViewState, WorldProjection};
+use crate::theme::ui_theme::UiShellConfig;
+use crate::theme::ui_tokens::space;
 use crate::ui_layout::LayoutFile;
-use crate::ui_theme::UiShellConfig;
-use crate::ui_tokens::space;
 
 use super::shell::UiShell;
 use super::widgets::{empty_state, float_window};

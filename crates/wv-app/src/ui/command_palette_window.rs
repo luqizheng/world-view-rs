@@ -17,9 +17,9 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::state::{RecentProjects, WorldProjection};
+use crate::theme::ui_theme::{mono, proportional, UiShellConfig};
+use crate::theme::ui_tokens::{font_size, radius, space};
 use crate::ui_command_palette::CommandPalette;
-use crate::ui_theme::{mono, proportional, UiShellConfig};
-use crate::ui_tokens::{font_size, radius, space};
 
 use super::shell::UiShell;
 
@@ -58,6 +58,11 @@ pub fn command_palette(
     let y = screen.height() * 0.22;
     egui::Window::new("")
         .id(egui::Id::new("wv_cmdk"))
+        // 与上面 scrim 同层（Foreground）：同层内按声明顺序绘制，窗口在遮罩
+        // 之后创建 → 压在遮罩上、点得到。此前窗口缺省是 Middle——**低于**
+        // Foreground 的遮罩，鼠标点击全被遮罩吃掉，面板只剩键盘输入可用
+        //（2026-10-14 用户要求「弹窗/浮动都在最顶层」时一并修正）。
+        .order(egui::Order::Foreground)
         .fixed_pos(egui::pos2(x, y))
         .fixed_size(egui::vec2(w, 380.0))
         .title_bar(false)
@@ -66,7 +71,7 @@ pub fn command_palette(
             egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
                 .fill(shell.panel_bg())
                 .stroke(egui::Stroke::new(1.0_f32, shell.border_strong()))
-                .inner_margin(crate::ui_theme::margin_all(space::MD))
+                .inner_margin(crate::theme::ui_theme::margin_all(space::MD))
                 .corner_radius(radius::MODAL),
         )
         .show(ctx, |ui| {

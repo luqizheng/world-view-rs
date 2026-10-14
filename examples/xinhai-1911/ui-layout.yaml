@@ -1,9 +1,9 @@
 panels:
   brush:
     x: 12.0
-    y: 239.1875
+    y: 456.8125
     width: 264.0
-    height: 560.40625
+    height: 343.25
     collapsed: false
     visible: true
   character:
@@ -13,6 +13,13 @@ panels:
     height: 260.0
     collapsed: false
     visible: false
+  compass:
+    x: 332.0
+    y: 0.0
+    width: 342.90625
+    height: 825.8125
+    collapsed: false
+    visible: true
   event:
     x: 652.0
     y: 56.0
@@ -41,13 +48,6 @@ panels:
     height: 168.0
     collapsed: false
     visible: false
-  minimap:
-    x: 332.0
-    y: 56.0
-    width: 216.0
-    height: 336.0
-    collapsed: false
-    visible: true
   situation:
     x: 652.0
     y: 380.0

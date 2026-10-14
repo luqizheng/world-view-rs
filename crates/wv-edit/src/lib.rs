@@ -19,7 +19,8 @@ pub mod command;
 pub mod history;
 
 pub use command::{
-    AddStreetSegmentCommand, DeleteStreetSegmentCommand, EditCommand, EditError, EditResult,
+    AddMapCommand, AddMeasurementCommand, AddStreetSegmentCommand, ClearMeasurementsCommand,
+    DeleteStreetSegmentCommand, EditCommand, EditError, EditResult, RemoveMeasurementCommand,
     SetMapOrientationCommand,
 };
 pub use history::{History, Transaction};

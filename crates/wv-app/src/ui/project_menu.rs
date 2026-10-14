@@ -1,4 +1,4 @@
-//! 项目管理菜单（v0.2 §A）+ 面包屑（v0.2 §B.3）。
+﻿//! 项目管理菜单（v0.2 §A）+ 面包屑（v0.2 §B.3）。
 //!
 //! ## 职责
 //! - `ProjectMenuState` —— 跨帧高亮项（egui `Popup::Memory` 只存开关，不存选中行）。
@@ -21,8 +21,8 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::state::{DrillState, Panel, PanelState, RecentProject, WorldProjection};
-use crate::ui_theme::{mono, proportional, UiShellConfig};
-use crate::ui_tokens::{font_size, radius, space};
+use crate::theme::ui_theme::{mono, proportional, UiShellConfig};
+use crate::theme::ui_tokens::{font_size, radius, space};
 
 use super::shell::UiShell;
 
@@ -34,8 +34,9 @@ use super::shell::UiShell;
 pub struct ProjectMenuState {
     /// 高亮行索引（对**命令行**编号，跳过分隔线与复选框）。
     pub selected: usize,
-    /// 待执行的命令。与 [`CommandPalette::pending`] 一样，交给
-    /// [`crate::ui_shell::apply_pending_commands`] 统一分发——**唯一分发器**。
+    /// 待执行的命令。菜单绘制函数拿不到 [`CommandPalette`]（不穿进本函数），
+    /// 所以先落在这里，由 [`crate::ui_shell::apply_pending_commands`] 每帧与
+    /// `CommandPalette::pending` 汇合消费——**唯一分发器**。
     pub pending: Option<crate::ui_command_palette::CommandId>,
 }
 
@@ -119,7 +120,10 @@ pub(crate) fn project_menu_inner(
         });
     }
     for (label, keys, id) in [
-        ("新建工程", Some("Ctrl+Shift+N"), CommandId::NewProject),
+        // 2026-10-14：地图级新建入口（区别于「新建工程」）——弹参数对话框。
+        // 「新建工程」带省略号：它也弹参数对话框（名称 + 位置 + 路径预览）。
+        ("新建工程…", Some("Ctrl+Shift+N"), CommandId::NewProject),
+        ("新建地图…", None, CommandId::NewMap),
         ("打开工程…", Some("Ctrl+O"), CommandId::OpenProject),
         ("另存为…", Some("Ctrl+Shift+S"), CommandId::SaveProjectAs),
         ("导出…", Some("Ctrl+E"), CommandId::ExportProject),
@@ -326,7 +330,7 @@ pub fn breadcrumb(
             egui::Frame::NONE
                 .fill(shell.float_fill().gamma_multiply(alpha))
                 .stroke(egui::Stroke::new(1.0_f32, shell.border_subtle()))
-                .inner_margin(crate::ui_theme::margin_xy(space::SM, space::XS))
+                .inner_margin(crate::theme::ui_theme::margin_xy(space::SM, space::XS))
                 .corner_radius(radius::CONTROL)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {

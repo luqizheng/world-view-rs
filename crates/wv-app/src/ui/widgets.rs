@@ -22,9 +22,9 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 
 use crate::state::{Panel, PanelState};
+use crate::theme::ui_theme::{color32, mono, proportional};
+use crate::theme::ui_tokens::{font_size, radius, space, BadgeTone};
 use crate::ui_layout::LayoutFile;
-use crate::ui_theme::{color32, mono, proportional};
-use crate::ui_tokens::{font_size, radius, space, BadgeTone};
 
 use super::shell::{terrain_swatch, UiShell};
 
@@ -65,7 +65,7 @@ impl From<BadgeKind> for BadgeTone {
 pub fn badge(ui: &mut egui::Ui, shell: &UiShell, kind: BadgeKind, text: &str) {
     let colors = shell.palette.badge(kind.into());
     let fg = color32(colors.fg);
-    let bg = crate::ui_theme::color32_alpha(colors.fill, colors.fill_alpha);
+    let bg = crate::theme::ui_theme::color32_alpha(colors.fill, colors.fill_alpha);
     let pad = egui::vec2(space::XS * 1.5, 1.0);
     let font = proportional(font_size::MICRO);
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, fg);
@@ -179,7 +179,11 @@ pub(crate) fn rect_stroke(
     painter.rect_stroke(rect, corner_radius, stroke, egui::StrokeKind::Inside);
 }
 
-/// 地形色块网格（§4.5：2 列 × 5 行，色块即地形本色）。
+/// 地形色块网格（§4.5：2 列 × 5 行，单行色块+名称，整块紧凑）。
+///
+/// 行高 22 px（曾 44 px），色块 14 px 居左、名称 11 px 居右同一行——
+/// 高度砍半但视觉仍能一眼区分当前选中（背景填 `active_bg` + 1.5 px
+/// `focus` 描边），网格外的所有状态提示交还给面板体。
 pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8) {
     egui::Grid::new("terrain_swatches")
         .num_columns(2)
@@ -189,8 +193,9 @@ pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8) {
                 let name = super::shell::TERRAIN_NAMES[k as usize];
                 let is_sel = *selected == k;
                 let cell_w = (ui.available_width() - space::XS) / 2.0;
+                let row_h = 22.0;
                 let (rect, resp) =
-                    ui.allocate_exact_size(egui::vec2(cell_w, 44.0), egui::Sense::click());
+                    ui.allocate_exact_size(egui::vec2(cell_w, row_h), egui::Sense::click());
                 let painter = ui.painter();
                 if is_sel {
                     painter.rect_filled(rect, radius::CONTROL, shell.active_bg());
@@ -203,21 +208,22 @@ pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8) {
                 } else if resp.hovered() {
                     painter.rect_filled(rect, radius::CONTROL, shell.hover_bg());
                 }
-                // 16px 色块。
+                // 14px 色块，垂直居中。
+                let sw_size = 14.0;
                 let sw = egui::Rect::from_min_size(
-                    egui::pos2(rect.min.x + space::SM, rect.min.y + space::SM),
-                    egui::vec2(16.0, 16.0),
+                    egui::pos2(rect.min.x + space::SM, rect.center().y - sw_size / 2.0),
+                    egui::vec2(sw_size, sw_size),
                 );
                 painter.rect_filled(sw, radius::BADGE, terrain_swatch(k));
-                // 10px 文字。
+                // 11px 名称，色块右侧，垂直居中。
                 painter.text(
                     egui::pos2(
-                        rect.min.x + space::SM,
-                        rect.min.y + space::SM + 16.0 + space::XS,
+                        rect.min.x + space::SM + sw_size + space::SM,
+                        rect.center().y,
                     ),
-                    egui::Align2::LEFT_TOP,
+                    egui::Align2::LEFT_CENTER,
                     name,
-                    proportional(10.0),
+                    proportional(11.0),
                     if is_sel { shell.t1() } else { shell.t2() },
                 );
                 if resp.clicked() {
@@ -230,11 +236,27 @@ pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8) {
         });
 }
 
-/// 浮动面板外壳：类型图标 + 标题 + 徽标 + 折叠，可拖动，可关闭。
+/// 浮动面板外壳：标题进原生标题栏行 + 可拖动，可折叠，可关闭。
 ///
 /// `layouts` 提供**跨会话**的位置/尺寸（`ui-layout.yaml`）；本帧的拖动结果由
 /// egui 按窗口 `Id` 自己记住，并由 [`crate::ui_shell::persist_layout_on_change`]
 /// 回写磁盘（D1：面板是客人，地图是主体）。
+///
+/// ## 层序约定（2026-10-14 用户要求「弹窗/浮动都在最顶层」后固化）
+///
+/// 本外壳**不设** `order`——即 egui 缺省 `Middle`：面板互斥点击由 egui 的
+/// 「点谁谁置顶」管理，且永远压在 egui Background 面板（顶栏/状态栏）与
+/// Bevy 地图之上。模态弹窗（新建地图 / 新建工程 / 命令面板 / 欢迎页 /
+/// 启动加载）在 `Order::Foreground`—— egui 绘制序
+/// `Background < Middle < Foreground < Tooltip`，故弹窗压面板、悬浮提示仍在最上。
+/// 新增浮层时按此表对号入座，不要把弹窗放回 Middle。
+///
+/// ## 标题为什么在原生标题栏里（2026-10-14 用户裁定）
+///
+/// 旧实现用空标题窗口（原生栏只剩 ▼ / × 两个按钮）+ 体内自绘标题行，代价是：
+/// ① 窗体多出一整行高度；② 折叠后只剩空标题栏，看不出折起来的是哪个面板。
+/// 把「图标 + 标题」直接交给 `Window::new`（egui 0.36 的标题栏布局是
+/// 「▼ … 标题 … ×」），两个问题同时消失。`panel_header` 自绘行随之退役。
 pub fn float_window(
     ctx: &egui::Context,
     shell: &UiShell,
@@ -255,7 +277,7 @@ pub fn float_window(
     // 沉浸模式：整体淡化但**仍可交互**（D3：状态永不抑制）。
     let alpha = if panels.immersive { 0.10 } else { 0.96 };
 
-    let win = egui::Window::new("")
+    let win = egui::Window::new(format!("{} {}", panel.icon(), panel.title()))
         .id(id)
         .open(&mut open)
         .default_pos(egui::pos2(layout.x, layout.y))
@@ -268,53 +290,20 @@ pub fn float_window(
             egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
                 .fill(shell.panel_bg().gamma_multiply(alpha))
                 .stroke(egui::Stroke::new(1.0_f32, shell.border_strong()))
-                .inner_margin(crate::ui_theme::margin_all(space::SM))
+                .inner_margin(crate::theme::ui_theme::margin_all(space::SM))
                 .corner_radius(radius::PANEL),
         );
 
     win.show(ctx, |ui| {
-        // 自绘标题栏三段（§4.1）：⠿ 拖动把手 · 图标+标题 · 徽标。
-        panel_header(ui, shell, panel, tag);
-        ui.add_space(space::XS);
-        ui.separator();
-        ui.add_space(space::XS);
+        // 徽标（当前无调用方传入，保留入口）：画在体首，不占标题栏。
+        if let Some((kind, text)) = tag {
+            badge(ui, shell, kind, &text);
+            ui.add_space(space::XS);
+        }
         body(ui);
     });
 
     if !open {
         panels.set_visible(panel, false);
     }
-}
-
-/// 自绘面板标题栏三段：⠿ 拖动把手 · 图标+标题 · 徽标（§4.1）。
-pub fn panel_header(
-    ui: &mut egui::Ui,
-    shell: &UiShell,
-    panel: Panel,
-    tag: Option<(BadgeKind, String)>,
-) {
-    ui.horizontal(|ui| {
-        // 拖动把手（视觉上明示可拖）。
-        ui.label(
-            egui::RichText::new("⠿")
-                .size(shell.scale.micro)
-                .color(shell.t3().gamma_multiply(0.6)),
-        );
-        // 类型图标（accent 着色）。
-        ui.label(
-            egui::RichText::new(panel.icon())
-                .size(shell.scale.base)
-                .color(shell.accent()),
-        );
-        // 标题（11px，字距 .05em 近似为大写风格）。
-        ui.label(
-            egui::RichText::new(panel.title())
-                .size(shell.scale.micro)
-                .color(shell.t1()),
-        );
-        if let Some((kind, text)) = tag {
-            ui.add_space(space::XS);
-            badge(ui, shell, kind, &text);
-        }
-    });
 }

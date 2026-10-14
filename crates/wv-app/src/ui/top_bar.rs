@@ -20,13 +20,14 @@ use bevy_egui::{egui, EguiContexts};
 use crate::state::{
     PlaybackState, RecentProject, RecentProjects, ViewMode, ViewState, WorldProjection,
 };
-use crate::ui_theme::{color32, mono, proportional, UiShellConfig};
+use crate::theme::ui_theme::{color32, mono, proportional, UiShellConfig};
 
 use super::project_menu::{project_menu_inner, ProjectMenuState};
 use super::shell::UiShell;
 use super::widgets::{badge, BadgeKind};
 
-use crate::ui_tokens::{font_size, radius, space};
+use crate::theme::ui_tokens::{font_size, radius, space};
+use crate::ui_command_palette::CommandId;
 
 /// 顶栏：身份 → 主控 → 读数。**唯一例外**的 `TopBottomPanel`（38px / 32px）。
 ///
@@ -38,6 +39,7 @@ pub fn top_bar(
     projection: Res<WorldProjection>,
     recents_res: Res<RecentProjects>,
     mut menu: ResMut<ProjectMenuState>,
+    mut palette: ResMut<crate::ui_command_palette::CommandPalette>,
     mut view: ResMut<ViewState>,
     playback: Res<PlaybackState>,
     mut panels: ResMut<crate::state::PanelState>,
@@ -54,7 +56,7 @@ pub fn top_bar(
         .frame(
             egui::Frame::NONE
                 .fill(color32(shell.palette.bg_panel))
-                .inner_margin(crate::ui_theme::margin_xy(space::SM, 0.0)),
+                .inner_margin(crate::theme::ui_theme::margin_xy(space::SM, 0.0)),
         )
         .show(&mut root, |ui| {
             ui.horizontal(|ui| {
@@ -64,6 +66,12 @@ pub fn top_bar(
 
                 // ── 主控（视图模式分段控件，权重最高）──
                 view_mode_segment(ui, &shell, &mut view);
+                ui.add_space(space::SM);
+
+                // ── 重画按钮（2026-10-14 用户需求：数据改了画面没跟上时点 ↻）──
+                if mini_icon_button(ui, &shell, "↻", "强制重画地形（F5）").clicked() {
+                    palette.pending = Some(CommandId::ForceRebuildTexture);
+                }
 
                 // 读数推到右端。
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -107,16 +115,16 @@ fn identity_segment(
 
 fn view_mode_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
     let total = ui.available_width();
-    // 分段控件：等分 `ViewMode::ALL`（当前 6 个模式，窄窗下不截断，§8 断点）。
+    // 分段控件：等分 `ViewMode::BROWSING`（2026-10-14 起只开放两种，见 state.rs）。
     // 宽度按分段数缩放，clamp 上下限保证每段仍有 ≥ 55px 可点区域。
-    let n = ViewMode::ALL.len() as f32;
+    let n = ViewMode::BROWSING.len() as f32;
     let seg_w = (total * 0.40).clamp(n * 55.0, n * 85.0);
     let seg_h = shell.hit;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(seg_w, seg_h), egui::Sense::hover());
     let painter = ui.painter();
     painter.rect_filled(rect, radius::CONTROL, shell.raised_bg());
     let seg_w_each = rect.width() / n;
-    for (i, mode) in ViewMode::ALL.iter().enumerate() {
+    for (i, mode) in ViewMode::BROWSING.iter().enumerate() {
         let r = egui::Rect::from_min_max(
             egui::pos2(rect.min.x + seg_w_each * i as f32, rect.min.y),
             egui::pos2(rect.min.x + seg_w_each * (i as f32 + 1.0), rect.max.y),
@@ -156,9 +164,14 @@ fn readout_segment(
     projection: &WorldProjection,
 ) {
     // 比例尺（<1400px 隐藏）。
+    //
+    // 定宽（2026-10-14 用户反馈）：缩放比随滚轮变化，不定宽会把左侧的日期
+    // 坐标一起拖得左右横跳。右对齐补空格 + 等宽字体 = 恒定像素宽。
+    // 上限 999999 覆盖全部可达缩放档（0.05× → 1:20000 仍在 6 位内）。
     if ui.available_width() > 400.0 {
+        let ratio = (1.0 / view.scale.max(1e-4) * 1000.0).min(999_999.0);
         ui.label(
-            egui::RichText::new(format!("1:{:.0}", 1.0 / view.scale.max(1e-4) * 1000.0))
+            egui::RichText::new(format!("1:{ratio:>6.0}"))
                 .size(shell.scale.small)
                 .color(shell.t2())
                 .font(mono(shell.scale.small)),
@@ -166,9 +179,14 @@ fn readout_segment(
         ui.add_space(space::MD);
     }
     // 坐标（<1100px 隐藏）。
+    //
+    // 定宽（2026-10-14 用户反馈）：x/y 随鼠标实时变化，不定宽时同一行左侧的
+    // 日期每帧移位、无法阅读。每个数右对齐补到 6 位（含负号），钳到 ±99999
+    // 防止把地图拖出极远时撑破布局。
     if ui.available_width() > 240.0 {
+        let pad = |v: f32| format!("{:>6}", v.clamp(-99_999.0, 999_999.0) as i32);
         let coord = match view.cursor_world {
-            Some(c) => format!("({:.0}, {:.0})", c.x, c.y),
+            Some(c) => format!("({}, {})", pad(c.x), pad(c.y)),
             None => "(—, —)".into(),
         };
         ui.label(
@@ -187,6 +205,38 @@ fn readout_segment(
             .color(shell.t1())
             .font(mono(shell.scale.small)),
     );
+}
+
+/// 顶栏用的小图标按钮（统一 `hit` 高、hover 走 `hover_bg`、点中走 `active_bg`）。
+///
+/// **不复用 egui::Button**——后者在 dark/light 主题下的 padding/hover 表现不一致，
+/// 顶栏对密度敏感，必须每帧自绘。
+///
+/// `icon` = 一个字符（用几何字符：↻ 重画、＋ 展开、⋯ 更多，**不**用 emoji）。
+/// `tooltip` = 鼠标悬停时 egui 原生 tooltip。
+fn mini_icon_button(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    icon: &str,
+    tooltip: &str,
+) -> egui::Response {
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(shell.hit, shell.hit), egui::Sense::click());
+    let painter = ui.painter();
+    if resp.hovered() {
+        painter.rect_filled(rect, radius::CONTROL, shell.hover_bg());
+    } else {
+        // 与顶栏背景一致：空 paint 一次以注册到 layout（避免被相邻元素挤扁）。
+        painter.rect_filled(rect, 0.0, egui::Color32::TRANSPARENT);
+    }
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        proportional(shell.scale.base),
+        shell.t1(),
+    );
+    resp.on_hover_text(tooltip)
 }
 
 /// 状态栏：实体计数 / 已选 / 缩放 / 操作回执。
@@ -209,7 +259,7 @@ pub fn status_bar(
         .frame(
             egui::Frame::NONE
                 .fill(color32(shell.palette.bg_panel))
-                .inner_margin(crate::ui_theme::margin_xy(space::SM, 0.0)),
+                .inner_margin(crate::theme::ui_theme::margin_xy(space::SM, 0.0)),
         )
         .show(&mut root, |ui| {
             ui.horizontal(|ui| {

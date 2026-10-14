@@ -50,6 +50,18 @@ pub struct WorldProjection {
     pub load_error: Option<String>,
 }
 
+impl WorldProjection {
+    /// 是否有工程在手——「无工程锁」的判据（2026-10-14 用户需求：
+    /// 程序刚打开不能画图，必须先新建或打开一个工程）。
+    ///
+    /// 「新建工程」改为对话框直接落盘后，工程在手 ⇔ 有磁盘目录：
+    /// 启动未加载 / 加载失败 / 关闭工程都回到 `false`（此时欢迎页接管界面，
+    /// 笔刷与街道系统按同一判据禁画）。
+    pub fn has_open_project(&self) -> bool {
+        self.project_dir.is_some()
+    }
+}
+
 /// 当前工程的校验结果缓存（来自 `wv_io::diagnostics::derive_hints`）。
 ///
 /// 为什么单独存一个资源而不是每次 UI 帧都算：
@@ -107,14 +119,29 @@ impl Default for PlaybackState {
     }
 }
 
-/// 视图模式（基线 §1.10，D4 四态）。
+/// 视图模式（基线 §1.10，D4 四态 + plan v0.1 D3 三模式）。
+///
+/// 浏览态默认底图自 [ADR-0012](file:///<root>/docs/adr/ADR-0012-terrain-default-vector-flat-shading.md) 起改为
+/// 等值线矢量平涂（plan v0.1 D3 A 类）；原 Google Default Map 视觉（亚像素纹理合成）
+/// 保留为 [`ViewMode::GoogleMap`] 可切换模式，**不再**是默认入口。Google 色板
+/// （`theme/colors_google.rs`）作为可切换主题之一继续生效，但浏览态默认走
+/// [`ViewMode::VectorFlat`] 的矢量管径。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ViewMode {
+    /// H. 等值线矢量平涂：高度场 marching squares 等值线 + 类型场邻域边界 +
+    /// 多边形平涂（plan v0.1 D3 A 类 · 浏览态默认 · [ADR-0012]）。
+    ///
+    /// 为什么是默认：与 ADR-0008 §2④「亚像素纹理合成」**同目标异路径**——
+    /// 同样给「平滑地形边界」，但走的是几何对象（marching squares 等值线）、
+    /// 而不是埋在像素位图里。山脊 / 海岸 / 大类色块的边界都成了可挂动画、
+    /// 可挂样式、可挂 LOD 的对象；这是 Google Maps 那种像素滤镜给不出的
+    /// 结构化产物。
+    #[default]
+    VectorFlat,
     /// G. Google Default Map：近白陆地 + 淡水 + 公园绿 + 白路灰缘。
     ///
-    /// 作为默认模式，是因为地图浏览/整理是作者的高频入口；地形、JRPG 等专题
-    /// 视图仍是显式切换的分析工具。
-    #[default]
+    /// ADR-0012 之后**降为可切换主题之一**，不再是默认入口；色板与交互
+    /// 仍走 [`crate::theme::colors_google`]。
     GoogleMap,
     /// A. 真实地形：高度图 + 法线光照 + 贴图。
     RealTerrain,
@@ -132,7 +159,8 @@ pub enum ViewMode {
 }
 
 impl ViewMode {
-    pub const ALL: [ViewMode; 6] = [
+    pub const ALL: [ViewMode; 7] = [
+        ViewMode::VectorFlat,
         ViewMode::GoogleMap,
         ViewMode::RealTerrain,
         ViewMode::Schematic,
@@ -141,9 +169,22 @@ impl ViewMode {
         ViewMode::Coastline,
     ];
 
+    /// 当前对作者开放的浏览模式（2026-10-14 用户裁定：暂时只显示两种）。
+    ///
+    /// - [`ViewMode::VectorFlat`]：**矢量地形**——Google 地图矢量瓦片式渲染
+    ///   （等值线描边 + 类型平涂，水陆边由高度场决定，ADR-0012）；
+    /// - [`ViewMode::Schematic`]：**色块地形**——一格一色，直接呈现每格的地形类型。
+    ///
+    /// 顶栏分段控件、数字快捷键与命令面板都只列这份；其余模式保留在
+    /// [`Self::ALL`] 与枚举里（数据层纹理管线仍支持，随时可重新开放）。
+    pub const BROWSING: [ViewMode; 2] = [ViewMode::VectorFlat, ViewMode::Schematic];
+
     /// 顶栏显示名。
     pub fn label(self) -> &'static str {
         match self {
+            // 2026-10-14 用户裁定：浏览态主打模式定名「矢量地形」（此前叫
+            // 「等值线」——等值线只是它的描边产物，名字该描述整体观感）。
+            ViewMode::VectorFlat => "矢量地形",
             ViewMode::GoogleMap => "地图",
             ViewMode::RealTerrain => "真实地形",
             ViewMode::Schematic => "色块地形",
@@ -284,6 +325,86 @@ pub struct BrushState {
     pub painting: bool,
     /// 笔刷是否启用。
     pub enabled: bool,
+    /// 手动显示逐格编辑网格（plan v0.1 D4）。笔刷启用时网格**恒显**；
+    /// 本字段是「不开笔刷也想看格子」的覆盖开关，两态相或。
+    pub grid_lines: bool,
+}
+
+/// 测量工具模式（2026-10-14）。
+///
+/// 枚举是**会话态**——不写盘。每次切图或重启应用都从 `Off` 起。
+/// 草稿数据（当前画的折线 / 矩形首点）走 [`MeasureState::draft`]。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MeasureMode {
+    /// 不启用测量工具（默认值）。
+    #[default]
+    Off,
+    /// 折线：多次左键累积点；右键 / Enter / 双击 / Esc 收笔。
+    Line,
+    /// 矩形：两次左键确定两对角；第二次点击即收。
+    Rect,
+    /// 橡皮：点击容差内的 measurement 即删除。
+    Eraser,
+}
+
+impl MeasureMode {
+    /// 是否处于「启用」状态（≠ Off）。给按钮高亮 / 互斥闸共用。
+    pub fn is_active(self) -> bool {
+        self != Self::Off
+    }
+
+    /// 该模式下鼠标左键是否被测量工具「吃掉」（不再驱动其它交互）。
+    /// Off / Eraser 模式下左键仍属地图（橡皮点击本身是测量输入）。
+    pub fn consumes_left_click(self) -> bool {
+        matches!(self, Self::Line | Self::Rect)
+    }
+}
+
+/// 测量会话状态（`AGENTS.md §3.3`：System 只生成命令，不直接改世界）。
+///
+/// 与 [`BrushState`] 平级——独立的工具资源。**与笔刷开启同一模式时**
+/// 用 [`Self::mode`] = Off 把笔刷顶下去（街道 / 笔刷都走同样的「工具语义」）。
+#[derive(Resource)]
+pub struct MeasureState {
+    /// 当前模式（默认 `Off`）。
+    pub mode: MeasureMode,
+    /// 当前草稿：**本图局部坐标**。
+    ///
+    /// - `Line` 模式：≥1 表示已起笔，渲染时画「末段 → 光标」的橡皮筋；
+    /// - `Rect` 模式：长度 0/2（0 = 未起笔，2 = 已点击两点即可提交）。
+    pub draft: Vec<Vec2>,
+    /// 切图时强制清空——测量**不能跨图**。
+    pub last_map_id: Option<wv_core::Id>,
+    /// 当前草稿绑定的图 ID。`commit_measurement_click` 用它判断「草稿已
+    /// 切换图」并丢弃旧草稿（不污染新图）。
+    pub draft_map_id: Option<wv_core::Id>,
+}
+
+impl Default for MeasureState {
+    fn default() -> Self {
+        Self {
+            mode: MeasureMode::Off,
+            draft: Vec::new(),
+            last_map_id: None,
+            draft_map_id: None,
+        }
+    }
+}
+
+impl MeasureState {
+    /// 清空草稿（提交 / 切模式 / 切图时调）。
+    pub fn clear_draft(&mut self) {
+        self.draft.clear();
+        self.draft_map_id = None;
+    }
+
+    /// 切图时调用——`new_map` 与 `last_map_id` 不一致则丢弃草稿。
+    pub fn on_map_change(&mut self, new_map: Option<&wv_core::Id>) {
+        if self.last_map_id.as_ref() != new_map {
+            self.clear_draft();
+        }
+        self.last_map_id = new_map.cloned();
+    }
 }
 
 impl Default for BrushState {
@@ -295,6 +416,7 @@ impl Default for BrushState {
             painting: false,
             // Google 式默认手势是左键拖动平移；笔刷必须显式开启，避免一开图就误改。
             enabled: false,
+            grid_lines: false,
         }
     }
 }
@@ -360,7 +482,7 @@ pub enum Panel {
     MapTree,
     /// P-2 图层管理：图层开关。
     Layers,
-    /// P-3 笔刷工具：紧凑 Photoshop 式浮动窗（2 列 × 2 图标）。
+    /// P-3 笔刷工具：紧凑 Photoshop 式浮动窗（2 列 × 5 行色块，街道区折叠）。
     Brush,
     /// P-4 属性检查器。
     Inspector,
@@ -451,7 +573,7 @@ impl Panel {
         match self {
             Panel::MapTree => [216.0, 330.0],
             Panel::Layers => [216.0, 168.0],
-            Panel::Brush => [264.0, 300.0],
+            Panel::Brush => [264.0, 220.0],
             Panel::Minimap => [216.0, 300.0],
             Panel::Compass => [216.0, 300.0],
             // 通栏：1280 − 12×2 = 1256。
@@ -837,10 +959,16 @@ impl DrillState {
     }
 
     /// 把当前图 id 写回 [`ViewState::current_map`] 镜像。
+    ///
+    /// **None 时清空镜像**（2026-10-14 回归）：旧实现只覆盖 `Some` 分支，
+    /// `drill.current() = None`（新建 / 关闭工程后）时镜像保留上一帧的 id，
+    /// 笔触按陈旧 id 提交 `PaintTerrainCommand` 走 `TerrainMismatch` 错误分支。
+    /// 现在任何调用都把镜像对齐到当前真源——空工程时镜像也为空。
     pub fn sync_view(&self, view: &mut ViewState) {
-        if let Some(id) = self.current() {
-            view.current_map = id.as_str().to_owned();
-        }
+        view.current_map = self
+            .current()
+            .map(|i| i.as_str().to_owned())
+            .unwrap_or_default();
     }
 }
 
@@ -940,10 +1068,28 @@ mod tests {
     use wv_core::time::TimeSpan;
     use wv_core::WorldMeta;
 
+    /// 浏览态默认从 [ADR-0012](file:///<root>/docs/adr/ADR-0012-terrain-default-vector-flat-shading.md) 起切到等值线
+    /// 矢量平涂；Google Default Map 降为可切换主题之一。`ALL[0]` 与 `default()`
+    /// 都应指 `VectorFlat`，以保证顶栏「默认 viewmode」与「主题列表第一位」
+    /// 不漂移。
     #[test]
-    fn google_map_is_the_default_map_experience() {
-        assert_eq!(ViewMode::default(), ViewMode::GoogleMap);
-        assert_eq!(ViewMode::ALL[0], ViewMode::GoogleMap);
+    fn vector_flat_is_the_default_browsing_view_after_adr_0012() {
+        assert_eq!(ViewMode::default(), ViewMode::VectorFlat);
+        assert_eq!(ViewMode::ALL[0], ViewMode::VectorFlat);
+        // GoogleMap 仍可达（可切换主题之一），仅不再是默认入口。
+        assert!(ViewMode::ALL.contains(&ViewMode::GoogleMap));
+    }
+
+    /// 2026-10-14 用户裁定：浏览态只开放两种——矢量地形（VectorFlat）与
+    /// 色块地形（Schematic）。顶栏 / 快捷键 / 命令面板都吃这份清单，
+    /// 默认模式必须也在其中，否则数字 1 按下去是空操作。
+    #[test]
+    fn browsing_list_offers_exactly_vector_flat_and_schematic() {
+        assert_eq!(
+            ViewMode::BROWSING,
+            [ViewMode::VectorFlat, ViewMode::Schematic]
+        );
+        assert!(ViewMode::BROWSING.contains(&ViewMode::default()));
     }
 
     #[test]
@@ -969,6 +1115,7 @@ mod tests {
             extent: None,
             raster: None,
             geographic_source: None,
+            unit_per_km: None,
             orientation: 0.0,
         }
     }

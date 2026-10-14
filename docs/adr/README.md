@@ -68,14 +68,96 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
 | [ADR-0005](ADR-0005-encounter-hint.md) | 相遇检测与「未写事件」提示 | 已接受（Accepted） | 相遇是**派生数据**（不建实体）；判定 = 时间重叠 + 空间贴近 + 未被覆盖三道门；候选日用 waypoint 锚点（**不逐日枚举**，跨千年史实会卡死）；指纹**不含日期** → 提示可认领、可回访定位；提示与错误在**类型层面**分开（`DiagLevel::{Hint, Error}`） | ADR-0004 §待裁 U4、AGENTS §7.5 V1、基线 §2.21 |
 | [ADR-0006](ADR-0006-gregorian-calendar.md) | 历法支持真公历（Calendar 双历制） | 已接受（Accepted） | `Calendar` 加判别字段 `kind`（缺省 `simple` 完全向后兼容）；`gregorian` 走 proleptic 公历（真实月长 + 闰年），天数计数器仍是唯一真相（P7 不动）；用 Hinnant 纯整数算法换算，**不引入 chrono** | 基线 §2.16、P3/P7、样例 xinhai-1911 |
 | [ADR-0007](ADR-0007-overture-real-geography.md) | 以 Overture Maps 作为真实地理底图（只存引用，不落几何） | 已接受（Accepted） | 引入 Overture 作为外部地理资源，但**只存引用**（`OvertureId` + `bbox`），领域模型不消费几何；新增平行 crate `wv-overture` 负责 Parquet 切片下载与渲染层几何转换；不破 P2（Git 友好）/ P3（不为 Overture 开例外）/ P4（只存引用）/ §4.2（距离只存参数）；为 `OvertureId` 单点豁免 §4.4 UUID 字符集约束（独立 newtype） | README §12 §15-§18、AGENTS §4.2 / §4.3 / §4.4（UUID 例外）/ §5 |
-| [ADR-0008](ADR-0008-google-default-map-experience.md) | Google Default Map 式地图体验 | 已接受（Accepted） | 大地图默认改为离线 Google Default Map 视觉与交互：左键拖动平移、笔刷显式开启、近白底图 + 亚像素边界 + 道路 casing/fill + 红点白环 POI + 右下角导航控件；不接在线瓦片，数据 / 时间求值 / 图层架构不变 | P1 / P3 / P5 / P7、ART_STYLE_SPEC 地图风格部分、STYLE_SWAPPABLE_ARCHITECTURE |
+| [ADR-0008](ADR-0008-google-default-map-experience.md) | Google Default Map 式地图体验 | 已接受（Accepted） | 大地图默认改为离线 Google Default Map 视觉与交互：左键拖动平移、笔刷显式开启、近白底图 + 亚像素边界 + 道路 casing/fill + 红点白环 POI + 右下角导航控件；不接在线瓦片，数据 / 时间求值 / 图层架构不变。**⚠️ 其 §2④（底图边界使用亚像素渲染）已被 [ADR-0012](ADR-0012-terrain-default-vector-flat-shading.md) 部分修正**——浏览态地形默认底图切到等值线矢量平涂（plan v0.1 Q11 路线），亚像素纹理合成降为 plan v0.1 D3 C 类可切换模式；本 ADR 的其余七项决策（左键平移 / 笔刷显式开启 / 近白陆地色板 / 道路 casing+fill / POI 红点白环 / 右下角控件 / 不接在线瓦片）继续有效 | P1 / P3 / P5 / P7、ART_STYLE_SPEC 地图风格部分、STYLE_SWAPPABLE_ARCHITECTURE、ADR-0012（§2④ 被部分修正） |
 | [ADR-0009](ADR-0009-graded-tile-zoom-to-street.md) | 分级瓦片缩放（世界 → 街道） | 已接受（Accepted） | 「缩放到街道」用**离散级别 + 级间平滑插值**，不用无极连续缩放：级别由**图在层级树中的深度**派生（不扩 `MapLevel` 枚举）；`Extent` 加 `origin`（子图在父图中的落点，缺省 `(0,0)`），每图自带 `raster` 与自带原点以规避 `f32` 大坐标精度崩溃；坐标变换集中到 `wv_core::coord` 单一实现点 | P1 / P2 / P4 / P5 / P7、ADR-0007、ADR-0008、基线 §2.12 / §2.15、README §12-19 / §12-20 |
 | [ADR-0010](ADR-0010-street-vector-layer.md) | 街道矢量层（双供给 + 批量渲染） | 已接受（Accepted） | 街道**不与** `distance.edges`（城市间行程连线）合并，是独立的**地物图层**；一个供给接口两个实现（虚构 = 作者手绘落 YAML 图层文件，真实 = Overture 只存引用）；渲染从「一段 2 实体」改为批量/实例化 + `class` LOD + 视口裁剪；几何不进领域 YAML；`wv-overture` 为平行叶子 crate | P1 / P2 / P3 / P4 / P5、AGENTS §2.1 / §4.2 / §5 / §9、ADR-0007、ADR-0008、ADR-0009、README §12-21 |
 | [ADR-0011](ADR-0011-bevy-0-19-upgrade.md) | 渲染引擎升级到 Bevy 0.19 | 已接受（Accepted） | 引擎 0.15.3 → **0.19.1**、bevy_egui 0.32 → **0.42**（不跳 0.20）；**在 Phase 4 之前**一次做完，先建可回退点、独立提交可整体 revert；以编译器驱动迁移 + 官方迁移指南核对「能编译但行为变了」的部分；实测迁移面极小（全仓**零 `*Bundle` 用法**） | P1、AGENTS §7.1 / §8、ADR-0008 / ADR-0009 / ADR-0010 |
+| [ADR-0012](ADR-0012-terrain-default-vector-flat-shading.md) | 浏览态地形默认底图由亚像素纹理切到等值线矢量平涂 | 已接受（Accepted） | 浏览态地形默认底图由 **ADR-0008 §2④** 的「亚像素纹理合成」改为**等值线矢量平涂**（marching squares → Chaikin → DP → 多边形平涂）；亚像素纹理合成保留为可切换模式（plan v0.1 D3 的 C 类）、瓦片图集保留为 B 类；ADR-0008 其它七项决策继续有效 | AGENTS §3 / §6.4 / P1 / P2 / P3 / P4 / P5、ADR-0008（§2④ 被部分修正）、ADR-0009（LodTier 同构复用）、plan v0.1 Q11、README §12-14(b) |
+| [ADR-0013](ADR-0013-layer-frame-binding.md) | 图层帧接通——`MapNode.layers[].z/visible/opacity` 驱动渲染 | 已接受（Accepted） | 新增 **LayerFrame**（`render/layer_frame.rs`）作为图层声明的唯一求值点：kind→渲染组映射、**可见 = YAML 声明 ∧ 会话开关**、opacity 落材质 alpha、**z 语义 v1 = 槽位偏移**（每格 0.05，clamp ±4，缺省渲染逐位不变）；标注跟随要素 kind（街名随 Road、地名随 Place）；Border/Custom 暂无消费者、EventPoint 的 z 在 Gizmos 路径不生效（待裁） | P5、AGENTS §3 / §6.4 / §7.5 V1、ADR-0008 / 0009 / 0010、GLOSSARY（图层帧/图层绑定/槽位偏移） |
+| [ADR-0014](ADR-0014-mcp-http-server.md) | LLM 可控的世界编辑——HTTP/MCP 服务与 skill 表面 | 提议（Proposed） | `wv-app` 新增 `http/` 模块（feature-gated），MCP `2025-03-26` HTTP/SSE 仅 loopback，默认端口 8732；写类 skill **必须**走 `EditCommand → mpsc → Bevy 主帧 drain_commands → History.apply`（§3.3），读类 skill 直查 `wv-core`；v0.1 上 8 个 skill（list_maps/get_map/list_places/get_state_at_time/create_map/create_place/undo/save_project）；MCP spec 锁版本 | P1 / P3、AGENTS §2.1 / §3 / §3.3 / §6.4 / §7.5 V1-V2 / §9 / §12、ADR-0007（外部接口先例） |
+| [ADR-0015](ADR-0015-city-submap-time-versioning.md) | 城市子图的时间版本化——双层 `TimeSpan` 模型 | 提议（Proposed） | 双层 `TimeSpan`：`MapNode.time_span`（图级时代窗口）+ `StreetSegment.time_span`（段级存在窗口）；二者皆 `Option`，缺省零迁移；可见性求值统一走 `TimelineQuery::at`（P7 唯一入口延伸）；不改 `class` / `points` / `name`；编辑经 EditCommand | P6 / P7、AGENTS §4.1 / §12、ADR-0009（子图深度）/ 0010（街道数据模型）/ 0013（图层帧求值点） |
 
 ---
 
-## 5. 三条硬约束的归属
+## 5. 模块路径对照（目录化重构 · 2026-10-14）
+
+> 本节**不**是新的设计决策，而是 2026-10-14「目录级别重构」对模块路径的**事实归档**。
+> ADR 正文一律不动（§6.4「只增不改」）。代码与文档看到旧路径时**优先**按本节对照。
+>
+> 重构内容（详见 `.trae/specs/` 落地）：
+> - `wv-app` 由 28 个平铺 `.rs` 重组为 `render/` `edit/` `ui/` `theme/` 四个目录，加顶层 4 个 `ui_*` 外壳服务
+> - `wv-core` 分为 `base/` `time/` `map/` `model/` `derived/` `source/` 六个目录
+
+### wv-app 路径对照
+
+| 旧路径 | 新路径 | 备注 |
+|---|---|---|
+| `wv_app::camera` | `wv_app::render::camera` | |
+| `wv_app::zoom_level` | `wv_app::render::zoom_level` | |
+| `wv_app::map_frame` | `wv_app::render::map_frame` | |
+| `wv_app::world_projection` | `wv_app::render::world_projection` | |
+| `wv_app::terrain_view` | `wv_app::render::terrain_view` | `terrain_view/` 目录整体平移 |
+| `wv_app::terrain_chunks` | `wv_app::render::terrain_chunks` | |
+| `wv_app::vector_layers` | `wv_app::render::vector_layers` | |
+| `wv_app::streets` | `wv_app::render::streets` | |
+| `wv_app::faction_overlays` | `wv_app::render::faction_overlays` | |
+| `wv_app::brush_cursor` | `wv_app::render::brush_cursor` | |
+| `wv_app::drill` | `wv_app::render::drill` | |
+| `wv_app::editing` | `wv_app::edit::editing` | |
+| `wv_app::faction_panel_actions` | `wv_app::edit::faction_panel_actions` | |
+| `wv_app::validation_actions` | `wv_app::edit::validation_actions` | |
+| `wv_app::diagnostics_bridge` | `wv_app::edit::diagnostics_bridge` | |
+| `wv_app::colors` | `wv_app::theme::colors` | |
+| `wv_app::colors_google` | `wv_app::theme::colors_google` | |
+| `wv_app::colors_jrpg` | `wv_app::theme::colors_jrpg` | |
+| `wv_app::fonts` | `wv_app::theme::fonts` | |
+| `wv_app::ui_tokens` | `wv_app::theme::ui_tokens` | |
+| `wv_app::ui_theme` | `wv_app::theme::ui_theme` | |
+| `wv_app::app_bootstrap` | `wv_app::app_bootstrap` | 留顶层（装配入口） |
+| `wv_app::state` | `wv_app::state` | 留顶层（横切工作区） |
+| `wv_app::ui_shell` | `wv_app::ui_shell` | 留顶层（跨面板服务） |
+| `wv_app::ui_command_palette` | `wv_app::ui_command_palette` | 留顶层（跨面板服务） |
+| `wv_app::ui_layout` | `wv_app::ui_layout` | 留顶层（跨面板服务） |
+| `wv_app::ui_time` | `wv_app::ui_time` | 留顶层（跨面板服务） |
+| `wv_app::overture_cli` | `wv_app::overture_cli` | 留顶层（CLI 子命令） |
+| `wv_app::ui` | `wv_app::ui` | 目录（已存在） |
+| `crates/wv-app/src/<xxx>.rs` | `crates/wv-app/src/<render\|edit\|theme>/<xxx>.rs` | 物理位置（除上表「留顶层」外） |
+
+### wv-core 路径对照
+
+**保路径（B1 承诺）**：AGENTS.md §3 与文档直接引用的顶层路径**全部可达**。
+- 类型层：`wv_core::Color` / `wv_core::Id` / `wv_core::TimeSpan` / `wv_core::MapNode` / `wv_core::Track` / …（由 `lib.rs` 顶层 `pub use` 维持）
+- 模块层：`wv_core::time` / `wv_core::map` / `wv_core::track` / `wv_core::coord` / `wv_core::distance` / `wv_core::unit` / `wv_core::character` / `wv_core::event` / `wv_core::relation` / `wv_core::faction` / `wv_core::encounter` / `wv_core::situation` / `wv_core::narration` / `wv_core::street` / `wv_core::overture_id` / `wv_core::geographic_source` / `wv_core::geometry` / `wv_core::color` / `wv_core::id` / `wv_core::error`（由 `lib.rs` 顶层 `pub use ::module` 维持）
+
+**物理位置**（与上表路径都仍然可达，下表是「源文件在哪」）：
+
+| 旧物理位置 | 新物理位置 | 顶层引用 |
+|---|---|---|
+| `crates/wv-core/src/id.rs` | `crates/wv-core/src/base/id.rs` | `wv_core::id` / `wv_core::Id` |
+| `crates/wv-core/src/error.rs` | `crates/wv-core/src/base/error.rs` | `wv_core::error` / `wv_core::CoreError` |
+| `crates/wv-core/src/geometry.rs` | `crates/wv-core/src/base/geometry.rs` | `wv_core::geometry` / `wv_core::Point` |
+| `crates/wv-core/src/color.rs` | `crates/wv-core/src/base/color.rs` | `wv_core::color` / `wv_core::Color` |
+| `crates/wv-core/src/time.rs` | `crates/wv-core/src/time/mod.rs` | `wv_core::time::TimelineQuery` 等 |
+| `crates/wv-core/src/track.rs` | `crates/wv-core/src/time/track.rs` | `wv_core::track` / `wv_core::track::Track` |
+| `crates/wv-core/src/map.rs` | `crates/wv-core/src/map/mod.rs` | `wv_core::map::MapNode` 等 |
+| `crates/wv-core/src/coord.rs` | `crates/wv-core/src/map/coord.rs` | `wv_core::coord` / `wv_core::coord::MapFrame` |
+| `crates/wv-core/src/distance.rs` | `crates/wv-core/src/map/distance.rs` | `wv_core::distance` / `wv_core::distance::DistanceGraph` |
+| `crates/wv-core/src/unit.rs` | `crates/wv-core/src/map/unit.rs` | `wv_core::unit` / `wv_core::Unit` |
+| `crates/wv-core/src/character.rs` | `crates/wv-core/src/model/character.rs` | `wv_core::character` / `wv_core::Character` |
+| `crates/wv-core/src/event.rs` | `crates/wv-core/src/model/event.rs` | `wv_core::event` / `wv_core::Event` |
+| `crates/wv-core/src/relation.rs` | `crates/wv-core/src/model/relation.rs` | `wv_core::relation` |
+| `crates/wv-core/src/faction.rs` | `crates/wv-core/src/model/faction.rs` | `wv_core::faction` / `wv_core::Faction` |
+| `crates/wv-core/src/encounter.rs` | `crates/wv-core/src/derived/encounter.rs` | `wv_core::encounter` / `wv_core::detect_encounter_hints` |
+| `crates/wv-core/src/situation.rs` | `crates/wv-core/src/derived/situation.rs` | `wv_core::situation` / `wv_core::Situation` |
+| `crates/wv-core/src/narration.rs` | `crates/wv-core/src/derived/narration.rs` | `wv_core::narration` / `wv_core::Narration` |
+| `crates/wv-core/src/street.rs` | `crates/wv-core/src/source/street.rs` | `wv_core::street` / `wv_core::StreetLayer` |
+| `crates/wv-core/src/overture_id.rs` | `crates/wv-core/src/source/overture_id.rs` | `wv_core::overture_id` / `wv_core::OvertureId` |
+| `crates/wv-core/src/geographic_source.rs` | `crates/wv-core/src/source/geographic_source.rs` | `wv_core::geographic_source` / `wv_core::GeographicSourceV1` |
+| `crates/wv-core/src/terrain`（inline） | `crates/wv-core/src/lib.rs` 内联 `pub mod terrain` | `wv_core::terrain`（**未动**） |
+
+---
+
+## 6. 三条硬约束的归属
 
 以下三条硬约束由创意总监提出（基线 §6.3），**逐字**写入了对应 ADR 正文，是**不可违反项**：
 
@@ -87,7 +169,7 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
 
 ---
 
-## 6. 新增 ADR 的流程
+## 7. 新增 ADR 的流程
 
 1. 复制一份现有 ADR 作为模板（推荐复制 ADR-0001，结构最完整）。
 2. 分配**下一个未占用的编号**，按 §2 的命名规则建文件。

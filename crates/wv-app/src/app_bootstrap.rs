@@ -20,20 +20,21 @@ use bevy::prelude::*;
 use bevy::window::WindowResolution;
 use bevy_egui::EguiPlugin;
 
-use crate::brush_cursor;
-use crate::camera;
-use crate::editing;
-use crate::faction_overlays;
-use crate::map_frame;
+use crate::edit::editing;
+use crate::render::brush_cursor;
+use crate::render::camera;
+use crate::render::faction_overlays;
+use crate::render::layer_frame;
+use crate::render::map_frame;
+use crate::render::streets;
+use crate::render::terrain_chunks;
+use crate::render::terrain_view;
+use crate::render::vector_layers::{self, VectorLayerEntities};
+use crate::render::world_projection;
 use crate::state::{
     BrushState, DrillState, GridConfig, PanelState, PlaybackState, ViewState, WorldProjection,
 };
-use crate::streets;
-use crate::terrain_chunks;
-use crate::terrain_view;
 use crate::ui;
-use crate::vector_layers::{self, VectorLayerEntities};
-use crate::world_projection;
 use crate::AppConfig;
 
 /// 启动 GUI。`startup_project` 为 `None` 时进空编辑器（占位地形），
@@ -100,7 +101,14 @@ pub fn run(config: AppConfig) {
     .init_resource::<BrushState>()
     .init_resource::<PanelState>()
     .init_resource::<GridConfig>()
+    // 「新建地图」对话框状态（ui_shell 分发器与对话框系统共用）。
+    .init_resource::<ui::NewMapDialog>()
+    // 「新建工程」对话框状态（欢迎页 / 分发器 / 目录轮询三方共用；
+    // 资源本体在 ui_shell::register 里也有 init，幂等，这里注册是就近可读）。
+    .init_resource::<ui::NewProjectDialog>()
     .init_resource::<world_projection::ProjectionFrame>()
+    // 图层帧（ADR-0013）：`MapNode.layers[].z/visible/opacity` 的每帧投影。
+    .init_resource::<layer_frame::LayerFrame>()
     .init_resource::<camera::ActiveStroke>()
     .init_resource::<camera::PointerOverUi>()
     .init_resource::<editing::EditHistory>()
@@ -110,12 +118,18 @@ pub fn run(config: AppConfig) {
     .init_resource::<VectorLayerEntities>()
     .init_resource::<streets::StreetLayerCache>()
     .init_resource::<streets::StreetEditorState>()
+    .init_resource::<crate::state::MeasureState>()
+    .init_resource::<crate::render::measurement::MeasurementCache>()
     // 势力多边形层（S12）：同属「每帧 despawn+spawn 的实体集合」资源，
     // 漏 init 会在首帧 panic（`could not access system parameter`）。
     .init_resource::<faction_overlays::FactionOverlayEntities>()
     .init_resource::<brush_cursor::BrushCursorEntities>()
     .init_resource::<map_frame::MapFrameEntities>()
     .init_resource::<terrain_chunks::TerrainChunkEntities>()
+    // 等值线矢量叠加层（ADR-0012 / plan v0.1 M2）：同属实体集合资源。
+    .init_resource::<terrain_view::IsolineOverlay>()
+    // 逐格编辑网格（plan v0.1 D4）：同上。
+    .init_resource::<terrain_view::GridLinesOverlay>()
     .add_systems(
         Startup,
         // 字体装配不在这里：bevy_egui 0.42 的主上下文要等 PreUpdate 的
@@ -129,7 +143,7 @@ pub fn run(config: AppConfig) {
         // 上下文调用会 panic（bevy_egui 0.32 lib.rs:437 的 expect）。
         // 字体重试式装配同口径：上下文就绪的首帧执行一次（fonts.rs 文档）。
         (
-            crate::fonts::setup_egui_fonts,
+            crate::theme::fonts::setup_egui_fonts,
             camera::poll_egui_wants_input,
         )
             .after(bevy_egui::EguiPreUpdateSet::InitContexts),
@@ -140,6 +154,9 @@ pub fn run(config: AppConfig) {
             // 主链已顶满 20 参上限，拆一层嵌套元组（内层先 chain 成一个整体）。
             (
                 // 输入 → 视图状态
+                // 朝向先行：把 MapNode.orientation 写进相机旋转，同帧的缩放锚点、
+                // 平移与拾取换算读 Transform.rotation 时拿到的就是新值（帧内自洽）。
+                camera::apply_map_orientation,
                 camera::camera_zoom,
                 camera::camera_pan,
                 camera::camera_pan_keys,
@@ -165,8 +182,15 @@ pub fn run(config: AppConfig) {
                 .chain(),
             // 换级淡化：旧底图淡出精灵逐帧降透明、归零回收（ADR-0009 §2⑦）。
             terrain_view::tick_basemap_fadeout,
+            // 图层帧（ADR-0013）：先于一切消费它的渲染系统求值。
+            layer_frame::resolve_layer_frame,
             // 投影（时间 → 渲染资源）
             world_projection::compute_projection,
+            // 等值线矢量叠加（ADR-0012 / plan v0.1 M2）：先于 chunk 层读
+            // `tex.chunks_dirty`（chunk 系统会消费清零），触发重算。
+            terrain_view::sync_isoline_overlay,
+            // 编辑态逐格网格（plan v0.1 D4）：与等值线同管线族，先于 chunk 层。
+            terrain_view::sync_grid_lines,
             // 地形分块 + mip + 视口拣选（优化项 3a/3b/3c）。
             terrain_chunks::sync_terrain_chunks,
             // 派生诊断刷新：在 flush 之后、UI 之前；面板本帧即可读新值。
@@ -193,10 +217,22 @@ pub fn run(config: AppConfig) {
     .add_systems(
         Update,
         (
+            // 测量：先 reload 缓存，再 commit 点击，最后 render。
+            // reload 在 `world_projection::is_changed` 后即可（缓存早退）。
+            crate::render::measurement::reload_measurement_cache.after(camera::track_cursor_world),
+            crate::render::measurement::commit_measurement_click
+                .after(crate::render::measurement::reload_measurement_cache),
+        ),
+    )
+    .add_systems(
+        Update,
+        (
             // 地图绘制必须在所有浮动面板**之前**执行，
             // 保证地图是最底层、面板浮在其上（基线 §1.11 R1）。
             world_projection::draw_map_gizmos,
             world_projection::draw_brush_cursor,
+            // 测量顶置渲染——与 gizmos 一起画。
+            crate::render::measurement::render_measurements,
         ),
     )
     .add_systems(
@@ -228,6 +264,12 @@ pub fn run(config: AppConfig) {
             ui::panel_faction,
             ui::panel_inspector,
             ui::panel_validation,
+            // 「新建地图」对话框（CommandId::NewMap 打开；居中模态窗）。
+            ui::new_map_dialog,
+            // 「新建工程」对话框（CommandId::NewProject / 欢迎页打开；
+            // 与 new_map_dialog 同族的居中模态窗，排在状态栏之前——
+            // 确认创建写的回执本帧就要被状态栏读到）。
+            ui::new_project_dialog,
             // 状态栏最后画：它读得到的 `ShellNotice` 已是本帧最终值。
             ui::status_bar,
         )
@@ -237,7 +279,7 @@ pub fn run(config: AppConfig) {
     // 界面外壳（主题 / 快捷键 / 命令面板 / 布局持久化）与地图钻取（v0.2 §B）。
     // 两者各自成模块并各自注册，`gui.rs` 只负责调用顺序（见各处模块文档）。
     crate::ui_shell::register(&mut app);
-    crate::drill::register(&mut app);
+    crate::render::drill::register(&mut app);
 
     app.run();
 }

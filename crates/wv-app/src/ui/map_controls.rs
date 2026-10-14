@@ -1,7 +1,8 @@
 //! Google 式地图控件 + 辅助函数（root_ui / rect_stroke / set_map_scale）。
 //!
 //! ## 职责
-//! - `map_controls` —— 右下角拖动/笔刷工具切换、+/− 缩放、缩放到全图。
+//! - `map_controls` —— 右下角拖动/笔刷工具切换、+/− 缩放、缩放到全图；
+//!   测量工具三按钮（折线 / 矩形 / 橡皮，2026-10-14）。
 //! - `set_map_scale` —— 写入缩放并同步相机 Transform（Camera 是渲染真源）。
 //! - 块级测试 `map_control_tests` —— `＋/－` 1.6× 步进夹在级夹持区间内。
 //!
@@ -17,8 +18,10 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use crate::state::{BrushState, DrillState, GridConfig, ViewState, WorldProjection};
-use crate::ui_theme::UiShellConfig;
+use crate::state::{
+    BrushState, DrillState, GridConfig, MeasureMode, MeasureState, ViewState, WorldProjection,
+};
+use crate::theme::ui_theme::UiShellConfig;
 
 use super::shell::UiShell;
 
@@ -33,9 +36,10 @@ pub fn map_controls(
     shell_cfg: Res<UiShellConfig>,
     mut view: ResMut<ViewState>,
     mut brush: ResMut<BrushState>,
+    mut measure: ResMut<MeasureState>,
     drill: Res<DrillState>,
     grid: Res<GridConfig>,
-    tex: Res<crate::terrain_view::TerrainTexture>,
+    tex: Res<crate::render::terrain_view::TerrainTexture>,
     projection: Res<WorldProjection>,
     windows: Query<&Window>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
@@ -57,13 +61,18 @@ pub fn map_controls(
         .unwrap_or(Vec2::new(1280.0, 800.0));
     let raster_size = Vec2::splat(grid.cell_size * tex.size as f32);
     let level_map_size =
-        crate::zoom_level::map_size_of(&projection.world, drill.current(), raster_size);
-    let zoom = crate::zoom_level::LevelZoom::for_map(level_map_size, window_size);
-    let control_bg = crate::colors::palette_to_color32(crate::colors_google::GOOGLE_CONTROL_BG);
-    let control_border =
-        crate::colors::palette_to_color32(crate::colors_google::GOOGLE_CONTROL_BORDER);
-    let control_text = crate::colors::palette_to_color32(crate::colors_google::GOOGLE_CONTROL_TEXT);
-    let active_bg = crate::colors::palette_to_color32(crate::colors_google::GOOGLE_CONTROL_ACTIVE);
+        crate::render::zoom_level::map_size_of(&projection.world, drill.current(), raster_size);
+    let zoom = crate::render::zoom_level::LevelZoom::for_map(level_map_size, window_size);
+    let control_bg =
+        crate::theme::colors::palette_to_color32(crate::theme::colors_google::GOOGLE_CONTROL_BG);
+    let control_border = crate::theme::colors::palette_to_color32(
+        crate::theme::colors_google::GOOGLE_CONTROL_BORDER,
+    );
+    let control_text =
+        crate::theme::colors::palette_to_color32(crate::theme::colors_google::GOOGLE_CONTROL_TEXT);
+    let active_bg = crate::theme::colors::palette_to_color32(
+        crate::theme::colors_google::GOOGLE_CONTROL_ACTIVE,
+    );
 
     egui::Area::new(egui::Id::new("wv_google_map_controls"))
         .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -38.0))
@@ -74,7 +83,7 @@ pub fn map_controls(
                 .fill(control_bg)
                 .stroke(egui::Stroke::new(1.0_f32, control_border))
                 .corner_radius(egui::CornerRadius::from(10.0))
-                .inner_margin(crate::ui_theme::margin_xy(5.0, 5.0))
+                .inner_margin(crate::theme::ui_theme::margin_xy(5.0, 5.0))
                 .show(ui, |ui| {
                     let tool_label = if brush.enabled { "✏" } else { "✋" };
                     let mut tool_button = egui::Button::new(
@@ -101,6 +110,40 @@ pub fn map_controls(
                         "地形笔刷仅在世界图可用；当前为拖动".to_owned()
                     };
                     tool_response.on_hover_text(tool_hint);
+                    ui.add_space(2.0);
+                    ui.separator();
+                    // ---- 测量工具三按钮（2026-10-14）----
+                    // 互斥：任一测量模式激活 → 笔刷顶下。模式 ≠ Off 时左键被
+                    // `commit_measurement_click` 截走，地图拖动失效——这是预期的。
+                    // 无工程锁与笔刷同口径：没打开工程不允许启用。
+                    let project_open = projection.project_dir.is_some();
+                    let mut pick = |target: MeasureMode, label: &str, hint: &str| {
+                        let active = measure.mode == target;
+                        let mut btn = egui::Button::new(
+                            egui::RichText::new(label)
+                                .size(shell.scale.base)
+                                .color(control_text),
+                        )
+                        .min_size(egui::vec2(38.0, shell.hit));
+                        if active {
+                            btn = btn.fill(active_bg);
+                        }
+                        let resp = ui.add_enabled(project_open, btn);
+                        if resp.clicked() {
+                            // 二态切换：再点一次同一模式 → 关闭。
+                            measure.mode = if active { MeasureMode::Off } else { target };
+                            // 与笔刷互斥：开任一测量模式 → 关闭笔刷。
+                            if measure.mode.is_active() {
+                                brush.enabled = false;
+                            }
+                            // 切模式时丢弃草稿。
+                            measure.clear_draft();
+                        }
+                        resp.on_hover_text(hint);
+                    };
+                    pick(MeasureMode::Line, "📏", "测量：折线（多段；右键/Esc 收笔）");
+                    pick(MeasureMode::Rect, "▭", "测量：矩形（两点确定长×宽）");
+                    pick(MeasureMode::Eraser, "🧹", "测量：橡皮（点选删除）");
                     ui.add_space(2.0);
                     ui.separator();
                     let zoom_in = ui.add_sized(
@@ -164,10 +207,10 @@ fn set_map_scale(
     view: &mut ViewState,
     cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     scale: f32,
-    zoom: crate::zoom_level::LevelZoom,
+    zoom: crate::render::zoom_level::LevelZoom,
 ) {
     view.scale = zoom.clamp(scale);
-    crate::camera::apply_view_to_camera(view.camera_center, view.scale, cameras);
+    crate::render::camera::apply_view_to_camera(view.camera_center, view.scale, cameras);
 }
 
 #[cfg(test)]
@@ -179,8 +222,10 @@ mod map_control_tests {
     /// 城市视图缩到世界级的尺度，画面瞬间变成一块糊）。
     #[test]
     fn zoom_button_steps_stop_at_the_levels_band() {
-        let zoom =
-            crate::zoom_level::LevelZoom::for_map(Vec2::splat(1024.0), Vec2::new(1280.0, 800.0));
+        let zoom = crate::render::zoom_level::LevelZoom::for_map(
+            Vec2::splat(1024.0),
+            Vec2::new(1280.0, 800.0),
+        );
         let mut s = zoom.fit;
         for _ in 0..40 {
             s = zoom.clamp(s / 1.6);

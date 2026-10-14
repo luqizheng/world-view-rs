@@ -184,6 +184,95 @@ impl EditCommand for PaintTerrainCommand {
 }
 
 // ---------------------------------------------------------------------------
+// 地图新建（2026-10-14：「新建地图」对话框的落点）
+// ---------------------------------------------------------------------------
+
+/// 新增一张地图（节点 + 父引用 + 可选预填充栅格）。
+///
+/// ## 为什么「挂到父图 children」是命令的一部分
+///
+/// P4 的层级关系只存 ID 引用（`MapNode.parent` / `children`），新节点不挂进
+/// 父图的 `children` 就是一张悬空图——钻取树、地图树都看不见它。三件事
+/// （push 节点、回填父引用、可选写栅格）必须同生共死，`revert` 才能完整回退。
+///
+/// ## 幂等保护
+///
+/// 目标 ID 已存在时 `apply` 报错（调用方——「新建地图」对话框——负责先生成
+/// 唯一 ID）；命令层不静默覆盖，那等于悄悄毁掉一张已有的图。
+#[derive(Debug)]
+pub struct AddMapCommand {
+    /// 新地图节点（`parent` 必须已指向既有地图；根图 `parent` 为 `None`）。
+    pub node: wv_core::map::MapNode,
+    /// 预填充栅格（海洋 / 陆地）。`None` = 不带栅格（沿用父图底图继承）。
+    pub terrain: Option<TerrainData>,
+}
+
+impl AddMapCommand {
+    pub fn new(node: wv_core::map::MapNode, terrain: Option<TerrainData>) -> Self {
+        Self { node, terrain }
+    }
+
+    /// 受影响的目录：节点 YAML + 预填充栅格的 `terrain.bin`。
+    fn dirty_paths(&self) -> Vec<String> {
+        let mut paths = vec!["maps".to_owned()];
+        if self.terrain.is_some() {
+            paths.push(format!("maps/{}/terrain.bin", self.node.id));
+        }
+        paths
+    }
+}
+
+impl EditCommand for AddMapCommand {
+    fn label(&self) -> String {
+        format!("新建地图「{}」", self.node.name)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        if world.maps.iter().any(|m| m.id == self.node.id) {
+            return Err(EditError::Precondition(format!(
+                "地图 `{}` 已存在",
+                self.node.id
+            )));
+        }
+        // 父引用必须在树上真实存在（悬空 parent 会让钻取与校验双输）。
+        if let Some(parent) = &self.node.parent {
+            let Some(pnode) = world.maps.iter_mut().find(|m| &m.id == parent) else {
+                return Err(EditError::TargetMissing(format!("父地图 `{parent}`")));
+            };
+            pnode.children.push(self.node.id.clone());
+        }
+        if let Some(data) = &self.terrain {
+            world.set_terrain(self.node.id.clone(), data.clone());
+        }
+        world.maps.push(self.node.clone());
+        Ok(self.dirty_paths())
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        // 对称拆三件套：移除节点、摘掉父引用、丢弃预填充栅格。
+        let existed = world
+            .maps
+            .iter()
+            .position(|m| m.id == self.node.id)
+            .map(|i| world.maps.remove(i))
+            .is_some();
+        if !existed {
+            return Err(EditError::TargetMissing(format!(
+                "地图 `{}` 不存在，无法撤销新建",
+                self.node.id
+            )));
+        }
+        if let Some(parent) = &self.node.parent {
+            if let Some(pnode) = world.maps.iter_mut().find(|m| &m.id == parent) {
+                pnode.children.retain(|c| c != &self.node.id);
+            }
+        }
+        world.terrains.remove(&self.node.id);
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 势力编辑命令（S12 v0.2）
 // ---------------------------------------------------------------------------
 
@@ -727,6 +816,189 @@ impl EditCommand for SetMapOrientationCommand {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 测量编辑命令（工具产物，每图一份，2026-10-14）
+// ---------------------------------------------------------------------------
+
+use wv_core::Measurement;
+use wv_core::MeasurementOverlay;
+
+/// 受影响的脏路径：测量走虚拟命名空间 `measurements/<map_id>`——避免
+/// `maps/<map_id>/` 前缀把同图其它文件（`index.yaml` / `terrain.bin`）误判脏。
+/// 与街道 `streets/<layer_id>` 同款越界防护（见 ADR-0010）。
+fn measurement_dirty_path(map: &wv_core::Id) -> Vec<String> {
+    vec![format!("measurements/{}", map.as_str())]
+}
+
+/// 新增一条测量。
+///
+/// `apply` 在 `world.measurements[map]` 末尾追加；`revert` 按 ID 移除。
+///
+/// **为什么按 ID 而非索引定位**：测量是用户手画的对象，**ID 是显式声明**
+/// 的稳定键，撤销按 ID 还原比按索引更安全（索引会随增删漂移）。
+///
+/// **顶替语义**：ID 已存在时 `apply` 报 `Precondition`，**不**静默覆盖
+/// （命令层「不擅自做作者的决定」）。
+#[derive(Debug)]
+pub struct AddMeasurementCommand {
+    pub map: wv_core::Id,
+    pub measurement: Measurement,
+}
+
+impl AddMeasurementCommand {
+    pub fn new(map: wv_core::Id, measurement: Measurement) -> Self {
+        Self { map, measurement }
+    }
+}
+
+impl EditCommand for AddMeasurementCommand {
+    fn label(&self) -> String {
+        format!("新增测量「{}」", self.measurement.id)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let overlay = world.measurement_of_mut(&self.map);
+        if overlay.add(self.measurement.clone()).is_err() {
+            return Err(EditError::Precondition(format!(
+                "测量 `{}` 已存在",
+                self.measurement.id
+            )));
+        }
+        Ok(measurement_dirty_path(&self.map))
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let overlay = world.measurement_of_mut(&self.map);
+        if overlay.remove(&self.measurement.id).is_none() {
+            return Err(EditError::Precondition(
+                "AddMeasurement revert 找不到对应记录".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// 删除一条测量（按 ID）。
+///
+/// `apply` 缓存被删的 measurement（位置 + 内容）；`revert` 用缓存恢复。
+#[derive(Debug)]
+pub struct RemoveMeasurementCommand {
+    pub map: wv_core::Id,
+    pub id: wv_core::Id,
+    before: std::sync::Mutex<Option<(usize, Measurement)>>,
+}
+
+impl RemoveMeasurementCommand {
+    pub fn new(map: wv_core::Id, id: wv_core::Id) -> Self {
+        Self {
+            map,
+            id,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for RemoveMeasurementCommand {
+    fn label(&self) -> String {
+        format!("删除测量「{}」", self.id)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let overlay = world.measurement_of_mut(&self.map);
+        let pos = overlay
+            .measurements
+            .iter()
+            .position(|m| m.id == self.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Measurement {}", self.id)))?;
+        let prev = overlay.measurements.remove(pos);
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = Some((pos, prev));
+        Ok(measurement_dirty_path(&self.map))
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let (pos, prev) = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("RemoveMeasurement 尚未 apply".into()))?;
+        let overlay = world.measurement_of_mut(&self.map);
+        let insert_at = pos.min(overlay.measurements.len());
+        overlay.measurements.insert(insert_at, prev);
+        Ok(())
+    }
+}
+
+/// 清空某张图的全部测量。
+///
+/// `apply` 缓存整份旧 overlay（可能为空）；`revert` 整份还原。
+/// **仅在该图原本非空时**才记脏路径——空→空不写盘（V1：作者没动就别替他造）。
+#[derive(Debug)]
+pub struct ClearMeasurementsCommand {
+    pub map: wv_core::Id,
+    before: std::sync::Mutex<Option<MeasurementOverlay>>,
+}
+
+impl ClearMeasurementsCommand {
+    pub fn new(map: wv_core::Id) -> Self {
+        Self {
+            map,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for ClearMeasurementsCommand {
+    fn label(&self) -> String {
+        format!("清空「{}」的全部测量", self.map)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let existing = world.measurement_of(&self.map).cloned();
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = existing.clone();
+        if let Some(doc) = existing {
+            if doc.is_empty() {
+                return Ok(Vec::new());
+            }
+            world.set_measurement(self.map.clone(), MeasurementOverlay::new());
+            return Ok(measurement_dirty_path(&self.map));
+        }
+        Ok(Vec::new())
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let prev = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))?
+            .clone();
+        // 缓存 `None` = `apply` 时该图无 overlay（连键都没有），
+        // revert 时也不该留下键。
+        // 缓存 `Some(empty_overlay)` = `apply` 时键存在但清单空，
+        // revert 还原成空文档。
+        // 缓存 `Some(doc)` 且非空 = `apply` 实际清空了一份非空 overlay，
+        // revert 整份还原。
+        match prev {
+            Some(doc) if !doc.is_empty() => {
+                world.set_measurement(self.map.clone(), doc);
+            }
+            Some(_) => {
+                world.set_measurement(self.map.clone(), MeasurementOverlay::new());
+            }
+            None => {
+                world.measurements.remove(&self.map);
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1132,6 +1404,7 @@ mod tests {
             extent: None,
             raster: None,
             geographic_source: None,
+            unit_per_km: None,
             orientation: 0.0,
         });
 
@@ -1156,5 +1429,330 @@ mod tests {
             matches!(cmd.apply(&mut w), Err(EditError::TargetMissing(_))),
             "不存在的地图必须报 TargetMissing"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // AddMapCommand（新建地图对话框的落点）
+    // -----------------------------------------------------------------------
+
+    fn map_node(
+        id: &str,
+        parent: Option<&str>,
+        level: wv_core::map::MapLevel,
+    ) -> wv_core::map::MapNode {
+        wv_core::map::MapNode {
+            id: Id::new_unchecked(id),
+            name: format!("地图{id}"),
+            level,
+            parent: parent.map(Id::new_unchecked),
+            children: Vec::new(),
+            layers: Vec::new(),
+            icons: Vec::new(),
+            extent: Some(wv_core::map::Extent::sized(1024.0, 1024.0)),
+            raster: None,
+            geographic_source: None,
+            unit_per_km: None,
+            orientation: 0.0,
+        }
+    }
+
+    fn flat_terrain(kind: u8, height: i16) -> TerrainData {
+        TerrainData {
+            width: 4,
+            height: 4,
+            cells: vec![TerrainCellData { height, kind }; 16],
+        }
+    }
+
+    #[test]
+    fn add_map_command_links_parent_and_prefills_terrain() {
+        let mut w = World::default();
+        w.maps
+            .push(map_node("world_main", None, wv_core::map::MapLevel::World));
+
+        let cmd = AddMapCommand::new(
+            map_node("map_a", Some("world_main"), wv_core::map::MapLevel::City),
+            Some(flat_terrain(0, -40)),
+        );
+        let dirty = cmd.apply(&mut w).unwrap();
+        assert!(
+            dirty.contains(&"maps".to_owned())
+                && dirty.contains(&"maps/map_a/terrain.bin".to_owned()),
+            "脏路径应含节点目录与栅格文件，实得 {dirty:?}"
+        );
+        // 节点入树 + 父引用回填 + 栅格落位，三件都在。
+        assert!(w.maps.iter().any(|m| m.id == Id::new_unchecked("map_a")));
+        assert!(w
+            .maps
+            .iter()
+            .find(|m| m.id == Id::new_unchecked("world_main"))
+            .unwrap()
+            .children
+            .contains(&Id::new_unchecked("map_a")));
+        assert_eq!(
+            w.terrain_of(&Id::new_unchecked("map_a")).unwrap().cells[0].kind,
+            0
+        );
+
+        // revert 对称拆三件套。
+        cmd.revert(&mut w).unwrap();
+        assert!(!w.maps.iter().any(|m| m.id == Id::new_unchecked("map_a")));
+        assert!(!w
+            .maps
+            .iter()
+            .find(|m| m.id == Id::new_unchecked("world_main"))
+            .unwrap()
+            .children
+            .contains(&Id::new_unchecked("map_a")));
+        assert!(w.terrain_of(&Id::new_unchecked("map_a")).is_none());
+    }
+
+    #[test]
+    fn add_map_command_rejects_duplicate_id_instead_of_overwriting() {
+        let mut w = World::default();
+        w.maps
+            .push(map_node("world_main", None, wv_core::map::MapLevel::World));
+        w.maps.push(map_node(
+            "map_a",
+            Some("world_main"),
+            wv_core::map::MapLevel::City,
+        ));
+        let before = w.maps.len();
+
+        let cmd = AddMapCommand::new(
+            map_node("map_a", Some("world_main"), wv_core::map::MapLevel::Region),
+            None,
+        );
+        assert!(
+            matches!(cmd.apply(&mut w), Err(EditError::Precondition(_))),
+            "重复 ID 必须报错，不能静默覆盖已有地图"
+        );
+        assert_eq!(w.maps.len(), before, "失败的 apply 不得改动地图表");
+    }
+
+    #[test]
+    fn add_map_command_rejects_dangling_parent() {
+        let mut w = World::default();
+        let cmd = AddMapCommand::new(
+            map_node("map_a", Some("ghost_parent"), wv_core::map::MapLevel::City),
+            None,
+        );
+        assert!(
+            matches!(cmd.apply(&mut w), Err(EditError::TargetMissing(_))),
+            "悬空父引用必须报 TargetMissing"
+        );
+        assert!(w.maps.is_empty(), "失败的 apply 不得留下半张图");
+    }
+
+    #[test]
+    fn root_map_adds_without_parent_and_revert_removes_it() {
+        // 空编辑器的「第一张图」：parent = None，revert 后世界回到空。
+        let mut w = World::default();
+        let cmd = AddMapCommand::new(
+            map_node("world_main", None, wv_core::map::MapLevel::World),
+            Some(flat_terrain(3, 80)),
+        );
+        cmd.apply(&mut w).unwrap();
+        assert_eq!(w.maps.len(), 1);
+        cmd.revert(&mut w).unwrap();
+        assert!(w.maps.is_empty());
+        assert!(w.terrains.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // 测量命令（2026-10-14）
+    // -----------------------------------------------------------------------
+
+    use wv_core::MeasurementKind;
+
+    fn m_line(id: &str) -> Measurement {
+        Measurement::polyline(vec![
+            wv_core::Point::new(0.0, 0.0),
+            wv_core::Point::new(10.0, 0.0),
+            wv_core::Point::new(10.0, 5.0),
+        ])
+        .with_id(Id::new_unchecked(id))
+    }
+
+    fn m_rect(id: &str) -> Measurement {
+        Measurement::rectangle(
+            wv_core::Point::new(0.0, 0.0),
+            wv_core::Point::new(20.0, 10.0),
+        )
+        .with_id(Id::new_unchecked(id))
+    }
+
+    fn m_kind(m: &Measurement) -> MeasurementKind {
+        m.kind
+    }
+
+    #[test]
+    fn add_measurement_pushes_and_reports_dirty_path() {
+        let mut w = World::default();
+        let cmd = AddMeasurementCommand::new(Id::new_unchecked("world_main"), m_line("m1"));
+        let dirty = cmd.apply(&mut w).unwrap();
+        assert_eq!(
+            dirty,
+            vec!["measurements/world_main".to_string()],
+            "脏路径应为虚拟命名空间 measurements/<map>"
+        );
+        let overlay = w.measurement_of(&Id::new_unchecked("world_main")).unwrap();
+        assert_eq!(overlay.len(), 1);
+        assert_eq!(overlay.measurements[0].id.as_str(), "m1");
+        assert_eq!(m_kind(&overlay.measurements[0]), MeasurementKind::Polyline);
+
+        cmd.revert(&mut w).unwrap();
+        let overlay = w.measurement_of(&Id::new_unchecked("world_main")).unwrap();
+        assert!(overlay.is_empty(), "revert 后该图 overlay 应清空");
+    }
+
+    #[test]
+    fn add_measurement_rejects_duplicate_id() {
+        let mut w = World::default();
+        AddMeasurementCommand::new(Id::new_unchecked("m1"), m_line("m1"))
+            .apply(&mut w)
+            .unwrap();
+        // 同 ID 二次添加 = Precondition 错。
+        let err = AddMeasurementCommand::new(Id::new_unchecked("m1"), m_rect("m1")).apply(&mut w);
+        assert!(matches!(err, Err(EditError::Precondition(_))));
+        // overlay 长度仍是 1（失败的 apply 不得增改）
+        assert_eq!(w.measurement_of(&Id::new_unchecked("m1")).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn add_measurement_revert_before_apply_is_precondition() {
+        let mut w = World::default();
+        let cmd = AddMeasurementCommand::new(Id::new_unchecked("m1"), m_line("m1"));
+        assert!(matches!(
+            cmd.revert(&mut w),
+            Err(EditError::Precondition(_))
+        ));
+    }
+
+    #[test]
+    fn remove_measurement_then_revert_restores_at_same_index() {
+        let mut w = World::default();
+        let map = Id::new_unchecked("world_main");
+        AddMeasurementCommand::new(map.clone(), m_line("m1"))
+            .apply(&mut w)
+            .unwrap();
+        AddMeasurementCommand::new(map.clone(), m_rect("m2"))
+            .apply(&mut w)
+            .unwrap();
+        AddMeasurementCommand::new(map.clone(), m_line("m3"))
+            .apply(&mut w)
+            .unwrap();
+        assert_eq!(w.measurement_of(&map).unwrap().len(), 3);
+
+        // 删中间那条 m2。
+        let rm = RemoveMeasurementCommand::new(map.clone(), Id::new_unchecked("m2"));
+        let dirty = rm.apply(&mut w).unwrap();
+        assert_eq!(dirty, vec!["measurements/world_main".to_string()]);
+        let overlay = w.measurement_of(&map).unwrap();
+        assert_eq!(overlay.len(), 2);
+        assert!(overlay.find(&Id::new_unchecked("m2")).is_none());
+
+        rm.revert(&mut w).unwrap();
+        let overlay = w.measurement_of(&map).unwrap();
+        assert_eq!(overlay.len(), 3);
+        assert_eq!(
+            overlay.measurements[1].id.as_str(),
+            "m2",
+            "应按原位置 1 还原"
+        );
+        assert_eq!(
+            m_kind(&overlay.measurements[1]),
+            MeasurementKind::Rectangle,
+            "还原的应是矩形那条"
+        );
+    }
+
+    #[test]
+    fn remove_measurement_missing_is_target_error() {
+        let mut w = World::default();
+        let cmd = RemoveMeasurementCommand::new(
+            Id::new_unchecked("world_main"),
+            Id::new_unchecked("ghost"),
+        );
+        assert!(matches!(
+            cmd.apply(&mut w),
+            Err(EditError::TargetMissing(_))
+        ));
+    }
+
+    #[test]
+    fn clear_measurements_drops_and_revert_restores_full_overlay() {
+        let mut w = World::default();
+        let map = Id::new_unchecked("world_main");
+        AddMeasurementCommand::new(map.clone(), m_line("m1"))
+            .apply(&mut w)
+            .unwrap();
+        AddMeasurementCommand::new(map.clone(), m_rect("m2"))
+            .apply(&mut w)
+            .unwrap();
+        let before = w.measurement_of(&map).unwrap().measurements.clone();
+
+        let cmd = ClearMeasurementsCommand::new(map.clone());
+        let dirty = cmd.apply(&mut w).unwrap();
+        assert!(!dirty.is_empty(), "非空→空 应记脏路径");
+        assert!(w.measurement_of(&map).unwrap().is_empty());
+
+        cmd.revert(&mut w).unwrap();
+        let overlay = w.measurement_of(&map).unwrap();
+        assert_eq!(overlay.measurements, before, "整份还原");
+    }
+
+    #[test]
+    fn clear_measurements_on_empty_or_missing_overlay_reports_no_dirty() {
+        let mut w = World::default();
+        let map = Id::new_unchecked("world_main");
+        // 第一次：根本没 overlay（连 BTreeMap 键都没）→ apply 应记空脏路径。
+        let cmd = ClearMeasurementsCommand::new(map.clone());
+        let dirty = cmd.apply(&mut w).unwrap();
+        assert!(dirty.is_empty(), "原本就空→应不写盘");
+        // revert 也应合法（缓存的「None」可还原）。
+        cmd.revert(&mut w).unwrap();
+
+        // 第二次：键存在但内部空 → apply 空。revert 不报错。
+        w.measurement_of_mut(&map);
+        let cmd = ClearMeasurementsCommand::new(map.clone());
+        let dirty = cmd.apply(&mut w).unwrap();
+        assert!(dirty.is_empty());
+        cmd.revert(&mut w).unwrap();
+    }
+
+    #[test]
+    fn three_measurement_commands_undo_independently() {
+        let mut w = World::default();
+        let map = Id::new_unchecked("world_main");
+        let a = AddMeasurementCommand::new(map.clone(), m_line("m1"));
+        let b = AddMeasurementCommand::new(map.clone(), m_rect("m2"));
+        a.apply(&mut w).unwrap();
+        b.apply(&mut w).unwrap();
+        assert_eq!(w.measurement_of(&map).unwrap().len(), 2);
+
+        b.revert(&mut w).unwrap();
+        assert_eq!(w.measurement_of(&map).unwrap().len(), 1);
+        a.revert(&mut w).unwrap();
+        // 两个 revert 之后：BTreeMap 键里仍留有该键，但 measurements 为空。
+        let overlay = w.measurement_of(&map).unwrap();
+        assert!(overlay.is_empty(), "overlay 应留空文档兜底");
+    }
+
+    #[test]
+    fn measurement_dirty_path_does_not_collide_with_streets_or_maps() {
+        // 关键不变量：脏路径不与 streets/、maps/ 共享前缀 → 不应误触发
+        // terrain.bin / index.yaml / roads.yaml 重写。
+        let mut w = World::default();
+        let map = Id::new_unchecked("world_main");
+        AddMeasurementCommand::new(map.clone(), m_line("m1"))
+            .apply(&mut w)
+            .unwrap();
+        let dirty_paths = RemoveMeasurementCommand::new(map.clone(), Id::new_unchecked("m1"))
+            .apply(&mut w)
+            .unwrap();
+        assert!(dirty_paths.iter().all(|p| p.starts_with("measurements/")));
+        assert!(!dirty_paths.iter().any(|p| p.starts_with("maps/")));
+        assert!(!dirty_paths.iter().any(|p| p.starts_with("streets/")));
     }
 }

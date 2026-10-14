@@ -7,7 +7,7 @@
 //!
 //! ## 边界（不做什么）
 //! - **不**改时间语义 —— 时间显示统一入口 [`crate::ui_time::format_date_for`]。
-//! - **不**直接改世界 —— UI 只生成 `EditCommand`，交给 [`crate::editing::EditHistory`]。
+//! - **不**直接改世界 —— UI 只生成 `EditCommand`，交给 [`crate::edit::editing::EditHistory`]。
 //!
 //! ## 主要导出
 //! - `TimelineLayer` / `panel_timeline` / `undo_last_street_segment`
@@ -18,9 +18,9 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::state::{Panel, PanelState, PlaybackState, WorldProjection};
+use crate::theme::ui_theme::{proportional, UiShellConfig};
+use crate::theme::ui_tokens::{radius, space};
 use crate::ui_layout::LayoutFile;
-use crate::ui_theme::{proportional, UiShellConfig};
-use crate::ui_tokens::{radius, space};
 
 use super::shell::UiShell;
 
@@ -97,7 +97,7 @@ pub fn panel_timeline(
             egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
                 .fill(shell.panel_bg().gamma_multiply(alpha))
                 .stroke(egui::Stroke::new(1.0_f32, shell.border_strong()))
-                .inner_margin(crate::ui_theme::margin_all(space::SM))
+                .inner_margin(crate::theme::ui_theme::margin_all(space::SM))
                 .corner_radius(radius::PANEL),
         )
         .show(ctx, |ui| {
@@ -125,7 +125,7 @@ pub fn panel_timeline(
                     ))
                     .size(shell.scale.base)
                     .color(shell.t1())
-                    .font(crate::ui_theme::mono(shell.scale.base)),
+                    .font(crate::theme::ui_theme::mono(shell.scale.base)),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("＋ 登记事件").clicked() {
@@ -207,7 +207,7 @@ fn draw_timeline_tracks(
                 painter.rect_filled(
                     bar,
                     radius::BADGE,
-                    crate::colors::palette_to_color32(crate::colors::ACCENT_EVENT),
+                    crate::theme::colors::palette_to_color32(crate::theme::colors::ACCENT_EVENT),
                 );
                 painter.text(
                     egui::pos2(x0 + space::XS, y + 6.0),
@@ -259,7 +259,7 @@ fn draw_timeline_tracks(
         [egui::pos2(cx, rect.min.y), egui::pos2(cx, rect.max.y)],
         egui::Stroke::new(
             2.0_f32,
-            crate::colors::palette_to_color32(crate::colors::ACCENT_CURSOR),
+            crate::theme::colors::palette_to_color32(crate::theme::colors::ACCENT_CURSOR),
         ),
     );
 }
@@ -268,12 +268,12 @@ fn draw_timeline_tracks(
 pub fn undo_last_street_segment(
     projection: &mut crate::state::WorldProjection,
     drill: &crate::state::DrillState,
-    edit: &mut crate::editing::EditHistory,
+    edit: &mut crate::edit::editing::EditHistory,
 ) {
     let Some(node) = drill.current_node(&projection.world) else {
         return;
     };
-    let Some(layer) = crate::streets::target_road_layer(node) else {
+    let Some(layer) = crate::render::streets::target_road_layer(node) else {
         return;
     };
     // 先读段数并结束借用，再把命令交给 History（commit 要 &mut World）。

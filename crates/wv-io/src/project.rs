@@ -250,6 +250,103 @@ fn write_streets_at(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// 测量文档（每图一份 `maps/<map_id>/measurements.yaml`，2026-10-14）
+// ---------------------------------------------------------------------------
+
+use wv_core::MeasurementOverlay;
+
+/// 测量文件路径（相对工程根）：`maps/<map_id>/measurements.yaml`。
+///
+/// **不**像街道那样按 `Layer.source` 派生——测量**没有**图层抽象，
+/// 落点就是当前图（按 map_id 走）。这把「地图级辅助产物」与
+/// 「图层级产物」清晰区分：街道几何随图层走，测量随地图走。
+fn measurement_rel_path(map_id: &wv_core::Id) -> String {
+    format!("maps/{}/measurements.yaml", map_id.as_str())
+}
+
+/// 加载某张图的测量叠加（文件不存在返空文档）。
+///
+/// 与 `load_streets` 的差别：街道是「按需读」，测量是「每图都有」——
+/// 因此 `not found` **不算错**，直接返 `MeasurementOverlay::default()`，
+/// 让空图作者不用手造一个文件。
+fn load_measurements_at(project_root: &Path, map_id: &wv_core::Id) -> IoResult<MeasurementOverlay> {
+    let path = project_root.join(measurement_rel_path(map_id));
+    if !path.is_file() {
+        return Ok(MeasurementOverlay::new());
+    }
+    let text = std::fs::read_to_string(&path).map_err(|source| IoError::ReadFile {
+        path: path.display().to_string(),
+        source,
+    })?;
+    serde_yaml::from_str(&text).map_err(|source| IoError::Yaml {
+        path: path.display().to_string(),
+        source,
+    })
+}
+
+/// 写入某张图的测量叠加；空文档**不**写盘（V1：作者没动就别替他造）。
+fn write_measurements_at(
+    project_root: &Path,
+    map_id: &wv_core::Id,
+    overlay: &MeasurementOverlay,
+) -> IoResult<()> {
+    let rel = measurement_rel_path(map_id);
+    let path = project_root.join(&rel);
+    if overlay.is_empty() {
+        // 删除传播：与 `save_entities` 同口径——磁盘文件不应留有
+        // 当前 World 不承认的内容。
+        if path.is_file() {
+            std::fs::remove_file(&path)?;
+        }
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let text = serde_yaml::to_string(overlay).map_err(|source| IoError::Yaml {
+        path: path.display().to_string(),
+        source,
+    })?;
+    std::fs::write(&path, text)?;
+    Ok(())
+}
+
+/// 测量这次落盘是否被触及。虚拟脏路径精确匹配 `measurements/<map_id>`。
+fn measurement_is_dirty(map_id: &wv_core::Id, dirty_paths: &[String], full: bool) -> bool {
+    if full {
+        return true;
+    }
+    let expected = format!("measurements/{}", map_id.as_str());
+    dirty_paths.iter().any(|d| d == &expected)
+}
+
+/// 落盘聚合：遍历 `world.measurements`，仅写出判为脏的那一份 YAML。
+///
+/// 选写的图必须有 `MapNode`（即 `world.maps` 中存在该 ID）——否则跳过
+/// 「meta/maps 与内存不一致」的报错。**全部为空**时本函数什么都不做
+/// （让 `delete_propagation` 在 `save_world` 末尾统一清理）。
+fn write_measurements_layers(
+    project_root: &Path,
+    maps: &[wv_core::map::MapNode],
+    measurements: &BTreeMap<wv_core::Id, MeasurementOverlay>,
+    dirty_paths: &[String],
+    full: bool,
+) -> IoResult<()> {
+    for (map_id, overlay) in measurements {
+        if !measurement_is_dirty(map_id, dirty_paths, full) {
+            continue;
+        }
+        // 找到那张 MapNode 才会写盘——找不到（数据状态不一致）
+        // 跳过，不报错。
+        if !maps.iter().any(|m| m.id == *map_id) {
+            continue;
+        }
+        write_measurements_at(project_root, map_id, overlay)?;
+    }
+    Ok(())
+}
+
 /// 写 `PlaceEdge` 列表到单文件 `distances/edges.yaml`。
 ///
 /// 读单文件列表（YAML），文件不存在时返回空 `Vec`。
@@ -549,6 +646,15 @@ impl Project {
             }
         }
 
+        // 测量：每图一份 `maps/<id>/measurements.yaml`，文件不存在即跳过（空图）。
+        let mut measurements: BTreeMap<wv_core::Id, MeasurementOverlay> = BTreeMap::new();
+        for m in &maps {
+            let overlay = self::load_measurements_at(&self.root, &m.id)?;
+            if !overlay.is_empty() {
+                measurements.insert(m.id.clone(), overlay);
+            }
+        }
+
         // 势力：路线图 S12（2026-10-12）。
         // - `factions/`：每势力一个 YAML（§4.5）。
         // - `geometry/faction/`：每势力几何一个 YAML（`GeometrySpan`）。
@@ -573,6 +679,7 @@ impl Project {
             faction_geometry,
             terrains,
             streets,
+            measurements,
         })
     }
 
@@ -737,6 +844,18 @@ impl Project {
         // 只画一笔街道时不应触发 index.yaml / terrain.bin 的重写。
         if wants("streets") || wants("maps") {
             write_streets_layers(&self.root, &world.maps, &world.streets, dirty_paths, full)?;
+        }
+        // 测量：虚拟命名空间 `measurements/<map>`，独立路由（避免 `wants("maps")`
+        // 把画一笔测量 → 重写 index.yaml / terrain.bin）。仅判 dirty 时写，
+        // 空 overlay 走 `write_measurements_at` 内部的删除传播。
+        if wants("measurements") || wants("maps") {
+            self::write_measurements_layers(
+                &self.root,
+                &world.maps,
+                &world.measurements,
+                dirty_paths,
+                full,
+            )?;
         }
         // 阶段七 v0.4：写 `world.yaml`。这条**不**走 dirty 路由——
         // meta 是工程头部，永远写；fall back 到 `self.meta`（处理「刚加载、

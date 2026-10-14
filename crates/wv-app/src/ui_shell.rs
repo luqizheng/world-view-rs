@@ -18,7 +18,8 @@
 //! ## 主要导出
 //! - `register(app: &mut App)` — Bevy App 装配入口。
 //! - `apply_pending_commands` / `dispatch_project_command` — **唯一**命令分发器与子派发器。
-//! - `startup_load` / `load_error_card` / `adopt_world_snapshot` — 启动期工程接管。
+//! - `startup_load` / `load_error_card` — 启动期工程加载与失败卡片；
+//!   `adopt_world_snapshot` — 运行期换世界（加载 / 新建 / 关闭）的视图接管。
 //! - `save_world_to_dir` / `poll_open_project_dialog` — 工程加载与落盘收口。
 //! - `persist_layout_on_change` — 布局写盘系统。
 //!
@@ -37,14 +38,14 @@ use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use bevy_egui::{egui, EguiContexts};
 
+use crate::render::terrain_view::{TerrainTexture, TileAtlas};
 use crate::state::{
     DrillState, Panel, PanelState, PlaybackState, RecentProjects, ViewState, WorldProjection,
 };
-use crate::terrain_view::{TerrainTexture, TileAtlas};
+use crate::theme::ui_theme::UiShellConfig;
+use crate::theme::ui_tokens::{UiDensity, UiTheme};
 use crate::ui_command_palette::{CommandId, CommandPalette};
 use crate::ui_layout::LayoutFile;
-use crate::ui_theme::UiShellConfig;
-use crate::ui_tokens::{UiDensity, UiTheme};
 
 /// 把界面外壳的资源与系统注册进 `App`。
 ///
@@ -58,6 +59,8 @@ pub fn register(app: &mut App) {
         .init_resource::<RecentProjects>()
         .init_resource::<LayoutFile>()
         .init_resource::<OpenProjectTask>()
+        // 「新建工程」对话框状态（欢迎页 / 分发器 / 目录轮询三方共用）。
+        .init_resource::<crate::ui::NewProjectDialog>()
         // CLI `-m` 的启动加载请求（`gui::run` 已注入值，这里只兜底默认）。
         .init_resource::<StartupLoadRequest>()
         // 根图落位必须早于所有读 `DrillState` 的 UI 系统（同一 `Update` 里靠顺序保证）。
@@ -81,11 +84,15 @@ pub fn register(app: &mut App) {
         // bevy_egui 0.42：UI 系统进 pass 调度（见 gui.rs 同款注释）；
         // `startup_load` 虽不碰 egui，但必须跟遮罩同调度并排在其后，
         // 否则 Update 先阻塞加载、遮罩永远赶不上渲染。
+        //
+        // `welcome_screen`（无工程锁）排在遮罩之后、失败卡片之前：
+        // 启动加载期间（req 有值）它自己会让位；失败卡片画在其后压在其上。
         .add_systems(
             bevy_egui::EguiPrimaryContextPass,
             (
                 crate::ui::command_palette,
                 startup_load_overlay,
+                crate::ui::welcome_screen,
                 load_error_card,
                 startup_load,
             )
@@ -163,15 +170,11 @@ fn hotkeys(
     if cmd && shift && input.key_pressed(bevy_egui::egui::Key::I) {
         panels.immersive = !panels.immersive;
     }
-    // 数字 1–4：切换视图模式。
-    for (i, key) in [
-        bevy_egui::egui::Key::Num1,
-        bevy_egui::egui::Key::Num2,
-        bevy_egui::egui::Key::Num3,
-        bevy_egui::egui::Key::Num4,
-    ]
-    .iter()
-    .enumerate()
+    // 数字 1–2：切换浏览视图模式（2026-10-14 起 BROWSING 只开放两种，
+    // 见 `ViewMode::BROWSING`；其余模式不再占数字键）。
+    for (i, key) in [bevy_egui::egui::Key::Num1, bevy_egui::egui::Key::Num2]
+        .iter()
+        .enumerate()
     {
         if input.key_pressed(*key) {
             palette.pending = Some(CommandId::SetViewMode(i as u8));
@@ -229,6 +232,10 @@ fn hotkeys(
     if input.key_pressed(bevy_egui::egui::Key::F) {
         palette.pending = Some(CommandId::FitMap);
     }
+    // F5：强制重画地形（2026-10-14 用户需求）。和 FitMap 的 F 不冲突。
+    if input.key_pressed(bevy_egui::egui::Key::F5) {
+        palette.pending = Some(CommandId::ForceRebuildTexture);
+    }
 }
 
 /// 一次用户可见的操作结果回执（成功 / 失败都显示）。
@@ -248,13 +255,15 @@ pub struct ShellNotice {
 }
 
 impl ShellNotice {
-    fn info(&mut self, text: impl Into<String>, frame: u64) {
+    /// 记一条成功回执（`ui_shell` 之外的编辑链 / 对话框也用，故 pub）。
+    pub fn info(&mut self, text: impl Into<String>, frame: u64) {
         self.text = Some(text.into());
         self.is_error = false;
         self.frame = frame;
     }
 
-    fn error(&mut self, text: impl Into<String>, frame: u64) {
+    /// 记一条失败回执（同上 pub：笔刷提交失败等路径要给人话说明）。
+    pub fn error(&mut self, text: impl Into<String>, frame: u64) {
         self.text = Some(text.into());
         self.is_error = true;
         self.frame = frame;
@@ -270,17 +279,24 @@ impl ShellNotice {
 
 /// 「打开工程…」对话框的进行中任务（v0.2 §A）。
 ///
-/// 入口（菜单 / `Ctrl+O` / 命令面板）把用户想打开工程的意图交给 [`Self::spawn`]
-/// ——`rfd::AsyncFileDialog` 的 future 在 `AsyncComputeTaskPool` 上跑，不阻塞渲染。
-/// 每帧的 [`poll_open_project_dialog`] 拿这个资源判 `is_finished()`；用户关掉
-/// 对话框那一刻 `Task` 完成，`block_on` 拿到 `Option<PathBuf>`，再走
-/// [`load_project_into`]。
+/// 入口（菜单 / `Ctrl+O` / 命令面板 / 无目录保存）只把「用户想弹目录对话框」的
+/// 意图交给 [`Self::request`] 排队；真正的 `rfd::AsyncFileDialog` 由
+/// [`poll_open_project_dialog`] 在下一帧 `PreUpdate` 发起——future 在
+/// `AsyncComputeTaskPool` 上跑，不阻塞渲染。每帧的 [`poll_open_project_dialog`]
+/// 拿这个资源判 `is_finished()`；用户关掉对话框那一刻 `Task` 完成，
+/// `block_on` 拿到 `Option<PathBuf>`，再按 [`Self::purpose`] 分流处理。
 ///
 /// ## 为什么单独一个资源（不塞进 `CommandPalette`）
 ///
 /// `pending` 是「下一个要执行的命令」，生命周期一帧；这里是要「等用户回话」，
 /// 跨帧存活，且同一时间只能有一个对话框在跑——独立的资源类型能让这两件事互不
 /// 污染，也方便测试时直接 `let mut t = OpenProjectTask::default();`。
+///
+/// ## 为什么发起与排队分开
+///
+/// `spawn_for` 起的 future 一被 poll 就弹**原生**窗口——若由命令分发器直接发起，
+/// 「无目录保存走对话框」这类路径在单测里一跑就弹真窗口。收口到轮询系统一处后，
+/// 分发器保持纯状态，测试只需断言 [`Self::wanted`] 的意图（见 `mod tests`）。
 #[derive(Resource, Default)]
 pub struct OpenProjectTask {
     task: Option<Task<Option<PathBuf>>>,
@@ -288,9 +304,12 @@ pub struct OpenProjectTask {
     /// 轮询收口时按它分流——两个意图共用同一个「等用户回话」的载体，
     /// 但回话后的处理完全不同（加载 vs 创建+保存），不能混。
     purpose: DialogPurpose,
+    /// 已排队、尚未发起的对话框意图。由 [`Self::request`] 写入，
+    /// [`poll_open_project_dialog`] 取走并 [`Self::spawn_for`]。
+    wanted: Option<DialogPurpose>,
 }
 
-/// 目录选择对话框的意图（v0.3 §B）。
+/// 目录选择对话框的意图（v0.3 §B；2026-10-14 追加第三个）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DialogPurpose {
     /// 打开已有工程：选完走 [`load_project_into`]。
@@ -298,21 +317,38 @@ pub enum DialogPurpose {
     Open,
     /// 另存为 / 新工程首次保存：选完 `Project::create`（或 `open`）+ 全量保存。
     SaveAs,
+    /// 「新建工程」对话框点「浏览…」：选完把路径写回
+    /// [`crate::ui::NewProjectDialog::location`]（不加载、不保存，
+    /// 只回填输入框——真正的创建在对话框「创建」确认时发生）。
+    PickNewProjectLocation,
 }
 
 impl OpenProjectTask {
-    /// 起一个原生目录选择对话框。重复点击会**取消**上一次未完成的对话框
-    /// ——只保留最新的意图（与 macOS Finder、Windows 资源管理器的行为一致）。
-    pub fn spawn(&mut self) {
-        self.spawn_for(DialogPurpose::Open);
+    /// 排队一个目录对话框意图（打开工程 / 选保存位置共用）。
+    ///
+    /// 重复排队会**覆盖**上一次未消费的意图——只保留最新的（与对话框自身的
+    /// 「重开一次取消上一个」行为一致）。真正的原生窗口由
+    /// [`poll_open_project_dialog`] 发起，本方法**不弹窗**。
+    pub fn request(&mut self, purpose: DialogPurpose) {
+        self.wanted = Some(purpose);
     }
 
-    /// 带意图起对话框（`SaveAs` 的标题话术与打开不同，见 [`DialogPurpose`]）。
-    pub fn spawn_for(&mut self, purpose: DialogPurpose) {
+    /// 取走排队的意图（仅 [`poll_open_project_dialog`] 使用）。
+    fn take_request(&mut self) -> Option<DialogPurpose> {
+        self.wanted.take()
+    }
+
+    /// 带意图起原生目录选择对话框（**唯一发起点**在 [`poll_open_project_dialog`]；
+    /// `SaveAs` 的标题话术与打开不同，见 [`DialogPurpose`]）。
+    ///
+    /// 重复发起会**取消**上一次未完成的对话框
+    /// ——只保留最新的意图（与 macOS Finder、Windows 资源管理器的行为一致）。
+    fn spawn_for(&mut self, purpose: DialogPurpose) {
         let pool = AsyncComputeTaskPool::get();
         let title = match purpose {
             DialogPurpose::Open => "选择工程目录（含 world.yaml 的目录）",
             DialogPurpose::SaveAs => "选择保存位置（将在此目录创建工程）",
+            DialogPurpose::PickNewProjectLocation => "选择项目位置（将在所选目录下创建项目子目录）",
         };
         let task = pool.spawn(async move {
             // `set_title` 让 Windows / macOS / Linux 三大平台都显示一致的话术；
@@ -363,21 +399,32 @@ pub struct StartupLoadRequest(pub Option<String>);
 
 /// 每帧看一眼「打开工程」对话框是否回来了（v0.2 §A）。
 ///
-/// 顺序：在 `seed_drill_state` 之后、`hotkeys` 之后——`hotkeys` 可能
-/// 会在这一帧把 `OpenProjectTask::spawn` 叫起来，本系统再读同一个资源
-/// 至少要等到写入完成之后；同一 `PreUpdate` 内系统顺序由 `.after(...)` 声明，
-/// 这里靠「放在 `hotkeys` 之后」+「下一帧才 `block_on`」共同保证不读到半截状态。
+/// 也是目录对话框的**唯一发起点**：命令分发器（`Update`）只把意图排进
+/// [`OpenProjectTask::wanted`]，本系统（`PreUpdate`）先发起、再轮询——写入
+/// 发生在上一帧的 `Update`，天然读不到半截状态；`block_on` 只在用户关掉
+/// 对话框的那一帧执行（见 [`OpenProjectTask::take_if_finished`]）。
 #[allow(clippy::too_many_arguments)]
 fn poll_open_project_dialog(
     mut task: ResMut<OpenProjectTask>,
+    mut new_project_dialog: ResMut<crate::ui::NewProjectDialog>,
     mut projection: ResMut<WorldProjection>,
     mut drill: ResMut<DrillState>,
     mut recents: ResMut<RecentProjects>,
     mut notice: ResMut<ShellNotice>,
     mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
-    mut edit: ResMut<crate::editing::EditHistory>,
+    mut edit: ResMut<crate::edit::editing::EditHistory>,
+    mut playback: ResMut<PlaybackState>,
+    mut view: ResMut<ViewState>,
+    mut tex: ResMut<TerrainTexture>,
+    atlas: Option<Res<TileAtlas>>,
+    mut images: ResMut<Assets<Image>>,
+    mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     time: Res<Time>,
 ) {
+    // 先发起上一帧排队的对话框意图（唯一发起点，见 `OpenProjectTask::request`）。
+    if let Some(purpose) = task.take_request() {
+        task.spawn_for(purpose);
+    }
     let Some(outcome) = task.take_if_finished() else {
         return;
     };
@@ -400,12 +447,23 @@ fn poll_open_project_dialog(
                 &mut notice,
                 &mut diagnostics,
                 &mut edit,
+                &mut playback,
+                &mut view,
+                &mut tex,
+                atlas.as_deref(),
+                &mut images,
+                &mut cameras,
                 frame,
             );
         }
         DialogPurpose::SaveAs => {
             let dir = path.to_string_lossy().into_owned();
             save_world_to_dir(&dir, &mut projection, &mut edit, &mut notice, frame);
+        }
+        DialogPurpose::PickNewProjectLocation => {
+            // 只回填输入框；位置变了，框内残留的旧错误不再成立，一并清掉。
+            new_project_dialog.location = path.to_string_lossy().into_owned();
+            new_project_dialog.error = None;
         }
     }
 }
@@ -419,7 +477,7 @@ fn poll_open_project_dialog(
 fn save_world_to_dir(
     dir: &str,
     projection: &mut WorldProjection,
-    edit: &mut crate::editing::EditHistory,
+    edit: &mut crate::edit::editing::EditHistory,
     notice: &mut ShellNotice,
     frame: u64,
 ) {
@@ -459,11 +517,15 @@ fn save_world_to_dir(
 
 /// 从磁盘加载一个工程并替换当前工作副本（v0.2 §A「切换最近工程」）。
 ///
-/// 成功后必须同时做三件事，缺一不可：
+/// **运行期换世界唯一完整入口**：对话框打开（`poll_open_project_dialog`）、
+/// 最近工程（`OpenRecentProject`）、启动加载（`startup_load`）都从这里过。
+/// 成功后必须同时做四件事，缺一不可：
 /// 1. 替换 [`WorldProjection::world`] 与 `project_dir`、清 `dirty`；
 /// 2. [`DrillState::reset_to_world`]——**重置地图层级回世界**，否则新工程的
 ///    路径里还留着旧工程的 id（§A 明确要求）；
-/// 3. 推进 [`RecentProjects`] 的顺序。
+/// 3. 推进 [`RecentProjects`] 的顺序；
+/// 4. [`adopt_world_snapshot`] 接管纹理 / 相机 / 播放——漏了它就是「加载完成
+///    像没加载」：底图停在旧工程、相机纹丝不动（见该函数文档的回归记录）。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn load_project_into(
     dir: &str,
@@ -472,7 +534,13 @@ pub(crate) fn load_project_into(
     recents: &mut RecentProjects,
     notice: &mut ShellNotice,
     diagnostics: &mut crate::state::ProjectDiagnostics,
-    edit: &mut crate::editing::EditHistory,
+    edit: &mut crate::edit::editing::EditHistory,
+    playback: &mut PlaybackState,
+    view: &mut ViewState,
+    tex: &mut TerrainTexture,
+    atlas: Option<&TileAtlas>,
+    images: &mut Assets<Image>,
+    cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     frame: u64,
 ) {
     match wv_io::Project::open(dir).and_then(|p| p.load_world()) {
@@ -498,11 +566,14 @@ pub(crate) fn load_project_into(
             // 系统链上 `refresh_project_diagnostics` 也会重算（并清 `needs_diagnose`），
             // 但本帧若不立刻灌，UI 会先看到旧工程的诊断，视觉闪烁。
             // 走 `derive_diagnostics`（错误+提示），不只 `derive_hints`。
-            let d = crate::diagnostics_bridge::derive_diagnostics(&projection.world);
+            let d = crate::edit::diagnostics_bridge::derive_diagnostics(&projection.world);
             diagnostics.last_count = d.items.len();
             diagnostics.diagnostics = d;
             diagnostics.needs_diagnose = false;
             notice.info(format!("已加载工程「{name}」"), frame);
+            adopt_world_snapshot(
+                projection, drill, playback, view, tex, atlas, images, cameras,
+            );
         }
         Err(e) => {
             projection.load_error = Some(format!("打开工程 `{dir}` 失败: {e}"));
@@ -569,7 +640,9 @@ fn load_error_card(mut ctxs: EguiContexts, mut projection: ResMut<WorldProjectio
         .show(ctx, |ui| {
             ui.label(egui::RichText::new(&err).color(egui::Color32::LIGHT_RED));
             ui.add_space(8.0);
-            ui.label("换一个工程：文件 → 打开工程…（Ctrl+O），或命令行 `wv gui -m <工程目录>`。");
+            ui.label(
+                "换一个工程：顶栏工程菜单 → 打开工程…（Ctrl+O），或命令行 `wv gui -m <工程目录>`。",
+            );
             ui.add_space(8.0);
             if ui.button("知道了").clicked() {
                 projection.load_error = None;
@@ -593,7 +666,7 @@ fn startup_load(
     mut recents: ResMut<RecentProjects>,
     mut notice: ResMut<ShellNotice>,
     mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
-    mut edit: ResMut<crate::editing::EditHistory>,
+    mut edit: ResMut<crate::edit::editing::EditHistory>,
     mut playback: ResMut<PlaybackState>,
     mut view: ResMut<ViewState>,
     mut tex: ResMut<TerrainTexture>,
@@ -610,10 +683,8 @@ fn startup_load(
     let Some(dir) = req.0.take() else {
         if !*hinted {
             *hinted = true;
-            notice.info(
-                "未加载工程：文件 → 打开工程…（Ctrl+O），或 `wv gui -m <工程目录>`",
-                frame,
-            );
+            // 2026-10-14 起无工程时欢迎页全屏接管，指引跟着改口。
+            notice.info("未加载工程：在欢迎页新建或打开工程后即可开始绘制", frame);
         }
         return;
     };
@@ -626,20 +697,14 @@ fn startup_load(
         &mut notice,
         &mut diagnostics,
         &mut edit,
+        &mut playback,
+        &mut view,
+        &mut tex,
+        atlas.as_deref(),
+        &mut images,
+        &mut cameras,
         frame,
     );
-    if projection.load_error.is_none() {
-        adopt_world_snapshot(
-            &mut projection,
-            &drill,
-            &mut playback,
-            &mut view,
-            &mut tex,
-            atlas.as_deref(),
-            &mut images,
-            &mut cameras,
-        );
-    }
 }
 
 /// 工作副本整体替换后的视图 / 纹理 / 播放接管——**加载成功 / 关闭工程 / 新建工程**
@@ -676,14 +741,18 @@ fn adopt_world_snapshot(
 ) {
     // 地形保底（与 `setup_terrain_texture_after_world` 同一不变量：总有底图可用）。
     // Phase 2：底图按图存，取「当前图向上的第一张自带栅格」，都没有才塞占位。
-    let (map, data) = crate::terrain_view::active_terrain_or_placeholder(
+    let (map, data) = crate::render::terrain_view::active_terrain_or_placeholder(
         &mut projection.world,
         drill.current(),
         512,
     );
-    let image =
-        crate::terrain_view::image_from_terrain(&data, view.mode, atlas, view.terrain_soften);
-    crate::terrain_view::replace_terrain_texture(
+    let image = crate::render::terrain_view::image_from_terrain(
+        &data,
+        view.mode,
+        atlas,
+        view.terrain_soften,
+    );
+    crate::render::terrain_view::replace_terrain_texture(
         tex,
         images,
         image,
@@ -697,6 +766,9 @@ fn adopt_world_snapshot(
     let (center, scale) = crate::app_bootstrap::fit_view_for_world(&projection.world);
     view.camera_center = center;
     view.scale = scale;
+    // 同步当前图 id 镜像。`drill` 是 `Res<DrillState>`（借用）所以这里手动调——
+    // 不调的话状态栏的「已选」与新工程的真实层级会有一帧失同步。
+    drill.sync_view(view);
     playback.range_from = projection
         .world
         .timeline
@@ -713,7 +785,7 @@ fn adopt_world_snapshot(
     for (mut transform, mut proj) in cameras.iter_mut() {
         transform.translation.x = center.x;
         transform.translation.y = center.y;
-        crate::camera::set_ortho_scale(&mut proj, scale);
+        crate::render::camera::set_ortho_scale(&mut proj, scale);
     }
 }
 
@@ -727,23 +799,33 @@ fn adopt_world_snapshot(
 /// 能力边界（如实回执，不假装成功）：
 ///
 /// - 打开工程… → ✅ 原生目录选择对话框（`rfd`），加载走 `wv_io::Project::open`
-/// - 打开最近工程 → ✅ 真加载（`wv_io::Project::open`）
-/// - 新建工程 → ✅ 内存中新建空白工程（`Ctrl+S` 时引导选目录落盘）
-/// - 关闭工程 → ✅ 清空工作副本
+/// - 打开最近工程 → ✅ 真加载 + 视图接管（`load_project_into` 内含 adopt）
+/// - 新建工程 → ✅ 弹「新建工程」对话框（名称 + 位置 + 路径预览）；确认后在
+///   `位置\名称` 落盘（含首张世界地图）并打开（2026-10-14 改版，取代旧的
+///   「内存空白工程 + 首次保存再选目录」链路）
+/// - 关闭工程 → ✅ 清空工作副本并归位视图（底图 / 相机 / 播放）
 /// - 另存为… → ✅ 目录对话框 → `Project::create`/`open` + 全量保存
 /// - 导出… → ⛔ 导出格式未定（见 v0.2 §G）
 /// - 项目设置 → ⛔ 面板未实现（v0.3）
-/// - 保存 → ✅ `wv_io::Project::save_world` 全量写，dirty 路由 v0.2
+/// - 保存 → ✅ 无目录时排队「选保存位置」对话框；有目录走
+///   `wv_io::Project::save_world` 全量写，dirty 路由 v0.2
 #[allow(clippy::too_many_arguments)]
 fn dispatch_project_command(
     id: &CommandId,
     projection: &mut WorldProjection,
+    new_project_dialog: &mut crate::ui::NewProjectDialog,
     drill: &mut DrillState,
     recents: &mut RecentProjects,
     notice: &mut ShellNotice,
     open_task: &mut OpenProjectTask,
     diagnostics: &mut crate::state::ProjectDiagnostics,
-    edit: &mut crate::editing::EditHistory,
+    edit: &mut crate::edit::editing::EditHistory,
+    playback: &mut PlaybackState,
+    view: &mut ViewState,
+    tex: &mut TerrainTexture,
+    atlas: Option<&TileAtlas>,
+    images: &mut Assets<Image>,
+    cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     frame: u64,
 ) -> bool {
     match id {
@@ -760,6 +842,12 @@ fn dispatch_project_command(
                         notice,
                         diagnostics,
                         edit,
+                        playback,
+                        view,
+                        tex,
+                        atlas,
+                        images,
+                        cameras,
                         frame,
                     );
                 }
@@ -768,19 +856,11 @@ fn dispatch_project_command(
             true
         }
         CommandId::NewProject => {
-            projection.world = wv_core::World::default();
-            projection.project_dir = None;
-            projection.dirty = true;
-            projection.load_error = None;
-            drill.reset_to_world();
-            // 新建空白工程：清空诊断并打上重算标（避免显示旧工程的提示）。
-            diagnostics.diagnostics = wv_io::diagnostics::Diagnostics::default();
-            diagnostics.last_count = 0;
-            diagnostics.needs_diagnose = true;
-            // 新工程：清空编辑历史与 dirty 集合（与 `load_project_into` 同源）。
-            edit.history = Default::default();
-            edit.clear_dirty();
-            notice.info("已新建空白工程（尚未落盘）", frame);
+            // 2026-10-14 改版（用户需求：参考 VS 的新建项目对话框）：不再默默
+            // 造一个内存空白世界——弹对话框收「名称 + 位置」，确认后在
+            // `位置\名称` 落盘（含首张世界地图）并打开。创建逻辑与落盘细节
+            // 全在 `ui::new_project_dialog`；这里只负责把框打开。
+            new_project_dialog.open();
             true
         }
         CommandId::CloseProject => {
@@ -795,20 +875,25 @@ fn dispatch_project_command(
             diagnostics.needs_diagnose = true;
             edit.history = Default::default();
             edit.clear_dirty();
+            // 关闭 = 换成空世界：底图 / 相机 / 播放必须跟着归位，否则旧工程的
+            // 地图永远挂在屏上（回归 2026-10-14「关了像没关」，见 adopt 文档）。
+            adopt_world_snapshot(
+                projection, drill, playback, view, tex, atlas, images, cameras,
+            );
             notice.info("已关闭工程", frame);
             true
         }
         CommandId::OpenProject => {
-            // 发起系统目录选择对话框（不阻塞）；选完路径由
-            // `poll_open_project_dialog` 收口、复用 `OpenRecentProject` 的同一条
-            // `load_project_into` 加载路径——结果就只是「多了一条最近工程」。
-            open_task.spawn();
+            // 排队「打开工程」对话框意图（不阻塞）；下一帧由
+            // `poll_open_project_dialog` 发起、收口，复用 `OpenRecentProject`
+            // 的同一条 `load_project_into` 加载路径——结果就只是「多了一条最近工程」。
+            open_task.request(DialogPurpose::Open);
             true
         }
         CommandId::SaveProjectAs => {
-            // v0.3 §B：接上目录对话框——选完由 `poll_open_project_dialog`
-            // 的 SaveAs 分支收口（create-or-open + 全量保存）。
-            open_task.spawn_for(DialogPurpose::SaveAs);
+            // v0.3 §B：排队「选保存位置」意图——下一帧发起，选完由
+            // `poll_open_project_dialog` 的 SaveAs 分支收口（create-or-open + 全量保存）。
+            open_task.request(DialogPurpose::SaveAs);
             true
         }
         CommandId::ExportProject => {
@@ -847,43 +932,100 @@ fn dispatch_project_command(
 
 /// 执行命令面板 / 快捷键 / 菜单排队的命令。
 ///
-/// **唯一分发器**：所有入口只写 `palette.pending = Some(id)`，由这里统一执行。
-/// 拆成多个系统各自 `take()` 会在「谁先拿到」上产生时序耦合。
+/// **唯一分发器**：快捷键与命令面板写 [`CommandPalette::pending`]；顶栏工程菜单
+/// 的绘制函数只拿得到菜单自身状态，命令先落 [`crate::ui::ProjectMenuState::pending`]。
+/// 两条队列在这里汇合（菜单优先，每帧最多消费一条）统一执行——拆成多个系统各自
+/// `take()` 会在「谁先拿到」上产生时序耦合。菜单的写入发生在
+/// `EguiPrimaryContextPass`（晚于本 `Update`），所以菜单命令在下一帧这里被执行，
+/// 一帧延迟与快捷键「PreUpdate 写 / 本帧 Update 收」同量级，用户不可感。
 #[allow(clippy::too_many_arguments)]
 fn apply_pending_commands(
-    mut palette: ResMut<CommandPalette>,
-    mut panels: ResMut<PanelState>,
-    mut cfg: ResMut<UiShellConfig>,
-    mut view: ResMut<ViewState>,
-    mut playback: ResMut<crate::state::PlaybackState>,
-    mut brush: ResMut<crate::state::BrushState>,
-    mut projection: ResMut<WorldProjection>,
-    mut drill: ResMut<DrillState>,
-    mut recents: ResMut<RecentProjects>,
-    mut notice: ResMut<ShellNotice>,
-    mut edit: ResMut<crate::editing::EditHistory>,
-    mut tex: ResMut<crate::terrain_view::TerrainTexture>,
-    mut open_task: ResMut<OpenProjectTask>,
-    mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
+    // Bevy 单个函数系统的参数上限是 16 个；汇入菜单队列、换世界接管资源后
+    // 到这里共 19 个，超限报「not a valid system」。按职责折成嵌套元组——
+    // `SystemParam` 对元组递归实现，每层元组算 1 个参数；解构保留原名，函数体不受影响。
+    (mut palette, mut menu, mut panels): (
+        ResMut<CommandPalette>,
+        ResMut<crate::ui::ProjectMenuState>,
+        ResMut<PanelState>,
+    ),
+    (mut cfg, mut view, mut playback): (
+        ResMut<UiShellConfig>,
+        ResMut<ViewState>,
+        ResMut<crate::state::PlaybackState>,
+    ),
+    (mut brush, mut projection, mut drill): (
+        ResMut<crate::state::BrushState>,
+        ResMut<WorldProjection>,
+        ResMut<DrillState>,
+    ),
+    (mut recents, mut notice, mut edit): (
+        ResMut<RecentProjects>,
+        ResMut<ShellNotice>,
+        ResMut<crate::edit::editing::EditHistory>,
+    ),
+    (mut tex, mut open_task, mut diagnostics): (
+        ResMut<crate::render::terrain_view::TerrainTexture>,
+        ResMut<OpenProjectTask>,
+        ResMut<crate::state::ProjectDiagnostics>,
+    ),
+    // 「新建地图」对话框的开关（CommandId::NewMap → open_for；真正的创建
+    // 在对话框自身的系统里提交，见 `ui::new_map_dialog`）。
+    // 「新建工程」对话框的开关同源（CommandId::NewProject / 欢迎页 → open）。
+    // 两个 ResMut 折成一层元组：单系统参数上限 16，拆元组后每层元组算 1 个。
+    (mut new_map_dialog, mut new_project_dialog): (
+        ResMut<crate::ui::NewMapDialog>,
+        ResMut<crate::ui::NewProjectDialog>,
+    ),
+    // 换世界接管（adopt_world_snapshot）所需：瓦片图集可缺席（纯色平涂回退）。
+    (atlas, mut images): (
+        Option<Res<crate::render::terrain_view::TileAtlas>>,
+        ResMut<Assets<Image>>,
+    ),
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     time: Res<Time>,
 ) {
-    let Some(id) = palette.pending.take() else {
+    // 菜单队列优先（egui 一帧最多产生一条），命令面板其次。
+    let id = menu.pending.take().or_else(|| palette.pending.take());
+    let Some(id) = id else {
         return;
     };
     // 帧号：回执过期判断只依赖它，不引入计时器资源。
     let frame = (time.elapsed_secs() * 60.0) as u64;
 
+    // 无工程锁（2026-10-14 用户需求）：没有打开任何工程时，一切「改数据 /
+    // 需要工程上下文」的命令一律挡下并指出下一步——欢迎页是唯一入口。
+    // NewProject / OpenProject / CloseProject（本身就是入口）与视图 / 面板
+    // 命令不在其列；笔刷与街道的输入侧另有同口径门禁（见 collect_brush_stroke）。
+    if !projection.has_open_project()
+        && matches!(
+            id,
+            CommandId::NewMap
+                | CommandId::Save
+                | CommandId::SaveProjectAs
+                | CommandId::ExportProject
+        )
+    {
+        notice.error("请先新建或打开工程，再执行该操作", frame);
+        return;
+    }
+
     // 工程 / 导航类先试（它们改的是世界与路径，与下面的视图状态互不重叠）。
     if dispatch_project_command(
         &id,
         &mut projection,
+        &mut new_project_dialog,
         &mut drill,
         &mut recents,
         &mut notice,
         &mut open_task,
         &mut diagnostics,
         &mut edit,
+        &mut playback,
+        &mut view,
+        &mut tex,
+        atlas.as_deref(),
+        &mut images,
+        &mut cameras,
         frame,
     ) {
         return;
@@ -891,11 +1033,16 @@ fn apply_pending_commands(
 
     match id {
         CommandId::SetViewMode(i) => {
-            if let Some(m) = crate::state::ViewMode::ALL.get(i as usize) {
+            // 索引对 `BROWSING` 而不是 `ALL`：命令面板 / 快捷键只开放两种浏览模式
+            // （2026-10-14 用户裁定），索引语义必须与列表来源一致。
+            if let Some(m) = crate::state::ViewMode::BROWSING.get(i as usize) {
                 view.mode = *m;
             }
         }
         CommandId::OpenCommandPalette => palette.open(),
+        // 新建地图：只负责把对话框打开（默认值按世界现状预填）；创建动作
+        // 在对话框自身的系统里经 `AddMapCommand` 提交（见 `ui::new_map_dialog`）。
+        CommandId::NewMap => new_map_dialog.open_for(&projection.world),
         CommandId::ToggleTheme => cfg.theme = cfg.theme.toggled(),
         CommandId::ToggleDensity => cfg.density = cfg.density.toggled(),
         CommandId::ToggleImmersive => panels.immersive = !panels.immersive,
@@ -908,22 +1055,26 @@ fn apply_pending_commands(
             let (center, scale) = crate::app_bootstrap::fit_view_for_world(&projection.world);
             view.camera_center = center;
             view.scale = scale;
-            crate::camera::apply_view_to_camera(center, scale, &mut cameras);
+            crate::render::camera::apply_view_to_camera(center, scale, &mut cameras);
         }
         CommandId::Zoom(d) => {
             // 命令没有指针上下文（锚点固定为视口中心），但**缩放上下限必须按当前级别取**：
             // 固定 `0.1..8.0` 是单级时代的产物，分级后城市/街道级的区间完全不同
             // （ADR-0009 §8 决策①）。窗口尺寸只影响区间宽度，取不到时按默认窗口。
             let window_size = view.window_size;
-            let band = crate::zoom_level::level_zoom(
+            let band = crate::render::zoom_level::level_zoom(
                 &projection.world,
                 drill.current(),
                 window_size,
-                Vec2::splat(crate::zoom_level::FALLBACK_MAP_SIZE),
+                Vec2::splat(crate::render::zoom_level::FALLBACK_MAP_SIZE),
             );
             view.scale = band.clamp(view.scale * if d > 0 { 1.25 } else { 0.8 });
             // 缩放锚点 = 视口中心（命令无指针上下文，保持中心不动）。
-            crate::camera::apply_view_to_camera(view.camera_center, view.scale, &mut cameras);
+            crate::render::camera::apply_view_to_camera(
+                view.camera_center,
+                view.scale,
+                &mut cameras,
+            );
         }
         CommandId::TogglePlay => playback.playing = !playback.playing,
         CommandId::JumpToStart => playback.current_day = playback.range_from,
@@ -934,7 +1085,7 @@ fn apply_pending_commands(
         // 撤销 / 重做走 `editing` 的公开入口（同一份逻辑，不复制）。
         CommandId::Undo | CommandId::Redo => {
             let redo = matches!(id, CommandId::Redo);
-            match crate::editing::apply_history_command(
+            match crate::edit::editing::apply_history_command(
                 redo,
                 &mut edit,
                 &mut projection,
@@ -957,9 +1108,10 @@ fn apply_pending_commands(
         // 刚加载、刚撤销等场景）。失败不排空——脏标记仍在，下次保存能补上。
         CommandId::Save => {
             let Some(dir) = projection.project_dir.clone() else {
-                // 新建工程还没目录：不再报死错，而是接「选保存位置」对话框
-                // （v0.3 §B）。这补上了「新建 → 首次保存」的断链。
-                open_task.spawn_for(DialogPurpose::SaveAs);
+                // 新建工程还没目录：不再报死错，而是排队「选保存位置」对话框
+                // 意图（v0.3 §B，下一帧由 `poll_open_project_dialog` 发起）。
+                // 这补上了「新建 → 首次保存」的断链。
+                open_task.request(DialogPurpose::SaveAs);
                 return;
             };
             let dirty = edit.take_dirty();
@@ -983,6 +1135,12 @@ fn apply_pending_commands(
                 },
                 Err(e) => notice.error(format!("打开工程目录失败：{e}"), frame),
             }
+        }
+        // 强制重画地形纹理（2026-10-14 用户需求：怀疑数据已改、画面没跟上时点 ↻）。
+        // 不动世界数据；只清 `last_mode/last_map` 让下一帧必然全图重建。
+        CommandId::ForceRebuildTexture => {
+            crate::render::terrain_view::force_rebuild(&mut tex);
+            notice.info("已强制重画地形", frame);
         }
         // 其余工程 / 导航命令已在上面消费。
         CommandId::OpenRecentProject(_)
@@ -1099,11 +1257,273 @@ mod tests {
         let mut t = OpenProjectTask {
             task: Some(pending),
             purpose: DialogPurpose::default(),
+            wanted: None,
         };
         // 此刻 future 永远 pending，is_finished 一定为 false。
         assert!(
             t.take_if_finished().is_none(),
             "未关闭的对话框不应让 UI 线程阻塞"
         );
+    }
+
+    /// 给分发器测试搭一个最小 `World`：与真实装配同名的资源 + 一条待执行命令
+    /// （落在 `CommandPalette::pending`，即快捷键 / 命令面板的入队口）。
+    ///
+    /// `AsyncComputeTaskPool::get_or_init`：分发器走对话框路径时会 `get()`，
+    /// 裸单测没有 TaskPoolPlugin 未初始化会 panic；应用运行时 Bevy 已初始化，
+    /// 这里 init 是幂等的。
+    fn dispatcher_world(project_dir: Option<&str>, dirty: bool, pending: CommandId) -> World {
+        AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
+        let mut world = World::new();
+        world.init_resource::<CommandPalette>();
+        world.init_resource::<crate::ui::ProjectMenuState>();
+        world.init_resource::<PanelState>();
+        world.init_resource::<UiShellConfig>();
+        world.init_resource::<ViewState>();
+        world.init_resource::<crate::state::PlaybackState>();
+        world.init_resource::<crate::state::BrushState>();
+        world.init_resource::<DrillState>();
+        world.init_resource::<RecentProjects>();
+        world.init_resource::<ShellNotice>();
+        world.init_resource::<crate::edit::editing::EditHistory>();
+        world.init_resource::<OpenProjectTask>();
+        world.init_resource::<crate::state::ProjectDiagnostics>();
+        world.init_resource::<crate::ui::NewMapDialog>();
+        world.init_resource::<crate::ui::NewProjectDialog>();
+        use bevy::asset::Assets;
+        use bevy::image::Image;
+        world.init_resource::<Assets<Image>>();
+        world.insert_resource(WorldProjection {
+            world: wv_core::World::default(),
+            project_dir: project_dir.map(str::to_owned),
+            dirty,
+            load_error: None,
+        });
+        world.insert_resource(TerrainTexture {
+            handle: Default::default(),
+            size: 1,
+            res: 1,
+            dirty: None,
+            chunks_dirty: None,
+            last_mode: None,
+            last_soften: false,
+            last_map: None,
+        });
+        world.insert_resource(Time::<()>::default());
+        world.resource_mut::<CommandPalette>().pending = Some(pending);
+        world
+    }
+
+    /// 无工程锁（2026-10-14）：没有打开任何工程时，「保存」不再排队「选保存
+    /// 位置」对话框（那是旧的「内存空白工程」链路），而是挡下并给出下一步
+    /// 指引——欢迎页是唯一入口。有工程在手时才走原有的 dirty 保存路径。
+    #[test]
+    fn save_without_project_shows_guidance_instead_of_a_dialog() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = dispatcher_world(None, true, CommandId::Save);
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+        let task = world.resource::<OpenProjectTask>();
+        assert!(
+            task.wanted.is_none() && task.task.is_none(),
+            "无工程时不得发起 / 排队任何目录对话框"
+        );
+        let notice = world.resource::<ShellNotice>();
+        assert!(
+            notice.is_error
+                && notice
+                    .text
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("新建或打开工程"),
+            "应给出「先新建或打开工程」的指引，实得 {:?}",
+            notice.text
+        );
+    }
+
+    #[test]
+    fn open_project_command_queues_open_dialog() {
+        // 「打开工程…」同样只排队意图：发起收口在轮询系统（见
+        // `OpenProjectTask::request` 的文档）。
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = dispatcher_world(None, false, CommandId::OpenProject);
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+        let task = world.resource::<OpenProjectTask>();
+        assert_eq!(
+            task.wanted,
+            Some(DialogPurpose::Open),
+            "打开工程应排队「打开」对话框意图"
+        );
+        assert!(task.task.is_none(), "分发器不得直接发起 rfd 对话框");
+    }
+
+    #[test]
+    fn project_menu_pending_command_reaches_the_dispatcher() {
+        // 回归 1：工程菜单的点击 / 回车写的是 `ProjectMenuState::pending`，而唯一
+        // 分发器曾只消费 `CommandPalette::pending`——菜单里的「打开工程 / 新建 /
+        // 关闭」全部悬空（点击无反应）。
+        // 回归 2：换世界后必须走 `adopt_world_snapshot` 接管纹理 / 相机 / 播放，
+        // 否则「关闭像没点」——旧底图原封不动挂在屏上。
+        // 本测试用最小 World 跑真实分发器：菜单队列里的 CloseProject 必须被执行
+        //（世界被清空 + 状态栏回执 + 纹理整体重建标记）。
+        //（2026-10-14 起用 CloseProject 验证 adopt：NewProject 改为只弹对话框、
+        // 不再直接换世界，adopt 的菜单级回归覆盖转移到 CloseProject 上。）
+        use crate::render::terrain_view::TerrainTexture;
+        use crate::ui::ProjectMenuState;
+        use bevy::asset::Assets;
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy::image::Image;
+
+        let mut world = World::new();
+        world.init_resource::<CommandPalette>();
+        world.init_resource::<ProjectMenuState>();
+        world.init_resource::<PanelState>();
+        world.init_resource::<UiShellConfig>();
+        world.init_resource::<ViewState>();
+        world.init_resource::<crate::state::PlaybackState>();
+        world.init_resource::<crate::state::BrushState>();
+        world.init_resource::<DrillState>();
+        world.init_resource::<RecentProjects>();
+        world.init_resource::<ShellNotice>();
+        world.init_resource::<crate::edit::editing::EditHistory>();
+        world.init_resource::<OpenProjectTask>();
+        world.init_resource::<crate::state::ProjectDiagnostics>();
+        world.init_resource::<crate::ui::NewMapDialog>();
+        world.init_resource::<crate::ui::NewProjectDialog>();
+        world.init_resource::<Assets<Image>>();
+        world.insert_resource(WorldProjection {
+            world: wv_core::World::default(),
+            project_dir: Some("D:/some/project".into()),
+            dirty: true,
+            load_error: None,
+        });
+        world.insert_resource(TerrainTexture {
+            handle: Default::default(),
+            size: 1,
+            res: 1,
+            dirty: None,
+            chunks_dirty: None,
+            last_mode: None,
+            last_soften: false,
+            last_map: None,
+        });
+        world.insert_resource(Time::<()>::default());
+        world.resource_mut::<ProjectMenuState>().pending = Some(CommandId::CloseProject);
+
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+
+        let projection = world.resource::<WorldProjection>();
+        assert!(
+            projection.project_dir.is_none() && !projection.dirty,
+            "菜单 pending 的 CloseProject 未被执行（菜单命令悬空回归）"
+        );
+        assert!(
+            world.resource::<ShellNotice>().text.is_some(),
+            "命令执行后状态栏应有回执"
+        );
+        let tex = world.resource::<TerrainTexture>();
+        assert!(
+            tex.dirty.is_some(),
+            "CloseProject 后纹理未整体重建（adopt_world_snapshot 未被触发：地图停在旧世界）"
+        );
+        // 初始手工构造的纹理 `last_mode` 为 None；adopt 内的
+        // `replace_terrain_texture` 必然写入 `Some(mode)`。
+        assert!(
+            tex.last_mode.is_some(),
+            "adopt 未按新世界重建纹理（last_mode 仍为 None）"
+        );
+    }
+
+    /// 2026-10-14 改版：`CommandId::NewProject` 只负责弹「新建工程」对话框，
+    /// 不再默默清世界 / 标脏（创建与落盘在对话框确认后发生）。无工程锁下的
+    /// 门禁不拦它——它就是入口之一。
+    #[test]
+    fn new_project_command_opens_the_dialog_not_a_blank_world() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = dispatcher_world(None, false, CommandId::NewProject);
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+        assert!(
+            world.resource::<crate::ui::NewProjectDialog>().open,
+            "NewProject 应打开「新建工程」对话框"
+        );
+        let projection = world.resource::<WorldProjection>();
+        assert!(
+            !projection.dirty && projection.project_dir.is_none(),
+            "对话框未确认前不得改工作副本（世界替换 / 落盘都在确认后）"
+        );
+    }
+
+    /// 无工程锁：`CommandId::NewMap`（同样改数据）在无工程时必须被挡下，
+    /// 对话框不打开、世界不动、回执给指引。
+    #[test]
+    fn new_map_is_blocked_until_a_project_is_open() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = dispatcher_world(None, false, CommandId::NewMap);
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+        assert!(
+            !world.resource::<crate::ui::NewMapDialog>().open,
+            "无工程时不得打开「新建地图」对话框"
+        );
+        let notice = world.resource::<ShellNotice>();
+        assert!(
+            notice.is_error
+                && notice
+                    .text
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("新建或打开工程"),
+            "应给出指引，实得 {:?}",
+            notice.text
+        );
+    }
+
+    /// 2026-10-14 用户反馈「新建工程后笔刷涂大地图没变化」的根本原因（旧版
+    /// NewProject 直接换世界）：换世界后 `view.current_map` 没同步到 drill 镜像
+    /// ——笔触按陈旧 id 提交命令，落到不存在的图上。
+    ///
+    /// NewProject 改版后 adopt 的换世界路径由 CloseProject 代表验证：预置一个
+    /// 陈旧的 `view.current_map`，断言 adopt 路径把它清回 drill 的镜像；且若
+    /// drill.current() 指向某张图，那张图必须真实存在。
+    #[test]
+    fn adopt_world_syncs_view_current_map_to_drill_current() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = dispatcher_world(Some("D:/old/project"), true, CommandId::CloseProject);
+        // 预置陈旧镜像：关闭工程后世界为空，正确的同步结果是把它清空。
+        world.resource_mut::<ViewState>().current_map = "stale_map".into();
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+
+        let drill = world.resource::<DrillState>();
+        let view = world.resource::<ViewState>();
+        // adopt 路径必须把 view.current_map 与 drill.current 对齐。
+        assert_eq!(
+            view.current_map,
+            drill
+                .current()
+                .map(|i| i.as_str().to_owned())
+                .unwrap_or_default(),
+            "adopt 路径必须把 view.current_map 同步到 drill.current()，\
+             否则笔触会按陈旧 id 提交"
+        );
+        // 若 drill.current 指向某 id，那张图必须存在。
+        if let Some(id) = drill.current() {
+            let exists = world
+                .resource::<WorldProjection>()
+                .world
+                .maps
+                .iter()
+                .any(|m| &m.id == id);
+            assert!(exists, "drill.current() 指向的图应真实存在：{id:?}");
+        }
     }
 }

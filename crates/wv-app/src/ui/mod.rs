@@ -3,8 +3,7 @@
 //! ## 职责
 //! - 顶栏、状态栏、项目菜单、命令面板窗口、时间轴、笔刷、小地图、罗盘、
 //!   检视器、势力、校验等浮窗面板。
-//! - 共享 widget helper（`badge` / `empty_state` / `list_item` / `panel_header`
-//!   / `float_window` 等）。
+//! - 共享 widget helper（`badge` / `empty_state` / `list_item` / `float_window` 等）。
 //!
 //! ## 边界（不做什么）
 //! - **不分发命令**——单一入口 [`crate::ui_shell::apply_pending_commands`]；本模块只
@@ -27,12 +26,15 @@ pub mod layers_panel;
 pub mod list_panels_panel;
 pub mod map_controls;
 pub mod minimap_panel;
+pub mod new_map_dialog;
+pub mod new_project_dialog;
 pub mod project_menu;
 pub mod shell;
 pub mod situation_panel;
 pub mod timeline;
 pub mod top_bar;
 pub mod validation_panel;
+pub mod welcome_screen;
 pub mod widgets;
 
 // ── 路径兼容 re-export（保持 `crate::ui::X` 不变） ───────────────────────
@@ -45,13 +47,16 @@ pub use layers_panel::{panel_layers, panel_map_tree};
 pub use list_panels_panel::{panel_character, panel_event};
 pub use map_controls::map_controls;
 pub use minimap_panel::panel_minimap;
+pub use new_map_dialog::{new_map_dialog, NewMapDialog, NewMapPrefill};
+pub use new_project_dialog::{new_project_dialog, NewProjectDialog};
 pub use project_menu::{breadcrumb, ProjectMenuState};
 pub use shell::{terrain_swatch, UiShell, TERRAIN_NAMES};
 pub use situation_panel::panel_situation;
 pub use timeline::{panel_timeline, undo_last_street_segment, TimelineLayer};
 pub use top_bar::{status_bar, top_bar};
 pub use validation_panel::panel_validation;
-pub use widgets::{badge, empty_state, float_window, list_item, panel_header, BadgeKind};
+pub use welcome_screen::welcome_screen;
+pub use widgets::{badge, empty_state, float_window, list_item, BadgeKind};
 
 // `terrain_grid` 仅被 panel_brush 调用，从 widgets 重新导出。
 pub use widgets::terrain_grid;
