@@ -165,6 +165,9 @@
 | **格心采样** | Center sampling | 等值线提取的采样口径：每格存的值即格心样本，等值点落在相邻格心连线上（曲线穿行格子内部）；单格小岛 = 内切菱形（plan Q4） | 渲染 / 数据 |
 | **链装配** | Chain assembly | 把 marching squares 输出的离散线段按端点接成折线链；端点匹配用 `f32::to_bits` 位级精确比对（相邻对偶格共享边交点由同公式算出，位级一致，不需要浮点容差） | 渲染 / 算法 |
 | **等值线叠加层** | Isoline overlay | `VectorFlat` 浏览态在平涂底图之上的几何边界描边（海岸线 + 类型场边界），单 mesh 批量、派生不落盘；实现 `wv-app/render/terrain_view/isoline_overlay.rs`，重算触发 = 结构键 + `chunks_dirty` | 地理 / 渲染 |
+| **矢量地形** | Vector terrain | `VectorFlat` 浏览态的 UI 定名（2026-10-14 用户裁定，此前顶栏叫「等值线」——等值线只是它的描边产物）：Google 地图矢量瓦片式渲染 = 高度场平涂填充（水陆边由双线性高度决定）+ 等值线叠加层描边。浏览态两模式之一（另一个是「色块地形」），见 `ViewMode::BROWSING` | 地理 / 渲染 |
+| **色块地形** | Schematic terrain | `Schematic` 浏览态的既有 UI 名：一格一色，直接呈现每格的地形类型（`colors::core_terrain`）。浏览态两模式之一 | 地理 / 渲染 |
+| **预填充** | prefill | 「新建地图」对话框按选择整图铺满海洋（高度 < 0 + 水系类型）或陆地（高度 ≥ 0 + 陆系类型）的初始栅格；同时写高度与类型——VectorFlat 填充「高度赢过类型」口径下二者必须一致 | 编辑 / 数据 |
 
 ## 设计上不做（负向清单）
 
@@ -220,3 +223,9 @@
 
 | **职责域目录** | Domain directory | wv-app 与 wv-core 按职责域分目录：前者 ender/（地图渲染）、edit/（UI 动作→EditCommand）、ui/（面板/组件）、	heme/（外观令牌）；后者 ase/ 	ime/ map/ model/ derived/ source/。**目的**：让 AI 通过目录名快速定位（无需扫 28 个平铺文件）。模块挂点与公开 API 不变。首次出现：2026-10-14 目录级别重构 + docs/adr/README.md §5 | 工程 |
 | **保路径重导出** | Path-preserving re-export | wv-core 因 AGENTS.md §3 与文档直接引用顶层路径（如 wv_core::time::TimelineQuery），lib.rs 用 pub use base::id;（**模块**）与 pub use base::id::Id;（**类型**）两套并存的 re-export 让「wv_core::id 模块路径」与「wv_core::Id 类型路径」都仍可达。**命名空间不同**，不冲突。**作用**：目录重构不动公共 API。首次出现：2026-10-14 目录级别重构 + docs/adr/README.md §5 | 工程 |
+| **欢迎页** | Welcome screen | 无工程在手时的全屏接管界面（压暗 + 居中卡片）：「新建工程… / 打开工程… / 最近工程」。点不到地图与面板；是「先立工程才能画」的 UI 侧入口。判据 `WorldProjection::has_open_project()`（= `project_dir.is_some()`）。首次出现：2026-10-14 用户需求（新建项目对话框 + 启动锁定）+ `crates/wv-app/src/ui/welcome_screen.rs` | 工程 / 编辑 |
+| **无工程锁** | No-project lock | 「程序刚打开不能画图」的三道门禁同一判据（`has_open_project`）：① 欢迎页压暗吃点击（UI 侧）；② `collect_brush_stroke` / `commit_street_click` 直接早退（数据侧，防穿透）；③ 命令分发器挡下 NewMap / Save / SaveAs / Export（命令侧）。NewProject / OpenProject / CloseProject 是入口本身，不拦。首次出现：2026-10-14 用户需求 + `ui_shell.rs` / `camera.rs` / `streets.rs` | 工程 / 编辑 |
+| **图层帧** | LayerFrame | `MapNode.layers[].z / visible / opacity` 的**每帧投影**：`render/layer_frame.rs` 的 `resolve_layer_frame` 从当前图（`DrillState` 所指）的 layers + `ViewState` 会话开关求值出七类渲染组各自的 `LayerBinding`，写入 `LayerFrame` 资源。求值是纯函数、拉动式（AGENTS §3）；手动相等比较，绑定不变不触发 Bevy change detection。**kind→渲染组映射与全部语义的唯一出处**（ADR-0013）。首次出现：2026-10-14 六层渲染架构方案 C + ADR-0013 + `render/layer_frame.rs` | 渲染 |
+| **图层绑定** | LayerBinding | 一个渲染组从作者图层声明求出的三元绑定：`visible`（**YAML 声明 ∧ 会话开关**的合取）、`opacity`（clamp 0..=1，落材质 alpha）、`z_offset`（槽位偏移的世界 Z 值）。未声明 kind = 中性绑定（沿用会话开关、不透明、不偏移）——既有地图渲染零变化。首次出现：ADR-0013 + `render/layer_frame.rs` | 渲染 |
+| **槽位偏移** | Slot offset | ADR-0013 对作者 `z: i32` 的 v1 语义：按每格 `SLOT_STEP = 0.05` 世界 Z 平移该 kind 渲染组的**内建槽位**（各渲染模块的既有 Z 常量：道路 0.09–0.12、POI 0.21–0.22、势力 0.3、标注 0.35/0.4……），clamp ±`Z_CLAMP = 4` 格。**不是**「按 z 排序全量分带」——那会拆掉组内次序编译期断言、冲突标注远偏移，留待 v2（ADR-0013 §6 待裁）。`z` 全缺省时渲染与历史版本逐位一致。首次出现：ADR-0013 + `render/layer_frame.rs` | 渲染 |
+| **模态置顶** | Modal pinning | UI 层序约定（2026-10-14 用户要求「弹窗/浮动都在最顶层」）：egui 绘制序 `Background < Middle < Foreground < Tooltip`。浮动面板走缺省 `Middle`（点谁谁置顶）；**一切模态弹窗**（新建地图 / 新建工程 / 命令面板 / 欢迎页 / 启动加载）必须在 `Order::Foreground` 压住面板；Tooltip 在 Foreground 之上，弹窗内 `on_hover_text` 不受影响。命令面板窗口曾缺省 Middle 而**低于**自己的 Foreground 遮罩——鼠标点击全被遮罩吃掉（已修）。约定表见 `ui/widgets.rs` `float_window` 文档。首次出现：2026-10-14 用户需求 + `ui/new_map_dialog.rs` / `ui/command_palette_window.rs` / `ui/widgets.rs` | 工程 / 渲染 |

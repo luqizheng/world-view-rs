@@ -73,6 +73,7 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
 | [ADR-0010](ADR-0010-street-vector-layer.md) | 街道矢量层（双供给 + 批量渲染） | 已接受（Accepted） | 街道**不与** `distance.edges`（城市间行程连线）合并，是独立的**地物图层**；一个供给接口两个实现（虚构 = 作者手绘落 YAML 图层文件，真实 = Overture 只存引用）；渲染从「一段 2 实体」改为批量/实例化 + `class` LOD + 视口裁剪；几何不进领域 YAML；`wv-overture` 为平行叶子 crate | P1 / P2 / P3 / P4 / P5、AGENTS §2.1 / §4.2 / §5 / §9、ADR-0007、ADR-0008、ADR-0009、README §12-21 |
 | [ADR-0011](ADR-0011-bevy-0-19-upgrade.md) | 渲染引擎升级到 Bevy 0.19 | 已接受（Accepted） | 引擎 0.15.3 → **0.19.1**、bevy_egui 0.32 → **0.42**（不跳 0.20）；**在 Phase 4 之前**一次做完，先建可回退点、独立提交可整体 revert；以编译器驱动迁移 + 官方迁移指南核对「能编译但行为变了」的部分；实测迁移面极小（全仓**零 `*Bundle` 用法**） | P1、AGENTS §7.1 / §8、ADR-0008 / ADR-0009 / ADR-0010 |
 | [ADR-0012](ADR-0012-terrain-default-vector-flat-shading.md) | 浏览态地形默认底图由亚像素纹理切到等值线矢量平涂 | 已接受（Accepted） | 浏览态地形默认底图由 **ADR-0008 §2④** 的「亚像素纹理合成」改为**等值线矢量平涂**（marching squares → Chaikin → DP → 多边形平涂）；亚像素纹理合成保留为可切换模式（plan v0.1 D3 的 C 类）、瓦片图集保留为 B 类；ADR-0008 其它七项决策继续有效 | AGENTS §3 / §6.4 / P1 / P2 / P3 / P4 / P5、ADR-0008（§2④ 被部分修正）、ADR-0009（LodTier 同构复用）、plan v0.1 Q11、README §12-14(b) |
+| [ADR-0013](ADR-0013-layer-frame-binding.md) | 图层帧接通——`MapNode.layers[].z/visible/opacity` 驱动渲染 | 已接受（Accepted） | 新增 **LayerFrame**（`render/layer_frame.rs`）作为图层声明的唯一求值点：kind→渲染组映射、**可见 = YAML 声明 ∧ 会话开关**、opacity 落材质 alpha、**z 语义 v1 = 槽位偏移**（每格 0.05，clamp ±4，缺省渲染逐位不变）；标注跟随要素 kind（街名随 Road、地名随 Place）；Border/Custom 暂无消费者、EventPoint 的 z 在 Gizmos 路径不生效（待裁） | P5、AGENTS §3 / §6.4 / §7.5 V1、ADR-0008 / 0009 / 0010、GLOSSARY（图层帧/图层绑定/槽位偏移） |
 
 ---
 
