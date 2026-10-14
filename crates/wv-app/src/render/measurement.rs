@@ -85,8 +85,8 @@ const MEASURE_Z: f32 = 0.45;
 
 /// 命中容差（世界单位）。`8.0` ≈ 1 栅格（`cell_size = 8` 默认）。
 const ERASER_TOLERANCE_WU: f32 = 8.0;
-/// 长度 / 面积文字的屏幕像素基准（与 `STREET_LABEL_PX=9` 齐平）。
-const LABEL_PX: f32 = 10.0;
+/// 长度 / 面积文字的屏幕像素基准（2026-10-14 用户反馈 10 px 偏小，加到 13 px）。
+const LABEL_PX: f32 = 13.0;
 
 /// 折线标签（"段长" / "总长" / "长×宽=面积"）。
 #[derive(Component)]
@@ -260,9 +260,9 @@ pub fn render_measurements(
     for (pos, text) in &wanted {
         let text: &str = text.as_str();
 
-        // 1. 主文字（白色，z = MEASURE_Z + 0.05）
+        // 1. 主文字（白色，z = MEASURE_Z + 0.5，确保明显压在线之上）
         if let Some((_, mut tf, mut t, mut style, mut color, mut vis)) = iter_main.next() {
-            tf.translation = pos.extend(MEASURE_Z + 0.05);
+            tf.translation = pos.extend(MEASURE_Z + 0.5);
             tf.rotation = label_rot;
             *t = Text2d::new(text.to_string());
             style.font_size = font_size.into();
@@ -282,7 +282,7 @@ pub fn render_measurements(
                 },
                 TextColor(label_color),
                 Transform {
-                    translation: pos.extend(MEASURE_Z + 0.05),
+                    translation: pos.extend(MEASURE_Z + 0.5),
                     rotation: label_rot,
                     ..Default::default()
                 },
@@ -290,11 +290,11 @@ pub fn render_measurements(
             ));
         }
 
-        // 2. 描边阴影（4 个方向，各 1 像素偏移，全不透明黑，z = MEASURE_Z + 0.04）
+        // 2. 描边阴影（4 方向 1 像素，全不透明黑，z = MEASURE_Z + 0.4 — 紧贴主字下层）
         for (dx, dy) in SHADOW_OFFSETS {
             let shadow_pos = pos + Vec2::new(dx * view.scale, dy * view.scale);
             if let Some((_, mut tf, mut t, mut style, mut color, mut vis)) = iter_shadow.next() {
-                tf.translation = shadow_pos.extend(MEASURE_Z + 0.04);
+                tf.translation = shadow_pos.extend(MEASURE_Z + 0.4);
                 tf.rotation = label_rot;
                 *t = Text2d::new(text.to_string());
                 style.font_size = font_size.into();
@@ -314,7 +314,7 @@ pub fn render_measurements(
                     },
                     TextColor(shadow_color),
                     Transform {
-                        translation: shadow_pos.extend(MEASURE_Z + 0.04),
+                        translation: shadow_pos.extend(MEASURE_Z + 0.4),
                         rotation: label_rot,
                         ..Default::default()
                     },
