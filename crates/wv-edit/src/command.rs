@@ -757,6 +757,63 @@ impl EditCommand for DeleteStreetSegmentCommand {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 地点新增（ADR-0014 v0.1 骨架：HTTP skill `create_place` 的命令入口）
+// ---------------------------------------------------------------------------
+
+/// 新增一个 `Place`（距离图节点 + 地图上可选锚点）。
+///
+/// `Place` 的存储归属在 `World.distances.places`（`wv_core::distance::Place`），
+/// 它是 §4.5「每实体一文件」下的一个实体——脏路径 `distances/places`，由
+/// `wv-io::save_world` 触发该目录的全量重写 + 删除传播。
+///
+/// ## 幂等保护
+///
+/// 与 `AddMapCommand` 同源：目标 ID 已存在时 `apply` 报错，不静默覆盖——
+/// Place 是引用网络中的关键节点，悄无声息覆盖会让 `PlaceEdge` / `Unit` 的
+/// 起点终点成为悬空引用，校验面板得花更多轮才找得到原因。
+#[derive(Debug)]
+pub struct AddPlaceCommand {
+    pub place: wv_core::distance::Place,
+}
+
+impl AddPlaceCommand {
+    pub fn new(place: wv_core::distance::Place) -> Self {
+        Self { place }
+    }
+}
+
+impl EditCommand for AddPlaceCommand {
+    fn label(&self) -> String {
+        format!("新增地点「{}」", self.place.name)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        if world
+            .distances
+            .places
+            .iter()
+            .any(|p| p.id == self.place.id)
+        {
+            return Err(EditError::Precondition(format!(
+                "地点 `{}` 已存在",
+                self.place.id
+            )));
+        }
+        world.distances.places.push(self.place.clone());
+        Ok(vec!["distances/places".into()])
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let pos = world
+            .distances
+            .places
+            .iter()
+            .position(|p| p.id == self.place.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Place {}", self.place.id)))?;
+        world.distances.places.remove(pos);
+        Ok(())
+    }
+}
+
 /// 设置地图朝向（屏幕旋转角，单位：度）。
 ///
 /// `apply` 缓存旧值；`revert` 用缓存恢复。`0.0` = 正北朝上；

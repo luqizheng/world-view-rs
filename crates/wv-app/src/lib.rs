@@ -95,3 +95,10 @@ pub mod ui_layout;
 pub mod ui_shell;
 #[cfg(feature = "app")]
 pub mod ui_time;
+
+// LLM 可控编辑（ADR-0014）。仅 `--features http` 时编译；与 `app` 同源
+// （HTTP handler 持 GUI 主帧的 `WorldProjection` + `History` 句柄）。
+#[cfg(feature = "http")]
+pub mod http;
+#[cfg(feature = "http")]
+pub mod http_integration;

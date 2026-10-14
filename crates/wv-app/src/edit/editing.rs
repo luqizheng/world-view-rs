@@ -309,7 +309,7 @@ pub fn apply_history_command(
         edit.history.undo(&mut projection.world)
     };
     match result {
-        Ok(true) => {
+        Ok((true, _dirty_paths)) => {
             projection.dirty = true;
             let after = crate::render::terrain_view::texture_terrain(tex, &projection.world, None)
                 .map(|t| (t.width.max(1), t.cells.clone()));
@@ -330,7 +330,7 @@ pub fn apply_history_command(
                 "已撤销".into()
             })
         }
-        Ok(false) => Ok(if redo {
+        Ok((false, _)) => Ok(if redo {
             "没有可重做的操作".into()
         } else {
             "没有可撤销的操作".into()

@@ -14,6 +14,13 @@ incremental = false
 # 必须单独用带 feature 的命令验证。别名只是省敲：
 #   cargo app-test   == cargo test -p wv-app --features app --no-fail-fast
 #   cargo app-clippy == cargo clippy -p wv-app --all-targets --features app -- -D warnings
+#
+# 同理（ADR-0014，2026-10-14）：HTTP/MCP 服务挂在 `#[cfg(feature = "http")]`
+# 下，`cargo test --workspace` 不会编译；`cargo app-test` 也不会（http 隐式依赖
+# app 之外的 axum/tokio/async-trait/serde_json）。用 `cargo http-test` 验证
+# http 模块。
 [alias]
 app-test = "test -p wv-app --features app --no-fail-fast"
 app-clippy = "clippy -p wv-app --all-targets --features app -- -D warnings"
+http-test = "test -p wv-app --features http --no-fail-fast"
+http-clippy = "clippy -p wv-app --all-targets --features http -- -D warnings"

@@ -8,9 +8,13 @@ description = "World View 应用层：Bevy 渲染、UI、输入，转发编辑�
 
 # 应用层默认只编译 CLI 部分，渲染/UI 需显式开启 `app` feature。
 # 原因：Bevy 依赖树庞大，阶段一（数据层打底）不应对其产生构建依赖。
+# `http` feature（ADR-0014）让 LLM 客户端（Claude Desktop 等）通过 MCP 协议
+# 读 / 改 / 存当前打开的世界；依赖 `app`（GUI 主循环持有 WorldProjection + History），
+# 仅在显式 `--features http` 时拉取。默认不编译，§7.1 渲染层命令同理。
 [features]
 default = []
 app = ["dep:bevy", "dep:bevy_egui", "dep:rfd", "dep:icu_provider"]
+http = ["app", "dep:axum", "dep:tokio", "dep:async-trait", "dep:serde_json"]
 
 [dependencies]
 wv-core = { workspace = true }
@@ -29,6 +33,11 @@ rfd = { workspace = true, optional = true }
 # EnvFilter 过滤。开启该 feature（已在依赖树内，无新二进制）让告警走 `log` facade，
 # 由 gui.rs 的 LogPlugin filter（icu_provider=off）静默。
 icu_provider = { version = "2.3", optional = true, features = ["logging"] }
+# http feature 依赖
+axum = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 [[bin]]
 name = "wv"

@@ -48,6 +48,25 @@ bevy_egui = "0.42"
 # AGENTS §9 审视通过：依赖面小、与 P1（单机可运行）不冲突、不污染数据层。
 rfd = "0.17"
 
+# LLM 可控编辑（ADR-0014）。仅 `wv-app --features http` 时拉取。
+# 默认不编译，与 §7.1 渲染层独立命令同理——
+# 普通 `cargo test --workspace` / `cargo clippy --workspace` 不应编译 HTTP 模块，
+# 避免误以为 http 路径已被默认闸门覆盖。
+# axum：MCP 2025-03-26 Streamable HTTP 协议的服务端框架。
+# `json` feature 启用 `axum::Json`（POST /mcp body 反序列化用）。
+# `macros` feature 启用路由宏（v0.1 暂用 `Router::new().route` 拼接）。
+# tokio：异步运行时（axum 的默认运行时；与 Bevy 主线程并行）。
+#   `rt-multi-thread` 提供多线程运行时；`net` 提供 TcpListener；
+#   `macros` 提供 #[tokio::main]（handler 单元测试用）。
+#   与 Bevy 不抢主线程：HTTP handler 在 tokio runtime 中跑，
+#   写命令经 tokio::sync::mpsc 投递到 Bevy 主帧 drain（AGENTS §3.3）。
+# async-trait：trait 中放 async fn 的语法糖（skill handler 是 async）。
+# serde_json：MCP payload 是 JSON，与 serde_yaml 平级，二选一（HTTP 选 JSON）。
+axum = { version = "0.8", features = ["json", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync"] }
+async-trait = "0.1"
+serde_json = "1"
+
 # [启动性能] debug 构建下对热点包开优化：地形纹理合成（wv-app）与图集 PNG
 # 解码（image）在无优化 debug 下合计阻塞主线程 >5s，触发 Windows「未响应」
 # （启动白屏）。只影响这两个包的编译产物，增量编译代价可接受。

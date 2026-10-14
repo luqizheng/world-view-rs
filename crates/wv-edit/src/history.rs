@@ -5,14 +5,22 @@ use wv_core::World;
 use crate::command::{EditCommand, EditResult};
 
 /// 一次事务：一组要么全成功、要么全回滚的命令。
+///
+/// `committed_dirty` 在 [`Self::commit`] 成功后填入当时收集的脏路径，
+/// 供 [`History::undo`] / [`History::redo`] 在回退/重做时报告——
+/// 这样调用方（GUI 顶栏的 `●` 标脏、保存路径优化、HTTP `undo` skill 等）
+/// 不必各自维护「哪些事务产生了哪些 dirty 集合」的影子表。
 pub struct Transaction {
     commands: Vec<Box<dyn EditCommand>>,
+    /// `commit` 成功后填入；`commit` 未被调用过则 `None`。
+    committed_dirty: Option<Vec<String>>,
 }
 
 impl Transaction {
     pub fn new() -> Self {
         Self {
             commands: Vec::new(),
+            committed_dirty: None,
         }
     }
 
@@ -25,7 +33,7 @@ impl Transaction {
     }
 
     /// 顺序执行全部命令；任一失败则逆序回滚已成功的部分。
-    pub fn commit(&self, world: &mut World) -> EditResult<Vec<String>> {
+    pub fn commit(&mut self, world: &mut World) -> EditResult<Vec<String>> {
         let mut applied: Vec<&Box<dyn EditCommand>> = Vec::new();
         let mut dirty = Vec::new();
         for cmd in &self.commands {
@@ -42,7 +50,13 @@ impl Transaction {
                 }
             }
         }
+        self.committed_dirty = Some(dirty.clone());
         Ok(dirty)
+    }
+
+    /// 取回 `commit` 时收集的脏路径（`commit` 成功后才有值）。
+    pub fn committed_dirty(&self) -> Option<&[String]> {
+        self.committed_dirty.as_deref()
     }
 }
 
@@ -68,7 +82,7 @@ impl History {
     }
 
     /// 提交一个事务并压入 Undo 栈，清空 Redo 栈。
-    pub fn commit(&mut self, world: &mut World, tx: Transaction) -> EditResult<Vec<String>> {
+    pub fn commit(&mut self, world: &mut World, mut tx: Transaction) -> EditResult<Vec<String>> {
         if tx.is_empty() {
             return Ok(Vec::new());
         }
@@ -86,25 +100,33 @@ impl History {
         !self.redo.is_empty()
     }
 
-    /// 回退一步。
-    pub fn undo(&mut self, world: &mut World) -> EditResult<bool> {
+    /// 回退一步。返回 `(是否实际回退, 该事务 commit 时收集的脏路径)`。
+    ///
+    /// **为什么返回脏路径**：撤销「新建地图 + 预填充栅格」这种事务后，
+    /// `wv-io::save_world` 仍要知道「哪些目录路径需要重写 / 删除传播」——
+    /// 不能要求调用方自行维护影子表。把脏路径沿 `Transaction` 一路带过来
+    /// 是最不容易漂移的口径（ADR-0014 §2.3「写类 skill 经 EditCommand → History」的
+    /// 隐含约束：撤销也得能精确告诉 IO 哪些文件要动）。
+    pub fn undo(&mut self, world: &mut World) -> EditResult<(bool, Vec<String>)> {
         let Some(tx) = self.undo.pop() else {
-            return Ok(false);
+            return Ok((false, Vec::new()));
         };
         for cmd in tx.commands.iter().rev() {
             cmd.revert(world)?;
         }
+        let dirty = tx.committed_dirty.clone().unwrap_or_default();
         self.redo.push(tx);
-        Ok(true)
+        Ok((true, dirty))
     }
 
-    /// 重做一步。
-    pub fn redo(&mut self, world: &mut World) -> EditResult<bool> {
-        let Some(tx) = self.redo.pop() else {
-            return Ok(false);
+    /// 重做一步。返回 `(是否实际重做, 该事务 commit 时收集的脏路径)`。
+    pub fn redo(&mut self, world: &mut World) -> EditResult<(bool, Vec<String>)> {
+        let Some(mut tx) = self.redo.pop() else {
+            return Ok((false, Vec::new()));
         };
         tx.commit(world)?;
+        let dirty = tx.committed_dirty.clone().unwrap_or_default();
         self.undo.push(tx);
-        Ok(true)
+        Ok((true, dirty))
     }
 }
