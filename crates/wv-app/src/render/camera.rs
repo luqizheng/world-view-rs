@@ -2,6 +2,8 @@
 //!
 //! ## 职责
 //! - 处理 Bevy `Camera2d` 的缩放、平移；为 geo 坐标 ↔ 屏幕坐标提供 `ProjectionFrame`。
+//! - 把当前地图的 `MapNode.orientation` 写进相机旋转（`apply_map_orientation`，
+//!   拉动式每帧重读数据层；`wv-core` 字段文档：渲染层只读这个值，**不另设朝向字段**）。
 //! - 收集 `ActiveStroke`：按住鼠标拖拽时把世界坐标点列进栈，
 //!   左键释放后由 [`crate::editing`] 把这一段落笔画成 `EditCommand`。
 //!
@@ -12,7 +14,9 @@
 //! - **零惯性 / 无缓动**（ANIMATION_SPEC AD-3 / §4.3）——编辑要指哪打哪。
 //!
 //! ## 主要导出
-//! - `apply_view_to_camera` — 把 `ViewState` 写进 `Transform` / `Projection`。
+//! - `apply_view_to_camera` — 把 `ViewState` 写进 `Transform` / `Projection`（平移 + 缩放）。
+//! - `apply_map_orientation` — 把 `MapNode.orientation` 写进相机旋转。
+//! - `screen_to_world` — 屏幕坐标 → 世界坐标（变换链唯一实现，含旋转）。
 //! - `collect_stroke_points` — 笔刷拾取 / 笔触收集。
 //! - `ActiveStroke` 组件、`CameraZoom` 资源。
 
@@ -48,6 +52,9 @@ pub(crate) fn set_ortho_scale(projection: &mut Projection, scale: f32) {
 /// 只写 ViewState 相机纹丝不动，且 chunk 视口拣选按假视口抖动
 /// （despawn/respawn 重建画面，表现为「render 很慢」）。凡是运行期
 /// 想改取景的入口，写完 ViewState 后必须经本函数同步相机。
+///
+/// 只写平移与缩放；**旋转**归 [`apply_map_orientation`] 管（数据来自
+/// `MapNode.orientation` 而非 `ViewState`——`ViewState` 禁设朝向字段）。
 pub(crate) fn apply_view_to_camera(
     center: Vec2,
     scale: f32,
@@ -58,6 +65,49 @@ pub(crate) fn apply_view_to_camera(
         tf.translation.y = center.y;
         set_ortho_scale(&mut projection, scale);
     }
+}
+
+/// 地图朝向（度，`MapNode.orientation`，正值 = 顺时针）→ 相机旋转四元数。
+///
+/// 语义推导：Bevy 正角绕 Z 是**屏幕逆时针**；相机逆时针转 θ，画面内容即
+/// **顺时针**转 θ——恰是字段文档「0.0 = 正北朝上，正值 = 顺时针偏转
+/// （90.0 = 北方朝右）」的定义。钻入子图时朝向立即切换、不做缓动：
+/// 朝向是作者对每张图的声明而非动画参数，过渡缓动留待有真实需求再加。
+pub fn camera_rotation_for_orientation(orientation_deg: f32) -> Quat {
+    Quat::from_rotation_z(orientation_deg.to_radians())
+}
+
+/// 当前地图的朝向（度）。drill 未就绪（无当前图）时按 0 = 正北朝上。
+pub fn current_orientation(world: &wv_core::World, drill: &DrillState) -> f32 {
+    drill
+        .current_node(world)
+        .map(|n| n.orientation)
+        .unwrap_or(0.0)
+}
+
+/// 把当前地图的 `MapNode.orientation` 写进相机旋转（拉动式：每帧重读数据层）。
+///
+/// 只动 `Transform.rotation`；平移/缩放归 zoom / pan / `apply_view_to_camera`
+/// 管，互不覆写。排在输入系统**之前**：同帧的拾取换算（`screen_to_world` 等）
+/// 直接读 `Transform.rotation`，与渲染看到的是同一个值，帧内自洽。
+pub fn apply_map_orientation(
+    projection: Res<WorldProjection>,
+    drill: Res<DrillState>,
+    mut camera: Query<&mut Transform, With<Camera2d>>,
+) {
+    let rot = camera_rotation_for_orientation(current_orientation(&projection.world, &drill));
+    for mut tf in camera.iter_mut() {
+        tf.rotation = rot;
+    }
+}
+
+/// 屏幕空间的二维偏移经相机旋转映到世界空间。
+///
+/// 相机带旋转后，「屏幕上的右/上」对应的世界方向随之转动；所有
+/// 「屏幕像素偏移 → 世界偏移」的换算（平移、标注偏移）都必须过这里，
+/// 与 [`screen_to_world`] 同一条变换链。
+pub fn screen_vec_to_world(v: Vec2, camera_rotation: Quat) -> Vec2 {
+    camera_rotation.mul_vec3(v.extend(0.0)).truncate()
 }
 
 /// egui 是否想要指针输入（读上一帧结果，基线 §2.13）。
@@ -124,6 +174,8 @@ pub fn camera_zoom(
     let Ok((mut transform, mut ortho)) = camera.single_mut() else {
         return;
     };
+    // 旋转（地图朝向）参与锚点换算：屏幕像素偏移要先转过相机旋转才是世界偏移。
+    let cam_rot = transform.rotation;
 
     let old_scale = view.scale;
     let factor = (1.0 + scroll_y * 0.12).clamp(0.5, 2.0);
@@ -141,8 +193,8 @@ pub fn camera_zoom(
         (cursor.x / size.x) * 2.0 - 1.0,
         -((cursor.y / size.y) * 2.0 - 1.0),
     );
-    let cursor_world_before =
-        transform.translation.truncate() + cursor_ndc * (size * 0.5) * old_scale;
+    let cursor_world_before = transform.translation.truncate()
+        + screen_vec_to_world(cursor_ndc * (size * 0.5) * old_scale, cam_rot);
 
     // 撞界后继续同向滚动 = 请求换级。**必须在「值没变就返回」之前判**：
     // 撞界时 `new_scale == old_scale`，恰恰是下面那个提前返回会吞掉的情形。
@@ -171,8 +223,8 @@ pub fn camera_zoom(
     set_ortho_scale(&mut ortho, new_scale);
     view.scale = new_scale;
 
-    let cursor_world_after =
-        transform.translation.truncate() + cursor_ndc * (size * 0.5) * new_scale;
+    let cursor_world_after = transform.translation.truncate()
+        + screen_vec_to_world(cursor_ndc * (size * 0.5) * new_scale, cam_rot);
     let delta = cursor_world_before - cursor_world_after;
     transform.translation.x += delta.x;
     transform.translation.y += delta.y;
@@ -212,8 +264,11 @@ pub fn camera_pan(
     let Ok(mut transform) = camera.single_mut() else {
         return;
     };
-    // 屏幕像素 → 世界单位：乘以 scale，且 y 轴反向。
-    let world_delta = Vec2::new(-delta.x, delta.y) * view.scale;
+    // 屏幕像素 → 世界单位：乘以 scale，y 轴反向，再转过相机旋转（地图朝向）。
+    let world_delta = screen_vec_to_world(
+        Vec2::new(-delta.x, delta.y) * view.scale,
+        transform.rotation,
+    );
     transform.translation.x += world_delta.x;
     transform.translation.y += world_delta.y;
     view.camera_center = transform.translation.truncate();
@@ -231,17 +286,17 @@ fn pan_button_pressed(buttons: &ButtonInput<MouseButton>, brush_enabled: bool) -
 }
 
 /// 屏幕坐标 → 世界坐标（基线 §2.15 变换链，唯一实现）。
-pub fn screen_to_world(
-    cursor: Vec2,
-    window_size: Vec2,
-    camera_translation: Vec3,
-    scale: f32,
-) -> Vec2 {
+///
+/// 含相机旋转（地图朝向）：世界点 = 相机中心 + 相机旋转 × (NDC × 半窗 × scale)。
+/// 旋转来自相机 `Transform.rotation` 本身（渲染真源），调用方传整个 `Transform`
+/// 而不是只传平移——否则拾取与画面会各转各的。
+pub fn screen_to_world(cursor: Vec2, window_size: Vec2, camera: &Transform, scale: f32) -> Vec2 {
     let ndc = Vec2::new(
         (cursor.x / window_size.x) * 2.0 - 1.0,
         -((cursor.y / window_size.y) * 2.0 - 1.0),
     );
-    camera_translation.truncate() + ndc * (window_size * 0.5) * scale
+    camera.translation.truncate()
+        + screen_vec_to_world(ndc * (window_size * 0.5) * scale, camera.rotation)
 }
 
 /// 更新光标世界坐标（顶栏坐标显示）。
@@ -260,7 +315,7 @@ pub fn track_cursor_world(
     state.window_size = window.resolution.size();
     state.cursor_world = window
         .cursor_position()
-        .map(|c| screen_to_world(c, window.resolution.size(), transform.translation, scale));
+        .map(|c| screen_to_world(c, window.resolution.size(), transform, scale));
 }
 
 /// 笔刷拾取：左键按下/拖拽时收集笔触点列（**不改世界**）。
@@ -301,12 +356,7 @@ pub fn collect_brush_stroke(
     let Ok(transform) = camera.single() else {
         return;
     };
-    let world = screen_to_world(
-        cursor,
-        window.resolution.size(),
-        transform.translation,
-        view.scale,
-    );
+    let world = screen_to_world(cursor, window.resolution.size(), transform, view.scale);
 
     if buttons.just_pressed(MouseButton::Left) {
         if crate::render::drill::marker_hit(&projection.world, &drill, &grid, world, view.scale)
@@ -343,12 +393,15 @@ pub fn brush_cursor_world(
     Some(screen_to_world(
         cursor,
         window.resolution.size(),
-        transform.translation,
+        transform,
         view.scale,
     ))
 }
 
 /// 键盘平移：WASD / 方向键（零惯性）。
+///
+/// 方向按**屏幕**语义（W = 画面上移）：相机带旋转时，「画面上方」对应的世界
+/// 方向随朝向转，与鼠标拖拽平移同一口径。
 pub fn camera_pan_keys(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
@@ -379,7 +432,7 @@ pub fn camera_pan_keys(
         return;
     };
     let speed = 900.0 * view.scale; // 世界单位/秒
-    let delta = dir.normalize() * speed * time.delta_secs();
+    let delta = screen_vec_to_world(dir * speed * time.delta_secs(), transform.rotation);
     transform.translation.x += delta.x;
     transform.translation.y += delta.y;
     view.camera_center = transform.translation.truncate();
@@ -607,5 +660,72 @@ mod tests {
             None
         );
         assert_eq!(app.world().resource::<ViewState>().scale, max);
+    }
+
+    // ---------------------------------------------------------------------------
+    // 地图朝向 → 相机旋转（手算断言）
+    // ---------------------------------------------------------------------------
+
+    /// 朝向 90°（「北方朝右」）时，屏幕「右」对应世界「上」：
+    /// 相机中心 (100, 200)、scale 2、指针在窗口中心右 100px，
+    /// 手算 = 中心 + 旋转90°·(200, 0) = (100, 400)。
+    #[test]
+    fn screen_to_world_rotates_with_camera_orientation() {
+        let cam = Transform {
+            translation: Vec3::new(100.0, 200.0, 0.0),
+            rotation: camera_rotation_for_orientation(90.0),
+            ..Default::default()
+        };
+        let w = screen_to_world(Vec2::new(740.0, 360.0), Vec2::new(1280.0, 720.0), &cam, 2.0);
+        assert!((w.x - 100.0).abs() < 1e-4, "got {:?}", w);
+        assert!((w.y - 400.0).abs() < 1e-4, "got {:?}", w);
+    }
+
+    /// 朝向语义必须是「正值 = 顺时针」：相机取 +90°（屏幕逆时针）后，
+    /// 世界 +Y（默认画面的北/上）在屏幕上指向右。
+    #[test]
+    fn orientation_positive_is_clockwise_on_screen() {
+        let rot = camera_rotation_for_orientation(90.0);
+        // 世界 → 相机空间 = 旋转的逆：北出现在相机 +X（屏幕右）。
+        let north = rot.inverse().mul_vec3(Vec3::Y).truncate();
+        assert!((north.x - 1.0).abs() < 1e-5, "got {:?}", north);
+        assert!(north.y.abs() < 1e-5, "got {:?}", north);
+    }
+
+    /// 「屏幕上方」的标注偏移在朝向 90° 时应映为世界的「左」——
+    /// 这是文字标注不随地图转的两条支柱之一（另一条是实体反向旋转）。
+    #[test]
+    fn label_offset_stays_screen_up_under_rotation() {
+        let rot = camera_rotation_for_orientation(90.0);
+        let off = screen_vec_to_world(Vec2::Y * 10.0, rot);
+        assert!((off.x + 10.0).abs() < 1e-5, "got {:?}", off);
+        assert!(off.y.abs() < 1e-5, "got {:?}", off);
+    }
+
+    /// 标注反向旋转 = 相机旋转的逆，叠加后屏幕角为零（文字保持水平）。
+    #[test]
+    fn label_counter_rotation_cancels_camera_rotation() {
+        for deg in [0.0_f32, 30.0, 90.0, 217.5] {
+            let cam = camera_rotation_for_orientation(deg);
+            let label = cam.inverse();
+            let total = (cam * label).mul_vec3(Vec3::X).truncate();
+            assert!(
+                (total - Vec2::X).length() < 1e-5,
+                "deg {}, got {:?}",
+                deg,
+                total
+            );
+        }
+    }
+
+    /// 当前图的朝向从数据层现读：无图按 0，有图按 `MapNode.orientation`。
+    #[test]
+    fn current_orientation_reads_the_active_map() {
+        let mut world = two_level_world();
+        world.maps[0].orientation = 90.0;
+        let mut drill = DrillState::default();
+        assert_eq!(current_orientation(&world, &drill), 0.0, "无当前图按 0");
+        drill.ensure_root(&world);
+        assert_eq!(current_orientation(&world, &drill), 90.0);
     }
 }

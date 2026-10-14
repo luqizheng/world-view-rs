@@ -140,6 +140,9 @@ pub fn run(config: AppConfig) {
             // 主链已顶满 20 参上限，拆一层嵌套元组（内层先 chain 成一个整体）。
             (
                 // 输入 → 视图状态
+                // 朝向先行：把 MapNode.orientation 写进相机旋转，同帧的缩放锚点、
+                // 平移与拾取换算读 Transform.rotation 时拿到的就是新值（帧内自洽）。
+                camera::apply_map_orientation,
                 camera::camera_zoom,
                 camera::camera_pan,
                 camera::camera_pan_keys,

@@ -85,6 +85,12 @@ pub struct MapNode {
     ///
     /// `origin` 描述**子图在父图中的位置**（平移），`orientation` 描述
     /// **本图在屏幕上的旋转**（旋转）。两者独立，互不替代。
+    ///
+    /// ## 追记（2026-10-14）
+    ///
+    /// `wv-app` 渲染层已消费此值：`camera::apply_map_orientation` 每帧把它写进
+    /// 相机旋转，视图随之转动；文字标注取相机旋转的逆保持屏幕水平（用户裁定
+    /// 「屏幕对齐文字」）。本段为追加说明，上文语义不变。
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub orientation: f32,
 }

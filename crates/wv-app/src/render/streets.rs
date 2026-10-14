@@ -148,6 +148,9 @@ const STREET_LABEL_Z: f32 = 0.35;
 ///
 /// LOD 口径：街道名只在编辑级视野出现——省/国家级一屏几十条街的名字
 /// 会把图变成字海（Google 地图也是拉近才出街名）。
+///
+/// **屏幕对齐**（2026-10-14 用户裁定，与地名标注同一口径）：地图随
+/// `MapNode.orientation` 旋转后，街道名文字取相机旋转的**逆**保持水平。
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_street_labels(
     mut commands: Commands,
@@ -155,6 +158,7 @@ pub fn update_street_labels(
     grid: Res<GridConfig>,
     view: Res<ViewState>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
+    camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
         (
             Entity,
@@ -178,6 +182,10 @@ pub fn update_street_labels(
     // 无变化帧也照常对齐：位置/字号随视图每帧都可能变，池对齐本身极轻。
 
     let font_size = STREET_LABEL_PX * view.scale.max(0.05);
+    let label_rot = camera
+        .single()
+        .map(|t| t.rotation.inverse())
+        .unwrap_or(Quat::IDENTITY);
     let cjk = fonts.cjk_font.clone();
     let label_color = match view.mode {
         crate::state::ViewMode::GoogleMap => crate::theme::colors_google::GOOGLE_LABEL_FILL,
@@ -189,6 +197,7 @@ pub fn update_street_labels(
         let name: &str = name.as_str();
         if let Some((_, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
             tf.translation = pos.extend(STREET_LABEL_Z);
+            tf.rotation = label_rot;
             *text = Text2d::new(name);
             style.font_size = font_size.into();
             if let Some(f) = &cjk {
@@ -206,7 +215,11 @@ pub fn update_street_labels(
                     ..Default::default()
                 },
                 TextColor(label_color),
-                Transform::from_translation(pos.extend(STREET_LABEL_Z)),
+                Transform {
+                    translation: pos.extend(STREET_LABEL_Z),
+                    rotation: label_rot,
+                    ..Default::default()
+                },
                 Visibility::Visible,
             ));
         }

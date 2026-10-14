@@ -373,7 +373,7 @@ pub fn draw_brush_cursor(
         let world = crate::render::camera::screen_to_world(
             cursor,
             window.resolution.size(),
-            transform.translation,
+            transform,
             view.scale,
         );
 

@@ -133,7 +133,7 @@ pub fn sync_brush_cursor(
     let cursor_world = screen_to_world(
         cursor_screen,
         window.resolution.size(),
-        camera_transform.translation,
+        camera_transform,
         view.scale,
     );
 

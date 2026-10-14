@@ -497,7 +497,7 @@ pub fn drill_pick(
     let world_pos = crate::render::camera::screen_to_world(
         cursor,
         window.resolution.size(),
-        transform.translation,
+        transform,
         view.scale,
     );
 
@@ -659,7 +659,11 @@ fn place_label_kept_at_tier(w: Option<f32>, h: Option<f32>, tier: LodTier) -> bo
 }
 
 /// 更新当前层级的地名标注池。
-#[allow(clippy::type_complexity)]
+///
+/// **屏幕对齐**（2026-10-14 用户裁定）：地图随 `MapNode.orientation` 旋转后，
+/// 地名文字必须保持水平——实体取相机旋转的**逆**，标注的「上移避让 POI」偏移
+/// 也按屏幕上方取世界方向（`screen_vec_to_world`），不随地图转。
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_place_labels(
     mut commands: Commands,
     projection: Res<WorldProjection>,
@@ -667,6 +671,7 @@ pub fn update_place_labels(
     grid: Res<GridConfig>,
     view: Res<ViewState>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
+    camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
         (
             Entity,
@@ -696,9 +701,16 @@ pub fn update_place_labels(
     // 文字尺寸按屏幕像素恒定（与 draw_drill_markers 的 screen_scale 口径一致）。
     let font_size = LABEL_PX * view.scale.max(0.05);
     // Text2d 默认以文字中心为 transform 原点；上移约一个字高，避免压住 POI。
+    // 「上」是屏幕上：经相机旋转映回世界方向。
     let label_offset = font_size * 0.9;
+    let cam_rot = camera
+        .single()
+        .map(|t| t.rotation)
+        .unwrap_or(Quat::IDENTITY);
+    let up_world = crate::render::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
+    let label_rot = cam_rot.inverse();
     for (pos, _) in &mut wanted {
-        pos.y += label_offset;
+        *pos += up_world;
     }
     // CJK 字体（fonts.rs 在 Startup 注册）：缺省字体无中文字形，地名会成方块。
     let cjk = fonts.cjk_font.clone();
@@ -713,6 +725,7 @@ pub fn update_place_labels(
     for (pos, name) in &wanted {
         if let Some((_, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
             tf.translation = pos.extend(LABEL_Z);
+            tf.rotation = label_rot;
             // Bevy 0.19：字号是 `TextFont.font_size: FontSize`、字体是 `font: FontSource`。
             *text = Text2d::new(*name);
             style.font_size = font_size.into();
@@ -732,7 +745,11 @@ pub fn update_place_labels(
                     ..Default::default()
                 },
                 TextColor(label_color),
-                Transform::from_translation(pos.extend(LABEL_Z)),
+                Transform {
+                    translation: pos.extend(LABEL_Z),
+                    rotation: label_rot,
+                    ..Default::default()
+                },
                 Visibility::Visible,
             ));
         }

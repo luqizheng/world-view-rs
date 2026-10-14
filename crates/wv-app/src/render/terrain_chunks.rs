@@ -145,17 +145,27 @@ fn rects_intersect(a: [u32; 4], b: [u32; 4]) -> bool {
 /// 视口在世界空间的 AABB（min, max），含 `VIEWPORT_MARGIN_CHUNKS` 块边距。
 ///
 /// 视口半宽（世界单位）= `window.width / 2 × view.scale`；半高同理。
-/// 中心 = `view.camera_center`。
+/// 中心 = `view.camera_center`。相机带旋转（地图朝向）时视口是**斜矩形**，
+/// 其世界 AABB 半轴吃进另一轴的 |sin| 分量——不扩宽的话斜着看时边缘块
+/// 会被误判视野外，画面出现空洞。
 pub fn viewport_world_aabb(
     camera_center: Vec2,
     view_scale: f32,
     window_size: Vec2,
+    camera_rotation: Quat,
 ) -> (Vec2, Vec2) {
     let half_w = window_size.x * 0.5 * view_scale;
     let half_h = window_size.y * 0.5 * view_scale;
+    // 单位轴经旋转后的分量绝对值 = 该轴在各世界方向上的投影长度。
+    let rx = camera_rotation.mul_vec3(Vec3::X).truncate();
+    let ry = camera_rotation.mul_vec3(Vec3::Y).truncate();
+    let ext = Vec2::new(
+        half_w * rx.x.abs() + half_h * ry.x.abs(),
+        half_w * rx.y.abs() + half_h * ry.y.abs(),
+    );
     let margin_px = (VIEWPORT_MARGIN_CHUNKS * CHUNK_SIZE) as f32 * view_scale;
-    let min = camera_center - Vec2::new(half_w, half_h) - Vec2::splat(margin_px);
-    let max = camera_center + Vec2::new(half_w, half_h) + Vec2::splat(margin_px);
+    let min = camera_center - ext - Vec2::splat(margin_px);
+    let max = camera_center + ext + Vec2::splat(margin_px);
     (min, max)
 }
 
@@ -231,6 +241,7 @@ pub fn sync_terrain_chunks(
     grid: Res<GridConfig>,
     view: Res<ViewState>,
     windows: Query<&Window>,
+    camera: Query<&Transform, With<Camera2d>>,
     mut chunk_entities: ResMut<TerrainChunkEntities>,
     mut q_chunks: Query<(&mut TerrainChunk, &Mesh2d)>,
 ) {
@@ -254,11 +265,16 @@ pub fn sync_terrain_chunks(
     let [cw, ch] = chunk_grid(size);
     let res = tex.res;
 
-    // 视口 AABB 与当前 mip 级。
+    // 视口 AABB 与当前 mip 级。相机旋转（地图朝向）决定视口斜矩形的朝向。
+    let cam_rot = camera
+        .single()
+        .map(|t| t.rotation)
+        .unwrap_or(Quat::IDENTITY);
     let (vp_min, vp_max) = viewport_world_aabb(
         view.camera_center,
         view.scale,
         Vec2::new(window.resolution.width(), window.resolution.height()),
+        cam_rot,
     );
     let mip_now = select_mip(view.scale);
     let chunk_world_size = CHUNK_SIZE as f32 * cell_size;
@@ -657,8 +673,9 @@ mod tests {
     #[test]
     fn viewport_world_aabb_scales_with_view_scale() {
         // 正常缩放 1.0：视口 1000×800 像素 → AABB 半宽 500 / 半高 400。
-        // + 1 块边距 = 256 世界单位。
-        let (min, max) = viewport_world_aabb(Vec2::ZERO, 1.0, Vec2::new(1000.0, 800.0));
+        // + 1 块边距 = 256 世界单位。恒等旋转下与历史口径逐值相同。
+        let (min, max) =
+            viewport_world_aabb(Vec2::ZERO, 1.0, Vec2::new(1000.0, 800.0), Quat::IDENTITY);
         assert!(
             (min.x - (-500.0 - CHUNK_SIZE as f32)).abs() < 1e-3,
             "got {}",
@@ -670,13 +687,32 @@ mod tests {
             max.x
         );
         // 缩放 0.5：视口半宽 250 / 半高 200，1 块边距 = 128 世界单位。
-        let (min, max) = viewport_world_aabb(Vec2::ZERO, 0.5, Vec2::new(1000.0, 800.0));
+        let (min, max) =
+            viewport_world_aabb(Vec2::ZERO, 0.5, Vec2::new(1000.0, 800.0), Quat::IDENTITY);
         assert!(
             (min.x - (-250.0 - CHUNK_SIZE as f32 * 0.5)).abs() < 1e-3,
             "got {}",
             min.x
         );
         let _ = max;
+    }
+
+    /// 相机转 45° 时视口是斜矩形：AABB 半轴 = (500+400)·√2/2 ≈ 636.396，
+    /// 比±500 宽——不扩宽的话斜视时边缘块会被误判视野外。
+    #[test]
+    fn viewport_world_aabb_widens_for_camera_rotation() {
+        let rot = Quat::from_rotation_z(std::f32::consts::FRAC_PI_4);
+        let (min, _) = viewport_world_aabb(Vec2::ZERO, 1.0, Vec2::new(1000.0, 800.0), rot);
+        let expected = 900.0 * std::f32::consts::FRAC_1_SQRT_2 + CHUNK_SIZE as f32;
+        assert!(
+            (min.x - -expected).abs() < 1e-2,
+            "got {} want {}",
+            min.x,
+            -expected
+        );
+        // y 半轴同式：|sin| 与 |cos| 在 45° 相等。
+        let (_, max) = viewport_world_aabb(Vec2::ZERO, 1.0, Vec2::new(1000.0, 800.0), rot);
+        assert!((max.y - expected).abs() < 1e-2, "got {}", max.y);
     }
 
     #[test]
