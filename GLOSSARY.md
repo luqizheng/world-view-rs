@@ -112,6 +112,8 @@
 | **Google Default Map 式地图壳** | Google Default Map-style map shell | 离线模仿 Google 普通地图的信息层级与交互：近白陆地、淡水、公园绿、白路灰缘、红点白环 POI、左键拖动平移、贴边缩放控件；**不接入在线瓦片或专有数据**。首次出现：用户 2026-10-13 要求与 ADR-0008 | 地理 / UI |
 | **道路双层描边** | Road casing and fill | 道路用浅灰外缘（casing）与白色主体（fill）两层表示；两层宽度差形成 Google 式路缘。首次出现：ADR-0008。（2026-10-14 追记：**街道**自 ADR-0010 §5「街道双层描边」起同口径——两个宽度档各画 casing + fill 两层；此前只画 fill，地图模式下白 fill 落在近白土地上等于隐形） | 地理 / 渲染 |
 | **亚像素渲染** | Subpixel rendering | 每个逻辑地形格输出多个纹理像素，使水陆 / 绿地边界在放大与线性采样下得到平滑过渡；分辨率受 4096² 纹理预算约束。首次出现：ADR-0008 | 地理 / 渲染 |
+| **地图朝向** | Map orientation | `MapNode.orientation`（度）：本图在屏幕上的旋转角，**0 = 正北朝上，正值 = 顺时针偏转**（90 = 北朝右）。是**地图的属性**（作者决定这张图的「北」朝哪）而非相机状态——YAML 是唯一存储处，渲染层只读（2026-10-14 起由 `wv-app` 的 `camera::apply_map_orientation` 每帧写进相机旋转，视图真正随它转动）。指南针面板经 `SetMapOrientationCommand` 编辑此值。首次出现：`crates/wv-core/src/map/mod.rs` + 指南针面板（e84eec9） | 地理 / 渲染 |
+| **屏幕对齐文字** | Screen-aligned labels | 地名 / 街道名标注**不随地图旋转**的约束（2026-10-14 用户裁定）：地图按朝向旋转后，`Text2d` 标注实体取相机旋转的**逆**叠加，屏幕角恒为零；标注相对 POI 的「上移避让」偏移也按**屏幕上方**取世界方向（`camera::screen_vec_to_world`）。Google Maps 旋转时标签保持水平的同款行为。首次出现：`crates/wv-app/src/render/{camera,drill,streets}.rs`（2026-10-14） | 地理 / 渲染 |
 
 ## 缩放到街道：分级缩放与街道图层（2026-10）
 
@@ -139,6 +141,26 @@
 | **级缩放区间** | Level zoom band | 一级允许的缩放范围，锚在「整幅图适配窗口」的尺度上：`fit = max(w/window.w, h/window.h)`、`min = fit/80`、`max = fit*1.5625`。**各区间的绝对数值有意重叠**（子图区间跨过父图内界），故换级时 `scale` 无需改动。由 `crates/wv-app/src/render/zoom_level.rs` 的 `LevelZoom` 承担；旧的全局常量 `SCALE_MIN=0.1` / `SCALE_MAX=8.0` 已删除。首次出现：ADR-0009 §8 + `crates/wv-app/src/render/zoom_level.rs` | 地理 / 渲染 |
 | **换级** | Level crossing | 滚轮在**当前级边界上继续同向滚动**所触发的层级切换：往外 → 上一级（`drill.up()`），往里 → 光标下的子图（`drill.enter()`）。触发条件因此是「已在边界 **且** 继续滚」，不是「进入区间」；意图经 `ZoomCrossRequest` 交给 `drill::apply_zoom_cross` 独家执行（地图路径的唯一写入口仍是 `DrillState`）。**连续性的证明**：子图 `fit` 更小 ⇒ `parent.min ≤ child.max`，故换级前后 `scale` 同值合法。首次出现：ADR-0009 §8 + `crates/wv-app/src/render/{camera,drill}.rs` | 地理 / 交互 |
 | **钻取过渡目标缩放** | Fly-in target scale | 双击/面包屑换级时相机过渡的终点缩放 = `clamp(min(from_scale, child.fit))`：整幅子图铺满窗口，但作者已贴得更近时不为换级拉远视野；末尾 clamp 保证终点必落在**新级区间**内。取代历史上硬编码的 `4.0`（分级后会越界，进城后第一次滚轮被硬拽）。首次出现：ADR-0009 §8 + `render::zoom_level::fly_in_scale` | 地理 / 交互 |
+
+## 地形边界渲染与草图式生成（2026-10）
+
+> 来源：2026-10-14 三轮设计讨论（网格编辑 · Google 式平涂渲染 · 多边形地物工具）。计划与待裁清单（Q 组）见 `docs/TERRAIN_RENDER_AND_SKETCH_TOOL_PLAN_v0.1.md`；方向（D 组）已定，参数待裁。
+
+| 术语 | 英文 / 拼音 | 定义 | 所属维度 |
+|---|---|---|---|
+| **等值线边界** | contour boundary | 从高度场提取的等值线作为边界的事实来源：海岸线 = 海平面等值线、崖线 = 坡度阈值线；地表覆盖（森林/沙漠等）边界则归类型场（软边过渡）。渲染期派生，永不落盘 | 地理 / 渲染 |
+| **类型优先序** | type precedence | 多种地形类型在同一格点交汇时的全局裁决序（计划 Q5 缺省建议：深水 < 岸 < 沼泽 < 平原 < 沙漠 < 森林 < 丘陵 < 山地 < 雪原）。只影响渲染归属与生成默认，不改数据 | 渲染 / 编辑 |
+| **鞍点规则** | saddle rule | marching squares 遇对角同型（棋盘格）歧义时的确定性裁决（计划 Q6 缺省建议：四邻均值法）。同数据必同结果 | 渲染 |
+| **晕渲图** | hillshade | 由高度场派生的山体阴影叠加（光源方位 / 俯角 / 强度参数化），经典制图缺省 315° / 45°。渲染期计算 | 地理 / 渲染 |
+| **LOD 抽稀** | LOD simplification | 远景按 Douglas-Peucker 容差抽稀等值线折线以减顶点；容差随 LOD 分档 | 渲染 |
+| **草图式生成** | sketch-based generation | 作者画粗略意图（多边形 / 脊线）、算法展开成细节网格的生成范式 | 编辑 |
+| **意图包络** | intent envelope | 多边形工具中作者圈出的约束区：是**意图不是边界**，真实边缘由剖面衰减 + 噪声在包络附近生成，偏离有界 | 编辑 |
+| **地物配方** | landform recipe | 每种地物的生成参数集（剖面曲线 + 噪声参数 + 类型分带 + 过渡带宽度）。YAML 数据化，内置缺省 + 工程可覆盖 | 编辑 / 数据 |
+| **高度分带** | elevation banding | 生成时按高度区间推导默认地形类型的规则表（如雪线以上 = 雪/岩）。只是生成默认，落盘的是格子类型 | 编辑 / 数据 |
+| **融合权重** | blend weight | 生成结果与既有高度场按衰减曲线混合的系数；复用笔刷「衰减权重（Falloff）」的高斯实现，公式不二实现 | 编辑 |
+| **手势即命令** | gesture as command | 多边形工具的架构口径：圈选 + 配方 + 种子 = 一条宏 `EditCommand`，执行后网格是唯一事实，多边形只留撤销历史、不留存为实体 | 编辑 / 架构 |
+| **混合像素模式** | hybrid pixel mode | 像素纹理填充 + 矢量曲线裁切遮罩的渲染模式：填充像素化、边缘平滑。与整瓦片 autotile（边缘硬）相区别 | 地理 / 渲染 |
+| **抖动** | dithering | 像素风瓦片伪造平滑边缘的棋盘格过渡画法——整瓦片路线下边缘平滑的妥协手段 | 美术 / 渲染 |
 
 ## 设计上不做（负向清单）
 

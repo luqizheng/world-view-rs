@@ -52,6 +52,9 @@ fn shade_for_mode(mode: ViewMode) -> Shader {
         ViewMode::Coastline => shade_coast,
         // Google Default Map：近白陆地 + 淡水 + 绿地（色板见 palette_google）。
         ViewMode::GoogleMap => shade_google,
+        // TODO(plan v0.1 D3-A): ADR-0012 的等值线矢量平涂管线未落地前，
+        // 先按色块平涂渲染（同为「类型场平涂」家族，视觉最近）；管线就绪后替换。
+        ViewMode::VectorFlat => shade_flat,
     }
 }
 

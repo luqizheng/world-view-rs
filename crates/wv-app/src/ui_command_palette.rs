@@ -240,11 +240,12 @@ impl CommandRegistry {
 
         // 视图
         for (i, mode) in crate::state::ViewMode::ALL.iter().enumerate() {
-            let keys = ["1", "2", "3", "4", "5", "6"][i];
+            let keys = ["1", "2", "3", "4", "5", "6", "7"][i];
             push(
                 CommandId::SetViewMode(i as u8),
                 CommandGroup::View,
                 match mode {
+                    crate::state::ViewMode::VectorFlat => "切换到等值线视图",
                     crate::state::ViewMode::RealTerrain => "切换到真实地形视图",
                     crate::state::ViewMode::Schematic => "切换到色块地形视图",
                     crate::state::ViewMode::Faction => "切换到势力图视图",

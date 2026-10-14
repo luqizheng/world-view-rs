@@ -107,14 +107,29 @@ impl Default for PlaybackState {
     }
 }
 
-/// 视图模式（基线 §1.10，D4 四态）。
+/// 视图模式（基线 §1.10，D4 四态 + plan v0.1 D3 三模式）。
+///
+/// 浏览态默认底图自 [ADR-0012](file:///<root>/docs/adr/ADR-0012-terrain-default-vector-flat-shading.md) 起改为
+/// 等值线矢量平涂（plan v0.1 D3 A 类）；原 Google Default Map 视觉（亚像素纹理合成）
+/// 保留为 [`ViewMode::GoogleMap`] 可切换模式，**不再**是默认入口。Google 色板
+/// （`theme/colors_google.rs`）作为可切换主题之一继续生效，但浏览态默认走
+/// [`ViewMode::VectorFlat`] 的矢量管径。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ViewMode {
+    /// H. 等值线矢量平涂：高度场 marching squares 等值线 + 类型场邻域边界 +
+    /// 多边形平涂（plan v0.1 D3 A 类 · 浏览态默认 · [ADR-0012]）。
+    ///
+    /// 为什么是默认：与 ADR-0008 §2④「亚像素纹理合成」**同目标异路径**——
+    /// 同样给「平滑地形边界」，但走的是几何对象（marching squares 等值线）、
+    /// 而不是埋在像素位图里。山脊 / 海岸 / 大类色块的边界都成了可挂动画、
+    /// 可挂样式、可挂 LOD 的对象；这是 Google Maps 那种像素滤镜给不出的
+    /// 结构化产物。
+    #[default]
+    VectorFlat,
     /// G. Google Default Map：近白陆地 + 淡水 + 公园绿 + 白路灰缘。
     ///
-    /// 作为默认模式，是因为地图浏览/整理是作者的高频入口；地形、JRPG 等专题
-    /// 视图仍是显式切换的分析工具。
-    #[default]
+    /// ADR-0012 之后**降为可切换主题之一**，不再是默认入口；色板与交互
+    /// 仍走 [`crate::theme::colors_google`]。
     GoogleMap,
     /// A. 真实地形：高度图 + 法线光照 + 贴图。
     RealTerrain,
@@ -132,7 +147,8 @@ pub enum ViewMode {
 }
 
 impl ViewMode {
-    pub const ALL: [ViewMode; 6] = [
+    pub const ALL: [ViewMode; 7] = [
+        ViewMode::VectorFlat,
         ViewMode::GoogleMap,
         ViewMode::RealTerrain,
         ViewMode::Schematic,
@@ -144,6 +160,7 @@ impl ViewMode {
     /// 顶栏显示名。
     pub fn label(self) -> &'static str {
         match self {
+            ViewMode::VectorFlat => "等值线",
             ViewMode::GoogleMap => "地图",
             ViewMode::RealTerrain => "真实地形",
             ViewMode::Schematic => "色块地形",
@@ -360,7 +377,7 @@ pub enum Panel {
     MapTree,
     /// P-2 图层管理：图层开关。
     Layers,
-    /// P-3 笔刷工具：紧凑 Photoshop 式浮动窗（2 列 × 2 图标）。
+    /// P-3 笔刷工具：紧凑 Photoshop 式浮动窗（2 列 × 5 行色块，街道区折叠）。
     Brush,
     /// P-4 属性检查器。
     Inspector,
@@ -451,7 +468,7 @@ impl Panel {
         match self {
             Panel::MapTree => [216.0, 330.0],
             Panel::Layers => [216.0, 168.0],
-            Panel::Brush => [264.0, 300.0],
+            Panel::Brush => [264.0, 220.0],
             Panel::Minimap => [216.0, 300.0],
             Panel::Compass => [216.0, 300.0],
             // 通栏：1280 − 12×2 = 1256。
@@ -940,10 +957,16 @@ mod tests {
     use wv_core::time::TimeSpan;
     use wv_core::WorldMeta;
 
+    /// 浏览态默认从 [ADR-0012](file:///<root>/docs/adr/ADR-0012-terrain-default-vector-flat-shading.md) 起切到等值线
+    /// 矢量平涂；Google Default Map 降为可切换主题之一。`ALL[0]` 与 `default()`
+    /// 都应指 `VectorFlat`，以保证顶栏「默认 viewmode」与「主题列表第一位」
+    /// 不漂移。
     #[test]
-    fn google_map_is_the_default_map_experience() {
-        assert_eq!(ViewMode::default(), ViewMode::GoogleMap);
-        assert_eq!(ViewMode::ALL[0], ViewMode::GoogleMap);
+    fn vector_flat_is_the_default_browsing_view_after_adr_0012() {
+        assert_eq!(ViewMode::default(), ViewMode::VectorFlat);
+        assert_eq!(ViewMode::ALL[0], ViewMode::VectorFlat);
+        // GoogleMap 仍可达（可切换主题之一），仅不再是默认入口。
+        assert!(ViewMode::ALL.contains(&ViewMode::GoogleMap));
     }
 
     #[test]
