@@ -243,6 +243,14 @@ pub enum LayerKind {
     Road,
     EventPoint,
     Place,
+    /// 标签层（ADR-0016 · 2026-10-14 接受）。
+    ///
+    /// 标签是**实体在地图上的文本投影**——不是作者手摆的文本，也不是图层
+    /// 文件里存的字符串。`Layer.source` 指向的 YAML 只存**配置**（白名单 /
+    /// 字号阶梯 / 最大标签数 / 优先级），文本内容由 `Place` / `Region` /
+    /// `Faction` / `StreetSegment` / `Event` 等实体经 `label_visible_at`
+    /// 派生而来。详见 `docs/adr/ADR-0016-label-layer.md`。
+    Label,
     Custom,
 }
 
