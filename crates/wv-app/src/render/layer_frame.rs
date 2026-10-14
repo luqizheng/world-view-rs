@@ -82,6 +82,13 @@ pub struct LayerFrame {
     pub road: LayerBinding,
     pub event_point: LayerBinding,
     pub place: LayerBinding,
+    /// 标签层绑定（ADR-0016 · Q1 用户拍板"进独立渲染组"）。
+    ///
+    /// 与 `Place` / `Road` / `Influence` 平级——可见 / 透明 / z 偏移走
+    /// 同一管线（YAML 声明 ∧ 会话开关、opacity 落材质、z 槽位偏移）。
+    /// 标签内容**不**由本结构承载：`WorldProjection.selection` 决定当前
+    /// 选中实体，可见性求值由 `wv_core::label_visible_at` 单一入口给出。
+    pub label: LayerBinding,
     pub custom: LayerBinding,
 }
 
@@ -124,13 +131,17 @@ impl LayerFrame {
                 visible: view.places_visible,
                 ..LayerBinding::NEUTRAL
             },
+            label: LayerBinding {
+                visible: view.labels_visible,
+                ..LayerBinding::NEUTRAL
+            },
             custom: LayerBinding::NEUTRAL,
         };
         let Some(node) = node else {
             return frame;
         };
         // 同 kind 只认第一个声明（模块文档「多个同 kind 图层」）。
-        let mut claimed = [false; 7];
+        let mut claimed = [false; 8];
         for layer in &node.layers {
             let idx = kind_index(&layer.kind);
             if claimed[idx] {
@@ -166,7 +177,8 @@ fn kind_index(kind: &LayerKind) -> usize {
         LayerKind::Road => 3,
         LayerKind::EventPoint => 4,
         LayerKind::Place => 5,
-        LayerKind::Custom => 6,
+        LayerKind::Label => 6,
+        LayerKind::Custom => 7,
     }
 }
 
@@ -179,6 +191,7 @@ fn slot_visible_default(frame: &LayerFrame, kind: &LayerKind) -> bool {
         LayerKind::Road => frame.road.visible,
         LayerKind::EventPoint => frame.event_point.visible,
         LayerKind::Place => frame.place.visible,
+        LayerKind::Label => frame.label.visible,
         LayerKind::Custom => frame.custom.visible,
     }
 }
@@ -192,6 +205,7 @@ fn slot_mut<'f>(frame: &'f mut LayerFrame, kind: &LayerKind) -> &'f mut LayerBin
         LayerKind::Road => &mut frame.road,
         LayerKind::EventPoint => &mut frame.event_point,
         LayerKind::Place => &mut frame.place,
+        LayerKind::Label => &mut frame.label,
         LayerKind::Custom => &mut frame.custom,
     }
 }

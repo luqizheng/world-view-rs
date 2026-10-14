@@ -88,6 +88,7 @@ pub fn run(config: AppConfig) {
         project_dir: None,
         dirty: false,
         load_error: None,
+        selection: None,
     })
     // CLI `-m <目录>` 带来的启动加载请求；`None` = 空编辑器。
     .insert_resource(crate::ui_shell::StartupLoadRequest(

@@ -78,6 +78,39 @@ pub use source::street::{RoadClass, StreetLayer, StreetSegment};
 pub use time::track::{Track, Waypoint};
 pub use time::{Calendar, TimePoint, TimeSpan};
 
+/// 当前选中的实体（ADR-0016 §2.7）。
+///
+/// 标签层点击派发的目标——`Place` / `Region` / `Faction` / `StreetSegment` /
+/// `Event` 之一。该结构只携带定位信息（kind + id），**不**携带任何渲染态或
+/// 投影态；详情面板用 `kind` 决定读哪张表（`World.places` / `World.factions` /
+/// ...），用 `id` 定位。
+///
+/// ## 与 World 持久化的关系
+///
+/// `SelectedEntity` 是**会话状态**——存于 `wv_app::state::WorldProjection.selection`，
+/// **不**进 `World`、不落盘、不经 `EditCommand` 流水线（与 undo 隔离：
+/// 撤销实体编辑不会一并撤销"选谁"——选谁不是世界数据，是 UI 焦点）。
+///
+/// ## 何时清除
+///
+/// - 用户点击空白处 → `Selection::None`
+/// - 切换工程 / 关闭工程 → `Selection::None`（id 跨工程无意义）
+/// - 当前不被自动清除（"上次选中的实体"不持久化，但当前会话内会保留）
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct SelectedEntity {
+    /// 实体类型（决定查哪张表）。
+    pub kind: EntityKind,
+    /// 实体 ID（在所属表内唯一）。
+    pub id: Id,
+}
+
+impl SelectedEntity {
+    /// 构造一个选中引用。
+    pub fn new(kind: EntityKind, id: Id) -> Self {
+        Self { kind, id }
+    }
+}
+
 /// 工程级元数据。对应工程根目录的 `world.yaml`。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct WorldMeta {
@@ -267,5 +300,42 @@ pub mod terrain {
         pub fn cell_count(&self) -> usize {
             self.cells.len()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── ADR-0016 §2.7：SelectedEntity ────────────────────────────────────
+
+    #[test]
+    fn selected_entity_new_stores_kind_and_id() {
+        let id = Id::new("city_qingyun").unwrap();
+        let sel = SelectedEntity::new(EntityKind::Place, id.clone());
+        assert_eq!(sel.kind, EntityKind::Place);
+        assert_eq!(sel.id, id);
+    }
+
+    #[test]
+    fn selected_entity_equality_uses_both_fields() {
+        let id = Id::new("x").unwrap();
+        let a = SelectedEntity::new(EntityKind::Place, id.clone());
+        let b = SelectedEntity::new(EntityKind::Place, id.clone());
+        let c = SelectedEntity::new(EntityKind::Faction, id.clone());
+        let d = SelectedEntity::new(EntityKind::Place, Id::new("y").unwrap());
+        assert_eq!(a, b, "同 kind + 同 id 应相等");
+        assert_ne!(a, c, "不同 kind 不等");
+        assert_ne!(a, d, "不同 id 不等");
+    }
+
+    #[test]
+    fn selected_entity_is_hashable() {
+        use std::collections::HashSet;
+        let id = Id::new("x").unwrap();
+        let mut set = HashSet::new();
+        set.insert(SelectedEntity::new(EntityKind::Place, id.clone()));
+        set.insert(SelectedEntity::new(EntityKind::Place, id));
+        assert_eq!(set.len(), 1, "同 kind+id 应去重为 1");
     }
 }

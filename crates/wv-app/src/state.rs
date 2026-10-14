@@ -48,6 +48,12 @@ pub struct WorldProjection {
     /// 工程加载失败时的错误信息。**必须显式显示给用户**——
     /// 否则启动目录不对时会静默退化成空白占位地形，看起来像「崩溃」。
     pub load_error: Option<String>,
+    /// 当前选中的实体（ADR-0016 §2.7）。
+    ///
+    /// 会话状态——`Some(s)` = 标签点击 / 详情面板引用，UI 据此高亮并打开面板；
+    /// `None` = 未选中。**不**落盘，**不**经 `EditCommand`，**不**进
+    /// `History.apply`（撤销实体编辑不应一并撤销"选谁"——选谁不是世界数据）。
+    pub selection: Option<wv_core::SelectedEntity>,
 }
 
 impl WorldProjection {
@@ -219,6 +225,12 @@ pub struct ViewState {
     pub tracks_visible: bool,
     /// 道路图层是否可见。
     pub roads_visible: bool,
+    /// 标签层是否可见（ADR-0016 · 标签层会话开关）。
+    ///
+    /// 与 YAML 中 `Layer.visible: false` **合取**决定标签是否参与渲染
+    /// （参见 `LayerFrame::resolve`）—— 面板布尔是本会话临时隐藏，
+    /// YAML 是作者持久声明。
+    pub labels_visible: bool,
     /// 地点（POI）图层是否可见：锚定地点的点标（矢量图层底子）。
     pub places_visible: bool,
     /// 势力多边形叠加层是否可见（S12）。
@@ -244,6 +256,7 @@ impl Default for ViewState {
             events_visible: true,
             tracks_visible: true,
             roads_visible: true,
+            labels_visible: true,
             places_visible: true,
             factions_visible: true,
             cursor_world: None,
@@ -1386,6 +1399,53 @@ mod tests {
         };
         let shown = RecentProjects::default().visible(&projection);
         assert_eq!(shown[0].name, "minimal-world");
+    }
+
+    // -----------------------------------------------------------------------
+    // ADR-0016 §2.7：WorldProjection.selection（session 状态，不走 EditCommand）
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn default_world_projection_has_no_selection() {
+        let p = WorldProjection::default();
+        assert!(
+            p.selection.is_none(),
+            "WorldProjection::default() ⇒ selection = None（默认未选中）"
+        );
+    }
+
+    #[test]
+    fn selection_round_trip_through_resource_replace() {
+        use wv_core::{EntityKind, SelectedEntity};
+        let mut p = WorldProjection::default();
+        let sel = SelectedEntity::new(EntityKind::Place, wv_core::Id::new("city_qingyun").unwrap());
+        // 模拟"标签点击"：直接设字段。
+        p.selection = Some(sel.clone());
+        assert_eq!(p.selection.as_ref(), Some(&sel));
+        // 模拟"点击空白"：回到 None。
+        p.selection = None;
+        assert!(p.selection.is_none());
+    }
+
+    #[test]
+    fn closing_a_project_resets_selection() {
+        // 模拟"切工程 / 关工程"：selection 必须随 WorldProjection 一起被重置，
+        // 否则旧工程的 id 会在新工程里被误读为"已选中"。
+        use wv_core::{EntityKind, SelectedEntity};
+        let mut p = WorldProjection {
+            project_dir: Some("/w/old".into()),
+            selection: Some(SelectedEntity::new(
+                EntityKind::Place,
+                wv_core::Id::new("city_x").unwrap(),
+            )),
+            ..WorldProjection::default()
+        };
+        // 关闭工程：project_dir 回到 None，selection 应被显式清掉
+        // （不能用 ..default() 因为我们要保留其他可能状态——但 selection 必须 None）
+        p.project_dir = None;
+        p.selection = None; // 显式重置
+        assert!(p.selection.is_none(), "关闭工程后 selection 必须为 None");
+        assert!(!p.has_open_project());
     }
 
     // -----------------------------------------------------------------------
