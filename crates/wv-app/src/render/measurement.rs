@@ -164,6 +164,8 @@ pub fn render_measurements(
         (Entity, &mut Transform, &mut Mesh2d, &mut Visibility),
         (
             With<MeasureLabelPlate>,
+            Without<MeasureLabel>,
+            Without<MeasureLabelShadow>,
             Without<Camera2d>,
             Without<StreetLabel>,
         ),
@@ -180,6 +182,7 @@ pub fn render_measurements(
         (
             With<MeasureLabelShadow>,
             Without<MeasureLabel>,
+            Without<MeasureLabelPlate>,
             Without<Camera2d>,
             Without<StreetLabel>,
         ),
