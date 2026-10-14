@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use wv_core::time::TimePoint;
-use wv_core::{StreetLayer, World, WorldMeta};
+use wv_core::{BuildingLayer, StreetLayer, World, WorldMeta};
 
 use crate::diagnostics::{derive_hints, Diagnostics};
 use crate::error::{IoError, IoResult};
@@ -305,6 +305,59 @@ fn write_measurements_at(
         std::fs::create_dir_all(parent)?;
     }
     let text = serde_yaml::to_string(overlay).map_err(|source| IoError::Yaml {
+/// 写**建筑图层文档**到各 `Layer.source` 指向的 YAML（ADR-0014 §6 落地项）。
+///
+/// 与 [`write_streets_layers`] 完全同构：虚拟脏命名空间 `buildings/<layer_id>`
+/// （建筑文件物理上在 `maps/<map_id>/<source>`，虚拟化防止 `maps/<map>/` 前缀
+/// 把「改一栋楼」误判成「整图地形脏了」）；返回 `maps` 原样。
+fn write_buildings_layers(
+    project_root: &Path,
+    maps: &[wv_core::map::MapNode],
+    buildings: &BTreeMap<wv_core::Id, wv_core::BuildingLayer>,
+    dirty_paths: &[String],
+    full: bool,
+) -> IoResult<Vec<wv_core::map::MapNode>> {
+    if buildings.is_empty() {
+        return Ok(maps.to_vec());
+    }
+    for (layer_id, doc) in buildings {
+        if !building_is_dirty(layer_id, dirty_paths, full) {
+            continue;
+        }
+        let owner = maps.iter().find_map(|m| {
+            m.layers
+                .iter()
+                .find(|l| l.id == *layer_id && l.kind == wv_core::map::LayerKind::Building)
+                .and_then(|l| l.source.clone().map(|src| (m.id.clone(), src)))
+        });
+        let Some((_map_id, rel_path)) = owner else {
+            continue;
+        };
+        self::write_buildings_at(project_root, &rel_path, doc)?;
+    }
+    Ok(maps.to_vec())
+}
+
+/// 这个建筑图层这次落盘是否被触及。虚拟脏路径精确匹配 `buildings/<layer_id>`。
+fn building_is_dirty(layer_id: &wv_core::Id, dirty_paths: &[String], full: bool) -> bool {
+    if full {
+        return true;
+    }
+    let expected = format!("buildings/{}", layer_id.as_str());
+    dirty_paths.iter().any(|d| d == &expected)
+}
+
+/// [`Project::write_buildings`](Project::write_buildings) 的自由函数形态。
+fn write_buildings_at(
+    project_root: &Path,
+    rel_path: &str,
+    doc: &wv_core::BuildingLayer,
+) -> IoResult<()> {
+    let path = project_root.join(rel_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let text = serde_yaml::to_string(doc).map_err(|source| IoError::Yaml {
         path: path.display().to_string(),
         source,
     })?;
@@ -652,6 +705,19 @@ impl Project {
             let overlay = self::load_measurements_at(&self.root, &m.id)?;
             if !overlay.is_empty() {
                 measurements.insert(m.id.clone(), overlay);
+        // 建筑：ADR-0014 §6 落地项。失败语义分级与街道同款（V1）。
+        let mut buildings: BTreeMap<wv_core::Id, wv_core::BuildingLayer> = BTreeMap::new();
+        for m in &maps {
+            for l in &m.layers {
+                if l.kind == wv_core::map::LayerKind::Building {
+                    if let Some(src) = l.source.as_deref() {
+                        if !self.root.join(src).is_file() {
+                            continue;
+                        }
+                        let doc = self.load_buildings(src)?;
+                        buildings.insert(l.id.clone(), doc);
+                    }
+                }
             }
         }
 
@@ -680,6 +746,7 @@ impl Project {
             terrains,
             streets,
             measurements,
+            buildings,
         })
     }
 
@@ -856,6 +923,9 @@ impl Project {
                 dirty_paths,
                 full,
             )?;
+        // 建筑文档：与街道同款虚拟命名空间 + 独立路由（ADR-0014 §6）。
+        if wants("buildings") || wants("maps") {
+            write_buildings_layers(&self.root, &world.maps, &world.buildings, dirty_paths, full)?;
         }
         // 阶段七 v0.4：写 `world.yaml`。这条**不**走 dirty 路由——
         // meta 是工程头部，永远写；fall back 到 `self.meta`（处理「刚加载、
@@ -899,6 +969,35 @@ impl Project {
     /// 该图的目录可能还没建过）。返回值是写入路径的显示形态，供调用方
     /// 记日志 / 报告。
     pub fn write_streets(&self, rel_path: &str, layer: &StreetLayer) -> IoResult<String> {
+        let path = self.root.join(rel_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let text = serde_yaml::to_string(layer).map_err(|source| IoError::Yaml {
+            path: path.display().to_string(),
+            source,
+        })?;
+        std::fs::write(&path, text)?;
+        Ok(path.display().to_string())
+    }
+
+    /// 读取一份建筑图层文件（ADR-0014 §6：`LayerKind::Building` 图层的
+    /// `Layer.source` 指向的 YAML，文档模型是 [`BuildingLayer`]）。
+    /// 失败语义与 [`Self::load_streets`] 同款。
+    pub fn load_buildings(&self, rel_path: &str) -> IoResult<BuildingLayer> {
+        let path = self.root.join(rel_path);
+        let text = std::fs::read_to_string(&path).map_err(|source| IoError::ReadFile {
+            path: path.display().to_string(),
+            source,
+        })?;
+        serde_yaml::from_str(&text).map_err(|source| IoError::Yaml {
+            path: path.display().to_string(),
+            source,
+        })
+    }
+
+    /// 写入一份建筑图层文件（[`Self::load_buildings`] 的逆操作）。
+    pub fn write_buildings(&self, rel_path: &str, layer: &BuildingLayer) -> IoResult<String> {
         let path = self.root.join(rel_path);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;

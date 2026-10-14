@@ -24,6 +24,8 @@
 #[cfg(feature = "app")]
 pub mod brush_cursor;
 #[cfg(feature = "app")]
+pub mod buildings;
+#[cfg(feature = "app")]
 pub mod camera;
 #[cfg(feature = "app")]
 pub mod drill;

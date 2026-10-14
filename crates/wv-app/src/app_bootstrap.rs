@@ -22,6 +22,7 @@ use bevy_egui::EguiPlugin;
 
 use crate::edit::editing;
 use crate::render::brush_cursor;
+use crate::render::buildings;
 use crate::render::camera;
 use crate::render::faction_overlays;
 use crate::render::layer_frame;
@@ -116,6 +117,7 @@ pub fn run(config: AppConfig) {
     // 不存在的资源会在首帧 panic → 窗口无法显示）。`derive(Default)` 起步。
     .init_resource::<crate::state::ProjectDiagnostics>()
     .init_resource::<VectorLayerEntities>()
+    .init_resource::<buildings::BuildingOverlays>()
     .init_resource::<terrain_view::atmosphere::AtmosphereLayer>()
     .init_resource::<streets::StreetLayerCache>()
     .init_resource::<streets::StreetEditorState>()
@@ -229,6 +231,11 @@ pub fn run(config: AppConfig) {
     .add_systems(
         Update,
         terrain_view::atmosphere::sync_atmosphere.after(map_frame::sync_map_frame),
+    )
+    // 2.5D 建筑挤出（ADR-0014 §6）：独立注册，消费主链产出的 LayerFrame。
+    .add_systems(
+        Update,
+        buildings::sync_building_overlays.after(vector_layers::sync_vector_layers),
     )
     .add_systems(
         Update,

@@ -16,6 +16,7 @@
 //! - [`street::StreetLayer`] / [`overture_id::OvertureId`] / [`geographic_source::GeographicSourceV1`]
 //! - [`measurement::MeasurementOverlay`]
 
+pub mod building;
 pub mod geographic_source;
 pub mod measurement;
 pub mod overture_id;
