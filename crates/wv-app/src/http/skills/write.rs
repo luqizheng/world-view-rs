@@ -374,6 +374,13 @@ mod tests {
                 .await
             })
             .unwrap();
+        // 合并 main（unit_per_km）时丢失的断言补回：create_map 成功路径
+        // 应回报新图 id 与非空脏路径（`maps` 目录）。
+        assert_eq!(v["id"], "city_a");
+        assert!(
+            v["dirty_paths"].as_array().is_some_and(|p| !p.is_empty()),
+            "create_map 应产生脏路径；raw = {v}"
+        );
     }
 
     #[test]

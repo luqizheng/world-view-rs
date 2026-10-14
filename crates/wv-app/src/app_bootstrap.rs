@@ -139,20 +139,19 @@ pub fn run(config: AppConfig) {
         // InitContexts 才创建，Startup 时 ctx_mut() 必然 Err（曾导致 egui
         // 全程豆腐块）。见 fonts.rs 文档与下方 PreUpdate 注册。
         (setup_camera, setup_terrain_texture_after_world).chain(),
-    )
-    // LLM 可控编辑（ADR-0016）：仅 `--features http` 时启用。在 Startup
-    // schedule 注册 [`crate::http_integration::HttpServerPlugin`]：
-    // - 建 mpsc 通道，sender 端给独立 tokio runtime（后台线程），receiver
-    //   端给 [`drain_http_commands`] 系统（主帧）。
-    // - 端口占用走 stderr + 退出，**不**自动 +1（ADR §2.2 + §6 Q1）。
-    // - 默认地址 `127.0.0.1:8732`；用户可用启动参数覆盖
-    //   （v0.1 暂未接入 CLI flag，留待下一个 PR——Plugin 的 `config` 字段
-    //   已留口子，调用方构造 `HttpServerPlugin { config: ... }` 即可）。
-    // HTTP Plugin（ADR-0014 §2.2）默认不注册——`http` feature 关闭，
-    // 不引用 crate::http_integration 以避免无关 feature 拉入重型 tokio 栈。
-    // 完整 PluginGroup 构造在 main 分支可见；本分支按 feature 实际启停。
-    // .add_plugins(())
-    .add_systems(
+    );
+    // LLM 可控编辑（ADR-0014 / 0016）：仅 `--features http` 时启用。单独
+    // `add_plugins` 调用（不进表达式链）——`#[cfg(feature = "http")]` 属性
+    // 不能裸放在 `.method()` 调用位置（`#` 会让解析器把后续当作属性参数）。
+    // 上面的 `;` 把 Startup 链断在这里：链断是必须的——若在 `.add_systems(Startup, ...)`
+    // 末尾不加分号，下面的 `#[cfg]` 块会被解析器视为链上的下一项而失败。
+    // 配置（`bind` / `port`）由 CLI `--http-bind` / `--http-port` 注入
+    // （v0.2 增量）；默认 `127.0.0.1:8732` 走 [`HttpServerConfig::default()`]。
+    #[cfg(feature = "http")]
+    app.add_plugins(crate::http_integration::HttpServerPlugin {
+        config: config.http_server_config.clone(),
+    });
+    app.add_systems(
         PreUpdate,
         // 必须排在 bevy_egui 建上下文之后：否则首帧 ctx_mut() 对未初始化
         // 上下文调用会 panic（bevy_egui 0.32 lib.rs:437 的 expect）。

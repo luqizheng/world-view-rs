@@ -71,6 +71,15 @@ pub struct AppConfig {
     /// `Some(dir)` = 启动后立即加载该工程：加载期间窗口内显示进度遮罩，
     /// 失败原因在窗口内展示（不依赖控制台）。
     pub startup_project: Option<String>,
+    /// MCP server 配置（ADR-0014 v0.2 增量）。仅在 `--features http` 时被
+    /// `app_bootstrap` 接线到 `HttpServerPlugin`；`--features app` 但不带 http
+    /// 时**不**启 server（无 server 进程就是 v0.1 默认行为）。
+    ///
+    /// 默认值见 [`HttpServerConfig::default`]：`127.0.0.1:8732`。
+    /// `Default::default()` 走字段自身的 `Default`（`HttpServerConfig::default()`），
+    /// 与手写 `impl Default` 等价——`#[cfg]` 跨字段类型对 derive 透明。
+    #[cfg(feature = "http")]
+    pub http_server_config: crate::http_integration::HttpServerConfig,
 }
 
 #[cfg(feature = "app")]
