@@ -1,9 +1,9 @@
 panels:
   brush:
     x: 12.0
-    y: 239.1875
+    y: 456.8125
     width: 264.0
-    height: 220.0
+    height: 343.25
     collapsed: false
     visible: true
   character:
@@ -14,12 +14,12 @@ panels:
     collapsed: false
     visible: false
   compass:
-    x: 369.59375
+    x: 332.0
     y: 0.0
     width: 342.90625
-    height: 1106.625
+    height: 825.8125
     collapsed: false
-    visible: false
+    visible: true
   event:
     x: 652.0
     y: 56.0
