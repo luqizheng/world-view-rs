@@ -161,6 +161,7 @@ pub async fn dispatch_write(
                 extent: Some(wv_core::map::Extent::sized(input.size_w, input.size_h)),
                 raster: None,
                 geographic_source: None,
+                unit_per_km: None,
                 orientation: 0.0,
             };
             // v0.1 不带预填充栅格；地形由后续 skill 单独填。
@@ -339,6 +340,7 @@ mod tests {
                 extent: Some(Extent::sized(4096.0, 4096.0)),
                 raster: None,
                 geographic_source: None,
+                unit_per_km: None,
                 orientation: 0.0,
             });
             dispatch_write_with_drain(
