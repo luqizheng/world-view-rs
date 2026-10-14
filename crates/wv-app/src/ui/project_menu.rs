@@ -34,8 +34,9 @@ use super::shell::UiShell;
 pub struct ProjectMenuState {
     /// 高亮行索引（对**命令行**编号，跳过分隔线与复选框）。
     pub selected: usize,
-    /// 待执行的命令。与 [`CommandPalette::pending`] 一样，交给
-    /// [`crate::ui_shell::apply_pending_commands`] 统一分发——**唯一分发器**。
+    /// 待执行的命令。菜单绘制函数拿不到 [`CommandPalette`]（不穿进本函数），
+    /// 所以先落在这里，由 [`crate::ui_shell::apply_pending_commands`] 每帧与
+    /// `CommandPalette::pending` 汇合消费——**唯一分发器**。
     pub pending: Option<crate::ui_command_palette::CommandId>,
 }
 
