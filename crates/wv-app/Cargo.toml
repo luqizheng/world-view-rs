@@ -16,6 +16,11 @@ default = []
 app = ["dep:bevy", "dep:bevy_egui", "dep:rfd", "dep:icu_provider"]
 http = ["app", "dep:axum", "dep:tokio", "dep:async-trait", "dep:serde_json"]
 
+# dev-only：axum `Router::oneshot` 走 `tower::ServiceExt`，与 `body::to_bytes`、
+# `Body::from` 配对做端到端 smoke（HTTP 测试模块 `server.rs`）。
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
 [dependencies]
 wv-core = { workspace = true }
 wv-terrain = { workspace = true }

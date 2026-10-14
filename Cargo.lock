@@ -6836,6 +6836,7 @@ dependencies = [
  "serde_yaml",
  "thiserror 2.0.21",
  "tokio",
+ "tower",
  "wv-core",
  "wv-edit",
  "wv-io",

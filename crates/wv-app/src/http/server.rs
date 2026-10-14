@@ -166,6 +166,150 @@ mod tests {
         tokio::runtime::Runtime::new().unwrap()
     }
 
+    /// **真·smoke test**：构造 axum Router（与生产 server.rs 一致的路由表），
+    /// 用 `tower::ServiceExt::oneshot` 跑一次端到端 POST /mcp（不绑端口，
+    /// 内存里走完整 handler 链路），验证从「客户端 JSON-RPC 请求」到
+    ///「handler 回 JSON-RPC 响应」无任何中间层失真。
+    ///
+    /// 这条用例是 `cargo http-test` 的 end-to-end 闸门——任何把 handler
+    /// 接到错误路由、改坏 schema、或破坏 axum `IntoResponse` 形态的改动
+    /// 都会被这条用例捕到。生产路径的端口绑定走 `start_mcp_server`，
+    /// 已在另外的测试覆盖（绑定失败 stderr + 退出）。
+    #[tokio::test]
+    async fn end_to_end_post_mcp_tools_list_returns_nine_skills() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::util::ServiceExt;
+
+        let (state, mut rx) = app_state();
+        // 起后台 drain，让读类 skill 的 send + await 闭环（handler 在
+        // tokio runtime 里，drain 在另一个 task——同 production 形态）。
+        let drain = tokio::spawn(async move {
+            let mut world = wv_core::World::default();
+            let mut history = wv_edit::History::default();
+            for _ in 0..100_000 {
+                drain_messages(&mut rx, &mut world, &mut history, None);
+                tokio::task::yield_now().await;
+            }
+        });
+
+        let app = Router::new()
+            .route("/mcp", post(mcp_handler))
+            .with_state(state.clone());
+
+        let body = serde_json::to_string(&json!({
+            "jsonrpc": "2.0",
+            "method": "tools/list",
+            "id": 1
+        }))
+        .unwrap();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "POST /mcp 应回 200 OK");
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let resp: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(resp["jsonrpc"], "2.0");
+        assert_eq!(resp["id"], 1);
+        let tools = resp["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 9, "应暴露 9 个 skill");
+
+        let names: Vec<&str> = tools
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "list_maps",
+                "get_map",
+                "list_places",
+                "get_place",
+                "get_state_at_time",
+                "create_map",
+                "create_place",
+                "undo",
+                "save_project",
+            ]
+        );
+
+        for t in tools {
+            assert!(t["name"].is_string());
+            assert!(t["description"].is_string());
+            assert_eq!(t["inputSchema"]["type"], "object");
+        }
+
+        drain.abort();
+    }
+
+    /// end-to-end smoke：POST /mcp `tools/call` 命中 list_maps（读类），
+    /// 验证 handler → bridge.read → drain → 回执 → CallToolResult 完整链路。
+    #[tokio::test]
+    async fn end_to_end_post_mcp_tools_call_list_maps_routes_through_handler() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::util::ServiceExt;
+
+        let (state, mut rx) = app_state();
+        let drain = tokio::spawn(async move {
+            let mut world = wv_core::World::default();
+            let mut history = wv_edit::History::default();
+            for _ in 0..100_000 {
+                drain_messages(&mut rx, &mut world, &mut history, None);
+                tokio::task::yield_now().await;
+            }
+        });
+
+        let app = Router::new()
+            .route("/mcp", post(mcp_handler))
+            .with_state(state.clone());
+
+        let body = serde_json::to_string(&json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "list_maps",
+                "arguments": {}
+            },
+            "id": 7
+        }))
+        .unwrap();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let resp: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(resp["id"], 7);
+        assert_eq!(
+            resp["result"]["isError"].as_bool(),
+            Some(false),
+            "list_maps 走通 = isError:false；raw = {resp}"
+        );
+        let text = resp["result"]["content"][0]["text"]
+            .as_str()
+            .expect("content[0].text 必为字符串");
+        let payload: Value = serde_json::from_str(text).expect("text 必为合法 JSON");
+        assert!(payload.is_array(), "list_maps 应返 Vec<MapSummary>；raw = {payload}");
+
+        drain.abort();
+    }
+
     #[test]
     fn tools_list_returns_nine_tools() {
         let (state, _rx) = app_state();
