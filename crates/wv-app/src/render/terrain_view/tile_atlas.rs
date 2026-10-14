@@ -218,7 +218,7 @@ pub fn sample_tile_block(atlas: &TileAtlas, col: u32, row: u32, res: u32) -> Vec
 /// `Identity` 走行级 `copy_from_slice`——整图直铺的最快路径。
 ///
 /// `soften` = 底图淡化开关（`ViewState.terrain_soften`）：在 tint 结果上再向
-/// `soften_toward`（当前主题的纸面色，ADR-0014）混 `(1 - soften_keep)`。
+/// `soften_toward`（当前主题的纸面色，ADR-0016）混 `(1 - soften_keep)`。
 /// 实现上把两步合并为一条定点管线（先 tint 后 soften，每通道两次 Q8 乘加），
 /// 避免中间缓冲。两个淡化参数由调用方从 `PaletteColors` 透传（勿直引常量）。
 #[allow(clippy::too_many_arguments)]

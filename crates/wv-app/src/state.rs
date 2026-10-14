@@ -197,7 +197,7 @@ impl ViewMode {
 #[derive(Resource)]
 pub struct ViewState {
     pub mode: ViewMode,
-    /// **地图主题**（配色轴，ADR-0014）：日间古舆图 / 暮色旧纸，与 `mode`
+    /// **地图主题**（配色轴，ADR-0016）：日间古舆图 / 暮色旧纸，与 `mode`
     /// （技法轴）正交。切换会触发底图纹理重建（`TerrainTexture.last_palette`）
     /// 与矢量层材质刷新（缓存键含本字段）。
     pub map_palette: crate::theme::palette::MapPalette,
@@ -221,7 +221,7 @@ pub struct ViewState {
     pub roads_visible: bool,
     /// 地点（POI）图层是否可见：锚定地点的点标（矢量图层底子）。
     pub places_visible: bool,
-    /// 建筑（2.5D 挤出）图层是否可见（ADR-0014 §6）。
+    /// 建筑（2.5D 挤出）图层是否可见（ADR-0016 §6）。
     pub buildings_visible: bool,
     /// 势力多边形叠加层是否可见（S12）。
     pub factions_visible: bool,

@@ -215,7 +215,7 @@ pub struct VectorLayerEntities {
     road_material_mode: Option<crate::state::ViewMode>,
     poi_materials: Vec<PoiMaterialSet>,
     poi_material_mode: Option<crate::state::ViewMode>,
-    /// 街道分级材质：主干 / 次干各 casing+fill（古舆图双色，ADR-0014）。
+    /// 街道分级材质：主干 / 次干各 casing+fill（古舆图双色，ADR-0016）。
     street_materials: Vec<StreetMaterialSet>,
     street_material_key: Option<(crate::state::ViewMode, MapPalette)>,
 }
@@ -383,7 +383,7 @@ pub fn sync_vector_layers(
 /// 道路组两种模式的基础色（casing, fill）。alpha 是「本色 alpha」，
 /// 图层 opacity 在其上相乘。
 ///
-/// 非 Google 模式走地图主题色板（ADR-0014）：casing = 纸面色（把路从同族
+/// 非 Google 模式走地图主题色板（ADR-0016）：casing = 纸面色（把路从同族
 /// 地形色上「托」出来），fill = 官道棕。
 fn road_base_colors(mode: crate::state::ViewMode, pal: &PaletteColors) -> (Color, Color) {
     match mode {
@@ -402,7 +402,7 @@ fn poi_base_colors(mode: crate::state::ViewMode, pal: &PaletteColors) -> (Color,
 
 /// 街道两级的基础色（[(主干 casing, 主干 fill), (次干 casing, 次干 fill)]）。
 ///
-/// 古舆图分级双色（ADR-0014）：主干官道棕粗、次干浅卡其细；casing 同为纸面色。
+/// 古舆图分级双色（ADR-0016）：主干官道棕粗、次干浅卡其细；casing 同为纸面色。
 fn street_base_colors(mode: crate::state::ViewMode, pal: &PaletteColors) -> [(Color, Color); 2] {
     match mode {
         crate::state::ViewMode::GoogleMap => [(GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL); 2],

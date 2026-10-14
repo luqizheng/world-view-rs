@@ -2,7 +2,7 @@
 //!
 //! ## 职责
 //! - `CellRenderer` —— 单元渲染器（全图合成与增量 patch **必须共用**）。
-//! - `shade_*` —— 视图模式 → 着色函数（`shade_real` / `shade_google` / `shade_flat` / `shade_faded` / `shade_event` / `shade_coast`），随主题色板（`PaletteColors`，ADR-0014）取值。
+//! - `shade_*` —— 视图模式 → 着色函数（`shade_real` / `shade_google` / `shade_flat` / `shade_faded` / `shade_event` / `shade_coast`），随主题色板（`PaletteColors`，ADR-0016）取值。
 //! - `hash01` / `vnoise` / `wobble_px` —— 边界扰动噪声（确定性，跨平台一致）。
 //! - `image_from_terrain` —— 由 `TerrainData` 构造 Bevy `Image`（全图合成）。
 //! - `patch_terrain_image` —— 脏块增量 patch（笔触提交用）。
@@ -33,7 +33,7 @@ use super::tile_atlas::{
 
 /// 把一个着色函数应用到一格，返回 sRGB 线性分量。
 ///
-/// 第三参 = 当前主题色板（ADR-0014）：主题相关色一律经它取，禁止直引常量。
+/// 第三参 = 当前主题色板（ADR-0016）：主题相关色一律经它取，禁止直引常量。
 type Shader = fn(&TerrainData, u8, &PaletteColors) -> Color;
 
 /// 依据当前视图模式选择纯色着色函数（基线 §1.10 四态；图集缺项/无图集时也走这里）。
@@ -84,7 +84,7 @@ fn shade_real(data: &TerrainData, kind: u8, pal: &PaletteColors) -> Color {
 
 fn shade_faded(_data: &TerrainData, kind: u8, pal: &PaletteColors) -> Color {
     // 淡化：向**该主题的纸面色**混 55%，保留地形骨架（特效 §2.1 alpha≈0.35
-    // 的近似）。ADR-0014 前混固定灰 0.7；古舆图 / 暮色下向纸面混合更自洽，
+    // 的近似）。ADR-0016 前混固定灰 0.7；古舆图 / 暮色下向纸面混合更自洽，
     // 也让势力图底色随主题走（暮色势力图不再是刺眼的亮灰底）。
     let base = pal.core_terrain(kind);
     let Color::Srgba(c) = base else {
@@ -114,7 +114,7 @@ fn is_water_kind(kind: u8) -> bool {
 }
 
 fn shade_coast(_data: &TerrainData, kind: u8, _pal: &PaletteColors) -> Color {
-    // 轮廓图三色是模式语义色，不随主题切换（ADR-0014 §2）。
+    // 轮廓图三色是模式语义色，不随主题切换（ADR-0016 §2）。
     if is_water_kind(kind) {
         colors::COAST_WATER
     } else {
@@ -185,7 +185,7 @@ struct CellRenderer<'a> {
     w: u32,
     h: u32,
     mode: ViewMode,
-    /// 当前主题色板（ADR-0014）：着色与淡化的取值来源。
+    /// 当前主题色板（ADR-0016）：着色与淡化的取值来源。
     palette: &'a PaletteColors,
     /// 高度归一化范围（仅 `RealTerrain` 模式非零）。
     hmin: f32,

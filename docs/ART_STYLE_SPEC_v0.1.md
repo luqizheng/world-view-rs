@@ -116,7 +116,7 @@ ThemePalette
 
 #### 1.4.4 古舆图色板（2026-10-14 定稿 · 默认 Theme Pack 现行值）【追加，不改 §1.4.2】
 
-> 2026-10-14 用户裁定（[ADR-0014](adr/ADR-0016-jrpg-antique-map-default-theme.md)）：§1.4.2 的骨架值由下表**取代**为现行默认——§1.4.2 原文保留作历史，不删改。
+> 2026-10-14 用户裁定（[ADR-0016](adr/ADR-0016-jrpg-antique-map-default-theme.md)）：§1.4.2 的骨架值由下表**取代**为现行默认——§1.4.2 原文保留作历史，不删改。
 > `theme/colors.rs` 是本表唯一代码投影，冲突时改 `colors.rs`（本节头部纪律）。
 > 暮色旧纸（Dusk）变体值见 `theme/colors_dusk.rs`，本表未列的槽位由日间色系同法压暗推导，实机校准前标「待复核」。
 

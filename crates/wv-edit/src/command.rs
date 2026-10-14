@@ -758,7 +758,6 @@ impl EditCommand for DeleteStreetSegmentCommand {
 }
 
 // ---------------------------------------------------------------------------
-<<<<<<< HEAD
 // 地点新增（ADR-0014 v0.1 骨架：HTTP skill `create_place` 的命令入口）
 // ---------------------------------------------------------------------------
 
@@ -811,8 +810,7 @@ impl EditCommand for AddPlaceCommand {
             .position(|p| p.id == self.place.id)
             .ok_or_else(|| EditError::TargetMissing(format!("Place {}", self.place.id)))?;
         world.distances.places.remove(pos);
-=======
-// 建筑编辑命令（ADR-0014 §6 落地项，2026-10-14）
+// 建筑编辑命令（ADR-0016 §6 落地项，2026-10-14）
 // ---------------------------------------------------------------------------
 
 /// 追加一栋建筑（2.5D 建筑挤出的数据入口）。
@@ -929,7 +927,6 @@ impl EditCommand for DeleteBuildingCommand {
         let index = self.index.min(doc.buildings.len());
         doc.buildings.insert(index, removed);
         world.set_buildings(self.layer.clone(), doc);
->>>>>>> be653cb (feat(wv-core,wv-io,wv-edit,wv-app): 2.5D 建筑挤出——数据模型+编辑命令+三层渲染)
         Ok(())
     }
 }
@@ -1445,7 +1442,7 @@ mod tests {
         Id::new_unchecked(TEST_LAYER)
     }
 
-    // ---------------------- 建筑命令（ADR-0014 §6） ----------------------
+    // ---------------------- 建筑命令（ADR-0016 §6） ----------------------
 
     const TEST_BUILDING_LAYER: &str = "layer_city_buildings";
 

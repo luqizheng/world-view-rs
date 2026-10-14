@@ -1,4 +1,4 @@
-//! 建筑图层文件（`Layer.source` 指向的 YAML）的读写验证（ADR-0014 §6）。
+//! 建筑图层文件（`Layer.source` 指向的 YAML）的读写验证（ADR-0016 §6）。
 //!
 //! 与 `street_layer_yaml.rs` 同型：文档模型在 `wv-core::building`，
 //! 读写入口在 `Project`。round-trip 按 AGENTS §7.2 必须无损。

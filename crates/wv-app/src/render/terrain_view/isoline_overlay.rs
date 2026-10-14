@@ -32,7 +32,7 @@ use super::terrain_resolve::texture_terrain;
 use super::terrain_texture::TerrainTexture;
 
 /// 等值线本色的 alpha（作者未给 Terrain 图层设 opacity 时的值）。
-/// 墨色本体走 `PaletteColors.isoline_ink`（ADR-0014：日间褐墨 / 暮色浅墨）。
+/// 墨色本体走 `PaletteColors.isoline_ink`（ADR-0016：日间褐墨 / 暮色浅墨）。
 const ISOLINE_BASE_ALPHA: f32 = 1.0;
 
 /// 叠加层 Z：底图块（`TERRAIN_Z = 0.0`）之上、换级淡化精灵（0.05）与道路

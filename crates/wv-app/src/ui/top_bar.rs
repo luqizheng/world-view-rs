@@ -159,7 +159,7 @@ fn view_mode_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
     }
 }
 
-/// 地图主题分段控件（日间古舆图 / 暮色旧纸，ADR-0014）。
+/// 地图主题分段控件（日间古舆图 / 暮色旧纸，ADR-0016）。
 ///
 /// 与 [`view_mode_segment`] 同款手绘（密度敏感，不用 `egui::Button`）；
 /// 两段定宽 64px——「日间古舆图」四~五字在 SMALL 字号下正好放下，不抢主控宽度。

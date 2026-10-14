@@ -105,7 +105,7 @@ impl History {
     /// **为什么返回脏路径**：撤销「新建地图 + 预填充栅格」这种事务后，
     /// `wv-io::save_world` 仍要知道「哪些目录路径需要重写 / 删除传播」——
     /// 不能要求调用方自行维护影子表。把脏路径沿 `Transaction` 一路带过来
-    /// 是最不容易漂移的口径（ADR-0014 §2.3「写类 skill 经 EditCommand → History」的
+    /// 是最不容易漂移的口径（ADR-0016 §2.3「写类 skill 经 EditCommand → History」的
     /// 隐含约束：撤销也得能精确告诉 IO 哪些文件要动）。
     pub fn undo(&mut self, world: &mut World) -> EditResult<(bool, Vec<String>)> {
         let Some(tx) = self.undo.pop() else {

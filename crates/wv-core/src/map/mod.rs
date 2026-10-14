@@ -241,7 +241,7 @@ pub enum LayerKind {
     Border,
     Influence,
     Road,
-    /// 建筑轮廓层（ADR-0014 §6 落地项）：`Layer.source` 指向
+    /// 建筑轮廓层（ADR-0016 §6 落地项）：`Layer.source` 指向
     /// [`crate::building::BuildingLayer`] YAML，供 2.5D 建筑挤出渲染。
     Building,
     EventPoint,

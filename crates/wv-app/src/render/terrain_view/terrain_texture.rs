@@ -47,7 +47,7 @@ pub struct TerrainTexture {
     pub last_mode: Option<ViewMode>,
     /// 当前纹理内容是否带底图淡化（与 `view.terrain_soften` 比较用）。
     pub last_soften: bool,
-    /// 当前纹理内容所用的地图主题（ADR-0014，与 `view.map_palette` 比较用）——
+    /// 当前纹理内容所用的地图主题（ADR-0016，与 `view.map_palette` 比较用）——
     /// 切主题 = 换一套色板烘焙整图，必须重建。
     pub last_palette: crate::theme::palette::MapPalette,
     /// 当前纹理画的是**哪张图**的底图（`None` = 不属于任何图的占位纹理）。

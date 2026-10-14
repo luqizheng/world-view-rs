@@ -1,4 +1,4 @@
-//! 纸面氛围层（ADR-0014 M2）：**纸面雾霭**（缩放联动降饱和）+ **纸张噪点**。
+//! 纸面氛围层（ADR-0016 M2）：**纸面雾霭**（缩放联动降饱和）+ **纸张噪点**。
 //!
 //! ## 职责
 //! - `sync_atmosphere` —— 在地形栅格幅面上铺两层半透明四边形：
@@ -217,7 +217,7 @@ pub fn sync_atmosphere(
         atm.grain = Some((grain, grain_mesh, grain_mat));
         atm.key = Some(key);
     }
-    // 雾霭 alpha 逐帧连续更新（缩放的空气感）；颜色随主题纸面（ADR-0014）。
+    // 雾霭 alpha 逐帧连续更新（缩放的空气感）；颜色随主题纸面（ADR-0016）。
     let pal = palette::colors(view.map_palette);
     if let Some((_, _, mat)) = &atm.veil {
         if let Some(mut m) = materials.get_mut(mat) {

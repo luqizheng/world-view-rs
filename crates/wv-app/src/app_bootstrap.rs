@@ -140,7 +140,7 @@ pub fn run(config: AppConfig) {
         // 全程豆腐块）。见 fonts.rs 文档与下方 PreUpdate 注册。
         (setup_camera, setup_terrain_texture_after_world).chain(),
     )
-    // LLM 可控编辑（ADR-0014）：仅 `--features http` 时启用。在 Startup
+    // LLM 可控编辑（ADR-0016）：仅 `--features http` 时启用。在 Startup
     // schedule 注册 [`crate::http_integration::HttpServerPlugin`]：
     // - 建 mpsc 通道，sender 端给独立 tokio runtime（后台线程），receiver
     //   端给 [`drain_http_commands`] 系统（主帧）。
@@ -226,13 +226,13 @@ pub fn run(config: AppConfig) {
         Update,
         brush_cursor::sync_brush_cursor.after(camera::track_cursor_world),
     )
-    // 纸面氛围层（ADR-0014 M2：雾霭 + 纸张噪点）：独立注册，排在主链
+    // 纸面氛围层（ADR-0016 M2：雾霭 + 纸张噪点）：独立注册，排在主链
     // `sync_map_frame` 之后（同帧即可，只要不先于地形 chunk 出现）。
     .add_systems(
         Update,
         terrain_view::atmosphere::sync_atmosphere.after(map_frame::sync_map_frame),
     )
-    // 2.5D 建筑挤出（ADR-0014 §6）：独立注册，消费主链产出的 LayerFrame。
+    // 2.5D 建筑挤出（ADR-0016 §6）：独立注册，消费主链产出的 LayerFrame。
     .add_systems(
         Update,
         buildings::sync_building_overlays.after(vector_layers::sync_vector_layers),

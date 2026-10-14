@@ -23,7 +23,7 @@ use super::isoline_overlay::build_stroke_mesh;
 use super::terrain_texture::TerrainTexture;
 
 /// 网格线本色的 alpha（作者未给 Terrain 图层设 opacity 时的值）。
-/// 网格线基色走 `PaletteColors.grid_line`（ADR-0014：日间褐墨 / 暮色浅墨）。
+/// 网格线基色走 `PaletteColors.grid_line`（ADR-0016：日间褐墨 / 暮色浅墨）。
 const GRID_LINE_BASE_ALPHA: f32 = 0.35;
 
 /// Z 序：底图块（0.0）之上、等值线描边（0.04）之下。

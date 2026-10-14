@@ -737,11 +737,11 @@ pub fn update_place_labels(
     // 光晕描边需自定义 shader，后续再补白 halo。透明度随 Place 图层（ADR-0013）。
     let label_color = match view.mode {
         crate::state::ViewMode::GoogleMap => crate::theme::colors_google::GOOGLE_LABEL_FILL,
-        // 古舆图 / 暮色：深褐墨（暮色为浅米），不再回退纯白（ADR-0014）。
+        // 古舆图 / 暮色：深褐墨（暮色为浅米），不再回退纯白（ADR-0016）。
         _ => crate::theme::palette::colors(view.map_palette).label_fill,
     }
     .with_alpha(layers.place.opacity);
-    // 晕边色（ADR-0014 M2）：纸面色系（Google 用白晕兜底），随 Place 图层透明度。
+    // 晕边色（ADR-0016 M2）：纸面色系（Google 用白晕兜底），随 Place 图层透明度。
     let halo_color = match view.mode {
         crate::state::ViewMode::GoogleMap => bevy::color::Color::WHITE,
         _ => crate::theme::palette::colors(view.map_palette).halo_fill,

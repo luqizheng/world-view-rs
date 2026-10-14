@@ -1,7 +1,7 @@
 //! 待批准：本文件在 `app` feature 下才编译。
 #![cfg(feature = "app")]
 
-//! 地图主题运行时分发（ADR-0014）——「日间古舆图 / 暮色旧纸」二选一的唯一入口。
+//! 地图主题运行时分发（ADR-0016）——「日间古舆图 / 暮色旧纸」二选一的唯一入口。
 //!
 //! ## 职责
 //! - [`MapPalette`] —— 主题枚举（`ViewState.map_palette` 持有、UI 切换、YAML 持久化）。
@@ -25,7 +25,7 @@ use bevy::prelude::*;
 use super::colors;
 use super::colors_dusk;
 
-/// 地图主题（配色轴）：与视图模式（`ViewMode`，技法轴）**正交**（ADR-0014）。
+/// 地图主题（配色轴）：与视图模式（`ViewMode`，技法轴）**正交**（ADR-0016）。
 ///
 /// GoogleMap 模式继续绑 `colors_google`、轮廓图三色为模式语义不随主题切换——
 /// 本枚举只管「古舆图」家族内部的日间 / 暮色。

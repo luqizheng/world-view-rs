@@ -305,7 +305,7 @@ fn write_measurements_at(
         std::fs::create_dir_all(parent)?;
     }
     let text = serde_yaml::to_string(overlay).map_err(|source| IoError::Yaml {
-/// 写**建筑图层文档**到各 `Layer.source` 指向的 YAML（ADR-0014 §6 落地项）。
+/// 写**建筑图层文档**到各 `Layer.source` 指向的 YAML（ADR-0016 §6 落地项）。
 ///
 /// 与 [`write_streets_layers`] 完全同构：虚拟脏命名空间 `buildings/<layer_id>`
 /// （建筑文件物理上在 `maps/<map_id>/<source>`，虚拟化防止 `maps/<map>/` 前缀
@@ -705,7 +705,7 @@ impl Project {
             let overlay = self::load_measurements_at(&self.root, &m.id)?;
             if !overlay.is_empty() {
                 measurements.insert(m.id.clone(), overlay);
-        // 建筑：ADR-0014 §6 落地项。失败语义分级与街道同款（V1）。
+        // 建筑：ADR-0016 §6 落地项。失败语义分级与街道同款（V1）。
         let mut buildings: BTreeMap<wv_core::Id, wv_core::BuildingLayer> = BTreeMap::new();
         for m in &maps {
             for l in &m.layers {
@@ -923,7 +923,7 @@ impl Project {
                 dirty_paths,
                 full,
             )?;
-        // 建筑文档：与街道同款虚拟命名空间 + 独立路由（ADR-0014 §6）。
+        // 建筑文档：与街道同款虚拟命名空间 + 独立路由（ADR-0016 §6）。
         if wants("buildings") || wants("maps") {
             write_buildings_layers(&self.root, &world.maps, &world.buildings, dirty_paths, full)?;
         }
@@ -981,7 +981,7 @@ impl Project {
         Ok(path.display().to_string())
     }
 
-    /// 读取一份建筑图层文件（ADR-0014 §6：`LayerKind::Building` 图层的
+    /// 读取一份建筑图层文件（ADR-0016 §6：`LayerKind::Building` 图层的
     /// `Layer.source` 指向的 YAML，文档模型是 [`BuildingLayer`]）。
     /// 失败语义与 [`Self::load_streets`] 同款。
     pub fn load_buildings(&self, rel_path: &str) -> IoResult<BuildingLayer> {

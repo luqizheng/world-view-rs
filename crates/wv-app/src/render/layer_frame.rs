@@ -22,7 +22,7 @@
 //! | `Place` | POI 点标 + 地名标注 | `places_visible` |
 //! | `Influence` | 势力多边形叠加 | `factions_visible` |
 //! | `EventPoint` | 事件高亮（Gizmos） | `events_visible` |
-//! | `Building` | 2.5D 建筑挤出（阴影 / 侧面 / 顶面，ADR-0014 §6） | `buildings_visible` |
+//! | `Building` | 2.5D 建筑挤出（阴影 / 侧面 / 顶面，ADR-0016 §6） | `buildings_visible` |
 //! | `Border` / `Custom` | **无消费者**（预留声明位） | — |
 //!
 //! ## z 的语义：槽位偏移（ADR-0013 v1）

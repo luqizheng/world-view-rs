@@ -1167,7 +1167,7 @@ fn apply_pending_commands(
 ///
 /// 位置的真相在 egui 的窗口记忆里（`Memory::area_rect`），不在 [`crate::ui_layout::default_layout`]。
 /// 拖动过程中不写盘（`is_using_pointer`），松手后的那一帧才落盘——避免 60 次/秒的文件写。
-/// 打开工程时读回 `ui-layout.yaml` 里的**地图主题**（ADR-0014）。
+/// 打开工程时读回 `ui-layout.yaml` 里的**地图主题**（ADR-0016）。
 ///
 /// 只恢复 `map_theme`：面板几何由 egui 记忆按窗口接管，软件壳 theme/density
 /// 的读回是独立待决（README §12-32），本系统刻意不碰，避免把「修一个字段」

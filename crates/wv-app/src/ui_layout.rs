@@ -63,7 +63,7 @@ pub struct LayoutFile {
     /// 密度档。
     #[serde(default)]
     pub density: Option<String>,
-    /// 地图主题（ADR-0014：`daylight` / `dusk`，`MapPalette::key`）。
+    /// 地图主题（ADR-0016：`daylight` / `dusk`，`MapPalette::key`）。
     #[serde(default)]
     pub map_theme: Option<String>,
 }
