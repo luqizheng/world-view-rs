@@ -51,6 +51,7 @@
 #![cfg(feature = "app")]
 
 use bevy::image::ImageSampler;
+use bevy::math::Affine2;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
@@ -470,6 +471,13 @@ pub fn sync_terrain_chunks(
             // 图层透明度（ADR-0013）：作者 YAML 的 `opacity` 落在材质 alpha 上。
             color: Color::WHITE.with_alpha(layers.terrain.opacity),
             texture: mip_handles.get(mip_now as usize).cloned(),
+            // V 翻转：Mesh2d + Rectangle 的默认 UV 把 image data 第 0 行映射到世界 +
+            // Y 顶点，与 `apply_brush` / `isoline_overlay` 的「cell row 0 = 世界底部」
+            // 约定相反。翻转后 data 行 0 落在世界底部，与笔刷和等值线描边同源——
+            // 修复「VectorFlat 填充与描边呈 90° 错位 / 笔刷落点与网格点对不上」
+            // （M2 提交 5f8cb73 后浮现的回归：色块模式没有描边时不可见）。
+            uv_transform: Affine2::from_translation(Vec2::new(0.0, 1.0))
+                * Affine2::from_scale(Vec2::new(1.0, -1.0)),
             ..default()
         });
         let entity = commands
