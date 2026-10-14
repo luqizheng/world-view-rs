@@ -103,6 +103,21 @@ pub struct MeasureLabel;
 #[derive(Component)]
 pub struct MeasureLabelShadow;
 
+/// 测量文字标签的暗色背板（半透明黑矩形，铺在文字后一层，挡住穿过的黄线）。
+///
+/// 与 [`MeasureLabel`] **1 : 1** 配对 spawn：每个标签 1 主文字 + 1 背板实体。
+///
+/// ## 为什么需要背板（用户 2026-10-14 反馈）
+///
+/// Bevy 没有 CSS `mix-blend-mode: difference` 等价 API；想达到「文字明显
+/// 盖在黄色线段上」的视觉效果，最简单等效做法就是：**背板在文字与线之间
+/// 铺一块暗色矩形**，让黄线在背板区域被完全遮住。
+///
+/// 视觉等价于 difference：在文字区显示文字+背板，其他地方保留原色。
+/// 渲染代价：每标签 +1 个 mesh 实体 + 1 个 ColorMaterial（小，可接受）。
+#[derive(Component)]
+pub struct MeasureLabelPlate;
+
 /// 测量叠加的渲染入口（**顶置**，无 LayerFrame 联动）。
 ///
 /// 把 cache + 草稿一起画：
@@ -111,11 +126,15 @@ pub struct MeasureLabelShadow;
 /// - 长度 / 面积：纯函数（`wv_core::Measurement::total_length`）手算。
 /// - 文字标签带 **1px 描边**：每个标签实际 spawn 2 个 Text2d 实体——黑色阴影
 ///   在主文字右下方 1 屏幕 px，白色主文字在上。
+/// - 文字标签背**暗色矩形背板**（[`MeasureLabelPlate`]）：覆盖穿过的黄线，
+///   等效 mix-blend-mode: difference 的视觉效果。
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::type_complexity)]
 pub fn render_measurements(
     mut commands: Commands,
     mut gizmos: Gizmos,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
     cache: Res<MeasurementCache>,
     measure: Res<MeasureState>,
     grid: Res<GridConfig>,
@@ -136,6 +155,15 @@ pub fn render_measurements(
         (
             With<MeasureLabel>,
             Without<MeasureLabelShadow>,
+            Without<MeasureLabelPlate>,
+            Without<Camera2d>,
+            Without<StreetLabel>,
+        ),
+    >,
+    mut q_plate: Query<
+        (Entity, &mut Transform, &mut Mesh2d, &mut Visibility),
+        (
+            With<MeasureLabelPlate>,
             Without<Camera2d>,
             Without<StreetLabel>,
         ),
@@ -252,13 +280,45 @@ pub fn render_measurements(
     // 4 个方向叠加 → ~2 px 实心描边，让白字在任何底色（绿底/黄线）上都清晰。
     const SHADOW_OFFSETS: [(f32, f32); 4] = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)];
 
-    // ---- 文字标签对象池（主 + 描边）----
-    // 每个 wanted 标签需要 1 个 main + 4 个 shadow（共 5N 个实体）。
-    // 阴影池大小 = 4N（每个 main 配 4 个 shadow）。
+    // ---- 文字标签对象池（主 + 描边 + 背板）----
+    // 每个 wanted 标签需要：
+    // - 1 main 文字
+    // - 4 shadow 文字（4 方向描边）
+    // - 1 plate 矩形（不透明暗色背板，挡住穿过的黄线）
+    // 阴影池大小 = 4N，背板池大小 = N，主 mesh 池大小 = N。
     let mut iter_main = q_main.iter_mut();
     let mut iter_shadow = q_shadow.iter_mut();
+    let mut iter_plate = q_plate.iter_mut();
+    let plate_color = bevy::color::Color::srgba(0.0, 0.0, 0.0, 0.85);
     for (pos, text) in &wanted {
         let text: &str = text.as_str();
+
+        // 0. 背板（在文字与线之间，z = MEASURE_Z + 0.3 — 高于线 z=0，低于字 z=0.5）。
+        let plate_size = estimate_text_world_size(text, font_size);
+        let plate_mesh = meshes.add(Rectangle::new(plate_size.x, plate_size.y));
+        let plate_material = materials.add(ColorMaterial {
+            color: plate_color,
+            ..Default::default()
+        });
+        if let Some((_, mut tf, mut m, mut vis)) = iter_plate.next() {
+            tf.translation = pos.extend(MEASURE_Z + 0.3);
+            tf.rotation = label_rot;
+            tf.scale = Vec3::ONE;
+            *m = Mesh2d(plate_mesh);
+            *vis = Visibility::Visible;
+        } else {
+            commands.spawn((
+                MeasureLabelPlate,
+                Mesh2d(plate_mesh),
+                MeshMaterial2d(plate_material),
+                Transform {
+                    translation: pos.extend(MEASURE_Z + 0.3),
+                    rotation: label_rot,
+                    ..Default::default()
+                },
+                Visibility::Visible,
+            ));
+        }
 
         // 1. 主文字（白色，z = MEASURE_Z + 0.5，确保明显压在线之上）
         if let Some((_, mut tf, mut t, mut style, mut color, mut vis)) = iter_main.next() {
@@ -328,6 +388,10 @@ pub fn render_measurements(
         *vis = Visibility::Hidden;
     }
     for (_, mut _tf, mut _t, mut _s, mut _c, mut vis) in iter_shadow {
+        *vis = Visibility::Hidden;
+    }
+    for (_, mut _tf, mut _m, mut vis) in iter_plate {
+        let _ = _m;
         *vis = Visibility::Hidden;
     }
 
@@ -644,6 +708,52 @@ fn wu_to_km(wu: f32, km_factor: f64) -> f64 {
     f64::from(wu) * km_factor
 }
 
+/// 按字符数粗估文字渲染尺寸（**世界单位**）。
+///
+/// 不读 `TextLayoutInfo`（存在布局时机竞争），用字符数 × 平均字符宽近似。
+/// CJK 与 ASCII 字符宽差异通过「CJK 算 1 单位，ASCII 算 0.6 单位」加权——
+/// 估算的宽度略大于真实宽度（避免文字底边露线），高度按行数 × 1.3 字高。
+///
+/// ## 为什么不用精确测量
+///
+/// Bevy 的 `TextLayoutInfo` 由 text 系统异步写入，与 render 系统同帧竞争。
+/// 第一次 spawn 时拿到的可能是上一帧的缓存值，导致抖动。本估算得是确定性的，
+/// 视觉上误差 ±2 px（小于 4 方向描边的总厚度），不会产生抖动。
+fn estimate_text_world_size(text: &str, font_world_size: f32) -> Vec2 {
+    let line_count = text.matches('\n').count() + 1;
+    // 最长一行的「等效字符宽度」（世界单位）：
+    // - CJK 字符宽度 ≈ 1.0 × font_world_size
+    // - ASCII 字符宽度 ≈ 0.6 × font_world_size
+    // 实测字体宽度 ≈ font_world_size × 0.55（Helvetica-like），CJK 字宽 ≈ 1.0×font。
+    // 这里取 ASCII ≈ 0.55，CJK ≈ 1.0。
+    const ASCII_WIDTH_RATIO: f32 = 0.55;
+    const CJK_WIDTH_RATIO: f32 = 1.0;
+    let max_eq_width = text
+        .lines()
+        .map(|line| {
+            line.chars()
+                .map(|c| {
+                    let code = c as u32;
+                    let ratio = if (0x4E00..=0x9FFF).contains(&code)
+                        || (0x3000..=0x303F).contains(&code)
+                        || (0xFF00..=0xFFEF).contains(&code)
+                    {
+                        CJK_WIDTH_RATIO
+                    } else {
+                        ASCII_WIDTH_RATIO
+                    };
+                    ratio * font_world_size
+                })
+                .sum::<f32>()
+        })
+        .fold(0.0_f32, f32::max);
+    // 横向 padding（左右各一点）。
+    let pad_x = font_world_size * 0.4;
+    // 高度 = 行数 × 字高（×1.3 含上下 padding）。
+    let height = font_world_size * 1.3 * line_count as f32;
+    Vec2::new(max_eq_width + pad_x, height)
+}
+
 /// 单段长度标签（折线）。
 ///
 /// 无 km： `"5.0"`
@@ -809,6 +919,31 @@ mod tests {
     fn format_length_label_no_km() {
         assert_eq!(format_length_label(5.0, None), "5.0");
         assert_eq!(format_length_label(12.34, None), "12.3");
+    }
+
+    #[test]
+    fn estimate_text_world_size_handles_cjk_vs_ascii() {
+        let font = 13.0_f32;
+        // ASCII 6 字符：6 × 0.55 × 13 ≈ 42.9 + padding ≈ 48。
+        let ascii = estimate_text_world_size("abc 12", font);
+        assert!(ascii.x < 60.0, "ASCII 字符估宽应较窄: {}", ascii.x);
+        assert!(ascii.x > 40.0, "ASCII 应有合理宽度: {}", ascii.x);
+        // CJK 6 字：6 × 1.0 × 13 ≈ 78——显著宽于 ASCII。
+        let cjk = estimate_text_world_size("测量三段折线", font);
+        assert!(
+            cjk.x > ascii.x * 1.3,
+            "CJK 应显著宽于 ASCII: cjk={} ascii={}",
+            cjk.x,
+            ascii.x
+        );
+        // 多行：高度按行数倍。
+        let multi = estimate_text_world_size("5.0 wu\n(8.20 km)", font);
+        assert!(
+            multi.y > ascii.y,
+            "多行标签应比单行高: multi={} single={}",
+            multi.y,
+            ascii.y
+        );
     }
 
     #[test]
