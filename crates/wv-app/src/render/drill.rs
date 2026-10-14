@@ -693,8 +693,9 @@ pub fn update_place_labels(
         (&mut Transform, &mut Text2d, &mut TextFont, &mut TextColor),
         (
             With<crate::render::label_halo::LabelHalo>,
-            // 与上面的 `With<PlaceLabel>` 写查询构成 Without 级不相交——
-            // Bevy 只认 Without 可证互斥，纯 With 组合会在系统初始化时爆 B0003。
+            // 与 `camera: Query<&Transform, With<Camera2d>>` 互斥（B0001）。
+            Without<bevy::prelude::Camera2d>,
+            // 与主查询 `With<PlaceLabel>` 互斥。
             Without<PlaceLabel>,
         ),
     >,

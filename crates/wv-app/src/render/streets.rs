@@ -180,6 +180,7 @@ pub fn update_street_labels(
         (&mut Transform, &mut Text2d, &mut TextFont, &mut TextColor),
         (
             With<crate::render::label_halo::LabelHalo>,
+            Without<bevy::prelude::Camera2d>,
             Without<StreetLabel>,
         ),
     >,
