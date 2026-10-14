@@ -6,7 +6,8 @@
 //! - 脏矩形驱动：`dirty_chunks` 标记哪些 chunk 在编辑后需要重烘，其它早退。
 //!
 //! ## 边界（不做什么）
-//! - **不画 JRPG / Google 风格**——单图块内部色值由 [`crate::terrain_view`] 决定；
+//! - **不画风格**（JRPG 图集 / Google / 古舆图色板）——单图块内部色值由
+//!   [`crate::theme::palette`] + [`crate::render::terrain_view`] 决定；
 //!   本模块只关心几何 / mip / 拣选。
 //! - **不直接听编辑输入**——笔触收口在 [`crate::editing`]；本模块订阅
 //!   `terrain.dirty_chunks`（`Changed<WorldProjection>` 之类）就够了。

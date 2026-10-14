@@ -58,12 +58,16 @@ pub fn rebuild_texture_on_mode_change(
     mut tex: ResMut<TerrainTexture>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    // 模式、淡化开关、来源图三者任一真的变了才需要重建（不看整个 ViewState 资源）。
+    // 模式、淡化开关、主题、来源图任一真的变了才需要重建（不看整个 ViewState 资源）。
     let map_changed = match active_terrain(&projection.world, drill.current()) {
         Some((node, _)) => tex.last_map.as_ref() != Some(&node.id),
         None => false,
     };
-    if !map_changed && tex.last_mode == Some(view.mode) && tex.last_soften == view.terrain_soften {
+    if !map_changed
+        && tex.last_mode == Some(view.mode)
+        && tex.last_soften == view.terrain_soften
+        && tex.last_palette == view.map_palette
+    {
         return;
     }
     let Some((node, data)) = active_terrain(&projection.world, drill.current()) else {
@@ -77,7 +81,13 @@ pub fn rebuild_texture_on_mode_change(
     if map_changed && tex.last_map.is_some() {
         spawn_basemap_fadeout(&mut commands, &mut images, &tex, &grid);
     }
-    let image = image_from_terrain(data, view.mode, atlas.as_deref(), view.terrain_soften);
+    let image = image_from_terrain(
+        data,
+        view.mode,
+        atlas.as_deref(),
+        view.terrain_soften,
+        crate::theme::palette::colors(view.map_palette),
+    );
     replace_terrain_texture(
         &mut tex,
         &mut images,
@@ -86,6 +96,7 @@ pub fn rebuild_texture_on_mode_change(
         Some(node.id.clone()),
         view.mode,
         view.terrain_soften,
+        view.map_palette,
     );
     // 整图内容已整体替换：chunk 层需要全量重贴（不经 `dirty`，避免
     // `flush_terrain_texture` 下帧再做一次重复的全图重建）。
@@ -93,6 +104,7 @@ pub fn rebuild_texture_on_mode_change(
     // 仅在实际重建后记录（保证纹理内容与记录一致）。
     tex.last_mode = Some(view.mode);
     tex.last_soften = view.terrain_soften;
+    tex.last_palette = view.map_palette;
     tex.last_map = Some(node.id.clone());
 }
 

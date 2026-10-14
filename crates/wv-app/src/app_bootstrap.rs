@@ -336,8 +336,13 @@ fn setup_terrain_texture_after_world(
     // 原型默认 512×512 占位（基线 §2.19：1024² 亦轻松 60 FPS）。
     let (map, data) =
         terrain_view::active_terrain_or_placeholder(&mut projection.world, drill.current(), 512);
-    let image =
-        terrain_view::image_from_terrain(&data, view.mode, atlas.as_ref(), view.terrain_soften);
+    let image = terrain_view::image_from_terrain(
+        &data,
+        view.mode,
+        atlas.as_ref(),
+        view.terrain_soften,
+        crate::theme::palette::colors(view.map_palette),
+    );
     commands.insert_resource(terrain_view::new_terrain_texture(
         &mut images,
         image,
@@ -345,6 +350,7 @@ fn setup_terrain_texture_after_world(
         map,
         view.mode,
         view.terrain_soften,
+        view.map_palette,
     ));
 }
 

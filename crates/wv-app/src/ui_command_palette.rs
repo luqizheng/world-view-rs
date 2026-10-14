@@ -87,6 +87,8 @@ pub enum CommandId {
     ToggleTheme,
     /// 切换密度档。
     ToggleDensity,
+    /// 切换地图主题（ADR-0014：日间古舆图 ⇄ 暮色旧纸）。
+    ToggleMapPalette,
     /// 播放 / 暂停。
     TogglePlay,
     /// 沉浸模式。
@@ -366,6 +368,12 @@ impl CommandRegistry {
             CommandId::ToggleDensity,
             CommandGroup::Interface,
             "切换紧凑 / 标准密度",
+            None,
+        );
+        push(
+            CommandId::ToggleMapPalette,
+            CommandGroup::View,
+            "切换地图主题（日间古舆图 / 暮色旧纸）",
             None,
         );
         // 2026-10-14 用户需求：怀疑数据已改、画面没跟随时手动重画底图。

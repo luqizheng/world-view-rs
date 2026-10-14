@@ -7,7 +7,7 @@
 //!   避免 `wgpu::Batch` 节点数随 POI 总数失控。
 //!
 //! ## 边界（不做什么）
-//! - **不画 JRPG 风格地形**——那是 [`crate::colors_jrpg`] + [`crate::terrain_view`]。
+//! - **不画地形底图**——那是 [`crate::render::terrain_view`] + [`crate::theme::palette`]。
 //! - **不投影地理坐标**——只消费 [`crate::render::world_projection::ProjectionFrame`]。
 //! - **不维护世界数据**——POI 经 [`crate::state::ViewState`] 当前地图与可见层过滤。
 //!
@@ -31,10 +31,10 @@ use bevy::prelude::*;
 use crate::render::layer_frame::LayerFrame;
 use crate::render::world_projection::{PlaceDot, ProjectionFrame};
 use crate::state::{lod_tier, GridConfig, LodTier, ViewState};
-use crate::theme::colors;
 use crate::theme::colors_google::{
     GOOGLE_PLACE_DOT, GOOGLE_POI_RING, GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL,
 };
+use crate::theme::palette::{self, MapPalette, PaletteColors};
 
 /// Google 式道路外缘宽度（屏幕像素）。
 const GOOGLE_ROAD_CASING_PX: f32 = 6.0;
@@ -132,6 +132,7 @@ struct PoiInnerSpec {
 /// 按模式缓存的道路材质。
 struct RoadMaterialSet {
     mode: crate::state::ViewMode,
+    palette: MapPalette,
     casing: Handle<ColorMaterial>,
     fill: Handle<ColorMaterial>,
 }
@@ -139,8 +140,19 @@ struct RoadMaterialSet {
 /// 按模式缓存的 POI 材质。
 struct PoiMaterialSet {
     mode: crate::state::ViewMode,
+    palette: MapPalette,
     ring: Handle<ColorMaterial>,
     dot: Handle<ColorMaterial>,
+}
+
+/// 按模式 + 主题缓存的街道材质（ADR-0014：主干 / 次干在古舆图里是两种色）。
+struct StreetMaterialSet {
+    mode: crate::state::ViewMode,
+    palette: MapPalette,
+    major_casing: Handle<ColorMaterial>,
+    major_fill: Handle<ColorMaterial>,
+    minor_casing: Handle<ColorMaterial>,
+    minor_fill: Handle<ColorMaterial>,
 }
 
 /// 实体与 Mesh 句柄的一一对应缓存。
@@ -203,6 +215,9 @@ pub struct VectorLayerEntities {
     road_material_mode: Option<crate::state::ViewMode>,
     poi_materials: Vec<PoiMaterialSet>,
     poi_material_mode: Option<crate::state::ViewMode>,
+    /// 街道分级材质：主干 / 次干各 casing+fill（古舆图双色，ADR-0014）。
+    street_materials: Vec<StreetMaterialSet>,
+    street_material_key: Option<(crate::state::ViewMode, MapPalette)>,
 }
 
 /// 每帧同步道路、街道与 POI。系统只消费 `ProjectionFrame` 与街道缓存，
@@ -223,10 +238,27 @@ pub fn sync_vector_layers(
     editor: Res<crate::render::streets::StreetEditorState>,
     mut layer: ResMut<VectorLayerEntities>,
 ) {
-    let road_materials_changed =
-        ensure_road_materials(&mut materials, view.mode, layers.road.opacity, &mut layer);
-    let poi_materials_changed =
-        ensure_poi_materials(&mut materials, view.mode, layers.place.opacity, &mut layer);
+    let road_materials_changed = ensure_road_materials(
+        &mut materials,
+        view.mode,
+        view.map_palette,
+        layers.road.opacity,
+        &mut layer,
+    );
+    let poi_materials_changed = ensure_poi_materials(
+        &mut materials,
+        view.mode,
+        view.map_palette,
+        layers.place.opacity,
+        &mut layer,
+    );
+    let street_materials_changed = ensure_street_materials(
+        &mut materials,
+        view.mode,
+        view.map_palette,
+        layers.road.opacity,
+        &mut layer,
+    );
     // 绑定变化（作者改 YAML 的 opacity）：缓存材质的 alpha 就地刷新。
     // z 偏移不需要这步——sync_road_strokes / sync_poi 每帧全量重写 Transform。
     if layers.is_changed() {
@@ -256,6 +288,19 @@ pub fn sync_vector_layers(
             .find(|m| m.mode == view.mode)
             .map(|m| (m.casing.clone(), m.fill.clone()))
             .expect("ensure_road_materials 必须已初始化");
+        let (major_casing, major_fill, minor_casing, minor_fill) = layer
+            .street_materials
+            .iter()
+            .find(|m| m.mode == view.mode && m.palette == view.map_palette)
+            .map(|m| {
+                (
+                    m.major_casing.clone(),
+                    m.major_fill.clone(),
+                    m.minor_casing.clone(),
+                    m.minor_fill.clone(),
+                )
+            })
+            .expect("ensure_street_materials 必须已初始化");
         sync_road_strokes(
             &mut commands,
             &mut meshes,
@@ -305,10 +350,12 @@ pub fn sync_vector_layers(
             &grid,
             &streets,
             view.scale,
-            casing,
-            fill,
+            major_casing,
+            major_fill,
+            minor_casing,
+            minor_fill,
             road_z,
-            road_materials_changed,
+            street_materials_changed,
             &mut layer,
         );
     }
@@ -335,18 +382,34 @@ pub fn sync_vector_layers(
 
 /// 道路组两种模式的基础色（casing, fill）。alpha 是「本色 alpha」，
 /// 图层 opacity 在其上相乘。
-fn road_base_colors(mode: crate::state::ViewMode) -> (Color, Color) {
+///
+/// 非 Google 模式走地图主题色板（ADR-0014）：casing = 纸面色（把路从同族
+/// 地形色上「托」出来），fill = 官道棕。
+fn road_base_colors(mode: crate::state::ViewMode, pal: &PaletteColors) -> (Color, Color) {
     match mode {
         crate::state::ViewMode::GoogleMap => (GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL),
-        _ => (colors::LINE_ON_MID.with_alpha(0.28), colors::ROAD_STROKE),
+        _ => (pal.road_casing.with_alpha(0.28), pal.road_stroke),
     }
 }
 
 /// POI 组两种模式的基础色（ring, dot）。
-fn poi_base_colors(mode: crate::state::ViewMode) -> (Color, Color) {
+fn poi_base_colors(mode: crate::state::ViewMode, pal: &PaletteColors) -> (Color, Color) {
     match mode {
         crate::state::ViewMode::GoogleMap => (GOOGLE_POI_RING, GOOGLE_PLACE_DOT),
-        _ => (colors::POI_RING, colors::PLACE_DOT),
+        _ => (pal.poi_ring, pal.poi_dot),
+    }
+}
+
+/// 街道两级的基础色（[(主干 casing, 主干 fill), (次干 casing, 次干 fill)]）。
+///
+/// 古舆图分级双色（ADR-0014）：主干官道棕粗、次干浅卡其细；casing 同为纸面色。
+fn street_base_colors(mode: crate::state::ViewMode, pal: &PaletteColors) -> [(Color, Color); 2] {
+    match mode {
+        crate::state::ViewMode::GoogleMap => [(GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL); 2],
+        _ => [
+            (pal.road_casing.with_alpha(0.28), pal.street_major),
+            (pal.road_casing.with_alpha(0.28), pal.street_minor),
+        ],
     }
 }
 
@@ -357,7 +420,7 @@ fn apply_road_material_alpha(
     opacity: f32,
 ) {
     for set in &layer.road_materials {
-        let (casing, fill) = road_base_colors(set.mode);
+        let (casing, fill) = road_base_colors(set.mode, palette::colors(set.palette));
         if let Some(mut mat) = materials.get_mut(&set.casing) {
             mat.color = casing.with_alpha(casing.alpha() * opacity);
         }
@@ -374,7 +437,7 @@ fn apply_poi_material_alpha(
     opacity: f32,
 ) {
     for set in &layer.poi_materials {
-        let (ring, dot) = poi_base_colors(set.mode);
+        let (ring, dot) = poi_base_colors(set.mode, palette::colors(set.palette));
         if let Some(mut mat) = materials.get_mut(&set.ring) {
             mat.color = ring.with_alpha(ring.alpha() * opacity);
         }
@@ -392,17 +455,23 @@ fn poi_kept_at_tier(dot: &PlaceDot, tier: LodTier) -> bool {
 fn ensure_road_materials(
     materials: &mut Assets<ColorMaterial>,
     mode: crate::state::ViewMode,
+    map_palette: MapPalette,
     road_opacity: f32,
     layer: &mut VectorLayerEntities,
 ) -> bool {
     if layer.road_material_mode == Some(mode) {
         return false;
     }
-    if !layer.road_materials.iter().any(|set| set.mode == mode) {
-        let (casing, fill) = road_base_colors(mode);
+    if !layer
+        .road_materials
+        .iter()
+        .any(|set| set.mode == mode && set.palette == map_palette)
+    {
+        let (casing, fill) = road_base_colors(mode, palette::colors(map_palette));
         let with_opacity = |c: Color| c.with_alpha(c.alpha() * road_opacity);
         layer.road_materials.push(RoadMaterialSet {
             mode,
+            palette: map_palette,
             casing: materials.add(with_opacity(casing)),
             fill: materials.add(with_opacity(fill)),
         });
@@ -414,22 +483,60 @@ fn ensure_road_materials(
 fn ensure_poi_materials(
     materials: &mut Assets<ColorMaterial>,
     mode: crate::state::ViewMode,
+    map_palette: MapPalette,
     place_opacity: f32,
     layer: &mut VectorLayerEntities,
 ) -> bool {
     if layer.poi_material_mode == Some(mode) {
         return false;
     }
-    if !layer.poi_materials.iter().any(|set| set.mode == mode) {
-        let (ring, dot) = poi_base_colors(mode);
+    if !layer
+        .poi_materials
+        .iter()
+        .any(|set| set.mode == mode && set.palette == map_palette)
+    {
+        let (ring, dot) = poi_base_colors(mode, palette::colors(map_palette));
         let with_opacity = |c: Color| c.with_alpha(c.alpha() * place_opacity);
         layer.poi_materials.push(PoiMaterialSet {
             mode,
+            palette: map_palette,
             ring: materials.add(with_opacity(ring)),
             dot: materials.add(with_opacity(dot)),
         });
     }
     layer.poi_material_mode = Some(mode);
+    true
+}
+
+/// 确保街道两级材质已按 (mode, palette) 建好；键变了返回 true（mesh 材质句柄要刷）。
+fn ensure_street_materials(
+    materials: &mut Assets<ColorMaterial>,
+    mode: crate::state::ViewMode,
+    map_palette: MapPalette,
+    road_opacity: f32,
+    layer: &mut VectorLayerEntities,
+) -> bool {
+    let key = (mode, map_palette);
+    if layer.street_material_key == Some(key) {
+        return false;
+    }
+    if !layer
+        .street_materials
+        .iter()
+        .any(|set| set.mode == mode && set.palette == map_palette)
+    {
+        let [(mc, mf), (nc, nf)] = street_base_colors(mode, palette::colors(map_palette));
+        let with_opacity = |c: Color| c.with_alpha(c.alpha() * road_opacity);
+        layer.street_materials.push(StreetMaterialSet {
+            mode,
+            palette: map_palette,
+            major_casing: materials.add(with_opacity(mc)),
+            major_fill: materials.add(with_opacity(mf)),
+            minor_casing: materials.add(with_opacity(nc)),
+            minor_fill: materials.add(with_opacity(nf)),
+        });
+    }
+    layer.street_material_key = Some(key);
     true
 }
 
@@ -448,8 +555,10 @@ fn sync_street_layers(
     grid: &GridConfig,
     streets: &crate::render::streets::StreetLayerCache,
     view_scale: f32,
-    casing: Handle<ColorMaterial>,
-    fill: Handle<ColorMaterial>,
+    major_casing: Handle<ColorMaterial>,
+    major_fill: Handle<ColorMaterial>,
+    minor_casing: Handle<ColorMaterial>,
+    minor_fill: Handle<ColorMaterial>,
     z_offset: f32,
     material_changed: bool,
     layer: &mut VectorLayerEntities,
@@ -477,7 +586,7 @@ fn sync_street_layers(
         meshes,
         &major,
         view_scale,
-        casing.clone(),
+        major_casing,
         STREET_MAJOR_PX + STREET_CASING_EXTRA_PX,
         STREET_MAJOR_CASING_Z + z_offset,
         material_changed,
@@ -488,7 +597,7 @@ fn sync_street_layers(
         meshes,
         &major,
         view_scale,
-        fill.clone(),
+        major_fill,
         STREET_MAJOR_PX,
         STREET_MAJOR_Z + z_offset,
         material_changed,
@@ -499,7 +608,7 @@ fn sync_street_layers(
         meshes,
         &minor,
         view_scale,
-        casing,
+        minor_casing,
         STREET_MINOR_PX + STREET_CASING_EXTRA_PX,
         STREET_MINOR_CASING_Z + z_offset,
         material_changed,
@@ -510,7 +619,7 @@ fn sync_street_layers(
         meshes,
         &minor,
         view_scale,
-        fill,
+        minor_fill,
         STREET_MINOR_PX,
         STREET_MINOR_Z + z_offset,
         material_changed,

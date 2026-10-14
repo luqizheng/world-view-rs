@@ -196,7 +196,8 @@ pub fn update_street_labels(
     let cjk = fonts.cjk_font.clone();
     let label_color = match view.mode {
         crate::state::ViewMode::GoogleMap => crate::theme::colors_google::GOOGLE_LABEL_FILL,
-        _ => bevy::color::Color::WHITE,
+        // 古舆图 / 暮色：深褐墨（暮色为浅米），不再回退纯白（ADR-0014）。
+        _ => crate::theme::palette::colors(view.map_palette).label_fill,
     }
     .with_alpha(layers.road.opacity);
 

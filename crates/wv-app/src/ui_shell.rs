@@ -42,6 +42,7 @@ use crate::render::terrain_view::{TerrainTexture, TileAtlas};
 use crate::state::{
     DrillState, Panel, PanelState, PlaybackState, RecentProjects, ViewState, WorldProjection,
 };
+use crate::theme::palette::MapPalette;
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::{UiDensity, UiTheme};
 use crate::ui_command_palette::{CommandId, CommandPalette};
@@ -78,6 +79,7 @@ pub fn register(app: &mut App) {
             (
                 apply_pending_commands,
                 sync_drill_mirror,
+                load_map_theme_on_project_open,
                 persist_layout_on_change,
             ),
         )
@@ -751,6 +753,7 @@ fn adopt_world_snapshot(
         view.mode,
         atlas,
         view.terrain_soften,
+        crate::theme::palette::colors(view.map_palette),
     );
     crate::render::terrain_view::replace_terrain_texture(
         tex,
@@ -760,6 +763,7 @@ fn adopt_world_snapshot(
         map,
         view.mode,
         view.terrain_soften,
+        view.map_palette,
     );
     // 整图内容已整体替换：chunk 层全量重贴。
     tex.mark_all_dirty();
@@ -1045,6 +1049,7 @@ fn apply_pending_commands(
         CommandId::NewMap => new_map_dialog.open_for(&projection.world),
         CommandId::ToggleTheme => cfg.theme = cfg.theme.toggled(),
         CommandId::ToggleDensity => cfg.density = cfg.density.toggled(),
+        CommandId::ToggleMapPalette => view.map_palette = view.map_palette.toggled(),
         CommandId::ToggleImmersive => panels.immersive = !panels.immersive,
         CommandId::TogglePanel(p) => panels.toggle(p),
         CommandId::ResetPanelLayout => panels.reset_requested = true,
@@ -1162,12 +1167,41 @@ fn apply_pending_commands(
 ///
 /// 位置的真相在 egui 的窗口记忆里（`Memory::area_rect`），不在 [`crate::ui_layout::default_layout`]。
 /// 拖动过程中不写盘（`is_using_pointer`），松手后的那一帧才落盘——避免 60 次/秒的文件写。
+/// 打开工程时读回 `ui-layout.yaml` 里的**地图主题**（ADR-0014）。
+///
+/// 只恢复 `map_theme`：面板几何由 egui 记忆按窗口接管，软件壳 theme/density
+/// 的读回是独立待决（README §12-32），本系统刻意不碰，避免把「修一个字段」
+/// 扩成「激活整套壳配置」。
+fn load_map_theme_on_project_open(
+    project: Res<WorldProjection>,
+    mut layout: ResMut<LayoutFile>,
+    mut view: ResMut<ViewState>,
+    mut loaded_dir: Local<Option<String>>,
+) {
+    let Some(dir) = project.project_dir.clone() else {
+        return;
+    };
+    if loaded_dir.as_ref() == Some(&dir) {
+        return;
+    }
+    let Some(path) = crate::ui_layout::layout_path(Some(&dir)) else {
+        return;
+    };
+    let file = LayoutFile::load(&path);
+    if let Some(t) = file.map_theme.as_deref().and_then(MapPalette::from_key) {
+        view.map_palette = t;
+    }
+    *layout = file;
+    *loaded_dir = Some(dir);
+}
+
 fn persist_layout_on_change(
     mut contexts: EguiContexts,
     panels: Res<PanelState>,
     cfg: Res<UiShellConfig>,
     mut layout: ResMut<LayoutFile>,
     project: Res<WorldProjection>,
+    view: Res<ViewState>,
 ) {
     let Some(path) = crate::ui_layout::layout_path(project.project_dir.as_deref()) else {
         return;
@@ -1185,6 +1219,7 @@ fn persist_layout_on_change(
         UiDensity::Cozy => "cozy".into(),
         UiDensity::Compact => "compact".into(),
     });
+    file.map_theme = Some(view.map_palette.key().to_string());
 
     let mut changed = false;
     for p in Panel::ALL {
@@ -1307,6 +1342,7 @@ mod tests {
             chunks_dirty: None,
             last_mode: None,
             last_soften: false,
+            last_palette: Default::default(),
             last_map: None,
         });
         world.insert_resource(Time::<()>::default());
@@ -1408,6 +1444,7 @@ mod tests {
             chunks_dirty: None,
             last_mode: None,
             last_soften: false,
+            last_palette: Default::default(),
             last_map: None,
         });
         world.insert_resource(Time::<()>::default());

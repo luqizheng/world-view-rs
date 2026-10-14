@@ -2,7 +2,7 @@
 //!
 //! ## 职责
 //! - `CellRenderer` —— 单元渲染器（全图合成与增量 patch **必须共用**）。
-//! - `shade_*` —— 视图模式 → 着色函数（`shade_real` / `shade_google` / `shade_jrpg` / `shade_flat` / `shade_faded` / `shade_event` / `shade_coast`）。
+//! - `shade_*` —— 视图模式 → 着色函数（`shade_real` / `shade_google` / `shade_flat` / `shade_faded` / `shade_event` / `shade_coast`），随主题色板（`PaletteColors`，ADR-0014）取值。
 //! - `hash01` / `vnoise` / `wobble_px` —— 边界扰动噪声（确定性，跨平台一致）。
 //! - `image_from_terrain` —— 由 `TerrainData` 构造 Bevy `Image`（全图合成）。
 //! - `patch_terrain_image` —— 脏块增量 patch（笔触提交用）。
@@ -24,7 +24,7 @@ use wv_core::terrain::TerrainData;
 use crate::state::ViewMode;
 use crate::theme::colors;
 use crate::theme::colors_google;
-use crate::theme::colors_jrpg;
+use crate::theme::palette::PaletteColors;
 
 use super::terrain_texture::terrain_res_for;
 use super::tile_atlas::{
@@ -32,7 +32,9 @@ use super::tile_atlas::{
 };
 
 /// 把一个着色函数应用到一格，返回 sRGB 线性分量。
-type Shader = fn(&TerrainData, u8) -> Color;
+///
+/// 第三参 = 当前主题色板（ADR-0014）：主题相关色一律经它取，禁止直引常量。
+type Shader = fn(&TerrainData, u8, &PaletteColors) -> Color;
 
 /// 依据当前视图模式选择纯色着色函数（基线 §1.10 四态；图集缺项/无图集时也走这里）。
 fn shade_for_mode(mode: ViewMode) -> Shader {
@@ -41,8 +43,6 @@ fn shade_for_mode(mode: ViewMode) -> Shader {
         ViewMode::RealTerrain => shade_real,
         // 色块地形：纯色平涂。
         ViewMode::Schematic => shade_flat,
-        // JRPG 地图：JRPG 风格色板。
-        ViewMode::JRPG => shade_jrpg,
         // 势力图：原型阶段底色淡化地形（势力几何属 S12，本轮不画）。
         ViewMode::Faction => shade_faded,
         // 事件图：极简灰白底图。
@@ -59,7 +59,7 @@ fn shade_for_mode(mode: ViewMode) -> Shader {
     }
 }
 
-fn shade_google(_data: &TerrainData, kind: u8) -> Color {
+fn shade_google(_data: &TerrainData, kind: u8, _pal: &PaletteColors) -> Color {
     // Google Default Map 做普通地图折叠（2026-10-13 用户裁定）：
     // 不渲染地形高低分带。Google 普通地图的陆地是单一近白平涂；若把
     // Perlin 高度分带（沙/草/丘/山/雪）逐档着色，整图会退化成近色马赛克。
@@ -71,37 +71,38 @@ fn shade_google(_data: &TerrainData, kind: u8) -> Color {
     }
 }
 
-fn shade_jrpg(_data: &TerrainData, kind: u8) -> Color {
-    colors_jrpg::jrpg_core_terrain(kind)
+fn shade_flat(_data: &TerrainData, kind: u8, pal: &PaletteColors) -> Color {
+    pal.core_terrain(kind)
 }
 
-fn shade_flat(_data: &TerrainData, kind: u8) -> Color {
-    colors::core_terrain(kind)
-}
-
-fn shade_real(data: &TerrainData, kind: u8) -> Color {
+fn shade_real(data: &TerrainData, kind: u8, pal: &PaletteColors) -> Color {
     // 用 kind 对应的基色，叠加高度明度调制。
     // 这里 data 已无单格高度上下文，故高度调制在 write_terrain_pixels 里做。
     let _ = data;
-    colors::core_terrain(kind)
+    pal.core_terrain(kind)
 }
 
-fn shade_faded(_data: &TerrainData, kind: u8) -> Color {
-    // 淡化：与中性灰混合 55%，保留地形骨架（特效 §2.1 alpha≈0.35 的近似）。
-    let base = colors::core_terrain(kind);
+fn shade_faded(_data: &TerrainData, kind: u8, pal: &PaletteColors) -> Color {
+    // 淡化：向**该主题的纸面色**混 55%，保留地形骨架（特效 §2.1 alpha≈0.35
+    // 的近似）。ADR-0014 前混固定灰 0.7；古舆图 / 暮色下向纸面混合更自洽，
+    // 也让势力图底色随主题走（暮色势力图不再是刺眼的亮灰底）。
+    let base = pal.core_terrain(kind);
     let Color::Srgba(c) = base else {
+        return base;
+    };
+    let Color::Srgba(t) = pal.soften_toward else {
         return base;
     };
     let k = 0.45; // 保留比例
     Color::srgb(
-        c.red * k + 0.7 * (1.0 - k),
-        c.green * k + 0.7 * (1.0 - k),
-        c.blue * k + 0.7 * (1.0 - k),
+        c.red * k + t.red * (1.0 - k),
+        c.green * k + t.green * (1.0 - k),
+        c.blue * k + t.blue * (1.0 - k),
     )
 }
 
-fn shade_event(_data: &TerrainData, _kind: u8) -> Color {
-    colors::EVENT_VIEW_BACKDROP
+fn shade_event(_data: &TerrainData, _kind: u8, pal: &PaletteColors) -> Color {
+    pal.event_backdrop
 }
 
 /// 水系判定（轮廓图唯一关心的二分）：深水/浅水算水，其余全算陆。
@@ -112,7 +113,8 @@ fn is_water_kind(kind: u8) -> bool {
     wv_terrain::edit::is_water_kind(kind)
 }
 
-fn shade_coast(_data: &TerrainData, kind: u8) -> Color {
+fn shade_coast(_data: &TerrainData, kind: u8, _pal: &PaletteColors) -> Color {
+    // 轮廓图三色是模式语义色，不随主题切换（ADR-0014 §2）。
     if is_water_kind(kind) {
         colors::COAST_WATER
     } else {
@@ -183,6 +185,8 @@ struct CellRenderer<'a> {
     w: u32,
     h: u32,
     mode: ViewMode,
+    /// 当前主题色板（ADR-0014）：着色与淡化的取值来源。
+    palette: &'a PaletteColors,
     /// 高度归一化范围（仅 `RealTerrain` 模式非零）。
     hmin: f32,
     hrange: f32,
@@ -206,6 +210,7 @@ impl<'a> CellRenderer<'a> {
         mode: ViewMode,
         atlas: Option<&'a TileAtlas>,
         soften: bool,
+        palette: &'a PaletteColors,
     ) -> Self {
         let (w, h) = (data.width.max(1), data.height.max(1));
         // 事件图与轮廓图都不铺瓦片：前者灰白底，后者水陆三色。
@@ -228,6 +233,7 @@ impl<'a> CellRenderer<'a> {
             w,
             h,
             mode,
+            palette,
             hmin: hmin as f32,
             hrange: (hmax as f32 - hmin as f32).max(1.0),
             atlas,
@@ -286,7 +292,7 @@ impl<'a> CellRenderer<'a> {
             } else if self.mode == ViewMode::GoogleMap {
                 // Google 模式下同色的陆上类不构成边界（沙/草/丘/山/雪已折叠为
                 // 同一陆色）——省掉无意义的逐像素超采样。
-                shade_google(self.data, a) != shade_google(self.data, b)
+                shade_google(self.data, a, self.palette) != shade_google(self.data, b, self.palette)
             } else {
                 a != b
             }
@@ -336,10 +342,10 @@ impl<'a> CellRenderer<'a> {
             self.sample_kind(gx, gy, fx, fy, out);
         }
         if self.soften {
-            let Color::Srgba(t) = colors::SOFTEN_TOWARD else {
-                unreachable!("SOFTEN_TOWARD 应为 Srgba")
+            let Color::Srgba(t) = self.palette.soften_toward else {
+                unreachable!("soften_toward 应为 Srgba")
             };
-            let k = colors::SOFTEN_KEEP;
+            let k = self.palette.soften_keep;
             for (o, tc) in out.iter_mut().zip([t.red, t.green, t.blue]) {
                 *o = (*o * k + tc * 255.0 * (1.0 - k)).clamp(0.0, 255.0);
             }
@@ -378,7 +384,7 @@ impl<'a> CellRenderer<'a> {
         } else {
             kind
         };
-        let Color::Srgba(c) = (self.shader)(self.data, kind) else {
+        let Color::Srgba(c) = (self.shader)(self.data, kind, self.palette) else {
             return;
         };
         out[0] = c.red * 255.0;
@@ -403,7 +409,7 @@ impl<'a> CellRenderer<'a> {
             out[1] = block[o + 1] as f32 * mul;
             out[2] = block[o + 2] as f32 * mul;
         } else {
-            if let Color::Srgba(c) = (self.shader)(self.data, kind) {
+            if let Color::Srgba(c) = (self.shader)(self.data, kind, self.palette) {
                 out[0] = c.red * 255.0 * mul;
                 out[1] = c.green * 255.0 * mul;
                 out[2] = c.blue * 255.0 * mul;
@@ -540,6 +546,8 @@ impl<'a> CellRenderer<'a> {
                         self.res,
                         tint,
                         self.soften,
+                        self.palette.soften_toward,
+                        self.palette.soften_keep,
                         pixels,
                         stride,
                         cx * self.res,
@@ -549,9 +557,9 @@ impl<'a> CellRenderer<'a> {
                 return;
             }
             // 纯色回退（无图集 / 缺项）：整格平涂。
-            let mut color = (self.shader)(self.data, kind);
+            let mut color = (self.shader)(self.data, kind, self.palette);
             if self.soften {
-                color = colors::soften_color(color);
+                color = self.palette.soften_color(color);
             }
             if self.mode == ViewMode::RealTerrain {
                 let mul = self.height_mul(cell.height);
@@ -589,8 +597,9 @@ fn write_terrain_pixels(
     mode: ViewMode,
     atlas: Option<&TileAtlas>,
     soften: bool,
+    palette: &PaletteColors,
 ) -> (Vec<u8>, u32) {
-    let mut renderer = CellRenderer::new(data, mode, atlas, soften);
+    let mut renderer = CellRenderer::new(data, mode, atlas, soften, palette);
     let (w, h, res) = (renderer.w, renderer.h, renderer.res);
     let stride = w * res;
     let mut pixels = vec![0u8; (stride * h * res * 4) as usize];
@@ -610,14 +619,16 @@ fn a_tile(atlas: Option<&TileAtlas>, kind: u8) -> Option<[u32; 2]> {
 
 /// 由 `TerrainData` 构造 Bevy `Image`（RGBA8；有图集时像素边长 = 格数 × res）。
 ///
-/// `soften` = 底图淡化（`ViewState.terrain_soften`）。
+/// `soften` = 底图淡化（`ViewState.terrain_soften`）；`palette` = 地图主题
+/// （ADR-0014：切主题 = 按新色板整图重建）。
 pub fn image_from_terrain(
     data: &TerrainData,
     mode: ViewMode,
     atlas: Option<&TileAtlas>,
     soften: bool,
+    palette: &PaletteColors,
 ) -> Image {
-    let (pixels, res) = write_terrain_pixels(data, mode, atlas, soften);
+    let (pixels, res) = write_terrain_pixels(data, mode, atlas, soften, palette);
     let (w, h) = (data.width.max(1), data.height.max(1));
     Image::new(
         Extent3d {
@@ -653,6 +664,7 @@ pub fn image_from_terrain(
 /// ## 与 `image_from_terrain` 的关系
 /// `image_from_terrain` 是**全图版本**（首次建纹理 / 模式切换时用）；
 /// 本函数是**增量版本**（笔刷编辑 / 撤销重做时用）。
+#[allow(clippy::too_many_arguments)]
 pub fn patch_terrain_image(
     image: &mut Image,
     data: &TerrainData,
@@ -661,6 +673,7 @@ pub fn patch_terrain_image(
     dirty_cell_rect: [u32; 4],
     res: u32,
     soften: bool,
+    palette: &PaletteColors,
 ) {
     let (w, h) = (data.width.max(1), data.height.max(1));
     let stride = w * res; // 像素 stride
@@ -670,7 +683,7 @@ pub fn patch_terrain_image(
     let gy1 = gy1.min(h);
 
     // 与全图合成共用一个渲染器（边界扰动必须一致，否则笔刷区出现拼接裂缝）。
-    let mut renderer = CellRenderer::new(data, mode, atlas, soften);
+    let mut renderer = CellRenderer::new(data, mode, atlas, soften, palette);
     // 调用方传入的 res 与渲染器推导的 res 必须一致（同一张纹理）。
     debug_assert_eq!(
         renderer.res, res,
@@ -726,7 +739,13 @@ mod tests {
                 },
             ],
         };
-        let img = image_from_terrain(&data, ViewMode::VectorFlat, None, false);
+        let img = image_from_terrain(
+            &data,
+            ViewMode::VectorFlat,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         let Color::Srgba(grass) = colors::core_terrain(3) else {
             unreachable!()
         };
@@ -756,7 +775,13 @@ mod tests {
                 9
             ],
         };
-        let img = image_from_terrain(&data, ViewMode::VectorFlat, None, false);
+        let img = image_from_terrain(
+            &data,
+            ViewMode::VectorFlat,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         let Color::Srgba(deep) = colors::core_terrain(0) else {
             unreachable!()
         };
@@ -815,7 +840,13 @@ mod tests {
         );
 
         let mut images = Assets::<Image>::default();
-        let image = image_from_terrain(&data, ViewMode::VectorFlat, None, false);
+        let image = image_from_terrain(
+            &data,
+            ViewMode::VectorFlat,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         let tex = crate::render::terrain_view::new_terrain_texture(
             &mut images,
             image,
@@ -823,6 +854,7 @@ mod tests {
             map.clone(),
             ViewMode::VectorFlat,
             false,
+            Default::default(),
         );
         let handle = tex.handle.clone();
 
@@ -850,7 +882,13 @@ mod tests {
         assert_eq!(after.cells[4 * 64 + 4].kind, 0);
 
         // 全图重建（同 `flush_terrain_texture` 的整图分支）。
-        let new_image = image_from_terrain(after, ViewMode::VectorFlat, None, false);
+        let new_image = image_from_terrain(
+            after,
+            ViewMode::VectorFlat,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         if let Some(mut img) = images.get_mut(&handle) {
             *img = new_image;
         }
@@ -909,7 +947,13 @@ mod tests {
         );
 
         let mut images = Assets::<Image>::default();
-        let image = image_from_terrain(&data, ViewMode::VectorFlat, None, false);
+        let image = image_from_terrain(
+            &data,
+            ViewMode::VectorFlat,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         let mut tex = crate::render::terrain_view::new_terrain_texture(
             &mut images,
             image,
@@ -917,10 +961,17 @@ mod tests {
             map.clone(),
             ViewMode::VectorFlat,
             false,
+            Default::default(),
         );
         let expected_handle = tex.handle.clone();
         // 二次写入（NewMap / LoadProject 的真实路径）。
-        let image2 = image_from_terrain(&data, ViewMode::VectorFlat, None, false);
+        let image2 = image_from_terrain(
+            &data,
+            ViewMode::VectorFlat,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         crate::render::terrain_view::replace_terrain_texture(
             &mut tex,
             &mut images,
@@ -929,6 +980,7 @@ mod tests {
             map.clone(),
             ViewMode::VectorFlat,
             false,
+            Default::default(),
         );
         assert_eq!(
             tex.handle, expected_handle,

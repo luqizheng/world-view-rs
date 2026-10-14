@@ -56,7 +56,7 @@
 //! |---|---|
 //! | [`theme::colors`] | 28 色板令牌（基底）；权威来自 `ART_STYLE_SPEC_v0.1` §1.4。 |
 //! | [`theme::colors_google`] | Google Default Map 色板（地图默认视图）。 |
-//! | [`theme::colors_jrpg`] | JRPG 风格色板（真实地形视图）。 |
+//! | [`theme::palette`] | 地图主题分发：日间古舆图（默认）/ 暮色旧纸（ADR-0014）。 |
 //! | [`theme::ui_tokens`] | 界面外壳色令牌（权威来自 `UI_DESIGN_SPEC` §2.2）。 |
 //! | [`theme::ui_theme`] | 把 `ui_tokens` 投影成 egui `Visuals`。 |
 //! | [`theme::fonts`] | 系统字体栈探测 + CJK 字体注册。 |
