@@ -34,6 +34,8 @@ pub mod layer_frame;
 #[cfg(feature = "app")]
 pub mod map_frame;
 #[cfg(feature = "app")]
+pub mod measurement;
+#[cfg(feature = "app")]
 pub mod streets;
 #[cfg(feature = "app")]
 pub mod terrain_chunks;

@@ -93,6 +93,38 @@ impl LatLonBbox {
             north: self.south.max(self.north),
         }
     }
+
+    /// 把 `bbox` 覆盖面积折算成 `wu → km` 的系数。
+    ///
+    /// 返回 `(km_per_wu_x, km_per_wu_y)`。计算口径：
+    ///
+    /// - 1° 纬度 ≈ 111.132 km（地球平均，不分南北）；
+    /// - 1° 经度 ≈ 111.132 · cos(中心纬度) km（Mercator 真实经度缩放）；
+    /// - 折算：把 bbox 的经纬度范围当成本图 extent 的世界尺度覆盖，
+    ///   系数 = `(bbox_km) / (extent_wu)`。
+    ///
+    /// ## 这是**近似**，不是测绘
+    ///
+    /// - bbox 与 extent 中心**不必对齐**（子图继承父图底图时，bbox 写
+    ///   的是父图那一块）；
+    /// - 真实地图的米制尺度由 ADR-0007 与地理信息本身决定**，本方法
+    ///   不重新实现**，只给一个基于 bbox 的粗估；
+    /// - 子图（City 级）应使用**父图**的 bbox 换算（调用方负责传入）。
+    ///
+    /// `extent.width` 或 `extent.height ≤ 0` 时返回 `None`——避免除零。
+    pub fn km_per_wu(&self, extent: &crate::map::Extent) -> Option<(f64, f64)> {
+        let w = extent.width as f64;
+        let h = extent.height as f64;
+        if w <= 0.0 || h <= 0.0 {
+            return None;
+        }
+        let n = self.normalized();
+        // 中心纬度（用于经度 cos 修正）。
+        let center_lat_rad = ((n.north + n.south) * 0.5).to_radians();
+        let lat_km = n.height() * 111.132;
+        let lon_km = n.width() * 111.132 * center_lat_rad.cos();
+        Some((lon_km / w, lat_km / h))
+    }
 }
 
 #[cfg(test)]
@@ -124,5 +156,87 @@ mod tests {
         assert_eq!(src.bbox.west, 0.0);
         assert_eq!(src.data_path.to_str(), Some(""));
         assert!(src.release.is_none());
+    }
+
+    /// 西雅图 ~0.25° × 0.25° 的 bbox，extent = 1024 × 1024 wu。
+    /// 纬度 1° ≈ 111.132 km，所以 0.25° ≈ 27.78 km。
+    /// 中心纬度 ~47.625°，cos(47.625°) ≈ 0.6732；经度 0.25° ≈ 18.70 km。
+    /// 因此 km/wu_x ≈ 0.0183，km/wu_y ≈ 0.0271。
+    #[test]
+    fn km_per_wu_seattle_like_bbox() {
+        let bbox = LatLonBbox {
+            west: -122.50,
+            south: 47.50,
+            east: -122.25,
+            north: 47.75,
+        };
+        let ext = crate::map::Extent::sized(1024.0, 1024.0);
+        let (kx, ky) = bbox.km_per_wu(&ext).unwrap();
+        assert!(
+            (ky - 27.78 / 1024.0).abs() < 1e-3,
+            "ky ≈ {} got {}",
+            27.78 / 1024.0,
+            ky
+        );
+        // 经度系数受 cos 修正，预期 ~ 0.01825
+        assert!(
+            (kx - 18.70 / 1024.0).abs() < 1e-3,
+            "kx ≈ {} got {}",
+            18.70 / 1024.0,
+            kx
+        );
+        // 比例关系：纬度系数 > 经度系数（Seattle 偏北）
+        assert!(ky > kx, "Seattle 纬度 1° 的 km 数应大于经度 1°");
+    }
+
+    /// 赤道地区（中心纬度 0）：经度 cos 修正 = 1。
+    /// bbox = (-0.25..0.25, -0.25..0.25)，中心 0°，各 0.5° 跨度。
+    /// 0.5° ≈ 55.566 km，cos(0°) = 1，所以 kx = ky。
+    #[test]
+    fn km_per_wu_at_equator_is_isotropic() {
+        let bbox = LatLonBbox {
+            west: -0.25,
+            south: -0.25,
+            east: 0.25,
+            north: 0.25,
+        };
+        let ext = crate::map::Extent::sized(1000.0, 1000.0);
+        let (kx, ky) = bbox.km_per_wu(&ext).unwrap();
+        // 赤道 cos(0) = 1，故经度 km/° 与纬度一致
+        assert!(
+            (kx - ky).abs() < 1e-6,
+            "赤道处 x/y 系数应相等：{kx} vs {ky}"
+        );
+    }
+
+    /// 极地：中心纬度 ±90°，cos → 0。经度 km/wu 应趋于 0。
+    #[test]
+    fn km_per_wu_near_pole_collapses_lon_factor() {
+        let bbox = LatLonBbox {
+            west: 0.0,
+            south: 89.0,
+            east: 1.0,
+            north: 89.5,
+        };
+        let ext = crate::map::Extent::sized(1000.0, 1000.0);
+        let (kx, ky) = bbox.km_per_wu(&ext).unwrap();
+        assert!(kx < ky, "洛地 x 系数应小于 y，实际 kx={kx} ky={ky}");
+        assert!(kx < 0.02, "极地 1° 经度换算 km 应接近 0，实际 {kx}");
+    }
+
+    /// extent = 0：返回 None（避免除零）。
+    #[test]
+    fn km_per_wu_returns_none_when_extent_is_zero() {
+        let bbox = LatLonBbox {
+            west: 0.0,
+            south: 0.0,
+            east: 1.0,
+            north: 1.0,
+        };
+        let ext = crate::map::Extent::ZERO;
+        assert!(bbox.km_per_wu(&ext).is_none());
+
+        let ext = crate::map::Extent::sized(0.0, 1024.0);
+        assert!(bbox.km_per_wu(&ext).is_none());
     }
 }

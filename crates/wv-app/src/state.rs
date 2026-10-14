@@ -330,6 +330,83 @@ pub struct BrushState {
     pub grid_lines: bool,
 }
 
+/// 测量工具模式（2026-10-14）。
+///
+/// 枚举是**会话态**——不写盘。每次切图或重启应用都从 `Off` 起。
+/// 草稿数据（当前画的折线 / 矩形首点）走 [`MeasureState::draft`]。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MeasureMode {
+    /// 不启用测量工具（默认值）。
+    #[default]
+    Off,
+    /// 折线：多次左键累积点；右键 / Enter / 双击 / Esc 收笔。
+    Line,
+    /// 矩形：两次左键确定两对角；第二次点击即收。
+    Rect,
+    /// 橡皮：点击容差内的 measurement 即删除。
+    Eraser,
+}
+
+impl MeasureMode {
+    /// 是否处于「启用」状态（≠ Off）。给按钮高亮 / 互斥闸共用。
+    pub fn is_active(self) -> bool {
+        self != Self::Off
+    }
+
+    /// 该模式下鼠标左键是否被测量工具「吃掉」（不再驱动其它交互）。
+    /// Off / Eraser 模式下左键仍属地图（橡皮点击本身是测量输入）。
+    pub fn consumes_left_click(self) -> bool {
+        matches!(self, Self::Line | Self::Rect)
+    }
+}
+
+/// 测量会话状态（`AGENTS.md §3.3`：System 只生成命令，不直接改世界）。
+///
+/// 与 [`BrushState`] 平级——独立的工具资源。**与笔刷开启同一模式时**
+/// 用 [`Self::mode`] = Off 把笔刷顶下去（街道 / 笔刷都走同样的「工具语义」）。
+#[derive(Resource)]
+pub struct MeasureState {
+    /// 当前模式（默认 `Off`）。
+    pub mode: MeasureMode,
+    /// 当前草稿：**本图局部坐标**。
+    ///
+    /// - `Line` 模式：≥1 表示已起笔，渲染时画「末段 → 光标」的橡皮筋；
+    /// - `Rect` 模式：长度 0/2（0 = 未起笔，2 = 已点击两点即可提交）。
+    pub draft: Vec<Vec2>,
+    /// 切图时强制清空——测量**不能跨图**。
+    pub last_map_id: Option<wv_core::Id>,
+    /// 当前草稿绑定的图 ID。`commit_measurement_click` 用它判断「草稿已
+    /// 切换图」并丢弃旧草稿（不污染新图）。
+    pub draft_map_id: Option<wv_core::Id>,
+}
+
+impl Default for MeasureState {
+    fn default() -> Self {
+        Self {
+            mode: MeasureMode::Off,
+            draft: Vec::new(),
+            last_map_id: None,
+            draft_map_id: None,
+        }
+    }
+}
+
+impl MeasureState {
+    /// 清空草稿（提交 / 切模式 / 切图时调）。
+    pub fn clear_draft(&mut self) {
+        self.draft.clear();
+        self.draft_map_id = None;
+    }
+
+    /// 切图时调用——`new_map` 与 `last_map_id` 不一致则丢弃草稿。
+    pub fn on_map_change(&mut self, new_map: Option<&wv_core::Id>) {
+        if self.last_map_id.as_ref() != new_map {
+            self.clear_draft();
+        }
+        self.last_map_id = new_map.cloned();
+    }
+}
+
 impl Default for BrushState {
     fn default() -> Self {
         Self {

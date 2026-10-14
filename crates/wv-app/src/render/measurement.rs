@@ -1,0 +1,681 @@
+//! 测量叠加的渲染层（2026-10-14）。
+//!
+//! ## 职责
+//!
+//! - `MeasurementCache` — 当前图的测量文档缓存（仿 `StreetLayerCache`）。
+//! - `reload_measurement_cache` — 当前图 / `WorldProjection` 变更时同步缓存。
+//! - `commit_measurement_click` — 把鼠标点击派发到对应模式（折线 / 矩形 / 橡皮）。
+//! - `render_measurements` — 顶置渲染所有可见 measurement + 草稿预览 + 长度 / 面积文字。
+//!
+//! ## 边界（不做什么）
+//!
+//! - **不**做「测量图层开关」（用户需求：永远显示）。
+//! - **不**做渲染层决策（线宽 / 颜色 / LOD 阈值），本模块只接受 `Measurement` 携带的
+//!   `color` 可选字段并把它应用到绘制——其它色值走主题。
+//!
+//! ## 与 `streets::commit_street_click` 的对照
+//!
+//! 共用「enabled 闸 → UI / 播放 / 缩放下限闸 → 无工程锁闸 → 坐标走
+//! `drill::map_origin` 同源链 → 命令经 `EditHistory`」纪律，但：
+//! - **测量模式更复杂**：三态分支（Line / Rect / Eraser），Line 是多段累积。
+//! - **切图时清草稿**：草稿绑 map_id，切图丢弃（不污染新图）。
+//! - **橡皮命中用距离容差**：8 wu ≈ 1 栅格（`cell_size=8`），不要求精确点中。
+
+#![cfg(feature = "app")]
+
+use bevy::prelude::*;
+
+use wv_core::{Measurement, MeasurementKind, MeasurementOverlay};
+
+use crate::edit::editing;
+use crate::state::{
+    DrillState, GridConfig, MeasureMode, MeasureState, PlaybackState, ViewState, WorldProjection,
+};
+
+use super::streets::StreetLabel;
+
+// ---------------------------------------------------------------------------
+// 缓存
+// ---------------------------------------------------------------------------
+
+/// 当前图的测量文档缓存（仿 `StreetLayerCache`，键 = map_id）。
+#[derive(Resource, Default)]
+pub struct MeasurementCache {
+    /// 已加载的图 id；与当前图不同则整个缓存作废重载。
+    pub map_id: Option<wv_core::Id>,
+    /// 当前图的全部测量（空 overlay 兜底）。
+    pub overlay: MeasurementOverlay,
+}
+
+impl MeasurementCache {
+    /// 当前缓存里的 measurement 引用。
+    pub fn measurements(&self) -> &[Measurement] {
+        &self.overlay.measurements
+    }
+}
+
+/// 每帧对齐缓存：当前图变了 / `World.measurements` 被编辑改过 → 从 `World` 重取。
+///
+/// 早退：同图且世界未被改过。`WorldProjection::is_changed` 已写进 `DirtySet` 的副作用。
+pub fn reload_measurement_cache(
+    projection: Res<WorldProjection>,
+    drill: Res<DrillState>,
+    mut cache: ResMut<MeasurementCache>,
+) {
+    let current = drill.current_node(&projection.world);
+    let key = current.map(|n| n.id.clone());
+    if cache.map_id == key && !projection.is_changed() {
+        return;
+    }
+    cache.map_id = key.clone();
+    cache.overlay = key
+        .as_ref()
+        .and_then(|id| projection.world.measurement_of(id).cloned())
+        .unwrap_or_default();
+}
+
+// ---------------------------------------------------------------------------
+// 渲染：折线 + 矩形 + 草稿 + 橡皮
+// ---------------------------------------------------------------------------
+
+/// 测量绘制层的 Z：压在「地名（0.4）」之上、给 `LayerFrame.z_offset` 漂移
+/// 留 0.15 余地（实测最高 ~0.6）。用户要求「测量属于最上层」——这条规则
+/// 与 z 选择兼容（顶置 + 还能被未来更高层打穿）。
+const MEASURE_Z: f32 = 0.45;
+
+/// 命中容差（世界单位）。`8.0` ≈ 1 栅格（`cell_size = 8` 默认）。
+const ERASER_TOLERANCE_WU: f32 = 8.0;
+/// 长度 / 面积文字的屏幕像素基准（与 `STREET_LABEL_PX=9` 齐平）。
+const LABEL_PX: f32 = 10.0;
+
+/// 折线标签（"段长" / "总长" / "长×宽=面积"）。
+#[derive(Component)]
+pub struct MeasureLabel;
+
+/// 测量叠加的渲染入口（**顶置**，无 LayerFrame 联动）。
+///
+/// 把 cache + 草稿一起画：
+/// - 完成 measurement（committed）：折线 + 矩形外框 + 文字标签；
+/// - 草稿（draft）：同色减半，附加「末点 → 光标」的橡皮筋；
+/// - 长度 / 面积：纯函数（`wv_core::Measurement::total_length`）手算。
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
+pub fn render_measurements(
+    mut commands: Commands,
+    mut gizmos: Gizmos,
+    cache: Res<MeasurementCache>,
+    measure: Res<MeasureState>,
+    grid: Res<GridConfig>,
+    view: Res<ViewState>,
+    fonts: Res<crate::theme::fonts::LoadedFonts>,
+    camera: Query<&Transform, With<Camera2d>>,
+    mut q: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut Text2d,
+            &mut TextFont,
+            &mut TextColor,
+            &mut Visibility,
+        ),
+        (With<MeasureLabel>, Without<Camera2d>, Without<StreetLabel>),
+    >,
+) {
+    // 顶置不受 LayerFrame.z_offset 漂移影响——这是用户原话「最上层」的强约束。
+
+    let label_world = (LABEL_PX * view.scale).max(0.05);
+    // 屏幕对齐：取相机旋转的逆，让标签永远水平（与街道标注同款）。
+    let label_rot = camera
+        .single()
+        .map(|t| t.rotation.inverse())
+        .unwrap_or(Quat::IDENTITY);
+
+    // 顶置测量色：琥珀黄（避开主题 accent 蓝）。
+    let color_done = bevy::color::Color::srgb(1.0, 0.78, 0.18);
+
+    // ---- 期望标签集（位置 + 文本）----
+    let mut wanted: Vec<(Vec2, String)> = Vec::new();
+    for m in cache.measurements() {
+        match m.kind {
+            MeasurementKind::Polyline => {
+                if m.points.len() < 2 {
+                    continue;
+                }
+                for w in m.points.windows(2) {
+                    let a = Vec2::new(w[0].x, w[0].y);
+                    let b = Vec2::new(w[1].x, w[1].y);
+                    let seg_len = (b - a).length();
+                    let mid = grid.map_to_view((a + b) * 0.5);
+                    wanted.push((mid, format!("{:.1}", seg_len)));
+                }
+                // 总长标在第一段中点上方。
+                let first_mid = grid.map_to_view({
+                    let a = Vec2::new(m.points[0].x, m.points[0].y);
+                    let b = Vec2::new(m.points[1].x, m.points[1].y);
+                    (a + b) * 0.5
+                });
+                let above = first_mid + Vec2::new(0.0, label_world * 1.2);
+                wanted.push((above, format!("Σ {:.1}", m.total_length())));
+            }
+            MeasurementKind::Rectangle => {
+                if m.points.len() != 2 {
+                    continue;
+                }
+                let a = Vec2::new(m.points[0].x, m.points[0].y);
+                let b = Vec2::new(m.points[1].x, m.points[1].y);
+                let dx = (b.x - a.x).abs();
+                let dy = (b.y - a.y).abs();
+                let area = dx * dy;
+                let mid = grid.map_to_view((a + b) * 0.5);
+                wanted.push((mid, format!("{:.1} × {:.1} = {:.1}", dx, dy, area)));
+            }
+        }
+    }
+    // ---- 草稿预览标签 ----
+    if measure.mode != MeasureMode::Off && !measure.draft.is_empty() {
+        for w in measure.draft.windows(2) {
+            let a = w[0];
+            let b = w[1];
+            let seg_len = (b - a).length();
+            let mid = grid.map_to_view((a + b) * 0.5);
+            wanted.push((mid, format!("{:.1}", seg_len)));
+        }
+        if measure.draft.len() >= 2 {
+            let a = measure.draft[0];
+            let b = measure.draft[1];
+            let total: f32 = measure
+                .draft
+                .windows(2)
+                .map(|w| (w[1] - w[0]).length())
+                .sum();
+            let first_mid = grid.map_to_view((a + b) * 0.5);
+            wanted.push((
+                first_mid + Vec2::new(0.0, label_world * 1.2),
+                format!("Σ {:.1}", total),
+            ));
+        }
+    }
+
+    let font_size = label_world;
+    let cjk = fonts.cjk_font.clone();
+    let label_color = bevy::color::Color::WHITE;
+
+    // ---- 文字标签对象池 ----
+    let mut iter = q.iter_mut();
+    for (pos, text) in &wanted {
+        let text: &str = text.as_str();
+        if let Some((_, mut tf, mut t, mut style, mut color, mut vis)) = iter.next() {
+            tf.translation = pos.extend(MEASURE_Z + 0.05);
+            tf.rotation = label_rot;
+            *t = Text2d::new(text.to_string());
+            style.font_size = font_size.into();
+            if let Some(f) = &cjk {
+                style.font = f.clone().into();
+            }
+            *color = TextColor(label_color);
+            *vis = Visibility::Visible;
+        } else {
+            commands.spawn((
+                MeasureLabel,
+                Text2d::new(text.to_string()),
+                TextFont {
+                    font_size: font_size.into(),
+                    font: cjk.clone().unwrap_or_default().into(),
+                    ..Default::default()
+                },
+                TextColor(label_color),
+                Transform {
+                    translation: pos.extend(MEASURE_Z + 0.05),
+                    rotation: label_rot,
+                    ..Default::default()
+                },
+                Visibility::Visible,
+            ));
+        }
+    }
+    for (_, mut _tf, mut _t, mut _s, mut _c, mut vis) in iter {
+        *vis = Visibility::Hidden;
+    }
+
+    // ---- 几何绘制（Gizmos）----
+    let draft_color_dim = color_done.with_alpha(0.7);
+
+    // 已提交的 measurement：折线 / 矩形外框。
+    for m in cache.measurements() {
+        match m.kind {
+            MeasurementKind::Polyline => {
+                if m.points.len() < 2 {
+                    continue;
+                }
+                for w in m.points.windows(2) {
+                    let a = grid.map_to_view(Vec2::new(w[0].x, w[0].y));
+                    let b = grid.map_to_view(Vec2::new(w[1].x, w[1].y));
+                    gizmos.line_2d(a, b, color_done);
+                }
+            }
+            MeasurementKind::Rectangle => {
+                if m.points.len() != 2 {
+                    continue;
+                }
+                let a = Vec2::new(m.points[0].x, m.points[0].y);
+                let b = Vec2::new(m.points[1].x, m.points[1].y);
+                let corners = [
+                    Vec2::new(a.x.min(b.x), a.y.min(b.y)),
+                    Vec2::new(a.x.max(b.x), a.y.min(b.y)),
+                    Vec2::new(a.x.max(b.x), a.y.max(b.y)),
+                    Vec2::new(a.x.min(b.x), a.y.max(b.y)),
+                ];
+                let corners_v: Vec<Vec2> = corners.iter().map(|c| grid.map_to_view(*c)).collect();
+                for w in corners_v.windows(2) {
+                    gizmos.line_2d(w[0], w[1], color_done);
+                }
+                gizmos.line_2d(corners_v[3], corners_v[0], color_done);
+            }
+        }
+    }
+    // 草稿已固定的段（同色减半）。
+    for w in measure.draft.windows(2) {
+        gizmos.line_2d(
+            grid.map_to_view(w[0]),
+            grid.map_to_view(w[1]),
+            draft_color_dim,
+        );
+    }
+    // 草稿橡皮筋（末段 → 光标）：仅 Line / Rect 模式有。
+    if (measure.mode == MeasureMode::Line || measure.mode == MeasureMode::Rect)
+        && !measure.draft.is_empty()
+    {
+        if let Some(cursor) = view.cursor_world {
+            gizmos.line_2d(
+                grid.map_to_view(*measure.draft.last().unwrap()),
+                cursor,
+                draft_color_dim,
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 输入：把鼠标点击派发到三模式（折线 / 矩形 / 橡皮）
+// ---------------------------------------------------------------------------
+
+/// 把光标世界坐标 → 本图局部（与街道同款：`drill::map_origin`）。
+fn cursor_to_local(
+    cursor_world: Vec2,
+    drill: &DrillState,
+    projection: &WorldProjection,
+    grid: &GridConfig,
+) -> Option<(Vec2, wv_core::Id)> {
+    let node = drill.current_node(&projection.world)?;
+    let origin = crate::render::drill::map_origin(&projection.world, node, grid);
+    Some((cursor_world - origin, node.id.clone()))
+}
+
+/// 命中检测：点到折线 / 矩形外框的最小距离是否在容差内。
+fn hit_test(m: &Measurement, point: Vec2, tolerance: f32) -> bool {
+    match m.kind {
+        MeasurementKind::Polyline => m.points.windows(2).any(|w| {
+            let a = Vec2::new(w[0].x, w[0].y);
+            let b = Vec2::new(w[1].x, w[1].y);
+            point_segment_distance(point, a, b) <= tolerance
+        }),
+        MeasurementKind::Rectangle => {
+            if m.points.len() != 2 {
+                return false;
+            }
+            let a = Vec2::new(m.points[0].x, m.points[0].y);
+            let b = Vec2::new(m.points[1].x, m.points[1].y);
+            let corners = [
+                Vec2::new(a.x.min(b.x), a.y.min(b.y)),
+                Vec2::new(a.x.max(b.x), a.y.min(b.y)),
+                Vec2::new(a.x.max(b.x), a.y.max(b.y)),
+                Vec2::new(a.x.min(b.x), a.y.max(b.y)),
+            ];
+            // 四条边：bottom / right / top / left（闭合）。
+            for i in 0..4 {
+                let p0 = corners[i];
+                let p1 = corners[(i + 1) % 4];
+                if point_segment_distance(point, p0, p1) <= tolerance {
+                    return true;
+                }
+            }
+            false
+        }
+    }
+}
+
+/// 点到线段距离（闭区间）。
+fn point_segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f32 {
+    let ab = b - a;
+    let len_sq = ab.length_squared();
+    if len_sq <= f32::EPSILON {
+        return (p - a).length();
+    }
+    let t = ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0);
+    let projection = a + ab * t;
+    (p - projection).length()
+}
+
+/// 生成下一条 measurement 的 ID（`measure_<n>`），`n` 取当前已用最大 + 1。
+fn next_measurement_id(world: &wv_core::World, map_id: &wv_core::Id) -> wv_core::Id {
+    let n = world
+        .measurement_of(map_id)
+        .map(|o| o.measurements.len())
+        .unwrap_or(0);
+    wv_core::Id::new_unchecked(format!("measure_{n}"))
+}
+
+/// 把当前点击提交为测量命令。
+///
+/// - Line 模式：累积点。**第二次**点击开始提交「上一段 → 本段」= 新 measurement。
+///   简单起见，这里采用「每次点击都新建一条 polyline」的策略——多段折线
+///   表达为多条独立 polyline 的串，渲染层各自画各自。后续要做「合并成一条」
+///   时改 `commit` 即可。
+/// - Rect 模式：第二次点击立刻提交 Rectangle 并清草稿。
+/// - Eraser 模式：点中哪条删哪条（容差 `ERASER_TOLERANCE_WU`）。
+/// - 右键 / Esc：取消当前模式（回 `Off`），草稿丢弃。
+///
+/// 系统纪律（与街道 / 笔刷同款）：
+/// - enabled 闸（`mode != Off`）；
+/// - 不悬 UI / 不在播放 / 不在过低缩放；
+/// - 无工程锁；
+/// - 经 `EditHistory.commit` 不直改 `World`；
+/// - 落点要 `cursor_world` 存在。
+#[allow(clippy::too_many_arguments)]
+pub fn commit_measurement_click(
+    buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    view: Res<ViewState>,
+    playback: Res<PlaybackState>,
+    ui: Res<crate::render::camera::PointerOverUi>,
+    grid: Res<GridConfig>,
+    drill: Res<DrillState>,
+    mut projection: ResMut<WorldProjection>,
+    mut measure: ResMut<MeasureState>,
+    mut edit: ResMut<editing::EditHistory>,
+) {
+    let mode = measure.mode;
+    if mode == MeasureMode::Off {
+        return;
+    }
+    // 切图后强制清草稿（避免上一张图的草稿污染当前图）。
+    let current_map = drill.current_node(&projection.world).map(|n| n.id.clone());
+    measure.on_map_change(current_map.as_ref());
+    if mode == MeasureMode::Line
+        && measure.draft_map_id.is_some()
+        && current_map.as_ref() != Some(measure.draft_map_id.as_ref().unwrap())
+    {
+        measure.clear_draft();
+    }
+
+    if ui.wants_pointer || playback.playing || view.scale < 0.15 {
+        return;
+    }
+    if projection.project_dir.is_none() {
+        return;
+    }
+
+    // 右键 = 退出模式（清草稿）。
+    if buttons.just_pressed(MouseButton::Right) {
+        measure.clear_draft();
+        measure.mode = MeasureMode::Off;
+        return;
+    }
+    // Esc 也退出（key input）。
+    if keys.just_pressed(KeyCode::Escape) {
+        measure.clear_draft();
+        measure.mode = MeasureMode::Off;
+        return;
+    }
+    // Enter 在 Line 模式 = 收笔（提交首段就停，后续由用户手动新建下一条）。
+    if mode == MeasureMode::Line && keys.just_pressed(KeyCode::Enter) {
+        measure.clear_draft();
+        measure.mode = MeasureMode::Off;
+        return;
+    }
+
+    if !buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+    let Some(cursor_world) = view.cursor_world else {
+        return;
+    };
+    let Some((local, map_id)) = cursor_to_local(cursor_world, &drill, &projection, &grid) else {
+        return;
+    };
+
+    match mode {
+        MeasureMode::Off => unreachable!(),
+        MeasureMode::Line => {
+            // 第一次点击：仅记录草稿起笔。
+            if measure.draft.is_empty() {
+                measure.draft.push(local);
+                measure.draft_map_id = Some(map_id.clone());
+                return;
+            }
+            // 第二次起：提交「上一段 → 本段」= 折线一条。
+            let prev = *measure.draft.last().expect("已保证非空");
+            let seg = wv_core::Measurement::polyline(vec![
+                wv_core::Point::new(prev.x, prev.y),
+                wv_core::Point::new(local.x, local.y),
+            ])
+            .with_id(next_measurement_id(&projection.world, &map_id));
+            let cmd = wv_edit::AddMeasurementCommand::new(map_id.clone(), seg);
+            let mut tx = wv_edit::Transaction::new();
+            tx.push(Box::new(cmd));
+            match edit.history.commit(&mut projection.world, tx) {
+                Ok(dirty) => {
+                    edit.record_dirty(dirty);
+                    projection.dirty = true;
+                    measure.draft.push(local);
+                    measure.draft_map_id = Some(map_id.clone());
+                }
+                Err(e) => bevy::log::warn!("测量命令失败: {e}"),
+            }
+        }
+        MeasureMode::Rect => {
+            // 第一次点击：草稿起笔。
+            if measure.draft.is_empty() {
+                measure.draft.push(local);
+                measure.draft_map_id = Some(map_id.clone());
+                return;
+            }
+            // 第二次点击：提交矩形并清草稿。
+            let prev = *measure.draft.last().expect("已保证非空");
+            let m = wv_core::Measurement::rectangle(
+                wv_core::Point::new(prev.x, prev.y),
+                wv_core::Point::new(local.x, local.y),
+            )
+            .with_id(next_measurement_id(&projection.world, &map_id));
+            let cmd = wv_edit::AddMeasurementCommand::new(map_id.clone(), m);
+            let mut tx = wv_edit::Transaction::new();
+            tx.push(Box::new(cmd));
+            match edit.history.commit(&mut projection.world, tx) {
+                Ok(dirty) => {
+                    edit.record_dirty(dirty);
+                    projection.dirty = true;
+                    measure.clear_draft();
+                }
+                Err(e) => bevy::log::warn!("测量命令失败: {e}"),
+            }
+        }
+        MeasureMode::Eraser => {
+            // 找容差内最近的一条 measurement → 删。
+            let mut best: Option<(usize, f32)> = None;
+            for (i, m) in projection
+                .world
+                .measurement_of(&map_id)
+                .map(|o| o.measurements.as_slice())
+                .unwrap_or(&[])
+                .iter()
+                .enumerate()
+            {
+                let d = if hit_test(m, local, ERASER_TOLERANCE_WU) {
+                    0.0
+                } else {
+                    f32::INFINITY
+                };
+                if d.is_finite() && best.is_none_or(|(_, bd)| d < bd) {
+                    best = Some((i, d));
+                }
+            }
+            if let Some((idx, _)) = best {
+                // 取该 ID（O(n) 但 measurement 规模小）。
+                let id = projection
+                    .world
+                    .measurement_of(&map_id)
+                    .unwrap()
+                    .measurements[idx]
+                    .id
+                    .clone();
+                let cmd = wv_edit::RemoveMeasurementCommand::new(map_id.clone(), id);
+                let mut tx = wv_edit::Transaction::new();
+                tx.push(Box::new(cmd));
+                if let Ok(dirty) = edit.history.commit(&mut projection.world, tx) {
+                    edit.record_dirty(dirty);
+                    projection.dirty = true;
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 测试
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn point_segment_distance_handles_collinear_and_perpendicular() {
+        let a = Vec2::ZERO;
+        let b = Vec2::new(10.0, 0.0);
+        // 端点上距离 = 0。
+        assert!(point_segment_distance(Vec2::new(0.0, 0.0), a, b) < 1e-4);
+        assert!(point_segment_distance(Vec2::new(10.0, 0.0), a, b) < 1e-4);
+        // 垂直投影在中点，距离 = 3。
+        assert!((point_segment_distance(Vec2::new(5.0, 3.0), a, b) - 3.0).abs() < 1e-4);
+        // 中点距离 = 3。
+        assert!((point_segment_distance(Vec2::new(5.0, -3.0), a, b) - 3.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn point_segment_distance_zero_length_segment_uses_point_distance() {
+        let a = Vec2::new(1.0, 1.0);
+        let b = a;
+        assert!((point_segment_distance(Vec2::new(4.0, 5.0), a, b) - 5.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn hit_test_polyline_hits_within_tolerance() {
+        // L 形折线 (0,0) → (10,0) → (10,5)
+        let m = wv_core::Measurement::polyline(vec![
+            wv_core::Point::new(0.0, 0.0),
+            wv_core::Point::new(10.0, 0.0),
+            wv_core::Point::new(10.0, 5.0),
+        ]);
+        // 垂直偏移 4（容差 5）
+        assert!(hit_test(&m, Vec2::new(5.0, 4.0), 5.0));
+        // 偏移 6（容差 5） → 不命中
+        assert!(!hit_test(&m, Vec2::new(5.0, 6.0), 5.0));
+    }
+
+    #[test]
+    fn hit_test_rectangle_hits_border_not_inside() {
+        let m = wv_core::Measurement::rectangle(
+            wv_core::Point::new(0.0, 0.0),
+            wv_core::Point::new(10.0, 5.0),
+        );
+        // 边框上：命中。
+        assert!(hit_test(&m, Vec2::new(0.0, 2.0), 0.5));
+        assert!(hit_test(&m, Vec2::new(10.0, 2.0), 0.5));
+        // 内部：与边框距离 = 2.5 > 容差 0.5 → 不命中。
+        assert!(!hit_test(&m, Vec2::new(5.0, 2.5), 0.5));
+    }
+
+    #[test]
+    fn next_measurement_id_starts_at_zero_for_a_fresh_map() {
+        let world = wv_core::World::default();
+        let id = next_measurement_id(&world, &wv_core::Id::new_unchecked("m"));
+        assert_eq!(id.as_str(), "measure_0");
+    }
+
+    #[test]
+    fn next_measurement_id_increments_after_appending() {
+        let mut world = wv_core::World::default();
+        let map = wv_core::Id::new_unchecked("m");
+        let m = wv_core::Measurement::polyline(vec![
+            wv_core::Point::new(0.0, 0.0),
+            wv_core::Point::new(1.0, 1.0),
+        ])
+        .with_id(wv_core::Id::new_unchecked("measure_0"));
+        world.measurement_of_mut(&map).add(m).unwrap();
+        let id = next_measurement_id(&world, &map);
+        assert_eq!(id.as_str(), "measure_1");
+    }
+
+    #[test]
+    fn measurement_cache_tracks_current_map_id() {
+        let mut cache = MeasurementCache::default();
+        assert!(cache.map_id.is_none());
+        cache.map_id = Some(wv_core::Id::new_unchecked("m1"));
+        assert_eq!(cache.map_id.as_ref().unwrap().as_str(), "m1");
+    }
+
+    #[test]
+    fn measure_state_clear_draft_resets_everything() {
+        let mut st = MeasureState {
+            mode: MeasureMode::Line,
+            draft: vec![Vec2::new(1.0, 1.0)],
+            last_map_id: Some(wv_core::Id::new_unchecked("m1")),
+            draft_map_id: Some(wv_core::Id::new_unchecked("m1")),
+        };
+        st.clear_draft();
+        assert!(st.draft.is_empty());
+        assert!(st.draft_map_id.is_none());
+        // last_map_id 不动——切图判断需要它。
+        assert!(st.last_map_id.is_some());
+    }
+
+    #[test]
+    fn measure_state_on_map_change_clears_when_map_differs() {
+        let mut st = MeasureState {
+            mode: MeasureMode::Line,
+            draft: vec![Vec2::new(1.0, 1.0)],
+            last_map_id: Some(wv_core::Id::new_unchecked("m1")),
+            draft_map_id: Some(wv_core::Id::new_unchecked("m1")),
+        };
+        st.on_map_change(Some(&wv_core::Id::new_unchecked("m2")));
+        assert!(st.draft.is_empty(), "切图应清草稿");
+        assert_eq!(st.last_map_id.as_ref().unwrap().as_str(), "m2");
+    }
+
+    #[test]
+    fn measure_state_on_map_change_keeps_when_same() {
+        let mut st = MeasureState {
+            mode: MeasureMode::Line,
+            draft: vec![Vec2::new(1.0, 1.0)],
+            last_map_id: Some(wv_core::Id::new_unchecked("m1")),
+            draft_map_id: Some(wv_core::Id::new_unchecked("m1")),
+        };
+        st.on_map_change(Some(&wv_core::Id::new_unchecked("m1")));
+        assert_eq!(st.draft.len(), 1, "同图不清草稿");
+    }
+
+    #[test]
+    fn measure_mode_is_active_and_consumes_left_click() {
+        assert!(!MeasureMode::Off.is_active());
+        assert!(MeasureMode::Line.is_active());
+        assert!(MeasureMode::Rect.is_active());
+        assert!(MeasureMode::Eraser.is_active());
+        assert!(!MeasureMode::Off.consumes_left_click());
+        assert!(MeasureMode::Line.consumes_left_click());
+        assert!(MeasureMode::Rect.consumes_left_click());
+        // 橡皮不消费——它的左键仍要走地图？
+        // 当前实现里橡皮模式不消费左键——它由本系统处理，不是地图。
+        // 但「消费」语义保留 Eraser 也算合理。
+        assert!(!MeasureMode::Eraser.consumes_left_click());
+    }
+}

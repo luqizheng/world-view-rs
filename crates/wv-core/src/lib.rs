@@ -49,6 +49,7 @@ pub use model::event;
 pub use model::faction;
 pub use model::relation;
 pub use source::geographic_source;
+pub use source::measurement;
 pub use source::overture_id;
 pub use source::street;
 pub use time::track;
@@ -69,6 +70,7 @@ pub use model::character::Character;
 pub use model::event::{Event, EventLocation};
 pub use model::faction::{factions_at, Faction};
 pub use source::geographic_source::{GeographicSourceV1, LatLonBbox};
+pub use source::measurement::{Measurement, MeasurementKind, MeasurementOverlay};
 pub use source::overture_id::{OvertureId, OvertureIdError};
 pub use source::street::{RoadClass, StreetLayer, StreetSegment};
 pub use time::track::{Track, Waypoint};
@@ -174,6 +176,17 @@ pub struct World {
     ///
     /// **驻留策略同 §12-19**：加载时全读入、不淘汰——最易回退的形态。
     pub streets: BTreeMap<Id, source::street::StreetLayer>,
+
+    /// 各图的测量叠加，键 = **地图 ID**（不是图层 ID）。
+    ///
+    /// 与 [`World::streets`] / [`World::terrains`] 同构：磁盘真源是各
+    /// `maps/<map_id>/measurements.yaml`（**固定路径**，无需 `Layer.source`
+    /// 派生），加载期一次性读入。
+    ///
+    /// 测量是**工具产物**（不是领域实体），不带 `TimeSpan`——撤销走
+    /// `wv-edit` 命令链，不走「区间不覆盖」。作者要清就清、要回退就 Undo
+    /// （`AGENTS.md §7.5V2`）。不存「当前图」这类视图状态（P7）。
+    pub measurements: BTreeMap<Id, source::measurement::MeasurementOverlay>,
 }
 
 impl World {
@@ -203,6 +216,26 @@ impl World {
         doc: source::street::StreetLayer,
     ) -> Option<source::street::StreetLayer> {
         self.streets.insert(layer, doc)
+    }
+
+    /// 取某张图的测量叠加（无测量时 `None`）。
+    pub fn measurement_of(&self, map: &Id) -> Option<&source::measurement::MeasurementOverlay> {
+        self.measurements.get(map)
+    }
+
+    /// 取某张图的测量叠加（可变）；不存在时**空文档兜底**——写入便利
+    /// （调用方在第一次写之前不必先 `insert`）。
+    pub fn measurement_of_mut(&mut self, map: &Id) -> &mut source::measurement::MeasurementOverlay {
+        self.measurements.entry(map.clone()).or_default()
+    }
+
+    /// 写入某张图的测量叠加，返回被替换掉的旧值（首次写入时为 `None`）。
+    pub fn set_measurement(
+        &mut self,
+        map: Id,
+        doc: source::measurement::MeasurementOverlay,
+    ) -> Option<source::measurement::MeasurementOverlay> {
+        self.measurements.insert(map, doc)
     }
 }
 

@@ -118,6 +118,8 @@ pub fn run(config: AppConfig) {
     .init_resource::<VectorLayerEntities>()
     .init_resource::<streets::StreetLayerCache>()
     .init_resource::<streets::StreetEditorState>()
+    .init_resource::<crate::state::MeasureState>()
+    .init_resource::<crate::render::measurement::MeasurementCache>()
     // 势力多边形层（S12）：同属「每帧 despawn+spawn 的实体集合」资源，
     // 漏 init 会在首帧 panic（`could not access system parameter`）。
     .init_resource::<faction_overlays::FactionOverlayEntities>()
@@ -215,10 +217,22 @@ pub fn run(config: AppConfig) {
     .add_systems(
         Update,
         (
+            // 测量：先 reload 缓存，再 commit 点击，最后 render。
+            // reload 在 `world_projection::is_changed` 后即可（缓存早退）。
+            crate::render::measurement::reload_measurement_cache.after(camera::track_cursor_world),
+            crate::render::measurement::commit_measurement_click
+                .after(crate::render::measurement::reload_measurement_cache),
+        ),
+    )
+    .add_systems(
+        Update,
+        (
             // 地图绘制必须在所有浮动面板**之前**执行，
             // 保证地图是最底层、面板浮在其上（基线 §1.11 R1）。
             world_projection::draw_map_gizmos,
             world_projection::draw_brush_cursor,
+            // 测量顶置渲染——与 gizmos 一起画。
+            crate::render::measurement::render_measurements,
         ),
     )
     .add_systems(
