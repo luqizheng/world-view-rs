@@ -688,6 +688,16 @@ pub fn update_place_labels(
         ),
         (With<PlaceLabel>, Without<Camera2d>),
     >,
+    children_q: Query<&bevy::ecs::hierarchy::Children, With<PlaceLabel>>,
+    mut halo_q: Query<
+        (&mut Transform, &mut Text2d, &mut TextFont, &mut TextColor),
+        (
+            With<crate::render::label_halo::LabelHalo>,
+            // 与上面的 `With<PlaceLabel>` 写查询构成 Without 级不相交——
+            // Bevy 只认 Without 可证互斥，纯 With 组合会在系统初始化时爆 B0003。
+            Without<PlaceLabel>,
+        ),
+    >,
 ) {
     // 期望标注集：锚定在当前地图、坐标齐备的地点（与道路层同一可见口径）。
     // 图层不可见 → wanted 为空 → 池全隐藏（尾部的「多余的隐藏」路径）。
@@ -731,10 +741,17 @@ pub fn update_place_labels(
         _ => crate::theme::palette::colors(view.map_palette).label_fill,
     }
     .with_alpha(layers.place.opacity);
+    // 晕边色（ADR-0014 M2）：纸面色系（Google 用白晕兜底），随 Place 图层透明度。
+    let halo_color = match view.mode {
+        crate::state::ViewMode::GoogleMap => bevy::color::Color::WHITE,
+        _ => crate::theme::palette::colors(view.map_palette).halo_fill,
+    }
+    .with_alpha(layers.place.opacity);
+    let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
 
     let mut iter = q.iter_mut();
     for (pos, name) in &wanted {
-        if let Some((_, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
+        if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
             tf.translation = pos.extend(label_z);
             tf.rotation = label_rot;
             // Bevy 0.19：字号是 `TextFont.font_size: FontSize`、字体是 `font: FontSource`。
@@ -746,8 +763,20 @@ pub fn update_place_labels(
             }
             *color = TextColor(label_color);
             *vis = Visibility::Visible;
+            // 晕边子实体随字同步（8 向纸色副本，绿地/水面上托出文字）。
+            if let Ok(children) = children_q.get(e) {
+                crate::render::label_halo::sync_halo(
+                    children,
+                    &mut halo_q,
+                    name,
+                    font_size,
+                    cjk.as_ref(),
+                    halo_color,
+                    halo_offset,
+                );
+            }
         } else {
-            commands.spawn((
+            let mut cmd = commands.spawn((
                 PlaceLabel,
                 Text2d::new(*name),
                 TextFont {
@@ -763,6 +792,14 @@ pub fn update_place_labels(
                 },
                 Visibility::Visible,
             ));
+            let (text_owned, font_ref, fs, hc) = (*name, cjk.as_ref(), font_size, halo_color);
+            cmd.with_children(move |c| {
+                for _ in 0..crate::render::label_halo::HALO_DIRS.len() {
+                    c.spawn(crate::render::label_halo::halo_bundle(
+                        text_owned, font_ref, fs, hc,
+                    ));
+                }
+            });
         }
     }
     // 池里多出来的实体隐藏（保留复用，不 despawn）。

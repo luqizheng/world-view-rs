@@ -17,6 +17,7 @@
 
 #![cfg(feature = "app")]
 
+pub mod atmosphere;
 pub mod cells;
 pub mod grid_lines;
 pub mod grid_sync;

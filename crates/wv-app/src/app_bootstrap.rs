@@ -116,6 +116,7 @@ pub fn run(config: AppConfig) {
     // 不存在的资源会在首帧 panic → 窗口无法显示）。`derive(Default)` 起步。
     .init_resource::<crate::state::ProjectDiagnostics>()
     .init_resource::<VectorLayerEntities>()
+    .init_resource::<terrain_view::atmosphere::AtmosphereLayer>()
     .init_resource::<streets::StreetLayerCache>()
     .init_resource::<streets::StreetEditorState>()
     .init_resource::<crate::state::MeasureState>()
@@ -222,6 +223,12 @@ pub fn run(config: AppConfig) {
     .add_systems(
         Update,
         brush_cursor::sync_brush_cursor.after(camera::track_cursor_world),
+    )
+    // 纸面氛围层（ADR-0014 M2：雾霭 + 纸张噪点）：独立注册，排在主链
+    // `sync_map_frame` 之后（同帧即可，只要不先于地形 chunk 出现）。
+    .add_systems(
+        Update,
+        terrain_view::atmosphere::sync_atmosphere.after(map_frame::sync_map_frame),
     )
     .add_systems(
         Update,
