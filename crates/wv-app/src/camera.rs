@@ -1,13 +1,20 @@
 //! 相机、缩放、平移（S4）与笔刷拾取（S5）。
 //!
-//! ## 硬约束
+//! ## 职责
+//! - 处理 Bevy `Camera2d` 的缩放、平移；为 geo 坐标 ↔ 屏幕坐标提供 `ProjectionFrame`。
+//! - 收集 `ActiveStroke`：按住鼠标拖拽时把世界坐标点列进栈，
+//!   左键释放后由 [`crate::editing`] 把这一段落笔画成 `EditCommand`。
 //!
-//! - **缩放/平移零惯性、刚性跟随**（`ANIMATION_SPEC` AD-3 / §4.3）：
-//!   地图编辑要「指哪打哪」，任何缓动都会让作者对不齐要素。
-//! - **缩放锚点 = 鼠标指针位置**（基线 §1.16 / §2.12）。
-//! - **输入冲突**：指针落在 egui 面板上时，地图不吃输入（基线 §2.13）。
-//!   查 `EguiContexts::ctx_mut().egui_wants_pointer_input()`。
-//! - **不直接改世界**：笔刷拖拽只**收集笔触**，松手后由 [`crate::editing`] 生成命令。
+//! ## 边界（不做什么）
+//! - **不直接改世界**——笔刷拖拽只收集笔触，松手后才落命令（AGENTS §3.3）。
+//! - **不吃落在 egui 面板上的输入**——查 `EguiContexts::ctx_mut().egui_wants_pointer_input()`
+//!   让面板优先（基线 §2.13）。
+//! - **零惯性 / 无缓动**（ANIMATION_SPEC AD-3 / §4.3）——编辑要指哪打哪。
+//!
+//! ## 主要导出
+//! - `apply_view_to_camera` — 把 `ViewState` 写进 `Transform` / `Projection`。
+//! - `collect_stroke_points` — 笔刷拾取 / 笔触收集。
+//! - `ActiveStroke` 组件、`CameraZoom` 资源。
 
 use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;

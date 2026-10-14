@@ -6,6 +6,21 @@
 //! - YAML 是 source of truth，Bevy ECS 只是投影。
 //! - 本 crate 不得引入任何渲染/UI 依赖。
 //! - 历史状态以「带时间区间的状态片段」存储，不存「当前值」。
+//!
+//! ## 模块导航表（按"被谁找"分组）
+//!
+//! | 模块 | 用途 |
+//! |---|---|
+//! | [`id`] / [`error`] | 通用基础（`Id` / 错误类型）。 |
+//! | [`time`] / [`track`] | 时间模型 + 轨迹（`TimeSpan` / `Track` / `TimePoint`）。 |
+//! | [`coord`] / [`map`] / [`geometry`] / [`unit`] | 地图层级与坐标系（`Point` / `MapFrame` / `Unit`）。 |
+//! | [`distance`] | 行程时间计算（`DistanceGraph`，唯一速度换算入口）。 |
+//! | [`character`] / [`event`] / [`relation`] / [`faction`] | 领域模型（人物 / 事件 / 关系 / 势力）。 |
+//! | [`encounter`] / [`situation`] / [`narration`] | 派生层（相遇提示 / 事态 / 旁白）。 |
+//! | [`street`] / [`overture_id`] / [`geographic_source`] | 数据来源（街道 / Overture ID / 外部地理数据源）。 |
+//! | [`color`] | 色板定义（与 `wv-app` 的色板分离，承载核心语义色）。 |
+//!
+//! 顶层：构建入口 [`World`] + 元数据 [`WorldMeta`]，时间区间化由 [`time`] / [`track`] 提供。
 
 use std::collections::BTreeMap;
 

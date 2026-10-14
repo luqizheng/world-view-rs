@@ -1,14 +1,31 @@
-//! 应用层状态：本层持有的是**投影与视图状态**，不是权威世界数据。
+//! 应用层状态容器（Bevy Resource）。
 //!
-//! `AGENTS.md` §3：YAML 是 source of truth，Bevy ECS 只是投影。
-//! 本模块的资源分三类：
+//! ## 职责
+//! - 声明编辑器工作区所需的全部 Bevy Resource：`WorldProjection`（世界的工作副本）、
+//!   `ViewState`（相机/图层）、`PlaybackState`（时间轴 / 沉浸）、`PanelState`、
+//!   `DrillState`（下钻层级）、`BrushState`、`GridConfig` / `LodConfig`、
+//!   `ProjectDiagnostics`、`RecentProjects` 等。
+//! - 提供类型与默认实现；其它模块按需 `use crate::state::*`。
 //!
-//! 1. [`WorldProjection`]：`World` 的**可变工作副本**（由 `wv-io` 加载，`wv-edit` 修改）。
-//!    注意：`wv-app` 持有它不违反 `AGENTS.md` §2.1——真正的 source of truth 是磁盘
-//!    YAML，这里只是编辑器的工作区；约束的是**改动路径**，一律经 `wv-edit` 的
-//!    `EditCommand` / `History`（§3.3），不得由 System 直接改。
-//! 2. [`PlaybackState`]：`current_day` 等**视图状态**（不是世界数据，基线 §2.14）。
-//! 3. [`ViewState`]：相机缩放、当前地图、视图模式、图层可见性。
+//! ## 边界（不做什么）
+//! - **不修改世界**——`WorldProjection.world` 只能由 `wv-edit` 的 `EditCommand` 改，
+//!   System 不得直接动手（AGENTS.md §3.3）。
+//! - **不持有时间结论**——`current_day` 等只存「视图当前在哪一刻」；
+//!   任何「某时刻的状态」必须经 [`wv_core::time::TimelineQuery::at`] 求值（AGENTS §3.2）。
+//! - **不是 source of truth**——YAML 才是；这里只是投影与视图状态。
+//!
+//! ## 主要导出
+//! - `WorldProjection`（含 `World` 工作副本）、`ProjectDiagnostics`
+//! - `ViewState` / `PlaybackState` / `PanelState` / `Panel` / `DrillState` / `BrushState`
+//! - `GridConfig` / `LodConfig` / `LodTier` / `lod_tier` / `ViewMode` / `EditMode`
+//! - `RecentProjects` / `RecentProject`
+//!
+//! ## 职责分段（grep `// ── 段名 ──` 可快速跳转）
+//!
+//! 1. 工作副本与诊断；2. 视图与相机；3. 面板与显隐；4. 时间轴 / 沉浸 / 播放；
+//! 5. 编辑模式（笔刷 / 下钻）；6. 网格 / LOD / 视图模式；7. 工程历史与最近列表。
+//!
+//! 文件末尾有 `mod tests`。
 
 use bevy::prelude::*;
 use wv_core::World;

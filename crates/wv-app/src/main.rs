@@ -1,7 +1,17 @@
 //! `wv` 命令行入口。
 //!
-//! 阶段一交付物：`wv load <dir>` 打印世界摘要。
-//! GUI 入口在开启 `app` feature 后由 [`run_gui`] 提供。
+//! ## 职责
+//! - 解析 `wv load|validate|raster-slice|overture|gui` 子命令并分发。
+//! - GUI 入口 `wv gui [-m <dir>]` 在 `--features app` 下由 [`run_gui`] 提供。
+//!
+//! ## 边界（不做什么）
+//! - **不持有世界数据**——CLI 只通过 `wv_io::Project::open` 加载并打印摘要，
+//!   不维护工作副本。要修改必须进 GUI。
+//! - **不直接写 YAML**——校验 / 切片仍走 `wv_io::Project::save_world`。
+//!
+//! ## 主要导出
+//! - `main()` — 入口；按子命令派发。
+//! - `run_gui()` — `feature = "app"` 才编译的 GUI 启动封装。
 
 mod overture_cli;
 
@@ -159,7 +169,7 @@ fn run_gui() {
     // 用户想打开的工程」这类事故的根源（曾命中 target/ 下的陈旧拷贝）。
     let args: Vec<String> = std::env::args().skip(2).collect();
     match parse_gui_args(&args) {
-        Ok(dir) => wv_app::gui::run(wv_app::AppConfig {
+        Ok(dir) => wv_app::app_bootstrap::run(wv_app::AppConfig {
             startup_project: dir,
         }),
         Err(msg) => {

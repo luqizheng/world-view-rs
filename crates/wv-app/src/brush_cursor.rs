@@ -1,13 +1,16 @@
 //! 笔刷光标：屏幕恒定粗细的 Mesh2d 实体。
 //!
-//! ## 背景与动机（优化项 2）
+//! ## 职责
+//! - 跟随鼠标光标画一个圆形光标（外环 + 内环虚线 + 十字），半径 = 当前笔刷半径。
+//! - 屏幕恒定粗细：相机放大缩小都不变，与道路 / 边框策略一致（**策略 A**）。
 //!
-//! 原实现 [`crate::projection::draw_brush_cursor`] 用 `Gizmos` 画：
-//! - 外环：`gizmos.circle_2d`（48 段）——`Gizmos` 屏幕 1px 描线，
-//!   **世界空间半径 = `brush.radius`**，相机放大后屏幕尺寸放大、外环变粗；
-//! - 内环虚线：48 段短弧拼成——**段长 = 2π·inner/48 世界单位固定**，
-//!   相机缩放 ±10× 时，**段长屏幕尺寸跟着 ±10×**，远观变实线、近看段消失；
-//! - 十字：1 像素 Gizmos，相机放大变粗。
+//! ## 边界（不做什么）
+//! - **不吃输入**——位置由 [`crate::camera::collect_stroke_points`] 喂入；本模块只画。
+//! - **不画地形 / 道路**——这是叠在 `terrain_view` 之上的编辑提示层。
+//!
+//! ## 主要导出
+//! - `BrushCursor` — 组件，含半径 / 屏幕坐标 / 描边参数。
+//! - `sync_brush_cursor` — 每帧从 `BrushState` 同步位置与半径。
 //!
 //! 目标：**光标的"线"在屏幕恒定 1–3 像素**（与 `vector_layers` 策略 A 一致），
 //! 半径、十字长度等"世界指示"按 `brush.radius` 真实世界尺寸保留——
@@ -42,7 +45,7 @@ use bevy::math::primitives::{Annulus, Rectangle};
 use bevy::prelude::*;
 
 use crate::camera::{screen_to_world, PointerOverUi};
-use crate::palette;
+use crate::colors;
 use crate::state::{BrushState, DrillState, ViewState};
 
 /// 屏幕像素描边（外环 / 十字线宽）。
@@ -141,8 +144,8 @@ pub fn sync_brush_cursor(
     let dash_world = (DASH_PX * view.scale).max(f32::EPSILON);
     let cross_world = (CROSS_PX * view.scale).max(f32::EPSILON);
 
-    let mat_select = materials.add(palette::ACCENT_SELECT);
-    let mat_select_dim = materials.add(palette::ACCENT_SELECT.with_alpha(0.6));
+    let mat_select = materials.add(colors::ACCENT_SELECT);
+    let mat_select_dim = materials.add(colors::ACCENT_SELECT.with_alpha(0.6));
 
     // ---- 外环（Annulus，屏幕 2px 描边）----
     let outer_radius = brush.radius;

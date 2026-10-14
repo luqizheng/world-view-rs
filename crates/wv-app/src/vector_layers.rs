@@ -1,25 +1,39 @@
 //! Google 式矢量叠加层：道路 casing/fill + 红点白环 POI。
 //!
+//! ## 职责
+//! - 在地形之上叠画 Google Maps 风格的视觉层：道路外壳（casing）+ 道路主体（fill），
+//!   以及 POI 的红点白环 marker。
+//! - 用 `PlaceDot` 组件驱动可见性 / LOD：在当前 zoom 下超界的点会随缩放增删，
+//!   避免 `wgpu::Batch` 节点数随 POI 总数失控。
+//!
+//! ## 边界（不做什么）
+//! - **不画 JRPG 风格地形**——那是 [`crate::colors_jrpg`] + [`crate::terrain_view`]。
+//! - **不投影地理坐标**——只消费 [`crate::world_projection::ProjectionFrame`]。
+//! - **不维护世界数据**——POI 经 [`crate::state::ViewState`] 当前地图与可见层过滤。
+//!
+//! ## 主要导出
+//! - `VectorLayerEntities` — Resource，记录当前帧的 casing / fill / dot 实体。
+//! - `setup_place_dots` / `render_place_dots` — POI 红点系统。
+//! - `draw_streets_casing` / `draw_streets_fill` — 道路外壳 / 道路主体绘制系统。
+//!
 //! ## 资产纪律
 //!
 //! 本系统每帧运行，但 **Mesh / Material 资产不能每帧新增**：
 //! - Material 按视图模式缓存，模式切换才重建；
 //! - Mesh 只在几何规格变化时重建，旧 Mesh 用延迟命令在实体换绑后移除；
 //! - Transform 仍每帧对齐投影，保证视图拉动式刷新。
-//!
-//! 这样 Google 式双层道路虽然实体数翻倍，但不会带来无界资产泄漏。
 
 #![cfg(feature = "app")]
 
 use bevy::math::primitives::{Annulus, Circle};
 use bevy::prelude::*;
 
-use crate::palette;
-use crate::palette_google::{
+use crate::colors;
+use crate::colors_google::{
     GOOGLE_PLACE_DOT, GOOGLE_POI_RING, GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL,
 };
-use crate::projection::{PlaceDot, ProjectionFrame};
 use crate::state::{lod_tier, GridConfig, LodTier, ViewState};
+use crate::world_projection::{PlaceDot, ProjectionFrame};
 
 /// Google 式道路外缘宽度（屏幕像素）。
 const GOOGLE_ROAD_CASING_PX: f32 = 6.0;
@@ -318,7 +332,7 @@ fn ensure_road_materials(
     if !layer.road_materials.iter().any(|set| set.mode == mode) {
         let (casing_color, fill_color) = match mode {
             crate::state::ViewMode::GoogleMap => (GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL),
-            _ => (palette::LINE_ON_MID.with_alpha(0.28), palette::ROAD_STROKE),
+            _ => (colors::LINE_ON_MID.with_alpha(0.28), colors::ROAD_STROKE),
         };
         layer.road_materials.push(RoadMaterialSet {
             mode,
@@ -341,7 +355,7 @@ fn ensure_poi_materials(
     if !layer.poi_materials.iter().any(|set| set.mode == mode) {
         let (ring_color, dot_color) = match mode {
             crate::state::ViewMode::GoogleMap => (GOOGLE_POI_RING, GOOGLE_PLACE_DOT),
-            _ => (palette::POI_RING, palette::PLACE_DOT),
+            _ => (colors::POI_RING, colors::PLACE_DOT),
         };
         layer.poi_materials.push(PoiMaterialSet {
             mode,

@@ -6,6 +6,14 @@
 //! - 所有修改必须表达为 `EditCommand`，不得直接改 `World`。
 //! - Undo 不是「反向操作」，而是命令栈的回退——因为历史只被追加，不被覆盖。
 //! - 写盘由 `dirty set` 驱动，不做每帧写盘。
+//!
+//! ## 模块导航表
+//!
+//! | 名字 | 用途 |
+//! |---|---|
+//! | [`command`] | `EditCommand` 实现族（`AddStreetSegmentCommand` 等）。 |
+//! | [`history`] | `History` 命令栈 + 事务 / 撤回 / 重做。 |
+//! | [`DirtySet`]（顶层） | 「哪些文件要写盘」集合，给 `wv-io` 的保存路径用。 |
 
 pub mod command;
 pub mod history;

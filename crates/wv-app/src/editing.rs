@@ -1,21 +1,22 @@
-//! 编辑桥：笔刷笔触 → `PaintTerrainCommand` → `wv-edit::History`（S5 / S9）。
+//! 编辑桥：笔刷笔触 → `EditCommand` → `wv-edit::History`（S5 / S9）。
 //!
-//! ## 铁律（`AGENTS.md` §3.3）
+//! ## 职责
+//! - 收集 [`crate::camera::ActiveStroke`] 的点列，在松手（左键释放）时把
+//!   `wv_terrain::edit::Stroke` 包成 `wv_edit::PaintTerrainCommand` 提交给 `History`。
+//! - 处理 Undo/Redo：`Ctrl+Z` / `Ctrl+Shift+Z` 由 `ui_shell::hotkeys` 收键，
+//!   经 `CommandPalette` 派发到本模块的 `apply_history_command`。
+//! - 播放中一律拒绝编辑（基线 §1.8 / V37）：时间游标「当前世界」是投影，不能原地改。
 //!
-//! **System 只能生成 `EditCommand`，不能自己改世界。** 本模块是唯一的桥：
-//! 松手（左键释放）时，把 [`crate::camera::ActiveStroke`] 里的点列转成
-//! `wv_terrain::edit::Stroke`，包成 `PaintTerrainCommand`，交给 `History` 提交。
+//! ## 边界（不做什么）
+//! - **不自己听键盘**——所有键一律经 `ui_shell::hotkeys` → `CommandPalette::pending`
+//!   → 本模块执行，避免两个系统重复处理同一组键。
+//! - **不直接修改 `WorldProjection.world`**——只能走 `wv-edit` 的 `History`（§3.3）。
+//! - **不在播放中接受编辑**——门禁在 `apply_history_command` / `apply_brush`。
 //!
-//! ## Undo/Redo（S9）
-//!
-//! `Ctrl+Z` / `Ctrl+Shift+Z` 由 `crate::ui_shell::hotkeys` 收键、经 `CommandPalette`
-//! 派发回本模块的 [`apply_history_command`] 执行——**这里不再自己听键盘**。
-//! 撤销/重做与编辑命令都服从同一条门禁：播放中一律拒绝（基线 §1.8 / V37），
-//! 因为播放中「当前世界」是时间游标的投影，改它等于改了一个并不存在的现在。
-//!
-//! 注意这个布局的另一个好处：快捷键只在「输入框未聚焦」时生效这件事，
-//! 只在一个地方处理一次（`ui_shell::hotkeys`），不会出现「两个系统都听同一组键」
-//! 导致一次按键应用两次的经典 bug。
+//! ## 主要导出
+//! - `apply_brush` / `apply_history_command` / `push_history` — 编辑命令入口。
+//! - 资源 `History` / `EditMode` 由 `state.rs` 暴露；本模块只读 / 提交。
+//! - 测试 `mod tests` 覆盖 painting / undo / 播放拒绝。
 
 use bevy::prelude::*;
 

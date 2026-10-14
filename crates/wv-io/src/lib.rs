@@ -6,6 +6,18 @@
 //! - 唯一允许触碰文件系统的地方（`wv-core` 纯内存，`wv-app` 不直接读盘）。
 //! - YAML 读写必须 round-trip 稳定：`load(save(w)) == w`。
 //! - 二进制分块的读写与《二进制格式规格》绑定。
+//!
+//! ## 模块导航表
+//!
+//! | 模块 | 用途 |
+//! |---|---|
+//! | [`project`] | `Project` —— 工程入口（开 / 存 / 校验）。 |
+//! | [`binary`] | 通用二进制读写工具（与领域无关）。 |
+//! | [`terrain_bin`] | 地形栅格二进制格式（`TERRAIN_FORMAT_VERSION`）。 |
+//! | [`diagnostics`] | 派生诊断（错误 + 提示；含 `derive_hints`）。 |
+//! | [`slice`] | 底图切片（`slice_terrain`，CLI `wv raster-slice` 用）。 |
+//! | [`situation_io`] | 事态层的 IO 适配（与核心 `Situation` 分离）。 |
+//! | [`error`] | `IoError` / `IoResult`。 |
 
 pub mod binary;
 pub mod diagnostics;

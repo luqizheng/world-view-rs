@@ -1,15 +1,20 @@
-//! 地形分块 + mip 链 + 视口拣选 + 脏矩形驱动：治"放大糊"与"每帧全量重拷"两刀。
+//! 地形分块 + mip 链 + 视口拣选 + 脏矩形驱动（S3 优化项 3a + 3b + 3c + 3e）。
 //!
-//! ## 背景与动机（优化项 3a + 3b + 3c + 3e）
+//! ## 职责
+//! - 把整张地形切成 N×N 的图块，每块持有 mip 链，屏幕恒定 1.5px 描边。
+//! - 视口拣选：只 sync 当前视口内可见的 chunk；视口外的帧早退，省 fillrate。
+//! - 脏矩形驱动：`dirty_chunks` 标记哪些 chunk 在编辑后需要重烘，其它早退。
 //!
-//! 原 [`crate::terrain_view::sync_terrain_sprite`] 用**单张大 quad + 单张 `Image`** 画整张地形。
-//! 两个问题：
+//! ## 边界（不做什么）
+//! - **不画 JRPG / Google 风格**——单图块内部色值由 [`crate::terrain_view`] 决定；
+//!   本模块只关心几何 / mip / 拣选。
+//! - **不直接听编辑输入**——笔触收口在 [`crate::editing`]；本模块订阅
+//!   `terrain.dirty_chunks`（`Changed<WorldProjection>` 之类）就够了。
 //!
-//! 1. **放大后模糊**——单 quad 跨整个视口时，每像素覆盖许多屏幕像素，**双线性过滤**
-//!    把它插值成模糊色块。这是**物理上限**，跟 mip 无关——**必须**用 mip 链。
-//! 2. **每帧画整图**——视口外的像素也被 GPU 填充，**浪费 fill rate**。
-//!
-//! ## 方案：分块 + mip + 视口拣选 + 脏矩形驱动
+//! ## 主要导出
+//! - `sync_visible_chunks` — 视口拣选 + mip 同步。
+//! - `mark_dirty` — 把被编辑过的 chunk 写入 `dirty_chunks` 集合。
+//! - 资源 `TerrainChunks`（mip 链 + 实体索引）、`ChunkCoords` / `MipLevel`。
 //!
 //! - **分块**（3a）：把 `tex.size` 按 `CHUNK_SIZE = 256` 逻辑格切块；
 //!   对 512² 地形 = 4 块，对 1024² = 16 块，对 4096² = 256 块。

@@ -485,9 +485,9 @@ playback.current_day  ──┬──→  Calendar::format()  ──→ 顶栏�
 
 | 文件 | 内容 |
 |---|---|
-| `crates/wv-app/src/ui_tokens.rs` | `ui.*` 12 色令牌（明/暗两套），与 `palette.rs` **并列导出** |
+| `crates/wv-app/src/ui_tokens.rs` | `ui.*` 12 色令牌（明/暗两套），与 `colors.rs` **并列导出** |
 | `crates/wv-app/src/ui_theme.rs` | 明暗切换 + 密度切换 + 持久化（`ui-layout.yaml`） |
-| `crates/wv-app/src/ui_cmdk.rs` | 命令面板 + 19 条命令注册表 |
+| `crates/wv-app/src/ui_command_palette.rs` | 命令面板 + 19 条命令注册表 |
 | `crates/wv-app/src/ui_layout.rs` | 面板位置/尺寸/折叠/可见性持久化 |
 | `docs/UI_DESIGN_SPEC_v0.1.md` | **本文件移入工程 `docs/`** |
 

@@ -1,28 +1,18 @@
 //! 字体装配：从**系统字体栈**解析中文字体并注册进 egui 与 Bevy `Assets<Font>`。
 //!
-//! ## 依据
+//! ## 职责
+//! - 启动期按平台（Windows / macOS / Linux）探测系统 CJK / 等宽字体路径，
+//!   注册到 egui 与 Bevy 资产。**不打包任何字体文件**。
+//! - 暴露 `FontFamily::Proportional`（正文）+ `FontFamily::Monospace`（数字 / 日期）
+//!   两个族，对应 §4.2 的硬约束（中英混排 ≥ 12px / 数字等宽不跳动）。
 //!
-//! `docs/ART_STYLE_SPEC_v0.1.md` §4.2「字体层级（只用系统字体栈 / 已授权字体）」：
+//! ## 边界（不做什么）
+//! - **不下载 / 不嵌入字体**——只用系统栈（ART_STYLE_SPEC §4.2 硬约束 2）。
+//! - **不画文字**——本模块只创资源 / 抢 `FontFamily` 注册位；具体绘制由 egui 调用。
 //!
-//! > **字体硬约束**
-//! > 2. **必须使用系统字体栈，不引入未授权字体文件**。建议栈：
-//! >    - 中文：`"PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif`
-//! >    - 数字/代码：`ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace`
-//! > 3. 中英混排：**中文字号 ≥ 12px**
-//!
-//! 因此本模块**不打包任何字体文件**，而是在运行时按候选列表探测系统字体路径，
-//! 命中第一个可读的即注册。
-//!
-//! ## 为什么必需
-//!
-//! Bevy / egui 的内置默认字体**不含 CJK 字形**，中文会全部渲染成 □□□（豆腐块）。
-//!
-//! ## 注册两个字体族
-//!
-//! - `FontFamily::Proportional`：正文用。比例中文字体（如微软雅黑），
-//!   同时把默认字体作为 fallback（保证拉丁字符与图标仍可用）。
-//! - `FontFamily::Monospace`：`font.mono` 令牌用（数字/日期/天数必须等宽，
-//!   见 §4.2 硬约束 1「数字必须等宽，超长年份不得跳动」）。
+//! ## 主要导出
+//! - `install_cjk_fonts` — 资源与字体名映射的初始化入口（由 `app_bootstrap` 调）。
+//! - `cjk_font_name` — 返回当前可选中的 CJK 比例字体名，渲染代码据此绑 `TextStyle`。
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};

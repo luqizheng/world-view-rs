@@ -1,16 +1,17 @@
-//! JRPG 风格色板 —— 基于用户提供的 Google Maps JSON 色彩方案。
+//! JRPG 风格色板 —— 把 Google Maps 自然色调转译成 JRPG 高饱和对比。
 //!
-//! ## 设计思路
+//! ## 职责
+//! - 提供与 [`crate::colors`] 同序的 `TerrainKind → Color` 映射（10 种地形），
+//!   但用更饱和、更暖的色值，便于「真实地形」模式做艺术化呈现。
+//! - 由 [`crate::terrain_view`] 在视图模式 = `ViewMode::JrpgMap` 时切换。
 //!
-//! 将 Google Maps 的自然色调转换为 JRPG 风格，保留原色彩层次但增强对比度和艺术感：
-//! - 水体：保持蓝色系但增加饱和度，深水更暗，浅水更亮
-//! - 陆地：沙漠/草原/森林/山地采用更饱和的暖色调
-//! - 道路：使用更明显的道路色
-//! - 强调色：使用 JRPG 经典的金色、紫色等高对比色彩
+//! ## 边界（不做什么）
+//! - **不替代 `colors.rs`**——它是同色位的另一选择，不是默认。
+//! - **不修改 `wv-core` 地形数据**——色板是渲染层语义的视觉解释。
 //!
-//! ## 使用方式
-//!
-//! 在 `terrain_view.rs` 中添加新的视图模式，使用此色板替换默认的 `CORE_TERRAIN`。
+//! ## 主要导出
+//! - `JRPG_TERRAIN` — `TerrainKind → Color` 常量数组。
+//! - `terrain_color(kind)` / `core_terrain(kind)` — 异步访问入口。
 
 use bevy::prelude::*;
 

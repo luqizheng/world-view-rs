@@ -1,18 +1,20 @@
-//! 街道矢量层（ADR-0010 待做第 2 项）：把当前图 `LayerKind::Road` 图层的
-//! 街道文档转成「路段流」交给 [`crate::vector_layers`] 渲染。
+//! 街道矢量层：把当前图 `LayerKind::Road` 图层的街道文档转成「路段流」。
 //!
-//! 职责边界（ADR-0010 ①②）：
-//! - 本模块只做**取数与变换**（`World.streets` → 本图局部坐标折线段），
-//!   不做任何渲染决策；线宽 / 颜色 / LOD 档位在 `vector_layers` 按
-//!   [`wv_core::RoadClass::lod_rank`] 派生。
-//! - 与 `distance.edges` 的城市间行程连线是两个语义层，互不读写。
+//! ## 职责
+//! - 只做**取数与变换**：`World.streets`（键 = 当前图 ID）→ 本图局部坐标折线段，
+//!   交给 [`crate::vector_layers`] 渲染。
+//! - 取数从 `World.streets` 而非磁盘（2026-10-13 改动）：编辑立即可见，
+//!   加载期一次性从 YAML 读入内存缓存。
 //!
-//! 取数来源（2026-10-13 起改为 `World.streets`）：工程加载时 `wv-io` 已把
-//! 各图层文件读进 `World.streets`（键 = 图层 ID），编辑命令（如
-//! `AddStreetSegmentCommand`）也写它——缓存从 `World` 取数才能**即刻反映
-//! 手绘的一笔**，而不是等落盘重读。磁盘只在加载时读一次。
+//! ## 边界（不做什么）
+//! - **不做渲染决策**——线宽 / 颜色 / LOD 档位在 `vector_layers` 按
+//!   `wv_core::RoadClass::lod_rank` 派生。
+//! - **与 `distance.edges` 分清**——后者是城市间行程连线，不与街道层互读写。
 //!
-//! 刷新时机：当前图变化**或** `WorldProjection` 被改（编辑落了一笔）时重对齐；
+//! ## 主要导出
+//! - `sync_streets_to_projection` — 当前图 / `WorldProjection` 变更时把路段对齐到 `vector_layers`。
+//! - `UndoLastStreetSegment` — 撤销最近一段笔刷画的街道。
+//!
 //! 其余帧早退，不做逐帧克隆。
 
 #![cfg(feature = "app")]
@@ -178,7 +180,7 @@ pub fn update_street_labels(
     let font_size = STREET_LABEL_PX * view.scale.max(0.05);
     let cjk = fonts.cjk_font.clone();
     let label_color = match view.mode {
-        crate::state::ViewMode::GoogleMap => crate::palette_google::GOOGLE_LABEL_FILL,
+        crate::state::ViewMode::GoogleMap => crate::colors_google::GOOGLE_LABEL_FILL,
         _ => bevy::color::Color::WHITE,
     };
 

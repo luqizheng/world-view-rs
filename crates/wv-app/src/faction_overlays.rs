@@ -1,13 +1,13 @@
 //! 势力多边形叠加层（S12 v0.1）。
 //!
-//! ## 动机
+//! ## 职责
+//! - 用世界空间 `Mesh2d` 把 `World.faction_geometry` 在 `current_day` 切片后的
+//!   多边形画出来——三角形扇逐顶点三角化，每势力一材质，颜色取 `Faction.color`。
+//! - 取代 `ViewMode::Faction` 之前仅"淡化底色"的占位（[`crate::terrain_view::shade_faded`]）。
 //!
-//! `ViewMode::Faction` 之前只是**淡化底色**的占位（见 [`crate::terrain_view::shade_faded`]）。
-//! 真正的势力几何是 `World.faction_geometry`，通过 [`wv_core::factions_at`] 在
-//! `current_day` 上切片后得到「当前地图上所有势力 + 多边形」。
-//!
-//! 本模块把多边形用**世界空间 `Mesh2d`** 画出来——三角形扇（fan）逐顶点三角化，
-//! 每势力一材质，颜色取自 `Faction.color`。
+//! ## 边界（不做什么）
+//! - **不写时间比较**——通过 [`wv_core::factions_at`] 求值；禁止 `if day > …`。
+//! - **不画地形底色**——本模块叠在 `terrain_view` 之上。
 //!
 //! ## 时间与视图
 //!
@@ -70,7 +70,7 @@ impl FactionOverlayEntities {
 
 /// 势力叠加层主 system。
 ///
-/// 在 [`crate::projection::compute_projection`] 之后跑；只读
+/// 在 [`crate::world_projection::compute_projection`] 之后跑；只读
 /// `WorldProjection.world` / `ViewState.current_day` / `ViewState.current_map`。
 pub fn sync_faction_overlays(
     mut commands: Commands,

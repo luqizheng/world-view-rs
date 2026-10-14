@@ -1,19 +1,26 @@
 //! 投影与叠加层：事件点高亮（S8）、轨迹逐段生长（S8）、笔刷光标与视口网格（S4/S5）。
 //!
-//! ## 铁律（`AGENTS.md` §3.2 / 基线 §2.14）
+//! ## 职责
+//! - 求值「某时刻的世界状态」：从 `PlaybackState::current_day` 出发，经
+//!   `wv_core::time::TimelineQuery::at` 把时间相关的世界片段投影成渲染就绪数据。
+//! - 维护轨迹逐段生长（ANIMATION_SPEC §1.2）：起点全亮 + 当前段部分生长，
+//!   末端是 `accent.cursor` 6px 圆点。
+//! - 把相机网格、笔刷光标、POI 焦点圆等**瞬态高亮**画到 terrain_view 之上。
 //!
-//! **渲染层禁止做时间比较。** 本模块从 [`crate::state::PlaybackState::current_day`]
-//! 出发，**只调用 `TimelineQuery::at` / `Track::sample_at`** 求出投影，
-//! 再把结果写进渲染用的组件/资源。渲染 System 读到的已是「本帧该画什么」。
+//! ## 边界（不做什么）
+//! - **不写时间比较**——所有时间求值只能走 `TimelineQuery::at` / `Track::sample_at`
+//!   （AGENTS §3.2 / 基线 §2.14），System 不准自行 `if time > event.time`。
+//! - **不修改世界**——只读 `WorldProjection.world`；改动仍走 `wv-edit` 的 `History`。
+//! - **不画地形底色**——那是 [`crate::terrain_view`]；本模块只在上层叠加高亮。
 //!
-//! ## 轨迹逐段生长（`ANIMATION_SPEC` §1.2）
-//!
-//! `t <= p0.day` → 只画起点；`pi.day <= t < p(i+1).day` → `p0..pi` 全亮 + 部分生长；
-//! `t >= pn.day` → 全亮。生长末端的「生长笔尖」用 `accent.cursor` 6px 圆点。
+//! ## 主要导出
+//! - `ProjectionFrame` — 帧快照（geo ↔ 屏幕相机矩阵）。
+//! - `apply_projection_refresh` — 每帧把 `ProjectionFrame` 推给渲染系统。
+//! - `PlaceDot` / `PlaceDotKind` — POI 红点组件（含可见性标记）。
 
 use bevy::prelude::*;
 
-use crate::palette;
+use crate::colors;
 use crate::state::{BrushState, GridConfig, PlaybackState, ViewState, WorldProjection};
 use wv_core::time::TimeSpan;
 use wv_core::time::TimelineQuery;
@@ -239,7 +246,7 @@ pub fn draw_map_gizmos(
         gizmos.rect_2d(
             Isometry2d::from_translation((min + max) * 0.5),
             Vec2::splat(size),
-            palette::LINE_ON_DARK,
+            colors::LINE_ON_DARK,
         );
         let step = size / 4.0;
         for i in 1..4 {
@@ -247,13 +254,13 @@ pub fn draw_map_gizmos(
             gizmos.line_2d(
                 Vec2::new(x, min.y),
                 Vec2::new(x, max.y),
-                palette::LINE_ON_DARK.with_alpha(0.35),
+                colors::LINE_ON_DARK.with_alpha(0.35),
             );
             let y = min.y + step * i as f32;
             gizmos.line_2d(
                 Vec2::new(min.x, y),
                 Vec2::new(max.x, y),
-                palette::LINE_ON_DARK.with_alpha(0.35),
+                colors::LINE_ON_DARK.with_alpha(0.35),
             );
         }
     }
@@ -266,7 +273,7 @@ pub fn draw_map_gizmos(
     // 作为回退开关——若新实现出问题，把 `false` 改 `true` 即可恢复。
     if false && view.roads_visible {
         for (a, b) in &frame.road_segments {
-            gizmos.line_2d(*a, *b, palette::ACCENT_NOTE.with_alpha(0.9));
+            gizmos.line_2d(*a, *b, colors::ACCENT_NOTE.with_alpha(0.9));
         }
     }
 
@@ -280,12 +287,12 @@ pub fn draw_map_gizmos(
             gizmos.circle_2d(
                 Isometry2d::from_translation(dot.pos),
                 r,
-                palette::LINE_ON_DARK,
+                colors::LINE_ON_DARK,
             );
             gizmos.circle_2d(
                 Isometry2d::from_translation(dot.pos),
                 r * 0.5,
-                palette::LINE_ON_MID,
+                colors::LINE_ON_MID,
             );
         }
     }
@@ -296,12 +303,12 @@ pub fn draw_map_gizmos(
             gizmos.circle_2d(
                 Isometry2d::from_translation(*pos),
                 grid.cell_size * 1.6,
-                palette::ACCENT_EVENT.with_alpha(0.25),
+                colors::ACCENT_EVENT.with_alpha(0.25),
             );
             gizmos.circle_2d(
                 Isometry2d::from_translation(*pos),
                 grid.cell_size * 0.7,
-                palette::ACCENT_EVENT,
+                colors::ACCENT_EVENT,
             );
         }
     }
@@ -310,21 +317,21 @@ pub fn draw_map_gizmos(
     if view.tracks_visible {
         for poly in &frame.track_polylines {
             for w in poly.windows(2) {
-                gizmos.line_2d(w[0], w[1], palette::ACCENT_EVENT);
+                gizmos.line_2d(w[0], w[1], colors::ACCENT_EVENT);
             }
         }
         for head in &frame.track_heads {
             gizmos.circle_2d(
                 Isometry2d::from_translation(*head),
                 grid.cell_size * 0.75,
-                palette::ACCENT_CURSOR,
+                colors::ACCENT_CURSOR,
             );
         }
         for s in &frame.track_hollow_starts {
             gizmos.circle_2d(
                 Isometry2d::from_translation(*s),
                 grid.cell_size * 0.6,
-                palette::LINE_ON_LIGHT,
+                colors::LINE_ON_LIGHT,
             );
         }
     }
@@ -374,7 +381,7 @@ pub fn draw_brush_cursor(
         gizmos.circle_2d(
             Isometry2d::from_translation(world),
             brush.radius,
-            palette::ACCENT_SELECT,
+            colors::ACCENT_SELECT,
         );
         // 内环：50% 强度半径 R * (1 - softness)，虚线（用短弧近似）。
         let inner = brush.radius * (1.0 - brush.softness).max(0.15);
@@ -382,19 +389,19 @@ pub fn draw_brush_cursor(
             &mut gizmos,
             world,
             inner,
-            palette::ACCENT_SELECT.with_alpha(0.6),
+            colors::ACCENT_SELECT.with_alpha(0.6),
         );
         // 中心十字。
         let c = grid.cell_size * 0.5;
         gizmos.line_2d(
             world - Vec2::X * c,
             world + Vec2::X * c,
-            palette::ACCENT_SELECT,
+            colors::ACCENT_SELECT,
         );
         gizmos.line_2d(
             world - Vec2::Y * c,
             world + Vec2::Y * c,
-            palette::ACCENT_SELECT,
+            colors::ACCENT_SELECT,
         );
     } // 关闭 `if false` 回退开关。
 }

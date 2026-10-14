@@ -1,28 +1,53 @@
-//! UI 组件库 —— 设计规格 `UI_DESIGN_SPEC_v0.1.md` 的 Rust 落地。
+//! UI 组件库（面板、菜单、弹窗、共享 widget helper）。
+//!
+//! ## 职责
+//! - 承载设计规格 §3.1 落地：顶栏、状态栏、项目菜单、命令面板窗口、时间轴、
+//!   笔刷、小地图、罗盘、检视器、势力、校验等浮窗面板。
+//! - 共享 widget helper（`danger_button` / `badge` / `panel_*` 等）。
+//!
+//! ## 边界（不做什么）
+//! - **不分发命令**——单一入口 [`crate::ui_shell::apply_pending_commands`]；本模块只
+//!   把"用户选的命令"通过 `CommandPalette::pending` 排队，由分发器统一处理。
+//! - **不装配 Bevy App**——那是 [`crate::app_bootstrap`] 与 [`crate::ui_shell`]。
+//! - **不重置布局**——见 [`crate::ui_layout`] 与 `ui_shell` 的持久化系统。
+//!
+//! ## 主要导出
+//! - `top_bar` / `status_bar` — 顶部固定栏。
+//! - `project_menu` / `menu_section` / `menu_row` — 项目菜单项（被 `project_menu_window` 风格的调用方组装）。
+//! - `command_palette` — 命令面板弹窗的 egui 绘制入口。
+//! - `panel_timeline` / `panel_brush` / `panel_minimap` / `panel_compass` / `panel_inspector` / `panel_faction` / `panel_validation`。
+//! - `map_controls` — 缩放按钮与 Google Map 控件叠层（通过 `map_control_overlay` 别名暴露）。
+//! - `ProjectMenuState` / `UiShell` — 共享状态与样式快照。
+//! - `badge` / `danger_button` / `float_window` / `panel_header` — 共享 widget helper。
+//!
+//! ## 职责分段（grep `// ── 段名 ──` 可快速跳转）
+//!
+//! 1. 顶栏 / 状态栏；2. 项目菜单；3. 命令面板窗口；4. 时间轴 / 笔刷 / 小地图 / 罗盘；
+//! 5. 检视器 / 势力 / 校验；6. 单元格渲染辅助。
+//!
+//! 文件末尾有 `mod tests`。
+
 #![cfg(feature = "app")]
 
-//! ## 布局骨架（规格 §3.1）
-//!
-//! - 顶栏（[`top_bar`]）：`TopBottomPanel` 是**唯一例外**，固定高 38px / 32px。
-//! - 状态栏（[`status_bar`]）：同为 `TopBottomPanel`，固定高 22px。
-//! - 其余全部是 [`float_window`] 包出的 `egui::Window` 浮窗，**地图铺满、
-//!   面板是客人**（D1：面板不得推挤地图坐标系）。
-//! - 时间轴（[`panel_timeline`]）是底部通栏浮窗，四层轨道（§3.4）。
-//!
-//! ## 设计原则落地
-//!
-//! | 原则 | 落点 |
-//! |---|---|
-//! | D1 地图是主体 | 无 SidePanel；面板显隐不改相机 |
-//! | D2 世界色/界面色分离 | 本文件只用 [`crate::ui_tokens`]，世界色经 `palette.rs` |
-//! | D3 状态永不抑制 | 沉浸模式只降透明度，不隐藏时间轴/日期 |
-//! | D4 一切可逆 | 破坏操作二次确认（[`danger_button`]） |
-//! | D5 零隐藏功能 | [`crate::ui_cmdk::CommandRegistry`] 收录全部功能 |
-//!
-//! ## 色值纪律
-//!
-//! 本文件**不得**出现裸十六进制色值：一律经 [`UiShell`] 持有的
-//! [`crate::ui_tokens::ShellPalette`]。
+// ────────────────────────────────────────────────────────────────────────────
+// 布局骨架（规格 §3.1）
+//
+// - 顶栏（top_bar）：TopBottomPanel 是唯一例外，固定高 38px / 32px。
+// - 状态栏（status_bar）：同为 TopBottomPanel，固定高 22px。
+// - 其余全部是 float_window 包出的 egui::Window 浮窗，地图铺满、面板是客人
+//   （D1：面板不得推挤地图坐标系）。
+// - 时间轴（panel_timeline）是底部通栏浮窗，四层轨道（§3.4）。
+//
+// 设计原则落地：
+//   D1 地图是主体    无 SidePanel；面板显隐不改相机
+//   D2 世界色/界面色  本文件只用 crate::ui_tokens；世界色经 colors.rs
+//   D3 状态永不抑制    沉浸模式只降透明度，不隐藏时间轴/日期
+//   D4 一切可逆       破坏操作二次确认（danger_button）
+//   D5 零隐藏功能     crate::ui_command_palette::CommandRegistry 收录全部功能
+//
+// 色值纪律：本文件不得出现裸十六进制色值，一律经 UiShell 持有的
+// crate::ui_tokens::ShellPalette。
+// ────────────────────────────────────────────────────────────────────────────
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
@@ -33,7 +58,7 @@ use crate::state::{
     BrushState, DrillState, GridConfig, Panel, PanelState, PlaybackState, RecentProject,
     RecentProjects, ViewMode, ViewState, WorldProjection,
 };
-use crate::ui_cmdk::CommandPalette;
+use crate::ui_command_palette::CommandPalette;
 use crate::ui_layout::LayoutFile;
 use crate::ui_theme::{color32, color32_alpha, mono, proportional, UiShellConfig};
 use crate::ui_tokens::{font_size, radius, space, BadgeTone, ShellPalette};
@@ -45,8 +70,9 @@ pub const TERRAIN_NAMES: [&str; 10] = [
 ];
 
 /// 地形色块索引 → `palette::CORE_TERRAIN` 同序（§4.5：色块就是地形本色）。
+// ── 段 6 · 单元格渲染辅助 ────────────────────────────────────────────────────
 fn terrain_swatch(kind: u8) -> egui::Color32 {
-    let c = crate::palette::core_terrain(kind);
+    let c = crate::colors::core_terrain(kind);
     let bevy::prelude::Color::Srgba(s) = c else {
         return egui::Color32::GRAY;
     };
@@ -58,6 +84,7 @@ fn terrain_swatch(kind: u8) -> egui::Color32 {
 }
 
 /// 每帧由 UI 系统装配的样式快照（避免到处传参）。
+// ── 段 6 · UiShell 样式快照 ──────────────────────────────────────────────────
 pub struct UiShell {
     /// 当前外壳令牌。
     pub palette: ShellPalette,
@@ -146,6 +173,8 @@ impl UiShell {
 // 项目管理菜单（v0.2 §A）
 // ---------------------------------------------------------------------------
 
+// ── 段 2 · 项目菜单 ──────────────────────────────────────────────────────────
+
 /// 项目管理菜单的交互状态。
 ///
 /// **为什么单独一个资源**：菜单要支持 `↑ ↓ ↵`（v0.2 §A「焦点落当前项、↑↓ 选择、
@@ -156,7 +185,7 @@ pub struct ProjectMenuState {
     pub selected: usize,
     /// 待执行的命令。与 [`CommandPalette::pending`] 一样，交给
     /// [`crate::ui_shell::apply_pending_commands`] 统一分发——**唯一分发器**。
-    pub pending: Option<crate::ui_cmdk::CommandId>,
+    pub pending: Option<crate::ui_command_palette::CommandId>,
 }
 
 /// 菜单里的一行。
@@ -168,7 +197,7 @@ struct MenuRow {
     section: &'static str,
     label: String,
     keys: Option<&'static str>,
-    id: crate::ui_cmdk::CommandId,
+    id: crate::ui_command_palette::CommandId,
 }
 
 /// 工程名下拉菜单（v0.2 §A）。
@@ -228,7 +257,7 @@ fn project_menu(
 
     // ── 菜单内容 ──
     // 命令行清单先建好：键盘导航要知道一共几行，绘制时才知道哪行高亮。
-    use crate::ui_cmdk::CommandId;
+    use crate::ui_command_palette::CommandId;
     let mut rows: Vec<MenuRow> = Vec::new();
     for (i, p) in recents.iter().enumerate() {
         rows.push(MenuRow {
@@ -584,6 +613,8 @@ fn root_ui(ctx: &egui::Context) -> egui::Ui {
     )
 }
 
+// ── 段 1 · 顶栏 / 状态栏 ──────────────────────────────────────────────────────
+
 /// 顶栏：身份 → 主控 → 读数。**唯一例外**的 `TopBottomPanel`（38px / 32px）。
 ///
 /// Bevy 系统的参数即「依赖声明」，宽签名是框架惯例而非坏味道（同 `editing.rs`）。
@@ -786,13 +817,11 @@ pub fn map_controls(
     let level_map_size =
         crate::zoom_level::map_size_of(&projection.world, drill.current(), raster_size);
     let zoom = crate::zoom_level::LevelZoom::for_map(level_map_size, window_size);
-    let control_bg = crate::palette::palette_to_color32(crate::palette_google::GOOGLE_CONTROL_BG);
+    let control_bg = crate::colors::palette_to_color32(crate::colors_google::GOOGLE_CONTROL_BG);
     let control_border =
-        crate::palette::palette_to_color32(crate::palette_google::GOOGLE_CONTROL_BORDER);
-    let control_text =
-        crate::palette::palette_to_color32(crate::palette_google::GOOGLE_CONTROL_TEXT);
-    let active_bg =
-        crate::palette::palette_to_color32(crate::palette_google::GOOGLE_CONTROL_ACTIVE);
+        crate::colors::palette_to_color32(crate::colors_google::GOOGLE_CONTROL_BORDER);
+    let control_text = crate::colors::palette_to_color32(crate::colors_google::GOOGLE_CONTROL_TEXT);
+    let active_bg = crate::colors::palette_to_color32(crate::colors_google::GOOGLE_CONTROL_ACTIVE);
 
     egui::Area::new(egui::Id::new("wv_google_map_controls"))
         .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -38.0))
@@ -926,6 +955,8 @@ mod map_control_tests {
 // ---------------------------------------------------------------------------
 // 状态栏（§3.1 底部 22px）
 // ---------------------------------------------------------------------------
+
+// ── 段 1 · 顶栏 / 状态栏 续 ───────────────────────────────────────────────────
 
 /// 状态栏：实体计数 / 已选 / 缩放 / 操作回执。
 pub fn status_bar(
@@ -1272,6 +1303,8 @@ impl TimelineLayer {
     ];
 }
 
+// ── 段 4 · 时间轴 / 笔刷 / 小地图 / 罗盘 ────────────────────────────────────
+
 /// 时间轴底部通栏浮窗 + 四层轨道。
 ///
 /// Bevy 系统的参数即「依赖声明」，宽签名是框架惯例而非坏味道（同 `editing.rs`）。
@@ -1422,7 +1455,7 @@ fn draw_timeline_tracks(
                 painter.rect_filled(
                     bar,
                     radius::BADGE,
-                    crate::palette::palette_to_color32(crate::palette::ACCENT_EVENT),
+                    crate::colors::palette_to_color32(crate::colors::ACCENT_EVENT),
                 );
                 painter.text(
                     egui::pos2(x0 + space::XS, y + 6.0),
@@ -1474,7 +1507,7 @@ fn draw_timeline_tracks(
         [egui::pos2(cx, rect.min.y), egui::pos2(cx, rect.max.y)],
         egui::Stroke::new(
             2.0_f32,
-            crate::palette::palette_to_color32(crate::palette::ACCENT_CURSOR),
+            crate::colors::palette_to_color32(crate::colors::ACCENT_CURSOR),
         ),
     );
 }
@@ -1980,6 +2013,9 @@ fn push_cmd(
         }
     }
 }
+
+// ── 段 5 · 检视器 / 势力 / 校验 ────────────────────────────────────────────────
+
 pub fn panel_inspector(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,
@@ -2057,7 +2093,7 @@ pub fn panel_situation(
                     list_item(
                         ui,
                         &shell,
-                        crate::palette::palette_to_color32(crate::palette::ACCENT_EVENT),
+                        crate::colors::palette_to_color32(crate::colors::ACCENT_EVENT),
                         &s.name,
                         &meta,
                         false,
@@ -2524,7 +2560,7 @@ pub fn panel_event(
                     list_item(
                         ui,
                         &shell,
-                        crate::palette::palette_to_color32(crate::palette::ACCENT_EVENT),
+                        crate::colors::palette_to_color32(crate::colors::ACCENT_EVENT),
                         e.id.as_str(),
                         &meta,
                         false,
@@ -2538,6 +2574,8 @@ pub fn panel_event(
 // ---------------------------------------------------------------------------
 // 命令面板（§6.3）
 // ---------------------------------------------------------------------------
+
+// ── 段 3 · 命令面板窗口 ──────────────────────────────────────────────────────
 
 /// 命令面板：`Ctrl+K` 打开，`Esc` 关闭，模糊搜索，键盘完全可操作。
 pub fn command_palette(

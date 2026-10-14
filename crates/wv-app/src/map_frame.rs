@@ -1,33 +1,23 @@
-//! 地图外框 + 1/4 幅面参考网格：世界空间 Mesh2d，屏幕恒定 1px 描边。
+//! 地图外框 + 1/4 幅面参考网格（世界空间 Mesh2d，屏幕恒定 1.5px 描边）。
 //!
-//! ## 背景与动机（优化项 4）
+//! ## 职责
+//! - 用 `Rectangle` 实体画 4 段外框（顶 / 底 / 左 / 右），宽度按 `view.scale` 比例
+//!   缩放，保证屏幕恒定 1.5px。
+//! - 用 6 段 `Rectangle` 画 1/4 幅面参考网格（3 竖 3 横），按 `view.scale` LOD：
+//!   远观 / 近看都隐藏，中间区间显示。
 //!
-//! 原 [`crate::projection::draw_map_gizmos`] 用 `Gizmos` 画：
-//! - **外框** = `gizmos.rect_2d`（屏幕 1px 常量，相机放大后变粗、出现锯齿）；
-//! - **1/4 幅面参考网格** = 6 条 `gizmos.line_2d`（3 竖 + 3 横），同样问题；
-//!   且**没有 LOD**——缩到 0.1× 时 6 条线挤在一起变成实线黑框，放到 8× 时
-//!   网格太密反而看不见。
+//! ## 边界（不做什么）
+//! - **不画世界数据**——只画「图框 / 参考线」，绘图内容由 `terrain_view` / `vector_layers` 负责。
+//! - **不裸用 `Gizmos`**——屏幕恒定宽度难以同时正确处理锯齿，本模块用 Mesh 实体。
 //!
-//! 目标：
-//! 1. **外框屏幕恒定 1.5px**（与道路 / POI 同策略 A）；
-//! 2. **参考网格按 `view.scale` 阈值 LOD**：
-//!    - `view.scale > MAX`（远观，地图在屏幕很小）→ 隐藏（线挤成实线无意义）；
-//!    - `view.scale < MIN`（近看，地图远超视口）→ 隐藏（看不到全图无意义）；
-//!    - 中间区间显示，屏幕恒定 1px。
-//!
-//! ## 实现
-//!
-//! - **外框** = 4 段 `Rectangle`（顶 / 底 / 左 / 右），与道路同样公式
-//!   `world_thickness = 1.5 * view.scale`（`view.scale` 的单位是世界单位/像素，
-//!   恒定屏幕宽度必须**乘** scale）；
-//! - **参考网格** = 6 段 `Rectangle`（3 竖 + 3 横），等分四份。
+//! ## 主要导出
+//! - `spawn_map_frame` — 初次进入或画布尺寸变更时创建外框 / 参考线实体。
+//! - `update_map_frame_geometry` — 跟随相机 view.scale 调整厚度。
 //!
 //! ## 数据来源
 //!
-//! **当前图**的图帧：[`GridConfig::map_origin`] 算起点、[`GridConfig::map_size`]
-//! 算幅面（`sync_grid_config` 已按当前图填好，与「缩放到全图」同口径）。
-//! 早先按 `tex.size × grid.cell_size` 取**栅格**的那一块：城市继承父图底图时，
-//! 城级画出来的是整幅世界图的框——外框与参考网格都指向「世界」，与城里的内容
+//! 当前图的图帧由 [`crate::state::GridConfig::map_origin`] 与
+//! [`crate::state::GridConfig::map_size`] 提供（`sync_grid_config` 已填好）。
 //! 对不上。外框/网格是**纯几何**而非"时间投影"，不参与 P7，也不修改
 //! `ProjectionFrame`。
 //!
@@ -42,7 +32,7 @@
 use bevy::math::primitives::Rectangle;
 use bevy::prelude::*;
 
-use crate::palette;
+use crate::colors;
 use crate::state::{GridConfig, ViewState};
 
 /// 屏幕像素描边。
@@ -115,7 +105,7 @@ pub fn sync_map_frame(
     // ---- 外框：4 段 Rectangle ----
     // 顶 / 底：水平方向，长度 = size。
     // 左 / 右：垂直方向，长度 = size。
-    let mat_frame = materials.add(palette::LINE_ON_DARK);
+    let mat_frame = materials.add(colors::LINE_ON_DARK);
     let segs: [(usize, Vec2, Vec2, f32); 4] = [
         // (idx, translation, scale, rotation_rad)
         (
@@ -167,7 +157,7 @@ pub fn sync_map_frame(
         }
         return;
     }
-    let mat_grid = materials.add(palette::LINE_ON_DARK.with_alpha(0.35));
+    let mat_grid = materials.add(colors::LINE_ON_DARK.with_alpha(0.35));
     let step = size / 4.0;
     // 3 条竖线（v1, v2, v3）：x = min.x + step*i，i ∈ 1..4。
     for i in 0..3 {

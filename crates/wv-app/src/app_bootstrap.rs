@@ -1,16 +1,20 @@
-//! GUI 装配（S3–S9）：Bevar + bevy_egui，把各系统按顺序接入。
+//! GUI 装配（S3–S9）：Bevy + bevy_egui，把各系统按顺序接入。
 //!
-//! ## 系统顺序（基线 §2.13）
+//! ## 职责
+//! - `run(config)`：构造 `App`、装 `DefaultPlugins` + `EguiPlugin`，
+//!   按基线 §2.13 的顺序注册 `PreUpdate` / `Update` / `EguiPrimaryContextPass` 各系统。
+//! - 注册所有 `crate::*` 模块的初始化与资源；具体面板逻辑留在 `ui.rs`，
+//!   命令调度与启动接管留在 `ui_shell.rs`。
 //!
-//! - `poll_egui_wants_input` 在 `PreUpdate`：**先**知道 egui 要不要输入，
-//!   地图输入系统读的就是这个（避免指针落在面板上还去拾取地图）。
-//! - 地图输入/投影在 `Update`。
-//! - egui 面板在 `Update` 的 `EguiPrimaryContextPass` 阶段（bevy_egui 0.32 约定）。
+//! ## 边界（不做什么）
+//! - **feature 门控**——整个模块只在 `--features app` 下编译，让数据层（`wv-core` /
+//!   `wv-io` / `wv-edit` / `wv-terrain`）开发不受 Bevy 全量编译影响（AGENTS §7.1）。
+//! - **不画 UI**——只把面板注册进 schedule；面板绘制在 `ui.rs`，快捷键在 `ui_shell.rs`。
+//! - **不加载工程**——`startup_project` 为 `Some(_)` 时，由 `ui_shell::startup_load`
+//!   在窗口内做异步加载并显示进度 / 失败原因。
 //!
-//! ## feature 门控
-//!
-//! 整个模块只在 `--features app` 下编译。这是为了让数据层（`wv-core` /
-//! `wv-io` / `wv-edit` / `wv-terrain`）的开发不受 Bevy 全量编译影响。
+//! ## 主要导出
+//! - `run(config: AppConfig)` — 启动 GUI 的唯一入口。
 
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
@@ -21,7 +25,6 @@ use crate::camera;
 use crate::editing;
 use crate::faction_overlays;
 use crate::map_frame;
-use crate::projection;
 use crate::state::{
     BrushState, DrillState, GridConfig, PanelState, PlaybackState, ViewState, WorldProjection,
 };
@@ -30,6 +33,7 @@ use crate::terrain_chunks;
 use crate::terrain_view;
 use crate::ui;
 use crate::vector_layers::{self, VectorLayerEntities};
+use crate::world_projection;
 use crate::AppConfig;
 
 /// 启动 GUI。`startup_project` 为 `None` 时进空编辑器（占位地形），
@@ -96,7 +100,7 @@ pub fn run(config: AppConfig) {
     .init_resource::<BrushState>()
     .init_resource::<PanelState>()
     .init_resource::<GridConfig>()
-    .init_resource::<projection::ProjectionFrame>()
+    .init_resource::<world_projection::ProjectionFrame>()
     .init_resource::<camera::ActiveStroke>()
     .init_resource::<camera::PointerOverUi>()
     .init_resource::<editing::EditHistory>()
@@ -150,7 +154,7 @@ pub fn run(config: AppConfig) {
                 // 两处都听会导致一次按键应用两次。
                 editing::flush_terrain_texture,
                 // 播放推进（时间 → 当前时刻）
-                projection::advance_playback,
+                world_projection::advance_playback,
                 // 纹理先于网格几何：`grid.cell_size` 取自纹理的来源图与格数。
                 terrain_view::rebuild_texture_on_mode_change,
                 // 网格几何（`raster_origin` / `map_origin` 两套原点）必须先于所有
@@ -162,7 +166,7 @@ pub fn run(config: AppConfig) {
             // 换级淡化：旧底图淡出精灵逐帧降透明、归零回收（ADR-0009 §2⑦）。
             terrain_view::tick_basemap_fadeout,
             // 投影（时间 → 渲染资源）
-            projection::compute_projection,
+            world_projection::compute_projection,
             // 地形分块 + mip + 视口拣选（优化项 3a/3b/3c）。
             terrain_chunks::sync_terrain_chunks,
             // 派生诊断刷新：在 flush 之后、UI 之前；面板本帧即可读新值。
@@ -191,8 +195,8 @@ pub fn run(config: AppConfig) {
         (
             // 地图绘制必须在所有浮动面板**之前**执行，
             // 保证地图是最底层、面板浮在其上（基线 §1.11 R1）。
-            projection::draw_map_gizmos,
-            projection::draw_brush_cursor,
+            world_projection::draw_map_gizmos,
+            world_projection::draw_brush_cursor,
         ),
     )
     .add_systems(

@@ -1,16 +1,35 @@
-//! 界面外壳装配：把主题、快捷键、命令面板、布局持久化接入 Bevy App。
-#![cfg(feature = "app")]
-
-//! ## 职责（设计规格 §9.2「改 gui.rs」的落点）
+//! 界面外壳装配 + 唯一命令分发器。
 //!
-//! - 注册 [`crate::ui_theme`] / [`crate::ui_cmdk`] / [`crate::ui_layout`]。
-//! - 装配快捷键（§6.1，19 条）与命令面板（§6.3）。
+//! ## 职责
+//! - 注册 [`crate::ui_theme`] / [`crate::ui_command_palette`] / [`crate::ui_layout`] 等 `crate::ui_*` 资产。
+//! - 装配快捷键（设计规格 §6.1，19 条）与命令面板（§6.3）。
 //! - 布局持久化（§10 Q5）：面板被拖动 / 折叠 / 显隐时写回 `ui-layout.yaml`。
+//! - **`apply_pending_commands` 是命令**唯一**分发器**（见 [§9.3 验证项 8]）：
+//!   从 `CommandPalette::pending` 取 1 条、枚举派发、各类命中的具体动作都在这里。
+//! - `StartupLoadRequest` 排队、文件 / 目录对话框任务、面板显隐 Toggle 注册。
 //!
-//! ## 为什么单独一个模块
+//! ## 边界（不做什么）
+//! - **不持有权威世界数据**——经 `WorldProjection.world`；改动必须经 `wv-edit`。
+//! - **不画地形**——`crate::world_projection` / `crate::terrain_view` 负责。
+//! - **不画单个面板**——所有 `crate::ui::panel_*` 在 `ui.rs`。
+//! - **未来可能拆出的 `project_io.rs` / `drill_state.rs`**：`save_world_to_dir`（§A-4 内部动作）与
+//!   `drill.rs` 的调用已集成在分发里；下次需要物理拆时这两处是迁移锚点。
 //!
-//! `gui.rs` 是 Bevy 装配层（相机、地形、投影）；界面外壳的装配与之正交，
-//! 拆开后两侧各自可测、可替换（D2：换 Theme Pack 不该动装配层）。
+//! ## 主要导出
+//! - `register(app: &mut App)` — Bevy App 装配入口。
+//! - `apply_pending_commands` / `dispatch_project_command` — **唯一**命令分发器与子派发器。
+//! - `startup_load` / `load_error_card` / `adopt_world_snapshot` — 启动期工程接管。
+//! - `save_world_to_dir` / `poll_open_project_dialog` — 工程加载与落盘收口。
+//! - `persist_layout_on_change` — 布局写盘系统。
+//!
+//! ## 职责分段（grep `// ── 段名 ──` 可快速跳转）
+//!
+//! 1. `register` 装配；2. DrillState 同步；3. hotkeys 快捷键；
+//! 4. 文件 / 目录对话框任务；5. 启动期工程接管；6. 保存落盘；
+//! 7. **唯一**命令分发器；8. 布局写盘。
+//!
+//! 文件末尾有 `mod tests`。
+#![cfg(feature = "app")]
 
 use std::path::PathBuf;
 
@@ -22,7 +41,7 @@ use crate::state::{
     DrillState, Panel, PanelState, PlaybackState, RecentProjects, ViewState, WorldProjection,
 };
 use crate::terrain_view::{TerrainTexture, TileAtlas};
-use crate::ui_cmdk::{CommandId, CommandPalette};
+use crate::ui_command_palette::{CommandId, CommandPalette};
 use crate::ui_layout::LayoutFile;
 use crate::ui_theme::UiShellConfig;
 use crate::ui_tokens::{UiDensity, UiTheme};
@@ -74,6 +93,8 @@ pub fn register(app: &mut App) {
         );
 }
 
+// ── 段 2 · DrillState 同步 ─────────────────────────────────────────────────────
+
 /// 把钻取路径钉到根图（`world.meta.root_map`），并镜像到 [`ViewState::current_map`]。
 ///
 /// 放在 `PreUpdate`：本帧的渲染 / 拾取随后都读得到一致的两份状态。
@@ -95,6 +116,8 @@ fn sync_drill_mirror(drill: Res<DrillState>, mut view: ResMut<ViewState>) {
         drill.sync_view(&mut view);
     }
 }
+
+// ── 段 3 · hotkeys 快捷键 ──────────────────────────────────────────────────────
 
 /// 快捷键（§6.1，19 条；**禁止占用裸 `Tab`**）。
 ///
@@ -243,6 +266,8 @@ impl ShellNotice {
     }
 }
 
+// ── 段 4 · 文件 / 目录对话框任务 ──────────────────────────────────────────────
+
 /// 「打开工程…」对话框的进行中任务（v0.2 §A）。
 ///
 /// 入口（菜单 / `Ctrl+O` / 命令面板）把用户想打开工程的意图交给 [`Self::spawn`]
@@ -324,6 +349,8 @@ impl OpenProjectTask {
         Some(bevy::tasks::block_on(task))
     }
 }
+
+// ── 段 5 · 启动期工程接管 ──────────────────────────────────────────────────────
 
 /// CLI `-m <目录>` 带来的启动加载请求。
 ///
@@ -667,7 +694,7 @@ fn adopt_world_snapshot(
     );
     // 整图内容已整体替换：chunk 层全量重贴。
     tex.mark_all_dirty();
-    let (center, scale) = crate::gui::fit_view_for_world(&projection.world);
+    let (center, scale) = crate::app_bootstrap::fit_view_for_world(&projection.world);
     view.camera_center = center;
     view.scale = scale;
     playback.range_from = projection
@@ -692,21 +719,21 @@ fn adopt_world_snapshot(
 
 /// 分发工程 / 导航类命令（v0.2 §A §B），返回是否已消费该命令。
 ///
-/// ## 能力边界（如实回执，不假装成功）
-///
-/// | 命令 | 现状 |
-/// |---|---|
-/// | 打开工程… | ✅ 原生目录选择对话框（`rfd`），加载走 [`wv_io::Project::open`] |
-/// | 打开最近工程 | ✅ 真加载（`wv_io::Project::open`） |
-/// | 新建工程 | ✅ 内存中新建空白工程（`Ctrl+S` 时引导选目录落盘） |
-/// | 关闭工程 | ✅ 清空工作副本 |
-/// | 另存为… | ✅ 目录对话框 → `Project::create`/`open` + 全量保存（v0.3 §B） |
-/// | 导出… | ⛔ 导出格式未定（见 v0.2 §G） |
-/// | 项目设置 | ⛔ 面板未实现（v0.3） |
-/// | 保存 | ✅ 阶段七 v0.1：`wv_io::Project::save_world` 全量写，dirty 路由 v0.2 |
+/// 段：唯一命令分发器 · project 子派发。
 ///
 /// 保存那条不是偷懒：数据落盘要处理「每实体一文件 + 引用完整性 + 二进制分块」
 /// 三件事（AGENTS §5/§4.5），不是一次 `serde_yaml::to_string` 能收尾的。
+///
+/// 能力边界（如实回执，不假装成功）：
+///
+/// - 打开工程… → ✅ 原生目录选择对话框（`rfd`），加载走 `wv_io::Project::open`
+/// - 打开最近工程 → ✅ 真加载（`wv_io::Project::open`）
+/// - 新建工程 → ✅ 内存中新建空白工程（`Ctrl+S` 时引导选目录落盘）
+/// - 关闭工程 → ✅ 清空工作副本
+/// - 另存为… → ✅ 目录对话框 → `Project::create`/`open` + 全量保存
+/// - 导出… → ⛔ 导出格式未定（见 v0.2 §G）
+/// - 项目设置 → ⛔ 面板未实现（v0.3）
+/// - 保存 → ✅ `wv_io::Project::save_world` 全量写，dirty 路由 v0.2
 #[allow(clippy::too_many_arguments)]
 fn dispatch_project_command(
     id: &CommandId,
@@ -816,6 +843,8 @@ fn dispatch_project_command(
     }
 }
 
+// ── 段 7 · 唯一命令分发器 · 主循环 ──────────────────────────────────────────
+
 /// 执行命令面板 / 快捷键 / 菜单排队的命令。
 ///
 /// **唯一分发器**：所有入口只写 `palette.pending = Some(id)`，由这里统一执行。
@@ -876,7 +905,7 @@ fn apply_pending_commands(
             // FitMap 的语义 = 与启动/加载后相同的取景（`adopt_loaded_world`
             // 同款 fit），而不是字面 ZERO/1.0——旧实现只写 ViewState，
             // 相机从不跟随，语义从未真正生效过。
-            let (center, scale) = crate::gui::fit_view_for_world(&projection.world);
+            let (center, scale) = crate::app_bootstrap::fit_view_for_world(&projection.world);
             view.camera_center = center;
             view.scale = scale;
             crate::camera::apply_view_to_camera(center, scale, &mut cameras);
@@ -968,6 +997,8 @@ fn apply_pending_commands(
         | CommandId::DrillToSegment(_) => {}
     }
 }
+
+// ── 段 8 · 布局写盘 ────────────────────────────────────────────────────────────
 
 /// 布局持久化：把面板的**真实几何**回写 `ui-layout.yaml`（Q5）。
 ///

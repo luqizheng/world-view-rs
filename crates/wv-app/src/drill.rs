@@ -1,13 +1,17 @@
-//! 地图三级钻取（v0.2 §B）的**导航层**：标记布局、命中测试、相机过渡。
+//! 地图三级钻取的**导航层**（v0.2 §B）：标记布局、命中测试、相机过渡。
 //!
-//! ## 为什么单独一个模块
+//! ## 职责
+//! - 显示当前图的下级 `MapNode`，按 `MapNode.icons` 在屏幕上落点，可点击下钻。
+//! - 命中测试：点击 marker 时经 `wv-edit` 的 `DrillToNodeCommand` 改 `DrillState`，
+//!   然后交给 [`crate::zoom_level::clamp_to_level`] 选级区间并过渡相机。
 //!
-//! [`crate::state::DrillState`] 只回答「我现在在哪一级」；本模块回答
-//! 「下一级画在哪、怎么点进去、进去时相机怎么动」。前者是状态，后者是交互，
-//! 混进 [`crate::projection`]（那一模块的职责是**时间**投影，见其模块文档的「铁律」）
-//! 会让两个正交的关注点互相纠缠。
+//! ## 边界（不做什么）
+//! - **不维护钻取状态**——那是 [`crate::state::DrillState`]；本模块只读写它。
+//! - **不混进时间投影**——[`crate::world_projection`] 关心时间，本模块关心层级。
 //!
-//! ## 数据真相：落点来自 `MapNode::icons`
+//! ## 主要导出
+//! - `sync_drill_markers` — 当前 `DrillState` 变更时计算 marker 屏幕位置。
+//! - `drill_mouse_pick` — 命中测试，命中后派 `CommandId::DrillToNode`。
 //!
 //! [`wv_core::map::MapNode`] 有 `parent` / `children` 的 **ID 引用**（原则四），
 //! 也有 `extent`（尺寸），但**没有**「子图在父图里的位置」字段。
@@ -189,7 +193,7 @@ pub fn marker_local(extent: Option<Extent>, id: &Id) -> Vec2 {
 ///
 /// v0.2 §B.2 给的 14 / 12 是**屏幕像素**，而 gizmo 画在世界空间；默认 1 世界单位 =
 /// 1 像素（`TILE_BASE = 32`、`cell_size = 8` 时一格 = 8 像素），故用 `cell_size` 换算，
-/// 与 [`crate::projection::draw_brush_cursor`] 的既有约定一致。
+/// 与 [`crate::world_projection::draw_brush_cursor`] 的既有约定一致。
 pub fn half_from_px(px: f32, cell_size: f32) -> f32 {
     px * 0.5 * (cell_size / 8.0)
 }
@@ -594,7 +598,7 @@ pub fn ease_out_cubic(k: f32) -> f32 {
 
 /// 画当前层级的全部钻入标记（v0.2 §B.2）。
 ///
-/// 颜色取**界面令牌**而不是 [`crate::palette`] 的世界色：钻入是导航，属外壳语义
+/// 颜色取**界面令牌**而不是 [`crate::colors`] 的世界色：钻入是导航，属外壳语义
 /// （`STYLE_SWAPPABLE_ARCHITECTURE` §2 的 L2/L1 分界；界面色不随 Theme Pack 变）。
 pub fn draw_drill_markers(
     mut gizmos: Gizmos,
@@ -701,7 +705,7 @@ pub fn update_place_labels(
     // 文字色按视图模式走 palette：Google Default Map 用深灰标签；Text2d
     // 光晕描边需自定义 shader，后续再补白 halo。
     let label_color = match view.mode {
-        crate::state::ViewMode::GoogleMap => crate::palette_google::GOOGLE_LABEL_FILL,
+        crate::state::ViewMode::GoogleMap => crate::colors_google::GOOGLE_LABEL_FILL,
         _ => bevy::color::Color::WHITE,
     };
 
