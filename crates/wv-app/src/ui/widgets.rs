@@ -179,7 +179,11 @@ pub(crate) fn rect_stroke(
     painter.rect_stroke(rect, corner_radius, stroke, egui::StrokeKind::Inside);
 }
 
-/// 地形色块网格（§4.5：2 列 × 5 行，色块即地形本色）。
+/// 地形色块网格（§4.5：2 列 × 5 行，单行色块+名称，整块紧凑）。
+///
+/// 行高 22 px（曾 44 px），色块 14 px 居左、名称 11 px 居右同一行——
+/// 高度砍半但视觉仍能一眼区分当前选中（背景填 `active_bg` + 1.5 px
+/// `focus` 描边），网格外的所有状态提示交还给面板体。
 pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8) {
     egui::Grid::new("terrain_swatches")
         .num_columns(2)
@@ -189,8 +193,9 @@ pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8) {
                 let name = super::shell::TERRAIN_NAMES[k as usize];
                 let is_sel = *selected == k;
                 let cell_w = (ui.available_width() - space::XS) / 2.0;
+                let row_h = 22.0;
                 let (rect, resp) =
-                    ui.allocate_exact_size(egui::vec2(cell_w, 44.0), egui::Sense::click());
+                    ui.allocate_exact_size(egui::vec2(cell_w, row_h), egui::Sense::click());
                 let painter = ui.painter();
                 if is_sel {
                     painter.rect_filled(rect, radius::CONTROL, shell.active_bg());
@@ -203,21 +208,22 @@ pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8) {
                 } else if resp.hovered() {
                     painter.rect_filled(rect, radius::CONTROL, shell.hover_bg());
                 }
-                // 16px 色块。
+                // 14px 色块，垂直居中。
+                let sw_size = 14.0;
                 let sw = egui::Rect::from_min_size(
-                    egui::pos2(rect.min.x + space::SM, rect.min.y + space::SM),
-                    egui::vec2(16.0, 16.0),
+                    egui::pos2(rect.min.x + space::SM, rect.center().y - sw_size / 2.0),
+                    egui::vec2(sw_size, sw_size),
                 );
                 painter.rect_filled(sw, radius::BADGE, terrain_swatch(k));
-                // 10px 文字。
+                // 11px 名称，色块右侧，垂直居中。
                 painter.text(
                     egui::pos2(
-                        rect.min.x + space::SM,
-                        rect.min.y + space::SM + 16.0 + space::XS,
+                        rect.min.x + space::SM + sw_size + space::SM,
+                        rect.center().y,
                     ),
-                    egui::Align2::LEFT_TOP,
+                    egui::Align2::LEFT_CENTER,
                     name,
-                    proportional(10.0),
+                    proportional(11.0),
                     if is_sel { shell.t1() } else { shell.t2() },
                 );
                 if resp.clicked() {

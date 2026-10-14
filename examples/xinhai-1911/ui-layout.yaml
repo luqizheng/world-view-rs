@@ -3,7 +3,7 @@ panels:
     x: 12.0
     y: 239.1875
     width: 264.0
-    height: 560.40625
+    height: 220.0
     collapsed: false
     visible: true
   character:
@@ -11,6 +11,13 @@ panels:
     y: 560.0
     width: 280.0
     height: 260.0
+    collapsed: false
+    visible: false
+  compass:
+    x: 369.59375
+    y: 0.0
+    width: 342.90625
+    height: 1106.625
     collapsed: false
     visible: false
   event:
@@ -41,13 +48,6 @@ panels:
     height: 168.0
     collapsed: false
     visible: false
-  minimap:
-    x: 332.0
-    y: 56.0
-    width: 216.0
-    height: 336.0
-    collapsed: false
-    visible: true
   situation:
     x: 652.0
     y: 380.0
