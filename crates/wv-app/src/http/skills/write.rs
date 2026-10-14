@@ -143,9 +143,8 @@ pub async fn dispatch_write(
             })?;
             let parent = match input.parent.as_deref() {
                 Some(s) => Some(
-                    wv_core::Id::new(s).map_err(|e| {
-                        JsonRpcError::invalid_params(format!("parent 非法: {e}"))
-                    })?,
+                    wv_core::Id::new(s)
+                        .map_err(|e| JsonRpcError::invalid_params(format!("parent 非法: {e}")))?,
                 ),
                 None => None,
             };
@@ -164,10 +163,12 @@ pub async fn dispatch_write(
                 orientation: 0.0,
             };
             // v0.1 不带预填充栅格；地形由后续 skill 单独填。
-            let cmd: Box<dyn wv_edit::EditCommand> = Box::new(wv_edit::AddMapCommand::new(node, None));
-            let dirty = bridge.apply(cmd).await.map_err(|e| {
-                JsonRpcError::internal_error(format!("create_map apply 失败: {e}"))
-            })?;
+            let cmd: Box<dyn wv_edit::EditCommand> =
+                Box::new(wv_edit::AddMapCommand::new(node, None));
+            let dirty = bridge
+                .apply(cmd)
+                .await
+                .map_err(|e| JsonRpcError::internal_error(format!("create_map apply 失败: {e}")))?;
             Ok(json!({
                 "id": input.id,
                 "dirty_paths": dirty,
@@ -181,9 +182,8 @@ pub async fn dispatch_write(
             })?;
             let map = match input.map.as_deref() {
                 Some(s) => Some(
-                    wv_core::Id::new(s).map_err(|e| {
-                        JsonRpcError::invalid_params(format!("map 非法: {e}"))
-                    })?,
+                    wv_core::Id::new(s)
+                        .map_err(|e| JsonRpcError::invalid_params(format!("map 非法: {e}")))?,
                 ),
                 None => None,
             };
@@ -202,8 +202,7 @@ pub async fn dispatch_write(
                 w: input.w,
                 h: input.h,
             };
-            let cmd: Box<dyn wv_edit::EditCommand> =
-                Box::new(wv_edit::AddPlaceCommand::new(place));
+            let cmd: Box<dyn wv_edit::EditCommand> = Box::new(wv_edit::AddPlaceCommand::new(place));
             let dirty = bridge.apply(cmd).await.map_err(|e| {
                 JsonRpcError::internal_error(format!("create_place apply 失败: {e}"))
             })?;
@@ -215,9 +214,10 @@ pub async fn dispatch_write(
         "undo" => {
             let _input: UndoInput = serde_json::from_value(args)
                 .map_err(|e| JsonRpcError::invalid_params(format!("undo: {e}")))?;
-            let (did, dirty) = bridge.undo().await.map_err(|e| {
-                JsonRpcError::internal_error(format!("undo 失败: {e}"))
-            })?;
+            let (did, dirty) = bridge
+                .undo()
+                .await
+                .map_err(|e| JsonRpcError::internal_error(format!("undo 失败: {e}")))?;
             Ok(json!({
                 "did_undo": did,
                 "dirty_paths": dirty,
@@ -226,9 +226,10 @@ pub async fn dispatch_write(
         "save_project" => {
             let _input: SaveProjectInput = serde_json::from_value(args)
                 .map_err(|e| JsonRpcError::invalid_params(format!("save_project: {e}")))?;
-            let outcome = bridge.save().await.map_err(|e| {
-                JsonRpcError::internal_error(format!("save_project 失败: {e:?}"))
-            })?;
+            let outcome = bridge
+                .save()
+                .await
+                .map_err(|e| JsonRpcError::internal_error(format!("save_project 失败: {e:?}")))?;
             Ok(json!({
                 "saved": true,
                 "dirty_paths": outcome.dirty_paths,
@@ -267,7 +268,12 @@ mod tests {
     ) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let bridge = HttpBridge::new(tx);
-        (bridge, rx, wv_core::World::default(), wv_edit::History::default())
+        (
+            bridge,
+            rx,
+            wv_core::World::default(),
+            wv_edit::History::default(),
+        )
     }
 
     fn rt() -> tokio::runtime::Runtime {
@@ -302,21 +308,27 @@ mod tests {
         // 悬空时 AddMapCommand 应报 EditError（目标不存在），dispatch_write
         // 把它包成 INTERNAL_ERROR（-32603）。LLM 客户端看到 isError=true。
         let rt = rt();
-        let err = rt.block_on(async {
-            let (bridge, rx, world, history) = setup();
-            dispatch_write_with_drain(
-                bridge, rx, world, history,
-                "create_map",
-                json!({
-                    "id": "city_a",
-                    "name": "城市甲",
-                    "level": "city",
-                    "parent": "ghost_parent",
-                    "size_w": 1024.0,
-                    "size_h": 1024.0,
-                }),
-            ).await
-        }).unwrap_err();
+        let err = rt
+            .block_on(async {
+                let (bridge, rx, world, history) = setup();
+                dispatch_write_with_drain(
+                    bridge,
+                    rx,
+                    world,
+                    history,
+                    "create_map",
+                    json!({
+                        "id": "city_a",
+                        "name": "城市甲",
+                        "level": "city",
+                        "parent": "ghost_parent",
+                        "size_w": 1024.0,
+                        "size_h": 1024.0,
+                    }),
+                )
+                .await
+            })
+            .unwrap_err();
         assert_eq!(err.code, -32603, "EditError → INTERNAL_ERROR");
         assert!(err.message.contains("父地图"));
     }
@@ -324,36 +336,42 @@ mod tests {
     #[test]
     fn create_map_with_existing_parent_succeeds() {
         let rt = rt();
-        let v = rt.block_on(async {
-            use wv_core::map::{Extent, MapNode};
-            use wv_core::Id;
-            let (bridge, rx, mut world, history) = setup();
-            world.maps.push(MapNode {
-                id: Id::new_unchecked("world_main"),
-                name: "主世界".into(),
-                level: MapLevel::World,
-                parent: None,
-                children: vec![],
-                icons: vec![],
-                layers: vec![],
-                extent: Some(Extent::sized(4096.0, 4096.0)),
-                raster: None,
-                geographic_source: None,
-                orientation: 0.0,
-            });
-            dispatch_write_with_drain(
-                bridge, rx, world, history,
-                "create_map",
-                json!({
-                    "id": "city_a",
-                    "name": "城市甲",
-                    "level": "city",
-                    "parent": "world_main",
-                    "size_w": 1024.0,
-                    "size_h": 1024.0,
-                }),
-            ).await
-        }).unwrap();
+        let v = rt
+            .block_on(async {
+                use wv_core::map::{Extent, MapNode};
+                use wv_core::Id;
+                let (bridge, rx, mut world, history) = setup();
+                world.maps.push(MapNode {
+                    id: Id::new_unchecked("world_main"),
+                    name: "主世界".into(),
+                    level: MapLevel::World,
+                    parent: None,
+                    children: vec![],
+                    icons: vec![],
+                    layers: vec![],
+                    extent: Some(Extent::sized(4096.0, 4096.0)),
+                    raster: None,
+                    geographic_source: None,
+                    orientation: 0.0,
+                });
+                dispatch_write_with_drain(
+                    bridge,
+                    rx,
+                    world,
+                    history,
+                    "create_map",
+                    json!({
+                        "id": "city_a",
+                        "name": "城市甲",
+                        "level": "city",
+                        "parent": "world_main",
+                        "size_w": 1024.0,
+                        "size_h": 1024.0,
+                    }),
+                )
+                .await
+            })
+            .unwrap();
         assert_eq!(v["id"], "city_a");
     }
 
@@ -394,18 +412,24 @@ mod tests {
     #[test]
     fn create_place_round_trip() {
         let rt = rt();
-        let v = rt.block_on(async {
-            let (bridge, rx, world, history) = setup();
-            dispatch_write_with_drain(
-                bridge, rx, world, history,
-                "create_place",
-                json!({
-                    "id": "qingyun",
-                    "name": "青云城",
-                    "x": 100.0, "y": 200.0,
-                }),
-            ).await
-        }).unwrap();
+        let v = rt
+            .block_on(async {
+                let (bridge, rx, world, history) = setup();
+                dispatch_write_with_drain(
+                    bridge,
+                    rx,
+                    world,
+                    history,
+                    "create_place",
+                    json!({
+                        "id": "qingyun",
+                        "name": "青云城",
+                        "x": 100.0, "y": 200.0,
+                    }),
+                )
+                .await
+            })
+            .unwrap();
         assert_eq!(v["id"], "qingyun");
     }
 
@@ -461,7 +485,10 @@ mod tests {
         assert_eq!(v.0["id"], "qingyun");
         assert_eq!(v.1["did_undo"], true);
         assert!(
-            v.1["dirty_paths"].as_array().unwrap().contains(&json!("distances/places")),
+            v.1["dirty_paths"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("distances/places")),
             "应回报 commit 时的脏路径"
         );
     }
@@ -469,21 +496,29 @@ mod tests {
     #[test]
     fn undo_with_empty_history_returns_did_undo_false() {
         let rt = rt();
-        let v = rt.block_on(async {
-            let (bridge, rx, world, history) = setup();
-            dispatch_write_with_drain(bridge, rx, world, history, "undo", json!({})).await
-        }).unwrap();
+        let v = rt
+            .block_on(async {
+                let (bridge, rx, world, history) = setup();
+                dispatch_write_with_drain(bridge, rx, world, history, "undo", json!({})).await
+            })
+            .unwrap();
         assert_eq!(v["did_undo"], false);
     }
 
     #[test]
     fn save_project_without_open_project_is_internal_error() {
         let rt = rt();
-        let err = rt.block_on(async {
-            let (bridge, rx, world, history) = setup();
-            dispatch_write_with_drain(bridge, rx, world, history, "save_project", json!({})).await
-        }).unwrap_err();
-        assert_eq!(err.code, -32603, "无 project_dir → INTERNAL_ERROR（V1 守约）");
+        let err = rt
+            .block_on(async {
+                let (bridge, rx, world, history) = setup();
+                dispatch_write_with_drain(bridge, rx, world, history, "save_project", json!({}))
+                    .await
+            })
+            .unwrap_err();
+        assert_eq!(
+            err.code, -32603,
+            "无 project_dir → INTERNAL_ERROR（V1 守约）"
+        );
     }
 
     #[test]

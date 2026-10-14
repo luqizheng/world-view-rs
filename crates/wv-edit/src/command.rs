@@ -788,12 +788,7 @@ impl EditCommand for AddPlaceCommand {
         format!("新增地点「{}」", self.place.name)
     }
     fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
-        if world
-            .distances
-            .places
-            .iter()
-            .any(|p| p.id == self.place.id)
-        {
+        if world.distances.places.iter().any(|p| p.id == self.place.id) {
             return Err(EditError::Precondition(format!(
                 "地点 `{}` 已存在",
                 self.place.id
@@ -810,6 +805,9 @@ impl EditCommand for AddPlaceCommand {
             .position(|p| p.id == self.place.id)
             .ok_or_else(|| EditError::TargetMissing(format!("Place {}", self.place.id)))?;
         world.distances.places.remove(pos);
+        Ok(())
+    }
+}
 // 建筑编辑命令（ADR-0016 §6 落地项，2026-10-14）
 // ---------------------------------------------------------------------------
 

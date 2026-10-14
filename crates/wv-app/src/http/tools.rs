@@ -40,17 +40,17 @@ pub fn all_tools() -> Vec<ToolDef> {
 /// - 名字不存在 → `method_not_found`（`-32601`）
 /// - 输入参数校验失败 → 由各 handler 自行转 `invalid_params`（`-32602`）
 /// - apply 抛 `EditError` → `internal_error`（`-32603`）
-pub async fn dispatch(
-    bridge: &HttpBridge,
-    name: &str,
-    args: Value,
-) -> Result<Value, JsonRpcError> {
+pub async fn dispatch(bridge: &HttpBridge, name: &str, args: Value) -> Result<Value, JsonRpcError> {
     // 先查读类，再查写类——避免一个名字同时出现在两边（v0.1 不会，但
     // 防御性检查比运行时 panic 友好）。
-    let read_names: Vec<&'static str> =
-        skills::read_tool_schemas().into_iter().map(|(n, _, _)| n).collect();
-    let write_names: Vec<&'static str> =
-        skills::write_tool_schemas().into_iter().map(|(n, _, _)| n).collect();
+    let read_names: Vec<&'static str> = skills::read_tool_schemas()
+        .into_iter()
+        .map(|(n, _, _)| n)
+        .collect();
+    let write_names: Vec<&'static str> = skills::write_tool_schemas()
+        .into_iter()
+        .map(|(n, _, _)| n)
+        .collect();
     if read_names.contains(&name) {
         return skills::dispatch_read(bridge, name, args).await;
     }

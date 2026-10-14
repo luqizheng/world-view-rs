@@ -144,10 +144,7 @@ impl HttpBridge {
     }
 
     /// 同 [`Self::apply_send`]，read 路径的同步入队 + receiver 形态。
-    pub fn read_send(
-        &self,
-        req: ReadRequest,
-    ) -> tokio::sync::oneshot::Receiver<ReadReply> {
+    pub fn read_send(&self, req: ReadRequest) -> tokio::sync::oneshot::Receiver<ReadReply> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let _ = self.tx.send(HttpMessage::Read(req, reply_tx));
         reply_rx
@@ -162,10 +159,7 @@ impl HttpBridge {
     ///
     /// 异步路径走 [`Self::apply_send`]（同步入队）再 `await` 拿到的
     /// `oneshot::Receiver`——见 [`Self::apply`] 的实现。
-    pub async fn apply(
-        &self,
-        cmd: Box<dyn EditCommand>,
-    ) -> EditResult<Vec<String>> {
+    pub async fn apply(&self, cmd: Box<dyn EditCommand>) -> EditResult<Vec<String>> {
         self.apply_send(cmd)
             .await
             .unwrap_or_else(|_| Err(wv_edit::EditError::Precondition("reply dropped".into())))
@@ -192,9 +186,7 @@ impl HttpBridge {
     }
 
     /// 同 [`Self::apply_send`]，undo 路径的同步入队 + receiver 形态。
-    pub fn undo_send(
-        &self,
-    ) -> tokio::sync::oneshot::Receiver<EditResult<(bool, Vec<String>)>> {
+    pub fn undo_send(&self) -> tokio::sync::oneshot::Receiver<EditResult<(bool, Vec<String>)>> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let _ = self.tx.send(HttpMessage::Undo(reply_tx));
         reply_rx
@@ -205,18 +197,13 @@ impl HttpBridge {
         self.save_send().await.unwrap_or_else(|_| {
             Err(wv_io::IoError::ReadFile {
                 path: "HTTP bridge".into(),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::BrokenPipe,
-                    "reply dropped",
-                ),
+                source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, "reply dropped"),
             })
         })
     }
 
     /// 同 [`Self::apply_send`]，save 路径的同步入队 + receiver 形态。
-    pub fn save_send(
-        &self,
-    ) -> tokio::sync::oneshot::Receiver<Result<SaveOutcome, wv_io::IoError>> {
+    pub fn save_send(&self) -> tokio::sync::oneshot::Receiver<Result<SaveOutcome, wv_io::IoError>> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let _ = self.tx.send(HttpMessage::Save(reply_tx));
         reply_rx
@@ -288,11 +275,7 @@ fn handle_message(
 fn handle_read(req: &ReadRequest, world: &World) -> ReadReply {
     match req {
         ReadRequest::ListMaps => {
-            let summaries: Vec<MapSummary> = world
-                .maps
-                .iter()
-                .map(map_to_summary)
-                .collect();
+            let summaries: Vec<MapSummary> = world.maps.iter().map(map_to_summary).collect();
             ReadReply::MapSummaries(summaries)
         }
         ReadRequest::GetMap { id } => {
@@ -304,21 +287,18 @@ fn handle_read(req: &ReadRequest, world: &World) -> ReadReply {
             filter,
             cursor,
             limit,
-        } => {
-            handle_list_places(world, map_id.as_ref(), filter.as_ref(), cursor.as_deref(), *limit)
-        }
+        } => handle_list_places(
+            world,
+            map_id.as_ref(),
+            filter.as_ref(),
+            cursor.as_deref(),
+            *limit,
+        ),
         ReadRequest::GetPlace { id } => {
-            let place = world
-                .distances
-                .places
-                .iter()
-                .find(|p| &p.id == id)
-                .cloned();
+            let place = world.distances.places.iter().find(|p| &p.id == id).cloned();
             ReadReply::Place(place)
         }
-        ReadRequest::GetStateAtTime { map_id, day } => {
-            handle_state_at_time(world, map_id, *day)
-        }
+        ReadRequest::GetStateAtTime { map_id, day } => handle_state_at_time(world, map_id, *day),
     }
 }
 
@@ -402,11 +382,7 @@ fn place_to_summary(p: &wv_core::distance::Place) -> PlaceSummary {
     }
 }
 
-fn handle_state_at_time(
-    world: &World,
-    map_id: &wv_core::Id,
-    day: i64,
-) -> ReadReply {
+fn handle_state_at_time(world: &World, map_id: &wv_core::Id, day: i64) -> ReadReply {
     // v0.1 简化：返回该 map 下的所有 character / event / place 摘要，
     // **不**做时间区间投影。`TimelineQuery::at` 要求预构造
     // `Vec<(TimeSpan, T)>`（参考 `wv-core::time::TimelineQuery::at`），
@@ -432,10 +408,7 @@ fn handle_state_at_time(
     ReadReply::StateAtTime(payload)
 }
 
-fn handle_save(
-    world: &World,
-    save_dir: Option<&Path>,
-) -> Result<SaveOutcome, wv_io::IoError> {
+fn handle_save(world: &World, save_dir: Option<&Path>) -> Result<SaveOutcome, wv_io::IoError> {
     let Some(dir) = save_dir else {
         return Err(wv_io::IoError::ReadFile {
             path: "<unsaved>".into(),
@@ -521,9 +494,12 @@ mod tests {
     #[test]
     fn get_map_missing_returns_none_not_panic() {
         let w = world_with_two_maps();
-        let reply = handle_read(&ReadRequest::GetMap {
-            id: Id::new_unchecked("ghost_map"),
-        }, &w);
+        let reply = handle_read(
+            &ReadRequest::GetMap {
+                id: Id::new_unchecked("ghost_map"),
+            },
+            &w,
+        );
         match reply {
             ReadReply::MapNode(None) => {}
             _ => panic!("应为 MapNode(None)"),
@@ -537,13 +513,19 @@ mod tests {
             id: Id::new_unchecked("qingyun"),
             name: "青云城".into(),
             map: None,
-            x: None, y: None, w: None, h: None,
+            x: None,
+            y: None,
+            w: None,
+            h: None,
         });
         w.distances.places.push(wv_core::distance::Place {
             id: Id::new_unchecked("wuhan"),
             name: "武汉".into(),
             map: None,
-            x: None, y: None, w: None, h: None,
+            x: None,
+            y: None,
+            w: None,
+            h: None,
         });
         let f = Filter::parse("name ~ '青'").unwrap();
         let reply = handle_read(
@@ -573,7 +555,10 @@ mod tests {
                 id: Id::new_unchecked(format!("p_{i:03}")),
                 name: format!("Place {i}"),
                 map: None,
-                x: None, y: None, w: None, h: None,
+                x: None,
+                y: None,
+                w: None,
+                h: None,
             });
         }
         let reply = handle_read(
@@ -581,7 +566,7 @@ mod tests {
                 map_id: None,
                 filter: None,
                 cursor: None,
-                limit: 200,  // 请求 200 → 硬顶 100
+                limit: 200, // 请求 200 → 硬顶 100
             },
             &w,
         );
@@ -602,7 +587,10 @@ mod tests {
                 id: Id::new_unchecked(format!("p_{i:03}")),
                 name: format!("Place {i}"),
                 map: None,
-                x: None, y: None, w: None, h: None,
+                x: None,
+                y: None,
+                w: None,
+                h: None,
             });
         }
         // 第一页
@@ -652,7 +640,10 @@ mod tests {
             id: Id::new_unchecked("qingyun"),
             name: "青云城".into(),
             map: None,
-            x: None, y: None, w: None, h: None,
+            x: None,
+            y: None,
+            w: None,
+            h: None,
         };
         // 同步入队（apply_send 不 poll future，消息直接进 mpsc）。
         let cmd: Box<dyn EditCommand> = Box::new(wv_edit::AddPlaceCommand::new(place));
@@ -680,7 +671,10 @@ mod tests {
             id: Id::new_unchecked("qingyun"),
             name: "青云城".into(),
             map: None,
-            x: None, y: None, w: None, h: None,
+            x: None,
+            y: None,
+            w: None,
+            h: None,
         };
         let cmd: Box<dyn EditCommand> = Box::new(wv_edit::AddPlaceCommand::new(place));
         let apply_reply = bridge.apply_send(cmd);
@@ -695,7 +689,10 @@ mod tests {
         let result = rt.block_on(undo_reply).unwrap();
         let (did_undo, dirty) = result.unwrap();
         assert!(did_undo);
-        assert!(dirty.contains(&"distances/places".to_string()), "撤销后应回报 commit 时的脏路径");
+        assert!(
+            dirty.contains(&"distances/places".to_string()),
+            "撤销后应回报 commit 时的脏路径"
+        );
         assert_eq!(world.distances.places.len(), 0);
     }
 

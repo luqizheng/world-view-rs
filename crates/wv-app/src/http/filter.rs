@@ -62,7 +62,9 @@ pub enum Op {
 pub enum FilterError {
     #[error("filter 不能为空字符串")]
     Empty,
-    #[error("filter 语法错：{0}；当前支持 `field = 'value'` / `field ~ 'value'` / `expr AND expr`")]
+    #[error(
+        "filter 语法错：{0}；当前支持 `field = 'value'` / `field ~ 'value'` / `expr AND expr`"
+    )]
     Syntax(String),
     #[error("未闭合的引号")]
     UnclosedQuote,
@@ -129,10 +131,7 @@ fn parse_predicate(s: &str) -> Result<Predicate, FilterError> {
     // 形如 `field = 'value'` 或 `field ~ 'value'`。先按第一个 ASCII 空白
     // 拆字段名与剩余，再在剩余里找运算符与字面值。
     let mut chars = s.chars();
-    let field: String = chars
-        .by_ref()
-        .take_while(|c| !c.is_whitespace())
-        .collect();
+    let field: String = chars.by_ref().take_while(|c| !c.is_whitespace()).collect();
     if field.is_empty() {
         return Err(FilterError::Syntax(format!("缺少字段名：`{s}`")));
     }
@@ -150,15 +149,9 @@ fn parse_predicate(s: &str) -> Result<Predicate, FilterError> {
     let rest = rest
         .strip_prefix('\'')
         .ok_or_else(|| FilterError::Syntax(format!("字面值需用单引号包裹：`{s}`")))?;
-    let end = rest
-        .find('\'')
-        .ok_or(FilterError::UnclosedQuote)?;
+    let end = rest.find('\'').ok_or(FilterError::UnclosedQuote)?;
     let literal = rest[..end].to_owned();
-    Ok(Predicate {
-        field,
-        op,
-        literal,
-    })
+    Ok(Predicate { field, op, literal })
 }
 
 #[cfg(test)]

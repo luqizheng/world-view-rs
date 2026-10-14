@@ -48,6 +48,7 @@ pub use model::character;
 pub use model::event;
 pub use model::faction;
 pub use model::relation;
+pub use source::building;
 pub use source::geographic_source;
 pub use source::measurement;
 pub use source::overture_id;
@@ -69,6 +70,7 @@ pub use map::unit::Unit;
 pub use model::character::Character;
 pub use model::event::{Event, EventLocation};
 pub use model::faction::{factions_at, Faction};
+pub use source::building::{Building, BuildingLayer};
 pub use source::geographic_source::{GeographicSourceV1, LatLonBbox};
 pub use source::measurement::{Measurement, MeasurementKind, MeasurementOverlay};
 pub use source::overture_id::{OvertureId, OvertureIdError};
@@ -187,6 +189,11 @@ pub struct World {
     /// `wv-edit` 命令链，不走「区间不覆盖」。作者要清就清、要回退就 Undo
     /// （`AGENTS.md §7.5V2`）。不存「当前图」这类视图状态（P7）。
     pub measurements: BTreeMap<Id, source::measurement::MeasurementOverlay>,
+
+    /// 建筑图层运行副本（ADR-0016 §6 落地项）：与 [`World::streets`] 完全同构
+    /// ——磁盘真源是各 `Layer.source` 指向的 YAML 文件，`World` 只持有可改、
+    /// 可撤销的工作副本（2026-10-11 裁定）。2.5D 建筑挤出的数据源。
+    pub buildings: BTreeMap<Id, source::building::BuildingLayer>,
 }
 
 impl World {
@@ -218,6 +225,19 @@ impl World {
         self.streets.insert(layer, doc)
     }
 
+    /// 取某个建筑图层的文档（未加载/未声明则 `None`）。
+    pub fn building_of(&self, layer: &Id) -> Option<&source::building::BuildingLayer> {
+        self.buildings.get(layer)
+    }
+
+    /// 写入某个建筑图层的文档，返回被替换掉的旧值（首次写入时为 `None`）。
+    pub fn set_buildings(
+        &mut self,
+        layer: Id,
+        doc: source::building::BuildingLayer,
+    ) -> Option<source::building::BuildingLayer> {
+        self.buildings.insert(layer, doc)
+    }
     /// 取某张图的测量叠加（无测量时 `None`）。
     pub fn measurement_of(&self, map: &Id) -> Option<&source::measurement::MeasurementOverlay> {
         self.measurements.get(map)

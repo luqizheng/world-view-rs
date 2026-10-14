@@ -155,10 +155,15 @@ mod tests {
     use serde_json::json;
 
     /// 构造「桥 + 一个空 World + 空 History」的三件套，handler 测试专用。
-    fn app_state() -> (Arc<AppState>, tokio::sync::mpsc::UnboundedReceiver<crate::http::bridge::HttpMessage>) {
+    fn app_state() -> (
+        Arc<AppState>,
+        tokio::sync::mpsc::UnboundedReceiver<crate::http::bridge::HttpMessage>,
+    ) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let bridge = HttpBridge::new(tx);
-        let state = Arc::new(AppState { bridge: bridge.clone() });
+        let state = Arc::new(AppState {
+            bridge: bridge.clone(),
+        });
         (state, rx)
     }
 
@@ -222,10 +227,7 @@ mod tests {
         let tools = resp["result"]["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 9, "应暴露 9 个 skill");
 
-        let names: Vec<&str> = tools
-            .iter()
-            .map(|t| t["name"].as_str().unwrap())
-            .collect();
+        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert_eq!(
             names,
             vec![
@@ -305,7 +307,10 @@ mod tests {
             .as_str()
             .expect("content[0].text 必为字符串");
         let payload: Value = serde_json::from_str(text).expect("text 必为合法 JSON");
-        assert!(payload.is_array(), "list_maps 应返 Vec<MapSummary>；raw = {payload}");
+        assert!(
+            payload.is_array(),
+            "list_maps 应返 Vec<MapSummary>；raw = {payload}"
+        );
 
         drain.abort();
     }
@@ -341,7 +346,10 @@ mod tests {
             }),
         ));
         let raw = serde_json::to_string(&resp).unwrap();
-        assert!(raw.contains("\"code\":-32601"), "未知方法应得 -32601：{raw}");
+        assert!(
+            raw.contains("\"code\":-32601"),
+            "未知方法应得 -32601：{raw}"
+        );
     }
 
     #[test]

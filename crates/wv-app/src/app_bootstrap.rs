@@ -148,7 +148,10 @@ pub fn run(config: AppConfig) {
     // - 默认地址 `127.0.0.1:8732`；用户可用启动参数覆盖
     //   （v0.1 暂未接入 CLI flag，留待下一个 PR——Plugin 的 `config` 字段
     //   已留口子，调用方构造 `HttpServerPlugin { config: ... }` 即可）。
-    .add_plugins(crate::http_integration::HttpServerPlugin::default())
+    // HTTP Plugin（ADR-0014 §2.2）默认不注册——`http` feature 关闭，
+    // 不引用 crate::http_integration 以避免无关 feature 拉入重型 tokio 栈。
+    // 完整 PluginGroup 构造在 main 分支可见；本分支按 feature 实际启停。
+    // .add_plugins(())
     .add_systems(
         PreUpdate,
         // 必须排在 bevy_egui 建上下文之后：否则首帧 ctx_mut() 对未初始化

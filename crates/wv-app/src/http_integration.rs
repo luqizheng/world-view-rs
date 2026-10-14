@@ -148,7 +148,7 @@ mod tests {
     use wv_core::map::{Extent, MapLevel, MapNode};
     use wv_core::Id;
 
-/// 直接构造 drain 路径，避免起 Plugin 整盘——单元测试用更稳。
+    /// 直接构造 drain 路径，避免起 Plugin 整盘——单元测试用更稳。
     #[test]
     fn drain_applies_apply_message_through_resource_path() {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();

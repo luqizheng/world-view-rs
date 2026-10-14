@@ -163,9 +163,8 @@ pub async fn dispatch_read(
         "get_map" => {
             let input: GetMapInput = serde_json::from_value(args)
                 .map_err(|e| JsonRpcError::invalid_params(format!("get_map: {e}")))?;
-            let id = wv_core::Id::new(&input.id).map_err(|e| {
-                JsonRpcError::invalid_params(format!("get_map.id 非法: {e}"))
-            })?;
+            let id = wv_core::Id::new(&input.id)
+                .map_err(|e| JsonRpcError::invalid_params(format!("get_map.id 非法: {e}")))?;
             let reply = bridge.read(ReadRequest::GetMap { id }).await;
             Ok(match reply {
                 ReadReply::MapNode(Some(node)) => serde_json::to_value(&node)
@@ -187,12 +186,13 @@ pub async fn dispatch_read(
                 ),
                 None => None,
             };
-            let filter = match input.filter {
-                Some(s) if !s.is_empty() => Some(ParsedFilter::parse(&s).map_err(|e| {
-                    JsonRpcError::invalid_params(format!("filter 解析失败: {e}"))
-                })?),
-                _ => None,
-            };
+            let filter =
+                match input.filter {
+                    Some(s) if !s.is_empty() => Some(ParsedFilter::parse(&s).map_err(|e| {
+                        JsonRpcError::invalid_params(format!("filter 解析失败: {e}"))
+                    })?),
+                    _ => None,
+                };
             if input.limit > 100 {
                 return Err(JsonRpcError::invalid_params(
                     "limit 上限 100；超出会触发分页，用 cursor 续取",
@@ -217,9 +217,8 @@ pub async fn dispatch_read(
         "get_place" => {
             let input: GetPlaceInput = serde_json::from_value(args)
                 .map_err(|e| JsonRpcError::invalid_params(format!("get_place: {e}")))?;
-            let id = wv_core::Id::new(&input.id).map_err(|e| {
-                JsonRpcError::invalid_params(format!("get_place.id 非法: {e}"))
-            })?;
+            let id = wv_core::Id::new(&input.id)
+                .map_err(|e| JsonRpcError::invalid_params(format!("get_place.id 非法: {e}")))?;
             let reply = bridge.read(ReadRequest::GetPlace { id }).await;
             Ok(match reply {
                 ReadReply::Place(Some(place)) => serde_json::to_value(&place)
@@ -233,12 +232,9 @@ pub async fn dispatch_read(
         }
         "get_state_at_time" => {
             let input: GetStateAtTimeInput = serde_json::from_value(args)
-                .map_err(|e| {
-                    JsonRpcError::invalid_params(format!("get_state_at_time: {e}"))
-                })?;
-            let map_id = wv_core::Id::new(&input.map_id).map_err(|e| {
-                JsonRpcError::invalid_params(format!("map_id 非法: {e}"))
-            })?;
+                .map_err(|e| JsonRpcError::invalid_params(format!("get_state_at_time: {e}")))?;
+            let map_id = wv_core::Id::new(&input.map_id)
+                .map_err(|e| JsonRpcError::invalid_params(format!("map_id 非法: {e}")))?;
             let reply = bridge
                 .read(ReadRequest::GetStateAtTime {
                     map_id,
@@ -303,7 +299,10 @@ mod tests {
             id: Id::new_unchecked("qingyun"),
             name: "青云城".into(),
             map: Some(Id::new_unchecked("world_main")),
-            x: Some(100.0), y: Some(200.0), w: None, h: None,
+            x: Some(100.0),
+            y: Some(200.0),
+            w: None,
+            h: None,
         });
         (bridge, rx, world, wv_edit::History::default())
     }
@@ -339,11 +338,12 @@ mod tests {
     #[test]
     fn list_maps_round_trip() {
         let rt = rt();
-        let v = rt.block_on(async {
-            let (bridge, rx, world, history) = setup();
-            dispatch_read_with_drain(bridge, rx, world, history, "list_maps", json!({})).await
-        })
-        .unwrap();
+        let v = rt
+            .block_on(async {
+                let (bridge, rx, world, history) = setup();
+                dispatch_read_with_drain(bridge, rx, world, history, "list_maps", json!({})).await
+            })
+            .unwrap();
         let arr = v.as_array().unwrap();
         assert_eq!(arr.len(), 2);
         assert_eq!(arr[0]["id"], "world_main");
@@ -352,10 +352,20 @@ mod tests {
     #[test]
     fn get_map_round_trip_existing() {
         let rt = rt();
-        let v = rt.block_on(async {
-            let (bridge, rx, world, history) = setup();
-            dispatch_read_with_drain(bridge, rx, world, history, "get_map", json!({"id": "city_a"})).await
-        }).unwrap();
+        let v = rt
+            .block_on(async {
+                let (bridge, rx, world, history) = setup();
+                dispatch_read_with_drain(
+                    bridge,
+                    rx,
+                    world,
+                    history,
+                    "get_map",
+                    json!({"id": "city_a"}),
+                )
+                .await
+            })
+            .unwrap();
         assert_eq!(v["id"], "city_a");
         assert_eq!(v["level"], "city");
     }
@@ -363,24 +373,40 @@ mod tests {
     #[test]
     fn get_map_missing_returns_error_payload_not_none() {
         let rt = rt();
-        let v = rt.block_on(async {
-            let (bridge, rx, world, history) = setup();
-            dispatch_read_with_drain(bridge, rx, world, history, "get_map", json!({"id": "ghost"})).await
-        }).unwrap();
+        let v = rt
+            .block_on(async {
+                let (bridge, rx, world, history) = setup();
+                dispatch_read_with_drain(
+                    bridge,
+                    rx,
+                    world,
+                    history,
+                    "get_map",
+                    json!({"id": "ghost"}),
+                )
+                .await
+            })
+            .unwrap();
         assert_eq!(v["error"], "map_not_found");
     }
 
     #[test]
     fn list_places_with_filter_and_limit() {
         let rt = rt();
-        let v = rt.block_on(async {
-            let (bridge, rx, world, history) = setup();
-            dispatch_read_with_drain(
-                bridge, rx, world, history,
-                "list_places",
-                json!({"filter": "name ~ '青'", "limit": 50}),
-            ).await
-        }).unwrap();
+        let v = rt
+            .block_on(async {
+                let (bridge, rx, world, history) = setup();
+                dispatch_read_with_drain(
+                    bridge,
+                    rx,
+                    world,
+                    history,
+                    "list_places",
+                    json!({"filter": "name ~ '青'", "limit": 50}),
+                )
+                .await
+            })
+            .unwrap();
         assert_eq!(v["items"].as_array().unwrap().len(), 1);
         assert_eq!(v["items"][0]["id"], "qingyun");
     }
@@ -398,10 +424,20 @@ mod tests {
     #[test]
     fn get_place_round_trip() {
         let rt = rt();
-        let v = rt.block_on(async {
-            let (bridge, rx, world, history) = setup();
-            dispatch_read_with_drain(bridge, rx, world, history, "get_place", json!({"id": "qingyun"})).await
-        }).unwrap();
+        let v = rt
+            .block_on(async {
+                let (bridge, rx, world, history) = setup();
+                dispatch_read_with_drain(
+                    bridge,
+                    rx,
+                    world,
+                    history,
+                    "get_place",
+                    json!({"id": "qingyun"}),
+                )
+                .await
+            })
+            .unwrap();
         assert_eq!(v["id"], "qingyun");
         assert_eq!(v["name"], "青云城");
         assert_eq!(v["x"], 100.0);
@@ -411,14 +447,20 @@ mod tests {
     #[test]
     fn get_state_at_time_round_trip_with_p7_query() {
         let rt = rt();
-        let v = rt.block_on(async {
-            let (bridge, rx, world, history) = setup();
-            dispatch_read_with_drain(
-                bridge, rx, world, history,
-                "get_state_at_time",
-                json!({"map_id": "world_main", "day": 1}),
-            ).await
-        }).unwrap();
+        let v = rt
+            .block_on(async {
+                let (bridge, rx, world, history) = setup();
+                dispatch_read_with_drain(
+                    bridge,
+                    rx,
+                    world,
+                    history,
+                    "get_state_at_time",
+                    json!({"map_id": "world_main", "day": 1}),
+                )
+                .await
+            })
+            .unwrap();
         assert_eq!(v["map_id"], "world_main");
         assert_eq!(v["day"], 1);
         assert!(v["characters"].is_array());
