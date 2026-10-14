@@ -44,7 +44,9 @@
 use bevy::prelude::*;
 
 use crate::render::layer_frame::LayerFrame;
-use crate::state::{lod_tier, DrillState, GridConfig, LodTier, PlaybackState, ViewState, WorldProjection};
+use crate::state::{
+    lod_tier, DrillState, GridConfig, LodTier, PlaybackState, ViewState, WorldProjection,
+};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::UiTheme;
 use wv_core::id::Id;
@@ -91,6 +93,9 @@ pub fn register(app: &mut App) {
                 draw_drill_markers,
                 // 地名标注在标记之后对齐（读同一份钻取状态，画在标记上方）。
                 update_place_labels,
+                // 势力 / 事件标签（ADR-0016 §2.2）——与地名标签独立，Label 渲染组。
+                update_faction_labels,
+                update_event_labels,
             )
                 .chain(),
         );
@@ -651,6 +656,18 @@ const LABEL_PX: f32 = 12.0;
 /// 地名标注层：高于势力面（0.3）与 POI（0.22），低于笔刷光标（0.9）。
 const LABEL_Z: f32 = 0.4;
 
+/// 势力标签标记组件（ADR-0016 §2.2）。
+///
+/// 与 `PlaceLabel` 同型：对象池模式，每帧更新位置/文案/可见性。
+#[derive(Component)]
+pub struct FactionLabel;
+
+/// 事件标签标记组件（ADR-0016 §2.2）。
+///
+/// 与 `PlaceLabel` 同型：对象池模式，每帧更新位置/文案/可见性。
+#[derive(Component)]
+pub struct EventLabel;
+
 /// 当前 LOD 下是否保留地名标注。
 ///
 /// Google 式地图在国家级视野只给“城市级”地点留标签；渡口、关隘等点状小地点
@@ -814,6 +831,292 @@ pub fn update_place_labels(
         }
     }
     // 池里多出来的实体隐藏（保留复用，不 despawn）。
+    for (_, mut _tf, mut _text, mut _style, mut _color, mut vis) in iter {
+        *vis = Visibility::Hidden;
+    }
+}
+
+/// 更新当前层级的势力标签池（ADR-0016 §2.2 · EntityKind::Faction）。
+///
+/// 数据来源：`World::factions_at(map, day)`——已按时间过滤（GeometrySpan.span）。
+/// 位置：多边形质心（简单平均，够用且稳定）。
+/// 图层归属：Label 渲染组（ADR-0016 Q1）——与 Place 标签独立。
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn update_faction_labels(
+    mut commands: Commands,
+    projection: Res<WorldProjection>,
+    drill: Res<DrillState>,
+    grid: Res<GridConfig>,
+    view: Res<ViewState>,
+    layers: Res<LayerFrame>,
+    playback: Res<PlaybackState>,
+    fonts: Res<crate::theme::fonts::LoadedFonts>,
+    camera: Query<&Transform, With<Camera2d>>,
+    mut q: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut Text2d,
+            &mut TextFont,
+            &mut TextColor,
+            &mut Visibility,
+        ),
+        (With<FactionLabel>, Without<Camera2d>),
+    >,
+    children_q: Query<&bevy::ecs::hierarchy::Children, With<FactionLabel>>,
+    mut halo_q: Query<
+        (&mut Transform, &mut Text2d, &mut TextFont, &mut TextColor),
+        (
+            With<crate::render::label_halo::LabelHalo>,
+            Without<bevy::prelude::Camera2d>,
+            Without<FactionLabel>,
+        ),
+    >,
+) {
+    let tier = lod_tier(view.scale);
+    let t = playback.current_day;
+    let mut wanted: Vec<(Vec2, &str)> = Vec::new();
+    // Label 层可见性（ADR-0016 Q1）
+    if layers.label.visible {
+        if let Some(current) = drill.current_node(&projection.world) {
+            let map_span = current.time_span.as_ref();
+            if wv_core::label_visible_at(map_span, None, t) {
+                // factions_at 已按 GeometrySpan.span 过滤（时间维度），
+                // 此处只需过滤图级窗口。
+                let factions = wv_core::factions_at(&projection.world, &current.id, t);
+                for (faction, coords) in factions {
+                    // 计算多边形质心（简单平均）。
+                    if coords.len() >= 2 {
+                        let n = (coords.len() / 2) as f32;
+                        let (mut sx, mut sy) = (0.0_f32, 0.0_f32);
+                        for pair in coords.chunks(2) {
+                            sx += pair[0];
+                            sy += pair[1];
+                        }
+                        let center = Vec2::new(sx / n, sy / n);
+                        wanted.push((grid.map_to_view(center), faction.name.as_str()));
+                    }
+                }
+            }
+        }
+    }
+
+    let font_size = LABEL_PX * view.scale.max(0.05);
+    let label_offset = font_size * 0.9;
+    let label_z = LABEL_Z + layers.label.z_offset;
+    let cam_rot = camera
+        .single()
+        .map(|t| t.rotation)
+        .unwrap_or(Quat::IDENTITY);
+    let up_world = crate::render::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
+    let label_rot = cam_rot.inverse();
+    for (pos, _) in &mut wanted {
+        *pos += up_world;
+    }
+    let cjk = fonts.cjk_font.clone();
+    let label_color = match view.mode {
+        _ => crate::theme::colors_google::GOOGLE_CONTROL_TEXT,
+    }
+    .with_alpha(layers.label.opacity);
+    let halo_color = crate::theme::colors_google::GOOGLE_COAST_LAND;
+    let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
+
+    let mut iter = q.iter_mut();
+    for (pos, name) in &wanted {
+        if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
+            tf.translation = pos.extend(label_z);
+            tf.rotation = label_rot;
+            *text = Text2d::new(*name);
+            style.font_size = font_size.into();
+            if let Some(f) = &cjk {
+                style.font = f.clone().into();
+            }
+            *color = TextColor(label_color);
+            *vis = Visibility::Visible;
+            if let Ok(children) = children_q.get(e) {
+                crate::render::label_halo::sync_halo(
+                    children,
+                    &mut halo_q,
+                    name,
+                    font_size,
+                    cjk.as_ref(),
+                    halo_color,
+                    halo_offset,
+                );
+            }
+        } else {
+            let mut cmd = commands.spawn((
+                FactionLabel,
+                Text2d::new(*name),
+                TextFont {
+                    font_size: font_size.into(),
+                    font: cjk.clone().unwrap_or_default().into(),
+                    ..Default::default()
+                },
+                TextColor(label_color),
+                Transform {
+                    translation: pos.extend(label_z),
+                    rotation: label_rot,
+                    ..Default::default()
+                },
+                Visibility::Visible,
+            ));
+            let (text_owned, font_ref, fs, hc) = (*name, cjk.as_ref(), font_size, halo_color);
+            cmd.with_children(move |c| {
+                for _ in 0..crate::render::label_halo::HALO_DIRS.len() {
+                    c.spawn(crate::render::label_halo::halo_bundle(
+                        text_owned, font_ref, fs, hc,
+                    ));
+                }
+            });
+        }
+    }
+    for (_, mut _tf, mut _text, mut _style, mut _color, mut vis) in iter {
+        *vis = Visibility::Hidden;
+    }
+}
+
+/// 更新当前层级的事件标签池（ADR-0016 §2.2 · EntityKind::Event）。
+///
+/// 数据来源：`World.events`，按 `Event.span` 时间过滤。
+/// 位置：`Event.location` 引用的 Place 坐标（或覆盖坐标）。
+/// 图层归属：Label 渲染组（ADR-0016 Q1）——与 Place 标签独立。
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn update_event_labels(
+    mut commands: Commands,
+    projection: Res<WorldProjection>,
+    drill: Res<DrillState>,
+    grid: Res<GridConfig>,
+    view: Res<ViewState>,
+    layers: Res<LayerFrame>,
+    playback: Res<PlaybackState>,
+    fonts: Res<crate::theme::fonts::LoadedFonts>,
+    camera: Query<&Transform, With<Camera2d>>,
+    mut q: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut Text2d,
+            &mut TextFont,
+            &mut TextColor,
+            &mut Visibility,
+        ),
+        (With<EventLabel>, Without<Camera2d>),
+    >,
+    children_q: Query<&bevy::ecs::hierarchy::Children, With<EventLabel>>,
+    mut halo_q: Query<
+        (&mut Transform, &mut Text2d, &mut TextFont, &mut TextColor),
+        (
+            With<crate::render::label_halo::LabelHalo>,
+            Without<bevy::prelude::Camera2d>,
+            Without<EventLabel>,
+        ),
+    >,
+) {
+    let tier = lod_tier(view.scale);
+    let t = playback.current_day;
+    let mut wanted: Vec<(Vec2, &str)> = Vec::new();
+    // Label 层可见性（ADR-0016 Q1）
+    if layers.label.visible {
+        if let Some(current) = drill.current_node(&projection.world) {
+            let map_span = current.time_span.as_ref();
+            // Event 有 span 字段（ADR-0016 §2.3：entity_span = event.span）
+            for event in &projection.world.events {
+                let entity_span = &event.span;
+                if !wv_core::label_visible_at(map_span, Some(entity_span), t) {
+                    continue;
+                }
+                // 从 Event.location 找到对应 Place 的坐标
+                if let Some(loc) = &event.location {
+                    if let Some(place) = projection
+                        .world
+                        .distances
+                        .places
+                        .iter()
+                        .find(|p| p.id == loc.place)
+                    {
+                        if place.map.as_ref() != Some(&current.id) {
+                            continue;
+                        }
+                        let x = loc.x.unwrap_or(place.x.unwrap_or(0.0));
+                        let y = loc.y.unwrap_or(place.y.unwrap_or(0.0));
+                        wanted.push((grid.map_to_view(Vec2::new(x, y)), event.name.as_str()));
+                    }
+                }
+            }
+        }
+    }
+
+    let font_size = LABEL_PX * view.scale.max(0.05);
+    let label_offset = font_size * 0.9;
+    let label_z = LABEL_Z + layers.label.z_offset;
+    let cam_rot = camera
+        .single()
+        .map(|t| t.rotation)
+        .unwrap_or(Quat::IDENTITY);
+    let up_world = crate::render::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
+    let label_rot = cam_rot.inverse();
+    for (pos, _) in &mut wanted {
+        *pos += up_world;
+    }
+    let cjk = fonts.cjk_font.clone();
+    let label_color = match view.mode {
+        _ => crate::theme::colors_google::GOOGLE_CONTROL_TEXT,
+    }
+    .with_alpha(layers.label.opacity);
+    let halo_color = crate::theme::colors_google::GOOGLE_COAST_LAND;
+    let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
+
+    let mut iter = q.iter_mut();
+    for (pos, name) in &wanted {
+        if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
+            tf.translation = pos.extend(label_z);
+            tf.rotation = label_rot;
+            *text = Text2d::new(*name);
+            style.font_size = font_size.into();
+            if let Some(f) = &cjk {
+                style.font = f.clone().into();
+            }
+            *color = TextColor(label_color);
+            *vis = Visibility::Visible;
+            if let Ok(children) = children_q.get(e) {
+                crate::render::label_halo::sync_halo(
+                    children,
+                    &mut halo_q,
+                    name,
+                    font_size,
+                    cjk.as_ref(),
+                    halo_color,
+                    halo_offset,
+                );
+            }
+        } else {
+            let mut cmd = commands.spawn((
+                EventLabel,
+                Text2d::new(*name),
+                TextFont {
+                    font_size: font_size.into(),
+                    font: cjk.clone().unwrap_or_default().into(),
+                    ..Default::default()
+                },
+                TextColor(label_color),
+                Transform {
+                    translation: pos.extend(label_z),
+                    rotation: label_rot,
+                    ..Default::default()
+                },
+                Visibility::Visible,
+            ));
+            let (text_owned, font_ref, fs, hc) = (*name, cjk.as_ref(), font_size, halo_color);
+            cmd.with_children(move |c| {
+                for _ in 0..crate::render::label_halo::HALO_DIRS.len() {
+                    c.spawn(crate::render::label_halo::halo_bundle(
+                        text_owned, font_ref, fs, hc,
+                    ));
+                }
+            });
+        }
+    }
     for (_, mut _tf, mut _text, mut _style, mut _color, mut vis) in iter {
         *vis = Visibility::Hidden;
     }
