@@ -264,9 +264,7 @@ fn parse_gui_args(args: &[String]) -> Result<GuiArgs, String> {
                 #[cfg(not(feature = "http"))]
                 {
                     let _ = i;
-                    return Err(
-                        "`--http-port` 需要 `--features http` 才会生效".to_owned(),
-                    );
+                    return Err("`--http-port` 需要 `--features http` 才会生效".to_owned());
                 }
             }
             "--http-bind" => {
@@ -290,18 +288,14 @@ fn parse_gui_args(args: &[String]) -> Result<GuiArgs, String> {
                     };
                     probe
                         .parse::<std::net::SocketAddr>()
-                        .map_err(|_| {
-                            format!("`--http-bind {s}` 不是合法的 IPv4:port 形态")
-                        })?;
+                        .map_err(|_| format!("`--http-bind {s}` 不是合法的 IPv4:port 形态"))?;
                     bind = Some(s.clone());
                     i += 2;
                 }
                 #[cfg(not(feature = "http"))]
                 {
                     let _ = i;
-                    return Err(
-                        "`--http-bind` 需要 `--features http` 才会生效".to_owned(),
-                    );
+                    return Err("`--http-bind` 需要 `--features http` 才会生效".to_owned());
                 }
             }
             s if s.starts_with('-') => return Err(format!("未知参数: {s}")),
@@ -369,7 +363,10 @@ mod gui_args_tests {
     fn positional_directory_still_works_as_legacy_form() {
         let got = parse_gui_args(&args(&["examples/xinhai-1911"]));
         let parsed = got.expect("positional dir should parse");
-        assert_eq!(parsed.startup_project, Some("examples/xinhai-1911".to_owned()));
+        assert_eq!(
+            parsed.startup_project,
+            Some("examples/xinhai-1911".to_owned())
+        );
     }
 
     #[test]
@@ -392,8 +389,7 @@ mod gui_args_tests {
     #[cfg(feature = "http")]
     #[test]
     fn http_port_override_takes_effect() {
-        let parsed = parse_gui_args(&args(&["--http-port", "9000"]))
-            .expect("--http-port 应被接受");
+        let parsed = parse_gui_args(&args(&["--http-port", "9000"])).expect("--http-port 应被接受");
         assert_eq!(parsed.http_server_config.port, 9000);
         assert_eq!(parsed.startup_project, None);
     }
@@ -401,8 +397,8 @@ mod gui_args_tests {
     #[cfg(feature = "http")]
     #[test]
     fn http_bind_override_takes_effect() {
-        let parsed = parse_gui_args(&args(&["--http-bind", "0.0.0.0"]))
-            .expect("--http-bind 应被接受");
+        let parsed =
+            parse_gui_args(&args(&["--http-bind", "0.0.0.0"])).expect("--http-bind 应被接受");
         assert_eq!(parsed.http_server_config.bind, "0.0.0.0");
     }
 
@@ -410,8 +406,8 @@ mod gui_args_tests {
     #[test]
     fn http_bind_with_port_works() {
         // 用户想绑 loopback:9000 → 显式 host:port 形态。
-        let parsed = parse_gui_args(&args(&["--http-bind", "127.0.0.1:9000"]))
-            .expect("host:port 应被接受");
+        let parsed =
+            parse_gui_args(&args(&["--http-bind", "127.0.0.1:9000"])).expect("host:port 应被接受");
         assert_eq!(parsed.http_server_config.bind, "127.0.0.1:9000");
     }
 
@@ -443,7 +439,10 @@ mod gui_args_tests {
             "127.0.0.1",
         ]))
         .expect("全 flag 共存应能解析");
-        assert_eq!(parsed.startup_project.as_deref(), Some("examples/xinhai-1911"));
+        assert_eq!(
+            parsed.startup_project.as_deref(),
+            Some("examples/xinhai-1911")
+        );
         assert_eq!(parsed.http_server_config.port, 9000);
         assert_eq!(parsed.http_server_config.bind, "127.0.0.1");
     }
@@ -452,15 +451,19 @@ mod gui_args_tests {
     #[test]
     fn http_port_repeated_is_rejected() {
         // LLM 客户端错传两遍时**立刻**报错（不静默覆盖）——v0.2 决策
-        assert!(parse_gui_args(&args(&["--http-port", "9000", "--http-port", "9001"]))
-            .is_err());
+        assert!(parse_gui_args(&args(&["--http-port", "9000", "--http-port", "9001"])).is_err());
     }
 
     #[cfg(feature = "http")]
     #[test]
     fn http_bind_repeated_is_rejected() {
-        assert!(parse_gui_args(&args(&["--http-bind", "0.0.0.0", "--http-bind", "127.0.0.1"]))
-            .is_err());
+        assert!(parse_gui_args(&args(&[
+            "--http-bind",
+            "0.0.0.0",
+            "--http-bind",
+            "127.0.0.1"
+        ]))
+        .is_err());
     }
 
     #[cfg(feature = "http")]

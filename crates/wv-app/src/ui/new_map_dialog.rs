@@ -343,6 +343,7 @@ fn create_map(
         extent: Some(Extent::sized(dialog.extent, dialog.extent)),
         raster: None,
         geographic_source: None,
+        time_span: None,
         unit_per_km: None,
         orientation: 0.0,
     };
@@ -385,6 +386,7 @@ mod tests {
                 extent: None,
                 raster: None,
                 geographic_source: None,
+                time_span: None,
                 unit_per_km: None,
                 orientation: 0.0,
             });
@@ -452,6 +454,7 @@ mod tests {
             extent: None,
             raster: None,
             geographic_source: None,
+            time_span: None,
             unit_per_km: None,
             orientation: 0.0,
         });

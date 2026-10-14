@@ -320,6 +320,7 @@ mod tests {
             extent,
             raster: None,
             geographic_source: None,
+            time_span: None,
             unit_per_km: None,
             orientation: 0.0,
         }

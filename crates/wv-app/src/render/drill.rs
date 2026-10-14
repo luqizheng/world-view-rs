@@ -675,6 +675,7 @@ pub fn update_place_labels(
     grid: Res<GridConfig>,
     view: Res<ViewState>,
     layers: Res<LayerFrame>,
+    playback: Res<PlaybackState>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
@@ -702,12 +703,21 @@ pub fn update_place_labels(
 ) {
     // 期望标注集：锚定在当前地图、坐标齐备的地点（与道路层同一可见口径）。
     // 图层不可见 → wanted 为空 → 池全隐藏（尾部的「多余的隐藏」路径）。
+    // ADR-0016：图级 time_span 否决（PlaceDistance 无实体级窗口，v0.1 永久可见）。
+    // ADR-0016 Q1：标签走独立渲染组 `layers.label.visible`；
+    // ADR-0013 §2.2：地名随 Place 图层（`layers.place.visible`）。
+    // 两者合取——任一关闭即标签消失。
     let tier = lod_tier(view.scale);
+    let t = playback.current_day;
     let mut wanted: Vec<(Vec2, &str)> = Vec::new();
-    if layers.place.visible {
+    if layers.place.visible && layers.label.visible {
         if let Some(current) = drill.current_node(&projection.world) {
+            let map_span = current.time_span.as_ref();
             for p in &projection.world.distances.places {
-                if p.map.as_ref() == Some(&current.id) && place_label_kept_at_tier(p.w, p.h, tier) {
+                if p.map.as_ref() == Some(&current.id)
+                    && place_label_kept_at_tier(p.w, p.h, tier)
+                    && wv_core::label_visible_at(map_span, None, t)
+                {
                     if let (Some(x), Some(y)) = (p.x, p.y) {
                         // 地点坐标是本图局部 → 视图空间（`map_to_view`，非栅格原点）。
                         wanted.push((grid.map_to_view(Vec2::new(x, y)), p.name.as_str()));
@@ -937,6 +947,7 @@ mod tests {
             extent: Some(Extent::sized(4096.0, 4096.0)),
             raster: None,
             geographic_source: None,
+            time_span: None,
             unit_per_km: None,
             orientation: 0.0,
         }
