@@ -296,6 +296,75 @@ cargo run -p wv-app -- validate examples/minimal-world
 cargo run -p wv-app --features app -- gui
 ```
 
+### 10.1 用 LLM 控制编辑器（MCP，ADR-0014）
+
+编辑器内置一个 **MCP `2025-03-26` HTTP server**（仅 `127.0.0.1`，默认端口 `8732`），让 Claude Desktop / Cursor / Zed / Continue 等支持 MCP 的 LLM 客户端能**读取、修改、保存**当前打开的世界。设计决策见 [`docs/adr/ADR-0014-mcp-http-server.md`](docs/adr/ADR-0014-mcp-http-server.md)。
+
+**① 启动带 MCP 服务的编辑器**（`http` feature 隐含 `app`，窗口照常打开）：
+
+```bash
+# 默认 127.0.0.1:8732
+cargo run -p wv-app --features http -- gui
+
+# 自定义端口 / 绑定地址
+cargo run -p wv-app --features http -- gui --http-port 9000
+cargo run -p wv-app --features http -- gui --http-bind 127.0.0.1 --http-port 9000
+```
+
+启动后窗口内先「新建工程」或打开一个工程（LLM 的读写作用于**当前打开**的世界；未开工程时 `save_project` 会报错）。日志出现 `[wv-app http] MCP server 监听 127.0.0.1:8732（POST /mcp）` 即就绪；端口被占时进程报错退出（**不**自动换端口），换一个 `--http-port` 再启动。
+
+**② 配置 MCP 客户端**（任选一种）：
+
+- **Claude Desktop / Cursor / 通用 JSON 配置**（streamable HTTP 形态）：
+
+  ```json
+  {
+    "mcpServers": {
+      "worldview": {
+        "url": "http://127.0.0.1:8732/mcp"
+      }
+    }
+  }
+  ```
+
+  写进 `claude_desktop_config.json`（Claude Desktop）或 `.cursor/mcp.json`（Cursor）后重启客户端即可。
+
+- **curl 直接调**（调试 / 脚本）：
+
+  ```bash
+  # 列出 9 个 skill 的 schema
+  curl -s http://127.0.0.1:8732/mcp -X POST -H 'content-type: application/json' \
+    -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
+
+  # 调用：列出所有地图摘要
+  curl -s http://127.0.0.1:8732/mcp -X POST -H 'content-type: application/json' \
+    -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"list_maps","arguments":{}},"id":2}'
+  ```
+
+  真机烟测一键跑通三条链路（9 skill schema / 读路径 / 错误路径）：
+
+  ```bash
+  bash scripts/smoke-http.sh        # 默认用 18732 端口，避开你可能已在跑的 8732
+  ```
+
+**③ 9 个 skill**（`tools/list` 会给出完整入参 schema）：
+
+| 读（不修改世界） | 写（经撤销栈，可 Ctrl+Z 撤销） |
+|---|---|
+| `list_maps` — 地图摘要列表 | `create_map` — 新建地图节点 |
+| `get_map` — 单图完整节点 | `create_place` — 新增地点 |
+| `list_places` — 地点摘要（支持过滤） | `undo` — 撤销最后一次事务 |
+| `get_place` — 单地点详情 | `save_project` — 全量保存到工程目录 |
+| `get_state_at_time` — 某时刻的世界快照 | |
+
+列表类 skill 返回**轻量摘要**、`limit ≤ 100` 超出分页；详情用 `get_*` 单条取——避免撑爆 LLM 上下文（ADR-0014 §2.5.1）。
+
+**④ 安全与语义边界**：
+
+- 服务**仅监听 loopback**，局域网不可见；无鉴权（本地单机场景，鉴权留待 LAN 支持时另开 ADR）。
+- 所有写操作经编辑命令栈（`EditCommand → History`），与 GUI 的 Ctrl+Z **共用同一撤销时间线**——LLM 改坏了直接 Ctrl+Z；任何改动在 `save_project`（或 GUI Ctrl+S）之前不会落盘。
+- 校验只提示不阻止（悬空引用等照常可在校验面板看到）；`save_project` 不触发校验。
+
 ---
 
 ## 11. 术语表
