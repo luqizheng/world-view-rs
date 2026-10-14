@@ -20,11 +20,9 @@
 //! 句柄（全部经 `HttpBridge` → mpsc → drain）。这与 GUI 笔刷系统的纪律
 //! 一致——`World` 是工作副本，**只**在主帧写。
 
-use std::sync::Arc;
-
 use bevy::prelude::*;
-use wv_edit::History;
 
+use crate::edit::editing::EditHistory;
 use crate::http::bridge::{drain_messages, HttpBridge, HttpMessage};
 use crate::http::server::start_mcp_server;
 use crate::state::WorldProjection;
@@ -61,16 +59,6 @@ impl Default for HttpReceiver {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         Self { rx }
     }
-}
-
-/// `EditHistory` 的 Bevy Resource 别名。`wv-edit::History` + 主帧的 mutex
-/// 是 `edit/editing.rs` 现有的锁策略；这里复用同一类型以避免引入并行结构。
-#[derive(Resource, Default)]
-pub struct EditHistory(pub Arc<parking_lot_hack::Mutex<History>>);
-
-/// 简化版的「parking_lot 替代」——Bevy 0.19 自带的 `Mutex` 即可。
-mod parking_lot_hack {
-    pub use std::sync::Mutex;
 }
 
 /// 把 MCP server 装到 Bevy App 的 Plugin。
@@ -110,22 +98,31 @@ impl Plugin for HttpServerPlugin {
         app.insert_resource(HttpReceiver { rx });
 
         // 4) drain 系统每帧排空。
+        //
+        // **复用 GUI 的 [`EditHistory`]**（`edit::editing::EditHistory`，已由
+        // `app_bootstrap` init_resource）：HTTP 与 Ctrl+Z 共用**同一**撤销栈——
+        // ADR-0014 §2.3「单线程命令队列」的本意就是只有一个权威 History。
+        // （v0.2 修：此前本模块自定义了一个带 `Arc<Mutex>` 的同名 Resource 且
+        // 从未插入，真机 smoke 抓到 `Res<EditHistory> does not exist` 每帧 panic
+        // ——drain 只在主帧跑，`ResMut` 本身就是正确且足够的访问形态，锁是多余的。）
         app.add_systems(Update, drain_http_commands);
     }
 }
 
-/// 每帧从 `HttpReceiver` 排空消息，apply 到 WorldProjection.world + History。
+/// 每帧从 `HttpReceiver` 排空消息，apply 到 WorldProjection.world + GUI 的 History。
 ///
 /// ## 不破 §3.3
 /// 这是**唯一**改 WorldProjection.world 的 HTTP 路径；handler 不直接持有
 /// `World` 句柄（见 [`crate::http::bridge::HttpBridge`]）。
+///
+/// ## 与 GUI 撤销栈的关系
+/// `edit.history` 就是 Ctrl+Z 用的那一个栈：LLM 的 `create_place` 之后
+/// 用户按 Ctrl+Z 撤掉的是它，`undo` skill 撤掉的是 GUI 笔刷——同一时间线。
 pub fn drain_http_commands(
     mut receiver: ResMut<HttpReceiver>,
     mut projection: ResMut<WorldProjection>,
-    edit_history: Res<EditHistory>,
+    mut edit: ResMut<EditHistory>,
 ) {
-    // 锁取 EditHistory；drain 是纯函数，无 await。短锁。
-    let mut history = edit_history.0.lock().expect("EditHistory 锁中毒");
     // 把 save_dir 拷成 owned，先结束 `projection.project_dir` 的不可变借用，
     // 然后才能用 `&mut projection.world`（§3.3）。
     let save_dir: Option<std::path::PathBuf> = projection
@@ -133,12 +130,16 @@ pub fn drain_http_commands(
         .as_deref()
         .map(std::path::Path::new)
         .map(|p| p.to_path_buf());
-    drain_messages(
+    let processed = drain_messages(
         &mut receiver.rx,
         &mut projection.world,
-        &mut history,
+        &mut edit.history,
         save_dir.as_deref(),
     );
+    // 本帧处理过消息 = 有未落盘的编辑，点亮顶栏 `●`（与 GUI 编辑同语义）。
+    if processed {
+        projection.dirty = true;
+    }
 }
 
 #[cfg(test)]
@@ -183,7 +184,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let cmd: Box<dyn wv_edit::EditCommand> = Box::new(wv_edit::AddPlaceCommand::new(place));
         let apply_reply = bridge.apply_send(cmd);
-        let mut history = History::default();
+        let mut history = wv_edit::History::default();
         drain_messages(&mut { rx }, &mut world, &mut history, None);
         let _ = rt.block_on(apply_reply).unwrap();
         assert_eq!(world.distances.places.len(), 1);
@@ -202,7 +203,7 @@ mod tests {
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let reply_rx = bridge.read_send(ReadRequest::ListMaps);
-        drain_messages(&mut rx, &mut world, &mut History::default(), None);
+        drain_messages(&mut rx, &mut world, &mut wv_edit::History::default(), None);
         let reply = rt.block_on(reply_rx).unwrap();
         match reply {
             ReadReply::MapSummaries(v) => assert!(v.is_empty()),
