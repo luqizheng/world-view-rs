@@ -24,7 +24,7 @@ use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 use bevy_egui::EguiContexts;
 
-use crate::state::{BrushState, DrillState, GridConfig, ViewState, WorldProjection};
+use crate::state::{BrushState, DrillState, GridConfig, MeasureState, ViewState, WorldProjection};
 
 // 缩放区间不再用全局常量：它按**当前级**（`drill` 所在那张图的 `extent`）实时算，
 // 见 `crate::zoom_level` 与 ADR-0009 §2 决策 ⑤。历史上的
@@ -241,14 +241,16 @@ pub fn camera_pan(
     mut view: ResMut<ViewState>,
     brush: Res<BrushState>,
     streets: Res<crate::render::streets::StreetEditorState>,
+    measure: Res<MeasureState>,
     ui: Res<PointerOverUi>,
     windows: Query<&Window>,
 ) {
     if ui.wants_pointer {
         return;
     }
-    // 画街道模式下左键让渡给街道点取（与笔刷同一条手势让渡规则）。
-    if !pan_button_pressed(&buttons, brush.enabled || streets.enabled) {
+    // 启用笔刷 / 街道 / 测量时，左键让渡给对应工具（与笔刷同一条手势让渡规则）。
+    let any_tool_active = brush.enabled || streets.enabled || measure.mode.is_active();
+    if !pan_button_pressed(&buttons, any_tool_active) {
         return;
     }
     let Ok(window) = windows.single() else {
@@ -277,12 +279,13 @@ pub fn camera_pan(
 
 /// 当前按下的按钮是否应该平移地图。
 ///
-/// 左键遵循 Google Maps 手势：默认拖动平移；只有作者显式启用笔刷时才让渡给
-/// 笔刷。右键 / 中键始终保留给平移，作为精确编辑时的逃生通道。
-fn pan_button_pressed(buttons: &ButtonInput<MouseButton>, brush_enabled: bool) -> bool {
-    buttons.pressed(MouseButton::Right)
-        || buttons.pressed(MouseButton::Middle)
-        || (!brush_enabled && buttons.pressed(MouseButton::Left))
+/// 平移按键口径（2026-10-14 用户裁定：**右键 / 中键**承担平移，左键让给
+/// 测量工具——保证「左键点落点 = 起笔/收笔/橡皮」不与地图拖动冲突）。
+///
+/// - **右键 / 中键**：始终保留给平移，与工具状态无关。
+/// - **左键**：**任何情况下都不平移**——空操作，让工具（笔刷 / 街道 / 测量）自取。
+fn pan_button_pressed(buttons: &ButtonInput<MouseButton>, _any_tool_active: bool) -> bool {
+    buttons.pressed(MouseButton::Right) || buttons.pressed(MouseButton::Middle)
 }
 
 /// 屏幕坐标 → 世界坐标（基线 §2.15 变换链，唯一实现）。
@@ -477,13 +480,36 @@ mod tests {
     use wv_core::id::Id;
     use wv_core::map::{IconShape, IconSpec, MapLevel, MapNode};
 
-    /// Google 式地图的默认手势是左键拖拽平移；只有显式启用笔刷时左键才归笔刷。
+    /// 2026-10-14 用户裁定：右键 / 中键承担平移，左键让给工具。
+    /// - 工具全部关闭时：左键**不**再平移（空操作，留给未来测量 / 笔刷外的工具）。
+    /// - 工具关闭时：右键 / 中键始终平移。
+    /// - 工具开启时：左键让给工具，平移继续走右键 / 中键。
     #[test]
-    fn left_drag_pans_when_brush_is_disabled() {
+    fn pan_keys_are_right_and_middle_by_default() {
+        let mut buttons = ButtonInput::<MouseButton>::default();
+        // 无工具：左键 → 不平移（释放给测量等工具）。
+        buttons.press(MouseButton::Left);
+        assert!(
+            !pan_button_pressed(&buttons, false),
+            "无工具时左键不应平移（2026-10-14 用户裁定）"
+        );
+        // 右键 / 中键始终平移。
+        let mut buttons = ButtonInput::<MouseButton>::default();
+        buttons.press(MouseButton::Right);
+        assert!(pan_button_pressed(&buttons, false));
+        buttons.release(MouseButton::Right);
+        buttons.press(MouseButton::Middle);
+        assert!(pan_button_pressed(&buttons, false));
+        // 工具开启时左键让给工具（不平移）；右键仍平移。
         let mut buttons = ButtonInput::<MouseButton>::default();
         buttons.press(MouseButton::Left);
-        assert!(pan_button_pressed(&buttons, false));
-        assert!(!pan_button_pressed(&buttons, true));
+        assert!(
+            !pan_button_pressed(&buttons, true),
+            "工具开启时左键让给工具"
+        );
+        buttons.release(MouseButton::Left);
+        buttons.press(MouseButton::Right);
+        assert!(pan_button_pressed(&buttons, true));
     }
 
     /// 世界 4096²（`fit` 5.12 → 区间 `[0.064, 8.0]`）+ 一座 1024² 的城市，
