@@ -94,7 +94,10 @@ pub(crate) fn terrain_res_for(
     atlas: Option<&super::tile_atlas::TileAtlas>,
 ) -> u32 {
     let cells = data.width.max(data.height).max(1);
-    if mode == ViewMode::GoogleMap {
+    if mode == ViewMode::GoogleMap || mode == ViewMode::VectorFlat {
+        // VectorFlat 与 GoogleMap 同口径：填充的水陆边由双线性高度采样决定
+        // （isoline_overlay 的等值线描边也插值自同一高度场），亚像素分辨率让
+        // 填充边与描边在像素级吻合——1px/格会把边退化成锯齿阶梯。
         // 小图至少 4px/格以抗锯齿；大图回落到 1px/格，维持 4096² 纹理预算。
         let min_res = if cells <= 1024 { 4 } else { 1 };
         (4096 / cells).clamp(min_res, 8)

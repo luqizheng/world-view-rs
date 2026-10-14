@@ -301,6 +301,9 @@ pub struct BrushState {
     pub painting: bool,
     /// 笔刷是否启用。
     pub enabled: bool,
+    /// 手动显示逐格编辑网格（plan v0.1 D4）。笔刷启用时网格**恒显**；
+    /// 本字段是「不开笔刷也想看格子」的覆盖开关，两态相或。
+    pub grid_lines: bool,
 }
 
 impl Default for BrushState {
@@ -312,6 +315,7 @@ impl Default for BrushState {
             painting: false,
             // Google 式默认手势是左键拖动平移；笔刷必须显式开启，避免一开图就误改。
             enabled: false,
+            grid_lines: false,
         }
     }
 }

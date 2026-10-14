@@ -258,6 +258,8 @@
 
 每步过全部门槛：`cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` / `cargo fmt --all -- --check` / `cargo app-test` / `cargo app-clippy`。
 
+> **M2 进展（2026-10-14，前半落地）**：① `wv-terrain/src/isoline.rs`——marching squares（Q4 格心采样 + Q6 角点仲裁）+ 类型场边界阶梯 + 链装配（`f32::to_bits` 位级精确匹配）+ Chaikin（Q8）+ DP，14 个手算期望测试全绿；② `wv-app/src/render/terrain_view/isoline_overlay.rs`——VectorFlat 态的单 mesh 批量描边叠加（海岸线 = 海平面等值线、类型边界 = 异类邻边阶梯），结构键（来源图/尺寸/分辨率/淡化/LOD 档）+ `chunks_dirty` 触发重算，Z=0.04 在底图之上、淡化精灵与道路之下。**M2 后半（2026-10-14 落地，M2 完成）**：③ **填充同源**——VectorFlat 填充改走双线性高度采样（`cells.rs::sample_vector_flat`，与等值线描边插值自同一组格心值，D2「类型↔高度矛盾时高度赢」的回退规则：高度判陆而最近格是水系 → 沙；判水而最近格是陆地 → 深水），分辨率与 GoogleMap 同亚像素口径（`terrain_res_for`）；离屏渲染验证 `render_map_modes` 出图连贯无格缘锯齿。④ **描边分宽**——海岸线细（屏幕常量 1.25px）、类型边界按格径加宽（半宽 0.25 格，盖住「阶梯 → Chaikin」偏差）。⑤ **编辑态网格开关（D4）**——`BrushState.grid_lines` + 笔刷面板勾选，可见性 = `enabled || grid_lines`（笔刷开启恒显）；`grid_lines.rs` 单 mesh 格线层（复用描边展开器），Z=0.03 在等值线之下。**M2 后段的原「多边形平涂 mesh 化填充」改道**：以「双线性场采样填充 + 等值线描边」达成同一视觉契约（§6.3 追写：真 mesh 化填充需 ear-clipping，待真实需求出现再议，记 M2.5 同批）。**已知妥协**：笔刷提交触发等值线全图重算（4096² 每笔一顿），chunk 级增量提取记 `TODO(plan M2.5)`；网格线随缩放逐帧重算（仅编辑态存在，512² 毫秒级）。
+
 ## 7. 与既有决议的关系（§6.3 追写口径）
 
 | 既有 | 关系 |

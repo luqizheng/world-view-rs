@@ -161,6 +161,10 @@
 | **手势即命令** | gesture as command | 多边形工具的架构口径：圈选 + 配方 + 种子 = 一条宏 `EditCommand`，执行后网格是唯一事实，多边形只留撤销历史、不留存为实体 | 编辑 / 架构 |
 | **混合像素模式** | hybrid pixel mode | 像素纹理填充 + 矢量曲线裁切遮罩的渲染模式：填充像素化、边缘平滑。与整瓦片 autotile（边缘硬）相区别 | 地理 / 渲染 |
 | **抖动** | dithering | 像素风瓦片伪造平滑边缘的棋盘格过渡画法——整瓦片路线下边缘平滑的妥协手段 | 美术 / 渲染 |
+| **行进方块** | Marching Squares | 对标量场逐对偶格提取等值线的经典算法：按四角样本内外之分查 16 案例表输出线段。`wv_terrain::isoline::height_segments` 是唯一实现点（plan Q4/Q6 裁定其采样与鞍点口径） | 渲染 / 算法 |
+| **格心采样** | Center sampling | 等值线提取的采样口径：每格存的值即格心样本，等值点落在相邻格心连线上（曲线穿行格子内部）；单格小岛 = 内切菱形（plan Q4） | 渲染 / 数据 |
+| **链装配** | Chain assembly | 把 marching squares 输出的离散线段按端点接成折线链；端点匹配用 `f32::to_bits` 位级精确比对（相邻对偶格共享边交点由同公式算出，位级一致，不需要浮点容差） | 渲染 / 算法 |
+| **等值线叠加层** | Isoline overlay | `VectorFlat` 浏览态在平涂底图之上的几何边界描边（海岸线 + 类型场边界），单 mesh 批量、派生不落盘；实现 `wv-app/render/terrain_view/isoline_overlay.rs`，重算触发 = 结构键 + `chunks_dirty` | 地理 / 渲染 |
 
 ## 设计上不做（负向清单）
 

@@ -38,8 +38,9 @@ fn main() {
 
     for mode in ViewMode::ALL {
         let img = image_from_terrain(&data, mode, None, true);
-        let (w, h) = (data.width as usize, data.height as usize);
-        // atlas=None → res=1，每格 1 像素。
+        // atlas=None 时多数模式 res=1（每格 1 像素）；GoogleMap / VectorFlat
+        // 走亚像素（plan v0.1 M2）——尺寸以 Image 实际边长为准。
+        let (w, h) = (img.width() as usize, img.height() as usize);
         debug_assert_eq!(
             img.data.as_ref().expect("地形图必须有像素数据").len(),
             w * h * 4
@@ -53,7 +54,7 @@ fn main() {
             img.data.as_ref().expect("地形图必须有像素数据"),
         )
         .expect("写 PNG 失败");
-        println!("已写出 {}", path.display());
+        println!("已写出 {} ({}x{})", path.display(), w, h);
     }
     println!("完成，共 {} 个模式", ViewMode::ALL.len());
 }

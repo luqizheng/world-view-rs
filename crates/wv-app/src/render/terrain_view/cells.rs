@@ -52,8 +52,9 @@ fn shade_for_mode(mode: ViewMode) -> Shader {
         ViewMode::Coastline => shade_coast,
         // Google Default Map：近白陆地 + 淡水 + 绿地（色板见 palette_google）。
         ViewMode::GoogleMap => shade_google,
-        // TODO(plan v0.1 D3-A): ADR-0012 的等值线矢量平涂管线未落地前，
-        // 先按色块平涂渲染（同为「类型场平涂」家族，视觉最近）；管线就绪后替换。
+        // 等值线矢量平涂（ADR-0012 / plan v0.1 M2）：内部格走本 shader 的
+        // 类型色平涂；边界格的水陆由 `sample_vector_flat` 的双线性高度采样
+        // 决定——填充边与 `isoline_overlay` 的等值线描边同源吻合。
         ViewMode::VectorFlat => shade_flat,
     }
 }
@@ -236,7 +237,9 @@ impl<'a> CellRenderer<'a> {
             // Google 模式同样无效：色板已是最终观感，再淡化会把水色
             // 洗成米糊、全图趋同（见测试 `google_mode_ignores_soften_flag`）。
             soften: soften && !matches!(mode, ViewMode::Coastline | ViewMode::GoogleMap),
-            wobble: !matches!(mode, ViewMode::GoogleMap),
+            // 等值线模式（VectorFlat）也关闭揉边：它的自然蜿蜒由
+            // `isoline_overlay` 的等值线描边承担，逐像素噪声会和几何曲线打架。
+            wobble: !matches!(mode, ViewMode::GoogleMap | ViewMode::VectorFlat),
             blocks: std::array::from_fn(|_| None),
             tried: [false; 10],
         }
@@ -270,6 +273,10 @@ impl<'a> CellRenderer<'a> {
     ///
     /// 轮廓图只关心**水陆之别**：陆地内部的地形类差异（草/林/山）不触发
     /// 边界路径（轮廓图里它们同色，采样只是浪费）。
+    ///
+    /// 等值线模式（VectorFlat）多一条触发：3×3 邻域高度**跨越海平面**
+    /// ——填充的水陆边由双线性高度决定（D2），哪怕全邻域同类型，
+    /// 只要高度穿零就得逐像素采。
     fn is_boundary(&self, cx: u32, cy: u32) -> bool {
         let kind0 = self.data.cells[(cy * self.w + cx) as usize].kind;
         let differs = |a: u8, b: u8| {
@@ -283,6 +290,14 @@ impl<'a> CellRenderer<'a> {
                 a != b
             }
         };
+        let mut hmin = i16::MAX;
+        let mut hmax = i16::MIN;
+        // 中心格也参与高度极值（跨零判定含自身）。
+        if self.mode == ViewMode::VectorFlat {
+            let h0 = self.data.cells[(cy * self.w + cx) as usize].height;
+            hmin = hmin.min(h0);
+            hmax = hmax.max(h0);
+        }
         for dy in -1i32..=1 {
             for dx in -1i32..=1 {
                 if dx == 0 && dy == 0 {
@@ -292,15 +307,18 @@ impl<'a> CellRenderer<'a> {
                 if nx < 0 || ny < 0 || nx >= self.w as i32 || ny >= self.h as i32 {
                     continue;
                 }
-                if differs(
-                    kind0,
-                    self.data.cells[(ny as u32 * self.w + nx as u32) as usize].kind,
-                ) {
+                let cell = &self.data.cells[(ny as u32 * self.w + nx as u32) as usize];
+                if self.mode == ViewMode::VectorFlat {
+                    hmin = hmin.min(cell.height);
+                    hmax = hmax.max(cell.height);
+                }
+                if differs(kind0, cell.kind) {
                     return true;
                 }
             }
         }
-        false
+        // 高度跨海平面（Q1：海平面 = 0，负值水下）。
+        self.mode == ViewMode::VectorFlat && hmin < 0 && hmax >= 0
     }
 
     /// 在连续纹理像素坐标取一次颜色样本（写入 `out`，RGB，0..255）。
@@ -308,8 +326,68 @@ impl<'a> CellRenderer<'a> {
     /// 落点跨出地图时钳到边缘格——扰动把边缘格的采样点推出去是常态，不是错误。
     fn sample_into(&self, fx: f32, fy: f32, out: &mut [f32; 3]) {
         let resf = self.res as f32;
-        let gx = ((fx / resf).floor() as i32).clamp(0, self.w as i32 - 1) as u32;
-        let gy = ((fy / resf).floor() as i32).clamp(0, self.h as i32 - 1) as u32;
+        // 等值线模式：水陆由双线性高度采样决定（与等值线描边同源，D2）。
+        if self.mode == ViewMode::VectorFlat {
+            self.sample_vector_flat(fx / resf, fy / resf, out);
+        } else {
+            let gx = ((fx / resf).floor() as i32).clamp(0, self.w as i32 - 1) as u32;
+            let gy = ((fy / resf).floor() as i32).clamp(0, self.h as i32 - 1) as u32;
+            self.sample_kind(gx, gy, fx, fy, out);
+        }
+        if self.soften {
+            let Color::Srgba(t) = colors::SOFTEN_TOWARD else {
+                unreachable!("SOFTEN_TOWARD 应为 Srgba")
+            };
+            let k = colors::SOFTEN_KEEP;
+            for (o, tc) in out.iter_mut().zip([t.red, t.green, t.blue]) {
+                *o = (*o * k + tc * 255.0 * (1.0 - k)).clamp(0.0, 255.0);
+            }
+        }
+    }
+
+    /// 等值线模式采样：连续格坐标 `(gx, gy)` 处。
+    ///
+    /// - 高度在四个相邻**格心**间双线性插值（`isoline_overlay` 的等值线
+    ///   正是插值自同一组格心值），`≥ 0` 判陆、`< 0` 判水（Q1 海平面锚点）；
+    /// - 陆色 = 最近格的类型色；最近格是水系而高度判陆时回退沙滩色
+    ///   （类型与高度矛盾时高度赢，海岸带自然呈现为滩）；
+    /// - 水色 = 最近格的水系色（作者画的深浅分区保留）；最近格是陆地
+    ///   类型而高度判水时回退深水色。
+    fn sample_vector_flat(&self, gx: f32, gy: f32, out: &mut [f32; 3]) {
+        // 双线性高度：格心在 (i + 0.5, j + 0.5)。
+        let hx = (gx - 0.5).clamp(0.0, self.w as f32 - 1.0);
+        let hy = (gy - 0.5).clamp(0.0, self.h as f32 - 1.0);
+        let (x0, y0) = (hx.floor() as u32, hy.floor() as u32);
+        let x1 = (x0 + 1).min(self.w - 1);
+        let y1 = (y0 + 1).min(self.h - 1);
+        let (tx, ty) = (hx - x0 as f32, hy - y0 as f32);
+        let h = |x: u32, y: u32| self.data.cells[(y * self.w + x) as usize].height as f32;
+        let height = (h(x0, y0) * (1.0 - tx) + h(x1, y0) * tx) * (1.0 - ty)
+            + (h(x0, y1) * (1.0 - tx) + h(x1, y1) * tx) * ty;
+        // 最近格的类型（钳边）。
+        let cx = (gx.floor() as i32).clamp(0, self.w as i32 - 1) as u32;
+        let cy = (gy.floor() as i32).clamp(0, self.h as i32 - 1) as u32;
+        let kind = self.data.cells[(cy * self.w + cx) as usize].kind;
+        let land = height >= 0.0;
+        // 类型 ↔ 高度矛盾时高度赢（D2）；回退色取「岸」语义的沙滩 / 深水。
+        let kind = if land && kind <= 1 {
+            2 // 沙
+        } else if !land && kind > 1 {
+            0 // 深水
+        } else {
+            kind
+        };
+        let Color::Srgba(c) = (self.shader)(self.data, kind) else {
+            return;
+        };
+        out[0] = c.red * 255.0;
+        out[1] = c.green * 255.0;
+        out[2] = c.blue * 255.0;
+    }
+
+    /// 通用模式采样：最近格着色 / 瓦片块，供 `sample_into` 分派。
+    fn sample_kind(&self, gx: u32, gy: u32, fx: f32, fy: f32, out: &mut [f32; 3]) {
+        let resf = self.res as f32;
         let cell = &self.data.cells[(gy * self.w + gx) as usize];
         let kind = cell.kind;
         let mul = self.height_mul(cell.height);
@@ -328,15 +406,6 @@ impl<'a> CellRenderer<'a> {
                 out[0] = c.red * 255.0 * mul;
                 out[1] = c.green * 255.0 * mul;
                 out[2] = c.blue * 255.0 * mul;
-            }
-        }
-        if self.soften {
-            let Color::Srgba(t) = colors::SOFTEN_TOWARD else {
-                unreachable!("SOFTEN_TOWARD 应为 Srgba")
-            };
-            let k = colors::SOFTEN_KEEP;
-            for (o, tc) in out.iter_mut().zip([t.red, t.green, t.blue]) {
-                *o = (*o * k + tc * 255.0 * (1.0 - k)).clamp(0.0, 255.0);
             }
         }
     }
@@ -617,5 +686,93 @@ pub fn patch_terrain_image(
                 cy,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! VectorFlat 填充口径测试：水陆边随高度（D2）、内部快路径、亚像素分辨率。
+
+    use super::*;
+    use crate::render::terrain_view::terrain_texture::terrain_res_for;
+
+    /// 像素颜色是否接近目标 sRGB 色（±2/255，吸收 u8 舍入）。
+    fn pixel_near(img: &Image, x: u32, y: u32, target: bevy::color::Srgba) -> bool {
+        let data = img.data.as_ref().expect("地形图必须有像素数据");
+        let w = img.width();
+        let o = ((y * w + x) * 4) as usize;
+        (data[o] as f32 / 255.0 - target.red).abs() < 0.02
+            && (data[o + 1] as f32 / 255.0 - target.green).abs() < 0.02
+            && (data[o + 2] as f32 / 255.0 - target.blue).abs() < 0.02
+    }
+
+    /// 水陆填充边由双线性高度决定，而非类型格缘（D2 的招牌手算案例）：
+    /// 2×1 两格同为草地，高度 +50 / −50，海平面等值线恰在格缘 x=1——
+    /// 填充左半陆色、右半水色（旧的逐格平涂会整行草色）。
+    #[test]
+    fn vector_flat_fill_edge_follows_height_not_kind() {
+        let data = TerrainData {
+            width: 2,
+            height: 1,
+            cells: vec![
+                wv_core::terrain::TerrainCellData {
+                    height: 50,
+                    kind: 3,
+                },
+                wv_core::terrain::TerrainCellData {
+                    height: -50,
+                    kind: 3,
+                },
+            ],
+        };
+        let img = image_from_terrain(&data, ViewMode::VectorFlat, None, false);
+        let Color::Srgba(grass) = colors::core_terrain(3) else {
+            unreachable!()
+        };
+        let Color::Srgba(deep) = colors::core_terrain(0) else {
+            unreachable!()
+        };
+        // 2 格 ≤1024 → res = clamp(4096/2, 4, 8) = 8：图像 16×8。
+        // 等值线在格缘 gx=1.0 → 像素 x∈0..8 陆、x∈8..16 水。
+        assert!(pixel_near(&img, 2, 2, grass), "左半应为草色");
+        assert!(
+            pixel_near(&img, 12, 2, deep),
+            "右半应为深水色（最近格为草地、高度判水 → 回退深水）"
+        );
+    }
+
+    /// 深水内部格走快路径：全 −100 / kind 0 的 3×3，中心像素 = 深水色。
+    #[test]
+    fn vector_flat_deep_water_interior_stays_flat() {
+        let data = TerrainData {
+            width: 3,
+            height: 3,
+            cells: vec![
+                wv_core::terrain::TerrainCellData {
+                    height: -100,
+                    kind: 0,
+                };
+                9
+            ],
+        };
+        let img = image_from_terrain(&data, ViewMode::VectorFlat, None, false);
+        let Color::Srgba(deep) = colors::core_terrain(0) else {
+            unreachable!()
+        };
+        assert!(pixel_near(&img, 4, 4, deep));
+    }
+
+    /// 等值线模式与 GoogleMap 同用亚像素分辨率（填充边与描边吻合的前提）。
+    #[test]
+    fn vector_flat_resolution_matches_google_subpixel() {
+        let data = TerrainData {
+            width: 512,
+            height: 512,
+            cells: vec![wv_core::terrain::TerrainCellData::default(); 512 * 512],
+        };
+        let vector = terrain_res_for(&data, ViewMode::VectorFlat, None);
+        let google = terrain_res_for(&data, ViewMode::GoogleMap, None);
+        assert_eq!(vector, google, "VectorFlat 应与 GoogleMap 同口径");
+        assert!(vector > 1, "512² 图应取 {vector}px/格（亚像素）");
     }
 }

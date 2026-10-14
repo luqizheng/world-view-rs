@@ -116,6 +116,10 @@ pub fn run(config: AppConfig) {
     .init_resource::<brush_cursor::BrushCursorEntities>()
     .init_resource::<map_frame::MapFrameEntities>()
     .init_resource::<terrain_chunks::TerrainChunkEntities>()
+    // 等值线矢量叠加层（ADR-0012 / plan v0.1 M2）：同属实体集合资源。
+    .init_resource::<terrain_view::IsolineOverlay>()
+    // 逐格编辑网格（plan v0.1 D4）：同上。
+    .init_resource::<terrain_view::GridLinesOverlay>()
     .add_systems(
         Startup,
         // 字体装配不在这里：bevy_egui 0.42 的主上下文要等 PreUpdate 的
@@ -170,6 +174,11 @@ pub fn run(config: AppConfig) {
             terrain_view::tick_basemap_fadeout,
             // 投影（时间 → 渲染资源）
             world_projection::compute_projection,
+            // 等值线矢量叠加（ADR-0012 / plan v0.1 M2）：先于 chunk 层读
+            // `tex.chunks_dirty`（chunk 系统会消费清零），触发重算。
+            terrain_view::sync_isoline_overlay,
+            // 编辑态逐格网格（plan v0.1 D4）：与等值线同管线族，先于 chunk 层。
+            terrain_view::sync_grid_lines,
             // 地形分块 + mip + 视口拣选（优化项 3a/3b/3c）。
             terrain_chunks::sync_terrain_chunks,
             // 派生诊断刷新：在 flush 之后、UI 之前；面板本帧即可读新值。

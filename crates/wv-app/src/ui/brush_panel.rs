@@ -53,6 +53,9 @@ pub fn panel_brush(
         None,
         |ui| {
             ui.checkbox(&mut brush.enabled, "笔刷模式（关闭时左键拖动地图）");
+            // 逐格编辑网格（plan v0.1 D4）：笔刷开着恒显；这里手动补一个
+            // 「不开笔刷也想看格子」的覆盖开关（相或）。
+            ui.checkbox(&mut brush.grid_lines, "显示网格");
             ui.add_space(space::XS);
             ui.label(
                 egui::RichText::new("地形")

@@ -18,7 +18,9 @@
 #![cfg(feature = "app")]
 
 pub mod cells;
+pub mod grid_lines;
 pub mod grid_sync;
+pub mod isoline_overlay;
 pub mod rebuild;
 pub mod setup;
 pub mod terrain_resolve;
@@ -27,7 +29,9 @@ pub mod tile_atlas;
 
 // ── 路径兼容 re-export（保持 `crate::render::terrain_view::X` 不变） ─────────────────
 pub use cells::{image_from_terrain, patch_terrain_image};
+pub use grid_lines::{grid_lines_visible, sync_grid_lines, GridLinesOverlay};
 pub use grid_sync::sync_grid_config;
+pub use isoline_overlay::{sync_isoline_overlay, IsolineOverlay};
 pub use rebuild::{
     rebuild_texture_on_mode_change, tick_basemap_fadeout, BasemapFadeOut, LEVEL_FADE_SECS,
 };
