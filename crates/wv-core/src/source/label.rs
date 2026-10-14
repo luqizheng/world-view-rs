@@ -152,7 +152,10 @@ pub struct LabelLayerConfig {
     /// 字号阶梯（§2.4）。屏幕像素 = 数值 × `view.scale`。
     /// 缺省 = [`ZoomTier::DEFAULT_FONT_SIZES`]（9 / 11 / 14）。
     /// 声明则全权覆盖——缺失的档位由渲染层用上一个"更近"的档位兜底。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default = "default_font_size_ladder",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub font_size_ladder: BTreeMap<ZoomTier, f32>,
 
     /// 最大标签数（§2.6）。超限时按优先级截断。
@@ -221,6 +224,10 @@ fn default_min_zoom_tier() -> ZoomTier {
 
 fn default_max_labels() -> usize {
     ZoomTier::DEFAULT_MAX_LABELS
+}
+
+fn default_font_size_ladder() -> BTreeMap<ZoomTier, f32> {
+    ZoomTier::DEFAULT_FONT_SIZES.iter().copied().collect()
 }
 
 /// 标签可见性求值（ADR-0016 §2.3）——**单一实现点**。
