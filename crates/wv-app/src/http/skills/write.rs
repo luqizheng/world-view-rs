@@ -160,6 +160,7 @@ pub async fn dispatch_write(
                 extent: Some(wv_core::map::Extent::sized(input.size_w, input.size_h)),
                 raster: None,
                 geographic_source: None,
+                unit_per_km: None,
                 orientation: 0.0,
             };
             // v0.1 不带预填充栅格；地形由后续 skill 单独填。
@@ -336,42 +337,39 @@ mod tests {
     #[test]
     fn create_map_with_existing_parent_succeeds() {
         let rt = rt();
-        let v = rt
-            .block_on(async {
-                use wv_core::map::{Extent, MapNode};
-                use wv_core::Id;
-                let (bridge, rx, mut world, history) = setup();
-                world.maps.push(MapNode {
-                    id: Id::new_unchecked("world_main"),
-                    name: "主世界".into(),
-                    level: MapLevel::World,
-                    parent: None,
-                    children: vec![],
-                    icons: vec![],
-                    layers: vec![],
-                    extent: Some(Extent::sized(4096.0, 4096.0)),
-                    raster: None,
-                    geographic_source: None,
-                    orientation: 0.0,
-                });
-                dispatch_write_with_drain(
-                    bridge,
-                    rx,
-                    world,
-                    history,
-                    "create_map",
-                    json!({
-                        "id": "city_a",
-                        "name": "城市甲",
-                        "level": "city",
-                        "parent": "world_main",
-                        "size_w": 1024.0,
-                        "size_h": 1024.0,
-                    }),
-                )
-                .await
-            })
-            .unwrap();
+<<<<<<< HEAD
+        let v = rt.block_on(async {
+            use wv_core::map::{Extent, MapNode};
+            use wv_core::Id;
+            let (bridge, rx, mut world, history) = setup();
+            world.maps.push(MapNode {
+                id: Id::new_unchecked("world_main"),
+                name: "主世界".into(),
+                level: MapLevel::World,
+                parent: None,
+                children: vec![],
+                icons: vec![],
+                layers: vec![],
+                extent: Some(Extent::sized(4096.0, 4096.0)),
+                raster: None,
+                geographic_source: None,
+                unit_per_km: None,
+                orientation: 0.0,
+            });
+            dispatch_write_with_drain(
+                bridge, rx, world, history,
+                "create_map",
+                json!({
+                    "id": "city_a",
+                    "name": "城市甲",
+                    "level": "city",
+                    "parent": "world_main",
+                    "size_w": 1024.0,
+                    "size_h": 1024.0,
+                }),
+            ).await
+        }).unwrap();
+>>>>>>> main
         assert_eq!(v["id"], "city_a");
     }
 
