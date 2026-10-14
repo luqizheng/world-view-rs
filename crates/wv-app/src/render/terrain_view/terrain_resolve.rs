@@ -1,17 +1,15 @@
-//! 地形数据解析：`texture_terrain` / `active_terrain` / `active_terrain_or_placeholder` / `replace_terrain_texture`。
+//! 地形数据解析：`texture_terrain` / `active_terrain` / `active_terrain_or_placeholder` / `replace_terrain_texture` / `force_rebuild`。
 //!
 //! ## 职责
 //! - `texture_terrain` —— 优先按 `tex.last_map` 取数，拿不到回退 `active_terrain`。
 //! - `active_terrain` —— 当前图沿 `parent` 向上找**第一张自带栅格**的图。
 //! - `active_terrain_or_placeholder` —— 兜底版：根图塞占位地形并返回。
 //! - `replace_terrain_texture` —— 用新 Image 替换既有纹理资源（优先复用 Handle）。
+//! - `force_rebuild` —— 清掉 `last_mode/last_map`，让下一帧全图重建。
 //!
 //! ## 边界（不做什么）
 //! - **不直接读盘**——`World.terrain_of(map)` 由 `wv-core` 提供。
 //! - **不画到屏幕**。
-//!
-//! ## 主要导出
-//! - [`texture_terrain`] / [`active_terrain`] / [`active_terrain_or_placeholder`] / [`replace_terrain_texture`]
 
 #![cfg(feature = "app")]
 
@@ -145,5 +143,58 @@ pub fn active_terrain_or_placeholder(
             (Some(root), data)
         }
         None => (None, data),
+    }
+}
+
+/// 强制下一帧全图重建（2026-10-14 用户需求）。
+///
+/// 复位 `last_mode / last_soften / last_map`，并标全图脏。
+/// [`super::rebuild::rebuild_texture_on_mode_change`] 看到三个「已知」
+/// 字段都被清掉，必然走 `image_from_terrain` 整图重建路径。
+///
+/// **不**直接 `image_from_terrain` 写 `Image`——那是 `rebuild_texture_on_mode_change`
+/// 在 `Update` 链里的活；本函数只**解锁**比较，渲染侧那一帧自己会重建。
+/// 改 `Image` 资源会跨帧操作 GPU 上传链路（bevy 0.15 的 Image 资源变更
+/// 在下一帧才上传），由 Update 链去管理更稳。
+///
+/// ## 与 `mark_all_dirty` 的区别
+///
+/// `mark_all_dirty` 仅设脏矩形，走 `flush_terrain_texture` 的 patch 路径——
+/// 它复用既有 `Image` 资源，**不**调 `image_from_terrain`，所以如果上
+/// 一帧的纹理本就和当前地形对不上（"数据改了、纹理没跟上"的场景），
+/// patch 只是把已失真的源数据再 patch 一次。**必须**配合本函数把
+/// `last_mode` 清掉，让 `rebuild_texture_on_mode_change` 跑全图重建。
+pub fn force_rebuild(tex: &mut TerrainTexture) {
+    tex.last_mode = None;
+    tex.last_soften = false; // 与 `Default` 一致即可；不与 view.terrain_soften 比
+    tex.last_map = None;
+    tex.mark_all_dirty();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::ViewMode;
+
+    /// 复位三个「已知」字段 → `rebuild_texture_on_mode_change` 必走全图重建路径。
+    #[test]
+    fn force_rebuild_clears_all_three_known_fields() {
+        let mut tex = TerrainTexture {
+            handle: Handle::default(),
+            size: 64,
+            res: 4,
+            dirty: None,
+            chunks_dirty: None,
+            last_mode: Some(ViewMode::VectorFlat),
+            last_soften: true,
+            last_map: Some(wv_core::Id::new_unchecked("map_x")),
+        };
+        force_rebuild(&mut tex);
+        assert!(tex.last_mode.is_none(), "last_mode 应被清为 None");
+        assert!(!tex.last_soften, "last_soften 应被重置为 false");
+        assert!(tex.last_map.is_none(), "last_map 应被清为 None");
+        assert!(tex.dirty.is_some(), "dirty 矩形应被设置");
+        // 全图 = [0, 0, size, size]
+        assert_eq!(tex.dirty, Some([0, 0, tex.size, tex.size]));
     }
 }

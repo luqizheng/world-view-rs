@@ -37,7 +37,8 @@ pub use rebuild::{
 };
 pub use setup::{new_terrain_texture, placeholder_terrain, setup_terrain_texture};
 pub use terrain_resolve::{
-    active_terrain, active_terrain_or_placeholder, replace_terrain_texture, texture_terrain,
+    active_terrain, active_terrain_or_placeholder, force_rebuild, replace_terrain_texture,
+    texture_terrain,
 };
 pub use terrain_texture::TerrainTexture;
 pub use tile_atlas::{ensure_atlas, load_tile_atlas, TileAtlas};

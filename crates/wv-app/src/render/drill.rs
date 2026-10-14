@@ -43,6 +43,7 @@
 
 use bevy::prelude::*;
 
+use crate::render::layer_frame::LayerFrame;
 use crate::state::{lod_tier, DrillState, GridConfig, LodTier, ViewState, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::UiTheme;
@@ -663,6 +664,9 @@ fn place_label_kept_at_tier(w: Option<f32>, h: Option<f32>, tier: LodTier) -> bo
 /// **屏幕对齐**（2026-10-14 用户裁定）：地图随 `MapNode.orientation` 旋转后，
 /// 地名文字必须保持水平——实体取相机旋转的**逆**，标注的「上移避让 POI」偏移
 /// 也按屏幕上方取世界方向（`screen_vec_to_world`），不随地图转。
+///
+/// 图层归属：地名是 Place 组的标注（ADR-0013）——Place 图层隐藏（YAML 声明
+/// 或会话开关）时地名一并退场，透明度与 z 偏移也随 Place 组。
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_place_labels(
     mut commands: Commands,
@@ -670,6 +674,7 @@ pub fn update_place_labels(
     drill: Res<DrillState>,
     grid: Res<GridConfig>,
     view: Res<ViewState>,
+    layers: Res<LayerFrame>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
@@ -681,18 +686,21 @@ pub fn update_place_labels(
             &mut TextColor,
             &mut Visibility,
         ),
-        With<PlaceLabel>,
+        (With<PlaceLabel>, Without<Camera2d>),
     >,
 ) {
     // 期望标注集：锚定在当前地图、坐标齐备的地点（与道路层同一可见口径）。
+    // 图层不可见 → wanted 为空 → 池全隐藏（尾部的「多余的隐藏」路径）。
     let tier = lod_tier(view.scale);
     let mut wanted: Vec<(Vec2, &str)> = Vec::new();
-    if let Some(current) = drill.current_node(&projection.world) {
-        for p in &projection.world.distances.places {
-            if p.map.as_ref() == Some(&current.id) && place_label_kept_at_tier(p.w, p.h, tier) {
-                if let (Some(x), Some(y)) = (p.x, p.y) {
-                    // 地点坐标是本图局部 → 视图空间（`map_to_view`，非栅格原点）。
-                    wanted.push((grid.map_to_view(Vec2::new(x, y)), p.name.as_str()));
+    if layers.place.visible {
+        if let Some(current) = drill.current_node(&projection.world) {
+            for p in &projection.world.distances.places {
+                if p.map.as_ref() == Some(&current.id) && place_label_kept_at_tier(p.w, p.h, tier) {
+                    if let (Some(x), Some(y)) = (p.x, p.y) {
+                        // 地点坐标是本图局部 → 视图空间（`map_to_view`，非栅格原点）。
+                        wanted.push((grid.map_to_view(Vec2::new(x, y)), p.name.as_str()));
+                    }
                 }
             }
         }
@@ -703,6 +711,7 @@ pub fn update_place_labels(
     // Text2d 默认以文字中心为 transform 原点；上移约一个字高，避免压住 POI。
     // 「上」是屏幕上：经相机旋转映回世界方向。
     let label_offset = font_size * 0.9;
+    let label_z = LABEL_Z + layers.place.z_offset;
     let cam_rot = camera
         .single()
         .map(|t| t.rotation)
@@ -715,16 +724,17 @@ pub fn update_place_labels(
     // CJK 字体（fonts.rs 在 Startup 注册）：缺省字体无中文字形，地名会成方块。
     let cjk = fonts.cjk_font.clone();
     // 文字色按视图模式走 palette：Google Default Map 用深灰标签；Text2d
-    // 光晕描边需自定义 shader，后续再补白 halo。
+    // 光晕描边需自定义 shader，后续再补白 halo。透明度随 Place 图层（ADR-0013）。
     let label_color = match view.mode {
         crate::state::ViewMode::GoogleMap => crate::theme::colors_google::GOOGLE_LABEL_FILL,
         _ => bevy::color::Color::WHITE,
-    };
+    }
+    .with_alpha(layers.place.opacity);
 
     let mut iter = q.iter_mut();
     for (pos, name) in &wanted {
         if let Some((_, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
-            tf.translation = pos.extend(LABEL_Z);
+            tf.translation = pos.extend(label_z);
             tf.rotation = label_rot;
             // Bevy 0.19：字号是 `TextFont.font_size: FontSize`、字体是 `font: FontSource`。
             *text = Text2d::new(*name);
@@ -746,7 +756,7 @@ pub fn update_place_labels(
                 },
                 TextColor(label_color),
                 Transform {
-                    translation: pos.extend(LABEL_Z),
+                    translation: pos.extend(label_z),
                     rotation: label_rot,
                     ..Default::default()
                 },

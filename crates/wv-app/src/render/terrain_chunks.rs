@@ -54,6 +54,7 @@ use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
+use crate::render::layer_frame::LayerFrame;
 use crate::render::terrain_view::TerrainTexture;
 use crate::state::{GridConfig, ViewState};
 
@@ -95,6 +96,16 @@ pub struct TerrainChunk {
 pub struct TerrainChunkEntities {
     /// 块坐标 → 实体。`coord` 是 `[cx, cy]`。
     by_coord: std::collections::HashMap<[u32; 2], Entity>,
+}
+
+impl TerrainChunkEntities {
+    /// 当前活跃的 chunk 数（仅诊断/测试用，不参与渲染逻辑）。
+    pub fn len(&self) -> usize {
+        self.by_coord.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.by_coord.is_empty()
+    }
 }
 
 /// 计算地形按 `CHUNK_SIZE` 切块的二维网格尺寸。
@@ -240,13 +251,15 @@ pub fn sync_terrain_chunks(
     mut tex: ResMut<TerrainTexture>,
     grid: Res<GridConfig>,
     view: Res<ViewState>,
+    layers: Res<LayerFrame>,
     windows: Query<&Window>,
     camera: Query<&Transform, With<Camera2d>>,
     mut chunk_entities: ResMut<TerrainChunkEntities>,
     mut q_chunks: Query<(&mut TerrainChunk, &Mesh2d)>,
 ) {
-    // 关闭图层 → 全部 despawn；丢掉待消费脏矩形（重开时 spawn 会拷最新像素）。
-    if !view.terrain_visible {
+    // 关闭图层（YAML 声明 ∨ 会话开关，ADR-0013）→ 全部 despawn；
+    // 丢掉待消费脏矩形（重开时 spawn 会拷最新像素）。
+    if !layers.terrain.visible {
         let entities: Vec<Entity> = chunk_entities.by_coord.drain().map(|(_, e)| e).collect();
         for entity in entities {
             despawn_chunk(&mut commands, entity, &q_chunks);
@@ -255,6 +268,31 @@ pub fn sync_terrain_chunks(
             tex.chunks_dirty = None;
         }
         return;
+    }
+    // 绑定变化（作者改 YAML 的 opacity/z）：已存在块就地补丁——不重建像素，
+    // 只写材质 alpha 与 Transform.z（重 spawn 的块在下方 spawn 路径取新值）。
+    // 借**延迟命令**写：本系统的 `q_chunks` 已持有 `&mut TerrainChunk`，
+    // 再开一个读它的查询会触发 Bevy B0001 访问冲突（启动即 panic）。
+    if layers.is_changed() {
+        let z = TERRAIN_Z + layers.terrain.z_offset;
+        let alpha = layers.terrain.opacity;
+        for &entity in chunk_entities.by_coord.values() {
+            let Ok((chunk, _)) = q_chunks.get(entity) else {
+                continue;
+            };
+            let material = chunk.material.clone();
+            commands.queue(move |world: &mut World| {
+                if let Some(mut tf) = world.get_mut::<Transform>(entity) {
+                    tf.translation.z = z;
+                }
+                if let Some(mut mat) = world
+                    .resource_mut::<Assets<ColorMaterial>>()
+                    .get_mut(&material)
+                {
+                    mat.color = Color::WHITE.with_alpha(alpha);
+                }
+            });
+        }
     }
     let Ok(window) = windows.single() else {
         return;
@@ -321,13 +359,41 @@ pub fn sync_terrain_chunks(
             Some(source) if source.data.as_ref().is_some_and(|d| !d.is_empty()) => {
                 source.data.clone()
             }
-            _ => None,
+            _other => {
+                // TODO(诊断 2026-10-14): "只看到等值线、没有底图填充" 回归。
+                // 触发条件是 needs_src=true 但 source.data 为空/缺。常见原因：
+                // ① tex.handle 资产被 replace_terrain_texture 用 *img=image 整
+                //    体替换——bevy 0.15 的 Assets<Image> 是 Arc-backed，clone 仍
+                //    指向旧值（这是已知的迁移期坑）。
+                // ② handle 与 images 里其他槽位撞键。
+                // 关闭诊断后移除本分支。
+                if std::env::var("WV_CHUNK_DIAG").is_ok() {
+                    let has_handle = images.get(&tex.handle).is_some();
+                    let data_len = images
+                        .get(&tex.handle)
+                        .and_then(|i| i.data.as_ref())
+                        .map(|d| d.len())
+                        .unwrap_or(0);
+                    eprintln!(
+                        "[chunk-diag] needs_src=true but source unusable: handle_valid={has_handle} data_len={data_len} tex.size={} tex.res={} chunk_entities={} visible_chunks={}",
+                        tex.size,
+                        tex.res,
+                        chunk_entities.by_coord.len(),
+                        visible.len(),
+                    );
+                }
+                // `&Image` 是 Copy，match 块结束自动释放——不需要手动 drop。
+                None
+            }
         }
     } else {
         None
     };
     // 需要像素但源未就绪：保留 chunks_dirty，下帧重试。
     if needs_src && src_data.is_none() {
+        if std::env::var("WV_CHUNK_DIAG").is_ok() {
+            eprintln!("[chunk-diag] bailing: needs_src but src_data=None, keeping chunks_dirty");
+        }
         return;
     }
     let src = src_data.as_deref();
@@ -401,6 +467,8 @@ pub fn sync_terrain_chunks(
             .collect();
         let mesh_handle = meshes.add(Rectangle::new(chunk_world_size, chunk_world_size));
         let material = materials.add(ColorMaterial {
+            // 图层透明度（ADR-0013）：作者 YAML 的 `opacity` 落在材质 alpha 上。
+            color: Color::WHITE.with_alpha(layers.terrain.opacity),
             texture: mip_handles.get(mip_now as usize).cloned(),
             ..default()
         });
@@ -408,7 +476,7 @@ pub fn sync_terrain_chunks(
             .spawn((
                 Mesh2d(mesh_handle),
                 MeshMaterial2d(material.clone()),
-                Transform::from_translation(center.extend(TERRAIN_Z)),
+                Transform::from_translation(center.extend(TERRAIN_Z + layers.terrain.z_offset)),
                 TerrainChunk {
                     _coord: coord,
                     current_mip: mip_now,

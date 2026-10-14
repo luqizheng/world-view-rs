@@ -24,6 +24,7 @@ use bevy::render::render_resource::{PrimitiveTopology, VertexFormat};
 
 use wv_terrain::isoline::{assemble_chains, chaikin, height_segments, kind_segments, simplify_dp};
 
+use crate::render::layer_frame::LayerFrame;
 use crate::state::{DrillState, GridConfig, ViewMode, ViewState, WorldProjection};
 
 use super::terrain_resolve::texture_terrain;
@@ -31,6 +32,8 @@ use super::terrain_texture::TerrainTexture;
 
 /// 等值线墨色（制图蓝灰）：海岸线与类型场边界第一版共用一色。
 const ISOLINE_COLOR: Color = Color::srgb(0.29, 0.40, 0.50);
+/// 等值线本色的 alpha（作者未给 Terrain 图层设 opacity 时的值）。
+const ISOLINE_BASE_ALPHA: f32 = 1.0;
 
 /// 叠加层 Z：底图块（`TERRAIN_Z = 0.0`）之上、换级淡化精灵（0.05）与道路
 /// （`ROAD_Z = 0.1`）之下——等值线属于底图的一部分。
@@ -105,10 +108,12 @@ pub fn sync_isoline_overlay(
     drill: Res<DrillState>,
     grid: Res<GridConfig>,
     tex: Res<TerrainTexture>,
+    layers: Res<LayerFrame>,
     mut overlay: ResMut<IsolineOverlay>,
 ) {
-    // 只在 VectorFlat 浏览态存在；关图层 / 换模式即退场（键随之清零，重进重算）。
-    if !view.terrain_visible || view.mode != ViewMode::VectorFlat {
+    // 只在 VectorFlat 浏览态存在；关图层（YAML ∨ 会话，ADR-0013）/ 换模式即退场
+    // （键随之清零，重进重算）。
+    if !layers.terrain.visible || view.mode != ViewMode::VectorFlat {
         overlay.despawn(&mut commands);
         return;
     }
@@ -126,6 +131,18 @@ pub fn sync_isoline_overlay(
     let structural_same = overlay.key.as_ref() == Some(&key);
     let dirty_pending = tex.chunks_dirty.is_some();
     if structural_same && !dirty_pending && overlay.entity.is_some() {
+        // 结构没变也可能只是图层绑定变了（作者改 opacity/z）：就地补丁，
+        // 不重算派生几何。
+        if layers.is_changed() {
+            apply_material_alpha(&mut materials, &overlay, layers.terrain.opacity);
+            if let Some(entity) = overlay.entity {
+                commands.entity(entity).insert(Transform::from_xyz(
+                    0.0,
+                    0.0,
+                    ISOLINE_Z + layers.terrain.z_offset,
+                ));
+            }
+        }
         return;
     }
 
@@ -165,18 +182,36 @@ pub fn sync_isoline_overlay(
         .material
         .get_or_insert_with(|| materials.add(ColorMaterial::from_color(ISOLINE_COLOR)))
         .clone();
+    // 材质跨重建复用（get_or_insert）：重算后也要按当前绑定刷新 alpha。
+    apply_material_alpha(&mut materials, &overlay, layers.terrain.opacity);
 
     overlay.despawn(&mut commands);
     let entity = commands
         .spawn((
             Mesh2d(handle.clone()),
             MeshMaterial2d(material),
-            Transform::from_xyz(0.0, 0.0, ISOLINE_Z),
+            Transform::from_xyz(0.0, 0.0, ISOLINE_Z + layers.terrain.z_offset),
         ))
         .id();
     overlay.entity = Some(entity);
     overlay.mesh = Some(handle);
     overlay.key = Some(key);
+}
+
+/// 把 Terrain 图层绑定的 opacity 写到等值线材质 alpha 上。
+///
+/// 材质是**缓存复用**的单例（`overlay.material`），改 alpha 走 `Assets::get_mut`，
+/// 不新建资产；实体 z 由 spawn 路径或结构不变路径的 Transform 补丁负责。
+fn apply_material_alpha(
+    materials: &mut Assets<ColorMaterial>,
+    overlay: &IsolineOverlay,
+    opacity: f32,
+) {
+    if let Some(handle) = &overlay.material {
+        if let Some(mut mat) = materials.get_mut(handle) {
+            mat.color = ISOLINE_COLOR.with_alpha(ISOLINE_BASE_ALPHA * opacity);
+        }
+    }
 }
 
 /// 把折线链展开成**单个**三角网（每段一个加宽四边形，段端外扩半宽盖住转角缝隙）。

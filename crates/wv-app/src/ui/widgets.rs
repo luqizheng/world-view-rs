@@ -236,11 +236,27 @@ pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8) {
         });
 }
 
-/// 浮动面板外壳：类型图标 + 标题 + 徽标 + 折叠，可拖动，可关闭。
+/// 浮动面板外壳：标题进原生标题栏行 + 可拖动，可折叠，可关闭。
 ///
 /// `layouts` 提供**跨会话**的位置/尺寸（`ui-layout.yaml`）；本帧的拖动结果由
 /// egui 按窗口 `Id` 自己记住，并由 [`crate::ui_shell::persist_layout_on_change`]
 /// 回写磁盘（D1：面板是客人，地图是主体）。
+///
+/// ## 层序约定（2026-10-14 用户要求「弹窗/浮动都在最顶层」后固化）
+///
+/// 本外壳**不设** `order`——即 egui 缺省 `Middle`：面板互斥点击由 egui 的
+/// 「点谁谁置顶」管理，且永远压在 egui Background 面板（顶栏/状态栏）与
+/// Bevy 地图之上。模态弹窗（新建地图 / 新建工程 / 命令面板 / 欢迎页 /
+/// 启动加载）在 `Order::Foreground`—— egui 绘制序
+/// `Background < Middle < Foreground < Tooltip`，故弹窗压面板、悬浮提示仍在最上。
+/// 新增浮层时按此表对号入座，不要把弹窗放回 Middle。
+///
+/// ## 标题为什么在原生标题栏里（2026-10-14 用户裁定）
+///
+/// 旧实现用空标题窗口（原生栏只剩 ▼ / × 两个按钮）+ 体内自绘标题行，代价是：
+/// ① 窗体多出一整行高度；② 折叠后只剩空标题栏，看不出折起来的是哪个面板。
+/// 把「图标 + 标题」直接交给 `Window::new`（egui 0.36 的标题栏布局是
+/// 「▼ … 标题 … ×」），两个问题同时消失。`panel_header` 自绘行随之退役。
 pub fn float_window(
     ctx: &egui::Context,
     shell: &UiShell,
@@ -261,7 +277,7 @@ pub fn float_window(
     // 沉浸模式：整体淡化但**仍可交互**（D3：状态永不抑制）。
     let alpha = if panels.immersive { 0.10 } else { 0.96 };
 
-    let win = egui::Window::new("")
+    let win = egui::Window::new(format!("{} {}", panel.icon(), panel.title()))
         .id(id)
         .open(&mut open)
         .default_pos(egui::pos2(layout.x, layout.y))
@@ -279,48 +295,15 @@ pub fn float_window(
         );
 
     win.show(ctx, |ui| {
-        // 自绘标题栏三段（§4.1）：⠿ 拖动把手 · 图标+标题 · 徽标。
-        panel_header(ui, shell, panel, tag);
-        ui.add_space(space::XS);
-        ui.separator();
-        ui.add_space(space::XS);
+        // 徽标（当前无调用方传入，保留入口）：画在体首，不占标题栏。
+        if let Some((kind, text)) = tag {
+            badge(ui, shell, kind, &text);
+            ui.add_space(space::XS);
+        }
         body(ui);
     });
 
     if !open {
         panels.set_visible(panel, false);
     }
-}
-
-/// 自绘面板标题栏三段：⠿ 拖动把手 · 图标+标题 · 徽标（§4.1）。
-pub fn panel_header(
-    ui: &mut egui::Ui,
-    shell: &UiShell,
-    panel: Panel,
-    tag: Option<(BadgeKind, String)>,
-) {
-    ui.horizontal(|ui| {
-        // 拖动把手（视觉上明示可拖）。
-        ui.label(
-            egui::RichText::new("⠿")
-                .size(shell.scale.micro)
-                .color(shell.t3().gamma_multiply(0.6)),
-        );
-        // 类型图标（accent 着色）。
-        ui.label(
-            egui::RichText::new(panel.icon())
-                .size(shell.scale.base)
-                .color(shell.accent()),
-        );
-        // 标题（11px，字距 .05em 近似为大写风格）。
-        ui.label(
-            egui::RichText::new(panel.title())
-                .size(shell.scale.micro)
-                .color(shell.t1()),
-        );
-        if let Some((kind, text)) = tag {
-            ui.add_space(space::XS);
-            badge(ui, shell, kind, &text);
-        }
-    });
 }

@@ -15,6 +15,7 @@
 
 use bevy::prelude::*;
 
+use crate::render::layer_frame::LayerFrame;
 use crate::state::{BrushState, GridConfig, ViewState};
 
 use super::isoline_overlay::build_stroke_mesh;
@@ -22,6 +23,8 @@ use super::terrain_texture::TerrainTexture;
 
 /// 网格线色：半透明深灰蓝，压在底图上不喧宾。
 const GRID_LINE_COLOR: Color = Color::srgba(0.15, 0.22, 0.30, 0.35);
+/// 网格线本色的 alpha（作者未给 Terrain 图层设 opacity 时的值）。
+const GRID_LINE_BASE_ALPHA: f32 = 0.35;
 
 /// Z 序：底图块（0.0）之上、等值线描边（0.04）之下。
 const GRID_Z: f32 = 0.03;
@@ -66,6 +69,9 @@ impl GridLinesOverlay {
 }
 
 /// 同步逐格网格叠加层。
+///
+/// 网格是**编辑参照**，跟随 Terrain 图层的可见与透明度（ADR-0013）：
+/// 作者把地形藏了，格线还浮着只会误导「这里可以画」。
 #[allow(clippy::too_many_arguments)]
 pub fn sync_grid_lines(
     mut commands: Commands,
@@ -75,9 +81,10 @@ pub fn sync_grid_lines(
     grid: Res<GridConfig>,
     tex: Res<TerrainTexture>,
     brush: Res<BrushState>,
+    layers: Res<LayerFrame>,
     mut overlay: ResMut<GridLinesOverlay>,
 ) {
-    if !view.terrain_visible || !grid_lines_visible(&brush) {
+    if !layers.terrain.visible || !grid_lines_visible(&brush) {
         overlay.despawn(&mut commands);
         return;
     }
@@ -91,6 +98,22 @@ pub fn sync_grid_lines(
         scale_bits: view.scale.to_bits() as u64,
     };
     if overlay.key.as_ref() == Some(&key) && overlay.entity.is_some() {
+        // 结构没变也可能只是图层绑定变了（作者改 opacity/z）：就地补丁。
+        if layers.is_changed() {
+            if let Some(handle) = &overlay.material {
+                if let Some(mut mat) = materials.get_mut(handle) {
+                    mat.color =
+                        GRID_LINE_COLOR.with_alpha(GRID_LINE_BASE_ALPHA * layers.terrain.opacity);
+                }
+            }
+            if let Some(entity) = overlay.entity {
+                commands.entity(entity).insert(Transform::from_xyz(
+                    0.0,
+                    0.0,
+                    GRID_Z + layers.terrain.z_offset,
+                ));
+            }
+        }
         return;
     }
     if tex.size == 0 {
@@ -106,13 +129,17 @@ pub fn sync_grid_lines(
         .material
         .get_or_insert_with(|| materials.add(ColorMaterial::from_color(GRID_LINE_COLOR)))
         .clone();
+    // 材质跨重建复用（get_or_insert）：重算后也要按当前绑定刷新 alpha。
+    if let Some(mut mat) = materials.get_mut(&material) {
+        mat.color = GRID_LINE_COLOR.with_alpha(GRID_LINE_BASE_ALPHA * layers.terrain.opacity);
+    }
 
     overlay.despawn(&mut commands);
     let entity = commands
         .spawn((
             Mesh2d(handle.clone()),
             MeshMaterial2d(material),
-            Transform::from_xyz(0.0, 0.0, GRID_Z),
+            Transform::from_xyz(0.0, 0.0, GRID_Z + layers.terrain.z_offset),
         ))
         .id();
     overlay.entity = Some(entity);

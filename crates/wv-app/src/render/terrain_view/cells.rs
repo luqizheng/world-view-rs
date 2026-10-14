@@ -106,9 +106,10 @@ fn shade_event(_data: &TerrainData, _kind: u8) -> Color {
 
 /// 水系判定（轮廓图唯一关心的二分）：深水/浅水算水，其余全算陆。
 ///
-/// 只此一个入口——笔刷新增水系 kind 时改这里，海岸线自动跟随。
+/// 口径委托给 [`wv_terrain::edit::is_water_kind`]（笔刷高度域对齐共用同一判定，
+/// 单一真源；见该函数文档）。
 fn is_water_kind(kind: u8) -> bool {
-    kind <= 1
+    wv_terrain::edit::is_water_kind(kind)
 }
 
 fn shade_coast(_data: &TerrainData, kind: u8) -> Color {
@@ -774,5 +775,169 @@ mod tests {
         let google = terrain_res_for(&data, ViewMode::GoogleMap, None);
         assert_eq!(vector, google, "VectorFlat 应与 GoogleMap 同口径");
         assert!(vector > 1, "512² 图应取 {vector}px/格（亚像素）");
+    }
+
+    // -----------------------------------------------------------------------
+    // 端到端回归：笔刷→数据→纹理（2026-10-14 用户反馈「笔刷涂大地图没变化」）。
+    // 单测层验过 wv-terrain 改值；本测试验「数据 + 图像合成」两步的连贯性——
+    // 任何一环把数据吞了/拿错底图/类型 vs 高度口径不一致，都会在这挂掉。
+    // -----------------------------------------------------------------------
+    use wv_core::id::Id;
+    use wv_core::terrain::TerrainData;
+    use wv_terrain::edit::{Brush, Stroke};
+
+    /// 启动占位地形 → 笔刷把陆地涂成深水 → 全图重建后中心格像素必须是深水色。
+    /// 任何"笔刷不生效"的回归都会让这测试的红/蓝通道与基色 0x1E3A5F 偏离。
+    #[test]
+    fn brush_paint_round_trips_through_terrain_renderer() {
+        use bevy::asset::Assets;
+        use bevy::image::Image;
+        use bevy::prelude::*;
+        let mut world = wv_core::World::default();
+        world.maps.push(wv_core::map::MapNode {
+            id: Id::new_unchecked("world_main"),
+            name: "世界".into(),
+            level: wv_core::map::MapLevel::World,
+            parent: None,
+            children: vec![],
+            layers: vec![],
+            icons: vec![],
+            extent: Some(wv_core::map::Extent::sized(512.0, 512.0)),
+            raster: None,
+            geographic_source: None,
+            orientation: 0.0,
+        });
+        let (map, data) = crate::render::terrain_view::active_terrain_or_placeholder(
+            &mut world,
+            Some(&Id::new_unchecked("world_main")),
+            64,
+        );
+
+        let mut images = Assets::<Image>::default();
+        let image = image_from_terrain(&data, ViewMode::VectorFlat, None, false);
+        let tex = crate::render::terrain_view::new_terrain_texture(
+            &mut images,
+            image,
+            &data,
+            map.clone(),
+            ViewMode::VectorFlat,
+            false,
+        );
+        let handle = tex.handle.clone();
+
+        // 笔刷落笔 (32.5, 32.5) world, cell_size 8 → 格 (4,4)
+        let mut stroke = Stroke::new();
+        stroke.push(Brush {
+            center: (32.5, 32.5),
+            radius: 96.0,
+            softness: 0.5,
+            kind: Some(0),
+            height_delta: 0.0,
+        });
+        let cmd = wv_edit::command::PaintTerrainCommand::new(
+            Id::new_unchecked("world_main"),
+            stroke,
+            8.0,
+        );
+        let mut tx = wv_edit::Transaction::new();
+        tx.push(Box::new(cmd));
+        let mut hist = wv_edit::History::default();
+        hist.commit(&mut world, tx).unwrap();
+
+        let after = world.terrain_of(&Id::new_unchecked("world_main")).unwrap();
+        assert!(after.cells[4 * 64 + 4].height < 0, "海格高度应在海平面下");
+        assert_eq!(after.cells[4 * 64 + 4].kind, 0);
+
+        // 全图重建（同 `flush_terrain_texture` 的整图分支）。
+        let new_image = image_from_terrain(after, ViewMode::VectorFlat, None, false);
+        if let Some(mut img) = images.get_mut(&handle) {
+            *img = new_image;
+        }
+        let img_after = images.get(&handle).unwrap();
+        let w = img_after.width();
+        let res = w / 64;
+        let px = (4 * res + res / 2) as usize;
+        let py = (4 * res + res / 2) as usize;
+        let o = (py * w as usize + px) * 4;
+        let data_ref = img_after.data.as_ref().unwrap();
+        let Color::Srgba(deep) = colors::core_terrain(0) else {
+            unreachable!()
+        };
+        let r = data_ref[o] as f32 / 255.0;
+        let g = data_ref[o + 1] as f32 / 255.0;
+        let b = data_ref[o + 2] as f32 / 255.0;
+        assert!(
+            (r - deep.red).abs() < 0.02
+                && (g - deep.green).abs() < 0.02
+                && (b - deep.blue).abs() < 0.02,
+            "中心格应为深水色 ({}), got ({:.3}, {:.3}, {:.3})",
+            deep.blue,
+            r,
+            g,
+            b
+        );
+    }
+
+    /// 2026-10-14「只看到等值线、没有底图填充」回归。
+    /// 模拟 NewMap / LoadProject 的"造地形 → 调 replace_terrain_texture
+    /// 二次写入"链路，验证新 image data 通过同句柄仍能取到。
+    /// `sync_terrain_chunks` 的 needs_src 路径成立的前提就是这一不变量。
+    #[test]
+    fn replace_terrain_texture_keeps_image_data_reachable_via_same_handle() {
+        use bevy::asset::Assets;
+        use bevy::image::Image;
+        let mut world_core = wv_core::World::default();
+        world_core.maps.push(wv_core::map::MapNode {
+            id: Id::new_unchecked("world_main"),
+            name: "世界".into(),
+            level: wv_core::map::MapLevel::World,
+            parent: None,
+            children: vec![],
+            layers: vec![],
+            icons: vec![],
+            extent: Some(wv_core::map::Extent::sized(512.0, 512.0)),
+            raster: None,
+            geographic_source: None,
+            orientation: 0.0,
+        });
+        let (map, data) = crate::render::terrain_view::active_terrain_or_placeholder(
+            &mut world_core,
+            Some(&Id::new_unchecked("world_main")),
+            64,
+        );
+
+        let mut images = Assets::<Image>::default();
+        let image = image_from_terrain(&data, ViewMode::VectorFlat, None, false);
+        let mut tex = crate::render::terrain_view::new_terrain_texture(
+            &mut images,
+            image,
+            &data,
+            map.clone(),
+            ViewMode::VectorFlat,
+            false,
+        );
+        let expected_handle = tex.handle.clone();
+        // 二次写入（NewMap / LoadProject 的真实路径）。
+        let image2 = image_from_terrain(&data, ViewMode::VectorFlat, None, false);
+        crate::render::terrain_view::replace_terrain_texture(
+            &mut tex,
+            &mut images,
+            image2,
+            &data,
+            map.clone(),
+            ViewMode::VectorFlat,
+            false,
+        );
+        assert_eq!(
+            tex.handle, expected_handle,
+            "replace 必须复用句柄（否则 ColorMaterial 悬空）"
+        );
+        let img = images.get(&tex.handle).expect("句柄必须仍指向有效资产");
+        let data_len = img
+            .data
+            .as_ref()
+            .map(|d| d.len())
+            .expect("image data 应非空");
+        assert!(data_len > 0, "replace 后 data 仍应非空，实得 {data_len}");
     }
 }

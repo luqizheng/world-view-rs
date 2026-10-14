@@ -28,6 +28,7 @@
 use bevy::math::primitives::{Annulus, Circle};
 use bevy::prelude::*;
 
+use crate::render::layer_frame::LayerFrame;
 use crate::render::world_projection::{PlaceDot, ProjectionFrame};
 use crate::state::{lod_tier, GridConfig, LodTier, ViewState};
 use crate::theme::colors;
@@ -206,6 +207,9 @@ pub struct VectorLayerEntities {
 
 /// 每帧同步道路、街道与 POI。系统只消费 `ProjectionFrame` 与街道缓存，
 /// 不修改世界数据。
+///
+/// 可见 / 透明度 / Z 偏移读 [`LayerFrame`]（ADR-0013）：Road 组与 Place 组
+/// 各自独立绑定，组内 casing < fill < 标注的次序不变，整组随 `z_offset` 平移。
 #[allow(clippy::too_many_arguments)]
 pub fn sync_vector_layers(
     mut commands: Commands,
@@ -214,14 +218,25 @@ pub fn sync_vector_layers(
     view: Res<ViewState>,
     grid: Res<GridConfig>,
     frame: Res<ProjectionFrame>,
+    layers: Res<LayerFrame>,
     streets: Res<crate::render::streets::StreetLayerCache>,
     editor: Res<crate::render::streets::StreetEditorState>,
     mut layer: ResMut<VectorLayerEntities>,
 ) {
-    let road_materials_changed = ensure_road_materials(&mut materials, view.mode, &mut layer);
-    let poi_materials_changed = ensure_poi_materials(&mut materials, view.mode, &mut layer);
+    let road_materials_changed =
+        ensure_road_materials(&mut materials, view.mode, layers.road.opacity, &mut layer);
+    let poi_materials_changed =
+        ensure_poi_materials(&mut materials, view.mode, layers.place.opacity, &mut layer);
+    // 绑定变化（作者改 YAML 的 opacity）：缓存材质的 alpha 就地刷新。
+    // z 偏移不需要这步——sync_road_strokes / sync_poi 每帧全量重写 Transform。
+    if layers.is_changed() {
+        apply_road_material_alpha(&mut materials, &layer, layers.road.opacity);
+        apply_poi_material_alpha(&mut materials, &layer, layers.place.opacity);
+    }
+    let road_z = layers.road.z_offset;
+    let place_z = layers.place.z_offset;
 
-    if !view.roads_visible {
+    if !layers.road.visible {
         layer.road_casings.mesh.despawn(&mut commands);
         layer.roads.mesh.despawn(&mut commands);
         layer.road_casings.specs.clear();
@@ -248,7 +263,7 @@ pub fn sync_vector_layers(
             view.scale,
             casing.clone(),
             GOOGLE_ROAD_CASING_PX,
-            ROAD_CASING_Z,
+            ROAD_CASING_Z + road_z,
             road_materials_changed,
             &mut layer.road_casings,
         );
@@ -259,7 +274,7 @@ pub fn sync_vector_layers(
             view.scale,
             fill.clone(),
             GOOGLE_ROAD_FILL_PX,
-            ROAD_Z,
+            ROAD_Z + road_z,
             road_materials_changed,
             &mut layer.roads,
         );
@@ -280,7 +295,7 @@ pub fn sync_vector_layers(
             view.scale,
             fill.clone(),
             STREET_PREVIEW_PX,
-            STREET_PREVIEW_Z,
+            STREET_PREVIEW_Z + road_z,
             road_materials_changed,
             &mut layer.street_preview,
         );
@@ -292,12 +307,13 @@ pub fn sync_vector_layers(
             view.scale,
             casing,
             fill,
+            road_z,
             road_materials_changed,
             &mut layer,
         );
     }
 
-    if !view.places_visible {
+    if !layers.place.visible {
         layer.poi_outer.mesh.despawn(&mut commands);
         layer.poi_inner.mesh.despawn(&mut commands);
         layer.poi_outer.specs.clear();
@@ -310,9 +326,61 @@ pub fn sync_vector_layers(
             view.scale,
             lod_tier(view.scale),
             &grid,
+            place_z,
             poi_materials_changed,
             &mut layer,
         );
+    }
+}
+
+/// 道路组两种模式的基础色（casing, fill）。alpha 是「本色 alpha」，
+/// 图层 opacity 在其上相乘。
+fn road_base_colors(mode: crate::state::ViewMode) -> (Color, Color) {
+    match mode {
+        crate::state::ViewMode::GoogleMap => (GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL),
+        _ => (colors::LINE_ON_MID.with_alpha(0.28), colors::ROAD_STROKE),
+    }
+}
+
+/// POI 组两种模式的基础色（ring, dot）。
+fn poi_base_colors(mode: crate::state::ViewMode) -> (Color, Color) {
+    match mode {
+        crate::state::ViewMode::GoogleMap => (GOOGLE_POI_RING, GOOGLE_PLACE_DOT),
+        _ => (colors::POI_RING, colors::PLACE_DOT),
+    }
+}
+
+/// 把 Road 图层 opacity 刷进所有已缓存的道路材质（按各模式的基础色重算）。
+fn apply_road_material_alpha(
+    materials: &mut Assets<ColorMaterial>,
+    layer: &VectorLayerEntities,
+    opacity: f32,
+) {
+    for set in &layer.road_materials {
+        let (casing, fill) = road_base_colors(set.mode);
+        if let Some(mut mat) = materials.get_mut(&set.casing) {
+            mat.color = casing.with_alpha(casing.alpha() * opacity);
+        }
+        if let Some(mut mat) = materials.get_mut(&set.fill) {
+            mat.color = fill.with_alpha(fill.alpha() * opacity);
+        }
+    }
+}
+
+/// 把 Place 图层 opacity 刷进所有已缓存的 POI 材质。
+fn apply_poi_material_alpha(
+    materials: &mut Assets<ColorMaterial>,
+    layer: &VectorLayerEntities,
+    opacity: f32,
+) {
+    for set in &layer.poi_materials {
+        let (ring, dot) = poi_base_colors(set.mode);
+        if let Some(mut mat) = materials.get_mut(&set.ring) {
+            mat.color = ring.with_alpha(ring.alpha() * opacity);
+        }
+        if let Some(mut mat) = materials.get_mut(&set.dot) {
+            mat.color = dot.with_alpha(dot.alpha() * opacity);
+        }
     }
 }
 
@@ -324,20 +392,19 @@ fn poi_kept_at_tier(dot: &PlaceDot, tier: LodTier) -> bool {
 fn ensure_road_materials(
     materials: &mut Assets<ColorMaterial>,
     mode: crate::state::ViewMode,
+    road_opacity: f32,
     layer: &mut VectorLayerEntities,
 ) -> bool {
     if layer.road_material_mode == Some(mode) {
         return false;
     }
     if !layer.road_materials.iter().any(|set| set.mode == mode) {
-        let (casing_color, fill_color) = match mode {
-            crate::state::ViewMode::GoogleMap => (GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL),
-            _ => (colors::LINE_ON_MID.with_alpha(0.28), colors::ROAD_STROKE),
-        };
+        let (casing, fill) = road_base_colors(mode);
+        let with_opacity = |c: Color| c.with_alpha(c.alpha() * road_opacity);
         layer.road_materials.push(RoadMaterialSet {
             mode,
-            casing: materials.add(casing_color),
-            fill: materials.add(fill_color),
+            casing: materials.add(with_opacity(casing)),
+            fill: materials.add(with_opacity(fill)),
         });
     }
     layer.road_material_mode = Some(mode);
@@ -347,20 +414,19 @@ fn ensure_road_materials(
 fn ensure_poi_materials(
     materials: &mut Assets<ColorMaterial>,
     mode: crate::state::ViewMode,
+    place_opacity: f32,
     layer: &mut VectorLayerEntities,
 ) -> bool {
     if layer.poi_material_mode == Some(mode) {
         return false;
     }
     if !layer.poi_materials.iter().any(|set| set.mode == mode) {
-        let (ring_color, dot_color) = match mode {
-            crate::state::ViewMode::GoogleMap => (GOOGLE_POI_RING, GOOGLE_PLACE_DOT),
-            _ => (colors::POI_RING, colors::PLACE_DOT),
-        };
+        let (ring, dot) = poi_base_colors(mode);
+        let with_opacity = |c: Color| c.with_alpha(c.alpha() * place_opacity);
         layer.poi_materials.push(PoiMaterialSet {
             mode,
-            ring: materials.add(ring_color),
-            dot: materials.add(dot_color),
+            ring: materials.add(with_opacity(ring)),
+            dot: materials.add(with_opacity(dot)),
         });
     }
     layer.poi_material_mode = Some(mode);
@@ -384,6 +450,7 @@ fn sync_street_layers(
     view_scale: f32,
     casing: Handle<ColorMaterial>,
     fill: Handle<ColorMaterial>,
+    z_offset: f32,
     material_changed: bool,
     layer: &mut VectorLayerEntities,
 ) {
@@ -404,6 +471,7 @@ fn sync_street_layers(
         );
     }
     // casing 先画（Z 更低），fill 后画：两层的宽度差就是可见路缘。
+    // 组内次序是编译期约束；整组再叠加 Road 图层的 z_offset（ADR-0013）。
     sync_road_strokes(
         commands,
         meshes,
@@ -411,7 +479,7 @@ fn sync_street_layers(
         view_scale,
         casing.clone(),
         STREET_MAJOR_PX + STREET_CASING_EXTRA_PX,
-        STREET_MAJOR_CASING_Z,
+        STREET_MAJOR_CASING_Z + z_offset,
         material_changed,
         &mut layer.street_major_casing,
     );
@@ -422,7 +490,7 @@ fn sync_street_layers(
         view_scale,
         fill.clone(),
         STREET_MAJOR_PX,
-        STREET_MAJOR_Z,
+        STREET_MAJOR_Z + z_offset,
         material_changed,
         &mut layer.street_major,
     );
@@ -433,7 +501,7 @@ fn sync_street_layers(
         view_scale,
         casing,
         STREET_MINOR_PX + STREET_CASING_EXTRA_PX,
-        STREET_MINOR_CASING_Z,
+        STREET_MINOR_CASING_Z + z_offset,
         material_changed,
         &mut layer.street_minor_casing,
     );
@@ -444,7 +512,7 @@ fn sync_street_layers(
         view_scale,
         fill,
         STREET_MINOR_PX,
-        STREET_MINOR_Z,
+        STREET_MINOR_Z + z_offset,
         material_changed,
         &mut layer.street_minor,
     );
@@ -517,7 +585,7 @@ fn sync_road_strokes(
     }
 }
 
-/// 同步红点白环 POI；Mesh 只在半径变化时重建。
+/// 同步红点白环 POI；Mesh 只在半径变化时重建。`z_offset` 是 Place 图层的槽位偏移。
 #[allow(clippy::too_many_arguments)]
 fn sync_poi(
     commands: &mut Commands,
@@ -526,6 +594,7 @@ fn sync_poi(
     view_scale: f32,
     tier: LodTier,
     grid: &GridConfig,
+    z_offset: f32,
     material_changed: bool,
     layer: &mut VectorLayerEntities,
 ) {
@@ -586,7 +655,7 @@ fn sync_poi(
                 .spawn((
                     Mesh2d(mesh.clone()),
                     MeshMaterial2d(materials.0.clone()),
-                    Transform::from_translation(dot.pos.extend(POI_OUTER_Z)),
+                    Transform::from_translation(dot.pos.extend(POI_OUTER_Z + z_offset)),
                 ))
                 .id();
             layer.poi_outer.mesh.entities.push(entity);
@@ -598,6 +667,7 @@ fn sync_poi(
                 meshes,
                 layer.poi_outer.mesh.entities[i],
                 outer_spec,
+                z_offset,
                 material_changed,
                 &mut layer.poi_outer.mesh.meshes[i],
                 &mut layer.poi_outer.specs[i],
@@ -611,7 +681,7 @@ fn sync_poi(
                 .spawn((
                     Mesh2d(mesh.clone()),
                     MeshMaterial2d(materials.1.clone()),
-                    Transform::from_translation(dot.pos.extend(POI_INNER_Z)),
+                    Transform::from_translation(dot.pos.extend(POI_INNER_Z + z_offset)),
                 ))
                 .id();
             layer.poi_inner.mesh.entities.push(entity);
@@ -623,6 +693,7 @@ fn sync_poi(
                 meshes,
                 layer.poi_inner.mesh.entities[i],
                 inner_spec,
+                z_offset,
                 material_changed,
                 &mut layer.poi_inner.mesh.meshes[i],
                 &mut layer.poi_inner.specs[i],
@@ -638,6 +709,7 @@ fn update_poi_outer(
     meshes: &mut Assets<Mesh>,
     entity: Entity,
     spec: PoiOuterSpec,
+    z_offset: f32,
     material_changed: bool,
     mesh_handle: &mut Handle<Mesh>,
     cached: &mut PoiOuterSpec,
@@ -658,9 +730,9 @@ fn update_poi_outer(
             .entity(entity)
             .insert(MeshMaterial2d(material.clone()));
     }
-    commands
-        .entity(entity)
-        .insert(Transform::from_translation(spec.pos.extend(POI_OUTER_Z)));
+    commands.entity(entity).insert(Transform::from_translation(
+        spec.pos.extend(POI_OUTER_Z + z_offset),
+    ));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -669,6 +741,7 @@ fn update_poi_inner(
     meshes: &mut Assets<Mesh>,
     entity: Entity,
     spec: PoiInnerSpec,
+    z_offset: f32,
     material_changed: bool,
     mesh_handle: &mut Handle<Mesh>,
     cached: &mut PoiInnerSpec,
@@ -689,9 +762,9 @@ fn update_poi_inner(
             .entity(entity)
             .insert(MeshMaterial2d(material.clone()));
     }
-    commands
-        .entity(entity)
-        .insert(Transform::from_translation(spec.pos.extend(POI_INNER_Z)));
+    commands.entity(entity).insert(Transform::from_translation(
+        spec.pos.extend(POI_INNER_Z + z_offset),
+    ));
 }
 
 #[cfg(test)]
@@ -826,6 +899,7 @@ mod tests {
         world.init_resource::<VectorLayerEntities>();
         world.init_resource::<crate::render::streets::StreetLayerCache>();
         world.init_resource::<crate::render::streets::StreetEditorState>();
+        world.init_resource::<crate::render::layer_frame::LayerFrame>();
 
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);
@@ -882,6 +956,7 @@ mod tests {
             )],
         });
         world.init_resource::<crate::render::streets::StreetEditorState>();
+        world.init_resource::<crate::render::layer_frame::LayerFrame>();
 
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);

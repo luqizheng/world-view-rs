@@ -24,6 +24,7 @@ use crate::edit::editing;
 use crate::render::brush_cursor;
 use crate::render::camera;
 use crate::render::faction_overlays;
+use crate::render::layer_frame;
 use crate::render::map_frame;
 use crate::render::streets;
 use crate::render::terrain_chunks;
@@ -100,7 +101,14 @@ pub fn run(config: AppConfig) {
     .init_resource::<BrushState>()
     .init_resource::<PanelState>()
     .init_resource::<GridConfig>()
+    // 「新建地图」对话框状态（ui_shell 分发器与对话框系统共用）。
+    .init_resource::<ui::NewMapDialog>()
+    // 「新建工程」对话框状态（欢迎页 / 分发器 / 目录轮询三方共用；
+    // 资源本体在 ui_shell::register 里也有 init，幂等，这里注册是就近可读）。
+    .init_resource::<ui::NewProjectDialog>()
     .init_resource::<world_projection::ProjectionFrame>()
+    // 图层帧（ADR-0013）：`MapNode.layers[].z/visible/opacity` 的每帧投影。
+    .init_resource::<layer_frame::LayerFrame>()
     .init_resource::<camera::ActiveStroke>()
     .init_resource::<camera::PointerOverUi>()
     .init_resource::<editing::EditHistory>()
@@ -172,6 +180,8 @@ pub fn run(config: AppConfig) {
                 .chain(),
             // 换级淡化：旧底图淡出精灵逐帧降透明、归零回收（ADR-0009 §2⑦）。
             terrain_view::tick_basemap_fadeout,
+            // 图层帧（ADR-0013）：先于一切消费它的渲染系统求值。
+            layer_frame::resolve_layer_frame,
             // 投影（时间 → 渲染资源）
             world_projection::compute_projection,
             // 等值线矢量叠加（ADR-0012 / plan v0.1 M2）：先于 chunk 层读
@@ -240,6 +250,12 @@ pub fn run(config: AppConfig) {
             ui::panel_faction,
             ui::panel_inspector,
             ui::panel_validation,
+            // 「新建地图」对话框（CommandId::NewMap 打开；居中模态窗）。
+            ui::new_map_dialog,
+            // 「新建工程」对话框（CommandId::NewProject / 欢迎页打开；
+            // 与 new_map_dialog 同族的居中模态窗，排在状态栏之前——
+            // 确认创建写的回执本帧就要被状态栏读到）。
+            ui::new_project_dialog,
             // 状态栏最后画：它读得到的 `ShellNotice` 已是本帧最终值。
             ui::status_bar,
         )

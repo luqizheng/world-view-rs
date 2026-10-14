@@ -107,8 +107,11 @@ pub enum CommandId {
     ResetPanelLayout,
     /// 打开最近工程列表里的第 n 条（索引对应 `RecentProjects::visible`）。
     OpenRecentProject(u8),
-    /// 新建工程（`Ctrl+Shift+N`）。
+    /// 新建工程…（`Ctrl+Shift+N`）：弹「名称 + 位置 + 路径预览」对话框，
+    /// 确认后在 `位置\名称` 落盘（含首张世界地图）并打开（2026-10-14 改版）。
     NewProject,
+    /// 新建地图…（弹出参数对话框：名称 / 层级 / 幅面 / 海陆预填充）。
+    NewMap,
     /// 打开工程…（`Ctrl+O`）。
     OpenProject,
     /// 另存为…（`Ctrl+Shift+S`）。
@@ -125,6 +128,10 @@ pub enum CommandId {
     DrillToRoot,
     /// 钻到面包屑的第 n 段（0 = 世界）。
     DrillToSegment(u8),
+    /// 强制重建地形纹理（2026-10-14 用户需求：怀疑数据已改但画面没跟随时可用）。
+    /// 把 `TerrainTexture.last_mode/last_map/soften` 一起重置为「未知」，
+    /// 下一帧 `rebuild_texture_on_mode_change` 必然走全图重建路径。
+    ForceRebuildTexture,
 }
 
 /// 一条命令：注册表的条目。
@@ -204,9 +211,10 @@ impl CommandRegistry {
         push(
             CommandId::NewProject,
             CommandGroup::Project,
-            "新建工程",
+            "新建工程…",
             Some("Ctrl+Shift+N"),
         );
+        push(CommandId::NewMap, CommandGroup::Project, "新建地图…", None);
         push(
             CommandId::OpenProject,
             CommandGroup::Project,
@@ -238,24 +246,18 @@ impl CommandRegistry {
             None,
         );
 
-        // 视图
-        for (i, mode) in crate::state::ViewMode::ALL.iter().enumerate() {
-            let keys = ["1", "2", "3", "4", "5", "6", "7"][i];
+        // 视图（2026-10-14 起只列 BROWSING 两种，与顶栏分段控件同源）
+        for (i, mode) in crate::state::ViewMode::BROWSING.iter().enumerate() {
             push(
                 CommandId::SetViewMode(i as u8),
                 CommandGroup::View,
                 match mode {
-                    crate::state::ViewMode::VectorFlat => "切换到等值线视图",
-                    crate::state::ViewMode::RealTerrain => "切换到真实地形视图",
+                    crate::state::ViewMode::VectorFlat => "切换到矢量地形视图",
                     crate::state::ViewMode::Schematic => "切换到色块地形视图",
-                    crate::state::ViewMode::Faction => "切换到势力图视图",
-                    crate::state::ViewMode::Event => "切换到事件图视图",
-                    crate::state::ViewMode::Coastline => "切换到轮廓图视图",
-                    crate::state::ViewMode::GoogleMap => "切换到地图视图",
-                    // JRPG 未进 ALL，理论上不可达；但保留分支以防后续再启用。
-                    crate::state::ViewMode::JRPG => "切换到 JRPG 视图",
+                    // BROWSING 之外的模式不再注册（枚举变体仍在，见 state.rs）。
+                    _ => continue,
                 },
-                Some(keys),
+                Some(["1", "2"][i]),
             );
         }
         push(
@@ -366,6 +368,13 @@ impl CommandRegistry {
             "切换紧凑 / 标准密度",
             None,
         );
+        // 2026-10-14 用户需求：怀疑数据已改、画面没跟随时手动重画底图。
+        push(
+            CommandId::ForceRebuildTexture,
+            CommandGroup::Interface,
+            "强制重画地形（怀疑没跟上时点一下）",
+            Some("F5"),
+        );
 
         // 对象
         push(
@@ -464,12 +473,14 @@ mod tests {
                 p.title()
             );
         }
-        for i in 0..4u8 {
+        for i in 0..crate::state::ViewMode::BROWSING.len() as u8 {
             assert!(
                 all.iter().any(|c| c.id == CommandId::SetViewMode(i)),
-                "视图模式 {i} 未注册命令"
+                "浏览视图模式 {i} 未注册命令"
             );
         }
+        // 2026-10-14 收敛：BROWSING 之外的模式不占命令面板（两种 → 只有 0/1）。
+        assert!(!all.iter().any(|c| c.id == CommandId::SetViewMode(2)));
     }
 
     #[test]

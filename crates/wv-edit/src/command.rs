@@ -184,6 +184,95 @@ impl EditCommand for PaintTerrainCommand {
 }
 
 // ---------------------------------------------------------------------------
+// 地图新建（2026-10-14：「新建地图」对话框的落点）
+// ---------------------------------------------------------------------------
+
+/// 新增一张地图（节点 + 父引用 + 可选预填充栅格）。
+///
+/// ## 为什么「挂到父图 children」是命令的一部分
+///
+/// P4 的层级关系只存 ID 引用（`MapNode.parent` / `children`），新节点不挂进
+/// 父图的 `children` 就是一张悬空图——钻取树、地图树都看不见它。三件事
+/// （push 节点、回填父引用、可选写栅格）必须同生共死，`revert` 才能完整回退。
+///
+/// ## 幂等保护
+///
+/// 目标 ID 已存在时 `apply` 报错（调用方——「新建地图」对话框——负责先生成
+/// 唯一 ID）；命令层不静默覆盖，那等于悄悄毁掉一张已有的图。
+#[derive(Debug)]
+pub struct AddMapCommand {
+    /// 新地图节点（`parent` 必须已指向既有地图；根图 `parent` 为 `None`）。
+    pub node: wv_core::map::MapNode,
+    /// 预填充栅格（海洋 / 陆地）。`None` = 不带栅格（沿用父图底图继承）。
+    pub terrain: Option<TerrainData>,
+}
+
+impl AddMapCommand {
+    pub fn new(node: wv_core::map::MapNode, terrain: Option<TerrainData>) -> Self {
+        Self { node, terrain }
+    }
+
+    /// 受影响的目录：节点 YAML + 预填充栅格的 `terrain.bin`。
+    fn dirty_paths(&self) -> Vec<String> {
+        let mut paths = vec!["maps".to_owned()];
+        if self.terrain.is_some() {
+            paths.push(format!("maps/{}/terrain.bin", self.node.id));
+        }
+        paths
+    }
+}
+
+impl EditCommand for AddMapCommand {
+    fn label(&self) -> String {
+        format!("新建地图「{}」", self.node.name)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        if world.maps.iter().any(|m| m.id == self.node.id) {
+            return Err(EditError::Precondition(format!(
+                "地图 `{}` 已存在",
+                self.node.id
+            )));
+        }
+        // 父引用必须在树上真实存在（悬空 parent 会让钻取与校验双输）。
+        if let Some(parent) = &self.node.parent {
+            let Some(pnode) = world.maps.iter_mut().find(|m| &m.id == parent) else {
+                return Err(EditError::TargetMissing(format!("父地图 `{parent}`")));
+            };
+            pnode.children.push(self.node.id.clone());
+        }
+        if let Some(data) = &self.terrain {
+            world.set_terrain(self.node.id.clone(), data.clone());
+        }
+        world.maps.push(self.node.clone());
+        Ok(self.dirty_paths())
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        // 对称拆三件套：移除节点、摘掉父引用、丢弃预填充栅格。
+        let existed = world
+            .maps
+            .iter()
+            .position(|m| m.id == self.node.id)
+            .map(|i| world.maps.remove(i))
+            .is_some();
+        if !existed {
+            return Err(EditError::TargetMissing(format!(
+                "地图 `{}` 不存在，无法撤销新建",
+                self.node.id
+            )));
+        }
+        if let Some(parent) = &self.node.parent {
+            if let Some(pnode) = world.maps.iter_mut().find(|m| &m.id == parent) {
+                pnode.children.retain(|c| c != &self.node.id);
+            }
+        }
+        world.terrains.remove(&self.node.id);
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 势力编辑命令（S12 v0.2）
 // ---------------------------------------------------------------------------
 
@@ -1156,5 +1245,132 @@ mod tests {
             matches!(cmd.apply(&mut w), Err(EditError::TargetMissing(_))),
             "不存在的地图必须报 TargetMissing"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // AddMapCommand（新建地图对话框的落点）
+    // -----------------------------------------------------------------------
+
+    fn map_node(
+        id: &str,
+        parent: Option<&str>,
+        level: wv_core::map::MapLevel,
+    ) -> wv_core::map::MapNode {
+        wv_core::map::MapNode {
+            id: Id::new_unchecked(id),
+            name: format!("地图{id}"),
+            level,
+            parent: parent.map(Id::new_unchecked),
+            children: Vec::new(),
+            layers: Vec::new(),
+            icons: Vec::new(),
+            extent: Some(wv_core::map::Extent::sized(1024.0, 1024.0)),
+            raster: None,
+            geographic_source: None,
+            orientation: 0.0,
+        }
+    }
+
+    fn flat_terrain(kind: u8, height: i16) -> TerrainData {
+        TerrainData {
+            width: 4,
+            height: 4,
+            cells: vec![TerrainCellData { height, kind }; 16],
+        }
+    }
+
+    #[test]
+    fn add_map_command_links_parent_and_prefills_terrain() {
+        let mut w = World::default();
+        w.maps
+            .push(map_node("world_main", None, wv_core::map::MapLevel::World));
+
+        let cmd = AddMapCommand::new(
+            map_node("map_a", Some("world_main"), wv_core::map::MapLevel::City),
+            Some(flat_terrain(0, -40)),
+        );
+        let dirty = cmd.apply(&mut w).unwrap();
+        assert!(
+            dirty.contains(&"maps".to_owned())
+                && dirty.contains(&"maps/map_a/terrain.bin".to_owned()),
+            "脏路径应含节点目录与栅格文件，实得 {dirty:?}"
+        );
+        // 节点入树 + 父引用回填 + 栅格落位，三件都在。
+        assert!(w.maps.iter().any(|m| m.id == Id::new_unchecked("map_a")));
+        assert!(w
+            .maps
+            .iter()
+            .find(|m| m.id == Id::new_unchecked("world_main"))
+            .unwrap()
+            .children
+            .contains(&Id::new_unchecked("map_a")));
+        assert_eq!(
+            w.terrain_of(&Id::new_unchecked("map_a")).unwrap().cells[0].kind,
+            0
+        );
+
+        // revert 对称拆三件套。
+        cmd.revert(&mut w).unwrap();
+        assert!(!w.maps.iter().any(|m| m.id == Id::new_unchecked("map_a")));
+        assert!(!w
+            .maps
+            .iter()
+            .find(|m| m.id == Id::new_unchecked("world_main"))
+            .unwrap()
+            .children
+            .contains(&Id::new_unchecked("map_a")));
+        assert!(w.terrain_of(&Id::new_unchecked("map_a")).is_none());
+    }
+
+    #[test]
+    fn add_map_command_rejects_duplicate_id_instead_of_overwriting() {
+        let mut w = World::default();
+        w.maps
+            .push(map_node("world_main", None, wv_core::map::MapLevel::World));
+        w.maps.push(map_node(
+            "map_a",
+            Some("world_main"),
+            wv_core::map::MapLevel::City,
+        ));
+        let before = w.maps.len();
+
+        let cmd = AddMapCommand::new(
+            map_node("map_a", Some("world_main"), wv_core::map::MapLevel::Region),
+            None,
+        );
+        assert!(
+            matches!(cmd.apply(&mut w), Err(EditError::Precondition(_))),
+            "重复 ID 必须报错，不能静默覆盖已有地图"
+        );
+        assert_eq!(w.maps.len(), before, "失败的 apply 不得改动地图表");
+    }
+
+    #[test]
+    fn add_map_command_rejects_dangling_parent() {
+        let mut w = World::default();
+        let cmd = AddMapCommand::new(
+            map_node("map_a", Some("ghost_parent"), wv_core::map::MapLevel::City),
+            None,
+        );
+        assert!(
+            matches!(cmd.apply(&mut w), Err(EditError::TargetMissing(_))),
+            "悬空父引用必须报 TargetMissing"
+        );
+        assert!(w.maps.is_empty(), "失败的 apply 不得留下半张图");
+    }
+
+    #[test]
+    fn root_map_adds_without_parent_and_revert_removes_it() {
+        // 空编辑器的「第一张图」：parent = None，revert 后世界回到空。
+        let mut w = World::default();
+        let cmd = AddMapCommand::new(
+            map_node("world_main", None, wv_core::map::MapLevel::World),
+            Some(flat_terrain(3, 80)),
+        );
+        cmd.apply(&mut w).unwrap();
+        assert_eq!(w.maps.len(), 1);
+        cmd.revert(&mut w).unwrap();
+        assert!(w.maps.is_empty());
+        assert!(w.terrains.is_empty());
     }
 }

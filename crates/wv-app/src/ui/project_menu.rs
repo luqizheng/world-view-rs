@@ -120,7 +120,10 @@ pub(crate) fn project_menu_inner(
         });
     }
     for (label, keys, id) in [
-        ("新建工程", Some("Ctrl+Shift+N"), CommandId::NewProject),
+        // 2026-10-14：地图级新建入口（区别于「新建工程」）——弹参数对话框。
+        // 「新建工程」带省略号：它也弹参数对话框（名称 + 位置 + 路径预览）。
+        ("新建工程…", Some("Ctrl+Shift+N"), CommandId::NewProject),
+        ("新建地图…", None, CommandId::NewMap),
         ("打开工程…", Some("Ctrl+O"), CommandId::OpenProject),
         ("另存为…", Some("Ctrl+Shift+S"), CommandId::SaveProjectAs),
         ("导出…", Some("Ctrl+E"), CommandId::ExportProject),

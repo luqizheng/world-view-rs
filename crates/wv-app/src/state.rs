@@ -50,6 +50,18 @@ pub struct WorldProjection {
     pub load_error: Option<String>,
 }
 
+impl WorldProjection {
+    /// 是否有工程在手——「无工程锁」的判据（2026-10-14 用户需求：
+    /// 程序刚打开不能画图，必须先新建或打开一个工程）。
+    ///
+    /// 「新建工程」改为对话框直接落盘后，工程在手 ⇔ 有磁盘目录：
+    /// 启动未加载 / 加载失败 / 关闭工程都回到 `false`（此时欢迎页接管界面，
+    /// 笔刷与街道系统按同一判据禁画）。
+    pub fn has_open_project(&self) -> bool {
+        self.project_dir.is_some()
+    }
+}
+
 /// 当前工程的校验结果缓存（来自 `wv_io::diagnostics::derive_hints`）。
 ///
 /// 为什么单独存一个资源而不是每次 UI 帧都算：
@@ -157,10 +169,22 @@ impl ViewMode {
         ViewMode::Coastline,
     ];
 
+    /// 当前对作者开放的浏览模式（2026-10-14 用户裁定：暂时只显示两种）。
+    ///
+    /// - [`ViewMode::VectorFlat`]：**矢量地形**——Google 地图矢量瓦片式渲染
+    ///   （等值线描边 + 类型平涂，水陆边由高度场决定，ADR-0012）；
+    /// - [`ViewMode::Schematic`]：**色块地形**——一格一色，直接呈现每格的地形类型。
+    ///
+    /// 顶栏分段控件、数字快捷键与命令面板都只列这份；其余模式保留在
+    /// [`Self::ALL`] 与枚举里（数据层纹理管线仍支持，随时可重新开放）。
+    pub const BROWSING: [ViewMode; 2] = [ViewMode::VectorFlat, ViewMode::Schematic];
+
     /// 顶栏显示名。
     pub fn label(self) -> &'static str {
         match self {
-            ViewMode::VectorFlat => "等值线",
+            // 2026-10-14 用户裁定：浏览态主打模式定名「矢量地形」（此前叫
+            // 「等值线」——等值线只是它的描边产物，名字该描述整体观感）。
+            ViewMode::VectorFlat => "矢量地形",
             ViewMode::GoogleMap => "地图",
             ViewMode::RealTerrain => "真实地形",
             ViewMode::Schematic => "色块地形",
@@ -858,10 +882,16 @@ impl DrillState {
     }
 
     /// 把当前图 id 写回 [`ViewState::current_map`] 镜像。
+    ///
+    /// **None 时清空镜像**（2026-10-14 回归）：旧实现只覆盖 `Some` 分支，
+    /// `drill.current() = None`（新建 / 关闭工程后）时镜像保留上一帧的 id，
+    /// 笔触按陈旧 id 提交 `PaintTerrainCommand` 走 `TerrainMismatch` 错误分支。
+    /// 现在任何调用都把镜像对齐到当前真源——空工程时镜像也为空。
     pub fn sync_view(&self, view: &mut ViewState) {
-        if let Some(id) = self.current() {
-            view.current_map = id.as_str().to_owned();
-        }
+        view.current_map = self
+            .current()
+            .map(|i| i.as_str().to_owned())
+            .unwrap_or_default();
     }
 }
 
@@ -971,6 +1001,18 @@ mod tests {
         assert_eq!(ViewMode::ALL[0], ViewMode::VectorFlat);
         // GoogleMap 仍可达（可切换主题之一），仅不再是默认入口。
         assert!(ViewMode::ALL.contains(&ViewMode::GoogleMap));
+    }
+
+    /// 2026-10-14 用户裁定：浏览态只开放两种——矢量地形（VectorFlat）与
+    /// 色块地形（Schematic）。顶栏 / 快捷键 / 命令面板都吃这份清单，
+    /// 默认模式必须也在其中，否则数字 1 按下去是空操作。
+    #[test]
+    fn browsing_list_offers_exactly_vector_flat_and_schematic() {
+        assert_eq!(
+            ViewMode::BROWSING,
+            [ViewMode::VectorFlat, ViewMode::Schematic]
+        );
+        assert!(ViewMode::BROWSING.contains(&ViewMode::default()));
     }
 
     #[test]

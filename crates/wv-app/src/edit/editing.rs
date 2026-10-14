@@ -23,7 +23,6 @@ use bevy::prelude::*;
 use crate::render::camera::ActiveStroke;
 use crate::render::terrain_view::{image_from_terrain, TerrainTexture, TileAtlas};
 use crate::state::{BrushState, DrillState, GridConfig, PlaybackState, ViewState, WorldProjection};
-use wv_core::Id;
 use wv_edit::command::PaintTerrainCommand;
 use wv_edit::history::Transaction;
 use wv_edit::History;
@@ -84,10 +83,13 @@ pub fn commit_stroke_on_release(
     brush: Res<BrushState>,
     playback: Res<PlaybackState>,
     view: Res<ViewState>,
+    drill: Res<DrillState>,
     mut projection: ResMut<WorldProjection>,
     mut tex: ResMut<TerrainTexture>,
     mut edit: ResMut<EditHistory>,
     mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
+    mut notice: ResMut<crate::ui_shell::ShellNotice>,
+    time: Res<Time>,
 ) {
     if !buttons.just_released(MouseButton::Left) {
         return;
@@ -123,11 +125,19 @@ pub fn commit_stroke_on_release(
     // 笔触世界包围盒（在构造 `cmd` 之前算——`stroke` move 给 cmd 后不可用）。
     let dirty_rect = stroke_bbox_in_cells(&stroke, &grid);
 
-    let cmd = PaintTerrainCommand::new(
-        Id::new_unchecked(view.current_map.clone()),
-        stroke,
-        grid.cell_size,
-    );
+    // 笔刷应落在 `drill.current()`（单一真源），而不是 `view.current_map` 镜像——
+    // 镜像在 `NewProject`/`CloseProject`/`adopt` 之后会失同步一帧（2026-10-14
+    // 用户反馈"新建工程后笔刷不生效"即此因）。`drill.current()=None` 时直接
+    // 拒绝：世界上没图可画，作者应该先用「新建地图…」建一张。
+    let Some(target_map) = drill.current().cloned() else {
+        bevy::log::warn!("笔刷无目标图（drill.current=None）：请先新建一张地图");
+        notice.error(
+            "笔刷未生效：当前没有地图（顶栏工程菜单 → 新建地图…）",
+            (time.elapsed_secs() * 60.0) as u64,
+        );
+        return;
+    };
+    let cmd = PaintTerrainCommand::new(target_map, stroke, grid.cell_size);
 
     // 提交到 History（一次笔触 = 一个事务 = 一次可撤销单位）。
     let mut tx = Transaction::new();
@@ -143,7 +153,12 @@ pub fn commit_stroke_on_release(
             diagnostics.needs_diagnose = true;
         }
         Err(e) => {
+            // 失败必须给人话回执（§5.3）：最常见的是在**没有自己栅格的图**上
+            // 落笔（子图继承父图底图时，`terrain_of` 返回 None）。只写日志的
+            // 旧做法在用户眼里就是「笔刷坏了」——状态栏要说清楚原因与下一步。
             bevy::log::warn!("编辑命令失败: {e}");
+            let frame = (time.elapsed_secs() * 60.0) as u64;
+            notice.error(format!("笔刷未生效：{e}"), frame);
         }
     }
 }

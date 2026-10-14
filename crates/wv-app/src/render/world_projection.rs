@@ -20,6 +20,7 @@
 
 use bevy::prelude::*;
 
+use crate::render::layer_frame::LayerFrame;
 use crate::state::{BrushState, GridConfig, PlaybackState, ViewState, WorldProjection};
 use crate::theme::colors;
 use wv_core::time::TimeSpan;
@@ -59,12 +60,16 @@ pub struct PlaceDot {
 }
 
 /// 计算本帧投影。**所有时间判断集中在这里**，且走 `wv-core` 的纯函数。
+///
+/// 图层可见性读 [`LayerFrame`]（ADR-0013：YAML 声明 ∧ 会话开关的合取投影），
+/// 不直接读 `ViewState` 的布尔——轨迹无对应 `LayerKind`，仍走会话开关。
 pub fn compute_projection(
     playback: Res<PlaybackState>,
     view: Res<ViewState>,
     grid: Res<GridConfig>,
     drill: Res<crate::state::DrillState>,
     projection: Res<WorldProjection>,
+    layers: Res<LayerFrame>,
     mut frame: ResMut<ProjectionFrame>,
 ) {
     frame.active_events.clear();
@@ -74,7 +79,11 @@ pub fn compute_projection(
     frame.road_segments.clear();
     frame.place_dots.clear();
 
-    if !view.events_visible && !view.tracks_visible && !view.roads_visible && !view.places_visible {
+    if !layers.event_point.visible
+        && !view.tracks_visible
+        && !layers.road.visible
+        && !layers.place.visible
+    {
         return;
     }
 
@@ -82,7 +91,7 @@ pub fn compute_projection(
     let t = playback.current_day;
 
     // ---- 事件高亮：用 TimelineQuery::at 求「t 时刻正在发生的事件」----
-    if view.events_visible {
+    if layers.event_point.visible {
         let spans: Vec<(TimeSpan, usize)> = world
             .events
             .iter()
@@ -122,7 +131,7 @@ pub fn compute_projection(
     }
 
     // ---- 道路层：地点边（纯几何叠加，无时间语义，不涉 P7）----
-    if view.roads_visible || view.places_visible {
+    if layers.road.visible || layers.place.visible {
         if let Some(current) = drill.current_node(world) {
             // 只取锚定在当前地图、且坐标齐备的地点（与标记层「只画当前层级」同口径）。
             // 地点坐标是**本图局部**坐标 → `grid.map_to_view`（不是栅格原点）。
@@ -134,7 +143,7 @@ pub fn compute_projection(
                     .find(|p| &p.id == id && p.map.as_ref() == Some(&current.id))?;
                 Some(grid.map_to_view(Vec2::new(p.x?, p.y?)))
             };
-            if view.roads_visible {
+            if layers.road.visible {
                 for edge in &world.distances.edges {
                     if let (Some(a), Some(b)) = (find_place(&edge.a), find_place(&edge.b)) {
                         frame.road_segments.push((a, b));
@@ -142,7 +151,7 @@ pub fn compute_projection(
                 }
             }
             // POI 点标：当前地图上的全部锚定地点；带「是否城市级」标记供 LOD 筛选。
-            if view.places_visible {
+            if layers.place.visible {
                 for p in &world.distances.places {
                     if p.map.as_ref() == Some(&current.id) {
                         if let (Some(x), Some(y)) = (p.x, p.y) {
@@ -225,12 +234,18 @@ pub fn advance_playback(time: Res<Time>, mut playback: ResMut<PlaybackState>) {
 }
 
 /// 绘制视口网格与唯一的地形四边形（S3）。用 `Gizmos` 画（原型轻量方案）。
+///
+/// 事件高亮读 [`LayerFrame`]（ADR-0013）：visible 门 + opacity 乘进 alpha。
+/// 事件属 `Gizmos` 即时线元，**没有每实体 Z**——`EventPoint` 的 `z` 偏移
+/// 在 Gizmos 路径不生效（ADR-0013 待裁项）。
+#[allow(clippy::too_many_arguments)]
 pub fn draw_map_gizmos(
     mut gizmos: Gizmos,
     tex: Res<crate::render::terrain_view::TerrainTexture>,
     grid: Res<GridConfig>,
     view: Res<ViewState>,
     frame: Res<ProjectionFrame>,
+    layers: Res<LayerFrame>,
 ) {
     let _ = &*tex; // suppress unused warning
     if false {
@@ -298,17 +313,19 @@ pub fn draw_map_gizmos(
     }
 
     // 事件高点亮：常驻底环 + 内芯（特效 §4.2：状态永不抑制）。
-    if view.events_visible {
+    // 图层门 + 透明度走 LayerFrame（ADR-0013）；Gizmos 无逐实体 Z，z 偏移不适用。
+    if layers.event_point.visible {
+        let alpha = layers.event_point.opacity;
         for (_id, pos) in &frame.active_events {
             gizmos.circle_2d(
                 Isometry2d::from_translation(*pos),
                 grid.cell_size * 1.6,
-                colors::ACCENT_EVENT.with_alpha(0.25),
+                colors::ACCENT_EVENT.with_alpha(0.25 * alpha),
             );
             gizmos.circle_2d(
                 Isometry2d::from_translation(*pos),
                 grid.cell_size * 0.7,
-                colors::ACCENT_EVENT,
+                colors::ACCENT_EVENT.with_alpha(alpha),
             );
         }
     }

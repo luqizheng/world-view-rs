@@ -14,6 +14,23 @@
 
 use crate::{Height, TerrainGrid, TerrainKind};
 
+/// 水系 kind 的判定（唯一入口，`kind <= 1` = 深水/浅水）。
+///
+/// **为什么放在 wv-terrain**：水陆二分是地形数据的领域规则，`wv-app` 的
+/// 轮廓图渲染（`cells.rs`）与笔刷的高度域对齐（[`apply_brush`]）都要用它；
+/// 放在渲染层会让数据层反向引用 UI，放在两处会造成口径漂移。
+pub fn is_water_kind(kind: TerrainKind) -> bool {
+    kind <= 1
+}
+
+/// 涂出海时的保底深度：把陆格改成水系 kind 时，高度一并压到海平面以下。
+///
+/// 不用极深值：与周边海格的高度差太大，VectorFlat 的双线性填充会在笔刷
+/// 边缘拉出陡峭的等值线带。
+pub const PAINT_SEA_DEPTH: Height = -40;
+/// 涂上陆地时的保底高度：把水格改成陆系 kind 时，高度一并抬到海平面以上。
+pub const PAINT_LAND_HEIGHT: Height = 40;
+
 /// 笔刷形状与参数。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Brush {
@@ -158,9 +175,21 @@ fn apply_brush(grid: &mut TerrainGrid, brush: &Brush, cell_size: f32) -> usize {
                 continue; // 越界格跳过（笔刷扫过边缘时的合法情形）
             };
             // 地形类型：超过 50% 权重才写入——避免软边把边缘涂成半吊子色块。
+            // 高度域随类型对齐（2026-10-14 用户反馈「笔刷涂大地图没变化」）：
+            // VectorFlat 填充的水陆由**高度**决定（海平面 = 0），只写 kind 不写
+            // 高度时，「把海涂成陆地 / 把陆涂成海」在等值线视图下完全不可见，
+            // 笔刷等于失效。此处把跨域格的高度一并推过海平面，同域格不动
+            // （不抹平作者已有的起伏）。
             if let Some(kind) = brush.kind {
                 if w >= 0.5 {
                     cell.kind = kind;
+                    if is_water_kind(kind) {
+                        if cell.height >= 0 {
+                            cell.height = PAINT_SEA_DEPTH;
+                        }
+                    } else if cell.height < 0 {
+                        cell.height = PAINT_LAND_HEIGHT;
+                    }
                 }
             }
             // 高度：按权重线性叠加（羽化抬升，基线 §1.14 / §2.4 高斯衰减的近亲）。
@@ -272,6 +301,69 @@ mod tests {
         assert!(touched > 0, "应有格被涂抹");
         assert_eq!(g.get(10, 10).unwrap().kind, 3, "中心格类型应被写入");
         assert_eq!(g.get(0, 0).unwrap().kind, 0, "远角不应被涂");
+    }
+
+    /// 2026-10-14 用户反馈「笔刷涂大地图没变化」的核心修复：在 VectorFlat
+    /// 填充口径下（海平面 = 0，高度赢过类型），把海格涂成陆地时高度必须
+    /// 一并抬过海平面，否则画面纹丝不动。
+    #[test]
+    fn painting_land_kind_over_sea_raises_height_above_sea_level() {
+        let mut g = TerrainGrid::new(20, 20);
+        // 造一片海：高度压到 -200。
+        for gy in 0..20 {
+            for gx in 0..20 {
+                let mut c = g.get(gx, gy).unwrap();
+                c.height = -200;
+                g.set(gx, gy, c);
+            }
+        }
+        let b = Brush::paint((10.5, 10.5), 5.0, 3);
+        paint(&mut g, &b, 1.0);
+        let cell = g.get(10, 10).unwrap();
+        assert_eq!(cell.kind, 3, "中心格类型应写入");
+        assert!(
+            cell.height >= 0,
+            "海格涂陆后高度应 ≥ 0（海平面），实得 {}",
+            cell.height
+        );
+    }
+
+    #[test]
+    fn painting_water_kind_over_land_lowers_height_below_sea_level() {
+        let mut g = TerrainGrid::new(20, 20);
+        // 造一片高原陆地：高度抬到 +300。
+        for gy in 0..20 {
+            for gx in 0..20 {
+                let mut c = g.get(gx, gy).unwrap();
+                c.height = 300;
+                g.set(gx, gy, c);
+            }
+        }
+        let b = Brush::paint((10.5, 10.5), 5.0, 0);
+        paint(&mut g, &b, 1.0);
+        let cell = g.get(10, 10).unwrap();
+        assert_eq!(cell.kind, 0, "中心格类型应写入");
+        assert!(
+            cell.height < 0,
+            "陆格涂海后高度应 < 0（海平面），实得 {}",
+            cell.height
+        );
+    }
+
+    /// 同域涂抹不动高度：陆上换类（草原→森林）不得抹平作者已有的起伏。
+    #[test]
+    fn painting_kind_within_the_same_domain_keeps_height() {
+        let mut g = TerrainGrid::new(20, 20);
+        for gy in 0..20 {
+            for gx in 0..20 {
+                let mut c = g.get(gx, gy).unwrap();
+                c.height = 77;
+                g.set(gx, gy, c);
+            }
+        }
+        let b = Brush::paint((10.5, 10.5), 5.0, 4);
+        paint(&mut g, &b, 1.0);
+        assert_eq!(g.get(10, 10).unwrap().height, 77, "陆→陆换类不应改高度");
     }
 
     #[test]

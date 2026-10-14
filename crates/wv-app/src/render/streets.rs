@@ -23,6 +23,7 @@ use bevy::prelude::*;
 
 use wv_core::RoadClass;
 
+use crate::render::layer_frame::LayerFrame;
 use crate::state::{DrillState, GridConfig, LodTier, PlaybackState, ViewState, WorldProjection};
 
 /// 当前图的街道图层缓存。
@@ -151,12 +152,16 @@ const STREET_LABEL_Z: f32 = 0.35;
 ///
 /// **屏幕对齐**（2026-10-14 用户裁定，与地名标注同一口径）：地图随
 /// `MapNode.orientation` 旋转后，街道名文字取相机旋转的**逆**保持水平。
+///
+/// 图层归属：街道名是 Road 组的标注（ADR-0013）——Road 图层隐藏（YAML 声明
+/// 或会话开关）时街名一并退场，透明度与 z 偏移也随 Road 组。
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_street_labels(
     mut commands: Commands,
     cache: Res<StreetLayerCache>,
     grid: Res<GridConfig>,
     view: Res<ViewState>,
+    layers: Res<LayerFrame>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
@@ -168,13 +173,14 @@ pub fn update_street_labels(
             &mut TextColor,
             &mut Visibility,
         ),
-        With<StreetLabel>,
+        (With<StreetLabel>, Without<Camera2d>),
     >,
 ) {
     // 期望标注集：有名字的段 × 折线中点（本图局部 → 视图空间，走 `map_to_view`）。
+    // 图层不可见 → wanted 为空 → 池全隐藏（尾部的「多余的隐藏」路径）。
     let tier = crate::state::lod_tier(view.scale);
     let mut wanted: Vec<(Vec2, String)> = Vec::new();
-    if tier == LodTier::Edit {
+    if layers.road.visible && tier == LodTier::Edit {
         for (mid, name) in named_midpoints(&cache.sources) {
             wanted.push((grid.map_to_view(mid), name));
         }
@@ -182,6 +188,7 @@ pub fn update_street_labels(
     // 无变化帧也照常对齐：位置/字号随视图每帧都可能变，池对齐本身极轻。
 
     let font_size = STREET_LABEL_PX * view.scale.max(0.05);
+    let label_z = STREET_LABEL_Z + layers.road.z_offset;
     let label_rot = camera
         .single()
         .map(|t| t.rotation.inverse())
@@ -190,13 +197,14 @@ pub fn update_street_labels(
     let label_color = match view.mode {
         crate::state::ViewMode::GoogleMap => crate::theme::colors_google::GOOGLE_LABEL_FILL,
         _ => bevy::color::Color::WHITE,
-    };
+    }
+    .with_alpha(layers.road.opacity);
 
     let mut iter = q.iter_mut();
     for (pos, name) in &wanted {
         let name: &str = name.as_str();
         if let Some((_, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
-            tf.translation = pos.extend(STREET_LABEL_Z);
+            tf.translation = pos.extend(label_z);
             tf.rotation = label_rot;
             *text = Text2d::new(name);
             style.font_size = font_size.into();
@@ -216,7 +224,7 @@ pub fn update_street_labels(
                 },
                 TextColor(label_color),
                 Transform {
-                    translation: pos.extend(STREET_LABEL_Z),
+                    translation: pos.extend(label_z),
                     rotation: label_rot,
                     ..Default::default()
                 },
@@ -282,7 +290,11 @@ pub fn commit_street_click(
         return;
     }
     // 悬在 UI 上 / 播放中只读 / 极低缩放禁画（与地形笔刷同口径）。
+    // 无工程锁同口径（2026-10-14）：没打开任何工程时不允许落笔。
     if ui.wants_pointer || playback.playing || view.scale < 0.15 {
+        return;
+    }
+    if projection.project_dir.is_none() {
         return;
     }
     if buttons.just_pressed(MouseButton::Right) {
@@ -661,6 +673,7 @@ mod tests {
         drill.ensure_root(&world);
         app_world.insert_resource(crate::state::WorldProjection {
             world,
+            project_dir: Some("/test/project".into()),
             ..crate::state::WorldProjection::default()
         });
         app_world.insert_resource(drill);

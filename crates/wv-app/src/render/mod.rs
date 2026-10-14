@@ -8,6 +8,7 @@
 //! - 地形底图（色块 / 真实地形 / LOD tile atlas）
 //! - 矢量层（道路 casing / fill / POI 红点白环）
 //! - 势力多边形叠加 + 笔刷光标 + 地图三级钻取
+//! - 图层帧（`MapNode.layers[].z/visible/opacity` → 渲染绑定的唯一求值点，ADR-0013）
 //!
 //! ## 边界（不做什么）
 //! - **不**改世界数据。修改一律经 `crate::edit::*`。
@@ -28,6 +29,8 @@ pub mod camera;
 pub mod drill;
 #[cfg(feature = "app")]
 pub mod faction_overlays;
+#[cfg(feature = "app")]
+pub mod layer_frame;
 #[cfg(feature = "app")]
 pub mod map_frame;
 #[cfg(feature = "app")]

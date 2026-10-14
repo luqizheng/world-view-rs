@@ -44,6 +44,7 @@ use bevy::render::mesh::Indices;
 use bevy::render::mesh::MeshVertexAttribute;
 use bevy::render::render_resource::{PrimitiveTopology, VertexFormat};
 
+use crate::render::layer_frame::LayerFrame;
 use crate::state::ViewState;
 use wv_core::{factions_at, Faction};
 
@@ -72,6 +73,9 @@ impl FactionOverlayEntities {
 ///
 /// 在 [`crate::render::world_projection::compute_projection`] 之后跑；只读
 /// `WorldProjection.world` / `ViewState.current_day` / `ViewState.current_map`。
+/// 图层绑定（`Influence` kind）读 [`LayerFrame`]（ADR-0013）：visible 门、
+/// opacity 乘进本层 0.30 的本色 alpha、z 随组偏移。
+#[allow(clippy::too_many_arguments)]
 pub fn sync_faction_overlays(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -79,10 +83,11 @@ pub fn sync_faction_overlays(
     view: Res<ViewState>,
     playback: Res<crate::state::PlaybackState>,
     projection: Res<crate::state::WorldProjection>,
+    layers: Res<LayerFrame>,
     mut layer: ResMut<FactionOverlayEntities>,
 ) {
-    // 关闭图层 / 视图模式不是 Faction → 全部 despawn。
-    if !view.factions_visible || !is_faction_mode(&view) {
+    // 关闭图层（YAML ∨ 会话）/ 视图模式不是 Faction → 全部 despawn。
+    if !view.factions_visible || !layers.influence.visible || !is_faction_mode(&view) {
         layer.despawn_all(&mut commands);
         return;
     }
@@ -94,6 +99,8 @@ pub fn sync_faction_overlays(
     // 缓存复用得不偿失。
     layer.despawn_all(&mut commands);
 
+    let alpha = FACTION_ALPHA * layers.influence.opacity;
+    let z = FACTION_Z + layers.influence.z_offset;
     for (faction, coords) in overlays {
         // 坐标对数 = 顶点数。点数 < 3 无法成多边形，跳过（V1 守约）。
         if coords.len() < 6 {
@@ -107,7 +114,7 @@ pub fn sync_faction_overlays(
                 color[0] as f32 / 255.0,
                 color[1] as f32 / 255.0,
                 color[2] as f32 / 255.0,
-                FACTION_ALPHA,
+                alpha,
             ),
             ..default()
         });
@@ -115,7 +122,7 @@ pub fn sync_faction_overlays(
             .spawn((
                 Mesh2d(mesh_handle),
                 MeshMaterial2d(material),
-                Transform::from_translation(Vec3::new(0.0, 0.0, FACTION_Z)),
+                Transform::from_translation(Vec3::new(0.0, 0.0, z)),
             ))
             .id();
         layer.polygons.push(entity);

@@ -58,6 +58,11 @@ pub fn command_palette(
     let y = screen.height() * 0.22;
     egui::Window::new("")
         .id(egui::Id::new("wv_cmdk"))
+        // 与上面 scrim 同层（Foreground）：同层内按声明顺序绘制，窗口在遮罩
+        // 之后创建 → 压在遮罩上、点得到。此前窗口缺省是 Middle——**低于**
+        // Foreground 的遮罩，鼠标点击全被遮罩吃掉，面板只剩键盘输入可用
+        //（2026-10-14 用户要求「弹窗/浮动都在最顶层」时一并修正）。
+        .order(egui::Order::Foreground)
         .fixed_pos(egui::pos2(x, y))
         .fixed_size(egui::vec2(w, 380.0))
         .title_bar(false)
