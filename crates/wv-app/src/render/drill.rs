@@ -44,7 +44,7 @@
 use bevy::prelude::*;
 
 use crate::render::layer_frame::LayerFrame;
-use crate::state::{lod_tier, DrillState, GridConfig, LodTier, ViewState, WorldProjection};
+use crate::state::{lod_tier, DrillState, GridConfig, LodTier, PlaybackState, ViewState, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::UiTheme;
 use wv_core::id::Id;
