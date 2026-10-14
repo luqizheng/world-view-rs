@@ -102,7 +102,13 @@ fn main() {
     );
 
     // 渲染谷歌风 PNG。
-    let img = image_from_terrain(&data, ViewMode::GoogleMap, None, true);
+    let img = image_from_terrain(
+        &data,
+        ViewMode::GoogleMap,
+        None,
+        true,
+        wv_app::theme::palette::colors(Default::default()),
+    );
     let out = root.join("target/map_preview/seattle_google.png");
     write_png(
         &out,
@@ -114,7 +120,13 @@ fn main() {
     println!("已写 {}", out.display());
 
     // 也渲染真实地形模式，供对照。
-    let img_rt = image_from_terrain(&data, ViewMode::RealTerrain, None, true);
+    let img_rt = image_from_terrain(
+        &data,
+        ViewMode::RealTerrain,
+        None,
+        true,
+        wv_app::theme::palette::colors(Default::default()),
+    );
     let out_rt = root.join("target/map_preview/seattle_real.png");
     write_png(
         &out_rt,

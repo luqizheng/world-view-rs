@@ -224,7 +224,13 @@ pub fn flush_terrain_texture(
     // dirty 矩形 = 整图 → 走全图重建（模式切换 / 全图标记脏的场景）。
     let is_full = rect == [0, 0, w, h];
     if is_full {
-        let image = image_from_terrain(data, view.mode, atlas.as_deref(), view.terrain_soften);
+        let image = image_from_terrain(
+            data,
+            view.mode,
+            atlas.as_deref(),
+            view.terrain_soften,
+            crate::theme::palette::colors(view.map_palette),
+        );
         if let Some(mut img) = images.get_mut(&tex.handle) {
             *img = image;
         }
@@ -242,6 +248,7 @@ pub fn flush_terrain_texture(
             rect,
             res,
             view.terrain_soften,
+            crate::theme::palette::colors(view.map_palette),
         );
     }
     tex.dirty = None;
@@ -309,7 +316,7 @@ pub fn apply_history_command(
         edit.history.undo(&mut projection.world)
     };
     match result {
-        Ok(true) => {
+        Ok((true, _dirty_paths)) => {
             projection.dirty = true;
             let after = crate::render::terrain_view::texture_terrain(tex, &projection.world, None)
                 .map(|t| (t.width.max(1), t.cells.clone()));
@@ -330,7 +337,7 @@ pub fn apply_history_command(
                 "已撤销".into()
             })
         }
-        Ok(false) => Ok(if redo {
+        Ok((false, _)) => Ok(if redo {
             "没有可重做的操作".into()
         } else {
             "没有可撤销的操作".into()

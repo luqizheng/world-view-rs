@@ -22,6 +22,7 @@ use bevy_egui::EguiPlugin;
 
 use crate::edit::editing;
 use crate::render::brush_cursor;
+use crate::render::buildings;
 use crate::render::camera;
 use crate::render::faction_overlays;
 use crate::render::layer_frame;
@@ -117,6 +118,8 @@ pub fn run(config: AppConfig) {
     // 不存在的资源会在首帧 panic → 窗口无法显示）。`derive(Default)` 起步。
     .init_resource::<crate::state::ProjectDiagnostics>()
     .init_resource::<VectorLayerEntities>()
+    .init_resource::<buildings::BuildingOverlays>()
+    .init_resource::<terrain_view::atmosphere::AtmosphereLayer>()
     .init_resource::<streets::StreetLayerCache>()
     .init_resource::<streets::StreetEditorState>()
     .init_resource::<crate::state::MeasureState>()
@@ -137,8 +140,19 @@ pub fn run(config: AppConfig) {
         // InitContexts 才创建，Startup 时 ctx_mut() 必然 Err（曾导致 egui
         // 全程豆腐块）。见 fonts.rs 文档与下方 PreUpdate 注册。
         (setup_camera, setup_terrain_texture_after_world).chain(),
-    )
-    .add_systems(
+    );
+    // LLM 可控编辑（ADR-0014 / 0016）：仅 `--features http` 时启用。单独
+    // `add_plugins` 调用（不进表达式链）——`#[cfg(feature = "http")]` 属性
+    // 不能裸放在 `.method()` 调用位置（`#` 会让解析器把后续当作属性参数）。
+    // 上面的 `;` 把 Startup 链断在这里：链断是必须的——若在 `.add_systems(Startup, ...)`
+    // 末尾不加分号，下面的 `#[cfg]` 块会被解析器视为链上的下一项而失败。
+    // 配置（`bind` / `port`）由 CLI `--http-bind` / `--http-port` 注入
+    // （v0.2 增量）；默认 `127.0.0.1:8732` 走 [`HttpServerConfig::default()`]。
+    #[cfg(feature = "http")]
+    app.add_plugins(crate::http_integration::HttpServerPlugin {
+        config: config.http_server_config.clone(),
+    });
+    app.add_systems(
         PreUpdate,
         // 必须排在 bevy_egui 建上下文之后：否则首帧 ctx_mut() 对未初始化
         // 上下文调用会 panic（bevy_egui 0.32 lib.rs:437 的 expect）。
@@ -214,6 +228,17 @@ pub fn run(config: AppConfig) {
     .add_systems(
         Update,
         brush_cursor::sync_brush_cursor.after(camera::track_cursor_world),
+    )
+    // 纸面氛围层（ADR-0016 M2：雾霭 + 纸张噪点）：独立注册，排在主链
+    // `sync_map_frame` 之后（同帧即可，只要不先于地形 chunk 出现）。
+    .add_systems(
+        Update,
+        terrain_view::atmosphere::sync_atmosphere.after(map_frame::sync_map_frame),
+    )
+    // 2.5D 建筑挤出（ADR-0016 §6）：独立注册，消费主链产出的 LayerFrame。
+    .add_systems(
+        Update,
+        buildings::sync_building_overlays.after(vector_layers::sync_vector_layers),
     )
     .add_systems(
         Update,
@@ -328,8 +353,13 @@ fn setup_terrain_texture_after_world(
     // 原型默认 512×512 占位（基线 §2.19：1024² 亦轻松 60 FPS）。
     let (map, data) =
         terrain_view::active_terrain_or_placeholder(&mut projection.world, drill.current(), 512);
-    let image =
-        terrain_view::image_from_terrain(&data, view.mode, atlas.as_ref(), view.terrain_soften);
+    let image = terrain_view::image_from_terrain(
+        &data,
+        view.mode,
+        atlas.as_ref(),
+        view.terrain_soften,
+        crate::theme::palette::colors(view.map_palette),
+    );
     commands.insert_resource(terrain_view::new_terrain_texture(
         &mut images,
         image,
@@ -337,6 +367,7 @@ fn setup_terrain_texture_after_world(
         map,
         view.mode,
         view.terrain_soften,
+        view.map_palette,
     ));
 }
 

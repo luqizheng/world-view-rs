@@ -214,6 +214,18 @@ cargo test -p wv-app --features app
 cargo clippy -p wv-app --all-targets --features app -- -D warnings
 ```
 
+**GUI 启动烟测必须过一遍**（2026-10-15 追加，ADR-0016 followup）：上面所有闸门都在
+**测试层**——单元测试不实例化 Bevy 系统集，B0001（query 互斥证据缺失）、资源初始化
+顺序、Plugin 互依赖这类**运行期 panic** 只有真正启动 GUI 才暴露。ADR-0016 M2 文字晕边
+（halo query 缺 `Without<Camera2d>`）就是全闸门绿灯、首次 `wv gui` 即崩的实例。因此：
+
+```bash
+bash scripts/smoke-gui.sh        # 启动 wv gui 观察 5s，进程存活 + 日志无 panic/B000x
+```
+
+判定口径：**进程 5 秒存活 + 日志干净 = PASS**；渲染正确性（画面好不好看）不在此范围，
+仍属人工验收。涉及渲染系统签名 / Plugin 装配 / 新增 Resource 的改动，提交前必跑。
+
 ### 7.2 必须写测试的场景
 
 | 场景 | 要求 |

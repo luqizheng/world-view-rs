@@ -1,4 +1,4 @@
-﻿//! 街道矢量层：把当前图 `LayerKind::Road` 图层的街道文档转成「路段流」。
+//! 街道矢量层：把当前图 `LayerKind::Road` 图层的街道文档转成「路段流」。
 //!
 //! ## 职责
 //! - 只做**取数与变换**：`World.streets`（键 = 当前图 ID）→ 本图局部坐标折线段，
@@ -175,6 +175,15 @@ pub fn update_street_labels(
         ),
         (With<StreetLabel>, Without<Camera2d>),
     >,
+    children_q: Query<&bevy::ecs::hierarchy::Children, With<StreetLabel>>,
+    mut halo_q: Query<
+        (&mut Transform, &mut Text2d, &mut TextFont, &mut TextColor),
+        (
+            With<crate::render::label_halo::LabelHalo>,
+            Without<bevy::prelude::Camera2d>,
+            Without<StreetLabel>,
+        ),
+    >,
 ) {
     // 期望标注集：有名字的段 × 折线中点（本图局部 → 视图空间，走 `map_to_view`）。
     // 图层不可见 → wanted 为空 → 池全隐藏（尾部的「多余的隐藏」路径）。
@@ -196,14 +205,22 @@ pub fn update_street_labels(
     let cjk = fonts.cjk_font.clone();
     let label_color = match view.mode {
         crate::state::ViewMode::GoogleMap => crate::theme::colors_google::GOOGLE_LABEL_FILL,
-        _ => bevy::color::Color::WHITE,
+        // 古舆图 / 暮色：深褐墨（暮色为浅米），不再回退纯白（ADR-0016）。
+        _ => crate::theme::palette::colors(view.map_palette).label_fill,
     }
     .with_alpha(layers.road.opacity);
+    // 晕边色（ADR-0016 M2）：与地名同口径（Google 白晕兜底）。
+    let halo_color = match view.mode {
+        crate::state::ViewMode::GoogleMap => bevy::color::Color::WHITE,
+        _ => crate::theme::palette::colors(view.map_palette).halo_fill,
+    }
+    .with_alpha(layers.road.opacity);
+    let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
 
     let mut iter = q.iter_mut();
     for (pos, name) in &wanted {
         let name: &str = name.as_str();
-        if let Some((_, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
+        if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
             tf.translation = pos.extend(label_z);
             tf.rotation = label_rot;
             *text = Text2d::new(name);
@@ -213,8 +230,20 @@ pub fn update_street_labels(
             }
             *color = TextColor(label_color);
             *vis = Visibility::Visible;
+            // 晕边子实体随字同步（8 向纸色副本）。
+            if let Ok(children) = children_q.get(e) {
+                crate::render::label_halo::sync_halo(
+                    children,
+                    &mut halo_q,
+                    name,
+                    font_size,
+                    cjk.as_ref(),
+                    halo_color,
+                    halo_offset,
+                );
+            }
         } else {
-            commands.spawn((
+            let mut cmd = commands.spawn((
                 StreetLabel,
                 Text2d::new(name.to_string()),
                 TextFont {
@@ -230,6 +259,18 @@ pub fn update_street_labels(
                 },
                 Visibility::Visible,
             ));
+            let (text_owned, font_ref, fs, hc) =
+                (name.to_string(), cjk.as_ref(), font_size, halo_color);
+            cmd.with_children(move |c| {
+                for _ in 0..crate::render::label_halo::HALO_DIRS.len() {
+                    c.spawn(crate::render::label_halo::halo_bundle(
+                        &text_owned,
+                        font_ref,
+                        fs,
+                        hc,
+                    ));
+                }
+            });
         }
     }
     // 池里多出来的实体隐藏（复用不 despawn，与 PlaceLabel 同哲学）。

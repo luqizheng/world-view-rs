@@ -23,7 +23,6 @@ use bevy::image::{CompressedImageFormats, ImageSampler};
 use bevy::prelude::*;
 
 use crate::state::ViewMode;
-use crate::theme::colors;
 
 /// 瓦片图集：已解码的 RGBA 像素 + 网格规格 + `TerrainKind → 格位` 映射。
 ///
@@ -164,8 +163,6 @@ pub(crate) fn tile_tint_for_mode(mode: ViewMode) -> TileTint {
         ViewMode::Coastline => TileTint::Identity,
         // Google Default Map（ViewMode::GoogleMap）与色块地形同为平铺色块，Identity 保留原色。
         ViewMode::GoogleMap => TileTint::Identity,
-        // JRPG 未进 ALL（隐藏态），仍给出 Identity 分支保持 match 穷尽。
-        ViewMode::JRPG => TileTint::Identity,
         // TODO(plan v0.1 D3-A): 等值线矢量平涂管线未落地前，瓦片按原色直铺
         // （平涂家族，与 shade_for_mode 的 shade_flat 回退同一口径）。
         ViewMode::VectorFlat => TileTint::Identity,
@@ -221,14 +218,17 @@ pub fn sample_tile_block(atlas: &TileAtlas, col: u32, row: u32, res: u32) -> Vec
 /// `Identity` 走行级 `copy_from_slice`——整图直铺的最快路径。
 ///
 /// `soften` = 底图淡化开关（`ViewState.terrain_soften`）：在 tint 结果上再向
-/// `colors::SOFTEN_TOWARD`（纸面色）混 `(1 - SOFTEN_KEEP)`。实现上把两步合并为
-/// 一条定点管线（先 tint 后 soften，每通道两次 Q8 乘加），避免中间缓冲。
+/// `soften_toward`（当前主题的纸面色，ADR-0016）混 `(1 - soften_keep)`。
+/// 实现上把两步合并为一条定点管线（先 tint 后 soften，每通道两次 Q8 乘加），
+/// 避免中间缓冲。两个淡化参数由调用方从 `PaletteColors` 透传（勿直引常量）。
 #[allow(clippy::too_many_arguments)]
 pub fn blit_block_tinted(
     block: &[u8],
     res: u32,
     tint: TileTint,
     soften: bool,
+    soften_toward: Color,
+    soften_keep: f32,
     dst: &mut [u8],
     dst_stride: u32,
     dx: u32,
@@ -249,10 +249,10 @@ pub fn blit_block_tinted(
     };
     // 淡化参数：out2 = (out1*keep_q2 + toward[ch]*(1-k)*256) >> 8。
     let (keep_q2, add2): (u32, [u32; 3]) = if soften {
-        let Color::Srgba(t) = colors::SOFTEN_TOWARD else {
-            unreachable!("SOFTEN_TOWARD 应为 Srgba")
+        let Color::Srgba(t) = soften_toward else {
+            unreachable!("soften_toward 应为 Srgba")
         };
-        let k = colors::SOFTEN_KEEP;
+        let k = soften_keep;
         (
             (k * 256.0).round() as u32,
             [

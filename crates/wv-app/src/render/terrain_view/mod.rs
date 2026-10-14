@@ -17,6 +17,7 @@
 
 #![cfg(feature = "app")]
 
+pub mod atmosphere;
 pub mod cells;
 pub mod grid_lines;
 pub mod grid_sync;
@@ -120,7 +121,18 @@ mod tests {
         let res: u32 = 4;
         let block = sample_tile_block(&atlas, 0, 0, res);
         let mut dst = vec![0u8; (res * res * 4) as usize];
-        blit_block_tinted(&block, res, TileTint::Identity, false, &mut dst, res, 0, 0);
+        blit_block_tinted(
+            &block,
+            res,
+            TileTint::Identity,
+            false,
+            crate::theme::palette::colors(Default::default()).soften_toward,
+            crate::theme::palette::colors(Default::default()).soften_keep,
+            &mut dst,
+            res,
+            0,
+            0,
+        );
         // 实心格子盒式平均后仍是原色。
         for px in dst.chunks_exact(4) {
             assert_eq!(px, [200, 100, 0, 255]);
@@ -133,7 +145,18 @@ mod tests {
         let res: u32 = 2;
         let block = sample_tile_block(&atlas, 0, 0, res);
         let mut dst = vec![0u8; (res * res * 4) as usize];
-        blit_block_tinted(&block, res, TileTint::Fade, false, &mut dst, res, 0, 0);
+        blit_block_tinted(
+            &block,
+            res,
+            TileTint::Fade,
+            false,
+            crate::theme::palette::colors(Default::default()).soften_toward,
+            crate::theme::palette::colors(Default::default()).soften_keep,
+            &mut dst,
+            res,
+            0,
+            0,
+        );
         // 黑 × keep 0.45 + 灰 0.7×0.55 = 0.385 → 98。
         for px in dst.chunks_exact(4) {
             assert_eq!(px, [98, 98, 98, 255]);
@@ -183,7 +206,13 @@ mod tests {
                 },
             ],
         };
-        let img = image_from_terrain(&data, ViewMode::Schematic, Some(&atlas), false);
+        let img = image_from_terrain(
+            &data,
+            ViewMode::Schematic,
+            Some(&atlas),
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         let mut mixed = 0usize;
         for px in img
             .data
@@ -206,8 +235,20 @@ mod tests {
     fn image_compositing_is_deterministic() {
         let atlas = two_color_atlas([200, 0, 0], [0, 0, 200]);
         let data = placeholder_terrain(16, 16);
-        let a = image_from_terrain(&data, ViewMode::Schematic, Some(&atlas), false);
-        let b = image_from_terrain(&data, ViewMode::Schematic, Some(&atlas), false);
+        let a = image_from_terrain(
+            &data,
+            ViewMode::Schematic,
+            Some(&atlas),
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
+        let b = image_from_terrain(
+            &data,
+            ViewMode::Schematic,
+            Some(&atlas),
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         assert_eq!(a.data, b.data);
     }
 
@@ -235,12 +276,30 @@ mod tests {
     fn image_from_terrain_scales_pixels_with_atlas_res() {
         let atlas = solid_atlas(16, 16, [10, 20, 30]);
         let data = placeholder_terrain(4, 4);
-        let img = image_from_terrain(&data, ViewMode::Schematic, Some(&atlas), false);
+        let img = image_from_terrain(
+            &data,
+            ViewMode::Schematic,
+            Some(&atlas),
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         assert_eq!(img.width(), 4 * 64); // 4 格 → res 上限 64
-        let img_flat = image_from_terrain(&data, ViewMode::Schematic, None, false);
+        let img_flat = image_from_terrain(
+            &data,
+            ViewMode::Schematic,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         assert_eq!(img_flat.width(), 4);
         // 事件图不铺瓦片：有图集也按纯色 1px/格。
-        let img_event = image_from_terrain(&data, ViewMode::Event, Some(&atlas), false);
+        let img_event = image_from_terrain(
+            &data,
+            ViewMode::Event,
+            Some(&atlas),
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         assert_eq!(img_event.width(), 4);
     }
 
@@ -254,7 +313,13 @@ mod tests {
     fn patch_terrain_image_runs_on_small_input() {
         let data = placeholder_terrain(4, 4);
         // res=1（无图集），像素维度 = 4×4 = 16 像素。
-        let mut img = image_from_terrain(&data, ViewMode::Schematic, None, false);
+        let mut img = image_from_terrain(
+            &data,
+            ViewMode::Schematic,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         // 用 0 标记所有像素。
         for px in img.data.as_mut().expect("地形图必须有像素数据").iter_mut() {
             *px = 0;
@@ -268,6 +333,7 @@ mod tests {
             [1, 1, 3, 3],
             1,
             false,
+            crate::theme::palette::colors(Default::default()),
         );
         // 矩形外的像素仍是 0。
         // 索引 (0,0) → 像素 0..4。
@@ -287,7 +353,13 @@ mod tests {
     #[test]
     fn patch_terrain_image_leaves_outer_region_intact() {
         let data = placeholder_terrain(4, 4);
-        let mut img = image_from_terrain(&data, ViewMode::Schematic, None, false);
+        let mut img = image_from_terrain(
+            &data,
+            ViewMode::Schematic,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         // 把整图刷成 0xFF 哨兵值。
         for px in img.data.as_mut().expect("地形图必须有像素数据").iter_mut() {
             *px = 0xFF;
@@ -301,6 +373,7 @@ mod tests {
             [1, 1, 2, 2],
             1,
             false,
+            crate::theme::palette::colors(Default::default()),
         );
         // (0,0) 像素仍是 0xFF。
         assert_eq!(img.data.as_ref().expect("地形图必须有像素数据")[0], 0xFF);
@@ -335,7 +408,13 @@ mod tests {
     #[test]
     fn coastline_mode_renders_water_land_and_line_pixels() {
         let data = placeholder_terrain(16, 16);
-        let img = image_from_terrain(&data, ViewMode::Coastline, None, false);
+        let img = image_from_terrain(
+            &data,
+            ViewMode::Coastline,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         let Color::Srgba(water) = colors::COAST_WATER else {
             unreachable!()
         };
@@ -376,8 +455,20 @@ mod tests {
     #[test]
     fn coastline_mode_ignores_soften_flag() {
         let data = placeholder_terrain(8, 8);
-        let a = image_from_terrain(&data, ViewMode::Coastline, None, false);
-        let b = image_from_terrain(&data, ViewMode::Coastline, None, true);
+        let a = image_from_terrain(
+            &data,
+            ViewMode::Coastline,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
+        let b = image_from_terrain(
+            &data,
+            ViewMode::Coastline,
+            None,
+            true,
+            crate::theme::palette::colors(Default::default()),
+        );
         assert_eq!(a.data, b.data, "轮廓图应忽略 soften 开关");
     }
 
@@ -386,8 +477,15 @@ mod tests {
     #[test]
     fn terrain_res_helper_matches_generated_google_image_resolution() {
         let data = placeholder_terrain(64, 64);
-        let expected =
-            image_from_terrain(&data, ViewMode::GoogleMap, None, false).width() / data.width;
+        let expected = image_from_terrain(
+            &data,
+            ViewMode::GoogleMap,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        )
+        .width()
+            / data.width;
         let actual = terrain_res_for(&data, ViewMode::GoogleMap, None);
         assert_eq!(
             actual, expected,
@@ -402,7 +500,13 @@ mod tests {
         for c in &mut data.cells {
             c.kind = 3;
         }
-        let mut image = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
+        let mut image = image_from_terrain(
+            &data,
+            ViewMode::GoogleMap,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         let res = image.width() / data.width;
         data.cells[5].kind = 1;
         patch_terrain_image(
@@ -413,6 +517,7 @@ mod tests {
             [1, 1, 2, 2],
             res,
             false,
+            crate::theme::palette::colors(Default::default()),
         );
         assert!(image.width() > data.width, "patch 不应缩小纹理分辨率");
     }
@@ -420,7 +525,13 @@ mod tests {
     #[test]
     fn google_mode_renders_with_subpixel_resolution() {
         let data = placeholder_terrain(8, 8);
-        let img = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
+        let img = image_from_terrain(
+            &data,
+            ViewMode::GoogleMap,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         assert!(
             img.width() > data.width,
             "Google 模式应提高纹理分辨率，实得 {}px / {}格",
@@ -433,8 +544,20 @@ mod tests {
     #[test]
     fn google_mode_ignores_soften_flag() {
         let data = placeholder_terrain(8, 8);
-        let a = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
-        let b = image_from_terrain(&data, ViewMode::GoogleMap, None, true);
+        let a = image_from_terrain(
+            &data,
+            ViewMode::GoogleMap,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
+        let b = image_from_terrain(
+            &data,
+            ViewMode::GoogleMap,
+            None,
+            true,
+            crate::theme::palette::colors(Default::default()),
+        );
         assert_eq!(a.data, b.data, "Google 模式应忽略 soften 开关");
     }
 
@@ -447,7 +570,13 @@ mod tests {
             // 人为铺一条 kind 2..7 循环的高度分带（全是陆上类）。
             c.kind = 2 + (i % 6) as u8;
         }
-        let img = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
+        let img = image_from_terrain(
+            &data,
+            ViewMode::GoogleMap,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         let Color::Srgba(land) = colors_google::GOOGLE_CORE_TERRAIN[2] else {
             unreachable!("GOOGLE_CORE_TERRAIN[2] 应为 Srgba")
         };
@@ -480,7 +609,13 @@ mod tests {
         }
         data.cells[9].kind = 1; // 浅水
         data.cells[18].kind = 4; // 森林
-        let img = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
+        let img = image_from_terrain(
+            &data,
+            ViewMode::GoogleMap,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         let res = img.width() / data.width;
         let cell_center = |cell: usize| {
             let (gx, gy) = (cell % data.width as usize, cell / data.width as usize);
@@ -501,8 +636,20 @@ mod tests {
     #[test]
     fn soften_flag_pulls_pixels_toward_paper_gray() {
         let data = placeholder_terrain(4, 4);
-        let raw = image_from_terrain(&data, ViewMode::Schematic, None, false);
-        let soft = image_from_terrain(&data, ViewMode::Schematic, None, true);
+        let raw = image_from_terrain(
+            &data,
+            ViewMode::Schematic,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
+        let soft = image_from_terrain(
+            &data,
+            ViewMode::Schematic,
+            None,
+            true,
+            crate::theme::palette::colors(Default::default()),
+        );
         let Color::Srgba(t) = colors::SOFTEN_TOWARD else {
             unreachable!("SOFTEN_TOWARD 应为 Srgba")
         };
@@ -540,8 +687,20 @@ mod tests {
     #[test]
     fn coastline_patch_matches_full_render() {
         let data = placeholder_terrain(8, 8);
-        let full = image_from_terrain(&data, ViewMode::Coastline, None, false);
-        let mut patched = image_from_terrain(&data, ViewMode::Coastline, None, false);
+        let full = image_from_terrain(
+            &data,
+            ViewMode::Coastline,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
+        let mut patched = image_from_terrain(
+            &data,
+            ViewMode::Coastline,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         patch_terrain_image(
             &mut patched,
             &data,
@@ -550,6 +709,7 @@ mod tests {
             [2, 2, 6, 6],
             1,
             false,
+            crate::theme::palette::colors(Default::default()),
         );
         assert_eq!(full.data, patched.data, "轮廓图 patch 与全图应逐字节一致");
     }
@@ -682,6 +842,7 @@ mod tests {
             chunks_dirty: None,
             last_mode: None,
             last_soften: false,
+            last_palette: Default::default(),
             last_map: Some(wv_core::Id::new_unchecked("map_world")),
         };
         let data = texture_terrain(&tex, &world, Some(&city)).expect("应取世界图地形");
@@ -709,6 +870,7 @@ mod tests {
             chunks_dirty: None,
             last_mode: None,
             last_soften: false,
+            last_palette: Default::default(),
             last_map: None,
         };
         let data = texture_terrain(&tex, &world, Some(&city)).expect("应退回继承口径");
@@ -719,7 +881,13 @@ mod tests {
     #[test]
     fn terrain_texture_records_which_map_it_holds() {
         let data = small_terrain(3);
-        let image = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
+        let image = image_from_terrain(
+            &data,
+            ViewMode::GoogleMap,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         let mut images = Assets::<Image>::default();
         let held = wv_core::Id::new_unchecked("map_city");
         let tex = new_terrain_texture(
@@ -729,6 +897,7 @@ mod tests {
             Some(held.clone()),
             ViewMode::GoogleMap,
             false,
+            Default::default(),
         );
         assert_eq!(tex.last_map.as_ref(), Some(&held));
     }
@@ -778,6 +947,7 @@ mod tests {
             chunks_dirty: None,
             last_mode: None,
             last_soften: false,
+            last_palette: Default::default(),
             // 纹理装的是世界图底图；钻入城市后**不会**重建（继承同一个来源）。
             last_map: Some(wv_core::Id::new_unchecked("map_world")),
         });
@@ -847,8 +1017,22 @@ mod tests {
     fn fadeout_spawn_clones_pixels_and_covers_the_old_raster() {
         let data = small_terrain(3);
         let mut images = Assets::<Image>::default();
-        let image = image_from_terrain(&data, ViewMode::GoogleMap, None, false);
-        let tex = new_terrain_texture(&mut images, image, &data, None, ViewMode::GoogleMap, false);
+        let image = image_from_terrain(
+            &data,
+            ViewMode::GoogleMap,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
+        let tex = new_terrain_texture(
+            &mut images,
+            image,
+            &data,
+            None,
+            ViewMode::GoogleMap,
+            false,
+            Default::default(),
+        );
         let grid = GridConfig {
             cell_size: 2.0,
             raster_origin: Vec2::new(100.0, 200.0),
@@ -900,7 +1084,13 @@ mod tests {
         let (node, data) = active_terrain(&core, drill.current()).expect("世界图有地形");
         assert_eq!(node.id, world_id);
         let mut images = Assets::<Image>::default();
-        let image = image_from_terrain(data, ViewMode::GoogleMap, None, false);
+        let image = image_from_terrain(
+            data,
+            ViewMode::GoogleMap,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+        );
         let tex = new_terrain_texture(
             &mut images,
             image,
@@ -908,6 +1098,7 @@ mod tests {
             Some(world_id),
             ViewMode::GoogleMap,
             false,
+            Default::default(),
         );
 
         let mut world = World::new();

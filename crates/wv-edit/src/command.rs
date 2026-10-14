@@ -757,6 +757,178 @@ impl EditCommand for DeleteStreetSegmentCommand {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 地点新增（ADR-0014 v0.1 骨架：HTTP skill `create_place` 的命令入口）
+// ---------------------------------------------------------------------------
+
+/// 新增一个 `Place`（距离图节点 + 地图上可选锚点）。
+///
+/// `Place` 的存储归属在 `World.distances.places`（`wv_core::distance::Place`），
+/// 它是 §4.5「每实体一文件」下的一个实体——脏路径 `distances/places`，由
+/// `wv-io::save_world` 触发该目录的全量重写 + 删除传播。
+///
+/// ## 幂等保护
+///
+/// 与 `AddMapCommand` 同源：目标 ID 已存在时 `apply` 报错，不静默覆盖——
+/// Place 是引用网络中的关键节点，悄无声息覆盖会让 `PlaceEdge` / `Unit` 的
+/// 起点终点成为悬空引用，校验面板得花更多轮才找得到原因。
+#[derive(Debug)]
+pub struct AddPlaceCommand {
+    pub place: wv_core::distance::Place,
+}
+
+impl AddPlaceCommand {
+    pub fn new(place: wv_core::distance::Place) -> Self {
+        Self { place }
+    }
+}
+
+impl EditCommand for AddPlaceCommand {
+    fn label(&self) -> String {
+        format!("新增地点「{}」", self.place.name)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        if world.distances.places.iter().any(|p| p.id == self.place.id) {
+            return Err(EditError::Precondition(format!(
+                "地点 `{}` 已存在",
+                self.place.id
+            )));
+        }
+        world.distances.places.push(self.place.clone());
+        Ok(vec!["distances/places".into()])
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let pos = world
+            .distances
+            .places
+            .iter()
+            .position(|p| p.id == self.place.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Place {}", self.place.id)))?;
+        world.distances.places.remove(pos);
+        Ok(())
+    }
+}
+// 建筑编辑命令（ADR-0016 §6 落地项，2026-10-14）
+// ---------------------------------------------------------------------------
+
+/// 追加一栋建筑（2.5D 建筑挤出的数据入口）。
+///
+/// 语义与 [`AddStreetSegmentCommand`] 完全同构：目标图层未加载时**静默新建
+/// 空文档**再追加（V1：作者画下的第一笔就是文档的诞生，不报错不追问）；
+/// 落盘走虚拟脏路径 `buildings/<layer_id>`（`wv-io` 聚合写出）。
+#[derive(Debug)]
+pub struct AddBuildingCommand {
+    /// 目标建筑图层 ID（`World.buildings` 的键）。
+    pub layer: wv_core::Id,
+    /// 要追加的建筑（轮廓 + 高度，本图局部坐标）。
+    pub building: wv_core::Building,
+    /// `apply` 时缓存的追加前栋数：revert 时把文档截回这个长度。
+    before_len: std::sync::Mutex<Option<usize>>,
+}
+
+impl AddBuildingCommand {
+    pub fn new(layer: wv_core::Id, building: wv_core::Building) -> Self {
+        Self {
+            layer,
+            building,
+            before_len: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for AddBuildingCommand {
+    fn label(&self) -> String {
+        format!("画建筑（{:.0} 米）", self.building.height_m)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let mut doc = world.building_of(&self.layer).cloned().unwrap_or_default();
+        let before_len = doc.len();
+        doc.push(self.building.clone());
+        world.set_buildings(self.layer.clone(), doc);
+        *(self
+            .before_len
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?) = Some(before_len);
+        Ok(vec![format!("buildings/{}", self.layer.as_str())])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let before_len = self
+            .before_len
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
+            .ok_or_else(|| EditError::Precondition("AddBuilding 尚未 apply".into()))?;
+        let mut doc = world.building_of(&self.layer).cloned().unwrap_or_default();
+        doc.buildings.truncate(before_len);
+        world.set_buildings(self.layer.clone(), doc);
+        Ok(())
+    }
+}
+
+/// 删除一栋建筑（按索引）。
+///
+/// 与 [`DeleteStreetSegmentCommand`] 对偶：apply 缓存被删栋，revert 插回原
+/// 索引；越界报 `Precondition`（UI 侧点击前置灰，命令层兜底）。
+#[derive(Debug)]
+pub struct DeleteBuildingCommand {
+    /// 目标建筑图层 ID（`World.buildings` 的键）。
+    pub layer: wv_core::Id,
+    /// 要删除的建筑索引（`buildings` 下标）。
+    pub index: usize,
+    /// `apply` 时缓存的被删栋：revert 时插回 `index`。
+    before: std::sync::Mutex<Option<wv_core::Building>>,
+}
+
+impl DeleteBuildingCommand {
+    pub fn new(layer: wv_core::Id, index: usize) -> Self {
+        Self {
+            layer,
+            index,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for DeleteBuildingCommand {
+    fn label(&self) -> String {
+        format!("删除建筑 #{}", self.index)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let mut doc = world.building_of(&self.layer).cloned().unwrap_or_default();
+        if self.index >= doc.len() {
+            return Err(EditError::Precondition(format!(
+                "建筑索引 {} 越界（图层 `{}` 共 {} 栋）",
+                self.index,
+                self.layer.as_str(),
+                doc.len()
+            )));
+        }
+        let removed = doc.buildings.remove(self.index);
+        world.set_buildings(self.layer.clone(), doc);
+        *(self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?) = Some(removed);
+        Ok(vec![format!("buildings/{}", self.layer.as_str())])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let removed = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("DeleteBuilding 尚未 apply".into()))?;
+        let mut doc = world.building_of(&self.layer).cloned().unwrap_or_default();
+        let index = self.index.min(doc.buildings.len());
+        doc.buildings.insert(index, removed);
+        world.set_buildings(self.layer.clone(), doc);
+        Ok(())
+    }
+}
+
 /// 设置地图朝向（屏幕旋转角，单位：度）。
 ///
 /// `apply` 缓存旧值；`revert` 用缓存恢复。`0.0` = 正北朝上；
@@ -1266,6 +1438,79 @@ mod tests {
 
     fn test_layer() -> Id {
         Id::new_unchecked(TEST_LAYER)
+    }
+
+    // ---------------------- 建筑命令（ADR-0016 §6） ----------------------
+
+    const TEST_BUILDING_LAYER: &str = "layer_city_buildings";
+
+    fn test_building_layer() -> Id {
+        Id::new_unchecked(TEST_BUILDING_LAYER)
+    }
+
+    fn sample_building(h: f32) -> wv_core::Building {
+        wv_core::Building::rect(0.0, 0.0, 8.0, 8.0, h)
+    }
+
+    #[test]
+    fn add_building_then_revert_restores_the_document() {
+        let mut w = World::default();
+        let mut doc = wv_core::BuildingLayer::new();
+        doc.push(sample_building(6.0));
+        w.set_buildings(test_building_layer(), doc);
+
+        let cmd = AddBuildingCommand::new(test_building_layer(), sample_building(12.0));
+        let dirty = cmd.apply(&mut w).unwrap();
+        assert_eq!(
+            dirty,
+            vec![format!("buildings/{}", TEST_BUILDING_LAYER)],
+            "脏路径应为虚拟命名空间 `buildings/<layer>`"
+        );
+        assert_eq!(w.building_of(&test_building_layer()).unwrap().len(), 2);
+
+        cmd.revert(&mut w).unwrap();
+        let doc = w.building_of(&test_building_layer()).unwrap();
+        assert_eq!(doc.len(), 1, "revert 应截回追加前长度");
+        assert!(
+            (doc.buildings[0].height_m - 6.0).abs() < 1e-6,
+            "被截掉的是新画的那栋，旧栋原样（高度实得 {}）",
+            doc.buildings[0].height_m
+        );
+    }
+
+    #[test]
+    fn delete_building_reverts_by_reinserting_at_the_same_index() {
+        let mut w = World::default();
+        let mut doc = wv_core::BuildingLayer::new();
+        doc.push(sample_building(6.0));
+        doc.push(sample_building(12.0));
+        doc.push(sample_building(18.0));
+        w.set_buildings(test_building_layer(), doc);
+
+        let cmd = DeleteBuildingCommand::new(test_building_layer(), 1);
+        cmd.apply(&mut w).unwrap();
+        assert_eq!(w.building_of(&test_building_layer()).unwrap().len(), 2);
+
+        cmd.revert(&mut w).unwrap();
+        let doc = w.building_of(&test_building_layer()).unwrap();
+        assert_eq!(doc.len(), 3, "revert 应插回原索引");
+        assert!(
+            (doc.buildings[1].height_m - 12.0).abs() < 1e-6,
+            "插回的应是原 #1（高度实得 {}）",
+            doc.buildings[1].height_m
+        );
+    }
+
+    #[test]
+    fn delete_building_out_of_range_is_a_precondition_error() {
+        let mut w = World::default();
+        let err = DeleteBuildingCommand::new(test_building_layer(), 5)
+            .apply(&mut w)
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::EditError::Precondition(_)),
+            "越界删除应报 Precondition，实得 {err:?}"
+        );
     }
 
     #[test]

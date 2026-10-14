@@ -7,6 +7,11 @@
 //!
 //! - **色彩唯一权威源是 `docs/ART_STYLE_SPEC_v0.1.md`**（基线 §3.1）。
 //!   本文件是它的**投影**，不是第二权威——若两者冲突，改本文件。
+//! - **2026-10-14 起（ADR-0016）本文件承载「日间古舆图」（Antique Map）定稿值**，
+//!   是默认地图观感；暗调变体「暮色旧纸」见 [`super::colors_dusk`]（同槽位镜像），
+//!   运行时二选一经 [`super::palette`] 分发。渲染代码画「随主题变化的要素」
+//!   时**必须经 palette 分发**，不得直引本模块常量
+//!   （accent / 语义色 / 派系 / 轮廓图三色等主题不变项除外）。
 //! - **禁止**在渲染代码里写裸十六进制色值（`Color::srgb(0.2, 0.3, 0.4)`）：
 //!   一律经此模块的令牌引用。这样换 Theme Pack 时只改一处。
 //! - `ui_link.*` 三色是**语义色**（可达绿 / 迟到黄 / 不可达红），
@@ -35,30 +40,55 @@ const fn hex(rgb: u32) -> Color {
 
 /// 地形基色（`core.*`）。索引即 `TerrainKind` 编号（0..10）。
 ///
-/// 「深海」Theme Pack（2026-11 用户指定色值）：远海深蓝 + 高饱和陆域色，
-/// 对比强烈、轮廓一眼可辨。顺序刻意与「色块地形」视图模式的默认图例一致：
-/// 0 为最低（深水）→ 8 为最高（雪），9 为道路。作者改 `kind` 编号即可换色，无需改代码。
+/// **「日间古舆图」（2026-10-14 用户定稿，ADR-0016）**：泛黄宣纸底 + 低饱和
+/// 褐墨线 + 雾感褪色蓝水系 + 灰橄榄绿地，历史感 JRPG。顺序刻意与「色块地形」
+/// 视图模式的默认图例一致：0 为最低（深水）→ 8 为最高（雪），9 为道路。
+/// 作者改 `kind` 编号即可换色，无需改代码。标「待复核」的值由主题色系推导，
+/// 实机校准后可能微调（定稿记录见 ART_STYLE_SPEC §1.4.4）。
 pub const CORE_TERRAIN: [Color; 10] = [
-    hex(0x1E3A5F), // 0 core.water_deep   深水（远海，30,58,95）
-    hex(0x4A90E2), // 1 core.water_shallow 浅水（近海，74,144,226）
-    hex(0xE8B86D), // 2 core.sand         沙 / 沙漠（232,184,109）
-    hex(0xCDE77F), // 3 core.grass        草原 / 平原（205,231,127）
-    hex(0x3E8E41), // 4 core.forest       森林（62,142,65）
-    hex(0xD4B483), // 5 core.hill         丘陵 / 荒原（212,180,131）
-    hex(0xA67C52), // 6 core.mountain     山地（166,124,82）
-    hex(0xE6ECEF), // 7 core.snow         雪线 / 冰原
-    hex(0x6B7A55), // 8 core.marsh        沼泽
-    hex(0x222222), // 9 core.road         道路 / 区域分界（34,34,34）
+    hex(0x8FA2B3), // 0 core.water_deep   深水（远海；#98A9B9 同族压深）待复核
+    hex(0x98A9B9), // 1 core.water_shallow 浅水 / 海岸带（雾感褪色蓝）用户定稿
+    hex(0xE3D5BC), // 2 core.sand         沙 / 沙漠（纸调暖沙）待复核
+    hex(0xA8B898), // 3 core.grass        草原 / 平原（灰橄榄绿）用户定稿
+    hex(0x93A684), // 4 core.forest       森林（草色同族压深）待复核
+    hex(0xDCCBAF), // 5 core.hill         丘陵 / 荒原 待复核
+    hex(0xB7A388), // 6 core.mountain     山地（与主干道官道棕同族）待复核
+    hex(0xF2EAD8), // 7 core.snow         雪线 / 冰原（= 纸面色）待复核
+    hex(0x9AA88C), // 8 core.marsh        沼泽 待复核
+    hex(0x735D48), // 9 core.road         道路 / 区域分界（= 城墙墨棕）用户定稿
 ];
 
-/// 海岸线描边色（水陆边界浅蓝，2026-11 用户需求）。
+/// 海岸线描边色（轮廓图模式专用三色之一；模式语义，不随 [`super::palette`] 切换）。
 pub const COAST_LINE: Color = hex(0x4A90E2); // 浅水色，与近海一致
-/// 城市点位色（POI 内芯实心红点，2026-11 用户指定 192,57,43）。
-pub const PLACE_DOT: Color = hex(0xC0392B);
-/// 城市点外环（白环衬红点，保证在任何陆域色上可辨）。
-pub const POI_RING: Color = hex(0xFFFFFF);
-/// 道路描线（亮色地图上白色道路，对标 Google Maps）。
-pub const ROAD_STROKE: Color = hex(0xFFFFFF);
+/// POI 图标底色（砖赭，2026-10-14 用户定稿）。
+pub const PLACE_DOT: Color = hex(0xB88E6C);
+/// POI 外环（= 纸面色，防止绿地 / 水面吞没圆点，2026-10-14 用户定稿）。
+pub const POI_RING: Color = hex(0xF2EAD8);
+/// 城市间连线（`frame.road_segments`）的描线：官道棕褐（2026-10-14 用户定稿）。
+pub const ROAD_STROKE: Color = hex(0xA67C52);
+
+// ---------------------------------------------------------------------------
+// 古舆图矢量层令牌（ADR-0016 新增；`colors_dusk` 有同槽位镜像）
+// ---------------------------------------------------------------------------
+
+/// 主干道（城市主街 / 官道）填充：棕褐粗线（2026-10-14 用户定稿）。
+pub const STREET_MAJOR: Color = hex(0xA67C52);
+/// 次级道路 / 街巷填充：浅卡其细线（2026-10-14 用户定稿）。
+pub const STREET_MINOR: Color = hex(0xD9C8B4);
+/// 道路 casing（外缘描边）= 纸面色：把路从同类色地形上「托」出来。
+pub const ROAD_CASING: Color = hex(0xF2EAD8);
+/// 地名 / 街名文字填充：深褐墨色，替代纯黑 / 纯白（2026-10-14 用户定稿）。
+pub const LABEL_FILL: Color = hex(0x4A3F35);
+/// 文字晕边（halo）填充 = 纸面色：保证文字在绿地 / 水面上可读（M2 启用）。
+pub const HALO_FILL: Color = hex(0xF2EAD8);
+/// 等值线 / 海岸线墨色：褐墨（取代旧硬编码「制图蓝灰」，ADR-0016 令牌化）。
+pub const ISOLINE_INK: Color = hex(0x6B5B49); // 待复核
+/// 编辑网格线基色（alpha 由 `grid_lines` 叠加，token 只存本色）。
+pub const GRID_LINE: Color = hex(0x4A3F35); // 待复核
+/// 建筑顶面（浅陶土灰，2026-10-14 用户定稿；M3 建筑挤出消费）。
+pub const BUILDING_TOP: Color = hex(0xD4C8BB);
+/// 建筑侧面 / 投影基色（阴影 = 本色 α0.35，ART_STYLE_SPEC §1.5）。
+pub const BUILDING_SIDE: Color = hex(0x9A8B7A);
 
 /// 派系色（`faction.*`，已定的 2 个骨架值）。
 pub const FACTION_NEUTRAL: Color = hex(0x8C8C94); // 无主 / 未归属
@@ -69,10 +99,14 @@ pub const UI_REACHABLE: Color = hex(0x3F9B4E); // 可达绿
 pub const UI_LATE: Color = hex(0xC9971F); // 迟到黄
 pub const UI_UNREACHABLE: Color = hex(0xB5453A); // 不可达红
 
-/// 描线色（`line.*`）。
-pub const LINE_ON_LIGHT: Color = hex(0x2B2B33); // 浅底描线
-pub const LINE_ON_MID: Color = hex(0x1A1A22); // 中底描线
-pub const LINE_ON_DARK: Color = hex(0xEFE9DC); // 深底描线（反白）
+/// 描线三档（`line.*`）：地图要素描边的墨色深浅档。
+///
+/// 命名是历史语义（「画在什么底上用什么档」），实际口径 = **同色系的三档深浅**：
+/// 日间古舆图全档褐墨（纸上要深墨），暮色旧纸全档浅米（暗纸上要浅墨）——
+/// 两套值见 [`super::colors_dusk`]。
+pub const LINE_ON_LIGHT: Color = hex(0x4A3F35); // 墨（= label.fill 同源）
+pub const LINE_ON_MID: Color = hex(0x443A30); // 略深一档 待复核
+pub const LINE_ON_DARK: Color = hex(0x382F27); // 最深一档 待复核
 
 /// 强调色（`accent.*`）。
 pub const ACCENT_SELECT: Color = hex(0xF2C14E); // 选中高亮（金）
@@ -81,11 +115,12 @@ pub const ACCENT_CURSOR: Color = hex(0xE8623C);
 pub const ACCENT_EVENT: Color = hex(0xC08BD8); // 事件标记（紫）
 pub const ACCENT_NOTE: Color = hex(0x9AA5B1); // 「故事」便签（灰蓝）
 
-/// 视图模式 D（事件图）的极简底图色。取石灰色，中性、不抢事件高亮。
-pub const EVENT_VIEW_BACKDROP: Color = hex(0xE8E6E1);
+/// 视图模式 D（事件图）的极简底图色：= 纸面色（中性、不抢事件高亮）。
+pub const EVENT_VIEW_BACKDROP: Color = hex(0xF2EAD8);
 
 /// 视图模式 E（轮廓图）三色（2026-11 用户需求：黑底 + 海岸线）。
 /// 水面近黑、陆地深灰、海岸线中亮灰——黑底上白圈 POI 与强调色全高对比。
+/// **模式语义色，不随 MapPalette 切换**（ADR-0016 §2）。
 pub const COAST_WATER: Color = hex(0x07090C); // 水面：近黑
 pub const COAST_LAND: Color = hex(0x1A1E24); // 陆地：深灰（与水可辨但不抢要素）
 
@@ -94,8 +129,8 @@ pub const COAST_LAND: Color = hex(0x1A1E24); // 陆地：深灰（与水可辨�
 /// 0.35 = 与势力图淡化同源（`shade_faded` 的 k=0.45 略再淡一档），
 /// 目标是「仍可辨山川骨架，但饱和度让位给路线与地标」。
 pub const SOFTEN_KEEP: f32 = 0.35;
-/// 底图淡化目标色：亮暖灰（纸面色），去饱和 + 提亮一并完成。
-pub const SOFTEN_TOWARD: Color = hex(0xEDE8DC);
+/// 底图淡化目标色：= 纸面色（2026-10-14 用户定稿）。
+pub const SOFTEN_TOWARD: Color = hex(0xF2EAD8);
 
 /// 底图淡化混合（所有视图模式共用的唯一实现；禁止散落重写）。
 pub fn soften_color(base: Color) -> Color {

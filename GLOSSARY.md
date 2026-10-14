@@ -169,6 +169,20 @@
 | **色块地形** | Schematic terrain | `Schematic` 浏览态的既有 UI 名：一格一色，直接呈现每格的地形类型（`colors::core_terrain`）。浏览态两模式之一 | 地理 / 渲染 |
 | **预填充** | prefill | 「新建地图」对话框按选择整图铺满海洋（高度 < 0 + 水系类型）或陆地（高度 ≥ 0 + 陆系类型）的初始栅格；同时写高度与类型——VectorFlat 填充「高度赢过类型」口径下二者必须一致 | 编辑 / 数据 |
 
+## 古舆图主题与氛围渲染（2026-10）
+
+> 来源：用户 2026-10-14「日间古舆图 / 暮色旧纸」配色定稿与五条渲染规则，决策见 `docs/adr/ADR-0016-jrpg-antique-map-default-theme.md`；定稿色值见 `docs/ART_STYLE_SPEC_v0.1.md` §1.4.4。
+
+| 术语 | 英文 / 拼音 | 定义 | 所属维度 |
+|---|---|---|---|
+| **古舆图** | Antique Map | 日间古舆图配色的正式名：泛黄宣纸底 `#F2EAD8` + 褐墨线条 `#4A3F35` + 灰蓝水 `#98A9B9` + 灰橄榄绿 `#A8B898`，低饱和历史感 JRPG。ADR-0016 定稿的**默认地图观感**（`theme/colors.rs` 现行值） | 美术 |
+| **暮色旧纸** | Dusk | 古舆图的暗调变体：深褐灰纸底 `#3A342E` + 暗棕路 `#705844` + 深蓝灰水 `#44505C`。对应 `MapPalette::Dusk`，适合黄昏 / 雨夜 / 夜景叙事场景 | 美术 |
+| **地图主题** | MapPalette | 与视图模式（`ViewMode`，技法轴）**正交**的配色轴：`Daylight`（古舆图）/ `Dusk`（暮色旧纸）两档。GoogleMap 模式继续绑 `colors_google` 不受影响；轮廓图三色不随其切换。持久化于 `ui-layout.yaml` 的 `map_theme` 字段。`ViewMode::JRPG` 已移除，色板切换职责由它承接。首次出现：ADR-0016 + `theme/palette.rs` | 渲染 |
+| **纸面雾霭** | Aerial veil | 缩放联动降饱和的实现载体：纸色半透明全图四边形（Z 在等值线之上、道路之下），alpha 随相机缩放**连续**变化——远景要素向纸色退散的手绘空气感。不改 CPU 纹理（每帧只改 alpha）。首次出现：ADR-0016 + `render/terrain_view/atmosphere.rs` | 渲染 |
+| **纸张噪点** | Paper grain | 世界锁定的极淡程序化噪声叠加层（定种子生成、alpha ≈ 0.035），模拟旧纸纤维；随图平移缩放，如真实纸张。首次出现：ADR-0016 + `render/terrain_view/atmosphere.rs` | 美术 / 渲染 |
+| **文字晕边** | Label halo | 地名 / 街名 `Text2d` 的纸色描边晕：每条标注 4 向偏移副本先画 halo 再画本体，保证文字在绿地 / 水面上可读（暮色用深纸色）。首次出现：ADR-0016 + `render/label_halo.rs` | 渲染 |
+| **建筑挤出** | Building extrusion | 2.5D 假立体画法：建筑轮廓多边形沿固定世界方向挤出侧面 quad + 顶面平涂 + 柔和投影（ART_STYLE_SPEC §1.5：左上光、右下投影、长度 0.5× 高度、alpha 0.35、禁纯黑）。建筑数据走「街道同款」作者数据路径（ADR-0010 模式），渲染不依赖数据来源 | 渲染 |
+
 ## 设计上不做（负向清单）
 
 > 来源：`docs/MAP_EDITOR_BASELINE_v1.md` §5.1c（Phase 2 明确「设计上不做」项，反向登记）。
@@ -221,7 +235,8 @@
 | 换级淡化 | Level-cross basemap fade | 换图（换级/钻取）时的视觉过渡：新底图**同帧即时重建**（切换不延迟），旧底图以克隆像素的淡出精灵（`BasemapFadeOut`，z=0.05，盖分块底图、在道路之下）在 `LEVEL_FADE_SECS = 0.4s` 内线性降透明至归零回收。只淡出旧图、不淡入新图；无位移插值；换模式/换 soften 不触发。实现：`crates/wv-app/src/render/terrain_view/mod.rs`。首次出现：ADR-0009 §5 追写 + `terrain_view.rs` | 地理 / 渲染 |
 | 淡出精灵 | Fade-out sprite | 换级淡化的载体：`spawn_basemap_fadeout` 把**旧纹理像素克隆**成新 `Image`（句柄会被原地覆写，不克隆会瞬间变新图）挂到 `Sprite` 上逐帧降 alpha，归零即 despawn。首次出现：ADR-0009 §5 追写 + `terrain_view.rs` | 地理 / 渲染 |
 
-| **职责域目录** | Domain directory | wv-app 与 wv-core 按职责域分目录：前者 ender/（地图渲染）、edit/（UI 动作→EditCommand）、ui/（面板/组件）、	heme/（外观令牌）；后者 ase/ 	ime/ map/ model/ derived/ source/。**目的**：让 AI 通过目录名快速定位（无需扫 28 个平铺文件）。模块挂点与公开 API 不变。首次出现：2026-10-14 目录级别重构 + docs/adr/README.md §5 | 工程 |
+| **职责域目录** | Domain directory | wv-app 与 wv-core 按职责域分目录：前者 
+ender/（地图渲染）、edit/（UI 动作→EditCommand）、ui/（面板/组件）、	heme/（外观令牌）；后者 ase/ 	ime/ map/ model/ derived/ source/。**目的**：让 AI 通过目录名快速定位（无需扫 28 个平铺文件）。模块挂点与公开 API 不变。首次出现：2026-10-14 目录级别重构 + docs/adr/README.md §5 | 工程 |
 | **保路径重导出** | Path-preserving re-export | wv-core 因 AGENTS.md §3 与文档直接引用顶层路径（如 wv_core::time::TimelineQuery），lib.rs 用 pub use base::id;（**模块**）与 pub use base::id::Id;（**类型**）两套并存的 re-export 让「wv_core::id 模块路径」与「wv_core::Id 类型路径」都仍可达。**命名空间不同**，不冲突。**作用**：目录重构不动公共 API。首次出现：2026-10-14 目录级别重构 + docs/adr/README.md §5 | 工程 |
 | **欢迎页** | Welcome screen | 无工程在手时的全屏接管界面（压暗 + 居中卡片）：「新建工程… / 打开工程… / 最近工程」。点不到地图与面板；是「先立工程才能画」的 UI 侧入口。判据 `WorldProjection::has_open_project()`（= `project_dir.is_some()`）。首次出现：2026-10-14 用户需求（新建项目对话框 + 启动锁定）+ `crates/wv-app/src/ui/welcome_screen.rs` | 工程 / 编辑 |
 | **无工程锁** | No-project lock | 「程序刚打开不能画图」的三道门禁同一判据（`has_open_project`）：① 欢迎页压暗吃点击（UI 侧）；② `collect_brush_stroke` / `commit_street_click` 直接早退（数据侧，防穿透）；③ 命令分发器挡下 NewMap / Save / SaveAs / Export（命令侧）。NewProject / OpenProject / CloseProject 是入口本身，不拦。首次出现：2026-10-14 用户需求 + `ui_shell.rs` / `camera.rs` / `streets.rs` | 工程 / 编辑 |

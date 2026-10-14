@@ -37,7 +37,13 @@ fn main() {
     );
 
     for mode in ViewMode::ALL {
-        let img = image_from_terrain(&data, mode, None, true);
+        let img = image_from_terrain(
+            &data,
+            mode,
+            None,
+            true,
+            wv_app::theme::palette::colors(Default::default()),
+        );
         // atlas=None 时多数模式 res=1（每格 1 像素）；GoogleMap / VectorFlat
         // 走亚像素（plan v0.1 M2）——尺寸以 Image 实际边长为准。
         let (w, h) = (img.width() as usize, img.height() as usize);

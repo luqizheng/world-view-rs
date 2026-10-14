@@ -22,6 +22,7 @@
 //! | `Place` | POI 点标 + 地名标注 | `places_visible` |
 //! | `Influence` | 势力多边形叠加 | `factions_visible` |
 //! | `EventPoint` | 事件高亮（Gizmos） | `events_visible` |
+//! | `Building` | 2.5D 建筑挤出（阴影 / 侧面 / 顶面，ADR-0016 §6） | `buildings_visible` |
 //! | `Border` / `Custom` | **无消费者**（预留声明位） | — |
 //!
 //! ## z 的语义：槽位偏移（ADR-0013 v1）
@@ -82,6 +83,8 @@ pub struct LayerFrame {
     pub road: LayerBinding,
     pub event_point: LayerBinding,
     pub place: LayerBinding,
+    /// 建筑层绑定（ADR-0016 §6）。
+    pub building: LayerBinding,
     /// 标签层绑定（ADR-0016 · Q1 用户拍板"进独立渲染组"）。
     ///
     /// 与 `Place` / `Road` / `Influence` 平级——可见 / 透明 / z 偏移走
@@ -131,6 +134,10 @@ impl LayerFrame {
                 visible: view.places_visible,
                 ..LayerBinding::NEUTRAL
             },
+            building: LayerBinding {
+                visible: view.buildings_visible,
+                ..LayerBinding::NEUTRAL
+            },
             label: LayerBinding {
                 visible: view.labels_visible,
                 ..LayerBinding::NEUTRAL
@@ -141,7 +148,7 @@ impl LayerFrame {
             return frame;
         };
         // 同 kind 只认第一个声明（模块文档「多个同 kind 图层」）。
-        let mut claimed = [false; 8];
+        let mut claimed = [false; 9];
         for layer in &node.layers {
             let idx = kind_index(&layer.kind);
             if claimed[idx] {
@@ -177,8 +184,9 @@ fn kind_index(kind: &LayerKind) -> usize {
         LayerKind::Road => 3,
         LayerKind::EventPoint => 4,
         LayerKind::Place => 5,
-        LayerKind::Label => 6,
-        LayerKind::Custom => 7,
+        LayerKind::Building => 6,
+        LayerKind::Label => 7,
+        LayerKind::Custom => 8,
     }
 }
 
@@ -191,6 +199,7 @@ fn slot_visible_default(frame: &LayerFrame, kind: &LayerKind) -> bool {
         LayerKind::Road => frame.road.visible,
         LayerKind::EventPoint => frame.event_point.visible,
         LayerKind::Place => frame.place.visible,
+        LayerKind::Building => frame.building.visible,
         LayerKind::Label => frame.label.visible,
         LayerKind::Custom => frame.custom.visible,
     }
@@ -205,6 +214,7 @@ fn slot_mut<'f>(frame: &'f mut LayerFrame, kind: &LayerKind) -> &'f mut LayerBin
         LayerKind::Road => &mut frame.road,
         LayerKind::EventPoint => &mut frame.event_point,
         LayerKind::Place => &mut frame.place,
+        LayerKind::Building => &mut frame.building,
         LayerKind::Label => &mut frame.label,
         LayerKind::Custom => &mut frame.custom,
     }

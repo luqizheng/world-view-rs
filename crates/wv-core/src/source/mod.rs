@@ -18,6 +18,7 @@
 //! - [`label::LabelLayerConfig`] / [`label::label_visible_at`]
 //! - [`measurement::MeasurementOverlay`]
 
+pub mod building;
 pub mod geographic_source;
 pub mod label;
 pub mod measurement;

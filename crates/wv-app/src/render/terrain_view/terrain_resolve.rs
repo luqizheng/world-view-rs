@@ -46,6 +46,7 @@ pub fn texture_terrain<'w>(
 
 /// 用新 Image 替换既有纹理资源。优先复用 Handle，项目切换 / 模式切换不再
 /// 保留一串旧整图 source；资产不存在时回退为新增。
+#[allow(clippy::too_many_arguments)]
 pub fn replace_terrain_texture(
     tex: &mut TerrainTexture,
     images: &mut Assets<Image>,
@@ -54,6 +55,7 @@ pub fn replace_terrain_texture(
     map: Option<wv_core::Id>,
     mode: ViewMode,
     soften: bool,
+    palette: crate::theme::palette::MapPalette,
 ) {
     let res = image.width() / data.width.max(1);
     let handle = if images.get_mut(&tex.handle).is_some() {
@@ -72,6 +74,7 @@ pub fn replace_terrain_texture(
         chunks_dirty: None,
         last_mode: Some(mode),
         last_soften: soften,
+        last_palette: palette,
         last_map: map,
     };
 }
@@ -167,6 +170,7 @@ pub fn active_terrain_or_placeholder(
 pub fn force_rebuild(tex: &mut TerrainTexture) {
     tex.last_mode = None;
     tex.last_soften = false; // 与 `Default` 一致即可；不与 view.terrain_soften 比
+    tex.last_palette = Default::default(); // 与 `Default` 一致即可；不与 view.map_palette 比
     tex.last_map = None;
     tex.mark_all_dirty();
 }
@@ -187,6 +191,7 @@ mod tests {
             chunks_dirty: None,
             last_mode: Some(ViewMode::VectorFlat),
             last_soften: true,
+            last_palette: Default::default(),
             last_map: Some(wv_core::Id::new_unchecked("map_x")),
         };
         force_rebuild(&mut tex);

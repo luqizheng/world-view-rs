@@ -153,8 +153,6 @@ pub enum ViewMode {
     RealTerrain,
     /// B. 色块地形：每种地形一种颜色。
     Schematic,
-    /// C. JRPG 地图：JRPG 风格色板。
-    JRPG,
     /// D. 势力图：颜色 = 势力，底色淡化地形。
     Faction,
     /// E. 事件图：极简底图 + 事件高亮。
@@ -197,8 +195,6 @@ impl ViewMode {
             ViewMode::Faction => "势力图",
             ViewMode::Event => "事件图",
             ViewMode::Coastline => "轮廓图",
-            // JRPG 未进 ALL（见上方注释），但仍需在此给出 label 以免 match 报错。
-            ViewMode::JRPG => "JRPG",
         }
     }
 }
@@ -207,6 +203,10 @@ impl ViewMode {
 #[derive(Resource)]
 pub struct ViewState {
     pub mode: ViewMode,
+    /// **地图主题**（配色轴，ADR-0016）：日间古舆图 / 暮色旧纸，与 `mode`
+    /// （技法轴）正交。切换会触发底图纹理重建（`TerrainTexture.last_palette`）
+    /// 与矢量层材质刷新（缓存键含本字段）。
+    pub map_palette: crate::theme::palette::MapPalette,
     /// 相机缩放（渲染层钳制范围）。
     pub scale: f32,
     /// 相机中心（世界坐标）。
@@ -233,6 +233,8 @@ pub struct ViewState {
     pub labels_visible: bool,
     /// 地点（POI）图层是否可见：锚定地点的点标（矢量图层底子）。
     pub places_visible: bool,
+    /// 建筑（2.5D 挤出）图层是否可见（ADR-0016 §6）。
+    pub buildings_visible: bool,
     /// 势力多边形叠加层是否可见（S12）。
     pub factions_visible: bool,
     /// 鼠标在地图上的世界坐标（顶栏坐标显示用）。
@@ -250,6 +252,7 @@ impl Default for ViewState {
         Self {
             mode: ViewMode::default(),
             scale: 1.0,
+            map_palette: Default::default(),
             camera_center: Vec2::ZERO,
             terrain_visible: true,
             terrain_soften: true,
@@ -258,6 +261,7 @@ impl Default for ViewState {
             roads_visible: true,
             labels_visible: true,
             places_visible: true,
+            buildings_visible: true,
             factions_visible: true,
             cursor_world: None,
             window_size: Vec2::new(1280.0, 800.0),

@@ -1,6 +1,6 @@
 # ADR-0014：LLM 可控的世界编辑——HTTP/MCP 服务与 skill 表面
 
-**状态**：提议（Proposed，2026-10-14 用户授权先开 ADR、再动代码）
+**状态**：已接受（Accepted，2026-10-14 用户拍板，授权开 worktree 进 v0.1 骨架实现）
 **日期**：2026-10-14
 **决策者**：用户
 **关联**：P1（单机可运行）、P3（YAML 为主格式）、AGENTS §2.1（wv-app 持有工作副本 + 变更经 wv-edit）、AGENTS §3（数据与渲染分离）、AGENTS §3.3（System 不得改世界）、AGENTS §6.4（ADR 纪律）、AGENTS §7.5 V1/V2（校验只提示不阻止 / 历史可重写）、AGENTS §9（依赖新增纪律）、AGENTS §12（待决问题处置）、[ADR-0007](ADR-0007-overture-real-geography.md)（已有「外部接口扩展」先例，可参考其「只读引用 + 平行 crate」格局）、[ADR-0013](ADR-0013-layer-frame-binding.md)（最近一份 ADR 模板）

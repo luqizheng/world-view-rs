@@ -33,7 +33,6 @@ use bevy::math::primitives::Rectangle;
 use bevy::prelude::*;
 
 use crate::state::{GridConfig, ViewState};
-use crate::theme::colors;
 
 /// 屏幕像素描边。
 const STROKE_PX: f32 = 1.5;
@@ -105,7 +104,7 @@ pub fn sync_map_frame(
     // ---- 外框：4 段 Rectangle ----
     // 顶 / 底：水平方向，长度 = size。
     // 左 / 右：垂直方向，长度 = size。
-    let mat_frame = materials.add(colors::LINE_ON_DARK);
+    let mat_frame = materials.add(crate::theme::palette::colors(view.map_palette).line_on_dark);
     let segs: [(usize, Vec2, Vec2, f32); 4] = [
         // (idx, translation, scale, rotation_rad)
         (
@@ -157,7 +156,11 @@ pub fn sync_map_frame(
         }
         return;
     }
-    let mat_grid = materials.add(colors::LINE_ON_DARK.with_alpha(0.35));
+    let mat_grid = materials.add(
+        crate::theme::palette::colors(view.map_palette)
+            .line_on_dark
+            .with_alpha(0.35),
+    );
     let step = size / 4.0;
     // 3 条竖线（v1, v2, v3）：x = min.x + step*i，i ∈ 1..4。
     for i in 0..3 {

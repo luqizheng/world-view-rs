@@ -67,6 +67,9 @@ pub fn top_bar(
                 // ── 主控（视图模式分段控件，权重最高）──
                 view_mode_segment(ui, &shell, &mut view);
                 ui.add_space(space::SM);
+                // ── 地图主题（ADR-0014：日间古舆图 / 暮色旧纸，与技法正交）──
+                map_palette_segment(ui, &shell, &mut view);
+                ui.add_space(space::SM);
 
                 // ── 重画按钮（2026-10-14 用户需求：数据改了画面没跟上时点 ↻）──
                 if mini_icon_button(ui, &shell, "↻", "强制重画地形（F5）").clicked() {
@@ -152,6 +155,53 @@ fn view_mode_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
         );
         if resp.clicked() {
             view.mode = *mode;
+        }
+    }
+}
+
+/// 地图主题分段控件（日间古舆图 / 暮色旧纸，ADR-0016）。
+///
+/// 与 [`view_mode_segment`] 同款手绘（密度敏感，不用 `egui::Button`）；
+/// 两段定宽 64px——「日间古舆图」四~五字在 SMALL 字号下正好放下，不抢主控宽度。
+fn map_palette_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
+    use crate::theme::palette::MapPalette;
+    let n = MapPalette::ALL.len() as f32;
+    let seg_w = n * 64.0;
+    let seg_h = shell.hit;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(seg_w, seg_h), egui::Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(rect, radius::CONTROL, shell.raised_bg());
+    let seg_w_each = rect.width() / n;
+    for (i, p) in MapPalette::ALL.iter().enumerate() {
+        let r = egui::Rect::from_min_max(
+            egui::pos2(rect.min.x + seg_w_each * i as f32, rect.min.y),
+            egui::pos2(rect.min.x + seg_w_each * (i as f32 + 1.0), rect.max.y),
+        );
+        let selected = view.map_palette == *p;
+        let resp = ui.interact(
+            r,
+            egui::Id::new(("wv_palette_seg", i)),
+            egui::Sense::click(),
+        );
+        if selected {
+            painter.rect_filled(r, radius::CONTROL, shell.accent());
+        } else if resp.hovered() {
+            painter.rect_filled(r, radius::CONTROL, shell.hover_bg());
+        }
+        let fg = if selected {
+            shell.text_on_accent()
+        } else {
+            shell.t2()
+        };
+        painter.text(
+            r.center(),
+            egui::Align2::CENTER_CENTER,
+            p.label(),
+            proportional(font_size::SMALL),
+            fg,
+        );
+        if resp.clicked() {
+            view.map_palette = *p;
         }
     }
 }

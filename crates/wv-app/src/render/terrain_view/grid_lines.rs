@@ -17,13 +17,13 @@ use bevy::prelude::*;
 
 use crate::render::layer_frame::LayerFrame;
 use crate::state::{BrushState, GridConfig, ViewState};
+use crate::theme::palette::{self, MapPalette};
 
 use super::isoline_overlay::build_stroke_mesh;
 use super::terrain_texture::TerrainTexture;
 
-/// 网格线色：半透明深灰蓝，压在底图上不喧宾。
-const GRID_LINE_COLOR: Color = Color::srgba(0.15, 0.22, 0.30, 0.35);
 /// 网格线本色的 alpha（作者未给 Terrain 图层设 opacity 时的值）。
+/// 网格线基色走 `PaletteColors.grid_line`（ADR-0016：日间褐墨 / 暮色浅墨）。
 const GRID_LINE_BASE_ALPHA: f32 = 0.35;
 
 /// Z 序：底图块（0.0）之上、等值线描边（0.04）之下。
@@ -53,6 +53,7 @@ struct GridKey {
     size: u32,
     cell_bits: u64,
     origin: (u64, u64),
+    palette: MapPalette,
     scale_bits: u64,
 }
 
@@ -95,15 +96,16 @@ pub fn sync_grid_lines(
             grid.raster_origin.x.to_bits() as u64,
             grid.raster_origin.y.to_bits() as u64,
         ),
+        palette: view.map_palette,
         scale_bits: view.scale.to_bits() as u64,
     };
+    let grid_ink = palette::colors(view.map_palette).grid_line;
     if overlay.key.as_ref() == Some(&key) && overlay.entity.is_some() {
         // 结构没变也可能只是图层绑定变了（作者改 opacity/z）：就地补丁。
         if layers.is_changed() {
             if let Some(handle) = &overlay.material {
                 if let Some(mut mat) = materials.get_mut(handle) {
-                    mat.color =
-                        GRID_LINE_COLOR.with_alpha(GRID_LINE_BASE_ALPHA * layers.terrain.opacity);
+                    mat.color = grid_ink.with_alpha(GRID_LINE_BASE_ALPHA * layers.terrain.opacity);
                 }
             }
             if let Some(entity) = overlay.entity {
@@ -127,11 +129,11 @@ pub fn sync_grid_lines(
     let handle = meshes.add(mesh);
     let material = overlay
         .material
-        .get_or_insert_with(|| materials.add(ColorMaterial::from_color(GRID_LINE_COLOR)))
+        .get_or_insert_with(|| materials.add(ColorMaterial::from_color(grid_ink)))
         .clone();
     // 材质跨重建复用（get_or_insert）：重算后也要按当前绑定刷新 alpha。
     if let Some(mut mat) = materials.get_mut(&material) {
-        mat.color = GRID_LINE_COLOR.with_alpha(GRID_LINE_BASE_ALPHA * layers.terrain.opacity);
+        mat.color = grid_ink.with_alpha(GRID_LINE_BASE_ALPHA * layers.terrain.opacity);
     }
 
     overlay.despawn(&mut commands);

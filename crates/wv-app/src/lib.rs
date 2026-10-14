@@ -56,7 +56,7 @@
 //! |---|---|
 //! | [`theme::colors`] | 28 色板令牌（基底）；权威来自 `ART_STYLE_SPEC_v0.1` §1.4。 |
 //! | [`theme::colors_google`] | Google Default Map 色板（地图默认视图）。 |
-//! | [`theme::colors_jrpg`] | JRPG 风格色板（真实地形视图）。 |
+//! | [`theme::palette`] | 地图主题分发：日间古舆图（默认）/ 暮色旧纸（ADR-0016）。 |
 //! | [`theme::ui_tokens`] | 界面外壳色令牌（权威来自 `UI_DESIGN_SPEC` §2.2）。 |
 //! | [`theme::ui_theme`] | 把 `ui_tokens` 投影成 egui `Visuals`。 |
 //! | [`theme::fonts`] | 系统字体栈探测 + CJK 字体注册。 |
@@ -71,6 +71,15 @@ pub struct AppConfig {
     /// `Some(dir)` = 启动后立即加载该工程：加载期间窗口内显示进度遮罩，
     /// 失败原因在窗口内展示（不依赖控制台）。
     pub startup_project: Option<String>,
+    /// MCP server 配置（ADR-0014 v0.2 增量）。仅在 `--features http` 时被
+    /// `app_bootstrap` 接线到 `HttpServerPlugin`；`--features app` 但不带 http
+    /// 时**不**启 server（无 server 进程就是 v0.1 默认行为）。
+    ///
+    /// 默认值见 [`HttpServerConfig::default`]：`127.0.0.1:8732`。
+    /// `Default::default()` 走字段自身的 `Default`（`HttpServerConfig::default()`），
+    /// 与手写 `impl Default` 等价——`#[cfg]` 跨字段类型对 derive 透明。
+    #[cfg(feature = "http")]
+    pub http_server_config: crate::http_integration::HttpServerConfig,
 }
 
 #[cfg(feature = "app")]
@@ -95,3 +104,10 @@ pub mod ui_layout;
 pub mod ui_shell;
 #[cfg(feature = "app")]
 pub mod ui_time;
+
+// LLM 可控编辑（ADR-0016）。仅 `--features http` 时编译；与 `app` 同源
+// （HTTP handler 持 GUI 主帧的 `WorldProjection` + `History` 句柄）。
+#[cfg(feature = "http")]
+pub mod http;
+#[cfg(feature = "http")]
+pub mod http_integration;

@@ -36,7 +36,13 @@ pub fn setup_terrain_texture(
 ) {
     let atlas = super::tile_atlas::ensure_atlas(&mut commands);
     let (map, data) = active_terrain_or_placeholder(&mut projection.world, drill.current(), 64);
-    let image = image_from_terrain(&data, view.mode, atlas.as_ref(), view.terrain_soften);
+    let image = image_from_terrain(
+        &data,
+        view.mode,
+        atlas.as_ref(),
+        view.terrain_soften,
+        crate::theme::palette::colors(view.map_palette),
+    );
     commands.insert_resource(new_terrain_texture(
         &mut images,
         image,
@@ -44,12 +50,14 @@ pub fn setup_terrain_texture(
         map,
         view.mode,
         view.terrain_soften,
+        view.map_palette,
     ));
 }
 
 /// 创建新的地形纹理资源。分辨率元数据从实际 Image 反推，避免第二套推断逻辑。
 ///
 /// `map` = 这份地形属于哪张图（占位纹理传 `None`），记进 [`TerrainTexture::last_map`]。
+#[allow(clippy::too_many_arguments)]
 pub fn new_terrain_texture(
     images: &mut Assets<Image>,
     image: Image,
@@ -57,6 +65,7 @@ pub fn new_terrain_texture(
     map: Option<wv_core::Id>,
     mode: crate::state::ViewMode,
     soften: bool,
+    palette: crate::theme::palette::MapPalette,
 ) -> TerrainTexture {
     let res = image.width() / data.width.max(1);
     TerrainTexture {
@@ -67,6 +76,7 @@ pub fn new_terrain_texture(
         chunks_dirty: None,
         last_mode: Some(mode),
         last_soften: soften,
+        last_palette: palette,
         last_map: map,
     }
 }

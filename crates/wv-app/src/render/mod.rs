@@ -24,11 +24,15 @@
 #[cfg(feature = "app")]
 pub mod brush_cursor;
 #[cfg(feature = "app")]
+pub mod buildings;
+#[cfg(feature = "app")]
 pub mod camera;
 #[cfg(feature = "app")]
 pub mod drill;
 #[cfg(feature = "app")]
 pub mod faction_overlays;
+#[cfg(feature = "app")]
+pub mod label_halo;
 #[cfg(feature = "app")]
 pub mod layer_frame;
 #[cfg(feature = "app")]
