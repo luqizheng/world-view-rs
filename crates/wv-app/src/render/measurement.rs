@@ -92,10 +92,14 @@ const LABEL_PX: f32 = 10.0;
 #[derive(Component)]
 pub struct MeasureLabel;
 
-/// 折线标签的描边阴影（黑色，在主文字之后渲染——z=MEASURE_Z + 0.04）。
+/// 折线标签的描边阴影（黑色 4 方向实体，撑出 ~2 px 实心描边）。
 ///
-/// 与 [`MeasureLabel`] 1:1 配对 spawn：同一 pos + 同 text，黑色 + 1 屏幕 px
-/// 右下偏移。`z` 比主文字略低，避免遮挡文字本身。
+/// 与 [`MeasureLabel`] **N : 4** 配对 spawn：每个标签 1 主文字 + 4 阴影实体，
+/// 阴影分别位于主文字的左 / 右 / 上 / 下 1 屏幕 px 处，全不透明黑。
+/// 形成 2 px 厚的描边，让白字在任何底色上都可读——尤其是黄色测量线穿过处
+/// （用户 2026-10-14 反馈：单方向 1 px 半透明黑压不住黄底）。
+///
+/// `z` 比主文字略低，避免遮挡文字本身。
 #[derive(Component)]
 pub struct MeasureLabelShadow;
 
@@ -242,12 +246,15 @@ pub fn render_measurements(
     let font_size = label_world;
     let cjk = fonts.cjk_font.clone();
     let label_color = bevy::color::Color::WHITE;
-    let shadow_color = bevy::color::Color::srgba(0.0, 0.0, 0.0, 0.85);
-    // 描边偏移：屏幕 1 像素 → 世界单位 = `view.scale`（与 brush_cursor 同款口径）。
-    let shadow_offset = Vec2::new(view.scale, -view.scale);
+    // 描边：全不透明黑（2026-10-14 用户反馈：半透明黑压不住黄底）。
+    let shadow_color = bevy::color::Color::srgba(0.0, 0.0, 0.0, 1.0);
+    // 4 方向描边（上下左右），每个方向 1 屏幕 px；屏幕 1 px = `view.scale` 世界单位。
+    // 4 个方向叠加 → ~2 px 实心描边，让白字在任何底色（绿底/黄线）上都清晰。
+    const SHADOW_OFFSETS: [(f32, f32); 4] = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)];
 
     // ---- 文字标签对象池（主 + 描边）----
-    // 每个 wanted 标签需要 1 个 shadow + 1 个 main（共 2N 个实体）。
+    // 每个 wanted 标签需要 1 个 main + 4 个 shadow（共 5N 个实体）。
+    // 阴影池大小 = 4N（每个 main 配 4 个 shadow）。
     let mut iter_main = q_main.iter_mut();
     let mut iter_shadow = q_shadow.iter_mut();
     for (pos, text) in &wanted {
@@ -283,35 +290,37 @@ pub fn render_measurements(
             ));
         }
 
-        // 2. 描边阴影（黑色，1 像素右下方偏移，z = MEASURE_Z + 0.04）
-        let shadow_pos = pos + shadow_offset;
-        if let Some((_, mut tf, mut t, mut style, mut color, mut vis)) = iter_shadow.next() {
-            tf.translation = shadow_pos.extend(MEASURE_Z + 0.04);
-            tf.rotation = label_rot;
-            *t = Text2d::new(text.to_string());
-            style.font_size = font_size.into();
-            if let Some(f) = &cjk {
-                style.font = f.clone().into();
+        // 2. 描边阴影（4 个方向，各 1 像素偏移，全不透明黑，z = MEASURE_Z + 0.04）
+        for (dx, dy) in SHADOW_OFFSETS {
+            let shadow_pos = pos + Vec2::new(dx * view.scale, dy * view.scale);
+            if let Some((_, mut tf, mut t, mut style, mut color, mut vis)) = iter_shadow.next() {
+                tf.translation = shadow_pos.extend(MEASURE_Z + 0.04);
+                tf.rotation = label_rot;
+                *t = Text2d::new(text.to_string());
+                style.font_size = font_size.into();
+                if let Some(f) = &cjk {
+                    style.font = f.clone().into();
+                }
+                *color = TextColor(shadow_color);
+                *vis = Visibility::Visible;
+            } else {
+                commands.spawn((
+                    MeasureLabelShadow,
+                    Text2d::new(text.to_string()),
+                    TextFont {
+                        font_size: font_size.into(),
+                        font: cjk.clone().unwrap_or_default().into(),
+                        ..Default::default()
+                    },
+                    TextColor(shadow_color),
+                    Transform {
+                        translation: shadow_pos.extend(MEASURE_Z + 0.04),
+                        rotation: label_rot,
+                        ..Default::default()
+                    },
+                    Visibility::Visible,
+                ));
             }
-            *color = TextColor(shadow_color);
-            *vis = Visibility::Visible;
-        } else {
-            commands.spawn((
-                MeasureLabelShadow,
-                Text2d::new(text.to_string()),
-                TextFont {
-                    font_size: font_size.into(),
-                    font: cjk.clone().unwrap_or_default().into(),
-                    ..Default::default()
-                },
-                TextColor(shadow_color),
-                Transform {
-                    translation: shadow_pos.extend(MEASURE_Z + 0.04),
-                    rotation: label_rot,
-                    ..Default::default()
-                },
-                Visibility::Visible,
-            ));
         }
     }
     // 池里多出的实体隐藏（复用，不 despawn）。
