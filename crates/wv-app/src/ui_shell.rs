@@ -38,14 +38,14 @@ use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use bevy_egui::{egui, EguiContexts};
 
+use crate::render::terrain_view::{TerrainTexture, TileAtlas};
 use crate::state::{
     DrillState, Panel, PanelState, PlaybackState, RecentProjects, ViewState, WorldProjection,
 };
-use crate::terrain_view::{TerrainTexture, TileAtlas};
+use crate::theme::ui_theme::UiShellConfig;
+use crate::theme::ui_tokens::{UiDensity, UiTheme};
 use crate::ui_command_palette::{CommandId, CommandPalette};
 use crate::ui_layout::LayoutFile;
-use crate::ui_theme::UiShellConfig;
-use crate::ui_tokens::{UiDensity, UiTheme};
 
 /// 把界面外壳的资源与系统注册进 `App`。
 ///
@@ -376,7 +376,7 @@ fn poll_open_project_dialog(
     mut recents: ResMut<RecentProjects>,
     mut notice: ResMut<ShellNotice>,
     mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
-    mut edit: ResMut<crate::editing::EditHistory>,
+    mut edit: ResMut<crate::edit::editing::EditHistory>,
     mut playback: ResMut<PlaybackState>,
     mut view: ResMut<ViewState>,
     mut tex: ResMut<TerrainTexture>,
@@ -432,7 +432,7 @@ fn poll_open_project_dialog(
 fn save_world_to_dir(
     dir: &str,
     projection: &mut WorldProjection,
-    edit: &mut crate::editing::EditHistory,
+    edit: &mut crate::edit::editing::EditHistory,
     notice: &mut ShellNotice,
     frame: u64,
 ) {
@@ -489,7 +489,7 @@ pub(crate) fn load_project_into(
     recents: &mut RecentProjects,
     notice: &mut ShellNotice,
     diagnostics: &mut crate::state::ProjectDiagnostics,
-    edit: &mut crate::editing::EditHistory,
+    edit: &mut crate::edit::editing::EditHistory,
     playback: &mut PlaybackState,
     view: &mut ViewState,
     tex: &mut TerrainTexture,
@@ -521,7 +521,7 @@ pub(crate) fn load_project_into(
             // 系统链上 `refresh_project_diagnostics` 也会重算（并清 `needs_diagnose`），
             // 但本帧若不立刻灌，UI 会先看到旧工程的诊断，视觉闪烁。
             // 走 `derive_diagnostics`（错误+提示），不只 `derive_hints`。
-            let d = crate::diagnostics_bridge::derive_diagnostics(&projection.world);
+            let d = crate::edit::diagnostics_bridge::derive_diagnostics(&projection.world);
             diagnostics.last_count = d.items.len();
             diagnostics.diagnostics = d;
             diagnostics.needs_diagnose = false;
@@ -621,7 +621,7 @@ fn startup_load(
     mut recents: ResMut<RecentProjects>,
     mut notice: ResMut<ShellNotice>,
     mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
-    mut edit: ResMut<crate::editing::EditHistory>,
+    mut edit: ResMut<crate::edit::editing::EditHistory>,
     mut playback: ResMut<PlaybackState>,
     mut view: ResMut<ViewState>,
     mut tex: ResMut<TerrainTexture>,
@@ -698,14 +698,18 @@ fn adopt_world_snapshot(
 ) {
     // 地形保底（与 `setup_terrain_texture_after_world` 同一不变量：总有底图可用）。
     // Phase 2：底图按图存，取「当前图向上的第一张自带栅格」，都没有才塞占位。
-    let (map, data) = crate::terrain_view::active_terrain_or_placeholder(
+    let (map, data) = crate::render::terrain_view::active_terrain_or_placeholder(
         &mut projection.world,
         drill.current(),
         512,
     );
-    let image =
-        crate::terrain_view::image_from_terrain(&data, view.mode, atlas, view.terrain_soften);
-    crate::terrain_view::replace_terrain_texture(
+    let image = crate::render::terrain_view::image_from_terrain(
+        &data,
+        view.mode,
+        atlas,
+        view.terrain_soften,
+    );
+    crate::render::terrain_view::replace_terrain_texture(
         tex,
         images,
         image,
@@ -735,7 +739,7 @@ fn adopt_world_snapshot(
     for (mut transform, mut proj) in cameras.iter_mut() {
         transform.translation.x = center.x;
         transform.translation.y = center.y;
-        crate::camera::set_ortho_scale(&mut proj, scale);
+        crate::render::camera::set_ortho_scale(&mut proj, scale);
     }
 }
 
@@ -765,7 +769,7 @@ fn dispatch_project_command(
     notice: &mut ShellNotice,
     open_task: &mut OpenProjectTask,
     diagnostics: &mut crate::state::ProjectDiagnostics,
-    edit: &mut crate::editing::EditHistory,
+    edit: &mut crate::edit::editing::EditHistory,
     playback: &mut PlaybackState,
     view: &mut ViewState,
     tex: &mut TerrainTexture,
@@ -920,16 +924,16 @@ fn apply_pending_commands(
     (mut recents, mut notice, mut edit): (
         ResMut<RecentProjects>,
         ResMut<ShellNotice>,
-        ResMut<crate::editing::EditHistory>,
+        ResMut<crate::edit::editing::EditHistory>,
     ),
     (mut tex, mut open_task, mut diagnostics): (
-        ResMut<crate::terrain_view::TerrainTexture>,
+        ResMut<crate::render::terrain_view::TerrainTexture>,
         ResMut<OpenProjectTask>,
         ResMut<crate::state::ProjectDiagnostics>,
     ),
     // 换世界接管（adopt_world_snapshot）所需：瓦片图集可缺席（纯色平涂回退）。
     (atlas, mut images): (
-        Option<Res<crate::terrain_view::TileAtlas>>,
+        Option<Res<crate::render::terrain_view::TileAtlas>>,
         ResMut<Assets<Image>>,
     ),
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
@@ -983,22 +987,26 @@ fn apply_pending_commands(
             let (center, scale) = crate::app_bootstrap::fit_view_for_world(&projection.world);
             view.camera_center = center;
             view.scale = scale;
-            crate::camera::apply_view_to_camera(center, scale, &mut cameras);
+            crate::render::camera::apply_view_to_camera(center, scale, &mut cameras);
         }
         CommandId::Zoom(d) => {
             // 命令没有指针上下文（锚点固定为视口中心），但**缩放上下限必须按当前级别取**：
             // 固定 `0.1..8.0` 是单级时代的产物，分级后城市/街道级的区间完全不同
             // （ADR-0009 §8 决策①）。窗口尺寸只影响区间宽度，取不到时按默认窗口。
             let window_size = view.window_size;
-            let band = crate::zoom_level::level_zoom(
+            let band = crate::render::zoom_level::level_zoom(
                 &projection.world,
                 drill.current(),
                 window_size,
-                Vec2::splat(crate::zoom_level::FALLBACK_MAP_SIZE),
+                Vec2::splat(crate::render::zoom_level::FALLBACK_MAP_SIZE),
             );
             view.scale = band.clamp(view.scale * if d > 0 { 1.25 } else { 0.8 });
             // 缩放锚点 = 视口中心（命令无指针上下文，保持中心不动）。
-            crate::camera::apply_view_to_camera(view.camera_center, view.scale, &mut cameras);
+            crate::render::camera::apply_view_to_camera(
+                view.camera_center,
+                view.scale,
+                &mut cameras,
+            );
         }
         CommandId::TogglePlay => playback.playing = !playback.playing,
         CommandId::JumpToStart => playback.current_day = playback.range_from,
@@ -1009,7 +1017,7 @@ fn apply_pending_commands(
         // 撤销 / 重做走 `editing` 的公开入口（同一份逻辑，不复制）。
         CommandId::Undo | CommandId::Redo => {
             let redo = matches!(id, CommandId::Redo);
-            match crate::editing::apply_history_command(
+            match crate::edit::editing::apply_history_command(
                 redo,
                 &mut edit,
                 &mut projection,
@@ -1191,7 +1199,7 @@ mod tests {
         // 否则「新建 / 关闭像没点」——旧底图原封不动挂在屏上。
         // 本测试用最小 World 跑真实分发器：菜单队列里的 NewProject 必须被执行
         // （世界变脏 + 状态栏回执 + 纹理整体重建标记）。
-        use crate::terrain_view::TerrainTexture;
+        use crate::render::terrain_view::TerrainTexture;
         use crate::ui::ProjectMenuState;
         use bevy::asset::Assets;
         use bevy::ecs::system::RunSystemOnce;
@@ -1208,7 +1216,7 @@ mod tests {
         world.init_resource::<DrillState>();
         world.init_resource::<RecentProjects>();
         world.init_resource::<ShellNotice>();
-        world.init_resource::<crate::editing::EditHistory>();
+        world.init_resource::<crate::edit::editing::EditHistory>();
         world.init_resource::<OpenProjectTask>();
         world.init_resource::<crate::state::ProjectDiagnostics>();
         world.init_resource::<Assets<Image>>();

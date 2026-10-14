@@ -17,9 +17,9 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::state::{RecentProjects, WorldProjection};
+use crate::theme::ui_theme::{mono, proportional, UiShellConfig};
+use crate::theme::ui_tokens::{font_size, radius, space};
 use crate::ui_command_palette::CommandPalette;
-use crate::ui_theme::{mono, proportional, UiShellConfig};
-use crate::ui_tokens::{font_size, radius, space};
 
 use super::shell::UiShell;
 
@@ -66,7 +66,7 @@ pub fn command_palette(
             egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
                 .fill(shell.panel_bg())
                 .stroke(egui::Stroke::new(1.0_f32, shell.border_strong()))
-                .inner_margin(crate::ui_theme::margin_all(space::MD))
+                .inner_margin(crate::theme::ui_theme::margin_all(space::MD))
                 .corner_radius(radius::MODAL),
         )
         .show(ctx, |ui| {

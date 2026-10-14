@@ -16,13 +16,13 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
+use crate::edit::validation_actions;
 use crate::state::{
     Panel, PanelState, PlaybackState, ProjectDiagnostics, ViewState, WorldProjection,
 };
+use crate::theme::ui_theme::UiShellConfig;
+use crate::theme::ui_tokens::space;
 use crate::ui_layout::LayoutFile;
-use crate::ui_theme::UiShellConfig;
-use crate::ui_tokens::space;
-use crate::validation_actions;
 
 use super::shell::UiShell;
 use super::widgets::{badge, float_window, BadgeKind};

@@ -11,8 +11,8 @@
 
 use std::path::PathBuf;
 
+use wv_app::render::terrain_view::image_from_terrain;
 use wv_app::state::ViewMode;
-use wv_app::terrain_view::image_from_terrain;
 use wv_io::terrain_bin::decode_terrain;
 
 fn main() {

@@ -1,4 +1,4 @@
-//! 项目管理菜单（v0.2 §A）+ 面包屑（v0.2 §B.3）。
+﻿//! 项目管理菜单（v0.2 §A）+ 面包屑（v0.2 §B.3）。
 //!
 //! ## 职责
 //! - `ProjectMenuState` —— 跨帧高亮项（egui `Popup::Memory` 只存开关，不存选中行）。
@@ -21,8 +21,8 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::state::{DrillState, Panel, PanelState, RecentProject, WorldProjection};
-use crate::ui_theme::{mono, proportional, UiShellConfig};
-use crate::ui_tokens::{font_size, radius, space};
+use crate::theme::ui_theme::{mono, proportional, UiShellConfig};
+use crate::theme::ui_tokens::{font_size, radius, space};
 
 use super::shell::UiShell;
 
@@ -327,7 +327,7 @@ pub fn breadcrumb(
             egui::Frame::NONE
                 .fill(shell.float_fill().gamma_multiply(alpha))
                 .stroke(egui::Stroke::new(1.0_f32, shell.border_subtle()))
-                .inner_margin(crate::ui_theme::margin_xy(space::SM, space::XS))
+                .inner_margin(crate::theme::ui_theme::margin_xy(space::SM, space::XS))
                 .corner_radius(radius::CONTROL)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {

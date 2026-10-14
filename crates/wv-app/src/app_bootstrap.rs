@@ -20,20 +20,20 @@ use bevy::prelude::*;
 use bevy::window::WindowResolution;
 use bevy_egui::EguiPlugin;
 
-use crate::brush_cursor;
-use crate::camera;
-use crate::editing;
-use crate::faction_overlays;
-use crate::map_frame;
+use crate::edit::editing;
+use crate::render::brush_cursor;
+use crate::render::camera;
+use crate::render::faction_overlays;
+use crate::render::map_frame;
+use crate::render::streets;
+use crate::render::terrain_chunks;
+use crate::render::terrain_view;
+use crate::render::vector_layers::{self, VectorLayerEntities};
+use crate::render::world_projection;
 use crate::state::{
     BrushState, DrillState, GridConfig, PanelState, PlaybackState, ViewState, WorldProjection,
 };
-use crate::streets;
-use crate::terrain_chunks;
-use crate::terrain_view;
 use crate::ui;
-use crate::vector_layers::{self, VectorLayerEntities};
-use crate::world_projection;
 use crate::AppConfig;
 
 /// 启动 GUI。`startup_project` 为 `None` 时进空编辑器（占位地形），
@@ -129,7 +129,7 @@ pub fn run(config: AppConfig) {
         // 上下文调用会 panic（bevy_egui 0.32 lib.rs:437 的 expect）。
         // 字体重试式装配同口径：上下文就绪的首帧执行一次（fonts.rs 文档）。
         (
-            crate::fonts::setup_egui_fonts,
+            crate::theme::fonts::setup_egui_fonts,
             camera::poll_egui_wants_input,
         )
             .after(bevy_egui::EguiPreUpdateSet::InitContexts),
@@ -237,7 +237,7 @@ pub fn run(config: AppConfig) {
     // 界面外壳（主题 / 快捷键 / 命令面板 / 布局持久化）与地图钻取（v0.2 §B）。
     // 两者各自成模块并各自注册，`gui.rs` 只负责调用顺序（见各处模块文档）。
     crate::ui_shell::register(&mut app);
-    crate::drill::register(&mut app);
+    crate::render::drill::register(&mut app);
 
     app.run();
 }

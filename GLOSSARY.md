@@ -1,4 +1,4 @@
-# GLOSSARY.md —— 术语字典
+﻿# GLOSSARY.md —— 术语字典
 
 > 规约见 `AGENTS.md` §6.1：**讨论中出现新术语必须即时登记**，不允许事后补。
 >
@@ -121,9 +121,9 @@
 |---|---|---|---|
 | **分级瓦片缩放** | Graded (discrete-level) zoom | 缩放采用**离散级别 + 级间平滑插值**，而非无极连续缩放。理由：`f32` 在世界坐标 4096 量级下相邻可表示间距约 0.0005，深缩放到 10⁵ 倍会放大成约 50 像素抖动；分级让每级在**自己的原点附近**工作。首次出现：ADR-0009 | 地理 / 渲染 |
 | **级（缩放级别）** | Zoom level | 一个离散缩放档。**由「图在层级树中的深度」派生**，规划 6 级（世界 → 大区 → 区域 → 城市 → 城区 → 街道）；`MapLevel` 四值枚举**不扩充**——级数是参数，不是结构。首次出现：ADR-0009 | 地理 |
-| **图原点** | Extent origin | `Extent.origin: Option<Point>`：本图左上角在**父图局部坐标系**中的位置。`None` = 作者未声明（序列化时跳过，既有 YAML 零迁移）。它补上了「多地图层级」在坐标上一直缺的一环。**派生**：未声明时由父图上指向本图的钻入图标反推（见下条）。首次出现：ADR-0009（§6 追加细化类型） + `crates/wv-core/src/map.rs` | 地理 |
-| **落点派生** | Origin derivation | 子图未声明 `Extent.origin` 时，用父图上第一个「`drill_into == 本图` 且显式声明 `anchor`」的图标反推落点：图标标记的是子图**中心**，故左上角 = 图标点 − 子图 `extent/2`。优先级：显式 `origin` ＞ 图标派生 ＞ `(0,0)`。理由：世界图上那个城市圆点本就是「城市在哪」的**唯一**书面表达，不该让作者把同一位置写两遍（原则四）。只认显式 `anchor`——哈希回退摆位是渲染层避免重叠的权宜，不决定世界坐标。首次出现：ADR-0009 §6 + `crates/wv-core/src/coord.rs` | 地理 |
-| **还原帧** | MapFrame | `wv_core::coord` 的逐层上溯结果：`{world_origin, extent}`。把上溯预先算好，供「图内局部坐标 ↔ 世界坐标 ↔ 归一化坐标（UV）」统一换算——**唯一实现点**（基线 §2.15 的「禁止多 System 各写一遍」由此可执行）。首次出现：ADR-0009 + `crates/wv-core/src/coord.rs` | 地理 |
+| **图原点** | Extent origin | `Extent.origin: Option<Point>`：本图左上角在**父图局部坐标系**中的位置。`None` = 作者未声明（序列化时跳过，既有 YAML 零迁移）。它补上了「多地图层级」在坐标上一直缺的一环。**派生**：未声明时由父图上指向本图的钻入图标反推（见下条）。首次出现：ADR-0009（§6 追加细化类型） + `crates/wv-core/src/map/mod.rs` | 地理 |
+| **落点派生** | Origin derivation | 子图未声明 `Extent.origin` 时，用父图上第一个「`drill_into == 本图` 且显式声明 `anchor`」的图标反推落点：图标标记的是子图**中心**，故左上角 = 图标点 − 子图 `extent/2`。优先级：显式 `origin` ＞ 图标派生 ＞ `(0,0)`。理由：世界图上那个城市圆点本就是「城市在哪」的**唯一**书面表达，不该让作者把同一位置写两遍（原则四）。只认显式 `anchor`——哈希回退摆位是渲染层避免重叠的权宜，不决定世界坐标。首次出现：ADR-0009 §6 + `crates/wv-core/src/map/coord.rs` | 地理 |
+| **还原帧** | MapFrame | `wv_core::coord` 的逐层上溯结果：`{world_origin, extent}`。把上溯预先算好，供「图内局部坐标 ↔ 世界坐标 ↔ 归一化坐标（UV）」统一换算——**唯一实现点**（基线 §2.15 的「禁止多 System 各写一遍」由此可执行）。首次出现：ADR-0009 + `crates/wv-core/src/map/coord.rs` | 地理 |
 | **视图空间** | View space | 渲染与相机所用的**唯一**坐标系：**就是根图（世界）坐标系**（基线 §2.15）。相机、`ViewState::cursor_world`、钻取落点、所有 mesh 顶点都在此空间；本图局部坐标必须先经 `GridConfig::map_to_view` 换算进来，而根帧内容（轨迹 / 事项事件）是恒等映射（`projection::root_to_view`，所属帧仍待裁见 README §12-26）。首次出现：ADR-0009 §9 + `crates/wv-app/src/state.rs` | 地理 / 渲染 |
 | **栅格原点** | Raster origin | `GridConfig.raster_origin`：当前**显示的那张栅格**在世界里的左上角。栅格属于祖先图，故它恒为根图图帧原点 `(0,0)`。**地形专用**：栅格采样、笔刷、chunk 划分、小地图、地形回退 sprite。2026-10-14 由 `GridConfig.origin` **更名**而来（原名同时被当成图帧原点用，正是 ADR-0009 §9 那个偏移 bug 的成因）。首次出现：ADR-0009 §9 + `crates/wv-app/src/state.rs` | 地理 / 渲染 |
 | **图帧原点** | Map frame origin | `GridConfig.map_origin`：**当前这张图**的 `extent` 左上角在视图空间（= 世界）里的位置，由 `Extent.origin` 沿父链累积得到（`wv_core::resolve_frame_in`，见「还原帧」）。**本图局部内容专用**：地点、街道、街道名、地图外框、编辑预览；唯一换算是 `GridConfig::map_to_view(local)`。与栅格原点**只在当前图自带栅格时相等**——继承底图时二者相差一个图帧原点，混用会把本图内容整体画到视野之外（武昌城案例见 ADR-0009 §9）。首次出现：ADR-0009 §9 + `crates/wv-app/src/state.rs` | 地理 / 渲染 |
@@ -134,11 +134,11 @@
 | **街道名标注** | Street label | 有 `name` 的街道段在**编辑级视野**（LodTier::Edit）显示的中点文字标签；锚点 = `StreetSegment::polyline_midpoint()`（按累计长度取半程，折线弯曲也不钉端点）。无名段不产生任何标注——手绘的大多数小巷无名，命名不是门槛。首次出现：ADR-0010 §5（Phase 5 首片） | 地理 / 渲染 |
 | **底图切片** | Raster slicing | `wv raster-slice <工程> <map_id> [size]`：沿坐标链把来源图栅格被子图覆盖的那块**最近邻采样**成子图自己的 `terrain.bin`（出界取海平面，不镜像对侧）。是「按父图 bbox 一键生成子图栅格」的落地（README §12-24），切片后底图继承（ADR-0009 §7）对该图退场、精度升级为自身。首次出现：ADR-0009 §5 落地记录 | 地理 / 数据流 |
 | **虚拟脏路径** | Virtual dirty path | 街道编辑命令上报的落盘标记 `streets/<layer_id>`——不是真实文件路径，由 `wv-io` 落盘时映射回 `maps/<map>/<source>`。为什么绕一层：街道文件物理上在 `maps/<map>/` 下，若直接报真实路径，`terrain_is_dirty` 的 `maps/<map>/` 前缀匹配会把「画一笔街道」误判成「整张图地形脏了」而白白重写 `.bin`。首次出现：ADR-0010 §5（第 3 项） | 地理 / 数据流 |
-| **来源图** | Source map (of the displayed raster) | 当前视图**实际**显示其栅格的那张图。当前图自带 `raster` 时就是它自己；否则是沿 `parent` 向上**最近**一张自带栅格的祖先。由 `DrillState` 的当前图推得，**不落进 `World`**（P7）；`grid.cell_size` / `grid.raster_origin` 一律与来源图同源（**2026-10-14 更名**：原 `grid.origin` 即今天的 `raster_origin`；本图局部内容改走**图帧原点**，原字段一名两用是 ADR-0009 §9 那个偏移 bug 的成因）。首次出现：ADR-0009 §7 + `crates/wv-app/src/terrain_view.rs` | 地理 / 渲染 |
+| **来源图** | Source map (of the displayed raster) | 当前视图**实际**显示其栅格的那张图。当前图自带 `raster` 时就是它自己；否则是沿 `parent` 向上**最近**一张自带栅格的祖先。由 `DrillState` 的当前图推得，**不落进 `World`**（P7）；`grid.cell_size` / `grid.raster_origin` 一律与来源图同源（**2026-10-14 更名**：原 `grid.origin` 即今天的 `raster_origin`；本图局部内容改走**图帧原点**，原字段一名两用是 ADR-0009 §9 那个偏移 bug 的成因）。首次出现：ADR-0009 §7 + `crates/wv-app/src/render/terrain_view/mod.rs` | 地理 / 渲染 |
 | **底图继承** | Raster inheritance | 图没有自带栅格时，沿 `parent` 向上取最近一张来源图的地形**直接渲染**，不复制数据。理由：工程是渐进长出来的，城市还没刷地形时城市视图应继续看到父图那一块，而不是黑屏；城市一旦有了 `terrain.bin`，纹理自动切过去。代价：继承来的精度就是父图的精度（街道级会糊，README §12-24）。首次出现：ADR-0009 §7 | 地理 / 渲染 |
-| **级缩放区间** | Level zoom band | 一级允许的缩放范围，锚在「整幅图适配窗口」的尺度上：`fit = max(w/window.w, h/window.h)`、`min = fit/80`、`max = fit*1.5625`。**各区间的绝对数值有意重叠**（子图区间跨过父图内界），故换级时 `scale` 无需改动。由 `crates/wv-app/src/zoom_level.rs` 的 `LevelZoom` 承担；旧的全局常量 `SCALE_MIN=0.1` / `SCALE_MAX=8.0` 已删除。首次出现：ADR-0009 §8 + `crates/wv-app/src/zoom_level.rs` | 地理 / 渲染 |
-| **换级** | Level crossing | 滚轮在**当前级边界上继续同向滚动**所触发的层级切换：往外 → 上一级（`drill.up()`），往里 → 光标下的子图（`drill.enter()`）。触发条件因此是「已在边界 **且** 继续滚」，不是「进入区间」；意图经 `ZoomCrossRequest` 交给 `drill::apply_zoom_cross` 独家执行（地图路径的唯一写入口仍是 `DrillState`）。**连续性的证明**：子图 `fit` 更小 ⇒ `parent.min ≤ child.max`，故换级前后 `scale` 同值合法。首次出现：ADR-0009 §8 + `crates/wv-app/src/{camera,drill}.rs` | 地理 / 交互 |
-| **钻取过渡目标缩放** | Fly-in target scale | 双击/面包屑换级时相机过渡的终点缩放 = `clamp(min(from_scale, child.fit))`：整幅子图铺满窗口，但作者已贴得更近时不为换级拉远视野；末尾 clamp 保证终点必落在**新级区间**内。取代历史上硬编码的 `4.0`（分级后会越界，进城后第一次滚轮被硬拽）。首次出现：ADR-0009 §8 + `zoom_level::fly_in_scale` | 地理 / 交互 |
+| **级缩放区间** | Level zoom band | 一级允许的缩放范围，锚在「整幅图适配窗口」的尺度上：`fit = max(w/window.w, h/window.h)`、`min = fit/80`、`max = fit*1.5625`。**各区间的绝对数值有意重叠**（子图区间跨过父图内界），故换级时 `scale` 无需改动。由 `crates/wv-app/src/render/zoom_level.rs` 的 `LevelZoom` 承担；旧的全局常量 `SCALE_MIN=0.1` / `SCALE_MAX=8.0` 已删除。首次出现：ADR-0009 §8 + `crates/wv-app/src/render/zoom_level.rs` | 地理 / 渲染 |
+| **换级** | Level crossing | 滚轮在**当前级边界上继续同向滚动**所触发的层级切换：往外 → 上一级（`drill.up()`），往里 → 光标下的子图（`drill.enter()`）。触发条件因此是「已在边界 **且** 继续滚」，不是「进入区间」；意图经 `ZoomCrossRequest` 交给 `drill::apply_zoom_cross` 独家执行（地图路径的唯一写入口仍是 `DrillState`）。**连续性的证明**：子图 `fit` 更小 ⇒ `parent.min ≤ child.max`，故换级前后 `scale` 同值合法。首次出现：ADR-0009 §8 + `crates/wv-app/src/render/{camera,drill}.rs` | 地理 / 交互 |
+| **钻取过渡目标缩放** | Fly-in target scale | 双击/面包屑换级时相机过渡的终点缩放 = `clamp(min(from_scale, child.fit))`：整幅子图铺满窗口，但作者已贴得更近时不为换级拉远视野；末尾 clamp 保证终点必落在**新级区间**内。取代历史上硬编码的 `4.0`（分级后会越界，进城后第一次滚轮被硬拽）。首次出现：ADR-0009 §8 + `render::zoom_level::fly_in_scale` | 地理 / 交互 |
 
 ## 设计上不做（负向清单）
 
@@ -189,5 +189,8 @@
 | 继承底图精度提示 | 待裁（README §12-24） | 底图向上继承后（ADR-0009 §7），世界图 4.9 m/格 放到街道级会糊。提示形式（校验面板 / 状态栏 / 地图树角标）与是否要「按父图 bbox 生成子图栅格骨架」未定。按 V1 只提示、不阻止 |
 | 换级视觉过渡 | 待裁（README §12-25） | `§2⑦` 的「淡化」未实现——今天换底图是整张纹理硬切换（`rebuild_texture_on_mode_change`）。淡化形式、时长、可否关闭未定；不得引入位移插值、不得延迟层级切换 |
 | 轨迹/事件坐标所属帧 | 待裁（README §12-26） | 视图空间就是根帧，轨迹 waypoint 与事项事件位置今天走恒等映射（`projection::root_to_view`），数据里没有「这份坐标属于哪张图」的声明。是否允许按子图局部坐标书写、城市内事件在父图视野下如何呈现未定 |
-| 换级淡化 | Level-cross basemap fade | 换图（换级/钻取）时的视觉过渡：新底图**同帧即时重建**（切换不延迟），旧底图以克隆像素的淡出精灵（`BasemapFadeOut`，z=0.05，盖分块底图、在道路之下）在 `LEVEL_FADE_SECS = 0.4s` 内线性降透明至归零回收。只淡出旧图、不淡入新图；无位移插值；换模式/换 soften 不触发。实现：`crates/wv-app/src/terrain_view.rs`。首次出现：ADR-0009 §5 追写 + `terrain_view.rs` | 地理 / 渲染 |
+| 换级淡化 | Level-cross basemap fade | 换图（换级/钻取）时的视觉过渡：新底图**同帧即时重建**（切换不延迟），旧底图以克隆像素的淡出精灵（`BasemapFadeOut`，z=0.05，盖分块底图、在道路之下）在 `LEVEL_FADE_SECS = 0.4s` 内线性降透明至归零回收。只淡出旧图、不淡入新图；无位移插值；换模式/换 soften 不触发。实现：`crates/wv-app/src/render/terrain_view/mod.rs`。首次出现：ADR-0009 §5 追写 + `terrain_view.rs` | 地理 / 渲染 |
 | 淡出精灵 | Fade-out sprite | 换级淡化的载体：`spawn_basemap_fadeout` 把**旧纹理像素克隆**成新 `Image`（句柄会被原地覆写，不克隆会瞬间变新图）挂到 `Sprite` 上逐帧降 alpha，归零即 despawn。首次出现：ADR-0009 §5 追写 + `terrain_view.rs` | 地理 / 渲染 |
+
+| **职责域目录** | Domain directory | wv-app 与 wv-core 按职责域分目录：前者 ender/（地图渲染）、edit/（UI 动作→EditCommand）、ui/（面板/组件）、	heme/（外观令牌）；后者 ase/ 	ime/ map/ model/ derived/ source/。**目的**：让 AI 通过目录名快速定位（无需扫 28 个平铺文件）。模块挂点与公开 API 不变。首次出现：2026-10-14 目录级别重构 + docs/adr/README.md §5 | 工程 |
+| **保路径重导出** | Path-preserving re-export | wv-core 因 AGENTS.md §3 与文档直接引用顶层路径（如 wv_core::time::TimelineQuery），lib.rs 用 pub use base::id;（**模块**）与 pub use base::id::Id;（**类型**）两套并存的 re-export 让「wv_core::id 模块路径」与「wv_core::Id 类型路径」都仍可达。**命名空间不同**，不冲突。**作用**：目录重构不动公共 API。首次出现：2026-10-14 目录级别重构 + docs/adr/README.md §5 | 工程 |

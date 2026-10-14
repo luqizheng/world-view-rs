@@ -7,58 +7,72 @@
 //! - 本 crate 不得引入任何渲染/UI 依赖。
 //! - 历史状态以「带时间区间的状态片段」存储，不存「当前值」。
 //!
-//! ## 模块导航表（按"被谁找"分组）
+//! ## 模块导航表（按"被谁找"分组；目录化分组，主路径尽量保顶层可达）
 //!
-//! | 模块 | 用途 |
+//! | 目录 / 模块 | 用途 |
 //! |---|---|
-//! | [`id`] / [`error`] | 通用基础（`Id` / 错误类型）。 |
-//! | [`time`] / [`track`] | 时间模型 + 轨迹（`TimeSpan` / `Track` / `TimePoint`）。 |
-//! | [`coord`] / [`map`] / [`geometry`] / [`unit`] | 地图层级与坐标系（`Point` / `MapFrame` / `Unit`）。 |
-//! | [`distance`] | 行程时间计算（`DistanceGraph`，唯一速度换算入口）。 |
-//! | [`character`] / [`event`] / [`relation`] / [`faction`] | 领域模型（人物 / 事件 / 关系 / 势力）。 |
-//! | [`encounter`] / [`situation`] / [`narration`] | 派生层（相遇提示 / 事态 / 旁白）。 |
-//! | [`street`] / [`overture_id`] / [`geographic_source`] | 数据来源（街道 / Overture ID / 外部地理数据源）。 |
-//! | [`color`] | 色板定义（与 `wv-app` 的色板分离，承载核心语义色）。 |
+//! | [`base`] | 通用基础（`Id` / `CoreError` / `Point` / `Color`）。 |
+//! | [`time`] / [`track`] | 时间模型 + 轨迹（`TimeSpan` / `Timeline` / `Track` / `TimePoint`）。 |
+//! | [`map`] / [`coord`] / [`distance`] / [`unit`] / [`geometry`] | 地图层级、坐标系、行程时间计算、单位。 |
+//! | [`model`] | 领域模型（人物 / 事件 / 关系 / 势力）。 |
+//! | [`derived`] | 派生层（相遇提示 / 事态 / 旁白）。 |
+//! | [`source`] | 外部数据来源（街道 / Overture ID / 外部地理数据源）。 |
 //!
 //! 顶层：构建入口 [`World`] + 元数据 [`WorldMeta`]，时间区间化由 [`time`] / [`track`] 提供。
 
 use std::collections::BTreeMap;
 
-pub mod color;
-pub mod coord;
-pub mod distance;
-pub mod encounter;
-pub mod error;
-pub mod faction;
-pub mod geographic_source;
-pub mod geometry;
-pub mod id;
+pub mod base;
+pub mod derived;
 pub mod map;
-pub mod narration;
-pub mod overture_id;
-pub mod situation;
-pub mod street;
+pub mod model;
+pub mod source;
 pub mod time;
-pub mod track;
-pub mod unit;
 
-pub use character::Character;
-pub use color::Color;
-pub use coord::{resolve_frame, resolve_frame_in, FrameNode, MapFrame};
-pub use encounter::{detect_encounter_hints, EncounterHint, EncounterInput, HintSeverity};
-pub use error::{CoreError, CoreResult};
-pub use event::{Event, EventLocation};
-pub use faction::{factions_at, Faction};
-pub use geographic_source::{GeographicSourceV1, LatLonBbox};
-pub use geometry::Point;
-pub use id::{Id, IdError};
-pub use narration::Narration;
-pub use overture_id::{OvertureId, OvertureIdError};
-pub use situation::{Situation, SituationStep};
-pub use street::{RoadClass, StreetLayer, StreetSegment};
+// **保路径重导出**（B1 设计，详见 `docs/adr/README.md` 的「模块路径对照」）。
+// AGENTS.md §3 与大量文档直接引用 `wv_core::time::TimelineQuery` /
+// `wv_core::map::MapNode` / `wv_core::track` 等顶层路径；
+// 重新导出模块本身让 `wv_core::xxx` 仍可达（**与下面 `pub use ::Type` 互不冲突**，
+// 前者让 `mod`，后者让 `Type`）。
+pub use base::color;
+pub use base::error;
+pub use base::geometry;
+pub use base::id;
+pub use derived::encounter;
+pub use derived::narration;
+pub use derived::situation;
+pub use map::coord;
+pub use map::distance;
+pub use map::unit;
+pub use model::character;
+pub use model::event;
+pub use model::faction;
+pub use model::relation;
+pub use source::geographic_source;
+pub use source::overture_id;
+pub use source::street;
+pub use time::track;
+
+// 顶层类型重导出（与上面的「保模块路径」是**两个名字空间**，不冲突）。
+// 这些让 `wv_core::Color` / `wv_core::Id` / `wv_core::TimeSpan` 等直接可达，
+// 不必写 `wv_core::base::color::Color`。
+pub use base::color::Color;
+pub use base::error::{CoreError, CoreResult};
+pub use base::geometry::Point;
+pub use base::id::{Id, IdError};
+pub use derived::encounter::{detect_encounter_hints, EncounterHint, EncounterInput, HintSeverity};
+pub use derived::narration::Narration;
+pub use derived::situation::{Situation, SituationStep};
+pub use map::coord::{resolve_frame, resolve_frame_in, FrameNode, MapFrame};
+pub use map::unit::Unit;
+pub use model::character::Character;
+pub use model::event::{Event, EventLocation};
+pub use model::faction::{factions_at, Faction};
+pub use source::geographic_source::{GeographicSourceV1, LatLonBbox};
+pub use source::overture_id::{OvertureId, OvertureIdError};
+pub use source::street::{RoadClass, StreetLayer, StreetSegment};
+pub use time::track::{Track, Waypoint};
 pub use time::{Calendar, TimePoint, TimeSpan};
-pub use track::{Track, Waypoint};
-pub use unit::Unit;
 
 /// 工程级元数据。对应工程根目录的 `world.yaml`。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -100,26 +114,26 @@ pub struct World {
     /// 时间轴定义。
     pub timeline: Option<time::Timeline>,
     /// 人物。
-    pub characters: Vec<character::Character>,
+    pub characters: Vec<model::character::Character>,
     /// 事件。
-    pub events: Vec<event::Event>,
+    pub events: Vec<model::event::Event>,
     /// 关系网。
-    pub relations: Vec<relation::Relation>,
+    pub relations: Vec<model::relation::Relation>,
     /// 距离图。
-    pub distances: distance::DistanceGraph,
+    pub distances: map::distance::DistanceGraph,
     /// 事态（**归纳容器**：收拢事件与单位，基线 §1.1 / §2.7）。
-    pub situations: Vec<situation::Situation>,
+    pub situations: Vec<derived::situation::Situation>,
     /// 单位（在地图上独立运动的主体，ADR-0004）。
-    pub units: Vec<unit::Unit>,
+    pub units: Vec<map::unit::Unit>,
     /// 轨迹（运动的主体是 `unit`；事态节点通过 ID 引用，见 ADR-0004）。
-    pub tracks: Vec<track::Track>,
+    pub tracks: Vec<time::track::Track>,
     /// 旁白（独立叙事实体，事件只存 ID 引用；2026-01 用户裁定）。
-    pub narrations: Vec<narration::Narration>,
+    pub narrations: Vec<derived::narration::Narration>,
     /// 势力本体（路线图 S12，2026-10-12）。
     ///
     /// §4.5 原则「每实体一文件」：每个势力一个 `factions/<id>.yaml`。
     /// 势力占据地图的几何**不**内联在这里——见下方的 `faction_geometry`。
-    pub factions: Vec<faction::Faction>,
+    pub factions: Vec<model::faction::Faction>,
     /// 势力的几何（含时间区间，§4.1 P6/P7）。
     ///
     /// `GeometrySpan.owner` 引用 `factions` 中的 `Faction.id`。
@@ -159,7 +173,7 @@ pub struct World {
     /// 原样不变）。不存「当前图层」这类视图状态（P7）。
     ///
     /// **驻留策略同 §12-19**：加载时全读入、不淘汰——最易回退的形态。
-    pub streets: BTreeMap<Id, street::StreetLayer>,
+    pub streets: BTreeMap<Id, source::street::StreetLayer>,
 }
 
 impl World {
@@ -178,7 +192,7 @@ impl World {
     }
 
     /// 取某个街道图层的文档（未加载/未声明则 `None`）。
-    pub fn street_of(&self, layer: &Id) -> Option<&street::StreetLayer> {
+    pub fn street_of(&self, layer: &Id) -> Option<&source::street::StreetLayer> {
         self.streets.get(layer)
     }
 
@@ -186,8 +200,8 @@ impl World {
     pub fn set_streets(
         &mut self,
         layer: Id,
-        doc: street::StreetLayer,
-    ) -> Option<street::StreetLayer> {
+        doc: source::street::StreetLayer,
+    ) -> Option<source::street::StreetLayer> {
         self.streets.insert(layer, doc)
     }
 }
@@ -220,7 +234,3 @@ pub mod terrain {
         }
     }
 }
-
-pub mod character;
-pub mod event;
-pub mod relation;

@@ -18,8 +18,8 @@
 
 use std::path::Path;
 
+use wv_app::render::terrain_view::image_from_terrain;
 use wv_app::state::ViewMode;
-use wv_app::terrain_view::image_from_terrain;
 use wv_core::terrain::{TerrainCellData, TerrainData};
 use wv_io::terrain_bin::write_terrain;
 

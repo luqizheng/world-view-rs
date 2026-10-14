@@ -16,9 +16,9 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::state::{Panel, PanelState, ViewState};
+use crate::theme::ui_theme::UiShellConfig;
+use crate::theme::ui_tokens::space;
 use crate::ui_layout::LayoutFile;
-use crate::ui_theme::UiShellConfig;
-use crate::ui_tokens::space;
 
 use super::shell::{terrain_swatch, UiShell};
 use super::widgets::{float_window, list_item};

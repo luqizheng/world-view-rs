@@ -17,11 +17,11 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use crate::editing::EditHistory;
+use crate::edit::editing::EditHistory;
 use crate::state::{DrillState, Panel, PanelState, WorldProjection};
+use crate::theme::ui_theme::{mono, proportional, UiShellConfig};
+use crate::theme::ui_tokens::space;
 use crate::ui_layout::LayoutFile;
-use crate::ui_theme::{mono, proportional, UiShellConfig};
-use crate::ui_tokens::space;
 
 use super::shell::UiShell;
 use super::widgets::{empty_state, float_window};
@@ -185,7 +185,7 @@ pub fn panel_compass(
 /// 指南针内部：把朝向变化包成事务提交。
 pub(crate) fn push_orientation_cmd(
     projection: &mut WorldProjection,
-    edit: &mut crate::editing::EditHistory,
+    edit: &mut crate::edit::editing::EditHistory,
     map_id: &wv_core::Id,
     orientation: f32,
 ) {

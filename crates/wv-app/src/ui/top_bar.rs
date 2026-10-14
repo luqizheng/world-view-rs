@@ -1,4 +1,4 @@
-//! 顶栏（§3.2 三段式）+ 状态栏（§3.1 底部 22px）。
+﻿//! 顶栏（§3.2 三段式）+ 状态栏（§3.1 底部 22px）。
 //!
 //! ## 职责
 //! - `top_bar`：身份 → 主控 → 读数，三段式布局；身份段含项目管理菜单。
@@ -20,13 +20,13 @@ use bevy_egui::{egui, EguiContexts};
 use crate::state::{
     PlaybackState, RecentProject, RecentProjects, ViewMode, ViewState, WorldProjection,
 };
-use crate::ui_theme::{color32, mono, proportional, UiShellConfig};
+use crate::theme::ui_theme::{color32, mono, proportional, UiShellConfig};
 
 use super::project_menu::{project_menu_inner, ProjectMenuState};
 use super::shell::UiShell;
 use super::widgets::{badge, BadgeKind};
 
-use crate::ui_tokens::{font_size, radius, space};
+use crate::theme::ui_tokens::{font_size, radius, space};
 
 /// 顶栏：身份 → 主控 → 读数。**唯一例外**的 `TopBottomPanel`（38px / 32px）。
 ///
@@ -54,7 +54,7 @@ pub fn top_bar(
         .frame(
             egui::Frame::NONE
                 .fill(color32(shell.palette.bg_panel))
-                .inner_margin(crate::ui_theme::margin_xy(space::SM, 0.0)),
+                .inner_margin(crate::theme::ui_theme::margin_xy(space::SM, 0.0)),
         )
         .show(&mut root, |ui| {
             ui.horizontal(|ui| {
@@ -209,7 +209,7 @@ pub fn status_bar(
         .frame(
             egui::Frame::NONE
                 .fill(color32(shell.palette.bg_panel))
-                .inner_margin(crate::ui_theme::margin_xy(space::SM, 0.0)),
+                .inner_margin(crate::theme::ui_theme::margin_xy(space::SM, 0.0)),
         )
         .show(&mut root, |ui| {
             ui.horizontal(|ui| {

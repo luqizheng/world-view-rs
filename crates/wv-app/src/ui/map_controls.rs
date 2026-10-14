@@ -18,7 +18,7 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::state::{BrushState, DrillState, GridConfig, ViewState, WorldProjection};
-use crate::ui_theme::UiShellConfig;
+use crate::theme::ui_theme::UiShellConfig;
 
 use super::shell::UiShell;
 
@@ -35,7 +35,7 @@ pub fn map_controls(
     mut brush: ResMut<BrushState>,
     drill: Res<DrillState>,
     grid: Res<GridConfig>,
-    tex: Res<crate::terrain_view::TerrainTexture>,
+    tex: Res<crate::render::terrain_view::TerrainTexture>,
     projection: Res<WorldProjection>,
     windows: Query<&Window>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
@@ -57,13 +57,18 @@ pub fn map_controls(
         .unwrap_or(Vec2::new(1280.0, 800.0));
     let raster_size = Vec2::splat(grid.cell_size * tex.size as f32);
     let level_map_size =
-        crate::zoom_level::map_size_of(&projection.world, drill.current(), raster_size);
-    let zoom = crate::zoom_level::LevelZoom::for_map(level_map_size, window_size);
-    let control_bg = crate::colors::palette_to_color32(crate::colors_google::GOOGLE_CONTROL_BG);
-    let control_border =
-        crate::colors::palette_to_color32(crate::colors_google::GOOGLE_CONTROL_BORDER);
-    let control_text = crate::colors::palette_to_color32(crate::colors_google::GOOGLE_CONTROL_TEXT);
-    let active_bg = crate::colors::palette_to_color32(crate::colors_google::GOOGLE_CONTROL_ACTIVE);
+        crate::render::zoom_level::map_size_of(&projection.world, drill.current(), raster_size);
+    let zoom = crate::render::zoom_level::LevelZoom::for_map(level_map_size, window_size);
+    let control_bg =
+        crate::theme::colors::palette_to_color32(crate::theme::colors_google::GOOGLE_CONTROL_BG);
+    let control_border = crate::theme::colors::palette_to_color32(
+        crate::theme::colors_google::GOOGLE_CONTROL_BORDER,
+    );
+    let control_text =
+        crate::theme::colors::palette_to_color32(crate::theme::colors_google::GOOGLE_CONTROL_TEXT);
+    let active_bg = crate::theme::colors::palette_to_color32(
+        crate::theme::colors_google::GOOGLE_CONTROL_ACTIVE,
+    );
 
     egui::Area::new(egui::Id::new("wv_google_map_controls"))
         .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -38.0))
@@ -74,7 +79,7 @@ pub fn map_controls(
                 .fill(control_bg)
                 .stroke(egui::Stroke::new(1.0_f32, control_border))
                 .corner_radius(egui::CornerRadius::from(10.0))
-                .inner_margin(crate::ui_theme::margin_xy(5.0, 5.0))
+                .inner_margin(crate::theme::ui_theme::margin_xy(5.0, 5.0))
                 .show(ui, |ui| {
                     let tool_label = if brush.enabled { "✏" } else { "✋" };
                     let mut tool_button = egui::Button::new(
@@ -164,10 +169,10 @@ fn set_map_scale(
     view: &mut ViewState,
     cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     scale: f32,
-    zoom: crate::zoom_level::LevelZoom,
+    zoom: crate::render::zoom_level::LevelZoom,
 ) {
     view.scale = zoom.clamp(scale);
-    crate::camera::apply_view_to_camera(view.camera_center, view.scale, cameras);
+    crate::render::camera::apply_view_to_camera(view.camera_center, view.scale, cameras);
 }
 
 #[cfg(test)]
@@ -179,8 +184,10 @@ mod map_control_tests {
     /// 城市视图缩到世界级的尺度，画面瞬间变成一块糊）。
     #[test]
     fn zoom_button_steps_stop_at_the_levels_band() {
-        let zoom =
-            crate::zoom_level::LevelZoom::for_map(Vec2::splat(1024.0), Vec2::new(1280.0, 800.0));
+        let zoom = crate::render::zoom_level::LevelZoom::for_map(
+            Vec2::splat(1024.0),
+            Vec2::new(1280.0, 800.0),
+        );
         let mut s = zoom.fit;
         for _ in 0..40 {
             s = zoom.clamp(s / 1.6);

@@ -22,9 +22,9 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 
 use crate::state::{Panel, PanelState};
+use crate::theme::ui_theme::{color32, mono, proportional};
+use crate::theme::ui_tokens::{font_size, radius, space, BadgeTone};
 use crate::ui_layout::LayoutFile;
-use crate::ui_theme::{color32, mono, proportional};
-use crate::ui_tokens::{font_size, radius, space, BadgeTone};
 
 use super::shell::{terrain_swatch, UiShell};
 
@@ -65,7 +65,7 @@ impl From<BadgeKind> for BadgeTone {
 pub fn badge(ui: &mut egui::Ui, shell: &UiShell, kind: BadgeKind, text: &str) {
     let colors = shell.palette.badge(kind.into());
     let fg = color32(colors.fg);
-    let bg = crate::ui_theme::color32_alpha(colors.fill, colors.fill_alpha);
+    let bg = crate::theme::ui_theme::color32_alpha(colors.fill, colors.fill_alpha);
     let pad = egui::vec2(space::XS * 1.5, 1.0);
     let font = proportional(font_size::MICRO);
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, fg);
@@ -268,7 +268,7 @@ pub fn float_window(
             egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
                 .fill(shell.panel_bg().gamma_multiply(alpha))
                 .stroke(egui::Stroke::new(1.0_f32, shell.border_strong()))
-                .inner_margin(crate::ui_theme::margin_all(space::SM))
+                .inner_margin(crate::theme::ui_theme::margin_all(space::SM))
                 .corner_radius(radius::PANEL),
         );
 

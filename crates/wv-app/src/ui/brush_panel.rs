@@ -4,7 +4,7 @@
 //! - `panel_brush` —— 笔刷开关 / 地形色块 / 半径 / 软度 / 街道模式 / 撤销段。
 //!
 //! ## 边界（不做什么）
-//! - **不**直接改世界 —— 撤销段生成 `DeleteStreetSegmentCommand` 交给 [`crate::editing::EditHistory`]。
+//! - **不**直接改世界 —— 撤销段生成 `DeleteStreetSegmentCommand` 交给 [`crate::edit::editing::EditHistory`]。
 //! - **不**持有街道矢量数据 —— 那是 [`crate::streets`]。
 //!
 //! ## 主要导出
@@ -15,12 +15,12 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use crate::editing;
+use crate::edit::editing;
+use crate::render::streets;
 use crate::state::{BrushState, DrillState, Panel, PanelState, WorldProjection};
-use crate::streets;
+use crate::theme::ui_theme::{mono, UiShellConfig};
+use crate::theme::ui_tokens::space;
 use crate::ui_layout::LayoutFile;
-use crate::ui_theme::{mono, UiShellConfig};
-use crate::ui_tokens::space;
 
 use super::shell::UiShell;
 use super::timeline::undo_last_street_segment;

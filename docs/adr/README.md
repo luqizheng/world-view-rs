@@ -75,7 +75,85 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
 
 ---
 
-## 5. 三条硬约束的归属
+## 5. 模块路径对照（目录化重构 · 2026-10-14）
+
+> 本节**不**是新的设计决策，而是 2026-10-14「目录级别重构」对模块路径的**事实归档**。
+> ADR 正文一律不动（§6.4「只增不改」）。代码与文档看到旧路径时**优先**按本节对照。
+>
+> 重构内容（详见 `.trae/specs/` 落地）：
+> - `wv-app` 由 28 个平铺 `.rs` 重组为 `render/` `edit/` `ui/` `theme/` 四个目录，加顶层 4 个 `ui_*` 外壳服务
+> - `wv-core` 分为 `base/` `time/` `map/` `model/` `derived/` `source/` 六个目录
+
+### wv-app 路径对照
+
+| 旧路径 | 新路径 | 备注 |
+|---|---|---|
+| `wv_app::camera` | `wv_app::render::camera` | |
+| `wv_app::zoom_level` | `wv_app::render::zoom_level` | |
+| `wv_app::map_frame` | `wv_app::render::map_frame` | |
+| `wv_app::world_projection` | `wv_app::render::world_projection` | |
+| `wv_app::terrain_view` | `wv_app::render::terrain_view` | `terrain_view/` 目录整体平移 |
+| `wv_app::terrain_chunks` | `wv_app::render::terrain_chunks` | |
+| `wv_app::vector_layers` | `wv_app::render::vector_layers` | |
+| `wv_app::streets` | `wv_app::render::streets` | |
+| `wv_app::faction_overlays` | `wv_app::render::faction_overlays` | |
+| `wv_app::brush_cursor` | `wv_app::render::brush_cursor` | |
+| `wv_app::drill` | `wv_app::render::drill` | |
+| `wv_app::editing` | `wv_app::edit::editing` | |
+| `wv_app::faction_panel_actions` | `wv_app::edit::faction_panel_actions` | |
+| `wv_app::validation_actions` | `wv_app::edit::validation_actions` | |
+| `wv_app::diagnostics_bridge` | `wv_app::edit::diagnostics_bridge` | |
+| `wv_app::colors` | `wv_app::theme::colors` | |
+| `wv_app::colors_google` | `wv_app::theme::colors_google` | |
+| `wv_app::colors_jrpg` | `wv_app::theme::colors_jrpg` | |
+| `wv_app::fonts` | `wv_app::theme::fonts` | |
+| `wv_app::ui_tokens` | `wv_app::theme::ui_tokens` | |
+| `wv_app::ui_theme` | `wv_app::theme::ui_theme` | |
+| `wv_app::app_bootstrap` | `wv_app::app_bootstrap` | 留顶层（装配入口） |
+| `wv_app::state` | `wv_app::state` | 留顶层（横切工作区） |
+| `wv_app::ui_shell` | `wv_app::ui_shell` | 留顶层（跨面板服务） |
+| `wv_app::ui_command_palette` | `wv_app::ui_command_palette` | 留顶层（跨面板服务） |
+| `wv_app::ui_layout` | `wv_app::ui_layout` | 留顶层（跨面板服务） |
+| `wv_app::ui_time` | `wv_app::ui_time` | 留顶层（跨面板服务） |
+| `wv_app::overture_cli` | `wv_app::overture_cli` | 留顶层（CLI 子命令） |
+| `wv_app::ui` | `wv_app::ui` | 目录（已存在） |
+| `crates/wv-app/src/<xxx>.rs` | `crates/wv-app/src/<render\|edit\|theme>/<xxx>.rs` | 物理位置（除上表「留顶层」外） |
+
+### wv-core 路径对照
+
+**保路径（B1 承诺）**：AGENTS.md §3 与文档直接引用的顶层路径**全部可达**。
+- 类型层：`wv_core::Color` / `wv_core::Id` / `wv_core::TimeSpan` / `wv_core::MapNode` / `wv_core::Track` / …（由 `lib.rs` 顶层 `pub use` 维持）
+- 模块层：`wv_core::time` / `wv_core::map` / `wv_core::track` / `wv_core::coord` / `wv_core::distance` / `wv_core::unit` / `wv_core::character` / `wv_core::event` / `wv_core::relation` / `wv_core::faction` / `wv_core::encounter` / `wv_core::situation` / `wv_core::narration` / `wv_core::street` / `wv_core::overture_id` / `wv_core::geographic_source` / `wv_core::geometry` / `wv_core::color` / `wv_core::id` / `wv_core::error`（由 `lib.rs` 顶层 `pub use ::module` 维持）
+
+**物理位置**（与上表路径都仍然可达，下表是「源文件在哪」）：
+
+| 旧物理位置 | 新物理位置 | 顶层引用 |
+|---|---|---|
+| `crates/wv-core/src/id.rs` | `crates/wv-core/src/base/id.rs` | `wv_core::id` / `wv_core::Id` |
+| `crates/wv-core/src/error.rs` | `crates/wv-core/src/base/error.rs` | `wv_core::error` / `wv_core::CoreError` |
+| `crates/wv-core/src/geometry.rs` | `crates/wv-core/src/base/geometry.rs` | `wv_core::geometry` / `wv_core::Point` |
+| `crates/wv-core/src/color.rs` | `crates/wv-core/src/base/color.rs` | `wv_core::color` / `wv_core::Color` |
+| `crates/wv-core/src/time.rs` | `crates/wv-core/src/time/mod.rs` | `wv_core::time::TimelineQuery` 等 |
+| `crates/wv-core/src/track.rs` | `crates/wv-core/src/time/track.rs` | `wv_core::track` / `wv_core::track::Track` |
+| `crates/wv-core/src/map.rs` | `crates/wv-core/src/map/mod.rs` | `wv_core::map::MapNode` 等 |
+| `crates/wv-core/src/coord.rs` | `crates/wv-core/src/map/coord.rs` | `wv_core::coord` / `wv_core::coord::MapFrame` |
+| `crates/wv-core/src/distance.rs` | `crates/wv-core/src/map/distance.rs` | `wv_core::distance` / `wv_core::distance::DistanceGraph` |
+| `crates/wv-core/src/unit.rs` | `crates/wv-core/src/map/unit.rs` | `wv_core::unit` / `wv_core::Unit` |
+| `crates/wv-core/src/character.rs` | `crates/wv-core/src/model/character.rs` | `wv_core::character` / `wv_core::Character` |
+| `crates/wv-core/src/event.rs` | `crates/wv-core/src/model/event.rs` | `wv_core::event` / `wv_core::Event` |
+| `crates/wv-core/src/relation.rs` | `crates/wv-core/src/model/relation.rs` | `wv_core::relation` |
+| `crates/wv-core/src/faction.rs` | `crates/wv-core/src/model/faction.rs` | `wv_core::faction` / `wv_core::Faction` |
+| `crates/wv-core/src/encounter.rs` | `crates/wv-core/src/derived/encounter.rs` | `wv_core::encounter` / `wv_core::detect_encounter_hints` |
+| `crates/wv-core/src/situation.rs` | `crates/wv-core/src/derived/situation.rs` | `wv_core::situation` / `wv_core::Situation` |
+| `crates/wv-core/src/narration.rs` | `crates/wv-core/src/derived/narration.rs` | `wv_core::narration` / `wv_core::Narration` |
+| `crates/wv-core/src/street.rs` | `crates/wv-core/src/source/street.rs` | `wv_core::street` / `wv_core::StreetLayer` |
+| `crates/wv-core/src/overture_id.rs` | `crates/wv-core/src/source/overture_id.rs` | `wv_core::overture_id` / `wv_core::OvertureId` |
+| `crates/wv-core/src/geographic_source.rs` | `crates/wv-core/src/source/geographic_source.rs` | `wv_core::geographic_source` / `wv_core::GeographicSourceV1` |
+| `crates/wv-core/src/terrain`（inline） | `crates/wv-core/src/lib.rs` 内联 `pub mod terrain` | `wv_core::terrain`（**未动**） |
+
+---
+
+## 6. 三条硬约束的归属
 
 以下三条硬约束由创意总监提出（基线 §6.3），**逐字**写入了对应 ADR 正文，是**不可违反项**：
 
@@ -87,7 +165,7 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
 
 ---
 
-## 6. 新增 ADR 的流程
+## 7. 新增 ADR 的流程
 
 1. 复制一份现有 ADR 作为模板（推荐复制 ADR-0001，结构最完整）。
 2. 分配**下一个未占用的编号**，按 §2 的命名规则建文件。

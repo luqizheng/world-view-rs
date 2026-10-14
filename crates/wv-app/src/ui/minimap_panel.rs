@@ -16,9 +16,9 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::state::{GridConfig, Panel, PanelState, ViewState};
+use crate::theme::ui_theme::UiShellConfig;
+use crate::theme::ui_tokens::{radius, space};
 use crate::ui_layout::LayoutFile;
-use crate::ui_theme::UiShellConfig;
-use crate::ui_tokens::{radius, space};
 
 use super::shell::UiShell;
 use super::widgets::{float_window, rect_stroke};
@@ -32,7 +32,7 @@ pub fn panel_minimap(
     mut panels: ResMut<PanelState>,
     mut view: ResMut<ViewState>,
     grid: Res<GridConfig>,
-    tex: Res<crate::terrain_view::TerrainTexture>,
+    tex: Res<crate::render::terrain_view::TerrainTexture>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
 ) {
     let shell = UiShell::new(&shell_cfg);
@@ -95,7 +95,7 @@ pub fn panel_minimap(
                         Vec2::new(nx * grid.cell_size * 512.0, ny * grid.cell_size * 512.0);
                     // 相机 Transform 是主真源：只写 ViewState 相机不动，
                     // chunk 拣选却按新视口走 → 画面按假视口重裁（抖动重建）。
-                    crate::camera::apply_view_to_camera(
+                    crate::render::camera::apply_view_to_camera(
                         view.camera_center,
                         view.scale,
                         &mut cameras,

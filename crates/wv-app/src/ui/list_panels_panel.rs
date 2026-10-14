@@ -16,8 +16,8 @@ use bevy::prelude::*;
 use bevy_egui::EguiContexts;
 
 use crate::state::{Panel, PanelState, WorldProjection};
+use crate::theme::ui_theme::UiShellConfig;
 use crate::ui_layout::LayoutFile;
-use crate::ui_theme::UiShellConfig;
 
 use super::shell::UiShell;
 use super::widgets::{empty_state, float_window, list_item, BadgeKind};
@@ -112,7 +112,9 @@ pub fn panel_event(
                     list_item(
                         ui,
                         &shell,
-                        crate::colors::palette_to_color32(crate::colors::ACCENT_EVENT),
+                        crate::theme::colors::palette_to_color32(
+                            crate::theme::colors::ACCENT_EVENT,
+                        ),
                         e.id.as_str(),
                         &meta,
                         false,
