@@ -1,6 +1,6 @@
 # ADR-0015：城市子图的时间版本化——双层 `TimeSpan` 模型
 
-**状态**：提议（Proposed，2026-10-14）
+**状态**：已接受（Accepted，2026-10-14 用户「继续」拍板）
 **日期**：2026-10-14
 **决策者**：用户
 **关联**：P6（非破坏编辑）、P7（时间轴驱动）、AGENTS §4.1（历史即区间）、§12（待决问题处置）、[ADR-0009](ADR-0009-graded-tile-zoom-to-street.md)（分级缩放 + 子图深度）、[ADR-0010](ADR-0010-street-vector-layer.md)（街道矢量层与 `StreetSegment` 数据模型）、[ADR-0013](ADR-0013-layer-frame-binding.md)（图层帧求值点）

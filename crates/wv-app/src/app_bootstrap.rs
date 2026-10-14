@@ -137,6 +137,15 @@ pub fn run(config: AppConfig) {
         // 全程豆腐块）。见 fonts.rs 文档与下方 PreUpdate 注册。
         (setup_camera, setup_terrain_texture_after_world).chain(),
     )
+    // LLM 可控编辑（ADR-0014）：仅 `--features http` 时启用。在 Startup
+    // schedule 注册 [`crate::http_integration::HttpServerPlugin`]：
+    // - 建 mpsc 通道，sender 端给独立 tokio runtime（后台线程），receiver
+    //   端给 [`drain_http_commands`] 系统（主帧）。
+    // - 端口占用走 stderr + 退出，**不**自动 +1（ADR §2.2 + §6 Q1）。
+    // - 默认地址 `127.0.0.1:8732`；用户可用启动参数覆盖
+    //   （v0.1 暂未接入 CLI flag，留待下一个 PR——Plugin 的 `config` 字段
+    //   已留口子，调用方构造 `HttpServerPlugin { config: ... }` 即可）。
+    .add_plugins(crate::http_integration::HttpServerPlugin::default())
     .add_systems(
         PreUpdate,
         // 必须排在 bevy_egui 建上下文之后：否则首帧 ctx_mut() 对未初始化
