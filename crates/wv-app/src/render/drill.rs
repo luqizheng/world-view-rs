@@ -80,6 +80,7 @@ pub struct DrillClick {
 /// 把钻取相关的资源与系统注册进 `App`。
 pub fn register(app: &mut App) {
     app.init_resource::<DrillClick>()
+        .init_resource::<crate::render::label_pick::LabelHits>()
         .init_resource::<crate::render::zoom_level::ZoomCrossRequest>()
         .add_systems(
             Update,
@@ -485,9 +486,10 @@ pub fn drill_pick(
     camera: Query<&Transform, With<Camera2d>>,
     time: Res<Time>,
     ui: Res<crate::render::camera::PointerOverUi>,
-    projection: Res<WorldProjection>,
+    mut projection: ResMut<WorldProjection>,
     grid: Res<GridConfig>,
     view: Res<ViewState>,
+    hits: Res<crate::render::label_pick::LabelHits>,
     mut drill: ResMut<DrillState>,
     mut clicks: ResMut<DrillClick>,
 ) {
@@ -519,7 +521,18 @@ pub fn drill_pick(
         Some((now, world_pos))
     };
 
+    // ADR-0017 §2.7：标签命中优先于一切点击语义——命中即选中该实体并
+    // 吃掉这次点击（不参与双击钻取计数）。命中表是上一帧注册的（本系统
+    // 在标签系统之前跑），但按下那一刻相机尚未移动，包围盒仍然有效。
+    if let Some(target) = crate::render::label_pick::hit_test(world_pos, &hits.items) {
+        projection.selection = Some(target);
+        clicks.last = None;
+        return;
+    }
+
     if !is_double {
+        // 空白单击清除选中（ADR-0017 §2.7：点空白 = 取消选择）。
+        projection.selection = None;
         return;
     }
     if let Some(child) = marker_hit(&projection.world, &drill, &grid, world_pos, view.scale) {
@@ -693,6 +706,7 @@ pub fn update_place_labels(
     view: Res<ViewState>,
     layers: Res<LayerFrame>,
     playback: Res<PlaybackState>,
+    mut hits: ResMut<crate::render::label_pick::LabelHits>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
@@ -744,6 +758,11 @@ pub fn update_place_labels(
                             pos,
                             name: p.name.clone(),
                             priority,
+                            // ADR-0017 §2.7：地点标签可拾取——点击选中该地点。
+                            target: Some(wv_core::SelectedEntity::new(
+                                wv_core::EntityKind::Place,
+                                p.id.clone(),
+                            )),
                         });
                     }
                 }
@@ -756,7 +775,6 @@ pub fn update_place_labels(
     let mut filtered =
         crate::render::label_collision::filter_collisions(&mut candidates, font_size);
     filtered.truncate(max_labels);
-    let mut wanted: Vec<(Vec2, String)> = filtered.into_iter().map(|c| (c.pos, c.name)).collect();
 
     // 文字尺寸按屏幕像素恒定（与 draw_drill_markers 的 screen_scale 口径一致）。
     // Text2d 默认以文字中心为 transform 原点；上移约一个字高，避免压住 POI。
@@ -769,9 +787,26 @@ pub fn update_place_labels(
         .unwrap_or(Quat::IDENTITY);
     let up_world = crate::render::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
     let label_rot = cam_rot.inverse();
-    for (pos, _) in &mut wanted {
-        *pos += up_world;
+    for c in &mut filtered {
+        c.pos += up_world;
     }
+    // ADR-0017 §2.7：把本帧实际可见（碰撞幸存）的标签注册进命中表。
+    // 地名系统在三个标签系统中第一个跑，负责清场；后两个只追加。
+    hits.clear();
+    for c in &filtered {
+        if let Some(target) = &c.target {
+            let half = Vec2::new(
+                crate::render::label_collision::estimate_label_width(&c.name, font_size) * 0.5,
+                crate::render::label_collision::estimate_label_height(font_size) * 0.5,
+            );
+            hits.push(crate::render::label_pick::LabelHit {
+                center: c.pos,
+                half,
+                target: target.clone(),
+            });
+        }
+    }
+    let wanted = filtered;
     // CJK 字体（fonts.rs 在 Startup 注册）：缺省字体无中文字形，地名会成方块。
     let cjk = fonts.cjk_font.clone();
     // 文字色按视图模式走 palette：Google Default Map 用深灰标签；Text2d
@@ -791,7 +826,9 @@ pub fn update_place_labels(
     let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
 
     let mut iter = q.iter_mut();
-    for (pos, name) in &wanted {
+    for c in &wanted {
+        let pos = c.pos;
+        let name = &c.name;
         if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
             tf.translation = pos.extend(label_z);
             tf.rotation = label_rot;
@@ -867,6 +904,7 @@ pub fn update_faction_labels(
     view: Res<ViewState>,
     layers: Res<LayerFrame>,
     playback: Res<PlaybackState>,
+    mut hits: ResMut<crate::render::label_pick::LabelHits>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
@@ -915,6 +953,11 @@ pub fn update_faction_labels(
                             pos: grid.map_to_view(center),
                             name: faction.name.clone(),
                             priority: faction.name.len() as u32,
+                            // ADR-0017 §2.7：势力标签可拾取——点击选中该势力。
+                            target: Some(wv_core::SelectedEntity::new(
+                                wv_core::EntityKind::Faction,
+                                faction.id.clone(),
+                            )),
                         });
                     }
                 }
@@ -927,7 +970,6 @@ pub fn update_faction_labels(
     let mut filtered =
         crate::render::label_collision::filter_collisions(&mut candidates, font_size);
     filtered.truncate(200);
-    let mut wanted: Vec<(Vec2, String)> = filtered.into_iter().map(|c| (c.pos, c.name)).collect();
     let label_offset = font_size * 0.9;
     let label_z = LABEL_Z + layers.label.z_offset;
     let cam_rot = camera
@@ -936,9 +978,24 @@ pub fn update_faction_labels(
         .unwrap_or(Quat::IDENTITY);
     let up_world = crate::render::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
     let label_rot = cam_rot.inverse();
-    for (pos, _) in &mut wanted {
-        *pos += up_world;
+    for c in &mut filtered {
+        c.pos += up_world;
     }
+    // ADR-0017 §2.7：注册本帧可见的标签命中盒（追加，地名系统已清场）。
+    for c in &filtered {
+        if let Some(target) = &c.target {
+            let half = Vec2::new(
+                crate::render::label_collision::estimate_label_width(&c.name, font_size) * 0.5,
+                crate::render::label_collision::estimate_label_height(font_size) * 0.5,
+            );
+            hits.push(crate::render::label_pick::LabelHit {
+                center: c.pos,
+                half,
+                target: target.clone(),
+            });
+        }
+    }
+    let wanted = filtered;
     let cjk = fonts.cjk_font.clone();
     // ADR-0017 Q1：势力标签色随 Label 渲染组透明度；色值走 Google 文字深灰
     // （与地名标签同一族，v0.1 不做 per-PlaceKind 主题映射——ADR-0016 §6.1 Q5）。
@@ -948,7 +1005,9 @@ pub fn update_faction_labels(
     let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
 
     let mut iter = q.iter_mut();
-    for (pos, name) in &wanted {
+    for c in &wanted {
+        let pos = c.pos;
+        let name = &c.name;
         if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
             tf.translation = pos.extend(label_z);
             tf.rotation = label_rot;
@@ -1020,6 +1079,7 @@ pub fn update_event_labels(
     view: Res<ViewState>,
     layers: Res<LayerFrame>,
     playback: Res<PlaybackState>,
+    mut hits: ResMut<crate::render::label_pick::LabelHits>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
@@ -1074,6 +1134,11 @@ pub fn update_event_labels(
                             pos: grid.map_to_view(Vec2::new(x, y)),
                             name: event.name.clone(),
                             priority: event.name.len() as u32,
+                            // ADR-0017 §2.7：事件标签可拾取——点击选中该事件。
+                            target: Some(wv_core::SelectedEntity::new(
+                                wv_core::EntityKind::Event,
+                                event.id.clone(),
+                            )),
                         });
                     }
                 }
@@ -1086,7 +1151,6 @@ pub fn update_event_labels(
     let mut filtered =
         crate::render::label_collision::filter_collisions(&mut candidates, font_size);
     filtered.truncate(200);
-    let mut wanted: Vec<(Vec2, String)> = filtered.into_iter().map(|c| (c.pos, c.name)).collect();
     let label_offset = font_size * 0.9;
     let label_z = LABEL_Z + layers.label.z_offset;
     let cam_rot = camera
@@ -1095,9 +1159,24 @@ pub fn update_event_labels(
         .unwrap_or(Quat::IDENTITY);
     let up_world = crate::render::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
     let label_rot = cam_rot.inverse();
-    for (pos, _) in &mut wanted {
-        *pos += up_world;
+    for c in &mut filtered {
+        c.pos += up_world;
     }
+    // ADR-0017 §2.7：注册本帧可见的标签命中盒（追加，地名系统已清场）。
+    for c in &filtered {
+        if let Some(target) = &c.target {
+            let half = Vec2::new(
+                crate::render::label_collision::estimate_label_width(&c.name, font_size) * 0.5,
+                crate::render::label_collision::estimate_label_height(font_size) * 0.5,
+            );
+            hits.push(crate::render::label_pick::LabelHit {
+                center: c.pos,
+                half,
+                target: target.clone(),
+            });
+        }
+    }
+    let wanted = filtered;
     let cjk = fonts.cjk_font.clone();
     // 事件标签色同势力标签（Label 渲染组透明度 + Google 文字深灰）。
     let label_color =
@@ -1106,7 +1185,9 @@ pub fn update_event_labels(
     let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
 
     let mut iter = q.iter_mut();
-    for (pos, name) in &wanted {
+    for c in &wanted {
+        let pos = c.pos;
+        let name = &c.name;
         if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
             tf.translation = pos.extend(label_z);
             tf.rotation = label_rot;

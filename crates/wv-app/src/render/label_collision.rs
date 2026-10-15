@@ -29,6 +29,10 @@ pub struct LabelCandidate {
     pub name: String,
     /// 优先级（数值越小越优先保留）。
     pub priority: u32,
+    /// 命中后选中的实体（ADR-0017 §2.7）。`None` = 不可拾取（无稳定 id，
+    /// 如街名）；碰撞过滤把 `None` 与有身份者一视同仁地裁掉——**看不见的
+    /// 标签也不可点**。
+    pub target: Option<wv_core::SelectedEntity>,
 }
 
 /// AABB（轴对齐包围盒）。
@@ -153,16 +157,19 @@ mod tests {
                 pos: Vec2::new(0.0, 0.0),
                 name: "A".into(),
                 priority: 1,
+                target: None,
             },
             LabelCandidate {
                 pos: Vec2::new(1.0, 1.0), // 与 A 重叠
                 name: "B".into(),
                 priority: 2,
+                target: None,
             },
             LabelCandidate {
                 pos: Vec2::new(100.0, 100.0), // 与 A 不重叠
                 name: "C".into(),
                 priority: 3,
+                target: None,
             },
         ];
         let result = filter_collisions(&mut candidates, 12.0);
@@ -178,11 +185,13 @@ mod tests {
                 pos: Vec2::new(0.0, 0.0),
                 name: "low".into(),
                 priority: 10,
+                target: None,
             },
             LabelCandidate {
                 pos: Vec2::new(1.0, 1.0), // 与 low 重叠
                 name: "high".into(),
                 priority: 1,
+                target: None,
             },
         ];
         let result = filter_collisions(&mut candidates, 12.0);
