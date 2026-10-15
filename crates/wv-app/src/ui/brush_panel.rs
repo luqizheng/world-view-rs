@@ -61,11 +61,13 @@ pub fn panel_brush(
         badge,
         current_loc.0,
         |ui| {
-            // ── Brush / Grid 双段切换（Figma v0.3 风格）──
+            // ── Brush 段切换（Figma v0.3 风格）——Grid 段已拆成下方独立
+            // checkbox（用户新目标，2026-10-15：网格能脱离笔刷独立启停）。
+            // 这里只剩 Brush 一段，宽度相应减半（60px）。
             ui.horizontal(|ui| {
-                let segs = [("Brush", true), ("Grid", false)];
+                let segs = [("Brush", true)];
                 let n = segs.len() as f32;
-                let seg_w = 120.0;
+                let seg_w = 60.0;
                 let (rect, _) =
                     ui.allocate_exact_size(egui::vec2(seg_w, shell.hit), egui::Sense::hover());
                 let p = ui.painter();
@@ -80,10 +82,8 @@ pub fn panel_brush(
                         egui::pos2(rect.min.x + each * i as f32, rect.min.y),
                         egui::pos2(rect.min.x + each * (i as f32 + 1.0), rect.max.y),
                     );
-                    // Grid 段高亮只跟自己的 grid_lines 走（独立于笔刷，
-                    // 2026-10-15 用户新目标：网格能脱离笔刷独立显示）。
-                    let sel = (*label == "Brush" && brush.enabled)
-                        || (*label == "Grid" && brush.grid_lines);
+                    // Brush 段高亮：单一条件（Grid 已拆成下方独立 checkbox）。
+                    let sel = *label == "Brush" && brush.enabled;
                     if sel {
                         p.rect_filled(
                             r,
@@ -114,17 +114,21 @@ pub fn panel_brush(
                     let resp =
                         ui.interact(r, egui::Id::new(("wv_brush_seg", i)), egui::Sense::click());
                     if resp.clicked() {
-                        match *label {
-                            "Brush" => brush.enabled = true,
-                            "Grid" => {
-                                // 网格独立开关：不再强关笔刷。
-                                brush.grid_lines = !brush.grid_lines;
-                            }
-                            _ => {}
-                        }
+                        // Grid 已拆成独立 checkbox（上方），本段只剩 Brush。
+                        brush.enabled = true;
                     }
                 }
             });
+            ui.add_space(space::SM);
+
+            // ── GRID 独立开关（用户新目标，2026-10-15）──
+            // 此前 Grid 段嵌在 Brush/Grid segmented control 里——视觉上
+            // "笔刷关 → Grid 段不可点"，作者无法单独控制。拆成独立
+            // checkbox：与笔刷完全无关（已在 grid_lines.rs 33b65b9
+            // 解耦可见性），现在 UI 也解耦。
+            ui.checkbox(&mut brush.grid_lines, "Grid (independent of brush)")
+                .changed();
+
             ui.add_space(space::SM);
 
             // ── TOOL：直接涂类型 vs 意图生成（意图笔刷 plan v0.1）──
@@ -328,4 +332,37 @@ fn slider_row(ui: &mut egui::Ui, shell: &UiShell, label: &str, value: &str, slid
             );
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::state::{BrushState, BrushTool};
+
+    /// `BrushState::default()` 字段：笔刷关、网格关——与用户新目标一致
+    /// （\"现在时只有笔刷的时候出现\"已修复：网格独立默认关，但 UI
+    /// 现在能让用户在任何时候启用）。
+    #[test]
+    fn brush_state_default_independent_grid_and_brush() {
+        let b = BrushState::default();
+        assert!(!b.enabled, "笔刷默认关");
+        assert!(!b.grid_lines, "网格默认关——与笔刷独立");
+        assert_eq!(b.kind, 3, "默认 kind=草原");
+        assert_eq!(b.tool, BrushTool::PaintKind, "默认工具=Paint");
+        assert!((b.strength - 1.0).abs() < 1e-6, "默认强度 1.0");
+    }
+
+    /// 网格独立读写：toggle grid_lines 不应影响 brush.enabled。
+    /// （语义在 `grid_lines.rs::grid_lines_visible` 已锁定；这里确认字段本身
+    /// 是 plain bool，两个 toggle 各自独立。）
+    #[test]
+    fn grid_lines_can_toggle_independently_of_brush_enabled() {
+        let mut b = BrushState::default();
+        assert!(!b.enabled && !b.grid_lines);
+        b.enabled = true;
+        assert!(b.enabled && !b.grid_lines, "开笔刷不自动开网格");
+        b.grid_lines = true;
+        assert!(b.enabled && b.grid_lines, "两态可同时为 true");
+        b.grid_lines = false;
+        assert!(b.enabled && !b.grid_lines, "关网格不自动关笔刷");
+    }
 }
