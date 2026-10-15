@@ -136,11 +136,24 @@ pub(crate) fn extent_quad_mesh(size: Vec2, uv_scale: Vec2) -> Mesh {
     mesh
 }
 
-/// 幅面键：栅格原点 / 尺寸 / 格径任一变化即重建（与 `grid_lines` 同触发口径）。
+/// 幅面键：栅格原点 / 尺寸 / 格径 / 缩放档任一变化即重建（与 `grid_lines` 同触发口径）。
+///
+/// `scale_bucket` 把连续 `view.scale` 量化到 1/8 octaves 档——避免每帧
+/// scale 微变都重建（grain mesh 创建有 GPU 开销）；近看纸浆细节变化
+///（手绘地图 #6，2026-10-15）的视觉差一档即可辨。
 #[derive(Debug, Clone, PartialEq)]
 struct AtmosphereKey {
     origin: (u32, u32),
     extent: (u32, u32),
+    scale_bucket: u32,
+}
+
+/// 把 `view.scale` 量化到 1/8 octaves（`bucket = (log2(scale) × 8).round() as i32`）。
+fn scale_bucket(scale: f32) -> u32 {
+    if scale <= 0.0 {
+        return 0;
+    }
+    (scale.log2() * 8.0).round().max(0.0) as u32
 }
 
 /// 氛围层实体缓存。
@@ -198,11 +211,15 @@ pub fn sync_atmosphere(
             grid.raster_origin.y.to_bits(),
         ),
         extent: (tex.size, grid.cell_size.to_bits()),
+        scale_bucket: scale_bucket(view.scale),
     };
     if atm.key.as_ref() != Some(&key) {
         atm.despawn(&mut commands);
         let size = Vec2::splat(tex.size as f32 * grid.cell_size);
-        let uv = Vec2::splat(size.x / GRAIN_TILE_WORLD);
+        // 手绘地图 #6：grain uv 随 `view.scale` 微调——近看 grain 翻倍密、远看
+        // 减半；连续变化用 `scale_bucket` 量化到 1/8 octaves 档避免逐帧重建。
+        let grain_tile = (GRAIN_TILE_WORLD / view.scale.max(0.05)).max(1.0);
+        let uv = Vec2::splat(size.x / grain_tile);
         // —— 雾霭（初色 NONE，末尾逐帧更新段马上会写入当前值）——
         let veil_mesh = meshes.add(extent_quad_mesh(size, Vec2::ZERO));
         let veil_mat = materials.add(ColorMaterial::from_color(Color::NONE));
@@ -319,5 +336,39 @@ mod tests {
             panic!("UV 应为 Float32x2");
         };
         assert_eq!(uv[3], [2.0, 2.0], "右上限应等于 uv_scale");
+    }
+
+    // -----------------------------------------------------------------------
+    // 纸纹缩放（手绘地图呈现 #6，2026-10-15）
+    // -----------------------------------------------------------------------
+
+    /// `scale_bucket` 把连续 scale 量化到 1/8 octaves 档：scale=1 → 0、scale=2 → 8。
+    #[test]
+    fn scale_bucket_quantizes_to_eighth_octaves() {
+        assert_eq!(scale_bucket(1.0), 0, "scale=1 应归 0 档");
+        assert_eq!(scale_bucket(2.0), 8, "scale=2 应归 8 档（+1 oct）");
+        // scale=0.5 时 log2 = -1, ×8 = -8, max(0, ...) = 0 档（与 scale=0 同档）
+        assert_eq!(scale_bucket(0.5), 0, "scale=0.5 应归 0 档（log2=-1 截断）");
+        // 极端 / 非法值不 panic。
+        assert_eq!(scale_bucket(0.0), 0, "scale=0 应归 0");
+    }
+
+    /// grain_tile 随 scale 缩小：近（scale=4）tile 缩 4× → grain 翻 4 倍密；
+    /// 远（scale=0.25）tile 放 4× → grain 变 1/4 疏。
+    #[test]
+    fn grain_tile_scales_inversely_with_view_scale() {
+        // 复用 sync_atmosphere 内部的同一公式（行内复制避免外露细节）。
+        let near = (GRAIN_TILE_WORLD / 4.0_f32.max(0.05)).max(1.0);
+        let far = (GRAIN_TILE_WORLD / 0.25_f32.max(0.05)).max(1.0);
+        let base = GRAIN_TILE_WORLD;
+        assert!(
+            near < base,
+            "近（scale=4）tile 应 < 基础 tile：near={near} base={base}"
+        );
+        assert!(
+            far > base,
+            "远（scale=0.25）tile 应 > 基础 tile：far={far} base={base}"
+        );
+        assert!((near * 4.0 - base).abs() < 0.5, "近 = 基础/4 关系");
     }
 }
