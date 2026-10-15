@@ -472,6 +472,7 @@ impl GeometryData {
 
 pub mod coord;
 pub mod distance;
+pub mod sea;
 pub mod unit;
 
 #[cfg(test)]

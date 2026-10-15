@@ -739,6 +739,9 @@ impl Project {
 
         // 命名区域（ADR-0017 §2.2）：`regions/` 每区域一个 YAML，几何内联。
         // 目录可缺失——旧工程直接得空 Vec（零迁移）。
+        // 海名（手绘地图 #13）：每实体一文件，落 `seas/<id>.yaml`。
+        // 目录不存在 = 没海名 = 空 Vec（v0.1 暂不写，留给编辑器落盘）。
+        let seas: Vec<wv_core::sea::Sea> = load_dir(&self.root, "seas").unwrap_or_default();
         let regions: Vec<wv_core::Region> = load_dir(&self.root, "regions")?;
 
         Ok(World {
@@ -756,6 +759,7 @@ impl Project {
             factions,
             faction_geometry,
             regions,
+            seas,
             terrains,
             streets,
             measurements,

@@ -43,6 +43,7 @@ pub use derived::narration;
 pub use derived::situation;
 pub use map::coord;
 pub use map::distance;
+pub use map::sea;
 pub use map::unit;
 pub use model::character;
 pub use model::event;
@@ -162,6 +163,11 @@ pub struct World {
     pub relations: Vec<model::relation::Relation>,
     /// 距离图。
     pub distances: map::distance::DistanceGraph,
+    /// 海名（手绘地图呈现 #13，2026-10-15）：地图上**水域**的标注实体，
+    /// 与 Place 平级但独立——海名不参与距离图，仅做视觉标注。civ-atlas
+    /// `ICE_PAPER` 的姊妹概念。`Vec::default()` 即空 Vec，serde derive
+    /// 对缺字段默认走 `Default`——`#[serde(default)]` 冗余且需 `use serde`。
+    pub seas: Vec<map::sea::Sea>,
     /// 事态（**归纳容器**：收拢事件与单位，基线 §1.1 / §2.7）。
     pub situations: Vec<derived::situation::Situation>,
     /// 单位（在地图上独立运动的主体，ADR-0004）。
