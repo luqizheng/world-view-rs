@@ -54,6 +54,12 @@ const HALO_2_MULT: f32 = 5.0;
 const HALO_1_ALPHA: f32 = 0.35;
 const HALO_2_ALPHA: f32 = 0.18;
 
+/// 河水中线（手绘地图 #8，2026-10-15）：
+/// - `RIVER_MULT` = 主线 `thin_half × 0.5`（比主线细一半）。
+/// - `RIVER_ALPHA` = 0.5（半透，不抢主线）。
+const RIVER_MULT: f32 = 0.5;
+const RIVER_ALPHA: f32 = 0.5;
+
 /// 重算触发键：只含**结构性**输入——任一变化才重算派生几何。
 ///
 /// `view.scale` 只通过 `lod` 档（Q8 分档）进入，连续缩放不触发重算。
@@ -78,6 +84,9 @@ pub struct IsolineOverlay {
     /// 走晕（kind 切换不是水彩晕的语义）。
     halo_outer: Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)>,
     halo_outer_outer: Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)>,
+    /// 河水中线（手绘地图 #8，2026-10-15）：海岸链上方一道窄青蓝线（`label_water`
+    /// 颜色）——civ-atlas 风格的"水边反光"。宽度 0.5× main，alpha 0.5。仅海岸。
+    coast_river: Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)>,
     key: Option<IsolineKey>,
 }
 
@@ -89,9 +98,13 @@ impl IsolineOverlay {
                 world.resource_mut::<Assets<Mesh>>().remove(&mesh);
             });
         }
-        for (entity, mesh, _mat) in [self.halo_outer.take(), self.halo_outer_outer.take()]
-            .into_iter()
-            .flatten()
+        for (entity, mesh, _mat) in [
+            self.halo_outer.take(),
+            self.halo_outer_outer.take(),
+            self.coast_river.take(),
+        ]
+        .into_iter()
+        .flatten()
         {
             commands.entity(entity).despawn();
             commands.queue(move |world: &mut World| {
@@ -205,6 +218,8 @@ pub fn sync_isoline_overlay(
     // 水彩外晕（手绘地图 #4）：仅海岸，2 圈；走同一 `coast` 链，3 套半宽。
     let mut coast_halo_inner: Vec<(Vec<wv_terrain::isoline::Pt>, bool, f32)> = Vec::new();
     let mut coast_halo_outer: Vec<(Vec<wv_terrain::isoline::Pt>, bool, f32)> = Vec::new();
+    // 河水中线（手绘地图 #8）：与外晕同链，宽 0.5×，单层。
+    let mut coast_river: Vec<(Vec<wv_terrain::isoline::Pt>, bool, f32)> = Vec::new();
     for c in assemble_chains(&coast) {
         let smoothed = chaikin(&c.pts, c.closed, 2);
         let thin = simplify_dp(&smoothed, c.closed, tol);
@@ -213,7 +228,8 @@ pub fn sync_isoline_overlay(
         }
         strokes.push((thin.clone(), c.closed, thin_half));
         coast_halo_inner.push((thin.clone(), c.closed, thin_half * HALO_1_MULT));
-        coast_halo_outer.push((thin, c.closed, thin_half * HALO_2_MULT));
+        coast_halo_outer.push((thin.clone(), c.closed, thin_half * HALO_2_MULT));
+        coast_river.push((thin, c.closed, thin_half * RIVER_MULT));
     }
     for c in assemble_chains(&kinds) {
         // 类型场边界是格缘阶梯：先小容差预抽稀去共线中点，再 Chaikin 磨角，
@@ -295,6 +311,25 @@ pub fn sync_isoline_overlay(
                 ))
                 .id();
             overlay.halo_outer_outer = Some((e, h, mat));
+        }
+    }
+    // 河水中线（手绘地图 #8）：在主线上方，z+0.001，宽度 0.5× main，
+    // `label_water` 颜色 + 0.5 alpha——"水边反光"观感（civ-atlas 风格）。
+    if !coast_river.is_empty() {
+        if let Some(mesh) = build_stroke_mesh(&coast_river, grid.raster_origin, grid.cell_size) {
+            let h = meshes.add(mesh);
+            let mat = materials.add(ColorMaterial::from_color(
+                pal.label_water
+                    .with_alpha(RIVER_ALPHA * layers.terrain.opacity),
+            ));
+            let e = commands
+                .spawn((
+                    Mesh2d(h.clone()),
+                    MeshMaterial2d(mat.clone()),
+                    Transform::from_xyz(0.0, 0.0, ISOLINE_Z + 0.001 + layers.terrain.z_offset),
+                ))
+                .id();
+            overlay.coast_river = Some((e, h, mat));
         }
     }
 
@@ -604,5 +639,41 @@ mod tests {
                 "外晕 alpha 应在 (0,1)"
             )
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // 河水中线（手绘地图呈现 #8，2026-10-15）
+    // -----------------------------------------------------------------------
+
+    /// RIVER_MULT = 0.5，RIVER_ALPHA = 0.5：比主线更细 + 半透，不抢主线。
+    #[test]
+    fn river_layer_dimensions_are_strictly_smaller_than_main() {
+        const { assert!(RIVER_MULT < 1.0, "河水中线应比主线窄") }
+        const { assert!(RIVER_MULT > 0.0, "但不能为 0") }
+        const {
+            assert!(
+                RIVER_ALPHA > 0.0 && RIVER_ALPHA < 1.0,
+                "河水中线 alpha 应在 (0,1)"
+            )
+        }
+    }
+
+    /// 河水中线 mesh 产出非空：与主线同链（海岸），复用 `build_stroke_mesh`。
+    #[test]
+    fn river_coast_mesh_is_nonempty_when_coast_present() {
+        let mesh = build_stroke_mesh(
+            &[(
+                vec![
+                    wv_terrain::isoline::Pt { x: 0.5, y: 1.5 },
+                    wv_terrain::isoline::Pt { x: 5.5, y: 1.5 },
+                    wv_terrain::isoline::Pt { x: 5.5, y: 5.5 },
+                ],
+                false,
+                0.5 * 1.25, // RIVER_MULT * STROKE_PX
+            )],
+            Vec2::ZERO,
+            1.0,
+        );
+        assert!(mesh.is_some(), "河水中线 mesh 应产出");
     }
 }
