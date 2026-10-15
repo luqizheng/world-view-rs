@@ -29,6 +29,7 @@ pub mod minimap_panel;
 pub mod new_map_dialog;
 pub mod new_project_dialog;
 pub mod project_menu;
+pub mod region_panel;
 pub mod shell;
 pub mod situation_panel;
 pub mod timeline;
@@ -50,13 +51,18 @@ pub use minimap_panel::panel_minimap;
 pub use new_map_dialog::{new_map_dialog, NewMapDialog, NewMapPrefill};
 pub use new_project_dialog::{new_project_dialog, NewProjectDialog};
 pub use project_menu::{breadcrumb, ProjectMenuState};
+pub use region_panel::panel_region;
 pub use shell::{terrain_swatch, UiShell, TERRAIN_NAMES};
 pub use situation_panel::panel_situation;
 pub use timeline::{panel_timeline, undo_last_street_segment, TimelineLayer};
 pub use top_bar::{status_bar, top_bar};
 pub use validation_panel::panel_validation;
 pub use welcome_screen::welcome_screen;
-pub use widgets::{badge, empty_state, float_window, list_item, BadgeKind};
+pub use widgets::{
+    badge, empty_state, float_window, list_item, setup_egui_image_loaders, BadgeKind,
+    EguiImageLoadersInstalled, ToolButton, ToolButtonContent, ToolIcon, ICON_ERASER, ICON_MAXIMIZE,
+    ICON_PEN, ICON_RULER, ICON_SQUARE, ICON_ZOOM_IN, ICON_ZOOM_OUT,
+};
 
 // `terrain_grid` 仅被 panel_brush 调用，从 widgets 重新导出。
 pub use widgets::terrain_grid;

@@ -11,10 +11,9 @@
 //!
 //! ## 为什么不用 `GeometryData`
 //!
-//! `map::GeometryData` 是 `#[serde(untagged)]` 且 `Points` 变体在前——
-//! 裸数组 YAML **永远**反序列化为 `Points`，`Polygon` 变体实际无法从
-//! YAML 还原（势力几何踩的同一个坑）。区域语义上就是多边形，直接存
-//! 扁平顶点，绕开该陷阱；将来 `GeometryData` 语义修正后可再归并。
+//! 区域语义上永远是多边形（不像 `GeometryData` 还有点列和引用变体），
+//! 直接存 `Vec<f32>` 更简单、类型更精确。`GeometryData` 的变体顺序问题
+//! 已修正（`Polygon` 在前），但 Region 仍保持内联——归并无收益、徒增复杂度。
 //!
 //! ## 时间维度（v0.1 不带）
 //!

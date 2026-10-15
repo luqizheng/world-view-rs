@@ -26,4 +26,6 @@ pub mod editing;
 #[cfg(feature = "app")]
 pub mod faction_panel_actions;
 #[cfg(feature = "app")]
+pub mod region_panel_actions;
+#[cfg(feature = "app")]
 pub mod validation_actions;

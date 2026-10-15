@@ -213,6 +213,18 @@ fn faction_geometry_round_trip_via_synthetic_id() {
         .collect();
     assert!(froms.contains(&1));
     assert!(froms.contains(&200));
+
+    // 验证变体类型 round-trip 正确：Polygon 不应退化为 Points（untagged 顺序 bug）。
+    let g1 = world2
+        .faction_geometry
+        .iter()
+        .find(|g| g.span.from == 1)
+        .expect("from=1 应存在");
+    assert!(
+        matches!(g1.geometry, GeometryData::Polygon(_)),
+        "Polygon 应 round-trip 为 Polygon，实得 {:?}",
+        g1.geometry
+    );
 }
 
 #[test]

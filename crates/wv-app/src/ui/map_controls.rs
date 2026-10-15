@@ -24,6 +24,10 @@ use crate::state::{
 use crate::theme::ui_theme::UiShellConfig;
 
 use super::shell::UiShell;
+use super::{
+    ToolButton, ToolIcon, ICON_ERASER, ICON_MAXIMIZE, ICON_PEN, ICON_RULER, ICON_SQUARE,
+    ICON_ZOOM_IN, ICON_ZOOM_OUT,
+};
 
 /// 右下角地图控件：拖动 / 笔刷工具、+/- 缩放、全图复位。
 ///
@@ -85,116 +89,108 @@ pub fn map_controls(
                 .corner_radius(egui::CornerRadius::from(10.0))
                 .inner_margin(crate::theme::ui_theme::margin_xy(5.0, 5.0))
                 .show(ui, |ui| {
-                    let tool_label = if brush.enabled { "✏" } else { "✋" };
-                    let mut tool_button = egui::Button::new(
-                        egui::RichText::new(tool_label)
-                            .size(shell.scale.base)
-                            .color(control_text),
-                    );
-                    if brush.enabled {
-                        tool_button = tool_button.fill(active_bg);
-                    }
-                    let tool_response = ui.add_enabled(
-                        brush_available,
-                        tool_button.min_size(egui::vec2(38.0, shell.hit)),
-                    );
-                    if tool_response.clicked() {
-                        brush.enabled = !brush.enabled;
-                    }
-                    let tool_hint = if brush_available {
-                        format!(
-                            "切换工具（当前：{}）",
-                            if brush.enabled { "笔刷" } else { "拖动" }
-                        )
-                    } else {
-                        "地形笔刷仅在世界图可用；当前为拖动".to_owned()
-                    };
-                    tool_response.on_hover_text(tool_hint);
+                    let button_size = egui::vec2(38.0, shell.hit);
+
+                    // ---- 笔刷 / 平移 toggle（单图标 + 激活态，砍掉原 ✏↔✋ 双字符）----
+                    ToolButton::icon(ToolIcon::Svg(ICON_PEN), "切换工具（当前：笔刷 / 拖动）")
+                        .active(brush.enabled)
+                        .enabled(brush_available)
+                        .size(button_size)
+                        .tint(control_text)
+                        .active_bg(active_bg)
+                        .show(ui, &shell, || {
+                            brush.enabled = !brush.enabled;
+                        });
                     ui.add_space(2.0);
                     ui.separator();
+
                     // ---- 测量工具三按钮（2026-10-14）----
                     // 互斥：任一测量模式激活 → 笔刷顶下。模式 ≠ Off 时左键被
                     // `commit_measurement_click` 截走，地图拖动失效——这是预期的。
                     // 无工程锁与笔刷同口径：没打开工程不允许启用。
                     let project_open = projection.project_dir.is_some();
-                    let mut pick = |target: MeasureMode, label: &str, hint: &str| {
-                        let active = measure.mode == target;
-                        let mut btn = egui::Button::new(
-                            egui::RichText::new(label)
-                                .size(shell.scale.base)
-                                .color(control_text),
-                        )
-                        .min_size(egui::vec2(38.0, shell.hit));
-                        if active {
-                            btn = btn.fill(active_bg);
-                        }
-                        let resp = ui.add_enabled(project_open, btn);
-                        if resp.clicked() {
-                            // 二态切换：再点一次同一模式 → 关闭。
-                            measure.mode = if active { MeasureMode::Off } else { target };
-                            // 与笔刷互斥：开任一测量模式 → 关闭笔刷。
-                            if measure.mode.is_active() {
-                                brush.enabled = false;
-                            }
-                            // 切模式时丢弃草稿。
-                            measure.clear_draft();
-                        }
-                        resp.on_hover_text(hint);
-                    };
-                    pick(MeasureMode::Line, "📏", "测量：折线（多段；右键/Esc 收笔）");
-                    pick(MeasureMode::Rect, "▭", "测量：矩形（两点确定长×宽）");
-                    pick(MeasureMode::Eraser, "🧹", "测量：橡皮（点选删除）");
+                    // active 状态在闭包外预先求值（闭包体里同时存在 &measure 和
+                    // &mut measure 会触发借用冲突，移到外面后闭包只持 &mut）。
+                    let line_active = measure.mode == MeasureMode::Line;
+                    let rect_active = measure.mode == MeasureMode::Rect;
+                    let eraser_active = measure.mode == MeasureMode::Eraser;
+                    let mut measure_pick =
+                        |target: MeasureMode,
+                         icon: egui::ImageSource<'static>,
+                         hint: &str,
+                         active: bool| {
+                            ToolButton::icon(ToolIcon::Svg(icon), hint)
+                                .active(active)
+                                .enabled(project_open)
+                                .size(button_size)
+                                .tint(control_text)
+                                .active_bg(active_bg)
+                                .show(ui, &shell, || {
+                                    // 二态切换：再点一次同一模式 → 关闭。
+                                    measure.mode = if active { MeasureMode::Off } else { target };
+                                    // 与笔刷互斥：开任一测量模式 → 关闭笔刷。
+                                    if measure.mode.is_active() {
+                                        brush.enabled = false;
+                                    }
+                                    // 切模式时丢弃草稿。
+                                    measure.clear_draft();
+                                });
+                        };
+                    measure_pick(
+                        MeasureMode::Line,
+                        ICON_RULER,
+                        "测量：折线（多段；右键/Esc 收笔）",
+                        line_active,
+                    );
+                    measure_pick(
+                        MeasureMode::Rect,
+                        ICON_SQUARE,
+                        "测量：矩形（两点确定长×宽）",
+                        rect_active,
+                    );
+                    measure_pick(
+                        MeasureMode::Eraser,
+                        ICON_ERASER,
+                        "测量：橡皮（点选删除）",
+                        eraser_active,
+                    );
                     ui.add_space(2.0);
                     ui.separator();
-                    let zoom_in = ui.add_sized(
-                        egui::vec2(38.0, shell.hit),
-                        egui::Button::new(
-                            egui::RichText::new("＋")
-                                .size(shell.scale.base)
-                                .color(control_text),
-                        ),
-                    );
-                    if zoom_in.clicked() {
-                        let next = view.scale / 1.6;
-                        set_map_scale(&mut view, &mut cameras, next, zoom);
-                    }
-                    zoom_in.on_hover_text("放大");
-                    let zoom_out = ui.add_sized(
-                        egui::vec2(38.0, shell.hit),
-                        egui::Button::new(
-                            egui::RichText::new("－")
-                                .size(shell.scale.base)
-                                .color(control_text),
-                        ),
-                    );
-                    if zoom_out.clicked() {
-                        let next = view.scale * 1.6;
-                        set_map_scale(&mut view, &mut cameras, next, zoom);
-                    }
-                    zoom_out.on_hover_text("缩小");
+
+                    // ---- 缩放 / 全图 ----
+                    ToolButton::icon(ToolIcon::Svg(ICON_ZOOM_IN), "放大")
+                        .size(button_size)
+                        .tint(control_text)
+                        .show(ui, &shell, || {
+                            let next = view.scale / 1.6;
+                            set_map_scale(&mut view, &mut cameras, next, zoom);
+                        });
+                    ToolButton::icon(ToolIcon::Svg(ICON_ZOOM_OUT), "缩小")
+                        .size(button_size)
+                        .tint(control_text)
+                        .show(ui, &shell, || {
+                            let next = view.scale * 1.6;
+                            set_map_scale(&mut view, &mut cameras, next, zoom);
+                        });
                     ui.separator();
-                    let fit = ui.add_sized(
-                        egui::vec2(38.0, shell.hit),
-                        egui::Button::new(
-                            egui::RichText::new("⛶")
-                                .size(shell.scale.base)
-                                .color(control_text),
-                        ),
-                    );
-                    let fit = fit.on_hover_text("缩放到全图");
-                    if fit.clicked() {
-                        // 「全图」= **当前级**那张图的全幅（不是底层栅格的全幅）：
-                        // 中心取该图的图帧原点 + 半幅，缩放取它的 fit。
-                        // 图帧原点与 `grid.map_origin` 同源（`drill::map_origin` 是唯一
-                        // 实现点），但这里要的是**当帧**的值，直接解析一次比读资源更稳。
-                        let frame_origin = drill
-                            .current()
-                            .and_then(|id| wv_core::resolve_frame_in(&projection.world.maps, id))
-                            .map(|f| Vec2::new(f.world_origin.x, f.world_origin.y))
-                            .unwrap_or(grid.map_origin);
-                        view.camera_center = frame_origin + level_map_size * 0.5;
-                        set_map_scale(&mut view, &mut cameras, zoom.fit, zoom);
-                    }
+                    ToolButton::icon(ToolIcon::Svg(ICON_MAXIMIZE), "缩放到全图")
+                        .size(button_size)
+                        .tint(control_text)
+                        .show(ui, &shell, || {
+                            // 「全图」= **当前级**那张图的全幅（不是底层栅格的全幅）：
+                            // 中心取该图的图帧原点 + 半幅，缩放取它的 fit。
+                            // 图帧原点与 `grid.map_origin` 同源（`drill::map_origin` 是唯一
+                            // 实现点），但这里要的是**当帧**的值，直接解析一次比读资源更稳。
+                            let frame_origin = drill
+                                .current()
+                                .and_then(|id| {
+                                    wv_core::resolve_frame_in(&projection.world.maps, id)
+                                })
+                                .map(|f| Vec2::new(f.world_origin.x, f.world_origin.y))
+                                .unwrap_or(grid.map_origin);
+                            view.camera_center = frame_origin + level_map_size * 0.5;
+                            set_map_scale(&mut view, &mut cameras, zoom.fit, zoom);
+                        });
                 });
         });
 }

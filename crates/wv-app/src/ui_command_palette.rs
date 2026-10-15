@@ -324,6 +324,7 @@ impl CommandRegistry {
                     Panel::Situation => "显隐事态登记面板",
                     Panel::Character => "显隐人物登记面板",
                     Panel::Faction => "显隐势力层面板",
+                    Panel::Region => "显隐区域面板",
                     Panel::Inspector => "显隐检视器面板",
                     Panel::Validation => "显隐校验面板",
                 },

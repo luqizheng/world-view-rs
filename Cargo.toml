@@ -42,6 +42,16 @@ zstd = "0.13"
 bevy = "0.19"
 bevy_egui = "0.42"
 
+# egui 图像解码器（SVG → 像素）。仅 wv-app 用，`app` feature 才会拉。
+# egui core 的 loader 链只有「取字节（DefaultBytesLoader）」和「颜色→纹理
+# （DefaultTextureLoader）」两级，`ImageLoader`（字节解码）默认为空——
+# 2026-10-15 实测：工具栏 SVG 全部渲染成红三角占位（egui 的加载失败图）。
+# 解码器只在官方配套 egui_extras 里（svg feature 走 resvg）。
+# AGENTS §9 审视：分层零风险（仅 wv-app 渲染层）；标准库无等价物，自己包
+# resvg 反而多一层胶水；不进任何序列化路径，YAML round-trip 无关。
+# 版本必须与 bevy_egui 内嵌的 egui（0.36）严格同轨，避免双 egui 实例。
+egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
+
 # 原生文件对话框（仅 wv-app 用，`app` feature 才会拉）。
 # 默认 backend 是 xdg-portal（Linux），跨平台开箱即用；
 # Windows / macOS 直接走 OS API，无需额外依赖。

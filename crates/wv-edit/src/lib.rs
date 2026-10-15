@@ -19,10 +19,10 @@ pub mod command;
 pub mod history;
 
 pub use command::{
-    AddBuildingCommand, AddMapCommand, AddMeasurementCommand, AddPlaceCommand,
+    AddBuildingCommand, AddMapCommand, AddMeasurementCommand, AddPlaceCommand, AddRegionCommand,
     AddStreetSegmentCommand, ClearMeasurementsCommand, DeleteBuildingCommand,
     DeleteStreetSegmentCommand, EditCommand, EditError, EditResult, RemoveMeasurementCommand,
-    SetMapOrientationCommand,
+    RemoveRegionCommand, SetMapOrientationCommand, UpdateRegionCommand,
 };
 pub use history::{History, Transaction};
 

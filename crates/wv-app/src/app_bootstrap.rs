@@ -157,8 +157,10 @@ pub fn run(config: AppConfig) {
         // 必须排在 bevy_egui 建上下文之后：否则首帧 ctx_mut() 对未初始化
         // 上下文调用会 panic（bevy_egui 0.32 lib.rs:437 的 expect）。
         // 字体重试式装配同口径：上下文就绪的首帧执行一次（fonts.rs 文档）。
+        // 图标 loader 同口径：bytes:// URI 没这两个 loader 全部变红三角。
         (
             crate::theme::fonts::setup_egui_fonts,
+            crate::ui::setup_egui_image_loaders,
             camera::poll_egui_wants_input,
         )
             .after(bevy_egui::EguiPreUpdateSet::InitContexts),
@@ -288,6 +290,7 @@ pub fn run(config: AppConfig) {
             ui::panel_situation,
             ui::panel_character,
             ui::panel_faction,
+            ui::panel_region,
             ui::panel_inspector,
             ui::panel_validation,
             // 「新建地图」对话框（CommandId::NewMap 打开；居中模态窗）。

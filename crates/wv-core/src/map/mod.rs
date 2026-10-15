@@ -442,13 +442,20 @@ pub struct GeometrySpan {
 /// `geometry: [x0, y0, x1, y1, ...]`（裸数组）直接被识别为 `Polygon`。
 /// 外部标签（默认）会要求 `geometry: !polygon [...]` 或 `geometry: { polygon: [...] }`，
 /// 不可读且对作者不友好。
+///
+/// **变体顺序约束**：`Polygon` 必须排在 `Points` 之前。`untagged` 按声明顺序逐个
+/// 尝试反序列化，而 `Polygon(Vec<f32>)` 和 `Points(Vec<f32>)` 在 serde 眼里是
+/// 相同类型（浮点序列）——谁在前谁就能匹配裸 YAML 数组。所有磁盘上的几何数据
+/// 语义上都是多边形，因此 `Polygon` 在前保证 YAML round-trip 正确。
+/// `Points` 仅在 Rust 代码中构造使用，不会出现在 YAML 里。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
 pub enum GeometryData {
-    /// 点列坐标，扁平存储 `[x0, y0, x1, y1, ...]`。
-    Points(Vec<f32>),
     /// 多边形环，扁平存储，首尾不重复。
     Polygon(Vec<f32>),
+    /// 点列坐标，扁平存储 `[x0, y0, x1, y1, ...]`。
+    /// 仅限 Rust 代码构造——YAML 裸数组会被 `Polygon` 优先匹配。
+    Points(Vec<f32>),
     /// 引用外部几何文件。
     Ref(String),
 }
@@ -466,6 +473,29 @@ impl GeometryData {
 pub mod coord;
 pub mod distance;
 pub mod unit;
+
+#[cfg(test)]
+mod geometry_data_tests {
+    use super::*;
+
+    #[test]
+    fn polygon_point_count_is_half_length() {
+        let g = GeometryData::Polygon(vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0]);
+        assert_eq!(g.point_count(), 3, "三对坐标 = 3 个顶点");
+    }
+
+    #[test]
+    fn points_point_count_is_half_length() {
+        let g = GeometryData::Points(vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(g.point_count(), 2, "两对坐标 = 2 个顶点");
+    }
+
+    #[test]
+    fn ref_point_count_is_zero() {
+        let g = GeometryData::Ref("geometry/ext.bin".into());
+        assert_eq!(g.point_count(), 0, "Ref 引用不计顶点");
+    }
+}
 
 #[cfg(test)]
 mod km_per_wu_tests {

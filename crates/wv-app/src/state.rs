@@ -507,6 +507,8 @@ pub enum Panel {
     Timeline,
     /// P-6 势力编辑。
     Faction,
+    /// P-6b 区域编辑（ADR-0017 §2.2）。
+    Region,
     /// P-7 事态登记（含事件登记入口）。
     Situation,
     /// P-8 校验面板。
@@ -523,7 +525,7 @@ pub enum Panel {
 
 impl Panel {
     /// 全部面板（菜单按此顺序列出）。
-    pub const ALL: [Panel; 11] = [
+    pub const ALL: [Panel; 12] = [
         Panel::MapTree,
         Panel::Layers,
         Panel::Brush,
@@ -533,6 +535,7 @@ impl Panel {
         Panel::Situation,
         Panel::Character,
         Panel::Faction,
+        Panel::Region,
         Panel::Inspector,
         Panel::Validation,
     ];
@@ -546,6 +549,7 @@ impl Panel {
             Panel::Inspector => "属性检查器",
             Panel::Timeline => "时间轴",
             Panel::Faction => "势力编辑",
+            Panel::Region => "区域编辑",
             Panel::Situation => "事态登记",
             Panel::Validation => "校验面板",
             Panel::Minimap => "小地图",
@@ -575,6 +579,7 @@ impl Panel {
             Panel::Minimap => [332.0, 56.0],
             Panel::Compass => [332.0, 56.0],
             Panel::Faction => [332.0, 368.0],
+            Panel::Region => [332.0, 680.0],
             Panel::Event => [652.0, 56.0],
             Panel::Situation => [652.0, 380.0],
             Panel::Validation => [972.0, 56.0],
@@ -599,6 +604,7 @@ impl Panel {
             Panel::Situation => [300.0, 308.0],
             Panel::Character => [280.0, 260.0],
             Panel::Faction => [280.0, 300.0],
+            Panel::Region => [280.0, 200.0],
             Panel::Inspector => [264.0, 240.0],
             Panel::Validation => [300.0, 240.0],
         }
@@ -613,6 +619,7 @@ impl Panel {
             Panel::Inspector => "inspector",
             Panel::Timeline => "timeline",
             Panel::Faction => "faction",
+            Panel::Region => "region",
             Panel::Situation => "situation",
             Panel::Validation => "validation",
             Panel::Minimap => "minimap",
@@ -634,6 +641,7 @@ impl Panel {
             Panel::Inspector => "◉",
             Panel::Timeline => "═",
             Panel::Faction => "◆",
+            Panel::Region => "⬡",
             Panel::Situation => "▣",
             Panel::Validation => "△",
             Panel::Minimap => "□",
@@ -647,7 +655,7 @@ impl Panel {
     pub fn data_opt(self) -> bool {
         matches!(
             self,
-            Panel::Brush | Panel::Compass | Panel::Layers | Panel::Validation
+            Panel::Brush | Panel::Compass | Panel::Layers | Panel::Region | Panel::Validation
         )
     }
 
