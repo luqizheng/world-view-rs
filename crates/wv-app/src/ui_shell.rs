@@ -48,6 +48,8 @@ use crate::theme::ui_tokens::{UiDensity, UiTheme};
 use crate::ui_command_palette::{CommandId, CommandPalette};
 use crate::ui_layout::LayoutFile;
 
+use crate::i18n::{parse as parse_locale, CurrentLocale};
+
 /// 把界面外壳的资源与系统注册进 `App`。
 ///
 /// 调用顺序：在 `EguiPlugin` 之后、UI 面板系统之前。
@@ -59,6 +61,9 @@ pub fn register(app: &mut App) {
         .init_resource::<DrillState>()
         .init_resource::<RecentProjects>()
         .init_resource::<LayoutFile>()
+        // ADR-0018：UI 文案语言；默认 `Locale::Zh`。`load_layout_on_project_open`
+        // 在切工程时回灌；`persist_layout_on_change` 在用户切换时落盘。
+        .init_resource::<CurrentLocale>()
         .init_resource::<OpenProjectTask>()
         // 「新建工程」对话框状态（欢迎页 / 分发器 / 目录轮询三方共用）。
         .init_resource::<crate::ui::NewProjectDialog>()
@@ -79,7 +84,7 @@ pub fn register(app: &mut App) {
             (
                 apply_pending_commands,
                 sync_drill_mirror,
-                load_map_theme_on_project_open,
+                load_layout_on_project_open,
                 persist_layout_on_change,
             ),
         )
@@ -1167,15 +1172,20 @@ fn apply_pending_commands(
 ///
 /// 位置的真相在 egui 的窗口记忆里（`Memory::area_rect`），不在 [`crate::ui_layout::default_layout`]。
 /// 拖动过程中不写盘（`is_using_pointer`），松手后的那一帧才落盘——避免 60 次/秒的文件写。
-/// 打开工程时读回 `ui-layout.yaml` 里的**地图主题**（ADR-0016）。
+/// 打开工程时读回 `ui-layout.yaml` 里**当前已落盘的 layout 偏好**。
 ///
-/// 只恢复 `map_theme`：面板几何由 egui 记忆按窗口接管，软件壳 theme/density
-/// 的读回是独立待决（README §12-32），本系统刻意不碰，避免把「修一个字段」
-/// 扩成「激活整套壳配置」。
-fn load_map_theme_on_project_open(
+/// 当前覆盖：
+/// - `map_theme`（ADR-0016：日间 / 暮色）
+/// - `language`（ADR-0018：zh / en，注入 `CurrentLocale`）
+///
+/// 面板几何由 egui 自带的窗口记忆按 panel id 接管，不属于本函数职责。
+/// 软件壳 theme / density 的读回是独立待决（README §12-32），本系统刻意不碰，
+/// 避免「修一个字段」扩成「激活整套壳配置」。
+fn load_layout_on_project_open(
     project: Res<WorldProjection>,
     mut layout: ResMut<LayoutFile>,
     mut view: ResMut<ViewState>,
+    mut current_loc: ResMut<CurrentLocale>,
     mut loaded_dir: Local<Option<String>>,
 ) {
     let Some(dir) = project.project_dir.clone() else {
@@ -1191,6 +1201,13 @@ fn load_map_theme_on_project_open(
     if let Some(t) = file.map_theme.as_deref().and_then(MapPalette::from_key) {
         view.map_palette = t;
     }
+    if let Some(lang) = file.language.as_deref() {
+        if let Some(loc) = parse_locale(lang) {
+            // V1：language 缺字段 / 不可解析 → 保留 CurrentLocale 当前值
+            // （project 没换就不该重置；project 第一次打开保持默认 Zh）。
+            current_loc.0 = loc;
+        }
+    }
     *layout = file;
     *loaded_dir = Some(dir);
 }
@@ -1202,6 +1219,7 @@ fn persist_layout_on_change(
     mut layout: ResMut<LayoutFile>,
     project: Res<WorldProjection>,
     view: Res<ViewState>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let Some(path) = crate::ui_layout::layout_path(project.project_dir.as_deref()) else {
         return;
@@ -1220,8 +1238,17 @@ fn persist_layout_on_change(
         UiDensity::Compact => "compact".into(),
     });
     file.map_theme = Some(view.map_palette.key().to_string());
+    file.language = Some(current_loc.0.as_str().to_string());
 
     let mut changed = false;
+    // 语言切换本身就让 layout 跟着变；与面板几何检测并入同一个 `changed` 累加器。
+    if file.language != layout.language
+        || file.theme != layout.theme
+        || file.density != layout.density
+        || file.map_theme != layout.map_theme
+    {
+        changed = true;
+    }
     for p in Panel::ALL {
         let id = bevy_egui::egui::Id::new(("wv_panel", p));
         let rect = ctx
