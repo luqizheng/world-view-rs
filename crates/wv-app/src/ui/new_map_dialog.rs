@@ -26,6 +26,8 @@ use crate::render::terrain_view::TerrainTexture;
 use crate::state::{map_level_label, DrillState, ProjectDiagnostics, WorldProjection};
 use crate::ui_shell::ShellNotice;
 
+use super::widgets::{DialogWindow, FieldInput, ToolButton};
+
 /// 新地图的**预填充**（2026-10-14 用户需求：新建时可选铺海还是铺陆）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NewMapPrefill {
@@ -165,22 +167,17 @@ pub fn new_map_dialog(
         return;
     };
     let frame = (time.elapsed_secs() * 60.0) as u64;
-    let mut open = dialog.open;
     let mut confirmed = false;
     let mut cancelled = false;
+    // 与 new_project_dialog 同口径：本函数**不**取 `shell_cfg` 入参——浮动面板
+    // chain 已经 18 个系统。再加 Res<UiShellConfig> 会破 tuple trait bounds。
+    // todo: chain 按层拆分后回填 `Res<UiShellConfig>`。
+    let shell = crate::ui::UiShell::new(&crate::theme::ui_theme::UiShellConfig::default());
+    let mut open = dialog.open;
 
-    egui::Window::new("新建地图")
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(false)
-        .default_width(380.0)
-        // 模态置顶（2026-10-14 用户要求）：egui 绘制序 Background < Middle <
-        // Foreground < Tooltip——浮动面板是 Middle，弹窗必须在 Foreground 才
-        // 压得住面板；Tooltip 在 Foreground 之上，窗内 on_hover_text 不受影响。
-        // 与 welcome_screen / startup_load 的先例同层。
-        .order(egui::Order::Foreground)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .show(ctx, |ui| {
+    DialogWindow::new("新建地图", &mut open)
+        .width(380.0)
+        .show(ctx, &shell, |ui| {
             let world = &projection.world;
             let first_map = world.maps.is_empty();
 
@@ -188,16 +185,12 @@ pub fn new_map_dialog(
                 ui.label("名称").on_hover_text(
                     "显示名，可中文；地图 ID（YAML/Git 里用的）会按 map_1、map_2… 自动生成",
                 );
-                let mut name = dialog.name.clone();
-                if ui
-                    .add(
-                        egui::TextEdit::singleline(&mut name)
-                            .desired_width(220.0)
-                            .hint_text("新地图"),
-                    )
+                if FieldInput::new(&mut dialog.name, "新地图")
+                    .min_size(egui::vec2(220.0, 28.0))
+                    .show(ui, &shell)
                     .changed()
                 {
-                    dialog.name = name.trim().to_owned();
+                    dialog.name = dialog.name.trim().to_owned();
                 }
             });
 
@@ -272,16 +265,16 @@ pub fn new_map_dialog(
             ui.separator();
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if ui.button("取消").clicked() {
+                ToolButton::text("取消", "").show(ui, &shell, || {
                     cancelled = true;
-                }
-                if ui.add(egui::Button::new("创建")).clicked() {
+                });
+                ToolButton::text("创建", "").show(ui, &shell, || {
                     confirmed = true;
-                }
+                });
             });
         });
 
-    // X（`open(&mut open)` 写回）与「取消」都走关；「创建」失败时留在框内。
+    // X（`DialogWindow` 写回 `open`）与「取消」都走关；「创建」失败时留在框内。
     dialog.open = open && !cancelled;
     if !dialog.open {
         return;
