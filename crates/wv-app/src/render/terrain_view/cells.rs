@@ -123,6 +123,59 @@ fn shade_coast(_data: &TerrainData, kind: u8, _pal: &PaletteColors) -> Color {
 }
 
 // ---------------------------------------------------------------------------
+// 水域按高度的渐变（2026-10-15，手绘地图呈现改进 #1）
+// ---------------------------------------------------------------------------
+
+/// 高度域 → 颜色 lerp 系数 [0, 1]：
+/// 0 = 海平面（最浅），1 = 深海（最暗）。
+///
+/// 端口区间按 civ-atlas 的 `sea` 频谱：近岸 0 段 / 浅海 −200 / 大陆坡拐点
+/// −1500 / 老洋底 −3000。钳到 [−3500, 0] 之外 → 0 或 1。
+fn water_depth_t(height: i16) -> f32 {
+    // 把 i16 高度转成「深度」（正值 = 越深）。
+    let depth = (-height as f32).clamp(0.0, 3500.0);
+    depth / 3500.0
+}
+
+/// 水域按高度的渐变色——lerp `water_shallow → water_deep`，并对深色带
+/// 提一点蓝饱和（海沟观感）。所有视图模式下的水域**内部格**都走这条；
+/// 边界格的双线性高度采样会通过 `sample_vector_flat` 拿到亚格高度，
+/// 但单格渲染阶段我们只能用该格的 `cell.height`（一格一种颜色，与 civ-atlas
+/// 同样离散），从远处看仍是渐变观感。
+///
+/// 海岸/轮廓模式不进这里（`shade_coast` 单独出口）。
+fn water_shade_at(height: i16, pal: &PaletteColors) -> Color {
+    let t = water_depth_t(height);
+    let shallow = pal.core_terrain(1); // water_shallow
+    let deep = pal.core_terrain(0); // water_deep
+    let (Color::Srgba(a), Color::Srgba(b)) = (shallow, deep) else {
+        return shallow;
+    };
+    // 主体 lerp：sRGB 空间线性插值足够（手绘感是色块而非 PBR）。
+    let base = Color::srgb(
+        a.red + (b.red - a.red) * t,
+        a.green + (b.green - a.green) * t,
+        a.blue + (b.blue - a.blue) * t,
+    );
+    // 深海带（t > 0.7）微微拉向冷蓝，模拟水彩的"水越深越冷"——颜色令牌里
+    // 已有现成青蓝色（label_fill halo，soften_toward 同族），调一点即可。
+    if t > 0.7 {
+        let k = (t - 0.7) / 0.3; // 0..1 over the deep band
+        let Color::Srgba(c) = base else {
+            return base;
+        };
+        // 冷偏：把红色通道压一点，蓝色补一点。Srgba 直接调，简单可控。
+        Color::srgb(
+            (c.red * (1.0 - 0.18 * k)).clamp(0.0, 1.0),
+            (c.green * (1.0 - 0.06 * k)).clamp(0.0, 1.0),
+            (c.blue + 0.10 * k).clamp(0.0, 1.0),
+        )
+    } else {
+        base
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 方案 A：边界扰动 + 超采样（抗锯齿地形边界）
 // ---------------------------------------------------------------------------
 
@@ -558,6 +611,11 @@ impl<'a> CellRenderer<'a> {
             }
             // 纯色回退（无图集 / 缺项）：整格平涂。
             let mut color = (self.shader)(self.data, kind, self.palette);
+            // 水域按高度渐变（手绘地图 #1）：kind 0/1 的内部格从单色水变
+            // height 调度的水彩带；轮廓图模式不进这里。
+            if is_water_kind(kind) && self.mode != ViewMode::Coastline {
+                color = water_shade_at(cell.height, self.palette);
+            }
             if self.soften {
                 color = self.palette.soften_color(color);
             }
@@ -769,7 +827,7 @@ mod tests {
             height: 3,
             cells: vec![
                 wv_core::terrain::TerrainCellData {
-                    height: -100,
+                    height: -3500,
                     kind: 0,
                 };
                 9
@@ -782,7 +840,10 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
         );
-        let Color::Srgba(deep) = colors::core_terrain(0) else {
+        // 深水渐变（手绘地图 #1）启用后：深水中心像素 = water_shade_at(−3500)，
+        // 不再是 core_terrain(0) 原色。统一从 water_shade_at 取色源，避免硬编码颜色。
+        let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
+        let Color::Srgba(deep) = water_shade_at(-3500, pal) else {
             unreachable!()
         };
         assert!(pixel_near(&img, 4, 4, deep));
@@ -900,7 +961,10 @@ mod tests {
         let py = (4 * res + res / 2) as usize;
         let o = (py * w as usize + px) * 4;
         let data_ref = img_after.data.as_ref().unwrap();
-        let Color::Srgba(deep) = colors::core_terrain(0) else {
+        // 海色渐变（手绘地图 #1）后：中心格实际渲染色 = water_shade_at(−40)，
+        // 不再等于 core_terrain(0) 原色。从 water_shade_at 取色源，避免硬编码。
+        let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
+        let Color::Srgba(deep) = water_shade_at(-40, pal) else {
             unreachable!()
         };
         let r = data_ref[o] as f32 / 255.0;
@@ -995,5 +1059,76 @@ mod tests {
             .map(|d| d.len())
             .expect("image data 应非空");
         assert!(data_len > 0, "replace 后 data 仍应非空，实得 {data_len}");
+    }
+
+    // -----------------------------------------------------------------------
+    // 水域高度渐变（手绘地图呈现 #1，2026-10-15）
+    // -----------------------------------------------------------------------
+
+    use super::water_depth_t;
+    use super::water_shade_at;
+
+    /// 深度系数端点 + 钳制：海平面 0、深海 −3500 → 1；越界 → 钳。
+    #[test]
+    fn water_depth_t_endpoints_and_clamps() {
+        assert_eq!(water_depth_t(0), 0.0, "海平面应为 0");
+        assert!(
+            (water_depth_t(-3500) - 1.0).abs() < 1e-6,
+            "−3500 m 应为 1.0（满深）"
+        );
+        assert_eq!(water_depth_t(-5000), 1.0, "更深应钳到 1.0");
+        assert_eq!(water_depth_t(5000), 0.0, "陆上高度应钳到 0.0");
+        // 中点：−1750 → 0.5。
+        let mid = water_depth_t(-1750);
+        assert!((mid - 0.5).abs() < 1e-6, "−1750 m 应为 0.5，实得 {mid}");
+    }
+
+    /// 渐变色：海平面 = water_shallow，−3500 = water_deep。中间深度居中。
+    #[test]
+    fn water_shade_at_lerps_between_shallow_and_deep() {
+        let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
+        let shallow = pal.core_terrain(1);
+        let deep = pal.core_terrain(0);
+        let (Color::Srgba(s), Color::Srgba(d)) = (shallow, deep) else {
+            panic!("应为 Srgba")
+        };
+        let at_zero = water_shade_at(0, pal);
+        let Color::Srgba(z) = at_zero else { panic!() };
+        assert!(
+            (z.red - s.red).abs() < 1e-4 && (z.green - s.green).abs() < 1e-4,
+            "海平面应等于 water_shallow"
+        );
+        let at_max = water_shade_at(-3500, pal);
+        let Color::Srgba(m) = at_max else { panic!() };
+        // 深色带（t>0.7）会拉冷：R/G 略低、B 略高于 deep 基色。
+        assert!(
+            m.red < d.red + 0.02 && m.blue > d.blue - 0.02,
+            "深海应接近 water_deep；实得 r={} b={}",
+            m.red,
+            m.blue
+        );
+    }
+
+    /// 深海带冷偏：t=1 时蓝色通道比 lerp 终值更亮（冷偏生效）。
+    #[test]
+    fn water_shade_at_deep_band_gets_cooler_tint() {
+        let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
+        let at_70pct = water_shade_at(-2450, pal); // t = 0.7
+        let at_100pct = water_shade_at(-3500, pal); // t = 1.0
+        let (Color::Srgba(a), Color::Srgba(b)) = (at_70pct, at_100pct) else {
+            panic!()
+        };
+        assert!(
+            b.blue > a.blue,
+            "深海带越深越冷（蓝更高），实得 t=0.7 b={} t=1.0 b={}",
+            a.blue,
+            b.blue
+        );
+        assert!(
+            b.red < a.red,
+            "深海带越深红色越压，实得 t=0.7 r={} t=1.0 r={}",
+            a.red,
+            b.red
+        );
     }
 }
