@@ -389,6 +389,17 @@ pub const ICON_COMMAND: egui::ImageSource<'static> =
 pub const ICON_MAP_PIN: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/map-pin.svg");
 
+// ── 欢迎页（无工程锁）图标：Figma `Zw4tonExV5lIY_EJamjPRw` ────────────────
+//
+// 入口图标——蓝底圆角方块用 ICON_GLOBE，CTA 用 ICON_PLUS（主）/ ICON_FOLDER_OPEN（次），
+// 最近工程用 ICON_MAP（已有）。同样 `stroke="currentColor"`，由 tint 注入主题色。
+pub const ICON_GLOBE: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/globe.svg");
+pub const ICON_PLUS: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/plus.svg");
+pub const ICON_FOLDER_OPEN: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/folder-open.svg");
+
 /// 按钮内容三形态。
 ///
 /// 新增图标 = 放一个 SVG 进 `assets/ui/tool_icons/` + 加一个 `ICON_*` 常量，
