@@ -19,7 +19,7 @@ panels:
     width: 342.90625
     height: 825.8125
     collapsed: false
-    visible: true
+    visible: false
   event:
     x: 652.0
     y: 56.0
@@ -78,3 +78,4 @@ panels:
     visible: false
 theme: dark
 density: cozy
+map_theme: daylight
