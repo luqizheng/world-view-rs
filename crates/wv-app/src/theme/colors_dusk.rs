@@ -67,6 +67,11 @@ pub const DUSK_LABEL_FILL: Color = hex(0xC9BBA8);
 /// - water（海名）= 暗青（暗纸上的青蓝，亮于海面同族）
 pub const DUSK_LABEL_REGION: Color = hex(0xD6C9B6);
 pub const DUSK_LABEL_WATER: Color = hex(0x5A7A88);
+/// 雪格双调（手绘地图 #3）—— 暮色版：
+/// - 雪 highlight = 暗纸上的近白（最亮档，比日间偏冷一点）
+/// - 雪 shadow = 深青灰（暗纸冷阴影，比日间深一档）
+pub const DUSK_SNOW_HIGHLIGHT: Color = hex(0xE5DDC8);
+pub const DUSK_SNOW_SHADOW: Color = hex(0x6F7C88);
 /// 文字晕边 = 暮色纸面深底。
 pub const DUSK_HALO_FILL: Color = hex(0x3A342E);
 /// 等值线 / 海岸线墨色：暗纸上的浅墨 推导·待复核。

@@ -108,6 +108,10 @@ pub struct PaletteColors {
     pub label_place: Color,
     /// 标注字重梯度：water（海名）= 青蓝（civ-atlas 海名色族）。
     pub label_water: Color,
+    /// 雪高光色（手绘地图 #3）—— 比 `core_terrain[7]` 略亮，近白。
+    pub snow_highlight: Color,
+    /// 雪冷阴影色（手绘地图 #3）—— 冷蓝灰，叠在 high-altitude 雪格上。
+    pub snow_shadow: Color,
     /// 文字晕边填充（= 纸面色族）。
     pub halo_fill: Color,
     /// 等值线 / 海岸线墨色。
@@ -171,6 +175,8 @@ impl PaletteColors {
         label_region: colors::LABEL_REGION,
         label_place: colors::LABEL_PLACE,
         label_water: colors::LABEL_WATER,
+        snow_highlight: colors::SNOW_HIGHLIGHT,
+        snow_shadow: colors::SNOW_SHADOW,
         halo_fill: colors::HALO_FILL,
         isoline_ink: colors::ISOLINE_INK,
         grid_line: colors::GRID_LINE,
@@ -197,6 +203,8 @@ impl PaletteColors {
         label_region: colors_dusk::DUSK_LABEL_REGION,
         label_place: colors_dusk::DUSK_LABEL_FILL, // place 复用 LABEL_FILL（视觉一致）
         label_water: colors_dusk::DUSK_LABEL_WATER,
+        snow_highlight: colors_dusk::DUSK_SNOW_HIGHLIGHT,
+        snow_shadow: colors_dusk::DUSK_SNOW_SHADOW,
         halo_fill: colors_dusk::DUSK_HALO_FILL,
         isoline_ink: colors_dusk::DUSK_ISOLINE_INK,
         grid_line: colors_dusk::DUSK_GRID_LINE,

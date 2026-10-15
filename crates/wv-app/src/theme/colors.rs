@@ -53,7 +53,7 @@ pub const CORE_TERRAIN: [Color; 10] = [
     hex(0x93A684), // 4 core.forest       森林（草色同族压深）待复核
     hex(0xDCCBAF), // 5 core.hill         丘陵 / 荒原 待复核
     hex(0xB7A388), // 6 core.mountain     山地（与主干道官道棕同族）待复核
-    hex(0xF2EAD8), // 7 core.snow         雪线 / 冰原（= 纸面色）待复核
+    hex(0xF8F4EA), // 7 core.snow         雪线 / 冰原（提亮一档，与纸面可辨；2026-10-15 #3）
     hex(0x9AA88C), // 8 core.marsh        沼泽 待复核
     hex(0x735D48), // 9 core.road         道路 / 区域分界（= 城墙墨棕）用户定稿
 ];
@@ -126,6 +126,24 @@ pub const LABEL_REGION: Color = hex(0x382F27); // 国/大区：最深的褐墨
 pub const LABEL_PLACE: Color = hex(0x4A3F35); // 城/POI：原 label.fill（不变）
 /// 海域名：青蓝（civ-atlas `INK_CSS` 同族偏青）。暮色版另见 colors_dusk。
 pub const LABEL_WATER: Color = hex(0x3F5B6A);
+
+// ---------------------------------------------------------------------------
+// 雪色双调（手绘地图呈现 #3，2026-10-15）
+// ---------------------------------------------------------------------------
+
+/// 雪格"亮面"——比 `core.snow` 更亮一档、近白带暖（高光面、迎光坡）。
+/// civ-atlas `SNOW_PAINT` 思路。手绘地图 #3：让雪原从一片纸面中跳出来。
+pub const SNOW_HIGHLIGHT: Color = hex(0xFBF7EB);
+/// 雪格"冷阴影"——冷蓝灰，叠在高海拔/背光雪格上模拟阴影（civ-atlas
+/// `SNOW_SHADOW #AEBBC3` 思路）。`cells.rs` 在 RealTerrain 模式下对
+/// kind=7 的格按高度混合叠这个色。
+pub const SNOW_SHADOW: Color = hex(0xAEBBC3);
+/// 雪阴影高度阈值：海拔高于此（米）开始叠冷蓝灰阴影；阈值以下保持雪色基底。
+/// 默认 2500 m——主线国家的高山带永久雪线附近。
+pub const SNOW_SHADOW_MIN_HEIGHT: i16 = 2500;
+/// 雪阴影强度：海拔每超过阈值 1000 m 多叠多少冷蓝灰（0..1 的 lerp 系数）。
+/// 0.0 = 全不叠（雪原是平的），1.0 = 高海拔全冷蓝。
+pub const SNOW_SHADOW_PER_KM: f32 = 0.35;
 
 /// 强调色（`accent.*`）。
 pub const ACCENT_SELECT: Color = hex(0xF2C14E); // 选中高亮（金）

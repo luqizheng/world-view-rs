@@ -190,6 +190,36 @@ fn hash01(xi: i64, yi: i64, seed: u64) -> f32 {
     (h & 0xFFFF_FFFF) as f32 / u32::MAX as f32
 }
 
+// ---------------------------------------------------------------------------
+// 雪格双调（手绘地图呈现 #3，2026-10-15）
+// ---------------------------------------------------------------------------
+
+/// 雪阴影强度系数 [0, 1]：
+/// - 海拔 ≤ `SNOW_SHADOW_MIN_HEIGHT` → 0（雪原是平的，不叠阴影）
+/// - 海拔每超 1 km 多 0.35，封顶 1.0
+///
+/// 端口 civ-atlas 的 `SNOW_SHADOW` 思路——雪格按海拔叠冷蓝灰，越高越冷。
+fn snow_shadow_t(height: i16) -> f32 {
+    let over = (height as f32 - colors::SNOW_SHADOW_MIN_HEIGHT as f32).max(0.0);
+    let t = over / 1000.0 * colors::SNOW_SHADOW_PER_KM;
+    t.clamp(0.0, 1.0)
+}
+
+/// 雪格按高度叠冷蓝灰阴影（手绘地图 #3）。
+/// 高度低于 `SNOW_SHADOW_MIN_HEIGHT` → 走 `snow_highlight`（比 core_terrain[7] 略亮的近白），
+/// 高于阈值则按 `snow_shadow_t` 在 highlight ↔ shadow 之间 lerp。
+fn snow_shade_at(height: i16, pal: &PaletteColors) -> Color {
+    let t = snow_shadow_t(height);
+    let (Color::Srgba(h), Color::Srgba(s)) = (pal.snow_highlight, pal.snow_shadow) else {
+        return pal.snow_highlight;
+    };
+    Color::srgb(
+        h.red + (s.red - h.red) * t,
+        h.green + (s.green - h.green) * t,
+        h.blue + (s.blue - h.blue) * t,
+    )
+}
+
 /// 平滑 value noise（双线性 + smoothstep），输出 `[-1,1]`。
 fn vnoise(x: f32, y: f32, freq: f32, seed: u64) -> f32 {
     let (fx, fy) = (x * freq, y * freq);
@@ -616,6 +646,11 @@ impl<'a> CellRenderer<'a> {
             if is_water_kind(kind) && self.mode != ViewMode::Coastline {
                 color = water_shade_at(cell.height, self.palette);
             }
+            // 雪格双调（手绘地图 #3）：kind=7 全部走 snow_shade_at（RealTerrain
+            // 模式之外也给 highlight 视觉——海报感的"近白雪"）。轮廓图模式不动。
+            if kind == 7 && self.mode != ViewMode::Coastline {
+                color = snow_shade_at(cell.height, self.palette);
+            }
             if self.soften {
                 color = self.palette.soften_color(color);
             }
@@ -776,6 +811,63 @@ mod tests {
         (data[o] as f32 / 255.0 - target.red).abs() < 0.02
             && (data[o + 1] as f32 / 255.0 - target.green).abs() < 0.02
             && (data[o + 2] as f32 / 255.0 - target.blue).abs() < 0.02
+    }
+
+    // -----------------------------------------------------------------------
+    // 雪格双调（手绘地图呈现 #3，2026-10-15）
+    // -----------------------------------------------------------------------
+
+    use super::snow_shade_at;
+    use super::snow_shadow_t;
+
+    /// 雪阴影强度阈值：阈值以下为 0，以上按 km 比例，封顶 1。
+    #[test]
+    fn snow_shadow_t_threshold_and_clamp() {
+        assert_eq!(snow_shadow_t(0), 0.0, "低海拔无阴影");
+        assert_eq!(
+            snow_shadow_t(crate::theme::colors::SNOW_SHADOW_MIN_HEIGHT),
+            0.0,
+            "恰阈值处无阴影"
+        );
+        let t = snow_shadow_t(crate::theme::colors::SNOW_SHADOW_MIN_HEIGHT + 1000);
+        assert!(
+            (t - crate::theme::colors::SNOW_SHADOW_PER_KM).abs() < 1e-6,
+            "+1 km 应为 per_km，实得 {t}"
+        );
+        assert_eq!(snow_shadow_t(i16::MAX), 1.0, "高海拔应封顶 1.0");
+    }
+
+    /// 雪格 highlight：低海拔雪 = 近白雪（与 core_terrain[7] 提亮一档同族但更亮）。
+    #[test]
+    fn snow_shade_at_low_elevation_is_highlight() {
+        let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
+        let Color::Srgba(h) = snow_shade_at(1000, pal) else {
+            panic!()
+        };
+        let Color::Srgba(b) = pal.core_terrain(7) else {
+            panic!()
+        };
+        let lum_h = (h.red + h.green + h.blue) / 3.0;
+        let lum_b = (b.red + b.green + b.blue) / 3.0;
+        assert!(
+            lum_h > lum_b,
+            "highlight({lum_h}) 应比 core.snow({lum_b}) 亮"
+        );
+    }
+
+    /// 雪格 shadow：高海拔雪 = 冷蓝灰（蓝 > 红），与 highlight 冷暖对调。
+    #[test]
+    fn snow_shade_at_high_elevation_is_cool_gray() {
+        let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
+        let Color::Srgba(s) = snow_shade_at(6000, pal) else {
+            panic!()
+        };
+        assert!(
+            s.blue > s.red,
+            "高海拔雪阴影应偏冷（蓝 > 红），实得 r={} b={}",
+            s.red,
+            s.blue
+        );
     }
 
     /// 水陆填充边由双线性高度决定，而非类型格缘（D2 的招牌手算案例）：
