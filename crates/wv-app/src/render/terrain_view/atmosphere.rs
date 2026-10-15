@@ -7,6 +7,10 @@
 //!     **不触发 CPU 纹理重建**（那是 O(格数) 的整图重烘，雾是逐帧连续量）；
 //!   - **纸张噪点**（Z=0.5）：世界锁定的程序化噪声平铺，模拟旧纸纤维
 //!     （用户渲染规则 2）。UV 按世界坐标计算，随图平移缩放——如真实纸张。
+//! - **编辑态免雾**（2026-10-15 用户反馈）：笔刷开着时雾霭整体退场——雾是
+//!   **浏览**氛围，而编辑态作者最需要看清的恰恰是自己的笔迹（填充 + 描边都
+//!   压在雾下，满雾时深褐墨线被洗到 ΔRGB≈10 的浅灰褐，远观等于没画）。
+//!   纸张噪点不退：α0.035 的纤维不参与可见性问题，且纸感属于编辑态也是纸。
 //!
 //! ## 边界（不做什么）
 //! - **不改地形纹理内容**——那是 [`super::cells`]（烘焙路径）+ `terrain_soften`
@@ -21,7 +25,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::render::layer_frame::LayerFrame;
-use crate::state::{GridConfig, ViewMode, ViewState};
+use crate::state::{BrushState, GridConfig, ViewMode, ViewState};
 use crate::theme::palette;
 
 use super::terrain_texture::TerrainTexture;
@@ -51,6 +55,19 @@ pub const GRAIN_Z: f32 = 0.5;
 pub fn veil_alpha(scale: f32) -> f32 {
     let t = ((scale - VEIL_NEAR_SCALE) / (VEIL_FAR_SCALE - VEIL_NEAR_SCALE)).clamp(0.0, 1.0);
     VEIL_MAX_ALPHA * t
+}
+
+/// 雾霭的最终 alpha：**编辑态免雾**（2026-10-15 用户裁定）。
+///
+/// 笔刷开着时恒 0——不是减淡。半截雾仍会把刚画的低对比填充（古舆图淡化
+/// 之后本就贴近纸面）洗到不可辨，「看清笔迹」没有折中可言；浏览氛围在
+/// 编辑态让位。噪点层不受此开关影响（见模块文档）。
+pub fn veil_alpha_for(scale: f32, brush_enabled: bool) -> f32 {
+    if brush_enabled {
+        0.0
+    } else {
+        veil_alpha(scale)
+    }
 }
 
 /// 确定性生成纸张噪点图：灰度 112..=144 微扰 + 均匀低 alpha 通道。
@@ -164,6 +181,7 @@ pub fn sync_atmosphere(
     grid: Res<GridConfig>,
     tex: Res<TerrainTexture>,
     layers: Res<LayerFrame>,
+    brush: Res<BrushState>,
     mut atm: ResMut<AtmosphereLayer>,
 ) {
     // GoogleMap 有完整自有观感、Coastline 是黑底分析视图——都不铺纸面氛围。
@@ -217,11 +235,14 @@ pub fn sync_atmosphere(
         atm.grain = Some((grain, grain_mesh, grain_mat));
         atm.key = Some(key);
     }
-    // 雾霭 alpha 逐帧连续更新（缩放的空气感）；颜色随主题纸面（ADR-0016）。
+    // 雾霭 alpha 逐帧连续更新（缩放的空气感 + 编辑态免雾）；颜色随主题纸面
+    //（ADR-0016）。免雾只动 alpha 不拆实体：笔刷一关，下一帧雾即回来。
     let pal = palette::colors(view.map_palette);
     if let Some((_, _, mat)) = &atm.veil {
         if let Some(mut m) = materials.get_mut(mat) {
-            m.color = pal.soften_toward.with_alpha(veil_alpha(view.scale));
+            m.color = pal
+                .soften_toward
+                .with_alpha(veil_alpha_for(view.scale, brush.enabled));
         }
     }
 }
@@ -242,6 +263,24 @@ mod tests {
             (mid - VEIL_MAX_ALPHA / 2.0).abs() < 1e-6,
             "中点应线性一半：got {mid}"
         );
+    }
+
+    /// 编辑态免雾（2026-10-15）：笔刷开着雾恒 0——再远也不许把笔迹洗掉；
+    /// 笔刷关着则与纯缩放曲线逐点一致（开关只该切雾，不该改曲线形状）。
+    #[test]
+    fn brush_enabled_disables_the_veil_at_every_zoom() {
+        for scale in [0.1, VEIL_NEAR_SCALE, 2.0, VEIL_FAR_SCALE, 99.0] {
+            assert_eq!(
+                veil_alpha_for(scale, true),
+                0.0,
+                "scale={scale} 编辑态应无雾"
+            );
+            assert_eq!(
+                veil_alpha_for(scale, false),
+                veil_alpha(scale),
+                "scale={scale} 浏览态应走原曲线"
+            );
+        }
     }
 
     /// 噪点确定性：同种子字节一致、异种子不同（跨帧闪变即此缺陷）。

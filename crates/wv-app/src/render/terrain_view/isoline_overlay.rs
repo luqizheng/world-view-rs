@@ -78,10 +78,23 @@ impl IsolineOverlay {
         }
         self.key = None;
     }
+
+    /// 「建过一次且结论是无几何」：实体与 mesh 皆空但键还在。整图同类型
+    /// （新建地图的常态）没有海岸线 / 类型边界，叠加层**合法地无实体**；
+    /// 不把这个稳态记进键，守卫 `entity.is_some()` 会撞空、每帧全图
+    /// marching-squares 重算。
+    fn empty_settled(&self) -> bool {
+        self.entity.is_none() && self.mesh.is_none() && self.key.is_some()
+    }
 }
 
-/// DP 容差的 LOD 分档（plan Q8：远 0.5 格 / 中 0.25 / 近 0.125），阈值与
-/// chunk mip 选级（`select_mip` 的 `[0.5, 0.25]`）同口径。
+/// DP 容差的 LOD 分档（plan Q8：远 0.5 格 / 中 0.25 / 近 0.125）。
+///
+/// ⚠️ 2026-10-15 侧记：本分档与旧 chunk mip 阈值 `[0.5, 0.25]` 同源、疑似同款
+/// 「scale 大 = 近」方向反装（按现行 world-per-px 口径，近观 scale<0.25 反而
+/// 拿最粗容差 0.5，远观恒拿最细 0.125）。mip 已按 texel 屏幕尺寸修正
+/// （`terrain_chunks::select_mip`），本分档**暂未动**——改动会改变描边观感，
+/// 待用户拍板后另行处理。
 fn lod_bucket(scale: f32) -> u8 {
     if scale >= 0.5 {
         0
@@ -132,7 +145,7 @@ pub fn sync_isoline_overlay(
     };
     let structural_same = overlay.key.as_ref() == Some(&key);
     let dirty_pending = tex.chunks_dirty.is_some();
-    if structural_same && !dirty_pending && overlay.entity.is_some() {
+    if structural_same && !dirty_pending && (overlay.entity.is_some() || overlay.empty_settled()) {
         // 结构没变也可能只是图层绑定变了（作者改 opacity/z）：就地补丁，
         // 不重算派生几何。
         if layers.is_changed() {
@@ -183,7 +196,14 @@ pub fn sync_isoline_overlay(
         }
     }
 
-    let mesh = build_stroke_mesh(&strokes, grid.raster_origin, grid.cell_size);
+    let Some(mesh) = build_stroke_mesh(&strokes, grid.raster_origin, grid.cell_size) else {
+        // 空几何（无等值线）也是稳态：0 顶点 mesh 会踩 bevy #24874
+        // （MeshAllocator 误报 Use-after-free），退场不插；键记为「空已定」，
+        // 下一帧走 `empty_settled` 快路，不重算。
+        overlay.despawn(&mut commands);
+        overlay.key = Some(key);
+        return;
+    };
     let handle = meshes.add(mesh);
     let pal = palette::colors(view.map_palette);
     let material = overlay
@@ -233,11 +253,16 @@ fn apply_material_alpha(
 /// 每链自带半宽（`chains` 第三元）：海岸线细、类型边界粗。
 /// 不做圆头/斜头连接：同色 overdraw 下外扩接缝不可见，省掉逐转角的扇形开销。
 /// `grid_lines`（编辑态逐格网格）复用同一展开器。
+///
+/// 返回 `None` 表示**什么都没挤出来**（链表为空 / 全是短于 2 点或零长的退化
+/// 链）。调用方必须以退场响应 `None`——绝不能把 0 顶点 mesh 插进 `Assets`：
+/// MeshAllocator 对空 mesh 跳过分配、拷贝阶段却无条件读取，bevy #24874 会
+/// 误报 `Use-after-free`。
 pub(crate) fn build_stroke_mesh(
     chains: &[(Vec<wv_terrain::isoline::Pt>, bool, f32)],
     origin: Vec2,
     cell_size: f32,
-) -> Mesh {
+) -> Option<Mesh> {
     let to_world = |p: wv_terrain::isoline::Pt| origin + Vec2::new(p.x, p.y) * cell_size;
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
@@ -268,6 +293,9 @@ pub(crate) fn build_stroke_mesh(
             indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
         }
     }
+    if positions.is_empty() {
+        return None;
+    }
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
@@ -277,7 +305,7 @@ pub(crate) fn build_stroke_mesh(
         positions,
     );
     mesh.insert_indices(Indices::U32(indices));
-    mesh
+    Some(mesh)
 }
 
 #[cfg(test)]
@@ -300,11 +328,19 @@ mod tests {
         assert!((dp_tol_for(0.25) - 0.25).abs() < 1e-6);
     }
 
+    /// 全退化链（空表 / 单点链）→ 无 mesh：渲染层不得插 0 顶点网格
+    /// （bevy #24874 误报 Use-after-free），调用方以退场响应 `None`。
+    #[test]
+    fn stroke_mesh_degenerate_chains_produce_no_mesh() {
+        assert!(build_stroke_mesh(&[], Vec2::ZERO, 1.0).is_none());
+        assert!(build_stroke_mesh(&[(vec![p(0.0, 0.0)], false, 0.5)], Vec2::ZERO, 1.0).is_none());
+    }
+
     /// 两点开链 → 一段四边形：4 顶点 6 索引，端点外扩半宽。
     #[test]
     fn stroke_mesh_two_point_chain_yields_one_quad() {
         let chains = vec![(vec![p(0.0, 0.0), p(4.0, 0.0)], false, 0.5)];
-        let mesh = build_stroke_mesh(&chains, Vec2::ZERO, 1.0);
+        let mesh = build_stroke_mesh(&chains, Vec2::ZERO, 1.0).expect("非退化链应有 mesh");
         let pos = mesh
             .attribute(MeshVertexAttribute::new(
                 "Vertex_Position",
@@ -342,7 +378,7 @@ mod tests {
     #[test]
     fn stroke_mesh_closed_chain_draws_closing_edge() {
         let chains = vec![(vec![p(0.0, 0.0), p(4.0, 0.0), p(2.0, 3.0)], true, 0.5)];
-        let mesh = build_stroke_mesh(&chains, Vec2::ZERO, 1.0);
+        let mesh = build_stroke_mesh(&chains, Vec2::ZERO, 1.0).expect("非退化链应有 mesh");
         assert_eq!(mesh.indices().expect("索引应存在").len(), 18);
     }
 
@@ -443,7 +479,7 @@ mod tests {
                 }
             }
         }
-        let mesh = build_stroke_mesh(&strokes, Vec2::ZERO, 20.0);
+        let mesh = build_stroke_mesh(&strokes, Vec2::ZERO, 20.0).expect("4×4 陆块应有 mesh");
         let idx = mesh.indices().expect("索引应存在").len();
         assert!(idx > 0, "4×4 陆块的海岸线与类型边界不应为空");
         assert_eq!(idx % 3, 0, "三角网索引应是 3 的倍数");

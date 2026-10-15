@@ -20,11 +20,17 @@
 //! - **分块**（3a）：把 `tex.size` 按 `CHUNK_SIZE = 256` 逻辑格切块；
 //!   对 512² 地形 = 4 块，对 1024² = 16 块，对 4096² = 256 块。
 //! - **mip 链**（3b）：每块 spawn 时一次性生成 3 级 mip（逐级盒式 2×2 降采样），
-//!   按 `view.scale` 阈值选：
-//!   - `scale ≥ 0.5`（近看/正常）：mip0（原分辨率，锐利）；
-//!   - `scale < 0.5`（远观）：mip1（半分辨率，平滑）；
-//!   - `scale < 0.25`（更远观）：mip2（四分之一分辨率，更平滑）。
+//!   按 **mip0 单 texel 的屏幕尺寸**选级（[`select_mip`]）：
+//!   - texel ≥ 1px（放大 / 1:1）：mip0（原分辨率，锐利）；
+//!   - 缩小到 texel < 1px：降 mip1 / mip2（盒式降采样代替点采样，消摩尔纹——
+//!     nearest 直缩 4× 时 3/4 的 texel 被随机丢弃，低对比填充会散成噪点）。
 //!     切换只换材质的纹理句柄，几何不动。
+//!
+//!   ⚠️ 2026-10-15 修正：旧实现按 `view.scale` 常数阈值 `[0.5, 0.25]` 选级，
+//!   是按「scale 大 = 近看」的旧语义写的，与现行「scale = 世界单位/像素」
+//!   （ADR-0008 §8，相机 / 雾霭 / 线宽同一口径）**方向相反**——远观该降采样时
+//!   恒用 mip0，近看放大时反而误用模糊的 mip1/mip2。现按 texel 实际屏幕尺寸
+//!   选级，阈值随 `cell_size / res` 自然缩放，不再依赖语义记忆。
 //! - **视口拣选**（3c）：每帧根据 `view.camera_center` + `view.scale` + 窗口大小
 //!   算视口在世界空间的 AABB，**只 spawn 视口内 + 1 块边距**的块。视口外 despawn。
 //! - **脏矩形驱动**（3e）：稳态**不拷任何像素**——只有 `tex.chunks_dirty`
@@ -64,8 +70,6 @@ use crate::state::{GridConfig, ViewState};
 const CHUNK_SIZE: u32 = 256;
 /// mip 链级数（mip0 + mip1 + mip2）。3 级 = 256 / 128 / 64。
 const MIP_LEVELS: u32 = 3;
-/// mip 切换阈值（`view.scale`）。
-const MIP_LOD_THRESHOLDS: [f32; 2] = [0.5, 0.25];
 /// 视口外的"边距块数"——避免边缘瞬移/锯齿。
 const VIEWPORT_MARGIN_CHUNKS: u32 = 1;
 /// 地形在 Z 轴的偏移：在所有矢量层之下。
@@ -130,24 +134,24 @@ fn chunk_cell_rect(coord: [u32; 2], size: u32) -> [u32; 4] {
     [x0, y0, x1, y1]
 }
 
-/// 根据 `view.scale` 选 mip 级（0 = 最高分辨率）。
+/// 选 mip 级（0 = 最高分辨率），依据是 **mip0 单 texel 的屏幕尺寸**。
 ///
-/// 阈值表 `[0.5, 0.25]`：
-/// - `scale ≥ 0.5` → mip0；
-/// - `0.25 ≤ scale < 0.5` → mip1；
-/// - `scale < 0.25` → mip2。
-fn select_mip(scale: f32) -> u32 {
-    // 阈值按"从大到小"列出；scale 越小于前几个阈值，mip 级越大。
-    // 例：thresholds = [0.5, 0.25]，scale = 0.1 → 0.1 < 0.5 && 0.1 < 0.25 → mip 2。
+/// `texel_world` = mip0 单 texel 的世界边长（`cell_size / res`）；其屏幕尺寸 =
+/// `texel_world / scale`（scale = 世界单位/像素，ADR-0008 §8）。texel 还 ≥ 1px
+/// （放大或 1:1）就用 mip0；一旦缩小到 < 1px，逐级降 mip 让 texel 翻倍回
+/// ~1px——盒式预降采样代替采样时的点丢弃，这正是 mip 存在的目的。
+///
+/// ⚠️ 2026-10-15 修正：旧版用常数阈值 `[0.5, 0.25]` 比较 `scale`，按的是
+/// 「scale 大 = 近看」的旧语义，与现行 world-per-px 口径方向相反（远观摩尔纹、
+/// 近看误糊）。改按 texel 尺寸后阈值随纹理分辨率自然缩放，语义不再可反装。
+fn select_mip(scale: f32, texel_world: f32) -> u32 {
     let mut mip = 0u32;
-    for &t in &MIP_LOD_THRESHOLDS {
-        if scale < t {
-            mip += 1;
-        } else {
-            break;
-        }
+    let mut texel = texel_world.max(1e-6);
+    while texel < scale && mip < MIP_LEVELS - 1 {
+        texel *= 2.0;
+        mip += 1;
     }
-    mip.min(MIP_LEVELS - 1)
+    mip
 }
 
 /// 两个半开矩形（`[x0, y0, x1, y1]`）是否相交。边贴边不算相交。
@@ -316,7 +320,7 @@ pub fn sync_terrain_chunks(
         Vec2::new(window.resolution.width(), window.resolution.height()),
         cam_rot,
     );
-    let mip_now = select_mip(view.scale);
+    let mip_now = select_mip(view.scale, cell_size / res as f32);
     let chunk_world_size = CHUNK_SIZE as f32 * cell_size;
 
     // 1) 视口外 chunk despawn。
@@ -721,17 +725,36 @@ mod tests {
         assert_eq!(r10, [256, 0, 500, 256]);
     }
 
+    /// texel 被放大或 1:1 时恒用 mip0（最细分辨率）——近看的锐利不许被 mip 吃掉。
+    /// 512 格图（res 8 → texel 1 世界单位）：内界 0.064 到 1:1000 全段 mip0。
     #[test]
-    fn select_mip_picks_level_by_view_scale() {
-        // scale >= 0.5 → mip0
-        assert_eq!(select_mip(1.0), 0);
-        assert_eq!(select_mip(0.5), 0);
-        // 0.25 <= scale < 0.5 → mip1
-        assert_eq!(select_mip(0.4), 1);
-        assert_eq!(select_mip(0.25), 1);
-        // scale < 0.25 → mip2
-        assert_eq!(select_mip(0.1), 2);
-        assert_eq!(select_mip(0.01), 2);
+    fn select_mip_stays_finest_while_texel_is_magnified() {
+        assert_eq!(select_mip(0.064, 1.0), 0, "深度放大应 mip0");
+        assert_eq!(select_mip(0.5, 1.0), 0, "2px/texel 放大应 mip0");
+        assert_eq!(select_mip(1.0, 1.0), 0, "1:1 恰好 1px/texel 应 mip0");
+    }
+
+    /// 缩小到 texel < 1px 才逐级降级：1.5 → mip1，2.9（用户截图的 1:345 档）
+    /// → mip2；越远钳在末级。修正前这段恒返回 mip0（阈值方向反装），
+    /// nearest 直缩把低对比填充散成噪点。
+    #[test]
+    fn select_mip_steps_down_only_when_the_view_minifies() {
+        assert_eq!(select_mip(1.5, 1.0), 1, "texel 缩到 0.67px 应降 mip1");
+        assert_eq!(select_mip(2.9, 1.0), 2, "1:345 远观应降 mip2");
+        assert_eq!(select_mip(99.0, 1.0), 2, "越远应钳在末级");
+    }
+
+    /// texel 尺寸随纹理分辨率缩放：1024 格图 res=4 → texel 2，降级点整体右移；
+    /// 4096 格图 res=1 → texel 8，外界 8.0 恰好 1px/texel，全程不降级。
+    #[test]
+    fn select_mip_adapts_to_texture_resolution() {
+        assert_eq!(select_mip(1.0, 2.0), 0, "1024 格图 1:1000 应 mip0");
+        assert_eq!(select_mip(2.9, 2.0), 1, "1024 格图 1:345 应 mip1");
+        assert_eq!(
+            select_mip(8.0, 8.0),
+            0,
+            "4096 格图最远端恰 1px/texel 应 mip0"
+        );
     }
 
     #[test]

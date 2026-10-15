@@ -5,6 +5,10 @@
 //!   画 `(size+1)` 竖 + `(size+1)` 横格线，单 mesh 批量（复用
 //!   [`super::isoline_overlay::build_stroke_mesh`]）。
 //! - 可见性 = `brush.enabled || brush.grid_lines`（相或，见 [`grid_lines_visible`]）。
+//! - **远观淡出**（2026-10-15 用户反馈）：格子屏幕尺寸 `< 4px` 起 alpha 线性
+//!   衰减、`≤ 2px` 整层退场（[`grid_line_fade`]）——线宽是屏幕常量，缩得越远
+//!   格子越密，~2px 格距时 1px 线条已盖住半幅画面，摩尔纹把低对比的笔迹整个
+//!   淹没（作者看到的是「满屏布纹」，不是自己画的东西）。
 //!
 //! ## 边界（不做什么）
 //! - **不画参考网格**——1/4 幅面参考网格是 `map_frame` 的（浏览态也在）；
@@ -32,10 +36,23 @@ const GRID_Z: f32 = 0.03;
 /// 网格线屏幕宽度（px）：世界宽度 = `px × view.scale`（ADR-0008 §8 的「乘」口径）。
 const GRID_LINE_PX: f32 = 1.0;
 
+/// 远观淡出的起点/终点（格子屏幕边长，px）：≥ 4px 全显，≤ 2px 消失。
+///
+/// 4px 是「还能数清格子」的下限经验值；2px 以下 1px 线条的覆盖率 ≥ 50%，
+/// 画与不画只剩摩尔纹差别——与其铺一层噪声，不如整层退场让笔迹自己说话。
+const GRID_FADE_START_PX: f32 = 4.0;
+const GRID_FADE_END_PX: f32 = 2.0;
+
 /// 网格可见性（D4）：笔刷开启**恒显**（编辑需要格子参照）；
 /// 手动勾选是「不开笔刷也想看格子」的覆盖项。
 pub fn grid_lines_visible(brush: &BrushState) -> bool {
     brush.enabled || brush.grid_lines
+}
+
+/// 远观淡出系数：格子屏幕边长 `cell_px` 在 `[END, START]` 间线性衰减，
+/// 端点外钳制。纯函数（测试锚点：4px→1，3px→0.5，2px→0）。
+pub fn grid_line_fade(cell_px: f32) -> f32 {
+    ((cell_px - GRID_FADE_END_PX) / (GRID_FADE_START_PX - GRID_FADE_END_PX)).clamp(0.0, 1.0)
 }
 
 /// 资源：网格线实体 + 上次构建键。
@@ -89,6 +106,13 @@ pub fn sync_grid_lines(
         overlay.despawn(&mut commands);
         return;
     }
+    // 远观淡出：格距缩到 2px 以下整层退场。fade 是 cell_size/scale 的纯函数，
+    // 两者都在重算键里——fade 一变必然伴随键变，不存在「键相同而 fade 变了」。
+    let fade = grid_line_fade(grid.cell_size / view.scale);
+    if fade <= 0.0 {
+        overlay.despawn(&mut commands);
+        return;
+    }
     let key = GridKey {
         size: tex.size,
         cell_bits: grid.cell_size.to_bits() as u64,
@@ -105,7 +129,8 @@ pub fn sync_grid_lines(
         if layers.is_changed() {
             if let Some(handle) = &overlay.material {
                 if let Some(mut mat) = materials.get_mut(handle) {
-                    mat.color = grid_ink.with_alpha(GRID_LINE_BASE_ALPHA * layers.terrain.opacity);
+                    mat.color =
+                        grid_ink.with_alpha(GRID_LINE_BASE_ALPHA * layers.terrain.opacity * fade);
                 }
             }
             if let Some(entity) = overlay.entity {
@@ -125,7 +150,12 @@ pub fn sync_grid_lines(
     // 线宽屏幕常量（乘 scale），不设世界下限——网格是编辑参照，远观淡去无妨。
     let half_w = GRID_LINE_PX * 0.5 * view.scale;
     let chains = grid_chains(tex.size, half_w);
-    let mesh = build_stroke_mesh(&chains, grid.raster_origin, grid.cell_size);
+    let Some(mesh) = build_stroke_mesh(&chains, grid.raster_origin, grid.cell_size) else {
+        // 仅 `cell_size` 退化为 0 时可达：不插空网格（bevy #24874 误报
+        // Use-after-free），退场即可——链装配是 O(size²) 便宜操作，下帧重算无妨。
+        overlay.despawn(&mut commands);
+        return;
+    };
     let handle = meshes.add(mesh);
     let material = overlay
         .material
@@ -133,7 +163,7 @@ pub fn sync_grid_lines(
         .clone();
     // 材质跨重建复用（get_or_insert）：重算后也要按当前绑定刷新 alpha。
     if let Some(mut mat) = materials.get_mut(&material) {
-        mat.color = grid_ink.with_alpha(GRID_LINE_BASE_ALPHA * layers.terrain.opacity);
+        mat.color = grid_ink.with_alpha(GRID_LINE_BASE_ALPHA * layers.terrain.opacity * fade);
     }
 
     overlay.despawn(&mut commands);
@@ -185,12 +215,23 @@ mod tests {
         assert!(grid_lines_visible(&brush(true, true)));
     }
 
+    /// 远观淡出锚点：≥4px 全显、≤2px 消失、中点线性一半、端点外钳制。
+    #[test]
+    fn grid_line_fade_is_linear_between_two_and_four_pixel_cells() {
+        assert_eq!(grid_line_fade(8.0), 1.0, "宽格全显");
+        assert_eq!(grid_line_fade(GRID_FADE_START_PX), 1.0, "起点全显");
+        let mid = grid_line_fade(3.0);
+        assert!((mid - 0.5).abs() < 1e-6, "中点应线性一半：got {mid}");
+        assert_eq!(grid_line_fade(GRID_FADE_END_PX), 0.0, "终点消失");
+        assert_eq!(grid_line_fade(1.0), 0.0, "更密仍钳在 0");
+    }
+
     /// 2×2 幅面 → 3 竖 + 3 横 = 6 条链，每条 2 点 1 段：24 顶点 36 索引。
     #[test]
     fn grid_chains_cover_full_raster_extent() {
         let chains = grid_chains(2, 0.5);
         assert_eq!(chains.len(), 6, "3 竖 + 3 横");
-        let mesh = build_stroke_mesh(&chains, Vec2::ZERO, 10.0);
+        let mesh = build_stroke_mesh(&chains, Vec2::ZERO, 10.0).expect("规则格链应有 mesh");
         let idx = mesh.indices().expect("索引应存在").len();
         assert_eq!(idx, 6 * 6, "每段一个四边形 = 6 索引");
     }
@@ -199,7 +240,7 @@ mod tests {
     #[test]
     fn grid_chains_span_raster_bounds_exactly() {
         let chains = grid_chains(2, 0.0);
-        let mesh = build_stroke_mesh(&chains, Vec2::ZERO, 10.0);
+        let mesh = build_stroke_mesh(&chains, Vec2::ZERO, 10.0).expect("规则格链应有 mesh");
         let pos = mesh
             .attribute(MeshVertexAttribute::new(
                 "Vertex_Position",
