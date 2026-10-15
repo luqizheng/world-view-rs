@@ -725,11 +725,27 @@ pub enum I18nKey {
     CliLanguageDup,
     /// 「\`--language\` 缺值」
     CliLanguageMissing,
+
+    // ── W7：HTTP 用户可见 stderr（ADR-0018 Q1 carve-out 可见部分） ────
+    /// 「[wv-app http] 绑定 {addr} 失败: {e}。…」整段
+    HttpBindFailed,
+    /// 「[wv-app http] MCP server 监听 {addr}（POST /mcp）」
+    HttpListening,
+    /// 「绑定地址解析失败: 」ServerError 前缀
+    HttpAddrParseFailed,
+    /// 「TCP 绑定失败: 」ServerError 前缀
+    HttpTcpBindFailed,
+    /// 「HTTP 服务运行失败: 」ServerError 前缀
+    HttpServeFailed,
+    /// 「[wv-app http] 启 tokio 失败: 」http_integration 前缀
+    HttpTokioStartFailed,
+    /// 「[wv-app http] server 退出: 」http_integration 前缀
+    HttpServerCrashed,
 }
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 321] = [
+    pub const ALL: [I18nKey; 328] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1080,5 +1096,13 @@ impl I18nKey {
         I18nKey::CliLanguageBadTag,
         I18nKey::CliLanguageDup,
         I18nKey::CliLanguageMissing,
+        // HTTP（7）
+        I18nKey::HttpBindFailed,
+        I18nKey::HttpListening,
+        I18nKey::HttpAddrParseFailed,
+        I18nKey::HttpTcpBindFailed,
+        I18nKey::HttpServeFailed,
+        I18nKey::HttpTokioStartFailed,
+        I18nKey::HttpServerCrashed,
     ];
 }

@@ -123,30 +123,58 @@ pub async fn start_mcp_server(
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
         // 端口占用的 stderr 消息：给出可操作的指引（用户可换端口），
         // 但**不**自动 +1（避免静默偏移掩盖冲突，ADR §6 Q1）。
+        let loc = crate::i18n::cli_locale();
         eprintln!(
-            "[wv-app http] 绑定 {addr} 失败: {e}。\n\
-             当前端口被占用，请用 `--http-port <N>` 指定另一端口\n\
-             （详见 ADR-0014 §6 Q1）。"
+            "{}",
+            crate::i18n::t(loc, crate::i18n::I18nKey::HttpBindFailed)
+                .replace("<addr>", &addr)
+                .replace("<err>", &e.to_string())
         );
         ServerError::Bind(e.to_string())
     })?;
 
-    eprintln!("[wv-app http] MCP server 监听 {addr}（POST /mcp）");
+    let loc = crate::i18n::cli_locale();
+    eprintln!(
+        "{}",
+        crate::i18n::t(loc, crate::i18n::I18nKey::HttpListening).replace("<addr>", &addr)
+    );
 
     axum::serve(listener, app)
         .await
         .map_err(|e| ServerError::Serve(e.to_string()))
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum ServerError {
-    #[error("绑定地址解析失败: {0}")]
     BadAddress(String),
-    #[error("TCP 绑定失败: {0}")]
     Bind(String),
-    #[error("HTTP 服务运行失败: {0}")]
     Serve(String),
 }
+
+impl std::fmt::Display for ServerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let loc = crate::i18n::cli_locale();
+        let t = |k| crate::i18n::t(loc, k);
+        match self {
+            ServerError::BadAddress(inner) => {
+                write!(
+                    f,
+                    "{}{}",
+                    t(crate::i18n::I18nKey::HttpAddrParseFailed),
+                    inner
+                )
+            }
+            ServerError::Bind(inner) => {
+                write!(f, "{}{}", t(crate::i18n::I18nKey::HttpTcpBindFailed), inner)
+            }
+            ServerError::Serve(inner) => {
+                write!(f, "{}{}", t(crate::i18n::I18nKey::HttpServeFailed), inner)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ServerError {}
 
 #[cfg(test)]
 mod tests {

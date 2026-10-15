@@ -396,6 +396,15 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CliLanguageBadTag => "`--language` 不是合法语言（可选 zh / en）",
         I18nKey::CliLanguageDup => "`--language` 重复指定",
         I18nKey::CliLanguageMissing => "`--language` 缺值",
+
+        // ── HTTP stderr（7）──
+        I18nKey::HttpBindFailed => "[wv-app http] 绑定 <addr> 失败: <err>。\n当前端口被占用，请用 `--http-port <N>` 指定另一端口\n（详见 ADR-0014 §6 Q1）。",
+        I18nKey::HttpListening => "[wv-app http] MCP server 监听 <addr>（POST /mcp）",
+        I18nKey::HttpAddrParseFailed => "绑定地址解析失败: ",
+        I18nKey::HttpTcpBindFailed => "TCP 绑定失败: ",
+        I18nKey::HttpServeFailed => "HTTP 服务运行失败: ",
+        I18nKey::HttpTokioStartFailed => "[wv-app http] 启 tokio 失败: ",
+        I18nKey::HttpServerCrashed => "[wv-app http] server 退出: ",
     }
 }
 
@@ -780,5 +789,14 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CliLanguageBadTag => "`--language` is not a valid tag (only zh / en supported)",
         I18nKey::CliLanguageDup => "`--language` specified more than once",
         I18nKey::CliLanguageMissing => "`--language` is missing a value",
+
+        // ── HTTP stderr (7) ──
+        I18nKey::HttpBindFailed => "[wv-app http] bind to <addr> failed: <err>.\nThe port may be in use — try `--http-port <N>` to pick another one\n(see ADR-0014 §6 Q1).",
+        I18nKey::HttpListening => "[wv-app http] MCP server listening on <addr> (POST /mcp)",
+        I18nKey::HttpAddrParseFailed => "bind address parse failed: ",
+        I18nKey::HttpTcpBindFailed => "TCP bind failed: ",
+        I18nKey::HttpServeFailed => "HTTP service failed: ",
+        I18nKey::HttpTokioStartFailed => "[wv-app http] tokio start failed: ",
+        I18nKey::HttpServerCrashed => "[wv-app http] server exited: ",
     }
 }
