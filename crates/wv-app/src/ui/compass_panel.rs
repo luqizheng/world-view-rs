@@ -19,12 +19,12 @@ use bevy_egui::{egui, EguiContexts};
 
 use crate::edit::editing::EditHistory;
 use crate::state::{DrillState, Panel, PanelState, WorldProjection};
-use crate::theme::ui_theme::{mono, proportional, UiShellConfig};
+use crate::theme::ui_theme::{proportional, UiShellConfig};
 use crate::theme::ui_tokens::space;
 use crate::ui_layout::LayoutFile;
 
 use super::shell::UiShell;
-use super::widgets::{empty_state, float_window};
+use super::widgets::{empty_state, float_window, FieldInput, ToolButton};
 
 /// 指南针（临时替换小地图，显示地图朝向）。
 ///
@@ -140,12 +140,10 @@ pub fn panel_compass(
                         .color(shell.t2()),
                 );
                 let mut val_text = format!("{:.1}", orientation);
-                if ui
-                    .add(
-                        egui::TextEdit::singleline(&mut val_text)
-                            .font(mono(shell.scale.input))
-                            .min_size(egui::vec2(60.0, shell.hit)),
-                    )
+                if FieldInput::new(&mut val_text, "")
+                    .font_mono(true)
+                    .min_size(egui::vec2(60.0, shell.hit))
+                    .show(ui, &shell)
                     .changed()
                 {
                     if let Ok(v) = val_text.parse::<f32>() {
@@ -172,10 +170,12 @@ pub fn panel_compass(
                     ("S 180°", 180.0),
                     ("W 270°", 270.0),
                 ] {
-                    if ui.button(label).clicked() && val != orientation {
-                        orientation = val;
-                        push_orientation_cmd(&mut projection, &mut edit, &map_id, val);
-                    }
+                    ToolButton::text(label, "").show(ui, &shell, || {
+                        if val != orientation {
+                            orientation = val;
+                            push_orientation_cmd(&mut projection, &mut edit, &map_id, val);
+                        }
+                    });
                 }
             });
         },
