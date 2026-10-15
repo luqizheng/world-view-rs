@@ -177,12 +177,43 @@ pub enum I18nKey {
     NewMapDialogErrCreateFailPrefix,
     /// 「创建」按钮
     NewMapDialogCreateBtn,
-    // ── 通用：删除/确认 ──────────────────────────────────────────
+
+    // ── 笔刷面板（ADR-0010 / panel_brush） ────────────────────────
+    /// 「笔刷模式（关闭时左键拖动地图）」
+    BrushModeToggle,
+    /// 「显示网格」开关
+    BrushShowGrid,
+    /// 「地形」分块小标题
+    BrushTerrainHeader,
+    /// 半径滑条格式前缀「半径 」
+    BrushRadiusPrefix,
+    /// 半径单位「wu」（中英同字，留作 Key 备用）
+    BrushRadiusUnitWu,
+    /// 衰减滑条格式前缀「衰减软度 」
+    BrushSoftnessPrefix,
+    /// 街道分块折叠头
+    BrushStreetsHeader,
+    /// 「画街道模式（左键逐点连线，右键结束）」
+    BrushStreetsToggle,
+    /// 「类别」下拉标签
+    BrushClassLabel,
+    /// 「街道名」字段标签
+    BrushStreetNameLabel,
+    /// 「已画 {} 段」前缀
+    BrushStreetsDrawnPrefix,
+    /// 「段」单位
+    BrushStreetsDrawnUnit,
+    /// 「结束连线」按钮
+    BrushFinishLineBtn,
+    /// 「撤销上一段」按钮
+    BrushUndoLastSegmentBtn,
+    /// 「Ctrl+滚轮改半径」底部提示
+    BrushHintRadiusShortcut,
 }
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 70] = [
+    pub const ALL: [I18nKey; 85] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -259,5 +290,21 @@ impl I18nKey {
         I18nKey::NewMapDialogCreatedSuffix,
         I18nKey::NewMapDialogErrCreateFailPrefix,
         I18nKey::NewMapDialogCreateBtn,
+        // 笔刷面板（14）
+        I18nKey::BrushModeToggle,
+        I18nKey::BrushShowGrid,
+        I18nKey::BrushTerrainHeader,
+        I18nKey::BrushRadiusPrefix,
+        I18nKey::BrushRadiusUnitWu,
+        I18nKey::BrushSoftnessPrefix,
+        I18nKey::BrushStreetsHeader,
+        I18nKey::BrushStreetsToggle,
+        I18nKey::BrushClassLabel,
+        I18nKey::BrushStreetNameLabel,
+        I18nKey::BrushStreetsDrawnPrefix,
+        I18nKey::BrushStreetsDrawnUnit,
+        I18nKey::BrushFinishLineBtn,
+        I18nKey::BrushUndoLastSegmentBtn,
+        I18nKey::BrushHintRadiusShortcut,
     ];
 }

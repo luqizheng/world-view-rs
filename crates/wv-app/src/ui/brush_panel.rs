@@ -16,6 +16,8 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::edit::editing;
+use crate::i18n::CurrentLocale;
+use crate::i18n::{t_key, I18nKey};
 use crate::render::streets;
 use crate::state::{BrushState, DrillState, Panel, PanelState, WorldProjection};
 use crate::theme::ui_theme::{mono, UiShellConfig};
@@ -39,6 +41,7 @@ pub fn panel_brush(
     drill: Res<DrillState>,
     mut edit: ResMut<editing::EditHistory>,
     grid: Res<crate::state::GridConfig>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -52,38 +55,51 @@ pub fn panel_brush(
         Panel::Brush,
         None,
         |ui| {
-            ui.checkbox(&mut brush.enabled, "笔刷模式（关闭时左键拖动地图）");
+            ui.checkbox(
+                &mut brush.enabled,
+                t_key(&current_loc, I18nKey::BrushModeToggle),
+            );
             // 逐格编辑网格（plan v0.1 D4）：笔刷开着恒显；这里手动补一个
             // 「不开笔刷也想看格子」的覆盖开关（相或）。
-            ui.checkbox(&mut brush.grid_lines, "显示网格");
+            ui.checkbox(
+                &mut brush.grid_lines,
+                t_key(&current_loc, I18nKey::BrushShowGrid),
+            );
             ui.add_space(space::XS);
             ui.label(
-                egui::RichText::new("地形")
+                egui::RichText::new(t_key(&current_loc, I18nKey::BrushTerrainHeader))
                     .size(shell.scale.micro)
                     .color(shell.t2()),
             );
             terrain_grid(ui, &shell, &mut brush.kind);
             ui.add_space(space::XS);
             // 半径滑条：标签合并进 show_value，单位用「wu」。
+            // 数值由 custom_formatter 拼，「半径」「wu」字串走 i18n。
+            let radius_prefix = t_key(&current_loc, I18nKey::BrushRadiusPrefix).to_owned();
+            let radius_unit = t_key(&current_loc, I18nKey::BrushRadiusUnitWu).to_owned();
             ui.add(
                 egui::Slider::new(&mut brush.radius, grid.cell_size * 2.0..=600.0)
                     .logarithmic(true)
                     .show_value(true)
-                    .custom_formatter(|n, _| format!("半径 {:.0} wu", n)),
+                    .custom_formatter(move |n, _| format!("{radius_prefix}{:.0}{radius_unit}", n)),
             );
+            let soft_prefix = t_key(&current_loc, I18nKey::BrushSoftnessPrefix).to_owned();
             ui.add(
                 egui::Slider::new(&mut brush.softness, 0.0..=1.0)
                     .show_value(true)
-                    .custom_formatter(|n, _| format!("衰减软度 {:.2}", n)),
+                    .custom_formatter(move |n, _| format!("{soft_prefix}{:.2}", n)),
             );
             ui.add_space(space::XS);
             // 街道区：默认折叠，作者真在画街道时（`enabled` 或已有段数）才展开。
-            egui::CollapsingHeader::new("街道")
+            egui::CollapsingHeader::new(t_key(&current_loc, I18nKey::BrushStreetsHeader))
                 .default_open(streets.enabled || streets.drawn > 0)
                 .show(ui, |ui| {
-                    ui.checkbox(&mut streets.enabled, "画街道模式（左键逐点连线，右键结束）");
+                    ui.checkbox(
+                        &mut streets.enabled,
+                        t_key(&current_loc, I18nKey::BrushStreetsToggle),
+                    );
                     if streets.enabled {
-                        egui::ComboBox::from_label("类别")
+                        egui::ComboBox::from_label(t_key(&current_loc, I18nKey::BrushClassLabel))
                             .selected_text(streets.class.label())
                             .show_ui(ui, |ui| {
                                 for c in wv_core::RoadClass::ALL {
@@ -91,18 +107,26 @@ pub fn panel_brush(
                                 }
                             });
                         ui.horizontal(|ui| {
-                            ui.label("街道名");
+                            ui.label(t_key(&current_loc, I18nKey::BrushStreetNameLabel));
                             // 留空 = 下一笔无名（不产生标注）。
                             ui.text_edit_singleline(&mut streets.name);
                         });
                         ui.label(
-                            egui::RichText::new(format!("已画 {} 段", streets.drawn))
-                                .size(shell.scale.small)
-                                .color(shell.t3())
-                                .font(mono(shell.scale.small)),
+                            egui::RichText::new(format!(
+                                "{}{}{}",
+                                t_key(&current_loc, I18nKey::BrushStreetsDrawnPrefix),
+                                streets.drawn,
+                                t_key(&current_loc, I18nKey::BrushStreetsDrawnUnit),
+                            ))
+                            .size(shell.scale.small)
+                            .color(shell.t3())
+                            .font(mono(shell.scale.small)),
                         );
                         ui.horizontal(|ui| {
-                            if ui.button("结束连线").clicked() {
+                            if ui
+                                .button(t_key(&current_loc, I18nKey::BrushFinishLineBtn))
+                                .clicked()
+                            {
                                 streets.last_click = None;
                             }
                             // 撤销上一段：UI 只生成 `DeleteStreetSegmentCommand` 交给
@@ -113,7 +137,13 @@ pub fn panel_brush(
                                 .and_then(|l| projection.world.street_of(&l.id))
                                 .map_or(0, |d| d.len());
                             if ui
-                                .add_enabled(deletable > 0, egui::Button::new("撤销上一段"))
+                                .add_enabled(
+                                    deletable > 0,
+                                    egui::Button::new(t_key(
+                                        &current_loc,
+                                        I18nKey::BrushUndoLastSegmentBtn,
+                                    )),
+                                )
                                 .clicked()
                             {
                                 undo_last_street_segment(&mut projection, &drill, &mut edit);
@@ -125,7 +155,7 @@ pub fn panel_brush(
             // 底部一行：仅保留「Ctrl+滚轮改半径」（其他提示与笔刷复选框标签重复）。
             ui.add_space(space::XS);
             ui.label(
-                egui::RichText::new("Ctrl+滚轮改半径")
+                egui::RichText::new(t_key(&current_loc, I18nKey::BrushHintRadiusShortcut))
                     .size(shell.scale.micro)
                     .color(shell.t3()),
             );

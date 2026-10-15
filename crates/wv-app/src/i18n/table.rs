@@ -99,6 +99,23 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::NewMapDialogCreatedSuffix => "」",
         I18nKey::NewMapDialogErrCreateFailPrefix => "创建失败：",
         I18nKey::NewMapDialogCreateBtn => "创建",
+
+        // ── 笔刷面板 ──
+        I18nKey::BrushModeToggle => "笔刷模式（关闭时左键拖动地图）",
+        I18nKey::BrushShowGrid => "显示网格",
+        I18nKey::BrushTerrainHeader => "地形",
+        I18nKey::BrushRadiusPrefix => "半径 ",
+        I18nKey::BrushRadiusUnitWu => " wu",
+        I18nKey::BrushSoftnessPrefix => "衰减软度 ",
+        I18nKey::BrushStreetsHeader => "街道",
+        I18nKey::BrushStreetsToggle => "画街道模式（左键逐点连线，右键结束）",
+        I18nKey::BrushClassLabel => "类别",
+        I18nKey::BrushStreetNameLabel => "街道名",
+        I18nKey::BrushStreetsDrawnPrefix => "已画 ",
+        I18nKey::BrushStreetsDrawnUnit => " 段",
+        I18nKey::BrushFinishLineBtn => "结束连线",
+        I18nKey::BrushUndoLastSegmentBtn => "撤销上一段",
+        I18nKey::BrushHintRadiusShortcut => "Ctrl+滚轮改半径",
     }
 }
 
@@ -186,5 +203,22 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::NewMapDialogCreatedSuffix => "\"",
         I18nKey::NewMapDialogErrCreateFailPrefix => "Failed to create: ",
         I18nKey::NewMapDialogCreateBtn => "Create",
+
+        // ── Brush panel ──
+        I18nKey::BrushModeToggle => "Brush mode (drag the map with left-click when off)",
+        I18nKey::BrushShowGrid => "Show grid",
+        I18nKey::BrushTerrainHeader => "Terrain",
+        I18nKey::BrushRadiusPrefix => "Radius ",
+        I18nKey::BrushRadiusUnitWu => " wu",
+        I18nKey::BrushSoftnessPrefix => "Softness ",
+        I18nKey::BrushStreetsHeader => "Streets",
+        I18nKey::BrushStreetsToggle => "Draw streets (left-click to add points, right-click to finish)",
+        I18nKey::BrushClassLabel => "Class",
+        I18nKey::BrushStreetNameLabel => "Street name",
+        I18nKey::BrushStreetsDrawnPrefix => "Drawn ",
+        I18nKey::BrushStreetsDrawnUnit => " segment(s)",
+        I18nKey::BrushFinishLineBtn => "Finish line",
+        I18nKey::BrushUndoLastSegmentBtn => "Undo last segment",
+        I18nKey::BrushHintRadiusShortcut => "Ctrl + wheel to change radius",
     }
 }
