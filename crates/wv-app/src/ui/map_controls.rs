@@ -43,21 +43,20 @@ use super::{
     ICON_LINE, ICON_MAXIMIZE, ICON_PEN, ICON_PENCIL, ICON_SQUARE, ICON_ZOOM_IN, ICON_ZOOM_OUT,
 };
 
-/// 单瓷砖边长 56px（图片视觉比例）。
-const TILE_SIZE: f32 = 56.0;
+/// 单瓷砖边长 36px（适中尺寸，不遮地图）。
+const TILE_SIZE: f32 = 36.0;
 /// 瓷砖间默认竖向间距。
-const TILE_GAP: f32 = space::SM;
+const TILE_GAP: f32 = space::XS;
 /// 分隔线上下额外间距，让分隔条带视觉上独立成段。
-const SEPARATOR_PAD: f32 = space::MD;
-/// 锚点偏移：左 16px；下挪顶栏 38 + 间距 20 = 58px。
+const SEPARATOR_PAD: f32 = space::SM;
+/// 锚点偏移：左 16px。
 const LEFT_OFFSET_X: f32 = space::LG;
-const LEFT_OFFSET_Y: f32 = 58.0;
-/// 图标内嵌（tile 边长减去 `ICON_INSET * 2`）。
-const ICON_INSET: f32 = 16.0;
+/// 图标内嵌（tile 边长减去 `ICON_INSET * 2` = 36 − 16 = 20px 图标）。
+const ICON_INSET: f32 = 8.0;
 
 /// 左列纵向工具条（图片规格：8 独立瓷砖）。
 ///
-/// v0.3 重做后视觉与图片一致：左列 56×56 独立圆角方块，活动态蓝底白图标、
+/// v0.3 重做后视觉与图片一致：左列 36×36 独立圆角方块，活动态蓝底白图标、
 /// 非活动态 raised_bg 灰底；写相机仍经 `apply_view_to_camera`，
 /// Camera Transform 仍是渲染真源。
 ///
@@ -111,12 +110,9 @@ pub fn map_controls(
     let line_active = measure.mode == MeasureMode::Line;
     let rect_active = measure.mode == MeasureMode::Rect;
 
-    // 位置：左列上方（顶栏 38 + 间距 20）。
+    // 位置：左侧居中（egui LEFT_CENTER 锚点 Y 偏移 0 = 垂直居中）。
     egui::Area::new(egui::Id::new("wv_map_controls_v04"))
-        .anchor(
-            egui::Align2::LEFT_TOP,
-            egui::vec2(LEFT_OFFSET_X, LEFT_OFFSET_Y),
-        )
+        .anchor(egui::Align2::LEFT_CENTER, egui::vec2(LEFT_OFFSET_X, 0.0))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             ui.spacing_mut().item_spacing.y = TILE_GAP;
@@ -335,18 +331,18 @@ mod map_control_tests {
     /// 高度 = 7×TILE + 6×GAP + 2×SEPARATOR_PAD。
     ///
     /// 不直接渲染——egui 0.36 在 unit 上下文没有 GPU surface；
-    /// 这里钉的是 layout 数学校验：模块顶部常量（`TILE_SIZE` = 56、
-    /// `TILE_GAP` = 8、`SEPARATOR_PAD` = 12）若被改了，这里必须同步改。
+    /// 这里钉的是 layout 数学校验：模块顶部常量（`TILE_SIZE` = 36、
+    /// `TILE_GAP` = 4、`SEPARATOR_PAD` = 8）若被改了，这里必须同步改。
     #[test]
     fn toolbar_layout_sums_to_expected_total_height() {
-        // 图片规格：7 瓷砖 × 56 + 6 个 tile gap × 8 + 2 × 12 = 392 + 48 + 24 = 464
-        const TILE: f32 = 56.0;
-        const GAP: f32 = 8.0;
-        const SEP: f32 = 12.0;
+        // 7 瓷砖 × 36 + 6 个 tile gap × 4 + 2 × 8 = 252 + 24 + 16 = 292
+        const TILE: f32 = 36.0;
+        const GAP: f32 = 4.0;
+        const SEP: f32 = 8.0;
         let total = 7.0 * TILE + 6.0 * GAP + 2.0 * SEP;
         assert!(
-            (total - 464.0).abs() < 1e-3,
-            "总额不等于 464：模块顶部常量（TILE_SIZE/TILE_GAP/SEPARATOR_PAD）改了 \
+            (total - 292.0).abs() < 1e-3,
+            "总额不等于 292：模块顶部常量（TILE_SIZE/TILE_GAP/SEPARATOR_PAD）改了 \
              必须在测试里同步更新。got {total}",
         );
     }
