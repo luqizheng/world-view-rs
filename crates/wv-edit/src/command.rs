@@ -8,6 +8,7 @@
 use wv_core::terrain::{TerrainCellData, TerrainData};
 use wv_core::World;
 use wv_terrain::edit::{apply_stroke, Stroke};
+use wv_terrain::intent::{apply_intent, Intent};
 use wv_terrain::{TerrainCell, TerrainGrid};
 
 /// `wv-core::terrain::TerrainData` → `wv-terrain::TerrainGrid` 的桥。
@@ -164,6 +165,111 @@ impl EditCommand for PaintTerrainCommand {
         // ④ 写回中立数据（写回**这张图**的格子，不动别的图）
         world.set_terrain(self.map.clone(), from_grid(grid));
 
+        Ok(vec![format!("maps/{}/terrain.bin", self.map)])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let before = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?;
+        let data = self.terrain(world)?.clone();
+        let mut grid = to_grid(&data)?;
+        for (gx, gy, cell) in before.iter() {
+            grid.set(*gx, *gy, *cell);
+        }
+        drop(before);
+        world.set_terrain(self.map.clone(), from_grid(grid));
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 意图笔刷命令（2026-10-15，意图笔刷 plan v0.1）
+// ---------------------------------------------------------------------------
+
+/// 意图笔刷命令：作者给「意图 + 大致区域」，程序生成自然地形。
+///
+/// ## 与 [`PaintTerrainCommand`] 的分工
+///
+/// 两者都落 `maps/<map>/terrain.bin`、都用「快照 → 改格 → diff 缓存 → 写回 /
+/// 按表回滚」的同一模式；差别只在第 ② 步调的是 `apply_stroke`（直接笔刷）
+/// 还是 [`apply_intent`]（意图生成）。
+///
+/// ## seed 的确定性契约
+///
+/// `seed` 在 [`Self::new`] 里从 `(map, intent)` 派生并**存进命令**——
+/// undo 后 redo 重放的是同一个 seed，wv-terrain 保证同 seed 同 intent 逐格
+/// 一致，因此 redo 结果与首次 apply 完全相同。
+#[derive(Debug)]
+pub struct IntentTerrainCommand {
+    /// 目标地图 ID。
+    pub map: wv_core::Id,
+    /// 地形意图（山脉 / 高原 / 丘陵 / 火山 / 湖 / 河）。
+    pub intent: Intent,
+    /// 每格世界边长。
+    pub cell_size: f32,
+    /// 派生种子（构造时算好，随命令存活）。
+    pub seed: u64,
+    /// `apply` 时缓存的受影响格旧值：`(gx, gy, before_cell)`。
+    before: std::sync::Mutex<Vec<(i32, i32, TerrainCell)>>,
+}
+
+impl IntentTerrainCommand {
+    /// 构造时从图 ID 与意图内容派生 seed（见 [`Intent::derive_seed`]）。
+    pub fn new(map: wv_core::Id, intent: Intent, cell_size: f32) -> Self {
+        let seed = intent.derive_seed(map.as_str());
+        Self {
+            map,
+            intent,
+            cell_size,
+            seed,
+            before: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// 与 [`PaintTerrainCommand::terrain`] 同款：按图查栅格，缺失报
+    /// `TerrainMismatch`（不替作者凭空造尺寸）。
+    fn terrain<'a>(&self, world: &'a World) -> EditResult<&'a TerrainData> {
+        world
+            .terrain_of(&self.map)
+            .ok_or_else(|| EditError::TerrainMismatch(format!("地图 `{}` 无地形网格", self.map)))
+    }
+}
+
+impl EditCommand for IntentTerrainCommand {
+    fn label(&self) -> String {
+        let what = match &self.intent {
+            Intent::MountainRange { .. } => "山脉",
+            Intent::Plateau { .. } => "高原",
+            Intent::Hills { .. } => "丘陵",
+            Intent::Volcano { .. } => "火山",
+            Intent::Lake { .. } => "湖",
+            Intent::River { .. } => "河",
+        };
+        format!("生成{what}")
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let data = self.terrain(world)?.clone();
+        let mut grid = to_grid(&data)?;
+        let snapshot: Vec<TerrainCell> = grid.cells().to_vec();
+        apply_intent(&mut grid, &self.intent, self.seed, self.cell_size);
+        let mut before = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?;
+        before.clear();
+        let width = grid.width() as usize;
+        for (idx, (old, new)) in snapshot.iter().zip(grid.cells().iter()).enumerate() {
+            if old != new {
+                let gx = (idx % width) as i32;
+                let gy = (idx / width) as i32;
+                before.push((gx, gy, *old));
+            }
+        }
+        drop(before);
+        world.set_terrain(self.map.clone(), from_grid(grid));
         Ok(vec![format!("maps/{}/terrain.bin", self.map)])
     }
 
@@ -1396,6 +1502,81 @@ mod tests {
         let mut stroke = Stroke::new();
         stroke.push(wv_terrain::edit::Brush::paint((0.0, 0.0), 1.0, 1));
         let cmd = PaintTerrainCommand::new(Id::new_unchecked("world_main"), stroke, 1.0);
+        assert!(matches!(
+            cmd.apply(&mut world),
+            Err(EditError::TerrainMismatch(_))
+        ));
+    }
+
+    // ---- 意图笔刷命令（意图笔刷 plan v0.1） ----
+
+    #[test]
+    fn intent_command_apply_then_revert_restores_grid() {
+        let mut world = world_with_terrain(48);
+        let before_snapshot = world.terrain_of(&test_map()).cloned().unwrap();
+
+        let cmd = IntentTerrainCommand::new(
+            test_map(),
+            Intent::MountainRange {
+                pts: vec![(10.0, 24.0), (38.0, 24.0)],
+                radius: 5.0,
+                strength: 1.0,
+            },
+            1.0,
+        );
+        let dirty = cmd.apply(&mut world).unwrap();
+        assert_eq!(dirty, vec!["maps/world_main/terrain.bin".to_string()]);
+        let after = world.terrain_of(&test_map()).cloned().unwrap();
+        assert_ne!(before_snapshot, after, "apply 应改变地形");
+        // 中段脊线确实隆起（高度远超 0）。
+        assert!(
+            after.cells[24 * 48 + 24].height > 500,
+            "脊线中段应显著隆起，实得 {}",
+            after.cells[24 * 48 + 24].height
+        );
+
+        cmd.revert(&mut world).unwrap();
+        assert_eq!(
+            world.terrain_of(&test_map()).cloned().unwrap(),
+            before_snapshot,
+            "revert 应完全还原"
+        );
+    }
+
+    #[test]
+    fn intent_command_redo_replays_identical_grid() {
+        // undo 后 redo：revert 已把 before 写回，re-apply 用同一 seed，
+        // 结果必须与首次 apply 逐格一致（确定性契约）。
+        let mut world = world_with_terrain(48);
+        let cmd = IntentTerrainCommand::new(
+            test_map(),
+            Intent::Volcano {
+                center: (24.0, 24.0),
+                radius: 8.0,
+                strength: 1.0,
+            },
+            1.0,
+        );
+        cmd.apply(&mut world).unwrap();
+        let first = world.terrain_of(&test_map()).cloned().unwrap();
+        cmd.revert(&mut world).unwrap();
+        cmd.apply(&mut world).unwrap();
+        let second = world.terrain_of(&test_map()).cloned().unwrap();
+        assert_eq!(first.cells, second.cells, "redo 应逐格重现首次结果");
+    }
+
+    #[test]
+    fn intent_command_without_terrain_reports_mismatch() {
+        let mut world = World::default();
+        let cmd = IntentTerrainCommand::new(
+            Id::new_unchecked("world_main"),
+            Intent::Hills {
+                pts: vec![(5.0, 5.0)],
+                radius: 4.0,
+                strength: 1.0,
+            },
+            1.0,
+        );
         assert!(matches!(
             cmd.apply(&mut world),
             Err(EditError::TerrainMismatch(_))
