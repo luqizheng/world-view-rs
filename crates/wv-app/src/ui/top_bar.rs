@@ -22,6 +22,8 @@ use crate::state::{
 };
 use crate::theme::ui_theme::{color32, mono, proportional, UiShellConfig};
 
+use crate::i18n::{CurrentLocale, Locale};
+
 use super::project_menu::{project_menu_inner, ProjectMenuState};
 use super::shell::UiShell;
 use super::widgets::{badge, BadgeKind};
@@ -43,6 +45,7 @@ pub fn top_bar(
     mut view: ResMut<ViewState>,
     playback: Res<PlaybackState>,
     mut panels: ResMut<crate::state::PanelState>,
+    mut current_loc: ResMut<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -76,8 +79,14 @@ pub fn top_bar(
                     palette.pending = Some(CommandId::ForceRebuildTexture);
                 }
 
-                // 读数推到右端。
+                // 读数 + 语言切换器推到右端。
+                //
+                // 语言切换器落 `right_to_left` 最右端（last → 最右），与
+                // `readout_segment` 之间留 SM 间距便于触达；切语言时由
+                // `ui_shell::persist_layout_on_change` 落 `ui-layout.yaml`（ADR-0018 §2.2）。
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    language_switch(ui, &shell, &mut current_loc);
+                    ui.add_space(space::SM);
                     readout_segment(ui, &shell, &view, &playback, &projection);
                 });
             });
@@ -203,6 +212,41 @@ fn map_palette_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState)
         if resp.clicked() {
             view.map_palette = *p;
         }
+    }
+}
+
+/// 顶栏远右端的语言切换器（ADR-0018 §2.2）。
+///
+/// 极小规格、与 `mini_icon_button` 同族：等宽字体确保单字符恒宽（"EN" vs "中"）。
+/// 按钮文本语义：当前 locale 的**对侧**——「我现在是中，按这个切到 EN」；
+/// 即 `Zh` 时显示 `EN`，`En` 时显示 `中`。hover 用 `shell.hover_bg`。
+///
+/// 点击只改 `ResMut<CurrentLocale>`，落盘由 `ui_shell::persist_layout_on_change`
+/// 在下一帧统一处理（与面板尺寸 / 主题切换同一通道），不会出现「UI 显示 EN
+/// 但磁盘仍是 zh」的脱节窗口。
+fn language_switch(ui: &mut egui::Ui, shell: &UiShell, current_loc: &mut CurrentLocale) {
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(shell.hit * 1.4, shell.hit), egui::Sense::click());
+    let painter = ui.painter();
+    if resp.hovered() {
+        painter.rect_filled(rect, radius::CONTROL, shell.hover_bg());
+    }
+    let label = match current_loc.0 {
+        Locale::Zh => "EN",
+        Locale::En => "中",
+    };
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        mono(shell.scale.small),
+        shell.t1(),
+    );
+    if resp.clicked() {
+        current_loc.0 = match current_loc.0 {
+            Locale::Zh => Locale::En,
+            Locale::En => Locale::Zh,
+        };
     }
 }
 
