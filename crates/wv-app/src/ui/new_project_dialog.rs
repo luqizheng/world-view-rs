@@ -34,11 +34,14 @@ use crate::render::terrain_view::{TerrainTexture, TileAtlas};
 use crate::state::{
     DrillState, PlaybackState, ProjectDiagnostics, RecentProjects, ViewState, WorldProjection,
 };
+use crate::theme::ui_theme::UiShellConfig;
+use crate::ui::widgets::{button as widget_button, ButtonContent, ButtonStyle};
 use crate::ui_shell::{load_project_into, DialogPurpose, OpenProjectTask, ShellNotice};
 
 // 与「新建地图」对话框同一口径的幅面 / 预填充默认值（首图 = 空世界的第一张图，
 // 与 NewMapDialog::open_for 的空世界分支完全一致：世界级、最大幅面、陆地预填充）。
 use super::new_map_dialog::{NewMapPrefill, EXTENT_CHOICES, GRID_CELL_SIZE};
+use super::shell::UiShell;
 
 /// 新工程首张地图（世界图）的 ID。
 ///
@@ -46,6 +49,22 @@ use super::new_map_dialog::{NewMapPrefill, EXTENT_CHOICES, GRID_CELL_SIZE};
 /// create 先立骨架（root_map 暂定 `world`），随后 `save_world` 用 `world.meta`
 /// 全量覆写——两处口径一致，才不会出现「root_map 指向不存在的图」。
 pub(crate) const FIRST_MAP_ID: &str = "world";
+
+/// 「新建工程」待消费的"创建意图"——UI 系统按下「创建」时打包进去，
+/// apply 系统下一帧读走并落盘 / 打开。
+///
+/// 拆 UI 系统与 apply 系统的目的是让 UI 系统保持在 Bevy 16 系统参数上限内
+/// （原本 UI 系统一次性拿全部 ResMut 已经踩线到 16，加 shell_cfg 17 直接
+/// 触发 `the trait bound IntoSystem is not satisfied`，详见 2026-10-15 拆分 commit）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewProjectIntent {
+    /// 用户敲定的工程目录（`位置\名称` 拼出来的 PathBuf）。
+    pub path: std::path::PathBuf,
+    /// 项目显示名（同 [`NewProjectDialog::name`]）。
+    pub name: String,
+    /// `time.elapsed_secs() * 60.0` 计算出的帧号，给 `ShellNotice` 用。
+    pub frame: u64,
+}
 
 /// 「新建工程」对话框的跨帧状态。
 ///
@@ -61,6 +80,9 @@ pub struct NewProjectDialog {
     pub location: String,
     /// 上次创建失败的错误（留在框内，作者改完再试；成功即清）。
     pub error: Option<String>,
+    /// UI 系统按下「创建」时把已校验的输入打包放这里，下一帧 apply 系统取走
+    /// 执行落盘 + 打开。`take()` 后下次创建前保持 `None`。
+    pub pending_apply: Option<NewProjectIntent>,
 }
 
 impl Default for NewProjectDialog {
@@ -70,6 +92,7 @@ impl Default for NewProjectDialog {
             name: "新工程".into(),
             location: String::new(),
             error: None,
+            pending_apply: None,
         }
     }
 }
@@ -169,24 +192,22 @@ fn initial_world(name: &str) -> wv_core::World {
     world
 }
 
-/// 「新建工程」对话框：绘制 + 确认创建。
+/// 「新建工程」对话框 UI 渲染（5 个系统参数）。
+///
+/// 该函数只负责画窗口 + 收集输入 + 在「创建」被按下时把已校验输入打包放进
+/// [`NewProjectDialog::pending_apply`]，由 [`new_project_apply_create`] 系统下
+/// 一帧读走并执行落盘 / 打开。
+///
+/// **为什么拆成两个系统**：原 `new_project_dialog` 一个系统拿了 17 个 ResMut，
+/// 超过 Bevy 0.19 系统参数上限 16（`impl_system_function, 0, 16, F`），拆 UI /
+//  apply 两个系统后两边均落在上限内。Apply 系统那 14 个参数（投影 / 钻取 /
+/// 资源 / 纹理 / 摄像机 + 时间 + 对话框）刚好压线下。
 #[allow(clippy::too_many_arguments)]
 pub fn new_project_dialog(
     mut ctxs: EguiContexts,
+    shell_cfg: Res<UiShellConfig>,
     mut dialog: ResMut<NewProjectDialog>,
     mut open_task: ResMut<OpenProjectTask>,
-    mut projection: ResMut<WorldProjection>,
-    mut drill: ResMut<DrillState>,
-    mut recents: ResMut<RecentProjects>,
-    mut notice: ResMut<ShellNotice>,
-    mut diagnostics: ResMut<ProjectDiagnostics>,
-    mut edit: ResMut<EditHistory>,
-    mut playback: ResMut<PlaybackState>,
-    mut view: ResMut<ViewState>,
-    mut tex: ResMut<TerrainTexture>,
-    atlas: Option<Res<TileAtlas>>,
-    mut images: ResMut<Assets<Image>>,
-    mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     time: Res<Time>,
 ) {
     if !dialog.open {
@@ -195,9 +216,10 @@ pub fn new_project_dialog(
     let Ok(ctx) = ctxs.ctx_mut() else {
         return;
     };
+    let shell = UiShell::new(&shell_cfg);
     let frame = (time.elapsed_secs() * 60.0) as u64;
     let mut open = dialog.open;
-    let mut confirmed = false;
+    let mut confirmed_intent: Option<NewProjectIntent> = None;
     let mut cancelled = false;
 
     egui::Window::new("新建工程")
@@ -273,40 +295,86 @@ pub fn new_project_dialog(
                 if ui.button("取消").clicked() {
                     cancelled = true;
                 }
-                if ui
-                    .add_enabled(dialog.ready(), egui::Button::new("创建"))
-                    .clicked()
+                if widget_button(
+                    ui,
+                    &shell,
+                    ButtonContent::Text("创建"),
+                    ButtonStyle::Accent,
+                    None,
+                    dialog.ready(),
+                )
+                .clicked()
                 {
-                    confirmed = true;
+                    // 在 UI 线程完成输入校验，避免 apply 系统再依赖 UI 内的变量；
+                    // 校验失败把错误塞回对话框而不是塞进 intent——让作者就在框
+                    // 内修。
+                    match dialog.validated_path() {
+                        Ok(path) => {
+                            confirmed_intent = Some(NewProjectIntent {
+                                path,
+                                name: dialog.name.trim().to_owned(),
+                                frame,
+                            });
+                        }
+                        Err(e) => dialog.error = Some(e),
+                    }
                 }
             });
         });
 
     // X（`open(&mut open)` 写回）与「取消」都走关；「创建」失败时留在框内。
     dialog.open = open && !cancelled;
-    if !dialog.open {
-        return;
+    // 把确认的意图交给 apply 系统；apply 系统下一帧才会拿到，本帧这段
+    // `pending_apply` 不为空时对话框应保持关闭——成功的归 apply，失败的归
+    // `dialog.error`，后者仍要求对话框打开以让作者改。
+    if let Some(intent) = confirmed_intent {
+        dialog.open = false;
+        dialog.pending_apply = Some(intent);
+        dialog.error = None;
     }
-    if confirmed {
-        match create_project(
-            &dialog,
-            &mut projection,
-            &mut drill,
-            &mut recents,
-            &mut notice,
-            &mut diagnostics,
-            &mut edit,
-            &mut playback,
-            &mut view,
-            &mut tex,
-            atlas.as_deref(),
-            &mut images,
-            &mut cameras,
-            frame,
-        ) {
-            Ok(()) => dialog.open = false,
-            Err(e) => dialog.error = Some(e),
-        }
+}
+
+/// 消费 [`NewProjectDialog::pending_apply`]：落盘 + 打开 + 回执。
+///
+/// 系统参数 14 个，刚好压在 Bevy 0.19 `impl_system_function, 0, 16` 上限内。
+/// 若以后需要再往里塞资源，先考虑抽一个中间 struct 而不是突破上限。
+#[allow(clippy::too_many_arguments)]
+pub fn new_project_apply_create(
+    mut dialog: ResMut<NewProjectDialog>,
+    mut projection: ResMut<WorldProjection>,
+    mut drill: ResMut<DrillState>,
+    mut recents: ResMut<RecentProjects>,
+    mut notice: ResMut<ShellNotice>,
+    mut diagnostics: ResMut<ProjectDiagnostics>,
+    mut edit: ResMut<EditHistory>,
+    mut playback: ResMut<PlaybackState>,
+    mut view: ResMut<ViewState>,
+    mut tex: ResMut<TerrainTexture>,
+    atlas: Option<Res<TileAtlas>>,
+    mut images: ResMut<Assets<Image>>,
+    mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+) {
+    let Some(intent) = dialog.pending_apply.take() else {
+        return;
+    };
+    if let Err(e) = create_project(
+        &intent,
+        &mut projection,
+        &mut drill,
+        &mut recents,
+        &mut notice,
+        &mut diagnostics,
+        &mut edit,
+        &mut playback,
+        &mut view,
+        &mut tex,
+        atlas.as_deref(),
+        &mut images,
+        &mut cameras,
+    ) {
+        // 失败时让对话框再次打开让作者改。
+        dialog.error = Some(e);
+        dialog.open = true;
     }
 }
 
@@ -317,9 +385,12 @@ pub fn new_project_dialog(
 /// 2. `save_world(全量)`：首图的 `index.yaml` + `terrain.bin` + meta 覆写；
 /// 3. `load_project_into`：从磁盘打开（最近工程 / 视图 / 纹理 / 播放全部接管，
 ///    顺带验证刚写下的东西真能读回来）。
+///
+/// 输入校验已在 UI 系统打包 [`NewProjectIntent`] 时完成（`validated_path()`），
+/// 此处不再重复。
 #[allow(clippy::too_many_arguments)]
 fn create_project(
-    dialog: &NewProjectDialog,
+    intent: &NewProjectIntent,
     projection: &mut WorldProjection,
     drill: &mut DrillState,
     recents: &mut RecentProjects,
@@ -332,10 +403,10 @@ fn create_project(
     atlas: Option<&TileAtlas>,
     images: &mut Assets<Image>,
     cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
-    frame: u64,
 ) -> Result<(), String> {
-    let path = dialog.validated_path()?;
-    let name = dialog.name.trim().to_owned();
+    let path = intent.path.clone();
+    let name = intent.name.clone();
+    let frame = intent.frame;
     let world = initial_world(&name);
 
     wv_io::Project::create(&path, &name).map_err(|e| format!("创建工程失败：{e}"))?;

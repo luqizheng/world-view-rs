@@ -1012,6 +1012,12 @@ pub struct RecentProject {
     pub dir: String,
     /// 显示名（`world.yaml` 的 `meta.name`）。
     pub name: String,
+    /// 上次被 `remember` / 当前正在打开的时间戳。
+    ///
+    /// **会话内 monotonic 时钟**（`Instant` 不参与 Serialize，所以目前**不**进
+    /// 落盘；跨会话持久化见 README §12 待决）。欢迎页右侧 `time_ago` 由此
+    /// 算出（`format_time_ago`，见 [`crate::ui::widgets`]）。
+    pub last_opened_at: std::time::Instant,
 }
 
 /// 最近打开的工程列表。
@@ -1039,8 +1045,15 @@ impl RecentProjects {
         &self.entries
     }
 
-    /// 置顶一个工程（按目录去重，超上限截断）。
+    /// 置顶一个工程（按目录去重，超上限截断）。时间戳由 `remember_at` 灌入
+    /// 当前时刻——多数 caller 都想要「现在」语义，所以这个 wrapper 是默认入口。
     pub fn remember(&mut self, dir: &str, name: &str) {
+        self.remember_at(dir, name, std::time::Instant::now());
+    }
+
+    /// 时间戳由 caller 注入的版本。测试用——给一个固定 `Instant` 让断言无 flaky。
+    /// 业务路径都用 [`Self::remember`]。
+    pub fn remember_at(&mut self, dir: &str, name: &str, at: std::time::Instant) {
         if dir.is_empty() {
             return;
         }
@@ -1050,6 +1063,7 @@ impl RecentProjects {
             RecentProject {
                 dir: dir.to_owned(),
                 name: name.to_owned(),
+                last_opened_at: at,
             },
         );
         self.entries.truncate(RECENT_PROJECTS_MAX);
@@ -1058,7 +1072,12 @@ impl RecentProjects {
     /// 菜单 / 命令面板实际要显示的列表：会话记录 **∪** 当前工程。
     ///
     /// 当前工程放在最前——用户最可能想确认的就是「我现在开的是哪个」。
+    /// 当前正在打开的工程其 `last_opened_at` 取 `Instant::now()`（"现在开着"
+    /// 这一事实本身就是它最近一次被打开的标志）；如果之后某次工程**重新**
+    /// 进入 `RecentProjects.entries`（例如关闭后再次打开），那个时间戳会
+    /// 由 [`Self::remember`] 在打开时被刷新。
     pub fn visible(&self, projection: &WorldProjection) -> Vec<RecentProject> {
+        let now = std::time::Instant::now();
         let mut out: Vec<RecentProject> = Vec::new();
         if let Some(dir) = projection.project_dir.as_deref() {
             let name = projection
@@ -1070,6 +1089,7 @@ impl RecentProjects {
             out.push(RecentProject {
                 dir: dir.to_owned(),
                 name,
+                last_opened_at: now,
             });
         }
         for e in &self.entries {
@@ -1376,6 +1396,35 @@ mod tests {
         assert_eq!(r.entries().len(), RECENT_PROJECTS_MAX);
         r.remember("", "无目录");
         assert_eq!(r.entries().len(), RECENT_PROJECTS_MAX, "空目录不入表");
+    }
+
+    /// `remember_at` 用显式 `Instant` 灌入，断言两次 remember 之间的时间戳
+    /// 严格区分——会话内 monotonic 时钟下 `a < b` 意味着 `a + 1ns <= b` 成立。
+    #[test]
+    fn remember_at_records_explicit_instant_per_dir() {
+        use std::time::{Duration, Instant};
+        let mut r = RecentProjects::default();
+        let t0 = Instant::now();
+        r.remember_at("/w/a", "alpha", t0);
+        r.remember_at("/w/b", "beta", t0 + Duration::from_secs(60));
+        r.remember_at("/w/c", "gamma", t0 + Duration::from_secs(86400));
+
+        let entries = r.entries();
+        assert_eq!(entries.len(), 3);
+        // newest-first（最近放在最前）；c 是最新
+        assert_eq!(entries[0].dir, "/w/c");
+        assert_eq!(entries[0].last_opened_at, t0 + Duration::from_secs(86400));
+        assert_eq!(entries[1].dir, "/w/b");
+        assert_eq!(entries[1].last_opened_at, t0 + Duration::from_secs(60));
+        assert_eq!(entries[2].dir, "/w/a");
+        assert_eq!(entries[2].last_opened_at, t0);
+        // 重新 remember 同一个 dir 时，旧条目被替换、新时间戳生效
+        r.remember_at("/w/a", "alpha v2", t0 + Duration::from_secs(30));
+        let entries = r.entries();
+        assert_eq!(entries[0].dir, "/w/a", "去重后置顶");
+        assert_eq!(entries[0].name, "alpha v2", "name 也被替换");
+        assert_eq!(entries[0].last_opened_at, t0 + Duration::from_secs(30));
+        assert_eq!(entries.len(), 3, "去重不增加计数");
     }
 
     #[test]

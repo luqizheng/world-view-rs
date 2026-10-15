@@ -518,14 +518,18 @@ mod tests {
     }
 
     fn sample_recent() -> Vec<RecentProject> {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
         vec![
             RecentProject {
                 dir: "/w/a".into(),
                 name: "四渡赤水 · 行军图".into(),
+                last_opened_at: t0,
             },
             RecentProject {
                 dir: "/w/b".into(),
                 name: "封神演义 · 架空".into(),
+                last_opened_at: t0 - Duration::from_secs(3600),
             },
         ]
     }
