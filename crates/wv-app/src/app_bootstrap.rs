@@ -294,8 +294,16 @@ pub fn run(config: AppConfig) {
             ui::panel_character,
             ui::panel_faction,
             ui::panel_region,
+            // v0.3：Inspector 整体右移后绘在最后（右上角，离顶栏最近），
+            // 避免被左列 / 中列面板遮挡。
             ui::panel_inspector,
             ui::panel_validation,
+            // v0.3 Figma 视觉重做（M2）：画布占位装饰（背景渐变/网格/EAST FARMLANDS
+            // 标签/河流/ZUNYI OLD CITY 虚线圈/建筑/松树）—— 必须挂在
+            // `EguiPrimaryContextPass`（egui 绘制类系统的唯一合法 schedule，
+            // 挂 `Update` 会第一帧 panic「No fonts available」，见本文件
+            // `setup_camera` 上方注释）；排在校验之后、模态对话框之前。
+            crate::render::map_decorations::draw_map_decorations,
             // 「新建地图」对话框（CommandId::NewMap 打开；居中模态窗）。
             ui::new_map_dialog,
             // 「新建工程」对话框（CommandId::NewProject / 欢迎页打开；

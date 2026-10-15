@@ -40,6 +40,8 @@ pub mod label_pick;
 #[cfg(feature = "app")]
 pub mod layer_frame;
 #[cfg(feature = "app")]
+pub mod map_decorations;
+#[cfg(feature = "app")]
 pub mod map_frame;
 #[cfg(feature = "app")]
 pub mod measurement;

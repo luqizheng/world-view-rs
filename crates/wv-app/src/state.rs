@@ -582,9 +582,11 @@ impl Panel {
             Panel::Region => [332.0, 680.0],
             Panel::Event => [652.0, 56.0],
             Panel::Situation => [652.0, 380.0],
-            Panel::Validation => [972.0, 56.0],
-            Panel::Inspector => [972.0, 308.0],
-            Panel::Character => [972.0, 560.0],
+            // v0.3（Figma）：Inspector 改到顶栏正下方右侧（紧贴 Figma 风格的右上角），
+            // 旧位 972,308 让给 Validation；Character / Event 错开避免矩形重叠。
+            Panel::Validation => [12.0, 808.0],
+            Panel::Inspector => [992.0, 56.0],
+            Panel::Character => [992.0, 520.0],
             // 底部通栏（§3.3 P-5）。
             Panel::Timeline => [12.0, 880.0],
         }
@@ -606,7 +608,8 @@ impl Panel {
             Panel::Faction => [280.0, 300.0],
             Panel::Region => [280.0, 200.0],
             Panel::Inspector => [264.0, 240.0],
-            Panel::Validation => [300.0, 240.0],
+            // v0.3：Validation 改成 240 高（默认隐藏，validation 触发时才出现）
+            Panel::Validation => [300.0, 60.0],
         }
     }
 
