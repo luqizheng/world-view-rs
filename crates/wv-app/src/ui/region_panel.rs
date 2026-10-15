@@ -15,7 +15,7 @@ use bevy_egui::{egui, EguiContexts};
 
 use crate::edit::editing;
 use crate::edit::region_panel_actions;
-use crate::i18n::CurrentLocale;
+use crate::i18n::{t_key, CurrentLocale, I18nKey};
 use crate::state::{Panel, PanelState, ViewState, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::space;
@@ -51,19 +51,26 @@ pub fn panel_region(
         current_loc.0,
         |ui| {
             ui.horizontal(|ui| {
-                if ui.button("+ 新建区域").clicked() {
+                if ui
+                    .button(t_key(&current_loc, I18nKey::RegionPanelAddBtn))
+                    .clicked()
+                {
                     region_panel_actions::add_region_now(
                         &mut projection,
                         &mut edit,
                         &view,
-                        "新区域".into(),
+                        t_key(&current_loc, I18nKey::RegionPanelDefaultName).to_owned(),
                     );
                 }
                 ui.add_space(space::SM);
                 ui.label(
-                    egui::RichText::new(format!("当前地图：{}", view.current_map))
-                        .small()
-                        .color(shell.t2()),
+                    egui::RichText::new(format!(
+                        "{}{}",
+                        t_key(&current_loc, I18nKey::RegionPanelCurrentMapPrefix),
+                        view.current_map
+                    ))
+                    .small()
+                    .color(shell.t2()),
                 );
             });
             ui.add_space(space::SM);
@@ -85,15 +92,23 @@ pub fn panel_region(
                     ui,
                     &shell,
                     "⬡",
-                    "当前地图尚无区域",
-                    "点击上方「+ 新建区域」创建，或在工程目录下编辑 regions/*.yaml",
-                    "查看区域说明 →",
+                    t_key(&current_loc, I18nKey::RegionPanelEmptyTitle),
+                    t_key(&current_loc, I18nKey::RegionPanelEmptyHint),
+                    t_key(&current_loc, I18nKey::RegionPanelEmptyAction),
                 );
                 return;
             }
 
             for r in &regions {
-                region_card(ui, &shell, r, &view, &mut projection, &mut edit);
+                region_card(
+                    ui,
+                    &shell,
+                    r,
+                    &view,
+                    &mut projection,
+                    &mut edit,
+                    &current_loc,
+                );
                 ui.add_space(space::XS);
             }
         },
@@ -109,19 +124,23 @@ fn region_card(
     view: &ViewState,
     projection: &mut WorldProjection,
     edit: &mut editing::EditHistory,
+    current_loc: &CurrentLocale,
 ) {
     let id = region.id.clone();
     let vertex_count = region.polygon.len() / 2;
     egui::CollapsingHeader::new(format!(
-        "⬡ {} ({}) — {} 顶点",
-        region.name, region.id, vertex_count
+        "⬡ {} ({}) — {}{}",
+        region.name,
+        region.id,
+        vertex_count,
+        t_key(current_loc, I18nKey::FactionPanelPointCountSuffix)
     ))
     .default_open(true)
     .show(ui, |ui| {
         // 名称编辑。
         let mut name_buf = region.name.clone();
         ui.horizontal(|ui| {
-            ui.label("名称：");
+            ui.label(t_key(current_loc, I18nKey::RegionPanelNameLabel));
             if ui.text_edit_singleline(&mut name_buf).changed() {
                 region_panel_actions::update_region_now(
                     projection,
@@ -137,13 +156,18 @@ fn region_card(
         // 轮廓信息。
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new(format!("轮廓：{} 个顶点", vertex_count))
-                    .small()
-                    .color(shell.t2()),
+                egui::RichText::new(format!(
+                    "{}{}{}",
+                    t_key(current_loc, I18nKey::RegionPanelOutlinePrefix),
+                    vertex_count,
+                    t_key(current_loc, I18nKey::RegionPanelOutlineSuffix)
+                ))
+                .small()
+                .color(shell.t2()),
             );
             if region.polygon.is_empty() {
                 ui.label(
-                    egui::RichText::new("（未绘制）")
+                    egui::RichText::new(t_key(current_loc, I18nKey::RegionPanelOutlinePlaceholder))
                         .italics()
                         .small()
                         .color(shell.t2()),
@@ -153,7 +177,10 @@ fn region_card(
 
         ui.add_space(space::XS);
         if ui
-            .button(egui::RichText::new("删除区域").color(egui::Color32::RED))
+            .button(
+                egui::RichText::new(t_key(current_loc, I18nKey::RegionPanelDeleteBtn))
+                    .color(egui::Color32::RED),
+            )
             .clicked()
         {
             region_panel_actions::remove_region_now(projection, edit, view, id.clone());

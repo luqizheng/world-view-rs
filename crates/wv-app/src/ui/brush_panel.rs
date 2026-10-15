@@ -72,7 +72,7 @@ pub fn panel_brush(
                     .size(shell.scale.micro)
                     .color(shell.t2()),
             );
-            terrain_grid(ui, &shell, &mut brush.kind);
+            terrain_grid(ui, &shell, &mut brush.kind, current_loc.0);
             ui.add_space(space::XS);
             // 半径滑条：标签合并进 show_value，单位用「wu」。
             // 数值由 custom_formatter 拼，「半径」「wu」字串走 i18n。

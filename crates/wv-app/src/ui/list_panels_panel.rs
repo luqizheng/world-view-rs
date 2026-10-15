@@ -15,7 +15,7 @@
 use bevy::prelude::*;
 use bevy_egui::EguiContexts;
 
-use crate::i18n::CurrentLocale;
+use crate::i18n::{t_key, CurrentLocale, I18nKey};
 use crate::state::{Panel, PanelState, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::ui_layout::LayoutFile;
@@ -57,9 +57,9 @@ pub fn panel_character(
                     ui,
                     &shell,
                     "◎",
-                    "暂无已登记人物",
-                    "人物是叙事的载体：登记一个，让它走进历史",
-                    "登记人物 →",
+                    t_key(&current_loc, I18nKey::CharacterPanelEmptyTitle),
+                    t_key(&current_loc, I18nKey::CharacterPanelEmptyHint),
+                    t_key(&current_loc, I18nKey::CharacterPanelEmptyAction),
                 );
             } else {
                 for c in chars {
@@ -104,15 +104,27 @@ pub fn panel_event(
                     ui,
                     &shell,
                     "○",
-                    "暂无已登记事件",
-                    "事件是时间轴上的锚点：登记一个，让它在地图上出现",
-                    "登记事件 →",
+                    t_key(&current_loc, I18nKey::EventPanelEmptyTitle),
+                    t_key(&current_loc, I18nKey::EventPanelEmptyHint),
+                    t_key(&current_loc, I18nKey::EventPanelEmptyAction),
                 );
             } else {
                 for e in events {
                     let meta = match e.span.to {
-                        Some(to) => format!("第 {}–{} 天", e.span.from, to),
-                        None => format!("第 {} 天", e.span.from),
+                        Some(to) => format!(
+                            "{}{}{}{}{}",
+                            t_key(&current_loc, I18nKey::SpanDayPrefix),
+                            e.span.from,
+                            t_key(&current_loc, I18nKey::SpanDayRangeMid),
+                            to,
+                            t_key(&current_loc, I18nKey::SpanDaySuffix),
+                        ),
+                        None => format!(
+                            "{}{}{}",
+                            t_key(&current_loc, I18nKey::SpanDayPrefix),
+                            e.span.from,
+                            t_key(&current_loc, I18nKey::SpanDaySuffix),
+                        ),
                     };
                     list_item(
                         ui,

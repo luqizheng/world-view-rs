@@ -187,13 +187,18 @@ pub(crate) fn rect_stroke(
 /// 行高 22 px（曾 44 px），色块 14 px 居左、名称 11 px 居右同一行——
 /// 高度砍半但视觉仍能一眼区分当前选中（背景填 `active_bg` + 1.5 px
 /// `focus` 描边），网格外的所有状态提示交还给面板体。
-pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8) {
+pub fn terrain_grid(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    selected: &mut u8,
+    loc: crate::i18n::Locale,
+) {
     egui::Grid::new("terrain_swatches")
         .num_columns(2)
         .spacing([space::XS, space::XS])
         .show(ui, |ui| {
             for k in 0u8..10 {
-                let name = super::shell::TERRAIN_NAMES[k as usize];
+                let name = super::shell::terrain_name_at(loc, k as usize);
                 let is_sel = *selected == k;
                 let cell_w = (ui.available_width() - space::XS) / 2.0;
                 let row_h = 22.0;

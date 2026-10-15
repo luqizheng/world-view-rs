@@ -15,7 +15,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use crate::i18n::CurrentLocale;
+use crate::i18n::{t_key, CurrentLocale, I18nKey};
 use crate::state::{Panel, PanelState, ViewState};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::space;
@@ -51,7 +51,7 @@ pub fn panel_map_tree(
                 &shell,
                 terrain_swatch(3),
                 &view.current_map,
-                "世界地图",
+                t_key(&current_loc, I18nKey::LayerWorldMapLabel),
                 true,
             );
             let _ = resp;
@@ -87,15 +87,39 @@ pub fn panel_layers(
         None,
         current_loc.0,
         |ui| {
-            ui.checkbox(&mut view.terrain_visible, "地形");
+            ui.checkbox(
+                &mut view.terrain_visible,
+                t_key(&current_loc, I18nKey::LayerTerrain),
+            );
             // 底图淡化：把瓦片图集向纸面色拉，让路线/地标压得住底图。
-            ui.checkbox(&mut view.terrain_soften, "底图淡化");
-            ui.checkbox(&mut view.places_visible, "地点");
-            ui.checkbox(&mut view.events_visible, "事件点");
-            ui.checkbox(&mut view.tracks_visible, "轨迹");
-            ui.checkbox(&mut view.roads_visible, "道路");
-            ui.checkbox(&mut view.buildings_visible, "建筑");
-            ui.checkbox(&mut view.factions_visible, "势力");
+            ui.checkbox(
+                &mut view.terrain_soften,
+                t_key(&current_loc, I18nKey::LayerBaseFading),
+            );
+            ui.checkbox(
+                &mut view.places_visible,
+                t_key(&current_loc, I18nKey::LayerPlace),
+            );
+            ui.checkbox(
+                &mut view.events_visible,
+                t_key(&current_loc, I18nKey::LayerEventPoint),
+            );
+            ui.checkbox(
+                &mut view.tracks_visible,
+                t_key(&current_loc, I18nKey::LayerTrail),
+            );
+            ui.checkbox(
+                &mut view.roads_visible,
+                t_key(&current_loc, I18nKey::LayerRoad),
+            );
+            ui.checkbox(
+                &mut view.buildings_visible,
+                t_key(&current_loc, I18nKey::LayerBuilding),
+            );
+            ui.checkbox(
+                &mut view.factions_visible,
+                t_key(&current_loc, I18nKey::LayerFaction),
+            );
         },
     );
 }

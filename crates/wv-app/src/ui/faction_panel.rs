@@ -17,7 +17,7 @@ use bevy_egui::{egui, EguiContexts};
 
 use crate::edit::editing;
 use crate::edit::faction_panel_actions;
-use crate::i18n::CurrentLocale;
+use crate::i18n::{t_key, CurrentLocale, I18nKey};
 use crate::state::{Panel, PanelState, PlaybackState, ViewState, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::space;
@@ -54,20 +54,27 @@ pub fn panel_faction(
         current_loc.0,
         |ui| {
             ui.horizontal(|ui| {
-                if ui.button("+ 新建势力").clicked() {
+                if ui
+                    .button(t_key(&current_loc, I18nKey::FactionPanelAddBtn))
+                    .clicked()
+                {
                     faction_panel_actions::add_faction_now(
                         &mut projection,
                         &mut edit,
                         &view,
-                        "新势力".into(),
+                        t_key(&current_loc, I18nKey::FactionPanelDefaultName).to_owned(),
                         wv_core::color::Color("#1E6FCC".into()),
                     );
                 }
                 ui.add_space(space::SM);
                 ui.label(
-                    egui::RichText::new(format!("当前地图：{}", view.current_map))
-                        .small()
-                        .color(shell.t2()),
+                    egui::RichText::new(format!(
+                        "{}{}",
+                        t_key(&current_loc, I18nKey::FactionPanelCurrentMapPrefix),
+                        view.current_map
+                    ))
+                    .small()
+                    .color(shell.t2()),
                 );
             });
             ui.add_space(space::SM);
@@ -83,9 +90,9 @@ pub fn panel_faction(
                     ui,
                     &shell,
                     "◆",
-                    "尚未创建势力",
-                    "在工程目录下编辑 factions/*.yaml，或点击上方「+ 新建势力」",
-                    "查看势力层说明 →",
+                    t_key(&current_loc, I18nKey::FactionPanelEmptyTitle),
+                    t_key(&current_loc, I18nKey::FactionPanelEmptyHint),
+                    t_key(&current_loc, I18nKey::FactionPanelEmptyAction),
                 );
                 return;
             }
@@ -100,6 +107,7 @@ pub fn panel_faction(
                     &map_id,
                     &mut projection,
                     &mut edit,
+                    &current_loc,
                 );
                 ui.add_space(space::XS);
             }
@@ -118,6 +126,7 @@ fn faction_card(
     map_id: &wv_core::id::Id,
     projection: &mut WorldProjection,
     edit: &mut editing::EditHistory,
+    current_loc: &CurrentLocale,
 ) {
     let id = faction.id.clone();
     egui::CollapsingHeader::new(format!("◆ {} ({})", faction.name, faction.id))
@@ -128,13 +137,13 @@ fn faction_card(
             let mut color_buf = faction.color.as_str().to_string();
             let mut changed = false;
             ui.horizontal(|ui| {
-                ui.label("名称：");
+                ui.label(t_key(current_loc, I18nKey::FactionPanelFieldNameLabel));
                 if ui.text_edit_singleline(&mut name_buf).changed() {
                     changed = true;
                 }
             });
             ui.horizontal(|ui| {
-                ui.label("颜色：");
+                ui.label(t_key(current_loc, I18nKey::FactionPanelFieldColorLabel));
                 if ui.text_edit_singleline(&mut color_buf).changed() {
                     changed = true;
                 }
@@ -153,9 +162,13 @@ fn faction_card(
 
             ui.add_space(space::XS);
             ui.label(
-                egui::RichText::new(format!("当前地图几何：{}", view.current_map))
-                    .small()
-                    .color(shell.t2()),
+                egui::RichText::new(format!(
+                    "{}{}",
+                    t_key(current_loc, I18nKey::FactionPanelCurrentMapGeomPrefix),
+                    view.current_map
+                ))
+                .small()
+                .color(shell.t2()),
             );
             // 几何列表：仅展示当前地图下的。
             let geos: Vec<wv_core::map::GeometrySpan> = projection
@@ -167,7 +180,7 @@ fn faction_card(
                 .collect();
             if geos.is_empty() {
                 ui.label(
-                    egui::RichText::new("（无几何）")
+                    egui::RichText::new(t_key(current_loc, I18nKey::FactionPanelNoGeometry))
                         .italics()
                         .small()
                         .color(shell.t2()),
@@ -177,8 +190,18 @@ fn faction_card(
                     let from = g.span.from;
                     ui.horizontal(|ui| {
                         ui.label(format!("[{}, {})", from, g.span.to.unwrap_or(from + 1)));
-                        ui.label(format!("{} 顶点", g.geometry.point_count()));
-                        if ui.small_button("删除").clicked() {
+                        ui.label(format!(
+                            "{}{}",
+                            g.geometry.point_count(),
+                            t_key(current_loc, I18nKey::FactionPanelPointCountSuffix)
+                        ));
+                        if ui
+                            .small_button(t_key(
+                                current_loc,
+                                I18nKey::FactionPanelDeleteBoundaryBtn,
+                            ))
+                            .clicked()
+                        {
                             faction_panel_actions::remove_geometry_now(
                                 projection,
                                 edit,
@@ -194,13 +217,16 @@ fn faction_card(
             ui.horizontal(|ui| {
                 let mut from_buf = playback.current_day.to_string();
                 let mut to_buf = "".to_string();
-                ui.label("起 day：");
+                ui.label(t_key(current_loc, I18nKey::FactionPanelFieldStartDayLabel));
                 if ui.text_edit_singleline(&mut from_buf).changed() {
                     // 改了起日就停掉按钮的焦点闪烁问题——面板每帧重画，自动 commit。
                 }
-                ui.label("止（留空=至今）：");
+                ui.label(t_key(current_loc, I18nKey::FactionPanelFieldEndDayLabel));
                 ui.text_edit_singleline(&mut to_buf);
-                if ui.button("+ 新建疆界").clicked() {
+                if ui
+                    .button(t_key(current_loc, I18nKey::FactionPanelAddBoundaryBtn))
+                    .clicked()
+                {
                     let from: i64 = from_buf.trim().parse().unwrap_or(playback.current_day);
                     let to: Option<i64> = if to_buf.trim().is_empty() {
                         None
@@ -220,7 +246,10 @@ fn faction_card(
 
             ui.add_space(space::XS);
             if ui
-                .button(egui::RichText::new("删除整个势力").color(egui::Color32::RED))
+                .button(
+                    egui::RichText::new(t_key(current_loc, I18nKey::FactionPanelDeleteEntireBtn))
+                        .color(egui::Color32::RED),
+                )
                 .clicked()
             {
                 faction_panel_actions::remove_faction_now(projection, edit, view, id.clone());

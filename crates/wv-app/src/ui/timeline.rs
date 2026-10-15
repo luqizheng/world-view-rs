@@ -17,6 +17,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
+use crate::i18n::{t_key, I18nKey};
 use crate::state::{Panel, PanelState, PlaybackState, WorldProjection};
 use crate::theme::ui_theme::{proportional, UiShellConfig};
 use crate::theme::ui_tokens::{radius, space};
@@ -114,7 +115,16 @@ pub fn panel_timeline(
                 }
                 for s in [1.0f32, 5.0, 30.0] {
                     let sel = (playback.speed - s).abs() < f32::EPSILON;
-                    if ui.selectable_label(sel, format!("{s:.0}天/秒")).clicked() {
+                    if ui
+                        .selectable_label(
+                            sel,
+                            format!(
+                                "{s:.0}{}",
+                                t_key(&current_loc, I18nKey::TimelineSpeedPillSuffix)
+                            ),
+                        )
+                        .clicked()
+                    {
                         playback.speed = s;
                     }
                 }
@@ -130,7 +140,10 @@ pub fn panel_timeline(
                     .font(crate::theme::ui_theme::mono(shell.scale.base)),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("＋ 登记事件").clicked() {
+                    if ui
+                        .button(t_key(&current_loc, I18nKey::TimelineRegisterEventBtn))
+                        .clicked()
+                    {
                         *open_event = true;
                     }
                     ui.add_space(space::SM);

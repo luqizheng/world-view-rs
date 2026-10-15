@@ -291,11 +291,223 @@ pub enum I18nKey {
     TimelineLayerCharacter,
     /// 「世纪」TimelineLayer
     TimelineLayerCentury,
+
+    // ── 图层可见性（W2：layers_panel / minimap_panel 共享） ───────────
+    /// 「地形」图层开关
+    LayerTerrain,
+    /// 「底图淡化」图层开关
+    LayerBaseFading,
+    /// 「地点」图层开关（layers_panel/minimap 共用；minimap 用 "Place"，layers_panel 用 "Place" 一致）
+    LayerPlace,
+    /// 「事件点」图层开关
+    LayerEventPoint,
+    /// 「轨迹」图层开关
+    LayerTrail,
+    /// 「道路」图层开关
+    LayerRoad,
+    /// 「建筑」图层开关
+    LayerBuilding,
+    /// 「势力」图层开关
+    LayerFaction,
+    /// 图层面板标题「图层」
+    LayerPanelHeader,
+    /// 世界地图（layers_panel 行项）
+    LayerWorldMapLabel,
+
+    // ── 地形种类（TERRAIN_NAMES：实际 10 种，写在 `crate::ui::shell::TERRAIN_NAMES`） ──
+    /// 「深水」地形
+    TerrainKindDeepWater,
+    /// 「浅水」地形
+    TerrainKindShallowWater,
+    /// 「沙滩」地形
+    TerrainKindBeach,
+    /// 「草原」地形
+    TerrainKindGrassland,
+    /// 「林地」地形
+    TerrainKindForest,
+    /// 「丘陵」地形
+    TerrainKindHill,
+    /// 「山地」地形
+    TerrainKindMountain,
+    /// 「雪原」地形
+    TerrainKindSnow,
+    /// 「沼泽」地形
+    TerrainKindSwamp,
+    /// 「道路」地形
+    TerrainKindRoad,
+
+    // ── 项目菜单（project_menu） ─────────────────────────────────────
+    /// 「（未命名工程）」
+    ProjectMenuUnnamedProject,
+    /// 「最近工程」分组
+    ProjectMenuRecentSection,
+    /// 「打开最近工程 · 」前缀（与 name 拼接）
+    ProjectMenuRecentOpenPrefix,
+    /// 「新建工程…」按钮
+    ProjectMenuNewProject,
+    /// 「新建地图…」按钮
+    ProjectMenuNewMap,
+    /// 「打开工程…」按钮
+    ProjectMenuOpenProject,
+    /// 「另存为…」按钮
+    ProjectMenuSaveProjectAs,
+    /// 「导出…」按钮
+    ProjectMenuExportProject,
+    /// 「关闭工程」按钮
+    ProjectMenuCloseProject,
+    /// 「项目设置」按钮
+    ProjectMenuProjectSettings,
+    /// 「工程」分组
+    ProjectMenuProjectSection,
+    /// 「面板」分组
+    ProjectMenuPanelsSection,
+    /// 「重置所有面板位置」按钮
+    ProjectMenuResetPanels,
+
+    // ── 时段 / 区间（公共：第 N 天、跨越时间段） ──────────────────────
+    /// 「第 」时段前缀
+    SpanDayPrefix,
+    /// 「 天」时段后缀
+    SpanDaySuffix,
+    /// 「–」起止连接符
+    SpanDayRangeMid,
+    /// 「 天 –」开放区间后缀（结束时间未填）
+    SpanDayOpenSuffix,
+
+    // ── 事态面板 ─────────────────────────────────────────────────────
+    /// 暂无事态空态标题
+    SituationPanelEmptyTitle,
+    /// 暂无事态空态提示
+    SituationPanelEmptyHint,
+    /// 暂无事态空态动作
+    SituationPanelEmptyAction,
+
+    // ── 区域面板 ─────────────────────────────────────────────────────
+    /// 「+ 新建区域」按钮
+    RegionPanelAddBtn,
+    /// 默认新建区域名
+    RegionPanelDefaultName,
+    /// 「当前地图：」前缀
+    RegionPanelCurrentMapPrefix,
+    /// 尚无区域空态标题
+    RegionPanelEmptyTitle,
+    /// 尚无区域空态提示
+    RegionPanelEmptyHint,
+    /// 尚无区域空态动作
+    RegionPanelEmptyAction,
+    /// 「名称：」字段标签
+    RegionPanelNameLabel,
+    /// 「轮廓：」前缀
+    RegionPanelOutlinePrefix,
+    /// 「 个顶点」后缀
+    RegionPanelOutlineSuffix,
+    /// 「（未绘制）」占位
+    RegionPanelOutlinePlaceholder,
+    /// 「删除区域」按钮
+    RegionPanelDeleteBtn,
+
+    // ── 势力面板 ─────────────────────────────────────────────────────
+    /// 「+ 新建势力」按钮
+    FactionPanelAddBtn,
+    /// 「+ 新建疆界」按钮
+    FactionPanelAddBoundaryBtn,
+    /// 默认新建势力名
+    FactionPanelDefaultName,
+    /// 尚无势力空态标题
+    FactionPanelEmptyTitle,
+    /// 尚无势力空态提示
+    FactionPanelEmptyHint,
+    /// 尚无势力空态动作
+    FactionPanelEmptyAction,
+    /// 「当前地图：」前缀
+    FactionPanelCurrentMapPrefix,
+    /// 「当前地图几何：」前缀
+    FactionPanelCurrentMapGeomPrefix,
+    /// 「名称：」字段标签
+    FactionPanelFieldNameLabel,
+    /// 「颜色：」字段标签
+    FactionPanelFieldColorLabel,
+    /// 「起 day：」字段标签
+    FactionPanelFieldStartDayLabel,
+    /// 「止（留空=至今）：」字段标签
+    FactionPanelFieldEndDayLabel,
+    /// 「删除」单段按钮
+    FactionPanelDeleteBoundaryBtn,
+    /// 「删除整个势力」按钮
+    FactionPanelDeleteEntireBtn,
+    /// 「 顶点」后缀（无前缀）
+    FactionPanelPointCountSuffix,
+    /// 「（无几何）」占位
+    FactionPanelNoGeometry,
+
+    // ── 检视器面板 ───────────────────────────────────────────────────
+    /// 未选中对象空态标题
+    InspectorEmptyTitle,
+    /// 未选中对象空态提示
+    InspectorEmptyHint,
+    /// 未选中对象空态动作
+    InspectorEmptyAction,
+
+    // ── 时间轴面板（剩余字面量） ─────────────────────────────────────
+    /// 「天/秒」速度单位后缀（format!("{s:.0}") + suffix 拼接）
+    TimelineSpeedPillSuffix,
+    /// 「＋ 登记事件」按钮
+    TimelineRegisterEventBtn,
+
+    // ── 校验面板 ─────────────────────────────────────────────────────
+    /// 「错误 N」徽标前缀（数字前缀拼接）
+    ValidationBadgeErrCountPrefix,
+    /// 「提示 N」徽标前缀
+    ValidationBadgeWarnCountPrefix,
+    /// 「无错误」徽标
+    ValidationBadgeErrNone,
+    /// 「四维校验：时间 / 引用 / 几何 / 一致性」副标题
+    ValidationSubtitle,
+    /// 「校验只提示，不阻止保存（AGENTS §7.5）」脚注
+    ValidationFootnote,
+    /// 「错误」段标题
+    ValidationSectionErrors,
+    /// 「提示」段标题
+    ValidationSectionHints,
+    /// 「一切正常」空态
+    ValidationOkAll,
+
+    // ── 人物面板 ─────────────────────────────────────────────────────
+    /// 无人物空态标题
+    CharacterPanelEmptyTitle,
+    /// 无人物空态提示
+    CharacterPanelEmptyHint,
+    /// 无人物空态动作
+    CharacterPanelEmptyAction,
+
+    // ── 事件面板 ─────────────────────────────────────────────────────
+    /// 无事件空态标题
+    EventPanelEmptyTitle,
+    /// 无事件空态提示
+    EventPanelEmptyHint,
+    /// 无事件空态动作
+    EventPanelEmptyAction,
+
+    // ── 地图控制面板 ─────────────────────────────────────────────────
+    /// 工具按钮 hover：切换工具（当前：笔刷 / 拖动）
+    MapControlsToolSwitchHint,
+    /// 测量：折线
+    MapControlsMeasurePolylineHint,
+    /// 测量：矩形
+    MapControlsMeasureRectHint,
+    /// 测量：橡皮
+    MapControlsMeasureEraserHint,
+    /// 「放大」
+    MapControlsZoomIn,
+    /// 「缩小」
+    MapControlsZoomOut,
+    /// 「缩放到全图」
+    MapControlsFitMap,
 }
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 121] = [
+    pub const ALL: [I18nKey; 214] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -429,5 +641,111 @@ impl I18nKey {
         I18nKey::TimelineLayerSituation,
         I18nKey::TimelineLayerCharacter,
         I18nKey::TimelineLayerCentury,
+        // 图层可见性（10）
+        I18nKey::LayerTerrain,
+        I18nKey::LayerBaseFading,
+        I18nKey::LayerPlace,
+        I18nKey::LayerEventPoint,
+        I18nKey::LayerTrail,
+        I18nKey::LayerRoad,
+        I18nKey::LayerBuilding,
+        I18nKey::LayerFaction,
+        I18nKey::LayerPanelHeader,
+        I18nKey::LayerWorldMapLabel,
+        // 地形种类（10）
+        I18nKey::TerrainKindDeepWater,
+        I18nKey::TerrainKindShallowWater,
+        I18nKey::TerrainKindBeach,
+        I18nKey::TerrainKindGrassland,
+        I18nKey::TerrainKindForest,
+        I18nKey::TerrainKindHill,
+        I18nKey::TerrainKindMountain,
+        I18nKey::TerrainKindSnow,
+        I18nKey::TerrainKindSwamp,
+        I18nKey::TerrainKindRoad,
+        // 项目菜单（13）
+        I18nKey::ProjectMenuUnnamedProject,
+        I18nKey::ProjectMenuRecentSection,
+        I18nKey::ProjectMenuRecentOpenPrefix,
+        I18nKey::ProjectMenuNewProject,
+        I18nKey::ProjectMenuNewMap,
+        I18nKey::ProjectMenuOpenProject,
+        I18nKey::ProjectMenuSaveProjectAs,
+        I18nKey::ProjectMenuExportProject,
+        I18nKey::ProjectMenuCloseProject,
+        I18nKey::ProjectMenuProjectSettings,
+        I18nKey::ProjectMenuProjectSection,
+        I18nKey::ProjectMenuPanelsSection,
+        I18nKey::ProjectMenuResetPanels,
+        // 区间（4）
+        I18nKey::SpanDayPrefix,
+        I18nKey::SpanDaySuffix,
+        I18nKey::SpanDayRangeMid,
+        I18nKey::SpanDayOpenSuffix,
+        // 事态（3）
+        I18nKey::SituationPanelEmptyTitle,
+        I18nKey::SituationPanelEmptyHint,
+        I18nKey::SituationPanelEmptyAction,
+        // 区域（11）
+        I18nKey::RegionPanelAddBtn,
+        I18nKey::RegionPanelDefaultName,
+        I18nKey::RegionPanelCurrentMapPrefix,
+        I18nKey::RegionPanelEmptyTitle,
+        I18nKey::RegionPanelEmptyHint,
+        I18nKey::RegionPanelEmptyAction,
+        I18nKey::RegionPanelNameLabel,
+        I18nKey::RegionPanelOutlinePrefix,
+        I18nKey::RegionPanelOutlineSuffix,
+        I18nKey::RegionPanelOutlinePlaceholder,
+        I18nKey::RegionPanelDeleteBtn,
+        // 势力（15）
+        I18nKey::FactionPanelAddBtn,
+        I18nKey::FactionPanelAddBoundaryBtn,
+        I18nKey::FactionPanelDefaultName,
+        I18nKey::FactionPanelEmptyTitle,
+        I18nKey::FactionPanelEmptyHint,
+        I18nKey::FactionPanelEmptyAction,
+        I18nKey::FactionPanelCurrentMapPrefix,
+        I18nKey::FactionPanelCurrentMapGeomPrefix,
+        I18nKey::FactionPanelFieldNameLabel,
+        I18nKey::FactionPanelFieldColorLabel,
+        I18nKey::FactionPanelFieldStartDayLabel,
+        I18nKey::FactionPanelFieldEndDayLabel,
+        I18nKey::FactionPanelDeleteBoundaryBtn,
+        I18nKey::FactionPanelDeleteEntireBtn,
+        I18nKey::FactionPanelPointCountSuffix,
+        I18nKey::FactionPanelNoGeometry,
+        // 检视器（3）
+        I18nKey::InspectorEmptyTitle,
+        I18nKey::InspectorEmptyHint,
+        I18nKey::InspectorEmptyAction,
+        // 时间轴（2）
+        I18nKey::TimelineSpeedPillSuffix,
+        I18nKey::TimelineRegisterEventBtn,
+        // 校验（8）
+        I18nKey::ValidationBadgeErrCountPrefix,
+        I18nKey::ValidationBadgeWarnCountPrefix,
+        I18nKey::ValidationBadgeErrNone,
+        I18nKey::ValidationSubtitle,
+        I18nKey::ValidationFootnote,
+        I18nKey::ValidationSectionErrors,
+        I18nKey::ValidationSectionHints,
+        I18nKey::ValidationOkAll,
+        // 人物（3）
+        I18nKey::CharacterPanelEmptyTitle,
+        I18nKey::CharacterPanelEmptyHint,
+        I18nKey::CharacterPanelEmptyAction,
+        // 事件（3）
+        I18nKey::EventPanelEmptyTitle,
+        I18nKey::EventPanelEmptyHint,
+        I18nKey::EventPanelEmptyAction,
+        // 地图控制（7）
+        I18nKey::MapControlsToolSwitchHint,
+        I18nKey::MapControlsMeasurePolylineHint,
+        I18nKey::MapControlsMeasureRectHint,
+        I18nKey::MapControlsMeasureEraserHint,
+        I18nKey::MapControlsZoomIn,
+        I18nKey::MapControlsZoomOut,
+        I18nKey::MapControlsFitMap,
     ];
 }

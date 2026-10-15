@@ -162,6 +162,125 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::TimelineLayerSituation => "事态",
         I18nKey::TimelineLayerCharacter => "人物",
         I18nKey::TimelineLayerCentury => "世纪",
+
+        // ── 图层可见性 ──
+        I18nKey::LayerTerrain => "地形",
+        I18nKey::LayerBaseFading => "底图淡化",
+        I18nKey::LayerPlace => "地点",
+        I18nKey::LayerEventPoint => "事件点",
+        I18nKey::LayerTrail => "轨迹",
+        I18nKey::LayerRoad => "道路",
+        I18nKey::LayerBuilding => "建筑",
+        I18nKey::LayerFaction => "势力",
+        I18nKey::LayerPanelHeader => "图层",
+        I18nKey::LayerWorldMapLabel => "世界地图",
+
+        // ── 地形种类（TERRAIN_NAMES 实际清单）──
+        I18nKey::TerrainKindDeepWater => "深水",
+        I18nKey::TerrainKindShallowWater => "浅水",
+        I18nKey::TerrainKindBeach => "沙滩",
+        I18nKey::TerrainKindGrassland => "草原",
+        I18nKey::TerrainKindForest => "林地",
+        I18nKey::TerrainKindHill => "丘陵",
+        I18nKey::TerrainKindMountain => "山地",
+        I18nKey::TerrainKindSnow => "雪原",
+        I18nKey::TerrainKindSwamp => "沼泽",
+        I18nKey::TerrainKindRoad => "道路",
+
+        // ── 项目菜单 ──
+        I18nKey::ProjectMenuUnnamedProject => "（未命名工程）",
+        I18nKey::ProjectMenuRecentSection => "最近工程",
+        I18nKey::ProjectMenuRecentOpenPrefix => "打开最近工程 · ",
+        I18nKey::ProjectMenuNewProject => "新建工程…",
+        I18nKey::ProjectMenuNewMap => "新建地图…",
+        I18nKey::ProjectMenuOpenProject => "打开工程…",
+        I18nKey::ProjectMenuSaveProjectAs => "另存为…",
+        I18nKey::ProjectMenuExportProject => "导出…",
+        I18nKey::ProjectMenuCloseProject => "关闭工程",
+        I18nKey::ProjectMenuProjectSettings => "项目设置",
+        I18nKey::ProjectMenuProjectSection => "工程",
+        I18nKey::ProjectMenuPanelsSection => "面板",
+        I18nKey::ProjectMenuResetPanels => "重置所有面板位置",
+
+        // ── 区间 ──
+        I18nKey::SpanDayPrefix => "第 ",
+        I18nKey::SpanDaySuffix => " 天",
+        I18nKey::SpanDayRangeMid => "–",
+        I18nKey::SpanDayOpenSuffix => " 天 –",
+
+        // ── 事态 ──
+        I18nKey::SituationPanelEmptyTitle => "暂无已登记事态",
+        I18nKey::SituationPanelEmptyHint => "事态是叙事的骨架：登记一个，把事件串起来",
+        I18nKey::SituationPanelEmptyAction => "登记事态 →",
+
+        // ── 区域 ──
+        I18nKey::RegionPanelAddBtn => "+ 新建区域",
+        I18nKey::RegionPanelDefaultName => "新区域",
+        I18nKey::RegionPanelCurrentMapPrefix => "当前地图：",
+        I18nKey::RegionPanelEmptyTitle => "当前地图尚无区域",
+        I18nKey::RegionPanelEmptyHint => "点击上方「+ 新建区域」创建，或在工程目录下编辑 regions/*.yaml",
+        I18nKey::RegionPanelEmptyAction => "查看区域说明 →",
+        I18nKey::RegionPanelNameLabel => "名称：",
+        I18nKey::RegionPanelOutlinePrefix => "轮廓：",
+        I18nKey::RegionPanelOutlineSuffix => " 个顶点",
+        I18nKey::RegionPanelOutlinePlaceholder => "（未绘制）",
+        I18nKey::RegionPanelDeleteBtn => "删除区域",
+
+        // ── 势力 ──
+        I18nKey::FactionPanelAddBtn => "+ 新建势力",
+        I18nKey::FactionPanelAddBoundaryBtn => "+ 新建疆界",
+        I18nKey::FactionPanelDefaultName => "新势力",
+        I18nKey::FactionPanelEmptyTitle => "尚未创建势力",
+        I18nKey::FactionPanelEmptyHint => "在工程目录下编辑 factions/*.yaml，或点击上方「+ 新建势力」",
+        I18nKey::FactionPanelEmptyAction => "查看势力层说明 →",
+        I18nKey::FactionPanelCurrentMapPrefix => "当前地图：",
+        I18nKey::FactionPanelCurrentMapGeomPrefix => "当前地图几何：",
+        I18nKey::FactionPanelFieldNameLabel => "名称：",
+        I18nKey::FactionPanelFieldColorLabel => "颜色：",
+        I18nKey::FactionPanelFieldStartDayLabel => "起 day：",
+        I18nKey::FactionPanelFieldEndDayLabel => "止（留空=至今）：",
+        I18nKey::FactionPanelDeleteBoundaryBtn => "删除",
+        I18nKey::FactionPanelDeleteEntireBtn => "删除整个势力",
+        I18nKey::FactionPanelPointCountSuffix => " 顶点",
+        I18nKey::FactionPanelNoGeometry => "（无几何）",
+
+        // ── 检视器 ──
+        I18nKey::InspectorEmptyTitle => "未选中对象",
+        I18nKey::InspectorEmptyHint => "在图上点选地块 / 事件 / 人物后，此处显示其全部属性",
+        I18nKey::InspectorEmptyAction => "用命令面板查找 →",
+
+        // ── 时间轴 ──
+        I18nKey::TimelineSpeedPillSuffix => "天/秒",
+        I18nKey::TimelineRegisterEventBtn => "＋ 登记事件",
+
+        // ── 校验 ──
+        I18nKey::ValidationBadgeErrCountPrefix => "错误 ",
+        I18nKey::ValidationBadgeWarnCountPrefix => "提示 ",
+        I18nKey::ValidationBadgeErrNone => "无错误",
+        I18nKey::ValidationSubtitle => "四维校验：时间 / 引用 / 几何 / 一致性",
+        I18nKey::ValidationFootnote => "校验只提示，不阻止保存（AGENTS §7.5）",
+        I18nKey::ValidationSectionErrors => "错误",
+        I18nKey::ValidationSectionHints => "提示",
+        I18nKey::ValidationOkAll => "一切正常",
+
+        // ── 人物 ──
+        I18nKey::CharacterPanelEmptyTitle => "暂无已登记人物",
+        I18nKey::CharacterPanelEmptyHint => "人物是叙事的载体：登记一个，让它走进历史",
+        I18nKey::CharacterPanelEmptyAction => "登记人物 →",
+
+        // ── 事件 ──
+        I18nKey::EventPanelEmptyTitle => "暂无已登记事件",
+        I18nKey::EventPanelEmptyHint => "事件是叙事的节拍：在时间轴上登记它，便于回顾",
+        I18nKey::EventPanelEmptyAction => "登记事件 →",
+
+        // ── 地图控制 ──
+        I18nKey::MapControlsToolSwitchHint => "切换工具（当前：笔刷 / 拖动）",
+        I18nKey::MapControlsMeasurePolylineHint => "测量：折线（多段；右键/Esc 收笔）",
+        I18nKey::MapControlsMeasureRectHint => "测量：矩形（两点确定长×宽）",
+        I18nKey::MapControlsMeasureEraserHint => "测量：橡皮（点选删除）",
+        I18nKey::MapControlsZoomIn => "放大",
+        I18nKey::MapControlsZoomOut => "缩小",
+        I18nKey::MapControlsFitMap => "缩放到全图",
     }
 }
 
@@ -312,5 +431,124 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::TimelineLayerSituation => "Situation",
         I18nKey::TimelineLayerCharacter => "Character",
         I18nKey::TimelineLayerCentury => "Century",
+
+        // ── Layer visibility toggles (shared by layers_panel & minimap_panel) ──
+        I18nKey::LayerTerrain => "Terrain",
+        I18nKey::LayerBaseFading => "Base fading",
+        I18nKey::LayerPlace => "Places",
+        I18nKey::LayerEventPoint => "Event points",
+        I18nKey::LayerTrail => "Trails",
+        I18nKey::LayerRoad => "Roads",
+        I18nKey::LayerBuilding => "Buildings",
+        I18nKey::LayerFaction => "Factions",
+        I18nKey::LayerPanelHeader => "Layers",
+        I18nKey::LayerWorldMapLabel => "World map",
+
+        // ── Terrain kinds (W2: widgets::terrain_grid) ──
+        I18nKey::TerrainKindDeepWater => "Deep water",
+        I18nKey::TerrainKindShallowWater => "Shallow water",
+        I18nKey::TerrainKindBeach => "Beach",
+        I18nKey::TerrainKindGrassland => "Grassland",
+        I18nKey::TerrainKindForest => "Forest",
+        I18nKey::TerrainKindHill => "Hill",
+        I18nKey::TerrainKindMountain => "Mountain",
+        I18nKey::TerrainKindSnow => "Snowfield",
+        I18nKey::TerrainKindSwamp => "Swamp",
+        I18nKey::TerrainKindRoad => "Road",
+
+        // ── Project menu (W2: project_menu.rs) ──
+        I18nKey::ProjectMenuUnnamedProject => "(Untitled project)",
+        I18nKey::ProjectMenuRecentSection => "Recent projects",
+        I18nKey::ProjectMenuRecentOpenPrefix => "Open recent · ",
+        I18nKey::ProjectMenuNewProject => "New project…",
+        I18nKey::ProjectMenuNewMap => "New map…",
+        I18nKey::ProjectMenuOpenProject => "Open project…",
+        I18nKey::ProjectMenuSaveProjectAs => "Save as…",
+        I18nKey::ProjectMenuExportProject => "Export…",
+        I18nKey::ProjectMenuCloseProject => "Close project",
+        I18nKey::ProjectMenuProjectSettings => "Project settings",
+        I18nKey::ProjectMenuProjectSection => "Project",
+        I18nKey::ProjectMenuPanelsSection => "Panels",
+        I18nKey::ProjectMenuResetPanels => "Reset all panel positions",
+
+        // ── Span fragments (W2: timeline / list_panels date strings) ──
+        I18nKey::SpanDayPrefix => "Day ",
+        I18nKey::SpanDaySuffix => "",
+        I18nKey::SpanDayRangeMid => "–",
+        I18nKey::SpanDayOpenSuffix => " (open)",
+
+        // ── Situation panel ──
+        I18nKey::SituationPanelEmptyTitle => "No situations logged yet",
+        I18nKey::SituationPanelEmptyHint => "Situations are the backbone of a story — log one and string events into it",
+        I18nKey::SituationPanelEmptyAction => "Log a situation →",
+
+        // ── Region panel ──
+        I18nKey::RegionPanelAddBtn => "+ New region",
+        I18nKey::RegionPanelDefaultName => "New region",
+        I18nKey::RegionPanelCurrentMapPrefix => "Current map: ",
+        I18nKey::RegionPanelEmptyTitle => "No regions on this map yet",
+        I18nKey::RegionPanelEmptyHint => "Click \"+ New region\" above, or edit regions/*.yaml directly",
+        I18nKey::RegionPanelEmptyAction => "View region docs →",
+        I18nKey::RegionPanelNameLabel => "Name: ",
+        I18nKey::RegionPanelOutlinePrefix => "Outline: ",
+        I18nKey::RegionPanelOutlineSuffix => " vertex/vertices",
+        I18nKey::RegionPanelOutlinePlaceholder => "(none drawn)",
+        I18nKey::RegionPanelDeleteBtn => "Delete region",
+
+        // ── Faction panel ──
+        I18nKey::FactionPanelAddBtn => "+ New faction",
+        I18nKey::FactionPanelAddBoundaryBtn => "+ New boundary",
+        I18nKey::FactionPanelDefaultName => "New faction",
+        I18nKey::FactionPanelEmptyTitle => "No factions yet",
+        I18nKey::FactionPanelEmptyHint => "Edit factions/*.yaml directly, or click \"+ New faction\" above",
+        I18nKey::FactionPanelEmptyAction => "View faction-layer docs →",
+        I18nKey::FactionPanelCurrentMapPrefix => "Current map: ",
+        I18nKey::FactionPanelCurrentMapGeomPrefix => "Current map geometry: ",
+        I18nKey::FactionPanelFieldNameLabel => "Name: ",
+        I18nKey::FactionPanelFieldColorLabel => "Color: ",
+        I18nKey::FactionPanelFieldStartDayLabel => "Start day: ",
+        I18nKey::FactionPanelFieldEndDayLabel => "End (blank = open): ",
+        I18nKey::FactionPanelDeleteBoundaryBtn => "Delete",
+        I18nKey::FactionPanelDeleteEntireBtn => "Delete entire faction",
+        I18nKey::FactionPanelPointCountSuffix => " vertex/vertices",
+        I18nKey::FactionPanelNoGeometry => "(no geometry)",
+
+        // ── Inspector panel ──
+        I18nKey::InspectorEmptyTitle => "Nothing selected",
+        I18nKey::InspectorEmptyHint => "Click a tile / event / character on the map to see all of its attributes here",
+        I18nKey::InspectorEmptyAction => "Use the command palette →",
+
+        // ── Timeline panel (W2: speed pill + add-event button) ──
+        I18nKey::TimelineSpeedPillSuffix => " day/sec",
+        I18nKey::TimelineRegisterEventBtn => "+ Log event",
+
+        // ── Validation panel ──
+        I18nKey::ValidationBadgeErrCountPrefix => "Errors ",
+        I18nKey::ValidationBadgeWarnCountPrefix => "Hints ",
+        I18nKey::ValidationBadgeErrNone => "No errors",
+        I18nKey::ValidationSubtitle => "Four dimensions: time / refs / geometry / consistency",
+        I18nKey::ValidationFootnote => "Validation only flags — it never blocks save (AGENTS §7.5)",
+        I18nKey::ValidationSectionErrors => "Errors",
+        I18nKey::ValidationSectionHints => "Hints",
+        I18nKey::ValidationOkAll => "Everything checks out",
+
+        // ── Character panel ──
+        I18nKey::CharacterPanelEmptyTitle => "No characters logged yet",
+        I18nKey::CharacterPanelEmptyHint => "Characters are the carriers of a story — log one and step into history",
+        I18nKey::CharacterPanelEmptyAction => "Log a character →",
+
+        // ── Event panel ──
+        I18nKey::EventPanelEmptyTitle => "No events logged yet",
+        I18nKey::EventPanelEmptyHint => "Events are the beats of a story — log them on the timeline to review later",
+        I18nKey::EventPanelEmptyAction => "Log an event →",
+
+        // ── Map controls ──
+        I18nKey::MapControlsToolSwitchHint => "Toggle tool (current: brush / pan)",
+        I18nKey::MapControlsMeasurePolylineHint => "Measure: polyline (right-click/Esc to finish)",
+        I18nKey::MapControlsMeasureRectHint => "Measure: rectangle (two clicks for W×H)",
+        I18nKey::MapControlsMeasureEraserHint => "Measure: eraser (click a measurement to remove)",
+        I18nKey::MapControlsZoomIn => "Zoom in",
+        I18nKey::MapControlsZoomOut => "Zoom out",
+        I18nKey::MapControlsFitMap => "Fit map to view",
     }
 }

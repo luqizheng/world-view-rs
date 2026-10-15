@@ -14,7 +14,7 @@
 use bevy::prelude::*;
 use bevy_egui::EguiContexts;
 
-use crate::i18n::CurrentLocale;
+use crate::i18n::{t_key, CurrentLocale, I18nKey};
 use crate::state::{Panel, PanelState};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::ui_layout::LayoutFile;
@@ -46,9 +46,9 @@ pub fn panel_inspector(
                 ui,
                 &shell,
                 "◎",
-                "未选中对象",
-                "在图上点选地块 / 事件 / 人物后，此处显示其全部属性",
-                "用命令面板查找 →",
+                t_key(&current_loc, I18nKey::InspectorEmptyTitle),
+                t_key(&current_loc, I18nKey::InspectorEmptyHint),
+                t_key(&current_loc, I18nKey::InspectorEmptyAction),
             ) {
                 // 空状态的引导按钮：无副作用的占位（后续接选择系统）。
             }

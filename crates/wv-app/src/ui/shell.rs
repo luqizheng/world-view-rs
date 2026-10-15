@@ -1,7 +1,7 @@
-﻿//! UI 样式快照：调色板 / 字号 / 圆角 / 间距的 egui 投影。
+//! UI 样式快照：调色板 / 字号 / 圆角 / 间距的 egui 投影。
 //!
 //! ## 职责
-//! - `TERRAIN_NAMES` —— 地形类型名常量（10 种），供笔刷面板与图例。
+//! - `terrain_name_at` —— 10 种地形的本地化显示名（ADR-0018）。
 //! - `terrain_swatch` —— 地形色块（依 `crate::theme::colors::core_terrain`）。
 //! - `UiShell` —— 每帧由 UI 系统装配的样式快照，避免到处传参。
 //!
@@ -10,7 +10,7 @@
 //! - **不**改写 `crate::ui_tokens` / `crate::ui_theme` 的源头 —— 只读它们。
 //!
 //! ## 主要导出
-//! - `TERRAIN_NAMES` —— 地形名常量。
+//! - `terrain_name_at` —— `(Locale, idx) -> &'static str` 地形名查表（取代常量 TERRAIN_NAMES）。
 //! - `terrain_swatch` —— `u8` 地形索引 → `egui::Color32`。
 //! - `UiShell` —— 样式快照（含 `t1` / `t2` / `t3` / `accent` / `panel_bg` 等 getter）。
 
@@ -18,13 +18,31 @@
 
 use bevy_egui::egui;
 
+use crate::i18n::{t, I18nKey, Locale};
 use crate::theme::ui_theme::{color32, color32_alpha, UiShellConfig};
 use crate::theme::ui_tokens::ShellPalette;
 
-/// 地形类型名（供笔刷面板与图例）。
-pub const TERRAIN_NAMES: [&str; 10] = [
-    "深水", "浅水", "沙滩", "草原", "林地", "丘陵", "山地", "雪原", "沼泽", "道路",
+/// 10 种地形的 i18n Key 表（与 `crate::i18n::table.rs` 的 zh/en 镜像同序）。
+const TERRAIN_KEYS: [I18nKey; 10] = [
+    I18nKey::TerrainKindDeepWater,
+    I18nKey::TerrainKindShallowWater,
+    I18nKey::TerrainKindBeach,
+    I18nKey::TerrainKindGrassland,
+    I18nKey::TerrainKindForest,
+    I18nKey::TerrainKindHill,
+    I18nKey::TerrainKindMountain,
+    I18nKey::TerrainKindSnow,
+    I18nKey::TerrainKindSwamp,
+    I18nKey::TerrainKindRoad,
 ];
+
+/// 按索引返回本地化后的地形名。索引越界时返回 `"?"`（防御性兜底，绝不在 UI 字符串里 panic）。
+pub fn terrain_name_at(loc: Locale, idx: usize) -> &'static str {
+    match TERRAIN_KEYS.get(idx) {
+        Some(k) => t(loc, *k),
+        None => "?",
+    }
+}
 
 /// 地形色块索引 → `palette::CORE_TERRAIN` 同序（§4.5：色块就是地形本色）。
 pub fn terrain_swatch(kind: u8) -> egui::Color32 {

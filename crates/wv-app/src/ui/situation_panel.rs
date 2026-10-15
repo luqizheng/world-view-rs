@@ -14,7 +14,7 @@
 use bevy::prelude::*;
 use bevy_egui::EguiContexts;
 
-use crate::i18n::CurrentLocale;
+use crate::i18n::{t_key, CurrentLocale, I18nKey};
 use crate::state::{Panel, PanelState, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::ui_layout::LayoutFile;
@@ -56,15 +56,27 @@ pub fn panel_situation(
                     ui,
                     &shell,
                     "▣",
-                    "暂无已登记事态",
-                    "事态是叙事的骨架：登记一个，把事件串起来",
-                    "登记事态 →",
+                    t_key(&current_loc, I18nKey::SituationPanelEmptyTitle),
+                    t_key(&current_loc, I18nKey::SituationPanelEmptyHint),
+                    t_key(&current_loc, I18nKey::SituationPanelEmptyAction),
                 );
             } else {
                 for s in sits {
                     let meta = match s.span.to {
-                        Some(to) => format!("第 {}–{} 天", s.span.from, to),
-                        None => format!("第 {} 天 –", s.span.from),
+                        Some(to) => format!(
+                            "{}{}{}{}{}",
+                            t_key(&current_loc, I18nKey::SpanDayPrefix),
+                            s.span.from,
+                            t_key(&current_loc, I18nKey::SpanDayRangeMid),
+                            to,
+                            t_key(&current_loc, I18nKey::SpanDaySuffix),
+                        ),
+                        None => format!(
+                            "{}{}{}",
+                            t_key(&current_loc, I18nKey::SpanDayPrefix),
+                            s.span.from,
+                            t_key(&current_loc, I18nKey::SpanDayOpenSuffix),
+                        ),
                     };
                     super::widgets::list_item(
                         ui,

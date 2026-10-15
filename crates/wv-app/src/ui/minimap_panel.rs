@@ -15,7 +15,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use crate::i18n::CurrentLocale;
+use crate::i18n::{t_key, CurrentLocale, I18nKey};
 use crate::state::{GridConfig, Panel, PanelState, ViewState};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::{radius, space};
@@ -109,10 +109,13 @@ pub fn panel_minimap(
             // "地形" 与 "图层" 标题共用顶部行，保持视觉对齐。
             ui.add_space(space::SM);
             ui.horizontal(|ui| {
-                ui.checkbox(&mut view.terrain_visible, "地形");
+                ui.checkbox(
+                    &mut view.terrain_visible,
+                    t_key(&current_loc, I18nKey::LayerTerrain),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        egui::RichText::new("图层")
+                        egui::RichText::new(t_key(&current_loc, I18nKey::LayerPanelHeader))
                             .size(shell.scale.micro)
                             .color(shell.t2()),
                     );
@@ -120,18 +123,33 @@ pub fn panel_minimap(
             });
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
-                    ui.checkbox(&mut view.places_visible, "地点");
-                    ui.checkbox(&mut view.tracks_visible, "轨迹");
+                    ui.checkbox(
+                        &mut view.places_visible,
+                        t_key(&current_loc, I18nKey::LayerPlace),
+                    );
+                    ui.checkbox(
+                        &mut view.tracks_visible,
+                        t_key(&current_loc, I18nKey::LayerTrail),
+                    );
                 });
                 ui.add_space(space::SM);
                 ui.vertical(|ui| {
-                    ui.checkbox(&mut view.events_visible, "事件");
-                    ui.checkbox(&mut view.roads_visible, "道路");
+                    ui.checkbox(
+                        &mut view.events_visible,
+                        t_key(&current_loc, I18nKey::LayerEventPoint),
+                    );
+                    ui.checkbox(
+                        &mut view.roads_visible,
+                        t_key(&current_loc, I18nKey::LayerRoad),
+                    );
                 });
                 ui.add_space(space::SM);
                 ui.vertical(|ui| {
                     // 底图淡化：把瓦片图集向纸面色拉，让路线/地标压得住底图。
-                    ui.checkbox(&mut view.terrain_soften, "底图淡化");
+                    ui.checkbox(
+                        &mut view.terrain_soften,
+                        t_key(&current_loc, I18nKey::LayerBaseFading),
+                    );
                 });
             });
         },

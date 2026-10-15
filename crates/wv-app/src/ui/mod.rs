@@ -52,7 +52,7 @@ pub use new_map_dialog::{new_map_dialog, NewMapDialog, NewMapPrefill};
 pub use new_project_dialog::{new_project_dialog, NewProjectDialog};
 pub use project_menu::{breadcrumb, ProjectMenuState};
 pub use region_panel::panel_region;
-pub use shell::{terrain_swatch, UiShell, TERRAIN_NAMES};
+pub use shell::{terrain_name_at, terrain_swatch, UiShell};
 pub use situation_panel::panel_situation;
 pub use timeline::{panel_timeline, undo_last_street_segment, TimelineLayer};
 pub use top_bar::{status_bar, top_bar};

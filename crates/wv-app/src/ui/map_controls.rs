@@ -18,6 +18,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
+use crate::i18n::{t_key, CurrentLocale, I18nKey};
 use crate::state::{
     BrushState, DrillState, GridConfig, MeasureMode, MeasureState, ViewState, WorldProjection,
 };
@@ -47,6 +48,7 @@ pub fn map_controls(
     projection: Res<WorldProjection>,
     windows: Query<&Window>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -92,15 +94,18 @@ pub fn map_controls(
                     let button_size = egui::vec2(38.0, shell.hit);
 
                     // ---- 笔刷 / 平移 toggle（单图标 + 激活态，砍掉原 ✏↔✋ 双字符）----
-                    ToolButton::icon(ToolIcon::Svg(ICON_PEN), "切换工具（当前：笔刷 / 拖动）")
-                        .active(brush.enabled)
-                        .enabled(brush_available)
-                        .size(button_size)
-                        .tint(control_text)
-                        .active_bg(active_bg)
-                        .show(ui, &shell, || {
-                            brush.enabled = !brush.enabled;
-                        });
+                    ToolButton::icon(
+                        ToolIcon::Svg(ICON_PEN),
+                        t_key(&current_loc, I18nKey::MapControlsToolSwitchHint),
+                    )
+                    .active(brush.enabled)
+                    .enabled(brush_available)
+                    .size(button_size)
+                    .tint(control_text)
+                    .active_bg(active_bg)
+                    .show(ui, &shell, || {
+                        brush.enabled = !brush.enabled;
+                    });
                     ui.add_space(2.0);
                     ui.separator();
 
@@ -139,58 +144,65 @@ pub fn map_controls(
                     measure_pick(
                         MeasureMode::Line,
                         ICON_RULER,
-                        "测量：折线（多段；右键/Esc 收笔）",
+                        t_key(&current_loc, I18nKey::MapControlsMeasurePolylineHint),
                         line_active,
                     );
                     measure_pick(
                         MeasureMode::Rect,
                         ICON_SQUARE,
-                        "测量：矩形（两点确定长×宽）",
+                        t_key(&current_loc, I18nKey::MapControlsMeasureRectHint),
                         rect_active,
                     );
                     measure_pick(
                         MeasureMode::Eraser,
                         ICON_ERASER,
-                        "测量：橡皮（点选删除）",
+                        t_key(&current_loc, I18nKey::MapControlsMeasureEraserHint),
                         eraser_active,
                     );
                     ui.add_space(2.0);
                     ui.separator();
 
                     // ---- 缩放 / 全图 ----
-                    ToolButton::icon(ToolIcon::Svg(ICON_ZOOM_IN), "放大")
-                        .size(button_size)
-                        .tint(control_text)
-                        .show(ui, &shell, || {
-                            let next = view.scale / 1.6;
-                            set_map_scale(&mut view, &mut cameras, next, zoom);
-                        });
-                    ToolButton::icon(ToolIcon::Svg(ICON_ZOOM_OUT), "缩小")
-                        .size(button_size)
-                        .tint(control_text)
-                        .show(ui, &shell, || {
-                            let next = view.scale * 1.6;
-                            set_map_scale(&mut view, &mut cameras, next, zoom);
-                        });
+                    ToolButton::icon(
+                        ToolIcon::Svg(ICON_ZOOM_IN),
+                        t_key(&current_loc, I18nKey::MapControlsZoomIn),
+                    )
+                    .size(button_size)
+                    .tint(control_text)
+                    .show(ui, &shell, || {
+                        let next = view.scale / 1.6;
+                        set_map_scale(&mut view, &mut cameras, next, zoom);
+                    });
+                    ToolButton::icon(
+                        ToolIcon::Svg(ICON_ZOOM_OUT),
+                        t_key(&current_loc, I18nKey::MapControlsZoomOut),
+                    )
+                    .size(button_size)
+                    .tint(control_text)
+                    .show(ui, &shell, || {
+                        let next = view.scale * 1.6;
+                        set_map_scale(&mut view, &mut cameras, next, zoom);
+                    });
                     ui.separator();
-                    ToolButton::icon(ToolIcon::Svg(ICON_MAXIMIZE), "缩放到全图")
-                        .size(button_size)
-                        .tint(control_text)
-                        .show(ui, &shell, || {
-                            // 「全图」= **当前级**那张图的全幅（不是底层栅格的全幅）：
-                            // 中心取该图的图帧原点 + 半幅，缩放取它的 fit。
-                            // 图帧原点与 `grid.map_origin` 同源（`drill::map_origin` 是唯一
-                            // 实现点），但这里要的是**当帧**的值，直接解析一次比读资源更稳。
-                            let frame_origin = drill
-                                .current()
-                                .and_then(|id| {
-                                    wv_core::resolve_frame_in(&projection.world.maps, id)
-                                })
-                                .map(|f| Vec2::new(f.world_origin.x, f.world_origin.y))
-                                .unwrap_or(grid.map_origin);
-                            view.camera_center = frame_origin + level_map_size * 0.5;
-                            set_map_scale(&mut view, &mut cameras, zoom.fit, zoom);
-                        });
+                    ToolButton::icon(
+                        ToolIcon::Svg(ICON_MAXIMIZE),
+                        t_key(&current_loc, I18nKey::MapControlsFitMap),
+                    )
+                    .size(button_size)
+                    .tint(control_text)
+                    .show(ui, &shell, || {
+                        // 「全图」= **当前级**那张图的全幅（不是底层栅格的全幅）：
+                        // 中心取该图的图帧原点 + 半幅，缩放取它的 fit。
+                        // 图帧原点与 `grid.map_origin` 同源（`drill::map_origin` 是唯一
+                        // 实现点），但这里要的是**当帧**的值，直接解析一次比读资源更稳。
+                        let frame_origin = drill
+                            .current()
+                            .and_then(|id| wv_core::resolve_frame_in(&projection.world.maps, id))
+                            .map(|f| Vec2::new(f.world_origin.x, f.world_origin.y))
+                            .unwrap_or(grid.map_origin);
+                        view.camera_center = frame_origin + level_map_size * 0.5;
+                        set_map_scale(&mut view, &mut cameras, zoom.fit, zoom);
+                    });
                 });
         });
 }
