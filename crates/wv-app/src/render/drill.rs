@@ -93,7 +93,7 @@ pub fn register(app: &mut App) {
                 draw_drill_markers,
                 // 地名标注在标记之后对齐（读同一份钻取状态，画在标记上方）。
                 update_place_labels,
-                // 势力 / 事件标签（ADR-0016 §2.2）——与地名标签独立，Label 渲染组。
+                // 势力 / 事件标签（ADR-0017 §2.2）——与地名标签独立，Label 渲染组。
                 update_faction_labels,
                 update_event_labels,
             )
@@ -656,13 +656,13 @@ const LABEL_PX: f32 = 12.0;
 /// 地名标注层：高于势力面（0.3）与 POI（0.22），低于笔刷光标（0.9）。
 const LABEL_Z: f32 = 0.4;
 
-/// 势力标签标记组件（ADR-0016 §2.2）。
+/// 势力标签标记组件（ADR-0017 §2.2）。
 ///
 /// 与 `PlaceLabel` 同型：对象池模式，每帧更新位置/文案/可见性。
 #[derive(Component)]
 pub struct FactionLabel;
 
-/// 事件标签标记组件（ADR-0016 §2.2）。
+/// 事件标签标记组件（ADR-0017 §2.2）。
 ///
 /// 与 `PlaceLabel` 同型：对象池模式，每帧更新位置/文案/可见性。
 #[derive(Component)]
@@ -720,8 +720,8 @@ pub fn update_place_labels(
 ) {
     // 期望标注集：锚定在当前地图、坐标齐备的地点（与道路层同一可见口径）。
     // 图层不可见 → wanted 为空 → 池全隐藏（尾部的「多余的隐藏」路径）。
-    // ADR-0016：图级 time_span 否决（PlaceDistance 无实体级窗口，v0.1 永久可见）。
-    // ADR-0016 Q1：标签走独立渲染组 `layers.label.visible`；
+    // ADR-0017：图级 time_span 否决（PlaceDistance 无实体级窗口，v0.1 永久可见）。
+    // ADR-0017 Q1：标签走独立渲染组 `layers.label.visible`；
     // ADR-0013 §2.2：地名随 Place 图层（`layers.place.visible`）。
     // 两者合取——任一关闭即标签消失。
     let tier = lod_tier(view.scale);
@@ -750,7 +750,7 @@ pub fn update_place_labels(
             }
         }
     }
-    // ADR-0016 §2.6：AABB 碰撞过滤（max_labels = 200 默认）。
+    // ADR-0017 §2.6：AABB 碰撞过滤（max_labels = 200 默认）。
     let font_size = LABEL_PX * view.scale.max(0.05);
     let max_labels = 200;
     let mut filtered =
@@ -853,11 +853,11 @@ pub fn update_place_labels(
     }
 }
 
-/// 更新当前层级的势力标签池（ADR-0016 §2.2 · EntityKind::Faction）。
+/// 更新当前层级的势力标签池（ADR-0017 §2.2 · EntityKind::Faction）。
 ///
 /// 数据来源：`World::factions_at(map, day)`——已按时间过滤（GeometrySpan.span）。
 /// 位置：多边形质心（简单平均，够用且稳定）。
-/// 图层归属：Label 渲染组（ADR-0016 Q1）——与 Place 标签独立。
+/// 图层归属：Label 渲染组（ADR-0017 Q1）——与 Place 标签独立。
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_faction_labels(
     mut commands: Commands,
@@ -892,7 +892,7 @@ pub fn update_faction_labels(
 ) {
     let t = playback.current_day;
     let mut candidates: Vec<crate::render::label_collision::LabelCandidate> = Vec::new();
-    // Label 层可见性（ADR-0016 Q1）
+    // Label 层可见性（ADR-0017 Q1）
     if layers.label.visible {
         if let Some(current) = drill.current_node(&projection.world) {
             let map_span = current.time_span.as_ref();
@@ -922,7 +922,7 @@ pub fn update_faction_labels(
         }
     }
 
-    // ADR-0016 §2.6：AABB 碰撞过滤（势力标签通常个位数，200 上限不会触顶）。
+    // ADR-0017 §2.6：AABB 碰撞过滤（势力标签通常个位数，200 上限不会触顶）。
     let font_size = LABEL_PX * view.scale.max(0.05);
     let mut filtered =
         crate::render::label_collision::filter_collisions(&mut candidates, font_size);
@@ -940,7 +940,7 @@ pub fn update_faction_labels(
         *pos += up_world;
     }
     let cjk = fonts.cjk_font.clone();
-    // ADR-0016 Q1：势力标签色随 Label 渲染组透明度；色值走 Google 文字深灰
+    // ADR-0017 Q1：势力标签色随 Label 渲染组透明度；色值走 Google 文字深灰
     // （与地名标签同一族，v0.1 不做 per-PlaceKind 主题映射——ADR-0016 §6.1 Q5）。
     let label_color =
         crate::theme::colors_google::GOOGLE_CONTROL_TEXT.with_alpha(layers.label.opacity);
@@ -1006,11 +1006,11 @@ pub fn update_faction_labels(
     }
 }
 
-/// 更新当前层级的事件标签池（ADR-0016 §2.2 · EntityKind::Event）。
+/// 更新当前层级的事件标签池（ADR-0017 §2.2 · EntityKind::Event）。
 ///
 /// 数据来源：`World.events`，按 `Event.span` 时间过滤。
 /// 位置：`Event.location` 引用的 Place 坐标（或覆盖坐标）。
-/// 图层归属：Label 渲染组（ADR-0016 Q1）——与 Place 标签独立。
+/// 图层归属：Label 渲染组（ADR-0017 Q1）——与 Place 标签独立。
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_event_labels(
     mut commands: Commands,
@@ -1045,11 +1045,11 @@ pub fn update_event_labels(
 ) {
     let t = playback.current_day;
     let mut candidates: Vec<crate::render::label_collision::LabelCandidate> = Vec::new();
-    // Label 层可见性（ADR-0016 Q1）
+    // Label 层可见性（ADR-0017 Q1）
     if layers.label.visible {
         if let Some(current) = drill.current_node(&projection.world) {
             let map_span = current.time_span.as_ref();
-            // Event 有 span 字段（ADR-0016 §2.3：entity_span = event.span）
+            // Event 有 span 字段（ADR-0017 §2.3：entity_span = event.span）
             for event in &projection.world.events {
                 let entity_span = &event.span;
                 if !wv_core::label_visible_at(map_span, Some(entity_span), t) {
@@ -1081,7 +1081,7 @@ pub fn update_event_labels(
         }
     }
 
-    // ADR-0016 §2.6：AABB 碰撞过滤（事件标签通常个位数）。
+    // ADR-0017 §2.6：AABB 碰撞过滤（事件标签通常个位数）。
     let font_size = LABEL_PX * view.scale.max(0.05);
     let mut filtered =
         crate::render::label_collision::filter_collisions(&mut candidates, font_size);

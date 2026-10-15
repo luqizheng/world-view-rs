@@ -85,7 +85,7 @@ pub struct LayerFrame {
     pub place: LayerBinding,
     /// 建筑层绑定（ADR-0016 §6）。
     pub building: LayerBinding,
-    /// 标签层绑定（ADR-0016 · Q1 用户拍板"进独立渲染组"）。
+    /// 标签层绑定（ADR-0017 · Q1 用户拍板"进独立渲染组"）。
     ///
     /// 与 `Place` / `Road` / `Influence` 平级——可见 / 透明 / z 偏移走
     /// 同一管线（YAML 声明 ∧ 会话开关、opacity 落材质、z 槽位偏移）。

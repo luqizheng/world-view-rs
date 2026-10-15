@@ -48,7 +48,7 @@ pub struct WorldProjection {
     /// 工程加载失败时的错误信息。**必须显式显示给用户**——
     /// 否则启动目录不对时会静默退化成空白占位地形，看起来像「崩溃」。
     pub load_error: Option<String>,
-    /// 当前选中的实体（ADR-0016 §2.7）。
+    /// 当前选中的实体（ADR-0017 §2.7）。
     ///
     /// 会话状态——`Some(s)` = 标签点击 / 详情面板引用，UI 据此高亮并打开面板；
     /// `None` = 未选中。**不**落盘，**不**经 `EditCommand`，**不**进
@@ -225,7 +225,7 @@ pub struct ViewState {
     pub tracks_visible: bool,
     /// 道路图层是否可见。
     pub roads_visible: bool,
-    /// 标签层是否可见（ADR-0016 · 标签层会话开关）。
+    /// 标签层是否可见（ADR-0017 · 标签层会话开关）。
     ///
     /// 与 YAML 中 `Layer.visible: false` **合取**决定标签是否参与渲染
     /// （参见 `LayerFrame::resolve`）—— 面板布尔是本会话临时隐藏，
@@ -1407,7 +1407,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // ADR-0016 §2.7：WorldProjection.selection（session 状态，不走 EditCommand）
+    // ADR-0017 §2.7：WorldProjection.selection（session 状态，不走 EditCommand）
     // -----------------------------------------------------------------------
 
     #[test]

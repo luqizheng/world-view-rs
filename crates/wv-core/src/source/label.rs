@@ -1,4 +1,4 @@
-//! 标签层的数据模型与可见性求值（ADR-0016 · 2026-10-14 接受）。
+//! 标签层的数据模型与可见性求值（ADR-0017 · 2026-10-14 接受）。
 //!
 //! ## 职责
 //! - [`EntityKind`]：标签投影源的实体类型白名单（§2.2）。
@@ -30,7 +30,7 @@ use std::collections::BTreeMap;
 
 use crate::time::{TimePoint, TimeSpan};
 
-/// 标签投影源的实体类型（ADR-0016 §2.2）。
+/// 标签投影源的实体类型（ADR-0017 §2.2）。
 ///
 /// 白名单用：`LabelLayerConfig.entity_kinds: Vec<EntityKind>`。
 /// 渲染管线遍历工程内的实体集合，仅对白名单内的实体生成标签。
@@ -77,7 +77,7 @@ impl EntityKind {
     }
 }
 
-/// 标签最小显示档位（ADR-0016 §2.4）。
+/// 标签最小显示档位（ADR-0017 §2.4）。
 ///
 /// 数据层概念——`wv-core` 不依赖 `wv-app` 的 `LodTier`，因此独立定义。
 /// 三个值按"放大方向"递增：`Nation` < `Region` < `Edit`；`min_zoom_tier` 表示
@@ -122,7 +122,7 @@ impl ZoomTier {
     }
 }
 
-/// 标签层配置（ADR-0016 §2.1 / §2.2 / §2.4 / §2.6）。
+/// 标签层配置（ADR-0017 §2.1 / §2.2 / §2.4 / §2.6）。
 ///
 /// `Layer.source` 指向的 YAML 根。**只存配置，不存文本**——文本由实体投影。
 ///
@@ -230,7 +230,7 @@ fn default_font_size_ladder() -> BTreeMap<ZoomTier, f32> {
     ZoomTier::DEFAULT_FONT_SIZES.iter().copied().collect()
 }
 
-/// 标签可见性求值（ADR-0016 §2.3）——**单一实现点**。
+/// 标签可见性求值（ADR-0017 §2.3）——**单一实现点**。
 ///
 /// 与 [`crate::source::street::StreetSegment::visible_at`] 完全同构：
 /// 图级窗口 ∧ 实体级时间区间。**所有调用方必须走此函数**，不得在调用点

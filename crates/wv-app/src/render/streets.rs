@@ -153,9 +153,9 @@ const STREET_LABEL_Z: f32 = 0.35;
 /// **屏幕对齐**（2026-10-14 用户裁定，与地名标注同一口径）：地图随
 /// `MapNode.orientation` 旋转后，街道名文字取相机旋转的**逆**保持水平。
 ///
-/// 图层归属（ADR-0016 §2.9 Q3 全接管）：
+/// 图层归属（ADR-0017 §2.9 Q3 全接管）：
 /// - ADR-0013 §2.2：街名随 Road 图层（`layers.road.visible`）
-/// - ADR-0016 Q1：标签走独立渲染组（`layers.label.visible`）
+/// - ADR-0017 Q1：标签走独立渲染组（`layers.label.visible`）
 /// - 两者合取——任一关闭即街名消失。
 /// - LodTier 过滤**去除**（Q3：不再只在 Edit 级别显示）。
 /// - 时间过滤（`label_visible_at`，ADR-0015）待段级 `StreetSegment.time_span`
@@ -194,7 +194,7 @@ pub fn update_street_labels(
     // 期望标注集：有名字的段 × 折线中点（本图局部 → 视图空间，走 `map_to_view`）。
     // 图层不可见 → wanted 为空 → 池全隐藏（尾部的「多余的隐藏」路径）。
     let mut wanted: Vec<(Vec2, String)> = Vec::new();
-    // ADR-0016 §2.9 Q3：街名走 Label 渲染组 + Road 图层（合取）。
+    // ADR-0017 §2.9 Q3：街名走 Label 渲染组 + Road 图层（合取）。
     // 去掉 LodTier::Edit 限制——Q3 拍板"全接管"，所有级别都显示街名。
     // 时间过滤（label_visible_at）待段级窗口进缓存后接入（见函数文档）。
     if layers.road.visible && layers.label.visible {
@@ -205,7 +205,7 @@ pub fn update_street_labels(
     // 无变化帧也照常对齐：位置/字号随视图每帧都可能变，池对齐本身极轻。
 
     let font_size = STREET_LABEL_PX * view.scale.max(0.05);
-    // ADR-0016 §2.9 Q3：街名走 Label 渲染组的 z 和 opacity。
+    // ADR-0017 §2.9 Q3：街名走 Label 渲染组的 z 和 opacity。
     let label_z = STREET_LABEL_Z + layers.label.z_offset;
     let label_rot = camera
         .single()

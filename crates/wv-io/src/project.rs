@@ -1019,7 +1019,7 @@ impl Project {
         Ok(path.display().to_string())
     }
 
-    /// 读取一份标签层配置（ADR-0016）。
+    /// 读取一份标签层配置（ADR-0017）。
     ///
     /// 路径相对工程根（与 `Layer.source` 的存储口径一致）。
     /// 解析失败按惯例带路径报 [`IoError::Yaml`]；文件不存在则原样透传

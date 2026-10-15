@@ -80,7 +80,7 @@ pub use source::street::{RoadClass, StreetLayer, StreetSegment};
 pub use time::track::{Track, Waypoint};
 pub use time::{Calendar, TimePoint, TimeSpan};
 
-/// 当前选中的实体（ADR-0016 §2.7）。
+/// 当前选中的实体（ADR-0017 §2.7）。
 ///
 /// 标签层点击派发的目标——`Place` / `Region` / `Faction` / `StreetSegment` /
 /// `Event` 之一。该结构只携带定位信息（kind + id），**不**携带任何渲染态或
@@ -327,7 +327,7 @@ pub mod terrain {
 mod tests {
     use super::*;
 
-    // ─── ADR-0016 §2.7：SelectedEntity ────────────────────────────────────
+    // ─── ADR-0017 §2.7：SelectedEntity ────────────────────────────────────
 
     #[test]
     fn selected_entity_new_stores_kind_and_id() {
