@@ -74,8 +74,13 @@ const NEW_PROJECT_LABEL: &str = "New Project…";
 const OPEN_PROJECT_LABEL: &str = "Open Project…";
 /// 最近工程小节标题（与 Figma `Recent Projects` 一致）。
 const RECENTS_HEADER: &str = "Recent Projects";
-/// 底部版本水印（Figma 直接给出；版本号同步是后续 TODO，见 README §12 待裁）。
-const FOOTER_VERSION: &str = "v0.9.1 — World-View Alpha";
+/// 底部版本水印。
+///
+/// 版本号在**编译期**读 `CARGO_PKG_VERSION`（wv-app 的 `Cargo.toml` 用
+/// `version.workspace = true` 指向根 `[workspace.package] version`）：
+/// workspace 升 `0.2.0` 时 UI 文字自动同步，不需要手工维护。
+const FOOTER_VERSION: &str =
+    concat!("v", env!("CARGO_PKG_VERSION"), " — World-View Alpha");
 
 /// 无工程时的欢迎页（Figma `Zw4tonExV5lIY_EJamjPRw` · `00_WelcomeScreen`）。
 ///
