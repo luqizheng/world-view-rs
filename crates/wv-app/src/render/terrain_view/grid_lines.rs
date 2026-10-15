@@ -4,7 +4,10 @@
 //! - 在**栅格幅面**（`tex.size × grid.cell_size`，`grid.raster_origin` 起）上
 //!   画 `(size+1)` 竖 + `(size+1)` 横格线，单 mesh 批量（复用
 //!   [`super::isoline_overlay::build_stroke_mesh`]）。
-//! - 可见性 = `brush.enabled || brush.grid_lines`（相或，见 [`grid_lines_visible`]）。
+//! - 可见性 = `brush.grid_lines` 单控（用户新目标，2026-10-15：网格独立于笔刷）。
+//!   旧版 `brush.enabled || brush.grid_lines` 让"关笔刷 → 网格自动隐"——
+//!   作者想"不开笔刷但留网格定位"做不到。改后笔刷只管绘画，网格只管
+//!   自己的 `grid_lines` 开关。
 //! - **远观淡出**（2026-10-15 用户反馈）：格子屏幕尺寸 `< 4px` 起 alpha 线性
 //!   衰减、`≤ 2px` 整层退场（[`grid_line_fade`]）——线宽是屏幕常量，缩得越远
 //!   格子越密，~2px 格距时 1px 线条已盖住半幅画面，摩尔纹把低对比的笔迹整个
@@ -43,10 +46,11 @@ const GRID_LINE_PX: f32 = 1.0;
 const GRID_FADE_START_PX: f32 = 4.0;
 const GRID_FADE_END_PX: f32 = 2.0;
 
-/// 网格可见性（D4）：笔刷开启**恒显**（编辑需要格子参照）；
-/// 手动勾选是「不开笔刷也想看格子」的覆盖项。
+/// 网格可见性：单由 `brush.grid_lines` 控制（用户新目标，2026-10-15）。
+/// 旧版与 `brush.enabled` 相或——关笔刷自动隐网格，作者无法"不开笔刷
+/// 但留网格定位"。改后两态独立。
 pub fn grid_lines_visible(brush: &BrushState) -> bool {
-    brush.enabled || brush.grid_lines
+    brush.grid_lines
 }
 
 /// 远观淡出系数：格子屏幕边长 `cell_px` 在 `[END, START]` 间线性衰减，
@@ -206,13 +210,31 @@ mod tests {
         }
     }
 
-    /// D4 语义：笔刷开着恒显；关闭时可被手动勾选顶起；两态皆关则不显示。
+    /// 独立开关语义（2026-10-15 用户新目标）：只由 `grid_lines` 控制。
+    /// 笔刷开/关不影响网格可见性——作者可"不开笔刷但留网格定位"。
     #[test]
-    fn grid_lines_visible_follows_brush_or_override() {
+    fn grid_lines_visible_depends_only_on_grid_lines() {
         assert!(!grid_lines_visible(&brush(false, false)));
-        assert!(grid_lines_visible(&brush(true, false)));
-        assert!(grid_lines_visible(&brush(false, true)));
+        assert!(
+            !grid_lines_visible(&brush(true, false)),
+            "笔刷开不再强制显网格"
+        );
+        assert!(
+            grid_lines_visible(&brush(false, true)),
+            "笔刷关 + grid 开 → 显"
+        );
         assert!(grid_lines_visible(&brush(true, true)));
+    }
+
+    /// 用户场景：关笔刷 + 开网格（之前的"做不到"组合）现在可行。
+    #[test]
+    fn grid_alone_without_brush_is_visible() {
+        // 关笔刷 + 开网格 = 唯一的"网格单独"路径。
+        let only_grid = brush(false, true);
+        assert!(grid_lines_visible(&only_grid));
+        // 反向：开笔刷 + 关网格 = 笔刷绘制时无网格（作者选择"裸画"）。
+        let only_brush = brush(true, false);
+        assert!(!grid_lines_visible(&only_brush));
     }
 
     /// 远观淡出锚点：≥4px 全显、≤2px 消失、中点线性一半、端点外钳制。

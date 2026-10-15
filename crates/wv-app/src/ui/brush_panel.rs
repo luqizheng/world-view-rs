@@ -80,8 +80,10 @@ pub fn panel_brush(
                         egui::pos2(rect.min.x + each * i as f32, rect.min.y),
                         egui::pos2(rect.min.x + each * (i as f32 + 1.0), rect.max.y),
                     );
+                    // Grid 段高亮只跟自己的 grid_lines 走（独立于笔刷，
+                    // 2026-10-15 用户新目标：网格能脱离笔刷独立显示）。
                     let sel = (*label == "Brush" && brush.enabled)
-                        || (*label == "Grid" && brush.grid_lines && !brush.enabled);
+                        || (*label == "Grid" && brush.grid_lines);
                     if sel {
                         p.rect_filled(
                             r,
@@ -115,7 +117,7 @@ pub fn panel_brush(
                         match *label {
                             "Brush" => brush.enabled = true,
                             "Grid" => {
-                                brush.enabled = false;
+                                // 网格独立开关：不再强关笔刷。
                                 brush.grid_lines = !brush.grid_lines;
                             }
                             _ => {}
