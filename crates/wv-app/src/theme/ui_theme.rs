@@ -80,7 +80,7 @@ pub fn build_visuals(palette: ShellPalette) -> egui::Visuals {
     v.extreme_bg_color = color32(palette.bg_app);
     v.faint_bg_color = color32(palette.bg_raised);
     v.code_bg_color = color32(palette.bg_raised);
-    v.selection.bg_fill = color32(palette.bg_active);
+    v.selection.bg_fill = color32(palette.accent);
     v.selection.stroke = egui::Stroke::new(1.0_f32, color32(palette.accent));
 
     // 文字三级。

@@ -18,7 +18,7 @@ use bevy_egui::{egui, EguiContexts};
 use crate::edit::editing;
 use crate::render::streets;
 use crate::state::{BrushState, BrushTool, DrillState, Panel, PanelState, WorldProjection};
-use crate::theme::ui_theme::{mono, UiShellConfig};
+use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::space;
 use crate::ui_layout::LayoutFile;
 
@@ -268,21 +268,59 @@ pub fn panel_brush(
 }
 
 /// Figma 风格滑条：标签左、值右、滑条在中。
+///
+/// 对齐原型 `World-View UI Prototype/src/index.css` 的 `.range-label` /
+/// `input[type="range]`：
+///
+/// - 整行单条 record：label 与值各占固定底端宽度，两端对齐；滑条吃掉剩余空间。
+/// - 字号 11px（最贴原型 10px；§2.3 阶梯 MICRO=11，BASE=13 不用于滑条行）。
+/// - value 不走 monospace（原型用 `font-weight: 500` Proportional，本处用 t1）。
+/// - 滑条内嵌 `show_value(false)`——值已显示在右侧，外侧不再叠气泡。
+/// - 强制 `trailing_fill(true)` + `HandleShape::Circle`：
+///   egui 0.36 全局默认 `slider_trailing_fill=false`、`handle_shape=Rect`，
+///   不开这两项就是空心方框 thumb + 无蓝色选中轨。选中轨颜色由
+///   `ui.visuals().selection.bg_fill` 决定（见 `build_visuals`，已把这一项
+///   路由到 `palette.accent`）。
 fn slider_row(ui: &mut egui::Ui, shell: &UiShell, label: &str, value: &str, slider: egui::Slider) {
+    // label / value 锁宽：让中间滑条吃光剩余宽度（最贴近原型 `justify-content:
+    // space-between` 两端对齐）。具体宽度由字号 * 经验上限推得，留 2px 余量。
+    let label_w = shell.scale.micro * 5.0;
+    let value_w = shell.scale.micro * 4.0;
     ui.horizontal(|ui| {
+        ui.allocate_exact_size(
+            egui::vec2(label_w, ui.spacing().interact_size.y),
+            egui::Sense::hover(),
+        );
         ui.label(
             egui::RichText::new(label)
-                .size(shell.scale.base)
+                .size(shell.scale.micro)
                 .color(shell.t2()),
         );
-        ui.add_space(space::MD);
-        ui.add(slider);
         ui.add_space(space::SM);
-        ui.label(
-            egui::RichText::new(value)
-                .size(shell.scale.base)
-                .color(shell.t1())
-                .font(mono(shell.scale.base)),
+        // 滑条宽度 = 当前行剩余宽度 - value 宽度 - 两侧 spacing。
+        let remaining = ui.available_width() - value_w - space::SM;
+        ui.allocate_ui(
+            egui::vec2(remaining.max(64.0), ui.spacing().interact_size.y),
+            |ui| {
+                ui.add(
+                    slider
+                        .show_value(false)
+                        .trailing_fill(true)
+                        .handle_shape(egui::style::HandleShape::Circle),
+                );
+            },
         );
+        ui.add_space(space::SM);
+        ui.allocate_exact_size(
+            egui::vec2(value_w, ui.spacing().interact_size.y),
+            egui::Sense::hover(),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(value)
+                    .size(shell.scale.micro)
+                    .color(shell.t1()),
+            );
+        });
     });
 }
