@@ -641,11 +641,95 @@ pub enum I18nKey {
     CmdDrillToRoot,
     /// 「钻回上一级」
     CmdDrillUp,
+
+    // ── W6：CLI 用户可见文案（main.rs + overture_cli.rs） ────────────────
+    /// 「用法: wv load <工程目录>」
+    CliUsageLoad,
+    /// 「用法: wv validate <工程目录>」
+    CliUsageValidate,
+    /// 「错误: 」前缀（stderr 输出错误体）
+    CliErrorPrefix,
+    /// 「GUI 未编译。请使用 \`cargo run -p wv-app --features app -- gui\`」
+    CliGuiNotCompiled,
+    /// 「未知命令: 」前缀
+    CliUnknownCommandPrefix,
+    /// 「wv —— World View 世界编辑器」（help banner 头）
+    CliHelpBanner,
+    /// help banner「用法:」段头
+    CliHelpUsageHeader,
+    /// help banner「wv load <工程目录>」+ 描述「加载工程并打印摘要」
+    CliHelpLoad,
+    /// help banner「wv validate <工程目录>」+ 描述
+    CliHelpValidate,
+    /// help banner「wv raster-slice ...」+ 描述
+    CliHelpRasterSlice,
+    /// help banner「wv overture fetch ...」+ 描述
+    CliHelpOvertureFetch,
+    /// help banner「wv gui ...」+ 描述
+    CliHelpGui,
+    /// help banner「wv --help」+ 描述
+    CliHelpHelp,
+    /// 「用法: wv raster-slice <工程目录> <map_id> [size]」
+    CliUsageRasterSlice,
+    /// 「缺少 <map_id>。用法: wv raster-slice <工程目录> <map_id> [size]」
+    CliUsageRasterSliceMapId,
+    /// 「size {s} 不是正整数」
+    CliRasterSliceBadSize,
+    /// 「非法 map_id {map_id}: {e}」
+    CliRasterSliceBadMapId,
+    /// 「已切片: maps/{map_id}/terrain.bin（{size}×{size}）」
+    CliRasterSliceDone,
+    /// 「重新打开工程后，该图即使用自己的底图（继承退场）。」
+    CliRasterSliceInherit,
+    /// 「已加载工程：」前缀（cli load 摘要前）
+    CliProjectSummaryHeader,
+    /// 「提示:」段头
+    CliProjectSummaryHints,
+    /// 「  - 」警告项缩进前缀
+    CliProjectSummaryHintBullet,
+    /// 「校验通过: 」前缀
+    CliValidateOk,
+    /// 「校验发现 {n} 项问题:」前缀
+    CliValidateFailPrefix,
+    /// 「-m 需要一个工程目录参数，例如 \`wv gui -m examples/minimal-world\`」
+    CliGuiErrMDirNeeded,
+    /// 「工程目录重复指定」
+    CliGuiErrDirDup,
+    /// 「\`--http-port\` 需要一个 1..=65535 的整数，例如 \`--http-port 9000\`」
+    CliGuiErrHttpPortNeeded,
+    /// 「\`--http-port\` 重复指定」
+    CliGuiErrHttpPortDup,
+    /// 「\`--http-port {s}\` 不是 1..=65535 的整数」
+    CliGuiErrHttpPortParse,
+    /// 「\`--http-port\` 必须 ≥ 1」
+    CliGuiErrHttpPortZero,
+    /// 「\`--http-port\` 需要 \`--features http\` 才会生效」
+    CliGuiErrHttpPortDisabled,
+    /// 「\`--http-bind\` 需要一个 IPv4 地址，例如 \`--http-bind 0.0.0.0\`」
+    CliGuiErrHttpBindNeeded,
+    /// 「\`--http-bind\` 重复指定」
+    CliGuiErrHttpBindDup,
+    /// 「\`--http-bind {s}\` 不是合法的 IPv4:port 形态」
+    CliGuiErrHttpBindParse,
+    /// 「\`--http-bind\` 需要 \`--features http\` 才会生效」
+    CliGuiErrHttpBindDisabled,
+    /// 「未知参数: 」前缀
+    CliGuiErrUnknownArg,
+    /// 「用法: wv gui [-m <工程目录>] [...]」
+    CliGuiUsage,
+    /// 「--language <zh|en>」标记帮助段
+    CliLanguageFlagHelp,
+    /// 「\`--language {s}\` 不是合法语言（可选 zh / en）」
+    CliLanguageBadTag,
+    /// 「\`--language\` 重复指定」
+    CliLanguageDup,
+    /// 「\`--language\` 缺值」
+    CliLanguageMissing,
 }
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 280] = [
+    pub const ALL: [I18nKey; 321] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -954,5 +1038,47 @@ impl I18nKey {
         I18nKey::CmdBrushRadiusDown,
         I18nKey::CmdDrillToRoot,
         I18nKey::CmdDrillUp,
+        // CLI（38）
+        I18nKey::CliUsageLoad,
+        I18nKey::CliUsageValidate,
+        I18nKey::CliErrorPrefix,
+        I18nKey::CliGuiNotCompiled,
+        I18nKey::CliUnknownCommandPrefix,
+        I18nKey::CliHelpBanner,
+        I18nKey::CliHelpUsageHeader,
+        I18nKey::CliHelpLoad,
+        I18nKey::CliHelpValidate,
+        I18nKey::CliHelpRasterSlice,
+        I18nKey::CliHelpOvertureFetch,
+        I18nKey::CliHelpGui,
+        I18nKey::CliHelpHelp,
+        I18nKey::CliUsageRasterSlice,
+        I18nKey::CliUsageRasterSliceMapId,
+        I18nKey::CliRasterSliceBadSize,
+        I18nKey::CliRasterSliceBadMapId,
+        I18nKey::CliRasterSliceDone,
+        I18nKey::CliRasterSliceInherit,
+        I18nKey::CliProjectSummaryHeader,
+        I18nKey::CliProjectSummaryHints,
+        I18nKey::CliProjectSummaryHintBullet,
+        I18nKey::CliValidateOk,
+        I18nKey::CliValidateFailPrefix,
+        I18nKey::CliGuiErrMDirNeeded,
+        I18nKey::CliGuiErrDirDup,
+        I18nKey::CliGuiErrHttpPortNeeded,
+        I18nKey::CliGuiErrHttpPortDup,
+        I18nKey::CliGuiErrHttpPortParse,
+        I18nKey::CliGuiErrHttpPortZero,
+        I18nKey::CliGuiErrHttpPortDisabled,
+        I18nKey::CliGuiErrHttpBindNeeded,
+        I18nKey::CliGuiErrHttpBindDup,
+        I18nKey::CliGuiErrHttpBindParse,
+        I18nKey::CliGuiErrHttpBindDisabled,
+        I18nKey::CliGuiErrUnknownArg,
+        I18nKey::CliGuiUsage,
+        I18nKey::CliLanguageFlagHelp,
+        I18nKey::CliLanguageBadTag,
+        I18nKey::CliLanguageDup,
+        I18nKey::CliLanguageMissing,
     ];
 }

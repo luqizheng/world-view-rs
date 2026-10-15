@@ -33,6 +33,7 @@
 #![cfg(feature = "app")]
 
 use bevy::prelude::Resource;
+use std::sync::OnceLock;
 
 mod keys;
 mod locale;
@@ -40,6 +41,26 @@ mod table;
 
 pub use keys::I18nKey;
 pub use locale::{parse, Locale};
+
+/// CLI 进程级单例 Locale（Bevy 资源走不到，CLI 子命令 / 选项解析 / help 都用这个）。
+///
+/// **设置时机**：进程启动早期（main() 第一步）。CLI 不支持热切换；GUI 启动后
+/// 用 Bevy 的 `CurrentLocale` 资源（两者互不相通，CLI 设的值仅影响 stderr / stdout
+/// 文案）。
+static CLI_LOCALE: OnceLock<Locale> = OnceLock::new();
+
+/// 进程启动时一次性设 CLI Locale。多次调用取第一次。
+///
+/// 由 [`crate::main`] 在解析 `--language` 标记后立即调用；其它路径不调用时
+/// 退回 [`Locale::Zh`] 默认。
+pub fn set_cli_locale(loc: Locale) {
+    let _ = CLI_LOCALE.set(loc);
+}
+
+/// 读 CLI Locale；未设置时返回 [`Locale::default`]（= [`Locale::Zh`]）。
+pub fn cli_locale() -> Locale {
+    CLI_LOCALE.get().copied().unwrap_or_default()
+}
 
 /// 当前 UI 文案语言（与工程绑定的会话内存副本）。
 ///

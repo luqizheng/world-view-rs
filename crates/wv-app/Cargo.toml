@@ -48,6 +48,7 @@ serde_json = { workspace = true, optional = true }
 [[bin]]
 name = "wv"
 path = "src/main.rs"
+required-features = ["app"]
 
 # 这些示例直接使用 app-only 渲染模块；无 feature 的 `--all-targets` 不应编译它们。
 [[example]]
