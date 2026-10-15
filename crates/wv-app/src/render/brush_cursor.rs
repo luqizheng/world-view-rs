@@ -59,6 +59,10 @@ const DASH_PX: f32 = 3.0;
 const DASH_COUNT: usize = 24;
 /// 屏幕像素十字臂长。
 const CROSS_PX: f32 = 12.0;
+/// 内环相对外环半径（手绘地图 #11，2026-10-15）：笔刷提亮的"已刷过"
+/// 内圈 = `radius × INNER_RADIUS_RATIO`。civ-atlas 笔刷 cursor 双环——
+/// 外环"将要影响"、内环"已下笔"——内圈比外圈小一圈、alpha 较暗对比。
+const INNER_RADIUS_RATIO: f32 = 0.7;
 
 /// Z 偏移：光标永远在所有矢量层之上、egui 面板之下。
 const CURSOR_Z: f32 = 0.9;
@@ -69,8 +73,11 @@ const CURSOR_Z: f32 = 0.9;
 /// 1（外环）+ 24（虚线段）+ 2（十字）= 27。
 #[derive(Resource, Default)]
 pub struct BrushCursorEntities {
-    /// 外环（`Annulus` 实线）。
+    /// 外环（`Annulus` 实线）——将要影响范围（civ-atlas「将要下笔」）。
     pub outer: Option<Entity>,
+    /// 内环（手绘地图 #11，2026-10-15）——已影响范围的视觉提示，alpha 较暗
+    /// 与外环对比（civ-atlas「刚下笔」/「已修改」反馈）。
+    pub inner: Option<Entity>,
     /// `DASH_COUNT` 个虚线段。
     pub dashes: Vec<Entity>,
     /// 横臂。
@@ -171,6 +178,30 @@ pub fn sync_brush_cursor(
         entities.outer = Some(e);
     }
 
+    // ---- 内环实环（手绘地图 #11）----半径 = outer × INNER_RADIUS_RATIO，
+    // 颜色 = mat_select_dim（alpha 0.6，亮金色变暗）——"已下笔"双调视觉。
+    let inner_radius = (outer_radius * INNER_RADIUS_RATIO).max(stroke_world * 2.0);
+    let inner_annulus_inner = (inner_radius - stroke_world).max(f32::EPSILON);
+    let inner_mesh = Annulus::new(inner_annulus_inner, inner_radius)
+        .mesh()
+        .resolution(96);
+    let inner_handle = meshes.add(inner_mesh);
+    let inner_transform = Transform::from_translation(cursor_world.extend(CURSOR_Z - 0.001));
+    if let Some(e) = entities.inner {
+        commands
+            .entity(e)
+            .insert((Mesh2d(inner_handle), inner_transform));
+    } else {
+        let e = commands
+            .spawn((
+                Mesh2d(inner_handle),
+                MeshMaterial2d(mat_select_dim.clone()),
+                inner_transform,
+            ))
+            .id();
+        entities.inner = Some(e);
+    }
+
     // ---- 内环虚线（24 段 Rectangle）----
     let inner_radius = (brush.radius * (1.0 - brush.softness).max(0.15)).max(f32::EPSILON);
     // 段数 = 实体数：缺则补，多则删。
@@ -265,9 +296,25 @@ mod tests {
     fn brush_cursor_entities_default_is_empty() {
         let e = BrushCursorEntities::default();
         assert!(e.outer.is_none());
+        assert!(e.inner.is_none(), "inner 槽位也应默认 None（手绘地图 #11）");
         assert!(e.dashes.is_empty());
         assert!(e.cross_h.is_none());
         assert!(e.cross_v.is_none());
+    }
+
+    /// 内环相对外环半径（手绘地图 #11）：INNER_RADIUS_RATIO = 0.7。
+    /// 端到端比例断言——若改 0.7 → 0.6，笔刷会变得过小/过大。
+    #[test]
+    fn inner_radius_ratio_is_seventy_percent() {
+        const {
+            assert!(
+                (INNER_RADIUS_RATIO - 0.7).abs() < 1e-6,
+                "INNER_RADIUS_RATIO 应 = 0.7"
+            )
+        }
+        // 内圈必须严格 < 外圈（防 1.0 退化为零宽）。
+        const { assert!(INNER_RADIUS_RATIO < 1.0, "内圈应 < 外圈（= brush.radius）") }
+        const { assert!(INNER_RADIUS_RATIO > 0.0, "但内圈应 > 0") }
     }
 
     /// 角度 → 切线方向旋转：`θ + π/2` 让 Rectangle 默认 X 轴指向切线 (-sin θ, cos θ)。
