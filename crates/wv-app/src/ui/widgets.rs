@@ -707,13 +707,14 @@ mod tool_button_tests {
 #[cfg(test)]
 mod svg_decoder_tests {
     use super::install_svg_decoder;
+    use bevy_egui::egui;
 
     const SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000000" stroke-width="2"><rect x="4" y="4" width="16" height="16"/></svg>"##;
 
     fn bytes_source() -> egui::ImageSource<'static> {
         egui::ImageSource::Bytes {
             uri: std::borrow::Cow::Borrowed("bytes://test/pen.svg"),
-            bytes: std::borrow::Cow::Borrowed(SVG),
+            bytes: egui::load::Bytes::from(SVG),
         }
     }
 
@@ -730,13 +731,23 @@ mod svg_decoder_tests {
             Default::default(),
             egui::load::SizeHint::Scale(1.0.into()),
         );
-        assert!(
-            matches!(
-                &before,
-                Err(egui::load::LoadError::NoMatchingImageLoader { .. })
+        match &before {
+            // 出厂 `image` 列表为空 → NoImageLoaders；若哪天 egui 出厂带了解码器
+            // 但不认 SVG，会落 NoMatchingImageLoader——两者都是「没解码」的证据。
+            Err(
+                egui::load::LoadError::NoImageLoaders
+                | egui::load::LoadError::NoMatchingImageLoader { .. },
+            ) => {}
+            Err(e) => panic!("出厂上下文应报缺解码器，got {e}"),
+            Ok(poll) => panic!(
+                "出厂上下文不应解码就绪，got {}",
+                if matches!(poll, egui::load::TexturePoll::Ready { .. }) {
+                    "Ready"
+                } else {
+                    "Pending"
+                }
             ),
-            "出厂上下文应缺 SVG 解码器，got {before:?}"
-        );
+        }
 
         install_svg_decoder(&ctx);
         let after = bytes_source().load(
@@ -744,16 +755,19 @@ mod svg_decoder_tests {
             Default::default(),
             egui::load::SizeHint::Scale(1.0.into()),
         );
-        match after {
-            Ok(egui::load::TexturePoll::Ready { texture, .. }) => {
-                let size = texture.size;
-                assert_eq!(
-                    (size.x, size.y),
-                    (24, 24),
-                    "SVG 应按 viewBox 点数解码，got {size:?}"
-                );
-            }
-            other => panic!("装上 SvgLoader 后应直接解码就绪，got {other:?}"),
-        }
+        let ready = match after {
+            Ok(ready @ egui::load::TexturePoll::Ready { .. }) => ready,
+            Ok(_) => panic!("装上 SvgLoader 后应直接解码就绪，而非 Pending"),
+            Err(e) => panic!("装上 SvgLoader 后应解码成功，got {e}"),
+        };
+        let egui::load::TexturePoll::Ready { texture, .. } = ready else {
+            unreachable!("上面已筛出 Ready");
+        };
+        let size = texture.size;
+        assert_eq!(
+            (size.x, size.y),
+            (24.0, 24.0),
+            "SVG 应按 viewBox 点数解码，got {size:?}"
+        );
     }
 }
