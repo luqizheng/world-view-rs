@@ -49,7 +49,7 @@ pub fn top_bar(
     mut palette: ResMut<crate::ui_command_palette::CommandPalette>,
     mut view: ResMut<ViewState>,
     mut panels: ResMut<crate::state::PanelState>,
-    current_loc: Res<CurrentLocale>,
+    mut current_loc: ResMut<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -85,7 +85,7 @@ pub fn top_bar(
                     &recents,
                     &mut panels,
                     &mut menu,
-                    &current_loc,
+                    &mut current_loc,
                 );
                 // ── 右区：zoom / entities / 脏态徽标 / ⌘K（web .top-right，
                 //    L→R 次序 zoom→entities→badge→⌘K，故 RTL 添加序相反）──
@@ -124,7 +124,7 @@ fn identity_segment(
     recents: &[RecentProject],
     panels: &mut crate::state::PanelState,
     menu: &mut ProjectMenuState,
-    current_loc: &CurrentLocale,
+    current_loc: &mut CurrentLocale,
 ) {
     // 项目按钮（logo + 粗体名 + chevron，见 project_menu）+ 组间距。
     project_menu_inner(ui, shell, projection, recents, panels, menu, current_loc.0);
@@ -153,6 +153,30 @@ fn identity_segment(
         );
         ui.add_space(space::XS);
     }
+
+    // 语言选择下拉（ADR-0018）。
+    ui.add_space(space::SM);
+    let lang_label = match current_loc.0 {
+        crate::i18n::Locale::Zh => "简体中文",
+        crate::i18n::Locale::En => "English",
+    };
+    egui::ComboBox::from_id_salt("wv_lang_select")
+        .selected_text(
+            egui::RichText::new(lang_label)
+                .size(shell.scale.small)
+                .color(shell.t2()),
+        )
+        .width(80.0)
+        .show_ui(ui, |ui| {
+            let mut selectable = |ui: &mut egui::Ui, label: &str, loc: crate::i18n::Locale| {
+                let selected = current_loc.0 == loc;
+                if ui.selectable_label(selected, label).clicked() {
+                    current_loc.0 = loc;
+                }
+            };
+            selectable(ui, "简体中文", crate::i18n::Locale::Zh);
+            selectable(ui, "English", crate::i18n::Locale::En);
+        });
 
     // 工程未加载时的醒目错误（§5.1）。脏态徽标在右侧读数段。
     if projection.load_error.is_some() {
