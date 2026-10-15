@@ -59,9 +59,10 @@ pub use top_bar::{status_bar, top_bar};
 pub use validation_panel::panel_validation;
 pub use welcome_screen::welcome_screen;
 pub use widgets::{
-    badge, empty_state, float_window, list_item, setup_egui_image_loaders, BadgeKind,
-    EguiImageLoadersInstalled, ToolButton, ToolButtonContent, ToolIcon, ICON_ERASER, ICON_MAXIMIZE,
-    ICON_PEN, ICON_RULER, ICON_SQUARE, ICON_ZOOM_IN, ICON_ZOOM_OUT,
+    badge, empty_state, field_checkbox, float_window, list_item, setup_egui_image_loaders,
+    slider_row, BadgeKind, DialogWindow, EguiImageLoadersInstalled, FieldInput, FieldSelect,
+    Switch, ToolButton, ToolButtonContent, ToolIcon, ICON_ERASER, ICON_MAXIMIZE, ICON_PEN,
+    ICON_RULER, ICON_SQUARE, ICON_ZOOM_IN, ICON_ZOOM_OUT,
 };
 
 // `terrain_grid` 仅被 panel_brush 调用，从 widgets 重新导出。
