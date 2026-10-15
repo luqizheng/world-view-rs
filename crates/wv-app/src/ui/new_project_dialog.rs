@@ -36,6 +36,8 @@ use crate::state::{
 };
 use crate::ui_shell::{load_project_into, DialogPurpose, OpenProjectTask, ShellNotice};
 
+use super::widgets::{DialogWindow, FieldInput, ToolButton};
+
 // 与「新建地图」对话框同一口径的幅面 / 预填充默认值（首图 = 空世界的第一张图，
 // 与 NewMapDialog::open_for 的空世界分支完全一致：世界级、最大幅面、陆地预填充）。
 use super::new_map_dialog::{NewMapPrefill, EXTENT_CHOICES, GRID_CELL_SIZE};
@@ -196,56 +198,50 @@ pub fn new_project_dialog(
         return;
     };
     let frame = (time.elapsed_secs() * 60.0) as u64;
-    let mut open = dialog.open;
     let mut confirmed = false;
     let mut cancelled = false;
+    // `open` 走局部变量，避免 `&mut dialog.open` 与闭包内的 `&mut dialog.{name,location,error}`
+    // 同时借用整个 dialog 结构。show 完后写回。
+    let mut open = dialog.open;
 
-    egui::Window::new("新建工程")
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(false)
-        .default_width(460.0)
-        // 模态置顶（2026-10-14 用户要求）：与 new_map_dialog 同一口径——
-        // Foreground 压过浮动面板（Middle），Tooltip 仍在其上。
-        .order(egui::Order::Foreground)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .show(ctx, |ui| {
+    // 注意：本函数**不**取 `shell_cfg` 入参——`app_bootstrap.rs` 浮动面板 chain
+    // 已经把 18 个系统串起来，再加 `Res<UiShellConfig>` 会破 tuple 的 trait bounds
+    // （SystemParam 总预算上限）。`DialogWindow::show` 需要 `&UiShell`——这里构造一份
+    // 默认值壳（dark/cozy），动态主题/密度的差异由面板而非对话框承载。
+    // todo: 当 chain 被拆分（按层/分组）后，把 `Res<UiShellConfig>` 加回来。
+    let shell = crate::ui::UiShell::new(&crate::theme::ui_theme::UiShellConfig::default());
+    let input_h = 28.0_f32;
+
+    DialogWindow::new("新建工程", &mut open)
+        .width(460.0)
+        .show(ctx, &shell, |ui| {
             ui.horizontal(|ui| {
                 ui.label("项目名称")
                     .on_hover_text("可中文；将与位置拼成项目目录");
-                let mut name = dialog.name.clone();
-                if ui
-                    .add(
-                        egui::TextEdit::singleline(&mut name)
-                            .desired_width(320.0)
-                            .hint_text("例如：美洲大陆"),
-                    )
+                if FieldInput::new(&mut dialog.name, "例如：美洲大陆")
+                    .min_size(egui::vec2(320.0, input_h))
+                    .show(ui, &shell)
                     .changed()
                 {
-                    dialog.name = name.trim().to_owned();
+                    dialog.name = dialog.name.trim().to_owned();
                 }
             });
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.label("位置");
-                let mut loc = dialog.location.clone();
-                if ui
-                    .add(
-                        egui::TextEdit::singleline(&mut loc)
-                            .desired_width(286.0)
-                            .hint_text("项目将创建在这个目录下"),
-                    )
+                if FieldInput::new(&mut dialog.location, "项目将创建在这个目录下")
+                    .min_size(egui::vec2(286.0, input_h))
+                    .show(ui, &shell)
                     .changed()
                 {
                     // 不 trim：路径里的空格是合法的，尾部斜杠交给 join 消化。
-                    dialog.location = loc;
                 }
-                if ui.button("浏览…").clicked() {
+                ToolButton::text("浏览…", "").show(ui, &shell, || {
                     // 只排队意图；原生窗口由 poll_open_project_dialog 统一发起，
                     // 选完的路径也由它回填 `dialog.location`（与本模块文档一致）。
                     open_task.request(DialogPurpose::PickNewProjectLocation);
-                }
+                });
             });
 
             ui.add_space(6.0);
@@ -270,19 +266,18 @@ pub fn new_project_dialog(
             ui.separator();
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if ui.button("取消").clicked() {
+                ToolButton::text("取消", "").show(ui, &shell, || {
                     cancelled = true;
-                }
-                if ui
-                    .add_enabled(dialog.ready(), egui::Button::new("创建"))
-                    .clicked()
-                {
-                    confirmed = true;
-                }
+                });
+                ToolButton::text("创建", "")
+                    .enabled(dialog.ready())
+                    .show(ui, &shell, || {
+                        confirmed = true;
+                    });
             });
         });
 
-    // X（`open(&mut open)` 写回）与「取消」都走关；「创建」失败时留在框内。
+    // X（`DialogWindow` 写回 `open`）与「取消」都走关；「创建」失败时留在框内。
     dialog.open = open && !cancelled;
     if !dialog.open {
         return;
