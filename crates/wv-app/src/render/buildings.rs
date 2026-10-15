@@ -264,37 +264,41 @@ pub fn sync_building_overlays(
                 }
             }
         }
-        let shadow_mesh = meshes.add(triangles_to_mesh(&shadow_tris));
-        let side_mesh = meshes.add(sides_mesh(&side_quads));
-        let roof_mesh = meshes.add(triangles_to_mesh(&roof_tris));
-        let shadow_mat = materials.add(pal.building_side.with_alpha(SHADOW_ALPHA));
-        let side_mat = materials.add(pal.building_side);
-        let roof_mat = materials.add(pal.building_top);
+        // 空几何层不插 mesh：MeshAllocator 对 0 顶点 mesh 跳过分配、拷贝阶段
+        // 却无条件读取，bevy #24874 误报 Use-after-free（无建筑地图启动即刷
+        // 三条 error）。该层不生成实体，缓存槽位留 None，despawn 与
+        // opacity/z 补丁块对 None 天然跳过。
         let z = layers.building.z_offset;
-        let shadow = commands
-            .spawn((
-                Mesh2d(shadow_mesh.clone()),
-                MeshMaterial2d(shadow_mat.clone()),
-                Transform::from_xyz(0.0, 0.0, BUILDING_SHADOW_Z + z),
-            ))
-            .id();
-        let body = commands
-            .spawn((
-                Mesh2d(side_mesh.clone()),
-                MeshMaterial2d(side_mat.clone()),
-                Transform::from_xyz(0.0, 0.0, BUILDING_BODY_Z + z),
-            ))
-            .id();
-        let roof = commands
-            .spawn((
-                Mesh2d(roof_mesh.clone()),
-                MeshMaterial2d(roof_mat.clone()),
-                Transform::from_xyz(0.0, 0.0, BUILDING_ROOF_Z + z),
-            ))
-            .id();
-        cache.shadow = Some((shadow, shadow_mesh, shadow_mat));
-        cache.body = Some((body, side_mesh, side_mat));
-        cache.roof = Some((roof, roof_mesh, roof_mat));
+        let mut spawn_slot = |mesh: Option<Handle<Mesh>>,
+                              color: Color,
+                              base_z: f32|
+         -> Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)> {
+            let mesh = mesh?;
+            let mat = materials.add(color);
+            let entity = commands
+                .spawn((
+                    Mesh2d(mesh.clone()),
+                    MeshMaterial2d(mat.clone()),
+                    Transform::from_xyz(0.0, 0.0, base_z + z),
+                ))
+                .id();
+            Some((entity, mesh, mat))
+        };
+        cache.shadow = spawn_slot(
+            (!shadow_tris.is_empty()).then(|| meshes.add(triangles_to_mesh(&shadow_tris))),
+            pal.building_side.with_alpha(SHADOW_ALPHA),
+            BUILDING_SHADOW_Z,
+        );
+        cache.body = spawn_slot(
+            (!side_quads.is_empty()).then(|| meshes.add(sides_mesh(&side_quads))),
+            pal.building_side,
+            BUILDING_BODY_Z,
+        );
+        cache.roof = spawn_slot(
+            (!roof_tris.is_empty()).then(|| meshes.add(triangles_to_mesh(&roof_tris))),
+            pal.building_top,
+            BUILDING_ROOF_Z,
+        );
         cache.key = Some(key);
     }
     // 图层绑定变化（opacity / z）就地补丁，不重建几何（与 isoline 同款）。
