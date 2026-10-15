@@ -251,7 +251,8 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
 
         // ── 时间轴 ──
         I18nKey::TimelineSpeedPillSuffix => "天/秒",
-        I18nKey::TimelineRegisterEventBtn => "＋ 登记事件",
+        I18nKey::TimelineSpeedPillSuffixPlural => "天/秒",
+        I18nKey::TimelineRegisterEventBtn => "登记事件",
 
         // ── 校验 ──
         I18nKey::ValidationBadgeErrCountPrefix => "错误 ",
@@ -642,9 +643,10 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::InspectorEmptyHint => "Click a tile / event / character on the map to see all of its attributes here",
         I18nKey::InspectorEmptyAction => "Use the command palette →",
 
-        // ── Timeline panel (W2: speed pill + add-event button) ──
-        I18nKey::TimelineSpeedPillSuffix => " day/sec",
-        I18nKey::TimelineRegisterEventBtn => "+ Log event",
+        // ── Timeline panel (speed select + register-event button) ──
+        I18nKey::TimelineSpeedPillSuffix => " day / sec",
+        I18nKey::TimelineSpeedPillSuffixPlural => " days / sec",
+        I18nKey::TimelineRegisterEventBtn => "Register event",
 
         // ── Validation panel ──
         I18nKey::ValidationBadgeErrCountPrefix => "Errors ",

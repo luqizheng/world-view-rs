@@ -449,9 +449,11 @@ pub enum I18nKey {
     InspectorEmptyAction,
 
     // ── 时间轴面板（剩余字面量） ─────────────────────────────────────
-    /// 「天/秒」速度单位后缀（format!("{s:.0}") + suffix 拼接）
+    /// 「天/秒」速度单位后缀（单数档：format!("{s:.0}") + suffix 拼接）
     TimelineSpeedPillSuffix,
-    /// 「＋ 登记事件」按钮
+    /// 「天/秒」速度单位后缀（复数档，en 用 `days`；zh 与单数同值）
+    TimelineSpeedPillSuffixPlural,
+    /// 「+ Register event」按钮（加号由 `ICON_PLUS` 图标提供，文案不含加号）
     TimelineRegisterEventBtn,
 
     // ── 校验面板 ─────────────────────────────────────────────────────
@@ -745,7 +747,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 328] = [
+    pub const ALL: [I18nKey; 329] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -957,8 +959,9 @@ impl I18nKey {
         I18nKey::InspectorEmptyTitle,
         I18nKey::InspectorEmptyHint,
         I18nKey::InspectorEmptyAction,
-        // 时间轴（2）
+        // 时间轴（3）
         I18nKey::TimelineSpeedPillSuffix,
+        I18nKey::TimelineSpeedPillSuffixPlural,
         I18nKey::TimelineRegisterEventBtn,
         // 校验（8）
         I18nKey::ValidationBadgeErrCountPrefix,

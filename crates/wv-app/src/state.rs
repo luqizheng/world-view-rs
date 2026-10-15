@@ -675,8 +675,8 @@ impl Panel {
             Panel::Brush => [274.0, 220.0],
             Panel::Minimap => [216.0, 300.0],
             Panel::Compass => [216.0, 300.0],
-            // 通栏：1280 − 12×2 = 1256。
-            Panel::Timeline => [1256.0, 180.0],
+            // 通栏：1280 − 12×2 = 1256；高 164 对齐 web `.timeline`（50 顶排 + 轨道）。
+            Panel::Timeline => [1256.0, 164.0],
             Panel::Event => [300.0, 312.0],
             Panel::Situation => [300.0, 308.0],
             Panel::Character => [280.0, 260.0],
