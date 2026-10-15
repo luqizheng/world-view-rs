@@ -26,6 +26,7 @@
 //! |---|---|
 //! | [`generate`] | 写噪声 / lerp / 新的填充策略时。 |
 //! | [`edit`] | 写新笔刷（含 [`TerrainGrid`] 字段访问器）时。 |
+//! | [`intent`] | 写「意图笔刷」——按意图生成山脉 / 高原 / 火山 / 湖 / 河时。 |
 //! | [`isoline`] | 等值线提取 / 折线平滑抽稀（渲染派生，plan v0.1 M2）时。 |
 //!
 //! ## 双通道设计（基线 §2.3）
@@ -35,6 +36,7 @@
 
 pub mod edit;
 pub mod generate;
+pub mod intent;
 pub mod isoline;
 
 /// 地形类型编号。**刻意用 `u8` 而非枚举**。
