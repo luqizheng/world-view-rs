@@ -76,6 +76,11 @@ pub const DUSK_SNOW_SHADOW: Color = hex(0x6F7C88);
 pub const DUSK_ICE_PAPER: Color = hex(0xC8CCC6);
 pub const DUSK_ICE_INK: Color = hex(0x2E3A42);
 pub const DUSK_ICE_SHADOW: Color = hex(0x4A5A66);
+/// POI 圆点色族（手绘地图 #9）—— 暮色版：暗纸上稍亮的同族色。
+pub const DUSK_DOT_PLACE: Color = hex(0xD9B97A);
+pub const DUSK_DOT_REGION: Color = hex(0x7A8EAE);
+pub const DUSK_DOT_FACTION: Color = hex(0xE07A60);
+pub const DUSK_DOT_EVENT: Color = hex(0xD8B4E8);
 /// 文字晕边 = 暮色纸面深底。
 pub const DUSK_HALO_FILL: Color = hex(0x3A342E);
 /// 等值线 / 海岸线墨色：暗纸上的浅墨 推导·待复核。

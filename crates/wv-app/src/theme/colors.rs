@@ -128,6 +128,21 @@ pub const LABEL_PLACE: Color = hex(0x4A3F35); // 城/POI：原 label.fill（不�
 pub const LABEL_WATER: Color = hex(0x3F5B6A);
 
 // ---------------------------------------------------------------------------
+// POI 圆点色族（手绘地图呈现 #9，2026-10-15）
+// ---------------------------------------------------------------------------
+
+/// POI 悬停气泡圆点色——按 `EntityKind` 区分，统一调色板（之前 hover_tooltip
+/// 里硬编码 RGB，theme 切换不联动）。色源与「标签三级字重」同调：
+/// - Place 砖赭（与 `LABEL_PLACE` 同源——POI 即地点）
+/// - Region 冷蓝灰（与 `LABEL_REGION` 同族偏亮）
+/// - Faction 暖红（与 faction 势力色 `faction_color_a` 同族）
+/// - Event 紫（与 `ACCENT_EVENT` 同源）
+pub const DOT_PLACE: Color = hex(0xB48C5A);
+pub const DOT_REGION: Color = hex(0x5A6E8C);
+pub const DOT_FACTION: Color = hex(0xC4553F);
+pub const DOT_EVENT: Color = hex(0xC08BD8);
+
+// ---------------------------------------------------------------------------
 // 雪色双调（手绘地图呈现 #3，2026-10-15）
 // ---------------------------------------------------------------------------
 
@@ -373,5 +388,53 @@ mod tests {
     #[test]
     fn label_water_user_pinned_hex_is_stable() {
         assert_eq!(hex(0x3F5B6A), LABEL_WATER, "海名青蓝锚点应为 #3F5B6A");
+    }
+
+    // -----------------------------------------------------------------------
+    // POI 圆点色族（手绘地图呈现 #9，2026-10-15）
+    // -----------------------------------------------------------------------
+
+    /// DOT_PLACE 锚点：与 `LABEL_PLACE` 同源——POI 即地点。
+    #[test]
+    fn dot_place_anchored_to_label_place_family() {
+        // LABEL_PLACE = 0x4A3F35, DOT_PLACE = 0xB48C5A; 砖赭同族：
+        // r 高、b 低、g 中。三个通道各自手算断言（不是 hex 等值——避免两个
+        // 令牌意外被改成完全相同值而测试还过）。
+        let (Color::Srgba(p), Color::Srgba(l)) = (DOT_PLACE, LABEL_PLACE) else {
+            panic!()
+        };
+        assert!(
+            p.red > p.blue,
+            "DOT_PLACE 应偏暖（红 > 蓝），实得 r={} b={}",
+            p.red,
+            p.blue
+        );
+        assert!(
+            l.red > l.blue,
+            "LABEL_PLACE 应偏暖（红 > 蓝），实得 r={} b={}",
+            l.red,
+            l.blue
+        );
+    }
+
+    /// 四个 kind 圆点色互不相同：色源若被误改成同值，hover_tooltip 不可分辨 kind。
+    #[test]
+    fn dot_colors_per_kind_are_all_distinct() {
+        let (Color::Srgba(p), Color::Srgba(r), Color::Srgba(f), Color::Srgba(e)) =
+            (DOT_PLACE, DOT_REGION, DOT_FACTION, DOT_EVENT)
+        else {
+            panic!()
+        };
+        let colors = [
+            (p.red, p.green, p.blue),
+            (r.red, r.green, r.blue),
+            (f.red, f.green, f.blue),
+            (e.red, e.green, e.blue),
+        ];
+        for i in 0..colors.len() {
+            for j in (i + 1)..colors.len() {
+                assert_ne!(colors[i], colors[j], "DOT_ kind {i} 与 kind {j} 同色");
+            }
+        }
     }
 }

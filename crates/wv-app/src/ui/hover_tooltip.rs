@@ -26,6 +26,7 @@ use bevy_egui::{egui, EguiContexts};
 
 use crate::render::label_pick::{hit_test, LabelHits};
 use crate::state::{ViewState, WorldProjection};
+use crate::theme::palette;
 use crate::ui::shell::UiShell;
 use wv_core::{EntityKind, SelectedEntity};
 
@@ -71,7 +72,7 @@ pub fn hover_tooltip_system(
 
     // 4. egui 浮窗（屏幕位置 = 光标 + 8px 偏移）
     let pos = [cursor_screen.x + 8.0, cursor_screen.y + 8.0];
-    let kind_dot = kind_color(target.kind);
+    let kind_dot = kind_color(target.kind, palette::colors(view.map_palette));
     let sub_text = if subtitle.is_empty() {
         String::new()
     } else {
@@ -119,15 +120,19 @@ fn screen_to_view(
     view.camera_center + bevy::math::Vec2::new(p.x, p.y)
 }
 
-/// 按 `EntityKind` 取圆点色（手绘地图 #7）。
-fn kind_color(kind: EntityKind) -> egui::Color32 {
-    match kind {
-        EntityKind::Place => egui::Color32::from_rgb(180, 140, 90), // 砖赭（POI 暖色）
-        EntityKind::Region => egui::Color32::from_rgb(90, 110, 140), // 国/区：冷蓝灰
-        EntityKind::Faction => egui::Color32::from_rgb(196, 85, 63), // 势力：暖红
-        EntityKind::Event => egui::Color32::from_rgb(192, 139, 216), // 事件：紫
-        EntityKind::StreetSegment => egui::Color32::GRAY,
-    }
+/// 按 `EntityKind` 取圆点色（手绘地图 #7 + #9 统一调色板）。
+///
+/// 色源走 `PaletteColors.dot_*`（与 `LABEL_*` 同族），日间 / 暮色
+/// 自动切换；之前是 hover_tooltip 模块内硬编码 RGB，theme 切不到。
+fn kind_color(kind: EntityKind, pal: &palette::PaletteColors) -> egui::Color32 {
+    let c = match kind {
+        EntityKind::Place => pal.dot_place,
+        EntityKind::Region => pal.dot_region,
+        EntityKind::Faction => pal.dot_faction,
+        EntityKind::Event => pal.dot_event,
+        EntityKind::StreetSegment => return egui::Color32::GRAY,
+    };
+    crate::theme::colors::palette_to_color32(c)
 }
 
 /// 从 `WorldProjection.world` 解析 `(name, subtitle)`。
@@ -191,8 +196,10 @@ mod tests {
             h: None,
         };
         core.distances.places.push(place);
-        let mut proj = WorldProjection::default();
-        proj.world = core;
+        let proj = WorldProjection {
+            world: core,
+            ..Default::default()
+        };
         let target = SelectedEntity::new(EntityKind::Place, Id::new_unchecked("p1"));
         (proj, target)
     }
@@ -209,10 +216,11 @@ mod tests {
     /// kind_color：每个 kind 都返回非 GRAY 的特定色。
     #[test]
     fn kind_color_per_kind_distinct() {
-        let place = kind_color(EntityKind::Place);
-        let region = kind_color(EntityKind::Region);
-        let faction = kind_color(EntityKind::Faction);
-        let event = kind_color(EntityKind::Event);
+        let pal = palette::colors(crate::theme::palette::MapPalette::Daylight);
+        let place = kind_color(EntityKind::Place, pal);
+        let region = kind_color(EntityKind::Region, pal);
+        let faction = kind_color(EntityKind::Faction, pal);
+        let event = kind_color(EntityKind::Event, pal);
         let colors = [place, region, faction, event];
         for i in 0..colors.len() {
             for j in (i + 1)..colors.len() {

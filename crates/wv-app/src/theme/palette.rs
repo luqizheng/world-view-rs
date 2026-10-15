@@ -108,6 +108,11 @@ pub struct PaletteColors {
     pub label_place: Color,
     /// 标注字重梯度：water（海名）= 青蓝（civ-atlas 海名色族）。
     pub label_water: Color,
+    /// POI 圆点色族（手绘地图 #9）—— 按 `EntityKind` 选色。
+    pub dot_place: Color,
+    pub dot_region: Color,
+    pub dot_faction: Color,
+    pub dot_event: Color,
     /// 雪高光色（手绘地图 #3）—— 比 `core_terrain[7]` 略亮，近白。
     pub snow_highlight: Color,
     /// 雪冷阴影色（手绘地图 #3）—— 冷蓝灰，叠在 high-altitude 雪格上。
@@ -181,6 +186,10 @@ impl PaletteColors {
         label_region: colors::LABEL_REGION,
         label_place: colors::LABEL_PLACE,
         label_water: colors::LABEL_WATER,
+        dot_place: colors::DOT_PLACE,
+        dot_region: colors::DOT_REGION,
+        dot_faction: colors::DOT_FACTION,
+        dot_event: colors::DOT_EVENT,
         snow_highlight: colors::SNOW_HIGHLIGHT,
         snow_shadow: colors::SNOW_SHADOW,
         ice_paper: colors::ICE_PAPER,
@@ -212,6 +221,10 @@ impl PaletteColors {
         label_region: colors_dusk::DUSK_LABEL_REGION,
         label_place: colors_dusk::DUSK_LABEL_FILL, // place 复用 LABEL_FILL（视觉一致）
         label_water: colors_dusk::DUSK_LABEL_WATER,
+        dot_place: colors_dusk::DUSK_DOT_PLACE,
+        dot_region: colors_dusk::DUSK_DOT_REGION,
+        dot_faction: colors_dusk::DUSK_DOT_FACTION,
+        dot_event: colors_dusk::DUSK_DOT_EVENT,
         snow_highlight: colors_dusk::DUSK_SNOW_HIGHLIGHT,
         snow_shadow: colors_dusk::DUSK_SNOW_SHADOW,
         ice_paper: colors_dusk::DUSK_ICE_PAPER,
