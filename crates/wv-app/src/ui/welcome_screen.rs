@@ -30,10 +30,13 @@ use crate::ui::NewProjectDialog;
 use crate::ui_command_palette::{CommandId, CommandPalette};
 use crate::ui_shell::{DialogPurpose, OpenProjectTask, StartupLoadRequest};
 
+use crate::i18n::CurrentLocale;
+
 /// 欢迎页上最多列几条最近工程（列表本身存 8 条，首屏别太长）。
 const WELCOME_RECENTS_MAX: usize = 5;
 
 /// 无工程时的欢迎页：全屏压暗 + 居中的「新建 / 打开 / 最近」入口。
+#[allow(clippy::too_many_arguments)]
 pub fn welcome_screen(
     mut ctxs: EguiContexts,
     projection: Res<WorldProjection>,
@@ -42,6 +45,7 @@ pub fn welcome_screen(
     mut palette: ResMut<CommandPalette>,
     mut new_project: ResMut<NewProjectDialog>,
     startup_req: Res<StartupLoadRequest>,
+    current_loc: Res<CurrentLocale>,
 ) {
     // 有工程在手（或正在做启动加载）：不画。加载失败时工程仍未打开，
     // 本页照常出现，失败原因卡片（同为 Foreground、注册在后）压在其上。
@@ -69,51 +73,83 @@ pub fn welcome_screen(
                 .rect_filled(rect, 0.0, egui::Color32::from_black_alpha(180));
         });
 
-    egui::Window::new("World View")
-        .order(egui::Order::Foreground)
-        .collapsible(false)
-        .resizable(false)
-        .default_width(440.0)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .show(ctx, |ui| {
-            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                ui.heading("World View · 地图编辑器");
-                ui.add_space(2.0);
-                ui.label(
-                    egui::RichText::new("整理关键人物、地理、事件、关系的单机世界设定工具")
-                        .text_style(egui::TextStyle::Small)
-                        .color(ui.style().visuals.weak_text_color()),
-                );
-                ui.add_space(10.0);
-                ui.label(
-                    egui::RichText::new("还没有打开的工程——新建或打开一个之后才能开始绘制")
-                        .color(ui.style().visuals.warn_fg_color),
-                );
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button("新建工程…").clicked() {
-                        new_project.open();
-                    }
-                    if ui.button("打开工程…").clicked() {
-                        // 只排队意图；原生目录窗口由 poll_open_project_dialog 发起。
-                        open_task.request(DialogPurpose::Open);
-                    }
-                });
-                let entries = recents.entries();
-                if !entries.is_empty() {
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.label(egui::RichText::new("最近工程").text_style(egui::TextStyle::Small));
-                    for (i, e) in entries.iter().take(WELCOME_RECENTS_MAX).enumerate() {
-                        // 走唯一分发器（与菜单同一条路），本页不做加载。
-                        if ui
-                            .button(egui::RichText::new(format!("{} — {}", e.name, e.dir)).small())
-                            .clicked()
-                        {
-                            palette.pending = Some(CommandId::OpenRecentProject(i as u8));
-                        }
-                    }
+    egui::Window::new(crate::i18n::t_key(
+        &current_loc,
+        crate::i18n::I18nKey::WelcomeHeading,
+    ))
+    .order(egui::Order::Foreground)
+    .collapsible(false)
+    .resizable(false)
+    .default_width(440.0)
+    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+    .show(ctx, |ui| {
+        ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+            ui.heading(crate::i18n::t_key(
+                &current_loc,
+                crate::i18n::I18nKey::WelcomeHeading,
+            ));
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new(crate::i18n::t_key(
+                    &current_loc,
+                    crate::i18n::I18nKey::WelcomeTagline,
+                ))
+                .text_style(egui::TextStyle::Small)
+                .color(ui.style().visuals.weak_text_color()),
+            );
+            ui.add_space(10.0);
+            ui.label(
+                egui::RichText::new(crate::i18n::t_key(
+                    &current_loc,
+                    crate::i18n::I18nKey::WelcomeHelpText,
+                ))
+                .color(ui.style().visuals.warn_fg_color),
+            );
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .button(crate::i18n::t_key(
+                        &current_loc,
+                        crate::i18n::I18nKey::WelcomeNewProjectBtn,
+                    ))
+                    .clicked()
+                {
+                    new_project.open();
+                }
+                if ui
+                    .button(crate::i18n::t_key(
+                        &current_loc,
+                        crate::i18n::I18nKey::WelcomeOpenProjectBtn,
+                    ))
+                    .clicked()
+                {
+                    // 只排队意图；原生目录窗口由 poll_open_project_dialog 发起。
+                    open_task.request(DialogPurpose::Open);
                 }
             });
+            let entries = recents.entries();
+            if !entries.is_empty() {
+                ui.add_space(10.0);
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(crate::i18n::t_key(
+                        &current_loc,
+                        crate::i18n::I18nKey::WelcomeRecentHeading,
+                    ))
+                    .text_style(egui::TextStyle::Small),
+                );
+                for (i, e) in entries.iter().take(WELCOME_RECENTS_MAX).enumerate() {
+                    // 走唯一分发器（与菜单同一条路），本页不做加载。
+                    // 「—」分隔符与项目名是用户输入（跨语种天然混合），
+                    // 不引入 i18n Key。
+                    if ui
+                        .button(egui::RichText::new(format!("{} — {}", e.name, e.dir)).small())
+                        .clicked()
+                    {
+                        palette.pending = Some(CommandId::OpenRecentProject(i as u8));
+                    }
+                }
+            }
         });
+    });
 }

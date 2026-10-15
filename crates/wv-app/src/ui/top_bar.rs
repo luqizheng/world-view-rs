@@ -64,7 +64,15 @@ pub fn top_bar(
         .show(&mut root, |ui| {
             ui.horizontal(|ui| {
                 // ── 身份 ──
-                identity_segment(ui, &shell, &projection, &recents, &mut panels, &mut menu);
+                identity_segment(
+                    ui,
+                    &shell,
+                    &projection,
+                    &recents,
+                    &mut panels,
+                    &mut menu,
+                    &current_loc,
+                );
                 ui.add_space(space::MD);
 
                 // ── 主控（视图模式分段控件，权重最高）──
@@ -75,7 +83,17 @@ pub fn top_bar(
                 ui.add_space(space::SM);
 
                 // ── 重画按钮（2026-10-14 用户需求：数据改了画面没跟上时点 ↻）──
-                if mini_icon_button(ui, &shell, "↻", "强制重画地形（F5）").clicked() {
+                if mini_icon_button(
+                    ui,
+                    &shell,
+                    "↻",
+                    crate::i18n::t_key(
+                        &current_loc,
+                        crate::i18n::I18nKey::TopBarForceRedrawTooltip,
+                    ),
+                )
+                .clicked()
+                {
                     palette.pending = Some(CommandId::ForceRebuildTexture);
                 }
 
@@ -100,6 +118,7 @@ fn identity_segment(
     recents: &[RecentProject],
     panels: &mut crate::state::PanelState,
     menu: &mut ProjectMenuState,
+    current_loc: &CurrentLocale,
 ) {
     // 项目管理菜单（v0.2 §A）。入口就是工程名本身——不用固定菜单栏（§3.2 三段式密度）。
     project_menu_inner(ui, shell, projection, recents, panels, menu);
@@ -111,9 +130,9 @@ fn identity_segment(
         BadgeKind::Ok
     };
     let text = if projection.dirty {
-        "未保存"
+        crate::i18n::t_key(current_loc, crate::i18n::I18nKey::TopBarUnsaved)
     } else {
-        "已保存"
+        crate::i18n::t_key(current_loc, crate::i18n::I18nKey::TopBarSaved)
     };
     ui.add_space(space::XS);
     badge(ui, shell, label, text);
@@ -121,7 +140,12 @@ fn identity_segment(
     // 工程未加载时的醒目错误（§5.1）。
     if projection.load_error.is_some() {
         ui.add_space(space::SM);
-        badge(ui, shell, BadgeKind::Err, "工程未加载");
+        badge(
+            ui,
+            shell,
+            BadgeKind::Err,
+            crate::i18n::t_key(current_loc, crate::i18n::I18nKey::TopBarNoProjectLoaded),
+        );
     }
 }
 
@@ -341,6 +365,7 @@ pub fn status_bar(
     projection: Res<WorldProjection>,
     notice: Res<crate::ui_shell::ShellNotice>,
     time: Res<Time>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let fresh = notice.is_fresh((time.elapsed_secs() * 60.0) as u64);
@@ -358,11 +383,24 @@ pub fn status_bar(
         .show(&mut root, |ui| {
             ui.horizontal(|ui| {
                 let w = &projection.world;
+                // 顶栏右侧计数：纯片段拼接（不插值，按 ADR-0018 用户裁定）。
+                // 中文："Unit 3 · 人物 5 · 事态 2 · 事件 1"
+                // 英文："Unit 3 · Person 5 · Situation 2 · Event 1"
+                let ul = crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::TopBarCountUnits);
+                let cl =
+                    crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::TopBarCountCharacters);
+                let sl =
+                    crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::TopBarCountSituations);
+                let el = crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::TopBarCountEvents);
                 let summary = format!(
-                    "Unit {} · 人物 {} · 事态 {} · 事件 {}",
+                    "{} {} · {} {} · {} {} · {} {}",
+                    ul,
                     w.units.len(),
+                    cl,
                     w.characters.len(),
+                    sl,
                     w.situations.len(),
+                    el,
                     w.events.len()
                 );
                 ui.label(
@@ -372,14 +410,25 @@ pub fn status_bar(
                         .font(mono(shell.scale.micro)),
                 );
                 ui.add_space(space::LG);
+                let selected = format!(
+                    "{}{}",
+                    crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::TopBarSelectedMapPrefix),
+                    view.current_map
+                );
                 ui.label(
-                    egui::RichText::new(format!("已选：{}", view.current_map))
+                    egui::RichText::new(selected)
                         .size(shell.scale.micro)
                         .color(shell.t2()),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // 缩放前缀 + 预格式化数值（精度由调用点决定）
+                    let zoom_label = format!(
+                        "{}{:.2}×",
+                        crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::TopBarZoomPrefix),
+                        view.scale
+                    );
                     ui.label(
-                        egui::RichText::new(format!("缩放 {:.2}×", view.scale))
+                        egui::RichText::new(zoom_label)
                             .size(shell.scale.micro)
                             .color(shell.t2())
                             .font(mono(shell.scale.micro)),

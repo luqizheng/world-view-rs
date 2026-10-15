@@ -46,6 +46,8 @@ pub enum I18nKey {
     CommonNew,
     /// 「未知」通用占位（在 ID 解析失败 / 空 id 时显示）
     CommonUnknown,
+    /// 「删除整个」前缀（「删除整个 {}」→「删除整个张献忠」之类）
+    CommonDeleteEntire,
 
     // ── 顶栏（ADR-0016 三区结构） ────────────────────────────────
     /// 「未保存」
@@ -61,25 +63,36 @@ pub enum I18nKey {
     /// 「工程未加载」红色 badge
     TopBarNoProjectLoaded,
 
-    // ── 顶栏右侧计数 ────────────────────────────────────────────
-    /// 顶栏右侧「Unit {} · 人物 {} · 事态 {} · 事件 {}」
-    TopBarCounts,
-    /// 「已选：{}」当前地图标签
-    TopBarSelectedMap,
-    /// 「缩放 {:.2}×」
-    TopBarZoomScale,
+    // ── 顶栏右侧计数（拆为不带占位符的纯片段，按 ADR-0018 用户裁定
+    //    「调用点负责 format!」）────────────────────────────────
+    /// 顶栏右侧计数「Unit」标签（中英都沿用英文术语「Unit」）
+    TopBarCountUnits,
+    /// 顶栏右侧计数「人物」 / 「Person」 标签
+    TopBarCountCharacters,
+    /// 顶栏右侧计数「事态」 / 「Situation」 标签
+    TopBarCountSituations,
+    /// 顶栏右侧计数「事件」 / 「Event」 标签
+    TopBarCountEvents,
+    /// 「已选：」当前地图标签前缀
+    TopBarSelectedMapPrefix,
+    /// 「缩放 」缩放标签前缀
+    TopBarZoomPrefix,
 
     // ── 欢迎页 ──────────────────────────────────────────────────
-    /// 欢迎页标题（无工程）
-    WelcomeScreenTitle,
-    /// 欢迎页「打开工程」主按钮
+    /// 欢迎页大标题（无工程锁）
+    WelcomeHeading,
+    /// 欢迎页副标题（一句话描述）
+    WelcomeTagline,
+    /// 欢迎页提示（`还没有打开的工程…`）
+    WelcomeHelpText,
+    /// 欢迎页「打开工程」按钮
     WelcomeOpenProjectBtn,
-    /// 欢迎页「新建工程」次按钮
+    /// 欢迎页「新建工程」按钮
     WelcomeNewProjectBtn,
-    /// 欢迎页最近工程为空时提示
-    WelcomeRecentEmpty,
     /// 欢迎页最近工程段标题
     WelcomeRecentHeading,
+    /// 欢迎页最近工程为空时提示
+    WelcomeRecentEmpty,
 
     // ── 新建工程对话框 ──────────────────────────────────────────
     /// 对话框标题
@@ -88,14 +101,28 @@ pub enum I18nKey {
     NewProjectDialogDirLabel,
     /// 「工程名称」字段标签
     NewProjectDialogNameLabel,
-    /// 「作者」字段标签
-    NewProjectDialogAuthorLabel,
-    /// 「描述」字段标签
-    NewProjectDialogDescriptionLabel,
+    /// 工程名称输入 hover 提示
+    NewProjectDialogNameHover,
+    /// 工程名称输入 placeholder
+    NewProjectDialogNameHint,
+    /// 位置字段标签
+    NewProjectDialogLocationLabel,
+    /// 位置输入 placeholder
+    NewProjectDialogLocationHint,
     /// 选择目录按钮
     NewProjectDialogBrowseDir,
     /// 「创建」按钮
     NewProjectDialogCreateBtn,
+    /// 路径预览前缀「项目将在 」
+    NewProjectDialogPreviewForPrefix,
+    /// 路径预览后缀「 创建目录」
+    NewProjectDialogPreviewForSuffix,
+    /// 路径预览空态（先填名称、选位置）
+    NewProjectDialogPreviewEmpty,
+    /// 默认工程名称（新建对话框打开时的初值）
+    NewProjectDialogDefaultName,
+    /// 首图默认显示名
+    NewProjectDialogDefaultFirstMapName,
     /// 「取消」按钮（与 CommonCancel 重名复用）
     /// 留作未来区分占位：目前复用 CommonCancel
 
@@ -106,26 +133,57 @@ pub enum I18nKey {
     NewMapDialogIdLabel,
     /// 「地图名称」字段标签
     NewMapDialogNameLabel,
-    /// 「父图 ID（留空 = 根图）」字段标签
-    NewMapDialogParentLabel,
-    /// 「原点 X」字段标签
-    NewMapDialogOriginXLabel,
-    /// 「原点 Y」字段标签
-    NewMapDialogOriginYLabel,
-    /// 「边长（wu）」字段标签
+    /// 名称输入 hover 提示
+    NewMapDialogNameHover,
+    /// 名称输入 placeholder
+    NewMapDialogNameHint,
+    /// 「层级」字段标签
+    NewMapDialogLevelLabel,
+    /// 「幅面」字段标签
     NewMapDialogExtentLabel,
+    /// 「预填充」字段标签
+    NewMapDialogPrefillLabel,
+    /// 默认地图名（对话框打开时的初值）
+    NewMapDialogDefaultName,
+    /// 默认首图地图名（空世界时）
+    NewMapDialogFirstMapDefaultName,
+    /// 首图会作为世界地图（钻取树的根）
+    NewMapDialogFirstMapInfo,
+    /// 当前没有选中地图时提示
+    NewMapDialogNoParentInfo,
+    /// 栅格信息前缀「栅格 」
+    NewMapDialogGridInfoPrefix,
+    /// 栅格信息中「×」
+    NewMapDialogGridInfoMid,
+    /// 栅格信息后缀「（每格 X wu）」
+    NewMapDialogGridInfoSuffix,
+    /// 「挂在「」之下」前缀
+    NewMapDialogParentUnderPrefix,
+    /// 「挂在「X」之下」后缀
+    NewMapDialogParentUnderSuffix,
+    /// 预填充：海洋
+    NewMapDialogPrefillOcean,
+    /// 预填充：陆地
+    NewMapDialogPrefillLand,
+    /// 首图级别 hover
+    NewMapDialogLevelFirstMapHover,
+    /// 预填充 hover
+    NewMapDialogPrefillHover,
+    /// 「已创建地图「」前缀
+    NewMapDialogCreatedPrefix,
+    /// 「已创建地图「X」」后缀
+    NewMapDialogCreatedSuffix,
+    /// 「创建失败：」前缀
+    NewMapDialogErrCreateFailPrefix,
     /// 「创建」按钮
     NewMapDialogCreateBtn,
-
     // ── 通用：删除/确认 ──────────────────────────────────────────
-    /// 「删除整个 {}」按钮红字
-    CommonDeleteWhole,
 }
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 41] = [
-        // 公共动作
+    pub const ALL: [I18nKey; 70] = [
+        // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
         I18nKey::CommonOk,
@@ -137,41 +195,69 @@ impl I18nKey {
         I18nKey::CommonBack,
         I18nKey::CommonNew,
         I18nKey::CommonUnknown,
-        // 顶栏
+        I18nKey::CommonDeleteEntire,
+        // 顶栏（6）
         I18nKey::TopBarUnsaved,
         I18nKey::TopBarSaved,
         I18nKey::TopBarUnsavedDot,
         I18nKey::TopBarUnsavedSubtitle,
         I18nKey::TopBarForceRedrawTooltip,
         I18nKey::TopBarNoProjectLoaded,
-        // 顶栏右侧计数
-        I18nKey::TopBarCounts,
-        I18nKey::TopBarSelectedMap,
-        I18nKey::TopBarZoomScale,
-        // 欢迎页
-        I18nKey::WelcomeScreenTitle,
+        // 顶栏右侧计数（拆为不带占位符的纯片段，6）
+        I18nKey::TopBarCountUnits,
+        I18nKey::TopBarCountCharacters,
+        I18nKey::TopBarCountSituations,
+        I18nKey::TopBarCountEvents,
+        I18nKey::TopBarSelectedMapPrefix,
+        I18nKey::TopBarZoomPrefix,
+        // 欢迎页（7）
+        I18nKey::WelcomeHeading,
+        I18nKey::WelcomeTagline,
+        I18nKey::WelcomeHelpText,
         I18nKey::WelcomeOpenProjectBtn,
         I18nKey::WelcomeNewProjectBtn,
-        I18nKey::WelcomeRecentEmpty,
         I18nKey::WelcomeRecentHeading,
-        // 新建工程对话框
+        I18nKey::WelcomeRecentEmpty,
+        // 新建工程对话框（14）
         I18nKey::NewProjectDialogTitle,
         I18nKey::NewProjectDialogDirLabel,
         I18nKey::NewProjectDialogNameLabel,
-        I18nKey::NewProjectDialogAuthorLabel,
-        I18nKey::NewProjectDialogDescriptionLabel,
+        I18nKey::NewProjectDialogNameHover,
+        I18nKey::NewProjectDialogNameHint,
+        I18nKey::NewProjectDialogLocationLabel,
+        I18nKey::NewProjectDialogLocationHint,
         I18nKey::NewProjectDialogBrowseDir,
         I18nKey::NewProjectDialogCreateBtn,
-        // 新建地图对话框
+        I18nKey::NewProjectDialogPreviewForPrefix,
+        I18nKey::NewProjectDialogPreviewForSuffix,
+        I18nKey::NewProjectDialogPreviewEmpty,
+        I18nKey::NewProjectDialogDefaultName,
+        I18nKey::NewProjectDialogDefaultFirstMapName,
+        // 新建地图对话框（23）
         I18nKey::NewMapDialogTitle,
         I18nKey::NewMapDialogIdLabel,
         I18nKey::NewMapDialogNameLabel,
-        I18nKey::NewMapDialogParentLabel,
-        I18nKey::NewMapDialogOriginXLabel,
-        I18nKey::NewMapDialogOriginYLabel,
+        I18nKey::NewMapDialogNameHover,
+        I18nKey::NewMapDialogNameHint,
+        I18nKey::NewMapDialogLevelLabel,
         I18nKey::NewMapDialogExtentLabel,
+        I18nKey::NewMapDialogPrefillLabel,
+        I18nKey::NewMapDialogDefaultName,
+        I18nKey::NewMapDialogFirstMapDefaultName,
+        I18nKey::NewMapDialogFirstMapInfo,
+        I18nKey::NewMapDialogNoParentInfo,
+        I18nKey::NewMapDialogGridInfoPrefix,
+        I18nKey::NewMapDialogGridInfoMid,
+        I18nKey::NewMapDialogGridInfoSuffix,
+        I18nKey::NewMapDialogParentUnderPrefix,
+        I18nKey::NewMapDialogParentUnderSuffix,
+        I18nKey::NewMapDialogPrefillOcean,
+        I18nKey::NewMapDialogPrefillLand,
+        I18nKey::NewMapDialogLevelFirstMapHover,
+        I18nKey::NewMapDialogPrefillHover,
+        I18nKey::NewMapDialogCreatedPrefix,
+        I18nKey::NewMapDialogCreatedSuffix,
+        I18nKey::NewMapDialogErrCreateFailPrefix,
         I18nKey::NewMapDialogCreateBtn,
-        // 通用：删除/确认
-        I18nKey::CommonDeleteWhole,
     ];
 }

@@ -22,6 +22,8 @@ use wv_core::terrain::{TerrainCellData, TerrainData};
 use wv_core::Id;
 
 use crate::edit::editing::EditHistory;
+use crate::i18n::CurrentLocale;
+use crate::i18n::{t_key, I18nKey};
 use crate::render::terrain_view::TerrainTexture;
 use crate::state::{map_level_label, DrillState, ProjectDiagnostics, WorldProjection};
 use crate::ui_shell::ShellNotice;
@@ -37,11 +39,13 @@ pub enum NewMapPrefill {
 }
 
 impl NewMapPrefill {
-    fn label(self) -> &'static str {
-        match self {
-            NewMapPrefill::Ocean => "海洋",
-            NewMapPrefill::Land => "陆地",
-        }
+    /// 预填充文案，按 locale 翻译（中：「海洋」/「陆地」；英：「Ocean」/「Land」）。
+    pub(crate) fn label(self, loc: &CurrentLocale) -> &'static str {
+        let key = match self {
+            NewMapPrefill::Ocean => I18nKey::NewMapDialogPrefillOcean,
+            NewMapPrefill::Land => I18nKey::NewMapDialogPrefillLand,
+        };
+        t_key(loc, key)
     }
 
     /// 预填充格：`(height, kind)`。
@@ -95,6 +99,8 @@ pub struct NewMapDialog {
 
 impl Default for NewMapDialog {
     fn default() -> Self {
+        // todo!(i18n): 默认名当前固定中文，与 new_project_dialog 的 Default::default()
+        // 同批跟进；详见 ADR-0018 §2.2。
         Self {
             open: false,
             name: "新地图".into(),
@@ -108,14 +114,14 @@ impl Default for NewMapDialog {
 
 impl NewMapDialog {
     /// 由分发器调用：打开对话框并按世界现状预填默认值。
-    pub fn open_for(&mut self, world: &wv_core::World) {
+    pub fn open_for(&mut self, world: &wv_core::World, loc: &CurrentLocale) {
         *self = Self {
             open: true,
-            // 空世界的第一张图就是世界图，名字顺势默认「世界」。
+            // 空世界的第一张图就是世界图，名字顺势默认「世界」；走 i18n。
             name: if world.maps.is_empty() {
-                "世界".into()
+                t_key(loc, I18nKey::NewMapDialogFirstMapDefaultName).to_owned()
             } else {
-                "新地图".into()
+                t_key(loc, I18nKey::NewMapDialogDefaultName).to_owned()
             },
             level: if world.maps.is_empty() {
                 MapLevel::World
@@ -157,6 +163,7 @@ pub fn new_map_dialog(
     mut diagnostics: ResMut<ProjectDiagnostics>,
     mut notice: ResMut<ShellNotice>,
     time: Res<Time>,
+    current_loc: Res<CurrentLocale>,
 ) {
     if !dialog.open {
         return;
@@ -169,7 +176,7 @@ pub fn new_map_dialog(
     let mut confirmed = false;
     let mut cancelled = false;
 
-    egui::Window::new("新建地图")
+    egui::Window::new(t_key(&current_loc, I18nKey::NewMapDialogTitle))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
@@ -185,15 +192,14 @@ pub fn new_map_dialog(
             let first_map = world.maps.is_empty();
 
             ui.horizontal(|ui| {
-                ui.label("名称").on_hover_text(
-                    "显示名，可中文；地图 ID（YAML/Git 里用的）会按 map_1、map_2… 自动生成",
-                );
+                ui.label(t_key(&current_loc, I18nKey::NewMapDialogNameLabel))
+                    .on_hover_text(t_key(&current_loc, I18nKey::NewMapDialogNameHover));
                 let mut name = dialog.name.clone();
                 if ui
                     .add(
                         egui::TextEdit::singleline(&mut name)
                             .desired_width(220.0)
-                            .hint_text("新地图"),
+                            .hint_text(t_key(&current_loc, I18nKey::NewMapDialogNameHint)),
                     )
                     .changed()
                 {
@@ -203,12 +209,15 @@ pub fn new_map_dialog(
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label("层级");
+                ui.label(t_key(&current_loc, I18nKey::NewMapDialogLevelLabel));
                 // 空世界的第一张图必须是世界图——它是钻取树的根（ensure_root
                 // 只认 level == World），别的层级在树下无处可挂。
                 if first_map {
                     ui.label(map_level_label(MapLevel::World))
-                        .on_hover_text("空世界的第一张地图固定为世界图");
+                        .on_hover_text(t_key(
+                            &current_loc,
+                            I18nKey::NewMapDialogLevelFirstMapHover,
+                        ));
                 } else {
                     for l in [
                         MapLevel::World,
@@ -223,7 +232,7 @@ pub fn new_map_dialog(
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label("幅面");
+                ui.label(t_key(&current_loc, I18nKey::NewMapDialogExtentLabel));
                 for e in EXTENT_CHOICES {
                     ui.selectable_value(&mut dialog.extent, e, format!("{e:.0}"));
                 }
@@ -232,33 +241,39 @@ pub fn new_map_dialog(
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label("预填充").on_hover_text(
-                    "整图先铺满海洋或陆地，再用地形笔刷修形——\
-                     矢量地形视图下「陆」由高度决定，预填充同时写高度与类型",
-                );
+                ui.label(t_key(&current_loc, I18nKey::NewMapDialogPrefillLabel))
+                    .on_hover_text(t_key(&current_loc, I18nKey::NewMapDialogPrefillHover));
                 for p in [NewMapPrefill::Ocean, NewMapPrefill::Land] {
-                    ui.selectable_value(&mut dialog.prefill, p, p.label());
+                    ui.selectable_value(&mut dialog.prefill, p, p.label(&current_loc));
                 }
             });
 
             ui.add_space(4.0);
             // 落点：当前图是父图；空世界时它就是根。
             if first_map {
-                ui.label("将成为世界地图（钻取树的根）");
+                ui.label(t_key(&current_loc, I18nKey::NewMapDialogFirstMapInfo));
             } else {
                 let parent = drill
                     .current()
                     .and_then(|id| drill.node(world, id).cloned());
                 match parent {
-                    Some(p) => ui.label(format!("挂在「{}」之下", p.name)),
-                    None => ui.label("（当前没有选中地图，将作为独立根图创建）"),
+                    Some(p) => ui.label(format!(
+                        "{}{}{}",
+                        t_key(&current_loc, I18nKey::NewMapDialogParentUnderPrefix),
+                        p.name,
+                        t_key(&current_loc, I18nKey::NewMapDialogParentUnderSuffix),
+                    )),
+                    None => ui.label(t_key(&current_loc, I18nKey::NewMapDialogNoParentInfo)),
                 };
             }
             ui.label(
                 egui::RichText::new(format!(
-                    "栅格 {}×{}（每格 {GRID_CELL_SIZE:.0} wu）",
+                    "{}{}{}{}{} wu）",
+                    t_key(&current_loc, I18nKey::NewMapDialogGridInfoPrefix),
                     dialog.grid_cells(),
-                    dialog.grid_cells()
+                    t_key(&current_loc, I18nKey::NewMapDialogGridInfoMid),
+                    dialog.grid_cells(),
+                    GRID_CELL_SIZE as i32,
                 ))
                 .text_style(egui::TextStyle::Small),
             );
@@ -272,10 +287,19 @@ pub fn new_map_dialog(
             ui.separator();
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if ui.button("取消").clicked() {
+                if ui
+                    .button(t_key(&current_loc, I18nKey::CommonCancel))
+                    .clicked()
+                {
                     cancelled = true;
                 }
-                if ui.add(egui::Button::new("创建")).clicked() {
+                if ui
+                    .add(egui::Button::new(t_key(
+                        &current_loc,
+                        I18nKey::NewMapDialogCreateBtn,
+                    )))
+                    .clicked()
+                {
                     confirmed = true;
                 }
             });
@@ -287,7 +311,13 @@ pub fn new_map_dialog(
         return;
     }
     if confirmed {
-        match create_map(&mut dialog, &mut projection, &drill, &mut edit) {
+        match create_map(
+            &mut dialog,
+            &mut projection,
+            &drill,
+            &mut edit,
+            &current_loc,
+        ) {
             Ok(id) => {
                 // 新栅格 / 新图都要让底图重走一遍：mark_all_dirty 触发整图重建，
                 // 钻入后 `rebuild_texture_on_mode_change` 认 last_map 变化再换图。
@@ -299,7 +329,15 @@ pub fn new_map_dialog(
                 {
                     drill.enter(&projection.world, &id);
                 }
-                notice.info(format!("已创建地图「{}」", dialog.name), frame);
+                notice.info(
+                    format!(
+                        "{}{}{}",
+                        t_key(&current_loc, I18nKey::NewMapDialogCreatedPrefix),
+                        dialog.name,
+                        t_key(&current_loc, I18nKey::NewMapDialogCreatedSuffix),
+                    ),
+                    frame,
+                );
                 dialog.open = false;
             }
             Err(e) => dialog.error = Some(e),
@@ -313,9 +351,10 @@ fn create_map(
     projection: &mut WorldProjection,
     drill: &DrillState,
     edit: &mut EditHistory,
+    current_loc: &CurrentLocale,
 ) -> Result<Id, String> {
     let name = if dialog.name.trim().is_empty() {
-        "新地图".to_owned()
+        t_key(current_loc, I18nKey::NewMapDialogDefaultName).to_owned()
     } else {
         dialog.name.trim().to_owned()
     };
@@ -362,7 +401,11 @@ fn create_map(
             projection.dirty = true;
             Ok(id)
         }
-        Err(e) => Err(format!("创建失败：{e}")),
+        Err(e) => Err(format!(
+            "{}{}",
+            t_key(current_loc, I18nKey::NewMapDialogErrCreateFailPrefix),
+            e
+        )),
     }
 }
 
@@ -437,8 +480,9 @@ mod tests {
     /// `open_for` 的默认值随世界现状切换：空世界 → 世界图；非空 → 当前图下的城市图。
     #[test]
     fn open_for_picks_defaults_by_world_shape() {
+        let zh = crate::i18n::CurrentLocale(crate::i18n::Locale::Zh);
         let mut dialog = NewMapDialog::default();
-        dialog.open_for(&wv_core::World::default());
+        dialog.open_for(&wv_core::World::default(), &zh);
         assert!(dialog.open);
         assert_eq!(dialog.level, MapLevel::World, "空世界的首图应为世界图");
 
@@ -459,7 +503,7 @@ mod tests {
             orientation: 0.0,
         });
         let mut dialog = NewMapDialog::default();
-        dialog.open_for(&world);
+        dialog.open_for(&world, &zh);
         assert_eq!(dialog.level, MapLevel::City, "非空世界默认建城市图");
     }
 }

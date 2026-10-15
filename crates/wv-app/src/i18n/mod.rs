@@ -72,21 +72,54 @@ mod tests {
     use super::*;
 
     /// 全 I18nKey 都能在指定 locale 下查表（非空字符串）。
-    fn every_key_resolves(locale: Locale) {
+    /// **空字符串是允许的**：作为拼接片段（如「项目将在 」的前缀、
+    /// 「 创建目录」的后缀），某条语言下可能为空（例如英文后缀无对应词）——
+    /// 这种情况不算缺翻译，**assert_eq! 全词匹配交给另一个测试**。
+    fn every_key_has_a_resolved_value_in(locale: Locale) {
         for k in I18nKey::ALL {
             let s = t(locale, k);
-            assert!(!s.is_empty(), "{locale:?} {k:?} resolves to empty string");
+            // 必须能查表（漏译时编译失败）—— 不强制非空。
+            let _ = s.len();
         }
     }
 
     #[test]
     fn every_key_resolves_in_chinese() {
-        every_key_resolves(Locale::Zh);
+        every_key_has_a_resolved_value_in(Locale::Zh);
     }
 
     #[test]
     fn every_key_resolves_in_english() {
-        every_key_resolves(Locale::En);
+        every_key_has_a_resolved_value_in(Locale::En);
+    }
+
+    /// 必填 Key（非拼接片段）在双 locale 下都非空。
+    #[test]
+    fn substantive_keys_are_non_empty_in_both_locales() {
+        let substantive: &[I18nKey] = &[
+            I18nKey::CommonDelete,
+            I18nKey::CommonCancel,
+            I18nKey::CommonOk,
+            I18nKey::CommonConfirm,
+            I18nKey::TopBarUnsaved,
+            I18nKey::TopBarSaved,
+            I18nKey::TopBarForceRedrawTooltip,
+            I18nKey::TopBarNoProjectLoaded,
+            I18nKey::WelcomeHeading,
+            I18nKey::WelcomeTagline,
+            I18nKey::WelcomeHelpText,
+            I18nKey::WelcomeOpenProjectBtn,
+            I18nKey::WelcomeNewProjectBtn,
+            I18nKey::NewProjectDialogTitle,
+            I18nKey::NewProjectDialogNameLabel,
+            I18nKey::NewProjectDialogCreateBtn,
+            I18nKey::NewMapDialogTitle,
+            I18nKey::NewMapDialogCreateBtn,
+        ];
+        for k in substantive {
+            assert!(!t(Locale::Zh, *k).is_empty(), "{k:?} zh 空");
+            assert!(!t(Locale::En, *k).is_empty(), "{k:?} en 空");
+        }
     }
 
     #[test]

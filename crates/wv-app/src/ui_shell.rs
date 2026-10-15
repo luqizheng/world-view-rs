@@ -990,6 +990,7 @@ fn apply_pending_commands(
         Option<Res<crate::render::terrain_view::TileAtlas>>,
         ResMut<Assets<Image>>,
     ),
+    current_loc: Res<CurrentLocale>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     time: Res<Time>,
 ) {
@@ -1051,7 +1052,7 @@ fn apply_pending_commands(
         CommandId::OpenCommandPalette => palette.open(),
         // 新建地图：只负责把对话框打开（默认值按世界现状预填）；创建动作
         // 在对话框自身的系统里经 `AddMapCommand` 提交（见 `ui::new_map_dialog`）。
-        CommandId::NewMap => new_map_dialog.open_for(&projection.world),
+        CommandId::NewMap => new_map_dialog.open_for(&projection.world, &current_loc),
         CommandId::ToggleTheme => cfg.theme = cfg.theme.toggled(),
         CommandId::ToggleDensity => cfg.density = cfg.density.toggled(),
         CommandId::ToggleMapPalette => view.map_palette = view.map_palette.toggled(),
@@ -1352,6 +1353,9 @@ mod tests {
         world.init_resource::<crate::state::ProjectDiagnostics>();
         world.init_resource::<crate::ui::NewMapDialog>();
         world.init_resource::<crate::ui::NewProjectDialog>();
+        // ADR-0018：UI 文案语言；默认 `Locale::Zh`（与 GUI 启动默认值一致）。
+        world.init_resource::<crate::i18n::CurrentLocale>();
+        world.init_resource::<LayoutFile>();
         use bevy::asset::Assets;
         use bevy::image::Image;
         world.init_resource::<Assets<Image>>();
@@ -1457,6 +1461,9 @@ mod tests {
         world.init_resource::<crate::state::ProjectDiagnostics>();
         world.init_resource::<crate::ui::NewMapDialog>();
         world.init_resource::<crate::ui::NewProjectDialog>();
+        // ADR-0018：UI 文案语言；默认 `Locale::Zh`（与 GUI 启动默认值一致）。
+        world.init_resource::<crate::i18n::CurrentLocale>();
+        world.init_resource::<LayoutFile>();
         world.init_resource::<Assets<Image>>();
         world.insert_resource(WorldProjection {
             world: wv_core::World::default(),

@@ -281,10 +281,15 @@ mod tests {
 
     #[test]
     fn language_round_trips_through_yaml() {
-        let mut f = LayoutFile::default();
-        f.language = Some("en".into());
+        let f = LayoutFile {
+            language: Some("en".into()),
+            ..Default::default()
+        };
         let text = serde_yaml::to_string(&f).expect("序列化应成功");
-        assert!(text.contains("language: en"), "yaml 应有 language 字段: {text}");
+        assert!(
+            text.contains("language: en"),
+            "yaml 应有 language 字段: {text}"
+        );
         let back: LayoutFile = serde_yaml::from_str(&text).expect("反序列化应成功");
         assert_eq!(back.language, Some("en".into()));
     }
