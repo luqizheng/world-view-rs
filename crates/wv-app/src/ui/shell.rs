@@ -122,4 +122,37 @@ impl UiShell {
     pub fn crumb_text_3(&self) -> egui::Color32 {
         color32(self.palette.crumb_text_3)
     }
+    /// v0.3（Figma `5E8BCBCmtGAHqk3ORibBlU`）：accent 低饱和抬升底
+    /// （分段控件选中态 / 主切换按钮底色）。
+    pub fn accent_soft(&self) -> egui::Color32 {
+        color32(self.palette.accent_soft)
+    }
+    /// v0.3：金色（"ACTIVE" 徽标 / 时间线播放 / 城市虚线圈）。
+    pub fn gold(&self) -> egui::Color32 {
+        color32(self.palette.gold)
+    }
+    /// v0.3：危险红（"Unsaved changes" / 错误态）。
+    pub fn danger(&self) -> egui::Color32 {
+        color32(self.palette.danger)
+    }
+    /// v0.3：成功绿（"Saved locally"）。
+    pub fn success(&self) -> egui::Color32 {
+        color32(self.palette.success)
+    }
+    /// v0.3：地图水体衬底。
+    pub fn map_water(&self) -> egui::Color32 {
+        color32(self.palette.map_water)
+    }
+    /// v0.3：地图陆地衬底。
+    pub fn map_land(&self) -> egui::Color32 {
+        color32(self.palette.map_land)
+    }
+    /// v0.3：时间线轨道底。
+    pub fn timeline_track(&self) -> egui::Color32 {
+        color32(self.palette.timeline_track)
+    }
+    /// v0.3：时间线季节段底。
+    pub fn timeline_season(&self) -> egui::Color32 {
+        color32(self.palette.timeline_season)
+    }
 }

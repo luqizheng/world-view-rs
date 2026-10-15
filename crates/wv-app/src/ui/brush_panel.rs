@@ -44,46 +44,125 @@ pub fn panel_brush(
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
+    // v0.3：标题徽标 `ACTIVE` 当笔刷开着时亮起（金底），Figma 风格。
+    let badge = if brush.enabled {
+        Some((crate::ui::BadgeKind::Warn, "ACTIVE".into()))
+    } else {
+        None
+    };
     float_window(
         ctx,
         &shell,
         &layouts,
         &mut panels,
         Panel::Brush,
-        None,
+        badge,
         |ui| {
-            ui.checkbox(&mut brush.enabled, "笔刷模式（关闭时左键拖动地图）");
-            // 逐格编辑网格（plan v0.1 D4）：笔刷开着恒显；这里手动补一个
-            // 「不开笔刷也想看格子」的覆盖开关（相或）。
-            ui.checkbox(&mut brush.grid_lines, "显示网格");
-            ui.add_space(space::XS);
+            // ── Brush / Grid 双段切换（Figma v0.3 风格）──
+            ui.horizontal(|ui| {
+                let segs = [("Brush", true), ("Grid", false)];
+                let n = segs.len() as f32;
+                let seg_w = 120.0;
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(seg_w, shell.hit), egui::Sense::hover());
+                let p = ui.painter();
+                p.rect_filled(
+                    rect,
+                    crate::theme::ui_tokens::radius::CONTROL,
+                    shell.raised_bg(),
+                );
+                let each = rect.width() / n;
+                for (i, (label, _)) in segs.iter().enumerate() {
+                    let r = egui::Rect::from_min_max(
+                        egui::pos2(rect.min.x + each * i as f32, rect.min.y),
+                        egui::pos2(rect.min.x + each * (i as f32 + 1.0), rect.max.y),
+                    );
+                    let sel = (*label == "Brush" && brush.enabled)
+                        || (*label == "Grid" && brush.grid_lines && !brush.enabled);
+                    if sel {
+                        p.rect_filled(
+                            r,
+                            crate::theme::ui_tokens::radius::CONTROL,
+                            shell.accent_soft(),
+                        );
+                        p.text(
+                            r.center(),
+                            egui::Align2::CENTER_CENTER,
+                            *label,
+                            crate::theme::ui_theme::proportional(
+                                crate::theme::ui_tokens::font_size::SMALL,
+                            ),
+                            shell.t1(),
+                        );
+                    } else {
+                        p.text(
+                            r.center(),
+                            egui::Align2::CENTER_CENTER,
+                            *label,
+                            crate::theme::ui_theme::proportional(
+                                crate::theme::ui_tokens::font_size::SMALL,
+                            ),
+                            shell.t2(),
+                        );
+                    }
+                    // 命中检测（按钮整段可点）
+                    let resp =
+                        ui.interact(r, egui::Id::new(("wv_brush_seg", i)), egui::Sense::click());
+                    if resp.clicked() {
+                        match *label {
+                            "Brush" => brush.enabled = true,
+                            "Grid" => {
+                                brush.enabled = false;
+                                brush.grid_lines = !brush.grid_lines;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            });
+            ui.add_space(space::SM);
+
+            // ── TERRAIN MATERIAL 段（Figma 用 8 块色板 4×2；`terrain_grid` 现 10 块 2×5，
+            // 视觉差异可接受，M2 再统一）──
             ui.label(
-                egui::RichText::new("地形")
+                egui::RichText::new("TERRAIN MATERIAL")
                     .size(shell.scale.micro)
-                    .color(shell.t2()),
+                    .color(shell.t3()),
             );
             terrain_grid(ui, &shell, &mut brush.kind);
-            ui.add_space(space::XS);
-            // 半径滑条：标签合并进 show_value，单位用「wu」。
-            ui.add(
+            ui.add_space(space::SM);
+
+            // ── 半径 / 软度滑条（Figma 风格：标签左、值右、轨在中间）──
+            slider_row(
+                ui,
+                &shell,
+                "Radius",
+                &format!(
+                    "{} m",
+                    (brush.radius / grid.cell_size * 10.0).round() as i32
+                ),
                 egui::Slider::new(&mut brush.radius, grid.cell_size * 2.0..=600.0)
-                    .logarithmic(true)
-                    .show_value(true)
-                    .custom_formatter(|n, _| format!("半径 {:.0} wu", n)),
+                    .logarithmic(true),
             );
-            ui.add(
-                egui::Slider::new(&mut brush.softness, 0.0..=1.0)
-                    .show_value(true)
-                    .custom_formatter(|n, _| format!("衰减软度 {:.2}", n)),
+            slider_row(
+                ui,
+                &shell,
+                "Softness",
+                &format!("{}%", (brush.softness * 100.0).round() as i32),
+                egui::Slider::new(&mut brush.softness, 0.0..=1.0),
             );
-            ui.add_space(space::XS);
-            // 街道区：默认折叠，作者真在画街道时（`enabled` 或已有段数）才展开。
-            egui::CollapsingHeader::new("街道")
+
+            ui.add_space(space::SM);
+            // 街道区（Figma `Road drawing · 3 segments` 折叠段）
+            egui::CollapsingHeader::new(format!("Road drawing · {} segments", streets.drawn))
                 .default_open(streets.enabled || streets.drawn > 0)
                 .show(ui, |ui| {
-                    ui.checkbox(&mut streets.enabled, "画街道模式（左键逐点连线，右键结束）");
+                    ui.checkbox(
+                        &mut streets.enabled,
+                        "Draw mode (left-click line / right-click finish)",
+                    );
                     if streets.enabled {
-                        egui::ComboBox::from_label("类别")
+                        egui::ComboBox::new("wv_road_class", "")
                             .selected_text(streets.class.label())
                             .show_ui(ui, |ui| {
                                 for c in wv_core::RoadClass::ALL {
@@ -91,29 +170,46 @@ pub fn panel_brush(
                                 }
                             });
                         ui.horizontal(|ui| {
-                            ui.label("街道名");
-                            // 留空 = 下一笔无名（不产生标注）。
+                            ui.label("Name");
                             ui.text_edit_singleline(&mut streets.name);
                         });
-                        ui.label(
-                            egui::RichText::new(format!("已画 {} 段", streets.drawn))
-                                .size(shell.scale.small)
-                                .color(shell.t3())
-                                .font(mono(shell.scale.small)),
-                        );
+                        // Figma：Imperial Road / North Trade Route 双标签 + Finish line + ↶
                         ui.horizontal(|ui| {
-                            if ui.button("结束连线").clicked() {
+                            ui.label(
+                                egui::RichText::new("Imperial Road")
+                                    .size(shell.scale.small)
+                                    .color(shell.t2()),
+                            );
+                            ui.add_space(space::MD);
+                            ui.label(
+                                egui::RichText::new("North Trade Route")
+                                    .size(shell.scale.small)
+                                    .color(shell.t2()),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("Finish line")
+                                            .size(shell.scale.base)
+                                            .color(shell.t1()),
+                                    )
+                                    .fill(shell.accent())
+                                    .min_size(egui::vec2(120.0, shell.hit))
+                                    .corner_radius(crate::theme::ui_tokens::radius::CONTROL),
+                                )
+                                .clicked()
+                            {
                                 streets.last_click = None;
                             }
-                            // 撤销上一段：UI 只生成 `DeleteStreetSegmentCommand` 交给
-                            // History（§3.3）；可删性在这里判断，命令层兜底越界。
                             let deletable = drill
                                 .current_node(&projection.world)
                                 .and_then(streets::target_road_layer)
                                 .and_then(|l| projection.world.street_of(&l.id))
                                 .map_or(0, |d| d.len());
                             if ui
-                                .add_enabled(deletable > 0, egui::Button::new("撤销上一段"))
+                                .add_enabled(deletable > 0, egui::Button::new("↶"))
                                 .clicked()
                             {
                                 undo_last_street_segment(&mut projection, &drill, &mut edit);
@@ -122,13 +218,26 @@ pub fn panel_brush(
                         });
                     }
                 });
-            // 底部一行：仅保留「Ctrl+滚轮改半径」（其他提示与笔刷复选框标签重复）。
-            ui.add_space(space::XS);
-            ui.label(
-                egui::RichText::new("Ctrl+滚轮改半径")
-                    .size(shell.scale.micro)
-                    .color(shell.t3()),
-            );
         },
     );
+}
+
+/// Figma 风格滑条：标签左、值右、滑条在中。
+fn slider_row(ui: &mut egui::Ui, shell: &UiShell, label: &str, value: &str, slider: egui::Slider) {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(label)
+                .size(shell.scale.base)
+                .color(shell.t2()),
+        );
+        ui.add_space(space::MD);
+        ui.add(slider);
+        ui.add_space(space::SM);
+        ui.label(
+            egui::RichText::new(value)
+                .size(shell.scale.base)
+                .color(shell.t1())
+                .font(mono(shell.scale.base)),
+        );
+    });
 }

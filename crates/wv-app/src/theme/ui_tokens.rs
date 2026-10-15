@@ -104,6 +104,10 @@ pub mod space {
     pub const XL: f32 = 20.0;
     /// 大区块间距。
     pub const XXL: f32 = 24.0;
+    /// v0.3：列表项行内 gap（与 Figma 8px 一致）。
+    pub const GAP: f32 = 8.0;
+    /// v0.3：浮窗面板内边距（Figma 12–16px 取中）。
+    pub const PANEL_PAD: f32 = 14.0;
 }
 
 /// 圆角阶梯（§2.4）。
@@ -116,6 +120,8 @@ pub mod radius {
     pub const PANEL: f32 = 10.0;
     /// 模态 / 空状态卡。
     pub const MODAL: f32 = 14.0;
+    /// v0.3：胶囊徽标 / 圆点（不切实际值，用大数让 egui 走最大圆角裁剪）。
+    pub const PILL: f32 = 999.0;
 }
 
 /// 字号阶梯（§2.3：7 级）。
@@ -286,6 +292,26 @@ pub struct ShellPalette {
     /// 它**不是** `text_3` 的别名：面包屑浮在 `bg.float` 上，而浮层合成后的底色
     /// 既不是 `bg.panel` 也不是 `bg.map`，所以这枚弱文本必须单独标定。
     pub crumb_text_3: Rgb,
+    /// v0.3（UI 视觉重做）：accent 的低饱和抬升底（按钮 hover / 选中段背景）。
+    ///
+    /// 由 `Build #5E8BCBCmtGAHqk3ORibBlU` 设计稿直接采样，**不**走
+    /// `bg_hover` 同色相：Figma 主切换按钮选中态是淡蓝块，对比度上要让深色文字
+    /// 落到 `text_on_accent` 的近黑而不是白。本字段是规格投影，按 §6.3 仅追加。
+    pub accent_soft: Rgb,
+    /// v0.3：金色（"ACTIVE" 徽标 / 时间线播放 / 城市虚线圈）。
+    pub gold: Rgb,
+    /// v0.3：危险红（"Unsaved changes" / 错误态 / 时间线"Border dispute" 之类警示事件）。
+    pub danger: Rgb,
+    /// v0.3：成功绿（"Saved locally" 徽标）。
+    pub success: Rgb,
+    /// v0.3：地图水体衬底（暗色设计稿采样 #1F313A）。
+    pub map_water: Rgb,
+    /// v0.3：地图陆地衬底（暗色设计稿采样 #404F3F）。
+    pub map_land: Rgb,
+    /// v0.3：时间线轨道底（比面板略亮，让事件块「浮起来」）。
+    pub timeline_track: Rgb,
+    /// v0.3：时间线季节分段底。
+    pub timeline_season: Rgb,
 }
 
 /// 徽标的 5 种语义档（设计规格 §4.7）。
@@ -370,6 +396,15 @@ impl ShellPalette {
         badge_event: Rgb::hex(0xC9A0DC),
         text_on_accent: Rgb::hex(0x0B0D11),
         crumb_text_3: Rgb::hex(0x8A93A6),
+        // v0.3 设计稿采样
+        accent_soft: Rgb::hex(0x1F2A4A),
+        gold: Rgb::hex(0xD4A23A),
+        danger: Rgb::hex(0xE26A5C),
+        success: Rgb::hex(0x3F9B4E),
+        map_water: Rgb::hex(0x1F313A),
+        map_land: Rgb::hex(0x404F3F),
+        timeline_track: Rgb::hex(0x2A2E38),
+        timeline_season: Rgb::hex(0x23272F),
     };
 
     /// 亮色外壳（设计规格 §2.2「亮色」列）。
@@ -401,6 +436,15 @@ impl ShellPalette {
         badge_event: Rgb::hex(0x6D3388),
         text_on_accent: Rgb::hex(0xFFFFFF),
         crumb_text_3: Rgb::hex(0x5B6373),
+        // v0.3 亮色占位（按现有同色调亮推算，未做对比度审计，TODO: 亮色重做）
+        accent_soft: Rgb::hex(0xD9E5FA),
+        gold: Rgb::hex(0x8A5A00),
+        danger: Rgb::hex(0xB83828),
+        success: Rgb::hex(0x186B33),
+        map_water: Rgb::hex(0xC6D5DE),
+        map_land: Rgb::hex(0xD5DBC1),
+        timeline_track: Rgb::hex(0xE7E9F0),
+        timeline_season: Rgb::hex(0xF1F2F6),
     };
 
     /// 按主题取整套令牌。
@@ -818,5 +862,64 @@ mod tests {
             Rgb::hex(0x191C24),
             "全透明时应为背板色"
         );
+    }
+
+    // ── v0.3 Figma 视觉重做：新增 8 色（accent_soft / gold / danger / success
+    //    / map_water / map_land / timeline_track / timeline_season）──
+    //
+    // 这 8 个字段**不**进入 `audit_cases`：它们不是语义前景/底色对，而是
+    // 「装饰/状态点缀」。其中用到文字落地的三对（`text_1 on accent_soft`、
+    // `text_1 on timeline_track`、gold 自身的徽标前景）单独钉住对比度
+    // ≥ TEXT_MIN（4.5）。其他纯几何色（map_water / map_land / timeline_season）
+    // 由画布层在 `render::map_decorations` 自管一致性，不进令牌审计。
+
+    /// v0.3 新色落地到文字场景的最低对比度：text_1 在 `accent_soft` 上
+    /// （Figma "Browse" 段激活态）和 `timeline_track` 上（事件块 meta）必须 ≥ 4.5。
+    #[test]
+    fn v03_text1_on_soft_surfaces_passes_4_5() {
+        let p = ShellPalette::DARK;
+        for (name, surface) in [
+            ("accent_soft", p.accent_soft),
+            ("timeline_track", p.timeline_track),
+        ] {
+            let r = p.text_1.contrast_ratio(surface);
+            assert!(r >= 4.5, "暗色 text.1 / {name} = {r:.2}:1（应 ≥ 4.5）");
+        }
+    }
+
+    /// v0.3 金色徽标前景（"ACTIVE" / 时间线"Border dispute"）的对比度。
+    ///
+    /// Figma 设计：金底（`gold #D4A23A`）上文字是**近黑**——`text_1 #E9ECF3`
+    /// 反向只有 1.97:1（用了一次就掉 WCAG 4.5:1），所以**必须**走
+    /// `text_on_accent #0B0D11` 同款的近黑，钉 8.39:1 防回归。
+    #[test]
+    fn v03_gold_pill_text_passes_4_5() {
+        let p = ShellPalette::DARK;
+        let r = p.text_on_accent.contrast_ratio(p.gold);
+        assert!(
+            r >= 4.5,
+            "暗色 text_on_accent / gold = {r:.2}:1（应 ≥ 4.5；金底文字必须用近黑）"
+        );
+        // 反向防呆：白字绝不能放金底。
+        let white = Rgb::hex(0xFFFFFF);
+        assert!(
+            white.contrast_ratio(p.gold) < 4.5,
+            "白字 / gold 意外达标了，金底用白字这一支路不能开"
+        );
+    }
+
+    /// 钉住 v0.3 DARK 新色 hex（与 design sample 一一对应），任何人手抖
+    /// 改 hex 都被挡。
+    #[test]
+    fn v03_dark_palette_pins_match_figma_samples() {
+        let p = ShellPalette::DARK;
+        assert_eq!(p.accent_soft, Rgb::hex(0x1F2A4A), "Browse 段激活底");
+        assert_eq!(p.gold, Rgb::hex(0xD4A23A), "ACTIVE / 城市虚线 / 时间线游标");
+        assert_eq!(p.danger, Rgb::hex(0xE26A5C), "Unsaved changes 徽标");
+        assert_eq!(p.success, Rgb::hex(0x3F9B4E), "Saved locally 徽标");
+        assert_eq!(p.map_water, Rgb::hex(0x1F313A), "地图水体衬底");
+        assert_eq!(p.map_land, Rgb::hex(0x404F3F), "地图陆地衬底");
+        assert_eq!(p.timeline_track, Rgb::hex(0x2A2E38), "时间线轨道底");
+        assert_eq!(p.timeline_season, Rgb::hex(0x23272F), "时间线季节段底");
     }
 }

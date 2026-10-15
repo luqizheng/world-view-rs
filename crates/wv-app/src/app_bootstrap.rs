@@ -91,6 +91,9 @@ pub fn run(config: AppConfig) {
         load_error: None,
         selection: None,
     })
+    // v0.3 状态栏徽标用：默认 0 警告，由 validation_actions 在 Update
+    // 链每帧 insert_resource 覆盖。资源必须存在以让 status_bar 系统能取到。
+    .insert_resource(crate::ui::ValidationCount::default())
     // CLI `-m <目录>` 带来的启动加载请求；`None` = 空编辑器。
     .insert_resource(crate::ui_shell::StartupLoadRequest(
         config.startup_project.clone(),

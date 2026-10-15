@@ -354,6 +354,41 @@ pub const ICON_ZOOM_OUT: egui::ImageSource<'static> =
 pub const ICON_MAXIMIZE: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/maximize.svg");
 
+// ── v0.3 视觉重做：Figma `5E8BCBCmtGAHqk3ORibBlU` 所需的新图标 ──────────
+//
+// Lucide 24×24 outline 风格一致，全部 `stroke="currentColor" fill="none"`，
+// 由 ToolButton 的 `tint()` 注入主题色。
+pub const ICON_CHEVRON_RIGHT: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/chevron-right.svg");
+pub const ICON_CHEVRON_DOWN: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/chevron-down.svg");
+pub const ICON_PLAY: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/play.svg");
+pub const ICON_REFRESH: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/refresh-cw.svg");
+pub const ICON_SEARCH: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/search.svg");
+pub const ICON_LAYERS: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/layers.svg");
+pub const ICON_MAP: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/map.svg");
+pub const ICON_BRUSH: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/paintbrush.svg");
+pub const ICON_GRID: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/layout-grid.svg");
+pub const ICON_LINE: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/minus.svg");
+pub const ICON_PENCIL: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/pencil.svg");
+pub const ICON_ALERT: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/triangle-alert.svg");
+pub const ICON_CHECK: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/circle-check.svg");
+pub const ICON_COMMAND: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/command.svg");
+pub const ICON_MAP_PIN: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/map-pin.svg");
+
 /// 按钮内容三形态。
 ///
 /// 新增图标 = 放一个 SVG 进 `assets/ui/tool_icons/` + 加一个 `ICON_*` 常量，

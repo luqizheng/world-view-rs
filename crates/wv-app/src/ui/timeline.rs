@@ -1,11 +1,20 @@
-//! 时间轴底部通栏 + 四层轨道 + 街道撤销。
+//! 时间轴底部通栏（v0.3 Figma `5E8BCBCmtGAHqk3ORibBlU` 风格）+ 街道撤销。
 //!
 //! ## 职责
-//! - `TimelineLayer` —— L1 日 / L2 事态 / L3 人物 / L4 世纪 四层轨道枚举。
+//! - `TimelineLayer` —— Day / Situation 二段（v0.3 砍掉 Character/Century 两段，
+//!   Figma 上只显示 `DAY TICKS` / `SITUATIONS` 两个 chip；旧四段保留
+//!   在枚举里以备恢复）。
 //! - `panel_timeline` —— 时间轴浮窗；通栏位置由 [`crate::ui_layout`] 持久化。
 //! - `undo_last_street_segment` —— 撤销街道段（UI → `wv-edit::History`，见 §3.3）。
 //!
-//! ## 边界（不做什么）
+//! ## v0.3 视觉重做要点
+//! - 顶头：圆形播放按钮 + `Year N` / `Day M · Season` + 速度下拉 + 二段 chip
+//! - 主轨道：4 季节段（程序化几何，Figma `Y213·Winter / Y214·Spring ...`）
+//! - 事件块：金色"Border dispute" + 紫色"Market opens"（来自 Figma mock）
+//! - 播放头：金三角 + 金线 + `Day 38` 文字标签
+//! - 右：`+ Register event` 蓝按钮
+//!
+//! ## 边界
 //! - **不**改时间语义 —— 时间显示统一入口 [`crate::ui_time::format_date_for`]。
 //! - **不**直接改世界 —— UI 只生成 `EditCommand`，交给 [`crate::edit::editing::EditHistory`]。
 //!
@@ -18,28 +27,40 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::state::{Panel, PanelState, PlaybackState, WorldProjection};
-use crate::theme::ui_theme::{proportional, UiShellConfig};
+use crate::theme::ui_theme::{mono, proportional, UiShellConfig};
 use crate::theme::ui_tokens::{radius, space};
 use crate::ui_layout::LayoutFile;
 
 use super::shell::UiShell;
+use super::widgets::{ICON_PLAY, ICON_SEARCH};
 
 /// 时间轴轨道层。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TimelineLayer {
-    /// L1 日：细刻度尺 + 播放头。
+    /// L1 日：细刻度尺 + 播放头（Figma 段 `DAY TICKS`）。
     Day,
-    /// L2 事态：事态条 + 轨迹条（默认层）。
+    /// L2 事态：事态条 + 轨迹条（默认层，Figma 段 `SITUATIONS`）。
     #[default]
     Situation,
-    /// L3 人物：生卒条。
+    /// 保留：人物生卒条。Figma 不再展示，但枚举保留供 M3 重新开放。
+    #[allow(dead_code)]
     Character,
-    /// L4 世纪：按世纪聚合鸟瞰。
+    /// 保留：世纪聚合鸟瞰。同上。
+    #[allow(dead_code)]
     Century,
 }
 
 impl TimelineLayer {
-    /// 层名。
+    /// 顶栏 chip 标签（Figma 段是大写英文）。
+    pub fn chip_label(self) -> &'static str {
+        match self {
+            TimelineLayer::Day => "DAY TICKS",
+            TimelineLayer::Situation => "SITUATIONS",
+            TimelineLayer::Character => "CHARACTERS",
+            TimelineLayer::Century => "CENTURIES",
+        }
+    }
+    /// 旧内部层名（命令面板 / 日志 / 测试仍识别）。
     pub fn label(self) -> &'static str {
         match self {
             TimelineLayer::Day => "日",
@@ -48,7 +69,9 @@ impl TimelineLayer {
             TimelineLayer::Century => "世纪",
         }
     }
-    /// 全部层。
+    /// 顶栏二段 chip 用的两段（Figma v0.3）。
+    pub const VISIBLE: [TimelineLayer; 2] = [TimelineLayer::Day, TimelineLayer::Situation];
+    /// 旧四段保留，命令面板 / 测试不破。
     pub const ALL: [TimelineLayer; 4] = [
         TimelineLayer::Day,
         TimelineLayer::Situation,
@@ -57,9 +80,7 @@ impl TimelineLayer {
     ];
 }
 
-/// 时间轴底部通栏浮窗 + 四层轨道。
-///
-/// Bevy 系统的参数即「依赖声明」，宽签名是框架惯例而非坏味道（同 `editing.rs`）。
+/// 时间轴底部通栏浮窗（v0.3 视觉重做）。
 #[allow(clippy::too_many_arguments)]
 pub fn panel_timeline(
     mut contexts: EguiContexts,
@@ -79,10 +100,7 @@ pub fn panel_timeline(
         return;
     }
 
-    // 沉浸模式下时间轴降到 55% 透明但**不隐藏**（D3）。
     let alpha = if panels.immersive { 0.55 } else { 1.0 };
-
-    // 通栏也走布局表（否则拖动结果不落盘，`ui-layout.yaml` 里的 timeline 段是死数据）。
     let layout = crate::ui_layout::current_layout(&layouts, &panels, Panel::Timeline);
 
     let mut open = true;
@@ -97,61 +115,144 @@ pub fn panel_timeline(
             egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
                 .fill(shell.panel_bg().gamma_multiply(alpha))
                 .stroke(egui::Stroke::new(1.0_f32, shell.border_strong()))
-                .inner_margin(crate::theme::ui_theme::margin_all(space::SM))
+                .inner_margin(crate::theme::ui_theme::margin_all(space::MD))
                 .corner_radius(radius::PANEL),
         )
         .show(ctx, |ui| {
-            // ── 播放控件 + 日期 + 层切换 ──
+            // ── 顶头：播放 + 年 + 日/季节 + 速度下拉 + 二段 chip ──
             ui.horizontal(|ui| {
-                let play_label = if playback.playing { "⏸" } else { "▶" };
-                if ui
-                    .add(egui::Button::new(play_label).min_size(egui::vec2(shell.hit, shell.hit)))
-                    .clicked()
-                {
+                // 圆形播放按钮（Figma 44×44 蓝底）
+                let play_size = 44.0;
+                let (rect, resp) =
+                    ui.allocate_exact_size(egui::vec2(play_size, play_size), egui::Sense::click());
+                let painter = ui.painter();
+                painter.circle_filled(rect.center(), play_size * 0.5, shell.accent());
+                let glyph = if playback.playing { "⏸" } else { "▶" };
+                painter.text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    glyph,
+                    proportional(18.0),
+                    shell.t1(),
+                );
+                if resp.clicked() {
                     playback.playing = !playback.playing;
                 }
-                for s in [1.0f32, 5.0, 30.0] {
-                    let sel = (playback.speed - s).abs() < f32::EPSILON;
-                    if ui.selectable_label(sel, format!("{s:.0}天/秒")).clicked() {
-                        playback.speed = s;
-                    }
-                }
+                let _ = ICON_PLAY; // 保留引用：M2 替换 ⏸/▶ 为 SVG
+                let _ = ICON_SEARCH;
+
                 ui.add_space(space::MD);
-                // 日期（时间轴是唯一时间权威，§5.3）。
-                ui.label(
-                    egui::RichText::new(crate::ui_time::format_date_for(
-                        &projection,
-                        playback.current_day,
-                    ))
-                    .size(shell.scale.base)
-                    .color(shell.t1())
-                    .font(crate::theme::ui_theme::mono(shell.scale.base)),
+                // 年份 + 当日 + 季节
+                ui.vertical(|ui| {
+                    let year = playback.current_day.max(1) as i32;
+                    ui.label(
+                        egui::RichText::new(format!("Year {year}"))
+                            .size(shell.scale.title)
+                            .color(shell.t1())
+                            .strong(),
+                    );
+                    let day = playback.current_day;
+                    let season = season_of_day(day);
+                    ui.label(
+                        egui::RichText::new(format!("Day {day} · {season}"))
+                            .size(shell.scale.small)
+                            .color(shell.t3())
+                            .font(mono(shell.scale.small)),
+                    );
+                });
+                ui.add_space(space::LG);
+
+                // 速度下拉（v0.3：Figma 是 `1 day / sec` 风格）
+                let speed_label = format!(
+                    "{:.0} day{} / sec",
+                    playback.speed,
+                    if playback.speed >= 2.0 { "s" } else { "" }
                 );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("＋ 登记事件").clicked() {
-                        *open_event = true;
-                    }
-                    ui.add_space(space::SM);
-                    for l in TimelineLayer::ALL {
+                egui::ComboBox::new("wv_timeline_speed", "")
+                    .selected_text(speed_label)
+                    .show_ui(ui, |ui| {
+                        for s in [1.0f32, 5.0, 30.0] {
+                            if ui
+                                .selectable_label(
+                                    (playback.speed - s).abs() < f32::EPSILON,
+                                    format!("{s:.0} day / sec"),
+                                )
+                                .clicked()
+                            {
+                                playback.speed = s;
+                            }
+                        }
+                    });
+
+                ui.add_space(space::MD);
+                // 二段 chip（Figma `DAY TICKS` 浅描边 / `SITUATIONS` 金激活）
+                ui.horizontal(|ui| {
+                    for l in TimelineLayer::VISIBLE {
                         let sel = *layer == l;
-                        if ui.selectable_label(sel, l.label()).clicked() {
+                        let chip_w = 100.0;
+                        let chip_h = shell.hit;
+                        let (rect, r) = ui
+                            .allocate_exact_size(egui::vec2(chip_w, chip_h), egui::Sense::click());
+                        let p = ui.painter();
+                        if sel {
+                            // 选中：金底黑字（Figma v0.3）
+                            p.rect_filled(rect, radius::CONTROL, shell.gold());
+                            p.text(
+                                rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                l.chip_label(),
+                                proportional(shell.scale.micro),
+                                shell.text_on_accent(),
+                            );
+                        } else {
+                            p.rect_stroke(
+                                rect,
+                                radius::CONTROL,
+                                egui::Stroke::new(1.0, shell.border_strong()),
+                                egui::StrokeKind::Inside,
+                            );
+                            p.text(
+                                rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                l.chip_label(),
+                                proportional(shell.scale.micro),
+                                shell.t2(),
+                            );
+                        }
+                        if r.clicked() {
                             *layer = l;
                         }
                     }
                 });
+
+                // 右端：Register event 蓝按钮
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let resp = ui.add(
+                        egui::Button::new(
+                            egui::RichText::new("+ Register event")
+                                .size(shell.scale.base)
+                                .color(shell.t1()),
+                        )
+                        .fill(shell.accent())
+                        .min_size(egui::vec2(150.0, shell.hit))
+                        .corner_radius(radius::CONTROL),
+                    );
+                    if resp.clicked() {
+                        *open_event = true;
+                    }
+                });
             });
 
-            ui.add_space(space::SM);
+            ui.add_space(space::MD);
 
-            // ── 轨道区（按层渲染）──
-            let track_h = 84.0;
+            // ── 主轨道（按层渲染）──
+            let track_h = 130.0;
             let (rect, resp) = ui.allocate_exact_size(
                 egui::vec2(ui.available_width(), track_h),
                 egui::Sense::click_and_drag(),
             );
             draw_timeline_tracks(ui, &shell, rect, *layer, &playback, &projection);
 
-            // 播放头拖拽 / 点击定位。
             if resp.dragged() || resp.clicked() {
                 if let Some(p) = resp.interact_pointer_pos() {
                     let frac = ((p.x - rect.min.x) / rect.width()).clamp(0.0, 1.0);
@@ -170,6 +271,19 @@ pub fn panel_timeline(
     }
 }
 
+/// Figma 中 `Day N · Early Spring` 用的季节名（v0.3 占位）；
+/// M2 接 `wv_core::Calendar::season_of` 后替换。
+fn season_of_day(day: i64) -> &'static str {
+    // 90 天一个季节，从 1 起的 day index 决定。
+    let bucket = (day - 1).rem_euclid(360) / 90;
+    match bucket {
+        0 => "Early Spring",
+        1 => "Summer",
+        2 => "Autumn",
+        _ => "Winter",
+    }
+}
+
 fn draw_timeline_tracks(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -179,88 +293,186 @@ fn draw_timeline_tracks(
     projection: &WorldProjection,
 ) {
     let painter = ui.painter();
-    painter.rect_filled(rect, radius::CONTROL, shell.raised_bg());
+    // 轨道底（v0.3 新令牌 `timeline_track`）
+    painter.rect_filled(rect, radius::CONTROL, shell.timeline_track());
 
     let span = (playback.range_to - playback.range_from).max(1) as f32;
     let x_of = |day: i64| {
         rect.min.x + ((day - playback.range_from) as f32 / span).clamp(0.0, 1.0) * rect.width()
     };
 
+    // ── 季节段（4 等分，与 Figma 一致）──
+    let season_h = 20.0;
+    let season_rect =
+        egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.min.y + season_h));
+    let seg_w = season_rect.width() / 4.0;
+    let seasons = [
+        "Y213 · Winter",
+        "Y214 · Spring",
+        "Y214 · Summer",
+        "Y214 · Autumn",
+    ];
+    for (i, s) in seasons.iter().enumerate() {
+        let r = egui::Rect::from_min_max(
+            egui::pos2(season_rect.min.x + seg_w * i as f32, season_rect.min.y),
+            egui::pos2(
+                season_rect.min.x + seg_w * (i as f32 + 1.0),
+                season_rect.max.y,
+            ),
+        );
+        painter.rect_filled(r, 0.0, shell.timeline_season());
+        // 段分隔线
+        if i > 0 {
+            painter.line_segment(
+                [r.min, egui::pos2(r.min.x, r.max.y)],
+                egui::Stroke::new(1.0, shell.border_subtle()),
+            );
+        }
+        painter.text(
+            r.center(),
+            egui::Align2::CENTER_CENTER,
+            *s,
+            proportional(shell.scale.micro),
+            shell.t3(),
+        );
+    }
+
+    let track_y = rect.min.y + season_h + 8.0;
+    let track_h = rect.height() - season_h - 16.0;
+
     match layer {
         TimelineLayer::Day => {
-            // 细刻度尺 + 播放头。
+            // 细刻度尺
             for i in 0..=20 {
                 let x = rect.min.x + rect.width() * i as f32 / 20.0;
                 painter.line_segment(
-                    [egui::pos2(x, rect.min.y), egui::pos2(x, rect.min.y + 8.0)],
-                    egui::Stroke::new(1.0_f32, shell.border_strong()),
+                    [egui::pos2(x, track_y), egui::pos2(x, track_y + 8.0)],
+                    egui::Stroke::new(1.0, shell.border_strong()),
                 );
             }
         }
         TimelineLayer::Situation => {
-            // 事态条（世界色：事件紫）。
+            // 真实事态条（来自 world.situations）
             for (i, s) in projection.world.situations.iter().enumerate() {
-                let y = rect.min.y + space::SM + i as f32 * 18.0;
+                let y = track_y + i as f32 * 28.0;
                 let x0 = x_of(s.span.from);
                 let x1 = x_of(s.span.to.unwrap_or(playback.range_to));
-                let bar = egui::Rect::from_min_max(egui::pos2(x0, y), egui::pos2(x1, y + 12.0));
+                let bar = egui::Rect::from_min_max(
+                    egui::pos2(x0, y),
+                    egui::pos2(x1.max(x0 + 60.0), y + 18.0),
+                );
                 painter.rect_filled(
                     bar,
                     radius::BADGE,
                     crate::theme::colors::palette_to_color32(crate::theme::colors::ACCENT_EVENT),
                 );
                 painter.text(
-                    egui::pos2(x0 + space::XS, y + 6.0),
+                    egui::pos2(bar.min.x + space::SM, bar.center().y),
                     egui::Align2::LEFT_CENTER,
                     &s.name,
                     proportional(shell.scale.micro),
                     shell.t1(),
                 );
             }
+            // v0.3 mock 两条事件块（Figma 视觉对照；M2 切到真实数据）
+            draw_mock_event(
+                painter,
+                shell,
+                track_y + 56.0,
+                x_of(playback.range_from + (span * 0.20) as i64),
+                x_of(playback.range_from + (span * 0.40) as i64),
+                "Border dispute",
+                shell.gold(),
+            );
+            draw_mock_event(
+                painter,
+                shell,
+                track_y + 84.0,
+                x_of(playback.range_from + (span * 0.55) as i64),
+                x_of(playback.range_from + (span * 0.75) as i64),
+                "Market opens",
+                shell.danger(),
+            );
         }
-        TimelineLayer::Character => {
-            // 人物生卒条。
-            for (i, c) in projection.world.characters.iter().enumerate() {
-                let y = rect.min.y + space::SM + i as f32 * 18.0;
-                let bar = egui::Rect::from_min_max(
-                    egui::pos2(rect.min.x + space::MD, y),
-                    egui::pos2(rect.max.x - space::MD, y + 10.0),
+        TimelineLayer::Character | TimelineLayer::Century => {
+            // v0.3 顶栏 chip 不再展示这两层，但旧 enum 仍可达，保留简易占位
+            // 以免切回时空白。
+            for i in 0..3 {
+                let y = track_y + i as f32 * 24.0;
+                painter.line_segment(
+                    [egui::pos2(rect.min.x, y), egui::pos2(rect.max.x, y)],
+                    egui::Stroke::new(1.0, shell.border_subtle()),
                 );
-                painter.rect_filled(bar, radius::BADGE, shell.accent().gamma_multiply(0.5));
-                painter.text(
-                    egui::pos2(bar.min.x + space::XS, y + 5.0),
-                    egui::Align2::LEFT_CENTER,
-                    &c.name,
-                    proportional(shell.scale.micro),
-                    shell.t2(),
-                );
-            }
-        }
-        TimelineLayer::Century => {
-            // 世纪聚合鸟瞰（10 万年跨度下 L1 画不出来）。
-            let buckets = 12;
-            for i in 0..buckets {
-                let x = rect.min.x + rect.width() * i as f32 / buckets as f32;
-                let bar = egui::Rect::from_min_max(
-                    egui::pos2(x + 2.0, rect.max.y - 30.0),
-                    egui::pos2(
-                        x + rect.width() / buckets as f32 - 2.0,
-                        rect.max.y - space::SM,
-                    ),
-                );
-                painter.rect_filled(bar, radius::BADGE, shell.accent().gamma_multiply(0.35));
             }
         }
     }
 
-    // 播放头（游标色 world.accent.cursor，共用令牌）。
+    // ── 播放头：金三角 + 金线 + "Day N" 标签（v0.3）──
     let cx = x_of(playback.current_day);
+    let _ = track_h;
     painter.line_segment(
         [egui::pos2(cx, rect.min.y), egui::pos2(cx, rect.max.y)],
-        egui::Stroke::new(
-            2.0_f32,
-            crate::theme::colors::palette_to_color32(crate::theme::colors::ACCENT_CURSOR),
-        ),
+        egui::Stroke::new(2.0_f32, shell.gold()),
+    );
+    // 三角
+    let tri = [
+        egui::pos2(cx, rect.min.y),
+        egui::pos2(cx - 6.0, rect.min.y - 8.0),
+        egui::pos2(cx + 6.0, rect.min.y - 8.0),
+    ];
+    painter.add(egui::Shape::convex_polygon(
+        tri.to_vec(),
+        shell.gold(),
+        egui::Stroke::NONE,
+    ));
+    // Day N 标签
+    let day = playback.current_day;
+    let label = format!("Day {day}");
+    let label_size = painter
+        .layout(
+            label.clone(),
+            proportional(shell.scale.micro),
+            shell.text_on_accent(),
+            100.0,
+        )
+        .size();
+    let label_rect = egui::Rect::from_min_size(
+        egui::pos2(cx - label_size.x * 0.5 - 4.0, rect.max.y + 2.0),
+        egui::vec2(label_size.x + 8.0, label_size.y + 2.0),
+    );
+    painter.rect_filled(label_rect, radius::BADGE, shell.gold());
+    painter.text(
+        label_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        proportional(shell.scale.micro),
+        shell.text_on_accent(),
+    );
+}
+
+fn draw_mock_event(
+    painter: &egui::Painter,
+    shell: &UiShell,
+    y: f32,
+    x0: f32,
+    x1: f32,
+    name: &str,
+    color: egui::Color32,
+) {
+    let bar = egui::Rect::from_min_max(egui::pos2(x0, y), egui::pos2(x1.max(x0 + 60.0), y + 18.0));
+    painter.rect_filled(bar, radius::BADGE, color.linear_multiply(0.35));
+    painter.rect_stroke(
+        bar,
+        radius::BADGE,
+        egui::Stroke::new(1.0, color),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        egui::pos2(bar.min.x + space::SM, bar.center().y),
+        egui::Align2::LEFT_CENTER,
+        name,
+        proportional(shell.scale.micro),
+        shell.t1(),
     );
 }
 
@@ -276,7 +488,6 @@ pub fn undo_last_street_segment(
     let Some(layer) = crate::render::streets::target_road_layer(node) else {
         return;
     };
-    // 先读段数并结束借用，再把命令交给 History（commit 要 &mut World）。
     let len = projection.world.street_of(&layer.id).map_or(0, |d| d.len());
     if len == 0 {
         return;

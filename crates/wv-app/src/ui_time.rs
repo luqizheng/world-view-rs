@@ -53,6 +53,33 @@ pub fn calendar_of(projection: &WorldProjection) -> Option<&wv_core::Calendar> {
     projection.world.timeline.as_ref().map(|t| &t.calendar)
 }
 
+/// 面包屑段：把当前世界层级结构展成 `[World, Region, City, Interior]` 字符串数组。
+///
+/// v0.3（Figma `5E8BCBCmtGAHqk3ORibBlU`）：顶栏与状态栏都从这条函数取
+/// `World › Zunyi › Government Office` 段序列。**所有显示层级路径的地方必须
+/// 走这里**（§5.3「唯一真源」原则的扩展）。
+///
+/// - `current_map_id` 为空：返回 `["World"]`。
+/// - 找到当前地图但无显示名：返回 `["World", "<id>"]`。
+///
+/// 不在显示串里硬塞 emoji / 装饰符（让 caller 用图标资源自行装饰）。
+///
+/// `current_map_id` 来源：[`crate::state::ViewState::current_map`]（不是
+/// `WorldProjection` 字段——后者没有该字段）。
+pub fn format_breadcrumb(projection: &WorldProjection, current_map_id: &str) -> Vec<String> {
+    if current_map_id.is_empty() {
+        return vec!["World".to_string()];
+    }
+    let name = projection
+        .world
+        .maps
+        .iter()
+        .find(|m| m.id.as_str() == current_map_id)
+        .map(|m| m.name.clone())
+        .unwrap_or_else(|| current_map_id.to_string());
+    vec!["World".to_string(), name]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +115,45 @@ mod tests {
     fn never_emits_internal_at_day_notation() {
         let s = format_date(1);
         assert!(!s.contains('@'), "got {s}");
+    }
+
+    #[test]
+    fn breadcrumb_with_no_map_returns_world_only() {
+        let p = WorldProjection::default();
+        assert_eq!(format_breadcrumb(&p, ""), vec!["World".to_string()]);
+    }
+
+    #[test]
+    fn breadcrumb_returns_world_then_current_map_name() {
+        let mut p = WorldProjection::default();
+        let node = wv_core::map::MapNode {
+            id: wv_core::id::Id::new_unchecked("city_zunyi"),
+            name: "Zunyi".into(),
+            level: wv_core::map::MapLevel::City,
+            ..map_node_stub()
+        };
+        p.world.maps.push(node);
+        assert_eq!(
+            format_breadcrumb(&p, "city_zunyi"),
+            vec!["World".to_string(), "Zunyi".to_string()]
+        );
+    }
+
+    fn map_node_stub() -> wv_core::map::MapNode {
+        wv_core::map::MapNode {
+            id: wv_core::id::Id::new_unchecked(""),
+            name: String::new(),
+            level: wv_core::map::MapLevel::World,
+            parent: None,
+            children: Vec::new(),
+            icons: Vec::new(),
+            layers: Vec::new(),
+            extent: None,
+            raster: None,
+            geographic_source: None,
+            time_span: None,
+            unit_per_km: None,
+            orientation: 0.0,
+        }
     }
 }

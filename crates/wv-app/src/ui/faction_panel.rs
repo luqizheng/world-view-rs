@@ -50,26 +50,48 @@ pub fn panel_faction(
         Panel::Faction,
         None,
         |ui| {
+            // v0.3：Figma 风格 —— 标题用 `⋯` 菜单按钮表示「更多」，下方一个
+            // 占满宽的虚线描边 `+ Add faction` 按钮。faction_card 仍按
+            // 旧版样式渲染（保留数据通路，M2 再统一）。
             ui.horizontal(|ui| {
-                if ui.button("+ 新建势力").clicked() {
-                    faction_panel_actions::add_faction_now(
-                        &mut projection,
-                        &mut edit,
-                        &view,
-                        "新势力".into(),
-                        wv_core::color::Color("#1E6FCC".into()),
-                    );
+                if ui.button("⋯").clicked() {
+                    // TODO(M2): 弹出势力批量操作菜单（导入 / 导出 / 重命名）
                 }
                 ui.add_space(space::SM);
                 ui.label(
-                    egui::RichText::new(format!("当前地图：{}", view.current_map))
-                        .small()
-                        .color(shell.t2()),
+                    egui::RichText::new(format!("Map: {}", view.current_map))
+                        .size(shell.scale.small)
+                        .color(shell.t3()),
                 );
             });
-            ui.add_space(space::SM);
-            ui.separator();
-            ui.add_space(space::SM);
+            ui.add_space(space::MD);
+            // 占满宽的「+ Add faction」描边按钮（Figma 风格）
+            let add_w = ui.available_width();
+            let (rect, r) =
+                ui.allocate_exact_size(egui::vec2(add_w, shell.hit), egui::Sense::click());
+            ui.painter().rect_stroke(
+                rect,
+                crate::theme::ui_tokens::radius::CONTROL,
+                egui::Stroke::new(1.0, shell.border_strong()),
+                egui::StrokeKind::Inside,
+            );
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "+ Add faction",
+                crate::theme::ui_theme::proportional(shell.scale.base),
+                shell.t2(),
+            );
+            if r.clicked() {
+                faction_panel_actions::add_faction_now(
+                    &mut projection,
+                    &mut edit,
+                    &view,
+                    "新势力".into(),
+                    wv_core::color::Color("#1E6FCC".into()),
+                );
+            }
+            ui.add_space(space::MD);
 
             // 复制出 Vec 以便可变性借出（按 ID 升序展示，便于稳定定位）。
             let mut factions: Vec<wv_core::Faction> = projection.world.factions.clone();
