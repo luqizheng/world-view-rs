@@ -187,7 +187,7 @@ pub fn new_project_dialog(
     atlas: Option<Res<TileAtlas>>,
     mut images: ResMut<Assets<Image>>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
-    time: Res<Time>,
+    (time, current_loc): (Res<Time>, Res<crate::i18n::CurrentLocale>),
 ) {
     if !dialog.open {
         return;
@@ -303,6 +303,7 @@ pub fn new_project_dialog(
             &mut images,
             &mut cameras,
             frame,
+            &current_loc,
         ) {
             Ok(()) => dialog.open = false,
             Err(e) => dialog.error = Some(e),
@@ -333,6 +334,7 @@ fn create_project(
     images: &mut Assets<Image>,
     cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     frame: u64,
+    current_loc: &crate::i18n::CurrentLocale,
 ) -> Result<(), String> {
     let path = dialog.validated_path()?;
     let name = dialog.name.trim().to_owned();
@@ -360,6 +362,7 @@ fn create_project(
         images,
         cameras,
         frame,
+        current_loc,
     );
     if projection.project_dir.as_deref() != Some(dir.as_str()) {
         // load_project_into 失败分支已写 load_error + 状态栏回执；这里给对话框

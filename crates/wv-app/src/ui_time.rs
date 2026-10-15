@@ -14,38 +14,58 @@
 //! 「顶栏显示 `@day1`、时间轴显示 `无仙 1 年 1 月 1 日`」的错位。本模块把
 //! 「历法在哪、没有历法怎么办」收敛成一个入口。
 
+use crate::i18n::{I18nKey, Locale};
 use crate::state::{PlaybackState, WorldProjection};
 
 /// 把天数计数器格式化为作者可读的日期。
 ///
 /// - 有历法：`无仙 3 年 5 月 12 日`（经 `Calendar::format`）。
-/// - 无历法：`第 N 天`（基线 §1.12：不显示年月日）。
+/// - 无历法：`第 N 天`（zh）/ `Day N`（en）。
 ///
 /// **不接受** `@dayN` 这种内部记号——那是调试写法，不该出现在界面上。
-pub fn format_date_with(calendar: Option<&wv_core::Calendar>, day: i64) -> String {
+///
+/// `locale` 参数：v1 仅驱动「无历法」分支（zh 用「第 N 天」，en 用 `Day N`）。
+/// `wv_core::Calendar::format` 是项目内嵌的域数据格式（作者可改前缀），按
+/// ADR-0018 §3.5 不视为本地化目标，保持原样返回。
+pub fn format_date_with(calendar: Option<&wv_core::Calendar>, day: i64, locale: Locale) -> String {
     match calendar {
         Some(c) => c.format(day),
-        None => format!("第 {day} 天"),
+        None => format!(
+            "{}{}{}",
+            match locale {
+                Locale::Zh => crate::i18n::t(locale, I18nKey::TimeNoCalZhPrefix),
+                Locale::En => crate::i18n::t(locale, I18nKey::TimeNoCalEnPrefix),
+            },
+            day,
+            match locale {
+                Locale::Zh => crate::i18n::t(locale, I18nKey::TimeNoCalZhSuffix),
+                Locale::En => crate::i18n::t(locale, I18nKey::TimeNoCalEnSuffix),
+            }
+        ),
     }
 }
 
 /// 从世界投影取历法，格式化当前时刻。
-pub fn format_date_for(projection: &WorldProjection, day: i64) -> String {
+pub fn format_date_for(projection: &WorldProjection, day: i64, locale: Locale) -> String {
     let cal = projection.world.timeline.as_ref().map(|t| &t.calendar);
-    format_date_with(cal, day)
+    format_date_with(cal, day, locale)
 }
 
 /// 便捷入口：从 [`PlaybackState`] 取当前时刻（供无 `World` 引用的组件用）。
 ///
 /// 注意这**不是**权威换算——它只在拿不到 `World` 时兜底成「第 N 天」。
 /// 真正要显示作者日期的地方应走 [`format_date_for`]。
-pub fn format_date(day: i64) -> String {
-    format_date_with(None, day)
+pub fn format_date(day: i64, locale: Locale) -> String {
+    format_date_with(None, day, locale)
 }
 
 /// 读出当前时刻并格式化（顶栏/时间轴共用，保证一致）。
-pub fn current_date(projection: &WorldProjection, playback: &PlaybackState) -> String {
-    format_date_for(projection, playback.current_day)
+pub fn current_date(
+    projection: &WorldProjection,
+    playback: &PlaybackState,
+    locale: Locale,
+) -> String {
+    format_date_for(projection, playback.current_day, locale)
 }
 
 /// 世界的历法（若无则 None）。
@@ -59,8 +79,14 @@ mod tests {
 
     #[test]
     fn day_without_calendar_reads_as_day_counter() {
-        let s = format_date_with(None, 100805);
+        let s = format_date_with(None, 100805, Locale::Zh);
         assert_eq!(s, "第 100805 天", "got {s}");
+    }
+
+    #[test]
+    fn day_without_calendar_in_english_reads_as_day_counter() {
+        let s = format_date_with(None, 100805, Locale::En);
+        assert_eq!(s, "Day 100805", "got {s}");
     }
 
     #[test]
@@ -75,18 +101,24 @@ mod tests {
         // 天数计数器是 **1-based**：day 1 = 第 1 年第 1 月第 1 日。
         // 所以第 3 年第 1 天 = (3−1)×360 + 1 = 721，不是 1081
         // （1081 是第 4 年第 1 天——旧断言在此差了一年，代码没错）。
-        let s = format_date_with(Some(&c), 721);
+        let s = format_date_with(Some(&c), 721, Locale::Zh);
         assert_eq!(s, "无仙 3 年 1 月 1 日", "got {s}");
-        assert_eq!(format_date_with(Some(&c), 1081), "无仙 4 年 1 月 1 日");
+        assert_eq!(
+            format_date_with(Some(&c), 1081, Locale::Zh),
+            "无仙 4 年 1 月 1 日"
+        );
         // 跨月边界：第 1 年第 2 月第 1 天 = 30 + 1。
-        assert_eq!(format_date_with(Some(&c), 31), "无仙 1 年 2 月 1 日");
+        assert_eq!(
+            format_date_with(Some(&c), 31, Locale::Zh),
+            "无仙 1 年 2 月 1 日"
+        );
         // 与 `to_day` 互为逆运算（手册 §7.2：用算出来的期望值断言）。
         assert_eq!(c.to_day(3, 1, 1), Some(721));
     }
 
     #[test]
     fn never_emits_internal_at_day_notation() {
-        let s = format_date(1);
+        let s = format_date(1, Locale::Zh);
         assert!(!s.contains('@'), "got {s}");
     }
 }

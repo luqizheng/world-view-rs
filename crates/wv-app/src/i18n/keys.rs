@@ -503,11 +503,63 @@ pub enum I18nKey {
     MapControlsZoomOut,
     /// 「缩放到全图」
     MapControlsFitMap,
+
+    // ── W3：ui_shell 通知 toast 文本 ────────────────────────────────
+    /// 「已保存到 」前缀（后接 dir）
+    NoticeSavedToPrefix,
+    /// 「（」前缀（已保存全量 / 部分）
+    NoticeSavedScopePrefix,
+    /// 「）」后缀
+    NoticeSavedScopeSuffix,
+    /// 「全量」作用域文案
+    NoticeSavedScopeFull,
+    /// 「{} 个目录」作用域文案（数字 + 字段）—— 拆为前缀 key + 单位 key
+    NoticeSavedScopePartialCountPrefix,
+    /// 「 个目录」单位
+    NoticeSavedScopePartialCountSuffix,
+    /// 「保存失败：」前缀（后接错误体）
+    NoticeSaveFailedPrefix,
+    /// 「打开工程失败：」前缀
+    NoticeOpenProjectFailedPrefix,
+    /// 「打开工程目录失败：」前缀
+    NoticeOpenProjectDirFailedPrefix,
+    /// 「已加载工程「」前缀
+    NoticeProjectLoadedPrefix,
+    /// 「」」后缀
+    NoticeProjectLoadedSuffix,
+    /// 「未加载工程：在欢迎页新建或打开工程后即可开始绘制」整段
+    NoticeNoProjectNeed,
+    /// 「最近工程列表已变化，请重开菜单」整段
+    NoticeRecentsChanged,
+    /// 「已关闭工程」整段
+    NoticeProjectClosed,
+    /// 「导出尚未实现：需要先定导出格式（PNG / SVG），见 v0.2 §G」整段
+    NoticeExportPending,
+    /// 「项目设置面板待 v0.3」整段
+    NoticeSettingsPendingV03,
+    /// 「已在世界地图，无法再钻出」整段
+    NoticeAlreadyWorldMap,
+    /// 「该层级就是当前层级」整段
+    NoticeAlreadyAtLevel,
+    /// 「请先新建或打开工程，再执行该操作」整段
+    NoticeNeedProjectFirst,
+    /// 「已强制重画地形」整段
+    NoticeForceRedrawn,
+
+    // ── W3：ui_time 日期格式（中文 zh / 英文 en 不同） ────────────────
+    /// 时间无日历 zh prefix：「第 」
+    TimeNoCalZhPrefix,
+    /// 时间无日历 zh suffix：「 天」
+    TimeNoCalZhSuffix,
+    /// 时间无日历 en prefix：「Day 」
+    TimeNoCalEnPrefix,
+    /// 时间无日历 en suffix：空
+    TimeNoCalEnSuffix,
 }
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 214] = [
+    pub const ALL: [I18nKey; 238] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -747,5 +799,31 @@ impl I18nKey {
         I18nKey::MapControlsZoomIn,
         I18nKey::MapControlsZoomOut,
         I18nKey::MapControlsFitMap,
+        // ui_shell 通知（16）
+        I18nKey::NoticeSavedToPrefix,
+        I18nKey::NoticeSavedScopePrefix,
+        I18nKey::NoticeSavedScopeSuffix,
+        I18nKey::NoticeSavedScopeFull,
+        I18nKey::NoticeSavedScopePartialCountPrefix,
+        I18nKey::NoticeSavedScopePartialCountSuffix,
+        I18nKey::NoticeSaveFailedPrefix,
+        I18nKey::NoticeOpenProjectFailedPrefix,
+        I18nKey::NoticeOpenProjectDirFailedPrefix,
+        I18nKey::NoticeProjectLoadedPrefix,
+        I18nKey::NoticeProjectLoadedSuffix,
+        I18nKey::NoticeNoProjectNeed,
+        I18nKey::NoticeRecentsChanged,
+        I18nKey::NoticeProjectClosed,
+        I18nKey::NoticeExportPending,
+        I18nKey::NoticeSettingsPendingV03,
+        I18nKey::NoticeAlreadyWorldMap,
+        I18nKey::NoticeAlreadyAtLevel,
+        I18nKey::NoticeNeedProjectFirst,
+        I18nKey::NoticeForceRedrawn,
+        // ui_time（4）
+        I18nKey::TimeNoCalZhPrefix,
+        I18nKey::TimeNoCalZhSuffix,
+        I18nKey::TimeNoCalEnPrefix,
+        I18nKey::TimeNoCalEnSuffix,
     ];
 }

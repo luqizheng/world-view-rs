@@ -281,6 +281,34 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::MapControlsZoomIn => "放大",
         I18nKey::MapControlsZoomOut => "缩小",
         I18nKey::MapControlsFitMap => "缩放到全图",
+
+        // ── ui_shell 通知 ──
+        I18nKey::NoticeSavedToPrefix => "已保存到 ",
+        I18nKey::NoticeSavedScopePrefix => "（",
+        I18nKey::NoticeSavedScopeSuffix => "）",
+        I18nKey::NoticeSavedScopeFull => "全量",
+        I18nKey::NoticeSavedScopePartialCountPrefix => "",
+        I18nKey::NoticeSavedScopePartialCountSuffix => " 个目录",
+        I18nKey::NoticeSaveFailedPrefix => "保存失败：",
+        I18nKey::NoticeOpenProjectFailedPrefix => "打开工程失败：",
+        I18nKey::NoticeOpenProjectDirFailedPrefix => "打开工程目录失败：",
+        I18nKey::NoticeProjectLoadedPrefix => "已加载工程「",
+        I18nKey::NoticeProjectLoadedSuffix => "」",
+        I18nKey::NoticeNoProjectNeed => "未加载工程：在欢迎页新建或打开工程后即可开始绘制",
+        I18nKey::NoticeRecentsChanged => "最近工程列表已变化，请重开菜单",
+        I18nKey::NoticeProjectClosed => "已关闭工程",
+        I18nKey::NoticeExportPending => "导出尚未实现：需要先定导出格式（PNG / SVG），见 v0.2 §G",
+        I18nKey::NoticeSettingsPendingV03 => "项目设置面板待 v0.3",
+        I18nKey::NoticeAlreadyWorldMap => "已在世界地图，无法再钻出",
+        I18nKey::NoticeAlreadyAtLevel => "该层级就是当前层级",
+        I18nKey::NoticeNeedProjectFirst => "请先新建或打开工程，再执行该操作",
+        I18nKey::NoticeForceRedrawn => "已强制重画地形",
+
+        // ── ui_time 日期 ──
+        I18nKey::TimeNoCalZhPrefix => "第 ",
+        I18nKey::TimeNoCalZhSuffix => " 天",
+        I18nKey::TimeNoCalEnPrefix => "Day ",
+        I18nKey::TimeNoCalEnSuffix => "",
     }
 }
 
@@ -550,5 +578,33 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::MapControlsZoomIn => "Zoom in",
         I18nKey::MapControlsZoomOut => "Zoom out",
         I18nKey::MapControlsFitMap => "Fit map to view",
+
+        // ── ui_shell toasts ──
+        I18nKey::NoticeSavedToPrefix => "Saved to ",
+        I18nKey::NoticeSavedScopePrefix => " (",
+        I18nKey::NoticeSavedScopeSuffix => ")",
+        I18nKey::NoticeSavedScopeFull => "full",
+        I18nKey::NoticeSavedScopePartialCountPrefix => "",
+        I18nKey::NoticeSavedScopePartialCountSuffix => " dirty path(s)",
+        I18nKey::NoticeSaveFailedPrefix => "Save failed: ",
+        I18nKey::NoticeOpenProjectFailedPrefix => "Open project failed: ",
+        I18nKey::NoticeOpenProjectDirFailedPrefix => "Open project dir failed: ",
+        I18nKey::NoticeProjectLoadedPrefix => "Loaded project \"",
+        I18nKey::NoticeProjectLoadedSuffix => "\"",
+        I18nKey::NoticeNoProjectNeed => "No project loaded yet — create or open one to start drawing",
+        I18nKey::NoticeRecentsChanged => "Recent project list has changed — reopen the menu",
+        I18nKey::NoticeProjectClosed => "Project closed",
+        I18nKey::NoticeExportPending => "Export is not implemented yet — format (PNG / SVG) still needs a decision, see v0.2 §G",
+        I18nKey::NoticeSettingsPendingV03 => "Project-settings panel is planned for v0.3",
+        I18nKey::NoticeAlreadyWorldMap => "Already at the world map — cannot drill out further",
+        I18nKey::NoticeAlreadyAtLevel => "This level is the current one",
+        I18nKey::NoticeNeedProjectFirst => "Create or open a project before running this command",
+        I18nKey::NoticeForceRedrawn => "Forced terrain redraw",
+
+        // ── ui_time dates ──
+        I18nKey::TimeNoCalZhPrefix => "",
+        I18nKey::TimeNoCalZhSuffix => "",
+        I18nKey::TimeNoCalEnPrefix => "Day ",
+        I18nKey::TimeNoCalEnSuffix => "",
     }
 }

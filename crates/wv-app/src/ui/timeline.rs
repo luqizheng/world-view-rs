@@ -134,6 +134,7 @@ pub fn panel_timeline(
                     egui::RichText::new(crate::ui_time::format_date_for(
                         &projection,
                         playback.current_day,
+                        current_loc.0,
                     ))
                     .size(shell.scale.base)
                     .color(shell.t1())

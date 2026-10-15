@@ -105,7 +105,7 @@ pub fn top_bar(
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     language_switch(ui, &shell, &mut current_loc);
                     ui.add_space(space::SM);
-                    readout_segment(ui, &shell, &view, &playback, &projection);
+                    readout_segment(ui, &shell, &view, &playback, &projection, &current_loc);
                 });
             });
         });
@@ -280,6 +280,7 @@ fn readout_segment(
     view: &ViewState,
     playback: &PlaybackState,
     projection: &WorldProjection,
+    current_loc: &CurrentLocale,
 ) {
     // 比例尺（<1400px 隐藏）。
     //
@@ -316,7 +317,7 @@ fn readout_segment(
         ui.add_space(space::MD);
     }
     // 日期（只读镜像，§5.3 唯一真源是 playback.current_day）。
-    let date = crate::ui_time::format_date_for(projection, playback.current_day);
+    let date = crate::ui_time::format_date_for(projection, playback.current_day, current_loc.0);
     ui.label(
         egui::RichText::new(date)
             .size(shell.scale.small)

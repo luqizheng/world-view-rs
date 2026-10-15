@@ -427,6 +427,7 @@ fn poll_open_project_dialog(
     mut images: ResMut<Assets<Image>>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     time: Res<Time>,
+    current_loc: Res<crate::i18n::CurrentLocale>,
 ) {
     // 先发起上一帧排队的对话框意图（唯一发起点，见 `OpenProjectTask::request`）。
     if let Some(purpose) = task.take_request() {
@@ -461,11 +462,19 @@ fn poll_open_project_dialog(
                 &mut images,
                 &mut cameras,
                 frame,
+                &current_loc,
             );
         }
         DialogPurpose::SaveAs => {
             let dir = path.to_string_lossy().into_owned();
-            save_world_to_dir(&dir, &mut projection, &mut edit, &mut notice, frame);
+            save_world_to_dir(
+                &dir,
+                &mut projection,
+                &mut edit,
+                &mut notice,
+                frame,
+                &current_loc,
+            );
         }
         DialogPurpose::PickNewProjectLocation => {
             // 只回填输入框；位置变了，框内残留的旧错误不再成立，一并清掉。
@@ -487,6 +496,7 @@ fn save_world_to_dir(
     edit: &mut crate::edit::editing::EditHistory,
     notice: &mut ShellNotice,
     frame: u64,
+    current_loc: &crate::i18n::CurrentLocale,
 ) {
     // 新工程的默认名：元数据里有就用，没有就「未命名工程」。
     let default_name = projection
@@ -514,11 +524,32 @@ fn save_world_to_dir(
                 projection.project_dir = Some(dir.to_owned());
                 projection.dirty = false;
                 edit.clear_dirty();
-                notice.info(format!("已保存到 {dir}"), frame);
+                notice.info(
+                    format!(
+                        "{}{}",
+                        crate::i18n::t_key(current_loc, crate::i18n::I18nKey::NoticeSavedToPrefix),
+                        dir
+                    ),
+                    frame,
+                );
             }
-            Err(e) => notice.error(format!("保存失败：{e}"), frame),
+            Err(e) => notice.error(
+                format!(
+                    "{}{}",
+                    crate::i18n::t_key(current_loc, crate::i18n::I18nKey::NoticeSaveFailedPrefix),
+                    e
+                ),
+                frame,
+            ),
         },
-        Err(e) => notice.error(format!("保存失败：{e}"), frame),
+        Err(e) => notice.error(
+            format!(
+                "{}{}",
+                crate::i18n::t_key(current_loc, crate::i18n::I18nKey::NoticeSaveFailedPrefix),
+                e
+            ),
+            frame,
+        ),
     }
 }
 
@@ -549,6 +580,7 @@ pub(crate) fn load_project_into(
     images: &mut Assets<Image>,
     cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     frame: u64,
+    current_loc: &crate::i18n::CurrentLocale,
 ) {
     match wv_io::Project::open(dir).and_then(|p| p.load_world()) {
         Ok(world) => {
@@ -577,14 +609,38 @@ pub(crate) fn load_project_into(
             diagnostics.last_count = d.items.len();
             diagnostics.diagnostics = d;
             diagnostics.needs_diagnose = false;
-            notice.info(format!("已加载工程「{name}」"), frame);
+            notice.info(
+                format!(
+                    "{}{}{}",
+                    crate::i18n::t_key(
+                        current_loc,
+                        crate::i18n::I18nKey::NoticeProjectLoadedPrefix
+                    ),
+                    name,
+                    crate::i18n::t_key(
+                        current_loc,
+                        crate::i18n::I18nKey::NoticeProjectLoadedSuffix
+                    )
+                ),
+                frame,
+            );
             adopt_world_snapshot(
                 projection, drill, playback, view, tex, atlas, images, cameras,
             );
         }
         Err(e) => {
             projection.load_error = Some(format!("打开工程 `{dir}` 失败: {e}"));
-            notice.error(format!("打开工程失败：{e}"), frame);
+            notice.error(
+                format!(
+                    "{}{}",
+                    crate::i18n::t_key(
+                        current_loc,
+                        crate::i18n::I18nKey::NoticeOpenProjectFailedPrefix
+                    ),
+                    e
+                ),
+                frame,
+            );
         }
     }
 }
@@ -663,24 +719,25 @@ fn load_error_card(mut ctxs: EguiContexts, mut projection: ResMut<WorldProjectio
 /// 阻塞加载，用户看到的仍是白屏。帧 0 画遮罩 → present；帧 1 遮罩已在屏上，
 /// 这时才做真正（阻塞）的磁盘加载；帧 2 起显示加载结果 / 失败卡片。
 /// 空编辑器起步（无 `-m`）时顺带给一条一次性状态栏指引。
+///
+/// 参数已 16+1（基本类同 `apply_pending_commands`），按 Bevy 单系统 16 上限
+/// 把可成对的 Resources 折成元组：`time` + `current_loc` 一组，省一个位置。
 #[allow(clippy::too_many_arguments)]
 fn startup_load(
     mut req: ResMut<StartupLoadRequest>,
-    mut frames: Local<u32>,
-    mut hinted: Local<bool>,
+    (mut frames, mut hinted): (Local<u32>, Local<bool>),
     mut projection: ResMut<WorldProjection>,
     mut drill: ResMut<DrillState>,
     mut recents: ResMut<RecentProjects>,
     mut notice: ResMut<ShellNotice>,
     mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
     mut edit: ResMut<crate::edit::editing::EditHistory>,
-    mut playback: ResMut<PlaybackState>,
-    mut view: ResMut<ViewState>,
+    (mut playback, mut view): (ResMut<PlaybackState>, ResMut<ViewState>),
     mut tex: ResMut<TerrainTexture>,
     atlas: Option<Res<TileAtlas>>,
     mut images: ResMut<Assets<Image>>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
-    time: Res<Time>,
+    (time, current_loc): (Res<Time>, Res<crate::i18n::CurrentLocale>),
 ) {
     *frames += 1;
     if *frames < 2 {
@@ -691,7 +748,10 @@ fn startup_load(
         if !*hinted {
             *hinted = true;
             // 2026-10-14 起无工程时欢迎页全屏接管，指引跟着改口。
-            notice.info("未加载工程：在欢迎页新建或打开工程后即可开始绘制", frame);
+            notice.info(
+                crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::NoticeNoProjectNeed),
+                frame,
+            );
         }
         return;
     };
@@ -711,6 +771,7 @@ fn startup_load(
         &mut images,
         &mut cameras,
         frame,
+        &current_loc,
     );
 }
 
@@ -836,6 +897,7 @@ fn dispatch_project_command(
     images: &mut Assets<Image>,
     cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     frame: u64,
+    current_loc: &crate::i18n::CurrentLocale,
 ) -> bool {
     match id {
         CommandId::OpenRecentProject(i) => {
@@ -858,9 +920,13 @@ fn dispatch_project_command(
                         images,
                         cameras,
                         frame,
+                        current_loc,
                     );
                 }
-                None => notice.error("最近工程列表已变化，请重开菜单", frame),
+                None => notice.error(
+                    crate::i18n::t_key(current_loc, crate::i18n::I18nKey::NoticeRecentsChanged),
+                    frame,
+                ),
             }
             true
         }
@@ -889,7 +955,10 @@ fn dispatch_project_command(
             adopt_world_snapshot(
                 projection, drill, playback, view, tex, atlas, images, cameras,
             );
-            notice.info("已关闭工程", frame);
+            notice.info(
+                crate::i18n::t_key(current_loc, crate::i18n::I18nKey::NoticeProjectClosed),
+                frame,
+            );
             true
         }
         CommandId::OpenProject => {
@@ -907,18 +976,24 @@ fn dispatch_project_command(
         }
         CommandId::ExportProject => {
             notice.info(
-                "导出尚未实现：需要先定导出格式（PNG / SVG），见 v0.2 §G",
+                crate::i18n::t_key(current_loc, crate::i18n::I18nKey::NoticeExportPending),
                 frame,
             );
             true
         }
         CommandId::ProjectSettings => {
-            notice.info("项目设置面板待 v0.3", frame);
+            notice.info(
+                crate::i18n::t_key(current_loc, crate::i18n::I18nKey::NoticeSettingsPendingV03),
+                frame,
+            );
             true
         }
         CommandId::DrillUp => {
             if !drill.up() {
-                notice.info("已在世界地图，无法再钻出", frame);
+                notice.info(
+                    crate::i18n::t_key(current_loc, crate::i18n::I18nKey::NoticeAlreadyWorldMap),
+                    frame,
+                );
             }
             true
         }
@@ -929,7 +1004,10 @@ fn dispatch_project_command(
         CommandId::DrillToSegment(i) => {
             // 面包屑点第 i 段（0 = 根）。
             if !drill.jump_to(*i as usize) {
-                notice.info("该层级就是当前层级", frame);
+                notice.info(
+                    crate::i18n::t_key(current_loc, crate::i18n::I18nKey::NoticeAlreadyAtLevel),
+                    frame,
+                );
             }
             true
         }
@@ -1015,7 +1093,10 @@ fn apply_pending_commands(
                 | CommandId::ExportProject
         )
     {
-        notice.error("请先新建或打开工程，再执行该操作", frame);
+        notice.error(
+            crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::NoticeNeedProjectFirst),
+            frame,
+        );
         return;
     }
 
@@ -1037,6 +1118,7 @@ fn apply_pending_commands(
         &mut images,
         &mut cameras,
         frame,
+        &current_loc,
     ) {
         return;
     }
@@ -1132,26 +1214,83 @@ fn apply_pending_commands(
                     Ok(()) => {
                         projection.dirty = false;
                         let scope = if n == 0 {
-                            "全量".to_owned()
+                            crate::i18n::t_key(
+                                &current_loc,
+                                crate::i18n::I18nKey::NoticeSavedScopeFull,
+                            )
+                            .to_owned()
                         } else {
-                            format!("{n} 个目录")
+                            format!(
+                                "{}{}{}",
+                                crate::i18n::t_key(
+                                    &current_loc,
+                                    crate::i18n::I18nKey::NoticeSavedScopePartialCountPrefix
+                                ),
+                                n,
+                                crate::i18n::t_key(
+                                    &current_loc,
+                                    crate::i18n::I18nKey::NoticeSavedScopePartialCountSuffix
+                                )
+                            )
                         };
-                        notice.info(format!("已保存到 {dir}（{scope}）"), frame);
+                        notice.info(
+                            format!(
+                                "{}{}{}{}{}",
+                                crate::i18n::t_key(
+                                    &current_loc,
+                                    crate::i18n::I18nKey::NoticeSavedToPrefix
+                                ),
+                                dir,
+                                crate::i18n::t_key(
+                                    &current_loc,
+                                    crate::i18n::I18nKey::NoticeSavedScopePrefix
+                                ),
+                                scope,
+                                crate::i18n::t_key(
+                                    &current_loc,
+                                    crate::i18n::I18nKey::NoticeSavedScopeSuffix
+                                )
+                            ),
+                            frame,
+                        );
                     }
                     Err(e) => {
                         // 失败时把 dirty 放回，让下次保存能再试。
                         edit.record_dirty(dirty);
-                        notice.error(format!("保存失败：{e}"), frame);
+                        notice.error(
+                            format!(
+                                "{}{}",
+                                crate::i18n::t_key(
+                                    &current_loc,
+                                    crate::i18n::I18nKey::NoticeSaveFailedPrefix
+                                ),
+                                e
+                            ),
+                            frame,
+                        );
                     }
                 },
-                Err(e) => notice.error(format!("打开工程目录失败：{e}"), frame),
+                Err(e) => notice.error(
+                    format!(
+                        "{}{}",
+                        crate::i18n::t_key(
+                            &current_loc,
+                            crate::i18n::I18nKey::NoticeOpenProjectDirFailedPrefix
+                        ),
+                        e
+                    ),
+                    frame,
+                ),
             }
         }
         // 强制重画地形纹理（2026-10-14 用户需求：怀疑数据已改、画面没跟上时点 ↻）。
         // 不动世界数据；只清 `last_mode/last_map` 让下一帧必然全图重建。
         CommandId::ForceRebuildTexture => {
             crate::render::terrain_view::force_rebuild(&mut tex);
-            notice.info("已强制重画地形", frame);
+            notice.info(
+                crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::NoticeForceRedrawn),
+                frame,
+            );
         }
         // 其余工程 / 导航命令已在上面消费。
         CommandId::OpenRecentProject(_)
