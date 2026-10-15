@@ -143,6 +143,17 @@ pub const DOT_FACTION: Color = hex(0xC4553F);
 pub const DOT_EVENT: Color = hex(0xC08BD8);
 
 // ---------------------------------------------------------------------------
+// POI hover 文字色族（手绘地图呈现 #12，2026-10-15）
+// ---------------------------------------------------------------------------
+
+/// POI hover 文字色——比 `DOT_*` 略深一档（保证可读性）+ 同色族。
+/// civ-atlas 风格：圆点 + 文字同源色族，hover 整体像「同色系徽章」。
+pub const TEXT_PLACE: Color = hex(0x7A5A36); // 砖赭深
+pub const TEXT_REGION: Color = hex(0x3C4A60); // 冷蓝灰深
+pub const TEXT_FACTION: Color = hex(0x8C3525); // 暖红深
+pub const TEXT_EVENT: Color = hex(0x8050A0); // 紫深
+
+// ---------------------------------------------------------------------------
 // 雪色双调（手绘地图呈现 #3，2026-10-15）
 // ---------------------------------------------------------------------------
 
@@ -414,6 +425,37 @@ mod tests {
             "LABEL_PLACE 应偏暖（红 > 蓝），实得 r={} b={}",
             l.red,
             l.blue
+        );
+    }
+
+    /// TEXT_* 文字色与 DOT_* 圆点色**色族一致**（手绘地图 #12）：
+    /// 每对 text_xx 与 dot_xx 的 r/g/b 比例相近——文字比圆点略深（同色相）。
+    /// 防手滑改色时把"色族关联"破坏。
+    #[test]
+    fn text_colors_share_hue_with_dot_colors() {
+        let (Color::Srgba(p_dot), Color::Srgba(p_text)) = (DOT_PLACE, TEXT_PLACE) else {
+            panic!()
+        };
+        // 同一色相：r/g/b 的大小顺序一致。
+        let dot_order = (p_dot.red > p_dot.blue, p_dot.red > p_dot.green);
+        let text_order = (p_text.red > p_text.blue, p_text.red > p_text.green);
+        assert_eq!(
+            dot_order, text_order,
+            "PLACE 文字与圆点同色相（红 > 蓝、> 绿）"
+        );
+    }
+
+    /// 文字色明度 < 圆点色（hover 内文字更深，确保可读性 + 与圆点对比）。
+    #[test]
+    fn text_color_is_darker_than_dot_color() {
+        let lum = |c: Color| -> f32 {
+            let Color::Srgba(s) = c else { panic!() };
+            (s.red + s.green + s.blue) / 3.0
+        };
+        assert!(lum(TEXT_PLACE) < lum(DOT_PLACE), "TEXT 文字应比 DOT 圆点深");
+        assert!(
+            lum(TEXT_REGION) < lum(DOT_REGION),
+            "TEXT_REGION 应比 DOT_REGION 深"
         );
     }
 

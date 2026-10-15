@@ -72,7 +72,9 @@ pub fn hover_tooltip_system(
 
     // 4. egui 浮窗（屏幕位置 = 光标 + 8px 偏移）
     let pos = [cursor_screen.x + 8.0, cursor_screen.y + 8.0];
-    let kind_dot = kind_color(target.kind, palette::colors(view.map_palette));
+    let pal = palette::colors(view.map_palette);
+    let kind_dot = kind_color(target.kind, pal);
+    let text_color = kind_text_color(target.kind, pal);
     let sub_text = if subtitle.is_empty() {
         String::new()
     } else {
@@ -96,7 +98,7 @@ pub fn hover_tooltip_system(
                         ui.painter().circle_filled(rect.center(), 4.0, kind_dot);
                         ui.label(
                             egui::RichText::new(format!("{}{}", name, sub_text))
-                                .color(shell.t1())
+                                .color(text_color)
                                 .size(shell.scale.small),
                         );
                     });
@@ -131,6 +133,21 @@ fn kind_color(kind: EntityKind, pal: &palette::PaletteColors) -> egui::Color32 {
         EntityKind::Faction => pal.dot_faction,
         EntityKind::Event => pal.dot_event,
         EntityKind::StreetSegment => return egui::Color32::GRAY,
+    };
+    crate::theme::colors::palette_to_color32(c)
+}
+
+/// POI hover 文字色（手绘地图 #12）：与 `kind_color` 同色族但更深的
+/// `text_*` 令牌。日间 / 暮色自动切换；`color()` 接收 `egui::Color32`。
+fn kind_text_color(kind: EntityKind, pal: &palette::PaletteColors) -> egui::Color32 {
+    let c = match kind {
+        EntityKind::Place => pal.text_place,
+        EntityKind::Region => pal.text_region,
+        EntityKind::Faction => pal.text_faction,
+        EntityKind::Event => pal.text_event,
+        EntityKind::StreetSegment => {
+            return crate::theme::colors::palette_to_color32(pal.label_fill)
+        }
     };
     crate::theme::colors::palette_to_color32(c)
 }

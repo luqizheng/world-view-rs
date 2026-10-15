@@ -81,6 +81,11 @@ pub const DUSK_DOT_PLACE: Color = hex(0xD9B97A);
 pub const DUSK_DOT_REGION: Color = hex(0x7A8EAE);
 pub const DUSK_DOT_FACTION: Color = hex(0xE07A60);
 pub const DUSK_DOT_EVENT: Color = hex(0xD8B4E8);
+/// POI hover 文字色族（手绘地图 #12）—— 暮色版：暗纸上比 DOT 略亮的同族色。
+pub const DUSK_TEXT_PLACE: Color = hex(0xC9A878);
+pub const DUSK_TEXT_REGION: Color = hex(0x9CADC6);
+pub const DUSK_TEXT_FACTION: Color = hex(0xE89580);
+pub const DUSK_TEXT_EVENT: Color = hex(0xE0BAEC);
 /// 文字晕边 = 暮色纸面深底。
 pub const DUSK_HALO_FILL: Color = hex(0x3A342E);
 /// 等值线 / 海岸线墨色：暗纸上的浅墨 推导·待复核。

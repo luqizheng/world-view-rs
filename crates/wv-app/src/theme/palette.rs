@@ -113,6 +113,11 @@ pub struct PaletteColors {
     pub dot_region: Color,
     pub dot_faction: Color,
     pub dot_event: Color,
+    /// POI hover 文字色族（手绘地图 #12）—— 与 `dot_*` 同色族略深。
+    pub text_place: Color,
+    pub text_region: Color,
+    pub text_faction: Color,
+    pub text_event: Color,
     /// 雪高光色（手绘地图 #3）—— 比 `core_terrain[7]` 略亮，近白。
     pub snow_highlight: Color,
     /// 雪冷阴影色（手绘地图 #3）—— 冷蓝灰，叠在 high-altitude 雪格上。
@@ -190,6 +195,10 @@ impl PaletteColors {
         dot_region: colors::DOT_REGION,
         dot_faction: colors::DOT_FACTION,
         dot_event: colors::DOT_EVENT,
+        text_place: colors::TEXT_PLACE,
+        text_region: colors::TEXT_REGION,
+        text_faction: colors::TEXT_FACTION,
+        text_event: colors::TEXT_EVENT,
         snow_highlight: colors::SNOW_HIGHLIGHT,
         snow_shadow: colors::SNOW_SHADOW,
         ice_paper: colors::ICE_PAPER,
@@ -225,6 +234,10 @@ impl PaletteColors {
         dot_region: colors_dusk::DUSK_DOT_REGION,
         dot_faction: colors_dusk::DUSK_DOT_FACTION,
         dot_event: colors_dusk::DUSK_DOT_EVENT,
+        text_place: colors_dusk::DUSK_TEXT_PLACE,
+        text_region: colors_dusk::DUSK_TEXT_REGION,
+        text_faction: colors_dusk::DUSK_TEXT_FACTION,
+        text_event: colors_dusk::DUSK_TEXT_EVENT,
         snow_highlight: colors_dusk::DUSK_SNOW_HIGHLIGHT,
         snow_shadow: colors_dusk::DUSK_SNOW_SHADOW,
         ice_paper: colors_dusk::DUSK_ICE_PAPER,
