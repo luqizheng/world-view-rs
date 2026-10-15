@@ -127,13 +127,18 @@ pub fn street_streams(sources: &[(String, wv_core::StreetLayer)]) -> Vec<(u8, Ve
 #[derive(Component)]
 pub struct StreetLabel;
 
-/// 有名字段的中点表（**本图局部坐标**）——标注的取数口径，纯函数可测。
-pub fn named_midpoints(sources: &[(String, wv_core::StreetLayer)]) -> Vec<(Vec2, String)> {
+/// 有名字段的中点表（**本图局部坐标** + 段级存在窗口）——标注的取数口径，纯函数可测。
+///
+/// 第三元 = 该段的 `time_span`（`None` = 跟随子图）。ADR-0015：段窗口外
+/// 街名与街道几何同生共死，过滤在标注系统内做（`label_visible_at`）。
+pub fn named_midpoints(
+    sources: &[(String, wv_core::StreetLayer)],
+) -> Vec<(Vec2, String, Option<wv_core::TimeSpan>)> {
     let mut out = Vec::new();
     for (_, doc) in sources {
         for seg in &doc.segments {
             if let (Some(name), Some(mid)) = (&seg.name, seg.polyline_midpoint()) {
-                out.push((Vec2::new(mid.x, mid.y), name.clone()));
+                out.push((Vec2::new(mid.x, mid.y), name.clone(), seg.time_span));
             }
         }
     }
@@ -158,16 +163,19 @@ const STREET_LABEL_Z: f32 = 0.35;
 /// - ADR-0017 Q1：标签走独立渲染组（`layers.label.visible`）
 /// - 两者合取——任一关闭即街名消失。
 /// - LodTier 过滤**去除**（Q3：不再只在 Edit 级别显示）。
-/// - 时间过滤（`label_visible_at`，ADR-0015）待段级 `StreetSegment.time_span`
-///   进 `StreetLayerCache` 后接入——当前该缓存的 sources 不携带窗口，
-///   图级窗口否决由钻取侧（drill）覆盖，此处不重复求值。
+/// - 时间过滤（ADR-0015）：图级窗口（`MapNode.time_span`）∧ 段级窗口
+///   （`StreetSegment.time_span`）合取，经 `label_visible_at` 单一求值——
+///   街道几何不显示的时段，街名一并退场。
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_street_labels(
     mut commands: Commands,
     cache: Res<StreetLayerCache>,
+    projection: Res<WorldProjection>,
+    drill: Res<DrillState>,
     grid: Res<GridConfig>,
     view: Res<ViewState>,
     layers: Res<LayerFrame>,
+    playback: Res<crate::state::PlaybackState>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
@@ -196,10 +204,16 @@ pub fn update_street_labels(
     let mut wanted: Vec<(Vec2, String)> = Vec::new();
     // ADR-0017 §2.9 Q3：街名走 Label 渲染组 + Road 图层（合取）。
     // 去掉 LodTier::Edit 限制——Q3 拍板"全接管"，所有级别都显示街名。
-    // 时间过滤（label_visible_at）待段级窗口进缓存后接入（见函数文档）。
     if layers.road.visible && layers.label.visible {
-        for (mid, name) in named_midpoints(&cache.sources) {
-            wanted.push((grid.map_to_view(mid), name));
+        // ADR-0015 时间过滤：图级窗口（当前图）∧ 段级窗口（每段自带）。
+        let t = playback.current_day;
+        let map_span = drill
+            .current_node(&projection.world)
+            .and_then(|node| node.time_span.as_ref());
+        for (mid, name, seg_span) in named_midpoints(&cache.sources) {
+            if wv_core::label_visible_at(map_span, seg_span.as_ref(), t) {
+                wanted.push((grid.map_to_view(mid), name));
+            }
         }
     }
     // 无变化帧也照常对齐：位置/字号随视图每帧都可能变，池对齐本身极轻。
@@ -441,6 +455,45 @@ mod tests {
             (mids[0].0.x - 4.0).abs() < 1e-4 && (mids[0].0.y - 5.0).abs() < 1e-4,
             "中点应为 (4, 5)，实得 {:?}",
             mids[0].0
+        );
+    }
+
+    #[test]
+    fn named_midpoints_carries_each_segment_time_span() {
+        // ADR-0015：段级窗口随中点一起交给标注系统过滤。
+        let sources = vec![(
+            "roads.yaml".to_string(),
+            doc_of(vec![
+                StreetSegment {
+                    class: RoadClass::Primary,
+                    points: vec![Point::new(0.0, 0.0), Point::new(10.0, 0.0)],
+                    name: Some("无名无窗".into()),
+                    time_span: None,
+                },
+                StreetSegment {
+                    class: RoadClass::Residential,
+                    points: vec![Point::new(0.0, 5.0), Point::new(10.0, 5.0)],
+                    name: Some("清末新路".into()),
+                    time_span: Some(wv_core::TimeSpan::new(1850, 1912).unwrap()),
+                },
+            ]),
+        )];
+        let mids = named_midpoints(&sources);
+        assert_eq!(mids.len(), 2);
+        assert!(mids[0].2.is_none(), "无窗段携带 None");
+        assert_eq!(
+            mids[1].2,
+            Some(wv_core::TimeSpan::new(1850, 1912).unwrap()),
+            "有窗段携带原窗口"
+        );
+        // 过滤语义与 label_visible_at 一致：窗口外（1912 起）不可见。
+        assert!(
+            !wv_core::label_visible_at(None, mids[1].2.as_ref(), 1912),
+            "段窗口 [1850,1912)：t=1912 不可见（半开不含右）"
+        );
+        assert!(
+            wv_core::label_visible_at(None, mids[1].2.as_ref(), 1900),
+            "段窗口 [1850,1912)：t=1900 可见"
         );
     }
 
