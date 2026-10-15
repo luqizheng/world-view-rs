@@ -80,9 +80,10 @@ pub fn map_controls(
     let text_color = shell.t1();
     let active_bg = shell.active_bg();
 
-    // v0.3：位置上移 12px（-38 → -50），让出底部 24px 状态条。
+    // v0.3-B 校准：web `.map-controls` 是 right:18px / bottom:214px——上移量
+    // = 状态栏 22 + 时间线带 180 + 间距 12，正好让开底部时间线带。
     egui::Area::new(egui::Id::new("wv_map_controls_v03"))
-        .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -50.0))
+        .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -214.0))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             ui.set_min_width(48.0);

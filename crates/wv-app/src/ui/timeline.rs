@@ -27,12 +27,12 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::state::{Panel, PanelState, PlaybackState, WorldProjection};
-use crate::theme::ui_theme::{mono, proportional, UiShellConfig};
+use crate::theme::ui_theme::{color32, mono, proportional, UiShellConfig};
 use crate::theme::ui_tokens::{radius, space};
 use crate::ui_layout::LayoutFile;
 
 use super::shell::UiShell;
-use super::widgets::{ICON_PLAY, ICON_SEARCH};
+use super::widgets::BadgeKind;
 
 /// 时间轴轨道层。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -57,7 +57,7 @@ impl TimelineLayer {
             TimelineLayer::Day => "DAY TICKS",
             TimelineLayer::Situation => "SITUATIONS",
             TimelineLayer::Character => "CHARACTERS",
-            TimelineLayer::Century => "CENTURIES",
+            TimelineLayer::Century => "CENTURY VIEW",
         }
     }
     /// 旧内部层名（命令面板 / 日志 / 测试仍识别）。
@@ -69,15 +69,25 @@ impl TimelineLayer {
             TimelineLayer::Century => "世纪",
         }
     }
-    /// 顶栏二段 chip 用的两段（Figma v0.3）。
-    pub const VISIBLE: [TimelineLayer; 2] = [TimelineLayer::Day, TimelineLayer::Situation];
-    /// 旧四段保留，命令面板 / 测试不破。
-    pub const ALL: [TimelineLayer; 4] = [
+    /// chip 徽标语义色（web `.track-toggles`：DAY TICKS 中性 / SITUATIONS warn /
+    /// CHARACTERS event / CENTURY VIEW 中性）。
+    pub fn chip_tone(self) -> BadgeKind {
+        match self {
+            TimelineLayer::Day => BadgeKind::Neutral,
+            TimelineLayer::Situation => BadgeKind::Warn,
+            TimelineLayer::Character => BadgeKind::Event,
+            TimelineLayer::Century => BadgeKind::Neutral,
+        }
+    }
+    /// 顶栏 chip 展示的全部层（v0.3-B：web `.track-toggles` 有 4 个徽标）。
+    pub const VISIBLE: [TimelineLayer; 4] = [
         TimelineLayer::Day,
         TimelineLayer::Situation,
         TimelineLayer::Character,
         TimelineLayer::Century,
     ];
+    /// 与 [`Self::VISIBLE`] 同表（命令面板 / 测试用名保留）。
+    pub const ALL: [TimelineLayer; 4] = TimelineLayer::VISIBLE;
 }
 
 /// 时间轴底部通栏浮窗（v0.3 视觉重做）。
@@ -121,8 +131,8 @@ pub fn panel_timeline(
         .show(ctx, |ui| {
             // ── 顶头：播放 + 年 + 日/季节 + 速度下拉 + 二段 chip ──
             ui.horizontal(|ui| {
-                // 圆形播放按钮（Figma 44×44 蓝底）
-                let play_size = 44.0;
+                // 圆形播放按钮（web `.timeline-top .play`：32×32 蓝底白 glyph）
+                let play_size = 32.0;
                 let (rect, resp) =
                     ui.allocate_exact_size(egui::vec2(play_size, play_size), egui::Sense::click());
                 let painter = ui.painter();
@@ -138,8 +148,6 @@ pub fn panel_timeline(
                 if resp.clicked() {
                     playback.playing = !playback.playing;
                 }
-                let _ = ICON_PLAY; // 保留引用：M2 替换 ⏸/▶ 为 SVG
-                let _ = ICON_SEARCH;
 
                 ui.add_space(space::MD);
                 // 年份 + 当日 + 季节
@@ -186,39 +194,44 @@ pub fn panel_timeline(
 
                 ui.add_space(space::MD);
                 // 二段 chip（Figma `DAY TICKS` 浅描边 / `SITUATIONS` 金激活）
+                // track 徽标 ×4（web `.track-toggles`：按层语义色，选中段实心底）
                 ui.horizontal(|ui| {
                     for l in TimelineLayer::VISIBLE {
                         let sel = *layer == l;
-                        let chip_w = 100.0;
+                        let chip_w = 96.0;
                         let chip_h = shell.hit;
                         let (rect, r) = ui
                             .allocate_exact_size(egui::vec2(chip_w, chip_h), egui::Sense::click());
                         let p = ui.painter();
+                        // 徽标语义色（fill @ 16% 合成在 panel 上）
+                        let bc = shell.palette.badge(match l.chip_tone() {
+                            BadgeKind::Neutral => crate::theme::ui_tokens::BadgeTone::Neutral,
+                            BadgeKind::Warn => crate::theme::ui_tokens::BadgeTone::Warn,
+                            BadgeKind::Event => crate::theme::ui_tokens::BadgeTone::Event,
+                            BadgeKind::Ok => crate::theme::ui_tokens::BadgeTone::Ok,
+                            BadgeKind::Err => crate::theme::ui_tokens::BadgeTone::Err,
+                        });
                         if sel {
-                            // 选中：金底黑字（Figma v0.3）
-                            p.rect_filled(rect, radius::CONTROL, shell.gold());
-                            p.text(
-                                rect.center(),
-                                egui::Align2::CENTER_CENTER,
-                                l.chip_label(),
-                                proportional(shell.scale.micro),
-                                shell.text_on_accent(),
+                            p.rect_filled(
+                                rect,
+                                radius::BADGE,
+                                color32(bc.background_on(shell.palette.bg_panel)),
                             );
                         } else {
                             p.rect_stroke(
                                 rect,
-                                radius::CONTROL,
+                                radius::BADGE,
                                 egui::Stroke::new(1.0, shell.border_strong()),
                                 egui::StrokeKind::Inside,
                             );
-                            p.text(
-                                rect.center(),
-                                egui::Align2::CENTER_CENTER,
-                                l.chip_label(),
-                                proportional(shell.scale.micro),
-                                shell.t2(),
-                            );
                         }
+                        p.text(
+                            rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            l.chip_label(),
+                            proportional(shell.scale.micro),
+                            if sel { color32(bc.fg) } else { shell.t2() },
+                        );
                         if r.clicked() {
                             *layer = l;
                         }
@@ -374,25 +387,37 @@ fn draw_timeline_tracks(
                     shell.t1(),
                 );
             }
-            // v0.3 mock 两条事件块（Figma 视觉对照；M2 切到真实数据）
+            // v0.3 mock 两条事件块（web `.event-a/.event-b` 精确三色；M3 切真实数据）
             draw_mock_event(
                 painter,
                 shell,
-                track_y + 56.0,
-                x_of(playback.range_from + (span * 0.20) as i64),
-                x_of(playback.range_from + (span * 0.40) as i64),
+                track_y + 38.0,
+                x_of(playback.range_from + (span * 0.12) as i64),
+                x_of(playback.range_from + (span * 0.37) as i64),
                 "Border dispute",
-                shell.gold(),
+                egui::Color32::from_rgb(0xFF, 0xC1, 0x49),
+                egui::Color32::from_rgb(0x80, 0x5F, 0x23),
+                egui::Color32::from_rgb(0x4A, 0x3B, 0x21),
             );
             draw_mock_event(
                 painter,
                 shell,
-                track_y + 84.0,
-                x_of(playback.range_from + (span * 0.55) as i64),
-                x_of(playback.range_from + (span * 0.75) as i64),
+                track_y + 66.0,
+                x_of(playback.range_from + (span * 0.57) as i64),
+                x_of(playback.range_from + (span * 0.73) as i64),
                 "Market opens",
-                shell.danger(),
+                egui::Color32::from_rgb(0xD1, 0x7C, 0xDE),
+                egui::Color32::from_rgb(0x70, 0x40, 0x79),
+                egui::Color32::from_rgb(0x40, 0x2A, 0x47),
             );
+            // 事件点（web `.event-dot`：8px 紫点 + 25% 光环，位于轨道 45% 处）
+            let dot_c = egui::Color32::from_rgb(0xAB, 0x47, 0xBC);
+            let dot_pos = egui::pos2(
+                x_of(playback.range_from + (span * 0.45) as i64),
+                track_y + 50.0,
+            );
+            painter.circle_filled(dot_pos, 7.0, dot_c.linear_multiply(0.25));
+            painter.circle_filled(dot_pos, 4.0, dot_c);
         }
         TimelineLayer::Character | TimelineLayer::Century => {
             // v0.3 顶栏 chip 不再展示这两层，但旧 enum 仍可达，保留简易占位
@@ -450,6 +475,7 @@ fn draw_timeline_tracks(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_mock_event(
     painter: &egui::Painter,
     shell: &UiShell,
@@ -457,14 +483,16 @@ fn draw_mock_event(
     x0: f32,
     x1: f32,
     name: &str,
-    color: egui::Color32,
+    fg: egui::Color32,
+    border: egui::Color32,
+    bg: egui::Color32,
 ) {
     let bar = egui::Rect::from_min_max(egui::pos2(x0, y), egui::pos2(x1.max(x0 + 60.0), y + 18.0));
-    painter.rect_filled(bar, radius::BADGE, color.linear_multiply(0.35));
+    painter.rect_filled(bar, radius::BADGE, bg);
     painter.rect_stroke(
         bar,
         radius::BADGE,
-        egui::Stroke::new(1.0, color),
+        egui::Stroke::new(1.0, border),
         egui::StrokeKind::Inside,
     );
     painter.text(
@@ -472,7 +500,7 @@ fn draw_mock_event(
         egui::Align2::LEFT_CENTER,
         name,
         proportional(shell.scale.micro),
-        shell.t1(),
+        fg,
     );
 }
 

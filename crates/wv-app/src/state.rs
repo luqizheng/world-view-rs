@@ -595,9 +595,10 @@ impl Panel {
     /// 默认尺寸 `[宽, 高]`（设计规格 §3.3「默认宽」列）。
     pub fn default_size(self) -> [f32; 2] {
         match self {
-            Panel::MapTree => [216.0, 330.0],
-            Panel::Layers => [216.0, 168.0],
-            Panel::Brush => [264.0, 220.0],
+            // v0.3-B：宽度对齐 web（.w-tree/.w-layers 204 / .w-brush 274）。
+            Panel::MapTree => [204.0, 330.0],
+            Panel::Layers => [204.0, 168.0],
+            Panel::Brush => [274.0, 220.0],
             Panel::Minimap => [216.0, 300.0],
             Panel::Compass => [216.0, 300.0],
             // 通栏：1280 − 12×2 = 1256。
