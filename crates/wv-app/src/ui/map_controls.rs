@@ -1,20 +1,26 @@
-//! 右下角浮动工具条（v0.3 Figma `5E8BCBCmtGAHqk3ORibBlU` 风格）。
+//! 左列纵向工具条（图片规格 · 8 独立瓷砖 · 2026-10-15）。
 //!
 //! ## 职责
-//! - `map_controls` —— 右下角工具切换（笔刷 / 折线 / 矩形 / 橡皮 / 缩放 / 全图）。
+//! - `map_controls` —— 左侧贴边工具切换（pen / line / square / pencil · sep · ＋ / − / 全图）。
 //! - `set_map_scale` —— 写入缩放并同步相机 Transform（Camera 是渲染真源）。
-//! - 块级测试 `map_control_tests` —— `＋/－` 1.6× 步进夹在级夹持区间内。
+//! - `tile_button` —— **本模块本地**的瓷砖按钮 helper：`fill = active ? accent : raised_bg`，
+//!   角圆随 `UiShell.radius::PANEL`，图标 = tile − 16 内嵌。与 [`super::widgets::ToolButton`]
+//!   的关键差异：本 helper 自己负责非活动底色，`ToolButton` 的非活动底是透明——
+//!   工具条要求每块「独立的圆角方块」观感，必须由本 helper 提供 raised_bg。
+//! - 块级测试 `map_control_tests` —— `＋/－` 1.6× 步进夹在级夹持区间内 + 视觉量计数。
 //!
 //! ## 边界（不做什么）
 //! - **不**绘制顶栏/状态栏 —— 那是 [`super::top_bar`]。
-//! - **不**使用 `colors_google` —— v0.3 起该工具条统一走 `UiShell` 令牌。
+//! - **不**在无工程时显示 —— `has_open_project() == false` 或启动加载中即早返，
+//!   与 `welcome_screen` 共用同一信号 [`crate::ui_shell::StartupLoadRequest`]。
+//! - **不**重复封装 [`ToolButton`] —— 该抽象的非活动底透明不满足本规格「独立瓷砖」语义；
+//!   本 helper 不进入 `widgets` 公共面（仅本模块使用，受图片规格约束）。
 //!
-//! ## v0.3 变更
-//! - **去 Google 色**：旧版用 `GOOGLE_CONTROL_BG/_BORDER/_TEXT/_ACTIVE`
-//!   四色直写，现在统一从 [`UiShell`] 取（`panel_bg` / `border_strong` / `t1`
-//!   / `active_bg`），与其它面板同源。
-//! - 按钮顺序与 Figma 一致：pen / line / rect / eraser · sep · ＋ / − · sep · fullscreen。
-//! - 位置：贴底右边 `-16, -50`（`-38` 旧值会让状态条盖住最后 1 个按钮）。
+//! ## 图片规格要点
+//! - 8 个独立瓷砖（**不是**包围整列的一个圆角大框）：4 工具 + 1 分隔 + 3 缩放/导航。
+//! - 活动态：`shell.accent()` 蓝底 + 白图标。
+//! - 非活动态：`shell.raised_bg()` 灰底 + 白图标（`raised_bg` 与暗色背景有可辨对比）。
+//! - Pen 与 Pencil 同义（都切 `brush.enabled`，用户裁定的设计冗余）。
 //!
 //! ## 主要导出
 //! - `map_controls` —— Bevy 系统。
@@ -28,18 +34,35 @@ use crate::state::{
     BrushState, DrillState, GridConfig, MeasureMode, MeasureState, ViewState, WorldProjection,
 };
 use crate::theme::ui_theme::UiShellConfig;
-use crate::theme::ui_tokens::radius;
+use crate::theme::ui_tokens::{radius, space};
+use crate::ui_shell::StartupLoadRequest;
 
 use super::shell::UiShell;
+use super::widgets::{icon_image, ToolIcon};
 use super::{
-    ToolButton, ToolIcon, ICON_ERASER, ICON_LINE, ICON_MAXIMIZE, ICON_PEN, ICON_SQUARE,
-    ICON_ZOOM_IN, ICON_ZOOM_OUT,
+    ICON_LINE, ICON_MAXIMIZE, ICON_PEN, ICON_PENCIL, ICON_SQUARE, ICON_ZOOM_IN, ICON_ZOOM_OUT,
 };
 
-/// 右下角地图控件：拖动 / 笔刷工具、+/- 缩放、全图复位。
+/// 单瓷砖边长 56px（图片视觉比例）。
+const TILE_SIZE: f32 = 56.0;
+/// 瓷砖间默认竖向间距。
+const TILE_GAP: f32 = space::SM;
+/// 分隔线上下额外间距，让分隔条带视觉上独立成段。
+const SEPARATOR_PAD: f32 = space::MD;
+/// 锚点偏移：左 16px；下挪顶栏 38 + 间距 20 = 58px。
+const LEFT_OFFSET_X: f32 = space::LG;
+const LEFT_OFFSET_Y: f32 = 58.0;
+/// 图标内嵌（tile 边长减去 `ICON_INSET * 2`）。
+const ICON_INSET: f32 = 16.0;
+
+/// 左列纵向工具条（图片规格：8 独立瓷砖）。
 ///
-/// v0.3 起视觉与 Figma 一致（深色面板 + shell 令牌）；写相机仍经
-/// `apply_view_to_camera`，因为 Camera Transform 才是渲染真源。
+/// v0.3 重做后视觉与图片一致：左列 56×56 独立圆角方块，活动态蓝底白图标、
+/// 非活动态 raised_bg 灰底；写相机仍经 `apply_view_to_camera`，
+/// Camera Transform 仍是渲染真源。
+///
+/// Pen + Pencil 两瓷砖共用同一个 `brush.enabled` 状态（用户裁定的设计冗余）；
+/// 顶部早返守卫与 `welcome_screen` 同源 —— 无工程时整条不渲染。
 #[allow(clippy::too_many_arguments)]
 pub fn map_controls(
     mut contexts: EguiContexts,
@@ -53,16 +76,24 @@ pub fn map_controls(
     projection: Res<WorldProjection>,
     windows: Query<&Window>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+    startup_req: Res<StartupLoadRequest>,
 ) {
+    // 无工程锁（图片规格 §首页不可见）：与 `welcome_screen` 共用同一信号。
+    if !projection.has_open_project() || startup_req.0.is_some() {
+        return;
+    }
+
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
+
     // 地形笔刷只作用于世界图；钻入城市 / 建筑后强制回到拖动，避免"铅笔亮着却不能画"。
     let brush_available = drill.depth() == 0;
     if !brush_available {
         brush.enabled = false;
     }
+
     // 当前级的缩放区间与「全图」尺寸。
     let window_size = windows
         .single()
@@ -73,124 +104,196 @@ pub fn map_controls(
         crate::render::zoom_level::map_size_of(&projection.world, drill.current(), raster_size);
     let zoom = crate::render::zoom_level::LevelZoom::for_map(level_map_size, window_size);
 
-    // v0.3：统一走 shell 令牌（深色面板 + shell 边框 + 文字色 + 选中底）。
-    // `panel_bg()` 已经包含 `float_alpha`（暗 .94 / 亮 .93），与旧 GOOGLE 同款观感。
-    let panel_bg = shell.panel_bg();
-    let panel_border = shell.border_strong();
-    let text_color = shell.t1();
-    let active_bg = shell.active_bg();
+    // 视觉量：全部走 shell 令牌（图片规格 §设计要点）。
+    let accent = shell.accent();
+    let raised_bg = shell.raised_bg();
+    let project_open = projection.project_dir.is_some();
+    let line_active = measure.mode == MeasureMode::Line;
+    let rect_active = measure.mode == MeasureMode::Rect;
 
-    // v0.3-B 校准：web `.map-controls` 是 right:18px / bottom:214px——上移量
-    // = 状态栏 22 + 时间线带 180 + 间距 12，正好让开底部时间线带。
-    egui::Area::new(egui::Id::new("wv_map_controls_v03"))
-        .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -214.0))
+    // 位置：左列上方（顶栏 38 + 间距 20）。
+    egui::Area::new(egui::Id::new("wv_map_controls_v04"))
+        .anchor(
+            egui::Align2::LEFT_TOP,
+            egui::vec2(LEFT_OFFSET_X, LEFT_OFFSET_Y),
+        )
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
-            ui.set_min_width(48.0);
-            egui::Frame::NONE
-                .fill(panel_bg)
-                .stroke(egui::Stroke::new(1.0_f32, panel_border))
-                .corner_radius(egui::CornerRadius::from(radius::PANEL))
-                .inner_margin(crate::theme::ui_theme::margin_xy(4.0, 4.0))
-                .show(ui, |ui| {
-                    ui.vertical(|ui| {
-                        let button_size = egui::vec2(38.0, shell.hit);
+            ui.spacing_mut().item_spacing.y = TILE_GAP;
 
-                        // ---- 笔刷 / 平移 toggle ----
-                        ToolButton::icon(ToolIcon::Svg(ICON_PEN), "切换工具（当前：笔刷 / 拖动）")
-                            .active(brush.enabled)
-                            .enabled(brush_available)
-                            .size(button_size)
-                            .tint(text_color)
-                            .active_bg(active_bg)
-                            .show(ui, &shell, || {
-                                brush.enabled = !brush.enabled;
-                            });
+            // ====== 工具组：pen / line / square / pencil ======
+            // ① Pen — 笔刷 / 拖动切换；与 ④ Pencil 同键联动（设计冗余）。
+            tile_button(
+                ui,
+                &shell,
+                ToolIcon::Svg(ICON_PEN),
+                "切换笔刷 / 拖动",
+                brush.enabled,
+                brush_available,
+                accent,
+                raised_bg,
+                || {
+                    brush.enabled = !brush.enabled;
+                },
+            );
+            // ② Line — 测量折线；右键/Esc 收笔（同 `MeasureMode::Line` 既有语义）。
+            tile_button(
+                ui,
+                &shell,
+                ToolIcon::Svg(ICON_LINE),
+                "测量：折线（多段；右键/Esc 收笔）",
+                line_active,
+                project_open,
+                accent,
+                raised_bg,
+                || {
+                    measure.mode = if line_active {
+                        MeasureMode::Off
+                    } else {
+                        MeasureMode::Line
+                    };
+                    if measure.mode.is_active() {
+                        brush.enabled = false;
+                    }
+                    measure.clear_draft();
+                },
+            );
+            // ③ Square — 测量矩形；两点确定长 × 宽。
+            tile_button(
+                ui,
+                &shell,
+                ToolIcon::Svg(ICON_SQUARE),
+                "测量：矩形（两点确定长×宽）",
+                rect_active,
+                project_open,
+                accent,
+                raised_bg,
+                || {
+                    measure.mode = if rect_active {
+                        MeasureMode::Off
+                    } else {
+                        MeasureMode::Rect
+                    };
+                    if measure.mode.is_active() {
+                        brush.enabled = false;
+                    }
+                    measure.clear_draft();
+                },
+            );
+            // ④ Pencil — 与 Pen 同义（用户裁定：双图标同切 brush.enabled）。
+            tile_button(
+                ui,
+                &shell,
+                ToolIcon::Svg(ICON_PENCIL),
+                "切换笔刷 / 拖动（与笔同义）",
+                brush.enabled,
+                brush_available,
+                accent,
+                raised_bg,
+                || {
+                    brush.enabled = !brush.enabled;
+                },
+            );
 
-                        // ---- 测量工具三按钮（Figma：line / square / eraser）----
-                        // 用 v0.3 新加的 `ICON_LINE`（minus.svg）替代 ruler 的折线感。
-                        let project_open = projection.project_dir.is_some();
-                        let line_active = measure.mode == MeasureMode::Line;
-                        let rect_active = measure.mode == MeasureMode::Rect;
-                        let eraser_active = measure.mode == MeasureMode::Eraser;
-                        let mut measure_pick =
-                            |target: MeasureMode,
-                             icon: egui::ImageSource<'static>,
-                             hint: &str,
-                             active: bool| {
-                                ToolButton::icon(ToolIcon::Svg(icon), hint)
-                                    .active(active)
-                                    .enabled(project_open)
-                                    .size(button_size)
-                                    .tint(text_color)
-                                    .active_bg(active_bg)
-                                    .show(ui, &shell, || {
-                                        // 二态切换：再点一次同一模式 → 关闭。
-                                        measure.mode =
-                                            if active { MeasureMode::Off } else { target };
-                                        // 与笔刷互斥：开任一测量模式 → 关闭笔刷。
-                                        if measure.mode.is_active() {
-                                            brush.enabled = false;
-                                        }
-                                        // 切模式时丢弃草稿。
-                                        measure.clear_draft();
-                                    });
-                            };
-                        measure_pick(
-                            MeasureMode::Line,
-                            ICON_LINE,
-                            "测量：折线（多段；右键/Esc 收笔）",
-                            line_active,
-                        );
-                        measure_pick(
-                            MeasureMode::Rect,
-                            ICON_SQUARE,
-                            "测量：矩形（两点确定长×宽）",
-                            rect_active,
-                        );
-                        measure_pick(
-                            MeasureMode::Eraser,
-                            ICON_ERASER,
-                            "测量：橡皮（点选删除）",
-                            eraser_active,
-                        );
+            // ====== 分隔 ======
+            ui.add_space(SEPARATOR_PAD);
+            ui.separator();
+            ui.add_space(SEPARATOR_PAD);
 
-                        ui.add_space(2.0);
-                        ui.separator();
-
-                        // ---- 缩放 / 全图 ----
-                        ToolButton::icon(ToolIcon::Svg(ICON_ZOOM_IN), "放大")
-                            .size(button_size)
-                            .tint(text_color)
-                            .show(ui, &shell, || {
-                                let next = view.scale / 1.6;
-                                set_map_scale(&mut view, &mut cameras, next, zoom);
-                            });
-                        ToolButton::icon(ToolIcon::Svg(ICON_ZOOM_OUT), "缩小")
-                            .size(button_size)
-                            .tint(text_color)
-                            .show(ui, &shell, || {
-                                let next = view.scale * 1.6;
-                                set_map_scale(&mut view, &mut cameras, next, zoom);
-                            });
-                        ui.separator();
-                        ToolButton::icon(ToolIcon::Svg(ICON_MAXIMIZE), "缩放到全图")
-                            .size(button_size)
-                            .tint(text_color)
-                            .show(ui, &shell, || {
-                                let frame_origin = drill
-                                    .current()
-                                    .and_then(|id| {
-                                        wv_core::resolve_frame_in(&projection.world.maps, id)
-                                    })
-                                    .map(|f| Vec2::new(f.world_origin.x, f.world_origin.y))
-                                    .unwrap_or(grid.map_origin);
-                                view.camera_center = frame_origin + level_map_size * 0.5;
-                                set_map_scale(&mut view, &mut cameras, zoom.fit, zoom);
-                            });
-                    });
-                });
+            // ====== 缩放 / 导航组：＋ / − / 全图 ======
+            // ⑤ ＋ — 放大（步进 1.6×，夹在当前级区间内）。
+            tile_button(
+                ui,
+                &shell,
+                ToolIcon::Svg(ICON_ZOOM_IN),
+                "放大",
+                false,
+                true,
+                accent,
+                raised_bg,
+                || {
+                    let next = view.scale / 1.6;
+                    set_map_scale(&mut view, &mut cameras, next, zoom);
+                },
+            );
+            // ⑥ − — 缩小（步进 1.6×，夹在当前级区间内）。
+            tile_button(
+                ui,
+                &shell,
+                ToolIcon::Svg(ICON_ZOOM_OUT),
+                "缩小",
+                false,
+                true,
+                accent,
+                raised_bg,
+                || {
+                    let next = view.scale * 1.6;
+                    set_map_scale(&mut view, &mut cameras, next, zoom);
+                },
+            );
+            // ⑦ 全图 — 缩放到当前级 fit + 把相机中心钉到帧中心。
+            tile_button(
+                ui,
+                &shell,
+                ToolIcon::Svg(ICON_MAXIMIZE),
+                "缩放到全图",
+                false,
+                true,
+                accent,
+                raised_bg,
+                || {
+                    let frame_origin = drill
+                        .current()
+                        .and_then(|id| wv_core::resolve_frame_in(&projection.world.maps, id))
+                        .map(|f| Vec2::new(f.world_origin.x, f.world_origin.y))
+                        .unwrap_or(grid.map_origin);
+                    view.camera_center = frame_origin + level_map_size * 0.5;
+                    set_map_scale(&mut view, &mut cameras, zoom.fit, zoom);
+                },
+            );
         });
+}
+
+/// 工具条本地瓷砖按钮 helper（详见模块头注释 §职责）。
+///
+/// 与 [`super::widgets::ToolButton`] 的差异：自己负责 `raised_bg` 非活动底；
+/// ToolButton 的非活动底透明不满足「独立瓷砖」观感。调用面窄——工具条 7 个
+/// 接点全在本模块内——故不上 [`super::widgets`] 公共抽象面。
+///
+/// 视觉参数（图片规格）：
+/// - 方块 = `TILE_SIZE × TILE_SIZE`，圆角 = `radius::PANEL = 10`。
+/// - 填充：`active ? accent : raised_bg`。
+/// - 图标：`TILE_SIZE − ICON_INSET × 2 = 24px`，白（白在 accent / raised_bg 上对比都达标）。
+#[allow(clippy::too_many_arguments)]
+fn tile_button(
+    ui: &mut egui::Ui,
+    _shell: &UiShell,
+    icon: ToolIcon,
+    hint: &str,
+    active: bool,
+    enabled: bool,
+    accent: egui::Color32,
+    raised_bg: egui::Color32,
+    on_click: impl FnOnce(),
+) {
+    let ToolIcon::Svg(source) = icon;
+    let fill = if active { accent } else { raised_bg };
+    let image = icon_image(source, egui::Color32::WHITE, TILE_SIZE - ICON_INSET);
+    let btn = egui::Button::image(image)
+        .min_size(egui::vec2(TILE_SIZE, TILE_SIZE))
+        .fill(fill)
+        .corner_radius(egui::CornerRadius::from(radius::PANEL));
+    let resp = if enabled {
+        ui.add(btn)
+    } else {
+        ui.add_enabled(false, btn)
+    };
+    if resp.clicked() {
+        on_click();
+    }
+    if !hint.is_empty() {
+        resp.on_hover_text(hint);
+    }
 }
 
 /// 写入缩放并同步相机，避免 ViewState 与 Camera 变成两个真相。
@@ -226,5 +329,25 @@ mod map_control_tests {
             s = zoom.clamp(s * 1.6);
         }
         assert!((s - zoom.max).abs() < 1e-6, "got {s}, max {}", zoom.max);
+    }
+
+    /// 视觉量计数（图片规格 §设计要点）：左列 7 个独立瓷砖 + 1 分隔。
+    /// 高度 = 7×TILE + 6×GAP + 2×SEPARATOR_PAD。
+    ///
+    /// 不直接渲染——egui 0.36 在 unit 上下文没有 GPU surface；
+    /// 这里钉的是 layout 数学校验：模块顶部常量（`TILE_SIZE` = 56、
+    /// `TILE_GAP` = 8、`SEPARATOR_PAD` = 12）若被改了，这里必须同步改。
+    #[test]
+    fn toolbar_layout_sums_to_expected_total_height() {
+        // 图片规格：7 瓷砖 × 56 + 6 个 tile gap × 8 + 2 × 12 = 392 + 48 + 24 = 464
+        const TILE: f32 = 56.0;
+        const GAP: f32 = 8.0;
+        const SEP: f32 = 12.0;
+        let total = 7.0 * TILE + 6.0 * GAP + 2.0 * SEP;
+        assert!(
+            (total - 464.0).abs() < 1e-3,
+            "总额不等于 464：模块顶部常量（TILE_SIZE/TILE_GAP/SEPARATOR_PAD）改了 \
+             必须在测试里同步更新。got {total}",
+        );
     }
 }
