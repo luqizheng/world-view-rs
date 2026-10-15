@@ -260,6 +260,7 @@ pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8) {
 /// ① 窗体多出一整行高度；② 折叠后只剩空标题栏，看不出折起来的是哪个面板。
 /// 把「图标 + 标题」直接交给 `Window::new`（egui 0.36 的标题栏布局是
 /// 「▼ … 标题 … ×」），两个问题同时消失。`panel_header` 自绘行随之退役。
+#[allow(clippy::too_many_arguments)]
 pub fn float_window(
     ctx: &egui::Context,
     shell: &UiShell,
@@ -267,6 +268,7 @@ pub fn float_window(
     panels: &mut PanelState,
     panel: Panel,
     tag: Option<(BadgeKind, String)>,
+    loc: crate::i18n::Locale,
     body: impl FnOnce(&mut egui::Ui),
 ) {
     if !panels.is_visible(panel) {
@@ -280,7 +282,7 @@ pub fn float_window(
     // 沉浸模式：整体淡化但**仍可交互**（D3：状态永不抑制）。
     let alpha = if panels.immersive { 0.10 } else { 0.96 };
 
-    let win = egui::Window::new(format!("{} {}", panel.icon(), panel.title()))
+    let win = egui::Window::new(format!("{} {}", panel.icon(), panel.title(loc)))
         .id(id)
         .open(&mut open)
         .default_pos(egui::pos2(layout.x, layout.y))

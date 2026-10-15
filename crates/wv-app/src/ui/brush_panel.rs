@@ -54,6 +54,7 @@ pub fn panel_brush(
         &mut panels,
         Panel::Brush,
         None,
+        current_loc.0,
         |ui| {
             ui.checkbox(
                 &mut brush.enabled,

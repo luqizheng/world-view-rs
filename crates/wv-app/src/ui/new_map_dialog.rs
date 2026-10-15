@@ -213,7 +213,7 @@ pub fn new_map_dialog(
                 // 空世界的第一张图必须是世界图——它是钻取树的根（ensure_root
                 // 只认 level == World），别的层级在树下无处可挂。
                 if first_map {
-                    ui.label(map_level_label(MapLevel::World))
+                    ui.label(map_level_label(MapLevel::World, current_loc.0))
                         .on_hover_text(t_key(
                             &current_loc,
                             I18nKey::NewMapDialogLevelFirstMapHover,
@@ -225,7 +225,11 @@ pub fn new_map_dialog(
                         MapLevel::City,
                         MapLevel::Interior,
                     ] {
-                        ui.selectable_value(&mut dialog.level, l, map_level_label(l));
+                        ui.selectable_value(
+                            &mut dialog.level,
+                            l,
+                            map_level_label(l, current_loc.0),
+                        );
                     }
                 }
             });

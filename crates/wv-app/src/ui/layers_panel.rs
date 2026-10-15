@@ -15,6 +15,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
+use crate::i18n::CurrentLocale;
 use crate::state::{Panel, PanelState, ViewState};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::space;
@@ -30,6 +31,7 @@ pub fn panel_map_tree(
     layouts: Res<LayoutFile>,
     mut panels: ResMut<PanelState>,
     view: Res<ViewState>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -42,6 +44,7 @@ pub fn panel_map_tree(
         &mut panels,
         Panel::MapTree,
         None,
+        current_loc.0,
         |ui| {
             let resp = list_item(
                 ui,
@@ -69,6 +72,7 @@ pub fn panel_layers(
     layouts: Res<LayoutFile>,
     mut panels: ResMut<PanelState>,
     mut view: ResMut<ViewState>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -81,6 +85,7 @@ pub fn panel_layers(
         &mut panels,
         Panel::Layers,
         None,
+        current_loc.0,
         |ui| {
             ui.checkbox(&mut view.terrain_visible, "地形");
             // 底图淡化：把瓦片图集向纸面色拉，让路线/地标压得住底图。

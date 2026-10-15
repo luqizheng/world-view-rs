@@ -39,13 +39,14 @@ pub enum TimelineLayer {
 }
 
 impl TimelineLayer {
-    /// 层名。
-    pub fn label(self) -> &'static str {
+    /// 层名（ADR-0018：locale-dependent 文案查表）。
+    pub fn label(self, loc: crate::i18n::Locale) -> &'static str {
+        use crate::i18n::{t, I18nKey};
         match self {
-            TimelineLayer::Day => "日",
-            TimelineLayer::Situation => "事态",
-            TimelineLayer::Character => "人物",
-            TimelineLayer::Century => "世纪",
+            TimelineLayer::Day => t(loc, I18nKey::TimelineLayerDay),
+            TimelineLayer::Situation => t(loc, I18nKey::TimelineLayerSituation),
+            TimelineLayer::Character => t(loc, I18nKey::TimelineLayerCharacter),
+            TimelineLayer::Century => t(loc, I18nKey::TimelineLayerCentury),
         }
     }
     /// 全部层。
@@ -70,6 +71,7 @@ pub fn panel_timeline(
     projection: Res<WorldProjection>,
     mut layer: Local<TimelineLayer>,
     mut open_event: Local<bool>,
+    current_loc: Res<crate::i18n::CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -134,7 +136,7 @@ pub fn panel_timeline(
                     ui.add_space(space::SM);
                     for l in TimelineLayer::ALL {
                         let sel = *layer == l;
-                        if ui.selectable_label(sel, l.label()).clicked() {
+                        if ui.selectable_label(sel, l.label(current_loc.0)).clicked() {
                             *layer = l;
                         }
                     }

@@ -1,4 +1,4 @@
-﻿//! 项目管理菜单（v0.2 §A）+ 面包屑（v0.2 §B.3）。
+//! 项目管理菜单（v0.2 §A）+ 面包屑（v0.2 §B.3）。
 //!
 //! ## 职责
 //! - `ProjectMenuState` —— 跨帧高亮项（egui `Popup::Memory` 只存开关，不存选中行）。
@@ -69,6 +69,7 @@ pub(crate) fn project_menu_inner(
     recents: &[RecentProject],
     panels: &mut PanelState,
     state: &mut ProjectMenuState,
+    loc: crate::i18n::Locale,
 ) {
     let name = projection
         .world
@@ -200,7 +201,7 @@ pub(crate) fn project_menu_inner(
             menu_section(ui, shell, "面板");
             for p in Panel::ALL {
                 let mut on = panels.is_visible(p);
-                if ui.checkbox(&mut on, p.title()).changed() {
+                if ui.checkbox(&mut on, p.title(loc)).changed() {
                     panels.set_visible(p, on);
                 }
             }
@@ -295,6 +296,7 @@ pub fn breadcrumb(
     projection: Res<WorldProjection>,
     mut drill: ResMut<DrillState>,
     panels: Res<PanelState>,
+    current_loc: Res<crate::i18n::CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -318,7 +320,13 @@ pub fn breadcrumb(
     }
     let lod = drill
         .current_node(&projection.world)
-        .map(|n| format!("{} · {}", n.name, crate::state::map_level_label(n.level)))
+        .map(|n| {
+            format!(
+                "{} · {}",
+                n.name,
+                crate::state::map_level_label(n.level, current_loc.0)
+            )
+        })
         .unwrap_or_default();
 
     let mut jump: Option<usize> = None;

@@ -116,6 +116,52 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::BrushFinishLineBtn => "结束连线",
         I18nKey::BrushUndoLastSegmentBtn => "撤销上一段",
         I18nKey::BrushHintRadiusShortcut => "Ctrl+滚轮改半径",
+
+        // ── 视图模式 ──
+        I18nKey::ViewModeVectorFlat => "矢量地形",
+        I18nKey::ViewModeGoogleMap => "地图",
+        I18nKey::ViewModeRealTerrain => "真实地形",
+        I18nKey::ViewModeSchematic => "色块地形",
+        I18nKey::ViewModeFaction => "势力图",
+        I18nKey::ViewModeEvent => "事件图",
+        I18nKey::ViewModeCoastline => "轮廓图",
+
+        // ── 图层面板标题 ──
+        I18nKey::PanelMapTree => "地图树",
+        I18nKey::PanelLayers => "图层管理",
+        I18nKey::PanelBrush => "地形设计器",
+        I18nKey::PanelInspector => "属性检查器",
+        I18nKey::PanelTimeline => "时间轴",
+        I18nKey::PanelFaction => "势力编辑",
+        I18nKey::PanelRegion => "区域编辑",
+        I18nKey::PanelSituation => "事态登记",
+        I18nKey::PanelValidation => "校验面板",
+        I18nKey::PanelMinimap => "小地图",
+        I18nKey::PanelCompass => "指南针",
+        I18nKey::PanelCharacter => "人物登记",
+        I18nKey::PanelEvent => "事件登记",
+
+        // ── 地图层级 ──
+        I18nKey::MapLevelWorld => "世界",
+        I18nKey::MapLevelRegion => "区域",
+        I18nKey::MapLevelCity => "城市",
+        I18nKey::MapLevelInterior => "建筑内",
+
+        // ── 命令面板分组 ──
+        I18nKey::CommandGroupProject => "项目",
+        I18nKey::CommandGroupView => "视图",
+        I18nKey::CommandGroupEdit => "编辑",
+        I18nKey::CommandGroupPanel => "面板",
+        I18nKey::CommandGroupTime => "时间",
+        I18nKey::CommandGroupInterface => "界面",
+        I18nKey::CommandGroupObject => "对象",
+        I18nKey::CommandGroupNavigation => "导航",
+
+        // ── 时间轴层 ──
+        I18nKey::TimelineLayerDay => "日",
+        I18nKey::TimelineLayerSituation => "事态",
+        I18nKey::TimelineLayerCharacter => "人物",
+        I18nKey::TimelineLayerCentury => "世纪",
     }
 }
 
@@ -220,5 +266,51 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::BrushFinishLineBtn => "Finish line",
         I18nKey::BrushUndoLastSegmentBtn => "Undo last segment",
         I18nKey::BrushHintRadiusShortcut => "Ctrl + wheel to change radius",
+
+        // ── View modes ──
+        I18nKey::ViewModeVectorFlat => "Vector terrain",
+        I18nKey::ViewModeGoogleMap => "Map",
+        I18nKey::ViewModeRealTerrain => "Real terrain",
+        I18nKey::ViewModeSchematic => "Flat-shaded terrain",
+        I18nKey::ViewModeFaction => "Faction map",
+        I18nKey::ViewModeEvent => "Event map",
+        I18nKey::ViewModeCoastline => "Coastline",
+
+        // ── Panel titles ──
+        I18nKey::PanelMapTree => "Map tree",
+        I18nKey::PanelLayers => "Layers",
+        I18nKey::PanelBrush => "Terrain designer",
+        I18nKey::PanelInspector => "Inspector",
+        I18nKey::PanelTimeline => "Timeline",
+        I18nKey::PanelFaction => "Faction editor",
+        I18nKey::PanelRegion => "Region editor",
+        I18nKey::PanelSituation => "Situation log",
+        I18nKey::PanelValidation => "Validation",
+        I18nKey::PanelMinimap => "Minimap",
+        I18nKey::PanelCompass => "Compass",
+        I18nKey::PanelCharacter => "Character log",
+        I18nKey::PanelEvent => "Event log",
+
+        // ── Map levels ──
+        I18nKey::MapLevelWorld => "World",
+        I18nKey::MapLevelRegion => "Region",
+        I18nKey::MapLevelCity => "City",
+        I18nKey::MapLevelInterior => "Interior",
+
+        // ── Command palette groups ──
+        I18nKey::CommandGroupProject => "Project",
+        I18nKey::CommandGroupView => "View",
+        I18nKey::CommandGroupEdit => "Edit",
+        I18nKey::CommandGroupPanel => "Panels",
+        I18nKey::CommandGroupTime => "Time",
+        I18nKey::CommandGroupInterface => "Interface",
+        I18nKey::CommandGroupObject => "Object",
+        I18nKey::CommandGroupNavigation => "Navigation",
+
+        // ── Timeline layers ──
+        I18nKey::TimelineLayerDay => "Day",
+        I18nKey::TimelineLayerSituation => "Situation",
+        I18nKey::TimelineLayerCharacter => "Character",
+        I18nKey::TimelineLayerCentury => "Century",
     }
 }

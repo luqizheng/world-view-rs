@@ -209,11 +209,93 @@ pub enum I18nKey {
     BrushUndoLastSegmentBtn,
     /// 「Ctrl+滚轮改半径」底部提示
     BrushHintRadiusShortcut,
+
+    // ── 视图模式（state::ViewMode） ──────────────────────────────────
+    /// 「矢量地形」顶栏视图段（与 BROWSING 一致）
+    ViewModeVectorFlat,
+    /// 「地图」GoogleMap
+    ViewModeGoogleMap,
+    /// 「真实地形」RealTerrain
+    ViewModeRealTerrain,
+    /// 「色块地形」Schematic
+    ViewModeSchematic,
+    /// 「势力图」Faction
+    ViewModeFaction,
+    /// 「事件图」Event
+    ViewModeEvent,
+    /// 「轮廓图」Coastline
+    ViewModeCoastline,
+
+    // ── 图层面板（state::Panel::title） ─────────────────────────────
+    /// 「地图树」面板标题
+    PanelMapTree,
+    /// 「图层管理」面板标题
+    PanelLayers,
+    /// 「地形设计器」面板标题
+    PanelBrush,
+    /// 「属性检查器」面板标题
+    PanelInspector,
+    /// 「时间轴」面板标题
+    PanelTimeline,
+    /// 「势力编辑」面板标题
+    PanelFaction,
+    /// 「区域编辑」面板标题
+    PanelRegion,
+    /// 「事态登记」面板标题
+    PanelSituation,
+    /// 「校验面板」面板标题
+    PanelValidation,
+    /// 「小地图」面板标题
+    PanelMinimap,
+    /// 「指南针」面板标题
+    PanelCompass,
+    /// 「人物登记」面板标题
+    PanelCharacter,
+    /// 「事件登记」面板标题
+    PanelEvent,
+
+    // ── 地图层级（state::map_level_label） ──────────────────────────
+    /// 「世界」MapLevel
+    MapLevelWorld,
+    /// 「区域」MapLevel
+    MapLevelRegion,
+    /// 「城市」MapLevel
+    MapLevelCity,
+    /// 「建筑内」MapLevel
+    MapLevelInterior,
+
+    // ── 命令面板分组（ui_command_palette::CommandGroup） ─────────────
+    /// 「项目」命令分组
+    CommandGroupProject,
+    /// 「视图」命令分组
+    CommandGroupView,
+    /// 「编辑」命令分组
+    CommandGroupEdit,
+    /// 「面板」命令分组
+    CommandGroupPanel,
+    /// 「时间」命令分组
+    CommandGroupTime,
+    /// 「界面」命令分组
+    CommandGroupInterface,
+    /// 「对象」命令分组
+    CommandGroupObject,
+    /// 「导航」命令分组
+    CommandGroupNavigation,
+
+    // ── 时间轴层（ui::timeline::TimelineLayer） ─────────────────────
+    /// 「日」TimelineLayer
+    TimelineLayerDay,
+    /// 「事态」TimelineLayer
+    TimelineLayerSituation,
+    /// 「人物」TimelineLayer
+    TimelineLayerCharacter,
+    /// 「世纪」TimelineLayer
+    TimelineLayerCentury,
 }
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 85] = [
+    pub const ALL: [I18nKey; 121] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -306,5 +388,46 @@ impl I18nKey {
         I18nKey::BrushFinishLineBtn,
         I18nKey::BrushUndoLastSegmentBtn,
         I18nKey::BrushHintRadiusShortcut,
+        // 视图模式（7）
+        I18nKey::ViewModeVectorFlat,
+        I18nKey::ViewModeGoogleMap,
+        I18nKey::ViewModeRealTerrain,
+        I18nKey::ViewModeSchematic,
+        I18nKey::ViewModeFaction,
+        I18nKey::ViewModeEvent,
+        I18nKey::ViewModeCoastline,
+        // 图层面板（13）
+        I18nKey::PanelMapTree,
+        I18nKey::PanelLayers,
+        I18nKey::PanelBrush,
+        I18nKey::PanelInspector,
+        I18nKey::PanelTimeline,
+        I18nKey::PanelFaction,
+        I18nKey::PanelRegion,
+        I18nKey::PanelSituation,
+        I18nKey::PanelValidation,
+        I18nKey::PanelMinimap,
+        I18nKey::PanelCompass,
+        I18nKey::PanelCharacter,
+        I18nKey::PanelEvent,
+        // 地图层级（4）
+        I18nKey::MapLevelWorld,
+        I18nKey::MapLevelRegion,
+        I18nKey::MapLevelCity,
+        I18nKey::MapLevelInterior,
+        // 命令面板分组（8）
+        I18nKey::CommandGroupProject,
+        I18nKey::CommandGroupView,
+        I18nKey::CommandGroupEdit,
+        I18nKey::CommandGroupPanel,
+        I18nKey::CommandGroupTime,
+        I18nKey::CommandGroupInterface,
+        I18nKey::CommandGroupObject,
+        I18nKey::CommandGroupNavigation,
+        // 时间轴层（4）
+        I18nKey::TimelineLayerDay,
+        I18nKey::TimelineLayerSituation,
+        I18nKey::TimelineLayerCharacter,
+        I18nKey::TimelineLayerCentury,
     ];
 }

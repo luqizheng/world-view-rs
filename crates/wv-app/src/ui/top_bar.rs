@@ -76,7 +76,7 @@ pub fn top_bar(
                 ui.add_space(space::MD);
 
                 // ── 主控（视图模式分段控件，权重最高）──
-                view_mode_segment(ui, &shell, &mut view);
+                view_mode_segment(ui, &shell, &mut view, current_loc.0);
                 ui.add_space(space::SM);
                 // ── 地图主题（ADR-0014：日间古舆图 / 暮色旧纸，与技法正交）──
                 map_palette_segment(ui, &shell, &mut view);
@@ -121,7 +121,7 @@ fn identity_segment(
     current_loc: &CurrentLocale,
 ) {
     // 项目管理菜单（v0.2 §A）。入口就是工程名本身——不用固定菜单栏（§3.2 三段式密度）。
-    project_menu_inner(ui, shell, projection, recents, panels, menu);
+    project_menu_inner(ui, shell, projection, recents, panels, menu, current_loc.0);
 
     // 脏标记 / 保存状态（§A：切换工程后徽标变「已加载」）。
     let label = if projection.dirty {
@@ -149,7 +149,7 @@ fn identity_segment(
     }
 }
 
-fn view_mode_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
+fn view_mode_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState, loc: Locale) {
     let total = ui.available_width();
     // 分段控件：等分 `ViewMode::BROWSING`（2026-10-14 起只开放两种，见 state.rs）。
     // 宽度按分段数缩放，clamp 上下限保证每段仍有 ≥ 55px 可点区域。
@@ -182,7 +182,7 @@ fn view_mode_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
         painter.text(
             r.center(),
             egui::Align2::CENTER_CENTER,
-            mode.label(),
+            mode.label(loc),
             proportional(font_size::SMALL),
             fg,
         );

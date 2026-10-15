@@ -18,6 +18,7 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::edit::editing::EditHistory;
+use crate::i18n::CurrentLocale;
 use crate::state::{DrillState, Panel, PanelState, WorldProjection};
 use crate::theme::ui_theme::{mono, proportional, UiShellConfig};
 use crate::theme::ui_tokens::space;
@@ -30,6 +31,7 @@ use super::widgets::{empty_state, float_window};
 ///
 /// 圆形罗盘 + 可拖拽指针 + 数值输入。朝向 = 地图屏幕旋转角（度）：
 /// `0.0` = 正北朝上，正值 = 顺时针偏转。
+#[allow(clippy::too_many_arguments)]
 pub fn panel_compass(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,
@@ -38,6 +40,7 @@ pub fn panel_compass(
     drill: Res<DrillState>,
     mut projection: ResMut<WorldProjection>,
     mut edit: ResMut<EditHistory>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -50,6 +53,7 @@ pub fn panel_compass(
         &mut panels,
         Panel::Compass,
         None,
+        current_loc.0,
         |ui| {
             // 取当前地图朝向；无地图时显示空状态。
             let Some(node) = drill.current_node(&projection.world) else {

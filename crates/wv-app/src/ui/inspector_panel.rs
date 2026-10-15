@@ -14,6 +14,7 @@
 use bevy::prelude::*;
 use bevy_egui::EguiContexts;
 
+use crate::i18n::CurrentLocale;
 use crate::state::{Panel, PanelState};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::ui_layout::LayoutFile;
@@ -26,6 +27,7 @@ pub fn panel_inspector(
     shell_cfg: Res<UiShellConfig>,
     layouts: Res<LayoutFile>,
     mut panels: ResMut<PanelState>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -38,6 +40,7 @@ pub fn panel_inspector(
         &mut panels,
         Panel::Inspector,
         None,
+        current_loc.0,
         |ui| {
             if empty_state(
                 ui,

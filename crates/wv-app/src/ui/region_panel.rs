@@ -15,6 +15,7 @@ use bevy_egui::{egui, EguiContexts};
 
 use crate::edit::editing;
 use crate::edit::region_panel_actions;
+use crate::i18n::CurrentLocale;
 use crate::state::{Panel, PanelState, ViewState, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::space;
@@ -33,6 +34,7 @@ pub fn panel_region(
     view: Res<ViewState>,
     mut projection: ResMut<WorldProjection>,
     mut edit: ResMut<editing::EditHistory>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -46,6 +48,7 @@ pub fn panel_region(
         &mut panels,
         Panel::Region,
         None,
+        current_loc.0,
         |ui| {
             ui.horizontal(|ui| {
                 if ui.button("+ 新建区域").clicked() {

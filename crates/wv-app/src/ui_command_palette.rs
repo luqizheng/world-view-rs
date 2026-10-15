@@ -40,17 +40,18 @@ pub enum CommandGroup {
 }
 
 impl CommandGroup {
-    /// 分组标题。
-    pub fn title(self) -> &'static str {
+    /// 分组标题（ADR-0018：locale-dependent 文案查表）。
+    pub fn title(self, loc: crate::i18n::Locale) -> &'static str {
+        use crate::i18n::{t, I18nKey};
         match self {
-            CommandGroup::Project => "项目",
-            CommandGroup::View => "视图",
-            CommandGroup::Edit => "编辑",
-            CommandGroup::Panel => "面板",
-            CommandGroup::Time => "时间",
-            CommandGroup::Interface => "界面",
-            CommandGroup::Object => "对象",
-            CommandGroup::Navigation => "导航",
+            CommandGroup::Project => t(loc, I18nKey::CommandGroupProject),
+            CommandGroup::View => t(loc, I18nKey::CommandGroupView),
+            CommandGroup::Edit => t(loc, I18nKey::CommandGroupEdit),
+            CommandGroup::Panel => t(loc, I18nKey::CommandGroupPanel),
+            CommandGroup::Time => t(loc, I18nKey::CommandGroupTime),
+            CommandGroup::Interface => t(loc, I18nKey::CommandGroupInterface),
+            CommandGroup::Object => t(loc, I18nKey::CommandGroupObject),
+            CommandGroup::Navigation => t(loc, I18nKey::CommandGroupNavigation),
         }
     }
 
@@ -160,7 +161,10 @@ impl Command {
         }
         let q = query.to_lowercase();
         self.label.to_lowercase().contains(&q)
-            || self.group.title().contains(&q)
+            || self
+                .group
+                .title(crate::i18n::Locale::default())
+                .contains(&q)
             || self.keys.unwrap_or("").to_lowercase().contains(&q)
     }
 }
@@ -479,7 +483,7 @@ mod tests {
             assert!(
                 all.iter().any(|c| c.id == CommandId::TogglePanel(p)),
                 "面板 {} 未注册命令",
-                p.title()
+                p.title(crate::i18n::Locale::default())
             );
         }
         for i in 0..crate::state::ViewMode::BROWSING.len() as u8 {
@@ -538,7 +542,7 @@ mod tests {
             assert!(
                 all.iter().any(|c| c.group == g),
                 "分组「{}」没有任何命令",
-                g.title()
+                g.title(crate::i18n::Locale::default())
             );
         }
     }

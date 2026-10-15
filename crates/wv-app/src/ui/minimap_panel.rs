@@ -15,6 +15,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
+use crate::i18n::CurrentLocale;
 use crate::state::{GridConfig, Panel, PanelState, ViewState};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::{radius, space};
@@ -34,6 +35,7 @@ pub fn panel_minimap(
     grid: Res<GridConfig>,
     tex: Res<crate::render::terrain_view::TerrainTexture>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     // 小地图缩略图直接复用大地图的地形纹理（同一 Handle，零额外上传）。
@@ -49,6 +51,7 @@ pub fn panel_minimap(
         &mut panels,
         Panel::Minimap,
         None,
+        current_loc.0,
         |ui| {
             let side = 168.0;
             let (rect, response) =

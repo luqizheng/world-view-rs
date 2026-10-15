@@ -17,6 +17,7 @@ use bevy_egui::{egui, EguiContexts};
 
 use crate::edit::editing;
 use crate::edit::faction_panel_actions;
+use crate::i18n::CurrentLocale;
 use crate::state::{Panel, PanelState, PlaybackState, ViewState, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::space;
@@ -36,6 +37,7 @@ pub fn panel_faction(
     playback: Res<PlaybackState>,
     mut projection: ResMut<WorldProjection>,
     mut edit: ResMut<editing::EditHistory>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -49,6 +51,7 @@ pub fn panel_faction(
         &mut panels,
         Panel::Faction,
         None,
+        current_loc.0,
         |ui| {
             ui.horizontal(|ui| {
                 if ui.button("+ 新建势力").clicked() {

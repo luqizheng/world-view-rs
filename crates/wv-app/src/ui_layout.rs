@@ -213,8 +213,8 @@ mod tests {
                 assert!(
                     !overlap,
                     "{} 与 {} 默认矩形重叠: ({:.0},{:.0},{:.0},{:.0}) vs ({:.0},{:.0},{:.0},{:.0})",
-                    a.title(),
-                    b.title(),
+                    a.title(crate::i18n::Locale::default()),
+                    b.title(crate::i18n::Locale::default()),
                     la.x,
                     la.y,
                     la.width,

@@ -17,6 +17,7 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::edit::validation_actions;
+use crate::i18n::CurrentLocale;
 use crate::state::{
     Panel, PanelState, PlaybackState, ProjectDiagnostics, ViewState, WorldProjection,
 };
@@ -40,6 +41,7 @@ pub fn panel_validation(
     mut view: ResMut<ViewState>,
     mut playback: ResMut<PlaybackState>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -55,6 +57,7 @@ pub fn panel_validation(
         &mut panels,
         Panel::Validation,
         None,
+        current_loc.0,
         |ui| {
             // 顶部状态条：错误用 Err 徽标，提示用 Warn 徽标。
             if n_errors > 0 {

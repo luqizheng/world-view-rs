@@ -183,18 +183,19 @@ impl ViewMode {
     /// [`Self::ALL`] 与枚举里（数据层纹理管线仍支持，随时可重新开放）。
     pub const BROWSING: [ViewMode; 2] = [ViewMode::VectorFlat, ViewMode::Schematic];
 
-    /// 顶栏显示名。
-    pub fn label(self) -> &'static str {
+    /// 顶栏显示名（ADR-0018：locale-dependent 文案查表）。
+    pub fn label(self, loc: crate::i18n::Locale) -> &'static str {
+        use crate::i18n::{t, I18nKey};
         match self {
             // 2026-10-14 用户裁定：浏览态主打模式定名「矢量地形」（此前叫
             // 「等值线」——等值线只是它的描边产物，名字该描述整体观感）。
-            ViewMode::VectorFlat => "矢量地形",
-            ViewMode::GoogleMap => "地图",
-            ViewMode::RealTerrain => "真实地形",
-            ViewMode::Schematic => "色块地形",
-            ViewMode::Faction => "势力图",
-            ViewMode::Event => "事件图",
-            ViewMode::Coastline => "轮廓图",
+            ViewMode::VectorFlat => t(loc, I18nKey::ViewModeVectorFlat),
+            ViewMode::GoogleMap => t(loc, I18nKey::ViewModeGoogleMap),
+            ViewMode::RealTerrain => t(loc, I18nKey::ViewModeRealTerrain),
+            ViewMode::Schematic => t(loc, I18nKey::ViewModeSchematic),
+            ViewMode::Faction => t(loc, I18nKey::ViewModeFaction),
+            ViewMode::Event => t(loc, I18nKey::ViewModeEvent),
+            ViewMode::Coastline => t(loc, I18nKey::ViewModeCoastline),
         }
     }
 }
@@ -540,22 +541,23 @@ impl Panel {
         Panel::Validation,
     ];
 
-    /// 菜单 / 标题显示名。
-    pub fn title(self) -> &'static str {
+    /// 菜单 / 标题显示名（ADR-0018：locale-dependent 文案查表）。
+    pub fn title(self, loc: crate::i18n::Locale) -> &'static str {
+        use crate::i18n::{t, I18nKey};
         match self {
-            Panel::MapTree => "地图树",
-            Panel::Layers => "图层管理",
-            Panel::Brush => "地形设计器",
-            Panel::Inspector => "属性检查器",
-            Panel::Timeline => "时间轴",
-            Panel::Faction => "势力编辑",
-            Panel::Region => "区域编辑",
-            Panel::Situation => "事态登记",
-            Panel::Validation => "校验面板",
-            Panel::Minimap => "小地图",
-            Panel::Compass => "指南针",
-            Panel::Character => "人物登记",
-            Panel::Event => "事件登记",
+            Panel::MapTree => t(loc, I18nKey::PanelMapTree),
+            Panel::Layers => t(loc, I18nKey::PanelLayers),
+            Panel::Brush => t(loc, I18nKey::PanelBrush),
+            Panel::Inspector => t(loc, I18nKey::PanelInspector),
+            Panel::Timeline => t(loc, I18nKey::PanelTimeline),
+            Panel::Faction => t(loc, I18nKey::PanelFaction),
+            Panel::Region => t(loc, I18nKey::PanelRegion),
+            Panel::Situation => t(loc, I18nKey::PanelSituation),
+            Panel::Validation => t(loc, I18nKey::PanelValidation),
+            Panel::Minimap => t(loc, I18nKey::PanelMinimap),
+            Panel::Compass => t(loc, I18nKey::PanelCompass),
+            Panel::Character => t(loc, I18nKey::PanelCharacter),
+            Panel::Event => t(loc, I18nKey::PanelEvent),
         }
     }
 
@@ -719,17 +721,18 @@ impl PanelState {
 // 地图三级钻取（v0.2 §B）
 // ---------------------------------------------------------------------------
 
-/// 图层级别的显示名。
+/// 图层级别的显示名（ADR-0018：locale-dependent 文案查表）。
 ///
 /// 放在 UI 层而不是给 `wv_core::map::MapLevel` 加 `label()`：数据层不该出现
 /// 面向作者的中文文案（AGENTS §2 依赖方向，文案是外壳关注点）。
-pub fn map_level_label(level: wv_core::map::MapLevel) -> &'static str {
+pub fn map_level_label(level: wv_core::map::MapLevel, loc: crate::i18n::Locale) -> &'static str {
+    use crate::i18n::{t, I18nKey};
     use wv_core::map::MapLevel;
     match level {
-        MapLevel::World => "世界",
-        MapLevel::Region => "区域",
-        MapLevel::City => "城市",
-        MapLevel::Interior => "建筑内",
+        MapLevel::World => t(loc, I18nKey::MapLevelWorld),
+        MapLevel::Region => t(loc, I18nKey::MapLevelRegion),
+        MapLevel::City => t(loc, I18nKey::MapLevelCity),
+        MapLevel::Interior => t(loc, I18nKey::MapLevelInterior),
     }
 }
 
@@ -1348,9 +1351,12 @@ mod tests {
             MapLevel::City,
             MapLevel::Interior,
         ] {
-            assert!(!map_level_label(l).is_empty());
+            assert!(!map_level_label(l, crate::i18n::Locale::default()).is_empty());
         }
-        assert_eq!(map_level_label(MapLevel::Interior), "建筑内");
+        assert_eq!(
+            map_level_label(MapLevel::Interior, crate::i18n::Locale::default()),
+            "建筑内"
+        );
     }
 
     #[test]
