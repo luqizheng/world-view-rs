@@ -24,7 +24,7 @@ use crate::ui_layout::LayoutFile;
 
 use super::shell::UiShell;
 use super::timeline::undo_last_street_segment;
-use super::widgets::{float_window, terrain_grid};
+use super::widgets::{float_window, slider_row, terrain_grid, FieldInput, FieldSelect, ToolButton};
 
 /// 地形笔刷 + 街道编辑器面板（P-3 / ADR-0010 编辑器 UI）。
 #[allow(clippy::too_many_arguments)]
@@ -65,16 +65,23 @@ pub fn panel_brush(
             terrain_grid(ui, &shell, &mut brush.kind);
             ui.add_space(space::XS);
             // 半径滑条：标签合并进 show_value，单位用「wu」。
-            ui.add(
-                egui::Slider::new(&mut brush.radius, grid.cell_size * 2.0..=600.0)
-                    .logarithmic(true)
-                    .show_value(true)
-                    .custom_formatter(|n, _| format!("半径 {:.0} wu", n)),
+            slider_row(
+                ui,
+                &shell,
+                "半径",
+                &mut brush.radius,
+                grid.cell_size * 2.0..=600.0,
+                |n| format!("半径 {:.0} wu", n),
+                true,
             );
-            ui.add(
-                egui::Slider::new(&mut brush.softness, 0.0..=1.0)
-                    .show_value(true)
-                    .custom_formatter(|n, _| format!("衰减软度 {:.2}", n)),
+            slider_row(
+                ui,
+                &shell,
+                "衰减软度",
+                &mut brush.softness,
+                0.0..=1.0,
+                |n| format!("衰减软度 {:.2}", n),
+                false,
             );
             ui.add_space(space::XS);
             // 街道区：默认折叠，作者真在画街道时（`enabled` 或已有段数）才展开。
@@ -83,17 +90,16 @@ pub fn panel_brush(
                 .show(ui, |ui| {
                     ui.checkbox(&mut streets.enabled, "画街道模式（左键逐点连线，右键结束）");
                     if streets.enabled {
-                        egui::ComboBox::from_label("类别")
-                            .selected_text(streets.class.label())
-                            .show_ui(ui, |ui| {
-                                for c in wv_core::RoadClass::ALL {
-                                    ui.selectable_value(&mut streets.class, c, c.label());
-                                }
-                            });
+                        FieldSelect::new(
+                            &mut streets.class,
+                            &wv_core::RoadClass::ALL,
+                            "wv_road_class",
+                        )
+                        .show(ui, &shell, |c| c.label().to_owned());
                         ui.horizontal(|ui| {
                             ui.label("街道名");
                             // 留空 = 下一笔无名（不产生标注）。
-                            ui.text_edit_singleline(&mut streets.name);
+                            FieldInput::new(&mut streets.name, "").show(ui, &shell);
                         });
                         ui.label(
                             egui::RichText::new(format!("已画 {} 段", streets.drawn))
@@ -102,9 +108,9 @@ pub fn panel_brush(
                                 .font(mono(shell.scale.small)),
                         );
                         ui.horizontal(|ui| {
-                            if ui.button("结束连线").clicked() {
+                            ToolButton::text("结束连线", "").show(ui, &shell, || {
                                 streets.last_click = None;
-                            }
+                            });
                             // 撤销上一段：UI 只生成 `DeleteStreetSegmentCommand` 交给
                             // History（§3.3）；可删性在这里判断，命令层兜底越界。
                             let deletable = drill
@@ -112,13 +118,12 @@ pub fn panel_brush(
                                 .and_then(streets::target_road_layer)
                                 .and_then(|l| projection.world.street_of(&l.id))
                                 .map_or(0, |d| d.len());
-                            if ui
-                                .add_enabled(deletable > 0, egui::Button::new("撤销上一段"))
-                                .clicked()
-                            {
-                                undo_last_street_segment(&mut projection, &drill, &mut edit);
-                                streets.drawn = streets.drawn.saturating_sub(1);
-                            }
+                            ToolButton::text("撤销上一段", "")
+                                .enabled(deletable > 0)
+                                .show(ui, &shell, || {
+                                    undo_last_street_segment(&mut projection, &drill, &mut edit);
+                                    streets.drawn = streets.drawn.saturating_sub(1);
+                                });
                         });
                     }
                 });

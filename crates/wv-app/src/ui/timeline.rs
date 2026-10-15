@@ -23,6 +23,7 @@ use crate::theme::ui_tokens::{radius, space};
 use crate::ui_layout::LayoutFile;
 
 use super::shell::UiShell;
+use super::widgets::ToolButton;
 
 /// 时间轴轨道层。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -104,12 +105,11 @@ pub fn panel_timeline(
             // ── 播放控件 + 日期 + 层切换 ──
             ui.horizontal(|ui| {
                 let play_label = if playback.playing { "⏸" } else { "▶" };
-                if ui
-                    .add(egui::Button::new(play_label).min_size(egui::vec2(shell.hit, shell.hit)))
-                    .clicked()
-                {
-                    playback.playing = !playback.playing;
-                }
+                ToolButton::text(play_label, "播放/暂停")
+                    .size(egui::vec2(shell.hit, shell.hit))
+                    .show(ui, &shell, || {
+                        playback.playing = !playback.playing;
+                    });
                 for s in [1.0f32, 5.0, 30.0] {
                     let sel = (playback.speed - s).abs() < f32::EPSILON;
                     if ui.selectable_label(sel, format!("{s:.0}天/秒")).clicked() {
@@ -128,9 +128,9 @@ pub fn panel_timeline(
                     .font(crate::theme::ui_theme::mono(shell.scale.base)),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("＋ 登记事件").clicked() {
+                    ToolButton::text("＋ 登记事件", "").show(ui, &shell, || {
                         *open_event = true;
-                    }
+                    });
                     ui.add_space(space::SM);
                     for l in TimelineLayer::ALL {
                         let sel = *layer == l;
