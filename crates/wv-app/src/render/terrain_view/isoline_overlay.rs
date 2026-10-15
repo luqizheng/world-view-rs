@@ -42,6 +42,21 @@ const ISOLINE_Z: f32 = 0.04;
 /// 描边屏幕宽度（px）：世界宽度 = `px × view.scale`（ADR-0008 §8 的「乘」口径）。
 const STROKE_PX: f32 = 1.25;
 
+/// 描边亚线性缩放指数（手绘地图 #10）：世界半宽 ∝ scale^`GLYPH_SHRINK_EXP`。
+///
+/// 取自 civ-atlas 的 GLYPH_SHRINK = 0.22（屏幕观感 k^(1-0.22) = k^0.78 的
+/// 对偶）：∈ (0, 1) 才是「放大时屏幕变纤细」；= 1 退化为 ADR-0008 §8 的
+/// 严格乘口径（屏幕恒定）；> 1 则放大时线变粗（非手绘观感）。
+const GLYPH_SHRINK_EXP: f32 = 0.78;
+
+/// 描边世界半宽的唯一实现（主线 / 水彩晕 / 河水中线全走这里）。
+///
+/// `base_px` = 屏幕像素基准宽（scale=1 时的屏幕宽），`floor` = 世界下限
+/// （极远防消隐）。同公式供测试手算锚定。
+fn stroke_half_world(base_px: f32, scale: f32, floor: f32) -> f32 {
+    (base_px * 0.5 * scale.powf(GLYPH_SHRINK_EXP)).max(floor)
+}
+
 /// 类型边界描边的格径半宽（× cell_size）：盖住「阶梯 → Chaikin 平滑」的
 /// 偏差 + 填充的像素量化，让类型边界读作一条画上去的墨线。
 const KIND_STROKE_CELL: f32 = 0.25;
@@ -208,8 +223,13 @@ pub fn sync_isoline_overlay(
     let coast = height_segments(w, h, |x, y| cell(x, y).height as f32, 0.0);
     let kinds = kind_segments(w, h, |x, y| cell(x, y).kind);
     let tol = dp_tol_for(view.scale);
-    // 描边世界半宽：屏幕常量（乘 scale，ADR-0008 §8），加世界下限防远观消隐。
-    let thin_half = (STROKE_PX * 0.5 * view.scale).max(grid.cell_size * 0.03);
+    // 描边世界半宽（手绘地图 #10，2026-10-15）：**亚线性**缩放——
+    // 世界半宽 = px × scale^0.78 而非 px × scale（ADR-0008 §8 乘口径的
+    // 修正式）。civ-atlas GLYPH_SHRINK=0.22 同款思路：放大 4 倍时墨线的
+    // *世界*尺寸只长 ~3 倍 → *屏幕*观感随放大反而变纤细（k^-0.22），地图
+    // 细节浮现而墨线不霸道；缩小时屏幕上线变粗，远观仍可辨。
+    // 世界下限保留：极远时防消隐。
+    let thin_half = stroke_half_world(STROKE_PX, view.scale, grid.cell_size * 0.03);
     // 类型边界加宽：格缘阶梯被 Chaikin 磨角后，平滑曲线偏离原阶梯至多约
     // 0.3 格——细线盖不住露出的「错色台阶」，按格径给足半宽才压得平。
     let kind_half = thin_half.max(grid.cell_size * KIND_STROKE_CELL);
@@ -675,5 +695,57 @@ mod tests {
             1.0,
         );
         assert!(mesh.is_some(), "河水中线 mesh 应产出");
+    }
+
+    // -----------------------------------------------------------------------
+    // 符号缩放（手绘地图呈现 #10，2026-10-15）
+    // -----------------------------------------------------------------------
+
+    /// 亚线性缩放锚点（手算）：scale=1 → base/2；scale=4 → base/2 × 4^0.78
+    /// ≈ base/2 × 2.928（**小于**线性的 base/2 × 4 = 2·base——放大时世界
+    /// 尺寸长得慢）；scale=0.25 → base/2 × 0.25^0.78 ≈ base/2 × 0.341
+    /// （**大于**线性的 base/8——缩小时世界尺寸缩得慢，屏幕更粗更可辨）。
+    #[test]
+    fn stroke_half_world_grows_sublinearly_with_scale() {
+        let base = 2.0; // STROKE_PX 量级，手算方便
+        let floor = 0.0;
+        let at_one = stroke_half_world(base, 1.0, floor);
+        assert!(
+            (at_one - 1.0).abs() < 1e-5,
+            "scale=1 应为 base/2=1，实得 {at_one}"
+        );
+        let at_four = stroke_half_world(base, 4.0, floor);
+        // 4^0.78 = e^(0.78·ln4) = e^(0.78×1.38629) = e^1.08131 ≈ 2.9485
+        assert!(
+            (at_four - 2.9485).abs() < 0.01,
+            "scale=4 应为 1×2.9485≈2.95，实得 {at_four}"
+        );
+        assert!(at_four < 4.0, "亚线性：4 倍缩放下世界半宽应 < 线性值 4");
+        let at_quarter = stroke_half_world(base, 0.25, floor);
+        // 0.25^0.78 = 1/2.9485 ≈ 0.3392
+        assert!(
+            (at_quarter - 0.3392).abs() < 0.01,
+            "scale=0.25 应为 1×0.3392≈0.34，实得 {at_quarter}"
+        );
+        assert!(
+            at_quarter > 0.25,
+            "亚线性：1/4 缩放下世界半宽应 > 线性值 0.25"
+        );
+    }
+
+    /// 下限生效：极小 scale 时回到 floor，不随指数继续缩。
+    #[test]
+    fn stroke_half_world_respects_floor_at_extreme_zoom_out() {
+        let base = 2.0;
+        let floor = 0.5;
+        let v = stroke_half_world(base, 0.001, floor);
+        assert_eq!(v, floor, "极远时应取世界下限 {floor}，实得 {v}");
+        // 指数约束：∈ (0,1) 才是亚线性。
+        const {
+            assert!(
+                GLYPH_SHRINK_EXP > 0.0 && GLYPH_SHRINK_EXP < 1.0,
+                "缩放指数应在 (0,1)"
+            )
+        }
     }
 }
