@@ -3,7 +3,7 @@
 //! 与 `geographic_source_yaml.rs` 同型：文档模型在 `wv-core::street`，
 //! 读写入口在 `Project`。round-trip 按 AGENTS §7.2 必须无损。
 
-use wv_core::{Point, RoadClass, StreetLayer, StreetSegment};
+use wv_core::{Point, RoadClass, StreetLayer, StreetSegment, TimeSpan};
 
 #[test]
 fn street_layer_round_trips_through_yaml() {
@@ -23,6 +23,7 @@ fn street_layer_round_trips_through_yaml() {
             Point::new(5.0, 9.0),
         ],
         name: Some("中山路".into()),
+        time_span: Some(TimeSpan::new(1450, 1900).unwrap()),
     });
 
     let text = serde_yaml::to_string(&layer).expect("序列化");
@@ -45,6 +46,46 @@ fn segment_without_class_defaults_to_residential() {
     assert_eq!(
         layer.segments[0].points,
         vec![Point::new(1.0, 2.0), Point::new(3.0, 4.0)]
+    );
+}
+
+#[test]
+fn segment_without_time_span_field_is_zero_migration_and_omitted_on_write() {
+    // 既有工程 YAML 无 time_span 字段（ADR-0015 零迁移回归线）：
+    // 解析得 None，且 None 序列化时不写回字段（保持既有文件干净）。
+    let layer: StreetLayer =
+        serde_yaml::from_str("segments:\n  - points:\n      - {x: 1, y: 2}\n      - {x: 3, y: 4}")
+            .expect("既有 YAML 应兼容解析");
+    assert!(
+        layer.segments[0].time_span.is_none(),
+        "未声明 time_span 的段应解析为 None"
+    );
+
+    let text = serde_yaml::to_string(&layer).expect("序列化");
+    assert!(
+        !text.contains("time_span"),
+        "None 不应写出 time_span 字段（既有工程零污染）：\n{text}"
+    );
+    let back: StreetLayer = serde_yaml::from_str(&text).expect("round-trip");
+    assert_eq!(back, layer, "None 形态 round-trip 应无损");
+}
+
+#[test]
+fn segment_time_span_round_trips_with_open_window() {
+    // 开放窗口（to: None）是「至今有效」的常用写法，必须可逆。
+    let mut layer = StreetLayer::new();
+    layer.push(StreetSegment {
+        class: RoadClass::Primary,
+        points: vec![Point::new(0.0, 0.0), Point::new(1.0, 1.0)],
+        name: Some("中山路".into()),
+        time_span: Some(TimeSpan::open(1500)),
+    });
+    let text = serde_yaml::to_string(&layer).expect("序列化");
+    let back: StreetLayer = serde_yaml::from_str(&text).expect("反序列化");
+    assert_eq!(
+        back.segments[0].time_span,
+        Some(TimeSpan::open(1500)),
+        "开放窗口 round-trip 应无损"
     );
 }
 
@@ -102,6 +143,7 @@ fn project_writes_then_loads_a_street_layer_in_a_new_directory() {
         class: RoadClass::Service,
         points: vec![Point::new(0.0, 0.0), Point::new(7.0, 1.0)],
         name: None,
+        time_span: None,
     });
 
     // 目标目录 `maps/map_city/` 尚不存在——首次保存应自建。

@@ -430,6 +430,7 @@ mod tests {
                     class: RoadClass::Residential,
                     points: vec![Point::new(0.0, 5.0), Point::new(8.0, 5.0)],
                     name: Some("户部巷".into()),
+                    time_span: None,
                 },
             ]),
         )];
@@ -479,6 +480,7 @@ mod tests {
                     Point::new(4.0, 4.0),
                 ],
                 name: None,
+                time_span: None,
             }]),
         )];
         let streams = street_streams(&docs);
@@ -499,6 +501,7 @@ mod tests {
                     class: RoadClass::Path,
                     points: vec![Point::new(1.0, 1.0)],
                     name: None,
+                    time_span: None,
                 }]),
             ),
             ("b.yaml".to_string(), StreetLayer::new()),

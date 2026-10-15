@@ -1,4 +1,4 @@
-﻿//! 街道矢量图层的文档模型（ADR-0010）。
+//! 街道矢量图层的文档模型（ADR-0010）。
 //!
 //! 「缩放到街道」要求城市内部有一份真实的街道路网几何。本模块定义这份
 //! 几何的**存储形态**：一个 `LayerKind::Road` 图层经 [`wv_core::map::Layer::source`]
@@ -13,7 +13,10 @@
 //! - **只存几何与类别参数，不存渲染结论**：线宽、颜色、LOD 档位都是
 //!   渲染层按 [`RoadClass`] 派生的表现层决策，不在数据里落字段。
 
-use crate::base::geometry::Point;
+use crate::{
+    base::geometry::Point,
+    time::{TimePoint, TimeSpan},
+};
 
 /// 街道类别（ADR-0010 决策 ④ 的 class 集合）。
 ///
@@ -113,6 +116,17 @@ pub struct StreetSegment {
     /// `None` 不产生任何标注；命名不是门槛，标注不是校验。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// 街道段的存在窗口（ADR-0015 · 2026-10-14 接受）。
+    ///
+    /// `None` = 段跟随所在子图（默认；向后兼容，零迁移）；
+    /// `Some(span)` = 仅 `span.contains(t)` 时段可见（渲染与街名标注同口径）。
+    ///
+    /// **与 `MapNode.time_span` 的关系**：图级窗口**否决**段级——子图窗口
+    /// 之外的段一律不可见，无论段自己是否设了窗口。求值走
+    /// [`StreetSegment::visible_at`]（与 `wv_core::label_visible_at` 同构），
+    /// 调用方不得在调用点重写公式。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_span: Option<TimeSpan>,
 }
 
 impl StreetSegment {
@@ -122,7 +136,36 @@ impl StreetSegment {
             class,
             points: vec![Point::new(x1, y1), Point::new(x2, y2)],
             name: None,
+            time_span: None,
         }
+    }
+
+    /// 段级可见性（仅看自身 `time_span`，**不**看所在子图）。
+    ///
+    /// 拿「本段在某时刻是否参与渲染」请用 [`Self::visible_at`] 一站式
+    /// 双层求值，不要在调用点自行拼接图级 ∧ 段级。
+    pub fn is_visible_at(&self, t: i64) -> bool {
+        match &self.time_span {
+            None => true,
+            Some(span) => span.contains(&TimePoint::from_day(t)),
+        }
+    }
+
+    /// 双层合并可见性（ADR-0015 §2.3）：图级 ∧ 段级。
+    ///
+    /// - `map_span == None` ⇒ 图级不限时代（不否决段级）；
+    /// - `map_span == Some(s)` 且 `!s.contains(t)` ⇒ 一律 false（图级否决）；
+    /// - 否则按段级 `time_span` 判定。
+    ///
+    /// 与 [`wv_core::label_visible_at`] 同构：标签与几何同生共死——
+    /// 街道几何不显示的时段，它的街名标注也不显示。
+    pub fn visible_at(&self, map_span: Option<&TimeSpan>, t: i64) -> bool {
+        if let Some(map_span) = map_span {
+            if !map_span.contains(&TimePoint::from_day(t)) {
+                return false;
+            }
+        }
+        self.is_visible_at(t)
     }
 
     /// 折线中点（标签锚点）：按累计长度取半程处。与起终点距离各半，
@@ -187,9 +230,128 @@ impl StreetLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::time::TimeSpan;
 
     // YAML round-trip 与 serde 缺省值的测试在 `wv-io/tests/street_layer_yaml.rs`
     // —— wv-core 按 AGENTS §2.1 不依赖 serde_yaml，round-trip 与 IO 同层验证。
+
+    // ─── ADR-0015：双层 TimeSpan 可见性求值 ──────────────────────────────
+
+    fn two_point_seg(time_span: Option<TimeSpan>) -> StreetSegment {
+        StreetSegment {
+            class: RoadClass::Residential,
+            points: vec![Point::new(0.0, 0.0), Point::new(1.0, 1.0)],
+            name: None,
+            time_span,
+        }
+    }
+
+    #[test]
+    fn segment_without_time_span_is_always_segment_visible() {
+        let seg = two_point_seg(None);
+        assert!(seg.is_visible_at(0), "无 time_span：段级始终可见");
+        assert!(seg.is_visible_at(1450), "无 time_span：段级始终可见");
+    }
+
+    #[test]
+    fn segment_with_time_span_hides_outside_window() {
+        let span = TimeSpan::new(1450, 1900).unwrap();
+        let seg = two_point_seg(Some(span));
+        assert!(
+            !seg.is_visible_at(1449),
+            "段窗口 [1450, 1900)：t=1449 不可见"
+        );
+        assert!(
+            seg.is_visible_at(1450),
+            "段窗口 [1450, 1900)：t=1450 可见（半开含左）"
+        );
+        assert!(seg.is_visible_at(1899), "段窗口 [1450, 1900)：t=1899 可见");
+        assert!(
+            !seg.is_visible_at(1900),
+            "段窗口 [1450, 1900)：t=1900 不可见（半开不含右）"
+        );
+    }
+
+    #[test]
+    fn map_window_vetoes_segment_even_if_segment_window_covers_t() {
+        // 图级窗口 [1200, 1450)，段级窗口 [1400, 1500)：交集仅 [1400, 1450)
+        let map_span = TimeSpan::new(1200, 1450).unwrap();
+        let seg_span = TimeSpan::new(1400, 1500).unwrap();
+        let seg = two_point_seg(Some(seg_span));
+        assert!(
+            seg.is_visible_at(1425),
+            "段级单独看：1425 在 [1400,1500) 内"
+        );
+        assert!(
+            seg.visible_at(Some(&map_span), 1425),
+            "双层交集内的 t 应可见"
+        );
+        // 关键断言：图级窗口外时双层合并一律不可见
+        assert!(seg.is_visible_at(1475), "段级单独：1475 在 [1400,1500) 内");
+        assert!(
+            !seg.visible_at(Some(&map_span), 1475),
+            "图级窗口外时双层合并一律不可见（即便段级单独可见）"
+        );
+        assert!(
+            !seg.visible_at(Some(&map_span), 1199),
+            "图级 ∧ 段级 同时不在窗口内：不可见"
+        );
+        assert!(
+            seg.visible_at(None, 1475),
+            "图级 None 不否决，段级 1475 可见"
+        );
+    }
+
+    #[test]
+    fn segment_window_inside_map_window_yields_strict_subset() {
+        // 单调性：图级 ∧ 段级 的可见集 ⊆ 段级单独可见集
+        let map_span = TimeSpan::new(1200, 1500).unwrap();
+        let seg_span = TimeSpan::new(1300, 1400).unwrap();
+        let seg = two_point_seg(Some(seg_span));
+        for t in 1200..1500 {
+            let single = seg.is_visible_at(t);
+            let merged = seg.visible_at(Some(&map_span), t);
+            assert!(
+                !merged || single,
+                "t={t}：双层合并可见 ⇒ 段级单独必可见（合并 ⊆ 单项）"
+            );
+        }
+        for t in 1300..1400 {
+            assert!(
+                seg.visible_at(Some(&map_span), t),
+                "t={t}：图级 ∧ 段级 同时覆盖，应可见"
+            );
+        }
+    }
+
+    #[test]
+    fn open_segment_window_keeps_visible_from_start_to_present() {
+        let seg = two_point_seg(Some(TimeSpan::open(1500)));
+        assert!(
+            !seg.is_visible_at(1499),
+            "开放窗口 [1500, ∞)：t=1499 不可见"
+        );
+        assert!(seg.is_visible_at(1500), "开放窗口 [1500, ∞)：t=1500 可见");
+        assert!(
+            seg.is_visible_at(99_999),
+            "开放窗口 [1500, ∞)：t 极大仍可见"
+        );
+    }
+
+    #[test]
+    fn segment_visibility_matches_label_visible_at() {
+        // 与 label_visible_at 的同构承诺：街道几何与街名标注同生共死。
+        let map = TimeSpan::new(1200, 1450).unwrap();
+        let seg_span = TimeSpan::new(1400, 1500).unwrap();
+        let seg = two_point_seg(Some(seg_span));
+        for t in 1100..1600 {
+            assert_eq!(
+                seg.visible_at(Some(&map), t),
+                crate::label_visible_at(Some(&map), seg.time_span.as_ref(), t),
+                "t={t}：两函数结果必须一致（同构承诺）"
+            );
+        }
+    }
 
     #[test]
     fn lod_rank_orders_motorway_before_service() {
@@ -213,6 +375,7 @@ mod tests {
             class: RoadClass::Primary,
             points: vec![Point::new(0.0, 0.0), Point::new(10.0, 0.0)],
             name: Some("中山路".into()),
+            time_span: None,
         };
         let m = seg.polyline_midpoint().expect("两点直段必有中点");
         assert!(
@@ -234,6 +397,7 @@ mod tests {
                 Point::new(4.0, 6.0),
             ],
             name: None,
+            time_span: None,
         };
         let m = seg.polyline_midpoint().expect("折线必有中点");
         assert!(
