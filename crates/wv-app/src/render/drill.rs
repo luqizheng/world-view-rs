@@ -818,10 +818,12 @@ pub fn update_place_labels(
     let cjk = fonts.cjk_font.clone();
     // 文字色按视图模式走 palette：Google Default Map 用深灰标签；Text2d
     // 光晕描边需自定义 shader，后续再补白 halo。透明度随 Place 图层（ADR-0013）。
+    // 手绘地图 #2：place 走 `label_place` 槽位（与 `label_fill` 同色，避免回归），
+    // 字号保持 LABEL_PX 不动。区域 / 势力 大字走 `label_region` + ×1.4 倍字号。
     let label_color = match view.mode {
         crate::state::ViewMode::GoogleMap => crate::theme::colors_google::GOOGLE_LABEL_FILL,
-        // 古舆图 / 暮色：深褐墨（暮色为浅米），不再回退纯白（ADR-0016）。
-        _ => crate::theme::palette::colors(view.map_palette).label_fill,
+        // 古舆图 / 暮色：place 用 `label_place`（= `label_fill` 同色，避免回归）。
+        _ => crate::theme::palette::colors(view.map_palette).label_place,
     }
     .with_alpha(layers.place.opacity);
     // 晕边色（ADR-0016 M2）：纸面色系（Google 用白晕兜底），随 Place 图层透明度。
@@ -1006,8 +1008,16 @@ pub fn update_faction_labels(
     let cjk = fonts.cjk_font.clone();
     // ADR-0017 Q1：势力标签色随 Label 渲染组透明度；色值走 Google 文字深灰
     // （与地名标签同一族，v0.1 不做 per-PlaceKind 主题映射——ADR-0016 §6.1 Q5）。
-    let label_color =
-        crate::theme::colors_google::GOOGLE_CONTROL_TEXT.with_alpha(layers.label.opacity);
+    // 手绘地图 #2：势力 / 区域用 `label_region`（最深墨）+ 字号 ×1.4（国/大区字重更重）。
+    let region_font_size = font_size * 1.4;
+    let label_color = match view.mode {
+        crate::state::ViewMode::GoogleMap => {
+            crate::theme::colors_google::GOOGLE_CONTROL_TEXT.with_alpha(layers.label.opacity)
+        }
+        _ => crate::theme::palette::colors(view.map_palette)
+            .label_region
+            .with_alpha(layers.label.opacity),
+    };
     let halo_color = crate::theme::colors_google::GOOGLE_COAST_LAND;
     let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
 
@@ -1041,7 +1051,7 @@ pub fn update_faction_labels(
                 FactionLabel,
                 Text2d::new(name.as_str()),
                 TextFont {
-                    font_size: font_size.into(),
+                    font_size: region_font_size.into(),
                     font: cjk.clone().unwrap_or_default().into(),
                     ..Default::default()
                 },
@@ -1054,7 +1064,7 @@ pub fn update_faction_labels(
                 Visibility::Visible,
             ));
             let (text_owned, font_ref, fs, hc) =
-                (name.to_string(), cjk.as_ref(), font_size, halo_color);
+                (name.to_string(), cjk.as_ref(), region_font_size, halo_color);
             cmd.with_children(move |c| {
                 for _ in 0..crate::render::label_halo::HALO_DIRS.len() {
                     c.spawn(crate::render::label_halo::halo_bundle(
@@ -1218,7 +1228,7 @@ pub fn update_event_labels(
             }
         } else {
             let mut cmd = commands.spawn((
-                EventLabel,
+                FactionLabel,
                 Text2d::new(name.as_str()),
                 TextFont {
                     font_size: font_size.into(),
@@ -1358,8 +1368,16 @@ pub fn update_region_labels(
 
     let cjk = fonts.cjk_font.clone();
     // 区域标签色同势力/事件标签（Label 渲染组透明度 + Google 文字深灰）。
-    let label_color =
-        crate::theme::colors_google::GOOGLE_CONTROL_TEXT.with_alpha(layers.label.opacity);
+    // 手绘地图 #2：region 走 `label_region`（最深墨）+ 字号 ×1.4。
+    let region_font_size = font_size * 1.4;
+    let label_color = match view.mode {
+        crate::state::ViewMode::GoogleMap => {
+            crate::theme::colors_google::GOOGLE_CONTROL_TEXT.with_alpha(layers.label.opacity)
+        }
+        _ => crate::theme::palette::colors(view.map_palette)
+            .label_region
+            .with_alpha(layers.label.opacity),
+    };
     let halo_color = crate::theme::colors_google::GOOGLE_COAST_LAND;
     let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
 
@@ -1393,7 +1411,7 @@ pub fn update_region_labels(
                 RegionLabel,
                 Text2d::new(name.as_str()),
                 TextFont {
-                    font_size: font_size.into(),
+                    font_size: region_font_size.into(),
                     font: cjk.clone().unwrap_or_default().into(),
                     ..Default::default()
                 },
@@ -1406,7 +1424,7 @@ pub fn update_region_labels(
                 Visibility::Visible,
             ));
             let (text_owned, font_ref, fs, hc) =
-                (name.to_string(), cjk.as_ref(), font_size, halo_color);
+                (name.to_string(), cjk.as_ref(), region_font_size, halo_color);
             cmd.with_children(move |c| {
                 for _ in 0..crate::render::label_halo::HALO_DIRS.len() {
                     c.spawn(crate::render::label_halo::halo_bundle(

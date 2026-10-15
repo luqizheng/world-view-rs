@@ -61,6 +61,12 @@ pub const DUSK_STREET_MINOR: Color = hex(0x594F44);
 pub const DUSK_ROAD_CASING: Color = hex(0x3A342E);
 /// 地名 / 街名文字：浅米褐古墨字（2026-10-14 用户定稿）。
 pub const DUSK_LABEL_FILL: Color = hex(0xC9BBA8);
+/// 标注三级字重梯度（手绘地图 #2）—— 暮色版：
+/// - region（国/大区）= 浅米偏白（最亮档，对应日间最深的褐墨）
+/// - place（城/POI）= `DUSK_LABEL_FILL`（保持原观感，避免视觉回归）
+/// - water（海名）= 暗青（暗纸上的青蓝，亮于海面同族）
+pub const DUSK_LABEL_REGION: Color = hex(0xD6C9B6);
+pub const DUSK_LABEL_WATER: Color = hex(0x5A7A88);
 /// 文字晕边 = 暮色纸面深底。
 pub const DUSK_HALO_FILL: Color = hex(0x3A342E);
 /// 等值线 / 海岸线墨色：暗纸上的浅墨 推导·待复核。

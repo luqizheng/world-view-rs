@@ -108,6 +108,25 @@ pub const LINE_ON_LIGHT: Color = hex(0x4A3F35); // 墨（= label.fill 同源）
 pub const LINE_ON_MID: Color = hex(0x443A30); // 略深一档 待复核
 pub const LINE_ON_DARK: Color = hex(0x382F27); // 最深一档 待复核
 
+// ---------------------------------------------------------------------------
+// 标注三级字重（手绘地图呈现 #2，2026-10-15）
+// ---------------------------------------------------------------------------
+
+/// 标注三级字重 + 颜色的色源（手绘地图 #2，对应 civ-atlas 国/城/海三色梯度）。
+///
+/// - `region`（国/大区）—— 大字 + 最深墨（与 `line_on_dark` 同族）；
+/// - `place`（城/POI）—— 中字 + `label_fill`（与旧 `LABEL_FILL` 一致，避免视觉回归）；
+/// - `water`（海域名）—— 中字 + 青蓝（civ-atlas 海名色；worldview-rs 暂无独立
+///   海名 entity，但预留令牌供后续水路 / 海洋 overlay 引用）。
+///
+/// **不是字号本身**——字号仍由 `view.scale × LABEL_PX` 决定；这里是颜色梯度，
+/// 字重差由 `font_size × tier_factor` 体现（见 `drill.rs` 各 label 系统）。
+/// 所有日间 / 暮色两套值见 [`super::colors_dusk`]。
+pub const LABEL_REGION: Color = hex(0x382F27); // 国/大区：最深的褐墨
+pub const LABEL_PLACE: Color = hex(0x4A3F35); // 城/POI：原 label.fill（不变）
+/// 海域名：青蓝（civ-atlas `INK_CSS` 同族偏青）。暮色版另见 colors_dusk。
+pub const LABEL_WATER: Color = hex(0x3F5B6A);
+
 /// 强调色（`accent.*`）。
 pub const ACCENT_SELECT: Color = hex(0xF2C14E); // 选中高亮（金）
 /// **当前时刻指示色**：时间轴游标 + 生长笔尖**共用**（动画规格 §7.1：禁止拆成两令牌）。
@@ -273,5 +292,48 @@ mod tests {
         let lum = |c: Color| -> f32 { f(c).iter().sum::<f32>() / 3.0 };
         assert!(lum(COAST_WATER) < lum(COAST_LAND));
         assert!(lum(COAST_LAND) < lum(COAST_LINE));
+    }
+
+    // -----------------------------------------------------------------------
+    // 标注三级字重梯度（手绘地图 #2，2026-10-15）
+    // -----------------------------------------------------------------------
+
+    use super::hex;
+
+    /// `LABEL_REGION` 比 `LABEL_PLACE` 深一档（国名/大区 比 城/POI 更醒目）。
+    /// 三色梯度要求明度递减：region < place < water（海青蓝更冷，明度近似但色相不同）。
+    #[test]
+    fn label_tier_region_is_deeper_than_place() {
+        let f = |c: Color| -> f32 {
+            let Color::Srgba(s) = c else { panic!() };
+            (s.red + s.green + s.blue) / 3.0
+        };
+        assert!(
+            f(LABEL_REGION) < f(LABEL_PLACE),
+            "region ({}) 应比 place ({}) 更深",
+            f(LABEL_REGION),
+            f(LABEL_PLACE)
+        );
+    }
+
+    /// `LABEL_WATER` 是青蓝色族（蓝 > 红），与墨色 `LABEL_PLACE` 在色相上
+    /// 明显区分——海名一眼能跟城/陆名分开。
+    #[test]
+    fn label_water_is_cyan_blue_hue() {
+        let Color::Srgba(w) = LABEL_WATER else {
+            panic!()
+        };
+        assert!(
+            w.blue > w.red,
+            "海名应偏青蓝（蓝 > 红），实得 r={} b={}",
+            w.red,
+            w.blue
+        );
+    }
+
+    /// 海名青蓝锚点：日间 `#3F5B6A`——记死防手滑（与 civ-atlas 海名同族）。
+    #[test]
+    fn label_water_user_pinned_hex_is_stable() {
+        assert_eq!(hex(0x3F5B6A), LABEL_WATER, "海名青蓝锚点应为 #3F5B6A");
     }
 }
