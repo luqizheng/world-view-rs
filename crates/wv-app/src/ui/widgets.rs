@@ -84,6 +84,10 @@ pub fn badge(ui: &mut egui::Ui, shell: &UiShell, kind: BadgeKind, text: &str) {
 }
 
 /// 空状态卡（§5.2）：图标 + 一句人话 + 一个可点的下一步。
+///
+/// CTA 走 [`ToolButton::text`]（与 Toolbar 同一抽象），最低宽 120 锁定为
+/// 「空状态 CTA」专属尺寸——窄了就显不出引导感，宽了就把空状态拉散；
+/// 居中布局的行高直接吃 `shell.hit`。
 pub fn empty_state(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -113,12 +117,10 @@ pub fn empty_state(
                 .color(shell.t3()),
         );
         ui.add_space(space::MD);
-        if ui
-            .add(egui::Button::new(action).min_size(egui::vec2(120.0, shell.hit)))
-            .clicked()
-        {
-            clicked = true;
-        }
+        let resp = ToolButton::text(action, "")
+            .size(egui::vec2(120.0, shell.hit))
+            .show(ui, shell, || clicked = true);
+        let _ = resp;
     });
     clicked
 }

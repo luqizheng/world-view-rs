@@ -21,7 +21,7 @@ use crate::theme::ui_tokens::space;
 use crate::ui_layout::LayoutFile;
 
 use super::shell::{terrain_swatch, UiShell};
-use super::widgets::{float_window, list_item};
+use super::widgets::{field_checkbox, float_window, list_item};
 
 /// 世界树（P-1）。
 pub fn panel_map_tree(
@@ -82,15 +82,17 @@ pub fn panel_layers(
         Panel::Layers,
         None,
         |ui| {
-            ui.checkbox(&mut view.terrain_visible, "地形");
+            // 8 个图层开关统一走 [`field_checkbox`]：UI 形态不变，
+            // 后续要做品牌化（hover 反馈 / focus 环）只改一处。
+            field_checkbox(ui, &shell, &mut view.terrain_visible, "地形");
             // 底图淡化：把瓦片图集向纸面色拉，让路线/地标压得住底图。
-            ui.checkbox(&mut view.terrain_soften, "底图淡化");
-            ui.checkbox(&mut view.places_visible, "地点");
-            ui.checkbox(&mut view.events_visible, "事件点");
-            ui.checkbox(&mut view.tracks_visible, "轨迹");
-            ui.checkbox(&mut view.roads_visible, "道路");
-            ui.checkbox(&mut view.buildings_visible, "建筑");
-            ui.checkbox(&mut view.factions_visible, "势力");
+            field_checkbox(ui, &shell, &mut view.terrain_soften, "底图淡化");
+            field_checkbox(ui, &shell, &mut view.places_visible, "地点");
+            field_checkbox(ui, &shell, &mut view.events_visible, "事件点");
+            field_checkbox(ui, &shell, &mut view.tracks_visible, "轨迹");
+            field_checkbox(ui, &shell, &mut view.roads_visible, "道路");
+            field_checkbox(ui, &shell, &mut view.buildings_visible, "建筑");
+            field_checkbox(ui, &shell, &mut view.factions_visible, "势力");
         },
     );
 }
