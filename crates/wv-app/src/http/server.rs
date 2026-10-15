@@ -127,7 +127,7 @@ pub async fn start_mcp_server(
         eprintln!(
             "{}",
             crate::i18n::t(loc, crate::i18n::I18nKey::HttpBindFailed)
-                .replace("<addr>", &addr)
+                .replace("<addr>", &addr.to_string())
                 .replace("<err>", &e.to_string())
         );
         ServerError::Bind(e.to_string())
@@ -136,7 +136,8 @@ pub async fn start_mcp_server(
     let loc = crate::i18n::cli_locale();
     eprintln!(
         "{}",
-        crate::i18n::t(loc, crate::i18n::I18nKey::HttpListening).replace("<addr>", &addr)
+        crate::i18n::t(loc, crate::i18n::I18nKey::HttpListening)
+            .replace("<addr>", &addr.to_string())
     );
 
     axum::serve(listener, app)
