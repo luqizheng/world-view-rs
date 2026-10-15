@@ -98,6 +98,9 @@ pub fn register(app: &mut App) {
                 update_faction_labels,
                 update_event_labels,
                 update_region_labels,
+                // 海名标签（手绘地图呈现 #14 · 接续 #13 `wv-core::sea::Sea`）
+                // ——Label 渲染组末尾；不参与拾取、不注册 LabelHit。
+                update_sea_labels,
                 // 悬停气泡（手绘地图 #7）——读 LabelHits + label_pick::hit_test，
                 // 命中则画 ●+名+副标题 浮窗。链尾确保用最新包围盒。
                 crate::ui::hover_tooltip::hover_tooltip_system,
@@ -690,6 +693,25 @@ pub struct EventLabel;
 /// 与 `FactionLabel` 同型：对象池模式，每帧更新位置/文案/可见性。
 #[derive(Component)]
 pub struct RegionLabel;
+
+/// 海名标签标记组件（手绘地图呈现 #14，2026-10-16 · 接续 #13 `wv-core::sea::Sea`）。
+///
+/// 与 `RegionLabel` 同型：对象池模式，每帧更新位置/文案/可见性。
+///
+/// ## v0.1 简化（与 `#13` 数据层声明对齐）
+///
+/// - **不参与拾取**——`Sea` 没有 inspector 面板要显示、没有 `EditCommand` 要落盘，
+///   不写 `SelectedEntity`、不注册 `LabelHits`：点击穿透到下层（钻入 marker / 空白
+///   取消）。这是「数据层先有海名、UI 编辑器暂不接」的最小落点；未来要加拾取时，
+///   需先在 `wv_core::EntityKind` 加 `Sea` 变种（穷尽匹配 + ALL 表 + label() 三处）。
+/// - **不过滤 tier**——`Sea` 没有 `w/h` 字段，国家级视野一样画（海域文字本来就要远观）。
+/// - **走 `Label` 渲染组**——复用 `layers.label.visible` 与所有标签同一开关，
+///   不新增 `LayerKind::Water`（v0.1 海名数量个位数，独立开关属过度工程）。
+/// - **字重 ×1.4**——与 `RegionLabel` / `FactionLabel` 同档；`Sea` 字色走
+///   `PaletteColors::label_water`（青蓝色族，与 `label_place`/`label_region`
+///   字重梯度一致：place 浅、region/faction/sea 深）。
+#[derive(Component)]
+pub struct SeaLabel;
 
 /// 当前 LOD 下是否保留地名标注。
 ///
@@ -1428,6 +1450,176 @@ pub fn update_region_labels(
             ));
             let (text_owned, font_ref, fs, hc) =
                 (name.to_string(), cjk.as_ref(), region_font_size, halo_color);
+            cmd.with_children(move |c| {
+                for _ in 0..crate::render::label_halo::HALO_DIRS.len() {
+                    c.spawn(crate::render::label_halo::halo_bundle(
+                        &text_owned,
+                        font_ref,
+                        fs,
+                        hc,
+                    ));
+                }
+            });
+        }
+    }
+    for (_, mut _tf, mut _text, mut _style, mut _color, mut vis) in iter {
+        *vis = Visibility::Hidden;
+    }
+}
+
+/// 更新当前层级的海名标签池（手绘地图呈现 #14，2026-10-16 · 接续 #13）。
+///
+/// 数据来源：`World.seas`，按 `Sea.map` 锚定当前图。
+/// 位置：`Sea.(x, y)`（本图局部坐标 → 视图空间同 `PlaceLabel` 口径）。
+/// 可见性：图级窗口否决（`label_visible_at(map_span, None, t)`）——`Sea` v0.1 无
+/// 实体级时间窗口（数据层 #13 注释），未来加 `time_span` 时只换参数。
+/// 图层归属：Label 渲染组（与 `FactionLabel` / `RegionLabel` / `EventLabel` 同组），
+/// 复用 `layers.label.visible` 会话开关。
+///
+/// ## v0.1 不参与拾取
+///
+/// 不写 `SelectedEntity::target`、不调用 `hits.push`：海名点击穿透到下层。
+/// `update_region_labels` / `update_faction_labels` 的「注册命中盒」段在
+/// `update_sea_labels` 中**有意省略**，以保持「不参与拾取」语义不被误读为
+/// 「忘了调用」。
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn update_sea_labels(
+    mut commands: Commands,
+    projection: Res<WorldProjection>,
+    drill: Res<DrillState>,
+    grid: Res<GridConfig>,
+    view: Res<ViewState>,
+    layers: Res<LayerFrame>,
+    playback: Res<PlaybackState>,
+    fonts: Res<crate::theme::fonts::LoadedFonts>,
+    camera: Query<&Transform, With<Camera2d>>,
+    mut q: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut Text2d,
+            &mut TextFont,
+            &mut TextColor,
+            &mut Visibility,
+        ),
+        (With<SeaLabel>, Without<Camera2d>),
+    >,
+    children_q: Query<&bevy::ecs::hierarchy::Children, With<SeaLabel>>,
+    mut halo_q: Query<
+        (&mut Transform, &mut Text2d, &mut TextFont, &mut TextColor),
+        (
+            With<crate::render::label_halo::LabelHalo>,
+            Without<bevy::prelude::Camera2d>,
+            Without<SeaLabel>,
+        ),
+    >,
+) {
+    let t = playback.current_day;
+    let mut candidates: Vec<crate::render::label_collision::LabelCandidate> = Vec::new();
+    // Label 渲染组可见性（与 faction / region / event 同一开关）
+    if layers.label.visible {
+        if let Some(current) = drill.current_node(&projection.world) {
+            let map_span = current.time_span.as_ref();
+            if wv_core::label_visible_at(map_span, None, t) {
+                for sea in &projection.world.seas {
+                    if sea.map != current.id {
+                        continue;
+                    }
+                    // v0.1 优先级：文本长度（与其他标签同一口径）；`target = None`
+                    // 标记「不参与拾取」语义——`update_region_labels` / `_faction_labels`
+                    // 都填 `Some(...)`，与本系统行为不同。
+                    candidates.push(crate::render::label_collision::LabelCandidate {
+                        pos: grid.map_to_view(Vec2::new(sea.x, sea.y)),
+                        name: sea.name.clone(),
+                        priority: sea.name.len() as u32,
+                        target: None,
+                    });
+                }
+            }
+        }
+    }
+
+    // 字重梯度 ×1.4（与 RegionLabel / FactionLabel 同档，水域文字更深）。
+    // 海名数量通常个位数，`filter_collisions` 实质是 no-op——保留调用仅为
+    // 模式统一，未来海名数量上去后无须切管线。
+    let font_size = LABEL_PX * view.scale.max(0.05);
+    let sea_font_size = font_size * 1.4;
+    let mut filtered =
+        crate::render::label_collision::filter_collisions(&mut candidates, sea_font_size);
+    filtered.truncate(200);
+    let label_offset = sea_font_size * 0.9;
+    let label_z = LABEL_Z + layers.label.z_offset;
+    let cam_rot = camera
+        .single()
+        .map(|t| t.rotation)
+        .unwrap_or(Quat::IDENTITY);
+    let up_world = crate::render::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
+    let label_rot = cam_rot.inverse();
+    for c in &mut filtered {
+        c.pos += up_world;
+    }
+    let wanted = filtered;
+
+    let cjk = fonts.cjk_font.clone();
+    // 字色：古舆图走 `label_water`（青蓝色族 #3F5B6A · DUSK #5A7A88）；Google
+    // 走 `GOOGLE_LABEL_FILL` 深灰（与地名同族，v0.1 不做 water 主题区分）。
+    let label_color = match view.mode {
+        crate::state::ViewMode::GoogleMap => crate::theme::colors_google::GOOGLE_LABEL_FILL,
+        _ => crate::theme::palette::colors(view.map_palette).label_water,
+    }
+    .with_alpha(layers.label.opacity);
+    // 晕边色：海面上托出文字，走纸面色（古舆图）/ 白（Google）。
+    let halo_color = match view.mode {
+        crate::state::ViewMode::GoogleMap => bevy::color::Color::WHITE,
+        _ => crate::theme::palette::colors(view.map_palette).halo_fill,
+    }
+    .with_alpha(layers.label.opacity);
+    let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
+
+    let mut iter = q.iter_mut();
+    for c in &wanted {
+        let pos = c.pos;
+        let name = &c.name;
+        if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
+            tf.translation = pos.extend(label_z);
+            tf.rotation = label_rot;
+            *text = Text2d::new(name.as_str());
+            style.font_size = sea_font_size.into();
+            if let Some(f) = &cjk {
+                style.font = f.clone().into();
+            }
+            *color = TextColor(label_color);
+            *vis = Visibility::Visible;
+            if let Ok(children) = children_q.get(e) {
+                crate::render::label_halo::sync_halo(
+                    children,
+                    &mut halo_q,
+                    name.as_str(),
+                    sea_font_size,
+                    cjk.as_ref(),
+                    halo_color,
+                    halo_offset,
+                );
+            }
+        } else {
+            let mut cmd = commands.spawn((
+                SeaLabel,
+                Text2d::new(name.as_str()),
+                TextFont {
+                    font_size: sea_font_size.into(),
+                    font: cjk.clone().unwrap_or_default().into(),
+                    ..Default::default()
+                },
+                TextColor(label_color),
+                Transform {
+                    translation: pos.extend(label_z),
+                    rotation: label_rot,
+                    ..Default::default()
+                },
+                Visibility::Visible,
+            ));
+            let (text_owned, font_ref, fs, hc) =
+                (name.to_string(), cjk.as_ref(), sea_font_size, halo_color);
             cmd.with_children(move |c| {
                 for _ in 0..crate::render::label_halo::HALO_DIRS.len() {
                     c.spawn(crate::render::label_halo::halo_bundle(
