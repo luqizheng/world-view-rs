@@ -21,6 +21,7 @@ pub mod brush_panel;
 pub mod command_palette_window;
 pub mod compass_panel;
 pub mod faction_panel;
+pub mod hover_tooltip;
 pub mod inspector_panel;
 pub mod layers_panel;
 pub mod list_panels_panel;

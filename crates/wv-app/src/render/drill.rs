@@ -98,6 +98,9 @@ pub fn register(app: &mut App) {
                 update_faction_labels,
                 update_event_labels,
                 update_region_labels,
+                // 悬停气泡（手绘地图 #7）——读 LabelHits + label_pick::hit_test，
+                // 命中则画 ●+名+副标题 浮窗。链尾确保用最新包围盒。
+                crate::ui::hover_tooltip::hover_tooltip_system,
             )
                 .chain(),
         );
