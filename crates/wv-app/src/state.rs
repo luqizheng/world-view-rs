@@ -329,15 +329,85 @@ mod lod_tests {
     }
 }
 
+/// 笔刷工具（意图笔刷 plan v0.1）：直接涂类型，或六种「给意图、程序生成」。
+///
+/// 会话态，不写盘；工具选择不跨会话保留。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BrushTool {
+    /// 直接涂抹地形类型（原有行为，默认）。
+    #[default]
+    PaintKind,
+    /// 意图：沿拖拽线长一道山脉；单点 = 一座圆山；跨海自动成岛链。
+    MountainRange,
+    /// 意图：抬起一片顶面平坦的高原。
+    Plateau,
+    /// 意图：加一片低矮起伏（仅陆上）。
+    Hills,
+    /// 意图：点一下放一座带火山口的锥形山；海上自动成岛。
+    Volcano,
+    /// 意图：点一下挖一个碗形湖（碗底低于溢出口）。
+    Lake,
+    /// 意图：从源头拖到河口，程序拓扑挖出河床。
+    River,
+}
+
+impl BrushTool {
+    /// 面板遍历用。
+    pub const ALL: [BrushTool; 7] = [
+        BrushTool::PaintKind,
+        BrushTool::MountainRange,
+        BrushTool::Plateau,
+        BrushTool::Hills,
+        BrushTool::Volcano,
+        BrushTool::Lake,
+        BrushTool::River,
+    ];
+
+    /// 是否意图工具（决定提交 `IntentTerrainCommand` 而非 `PaintTerrainCommand`）。
+    pub fn is_intent(self) -> bool {
+        self != Self::PaintKind
+    }
+
+    /// 面板显示名（与既有面板的英文标签同风格）。
+    pub fn label(self) -> &'static str {
+        match self {
+            BrushTool::PaintKind => "Paint",
+            BrushTool::MountainRange => "Mountain range",
+            BrushTool::Plateau => "Plateau",
+            BrushTool::Hills => "Hills",
+            BrushTool::Volcano => "Volcano",
+            BrushTool::Lake => "Lake",
+            BrushTool::River => "River",
+        }
+    }
+
+    /// 一句话交互提示（面板底部）。
+    pub fn hint(self) -> &'static str {
+        match self {
+            BrushTool::PaintKind => "",
+            BrushTool::MountainRange => "拖一条脊线，山脊走向程序补；单点 = 一座圆山",
+            BrushTool::Plateau => "拖过目标区域，顶面平坦、边缘自收",
+            BrushTool::Hills => "拖过目标区域，只长在陆上",
+            BrushTool::Volcano => "点一下放置；点在海里自动成岛",
+            BrushTool::Lake => "点一下挖湖；湖心必须在陆上",
+            BrushTool::River => "从源头拖到河口；两端都在陆上时高端是源头",
+        }
+    }
+}
+
 /// 笔刷工具状态（`AGENTS.md` §3.3：System 只生成命令，不直接改世界）。
 #[derive(Resource)]
 pub struct BrushState {
-    /// 当前选中的地形类型编号。
+    /// 当前选中的地形类型编号（仅 Paint 工具用）。
     pub kind: u8,
-    /// 笔刷半径（世界单位）。
+    /// 当前工具（直接涂类型 / 意图生成）。
+    pub tool: BrushTool,
+    /// 笔刷半径（世界单位）。River 不用半径（河宽固定一格）。
     pub radius: f32,
-    /// 衰减软度 0..=1（与 `wv_terrain::edit::falloff_weight` 同一参数）。
+    /// 衰减软度 0..=1（与 `wv_terrain::edit::falloff_weight` 同一参数；仅 Paint 工具用）。
     pub softness: f32,
+    /// 意图强度（0.2..=2.0，wv_terrain::intent 内部夹取）。
+    pub strength: f32,
     /// 是否处于涂抹模式（按住左键拖拽中）。
     pub painting: bool,
     /// 笔刷是否启用。
@@ -428,8 +498,10 @@ impl Default for BrushState {
     fn default() -> Self {
         Self {
             kind: 3, // 默认草原
+            tool: BrushTool::PaintKind,
             radius: 96.0,
             softness: 0.5,
+            strength: 1.0,
             painting: false,
             // Google 式默认手势是左键拖动平移；笔刷必须显式开启，避免一开图就误改。
             enabled: false,

@@ -22,11 +22,14 @@ use bevy::prelude::*;
 
 use crate::render::camera::ActiveStroke;
 use crate::render::terrain_view::{image_from_terrain, TerrainTexture, TileAtlas};
-use crate::state::{BrushState, DrillState, GridConfig, PlaybackState, ViewState, WorldProjection};
-use wv_edit::command::PaintTerrainCommand;
+use crate::state::{
+    BrushState, BrushTool, DrillState, GridConfig, PlaybackState, ViewState, WorldProjection,
+};
+use wv_edit::command::{EditCommand, IntentTerrainCommand, PaintTerrainCommand};
 use wv_edit::history::Transaction;
 use wv_edit::History;
 use wv_terrain::edit::{Brush, Stroke as TerrainStroke};
+use wv_terrain::intent::Intent;
 
 /// 编辑历史（`wv-edit::History` 的应用层持有者）。
 ///
@@ -108,22 +111,13 @@ pub fn commit_stroke_on_release(
         return;
     }
 
-    // 世界坐标点列 → wv-terrain 的笔触（每点一个 Brush）。
-    let mut stroke = TerrainStroke::new();
-    for p in active.points.drain(..) {
-        // 世界坐标 → 图内局部坐标（反转 GridConfig 的 origin 偏移）。
-        let local = p - grid.raster_origin;
-        stroke.push(Brush {
-            center: (local.x, local.y),
-            radius: brush.radius,
-            softness: brush.softness,
-            kind: Some(brush.kind),
-            height_delta: 0.0,
-        });
-    }
-
-    // 笔触世界包围盒（在构造 `cmd` 之前算——`stroke` move 给 cmd 后不可用）。
-    let dirty_rect = stroke_bbox_in_cells(&stroke, &grid);
+    // 世界坐标点列 → 图内局部坐标（反转 GridConfig 的 origin 偏移）。
+    // 两种工具共用同一份点列：Paint 拿它当 Brush 序列，意图工具拿它当折线 / 首点。
+    let pts_local: Vec<(f32, f32)> = active
+        .points
+        .drain(..)
+        .map(|p| (p.x - grid.raster_origin.x, p.y - grid.raster_origin.y))
+        .collect();
 
     // 笔刷应落在 `drill.current()`（单一真源），而不是 `view.current_map` 镜像——
     // 镜像在 `NewProject`/`CloseProject`/`adopt` 之后会失同步一帧（2026-10-14
@@ -137,11 +131,45 @@ pub fn commit_stroke_on_release(
         );
         return;
     };
-    let cmd = PaintTerrainCommand::new(target_map, stroke, grid.cell_size);
+
+    // 按工具分派：意图工具 → IntentTerrainCommand；Paint → PaintTerrainCommand。
+    let (cmd, dirty_rect) = if brush.tool.is_intent() {
+        let Some(intent) = intent_from_stroke(brush.tool, &pts_local, brush.radius, brush.strength)
+        else {
+            return;
+        };
+        let dirty_rect = intent_bbox_in_cells(&pts_local, brush.radius, &grid);
+        (
+            Box::new(IntentTerrainCommand::new(
+                target_map,
+                intent,
+                grid.cell_size,
+            )) as Box<dyn EditCommand>,
+            dirty_rect,
+        )
+    } else {
+        let mut stroke = TerrainStroke::new();
+        for (x, y) in &pts_local {
+            stroke.push(Brush {
+                center: (*x, *y),
+                radius: brush.radius,
+                softness: brush.softness,
+                kind: Some(brush.kind),
+                height_delta: 0.0,
+            });
+        }
+        // 笔触世界包围盒（在构造 `cmd` 之前算——`stroke` move 给 cmd 后不可用）。
+        let dirty_rect = stroke_bbox_in_cells(&stroke, &grid);
+        (
+            Box::new(PaintTerrainCommand::new(target_map, stroke, grid.cell_size))
+                as Box<dyn EditCommand>,
+            dirty_rect,
+        )
+    };
 
     // 提交到 History（一次笔触 = 一个事务 = 一次可撤销单位）。
     let mut tx = Transaction::new();
-    tx.push(Box::new(cmd));
+    tx.push(cmd);
     match edit.history.commit(&mut projection.world, tx) {
         Ok(dirty) => {
             edit.record_dirty(dirty);
@@ -178,6 +206,80 @@ fn stroke_bbox_in_cells(stroke: &TerrainStroke, grid: &GridConfig) -> [u32; 4] {
         let cx = (b.center.0 / cs) as i32;
         let cy = (b.center.1 / cs) as i32;
         let pad = (b.radius / cs).ceil() as i32 + 1;
+        gx0 = gx0.min(cx - pad);
+        gy0 = gy0.min(cy - pad);
+        gx1 = gx1.max(cx + pad);
+        gy1 = gy1.max(cy + pad);
+    }
+    [
+        gx0.max(0) as u32,
+        gy0.max(0) as u32,
+        gx1.max(0) as u32,
+        gy1.max(0) as u32,
+    ]
+}
+
+/// 把一次拖拽点列 + 笔刷参数组装成地形意图（意图笔刷 plan v0.1）。
+///
+/// 点状意图（火山 / 湖）只取首点——「点一下」就是一条单点 ActiveStroke。
+/// `PaintKind` 返回 `None`（调用方不应走到这，防御性兜底）。
+fn intent_from_stroke(
+    tool: BrushTool,
+    pts: &[(f32, f32)],
+    radius: f32,
+    strength: f32,
+) -> Option<Intent> {
+    let first = pts.first().copied()?;
+    Some(match tool {
+        BrushTool::MountainRange => Intent::MountainRange {
+            pts: pts.to_vec(),
+            radius,
+            strength,
+        },
+        BrushTool::Plateau => Intent::Plateau {
+            pts: pts.to_vec(),
+            radius,
+            strength,
+        },
+        BrushTool::Hills => Intent::Hills {
+            pts: pts.to_vec(),
+            radius,
+            strength,
+        },
+        BrushTool::Volcano => Intent::Volcano {
+            center: first,
+            radius,
+            strength,
+        },
+        BrushTool::Lake => Intent::Lake {
+            center: first,
+            radius,
+            strength,
+        },
+        BrushTool::River => Intent::River {
+            pts: pts.to_vec(),
+            strength,
+        },
+        BrushTool::PaintKind => return None,
+    })
+}
+
+/// 意图影响包围盒（逻辑格，半开）。统一按 `2.6 × radius` 外扩——取全部意图的
+/// 最大 reach（火山 2.6r、山脉 2.0r + 域扭曲 0.45r），脏矩形宁可大不能小：
+/// 漏标的格会在纹理上残留旧像素。`radius` 无关的工具（河）传 0 即可只包点列。
+fn intent_bbox_in_cells(pts: &[(f32, f32)], radius: f32, grid: &GridConfig) -> [u32; 4] {
+    if pts.is_empty() {
+        return [0, 0, 0, 0];
+    }
+    let cs = grid.cell_size.max(f32::EPSILON);
+    let pad = (radius * 2.6 / cs).ceil() as i32 + 2;
+    let mut gx0 = i32::MAX;
+    let mut gy0 = i32::MAX;
+    let mut gx1 = i32::MIN;
+    let mut gy1 = i32::MIN;
+    for &(px, py) in pts {
+        let cx = (px / cs) as i32;
+        let cy = (py / cs) as i32;
         gx0 = gx0.min(cx - pad);
         gy0 = gy0.min(cy - pad);
         gx1 = gx1.max(cx + pad);
@@ -459,6 +561,78 @@ mod tests {
         let stroke = TerrainStroke::new();
         let bbox = stroke_bbox_in_cells(&stroke, &grid);
         assert_eq!(bbox, [0, 0, 0, 0]);
+    }
+
+    // -----------------------------------------------------------------------
+    // 意图笔刷：点列 → Intent 的映射 + 影响包围盒（意图笔刷 plan v0.1）
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn intent_from_stroke_maps_each_tool_correctly() {
+        let pts = vec![(10.0, 20.0), (30.0, 40.0)];
+        // 线状意图：整条折线 + 半径 + 强度。
+        match intent_from_stroke(BrushTool::MountainRange, &pts, 8.0, 1.5) {
+            Some(Intent::MountainRange {
+                pts: p,
+                radius,
+                strength,
+            }) => {
+                assert_eq!(p, pts);
+                assert_eq!(radius, 8.0);
+                assert_eq!(strength, 1.5);
+            }
+            other => panic!("应为 MountainRange，实得 {other:?}"),
+        }
+        // 点状意图：只取首点。
+        match intent_from_stroke(BrushTool::Volcano, &pts, 8.0, 1.0) {
+            Some(Intent::Volcano { center, .. }) => assert_eq!(center, (10.0, 20.0)),
+            other => panic!("应为 Volcano，实得 {other:?}"),
+        }
+        match intent_from_stroke(BrushTool::Lake, &pts, 8.0, 1.0) {
+            Some(Intent::Lake { center, .. }) => assert_eq!(center, (10.0, 20.0)),
+            other => panic!("应为 Lake，实得 {other:?}"),
+        }
+        // 河：不带半径（河宽固定一格）。
+        match intent_from_stroke(BrushTool::River, &pts, 8.0, 1.2) {
+            Some(Intent::River { pts: p, strength }) => {
+                assert_eq!(p, pts);
+                assert_eq!(strength, 1.2);
+            }
+            other => panic!("应为 River，实得 {other:?}"),
+        }
+        // Paint 工具不产生意图（防御兜底）。
+        assert_eq!(
+            intent_from_stroke(BrushTool::PaintKind, &pts, 8.0, 1.0),
+            None
+        );
+        // 空点列：任何工具都无意图。
+        assert_eq!(intent_from_stroke(BrushTool::Volcano, &[], 8.0, 1.0), None);
+    }
+
+    /// 意图包围盒按 2.6×radius + 2 格外扩：单点 (50,50)、radius 10、cell 10
+    /// → pad = ceil(26/10)+2 = 5 → [0,0,10,10]。
+    #[test]
+    fn intent_bbox_expands_by_max_reach() {
+        let grid = GridConfig {
+            cell_size: 10.0,
+            ..Default::default()
+        };
+        let bbox = intent_bbox_in_cells(&[(50.0, 50.0)], 10.0, &grid);
+        // 中心格 (5,5)，pad = 2.6×10/10 → ceil(2.6)+2 = 5 → [0,0,10,10]
+        assert_eq!(bbox, [0, 0, 10, 10]);
+    }
+
+    /// 意图包围盒取点列并集并钳到 0；空点列返回零矩形。
+    #[test]
+    fn intent_bbox_unions_and_clamps() {
+        let grid = GridConfig {
+            cell_size: 10.0,
+            ..Default::default()
+        };
+        let bbox = intent_bbox_in_cells(&[(5.0, 5.0), (95.0, 95.0)], 10.0, &grid);
+        // pad = 5；两点格 (0,0) 与 (9,9) → [0,0,14,14]
+        assert_eq!(bbox, [0, 0, 14, 14]);
+        assert_eq!(intent_bbox_in_cells(&[], 10.0, &grid), [0, 0, 0, 0]);
     }
 
     // -----------------------------------------------------------------------

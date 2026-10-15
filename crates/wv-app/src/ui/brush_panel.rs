@@ -17,7 +17,7 @@ use bevy_egui::{egui, EguiContexts};
 
 use crate::edit::editing;
 use crate::render::streets;
-use crate::state::{BrushState, DrillState, Panel, PanelState, WorldProjection};
+use crate::state::{BrushState, BrushTool, DrillState, Panel, PanelState, WorldProjection};
 use crate::theme::ui_theme::{mono, UiShellConfig};
 use crate::theme::ui_tokens::space;
 use crate::ui_layout::LayoutFile;
@@ -122,35 +122,80 @@ pub fn panel_brush(
             });
             ui.add_space(space::SM);
 
-            // ── TERRAIN MATERIAL 段（Figma 用 8 块色板 4×2；`terrain_grid` 现 10 块 2×5，
-            // 视觉差异可接受，M2 再统一）──
+            // ── TOOL：直接涂类型 vs 意图生成（意图笔刷 plan v0.1）──
             ui.label(
-                egui::RichText::new("TERRAIN MATERIAL")
+                egui::RichText::new("TOOL")
                     .size(shell.scale.micro)
                     .color(shell.t3()),
             );
-            terrain_grid(ui, &shell, &mut brush.kind);
+            egui::ComboBox::new("wv_brush_tool", "")
+                .selected_text(brush.tool.label())
+                .show_ui(ui, |ui| {
+                    for t in BrushTool::ALL {
+                        ui.selectable_value(&mut brush.tool, t, t.label());
+                    }
+                });
             ui.add_space(space::SM);
 
-            // ── 半径 / 软度滑条（Figma 风格：标签左、值右、轨在中间）──
-            slider_row(
-                ui,
-                &shell,
-                "Radius",
-                &format!(
-                    "{} m",
-                    (brush.radius / grid.cell_size * 10.0).round() as i32
-                ),
-                egui::Slider::new(&mut brush.radius, grid.cell_size * 2.0..=600.0)
-                    .logarithmic(true),
-            );
-            slider_row(
-                ui,
-                &shell,
-                "Softness",
-                &format!("{}%", (brush.softness * 100.0).round() as i32),
-                egui::Slider::new(&mut brush.softness, 0.0..=1.0),
-            );
+            if brush.tool.is_intent() {
+                // ── 意图工具：强度 + 半径（河不用半径）+ 交互提示 ──
+                slider_row(
+                    ui,
+                    &shell,
+                    "Strength",
+                    &format!("×{:.2}", brush.strength),
+                    egui::Slider::new(&mut brush.strength, 0.2..=2.0),
+                );
+                if brush.tool != BrushTool::River {
+                    slider_row(
+                        ui,
+                        &shell,
+                        "Radius",
+                        &format!(
+                            "{} m",
+                            (brush.radius / grid.cell_size * 10.0).round() as i32
+                        ),
+                        egui::Slider::new(&mut brush.radius, grid.cell_size * 2.0..=600.0)
+                            .logarithmic(true),
+                    );
+                }
+                ui.add_space(space::XS);
+                ui.label(
+                    egui::RichText::new(brush.tool.hint())
+                        .size(shell.scale.small)
+                        .color(shell.t3()),
+                );
+            } else {
+                // ── TERRAIN MATERIAL 段（Figma 用 8 块色板 4×2；`terrain_grid` 现 10 块 2×5，
+                // 视觉差异可接受，M2 再统一）──
+                ui.label(
+                    egui::RichText::new("TERRAIN MATERIAL")
+                        .size(shell.scale.micro)
+                        .color(shell.t3()),
+                );
+                terrain_grid(ui, &shell, &mut brush.kind);
+                ui.add_space(space::SM);
+
+                // ── 半径 / 软度滑条（Figma 风格：标签左、值右、轨在中间）──
+                slider_row(
+                    ui,
+                    &shell,
+                    "Radius",
+                    &format!(
+                        "{} m",
+                        (brush.radius / grid.cell_size * 10.0).round() as i32
+                    ),
+                    egui::Slider::new(&mut brush.radius, grid.cell_size * 2.0..=600.0)
+                        .logarithmic(true),
+                );
+                slider_row(
+                    ui,
+                    &shell,
+                    "Softness",
+                    &format!("{}%", (brush.softness * 100.0).round() as i32),
+                    egui::Slider::new(&mut brush.softness, 0.0..=1.0),
+                );
+            }
 
             ui.add_space(space::SM);
             // 街道区（Figma `Road drawing · 3 segments` 折叠段）
