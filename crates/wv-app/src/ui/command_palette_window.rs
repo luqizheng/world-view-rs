@@ -17,11 +17,12 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::state::{RecentProjects, WorldProjection};
-use crate::theme::ui_theme::{mono, proportional, UiShellConfig};
-use crate::theme::ui_tokens::{font_size, radius, space};
+use crate::theme::ui_theme::{mono, UiShellConfig};
+use crate::theme::ui_tokens::{radius, space};
 use crate::ui_command_palette::CommandPalette;
 
 use super::shell::UiShell;
+use super::widgets::FieldInput;
 
 /// 命令面板：`Ctrl+K` 打开，`Esc` 关闭，模糊搜索，键盘完全可操作。
 pub fn command_palette(
@@ -75,14 +76,11 @@ pub fn command_palette(
                 .corner_radius(radius::MODAL),
         )
         .show(ctx, |ui| {
-            // 输入框（14px）。
-            let resp = ui.add(
-                egui::TextEdit::singleline(&mut palette.query)
-                    .hint_text("搜索命令、面板、对象…  例：笔刷 / 撤销")
-                    .font(proportional(font_size::INPUT))
-                    .desired_width(f32::INFINITY),
-            );
-            resp.request_focus();
+            // 输入框（14px）：撑满宽度 + 打开帧抢焦点。
+            FieldInput::new(&mut palette.query, "搜索命令、面板、对象…  例：笔刷 / 撤销")
+                .fill_width(true)
+                .focus_on_add(true)
+                .show(ui, &shell);
             ui.add_space(space::SM);
 
             let results = palette.results(&recents);
