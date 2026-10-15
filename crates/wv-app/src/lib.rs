@@ -61,6 +61,9 @@
 //! | [`theme::ui_theme`] | 把 `ui_tokens` 投影成 egui `Visuals`。 |
 //! | [`theme::fonts`] | 系统字体栈探测 + CJK 字体注册。 |
 //!
+//! [`i18n`] —— UI 文案 zh/en 翻译（ADR-0018）；`CurrentLocale` Resource
+//! 与 `t(locale, key)` 查表入口；偏好随工程落 `ui-layout.yaml#language`。
+//!
 //! 应用层持有的一次性配置。
 #[derive(Debug, Clone, Default)]
 pub struct AppConfig {
@@ -86,6 +89,8 @@ pub struct AppConfig {
 pub mod app_bootstrap;
 #[cfg(feature = "app")]
 pub mod edit;
+#[cfg(feature = "app")]
+pub mod i18n;
 #[cfg(feature = "app")]
 pub mod overture_cli;
 #[cfg(feature = "app")]

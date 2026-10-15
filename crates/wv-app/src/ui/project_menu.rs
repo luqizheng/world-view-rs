@@ -70,13 +70,16 @@ pub(crate) fn project_menu_inner(
     recents: &[RecentProject],
     panels: &mut PanelState,
     state: &mut ProjectMenuState,
+    loc: crate::i18n::Locale,
 ) {
     let name = projection
         .world
         .meta
         .as_ref()
         .map(|m| m.name.clone())
-        .unwrap_or_else(|| "（未命名工程）".to_owned());
+        .unwrap_or_else(|| {
+            crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuUnnamedProject).to_owned()
+        });
     let dirty = projection.dirty;
     let popup_id = egui::Id::new("wv_project_menu");
     let opened = egui::Popup::is_id_open(ui.ctx(), popup_id);
@@ -150,28 +153,50 @@ pub(crate) fn project_menu_inner(
     let mut rows: Vec<MenuRow> = Vec::new();
     for (i, p) in recents.iter().enumerate() {
         rows.push(MenuRow {
-            section: "最近工程",
-            label: format!("打开最近工程 · {}", p.name),
+            section: crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuRecentSection),
+            label: format!(
+                "{}{}",
+                crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuRecentOpenPrefix),
+                p.name
+            ),
             keys: None,
             id: CommandId::OpenRecentProject(i as u8),
         });
     }
-    for (label, keys, id) in [
-        // 2026-10-14：地图级新建入口（区别于「新建工程」）——弹参数对话框。
-        // 「新建工程」带省略号：它也弹参数对话框（名称 + 位置 + 路径预览）。
-        ("新建工程…", Some("Ctrl+Shift+N"), CommandId::NewProject),
-        ("新建地图…", None, CommandId::NewMap),
-        ("打开工程…", Some("Ctrl+O"), CommandId::OpenProject),
-        ("另存为…", Some("Ctrl+Shift+S"), CommandId::SaveProjectAs),
-        ("导出…", Some("Ctrl+E"), CommandId::ExportProject),
-        ("关闭工程", Some("Ctrl+W"), CommandId::CloseProject),
-        ("项目设置", None, CommandId::ProjectSettings),
-    ] {
+    let lbls: [&str; 7] = [
+        crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuNewProject),
+        crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuNewMap),
+        crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuOpenProject),
+        crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuSaveProjectAs),
+        crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuExportProject),
+        crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuCloseProject),
+        crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuProjectSettings),
+    ];
+    let ids: [CommandId; 7] = [
+        CommandId::NewProject,
+        CommandId::NewMap,
+        CommandId::OpenProject,
+        CommandId::SaveProjectAs,
+        CommandId::ExportProject,
+        CommandId::CloseProject,
+        CommandId::ProjectSettings,
+    ];
+    let sect: &'static str = crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuProjectSection);
+    let keys_arr: [Option<&str>; 7] = [
+        Some("Ctrl+Shift+N"),
+        None,
+        Some("Ctrl+O"),
+        Some("Ctrl+Shift+S"),
+        Some("Ctrl+E"),
+        Some("Ctrl+W"),
+        None,
+    ];
+    for (idx, label) in lbls.into_iter().enumerate() {
         rows.push(MenuRow {
-            section: "工程",
+            section: sect,
             label: label.to_owned(),
-            keys,
-            id,
+            keys: keys_arr[idx],
+            id: ids[idx],
         });
     }
 
@@ -234,15 +259,25 @@ pub(crate) fn project_menu_inner(
             // 面板显隐 + 重置位置：v0.1 的「窗口菜单」内容保留在这里，
             // 它是三级可发现性的第 3 级，不能删（§6.2）。
             ui.separator();
-            menu_section(ui, shell, "面板");
+            menu_section(
+                ui,
+                shell,
+                crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuPanelsSection),
+            );
             for p in Panel::ALL {
                 let mut on = panels.is_visible(p);
-                if ui.checkbox(&mut on, p.title()).changed() {
+                if ui.checkbox(&mut on, p.title(loc)).changed() {
                     panels.set_visible(p, on);
                 }
             }
             ui.separator();
-            if ui.button("重置所有面板位置").clicked() {
+            if ui
+                .button(crate::i18n::t(
+                    loc,
+                    crate::i18n::I18nKey::ProjectMenuResetPanels,
+                ))
+                .clicked()
+            {
                 panels.reset_requested = true;
                 egui::Popup::close_all(ui.ctx());
             }
@@ -332,6 +367,7 @@ pub fn breadcrumb(
     projection: Res<WorldProjection>,
     mut drill: ResMut<DrillState>,
     panels: Res<PanelState>,
+    current_loc: Res<crate::i18n::CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -355,7 +391,13 @@ pub fn breadcrumb(
     }
     let lod = drill
         .current_node(&projection.world)
-        .map(|n| format!("{} · {}", n.name, crate::state::map_level_label(n.level)))
+        .map(|n| {
+            format!(
+                "{} · {}",
+                n.name,
+                crate::state::map_level_label(n.level, current_loc.0)
+            )
+        })
         .unwrap_or_default();
 
     let mut jump: Option<usize> = None;

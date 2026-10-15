@@ -83,13 +83,25 @@ impl Plugin for HttpServerPlugin {
             {
                 Ok(rt) => rt,
                 Err(e) => {
-                    eprintln!("[wv-app http] 启 tokio 失败: {e}");
+                    eprintln!(
+                        "{}{e}",
+                        crate::i18n::t(
+                            crate::i18n::cli_locale(),
+                            crate::i18n::I18nKey::HttpTokioStartFailed,
+                        )
+                    );
                     return;
                 }
             };
             rt.block_on(async move {
                 if let Err(e) = start_mcp_server(bridge, &cfg.bind, cfg.port).await {
-                    eprintln!("[wv-app http] server 退出: {e}");
+                    eprintln!(
+                        "{}{e}",
+                        crate::i18n::t(
+                            crate::i18n::cli_locale(),
+                            crate::i18n::I18nKey::HttpServerCrashed,
+                        )
+                    );
                 }
             });
         });

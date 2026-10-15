@@ -30,6 +30,7 @@ use wv_core::terrain::TerrainData;
 use wv_core::{Id, TimeSpan};
 
 use crate::edit::editing::EditHistory;
+use crate::i18n::CurrentLocale;
 use crate::render::terrain_view::{TerrainTexture, TileAtlas};
 use crate::state::{
     DrillState, PlaybackState, ProjectDiagnostics, RecentProjects, ViewState, WorldProjection,
@@ -353,6 +354,7 @@ pub fn new_project_apply_create(
     atlas: Option<Res<TileAtlas>>,
     mut images: ResMut<Assets<Image>>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let Some(intent) = dialog.pending_apply.take() else {
         return;
@@ -371,6 +373,7 @@ pub fn new_project_apply_create(
         atlas.as_deref(),
         &mut images,
         &mut cameras,
+        &current_loc,
     ) {
         // 失败时让对话框再次打开让作者改。
         dialog.error = Some(e);
@@ -403,6 +406,7 @@ fn create_project(
     atlas: Option<&TileAtlas>,
     images: &mut Assets<Image>,
     cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+    current_loc: &CurrentLocale,
 ) -> Result<(), String> {
     let path = intent.path.clone();
     let name = intent.name.clone();
@@ -431,6 +435,7 @@ fn create_project(
         images,
         cameras,
         frame,
+        current_loc,
     );
     if projection.project_dir.as_deref() != Some(dir.as_str()) {
         // load_project_into 失败分支已写 load_error + 状态栏回执；这里给对话框

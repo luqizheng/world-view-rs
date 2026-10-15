@@ -18,6 +18,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::i18n::Locale;
 use wv_overture::fetch::{parse_geojson_segments, parse_geojson_str};
 use wv_overture::index::IndexedOvertures;
 
@@ -25,7 +26,7 @@ use wv_overture::index::IndexedOvertures;
 ///
 /// 返回 `Ok(())` 表示命令成功执行完毕（即使没找到 GeoJSON 也算「命令执行 完毕」）。
 /// 失败原因走 `Err(String)` 给 caller 打印。
-pub fn overture_command(args: &[String]) -> Result<(), String> {
+pub fn overture_command(args: &[String], _loc: Locale) -> Result<(), String> {
     let sub = args.first().map(String::as_str).unwrap_or("");
     match sub {
         "fetch" => fetch_command(&args[1..]),

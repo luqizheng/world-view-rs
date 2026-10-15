@@ -28,6 +28,8 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
+use crate::i18n::Locale;
+
 use crate::state::{Panel, PanelState};
 use crate::theme::ui_theme::{color32, mono, proportional};
 use crate::theme::ui_tokens::{font_size, radius, space, BadgeTone};
@@ -338,13 +340,13 @@ pub fn format_time_ago(at: std::time::Instant, now: std::time::Instant) -> Strin
 /// 行高 22 px（曾 44 px），色块 14 px 居左、名称 11 px 居右同一行——
 /// 高度砍半但视觉仍能一眼区分当前选中（背景填 `active_bg` + 1.5 px
 /// `focus` 描边），网格外的所有状态提示交还给面板体。
-pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8) {
+pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8, loc: Locale) {
     egui::Grid::new("terrain_swatches")
         .num_columns(2)
         .spacing([space::XS, space::XS])
         .show(ui, |ui| {
             for k in 0u8..10 {
-                let name = super::shell::TERRAIN_NAMES[k as usize];
+                let name = super::shell::terrain_name_at(loc, k as usize);
                 let is_sel = *selected == k;
                 let cell_w = (ui.available_width() - space::XS) / 2.0;
                 let row_h = 22.0;
@@ -422,6 +424,7 @@ pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8) {
 ///   整面任意位置都能拖动，**不需要**额外写 `area_mut`。
 /// - 关按钮被删：`v0.3` Figma 里浮动面板没有 ×，作者用 `Esc` / 菜单
 ///   关掉面板（菜单入口已在顶栏，不在本外壳范围）。
+#[allow(clippy::too_many_arguments)]
 pub fn float_window(
     ctx: &egui::Context,
     shell: &UiShell,
@@ -429,6 +432,7 @@ pub fn float_window(
     panels: &mut PanelState,
     panel: Panel,
     tag: Option<(BadgeKind, String)>,
+    loc: Locale,
     body: impl FnOnce(&mut egui::Ui),
 ) {
     if !panels.is_visible(panel) {
@@ -450,7 +454,7 @@ pub fn float_window(
         !layout.collapsed,
     );
 
-    let win = egui::Window::new(panel.title())
+    let win = egui::Window::new(panel.title(loc))
         .id(id)
         .default_pos(egui::pos2(layout.x, layout.y))
         .default_size(egui::vec2(layout.width, layout.height))
@@ -466,7 +470,7 @@ pub fn float_window(
         );
 
     win.show(ctx, |ui| {
-        panel_head(ui, shell, panel, tag.as_ref(), &mut state, alpha);
+        panel_head(ui, shell, panel, tag.as_ref(), &mut state, alpha, loc);
         if state.is_open() {
             // 折叠关闭时不画体；体与头间留 `space::SM` 与壳内边距同步。
             state.show_body_unindented(ui, |ui| {
@@ -495,6 +499,7 @@ fn panel_head(
     tag: Option<&(BadgeKind, String)>,
     state: &mut egui::collapsing_header::CollapsingState,
     alpha: f32,
+    loc: Locale,
 ) {
     let head_h = shell.head_h;
     let avail_w = ui.available_width();
@@ -567,7 +572,7 @@ fn panel_head(
     p.text(
         egui::pos2(head_rect.min.x + pad + 18.0, center_y),
         egui::Align2::LEFT_CENTER,
-        panel.title(),
+        panel.title(loc),
         title_font,
         shell.t1(),
     );

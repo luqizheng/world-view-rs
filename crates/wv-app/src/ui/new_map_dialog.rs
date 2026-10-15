@@ -22,6 +22,7 @@ use wv_core::terrain::{TerrainCellData, TerrainData};
 use wv_core::Id;
 
 use crate::edit::editing::EditHistory;
+use crate::i18n::CurrentLocale;
 use crate::render::terrain_view::TerrainTexture;
 use crate::state::{map_level_label, DrillState, ProjectDiagnostics, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
@@ -162,6 +163,7 @@ pub fn new_map_dialog(
     mut diagnostics: ResMut<ProjectDiagnostics>,
     mut notice: ResMut<ShellNotice>,
     time: Res<Time>,
+    current_loc: Res<CurrentLocale>,
 ) {
     if !dialog.open {
         return;
@@ -213,7 +215,7 @@ pub fn new_map_dialog(
                 // 空世界的第一张图必须是世界图——它是钻取树的根（ensure_root
                 // 只认 level == World），别的层级在树下无处可挂。
                 if first_map {
-                    ui.label(map_level_label(MapLevel::World))
+                    ui.label(map_level_label(MapLevel::World, current_loc.0))
                         .on_hover_text("空世界的第一张地图固定为世界图");
                 } else {
                     for l in [
@@ -222,7 +224,11 @@ pub fn new_map_dialog(
                         MapLevel::City,
                         MapLevel::Interior,
                     ] {
-                        ui.selectable_value(&mut dialog.level, l, map_level_label(l));
+                        ui.selectable_value(
+                            &mut dialog.level,
+                            l,
+                            map_level_label(l, current_loc.0),
+                        );
                     }
                 }
             });

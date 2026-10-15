@@ -15,6 +15,7 @@
 use bevy::prelude::*;
 use bevy_egui::EguiContexts;
 
+use crate::i18n::CurrentLocale;
 use crate::state::{Panel, PanelState, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::ui_layout::LayoutFile;
@@ -32,6 +33,7 @@ pub fn panel_situation(
     layouts: Res<LayoutFile>,
     mut panels: ResMut<PanelState>,
     projection: Res<WorldProjection>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -51,6 +53,7 @@ pub fn panel_situation(
         &mut panels,
         Panel::Situation,
         badge,
+        current_loc.0,
         |ui| {
             let sits = &projection.world.situations;
             if sits.is_empty() {

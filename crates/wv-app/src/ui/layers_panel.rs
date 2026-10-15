@@ -18,6 +18,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
+use crate::i18n::CurrentLocale;
 use crate::state::{Panel, PanelState, ViewState};
 use crate::theme::ui_theme::{color32, proportional, UiShellConfig};
 use crate::theme::ui_tokens::{radius, space};
@@ -33,6 +34,7 @@ pub fn panel_map_tree(
     layouts: Res<LayoutFile>,
     mut panels: ResMut<PanelState>,
     _view: Res<ViewState>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -45,6 +47,7 @@ pub fn panel_map_tree(
         &mut panels,
         Panel::MapTree,
         None,
+        current_loc.0,
         |ui| {
             // 4 行：World / Region / City / Interior（web App.tsx 静态树；
             // 真实层级数据对接走后续任务）。(label, 缩进 px, 是否选中)
@@ -128,6 +131,7 @@ pub fn panel_layers(
     layouts: Res<LayoutFile>,
     mut panels: ResMut<PanelState>,
     mut view: ResMut<ViewState>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -140,6 +144,7 @@ pub fn panel_layers(
         &mut panels,
         Panel::Layers,
         Some((BadgeKind::Neutral, "8".into())),
+        current_loc.0,
         |ui| {
             // 一次性借走 8 个互不相同的字段（先降为普通 `&mut ViewState`，
             // borrowck 才允许不相交字段的并列可变借用——ResMut 每次 DerefMut

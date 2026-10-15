@@ -25,6 +25,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
+use crate::i18n::CurrentLocale;
 use crate::state::{RecentProject, RecentProjects, ViewMode, ViewState, WorldProjection};
 use crate::theme::palette::MapPalette;
 use crate::theme::ui_theme::{color32, mono, proportional, UiShellConfig};
@@ -48,6 +49,7 @@ pub fn top_bar(
     mut palette: ResMut<crate::ui_command_palette::CommandPalette>,
     mut view: ResMut<ViewState>,
     mut panels: ResMut<crate::state::PanelState>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -83,6 +85,7 @@ pub fn top_bar(
                     &recents,
                     &mut panels,
                     &mut menu,
+                    &current_loc,
                 );
                 // ── 右区：zoom / entities / 脏态徽标 / ⌘K（web .top-right，
                 //    L→R 次序 zoom→entities→badge→⌘K，故 RTL 添加序相反）──
@@ -112,6 +115,7 @@ pub fn top_bar(
         });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn identity_segment(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -120,9 +124,10 @@ fn identity_segment(
     recents: &[RecentProject],
     panels: &mut crate::state::PanelState,
     menu: &mut ProjectMenuState,
+    current_loc: &CurrentLocale,
 ) {
     // 项目按钮（logo + 粗体名 + chevron，见 project_menu）+ 组间距。
-    project_menu_inner(ui, shell, projection, recents, panels, menu);
+    project_menu_inner(ui, shell, projection, recents, panels, menu, current_loc.0);
     ui.add_space(space::MD);
 
     // 面包屑（web .breadcrumbs：gap 4、上级 text_3、**末级 text_2**）。

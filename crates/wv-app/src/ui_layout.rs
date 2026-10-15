@@ -52,6 +52,11 @@ fn default_true() -> bool {
 ///
 /// 作为 Bevy [`Resource`] 常驻内存：启动时读盘一次，运行中由
 /// [`crate::ui_shell::persist_layout_on_change`] 按 egui 记忆的**真实**窗口矩形回写。
+///
+/// ## 持久化字段说明（AGENTS §7.5 / P2 兼容）
+/// `panels` / `theme` / `density` / `map_theme` / `language` 都**只**写 UI 偏好，
+/// 不写世界数据——与本文件顶上的「纪律」一致。新增字段一律 `Option<String>` +
+/// `#[serde(default)]`（缺字段 / 字段无法解析静默忽略，V1 守约）。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
 pub struct LayoutFile {
     /// 各面板布局，键为 [`Panel::key`]。
@@ -66,6 +71,13 @@ pub struct LayoutFile {
     /// 地图主题（ADR-0016：`daylight` / `dusk`，`MapPalette::key`）。
     #[serde(default)]
     pub map_theme: Option<String>,
+    /// UI 语言（ADR-0018：`zh` / `en`）。
+    ///
+    /// 缺省 `None` = 使用默认 `Locale::Zh`；
+    /// 写入不可识别字符串（`ParseError` 等情况）由 `i18n::parse` 返回 `None`
+    /// 静默忽略，**不**阻塞启动（V1 守约）。
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 /// 布局文件路径：工程目录下的 `ui-layout.yaml`（P2：目录即工程）。
@@ -201,8 +213,8 @@ mod tests {
                 assert!(
                     !overlap,
                     "{} 与 {} 默认矩形重叠: ({:.0},{:.0},{:.0},{:.0}) vs ({:.0},{:.0},{:.0},{:.0})",
-                    a.title(),
-                    b.title(),
+                    a.title(crate::i18n::Locale::default()),
+                    b.title(crate::i18n::Locale::default()),
                     la.x,
                     la.y,
                     la.width,
@@ -263,5 +275,47 @@ mod tests {
         );
         assert!(got.collapsed, "折叠态未被记录");
         assert!(!got.visible, "显隐未被记录");
+    }
+
+    // ── language 持久化（ADR-0018 §2.2） ────────────────────────────
+
+    #[test]
+    fn language_round_trips_through_yaml() {
+        let f = LayoutFile {
+            language: Some("en".into()),
+            ..Default::default()
+        };
+        let text = serde_yaml::to_string(&f).expect("序列化应成功");
+        assert!(
+            text.contains("language: en"),
+            "yaml 应有 language 字段: {text}"
+        );
+        let back: LayoutFile = serde_yaml::from_str(&text).expect("反序列化应成功");
+        assert_eq!(back.language, Some("en".into()));
+    }
+
+    #[test]
+    fn missing_language_field_loads_as_none_without_error() {
+        let yaml = "panels: {}\n"; // 完全无 language 字段（与现存 examples/xinhai-1911/ui-layout.yaml 同口径）
+        let f: LayoutFile = serde_yaml::from_str(yaml).expect("缺字段应被 serde(default) 兜底");
+        assert_eq!(f.language, None);
+    }
+
+    #[test]
+    fn garbage_language_value_loads_as_raw_string_without_panic() {
+        // `Locale::parse` 处理在 ui_shell 层；本文件只保证**不做**字段级解析。
+        let yaml = "language: \"xx-XX-not-real\"\n";
+        let f: LayoutFile = serde_yaml::from_str(yaml).expect("字段保留为字符串");
+        assert_eq!(f.language.as_deref(), Some("xx-XX-not-real"));
+    }
+
+    #[test]
+    fn newer_yaml_with_extra_unknown_fields_loads_into_older_struct() {
+        // 兼容旧的 4 字段布局 yaml 加载到新版 LayoutFile（带 language）—— 不报错。
+        let yaml = "panels: {}\ntheme: dark\ndensity: cozy\n";
+        let f: LayoutFile = serde_yaml::from_str(yaml).expect("旧 yaml 加载应成功");
+        assert_eq!(f.theme.as_deref(), Some("dark"));
+        assert_eq!(f.density.as_deref(), Some("cozy"));
+        assert_eq!(f.language, None);
     }
 }

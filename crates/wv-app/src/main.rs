@@ -13,53 +13,102 @@
 //! - `main()` — 入口；按子命令派发。
 //! - `run_gui()` — `feature = "app"` 才编译的 GUI 启动封装。
 
-mod overture_cli;
-
 use std::process::ExitCode;
 
-use overture_cli::overture_command;
+use wv_app::i18n::{cli_locale, parse as parse_locale, set_cli_locale, Locale};
 use wv_io::Project;
+
+/// 进程启动第一步：把任意 `--language <zh|en>` 全局标记从 argv 里挑出来，
+/// 设进 [`wv_app::i18n::set_cli_locale`]，剩余参数从原地后移一格。
+///
+/// 这个标记**必须**在所有子命令派发之前应用——一旦子命令开始 eprintln 错误
+/// 信息，locale 已是最终值。`--language` 出现在位置任意（只要是 argv 的一
+/// 个独立 token）都生效；缺值 / 重复 / 不在白名单内则报错并打印 help。
+///
+/// 整体实现走「扫一遍 args，把 `--language <v>` 切掉，剩余传给后续 dispatch」
+/// —— 与主派发解耦，新加标记也按同口径加。
+fn extract_language_arg(args: Vec<String>) -> Result<Vec<String>, String> {
+    let loc = cli_locale();
+    let t = |k: wv_app::i18n::I18nKey| -> String { wv_app::i18n::t(loc, k).to_owned() };
+    let mut out = Vec::with_capacity(args.len());
+    let mut set = false;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--language" {
+            if set {
+                return Err(t(wv_app::i18n::I18nKey::CliLanguageDup));
+            }
+            let val = args
+                .get(i + 1)
+                .ok_or_else(|| t(wv_app::i18n::I18nKey::CliLanguageMissing))?;
+            let loc =
+                parse_locale(val).ok_or_else(|| t(wv_app::i18n::I18nKey::CliLanguageBadTag))?;
+            set_cli_locale(loc);
+            set = true;
+            i += 2;
+        } else {
+            out.push(args[i].clone());
+            i += 1;
+        }
+    }
+    if !set {
+        // 兜底：未显式给也登记一下默认 zh，让 cli_locale() 始终有值，
+        // 避免 [首次输出] 之前误用 .unwrap_or_default() 双重语义。
+        set_cli_locale(Locale::default());
+    }
+    Ok(out)
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = match extract_language_arg(args) {
+        Ok(a) => a,
+        Err(msg) => {
+            eprintln!("错误: {msg}");
+            print_help();
+            return ExitCode::from(2);
+        }
+    };
+    let loc = cli_locale();
+    let t = |k| wv_app::i18n::t(loc, k);
     match args.first().map(String::as_str) {
         Some("load") => {
             let Some(dir) = args.get(1) else {
-                eprintln!("用法: wv load <工程目录>");
+                eprintln!("{}", t(wv_app::i18n::I18nKey::CliUsageLoad));
                 return ExitCode::from(2);
             };
-            match load(dir) {
+            match load(dir, loc) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
-                    eprintln!("错误: {e}");
+                    eprintln!("{}{e}", t(wv_app::i18n::I18nKey::CliErrorPrefix));
                     ExitCode::FAILURE
                 }
             }
         }
         Some("validate") => {
             let Some(dir) = args.get(1) else {
-                eprintln!("用法: wv validate <工程目录>");
+                eprintln!("{}", t(wv_app::i18n::I18nKey::CliUsageValidate));
                 return ExitCode::from(2);
             };
-            match validate(dir) {
+            match validate(dir, loc) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
-                    eprintln!("错误: {e}");
+                    eprintln!("{}{e}", t(wv_app::i18n::I18nKey::CliErrorPrefix));
                     ExitCode::FAILURE
                 }
             }
         }
-        Some("raster-slice") => match raster_slice(&args[1..]) {
+        Some("raster-slice") => match raster_slice(&args[1..], loc) {
             Ok(()) => ExitCode::SUCCESS,
             Err(msg) => {
-                eprintln!("错误: {msg}");
+                eprintln!("{}{msg}", t(wv_app::i18n::I18nKey::CliErrorPrefix));
                 ExitCode::FAILURE
             }
         },
-        Some("overture") => match overture_command(&args[1..]) {
+        Some("overture") => match wv_app::overture_cli::overture_command(&args[1..], loc) {
             Ok(()) => ExitCode::SUCCESS,
             Err(msg) => {
-                eprintln!("错误: {msg}");
+                eprintln!("{}{msg}", t(wv_app::i18n::I18nKey::CliErrorPrefix));
                 ExitCode::FAILURE
             }
         },
@@ -71,7 +120,7 @@ fn main() -> ExitCode {
             }
             #[cfg(not(feature = "app"))]
             {
-                eprintln!("GUI 未编译。请使用 `cargo run -p wv-app --features app -- gui`");
+                eprintln!("{}", t(wv_app::i18n::I18nKey::CliGuiNotCompiled));
                 ExitCode::from(2)
             }
         }
@@ -80,7 +129,10 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some(other) => {
-            eprintln!("未知命令: {other}\n");
+            eprintln!(
+                "{}{other}",
+                t(wv_app::i18n::I18nKey::CliUnknownCommandPrefix)
+            );
             print_help();
             ExitCode::from(2)
         }
@@ -88,38 +140,47 @@ fn main() -> ExitCode {
 }
 
 fn print_help() {
+    let loc = cli_locale();
+    let t = |k| wv_app::i18n::t(loc, k);
     println!(
-        "wv —— World View 世界编辑器\n\n\
-         用法:\n  \
-         wv load <工程目录>       加载工程并打印摘要\n  \
-         wv validate <工程目录>   校验工程结构与引用完整性\n  \
-         wv raster-slice <工程目录> <map_id> [size]
-  \x20                  从来源图栅格切出该子图覆盖区域，
-  \x20                  采样落盘为 maps/<map_id>/terrain.bin（默认 512²）
-         wv overture fetch --bbox W,S,E,N --theme <places|transportation>\n  \
-         \x20                  [--release <TAG>] --out <GeoJSON 路径>\n  \
-         \x20                  下载 Overture Maps bbox 切片（GeoJSON）\n  \
-         \x20                  并按 ADR-0007 §理由（4）转为 PlaceEdgeCandidate 统计\n  \
-         wv gui [-m <工程目录>]   启动图形界面（需 --features app）。\n  \
-         \x20                        默认进空编辑器，不主动加载任何地图；\n  \
-         \x20                        显式 `-m <目录>` 时启动后加载（失败原因在窗口内显示）\n  \
-         wv --help                显示本帮助"
+        "{banner}\n\n\
+         {usage_header}:\n\
+         {load}\n\
+         {validate}\n\
+         {raster}\n\
+         {overture}\n\
+         {gui}\n\
+         {lang}\n\
+         {help}",
+        banner = t(wv_app::i18n::I18nKey::CliHelpBanner),
+        usage_header = t(wv_app::i18n::I18nKey::CliHelpUsageHeader),
+        load = t(wv_app::i18n::I18nKey::CliHelpLoad),
+        validate = t(wv_app::i18n::I18nKey::CliHelpValidate),
+        raster = t(wv_app::i18n::I18nKey::CliHelpRasterSlice),
+        overture = t(wv_app::i18n::I18nKey::CliHelpOvertureFetch),
+        gui = t(wv_app::i18n::I18nKey::CliHelpGui),
+        lang = t(wv_app::i18n::I18nKey::CliLanguageFlagHelp),
+        help = t(wv_app::i18n::I18nKey::CliHelpHelp),
     );
 }
 
 /// 底图切片（README §12-24）：把来源图栅格中被子图覆盖的那块采样落盘。
-fn raster_slice(args: &[String]) -> Result<(), String> {
+fn raster_slice(args: &[String], loc: Locale) -> Result<(), String> {
+    let t = |k| wv_app::i18n::t(loc, k);
     let Some(dir) = args.first() else {
-        return Err("用法: wv raster-slice <工程目录> <map_id> [size]".into());
+        return Err(t(wv_app::i18n::I18nKey::CliUsageRasterSlice).to_owned());
     };
     let Some(map_id) = args.get(1) else {
-        return Err("缺少 <map_id>。用法: wv raster-slice <工程目录> <map_id> [size]".into());
+        return Err(t(wv_app::i18n::I18nKey::CliUsageRasterSliceMapId).to_owned());
     };
     let size: u32 = match args.get(2) {
-        Some(s) => s.parse().map_err(|_| format!("size {s} 不是正整数"))?,
+        Some(s) => s
+            .parse()
+            .map_err(|_| t(wv_app::i18n::I18nKey::CliRasterSliceBadSize).to_owned())?,
         None => 512,
     };
-    let id = wv_core::Id::new(map_id).map_err(|e| format!("非法 map_id {map_id}: {e}"))?;
+    let id = wv_core::Id::new(map_id)
+        .map_err(|_| t(wv_app::i18n::I18nKey::CliRasterSliceBadMapId).to_owned())?;
     let mut project = Project::open(dir).map_err(|e| e.to_string())?;
     let mut world = project.load_world().map_err(|e| e.to_string())?;
     let data = wv_io::slice_terrain(&world, &id, size).map_err(|e| e.to_string())?;
@@ -127,33 +188,56 @@ fn raster_slice(args: &[String]) -> Result<(), String> {
     project
         .save_world(&world, &[format!("maps/{map_id}/terrain.bin")])
         .map_err(|e| e.to_string())?;
-    println!("已切片: maps/{map_id}/terrain.bin（{size}×{size}）");
-    println!("重新打开工程后，该图即使用自己的底图（继承退场）。");
+    // size 与 map_id 是**用户回显**字段；CLI 文案模板里留 `{map_id}` / `{size}`
+    // 占位，但 v1 仍要求用户回显原文——简单做字符串替换。
+    println!(
+        "{}",
+        t(wv_app::i18n::I18nKey::CliRasterSliceDone)
+            .replace("{map_id}", map_id)
+            .replace("{size}", &size.to_string())
+    );
+    println!("{}", t(wv_app::i18n::I18nKey::CliRasterSliceInherit));
     Ok(())
 }
 
-fn load(dir: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn load(dir: &str, loc: Locale) -> Result<(), Box<dyn std::error::Error>> {
+    let t = |k| wv_app::i18n::t(loc, k);
     let project = Project::open(dir)?;
     println!("{}", project.summary());
     let warnings = project.validate()?;
     if !warnings.is_empty() {
-        println!("\n提示:");
+        println!("\n{}", t(wv_app::i18n::I18nKey::CliProjectSummaryHints));
         for w in warnings {
-            println!("  - {w}");
+            println!(
+                "{}{w}",
+                t(wv_app::i18n::I18nKey::CliProjectSummaryHintBullet)
+            );
         }
     }
     Ok(())
 }
 
-fn validate(dir: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn validate(dir: &str, loc: Locale) -> Result<(), Box<dyn std::error::Error>> {
+    let t = |k| wv_app::i18n::t(loc, k);
     let project = Project::open(dir)?;
     let warnings = project.validate()?;
     if warnings.is_empty() {
-        println!("校验通过: {}", project.root().display());
+        println!(
+            "{}{}",
+            t(wv_app::i18n::I18nKey::CliValidateOk),
+            project.root().display()
+        );
     } else {
-        println!("校验发现 {} 项问题:", warnings.len());
+        println!(
+            "{}",
+            t(wv_app::i18n::I18nKey::CliValidateFailPrefix)
+                .replace("{n}", &warnings.len().to_string())
+        );
         for w in &warnings {
-            println!("  - {w}");
+            println!(
+                "{}{w}",
+                t(wv_app::i18n::I18nKey::CliProjectSummaryHintBullet)
+            );
         }
         std::process::exit(1);
     }
@@ -182,10 +266,14 @@ fn run_gui() {
             wv_app::app_bootstrap::run(config)
         }
         Err(msg) => {
-            eprintln!("错误: {msg}\n");
+            let loc = cli_locale();
             eprintln!(
-                "用法: wv gui [-m <工程目录>]\\\n           \
-                 [(--http-port <N>) [--http-bind <addr>]]"
+                "{}{msg}",
+                wv_app::i18n::t(loc, wv_app::i18n::I18nKey::CliErrorPrefix)
+            );
+            eprintln!(
+                "\n{}",
+                wv_app::i18n::t(loc, wv_app::i18n::I18nKey::CliGuiUsage)
             );
             std::process::exit(2);
         }
@@ -221,6 +309,9 @@ struct GuiArgs {
 /// 第一眼就发现）。
 #[cfg(feature = "app")]
 fn parse_gui_args(args: &[String]) -> Result<GuiArgs, String> {
+    use wv_app::i18n::I18nKey;
+    let loc = cli_locale();
+    let t = |k: I18nKey| -> String { wv_app::i18n::t(loc, k).to_owned() };
     let mut dir: Option<String> = None;
     // http 关闭时两个 flag 的分支直接报错返回（见下方 cfg(not(http))），收集槽
     // 不参与任何使用——按 cfg 静音，`--features app` 闸门的 -D warnings 才不误红。
@@ -233,13 +324,10 @@ fn parse_gui_args(args: &[String]) -> Result<GuiArgs, String> {
         match args[i].as_str() {
             "-m" => {
                 let Some(d) = args.get(i + 1) else {
-                    return Err(
-                        "`-m` 需要一个工程目录参数，例如 `wv gui -m examples/minimal-world`"
-                            .to_owned(),
-                    );
+                    return Err(t(I18nKey::CliGuiErrMDirNeeded));
                 };
                 if dir.is_some() {
-                    return Err("工程目录重复指定".to_owned());
+                    return Err(t(I18nKey::CliGuiErrDirDup));
                 }
                 dir = Some(d.clone());
                 i += 2;
@@ -248,19 +336,14 @@ fn parse_gui_args(args: &[String]) -> Result<GuiArgs, String> {
                 #[cfg(feature = "http")]
                 {
                     let Some(s) = args.get(i + 1) else {
-                        return Err(
-                            "`--http-port` 需要一个 1..=65535 的整数，例如 `--http-port 9000`"
-                                .to_owned(),
-                        );
+                        return Err(t(I18nKey::CliGuiErrHttpPortNeeded));
                     };
                     if port.is_some() {
-                        return Err("`--http-port` 重复指定".to_owned());
+                        return Err(t(I18nKey::CliGuiErrHttpPortDup));
                     }
-                    let parsed: u16 = s
-                        .parse()
-                        .map_err(|_| format!("`--http-port {s}` 不是 1..=65535 的整数"))?;
+                    let parsed: u16 = s.parse().map_err(|_| t(I18nKey::CliGuiErrHttpPortParse))?;
                     if parsed == 0 {
-                        return Err("`--http-port` 必须 ≥ 1".to_owned());
+                        return Err(t(I18nKey::CliGuiErrHttpPortZero));
                     }
                     port = Some(parsed);
                     i += 2;
@@ -268,20 +351,17 @@ fn parse_gui_args(args: &[String]) -> Result<GuiArgs, String> {
                 #[cfg(not(feature = "http"))]
                 {
                     let _ = i;
-                    return Err("`--http-port` 需要 `--features http` 才会生效".to_owned());
+                    return Err(t(I18nKey::CliGuiErrHttpPortDisabled));
                 }
             }
             "--http-bind" => {
                 #[cfg(feature = "http")]
                 {
                     let Some(s) = args.get(i + 1) else {
-                        return Err(
-                            "`--http-bind` 需要一个 IPv4 地址，例如 `--http-bind 0.0.0.0`"
-                                .to_owned(),
-                        );
+                        return Err(t(I18nKey::CliGuiErrHttpBindNeeded));
                     };
                     if bind.is_some() {
-                        return Err("`--http-bind` 重复指定".to_owned());
+                        return Err(t(I18nKey::CliGuiErrHttpBindDup));
                     }
                     // 用 std::net::SocketAddr 解析（要求 host:port 形态）。
                     // 端口可省：默认 0（让 OS 选），与 axum 的 TcpListener::bind 一致。
@@ -292,20 +372,25 @@ fn parse_gui_args(args: &[String]) -> Result<GuiArgs, String> {
                     };
                     probe
                         .parse::<std::net::SocketAddr>()
-                        .map_err(|_| format!("`--http-bind {s}` 不是合法的 IPv4:port 形态"))?;
+                        .map_err(|_| t(I18nKey::CliGuiErrHttpBindParse))?;
                     bind = Some(s.clone());
                     i += 2;
                 }
                 #[cfg(not(feature = "http"))]
                 {
                     let _ = i;
-                    return Err("`--http-bind` 需要 `--features http` 才会生效".to_owned());
+                    return Err(t(I18nKey::CliGuiErrHttpBindDisabled));
                 }
             }
-            s if s.starts_with('-') => return Err(format!("未知参数: {s}")),
+            s if s.starts_with('-') => {
+                return Err(format!(
+                    "{}{s}",
+                    wv_app::i18n::t(loc, I18nKey::CliGuiErrUnknownArg)
+                ));
+            }
             s => {
                 if dir.is_some() {
-                    return Err("工程目录重复指定".to_owned());
+                    return Err(t(I18nKey::CliGuiErrDirDup));
                 }
                 dir = Some(s.to_owned());
                 i += 1;

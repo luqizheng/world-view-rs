@@ -16,6 +16,7 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::edit::editing;
+use crate::i18n::CurrentLocale;
 use crate::render::streets;
 use crate::state::{BrushState, BrushTool, DrillState, Panel, PanelState, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
@@ -39,6 +40,7 @@ pub fn panel_brush(
     drill: Res<DrillState>,
     mut edit: ResMut<editing::EditHistory>,
     grid: Res<crate::state::GridConfig>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -57,6 +59,7 @@ pub fn panel_brush(
         &mut panels,
         Panel::Brush,
         badge,
+        current_loc.0,
         |ui| {
             // ── Brush / Grid 双段切换（Figma v0.3 风格）──
             ui.horizontal(|ui| {
@@ -173,7 +176,7 @@ pub fn panel_brush(
                         .size(shell.scale.micro)
                         .color(shell.t3()),
                 );
-                terrain_grid(ui, &shell, &mut brush.kind);
+                terrain_grid(ui, &shell, &mut brush.kind, current_loc.0);
                 ui.add_space(space::SM);
 
                 // ── 半径 / 软度滑条（Figma 风格：标签左、值右、轨在中间）──

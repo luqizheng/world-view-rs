@@ -17,6 +17,7 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::edit::validation_actions;
+use crate::i18n::{t_key, CurrentLocale, I18nKey};
 use crate::state::{
     Panel, PanelState, PlaybackState, ProjectDiagnostics, ViewState, WorldProjection,
 };
@@ -40,6 +41,7 @@ pub fn panel_validation(
     mut view: ResMut<ViewState>,
     mut playback: ResMut<PlaybackState>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -55,24 +57,46 @@ pub fn panel_validation(
         &mut panels,
         Panel::Validation,
         None,
+        current_loc.0,
         |ui| {
             // 顶部状态条：错误用 Err 徽标，提示用 Warn 徽标。
             if n_errors > 0 {
-                badge(ui, &shell, BadgeKind::Err, &format!("错误 {n_errors}"));
+                badge(
+                    ui,
+                    &shell,
+                    BadgeKind::Err,
+                    &format!(
+                        "{}{n_errors}",
+                        t_key(&current_loc, I18nKey::ValidationBadgeErrCountPrefix)
+                    ),
+                );
             } else {
-                badge(ui, &shell, BadgeKind::Ok, "无错误");
+                badge(
+                    ui,
+                    &shell,
+                    BadgeKind::Ok,
+                    t_key(&current_loc, I18nKey::ValidationBadgeErrNone),
+                );
             }
             ui.add_space(space::SM);
-            badge(ui, &shell, BadgeKind::Warn, &format!("提示 {n_hints}"));
+            badge(
+                ui,
+                &shell,
+                BadgeKind::Warn,
+                &format!(
+                    "{}{n_hints}",
+                    t_key(&current_loc, I18nKey::ValidationBadgeWarnCountPrefix)
+                ),
+            );
             ui.add_space(space::SM);
             ui.label(
-                egui::RichText::new("四维校验：时间 / 引用 / 几何 / 一致性")
+                egui::RichText::new(t_key(&current_loc, I18nKey::ValidationSubtitle))
                     .size(shell.scale.small)
                     .color(shell.t2()),
             );
             ui.add_space(space::XS);
             ui.label(
-                egui::RichText::new("校验只提示，不阻止保存（AGENTS §7.5）")
+                egui::RichText::new(t_key(&current_loc, I18nKey::ValidationFootnote))
                     .size(shell.scale.micro)
                     .color(shell.t3()),
             );
@@ -80,7 +104,7 @@ pub fn panel_validation(
             // 错误列表（按指纹 dedup 后仍可能有 N 条同类）。
             if n_errors > 0 {
                 ui.label(
-                    egui::RichText::new("错误")
+                    egui::RichText::new(t_key(&current_loc, I18nKey::ValidationSectionErrors))
                         .size(shell.scale.small)
                         .strong()
                         .color(shell.t1()),
@@ -133,7 +157,7 @@ pub fn panel_validation(
             // 提示列表（相遇提示 / 事件位移可行性等）。
             if n_hints > 0 {
                 ui.label(
-                    egui::RichText::new("提示")
+                    egui::RichText::new(t_key(&current_loc, I18nKey::ValidationSectionHints))
                         .size(shell.scale.small)
                         .strong()
                         .color(shell.t1()),
@@ -184,7 +208,7 @@ pub fn panel_validation(
             } else if n_errors == 0 {
                 ui.add_space(space::MD);
                 ui.label(
-                    egui::RichText::new("一切正常")
+                    egui::RichText::new(t_key(&current_loc, I18nKey::ValidationOkAll))
                         .size(shell.scale.small)
                         .color(shell.t3()),
                 );
