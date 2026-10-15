@@ -1,4 +1,4 @@
-﻿//! 项目管理菜单（v0.2 §A）+ 面包屑（v0.2 §B.3）。
+//! 项目管理菜单（v0.2 §A）+ 面包屑（v0.2 §B.3）。
 //!
 //! ## 职责
 //! - `ProjectMenuState` —— 跨帧高亮项（egui `Popup::Memory` 只存开关，不存选中行）。
@@ -25,6 +25,7 @@ use crate::theme::ui_theme::{mono, proportional, UiShellConfig};
 use crate::theme::ui_tokens::{font_size, radius, space};
 
 use super::shell::UiShell;
+use super::widgets::{ICON_CHEVRON_DOWN, ICON_MAP};
 
 /// 项目管理菜单的交互状态。
 ///
@@ -80,25 +81,61 @@ pub(crate) fn project_menu_inner(
     let popup_id = egui::Id::new("wv_project_menu");
     let opened = egui::Popup::is_id_open(ui.ctx(), popup_id);
 
-    // ── 触发器 ──
-    let text = format!("◈ {name}{}", if dirty { " ●" } else { "" });
-    let galley = ui
-        .painter()
-        .layout_no_wrap(text, proportional(shell.scale.base), shell.t1());
-    let size = egui::vec2(galley.size().x + space::SM * 2.0, shell.hit);
-    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
-    // 自绘而不是用 `Button`：菜单在顶栏里的 hover 底必须是 `bg.hover` 令牌（§4.2）。
-    if resp.hovered() || opened {
+    // ── 触发器（web `.project-button`：24×24 accent 蓝 logo 方块 + 粗体工程名
+    //    + 下翻 chevron；v0.3 前 的 `◈ 名字 ●` 文本形态已退役——脏态徽标在
+    //    顶栏右侧，不在按钮里）──
+    let _ = dirty; // 脏态展示已上移到顶栏右侧徽标（top_bar::readout_segment）
+    let logo_size = 24.0;
+    let chevron_w = 12.0_f32;
+    let galley =
         ui.painter()
-            .rect_filled(rect, radius::CONTROL, shell.hover_bg());
+            .layout_no_wrap(name.clone(), proportional(shell.scale.base), shell.t1());
+    // 左内边距 3 + logo 24 + gap 6 + 名字 + gap 4 + chevron 12 + 右内边距 8
+    let total_w = 3.0 + logo_size + 6.0 + galley.size().x + 4.0 + chevron_w + space::SM;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(total_w, 30.0), egui::Sense::click());
+    // 自绘而不是用 `Button`：菜单在顶栏里的 hover 底必须是 `bg.hover` 令牌（§4.2）。
+    {
+        let painter = ui.painter();
+        if resp.hovered() || opened {
+            painter.rect_filled(rect, radius::CONTROL, shell.hover_bg());
+        }
+        // logo：accent 蓝底圆角方块（web `.logo`），白色 map 图标由下方 ui.put 画
+        let logo_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.min.x + 3.0, rect.center().y - logo_size * 0.5),
+            egui::vec2(logo_size, logo_size),
+        );
+        painter.rect_filled(logo_rect, 6.0, shell.accent());
+        // 工程名（web 加粗）
+        painter.galley(
+            egui::pos2(
+                logo_rect.max.x + 6.0,
+                rect.center().y - galley.size().y * 0.5,
+            ),
+            galley,
+            shell.t1(),
+        );
     }
-    ui.painter().galley(
-        egui::pos2(
-            rect.min.x + space::SM,
-            rect.center().y - galley.size().y * 0.5,
-        ),
-        galley,
-        shell.t1(),
+    // logo 内的白色 map 图标（mut 借用须在 painter 作用域之后）
+    let logo_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.min.x + 3.0, rect.center().y - logo_size * 0.5),
+        egui::vec2(logo_size, logo_size),
+    );
+    let _ = ui.put(
+        logo_rect.shrink(4.0),
+        egui::Image::new(ICON_MAP)
+            .tint(egui::Color32::WHITE)
+            .fit_to_exact_size(egui::vec2(16.0, 16.0)),
+    );
+    // 下翻 chevron（web：chevron 旋转 90° → 直接用 chevron-down 资源）
+    let chevron_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.max.x - space::SM - chevron_w * 0.5, rect.center().y),
+        egui::vec2(chevron_w, chevron_w),
+    );
+    let _ = ui.put(
+        chevron_rect,
+        egui::Image::new(ICON_CHEVRON_DOWN)
+            .tint(shell.t3())
+            .fit_to_exact_size(egui::vec2(chevron_w, chevron_w)),
     );
     if resp.clicked() {
         state.selected = 0;

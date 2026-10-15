@@ -1,25 +1,24 @@
-//! 顶栏（38px v0.3）+ 状态栏（22px v0.3）。
+//! 顶栏（38px v0.3 · web `.topbar` 对齐）+ 状态栏（22px）。
 //!
 //! ## 职责
-//! - `top_bar`：身份 / 主控 / 读数 三段式；Figma `5E8BCBCmtGAHqk3ORibBlU` 风格：
-//!   左侧项目名 + 面包屑；中段 `Browse`/`Edit` 双段 + 地图主题分段 + `Rebuild`；
-//!   右侧 zoom / entities / 脏态徽标 / ⌘K。
-//! - `status_bar`：实体计数 / 路径 / zoom / Saved / warnings / 当前文件。
+//! - `top_bar` —— web `grid: 1fr auto 1fr` 三区：左 = 项目按钮（蓝 logo +
+//!   粗体名 + 下翻箭头，见 [`super::project_menu`]）+ 面包屑；**中 = Browse /
+//!   Edit 分段 + 地图主题分段 + Rebuild 按钮（独立 Area 锚视口顶部居中）**；
+//!   右 = zoom / entities / 脏态徽标 / ⌘K 按钮。
+//! - `status_bar` —— 实体计数 / 路径 / zoom / Saved / warnings / 当前文件。
+//!
+//! ## web 对齐要点（`index.css` / `App.tsx`，v0.3 校准）
+//! - 高度 38px（`.topbar`）；底色 `bg_app` 96% + 底边框 + `0 4px 20px` 投影。
+//! - 分段控件（`.segmented`）：容器 `bg_app` 底 + border + 圆角 7、内边距 2px；
+//!   选中段 `bg_active` 底 + `text_1`，**内嵌**于容器而非顶满。
+//! - 主题分段按 web 顺序与文案：`Dusk Old Paper` / `Sunlit Ancient Atlas`
+//!   （10px 字）；数据层仍映射 [`crate::theme::palette::MapPalette`]。
+//! - `Rebuild` / `⌘K` 是**图标+文字**的 raised 按钮（web `.button`），非裸图标。
+//! - 面包屑末级 `text_2`（web `b` 标签色），非末级 `text_3`。
 //!
 //! ## 边界
 //! - **不**画项目管理菜单的展开式内容 —— [`super::project_menu::project_menu`]。
 //! - **不**装配 Bevy App / Startup —— [`crate::app_bootstrap`]。
-//!
-//! ## 关键决策（v0.3 · 2026-10-15 用户拍板）
-//! - Figma 用 `Browse` / `Edit` 英文标签；数据层 `ViewMode::label()` 仍输出
-//!   中文「矢量地形 / 色块地形」（命令面板/快捷键依赖）。**仅顶栏**改英文：
-//!   `Browse` ↔ `ViewMode::VectorFlat`（默认），`Edit` ↔ `ViewMode::Schematic`。
-//! - 高度以 **web 实现源码**（`index.css` `.topbar`/`.statusbar`）为准：
-//!   38px / 22px（v0.3 初版按渲染图猜的 44/24 已回退）。
-//! - `Browse`/`Edit` 选中段是 `bg_active` **灰底**（web `.segmented
-//!   .button.active`），蓝底只给主按钮；分段容器底是 `bg_app`。
-//! - 脏态：顶栏右侧 warn 徽标 `● Unsaved changes`（web `.badge.warn`）；
-//!   状态栏 `Saved locally` 走 ok 徽标、`N warnings` 走 warn 徽标。
 
 #![cfg(feature = "app")]
 
@@ -27,17 +26,16 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::state::{RecentProject, RecentProjects, ViewMode, ViewState, WorldProjection};
+use crate::theme::palette::MapPalette;
 use crate::theme::ui_theme::{color32, mono, proportional, UiShellConfig};
 
 use super::project_menu::{project_menu_inner, ProjectMenuState};
 use super::shell::UiShell;
-use super::widgets::{
-    badge, BadgeKind, ICON_ALERT, ICON_CHEVRON_DOWN, ICON_CHEVRON_RIGHT, ICON_COMMAND, ICON_REFRESH,
-};
+use super::widgets::{badge, BadgeKind, ICON_CHEVRON_RIGHT, ICON_COMMAND, ICON_REFRESH};
 use crate::theme::ui_tokens::{font_size, radius, space};
 use crate::ui_command_palette::CommandId;
 
-/// 顶栏：身份 / 主控 / 读数。**唯一例外**的 `TopBottomPanel`（v0.3：44px）。
+/// 顶栏：身份 / 主控（居中独立 Area）/ 读数。**唯一例外**的 `TopBottomPanel`。
 #[allow(clippy::too_many_arguments)]
 pub fn top_bar(
     mut contexts: EguiContexts,
@@ -53,7 +51,7 @@ pub fn top_bar(
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
-    // v0.3 校准：web `.topbar` 高 38px（初版按渲染图猜 44px，已回退）。
+    // web `.topbar` 精确高度 38px。
     let h = 38.0;
     let recents = recents_res.visible(&projection);
     let mut root = root_ui(ctx);
@@ -61,13 +59,20 @@ pub fn top_bar(
         .exact_size(h)
         .frame(
             egui::Frame::NONE
-                .fill(color32(shell.palette.bg_panel))
+                // web：color-mix(app 96%) + border-bottom + 0 4px 20px 阴影
+                .fill(color32(shell.palette.bg_app).gamma_multiply(0.96))
                 .stroke(egui::Stroke::new(1.0, color32(shell.palette.border_subtle)))
-                .inner_margin(crate::theme::ui_theme::margin_xy(space::MD, 0.0)),
+                .shadow(egui::Shadow {
+                    offset: [0, 4],
+                    blur: 20,
+                    spread: 0,
+                    color: egui::Color32::from_black_alpha(56),
+                })
+                .inner_margin(crate::theme::ui_theme::margin_xy(space::SM, 0.0)),
         )
         .show(&mut root, |ui| {
             ui.horizontal(|ui| {
-                // ── 身份：项目名（带 chevron） + 面包屑 ──
+                // ── 左区：项目按钮 + 面包屑（web .top-left）──
                 identity_segment(
                     ui,
                     &shell,
@@ -77,26 +82,30 @@ pub fn top_bar(
                     &mut panels,
                     &mut menu,
                 );
-                ui.add_space(space::LG);
-
-                // ── 主控：Browse / Edit 双段（Figma v0.3）──
-                browse_edit_segment(ui, &shell, &mut view);
-                ui.add_space(space::SM);
-                // ── 地图主题（ADR-0016：日间古舆图 / 暮色旧纸，与技法正交）──
-                // v0.3 校准：web 顶栏中段确有主题分段（Dusk Old Paper / Sunlit
-                // Ancient Atlas），对应本项目 MapPalette——M1 曾误删，现恢复。
-                map_palette_segment(ui, &shell, &mut view);
-                ui.add_space(space::SM);
-                // ── Rebuild 图标按钮（web 顶栏为带字按钮，此处保留图标+tooltip）──
-                if mini_icon_button(ui, &shell, ICON_REFRESH, "强制重画地形（F5）").clicked()
-                {
-                    palette.pending = Some(CommandId::ForceRebuildTexture);
-                }
-
-                // 读数推到右端。
+                // ── 右区：zoom / entities / 脏态徽标 / ⌘K（web .top-right，
+                //    L→R 次序 zoom→entities→badge→⌘K，故 RTL 添加序相反）──
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     readout_segment(ui, &shell, &view, &projection);
                 });
+            });
+        });
+
+    // ── 中区：web grid 的 `auto` 列——独立 Area 锚视口顶部居中 ──
+    //（TopBottomPanel 里做不了「剩余宽度居中」，锚定 Area 是 egui 等价物；
+    //  高 38 内垂直居中：内容 shell.hit=28 → 偏移 (38-28)/2 = 5px。）
+    egui::Area::new(egui::Id::new("wv_topbar_middle"))
+        .anchor(
+            egui::Align2::CENTER_TOP,
+            egui::vec2(0.0, (h - shell.hit) * 0.5),
+        )
+        .order(egui::Order::Middle)
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                browse_edit_segment(ui, &shell, &mut view);
+                ui.add_space(6.0);
+                theme_segment(ui, &shell, &mut view);
+                ui.add_space(6.0);
+                rebuild_button(ui, &shell, &mut palette);
             });
         });
 }
@@ -110,16 +119,14 @@ fn identity_segment(
     panels: &mut crate::state::PanelState,
     menu: &mut ProjectMenuState,
 ) {
-    // 项目管理菜单：图标（蓝书）+ 工程名 + chevron
+    // 项目按钮（logo + 粗体名 + chevron，见 project_menu）+ 组间距。
     project_menu_inner(ui, shell, projection, recents, panels, menu);
     ui.add_space(space::MD);
 
-    // 面包屑：World › Zunyi › Government Office
-    //  末级 = `t1`（深），上级 = `t3`（弱）；与 `crumb_text_3` 同口径。
+    // 面包屑（web .breadcrumbs：gap 4、上级 text_3、**末级 text_2**）。
     let crumb = crate::ui_time::format_breadcrumb(projection, &view.current_map);
     for (i, seg) in crumb.iter().enumerate() {
         if i > 0 {
-            // 弱色 chevron 分隔
             ui.add(
                 egui::Image::new(ICON_CHEVRON_RIGHT)
                     .tint(shell.t3())
@@ -128,7 +135,7 @@ fn identity_segment(
             ui.add_space(space::XS);
         }
         let color = if i + 1 == crumb.len() {
-            shell.t1()
+            shell.t2()
         } else {
             shell.t3()
         };
@@ -140,136 +147,138 @@ fn identity_segment(
         ui.add_space(space::XS);
     }
 
-    // 工程未加载时的醒目错误（§5.1）。脏态徽标在右侧读数段（web `.top-right`）。
+    // 工程未加载时的醒目错误（§5.1）。脏态徽标在右侧读数段。
     if projection.load_error.is_some() {
         ui.add_space(space::SM);
         badge(ui, shell, BadgeKind::Err, "工程未加载");
     }
 }
 
-/// Figma v0.3：Browse / Edit 双段。
-///
-/// 与旧 `view_mode_segment` 同款手绘（密度敏感），但标签英文、内部映射：
-/// - `Browse` → `ViewMode::VectorFlat`（默认浏览）
-/// - `Edit`   → `ViewMode::Schematic`（色块格子，更适合编辑）
-///
-/// 数据层 `view.mode` 仍按原枚举流转；`CommandId::SetViewMode` 与命令面板不
-/// 受影响（命令面板的 label 来自 `ViewMode::label()`，保持中文「矢量地形/色块地形」）。
-///
-/// 样式以 web `.segmented` 为准：容器 `bg_app` 底 + `border` 描边，选中段
-/// `bg_active` 灰底 + `text_1`（蓝底只给主按钮，v0.3 初版的 accent_soft 已回退）。
-fn browse_edit_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
-    let segs: [(&str, ViewMode); 2] = [
-        ("Browse", ViewMode::VectorFlat),
-        ("Edit", ViewMode::Schematic),
-    ];
-    let n = segs.len() as f32;
-    let seg_w = 140.0;
-    let seg_h = shell.hit;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(seg_w, seg_h), egui::Sense::hover());
-    let painter = ui.painter();
-    painter.rect_filled(rect, radius::CONTROL, color32(shell.palette.bg_app));
-    rect_stroke_app(
-        painter,
-        rect,
-        radius::CONTROL,
-        color32(shell.palette.border_subtle),
-    );
-    let seg_w_each = rect.width() / n;
-    for (i, (label, mode)) in segs.iter().enumerate() {
-        let r = egui::Rect::from_min_max(
-            egui::pos2(rect.min.x + seg_w_each * i as f32, rect.min.y),
-            egui::pos2(rect.min.x + seg_w_each * (i as f32 + 1.0), rect.max.y),
-        );
-        let selected = view.mode == *mode;
-        let resp = ui.interact(
-            r,
-            egui::Id::new(("wv_browse_edit", i)),
-            egui::Sense::click(),
-        );
-        if selected {
-            painter.rect_filled(r, radius::CONTROL, shell.active_bg());
-        } else if resp.hovered() {
-            painter.rect_filled(r, radius::CONTROL, shell.hover_bg());
-        }
-        let fg = if selected { shell.t1() } else { shell.t2() };
-        painter.text(
-            r.center(),
-            egui::Align2::CENTER_CENTER,
-            *label,
-            proportional(font_size::SMALL),
-            fg,
-        );
-        if resp.clicked() {
-            view.mode = *mode;
-        }
-    }
-}
-
-/// 地图主题分段控件（日间古舆图 / 暮色旧纸，ADR-0016）。
-///
-/// v0.3 校准恢复：web 顶栏中段的 `Dusk Old Paper / Sunlit Ancient Atlas`
-/// 分段即本项目的 `MapPalette` 轴（M1 重写时误删）。样式与
-/// [`browse_edit_segment`] 同款（web `.segmented`），两段定宽 64px。
-fn map_palette_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
-    use crate::theme::palette::MapPalette;
-    let n = MapPalette::ALL.len() as f32;
-    let seg_w = n * 64.0;
-    let seg_h = shell.hit;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(seg_w, seg_h), egui::Sense::hover());
-    let painter = ui.painter();
-    painter.rect_filled(rect, radius::CONTROL, color32(shell.palette.bg_app));
-    rect_stroke_app(
-        painter,
-        rect,
-        radius::CONTROL,
-        color32(shell.palette.border_subtle),
-    );
-    let seg_w_each = rect.width() / n;
-    for (i, p) in MapPalette::ALL.iter().enumerate() {
-        let r = egui::Rect::from_min_max(
-            egui::pos2(rect.min.x + seg_w_each * i as f32, rect.min.y),
-            egui::pos2(rect.min.x + seg_w_each * (i as f32 + 1.0), rect.max.y),
-        );
-        let selected = view.map_palette == *p;
-        let resp = ui.interact(
-            r,
-            egui::Id::new(("wv_palette_seg", i)),
-            egui::Sense::click(),
-        );
-        if selected {
-            painter.rect_filled(r, radius::CONTROL, shell.active_bg());
-        } else if resp.hovered() {
-            painter.rect_filled(r, radius::CONTROL, shell.hover_bg());
-        }
-        let fg = if selected { shell.t1() } else { shell.t2() };
-        painter.text(
-            r.center(),
-            egui::Align2::CENTER_CENTER,
-            p.label(),
-            proportional(font_size::SMALL),
-            fg,
-        );
-        if resp.clicked() {
-            view.map_palette = *p;
-        }
-    }
-}
-
-/// 顶栏分段容器的内描边（统一 `StrokeKind::Inside`，与 widgets::rect_stroke
-/// 同口径；本文件自持一份以免引 pub(crate) 跨模块）。
-fn rect_stroke_app(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    corner_radius: impl Into<egui::CornerRadius>,
-    color: egui::Color32,
+/// web `.segmented`：容器 `bg_app` 底 + border + 圆角 7 + 内边距 2px；
+/// 选中段 `bg_active` 底 + `text_1`（内嵌于容器，不顶边）+ 1px 投影。
+#[allow(clippy::too_many_arguments)]
+fn segmented(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    id: &str,
+    seg_w_each: f32,
+    labels: &[&str],
+    active_index: usize,
+    font_px: f32,
+    mut on_pick: impl FnMut(usize),
 ) {
+    let total_w = seg_w_each * labels.len() as f32;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(total_w, shell.hit), egui::Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(rect, 7.0, color32(shell.palette.bg_app));
     painter.rect_stroke(
         rect,
-        corner_radius,
-        egui::Stroke::new(1.0, color),
+        7.0,
+        egui::Stroke::new(1.0, color32(shell.palette.border_subtle)),
         egui::StrokeKind::Inside,
     );
+    let inner = rect.shrink(2.0);
+    let each = inner.width() / labels.len().max(1) as f32;
+    for (i, label) in labels.iter().enumerate() {
+        let r = egui::Rect::from_min_max(
+            egui::pos2(inner.min.x + each * i as f32, inner.min.y),
+            egui::pos2(inner.min.x + each * (i as f32 + 1.0), inner.max.y),
+        );
+        let resp = ui.interact(r, egui::Id::new((id, i)), egui::Sense::click());
+        if i == active_index {
+            // web `.segmented .button.active`：active 底 + 0 1px 3px 阴影 + text_1
+            painter.rect_filled(r, 5.0, shell.active_bg());
+            painter.text(
+                r.center(),
+                egui::Align2::CENTER_CENTER,
+                *label,
+                proportional(font_px),
+                shell.t1(),
+            );
+        } else {
+            if resp.hovered() {
+                painter.rect_filled(r, 5.0, shell.hover_bg());
+            }
+            painter.text(
+                r.center(),
+                egui::Align2::CENTER_CENTER,
+                *label,
+                proportional(font_px),
+                shell.t2(),
+            );
+        }
+        if resp.clicked() {
+            on_pick(i);
+        }
+    }
+}
+
+/// Browse / Edit 双段：`Browse` → `ViewMode::VectorFlat`（默认浏览）、
+/// `Edit` → `ViewMode::Schematic`（色块格子）。
+///
+/// 数据层 `view.mode` 仍按原枚举流转；命令面板 label 来自 `ViewMode::label()`
+/// （中文），不受影响（v0.3 用户拍板：仅顶栏用英文）。
+fn browse_edit_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
+    let labels = ["Browse", "Edit"];
+    let modes = [ViewMode::VectorFlat, ViewMode::Schematic];
+    let active = modes.iter().position(|m| *m == view.mode).unwrap_or(0);
+    segmented(
+        ui,
+        shell,
+        "wv_browse_edit",
+        64.0,
+        &labels,
+        active,
+        font_size::SMALL,
+        |i| {
+            view.mode = modes[i];
+        },
+    );
+}
+
+/// 地图主题分段（web `.theme-toggle`：`Dusk Old Paper / Sunlit Ancient Atlas`，
+/// 10px 字，Dusk 在前）。数据层仍映射 [`MapPalette`]（Daylight/Dusk）。
+fn theme_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
+    let order = [MapPalette::Dusk, MapPalette::Daylight];
+    let labels = ["Dusk Old Paper", "Sunlit Ancient Atlas"];
+    let active = order
+        .iter()
+        .position(|p| *p == view.map_palette)
+        .unwrap_or(0);
+    segmented(
+        ui,
+        shell,
+        "wv_theme_seg",
+        96.0,
+        &labels,
+        active,
+        10.0,
+        |i| {
+            view.map_palette = order[i];
+        },
+    );
+}
+
+/// Rebuild 按钮（web：`<Button><Icon redo/> Rebuild</Button>`——raised 底 +
+/// border 的标准按钮，非裸图标）。
+fn rebuild_button(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    palette: &mut crate::ui_command_palette::CommandPalette,
+) {
+    let resp = ui.add(
+        egui::Button::image_and_text(
+            egui::Image::new(ICON_REFRESH),
+            egui::RichText::new("Rebuild").size(shell.scale.small),
+        )
+        .fill(shell.raised_bg())
+        .stroke(egui::Stroke::new(1.0, color32(shell.palette.border_subtle)))
+        .corner_radius(radius::CONTROL)
+        .min_size(egui::vec2(0.0, shell.hit)),
+    );
+    if resp.clicked() {
+        palette.pending = Some(CommandId::ForceRebuildTexture);
+    }
 }
 
 fn readout_segment(
@@ -279,26 +288,25 @@ fn readout_segment(
     projection: &WorldProjection,
 ) {
     // 右至左排布；web `.top-right` 从左到右是 zoom / entities / 脏态徽标 / ⌘K，
-    // 故本段添加顺序：⌘K → 脏态 → entities → zoom。
-    // ⌘K 提示（点击触发命令面板）
+    // 故本段添加顺序：⌘K → 脏态 → entities → zoom，间距 12px（web gap）。
+    // ⌘K 按钮（web：command 图标 + K 的 raised 按钮；tooltip 提示快捷键）
     let cmdk = ui.add(
-        egui::Image::new(ICON_COMMAND)
-            .tint(shell.t3())
-            .fit_to_exact_size(egui::vec2(14.0, 14.0)),
+        egui::Button::image_and_text(
+            egui::Image::new(ICON_COMMAND),
+            egui::RichText::new("K").size(shell.scale.small),
+        )
+        .fill(shell.raised_bg())
+        .stroke(egui::Stroke::new(1.0, color32(shell.palette.border_subtle)))
+        .corner_radius(radius::CONTROL)
+        .min_size(egui::vec2(0.0, shell.hit)),
     );
     let _ = cmdk.on_hover_text("命令面板（Ctrl+K / ⌘K）");
-    ui.label(
-        egui::RichText::new("K")
-            .size(shell.scale.small)
-            .color(shell.t3())
-            .font(mono(shell.scale.small)),
-    );
-    ui.add_space(space::MD);
+    ui.add_space(space::LG);
 
     // 脏态徽标（web `.badge.warn`：橙底 + 圆点；已保存时不画，状态栏负责）。
     if projection.dirty {
         badge(ui, shell, BadgeKind::Warn, "● Unsaved changes");
-        ui.add_space(space::MD);
+        ui.add_space(space::LG);
     }
 
     // 实体计数（"128 entities"）
@@ -309,9 +317,9 @@ fn readout_segment(
             .color(shell.t2())
             .font(mono(shell.scale.small)),
     );
-    ui.add_space(space::MD);
+    ui.add_space(space::LG);
 
-    // 缩放百分比（"86%"）—— Figma 是无小数百分比
+    // 缩放百分比（"86%"）
     let pct = (view.scale * 100.0).round() as i32;
     ui.label(
         egui::RichText::new(format!("{pct}%"))
@@ -325,44 +333,6 @@ fn count_entities(projection: &WorldProjection) -> usize {
     let w = &projection.world;
     w.units.len() + w.characters.len() + w.situations.len() + w.events.len()
 }
-
-/// 顶栏用的小图标按钮（统一 `hit` 高、hover 走 `hover_bg`、点中走 `active_bg`）。
-///
-/// v0.3：图标从单字符 `↻` 升级为 Lucide SVG（`ICON_REFRESH` 等），由
-/// `tint` 注入主题色；保持 hover 走 `hover_bg`、透明底语义。
-fn mini_icon_button(
-    ui: &mut egui::Ui,
-    shell: &UiShell,
-    icon: egui::ImageSource<'static>,
-    tooltip: &str,
-) -> egui::Response {
-    let (rect, resp) =
-        ui.allocate_exact_size(egui::vec2(shell.hit, shell.hit), egui::Sense::click());
-    let painter = ui.painter();
-    if resp.hovered() {
-        painter.rect_filled(rect, radius::CONTROL, shell.hover_bg());
-    } else {
-        painter.rect_filled(rect, 0.0, egui::Color32::TRANSPARENT);
-    }
-    // 直接用 egui::Image widget（与 widgets.rs L539 Button::image 同口径），
-    // 避免手工 painter.image() 需要 TextureId 的绕路。
-    let icon_size = shell.hit - 10.0;
-    let icon_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(icon_size, icon_size));
-    // 复用 ui 的子作用域画 image，egui 自动把 child 添加到当前 layout。
-    let _ = ui.put(
-        icon_rect,
-        egui::Image::new(icon)
-            .tint(shell.t1())
-            .fit_to_exact_size(egui::vec2(icon_size, icon_size)),
-    );
-    resp.on_hover_text(tooltip)
-}
-
-// 抑制未使用 import 警告 —— `ICON_ALERT` 暂未在顶栏直接用，但保留作为未来 v0.4 入口。
-#[allow(dead_code)]
-const _ICON_ALERT_PRESENT_FOR_FUTURE_USE: egui::ImageSource<'static> = ICON_ALERT;
-#[allow(dead_code)]
-const _ICON_CHEVRON_DOWN_PRESENT_FOR_FUTURE_USE: egui::ImageSource<'static> = ICON_CHEVRON_DOWN;
 
 /// 状态栏（v0.3：22px，web `.statusbar` 精确值）。
 ///
@@ -385,9 +355,9 @@ pub fn status_bar(
         .exact_size(22.0)
         .frame(
             egui::Frame::NONE
-                .fill(color32(shell.palette.bg_panel))
+                .fill(color32(shell.palette.bg_app))
                 .stroke(egui::Stroke::new(1.0, color32(shell.palette.border_subtle)))
-                .inner_margin(crate::theme::ui_theme::margin_xy(space::MD, 0.0)),
+                .inner_margin(crate::theme::ui_theme::margin_xy(space::SM, 0.0)),
         )
         .show(&mut root, |ui| {
             ui.horizontal(|ui| {
@@ -417,7 +387,7 @@ pub fn status_bar(
                     );
                     ui.add_space(space::MD);
 
-                    // 警告徽标（web `.badge.warn`：warn 语义底 + 前景）
+                    // 警告徽标（web `.badge.warn`）
                     if validation_count.warnings > 0 {
                         badge(
                             ui,
