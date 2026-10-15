@@ -46,6 +46,14 @@ const STROKE_PX: f32 = 1.25;
 /// 偏差 + 填充的像素量化，让类型边界读作一条画上去的墨线。
 const KIND_STROKE_CELL: f32 = 0.25;
 
+/// 海岸线水彩外晕（手绘地图 #4，2026-10-15）：
+/// 内晕 = 主线 `thin_half × HALO_1_MULT`、外晕 = `thin_half × HALO_2_MULT`。
+/// 两层渐变 alpha（[`HALO_1_ALPHA`] / [`HALO_2_ALPHA`]）模拟水彩晕染。
+const HALO_1_MULT: f32 = 2.6;
+const HALO_2_MULT: f32 = 5.0;
+const HALO_1_ALPHA: f32 = 0.35;
+const HALO_2_ALPHA: f32 = 0.18;
+
 /// 重算触发键：只含**结构性**输入——任一变化才重算派生几何。
 ///
 /// `view.scale` 只通过 `lod` 档（Q8 分档）进入，连续缩放不触发重算。
@@ -65,12 +73,26 @@ pub struct IsolineOverlay {
     entity: Option<Entity>,
     mesh: Option<Handle<Mesh>>,
     material: Option<Handle<ColorMaterial>>,
+    /// 海岸线水彩外晕（手绘地图 #4，2026-10-15）：2 个额外描边层（2.6× / 5.0×
+    /// `thin_half`），仅在海岸存在时插入；alpha 渐变模拟水彩晕。类型边界不
+    /// 走晕（kind 切换不是水彩晕的语义）。
+    halo_outer: Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)>,
+    halo_outer_outer: Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)>,
     key: Option<IsolineKey>,
 }
 
 impl IsolineOverlay {
     fn despawn(&mut self, commands: &mut Commands) {
         if let (Some(entity), Some(mesh)) = (self.entity.take(), self.mesh.take()) {
+            commands.entity(entity).despawn();
+            commands.queue(move |world: &mut World| {
+                world.resource_mut::<Assets<Mesh>>().remove(&mesh);
+            });
+        }
+        for (entity, mesh, _mat) in [self.halo_outer.take(), self.halo_outer_outer.take()]
+            .into_iter()
+            .flatten()
+        {
             commands.entity(entity).despawn();
             commands.queue(move |world: &mut World| {
                 world.resource_mut::<Assets<Mesh>>().remove(&mesh);
@@ -178,21 +200,29 @@ pub fn sync_isoline_overlay(
     // 类型边界加宽：格缘阶梯被 Chaikin 磨角后，平滑曲线偏离原阶梯至多约
     // 0.3 格——细线盖不住露出的「错色台阶」，按格径给足半宽才压得平。
     let kind_half = thin_half.max(grid.cell_size * KIND_STROKE_CELL);
+    // 主线（最锐）：主线 + 全部 kind 边界。
     let mut strokes: Vec<(Vec<wv_terrain::isoline::Pt>, bool, f32)> = Vec::new();
-    for (segs, pre_collapse, half) in [(coast, false, thin_half), (kinds, true, kind_half)] {
-        for c in assemble_chains(&segs) {
-            // 类型场边界是格缘阶梯：先小容差预抽稀去共线中点，再 Chaikin 磨角，
-            // 否则平滑后的点数翻两倍全是楼梯碎点。等值线本身就是平滑折线，跳过预抽。
-            let pts = if pre_collapse {
-                simplify_dp(&c.pts, c.closed, 0.30)
-            } else {
-                c.pts.clone()
-            };
-            let smoothed = chaikin(&pts, c.closed, 2);
-            let thin = simplify_dp(&smoothed, c.closed, tol);
-            if thin.len() >= 2 {
-                strokes.push((thin, c.closed, half));
-            }
+    // 水彩外晕（手绘地图 #4）：仅海岸，2 圈；走同一 `coast` 链，3 套半宽。
+    let mut coast_halo_inner: Vec<(Vec<wv_terrain::isoline::Pt>, bool, f32)> = Vec::new();
+    let mut coast_halo_outer: Vec<(Vec<wv_terrain::isoline::Pt>, bool, f32)> = Vec::new();
+    for c in assemble_chains(&coast) {
+        let smoothed = chaikin(&c.pts, c.closed, 2);
+        let thin = simplify_dp(&smoothed, c.closed, tol);
+        if thin.len() < 2 {
+            continue;
+        }
+        strokes.push((thin.clone(), c.closed, thin_half));
+        coast_halo_inner.push((thin.clone(), c.closed, thin_half * HALO_1_MULT));
+        coast_halo_outer.push((thin, c.closed, thin_half * HALO_2_MULT));
+    }
+    for c in assemble_chains(&kinds) {
+        // 类型场边界是格缘阶梯：先小容差预抽稀去共线中点，再 Chaikin 磨角，
+        // 否则平滑后的点数翻两倍全是楼梯碎点。
+        let pts = simplify_dp(&c.pts, c.closed, 0.30);
+        let smoothed = chaikin(&pts, c.closed, 2);
+        let thin = simplify_dp(&smoothed, c.closed, tol);
+        if thin.len() >= 2 {
+            strokes.push((thin, c.closed, kind_half));
         }
     }
 
@@ -228,6 +258,46 @@ pub fn sync_isoline_overlay(
         .id();
     overlay.entity = Some(entity);
     overlay.mesh = Some(handle);
+
+    // 水彩外晕（手绘地图 #4）：仅当海岸链非空时生成。晕在主线下层（z 更小），
+    // 避免遮住主线。alpha 渐变（`HALO_*_ALPHA`）实现水彩晕染感。
+    if !coast_halo_inner.is_empty() {
+        if let Some(mesh) = build_stroke_mesh(&coast_halo_inner, grid.raster_origin, grid.cell_size)
+        {
+            let h = meshes.add(mesh);
+            let mat = materials.add(ColorMaterial::from_color(
+                pal.isoline_ink
+                    .with_alpha(HALO_1_ALPHA * layers.terrain.opacity),
+            ));
+            let e = commands
+                .spawn((
+                    Mesh2d(h.clone()),
+                    MeshMaterial2d(mat.clone()),
+                    Transform::from_xyz(0.0, 0.0, ISOLINE_Z - 0.002 + layers.terrain.z_offset),
+                ))
+                .id();
+            overlay.halo_outer = Some((e, h, mat));
+        }
+    }
+    if !coast_halo_outer.is_empty() {
+        if let Some(mesh) = build_stroke_mesh(&coast_halo_outer, grid.raster_origin, grid.cell_size)
+        {
+            let h = meshes.add(mesh);
+            let mat = materials.add(ColorMaterial::from_color(
+                pal.isoline_ink
+                    .with_alpha(HALO_2_ALPHA * layers.terrain.opacity),
+            ));
+            let e = commands
+                .spawn((
+                    Mesh2d(h.clone()),
+                    MeshMaterial2d(mat.clone()),
+                    Transform::from_xyz(0.0, 0.0, ISOLINE_Z - 0.004 + layers.terrain.z_offset),
+                ))
+                .id();
+            overlay.halo_outer_outer = Some((e, h, mat));
+        }
+    }
+
     overlay.key = Some(key);
 }
 
@@ -336,7 +406,6 @@ mod tests {
         assert!(build_stroke_mesh(&[(vec![p(0.0, 0.0)], false, 0.5)], Vec2::ZERO, 1.0).is_none());
     }
 
-    /// 两点开链 → 一段四边形：4 顶点 6 索引，端点外扩半宽。
     #[test]
     fn stroke_mesh_two_point_chain_yields_one_quad() {
         let chains = vec![(vec![p(0.0, 0.0), p(4.0, 0.0)], false, 0.5)];
@@ -483,5 +552,57 @@ mod tests {
         let idx = mesh.indices().expect("索引应存在").len();
         assert!(idx > 0, "4×4 陆块的海岸线与类型边界不应为空");
         assert_eq!(idx % 3, 0, "三角网索引应是 3 的倍数");
+    }
+    // -----------------------------------------------------------------------
+    // 水彩外晕（手绘地图 #4，2026-10-15）
+    // -----------------------------------------------------------------------
+
+    /// 海岸水彩晕比内晕更宽：HALO_2_MULT > HALO_1_MULT > 1。
+    #[test]
+    fn halo_multipliers_form_widening_radii() {
+        const { assert!(HALO_1_MULT > 1.0, "内晕应比主线宽") }
+        const { assert!(HALO_2_MULT > HALO_1_MULT, "外晕应比内晕更宽") }
+        const {
+            assert!(
+                HALO_1_ALPHA < 1.0 && HALO_2_ALPHA < HALO_1_ALPHA,
+                "晕越外 alpha 越低"
+            )
+        }
+    }
+
+    /// 主线 mesh 在 kind 边界单独注入点（kind=6 山地块）下也能产出——我们没有
+    /// 改 build_stroke_mesh 的契约，复用既有测试断言。
+    #[test]
+    fn main_stroke_mesh_unaffected_by_halo_branch() {
+        let mesh = build_stroke_mesh(
+            &[(
+                vec![
+                    wv_terrain::isoline::Pt { x: 0.5, y: 1.5 },
+                    wv_terrain::isoline::Pt { x: 2.5, y: 1.5 },
+                ],
+                false,
+                0.5,
+            )],
+            Vec2::ZERO,
+            1.0,
+        );
+        assert!(mesh.is_some(), "主线 mesh 仍应产出");
+    }
+
+    /// 水彩晕 alpha < 1 才有「水彩」感；等于 1 退化成主线，不算晕。
+    #[test]
+    fn halo_alphas_are_strictly_less_than_one() {
+        const {
+            assert!(
+                HALO_1_ALPHA > 0.0 && HALO_1_ALPHA < 1.0,
+                "内晕 alpha 应在 (0,1)"
+            )
+        }
+        const {
+            assert!(
+                HALO_2_ALPHA > 0.0 && HALO_2_ALPHA < 1.0,
+                "外晕 alpha 应在 (0,1)"
+            )
+        }
     }
 }
