@@ -16,6 +16,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
+use crate::i18n::CurrentLocale;
 use crate::state::{RecentProjects, WorldProjection};
 use crate::theme::ui_theme::{mono, proportional, UiShellConfig};
 use crate::theme::ui_tokens::{font_size, radius, space};
@@ -30,6 +31,7 @@ pub fn command_palette(
     projection: Res<WorldProjection>,
     recents_res: Res<RecentProjects>,
     mut palette: ResMut<CommandPalette>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     // 「最近工程」是动态命令，每次绘制时按当前工程展开（v0.2 §C）。
@@ -85,7 +87,7 @@ pub fn command_palette(
             resp.request_focus();
             ui.add_space(space::SM);
 
-            let results = palette.results(&recents);
+            let results = palette.results_with_locale(&recents, current_loc.0);
             if results.is_empty() {
                 ui.label(
                     egui::RichText::new("无匹配命令")

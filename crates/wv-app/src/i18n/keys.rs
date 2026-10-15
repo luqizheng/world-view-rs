@@ -555,11 +555,97 @@ pub enum I18nKey {
     TimeNoCalEnPrefix,
     /// 时间无日历 en suffix：空
     TimeNoCalEnSuffix,
+
+    // ── W4：命令面板 41 个静态命令的 label（ADR-0018 §6.4） ──────────
+    /// 「新建工程…」
+    CmdNewProject,
+    /// 「新建地图…」
+    CmdNewMap,
+    /// 「打开工程…」
+    CmdOpenProject,
+    /// 「另存为…」
+    CmdSaveProjectAs,
+    /// 「关闭工程」
+    CmdCloseProject,
+    /// 「导出…」
+    CmdExportProject,
+    /// 「项目设置」
+    CmdProjectSettings,
+    /// 「切换到矢量地形视图」（命令 = 动词，与 W1 ViewMode 标签区分）
+    CmdSwitchVectorFlatView,
+    /// 「切换到色块地形视图」
+    CmdSwitchSchematicView,
+    /// 「全览地图（视野归位）」
+    CmdFitMap,
+    /// 「放大地图」
+    CmdZoomIn,
+    /// 「缩小地图」
+    CmdZoomOut,
+    /// 「沉浸模式（只留地图与时间轴）」
+    CmdToggleImmersive,
+    /// 「打开命令面板」
+    CmdOpenCommandPalette,
+    /// 「保存工程」
+    CmdSave,
+    /// 「撤销」
+    CmdUndo,
+    /// 「重做」
+    CmdRedo,
+    /// 「显隐世界树面板」
+    CmdTogglePanelMapTree,
+    /// 「显隐图层面板」
+    CmdTogglePanelLayers,
+    /// 「显隐地形笔刷面板」
+    CmdTogglePanelBrush,
+    /// 「显隐小地图面板」
+    CmdTogglePanelMinimap,
+    /// 「显隐指南针面板」
+    CmdTogglePanelCompass,
+    /// 「显隐时间轴」
+    CmdTogglePanelTimeline,
+    /// 「显隐事件登记面板」
+    CmdTogglePanelEvent,
+    /// 「显隐事态登记面板」
+    CmdTogglePanelSituation,
+    /// 「显隐人物登记面板」
+    CmdTogglePanelCharacter,
+    /// 「显隐势力层面板」
+    CmdTogglePanelFaction,
+    /// 「显隐区域面板」
+    CmdTogglePanelRegion,
+    /// 「显隐检视器面板」
+    CmdTogglePanelInspector,
+    /// 「显隐校验面板」
+    CmdTogglePanelValidation,
+    /// 「重置所有面板位置」
+    CmdResetPanelLayout,
+    /// 「播放 / 暂停时间轴」
+    CmdTogglePlay,
+    /// 「跳到时间轴起点」
+    CmdJumpToStart,
+    /// 「跳到时间轴终点」
+    CmdJumpToEnd,
+    /// 「切换明暗主题」
+    CmdToggleTheme,
+    /// 「切换紧凑 / 标准密度」
+    CmdToggleDensity,
+    /// 「切换地图主题（日间古舆图 / 暮色旧纸）」
+    CmdToggleMapPalette,
+    /// 「强制重画地形（怀疑没跟上时点一下）」
+    CmdForceRebuildTexture,
+    /// 「增大笔刷半径」
+    CmdBrushRadiusUp,
+    /// 「减小笔刷半径」
+    CmdBrushRadiusDown,
+    /// 「钻回世界地图」
+    CmdDrillToRoot,
+    /// 「钻回上一级」
+    CmdDrillUp,
 }
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 238] = [
+    pub const ALL: [I18nKey; 280] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -825,5 +911,48 @@ impl I18nKey {
         I18nKey::TimeNoCalZhSuffix,
         I18nKey::TimeNoCalEnPrefix,
         I18nKey::TimeNoCalEnSuffix,
+        // 命令面板（41 + 1 共享前缀 = 42）
+        I18nKey::CmdNewProject,
+        I18nKey::CmdNewMap,
+        I18nKey::CmdOpenProject,
+        I18nKey::CmdSaveProjectAs,
+        I18nKey::CmdCloseProject,
+        I18nKey::CmdExportProject,
+        I18nKey::CmdProjectSettings,
+        I18nKey::CmdSwitchVectorFlatView,
+        I18nKey::CmdSwitchSchematicView,
+        I18nKey::CmdFitMap,
+        I18nKey::CmdZoomIn,
+        I18nKey::CmdZoomOut,
+        I18nKey::CmdToggleImmersive,
+        I18nKey::CmdOpenCommandPalette,
+        I18nKey::CmdSave,
+        I18nKey::CmdUndo,
+        I18nKey::CmdRedo,
+        I18nKey::CmdTogglePanelMapTree,
+        I18nKey::CmdTogglePanelLayers,
+        I18nKey::CmdTogglePanelBrush,
+        I18nKey::CmdTogglePanelMinimap,
+        I18nKey::CmdTogglePanelCompass,
+        I18nKey::CmdTogglePanelTimeline,
+        I18nKey::CmdTogglePanelEvent,
+        I18nKey::CmdTogglePanelSituation,
+        I18nKey::CmdTogglePanelCharacter,
+        I18nKey::CmdTogglePanelFaction,
+        I18nKey::CmdTogglePanelRegion,
+        I18nKey::CmdTogglePanelInspector,
+        I18nKey::CmdTogglePanelValidation,
+        I18nKey::CmdResetPanelLayout,
+        I18nKey::CmdTogglePlay,
+        I18nKey::CmdJumpToStart,
+        I18nKey::CmdJumpToEnd,
+        I18nKey::CmdToggleTheme,
+        I18nKey::CmdToggleDensity,
+        I18nKey::CmdToggleMapPalette,
+        I18nKey::CmdForceRebuildTexture,
+        I18nKey::CmdBrushRadiusUp,
+        I18nKey::CmdBrushRadiusDown,
+        I18nKey::CmdDrillToRoot,
+        I18nKey::CmdDrillUp,
     ];
 }

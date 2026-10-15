@@ -16,6 +16,8 @@
 
 use bevy::prelude::*;
 
+use crate::i18n::I18nKey;
+
 use crate::state::{Panel, RecentProject};
 
 /// 命令分组（§6.3，v0.2 §C 新增「项目」「导航」两组）。
@@ -178,8 +180,15 @@ impl CommandRegistry {
     /// `recent` 由调用方传入而不是从全局读：注册表保持**纯函数**，
     /// 才能被单元测试直接戳（§9.3 验证项 8 靠它把关）。
     pub fn all_with(recent: &[RecentProject]) -> Vec<Command> {
-        let mut v = Self::all();
+        Self::all_with_locale(crate::i18n::Locale::default(), recent)
+    }
+
+    /// 全部命令 + 最近工程，按指定 locale 查表。
+    pub fn all_with_locale(locale: crate::i18n::Locale, recent: &[RecentProject]) -> Vec<Command> {
+        let mut v = Self::all_static(locale);
         // 项目：最近工程（插在本组固定条目之前，按最近使用排序）。
+        let recent_prefix =
+            crate::i18n::t(locale, crate::i18n::I18nKey::ProjectMenuRecentOpenPrefix);
         let mut recent_cmds: Vec<Command> = recent
             .iter()
             .take(8)
@@ -187,7 +196,7 @@ impl CommandRegistry {
             .map(|(i, p)| Command {
                 id: CommandId::OpenRecentProject(i as u8),
                 group: CommandGroup::Project,
-                label: format!("打开最近工程 · {}", p.name),
+                label: format!("{recent_prefix}{}", p.name),
                 keys: None,
             })
             .collect();
@@ -202,13 +211,18 @@ impl CommandRegistry {
 
     /// 全部**静态**命令（不含运行时才知道名字的最近工程）。
     pub fn all() -> Vec<Command> {
+        Self::all_static(crate::i18n::Locale::default())
+    }
+
+    /// 全部**静态**命令（不含运行时才知道名字的最近工程），按 Locale 查表。
+    pub fn all_static(locale: crate::i18n::Locale) -> Vec<Command> {
         let mut v: Vec<Command> = Vec::new();
         let mut push =
-            |id: CommandId, group: CommandGroup, label: &str, keys: Option<&'static str>| {
+            |id: CommandId, group: CommandGroup, label_key: I18nKey, keys: Option<&'static str>| {
                 v.push(Command {
                     id,
                     group,
-                    label: label.to_owned(),
+                    label: crate::i18n::t(locale, label_key).to_owned(),
                     keys,
                 })
             };
@@ -217,38 +231,43 @@ impl CommandRegistry {
         push(
             CommandId::NewProject,
             CommandGroup::Project,
-            "新建工程…",
+            I18nKey::CmdNewProject,
             Some("Ctrl+Shift+N"),
         );
-        push(CommandId::NewMap, CommandGroup::Project, "新建地图…", None);
+        push(
+            CommandId::NewMap,
+            CommandGroup::Project,
+            I18nKey::CmdNewMap,
+            None,
+        );
         push(
             CommandId::OpenProject,
             CommandGroup::Project,
-            "打开工程…",
+            I18nKey::CmdOpenProject,
             Some("Ctrl+O"),
         );
         push(
             CommandId::SaveProjectAs,
             CommandGroup::Project,
-            "另存为…",
+            I18nKey::CmdSaveProjectAs,
             Some("Ctrl+Shift+S"),
         );
         push(
             CommandId::CloseProject,
             CommandGroup::Project,
-            "关闭工程",
+            I18nKey::CmdCloseProject,
             Some("Ctrl+W"),
         );
         push(
             CommandId::ExportProject,
             CommandGroup::Project,
-            "导出…",
+            I18nKey::CmdExportProject,
             Some("Ctrl+E"),
         );
         push(
             CommandId::ProjectSettings,
             CommandGroup::Project,
-            "项目设置",
+            I18nKey::CmdProjectSettings,
             None,
         );
 
@@ -258,8 +277,8 @@ impl CommandRegistry {
                 CommandId::SetViewMode(i as u8),
                 CommandGroup::View,
                 match mode {
-                    crate::state::ViewMode::VectorFlat => "切换到矢量地形视图",
-                    crate::state::ViewMode::Schematic => "切换到色块地形视图",
+                    crate::state::ViewMode::VectorFlat => I18nKey::CmdSwitchVectorFlatView,
+                    crate::state::ViewMode::Schematic => I18nKey::CmdSwitchSchematicView,
                     // BROWSING 之外的模式不再注册（枚举变体仍在，见 state.rs）。
                     _ => continue,
                 },
@@ -269,25 +288,25 @@ impl CommandRegistry {
         push(
             CommandId::FitMap,
             CommandGroup::View,
-            "全览地图（视野归位）",
+            I18nKey::CmdFitMap,
             Some("F"),
         );
         push(
             CommandId::Zoom(1),
             CommandGroup::View,
-            "放大地图",
+            I18nKey::CmdZoomIn,
             Some("+ / 滚轮"),
         );
         push(
             CommandId::Zoom(-1),
             CommandGroup::View,
-            "缩小地图",
+            I18nKey::CmdZoomOut,
             Some("−"),
         );
         push(
             CommandId::ToggleImmersive,
             CommandGroup::View,
-            "沉浸模式（只留地图与时间轴）",
+            I18nKey::CmdToggleImmersive,
             Some("Ctrl+Shift+I"),
         );
 
@@ -295,50 +314,56 @@ impl CommandRegistry {
         push(
             CommandId::OpenCommandPalette,
             CommandGroup::Edit,
-            "打开命令面板",
+            I18nKey::CmdOpenCommandPalette,
             Some("Ctrl+K"),
         );
         push(
             CommandId::Save,
             CommandGroup::Edit,
-            "保存工程",
+            I18nKey::CmdSave,
             Some("Ctrl+S"),
         );
-        push(CommandId::Undo, CommandGroup::Edit, "撤销", Some("Ctrl+Z"));
+        push(
+            CommandId::Undo,
+            CommandGroup::Edit,
+            I18nKey::CmdUndo,
+            Some("Ctrl+Z"),
+        );
         push(
             CommandId::Redo,
             CommandGroup::Edit,
-            "重做",
+            I18nKey::CmdRedo,
             Some("Ctrl+Shift+Z"),
         );
 
         // 面板
         for p in Panel::ALL {
+            let label_key = match p {
+                Panel::MapTree => I18nKey::CmdTogglePanelMapTree,
+                Panel::Layers => I18nKey::CmdTogglePanelLayers,
+                Panel::Brush => I18nKey::CmdTogglePanelBrush,
+                Panel::Minimap => I18nKey::CmdTogglePanelMinimap,
+                Panel::Compass => I18nKey::CmdTogglePanelCompass,
+                Panel::Timeline => I18nKey::CmdTogglePanelTimeline,
+                Panel::Event => I18nKey::CmdTogglePanelEvent,
+                Panel::Situation => I18nKey::CmdTogglePanelSituation,
+                Panel::Character => I18nKey::CmdTogglePanelCharacter,
+                Panel::Faction => I18nKey::CmdTogglePanelFaction,
+                Panel::Region => I18nKey::CmdTogglePanelRegion,
+                Panel::Inspector => I18nKey::CmdTogglePanelInspector,
+                Panel::Validation => I18nKey::CmdTogglePanelValidation,
+            };
             push(
                 CommandId::TogglePanel(p),
                 CommandGroup::Panel,
-                match p {
-                    Panel::MapTree => "显隐世界树面板",
-                    Panel::Layers => "显隐图层面板",
-                    Panel::Brush => "显隐地形笔刷面板",
-                    Panel::Minimap => "显隐小地图面板",
-                    Panel::Compass => "显隐指南针面板",
-                    Panel::Timeline => "显隐时间轴",
-                    Panel::Event => "显隐事件登记面板",
-                    Panel::Situation => "显隐事态登记面板",
-                    Panel::Character => "显隐人物登记面板",
-                    Panel::Faction => "显隐势力层面板",
-                    Panel::Region => "显隐区域面板",
-                    Panel::Inspector => "显隐检视器面板",
-                    Panel::Validation => "显隐校验面板",
-                },
+                label_key,
                 None,
             );
         }
         push(
             CommandId::ResetPanelLayout,
             CommandGroup::Panel,
-            "重置所有面板位置",
+            I18nKey::CmdResetPanelLayout,
             None,
         );
 
@@ -346,19 +371,19 @@ impl CommandRegistry {
         push(
             CommandId::TogglePlay,
             CommandGroup::Time,
-            "播放 / 暂停时间轴",
+            I18nKey::CmdTogglePlay,
             Some("Space"),
         );
         push(
             CommandId::JumpToStart,
             CommandGroup::Time,
-            "跳到时间轴起点",
+            I18nKey::CmdJumpToStart,
             Some("Home"),
         );
         push(
             CommandId::JumpToEnd,
             CommandGroup::Time,
-            "跳到时间轴终点",
+            I18nKey::CmdJumpToEnd,
             Some("End"),
         );
 
@@ -366,26 +391,26 @@ impl CommandRegistry {
         push(
             CommandId::ToggleTheme,
             CommandGroup::Interface,
-            "切换明暗主题",
+            I18nKey::CmdToggleTheme,
             Some("Ctrl+J"),
         );
         push(
             CommandId::ToggleDensity,
             CommandGroup::Interface,
-            "切换紧凑 / 标准密度",
+            I18nKey::CmdToggleDensity,
             None,
         );
         push(
             CommandId::ToggleMapPalette,
             CommandGroup::View,
-            "切换地图主题（日间古舆图 / 暮色旧纸）",
+            I18nKey::CmdToggleMapPalette,
             None,
         );
         // 2026-10-14 用户需求：怀疑数据已改、画面没跟随时手动重画底图。
         push(
             CommandId::ForceRebuildTexture,
             CommandGroup::Interface,
-            "强制重画地形（怀疑没跟上时点一下）",
+            I18nKey::CmdForceRebuildTexture,
             Some("F5"),
         );
 
@@ -393,13 +418,13 @@ impl CommandRegistry {
         push(
             CommandId::BrushRadius(1),
             CommandGroup::Object,
-            "增大笔刷半径",
+            I18nKey::CmdBrushRadiusUp,
             Some("]"),
         );
         push(
             CommandId::BrushRadius(-1),
             CommandGroup::Object,
-            "减小笔刷半径",
+            I18nKey::CmdBrushRadiusDown,
             Some("["),
         );
 
@@ -407,13 +432,13 @@ impl CommandRegistry {
         push(
             CommandId::DrillToRoot,
             CommandGroup::Navigation,
-            "钻回世界地图",
+            I18nKey::CmdDrillToRoot,
             None,
         );
         push(
             CommandId::DrillUp,
             CommandGroup::Navigation,
-            "钻回上一级",
+            I18nKey::CmdDrillUp,
             Some("Backspace"),
         );
 
@@ -422,7 +447,7 @@ impl CommandRegistry {
 
     /// 按查询过滤（保持注册顺序）。
     pub fn search(query: &str, recent: &[RecentProject]) -> Vec<Command> {
-        Self::all_with(recent)
+        Self::all_with_locale(crate::i18n::Locale::default(), recent)
             .into_iter()
             .filter(|c| c.matches(query))
             .collect()
@@ -460,6 +485,26 @@ impl CommandPalette {
     /// 当前查询的命中项。
     pub fn results(&self, recent: &[RecentProject]) -> Vec<Command> {
         CommandRegistry::search(&self.query, recent)
+    }
+
+    /// 当前查询的命中项，按 Locale 查表（ADR-0018）。
+    pub fn results_with_locale(
+        &self,
+        recent: &[RecentProject],
+        locale: crate::i18n::Locale,
+    ) -> Vec<Command> {
+        CommandRegistry::all_with_locale(locale, recent)
+            .into_iter()
+            .filter(|c| {
+                if self.query.is_empty() {
+                    return true;
+                }
+                let q = self.query.to_lowercase();
+                c.label.to_lowercase().contains(&q)
+                    || c.group.title(locale).contains(&q)
+                    || c.keys.unwrap_or("").to_lowercase().contains(&q)
+            })
+            .collect()
     }
 
     /// 执行高亮项。
