@@ -304,6 +304,11 @@ pub fn run(config: AppConfig) {
             // 与 new_map_dialog 同族的居中模态窗，排在状态栏之前——
             // 确认创建写的回执本帧就要被状态栏读到）。
             ui::new_project_dialog,
+            // 「新建工程」apply 系统：消费 UI 系统上一帧塞进
+            // `NewProjectDialog::pending_apply` 的意图，做实际落盘 + 打开。
+            // 拆出来的目的是让 UI 系统跟 apply 系统都在 Bevy 0.19 的 16 系统
+            // 参数上限内（详见 `new_project_dialog` 文档）。
+            ui::new_project_apply_create,
             // 状态栏最后画：它读得到的 `ShellNotice` 已是本帧最终值。
             ui::status_bar,
         )

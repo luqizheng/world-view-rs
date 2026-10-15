@@ -31,7 +31,9 @@ use crate::theme::ui_theme::{color32, mono, proportional, UiShellConfig};
 
 use super::project_menu::{project_menu_inner, ProjectMenuState};
 use super::shell::UiShell;
-use super::widgets::{badge, BadgeKind, ICON_CHEVRON_RIGHT, ICON_COMMAND, ICON_REFRESH};
+use super::widgets::{
+    badge, icon_image, BadgeKind, ICON_CHEVRON_RIGHT, ICON_COMMAND, ICON_REFRESH,
+};
 use crate::theme::ui_tokens::{font_size, radius, space};
 use crate::ui_command_palette::CommandId;
 
@@ -261,6 +263,10 @@ fn theme_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
 
 /// Rebuild 按钮（web：`<Button><Icon redo/> Rebuild</Button>`——raised 底 +
 /// border 的标准按钮，非裸图标）。
+///
+/// **走 [`icon_image`] helper 而不是 [`crate::ui::widgets::button`] 工厂**：因为
+/// 本按钮 stroke 是 `border_subtle`（与工厂默认 `border_strong` 不一致——顶栏设计稿
+/// 用浅边，与对话/CTA 的强边区分）。工厂升级时若统一改 stroke，可以并入。
 fn rebuild_button(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -268,7 +274,7 @@ fn rebuild_button(
 ) {
     let resp = ui.add(
         egui::Button::image_and_text(
-            egui::Image::new(ICON_REFRESH),
+            icon_image(ICON_REFRESH, shell.t2(), shell.hit - 8.0),
             egui::RichText::new("Rebuild").size(shell.scale.small),
         )
         .fill(shell.raised_bg())
@@ -292,7 +298,7 @@ fn readout_segment(
     // ⌘K 按钮（web：command 图标 + K 的 raised 按钮；tooltip 提示快捷键）
     let cmdk = ui.add(
         egui::Button::image_and_text(
-            egui::Image::new(ICON_COMMAND),
+            icon_image(ICON_COMMAND, shell.t2(), shell.hit - 8.0),
             egui::RichText::new("K").size(shell.scale.small),
         )
         .fill(shell.raised_bg())

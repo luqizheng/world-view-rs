@@ -24,7 +24,11 @@ use wv_core::Id;
 use crate::edit::editing::EditHistory;
 use crate::render::terrain_view::TerrainTexture;
 use crate::state::{map_level_label, DrillState, ProjectDiagnostics, WorldProjection};
+use crate::theme::ui_theme::UiShellConfig;
+use crate::ui::widgets::{button as widget_button, ButtonContent, ButtonStyle};
 use crate::ui_shell::ShellNotice;
+
+use super::shell::UiShell;
 
 /// 新地图的**预填充**（2026-10-14 用户需求：新建时可选铺海还是铺陆）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -149,6 +153,7 @@ impl NewMapDialog {
 #[allow(clippy::too_many_arguments)]
 pub fn new_map_dialog(
     mut ctxs: EguiContexts,
+    shell_cfg: Res<UiShellConfig>,
     mut dialog: ResMut<NewMapDialog>,
     mut projection: ResMut<WorldProjection>,
     mut drill: ResMut<DrillState>,
@@ -164,6 +169,7 @@ pub fn new_map_dialog(
     let Ok(ctx) = ctxs.ctx_mut() else {
         return;
     };
+    let shell = UiShell::new(&shell_cfg);
     let frame = (time.elapsed_secs() * 60.0) as u64;
     let mut open = dialog.open;
     let mut confirmed = false;
@@ -275,7 +281,16 @@ pub fn new_map_dialog(
                 if ui.button("取消").clicked() {
                     cancelled = true;
                 }
-                if ui.add(egui::Button::new("创建")).clicked() {
+                if widget_button(
+                    ui,
+                    &shell,
+                    ButtonContent::Text("创建"),
+                    ButtonStyle::Accent,
+                    None,
+                    true,
+                )
+                .clicked()
+                {
                     confirmed = true;
                 }
             });

@@ -182,6 +182,150 @@ pub(crate) fn rect_stroke(
     painter.rect_stroke(rect, corner_radius, stroke, egui::StrokeKind::Inside);
 }
 
+/// 图标 helper：把 SVG 源 + tint + 目标边长封成单一 API。
+///
+/// 集中 [`egui::Image::new`]+`.tint()`+`.fit_to_exact_size()`，避免 caller
+/// 漏写 tint / 写错尺寸。`tint` 在 egui 0.36 是 vertex 色乘法（内部 wgsl）：
+/// 当纹理像素已经是非 0 实色时（仓库所有 25 个 `tool_icons/*.svg` 自 2026-10-15
+/// 起改用 `stroke="#ffffff"`），命中 vertex 色即等于直接覆盖。
+///
+/// **为什么不直接传给 `Image::tint`** —— API 上等同，但 `Image::new(..)` 一旦
+/// 漏写 `.tint()` 调默认 WHITE，乘 BLACK 像素仍得 BLACK（已被实测复现；
+/// 详见 `welcome_screen.rs::app_icon` 在改动前用户截图全黑的事实）。
+/// 本 helper 强制 caller 显式选择 tint，且所有调用点统一收口，方便后续再迭代
+/// （例如实现一个真正意义上的"runtime inject color" SvgLoader 时只改这里）。
+pub fn icon_image(
+    src: egui::ImageSource<'static>,
+    tint: egui::Color32,
+    px: f32,
+) -> egui::Image<'static> {
+    egui::Image::new(src)
+        .tint(tint)
+        .fit_to_exact_size(egui::Vec2::splat(px))
+}
+
+// ── 最近工程行（Figma `RecentItem` · 2026-10-15）────────────────────────
+//
+// 提到 widgets 的目的是消除欢迎页 / 命令面板 / 项目菜单里重复写的 list-row
+// 代码（之前三处都用 `ui.allocate_exact_size + painter.text + Image::new`
+// 三件套手工写）。**`time_ago` 是 Figma 原型上的一栏**——之前欢迎页预留了接口
+// 但形参未到，这次跟 [`crate::state::RecentProject::last_opened_at`]
+// 一并对齐，由 caller 传 `Option<&str>` 字符串进来。
+//
+// 设计量（Figma `00_WelcomeScreen.RecentProjects`）：
+// - 行高 36px
+// - 左侧 map 图标 14×14（shell.t3）
+// - 中间 name + dir 两行（name 13px t1 / dir 11px t3），left-aligned
+// - 右侧 `time_ago` 11px t3（mono + right-aligned），无时隐藏
+
+/// 最近工程行高（Figma `RecentItem.height = 36`）。
+pub const RECENT_ROW_H: f32 = 36.0;
+/// 最近工程行内左右内边距（Figma `padding [0, 8]`）。
+pub const RECENT_ROW_PAD_X: f32 = 8.0;
+/// 最近工程行内 icon 边长（Figma `map` 14×14）。
+pub const RECENT_ROW_ICON: f32 = 14.0;
+
+/// 单条最近工程（Figma `RecentItem`）：左侧 icon + 中间 name/dir 两行 + 右侧可选 time_ago。
+///
+/// 返回 [`egui::Response`]，caller 自己判断 `.clicked()`。
+/// `time_ago` 为 `None` 时不画右侧栏（空列表 / 尚未会话内记录的工程）；
+/// 不为 `None` 时是已经格式化好的字符串 —— 格式化放在 caller 测（见
+/// [`format_time_ago`]），本 helper 只画。
+pub fn recent_row(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    icon: egui::ImageSource<'static>,
+    name: &str,
+    dir: &str,
+    time_ago: Option<&str>,
+) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), RECENT_ROW_H),
+        egui::Sense::click(),
+    );
+    let painter = ui.painter();
+    // 1. hover 底。
+    if resp.hovered() {
+        painter.rect_filled(rect, radius::CONTROL, shell.hover_bg());
+    }
+    // 2. 左侧 icon，垂直居中。
+    let icon_y = rect.center().y - RECENT_ROW_ICON / 2.0;
+    let icon_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.min.x + RECENT_ROW_PAD_X, icon_y),
+        egui::vec2(RECENT_ROW_ICON, RECENT_ROW_ICON),
+    );
+    egui::Image::new(icon)
+        .tint(shell.t3())
+        .paint_at(ui, icon_rect);
+    // 3. name + dir 两行。
+    let text_x = icon_rect.max.x + RECENT_ROW_PAD_X;
+    painter.text(
+        egui::pos2(text_x, rect.min.y + 6.0),
+        egui::Align2::LEFT_TOP,
+        name,
+        proportional(font_size::BASE),
+        shell.t1(),
+    );
+    painter.text(
+        egui::pos2(text_x, rect.max.y - 13.0),
+        egui::Align2::LEFT_TOP,
+        dir,
+        proportional(font_size::MICRO),
+        shell.t3(),
+    );
+    // 4. time_ago 右对齐。
+    if let Some(t) = time_ago {
+        painter.text(
+            egui::pos2(rect.max.x - RECENT_ROW_PAD_X, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            t,
+            proportional(font_size::MICRO),
+            shell.t3(),
+        );
+    }
+    resp
+}
+
+/// 把过去的 [`std::time::Instant`] 格式化为 UI 文字（"Just now" / "5m ago" / "Yesterday" 等）。
+///
+/// **纯相对时间，不调用 chrono**：仓库禁用新依赖（AGENTS §9 默认拒绝），
+/// 且会话内 `[`Instant::now` − `last_opened_at`]` 的差是 monotonic 的。
+/// 大于 30 天用 "Nmo ago"（30 天 = 1 月的近似，与本工程其它"原值不在数据层"
+/// 的纪元无关——见 §7.5 V1）。
+///
+/// 边界（用上限排除下一档）：
+/// - `[0, 60s)` → "Just now"
+/// - `[60s, 1h)` → `"{n}m ago"`（n = secs/60）
+/// - `[1h, 1d)` → `"{n}h ago"`
+/// - `[1d, 2d)` → "Yesterday"
+/// - `[2d, 7d)` → `"{n}d ago"`
+/// - `[7d, 30d)` → `"{n}w ago"`（周）
+/// - `[30d, ∞)` → `"{n}mo ago"`（月）
+pub fn format_time_ago(at: std::time::Instant, now: std::time::Instant) -> String {
+    let dur = now.saturating_duration_since(at);
+    let secs = dur.as_secs();
+    const MIN: u64 = 60;
+    const HOUR: u64 = MIN * 60;
+    const DAY: u64 = HOUR * 24;
+    const WEEK: u64 = DAY * 7;
+    const MONTH: u64 = DAY * 30;
+    if secs < MIN {
+        "Just now".into()
+    } else if secs < HOUR {
+        format!("{}m ago", secs / MIN)
+    } else if secs < DAY {
+        format!("{}h ago", secs / HOUR)
+    } else if secs < 2 * DAY {
+        "Yesterday".into()
+    } else if secs < WEEK {
+        format!("{}d ago", secs / DAY)
+    } else if secs < MONTH {
+        format!("{}w ago", secs / WEEK)
+    } else {
+        format!("{}mo ago", secs / MONTH)
+    }
+}
+
 /// 地形色块网格（§4.5：2 列 × 5 行，单行色块+名称，整块紧凑）。
 ///
 /// 行高 22 px（曾 44 px），色块 14 px 居左、名称 11 px 居右同一行——
@@ -309,6 +453,142 @@ pub fn float_window(
     if !open {
         panels.set_visible(panel, false);
     }
+}
+
+// ── 标准按钮（统一工厂 · 2026-10-15）───────────────────────────────────
+//
+// 跨场景的统一按钮：欢迎页 CTA、对话框创建按钮、错误行 ghost 跳转、
+// 顶栏 raised 等都走这里——不再手搓 `egui::Button` / `ui.button()`。
+//
+// 与 [`ToolButton`] 的分工：
+// - `ToolButton`：**工具栏场景**——方块图标 / 选中态 / tooltip 一等公民，
+//   map_controls 5 处用它，保留。
+// - `button()`：**非工具栏场景**——主/次 CTA / 对话框 / 错误行 / 顶栏 raised 等。
+//
+// 为什么不合并：合并会把 ToolButton 的 active/disabled/hint builder 撑爆，
+// 且工具栏"方块图标"语义与对话框"宽 CTA"语义互不兼容；保持双轨，调用方按场景选入口。
+//
+// 颜色全部走 [`UiShell`] 令牌，不写裸 hex。
+//
+// 与 [`ToolButton`] 的分工：
+// - `ToolButton`：**工具栏场景**——方块图标 / 选中态 / tooltip 一等公民，
+//   map_controls 5 处用它，保留。
+// - `button()`：**非工具栏场景**——主/次 CTA / 对话框 / 错误行 / 顶栏 raised 等。
+//
+// 为什么不合并：合并会把 ToolButton 的 active/disabled/hint builder 撑爆，
+// 且工具栏"方块图标"语义与对话框"宽 CTA"语义互不兼容；保持双轨，调用方按场景选入口。
+//
+// 颜色全部走 [`UiShell`] 令牌，不写裸 hex。
+
+/// 按钮样式（统一工厂第二参数）。
+///
+/// 决定 fill / stroke / 前景色 / 字号 / 圆角等视觉量。文字与图标色来自 [`UiShell`]
+/// 令牌，**不**接收裸 hex。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ButtonStyle {
+    /// accent 实心底 + 白字白图标（主 CTA / Figma `primary button`）。
+    Accent,
+    /// raised 底 + border_strong 描边 + t2 字（次 CTA / 顶栏 raised）。
+    Raised,
+    /// 透明底 + t1 字（错误行跳转 / Dialog 取消式按钮）。
+    Ghost,
+    /// 透明底 + t2 字（顶栏 / 列表底部动作）。
+    #[default]
+    Subtle,
+}
+
+/// 按钮内容（统一工厂第三参数）。
+///
+/// `Image` / `ImageText` 二变体收 `egui::ImageSource<'static>`——
+/// `ICON_*` 常量直接喂入即可（`include_image!` 给的也是 `'static`）。
+///
+/// 不 derive `Copy`：`egui::ImageSource` 不是 `Copy`（内部是 `Arc<Vec<...>>`
+/// 类型也是 `Clone` 而非 `Copy`），本枚举只能 `Clone`。
+#[derive(Clone)]
+pub enum ButtonContent<'a> {
+    /// 纯文字按钮（高度 = `shell.hit`，宽度随文字）。
+    Text(&'a str),
+    /// 纯图标按钮（方块 = `shell.hit × shell.hit`，图标 = `hit − 8`）。
+    Image(egui::ImageSource<'static>),
+    /// 图标 + 文字横排（高度 = `shell.hit`，宽度随内容）。
+    ImageText(egui::ImageSource<'static>, &'a str),
+}
+
+/// 统一按钮工厂。
+///
+/// 工具栏场景请用 [`ToolButton`]（map_controls 等）；非工具栏场景一律走这里。
+/// 返回 [`egui::Response`]，caller 自己判断 `.clicked()` / `.hovered()` 等。
+///
+/// ## 参数
+///
+/// - `content` / `style`：见 [`ButtonContent`] / [`ButtonStyle`]。
+/// - `min_size_override`：`None` → 工厂默认（`Text` / `ImageText` 高度 =
+///   `shell.hit`，宽度随内容；`Image` 方块 = `shell.hit × shell.hit`）。
+///   `Some(s)` → caller 自定最小尺寸（例如欢迎页 CTA 高度 = `CTA_HEIGHT=40`
+///   与默认 28 不同，必须 `Some(vec2(w, 40))`）。
+///   caller **不得**通过 `Response.rect` 反推修改——`rect` 是分配结果，修改即失配。
+/// - `enabled`：`false` → 工厂内部走 [`egui::Ui::add_enabled`]，整按钮置灰且不响应
+///   点击。对话框「创建」按钮在 `name + location` 双空时禁用就是这一支路。
+pub fn button(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    content: ButtonContent,
+    style: ButtonStyle,
+    min_size_override: Option<egui::Vec2>,
+    enabled: bool,
+) -> egui::Response {
+    let (fill, stroke, fg, font_px, corner) = match style {
+        ButtonStyle::Accent => (
+            shell.accent(),
+            None,
+            egui::Color32::WHITE,
+            font_size::INPUT,
+            radius::CONTROL,
+        ),
+        ButtonStyle::Raised => (
+            shell.raised_bg(),
+            Some(egui::Stroke::new(1.0, shell.border_strong())),
+            shell.t2(),
+            font_size::INPUT,
+            radius::CONTROL,
+        ),
+        ButtonStyle::Ghost => (
+            egui::Color32::TRANSPARENT,
+            None,
+            shell.t1(),
+            shell.scale.small,
+            radius::CONTROL,
+        ),
+        ButtonStyle::Subtle => (
+            egui::Color32::TRANSPARENT,
+            None,
+            shell.t2(),
+            shell.scale.small,
+            radius::CONTROL,
+        ),
+    };
+
+    let default_min = match &content {
+        ButtonContent::Text(_) | ButtonContent::ImageText(_, _) => egui::vec2(0.0, shell.hit),
+        ButtonContent::Image(_) => egui::Vec2::splat(shell.hit),
+    };
+    let min_size = min_size_override.unwrap_or(default_min);
+
+    let mut btn = match content {
+        ButtonContent::Text(label) => {
+            egui::Button::new(egui::RichText::new(label).color(fg).size(font_px))
+        }
+        ButtonContent::Image(src) => egui::Button::image(icon_image(src, fg, shell.hit - 8.0)),
+        ButtonContent::ImageText(src, label) => egui::Button::image_and_text(
+            icon_image(src, fg, shell.hit - 8.0),
+            egui::RichText::new(label).color(fg).size(font_px),
+        ),
+    };
+    btn = btn.fill(fill).corner_radius(corner).min_size(min_size);
+    if let Some(s) = stroke {
+        btn = btn.stroke(s);
+    }
+    ui.add_enabled(enabled, btn)
 }
 
 // ── 标准按钮（标准化控件 · 第 1 项）──────────────────────────────────
@@ -544,10 +824,9 @@ impl<'a> ToolButton<'a> {
         let btn = match self.content {
             ToolButtonContent::Icon(icon) => {
                 let ToolIcon::Svg(source) = icon;
-                let image = egui::Image::new(source)
-                    .tint(st.tint)
-                    .fit_to_exact_size(egui::Vec2::splat(st.icon_px));
-                egui::Button::image(image).min_size(st.min_size).fill(fill)
+                egui::Button::image(icon_image(source, st.tint, st.icon_px))
+                    .min_size(st.min_size)
+                    .fill(fill)
             }
             ToolButtonContent::Text(label) => {
                 egui::Button::new(egui::RichText::new(label).color(st.tint).size(st.text_px))
@@ -556,11 +835,8 @@ impl<'a> ToolButton<'a> {
             }
             ToolButtonContent::IconText(icon, label) => {
                 let ToolIcon::Svg(source) = icon;
-                let image = egui::Image::new(source)
-                    .tint(st.tint)
-                    .fit_to_exact_size(egui::Vec2::splat(st.icon_px));
                 egui::Button::image_and_text(
-                    image,
+                    icon_image(source, st.tint, st.icon_px),
                     egui::RichText::new(label).color(st.tint).size(st.text_px),
                 )
                 .min_size(st.min_size)
@@ -747,6 +1023,325 @@ mod tool_button_tests {
             .enabled(false)
             .show(&mut ui, &sh, || fired = true);
         assert!(!fired, "未发生点击事件时回调不应触发");
+    }
+}
+
+#[cfg(test)]
+mod button_factory_tests {
+    //! 2026-10-15 引入的 `button()` 工厂 + `icon_image` helper。
+    //!
+    //! ToolButton 4 个老测试留在 [`super::tool_button_tests`]——它们继续守住工具栏
+    //! 方块图标 / active / disabled 语义；本模块只覆盖**新**工厂：4 种 style
+    //! 装配 + Image tint 中央化。
+
+    use super::*;
+    use crate::theme::ui_theme::UiShellConfig;
+
+    fn shell() -> UiShell {
+        UiShell::new(&UiShellConfig::default())
+    }
+
+    fn new_ui(ctx: &egui::Context, w: f32, h: f32) -> egui::Ui {
+        egui::Ui::new(
+            ctx.clone(),
+            egui::Id::new("button_factory_tests"),
+            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(w, h),
+            )),
+        )
+    }
+
+    /// 4 种 style 都能真实装配进 egui 而不 panic（API 签名 / Image tint /
+    /// RichText 尺寸任何错一处都立刻 panic 在这里，而不是等 GUI 启动烟测）。
+    #[test]
+    fn factory_renders_all_four_styles_into_egui_without_panic() {
+        let sh = shell();
+        let ctx = egui::Context::default();
+        ctx.begin_pass(Default::default());
+        let mut ui = new_ui(&ctx, 600.0, 200.0);
+
+        let r_a = button(
+            &mut ui,
+            &sh,
+            ButtonContent::ImageText(ICON_PLUS, "主 CTA"),
+            ButtonStyle::Accent,
+            None,
+            true,
+        );
+        let r_b = button(
+            &mut ui,
+            &sh,
+            ButtonContent::ImageText(ICON_FOLDER_OPEN, "次 CTA"),
+            ButtonStyle::Raised,
+            None,
+            true,
+        );
+        let r_c = button(
+            &mut ui,
+            &sh,
+            ButtonContent::Text("取消"),
+            ButtonStyle::Ghost,
+            None,
+            true,
+        );
+        let r_d = button(
+            &mut ui,
+            &sh,
+            ButtonContent::Text("了解更多"),
+            ButtonStyle::Subtle,
+            None,
+            true,
+        );
+
+        // 高度预期：Accent / Raised / Ghost / Subtle 的文字钮统一 = shell.hit；
+        // 即使文字色与 fill 不同也至少要有矩形。
+        assert!(
+            r_a.rect.width() > 0.0,
+            "Accent 钮应有宽度，got {}",
+            r_a.rect.width()
+        );
+        assert!(
+            r_b.rect.height() >= sh.hit,
+            "Raised 钮高 ≥ hit，got {}",
+            r_b.rect.height()
+        );
+        assert!(
+            r_c.rect.height() >= sh.hit,
+            "Ghost 钮高 ≥ hit，got {}",
+            r_c.rect.height()
+        );
+        assert!(
+            r_d.rect.height() >= sh.hit,
+            "Subtle 钮高 ≥ hit，got {}",
+            r_d.rect.height()
+        );
+    }
+
+    /// 纯 Image 按钮应该是 `shell.hit × shell.hit` 方块（与 ToolButton 的
+    /// 纯图标钮同一尺寸口径）。
+    #[test]
+    fn image_only_button_is_hit_square() {
+        let sh = shell();
+        let ctx = egui::Context::default();
+        ctx.begin_pass(Default::default());
+        let mut ui = new_ui(&ctx, 200.0, 200.0);
+
+        let r = button(
+            &mut ui,
+            &sh,
+            ButtonContent::Image(ICON_PLUS),
+            ButtonStyle::Accent,
+            None,
+            true,
+        );
+        assert!(
+            (r.rect.width() - sh.hit).abs() < 1e-3 && (r.rect.height() - sh.hit).abs() < 1e-3,
+            "纯图标钮 = hit×hit（{}×{}），got {:?}",
+            sh.hit,
+            sh.hit,
+            r.rect.size()
+        );
+    }
+
+    /// `min_size_override` 在 `Some(...)` 时必须覆盖工厂默认。
+    /// 欢迎页 CTA 要求 `40px` 高，与默认 `shell.hit=28` 不同——这条钉住扩展口径。
+    #[test]
+    fn min_size_override_wins_over_factory_default() {
+        let sh = shell();
+        let ctx = egui::Context::default();
+        ctx.begin_pass(Default::default());
+        let mut ui = new_ui(&ctx, 600.0, 100.0);
+        let r = button(
+            &mut ui,
+            &sh,
+            ButtonContent::ImageText(ICON_PLUS, "主 CTA"),
+            ButtonStyle::Accent,
+            Some(egui::vec2(200.0, 40.0)),
+            true,
+        );
+        assert!(
+            (r.rect.height() - 40.0).abs() < 1e-3,
+            "min_size_override(40) 必须压过默认 28，got {}",
+            r.rect.height()
+        );
+        assert!(
+            r.rect.width() >= 200.0,
+            "min_size_override(200) 必须让宽度 ≥ 200，got {}",
+            r.rect.width()
+        );
+    }
+
+    /// `enabled = false` 必须通过 [`egui::Ui::add_enabled`] 把整按钮置灰且不可点。
+    /// 这是对话框「创建」按钮在 `name + location` 双空时禁用这一支路。
+    #[test]
+    fn enabled_false_renders_button_disabled() {
+        let sh = shell();
+        let ctx = egui::Context::default();
+        ctx.begin_pass(Default::default());
+        let mut ui = new_ui(&ctx, 200.0, 200.0);
+
+        let r = button(
+            &mut ui,
+            &sh,
+            ButtonContent::Text("创建"),
+            ButtonStyle::Accent,
+            None,
+            false,
+        );
+        assert!(
+            r.rect.width() > 0.0,
+            "禁用钮也应有矩形，got {}",
+            r.rect.width()
+        );
+        // 关键：禁用的 egui::Response 自身**不**感知"自己被禁用"，但点击
+        // 应该在没有 enabled 包装时不再触发已注册的 sense——
+        // 单测无法直接断言"点不动"，所以只验：r 仍返回了、且感官上至少占位存在。
+        // 此条测试护的是 add_enabled 这条路径不 panic（曾经要求 path 走 `ui.add`）。
+    }
+
+    /// `icon_image` 必须把 `tint` 显式设进 Image（caller 漏 tint 的旧坑）。
+    /// `ImageOptions.tint` 是 `pub` 字段，getter `image_options()` 公开可读
+    /// ——直接对比 caller 传入值即可。
+    #[test]
+    fn icon_image_centralizes_tint_into_image_options() {
+        let img = icon_image(ICON_GLOBE, egui::Color32::RED, 28.0);
+        assert_eq!(
+            img.image_options().tint,
+            egui::Color32::RED,
+            "icon_image 必须把 tint 传到 Image，got {:?}",
+            img.image_options().tint
+        );
+    }
+
+    /// `icon_image` 的 `fit_to_exact_size` 落到 Image 私有 `size: ImageSize` 字段，
+    /// 不暴露 getter；走渲染出口拿 `Response.rect` —— 钉死 28×28。
+    #[test]
+    fn icon_image_paints_at_exact_pixel_size() {
+        let ctx = egui::Context::default();
+        ctx.begin_pass(Default::default());
+        let mut ui = new_ui(&ctx, 200.0, 200.0);
+        let img = icon_image(ICON_GLOBE, egui::Color32::WHITE, 28.0);
+        let r = ui.add(img);
+        let s = r.rect.size();
+        assert!(
+            (s.x - 28.0).abs() < 1e-3 && (s.y - 28.0).abs() < 1e-3,
+            "icon_image 强制 28×28，got {s:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod recent_row_and_time_ago_tests {
+    //! 2026-10-15 提到 widgets 的 [`super::recent_row`] 与
+    //! [`super::format_time_ago`] 的回归。
+
+    use super::*;
+    use crate::theme::ui_theme::UiShellConfig;
+    use std::time::{Duration, Instant};
+
+    fn shell() -> UiShell {
+        UiShell::new(&UiShellConfig::default())
+    }
+
+    /// 区间表钉死，避免后续误改文案悄悄回归。每档差用上限值测下界（如 `89m`
+    /// 进 "[1h, 1d)" 仍是 1h ago），上界留给相邻测。
+    #[test]
+    fn format_time_ago_spans_cover_every_bucket() {
+        let now = Instant::now();
+        // [0, 60s) → "Just now"
+        assert_eq!(format_time_ago(now, now), "Just now");
+        assert_eq!(
+            format_time_ago(now - Duration::from_secs(59), now),
+            "Just now"
+        );
+        // [60s, 1h) → "Nm ago"
+        assert_eq!(
+            format_time_ago(now - Duration::from_secs(60), now),
+            "1m ago"
+        );
+        // 59min 在 [60s, 1h) 上边界之内，应仍归 59m；59*60+30 也仍在同一档
+        assert_eq!(
+            format_time_ago(now - Duration::from_secs(59 * 60 + 30), now),
+            "59m ago"
+        );
+        // [1h, 1d) → "Nh ago"
+        assert_eq!(
+            format_time_ago(now - Duration::from_secs(3600), now),
+            "1h ago"
+        );
+        assert_eq!(
+            format_time_ago(now - Duration::from_secs(23 * 3600), now),
+            "23h ago"
+        );
+        // [1d, 2d) → "Yesterday"
+        assert_eq!(
+            format_time_ago(now - Duration::from_secs(86400), now),
+            "Yesterday"
+        );
+        // [2d, 7d) → "Nd ago"
+        assert_eq!(
+            format_time_ago(now - Duration::from_secs(2 * 86400), now),
+            "2d ago"
+        );
+        assert_eq!(
+            format_time_ago(now - Duration::from_secs(6 * 86400), now),
+            "6d ago"
+        );
+        // [7d, 30d) → "Nw ago"（按周）
+        assert_eq!(
+            format_time_ago(now - Duration::from_secs(7 * 86400), now),
+            "1w ago"
+        );
+        // [30d, ∞) → "Nmo ago"（按月）
+        assert_eq!(
+            format_time_ago(now - Duration::from_secs(30 * 86400), now),
+            "1mo ago"
+        );
+        assert_eq!(
+            format_time_ago(now - Duration::from_secs(120 * 86400), now),
+            "4mo ago"
+        );
+    }
+
+    /// `recent_row` 必须能给 `time_ago = None` 不画右侧栏（不 panic，rect
+    /// 仍存在）；给 `Some(...)` 也不 panic——这两条守的是 `Option` 通路。
+    #[test]
+    fn recent_row_handles_time_ago_none_and_some() {
+        let sh = shell();
+        let ctx = egui::Context::default();
+        ctx.begin_pass(Default::default());
+        let mut ui = egui::Ui::new(
+            ctx.clone(),
+            egui::Id::new("recent_row_tests"),
+            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400.0, 100.0),
+            )),
+        );
+        let r_none = recent_row(&mut ui, &sh, ICON_GLOBE, "name", "dir", None);
+        assert!(
+            r_none.rect.height() > 0.0,
+            "None 路径至少占位，got {}",
+            r_none.rect.height()
+        );
+
+        let ctx2 = egui::Context::default();
+        ctx2.begin_pass(Default::default());
+        let mut ui2 = egui::Ui::new(
+            ctx2.clone(),
+            egui::Id::new("recent_row_tests_2"),
+            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400.0, 100.0),
+            )),
+        );
+        let r_some = recent_row(&mut ui2, &sh, ICON_GLOBE, "name", "dir", Some("5m ago"));
+        assert!(
+            r_some.rect.height() > 0.0,
+            "Some 路径至少占位，got {}",
+            r_some.rect.height()
+        );
     }
 }
 

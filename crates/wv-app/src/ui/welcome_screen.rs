@@ -33,7 +33,13 @@ use bevy_egui::{egui, EguiContexts};
 use crate::state::{RecentProjects, WorldProjection};
 use crate::theme::ui_theme::{proportional, UiShellConfig};
 use crate::theme::ui_tokens::{font_size, space};
-use crate::ui::widgets::{ICON_FOLDER_OPEN, ICON_GLOBE, ICON_MAP, ICON_PLUS};
+use std::time::Instant;
+
+use crate::ui::widgets::button as widget_button;
+use crate::ui::widgets::{
+    format_time_ago, icon_image, recent_row, ButtonContent, ButtonStyle, ICON_FOLDER_OPEN,
+    ICON_GLOBE, ICON_MAP, ICON_PLUS,
+};
 use crate::ui::NewProjectDialog;
 use crate::ui_command_palette::{CommandId, CommandPalette};
 use crate::ui_shell::{DialogPurpose, OpenProjectTask, StartupLoadRequest};
@@ -46,23 +52,14 @@ const WELCOME_RECENTS_MAX: usize = 5;
 const CARD_WIDTH: f32 = 520.0;
 /// 卡片内边距（Figma `padding = 32`，单值对称）。
 const CARD_PADDING: f32 = 32.0;
-/// 主/次 CTA 高度（Figma `height = 40`）。
+/// 主/次 CTA 高度（Figma `height = 40`）。按钮工厂的 `min_size_override: Some(...)`
+/// 走它。
 const CTA_HEIGHT: f32 = 40.0;
-/// CTA 圆角（Figma `cornerRadius = 6`）。
-const CTA_CORNER: u8 = 6;
 /// AppIcon 圆角方块尺寸 / 圆角（Figma `AppIcon 56×56, cornerRadius = 12`）。
 const APP_ICON_BOX: f32 = 56.0;
 const APP_ICON_BOX_RADIUS: u8 = 12;
 /// AppIcon 内地球图标尺寸（Figma `globe 28×28`）。
 const APP_ICON_GLOBE: f32 = 28.0;
-/// 最近工程行高（Figma `RecentItem height = 36`）。
-const RECENT_ROW_H: f32 = 36.0;
-/// 最近工程列表项内左右内边距（Figma `padding [0, 8]`）。
-const RECENT_ROW_PAD_X: f32 = 8.0;
-/// 最近工程列表项内 icon 边长（Figma `map 14×14`）。
-const RECENT_ROW_ICON: f32 = 14.0;
-/// CTA 内 icon 边长（Figma `plus/folder-open 16×16`）。
-const CTA_ICON: f32 = 16.0;
 
 /// 主标题（与 Figma `AppTitle = "World-View"` 一致）。
 const APP_TITLE: &str = "World-View";
@@ -74,8 +71,12 @@ const NEW_PROJECT_LABEL: &str = "New Project…";
 const OPEN_PROJECT_LABEL: &str = "Open Project…";
 /// 最近工程小节标题（与 Figma `Recent Projects` 一致）。
 const RECENTS_HEADER: &str = "Recent Projects";
-/// 底部版本水印（Figma 直接给出；版本号同步是后续 TODO，见 README §12 待裁）。
-const FOOTER_VERSION: &str = "v0.9.1 — World-View Alpha";
+/// 底部版本水印。
+///
+/// 版本号在**编译期**读 `CARGO_PKG_VERSION`（wv-app 的 `Cargo.toml` 用
+/// `version.workspace = true` 指向根 `[workspace.package] version`）：
+/// workspace 升 `0.2.0` 时 UI 文字自动同步，不需要手工维护。
+const FOOTER_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"), " — World-View Alpha");
 
 /// 无工程时的欢迎页（Figma `Zw4tonExV5lIY_EJamjPRw` · `00_WelcomeScreen`）。
 ///
@@ -189,12 +190,12 @@ pub fn welcome_screen(
 
 /// 56×56 accent 圆角方块 + 28×28 地球图标（Figma `AppIcon`）。
 ///
-/// 用 [`egui::Button::image`] 把图标裹进可悬浮控件——`fill` 设成 accent，
-/// `corner_radius` 设成 12，整体 `min_size` 锁 56×56。不挂 on_click（装饰用）。
+/// 装饰用：不经按钮工厂（[`crate::ui::widgets::button`]）而直接构造
+/// [`egui::Button::image`]，因为这里需要**自定义 `corner_radius`=12**（Figma）
+/// 且**高度 = 56**（与默认 `shell.hit=28` 不同），又不响应点击。
+/// 图标仍然走 [`icon_image`] helper（强制 tint + 显式尺寸），与按钮工厂同一约定。
 fn app_icon(ui: &mut egui::Ui, shell: &UiShell) {
-    let image = egui::Image::new(ICON_GLOBE)
-        .tint(egui::Color32::WHITE)
-        .fit_to_exact_size(egui::vec2(APP_ICON_GLOBE, APP_ICON_GLOBE));
+    let image = icon_image(ICON_GLOBE, egui::Color32::WHITE, APP_ICON_GLOBE);
     let _ = ui.add(
         egui::Button::image(image)
             .fill(shell.accent())
@@ -218,50 +219,44 @@ fn divider(ui: &mut egui::Ui, shell: &UiShell) {
 
 /// 主 CTA：accent 实心底，白字 + 加号图标。
 ///
+/// 经 [`widget_button`] 工厂统一装配（fill/stroke/corner_radius/font 全部从
+/// `UiShell` 令牌解析），高度用 [`CTA_HEIGHT`]=40 覆盖默认 `shell.hit=28`
+/// —— `widget_button` 的 `min_size_override: Some(...)` 机制负责这件事。
 /// 返回 `true` 当用户点击——caller 据此排队意图。
 fn cta_primary(ui: &mut egui::Ui, shell: &UiShell, label: &str) -> bool {
-    let image = egui::Image::new(ICON_PLUS)
-        .tint(egui::Color32::WHITE)
-        .fit_to_exact_size(egui::vec2(CTA_ICON, CTA_ICON));
-    let resp = ui.add(
-        egui::Button::image_and_text(
-            image,
-            egui::RichText::new(label)
-                .font(proportional(font_size::INPUT))
-                .strong()
-                .color(egui::Color32::WHITE),
-        )
-        .fill(shell.accent())
-        .min_size(egui::vec2(ui.available_width(), CTA_HEIGHT))
-        .corner_radius(egui::CornerRadius::same(CTA_CORNER)),
-    );
-    resp.clicked()
+    widget_button(
+        ui,
+        shell,
+        ButtonContent::ImageText(ICON_PLUS, label),
+        ButtonStyle::Accent,
+        Some(egui::vec2(ui.available_width(), CTA_HEIGHT)),
+        true,
+    )
+    .clicked()
 }
 
 /// 次 CTA：raised_bg 底 + border_strong 描边，t2 文字 + 文件夹图标。
+///
+/// 同 [`cta_primary`] 的工厂化路径，区别在 [`ButtonStyle::Raised`]（自动写
+/// raised_bg / border_strong / t2 字）。
 fn cta_secondary(ui: &mut egui::Ui, shell: &UiShell, label: &str) -> bool {
-    let image = egui::Image::new(ICON_FOLDER_OPEN)
-        .tint(shell.t2())
-        .fit_to_exact_size(egui::vec2(CTA_ICON, CTA_ICON));
-    let resp = ui.add(
-        egui::Button::image_and_text(
-            image,
-            egui::RichText::new(label)
-                .font(proportional(font_size::INPUT))
-                .color(shell.t2()),
-        )
-        .fill(shell.raised_bg())
-        .stroke(egui::Stroke::new(1.0_f32, shell.border_strong()))
-        .min_size(egui::vec2(ui.available_width(), CTA_HEIGHT))
-        .corner_radius(egui::CornerRadius::same(CTA_CORNER)),
-    );
-    resp.clicked()
+    widget_button(
+        ui,
+        shell,
+        ButtonContent::ImageText(ICON_FOLDER_OPEN, label),
+        ButtonStyle::Raised,
+        Some(egui::vec2(ui.available_width(), CTA_HEIGHT)),
+        true,
+    )
+    .clicked()
 }
 
 /// 最近工程小节（Figma `RecentProjects`）。
 ///
 /// `palette.pending` 通过唯一分发器出口，避免本页重复实现"打开最近工程"的
-/// 路径——与菜单点同一行项走同一条命令。
+/// 路径——与菜单点同一行项走同一条命令。右侧 `time_ago` 由
+/// [`crate::ui::widgets::format_time_ago`] 算（Figma 原型设计）；`now` 在循环
+/// 外取一次，保证本帧所有行的"现在"一致。
 fn recents_section(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -286,46 +281,12 @@ fn recents_section(
             );
             return;
         }
+        let now = Instant::now();
         for (i, e) in entries.iter().take(WELCOME_RECENTS_MAX).enumerate() {
-            if recent_row(ui, shell, &e.name, &e.dir) {
+            let time_ago = format_time_ago(e.last_opened_at, now);
+            if recent_row(ui, shell, ICON_MAP, &e.name, &e.dir, Some(&time_ago)).clicked() {
                 palette.pending = Some(CommandId::OpenRecentProject(i as u8));
             }
         }
     });
-}
-
-/// 单条最近工程（Figma `RecentItem`）：map 图标 + 名/路径。
-///
-/// 暂未实现时间戳（`last_opened` 字段与持久化待后续补；详见
-/// `state::RecentProject` 注释）。Figma 中那一栏留作 `time_ago: &str` 接口，
-/// 现阶段传 `""`，由 [`recent_row`] 在文字层做"空就隐藏"的处理。
-fn recent_row(ui: &mut egui::Ui, shell: &UiShell, name: &str, dir: &str) -> bool {
-    let resp = ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), RECENT_ROW_H),
-        egui::Layout::left_to_right(egui::Align::Center),
-        |ui| {
-            ui.add_space(RECENT_ROW_PAD_X);
-            ui.add(
-                egui::Image::new(ICON_MAP)
-                    .tint(shell.t3())
-                    .fit_to_exact_size(egui::vec2(RECENT_ROW_ICON, RECENT_ROW_ICON)),
-            );
-            ui.add_space(RECENT_ROW_PAD_X);
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 1.0;
-                ui.label(
-                    egui::RichText::new(name)
-                        .font(proportional(font_size::BASE))
-                        .strong()
-                        .color(shell.t1()),
-                );
-                ui.label(
-                    egui::RichText::new(dir)
-                        .font(proportional(font_size::MICRO))
-                        .color(shell.t3()),
-                );
-            });
-        },
-    );
-    resp.response.clicked()
 }
