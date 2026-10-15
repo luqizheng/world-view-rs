@@ -737,6 +737,10 @@ impl Project {
         let faction_geometry: Vec<wv_core::map::GeometrySpan> =
             load_dir(&self.root, "geometry/faction")?;
 
+        // 命名区域（ADR-0017 §2.2）：`regions/` 每区域一个 YAML，几何内联。
+        // 目录可缺失——旧工程直接得空 Vec（零迁移）。
+        let regions: Vec<wv_core::Region> = load_dir(&self.root, "regions")?;
+
         Ok(World {
             meta: Some(self.meta.clone()),
             maps,
@@ -751,6 +755,7 @@ impl Project {
             narrations,
             factions,
             faction_geometry,
+            regions,
             terrains,
             streets,
             measurements,
@@ -868,6 +873,11 @@ impl Project {
         if wants("units") {
             save_entities(&self.root.join("units"), &world.units, |u| {
                 u.id.as_str().to_string()
+            })?;
+        }
+        if wants("regions") {
+            save_entities(&self.root.join("regions"), &world.regions, |r| {
+                r.id.as_str().to_string()
             })?;
         }
         if wants("tracks") {

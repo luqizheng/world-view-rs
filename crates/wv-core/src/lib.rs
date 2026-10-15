@@ -47,6 +47,7 @@ pub use map::unit;
 pub use model::character;
 pub use model::event;
 pub use model::faction;
+pub use model::region;
 pub use model::relation;
 pub use source::building;
 pub use source::geographic_source;
@@ -71,6 +72,7 @@ pub use map::unit::Unit;
 pub use model::character::Character;
 pub use model::event::{Event, EventLocation};
 pub use model::faction::{factions_at, Faction};
+pub use model::region::Region;
 pub use source::building::{Building, BuildingLayer};
 pub use source::geographic_source::{GeographicSourceV1, LatLonBbox};
 pub use source::label::{label_visible_at, EntityKind, LabelLayerConfig, ZoomTier};
@@ -178,6 +180,13 @@ pub struct World {
     /// `GeometrySpan.owner` 引用 `factions` 中的 `Faction.id`。
     /// 想要「某时刻某地图上所有势力 + 多边形」走 [`crate::factions_at`]。
     pub faction_geometry: Vec<map::GeometrySpan>,
+    /// 命名区域（ADR-0017 §2.2 · `EntityKind::Region`）。
+    ///
+    /// §4.5「每实体一文件」：每个区域一个 `regions/<id>.yaml`，几何内联
+    /// （区域少、顶点少，YAML 可读——P3 无需二进制）。v0.1 永久可见
+    /// （只受图级 `MapNode.time_span` 否决），未来加时间窗口时渲染侧
+    /// 只换 `label_visible_at` 的 `entity_span` 参数。
+    pub regions: Vec<model::region::Region>,
     /// 各图各自的**地形栅格**，键 = [`map::MapNode::id`]。
     ///
     /// 注意：`wv-core` **不认识** `wv_terrain::TerrainGrid`（不依赖 wv-terrain，基线 §2.1）。
