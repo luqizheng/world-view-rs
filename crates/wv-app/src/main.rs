@@ -222,7 +222,11 @@ struct GuiArgs {
 #[cfg(feature = "app")]
 fn parse_gui_args(args: &[String]) -> Result<GuiArgs, String> {
     let mut dir: Option<String> = None;
+    // http 关闭时两个 flag 的分支直接报错返回（见下方 cfg(not(http))），收集槽
+    // 不参与任何使用——按 cfg 静音，`--features app` 闸门的 -D warnings 才不误红。
+    #[cfg_attr(not(feature = "http"), allow(unused_mut, unused_variables))]
     let mut port: Option<u16> = None;
+    #[cfg_attr(not(feature = "http"), allow(unused_mut, unused_variables))]
     let mut bind: Option<String> = None;
     let mut i = 0;
     while i < args.len() {

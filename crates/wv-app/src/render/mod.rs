@@ -32,6 +32,8 @@ pub mod drill;
 #[cfg(feature = "app")]
 pub mod faction_overlays;
 #[cfg(feature = "app")]
+pub mod label_collision;
+#[cfg(feature = "app")]
 pub mod label_halo;
 #[cfg(feature = "app")]
 pub mod layer_frame;
