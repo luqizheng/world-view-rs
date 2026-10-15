@@ -1,8 +1,9 @@
-//! 顶栏（44px v0.3）+ 状态栏（24px v0.3）。
+//! 顶栏（38px v0.3）+ 状态栏（22px v0.3）。
 //!
 //! ## 职责
 //! - `top_bar`：身份 / 主控 / 读数 三段式；Figma `5E8BCBCmtGAHqk3ORibBlU` 风格：
-//!   左侧项目名 + 面包屑；中段 `Browse` / `Edit` 双段；右侧 zoom / entities / 脏态 / ⌘K。
+//!   左侧项目名 + 面包屑；中段 `Browse`/`Edit` 双段 + 地图主题分段 + `Rebuild`；
+//!   右侧 zoom / entities / 脏态徽标 / ⌘K。
 //! - `status_bar`：实体计数 / 路径 / zoom / Saved / warnings / 当前文件。
 //!
 //! ## 边界
@@ -13,9 +14,12 @@
 //! - Figma 用 `Browse` / `Edit` 英文标签；数据层 `ViewMode::label()` 仍输出
 //!   中文「矢量地形 / 色块地形」（命令面板/快捷键依赖）。**仅顶栏**改英文：
 //!   `Browse` ↔ `ViewMode::VectorFlat`（默认），`Edit` ↔ `ViewMode::Schematic`。
-//!   这两条标签是 Figma 中"用户视角"语义，**不影响** `CommandId::SetViewMode` 通路。
-//! - 脏态从"未保存/已保存"改为 Figma 的 `● Unsaved changes` / `Saved locally` 徽标。
-//! - 状态栏移除 `Time` 资源（顶部不再显示日期——日期下移到时间线头部）。
+//! - 高度以 **web 实现源码**（`index.css` `.topbar`/`.statusbar`）为准：
+//!   38px / 22px（v0.3 初版按渲染图猜的 44/24 已回退）。
+//! - `Browse`/`Edit` 选中段是 `bg_active` **灰底**（web `.segmented
+//!   .button.active`），蓝底只给主按钮；分段容器底是 `bg_app`。
+//! - 脏态：顶栏右侧 warn 徽标 `● Unsaved changes`（web `.badge.warn`）；
+//!   状态栏 `Saved locally` 走 ok 徽标、`N warnings` 走 warn 徽标。
 
 #![cfg(feature = "app")]
 
@@ -49,8 +53,8 @@ pub fn top_bar(
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
-    // v0.3：顶栏加高 38→44 装下"● Unsaved changes" 徽标 + ⌘K 提示。
-    let h = 44.0;
+    // v0.3 校准：web `.topbar` 高 38px（初版按渲染图猜 44px，已回退）。
+    let h = 38.0;
     let recents = recents_res.visible(&projection);
     let mut root = root_ui(ctx);
     egui::Panel::top("wv_top_bar")
@@ -78,7 +82,12 @@ pub fn top_bar(
                 // ── 主控：Browse / Edit 双段（Figma v0.3）──
                 browse_edit_segment(ui, &shell, &mut view);
                 ui.add_space(space::SM);
-                // ── Rebuild 图标按钮（保留旧 `↻` 行为）──
+                // ── 地图主题（ADR-0016：日间古舆图 / 暮色旧纸，与技法正交）──
+                // v0.3 校准：web 顶栏中段确有主题分段（Dusk Old Paper / Sunlit
+                // Ancient Atlas），对应本项目 MapPalette——M1 曾误删，现恢复。
+                map_palette_segment(ui, &shell, &mut view);
+                ui.add_space(space::SM);
+                // ── Rebuild 图标按钮（web 顶栏为带字按钮，此处保留图标+tooltip）──
                 if mini_icon_button(ui, &shell, ICON_REFRESH, "强制重画地形（F5）").clicked()
                 {
                     palette.pending = Some(CommandId::ForceRebuildTexture);
@@ -131,30 +140,11 @@ fn identity_segment(
         ui.add_space(space::XS);
     }
 
-    // 脏态徽标：从顶栏尾挪到身份段尾（与 Figma 一致：紧贴项目名）。
-    if projection.dirty {
-        ui.add_space(space::SM);
-        dirty_chip(ui, shell, true);
-    }
+    // 工程未加载时的醒目错误（§5.1）。脏态徽标在右侧读数段（web `.top-right`）。
     if projection.load_error.is_some() {
         ui.add_space(space::SM);
         badge(ui, shell, BadgeKind::Err, "工程未加载");
     }
-}
-
-/// 脏态 chip：Figma 是 "● Unsaved changes" 金边描边。
-/// 已保存态不画（M2 status_bar 的 `Saved locally` 徽标负责）。
-fn dirty_chip(ui: &mut egui::Ui, shell: &UiShell, dirty: bool) {
-    let (label, color) = if dirty {
-        ("● Unsaved changes", shell.danger())
-    } else {
-        ("● Saved locally", shell.success())
-    };
-    ui.label(
-        egui::RichText::new(label)
-            .size(shell.scale.small)
-            .color(color),
-    );
 }
 
 /// Figma v0.3：Browse / Edit 双段。
@@ -165,17 +155,26 @@ fn dirty_chip(ui: &mut egui::Ui, shell: &UiShell, dirty: bool) {
 ///
 /// 数据层 `view.mode` 仍按原枚举流转；`CommandId::SetViewMode` 与命令面板不
 /// 受影响（命令面板的 label 来自 `ViewMode::label()`，保持中文「矢量地形/色块地形」）。
+///
+/// 样式以 web `.segmented` 为准：容器 `bg_app` 底 + `border` 描边，选中段
+/// `bg_active` 灰底 + `text_1`（蓝底只给主按钮，v0.3 初版的 accent_soft 已回退）。
 fn browse_edit_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
     let segs: [(&str, ViewMode); 2] = [
         ("Browse", ViewMode::VectorFlat),
         ("Edit", ViewMode::Schematic),
     ];
     let n = segs.len() as f32;
-    let seg_w = 140.0; // Figma 中"双段"明显比旧版窄（70px/段）
+    let seg_w = 140.0;
     let seg_h = shell.hit;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(seg_w, seg_h), egui::Sense::hover());
     let painter = ui.painter();
-    painter.rect_filled(rect, radius::CONTROL, shell.raised_bg());
+    painter.rect_filled(rect, radius::CONTROL, color32(shell.palette.bg_app));
+    rect_stroke_app(
+        painter,
+        rect,
+        radius::CONTROL,
+        color32(shell.palette.border_subtle),
+    );
     let seg_w_each = rect.width() / n;
     for (i, (label, mode)) in segs.iter().enumerate() {
         let r = egui::Rect::from_min_max(
@@ -189,13 +188,10 @@ fn browse_edit_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState)
             egui::Sense::click(),
         );
         if selected {
-            painter.rect_filled(r, radius::CONTROL, shell.accent_soft());
+            painter.rect_filled(r, radius::CONTROL, shell.active_bg());
         } else if resp.hovered() {
             painter.rect_filled(r, radius::CONTROL, shell.hover_bg());
         }
-        // v0.3 关键：Browse/Edit 选中段用 `t1`（浅）而不是 `text_on_accent`（深）
-        // —— 底色是 `accent_soft` 淡蓝，按钮文字保持白才有"激活"感。
-        // accent_soft 浮在 panel 上合成底 ≈ 5:1（v03_text1_on_soft_surfaces 守住 4.5）。
         let fg = if selected { shell.t1() } else { shell.t2() };
         painter.text(
             r.center(),
@@ -210,12 +206,80 @@ fn browse_edit_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState)
     }
 }
 
+/// 地图主题分段控件（日间古舆图 / 暮色旧纸，ADR-0016）。
+///
+/// v0.3 校准恢复：web 顶栏中段的 `Dusk Old Paper / Sunlit Ancient Atlas`
+/// 分段即本项目的 `MapPalette` 轴（M1 重写时误删）。样式与
+/// [`browse_edit_segment`] 同款（web `.segmented`），两段定宽 64px。
+fn map_palette_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
+    use crate::theme::palette::MapPalette;
+    let n = MapPalette::ALL.len() as f32;
+    let seg_w = n * 64.0;
+    let seg_h = shell.hit;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(seg_w, seg_h), egui::Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(rect, radius::CONTROL, color32(shell.palette.bg_app));
+    rect_stroke_app(
+        painter,
+        rect,
+        radius::CONTROL,
+        color32(shell.palette.border_subtle),
+    );
+    let seg_w_each = rect.width() / n;
+    for (i, p) in MapPalette::ALL.iter().enumerate() {
+        let r = egui::Rect::from_min_max(
+            egui::pos2(rect.min.x + seg_w_each * i as f32, rect.min.y),
+            egui::pos2(rect.min.x + seg_w_each * (i as f32 + 1.0), rect.max.y),
+        );
+        let selected = view.map_palette == *p;
+        let resp = ui.interact(
+            r,
+            egui::Id::new(("wv_palette_seg", i)),
+            egui::Sense::click(),
+        );
+        if selected {
+            painter.rect_filled(r, radius::CONTROL, shell.active_bg());
+        } else if resp.hovered() {
+            painter.rect_filled(r, radius::CONTROL, shell.hover_bg());
+        }
+        let fg = if selected { shell.t1() } else { shell.t2() };
+        painter.text(
+            r.center(),
+            egui::Align2::CENTER_CENTER,
+            p.label(),
+            proportional(font_size::SMALL),
+            fg,
+        );
+        if resp.clicked() {
+            view.map_palette = *p;
+        }
+    }
+}
+
+/// 顶栏分段容器的内描边（统一 `StrokeKind::Inside`，与 widgets::rect_stroke
+/// 同口径；本文件自持一份以免引 pub(crate) 跨模块）。
+fn rect_stroke_app(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    corner_radius: impl Into<egui::CornerRadius>,
+    color: egui::Color32,
+) {
+    painter.rect_stroke(
+        rect,
+        corner_radius,
+        egui::Stroke::new(1.0, color),
+        egui::StrokeKind::Inside,
+    );
+}
+
 fn readout_segment(
     ui: &mut egui::Ui,
     shell: &UiShell,
     view: &ViewState,
     projection: &WorldProjection,
 ) {
+    // 右至左排布；web `.top-right` 从左到右是 zoom / entities / 脏态徽标 / ⌘K，
+    // 故本段添加顺序：⌘K → 脏态 → entities → zoom。
     // ⌘K 提示（点击触发命令面板）
     let cmdk = ui.add(
         egui::Image::new(ICON_COMMAND)
@@ -230,6 +294,12 @@ fn readout_segment(
             .font(mono(shell.scale.small)),
     );
     ui.add_space(space::MD);
+
+    // 脏态徽标（web `.badge.warn`：橙底 + 圆点；已保存时不画，状态栏负责）。
+    if projection.dirty {
+        badge(ui, shell, BadgeKind::Warn, "● Unsaved changes");
+        ui.add_space(space::MD);
+    }
 
     // 实体计数（"128 entities"）
     let entity_count = count_entities(projection);
@@ -294,11 +364,11 @@ const _ICON_ALERT_PRESENT_FOR_FUTURE_USE: egui::ImageSource<'static> = ICON_ALER
 #[allow(dead_code)]
 const _ICON_CHEVRON_DOWN_PRESENT_FOR_FUTURE_USE: egui::ImageSource<'static> = ICON_CHEVRON_DOWN;
 
-/// 状态栏（v0.3：24px · Figma 风格）。
+/// 状态栏（v0.3：22px，web `.statusbar` 精确值）。
 ///
 /// - 左：实体计数 `6 units · 12 characters · 2 situations · 28 events`
 /// - 中：当前路径 `Zunyi / Government Office` + zoom `Zoom 86%`
-/// - 右：`Saved locally` / `4 warnings` / `ui-layout.yaml`
+/// - 右：`Saved locally`（ok 徽标）/ `N warnings`（warn 徽标）/ `ui-layout.yaml`
 pub fn status_bar(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,
@@ -312,7 +382,7 @@ pub fn status_bar(
     };
     let mut root = root_ui(ctx);
     egui::Panel::bottom("wv_status_bar")
-        .exact_size(24.0)
+        .exact_size(22.0)
         .frame(
             egui::Frame::NONE
                 .fill(color32(shell.palette.bg_panel))
@@ -347,51 +417,29 @@ pub fn status_bar(
                     );
                     ui.add_space(space::MD);
 
-                    // 警告徽标（橙 danger 描边）
+                    // 警告徽标（web `.badge.warn`：warn 语义底 + 前景）
                     if validation_count.warnings > 0 {
-                        let resp = ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(format!(
-                                    "⚠ {} warning{}",
-                                    validation_count.warnings,
-                                    if validation_count.warnings == 1 {
-                                        ""
-                                    } else {
-                                        "s"
-                                    }
-                                ))
-                                .size(shell.scale.micro)
-                                .color(shell.danger())
-                                .font(mono(shell.scale.micro)),
-                            )
-                            .sense(egui::Sense::click()),
+                        badge(
+                            ui,
+                            &shell,
+                            BadgeKind::Warn,
+                            &format!(
+                                "{} warning{}",
+                                validation_count.warnings,
+                                if validation_count.warnings == 1 {
+                                    ""
+                                } else {
+                                    "s"
+                                }
+                            ),
                         );
-                        if resp.clicked() {
-                            // 点击打开验证面板（M2 在 faction_panel_actions 已有通路）
-                        }
-                        resp.on_hover_text("打开验证面板");
                         ui.add_space(space::MD);
                     }
 
-                    // Saved locally 徽标（success 绿）
+                    // Saved locally 徽标（web `.badge.ok`；脏态时顶栏右侧已有
+                    // Unsaved changes，此处不画）
                     if !projection.dirty {
-                        let (rect, _) = ui
-                            .allocate_exact_size(egui::vec2(80.0, shell.row), egui::Sense::hover());
-                        let painter = ui.painter();
-                        let pill =
-                            egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y));
-                        painter.rect_filled(
-                            pill,
-                            radius::PILL,
-                            shell.success().linear_multiply(0.16),
-                        );
-                        painter.text(
-                            pill.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "● Saved locally",
-                            proportional(shell.scale.micro),
-                            shell.success(),
-                        );
+                        badge(ui, &shell, BadgeKind::Ok, "Saved locally");
                         ui.add_space(space::MD);
                     }
 

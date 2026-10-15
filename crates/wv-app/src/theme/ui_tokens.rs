@@ -1,4 +1,4 @@
-﻿//! 界面外壳色令牌 —— `assets/ui-design/UI_DESIGN_SPEC_v0.1.md` §2.2 的唯一代码载体。
+//! 界面外壳色令牌 —— `assets/ui-design/UI_DESIGN_SPEC_v0.1.md` §2.2 的唯一代码载体。
 #![cfg(feature = "app")]
 
 //! ## 纪律
@@ -374,18 +374,25 @@ impl ShellPalette {
 
 impl ShellPalette {
     /// 暗色外壳（设计规格 §2.2「暗色」列）。
+    ///
+    /// v0.3 校准（2026-10-15）：中性 8 色（raised / hover / active / border×2 /
+    /// text×3）改为 Figma Make **web 实现源码** `index.css :root` 的精确值
+    /// （此前为设计稿渲染图像素采样，有 ±3~8/通道 偏差）。`bg_app` / `bg_panel`
+    /// / `accent` / `focus` 采样本就与 web 一致，未动；语义色（badge_* / fill）
+    /// 维持项目既有结论（§4.7 与 `crate::colors` 同色相，web 原型的 Atlassian
+    /// 系语义色**不**采纳，见 `badge_fills_mirror_the_world_link_palette`）。
     pub const DARK: Self = Self {
         bg_app: Rgb::hex(0x0F1116),
         bg_map: Rgb::hex(0x0B0D11),
         bg_panel: Rgb::hex(0x191C24),
-        bg_raised: Rgb::hex(0x212530),
-        bg_hover: Rgb::hex(0x2A2F3C),
-        bg_active: Rgb::hex(0x323847),
-        border_subtle: Rgb::hex(0x272C37),
-        border_strong: Rgb::hex(0x3A4152),
-        text_1: Rgb::hex(0xE9ECF3),
-        text_2: Rgb::hex(0xA3ABB9),
-        text_3: Rgb::hex(0x858D9C),
+        bg_raised: Rgb::hex(0x232731),
+        bg_hover: Rgb::hex(0x2C313D),
+        bg_active: Rgb::hex(0x373D4A),
+        border_subtle: Rgb::hex(0x2E333F),
+        border_strong: Rgb::hex(0x414858),
+        text_1: Rgb::hex(0xF0F2F7),
+        text_2: Rgb::hex(0xB4B9C6),
+        text_3: Rgb::hex(0x727A8C),
         accent: Rgb::hex(0x4C8DF6),
         focus: Rgb::hex(0xF2C14E),
         bg_float: Rgb::hex(0x14171D),
@@ -642,20 +649,29 @@ mod tests {
     /// 暗色掉在 `hover` / `active`（底比 panel 亮），亮色几乎处处都掉
     /// （底色越亮，浅色文字越失效）。
     ///
+    /// v0.3 校准追记（2026-10-15）：中性 8 色改为 web 实现精确值后，暗色
+    /// `text.3`（`#858D9C → #727A8C`，更弱）在 `panel` / `raised` / `float` 上
+    /// **新增**三条缺口（3.96 / 3.47 / 4.21），原 hover / active 两条加剧
+    /// （3.02 / 2.53）；亮色列未动。候选值 `text.3` 相应提亮
+    /// `#9BA3B3 → #A2AABA`（新 `bg.active` 上 4.66:1）。
+    ///
     /// 这不是「算了」：候选修正值已在
     /// [`tests::candidate_tokens_close_every_registered_gap`] 里验证通过，换上去
     /// 即可全部达标。先只登记不改，是因为令牌值属 `UI_DESIGN_SPEC_v0.1.md` §2.2
     /// 的既有结论，改它要走 §6.3（追加说明不改结论）与 §10 决议，不由实现单方面决定。
     const KNOWN_GAPS: &[(UiTheme, &str, &str)] = &[
-        (UiTheme::Dark, "text.3", "bg.hover"),            // 实测 4.00
-        (UiTheme::Dark, "text.3", "bg.active"),           // 实测 3.51
-        (UiTheme::Dark, "accent(as text)", "bg.hover"),   // 实测 4.11
-        (UiTheme::Light, "text.3", "bg.raised"),          // 实测 4.26
-        (UiTheme::Light, "text.3", "bg.hover"),           // 实测 3.93
-        (UiTheme::Light, "text.3", "bg.active"),          // 实测 3.55
-        (UiTheme::Light, "text.3", "bg.float"),           // 实测 4.46
+        (UiTheme::Dark, "text.3", "bg.panel"), // 实测 3.96（v0.3 新增）
+        (UiTheme::Dark, "text.3", "bg.raised"), // 实测 3.47（v0.3 新增）
+        (UiTheme::Dark, "text.3", "bg.hover"), // 实测 3.02（v0.3 加剧，原 4.00）
+        (UiTheme::Dark, "text.3", "bg.active"), // 实测 2.53（v0.3 加剧，原 3.51）
+        (UiTheme::Dark, "text.3", "bg.float"), // 实测 4.21（v0.3 新增）
+        (UiTheme::Dark, "accent(as text)", "bg.hover"), // 实测 4.00
+        (UiTheme::Light, "text.3", "bg.raised"), // 实测 4.26
+        (UiTheme::Light, "text.3", "bg.hover"), // 实测 3.93
+        (UiTheme::Light, "text.3", "bg.active"), // 实测 3.55
+        (UiTheme::Light, "text.3", "bg.float"), // 实测 4.46
         (UiTheme::Light, "accent(as text)", "bg.raised"), // 实测 4.34
-        (UiTheme::Light, "accent(as text)", "bg.hover"),  // 实测 4.00
+        (UiTheme::Light, "accent(as text)", "bg.hover"), // 实测 4.00
     ];
 
     /// 审计结果必须与登记表**完全一致**：表外的必须达标，表内的必须确实不达标。
@@ -708,7 +724,7 @@ mod tests {
     /// 交付物不只是「哪里不合格」，还包括「改成什么能合格」。
     #[test]
     fn candidate_tokens_close_every_registered_gap() {
-        let dark_text3 = Rgb::hex(0x9BA3B3);
+        let dark_text3 = Rgb::hex(0xA2AABA);
         let light_text3 = Rgb::hex(0x59606E);
         let dark_accent = Rgb::hex(0x6BA1F8);
         let light_accent = Rgb::hex(0x2263C0);
