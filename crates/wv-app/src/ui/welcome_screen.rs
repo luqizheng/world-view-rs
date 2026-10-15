@@ -30,6 +30,8 @@ use crate::ui::NewProjectDialog;
 use crate::ui_command_palette::{CommandId, CommandPalette};
 use crate::ui_shell::{DialogPurpose, OpenProjectTask, StartupLoadRequest};
 
+use super::widgets::ToolButton;
+
 /// 欢迎页上最多列几条最近工程（列表本身存 8 条，首屏别太长）。
 const WELCOME_RECENTS_MAX: usize = 5;
 
@@ -56,6 +58,9 @@ pub fn welcome_screen(
         return;
     };
     let screen = ctx.viewport_rect();
+    // 浮动面板 chain 不带 shell_cfg，本页也不带——构造默认壳供 ToolButton 用。
+    // todo: chain 拆分按层/组后回填 `Res<UiShellConfig>`。
+    let shell = crate::ui::UiShell::new(&crate::theme::ui_theme::UiShellConfig::default());
 
     // 全屏压暗 + 吃点击：`interactable(true)` 让 Area 接住指针，
     // 下面的地图与面板（Middle 层）点不到。
@@ -91,13 +96,13 @@ pub fn welcome_screen(
                 );
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("新建工程…").clicked() {
+                    ToolButton::text("新建工程…", "").show(ui, &shell, || {
                         new_project.open();
-                    }
-                    if ui.button("打开工程…").clicked() {
+                    });
+                    ToolButton::text("打开工程…", "").show(ui, &shell, || {
                         // 只排队意图；原生目录窗口由 poll_open_project_dialog 发起。
                         open_task.request(DialogPurpose::Open);
-                    }
+                    });
                 });
                 let entries = recents.entries();
                 if !entries.is_empty() {
@@ -106,12 +111,12 @@ pub fn welcome_screen(
                     ui.label(egui::RichText::new("最近工程").text_style(egui::TextStyle::Small));
                     for (i, e) in entries.iter().take(WELCOME_RECENTS_MAX).enumerate() {
                         // 走唯一分发器（与菜单同一条路），本页不做加载。
-                        if ui
-                            .button(egui::RichText::new(format!("{} — {}", e.name, e.dir)).small())
-                            .clicked()
-                        {
-                            palette.pending = Some(CommandId::OpenRecentProject(i as u8));
-                        }
+                        let label = format!("{} — {}", e.name, e.dir);
+                        ToolButton::text(&label, "")
+                            .tint(shell.t2())
+                            .show(ui, &shell, || {
+                                palette.pending = Some(CommandId::OpenRecentProject(i as u8));
+                            });
                     }
                 }
             });
