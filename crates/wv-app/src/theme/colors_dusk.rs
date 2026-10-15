@@ -72,6 +72,10 @@ pub const DUSK_LABEL_WATER: Color = hex(0x5A7A88);
 /// - 雪 shadow = 深青灰（暗纸冷阴影，比日间深一档）
 pub const DUSK_SNOW_HIGHLIGHT: Color = hex(0xE5DDC8);
 pub const DUSK_SNOW_SHADOW: Color = hex(0x6F7C88);
+/// 海冰色族（手绘地图 #5）—— 暮色版：海冰纸面比日间偏深、阴影更冷。
+pub const DUSK_ICE_PAPER: Color = hex(0xC8CCC6);
+pub const DUSK_ICE_INK: Color = hex(0x2E3A42);
+pub const DUSK_ICE_SHADOW: Color = hex(0x4A5A66);
 /// 文字晕边 = 暮色纸面深底。
 pub const DUSK_HALO_FILL: Color = hex(0x3A342E);
 /// 等值线 / 海岸线墨色：暗纸上的浅墨 推导·待复核。

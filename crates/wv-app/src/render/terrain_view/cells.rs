@@ -1223,4 +1223,48 @@ mod tests {
             b.red
         );
     }
+
+    // -----------------------------------------------------------------------
+    // 海冰（手绘地图呈现 #5，2026-10-15）
+    // -----------------------------------------------------------------------
+
+    /// 纬度阈值：高纬度 y < h × ICE_LATITUDE_T。
+    #[test]
+    fn ice_latitude_threshold_is_correctly_anchored() {
+        use crate::theme::colors::ICE_LATITUDE_T;
+        const {
+            assert!(
+                ICE_LATITUDE_T > 0.0 && ICE_LATITUDE_T < 1.0,
+                "纬度阈值应在 (0,1)"
+            )
+        }
+        const { assert!(ICE_LATITUDE_T <= 0.25, "阈值不应超过 25%") }
+    }
+
+    /// 深度上限：仅浅于 -200 m 的水域叠冰。
+    #[test]
+    fn ice_max_depth_threshold_is_anchor() {
+        use crate::theme::colors::ICE_MAX_DEPTH_M;
+        const { assert!(ICE_MAX_DEPTH_M == 200, "深度上限锚点应为 200 m") }
+    }
+
+    /// 海冰色源色：ice_paper 是淡白偏冷（civ-atlas `ICE_PAPER = #EEF1EC`，
+    /// 极浅白略偏绿/冷调），与雪 highlight 区分。
+    #[test]
+    fn ice_paper_is_pale_white() {
+        let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
+        let Color::Srgba(p) = pal.ice_paper else {
+            panic!()
+        };
+        // 极浅：三个通道都 > 0.9（近白）
+        assert!(
+            p.red > 0.9 && p.green > 0.9 && p.blue > 0.9,
+            "海冰纸面应近白，实得 r={} g={} b={}",
+            p.red,
+            p.green,
+            p.blue
+        );
+        // 与普通水色（kind=0/1 蓝 > 绿）区分：ice 三个通道都近 1.0，
+        // 蓝/绿差异极小（即"白"）；水色则绿/红明显小于蓝。
+    }
 }

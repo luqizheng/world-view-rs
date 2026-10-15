@@ -112,6 +112,12 @@ pub struct PaletteColors {
     pub snow_highlight: Color,
     /// 雪冷阴影色（手绘地图 #3）—— 冷蓝灰，叠在 high-altitude 雪格上。
     pub snow_shadow: Color,
+    /// 海冰纸面（手绘地图 #5）—— 极地海域叠的近白略冷。
+    pub ice_paper: Color,
+    /// 冰缘墨线（手绘地图 #5）—— 偏冷的冰边描线色（预留，未在 isoline 消费）。
+    pub ice_ink: Color,
+    /// 海冰背光排线色（手绘地图 #5）—— 淡蓝灰。
+    pub ice_shadow: Color,
     /// 文字晕边填充（= 纸面色族）。
     pub halo_fill: Color,
     /// 等值线 / 海岸线墨色。
@@ -177,6 +183,9 @@ impl PaletteColors {
         label_water: colors::LABEL_WATER,
         snow_highlight: colors::SNOW_HIGHLIGHT,
         snow_shadow: colors::SNOW_SHADOW,
+        ice_paper: colors::ICE_PAPER,
+        ice_ink: colors::ICE_INK,
+        ice_shadow: colors::ICE_SHADOW,
         halo_fill: colors::HALO_FILL,
         isoline_ink: colors::ISOLINE_INK,
         grid_line: colors::GRID_LINE,
@@ -205,6 +214,9 @@ impl PaletteColors {
         label_water: colors_dusk::DUSK_LABEL_WATER,
         snow_highlight: colors_dusk::DUSK_SNOW_HIGHLIGHT,
         snow_shadow: colors_dusk::DUSK_SNOW_SHADOW,
+        ice_paper: colors_dusk::DUSK_ICE_PAPER,
+        ice_ink: colors_dusk::DUSK_ICE_INK,
+        ice_shadow: colors_dusk::DUSK_ICE_SHADOW,
         halo_fill: colors_dusk::DUSK_HALO_FILL,
         isoline_ink: colors_dusk::DUSK_ISOLINE_INK,
         grid_line: colors_dusk::DUSK_GRID_LINE,

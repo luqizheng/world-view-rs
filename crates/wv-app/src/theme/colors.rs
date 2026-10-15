@@ -145,6 +145,26 @@ pub const SNOW_SHADOW_MIN_HEIGHT: i16 = 2500;
 /// 0.0 = 全不叠（雪原是平的），1.0 = 高海拔全冷蓝。
 pub const SNOW_SHADOW_PER_KM: f32 = 0.35;
 
+// ---------------------------------------------------------------------------
+// 海冰色族（手绘地图呈现 #5，2026-10-15）
+// ---------------------------------------------------------------------------
+
+/// 海冰纸面——比 `core.water_shallow` 更亮、近白略偏冷（civ-atlas `ICE_PAPER`）。
+/// 海域格在「足够冷」（按 y 纬度判定）时，叠这色。
+pub const ICE_PAPER: Color = hex(0xEEF1EC);
+/// 冰缘墨线：比海岸墨线偏冷、偏淡（civ-atlas `ICE_INK`）——一眼能与陆上
+/// 岸线分开。当前世界观不画冰缘线（isoline 没专门画冰边界），但令牌
+/// 留下供未来 M3 海冰描边消费。
+pub const ICE_INK: Color = hex(0x44525A);
+/// 海冰背光边的排线色：淡蓝灰（civ-atlas `ICE_SHADOW`）。
+pub const ICE_SHADOW: Color = hex(0x8C9EA8);
+/// 海冰纬度阈值：y < TERRAIN_H × `ICE_LATITUDE_T` 的海域格视为「足够冷」、
+/// 叠海冰色。`0.20` = 顶部 20% 区域为极地海冰带。
+pub const ICE_LATITUDE_T: f32 = 0.20;
+/// 海冰深度上限：仅在浅于这个深度（米，海拔 ≥ -threshold）的水域叠冰——
+/// 极深海底温度虽冷，但 civ-atlas 海冰只到大陆架。`200` = -200 m 以上才叠。
+pub const ICE_MAX_DEPTH_M: i16 = 200;
+
 /// 强调色（`accent.*`）。
 pub const ACCENT_SELECT: Color = hex(0xF2C14E); // 选中高亮（金）
 /// **当前时刻指示色**：时间轴游标 + 生长笔尖**共用**（动画规格 §7.1：禁止拆成两令牌）。
