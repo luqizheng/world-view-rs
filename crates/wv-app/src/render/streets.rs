@@ -153,8 +153,14 @@ const STREET_LABEL_Z: f32 = 0.35;
 /// **屏幕对齐**（2026-10-14 用户裁定，与地名标注同一口径）：地图随
 /// `MapNode.orientation` 旋转后，街道名文字取相机旋转的**逆**保持水平。
 ///
-/// 图层归属：街道名是 Road 组的标注（ADR-0013）——Road 图层隐藏（YAML 声明
-/// 或会话开关）时街名一并退场，透明度与 z 偏移也随 Road 组。
+/// 图层归属（ADR-0016 §2.9 Q3 全接管）：
+/// - ADR-0013 §2.2：街名随 Road 图层（`layers.road.visible`）
+/// - ADR-0016 Q1：标签走独立渲染组（`layers.label.visible`）
+/// - 两者合取——任一关闭即街名消失。
+/// - LodTier 过滤**去除**（Q3：不再只在 Edit 级别显示）。
+/// - 时间过滤（`label_visible_at`，ADR-0015）待段级 `StreetSegment.time_span`
+///   进 `StreetLayerCache` 后接入——当前该缓存的 sources 不携带窗口，
+///   图级窗口否决由钻取侧（drill）覆盖，此处不重复求值。
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_street_labels(
     mut commands: Commands,
@@ -187,9 +193,11 @@ pub fn update_street_labels(
 ) {
     // 期望标注集：有名字的段 × 折线中点（本图局部 → 视图空间，走 `map_to_view`）。
     // 图层不可见 → wanted 为空 → 池全隐藏（尾部的「多余的隐藏」路径）。
-    let tier = crate::state::lod_tier(view.scale);
     let mut wanted: Vec<(Vec2, String)> = Vec::new();
-    if layers.road.visible && tier == LodTier::Edit {
+    // ADR-0016 §2.9 Q3：街名走 Label 渲染组 + Road 图层（合取）。
+    // 去掉 LodTier::Edit 限制——Q3 拍板"全接管"，所有级别都显示街名。
+    // 时间过滤（label_visible_at）待段级窗口进缓存后接入（见函数文档）。
+    if layers.road.visible && layers.label.visible {
         for (mid, name) in named_midpoints(&cache.sources) {
             wanted.push((grid.map_to_view(mid), name));
         }
@@ -197,7 +205,8 @@ pub fn update_street_labels(
     // 无变化帧也照常对齐：位置/字号随视图每帧都可能变，池对齐本身极轻。
 
     let font_size = STREET_LABEL_PX * view.scale.max(0.05);
-    let label_z = STREET_LABEL_Z + layers.road.z_offset;
+    // ADR-0016 §2.9 Q3：街名走 Label 渲染组的 z 和 opacity。
+    let label_z = STREET_LABEL_Z + layers.label.z_offset;
     let label_rot = camera
         .single()
         .map(|t| t.rotation.inverse())
@@ -208,13 +217,13 @@ pub fn update_street_labels(
         // 古舆图 / 暮色：深褐墨（暮色为浅米），不再回退纯白（ADR-0016）。
         _ => crate::theme::palette::colors(view.map_palette).label_fill,
     }
-    .with_alpha(layers.road.opacity);
+    .with_alpha(layers.label.opacity);
     // 晕边色（ADR-0016 M2）：与地名同口径（Google 白晕兜底）。
     let halo_color = match view.mode {
         crate::state::ViewMode::GoogleMap => bevy::color::Color::WHITE,
         _ => crate::theme::palette::colors(view.map_palette).halo_fill,
     }
-    .with_alpha(layers.road.opacity);
+    .with_alpha(layers.label.opacity);
     let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
 
     let mut iter = q.iter_mut();
@@ -531,6 +540,7 @@ mod tests {
             extent: Some(wv_core::map::Extent::sized(4096.0, 4096.0)),
             raster: None,
             geographic_source: None,
+            time_span: None,
             unit_per_km: None,
             orientation: 0.0,
         };
@@ -633,6 +643,7 @@ mod tests {
             extent: Some(wv_core::map::Extent::sized(1024.0, 1024.0)),
             raster: None,
             geographic_source: None,
+            time_span: None,
             unit_per_km: None,
             orientation: 0.0,
         };
@@ -706,6 +717,7 @@ mod tests {
                 extent: Some(wv_core::map::Extent::sized(1024.0, 1024.0)),
                 raster: None,
                 geographic_source: None,
+                time_span: None,
                 unit_per_km: None,
                 orientation: 0.0,
             }],

@@ -830,6 +830,7 @@ mod tests {
             extent: Some(wv_core::map::Extent::sized(512.0, 512.0)),
             raster: None,
             geographic_source: None,
+            time_span: None,
             unit_per_km: None,
             orientation: 0.0,
         });
@@ -937,6 +938,7 @@ mod tests {
             extent: Some(wv_core::map::Extent::sized(512.0, 512.0)),
             raster: None,
             geographic_source: None,
+            time_span: None,
             unit_per_km: None,
             orientation: 0.0,
         });

@@ -101,6 +101,7 @@ fn map_node_yaml_round_trips() {
         extent: None,
         raster: None,
         geographic_source: None,
+        time_span: None,
         unit_per_km: None,
         orientation: 0.0,
     };
@@ -151,6 +152,7 @@ fn map_node_orientation_round_trips_and_defaults_to_zero() {
         extent: None,
         raster: None,
         geographic_source: None,
+        time_span: None,
         unit_per_km: None,
         orientation: 45.0,
     };

@@ -187,6 +187,7 @@ fn map_node_with_geographic_source_round_trips() {
             data_path: "maps/seattle_modern/data/places.parquet".into(),
             release: Some("2026-09-23.0".into()),
         }),
+        time_span: None,
         unit_per_km: None,
         orientation: 0.0,
     };
@@ -220,6 +221,7 @@ fn map_node_without_geographic_source_omits_field() {
         extent: None,
         raster: None,
         geographic_source: None, // 虚构地图
+        time_span: None,
         unit_per_km: None,
         orientation: 0.0,
     };
@@ -254,6 +256,7 @@ fn map_node_round_trip_preserves_presence_signal() {
         extent: None,
         raster: None,
         geographic_source: Some(GeographicSourceV1::default()),
+        time_span: None,
         unit_per_km: None,
         orientation: 0.0,
     };

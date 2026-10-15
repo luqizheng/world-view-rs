@@ -69,6 +69,18 @@ pub struct MapNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geographic_source: Option<GeographicSourceV1>,
 
+    /// 子图所代表的时代窗口（ADR-0015 · 2026-10-14 接受）。
+    ///
+    /// `None` = 不限定时代，子图在任意 `t` 都存在（向后兼容，零迁移）。
+    /// `Some(span)` = 子图仅在 `span.contains(t)` 时存在；窗口外的时段
+    /// 钻取被 UI 驳回、底图给"空"标记（**只提示不阻止**，V1）。
+    ///
+    /// **与 `StreetSegment.time_span` 的关系**：图级窗口**否决**段级——
+    /// 即便段设了 `time_span`，图级窗口外的段也不可见。求值由
+    /// `wv_core::label_visible_at` 单一实现点完成。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_span: Option<TimeSpan>,
+
     /// 「1 km = 多少 wu」（2026-10-14 用户需求：虚构地图自报尺度）。
     ///
     /// 与 §4.2「数据层不存换算结论」不冲突——`Extent` / `PlaceEdge` /
@@ -246,6 +258,14 @@ pub enum LayerKind {
     Building,
     EventPoint,
     Place,
+    /// 标签层（ADR-0016 · 2026-10-14 接受）。
+    ///
+    /// 标签是**实体在地图上的文本投影**——不是作者手摆的文本，也不是图层
+    /// 文件里存的字符串。`Layer.source` 指向的 YAML 只存**配置**（白名单 /
+    /// 字号阶梯 / 最大标签数 / 优先级），文本内容由 `Place` / `Region` /
+    /// `Faction` / `StreetSegment` / `Event` 等实体经 `label_visible_at`
+    /// 派生而来。详见 `docs/adr/ADR-0016-label-layer.md`。
+    Label,
     Custom,
 }
 
@@ -465,6 +485,7 @@ mod km_per_wu_tests {
             extent: None,
             raster: None,
             geographic_source: None,
+            time_span: None,
             unit_per_km: None,
             orientation: 0.0,
         }

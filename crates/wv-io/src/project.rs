@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use wv_core::time::TimePoint;
-use wv_core::{BuildingLayer, MeasurementOverlay, StreetLayer, World, WorldMeta};
+use wv_core::{BuildingLayer, LabelLayerConfig, MeasurementOverlay, StreetLayer, World, WorldMeta};
 
 use crate::diagnostics::{derive_hints, Diagnostics};
 use crate::error::{IoError, IoResult};
@@ -1018,6 +1018,44 @@ impl Project {
         std::fs::write(&path, text)?;
         Ok(path.display().to_string())
     }
+
+    /// 读取一份标签层配置（ADR-0016）。
+    ///
+    /// 路径相对工程根（与 `Layer.source` 的存储口径一致）。
+    /// 解析失败按惯例带路径报 [`IoError::Yaml`]；文件不存在则原样透传
+    /// 文件系统错误——调用方按 V1 自行决定「提示但不阻止」。
+    ///
+    /// 标签层是**只存配置不存文本**的容器（详见 `wv_core::label::LabelLayerConfig`），
+    /// 故 `default()` = 空配置 = 白名单为空 = 该层不显示任何标签。
+    pub fn load_labels(&self, rel_path: &str) -> IoResult<LabelLayerConfig> {
+        let path = self.root.join(rel_path);
+        let text = std::fs::read_to_string(&path).map_err(|source| IoError::ReadFile {
+            path: path.display().to_string(),
+            source,
+        })?;
+        serde_yaml::from_str(&text).map_err(|source| IoError::Yaml {
+            path: path.display().to_string(),
+            source,
+        })
+    }
+
+    /// 写入一份标签层配置（[`Self::load_labels`] 的逆操作）。
+    ///
+    /// 父目录不存在则创建（标签层首次保存 `maps/<id>/labels.yaml` 时
+    /// 该图的目录可能还没建过）。返回值是写入路径的显示形态。
+    pub fn write_labels(&self, rel_path: &str, config: &LabelLayerConfig) -> IoResult<String> {
+        let path = self.root.join(rel_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let text = serde_yaml::to_string(config).map_err(|source| IoError::Yaml {
+            path: path.display().to_string(),
+            source,
+        })?;
+        std::fs::write(&path, text)?;
+        Ok(path.display().to_string())
+    }
+
     /// 只报「目录结构缺失」这类**看得见的目录约定**问题。
     /// **引用完整性不在这里把关** —— 见 [`Self::diagnose`]（那是唯一的把关入口）。
     pub fn validate(&self) -> IoResult<Vec<String>> {

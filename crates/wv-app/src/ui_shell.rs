@@ -1333,6 +1333,7 @@ mod tests {
             project_dir: project_dir.map(str::to_owned),
             dirty,
             load_error: None,
+            selection: None,
         });
         world.insert_resource(TerrainTexture {
             handle: Default::default(),
@@ -1435,6 +1436,7 @@ mod tests {
             project_dir: Some("D:/some/project".into()),
             dirty: true,
             load_error: None,
+            selection: None,
         });
         world.insert_resource(TerrainTexture {
             handle: Default::default(),

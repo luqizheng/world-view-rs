@@ -44,7 +44,9 @@
 use bevy::prelude::*;
 
 use crate::render::layer_frame::LayerFrame;
-use crate::state::{lod_tier, DrillState, GridConfig, LodTier, ViewState, WorldProjection};
+use crate::state::{
+    lod_tier, DrillState, GridConfig, LodTier, PlaybackState, ViewState, WorldProjection,
+};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::UiTheme;
 use wv_core::id::Id;
@@ -91,6 +93,9 @@ pub fn register(app: &mut App) {
                 draw_drill_markers,
                 // 地名标注在标记之后对齐（读同一份钻取状态，画在标记上方）。
                 update_place_labels,
+                // 势力 / 事件标签（ADR-0016 §2.2）——与地名标签独立，Label 渲染组。
+                update_faction_labels,
+                update_event_labels,
             )
                 .chain(),
         );
@@ -651,6 +656,18 @@ const LABEL_PX: f32 = 12.0;
 /// 地名标注层：高于势力面（0.3）与 POI（0.22），低于笔刷光标（0.9）。
 const LABEL_Z: f32 = 0.4;
 
+/// 势力标签标记组件（ADR-0016 §2.2）。
+///
+/// 与 `PlaceLabel` 同型：对象池模式，每帧更新位置/文案/可见性。
+#[derive(Component)]
+pub struct FactionLabel;
+
+/// 事件标签标记组件（ADR-0016 §2.2）。
+///
+/// 与 `PlaceLabel` 同型：对象池模式，每帧更新位置/文案/可见性。
+#[derive(Component)]
+pub struct EventLabel;
+
 /// 当前 LOD 下是否保留地名标注。
 ///
 /// Google 式地图在国家级视野只给“城市级”地点留标签；渡口、关隘等点状小地点
@@ -675,6 +692,7 @@ pub fn update_place_labels(
     grid: Res<GridConfig>,
     view: Res<ViewState>,
     layers: Res<LayerFrame>,
+    playback: Res<PlaybackState>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
@@ -702,23 +720,45 @@ pub fn update_place_labels(
 ) {
     // 期望标注集：锚定在当前地图、坐标齐备的地点（与道路层同一可见口径）。
     // 图层不可见 → wanted 为空 → 池全隐藏（尾部的「多余的隐藏」路径）。
+    // ADR-0016：图级 time_span 否决（PlaceDistance 无实体级窗口，v0.1 永久可见）。
+    // ADR-0016 Q1：标签走独立渲染组 `layers.label.visible`；
+    // ADR-0013 §2.2：地名随 Place 图层（`layers.place.visible`）。
+    // 两者合取——任一关闭即标签消失。
     let tier = lod_tier(view.scale);
-    let mut wanted: Vec<(Vec2, &str)> = Vec::new();
-    if layers.place.visible {
+    let t = playback.current_day;
+    let mut candidates: Vec<crate::render::label_collision::LabelCandidate> = Vec::new();
+    if layers.place.visible && layers.label.visible {
         if let Some(current) = drill.current_node(&projection.world) {
+            let map_span = current.time_span.as_ref();
             for p in &projection.world.distances.places {
-                if p.map.as_ref() == Some(&current.id) && place_label_kept_at_tier(p.w, p.h, tier) {
+                if p.map.as_ref() == Some(&current.id)
+                    && place_label_kept_at_tier(p.w, p.h, tier)
+                    && wv_core::label_visible_at(map_span, None, t)
+                {
                     if let (Some(x), Some(y)) = (p.x, p.y) {
                         // 地点坐标是本图局部 → 视图空间（`map_to_view`，非栅格原点）。
-                        wanted.push((grid.map_to_view(Vec2::new(x, y)), p.name.as_str()));
+                        let pos = grid.map_to_view(Vec2::new(x, y));
+                        // v0.1 优先级：文本长度（长标签优先保留，短标签更容易被遮挡）。
+                        let priority = p.name.len() as u32;
+                        candidates.push(crate::render::label_collision::LabelCandidate {
+                            pos,
+                            name: p.name.clone(),
+                            priority,
+                        });
                     }
                 }
             }
         }
     }
+    // ADR-0016 §2.6：AABB 碰撞过滤（max_labels = 200 默认）。
+    let font_size = LABEL_PX * view.scale.max(0.05);
+    let max_labels = 200;
+    let mut filtered =
+        crate::render::label_collision::filter_collisions(&mut candidates, font_size);
+    filtered.truncate(max_labels);
+    let mut wanted: Vec<(Vec2, String)> = filtered.into_iter().map(|c| (c.pos, c.name)).collect();
 
     // 文字尺寸按屏幕像素恒定（与 draw_drill_markers 的 screen_scale 口径一致）。
-    let font_size = LABEL_PX * view.scale.max(0.05);
     // Text2d 默认以文字中心为 transform 原点；上移约一个字高，避免压住 POI。
     // 「上」是屏幕上：经相机旋转映回世界方向。
     let label_offset = font_size * 0.9;
@@ -756,7 +796,7 @@ pub fn update_place_labels(
             tf.translation = pos.extend(label_z);
             tf.rotation = label_rot;
             // Bevy 0.19：字号是 `TextFont.font_size: FontSize`、字体是 `font: FontSource`。
-            *text = Text2d::new(*name);
+            *text = Text2d::new(name.as_str());
             style.font_size = font_size.into();
             // TextFont.font 非 Option：缺 CJK 时回落内置字体（拉丁可用，中文方块）。
             if let Some(f) = &cjk {
@@ -779,7 +819,7 @@ pub fn update_place_labels(
         } else {
             let mut cmd = commands.spawn((
                 PlaceLabel,
-                Text2d::new(*name),
+                Text2d::new(name.as_str()),
                 TextFont {
                     font_size: font_size.into(),
                     font: cjk.clone().unwrap_or_default().into(),
@@ -793,17 +833,332 @@ pub fn update_place_labels(
                 },
                 Visibility::Visible,
             ));
-            let (text_owned, font_ref, fs, hc) = (*name, cjk.as_ref(), font_size, halo_color);
+            let (text_owned, font_ref, fs, hc) =
+                (name.clone(), cjk.as_ref(), font_size, halo_color);
             cmd.with_children(move |c| {
                 for _ in 0..crate::render::label_halo::HALO_DIRS.len() {
                     c.spawn(crate::render::label_halo::halo_bundle(
-                        text_owned, font_ref, fs, hc,
+                        &text_owned,
+                        font_ref,
+                        fs,
+                        hc,
                     ));
                 }
             });
         }
     }
     // 池里多出来的实体隐藏（保留复用，不 despawn）。
+    for (_, mut _tf, mut _text, mut _style, mut _color, mut vis) in iter {
+        *vis = Visibility::Hidden;
+    }
+}
+
+/// 更新当前层级的势力标签池（ADR-0016 §2.2 · EntityKind::Faction）。
+///
+/// 数据来源：`World::factions_at(map, day)`——已按时间过滤（GeometrySpan.span）。
+/// 位置：多边形质心（简单平均，够用且稳定）。
+/// 图层归属：Label 渲染组（ADR-0016 Q1）——与 Place 标签独立。
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn update_faction_labels(
+    mut commands: Commands,
+    projection: Res<WorldProjection>,
+    drill: Res<DrillState>,
+    grid: Res<GridConfig>,
+    view: Res<ViewState>,
+    layers: Res<LayerFrame>,
+    playback: Res<PlaybackState>,
+    fonts: Res<crate::theme::fonts::LoadedFonts>,
+    camera: Query<&Transform, With<Camera2d>>,
+    mut q: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut Text2d,
+            &mut TextFont,
+            &mut TextColor,
+            &mut Visibility,
+        ),
+        (With<FactionLabel>, Without<Camera2d>),
+    >,
+    children_q: Query<&bevy::ecs::hierarchy::Children, With<FactionLabel>>,
+    mut halo_q: Query<
+        (&mut Transform, &mut Text2d, &mut TextFont, &mut TextColor),
+        (
+            With<crate::render::label_halo::LabelHalo>,
+            Without<bevy::prelude::Camera2d>,
+            Without<FactionLabel>,
+        ),
+    >,
+) {
+    let t = playback.current_day;
+    let mut candidates: Vec<crate::render::label_collision::LabelCandidate> = Vec::new();
+    // Label 层可见性（ADR-0016 Q1）
+    if layers.label.visible {
+        if let Some(current) = drill.current_node(&projection.world) {
+            let map_span = current.time_span.as_ref();
+            if wv_core::label_visible_at(map_span, None, t) {
+                // factions_at 已按 GeometrySpan.span 过滤（时间维度），
+                // 此处只需过滤图级窗口。
+                let factions = wv_core::factions_at(&projection.world, &current.id, t);
+                for (faction, coords) in factions {
+                    // 计算多边形质心（简单平均）。
+                    if coords.len() >= 2 {
+                        let n = (coords.len() / 2) as f32;
+                        let (mut sx, mut sy) = (0.0_f32, 0.0_f32);
+                        for pair in coords.chunks(2) {
+                            sx += pair[0];
+                            sy += pair[1];
+                        }
+                        let center = Vec2::new(sx / n, sy / n);
+                        // v0.1 优先级：文本长度（与地名同一口径）。
+                        candidates.push(crate::render::label_collision::LabelCandidate {
+                            pos: grid.map_to_view(center),
+                            name: faction.name.clone(),
+                            priority: faction.name.len() as u32,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // ADR-0016 §2.6：AABB 碰撞过滤（势力标签通常个位数，200 上限不会触顶）。
+    let font_size = LABEL_PX * view.scale.max(0.05);
+    let mut filtered =
+        crate::render::label_collision::filter_collisions(&mut candidates, font_size);
+    filtered.truncate(200);
+    let mut wanted: Vec<(Vec2, String)> = filtered.into_iter().map(|c| (c.pos, c.name)).collect();
+    let label_offset = font_size * 0.9;
+    let label_z = LABEL_Z + layers.label.z_offset;
+    let cam_rot = camera
+        .single()
+        .map(|t| t.rotation)
+        .unwrap_or(Quat::IDENTITY);
+    let up_world = crate::render::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
+    let label_rot = cam_rot.inverse();
+    for (pos, _) in &mut wanted {
+        *pos += up_world;
+    }
+    let cjk = fonts.cjk_font.clone();
+    // ADR-0016 Q1：势力标签色随 Label 渲染组透明度；色值走 Google 文字深灰
+    // （与地名标签同一族，v0.1 不做 per-PlaceKind 主题映射——ADR-0016 §6.1 Q5）。
+    let label_color =
+        crate::theme::colors_google::GOOGLE_CONTROL_TEXT.with_alpha(layers.label.opacity);
+    let halo_color = crate::theme::colors_google::GOOGLE_COAST_LAND;
+    let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
+
+    let mut iter = q.iter_mut();
+    for (pos, name) in &wanted {
+        if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
+            tf.translation = pos.extend(label_z);
+            tf.rotation = label_rot;
+            *text = Text2d::new(name.as_str());
+            style.font_size = font_size.into();
+            if let Some(f) = &cjk {
+                style.font = f.clone().into();
+            }
+            *color = TextColor(label_color);
+            *vis = Visibility::Visible;
+            if let Ok(children) = children_q.get(e) {
+                crate::render::label_halo::sync_halo(
+                    children,
+                    &mut halo_q,
+                    name.as_str(),
+                    font_size,
+                    cjk.as_ref(),
+                    halo_color,
+                    halo_offset,
+                );
+            }
+        } else {
+            let mut cmd = commands.spawn((
+                FactionLabel,
+                Text2d::new(name.as_str()),
+                TextFont {
+                    font_size: font_size.into(),
+                    font: cjk.clone().unwrap_or_default().into(),
+                    ..Default::default()
+                },
+                TextColor(label_color),
+                Transform {
+                    translation: pos.extend(label_z),
+                    rotation: label_rot,
+                    ..Default::default()
+                },
+                Visibility::Visible,
+            ));
+            let (text_owned, font_ref, fs, hc) =
+                (name.to_string(), cjk.as_ref(), font_size, halo_color);
+            cmd.with_children(move |c| {
+                for _ in 0..crate::render::label_halo::HALO_DIRS.len() {
+                    c.spawn(crate::render::label_halo::halo_bundle(
+                        &text_owned,
+                        font_ref,
+                        fs,
+                        hc,
+                    ));
+                }
+            });
+        }
+    }
+    for (_, mut _tf, mut _text, mut _style, mut _color, mut vis) in iter {
+        *vis = Visibility::Hidden;
+    }
+}
+
+/// 更新当前层级的事件标签池（ADR-0016 §2.2 · EntityKind::Event）。
+///
+/// 数据来源：`World.events`，按 `Event.span` 时间过滤。
+/// 位置：`Event.location` 引用的 Place 坐标（或覆盖坐标）。
+/// 图层归属：Label 渲染组（ADR-0016 Q1）——与 Place 标签独立。
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn update_event_labels(
+    mut commands: Commands,
+    projection: Res<WorldProjection>,
+    drill: Res<DrillState>,
+    grid: Res<GridConfig>,
+    view: Res<ViewState>,
+    layers: Res<LayerFrame>,
+    playback: Res<PlaybackState>,
+    fonts: Res<crate::theme::fonts::LoadedFonts>,
+    camera: Query<&Transform, With<Camera2d>>,
+    mut q: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut Text2d,
+            &mut TextFont,
+            &mut TextColor,
+            &mut Visibility,
+        ),
+        (With<EventLabel>, Without<Camera2d>),
+    >,
+    children_q: Query<&bevy::ecs::hierarchy::Children, With<EventLabel>>,
+    mut halo_q: Query<
+        (&mut Transform, &mut Text2d, &mut TextFont, &mut TextColor),
+        (
+            With<crate::render::label_halo::LabelHalo>,
+            Without<bevy::prelude::Camera2d>,
+            Without<EventLabel>,
+        ),
+    >,
+) {
+    let t = playback.current_day;
+    let mut candidates: Vec<crate::render::label_collision::LabelCandidate> = Vec::new();
+    // Label 层可见性（ADR-0016 Q1）
+    if layers.label.visible {
+        if let Some(current) = drill.current_node(&projection.world) {
+            let map_span = current.time_span.as_ref();
+            // Event 有 span 字段（ADR-0016 §2.3：entity_span = event.span）
+            for event in &projection.world.events {
+                let entity_span = &event.span;
+                if !wv_core::label_visible_at(map_span, Some(entity_span), t) {
+                    continue;
+                }
+                // 从 Event.location 找到对应 Place 的坐标
+                if let Some(loc) = &event.location {
+                    if let Some(place) = projection
+                        .world
+                        .distances
+                        .places
+                        .iter()
+                        .find(|p| p.id == loc.place)
+                    {
+                        if place.map.as_ref() != Some(&current.id) {
+                            continue;
+                        }
+                        let x = loc.x.unwrap_or(place.x.unwrap_or(0.0));
+                        let y = loc.y.unwrap_or(place.y.unwrap_or(0.0));
+                        // v0.1 优先级：文本长度（与地名/势力同一口径）。
+                        candidates.push(crate::render::label_collision::LabelCandidate {
+                            pos: grid.map_to_view(Vec2::new(x, y)),
+                            name: event.name.clone(),
+                            priority: event.name.len() as u32,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // ADR-0016 §2.6：AABB 碰撞过滤（事件标签通常个位数）。
+    let font_size = LABEL_PX * view.scale.max(0.05);
+    let mut filtered =
+        crate::render::label_collision::filter_collisions(&mut candidates, font_size);
+    filtered.truncate(200);
+    let mut wanted: Vec<(Vec2, String)> = filtered.into_iter().map(|c| (c.pos, c.name)).collect();
+    let label_offset = font_size * 0.9;
+    let label_z = LABEL_Z + layers.label.z_offset;
+    let cam_rot = camera
+        .single()
+        .map(|t| t.rotation)
+        .unwrap_or(Quat::IDENTITY);
+    let up_world = crate::render::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
+    let label_rot = cam_rot.inverse();
+    for (pos, _) in &mut wanted {
+        *pos += up_world;
+    }
+    let cjk = fonts.cjk_font.clone();
+    // 事件标签色同势力标签（Label 渲染组透明度 + Google 文字深灰）。
+    let label_color =
+        crate::theme::colors_google::GOOGLE_CONTROL_TEXT.with_alpha(layers.label.opacity);
+    let halo_color = crate::theme::colors_google::GOOGLE_COAST_LAND;
+    let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
+
+    let mut iter = q.iter_mut();
+    for (pos, name) in &wanted {
+        if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
+            tf.translation = pos.extend(label_z);
+            tf.rotation = label_rot;
+            *text = Text2d::new(name.as_str());
+            style.font_size = font_size.into();
+            if let Some(f) = &cjk {
+                style.font = f.clone().into();
+            }
+            *color = TextColor(label_color);
+            *vis = Visibility::Visible;
+            if let Ok(children) = children_q.get(e) {
+                crate::render::label_halo::sync_halo(
+                    children,
+                    &mut halo_q,
+                    name.as_str(),
+                    font_size,
+                    cjk.as_ref(),
+                    halo_color,
+                    halo_offset,
+                );
+            }
+        } else {
+            let mut cmd = commands.spawn((
+                EventLabel,
+                Text2d::new(name.as_str()),
+                TextFont {
+                    font_size: font_size.into(),
+                    font: cjk.clone().unwrap_or_default().into(),
+                    ..Default::default()
+                },
+                TextColor(label_color),
+                Transform {
+                    translation: pos.extend(label_z),
+                    rotation: label_rot,
+                    ..Default::default()
+                },
+                Visibility::Visible,
+            ));
+            let (text_owned, font_ref, fs, hc) =
+                (name.to_string(), cjk.as_ref(), font_size, halo_color);
+            cmd.with_children(move |c| {
+                for _ in 0..crate::render::label_halo::HALO_DIRS.len() {
+                    c.spawn(crate::render::label_halo::halo_bundle(
+                        &text_owned,
+                        font_ref,
+                        fs,
+                        hc,
+                    ));
+                }
+            });
+        }
+    }
     for (_, mut _tf, mut _text, mut _style, mut _color, mut vis) in iter {
         *vis = Visibility::Hidden;
     }
@@ -937,6 +1292,7 @@ mod tests {
             extent: Some(Extent::sized(4096.0, 4096.0)),
             raster: None,
             geographic_source: None,
+            time_span: None,
             unit_per_km: None,
             orientation: 0.0,
         }

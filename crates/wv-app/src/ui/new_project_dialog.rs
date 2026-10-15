@@ -154,6 +154,7 @@ fn initial_world(name: &str) -> wv_core::World {
         extent: Some(Extent::sized(EXTENT_CHOICES[0], EXTENT_CHOICES[0])),
         raster: None,
         geographic_source: None,
+        time_span: None,
         unit_per_km: None,
         orientation: 0.0,
     });
