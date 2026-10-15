@@ -85,12 +85,12 @@ pub fn top_bar(
                     &recents,
                     &mut panels,
                     &mut menu,
-                    &mut current_loc,
+                    &current_loc,
                 );
                 // ── 右区：zoom / entities / 脏态徽标 / ⌘K（web .top-right，
                 //    L→R 次序 zoom→entities→badge→⌘K，故 RTL 添加序相反）──
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    readout_segment(ui, &shell, &view, &projection);
+                    readout_segment(ui, &shell, &view, &projection, &mut current_loc);
                 });
             });
         });
@@ -124,7 +124,7 @@ fn identity_segment(
     recents: &[RecentProject],
     panels: &mut crate::state::PanelState,
     menu: &mut ProjectMenuState,
-    current_loc: &mut CurrentLocale,
+    current_loc: &CurrentLocale,
 ) {
     // 项目按钮（logo + 粗体名 + chevron，见 project_menu）+ 组间距。
     project_menu_inner(ui, shell, projection, recents, panels, menu, current_loc.0);
@@ -153,30 +153,6 @@ fn identity_segment(
         );
         ui.add_space(space::XS);
     }
-
-    // 语言选择下拉（ADR-0018）。
-    ui.add_space(space::SM);
-    let lang_label = match current_loc.0 {
-        crate::i18n::Locale::Zh => "简体中文",
-        crate::i18n::Locale::En => "English",
-    };
-    egui::ComboBox::from_id_salt("wv_lang_select")
-        .selected_text(
-            egui::RichText::new(lang_label)
-                .size(shell.scale.small)
-                .color(shell.t2()),
-        )
-        .width(80.0)
-        .show_ui(ui, |ui| {
-            let mut selectable = |ui: &mut egui::Ui, label: &str, loc: crate::i18n::Locale| {
-                let selected = current_loc.0 == loc;
-                if ui.selectable_label(selected, label).clicked() {
-                    current_loc.0 = loc;
-                }
-            };
-            selectable(ui, "简体中文", crate::i18n::Locale::Zh);
-            selectable(ui, "English", crate::i18n::Locale::En);
-        });
 
     // 工程未加载时的醒目错误（§5.1）。脏态徽标在右侧读数段。
     if projection.load_error.is_some() {
@@ -321,9 +297,45 @@ fn readout_segment(
     shell: &UiShell,
     view: &ViewState,
     projection: &WorldProjection,
+    current_loc: &mut CurrentLocale,
 ) {
     // 右至左排布；web `.top-right` 从左到右是 zoom / entities / 脏态徽标 / ⌘K，
     // 故本段添加顺序：⌘K → 脏态 → entities → zoom，间距 12px（web gap）。
+
+    // 语言选择器（ADR-0018）：最右端。按钮显示单字（Zh=「简」/ En=「EN」），
+    // 点击弹出全名菜单（简体中文 / English）。`menu_button` 即
+    // 「Button 点击开菜单」——不是 select 框，符合 2026-10-15 用户裁定。
+    {
+        let short = match current_loc.0 {
+            crate::i18n::Locale::Zh => "简",
+            crate::i18n::Locale::En => "EN",
+        };
+        ui.menu_button(
+            egui::RichText::new(short)
+                .size(shell.scale.small)
+                .color(shell.t2()),
+            |ui| {
+                let mut pick = |ui: &mut egui::Ui, label: &str, loc: crate::i18n::Locale| {
+                    let selected = current_loc.0 == loc;
+                    if ui
+                        .add(egui::Button::new(
+                            egui::RichText::new(label)
+                                .size(shell.scale.small)
+                                .color(if selected { shell.t1() } else { shell.t2() }),
+                        ))
+                        .clicked()
+                    {
+                        current_loc.0 = loc;
+                        ui.close();
+                    }
+                };
+                pick(ui, "简体中文", crate::i18n::Locale::Zh);
+                pick(ui, "English", crate::i18n::Locale::En);
+            },
+        );
+        ui.add_space(space::LG);
+    }
+
     // ⌘K 按钮（web：command 图标 + K 的 raised 按钮；tooltip 提示快捷键）
     let cmdk = ui.add(
         egui::Button::image_and_text(
