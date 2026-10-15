@@ -361,6 +361,11 @@ fn menu_row(
 /// **偏离记录**：v0.2 把 LOD 标签（`四渡赤水 · 正在发生`）画在地图上，但那需要
 /// Bevy `Text2d` 的字体资产，而本工程不打包字体（§2.3 用系统字体栈，且只有 egui 侧
 /// 接了 `fonts.rs`）。故 LOD 文案并入面包屑行尾——信息不丢，代价是位置不同。
+///
+/// > **追记（2026-10-16，ADR-0019）**：字体已改为打包（Inter + Noto Sans SC），
+/// > 上述前提「不打包字体」不再成立——Bevy `Text2d` 现在有确定的字体资产
+/// > （`LoadedFonts::cjk_font`）。当时把 LOD 并入面包屑的实现**暂保持不变**
+/// > （改动它是独立任务），此记录仅说明原偏离理由已过期。
 pub fn breadcrumb(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,

@@ -709,8 +709,11 @@ impl Panel {
 
     /// 面板头类型图标（§4.1：类型图标着 `ui.accent` 色）。
     ///
-    /// 用几何字符而非 emoji：emoji 跨系统字形差异大（§4.5 的教训），
-    /// 且 `fonts.rs` 不打包字体，Linux 上可能缺字。
+    /// 用几何字符而非 emoji：emoji 跨系统字形差异大（§4.5 的教训）。
+    /// 2026-10-16 打包字体上线（ADR-0019）后这里仍是**已知缺口**：
+    /// ◈(U+25C8) ◧(U+25E7) ⬡(U+2B21) 在 Inter / Noto Sans SC 中均无字形，
+    /// egui 以替换符 ◻ 呈现（打包前的系统雅黑同样缺这三个，非回归）。
+    /// 真修复：改 SVG 图标（Figma 原型即 Lucide，见 `assets/ui/tool_icons/`）。
     pub fn icon(self) -> &'static str {
         match self {
             Panel::MapTree => "◈",

@@ -10,7 +10,7 @@
 //! - Google Default Map 色板（`colors_google`）
 //! - 界面外壳色令牌（`ui_tokens`，权威来自 `UI_DESIGN_SPEC` §2.2）
 //! - 把 `ui_tokens` 投影成 egui `Visuals`（`ui_theme`）
-//! - 系统字体栈探测 + CJK 字体注册（`fonts`）
+//! - 打包字体装配：Inter 拉丁 + Noto Sans SC 中文（`fonts`，ADR-0019）
 //!
 //! ## 边界（不做什么）
 //! - **不**做 Bevy 渲染。所有内容是纯数据 / 资源构造器。
@@ -19,7 +19,7 @@
 //! ## 主要导出
 //! - `BASE` —— 来自 `colors`（28 色板）
 //! - `Theme` —— 来自 `ui_theme`（egui 主题）
-//! - `load_system_fonts` —— 来自 `fonts`
+//! - `setup_egui_fonts` —— 来自 `fonts`
 
 #[cfg(feature = "app")]
 pub mod colors;

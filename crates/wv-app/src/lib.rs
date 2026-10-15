@@ -59,7 +59,7 @@
 //! | [`theme::palette`] | 地图主题分发：日间古舆图（默认）/ 暮色旧纸（ADR-0016）。 |
 //! | [`theme::ui_tokens`] | 界面外壳色令牌（权威来自 `UI_DESIGN_SPEC` §2.2）。 |
 //! | [`theme::ui_theme`] | 把 `ui_tokens` 投影成 egui `Visuals`。 |
-//! | [`theme::fonts`] | 系统字体栈探测 + CJK 字体注册。 |
+//! | [`theme::fonts`] | 打包字体装配（Inter 拉丁 + Noto Sans SC 中文，ADR-0019）。 |
 //!
 //! [`i18n`] —— UI 文案 zh/en 翻译（ADR-0018）；`CurrentLocale` Resource
 //! 与 `t(locale, key)` 查表入口；偏好随工程落 `ui-layout.yaml#language`。
