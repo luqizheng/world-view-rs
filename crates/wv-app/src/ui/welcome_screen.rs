@@ -14,6 +14,14 @@
 //!   Figma `#FFFFFF` 与暗色 `text_on_accent` `#0B0D11` 在「主 CTA」上对比度
 //!   都达标（≥4.5），但 `text_on_accent` 是历史暗色基底，本页统一用白以匹配原型）。
 //!
+//! ## 本地化（ADR-0018 收尾）
+//! - 5 处文案经 `Res<CurrentLocale>` 注入 `t_key(...)` 走 `I18nKey` 表：
+//!   `WelcomeTagline` / `WelcomeNewProjectBtn` / `WelcomeOpenProjectBtn` /
+//!   `WelcomeRecentHeading` / `WelcomeRecentEmpty`。
+//! - 品牌名 `World-View` 与底部 `World-View Alpha` 后缀两语统一不本地化
+//!   （产品定位决定——见 `README.md` §1）。
+//! - `widgets::format_time_ago` 暂未本地化，待 widgets 模块后续 PR 单独处理。
+//!
 //! ## 边界（不做什么）
 //! - **不**加载 / 创建——按钮只排队意图：打开 → [`OpenProjectTask`]，
 //!   新建 → [`NewProjectDialog`]，最近工程 → `CommandPalette::pending`
@@ -30,6 +38,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
+use crate::i18n::{t_key, CurrentLocale, I18nKey};
 use crate::state::{RecentProjects, WorldProjection};
 use crate::theme::ui_theme::{proportional, UiShellConfig};
 use crate::theme::ui_tokens::{font_size, space};
@@ -61,16 +70,8 @@ const APP_ICON_BOX_RADIUS: u8 = 12;
 /// AppIcon 内地球图标尺寸（Figma `globe 28×28`）。
 const APP_ICON_GLOBE: f32 = 28.0;
 
-/// 主标题（与 Figma `AppTitle = "World-View"` 一致）。
+/// 主标题（与 Figma `AppTitle = "World-View"` 一致；品牌名两语统一，不本地化）。
 const APP_TITLE: &str = "World-View";
-/// 副标题（与 Figma `AppSubtitle` 一致）。
-const APP_SUBTITLE: &str = "World-Building & Cartography Editor";
-/// 主 CTA 文案（与 Figma `BtnNewProject` 一致）。
-const NEW_PROJECT_LABEL: &str = "New Project…";
-/// 次 CTA 文案（与 Figma `BtnOpenProject` 一致）。
-const OPEN_PROJECT_LABEL: &str = "Open Project…";
-/// 最近工程小节标题（与 Figma `Recent Projects` 一致）。
-const RECENTS_HEADER: &str = "Recent Projects";
 /// 底部版本水印。
 ///
 /// 版本号在**编译期**读 `CARGO_PKG_VERSION`（wv-app 的 `Cargo.toml` 用
@@ -88,6 +89,7 @@ pub fn welcome_screen(
     shell_cfg: Res<UiShellConfig>,
     projection: Res<WorldProjection>,
     recents: Res<RecentProjects>,
+    current_loc: Res<CurrentLocale>,
     mut open_task: ResMut<OpenProjectTask>,
     mut palette: ResMut<CommandPalette>,
     mut new_project: ResMut<NewProjectDialog>,
@@ -149,7 +151,7 @@ pub fn welcome_screen(
                             .color(shell.t1()),
                     );
                     ui.label(
-                        egui::RichText::new(APP_SUBTITLE)
+                        egui::RichText::new(t_key(&current_loc, I18nKey::WelcomeTagline))
                             .font(proportional(font_size::BASE))
                             .color(shell.t3()),
                     );
@@ -161,10 +163,18 @@ pub fn welcome_screen(
                 // ── ActionGroup（主/次 CTA，gap = 8） ───────────
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = space::SM;
-                    if cta_primary(ui, &shell, NEW_PROJECT_LABEL) {
+                    if cta_primary(
+                        ui,
+                        &shell,
+                        t_key(&current_loc, I18nKey::WelcomeNewProjectBtn),
+                    ) {
                         new_project.open();
                     }
-                    if cta_secondary(ui, &shell, OPEN_PROJECT_LABEL) {
+                    if cta_secondary(
+                        ui,
+                        &shell,
+                        t_key(&current_loc, I18nKey::WelcomeOpenProjectBtn),
+                    ) {
                         open_task.request(DialogPurpose::Open);
                     }
                 });
@@ -173,7 +183,7 @@ pub fn welcome_screen(
                 divider(ui, &shell);
 
                 // ── RecentProjects ──────────────────────────────
-                recents_section(ui, &shell, &recents, &mut palette);
+                recents_section(ui, &shell, &recents, &mut palette, &current_loc);
 
                 // ── Footer version ──────────────────────────────
                 ui.add_space(space::SM);
@@ -262,12 +272,13 @@ fn recents_section(
     shell: &UiShell,
     recents: &RecentProjects,
     palette: &mut CommandPalette,
+    current_loc: &CurrentLocale,
 ) {
     let entries = recents.entries();
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = space::XS;
         ui.label(
-            egui::RichText::new(RECENTS_HEADER)
+            egui::RichText::new(t_key(current_loc, I18nKey::WelcomeRecentHeading))
                 .font(proportional(font_size::MICRO))
                 .strong()
                 .color(shell.t3())
@@ -275,7 +286,7 @@ fn recents_section(
         );
         if entries.is_empty() {
             ui.label(
-                egui::RichText::new("尚无最近工程——新建后会自动出现在这里。")
+                egui::RichText::new(t_key(current_loc, I18nKey::WelcomeRecentEmpty))
                     .font(proportional(font_size::MICRO))
                     .color(shell.t3()),
             );
