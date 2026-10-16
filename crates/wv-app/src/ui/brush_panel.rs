@@ -24,14 +24,18 @@ use bevy_egui::{egui, EguiContexts};
 use crate::edit::editing;
 use crate::i18n::{t, t_key, CurrentLocale, I18nKey, Locale};
 use crate::render::streets;
-use crate::state::{BrushState, BrushTool, DrillState, Panel, PanelState, WorldProjection};
+use crate::state::{
+    BrushState, BrushTool, BrushToolGroup, DrillState, Panel, PanelState, WorldProjection,
+};
 use crate::theme::ui_theme::{proportional, UiShellConfig};
 use crate::theme::ui_tokens::{font_size, radius, space};
 use crate::ui_layout::LayoutFile;
 
 use super::shell::{terrain_name_at, UiShell};
 use super::timeline::undo_last_street_segment;
-use super::widgets::{float_window, terrain_grid, ToolButton, ToolIcon};
+use super::widgets::{
+    float_window, segmented_control::segmented, terrain_grid, ToolButton, ToolIcon,
+};
 use super::{
     ICON_BRUSH, ICON_HILLS, ICON_LAKE, ICON_MOUNTAIN_RANGE, ICON_PLATEAU, ICON_RIVER, ICON_VOLCANO,
 };
@@ -101,41 +105,12 @@ pub fn panel_brush(
             });
             ui.add_space(space::SM);
 
-            // ── 工具区：三行行内分组（涂 / 塑 / 放）──
-            // 分组按「作者的手在做什么」：涂抹即所得 / 拖骨架程序生成 /
-            // 点种子扩散成形。瓷砖纯图标（形态两两互异），tooltip 兜底名称。
-            tool_group_row(
-                ui,
-                &shell,
-                t_key(&current_loc, I18nKey::BrushGroupPaint),
-                &[(ICON_BRUSH, BrushTool::PaintKind)],
-                &mut brush,
-                loc,
-            );
-            tool_group_row(
-                ui,
-                &shell,
-                t_key(&current_loc, I18nKey::BrushGroupShape),
-                &[
-                    (ICON_MOUNTAIN_RANGE, BrushTool::MountainRange),
-                    (ICON_PLATEAU, BrushTool::Plateau),
-                    (ICON_HILLS, BrushTool::Hills),
-                    (ICON_RIVER, BrushTool::River),
-                ],
-                &mut brush,
-                loc,
-            );
-            tool_group_row(
-                ui,
-                &shell,
-                t_key(&current_loc, I18nKey::BrushGroupPlace),
-                &[
-                    (ICON_VOLCANO, BrushTool::Volcano),
-                    (ICON_LAKE, BrushTool::Lake),
-                ],
-                &mut brush,
-                loc,
-            );
+            // ── 工具区：3 段控件（涂 / 塑 / 放）+ 段下瓷砖行 ──
+            // 段控件在「段/工具/组」三态中担当「组」维度的 1 选 1，与顶栏
+            // Browse/Edit / 主题段同源；下方瓷砖行只显示当前组内的工具
+            // （1–4 块），状态机由 `sync_tool_group` 同步。
+            tool_segmented(ui, &shell, &mut brush, current_loc.0);
+            tool_row_for_group(ui, &shell, &mut brush, current_loc.0);
             ui.add_space(space::SM);
             ui.separator();
             ui.add_space(space::XS);
@@ -284,27 +259,60 @@ pub fn panel_brush(
     );
 }
 
-/// 工具行：行首组标签 + 纯图标瓷砖（tooltip = 工具名 + 交互提示）。
+/// 3 段控件：涂 / 塑 / 放。
 ///
-/// 点瓷砖 = 选中该工具**并开启笔刷**——「选工具 = 准备画」，与命令面板
-/// `SelectBrushTool` 的分发语义一致；想空手拖图就点上方「笔刷」段关闭。
-/// 标签锁宽（micro 字号 × 3 字宽）让三行瓷砖左缘对齐。
-fn tool_group_row(
-    ui: &mut egui::Ui,
-    shell: &UiShell,
-    label: &str,
-    tools: &[(egui::ImageSource<'static>, BrushTool)],
-    brush: &mut BrushState,
-    loc: Locale,
-) {
+/// 选段 = 写 `tool_group` + `sync_tool_group()`（让 tool 落到该组第一个
+/// 工具，避免段/瓷砖分裂）+ 激活笔刷——「选工具 = 准备画」语义沿用提交 2。
+fn tool_segmented(ui: &mut egui::Ui, shell: &UiShell, brush: &mut BrushState, loc: Locale) {
+    let labels = [
+        t(loc, I18nKey::BrushGroupPaint),
+        t(loc, I18nKey::BrushGroupShape),
+        t(loc, I18nKey::BrushGroupPlace),
+    ];
+    let groups = [
+        BrushToolGroup::Paint,
+        BrushToolGroup::Shape,
+        BrushToolGroup::Place,
+    ];
+    let active = groups
+        .iter()
+        .position(|g| *g == brush.tool_group)
+        .unwrap_or(0);
+    segmented(
+        ui,
+        shell,
+        "wv_brush_tool_group",
+        60.0,
+        &labels,
+        active,
+        font_size::SMALL,
+        |i| {
+            brush.tool_group = groups[i];
+            brush.on_group_changed();
+            brush.enabled = true;
+        },
+    );
+}
+
+/// 段下瓷砖行：只渲染 `brush.tool_group` 该组的 1–4 个工具。
+///
+/// 点瓷砖 = 写 `tool` + `sync_tool_group()` 反向同步 + 激活笔刷。
+/// 1 击选工具，跨组 = 先段 1 击再瓷砖 1 击。
+fn tool_row_for_group(ui: &mut egui::Ui, shell: &UiShell, brush: &mut BrushState, loc: Locale) {
+    let tools: &[(egui::ImageSource<'static>, BrushTool)] = match brush.tool_group {
+        BrushToolGroup::Paint => &[(ICON_BRUSH, BrushTool::PaintKind)],
+        BrushToolGroup::Shape => &[
+            (ICON_MOUNTAIN_RANGE, BrushTool::MountainRange),
+            (ICON_PLATEAU, BrushTool::Plateau),
+            (ICON_HILLS, BrushTool::Hills),
+            (ICON_RIVER, BrushTool::River),
+        ],
+        BrushToolGroup::Place => &[
+            (ICON_VOLCANO, BrushTool::Volcano),
+            (ICON_LAKE, BrushTool::Lake),
+        ],
+    };
     ui.horizontal(|ui| {
-        let label_w = shell.scale.micro * 3.0;
-        ui.allocate_exact_size(egui::vec2(label_w, shell.hit), egui::Sense::hover());
-        ui.label(
-            egui::RichText::new(label)
-                .size(shell.scale.micro)
-                .color(shell.t3()),
-        );
         for (icon, tool) in tools.iter() {
             let tip = format!(
                 "{}\n{}",
@@ -315,6 +323,7 @@ fn tool_group_row(
                 .active(brush.tool == *tool)
                 .show(ui, shell, || {
                     brush.tool = *tool;
+                    brush.on_tool_changed();
                     brush.enabled = true;
                 });
         }
@@ -419,6 +428,11 @@ mod tests {
         assert!(!b.enabled, "笔刷默认关");
         assert_eq!(b.kind, 3, "默认 kind=草原");
         assert_eq!(b.tool, BrushTool::PaintKind, "默认工具=Paint");
+        assert_eq!(
+            b.tool_group,
+            BrushToolGroup::Paint,
+            "默认组=Paint（与 tool.group() 一致）"
+        );
         assert!((b.strength - 1.0).abs() < 1e-6, "默认强度 1.0");
     }
 

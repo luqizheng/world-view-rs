@@ -422,6 +422,12 @@ pub enum BrushToolGroup {
 pub struct BrushState {
     /// 当前选中的地形类型编号（仅 Paint 工具用）。
     pub kind: u8,
+    /// 当前选中的工具组（笔刷面板 3 段控件用：涂 / 塑 / 放）。
+    ///
+    /// 2026-10-16 增：段控件需要单独持有「当前组」状态，瓷砖行**按组过滤**渲染。
+    /// `tool` 与 `tool_group` 在所有写入路径（面板段、面板瓷砖、命令面板
+    /// `SelectBrushTool`）由 `sync_tool_group` 同步，**禁止**单独写其中一个。
+    pub tool_group: BrushToolGroup,
     /// 当前工具（直接涂类型 / 意图生成）。
     pub tool: BrushTool,
     /// 笔刷半径（世界单位）。River 不用半径（河宽固定一格）。
@@ -518,6 +524,7 @@ impl Default for BrushState {
         Self {
             kind: 3, // 默认草原
             tool: BrushTool::PaintKind,
+            tool_group: BrushToolGroup::Paint, // 与 tool.group() 一致
             radius: 96.0,
             softness: 0.5,
             strength: 1.0,
@@ -525,6 +532,28 @@ impl Default for BrushState {
             // Google 式默认手势是左键拖动平移；笔刷必须显式开启，避免一开图就误改。
             enabled: false,
         }
+    }
+}
+
+impl BrushState {
+    /// 段控件路径：调用方刚改了 `tool_group`——把 `tool` 落到该组第一个。
+    ///
+    /// 设计取舍：**`tool_group` 是 UI 主状态**（段控件高亮就代表选工具），
+    /// 段切换比瓷砖切换粒度更粗。所以「段被切」= 强制重置 tool 到该组首项，
+    /// 旧 tool 即便仍在该组内也归零（避免「塑」段亮着但 `tool=Hills` 这种
+    /// 「随机停留」感）。
+    pub fn on_group_changed(&mut self) {
+        self.tool = match self.tool_group {
+            BrushToolGroup::Paint => BrushTool::PaintKind,
+            BrushToolGroup::Shape => BrushTool::SHAPE[0],
+            BrushToolGroup::Place => BrushTool::PLACE[0],
+        };
+    }
+
+    /// 瓷砖 / `SelectBrushTool` 路径：调用方刚改了 `tool`——把 `tool_group`
+    /// 跟它走（不重置 tool）。该函数是面板与命令面板共用的轻量同步。
+    pub fn on_tool_changed(&mut self) {
+        self.tool_group = self.tool.group();
     }
 }
 
@@ -1273,6 +1302,44 @@ mod tests {
             assert!(t.is_intent(), "{t:?} 应走 IntentTerrainCommand");
         }
         assert!(!BrushTool::PaintKind.is_intent());
+    }
+
+    /// 段路径：`on_group_changed` 强制 `tool` 落到该组第一个，与旧 tool 无
+    /// 关——避免「塑」段亮着但 `tool=Hills` 这种随机停留。
+    #[test]
+    fn on_group_changed_resets_tool_to_group_first() {
+        let mut b = BrushState {
+            tool: BrushTool::Hills,
+            tool_group: BrushToolGroup::Shape,
+            ..BrushState::default()
+        };
+        b.on_group_changed();
+        assert_eq!(
+            b.tool,
+            BrushTool::MountainRange,
+            "Shape 组首项=MountainRange"
+        );
+
+        let mut b = BrushState {
+            tool: BrushTool::Lake,
+            tool_group: BrushToolGroup::Place,
+            ..BrushState::default()
+        };
+        b.on_group_changed();
+        assert_eq!(b.tool, BrushTool::Volcano, "Place 组首项=Volcano");
+    }
+
+    /// 瓷砖 / 命令路径：`on_tool_changed` 把 group 跟 tool 走，tool 不动。
+    #[test]
+    fn on_tool_changed_pulls_group_to_tool() {
+        let mut b = BrushState {
+            tool: BrushTool::Volcano,
+            tool_group: BrushToolGroup::Paint, // 错位
+            ..BrushState::default()
+        };
+        b.on_tool_changed();
+        assert_eq!(b.tool_group, BrushToolGroup::Place);
+        assert_eq!(b.tool, BrushTool::Volcano, "tool 不应被改");
     }
 
     fn node(

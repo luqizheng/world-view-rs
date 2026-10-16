@@ -28,7 +28,7 @@ use bevy_egui::{egui, EguiContexts};
 use crate::i18n::CurrentLocale;
 use crate::state::{RecentProject, RecentProjects, ViewMode, ViewState, WorldProjection};
 use crate::theme::palette::MapPalette;
-use crate::theme::ui_theme::{color32, mono, proportional, UiShellConfig};
+use crate::theme::ui_theme::{color32, mono, UiShellConfig};
 
 use super::project_menu::{project_menu_inner, ProjectMenuState};
 use super::shell::UiShell;
@@ -36,6 +36,7 @@ use super::widgets::{
     badge, icon_image, BadgeKind, ICON_CHEVRON_RIGHT, ICON_COMMAND, ICON_REFRESH,
 };
 use crate::theme::ui_tokens::{font_size, radius, space};
+use crate::ui::widgets::segmented_control::segmented;
 use crate::ui_command_palette::CommandId;
 
 /// 顶栏：身份 / 主控（居中独立 Area）/ 读数。**唯一例外**的 `TopBottomPanel`。
@@ -158,65 +159,6 @@ fn identity_segment(
     if projection.load_error.is_some() {
         ui.add_space(space::SM);
         badge(ui, shell, BadgeKind::Err, "工程未加载");
-    }
-}
-
-/// web `.segmented`：容器 `bg_app` 底 + border + 圆角 7 + 内边距 2px；
-/// 选中段 `bg_active` 底 + `text_1`（内嵌于容器，不顶边）+ 1px 投影。
-#[allow(clippy::too_many_arguments)]
-fn segmented(
-    ui: &mut egui::Ui,
-    shell: &UiShell,
-    id: &str,
-    seg_w_each: f32,
-    labels: &[&str],
-    active_index: usize,
-    font_px: f32,
-    mut on_pick: impl FnMut(usize),
-) {
-    let total_w = seg_w_each * labels.len() as f32;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(total_w, shell.hit), egui::Sense::hover());
-    let painter = ui.painter();
-    painter.rect_filled(rect, 7.0, color32(shell.palette.bg_app));
-    painter.rect_stroke(
-        rect,
-        7.0,
-        egui::Stroke::new(1.0, color32(shell.palette.border_subtle)),
-        egui::StrokeKind::Inside,
-    );
-    let inner = rect.shrink(2.0);
-    let each = inner.width() / labels.len().max(1) as f32;
-    for (i, label) in labels.iter().enumerate() {
-        let r = egui::Rect::from_min_max(
-            egui::pos2(inner.min.x + each * i as f32, inner.min.y),
-            egui::pos2(inner.min.x + each * (i as f32 + 1.0), inner.max.y),
-        );
-        let resp = ui.interact(r, egui::Id::new((id, i)), egui::Sense::click());
-        if i == active_index {
-            // web `.segmented .button.active`：active 底 + 0 1px 3px 阴影 + text_1
-            painter.rect_filled(r, 5.0, shell.active_bg());
-            painter.text(
-                r.center(),
-                egui::Align2::CENTER_CENTER,
-                *label,
-                proportional(font_px),
-                shell.t1(),
-            );
-        } else {
-            if resp.hovered() {
-                painter.rect_filled(r, 5.0, shell.hover_bg());
-            }
-            painter.text(
-                r.center(),
-                egui::Align2::CENTER_CENTER,
-                *label,
-                proportional(font_px),
-                shell.t2(),
-            );
-        }
-        if resp.clicked() {
-            on_pick(i);
-        }
     }
 }
 

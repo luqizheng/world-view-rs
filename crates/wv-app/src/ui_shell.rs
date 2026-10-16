@@ -1177,9 +1177,11 @@ fn apply_pending_commands(
         }
         CommandId::SelectBrushTool(i) => {
             // 越界索引静默忽略（与 SetViewMode 同口径）；选中即激活笔刷——
-            // 「选工具 = 准备画」，与面板瓷砖点击同一语义（brush_panel::tool_group_row）。
+            // 「选工具 = 准备画」，与面板段控件 / 瓷砖同一语义。同步
+            // `tool_group` 让段控件高亮跟随。
             if let Some(t) = crate::state::BrushTool::ALL.get(i as usize) {
                 brush.tool = *t;
+                brush.on_tool_changed();
                 brush.enabled = true;
             }
         }
@@ -1579,7 +1581,8 @@ mod tests {
     #[test]
     fn select_brush_tool_command_picks_tool_and_activates_brush() {
         // 命令面板 / 未来快捷键选工具的唯一路径：索引对 `BrushTool::ALL`，
-        // 选中即激活笔刷（与面板瓷砖点击同语义）。越界索引不 panic。
+        // 选中即激活笔刷（与面板瓷砖点击同语义）。同时 sync `tool_group`
+        // 让段控件高亮跟随。越界索引不 panic。
         use bevy::ecs::system::RunSystemOnce;
         let mut world = dispatcher_world(None, false, CommandId::SelectBrushTool(1));
         world
@@ -1591,7 +1594,20 @@ mod tests {
             crate::state::BrushTool::MountainRange,
             "索引 1 应选中山脉"
         );
+        assert_eq!(
+            brush.tool_group,
+            crate::state::BrushToolGroup::Shape,
+            "选 MountainRange 后段应切到塑"
+        );
         assert!(brush.enabled, "选工具 = 激活笔刷");
+
+        // 选 Place 组工具（Volcano=索引 4）→ 段切到放。
+        let mut world = dispatcher_world(None, false, CommandId::SelectBrushTool(4));
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+        let brush = world.resource::<crate::state::BrushState>();
+        assert_eq!(brush.tool_group, crate::state::BrushToolGroup::Place);
 
         // 越界索引：忽略而不改状态（不 panic 也不误切）。
         let mut world = dispatcher_world(None, false, CommandId::SelectBrushTool(99));
@@ -1603,6 +1619,11 @@ mod tests {
             brush.tool,
             crate::state::BrushTool::PaintKind,
             "越界不改工具"
+        );
+        assert_eq!(
+            brush.tool_group,
+            crate::state::BrushToolGroup::Paint,
+            "越界不改组"
         );
         assert!(!brush.enabled, "越界不激活笔刷");
     }

@@ -41,6 +41,7 @@ pub mod button;
 pub mod controls;
 pub mod floater;
 pub mod primitives;
+pub mod segmented_control;
 pub mod svg_loader;
 
 // ── 路径兼容 re-export（保持 `crate::ui::widgets::X` 不变） ───────────────
