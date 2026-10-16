@@ -43,37 +43,59 @@
 依赖只能**向下**，禁止反向或跨层：
 
 ```
-wv-app  →  wv-edit  →  wv-io  →  wv-core
-   │         │
-   └─────────┴──────→  wv-terrain   （与 wv-core 平行，纯数据层叶子）
+wv-app  →  wv-edit  ───┐
+   │                    │
+   ├────→ wv-render ────┤
+   │                    ├─→  wv-core
+   └────→ wv-io ────────┘            （wv-core 是唯一根）
+                                wv-terrain（与 wv-core 平行，纯数据层叶子）
+                                wv-overture（与 wv-core 平行，CLI 数据导入辅助）
 ```
+
+> `wv-edit` 与 `wv-render` 是 **双子 crate**——前者写、后者读，**互不依赖**，由 `wv-app` 同时装配。
 
 ### 2.1 硬性约束
 
 | Crate | 允许依赖 | **禁止** |
 |---|---|---|
 | `wv-core` | `serde`, `thiserror` | ❌ Bevy / egui / 任何渲染库<br>❌ 任何文件系统访问（`std::fs`）<br>❌ 任何网络库 |
-| `wv-io` | `wv-core`, `serde`, `serde_yaml` | ❌ Bevy / 渲染库<br>❌ 反向依赖 `wv-edit` / `wv-app` |
-| `wv-edit` | `wv-core` | ❌ 直接读写文件（那是 `wv-io` 的职责）<br>❌ 渲染库 |
-| `wv-app` | `wv-edit`, `wv-io`, `wv-core`, `wv-terrain` | ❌ 作为世界的**权威存储**（source of truth 是磁盘 YAML）<br>❌ 绕过 `wv-edit` 直接改世界（必须走 `EditCommand` / `History`）<br>❌ 持有「当前值」形态的世界状态（应经 `TimelineQuery` 求值） |
+| `wv-io` | `wv-core`, `serde`, `serde_yaml` | ❌ Bevy / 渲染库<br>❌ 反向依赖 `wv-edit` / `wv-render` / `wv-app` |
+| `wv-edit` | `wv-core`, `wv-terrain` | ❌ 直接读写文件（那是 `wv-io` 的职责）<br>❌ 渲染库<br>❌ 反向依赖 `wv-render` |
+| `wv-render` | `wv-core`, `wv-terrain`, `bevy`, `bevy_egui`, `egui_extras`（均 `optional = true`） | ❌ 直接读写文件<br>❌ 反向依赖 `wv-edit` / `wv-app`<br>❌ 直接持有 `wv-edit::EditHistory`（intent→dispatcher 翻译必走 wv-app）<br>❌ 直接构造 `wv_edit::EditCommand`（同上）|
+| `wv-app` | `wv-edit`, `wv-render`, `wv-io`, `wv-core`, `wv-terrain`, `wv-overture` | ❌ 作为世界的**权威存储**（source of truth 是磁盘 YAML）<br>❌ 绕过 `wv-edit` 直接改世界（必须走 `EditCommand` / `History`）<br>❌ 在 `System`（包括 wv-render 注册的）中 `ResMut<wv-edit::EditHistory>` 或 `ResMut<wv-app state>` 的世界数据<br>❌ 持有「当前值」形态的世界状态（应经 `TimelineQuery` 求值） |
 
-> **`wv-terrain` 补记**：它是与 `wv-core` **平行**的纯数据层叶子 crate（零第三方依赖，无 Bevy），承载地形网格（高度场 + 地形类型）与笔刷算法。`wv-edit` 与 `wv-app` 均可直接依赖它。
+> **`wv-terrain` 补记**：它是与 `wv-core` **平行**的纯数据层叶子 crate（零第三方依赖，无 Bevy），承载地形网格（高度场 + 地形类型）与笔刷算法。`wv-edit` / `wv-render` / `wv-app` 均可直接依赖它。
 
-> **`wv-app` 持有可变 `World` 工作副本是允许的**（2026-10-11 用户裁定）：编辑器必须有可变工作区，`WorldProjection.world` 即为该工作副本，真正的 source of truth 仍是磁盘 YAML。约束的是**改动的路径**——一律经 `wv-edit` 的 `EditCommand` / `History`，不得由 System 直接改世界（§3.3）。
+> **`wv-overture` 补记**：与 `wv-core` **平行**的 CLI 数据导入辅助 crate（仅被 `wv-app/src/overture_cli.rs` 引用，负责 Parquet 切片下载与几何转换）；渲染层零引用。详见 ADR-0007 / ADR-0010。
+
+> **`wv-render` 补记**（2026-10-16 用户裁定 + ADR-0020 提议）：由 `wv-app` 内 `render/` + `theme/{palette,colors,colors_google,colors_dusk}`（15359 + 922 行）整建制独立而成的平行 leaf crate。封装 Bevy 渲染与渲染配色，**不**持有编辑入口。render 模块对应用工作区状态的访问一律走 `wv_render::RenderInputs` trait。渲染相关 CJK 字体等 UI 资源（`fonts / ui_tokens / ui_theme`）保留在 `wv-app`。
+
+> **`wv-app` 持有可变 `World` 工作副本是允许的**（2026-10-11 用户裁定）：编辑器必须有可变工作区，`WorldProjection.world` 即为该工作副本，真正的 source of truth 仍是磁盘 YAML。约束的是**改动的路径**——一律经 `wv-edit` 的 `EditCommand` / `History`，不得由 System 直接改世界（§3.3）。`wv-render` 对 `World` 的访问仅以只读引用形式（`*const World` 或 `&World` 接口），所有权留在 `wv-app`。
 
 ### 2.2 验证方式
 
 ```bash
-# 确认 wv-core 零 Bevy 依赖（应输出空）
-cargo tree -p wv-core | grep -i bevy
+# 确认 wv-core / wv-terrain 零 Bevy 依赖（应输出空；两条都跑）
+cargo tree -p wv-core   | grep -i bevy
+cargo tree -p wv-terrain | grep -i bevy
+
+# 确认 wv-core / wv-terrain / wv-edit 零网络栈依赖（应输出空）
+cargo tree -p wv-core   | grep -E 'tokio|axum|hyper|reqwest'
+cargo tree -p wv-terrain | grep -E 'tokio|axum|hyper|reqwest'
+cargo tree -p wv-edit   | grep -E 'tokio|axum|hyper|reqwest'
+
+# 确认 wv-render 反向不依赖 wv-edit / wv-app（应输出空；ADR-0020）
+cargo tree -p wv-render | grep -E 'wv-edit|wv-app'
 
 # 确认无循环依赖
 cargo tree --workspace --duplicates
 ```
 
+> **2026-10-16 增列**（ADR-0020 提议态）：新 5 条断言对应"render 抽 crate 后的依赖红线"。一旦发现 `wv-render` 引用 `wv-edit` 或 `wv-app`、或 `wv-core/wv-terrain/wv-edit` 沾染 bevy/网络，**立即拒收 PR**——这是分层纪律与 §3.3「不直接改世界」的客观兜底，不必依赖 review 者的记忆。
+
 ### 2.3 为什么这条最重要
 
-`wv-core` 必须能独立测试、独立跑 CLI、独立做校验器。**一旦 Bevy 渗进数据层，这三件事全部失效**——这是本项目最容易犯、代价最大的错误。
+`wv-core` 必须能独立测试、独立跑 CLI、独立做校验器。`wv-render` 必须能独立测试、独立 headless 跑（未来 wv-render-cli）。**一旦 Bevy 渗进数据层、wv-render 反向依赖 wv-edit，这两件事全部失效**——这是本项目最容易犯、代价最大的错误。
 
 ---
 
@@ -310,11 +332,12 @@ assert!((j.total_days - 224.0).abs() < 1e-3, "got {}", j.total_days);
 提交前逐条自检：
 
 - [ ] 触及了哪条设计原则？如何满足？
-- [ ] 依赖方向是否正确？`wv-core` 是否仍零 Bevy 依赖？
+- [ ] 依赖方向是否正确？`wv-core` / `wv-terrain` / `wv-edit` 是否仍零 Bevy 与零网络依赖？`wv-render` 是否仍**未**反向依赖 `wv-edit` / `wv-app`？（§2.2 五条 `cargo tree` 都跑过）
 - [ ] 有无新增「当前值」字段或「时间结论」字段？（应为区间 / 参数）
 - [ ] 新术语是否已登记？
 - [ ] 新出现的未定论实现是否已标注待决？
 - [ ] `cargo test` / `clippy` / `fmt` 是否全绿？
+- [ ] 渲染层改动（`wv-render` / `wv-app/theme/palette`）是否额外跑过 `cargo app-test` 与 `cargo app-clippy` 与 `bash scripts/smoke-gui.sh`（§7.1）？
 - [ ] 数值断言是否附了上下文？
 
 ---
