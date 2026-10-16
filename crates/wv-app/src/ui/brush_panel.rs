@@ -33,8 +33,7 @@ use super::shell::{terrain_name_at, UiShell};
 use super::timeline::undo_last_street_segment;
 use super::widgets::{float_window, terrain_grid, ToolButton, ToolIcon};
 use super::{
-    ICON_BRUSH, ICON_HILLS, ICON_LAKE, ICON_MOUNTAIN_RANGE, ICON_PLATEAU, ICON_RIVER,
-    ICON_VOLCANO,
+    ICON_BRUSH, ICON_HILLS, ICON_LAKE, ICON_MOUNTAIN_RANGE, ICON_PLATEAU, ICON_RIVER, ICON_VOLCANO,
 };
 
 /// 地形笔刷 + 街道编辑器面板（P-3 / ADR-0010 编辑器 UI）。
@@ -89,7 +88,11 @@ pub fn panel_brush(
                     egui::Align2::CENTER_CENTER,
                     t_key(&current_loc, I18nKey::BrushModeShort),
                     proportional(font_size::SMALL),
-                    if brush.enabled { shell.t1() } else { shell.t2() },
+                    if brush.enabled {
+                        shell.t1()
+                    } else {
+                        shell.t2()
+                    },
                 );
                 let resp = ui.interact(rect, egui::Id::new("wv_brush_seg"), egui::Sense::click());
                 if resp.clicked() {

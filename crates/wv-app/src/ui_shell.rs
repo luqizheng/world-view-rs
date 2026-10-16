@@ -1599,7 +1599,11 @@ mod tests {
             .run_system_once(apply_pending_commands)
             .expect("系统运行失败");
         let brush = world.resource::<crate::state::BrushState>();
-        assert_eq!(brush.tool, crate::state::BrushTool::PaintKind, "越界不改工具");
+        assert_eq!(
+            brush.tool,
+            crate::state::BrushTool::PaintKind,
+            "越界不改工具"
+        );
         assert!(!brush.enabled, "越界不激活笔刷");
     }
 
