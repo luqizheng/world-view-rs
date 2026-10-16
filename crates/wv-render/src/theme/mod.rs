@@ -28,3 +28,7 @@ pub mod colors_google;
 pub mod fonts;
 #[cfg(feature = "app")]
 pub mod palette;
+#[cfg(feature = "app")]
+pub mod registry;
+#[cfg(feature = "app")]
+pub mod theme_pack;

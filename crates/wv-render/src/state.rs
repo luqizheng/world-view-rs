@@ -162,6 +162,12 @@ pub struct ViewState {
     /// （技法轴）正交。切换会触发底图纹理重建（`TerrainTexture.last_palette`）
     /// 与矢量层材质刷新（缓存键含本字段）。
     pub map_palette: crate::theme::palette::MapPalette,
+    /// 主题包 id（ADR-0023 D1/D3）—— M1 阶段权威源仍是 `map_palette`；
+    /// M2 把权威迁到本字段、保留 `map_palette` 作为兼容 fallback。
+    ///
+    /// 持久化键沿用 `ui-layout.yaml::map_theme` 字符串（D3 零迁移）；内置主题
+    /// id 与 `MapPalette` key 同名（`daylight` / `dusk`），存量 YAML 不动。
+    pub theme_pack_id: Option<String>,
     /// 相机缩放（渲染层钳制范围）。
     pub scale: f32,
     /// 相机中心（世界坐标）。
@@ -215,6 +221,7 @@ impl Default for ViewState {
             mode: ViewMode::default(),
             scale: 1.0,
             map_palette: Default::default(),
+            theme_pack_id: None,
             camera_center: Vec2::ZERO,
             terrain_visible: true,
             terrain_soften: true,
@@ -957,6 +964,7 @@ mod tests {
             unit_per_km: None,
             orientation: 0.0,
             base: None,
+            outline_polygon: None,
         }
     }
 

@@ -136,6 +136,9 @@ pub fn run(config: AppConfig) {
     .init_resource::<crate::state::MeasureState>()
     .init_resource::<crate::state::CityToolState>()
     .init_resource::<wv_render::measurement::MeasurementCache>()
+    // 主题包（ADR-0023 M1）：当前 `map_palette` 仍为权威源，本 Resource 仅作
+    // 入口就位、不被任何渲染系统消费；M2 切消费点时再写回 `view.theme_pack_id`。
+    .init_resource::<wv_render::theme::theme_pack::ActiveThemePack>()
     // 势力多边形层（S12）：同属「每帧 despawn+spawn 的实体集合」资源，
     // 漏 init 会在首帧 panic（`could not access system parameter`）。
     .init_resource::<faction_overlays::FactionOverlayEntities>()

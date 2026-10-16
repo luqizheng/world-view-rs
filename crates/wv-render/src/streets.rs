@@ -618,6 +618,7 @@ mod tests {
             unit_per_km: None,
             orientation: 0.0,
             base: None,
+            outline_polygon: None,
         };
         let mut city = wv_core::map::MapNode {
             orientation: 0.0,
@@ -723,6 +724,7 @@ mod tests {
             unit_per_km: None,
             orientation: 0.0,
             base: None,
+            outline_polygon: None,
         };
         world.maps = vec![city];
 
@@ -809,6 +811,7 @@ mod tests {
                 unit_per_km: None,
                 orientation: 0.0,
                 base: None,
+                outline_polygon: None,
             }],
             ..wv_core::World::default()
         };

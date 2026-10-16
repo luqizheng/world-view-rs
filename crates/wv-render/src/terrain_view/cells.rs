@@ -1187,6 +1187,7 @@ mod tests {
             unit_per_km: None,
             orientation: 0.0,
             base: None,
+            outline_polygon: None,
         });
         let (map, data) = crate::terrain_view::active_terrain_or_placeholder(
             &mut world,
@@ -1303,6 +1304,7 @@ mod tests {
             unit_per_km: None,
             orientation: 0.0,
             base: None,
+            outline_polygon: None,
         });
         let (map, data) = crate::terrain_view::active_terrain_or_placeholder(
             &mut world_core,
