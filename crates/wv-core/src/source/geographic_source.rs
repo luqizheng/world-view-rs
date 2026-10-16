@@ -125,6 +125,22 @@ impl LatLonBbox {
         let lon_km = n.width() * 111.132 * center_lat_rad.cos();
         Some((lon_km / w, lat_km / h))
     }
+
+    /// 图内归一化坐标（UV）→ 经纬度（WGS84，单位度）。
+    ///
+    /// UV 口径与 [`crate::map::IconSpec::anchor`] / [`crate::map::coord::MapFrame::world_to_uv`]
+    /// 一致：`[0,1]²`、**左上角为原点、y 向下**——`[0,0]` 是本图**西北角**，
+    /// `[1,1]` 是东南角。调用链是 `世界坐标 → (coord 模块) UV → 本方法`，
+    /// 本方法只负责最后一段线性映射，不碰世界坐标。
+    ///
+    /// 返回 `(纬度 lat, 经度 lon)`。越界输入按线性外推（不夹取）——
+    /// 「光标是否在图幅内、要不要显示经纬度」是**可见性**判断，归调用方。
+    pub fn uv_to_lat_lon(&self, uv: [f64; 2]) -> (f64, f64) {
+        let n = self.normalized();
+        let lat = n.north - uv[1] * n.height();
+        let lon = n.west + uv[0] * n.width();
+        (lat, lon)
+    }
 }
 
 #[cfg(test)]
@@ -238,5 +254,63 @@ mod tests {
 
         let ext = crate::map::Extent::sized(0.0, 1024.0);
         assert!(bbox.km_per_wu(&ext).is_none());
+    }
+
+    /// UV 四角与中心的手算对位（西雅图式 bbox）：
+    /// `[0,0]` = 西北角 (47.75, -122.50)，`[1,1]` = 东南角 (47.50, -122.25)，
+    /// `[0.5,0.5]` = 中心 (47.625, -122.375)。UV 左上原点、y 向下，
+    /// 因此 **v 越大纬度越小**（v=1 落在南边界）。
+    #[test]
+    fn uv_to_lat_lon_maps_corners_and_center() {
+        let bbox = LatLonBbox {
+            west: -122.50,
+            south: 47.50,
+            east: -122.25,
+            north: 47.75,
+        };
+        let (lat, lon) = bbox.uv_to_lat_lon([0.0, 0.0]);
+        assert!((lat - 47.75).abs() < 1e-9, "西北角纬度，got {lat}");
+        assert!((lon - (-122.50)).abs() < 1e-9, "西北角经度，got {lon}");
+
+        let (lat, lon) = bbox.uv_to_lat_lon([1.0, 1.0]);
+        assert!((lat - 47.50).abs() < 1e-9, "东南角纬度，got {lat}");
+        assert!((lon - (-122.25)).abs() < 1e-9, "东南角经度，got {lon}");
+
+        let (lat, lon) = bbox.uv_to_lat_lon([0.5, 0.5]);
+        assert!((lat - 47.625).abs() < 1e-9, "中心纬度，got {lat}");
+        assert!((lon - (-122.375)).abs() < 1e-9, "中心经度，got {lon}");
+    }
+
+    /// 反传 bbox（north < south）经 `normalized` 归位后结果一致：
+    /// 本方法吃的是「作者可能写反」的真实数据。
+    #[test]
+    fn uv_to_lat_lon_normalizes_reversed_bbox() {
+        let raw = LatLonBbox {
+            west: -122.25,
+            south: 47.75,
+            east: -122.50,
+            north: 47.50,
+        };
+        let (lat, lon) = raw.uv_to_lat_lon([0.0, 0.0]);
+        assert!((lat - 47.75).abs() < 1e-9, "归位后西北角纬度，got {lat}");
+        assert!(
+            (lon - (-122.50)).abs() < 1e-9,
+            "归位后西北角经度，got {lon}"
+        );
+    }
+
+    /// 越界输入线性外推、不夹取——夹不夹是调用方的可见性策略。
+    #[test]
+    fn uv_to_lat_lon_extrapolates_out_of_range_input() {
+        let bbox = LatLonBbox {
+            west: 0.0,
+            south: 0.0,
+            east: 1.0,
+            north: 1.0,
+        };
+        // v = 2：越过南边界一格 → lat = 1 - 2 = -1。
+        let (lat, lon) = bbox.uv_to_lat_lon([0.0, 2.0]);
+        assert!((lat - (-1.0)).abs() < 1e-9, "南向外推纬度，got {lat}");
+        assert!((lon - 0.0).abs() < 1e-9, "经度不外推，got {lon}");
     }
 }

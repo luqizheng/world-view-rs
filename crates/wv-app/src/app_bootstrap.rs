@@ -75,6 +75,9 @@ pub fn run(config: AppConfig) {
             }),
     )
     .add_plugins(EguiPlugin::default())
+    // 状态栏 FPS 读数（Figma #3:21001 右段）：DefaultPlugins 只提供
+    // DiagnosticsStore 容器，帧时间/帧率诊断要本插件显式注册。
+    .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
     // 播放范围：空编辑器起步先用默认值（1..180_001）；
     // 运行期加载工程成功后由 `startup_load` 按该工程 `timeline/axis.yaml` 重置。
     .insert_resource(PlaybackState {

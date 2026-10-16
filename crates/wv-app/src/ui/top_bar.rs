@@ -1,11 +1,14 @@
-//! 顶栏（38px v0.3 · web `.topbar` 对齐）+ 状态栏（22px）。
+//! 顶栏（38px v0.3 · web `.topbar` 对齐）+ 状态栏（28px · Figma #3:21001）。
 //!
 //! ## 职责
 //! - `top_bar` —— web `grid: 1fr auto 1fr` 三区：左 = 项目按钮（蓝 logo +
 //!   粗体名 + 下翻箭头，见 [`super::project_menu`]）+ 面包屑；**中 = Browse /
 //!   Edit 分段 + 地图主题分段 + Rebuild 按钮（独立 Area 锚视口顶部居中）**；
 //!   右 = zoom / entities / 脏态徽标 / ⌘K 按钮。
-//! - `status_bar` —— 实体计数 / 路径 / zoom / Saved / warnings / 当前文件。
+//! - `status_bar`（2026-10-16 按 Figma `Untitled` #3:21001 重做）——
+//!   左 = `WORLD–VIEW` + 版本 + 工程目录名；中 = 光标世界坐标 X/Y +
+//!   经纬度（真实地理图才有）+ EPSG；右 = 对象计数 + 选中数 + 警告徽标 +
+//!   FPS。
 //!
 //! ## web 对齐要点（`index.css` / `App.tsx`，v0.3 校准）
 //! - 高度 38px（`.topbar`）；底色 `bg_app` 96% + 底边框 + `0 4px 20px` 投影。
@@ -26,14 +29,16 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::i18n::CurrentLocale;
-use crate::state::{RecentProject, RecentProjects, ViewMode, ViewState, WorldProjection};
+use crate::state::{
+    DrillState, RecentProject, RecentProjects, ViewMode, ViewState, WorldProjection,
+};
 use crate::theme::palette::MapPalette;
-use crate::theme::ui_theme::{color32, mono, UiShellConfig};
+use crate::theme::ui_theme::{color32, color32_alpha, mono, UiShellConfig};
 
 use super::project_menu::{project_menu_inner, ProjectMenuState};
 use super::shell::UiShell;
 use super::widgets::{
-    badge, icon_image, BadgeKind, ICON_CHEVRON_RIGHT, ICON_COMMAND, ICON_REFRESH,
+    badge, icon_image, BadgeKind, ICON_CHEVRON_RIGHT, ICON_COMMAND, ICON_FOLDER_OPEN, ICON_REFRESH,
 };
 use crate::theme::ui_tokens::{font_size, radius, space};
 use crate::ui::widgets::segmented_control::segmented;
@@ -323,113 +328,367 @@ fn count_entities(projection: &WorldProjection) -> usize {
     w.units.len() + w.characters.len() + w.situations.len() + w.events.len()
 }
 
-/// 状态栏（v0.3：22px，web `.statusbar` 精确值）。
+/// 状态栏字号（Figma #3:21001 全部 10px/16px）。
 ///
-/// - 左：实体计数 `6 units · 12 characters · 2 situations · 28 events`
-/// - 中：当前路径 `Zunyi / Government Office` + zoom `Zoom 86%`
-/// - 右：`Saved locally`（ok 徽标）/ `N warnings`（warn 徽标）/ `ui-layout.yaml`
+/// 状态栏是「仪表读数」，比令牌阶梯 MICRO(11) 再小半档——顶栏主题分段
+/// （`theme_segment`）已有 10px 直写先例。
+const STATUS_FONT: f32 = 10.0;
+/// 状态栏行高（Figma lineHeight 16px）：中区锚定 Area 的垂直居中偏移用。
+const STATUS_ROW_H: f32 = 16.0;
+/// 中段（Pointer coordinates）组内间距（Figma gap 24px）。
+const STATUS_GAP_CENTER: f32 = 24.0;
+
+/// 状态栏（2026-10-16 按 Figma `Untitled` #3:21001「Status bar」重做，28px）。
+///
+/// 三段式（设计稿 `space-between`；中区真居中用锚定 Area，顶栏中区同款先例）：
+/// - 左「Project status」：`WORLD–VIEW` + 版本 + 分隔线 + 📁 工程目录名；
+/// - 中「Pointer coordinates」：光标世界坐标 `X / Y`；当前图声明了
+///   `geographic_source` 且光标落在图幅内时，追加经纬度 + `EPSG:4326`
+///   （世界 → UV 走 [`wv_core::resolve_frame_in`] 单一实现点，
+///   UV → 经纬度走 [`wv_core::LatLonBbox::uv_to_lat_lon`]，本文件零手搓换算）；
+/// - 右「Scene statistics」：对象计数 + 金色 `N selected` + 「N warnings」
+///   徽标（沿用旧版，>0 才出现）+ 分隔线 + 绿点 + FPS。
+///
+/// ## 与设计稿的刻意偏差（令牌纪律，非漏做）
+///
+/// 色值一律走 [`crate::theme::ui_tokens::ShellPalette`]（AGENTS §8：UI 禁写裸
+/// hex）：`#11171C@.96`→`bg_app@.96`、`#A3B1BA`→`text_2`、`#778994`→`text_3`、
+/// `#D6B77B`→`gold`、`#8FB397`→`badge_ok`、`#303B43`→`border_subtle`——
+/// 亮色主题因此自动获得同语义配色，而非设计稿的暗色单套。
 pub fn status_bar(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,
     view: Res<ViewState>,
     projection: Res<WorldProjection>,
     validation_count: Res<ValidationCount>,
+    drill: Res<DrillState>,
+    diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
+    // Figma #3:21001 designedHeight 28px（旧版 22px）。
+    let h = 28.0;
     let mut root = root_ui(ctx);
     egui::Panel::bottom("wv_status_bar")
-        .exact_size(22.0)
+        .exact_size(h)
         .frame(
             egui::Frame::NONE
-                .fill(color32(shell.palette.bg_app))
+                // 设计稿 rgba(17,23,28,.96)：走 bg_app @0.96 的 CSS rgba 语义
+                // （`to_color32_alpha` 非预乘），不学顶栏的 gamma_multiply 近似。
+                .fill(color32_alpha(shell.palette.bg_app, 0.96))
                 .stroke(egui::Stroke::new(1.0, color32(shell.palette.border_subtle)))
-                .inner_margin(crate::theme::ui_theme::margin_xy(space::SM, 0.0)),
+                .inner_margin(crate::theme::ui_theme::margin_xy(16.0, 0.0)),
         )
         .show(&mut root, |ui| {
+            // Panel 默认纵向布局：三段式必须包在 horizontal 里（旧版同款）。
             ui.horizontal(|ui| {
-                // ── 左：实体计数（mono 数字）──
-                let w = &projection.world;
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{} units · {} characters · {} situations · {} events",
-                        w.units.len(),
-                        w.characters.len(),
-                        w.situations.len(),
-                        w.events.len()
-                    ))
-                    .size(shell.scale.micro)
-                    .color(shell.t3())
-                    .font(mono(shell.scale.micro)),
-                );
-
-                // ── 中 + 右：右对齐的路径 / zoom / 状态徽标 / 文件名 ──
+                // ── 左：Project status（组内 gap 16）──
+                project_status_segment(ui, &shell, &projection);
+                // ── 右：Scene statistics（组内 gap 16，右对齐）──
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // 文件名（最右 · 弱文本）
-                    ui.label(
-                        egui::RichText::new("ui-layout.yaml")
-                            .size(shell.scale.micro)
-                            .color(shell.t3())
-                            .font(mono(shell.scale.micro)),
-                    );
-                    ui.add_space(space::MD);
-
-                    // 警告徽标（web `.badge.warn`）
-                    if validation_count.warnings > 0 {
-                        badge(
-                            ui,
-                            &shell,
-                            BadgeKind::Warn,
-                            &format!(
-                                "{} warning{}",
-                                validation_count.warnings,
-                                if validation_count.warnings == 1 {
-                                    ""
-                                } else {
-                                    "s"
-                                }
-                            ),
-                        );
-                        ui.add_space(space::MD);
-                    }
-
-                    // Saved locally 徽标（web `.badge.ok`；脏态时顶栏右侧已有
-                    // Unsaved changes，此处不画）
-                    if !projection.dirty {
-                        badge(ui, &shell, BadgeKind::Ok, "Saved locally");
-                        ui.add_space(space::MD);
-                    }
-
-                    // 当前路径（mono）
-                    let path = crate::ui_time::format_breadcrumb(&projection, &view.current_map)
-                        .join(" / ");
-                    ui.label(
-                        egui::RichText::new(path)
-                            .size(shell.scale.micro)
-                            .color(shell.t2())
-                            .font(mono(shell.scale.micro)),
-                    );
-                    ui.add_space(space::SM);
-                    ui.label(
-                        egui::RichText::new("|")
-                            .size(shell.scale.micro)
-                            .color(shell.t3()),
-                    );
-                    ui.add_space(space::SM);
-
-                    // Zoom 百分比
-                    let pct = (view.scale * 100.0).round() as i32;
-                    ui.label(
-                        egui::RichText::new(format!("Zoom {pct}%"))
-                            .size(shell.scale.micro)
-                            .color(shell.t2())
-                            .font(mono(shell.scale.micro)),
+                    scene_statistics_segment(
+                        ui,
+                        &shell,
+                        &projection,
+                        &validation_count,
+                        &diagnostics,
                     );
                 });
             });
         });
+
+    // ── 中区：Pointer coordinates——锚定 Area 视口底部居中 ──
+    //（TopBottomPanel 做不了「剩余宽度居中」；内容行高 16，(28-16)/2 = 6px 偏移。）
+    egui::Area::new(egui::Id::new("wv_status_bar_center"))
+        .anchor(
+            egui::Align2::CENTER_BOTTOM,
+            egui::vec2(0.0, (h - STATUS_ROW_H) * 0.5),
+        )
+        .order(egui::Order::Middle)
+        .show(ctx, |ui| {
+            // Area 默认纵向布局，横排同样要包 horizontal（顶栏中区同款）。
+            ui.horizontal(|ui| {
+                pointer_coordinates_segment(ui, &shell, &view, &projection, &drill);
+            });
+        });
+}
+
+/// 左段「Project status」：产品名 / 版本 / 分隔线 / 工程目录名（gap 16 均匀）。
+fn project_status_segment(ui: &mut egui::Ui, shell: &UiShell, projection: &WorldProjection) {
+    // WORLD–VIEW（设计稿 Inter SemiBold——打包仅 Regular、egui 无合成粗体，
+    // `.strong()` 退化为强调色，字体加粗待 ADR-0019 后续字重接线）。
+    ui.label(
+        egui::RichText::new("WORLD–VIEW")
+            .size(STATUS_FONT)
+            .strong()
+            .color(shell.t2()),
+    );
+    ui.add_space(space::LG);
+    // 版本号（真实 Cargo 版本，非设计稿示例 0.8.4）。
+    ui.label(
+        egui::RichText::new(env!("CARGO_PKG_VERSION"))
+            .size(STATUS_FONT)
+            .color(shell.t3())
+            .font(mono(STATUS_FONT)),
+    );
+    ui.add_space(space::LG);
+    vsep(ui, color32(shell.palette.border_subtle));
+    ui.add_space(space::LG);
+    // 工程目录名（未加载工程时不画——空编辑器没有「当前文件」可报）。
+    if let Some(dir) = projection.project_dir.as_deref() {
+        ui.add(icon_image(ICON_FOLDER_OPEN, shell.t2(), 12.0));
+        ui.add_space(space::LG);
+        ui.label(
+            egui::RichText::new(project_display_name(dir))
+                .size(STATUS_FONT)
+                .color(shell.t2())
+                .font(mono(STATUS_FONT)),
+        );
+    }
+}
+
+/// 中段「Pointer coordinates」：X/Y 世界坐标 +（真实地理图）经纬度 + EPSG。
+///
+/// 光标不在窗口内（`cursor_world = None`）整段不画。
+fn pointer_coordinates_segment(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    view: &ViewState,
+    projection: &WorldProjection,
+    drill: &DrillState,
+) {
+    let Some(cursor) = view.cursor_world else {
+        return;
+    };
+    ui.label(
+        egui::RichText::new(format!("X  {}", format_fixed2(cursor.x as f64)))
+            .size(STATUS_FONT)
+            .color(shell.t2())
+            .font(mono(STATUS_FONT)),
+    );
+    ui.add_space(STATUS_GAP_CENTER);
+    ui.label(
+        egui::RichText::new(format!("Y  {}", format_fixed2(cursor.y as f64)))
+            .size(STATUS_FONT)
+            .color(shell.t2())
+            .font(mono(STATUS_FONT)),
+    );
+
+    // 经纬度：当前图声明了 geographic_source 且光标在图幅内才显示——
+    // 虚构地图（绝大多数）没有地理参照，硬造经纬度是骗人。
+    if let Some((lat, lon)) = cursor_lat_lon(cursor, projection, drill) {
+        ui.add_space(STATUS_GAP_CENTER);
+        ui.label(
+            egui::RichText::new(format!("{}  {}", format_lat(lat), format_lon(lon)))
+                .size(STATUS_FONT)
+                .color(shell.t3())
+                .font(mono(STATUS_FONT)),
+        );
+        ui.add_space(STATUS_GAP_CENTER);
+        ui.label(
+            egui::RichText::new("EPSG:4326")
+                .size(STATUS_FONT)
+                .color(shell.t3())
+                .font(mono(STATUS_FONT)),
+        );
+    }
+}
+
+/// 光标世界坐标 → (纬度, 经度)。
+///
+/// 世界 → UV 是坐标链（基线 §2.15 禁止手搓）：[`wv_core::resolve_frame_in`]
+/// 还原本图世界帧 → [`wv_core::coord::MapFrame::world_to_uv`]；UV → 经纬度是
+/// ADR-0007 的地理派生（[`wv_core::LatLonBbox::uv_to_lat_lon`]）。
+/// 光标出图幅返回 `None`（可见性判断在这里，外推不夹取在 wv-core）。
+fn cursor_lat_lon(
+    cursor: Vec2,
+    projection: &WorldProjection,
+    drill: &DrillState,
+) -> Option<(f64, f64)> {
+    let node = drill.current_node(&projection.world)?;
+    let geo = node.geographic_source.as_ref()?;
+    let frame = wv_core::resolve_frame_in(&projection.world.maps, &node.id)?;
+    let uv = frame.world_to_uv(wv_core::Point::new(cursor.x, cursor.y))?;
+    if !(0.0..=1.0).contains(&uv[0]) || !(0.0..=1.0).contains(&uv[1]) {
+        return None;
+    }
+    Some(geo.bbox.uv_to_lat_lon([uv[0] as f64, uv[1] as f64]))
+}
+
+/// 右段「Scene statistics」：对象数 / 选中数 / 警告徽标 / 分隔线 / 绿点 / FPS。
+///
+/// **右至左添加**（父布局 `right_to_left`）：设计稿从左到右是
+/// objects → selected → 分隔线 → 绿点 → FPS，故添加序相反。
+fn scene_statistics_segment(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    projection: &WorldProjection,
+    validation_count: &ValidationCount,
+    diagnostics: &bevy::diagnostic::DiagnosticsStore,
+) {
+    // FPS（bevy Diagnostics 平滑值；插件未跑出数据的首帧不画）。
+    if let Some(fps) = diagnostics
+        .get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS)
+        .and_then(|d| d.smoothed())
+    {
+        ui.label(
+            egui::RichText::new(format!("{fps:.0} FPS"))
+                .size(STATUS_FONT)
+                .color(shell.t2())
+                .font(mono(STATUS_FONT)),
+        );
+        ui.add_space(space::LG);
+    }
+    status_dot(ui, color32(shell.palette.badge_ok));
+    ui.add_space(space::LG);
+    vsep(ui, color32(shell.palette.border_subtle));
+    ui.add_space(space::LG);
+    // 警告徽标（旧版功能保留：>0 才出现，默认视图与设计稿一致）。
+    if validation_count.warnings > 0 {
+        badge(
+            ui,
+            shell,
+            BadgeKind::Warn,
+            &format!(
+                "{} warning{}",
+                validation_count.warnings,
+                if validation_count.warnings == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            ),
+        );
+        ui.add_space(space::LG);
+    }
+    // 选中数（金 = 世界「选中」语义，同 `ui.focus` 暗色复用的理由）。
+    if projection.selection.is_some() {
+        ui.label(
+            egui::RichText::new("1 selected")
+                .size(STATUS_FONT)
+                .color(shell.gold()),
+        );
+        ui.add_space(space::LG);
+    }
+    // 对象计数（旧顶栏 count_entities 同口径：四类实体合计）。
+    let objects = count_entities(projection);
+    ui.label(
+        egui::RichText::new(format!("{} objects", format_thousands(objects as u64)))
+            .size(STATUS_FONT)
+            .color(shell.t3()),
+    );
+}
+
+/// 1×12px 竖分隔线（Figma「Separator」#3:21005）。
+fn vsep(ui: &mut egui::Ui, color: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 12.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, 0.0, color);
+}
+
+/// 4×4px 圆点（Figma「Render status」#3:21017）。
+fn status_dot(ui: &mut egui::Ui, color: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(4.0, 4.0), egui::Sense::hover());
+    ui.painter().circle_filled(rect.center(), 2.0, color);
+}
+
+/// 工程目录的展示名：取路径末段（`…/guizhou-atlas.world` → `guizhou-atlas.world`）。
+///
+/// `file_name` 失败（路径本身就是根/空）时退回原串——显示个完整路径
+/// 也好过什么都不显示。
+fn project_display_name(dir: &str) -> &str {
+    std::path::Path::new(dir)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(dir)
+}
+
+/// 整数千分位（en-US 逗号）：`12480` → `"12,480"`。
+fn format_thousands(value: u64) -> String {
+    let digits = value.to_string();
+    let len = digits.len();
+    let mut out = String::with_capacity(len + len / 3);
+    for (i, b) in digits.bytes().enumerate() {
+        if i > 0 && (len - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(b as char);
+    }
+    out
+}
+
+/// 定宽读数：两位小数 + 千分位、保留负号（`1284.5` → `"1,284.50"`）。
+///
+/// 经 `u64` 整数化（×100 取整）避免格式化器逐平台分叉；负零归 `-0.00`
+/// 可接受（读数不是账本）。
+fn format_fixed2(value: f64) -> String {
+    let scaled = (value.abs() * 100.0).round() as u64;
+    format!(
+        "{}{}.{:02}",
+        if value.is_sign_negative() { "-" } else { "" },
+        format_thousands(scaled / 100),
+        scaled % 100
+    )
+}
+
+/// 纬度读数：`28.034` → `"28.03° N"`，南半球出 `S`。
+fn format_lat(lat: f64) -> String {
+    format!("{:.2}° {}", lat.abs(), if lat >= 0.0 { "N" } else { "S" })
+}
+
+/// 经度读数：`116.4` → `"116.40° E"`，西半球出 `W`。
+fn format_lon(lon: f64) -> String {
+    format!("{:.2}° {}", lon.abs(), if lon >= 0.0 { "E" } else { "W" })
+}
+
+#[cfg(test)]
+mod status_bar_format_tests {
+    use super::{format_fixed2, format_lat, format_lon, format_thousands, project_display_name};
+
+    #[test]
+    fn thousands_groups_every_three_digits() {
+        assert_eq!(format_thousands(0), "0");
+        assert_eq!(format_thousands(480), "480");
+        assert_eq!(format_thousands(12_480), "12,480");
+        assert_eq!(format_thousands(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn fixed2_pads_two_decimals_and_groups() {
+        // 设计稿示例：X 1,284.50。
+        assert_eq!(format_fixed2(1284.5), "1,284.50");
+        assert_eq!(format_fixed2(0.0), "0.00");
+        assert_eq!(format_fixed2(60.0), "60.00");
+        // 0.125 在 f64 里精确，×100 = 12.5，round 半值远离零 → 13。
+        assert_eq!(format_fixed2(0.125), "0.13");
+    }
+
+    #[test]
+    fn fixed2_keeps_sign_for_negative_coordinates() {
+        // 真实地理图（西雅图）x 常为负。
+        assert_eq!(format_fixed2(-122.5), "-122.50");
+        assert_eq!(format_fixed2(-1_284.25), "-1,284.25");
+    }
+
+    #[test]
+    fn lat_lon_hemisphere_suffixes_follow_sign() {
+        assert_eq!(format_lat(28.034), "28.03° N");
+        assert_eq!(format_lat(-33.9), "33.90° S");
+        assert_eq!(format_lon(116.4), "116.40° E");
+        assert_eq!(format_lon(-122.5), "122.50° W");
+    }
+
+    #[test]
+    fn project_display_name_takes_the_last_segment() {
+        assert_eq!(
+            project_display_name(r"D:\projects\guizhou-atlas.world"),
+            "guizhou-atlas.world"
+        );
+        assert_eq!(project_display_name("foo/atlas"), "atlas");
+        // 无可拆分段时退回原串（显示完整路径好过空白）。
+        assert_eq!(project_display_name(""), "");
+    }
 }
 
 /// 验证警告数（v0.3：状态条右侧徽标需要）。
