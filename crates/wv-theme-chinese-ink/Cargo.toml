@@ -1,0 +1,16 @@
+[package]
+name = "wv-theme-chinese-ink"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "示例主题包：水墨（chinese_ink）—— ADR-0023 M2 演示"
+
+# 主题包默认不编译：依赖 wv-render 的 `app` feature（与 wv-render 自身红线同档）。
+# 游戏 app / 编辑器显式 `features = ["app"]` 才会拉入。
+[features]
+default = []
+app = ["wv-render/app"]
+
+[dependencies]
+wv-render = { workspace = true }

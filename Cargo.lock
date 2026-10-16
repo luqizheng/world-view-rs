@@ -7007,6 +7007,7 @@ dependencies = [
  "wv-overture",
  "wv-render",
  "wv-terrain",
+ "wv-theme-chinese-ink",
 ]
 
 [[package]]
@@ -7064,6 +7065,13 @@ dependencies = [
 [[package]]
 name = "wv-terrain"
 version = "0.1.0"
+
+[[package]]
+name = "wv-theme-chinese-ink"
+version = "0.1.0"
+dependencies = [
+ "wv-render",
+]
 
 [[package]]
 name = "x11-dl"

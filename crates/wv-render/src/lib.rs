@@ -61,6 +61,8 @@ pub mod map_frame;
 #[cfg(feature = "app")]
 pub mod measurement;
 #[cfg(feature = "app")]
+pub mod plugins;
+#[cfg(feature = "app")]
 pub mod state;
 #[cfg(feature = "app")]
 pub mod streets;

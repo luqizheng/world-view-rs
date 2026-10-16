@@ -20,6 +20,10 @@ http = ["app", "dep:axum", "dep:tokio", "dep:async-trait", "dep:serde_json"]
 # `Body::from` 配对做端到端 smoke（HTTP 测试模块 `server.rs`）。
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+# ADR-0023 M2 验收：`game_consumer` 示例演示"游戏 app 接入 wv-render + 主题包"
+# 的最小路径（只装 MapRenderPlugin / MapShellPlugin、不装 EditorOverlayPlugin）。
+# dev-dep 因为这是"插件接入契约"演示、非 wv-app 运行时依赖。
+wv-theme-chinese-ink = { workspace = true, features = ["app"] }
 
 [dependencies]
 wv-core = { workspace = true }
@@ -58,4 +62,8 @@ required-features = ["app"]
 
 [[example]]
 name = "build_seattle_terrain"
+required-features = ["app"]
+
+[[example]]
+name = "game_consumer"
 required-features = ["app"]
