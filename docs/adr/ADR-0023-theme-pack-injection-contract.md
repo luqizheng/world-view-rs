@@ -93,6 +93,9 @@ ADR-0021 提议的 **`TreatmentFlags`**（D2）是表达三轴里的**装饰族*
    - 启动时由 `ui_shell::register` 读 YAML → 解析为 `&'static ThemePack` → 塞 `ActiveThemePack` Resource；
    - 切换时**不重建系统**，只换 Resource + 触发一次 `terrain_view::rebuild_texture_on_mode_change` 同口径的脏标（M1 沿用现有路径；Recipe 落地的 M2 再做精细化）。
 3. 顶栏 "日间古舆图 / 暮色旧纸" 切换按钮**保留**作为内置主题的快速入口（不暴露所有 ThemePack，符合"壳层只装自己点过名的"原则）。
+4. **作用域口径（2026-10-16 用户澄清，双词分立）**：
+   - **运行时跟着软件**——主题是软件级全局观感：单一 `ActiveThemePack` Resource，切换 = 整软件一个开关，所有地图 / 所有要素同帧换肤；**不是**地图属性、**不**进 `wv-core` 数据层、**不**按元素混搭（见 §4 负 3）；
+   - **持久化跟着工程**——`map_theme` 记在工程根的 `ui-layout.yaml`，与 `theme` / `density` / `language` 同一纪律（`ui_layout.rs` "只写 UI 偏好"）：打开 A 工程恢复 A 上次选的主题，打开 B 工程恢复 B 的。这是**作者偏好随工程走**，不是"主题绑定地图数据"。
 
 ### D4 与 ADR-0021 协同
 
@@ -135,7 +138,7 @@ ADR-0021 提议的 **`TreatmentFlags`**（D2）是表达三轴里的**装饰族*
 - **负**：
   1. **每风格一个 crate ≈ 30 行 boilerplate**（`Cargo.toml` / `lib.rs` / `pub const PACK`），单人可接受但**不像 Web 那样零代码**；
   2. **`MapPalette` 字段名与实际语义错位**（字段叫 palette，承载的是 ThemePack id）——新增团队成员可能困惑；靠文档 + `view.map_palette_key` 字段名（M2 落地）消除；
-  3. **风格热切换粒度粗**：当前实现 = 整组切换（不允许多 ThemePack 共存），未来若需要"一张图同时用古舆图底 + 水墨 POI"会撞墙——本 ADR v1 不解决，**M3**（YAML 化 + per-element 风格覆盖）再说；
+  3. **主题是软件级全局观感，不按元素混搭**（2026-10-16 用户澄清后显式化）：运行时 = 单一 `ActiveThemePack` Resource，切换 = 整软件一个开关（所有地图 / 所有要素同帧换肤）；**不存在**也不预留"一张图同时用古舆图底 + 水墨 POI"的 per-element 覆盖——那是假想需求，真要做属于新 ADR 的 scope（pass / shader / draw 链全要按元素 tag），本契约**不为它预留逃生舱**；
   4. `AppThemePacks`（多 registry 合并）需要**合并顺序**约束（"后注册覆盖先注册"）——文档化、不强制；
   5. 与 `STYLE_SWAPPABLE_ARCHITECTURE.md`（面向 Web）的契约**部分**会偏离（资源热加载粒度、JS 字体卸载、gl.deleteTexture）——**显式记录在 §5 被否决的备选**。
 - **待裁（落地前收敛）**：
