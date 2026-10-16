@@ -451,6 +451,7 @@ mod tests {
             time_span: None,
             unit_per_km: None,
             orientation: 0.0,
+            base: None,
         });
         w.maps.push(MapNode {
             id: Id::new_unchecked("city_a"),
@@ -466,6 +467,7 @@ mod tests {
             time_span: None,
             unit_per_km: None,
             orientation: 0.0,
+            base: None,
         });
         w.meta = Some(WorldMeta {
             name: "测试".into(),
