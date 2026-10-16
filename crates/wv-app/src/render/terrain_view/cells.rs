@@ -1038,11 +1038,92 @@ mod tests {
         assert!(b >= 150, "蓝通道应清晰，实得 b={b}");
     }
 
-    // -----------------------------------------------------------------------
+    // ---------------------------------------------------------------------------
+    // 顶栏缩放下 Ocean 与 Land 仍可区分（2026-10-16 用户反馈「选了海洋但
+    // 颜色没变蓝」第二步）。
+    //
+    // 单测验「图像合成」后再过一道「雾霭」模拟——这是用户顶栏 473% 缩放下
+    // 实际看到的颜色。任何把 VEIL_FAR_SCALE 拉回 3.0、或 VEIL_MAX_ALPHA 拉回 0.55
+    // 都会让海陆都退成纸色，让这测试挂掉。
+    //
+    // 验证目标：在 4.73× 缩放（顶栏 473%）下：
+    //   - Ocean 仍 ≥ Land 的 b 通道（海偏冷，陆偏暖）
+    //   - Ocean 的 g - b ≥ 0（海冷，陆 g 偏大）
+    //   - Ocean 与 Land 的 RGB 差距 ≥ 5（可分辨）
+    // ---------------------------------------------------------------------------
+
+    /// 模拟「顶栏缩放 4.73× + 雾霭」下的真实色，把 MapBase::Ocean 与 MapBase::Land
+    /// 区分性钉住。任何让海陆在远缩放下都退成纸色的回归，都会被这里拦下。
+    #[test]
+    fn ocean_and_land_stay_distinguishable_at_user_zoom() {
+        // 1. 渲染 Ocean / Land 两张 4×4 图（同 scale、同 theme、同 soften）。
+        let ocean_data = TerrainData {
+            width: 4,
+            height: 4,
+            cells: vec![wv_core::map::MapBase::Ocean.cell(); 16],
+        };
+        let land_data = TerrainData {
+            width: 4,
+            height: 4,
+            cells: vec![wv_core::map::MapBase::Land.cell(); 16],
+        };
+        let palette = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
+        let ocean_img = image_from_terrain(&ocean_data, ViewMode::VectorFlat, None, true, palette);
+        let land_img = image_from_terrain(&land_data, ViewMode::VectorFlat, None, true, palette);
+
+        // 2. 取中心像素（在 image_from_terrain 之后，这一步相当于「无雾」底色）。
+        fn center_pixel(img: &Image) -> (i32, i32, i32) {
+            let px = img.data.as_ref().expect("image 必有像素");
+            let res = (img.width() / 4) as usize;
+            let cx = res / 2;
+            let cy = res / 2;
+            let i = (cy * img.width() as usize + cx) * 4;
+            (px[i] as i32, px[i + 1] as i32, px[i + 2] as i32)
+        }
+        let (or, og, ob) = center_pixel(&ocean_img);
+        let (lr, lg, lb) = center_pixel(&land_img);
+
+        // 3. 模拟雾霭顶混合（用户 4.73× 缩放）。
+        let veil_alpha = crate::render::terrain_view::atmosphere::veil_alpha(4.73);
+        // 手算 Ocean 过雾霭（为 0..255 字节，与底层 blend 一致）
+        // out = base * (1 - alpha) + paper * alpha
+        let paper = palette.soften_toward;
+        let Color::Srgba(p) = paper else {
+            panic!("soften_toward 应为 Srgba")
+        };
+        let pr = (p.red * 255.0).round() as i32;
+        let pg = (p.green * 255.0).round() as i32;
+        let pb = (p.blue * 255.0).round() as i32;
+        let k = (veil_alpha * 255.0).round() as i32;
+        let mk = 255 - k; // 1 - alpha（字节化）
+        let or_v = (or * mk + pr * k) / 255;
+        let og_v = (og * mk + pg * k) / 255;
+        let ob_v = (ob * mk + pb * k) / 255;
+        let lr_v = (lr * mk + pr * k) / 255;
+        let lg_v = (lg * mk + pg * k) / 255;
+        let lb_v = (lb * mk + pb * k) / 255;
+
+        // 4. 断言：Ocean 偏冷（蓝通道 ≥ 绿通道），Land 偏暖（绿通道 ≥ 蓝通道）。
+        assert!(
+            ob_v >= og_v,
+            "Ocean 过雾霭后仍应偏冷（蓝≥绿），实得 o=({or_v},{og_v},{ob_v}) l=({lr_v},{lg_v},{lb_v})"
+        );
+        assert!(
+            lg_v >= lb_v,
+            "Land 过雾霭后应偏暖（绿≥蓝），实得 l=({lr_v},{lg_v},{lb_v})"
+        );
+        // 5. 可分辨：海陆蓝通道差 ≥ 8
+        assert!(
+            ob_v.abs_diff(lb_v) >= 8,
+            "海陆蓝通道差应 ≥ 8，实得 ob={ob_v} lb={lb_v}"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
     // 端到端回归：笔刷→数据→纹理（2026-10-14 用户反馈「笔刷涂大地图没变化」）。
     // 单测层验过 wv-terrain 改值；本测试验「数据 + 图像合成」两步的连贯性——
-    // 任何一环把数据吞了/拿错底图/类型 vs 高度口径不一致，都会在这挂掉。
-    // -----------------------------------------------------------------------
+    // 任何一环把数据吞了/拿错底图/类型 vs 高度口径不一致，都会让这测试挂掉。
+    // ---------------------------------------------------------------------------
     use wv_core::id::Id;
     use wv_core::terrain::TerrainData;
     use wv_terrain::edit::{Brush, Stroke};

@@ -33,12 +33,19 @@ use super::terrain_texture::TerrainTexture;
 /// 雾霭层 Z：等值线（0.04）与换级淡出精灵（0.05）之上、道路（0.09+）之下
 /// ——雾只属于底图，道路 / POI / 标注从雾上穿出保持清晰。
 pub const VEIL_Z: f32 = 0.06;
-/// 雾霭峰值不透明度：拉到最远时地形向纸面压 55%——山川骨架仍可辨，
-/// 但饱和度明显让位（拉满 1.0 会把底图整个洗掉，等于关掉地形）。
-pub const VEIL_MAX_ALPHA: f32 = 0.55;
-/// 雾霭起雾缩放锚点（= LOD 分界）：≤ 1.0（编辑级）无雾，≥ 3.0（国家级）全雾。
+/// 雾霭峰值不透明度：拉到最远时地形向纸面压 35%——山川骨架仍可辨、
+/// 「水蓝 / 陆绿」色相在缩放 4-5× 仍可分辨（2026-10-16 用户反馈：旧 0.55 + 远缩放档
+/// 提前吃满，会让海陆都退成纸色，违背「选了海洋必须显蓝」的契约）。
+/// 1.0 会把底图整个洗掉（等于关掉地形），0.20 以下基本看不出雾。
+pub const VEIL_MAX_ALPHA: f32 = 0.35;
+/// 雾霭起雾缩放锚点（= LOD 分界）：≤ 1.0（编辑级）无雾。
+///
+/// `VEIL_FAR_SCALE = 6.0`（2026-10-16 旧值 3.0）：旧值在 3× 已吃满雾，
+/// 浏览器/画布的常用缩放区间（3-5×）直接退成纸色；新值 6.0 让 1-4× 仍保留
+/// 大部分颜色，只有 6× 以上的「超远观感」才进入最大雾——与古舆图「放大看
+/// 细节 / 缩小看全局」的语义吻合。
 pub const VEIL_NEAR_SCALE: f32 = 1.0;
-pub const VEIL_FAR_SCALE: f32 = 3.0;
+pub const VEIL_FAR_SCALE: f32 = 6.0;
 
 /// 噪点平铺的世界边长：一张 256² 噪声贴图管 320 世界单位，
 /// 常用缩放跨距内噪点始终是「细颗粒」而不是大色块。
@@ -268,17 +275,41 @@ pub fn sync_atmosphere(
 mod tests {
     use super::*;
 
-    /// 雾霭曲线锚点：编辑级无雾、国家级全雾、中点线性、两端钳制。
+    /// 雾霭曲线锚点：编辑级无雾、远级全雾、中点线性、两端钳制。
+    ///
+    /// **2026-10-16 用户裁定改 FAR_SCALE 6.0 后**：中点不再是 2.0（旧的 `mid`），
+    /// 而是 `(NEAR + FAR) / 2 = 3.5`；测试按当前常量计算，避免常量改了测试
+    /// 不跟手。
     #[test]
     fn veil_alpha_is_zero_near_and_maxed_far() {
         assert_eq!(veil_alpha(0.1), 0.0, "最近端应无雾");
         assert_eq!(veil_alpha(VEIL_NEAR_SCALE), 0.0, "编辑级应无雾");
         assert_eq!(veil_alpha(VEIL_FAR_SCALE), VEIL_MAX_ALPHA, "国家级应全雾");
         assert_eq!(veil_alpha(99.0), VEIL_MAX_ALPHA, "越界应钳制");
-        let mid = veil_alpha(2.0);
+        let mid_scale = (VEIL_NEAR_SCALE + VEIL_FAR_SCALE) * 0.5;
+        let mid = veil_alpha(mid_scale);
         assert!(
             (mid - VEIL_MAX_ALPHA / 2.0).abs() < 1e-6,
-            "中点应线性一半：got {mid}"
+            "中点（scale={mid_scale}）应线性一半：got {mid}"
+        );
+    }
+
+    /// 远级退色场景（2026-10-16 用户反馈「选了海洋但颜色没变蓝」回归）：
+    /// 在用户实际缩放的 4.73×（顶栏 473%）下，veil_alpha 必须 < 0.45——
+    /// 旧 FAR_SCALE = 3.0 时 4.73× 直接吃满 0.55 雾，海陆都退成纸色，违背
+    /// 「选了海洋必须显蓝」的契约；新 FAR_SCALE = 6.0 把 4.73× 压到 0.261。
+    #[test]
+    fn veil_alpha_at_user_zoom_does_not_saturate() {
+        let alpha_at_user_zoom = veil_alpha(4.73);
+        assert!(
+            alpha_at_user_zoom < 0.45,
+            "缩放 4.73× 下雾应 < 0.45（实际 {alpha_at_user_zoom}），避免海陆退成纸色"
+        );
+        // 同理：在 5× 缩放下也保持在 0.5 以下。
+        assert!(
+            veil_alpha(5.0) < 0.50,
+            "缩放 5× 下雾应 < 0.50，got {}",
+            veil_alpha(5.0)
         );
     }
 
@@ -286,7 +317,7 @@ mod tests {
     /// 笔刷关着则与纯缩放曲线逐点一致（开关只该切雾，不该改曲线形状）。
     #[test]
     fn brush_enabled_disables_the_veil_at_every_zoom() {
-        for scale in [0.1, VEIL_NEAR_SCALE, 2.0, VEIL_FAR_SCALE, 99.0] {
+        for scale in [0.1, VEIL_NEAR_SCALE, 2.0, 3.5, VEIL_FAR_SCALE, 99.0] {
             assert_eq!(
                 veil_alpha_for(scale, true),
                 0.0,
