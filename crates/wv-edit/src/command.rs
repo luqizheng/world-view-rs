@@ -379,6 +379,303 @@ impl EditCommand for AddMapCommand {
 }
 
 // ---------------------------------------------------------------------------
+// 城市子图编辑命令（ADR-0022 · 2026-10-16）
+// ---------------------------------------------------------------------------
+
+use wv_core::base::geometry::Point;
+use wv_core::map::{GeometryData, IconShape, IconSpec, MapNode};
+use wv_core::Id;
+
+/// 新建城市子图（ADR-0022 D5 · `AddCityCommand`）。
+///
+/// 在指定父图下挂一张 `MapLevel::City` 子图，同时在父图上落一个 `IconSpec`
+///（默认菱形，`drill_into = city.id`）作为钻入入口——这是用户在父图上
+/// 「看见这座城」的唯一视觉锚点。
+///
+/// ## 与 `AddMapCommand` 的边界
+///
+/// `AddMapCommand` 是「建任意图」的通用入口（任意 `MapLevel`、可选 terrain）；
+/// `AddCityCommand` 是「建城市图」的特化版本：
+/// - 强制 `level = MapLevel::City`（建错了 call site 应自行校验）；
+/// - **不**带 terrain 预填（城市图继承父图底图即可，per ADR-0009 §7）；
+/// - 自动落 `IconSpec`（普通子图不需要这个）。
+///
+/// ## 河流复制
+///
+/// M2 阶段**不**复制父图河流入子图——这是 M3 (`D3`) 的语义；
+/// 本命令 apply 仅挂图标 + 注册子图节点。M3 接 D3 时在本命令的 `apply`
+/// 末尾追加 clipping 步骤即可，向后兼容。
+///
+/// ## 脏路径
+///
+/// - `maps`（新增子图节点的 `index.yaml`）
+/// - `maps/{parent_id}/index.yaml`（父图加了 icons / children）
+#[derive(Debug)]
+pub struct AddCityCommand {
+    pub city: MapNode,
+    /// 钻入图标的 ID（`Id` 字符集 `[A-Za-z0-9_]`）。
+    pub icon_id: Id,
+    /// 钻入图标的形状（默认菱形；可用 `IconShape::City` 之类预留枚举）。
+    pub icon_shape: IconShape,
+    /// 钻入图标的中心锚点（[0,1]²，父图 extent 归一化）。默认 `(0.5, 0.5)`。
+    pub icon_anchor: [f32; 2],
+}
+
+impl AddCityCommand {
+    pub fn new(city: MapNode, icon_id: Id, icon_shape: IconShape) -> Self {
+        Self {
+            city,
+            icon_id,
+            icon_shape,
+            icon_anchor: [0.5, 0.5],
+        }
+    }
+}
+
+impl EditCommand for AddCityCommand {
+    fn label(&self) -> String {
+        format!("新建城市「{}」", self.city.name)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        if world.maps.iter().any(|m| m.id == self.city.id) {
+            return Err(EditError::Precondition(format!(
+                "城市 `{}` 已存在",
+                self.city.id
+            )));
+        }
+        let parent_id = self
+            .city
+            .parent
+            .clone()
+            .ok_or_else(|| EditError::Precondition("城市必须挂在某父图下".into()))?;
+        let parent = world
+            .maps
+            .iter_mut()
+            .find(|m| m.id == parent_id)
+            .ok_or_else(|| EditError::TargetMissing(format!("父图 `{parent_id}`")))?;
+        parent.icons.push(IconSpec {
+            id: self.icon_id.clone(),
+            anchor: Some(self.icon_anchor),
+            shape: self.icon_shape,
+            size: None,
+            color: None,
+            drill_into: Some(self.city.id.clone()),
+        });
+        parent.children.push(self.city.id.clone());
+
+        let city_id = self.city.id.clone();
+        world.maps.push(self.city.clone());
+        Ok(vec![
+            "maps".to_owned(),
+            format!("maps/{parent_id}/index.yaml"),
+            format!("maps/{city_id}/index.yaml"),
+        ])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let existed = world
+            .maps
+            .iter()
+            .position(|m| m.id == self.city.id)
+            .map(|i| world.maps.remove(i))
+            .is_some();
+        if !existed {
+            return Err(EditError::TargetMissing(format!(
+                "城市 `{}` 不存在，无法撤销新建",
+                self.city.id
+            )));
+        }
+        let parent_id_ref = self
+            .city
+            .parent
+            .as_ref()
+            .ok_or_else(|| EditError::Precondition("城市必须挂在某父图下".into()))?;
+        if let Some(parent) = world.maps.iter_mut().find(|m| &m.id == parent_id_ref) {
+            parent.children.retain(|c| c != &self.city.id);
+            parent
+                .icons
+                .retain(|ic| ic.drill_into.as_ref() != Some(&self.city.id));
+        }
+        Ok(())
+    }
+}
+
+/// 平移城市（ADR-0022 D2 · `MoveCityCommand`）。
+///
+/// 把城市在父图坐标系里平移 `delta`（wu）：
+/// - `extent.origin` += delta（若 `Some`）
+/// - `outline_polygon`（若 `Some` 且为 `Polygon` 变体）所有顶点 += delta
+/// - 子图 LOCAL 几何（街道、地点、building）**不动**——per ADR-0009 §9 「本图 local」
+/// - 引用该城市的 `Place` / `Track` / `Faction` **不动**——它们是独立实体
+///
+/// ## revert
+///
+/// 缓存整张 `MapNode` 的快照，`revert` 时把 `extent` 与 `outline_polygon` 还原；
+/// 其余字段（icons / layers / children / 名字等）不参与同步，保留当前值。
+/// 这避免了「撤回期间又有人改了同一节点」导致的字段级不一致。
+///
+/// ## 失败语义
+///
+/// - 城市不存在：`TargetMissing`
+/// - `outline_polygon = Some(Points)` 或 `Ref`：`Precondition`（不支持变体）
+#[derive(Debug)]
+pub struct MoveCityCommand {
+    pub city_id: Id,
+    pub delta: Point,
+    before_snapshot: std::sync::Mutex<Option<MapNode>>,
+}
+
+impl MoveCityCommand {
+    pub fn new(city_id: Id, delta: Point) -> Self {
+        Self {
+            city_id,
+            delta,
+            before_snapshot: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for MoveCityCommand {
+    fn label(&self) -> String {
+        format!(
+            "平移城市「{}」by ({:.1}, {:.1})",
+            self.city_id, self.delta.x, self.delta.y
+        )
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let node = world
+            .maps
+            .iter_mut()
+            .find(|m| m.id == self.city_id)
+            .ok_or_else(|| EditError::TargetMissing(format!("城市 {}", self.city_id)))?;
+        // 缓存快照。
+        *self
+            .before_snapshot
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))? = Some(node.clone());
+        // 平移 extent.origin。
+        if let Some(ext) = node.extent.as_mut() {
+            let origin = ext.origin.unwrap_or(Point::ORIGIN);
+            ext.origin = Some(Point {
+                x: origin.x + self.delta.x,
+                y: origin.y + self.delta.y,
+            });
+        }
+        // 平移 outline_polygon（仅 Polygon 变体）。
+        if let Some(poly) = node.outline_polygon.as_mut() {
+            match poly {
+                GeometryData::Polygon(v) => {
+                    for chunk in v.chunks_exact_mut(2) {
+                        chunk[0] += self.delta.x;
+                        chunk[1] += self.delta.y;
+                    }
+                }
+                GeometryData::Points(_) | GeometryData::Ref(_) => {
+                    return Err(EditError::Precondition(format!(
+                        "城市「{}」的 outline_polygon 不是 Polygon 变体，不支持平移",
+                        self.city_id
+                    )));
+                }
+            }
+        }
+        Ok(vec![format!("maps/{}/index.yaml", self.city_id)])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let snap = self
+            .before_snapshot
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
+            .take()
+            .ok_or_else(|| EditError::Precondition("MoveCity 尚未 apply".into()))?;
+        let node = world
+            .maps
+            .iter_mut()
+            .find(|m| m.id == self.city_id)
+            .ok_or_else(|| EditError::TargetMissing(format!("城市 {}", self.city_id)))?;
+        node.extent = snap.extent;
+        node.outline_polygon = snap.outline_polygon;
+        Ok(())
+    }
+}
+
+/// 重画城市轮廓（ADR-0022 D5 · `SetCityOutlineCommand`）。
+///
+/// 用新 polygon 覆盖 `outline_polygon`（允许 `None` 把轮廓擦掉）；
+/// `revert` 缓存旧值原子还原。
+///
+/// ## 用途
+///
+/// 用户在父图上重画轮廓（拖 4 个角点编辑）；与 `AddCityCommand` 的
+/// `outline_polygon` 字段共享同一 `GeometryData::Polygon` 变体约定。
+#[derive(Debug)]
+pub struct SetCityOutlineCommand {
+    pub city_id: Id,
+    pub new_polygon: Option<GeometryData>,
+    before: std::sync::Mutex<Option<Option<GeometryData>>>,
+}
+
+impl SetCityOutlineCommand {
+    pub fn new(city_id: Id, new_polygon: Option<GeometryData>) -> Self {
+        Self {
+            city_id,
+            new_polygon,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for SetCityOutlineCommand {
+    fn label(&self) -> String {
+        if self.new_polygon.is_some() {
+            format!("重画城市「{}」轮廓", self.city_id)
+        } else {
+            format!("擦除城市「{}」轮廓", self.city_id)
+        }
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let node = world
+            .maps
+            .iter_mut()
+            .find(|m| m.id == self.city_id)
+            .ok_or_else(|| EditError::TargetMissing(format!("城市 {}", self.city_id)))?;
+        if let Some(GeometryData::Polygon(v)) = &self.new_polygon {
+            if v.len() % 2 != 0 || v.len() < 6 {
+                return Err(EditError::Precondition(
+                    "outline_polygon 必须是 ≥3 顶点的扁平坐标对".into(),
+                ));
+            }
+        }
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))? =
+            Some(node.outline_polygon.clone());
+        node.outline_polygon = self.new_polygon.clone();
+        Ok(vec![format!("maps/{}/index.yaml", self.city_id)])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let prev = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
+            .take()
+            .ok_or_else(|| EditError::Precondition("SetCityOutline 尚未 apply".into()))?;
+        let node = world
+            .maps
+            .iter_mut()
+            .find(|m| m.id == self.city_id)
+            .ok_or_else(|| EditError::TargetMissing(format!("城市 {}", self.city_id)))?;
+        node.outline_polygon = prev;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 势力编辑命令（S12 v0.2）
 // ---------------------------------------------------------------------------
 
@@ -2069,6 +2366,7 @@ mod tests {
             unit_per_km: None,
             orientation: 0.0,
             base: None,
+            outline_polygon: None,
         });
 
         let cmd = SetMapOrientationCommand::new(Id::new_unchecked("world_main"), 90.0);
@@ -2118,6 +2416,7 @@ mod tests {
             unit_per_km: None,
             orientation: 0.0,
             base: None,
+            outline_polygon: None,
         }
     }
 
@@ -2523,5 +2822,273 @@ mod tests {
         assert!(dirty.iter().all(|p| p.starts_with("regions")));
         assert!(!dirty.iter().any(|p| p.starts_with("maps/")));
         assert!(!dirty.iter().any(|p| p.starts_with("geometry/")));
+    }
+
+    // ====== 城市子图命令（ADR-0022 D2 / D5）========================
+
+    fn city_node(
+        id: &str,
+        parent: Option<&str>,
+        outline: Option<GeometryData>,
+    ) -> wv_core::map::MapNode {
+        wv_core::map::MapNode {
+            id: wv_core::Id::new_unchecked(id),
+            name: format!("城{id}"),
+            level: wv_core::map::MapLevel::City,
+            parent: parent.map(wv_core::Id::new_unchecked),
+            extent: Some(wv_core::map::Extent::sized(1024.0, 1024.0)),
+            outline_polygon: outline,
+            ..wv_core::map::MapNode::default()
+        }
+    }
+
+    fn rect_polygon(w: f32, h: f32) -> GeometryData {
+        GeometryData::Polygon(vec![0.0, 0.0, w, 0.0, w, h, 0.0, h])
+    }
+
+    #[test]
+    fn add_city_pushes_node_and_icon_and_marks_dirty() {
+        let mut w = World::default();
+        w.maps
+            .push(map_node("world_main", None, wv_core::map::MapLevel::World));
+        let city = city_node(
+            "map_city_a",
+            Some("world_main"),
+            Some(rect_polygon(100.0, 100.0)),
+        );
+        let cmd = AddCityCommand::new(
+            city.clone(),
+            wv_core::Id::new_unchecked("icon_city_a"),
+            wv_core::map::IconShape::Diamond,
+        );
+        let dirty = cmd.apply(&mut w).expect("apply");
+        // 城市节点 + 父图 icons 都该落地。
+        assert_eq!(w.maps.len(), 2, "世界图 + 城市图");
+        assert!(
+            w.maps
+                .iter()
+                .any(|m| m.id == wv_core::Id::new_unchecked("map_city_a")),
+            "城市子图应在"
+        );
+        let parent = w
+            .maps
+            .iter()
+            .find(|m| m.id == wv_core::Id::new_unchecked("world_main"))
+            .expect("父图应在");
+        assert_eq!(parent.children.len(), 1, "父图 children 应含城市");
+        assert_eq!(parent.icons.len(), 1, "父图 icons 应含钻入图标");
+        assert_eq!(
+            parent.icons[0].drill_into.as_ref().map(|i| i.as_str()),
+            Some("map_city_a"),
+            "图标 drill_into 应指向城市"
+        );
+        // 脏路径：maps + 父图 index + 子图 index
+        assert!(dirty.contains(&"maps".to_owned()));
+        assert!(dirty.contains(&"maps/world_main/index.yaml".to_owned()));
+        assert!(dirty.contains(&"maps/map_city_a/index.yaml".to_owned()));
+    }
+
+    #[test]
+    fn add_city_revert_removes_node_and_parent_icon() {
+        let mut w = World::default();
+        w.maps
+            .push(map_node("world_main", None, wv_core::map::MapLevel::World));
+        let cmd = AddCityCommand::new(
+            city_node("map_city_a", Some("world_main"), None),
+            wv_core::Id::new_unchecked("icon_city_a"),
+            wv_core::map::IconShape::Diamond,
+        );
+        cmd.apply(&mut w).expect("apply");
+        assert_eq!(w.maps.len(), 2);
+        cmd.revert(&mut w).expect("revert");
+        assert_eq!(w.maps.len(), 1, "revert 应移除城市");
+        let parent = w
+            .maps
+            .iter()
+            .find(|m| m.id == wv_core::Id::new_unchecked("world_main"))
+            .expect("父图应在");
+        assert!(parent.children.is_empty(), "父图 children 应清空");
+        assert!(parent.icons.is_empty(), "父图 icons 应清空");
+    }
+
+    #[test]
+    fn add_city_rejects_duplicate_id() {
+        let mut w = World::default();
+        w.maps
+            .push(map_node("map_city_a", None, wv_core::map::MapLevel::World));
+        let cmd = AddCityCommand::new(
+            city_node("map_city_a", Some("map_city_a"), None),
+            wv_core::Id::new_unchecked("icon_dup"),
+            wv_core::map::IconShape::Diamond,
+        );
+        assert!(cmd.apply(&mut w).is_err(), "重复 ID 应 Precondition");
+    }
+
+    #[test]
+    fn add_city_requires_parent() {
+        let mut w = World::default();
+        let mut city = city_node("map_orphan", None, None);
+        city.parent = None;
+        let cmd = AddCityCommand::new(
+            city,
+            wv_core::Id::new_unchecked("icon_orphan"),
+            wv_core::map::IconShape::Diamond,
+        );
+        assert!(cmd.apply(&mut w).is_err(), "无 parent 应 Precondition");
+    }
+
+    #[test]
+    fn move_city_translates_origin_and_outline_polygon() {
+        let mut w = World::default();
+        let city = city_node(
+            "map_city_a",
+            Some("world_main"),
+            Some(rect_polygon(100.0, 200.0)),
+        );
+        w.maps.push(city.clone());
+        let delta = wv_core::geometry::Point::new(10.0, 20.0);
+        let cmd = MoveCityCommand::new(wv_core::Id::new_unchecked("map_city_a"), delta);
+        cmd.apply(&mut w).expect("apply");
+        let after = w
+            .maps
+            .iter()
+            .find(|m| m.id == wv_core::Id::new_unchecked("map_city_a"))
+            .expect("城市应在");
+        // extent.origin: None → (10, 20)
+        let origin = after.extent.as_ref().unwrap().origin.unwrap();
+        assert!(
+            (origin.x - 10.0).abs() < 1e-6,
+            "x 应 +10，实得 {}",
+            origin.x
+        );
+        assert!(
+            (origin.y - 20.0).abs() < 1e-6,
+            "y 应 +20，实得 {}",
+            origin.y
+        );
+        // outline_polygon 各顶点平移
+        let poly = match after.outline_polygon.as_ref().unwrap() {
+            GeometryData::Polygon(v) => v.clone(),
+            _ => panic!("outline 应是 Polygon"),
+        };
+        assert_eq!(
+            poly,
+            vec![10.0, 20.0, 110.0, 20.0, 110.0, 220.0, 10.0, 220.0]
+        );
+    }
+
+    #[test]
+    fn move_city_revert_restores_origin_and_polygon() {
+        let mut w = World::default();
+        let city = city_node(
+            "map_city_a",
+            Some("world_main"),
+            Some(rect_polygon(100.0, 200.0)),
+        );
+        w.maps.push(city.clone());
+        let delta = wv_core::geometry::Point::new(10.0, 20.0);
+        let cmd = MoveCityCommand::new(wv_core::Id::new_unchecked("map_city_a"), delta);
+        cmd.apply(&mut w).expect("apply");
+        cmd.revert(&mut w).expect("revert");
+        let after = w
+            .maps
+            .iter()
+            .find(|m| m.id == wv_core::Id::new_unchecked("map_city_a"))
+            .expect("城市应在");
+        // 初始 extent 由 Extent::sized() 构造（origin = None）；revert 应回 None。
+        assert!(
+            after.extent.as_ref().unwrap().origin.is_none(),
+            "revert 应把 origin 还原为 None（city_node 默认用 Extent::sized）"
+        );
+        let poly = match after.outline_polygon.as_ref().unwrap() {
+            GeometryData::Polygon(v) => v.clone(),
+            _ => panic!("outline 应是 Polygon"),
+        };
+        assert_eq!(poly, vec![0.0, 0.0, 100.0, 0.0, 100.0, 200.0, 0.0, 200.0]);
+    }
+
+    #[test]
+    fn move_city_no_origin_no_outline_is_noop() {
+        let mut w = World::default();
+        let mut city = city_node("map_bare", None, None);
+        city.extent = None;
+        city.outline_polygon = None;
+        w.maps.push(city);
+        let cmd = MoveCityCommand::new(
+            wv_core::Id::new_unchecked("map_bare"),
+            wv_core::geometry::Point::new(10.0, 20.0),
+        );
+        // 既无 extent 又无 outline：apply 不应 panic，应走「无字段可动」通路。
+        cmd.apply(&mut w).expect("apply 静默成功");
+        cmd.revert(&mut w).expect("revert");
+    }
+
+    #[test]
+    fn move_city_missing_id_errors() {
+        let mut w = World::default();
+        let cmd = MoveCityCommand::new(
+            wv_core::Id::new_unchecked("ghost"),
+            wv_core::geometry::Point::new(1.0, 1.0),
+        );
+        assert!(cmd.apply(&mut w).is_err(), "不存在应 TargetMissing");
+    }
+
+    #[test]
+    fn set_city_outline_replaces_polygon_and_reverts_to_old() {
+        let mut w = World::default();
+        let old_poly = rect_polygon(100.0, 100.0);
+        let city = city_node("map_city_a", Some("world_main"), Some(old_poly.clone()));
+        w.maps.push(city);
+        let new_poly = GeometryData::Polygon(vec![5.0, 5.0, 50.0, 5.0, 50.0, 50.0]);
+        let cmd = SetCityOutlineCommand::new(
+            wv_core::Id::new_unchecked("map_city_a"),
+            Some(new_poly.clone()),
+        );
+        cmd.apply(&mut w).expect("apply");
+        let after = w
+            .maps
+            .iter()
+            .find(|m| m.id == wv_core::Id::new_unchecked("map_city_a"))
+            .expect("城市应在");
+        assert_eq!(after.outline_polygon.as_ref().unwrap(), &new_poly);
+        cmd.revert(&mut w).expect("revert");
+        let reverted = w
+            .maps
+            .iter()
+            .find(|m| m.id == wv_core::Id::new_unchecked("map_city_a"))
+            .expect("城市应在");
+        assert_eq!(reverted.outline_polygon.as_ref().unwrap(), &old_poly);
+    }
+
+    #[test]
+    fn set_city_outline_to_none_erases_polygon() {
+        let mut w = World::default();
+        let city = city_node(
+            "map_city_a",
+            Some("world_main"),
+            Some(rect_polygon(100.0, 100.0)),
+        );
+        w.maps.push(city);
+        let cmd = SetCityOutlineCommand::new(wv_core::Id::new_unchecked("map_city_a"), None);
+        cmd.apply(&mut w).expect("apply");
+        let after = w
+            .maps
+            .iter()
+            .find(|m| m.id == wv_core::Id::new_unchecked("map_city_a"))
+            .expect("城市应在");
+        assert!(after.outline_polygon.is_none(), "擦除后应为 None");
+    }
+
+    #[test]
+    fn set_city_outline_rejects_too_few_vertices() {
+        let mut w = World::default();
+        let city = city_node("map_city_a", Some("world_main"), None);
+        w.maps.push(city);
+        let bad = GeometryData::Polygon(vec![0.0, 0.0, 1.0, 1.0]); // 仅 2 顶点
+        let cmd = SetCityOutlineCommand::new(wv_core::Id::new_unchecked("map_city_a"), Some(bad));
+        assert!(
+            cmd.apply(&mut w).is_err(),
+            "<3 顶点的 polygon 应 Precondition 拒绝"
+        );
     }
 }
