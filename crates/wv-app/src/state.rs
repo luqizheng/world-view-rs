@@ -238,6 +238,13 @@ pub struct ViewState {
     pub buildings_visible: bool,
     /// 势力多边形叠加层是否可见（S12）。
     pub factions_visible: bool,
+    /// 参照网格（逐格编辑网格叠加层）是否可见。
+    ///
+    /// 2026-10-15 起**与笔刷解耦**（33b65b9：不再是「笔刷开着恒显」的或分支）；
+    /// 2026-10-16 字段本身从 [`BrushState`] 搬入视图态——开关 UI 也随之上
+    /// 地图工具条（`map_controls` 瓷砖），它本来就是「看图方式」而非「笔刷参数」，
+    /// 与 `labels_visible` 等同族。
+    pub grid_lines: bool,
     /// 鼠标在地图上的世界坐标（顶栏坐标显示用）。
     pub cursor_world: Option<Vec2>,
     /// 主窗口逻辑尺寸——分级缩放区间（`zoom_level`）算 `fit` 需要它。
@@ -264,6 +271,7 @@ impl Default for ViewState {
             places_visible: true,
             buildings_visible: true,
             factions_visible: true,
+            grid_lines: false,
             cursor_world: None,
             window_size: Vec2::new(1280.0, 800.0),
             current_map: "world_main".into(),
@@ -413,9 +421,6 @@ pub struct BrushState {
     pub painting: bool,
     /// 笔刷是否启用。
     pub enabled: bool,
-    /// 手动显示逐格编辑网格（plan v0.1 D4）。笔刷启用时网格**恒显**；
-    /// 本字段是「不开笔刷也想看格子」的覆盖开关，两态相或。
-    pub grid_lines: bool,
 }
 
 /// 测量工具模式（2026-10-14）。
@@ -506,7 +511,6 @@ impl Default for BrushState {
             painting: false,
             // Google 式默认手势是左键拖动平移；笔刷必须显式开启，避免一开图就误改。
             enabled: false,
-            grid_lines: false,
         }
     }
 }

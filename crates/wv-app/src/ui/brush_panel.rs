@@ -121,16 +121,6 @@ pub fn panel_brush(
             });
             ui.add_space(space::SM);
 
-            // ── GRID 独立开关（用户新目标，2026-10-15）──
-            // 此前 Grid 段嵌在 Brush/Grid segmented control 里——视觉上
-            // "笔刷关 → Grid 段不可点"，作者无法单独控制。拆成独立
-            // checkbox：与笔刷完全无关（已在 grid_lines.rs 33b65b9
-            // 解耦可见性），现在 UI 也解耦。
-            ui.checkbox(&mut brush.grid_lines, "Grid (independent of brush)")
-                .changed();
-
-            ui.add_space(space::SM);
-
             // ── TOOL：直接涂类型 vs 意图生成（意图笔刷 plan v0.1）──
             ui.label(
                 egui::RichText::new("TOOL")
@@ -338,31 +328,14 @@ fn slider_row(ui: &mut egui::Ui, shell: &UiShell, label: &str, value: &str, slid
 mod tests {
     use crate::state::{BrushState, BrushTool};
 
-    /// `BrushState::default()` 字段：笔刷关、网格关——与用户新目标一致
-    /// （\"现在时只有笔刷的时候出现\"已修复：网格独立默认关，但 UI
-    /// 现在能让用户在任何时候启用）。
+    /// `BrushState::default()` 字段：笔刷默认关（Google 式手势——左键拖动
+    /// 平移），默认工具 = 涂抹、默认材质 = 草原。
     #[test]
-    fn brush_state_default_independent_grid_and_brush() {
+    fn brush_state_default_is_off_with_paint_tool() {
         let b = BrushState::default();
         assert!(!b.enabled, "笔刷默认关");
-        assert!(!b.grid_lines, "网格默认关——与笔刷独立");
         assert_eq!(b.kind, 3, "默认 kind=草原");
         assert_eq!(b.tool, BrushTool::PaintKind, "默认工具=Paint");
         assert!((b.strength - 1.0).abs() < 1e-6, "默认强度 1.0");
-    }
-
-    /// 网格独立读写：toggle grid_lines 不应影响 brush.enabled。
-    /// （语义在 `grid_lines.rs::grid_lines_visible` 已锁定；这里确认字段本身
-    /// 是 plain bool，两个 toggle 各自独立。）
-    #[test]
-    fn grid_lines_can_toggle_independently_of_brush_enabled() {
-        let mut b = BrushState::default();
-        assert!(!b.enabled && !b.grid_lines);
-        b.enabled = true;
-        assert!(b.enabled && !b.grid_lines, "开笔刷不自动开网格");
-        b.grid_lines = true;
-        assert!(b.enabled && b.grid_lines, "两态可同时为 true");
-        b.grid_lines = false;
-        assert!(b.enabled && !b.grid_lines, "关网格不自动关笔刷");
     }
 }
