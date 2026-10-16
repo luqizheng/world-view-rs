@@ -106,6 +106,11 @@ pub enum CommandId {
     JumpToEnd,
     /// 笔刷半径增减（像素步长）。
     BrushRadius(i8),
+    /// 选中笔刷工具（索引对应 [`crate::state::BrushTool::ALL`]）。
+    /// 选中即激活笔刷——「选工具 = 准备画」，与面板瓷砖点击同语义。
+    SelectBrushTool(u8),
+    /// 显示 / 隐藏参照网格（`ViewState.grid_lines`，地图工具条瓷砖同源）。
+    ToggleGrid,
     /// 显隐某个面板。
     TogglePanel(Panel),
     /// 重置所有面板位置。
@@ -292,6 +297,12 @@ impl CommandRegistry {
             Some("F"),
         );
         push(
+            CommandId::ToggleGrid,
+            CommandGroup::View,
+            I18nKey::CmdToggleGrid,
+            None,
+        );
+        push(
             CommandId::Zoom(1),
             CommandGroup::View,
             I18nKey::CmdZoomIn,
@@ -427,6 +438,26 @@ impl CommandRegistry {
             I18nKey::CmdBrushRadiusDown,
             Some("["),
         );
+        // 笔刷工具 7 条（索引 = BrushTool::ALL 下标，命令面板与面板瓷砖同一口径）
+        for (i, key) in [
+            I18nKey::CmdSelectBrushToolPaint,
+            I18nKey::CmdSelectBrushToolRange,
+            I18nKey::CmdSelectBrushToolPlateau,
+            I18nKey::CmdSelectBrushToolHills,
+            I18nKey::CmdSelectBrushToolVolcano,
+            I18nKey::CmdSelectBrushToolLake,
+            I18nKey::CmdSelectBrushToolRiver,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            push(
+                CommandId::SelectBrushTool(i as u8),
+                CommandGroup::Object,
+                key,
+                None,
+            );
+        }
 
         // 导航（v0.2 §B）
         push(
@@ -556,6 +587,28 @@ mod tests {
         assert!(
             hits.iter().any(|c| c.id == CommandId::OpenCommandPalette),
             "应能按快捷键文本搜到命令面板"
+        );
+    }
+
+    /// 7 个笔刷工具全部注册且中文可搜（「零隐藏功能」D5：工具瓷砖之外，
+    /// Ctrl+K 是第二入口）；网格开关注册在视图组。
+    #[test]
+    fn every_brush_tool_and_grid_toggle_are_registered_and_searchable() {
+        let all = CommandRegistry::all();
+        for i in 0..crate::state::BrushTool::ALL.len() as u8 {
+            assert!(
+                all.iter()
+                    .any(|c| matches!(c.id, CommandId::SelectBrushTool(x) if x == i)),
+                "笔刷工具 {i} 未注册"
+            );
+        }
+        assert!(all.iter().any(|c| c.id == CommandId::ToggleGrid));
+        // 中文子串搜到具体工具（ALL[1] = 山脉）。
+        let hits = CommandRegistry::search("山脉", &[]);
+        assert!(
+            hits.iter()
+                .any(|c| matches!(c.id, CommandId::SelectBrushTool(1))),
+            "搜「山脉」应命中笔刷工具"
         );
     }
 

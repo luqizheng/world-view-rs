@@ -21,7 +21,8 @@
 //! - 右侧垂直居中、距窗体右缘 18px（原型 `right: 18px`）。
 //! - 圆角大框包裹整列：`panel_bg` 底 + `border_subtle` 描边 + `radius::PANEL` 圆角 + 投影。
 //! - 瓷砖 34×34px（原型 `.map-controls .button`），间距 4px，内边距 5px。
-//! - 5 块 = 2 测量工具 + 1 分隔 + 3 缩放/导航（笔刷切换已移除）。
+//! - 6 块 = 2 测量工具 + 1 分隔 + 1 参照网格开关（2026-10-16 自地形设计器
+//!   迁入）+ 3 缩放/导航（笔刷切换已移除）。
 //! - 活动态：`shell.accent()` 蓝底 + 白图标。
 //! - 非活动态：`shell.raised_bg()` 灰底 + 白图标。
 //!
@@ -40,7 +41,7 @@ use crate::ui_shell::StartupLoadRequest;
 
 use super::shell::UiShell;
 use super::widgets::{icon_image, ToolIcon};
-use super::{ICON_LINE, ICON_MAXIMIZE, ICON_SQUARE, ICON_ZOOM_IN, ICON_ZOOM_OUT};
+use super::{ICON_GRID, ICON_LINE, ICON_MAXIMIZE, ICON_SQUARE, ICON_ZOOM_IN, ICON_ZOOM_OUT};
 
 /// 单瓷砖边长 34px（原型 `.map-controls .button`）。
 const TILE_SIZE: f32 = 34.0;
@@ -164,8 +165,24 @@ pub fn map_controls(
                     ui.separator();
                     ui.add_space(SEPARATOR_PAD);
 
-                    // ====== 缩放 / 导航组：＋ / − / 全图 ======
-                    // ③ ＋ — 放大（步进 1.6×，夹在当前级区间内）。
+                    // ====== 视图 / 导航组：网格 / ＋ / − / 全图 ======
+                    // ③ 网格 — 参照网格开关。状态在 `ViewState.grid_lines`
+                    //   （2026-10-16 从地形设计器迁来——它是「看图方式」，
+                    //   与缩放同族，不是笔刷参数）。
+                    tile_button(
+                        ui,
+                        &shell,
+                        ToolIcon::Svg(ICON_GRID),
+                        "显示参照网格（独立于笔刷）",
+                        view.grid_lines,
+                        true,
+                        accent,
+                        raised_bg,
+                        || {
+                            view.grid_lines = !view.grid_lines;
+                        },
+                    );
+                    // ④ ＋ — 放大（步进 1.6×，夹在当前级区间内）。
                     tile_button(
                         ui,
                         &shell,
@@ -180,7 +197,7 @@ pub fn map_controls(
                             set_map_scale(&mut view, &mut cameras, next, zoom);
                         },
                     );
-                    // ④ − — 缩小（步进 1.6×，夹在当前级区间内）。
+                    // ⑤ − — 缩小（步进 1.6×，夹在当前级区间内）。
                     tile_button(
                         ui,
                         &shell,
@@ -195,7 +212,7 @@ pub fn map_controls(
                             set_map_scale(&mut view, &mut cameras, next, zoom);
                         },
                     );
-                    // ⑤ 全图 — 缩放到当前级 fit + 把相机中心钉到帧中心。
+                    // ⑥ 全图 — 缩放到当前级 fit + 把相机中心钉到帧中心。
                     tile_button(
                         ui,
                         &shell,
@@ -298,22 +315,23 @@ mod map_control_tests {
         assert!((s - zoom.max).abs() < 1e-6, "got {s}, max {}", zoom.max);
     }
 
-    /// 视觉量计数（对齐原型 `.map-controls`）：5 个独立瓷砖 + 1 分隔。
-    /// 内容高度 = 5×TILE + 4×GAP + 2×SEPARATOR_PAD。
+    /// 视觉量计数（对齐原型 `.map-controls`）：6 个独立瓷砖 + 1 分隔。
+    /// 内容高度 = 6×TILE + 5×GAP + 2×SEPARATOR_PAD。
     ///
     /// 不直接渲染——egui 0.36 在 unit 上下文没有 GPU surface；
     /// 这里钉的是 layout 数学校验：模块顶部常量（`TILE_SIZE` = 34、
     /// `TILE_GAP` = 4、`SEPARATOR_PAD` = 8）若被改了，这里必须同步改。
     #[test]
     fn toolbar_layout_sums_to_expected_total_height() {
-        // 5 瓷砖 × 34 + 4 个 tile gap × 4 + 2 × 8 = 170 + 16 + 16 = 202
+        // 6 瓷砖 × 34 + 5 个 tile gap × 4 + 2 × 8 = 204 + 20 + 16 = 240
+        // （2026-10-16 加第 6 块「参照网格」瓷砖，自 5 块 202 迁移）
         const TILE: f32 = 34.0;
         const GAP: f32 = 4.0;
         const SEP: f32 = 8.0;
-        let total = 5.0 * TILE + 4.0 * GAP + 2.0 * SEP;
+        let total = 6.0 * TILE + 5.0 * GAP + 2.0 * SEP;
         assert!(
-            (total - 202.0).abs() < 1e-3,
-            "总额不等于 202：模块顶部常量（TILE_SIZE/TILE_GAP/SEPARATOR_PAD）改了 \
+            (total - 240.0).abs() < 1e-3,
+            "总额不等于 240：模块顶部常量（TILE_SIZE/TILE_GAP/SEPARATOR_PAD）改了 \
              必须在测试里同步更新。got {total}",
         );
     }

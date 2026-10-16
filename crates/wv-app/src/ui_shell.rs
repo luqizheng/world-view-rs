@@ -1175,6 +1175,15 @@ fn apply_pending_commands(
         CommandId::BrushRadius(d) => {
             brush.radius = (brush.radius + if d > 0 { 8.0 } else { -8.0 }).clamp(8.0, 600.0);
         }
+        CommandId::SelectBrushTool(i) => {
+            // 越界索引静默忽略（与 SetViewMode 同口径）；选中即激活笔刷——
+            // 「选工具 = 准备画」，与面板瓷砖点击同一语义（brush_panel::tool_group_row）。
+            if let Some(t) = crate::state::BrushTool::ALL.get(i as usize) {
+                brush.tool = *t;
+                brush.enabled = true;
+            }
+        }
+        CommandId::ToggleGrid => view.grid_lines = !view.grid_lines,
         // 撤销 / 重做走 `editing` 的公开入口（同一份逻辑，不复制）。
         CommandId::Undo | CommandId::Redo => {
             let redo = matches!(id, CommandId::Redo);
@@ -1565,6 +1574,46 @@ mod tests {
             "打开工程应排队「打开」对话框意图"
         );
         assert!(task.task.is_none(), "分发器不得直接发起 rfd 对话框");
+    }
+
+    #[test]
+    fn select_brush_tool_command_picks_tool_and_activates_brush() {
+        // 命令面板 / 未来快捷键选工具的唯一路径：索引对 `BrushTool::ALL`，
+        // 选中即激活笔刷（与面板瓷砖点击同语义）。越界索引不 panic。
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = dispatcher_world(None, false, CommandId::SelectBrushTool(1));
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+        let brush = world.resource::<crate::state::BrushState>();
+        assert_eq!(
+            brush.tool,
+            crate::state::BrushTool::MountainRange,
+            "索引 1 应选中山脉"
+        );
+        assert!(brush.enabled, "选工具 = 激活笔刷");
+
+        // 越界索引：忽略而不改状态（不 panic 也不误切）。
+        let mut world = dispatcher_world(None, false, CommandId::SelectBrushTool(99));
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+        let brush = world.resource::<crate::state::BrushState>();
+        assert_eq!(brush.tool, crate::state::BrushTool::PaintKind, "越界不改工具");
+        assert!(!brush.enabled, "越界不激活笔刷");
+    }
+
+    #[test]
+    fn toggle_grid_command_flips_the_view_flag() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = dispatcher_world(None, false, CommandId::ToggleGrid);
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+        assert!(
+            world.resource::<ViewState>().grid_lines,
+            "默认关 → 执行一次应为开"
+        );
     }
 
     #[test]
