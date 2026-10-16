@@ -156,13 +156,19 @@ impl MapBase {
     /// 该底图的单格「`(height, kind)`」。
     ///
     /// 数值与 `wv-app::NewMapPrefill::cell()` 历史口径同源：
-    /// - 海洋取 `-120` m（VectorFlat 双线性填充下足够深的纯水，又不至于与
-    ///   周边拉出夸张等值线）；
-    /// - 陆地取 `+80` m（稳居海平面之上、留出向下挖河的余量）。
+    /// - 海洋取 `-3500` m：`water_shade_at(-3500)` 走 t = 1.0 深海冷蓝端
+    ///   （2026-10-15 引入的水域渐变），即便 `terrain_soften = true`（默认）
+    ///   与纸面色 55% 混合后仍是清晰蓝 ≈ (186, 197, 233)；旧 `-120` 只走到
+    ///   t ≈ 0.034 的浅水端、过 soften 后退成中性灰 ≈ (201, 205, 202)，
+    ///   肉眼辨不出「海」（2026-10-16 用户反馈）。
+    /// - 陆地取 `+80` m：稳居海平面之上、留出向下挖河的余量。
+    ///
+    /// **整图同值**（每个 cell 高度一致），因此 `VectorFlat` 边界格的双线性
+    /// 高度采样仍是常数、无夸张等值线带——可在 `-3500` 与 `-120` 之间安全切。
     pub fn cell(self) -> TerrainCellData {
         match self {
             MapBase::Ocean => TerrainCellData {
-                height: -120,
+                height: -3500,
                 kind: 0,
             },
             MapBase::Land => TerrainCellData {

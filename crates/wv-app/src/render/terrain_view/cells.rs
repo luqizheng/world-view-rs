@@ -955,6 +955,89 @@ mod tests {
         assert!(vector > 1, "512² 图应取 {vector}px/格（亚像素）");
     }
 
+    // ---------------------------------------------------------------------------
+    // 底图海洋渲染（2026-10-16 用户反馈「选了海洋但颜色没变蓝」）
+    //
+    // 双重叠加陷阱：
+    //   1. VectorFlat 模式下水系格走 `water_shade_at(height)`（2026-10-15
+    //      引入的水域渐变），不是 `core_terrain(kind)`；
+    //   2. `terrain_soften = true`（默认）会把任何颜色再与纸面色 55% 混合。
+    //
+    // 旧 height = -120 走到 water_shade_at 的 t ≈ 0.034 浅水端（接近
+    // water_shallow #98A9B9），过 soften 后退成 ≈(201, 205, 202) 中性灰，
+    // 肉眼辨不出「海」。新 height = -3500 走 t = 1.0 + 冷蓝偏移 ≈(117, 152, 255)，
+    // 过 soften 后仍是 ≈(186, 197, 233) 清晰蓝。
+    // ---------------------------------------------------------------------------
+
+    /// VectorFlat + soften=true 下，MapBase::Ocean.cell() 渲染后中心像素是清晰蓝。
+    /// 回归 2026-10-16 的「选海洋不显蓝」——任何把 Ocean 高度拉回 -120、或 soften
+    /// 改全 paper mix、或 water_shade_at 的冷偏移被砍掉，都会让这测试挂掉。
+    #[test]
+    fn ocean_base_renders_as_clear_blue_under_default_soften() {
+        let data = TerrainData {
+            width: 4,
+            height: 4,
+            cells: vec![wv_core::map::MapBase::Ocean.cell(); 16],
+        };
+        let img = image_from_terrain(
+            &data,
+            ViewMode::VectorFlat,
+            None,
+            // 默认 soften=true 也要清晰蓝——这是用户最直观的视觉预期。
+            true,
+            crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight),
+        );
+        let px = img.data.as_ref().expect("image 必有像素");
+        let res = (img.width() / 4) as usize;
+        let cx = res / 2;
+        let cy = res / 2;
+        let i = (cy * img.width() as usize + cx) * 4;
+        let r = px[i] as i32;
+        let g = px[i + 1] as i32;
+        let b = px[i + 2] as i32;
+        assert!(
+            b > r + 10,
+            "蓝通道应显著高于红通道（清晰蓝），实得 r={r} g={g} b={b}"
+        );
+        assert!(b > g + 5, "蓝通道应高于绿通道，实得 r={r} g={g} b={b}");
+        assert!(b > 180, "蓝通道应清晰（>180），实得 b={b}");
+    }
+
+    /// Schematic + soften=true 下，kind=0（深水）也应是清晰蓝。Schematic 走
+    /// `core_terrain(kind)` 直读，不经 water_shade_at——这条路径上深水只被
+    /// soften 抹 55%，但底色（143, 162, 179）足够蓝，仍能辨出。
+    #[test]
+    fn schematic_deep_water_stays_blue_under_default_soften() {
+        let data = TerrainData {
+            width: 4,
+            height: 4,
+            cells: vec![
+                wv_core::terrain::TerrainCellData {
+                    height: -3500,
+                    kind: 0,
+                };
+                16
+            ],
+        };
+        let img = image_from_terrain(
+            &data,
+            ViewMode::Schematic,
+            None,
+            true,
+            crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight),
+        );
+        let px = img.data.as_ref().expect("image 必有像素");
+        let res = (img.width() / 4) as usize;
+        let cx = res / 2;
+        let cy = res / 2;
+        let i = (cy * img.width() as usize + cx) * 4;
+        let r = px[i] as i32;
+        let g = px[i + 1] as i32;
+        let b = px[i + 2] as i32;
+        assert!(b > r, "深水蓝通道应 > 红通道，实得 r={r} g={g} b={b}");
+        assert!(b >= 150, "蓝通道应清晰，实得 b={b}");
+    }
+
     // -----------------------------------------------------------------------
     // 端到端回归：笔刷→数据→纹理（2026-10-14 用户反馈「笔刷涂大地图没变化」）。
     // 单测层验过 wv-terrain 改值；本测试验「数据 + 图像合成」两步的连贯性——
