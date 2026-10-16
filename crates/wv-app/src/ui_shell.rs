@@ -1207,6 +1207,30 @@ fn apply_pending_commands(
                 Err(msg) => notice.error(msg, frame),
             }
         }
+        // 重置地形到底图（2026-10-16 用户需求）。
+        CommandId::ResetTerrainToBase => {
+            let Some(map_id) = drill.current().cloned() else {
+                notice.error(
+                    crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::NoticeResetTerrainNoMap),
+                    frame,
+                );
+                return;
+            };
+            match crate::edit::editing::apply_reset_terrain_to_base(
+                &map_id,
+                &mut edit,
+                &mut projection,
+                &mut tex,
+                &playback,
+            ) {
+                Ok(msg) => {
+                    // 重置后地形 cells 改了 → 派生诊断（事件位移 / 相遇）需要重算。
+                    diagnostics.needs_diagnose = true;
+                    notice.info(msg, frame);
+                }
+                Err(msg) => notice.error(msg, frame),
+            }
+        }
         // 保存（阶段七 v0.2）：走 `wv_io::Project::save_world`，只重写 dirty
         // 目录。`take_dirty` 原子取空集合；空 Vec 走全量路径（首次保存、
         // 刚加载、刚撤销等场景）。失败不排空——脏标记仍在，下次保存能补上。

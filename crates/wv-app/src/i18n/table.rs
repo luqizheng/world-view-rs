@@ -327,6 +327,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::NoticeAlreadyAtLevel => "该层级就是当前层级",
         I18nKey::NoticeNeedProjectFirst => "请先新建或打开工程，再执行该操作",
         I18nKey::NoticeForceRedrawn => "已强制重画地形",
+        I18nKey::NoticeResetTerrainNoMap => "当前没有地图，无法重置地形",
 
         // ── ui_time 日期 ──
         I18nKey::TimeNoCalZhPrefix => "第 ",
@@ -373,6 +374,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CmdToggleDensity => "切换紧凑 / 标准密度",
         I18nKey::CmdToggleMapPalette => "切换地图主题（日间古舆图 / 暮色旧纸）",
         I18nKey::CmdForceRebuildTexture => "强制重画地形（怀疑没跟上时点一下）",
+        I18nKey::CmdResetTerrainToBase => "重置当前图地形到底图",
         I18nKey::CmdBrushRadiusUp => "增大笔刷半径",
         I18nKey::CmdBrushRadiusDown => "减小笔刷半径",
         I18nKey::CmdSelectBrushToolPaint => "笔刷：涂抹",
@@ -760,6 +762,7 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::NoticeAlreadyAtLevel => "This level is the current one",
         I18nKey::NoticeNeedProjectFirst => "Create or open a project before running this command",
         I18nKey::NoticeForceRedrawn => "Forced terrain redraw",
+        I18nKey::NoticeResetTerrainNoMap => "No current map — cannot reset terrain",
 
         // ── ui_time dates ──
         I18nKey::TimeNoCalZhPrefix => "",
@@ -806,6 +809,7 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CmdToggleDensity => "Toggle compact / standard density",
         I18nKey::CmdToggleMapPalette => "Toggle map theme (Daylight Antique / Dusk Old Paper)",
         I18nKey::CmdForceRebuildTexture => "Force terrain redraw (when the image lags)",
+        I18nKey::CmdResetTerrainToBase => "Reset current map's terrain to its base",
         I18nKey::CmdBrushRadiusUp => "Increase brush radius",
         I18nKey::CmdBrushRadiusDown => "Decrease brush radius",
         I18nKey::CmdSelectBrushToolPaint => "Brush: Paint",

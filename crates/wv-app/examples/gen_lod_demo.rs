@@ -100,6 +100,7 @@ fn build_world(meta: WorldMeta) -> World {
         time_span: None,
         unit_per_km: None,
         orientation: 0.0,
+        base: None,
     });
 
     // ---- 地形：西陆东海（1024²，确定性 Perlin）---------------------------

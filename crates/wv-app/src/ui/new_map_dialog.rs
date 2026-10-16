@@ -10,15 +10,15 @@
 //!   调 [`NewMapDialog::open_for`]；本模块只管对话框自身。
 //!
 //! ## 主要导出
-//! - `NewMapDialog` / `NewMapPrefill` / `new_map_dialog` —— Bevy 资源与系统。
+//! - `NewMapDialog` / `new_map_dialog` —— Bevy 资源与系统。
 
 #![cfg(feature = "app")]
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use wv_core::map::{Extent, MapLevel, MapNode};
-use wv_core::terrain::{TerrainCellData, TerrainData};
+use wv_core::map::{Extent, MapBase, MapLevel, MapNode};
+use wv_core::terrain::TerrainData;
 use wv_core::Id;
 
 use crate::edit::editing::EditHistory;
@@ -30,44 +30,6 @@ use crate::ui::widgets::{button as widget_button, ButtonContent, ButtonStyle};
 use crate::ui_shell::ShellNotice;
 
 use super::shell::UiShell;
-
-/// 新地图的**预填充**（2026-10-14 用户需求：新建时可选铺海还是铺陆）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum NewMapPrefill {
-    /// 全海：高度压在海平面下、类型深水——适合先画大陆的作者。
-    Ocean,
-    /// 全陆：高度抬在海平面上、类型草原——适合先画内海的作者。
-    #[default]
-    Land,
-}
-
-impl NewMapPrefill {
-    fn label(self) -> &'static str {
-        match self {
-            NewMapPrefill::Ocean => "海洋",
-            NewMapPrefill::Land => "陆地",
-        }
-    }
-
-    /// 预填充格：`(height, kind)`。
-    ///
-    /// 海洋取 `-120`：VectorFlat 双线性填充下是足够深的纯水，又不至于与
-    /// 周边拉出夸张等值线；陆地取 `+80`：稳居海平面之上、留出向下挖河的余量。
-    ///
-    /// `pub(crate)`：`new_project_dialog` 的首图预填充与本方法同源。
-    pub(crate) fn cell(self) -> TerrainCellData {
-        match self {
-            NewMapPrefill::Ocean => TerrainCellData {
-                height: -120,
-                kind: 0,
-            },
-            NewMapPrefill::Land => TerrainCellData {
-                height: 80,
-                kind: 3,
-            },
-        }
-    }
-}
 
 /// 幅面候选（世界单位，正方形）。栅格边长 = 幅面 / [`GRID_CELL_SIZE`]。
 ///
@@ -92,8 +54,9 @@ pub struct NewMapDialog {
     pub level: MapLevel,
     /// 幅面（世界单位，正方形边长）。
     pub extent: f32,
-    /// 预填充。
-    pub prefill: NewMapPrefill,
+    /// 底图（2026-10-16）。原 `NewMapPrefill` 已并入 [`MapBase`]——
+    /// 字段语义「整图铺满的初始态」与「重置按钮回退目标」共享同一份枚举。
+    pub prefill: MapBase,
     /// 上次创建失败的错误（留在框内，作者改完再试；成功即清）。
     pub error: Option<String>,
 }
@@ -105,7 +68,8 @@ impl Default for NewMapDialog {
             name: "新地图".into(),
             level: MapLevel::City,
             extent: 4096.0,
-            prefill: NewMapPrefill::Land,
+            // 2026-10-16 用户裁定：默认铺海（新建即满图海洋，便于「先画大陆」场景）。
+            prefill: MapBase::Ocean,
             error: None,
         }
     }
@@ -128,7 +92,7 @@ impl NewMapDialog {
                 MapLevel::City
             },
             extent: 4096.0,
-            prefill: NewMapPrefill::Land,
+            prefill: MapBase::Ocean,
             error: None,
         };
     }
@@ -246,10 +210,11 @@ pub fn new_map_dialog(
             ui.horizontal(|ui| {
                 ui.label("预填充").on_hover_text(
                     "整图先铺满海洋或陆地，再用地形笔刷修形——\
-                     矢量地形视图下「陆」由高度决定，预填充同时写高度与类型",
+                     矢量地形视图下「陆」由高度决定，预填充同时写高度与类型；\
+                     此处选项即写入 `MapNode.base`，供「重置到底图」按钮回退",
                 );
-                for p in [NewMapPrefill::Ocean, NewMapPrefill::Land] {
-                    ui.selectable_value(&mut dialog.prefill, p, p.label());
+                for p in [MapBase::Ocean, MapBase::Land] {
+                    ui.selectable_value(&mut dialog.prefill, p, p.zh_label());
                 }
             });
 
@@ -367,6 +332,7 @@ fn create_map(
         time_span: None,
         unit_per_km: None,
         orientation: 0.0,
+        base: Some(dialog.prefill),
     };
     let n = dialog.grid_cells();
     let terrain = TerrainData {
@@ -410,6 +376,7 @@ mod tests {
                 time_span: None,
                 unit_per_km: None,
                 orientation: 0.0,
+                base: None,
             });
         }
         let dialog = NewMapDialog::default();
@@ -435,24 +402,31 @@ mod tests {
         assert_eq!(small.grid_cells(), 64);
     }
 
-    /// 预填充语义：海洋必须在海平面下（高度 < 0）、陆地在海平面上（≥ 0）——
+    /// 底图语义：海洋必须在海平面下（高度 < 0）、陆地在海平面上（≥ 0）——
     /// 这是 VectorFlat 填充「高度赢过类型」口径下的硬约束。
     #[test]
     fn prefill_ocean_is_below_sea_level_and_land_is_above() {
-        let ocean = NewMapPrefill::Ocean.cell();
+        let ocean = MapBase::Ocean.cell();
         assert!(
             ocean.height < 0,
-            "海洋预填充高度应为负，实得 {}",
+            "海洋底图高度应为负，实得 {}",
             ocean.height
         );
-        assert!(ocean.kind <= 1, "海洋预填充类型应为水系");
-        let land = NewMapPrefill::Land.cell();
-        assert!(
-            land.height >= 0,
-            "陆地预填充高度应非负，实得 {}",
-            land.height
+        assert!(ocean.kind <= 1, "海洋底图类型应为水系");
+        let land = MapBase::Land.cell();
+        assert!(land.height >= 0, "陆地底图高度应非负，实得 {}", land.height);
+        assert!(land.kind > 1, "陆地底图类型应为陆系");
+    }
+
+    /// 2026-10-16 用户裁定：新建对话框的默认底图 = 海洋。
+    #[test]
+    fn default_prefill_is_ocean_per_user_ruling() {
+        let d = NewMapDialog::default();
+        assert_eq!(
+            d.prefill,
+            MapBase::Ocean,
+            "默认铺海（便于「先画大陆」场景）"
         );
-        assert!(land.kind > 1, "陆地预填充类型应为陆系");
     }
 
     /// `open_for` 的默认值随世界现状切换：空世界 → 世界图；非空 → 当前图下的城市图。
@@ -478,6 +452,7 @@ mod tests {
             time_span: None,
             unit_per_km: None,
             orientation: 0.0,
+            base: None,
         });
         let mut dialog = NewMapDialog::default();
         dialog.open_for(&world);

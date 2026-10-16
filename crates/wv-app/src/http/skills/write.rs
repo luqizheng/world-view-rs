@@ -163,6 +163,8 @@ pub async fn dispatch_write(
                 time_span: None,
                 unit_per_km: None,
                 orientation: 0.0,
+                // v0.1 不声明底图；后续 skill 可单独设，或直接「重置到底图」（按 Ocean 兜底）。
+                base: None,
             };
             // v0.1 不带预填充栅格；地形由后续 skill 单独填。
             let cmd: Box<dyn wv_edit::EditCommand> =

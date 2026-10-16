@@ -1094,6 +1094,89 @@ impl EditCommand for SetMapOrientationCommand {
     }
 }
 
+/// 重置当前地形到底图（2026-10-16 用户需求）。
+///
+/// 把整张图的 `TerrainData.cells` 替换为 [`wv_core::map::MapBase::cell()`]
+/// 的复制；`base` 为 `None` 的旧地图按 [`MapBase::Ocean`] 兜底——
+/// 向后兼容不锁住「重置」入口。
+///
+/// ## 与 P6（非破坏编辑）的关系
+///
+/// `apply` 把**整张** `TerrainData` 缓存进 `before`，`revert` 原样恢复——
+/// 一次性写满 N² 格（512² ≈ 786 KB）就是这一命令的「diff」体积。
+/// 无内存里别处再持有地形 cells 的可变引用，克隆一份独立即可。
+///
+/// ## 脏路径
+///
+/// `maps/{id}/terrain.bin`（与 `PaintTerrainCommand` / `IntentTerrainCommand`
+/// 同源）。`index.yaml` **不**动（`base` 字段没变）。
+///
+/// ## 失败语义
+///
+/// - 地图不存在：`TargetMissing`
+/// - 该图无地形数据（如尚未生成栅格的子图）：`Precondition`，
+///   提示「地图「X」无地形数据可重置」——子图继承父图底图时常见。
+#[derive(Debug)]
+pub struct ResetTerrainToBaseCommand {
+    pub map: wv_core::Id,
+    before: std::sync::Mutex<Option<wv_core::terrain::TerrainData>>,
+}
+
+impl ResetTerrainToBaseCommand {
+    pub fn new(map: wv_core::Id) -> Self {
+        Self {
+            map,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for ResetTerrainToBaseCommand {
+    fn label(&self) -> String {
+        format!("重置地形「{}」到底图", self.map)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        // 1. 节点 → 决定底图（None 兜底 Ocean，向后兼容旧世界）
+        let base = world
+            .maps
+            .iter()
+            .find(|m| m.id == self.map)
+            .ok_or_else(|| EditError::TargetMissing(format!("地图 {}", self.map)))?
+            .base
+            .unwrap_or(wv_core::map::MapBase::Ocean);
+        // 2. 备份当前地形（含尺寸，决定替换后的 cells 数量）
+        let prev = world.terrain_of(&self.map).cloned().ok_or_else(|| {
+            EditError::Precondition(format!("地图「{}」无地形数据可重置", self.map))
+        })?;
+        let width = prev.width;
+        let height = prev.height;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))? = Some(prev);
+        // 3. 整片替换
+        let new = wv_core::terrain::TerrainData {
+            width,
+            height,
+            cells: vec![base.cell(); (width as usize) * (height as usize)],
+        };
+        world.set_terrain(self.map.clone(), new);
+        Ok(vec![format!("maps/{}/terrain.bin", self.map)])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let prev = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
+            .take()
+            .ok_or_else(|| EditError::Precondition("ResetTerrainToBase 尚未 apply".into()))?;
+        world.set_terrain(self.map.clone(), prev);
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 测量编辑命令（工具产物，每图一份，2026-10-14）
 // ---------------------------------------------------------------------------
@@ -1985,6 +2068,7 @@ mod tests {
             time_span: None,
             unit_per_km: None,
             orientation: 0.0,
+            base: None,
         });
 
         let cmd = SetMapOrientationCommand::new(Id::new_unchecked("world_main"), 90.0);
@@ -2033,6 +2117,7 @@ mod tests {
             time_span: None,
             unit_per_km: None,
             orientation: 0.0,
+            base: None,
         }
     }
 

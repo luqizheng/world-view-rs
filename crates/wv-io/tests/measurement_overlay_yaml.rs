@@ -25,6 +25,7 @@ fn stub_map_node(id: &str) -> MapNode {
         time_span: None,
         unit_per_km: None,
         orientation: 0.0,
+        base: None,
     }
 }
 

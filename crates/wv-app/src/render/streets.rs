@@ -599,11 +599,13 @@ mod tests {
             time_span: None,
             unit_per_km: None,
             orientation: 0.0,
+            base: None,
         };
         let mut city = wv_core::map::MapNode {
             orientation: 0.0,
             level: wv_core::map::MapLevel::City,
             parent: Some(wv_core::Id::new_unchecked("map_world")),
+            base: None,
             ..root.clone()
         };
         city.id = wv_core::Id::new_unchecked("map_city");
@@ -702,6 +704,7 @@ mod tests {
             time_span: None,
             unit_per_km: None,
             orientation: 0.0,
+            base: None,
         };
         world.maps = vec![city];
 
@@ -776,6 +779,7 @@ mod tests {
                 time_span: None,
                 unit_per_km: None,
                 orientation: 0.0,
+                base: None,
             }],
             ..wv_core::World::default()
         };

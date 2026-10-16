@@ -142,6 +142,10 @@ pub enum CommandId {
     /// 把 `TerrainTexture.last_mode/last_map/soften` 一起重置为「未知」，
     /// 下一帧 `rebuild_texture_on_mode_change` 必然走全图重建路径。
     ForceRebuildTexture,
+    /// 重置当前图的地形到底图（2026-10-16 用户需求）。
+    /// 「底图」= `MapNode.base`，旧地图无 `base` 时按 `MapBase::Ocean` 兜底。
+    /// 由 [`crate::edit::editing::apply_reset_terrain_to_base`] 执行。
+    ResetTerrainToBase,
 }
 
 /// 一条命令：注册表的条目。
@@ -423,6 +427,15 @@ impl CommandRegistry {
             CommandGroup::Interface,
             I18nKey::CmdForceRebuildTexture,
             Some("F5"),
+        );
+
+        // 2026-10-16 用户需求：笔刷面板的「重置到底图」按钮同样入口；
+        // 命令面板里能搜到，方便不愿点面板的人。
+        push(
+            CommandId::ResetTerrainToBase,
+            CommandGroup::Interface,
+            I18nKey::CmdResetTerrainToBase,
+            None,
         );
 
         // 对象

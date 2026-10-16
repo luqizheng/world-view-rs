@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use wv_core::map::{Extent, MapLevel, MapNode};
+use wv_core::map::{Extent, MapBase, MapLevel, MapNode};
 use wv_core::terrain::TerrainData;
 use wv_core::{Id, TimeSpan};
 
@@ -40,8 +40,9 @@ use crate::ui::widgets::{button as widget_button, ButtonContent, ButtonStyle};
 use crate::ui_shell::{load_project_into, DialogPurpose, OpenProjectTask, ShellNotice};
 
 // 与「新建地图」对话框同一口径的幅面 / 预填充默认值（首图 = 空世界的第一张图，
-// 与 NewMapDialog::open_for 的空世界分支完全一致：世界级、最大幅面、陆地预填充）。
-use super::new_map_dialog::{NewMapPrefill, EXTENT_CHOICES, GRID_CELL_SIZE};
+// 与 NewMapDialog::open_for 的空世界分支完全一致：世界级、最大幅面、海洋底图）。
+// 2026-10-16 用户裁定：底图默认 = 海洋（与 NewMapDialog 默认同源）。
+use super::new_map_dialog::{EXTENT_CHOICES, GRID_CELL_SIZE};
 use super::shell::UiShell;
 
 /// 新工程首张地图（世界图）的 ID。
@@ -149,10 +150,11 @@ impl NewProjectDialog {
     }
 }
 
-/// 新工程的初始世界：工程元数据 + 一张世界级根图 + 陆地预填充栅格。
+/// 新工程的初始世界：工程元数据 + 一张世界级根图 + 海洋底图预填充栅格。
 ///
 /// 首图参数与「新建地图」对话框对空世界的第一张图完全一致（世界级 / 最大幅面 /
-/// 陆地预填充），保证「新建工程」与「新建工程后新建第一张地图」两条路径殊途同归。
+/// 海洋底图，2026-10-16 用户裁定），保证「新建工程」与「新建工程后新建第一张地图」
+/// 两条路径殊途同归。`MapNode.base` 也明确写出 → 「重置到底图」按钮可用。
 fn initial_world(name: &str) -> wv_core::World {
     let side = ((EXTENT_CHOICES[0] / GRID_CELL_SIZE).round() as u32).max(1);
     let id = Id::new_unchecked(FIRST_MAP_ID);
@@ -181,13 +183,15 @@ fn initial_world(name: &str) -> wv_core::World {
         time_span: None,
         unit_per_km: None,
         orientation: 0.0,
+        // 2026-10-16：底图 = 海洋（与 NewMapDialog 默认同源；旧 Land 已切换）。
+        base: Some(MapBase::Ocean),
     });
     world.set_terrain(
         id,
         TerrainData {
             width: side,
             height: side,
-            cells: vec![NewMapPrefill::Land.cell(); (side * side) as usize],
+            cells: vec![MapBase::Ocean.cell(); (side * side) as usize],
         },
     );
     world
@@ -512,9 +516,10 @@ mod tests {
     }
 
     /// 初始世界形状：meta 就位（root_map 与首图同名）、一张世界级根图、
-    /// 陆地预填充栅格（幅面换算与「新建地图」同口径）。
+    /// 海洋底图预填充栅格（2026-10-16 默认 = 海洋；幅面换算与「新建地图」同口径）。
+    /// `MapNode.base` 也应明确为 Ocean，让「重置到底图」按钮可用。
     #[test]
-    fn initial_world_has_meta_world_root_map_and_land_raster() {
+    fn initial_world_has_meta_world_root_map_and_ocean_raster() {
         let w = initial_world("美洲大陆");
         let meta = w
             .meta
@@ -527,12 +532,21 @@ mod tests {
         assert_eq!(map.id.as_str(), FIRST_MAP_ID);
         assert_eq!(map.level, MapLevel::World);
         assert!(map.parent.is_none(), "首图是钻取树的根，无父图");
+        assert_eq!(
+            map.base,
+            Some(MapBase::Ocean),
+            "首图必须声明 base = Ocean，让「重置到底图」按钮可用"
+        );
         let terrain = w.terrain_of(&map.id).expect("首图必须带预填充栅格");
         let side = (EXTENT_CHOICES[0] / GRID_CELL_SIZE).round() as u32;
         assert_eq!((terrain.width, terrain.height), (side, side));
         assert!(
-            terrain.cells.iter().all(|c| c.height >= 0),
-            "陆地预填充必须整片在海平面上"
+            terrain.cells.iter().all(|c| c.height < 0),
+            "海洋底图必须整片在海平面下"
+        );
+        assert!(
+            terrain.cells.iter().all(|c| c.kind == 0),
+            "海洋底图 kind 必须全部为 0（深水）"
         );
     }
 

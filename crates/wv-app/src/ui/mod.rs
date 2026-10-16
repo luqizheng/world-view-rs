@@ -49,7 +49,7 @@ pub use layers_panel::{panel_layers, panel_map_tree};
 pub use list_panels_panel::{panel_character, panel_event};
 pub use map_controls::map_controls;
 pub use minimap_panel::panel_minimap;
-pub use new_map_dialog::{new_map_dialog, NewMapDialog, NewMapPrefill};
+pub use new_map_dialog::{new_map_dialog, NewMapDialog};
 pub use new_project_dialog::{
     new_project_apply_create, new_project_dialog, NewProjectDialog, NewProjectIntent,
 };

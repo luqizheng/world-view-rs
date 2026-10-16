@@ -323,6 +323,7 @@ mod tests {
             time_span: None,
             unit_per_km: None,
             orientation: 0.0,
+            base: None,
         }
     }
 

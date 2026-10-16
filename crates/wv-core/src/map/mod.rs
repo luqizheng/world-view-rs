@@ -19,13 +19,14 @@
 
 use crate::{
     base::color::Color, base::geometry::Point, base::id::Id,
-    source::geographic_source::GeographicSourceV1, time::TimeSpan,
+    source::geographic_source::GeographicSourceV1, terrain::TerrainCellData, time::TimeSpan,
 };
 
 /// 地图层级。由粗到细。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MapLevel {
+    #[default]
     World,
     Region,
     City,
@@ -33,7 +34,7 @@ pub enum MapLevel {
 }
 
 /// 地图节点。对应 `maps/<id>/index.yaml`。
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MapNode {
     pub id: Id,
     pub name: String,
@@ -119,6 +120,69 @@ pub struct MapNode {
     /// 「屏幕对齐文字」）。本段为追加说明，上文语义不变。
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub orientation: f32,
+
+    /// 底图（2026-10-16 用户需求）：每图一个「全部海 / 全部陆」的初始态。
+    ///
+    /// - `None` = 旧地图 / 没声明。**重置按钮按 [`MapBase::Ocean`] 兜底**，
+    ///   不锁住旧世界的「重置」入口（向后兼容，零迁移）。
+    /// - `Some(Ocean | Land)` = 新建时声明的底图，重置按钮一键回到此态。
+    ///
+    /// ## 底图 ≠ 当前地形
+    ///
+    /// 创建后所有笔刷、街道、意图工具都会改 `World.terrains[map_id]`；
+    /// **`base` 字段本身不被修改**——它只是「重置按钮」的回退锚点。
+    /// 与 P6（非破坏编辑）正交：作者在地形上的每一笔都按 `EditCommand` 走
+    /// `History`，底图字段不参与。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<MapBase>,
+}
+
+/// 每张地图的「底图」语义（2026-10-16）。
+///
+/// **不**替代 `TerrainData`——它是「新建地图时铺满整图的初始单元格」与
+/// 「重置按钮回填的目标态」这两件事的**口径源**，仅此而已。`Apply` /
+/// `Intent` / `Paint` 三类笔刷都不读这个字段；它们写 `World.terrains`，
+/// `base` 字段始终是它**被声明那一刻**的值。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MapBase {
+    /// 全海：高度压在海平面下、类型深水——适合先画大陆的作者。
+    Ocean,
+    /// 全陆：高度抬在海平面上，类型草原——适合先画内海的作者。
+    Land,
+}
+
+impl MapBase {
+    /// 该底图的单格「`(height, kind)`」。
+    ///
+    /// 数值与 `wv-app::NewMapPrefill::cell()` 历史口径同源：
+    /// - 海洋取 `-120` m（VectorFlat 双线性填充下足够深的纯水，又不至于与
+    ///   周边拉出夸张等值线）；
+    /// - 陆地取 `+80` m（稳居海平面之上、留出向下挖河的余量）。
+    pub fn cell(self) -> TerrainCellData {
+        match self {
+            MapBase::Ocean => TerrainCellData {
+                height: -120,
+                kind: 0,
+            },
+            MapBase::Land => TerrainCellData {
+                height: 80,
+                kind: 3,
+            },
+        }
+    }
+
+    /// 中文 UI 标签（2026-10-16 新建对话框预填充段用）。
+    ///
+    /// 故意放在 `wv-core`：i18n key 在 `wv-app` 里登记，但「海洋 / 陆地」
+    /// 是中文里这俩枚举的标准译名，与 CLI 报错 / 文档 / YAML 注释的口径
+    /// 完全一致——把它钉在核心层省得到处复制。
+    pub const fn zh_label(self) -> &'static str {
+        match self {
+            MapBase::Ocean => "海洋",
+            MapBase::Land => "陆地",
+        }
+    }
 }
 
 /// Serde `skip_serializing_if` 谓词：f32 零值不写出，保持既有 YAML 干净。
@@ -509,16 +573,7 @@ mod km_per_wu_tests {
             id: Id::new_unchecked("world_main"),
             name: "主世界".into(),
             level: MapLevel::World,
-            parent: None,
-            children: Vec::new(),
-            icons: Vec::new(),
-            layers: Vec::new(),
-            extent: None,
-            raster: None,
-            geographic_source: None,
-            time_span: None,
-            unit_per_km: None,
-            orientation: 0.0,
+            ..MapNode::default()
         }
     }
 

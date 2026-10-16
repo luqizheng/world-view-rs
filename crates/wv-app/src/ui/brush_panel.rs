@@ -24,12 +24,15 @@ use bevy_egui::{egui, EguiContexts};
 use crate::edit::editing;
 use crate::i18n::{t, t_key, CurrentLocale, I18nKey, Locale};
 use crate::render::streets;
+use crate::render::terrain_view::TerrainTexture;
 use crate::state::{
-    BrushState, BrushTool, BrushToolGroup, DrillState, Panel, PanelState, WorldProjection,
+    BrushState, BrushTool, BrushToolGroup, DrillState, Panel, PanelState, PlaybackState,
+    WorldProjection,
 };
 use crate::theme::ui_theme::{proportional, UiShellConfig};
 use crate::theme::ui_tokens::{font_size, radius, space};
 use crate::ui_layout::LayoutFile;
+use crate::ui_shell::ShellNotice;
 
 use super::shell::{terrain_name_at, UiShell};
 use super::timeline::undo_last_street_segment;
@@ -53,6 +56,10 @@ pub fn panel_brush(
     drill: Res<DrillState>,
     mut edit: ResMut<editing::EditHistory>,
     grid: Res<crate::state::GridConfig>,
+    mut tex: ResMut<TerrainTexture>,
+    playback: Res<PlaybackState>,
+    mut notice: ResMut<ShellNotice>,
+    time: Res<Time>,
     current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
@@ -193,6 +200,34 @@ pub fn panel_brush(
                     .size(shell.scale.small)
                     .color(shell.t3()),
                 );
+            }
+
+            ui.add_space(space::SM);
+            // ── 「重置到底图」（2026-10-16）──
+            // 破坏性操作：撤销栈兜底（EditCommand 走 History），所以不弹确认窗。
+            // 「无工程锁 / 无当前图」时按钮置灰——避免误触空指针。
+            let has_map = drill.current().is_some();
+            if ui
+                .add_enabled(
+                    has_map,
+                    egui::Button::new(t_key(&current_loc, I18nKey::CmdResetTerrainToBase)),
+                )
+                .on_hover_text(t_key(&current_loc, I18nKey::CmdResetTerrainToBase))
+                .clicked()
+            {
+                if let Some(map_id) = drill.current().cloned() {
+                    let frame = (time.elapsed_secs() * 60.0) as u64;
+                    match editing::apply_reset_terrain_to_base(
+                        &map_id,
+                        &mut edit,
+                        &mut projection,
+                        &mut tex,
+                        &playback,
+                    ) {
+                        Ok(msg) => notice.info(msg, frame),
+                        Err(msg) => notice.error(msg, frame),
+                    }
+                }
             }
 
             ui.add_space(space::SM);

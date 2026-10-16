@@ -8,7 +8,16 @@ use std::fmt;
 
 /// 实体标识。内部为轻量字符串包装，避免误把任意 `String` 当 ID 传递。
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+    Debug,
+    Default,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
 )]
 #[serde(transparent)]
 pub struct Id(String);

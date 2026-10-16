@@ -190,6 +190,7 @@ fn map_node_with_geographic_source_round_trips() {
         time_span: None,
         unit_per_km: None,
         orientation: 0.0,
+        base: None,
     };
 
     let yaml = serde_yaml::to_string(&node).unwrap();
@@ -224,6 +225,7 @@ fn map_node_without_geographic_source_omits_field() {
         time_span: None,
         unit_per_km: None,
         orientation: 0.0,
+        base: None,
     };
 
     let yaml = serde_yaml::to_string(&node).unwrap();
@@ -259,6 +261,7 @@ fn map_node_round_trip_preserves_presence_signal() {
         time_span: None,
         unit_per_km: None,
         orientation: 0.0,
+        base: None,
     };
     let fictional = MapNode {
         unit_per_km: None,

@@ -593,6 +593,8 @@ pub enum I18nKey {
     NoticeNeedProjectFirst,
     /// 「已强制重画地形」整段
     NoticeForceRedrawn,
+    /// 「当前没有地图，无法重置地形」整段（2026-10-16）
+    NoticeResetTerrainNoMap,
 
     // ── W3：ui_time 日期格式（中文 zh / 英文 en 不同） ────────────────
     /// 时间无日历 zh prefix：「第 」
@@ -681,6 +683,8 @@ pub enum I18nKey {
     CmdToggleMapPalette,
     /// 「强制重画地形（怀疑没跟上时点一下）」
     CmdForceRebuildTexture,
+    /// 「重置当前图地形到底图」（2026-10-16）
+    CmdResetTerrainToBase,
     /// 「增大笔刷半径」
     CmdBrushRadiusUp,
     /// 「减小笔刷半径」
@@ -809,7 +813,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 360] = [
+    pub const ALL: [I18nKey; 362] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1096,6 +1100,7 @@ impl I18nKey {
         I18nKey::NoticeAlreadyAtLevel,
         I18nKey::NoticeNeedProjectFirst,
         I18nKey::NoticeForceRedrawn,
+        I18nKey::NoticeResetTerrainNoMap,
         // ui_time（4）
         I18nKey::TimeNoCalZhPrefix,
         I18nKey::TimeNoCalZhSuffix,
@@ -1140,6 +1145,7 @@ impl I18nKey {
         I18nKey::CmdToggleDensity,
         I18nKey::CmdToggleMapPalette,
         I18nKey::CmdForceRebuildTexture,
+        I18nKey::CmdResetTerrainToBase,
         I18nKey::CmdBrushRadiusUp,
         I18nKey::CmdBrushRadiusDown,
         // 笔刷工具 7 条 + 参照网格（2026-10-16）

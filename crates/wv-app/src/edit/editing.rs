@@ -25,7 +25,9 @@ use crate::render::terrain_view::{image_from_terrain, TerrainTexture, TileAtlas}
 use crate::state::{
     BrushState, BrushTool, DrillState, GridConfig, PlaybackState, ViewState, WorldProjection,
 };
-use wv_edit::command::{EditCommand, IntentTerrainCommand, PaintTerrainCommand};
+use wv_edit::command::{
+    EditCommand, IntentTerrainCommand, PaintTerrainCommand, ResetTerrainToBaseCommand,
+};
 use wv_edit::history::Transaction;
 use wv_edit::History;
 use wv_terrain::edit::{Brush, Stroke as TerrainStroke};
@@ -383,6 +385,55 @@ fn terrain_diff_bbox(
         y1 = y1.max(cy + 1);
     }
     any.then_some([x0, y0, x1, y1])
+}
+
+/// 重置当前图的地形到底图（2026-10-16 用户需求）。
+///
+/// 走和「撤销/重做」同一套纹理脏追踪（前后 cells diff → 矩形标脏；
+/// 尺寸变了走 `mark_all_dirty`），让笔刷面板上的「重置到底图」按钮
+/// 不需要绕过 dispatcher。
+///
+/// 播放中只读（基线 V37）：拒绝重置并说明原因，而不是静默无反应。
+/// 无工程锁由 [`crate::ui_shell`] 提前把 `CommandId::ResetTerrainToBase`
+/// 挡掉，本函数不再重复。
+pub fn apply_reset_terrain_to_base(
+    map_id: &wv_core::Id,
+    edit: &mut EditHistory,
+    projection: &mut WorldProjection,
+    tex: &mut TerrainTexture,
+    playback: &PlaybackState,
+) -> Result<String, String> {
+    if playback.playing {
+        return Err("播放中为只读：先暂停再重置".into());
+    }
+
+    // 与 apply_history_command 同款：前后 cells diff → 矩形标脏
+    // （避免 mark_all_dirty 的整图重建）。
+    let before = crate::render::terrain_view::texture_terrain(tex, &projection.world, Some(map_id))
+        .map(|t| t.cells.clone());
+
+    let mut tx = Transaction::new();
+    tx.push(Box::new(ResetTerrainToBaseCommand::new(map_id.clone())));
+    match edit.history.commit(&mut projection.world, tx) {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
+            projection.dirty = true;
+
+            let after =
+                crate::render::terrain_view::texture_terrain(tex, &projection.world, Some(map_id))
+                    .map(|t| (t.width.max(1), t.cells.clone()));
+            match (before, after) {
+                (Some(b), Some((w, a))) if b.len() == a.len() => {
+                    if let Some(rect) = terrain_diff_bbox(&b, &a, w) {
+                        tex.mark_dirty(rect);
+                    }
+                }
+                _ => tex.mark_all_dirty(),
+            }
+            Ok("已重置到底图".into())
+        }
+        Err(e) => Err(format!("重置失败：{e}")),
+    }
 }
 
 /// 执行一次撤销 / 重做，返回给用户看的结果说明。

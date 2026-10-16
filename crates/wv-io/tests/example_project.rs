@@ -104,6 +104,7 @@ fn map_node_yaml_round_trips() {
         time_span: None,
         unit_per_km: None,
         orientation: 0.0,
+        base: None,
     };
 
     let text = serde_yaml::to_string(&node).unwrap();
@@ -155,6 +156,7 @@ fn map_node_orientation_round_trips_and_defaults_to_zero() {
         time_span: None,
         unit_per_km: None,
         orientation: 45.0,
+        base: None,
     };
     let yaml2 = serde_yaml::to_string(&with_orient).unwrap();
     assert!(
