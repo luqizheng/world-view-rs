@@ -372,36 +372,49 @@ impl BrushTool {
         BrushTool::River,
     ];
 
+    /// 「塑」组（拖拽骨架、程序生成）四工具——面板第二行。
+    pub const SHAPE: [BrushTool; 4] = [
+        BrushTool::MountainRange,
+        BrushTool::Plateau,
+        BrushTool::Hills,
+        BrushTool::River,
+    ];
+
+    /// 「放」组（单击种子、按半径扩散）两工具——面板第三行。
+    pub const PLACE: [BrushTool; 2] = [BrushTool::Volcano, BrushTool::Lake];
+
+    /// 所属分组（面板三行行内布局与命令面板注册共用同一口径）。
+    pub fn group(self) -> BrushToolGroup {
+        match self {
+            Self::PaintKind => BrushToolGroup::Paint,
+            Self::MountainRange | Self::Plateau | Self::Hills | Self::River => {
+                BrushToolGroup::Shape
+            }
+            Self::Volcano | Self::Lake => BrushToolGroup::Place,
+        }
+    }
+
     /// 是否意图工具（决定提交 `IntentTerrainCommand` 而非 `PaintTerrainCommand`）。
     pub fn is_intent(self) -> bool {
-        self != Self::PaintKind
+        self.group() != BrushToolGroup::Paint
     }
+}
 
-    /// 面板显示名（与既有面板的英文标签同风格）。
-    pub fn label(self) -> &'static str {
-        match self {
-            BrushTool::PaintKind => "Paint",
-            BrushTool::MountainRange => "Mountain range",
-            BrushTool::Plateau => "Plateau",
-            BrushTool::Hills => "Hills",
-            BrushTool::Volcano => "Volcano",
-            BrushTool::Lake => "Lake",
-            BrushTool::River => "River",
-        }
-    }
-
-    /// 一句话交互提示（面板底部）。
-    pub fn hint(self) -> &'static str {
-        match self {
-            BrushTool::PaintKind => "",
-            BrushTool::MountainRange => "拖一条脊线，山脊走向程序补；单点 = 一座圆山",
-            BrushTool::Plateau => "拖过目标区域，顶面平坦、边缘自收",
-            BrushTool::Hills => "拖过目标区域，只长在陆上",
-            BrushTool::Volcano => "点一下放置；点在海里自动成岛",
-            BrushTool::Lake => "点一下挖湖；湖心必须在陆上",
-            BrushTool::River => "从源头拖到河口；两端都在陆上时高端是源头",
-        }
-    }
+/// 笔刷工具的三个操作语义分组（面板行内布局的行首标签）。
+///
+/// 分组的差别是**作者的手在做什么**，不只是产出什么：
+/// - [`BrushToolGroup::Paint`]：分配式——涂抹即所得，每个落点都是印记；
+/// - [`BrushToolGroup::Shape`]：演绎式——拖的是几何骨架（脊线 / 台缘 /
+///   覆盖域 / 河床线），形状由 `wv_terrain::intent` 程序派生；
+/// - [`BrushToolGroup::Place`]：种子式——单击落种子，圆盘按半径扩散。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrushToolGroup {
+    /// 涂：直接涂地形类型。
+    Paint,
+    /// 塑：拖拽骨架、程序生成。
+    Shape,
+    /// 放：单击种子、扩散成形。
+    Place,
 }
 
 /// 笔刷工具状态（`AGENTS.md` §3.3：System 只生成命令，不直接改世界）。
@@ -1226,6 +1239,40 @@ mod tests {
     #[test]
     fn brush_starts_disabled_so_left_drag_pans_the_map() {
         assert!(!BrushState::default().enabled);
+    }
+
+    /// 三组（涂 / 塑 / 放）必须恰好划分全体 7 工具：面板三行与命令面板
+    /// 注册都按组枚举，任何工具漏组 = 面板上点不到它。
+    #[test]
+    fn tool_groups_partition_all_seven_tools() {
+        let mut grouped = vec![BrushTool::PaintKind];
+        grouped.extend(BrushTool::SHAPE);
+        grouped.extend(BrushTool::PLACE);
+        assert_eq!(
+            grouped.len(),
+            BrushTool::ALL.len(),
+            "组并集大小 {} ≠ 全体 {}——有工具被分了两次或漏了",
+            grouped.len(),
+            BrushTool::ALL.len()
+        );
+        for t in BrushTool::ALL {
+            assert!(grouped.contains(&t), "{t:?} 不在任何组里");
+        }
+    }
+
+    /// 组员身份与操作语义一致：仅涂组非意图（分派闸 `is_intent` 的口径）。
+    #[test]
+    fn group_membership_matches_intent_dispatch_gate() {
+        assert_eq!(BrushTool::PaintKind.group(), BrushToolGroup::Paint);
+        for t in BrushTool::SHAPE {
+            assert_eq!(t.group(), BrushToolGroup::Shape, "{t:?}");
+            assert!(t.is_intent(), "{t:?} 应走 IntentTerrainCommand");
+        }
+        for t in BrushTool::PLACE {
+            assert_eq!(t.group(), BrushToolGroup::Place, "{t:?}");
+            assert!(t.is_intent(), "{t:?} 应走 IntentTerrainCommand");
+        }
+        assert!(!BrushTool::PaintKind.is_intent());
     }
 
     fn node(

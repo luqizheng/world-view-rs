@@ -209,6 +209,52 @@ pub enum I18nKey {
     BrushUndoLastSegmentBtn,
     /// 「Ctrl+滚轮改半径」底部提示
     BrushHintRadiusShortcut,
+    /// 分段控件上的「笔刷」短标（点按切换笔刷总开/关）
+    BrushModeShort,
+    /// 工具行首组标签「涂」（分配式涂抹，2026-10-16 三行行内布局）
+    BrushGroupPaint,
+    /// 「塑」（拖拽骨架、程序生成）
+    BrushGroupShape,
+    /// 「放」（单击种子、扩散成形）
+    BrushGroupPlace,
+    /// 工具名「涂抹」（瓷砖 tooltip + 命令面板共用）
+    BrushToolNamePaint,
+    /// 「山脉」
+    BrushToolNameRange,
+    /// 「高原」
+    BrushToolNamePlateau,
+    /// 「丘陵」
+    BrushToolNameHills,
+    /// 「火山」
+    BrushToolNameVolcano,
+    /// 「湖泊」
+    BrushToolNameLake,
+    /// 「河流」
+    BrushToolNameRiver,
+    /// 涂抹工具交互提示（瓷砖 tooltip 第二行 + 面板提示行）
+    BrushHintPaint,
+    /// 山脉工具交互提示
+    BrushHintRange,
+    /// 高原工具交互提示
+    BrushHintPlateau,
+    /// 丘陵工具交互提示
+    BrushHintHills,
+    /// 火山工具交互提示
+    BrushHintVolcano,
+    /// 湖泊工具交互提示
+    BrushHintLake,
+    /// 河流工具交互提示
+    BrushHintRiver,
+    /// 「地形材料」段标题（旁附当前选中材质名）
+    BrushMaterialHeader,
+    /// 「半径」滑条标签
+    BrushRadiusLabel,
+    /// 「软度」滑条标签
+    BrushSoftnessLabel,
+    /// 「强度」滑条标签
+    BrushStrengthLabel,
+    /// 「画路」折叠段标题
+    BrushRoadDrawingHeader,
 
     // ── 视图模式（state::ViewMode） ──────────────────────────────────
     /// 「矢量地形」顶栏视图段（与 BROWSING 一致）
@@ -639,6 +685,22 @@ pub enum I18nKey {
     CmdBrushRadiusUp,
     /// 「减小笔刷半径」
     CmdBrushRadiusDown,
+    /// 「笔刷：涂抹」——选中即激活笔刷
+    CmdSelectBrushToolPaint,
+    /// 「笔刷：山脉」
+    CmdSelectBrushToolRange,
+    /// 「笔刷：高原」
+    CmdSelectBrushToolPlateau,
+    /// 「笔刷：丘陵」
+    CmdSelectBrushToolHills,
+    /// 「笔刷：火山」
+    CmdSelectBrushToolVolcano,
+    /// 「笔刷：湖泊」
+    CmdSelectBrushToolLake,
+    /// 「笔刷：河流」
+    CmdSelectBrushToolRiver,
+    /// 「显示参照网格」（地图工具条瓷砖同源）
+    CmdToggleGrid,
     /// 「钻回世界地图」
     CmdDrillToRoot,
     /// 「钻回上一级」
@@ -747,7 +809,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 329] = [
+    pub const ALL: [I18nKey; 360] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -840,6 +902,31 @@ impl I18nKey {
         I18nKey::BrushFinishLineBtn,
         I18nKey::BrushUndoLastSegmentBtn,
         I18nKey::BrushHintRadiusShortcut,
+        // 笔刷面板 2026-10-16 改版（23）：模式短标 + 组标签 3 + 工具名 7 +
+        // 提示 7 + 滑条标签 4 + 材料段标 1（画路头 / 半径 / 软度 / 强度）
+        I18nKey::BrushModeShort,
+        I18nKey::BrushGroupPaint,
+        I18nKey::BrushGroupShape,
+        I18nKey::BrushGroupPlace,
+        I18nKey::BrushToolNamePaint,
+        I18nKey::BrushToolNameRange,
+        I18nKey::BrushToolNamePlateau,
+        I18nKey::BrushToolNameHills,
+        I18nKey::BrushToolNameVolcano,
+        I18nKey::BrushToolNameLake,
+        I18nKey::BrushToolNameRiver,
+        I18nKey::BrushHintPaint,
+        I18nKey::BrushHintRange,
+        I18nKey::BrushHintPlateau,
+        I18nKey::BrushHintHills,
+        I18nKey::BrushHintVolcano,
+        I18nKey::BrushHintLake,
+        I18nKey::BrushHintRiver,
+        I18nKey::BrushMaterialHeader,
+        I18nKey::BrushRadiusLabel,
+        I18nKey::BrushSoftnessLabel,
+        I18nKey::BrushStrengthLabel,
+        I18nKey::BrushRoadDrawingHeader,
         // 视图模式（7）
         I18nKey::ViewModeVectorFlat,
         I18nKey::ViewModeGoogleMap,
@@ -1055,6 +1142,15 @@ impl I18nKey {
         I18nKey::CmdForceRebuildTexture,
         I18nKey::CmdBrushRadiusUp,
         I18nKey::CmdBrushRadiusDown,
+        // 笔刷工具 7 条 + 参照网格（2026-10-16）
+        I18nKey::CmdSelectBrushToolPaint,
+        I18nKey::CmdSelectBrushToolRange,
+        I18nKey::CmdSelectBrushToolPlateau,
+        I18nKey::CmdSelectBrushToolHills,
+        I18nKey::CmdSelectBrushToolVolcano,
+        I18nKey::CmdSelectBrushToolLake,
+        I18nKey::CmdSelectBrushToolRiver,
+        I18nKey::CmdToggleGrid,
         I18nKey::CmdDrillToRoot,
         I18nKey::CmdDrillUp,
         // CLI（38）

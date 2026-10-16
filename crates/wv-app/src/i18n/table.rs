@@ -116,6 +116,29 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::BrushFinishLineBtn => "结束连线",
         I18nKey::BrushUndoLastSegmentBtn => "撤销上一段",
         I18nKey::BrushHintRadiusShortcut => "Ctrl+滚轮改半径",
+        I18nKey::BrushModeShort => "笔刷",
+        I18nKey::BrushGroupPaint => "涂",
+        I18nKey::BrushGroupShape => "塑",
+        I18nKey::BrushGroupPlace => "放",
+        I18nKey::BrushToolNamePaint => "涂抹",
+        I18nKey::BrushToolNameRange => "山脉",
+        I18nKey::BrushToolNamePlateau => "高原",
+        I18nKey::BrushToolNameHills => "丘陵",
+        I18nKey::BrushToolNameVolcano => "火山",
+        I18nKey::BrushToolNameLake => "湖泊",
+        I18nKey::BrushToolNameRiver => "河流",
+        I18nKey::BrushHintPaint => "按住左键拖动，把选中的地形类型涂到格子上",
+        I18nKey::BrushHintRange => "拖一条脊线，山脊走向程序补；单点 = 一座圆山",
+        I18nKey::BrushHintPlateau => "拖过目标区域，顶面平坦、边缘自收",
+        I18nKey::BrushHintHills => "拖过目标区域，只长在陆上",
+        I18nKey::BrushHintVolcano => "点一下放置；点在海里自动成岛",
+        I18nKey::BrushHintLake => "点一下挖湖；湖心必须在陆上",
+        I18nKey::BrushHintRiver => "从源头拖到河口；两端都在陆上时高端是源头",
+        I18nKey::BrushMaterialHeader => "地形材料",
+        I18nKey::BrushRadiusLabel => "半径",
+        I18nKey::BrushSoftnessLabel => "软度",
+        I18nKey::BrushStrengthLabel => "强度",
+        I18nKey::BrushRoadDrawingHeader => "画路",
 
         // ── 视图模式 ──
         I18nKey::ViewModeVectorFlat => "矢量地形",
@@ -352,6 +375,14 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CmdForceRebuildTexture => "强制重画地形（怀疑没跟上时点一下）",
         I18nKey::CmdBrushRadiusUp => "增大笔刷半径",
         I18nKey::CmdBrushRadiusDown => "减小笔刷半径",
+        I18nKey::CmdSelectBrushToolPaint => "笔刷：涂抹",
+        I18nKey::CmdSelectBrushToolRange => "笔刷：山脉",
+        I18nKey::CmdSelectBrushToolPlateau => "笔刷：高原",
+        I18nKey::CmdSelectBrushToolHills => "笔刷：丘陵",
+        I18nKey::CmdSelectBrushToolVolcano => "笔刷：火山",
+        I18nKey::CmdSelectBrushToolLake => "笔刷：湖泊",
+        I18nKey::CmdSelectBrushToolRiver => "笔刷：河流",
+        I18nKey::CmdToggleGrid => "显示参照网格",
         I18nKey::CmdDrillToRoot => "钻回世界地图",
         I18nKey::CmdDrillUp => "钻回上一级",
 
@@ -510,6 +541,37 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::BrushFinishLineBtn => "Finish line",
         I18nKey::BrushUndoLastSegmentBtn => "Undo last segment",
         I18nKey::BrushHintRadiusShortcut => "Ctrl + wheel to change radius",
+        I18nKey::BrushModeShort => "Brush",
+        I18nKey::BrushGroupPaint => "Paint",
+        I18nKey::BrushGroupShape => "Shape",
+        I18nKey::BrushGroupPlace => "Place",
+        I18nKey::BrushToolNamePaint => "Paint",
+        I18nKey::BrushToolNameRange => "Mountain range",
+        I18nKey::BrushToolNamePlateau => "Plateau",
+        I18nKey::BrushToolNameHills => "Hills",
+        I18nKey::BrushToolNameVolcano => "Volcano",
+        I18nKey::BrushToolNameLake => "Lake",
+        I18nKey::BrushToolNameRiver => "River",
+        I18nKey::BrushHintPaint => {
+            "Hold left-click and drag to paint the selected terrain type onto cells"
+        }
+        I18nKey::BrushHintRange => {
+            "Drag a ridge line and the range fills itself in; a single click = one round peak"
+        }
+        I18nKey::BrushHintPlateau => {
+            "Drag over the target area; the top stays flat and the edges settle on their own"
+        }
+        I18nKey::BrushHintHills => "Drag over the target area; hills grow on land only",
+        I18nKey::BrushHintVolcano => "Click to place; dropping it in the sea grows an island",
+        I18nKey::BrushHintLake => "Click to dig a lake; the center must be on land",
+        I18nKey::BrushHintRiver => {
+            "Drag from source to mouth; when both ends are on land the higher one is the source"
+        }
+        I18nKey::BrushMaterialHeader => "Terrain material",
+        I18nKey::BrushRadiusLabel => "Radius",
+        I18nKey::BrushSoftnessLabel => "Softness",
+        I18nKey::BrushStrengthLabel => "Strength",
+        I18nKey::BrushRoadDrawingHeader => "Road drawing",
 
         // ── View modes ──
         I18nKey::ViewModeVectorFlat => "Vector terrain",
@@ -746,6 +808,14 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CmdForceRebuildTexture => "Force terrain redraw (when the image lags)",
         I18nKey::CmdBrushRadiusUp => "Increase brush radius",
         I18nKey::CmdBrushRadiusDown => "Decrease brush radius",
+        I18nKey::CmdSelectBrushToolPaint => "Brush: Paint",
+        I18nKey::CmdSelectBrushToolRange => "Brush: Mountain range",
+        I18nKey::CmdSelectBrushToolPlateau => "Brush: Plateau",
+        I18nKey::CmdSelectBrushToolHills => "Brush: Hills",
+        I18nKey::CmdSelectBrushToolVolcano => "Brush: Volcano",
+        I18nKey::CmdSelectBrushToolLake => "Brush: Lake",
+        I18nKey::CmdSelectBrushToolRiver => "Brush: River",
+        I18nKey::CmdToggleGrid => "Toggle reference grid",
         I18nKey::CmdDrillToRoot => "Drill back to world map",
         I18nKey::CmdDrillUp => "Drill back one level",
 

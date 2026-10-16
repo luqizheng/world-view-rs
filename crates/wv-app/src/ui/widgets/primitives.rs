@@ -324,23 +324,23 @@ pub fn format_time_ago(at: std::time::Instant, now: std::time::Instant) -> Strin
 
 // ── 笔刷面板用地形网格 ──────────────────────────────────────────────────
 
-/// 地形色块网格（§4.5：2 列 × 5 行，单行色块+名称，整块紧凑）。
+/// 地形色块瓷砖网格（2026-10-16 改版：5 列 × 2 行纯色块，26 px 方块）。
 ///
-/// 行高 22 px（曾 44 px），色块 14 px 居左、名称 11 px 居右同一行——
-/// 高度砍半但视觉仍能一眼区分当前选中（背景填 `active_bg` + 1.5 px
-/// `focus` 描边），网格外的所有状态提示交还给面板体。
+/// 旧版 2 列 × 5 行「色块 + 名称」行高 22 px——名字占掉一半面板宽，
+/// 十种地形竖排近一掌高。改版后名称两处补偿：悬停 `on_hover_text`（逐块），
+/// 选中名由面板段标题常显（`TERRAIN MATERIAL · 草原`）。选中 = 1.5 px
+/// `focus` 金描边（截图验收过的既视感），hover = `hover_bg` 底。
 pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8, loc: Locale) {
+    const SWATCH: f32 = 26.0;
     egui::Grid::new("terrain_swatches")
-        .num_columns(2)
+        .num_columns(5)
         .spacing([space::XS, space::XS])
         .show(ui, |ui| {
             for k in 0u8..10 {
                 let name = terrain_name_at(loc, k as usize);
                 let is_sel = *selected == k;
-                let cell_w = (ui.available_width() - space::XS) / 2.0;
-                let row_h = 22.0;
                 let (rect, resp) =
-                    ui.allocate_exact_size(egui::vec2(cell_w, row_h), egui::Sense::click());
+                    ui.allocate_exact_size(egui::Vec2::splat(SWATCH), egui::Sense::click());
                 let painter = ui.painter();
                 if is_sel {
                     painter.rect_filled(rect, radius::CONTROL, shell.active_bg());
@@ -353,28 +353,16 @@ pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8, loc: 
                 } else if resp.hovered() {
                     painter.rect_filled(rect, radius::CONTROL, shell.hover_bg());
                 }
-                // 14px 色块，垂直居中。
-                let sw_size = 14.0;
-                let sw = egui::Rect::from_min_size(
-                    egui::pos2(rect.min.x + space::SM, rect.center().y - sw_size / 2.0),
-                    egui::vec2(sw_size, sw_size),
-                );
+                // 16px 色块居中（瓷砖是 26px 命中区，色块小一点留呼吸）。
+                let sw_size = 16.0;
+                let sw = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(sw_size));
                 painter.rect_filled(sw, radius::BADGE, terrain_swatch(k));
-                // 11px 名称，色块右侧，垂直居中。
-                painter.text(
-                    egui::pos2(
-                        rect.min.x + space::SM + sw_size + space::SM,
-                        rect.center().y,
-                    ),
-                    egui::Align2::LEFT_CENTER,
-                    name,
-                    proportional(11.0),
-                    if is_sel { shell.t1() } else { shell.t2() },
-                );
                 if resp.clicked() {
                     *selected = k;
                 }
-                if (k + 1) % 2 == 0 {
+                resp.on_hover_text(name);
+                // 5 列换行：10 块 = 2 行。
+                if (k + 1) % 5 == 0 {
                     ui.end_row();
                 }
             }
@@ -438,6 +426,21 @@ pub const ICON_PLUS: egui::ImageSource<'static> =
     egui::include_image!("../../../assets/ui/tool_icons/plus.svg");
 pub const ICON_FOLDER_OPEN: egui::ImageSource<'static> =
     egui::include_image!("../../../assets/ui/tool_icons/folder-open.svg");
+/// 笔刷意图工具图标（地形设计器三行行内瓷砖）。形态两两互异是硬要求——
+/// 瓷砖纯图标，识别全靠形：尖峰(山脉)/平顶(高原)/圆丘(丘陵)/开口锥+射线(火山)/
+/// 水滴(湖)/波线(河)。
+pub const ICON_MOUNTAIN_RANGE: egui::ImageSource<'static> =
+    egui::include_image!("../../../assets/ui/tool_icons/mountain-range.svg");
+pub const ICON_PLATEAU: egui::ImageSource<'static> =
+    egui::include_image!("../../../assets/ui/tool_icons/plateau.svg");
+pub const ICON_HILLS: egui::ImageSource<'static> =
+    egui::include_image!("../../../assets/ui/tool_icons/hills.svg");
+pub const ICON_VOLCANO: egui::ImageSource<'static> =
+    egui::include_image!("../../../assets/ui/tool_icons/volcano.svg");
+pub const ICON_LAKE: egui::ImageSource<'static> =
+    egui::include_image!("../../../assets/ui/tool_icons/lake.svg");
+pub const ICON_RIVER: egui::ImageSource<'static> =
+    egui::include_image!("../../../assets/ui/tool_icons/river.svg");
 
 // ── 测试 ─────────────────────────────────────────────────────────────────
 

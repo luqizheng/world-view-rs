@@ -1,0 +1,17 @@
+<!-- 手绘（Lucide 风格）：双圆丘——两座圆弧土包比 mountain-snow 的单尖峰
+     更矮更钝，一眼区分「丘陵 vs 山脉」。stroke 固定 #ffffff（同族纪律）。 -->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="#ffffff"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M2 19h20" />
+  <path d="M4 19c1.5-5 4.5-5 6 0" />
+  <path d="M11 19c2-6.5 5.5-6.5 7.5 0" />
+</svg>

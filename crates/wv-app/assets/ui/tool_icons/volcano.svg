@@ -1,0 +1,19 @@
+<!-- 手绘（Lucide 风格；lucide-static 无 volcano 图标）：开口火山锥 + 三道
+     喷发射线。锥体顶边留缺口即火山口，与 mountain 尖峰、plateau 平顶相区分。
+     stroke 固定 #ffffff（同族纪律）。 -->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="#ffffff"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="m9 9-5 12h16L15 9" />
+  <path d="M12 6V3" />
+  <path d="m7.5 6.5-2-2" />
+  <path d="m16.5 6.5 2-2" />
+</svg>

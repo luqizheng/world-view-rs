@@ -1,0 +1,16 @@
+<!-- 手绘（Lucide 风格）：平顶台地——与 mountain 的尖峰、hills 的圆丘相区分，
+     台缘一条水平线是「顶面平坦」的语义核心。stroke 固定 #ffffff（同族纪律）。 -->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="#ffffff"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M3 19h18" />
+  <path d="m6 19 2-9h8l2 9" />
+</svg>
