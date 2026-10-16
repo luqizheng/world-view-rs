@@ -292,6 +292,9 @@ struct CellRenderer<'a> {
     /// 边界扰动开关：Google 模式关闭（Google 普通地图的边界是干净的直线/平滑
     /// 曲线；手绘感揉边与「普通地图」气质相悖）。
     wobble: bool,
+    /// 装饰旗标（ADR-0023 D4：`ThemePack.treatment`）。HandDrawn 全 `true` 时
+    /// 所有 gate 与历史恒开行为逐位一致。
+    treatment: crate::theme::theme_pack::TreatmentFlags,
     /// `kind → res² 瓦片块`（按需填充；`None` = 尚未尝试）。
     blocks: [Option<Vec<u8>>; 10],
     /// `kind` 是否已尝试过建块（避免无映射 kind 被反复查）。
@@ -305,6 +308,7 @@ impl<'a> CellRenderer<'a> {
         atlas: Option<&'a TileAtlas>,
         soften: bool,
         palette: &'a PaletteColors,
+        treatment: crate::theme::theme_pack::TreatmentFlags,
     ) -> Self {
         let (w, h) = (data.width.max(1), data.height.max(1));
         // 事件图与轮廓图都不铺瓦片：前者灰白底，后者水陆三色。
@@ -340,7 +344,10 @@ impl<'a> CellRenderer<'a> {
             soften: soften && !matches!(mode, ViewMode::Coastline | ViewMode::GoogleMap),
             // 等值线模式（VectorFlat）也关闭揉边：它的自然蜿蜒由
             // `isoline_overlay` 的等值线描边承担，逐像素噪声会和几何曲线打架。
-            wobble: !matches!(mode, ViewMode::GoogleMap | ViewMode::VectorFlat),
+            // 主题装饰旗标（ADR-0023 D4）是第三道闸：EMPTY 类主题整体关揉边。
+            wobble: treatment.boundary_wobble
+                && !matches!(mode, ViewMode::GoogleMap | ViewMode::VectorFlat),
+            treatment,
             blocks: std::array::from_fn(|_| None),
             tried: [false; 10],
         }
@@ -654,12 +661,15 @@ impl<'a> CellRenderer<'a> {
             let mut color = (self.shader)(self.data, kind, self.palette);
             // 水域按高度渐变（手绘地图 #1）：kind 0/1 的内部格从单色水变
             // height 调度的水彩带；轮廓图模式不进这里。
-            if is_water_kind(kind) && self.mode != ViewMode::Coastline {
+            if self.treatment.water_gradient
+                && is_water_kind(kind)
+                && self.mode != ViewMode::Coastline
+            {
                 color = water_shade_at(cell.height, self.palette);
             }
             // 雪格双调（手绘地图 #3）：kind=7 全部走 snow_shade_at（RealTerrain
             // 模式之外也给 highlight 视觉——海报感的"近白雪"）。轮廓图模式不动。
-            if kind == 7 && self.mode != ViewMode::Coastline {
+            if self.treatment.snow_shade && kind == 7 && self.mode != ViewMode::Coastline {
                 color = snow_shade_at(cell.height, self.palette);
             }
             if self.soften {
@@ -702,8 +712,9 @@ fn write_terrain_pixels(
     atlas: Option<&TileAtlas>,
     soften: bool,
     palette: &PaletteColors,
+    treatment: crate::theme::theme_pack::TreatmentFlags,
 ) -> (Vec<u8>, u32) {
-    let mut renderer = CellRenderer::new(data, mode, atlas, soften, palette);
+    let mut renderer = CellRenderer::new(data, mode, atlas, soften, palette, treatment);
     let (w, h, res) = (renderer.w, renderer.h, renderer.res);
     let stride = w * res;
     let mut pixels = vec![0u8; (stride * h * res * 4) as usize];
@@ -731,8 +742,9 @@ pub fn image_from_terrain(
     atlas: Option<&TileAtlas>,
     soften: bool,
     palette: &PaletteColors,
+    treatment: crate::theme::theme_pack::TreatmentFlags,
 ) -> Image {
-    let (pixels, res) = write_terrain_pixels(data, mode, atlas, soften, palette);
+    let (pixels, res) = write_terrain_pixels(data, mode, atlas, soften, palette, treatment);
     let (w, h) = (data.width.max(1), data.height.max(1));
     Image::new(
         Extent3d {
@@ -778,6 +790,7 @@ pub fn patch_terrain_image(
     res: u32,
     soften: bool,
     palette: &PaletteColors,
+    treatment: crate::theme::theme_pack::TreatmentFlags,
 ) {
     let (w, h) = (data.width.max(1), data.height.max(1));
     let stride = w * res; // 像素 stride
@@ -787,7 +800,7 @@ pub fn patch_terrain_image(
     let gy1 = gy1.min(h);
 
     // 与全图合成共用一个渲染器（边界扰动必须一致，否则笔刷区出现拼接裂缝）。
-    let mut renderer = CellRenderer::new(data, mode, atlas, soften, palette);
+    let mut renderer = CellRenderer::new(data, mode, atlas, soften, palette, treatment);
     // 调用方传入的 res 与渲染器推导的 res 必须一致（同一张纹理）。
     debug_assert_eq!(
         renderer.res, res,
@@ -906,6 +919,7 @@ mod tests {
             None,
             false,
             crate::theme::palette::colors(Default::default()),
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
         );
         let Color::Srgba(grass) = colors::core_terrain(3) else {
             unreachable!()
@@ -942,6 +956,7 @@ mod tests {
             None,
             false,
             crate::theme::palette::colors(Default::default()),
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
         );
         // 深水渐变（手绘地图 #1）启用后：深水中心像素 = water_shade_at(−3500)，
         // 不再是 core_terrain(0) 原色。统一从 water_shade_at 取色源，避免硬编码颜色。
@@ -997,6 +1012,7 @@ mod tests {
             // 默认 soften=true 也要清晰蓝——这是用户最直观的视觉预期。
             true,
             crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight),
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
         );
         let px = img.data.as_ref().expect("image 必有像素");
         let res = (img.width() / 4) as usize;
@@ -1025,7 +1041,14 @@ mod tests {
             cells: vec![wv_core::map::MapBase::Ocean.cell(); 16],
         };
         let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
-        let img = image_from_terrain(&data, ViewMode::VectorFlat, None, true, pal);
+        let img = image_from_terrain(
+            &data,
+            ViewMode::VectorFlat,
+            None,
+            true,
+            pal,
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+        );
         let px = img.data.as_ref().expect("image 必有像素");
         let res = (img.width() / 4) as usize;
         let i = (res / 2 * img.width() as usize + res / 2) * 4;
@@ -1062,6 +1085,7 @@ mod tests {
             None,
             true,
             crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight),
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
         );
         let px = img.data.as_ref().expect("image 必有像素");
         let res = (img.width() / 4) as usize;
@@ -1105,8 +1129,22 @@ mod tests {
             cells: vec![wv_core::map::MapBase::Land.cell(); 16],
         };
         let palette = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
-        let ocean_img = image_from_terrain(&ocean_data, ViewMode::VectorFlat, None, true, palette);
-        let land_img = image_from_terrain(&land_data, ViewMode::VectorFlat, None, true, palette);
+        let ocean_img = image_from_terrain(
+            &ocean_data,
+            ViewMode::VectorFlat,
+            None,
+            true,
+            palette,
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+        );
+        let land_img = image_from_terrain(
+            &land_data,
+            ViewMode::VectorFlat,
+            None,
+            true,
+            palette,
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+        );
 
         // 2. 取中心像素（在 image_from_terrain 之后，这一步相当于「无雾」底色）。
         fn center_pixel(img: &Image) -> (i32, i32, i32) {
@@ -1202,6 +1240,7 @@ mod tests {
             None,
             false,
             crate::theme::palette::colors(Default::default()),
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
         );
         let tex = crate::terrain_view::new_terrain_texture(
             &mut images,
@@ -1247,6 +1286,7 @@ mod tests {
             None,
             false,
             crate::theme::palette::colors(Default::default()),
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
         );
         if let Some(mut img) = images.get_mut(&handle) {
             *img = new_image;
@@ -1319,6 +1359,7 @@ mod tests {
             None,
             false,
             crate::theme::palette::colors(Default::default()),
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
         );
         let mut tex = crate::terrain_view::new_terrain_texture(
             &mut images,
@@ -1337,6 +1378,7 @@ mod tests {
             None,
             false,
             crate::theme::palette::colors(Default::default()),
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
         );
         crate::terrain_view::replace_terrain_texture(
             &mut tex,

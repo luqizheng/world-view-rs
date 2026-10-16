@@ -87,6 +87,7 @@ pub fn rebuild_texture_on_mode_change(
         atlas.as_deref(),
         view.terrain_soften,
         crate::theme::palette::colors(view.map_palette),
+        crate::theme::theme_pack::builtin::for_palette(view.map_palette).treatment,
     );
     replace_terrain_texture(
         &mut tex,

@@ -41,9 +41,11 @@ pub struct ThemePack {
     pub display_name: &'static str,
     /// 配色 36 槽位（现有 `PaletteColors` 直引）。
     pub palette: PaletteColors,
-    /// 装饰旗标（ADR-0021 D2 载荷）。M1 阶段 `Default::default()`（即所有旗标为
-    /// `false` 的占位）；M2 落地时切到 `Treatment::HandDrawn` 默认值——届时
-    /// 14 项手绘特性旗标全 `true`、与现状观感逐位一致。
+    /// 装饰旗标（ADR-0021 D2 载荷，经 ADR-0023 D4 修订归入本结构）。
+    ///
+    /// 内置两包装载 [`TreatmentFlags::HAND_DRAWN`]（手绘全开 = 历史恒开观感，
+    /// 零回归基准）；「干净矢量」类未来主题装载 `TreatmentFlags::EMPTY`。
+    /// 渲染 gate 点自 2026-10-16 起逐点接线（cells / isoline_overlay / atmosphere）。
     pub treatment: TreatmentFlags,
     /// 可选贴图（`None` = 纯色平涂，**当前默认行为**）。
     ///
@@ -71,18 +73,17 @@ impl TileAtlasSpec {
     }
 }
 
-/// 装饰旗标（M1 占位 = 全 `false`；M2 接 ADR-0021 D2 时切到 `Treatment::HandDrawn` 默认值）。
+/// 装饰旗标集合（ADR-0021 D2 特性归轴表的代码载体，经 ADR-0023 D4 修订归入 ThemePack）。
 ///
-/// **当前所有旗标为 `false` 不影响观感**——因为 M1 阶段渲染层**完全**不读本结构
-///（现有 `palette::colors(MapPalette)` 走 `PaletteColors::DAYLIGHT` 路径，与 `BuiltinPacks::DEFAULT.palette`
-/// 值源同源）。M2 切读路径时再启用。
+/// **归入本结构的 9 项**：水彩晕（#4）、海色渐变（#1）、雪调（#3）、海冰（#5，渲染
+/// 未接线、旗标预留）、纸纹（#6）、河中线（#8）、边界扰动（wobble）、墨线亚线性
+///（#10）、纸面雾霭。**不归入**（归各自既有轴，ADR-0021 §2 D2 §4）：标注字重（#2）、
+/// POI 行为与 hover（#7/#9/#12）、海名（#13/#14）、笔刷内环（#11，编辑态反馈）。
 ///
-/// **为何用 const `EMPTY` 而非 `Default` derive**：`bool::default` 不是 const fn，
-/// 无法在 `const` 上下文里调用——但 M1 阶段 `ThemePack` 字段必须用 const 构造
-///（M1 选 const 而非 static 是为了让 `&'static` 引用与 palette::DAYLIGHT 同档；
-/// static 的成本是首帧一次 lazy-init，const 是纯编译期）。**M1 在不改 ADR
-/// 性能档的前提下**改用 const + `EMPTY` 显式零值，绕开 `bool::default` 限制。
-#[derive(Debug, Clone, Copy)]
+/// 两极常量：[`TreatmentFlags::HAND_DRAWN`]（手绘全开）/ [`TreatmentFlags::EMPTY`]
+///（全关 = 干净矢量基准）。`bool::default` 非 const，故两极都用手写 const——
+/// `ThemePack` 的 `static` 构造点要求编译期求值。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TreatmentFlags {
     /// 是否启用海岸线水彩晕（手绘地图呈现 #4，commit 45bd159）。
     pub coast_halo: bool,
@@ -91,19 +92,42 @@ pub struct TreatmentFlags {
     /// 是否启用雪独立色 + 冷调阴影（#3，commit 386571d）。
     pub snow_shade: bool,
     /// 是否启用海冰层（#5，commit cd4aa40）。
+    ///
+    /// **注意**：海冰当前只有色源令牌（`ICE_PAPER` / `ICE_INK` / `ICE_SHADOW`）
+    /// 与纬度/深度阈值常量，**渲染消费从未接线**（`cells.rs` 无任何读取点）。
+    /// 本旗标为该未来的渲染接线预留；接线前恒 `true` 无副作用。
     pub sea_ice: bool,
     /// 是否启用纸纹 grain uv（#6，commit d32c590）。
     pub paper_grain: bool,
     /// 是否启用河中线（#8，commit 875bb2f）。
     pub river_centerline: bool,
-    /// 是否启用边界扰动 wobble（`cells.rs:343`）。
+    /// 是否启用边界扰动 wobble（`cells.rs` `CellRenderer::wobble`）。
     pub boundary_wobble: bool,
     /// 是否启用墨线亚线性缩放（#10，commit 93becde）。
     pub ink_sublinear: bool,
+    /// 是否启用纸面雾霭 + 远缩放 veil（ADR-0016 M2，`atmosphere.rs`）。
+    pub paper_fog: bool,
 }
 
 impl TreatmentFlags {
-    /// 全 `false` 常量（const fn 替代 `Default::default()`——`bool::default` 非 const）。
+    /// 手绘全开（= 2026-10-15 前 14 项手绘特性恒开的现状观感）。
+    ///
+    /// 内置两包（古舆图日间/暮色）都装载本值——**零回归硬前提**：所有 gate
+    /// 点在旗标 `true` 时走与恒开时期**逐位相同**的代码路径。
+    pub const HAND_DRAWN: Self = Self {
+        coast_halo: true,
+        water_gradient: true,
+        snow_shade: true,
+        sea_ice: true,
+        paper_grain: true,
+        river_centerline: true,
+        boundary_wobble: true,
+        ink_sublinear: true,
+        paper_fog: true,
+    };
+
+    /// 全 `false`（「干净矢量」观感的基准，未来 Skyline 类主题的起点；
+    /// 也是测试的对照组）。
     pub const EMPTY: Self = Self {
         coast_halo: false,
         water_gradient: false,
@@ -113,12 +137,15 @@ impl TreatmentFlags {
         river_centerline: false,
         boundary_wobble: false,
         ink_sublinear: false,
+        paper_fog: false,
     };
 }
 
 impl Default for TreatmentFlags {
+    /// 缺省 = 手绘全开（安全缺省：新主题 crate 忘写 `treatment` 时得到与
+    /// 编辑器一致的手绘观感，而非全关的素图）。
     fn default() -> Self {
-        Self::EMPTY
+        Self::HAND_DRAWN
     }
 }
 
@@ -159,10 +186,9 @@ impl Default for ActiveThemePack {
 /// （构造时未做任何字段映射或转换）。这是 M1 零回归的硬保证——
 /// `BuiltinPacks::DEFAULT.palette == PaletteColors::DAYLIGHT`（类型与值双重相等）。
 ///
-/// **为何用 `static` 而非 `const`**：`TreatmentFlags` 没有 const 构造器（`bool::default`
-/// 不是 const fn），const item 要求所有字段都能在编译期求值。M1 阶段 `DEFAULT` /
-/// `DUSK` 是只读单例，语义上等价于 const；选 `static` 拿到 `&'static` 引用 + 单态
-/// 初始化，**不影响 D2 §2 性能前提**（仍是 `&'static` 切片，热路径无 vtable）。
+/// **为何用 `static` 而非 `const`**：Rust 的 `const` item 引用在每次使用处内联展开，
+/// `ThemePack` 作为聚合身份（id / registry 查找键）必须**地址稳定**——`static` 保证
+/// 单例；**不影响 D2 §2 性能前提**（仍是 `&'static` 引用，热路径无 vtable）。
 pub mod builtin {
     use super::*;
 
@@ -171,7 +197,7 @@ pub mod builtin {
         id: "antique_default",
         display_name: "日间古舆图",
         palette: PaletteColors::DAYLIGHT,
-        treatment: TreatmentFlags::EMPTY,
+        treatment: TreatmentFlags::HAND_DRAWN,
         atlas: None,
     };
 
@@ -180,7 +206,7 @@ pub mod builtin {
         id: "antique_dusk",
         display_name: "暮色旧纸",
         palette: PaletteColors::DUSK,
-        treatment: TreatmentFlags::EMPTY,
+        treatment: TreatmentFlags::HAND_DRAWN,
         atlas: None,
     };
 
@@ -257,34 +283,46 @@ mod tests {
         assert_eq!(a.0.id, "antique_default");
     }
 
-    /// `TreatmentFlags::default()` 全 `false`（M1 占位语义——见字段文档）。
+    /// `TreatmentFlags::default()` = `HAND_DRAWN`（安全缺省：忘写 treatment 的新
+    /// 主题 crate 得到与编辑器一致的手绘观感）。
     #[test]
-    fn treatment_flags_default_is_all_false() {
-        let t = TreatmentFlags::default();
-        assert!(!t.coast_halo);
-        assert!(!t.water_gradient);
-        assert!(!t.snow_shade);
-        assert!(!t.sea_ice);
-        assert!(!t.paper_grain);
-        assert!(!t.river_centerline);
-        assert!(!t.boundary_wobble);
-        assert!(!t.ink_sublinear);
+    fn treatment_flags_default_is_hand_drawn() {
+        assert_eq!(
+            TreatmentFlags::default().coast_halo,
+            TreatmentFlags::HAND_DRAWN.coast_halo
+        );
+        assert!(TreatmentFlags::default().coast_halo);
+        assert!(TreatmentFlags::default().water_gradient);
+        assert!(TreatmentFlags::default().snow_shade);
+        assert!(TreatmentFlags::default().paper_grain);
+        assert!(TreatmentFlags::default().river_centerline);
+        assert!(TreatmentFlags::default().boundary_wobble);
+        assert!(TreatmentFlags::default().ink_sublinear);
+        assert!(TreatmentFlags::default().paper_fog);
     }
 
-    /// `TreatmentFlags::EMPTY` const 与 `Default::default()` 行为等价。
+    /// `HAND_DRAWN` 与 `EMPTY` 互补：每个旗标一真一假（两极对照完整，防加字段时
+    /// 漏更新某一个 const）。
     #[test]
-    fn treatment_flags_empty_matches_default() {
-        assert_eq!(
-            TreatmentFlags::EMPTY.coast_halo,
-            TreatmentFlags::default().coast_halo
-        );
-        assert_eq!(
-            TreatmentFlags::EMPTY.water_gradient,
-            TreatmentFlags::default().water_gradient
-        );
-        assert_eq!(
-            TreatmentFlags::EMPTY.ink_sublinear,
-            TreatmentFlags::default().ink_sublinear
-        );
+    fn hand_drawn_and_empty_are_complementary() {
+        let h = TreatmentFlags::HAND_DRAWN;
+        let e = TreatmentFlags::EMPTY;
+        assert!(h.coast_halo && !e.coast_halo);
+        assert!(h.water_gradient && !e.water_gradient);
+        assert!(h.snow_shade && !e.snow_shade);
+        assert!(h.sea_ice && !e.sea_ice);
+        assert!(h.paper_grain && !e.paper_grain);
+        assert!(h.river_centerline && !e.river_centerline);
+        assert!(h.boundary_wobble && !e.boundary_wobble);
+        assert!(h.ink_sublinear && !e.ink_sublinear);
+        assert!(h.paper_fog && !e.paper_fog);
+    }
+
+    /// 内置两包都装载 `HAND_DRAWN`（零回归硬前提：渲染 gate 读到的旗标全 `true`
+    /// = 与历史恒开行为逐位一致）。
+    #[test]
+    fn builtin_packs_carry_hand_drawn_treatment() {
+        assert_eq!(builtin::DEFAULT.treatment, TreatmentFlags::HAND_DRAWN);
+        assert_eq!(builtin::DUSK.treatment, TreatmentFlags::HAND_DRAWN);
     }
 }

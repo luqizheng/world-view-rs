@@ -820,6 +820,7 @@ fn adopt_world_snapshot(
         atlas,
         view.terrain_soften,
         crate::theme::palette::colors(view.map_palette),
+        wv_render::theme::theme_pack::builtin::for_palette(view.map_palette).treatment,
     );
     wv_render::terrain_view::replace_terrain_texture(
         tex,

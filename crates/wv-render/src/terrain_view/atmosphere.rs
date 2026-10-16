@@ -153,6 +153,10 @@ struct AtmosphereKey {
     origin: (u32, u32),
     extent: (u32, u32),
     scale_bucket: u32,
+    /// 装饰旗标快照（ADR-0023 D4）：`(paper_fog, paper_grain)`。进 key 是为了
+    /// 切主题导致旗标翻转时整体 despawn 重建（与幅面变化同口径），避免留下
+    /// 「旧主题的雾还挂着」的幽灵实体。
+    treatment: (bool, bool),
 }
 
 /// 把 `view.scale` 量化到 1/8 octaves（`bucket = (log2(scale) × 8).round() as i32`）。
@@ -212,6 +216,8 @@ pub fn sync_atmosphere(
         atm.despawn(&mut commands);
         return;
     }
+    // 装饰旗标（ADR-0023 D4）：从当前主题包派生；内置两包都是 HAND_DRAWN。
+    let treatment = crate::theme::theme_pack::builtin::for_palette(view.map_palette).treatment;
     let key = AtmosphereKey {
         origin: (
             grid.raster_origin.x.to_bits(),
@@ -219,6 +225,7 @@ pub fn sync_atmosphere(
         ),
         extent: (tex.size, grid.cell_size.to_bits()),
         scale_bucket: scale_bucket(view.scale),
+        treatment: (treatment.paper_fog, treatment.paper_grain),
     };
     if atm.key.as_ref() != Some(&key) {
         atm.despawn(&mut commands);
@@ -228,35 +235,42 @@ pub fn sync_atmosphere(
         let grain_tile = (GRAIN_TILE_WORLD / view.scale.max(0.05)).max(1.0);
         let uv = Vec2::splat(size.x / grain_tile);
         // —— 雾霭（初色 NONE，末尾逐帧更新段马上会写入当前值）——
-        let veil_mesh = meshes.add(extent_quad_mesh(size, Vec2::ZERO));
-        let veil_mat = materials.add(ColorMaterial::from_color(Color::NONE));
-        let veil = commands
-            .spawn((
-                Mesh2d(veil_mesh.clone()),
-                MeshMaterial2d(veil_mat.clone()),
-                Transform::from_xyz(grid.raster_origin.x, grid.raster_origin.y, VEIL_Z),
-            ))
-            .id();
+        // 装饰旗标 gate：`paper_fog = false` 的主题不铺雾（`atm.veil` 留 None，
+        // 下方逐帧 alpha 更新段与 despawn 都对 None 天然短路）。
+        if treatment.paper_fog {
+            let veil_mesh = meshes.add(extent_quad_mesh(size, Vec2::ZERO));
+            let veil_mat = materials.add(ColorMaterial::from_color(Color::NONE));
+            let veil = commands
+                .spawn((
+                    Mesh2d(veil_mesh.clone()),
+                    MeshMaterial2d(veil_mat.clone()),
+                    Transform::from_xyz(grid.raster_origin.x, grid.raster_origin.y, VEIL_Z),
+                ))
+                .id();
+            atm.veil = Some((veil, veil_mesh, veil_mat));
+        }
         // —— 纸张噪点 ——
-        let grain_tex = atm
-            .grain_texture
-            .get_or_insert_with(|| images.add(paper_grain_image(0x5EED_5EED)))
-            .clone();
-        let grain_mesh = meshes.add(extent_quad_mesh(size, uv));
-        let grain_mat = materials.add(ColorMaterial {
-            texture: Some(grain_tex),
-            color: Color::WHITE.with_alpha(GRAIN_ALPHA),
-            ..Default::default()
-        });
-        let grain = commands
-            .spawn((
-                Mesh2d(grain_mesh.clone()),
-                MeshMaterial2d(grain_mat.clone()),
-                Transform::from_xyz(grid.raster_origin.x, grid.raster_origin.y, GRAIN_Z),
-            ))
-            .id();
-        atm.veil = Some((veil, veil_mesh, veil_mat));
-        atm.grain = Some((grain, grain_mesh, grain_mat));
+        // 装饰旗标 gate：`paper_grain = false` 的主题不铺纸纹。
+        if treatment.paper_grain {
+            let grain_tex = atm
+                .grain_texture
+                .get_or_insert_with(|| images.add(paper_grain_image(0x5EED_5EED)))
+                .clone();
+            let grain_mesh = meshes.add(extent_quad_mesh(size, uv));
+            let grain_mat = materials.add(ColorMaterial {
+                texture: Some(grain_tex),
+                color: Color::WHITE.with_alpha(GRAIN_ALPHA),
+                ..Default::default()
+            });
+            let grain = commands
+                .spawn((
+                    Mesh2d(grain_mesh.clone()),
+                    MeshMaterial2d(grain_mat.clone()),
+                    Transform::from_xyz(grid.raster_origin.x, grid.raster_origin.y, GRAIN_Z),
+                ))
+                .id();
+            atm.grain = Some((grain, grain_mesh, grain_mat));
+        }
         atm.key = Some(key);
     }
     // 雾霭 alpha 逐帧连续更新（缩放的空气感 + 编辑态免雾）；颜色随主题纸面

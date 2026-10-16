@@ -223,13 +223,22 @@ pub fn sync_isoline_overlay(
     let coast = height_segments(w, h, |x, y| cell(x, y).height as f32, 0.0);
     let kinds = kind_segments(w, h, |x, y| cell(x, y).kind);
     let tol = dp_tol_for(view.scale);
+    // 装饰旗标（ADR-0023 D4）：从当前主题包派生。内置两包都是 HAND_DRAWN（全
+    // `true`）——所有 gate 分支在 `true` 时走与历史恒开**逐位相同**的路径。
+    let treatment = crate::theme::theme_pack::builtin::for_palette(view.map_palette).treatment;
     // 描边世界半宽（手绘地图 #10，2026-10-15）：**亚线性**缩放——
     // 世界半宽 = px × scale^0.78 而非 px × scale（ADR-0008 §8 乘口径的
     // 修正式）。civ-atlas GLYPH_SHRINK=0.22 同款思路：放大 4 倍时墨线的
     // *世界*尺寸只长 ~3 倍 → *屏幕*观感随放大反而变纤细（k^-0.22），地图
     // 细节浮现而墨线不霸道；缩小时屏幕上线变粗，远观仍可辨。
     // 世界下限保留：极远时防消隐。
-    let thin_half = stroke_half_world(STROKE_PX, view.scale, grid.cell_size * 0.03);
+    // 装饰旗标 gate：`ink_sublinear = false` 的主题回退 ADR-0008 §8 的严格
+    // 乘口径（屏幕恒定宽）。
+    let thin_half = if treatment.ink_sublinear {
+        stroke_half_world(STROKE_PX, view.scale, grid.cell_size * 0.03)
+    } else {
+        (STROKE_PX * 0.5 * view.scale).max(grid.cell_size * 0.03)
+    };
     // 类型边界加宽：格缘阶梯被 Chaikin 磨角后，平滑曲线偏离原阶梯至多约
     // 0.3 格——细线盖不住露出的「错色台阶」，按格径给足半宽才压得平。
     let kind_half = thin_half.max(grid.cell_size * KIND_STROKE_CELL);
@@ -247,9 +256,15 @@ pub fn sync_isoline_overlay(
             continue;
         }
         strokes.push((thin.clone(), c.closed, thin_half));
-        coast_halo_inner.push((thin.clone(), c.closed, thin_half * HALO_1_MULT));
-        coast_halo_outer.push((thin.clone(), c.closed, thin_half * HALO_2_MULT));
-        coast_river.push((thin, c.closed, thin_half * RIVER_MULT));
+        // 水彩晕与河中线（#4 / #8）的 gate 在 push 处：vec 留空 → 下游
+        // `is_empty()` 检查天然跳过 spawn，无需另改。
+        if treatment.coast_halo {
+            coast_halo_inner.push((thin.clone(), c.closed, thin_half * HALO_1_MULT));
+            coast_halo_outer.push((thin.clone(), c.closed, thin_half * HALO_2_MULT));
+        }
+        if treatment.river_centerline {
+            coast_river.push((thin, c.closed, thin_half * RIVER_MULT));
+        }
     }
     for c in assemble_chains(&kinds) {
         // 类型场边界是格缘阶梯：先小容差预抽稀去共线中点，再 Chaikin 磨角，
