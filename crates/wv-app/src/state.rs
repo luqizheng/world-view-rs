@@ -24,6 +24,58 @@ pub use wv_render::state::{
     LOD_REGION_SCALE,
 };
 
+/// 城市子图工具模式（ADR-0022 M2 · UI 工具）。
+///
+/// 工具栏按钮 → 切换此模式；map 上的拖拽 → [`CityToolState`] 累积草稿；
+/// 收笔时系统把草稿转 `AddCityCommand` 提交。
+///
+/// ## 三态
+///
+/// - `Off` —— 不启用城市工具（默认）。
+/// - `CreateArmed` —— 已开工具，下一次拖拽出矩形 = 建城草稿起笔；
+///   松开左键 = 提交 `AddCityCommand`，模式自动回 `Off`。
+/// - `Erase` —— 留待 V1.1：点击现有城市 outline = `SetCityOutlineCommand(None)`。
+///
+/// 与笔刷 / 测量**互斥**：进 `CreateArmed` 时把 `BrushState.enabled = false`、
+/// `MeasureState.mode = Off`，避免三种工具同时抢左键（per 同源 §4 工具语义）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CityToolMode {
+    #[default]
+    Off,
+    CreateArmed,
+}
+
+impl CityToolMode {
+    pub fn is_active(self) -> bool {
+        self != Self::Off
+    }
+
+    /// 该模式是否「吃掉」左键（防止笔刷同时响应）。
+    pub fn consumes_left_click(self) -> bool {
+        self == Self::CreateArmed
+    }
+}
+
+/// 城市草稿矩形（**父图局部 wu 坐标**）—— 拖拽出方框的两对角。
+#[derive(Debug, Clone, Copy)]
+pub struct CityDraft {
+    pub start: Vec2,
+    pub end: Vec2,
+}
+
+/// 城市工具会话态（ADR-0022 M2 · UI 工具）。
+///
+/// 与 [`MeasureState`] 同源（独立的工具资源，遵循 AGENTS §3.3 System 只生成命令、
+/// 不直接改世界）。
+#[derive(Resource, Debug, Default)]
+pub struct CityToolState {
+    pub mode: CityToolMode,
+    /// 拖拽中的草稿矩形（**父图局部 wu 坐标**）—— `Some(d)` = 起点已落、终点
+    /// 跟光标；松手时由 `commit_city_drag_on_release` 用 start/end 矩形构造
+    /// `AddCityCommand` + `outline_polygon` 提交。
+    pub draft: Option<CityDraft>,
+}
+
 /// [`ViewMode`](wv_render::state::ViewMode) 的顶栏显示名（ADR-0018：locale 查表）。
 ///
 /// ADR-0020 把 `ViewMode` 本体迁入 `wv-render` 后，i18n 文案留在应用层
@@ -466,6 +518,7 @@ mod tests {
             unit_per_km: None,
             orientation: 0.0,
             base: None,
+            outline_polygon: None,
         }
     }
 

@@ -134,6 +134,7 @@ pub fn run(config: AppConfig) {
     .init_resource::<streets::StreetLayerCache>()
     .init_resource::<streets::StreetEditorState>()
     .init_resource::<crate::state::MeasureState>()
+    .init_resource::<crate::state::CityToolState>()
     .init_resource::<wv_render::measurement::MeasurementCache>()
     // 势力多边形层（S12）：同属「每帧 despawn+spawn 的实体集合」资源，
     // 漏 init 会在首帧 panic（`could not access system parameter`）。
@@ -193,6 +194,9 @@ pub fn run(config: AppConfig) {
                 camera::collect_brush_stroke,
                 // 编辑（笔触 → 命令 → History）
                 editing::commit_stroke_on_release,
+                // ADR-0022 M2：城市工具——拖拽草稿 + 收笔提交。
+                editing::collect_city_drag,
+                editing::commit_city_drag_on_release,
                 streets::commit_street_click,
                 // 撤销 / 重做不再在这里单独监听 Ctrl+Z：快捷键统一由
                 // `ui_shell::hotkeys` 收（那里已经处理了「输入框聚焦时失效」），

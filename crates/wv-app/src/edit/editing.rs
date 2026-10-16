@@ -21,12 +21,15 @@
 use bevy::prelude::*;
 
 use crate::state::{
-    BrushState, BrushTool, DrillState, GridConfig, PlaybackState, ViewState, WorldProjection,
+    BrushState, BrushTool, CityDraft, CityToolMode, CityToolState, DrillState, GridConfig,
+    PlaybackState, ViewState, WorldProjection,
 };
+use wv_core::map::{GeometryData, IconShape, MapLevel};
 use wv_edit::command::{
     EditCommand, IntentTerrainCommand, PaintTerrainCommand, ResetTerrainToBaseCommand,
 };
 use wv_edit::history::Transaction;
+use wv_edit::AddCityCommand;
 use wv_edit::History;
 use wv_render::camera::ActiveStroke;
 use wv_render::terrain_view::{image_from_terrain, TerrainTexture, TileAtlas};
@@ -524,6 +527,179 @@ pub fn refresh_project_diagnostics(
     diagnostics.last_count = d.items.len();
     diagnostics.diagnostics = d;
     diagnostics.needs_diagnose = false;
+}
+
+// ====== 城市工具：拖拽草稿 + 收笔提交（ADR-0022 M2 UI）==============
+
+/// 收集鼠标拖拽的矩形入 [`CityToolState::draft`]（父图局部 wu 坐标）。
+///
+/// 模式 = `CreateArmed` 时：
+/// - `just_pressed(Left)`：起点 = 当前光标世界坐标（父图局部）；
+/// - `pressed(Left)`：终点 = 当前光标（每帧刷新，撑出"橡皮筋"效果）；
+/// - `just_released(Left)`：不做事——由 [`commit_city_drag_on_release`] 收笔。
+///
+/// 不在画笔 / 播放中 / 城市模式未开时清空草稿（保持与笔刷的互斥语义）。
+#[allow(clippy::too_many_arguments)]
+pub fn collect_city_drag(
+    buttons: Res<ButtonInput<MouseButton>>,
+    mut city_tool: ResMut<CityToolState>,
+    playback: Res<PlaybackState>,
+    projection: Res<WorldProjection>,
+    drill: Res<DrillState>,
+    grid: Res<GridConfig>,
+    view: Res<ViewState>,
+    windows: Query<&Window>,
+    cameras: Query<&Transform, With<Camera2d>>,
+) {
+    if city_tool.mode != CityToolMode::CreateArmed {
+        city_tool.draft = None;
+        return;
+    }
+    if playback.playing {
+        city_tool.draft = None;
+        return;
+    }
+    if projection.project_dir.is_none() {
+        city_tool.draft = None;
+        return;
+    }
+    if drill.current().is_none() {
+        return;
+    }
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Some(cursor) = window.cursor_position() else {
+        return;
+    };
+    let Ok(transform) = cameras.single() else {
+        return;
+    };
+    let world =
+        wv_render::camera::screen_to_world(cursor, window.resolution.size(), transform, view.scale);
+    let local = world - grid.raster_origin;
+    let pos = Vec2::new(local.x, local.y);
+
+    if buttons.just_pressed(MouseButton::Left) {
+        // 起笔：start = end = 当前点（避免橡皮筋"瞬移"到旧 end）。
+        city_tool.draft = Some(CityDraft {
+            start: pos,
+            end: pos,
+        });
+    } else if buttons.pressed(MouseButton::Left) {
+        if let Some(d) = city_tool.draft.as_mut() {
+            d.end = pos;
+        }
+    } else {
+        // 没按住左键：清草稿（关工具 / 切模式 / 取消）。
+        city_tool.draft = None;
+    }
+}
+
+/// 松手时把草稿矩形转 `AddCityCommand` 提交（ADR-0022 D2 + D5）。
+///
+/// 仅当 `mode = CreateArmed` 且左键 `just_released` 时：
+/// 1. 从 `draft.start / draft.end` 归一化出矩形（min/max 化 x、y）；
+/// 2. 建一张对应 `width × height` 的城市子图，`outline_polygon` = 矩形（子图 LOCAL 坐标）；
+/// 3. `AddCityCommand` 提交到 `EditHistory`；
+/// 4. 收笔即关工具、清草稿。
+///
+/// 矩形容忍：拖出太小的方块（< 8 wu）视为误触，丢弃并 notice.warn。
+#[allow(clippy::too_many_arguments)]
+pub fn commit_city_drag_on_release(
+    buttons: Res<ButtonInput<MouseButton>>,
+    mut city_tool: ResMut<CityToolState>,
+    drill: Res<DrillState>,
+    playback: Res<PlaybackState>,
+    mut projection: ResMut<WorldProjection>,
+    mut edit: ResMut<EditHistory>,
+    mut notice: ResMut<crate::ui_shell::ShellNotice>,
+    time: Res<Time>,
+) {
+    if city_tool.mode != CityToolMode::CreateArmed {
+        return;
+    }
+    if !buttons.just_released(MouseButton::Left) {
+        return;
+    }
+    if playback.playing {
+        return;
+    }
+    let Some(parent_id) = drill.current().cloned() else {
+        let frame = (time.elapsed_secs() * 60.0) as u64;
+        notice.error(
+            "城市工具未生效：当前没有父图（顶栏工程菜单 → 新建地图…）",
+            frame,
+        );
+        city_tool.mode = CityToolMode::Off;
+        city_tool.draft = None;
+        return;
+    };
+    let Some(draft) = city_tool.draft else {
+        // 单击（未拖动）→ 视为取消。
+        city_tool.mode = CityToolMode::Off;
+        return;
+    };
+    // 归一化：min / max 化 x、y，避免反向拖拽。
+    let min_x = draft.start.x.min(draft.end.x);
+    let min_y = draft.start.y.min(draft.end.y);
+    let max_x = draft.start.x.max(draft.end.x);
+    let max_y = draft.start.y.max(draft.end.y);
+    let width = max_x - min_x;
+    let height = max_y - min_y;
+    // 矩形过小视为误触（< 8 wu 几乎不可见）。
+    if width < 8.0 || height < 8.0 {
+        let frame = (time.elapsed_secs() * 60.0) as u64;
+        notice.info(
+            format!("城市工具：拖出矩形太小（{width:.0}×{height:.0} wu），已忽略"),
+            frame,
+        );
+        city_tool.mode = CityToolMode::Off;
+        city_tool.draft = None;
+        return;
+    }
+    let city_id = format!("city_{}", projection.world.maps.len());
+    let icon_id = format!("icon_{city_id}");
+    let extent = wv_core::map::Extent {
+        width,
+        height,
+        origin: Some(wv_core::geometry::Point { x: min_x, y: min_y }),
+    };
+    // outline_polygon 在子图 LOCAL 坐标：min_x..min_x+width, min_y..min_y+height。
+    let outline = GeometryData::Polygon(vec![0.0, 0.0, width, 0.0, width, height, 0.0, height]);
+    let city = wv_core::map::MapNode {
+        id: wv_core::Id::new_unchecked(&city_id),
+        name: format!("新城 {city_id}"),
+        level: MapLevel::City,
+        parent: Some(parent_id),
+        extent: Some(extent),
+        outline_polygon: Some(outline),
+        ..wv_core::map::MapNode::default()
+    };
+    let cmd = AddCityCommand::new(
+        city,
+        wv_core::Id::new_unchecked(&icon_id),
+        IconShape::Diamond,
+    );
+    let mut tx = Transaction::new();
+    tx.push(Box::new(cmd));
+    match edit.history.commit(&mut projection.world, tx) {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
+            projection.dirty = true;
+            let frame = (time.elapsed_secs() * 60.0) as u64;
+            notice.info(
+                format!("新建城市「{city_id}」（{width:.0}×{height:.0} wu）"),
+                frame,
+            );
+        }
+        Err(e) => {
+            let frame = (time.elapsed_secs() * 60.0) as u64;
+            notice.error(format!("新建城市未生效：{e}"), frame);
+        }
+    }
+    city_tool.mode = CityToolMode::Off;
+    city_tool.draft = None;
 }
 
 #[cfg(test)]

@@ -34,7 +34,10 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use crate::state::{DrillState, GridConfig, MeasureMode, MeasureState, ViewState, WorldProjection};
+use crate::state::{
+    CityToolMode, CityToolState, DrillState, GridConfig, MeasureMode, MeasureState, ViewState,
+    WorldProjection,
+};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::{radius, space};
 use crate::ui_shell::StartupLoadRequest;
@@ -65,6 +68,7 @@ pub fn map_controls(
     shell_cfg: Res<UiShellConfig>,
     mut view: ResMut<ViewState>,
     mut measure: ResMut<MeasureState>,
+    mut city_tool: ResMut<CityToolState>,
     drill: Res<DrillState>,
     grid: Res<GridConfig>,
     tex: Res<wv_render::terrain_view::TerrainTexture>,
@@ -99,6 +103,7 @@ pub fn map_controls(
     let project_open = projection.project_dir.is_some();
     let line_active = measure.mode == MeasureMode::Line;
     let rect_active = measure.mode == MeasureMode::Rect;
+    let city_active = city_tool.mode == CityToolMode::CreateArmed;
 
     // 位置：右侧垂直居中、距窗体右缘 18px（原型 `.map-controls`）。
     egui::Area::new(egui::Id::new("wv_map_controls_v05"))
@@ -164,6 +169,31 @@ pub fn map_controls(
                     ui.add_space(SEPARATOR_PAD);
                     ui.separator();
                     ui.add_space(SEPARATOR_PAD);
+
+                    // ②.5 City — 城市子图工具（ADR-0022 D2 UI 接入）
+                    //   M2 简化：单击落一个默认 256×256 wu 的城市在点击点（drag-to-draw 矩形
+                    //   留 v1.1）；启用时互斥地关掉 measure。详见 `commit_city_click` 系统。
+                    tile_button(
+                        ui,
+                        &shell,
+                        ToolIcon::Svg(ICON_SQUARE), // 暂复用 SQUARE 图标；V1.1 换专属 ICON_CITY
+                        "城市：在父图上单击落一个 256×256 wu 的城市子图（ADR-0022 M2）",
+                        city_active,
+                        project_open,
+                        accent,
+                        raised_bg,
+                        || {
+                            city_tool.mode = if city_active {
+                                CityToolMode::Off
+                            } else {
+                                // 互斥：开城市时关掉测量。
+                                measure.mode = MeasureMode::Off;
+                                measure.clear_draft();
+                                CityToolMode::CreateArmed
+                            };
+                            city_tool.draft = None;
+                        },
+                    );
 
                     // ====== 视图 / 导航组：网格 / ＋ / − / 全图 ======
                     // ③ 网格 — 参照网格开关。状态在 `ViewState.grid_lines`
