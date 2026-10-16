@@ -67,7 +67,7 @@ pub fn map_controls(
     mut measure: ResMut<MeasureState>,
     drill: Res<DrillState>,
     grid: Res<GridConfig>,
-    tex: Res<crate::render::terrain_view::TerrainTexture>,
+    tex: Res<wv_render::terrain_view::TerrainTexture>,
     projection: Res<WorldProjection>,
     windows: Query<&Window>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
@@ -90,8 +90,8 @@ pub fn map_controls(
         .unwrap_or(Vec2::new(1280.0, 800.0));
     let raster_size = Vec2::splat(grid.cell_size * tex.size as f32);
     let level_map_size =
-        crate::render::zoom_level::map_size_of(&projection.world, drill.current(), raster_size);
-    let zoom = crate::render::zoom_level::LevelZoom::for_map(level_map_size, window_size);
+        wv_render::zoom_level::map_size_of(&projection.world, drill.current(), raster_size);
+    let zoom = wv_render::zoom_level::LevelZoom::for_map(level_map_size, window_size);
 
     // 视觉量：全部走 shell 令牌。
     let accent = shell.accent();
@@ -285,10 +285,10 @@ fn set_map_scale(
     view: &mut ViewState,
     cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     scale: f32,
-    zoom: crate::render::zoom_level::LevelZoom,
+    zoom: wv_render::zoom_level::LevelZoom,
 ) {
     view.scale = zoom.clamp(scale);
-    crate::render::camera::apply_view_to_camera(view.camera_center, view.scale, cameras);
+    wv_render::camera::apply_view_to_camera(view.camera_center, view.scale, cameras);
 }
 
 #[cfg(test)]
@@ -299,7 +299,7 @@ mod map_control_tests {
     /// **当前级**区间内：连按到底应停在内界/外界，而不是穿过去。
     #[test]
     fn zoom_button_steps_stop_at_the_levels_band() {
-        let zoom = crate::render::zoom_level::LevelZoom::for_map(
+        let zoom = wv_render::zoom_level::LevelZoom::for_map(
             Vec2::splat(1024.0),
             Vec2::new(1280.0, 800.0),
         );

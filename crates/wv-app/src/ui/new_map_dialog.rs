@@ -23,11 +23,11 @@ use wv_core::Id;
 
 use crate::edit::editing::EditHistory;
 use crate::i18n::CurrentLocale;
-use crate::render::terrain_view::TerrainTexture;
 use crate::state::{map_level_label, DrillState, ProjectDiagnostics, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::ui::widgets::{button as widget_button, ButtonContent, ButtonStyle};
 use crate::ui_shell::ShellNotice;
+use wv_render::terrain_view::TerrainTexture;
 
 use super::shell::UiShell;
 

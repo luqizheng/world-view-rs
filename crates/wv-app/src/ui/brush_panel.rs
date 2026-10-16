@@ -23,8 +23,6 @@ use bevy_egui::{egui, EguiContexts};
 
 use crate::edit::editing;
 use crate::i18n::{t, t_key, CurrentLocale, I18nKey, Locale};
-use crate::render::streets;
-use crate::render::terrain_view::TerrainTexture;
 use crate::state::{
     BrushState, BrushTool, BrushToolGroup, DrillState, Panel, PanelState, PlaybackState,
     WorldProjection,
@@ -33,6 +31,8 @@ use crate::theme::ui_theme::{proportional, UiShellConfig};
 use crate::theme::ui_tokens::{font_size, radius, space};
 use crate::ui_layout::LayoutFile;
 use crate::ui_shell::ShellNotice;
+use wv_render::streets;
+use wv_render::terrain_view::TerrainTexture;
 
 use super::shell::{terrain_name_at, UiShell};
 use super::timeline::undo_last_street_segment;

@@ -7005,6 +7005,7 @@ dependencies = [
  "wv-edit",
  "wv-io",
  "wv-overture",
+ "wv-render",
  "wv-terrain",
 ]
 
@@ -7046,6 +7047,18 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "wv-core",
+]
+
+[[package]]
+name = "wv-render"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "serde",
+ "serde_yaml",
+ "wv-core",
+ "wv-terrain",
 ]
 
 [[package]]

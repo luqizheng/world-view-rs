@@ -3,7 +3,7 @@
 //! ## 职责
 //! - 用世界空间 `Mesh2d` 把 `World.faction_geometry` 在 `current_day` 切片后的
 //!   多边形画出来——三角形扇逐顶点三角化，每势力一材质，颜色取 `Faction.color`。
-//! - 取代 `ViewMode::Faction` 之前仅"淡化底色"的占位（[`crate::render::terrain_view::shade_faded`]）。
+//! - 取代 `ViewMode::Faction` 之前仅"淡化底色"的占位（[`crate::terrain_view::shade_faded`]）。
 //!
 //! ## 边界（不做什么）
 //! - **不写时间比较**——通过 [`wv_core::factions_at`] 求值；禁止 `if day > …`。
@@ -44,7 +44,7 @@ use bevy::render::mesh::Indices;
 use bevy::render::mesh::MeshVertexAttribute;
 use bevy::render::render_resource::{PrimitiveTopology, VertexFormat};
 
-use crate::render::layer_frame::LayerFrame;
+use crate::layer_frame::LayerFrame;
 use crate::state::ViewState;
 use wv_core::{factions_at, Faction};
 
@@ -71,7 +71,7 @@ impl FactionOverlayEntities {
 
 /// 势力叠加层主 system。
 ///
-/// 在 [`crate::render::world_projection::compute_projection`] 之后跑；只读
+/// 在 [`crate::world_projection::compute_projection`] 之后跑；只读
 /// `WorldProjection.world` / `ViewState.current_day` / `ViewState.current_map`。
 /// 图层绑定（`Influence` kind）读 [`LayerFrame`]（ADR-0013）：visible 门、
 /// opacity 乘进本层 0.30 的本色 alpha、z 随组偏移。

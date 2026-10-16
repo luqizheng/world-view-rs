@@ -21,22 +21,22 @@ use bevy::window::WindowResolution;
 use bevy_egui::EguiPlugin;
 
 use crate::edit::editing;
-use crate::render::brush_cursor;
-use crate::render::buildings;
-use crate::render::camera;
-use crate::render::faction_overlays;
-use crate::render::layer_frame;
-use crate::render::map_frame;
-use crate::render::streets;
-use crate::render::terrain_chunks;
-use crate::render::terrain_view;
-use crate::render::vector_layers::{self, VectorLayerEntities};
-use crate::render::world_projection;
 use crate::state::{
     BrushState, DrillState, GridConfig, PanelState, PlaybackState, ViewState, WorldProjection,
 };
 use crate::ui;
 use crate::AppConfig;
+use wv_render::brush_cursor;
+use wv_render::buildings;
+use wv_render::camera;
+use wv_render::faction_overlays;
+use wv_render::layer_frame;
+use wv_render::map_frame;
+use wv_render::streets;
+use wv_render::terrain_chunks;
+use wv_render::terrain_view;
+use wv_render::vector_layers::{self, VectorLayerEntities};
+use wv_render::world_projection;
 
 /// 启动 GUI。`startup_project` 为 `None` 时进空编辑器（占位地形），
 /// `Some(dir)` 时启动后由 `ui_shell::startup_load` 在窗口内加载并显示进度/失败原因。
@@ -117,6 +117,11 @@ pub fn run(config: AppConfig) {
     .init_resource::<camera::ActiveStroke>()
     .init_resource::<camera::PointerOverUi>()
     .init_resource::<editing::EditHistory>()
+    // 编辑意图桥（ADR-0020 §2.5）：渲染层产意图、本 crate 翻译提交、回执回填。
+    .init_resource::<wv_render::editing_bridge::EditIntents>()
+    .init_resource::<wv_render::editing_bridge::EditReceipts>()
+    .init_resource::<wv_render::streets::StreetCommitAcks>()
+    .init_resource::<wv_render::measurement::MeasureCommitAcks>()
     // 校验面板 / 笔触提交 / 撤销重做 / 打开工程都读写它（`ResMut` 访问
     // 不存在的资源会在首帧 panic → 窗口无法显示）。`derive(Default)` 起步。
     .init_resource::<crate::state::ProjectDiagnostics>()
@@ -126,7 +131,7 @@ pub fn run(config: AppConfig) {
     .init_resource::<streets::StreetLayerCache>()
     .init_resource::<streets::StreetEditorState>()
     .init_resource::<crate::state::MeasureState>()
-    .init_resource::<crate::render::measurement::MeasurementCache>()
+    .init_resource::<wv_render::measurement::MeasurementCache>()
     // 势力多边形层（S12）：同属「每帧 despawn+spawn 的实体集合」资源，
     // 漏 init 会在首帧 panic（`could not access system parameter`）。
     .init_resource::<faction_overlays::FactionOverlayEntities>()
@@ -234,6 +239,19 @@ pub fn run(config: AppConfig) {
         Update,
         brush_cursor::sync_brush_cursor.after(camera::track_cursor_world),
     )
+    // 编辑意图翻译（ADR-0020 §2.5）：渲染 commit_* 产意图 → 翻译器提交 wv-edit
+    // → 渲染 apply_*_receipts 回填本地。必须晚于两个 commit 系统（同帧闭环）。
+    .add_systems(
+        Update,
+        (
+            crate::edit::intent_translator::translate_edit_intents,
+            wv_render::streets::apply_street_receipts,
+            wv_render::measurement::apply_measurement_receipts,
+        )
+            .chain()
+            .after(wv_render::streets::commit_street_click)
+            .after(wv_render::measurement::commit_measurement_click),
+    )
     // 纸面氛围层（ADR-0016 M2：雾霭 + 纸张噪点）：独立注册，排在主链
     // `sync_map_frame` 之后（同帧即可，只要不先于地形 chunk 出现）。
     .add_systems(
@@ -250,9 +268,9 @@ pub fn run(config: AppConfig) {
         (
             // 测量：先 reload 缓存，再 commit 点击，最后 render。
             // reload 在 `world_projection::is_changed` 后即可（缓存早退）。
-            crate::render::measurement::reload_measurement_cache.after(camera::track_cursor_world),
-            crate::render::measurement::commit_measurement_click
-                .after(crate::render::measurement::reload_measurement_cache),
+            wv_render::measurement::reload_measurement_cache.after(camera::track_cursor_world),
+            wv_render::measurement::commit_measurement_click
+                .after(wv_render::measurement::reload_measurement_cache),
         ),
     )
     .add_systems(
@@ -263,7 +281,7 @@ pub fn run(config: AppConfig) {
             world_projection::draw_map_gizmos,
             world_projection::draw_brush_cursor,
             // 测量顶置渲染——与 gizmos 一起画。
-            crate::render::measurement::render_measurements,
+            wv_render::measurement::render_measurements,
         ),
     )
     .add_systems(
@@ -318,7 +336,18 @@ pub fn run(config: AppConfig) {
     // 界面外壳（主题 / 快捷键 / 命令面板 / 布局持久化）与地图钻取（v0.2 §B）。
     // 两者各自成模块并各自注册，`gui.rs` 只负责调用顺序（见各处模块文档）。
     crate::ui_shell::register(&mut app);
-    crate::render::drill::register(&mut app);
+    wv_render::drill::register(&mut app);
+    // ADR-0020 §2.6：钻入标记界面色由应用层灌（渲染只读 DrillMarkerPalette）；
+    // 悬停气泡（egui 浮窗）从 wv-render 链尾移回应用层，仍排海名标签之后。
+    app.add_systems(
+        Update,
+        crate::render_bridge::sync_drill_marker_palette
+            .before(wv_render::drill::draw_drill_markers),
+    );
+    app.add_systems(
+        Update,
+        ui::hover_tooltip::hover_tooltip_system.after(wv_render::drill::update_sea_labels),
+    );
 
     app.run();
 }

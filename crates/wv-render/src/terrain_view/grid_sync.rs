@@ -81,7 +81,7 @@ pub fn sync_grid_config(
     // 幅面取当前图的 extent；两者都不看底图继承自谁。
     let current = drill.current_node(&projection.world);
     let map_origin = current
-        .map(|n| crate::render::drill::map_origin(&projection.world, n, &grid))
+        .map(|n| crate::drill::map_origin(&projection.world, n, &grid))
         .unwrap_or(grid.raster_origin);
     let map_size = current
         .and_then(|n| n.extent.as_ref())

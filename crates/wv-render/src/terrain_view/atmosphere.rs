@@ -24,7 +24,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-use crate::render::layer_frame::LayerFrame;
+use crate::layer_frame::LayerFrame;
 use crate::state::{BrushState, GridConfig, ViewMode, ViewState};
 use crate::theme::palette;
 

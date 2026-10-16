@@ -26,7 +26,7 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 
-use crate::render::layer_frame::LayerFrame;
+use crate::layer_frame::LayerFrame;
 use crate::state::{lod_tier, GridConfig, LodTier, ViewMode, ViewState, WorldProjection};
 use crate::theme::palette;
 

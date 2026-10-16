@@ -22,7 +22,7 @@
 
 use bevy::prelude::*;
 
-use crate::render::layer_frame::LayerFrame;
+use crate::layer_frame::LayerFrame;
 use crate::state::{GridConfig, ViewState};
 use crate::theme::palette::{self, MapPalette};
 

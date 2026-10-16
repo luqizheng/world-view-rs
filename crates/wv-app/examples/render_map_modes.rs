@@ -11,9 +11,9 @@
 
 use std::path::PathBuf;
 
-use wv_app::render::terrain_view::image_from_terrain;
-use wv_app::state::ViewMode;
 use wv_io::terrain_bin::decode_terrain;
+use wv_render::state::ViewMode;
+use wv_render::terrain_view::image_from_terrain;
 
 fn main() {
     let root = std::env::current_dir().expect("cwd");
@@ -42,7 +42,7 @@ fn main() {
             mode,
             None,
             true,
-            wv_app::theme::palette::colors(Default::default()),
+            wv_render::theme::palette::colors(Default::default()),
         );
         // atlas=None 时多数模式 res=1（每格 1 像素）；GoogleMap / VectorFlat
         // 走亚像素（plan v0.1 M2）——尺寸以 Image 实际边长为准。

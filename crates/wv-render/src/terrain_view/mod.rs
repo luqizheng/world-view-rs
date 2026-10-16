@@ -13,7 +13,7 @@
 //!
 //! ## 路径兼容
 //! 所有 `pub` 符号在下方 `pub use` 重新导出，外部对
-//! `crate::render::terrain_view::TerrainTexture` / `TileAtlas` / `image_from_terrain` 等的引用零改动。
+//! `crate::terrain_view::TerrainTexture` / `TileAtlas` / `image_from_terrain` 等的引用零改动。
 
 #![cfg(feature = "app")]
 
@@ -28,7 +28,7 @@ pub mod terrain_resolve;
 pub mod terrain_texture;
 pub mod tile_atlas;
 
-// ── 路径兼容 re-export（保持 `crate::render::terrain_view::X` 不变） ─────────────────
+// ── 路径兼容 re-export（保持 `crate::terrain_view::X` 不变） ─────────────────
 pub use cells::{image_from_terrain, patch_terrain_image};
 pub use grid_lines::{grid_lines_visible, sync_grid_lines, GridLinesOverlay};
 pub use grid_sync::sync_grid_config;

@@ -29,14 +29,14 @@ pub struct TerrainTexture {
     pub res: u32,
     /// 上次上传后累计的脏矩形（像素坐标 `[x0,y0,x1,y1]`，半开）。
     ///
-    /// 由 [`crate::edit::editing::flush_terrain_texture`] 消费清零——它排在
-    /// [`crate::render::terrain_chunks::sync_terrain_chunks`] **之前**运行，
+    /// 由 `flush_terrain_texture`（wv-app::edit） 消费清零——它排在
+    /// [`crate::terrain_chunks::sync_terrain_chunks`] **之前**运行，
     /// 因此 chunk 层另有一份副本（[`Self::chunks_dirty`]）。
     pub dirty: Option<[u32; 4]>,
     /// chunk 层专用的脏矩形副本（逻辑格，半开）。
     ///
     /// 与 `dirty` 在 [`Self::mark_dirty`] / [`Self::mark_all_dirty`] 里同步标记，
-    /// 但由 [`crate::render::terrain_chunks::sync_terrain_chunks`] 消费清零。
+    /// 但由 [`crate::terrain_chunks::sync_terrain_chunks`] 消费清零。
     /// 拆分原因：system 链上 flush 先于 chunks 跑，`dirty` 到 chunks 时已是 `None`。
     pub chunks_dirty: Option<[u32; 4]>,
     /// 当前纹理内容所用的视图模式。

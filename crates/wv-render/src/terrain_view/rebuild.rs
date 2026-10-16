@@ -28,7 +28,7 @@ use super::tile_atlas::TileAtlas;
 /// ## 为什么不能监听 `Res<ViewState>::is_changed()`（缺陷修复）
 ///
 /// `ViewState` 是「大杂烩资源」：既有低频的 `mode`，也有**每帧无条件写入**的
-/// `cursor_world`（见 [`crate::render::camera::track_cursor_world`]）。对 `ResMut<T>` 的
+/// `cursor_world`（见 [`crate::camera::track_cursor_world`]）。对 `ResMut<T>` 的
 /// `deref_mut` 写入会标记资源 changed，于是**只要鼠标在地图上移动，
 /// `view.is_changed()` 每帧为真**，整张 512×512 纹理就被逐格重着色并重传 GPU。
 ///

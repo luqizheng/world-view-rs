@@ -7,6 +7,7 @@ members = [
     "crates/wv-overture",
     "crates/wv-edit",
     "crates/wv-app",
+    "crates/wv-render",
 ]
 
 [workspace.package]
@@ -29,6 +30,7 @@ wv-terrain = { path = "crates/wv-terrain" }
 wv-io = { path = "crates/wv-io" }
 wv-overture = { path = "crates/wv-overture" }
 wv-edit = { path = "crates/wv-edit" }
+wv-render = { path = "crates/wv-render" }
 wv-app = { path = "crates/wv-app" }
 
 # IO 层二进制分块（基线 §2.18：已批准，仅 wv-io 使用）。

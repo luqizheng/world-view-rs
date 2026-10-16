@@ -667,7 +667,7 @@ pub fn undo_last_street_segment(
     let Some(node) = drill.current_node(&projection.world) else {
         return;
     };
-    let Some(layer) = crate::render::streets::target_road_layer(node) else {
+    let Some(layer) = wv_render::streets::target_road_layer(node) else {
         return;
     };
     let len = projection.world.street_of(&layer.id).map_or(0, |d| d.len());

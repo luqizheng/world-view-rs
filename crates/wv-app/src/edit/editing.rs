@@ -1,7 +1,7 @@
 //! 编辑桥：笔刷笔触 → `EditCommand` → `wv-edit::History`（S5 / S9）。
 //!
 //! ## 职责
-//! - 收集 [`crate::render::camera::ActiveStroke`] 的点列，在松手（左键释放）时把
+//! - 收集 [`wv_render::camera::ActiveStroke`] 的点列，在松手（左键释放）时把
 //!   `wv_terrain::edit::Stroke` 包成 `wv_edit::PaintTerrainCommand` 提交给 `History`。
 //! - 处理 Undo/Redo：`Ctrl+Z` / `Ctrl+Shift+Z` 由 `ui_shell::hotkeys` 收键，
 //!   经 `CommandPalette` 派发到本模块的 `apply_history_command`。
@@ -20,8 +20,6 @@
 
 use bevy::prelude::*;
 
-use crate::render::camera::ActiveStroke;
-use crate::render::terrain_view::{image_from_terrain, TerrainTexture, TileAtlas};
 use crate::state::{
     BrushState, BrushTool, DrillState, GridConfig, PlaybackState, ViewState, WorldProjection,
 };
@@ -30,6 +28,8 @@ use wv_edit::command::{
 };
 use wv_edit::history::Transaction;
 use wv_edit::History;
+use wv_render::camera::ActiveStroke;
+use wv_render::terrain_view::{image_from_terrain, TerrainTexture, TileAtlas};
 use wv_terrain::edit::{Brush, Stroke as TerrainStroke};
 use wv_terrain::intent::Intent;
 
@@ -177,7 +177,7 @@ pub fn commit_stroke_on_release(
             edit.record_dirty(dirty);
             projection.dirty = true;
             // 增量重传（优化项 3d）：只标笔触影响矩形为脏，
-            // `flush_terrain_texture` 会走 [`crate::render::terrain_view::patch_terrain_image`] 增量 patch。
+            // `flush_terrain_texture` 会走 [`wv_render::terrain_view::patch_terrain_image`] 增量 patch。
             tex.mark_dirty(dirty_rect);
             // 地形 cells 改了 → 派生诊断（事件位移 / 相遇）需要重算。
             diagnostics.needs_diagnose = true;
@@ -300,7 +300,7 @@ fn intent_bbox_in_cells(pts: &[(f32, f32)], radius: f32, grid: &GridConfig) -> [
 /// **优化项 3d**：
 /// - 模式切换（`rebuild_texture_on_mode_change`）→ `tex.dirty = Some([0, 0, size, size])`
 ///   仍走 [`image_from_terrain`] 全图重建；
-/// - 笔刷编辑 → `tex.dirty = Some(笔触包围盒)` 走 [`crate::render::terrain_view::patch_terrain_image`]
+/// - 笔刷编辑 → `tex.dirty = Some(笔触包围盒)` 走 [`wv_render::terrain_view::patch_terrain_image`]
 ///   原地 patch 像素（**关键性能提升**：512² 整图重算 ≈ 80 ms → 几十格 patch ≈ <1 ms）。
 ///
 /// **为何不能直接靠修改 `image.data` 触发 GPU upload**：bevy 0.15 的 `Image` 资源
@@ -318,7 +318,7 @@ pub fn flush_terrain_texture(
     let Some(rect) = tex.dirty else { return };
     // Phase 2：取**纹理正在显示的那张图**的地形（当前图或它向上继承到的祖先图）。
     let Some(data) =
-        crate::render::terrain_view::texture_terrain(&tex, &projection.world, drill.current())
+        wv_render::terrain_view::texture_terrain(&tex, &projection.world, drill.current())
     else {
         tex.dirty = None;
         return;
@@ -344,7 +344,7 @@ pub fn flush_terrain_texture(
     // 增量 patch：只重算 dirty 矩形内的 cell，原地写进 `image.data`。
     let res = tex.res;
     if let Some(mut img) = images.get_mut(&tex.handle) {
-        crate::render::terrain_view::patch_terrain_image(
+        wv_render::terrain_view::patch_terrain_image(
             &mut img,
             data,
             view.mode,
@@ -409,7 +409,7 @@ pub fn apply_reset_terrain_to_base(
 
     // 与 apply_history_command 同款：前后 cells diff → 矩形标脏
     // （避免 mark_all_dirty 的整图重建）。
-    let before = crate::render::terrain_view::texture_terrain(tex, &projection.world, Some(map_id))
+    let before = wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(map_id))
         .map(|t| t.cells.clone());
 
     let mut tx = Transaction::new();
@@ -420,7 +420,7 @@ pub fn apply_reset_terrain_to_base(
             projection.dirty = true;
 
             let after =
-                crate::render::terrain_view::texture_terrain(tex, &projection.world, Some(map_id))
+                wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(map_id))
                     .map(|t| (t.width.max(1), t.cells.clone()));
             match (before, after) {
                 (Some(b), Some((w, a))) if b.len() == a.len() => {
@@ -461,7 +461,7 @@ pub fn apply_history_command(
     // Phase 2：快照对象必须是**纹理正在显示的那张图**的地形（当前图或它继承到的
     // 祖先图），否则 diff 出的矩形会落在另一张图上。cells 一并 clone 出来，
     // 免得 `after` 借着 `tex` 而后面又要 `tex.mark_dirty`。
-    let before = crate::render::terrain_view::texture_terrain(tex, &projection.world, None)
+    let before = wv_render::terrain_view::texture_terrain(tex, &projection.world, None)
         .map(|t| t.cells.clone());
     let result = if redo {
         edit.history.redo(&mut projection.world)
@@ -471,7 +471,7 @@ pub fn apply_history_command(
     match result {
         Ok((true, _dirty_paths)) => {
             projection.dirty = true;
-            let after = crate::render::terrain_view::texture_terrain(tex, &projection.world, None)
+            let after = wv_render::terrain_view::texture_terrain(tex, &projection.world, None)
                 .map(|t| (t.width.max(1), t.cells.clone()));
             match (before, after) {
                 (Some(b), Some((w, a))) if b.len() == a.len() => {

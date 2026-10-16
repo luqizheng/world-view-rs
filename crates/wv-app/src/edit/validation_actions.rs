@@ -50,7 +50,7 @@ pub fn jump_to_anchor_now(
     drill.sync_view(view);
     // 把相机拨到 anchor.at——世界坐标（ViewState + 相机主真源一起写）。
     view.camera_center = bevy::prelude::Vec2::new(anchor.at.x, anchor.at.y);
-    crate::render::camera::apply_view_to_camera(view.camera_center, view.scale, cameras);
+    wv_render::camera::apply_view_to_camera(view.camera_center, view.scale, cameras);
     // 时间轴拨到 anchor.day。
     playback.current_day = anchor.day;
     true

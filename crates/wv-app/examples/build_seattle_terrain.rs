@@ -18,10 +18,10 @@
 
 use std::path::Path;
 
-use wv_app::render::terrain_view::image_from_terrain;
-use wv_app::state::ViewMode;
 use wv_core::terrain::{TerrainCellData, TerrainData};
 use wv_io::terrain_bin::write_terrain;
+use wv_render::state::ViewMode;
+use wv_render::terrain_view::image_from_terrain;
 
 fn main() {
     let root = std::env::current_dir().expect("cwd");
@@ -107,7 +107,7 @@ fn main() {
         ViewMode::GoogleMap,
         None,
         true,
-        wv_app::theme::palette::colors(Default::default()),
+        wv_render::theme::palette::colors(Default::default()),
     );
     let out = root.join("target/map_preview/seattle_google.png");
     write_png(
@@ -125,7 +125,7 @@ fn main() {
         ViewMode::RealTerrain,
         None,
         true,
-        wv_app::theme::palette::colors(Default::default()),
+        wv_render::theme::palette::colors(Default::default()),
     );
     let out_rt = root.join("target/map_preview/seattle_real.png");
     write_png(

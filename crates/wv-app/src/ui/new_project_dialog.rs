@@ -31,13 +31,13 @@ use wv_core::{Id, TimeSpan};
 
 use crate::edit::editing::EditHistory;
 use crate::i18n::CurrentLocale;
-use crate::render::terrain_view::{TerrainTexture, TileAtlas};
 use crate::state::{
     DrillState, PlaybackState, ProjectDiagnostics, RecentProjects, ViewState, WorldProjection,
 };
 use crate::theme::ui_theme::UiShellConfig;
 use crate::ui::widgets::{button as widget_button, ButtonContent, ButtonStyle};
 use crate::ui_shell::{load_project_into, DialogPurpose, OpenProjectTask, ShellNotice};
+use wv_render::terrain_view::{TerrainTexture, TileAtlas};
 
 // 与「新建地图」对话框同一口径的幅面 / 预填充默认值（首图 = 空世界的第一张图，
 // 与 NewMapDialog::open_for 的空世界分支完全一致：世界级、最大幅面、海洋底图）。

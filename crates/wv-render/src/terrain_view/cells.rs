@@ -812,7 +812,7 @@ mod tests {
     //! VectorFlat 填充口径测试：水陆边随高度（D2）、内部快路径、亚像素分辨率。
 
     use super::*;
-    use crate::render::terrain_view::terrain_texture::terrain_res_for;
+    use crate::terrain_view::terrain_texture::terrain_res_for;
 
     /// 像素颜色是否接近目标 sRGB 色（±2/255，吸收 u8 舍入）。
     fn pixel_near(img: &Image, x: u32, y: u32, target: bevy::color::Srgba) -> bool {
@@ -1121,7 +1121,7 @@ mod tests {
         let (lr, lg, lb) = center_pixel(&land_img);
 
         // 3. 模拟雾霭顶混合（用户 4.73× 缩放）。
-        let veil_alpha = crate::render::terrain_view::atmosphere::veil_alpha(4.73);
+        let veil_alpha = crate::terrain_view::atmosphere::veil_alpha(4.73);
         // 手算 Ocean 过雾霭（为 0..255 字节，与底层 blend 一致）
         // out = base * (1 - alpha) + paper * alpha
         let paper = palette.soften_toward;
@@ -1163,7 +1163,6 @@ mod tests {
     // ---------------------------------------------------------------------------
     use wv_core::id::Id;
     use wv_core::terrain::TerrainData;
-    use wv_terrain::edit::{Brush, Stroke};
 
     /// 启动占位地形 → 笔刷把陆地涂成深水 → 全图重建后中心格像素必须是深水色。
     /// 任何"笔刷不生效"的回归都会让这测试的红/蓝通道与基色 0x1E3A5F 偏离。
@@ -1189,7 +1188,7 @@ mod tests {
             orientation: 0.0,
             base: None,
         });
-        let (map, data) = crate::render::terrain_view::active_terrain_or_placeholder(
+        let (map, data) = crate::terrain_view::active_terrain_or_placeholder(
             &mut world,
             Some(&Id::new_unchecked("world_main")),
             64,
@@ -1203,7 +1202,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
         );
-        let tex = crate::render::terrain_view::new_terrain_texture(
+        let tex = crate::terrain_view::new_terrain_texture(
             &mut images,
             image,
             &data,
@@ -1214,24 +1213,27 @@ mod tests {
         );
         let handle = tex.handle.clone();
 
-        // 笔刷落笔 (32.5, 32.5) world, cell_size 8 → 格 (4,4)
-        let mut stroke = Stroke::new();
-        stroke.push(Brush {
-            center: (32.5, 32.5),
-            radius: 96.0,
-            softness: 0.5,
-            kind: Some(0),
-            height_delta: 0.0,
-        });
-        let cmd = wv_edit::command::PaintTerrainCommand::new(
-            Id::new_unchecked("world_main"),
-            stroke,
-            8.0,
-        );
-        let mut tx = wv_edit::Transaction::new();
-        tx.push(Box::new(cmd));
-        let mut hist = wv_edit::History::default();
-        hist.commit(&mut world, tx).unwrap();
+        // 模拟「笔刷已落笔」：格 (4,4)（world (32.5,32.5)、cell_size 8）涂成
+        // kind 0 深水、中心高度 -40（与旧笔刷 falloff 在该格的落点值一致，
+        // 尾部断言的 water_shade_at(-40) 由此而来）。笔触 → 命令链的测试归
+        // wv-edit；本测试只验「数据变了 → 重建管线像素正确」，故直接改中立数据
+        // （ADR-0020：渲染层不依赖 wv-edit）。
+        let mut painted = world
+            .terrain_of(&Id::new_unchecked("world_main"))
+            .unwrap()
+            .clone();
+        // 涂 5×5 邻域（旧笔刷 falloff 半径 96wu ≈ 12 格的等效最小集）：VectorFlat
+        // 的水陆边在格内部按邻域高度画（D2），只改单格会被邻格陆地把中心像素
+        // 划成陆色，无法验证「中心格 = 深水色」。
+        for dy in -2i32..=2 {
+            for dx in -2i32..=2 {
+                let gx = (4 + dx) as usize;
+                let gy = (4 + dy) as usize;
+                painted.cells[gy * 64 + gx].height = -40;
+                painted.cells[gy * 64 + gx].kind = 0;
+            }
+        }
+        world.set_terrain(Id::new_unchecked("world_main"), painted);
 
         let after = world.terrain_of(&Id::new_unchecked("world_main")).unwrap();
         assert!(after.cells[4 * 64 + 4].height < 0, "海格高度应在海平面下");
@@ -1250,6 +1252,7 @@ mod tests {
         }
         let img_after = images.get(&handle).unwrap();
         let w = img_after.width();
+        println!("DBG w={} cell44={:?}", w, after.cells[4 * 64 + 4]);
         let res = w / 64;
         let px = (4 * res + res / 2) as usize;
         let py = (4 * res + res / 2) as usize;
@@ -1301,7 +1304,7 @@ mod tests {
             orientation: 0.0,
             base: None,
         });
-        let (map, data) = crate::render::terrain_view::active_terrain_or_placeholder(
+        let (map, data) = crate::terrain_view::active_terrain_or_placeholder(
             &mut world_core,
             Some(&Id::new_unchecked("world_main")),
             64,
@@ -1315,7 +1318,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
         );
-        let mut tex = crate::render::terrain_view::new_terrain_texture(
+        let mut tex = crate::terrain_view::new_terrain_texture(
             &mut images,
             image,
             &data,
@@ -1333,7 +1336,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
         );
-        crate::render::terrain_view::replace_terrain_texture(
+        crate::terrain_view::replace_terrain_texture(
             &mut tex,
             &mut images,
             image2,

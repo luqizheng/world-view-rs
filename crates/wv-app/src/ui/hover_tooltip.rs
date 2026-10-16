@@ -24,11 +24,11 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use crate::render::label_pick::{hit_test, LabelHits};
 use crate::state::{ViewState, WorldProjection};
 use crate::theme::palette;
 use crate::ui::shell::UiShell;
 use wv_core::{EntityKind, SelectedEntity};
+use wv_render::label_pick::{hit_test, LabelHits};
 
 /// 悬停气泡系统：每帧根据光标视图坐标 + `LabelHits` 决定是否显示浮窗。
 ///

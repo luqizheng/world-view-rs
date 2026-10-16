@@ -7,9 +7,9 @@
 //!
 //! ## 边界（不做什么）
 //! - **不画风格**（JRPG 图集 / Google / 古舆图色板）——单图块内部色值由
-//!   [`crate::theme::palette`] + [`crate::render::terrain_view`] 决定；
+//!   [`crate::theme::palette`] + [`crate::terrain_view`] 决定；
 //!   本模块只关心几何 / mip / 拣选。
-//! - **不直接听编辑输入**——笔触收口在 [`crate::editing`]；本模块订阅
+//! - **不直接听编辑输入**——笔触收口在 wv-app 的编辑链；本模块订阅
 //!   `terrain.dirty_chunks`（`Changed<WorldProjection>` 之类）就够了。
 //!
 //! ## 主要导出
@@ -62,9 +62,9 @@ use bevy::math::Affine2;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-use crate::render::layer_frame::LayerFrame;
-use crate::render::terrain_view::TerrainTexture;
+use crate::layer_frame::LayerFrame;
 use crate::state::{GridConfig, ViewState};
+use crate::terrain_view::TerrainTexture;
 
 /// 块边长（逻辑格）。基线 §2.11：分块 256×256 上传。
 const CHUNK_SIZE: u32 = 256;
@@ -238,8 +238,8 @@ fn despawn_chunk(
     });
 }
 
-/// 主 system：在 [`crate::edit::editing::flush_terrain_texture`] 与
-/// [`crate::render::terrain_view::rebuild_texture_on_mode_change`] 之后跑。
+/// 主 system：在 `flush_terrain_texture`（wv-app::edit） 与
+/// [`crate::terrain_view::rebuild_texture_on_mode_change`] 之后跑。
 ///
 /// 输入：整图 `TerrainTexture` + `view.scale` / `view.camera_center` / 窗口大小。
 /// 输出：spawn / despawn chunk 实体；对已存在块按需 patch 像素或切 mip。

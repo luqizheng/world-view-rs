@@ -5,7 +5,7 @@
 //! - 把当前地图的 `MapNode.orientation` 写进相机旋转（`apply_map_orientation`，
 //!   拉动式每帧重读数据层；`wv-core` 字段文档：渲染层只读这个值，**不另设朝向字段**）。
 //! - 收集 `ActiveStroke`：按住鼠标拖拽时把世界坐标点列进栈，
-//!   左键释放后由 [`crate::editing`] 把这一段落笔画成 `EditCommand`。
+//!   左键释放后由 wv-app 的编辑链（ADR-0020 起编辑归应用层） 把这一段落笔画成 `EditCommand`。
 //!
 //! ## 边界（不做什么）
 //! - **不直接改世界**——笔刷拖拽只收集笔触，松手后才落命令（AGENTS §3.3）。
@@ -39,7 +39,7 @@ pub struct ActiveStroke {
 }
 
 /// 写相机投影的缩放。非正交投影静默忽略（编辑器不会出现，且此处不该 panic）。
-pub(crate) fn set_ortho_scale(projection: &mut Projection, scale: f32) {
+pub fn set_ortho_scale(projection: &mut Projection, scale: f32) {
     if let Projection::Orthographic(ortho) = projection {
         ortho.scale = scale;
     }
@@ -55,7 +55,7 @@ pub(crate) fn set_ortho_scale(projection: &mut Projection, scale: f32) {
 ///
 /// 只写平移与缩放；**旋转**归 [`apply_map_orientation`] 管（数据来自
 /// `MapNode.orientation` 而非 `ViewState`——`ViewState` 禁设朝向字段）。
-pub(crate) fn apply_view_to_camera(
+pub fn apply_view_to_camera(
     center: Vec2,
     scale: f32,
     cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
@@ -135,8 +135,8 @@ pub fn poll_egui_wants_input(mut contexts: EguiContexts, mut flag: ResMut<Pointe
 ///
 /// 缩放区间按当前级实时算（`crate::zoom_level`），故需要 `projection`（读 `extent`）
 /// 与 `drill`（读「现在在哪一级」）。撞到级的边界后**继续同向滚动**表示「换级」，
-/// 本函数只把意图写进 [`crate::render::zoom_level::ZoomCrossRequest`]，真正的换级由
-/// [`crate::render::drill::apply_zoom_cross`] 执行（地图路径的写入口只有 `DrillState`）。
+/// 本函数只把意图写进 [`crate::zoom_level::ZoomCrossRequest`]，真正的换级由
+/// [`crate::drill::apply_zoom_cross`] 执行（地图路径的写入口只有 `DrillState`）。
 ///
 /// Bevy 系统的参数即「依赖声明」，宽签名是框架惯例而非坏味道（同 `drill.rs`）。
 #[allow(clippy::too_many_arguments)]
@@ -148,7 +148,7 @@ pub fn camera_zoom(
     projection: Res<WorldProjection>,
     drill: Res<DrillState>,
     grid: Res<GridConfig>,
-    mut cross: ResMut<crate::render::zoom_level::ZoomCrossRequest>,
+    mut cross: ResMut<crate::zoom_level::ZoomCrossRequest>,
     ui: Res<PointerOverUi>,
 ) {
     if ui.wants_pointer {
@@ -180,11 +180,11 @@ pub fn camera_zoom(
     let old_scale = view.scale;
     let factor = (1.0 + scroll_y * 0.12).clamp(0.5, 2.0);
     let size = window.resolution.size();
-    let zoom = crate::render::zoom_level::level_zoom(
+    let zoom = crate::zoom_level::level_zoom(
         &projection.world,
         drill.current(),
         size,
-        Vec2::splat(crate::render::zoom_level::FALLBACK_MAP_SIZE),
+        Vec2::splat(crate::zoom_level::FALLBACK_MAP_SIZE),
     );
     let new_scale = zoom.clamp(old_scale * factor);
 
@@ -200,18 +200,18 @@ pub fn camera_zoom(
     // 撞界时 `new_scale == old_scale`，恰恰是下面那个提前返回会吞掉的情形。
     if factor > 1.0 && zoom.at_outer_limit(old_scale) {
         // 继续往外：回到父级（世界级再往外没有父级，消费方会自行忽略）。
-        cross.pending = Some(crate::render::zoom_level::ZoomCross::Out);
+        cross.pending = Some(crate::zoom_level::ZoomCross::Out);
     } else if factor < 1.0 && zoom.at_inner_limit(old_scale) {
         // 继续往里：光标所在的那个子图。用与双击同一套命中测试——不然
         // 「双击能进的图，滚轮进不去」会让人以为坏了。
-        if let Some(child) = crate::render::drill::marker_hit(
+        if let Some(child) = crate::drill::marker_hit(
             &projection.world,
             &drill,
             &grid,
             cursor_world_before,
             old_scale,
         ) {
-            cross.pending = Some(crate::render::zoom_level::ZoomCross::Into(child));
+            cross.pending = Some(crate::zoom_level::ZoomCross::Into(child));
         }
     }
 
@@ -240,7 +240,7 @@ pub fn camera_pan(
     mut camera: Query<&mut Transform, With<Camera2d>>,
     mut view: ResMut<ViewState>,
     brush: Res<BrushState>,
-    streets: Res<crate::render::streets::StreetEditorState>,
+    streets: Res<crate::streets::StreetEditorState>,
     measure: Res<MeasureState>,
     ui: Res<PointerOverUi>,
     windows: Query<&Window>,
@@ -369,9 +369,7 @@ pub fn collect_brush_stroke(
     let world = screen_to_world(cursor, window.resolution.size(), transform, view.scale);
 
     if buttons.just_pressed(MouseButton::Left) {
-        if crate::render::drill::marker_hit(&projection.world, &drill, &grid, world, view.scale)
-            .is_some()
-        {
+        if crate::drill::marker_hit(&projection.world, &drill, &grid, world, view.scale).is_some() {
             // 这一下是冲着标记去的：不落笔（见上文第 2 条）。
             stroke.points.clear();
             return;
@@ -581,7 +579,7 @@ mod tests {
         };
         app.init_resource::<PointerOverUi>()
             .init_resource::<GridConfig>()
-            .init_resource::<crate::render::zoom_level::ZoomCrossRequest>()
+            .init_resource::<crate::zoom_level::ZoomCrossRequest>()
             .add_message::<MouseWheel>()
             .insert_resource(view)
             .insert_resource(drill)
@@ -609,12 +607,12 @@ mod tests {
 
     /// 世界级区间。**必须**从 `zoom_level` 现算而不是写死常量：窗口尺寸决定了 `fit`
     /// （`Window::default()` 是 1280×720，`fit = 4096/720 ≈ 5.688`，不是 800 高时的 5.12）。
-    fn world_band() -> crate::render::zoom_level::LevelZoom {
-        crate::render::zoom_level::level_zoom(
+    fn world_band() -> crate::zoom_level::LevelZoom {
+        crate::zoom_level::level_zoom(
             &two_level_world(),
             Some(&Id::new_unchecked("map_world")),
             Vec2::new(1280.0, 720.0),
-            Vec2::splat(crate::render::zoom_level::FALLBACK_MAP_SIZE),
+            Vec2::splat(crate::zoom_level::FALLBACK_MAP_SIZE),
         )
     }
 
@@ -638,9 +636,9 @@ mod tests {
         app.update();
         assert_eq!(
             app.world()
-                .resource::<crate::render::zoom_level::ZoomCrossRequest>()
+                .resource::<crate::zoom_level::ZoomCrossRequest>()
                 .pending,
-            Some(crate::render::zoom_level::ZoomCross::Out),
+            Some(crate::zoom_level::ZoomCross::Out),
             "踩在外界上继续往外滚，必须发出「上溯一级」的请求"
         );
     }
@@ -653,11 +651,11 @@ mod tests {
         app.update();
         assert_eq!(
             app.world()
-                .resource::<crate::render::zoom_level::ZoomCrossRequest>()
+                .resource::<crate::zoom_level::ZoomCrossRequest>()
                 .pending,
-            Some(crate::render::zoom_level::ZoomCross::Into(
-                Id::new_unchecked("city_a")
-            )),
+            Some(crate::zoom_level::ZoomCross::Into(Id::new_unchecked(
+                "city_a"
+            ))),
             "指针在城市图标上继续往里滚，必须请求进入该城"
         );
     }
@@ -671,7 +669,7 @@ mod tests {
         app.update();
         assert_eq!(
             app.world()
-                .resource::<crate::render::zoom_level::ZoomCrossRequest>()
+                .resource::<crate::zoom_level::ZoomCrossRequest>()
                 .pending,
             None
         );
@@ -691,7 +689,7 @@ mod tests {
         app.update();
         assert_eq!(
             app.world()
-                .resource::<crate::render::zoom_level::ZoomCrossRequest>()
+                .resource::<crate::zoom_level::ZoomCrossRequest>()
                 .pending,
             None
         );

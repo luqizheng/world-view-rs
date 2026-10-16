@@ -5,7 +5,7 @@
 //! - 屏幕恒定粗细：相机放大缩小都不变，与道路 / 边框策略一致（**策略 A**）。
 //!
 //! ## 边界（不做什么）
-//! - **不吃输入**——位置由 [`crate::render::camera::collect_stroke_points`] 喂入；本模块只画。
+//! - **不吃输入**——位置由 [`crate::camera::collect_stroke_points`] 喂入；本模块只画。
 //! - **不画地形 / 道路**——这是叠在 `terrain_view` 之上的编辑提示层。
 //!
 //! ## 主要导出
@@ -44,7 +44,7 @@
 use bevy::math::primitives::{Annulus, Rectangle};
 use bevy::prelude::*;
 
-use crate::render::camera::{screen_to_world, PointerOverUi};
+use crate::camera::{screen_to_world, PointerOverUi};
 use crate::state::{BrushState, DrillState, ViewState};
 use crate::theme::colors;
 
@@ -104,7 +104,7 @@ impl BrushCursorEntities {
     }
 }
 
-/// 笔刷光标的同步入口。在 [`crate::render::camera::track_cursor_world`] 之后跑。
+/// 笔刷光标的同步入口。在 [`crate::camera::track_cursor_world`] 之后跑。
 ///
 /// **只在世界级显示**（v0.2 §B：城市级/建筑级不显示笔刷光标）。
 /// **落在 egui 面板上时隐藏**（读 `PointerOverUi`，指针在 UI 上时光标该消失）。
