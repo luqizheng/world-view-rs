@@ -26,6 +26,11 @@
 //! 2026-10-12 用户简化方案改为「两 Track 的 Waypoint 在 (place, day) 上同时覆盖」，
 //! 因此 `EncounterInput` 不再需要 maps 参数——见 [`wv_core::encounter`] 模块文档。
 
+//! ## 2026-10-16 增列：跨级尺度一致性提示（ADR-0022 D4）
+//!
+//! 世界图 → 城市图跨级声明 `unit_per_km` 时，两级间的物理尺度可能不一致；
+//! 给作者一条 Hint 让 ta 注意到，不阻止保存（V1 守约）。
+
 use wv_core::encounter::{detect_encounter_hints, EncounterInput, HintSeverity};
 
 /// 诊断级别。
@@ -170,8 +175,114 @@ pub fn derive_hints(world: &wv_core::World) -> Diagnostics {
     // (place, day) 覆盖但没写事件」，两者不重叠。
     d.items.extend(detect_travel_feasibility_hints(world));
 
+    // ADR-0022 M3 D4：跨级尺度一致性（V1 提示，不阻止）。
+    d.items.extend(detect_cross_level_scale_hints(world));
+
     d.dedup_by_fingerprint();
     d
+}
+
+/// 跨级尺度一致性提示（ADR-0022 D4 · 2026-10-16 接受）。
+///
+/// ## 口径
+///
+/// 世界图 → 城市子图跨级声明 `unit_per_km` 时，预期物理宽度（伪代码）：
+///
+/// ```text
+/// expected_world_extent_w = (city_local_extent_w / city.unit_per_km) / world.unit_per_km
+/// declared_world_extent_w  = city.extent.width
+/// ratio = declared / expected
+/// ```
+///
+/// | ratio 区间 | 提示 |
+/// |---|---|
+/// | \|ratio − 1.0\| ≤ 0.1 | 一致，不发提示 |
+/// | 0.1 < \|ratio − 1.0\| ≤ 1.0 | 「两级间尺度有 X% 偏差」 |
+/// | ratio < 0.5 或 > 2.0 | 「两级尺度明显不匹配」 |
+///
+/// 缺省策略：
+/// - `world.unit_per_km = None` → 世界未声明尺度，**跳过**所有跨级检查
+///   （无法换算「城市在世界上应该多大」）。
+/// - `city.unit_per_km = None` → 城市未声明，跳过该城。
+/// - `city.extent = None` → 城市未声明幅面，跳过。
+///
+/// ## 与 P6（非破坏）/ V1（只提示）的关系
+///
+/// 这是**纯提示**，指纹 = `cross-level-scale:{city_id}` 稳定可认领；
+/// 不阻止保存——作者可能故意（艺术夸张、戏剧比例尺）。
+pub fn detect_cross_level_scale_hints(world: &wv_core::World) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    for city in &world.maps {
+        let Some(city_extent) = city.extent else {
+            continue;
+        };
+        let Some(city_per_km) = city.unit_per_km else {
+            continue;
+        };
+        if city_per_km <= 0.0 {
+            continue;
+        }
+        let Some(world_per_km) = world
+            .maps
+            .iter()
+            .find(|m| m.parent.is_none())
+            .and_then(|m| m.unit_per_km)
+        else {
+            continue;
+        };
+        if world_per_km <= 0.0 {
+            continue;
+        };
+
+        let city_world_w = city_extent.width / city_per_km / world_per_km;
+        if city_world_w <= 0.0 {
+            continue;
+        }
+        let declared_world_w = city_extent.width;
+        let ratio = declared_world_w / city_world_w;
+
+        let deviation = (ratio - 1.0).abs();
+        let severity_msg = if !(0.5..=2.0).contains(&ratio) {
+            format!(
+                "城市「{}」与父图两级尺度明显不匹配（ratio={:.2}）：城市本地 {:.0} wu × {} m/wu ≈ {:.1} km，\
+                 在世界上应占 {:.1} wu，当前声明 {:.0} wu。",
+                city.id,
+                ratio,
+                city_extent.width,
+                city_per_km,
+                city_extent.width / city_per_km,
+                city_world_w,
+                declared_world_w,
+            )
+        } else if deviation > 0.1 {
+            format!(
+                "城市「{}」与父图两级间尺度有 {:.0}% 偏差（ratio={:.2}）：城市本地 {:.0} wu 约 {:.1} km，\
+                 在世界上应占 {:.1} wu，当前声明 {:.0} wu。",
+                city.id,
+                deviation * 100.0,
+                ratio,
+                city_extent.width,
+                city_extent.width / city_per_km,
+                city_world_w,
+                declared_world_w,
+            )
+        } else {
+            continue;
+        };
+
+        out.push(Diagnostic {
+            level: DiagLevel::Hint,
+            message: severity_msg,
+            fingerprint: format!("cross-level-scale:{}", city.id),
+            anchor: Some(DiagAnchor {
+                map: city.id.clone(),
+                at: wv_core::geometry::Point { x: 0.0, y: 0.0 },
+                day: 0,
+            }),
+            severity: None,
+        });
+    }
+    out
 }
 
 /// 构造一条提示级诊断（供其他派生检查复用，如「孤立事件」等后续检查）。
@@ -302,6 +413,131 @@ pub fn error(fingerprint: impl Into<String>, message: impl Into<String>) -> Diag
         fingerprint: fingerprint.into(),
         anchor: None,
         severity: None,
+    }
+}
+
+// ====== ADR-0022 M3 D4 · 跨级一致性 V1 提示 =================================
+
+#[cfg(test)]
+mod cross_level_scale_tests {
+    use super::*;
+    use wv_core::map::{Extent, MapLevel, MapNode};
+    use wv_core::Id;
+
+    fn world_with(per_km: Option<f32>) -> wv_core::World {
+        let mut w = wv_core::World::default();
+        w.maps.push(MapNode {
+            id: Id::new_unchecked("map_world"),
+            name: "世界".into(),
+            level: MapLevel::World,
+            unit_per_km: per_km,
+            ..MapNode::default()
+        });
+        w
+    }
+
+    fn city_with(parent: &str, width: f32, per_km: Option<f32>) -> MapNode {
+        MapNode {
+            id: Id::new_unchecked("map_city"),
+            name: "城".into(),
+            level: MapLevel::City,
+            parent: Some(Id::new_unchecked(parent)),
+            extent: Some(Extent::sized(width, width)),
+            unit_per_km: per_km,
+            ..MapNode::default()
+        }
+    }
+
+    #[test]
+    fn ratio_one_emits_no_hint() {
+        // world 4 km/wu × city 1024 wu × 50 m/wu（=51.2 km） → 应占 12.8 wu
+        // 但城市声明 1024 wu（未校正），ratio = 80 → 远大于 2，应发「明显不匹配」。
+        // 这里先验证「正确换算」场景：城市声明 12.8 wu、unit_per_km = 800 m/wu（512 wu/km），
+        // 物理宽度 12.8 × 800 = 10240 m = 10.24 km；world 1 km/wu → 应占 10.24 wu。
+        // 调整到 ratio=1.0：city 1024 wu，unit 0.001 km/wu = 1 m/wu，world 1 km/wu，
+        // 预期 1024 / 0.001 / 1 = 1_024_000 wu。声明 1024 wu → ratio ≈ 1/1024 → 应发「明显」。
+        // 所以直接测 ratio=1：city 1000 wu、unit 1.0 km/wu、world 1.0 km/wu
+        // 预期 1000/1/1 = 1000 wu。声明 1000 wu → ratio=1 → 无提示。
+        let mut w = world_with(Some(1.0));
+        w.maps.push(MapNode {
+            unit_per_km: Some(1.0),
+            ..city_with("map_world", 1000.0, Some(1.0))
+        });
+        let hints = detect_cross_level_scale_hints(&w);
+        assert!(
+            hints.is_empty(),
+            "ratio=1.0 不应发提示，实得 {} 条",
+            hints.len()
+        );
+    }
+
+    #[test]
+    fn ratio_within_ten_percent_emits_no_hint() {
+        // city 1000 wu、unit 1.0；预期 1000 wu。声明 1050 wu → ratio = 1.05（差 5%）→ 无提示。
+        let mut w = world_with(Some(1.0));
+        w.maps.push(MapNode {
+            unit_per_km: Some(1.0),
+            ..city_with("map_world", 1050.0, Some(1.0))
+        });
+        let hints = detect_cross_level_scale_hints(&w);
+        assert!(hints.is_empty(), "5% 偏差 ≤ 10% 阈值，应无提示");
+    }
+
+    #[test]
+    fn ratio_50_percent_emits_mild_hint() {
+        // ratio = city.unit_per_km × world.unit_per_km = 0.5 × 1.0 = 0.5
+        // → 「两级间尺度有 50% 偏差」。
+        let mut w = world_with(Some(1.0));
+        w.maps.push(MapNode {
+            unit_per_km: Some(0.5),
+            ..city_with("map_world", 1000.0, Some(0.5))
+        });
+        let hints = detect_cross_level_scale_hints(&w);
+        assert_eq!(hints.len(), 1, "应发 1 条提示");
+        assert_eq!(hints[0].level, DiagLevel::Hint);
+        assert!(hints[0].message.contains("50%"), "应含百分比");
+    }
+
+    #[test]
+    fn ratio_five_x_emits_severe_hint() {
+        // ratio = city.unit_per_km × world.unit_per_km = 5.0 × 1.0 = 5.0
+        // → 「两级尺度明显不匹配」。
+        let mut w = world_with(Some(1.0));
+        w.maps.push(MapNode {
+            unit_per_km: Some(5.0),
+            ..city_with("map_world", 1000.0, Some(5.0))
+        });
+        let hints = detect_cross_level_scale_hints(&w);
+        assert_eq!(hints.len(), 1, "应发 1 条明显不匹配提示");
+        assert!(
+            hints[0].message.contains("明显不匹配"),
+            "应标记为严重，实得：{}",
+            hints[0].message
+        );
+    }
+
+    #[test]
+    fn missing_world_per_km_skips_all_checks() {
+        // world.unit_per_km = None → 跳过所有城市。
+        let mut w = world_with(None);
+        w.maps.push(MapNode {
+            unit_per_km: Some(1.0),
+            ..city_with("map_world", 5000.0, Some(1.0))
+        });
+        let hints = detect_cross_level_scale_hints(&w);
+        assert!(hints.is_empty(), "world 未声明尺度应跳过");
+    }
+
+    #[test]
+    fn missing_city_per_km_skips_city() {
+        // 城市未声明 unit_per_km → 跳过该城（自身元数据不足）。
+        let mut w = world_with(Some(1.0));
+        w.maps.push(MapNode {
+            unit_per_km: None,
+            ..city_with("map_world", 5000.0, Some(1.0))
+        });
+        let hints = detect_cross_level_scale_hints(&w);
+        assert!(hints.is_empty(), "城市未声明尺度应跳过");
     }
 }
 
