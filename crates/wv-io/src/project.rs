@@ -739,9 +739,9 @@ impl Project {
 
         // 命名区域（ADR-0017 §2.2）：`regions/` 每区域一个 YAML，几何内联。
         // 目录可缺失——旧工程直接得空 Vec（零迁移）。
-        // 海名（手绘地图 #13）：每实体一文件，落 `seas/<id>.yaml`。
-        // 目录不存在 = 没海名 = 空 Vec（v0.1 暂不写，留给编辑器落盘）。
-        let seas: Vec<wv_core::sea::Sea> = load_dir(&self.root, "seas").unwrap_or_default();
+        // 海名（手绘地图 #13）：每实体一文件，落 `seas/<id>.yaml`，
+        // 与 [`Self::save_world`] 对称；目录不存在 = 没海名 = 空 Vec。
+        let seas: Vec<wv_core::map::sea::Sea> = load_dir(&self.root, "seas").unwrap_or_default();
         let regions: Vec<wv_core::Region> = load_dir(&self.root, "regions")?;
 
         Ok(World {
@@ -794,7 +794,7 @@ impl Project {
     ///
     /// - **每实体一文件**（§4.5）：每个 `Faction` / `Character` / `Event` /
     ///   `Place` / `PlaceEdge` / `Vehicle` / `Unit` / `Track` / `Situation` /
-    ///   `Narration` / `GeometrySpan` 各自一个 `<id>.yaml`。
+    ///   `Narration` / `Region` / `Sea` / `GeometrySpan` 各自一个 `<id>.yaml`。
     /// - **map 节点**仍写 `maps/<id>/index.yaml`（已存在的索引约定）。
     /// - **删除传播**（AGENTS §4.5 + §7.5V1）：以 `World` 为 ground truth——
     ///   磁盘上存在但 `World` 中不含的文件被**删除**（覆盖命令删实体的情况）。
@@ -882,6 +882,14 @@ impl Project {
         if wants("regions") {
             save_entities(&self.root.join("regions"), &world.regions, |r| {
                 r.id.as_str().to_string()
+            })?;
+        }
+        // 海名（手绘地图 #13）：每实体一文件，落 `seas/<id>.yaml`，
+        // 与 loader 对称（`load_dir(&self.root, "seas")`）。
+        // 之前 v0.1 漏此分支 → save → load 后海名全丢；现在补齐。
+        if wants("seas") {
+            save_entities(&self.root.join("seas"), &world.seas, |s| {
+                s.id.as_str().to_string()
             })?;
         }
         if wants("tracks") {

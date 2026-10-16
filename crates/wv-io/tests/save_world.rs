@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use wv_core::id::Id;
+use wv_core::map::sea::Sea;
 use wv_core::map::{GeometryData, GeometrySpan};
 use wv_core::terrain::{TerrainCellData, TerrainData};
 use wv_core::time::TimeSpan;
@@ -113,6 +114,92 @@ fn save_then_load_preserves_faction() {
     assert_eq!(world2.factions[0].id.as_str(), "faction_x");
     assert_eq!(world2.factions[0].name, "X");
     assert_eq!(world2.factions[0].color.as_str(), "#FF8800");
+}
+
+/// 海名（手绘地图 #13）save → load round-trip：
+/// 之前 `save_world` 漏写 `seas/`，save 后海名全丢；此用例守住修复。
+#[test]
+fn sea_round_trips_via_save_and_load() {
+    let tmp = TempDir::new("sea_round_trip");
+    let dir = tmp.path();
+    let mut proj = build_min_project(dir, &[]).expect("建工程");
+    let mut world = proj.load_world().expect("初始加载");
+
+    world.seas.push(Sea {
+        id: Id::new_unchecked("sea_pacific"),
+        name: "沧浪洋".into(),
+        map: Id::new_unchecked("map_main"),
+        x: 1024.0,
+        y: 512.0,
+    });
+    world.seas.push(Sea {
+        id: Id::new_unchecked("sea_internal"),
+        name: "内海".into(),
+        map: Id::new_unchecked("map_main"),
+        x: 256.0,
+        y: 768.0,
+    });
+    proj.save_world(&world, &["seas".into()])
+        .expect("save 海名");
+
+    // 磁盘上应有两个 yaml。
+    let s_dir = dir.join("seas");
+    assert!(s_dir.join("sea_pacific.yaml").is_file(), "海名文件应落盘");
+    assert!(s_dir.join("sea_internal.yaml").is_file(), "海名文件应落盘");
+
+    let proj2 = Project::open(dir).expect("重开工程");
+    let world2 = proj2.load_world().expect("重载");
+    assert_eq!(world2.seas.len(), 2, "海名应全部回来");
+    // loader 用目录遍历，**不**保证顺序——按 id 找实体，逐字段断言。
+    let pacific = world2
+        .seas
+        .iter()
+        .find(|s| s.id.as_str() == "sea_pacific")
+        .expect("sea_pacific 应在");
+    assert_eq!(pacific.name, "沧浪洋");
+    assert_eq!(pacific.map.as_str(), "map_main");
+    assert_eq!(pacific.x, 1024.0);
+    assert_eq!(pacific.y, 512.0);
+    let internal = world2
+        .seas
+        .iter()
+        .find(|s| s.id.as_str() == "sea_internal")
+        .expect("sea_internal 应在");
+    assert_eq!(internal.name, "内海");
+}
+
+/// 海名删除传播：删一个海名 → save → 磁盘对应文件消失。
+#[test]
+fn removed_sea_propagates_to_disk() {
+    let tmp = TempDir::new("removed_sea");
+    let dir = tmp.path();
+    let mut proj = build_min_project(dir, &[]).expect("建工程");
+    let mut world = proj.load_world().expect("初始加载");
+    world.seas.push(Sea {
+        id: Id::new_unchecked("sea_keep"),
+        name: "留".into(),
+        map: Id::new_unchecked("map_main"),
+        x: 0.0,
+        y: 0.0,
+    });
+    world.seas.push(Sea {
+        id: Id::new_unchecked("sea_drop"),
+        name: "丢".into(),
+        map: Id::new_unchecked("map_main"),
+        x: 1.0,
+        y: 1.0,
+    });
+    proj.save_world(&world, &["seas".into()]).expect("先存两个");
+
+    let s_dir = dir.join("seas");
+    assert!(s_dir.join("sea_keep.yaml").is_file());
+    assert!(s_dir.join("sea_drop.yaml").is_file());
+
+    world.seas.retain(|s| s.id.as_str() != "sea_drop");
+    proj.save_world(&world, &["seas".into()]).expect("再存一个");
+
+    assert!(s_dir.join("sea_keep.yaml").is_file(), "留的仍在");
+    assert!(!s_dir.join("sea_drop.yaml").is_file(), "删的应传播到磁盘");
 }
 
 #[test]
