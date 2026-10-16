@@ -7,8 +7,8 @@
 //!   避免 `wgpu::Batch` 节点数随 POI 总数失控。
 //!
 //! ## 边界（不做什么）
-//! - **不画地形底图**——那是 [`crate::render::terrain_view`] + [`crate::theme::palette`]。
-//! - **不投影地理坐标**——只消费 [`crate::render::world_projection::ProjectionFrame`]。
+//! - **不画地形底图**——那是 [`crate::terrain_view`] + [`crate::theme::palette`]。
+//! - **不投影地理坐标**——只消费 [`crate::world_projection::ProjectionFrame`]。
 //! - **不维护世界数据**——POI 经 [`crate::state::ViewState`] 当前地图与可见层过滤。
 //!
 //! ## 主要导出
@@ -28,13 +28,13 @@
 use bevy::math::primitives::{Annulus, Circle};
 use bevy::prelude::*;
 
-use crate::render::layer_frame::LayerFrame;
-use crate::render::world_projection::{PlaceDot, ProjectionFrame};
+use crate::layer_frame::LayerFrame;
 use crate::state::{lod_tier, GridConfig, LodTier, ViewState};
 use crate::theme::colors_google::{
     GOOGLE_PLACE_DOT, GOOGLE_POI_RING, GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL,
 };
 use crate::theme::palette::{self, MapPalette, PaletteColors};
+use crate::world_projection::{PlaceDot, ProjectionFrame};
 
 /// Google 式道路外缘宽度（屏幕像素）。
 const GOOGLE_ROAD_CASING_PX: f32 = 6.0;
@@ -234,8 +234,8 @@ pub fn sync_vector_layers(
     grid: Res<GridConfig>,
     frame: Res<ProjectionFrame>,
     layers: Res<LayerFrame>,
-    streets: Res<crate::render::streets::StreetLayerCache>,
-    editor: Res<crate::render::streets::StreetEditorState>,
+    streets: Res<crate::streets::StreetLayerCache>,
+    editor: Res<crate::streets::StreetEditorState>,
     mut layer: ResMut<VectorLayerEntities>,
 ) {
     let road_materials_changed = ensure_road_materials(
@@ -553,7 +553,7 @@ fn sync_street_layers(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     grid: &GridConfig,
-    streets: &crate::render::streets::StreetLayerCache,
+    streets: &crate::streets::StreetLayerCache,
     view_scale: f32,
     major_casing: Handle<ColorMaterial>,
     major_fill: Handle<ColorMaterial>,
@@ -566,8 +566,8 @@ fn sync_street_layers(
     let tier = lod_tier(view_scale);
     let mut major: Vec<(Vec2, Vec2)> = Vec::new();
     let mut minor: Vec<(Vec2, Vec2)> = Vec::new();
-    for (rank, segments) in crate::render::streets::street_streams(&streets.sources) {
-        if !crate::render::streets::street_kept_at_tier(rank, tier) {
+    for (rank, segments) in crate::streets::street_streams(&streets.sources) {
+        if !crate::streets::street_kept_at_tier(rank, tier) {
             continue;
         }
         // 本图局部坐标 → 视图空间（`GridConfig::map_to_view`，与地点同一条链；
@@ -1006,9 +1006,9 @@ mod tests {
             ..Default::default()
         });
         world.init_resource::<VectorLayerEntities>();
-        world.init_resource::<crate::render::streets::StreetLayerCache>();
-        world.init_resource::<crate::render::streets::StreetEditorState>();
-        world.init_resource::<crate::render::layer_frame::LayerFrame>();
+        world.init_resource::<crate::streets::StreetLayerCache>();
+        world.init_resource::<crate::streets::StreetEditorState>();
+        world.init_resource::<crate::layer_frame::LayerFrame>();
 
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);
@@ -1049,7 +1049,7 @@ mod tests {
         });
         world.insert_resource(ProjectionFrame::default());
         world.init_resource::<VectorLayerEntities>();
-        world.insert_resource(crate::render::streets::StreetLayerCache {
+        world.insert_resource(crate::streets::StreetLayerCache {
             map_id: Some(wv_core::Id::new_unchecked("map_city")),
             sources: vec![(
                 "maps/city_wuchang/roads.yaml".to_owned(),
@@ -1064,8 +1064,8 @@ mod tests {
                 },
             )],
         });
-        world.init_resource::<crate::render::streets::StreetEditorState>();
-        world.init_resource::<crate::render::layer_frame::LayerFrame>();
+        world.init_resource::<crate::streets::StreetEditorState>();
+        world.init_resource::<crate::layer_frame::LayerFrame>();
 
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);

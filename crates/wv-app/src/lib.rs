@@ -94,7 +94,7 @@ pub mod i18n;
 #[cfg(feature = "app")]
 pub mod overture_cli;
 #[cfg(feature = "app")]
-pub mod render;
+pub mod render_bridge;
 #[cfg(feature = "app")]
 pub mod state;
 #[cfg(feature = "app")]

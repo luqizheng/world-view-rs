@@ -23,7 +23,7 @@ use bevy::prelude::*;
 
 use wv_core::RoadClass;
 
-use crate::render::layer_frame::LayerFrame;
+use crate::layer_frame::LayerFrame;
 use crate::state::{DrillState, GridConfig, LodTier, PlaybackState, ViewState, WorldProjection};
 
 /// 当前图的街道图层缓存。
@@ -80,7 +80,7 @@ pub fn reload_street_cache(
 
 /// LOD 口径：越远的视野只保留 `lod_rank` 越小（越主干）的街道。
 ///
-/// 阈值与 [`crate::state::poi_kept_at_tier`] 同一档位体系：
+/// 阈值与 [`crate::vector_layers::poi_kept_at_tier`] 同一档位体系：
 /// 国家档只留 rank ≤ 2（motorway / trunk / primary），省级 ≤ 5，
 /// 编辑级全保留。首版阈值可调，登记在 ADR-0010 §5。
 pub fn street_kept_at_tier(rank: u8, tier: LodTier) -> bool {
@@ -193,7 +193,7 @@ pub fn update_street_labels(
     mut halo_q: Query<
         (&mut Transform, &mut Text2d, &mut TextFont, &mut TextColor),
         (
-            With<crate::render::label_halo::LabelHalo>,
+            With<crate::label_halo::LabelHalo>,
             Without<bevy::prelude::Camera2d>,
             Without<StreetLabel>,
         ),
@@ -238,7 +238,7 @@ pub fn update_street_labels(
         _ => crate::theme::palette::colors(view.map_palette).halo_fill,
     }
     .with_alpha(layers.label.opacity);
-    let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
+    let halo_offset = crate::label_halo::HALO_PX * view.scale.max(0.05);
 
     let mut iter = q.iter_mut();
     for (pos, name) in &wanted {
@@ -255,7 +255,7 @@ pub fn update_street_labels(
             *vis = Visibility::Visible;
             // 晕边子实体随字同步（8 向纸色副本）。
             if let Ok(children) = children_q.get(e) {
-                crate::render::label_halo::sync_halo(
+                crate::label_halo::sync_halo(
                     children,
                     &mut halo_q,
                     name,
@@ -285,8 +285,8 @@ pub fn update_street_labels(
             let (text_owned, font_ref, fs, hc) =
                 (name.to_string(), cjk.as_ref(), font_size, halo_color);
             cmd.with_children(move |c| {
-                for _ in 0..crate::render::label_halo::HALO_DIRS.len() {
-                    c.spawn(crate::render::label_halo::halo_bundle(
+                for _ in 0..crate::label_halo::HALO_DIRS.len() {
+                    c.spawn(crate::label_halo::halo_bundle(
                         &text_owned,
                         font_ref,
                         fs,
@@ -343,12 +343,13 @@ pub fn commit_street_click(
     buttons: Res<ButtonInput<MouseButton>>,
     view: Res<ViewState>,
     playback: Res<PlaybackState>,
-    ui: Res<crate::render::camera::PointerOverUi>,
+    ui: Res<crate::camera::PointerOverUi>,
     grid: Res<GridConfig>,
-    mut projection: ResMut<WorldProjection>,
+    projection: Res<WorldProjection>,
     drill: Res<DrillState>,
     mut editor: ResMut<StreetEditorState>,
-    mut edit: ResMut<crate::edit::editing::EditHistory>,
+    mut intents: ResMut<crate::editing_bridge::EditIntents>,
+    mut acks: ResMut<StreetCommitAcks>,
 ) {
     if !editor.enabled {
         return;
@@ -383,7 +384,7 @@ pub fn commit_street_click(
 
     // 视图（根帧）坐标 → 本图局部：走 `drill::map_origin` 这唯一的图帧实现点
     // （解析不到时它退回栅格原点，等价于「本图就是栅格那张图」的旧行为）。
-    let origin = crate::render::drill::map_origin(&projection.world, node, &grid);
+    let origin = crate::drill::map_origin(&projection.world, node, &grid);
     let local = cursor - origin;
 
     // 首点只起笔不画段。
@@ -406,17 +407,35 @@ pub fn commit_street_click(
     if !trimmed.is_empty() {
         seg.name = Some(trimmed);
     }
-    let cmd = wv_edit::AddStreetSegmentCommand::new(layer.id.clone(), seg);
-    let mut tx = wv_edit::Transaction::new();
-    tx.push(Box::new(cmd));
-    match edit.history.commit(&mut projection.world, tx) {
-        Ok(dirty) => {
-            edit.record_dirty(dirty);
-            projection.dirty = true;
-            editor.last_click = Some(cursor);
-            editor.drawn += 1;
+    let seq = intents.push_street(crate::editing_bridge::StreetSegmentIntent {
+        layer_id: layer.id.clone(),
+        segment: seg,
+    });
+    acks.0.push((seq, cursor));
+}
+
+/// 街道提交的挂起回执队列：`(seq, 本笔光标世界坐标)`。
+///
+/// `commit_street_click` 写、`apply_street_receipts` 读。渲染层不持有
+/// `EditHistory`（ADR-0020 §2.5），「提交成功」由应用层翻译器经
+/// `crate::editing_bridge::EditReceipts` 回执后，这里才推进本地状态。
+#[derive(Resource, Default)]
+pub struct StreetCommitAcks(Vec<(u64, Vec2)>);
+
+/// 消费编辑回执：**提交成功才**推进连线锚点与计数——失败不动本地，
+/// 与拆 crate 前行为一致（ADR-0020 §2.5 / 闸门 8）。
+/// 必须排在 `wv-app` 翻译器之后跑（顺序由 app_bootstrap 钉死）。
+pub fn apply_street_receipts(
+    mut receipts: ResMut<crate::editing_bridge::EditReceipts>,
+    mut acks: ResMut<StreetCommitAcks>,
+    mut editor: ResMut<StreetEditorState>,
+) {
+    for (seq, cursor) in std::mem::take(&mut acks.0) {
+        if !receipts.take(seq) {
+            continue; // 提交失败 / 未回执：与旧行为一致，不推进锚点。
         }
-        Err(e) => bevy::log::warn!("街道编辑命令失败: {e}"),
+        editor.last_click = Some(cursor);
+        editor.drawn += 1;
     }
 }
 
@@ -424,7 +443,6 @@ pub fn commit_street_click(
 mod tests {
     use super::*;
     use wv_core::{Point, RoadClass, StreetLayer, StreetSegment};
-    use wv_edit::EditCommand as _;
 
     fn doc_of(segments: Vec<StreetSegment>) -> wv_core::StreetLayer {
         let mut doc = StreetLayer::new();
@@ -731,14 +749,22 @@ mod tests {
             "初始无街道文档，缓存应为空文档兜底"
         );
 
-        // 手绘一笔：走 wv-edit 命令改 World（渲染层不许直改），再触发 change。
-        let mut projection = app_world.resource_mut::<crate::state::WorldProjection>();
-        let cmd = wv_edit::AddStreetSegmentCommand::new(
-            wv_core::Id::new_unchecked("roads"),
-            StreetSegment::straight(RoadClass::Residential, 10.0, 10.0, 40.0, 10.0),
-        );
-        cmd.apply(&mut projection.world).expect("命令应成功");
-        // `Mut` 的借用活到语句末尾即释放（无需显式 drop，它也不实现 Drop）。
+        // 手绘一笔：把街道文档直接放进 World 的 streets 表（本测试关注缓存联动，
+        // 不经编辑链；「意图 → History 提交」的测试在 wv-app::edit::intent_translator）。
+        app_world
+            .resource_mut::<crate::state::WorldProjection>()
+            .world
+            .streets
+            .insert(
+                wv_core::Id::new_unchecked("roads"),
+                doc_of(vec![StreetSegment::straight(
+                    RoadClass::Residential,
+                    10.0,
+                    10.0,
+                    40.0,
+                    10.0,
+                )]),
+            );
 
         schedule.run(&mut app_world);
         let cache = app_world.resource::<StreetLayerCache>();
@@ -751,10 +777,13 @@ mod tests {
         );
     }
 
-    /// 手绘交互闭环：两次左键点击经 `commit_street_click` 落成一直段
-    /// （走 `EditHistory`，脏路径入 `dirty_set`），右键结束连线。
+    /// 手绘交互闭环（渲染侧契约）：两次左键点击经 `commit_street_click` 产出
+    /// **编辑意图**；应用层回执（模拟 `wv-app::edit::intent_translator` 提交成功）
+    /// 之后，本地状态（连线锚点 / 段计数）才推进；右键结束连线。
+    /// 「意图 → `History.commit` → `dirty_set`」那半段在
+    /// `wv-app::edit::intent_translator` 的测试里覆盖。
     #[test]
-    fn street_clicks_commit_segments_through_the_history() {
+    fn street_clicks_emit_intents_and_receipts_advance_local_state() {
         let world = wv_core::World {
             maps: vec![wv_core::map::MapNode {
                 id: wv_core::Id::new_unchecked("map_city"),
@@ -800,28 +829,43 @@ mod tests {
             ..ViewState::default()
         });
         app_world.insert_resource(PlaybackState::default());
-        app_world.insert_resource(crate::render::camera::PointerOverUi::default());
+        app_world.insert_resource(crate::camera::PointerOverUi::default());
         app_world.insert_resource(GridConfig::default());
         app_world.insert_resource(StreetEditorState {
             enabled: true,
             class: RoadClass::Primary,
             ..StreetEditorState::default()
         });
-        app_world.insert_resource(crate::edit::editing::EditHistory::default());
+        app_world.insert_resource(crate::editing_bridge::EditIntents::default());
+        app_world.insert_resource(crate::editing_bridge::EditReceipts::default());
+        app_world.insert_resource(StreetCommitAcks::default());
 
-        let mut schedule = Schedule::default();
-        schedule.add_systems(commit_street_click);
+        // 渲染侧两个系统分两个 schedule：真实 app 里翻译器（wv-app）夹在
+        // commit 与 apply 之间同帧跑；测试用「先 commit 轮、手动翻译回执、
+        // 再 apply 轮」复现同一时序（若合并一个 schedule，apply 会在回执
+        // 出现前把挂起 ack 消费掉——那不是真实时序）。
+        let mut commit_schedule = Schedule::default();
+        commit_schedule.add_systems(commit_street_click);
+        let mut apply_schedule = Schedule::default();
+        apply_schedule.add_systems(apply_street_receipts);
 
-        // 第一次点击：只起笔。
+        // 第一次点击：只起笔，不产意图。
         app_world
             .resource_mut::<ButtonInput<MouseButton>>()
             .press(MouseButton::Left);
-        schedule.run(&mut app_world);
+        commit_schedule.run(&mut app_world);
         assert_eq!(app_world.resource::<StreetEditorState>().drawn, 0);
         assert!(app_world
             .resource::<StreetEditorState>()
             .last_click
             .is_some());
+        assert!(
+            app_world
+                .resource_mut::<crate::editing_bridge::EditIntents>()
+                .drain_streets()
+                .is_empty(),
+            "首点只起笔，不应产意图"
+        );
 
         // 松开再按第二次（换落点）：`clear()` 只清 just_*，`pressed` 还挂着，
         // 必须先 `release` 才能让下一次 `press` 重新产生 just_pressed。
@@ -832,39 +876,58 @@ mod tests {
         app_world
             .resource_mut::<ButtonInput<MouseButton>>()
             .press(MouseButton::Left);
-        schedule.run(&mut app_world);
+        commit_schedule.run(&mut app_world);
+
+        // 翻译器还没跑（它在 wv-app）：本地状态此刻**必须**没动。
+        assert_eq!(
+            app_world.resource::<StreetEditorState>().drawn,
+            0,
+            "回执前不得推进计数"
+        );
+
+        // 模拟应用层翻译器：取出意图、核对内容、回执成功，再跑回执系统。
+        let drained = app_world
+            .resource_mut::<crate::editing_bridge::EditIntents>()
+            .drain_streets();
+        assert_eq!(drained.len(), 1, "两次点击应产 1 条意图");
+        let (seq, intent) = &drained[0];
+        assert_eq!(intent.layer_id, wv_core::Id::new_unchecked("roads"));
+        assert_eq!(intent.segment.class, RoadClass::Primary);
+        assert_eq!(intent.segment.points.len(), 2);
+        assert_eq!(
+            intent.segment.points[0],
+            Point::new(100.0, 200.0),
+            "段起点 = 首笔光标"
+        );
+        assert_eq!(
+            intent.segment.points[1],
+            Point::new(150.0, 180.0),
+            "段终点 = 第二笔光标"
+        );
+        app_world
+            .resource_mut::<crate::editing_bridge::EditReceipts>()
+            .commit(*seq);
+        apply_schedule.run(&mut app_world);
 
         {
             let editor = app_world.resource::<StreetEditorState>();
             assert_eq!(
                 editor.drawn, 1,
-                "第二次点击应提交 1 段（若为 0 则系统提前退出）"
+                "回执后应推进 1 段（若为 0 则回执链没接上）"
             );
-            let projection = app_world.resource::<crate::state::WorldProjection>();
-            let doc = projection
-                .world
-                .street_of(&wv_core::Id::new_unchecked("roads"))
-                .expect("命令应建出街道文档");
-            assert_eq!(doc.len(), 1, "两次点击应落 1 段，实际 {}", doc.len());
-            let s = &doc.segments[0];
-            assert_eq!(s.class, RoadClass::Primary);
-            assert_eq!(s.points.len(), 2);
-            assert_eq!(s.points[0], wv_core::geometry::Point::new(100.0, 200.0));
-            assert_eq!(s.points[1], wv_core::geometry::Point::new(150.0, 180.0));
+            assert_eq!(
+                editor.last_click,
+                Some(Vec2::new(150.0, 180.0)),
+                "锚点应推进到第二笔"
+            );
         }
-        let edit = app_world.resource::<crate::edit::editing::EditHistory>();
-        assert!(
-            edit.dirty_set.contains("streets/roads"),
-            "脏路径应进 dirty_set，实际 {:?}",
-            edit.dirty_set
-        );
 
-        // 右键结束连线：下一落点不再接段。
+        // 右键结束连线：下一落点不再接段（右键分支在 commit 系统里）。
         app_world.resource_mut::<ButtonInput<MouseButton>>().clear();
         app_world
             .resource_mut::<ButtonInput<MouseButton>>()
             .press(MouseButton::Right);
-        schedule.run(&mut app_world);
+        commit_schedule.run(&mut app_world);
         assert!(app_world
             .resource::<StreetEditorState>()
             .last_click

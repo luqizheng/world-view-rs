@@ -13,7 +13,7 @@ description = "World View 应用层：Bevy 渲染、UI、输入，转发编辑�
 # 仅在显式 `--features http` 时拉取。默认不编译，§7.1 渲染层命令同理。
 [features]
 default = []
-app = ["dep:bevy", "dep:bevy_egui", "dep:egui_extras", "dep:rfd", "dep:icu_provider"]
+app = ["wv-render/app", "dep:bevy", "dep:bevy_egui", "dep:egui_extras", "dep:rfd", "dep:icu_provider"]
 http = ["app", "dep:axum", "dep:tokio", "dep:async-trait", "dep:serde_json"]
 
 # dev-only：axum `Router::oneshot` 走 `tower::ServiceExt`，与 `body::to_bytes`、
@@ -26,6 +26,7 @@ wv-core = { workspace = true }
 wv-terrain = { workspace = true }
 wv-io = { workspace = true }
 wv-edit = { workspace = true }
+wv-render = { workspace = true }
 wv-overture = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }

@@ -77,7 +77,7 @@ impl MapFrameEntities {
 
 /// 地图外框 + 1/4 幅面参考网格的同步入口。
 ///
-/// 在 [`crate::render::terrain_view::sync_terrain_sprite`] 之后跑（外框要参考地形尺寸）。
+/// 在 [`crate::terrain_view::sync_terrain_sprite`] 之后跑（外框要参考地形尺寸）。
 pub fn sync_map_frame(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,

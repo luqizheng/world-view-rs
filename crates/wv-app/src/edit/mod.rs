@@ -1,7 +1,7 @@
 //! # wv-app::edit —— UI 动作 → `EditCommand` 链路
 //!
 //! 「面板发生了什么操作」与「世界数据怎么被改」之间的桥。
-//! 桥的这一端只关心**命令**；Undo/Redo 在 `wv-edit` 里，渲染在 `crate::render` 里。
+//! 桥的这一端只关心**命令**；Undo/Redo 在 `wv-edit` 里，渲染在 `wv-render`（ADR-0020）里。
 //!
 //! ## 职责
 //! - 把笔刷操作转成 `wv_edit::EditCommand`（`editing`）。
@@ -15,6 +15,7 @@
 //! - **不**持有 UI 外壳/面板（那是 `crate::ui::*` 的事）。
 //!
 //! ## 主要导出
+//! - `translate_edit_intents`（渲染编辑意图 → `EditCommand` 提交，ADR-0020 §2.5）—— 来自 `intent_translator`
 //! - `apply_brush_at`（笔刷提交）—— 来自 `editing`
 //! - `apply_faction_edit`（势力面板提交）—— 来自 `faction_panel_actions`
 //! - `jump_to_diagnostic`（校验面板跳转）—— 来自 `validation_actions`
@@ -25,6 +26,8 @@ pub mod diagnostics_bridge;
 pub mod editing;
 #[cfg(feature = "app")]
 pub mod faction_panel_actions;
+#[cfg(feature = "app")]
+pub mod intent_translator;
 #[cfg(feature = "app")]
 pub mod region_panel_actions;
 #[cfg(feature = "app")]

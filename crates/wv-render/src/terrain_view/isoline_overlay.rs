@@ -24,7 +24,7 @@ use bevy::render::render_resource::{PrimitiveTopology, VertexFormat};
 
 use wv_terrain::isoline::{assemble_chains, chaikin, height_segments, kind_segments, simplify_dp};
 
-use crate::render::layer_frame::LayerFrame;
+use crate::layer_frame::LayerFrame;
 use crate::state::{DrillState, GridConfig, ViewMode, ViewState, WorldProjection};
 use crate::theme::palette::{self, MapPalette};
 

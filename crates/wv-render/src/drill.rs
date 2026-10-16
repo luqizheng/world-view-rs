@@ -3,7 +3,7 @@
 //! ## 职责
 //! - 显示当前图的下级 `MapNode`，按 `MapNode.icons` 在屏幕上落点，可点击下钻。
 //! - 命中测试：点击 marker 时经 `wv-edit` 的 `DrillToNodeCommand` 改 `DrillState`，
-//!   然后交给 [`crate::render::zoom_level::clamp_to_level`] 选级区间并过渡相机。
+//!   然后交给 [`crate::zoom_level::clamp_to_level`] 选级区间并过渡相机。
 //!
 //! ## 边界（不做什么）
 //! - **不维护钻取状态**——那是 [`crate::state::DrillState`]；本模块只读写它。
@@ -43,12 +43,10 @@
 
 use bevy::prelude::*;
 
-use crate::render::layer_frame::LayerFrame;
+use crate::layer_frame::LayerFrame;
 use crate::state::{
     lod_tier, DrillState, GridConfig, LodTier, PlaybackState, ViewState, WorldProjection,
 };
-use crate::theme::ui_theme::UiShellConfig;
-use crate::theme::ui_tokens::UiTheme;
 use wv_core::id::Id;
 use wv_core::map::{Extent, IconShape, IconSpec, MapLevel, MapNode};
 
@@ -80,8 +78,9 @@ pub struct DrillClick {
 /// 把钻取相关的资源与系统注册进 `App`。
 pub fn register(app: &mut App) {
     app.init_resource::<DrillClick>()
-        .init_resource::<crate::render::label_pick::LabelHits>()
-        .init_resource::<crate::render::zoom_level::ZoomCrossRequest>()
+        .init_resource::<DrillMarkerPalette>()
+        .init_resource::<crate::label_pick::LabelHits>()
+        .init_resource::<crate::zoom_level::ZoomCrossRequest>()
         .add_systems(
             Update,
             (
@@ -101,11 +100,11 @@ pub fn register(app: &mut App) {
                 // 海名标签（手绘地图呈现 #14 · 接续 #13 `wv-core::sea::Sea`）
                 // ——Label 渲染组末尾；不参与拾取、不注册 LabelHit。
                 update_sea_labels,
-                // 悬停气泡（手绘地图 #7）——读 LabelHits + label_pick::hit_test，
-                // 命中则画 ●+名+副标题 浮窗。链尾确保用最新包围盒。
-                crate::ui::hover_tooltip::hover_tooltip_system,
             )
                 .chain(),
+            // 悬停气泡（手绘地图 #7）原在链尾，ADR-0020 起移回 wv-app
+            // （它画 egui 浮窗、读 `UiShellConfig`——都是应用层的事）；
+            // app_bootstrap 用 `.after(update_sea_labels)` 保持「链尾用最新包围盒」。
         );
 }
 
@@ -124,7 +123,7 @@ pub fn register(app: &mut App) {
 /// 于是本系统在真正换了级之后把 `take_depth_change` 的标记拿走，并自己同步相机。
 #[allow(clippy::too_many_arguments)]
 fn apply_zoom_cross(
-    mut cross: ResMut<crate::render::zoom_level::ZoomCrossRequest>,
+    mut cross: ResMut<crate::zoom_level::ZoomCrossRequest>,
     mut drill: ResMut<DrillState>,
     projection: Res<WorldProjection>,
     windows: Query<&Window>,
@@ -136,9 +135,9 @@ fn apply_zoom_cross(
     };
     let moved = match request {
         // 继续往外：回到父级。根图再往外没有父级，`up()` 自己会拒绝。
-        crate::render::zoom_level::ZoomCross::Out => drill.up(),
+        crate::zoom_level::ZoomCross::Out => drill.up(),
         // 继续往里：进到光标所在的那个子图（`enter` 只接受真子图，越级会被拒）。
-        crate::render::zoom_level::ZoomCross::Into(child) => drill.enter(&projection.world, &child),
+        crate::zoom_level::ZoomCross::Into(child) => drill.enter(&projection.world, &child),
     };
     if !moved {
         return;
@@ -150,16 +149,16 @@ fn apply_zoom_cross(
         .single()
         .map(|w| w.resolution.size())
         .unwrap_or(Vec2::new(1280.0, 800.0));
-    let zoom = crate::render::zoom_level::level_zoom(
+    let zoom = crate::zoom_level::level_zoom(
         &projection.world,
         drill.current(),
         window_size,
-        Vec2::splat(crate::render::zoom_level::FALLBACK_MAP_SIZE),
+        Vec2::splat(crate::zoom_level::FALLBACK_MAP_SIZE),
     );
     // 新级区间比旧级更宽（往外）或更深（往里），夹一下以防数据异常把 scale
     // 留在新级之外；正常情况下 `clamp` 是恒等变换。
     view.scale = zoom.clamp(view.scale);
-    crate::render::camera::apply_view_to_camera(view.camera_center, view.scale, &mut camera);
+    crate::camera::apply_view_to_camera(view.camera_center, view.scale, &mut camera);
 }
 
 // ---------------------------------------------------------------------------
@@ -207,7 +206,7 @@ pub fn marker_local(extent: Option<Extent>, id: &Id) -> Vec2 {
 ///
 /// v0.2 §B.2 给的 14 / 12 是**屏幕像素**，而 gizmo 画在世界空间；默认 1 世界单位 =
 /// 1 像素（`TILE_BASE = 32`、`cell_size = 8` 时一格 = 8 像素），故用 `cell_size` 换算，
-/// 与 [`crate::render::world_projection::draw_brush_cursor`] 的既有约定一致。
+/// 与 [`crate::world_projection::draw_brush_cursor`] 的既有约定一致。
 pub fn half_from_px(px: f32, cell_size: f32) -> f32 {
     px * 0.5 * (cell_size / 8.0)
 }
@@ -268,7 +267,7 @@ pub fn icon_local(extent: Option<Extent>, icon: &IconSpec) -> Vec2 {
 /// 一张图在世界坐标里的**图帧原点**（`MapFrame.world_origin`）。
 ///
 /// 这是全项目「图帧原点」的**唯一实现点**（类型转换层）：`GridConfig::map_origin`
-/// 由 [`crate::render::terrain_view::sync_grid_config`] 调它填、街道编辑（`streets`）
+/// 由 [`crate::terrain_view::sync_grid_config`] 调它填、街道编辑（`streets`）
 /// 反向换算本图局部坐标也调它，谁都别再手搓 `resolve_frame_in`。
 ///
 /// 与栅格原点**不是一回事**，这是本模块此前最深的坑：
@@ -446,12 +445,12 @@ pub fn drill_fly_scale(
     if drill.depth() == 0 {
         return 1.0;
     }
-    let size = crate::render::zoom_level::map_size_of(
+    let size = crate::zoom_level::map_size_of(
         world,
         drill.current(),
-        Vec2::splat(crate::render::zoom_level::FALLBACK_MAP_SIZE),
+        Vec2::splat(crate::zoom_level::FALLBACK_MAP_SIZE),
     );
-    crate::render::zoom_level::fly_in_scale(size, window_size, from_scale)
+    crate::zoom_level::fly_in_scale(size, window_size, from_scale)
 }
 
 /// 当前图在**父图**里的局部落点：优先用指向它的显式图标，没有就回退到哈希摆位。
@@ -479,7 +478,7 @@ fn extent_center(node: &MapNode) -> Vec2 {
 /// 双击钻入标记（v0.2 §B：双击菱形钻入）。
 ///
 /// 命名上只管「双击之后钻进去」这一件事；**该不该吃这次点击归笔刷那一侧判**
-/// （[`crate::render::camera::collect_brush_stroke`]）。原因：钻取是「双击」语义，第一下按下时
+/// （[`crate::camera::collect_brush_stroke`]）。原因：钻取是「双击」语义，第一下按下时
 /// 还不知道用户要不要双击，但**要不要落笔在第一下就必须决定**，所以命中标记的判定
 /// 必须在按下的那一刻、在笔刷的入口处完成，而不能等到第二下。
 ///
@@ -492,11 +491,11 @@ pub fn drill_pick(
     windows: Query<&Window>,
     camera: Query<&Transform, With<Camera2d>>,
     time: Res<Time>,
-    ui: Res<crate::render::camera::PointerOverUi>,
+    ui: Res<crate::camera::PointerOverUi>,
     mut projection: ResMut<WorldProjection>,
     grid: Res<GridConfig>,
     view: Res<ViewState>,
-    hits: Res<crate::render::label_pick::LabelHits>,
+    hits: Res<crate::label_pick::LabelHits>,
     mut drill: ResMut<DrillState>,
     mut clicks: ResMut<DrillClick>,
 ) {
@@ -509,12 +508,8 @@ pub fn drill_pick(
     let Some(cursor) = window.cursor_position() else {
         return;
     };
-    let world_pos = crate::render::camera::screen_to_world(
-        cursor,
-        window.resolution.size(),
-        transform,
-        view.scale,
-    );
+    let world_pos =
+        crate::camera::screen_to_world(cursor, window.resolution.size(), transform, view.scale);
 
     let now = time.elapsed_secs_f64();
     let is_double = clicks
@@ -531,7 +526,7 @@ pub fn drill_pick(
     // ADR-0017 §2.7：标签命中优先于一切点击语义——命中即选中该实体并
     // 吃掉这次点击（不参与双击钻取计数）。命中表是上一帧注册的（本系统
     // 在标签系统之前跑），但按下那一刻相机尚未移动，包围盒仍然有效。
-    if let Some(target) = crate::render::label_pick::hit_test(world_pos, &hits.items) {
+    if let Some(target) = crate::label_pick::hit_test(world_pos, &hits.items) {
         projection.selection = Some(target);
         clicks.last = None;
         return;
@@ -603,7 +598,7 @@ pub fn drill_transition(
     transform.translation.x = pos.x;
     transform.translation.y = pos.y;
     // 投影写回：`cam_proj` 是 `Projection` 枚举（`Camera2d` 的 require，见 ADR-0011）。
-    crate::render::camera::set_ortho_scale(&mut cam_proj, scale);
+    crate::camera::set_ortho_scale(&mut cam_proj, scale);
     view.scale = scale;
     view.camera_center = pos;
 
@@ -622,21 +617,44 @@ pub fn ease_out_cubic(k: f32) -> f32 {
 // 绘制
 // ---------------------------------------------------------------------------
 
+/// 钻入标记的界面色（交互主色 / 已访问灰显）。
+///
+/// 渲染层**不**持有 UI 令牌源头（`UiShellConfig` / `ShellPalette` 留在 wv-app，
+/// ADR-0020 §2.6）：应用层每帧把外壳令牌灌进本资源
+/// （`wv-app::render_bridge::sync_drill_marker_palette`），渲染只读。
+/// 默认值仅占位——同步系统排在绘制之前，首帧即被覆盖。
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct DrillMarkerPalette {
+    /// 交互主色（未访问标记）。
+    pub accent: Color,
+    /// 弱文本色（已访问标记灰显）。
+    pub visited: Color,
+}
+
+impl Default for DrillMarkerPalette {
+    fn default() -> Self {
+        Self {
+            accent: Color::WHITE,
+            visited: Color::WHITE,
+        }
+    }
+}
+
 /// 画当前层级的全部钻入标记（v0.2 §B.2）。
 ///
-/// 颜色取**界面令牌**而不是 [`crate::colors`] 的世界色：钻入是导航，属外壳语义
-/// （`STYLE_SWAPPABLE_ARCHITECTURE` §2 的 L2/L1 分界；界面色不随 Theme Pack 变）。
+/// 颜色读 [`DrillMarkerPalette`]（界面令牌的渲染侧投影）而不是 `crate::theme::colors`
+/// 的世界色：钻入是导航，属外壳语义（`STYLE_SWAPPABLE_ARCHITECTURE` §2 的 L2/L1
+/// 分界；界面色不随地图主题变）。
 pub fn draw_drill_markers(
     mut gizmos: Gizmos,
     projection: Res<WorldProjection>,
     drill: Res<DrillState>,
-    shell_cfg: Res<UiShellConfig>,
+    palette: Res<DrillMarkerPalette>,
     grid: Res<GridConfig>,
     view: Res<ViewState>,
 ) {
-    let shell = crate::ui::UiShell::new(&shell_cfg);
-    let accent = to_bevy_color(shell.accent());
-    let visited = to_bevy_color(shell.t3());
+    let accent = palette.accent;
+    let visited = palette.visited;
 
     for marker in resolve_markers(&projection.world, &drill, &grid, view.scale) {
         let color = if let Some([r, g, b]) = marker.color {
@@ -738,7 +756,7 @@ pub fn update_place_labels(
     view: Res<ViewState>,
     layers: Res<LayerFrame>,
     playback: Res<PlaybackState>,
-    mut hits: ResMut<crate::render::label_pick::LabelHits>,
+    mut hits: ResMut<crate::label_pick::LabelHits>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
@@ -756,7 +774,7 @@ pub fn update_place_labels(
     mut halo_q: Query<
         (&mut Transform, &mut Text2d, &mut TextFont, &mut TextColor),
         (
-            With<crate::render::label_halo::LabelHalo>,
+            With<crate::label_halo::LabelHalo>,
             // 与 `camera: Query<&Transform, With<Camera2d>>` 互斥（B0001）。
             Without<bevy::prelude::Camera2d>,
             // 与主查询 `With<PlaceLabel>` 互斥。
@@ -772,7 +790,7 @@ pub fn update_place_labels(
     // 两者合取——任一关闭即标签消失。
     let tier = lod_tier(view.scale);
     let t = playback.current_day;
-    let mut candidates: Vec<crate::render::label_collision::LabelCandidate> = Vec::new();
+    let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
     if layers.place.visible && layers.label.visible {
         if let Some(current) = drill.current_node(&projection.world) {
             let map_span = current.time_span.as_ref();
@@ -786,7 +804,7 @@ pub fn update_place_labels(
                         let pos = grid.map_to_view(Vec2::new(x, y));
                         // v0.1 优先级：文本长度（长标签优先保留，短标签更容易被遮挡）。
                         let priority = p.name.len() as u32;
-                        candidates.push(crate::render::label_collision::LabelCandidate {
+                        candidates.push(crate::label_collision::LabelCandidate {
                             pos,
                             name: p.name.clone(),
                             priority,
@@ -804,8 +822,7 @@ pub fn update_place_labels(
     // ADR-0017 §2.6：AABB 碰撞过滤（max_labels = 200 默认）。
     let font_size = LABEL_PX * view.scale.max(0.05);
     let max_labels = 200;
-    let mut filtered =
-        crate::render::label_collision::filter_collisions(&mut candidates, font_size);
+    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, font_size);
     filtered.truncate(max_labels);
 
     // 文字尺寸按屏幕像素恒定（与 draw_drill_markers 的 screen_scale 口径一致）。
@@ -817,7 +834,7 @@ pub fn update_place_labels(
         .single()
         .map(|t| t.rotation)
         .unwrap_or(Quat::IDENTITY);
-    let up_world = crate::render::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
+    let up_world = crate::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
     let label_rot = cam_rot.inverse();
     for c in &mut filtered {
         c.pos += up_world;
@@ -828,10 +845,10 @@ pub fn update_place_labels(
     for c in &filtered {
         if let Some(target) = &c.target {
             let half = Vec2::new(
-                crate::render::label_collision::estimate_label_width(&c.name, font_size) * 0.5,
-                crate::render::label_collision::estimate_label_height(font_size) * 0.5,
+                crate::label_collision::estimate_label_width(&c.name, font_size) * 0.5,
+                crate::label_collision::estimate_label_height(font_size) * 0.5,
             );
-            hits.push(crate::render::label_pick::LabelHit {
+            hits.push(crate::label_pick::LabelHit {
                 center: c.pos,
                 half,
                 target: target.clone(),
@@ -857,7 +874,7 @@ pub fn update_place_labels(
         _ => crate::theme::palette::colors(view.map_palette).halo_fill,
     }
     .with_alpha(layers.place.opacity);
-    let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
+    let halo_offset = crate::label_halo::HALO_PX * view.scale.max(0.05);
 
     let mut iter = q.iter_mut();
     for c in &wanted {
@@ -877,7 +894,7 @@ pub fn update_place_labels(
             *vis = Visibility::Visible;
             // 晕边子实体随字同步（8 向纸色副本，绿地/水面上托出文字）。
             if let Ok(children) = children_q.get(e) {
-                crate::render::label_halo::sync_halo(
+                crate::label_halo::sync_halo(
                     children,
                     &mut halo_q,
                     name,
@@ -907,8 +924,8 @@ pub fn update_place_labels(
             let (text_owned, font_ref, fs, hc) =
                 (name.clone(), cjk.as_ref(), font_size, halo_color);
             cmd.with_children(move |c| {
-                for _ in 0..crate::render::label_halo::HALO_DIRS.len() {
-                    c.spawn(crate::render::label_halo::halo_bundle(
+                for _ in 0..crate::label_halo::HALO_DIRS.len() {
+                    c.spawn(crate::label_halo::halo_bundle(
                         &text_owned,
                         font_ref,
                         fs,
@@ -938,7 +955,7 @@ pub fn update_faction_labels(
     view: Res<ViewState>,
     layers: Res<LayerFrame>,
     playback: Res<PlaybackState>,
-    mut hits: ResMut<crate::render::label_pick::LabelHits>,
+    mut hits: ResMut<crate::label_pick::LabelHits>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
@@ -956,14 +973,14 @@ pub fn update_faction_labels(
     mut halo_q: Query<
         (&mut Transform, &mut Text2d, &mut TextFont, &mut TextColor),
         (
-            With<crate::render::label_halo::LabelHalo>,
+            With<crate::label_halo::LabelHalo>,
             Without<bevy::prelude::Camera2d>,
             Without<FactionLabel>,
         ),
     >,
 ) {
     let t = playback.current_day;
-    let mut candidates: Vec<crate::render::label_collision::LabelCandidate> = Vec::new();
+    let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
     // Label 层可见性（ADR-0017 Q1）
     if layers.label.visible {
         if let Some(current) = drill.current_node(&projection.world) {
@@ -983,7 +1000,7 @@ pub fn update_faction_labels(
                         }
                         let center = Vec2::new(sx / n, sy / n);
                         // v0.1 优先级：文本长度（与地名同一口径）。
-                        candidates.push(crate::render::label_collision::LabelCandidate {
+                        candidates.push(crate::label_collision::LabelCandidate {
                             pos: grid.map_to_view(center),
                             name: faction.name.clone(),
                             priority: faction.name.len() as u32,
@@ -1001,8 +1018,7 @@ pub fn update_faction_labels(
 
     // ADR-0017 §2.6：AABB 碰撞过滤（势力标签通常个位数，200 上限不会触顶）。
     let font_size = LABEL_PX * view.scale.max(0.05);
-    let mut filtered =
-        crate::render::label_collision::filter_collisions(&mut candidates, font_size);
+    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, font_size);
     filtered.truncate(200);
     let label_offset = font_size * 0.9;
     let label_z = LABEL_Z + layers.label.z_offset;
@@ -1010,7 +1026,7 @@ pub fn update_faction_labels(
         .single()
         .map(|t| t.rotation)
         .unwrap_or(Quat::IDENTITY);
-    let up_world = crate::render::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
+    let up_world = crate::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
     let label_rot = cam_rot.inverse();
     for c in &mut filtered {
         c.pos += up_world;
@@ -1019,10 +1035,10 @@ pub fn update_faction_labels(
     for c in &filtered {
         if let Some(target) = &c.target {
             let half = Vec2::new(
-                crate::render::label_collision::estimate_label_width(&c.name, font_size) * 0.5,
-                crate::render::label_collision::estimate_label_height(font_size) * 0.5,
+                crate::label_collision::estimate_label_width(&c.name, font_size) * 0.5,
+                crate::label_collision::estimate_label_height(font_size) * 0.5,
             );
-            hits.push(crate::render::label_pick::LabelHit {
+            hits.push(crate::label_pick::LabelHit {
                 center: c.pos,
                 half,
                 target: target.clone(),
@@ -1044,7 +1060,7 @@ pub fn update_faction_labels(
             .with_alpha(layers.label.opacity),
     };
     let halo_color = crate::theme::colors_google::GOOGLE_COAST_LAND;
-    let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
+    let halo_offset = crate::label_halo::HALO_PX * view.scale.max(0.05);
 
     let mut iter = q.iter_mut();
     for c in &wanted {
@@ -1061,7 +1077,7 @@ pub fn update_faction_labels(
             *color = TextColor(label_color);
             *vis = Visibility::Visible;
             if let Ok(children) = children_q.get(e) {
-                crate::render::label_halo::sync_halo(
+                crate::label_halo::sync_halo(
                     children,
                     &mut halo_q,
                     name.as_str(),
@@ -1091,8 +1107,8 @@ pub fn update_faction_labels(
             let (text_owned, font_ref, fs, hc) =
                 (name.to_string(), cjk.as_ref(), region_font_size, halo_color);
             cmd.with_children(move |c| {
-                for _ in 0..crate::render::label_halo::HALO_DIRS.len() {
-                    c.spawn(crate::render::label_halo::halo_bundle(
+                for _ in 0..crate::label_halo::HALO_DIRS.len() {
+                    c.spawn(crate::label_halo::halo_bundle(
                         &text_owned,
                         font_ref,
                         fs,
@@ -1121,7 +1137,7 @@ pub fn update_event_labels(
     view: Res<ViewState>,
     layers: Res<LayerFrame>,
     playback: Res<PlaybackState>,
-    mut hits: ResMut<crate::render::label_pick::LabelHits>,
+    mut hits: ResMut<crate::label_pick::LabelHits>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
@@ -1139,14 +1155,14 @@ pub fn update_event_labels(
     mut halo_q: Query<
         (&mut Transform, &mut Text2d, &mut TextFont, &mut TextColor),
         (
-            With<crate::render::label_halo::LabelHalo>,
+            With<crate::label_halo::LabelHalo>,
             Without<bevy::prelude::Camera2d>,
             Without<EventLabel>,
         ),
     >,
 ) {
     let t = playback.current_day;
-    let mut candidates: Vec<crate::render::label_collision::LabelCandidate> = Vec::new();
+    let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
     // Label 层可见性（ADR-0017 Q1）
     if layers.label.visible {
         if let Some(current) = drill.current_node(&projection.world) {
@@ -1172,7 +1188,7 @@ pub fn update_event_labels(
                         let x = loc.x.unwrap_or(place.x.unwrap_or(0.0));
                         let y = loc.y.unwrap_or(place.y.unwrap_or(0.0));
                         // v0.1 优先级：文本长度（与地名/势力同一口径）。
-                        candidates.push(crate::render::label_collision::LabelCandidate {
+                        candidates.push(crate::label_collision::LabelCandidate {
                             pos: grid.map_to_view(Vec2::new(x, y)),
                             name: event.name.clone(),
                             priority: event.name.len() as u32,
@@ -1190,8 +1206,7 @@ pub fn update_event_labels(
 
     // ADR-0017 §2.6：AABB 碰撞过滤（事件标签通常个位数）。
     let font_size = LABEL_PX * view.scale.max(0.05);
-    let mut filtered =
-        crate::render::label_collision::filter_collisions(&mut candidates, font_size);
+    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, font_size);
     filtered.truncate(200);
     let label_offset = font_size * 0.9;
     let label_z = LABEL_Z + layers.label.z_offset;
@@ -1199,7 +1214,7 @@ pub fn update_event_labels(
         .single()
         .map(|t| t.rotation)
         .unwrap_or(Quat::IDENTITY);
-    let up_world = crate::render::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
+    let up_world = crate::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
     let label_rot = cam_rot.inverse();
     for c in &mut filtered {
         c.pos += up_world;
@@ -1208,10 +1223,10 @@ pub fn update_event_labels(
     for c in &filtered {
         if let Some(target) = &c.target {
             let half = Vec2::new(
-                crate::render::label_collision::estimate_label_width(&c.name, font_size) * 0.5,
-                crate::render::label_collision::estimate_label_height(font_size) * 0.5,
+                crate::label_collision::estimate_label_width(&c.name, font_size) * 0.5,
+                crate::label_collision::estimate_label_height(font_size) * 0.5,
             );
-            hits.push(crate::render::label_pick::LabelHit {
+            hits.push(crate::label_pick::LabelHit {
                 center: c.pos,
                 half,
                 target: target.clone(),
@@ -1224,7 +1239,7 @@ pub fn update_event_labels(
     let label_color =
         crate::theme::colors_google::GOOGLE_CONTROL_TEXT.with_alpha(layers.label.opacity);
     let halo_color = crate::theme::colors_google::GOOGLE_COAST_LAND;
-    let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
+    let halo_offset = crate::label_halo::HALO_PX * view.scale.max(0.05);
 
     let mut iter = q.iter_mut();
     for c in &wanted {
@@ -1241,7 +1256,7 @@ pub fn update_event_labels(
             *color = TextColor(label_color);
             *vis = Visibility::Visible;
             if let Ok(children) = children_q.get(e) {
-                crate::render::label_halo::sync_halo(
+                crate::label_halo::sync_halo(
                     children,
                     &mut halo_q,
                     name.as_str(),
@@ -1271,8 +1286,8 @@ pub fn update_event_labels(
             let (text_owned, font_ref, fs, hc) =
                 (name.to_string(), cjk.as_ref(), font_size, halo_color);
             cmd.with_children(move |c| {
-                for _ in 0..crate::render::label_halo::HALO_DIRS.len() {
-                    c.spawn(crate::render::label_halo::halo_bundle(
+                for _ in 0..crate::label_halo::HALO_DIRS.len() {
+                    c.spawn(crate::label_halo::halo_bundle(
                         &text_owned,
                         font_ref,
                         fs,
@@ -1303,7 +1318,7 @@ pub fn update_region_labels(
     view: Res<ViewState>,
     layers: Res<LayerFrame>,
     playback: Res<PlaybackState>,
-    mut hits: ResMut<crate::render::label_pick::LabelHits>,
+    mut hits: ResMut<crate::label_pick::LabelHits>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
@@ -1321,14 +1336,14 @@ pub fn update_region_labels(
     mut halo_q: Query<
         (&mut Transform, &mut Text2d, &mut TextFont, &mut TextColor),
         (
-            With<crate::render::label_halo::LabelHalo>,
+            With<crate::label_halo::LabelHalo>,
             Without<bevy::prelude::Camera2d>,
             Without<RegionLabel>,
         ),
     >,
 ) {
     let t = playback.current_day;
-    let mut candidates: Vec<crate::render::label_collision::LabelCandidate> = Vec::new();
+    let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
     // Label 层可见性（ADR-0017 Q1）
     if layers.label.visible {
         if let Some(current) = drill.current_node(&projection.world) {
@@ -1344,7 +1359,7 @@ pub fn update_region_labels(
                         continue;
                     };
                     // v0.1 优先级：文本长度（与其他标签同一口径）。
-                    candidates.push(crate::render::label_collision::LabelCandidate {
+                    candidates.push(crate::label_collision::LabelCandidate {
                         pos: grid.map_to_view(Vec2::new(centroid.x, centroid.y)),
                         name: region.name.clone(),
                         priority: region.name.len() as u32,
@@ -1361,8 +1376,7 @@ pub fn update_region_labels(
 
     // ADR-0017 §2.6：AABB 碰撞过滤（区域通常个位数）。
     let font_size = LABEL_PX * view.scale.max(0.05);
-    let mut filtered =
-        crate::render::label_collision::filter_collisions(&mut candidates, font_size);
+    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, font_size);
     filtered.truncate(200);
     let label_offset = font_size * 0.9;
     let label_z = LABEL_Z + layers.label.z_offset;
@@ -1370,7 +1384,7 @@ pub fn update_region_labels(
         .single()
         .map(|t| t.rotation)
         .unwrap_or(Quat::IDENTITY);
-    let up_world = crate::render::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
+    let up_world = crate::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
     let label_rot = cam_rot.inverse();
     for c in &mut filtered {
         c.pos += up_world;
@@ -1379,10 +1393,10 @@ pub fn update_region_labels(
     for c in &filtered {
         if let Some(target) = &c.target {
             let half = Vec2::new(
-                crate::render::label_collision::estimate_label_width(&c.name, font_size) * 0.5,
-                crate::render::label_collision::estimate_label_height(font_size) * 0.5,
+                crate::label_collision::estimate_label_width(&c.name, font_size) * 0.5,
+                crate::label_collision::estimate_label_height(font_size) * 0.5,
             );
-            hits.push(crate::render::label_pick::LabelHit {
+            hits.push(crate::label_pick::LabelHit {
                 center: c.pos,
                 half,
                 target: target.clone(),
@@ -1404,7 +1418,7 @@ pub fn update_region_labels(
             .with_alpha(layers.label.opacity),
     };
     let halo_color = crate::theme::colors_google::GOOGLE_COAST_LAND;
-    let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
+    let halo_offset = crate::label_halo::HALO_PX * view.scale.max(0.05);
 
     let mut iter = q.iter_mut();
     for c in &wanted {
@@ -1421,7 +1435,7 @@ pub fn update_region_labels(
             *color = TextColor(label_color);
             *vis = Visibility::Visible;
             if let Ok(children) = children_q.get(e) {
-                crate::render::label_halo::sync_halo(
+                crate::label_halo::sync_halo(
                     children,
                     &mut halo_q,
                     name.as_str(),
@@ -1451,8 +1465,8 @@ pub fn update_region_labels(
             let (text_owned, font_ref, fs, hc) =
                 (name.to_string(), cjk.as_ref(), region_font_size, halo_color);
             cmd.with_children(move |c| {
-                for _ in 0..crate::render::label_halo::HALO_DIRS.len() {
-                    c.spawn(crate::render::label_halo::halo_bundle(
+                for _ in 0..crate::label_halo::HALO_DIRS.len() {
+                    c.spawn(crate::label_halo::halo_bundle(
                         &text_owned,
                         font_ref,
                         fs,
@@ -1508,14 +1522,14 @@ pub fn update_sea_labels(
     mut halo_q: Query<
         (&mut Transform, &mut Text2d, &mut TextFont, &mut TextColor),
         (
-            With<crate::render::label_halo::LabelHalo>,
+            With<crate::label_halo::LabelHalo>,
             Without<bevy::prelude::Camera2d>,
             Without<SeaLabel>,
         ),
     >,
 ) {
     let t = playback.current_day;
-    let mut candidates: Vec<crate::render::label_collision::LabelCandidate> = Vec::new();
+    let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
     // Label 渲染组可见性（与 faction / region / event 同一开关）
     if layers.label.visible {
         if let Some(current) = drill.current_node(&projection.world) {
@@ -1528,7 +1542,7 @@ pub fn update_sea_labels(
                     // v0.1 优先级：文本长度（与其他标签同一口径）；`target = None`
                     // 标记「不参与拾取」语义——`update_region_labels` / `_faction_labels`
                     // 都填 `Some(...)`，与本系统行为不同。
-                    candidates.push(crate::render::label_collision::LabelCandidate {
+                    candidates.push(crate::label_collision::LabelCandidate {
                         pos: grid.map_to_view(Vec2::new(sea.x, sea.y)),
                         name: sea.name.clone(),
                         priority: sea.name.len() as u32,
@@ -1544,8 +1558,7 @@ pub fn update_sea_labels(
     // 模式统一，未来海名数量上去后无须切管线。
     let font_size = LABEL_PX * view.scale.max(0.05);
     let sea_font_size = font_size * 1.4;
-    let mut filtered =
-        crate::render::label_collision::filter_collisions(&mut candidates, sea_font_size);
+    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, sea_font_size);
     filtered.truncate(200);
     let label_offset = sea_font_size * 0.9;
     let label_z = LABEL_Z + layers.label.z_offset;
@@ -1553,7 +1566,7 @@ pub fn update_sea_labels(
         .single()
         .map(|t| t.rotation)
         .unwrap_or(Quat::IDENTITY);
-    let up_world = crate::render::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
+    let up_world = crate::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
     let label_rot = cam_rot.inverse();
     for c in &mut filtered {
         c.pos += up_world;
@@ -1574,7 +1587,7 @@ pub fn update_sea_labels(
         _ => crate::theme::palette::colors(view.map_palette).halo_fill,
     }
     .with_alpha(layers.label.opacity);
-    let halo_offset = crate::render::label_halo::HALO_PX * view.scale.max(0.05);
+    let halo_offset = crate::label_halo::HALO_PX * view.scale.max(0.05);
 
     let mut iter = q.iter_mut();
     for c in &wanted {
@@ -1591,7 +1604,7 @@ pub fn update_sea_labels(
             *color = TextColor(label_color);
             *vis = Visibility::Visible;
             if let Ok(children) = children_q.get(e) {
-                crate::render::label_halo::sync_halo(
+                crate::label_halo::sync_halo(
                     children,
                     &mut halo_q,
                     name.as_str(),
@@ -1621,8 +1634,8 @@ pub fn update_sea_labels(
             let (text_owned, font_ref, fs, hc) =
                 (name.to_string(), cjk.as_ref(), sea_font_size, halo_color);
             cmd.with_children(move |c| {
-                for _ in 0..crate::render::label_halo::HALO_DIRS.len() {
-                    c.spawn(crate::render::label_halo::halo_bundle(
+                for _ in 0..crate::label_halo::HALO_DIRS.len() {
+                    c.spawn(crate::label_halo::halo_bundle(
                         &text_owned,
                         font_ref,
                         fs,
@@ -1692,19 +1705,6 @@ fn draw_diamond(gizmos: &mut Gizmos, center: Vec2, half: f32, color: Color) {
     for (a, b) in [(top, right), (right, bottom), (bottom, left), (left, top)] {
         gizmos.line_2d(a, b, color);
     }
-}
-
-/// `ui_tokens::Rgb` → Bevy `Color`（gizmo 用的世界色）。
-fn to_bevy_color(c: bevy_egui::egui::Color32) -> Color {
-    Color::srgb_u8(c.r(), c.g(), c.b())
-}
-
-/// 当前主题下的界面强调色（供 [`draw_drill_markers`] 之外的调用者复用）。
-pub fn accent_for(theme: UiTheme) -> Color {
-    let c = crate::theme::ui_tokens::ShellPalette::for_theme(theme)
-        .accent
-        .to_color32();
-    to_bevy_color(c)
 }
 
 #[cfg(test)]
@@ -2139,7 +2139,7 @@ mod tests {
 
         assert!(drill.enter(&world, &Id::new_unchecked("city_a")));
         let got = drill_fly_scale(&world, &drill, window, 5.12);
-        let band = crate::render::zoom_level::LevelZoom::for_map(Vec2::splat(1024.0), window);
+        let band = crate::zoom_level::LevelZoom::for_map(Vec2::splat(1024.0), window);
         assert!(
             (band.min..=band.max).contains(&got),
             "目标缩放 {got} 必须落在城市级区间 [{}, {}] 内",
@@ -2177,17 +2177,6 @@ mod tests {
         assert!(ease_out_cubic(0.5) > 0.5, "缓出曲线前半段应更快");
     }
 
-    #[test]
-    fn accent_differs_between_themes_but_is_never_gold() {
-        let dark = accent_for(UiTheme::Dark);
-        let light = accent_for(UiTheme::Light);
-        assert_ne!(dark, light, "两套主题的界面蓝应不同");
-        // 金色（选中地块语义）绝不能出现在钻入标记上（v0.2 §B.2 明令）。
-        let gold = Color::srgb_u8(0xF2, 0xC1, 0x4E);
-        assert_ne!(dark, gold);
-        assert_ne!(light, gold);
-    }
-
     // -----------------------------------------------------------------------
     // 滚轮换级（ADR-0009 §2 决策 ⑤/⑦）：`camera_zoom` 只发请求，这里消费。
     // -----------------------------------------------------------------------
@@ -2223,7 +2212,7 @@ mod tests {
         app.init_resource::<DrillState>()
             .init_resource::<ViewState>()
             .init_resource::<GridConfig>()
-            .init_resource::<crate::render::zoom_level::ZoomCrossRequest>()
+            .init_resource::<crate::zoom_level::ZoomCrossRequest>()
             .insert_resource(WorldProjection {
                 world,
                 ..Default::default()
@@ -2257,8 +2246,8 @@ mod tests {
         app.world_mut().resource_mut::<ViewState>().scale = 1.0;
         app.world_mut().resource_mut::<ViewState>().camera_center = Vec2::new(1500.0, 1200.0);
         app.world_mut()
-            .resource_mut::<crate::render::zoom_level::ZoomCrossRequest>()
-            .pending = Some(crate::render::zoom_level::ZoomCross::Out);
+            .resource_mut::<crate::zoom_level::ZoomCrossRequest>()
+            .pending = Some(crate::zoom_level::ZoomCross::Out);
 
         app.update();
 
@@ -2296,10 +2285,10 @@ mod tests {
         }
         app.world_mut().resource_mut::<ViewState>().scale = 1.0;
         app.world_mut()
-            .resource_mut::<crate::render::zoom_level::ZoomCrossRequest>()
-            .pending = Some(crate::render::zoom_level::ZoomCross::Into(
-            Id::new_unchecked("city_a"),
-        ));
+            .resource_mut::<crate::zoom_level::ZoomCrossRequest>()
+            .pending = Some(crate::zoom_level::ZoomCross::Into(Id::new_unchecked(
+            "city_a",
+        )));
 
         app.update();
 
@@ -2326,15 +2315,15 @@ mod tests {
                 .ensure_root(&world);
         }
         app.world_mut()
-            .resource_mut::<crate::render::zoom_level::ZoomCrossRequest>()
-            .pending = Some(crate::render::zoom_level::ZoomCross::Out);
+            .resource_mut::<crate::zoom_level::ZoomCrossRequest>()
+            .pending = Some(crate::zoom_level::ZoomCross::Out);
 
         app.update();
 
         assert_eq!(app.world().resource::<DrillState>().depth(), 0);
         assert!(
             app.world()
-                .resource::<crate::render::zoom_level::ZoomCrossRequest>()
+                .resource::<crate::zoom_level::ZoomCrossRequest>()
                 .pending
                 .is_none(),
             "无论是否真的换级，请求都必须被消费"
@@ -2364,8 +2353,8 @@ mod tests {
         app.init_resource::<DrillState>()
             .init_resource::<ViewState>()
             .init_resource::<GridConfig>()
-            .init_resource::<crate::render::zoom_level::ZoomCrossRequest>()
-            .init_resource::<crate::render::camera::PointerOverUi>()
+            .init_resource::<crate::zoom_level::ZoomCrossRequest>()
+            .init_resource::<crate::camera::PointerOverUi>()
             .add_message::<MouseWheel>()
             .insert_resource(WorldProjection {
                 world,
@@ -2373,7 +2362,7 @@ mod tests {
             })
             .add_systems(
                 Update,
-                (crate::render::camera::camera_zoom, apply_zoom_cross).chain(),
+                (crate::camera::camera_zoom, apply_zoom_cross).chain(),
             );
 
         let world = app.world().resource::<WorldProjection>().world.clone();
@@ -2391,11 +2380,11 @@ mod tests {
         let window_id = app.world_mut().spawn(window).id();
 
         // 先把缩放踩到世界级内界。
-        let inner = crate::render::zoom_level::level_zoom(
+        let inner = crate::zoom_level::level_zoom(
             &world,
             Some(&Id::new_unchecked("world_main")),
             Vec2::new(1280.0, 720.0),
-            Vec2::splat(crate::render::zoom_level::FALLBACK_MAP_SIZE),
+            Vec2::splat(crate::zoom_level::FALLBACK_MAP_SIZE),
         )
         .min;
         app.world_mut().resource_mut::<ViewState>().scale = inner;

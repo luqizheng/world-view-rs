@@ -283,6 +283,7 @@ mod tests {
             time_span: None,
             unit_per_km: None,
             orientation: 0.0,
+            base: None,
         });
         world.maps.push(MapNode {
             id: Id::new_unchecked("city_a"),
@@ -298,6 +299,7 @@ mod tests {
             time_span: None,
             unit_per_km: None,
             orientation: 0.0,
+            base: None,
         });
         world.distances.places.push(wv_core::distance::Place {
             id: Id::new_unchecked("qingyun"),

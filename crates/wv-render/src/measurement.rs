@@ -27,12 +27,13 @@ use bevy::prelude::*;
 
 use wv_core::{Measurement, MeasurementKind, MeasurementOverlay};
 
-use crate::edit::editing;
+use crate::editing_bridge::{EditIntents, EditReceipts};
+
 use crate::state::{
     DrillState, GridConfig, MeasureMode, MeasureState, PlaybackState, ViewState, WorldProjection,
 };
 
-use super::streets::StreetLabel;
+use crate::streets::StreetLabel;
 
 // ---------------------------------------------------------------------------
 // 缓存
@@ -468,7 +469,7 @@ fn cursor_to_local(
     grid: &GridConfig,
 ) -> Option<(Vec2, wv_core::Id)> {
     let node = drill.current_node(&projection.world)?;
-    let origin = crate::render::drill::map_origin(&projection.world, node, grid);
+    let origin = crate::drill::map_origin(&projection.world, node, grid);
     Some((cursor_world - origin, node.id.clone()))
 }
 
@@ -540,7 +541,7 @@ fn next_measurement_id(world: &wv_core::World, map_id: &wv_core::Id) -> wv_core:
 /// - enabled 闸（`mode != Off`）；
 /// - 不悬 UI / 不在播放 / 不在过低缩放；
 /// - 无工程锁；
-/// - 经 `EditHistory.commit` 不直改 `World`；
+/// - 经 [`crate::editing_bridge`] 意图提交（wv-app 翻译成 `EditCommand`），不直改 `World`；
 /// - 落点要 `cursor_world` 存在。
 #[allow(clippy::too_many_arguments)]
 pub fn commit_measurement_click(
@@ -548,12 +549,13 @@ pub fn commit_measurement_click(
     keys: Res<ButtonInput<KeyCode>>,
     view: Res<ViewState>,
     playback: Res<PlaybackState>,
-    ui: Res<crate::render::camera::PointerOverUi>,
+    ui: Res<crate::camera::PointerOverUi>,
     grid: Res<GridConfig>,
     drill: Res<DrillState>,
-    mut projection: ResMut<WorldProjection>,
+    projection: Res<WorldProjection>,
     mut measure: ResMut<MeasureState>,
-    mut edit: ResMut<editing::EditHistory>,
+    mut intents: ResMut<EditIntents>,
+    mut acks: ResMut<MeasureCommitAcks>,
 ) {
     let mode = measure.mode;
     if mode == MeasureMode::Off {
@@ -621,18 +623,17 @@ pub fn commit_measurement_click(
                 wv_core::Point::new(local.x, local.y),
             ])
             .with_id(next_measurement_id(&projection.world, &map_id));
-            let cmd = wv_edit::AddMeasurementCommand::new(map_id.clone(), seg);
-            let mut tx = wv_edit::Transaction::new();
-            tx.push(Box::new(cmd));
-            match edit.history.commit(&mut projection.world, tx) {
-                Ok(dirty) => {
-                    edit.record_dirty(dirty);
-                    projection.dirty = true;
-                    measure.draft.push(local);
-                    measure.draft_map_id = Some(map_id.clone());
-                }
-                Err(e) => bevy::log::warn!("测量命令失败: {e}"),
-            }
+            let seq = intents.push_measurement(crate::editing_bridge::MeasurementIntent {
+                map_id: map_id.clone(),
+                op: crate::editing_bridge::MeasurementOp::Add(seg),
+            });
+            acks.0.push((
+                seq,
+                MeasureAck::LinePush {
+                    local,
+                    map_id: map_id.clone(),
+                },
+            ));
         }
         MeasureMode::Rect => {
             // 第一次点击：草稿起笔。
@@ -648,17 +649,11 @@ pub fn commit_measurement_click(
                 wv_core::Point::new(local.x, local.y),
             )
             .with_id(next_measurement_id(&projection.world, &map_id));
-            let cmd = wv_edit::AddMeasurementCommand::new(map_id.clone(), m);
-            let mut tx = wv_edit::Transaction::new();
-            tx.push(Box::new(cmd));
-            match edit.history.commit(&mut projection.world, tx) {
-                Ok(dirty) => {
-                    edit.record_dirty(dirty);
-                    projection.dirty = true;
-                    measure.clear_draft();
-                }
-                Err(e) => bevy::log::warn!("测量命令失败: {e}"),
-            }
+            let seq = intents.push_measurement(crate::editing_bridge::MeasurementIntent {
+                map_id,
+                op: crate::editing_bridge::MeasurementOp::Add(m),
+            });
+            acks.0.push((seq, MeasureAck::RectClear));
         }
         MeasureMode::Eraser => {
             // 找容差内最近的一条 measurement → 删。
@@ -689,14 +684,45 @@ pub fn commit_measurement_click(
                     .measurements[idx]
                     .id
                     .clone();
-                let cmd = wv_edit::RemoveMeasurementCommand::new(map_id.clone(), id);
-                let mut tx = wv_edit::Transaction::new();
-                tx.push(Box::new(cmd));
-                if let Ok(dirty) = edit.history.commit(&mut projection.world, tx) {
-                    edit.record_dirty(dirty);
-                    projection.dirty = true;
-                }
+                intents.push_measurement(crate::editing_bridge::MeasurementIntent {
+                    map_id,
+                    op: crate::editing_bridge::MeasurementOp::Remove(id),
+                });
             }
+        }
+    }
+}
+
+/// 待回执的本地动作：提交**成功**后由 [`apply_measurement_receipts`] 回填。
+#[derive(Debug, Clone)]
+enum MeasureAck {
+    /// Line：草稿推进到 `local`（并绑定 `map_id`）。
+    LinePush { local: Vec2, map_id: wv_core::Id },
+    /// Rect：两点齐，清草稿。
+    RectClear,
+}
+
+/// 测量提交的挂起回执队列（`commit_measurement_click` 写、`apply_measurement_receipts` 读）。
+#[derive(Resource, Default)]
+pub struct MeasureCommitAcks(Vec<(u64, MeasureAck)>);
+
+/// 消费编辑回执：**提交成功才**推进测量草稿——失败不动本地，与拆 crate 前行为一致
+/// （ADR-0020 §2.5 / 闸门 8）。必须排在 `wv-app` 翻译器之后跑（顺序由 app_bootstrap 钉死）。
+pub fn apply_measurement_receipts(
+    mut receipts: ResMut<EditReceipts>,
+    mut acks: ResMut<MeasureCommitAcks>,
+    mut measure: ResMut<MeasureState>,
+) {
+    for (seq, ack) in std::mem::take(&mut acks.0) {
+        if !receipts.take(seq) {
+            continue; // 提交失败 / 未回执：与旧行为一致，不推进草稿。
+        }
+        match ack {
+            MeasureAck::LinePush { local, map_id } => {
+                measure.draft.push(local);
+                measure.draft_map_id = Some(map_id);
+            }
+            MeasureAck::RectClear => measure.clear_draft(),
         }
     }
 }

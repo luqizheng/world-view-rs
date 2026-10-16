@@ -1,0 +1,26 @@
+[package]
+name = "wv-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "World View 渲染层：Bevy 地图渲染、渲染配色与视图状态（ADR-0020）"
+
+# 渲染层默认不编译（与 wv-app 的 `app` feature 同一红线，AGENTS §7.1）：
+# Bevy 依赖树庞大，数据层与 CLI 不应对其产生构建依赖。
+# `app` feature 打开后才有全部渲染模块；wv-app 的 `app` feature 会传递打开它。
+[features]
+default = []
+app = ["dep:bevy", "dep:bevy_egui"]
+
+[dependencies]
+wv-core = { workspace = true }
+wv-terrain = { workspace = true }
+# tile_atlas 的图集配置（AtlasConfig）从随图 YAML 读——与 wv-io 同一纯数据依赖，
+# 不引入任何渲染/网络库（ADR-0020 §2.1 落地注记：允许表 +serde/+serde_yaml）。
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+bevy = { workspace = true, optional = true }
+# camera / drill / brush_cursor 需要读「指针是否悬在 UI 上」（bevy_egui 的 EguiContext）；
+# 纯渲染路径不使用 egui 面板（那是 wv-app 的事）。
+bevy_egui = { workspace = true, optional = true }

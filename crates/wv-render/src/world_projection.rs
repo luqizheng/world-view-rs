@@ -20,7 +20,7 @@
 
 use bevy::prelude::*;
 
-use crate::render::layer_frame::LayerFrame;
+use crate::layer_frame::LayerFrame;
 use crate::state::{BrushState, GridConfig, PlaybackState, ViewState, WorldProjection};
 use crate::theme::colors;
 use wv_core::time::TimeSpan;
@@ -40,7 +40,7 @@ pub struct ProjectionFrame {
     /// 本帧道路层（矢量叠加）：每条地点边 `(PlaceEdge)` 的一段线（世界坐标端点对）。
     ///
     /// 只画**两端都锚定在当前地图**的边（`Place.map == 当前图 id` 且 `x/y` 齐备），
-    /// 与 [`crate::render::drill::resolve_markers`] 的「只画当前层级」口径一致。
+    /// 与 [`crate::drill::resolve_markers`] 的「只画当前层级」口径一致。
     pub road_segments: Vec<(Vec2, Vec2)>,
     /// 本帧地点（POI）点标（世界坐标），锚定在当前地图的地点。
     ///
@@ -241,7 +241,7 @@ pub fn advance_playback(time: Res<Time>, mut playback: ResMut<PlaybackState>) {
 #[allow(clippy::too_many_arguments)]
 pub fn draw_map_gizmos(
     mut gizmos: Gizmos,
-    tex: Res<crate::render::terrain_view::TerrainTexture>,
+    tex: Res<crate::terrain_view::TerrainTexture>,
     grid: Res<GridConfig>,
     view: Res<ViewState>,
     frame: Res<ProjectionFrame>,
@@ -287,7 +287,7 @@ pub fn draw_map_gizmos(
     // 道路：地点边直线（在事件/轨迹之下，视觉上先铺路网再叠动态要素）。
     //
     // **已迁出 Gizmos**：`Gizmos` 线宽是屏幕 1px 常量，放大后变粗、出现锯齿。
-    // 现由 [`crate::render::vector_layers::sync_vector_layers`] 写到世界空间 Mesh2d，
+    // 现由 [`crate::vector_layers::sync_vector_layers`] 写到世界空间 Mesh2d，
     // 线宽随 `view.scale` 反比缩放（屏幕恒定 1px）。`if false` 保留原实现
     // 作为回退开关——若新实现出问题，把 `false` 改 `true` 即可恢复。
     if false && view.roads_visible {
@@ -299,7 +299,7 @@ pub fn draw_map_gizmos(
     // 地点（POI）点标：白圈 + 深芯（导航地图惯例；不占用任何强调色的语义）。
     //
     // **已迁出 Gizmos**：同上路层理由（屏幕 1px 描线 + 抗锯齿圆）。
-    // 现由 [`crate::render::vector_layers::sync_vector_layers`] 写 Circle / Ring mesh。
+    // 现由 [`crate::vector_layers::sync_vector_layers`] 写 Circle / Ring mesh。
     if false && view.places_visible {
         for dot in &frame.place_dots {
             let r = grid.cell_size * 0.9;
@@ -366,7 +366,7 @@ pub fn draw_map_gizmos(
 /// 网格，光标画在那儿只会让人以为可以涂抹。
 ///
 /// **已迁出 Gizmos**：原实现用 `Gizmos` + 48 段短弧拼虚线，**段长世界空间
-/// 固定、相机放大后虚线变长、变实线**。现由 [`crate::render::brush_cursor::sync_brush_cursor`]
+/// 固定、相机放大后虚线变长、变实线**。现由 [`crate::brush_cursor::sync_brush_cursor`]
 /// 写 Mesh2d 实体（外环 `Annulus` + 虚线 24 段 `Rectangle` + 十字），屏幕 1px/3px
 /// 粗细由 `view.scale` 反比缩放保持恒定。`if false` 保留原实现作回退。
 pub fn draw_brush_cursor(
@@ -391,12 +391,8 @@ pub fn draw_brush_cursor(
         let Ok(transform) = camera.single() else {
             return;
         };
-        let world = crate::render::camera::screen_to_world(
-            cursor,
-            window.resolution.size(),
-            transform,
-            view.scale,
-        );
+        let world =
+            crate::camera::screen_to_world(cursor, window.resolution.size(), transform, view.scale);
 
         // 外环：实线，半径 = 真实笔刷半径（误差 0）。
         gizmos.circle_2d(

@@ -38,7 +38,6 @@ use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use bevy_egui::{egui, EguiContexts};
 
-use crate::render::terrain_view::{TerrainTexture, TileAtlas};
 use crate::state::{
     DrillState, Panel, PanelState, PlaybackState, RecentProjects, ViewState, WorldProjection,
 };
@@ -47,6 +46,7 @@ use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::{UiDensity, UiTheme};
 use crate::ui_command_palette::{CommandId, CommandPalette};
 use crate::ui_layout::LayoutFile;
+use wv_render::terrain_view::{TerrainTexture, TileAtlas};
 
 use crate::i18n::{parse as parse_locale, CurrentLocale};
 
@@ -809,19 +809,19 @@ fn adopt_world_snapshot(
 ) {
     // 地形保底（与 `setup_terrain_texture_after_world` 同一不变量：总有底图可用）。
     // Phase 2：底图按图存，取「当前图向上的第一张自带栅格」，都没有才塞占位。
-    let (map, data) = crate::render::terrain_view::active_terrain_or_placeholder(
+    let (map, data) = wv_render::terrain_view::active_terrain_or_placeholder(
         &mut projection.world,
         drill.current(),
         512,
     );
-    let image = crate::render::terrain_view::image_from_terrain(
+    let image = wv_render::terrain_view::image_from_terrain(
         &data,
         view.mode,
         atlas,
         view.terrain_soften,
         crate::theme::palette::colors(view.map_palette),
     );
-    crate::render::terrain_view::replace_terrain_texture(
+    wv_render::terrain_view::replace_terrain_texture(
         tex,
         images,
         image,
@@ -855,7 +855,7 @@ fn adopt_world_snapshot(
     for (mut transform, mut proj) in cameras.iter_mut() {
         transform.translation.x = center.x;
         transform.translation.y = center.y;
-        crate::render::camera::set_ortho_scale(&mut proj, scale);
+        wv_render::camera::set_ortho_scale(&mut proj, scale);
     }
 }
 
@@ -1051,7 +1051,7 @@ fn apply_pending_commands(
         ResMut<crate::edit::editing::EditHistory>,
     ),
     (mut tex, mut open_task, mut diagnostics): (
-        ResMut<crate::render::terrain_view::TerrainTexture>,
+        ResMut<wv_render::terrain_view::TerrainTexture>,
         ResMut<OpenProjectTask>,
         ResMut<crate::state::ProjectDiagnostics>,
     ),
@@ -1065,7 +1065,7 @@ fn apply_pending_commands(
     ),
     // 换世界接管（adopt_world_snapshot）所需：瓦片图集可缺席（纯色平涂回退）。
     (atlas, mut images): (
-        Option<Res<crate::render::terrain_view::TileAtlas>>,
+        Option<Res<wv_render::terrain_view::TileAtlas>>,
         ResMut<Assets<Image>>,
     ),
     current_loc: Res<CurrentLocale>,
@@ -1148,26 +1148,22 @@ fn apply_pending_commands(
             let (center, scale) = crate::app_bootstrap::fit_view_for_world(&projection.world);
             view.camera_center = center;
             view.scale = scale;
-            crate::render::camera::apply_view_to_camera(center, scale, &mut cameras);
+            wv_render::camera::apply_view_to_camera(center, scale, &mut cameras);
         }
         CommandId::Zoom(d) => {
             // 命令没有指针上下文（锚点固定为视口中心），但**缩放上下限必须按当前级别取**：
             // 固定 `0.1..8.0` 是单级时代的产物，分级后城市/街道级的区间完全不同
             // （ADR-0009 §8 决策①）。窗口尺寸只影响区间宽度，取不到时按默认窗口。
             let window_size = view.window_size;
-            let band = crate::render::zoom_level::level_zoom(
+            let band = wv_render::zoom_level::level_zoom(
                 &projection.world,
                 drill.current(),
                 window_size,
-                Vec2::splat(crate::render::zoom_level::FALLBACK_MAP_SIZE),
+                Vec2::splat(wv_render::zoom_level::FALLBACK_MAP_SIZE),
             );
             view.scale = band.clamp(view.scale * if d > 0 { 1.25 } else { 0.8 });
             // 缩放锚点 = 视口中心（命令无指针上下文，保持中心不动）。
-            crate::render::camera::apply_view_to_camera(
-                view.camera_center,
-                view.scale,
-                &mut cameras,
-            );
+            wv_render::camera::apply_view_to_camera(view.camera_center, view.scale, &mut cameras);
         }
         CommandId::TogglePlay => playback.playing = !playback.playing,
         CommandId::JumpToStart => playback.current_day = playback.range_from,
@@ -1321,7 +1317,7 @@ fn apply_pending_commands(
         // 强制重画地形纹理（2026-10-14 用户需求：怀疑数据已改、画面没跟上时点 ↻）。
         // 不动世界数据；只清 `last_mode/last_map` 让下一帧必然全图重建。
         CommandId::ForceRebuildTexture => {
-            crate::render::terrain_view::force_rebuild(&mut tex);
+            wv_render::terrain_view::force_rebuild(&mut tex);
             notice.info(
                 crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::NoticeForceRedrawn),
                 frame,
@@ -1676,11 +1672,11 @@ mod tests {
         //（世界被清空 + 状态栏回执 + 纹理整体重建标记）。
         //（2026-10-14 起用 CloseProject 验证 adopt：NewProject 改为只弹对话框、
         // 不再直接换世界，adopt 的菜单级回归覆盖转移到 CloseProject 上。）
-        use crate::render::terrain_view::TerrainTexture;
         use crate::ui::ProjectMenuState;
         use bevy::asset::Assets;
         use bevy::ecs::system::RunSystemOnce;
         use bevy::image::Image;
+        use wv_render::terrain_view::TerrainTexture;
 
         let mut world = World::new();
         world.init_resource::<CommandPalette>();

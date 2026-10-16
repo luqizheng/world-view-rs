@@ -33,7 +33,7 @@ pub fn panel_minimap(
     mut panels: ResMut<PanelState>,
     mut view: ResMut<ViewState>,
     grid: Res<GridConfig>,
-    tex: Res<crate::render::terrain_view::TerrainTexture>,
+    tex: Res<wv_render::terrain_view::TerrainTexture>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     current_loc: Res<CurrentLocale>,
 ) {
@@ -98,7 +98,7 @@ pub fn panel_minimap(
                         Vec2::new(nx * grid.cell_size * 512.0, ny * grid.cell_size * 512.0);
                     // 相机 Transform 是主真源：只写 ViewState 相机不动，
                     // chunk 拣选却按新视口走 → 画面按假视口重裁（抖动重建）。
-                    crate::render::camera::apply_view_to_camera(
+                    wv_render::camera::apply_view_to_camera(
                         view.camera_center,
                         view.scale,
                         &mut cameras,
