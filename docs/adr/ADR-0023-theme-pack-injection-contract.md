@@ -1,8 +1,8 @@
 # ADR-0023：主题包（Theme Pack）注入契约 —— 地图渲染可复用与游戏风格注入的统一接入点
 
-**状态**：提议（Proposed，待用户拍板）
+**状态**：已接受（Accepted，2026-10-16）
 **日期**：2026-10-16
-**决策者**：待定（源自 2026-10-16「地图各种表达方式调研」+ 「wv-render 复用到游戏」讨论）
+**决策者**：用户（2026-10-16 拍板；M1/M2 代码先行落地为证据——commit `4174e32` / `4be00c6` / `62e61d9`；作用域口径经 2026-10-16 用户澄清后显式化：运行时跟软件 / 持久化跟工程 / 不按元素混搭）
 **关联**：P3（YAML 为主格式）/ P5（图层化编辑）、AGENTS §2（分层）/ §3（数据与渲染分离）/ §6.4、ADR-0012（VectorFlat 浏览态默认底图）/ 0013（LayerFrame kind 轴单点）/ 0016（古舆图默认主题 + MapPalette 调色板轴）/ 0020（wv-render 独立 crate，§2.8 留项）/ **0021（RenderRecipe + Treatment，D2 的 TreatmentFlags 是本 ADR 配色包的一个字段）**、`docs/STYLE_SWAPPABLE_ARCHITECTURE.md`（2026 Q1 设计稿，契约骨架来源）
 **约束**：本 ADR 一旦「已接受」，正文按 AGENTS §6.3 / §6.4 不再修改；若后续需要反向修正，再新开一份 ADR。
 
@@ -141,16 +141,16 @@ ADR-0021 提议的 **`TreatmentFlags`**（D2）是表达三轴里的**装饰族*
   3. **主题是软件级全局观感，不按元素混搭**（2026-10-16 用户澄清后显式化）：运行时 = 单一 `ActiveThemePack` Resource，切换 = 整软件一个开关（所有地图 / 所有要素同帧换肤）；**不存在**也不预留"一张图同时用古舆图底 + 水墨 POI"的 per-element 覆盖——那是假想需求，真要做属于新 ADR 的 scope（pass / shader / draw 链全要按元素 tag），本契约**不为它预留逃生舱**；
   4. `AppThemePacks`（多 registry 合并）需要**合并顺序**约束（"后注册覆盖先注册"）——文档化、不强制；
   5. 与 `STYLE_SWAPPABLE_ARCHITECTURE.md`（面向 Web）的契约**部分**会偏离（资源热加载粒度、JS 字体卸载、gl.deleteTexture）——**显式记录在 §5 被否决的备选**。
-- **待裁（落地前收敛）**：
-  | 子点 | 选项 |
-  |---|---|
-  | 内置古舆图主题是否拆出为 `wv-theme-antique` | A. 留在 wv-render（推荐，零依赖增量）/ B. 拆出（与未来游戏主题同档） |
-  | 内置主题的 crate 命名 | A. `wv-theme-antique`（与游戏主题命名一致）/ B. `wv-theme-jrpg`（沿用 ADR-0016 名）/ C. 留在 wv-render 不命名 |
-  | ThemePack 的持久化键字段名 | A. 沿用 `map_theme`（推荐，零迁移）/ B. 改为 `theme_pack_id`（语义更准）|
-  | 多个 registry 合并时的优先级 | A. 后注册覆盖（推荐，简单）/ B. 显式 `priority: u8` 字段 |
-  | `MapPalette` 字段何时彻底移除 | A. 等 1-2 个版本观察 → 移除（推荐，AGENTS §12 最易回退）/ B. 永远保留作为 fallback key |
-  | 风格热切换 vs 重启 | A. 当前 A1 = 运行时（推荐，与 STYLE §4.2 一致）/ B. 切重启（更稳但 UX 差） |
-  | `Skyline` 在内置古舆图 crate 里是否提供 | A. 不提供（v1 只一个 HandDrawn；想做 Skyline 走新 crate `wv-theme-jrpg-clean`，推荐）/ B. 提供（同 crate 多 const） |
+- **待裁（2026-10-16 随接受一并收敛，按 M1/M2 实现实况逐项落定）**：
+  | 子点 | 裁定 | 依据 |
+  |---|---|---|
+  | 内置古舆图主题是否拆出为 `wv-theme-antique` | **A. 留在 wv-render**（`theme_pack::builtin` 模块） | 零依赖增量；拆出属未来重构，契约不变 |
+  | 内置主题的 crate 命名 | **C. 留在 wv-render 不命名**（id = `antique_default` / `antique_dusk`） | 与上一条同解 |
+  | ThemePack 的持久化键字段名 | **A. 沿用 `map_theme`**（零迁移；语义升格为 ThemePack id，D3 §1） | 存量 YAML 不动 |
+  | 多个 registry 合并时的优先级 | **C. id 重复 = panic**（`MergedThemeRegistry::merge`） | 既非"后注册覆盖"也非 priority 字段——重复是配置错误，V1 纪律显式暴露（`registry.rs` 实现） |
+  | `MapPalette` 字段何时彻底移除 | **A. 等 1-2 个版本观察 → 移除**（M1 保留为 fallback，`theme_pack_id: Option<String>` 已就位） | AGENTS §12 最易回退 |
+  | 风格热切换 vs 重启 | **A. 运行时热切换**（换 Resource + 既有纹理重建脏标） | 与 STYLE §4.2 一致；M2 `game_consumer` 已验通路 |
+  | `Skyline` 在内置古舆图 crate 里是否提供 | **A. 不提供**（想做 Skyline 走新主题 crate） | 零回归硬前提；TreatmentFlags 由 ADR-0021 M2 接线 |
 
 ---
 
