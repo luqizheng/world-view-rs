@@ -144,6 +144,10 @@ pub struct PaletteColors {
     pub line_on_light: Color,
     pub line_on_mid: Color,
     pub line_on_dark: Color,
+    /// 「明确深蓝」（2026-10-16 用户裁定）：最深水位直接走这个颜色，
+    /// 不再 lerp `core_terrain` 的「深海」+ soften 让过薄 + veil 让过淡——
+    /// 任何染色叠加后仍能辨为「海」。见 `colors::DEEP_OCEAN_BLUE` 注释。
+    pub deep_ocean_blue: Color,
 }
 
 impl PaletteColors {
@@ -213,6 +217,7 @@ impl PaletteColors {
         line_on_light: colors::LINE_ON_LIGHT,
         line_on_mid: colors::LINE_ON_MID,
         line_on_dark: colors::LINE_ON_DARK,
+        deep_ocean_blue: colors::DEEP_OCEAN_BLUE,
     };
 
     /// 暮色旧纸：值源 = [`colors_dusk`]（同槽位镜像）。
@@ -252,6 +257,7 @@ impl PaletteColors {
         line_on_light: colors_dusk::DUSK_LINE_ON_LIGHT,
         line_on_mid: colors_dusk::DUSK_LINE_ON_MID,
         line_on_dark: colors_dusk::DUSK_LINE_ON_DARK,
+        deep_ocean_blue: colors_dusk::DUSK_DEEP_OCEAN_BLUE,
     };
 }
 

@@ -215,6 +215,22 @@ pub const SOFTEN_KEEP: f32 = 0.35;
 /// 底图淡化目标色：= 纸面色（2026-10-14 用户定稿）。
 pub const SOFTEN_TOWARD: Color = hex(0xF2EAD8);
 
+/// 「明确深蓝」色（2026-10-16 用户裁定）。
+///
+/// `water_shade_at` 在 `t = 1.0`（最深水位，约 ≤ -3500 m）直接返回本色——
+/// 不再走主题里的 `CORE_TERRAIN[0]` 浅蓝 lerp + 冷偏移。理由：旧路径过
+/// `soften (35% keep)` + 远缩放 `veil` 后会退成中性灰，肉眼辨不出「海」；
+/// 新路径用一个语义「深海」色，无论缩放 / 主题怎么叠都明确深蓝。
+///
+/// 数值与古舆图「水墨 + 宣纸」基调不冲突：深蓝只在最深的海域出现（海
+/// 沟、大洋中央），其余水深仍走原 lerp + cold shift。
+///
+/// 数值口径（2026-10-16 定稿）：R=12, G=50, B=200。比冷偏移的旧路径
+///（蓝 179）还要深一档——蓝通道在 t=1.0 直接拿 200，过 `soften (35% keep)`
+/// 后 ≈ (161, 170, 210)——蓝通道仍显著高于红 / 绿；再过 4.73× 缩放
+/// `veil (alpha=0.261)` 后 ≈ (182, 184, 216)，仍辨为「海」。
+pub const DEEP_OCEAN_BLUE: Color = hex(0x0C32C8); // ≈ (12, 50, 200) 明确深蓝
+
 /// 底图淡化混合（所有视图模式共用的唯一实现；禁止散落重写）。
 pub fn soften_color(base: Color) -> Color {
     let (Color::Srgba(b), Color::Srgba(t)) = (base, SOFTEN_TOWARD) else {

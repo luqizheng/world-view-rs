@@ -100,6 +100,13 @@ pub const DUSK_BUILDING_SIDE: Color = hex(0x2E2924);
 /// 事件图极简底图：= 暮色纸面深底。
 pub const DUSK_EVENT_VIEW_BACKDROP: Color = hex(0x3A342E);
 
+/// 「明确深蓝」色——暮色版（2026-10-16 与日间版同日同步）。
+///
+/// 比日间版再压一档亮度：暮色纸面深底上，深蓝若用日间值会显得过亮，
+/// 抢了势力图 / 标注的颜色层级。这里 ≈ (6, 24, 130) = #061882。
+/// 过 `soften + veil` 后仍能辨为「海」。
+pub const DUSK_DEEP_OCEAN_BLUE: Color = hex(0x061882);
+
 /// 描线三档：暗纸上全档浅墨 推导·待复核。
 pub const DUSK_LINE_ON_LIGHT: Color = hex(0xC9BBA8);
 pub const DUSK_LINE_ON_MID: Color = hex(0xB5A68F);

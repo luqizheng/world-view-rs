@@ -144,8 +144,19 @@ fn water_depth_t(height: i16) -> f32 {
 /// 同样离散），从远处看仍是渐变观感。
 ///
 /// 海岸/轮廓模式不进这里（`shade_coast` 单独出口）。
+///
+/// **最深深水位（`t = 1.0`，约 `height ≤ -3500 m`）直接返回 [`PaletteColors::deep_ocean_blue`]**：
+/// 不再走主题里的「深海」色 + 冷偏移。原因：旧路径过 `soften (35% keep)` +
+/// 远缩放 `veil` 后会退成中性灰（约 `(210, 213, 212)`），肉眼辨不出「海」
+///（2026-10-16 用户反馈）。新版用一个语义「深海」色，无论缩放 / 主题
+/// 怎么叠都明确深蓝。`MapBase::Ocean.cell()` 的 `height = -3500` 命中
+/// 这一分支——所以选了「海洋」的用户立刻看到深蓝。
 fn water_shade_at(height: i16, pal: &PaletteColors) -> Color {
     let t = water_depth_t(height);
+    // 2026-10-16：最深深水位（海沟、大洋中央）走明确深蓝色，不再 lerp。
+    if t >= 1.0 {
+        return pal.deep_ocean_blue;
+    }
     let shallow = pal.core_terrain(1); // water_shallow
     let deep = pal.core_terrain(0); // water_deep
     let (Color::Srgba(a), Color::Srgba(b)) = (shallow, deep) else {
@@ -1003,6 +1014,32 @@ mod tests {
         assert!(b > 180, "蓝通道应清晰（>180），实得 b={b}");
     }
 
+    /// 2026-10-16 用户裁定「明明白白用深蓝」：Ocean 渲染后是「深蓝」色，
+    /// 不是浅蓝、不是灰蓝、不是中性灰。蓝绿差 ≥ 30 足以肉眼辨为「海」；
+    /// 蓝红差 ≥ 30 是「海」与「陆」区分的下限。
+    #[test]
+    fn ocean_base_is_visibly_deep_blue_not_pale_gray() {
+        let data = TerrainData {
+            width: 4,
+            height: 4,
+            cells: vec![wv_core::map::MapBase::Ocean.cell(); 16],
+        };
+        let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
+        let img = image_from_terrain(&data, ViewMode::VectorFlat, None, true, pal);
+        let px = img.data.as_ref().expect("image 必有像素");
+        let res = (img.width() / 4) as usize;
+        let i = (res / 2 * img.width() as usize + res / 2) * 4;
+        let r = px[i] as i32;
+        let g = px[i + 1] as i32;
+        let b = px[i + 2] as i32;
+        assert!(
+            b - g >= 30,
+            "Ocean 应是「深蓝」而非浅蓝 / 灰蓝，蓝绿差应 ≥ 30，实得 r={r} g={g} b={b}"
+        );
+        assert!(b - r >= 30, "Ocean 蓝红差应 ≥ 30，实得 r={r} g={g} b={b}");
+        assert!(b >= 180, "蓝通道 ≥ 180，实得 b={b}");
+    }
+
     /// Schematic + soften=true 下，kind=0（深水）也应是清晰蓝。Schematic 走
     /// `core_terrain(kind)` 直读，不经 water_shade_at——这条路径上深水只被
     /// soften 抹 55%，但底色（143, 162, 179）足够蓝，仍能辨出。
@@ -1346,8 +1383,7 @@ mod tests {
     fn water_shade_at_lerps_between_shallow_and_deep() {
         let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
         let shallow = pal.core_terrain(1);
-        let deep = pal.core_terrain(0);
-        let (Color::Srgba(s), Color::Srgba(d)) = (shallow, deep) else {
+        let (Color::Srgba(s), Color::Srgba(_)) = (shallow, Color::srgb(0.0, 0.0, 0.0)) else {
             panic!("应为 Srgba")
         };
         let at_zero = water_shade_at(0, pal);
@@ -1356,18 +1392,28 @@ mod tests {
             (z.red - s.red).abs() < 1e-4 && (z.green - s.green).abs() < 1e-4,
             "海平面应等于 water_shallow"
         );
+        // 2026-10-16：最深深水位（t=1.0）不再 lerp 到 water_deep，直接返回
+        // `pal.deep_ocean_blue`——一个明确的深蓝色，不再受主题 CORE_TERRAIN[0]
+        // 影响（2026-10-16 用户裁定）。
         let at_max = water_shade_at(-3500, pal);
+        let deep_target = pal.deep_ocean_blue;
         let Color::Srgba(m) = at_max else { panic!() };
-        // 深色带（t>0.7）会拉冷：R/G 略低、B 略高于 deep 基色。
+        let Color::Srgba(d) = deep_target else {
+            panic!()
+        };
         assert!(
-            m.red < d.red + 0.02 && m.blue > d.blue - 0.02,
-            "深海应接近 water_deep；实得 r={} b={}",
+            (m.red - d.red).abs() < 1e-4
+                && (m.green - d.green).abs() < 1e-4
+                && (m.blue - d.blue).abs() < 1e-4,
+            "最深深水位应直接返回 pal.deep_ocean_blue；实得 r={} g={} b={}",
             m.red,
+            m.green,
             m.blue
         );
     }
 
-    /// 深海带冷偏：t=1 时蓝色通道比 lerp 终值更亮（冷偏生效）。
+    /// 深海带越深越冷（2026-10-16）：t=1.0 直接走 `deep_ocean_blue`，
+    /// 蓝色通道应 ≥ 中段（t=0.7）的 lerp 结果。
     #[test]
     fn water_shade_at_deep_band_gets_cooler_tint() {
         let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
