@@ -333,6 +333,7 @@ fn create_map(
         unit_per_km: None,
         orientation: 0.0,
         base: Some(dialog.prefill),
+        outline_polygon: None,
     };
     let n = dialog.grid_cells();
     let terrain = TerrainData {
@@ -377,6 +378,7 @@ mod tests {
                 unit_per_km: None,
                 orientation: 0.0,
                 base: None,
+                outline_polygon: None,
             });
         }
         let dialog = NewMapDialog::default();
@@ -453,6 +455,7 @@ mod tests {
             unit_per_km: None,
             orientation: 0.0,
             base: None,
+            outline_polygon: None,
         });
         let mut dialog = NewMapDialog::default();
         dialog.open_for(&world);

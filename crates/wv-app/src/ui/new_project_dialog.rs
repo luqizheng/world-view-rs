@@ -185,6 +185,7 @@ fn initial_world(name: &str) -> wv_core::World {
         orientation: 0.0,
         // 2026-10-16：底图 = 海洋（与 NewMapDialog 默认同源；旧 Land 已切换）。
         base: Some(MapBase::Ocean),
+        outline_polygon: None,
     });
     world.set_terrain(
         id,

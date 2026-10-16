@@ -26,6 +26,7 @@ fn stub_map_node(id: &str) -> MapNode {
         unit_per_km: None,
         orientation: 0.0,
         base: None,
+        outline_polygon: None,
     }
 }
 

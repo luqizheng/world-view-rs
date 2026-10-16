@@ -135,6 +135,23 @@ pub struct MapNode {
     /// `History`，底图字段不参与。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<MapBase>,
+
+    /// 城市子图在世界图上的轮廓（ADR-0022 · 2026-10-16 接受）。
+    ///
+    /// 多边形顶点 = **本图 LOCAL 坐标**（与街道同口径），父图渲染时
+    /// 经 `coord::resolve_frame_in`（ADR-0009 §6 派生）一次性平移到
+    /// 父图坐标系——**复用单一换算入口**。
+    ///
+    /// - `None` = 没有显式轮廓（旧城市、点状标记）。运行时退化为
+    ///   `IconSpec` 渲染，**不**自动派生伪数据（守 P3 / §6.2 待决）。
+    /// - `Some(polygon)` = 父图上可见的轮廓区域；首写即定
+    ///   （`AddCityCommand`），后续子图内部编辑**不**回写父图轮廓——
+    ///   父图轮廓是声明，非派生。
+    ///
+    /// 与 `MapNode.extent` 正交：`extent` 描述子图**幅面**，`outline_polygon`
+    /// 描述子图**在父图上呈现的形状**。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline_polygon: Option<GeometryData>,
 }
 
 /// 每张地图的「底图」语义（2026-10-16）。

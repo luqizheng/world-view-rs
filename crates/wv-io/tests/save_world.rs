@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use wv_core::id::Id;
 use wv_core::map::sea::Sea;
-use wv_core::map::{GeometryData, GeometrySpan};
+use wv_core::map::{Extent, GeometryData, GeometrySpan, MapLevel, MapNode};
 use wv_core::terrain::{TerrainCellData, TerrainData};
 use wv_core::time::TimeSpan;
 use wv_core::{Color, Faction, World, WorldMeta};
@@ -1032,4 +1032,147 @@ fn place_edges_migrate_from_single_file_to_directory() {
     assert_eq!(e.b.as_str(), "p_b");
     assert_eq!(e.distance_km, 12.0);
     assert_eq!(e.terrain, "plain");
+}
+
+/// ADR-0022 M1 闸门 ①：`MapNode.outline_polygon` 字段的 YAML round-trip。
+///
+/// 验证三件事：
+/// 1. 给城市子图加 `outline_polygon` 后 save → load 回原值；
+/// 2. 序列化产物含 `outline_polygon` 键；
+/// 3. `GeometryData::Polygon` 在 untagged 顺序下不被误判为 `Points`
+///    （与 `faction_geometry_round_trip_via_synthetic_id` § 304 同款 bug 防护）。
+#[test]
+fn map_node_outline_polygon_round_trips_via_save_and_load() {
+    let tmp = TempDir::new("map_node_outline_polygon_round_trip");
+    let dir = tmp.path();
+    let mut proj = build_min_project_with_root_map(dir, &[]).expect("建工程");
+    let mut world = proj.load_world().expect("load");
+
+    let city_id = Id::new_unchecked("map_city");
+    let city = MapNode {
+        id: city_id.clone(),
+        name: "A 城".into(),
+        level: MapLevel::City,
+        parent: Some(Id::new_unchecked("map_main")),
+        extent: Some(Extent::sized(1024.0, 1024.0)),
+        outline_polygon: Some(GeometryData::Polygon(vec![
+            0.0, 0.0, 1024.0, 0.0, 1024.0, 1024.0, 0.0, 1024.0,
+        ])),
+        ..MapNode::default()
+    };
+    world.maps.push(city);
+
+    proj.save_world(&world, &[])
+        .expect("save 含 outline_polygon");
+
+    let city_yaml = dir.join("maps").join("map_city").join("index.yaml");
+    assert!(city_yaml.is_file(), "index.yaml 应落盘");
+
+    let text = std::fs::read_to_string(&city_yaml).expect("读 index.yaml");
+    assert!(
+        text.contains("outline_polygon"),
+        "index.yaml 应含 outline_polygon 键：{text}"
+    );
+
+    let proj2 = Project::open(dir).expect("重开");
+    let world2 = proj2.load_world().expect("重载");
+    let back = world2
+        .maps
+        .iter()
+        .find(|m| m.id == city_id)
+        .expect("城市子图应在");
+    let poly = back
+        .outline_polygon
+        .as_ref()
+        .expect("outline_polygon 应被读回");
+    assert!(
+        matches!(poly, GeometryData::Polygon(_)),
+        "outline_polygon 应为 Polygon，实得 {poly:?}"
+    );
+    assert_eq!(poly.point_count(), 4, "4 对坐标 = 4 顶点");
+    assert_eq!(
+        poly,
+        &GeometryData::Polygon(vec![0.0, 0.0, 1024.0, 0.0, 1024.0, 1024.0, 0.0, 1024.0]),
+        "polygon 顶点应 byte-for-byte 一致"
+    );
+}
+
+/// ADR-0022 M1 闸门 ②：缺省 `outline_polygon` 时不写盘（既有工程零迁移）。
+///
+/// 验证：
+/// 1. 没声明 `outline_polygon` 的城市子图序列化后**不**含该键；
+/// 2. 重载后该字段为 `None`；
+/// 3. 与 `faction_geometry_round_trip_via_synthetic_id` 共同守住
+///    「GeometryData::Polygon 在 YAML 裸数组下被正确识别」的 untagged 顺序约定。
+#[test]
+fn map_node_without_outline_polygon_keeps_yaml_clean() {
+    let tmp = TempDir::new("map_node_no_outline_polygon");
+    let dir = tmp.path();
+    let mut proj = build_min_project_with_root_map(dir, &[]).expect("建工程");
+    let mut world = proj.load_world().expect("load");
+
+    let city_id = Id::new_unchecked("map_city_no_outline");
+    let city = MapNode {
+        id: city_id.clone(),
+        name: "无轮廓城".into(),
+        level: MapLevel::City,
+        parent: Some(Id::new_unchecked("map_main")),
+        extent: Some(Extent::sized(64.0, 64.0)),
+        ..MapNode::default()
+    };
+    world.maps.push(city);
+    proj.save_world(&world, &[])
+        .expect("save 无 outline_polygon");
+
+    let city_yaml = dir
+        .join("maps")
+        .join("map_city_no_outline")
+        .join("index.yaml");
+    let text = std::fs::read_to_string(&city_yaml).expect("读 index.yaml");
+    assert!(
+        !text.contains("outline_polygon"),
+        "缺省字段不应写盘（既有工程零迁移）：{text}"
+    );
+
+    let proj2 = Project::open(dir).expect("重开");
+    let world2 = proj2.load_world().expect("重载");
+    let back = world2
+        .maps
+        .iter()
+        .find(|m| m.id == city_id)
+        .expect("无轮廓城应在");
+    assert!(
+        back.outline_polygon.is_none(),
+        "未声明时 outline_polygon 应为 None"
+    );
+}
+
+/// ADR-0022 M1 闸门 ③：手写不含 `outline_polygon` 的旧工程 YAML 仍能加载。
+///
+/// 这是「既有工程零迁移」承诺在 IO 层的最后一道闸：
+/// ADR-0022 落地前手写的所有工程 YAML 都应继续可加载，outline_polygon
+/// 字段被 Option 缺省兼容。
+#[test]
+fn legacy_yaml_without_outline_polygon_loads_with_none() {
+    let tmp = TempDir::new("legacy_no_outline_polygon");
+    let dir = tmp.path();
+    let proj = build_min_project(dir, &[]).expect("建工程");
+    let city_dir = dir.join("maps").join("map_city_legacy");
+    std::fs::create_dir_all(&city_dir).expect("mkdir");
+    std::fs::write(
+        city_dir.join("index.yaml"),
+        "id: map_city_legacy\nname: Legacy\nlevel: city\nparent: map_main\nextent:\n  width: 128.0\n  height: 128.0\n",
+    )
+    .expect("写旧格式 index.yaml");
+
+    let world = proj.load_world().expect("load 旧格式工程");
+    let city = world
+        .maps
+        .iter()
+        .find(|m| m.id == Id::new_unchecked("map_city_legacy"))
+        .expect("legacy 城市应在");
+    assert!(
+        city.outline_polygon.is_none(),
+        "旧 YAML 加载后 outline_polygon 应为 None（Option 缺省兼容）"
+    );
 }
