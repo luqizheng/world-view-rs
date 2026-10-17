@@ -18,7 +18,7 @@
 #![cfg(feature = "app")]
 
 use crate::edit::editing::EditHistory;
-use crate::state::{PlaybackState, ViewState, WorldProjection};
+use crate::state::{PlaybackState, WorldProjection};
 use wv_core::distance::Place;
 use wv_core::map::{GeometryData, GeometrySpan};
 use wv_core::time::TimeSpan;
@@ -36,26 +36,30 @@ use wv_edit::history::Transaction;
 /// ## 参数
 /// - `name`：作者在命名对话框输入的名称（调用方已 trim / 非空校验）；
 /// - `feature`：事实类型编号（工具条写 `FEATURE_FOREST`）；
-/// - `ring`：**当前图局部 wu** 的闭合环（首尾不重复，≥3 点）。
+/// - `map`：**捕获图 id**（`TerritorySketch::pending.map`——闭合那一刻钉住
+///   的图）。环坐标只在捕获图的局部帧里合法，这里**不用也不看**
+///   `view.current_map`：命名对话框开着时作者仍可下钻换图，现取当前图会把
+///   环写进错误的图、带着越帧坐标静默落盘（final review 数据完整性修复）；
+/// - `ring`：**捕获图局部 wu** 的闭合环（首尾不重复，≥3 点）。
 ///
 /// ## 返回
-/// 成功返回新地点 ID；无当前图 / 环退化 / 命令被拒（如 ID 冲突）返回 `None`。
+/// 成功返回新地点 ID；环退化 / 命令被拒（如 ID 冲突）返回 `None`。
 /// 失败只记 warn 不抛——与区域动作层的 V1 守约同口径（不阻止作者继续编辑）。
 pub fn add_feature_place_now(
     world: &mut WorldProjection,
     edit: &mut EditHistory,
-    view: &ViewState,
     playback: &PlaybackState,
     name: String,
     feature: u8,
+    map: &wv_core::Id,
     ring: &[(f32, f32)],
 ) -> Option<wv_core::Id> {
-    // 无当前图 = 没有可落点的工作区（对话框理论上只在有工程时打开；
-    // 这里仍守一道，避免空 id 进 `Id::new_unchecked`）。
-    if view.current_map.is_empty() || ring.len() < 3 {
+    // 环退化守门；地图 id 由 `try_close` 从 `drill.current()` 钉来，
+    // 天然非空（点击系统只在有当前图时才落点），无需再查空串。
+    if ring.len() < 3 {
         return None;
     }
-    let map = wv_core::Id::new_unchecked(&view.current_map);
+    let map = map.clone();
     let id = wv_core::Id::new_unchecked(format!("place_feature_{}", current_unix_ms()));
     // `x/y/w/h` 留空：`AddFeaturePlaceCommand::apply` 会按环重拟合锚点，
     // 动作层不复制拟合公式（唯一实现点在地点模型里）。
@@ -119,20 +123,20 @@ mod tests {
     fn add_feature_place_now_writes_open_span_and_anchors() {
         let mut world = WorldProjection::default();
         let mut edit = EditHistory::default();
-        let view = ViewState::default();
         let playback = PlaybackState {
             current_day: 42,
             ..PlaybackState::default()
         };
         let ring = [(10.0, 10.0), (30.0, 10.0), (30.0, 30.0), (10.0, 30.0)];
+        let map = wv_core::Id::new_unchecked("world_main");
 
         let id = add_feature_place_now(
             &mut world,
             &mut edit,
-            &view,
             &playback,
             "黑森林".into(),
             FEATURE_FOREST,
+            &map,
             &ring,
         )
         .expect("四点环应提交成功");
@@ -149,7 +153,7 @@ mod tests {
         assert_eq!(
             place.map.as_ref().map(wv_core::Id::as_str),
             Some("world_main"),
-            "地点应锚定到当前图"
+            "地点应锚定到捕获图"
         );
         assert_eq!(place.x, Some(20.0), "x 应为环质心");
         assert_eq!(place.y, Some(20.0), "y 应为环质心");
@@ -159,7 +163,7 @@ mod tests {
         assert_eq!(world.world.place_geometry.len(), 1, "应恰好新增 1 条地界");
         let geo = &world.world.place_geometry[0];
         assert_eq!(geo.owner, id, "地界 owner 应是新地点");
-        assert_eq!(geo.map.as_str(), view.current_map, "地界 map 应是当前图");
+        assert_eq!(geo.map.as_str(), "world_main", "地界 map 应是捕获图");
         assert_eq!(geo.span.from, 42, "span.from 应取播放当前日");
         assert_eq!(geo.span.to, None, "新建地界必须是开放区间（至今）");
         assert_eq!(
@@ -175,6 +179,50 @@ mod tests {
         assert!(
             world.world.place_geometry.is_empty(),
             "撤销后地界应一并移除"
+        );
+    }
+
+    /// final review 数据完整性修复：提交**只认闭合时钉住的捕获图 id**。
+    /// 命名对话框开着时作者钻进另一张图（`view.current_map` 已变）也不影响
+    /// ——环坐标只在捕获图局部帧里合法，落错图等于带着越帧坐标静默写盘。
+    /// 场景：环在 `city_zunyi` 里闭合，此刻视图已切回 `world_main`
+    /// （对话框仍开着、地图背后仍可交互），提交必须落 `city_zunyi`。
+    #[test]
+    fn add_feature_place_now_lands_on_the_pinned_capture_map() {
+        let mut world = WorldProjection::default();
+        let mut edit = EditHistory::default();
+        let playback = PlaybackState::default();
+        let ring = [(0.0, 0.0), (64.0, 0.0), (64.0, 64.0), (0.0, 64.0)];
+        // 捕获图 = 子图；对话框提交时视图可以停在别的图（默认 world_main）。
+        let capture_map = wv_core::Id::new_unchecked("city_zunyi");
+
+        let id = add_feature_place_now(
+            &mut world,
+            &mut edit,
+            &playback,
+            "城郊林地".into(),
+            FEATURE_FOREST,
+            &capture_map,
+            &ring,
+        )
+        .expect("钉住的捕获图应提交成功");
+
+        let place = &world.world.distances.places[0];
+        assert_eq!(
+            place.map.as_ref().map(wv_core::Id::as_str),
+            Some("city_zunyi"),
+            "地点必须落在闭合时钉住的捕获图，而不是提交时的当前图"
+        );
+        let geo = &world.world.place_geometry[0];
+        assert_eq!(
+            geo.map.as_str(),
+            "city_zunyi",
+            "地界必须与地点同图（同一捕获图 id）"
+        );
+        assert_eq!(geo.owner, id);
+        assert!(
+            edit.history.undo(&mut world.world).is_ok(),
+            "钉图路径同样整体可撤销"
         );
     }
 }

@@ -232,6 +232,10 @@ pub fn map_controls(
                                 sketch.enabled = false;
                                 sketch.discard_active();
                                 sketch.last_click = None;
+                                // 关工具也一并撤掉待命名的环：命名对话框以
+                                // `pending` 为开关判据，环没了它自然跟着关
+                                //（final review：作者显式关工具 = 放弃这一圈）。
+                                sketch.pending = None;
                             } else {
                                 measure.mode = MeasureMode::Off;
                                 measure.clear_draft();

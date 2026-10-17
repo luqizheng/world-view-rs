@@ -489,6 +489,25 @@ impl MeasureState {
 ///
 /// 坐标为**当前图局部 wu**（与 `MeasureState::draft` 同口径），落盘前由
 /// `wv-edit` 的 `AddFeaturePlaceCommand` 原样写入 `GeometrySpan`。
+/// 已闭合、等待命名的地界环——环 + **捕获时所在的地图 id**。
+///
+/// ## 为什么要钉住地图 id（final review 数据完整性修复）
+///
+/// 环顶点是**捕获那一刻所在图的局部坐标**，只在那个图的帧里有意义。命名
+/// 对话框打开期间地图背后仍可交互（下钻进另一张图），若提交时才从
+/// `view.current_map` 现取地图，就会把环写进错误的图、带着越帧的坐标
+/// 静默落盘。因此 [`TerritorySketch::try_close`] 在**闭合那一刻**把
+/// `drill.current()` 的图 id 钉进环里，提交层（`add_feature_place_now`）
+/// 一律用这个钉住的 id——环的坐标只在捕获图里合法，钉住的 id 永远正确，
+/// 不可能静默错位（对照 [`MeasureState::draft_map_id`] 的同族问题）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingRing {
+    /// 环捕获时所在的图（闭合那一刻的 `drill.current()`）。
+    pub map: wv_core::Id,
+    /// 环顶点（**上述图**的局部 wu，首尾不重复，≥3 点）。
+    pub ring: Vec<(f32, f32)>,
+}
+
 #[derive(Resource, Debug, Clone, PartialEq)]
 pub struct TerritorySketch {
     /// 是否启用圈地界工具（工具条瓷砖切换）。
@@ -502,9 +521,9 @@ pub struct TerritorySketch {
     pub active: Option<Vec<(f32, f32)>>,
     /// 上一次左键落点与时刻（双击收笔判定，`commit_territory_sketch_click` 用）。
     pub last_click: Option<((f32, f32), f64)>,
-    /// 已闭合、等待命名的环（≥3 点）。`Some` 时命名对话框应打开；
-    /// 提交或取消后由应用层清空。
-    pub pending: Option<Vec<(f32, f32)>>,
+    /// 已闭合、等待命名的环（≥3 点，含捕获图 id）。`Some` 时命名对话框应
+    /// 打开；提交或取消后由应用层清空。
+    pub pending: Option<PendingRing>,
 }
 
 impl Default for TerritorySketch {
@@ -525,15 +544,20 @@ impl TerritorySketch {
         self.active.get_or_insert_with(Vec::new).push(p);
     }
 
-    /// 收笔：≥ 3 点才写入 [`Self::pending`] 并返回 `true`；否则丢弃折线返回 `false`。
+    /// 收笔：把**闭合那一刻的图 id** 钉进环。≥ 3 点才写入 [`Self::pending`]
+    /// 并返回 `true`；否则丢弃折线返回 `false`。
     ///
     /// 「≥3」是多边形面的硬前提：退化环在 `wv-core::geometry::point_in_ring`
     /// 与 `Place::fit_anchor_to_ring`（`ring.len() < 6` 早返）里都没有意义；
     /// 在交互层就挡住，作者不会得到「点了两次却没反应」的谜。
-    pub fn try_close(&mut self) -> bool {
+    ///
+    /// `map` 由调用方（`commit_territory_sketch_click`）取 `drill.current()`：
+    /// 环顶点只在捕获图的局部帧里合法，提交层据此把 Place / GeometrySpan
+    /// 落到**这张**图上，与提交时 `view.current_map` 是否已变无关。
+    pub fn try_close(&mut self, map: wv_core::Id) -> bool {
         match self.active.take() {
             Some(pts) if pts.len() >= 3 => {
-                self.pending = Some(pts);
+                self.pending = Some(PendingRing { map, ring: pts });
                 true
             }
             Some(_) => false,
@@ -1352,7 +1376,7 @@ mod tests {
     // theme overlay Task 7：圈地界工具会话态（TerritorySketch）
     // -----------------------------------------------------------------------
 
-    /// 三个落点收笔 → `pending` 拿到整环、`active` 清空。
+    /// 三个落点收笔 → `pending` 拿到整环（含钉住的图 id）、`active` 清空。
     #[test]
     fn territory_sketch_closes_into_pending_with_three_points() {
         let mut s = TerritorySketch::default();
@@ -1364,12 +1388,17 @@ mod tests {
             Some(3),
             "三次落点应三点折线"
         );
-        assert!(s.try_close(), "≥3 点应能闭合");
+        assert!(
+            s.try_close(Id::new_unchecked("world_main")),
+            "≥3 点应能闭合"
+        );
+        let pending = s.pending.as_ref().expect("闭合后整环进入 pending");
         assert_eq!(
-            s.pending.as_ref().map(Vec::len),
-            Some(3),
+            pending.ring.len(),
+            3,
             "闭合后整环进入 pending（等待命名对话框）"
         );
+        assert_eq!(pending.map.as_str(), "world_main", "环应钉住闭合时的图 id");
         assert!(s.active.is_none(), "闭合后 active 应清空");
     }
 
@@ -1379,7 +1408,10 @@ mod tests {
         let mut s = TerritorySketch::default();
         s.add_point((0.0, 0.0));
         s.add_point((10.0, 10.0));
-        assert!(!s.try_close(), "两点不应成环");
+        assert!(
+            !s.try_close(Id::new_unchecked("world_main")),
+            "两点不应成环"
+        );
         assert!(s.pending.is_none(), "失败收笔不得产生 pending");
         assert!(s.active.is_none(), "失败收笔也清掉 active");
     }
@@ -1391,16 +1423,35 @@ mod tests {
         s.add_point((0.0, 0.0));
         s.add_point((10.0, 0.0));
         s.add_point((10.0, 10.0));
-        assert!(s.try_close());
+        assert!(s.try_close(Id::new_unchecked("world_main")));
         // 再起一笔，然后 Esc。
         s.add_point((50.0, 50.0));
         s.add_point((60.0, 50.0));
         s.discard_active();
         assert!(s.active.is_none(), "Esc 后 active 应丢弃");
+        let pending = s.pending.as_ref().expect("Esc 不得清掉已闭合待命名的环");
+        assert_eq!(pending.ring.len(), 3, "环本体保留");
+        assert_eq!(pending.map.as_str(), "world_main", "钉住的图 id 保留");
+    }
+
+    /// final review 数据完整性修复：闭合那一刻钉图。之后再「换图」也改不了
+    /// `pending` 里的图 id——环坐标只在捕获图的局部帧里合法，提交层据此
+    /// 把 Place / GeometrySpan 落到捕获图，不因提交时 `view.current_map`
+    /// 已变而错位。
+    #[test]
+    fn try_close_pins_the_map_id_at_capture_time() {
+        let mut s = TerritorySketch::default();
+        s.add_point((0.0, 0.0));
+        s.add_point((10.0, 0.0));
+        s.add_point((10.0, 10.0));
+        // 闭合时钻在 city_zunyi 里——即便之后回到 world_main，
+        // 环也必须仍属于 city_zunyi。
+        assert!(s.try_close(Id::new_unchecked("city_zunyi")));
+        let pending = s.pending.as_ref().expect("闭合应产生 pending");
         assert_eq!(
-            s.pending.as_ref().map(Vec::len),
-            Some(3),
-            "Esc 不得清掉已闭合待命名的环"
+            pending.map.as_str(),
+            "city_zunyi",
+            "pending 的图 id 是闭合那一刻钉住的，不随后续换图漂移"
         );
     }
 }

@@ -18,9 +18,11 @@
 //!   取值并写入命令，本层只画会话态草稿。
 //!
 //! ## 坐标口径
-//! 全部顶点是**当前图局部 wu**（与 `MeasureState::draft` 同口径）；落盘前由
-//! `wv-edit` 原样写入 `GeometrySpan`，渲染时经 [`GridConfig::map_to_view`] 回到
-//! 视图空间。子图继承父图底图时 `map_origin ≠ raster_origin`，这里必须用
+//! 全部顶点是**当前图局部 wu**（与 `MeasureState::draft` 同口径）；闭合时把
+//! `drill.current()` 的图 id 钉进 `pending`（命名对话框开着时地图仍可下钻，
+//! 提交必须落回捕获图，坐标才合法），落盘前由 `wv-edit` 原样写入
+//! `GeometrySpan`，渲染时经 [`GridConfig::map_to_view`] 回到视图空间。
+//! 子图继承父图底图时 `map_origin ≠ raster_origin`，这里必须用
 //! `map_origin`（与测量 / 街道同源）。
 
 #![cfg(feature = "app")]
@@ -85,9 +87,17 @@ pub fn commit_territory_sketch_click(
         sketch.last_click = None;
         return;
     }
-    // 回车 / 右键：收笔（≥3 点才成环，失败清空折线）。
+    // 回车 / 右键：收笔（≥3 点才成环，失败清空折线）。闭合那一刻把
+    // `drill.current()` 钉进环——命名对话框开着时地图仍可下钻，提交层
+    // 必须用捕获图的 id，不能到提交时才现取 `view.current_map`。
     if keys.just_pressed(KeyCode::Enter) || buttons.just_pressed(MouseButton::Right) {
-        sketch.try_close();
+        match drill.current().cloned() {
+            Some(map) => {
+                sketch.try_close(map);
+            }
+            // 无当前图 = 折线本就不可能合法落盘，直接丢弃。
+            None => sketch.discard_active(),
+        }
         sketch.last_click = None;
         return;
     }
@@ -105,13 +115,14 @@ pub fn commit_territory_sketch_click(
     let p = (local.x, local.y);
 
     // 双击收笔：与上一落点近且间隔短——不追加点，直接成环。
+    // 图 id 取 `node.id`（与落点同帧同源），钉进环里。
     if let Some(((lx, ly), t)) = sketch.last_click {
         let dx = p.0 - lx;
         let dy = p.1 - ly;
         if (dx * dx + dy * dy).sqrt() <= DOUBLE_CLICK_WU
             && time.elapsed_secs_f64() - t <= DOUBLE_CLICK_SECS
         {
-            sketch.try_close();
+            sketch.try_close(node.id.clone());
             sketch.last_click = None;
             return;
         }
@@ -143,17 +154,23 @@ pub fn draw_territory_sketch(
     .with_alpha(0.95);
     let vertex_r = (VERTEX_PX * view.scale).max(0.5);
 
-    if let Some(ring) = &sketch.pending {
-        let pts: Vec<Vec2> = ring
-            .iter()
-            .map(|&(x, y)| grid.map_to_view(Vec2::new(x, y)))
-            .collect();
-        if pts.len() >= 2 {
-            for w in 0..pts.len() {
-                gizmos.line_2d(pts[w], pts[(w + 1) % pts.len()], closed);
-            }
-            for p in &pts {
-                gizmos.circle_2d(Isometry2d::from_translation(*p), vertex_r, closed);
+    if let Some(pending) = &sketch.pending {
+        // 环只属于捕获它的图（final review 修复）：命名对话框开着时作者仍可
+        // 下钻换图，此时本图的 `map_to_view` 换算对捕获图坐标没有意义——
+        // 画出来只是错位的误导线。只在当前图与钉住的图一致时预览。
+        if pending.map.as_str() == view.current_map {
+            let pts: Vec<Vec2> = pending
+                .ring
+                .iter()
+                .map(|&(x, y)| grid.map_to_view(Vec2::new(x, y)))
+                .collect();
+            if pts.len() >= 2 {
+                for w in 0..pts.len() {
+                    gizmos.line_2d(pts[w], pts[(w + 1) % pts.len()], closed);
+                }
+                for p in &pts {
+                    gizmos.circle_2d(Isometry2d::from_translation(*p), vertex_r, closed);
+                }
             }
         }
     }

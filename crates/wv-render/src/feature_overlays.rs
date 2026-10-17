@@ -54,8 +54,15 @@ use crate::theme::theme_pack::builtin;
 use wv_core::id::Id;
 use wv_core::place_territory_at;
 
-/// 远带地界晕的 Z（地形之上、道路 0.09 之下）。
-const HALO_Z: f32 = 0.06;
+/// 远带地界晕的 Z。
+///
+/// 邻居槽位：等值线 0.04 → 外框 / 换级淡出 0.05 → **纸面雾霭
+/// （`atmosphere::VEIL_Z`）与 1/4 参考网格（`map_frame::GRID_Z`）同在 0.06**
+/// → 本晕 0.065 → 符号 0.07 → 道路 casing 0.09。晕必须与 0.06 的雾霭 /
+/// 网格**错开**：半透明同 Z 的先后序是未定义的，而覆盖层实体每帧重生成
+/// （全新 entity id），雾与晕谁压谁会跨运行漂移——哪怕 0.005 的空隙也是
+/// 确定序（final review 修复；雾 / 网格自身的 0.06 不动）。
+const HALO_Z: f32 = 0.065;
 /// 近带符号的 Z（紧贴晕之上，仍在道路之下）。
 const SYMBOL_Z: f32 = 0.07;
 /// 主题缺规则时的中性灰绿晕（设计稿 §6.4 回退）。
@@ -219,6 +226,10 @@ pub fn sync_feature_overlays(
     // 近带符号：近带满强度，远带退场。
     let symbol_alpha = (1.0 - blend) * layers.place.opacity;
     let opacity = layers.place.opacity;
+    // ADR-0013 槽位偏移：晕与符号同属 Place 渲染组，作者 `z` 平移整组
+    // （与 `faction_overlays` 的 `FACTION_Z + layers.influence.z_offset` 同款）。
+    let halo_z = HALO_Z + layers.place.z_offset;
+    let symbol_z = SYMBOL_Z + layers.place.z_offset;
 
     // 主题规则取内置包（D10）——不读 `ActiveThemePack`（尚无同步系统）。
     let pack = builtin::for_palette(view.map_palette);
@@ -262,7 +273,7 @@ pub fn sync_feature_overlays(
                     build_polygon_mesh_uv(ring),
                     texture,
                     halo_alpha,
-                    map_origin + Vec3::Z * HALO_Z,
+                    map_origin + Vec3::Z * halo_z,
                 ),
                 None => spawn_colored_mesh(
                     &mut commands,
@@ -271,7 +282,7 @@ pub fn sync_feature_overlays(
                     build_polygon_mesh(ring),
                     halo_color,
                     halo_alpha,
-                    map_origin + Vec3::Z * HALO_Z,
+                    map_origin + Vec3::Z * halo_z,
                 ),
             };
             layer.halos.push(entity);
@@ -313,7 +324,7 @@ pub fn sync_feature_overlays(
                     mesh,
                     texture,
                     symbol_alpha,
-                    map_origin + Vec3::Z * SYMBOL_Z,
+                    map_origin + Vec3::Z * symbol_z,
                 )
             }
             // 缺资产回退：纯色 quad（Task 6 路径），树形退化为色块但不空帧。
@@ -324,7 +335,7 @@ pub fn sync_feature_overlays(
                 build_symbol_mesh(&sites, world_size),
                 rule.symbol_color,
                 symbol_alpha,
-                map_origin + Vec3::Z * SYMBOL_Z,
+                map_origin + Vec3::Z * symbol_z,
             ),
         };
         layer.symbols.push(entity);

@@ -27,7 +27,7 @@ use bevy_egui::{egui, EguiContexts};
 use crate::edit::editing::EditHistory;
 use crate::edit::feature_place_actions::add_feature_place_now;
 use crate::i18n::{t_key, CurrentLocale, I18nKey};
-use crate::state::{PlaybackState, TerritorySketch, ViewState, WorldProjection};
+use crate::state::{PlaybackState, TerritorySketch, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::ui::widgets::{button as widget_button, ButtonContent, ButtonStyle};
 use wv_render::theme::overlays::FEATURE_FOREST;
@@ -58,7 +58,6 @@ pub fn feature_place_dialog(
     mut sketch: ResMut<TerritorySketch>,
     mut projection: ResMut<WorldProjection>,
     mut edit: ResMut<EditHistory>,
-    view: Res<ViewState>,
     playback: Res<PlaybackState>,
     current_loc: Res<CurrentLocale>,
 ) {
@@ -81,8 +80,8 @@ pub fn feature_place_dialog(
         return;
     }
 
-    // 打开态但环没了（被外部清掉 / 撤销 / 切图）：跟随关闭。
-    let Some(ring) = sketch.pending.clone() else {
+    // 打开态但环没了（被外部清掉 / 撤销 / 切工具）：跟随关闭。
+    let Some(pending) = sketch.pending.clone() else {
         dialog.open = false;
         dialog.name.clear();
         return;
@@ -155,14 +154,16 @@ pub fn feature_place_dialog(
         if name.is_empty() {
             return; // 按钮本应禁用；双保险（回车等未来入口）。
         }
+        // 地图用闭合时钉住的捕获图 id（`pending.map`）——对话框开着时
+        // 地图背后仍可下钻，现取 `view.current_map` 会把环落进错误的图。
         if add_feature_place_now(
             &mut projection,
             &mut edit,
-            &view,
             &playback,
             name,
             FEATURE_FOREST,
-            &ring,
+            &pending.map,
+            &pending.ring,
         )
         .is_some()
         {
