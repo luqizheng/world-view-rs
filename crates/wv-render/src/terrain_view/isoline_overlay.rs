@@ -123,6 +123,28 @@ fn terrain_data_hash(data: &wv_core::terrain::TerrainData) -> u64 {
     h.wrapping_mul(FNV_PRIME)
 }
 
+/// 一条平滑后的等值线链（点列 + 闭合位）——链缓存的存储单位。
+type IsolineChain = (Vec<wv_terrain::isoline::Pt>, bool);
+
+/// 链缓存失效输入：地形内容 / 来源图 / treatment 几何位 / Nation 档。
+///
+/// **不含 `tol_q`**——DP 容差只作用于缓存链；缩放跨档只重跑 DP + 建网格，
+/// 不重跑 marching squares / 装配 / Chaikin。
+#[derive(Debug, Clone, PartialEq)]
+struct ChainCacheInputs {
+    map: Option<wv_core::Id>,
+    data_hash: u64,
+    treatment: [bool; 3],
+    nation: bool,
+}
+
+/// 提取缓存：Chaikin 之后、DP 之前的链。
+struct CachedChains {
+    inputs: ChainCacheInputs,
+    coast_smoothed: Vec<IsolineChain>,
+    kinds_smoothed: Vec<IsolineChain>,
+}
+
 /// 资源：等值线叠加实体 + 上次构建的键。
 #[derive(Resource, Default)]
 pub struct IsolineOverlay {
@@ -143,6 +165,9 @@ pub struct IsolineOverlay {
     data_hash: Option<u64>,
     /// 最近一次上墨色的调色板：palette 变化而几何不变时只需重上色，不重算。
     ink_palette: Option<MapPalette>,
+    /// 提取缓存（Task 3）：与实体生命周期无关——`despawn()` **不**清它，
+    /// 只在 `inputs` 失配时重建。缩放只消费它重跑 DP。
+    chains: Option<CachedChains>,
 }
 
 impl IsolineOverlay {
@@ -274,10 +299,6 @@ pub fn sync_isoline_overlay(
     let w = data.width;
     let h = data.height;
     let cell = |x: u32, y: u32| &data.cells[(y * w + x) as usize];
-    let coast = height_segments(w, h, |x, y| cell(x, y).height as f32, 0.0);
-    // Nation 档只画海岸线（与 POI / 建筑同口径，spec §2.2c）：
-    // 类型边界在远观读不出差异，却让描边总长翻数倍。
-    let kinds = (!nation).then(|| kind_segments(w, h, |x, y| cell(x, y).kind));
     let tol = dp_tol_continuous(view.scale);
     // 装饰旗标（ADR-0023 D4）：从当前主题包派生。内置两包都是 HAND_DRAWN（全
     // `true`）——所有 gate 分支在 `true` 时走与历史恒开**逐位相同**的路径。
@@ -295,45 +316,62 @@ pub fn sync_isoline_overlay(
     } else {
         (STROKE_PX * 0.5 * view.scale).max(grid.cell_size * 0.03)
     };
-    // 主线（最锐）：主线 + 全部 kind 边界。
-    let mut strokes: Vec<(Vec<wv_terrain::isoline::Pt>, bool, f32)> = Vec::new();
-    // 水彩外晕（手绘地图 #4）：仅海岸，2 圈；走同一 `coast` 链，3 套半宽。
-    let mut coast_halo_inner: Vec<(Vec<wv_terrain::isoline::Pt>, bool, f32)> = Vec::new();
-    let mut coast_halo_outer: Vec<(Vec<wv_terrain::isoline::Pt>, bool, f32)> = Vec::new();
-    // 河水中线（手绘地图 #8）：与外晕同链，宽 0.5×，单层。
-    let mut coast_river: Vec<(Vec<wv_terrain::isoline::Pt>, bool, f32)> = Vec::new();
-    for c in assemble_chains(&coast) {
-        let smoothed = chaikin(&c.pts, c.closed, 2);
-        let thin = simplify_dp(&smoothed, c.closed, tol);
-        if thin.len() < 2 {
-            continue;
-        }
-        strokes.push((thin.clone(), c.closed, thin_half));
-        // 水彩晕与河中线（#4 / #8）的 gate 在 push 处：vec 留空 → 下游
-        // `is_empty()` 检查天然跳过 spawn，无需另改。
-        if treatment.coast_halo {
-            coast_halo_inner.push((thin.clone(), c.closed, thin_half * HALO_1_MULT));
-            coast_halo_outer.push((thin.clone(), c.closed, thin_half * HALO_2_MULT));
-        }
-        if treatment.river_centerline {
-            coast_river.push((thin, c.closed, thin_half * RIVER_MULT));
-        }
+    // 类型边界加宽：格缘阶梯被 Chaikin 磨角后，平滑曲线偏离原阶梯至多约
+    // 0.3 格——细线盖不住露出的「错色台阶」，按格径给足半宽才压得平。
+    let kind_half = thin_half.max(grid.cell_size * KIND_STROKE_CELL);
+
+    // ---- 提取 + 装配 + Chaikin 缓存（Task 3）----
+    // 这些与缩放无关；只有 DP 容差 / Nation 档消费它们。缓存输入不含 tol_q：
+    // 缩放只在缓存上重跑 DP（毫秒级），笔刷改地形 / 切图 / 改 treatment 才重建链。
+    let data_hash = terrain_data_hash(data);
+    let chain_inputs = ChainCacheInputs {
+        map: key.map.clone(),
+        data_hash,
+        treatment: key.treatment,
+        nation,
+    };
+    let rebuild_chains = overlay.chains.as_ref().map(|c| &c.inputs) != Some(&chain_inputs);
+    if rebuild_chains {
+        let coast_segs = height_segments(w, h, |x, y| cell(x, y).height as f32, 0.0);
+        // Nation 档只画海岸线（与 POI / 建筑同口径，spec §2.2c）：
+        // 类型边界在远观读不出差异，却让描边总长翻数倍。
+        let kinds_segs = (!nation).then(|| kind_segments(w, h, |x, y| cell(x, y).kind));
+        let coast_smoothed: Vec<IsolineChain> = assemble_chains(&coast_segs)
+            .into_iter()
+            .map(|c| (chaikin(&c.pts, c.closed, 2), c.closed))
+            .collect();
+        let kinds_smoothed: Vec<IsolineChain> = kinds_segs
+            .as_deref()
+            .map(|segs| {
+                assemble_chains(segs)
+                    .into_iter()
+                    // 类型场边界是格缘阶梯：先小容差预抽稀去共线中点，再 Chaikin，
+                    // 否则平滑后的点数翻两倍全是楼梯碎点。
+                    .map(|c| {
+                        let pts = simplify_dp(&c.pts, c.closed, 0.30);
+                        (chaikin(&pts, c.closed, 2), c.closed)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        overlay.chains = Some(CachedChains {
+            inputs: chain_inputs,
+            coast_smoothed,
+            kinds_smoothed,
+        });
     }
-    if let Some(kinds) = &kinds {
-        // 类型边界加宽：格缘阶梯被 Chaikin 磨角后，平滑曲线偏离原阶梯至多约
-        // 0.3 格——细线盖不住露出的「错色台阶」，按格径给足半宽才压得平。
-        let kind_half = thin_half.max(grid.cell_size * KIND_STROKE_CELL);
-        for c in assemble_chains(kinds) {
-            // 类型场边界是格缘阶梯：先小容差预抽稀去共线中点，再 Chaikin 磨角，
-            // 否则平滑后的点数翻两倍全是楼梯碎点。
-            let pts = simplify_dp(&c.pts, c.closed, 0.30);
-            let smoothed = chaikin(&pts, c.closed, 2);
-            let thin = simplify_dp(&smoothed, c.closed, tol);
-            if thin.len() >= 2 {
-                strokes.push((thin, c.closed, kind_half));
-            }
-        }
-    }
+    // 缩放热路径：只跑 DP + 半宽。
+    let (strokes, coast_halo_inner, coast_halo_outer, coast_river) = {
+        let chains = overlay.chains.as_ref().expect("上面刚建立");
+        assemble_strokes(
+            &chains.coast_smoothed,
+            &chains.kinds_smoothed,
+            tol,
+            thin_half,
+            kind_half,
+            treatment,
+        )
+    };
 
     let Some(mesh) = build_stroke_mesh(&strokes, grid.raster_origin, grid.cell_size) else {
         // 空几何（无等值线）也是稳态：0 顶点 mesh 会踩 bevy #24874
@@ -341,7 +379,7 @@ pub fn sync_isoline_overlay(
         // 下一帧走 `empty_settled` 快路，不重算。
         overlay.despawn(&mut commands);
         overlay.key = Some(key);
-        overlay.data_hash = Some(terrain_data_hash(data));
+        overlay.data_hash = Some(data_hash);
         overlay.ink_palette = Some(view.map_palette);
         return;
     };
@@ -464,6 +502,55 @@ fn apply_material_colors(
     }
 }
 
+/// 一条描边：点列 + 闭合位 + 世界半宽。
+type IsolineStroke = (Vec<wv_terrain::isoline::Pt>, bool, f32);
+
+/// 从缓存链装配四路描边：主线 / 水彩内晕 / 水彩外晕 / 河中线。
+///
+/// 入参是 **Chaikin 之后** 的链；本函数只跑 DP + 半宽赋值（缩放热路径）。
+/// 两段水彩晕分开返回（计划 Interfaces 写的是单路 `coast_halo`，但既有渲染
+/// 是 2.6× / 5.0× 两层 alpha 渐变，合并会改变观感——见 ledger Ruling）。
+#[allow(clippy::too_many_arguments)]
+fn assemble_strokes(
+    coast: &[IsolineChain],
+    kinds: &[IsolineChain],
+    tol: f32,
+    thin_half: f32,
+    kind_half: f32,
+    treatment: crate::theme::theme_pack::TreatmentFlags,
+) -> (
+    Vec<IsolineStroke>,
+    Vec<IsolineStroke>,
+    Vec<IsolineStroke>,
+    Vec<IsolineStroke>,
+) {
+    let mut strokes: Vec<IsolineStroke> = Vec::new();
+    let mut halo_inner: Vec<IsolineStroke> = Vec::new();
+    let mut halo_outer: Vec<IsolineStroke> = Vec::new();
+    let mut river: Vec<IsolineStroke> = Vec::new();
+    for (pts, closed) in coast {
+        let thin = simplify_dp(pts, *closed, tol);
+        if thin.len() < 2 {
+            continue;
+        }
+        strokes.push((thin.clone(), *closed, thin_half));
+        if treatment.coast_halo {
+            halo_inner.push((thin.clone(), *closed, thin_half * HALO_1_MULT));
+            halo_outer.push((thin.clone(), *closed, thin_half * HALO_2_MULT));
+        }
+        if treatment.river_centerline {
+            river.push((thin, *closed, thin_half * RIVER_MULT));
+        }
+    }
+    for (pts, closed) in kinds {
+        let thin = simplify_dp(pts, *closed, tol);
+        if thin.len() >= 2 {
+            strokes.push((thin, *closed, kind_half));
+        }
+    }
+    (strokes, halo_inner, halo_outer, river)
+}
+
 /// 把折线链展开成**单个**三角网（每段一个加宽四边形，段端外扩半宽盖住转角缝隙）。
 ///
 /// 每链自带半宽（`chains` 第三元）：海岸线细、类型边界粗。
@@ -583,6 +670,24 @@ mod tests {
             tol_quantum(0.3),
             tol_quantum(0.7)
         );
+    }
+
+    /// 缓存链复用口径：同一组链 + 同容差 → 主线 + 两路晕 + 河中线都产出。
+    #[test]
+    fn assemble_strokes_from_cached_chains_yields_main_halo_and_river() {
+        let coast = vec![(vec![p(0.5, 0.5), p(8.5, 0.5)], false)];
+        let (strokes, halo_inner, halo_outer, river) = assemble_strokes(
+            &coast,
+            &[],
+            0.125,
+            0.5,
+            1.0,
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+        );
+        assert_eq!(strokes.len(), 1, "一条海岸链 = 一条主线");
+        assert_eq!(halo_inner.len(), 1, "coast_halo 全开 → 内晕每链一");
+        assert_eq!(halo_outer.len(), 1, "coast_halo 全开 → 外晕每链一");
+        assert_eq!(river.len(), 1, "river_centerline 全开 → 每链一河中线");
     }
 
     /// 全退化链（空表 / 单点链）→ 无 mesh：渲染层不得插 0 顶点网格
