@@ -95,6 +95,8 @@ struct IsolineKey {
     treatment: [bool; 3],
     /// 量化后的 DP 容差档（1/64 格）：缩放跨过量化步长才重算。
     tol_q: u8,
+    /// Nation 档（`view.scale >= LOD_NATION_SCALE`）：只画海岸线、不画类型边界。
+    nation: bool,
 }
 
 /// 地形内容指纹（仅进程内缓存比较用，不落盘、不跨进程）：FNV-1a 扫
@@ -222,6 +224,7 @@ pub fn sync_isoline_overlay(
         return;
     };
     let treatment = crate::theme::theme_pack::builtin::for_palette(view.map_palette).treatment;
+    let nation = view.scale >= crate::state::LOD_NATION_SCALE;
     let key = IsolineKey {
         map: tex.last_map.clone(),
         size: tex.size,
@@ -233,6 +236,7 @@ pub fn sync_isoline_overlay(
             treatment.ink_sublinear,
         ],
         tol_q: tol_quantum(view.scale),
+        nation,
     };
     let structural_same = overlay.key.as_ref() == Some(&key);
     let dirty_pending = tex.chunks_dirty.is_some();
@@ -271,7 +275,9 @@ pub fn sync_isoline_overlay(
     let h = data.height;
     let cell = |x: u32, y: u32| &data.cells[(y * w + x) as usize];
     let coast = height_segments(w, h, |x, y| cell(x, y).height as f32, 0.0);
-    let kinds = kind_segments(w, h, |x, y| cell(x, y).kind);
+    // Nation 档只画海岸线（与 POI / 建筑同口径，spec §2.2c）：
+    // 类型边界在远观读不出差异，却让描边总长翻数倍。
+    let kinds = (!nation).then(|| kind_segments(w, h, |x, y| cell(x, y).kind));
     let tol = dp_tol_continuous(view.scale);
     // 装饰旗标（ADR-0023 D4）：从当前主题包派生。内置两包都是 HAND_DRAWN（全
     // `true`）——所有 gate 分支在 `true` 时走与历史恒开**逐位相同**的路径。
@@ -289,9 +295,6 @@ pub fn sync_isoline_overlay(
     } else {
         (STROKE_PX * 0.5 * view.scale).max(grid.cell_size * 0.03)
     };
-    // 类型边界加宽：格缘阶梯被 Chaikin 磨角后，平滑曲线偏离原阶梯至多约
-    // 0.3 格——细线盖不住露出的「错色台阶」，按格径给足半宽才压得平。
-    let kind_half = thin_half.max(grid.cell_size * KIND_STROKE_CELL);
     // 主线（最锐）：主线 + 全部 kind 边界。
     let mut strokes: Vec<(Vec<wv_terrain::isoline::Pt>, bool, f32)> = Vec::new();
     // 水彩外晕（手绘地图 #4）：仅海岸，2 圈；走同一 `coast` 链，3 套半宽。
@@ -316,14 +319,19 @@ pub fn sync_isoline_overlay(
             coast_river.push((thin, c.closed, thin_half * RIVER_MULT));
         }
     }
-    for c in assemble_chains(&kinds) {
-        // 类型场边界是格缘阶梯：先小容差预抽稀去共线中点，再 Chaikin 磨角，
-        // 否则平滑后的点数翻两倍全是楼梯碎点。
-        let pts = simplify_dp(&c.pts, c.closed, 0.30);
-        let smoothed = chaikin(&pts, c.closed, 2);
-        let thin = simplify_dp(&smoothed, c.closed, tol);
-        if thin.len() >= 2 {
-            strokes.push((thin, c.closed, kind_half));
+    if let Some(kinds) = &kinds {
+        // 类型边界加宽：格缘阶梯被 Chaikin 磨角后，平滑曲线偏离原阶梯至多约
+        // 0.3 格——细线盖不住露出的「错色台阶」，按格径给足半宽才压得平。
+        let kind_half = thin_half.max(grid.cell_size * KIND_STROKE_CELL);
+        for c in assemble_chains(kinds) {
+            // 类型场边界是格缘阶梯：先小容差预抽稀去共线中点，再 Chaikin 磨角，
+            // 否则平滑后的点数翻两倍全是楼梯碎点。
+            let pts = simplify_dp(&c.pts, c.closed, 0.30);
+            let smoothed = chaikin(&pts, c.closed, 2);
+            let thin = simplify_dp(&smoothed, c.closed, tol);
+            if thin.len() >= 2 {
+                strokes.push((thin, c.closed, kind_half));
+            }
         }
     }
 
@@ -544,6 +552,24 @@ mod tests {
         }
     }
 
+    /// Nation 位是几何结构输入：跨 `LOD_NATION_SCALE` 时容差档可能不变
+    /// （都在钳位区），key 必须仍判不等——否则类型边界残留 / 缺失。
+    #[test]
+    fn isoline_key_distinguishes_nation_tier() {
+        let base = IsolineKey {
+            nation: false,
+            tol_q: 32,
+            map: Some(wv_core::Id::new("m").expect("合法 id")),
+            size: 512,
+            res: 4,
+            soften: false,
+            treatment: [true, true, true],
+        };
+        let mut far = base.clone();
+        far.nation = true;
+        assert_ne!(base, far, "Nation 档几何不同（类型边界不画），key 必须不等");
+    }
+
     /// 量化档位有限：缩放跨越 1/64 容差步长才变档；两端钳位区同档。
     #[test]
     fn tol_quantum_changes_only_at_sixty_fourth_steps() {
@@ -623,6 +649,7 @@ mod tests {
             res: 4,
             soften: false,
             tol_q: 8,
+            nation: false,
         };
         let same = base.clone();
         assert_eq!(base, same);
@@ -638,6 +665,7 @@ mod tests {
                 res: 4,
                 soften: false,
                 treatment: base.treatment,
+                nation: false,
                 tol_q: 8,
             },
             IsolineKey {
@@ -646,6 +674,7 @@ mod tests {
                 res: 4,
                 soften: false,
                 treatment: base.treatment,
+                nation: false,
                 tol_q: 8,
             },
             IsolineKey {
@@ -654,6 +683,7 @@ mod tests {
                 res: 8,
                 soften: false,
                 treatment: base.treatment,
+                nation: false,
                 tol_q: 8,
             },
             IsolineKey {
@@ -662,6 +692,7 @@ mod tests {
                 res: 4,
                 soften: true,
                 treatment: base.treatment,
+                nation: false,
                 tol_q: 8,
             },
             IsolineKey {
@@ -670,6 +701,7 @@ mod tests {
                 res: 4,
                 soften: false,
                 treatment: base.treatment,
+                nation: false,
                 tol_q: 9,
             },
             IsolineKey {
@@ -678,6 +710,7 @@ mod tests {
                 res: 4,
                 soften: false,
                 treatment: [false, true, true],
+                nation: false,
                 tol_q: 8,
             },
         ];
@@ -700,6 +733,7 @@ mod tests {
             res: 4,
             soften: false,
             treatment: [t.coast_halo, t.river_centerline, t.ink_sublinear],
+            nation: false,
             tol_q: 8,
         };
         assert_eq!(
