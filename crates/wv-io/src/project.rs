@@ -1207,6 +1207,8 @@ impl Project {
 
         // 派生提示（相遇却未写事件）——**永不**产生 Error。
         d.extend(derive_hints(&world));
+        // 势力层 / 归属边诊断（ADR-0027 D10）：只列出，不阻止保存（V1）。
+        d.extend(crate::diagnostics::derive_faction_diagnostics(&world));
         d.dedup_by_fingerprint();
         Ok(d)
     }
