@@ -1,10 +1,10 @@
 # ADR-0021：表达配方（RenderRecipe）与装饰族（Treatment）——渲染判定的收口与手绘表现的预设化
 
-**状态**：提议（Proposed，待用户拍板）
-> **2026-10-16 修订追记**：本 ADR 的 **D2（Treatment 独立轴）已被 [ADR-0023](ADR-0023-theme-pack-injection-contract.md) D4（已接受）修订**——`TreatmentFlags` 归入 `ThemePack` 字段（`wv-render/src/theme/theme_pack.rs`），**不再**经 `view.treatment` 独立持有、**不再**做独立轴切换。本 ADR D2 的「特性归轴表」（§2 D2 §4）与「HandDrawn 默认零回归」前提继续有效；两档预设改由主题 crate 承载（`HandDrawn` = 内置古舆图包、`Skyline` = 未来独立主题 crate）。**D1（Recipe 收口）不受影响，仍独立待拍板**（ADR-0023 §3「先后顺序」明确 0023 落地后 0021 更容易做）。
+**状态**：已接受（Accepted，2026-10-17）
 **日期**：2026-10-16
-**决策者**：待定（源自 2026-10-16「地图的各种表达方式，能不能给出建议」调研的后续项；ADR-0020 §2.8 明确留予本 ADR）
-**关联**：P3（YAML 为主格式，仅作潜力方向）/ P5（图层化编辑）、AGENTS §3（数据与渲染分离）/ §6.4、ADR-0012（VectorFlat 默认底图）/ 0013（LayerFrame 唯一求值点）/ 0016（主题轴与正交性）/ 0017（标签层）/ 0020（wv-render 独立 crate，§2.8 留项）
+**决策者**：用户（2026-10-17 拍板）
+**修订追记（2026-10-16，随接受一并入正文）**：本 ADR 的 **D2（Treatment 独立轴）已被 [ADR-0023](ADR-0023-theme-pack-injection-contract.md) D4（已接受）修订**——`TreatmentFlags` 归入 `ThemePack` 字段（`wv-render/src/theme/theme_pack.rs`），**不再**经 `view.treatment` 独立持有、**不再**做独立轴切换；本 ADR D2 的「特性归轴表」（§2 D2 §4）与「HandDrawn 默认零回归」前提继续有效，两档预设由主题 crate 承载。**D1（Recipe）按原文执行**：`recipe.rs` 骨架 + MODE_TABLE 真值表 + 4 散点迁移已落地（commits `237c584` / `3556d7b` / `3a7ebec`），"该不该画"类 mode 散点已全部收口；其余 ViewMode match 经核对属选色逻辑（归 ThemePack 方向，不进 Recipe）。
+**关联**：P3（YAML 为主格式，仅作潜力方向）/ P5（图层化编辑）、AGENTS §3（数据与渲染分离）/ §6.4、ADR-0012（VectorFlat 默认底图）/ 0013（LayerFrame 唯一求值点）/ 0016（主题轴与正交性）/ 0017（标签层）/ 0020（wv-render 独立 crate，§2.8 留项）/ **0023（D2 修订来源；其 D4 将 TreatmentFlags 归入 ThemePack）**
 **约束**：本 ADR 一旦「已接受」，正文按 AGENTS §6.3 / §6.4 不再修改；若后续需要反向修正，再新开一份 ADR。
 
 ---
@@ -140,14 +140,15 @@
   2. **~10 模块的 gate 行机械改写**（M1 的一次性面）；
   3. **Recipe 管不到 pass 内部构成**：「海洋色 4 层叠加」那类问题是单 pass 内部的调色链，Recipe 只让「哪几层参与」显式（经 TreatmentFlags），**不**重构调色公式本身——对本类问题的收益是部分的，需诚实声明；
   4. 与 LayerFrame 的正交边界靠文档 + 测试维持，违反无编译期强制。
-- **待裁（落地前收敛）**：
-  | 子点 | 选项 |
-  |---|---|
-  | Treatment 默认档 | A. HandDrawn（推荐，零回归）/ B. Skyline |
-  | 粒度 | A. 整族两档（推荐，v1 简单）/ B. 逐项子开关 |
-  | 持久化位置 | A. ui-layout.yaml（推荐，与 map_theme 同处）/ B. 图 YAML（作者意图）/ C. 暂不持久化 |
-  | 笔刷内环（#11）归 Treatment 还是留编辑态 | 待 M2 |
-  | Recipe 是否预留 YAML 化接口（serde 字段）| 待 M1 落地时评估 |
+- **待裁（2026-10-17 随接受一并收敛，按落地实况逐项落定）**：
+  | 子点 | 裁定 | 依据 |
+  |---|---|---|
+  | Treatment 默认档 | **A. HandDrawn** | `TreatmentFlags::HAND_DRAWN`（全 true）为内置两包装载值 + `Default`；零回归实测通过 |
+  | 粒度 | **A. 整族两档**（`HAND_DRAWN` / `EMPTY` 两极 const） | 9 旗标一次成组切换，无逐项子开关 |
+  | 持久化位置 | **A. ui-layout.yaml**（与 `map_theme` 同处，随 ADR-0023 D3 的 theme_pack_id 一并持久化） | 主题切换是原子的，装饰旗标随包走、不单独持久化 |
+  | 笔刷内环（#11） | **留编辑态**（不进 TreatmentFlags） | 编辑反馈非观感；与 #7/#9/#12 同口径 |
+  | Recipe YAML 化接口 | **M1 不预留**（`MODE_TABLE` 为 Rust 常量，无 serde 字段） | AGENTS §12 最易回退；YAML 化等真需求 |
+  | 装饰旗标归轴 | **D2 修订：归 `ThemePack.treatment`**（ADR-0023 D4 已接受），本 ADR 原文"独立轴"不再执行 | 见头部修订追记 |
 
 ## 5. 被否决的备选（Rejected Alternatives）
 
