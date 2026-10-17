@@ -1,6 +1,7 @@
 //! 共享表单 / 浮层控件（标准化控件 · 第 2 批）。
 //!
 //! `FieldInput` / `FieldSelect` / `field_checkbox` / `Switch` / `slider_row` +
+//! `PropertyRow` / `value_box` / `check_row`（检视器组件族，Figma `42:2`）+
 //! `DialogWindow`（模态壳）。全部用 builder + show 模式（与 [`super::button::ToolButton`]
 //! 同构），样式默认由 `UiShell` 令牌解析，**绝不写裸 hex**——caller 忘了覆盖就走
 //! shell 默认值（map_controls 的白控件配色即覆盖用法）。
@@ -18,8 +19,10 @@
 
 use bevy_egui::egui;
 
-use crate::theme::ui_tokens::{radius, space};
+use crate::theme::ui_tokens::{font_size, radius, space};
 use crate::ui::shell::UiShell;
+
+use super::primitives::{icon_image, ICON_CHECK, ICON_CHEVRON_DOWN};
 
 // ── FieldInput（单行文本输入）───────────────────────────────────────
 
@@ -376,6 +379,205 @@ pub fn slider_row<T: egui::emath::Numeric>(
     });
     ui.add_space(space::XS);
     slider(ui, shell, value, range, logarithmic)
+}
+
+// ── PropertyRow / value_box（检视器属性行 · Figma `42:2` 组件族）──────
+
+/// Figma `42:2` 采样几何 @1x：label 列宽 84、值框高 28、值框水平内边距 8。
+const PROPERTY_LABEL_W: f32 = 84.0;
+const VALUE_BOX_H: f32 = 28.0;
+const VALUE_BOX_PAD_X: f32 = 8.0;
+
+/// 只读值框（Figma `42:27` Value 模板）：暗色内嵌底 + `border_subtle` 描边 +
+/// 等宽值文本，右端可挂单位后缀（Elevation 行的 `"m"`）与/或下拉箭头
+/// （Type 行的可编辑暗示）。
+///
+/// 「内嵌底」色彩语义：设计稿 `#131C23` 比面板**暗**（与 raised 相反方向），
+/// 令牌层没有 inset 档——取 `panel_bg × 0.8` gamma 域压暗，明暗两主题都自动
+/// 成立（亮色下面板本就近白，压暗后同样是「凹进去」观感）。值文本走
+/// `mono(MICRO)` + `t1`（设计稿 IBM Plex Mono 11 对位；打包字体缺 Plex，
+/// 用 mono 家族等价替换）。
+///
+/// 返回整框的 click `Response`——将来把 Type 行接成真下拉时用它开菜单。
+pub fn value_box(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    text: &str,
+    suffix: Option<&str>,
+    dropdown: bool,
+) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), VALUE_BOX_H),
+        egui::Sense::click(),
+    );
+    let p = ui.painter();
+    p.rect_filled(rect, radius::FIELD, shell.panel_bg().gamma_multiply(0.8));
+    p.rect_stroke(
+        rect,
+        radius::FIELD,
+        egui::Stroke::new(1.0, shell.border_subtle()),
+        egui::StrokeKind::Inside,
+    );
+    p.text(
+        egui::pos2(rect.min.x + VALUE_BOX_PAD_X, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        text,
+        crate::theme::ui_theme::mono(font_size::MICRO),
+        shell.t1(),
+    );
+    // 右端从右往左排：下拉箭头（最右）→ 单位后缀（其左）。
+    let mut right = rect.max.x - VALUE_BOX_PAD_X;
+    if dropdown {
+        right -= 10.0;
+    }
+    if let Some(sfx) = suffix {
+        p.text(
+            egui::pos2(right, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            sfx,
+            crate::theme::ui_theme::proportional(font_size::MICRO),
+            shell.t3(),
+        );
+    }
+    let _ = p; // 释放 painter 借用，让 `ui.put` 可借 ui。
+    if dropdown {
+        let glyph = egui::Rect::from_center_size(
+            egui::pos2(rect.max.x - VALUE_BOX_PAD_X - 5.0, rect.center().y),
+            egui::vec2(10.0, 10.0),
+        );
+        let _ = ui.put(glyph, icon_image(ICON_CHEVRON_DOWN, shell.t3(), 10.0));
+    }
+    resp
+}
+
+/// 属性行（Figma `42:25` Property 模板）：定宽 label（t2，12px）+ 整宽
+/// [`value_box`]。行高 = 值框高 28，label 垂直居中对齐值框。
+///
+/// ```text
+///   Elevation   ┌──────────────────┐
+///               │ 842            m │
+///               └──────────────────┘
+/// ```
+pub struct PropertyRow<'a> {
+    label: &'a str,
+    value: &'a str,
+    suffix: Option<&'a str>,
+    dropdown: bool,
+    label_width: f32,
+}
+
+impl<'a> PropertyRow<'a> {
+    /// label（如 `"Elevation"`）+ 等宽值文本（如 `"842"`）。
+    pub fn new(label: &'a str, value: &'a str) -> Self {
+        Self {
+            label,
+            value,
+            suffix: None,
+            dropdown: false,
+            label_width: PROPERTY_LABEL_W,
+        }
+    }
+
+    /// 单位后缀（如 `"m"`），挂在值框右端（下拉箭头之左）。
+    pub fn suffix(mut self, s: &'a str) -> Self {
+        self.suffix = Some(s);
+        self
+    }
+
+    /// 值框右端画下拉箭头（可编辑字段的视觉暗示）。默认 false。
+    pub fn dropdown(mut self, on: bool) -> Self {
+        self.dropdown = on;
+        self
+    }
+
+    /// label 列宽（默认 Figma 采样 84px）。
+    pub fn label_width(mut self, w: f32) -> Self {
+        self.label_width = w;
+        self
+    }
+
+    /// 装配并落地，返回值框的 `Response`（可继续串 `.clicked()`）。
+    pub fn show(self, ui: &mut egui::Ui, shell: &UiShell) -> egui::Response {
+        let mut resp: Option<egui::Response> = None;
+        ui.horizontal(|ui| {
+            let (lab_rect, _) = ui.allocate_exact_size(
+                egui::vec2(self.label_width, VALUE_BOX_H),
+                egui::Sense::hover(),
+            );
+            ui.painter().text(
+                egui::pos2(lab_rect.min.x, lab_rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                self.label,
+                crate::theme::ui_theme::proportional(font_size::SMALL),
+                shell.t2(),
+            );
+            resp = Some(value_box(ui, shell, self.value, self.suffix, self.dropdown));
+        });
+        resp.expect("horizontal 闭包必然执行一次")
+    }
+}
+
+/// 复选行（Figma `42:40` Visibility checkbox）：自绘 12×12 勾选方块 + 标签 +
+/// 可选右端挂件图标（如 `lock-keyhole-open`）。
+///
+/// 不复用 [`field_checkbox`]（原生 `ui.checkbox`）的原因：设计稿勾选块是
+/// 圆角描边块 + 内嵌 check 图标，与原生字体勾选号不同档；右端挂件槽原生
+/// checkbox 也给不了。`field_checkbox` 继续服务「原生即可」的场景，两者并存。
+pub fn check_row(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    on: &mut bool,
+    label: &str,
+    trailing: Option<egui::ImageSource<'static>>,
+) -> egui::Response {
+    const ROW_H: f32 = 18.0;
+    const BOX: f32 = 12.0;
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), ROW_H),
+        egui::Sense::click(),
+    );
+    // 勾选方块：描边块，选中态描边转 t1 并内嵌 check 图标（Figma square-check）。
+    let box_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.min.x + BOX / 2.0, rect.center().y),
+        egui::vec2(BOX, BOX),
+    );
+    let stroke = if *on {
+        shell.t1()
+    } else {
+        shell.border_strong()
+    };
+    ui.painter().rect_stroke(
+        box_rect,
+        radius::BADGE,
+        egui::Stroke::new(1.0, stroke),
+        egui::StrokeKind::Inside,
+    );
+    if *on {
+        // `ui.put` 左上锚定——勾号须落方块的**居中**矩形。
+        let check_rect =
+            egui::Rect::from_center_size(box_rect.center(), egui::vec2(BOX - 2.0, BOX - 2.0));
+        let _ = ui.put(check_rect, icon_image(ICON_CHECK, shell.t1(), BOX - 2.0));
+    }
+    // 标签（11px t2，Figma body-small 对位 MICRO）。
+    ui.painter().text(
+        egui::pos2(box_rect.max.x + 6.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        crate::theme::ui_theme::proportional(font_size::MICRO),
+        shell.t2(),
+    );
+    // 右端挂件（12×12 t3）。
+    if let Some(src) = trailing {
+        let trail_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.max.x - BOX / 2.0 - 2.0, rect.center().y),
+            egui::vec2(BOX, BOX),
+        );
+        let _ = ui.put(trail_rect, icon_image(src, shell.t3(), BOX));
+    }
+    if resp.clicked() {
+        *on = !*on;
+    }
+    resp
 }
 
 // ── dialog_window（模态壳）───────────────────────────────────────────
@@ -837,5 +1039,158 @@ mod dialog_window_tests {
             .width(700.0)
             .collapsible(true)
             .resizable(true);
+    }
+}
+
+#[cfg(test)]
+mod property_row_tests {
+    use super::*;
+    use crate::theme::ui_theme::UiShellConfig;
+
+    fn shell() -> UiShell {
+        UiShell::new(&UiShellConfig::default())
+    }
+
+    fn make_ui() -> (egui::Context, egui::Ui) {
+        let ctx = egui::Context::default();
+        ctx.begin_pass(Default::default());
+        let ui = egui::Ui::new(
+            ctx.clone(),
+            egui::Id::new("property_row_tests"),
+            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(288.0, 400.0),
+            )),
+        );
+        (ctx, ui)
+    }
+
+    #[test]
+    fn property_row_defaults_match_figma_sampling() {
+        let pr = PropertyRow::new("Elevation", "842");
+        assert_eq!(pr.label, "Elevation");
+        assert_eq!(pr.value, "842");
+        assert!(
+            (pr.label_width - 84.0).abs() < 1e-3,
+            "label 列宽默认 = Figma 采样 84，got {}",
+            pr.label_width
+        );
+        assert!(pr.suffix.is_none(), "默认无单位后缀");
+        assert!(!pr.dropdown, "默认无下拉箭头");
+    }
+
+    #[test]
+    fn property_row_builder_overrides_take_effect() {
+        let pr = PropertyRow::new("Type", "Government")
+            .suffix("m")
+            .dropdown(true)
+            .label_width(60.0);
+        assert_eq!(pr.suffix, Some("m"));
+        assert!(pr.dropdown);
+        assert!(
+            (pr.label_width - 60.0).abs() < 1e-3,
+            "got {}",
+            pr.label_width
+        );
+    }
+
+    #[test]
+    fn value_box_is_full_width_and_figma_28_high() {
+        let sh = shell();
+        let (_c, mut ui) = make_ui();
+        let r = value_box(&mut ui, &sh, "1142.00 / 496.00", None, false);
+        assert!(
+            (r.rect.height() - 28.0).abs() < 1e-3,
+            "值框高 = Figma 采样 28，got {}",
+            r.rect.height()
+        );
+        assert!(
+            (r.rect.width() - 288.0).abs() < 1e-3,
+            "值框应撑满可用宽（288），got {}",
+            r.rect.width()
+        );
+    }
+
+    #[test]
+    fn property_row_renders_suffix_and_dropdown_variants_without_panic() {
+        let sh = shell();
+        // Elevation 形态：后缀。
+        let (_c1, mut u1) = make_ui();
+        let r1 = PropertyRow::new("Elevation", "842")
+            .suffix("m")
+            .show(&mut u1, &sh);
+        assert!(
+            (r1.rect.height() - 28.0).abs() < 1e-3,
+            "行高 = 值框高 28，got {}",
+            r1.rect.height()
+        );
+        // Type 形态：下拉暗示。
+        let (_c2, mut u2) = make_ui();
+        let r2 = PropertyRow::new("Type", "Government")
+            .dropdown(true)
+            .show(&mut u2, &sh);
+        assert!(r2.rect.width() > 0.0);
+    }
+
+    #[test]
+    fn value_box_empty_text_renders_without_panic() {
+        let sh = shell();
+        let (_c, mut ui) = make_ui();
+        let r = value_box(&mut ui, &sh, "", Some(""), true);
+        assert!((r.rect.height() - 28.0).abs() < 1e-3);
+    }
+}
+
+#[cfg(test)]
+mod check_row_tests {
+    use super::super::primitives::ICON_MAP_PIN;
+    use super::*;
+    use crate::theme::ui_theme::UiShellConfig;
+
+    fn shell() -> UiShell {
+        UiShell::new(&UiShellConfig::default())
+    }
+
+    fn make_ui() -> (egui::Context, egui::Ui) {
+        let ctx = egui::Context::default();
+        ctx.begin_pass(Default::default());
+        let ui = egui::Ui::new(
+            ctx.clone(),
+            egui::Id::new("check_row_tests"),
+            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(288.0, 200.0),
+            )),
+        );
+        (ctx, ui)
+    }
+
+    #[test]
+    fn check_row_is_full_width_18_high_and_does_not_toggle_without_click() {
+        let sh = shell();
+        let (_c, mut ui) = make_ui();
+        let mut on = false;
+        let r = check_row(&mut ui, &sh, &mut on, "Visible on map", None);
+        assert!(
+            (r.rect.height() - 18.0).abs() < 1e-3,
+            "行高 18，got {}",
+            r.rect.height()
+        );
+        assert!(
+            (r.rect.width() - 288.0).abs() < 1e-3,
+            "整行可点（288），got {}",
+            r.rect.width()
+        );
+        assert!(!on, "headless 无点击事件，状态不变");
+    }
+
+    #[test]
+    fn check_row_with_trailing_icon_renders_without_panic() {
+        let sh = shell();
+        let (_c, mut ui) = make_ui();
+        let mut on = true;
+        let r = check_row(&mut ui, &sh, &mut on, "Visible on map", Some(ICON_MAP_PIN));
+        assert!(r.rect.width() > 0.0);
+        assert!(on, "headless 无点击事件，状态不变");
     }
 }

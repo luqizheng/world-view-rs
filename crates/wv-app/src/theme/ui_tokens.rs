@@ -114,6 +114,8 @@ pub mod space {
 pub mod radius {
     /// 徽标 / 色块。
     pub const BADGE: f32 = 4.0;
+    /// 表单值框（Figma `42:2` 属性行 Value 框 @1x 采样；与徽标同值但语义独立，勿互指）。
+    pub const FIELD: f32 = 4.0;
     /// 输入框 / 按钮。
     pub const CONTROL: f32 = 6.0;
     /// 浮动面板。

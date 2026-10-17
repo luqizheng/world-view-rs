@@ -105,6 +105,9 @@ pub fn register(app: &mut App) {
             )
                 .chain(),
         );
+
+    // 公共控件预览浮窗 + 截图探针（WV_WIDGET_PREVIEW / WV_SHOT 门控，缺省零开销）。
+    crate::ui::widget_preview::register(app);
 }
 
 // ── 段 2 · DrillState 同步 ─────────────────────────────────────────────────────

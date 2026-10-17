@@ -6,11 +6,13 @@
 //!
 //! - [`primitives`] —— 徽标 / 空状态 / 列表项 / 描边 helper / 图标 tint
 //!   中央化 / 最近工程行 + `time_ago` 格式化 / 笔刷面板用地形网格。
-//! - [`floater`] —— 浮动面板外壳 `float_window` + 自绘 panel-head。
+//! - [`floater`] —— 浮动面板外壳：公共 [`FloatWindow`]（Figma `42:2` 提取，
+//!   解耦 `Panel`）+ `Panel` 特化薄包装 `float_window` + 自绘 panel-head。
 //! - [`button`] —— 统一按钮工厂（多 style × 多 content 形态）+
 //!   `ToolButton` 工具栏按钮封装 + 全部 `ICON_*` 常量。
 //! - [`controls`] —— 表单 / 浮层控件：`FieldInput` / `FieldSelect` /
-//!   `FieldCheckbox` / `Switch` / `SliderRow` / `DialogWindow`。
+//!   `field_checkbox` / `Switch` / `slider_row` / `PropertyRow`+`value_box`+
+//!   `check_row`（检视器组件族）/ `DialogWindow`。
 //! - [`svg_loader`] —— egui SVG 解码器的运行时安装（Bevy 资源 + image-loader
 //!   marker）。
 //!
@@ -47,14 +49,17 @@ pub mod svg_loader;
 // ── 路径兼容 re-export（保持 `crate::ui::widgets::X` 不变） ───────────────
 pub use button::{button, ButtonContent, ButtonStyle, ToolButton, ToolButtonContent, ToolIcon};
 pub use controls::{
-    field_checkbox, slider, slider_row, DialogWindow, FieldInput, FieldSelect, Switch,
+    check_row, field_checkbox, slider, slider_row, value_box, DialogWindow, FieldInput,
+    FieldSelect, PropertyRow, Switch,
 };
-pub use floater::float_window;
+pub use floater::{float_window, FloatWindow, HeadIcon};
 pub use primitives::{
     badge,
+    divider,
     empty_state,
     format_time_ago,
     icon_image,
+    identity_header,
     list_item,
     recent_row,
     rect_stroke,

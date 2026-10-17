@@ -40,6 +40,7 @@ pub mod timeline;
 pub mod top_bar;
 pub mod validation_panel;
 pub mod welcome_screen;
+pub mod widget_preview;
 pub mod widgets;
 
 // ── 路径兼容 re-export（保持 `crate::ui::X` 不变） ───────────────────────

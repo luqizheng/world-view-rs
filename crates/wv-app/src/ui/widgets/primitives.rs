@@ -160,6 +160,68 @@ pub fn list_item(
     resp
 }
 
+// ── 身份块 / 分隔线（检视器组件族 · Figma `42:2`）──────────────────────
+
+/// 对象身份块（Figma `42:11` Selected place）：36×36 语义色图标瓦片 + 标题 +
+/// 副标题 + 可选右端挂件（如金色图钉）。
+///
+/// `tile_fill` 由 caller 给**类别语义色**，瓦片上的图标固定白 tint——底色是
+/// caller 的语义，白图标在其上恒可读（`ButtonStyle::Accent` 白字同规）。
+/// 挂件 tint 固定 [`UiShell::gold`]（Figma `42:18` pin 采样 `#D6B77B` →
+/// `gold` 令牌对位）。返回整行 click `Response`，行点击 / 挂件点击的分流
+/// 由 caller 自接（挂件几何在行内右缘，行 `Response` 优先）。
+pub fn identity_header(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    tile_fill: egui::Color32,
+    icon: egui::ImageSource<'static>,
+    title: &str,
+    subtitle: &str,
+    trailing: Option<egui::ImageSource<'static>>,
+) -> egui::Response {
+    const TILE: f32 = 36.0;
+    let avail_w = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(avail_w, TILE), egui::Sense::click());
+    let painter = ui.painter();
+    let tile = egui::Rect::from_min_size(rect.min, egui::vec2(TILE, TILE));
+    painter.rect_filled(tile, radius::CONTROL, tile_fill);
+    // 标题 + 副标题两行（Figma 行距 2px → 上下各偏 8 居中）。
+    let text_x = rect.min.x + TILE + 10.0;
+    painter.text(
+        egui::pos2(text_x, rect.center().y - 8.0),
+        egui::Align2::LEFT_CENTER,
+        title,
+        proportional(shell.scale.base),
+        shell.t1(),
+    );
+    painter.text(
+        egui::pos2(text_x, rect.center().y + 8.0),
+        egui::Align2::LEFT_CENTER,
+        subtitle,
+        proportional(shell.scale.micro),
+        shell.t3(),
+    );
+    let _ = painter; // 释放借用，`ui.put` 落图标。
+                     // `ui.put` 左上锚定——20px 图标须落 36px 瓦片的**居中**矩形。
+    let icon_rect = egui::Rect::from_center_size(tile.center(), egui::vec2(20.0, 20.0));
+    let _ = ui.put(icon_rect, icon_image(icon, egui::Color32::WHITE, 20.0));
+    if let Some(src) = trailing {
+        let trail = egui::Rect::from_center_size(
+            egui::pos2(rect.max.x - 6.0, rect.center().y),
+            egui::vec2(12.0, 12.0),
+        );
+        let _ = ui.put(trail, icon_image(src, shell.gold(), 12.0));
+    }
+    resp
+}
+
+/// 分隔线（Figma `42:23` Divider）：整宽 1px `border_subtle`。
+pub fn divider(ui: &mut egui::Ui, shell: &UiShell) {
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, 0.0, shell.border_subtle());
+}
+
 // ── 描边 + 图标 helper ──────────────────────────────────────────────────
 
 /// 描边矩形（统一 `StrokeKind::Inside`）。
@@ -550,6 +612,88 @@ mod recent_row_and_time_ago_tests {
             r_some.rect.height() > 0.0,
             "Some 路径至少占位，got {}",
             r_some.rect.height()
+        );
+    }
+}
+
+#[cfg(test)]
+mod identity_header_tests {
+    use super::*;
+
+    fn shell() -> UiShell {
+        UiShell::new(&crate::theme::ui_theme::UiShellConfig::default())
+    }
+
+    fn make_ui(name: &str) -> (egui::Context, egui::Ui) {
+        let ctx = egui::Context::default();
+        ctx.begin_pass(Default::default());
+        let ui = egui::Ui::new(
+            ctx.clone(),
+            egui::Id::new(name),
+            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(288.0, 100.0),
+            )),
+        );
+        (ctx, ui)
+    }
+
+    #[test]
+    fn identity_header_is_figma_36_tile_high_and_full_width() {
+        let sh = shell();
+        let (_c, mut ui) = make_ui("identity_header_geom");
+        let r = identity_header(
+            &mut ui,
+            &sh,
+            egui::Color32::from_rgb(0x4B, 0x42, 0x2E),
+            ICON_GLOBE,
+            "Government Office",
+            "Point of interest · Civic",
+            Some(ICON_MAP_PIN),
+        );
+        assert!(
+            (r.rect.height() - 36.0).abs() < 1e-3,
+            "瓦片行高 = Figma 采样 36，got {}",
+            r.rect.height()
+        );
+        assert!(
+            (r.rect.width() - 288.0).abs() < 1e-3,
+            "整行可点（288），got {}",
+            r.rect.width()
+        );
+    }
+
+    #[test]
+    fn identity_header_without_trailing_renders_without_panic() {
+        let sh = shell();
+        let (_c, mut ui) = make_ui("identity_header_no_trailing");
+        let r = identity_header(
+            &mut ui,
+            &sh,
+            egui::Color32::GRAY,
+            ICON_GLOBE,
+            "t",
+            "s",
+            None,
+        );
+        assert!(r.rect.width() > 0.0);
+    }
+
+    #[test]
+    fn divider_is_one_pixel_and_full_width() {
+        let sh = shell();
+        let (_c, mut ui) = make_ui("divider_geom");
+        divider(&mut ui, &sh);
+        let last = ui.min_rect();
+        assert!(
+            (last.height() - 1.0).abs() < 1e-3,
+            "分隔线高 = 1px，got {}",
+            last.height()
+        );
+        assert!(
+            (last.width() - 288.0).abs() < 1e-3,
+            "整宽（288），got {}",
+            last.width()
         );
     }
 }
