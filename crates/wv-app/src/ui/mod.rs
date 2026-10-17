@@ -18,6 +18,7 @@
 #![cfg(feature = "app")]
 
 pub mod brush_panel;
+pub mod city_intent;
 pub mod command_palette_window;
 pub mod compass_panel;
 pub mod continent_dialog;
