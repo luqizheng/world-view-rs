@@ -44,7 +44,7 @@ pub mod widgets;
 pub use brush_panel::panel_brush;
 pub use command_palette_window::command_palette;
 pub use compass_panel::panel_compass;
-pub use continent_dialog::{continent_dialog, ContinentDialog};
+pub use continent_dialog::{continent_dialog, continent_dialog_system, ContinentDialog};
 pub use faction_panel::panel_faction;
 pub use inspector_panel::panel_inspector;
 pub use layers_panel::{panel_layers, panel_map_tree};

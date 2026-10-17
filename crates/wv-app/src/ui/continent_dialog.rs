@@ -177,6 +177,69 @@ pub fn continent_dialog(
     }
 }
 
+/// Bevy 系统：绘制面板 + 把「生成」接到 `GenerateContinentCommand`。
+///
+/// 拆成系统而非塞进 `ui_shell` 的大分发器：面板要读写 10+ 个资源，
+/// 单系统参数上限（16）比分发器已经顶满的元组链安全得多。
+#[allow(clippy::too_many_arguments)]
+pub fn continent_dialog_system(
+    mut ctxs: bevy_egui::EguiContexts,
+    shell_cfg: bevy::prelude::Res<crate::theme::ui_theme::UiShellConfig>,
+    mut dialog: bevy::prelude::ResMut<ContinentDialog>,
+    current_loc: bevy::prelude::Res<crate::i18n::CurrentLocale>,
+    drill: bevy::prelude::Res<crate::state::DrillState>,
+    grid: bevy::prelude::Res<crate::state::GridConfig>,
+    mut projection: bevy::prelude::ResMut<crate::state::WorldProjection>,
+    mut edit: bevy::prelude::ResMut<crate::edit::editing::EditHistory>,
+    mut tex: bevy::prelude::ResMut<wv_render::terrain_view::TerrainTexture>,
+    mut sketch: bevy::prelude::ResMut<crate::state::ContinentSketch>,
+    mut gen: bevy::prelude::ResMut<crate::state::ContinentGenerationState>,
+    mut notice: bevy::prelude::ResMut<crate::ui_shell::ShellNotice>,
+    time: bevy::prelude::Res<bevy::prelude::Time>,
+) {
+    if !dialog.open {
+        return;
+    }
+    let Ok(ctx) = ctxs.ctx_mut() else {
+        return;
+    };
+    let shell = UiShell::new(&shell_cfg);
+    let loc = current_loc.0;
+    let map = drill.current().cloned();
+    let cell_size = grid.cell_size;
+    let frame = (time.elapsed_secs() * 60.0) as u64;
+
+    continent_dialog(ctx, &shell, &mut dialog, loc, |params, seed| {
+        let Some(map) = map else {
+            notice.error(t(loc, I18nKey::ContinentNoticeNoMap), frame);
+            return;
+        };
+        if sketch.envelopes.is_empty() {
+            notice.error(t(loc, I18nKey::ContinentNoticeNoEnvelopes), frame);
+            return;
+        }
+        let envelopes = std::mem::take(&mut sketch.envelopes);
+        match crate::edit::editing::commit_continent_generation(
+            map,
+            envelopes,
+            params,
+            seed,
+            cell_size,
+            &mut edit,
+            &mut projection,
+            &mut tex,
+            &mut sketch,
+            &mut gen,
+        ) {
+            Ok(()) => notice.info(t(loc, I18nKey::ContinentNoticeGenerated), frame),
+            Err(e) => notice.error(
+                format!("{}: {e}", t(loc, I18nKey::ContinentNoticeGenerateFailed)),
+                frame,
+            ),
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

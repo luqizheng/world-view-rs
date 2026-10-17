@@ -92,6 +92,19 @@ impl History {
         Ok(dirty)
     }
 
+    /// 已提交（在 Undo 栈上）的事务数。
+    ///
+    /// 应用层用它判定「撤销的是不是某一条特定命令」：大陆生成把提交后的
+    /// 长度记进 stash，撤销后长度回落才恢复被消费的意图包络。
+    pub fn len(&self) -> usize {
+        self.undo.len()
+    }
+
+    /// Undo 栈是否为空（与 [`Self::len`] 配对，满足 clippy `len_without_is_empty`）。
+    pub fn is_empty(&self) -> bool {
+        self.undo.is_empty()
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }

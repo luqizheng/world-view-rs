@@ -97,6 +97,35 @@ pub struct CityPending {
     pub base: wv_core::map::MapBase,
 }
 
+/// 大陆生成的撤销恢复圈暂存（2026-10-17 大陆生成 UI plan Task 4）。
+///
+/// 生成即消费意图包络（spec §8 裁定 2），但 Ctrl+Z 撤销那条宏命令时圈要
+/// 回驻留（裁定 3 的配套机制）。`committed_len` 记录提交后 `History::len()`：
+///
+/// - undo 成功且 `len < committed_len` → 撤的正是（或更早的）生成命令；
+/// - undo 成功但 `len >= committed_len` → 撤的是别的命令，圈不回来；
+/// - redo 成功且 `len >= committed_len` → 再消费。
+///
+/// 不清 stash：redo 还要用；参数也一并留着，作者「撤销 → 调参 → 再生成」时
+/// 面板能回到上次的值（面板自身状态由 `ContinentDialog` 持有）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContinentGenerationStash {
+    /// 被消费的意图包络（当前图局部坐标）。
+    pub envelopes: Vec<Vec<(f32, f32)>>,
+    /// 上次生成用的参数。
+    pub params: wv_terrain::continent::ContinentParams,
+    /// 上次生成用的种子。
+    pub seed: u64,
+    /// 提交后的 `History::len()`。
+    pub committed_len: usize,
+}
+
+/// 大陆生成恢复圈资源（`Option` 包裹——没有生成过就是 `None`）。
+#[derive(bevy::prelude::Resource, Debug, Default)]
+pub struct ContinentGenerationState {
+    pub stash: Option<ContinentGenerationStash>,
+}
+
 /// [`ViewMode`](wv_render::state::ViewMode) 的顶栏显示名（ADR-0018：locale 查表）。
 ///
 /// ADR-0020 把 `ViewMode` 本体迁入 `wv-render` 后，i18n 文案留在应用层

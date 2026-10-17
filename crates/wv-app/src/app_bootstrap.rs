@@ -150,8 +150,10 @@ pub fn run(config: AppConfig) {
     .init_resource::<streets::StreetEditorState>()
     .init_resource::<crate::state::MeasureState>()
     .init_resource::<crate::state::CityToolState>()
-    // 大陆生成意图包络（会话态；不落盘）
+    // 大陆生成意图包络 / 属性面板 / 撤销恢复圈（会话态；不落盘）
     .init_resource::<wv_render::state::ContinentSketch>()
+    .init_resource::<ui::ContinentDialog>()
+    .init_resource::<crate::state::ContinentGenerationState>()
     .init_resource::<wv_render::measurement::MeasurementCache>()
     // 主题包（ADR-0023 M1）：当前 `map_palette` 仍为权威源，本 Resource 仅作
     // 入口就位、不被任何渲染系统消费；M2 切消费点时再写回 `view.theme_pack_id`。
@@ -356,6 +358,8 @@ pub fn run(config: AppConfig) {
             ui::panel_validation,
             // 「新建地图」对话框（CommandId::NewMap 打开；居中模态窗）。
             ui::new_map_dialog,
+            // 「生成大陆」属性面板（工具条 / 命令面板打开；居中模态窗）。
+            ui::continent_dialog_system,
             // 「新建工程」对话框（CommandId::NewProject / 欢迎页打开；
             // 与 new_map_dialog 同族的居中模态窗，排在状态栏之前——
             // 确认创建写的回执本帧就要被状态栏读到）。

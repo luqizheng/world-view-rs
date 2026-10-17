@@ -453,6 +453,10 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::ContinentGenerate => "生成",
         I18nKey::ContinentCancel => "取消",
         I18nKey::ContinentToolName => "圈画大陆",
+        I18nKey::ContinentNoticeGenerated => "已生成大陆（Ctrl+Z 可撤销并找回意图圈）",
+        I18nKey::ContinentNoticeNoMap => "没有当前地图：先打开或新建一张地图",
+        I18nKey::ContinentNoticeNoEnvelopes => "没有圈出大陆范围：先用「圈画大陆」工具画至少一个闭合包络",
+        I18nKey::ContinentNoticeGenerateFailed => "生成失败",
     }
 }
 
@@ -902,5 +906,9 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::ContinentGenerate => "Generate",
         I18nKey::ContinentCancel => "Cancel",
         I18nKey::ContinentToolName => "Draw continent",
+        I18nKey::ContinentNoticeGenerated => "Continent generated (Ctrl+Z restores the intent outlines)",
+        I18nKey::ContinentNoticeNoMap => "No current map: open or create one first",
+        I18nKey::ContinentNoticeNoEnvelopes => "Nothing to generate: draw at least one closed outline with the continent tool",
+        I18nKey::ContinentNoticeGenerateFailed => "Generation failed",
     }
 }

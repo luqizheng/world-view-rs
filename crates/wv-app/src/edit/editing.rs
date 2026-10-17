@@ -21,16 +21,19 @@
 use bevy::prelude::*;
 
 use crate::state::{
-    BrushState, BrushTool, CityDraft, CityPending, CityToolMode, CityToolState, DrillState,
-    GridConfig, PlaybackState, ViewState, WorldProjection,
+    BrushState, BrushTool, CityDraft, CityPending, CityToolMode, CityToolState,
+    ContinentGenerationStash, ContinentGenerationState, ContinentSketch, DrillState, GridConfig,
+    PlaybackState, ViewState, WorldProjection,
 };
 use wv_edit::command::{
-    EditCommand, IntentTerrainCommand, PaintTerrainCommand, ResetTerrainToBaseCommand,
+    EditCommand, GenerateContinentCommand, IntentTerrainCommand, PaintTerrainCommand,
+    ResetTerrainToBaseCommand,
 };
 use wv_edit::history::Transaction;
 use wv_edit::History;
 use wv_render::camera::ActiveStroke;
 use wv_render::terrain_view::{image_from_terrain, TerrainTexture, TileAtlas};
+use wv_terrain::continent::ContinentParams;
 use wv_terrain::edit::{Brush, Stroke as TerrainStroke};
 use wv_terrain::intent::Intent;
 
@@ -439,6 +442,97 @@ pub fn apply_reset_terrain_to_base(
     }
 }
 
+/// 提交一次大陆生成（宏命令），成功后「生成即消费」包络并写恢复圈 stash。
+///
+/// 失败时把包络放回 `sketch.envelopes`——作者画了半天的圈不能因为一次提交
+/// 失败就消失（V1 精神：只提示，不替你决定）。
+///
+/// 纹理脏矩形与 [`apply_reset_terrain_to_base`] 同款：前后 cells diff 出
+/// 包围盒，避免整图重建。
+#[allow(clippy::too_many_arguments)]
+pub fn commit_continent_generation(
+    map: wv_core::Id,
+    envelopes: Vec<Vec<(f32, f32)>>,
+    params: ContinentParams,
+    seed: u64,
+    cell_size: f32,
+    edit: &mut EditHistory,
+    projection: &mut WorldProjection,
+    tex: &mut TerrainTexture,
+    sketch: &mut ContinentSketch,
+    gen: &mut ContinentGenerationState,
+) -> Result<(), String> {
+    if envelopes.is_empty() {
+        return Err("没有圈出大陆范围：先用「圈画大陆」工具画至少一个闭合包络".into());
+    }
+
+    let before = wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(&map))
+        .map(|t| t.cells.clone());
+    let mut tx = Transaction::new();
+    tx.push(Box::new(GenerateContinentCommand::new(
+        map.clone(),
+        envelopes.clone(),
+        params,
+        seed,
+        cell_size,
+    )));
+    match edit.history.commit(&mut projection.world, tx) {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
+            projection.dirty = true;
+            let after =
+                wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(&map))
+                    .map(|t| (t.width.max(1), t.cells.clone()));
+            match (before, after) {
+                (Some(b), Some((w, a))) if b.len() == a.len() => {
+                    if let Some(rect) = terrain_diff_bbox(&b, &a, w) {
+                        tex.mark_dirty(rect);
+                    }
+                }
+                _ => tex.mark_all_dirty(),
+            }
+            // 生成即消费 + 记录恢复圈（commit 后的长度）。
+            sketch.envelopes.clear();
+            sketch.discard_active();
+            gen.stash = Some(ContinentGenerationStash {
+                envelopes,
+                params,
+                seed,
+                committed_len: edit.history.len(),
+            });
+            Ok(())
+        }
+        Err(e) => {
+            sketch.envelopes = envelopes;
+            Err(format!("生成失败：{e}"))
+        }
+    }
+}
+
+/// 撤销 / 重做成功后的意图包络恢复圈判定（纯逻辑，便于单测）。
+///
+/// - undo 且 `len < committed_len`：撤到生成命令之前 → 圈回驻留；
+/// - undo 且 `len >= committed_len`：撤的是别的命令 → 不动；
+/// - redo 且 `len >= committed_len`：生成命令重新生效 → 再消费。
+pub fn sync_sketch_after_history_step(
+    redo: bool,
+    history: &History,
+    sketch: &mut ContinentSketch,
+    gen: &mut ContinentGenerationState,
+) {
+    let Some(stash) = gen.stash.as_ref() else {
+        return;
+    };
+    let len = history.len();
+    if redo {
+        if len >= stash.committed_len {
+            sketch.envelopes.clear();
+        }
+    } else if len < stash.committed_len {
+        sketch.envelopes = stash.envelopes.clone();
+    }
+}
+
 /// 执行一次撤销 / 重做，返回给用户看的结果说明。
 ///
 /// **唯一入口**：快捷键、命令面板、菜单都经此函数，避免「两处各写一遍」导致
@@ -452,6 +546,8 @@ pub fn apply_history_command(
     projection: &mut WorldProjection,
     tex: &mut TerrainTexture,
     playback: &PlaybackState,
+    sketch: &mut ContinentSketch,
+    gen: &mut ContinentGenerationState,
 ) -> Result<String, String> {
     if playback.playing {
         return Err("播放中为只读：先暂停再撤销".into());
@@ -474,6 +570,8 @@ pub fn apply_history_command(
     match result {
         Ok((true, _dirty_paths)) => {
             projection.dirty = true;
+            // 大陆生成恢复圈：撤掉生成命令 → 消费掉的意图圈回来；redo → 再消费。
+            sync_sketch_after_history_step(redo, &edit.history, sketch, gen);
             let after = wv_render::terrain_view::texture_terrain(tex, &projection.world, None)
                 .map(|t| (t.width.max(1), t.cells.clone()));
             match (before, after) {
@@ -890,5 +988,200 @@ mod tests {
         let mut after = before.clone();
         after[1].height = 500;
         assert_eq!(terrain_diff_bbox(&before, &after, 2), Some([1, 0, 2, 1]));
+    }
+
+    // -----------------------------------------------------------------------
+    // 大陆生成接线（大陆生成 UI plan Task 4）
+    // -----------------------------------------------------------------------
+
+    fn continent_test_world(
+        size: u32,
+    ) -> (WorldProjection, EditHistory, TerrainTexture, wv_core::Id) {
+        let map = wv_core::Id::new_unchecked("world_main");
+        let mut projection = WorldProjection::default();
+        let grid = wv_terrain::TerrainGrid::new(size, size);
+        let cells: Vec<wv_core::terrain::TerrainCellData> = grid
+            .into_cells()
+            .into_iter()
+            .map(|c| wv_core::terrain::TerrainCellData {
+                height: c.height,
+                kind: c.kind,
+            })
+            .collect();
+        projection.world.set_terrain(
+            map.clone(),
+            wv_core::terrain::TerrainData {
+                width: size,
+                height: size,
+                cells,
+            },
+        );
+        let tex = TerrainTexture {
+            handle: Handle::default(),
+            size,
+            res: 1,
+            dirty: None,
+            chunks_dirty: None,
+            last_mode: None,
+            last_soften: false,
+            last_palette: Default::default(),
+            last_map: Some(map.clone()),
+        };
+        (projection, EditHistory::default(), tex, map)
+    }
+
+    fn square_envelope() -> Vec<(f32, f32)> {
+        vec![(8.0, 8.0), (40.0, 8.0), (40.0, 40.0), (8.0, 40.0)]
+    }
+
+    fn generate_once(
+        projection: &mut WorldProjection,
+        edit: &mut EditHistory,
+        tex: &mut TerrainTexture,
+        sketch: &mut ContinentSketch,
+        gen: &mut ContinentGenerationState,
+        map: &wv_core::Id,
+    ) {
+        sketch.envelopes = vec![square_envelope()];
+        let envelopes = sketch.take_envelopes();
+        commit_continent_generation(
+            map.clone(),
+            envelopes,
+            ContinentParams::default(),
+            7,
+            1.0,
+            edit,
+            projection,
+            tex,
+            sketch,
+            gen,
+        )
+        .expect("生成应成功");
+    }
+
+    #[test]
+    fn undo_after_generate_restores_envelopes_and_grid() {
+        let (mut projection, mut edit, mut tex, map) = continent_test_world(48);
+        let before = projection
+            .world
+            .terrain_of(&map)
+            .cloned()
+            .expect("地形存在");
+        let mut sketch = ContinentSketch::default();
+        let mut gen = ContinentGenerationState::default();
+
+        generate_once(
+            &mut projection,
+            &mut edit,
+            &mut tex,
+            &mut sketch,
+            &mut gen,
+            &map,
+        );
+        assert!(sketch.envelopes.is_empty(), "生成即消费意图圈");
+        assert!(gen.stash.is_some(), "生成后应留恢复圈 stash");
+        let after = projection.world.terrain_of(&map).cloned().unwrap();
+        assert_ne!(before, after, "生成应改变地形");
+        assert!(after.cells.iter().any(|c| c.height > 0), "应长出陆地");
+
+        apply_history_command(
+            false,
+            &mut edit,
+            &mut projection,
+            &mut tex,
+            &PlaybackState::default(),
+            &mut sketch,
+            &mut gen,
+        )
+        .expect("撤销应成功");
+        assert_eq!(
+            projection.world.terrain_of(&map).cloned().unwrap(),
+            before,
+            "撤销后网格应逐格复原"
+        );
+        assert_eq!(sketch.envelopes.len(), 1, "撤销生成 → 意图圈回驻留");
+    }
+
+    #[test]
+    fn undo_of_other_command_does_not_restore_envelopes() {
+        let (mut projection, mut edit, mut tex, map) = continent_test_world(48);
+        let mut sketch = ContinentSketch::default();
+        let mut gen = ContinentGenerationState::default();
+        generate_once(
+            &mut projection,
+            &mut edit,
+            &mut tex,
+            &mut sketch,
+            &mut gen,
+            &map,
+        );
+
+        // 再提交一条别的命令（意图山）——历史变长。
+        let mut tx = Transaction::new();
+        tx.push(Box::new(IntentTerrainCommand::new(
+            map.clone(),
+            Intent::Hills {
+                pts: vec![(24.0, 24.0)],
+                radius: 4.0,
+                strength: 1.0,
+            },
+            1.0,
+        )));
+        edit.history
+            .commit(&mut projection.world, tx)
+            .expect("第二条命令应成功");
+
+        apply_history_command(
+            false,
+            &mut edit,
+            &mut projection,
+            &mut tex,
+            &PlaybackState::default(),
+            &mut sketch,
+            &mut gen,
+        )
+        .expect("撤销应成功");
+        assert!(
+            sketch.envelopes.is_empty(),
+            "撤销的是另一条命令，意图圈不得回驻留"
+        );
+    }
+
+    #[test]
+    fn redo_reconsumes_envelopes() {
+        let (mut projection, mut edit, mut tex, map) = continent_test_world(48);
+        let mut sketch = ContinentSketch::default();
+        let mut gen = ContinentGenerationState::default();
+        generate_once(
+            &mut projection,
+            &mut edit,
+            &mut tex,
+            &mut sketch,
+            &mut gen,
+            &map,
+        );
+        apply_history_command(
+            false,
+            &mut edit,
+            &mut projection,
+            &mut tex,
+            &PlaybackState::default(),
+            &mut sketch,
+            &mut gen,
+        )
+        .expect("撤销");
+        assert_eq!(sketch.envelopes.len(), 1, "撤销后圈回来");
+
+        apply_history_command(
+            true,
+            &mut edit,
+            &mut projection,
+            &mut tex,
+            &PlaybackState::default(),
+            &mut sketch,
+            &mut gen,
+        )
+        .expect("重做");
+        assert!(sketch.envelopes.is_empty(), "重做生成 → 意图圈再次被消费");
     }
 }

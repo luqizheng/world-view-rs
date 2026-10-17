@@ -1070,6 +1070,11 @@ fn apply_pending_commands(
         Option<Res<wv_render::terrain_view::TileAtlas>>,
         ResMut<Assets<Image>>,
     ),
+    // 大陆生成撤销恢复圈：撤销/重做成功分支要读历史长度、写回意图包络。
+    (mut sketch, mut gen): (
+        ResMut<crate::state::ContinentSketch>,
+        ResMut<crate::state::ContinentGenerationState>,
+    ),
     current_loc: Res<CurrentLocale>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     time: Res<Time>,
@@ -1193,6 +1198,8 @@ fn apply_pending_commands(
                 &mut projection,
                 &mut tex,
                 &playback,
+                &mut sketch,
+                &mut gen,
             ) {
                 Ok(msg) => {
                     // 撤销/重做后世界可能改——诊断需要重算。
@@ -1525,6 +1532,8 @@ mod tests {
         world.init_resource::<crate::state::ProjectDiagnostics>();
         world.init_resource::<crate::ui::NewMapDialog>();
         world.init_resource::<crate::ui::NewProjectDialog>();
+        world.init_resource::<crate::state::ContinentSketch>();
+        world.init_resource::<crate::state::ContinentGenerationState>();
         // ADR-0018：UI 文案语言；默认 `Locale::Zh`（与 GUI 启动默认值一致）。
         world.init_resource::<crate::i18n::CurrentLocale>();
         world.init_resource::<LayoutFile>();
@@ -1696,6 +1705,8 @@ mod tests {
         world.init_resource::<crate::state::ProjectDiagnostics>();
         world.init_resource::<crate::ui::NewMapDialog>();
         world.init_resource::<crate::ui::NewProjectDialog>();
+        world.init_resource::<crate::state::ContinentSketch>();
+        world.init_resource::<crate::state::ContinentGenerationState>();
         // ADR-0018：UI 文案语言；默认 `Locale::Zh`（与 GUI 启动默认值一致）。
         world.init_resource::<crate::i18n::CurrentLocale>();
         world.init_resource::<LayoutFile>();

@@ -837,11 +837,19 @@ pub enum I18nKey {
     ContinentCancel,
     /// 工具名「圈画大陆」
     ContinentToolName,
+    /// 提示「已生成大陆」
+    ContinentNoticeGenerated,
+    /// 错误「没有当前地图」
+    ContinentNoticeNoMap,
+    /// 错误「没有圈出大陆范围」
+    ContinentNoticeNoEnvelopes,
+    /// 错误前缀「生成失败」
+    ContinentNoticeGenerateFailed,
 }
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 375] = [
+    pub const ALL: [I18nKey; 379] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1251,5 +1259,9 @@ impl I18nKey {
         I18nKey::ContinentGenerate,
         I18nKey::ContinentCancel,
         I18nKey::ContinentToolName,
+        I18nKey::ContinentNoticeGenerated,
+        I18nKey::ContinentNoticeNoMap,
+        I18nKey::ContinentNoticeNoEnvelopes,
+        I18nKey::ContinentNoticeGenerateFailed,
     ];
 }
