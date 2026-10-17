@@ -151,6 +151,20 @@ pub enum Intent {
     /// （每格比两岸最低格低、比上游低），水就顺着链流。两端都在陆上时，
     /// 高的一端当源头；一头在水里则那头是河口。河宽固定一格。
     River { pts: Vec<(f32, f32)>, strength: f32 },
+
+    // ---- 区域意图（2026-10-17 选择工具 spec §4；多边形 = 选区，图内局部 wu）----
+    /// 高山群：选区内沿主轴派生脊线跑 [`Intent::MountainRange`] 同款 ridged
+    /// 噪声（半径 = 短轴之半）；跨海段自动冒岛链 / 半岛（继承语义，特性）。
+    MountainMassif { polygon: Vec<(f32, f32)> },
+    /// 丘陵：区域内铺 [`Intent::Hills`] 低矮起伏；只在陆上生效（纯海 = 无操作）。
+    HillsRegion { polygon: Vec<(f32, f32)> },
+    /// 平原：区域内**主动压平**到 [`PLAINS_TARGET_M`] ± 噪声（与
+    /// [`Intent::Plateau`]「不压低更高地形」语义相反——生成平原就是要把
+    /// 区域内高地抹平，spec §4 裁定）；只在陆上生效。
+    PlainsRegion { polygon: Vec<(f32, f32)> },
+    /// 湖泊：区域定湖界的碗形洼地（中心 ≈ [`LAKE_DEPTH_M`]，边缘 ≈ -[`LAKE_LIP_M`]）；
+    /// 多边形质心在海上 = 无操作（沿 [`Intent::Lake`]「湖心须陆上」口径）。
+    LakeRegion { polygon: Vec<(f32, f32)> },
 }
 
 impl Intent {
@@ -201,6 +215,36 @@ pub fn apply_intent(grid: &mut TerrainGrid, intent: &Intent, seed: u64, cell_siz
             strength,
         } => apply_lake(grid, *center, *radius, *strength, seed, cell_size),
         Intent::River { pts, strength } => apply_river(grid, pts, *strength, cell_size),
+        Intent::MountainMassif { polygon } => {
+            let Some((spine, radius)) = region_spine(polygon) else {
+                return 0;
+            };
+            apply_region_masked(grid, polygon, seed, cell_size, |sc| {
+                apply_mountain_range(sc, &spine, radius, 1.0, seed, cell_size)
+            })
+        }
+        Intent::HillsRegion { polygon } => {
+            let Some(c) = polygon_centroid(polygon) else {
+                return 0;
+            };
+            let r_max = polygon
+                .iter()
+                .map(|&(x, y)| ((x - c.0).powi(2) + (y - c.1).powi(2)).sqrt())
+                .fold(0.0f32, f32::max);
+            apply_region_masked(grid, polygon, seed, cell_size, |sc| {
+                apply_hills(sc, &[c], r_max, 1.0, seed, cell_size)
+            })
+        }
+        Intent::PlainsRegion { polygon } => {
+            apply_region_masked(grid, polygon, seed, cell_size, |sc| {
+                apply_plains_region(sc, polygon, seed, cell_size)
+            })
+        }
+        Intent::LakeRegion { polygon } => {
+            apply_region_masked(grid, polygon, seed, cell_size, |sc| {
+                apply_lake_region(sc, polygon, cell_size)
+            })
+        }
     }
 }
 
@@ -953,6 +997,252 @@ fn apply_river(grid: &mut TerrainGrid, pts: &[(f32, f32)], strength: f32, cell_s
 }
 
 // ---------------------------------------------------------------------------
+// 区域意图（2026-10-17 选择工具 spec §4 / §12）
+// ---------------------------------------------------------------------------
+
+/// 平原压平目标高度（米，海平面以上低海拔带中心，spec §4 裁定初值）。
+const PLAINS_TARGET_M: f32 = 60.0;
+/// 平原目标高度的噪声半幅（米）——压平不等于抹成常数。
+const PLAINS_NOISE_M: f32 = 15.0;
+
+/// 多边形质心（鞋带公式；零面积 / 空环回退顶点平均，`None` 仅空环）。
+fn polygon_centroid(polygon: &[(f32, f32)]) -> Option<(f32, f32)> {
+    let n = polygon.len();
+    if n == 0 {
+        return None;
+    }
+    let mut a2 = 0.0f32;
+    let mut cx = 0.0f32;
+    let mut cy = 0.0f32;
+    for i in 0..n {
+        let (x0, y0) = polygon[i];
+        let (x1, y1) = polygon[(i + 1) % n];
+        let cross = x0 * y1 - x1 * y0;
+        a2 += cross;
+        cx += (x0 + x1) * cross;
+        cy += (y0 + y1) * cross;
+    }
+    if a2.abs() < 1e-6 {
+        let sx: f32 = polygon.iter().map(|p| p.0).sum();
+        let sy: f32 = polygon.iter().map(|p| p.1).sum();
+        return Some((sx / n as f32, sy / n as f32));
+    }
+    Some((cx / (3.0 * a2), cy / (3.0 * a2)))
+}
+
+/// 区域主轴脊线（spec §4「高山」行）：协方差主方向为脊走向，脊线端点 =
+/// 顶点沿主轴投影的极值向质心收缩 20%（山脊不出掩膜）；返回 `(脊线, 半径)`，
+/// 半径 = 垂直半幅之半（spec 裁定「半径 = 短轴之半」）。
+pub fn region_spine(polygon: &[(f32, f32)]) -> Option<(Vec<(f32, f32)>, f32)> {
+    if polygon.len() < 3 {
+        return None;
+    }
+    let c = polygon_centroid(polygon)?;
+    let n = polygon.len() as f32;
+    let mut sxx = 0.0f32;
+    let mut sxy = 0.0f32;
+    let mut syy = 0.0f32;
+    for &(x, y) in polygon {
+        let (dx, dy) = (x - c.0, y - c.1);
+        sxx += dx * dx;
+        sxy += dx * dy;
+        syy += dy * dy;
+    }
+    sxx /= n;
+    sxy /= n;
+    syy /= n;
+    let theta = 0.5 * (2.0 * sxy).atan2(sxx - syy);
+    let (dir_x, dir_y) = (theta.cos(), theta.sin());
+    let (perp_x, perp_y) = (-dir_y, dir_x);
+    let mut t_min = f32::INFINITY;
+    let mut t_max = f32::NEG_INFINITY;
+    let mut r_max = 0.0f32;
+    for &(x, y) in polygon {
+        let (dx, dy) = (x - c.0, y - c.1);
+        let t = dx * dir_x + dy * dir_y;
+        t_min = t_min.min(t);
+        t_max = t_max.max(t);
+        r_max = r_max.max((dx * perp_x + dy * perp_y).abs());
+    }
+    if !t_min.is_finite() || t_max <= t_min {
+        return None;
+    }
+    const SPINE_SHRINK: f32 = 0.8;
+    let a = (
+        c.0 + dir_x * t_min * SPINE_SHRINK,
+        c.1 + dir_y * t_min * SPINE_SHRINK,
+    );
+    let b = (
+        c.0 + dir_x * t_max * SPINE_SHRINK,
+        c.1 + dir_y * t_max * SPINE_SHRINK,
+    );
+    Some((vec![a, b], r_max * 0.5))
+}
+
+/// even-odd 射线法点包含测试（自交环按栅格化口径处理，spec §12 裁定）。
+fn point_in_polygon(p: (f32, f32), polygon: &[(f32, f32)]) -> bool {
+    let (x, y) = p;
+    let n = polygon.len();
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = polygon[i];
+        let (xj, yj) = polygon[j];
+        if ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// 栅格化掩膜（spec §12 裁定的「按栅格化掩膜处理」）：
+///
+/// 1. `scratch = grid.clone()`；2. 闭包只改 `scratch`；
+/// 3. 只扫多边形 bbox，`多边形内`（扰动查询点，边缘有机化、偏离有界
+///    ≤ 2 格）的格子把 `scratch` 值拷回 `grid`——**掩膜外逐位不变**由构造保证。
+///
+/// 内层返回 0（无操作语义：纯海丘陵 / 湖心在海等）→ 整体返回 0，
+/// wv-app 据此发通知。
+fn apply_region_masked(
+    grid: &mut TerrainGrid,
+    polygon: &[(f32, f32)],
+    seed: u64,
+    cell_size: f32,
+    inner: impl FnOnce(&mut TerrainGrid) -> usize,
+) -> usize {
+    if polygon.len() < 3 || cell_size <= 0.0 {
+        return 0;
+    }
+    let mut scratch = grid.clone();
+    if inner(&mut scratch) == 0 {
+        return 0;
+    }
+    let wiggle = N2::new(seed, "mask-wiggle", 8.0, 3);
+    let Some((x0, y0, x1, y1)) = pts_bbox(grid, polygon, 3.0 * cell_size, cell_size) else {
+        return 0;
+    };
+    let mut copied = 0;
+    for gy in y0..=y1 {
+        for gx in x0..=x1 {
+            let wx = (gx as f32 + 0.5) * cell_size;
+            let wy = (gy as f32 + 0.5) * cell_size;
+            // 扰动查询点：边缘格按噪声进出，直边变有机边（偏离有界 ≤ 2 格）。
+            let qx = wx + wiggle.at(wx, wy) * 2.0 * cell_size;
+            let qy = wy + wiggle.at(wy, wx) * 2.0 * cell_size;
+            if !point_in_polygon((qx, qy), polygon) {
+                continue;
+            }
+            match (grid.get(gx, gy), scratch.get(gx, gy)) {
+                (Some(a), Some(b)) if a != b => {
+                    grid.set(gx, gy, b);
+                    copied += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    copied
+}
+
+/// 平原：掩膜内**陆格**压平到 [`PLAINS_TARGET_M`] ± [`PLAINS_NOISE_M`]，
+/// 类型写草原；海格不动（纯海选区 = 0 改动 → 上层通知）。
+fn apply_plains_region(
+    grid: &mut TerrainGrid,
+    polygon: &[(f32, f32)],
+    seed: u64,
+    cell_size: f32,
+) -> usize {
+    if cell_size <= 0.0 {
+        return 0;
+    }
+    let relief = N2::new(seed, "plains-relief", 40.0, 3);
+    let Some((x0, y0, x1, y1)) = pts_bbox(grid, polygon, cell_size, cell_size) else {
+        return 0;
+    };
+    let mut touched = 0;
+    for gy in y0..=y1 {
+        for gx in x0..=x1 {
+            let wx = (gx as f32 + 0.5) * cell_size;
+            let wy = (gy as f32 + 0.5) * cell_size;
+            if !point_in_polygon((wx, wy), polygon) {
+                continue;
+            }
+            let Some(cell0) = grid.get(gx, gy) else {
+                continue;
+            };
+            if is_water_cell(cell0) {
+                continue; // 只在陆上生效（spec §4 裁定）
+            }
+            let r = relief.at01(wx, wy) * 2.0 - 1.0;
+            let new_cell = TerrainCell {
+                height: to_height(PLAINS_TARGET_M + PLAINS_NOISE_M * r),
+                kind: KIND_GRASS,
+            };
+            if new_cell != cell0 {
+                grid.set(gx, gy, new_cell);
+                touched += 1;
+            }
+        }
+    }
+    touched
+}
+
+/// 湖泊：区域定湖界——质心须在陆上（沿 [`Intent::Lake`] 口径），掩膜内
+/// `h = min(原高, 碗剖面)`：中心 ≈ -[`LAKE_DEPTH_M`]、边缘 ≈ -[`LAKE_LIP_M`]，
+/// 类型写浅水；水自然积在碗里（h < 0）。
+fn apply_lake_region(grid: &mut TerrainGrid, polygon: &[(f32, f32)], cell_size: f32) -> usize {
+    if cell_size <= 0.0 {
+        return 0;
+    }
+    let Some(c) = polygon_centroid(polygon) else {
+        return 0;
+    };
+    // 湖心（质心）必须落在陆地上：点在海里不挖（`apply_lake` 同款裁决）。
+    let cgx = (c.0 / cell_size).floor() as i32;
+    let cgy = (c.1 / cell_size).floor() as i32;
+    match grid.get(cgx, cgy) {
+        Some(cell) if !is_water_cell(cell) => {}
+        _ => return 0,
+    }
+    let r_max = polygon
+        .iter()
+        .map(|&(x, y)| ((x - c.0).powi(2) + (y - c.1).powi(2)).sqrt())
+        .fold(0.0f32, f32::max);
+    if r_max <= 0.0 {
+        return 0;
+    }
+    let Some((x0, y0, x1, y1)) = pts_bbox(grid, polygon, cell_size, cell_size) else {
+        return 0;
+    };
+    let mut touched = 0;
+    for gy in y0..=y1 {
+        for gx in x0..=x1 {
+            let wx = (gx as f32 + 0.5) * cell_size;
+            let wy = (gy as f32 + 0.5) * cell_size;
+            if !point_in_polygon((wx, wy), polygon) {
+                continue;
+            }
+            let Some(cell0) = grid.get(gx, gy) else {
+                continue;
+            };
+            let d = ((wx - c.0).powi(2) + (wy - c.1).powi(2)).sqrt();
+            let tt = (d / r_max).min(1.0);
+            let target = -LAKE_DEPTH_M * (1.0 - tt * tt) - LAKE_LIP_M;
+            let new_cell = TerrainCell {
+                height: to_height((cell0.height as f32).min(target)),
+                kind: KIND_WATER_SHALLOW,
+            };
+            if new_cell != cell0 {
+                grid.set(gx, gy, new_cell);
+                touched += 1;
+            }
+        }
+    }
+    touched
+}
+
+// ---------------------------------------------------------------------------
 // 测试（AGENTS §7.2：核心公式用手算期望值，集成行为用性质断言）
 // ---------------------------------------------------------------------------
 
@@ -1357,5 +1647,222 @@ mod tests {
             strength: 1.1,
         };
         assert_ne!(a.derive_seed("map_x"), b.derive_seed("map_x"));
+    }
+
+    // ---- 区域意图（M3，spec §4 / §13）----
+
+    /// 2:1 长方形 → 脊线沿长轴（x 向），端点向质心收缩 20%；半径 = 短轴之半。
+    #[test]
+    fn massif_ridge_runs_along_long_axis() {
+        let rect = vec![(0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (0.0, 10.0)];
+        let (spine, radius) = region_spine(&rect).expect("正常多边形应有脊线");
+        assert_eq!(spine.len(), 2, "脊线是两段点");
+        let a = spine[0];
+        let b = spine[1];
+        assert!(
+            (a.1 - 5.0).abs() < 1e-4 && (b.1 - 5.0).abs() < 1e-4,
+            "y 应恒等于 5：{spine:?}"
+        );
+        assert!(
+            (a.0 - 2.0).abs() < 1e-4,
+            "t_min=-10 收缩 20% → x=2：got {a:?}"
+        );
+        assert!(
+            (b.0 - 18.0).abs() < 1e-4,
+            "t_max=+10 收缩 20% → x=18：got {b:?}"
+        );
+        assert!(
+            (radius - 2.5).abs() < 1e-4,
+            "短轴 10 之半 → 半径 2.5：got {radius}"
+        );
+    }
+
+    /// 高山群：掩膜内显著隆起（有的格 +500 m 以上、出山地类型），
+    /// 掩膜外**逐位不变**（spec §13 断言口径）。
+    #[test]
+    fn massif_raises_inside_and_keeps_outside_bitwise() {
+        let before = flat_land(64, 64, 100);
+        let polygon = vec![(16.0, 16.0), (48.0, 16.0), (48.0, 48.0), (16.0, 48.0)];
+        let mut g = before.clone();
+        let touched = apply_intent(
+            &mut g,
+            &Intent::MountainMassif {
+                polygon: polygon.clone(),
+            },
+            42,
+            1.0,
+        );
+        assert!(touched > 20, "掩膜内应大面积隆起：touched={touched}");
+        let mut raised = 0;
+        for gy in 16..48 {
+            for gx in 16..48 {
+                let c = g.get(gx, gy).expect("在界内");
+                if c.height >= 600 {
+                    raised += 1;
+                }
+            }
+        }
+        assert!(
+            raised > 0,
+            "掩膜内应有 +500 m 以上的山体格（100 m 底 + 500 m 增量）"
+        );
+        // 掩膜外（bbox 外三圈以外）逐位不变。
+        for gy in 0..64i32 {
+            for gx in 0..64i32 {
+                if (12..52).contains(&gx) && (12..52).contains(&gy) {
+                    continue;
+                }
+                assert_eq!(
+                    g.get(gx, gy),
+                    before.get(gx, gy),
+                    "掩膜外 ({gx},{gy}) 逐位不变"
+                );
+            }
+        }
+    }
+
+    /// 丘陵继承「只在陆上长」语义：纯海选区 = 0 改动；陆上选区有改动。
+    #[test]
+    fn hills_region_only_changes_land_cells() {
+        let polygon = vec![(20.0, 20.0), (44.0, 20.0), (44.0, 44.0), (20.0, 44.0)];
+        let mut sea = flat_sea(64, 64, -80);
+        let touched_sea = apply_intent(
+            &mut sea,
+            &Intent::HillsRegion {
+                polygon: polygon.clone(),
+            },
+            7,
+            1.0,
+        );
+        assert_eq!(touched_sea, 0, "纯海选区应无操作");
+        let mut land = flat_land(64, 64, 40);
+        let touched_land = apply_intent(&mut land, &Intent::HillsRegion { polygon }, 7, 1.0);
+        assert!(
+            touched_land > 10,
+            "陆上选区应有丘陵起伏：touched={touched_land}"
+        );
+    }
+
+    /// 平原：掩膜内 200 m 高地压平到 60±15 m 且出草原；海格与掩膜外不动。
+    #[test]
+    fn plains_region_flattens_land_to_target_band() {
+        let before = flat_land(64, 64, 200);
+        let polygon = vec![(16.0, 16.0), (48.0, 16.0), (48.0, 48.0), (16.0, 48.0)];
+        let mut g = before.clone();
+        let touched = apply_intent(
+            &mut g,
+            &Intent::PlainsRegion {
+                polygon: polygon.clone(),
+            },
+            9,
+            1.0,
+        );
+        assert!(touched > 100, "掩膜内应大面积压平：touched={touched}");
+        for gy in 16..48 {
+            for gx in 16..48 {
+                let c = g.get(gx, gy).expect("在界内");
+                let on_edge = !(20..=43).contains(&gx) || !(20..=43).contains(&gy);
+                if on_edge {
+                    // 边缘有机化（掩膜扰动）：贴边格允许保留原状或已压平。
+                    assert!(
+                        (45.0..=75.0).contains(&(c.height as f32)) || c.height == 200,
+                        "({gx},{gy}) 边缘格应为压平值或原值：got {}",
+                        c.height
+                    );
+                    continue;
+                }
+                assert!(
+                    (45.0..=75.0).contains(&(c.height as f32)),
+                    "({gx},{gy}) 应在 60±15 m：got {}",
+                    c.height
+                );
+                assert_eq!(c.kind, KIND_GRASS, "平原出草原");
+            }
+        }
+        for gy in 0..64i32 {
+            for gx in 0..64i32 {
+                if (14..50).contains(&gx) && (14..50).contains(&gy) {
+                    continue;
+                }
+                assert_eq!(
+                    g.get(gx, gy),
+                    before.get(gx, gy),
+                    "掩膜外 ({gx},{gy}) 逐位不变"
+                );
+            }
+        }
+    }
+
+    /// 湖泊：掩膜内挖成水面（中心最深、h<0 出浅水），质心在海 = 0 改动；
+    /// 掩膜外逐位不变。
+    #[test]
+    fn lake_region_digs_water_bowl_below_sea() {
+        let before = flat_land(64, 64, 100);
+        let polygon = vec![(20.0, 20.0), (44.0, 20.0), (44.0, 44.0), (20.0, 44.0)];
+        let mut g = before.clone();
+        let touched = apply_intent(
+            &mut g,
+            &Intent::LakeRegion {
+                polygon: polygon.clone(),
+            },
+            11,
+            1.0,
+        );
+        assert!(touched > 100, "掩膜内应成湖：touched={touched}");
+        let center = g.get(32, 32).expect("湖心在界内");
+        assert!(center.height < 0, "湖心应在水面以下：got {}", center.height);
+        assert_eq!(center.kind, KIND_WATER_SHALLOW, "湖面出浅水类型");
+        let rim = g.get(21, 32).expect("近边缘格在界内");
+        assert!(rim.height < 0, "近边缘仍是水面：got {}", rim.height);
+        assert!(
+            f32::from(rim.height) > f32::from(center.height),
+            "边缘应浅于中心：rim={} center={}",
+            rim.height,
+            center.height
+        );
+        // 质心在海 → 0 改动。
+        let mut sea = flat_sea(64, 64, -80);
+        let touched_sea = apply_intent(&mut sea, &Intent::LakeRegion { polygon }, 11, 1.0);
+        assert_eq!(touched_sea, 0, "湖心在海里应无操作");
+        for gy in 0..64i32 {
+            for gx in 0..64i32 {
+                if (18..46).contains(&gx) && (18..46).contains(&gy) {
+                    continue;
+                }
+                assert_eq!(
+                    g.get(gx, gy),
+                    before.get(gx, gy),
+                    "掩膜外 ({gx},{gy}) 逐位不变"
+                );
+            }
+        }
+    }
+
+    /// 退化环（空 / 两点）全部安全返回 0，不 panic（Review Focus 2）。
+    #[test]
+    fn degenerate_region_returns_zero_changes() {
+        let mut g = flat_land(32, 32, 50);
+        for polygon in [Vec::new(), vec![(1.0, 1.0), (2.0, 2.0)]] {
+            for intent in [
+                Intent::MountainMassif {
+                    polygon: polygon.clone(),
+                },
+                Intent::HillsRegion {
+                    polygon: polygon.clone(),
+                },
+                Intent::PlainsRegion {
+                    polygon: polygon.clone(),
+                },
+                Intent::LakeRegion {
+                    polygon: polygon.clone(),
+                },
+            ] {
+                assert_eq!(
+                    apply_intent(&mut g, &intent, 3, 1.0),
+                    0,
+                    "退化环应无操作：{intent:?}"
+                );
+            }
+        }
     }
 }
