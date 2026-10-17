@@ -209,14 +209,19 @@ pub mod builtin {
         atlas: None,
         // 设计与取值依据：`docs/superpowers/specs/2026-10-17-theme-overlay-geo-fact-design.md`
         // §6.4（D10：两内置包各一套，差异做在晕色 / 浓度 / 符号密度）。
-        // 日间：偏灰橄榄绿晕 + 深墨绿树冠，采样较疏（24wu）。
+        // 日间：偏灰橄榄绿晕 + 深墨绿树冠。
+        //
+        // `symbol_size_px` 是**屏幕像素**（spec §6.6：树冠符号 24–40 px）；
+        // `symbol_size_px * view.scale`（world-units-per-pixel）换成世界边长。
+        // `symbol_spacing_wu` 是**世界单位**采样间距——放大符号后同步放宽，
+        // 否则近带树冠会重叠成一片糊。
         overlays: FeatureOverlaySet {
             forest: Some(FeatureRule {
                 halo_color: [0x5F, 0x7A, 0x4A],
                 halo_alpha: 0.30,
                 symbol_color: [0x3F, 0x5A, 0x35],
-                symbol_size_px: 5.0,
-                symbol_spacing_wu: 24.0,
+                symbol_size_px: 28.0,
+                symbol_spacing_wu: 40.0,
                 // Task 9（D12）：日间走 3 变体树图集 + 森林盖层晕图章。
                 symbol_texture: Some("overlays/forest/tree_atlas_day.png"),
                 halo_texture: Some("overlays/forest/forest_fill.png"),
@@ -231,7 +236,8 @@ pub mod builtin {
         palette: PaletteColors::DUSK,
         treatment: TreatmentFlags::HAND_DRAWN,
         atlas: None,
-        // 暮色：压暗的橄榄绿晕 + 更深的树冠，晕更淡（0.20）、采样更密（16wu）
+        // 暮色：压暗的橄榄绿晕 + 更深的树冠，晕更淡（0.20）、符号略小
+        //（24 px，仍落在 spec §6.6 的 24–40 px）、采样比日间更密（32wu）
         // ——与 DEFAULT 在 halo_color / halo_alpha / symbol_size / spacing
         // 四项上都可见不同（D10 要求 ≥ 2 项）。
         overlays: FeatureOverlaySet {
@@ -239,8 +245,8 @@ pub mod builtin {
                 halo_color: [0x3E, 0x4A, 0x34],
                 halo_alpha: 0.20,
                 symbol_color: [0x28, 0x32, 0x24],
-                symbol_size_px: 4.0,
-                symbol_spacing_wu: 16.0,
+                symbol_size_px: 24.0,
+                symbol_spacing_wu: 32.0,
                 // Task 9：暮色符号走浅墨图集；晕保持纯色（贴图校准留待后续）。
                 symbol_texture: Some("overlays/forest/tree_atlas_dusk.png"),
                 halo_texture: None,
@@ -380,13 +386,13 @@ mod tests {
         );
         assert_eq!(rule.symbol_color, [0x3F, 0x5A, 0x35], "日间符号色");
         assert!(
-            (rule.symbol_size_px - 5.0).abs() < 1e-6,
-            "日间符号尺寸 5.0px，got {}",
+            (rule.symbol_size_px - 28.0).abs() < 1e-6,
+            "日间符号尺寸 28px（spec §6.6：24–40px），got {}",
             rule.symbol_size_px
         );
         assert!(
-            (rule.symbol_spacing_wu - 24.0).abs() < 1e-6,
-            "日间采样间距 24wu，got {}",
+            (rule.symbol_spacing_wu - 40.0).abs() < 1e-6,
+            "日间采样间距 40wu，got {}",
             rule.symbol_spacing_wu
         );
         assert_eq!(
@@ -455,8 +461,13 @@ mod tests {
             dusk.symbol_spacing_wu
         );
         assert!(
-            (dusk.symbol_spacing_wu - 16.0).abs() < 1e-6,
-            "暮色采样间距 16wu（比日间更密），got {}",
+            (dusk.symbol_size_px - 24.0).abs() < 1e-6,
+            "暮色符号尺寸 24px（spec §6.6 下限），got {}",
+            dusk.symbol_size_px
+        );
+        assert!(
+            (dusk.symbol_spacing_wu - 32.0).abs() < 1e-6,
+            "暮色采样间距 32wu（比日间 40wu 更密），got {}",
             dusk.symbol_spacing_wu
         );
     }

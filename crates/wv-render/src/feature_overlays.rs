@@ -31,7 +31,8 @@
 //! - `feature = Some(f)` 但主题没有 `f` 的规则：仍画中性灰绿晕
 //!   （`[0x6A, 0x70, 0x5A]`，alpha 0.12），不画符号——事实不因换主题消失；
 //! - 近带采样为空（无地形 / 全水 / 环退化）→ 只画晕，不画符号（空采样回退）；
-//! - 贴图键未知 / 解码失败 / 首帧未就绪 → 走纯色路径，不 panic、不空帧。
+//! - 贴图键未知 / 解码失败 → 走纯色路径，不 panic、不空帧（解码同步完成，
+//!   不存在「句柄未就绪」的首帧状态）。
 
 #![cfg(feature = "app")]
 
@@ -710,6 +711,15 @@ mod tests {
         assert!(
             embedded_texture("overlays/forest/does_not_exist.png").is_none(),
             "未知键不得命中内嵌表"
+        );
+    }
+
+    /// 非 PNG 字节 → 解码返回 `None`（调用方回退纯色，不 panic）。
+    #[test]
+    fn invalid_png_bytes_decode_to_none() {
+        assert!(
+            decode_texture(b"not a png").is_none(),
+            "非 PNG 字节必须解码失败并回退纯色"
         );
     }
 
