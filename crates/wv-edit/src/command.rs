@@ -247,6 +247,10 @@ impl EditCommand for IntentTerrainCommand {
             Intent::Volcano { .. } => "火山",
             Intent::Lake { .. } => "湖",
             Intent::River { .. } => "河",
+            Intent::MountainMassif { .. } => "高山群",
+            Intent::HillsRegion { .. } => "丘陵",
+            Intent::PlainsRegion { .. } => "平原",
+            Intent::LakeRegion { .. } => "湖泊",
         };
         format!("生成{what}")
     }
@@ -2043,6 +2047,59 @@ mod tests {
             cmd.apply(&mut world),
             Err(EditError::TerrainMismatch(_))
         ));
+    }
+
+    // ---- 区域意图命令（2026-10-17 选择工具 M3：复用 IntentTerrainCommand） ----
+
+    /// 区域意图经同一条命令路径：apply 改地形、revert 逐位复原（零新命令面）。
+    #[test]
+    fn region_intent_command_undo_restores_bitwise() {
+        let mut world = world_with_terrain(48);
+        let before_snapshot = world.terrain_of(&test_map()).cloned().unwrap();
+
+        // 用 MountainMassif（fixture 是海面，平原只在陆上生效会 0 改动——
+        // 压平带断言由 wv-terrain 的 plains 测试背书）。
+        let cmd = IntentTerrainCommand::new(
+            test_map(),
+            Intent::MountainMassif {
+                polygon: vec![(12.0, 12.0), (36.0, 12.0), (36.0, 36.0), (12.0, 36.0)],
+            },
+            1.0,
+        );
+        let dirty = cmd.apply(&mut world).unwrap();
+        assert_eq!(dirty, vec!["maps/world_main/terrain.bin".to_string()]);
+        let after = world.terrain_of(&test_map()).cloned().unwrap();
+        assert_ne!(before_snapshot, after, "apply 应在掩膜内隆起山体");
+
+        cmd.revert(&mut world).unwrap();
+        assert_eq!(
+            world.terrain_of(&test_map()).cloned().unwrap(),
+            before_snapshot,
+            "revert 后网格逐位复原"
+        );
+    }
+
+    /// 同一多边形两次构造 → 同 seed（spec：确定性，重放不漂移）。
+    #[test]
+    fn region_intent_seed_is_deterministic_for_same_polygon() {
+        let polygon = vec![(8.0, 8.0), (40.0, 8.0), (40.0, 40.0), (8.0, 40.0)];
+        let a = IntentTerrainCommand::new(
+            test_map(),
+            Intent::MountainMassif {
+                polygon: polygon.clone(),
+            },
+            1.0,
+        );
+        let b = IntentTerrainCommand::new(test_map(), Intent::MountainMassif { polygon }, 1.0);
+        assert_eq!(a.seed, b.seed, "同环同图 seed 必须一致");
+        let c = IntentTerrainCommand::new(
+            test_map(),
+            Intent::LakeRegion {
+                polygon: vec![(8.0, 8.0), (40.0, 8.0), (40.0, 40.0), (8.0, 40.0)],
+            },
+            1.0,
+        );
+        assert_ne!(a.seed, c.seed, "不同意图 seed 必须不同");
     }
 
     // ---- 意图笔刷命令（意图笔刷 plan v0.1） ----
