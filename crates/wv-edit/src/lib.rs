@@ -22,8 +22,8 @@ pub use command::{
     AddBuildingCommand, AddCityCommand, AddMapCommand, AddMeasurementCommand, AddPlaceCommand,
     AddPlaceEdgeCommand, AddRegionCommand, AddStreetSegmentCommand, ClearMeasurementsCommand,
     DeleteBuildingCommand, DeleteStreetSegmentCommand, EditCommand, EditError, EditResult,
-    MoveCityCommand, RemoveMeasurementCommand, RemoveRegionCommand, SetCityOutlineCommand,
-    SetMapOrientationCommand, UpdateRegionCommand,
+    GenerateContinentCommand, MoveCityCommand, RemoveMeasurementCommand, RemoveRegionCommand,
+    SetCityOutlineCommand, SetMapOrientationCommand, UpdateRegionCommand,
 };
 pub use history::{History, Transaction};
 

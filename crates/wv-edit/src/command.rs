@@ -7,6 +7,7 @@
 
 use wv_core::terrain::{TerrainCellData, TerrainData};
 use wv_core::World;
+use wv_terrain::continent::{generate_continents, ContinentParams};
 use wv_terrain::edit::{apply_stroke, Stroke};
 use wv_terrain::intent::{apply_intent, Intent};
 use wv_terrain::{TerrainCell, TerrainGrid};
@@ -255,6 +256,116 @@ impl EditCommand for IntentTerrainCommand {
         let mut grid = to_grid(&data)?;
         let snapshot: Vec<TerrainCell> = grid.cells().to_vec();
         apply_intent(&mut grid, &self.intent, self.seed, self.cell_size);
+        let mut before = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?;
+        before.clear();
+        let width = grid.width() as usize;
+        for (idx, (old, new)) in snapshot.iter().zip(grid.cells().iter()).enumerate() {
+            if old != new {
+                let gx = (idx % width) as i32;
+                let gy = (idx / width) as i32;
+                before.push((gx, gy, *old));
+            }
+        }
+        drop(before);
+        world.set_terrain(self.map.clone(), from_grid(grid));
+        Ok(vec![format!("maps/{}/terrain.bin", self.map)])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let before = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?;
+        let data = self.terrain(world)?.clone();
+        let mut grid = to_grid(&data)?;
+        for (gx, gy, cell) in before.iter() {
+            grid.set(*gx, *gy, *cell);
+        }
+        drop(before);
+        world.set_terrain(self.map.clone(), from_grid(grid));
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 大陆生成（大陆生成 UI plan v0.1 Task 1；README §12-40）
+// ---------------------------------------------------------------------------
+
+/// 大陆生成宏命令：一次 apply 完成「意图包络 → 大陆配方 → 双通道栅格」。
+///
+/// ## 与 [`IntentTerrainCommand`] 的两点差异
+///
+/// 1. **seed 显式传入**，不在构造时 derive——面板上有骰子按钮，同一个圈
+///    「重骰」语义要求作者能换 seed 再生成；意图笔刷的确定性来自
+///    `Intent::derive_seed`，大陆生成则把骰子交给作者。
+/// 2. 一次命令可带**多条包络**（多块大陆同批生成），撤销是 Q16 的
+///    原子语义：一撤全回。
+///
+/// before 缓存与 [`IntentTerrainCommand`] 同款：只记真正变过的格，
+/// 撤销逐格回放；`revert` 后 `before` 保留，redo 重放同一 seed 结果逐位一致。
+#[derive(Debug)]
+pub struct GenerateContinentCommand {
+    /// 目标地图 ID。
+    pub map: wv_core::Id,
+    /// 意图包络（每条 ≥ 3 点；世界单位）。图层面不落盘——只活在命令里。
+    pub envelopes: Vec<Vec<(f32, f32)>>,
+    /// 大陆配方八参数（全局单一面板）。
+    pub params: ContinentParams,
+    /// 骰子种子（面板「重骰」直接换这个值）。
+    pub seed: u64,
+    /// 每格世界边长。
+    pub cell_size: f32,
+    /// `apply` 时缓存的受影响格旧值：`(gx, gy, before_cell)`。
+    before: std::sync::Mutex<Vec<(i32, i32, TerrainCell)>>,
+}
+
+impl GenerateContinentCommand {
+    /// 按作者面板参数构造；`seed` 显式给出（见类型文档）。
+    pub fn new(
+        map: wv_core::Id,
+        envelopes: Vec<Vec<(f32, f32)>>,
+        params: ContinentParams,
+        seed: u64,
+        cell_size: f32,
+    ) -> Self {
+        Self {
+            map,
+            envelopes,
+            params,
+            seed,
+            cell_size,
+            before: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// 与 [`IntentTerrainCommand::terrain`] 同款：缺失栅格报 `TerrainMismatch`，
+    /// 不替作者凭空造尺寸（V1：只提示，不阻止）。
+    fn terrain<'a>(&self, world: &'a World) -> EditResult<&'a TerrainData> {
+        world
+            .terrain_of(&self.map)
+            .ok_or_else(|| EditError::TerrainMismatch(format!("地图 `{}` 无地形网格", self.map)))
+    }
+}
+
+impl EditCommand for GenerateContinentCommand {
+    fn label(&self) -> String {
+        "生成大陆".to_string()
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let data = self.terrain(world)?.clone();
+        let mut grid = to_grid(&data)?;
+        let snapshot: Vec<TerrainCell> = grid.cells().to_vec();
+        generate_continents(
+            &mut grid,
+            &self.envelopes,
+            &self.params,
+            self.seed,
+            self.cell_size,
+        );
         let mut before = self
             .before
             .lock()
@@ -3198,5 +3309,74 @@ mod tests {
         let cmd = AddPlaceEdgeCommand::new(edge("edge_orphan", "place_does_not_exist", "place_x"));
         cmd.apply(&mut w).expect("V1 允许悬空 endpoint");
         assert_eq!(w.distances.edges.len(), 1);
+    }
+
+    // ---- 大陆生成宏命令（大陆生成 UI plan Task 1） ----
+
+    fn continent_envelope() -> Vec<Vec<(f32, f32)>> {
+        vec![vec![(8.0, 8.0), (40.0, 8.0), (40.0, 40.0), (8.0, 40.0)]]
+    }
+
+    #[test]
+    fn generate_continent_apply_then_undo_restores_grid_cell_for_cell() {
+        let mut world = world_with_terrain(48);
+        let before_snapshot = world.terrain_of(&test_map()).cloned().unwrap();
+        let cmd = GenerateContinentCommand::new(
+            test_map(),
+            continent_envelope(),
+            ContinentParams::default(),
+            7,
+            1.0,
+        );
+        let dirty = cmd.apply(&mut world).unwrap();
+        assert_eq!(dirty, vec!["maps/world_main/terrain.bin".to_string()]);
+        let after = world.terrain_of(&test_map()).cloned().unwrap();
+        assert_ne!(before_snapshot, after, "apply 应改变地形");
+        assert!(
+            after.cells.iter().any(|c| c.height > 0),
+            "方形包络内应长出陆地"
+        );
+
+        cmd.revert(&mut world).unwrap();
+        assert_eq!(
+            world.terrain_of(&test_map()).cloned().unwrap(),
+            before_snapshot,
+            "撤销应逐格复原"
+        );
+    }
+
+    #[test]
+    fn generate_continent_missing_terrain_reports_mismatch_not_panic() {
+        let mut world = World::default();
+        let cmd = GenerateContinentCommand::new(
+            Id::new_unchecked("world_main"),
+            continent_envelope(),
+            ContinentParams::default(),
+            7,
+            1.0,
+        );
+        assert!(matches!(
+            cmd.apply(&mut world),
+            Err(EditError::TerrainMismatch(_))
+        ));
+    }
+
+    #[test]
+    fn generate_continent_empty_envelopes_is_a_noop_command() {
+        let mut world = world_with_terrain(32);
+        let before_snapshot = world.terrain_of(&test_map()).cloned().unwrap();
+        let cmd =
+            GenerateContinentCommand::new(test_map(), vec![], ContinentParams::default(), 7, 1.0);
+        cmd.apply(&mut world).unwrap();
+        assert_eq!(
+            world.terrain_of(&test_map()).cloned().unwrap(),
+            before_snapshot,
+            "空包络不得改动网格"
+        );
+        cmd.revert(&mut world).expect("空命令的 undo 不得炸");
+        assert_eq!(
+            world.terrain_of(&test_map()).cloned().unwrap(),
+            before_snapshot
+        );
     }
 }
