@@ -84,16 +84,29 @@ chunk 色块渲染、kind→颜色 ThemePack 调色板，**全链路已在**。
 
 - 场景 = `MapLevel::City` 或 `MapLevel::Interior` 的 MapNode（地下城用 Interior，
   村落/森林用 City 或 Region 级皆可——判定按「图级 ≠ World」，不按语义）。
+- **场景类型落数据（助手裁定，回应施工者审查 Q6）**：`MapNode` 增加可选
+  `scene_type: Option<SceneType>`（Settlement / Farmland / Forest / Dungeon），
+  建图时选、属性里可改。它驱动两件事：笔刷面板的分区词表瓷砖、生成器的参数集。
+  不落数据的话，作者每次进图都得重选词表，违背「放进去它就该是那个东西」的直觉。
 - 进入方式沿用现有双击钻入（`DrillState`），面包屑/返回零改动。
 - 场景图创建：`AddCityCommand` 已能建城+父图图标。新场景图**默认不带网格**，
-  首次刷色时自动引导生成一张「基底全未分区」的平坦网格（尺寸由 extent + cell_size 推，
+  首次刷色时自动引导生成一张「基底全未分区、height=0」的平坦网格（尺寸由 extent + cell_size 推，
   或给缺省 256×256——施工者定，倾向前者）。
+- **新建地图对话框要改（施工者审查 Q2，助手裁定）**：对话框目前对所有层级无条件预填
+  世界词表网格（海洋 kind 0 / -3500m）。「默认海洋」是作者 2026-10-16 对**世界图**的裁定，
+  不是对城市/地下城的。非 World 级不再预填海洋，改为不挂网格（走上面的首次刷色引导），
+  根治「首刷分区触发跨水陆高度改写」的路径。世界图行为不动。
 
 ### 5.3 生成器（第二阶段，R2）
 
 - 形态照抄 `GenerateContinentCommand` 先例：单命令宏，一次 apply 内
   「TerrainData→TerrainGrid → 按参数填 kind → 逐格 diff 缓存 before → 写回」，种子显式传入可重骰。
 - 参数面板：贫民/富人/普通居民占比 + 工业/商业/住宅面积比（其余归基底）。
+- **范围（助手裁定，回应施工者审查 Q1）**：生成器只服务**配比填色型**场景
+  （城市/村落/农田/森林）。**地下城不进生成器范围**——房间/走廊是连通性/拓扑问题，
+  按配比随机填出来的是互不连通的噪声块；地下城靠笔刷手工画
+  （这正是 R1「同一套范式」的含义——范式是刷和标，不是都有一键生成）。
+  将来若要地下城生成器（房间布局算法），另起设计。
 - 壳子来源：
   - 城市轮廓 = `MapNode.outline_polygon`（ADR-0022 已接受已落地）或 extent；
   - **穿城河流 = 读父图 TerrainGrid 的水域 kind/高度**（河流不是几何实体，
@@ -107,6 +120,8 @@ chunk 色块渲染、kind→颜色 ThemePack 调色板，**全链路已在**。
 - **新实体 `SceneMarker`**（助手裁定）：每图一文件 `maps/<map_id>/markers/<id>.yaml`
   （P2+每实体一文件），字段 `{ id, name: String, description: Option<String>,
   anchor: [f32;2], shape, color: Option<Color> }`——形状/颜色沿用 IconShape 词汇。
+  `anchor` 用**本图局部世界单位**（与街道/outline_polygon 同口径、与网格格对齐），
+  不走 IconSpec 的 extent 归一化——免得 extent 一变标记就漂移（回应审查 Q5）。
 - 配套 `AddSceneMarkerCommand` / `RemoveSceneMarkerCommand` / `UpdateSceneMarkerCommand`，
   照 Region 三命令（command.rs:1829+）现成模式。
 - 渲染：小图标 + 名字标签（描述进悬浮/详情面板，不常驻），复用 Poi/PlaceLabels 通道经验，
@@ -115,9 +130,16 @@ chunk 色块渲染、kind→颜色 ThemePack 调色板，**全链路已在**。
 
 ### 5.5 道路（第三阶段）
 
-- 数据已存在：`StreetSegment`（`RoadClass` 12 档 + 折线 + `time_span`），
-  `AddStreetSegmentCommand` 已在。缺的是**画街道的工具 UI** 和「几种宽度档位」的档位选择
-  ——宽度档=选 RoadClass，渲染宽度由街道渲染按 class 给，不新造宽度字段。
+- 【审查修正 Q4】画街道的工具 UI **已经存在**（`wv-render/src/streets.rs`：
+  左键逐点连线、右键结束，面板 12 档 `RoadClass` 下拉 + 名称 + 撤销），且不限图级。
+  真正缺的是两件：
+  ① **场景图 road 图层供给**——新场景图 `layers` 为空，而街道工具要求图上有
+  可见、未锁、带 source 的 road 图层，会在场景图上直接拒绝；建图时自动建，
+  或首次画路时引导建（施工者定）。
+  ② **场景宽度档位收敛**——作者原话「道路提供几种模式宽度」：场景模式给
+  大道/街道/小巷等 3 档左右预设（映射到 RoadClass 子集），12 档全量仍可展开。
+  档数与命名施工者定。
+- 渲染宽度由街道渲染按 class 给，不新造宽度字段。
 - 地下城通道=同一条 StreetSegment 路径，class 词表按主题包给场景级别名（可后议）。
 
 ### 5.6 存在时间段（第三阶段，R3）
@@ -138,7 +160,7 @@ chunk 色块渲染、kind→颜色 ThemePack 调色板，**全链路已在**。
 | **M1（MVP，先行）** | 场景分区刷色：场景图基底网格引导、场景 kind 词表+主题色板、笔刷面板场景模式、色块渲染、撤销 | 复用率极高，主体是接线；做完作者即可手工灌内容 |
 | M2 | 生成器（参数面板 + 填色宏命令 + 撤销/重骰） | 填的是 M1 的同一张格子 |
 | M3 | 标记点实体 + 三命令 + 渲染 + 详情面板 | |
-| M4 | 画道路工具 UI（宽度档=RoadClass 选择） | 数据层已就绪 |
+| M4 | 场景图 road 图层供给 + 场景宽度档位预设 | 审查修正：画路工具 UI 已存在，缺的是供给与档位收敛 |
 | M5 | 存在时间段：SetMapTimeSpanCommand + 图标时间过滤 + 无后继 Hint | |
 | 远期 | 模拟城市式建筑贴片、物件点放 | 另起设计，本设计不预设其形状 |
 
@@ -164,6 +186,10 @@ M1 单独交付即可用（R5）。M2–M5 顺序可按作者当时的需要调�
 - kind 编号最终分配（约束：>1，且不与现有世界地形编号冲突；建议 16 起）。
 - 门禁照 §7.1 全套：workspace test/clippy/fmt + `cargo app-test`/`app-clippy` +
   `bash scripts/smoke-gui.sh`（M1 触及渲染系统签名，烟测必跑）。
-- 术语登记（GLOSSARY.md）：场景编辑器 / 分区 / 填色器 / 存在时间段——实施首个 PR 顺带补。
-- ⚠️ 工作区注意（2026-10-17）：分支 `plan/2026-10-17-all-plans` 上另有并行会话的
-  wv-render 未提交改动（13 文件）。M1 实施应基于干净基线开新分支，先与所有者确认并行改动的归属。
+- 术语登记（GLOSSARY.md）：场景编辑器 / 分区 / 填色器 / 存在时间段 /
+  场景类型（scene_type）——实施首个 PR 顺带补。
+- ⚠️ 工作区注意（2026-10-17，审查复核为 **24 文件 / 6 crate**）：分支
+  `plan/2026-10-17-all-plans` 上有并行会话未提交改动，且不止渲染层——含
+  `wv-edit/history.rs`（撤销）、`wv-terrain/continent.rs`（M2 先例路径）、
+  `wv-app/edit/editing.rs`（M1 笔刷分发），**正压在 M1/M2 的改动面上**。
+  M1 开工前必须由所有者裁决这批改动的归属（先落库 or 另说），再定基线分支。
