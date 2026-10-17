@@ -12,7 +12,7 @@
 
 use crate::generate::Perlin;
 use crate::intent::{KIND_GRASS, KIND_HILL, KIND_MOUNTAIN, KIND_WATER_SHALLOW};
-use crate::{TerrainCell, TerrainKind};
+use crate::{TerrainCell, TerrainGrid, TerrainKind};
 
 // ---------------------------------------------------------------------------
 // 八参数（大陆配方属性面板 v1）
@@ -297,13 +297,7 @@ pub(crate) fn land_height(
     let t = (d / denom).clamp(0.0, 1.0);
     let base = peak * t;
     let scale = (inradius * 0.25).max(1.0);
-    let n = noise.fbm(
-        (p.0 / scale) as f64,
-        (p.1 / scale) as f64,
-        4,
-        2.0,
-        0.5,
-    );
+    let n = noise.fbm((p.0 / scale) as f64, (p.1 / scale) as f64, 4, 2.0, 0.5);
     let fbm01 = ((n * 0.5 + 1.0) as f32).clamp(0.0, 1.0);
     let h = base * (0.7 + 0.6 * fbm01);
     h.round().clamp(0.0, i16::MAX as f32) as i16
@@ -416,6 +410,122 @@ pub(crate) fn blended(
     }
 }
 
+// ---------------------------------------------------------------------------
+// 组装入口
+// ---------------------------------------------------------------------------
+
+/// 大陆架浅水深度（米）。与 `MapBase::Ocean` 的 −3500 m 深水基线拉开量级，
+/// 但保持在海平面以下——浅水是"岸的延伸"，不是陆。
+const SHELF_DEPTH_M: i16 = -40;
+/// 离岸小岛高度（米）——「低丘陵档」，远看是一点深色而非山峰。
+const ISLAND_HEIGHT_M: i16 = 120;
+
+/// 生成大陆：就地写 `grid`，返回改动格数。
+///
+/// 遍历范围 = 联合包络 bbox 外扩 `扰动幅度 + 大陆架 + 离岸带`；格心坐标
+/// `(gx+0.5)×cell_size`（Q4 口径）。分三类落笔：
+///
+/// - `d ≥ 0`：陆地——径向高度剖面 + Q5 分带 + 与既有地形融合；
+/// - `d ∈ [-shelf_wu, 0)`：大陆架浅水；
+/// - 更外侧：仅当 `islands ≠ Off` 且低频噪声过阈，撒 1 格小岛。
+///
+/// **深水基线不被重写**：海洋格（−3500 m / kind 0）只在变成大陆架或岛屿时
+/// 才改动，返回的改动格数因此也是命令层 before 缓存的规模。
+///
+/// 退化输入（空 envelopes / 任一多边形 < 3 点 / 非正 cell_size）零改动返回 0，
+/// 不 panic（V1 精神：作者画错了不阻止，也不炸）。
+pub fn generate_continents(
+    grid: &mut TerrainGrid,
+    envelopes: &[Vec<(f32, f32)>],
+    params: &ContinentParams,
+    seed: u64,
+    cell_size: f32,
+) -> usize {
+    if cell_size <= 0.0 || !cell_size.is_finite() || envelopes.is_empty() {
+        return 0;
+    }
+    if envelopes.iter().any(|poly| poly.len() < 3) {
+        return 0;
+    }
+    let Some((min, max)) = polygon_bbox(envelopes) else {
+        return 0;
+    };
+    let w = max.0 - min.0;
+    let h = max.1 - min.1;
+    if !(w > 0.0 && h > 0.0) {
+        return 0;
+    }
+    let diag = (w * w + h * h).sqrt();
+    // 内半径 = 0.5 × sqrt(bbox 面积)：方形包络下即半边长，
+    // 长条包络下按面积开方取等效半径（不会因一条窄带而高度骤降）。
+    let inradius = 0.5 * (w * h).sqrt();
+
+    let amp = params.coast_wiggle * 0.10 * diag;
+    let shelf_wu = params.shelf_cells as f32 * cell_size;
+    let offshore = 8.0 * cell_size;
+    let expand = amp + shelf_wu + offshore;
+
+    let coast_noise = Perlin::new(seed);
+    let land_noise = Perlin::new(seed ^ 0x9E37_79B9_7F4A_7C15);
+    let island_noise = Perlin::new(seed ^ 0xD1B5_4A32_D192_ED03);
+
+    let x0 = (((min.0 - expand) / cell_size).floor() as i32).max(0);
+    let y0 = (((min.1 - expand) / cell_size).floor() as i32).max(0);
+    let x1 = (((max.0 + expand) / cell_size).ceil() as i32).min(grid.width() as i32 - 1);
+    let y1 = (((max.1 + expand) / cell_size).ceil() as i32).min(grid.height() as i32 - 1);
+    if x0 > x1 || y0 > y1 {
+        return 0;
+    }
+
+    let mut touched = 0usize;
+    for gy in y0..=y1 {
+        for gx in x0..=x1 {
+            let p = ((gx as f32 + 0.5) * cell_size, (gy as f32 + 0.5) * cell_size);
+            let d = coast_field(p, envelopes, params, &coast_noise, diag);
+            let Some(existing) = grid.get(gx, gy) else {
+                continue;
+            };
+            let new_cell = if d >= 0.0 {
+                let height = land_height(d, inradius, params, &land_noise, p);
+                let kind = band_kind(height, d, params, &land_noise, p, diag, shelf_wu);
+                blended(existing, height, kind, d, cell_size)
+            } else if d > -shelf_wu {
+                // 大陆架：深水抬到浅水；既有陆地（含作者先画的岛）原样保留。
+                if existing.height > 0 {
+                    continue;
+                }
+                TerrainCell {
+                    height: existing.height.max(SHELF_DEPTH_M),
+                    kind: KIND_WATER_SHALLOW,
+                }
+            } else if params.islands != IslandDensity::Off {
+                if existing.height > 0 {
+                    continue;
+                }
+                let scale = (diag * 0.5).max(1.0);
+                let n = fbm01(&island_noise, (p.0 / scale) as f64, (p.1 / scale) as f64, 2);
+                if n as f64 <= params.islands.threshold() {
+                    continue;
+                }
+                let height = (ISLAND_HEIGHT_M as f32 * (0.6 + 0.4 * n))
+                    .round()
+                    .clamp(0.0, i16::MAX as f32) as i16;
+                TerrainCell {
+                    height,
+                    kind: KIND_HILL,
+                }
+            } else {
+                continue;
+            };
+            if new_cell != existing {
+                grid.set(gx, gy, new_cell);
+                touched += 1;
+            }
+        }
+    }
+    touched
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,11 +544,23 @@ mod tests {
     #[test]
     fn default_params_match_ruling_values() {
         let p = ContinentParams::default();
-        assert!((p.coast_wiggle - 0.40).abs() < 1e-6, "coast_wiggle 得 {}", p.coast_wiggle);
+        assert!(
+            (p.coast_wiggle - 0.40).abs() < 1e-6,
+            "coast_wiggle 得 {}",
+            p.coast_wiggle
+        );
         assert_eq!(p.coast_octaves, 4, "coast_octaves 得 {}", p.coast_octaves);
         assert_eq!(p.relief, ReliefLevel::Mountains, "relief 得 {:?}", p.relief);
-        assert!((p.forest_cover - 0.30).abs() < 1e-6, "forest_cover 得 {}", p.forest_cover);
-        assert!((p.desert_cover - 0.15).abs() < 1e-6, "desert_cover 得 {}", p.desert_cover);
+        assert!(
+            (p.forest_cover - 0.30).abs() < 1e-6,
+            "forest_cover 得 {}",
+            p.forest_cover
+        );
+        assert!(
+            (p.desert_cover - 0.15).abs() < 1e-6,
+            "desert_cover 得 {}",
+            p.desert_cover
+        );
         assert_eq!(p.shelf_cells, 8, "shelf_cells 得 {}", p.shelf_cells);
         assert_eq!(p.islands, IslandDensity::Off, "islands 得 {:?}", p.islands);
     }
@@ -448,8 +570,10 @@ mod tests {
         let sq = vec![vec![(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]];
         // 计划原文这里写 `default()` 却称 wiggle=0；缺省是 0.40，实际属性是
         // 「wiggle=0 时扰动为零」，故显式置 0（Ruling 见 ledger）。
-        let mut p = ContinentParams::default();
-        p.coast_wiggle = 0.0;
+        let p = ContinentParams {
+            coast_wiggle: 0.0,
+            ..Default::default()
+        };
         let n = Perlin::new(42);
         let f = coast_field((50.0, 50.0), &sq, &p, &n, 141.42);
         assert!((f - 50.0).abs() < 1e-3, "wiggle=0 应等于裸距离 50，got {f}");
@@ -457,9 +581,11 @@ mod tests {
 
     #[test]
     fn higher_cells_never_have_lower_priority_kind() {
-        let mut p = ContinentParams::default();
-        p.forest_cover = 0.0;
-        p.desert_cover = 0.0;
+        let p = ContinentParams {
+            forest_cover: 0.0,
+            desert_cover: 0.0,
+            ..Default::default()
+        };
         let n = Perlin::new(7);
         let rank = |k: TerrainKind| -> u8 {
             match k {
@@ -509,6 +635,110 @@ mod tests {
         let shelf_wu = p.shelf_cells as f32 * cell_size;
         let k = band_kind(-40, -2.0 * cell_size, &p, &n, (10.0, 10.0), 200.0, shelf_wu);
         assert_eq!(k, crate::intent::KIND_WATER_SHALLOW, "大陆架带应为浅水");
+    }
+
+    #[test]
+    fn same_seed_produces_bitwise_identical_grids() {
+        let env = vec![vec![
+            (64.0, 64.0),
+            (448.0, 64.0),
+            (448.0, 240.0),
+            (64.0, 240.0),
+        ]];
+        let mut a = TerrainGrid::new(64, 64);
+        let mut b = TerrainGrid::new(64, 64);
+        let n1 = generate_continents(&mut a, &env, &ContinentParams::default(), 7, 8.0);
+        let n2 = generate_continents(&mut b, &env, &ContinentParams::default(), 7, 8.0);
+        assert_eq!(a, b, "同 seed 应逐位一致");
+        assert_eq!(n1, n2, "改动格数也应一致");
+    }
+
+    #[test]
+    fn zero_wiggle_generation_stays_inside_envelope_minus_shelf_growth() {
+        let env = vec![vec![
+            (64.0, 64.0),
+            (448.0, 64.0),
+            (448.0, 240.0),
+            (64.0, 240.0),
+        ]];
+        let p = ContinentParams {
+            coast_wiggle: 0.0,
+            islands: IslandDensity::Off,
+            ..Default::default()
+        };
+        let mut g = TerrainGrid::new(64, 64);
+        generate_continents(&mut g, &env, &p, 11, 8.0);
+        let shelf_wu = p.shelf_cells as f32 * 8.0;
+        let mut land = 0;
+        for y in 0..64i32 {
+            for x in 0..64i32 {
+                let c = g.get(x, y).expect("in bounds");
+                if c.height > 0 {
+                    land += 1;
+                    let p = ((x as f32 + 0.5) * 8.0, (y as f32 + 0.5) * 8.0);
+                    let d = signed_distance(p, &env[0]);
+                    assert!(
+                        d > -shelf_wu,
+                        "格 ({x},{y}) 高度 {} 却离岸 {}（shelf {shelf_wu}）",
+                        c.height,
+                        d
+                    );
+                }
+            }
+        }
+        assert!(land > 0, "方形包络内应长出陆地");
+    }
+
+    #[test]
+    fn degenerate_inputs_change_nothing() {
+        let p = ContinentParams::default();
+        let mut g = TerrainGrid::new(8, 8);
+        let before = g.clone();
+        assert_eq!(generate_continents(&mut g, &[], &p, 1, 8.0), 0);
+        let two_pts = vec![vec![(0.0, 0.0), (10.0, 10.0)]];
+        assert_eq!(generate_continents(&mut g, &two_pts, &p, 1, 8.0), 0);
+        let env_ok = vec![vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)]];
+        assert_eq!(
+            generate_continents(&mut g, &env_ok, &p, 1, 0.0),
+            0,
+            "非正 cell_size"
+        );
+        assert_eq!(g, before, "退化输入不得改动网格");
+    }
+
+    #[test]
+    fn different_seed_different_layout_and_existing_land_survives() {
+        let env = vec![vec![
+            (64.0, 64.0),
+            (448.0, 64.0),
+            (448.0, 240.0),
+            (64.0, 240.0),
+        ]];
+        let p = ContinentParams::default();
+        let mut a = TerrainGrid::new(64, 64);
+        let mut b = TerrainGrid::new(64, 64);
+        generate_continents(&mut a, &env, &p, 1, 8.0);
+        generate_continents(&mut b, &env, &p, 2, 8.0);
+        assert_ne!(a, b, "不同 seed 应给出不同布局");
+
+        // 既有陆地（作者先画的岛）在任何 seed 下都不得被压低。
+        let mut g = TerrainGrid::new(64, 64);
+        // 选包络内部（距边 60 wu > 6 格融合带）：海岸带允许过渡，
+        // 内部才是「只增不减」的硬契约。
+        g.set(
+            30,
+            15,
+            TerrainCell {
+                height: 900,
+                kind: KIND_HILL,
+            },
+        );
+        generate_continents(&mut g, &env, &p, 3, 8.0);
+        assert!(
+            g.get(30, 15).expect("in bounds").height >= 900,
+            "既有 900 m 陆地被压低为 {}",
+            g.get(30, 15).expect("in bounds").height
+        );
     }
 
     #[test]
