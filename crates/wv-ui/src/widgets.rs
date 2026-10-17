@@ -91,6 +91,7 @@ pub use primitives::{
     ICON_RULER,
     ICON_SEARCH,
     ICON_SQUARE,
+    ICON_SQUARE_CHECK,
     ICON_TREES,
     ICON_VOLCANO,
     ICON_ZOOM_IN,

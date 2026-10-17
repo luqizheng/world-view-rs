@@ -104,6 +104,8 @@ pub mod ui;
 #[cfg(feature = "app")]
 pub mod ui_command_palette;
 #[cfg(feature = "app")]
+pub mod ui_gallery;
+#[cfg(feature = "app")]
 pub mod ui_layout;
 #[cfg(feature = "app")]
 pub mod ui_shell;

@@ -428,6 +428,9 @@ pub const ICON_ALERT: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/triangle-alert.svg");
 pub const ICON_CHECK: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/circle-check.svg");
+// 方框勾（Figma 42:2 `square-check`；check_row 勾选块用）。
+pub const ICON_SQUARE_CHECK: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/square-check.svg");
 pub const ICON_COMMAND: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/command.svg");
 pub const ICON_MAP_PIN: egui::ImageSource<'static> =

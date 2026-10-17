@@ -20,7 +20,7 @@ use bevy_egui::egui;
 use crate::shell::UiShell;
 use crate::ui_tokens::{font_size, radius, space};
 
-use super::primitives::{icon_image, ICON_CHECK, ICON_CHEVRON_DOWN};
+use super::primitives::{icon_image, ICON_CHEVRON_DOWN, ICON_SQUARE_CHECK};
 
 // ── FieldInput（单行文本输入）───────────────────────────────────────
 
@@ -79,21 +79,54 @@ impl<'a> FieldInput<'a> {
 
     /// 装配并落地。返回的 `Response` 可用 `.changed() / .lost_focus() / ...`
     /// 继续串行检查。
+    ///
+    /// ## 框式外观（2026-10-18，对齐 web 原型 `.inp`）
+    ///
+    /// 设计稿的输入框不是裸 `TextEdit`：`bg_app` 内嵌底 + `border_strong` 1px
+    /// 描边 + `radius::CONTROL` 圆角 + 左右 8 / 上下 3 内边距（合成 26px 高，
+    /// 与 `index.html .inp` 同档）。`TextEdit` 自身的背景/边框被关闭，视觉
+    /// 全部由外层 `Frame` 承担——焦点态仍由 egui 光标与选中色表达。
+    ///
+    /// `min_size` 覆盖的是**整框外尺寸**：内部编辑区自动扣掉内边距与描边，
+    /// 老调用点（罗盘朝向输入框 60×28）几何不变。
     pub fn show(self, ui: &mut egui::Ui, shell: &UiShell) -> egui::Response {
-        let mut edit = egui::TextEdit::singleline(self.value)
-            .hint_text(&self.hint)
-            .desired_width(if self.fill_width { f32::INFINITY } else { 0.0 });
-        if self.font_mono {
-            edit = edit.font(crate::ui_theme::mono(shell.scale.input));
-        }
-        if let Some(sz) = self.min_size {
-            edit = edit.min_size(sz);
-        }
-        let resp = ui.add(edit);
-        if self.focus_on_add {
-            resp.request_focus();
-        }
-        resp
+        const PAD_X: f32 = 8.0;
+        const PAD_Y: f32 = 3.0;
+        const STROKE: f32 = 1.0;
+        let frame = egui::Frame::default()
+            .fill(crate::ui_theme::color32(shell.palette.bg_app))
+            .stroke(egui::Stroke::new(STROKE, shell.border_strong()))
+            .corner_radius(radius::CONTROL)
+            .inner_margin(crate::ui_theme::margin_xy(PAD_X, PAD_Y));
+        let mut out = None;
+        frame.show(ui, |ui| {
+            let mut edit = egui::TextEdit::singleline(self.value)
+                .hint_text(&self.hint)
+                .desired_width(if self.fill_width { f32::INFINITY } else { 0.0 })
+                .background_color(egui::Color32::TRANSPARENT)
+                .margin(egui::Margin::ZERO)
+                .frame(egui::Frame::NONE);
+            if self.font_mono {
+                edit = edit.font(crate::ui_theme::mono(shell.scale.input));
+            }
+            // 外尺寸 → 内尺寸：扣掉两侧内边距与描边，保持老调用点几何不变。
+            let inner_min = self
+                .min_size
+                .map(|s| {
+                    egui::vec2(
+                        (s.x - 2.0 * (PAD_X + STROKE)).max(0.0),
+                        (s.y - 2.0 * (PAD_Y + STROKE)).max(0.0),
+                    )
+                })
+                .unwrap_or(egui::vec2(0.0, 18.0));
+            edit = edit.min_size(inner_min);
+            let resp = ui.add(edit);
+            if self.focus_on_add {
+                resp.request_focus();
+            }
+            out = Some(resp);
+        });
+        out.expect("Frame::show 必然执行一次")
     }
 }
 
@@ -554,7 +587,10 @@ pub fn check_row(
         // `ui.put` 左上锚定——勾号须落方块的**居中**矩形。
         let check_rect =
             egui::Rect::from_center_size(box_rect.center(), egui::vec2(BOX - 2.0, BOX - 2.0));
-        let _ = ui.put(check_rect, icon_image(ICON_CHECK, shell.t1(), BOX - 2.0));
+        let _ = ui.put(
+            check_rect,
+            icon_image(ICON_SQUARE_CHECK, shell.t1(), BOX - 2.0),
+        );
     }
     // 标签（11px t2，Figma body-small 对位 MICRO）。
     ui.painter().text(

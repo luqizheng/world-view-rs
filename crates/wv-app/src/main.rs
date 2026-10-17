@@ -124,6 +124,18 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         }
+        Some("gallery") => {
+            #[cfg(feature = "app")]
+            {
+                wv_app::ui_gallery::run();
+                ExitCode::SUCCESS
+            }
+            #[cfg(not(feature = "app"))]
+            {
+                eprintln!("{}", t(wv_app::i18n::I18nKey::CliGuiNotCompiled));
+                ExitCode::from(2)
+            }
+        }
         Some("--help") | Some("-h") | None => {
             print_help();
             ExitCode::SUCCESS
@@ -150,6 +162,7 @@ fn print_help() {
          {raster}\n\
          {overture}\n\
          {gui}\n\
+         {gallery}\n\
          {lang}\n\
          {help}",
         banner = t(wv_app::i18n::I18nKey::CliHelpBanner),
@@ -159,6 +172,7 @@ fn print_help() {
         raster = t(wv_app::i18n::I18nKey::CliHelpRasterSlice),
         overture = t(wv_app::i18n::I18nKey::CliHelpOvertureFetch),
         gui = t(wv_app::i18n::I18nKey::CliHelpGui),
+        gallery = t(wv_app::i18n::I18nKey::CliHelpGallery),
         lang = t(wv_app::i18n::I18nKey::CliLanguageFlagHelp),
         help = t(wv_app::i18n::I18nKey::CliHelpHelp),
     );

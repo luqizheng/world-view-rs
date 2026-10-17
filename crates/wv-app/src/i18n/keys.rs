@@ -745,6 +745,8 @@ pub enum I18nKey {
     CliHelpOvertureApply,
     /// help banner「wv gui ...」+ 描述
     CliHelpGui,
+    /// help banner「wv gallery」+ 描述
+    CliHelpGallery,
     /// help banner「wv --help」+ 描述
     CliHelpHelp,
     /// 「用法: wv raster-slice <工程目录> <map_id> [size]」
@@ -929,7 +931,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 390] = [
+    pub const ALL: [I18nKey; 391] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1294,6 +1296,7 @@ impl I18nKey {
         I18nKey::CliHelpOvertureFetch,
         I18nKey::CliHelpOvertureApply,
         I18nKey::CliHelpGui,
+        I18nKey::CliHelpGallery,
         I18nKey::CliHelpHelp,
         I18nKey::CliUsageRasterSlice,
         I18nKey::CliUsageRasterSliceMapId,
