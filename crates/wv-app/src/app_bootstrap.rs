@@ -30,6 +30,7 @@ use wv_render::brush_cursor;
 use wv_render::buildings;
 use wv_render::camera;
 use wv_render::faction_overlays;
+use wv_render::feature_overlays;
 use wv_render::layer_frame;
 use wv_render::map_frame;
 use wv_render::streets;
@@ -145,6 +146,9 @@ pub fn run(config: AppConfig) {
     // 势力多边形层（S12）：同属「每帧 despawn+spawn 的实体集合」资源，
     // 漏 init 会在首帧 panic（`could not access system parameter`）。
     .init_resource::<faction_overlays::FactionOverlayEntities>()
+    // 事实地界覆盖层（theme overlay）：与势力层同族的「每帧 despawn+spawn」
+    // 实体集合资源，漏 init 会在首帧 panic。
+    .init_resource::<feature_overlays::FeatureOverlayEntities>()
     .init_resource::<brush_cursor::BrushCursorEntities>()
     .init_resource::<map_frame::MapFrameEntities>()
     .init_resource::<terrain_chunks::TerrainChunkEntities>()
@@ -241,6 +245,9 @@ pub fn run(config: AppConfig) {
             streets::update_street_labels,
             // 势力多边形叠加层（S12 v0.1）：在矢量层之后、地图外框之前。
             faction_overlays::sync_faction_overlays,
+            // 事实地界覆盖层（theme overlay）：地盘随 (图, 日, 缩放) 求值，
+            // 排在势力层之后、地图外框之前（z 由各层常量决定，与顺序无关）。
+            feature_overlays::sync_feature_overlays,
             // 地图外框 + 1/4 幅面参考网格（外框需地形尺寸）。
             map_frame::sync_map_frame,
         )

@@ -54,6 +54,7 @@ pub enum PassId {
     EventDots,
     DrillMarkers,
     Atmosphere,
+    FeatureOverlay,
 }
 
 impl PassId {
@@ -79,10 +80,11 @@ impl PassId {
         PassId::EventDots,
         PassId::DrillMarkers,
         PassId::Atmosphere,
+        PassId::FeatureOverlay,
     ];
 
     /// pass 总数（数组长度 = `PassId::COUNT`）。
-    pub const COUNT: usize = 20;
+    pub const COUNT: usize = 21;
 }
 
 /// 单条 pass 的元信息（ADR-0021 §2 D1 §3）。
@@ -145,7 +147,8 @@ impl Default for RenderRecipe {
 /// 为准**（等价迁移，不借机改语义）：
 /// - Isoline 仅 VectorFlat（`isoline_overlay.rs` 原 gate：`mode != VectorFlat → despawn`）；
 /// - Buildings / Atmosphere / Veil / Grain 排除 GoogleMap | Coastline；
-/// - Faction 仅 Faction 模式。
+/// - Faction 仅 Faction 模式；
+/// - FeatureOverlay 除 Coastline 外全开（主题地界覆盖层，轮廓图只留轮廓）。
 ///
 /// **新增模式时**加一行；**改语义时**改对应行并同步测试锚定。
 #[rustfmt::skip]
@@ -172,36 +175,43 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true,  // EventDots
         true,  // DrillMarkers
         true,  // Atmosphere
+        true,  // FeatureOverlay
     ]),
     // 真实地形（plan v0.1 D3 B 类）——与 VectorFlat 同，除等值线（仅 VectorFlat）。
     (ViewMode::RealTerrain, [
         true, false, true, true, true, true, true, true, true, true,
         false, true, true, true, true, true, true, true, true, true,
+        true,
     ]),
     // 色块地形（plan v0.1 D3 C 类）——同上。
     (ViewMode::Schematic, [
         true, false, true, true, true, true, true, true, true, true,
         false, true, true, true, true, true, true, true, true, true,
+        true,
     ]),
     // Google 模式 —— 自带完整观感：等值线 / 氛围族 / 建筑不画。
     (ViewMode::GoogleMap, [
         true, false, true, true, false, true, true, true, true, false,
         false, true, true, true, true, true, true, true, true, false,
+        true,
     ]),
     // 势力图 —— 等值线不画，其余与真实地形同。
     (ViewMode::Faction, [
         true, false, true, true, true, true, true, true, true, true,
         true, true, true, true, true, true, true, true, true, true,
+        true,
     ]),
     // 事件图 —— 极简底图。
     (ViewMode::Event, [
         true, false, true, true, true, true, true, true, true, true,
         false, true, true, true, true, true, true, true, true, true,
+        true,
     ]),
     // 轮廓图（黑底分析视图）—— 大部分装饰关。
     (ViewMode::Coastline, [
         true, false, true, true, false, false, true, true, true, false,
         false, true, true, true, true, true, true, true, true, false,
+        false, // FeatureOverlay：轮廓图只留轮廓
     ]),
 ];
 
@@ -243,7 +253,7 @@ pub fn resolve_render_recipe(
         }
     }
     if !layers.place.visible {
-        for id in [PassId::Poi, PassId::PlaceLabels] {
+        for id in [PassId::Poi, PassId::PlaceLabels, PassId::FeatureOverlay] {
             passes[id as usize].enabled = false;
         }
     }
@@ -386,8 +396,43 @@ mod tests {
 
     /// PassId::COUNT = ALL 长度 = MODE_TABLE 行长（编译期硬保证）。
     #[test]
-    fn pass_id_count_matches() {
-        assert_eq!(PassId::ALL.len(), PassId::COUNT);
+    fn pass_id_count_matches_all_len() {
+        assert_eq!(
+            PassId::ALL.len(),
+            PassId::COUNT,
+            "PassId::ALL 长度应等于 COUNT"
+        );
+    }
+
+    /// FeatureOverlay 在除轮廓图外的全部模式默认开：主题地界晕 / 近景符号
+    /// 是浏览态的一等图层，不是某模式专属装饰。
+    #[test]
+    fn feature_overlay_enabled_in_all_modes_except_coastline() {
+        let (mut view, layers, world, drill, tex) = fixture();
+        for m in ViewMode::ALL {
+            view.mode = m;
+            let want = !matches!(m, ViewMode::Coastline);
+            let r = resolve_render_recipe(&view, &layers, &world, &drill, &tex, None);
+            assert_eq!(
+                r.enabled(PassId::FeatureOverlay),
+                want,
+                "{m:?} 下 FeatureOverlay 应为 {want}"
+            );
+        }
+    }
+
+    /// 地点图层（`LayerFrame.place`）关闭 → 事实地界随 POI 一起退场
+    /// （`!layers.place.visible` 级联，AGENTS §3 / ADR-0013）。
+    #[test]
+    fn hiding_place_layer_disables_feature_overlay() {
+        let (view, mut layers, world, drill, tex) = fixture();
+        layers.place.visible = false;
+        let r = resolve_render_recipe(&view, &layers, &world, &drill, &tex, None);
+        assert!(
+            !r.enabled(PassId::FeatureOverlay),
+            "地点层关 → FeatureOverlay 必关"
+        );
+        assert!(!r.enabled(PassId::Poi), "对照：POI 同关");
     }
 
     /// 未知模式 = 全关（fail-safe）。
