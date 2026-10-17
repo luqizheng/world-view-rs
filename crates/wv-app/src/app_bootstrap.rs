@@ -150,6 +150,8 @@ pub fn run(config: AppConfig) {
     .init_resource::<streets::StreetEditorState>()
     .init_resource::<crate::state::MeasureState>()
     .init_resource::<crate::state::CityToolState>()
+    // 大陆生成意图包络（会话态；不落盘）
+    .init_resource::<wv_render::state::ContinentSketch>()
     .init_resource::<wv_render::measurement::MeasurementCache>()
     // 主题包（ADR-0023 M1）：当前 `map_palette` 仍为权威源，本 Resource 仅作
     // 入口就位、不被任何渲染系统消费；M2 切消费点时再写回 `view.theme_pack_id`。
@@ -301,6 +303,12 @@ pub fn run(config: AppConfig) {
                 .after(wv_render::measurement::reload_measurement_cache),
         ),
     )
+    // 大陆生成的意图包络：点击采集（与测量同一条光标坐标链）。
+    .add_systems(
+        Update,
+        wv_render::continent_sketch::commit_continent_sketch_click
+            .after(camera::track_cursor_world),
+    )
     .add_systems(
         Update,
         (
@@ -310,6 +318,8 @@ pub fn run(config: AppConfig) {
             world_projection::draw_brush_cursor,
             // 测量顶置渲染——与 gizmos 一起画。
             wv_render::measurement::render_measurements,
+            // 大陆生成意图包络（白线 + 当前折线）。
+            wv_render::continent_sketch::draw_continent_sketch,
         ),
     )
     .add_systems(

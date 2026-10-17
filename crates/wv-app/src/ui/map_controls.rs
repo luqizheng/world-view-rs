@@ -35,8 +35,8 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::state::{
-    CityToolMode, CityToolState, DrillState, GridConfig, MeasureMode, MeasureState, ViewState,
-    WorldProjection,
+    CityToolMode, CityToolState, ContinentSketch, DrillState, GridConfig, MeasureMode,
+    MeasureState, ViewState, WorldProjection,
 };
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::{radius, space};
@@ -45,7 +45,9 @@ use crate::ui_shell::StartupLoadRequest;
 
 use super::shell::UiShell;
 use super::widgets::{icon_image, ToolIcon};
-use super::{ICON_GRID, ICON_LINE, ICON_MAXIMIZE, ICON_SQUARE, ICON_ZOOM_IN, ICON_ZOOM_OUT};
+use super::{
+    ICON_GRID, ICON_HILLS, ICON_LINE, ICON_MAXIMIZE, ICON_SQUARE, ICON_ZOOM_IN, ICON_ZOOM_OUT,
+};
 
 /// 单瓷砖边长 34px（原型 `.map-controls .button`）。
 const TILE_SIZE: f32 = 34.0;
@@ -70,6 +72,7 @@ pub fn map_controls(
     mut view: ResMut<ViewState>,
     mut measure: ResMut<MeasureState>,
     mut city_tool: ResMut<CityToolState>,
+    mut sketch: ResMut<ContinentSketch>,
     drill: Res<DrillState>,
     grid: Res<GridConfig>,
     tex: Res<wv_render::terrain_view::TerrainTexture>,
@@ -108,6 +111,7 @@ pub fn map_controls(
     let line_active = measure.mode == MeasureMode::Line;
     let rect_active = measure.mode == MeasureMode::Rect;
     let city_active = city_tool.mode == CityToolMode::CreateArmed;
+    let sketch_active = sketch.enabled;
 
     // 位置：右侧垂直居中、距窗体右缘 18px（原型 `.map-controls`）。
     egui::Area::new(egui::Id::new("wv_map_controls_v05"))
@@ -144,6 +148,8 @@ pub fn map_controls(
                             measure.mode = if line_active {
                                 MeasureMode::Off
                             } else {
+                                // 互斥：开测量时关掉大陆圈画。
+                                sketch.enabled = false;
                                 MeasureMode::Line
                             };
                             measure.clear_draft();
@@ -163,6 +169,7 @@ pub fn map_controls(
                             measure.mode = if rect_active {
                                 MeasureMode::Off
                             } else {
+                                sketch.enabled = false;
                                 MeasureMode::Rect
                             };
                             measure.clear_draft();
@@ -190,7 +197,8 @@ pub fn map_controls(
                             let new_mode = if city_active {
                                 CityToolMode::Off
                             } else {
-                                // 互斥：开城市时关掉测量。
+                                // 互斥：开城市时关掉测量与大陆圈画。
+                                sketch.enabled = false;
                                 measure.mode = MeasureMode::Off;
                                 measure.clear_draft();
                                 CityToolMode::CreateArmed
@@ -202,6 +210,32 @@ pub fn map_controls(
                             );
                             city_tool.mode = new_mode;
                             city_tool.draft = None;
+                        },
+                    );
+
+                    // ②.6 Continent — 大陆生成意图包络（2026-10-17 大陆生成 UI plan）。
+                    //   左键逐点画圈；≥3 点后双击 / 回车 / 右键闭合；Esc 丢弃当前折线。
+                    //   包络是会话态，生成按钮在「生成大陆」面板（Task 4 接线）。
+                    tile_button(
+                        ui,
+                        &shell,
+                        ToolIcon::Svg(ICON_HILLS),
+                        "大陆：圈出意图包络（左键加点；双击/回车闭合；Esc 丢弃）",
+                        sketch_active,
+                        project_open,
+                        accent,
+                        raised_bg,
+                        || {
+                            sketch.enabled = !sketch_active;
+                            if sketch.enabled {
+                                // 互斥：开圈画时关掉测量与城市工具。
+                                measure.mode = MeasureMode::Off;
+                                measure.clear_draft();
+                                city_tool.mode = CityToolMode::Off;
+                                city_tool.draft = None;
+                            } else {
+                                sketch.discard_active();
+                            }
                         },
                     );
 

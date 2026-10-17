@@ -95,6 +95,15 @@ impl Plugin for EditorOverlayPlugin {
                     measurement::commit_measurement_click
                         .after(measurement::reload_measurement_cache),
                 ),
+            )
+            .init_resource::<crate::state::ContinentSketch>()
+            .add_systems(
+                Update,
+                (
+                    crate::continent_sketch::commit_continent_sketch_click
+                        .after(crate::camera::track_cursor_world),
+                    crate::continent_sketch::draw_continent_sketch,
+                ),
             );
     }
 }
