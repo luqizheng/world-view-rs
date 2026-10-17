@@ -63,6 +63,28 @@ where
     Ok(())
 }
 
+/// 势力几何的文件键：`map__owner__from`，relation 非 control 时追加稳定哈希。
+///
+/// 同一 `(map, owner, from)` 可以同时有实控与声称两条 span（ADR-0027 D5）；
+/// 不带 relation 后缀会让第二条覆盖第一条。FNV-1a 而不是 `DefaultHasher`：
+/// 后者不保证跨进程 / 跨版本稳定，文件名会漂移。
+fn faction_geometry_key(g: &wv_core::map::GeometrySpan) -> String {
+    let base = format!("{}__{}__{}", g.map.as_str(), g.owner.as_str(), g.span.from);
+    match g.relation.as_deref() {
+        None | Some("control") => base,
+        Some(r) => format!("{base}__r{:08x}", fnv1a(r)),
+    }
+}
+
+fn fnv1a(s: &str) -> u32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in s.as_bytes() {
+        h ^= *b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    h
+}
+
 /// 写地图节点：每个 `MapNode` 写到 `maps/<id>/index.yaml`。
 ///
 /// 地图天然有子目录（约定），与 `save_entities` 路径形态不同——单独一个函数。
@@ -731,9 +753,11 @@ impl Project {
 
         // 势力：路线图 S12（2026-10-12）。
         // - `factions/`：每势力一个 YAML（§4.5）。
+        // - `faction_layers/`：每势力层一个 YAML（ADR-0027 D4），目录可缺失。
         // - `geometry/faction/`：每势力几何一个 YAML（`GeometrySpan`）。
-        // 两个目录都**可缺失**——S12 是新维度，旧工程直接得空 Vec。
+        // 三个目录都**可缺失**——旧工程直接得空 Vec；默认层在内存合成，不写盘。
         let factions: Vec<wv_core::Faction> = load_dir(&self.root, "factions")?;
+        let faction_layers: Vec<wv_core::FactionLayer> = load_dir(&self.root, "faction_layers")?;
         let faction_geometry: Vec<wv_core::map::GeometrySpan> =
             load_dir(&self.root, "geometry/faction")?;
 
@@ -763,7 +787,7 @@ impl Project {
             tracks,
             narrations,
             factions,
-            faction_layers: Vec::new(),
+            faction_layers,
             faction_geometry,
             place_geometry,
             regions,
@@ -847,15 +871,18 @@ impl Project {
                 f.id.as_str().to_string()
             })?;
         }
+        if wants("faction_layers") {
+            save_entities(
+                &self.root.join("faction_layers"),
+                &world.faction_layers,
+                |l| l.id.as_str().to_string(),
+            )?;
+        }
         if wants("geometry/faction") {
             save_entities(
                 &self.root.join("geometry/faction"),
                 &world.faction_geometry,
-                |g| {
-                    // 合成 id：map + owner + from。`--` 避开 ID 字符集，文件名
-                    // 用这个 key，文件内容里仍是原始字段。
-                    format!("{}__{}__{}", g.map.as_str(), g.owner.as_str(), g.span.from)
-                },
+                faction_geometry_key,
             )?;
         }
         // Place 地界：与 faction 分支逐字同构——合成 id（map + owner + from）
@@ -1182,5 +1209,118 @@ impl Project {
         d.extend(derive_hints(&world));
         d.dedup_by_fingerprint();
         Ok(d)
+    }
+}
+
+#[cfg(test)]
+mod faction_layer_io_tests {
+    use super::*;
+    use wv_core::map::{GeometryData, GeometrySpan};
+    use wv_core::{Color, Faction, FactionColorMode, FactionLayer, Id, TimeSpan};
+
+    fn temp_project(tag: &str) -> (std::path::PathBuf, Project) {
+        let root =
+            std::env::temp_dir().join(format!("wv_io_faction_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let p = Project::create(&root, "test").expect("create project");
+        (root, p)
+    }
+
+    fn faction(id: &str) -> Faction {
+        Faction::new(Id::new_unchecked(id), id, Color("#3366AA".into()))
+    }
+
+    fn square() -> Vec<f32> {
+        vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0]
+    }
+
+    #[test]
+    fn legacy_world_without_faction_layers_round_trips() {
+        let (root, mut p) = temp_project("legacy");
+        let mut w = World::default();
+        w.factions.push(faction("faction_qing"));
+        w.faction_geometry.push(GeometrySpan {
+            map: Id::new_unchecked("map_world"),
+            owner: Id::new_unchecked("faction_qing"),
+            span: TimeSpan::open(1),
+            geometry: GeometryData::Polygon(square()),
+            relation: None,
+        });
+        p.save_world(&w, &[]).expect("save");
+        assert!(
+            !root.join("faction_layers").exists(),
+            "旧工程保存不得凭空造空目录"
+        );
+        let loaded = p.load_world().expect("load");
+        assert_eq!(loaded.factions.len(), 1);
+        assert!(
+            loaded.faction_layers.is_empty(),
+            "缺 faction_layers 目录时得空 Vec，默认层只在查询时合成"
+        );
+        assert_eq!(loaded.faction_geometry.len(), 1);
+        p.save_world(&loaded, &[]).expect("resave");
+        let again = p.load_world().expect("reload");
+        assert_eq!(again.factions, loaded.factions);
+        assert_eq!(again.faction_geometry, loaded.faction_geometry);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn faction_layers_round_trip() {
+        let (root, mut p) = temp_project("layers");
+        let mut w = World::default();
+        w.faction_layers.push(FactionLayer {
+            id: Id::new_unchecked("layer_admin"),
+            name: "行政区".into(),
+            z: 3,
+            color_mode: FactionColorMode::Inherit,
+            visible: false,
+        });
+        p.save_world(&w, &[]).expect("save");
+        let loaded = p.load_world().expect("load");
+        assert_eq!(loaded.faction_layers.len(), 1);
+        let l = &loaded.faction_layers[0];
+        assert_eq!(l.id.as_str(), "layer_admin");
+        assert_eq!(l.name, "行政区");
+        assert_eq!(l.z, 3);
+        assert_eq!(l.color_mode, FactionColorMode::Inherit);
+        assert!(!l.visible);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn two_relations_same_owner_and_from_round_trip() {
+        let (root, mut p) = temp_project("relations");
+        let mut w = World::default();
+        w.factions.push(faction("faction_qing"));
+        for relation in [None, Some("claim".to_string())] {
+            w.faction_geometry.push(GeometrySpan {
+                map: Id::new_unchecked("map_world"),
+                owner: Id::new_unchecked("faction_qing"),
+                span: TimeSpan::open(1),
+                geometry: GeometryData::Polygon(square()),
+                relation,
+            });
+        }
+        p.save_world(&w, &[]).expect("save");
+        let files = std::fs::read_dir(root.join("geometry/faction"))
+            .expect("geometry dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("yaml"))
+            .count();
+        assert_eq!(
+            files, 2,
+            "claim/control 同 map+owner+from 必须落两个文件，got {files}"
+        );
+        let loaded = p.load_world().expect("load");
+        assert_eq!(loaded.faction_geometry.len(), 2);
+        let mut relations: Vec<Option<String>> = loaded
+            .faction_geometry
+            .iter()
+            .map(|g| g.relation.clone())
+            .collect();
+        relations.sort();
+        assert_eq!(relations, vec![None, Some("claim".into())]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
