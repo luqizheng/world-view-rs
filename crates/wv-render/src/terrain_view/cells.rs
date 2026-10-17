@@ -19,7 +19,8 @@
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-use wv_core::terrain::TerrainData;
+use wv_core::terrain::{TerrainCellData, TerrainData};
+use wv_terrain::biome::display_kind;
 
 use crate::state::ViewMode;
 use crate::theme::colors;
@@ -30,6 +31,29 @@ use super::terrain_texture::terrain_res_for;
 use super::tile_atlas::{
     blit_block_tinted, sample_tile_block, tile_tint_for_mode, TileAtlas, TileTint,
 };
+
+/// `wv-core` 中立格 → `wv-terrain` 格（三通道布局一致的字段搬运；wv-io 落盘
+/// 与 wv-edit 命令桥各有对称的一对，渲染取色在此处再消费一次）。
+fn to_cell(c: &TerrainCellData) -> wv_terrain::TerrainCell {
+    wv_terrain::TerrainCell {
+        height: c.height,
+        surface: c.surface,
+        biome: c.biome,
+    }
+}
+
+/// 格子的**显示槽位**（三通道 → 旧 0–9 调色板槽位）。
+///
+/// 投影唯一入口是 [`display_kind`]——色板数组零改动，槽位映射只活在那一处。
+fn display_slot(c: &TerrainCellData) -> u8 {
+    display_kind(&to_cell(c))
+}
+
+/// 旧槽位的水系判定（0 深水 / 1 浅水）——**只对 `display_slot` 的产物使用**；
+/// 逐格湿判定（surface 通道 ‖ 海拔 < 0）走 [`wv_terrain::edit::is_water_cell`]。
+fn slot_is_water(kind: u8) -> bool {
+    kind <= 1
+}
 
 /// 把一个着色函数应用到一格，返回 sRGB 线性分量。
 ///
@@ -105,17 +129,9 @@ fn shade_event(_data: &TerrainData, _kind: u8, pal: &PaletteColors) -> Color {
     pal.event_backdrop
 }
 
-/// 水系判定（轮廓图唯一关心的二分）：深水/浅水算水，其余全算陆。
-///
-/// 口径委托给 [`wv_terrain::edit::is_water_kind`]（笔刷高度域对齐共用同一判定，
-/// 单一真源；见该函数文档）。
-fn is_water_kind(kind: u8) -> bool {
-    wv_terrain::edit::is_water_kind(kind)
-}
-
 fn shade_coast(_data: &TerrainData, kind: u8, _pal: &PaletteColors) -> Color {
     // 轮廓图三色是模式语义色，不随主题切换（ADR-0016 §2）。
-    if is_water_kind(kind) {
+    if slot_is_water(kind) {
         colors::COAST_WATER
     } else {
         colors::COAST_LAND
@@ -386,10 +402,10 @@ impl<'a> CellRenderer<'a> {
     /// ——填充的水陆边由双线性高度决定（D2），哪怕全邻域同类型，
     /// 只要高度穿零就得逐像素采。
     fn is_boundary(&self, cx: u32, cy: u32) -> bool {
-        let kind0 = self.data.cells[(cy * self.w + cx) as usize].kind;
+        let kind0 = display_slot(&self.data.cells[(cy * self.w + cx) as usize]);
         let differs = |a: u8, b: u8| {
             if self.mode == ViewMode::Coastline {
-                is_water_kind(a) != is_water_kind(b)
+                slot_is_water(a) != slot_is_water(b)
             } else if self.mode == ViewMode::GoogleMap {
                 // Google 模式下同色的陆上类不构成边界（沙/草/丘/山/雪已折叠为
                 // 同一陆色）——省掉无意义的逐像素超采样。
@@ -420,7 +436,7 @@ impl<'a> CellRenderer<'a> {
                     hmin = hmin.min(cell.height);
                     hmax = hmax.max(cell.height);
                 }
-                if differs(kind0, cell.kind) {
+                if differs(kind0, display_slot(cell)) {
                     return true;
                 }
             }
@@ -475,7 +491,7 @@ impl<'a> CellRenderer<'a> {
         // 最近格的类型（钳边）。
         let cx = (gx.floor() as i32).clamp(0, self.w as i32 - 1) as u32;
         let cy = (gy.floor() as i32).clamp(0, self.h as i32 - 1) as u32;
-        let kind = self.data.cells[(cy * self.w + cx) as usize].kind;
+        let kind = display_slot(&self.data.cells[(cy * self.w + cx) as usize]);
         let land = height >= 0.0;
         // 类型 ↔ 高度矛盾时高度赢（D2）；回退色取「岸」语义的沙滩 / 深水。
         let kind = if land && kind <= 1 {
@@ -497,7 +513,7 @@ impl<'a> CellRenderer<'a> {
     fn sample_kind(&self, gx: u32, gy: u32, fx: f32, fy: f32, out: &mut [f32; 3]) {
         let resf = self.res as f32;
         let cell = &self.data.cells[(gy * self.w + gx) as usize];
-        let kind = cell.kind;
+        let kind = display_slot(cell);
         let mul = self.height_mul(cell.height);
         if let Some(block) = self.blocks.get(kind as usize).and_then(|b| b.as_deref()) {
             let r = self.res as usize;
@@ -519,12 +535,16 @@ impl<'a> CellRenderer<'a> {
     }
 
     /// 连续纹理像素坐标处的水陆判定（轮廓图海岸线专用；坐标口径同 `sample_into`）。
+    ///
+    /// 湿判定（surface 通道 ‖ 海拔 < 0，[`wv_terrain::edit::is_water_cell`]）——
+    /// 与 VectorFlat 的高度海岸线同一口径（v1 此处只看类型通道，两种模式对
+    /// 「被压到海下的陆格」结论相左；统一到湿判定是修偏）。
     fn sample_is_water(&self, fx: f32, fy: f32) -> bool {
         let resf = self.res as f32;
         let gx = ((fx / resf).floor() as i32).clamp(0, self.w as i32 - 1) as u32;
         let gy = ((fy / resf).floor() as i32).clamp(0, self.h as i32 - 1) as u32;
-        let kind = self.data.cells[(gy * self.w + gx) as usize].kind;
-        is_water_kind(kind)
+        let cell = &self.data.cells[(gy * self.w + gx) as usize];
+        wv_terrain::edit::is_water_cell(to_cell(cell))
     }
 
     /// 轮廓图边界格：逐像素扰动 + 4 样本超采样的**水陆占比**判定。
@@ -612,7 +632,8 @@ impl<'a> CellRenderer<'a> {
                 if nx < 0 || ny < 0 || nx >= self.w as i32 || ny >= self.h as i32 {
                     continue;
                 }
-                let kind = self.data.cells[(ny as u32 * self.w + nx as u32) as usize].kind;
+                let kind =
+                    display_slot(&self.data.cells[(ny as u32 * self.w + nx as u32) as usize]);
                 self.block_for(kind);
             }
         }
@@ -665,7 +686,7 @@ impl<'a> CellRenderer<'a> {
         };
         if !self.is_boundary(cx, gy) {
             // 内部格：与旧行为一致——整块直铺（快路径）。
-            let kind = cell.kind;
+            let kind = display_slot(cell);
             if self.block_for(kind).is_some() {
                 let tint = if self.mode == ViewMode::RealTerrain {
                     TileTint::Height(self.height_mul(cell.height))
@@ -694,7 +715,7 @@ impl<'a> CellRenderer<'a> {
             // 水域按高度渐变（手绘地图 #1）：kind 0/1 的内部格从单色水变
             // height 调度的水彩带；轮廓图模式不进这里。
             if self.treatment.water_gradient
-                && is_water_kind(kind)
+                && slot_is_water(kind)
                 && self.mode != ViewMode::Coastline
             {
                 color = water_shade_at(cell.height, self.palette);
@@ -937,12 +958,13 @@ mod tests {
                 let snow = x == 12 && y == 80;
                 wv_core::terrain::TerrainCellData {
                     height: if land { 80 } else { -60 },
-                    kind: if snow {
-                        7
+                    surface: if land { 1 } else { 0 },
+                    biome: if snow {
+                        9 // 雪原（显示槽位 7）
                     } else if land {
-                        3
+                        3 // 草原
                     } else {
-                        0
+                        0 // 深水
                     },
                 }
             })
@@ -1034,11 +1056,13 @@ mod tests {
             cells: vec![
                 wv_core::terrain::TerrainCellData {
                     height: 50,
-                    kind: 3,
+                    surface: 1,
+                    biome: 3,
                 },
                 wv_core::terrain::TerrainCellData {
                     height: -50,
-                    kind: 3,
+                    surface: 1,
+                    biome: 3,
                 },
             ],
         };
@@ -1053,15 +1077,16 @@ mod tests {
         let Color::Srgba(grass) = colors::core_terrain(3) else {
             unreachable!()
         };
-        let Color::Srgba(deep) = colors::core_terrain(0) else {
+        // 沉入海下的陆格按湿判定显示（surface 陆 + 海拔 -50 → 浅水槽位）。
+        let Color::Srgba(shallow) = colors::core_terrain(1) else {
             unreachable!()
         };
         // 2 格 ≤1024 → res = clamp(4096/2, 4, 8) = 8：图像 16×8。
         // 等值线在格缘 gx=1.0 → 像素 x∈0..8 陆、x∈8..16 水。
         assert!(pixel_near(&img, 2, 2, grass), "左半应为草色");
         assert!(
-            pixel_near(&img, 12, 2, deep),
-            "右半应为深水色（最近格为草地、高度判水 → 回退深水）"
+            pixel_near(&img, 12, 2, shallow),
+            "右半应为浅水色（authored 陆地被海拔判湿 → 按水深给浅水）"
         );
     }
 
@@ -1074,7 +1099,8 @@ mod tests {
             cells: vec![
                 wv_core::terrain::TerrainCellData {
                     height: -3500,
-                    kind: 0,
+                    surface: 0,
+                    biome: 0,
                 };
                 9
             ],
@@ -1203,7 +1229,8 @@ mod tests {
             cells: vec![
                 wv_core::terrain::TerrainCellData {
                     height: -3500,
-                    kind: 0,
+                    surface: 0,
+                    biome: 0,
                 };
                 16
             ],
@@ -1399,14 +1426,15 @@ mod tests {
                 let gx = (4 + dx) as usize;
                 let gy = (4 + dy) as usize;
                 painted.cells[gy * 64 + gx].height = -40;
-                painted.cells[gy * 64 + gx].kind = 0;
+                painted.cells[gy * 64 + gx].surface = 0;
+                painted.cells[gy * 64 + gx].biome = 0;
             }
         }
         world.set_terrain(Id::new_unchecked("world_main"), painted);
 
         let after = world.terrain_of(&Id::new_unchecked("world_main")).unwrap();
         assert!(after.cells[4 * 64 + 4].height < 0, "海格高度应在海平面下");
-        assert_eq!(after.cells[4 * 64 + 4].kind, 0);
+        assert_eq!(after.cells[4 * 64 + 4].surface, 0);
 
         // 全图重建（同 `flush_terrain_texture` 的整图分支）。
         let new_image = image_from_terrain(

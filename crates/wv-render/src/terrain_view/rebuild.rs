@@ -330,7 +330,14 @@ mod tests {
             level: wv_core::map::MapLevel::World,
             ..Default::default()
         });
-        let cells = vec![TerrainCellData { height, kind: 0 }; (size * size) as usize];
+        let cells = vec![
+            TerrainCellData {
+                height,
+                surface: 0,
+                biome: 0,
+            };
+            (size * size) as usize
+        ];
         world.set_terrain(
             map.clone(),
             TerrainData {

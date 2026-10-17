@@ -114,7 +114,7 @@ pub fn overlay_far_blend(scale: f32) -> f32 {
 ///    跨平台同 seed 同布局（重开工程树冠不跳变）；
 /// 3. 只保留 `point_in_ring` 内的候选；
 /// 4. 局部点 + `raster_offset` 映射到地形格（`(p + offset) / cell_size`，向下取整），
-///    越界候选丢弃；两遍规则——**有 `kind == FEATURE_FOREST` 的格就只收它们**
+///    越界候选丢弃；两遍规则——**有森林群系格就只收它们**
 ///    （作者刷过森林笔刷），否则收 `height > 0` 的陆地格（未刷 kind 的兜底）。
 ///
 /// `raster_offset` = 本图局部原点相对栅格原点的偏移（渲染侧为
@@ -165,7 +165,9 @@ pub fn forest_sites(
             let Some(cell) = cell_at(terrain, cell_size, raster_offset, x, y) else {
                 continue;
             };
-            if cell.kind == FEATURE_FOREST {
+            // 格子侧比较**森林群系**编号（biome 冻结表）；`FEATURE_FOREST`(4)
+            // 是 Place.feature 的旧 kind 词汇表，两者经 v1 迁移表对应。
+            if cell.biome == wv_terrain::biome::BIOME_FOREST {
                 forest.push((x, y));
             }
             if cell.height > 0 {
@@ -246,32 +248,42 @@ mod tests {
         vec![0.0, 0.0, 100.0, 0.0, 100.0, 100.0, 0.0, 100.0]
     }
 
-    /// `w`×`h` 格、每格 `cell_size` 世界单位、全图同 kind / height。
-    fn uniform_grid(w: u32, h: u32, kind: u8, height: i16) -> TerrainData {
+    /// `w`×`h` 格、每格 `cell_size` 世界单位、全图同 surface / biome / height。
+    fn uniform_grid(w: u32, h: u32, surface: u8, biome: u8, height: i16) -> TerrainData {
         TerrainData {
             width: w,
             height: h,
-            cells: vec![TerrainCellData { height, kind }; (w * h) as usize],
+            cells: vec![
+                TerrainCellData {
+                    height,
+                    surface,
+                    biome,
+                };
+                (w * h) as usize
+            ],
         }
     }
 
-    /// 10×10 格（格边长 10）：左半列 `kind=4`（森林）、右半列 `kind=3`（草原），
+    /// 森林格子的群系编号（biome 冻结表；feature 4 经 v1 迁移表映射到此）。
+    const FOREST_BIOME: u8 = 1;
+
+    /// 10×10 格（格边长 10）：左半列森林群系、右半列草原群系，
     /// 全图陆地（height=10）。
     fn half_forest_grid() -> TerrainData {
-        let mut grid = uniform_grid(10, 10, 3, 10);
+        let mut grid = uniform_grid(10, 10, 1, 3, 10);
         for (i, cell) in grid.cells.iter_mut().enumerate() {
             if i % 10 < 5 {
-                cell.kind = FEATURE_FOREST;
+                cell.biome = FOREST_BIOME;
             }
         }
         grid
     }
 
-    /// 把局部点按「局部 + raster_offset → 格心」口径映射回格子，读 kind。
+    /// 把局部点按「局部 + raster_offset → 格心」口径映射回格子，读群系。
     fn kind_at(terrain: &TerrainData, cell_size: f32, offset: (f32, f32), x: f32, y: f32) -> u8 {
         let gx = ((x + offset.0) / cell_size).floor() as usize;
         let gy = ((y + offset.1) / cell_size).floor() as usize;
-        terrain.cells[gy * terrain.width as usize + gx].kind
+        terrain.cells[gy * terrain.width as usize + gx].biome
     }
 
     #[test]
@@ -294,7 +306,7 @@ mod tests {
     #[test]
     fn forest_sites_are_inside_the_ring_and_deterministic() {
         let ring = square_ring();
-        let terrain = uniform_grid(10, 10, 3, 10);
+        let terrain = uniform_grid(10, 10, 1, 3, 10);
         let a = forest_sites(&ring, Some(&terrain), 10.0, (0.0, 0.0), 0x5EED_1234, 25.0);
         let b = forest_sites(&ring, Some(&terrain), 10.0, (0.0, 0.0), 0x5EED_1234, 25.0);
         assert_eq!(a, b, "同 seed + 同网格两次调用必须逐元素相等");
@@ -332,7 +344,7 @@ mod tests {
         for &(x, y) in &sites {
             assert_eq!(
                 kind_at(&terrain, 10.0, (0.0, 0.0), x, y),
-                FEATURE_FOREST,
+                FOREST_BIOME,
                 "点 ({x}, {y}) 应落在森林格"
             );
         }
@@ -340,7 +352,7 @@ mod tests {
 
     #[test]
     fn forest_sites_fall_back_to_land_when_no_cell_is_forest() {
-        let terrain = uniform_grid(10, 10, 3, 10);
+        let terrain = uniform_grid(10, 10, 1, 3, 10);
         let sites = forest_sites(
             &square_ring(),
             Some(&terrain),
@@ -359,7 +371,7 @@ mod tests {
 
     #[test]
     fn forest_sites_return_empty_when_all_water() {
-        let terrain = uniform_grid(10, 10, 1, -5);
+        let terrain = uniform_grid(10, 10, 0, 0, -5);
         let sites = forest_sites(
             &square_ring(),
             Some(&terrain),
@@ -404,7 +416,7 @@ mod tests {
         for &(x, y) in &shifted {
             assert_eq!(
                 kind_at(&terrain, 10.0, (10.0, 10.0), x, y),
-                FEATURE_FOREST,
+                FOREST_BIOME,
                 "偏移后点 ({x}, {y}) 应落在森林格"
             );
         }

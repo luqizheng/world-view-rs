@@ -96,26 +96,27 @@ pub fn placeholder_terrain(w: u32, h: u32) -> TerrainData {
             // 旧阈值（水 < 0.44）会让新建地图大半是海；现把水体压到 ~1/3，
             // 「新建即陆地为主」，海岸线仍保留足够碎度供作者取舍。
             let t = ((n + 1.0) / 2.0).clamp(0.0, 1.0);
-            let kind = if t < 0.26 {
-                0 // 深水
-            } else if t < 0.33 {
-                1 // 浅水
+            // 分档 →（地表，群系）：显示槽位经 `display_kind` 复现旧档位观感。
+            // 深水/浅水共用 (水, 无群系)——水的层次由显示层按海拔渐变给出。
+            let (surface, biome) = if t < 0.33 {
+                (0u8, 0u8) // 水（原深水/浅水两档）
             } else if t < 0.44 {
-                2 // 沙
+                (1, wv_terrain::biome::BIOME_DESERT) // 沙
             } else if t < 0.68 {
-                3 // 草
+                (1, wv_terrain::biome::BIOME_GRASSLAND) // 草
             } else if t < 0.79 {
-                4 // 林
+                (1, wv_terrain::biome::BIOME_FOREST) // 林
             } else if t < 0.87 {
-                5 // 丘
+                (1, wv_terrain::biome::BIOME_HILLS) // 丘
             } else if t < 0.94 {
-                6 // 山
+                (1, wv_terrain::biome::BIOME_MOUNTAINS) // 山
             } else {
-                7 // 雪
+                (1, wv_terrain::biome::BIOME_SNOWFIELD) // 雪
             };
             cells.push(wv_core::terrain::TerrainCellData {
                 height: (t * 2000.0) as i16,
-                kind,
+                surface,
+                biome,
             });
         }
     }

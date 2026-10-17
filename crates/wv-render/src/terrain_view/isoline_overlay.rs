@@ -115,7 +115,13 @@ pub(crate) fn terrain_data_hash(data: &wv_core::terrain::TerrainData) -> u64 {
     for c in &data.cells {
         h ^= (c.height as u16) as u64;
         h = h.wrapping_mul(FNV_PRIME);
-        h ^= c.kind as u64;
+        // 指纹折叠显示槽位（三通道 → 旧 0–9）：等值线的类型边界语义是
+        // 「视觉上的类型差异」，随 biome 变化也要重算。
+        h ^= wv_terrain::biome::display_kind(&wv_terrain::TerrainCell {
+            height: c.height,
+            surface: c.surface,
+            biome: c.biome,
+        }) as u64;
         h = h.wrapping_mul(FNV_PRIME);
     }
     // 尺寸折叠进尾部：不同 width/height 的同序列 cells 不共享指纹。
@@ -338,7 +344,15 @@ pub fn sync_isoline_overlay(
         let coast_segs = height_segments(w, h, |x, y| cell(x, y).height as f32, 0.0);
         // Nation 档只画海岸线（与 POI / 建筑同口径，spec §2.2c）：
         // 类型边界在远观读不出差异，却让描边总长翻数倍。
-        let kinds_segs = (!nation).then(|| kind_segments(w, h, |x, y| cell(x, y).kind));
+        let kinds_segs = (!nation).then(|| {
+            kind_segments(w, h, |x, y| {
+                wv_terrain::biome::display_kind(&wv_terrain::TerrainCell {
+                    height: cell(x, y).height,
+                    surface: cell(x, y).surface,
+                    biome: cell(x, y).biome,
+                })
+            })
+        });
         let coast_smoothed: Vec<IsolineChain> = assemble_chains(&coast_segs)
             .into_iter()
             .map(|c| (chaikin(&c.pts, c.closed, 2), c.closed))
@@ -864,11 +878,18 @@ mod tests {
     /// 尺寸进指纹（同序列不同形状不共享）。
     #[test]
     fn terrain_data_hash_separates_content_and_shape() {
-        fn make(height: i16, kind: u8, w: u32, h: u32) -> wv_core::terrain::TerrainData {
+        fn make(height: i16, biome: u8, w: u32, h: u32) -> wv_core::terrain::TerrainData {
             wv_core::terrain::TerrainData {
                 width: w,
                 height: h,
-                cells: vec![wv_core::terrain::TerrainCellData { height, kind }; (w * h) as usize],
+                cells: vec![
+                    wv_core::terrain::TerrainCellData {
+                        height,
+                        surface: 1,
+                        biome,
+                    };
+                    (w * h) as usize
+                ],
             }
         }
         let base = make(10, 3, 4, 4);
@@ -903,7 +924,8 @@ mod tests {
                 let land = (2..=5).contains(&x) && (2..=5).contains(&y);
                 wv_core::terrain::TerrainCellData {
                     height: if land { 100 } else { -100 },
-                    kind: if land { 3 } else { 0 },
+                    surface: if land { 1 } else { 0 },
+                    biome: 3,
                 }
             })
             .collect();
@@ -914,7 +936,13 @@ mod tests {
         };
         let cell = |x: u32, y: u32| &data.cells[(y * w + x) as usize];
         let coast = height_segments(w, h, |x, y| cell(x, y).height as f32, 0.0);
-        let kinds = kind_segments(w, h, |x, y| cell(x, y).kind);
+        let kinds = kind_segments(w, h, |x, y| {
+            wv_terrain::biome::display_kind(&wv_terrain::TerrainCell {
+                height: cell(x, y).height,
+                surface: cell(x, y).surface,
+                biome: cell(x, y).biome,
+            })
+        });
         assert!(!coast.is_empty() && !kinds.is_empty());
         let mut strokes = Vec::new();
         for (segs, pre) in [(coast, false), (kinds, true)] {

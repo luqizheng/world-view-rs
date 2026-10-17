@@ -199,11 +199,13 @@ mod tests {
             cells: vec![
                 wv_core::terrain::TerrainCellData {
                     height: 100,
-                    kind: 0,
+                    surface: 0,
+                    biome: 0,
                 },
                 wv_core::terrain::TerrainCellData {
                     height: 100,
-                    kind: 3,
+                    surface: 1,
+                    biome: 3,
                 },
             ],
         };
@@ -261,8 +263,8 @@ mod tests {
     #[test]
     fn placeholder_terrain_is_land_dominated() {
         let data = placeholder_terrain(512, 512);
-        let water = data.cells.iter().filter(|c| c.kind <= 1).count();
-        let sand_or_land = data.cells.iter().filter(|c| c.kind >= 2).count();
+        let water = data.cells.iter().filter(|c| c.surface == 0).count();
+        let sand_or_land = data.cells.iter().filter(|c| c.surface == 1).count();
         let total = data.cells.len() as f32;
         assert!(
             water as f32 / total < 0.40,
@@ -513,7 +515,8 @@ mod tests {
     fn google_patch_uses_generated_texture_resolution() {
         let mut data = placeholder_terrain(4, 4);
         for c in &mut data.cells {
-            c.kind = 3;
+            c.surface = 1;
+            c.biome = 3;
         }
         let mut image = image_from_terrain(
             &data,
@@ -524,7 +527,8 @@ mod tests {
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
         );
         let res = image.width() / data.width;
-        data.cells[5].kind = 1;
+        data.cells[5].surface = 0;
+        data.cells[5].biome = 0;
         patch_terrain_image(
             &mut image,
             &data,
@@ -587,8 +591,9 @@ mod tests {
     fn google_mode_collapses_elevation_bands_into_one_land_color() {
         let mut data = placeholder_terrain(8, 8);
         for (i, c) in data.cells.iter_mut().enumerate() {
-            // 人为铺一条 kind 2..7 循环的高度分带（全是陆上类）。
-            c.kind = 2 + (i % 6) as u8;
+            // 人为铺一条槽位 2..7 循环的分带（全是陆上类，biome 对应冻结表）。
+            c.surface = 1;
+            c.biome = [5, 3, 1, 12, 13, 9][i % 6];
         }
         let img = image_from_terrain(
             &data,
@@ -626,10 +631,13 @@ mod tests {
     fn google_mode_keeps_water_and_forest_distinct_from_land() {
         let mut data = placeholder_terrain(8, 8);
         for c in data.cells.iter_mut() {
-            c.kind = 3; // 草原（陆色）
+            c.surface = 1;
+            c.biome = 3; // 草原（陆色）
         }
-        data.cells[9].kind = 1; // 浅水
-        data.cells[18].kind = 4; // 森林
+        data.cells[9].surface = 0;
+        data.cells[9].biome = 0; // 浅水
+        data.cells[18].surface = 1;
+        data.cells[18].biome = 1; // 森林
         let img = image_from_terrain(
             &data,
             ViewMode::GoogleMap,
@@ -769,11 +777,18 @@ mod tests {
         }
     }
 
-    fn small_terrain(kind: u8) -> TerrainData {
+    fn small_terrain(biome: u8) -> TerrainData {
         TerrainData {
             width: 4,
             height: 4,
-            cells: vec![wv_core::terrain::TerrainCellData { height: 7, kind }; 16],
+            cells: vec![
+                wv_core::terrain::TerrainCellData {
+                    height: 7,
+                    surface: 1,
+                    biome,
+                };
+                16
+            ],
         }
     }
 
@@ -800,7 +815,7 @@ mod tests {
         let city = wv_core::Id::new_unchecked("map_city");
         let (node, data) = active_terrain(&world, Some(&city)).expect("应继承世界图底图");
         assert_eq!(node.id.as_str(), "map_world", "来源应是世界图");
-        assert_eq!(data.cells[0].kind, 3, "应取世界图的格数据");
+        assert_eq!(data.cells[0].biome, 3, "应取世界图的格数据");
     }
 
     /// 城市一旦自己刷了地形，就用自己的（继承只在缺失时兜底）。
@@ -812,7 +827,7 @@ mod tests {
         let city = wv_core::Id::new_unchecked("map_city");
         let (node, data) = active_terrain(&world, Some(&city)).expect("应用城市自己的底图");
         assert_eq!(node.id.as_str(), "map_city");
-        assert_eq!(data.cells[0].kind, 5);
+        assert_eq!(data.cells[0].biome, 5);
     }
 
     /// 整条父链都没有栅格 → `None`（调用方用占位兜底，而不是误报某张图）。
@@ -848,7 +863,7 @@ mod tests {
         world.set_terrain(root.clone(), small_terrain(3));
         let (map, data) = active_terrain_or_placeholder(&mut world, None, 32);
         assert_eq!(map.map(|m| m.as_str().to_owned()), Some("map_world".into()));
-        assert_eq!(data.cells[0].kind, 3, "应取回已有真实地形，而不是占位");
+        assert_eq!(data.cells[0].biome, 3, "应取回已有真实地形，而不是占位");
         assert_eq!(
             world.terrain_of(&root).map(|t| t.width),
             Some(4),
@@ -878,13 +893,13 @@ mod tests {
         };
         let data = texture_terrain(&tex, &world, Some(&city)).expect("应取世界图地形");
         assert_eq!(
-            data.cells[0].kind, 3,
+            data.cells[0].biome, 3,
             "纹理装了世界图，就不能拿城市格去 patch"
         );
         // 纹理换到城市后，同一调用应跟着换成城市的数据。
         tex.last_map = Some(city.clone());
         let data = texture_terrain(&tex, &world, Some(&city)).expect("应取城市地形");
-        assert_eq!(data.cells[0].kind, 5);
+        assert_eq!(data.cells[0].biome, 5);
     }
 
     /// `last_map` 无效或缺失时退回「当前图向上的第一张」，不留空白。
@@ -906,7 +921,7 @@ mod tests {
             last_map: None,
         };
         let data = texture_terrain(&tex, &world, Some(&city)).expect("应退回继承口径");
-        assert_eq!(data.cells[0].kind, 3);
+        assert_eq!(data.cells[0].biome, 3);
     }
 
     /// 纹理创建时记住来源图——`rebuild_texture_on_mode_change` 靠它判断「换图了」。
