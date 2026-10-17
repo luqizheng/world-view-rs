@@ -297,3 +297,31 @@ bash scripts/smoke-gui.sh
 - 触及原则：P5（图层化）——M3 淡出不改图层开关语义，仅视觉参数；P7 无涉（无时间语义）。
 - 依赖方向：全部改动在 `wv-render`（+M4 poll 系统注册在 `wv-app/app_bootstrap`）；零新第三方依赖（`bevy::tasks` 随 bevy 已在树）；`wv-core`/`wv-edit` 零改动。
 - 术语：`GLOSSARY.md` 登记「连续 LOD」「提取缓存」（2026-10-17 已登记）。
+
+---
+
+## 9. 落地实测记录（2026-10-17）
+
+**环境**：release 构建（`cargo build --release -p wv-app --features app`），
+Windows 10.0.26300 / 本机，`examples/layer-showcase`（1.5 MB，世界图 1024²）。
+探针法按 §7 附录（`WV_PERF=1`，3.2s / 4.4s 各翻一次 palette；1.2–2.8s 对数慢扫
+scale 0.1→5.0；6s 退出）。探针已删净（`grep -rn "WV_PERF\|palette_flip_probe" crates/` 为空）。
+
+| 场景 | 基线（本计划之前） | 本次实测 | 判据 | 结果 |
+|---|---|---|---|---|
+| 切 palette 触发帧 | 同步整图 ~90ms（含 synth 31–34ms） | **建 task 0.7–0.9ms** | 触发帧 ≤ 20ms | ✅ |
+| 切 palette 落地 | — | `synth land` 6.5–6.6ms（主线程写资产）；**整帧 153 / 156ms** | 全程 ≤ 20ms | ❌ |
+| 慢扫缩放（提取缓存） | 三档重算，每档 ~75ms | DP+网格 **10–12ms**（`chains=false`）；整帧典型 17–25ms | 单帧 ≤ 30ms | ⚠️ 峰值 41ms |
+| 缩放的提取重建 | 每次全链 | 只在结构变化时 4.8ms（`chains=true`） | — | ✅ |
+
+**结论**：
+
+- M1/M2/M3 达成：容差连续化 + 链缓存把「缩放重算」从 ~75ms 降到 10–12ms；
+  Nation 档只画海岸线；淡入淡出替代硬剔除（观感部分需人工终验）。
+- M4 的**合成**部分达成：触发帧 0.9ms、落地 6.6ms；但落地帧整帧仍是 **153ms**——
+  剩余热点不在合成，而在 `sync_terrain_chunks` 消费 `chunks_dirty` 时的**全量
+  重贴 + 67MB 级克隆**（与 2026-10-17 调色板性能记忆一致）。「无 > 20ms 帧」判据
+  因此**未满足**，需要下一个独立任务（chunk 增量/GPU 侧重贴），不在本计划范围。
+- 慢扫的 41ms 峰值同样来自 chunk LOD 切换的重建，而非 isoline（后者 10–12ms）；
+  「≤ 30ms」判据**未完全满足**，记录待裁。
+- 人工观感验收（远观类型边界消失、淡出无集体消失）仍待用户实机确认。
