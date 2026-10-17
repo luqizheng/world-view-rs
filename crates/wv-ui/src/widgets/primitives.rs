@@ -51,17 +51,22 @@ impl From<BadgeKind> for BadgeTone {
 ///
 /// 语义前景随主题变（亮色下必须换深色系），底色不变：这是 D2 的落点。
 pub fn badge(ui: &mut egui::Ui, shell: &UiShell, kind: BadgeKind, text: &str) {
-    let colors = shell.palette.badge(kind.into());
-    let fg = color32(colors.fg);
-    let bg = crate::ui_theme::color32_alpha(colors.fill, colors.fill_alpha);
-    let pad = egui::vec2(space::XS * 1.5, 1.0);
-    let font = proportional(font_size::MICRO);
+    // 目录 StatusPill：h20 / 左右 6 内边距 / radius 3 / 9px 字；
+    // 底色走语义软底，前景走语义色（不再用 alpha 叠色）。
+    let (bg, fg) = match kind {
+        BadgeKind::Neutral => (shell.raised_bg(), shell.t2()),
+        BadgeKind::Ok => (shell.success_soft(), shell.success()),
+        BadgeKind::Warn => (shell.gold_soft(), shell.gold()),
+        BadgeKind::Err => (shell.danger_soft(), shell.danger()),
+        BadgeKind::Event => (shell.active_bg(), color32(shell.palette.badge_event)),
+    };
+    let font = proportional(font_size::MICRO - 2.0);
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, fg);
-    let size = galley.size() + pad * 2.0;
+    let size = galley.size() + egui::vec2(12.0, 4.0);
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    ui.painter().rect_filled(rect, radius::BADGE, bg);
-    // egui 0.30 的 `Painter::galley` 需要一个兜底色（字体未命中字形时使用）。
-    ui.painter().galley(rect.min + pad, galley, fg);
+    let p = ui.painter();
+    p.rect_filled(rect, 3.0, bg);
+    p.galley(rect.min + egui::vec2(6.0, 2.0), galley, fg);
 }
 
 // ── 空状态 / 列表项 ──────────────────────────────────────────────────────
@@ -117,41 +122,36 @@ pub fn list_item(
     meta: &str,
     selected: bool,
 ) -> egui::Response {
-    let row_h = shell.row + space::SM;
-    let avail_w = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(avail_w, row_h), egui::Sense::click());
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), egui::Sense::click());
     let painter = ui.painter();
     if selected {
-        painter.rect_filled(rect, radius::CONTROL, shell.active_bg());
-        rect_stroke(
-            painter,
-            rect,
-            radius::CONTROL,
-            egui::Stroke::new(1.0_f32, shell.accent()),
+        painter.rect_filled(rect, radius::FIELD, shell.accent_soft());
+        painter.rect_filled(
+            egui::Rect::from_min_size(rect.min, egui::vec2(2.0, rect.height())),
+            0.0,
+            shell.accent(),
         );
     } else if resp.hovered() {
-        painter.rect_filled(rect, radius::CONTROL, shell.hover_bg());
+        painter.rect_filled(rect, radius::FIELD, shell.hover_bg());
     }
-    // 类型色块。
-    let sw = egui::Rect::from_min_size(
-        egui::pos2(rect.min.x + space::SM, rect.center().y - 5.0),
-        egui::vec2(10.0, 10.0),
+    let sw = egui::Rect::from_center_size(
+        egui::pos2(rect.min.x + space::SM + 4.0, rect.center().y),
+        egui::Vec2::splat(8.0),
     );
     painter.rect_filled(sw, radius::BADGE, swatch);
-    // 主标题。
     painter.text(
-        egui::pos2(rect.min.x + space::SM + 10.0 + space::SM, rect.center().y),
+        egui::pos2(sw.max.x + space::SM, rect.center().y),
         egui::Align2::LEFT_CENTER,
         title,
-        proportional(shell.scale.base),
-        shell.t1(),
+        proportional(font_size::SMALL),
+        if selected { shell.accent() } else { shell.t1() },
     );
-    // 等宽元信息（右对齐）。
     painter.text(
         egui::pos2(rect.max.x - space::SM, rect.center().y),
         egui::Align2::RIGHT_CENTER,
         meta,
-        mono(shell.scale.micro),
+        mono(font_size::MICRO - 2.0),
         shell.t3(),
     );
     resp
@@ -217,6 +217,285 @@ pub fn divider(ui: &mut egui::Ui, shell: &UiShell) {
     let (rect, _) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
     ui.painter().rect_filled(rect, 0.0, shell.border_subtle());
+}
+
+// ── 目录新增：Keycap / InlineAlert / MenuItem ─────────────────────────
+
+/// 键帽（目录 `UI/Keycap`）：h20 / 左右 6 / radius 4 / raised 底 +
+/// border_subtle 描边 / mono 9 字。
+pub fn keycap(ui: &mut egui::Ui, shell: &UiShell, label: &str) {
+    let font = mono(font_size::MICRO - 2.0);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font, shell.t2());
+    let size = galley.size() + egui::vec2(12.0, 6.0);
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect, radius::FIELD, shell.raised_bg());
+    p.rect_stroke(
+        rect,
+        radius::FIELD,
+        egui::Stroke::new(1.0, shell.border_subtle()),
+        egui::StrokeKind::Inside,
+    );
+    p.galley(rect.min + egui::vec2(6.0, 3.0), galley, shell.t2());
+}
+
+/// 内联提示种类（目录 `UI/InlineAlert`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlertKind {
+    /// 成功：success_soft 底 + success 描边/字。
+    Success,
+    /// 错误：danger_soft 底 + danger 描边/字。
+    Error,
+}
+
+/// 内联提示条：软底 + 同色描边 + 12px 图标 + 11px 正文，padding 8，radius 4。
+pub fn inline_alert(ui: &mut egui::Ui, shell: &UiShell, kind: AlertKind, text: &str) {
+    let (bg, fg, icon) = match kind {
+        AlertKind::Success => (shell.success_soft(), shell.success(), ICON_CHECK),
+        AlertKind::Error => (shell.danger_soft(), shell.danger(), ICON_ALERT),
+    };
+    egui::Frame::default()
+        .fill(bg)
+        .stroke(egui::Stroke::new(1.0, fg))
+        .corner_radius(radius::FIELD)
+        .inner_margin(crate::ui_theme::margin_all(8.0))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = space::SM;
+                ui.add(icon_image(icon, fg, 12.0));
+                ui.label(egui::RichText::new(text).size(font_size::MICRO).color(fg));
+            });
+        });
+}
+
+/// 菜单项状态（目录 `UI/MenuItem` 四变体）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuState {
+    /// 默认：文字 t1，hover 走 hover_bg。
+    Default,
+    /// 选中：accent_soft 底 + accent 字。
+    Selected,
+    /// 带勾：右侧 check 图标。
+    Checked,
+    /// 禁用：text_disabled。
+    Disabled,
+}
+
+/// 菜单项（目录 `UI/MenuItem`）：h28 / 左右 8 / radius 4。
+pub fn menu_item(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    icon: Option<egui::ImageSource<'static>>,
+    label: &str,
+    state: MenuState,
+) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), 28.0),
+        if state == MenuState::Disabled {
+            egui::Sense::hover()
+        } else {
+            egui::Sense::click()
+        },
+    );
+    let p = ui.painter();
+    if state == MenuState::Selected {
+        p.rect_filled(rect, radius::FIELD, shell.accent_soft());
+    } else if resp.hovered() && state != MenuState::Disabled {
+        p.rect_filled(rect, radius::FIELD, shell.hover_bg());
+    }
+    let fg = match state {
+        MenuState::Selected => shell.accent(),
+        MenuState::Disabled => shell.text_disabled(),
+        _ => shell.t1(),
+    };
+    let text_x = if icon.is_some() {
+        rect.min.x + 28.0
+    } else {
+        rect.min.x + 8.0
+    };
+    p.text(
+        egui::pos2(text_x, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        proportional(font_size::SMALL),
+        fg,
+    );
+    let _ = p; // 释放 painter 借用，`ui.put` 落图标。
+    if let Some(src) = icon {
+        let _ = ui.put(
+            egui::Rect::from_center_size(
+                egui::pos2(rect.min.x + 14.0, rect.center().y),
+                egui::vec2(12.0, 12.0),
+            ),
+            icon_image(src, fg, 12.0),
+        );
+    }
+    if state == MenuState::Checked {
+        let _ = ui.put(
+            egui::Rect::from_center_size(
+                egui::pos2(rect.max.x - 14.0, rect.center().y),
+                egui::vec2(12.0, 12.0),
+            ),
+            icon_image(ICON_CHECK, shell.accent(), 12.0),
+        );
+    }
+    resp
+}
+
+// ── 目录新增：TreeRow / LayerRow / Breadcrumb / Loading ───────────────
+
+/// 树行（目录 `UI/TreeRow`）：h24 / 缩进 / 展开三角 + 名称；选中行
+/// `accent_soft` 底 + 左侧 2px 蓝条 + accent 字。
+pub fn tree_row(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    depth: usize,
+    label: &str,
+    expanded: bool,
+    selected: bool,
+) -> egui::Response {
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::click());
+    let p = ui.painter();
+    if selected {
+        p.rect_filled(rect, radius::FIELD, shell.accent_soft());
+        p.rect_filled(
+            egui::Rect::from_min_size(rect.min, egui::vec2(2.0, rect.height())),
+            0.0,
+            shell.accent(),
+        );
+    } else if resp.hovered() {
+        p.rect_filled(rect, radius::FIELD, shell.hover_bg());
+    }
+    let cx = rect.min.x + 12.0 + depth as f32 * 12.0;
+    let cy = rect.center().y;
+    let tri = if expanded {
+        egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(cx - 3.0, cy - 2.0),
+                egui::pos2(cx + 3.0, cy - 2.0),
+                egui::pos2(cx, cy + 2.0),
+            ],
+            shell.t3(),
+            egui::Stroke::NONE,
+        )
+    } else {
+        egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(cx - 2.0, cy - 3.0),
+                egui::pos2(cx - 2.0, cy + 3.0),
+                egui::pos2(cx + 2.0, cy),
+            ],
+            shell.t3(),
+            egui::Stroke::NONE,
+        )
+    };
+    p.add(tri);
+    p.text(
+        egui::pos2(cx + 8.0, cy),
+        egui::Align2::LEFT_CENTER,
+        label,
+        proportional(font_size::SMALL),
+        if selected { shell.accent() } else { shell.t1() },
+    );
+    resp
+}
+
+/// 图层行（目录 `UI/LayerRow`）：h24 / 名称 + 右端可见性（圆环）与锁定（方框）状态。
+pub fn layer_row(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    label: &str,
+    visible: bool,
+    locked: bool,
+) -> egui::Response {
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::click());
+    let p = ui.painter();
+    if resp.hovered() {
+        p.rect_filled(rect, radius::FIELD, shell.hover_bg());
+    }
+    p.text(
+        egui::pos2(rect.min.x + 8.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        proportional(font_size::SMALL),
+        if visible {
+            shell.t1()
+        } else {
+            shell.text_disabled()
+        },
+    );
+    p.circle_stroke(
+        egui::pos2(rect.max.x - 30.0, rect.center().y),
+        4.0,
+        egui::Stroke::new(
+            1.0,
+            if visible {
+                shell.t2()
+            } else {
+                shell.text_disabled()
+            },
+        ),
+    );
+    p.rect_stroke(
+        egui::Rect::from_center_size(
+            egui::pos2(rect.max.x - 14.0, rect.center().y),
+            egui::vec2(8.0, 8.0),
+        ),
+        1.0,
+        egui::Stroke::new(
+            1.0,
+            if locked {
+                shell.gold()
+            } else {
+                shell.border_subtle()
+            },
+        ),
+        egui::StrokeKind::Inside,
+    );
+    resp
+}
+
+/// 面包屑（目录 `UI/Breadcrumb`）：11px 文字 + `›` 分隔，末段 t1、祖先 t3。
+pub fn breadcrumb(ui: &mut egui::Ui, shell: &UiShell, parts: &[&str]) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = space::XS;
+        for (i, part) in parts.iter().enumerate() {
+            let last = i + 1 == parts.len();
+            ui.label(
+                egui::RichText::new(*part)
+                    .size(font_size::SMALL)
+                    .color(if last { shell.t1() } else { shell.t3() }),
+            );
+            if !last {
+                ui.label(
+                    egui::RichText::new("›")
+                        .size(font_size::SMALL)
+                        .color(shell.text_disabled()),
+                );
+            }
+        }
+    });
+}
+
+/// 不确定进度（目录 `UI/Loading`）：三个圆点（静态帧；动画由调用方驱动）。
+pub fn loading(ui: &mut egui::Ui, shell: &UiShell) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(40.0, 16.0), egui::Sense::hover());
+    let p = ui.painter();
+    for i in 0..3 {
+        p.circle_filled(
+            egui::pos2(rect.min.x + 6.0 + i as f32 * 10.0, rect.center().y),
+            2.5,
+            if i == 0 {
+                shell.accent()
+            } else {
+                shell.text_disabled()
+            },
+        );
+    }
 }
 
 // ── 描边 + 图标 helper ──────────────────────────────────────────────────
@@ -429,6 +708,10 @@ pub const ICON_ALERT: egui::ImageSource<'static> =
 pub const ICON_CHECK: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/circle-check.svg");
 // 方框勾（Figma 42:2 `square-check`；check_row 勾选块用）。
+pub const ICON_TRASH: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/trash-2.svg");
+pub const ICON_MOUSE_POINTER: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/mouse-pointer-2.svg");
 pub const ICON_SQUARE_CHECK: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/square-check.svg");
 pub const ICON_COMMAND: egui::ImageSource<'static> =

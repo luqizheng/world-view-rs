@@ -30,13 +30,15 @@ use super::primitives::icon_image;
 /// 令牌，**不**接收裸 hex。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ButtonStyle {
-    /// accent 实心底 + 白字白图标（主 CTA / Figma `primary button`）。
+    /// 主操作（目录 `Primary`）：accent_soft 底 + accent 描边/文字。
     Accent,
-    /// raised 底 + border_strong 描边 + t2 字（次 CTA / 顶栏 raised）。
+    /// 次级（目录 `Secondary`）：raised 底 + border_subtle 描边 + t1 字。
     Raised,
-    /// 透明底 + t1 字（错误行跳转 / Dialog 取消式按钮）。
+    /// 轻操作（目录 `Ghost`）：面板底 + 同色描边 + t1 字。
     Ghost,
-    /// 透明底 + t2 字（顶栏 / 列表底部动作）。
+    /// 删除类（目录 `Destructive`）：danger_soft 底 + danger 描边/文字。
+    Destructive,
+    /// 无底无框（存量顶栏 / 列表底部动作）。
     #[default]
     Subtle,
 }
@@ -81,40 +83,66 @@ pub fn button(
     min_size_override: Option<egui::Vec2>,
     enabled: bool,
 ) -> egui::Response {
-    let (fill, stroke, fg, font_px, corner) = match style {
-        ButtonStyle::Accent => (
-            shell.accent(),
-            None,
-            egui::Color32::WHITE,
-            font_size::INPUT,
-            radius::CONTROL,
-        ),
-        ButtonStyle::Raised => (
+    // 目录口径（Dark/Parchment 同构，只换令牌）：
+    //   Primary      accent_soft 底 + accent 1px 描边 + accent 字
+    //   Secondary    raised 底 + border_subtle 1px 描边 + t1 字
+    //   Ghost        panel 底 + panel 同色描边（不可见）+ t1 字
+    //   Destructive  danger_soft 底 + danger 1px 描边 + danger 字
+    //   Disabled     次级壳 + text_disabled 字
+    //   几何：h28 / padding 0 10 / gap 6 / radius 4（在 `min_size` 与内容里体现）。
+    let (fill, stroke, fg, font_px, corner) = if !enabled {
+        (
             shell.raised_bg(),
-            Some(egui::Stroke::new(1.0, shell.border_strong())),
-            shell.t2(),
-            font_size::INPUT,
-            radius::CONTROL,
-        ),
-        ButtonStyle::Ghost => (
-            egui::Color32::TRANSPARENT,
-            None,
-            shell.t1(),
-            shell.scale.small,
-            radius::CONTROL,
-        ),
-        ButtonStyle::Subtle => (
-            egui::Color32::TRANSPARENT,
-            None,
-            shell.t2(),
-            shell.scale.small,
-            radius::CONTROL,
-        ),
+            Some(egui::Stroke::new(1.0, shell.border_subtle())),
+            shell.text_disabled(),
+            font_size::SMALL,
+            radius::FIELD,
+        )
+    } else {
+        match style {
+            ButtonStyle::Accent => (
+                shell.accent_soft(),
+                Some(egui::Stroke::new(1.0, shell.accent())),
+                shell.accent(),
+                font_size::SMALL,
+                radius::FIELD,
+            ),
+            ButtonStyle::Raised => (
+                shell.raised_bg(),
+                Some(egui::Stroke::new(1.0, shell.border_subtle())),
+                shell.t1(),
+                font_size::SMALL,
+                radius::FIELD,
+            ),
+            ButtonStyle::Ghost => (
+                shell.panel_bg(),
+                Some(egui::Stroke::new(1.0, shell.panel_bg())),
+                shell.t1(),
+                font_size::SMALL,
+                radius::FIELD,
+            ),
+            ButtonStyle::Destructive => (
+                shell.danger_soft(),
+                Some(egui::Stroke::new(1.0, shell.danger())),
+                shell.danger(),
+                font_size::SMALL,
+                radius::FIELD,
+            ),
+            ButtonStyle::Subtle => (
+                egui::Color32::TRANSPARENT,
+                None,
+                shell.t2(),
+                shell.scale.small,
+                radius::FIELD,
+            ),
+        }
     };
 
+    // 目录几何：文字/图标+文字 28 高；纯图标 28×28。横向内边距 10 由
+    // `egui::Button` 的默认 padding 近似（`min_size.x` 只兜底 0）。
     let default_min = match &content {
-        ButtonContent::Text(_) | ButtonContent::ImageText(_, _) => egui::vec2(0.0, shell.hit),
-        ButtonContent::Image(_) => egui::Vec2::splat(shell.hit),
+        ButtonContent::Text(_) | ButtonContent::ImageText(_, _) => egui::vec2(0.0, 28.0),
+        ButtonContent::Image(_) => egui::Vec2::splat(28.0),
     };
     let min_size = min_size_override.unwrap_or(default_min);
 
@@ -122,9 +150,9 @@ pub fn button(
         ButtonContent::Text(label) => {
             egui::Button::new(egui::RichText::new(label).color(fg).size(font_px))
         }
-        ButtonContent::Image(src) => egui::Button::image(icon_image(src, fg, shell.hit - 8.0)),
+        ButtonContent::Image(src) => egui::Button::image(icon_image(src, fg, 12.0)),
         ButtonContent::ImageText(src, label) => egui::Button::image_and_text(
-            icon_image(src, fg, shell.hit - 8.0),
+            icon_image(src, fg, 12.0),
             egui::RichText::new(label).color(fg).size(font_px),
         ),
     };
@@ -133,6 +161,73 @@ pub fn button(
         btn = btn.stroke(s);
     }
     ui.add_enabled(enabled, btn)
+}
+
+// ── 目录组件：IconButton / ToolbarTool（Figma 公共组件目录 01）──────────
+
+/// 图标按钮（目录 `UI/IconButton`）：28×28、raised 底、border_subtle 描边、
+/// radius 4、图标 12。返回 `Response`，caller 自行判断点击。
+pub fn icon_button(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    icon: egui::ImageSource<'static>,
+    enabled: bool,
+) -> egui::Response {
+    let tint = if enabled {
+        shell.t1()
+    } else {
+        shell.text_disabled()
+    };
+    let fill = if enabled {
+        shell.raised_bg()
+    } else {
+        shell.panel_bg()
+    };
+    let btn = egui::Button::image(icon_image(icon, tint, 12.0))
+        .min_size(egui::Vec2::splat(28.0))
+        .fill(fill)
+        .stroke(egui::Stroke::new(1.0, shell.border_subtle()))
+        .corner_radius(radius::FIELD);
+    ui.add_enabled(enabled, btn)
+}
+
+/// 工具栏工具（目录 `UI/ToolbarTool`）：h24 / padding 0 10 / gap 6 / radius 4。
+///
+/// 默认：raised 底 + border_subtle + t1；选中：gold_soft 底 + gold 描边与
+/// 前景（目录口径「金色仅表示当前画笔，蓝色表示选择」）。
+/// 返回 `Response`。
+pub fn toolbar_tool(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    icon: egui::ImageSource<'static>,
+    label: &str,
+    selected: bool,
+) -> egui::Response {
+    let (fill, stroke, tint) = if selected {
+        (
+            shell.gold_soft(),
+            egui::Stroke::new(1.0, shell.gold()),
+            shell.gold(),
+        )
+    } else {
+        (
+            shell.raised_bg(),
+            egui::Stroke::new(1.0, shell.border_subtle()),
+            shell.t1(),
+        )
+    };
+    ui.add(
+        egui::Button::image_and_text(
+            icon_image(icon, tint, 12.0),
+            egui::RichText::new(label)
+                .color(tint)
+                .size(shell.scale.small),
+        )
+        .min_size(egui::vec2(0.0, 24.0))
+        .fill(fill)
+        .stroke(stroke)
+        .corner_radius(radius::FIELD),
+    )
 }
 
 // ── 标准按钮（标准化控件 · 第 1 项）────────────────────────────────────

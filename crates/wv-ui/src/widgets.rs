@@ -46,23 +46,37 @@ pub mod segmented_control;
 pub mod svg_loader;
 
 // ── 路径兼容 re-export（保持 `crate::widgets::X` 不变） ───────────────
-pub use button::{button, ButtonContent, ButtonStyle, ToolButton, ToolButtonContent, ToolIcon};
+pub use button::{
+    button, icon_button, toolbar_tool, ButtonContent, ButtonStyle, ToolButton, ToolButtonContent,
+    ToolIcon,
+};
 pub use controls::{
-    check_row, field_checkbox, slider, slider_row, value_box, DialogWindow, FieldInput,
-    FieldSelect, PropertyRow, Switch,
+    check_row, checkbox_state, dropdown_box, field_checkbox, numeric_input, option_menu, progress,
+    radio, search_input, slider, slider_row, slider_row_brush, slider_row_disabled, tabs,
+    text_area, value_box, value_unit, CheckState, DialogWindow, FieldInput, FieldSelect,
+    PropertyRow, SliderTone, Switch,
 };
 pub use floater::{FloatWindow, HeadIcon};
 pub use primitives::{
     badge,
+    breadcrumb,
     divider,
     empty_state,
     format_time_ago,
     icon_image,
     identity_header,
+    inline_alert,
+    keycap,
+    layer_row,
     list_item,
+    loading,
+    menu_item,
     recent_row,
     rect_stroke,
+    tree_row,
+    AlertKind,
     BadgeKind, // 也由本模块直接重导出到 `crate::ui`
+    MenuState,
     ICON_ALERT,
     ICON_BRUSH,
     ICON_CHECK,
@@ -81,6 +95,7 @@ pub use primitives::{
     ICON_MAP_PIN,
     ICON_MAXIMIZE,
     ICON_MOUNTAIN_RANGE,
+    ICON_MOUSE_POINTER,
     ICON_PEN,
     ICON_PENCIL,
     ICON_PLATEAU,
@@ -92,6 +107,7 @@ pub use primitives::{
     ICON_SEARCH,
     ICON_SQUARE,
     ICON_SQUARE_CHECK,
+    ICON_TRASH,
     ICON_TREES,
     ICON_VOLCANO,
     ICON_ZOOM_IN,

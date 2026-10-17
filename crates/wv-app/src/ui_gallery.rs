@@ -1,74 +1,104 @@
 //! UI 组件画廊 —— `wv gallery` 子命令（**验收工具**，不是业务面板）。
 //!
-//! 起一个独立的 Bevy 窗口，把 `wv-ui` 的全部公共控件按真实样式铺一遍：
-//! 按钮四档 / 文本框 / 下拉 / 分段控件 / 复选框 / 复选行 / 开关 / 滑条 /
-//! 属性行 / 徽标 / 列表项 / 身份块 / 空状态 / 图标 / 浮窗 / 模态壳。
+//! 按 Figma《公共组件目录》两版（Dark `60:7813` / Parchment `60:8390`）
+//! 铺开 `wv-ui` 的公共控件：
 //!
-//! ## 为什么单独一个入口
+//! - **01 按钮与工具**：Primary / Secondary / Ghost / Destructive / Disabled /
+//!   IconButton / ToolbarTool（默认 + 选中）。
+//! - **02 选择与切换**：Checkbox 四态 / Radio / Switch 三态 / Segmented / Tabs。
+//! - **03 输入与表单**：Input 五态 / SearchInput / NumericInput / Dropdown /
+//!   OptionMenu / TextArea。
+//! - **04 数值与颜色**：Slider 三变体 / ValueUnit / Progress。
+//! - **05 覆盖与反馈**：TreeRow / LayerRow / MenuItem 四态 / Breadcrumb /
+//!   ListItem / StatusPill / Keycap / InlineAlert / EmptyState / Loading。
+//! - **06 面板与外壳**：PanelHeader / FloatingPanel / Divider / ZoomControl /
+//!   Playback / EventRow / Theme & Density Selector。
 //!
-//! 控件没有业务调用点之前（以及之后），要回答「它长什么样、组合起来协不协调」
-//! 只能靠真渲染。编辑器内的 `WV_WIDGET_PREVIEW` 只能摆一块 Inspector 样张，
-//! 且压在真实工程之上；画廊是**全量、可控、可截图**的验收载体。
+//! ## 主题
+//!
+//! 顶栏分段控件切换 Dark / Parchment；初始主题也可用 `WV_THEME=light`
+//! （或 `parchment`）指定，便于分别截图。
 //!
 //! ## 截图
 //!
-//! `WV_SHOT=<png 路径>` 时第 120 帧落一张主窗口截图（与 `widget_preview` 同款
-//! 探针），不自动退出——由外部脚本杀进程。
+//! `WV_SHOT=<png 路径>` 时第 120 帧落一张主窗口截图，不自动退出。
 //!
 //! ## 边界
 //!
 //! - 只读 `wv-ui` 与主题令牌；不碰世界数据 / 编辑入口。
-//! - 文案以英文为主（组件名称即英文术语）；夹一条中文验证打包字体。
-
-#![cfg(feature = "app")]
 
 use bevy::prelude::*;
-use bevy::window::{PrimaryWindow, WindowResolution};
+use bevy::window::WindowResolution;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 
 use crate::theme::ui_theme::UiShellConfig;
-use crate::theme::ui_tokens::ShellPalette;
 use wv_ui::shell::UiShell;
-use wv_ui::ui_tokens::{font_size, space};
+use wv_ui::ui_theme::build_visuals;
+use wv_ui::ui_tokens::{font_size, space, UiDensity, UiTheme};
 use wv_ui::widgets::{
-    badge, button, check_row, divider, empty_state, field_checkbox, icon_image, identity_header,
-    list_item, segmented_control::segmented, slider_row, value_box, BadgeKind, ButtonContent,
-    ButtonStyle, DialogWindow, FieldInput, FieldSelect, FloatWindow, HeadIcon, PropertyRow, Switch,
-    ToolButton, ToolIcon, ICON_BRUSH, ICON_CHECK, ICON_CHEVRON_DOWN, ICON_FOLDER_OPEN, ICON_GLOBE,
-    ICON_GRID, ICON_LAYERS, ICON_MAP, ICON_MAP_PIN, ICON_MAXIMIZE, ICON_PEN, ICON_PENCIL,
-    ICON_PLUS, ICON_RULER, ICON_SEARCH,
+    badge, breadcrumb, button, checkbox_state, divider, dropdown_box, empty_state, icon_button,
+    inline_alert, keycap, layer_row, list_item, loading, menu_item, numeric_input, option_menu,
+    progress, radio, search_input, segmented_control::segmented, slider_row, slider_row_brush,
+    slider_row_disabled, tabs, text_area, toolbar_tool, tree_row, value_box, value_unit, AlertKind,
+    BadgeKind, ButtonContent, ButtonStyle, CheckState, DialogWindow, FieldInput, FieldSelect,
+    FloatWindow, HeadIcon, MenuState, PropertyRow, Switch, ICON_BRUSH, ICON_CHECK, ICON_GRID,
+    ICON_MAP_PIN, ICON_MAXIMIZE, ICON_MOUSE_POINTER, ICON_PLAY, ICON_PLUS, ICON_RULER, ICON_TRASH,
+    ICON_ZOOM_IN as ICON_TOOL_ZOOM_IN, ICON_ZOOM_OUT as ICON_TOOL_ZOOM_OUT,
 };
 
-/// 交互态（画廊自持，纯展示用；不落盘、不接世界）。
+/// 首次运行时若给了 `WV_THEME`，用它决定初始主题（便于双主题截图）。
+fn initial_theme() -> UiTheme {
+    match std::env::var("WV_THEME") {
+        Ok(v) if v.eq_ignore_ascii_case("light") || v.eq_ignore_ascii_case("parchment") => {
+            UiTheme::Light
+        }
+        _ => UiTheme::Dark,
+    }
+}
+
+/// 交互态（画廊自持，纯展示用）。
 struct GalleryState {
+    theme: UiTheme,
+    density: UiDensity,
     name: String,
     mono: String,
+    search: String,
+    area: String,
     select: usize,
     seg: usize,
-    cb_a: bool,
-    cb_b: bool,
-    check_row: bool,
-    switch: bool,
+    tab: usize,
+    radio: usize,
+    switch_on: bool,
+    switch_off: bool,
     linear: f32,
     log: f32,
     steps: u32,
+    brush: f32,
+    numeric: f32,
     dialog_open: bool,
 }
 
 impl Default for GalleryState {
     fn default() -> Self {
         Self {
-            name: "Zunyi Prefecture".to_owned(),
+            theme: initial_theme(),
+            density: UiDensity::Cozy,
+            name: "Government Office".to_owned(),
             mono: "1142.00 / 496.00".to_owned(),
+            search: String::new(),
+            area: "Regional government office.\nOpen daily from 14:00.\nCouncil meets at 14:40."
+                .to_owned(),
             select: 0,
             seg: 1,
-            cb_a: true,
-            cb_b: false,
-            check_row: true,
-            switch: true,
-            linear: 0.42,
-            log: 64.0,
+            tab: 0,
+            radio: 1,
+            switch_on: true,
+            switch_off: false,
+            linear: 0.70,
+            log: 48.0,
             steps: 8,
+            brush: 0.60,
+            numeric: 842.0,
             dialog_open: false,
         }
     }
@@ -84,8 +114,8 @@ pub fn run() {
         DefaultPlugins
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "World View · wv-ui Gallery".into(),
-                    resolution: WindowResolution::new(1180, 900),
+                    title: "World View · wv-ui Catalogue".into(),
+                    resolution: WindowResolution::new(1180, 940),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -98,12 +128,11 @@ pub fn run() {
     )
     .add_plugins(EguiPlugin::default())
     .insert_resource(ClearColor({
-        let bg = ShellPalette::DARK.bg_app;
+        let bg = wv_ui::ui_tokens::ShellPalette::DARK.bg_app;
         Color::srgb(bg.r, bg.g, bg.b)
     }))
     .init_resource::<UiShellConfig>()
     .add_systems(Startup, setup_camera)
-    // 字体与图标 loader 必须排在 bevy_egui 建上下文之后（与 gui 主程序同口径）。
     .add_systems(
         PreUpdate,
         (
@@ -121,7 +150,6 @@ fn setup_camera(mut commands: Commands) {
     commands.spawn(Camera2d);
 }
 
-/// 小节标题 + 说明。
 fn section(ui: &mut egui::Ui, shell: &UiShell, title: &str, note: &str) {
     ui.label(
         egui::RichText::new(title)
@@ -139,31 +167,21 @@ fn section(ui: &mut egui::Ui, shell: &UiShell, title: &str, note: &str) {
     ui.add_space(space::XS);
 }
 
-/// 横向铺开一组控件。
-fn row(ui: &mut egui::Ui, shell: &UiShell, add: impl FnOnce(&mut egui::Ui)) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = space::SM;
-        add(ui);
-    });
-    let _ = shell;
-    ui.add_space(space::LG);
-}
-
 fn draw_gallery(mut contexts: EguiContexts, cfg: Res<UiShellConfig>, mut st: Local<GalleryState>) {
-    let shell = UiShell::new(&cfg);
+    let shell = UiShell::new(&UiShellConfig {
+        theme: st.theme,
+        density: st.density,
+    });
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
-    // 让 egui 原生控件（TextEdit / ComboBox / checkbox）也吃项目令牌。
-    ctx.set_visuals(wv_ui::ui_theme::build_visuals(shell.palette));
+    ctx.set_visuals(build_visuals(shell.palette));
 
     let frame = egui::Frame::default()
         .fill(shell.palette.bg_app.to_color32())
-        .inner_margin(wv_ui::ui_theme::margin_all(20.0));
-    // egui 0.36：`CentralPanel::show` 收 `&mut Ui`；整屏用无标题栏 Window
-    // 铺底（与项目既有 `egui::Window` 用法一致）。
+        .inner_margin(wv_ui::ui_theme::margin_all(24.0));
     let screen = ctx.content_rect();
-    egui::Window::new("wv_ui_gallery_root")
+    egui::Window::new("wv_ui_catalogue_root")
         .title_bar(false)
         .resizable(false)
         .movable(false)
@@ -172,280 +190,238 @@ fn draw_gallery(mut contexts: EguiContexts, cfg: Res<UiShellConfig>, mut st: Loc
         .default_size(screen.size())
         .frame(frame)
         .show(ctx, |ui| {
-            ui.set_min_size(screen.size() - egui::vec2(60.0, 60.0));
+            ui.set_min_size(screen.size() - egui::vec2(70.0, 70.0));
             ui.spacing_mut().item_spacing = egui::vec2(space::SM, space::XS);
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new("wv-ui · Component Gallery")
-                        .size(font_size::DISPLAY)
-                        .color(shell.t1())
-                        .strong(),
-                );
-                ui.label(
-                    egui::RichText::new(
-                        "ADR-0026 · 控件层实际渲染样式（界面控件画廊，中文验证打包字体）",
-                    )
-                    .size(shell.scale.small)
-                    .color(shell.t3()),
-                );
-                ui.add_space(space::MD);
-                divider(ui, &shell);
-                ui.add_space(space::MD);
-
-                ui.columns(2, |cols| {
-                    // ── 左列 ──────────────────────────────────────────────
-                    let ui = &mut cols[0];
-                    section(ui, &shell, "Buttons", "button() 四档 + 禁用 + ToolButton");
-                    row(ui, &shell, |ui| {
-                        let _ = button(
-                            ui,
-                            &shell,
-                            ButtonContent::ImageText(ICON_PLUS, "Create"),
-                            ButtonStyle::Accent,
-                            None,
-                            true,
-                        );
-                        let _ = button(
-                            ui,
-                            &shell,
-                            ButtonContent::ImageText(ICON_FOLDER_OPEN, "Open"),
-                            ButtonStyle::Raised,
-                            None,
-                            true,
-                        );
-                        let _ = button(
-                            ui,
-                            &shell,
-                            ButtonContent::Text("Cancel"),
-                            ButtonStyle::Ghost,
-                            None,
-                            true,
-                        );
-                    });
-                    row(ui, &shell, |ui| {
-                        let _ = button(
-                            ui,
-                            &shell,
-                            ButtonContent::Text("Learn more"),
-                            ButtonStyle::Subtle,
-                            None,
-                            true,
-                        );
-                        let _ = button(
-                            ui,
-                            &shell,
-                            ButtonContent::Text("Disabled"),
-                            ButtonStyle::Accent,
-                            None,
-                            false,
-                        );
-                    });
-                    row(ui, &shell, |ui| {
-                        let _ = ToolButton::icon(ToolIcon::Svg(ICON_PEN), "Pen").show(
-                            ui,
-                            &shell,
-                            || {},
-                        );
-                        let _ = ToolButton::icon(ToolIcon::Svg(ICON_RULER), "Ruler")
-                            .active(true)
-                            .show(ui, &shell, || {});
-                        let _ = ToolButton::icon_text(ToolIcon::Svg(ICON_BRUSH), "Brush", "").show(
-                            ui,
-                            &shell,
-                            || {},
-                        );
-                        let _ = ToolButton::text("Text", "").show(ui, &shell, || {});
-                    });
-
-                    section(
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new("WORLD-VIEW / SHARED UI")
+                            .size(font_size::MICRO)
+                            .color(shell.accent()),
+                    );
+                    ui.label(
+                        egui::RichText::new("公共组件目录")
+                            .size(24.0)
+                            .color(shell.t1())
+                            .strong(),
+                    );
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // 主题切换（目录两版）。
+                    let labels = ["Dark", "Parchment"];
+                    let active = if st.theme == UiTheme::Dark { 0 } else { 1 };
+                    segmented(
                         ui,
                         &shell,
-                        "Text inputs",
-                        "FieldInput：比例 / 等宽 / 占位空态",
+                        "gallery_theme",
+                        84.0,
+                        &labels,
+                        active,
+                        shell.scale.small,
+                        |i| st.theme = if i == 0 { UiTheme::Dark } else { UiTheme::Light },
                     );
-                    FieldInput::new(&mut st.name, "Place name")
-                        .fill_width(true)
-                        .show(ui, &shell);
+                });
+            });
+            ui.add_space(space::MD);
+            divider(ui, &shell);
+            ui.add_space(space::MD);
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.columns(2, |cols| {
+                    // ── 左列 01–03 ─────────────────────────────────────
+                    let ui = &mut cols[0];
+                    section(ui, &shell, "01 / 按钮与工具 Buttons", "Primary / Secondary / Ghost / Destructive / Disabled / Icon / Toolbar");
+                    ui.horizontal(|ui| {
+                        let _ = button(ui, &shell, ButtonContent::Text("Apply"), ButtonStyle::Accent, None, true);
+                        let _ = button(ui, &shell, ButtonContent::Text("Edit details"), ButtonStyle::Raised, None, true);
+                        let _ = button(ui, &shell, ButtonContent::Text("Cancel"), ButtonStyle::Ghost, None, true);
+                    });
+                    ui.add_space(space::XS);
+                    ui.horizontal(|ui| {
+                        let _ = button(ui, &shell, ButtonContent::ImageText(ICON_TRASH, "Delete"), ButtonStyle::Destructive, None, true);
+                        let _ = button(ui, &shell, ButtonContent::Text("Apply"), ButtonStyle::Accent, None, false);
+                        let _ = icon_button(ui, &shell, ICON_PLUS, true);
+                    });
+                    ui.add_space(space::XS);
+                    ui.horizontal(|ui| {
+                        let _ = toolbar_tool(ui, &shell, ICON_MOUSE_POINTER, "Select", false);
+                        let _ = toolbar_tool(ui, &shell, ICON_BRUSH, "Raise", true);
+                        let _ = toolbar_tool(ui, &shell, ICON_RULER, "Measure", false);
+                    });
+                    ui.add_space(space::LG);
+
+                    section(ui, &shell, "02 / 选择与切换 Selection", "Checkbox 四态 / Radio / Switch / Segmented / Tabs");
+                    checkbox_state(ui, &shell, CheckState::Unchecked, "Visible");
+                    checkbox_state(ui, &shell, CheckState::Checked, "Visible");
+                    checkbox_state(ui, &shell, CheckState::Indeterminate, "Mixed");
+                    checkbox_state(ui, &shell, CheckState::Disabled, "Disabled");
+                    ui.add_space(space::XS);
+                    ui.horizontal(|ui| {
+                        if radio(ui, &shell, st.radio == 0, "World").clicked() {
+                            st.radio = 0;
+                        }
+                        if radio(ui, &shell, st.radio == 1, "Local").clicked() {
+                            st.radio = 1;
+                        }
+                    });
+                    ui.add_space(space::XS);
+                    ui.horizontal(|ui| {
+                        let _ = Switch::new(&mut st.switch_on).show(ui, &shell);
+                        let _ = Switch::new(&mut st.switch_off).show(ui, &shell);
+                        let mut disabled = false;
+                        let _ = Switch::new(&mut disabled).enabled(false).show(ui, &shell);
+                    });
+                    ui.add_space(space::XS);
+                    segmented(
+                        ui, &shell, "gallery_seg", 64.0, &["Browse", "Edit"], st.seg,
+                        shell.scale.small, |i| st.seg = i,
+                    );
+                    ui.add_space(space::XS);
+                    if let Some(i) =
+                        tabs(ui, &shell, "gallery_tabs", &["Terrain", "Objects", "Roads"], st.tab, &[2])
+                    {
+                        st.tab = i;
+                    }
+                    ui.add_space(space::LG);
+
+                    section(ui, &shell, "03 / 输入与表单 Inputs", "Input 五态 / Search / Numeric / Dropdown / OptionMenu / TextArea");
+                    let mut empty = String::new();
+                    FieldInput::new(&mut empty, "Enter a place name…").fill_width(true).show(ui, &shell);
+                    ui.add_space(space::XS);
+                    FieldInput::new(&mut st.name, "Filled").fill_width(true).show(ui, &shell);
                     ui.add_space(space::XS);
                     FieldInput::new(&mut st.mono, "x / y")
                         .font_mono(true)
                         .fill_width(true)
                         .show(ui, &shell);
                     ui.add_space(space::XS);
-                    let mut empty = String::new();
-                    FieldInput::new(&mut empty, "Empty with hint…")
-                        .fill_width(true)
-                        .show(ui, &shell);
+                    let mut disabled = String::from("poi_government_001");
+                    FieldInput::new(&mut disabled, "").enabled(false).fill_width(true).show(ui, &shell);
+                    ui.add_space(space::XS);
+                    let mut err = String::new();
+                    FieldInput::new(&mut err, "Required").error(true).fill_width(true).show(ui, &shell);
+                    ui.label(egui::RichText::new("名称不能为空，请输入地点名称。").size(font_size::MICRO).color(shell.danger()));
+                    ui.add_space(space::XS);
+                    let _ = search_input(ui, &shell, &mut st.search, "Find a place…", "Ctrl+K");
+                    ui.add_space(space::XS);
+                    let _ = numeric_input(ui, &shell, &mut st.numeric, "m", 1.0);
+                    ui.add_space(space::XS);
+                    let _ = dropdown_box(ui, &shell, "Government");
+                    ui.add_space(space::XS);
+                    FieldSelect::new(&mut st.select, &SELECT_OPTIONS, "gallery_select")
+                        .show(ui, &shell, |i| SELECT_LABELS[*i].to_owned());
+                    ui.add_space(space::XS);
+                    if let Some(i) = option_menu(
+                        ui, &shell, "gallery_menu",
+                        &["Government", "Settlement", "Custom type"], st.select, &[2],
+                    ) {
+                        st.select = i;
+                    }
+                    ui.add_space(space::XS);
+                    let _ = text_area(ui, &shell, &mut st.area, 3);
                     ui.add_space(space::LG);
 
-                    section(
-                        ui,
-                        &shell,
-                        "Select",
-                        "FieldSelect（ComboBox 封装，需唯一 id_salt）",
-                    );
-                    FieldSelect::new(&mut st.select, &SELECT_OPTIONS, "gallery_select").show(
-                        ui,
-                        &shell,
-                        |i| SELECT_LABELS[*i].to_owned(),
-                    );
-                    ui.add_space(space::LG);
-
-                    section(ui, &shell, "Segmented", "segmented()：分段控件");
-                    segmented(
-                        ui,
-                        &shell,
-                        "gallery_seg",
-                        76.0,
-                        &["Day", "Event", "Person", "Century"],
-                        st.seg,
-                        shell.scale.small,
-                        |i| st.seg = i,
-                    );
-                    ui.add_space(space::LG);
-
-                    section(
-                        ui,
-                        &shell,
-                        "Checkboxes",
-                        "field_checkbox（原生薄壳）/ check_row（自绘行）",
-                    );
-                    row(ui, &shell, |ui| {
-                        let _ = field_checkbox(ui, &shell, &mut st.cb_a, "Checked");
-                        let _ = field_checkbox(ui, &shell, &mut st.cb_b, "Unchecked");
-                    });
-                    check_row(
-                        ui,
-                        &shell,
-                        &mut st.check_row,
-                        "Visible on map",
-                        Some(ICON_MAP_PIN),
-                    );
-                    ui.add_space(space::LG);
-
-                    section(ui, &shell, "Switch", "Switch：25×14 胶囊滑钮");
-                    row(ui, &shell, |ui| {
-                        let _ = Switch::new(&mut st.switch).show(ui, &shell);
-                        let mut off = false;
-                        let _ = Switch::new(&mut off).show(ui, &shell);
-                    });
-
-                    // ── 右列 ──────────────────────────────────────────────
+                    // ── 右列 04–06 ─────────────────────────────────────
                     let ui = &mut cols[1];
-                    section(ui, &shell, "Sliders", "slider_row：线性 / 对数 / 整数泛型");
-                    slider_row(
-                        ui,
-                        &shell,
-                        "Softness",
-                        &mut st.linear,
-                        0.0..=1.0,
-                        |n| format!("{n:.2}"),
-                        false,
-                    );
-                    slider_row(
-                        ui,
-                        &shell,
-                        "Radius",
-                        &mut st.log,
-                        16.0..=600.0,
-                        |n| format!("{n:.0} wu"),
-                        true,
-                    );
-                    slider_row(
-                        ui,
-                        &shell,
-                        "Shelf cells",
-                        &mut st.steps,
-                        0..=32,
-                        |n| format!("{n:.0}"),
-                        false,
-                    );
+                    section(ui, &shell, "04 / 数值与颜色 Values", "Slider 三变体 / ValueUnit / Progress");
+                    slider_row(ui, &shell, "Opacity", &mut st.linear, 0.0..=1.0, |n| format!("{:.0}%", n * 100.0), false);
+                    slider_row_brush(ui, &shell, "Radius", &mut st.log, 16.0..=600.0, |n| format!("{n:.0} px"), true);
+                    slider_row_disabled(ui, &shell, "Softness", &mut st.brush, 0.0..=1.0, |n| format!("{:.0}%", n * 100.0), false);
+                    slider_row(ui, &shell, "Shelf cells", &mut st.steps, 0..=32, |n| format!("{n:.0}"), false);
+                    ui.add_space(space::SM);
+                    value_unit(ui, &shell, "842", "m · Elevation");
+                    ui.add_space(space::SM);
+                    progress(ui, &shell, "Exporting terrain", 0.64);
+                    progress(ui, &shell, "Terrain exported", 1.0);
                     ui.add_space(space::LG);
 
-                    section(
-                        ui,
-                        &shell,
-                        "Property rows",
-                        "value_box / PropertyRow（Figma 42:2）",
-                    );
-                    PropertyRow::new("Type", "Government")
-                        .dropdown(true)
-                        .show(ui, &shell);
+                    section(ui, &shell, "05 / 覆盖与反馈 Overlays", "TreeRow / LayerRow / MenuItem / Breadcrumb / ListItem / StatusPill / Keycap / InlineAlert / EmptyState / Loading");
+                    tree_row(ui, &shell, 0, "Zunyi Prefecture", true, false);
+                    tree_row(ui, &shell, 1, "Government Office", false, true);
                     ui.add_space(space::XS);
-                    PropertyRow::new("Position", "1142.00 / 496.00").show(ui, &shell);
+                    layer_row(ui, &shell, "Terrain", true, false);
+                    layer_row(ui, &shell, "Roads", false, true);
                     ui.add_space(space::XS);
-                    PropertyRow::new("Elevation", "842")
-                        .suffix("m")
-                        .show(ui, &shell);
+                    menu_item(ui, &shell, Some(ICON_MAP_PIN), "Default", MenuState::Default);
+                    menu_item(ui, &shell, Some(ICON_MAP_PIN), "Selected", MenuState::Selected);
+                    menu_item(ui, &shell, Some(ICON_MAP_PIN), "Checked", MenuState::Checked);
+                    menu_item(ui, &shell, Some(ICON_MAP_PIN), "Disabled", MenuState::Disabled);
                     ui.add_space(space::XS);
-                    value_box(ui, &shell, "1847.50 / 623.75", Some("wu"), false);
-                    ui.add_space(space::LG);
-
-                    section(ui, &shell, "Badges", "badge()：五档语义色");
-                    row(ui, &shell, |ui| {
+                    breadcrumb(ui, &shell, &["World", "Guizhou", "Zunyi"]);
+                    ui.add_space(space::XS);
+                    let _ = list_item(ui, &shell, shell.accent(), "Zunyi", "Y214 · 12 events", true);
+                    let _ = list_item(ui, &shell, shell.gold(), "Hailongtun", "Y214 · 3 events", false);
+                    ui.add_space(space::XS);
+                    ui.horizontal(|ui| {
+                        badge(ui, &shell, BadgeKind::Ok, "Active");
+                        badge(ui, &shell, BadgeKind::Warn, "Paused");
+                        badge(ui, &shell, BadgeKind::Err, "Error");
                         badge(ui, &shell, BadgeKind::Neutral, "12");
-                        badge(ui, &shell, BadgeKind::Ok, "Saved locally");
-                        badge(ui, &shell, BadgeKind::Warn, "Unsaved");
-                        badge(ui, &shell, BadgeKind::Err, "Dangling ref");
                         badge(ui, &shell, BadgeKind::Event, "2 active");
                     });
-
-                    section(ui, &shell, "Identity & list", "identity_header / list_item");
-                    let _ = identity_header(
-                        ui,
-                        &shell,
-                        shell.gold().gamma_multiply(0.35),
-                        ICON_GLOBE,
-                        "Government Office",
-                        "Point of interest · Civic",
-                        Some(ICON_MAP_PIN),
-                    );
-                    ui.add_space(space::SM);
-                    let _ = list_item(
-                        ui,
-                        &shell,
-                        shell.accent(),
-                        "Zunyi",
-                        "Y214 · 12 events",
-                        true,
-                    );
-                    let _ = list_item(
-                        ui,
-                        &shell,
-                        shell.gold(),
-                        "Hailongtun",
-                        "Y214 · 3 events",
-                        false,
-                    );
+                    ui.add_space(space::XS);
+                    ui.horizontal(|ui| {
+                        keycap(ui, &shell, "Space");
+                        keycap(ui, &shell, "Shift");
+                        keycap(ui, &shell, "→");
+                    });
+                    ui.add_space(space::XS);
+                    inline_alert(ui, &shell, AlertKind::Success, "Saved locally");
+                    ui.add_space(space::XS);
+                    inline_alert(ui, &shell, AlertKind::Error, "Dangling reference: city_zunyi");
+                    ui.add_space(space::XS);
+                    ui.horizontal(|ui| {
+                        loading(ui, &shell);
+                        let _ = empty_state(ui, &shell, "◎", "No results", "Try another search.", "Clear");
+                    });
                     ui.add_space(space::LG);
 
-                    section(
-                        ui,
-                        &shell,
-                        "Icons (Lucide)",
-                        "ICON_*：include_image! 编译期嵌入",
-                    );
-                    row(ui, &shell, |ui| {
-                        for icon in [
-                            ICON_MAP,
-                            ICON_LAYERS,
-                            ICON_BRUSH,
-                            ICON_PENCIL,
-                            ICON_SEARCH,
-                            ICON_CHECK,
-                            ICON_CHEVRON_DOWN,
-                            ICON_MAXIMIZE,
-                        ] {
-                            ui.add(icon_image(icon, shell.t2(), 18.0));
-                        }
+                    section(ui, &shell, "06 / 面板与外壳 Chrome", "PanelHeader / FloatingPanel / Divider / ZoomControl / Playback / EventRow / Selectors");
+                    PropertyRow::new("Type", "Government").dropdown(true).show(ui, &shell);
+                    ui.add_space(space::XS);
+                    PropertyRow::new("Elevation", "842").suffix("m").show(ui, &shell);
+                    ui.add_space(space::XS);
+                    value_box(ui, &shell, "1847.50 / 623.75", Some("wu"), false);
+                    ui.add_space(space::XS);
+                    divider(ui, &shell);
+                    ui.add_space(space::XS);
+                    ui.horizontal(|ui| {
+                        // ZoomControl：28×28 图标钮竖排。
+                        ui.vertical(|ui| {
+                            let _ = icon_button(ui, &shell, ICON_TOOL_ZOOM_IN, true);
+                            let _ = icon_button(ui, &shell, ICON_TOOL_ZOOM_OUT, true);
+                            let _ = icon_button(ui, &shell, ICON_MAXIMIZE, true);
+                        });
+                        ui.add_space(space::SM);
+                        ui.vertical(|ui| {
+                            // Playback：播放 + 键帽 + 时间。
+                            ui.horizontal(|ui| {
+                                let _ = icon_button(ui, &shell, ICON_PLAY, true);
+                                keycap(ui, &shell, "Space");
+                                ui.label(
+                                    egui::RichText::new("Y214 D82 · 5 days/s")
+                                        .size(font_size::MICRO)
+                                        .color(shell.t2()),
+                                );
+                            });
+                            ui.add_space(space::XS);
+                            // EventRow：2px 色条 + 名称 + 跨度。
+                            ui.horizontal(|ui| {
+                                let (r, _) = ui.allocate_exact_size(egui::vec2(2.0, 18.0), egui::Sense::hover());
+                                ui.painter().rect_filled(r, 0.0, shell.accent());
+                                ui.label(egui::RichText::new("Railway crisis").size(font_size::MICRO).color(shell.t1()));
+                                ui.label(egui::RichText::new("Y214 D40 — Y215 D12").size(font_size::MICRO).color(shell.t3()));
+                            });
+                            ui.add_space(space::XS);
+                            // Selectors：主题 / 密度。
+                            segmented(
+                                ui, &shell, "gallery_density", 64.0, &["Cozy", "Compact"],
+                                if st.density == UiDensity::Cozy { 0 } else { 1 },
+                                shell.scale.micro,
+                                |i| st.density = if i == 0 { UiDensity::Cozy } else { UiDensity::Compact },
+                            );
+                        });
                     });
-
-                    section(
-                        ui,
-                        &shell,
-                        "Modal & float",
-                        "DialogWindow / FloatWindow（右上浮窗）",
-                    );
+                    ui.add_space(space::SM);
                     if ui
                         .add(
                             egui::Button::new(
@@ -454,50 +430,32 @@ fn draw_gallery(mut contexts: EguiContexts, cfg: Res<UiShellConfig>, mut st: Loc
                                     .size(shell.scale.small),
                             )
                             .fill(shell.raised_bg())
-                            .corner_radius(wv_ui::ui_tokens::radius::CONTROL),
+                            .stroke(egui::Stroke::new(1.0, shell.border_subtle()))
+                            .corner_radius(wv_ui::ui_tokens::radius::FIELD),
                         )
                         .clicked()
                     {
                         st.dialog_open = true;
                     }
-                    ui.add_space(space::LG);
-
-                    section(
-                        ui,
-                        &shell,
-                        "Empty state",
-                        "empty_state()：图标 + 人话 + 一个下一步",
-                    );
-                    let _ = empty_state(
-                        ui,
-                        &shell,
-                        "◎",
-                        "No object selected",
-                        "Click a map plot, event, or character\nto inspect properties.",
-                        "Learn more",
-                    );
                 });
             });
         });
 
-    // 浮动窗样张：标题栏 icon|title|…|⠿|▼ + 右下缩放角标。
+    // 浮窗样张：目录 `FloatingPanel`（260 宽 / r10 / border_strong）+ `PanelHeader`。
     FloatWindow::new("gallery_float", "Inspector")
         .icon(HeadIcon::Svg(ICON_GRID))
         .tag(Some((BadgeKind::Ok, "ACTIVE".to_owned())))
-        .default_pos(egui::pos2(860.0, 90.0))
+        .default_pos(egui::pos2(840.0, 560.0))
         .default_size(egui::vec2(288.0, 300.0))
         .show(ctx, &shell, |ui| {
             egui::Frame::default()
                 .inner_margin(wv_ui::ui_theme::margin_all(12.0))
                 .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = space::MD;
-                    PropertyRow::new("Type", "Government")
-                        .dropdown(true)
-                        .show(ui, &shell);
-                    PropertyRow::new("Elevation", "842")
-                        .suffix("m")
-                        .show(ui, &shell);
-                    check_row(ui, &shell, &mut st.check_row, "Visible on map", None);
+                    ui.spacing_mut().item_spacing.y = space::SM;
+                    tree_row(ui, &shell, 0, "Zunyi", true, false);
+                    layer_row(ui, &shell, "Terrain", true, false);
+                    menu_item(ui, &shell, Some(ICON_CHECK), "Verified", MenuState::Checked);
+                    keycap(ui, &shell, "Ctrl+K");
                 });
         });
 
@@ -531,6 +489,7 @@ fn draw_gallery(mut contexts: EguiContexts, cfg: Res<UiShellConfig>, mut st: Loc
                 });
             });
     }
+    let _ = &cfg;
 }
 
 /// 截图探针（`WV_SHOT=<路径>` 时第 120 帧落盘一张，不自动退出）。
@@ -547,11 +506,6 @@ fn screenshot_probe(mut frames: Local<u32>, mut sent: Local<bool>, mut commands:
         commands
             .spawn(bevy::render::view::screenshot::Screenshot::primary_window())
             .observe(bevy::render::view::screenshot::save_to_disk(path));
-        info!("[wv_gallery] screenshot requested at frame {}", *frames);
+        info!("[wv_catalogue] screenshot requested at frame {}", *frames);
     }
 }
-
-// 窗口实体与 `PrimaryWindow` 的关系仅用于截图（`Screenshot::primary_window`）；
-// 保留导入说明，防后续改成多窗口时漏改。
-#[allow(unused_imports)]
-use PrimaryWindow as _;

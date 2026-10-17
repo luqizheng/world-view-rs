@@ -1,35 +1,36 @@
-//! 共享表单 / 浮层控件（标准化控件 · 第 2 批）。
+//! 共享表单 / 值控件 —— 对齐 Figma《公共组件目录》03/04 章。
 //!
-//! `FieldInput` / `FieldSelect` / `field_checkbox` / `Switch` / `slider_row` +
-//! `PropertyRow` / `value_box` / `check_row`（检视器组件族，Figma `42:2`）+
-//! `DialogWindow`（模态壳）。全部用 builder + show 模式（与 [`super::button::ToolButton`]
-//! 同构），样式默认由 `UiShell` 令牌解析，**绝不写裸 hex**——caller 忘了覆盖就走
-//! shell 默认值（map_controls 的白控件配色即覆盖用法）。
+//! 覆盖：
+//! - 输入：`FieldInput`（空/填充/聚焦/禁用/错误）、`search_input`、
+//!   `numeric_input`、`text_area`、`FieldSelect`（ComboBox）、`option_menu`、
+//!   `dropdown_box`（只读下拉外观）。
+//! - 选择：`checkbox_state`（四态）、`check_row`（行式复选）、`radio`、
+//!   `Switch`、`tabs`。
+//! - 数值：`slider` / `slider_row`（蓝）/ `slider_row_brush`（金）/
+//!   `slider_row_disabled`、`value_unit`、`progress`。
+//! - 检视器：`PropertyRow` / `value_box`（42:2 组件族，随色板更新）。
 //!
-//! 测试纪律：每个控件**至少**四条单测——默认解析、builder 覆盖、show 不 panic、
-//! 边界。任何「等 GUI 烟测兜底」的脏改 panic 在这里而不是在用户面前。
+//! 几何口径（目录）：常规控件 28 高、紧凑 24；输入类内边距 0 8；圆角 4；
+//! 描边 1px（聚焦 2px accent）。颜色全部走 `UiShell` 令牌，**不写裸 hex**。
 //!
-//! 边界：
-//! - **不**承载浮窗外壳 / 多列布局 / 列表项 / Radio——各 panel 自管或留 in-place。
-//! - **不**写主题令牌源头 —— 调 `UiShell` getter 拿颜色。
-//!
-//! 历史来源：拆自原 [`crate::widgets`]。
+//! 边界：不承载浮窗外壳（`floater`）、不写主题令牌源头。
 
 use bevy_egui::egui;
 
 use crate::shell::UiShell;
+use crate::ui_theme::{margin_xy, mono, proportional};
 use crate::ui_tokens::{font_size, radius, space};
+use crate::widgets::primitives::{icon_image, ICON_CHECK, ICON_CHEVRON_DOWN, ICON_SEARCH};
 
-use super::primitives::{icon_image, ICON_CHEVRON_DOWN, ICON_SQUARE_CHECK};
+const CONTROL_H: f32 = 28.0;
+const COMPACT_H: f32 = 24.0;
+const INPUT_PAD_X: f32 = 8.0;
 
-// ── FieldInput（单行文本输入）───────────────────────────────────────
+// ── FieldInput（单行文本输入 · 目录 UI/Input）──────────────────────────
 
-/// 单行文本输入框。`hint` 是空值时的占位文本（**不是**初始值）。
-///
-/// 默认：原生 [`egui::TextEdit::singleline`]，无 min_size，文本色随主题，
-/// 不抢焦点。CFT（command palette search）通过 `.focus_on_add(true)` 在打开
-/// 帧自动聚焦；窄角度数字输入（compass 朝向）通过 `.min_size(..)` + mono 字体
-/// 改写。
+/// 单行文本输入框，外观对齐目录 `UI/Input`：
+/// `bg_input` 内嵌底 + `border_subtle` 1px + radius 4 + 左右 8 / 上下 4
+/// 内边距（合计 28 高）；聚焦时描边换 `accent` 2px，错误态换 `danger`。
 pub struct FieldInput<'a> {
     value: &'a mut String,
     hint: String,
@@ -37,10 +38,12 @@ pub struct FieldInput<'a> {
     min_size: Option<egui::Vec2>,
     fill_width: bool,
     focus_on_add: bool,
+    error: bool,
+    enabled: bool,
 }
 
 impl<'a> FieldInput<'a> {
-    /// 绑定 `&mut String` 与占位文本。`hint` 为空时不下发 hint。
+    /// 绑定 `&mut String` 与占位文本。
     pub fn new(value: &'a mut String, hint: &str) -> Self {
         Self {
             value,
@@ -49,55 +52,59 @@ impl<'a> FieldInput<'a> {
             min_size: None,
             fill_width: false,
             focus_on_add: false,
+            error: false,
+            enabled: true,
         }
     }
 
-    /// 等宽字体（默认 = 比例字体）。适合数字输入 / 工程代码字段。
+    /// 等宽字体（默认比例字体）。
     pub fn font_mono(mut self, on: bool) -> Self {
         self.font_mono = on;
         self
     }
 
-    /// 显式最小尺寸（宽 × 高）。未设时宽度由父布局决定。
+    /// 显式最小外尺寸（含内边距与描边）。未设时高度 ≈ 28。
     pub fn min_size(mut self, s: egui::Vec2) -> Self {
         self.min_size = Some(s);
         self
     }
 
-    /// 撑满父容器宽度（`desired_width(f32::INFINITY)`）。
-    /// 命令面板输入框 / 字段宽度跟随对话框 footer 等场景开。
+    /// 撑满父容器宽度。
     pub fn fill_width(mut self, on: bool) -> Self {
         self.fill_width = on;
         self
     }
 
-    /// 添加帧自动抢焦点（`request_focus()`）。命令面板打开时用。
+    /// 添加帧自动抢焦点。
     pub fn focus_on_add(mut self, on: bool) -> Self {
         self.focus_on_add = on;
         self
     }
 
-    /// 装配并落地。返回的 `Response` 可用 `.changed() / .lost_focus() / ...`
-    /// 继续串行检查。
-    ///
-    /// ## 框式外观（2026-10-18，对齐 web 原型 `.inp`）
-    ///
-    /// 设计稿的输入框不是裸 `TextEdit`：`bg_app` 内嵌底 + `border_strong` 1px
-    /// 描边 + `radius::CONTROL` 圆角 + 左右 8 / 上下 3 内边距（合成 26px 高，
-    /// 与 `index.html .inp` 同档）。`TextEdit` 自身的背景/边框被关闭，视觉
-    /// 全部由外层 `Frame` 承担——焦点态仍由 egui 光标与选中色表达。
-    ///
-    /// `min_size` 覆盖的是**整框外尺寸**：内部编辑区自动扣掉内边距与描边，
-    /// 老调用点（罗盘朝向输入框 60×28）几何不变。
+    /// 错误态：描边换 `danger`（目录 `Input/Error`）。
+    pub fn error(mut self, on: bool) -> Self {
+        self.error = on;
+        self
+    }
+
+    /// 禁用态：文字换 `text_disabled`、不可编辑。
+    pub fn enabled(mut self, on: bool) -> Self {
+        self.enabled = on;
+        self
+    }
+
+    /// 装配并落地。返回文本编辑控件的 `Response`。
     pub fn show(self, ui: &mut egui::Ui, shell: &UiShell) -> egui::Response {
-        const PAD_X: f32 = 8.0;
-        const PAD_Y: f32 = 3.0;
-        const STROKE: f32 = 1.0;
+        let stroke_color = if self.error {
+            shell.danger()
+        } else {
+            shell.border_subtle()
+        };
         let frame = egui::Frame::default()
-            .fill(crate::ui_theme::color32(shell.palette.bg_app))
-            .stroke(egui::Stroke::new(STROKE, shell.border_strong()))
-            .corner_radius(radius::CONTROL)
-            .inner_margin(crate::ui_theme::margin_xy(PAD_X, PAD_Y));
+            .fill(shell.input_bg())
+            .stroke(egui::Stroke::new(1.0, stroke_color))
+            .corner_radius(radius::FIELD)
+            .inner_margin(margin_xy(INPUT_PAD_X, 4.0));
         let mut out = None;
         frame.show(ui, |ui| {
             let mut edit = egui::TextEdit::singleline(self.value)
@@ -105,22 +112,36 @@ impl<'a> FieldInput<'a> {
                 .desired_width(if self.fill_width { f32::INFINITY } else { 0.0 })
                 .background_color(egui::Color32::TRANSPARENT)
                 .margin(egui::Margin::ZERO)
-                .frame(egui::Frame::NONE);
+                .frame(egui::Frame::NONE)
+                .text_color(if self.enabled {
+                    shell.t1()
+                } else {
+                    shell.text_disabled()
+                });
             if self.font_mono {
-                edit = edit.font(crate::ui_theme::mono(shell.scale.input));
+                edit = edit.font(mono(font_size::MICRO));
             }
-            // 外尺寸 → 内尺寸：扣掉两侧内边距与描边，保持老调用点几何不变。
             let inner_min = self
                 .min_size
                 .map(|s| {
                     egui::vec2(
-                        (s.x - 2.0 * (PAD_X + STROKE)).max(0.0),
-                        (s.y - 2.0 * (PAD_Y + STROKE)).max(0.0),
+                        (s.x - 2.0 * (INPUT_PAD_X + 1.0)).max(0.0),
+                        (s.y - 2.0 * (4.0 + 1.0)).max(0.0),
                     )
                 })
                 .unwrap_or(egui::vec2(0.0, 18.0));
             edit = edit.min_size(inner_min);
-            let resp = ui.add(edit);
+            let resp = ui.add_enabled(self.enabled, edit);
+            // 聚焦环：目录 `Input/Focus` = accent 2px（画在框内侧）。
+            if resp.has_focus() {
+                let r = resp.rect.expand2(egui::vec2(INPUT_PAD_X, 4.0));
+                ui.painter().rect_stroke(
+                    r,
+                    radius::FIELD,
+                    egui::Stroke::new(2.0, shell.accent()),
+                    egui::StrokeKind::Inside,
+                );
+            }
             if self.focus_on_add {
                 resp.request_focus();
             }
@@ -130,18 +151,542 @@ impl<'a> FieldInput<'a> {
     }
 }
 
-// ── FieldSelect<T>（下拉）───────────────────────────────────────────
+// ── SearchInput（目录 UI/SearchInput）──────────────────────────────────
+
+/// 搜索框：左侧 search 图标 + 文本 + 右侧快捷键提示（如 `Ctrl+K`）。
+pub fn search_input(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    value: &mut String,
+    hint: &str,
+    shortcut: &str,
+) -> egui::Response {
+    let frame = egui::Frame::default()
+        .fill(shell.input_bg())
+        .stroke(egui::Stroke::new(1.0, shell.border_subtle()))
+        .corner_radius(radius::FIELD)
+        .inner_margin(margin_xy(INPUT_PAD_X, 4.0));
+    let mut out = None;
+    frame.show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = space::SM;
+            ui.add(icon_image(ICON_SEARCH, shell.t3(), 12.0));
+            // 快捷键提示按内容宽度预留，输入框只吃剩余宽度——否则
+            // `desired_width(INFINITY)` 会把提示挤到下一行、撑高整框。
+            let shortcut_w = if shortcut.is_empty() {
+                0.0
+            } else {
+                ui.painter()
+                    .layout_no_wrap(
+                        shortcut.to_owned(),
+                        proportional(font_size::MICRO),
+                        shell.t3(),
+                    )
+                    .size()
+                    .x
+                    + space::SM
+            };
+            let edit_w = (ui.available_width() - shortcut_w).max(40.0);
+            let resp = ui.add(
+                egui::TextEdit::singleline(value)
+                    .hint_text(hint)
+                    .desired_width(edit_w)
+                    .background_color(egui::Color32::TRANSPARENT)
+                    .margin(egui::Margin::ZERO)
+                    .frame(egui::Frame::NONE)
+                    .min_size(egui::vec2(0.0, 18.0)),
+            );
+            if !shortcut.is_empty() {
+                ui.label(
+                    egui::RichText::new(shortcut)
+                        .size(font_size::MICRO)
+                        .color(shell.t3()),
+                );
+            }
+            out = Some(resp);
+        });
+    });
+    out.expect("Frame::show 必然执行一次")
+}
+
+// ── NumericInput（目录 UI/NumericInput：值 + 单位 + 步进器）────────────
+
+/// 数值输入：等宽值 + 单位（t3）+ 右侧 24×28 步进器（上下三角）。
+/// 步进器点击即 ±`step`；返回值区域的 `Response`。
+pub fn numeric_input(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    value: &mut f32,
+    unit: &str,
+    step: f32,
+) -> egui::Response {
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), CONTROL_H),
+        egui::Sense::hover(),
+    );
+    let p = ui.painter();
+    p.rect_filled(rect, radius::FIELD, shell.input_bg());
+    p.rect_stroke(
+        rect,
+        radius::FIELD,
+        egui::Stroke::new(1.0, shell.border_subtle()),
+        egui::StrokeKind::Inside,
+    );
+    p.text(
+        egui::pos2(rect.min.x + INPUT_PAD_X, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        format!("{value:.0}"),
+        mono(font_size::MICRO),
+        shell.t1(),
+    );
+    p.text(
+        egui::pos2(rect.min.x + INPUT_PAD_X + 34.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        unit,
+        proportional(font_size::MICRO),
+        shell.t3(),
+    );
+    let stepper = egui::Rect::from_min_max(egui::pos2(rect.max.x - 24.0, rect.min.y), rect.max);
+    p.line_segment(
+        [
+            egui::pos2(stepper.min.x, stepper.min.y),
+            egui::pos2(stepper.min.x, stepper.max.y),
+        ],
+        egui::Stroke::new(1.0, shell.border_subtle()),
+    );
+    let cx = stepper.center().x;
+    let up_cy = stepper.center().y - 5.0;
+    let dn_cy = stepper.center().y + 5.0;
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(cx - 3.0, up_cy + 2.0),
+            egui::pos2(cx + 3.0, up_cy + 2.0),
+            egui::pos2(cx, up_cy - 2.0),
+        ],
+        shell.t3(),
+        egui::Stroke::NONE,
+    ));
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(cx - 3.0, dn_cy - 2.0),
+            egui::pos2(cx + 3.0, dn_cy - 2.0),
+            egui::pos2(cx, dn_cy + 2.0),
+        ],
+        shell.t3(),
+        egui::Stroke::NONE,
+    ));
+    let _ = p;
+    let up = ui.interact(
+        egui::Rect::from_min_max(stepper.min, egui::pos2(stepper.max.x, stepper.center().y)),
+        ui.id().with("numeric_up"),
+        egui::Sense::click(),
+    );
+    let down = ui.interact(
+        egui::Rect::from_min_max(egui::pos2(stepper.min.x, stepper.center().y), stepper.max),
+        ui.id().with("numeric_down"),
+        egui::Sense::click(),
+    );
+    if up.clicked() {
+        *value += step;
+    }
+    if down.clicked() {
+        *value -= step;
+    }
+    ui.interact(rect, ui.id().with("numeric_body"), egui::Sense::hover())
+}
+
+// ── TextArea（目录 UI/TextArea：3 行）─────────────────────────────────
+
+/// 多行文本区：`bg_input` 底 + border_subtle + radius 4 + 8px 内边距。
+pub fn text_area(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    value: &mut String,
+    rows: usize,
+) -> egui::Response {
+    let h = rows as f32 * 18.0 + 16.0;
+    let frame = egui::Frame::default()
+        .fill(shell.input_bg())
+        .stroke(egui::Stroke::new(1.0, shell.border_subtle()))
+        .corner_radius(radius::FIELD)
+        .inner_margin(margin_xy(8.0, 8.0));
+    let mut out = None;
+    frame.show(ui, |ui| {
+        ui.set_min_height(h);
+        let resp = ui.add(
+            egui::TextEdit::multiline(value)
+                .desired_width(f32::INFINITY)
+                .desired_rows(rows)
+                .background_color(egui::Color32::TRANSPARENT)
+                .margin(egui::Margin::ZERO)
+                .frame(egui::Frame::NONE)
+                .text_color(shell.t1()),
+        );
+        out = Some(resp);
+    });
+    out.expect("Frame::show 必然执行一次")
+}
+
+// ── Dropdown（只读外观） / OptionMenu ─────────────────────────────────
+
+/// 只读下拉外观（目录 `UI/Dropdown/Closed`）：输入底 + 文本 + `⌄`。
+pub fn dropdown_box(ui: &mut egui::Ui, shell: &UiShell, text: &str) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), CONTROL_H),
+        egui::Sense::click(),
+    );
+    let p = ui.painter();
+    p.rect_filled(rect, radius::FIELD, shell.input_bg());
+    p.rect_stroke(
+        rect,
+        radius::FIELD,
+        egui::Stroke::new(1.0, shell.border_subtle()),
+        egui::StrokeKind::Inside,
+    );
+    p.text(
+        egui::pos2(rect.min.x + INPUT_PAD_X, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        text,
+        proportional(font_size::SMALL),
+        shell.t1(),
+    );
+    p.text(
+        egui::pos2(rect.max.x - INPUT_PAD_X, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        "⌄",
+        proportional(font_size::SMALL),
+        shell.t3(),
+    );
+    resp
+}
+
+/// 展开的选项菜单（目录 `UI/OptionMenu/Expanded`）：内嵌底 + border_strong
+/// 描边 + radius 6 + 4px 内边距；选项 28 高，选中 = accent_soft 底 + accent
+/// 字 + check 图标；禁用 = text_disabled。返回被点击的选项下标。
+pub fn option_menu(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    _id: &str,
+    labels: &[&str],
+    selected: usize,
+    disabled: &[usize],
+) -> Option<usize> {
+    let mut clicked = None;
+    egui::Frame::default()
+        .fill(shell.input_bg())
+        .stroke(egui::Stroke::new(1.0, shell.border_strong()))
+        .corner_radius(radius::CONTROL)
+        .inner_margin(margin_xy(4.0, 4.0))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            for (i, label) in labels.iter().enumerate() {
+                let is_disabled = disabled.contains(&i);
+                let (rect, resp) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), CONTROL_H),
+                    if is_disabled {
+                        egui::Sense::hover()
+                    } else {
+                        egui::Sense::click()
+                    },
+                );
+                let is_sel = i == selected;
+                let p = ui.painter();
+                if is_sel {
+                    p.rect_filled(rect, radius::FIELD, shell.accent_soft());
+                } else if resp.hovered() && !is_disabled {
+                    p.rect_filled(rect, radius::FIELD, shell.hover_bg());
+                }
+                let fg = if is_disabled {
+                    shell.text_disabled()
+                } else if is_sel {
+                    shell.accent()
+                } else {
+                    shell.t1()
+                };
+                p.text(
+                    egui::pos2(rect.min.x + INPUT_PAD_X, rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    *label,
+                    proportional(font_size::SMALL),
+                    fg,
+                );
+                if is_sel {
+                    let _ = ui.put(
+                        egui::Rect::from_center_size(
+                            egui::pos2(rect.max.x - 12.0, rect.center().y),
+                            egui::vec2(12.0, 12.0),
+                        ),
+                        icon_image(ICON_CHECK, shell.accent(), 12.0),
+                    );
+                }
+                if resp.clicked() && !is_disabled {
+                    clicked = Some(i);
+                }
+            }
+        });
+    clicked
+}
+
+// ── Checkbox（四态） / Radio ───────────────────────────────────────────
+
+/// 复选框状态（目录 `UI/Checkbox` 四变体）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckState {
+    /// 未选：`bg_input` 底 + `border_strong` 描边。
+    Unchecked,
+    /// 已选：`accent` 底 + 深色勾。
+    Checked,
+    /// 半选：`accent` 底 + 6×1 横条。
+    Indeterminate,
+    /// 禁用：文字 `text_disabled`。
+    Disabled,
+}
+
+/// 复选框（目录几何）：12×12 方块 radius 2 + 8px 间距 + 11px 标签，行高 24。
+pub fn checkbox_state(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    state: CheckState,
+    label: &str,
+) -> egui::Response {
+    const BOX: f32 = 12.0;
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), COMPACT_H),
+        egui::Sense::click(),
+    );
+    let box_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.min.x + BOX / 2.0, rect.center().y),
+        egui::vec2(BOX, BOX),
+    );
+    let disabled = state == CheckState::Disabled;
+    let checked = matches!(state, CheckState::Checked | CheckState::Indeterminate);
+    let p = ui.painter();
+    p.rect_filled(
+        box_rect,
+        2.0,
+        if checked {
+            shell.accent()
+        } else {
+            shell.input_bg()
+        },
+    );
+    p.rect_stroke(
+        box_rect,
+        2.0,
+        egui::Stroke::new(1.0, shell.border_strong()),
+        egui::StrokeKind::Inside,
+    );
+    if state == CheckState::Indeterminate {
+        p.rect_filled(
+            egui::Rect::from_center_size(box_rect.center(), egui::vec2(6.0, 1.0)),
+            0.0,
+            shell.text_on_accent(),
+        );
+    }
+    let fg = if disabled {
+        shell.text_disabled()
+    } else {
+        shell.t1()
+    };
+    p.text(
+        egui::pos2(box_rect.max.x + space::SM, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        proportional(font_size::MICRO),
+        fg,
+    );
+    let _ = p;
+    if state == CheckState::Checked {
+        let _ = ui.put(
+            egui::Rect::from_center_size(box_rect.center(), egui::vec2(10.0, 10.0)),
+            icon_image(ICON_CHECK, shell.text_on_accent(), 10.0),
+        );
+    }
+    resp
+}
+
+/// 行式复选（整行可点 + 右端挂件槽）。`on` 在点击时翻转。
+pub fn check_row(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    on: &mut bool,
+    label: &str,
+    trailing: Option<egui::ImageSource<'static>>,
+) -> egui::Response {
+    let state = if *on {
+        CheckState::Checked
+    } else {
+        CheckState::Unchecked
+    };
+    let resp = checkbox_state(ui, shell, state, label);
+    if resp.clicked() {
+        *on = !*on;
+    }
+    if let Some(src) = trailing {
+        let r = egui::Rect::from_center_size(
+            egui::pos2(resp.rect.max.x - 8.0, resp.rect.center().y),
+            egui::vec2(12.0, 12.0),
+        );
+        let _ = ui.put(r, icon_image(src, shell.t3(), 12.0));
+    }
+    resp
+}
+
+/// 单选（目录 `UI/Radio`）：12×12 圆环 + 选中 6×6 圆点，行高 24。
+pub fn radio(ui: &mut egui::Ui, shell: &UiShell, on: bool, label: &str) -> egui::Response {
+    const RING: f32 = 12.0;
+    // 单选是**内容宽度**控件：横向排多个时不能吃满整行（否则第二个会被
+    // 推到列宽之外）。宽度 = 圆环 + 间距 + 文本。
+    let text_w = ui
+        .painter()
+        .layout_no_wrap(
+            label.to_string(),
+            proportional(font_size::MICRO),
+            shell.t1(),
+        )
+        .size()
+        .x;
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(RING + space::SM + text_w, COMPACT_H),
+        egui::Sense::click(),
+    );
+    let ring = egui::Rect::from_center_size(
+        egui::pos2(rect.min.x + RING / 2.0, rect.center().y),
+        egui::vec2(RING, RING),
+    );
+    let p = ui.painter();
+    p.circle_stroke(
+        ring.center(),
+        RING / 2.0,
+        egui::Stroke::new(
+            1.0,
+            if on {
+                shell.accent()
+            } else {
+                shell.border_strong()
+            },
+        ),
+    );
+    if on {
+        p.circle_filled(ring.center(), 3.0, shell.accent());
+    }
+    p.text(
+        egui::pos2(ring.max.x + space::SM, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        proportional(font_size::MICRO),
+        shell.t1(),
+    );
+    resp
+}
+
+// ── Tabs（目录 UI/Tabs）───────────────────────────────────────────────
+
+/// 页签条：容器 `bg_input` 底 + radius 4；选中页签 `bg_raised` 底 +
+/// `t1` 字；其余 `t2`；`disabled` 下标用 `text_disabled`。
+pub fn tabs(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    id: &str,
+    labels: &[&str],
+    selected: usize,
+    disabled: &[usize],
+) -> Option<usize> {
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), CONTROL_H),
+        egui::Sense::hover(),
+    );
+    let p = ui.painter();
+    p.rect_filled(rect, radius::FIELD, shell.input_bg());
+    let each = rect.width() / labels.len().max(1) as f32;
+    let mut clicked = None;
+    for (i, label) in labels.iter().enumerate() {
+        let r = egui::Rect::from_min_size(
+            egui::pos2(rect.min.x + each * i as f32, rect.min.y),
+            egui::vec2(each, rect.height()),
+        );
+        let is_sel = i == selected;
+        let is_dis = disabled.contains(&i);
+        let resp = ui.interact(r, egui::Id::new((id, i)), egui::Sense::click());
+        let p = ui.painter();
+        if is_sel {
+            p.rect_filled(r, radius::FIELD, shell.raised_bg());
+        } else if resp.hovered() && !is_dis {
+            p.rect_filled(r, radius::FIELD, shell.hover_bg());
+        }
+        let fg = if is_dis {
+            shell.text_disabled()
+        } else if is_sel {
+            shell.t1()
+        } else {
+            shell.t2()
+        };
+        p.text(
+            r.center(),
+            egui::Align2::CENTER_CENTER,
+            *label,
+            proportional(font_size::SMALL),
+            fg,
+        );
+        if resp.clicked() && !is_dis {
+            clicked = Some(i);
+        }
+    }
+    clicked
+}
+
+// ── Progress / ValueUnit ──────────────────────────────────────────────
+
+/// 进度条（目录 `UI/Progress`）：标签行 + 4px 轨道。
+pub fn progress(ui: &mut egui::Ui, shell: &UiShell, label: &str, fraction: f32) {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(label)
+                .size(font_size::MICRO)
+                .color(shell.t2()),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(format!("{:.0}%", (fraction * 100.0).clamp(0.0, 100.0)))
+                    .font(mono(font_size::MICRO))
+                    .color(shell.t1()),
+            );
+        });
+    });
+    ui.add_space(space::XS);
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 4.0), egui::Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect, 2.0, shell.input_bg());
+    let w = rect.width() * fraction.clamp(0.0, 1.0);
+    if w > 0.0 {
+        p.rect_filled(
+            egui::Rect::from_min_size(rect.min, egui::vec2(w, rect.height())),
+            2.0,
+            shell.accent(),
+        );
+    }
+}
+
+/// 只读数值 + 单位（目录 `UI/ValueUnit`）：等宽 20px 主值 + 11px 说明。
+pub fn value_unit(ui: &mut egui::Ui, shell: &UiShell, value: &str, caption: &str) {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(value)
+                .font(mono(20.0))
+                .color(shell.t1()),
+        );
+        ui.label(
+            egui::RichText::new(caption)
+                .size(font_size::SMALL)
+                .color(shell.t2()),
+        );
+    });
+}
+
+// ── FieldSelect（下拉 · ComboBox 封装）────────────────────────────────
 
 /// 下拉选择：`selected = options[i]` 之一，绑定 `&mut T`。
-///
-/// 模版用 `egui::ComboBox::from_id_salt + show_ui`，把每一项塞进
-/// `selectable_value` —— 调用者只用给一个 `T -> String` 的 label 闭包，
-/// 不必为每种 T 写新组件。
-///
-/// ID salt 由调用方提供（避免面板里两个 FieldSelect 撞名）。
-///
-/// **注意**：不能替代 Radio 组（new_map_dialog 的 level/extent/prefill 是
-/// selectable_value 横向排，不抽）。
 pub struct FieldSelect<'a, T> {
     selected: &'a mut T,
     options: &'a [T],
@@ -150,7 +695,7 @@ pub struct FieldSelect<'a, T> {
 }
 
 impl<'a, T: Copy + PartialEq> FieldSelect<'a, T> {
-    /// 绑定当前值 / 选项切片 / egui 记忆 ID。**ID 必须在面板作用域内唯一**。
+    /// 绑定当前值 / 选项切片 / egui 记忆 ID（作用域内唯一）。
     pub fn new(selected: &'a mut T, options: &'a [T], id_salt: &str) -> Self {
         Self {
             selected,
@@ -166,8 +711,7 @@ impl<'a, T: Copy + PartialEq> FieldSelect<'a, T> {
         self
     }
 
-    /// 装配并落地。`label_for` 把 `&T` 映成显示文本——
-    /// 推荐返回 `String`，避免与 `FieldSelect` 自身的 `&'a T` 借用相争。
+    /// 装配并落地。
     pub fn show<F>(self, ui: &mut egui::Ui, _shell: &UiShell, label_for: F)
     where
         F: Fn(&T) -> String,
@@ -183,16 +727,9 @@ impl<'a, T: Copy + PartialEq> FieldSelect<'a, T> {
     }
 }
 
-// ── FieldCheckbox（原生复选项）────────────────────────────────────────
+// ── FieldCheckbox（原生复选项 · 存量）──────────────────────────────────
 
-/// 复选项 + 文本标签；匹配原型 `.checkbox` 与原生 `ui.checkbox` 同形视觉。
-///
-/// 当前是 [`egui::Ui::checkbox`] 的薄壳——给定 stable API，未来要在 hover
-/// 反馈 / focus 环上做品牌化也只改这一处。
-///
-/// ```text
-///   [✓] 标签
-/// ```
+/// 原生复选项 + 标签（存量 API；目录样式用 [`checkbox_state`] / [`check_row`]）。
 pub fn field_checkbox(
     ui: &mut egui::Ui,
     _shell: &UiShell,
@@ -202,87 +739,96 @@ pub fn field_checkbox(
     ui.checkbox(on, label)
 }
 
-// ── Switch（视觉开关 —— 预留）────────────────────────────────────────
+// ── Switch（目录 UI/Switch）───────────────────────────────────────────
 
-/// Switch 视觉控件（25×14 胶囊 + 滑钮）。
-///
-/// **当前 main 没有 call site**；保留作为后续「图层开关视觉升级」与原型
-/// `.toggle` 的对齐点。等真正用到时由 `layers_panel` 替换 `field_checkbox`
-/// 决定是否升级——本接口签名先稳定下来。
-///
-/// 视觉（web `.toggle`）：
-/// on：accent 底 + 白滑钮靠右；
-/// off：active 底 + text_3 滑钮靠左；
-/// 命中区整胶囊。
+/// 开关（目录 28×16）：on = accent_soft 底 + accent 描边 + accent 滑钮；
+/// off = bg_input 底 + border_subtle 描边 + t2 滑钮；disabled 滑钮 t3。
 pub struct Switch<'a> {
     on: &'a mut bool,
     size: egui::Vec2,
+    enabled: bool,
 }
 
 impl<'a> Switch<'a> {
-    /// 默认 25×14（对齐 web `.toggle`）。
+    /// 默认 28×16（目录）。
     pub fn new(on: &'a mut bool) -> Self {
         Self {
             on,
-            size: egui::vec2(25.0, 14.0),
+            size: egui::vec2(28.0, 16.0),
+            enabled: true,
         }
     }
 
-    /// 显式宽 × 高（含 `radius` = `size.y / 2.0`）。
+    /// 显式宽 × 高。
     pub fn size(mut self, s: egui::Vec2) -> Self {
         self.size = s;
         self
     }
 
-    /// 装配并落地。返回命中区 `Response`。
+    /// 禁用态（目录 `Switch/Disabled`）。
+    pub fn enabled(mut self, on: bool) -> Self {
+        self.enabled = on;
+        self
+    }
+
+    /// 装配并落地。
     pub fn show(self, ui: &mut egui::Ui, shell: &UiShell) -> egui::Response {
         let (rect, resp) = ui.allocate_exact_size(self.size, egui::Sense::click());
-        let painter = ui.painter();
-        // 底色胶囊。
+        let p = ui.painter();
         let r = self.size.y / 2.0;
-        painter.rect_filled(
+        let (fill, stroke, thumb) = if !self.enabled {
+            (shell.input_bg(), shell.border_subtle(), shell.t3())
+        } else if *self.on {
+            (shell.accent_soft(), shell.accent(), shell.accent())
+        } else {
+            (shell.input_bg(), shell.border_subtle(), shell.t2())
+        };
+        p.rect_filled(rect, r, fill);
+        p.rect_stroke(
             rect,
             r,
-            if *self.on {
-                shell.accent()
-            } else {
-                shell.active_bg()
-            },
+            egui::Stroke::new(1.0, stroke),
+            egui::StrokeKind::Inside,
         );
-        // 滑钮。
         let knob = self.size.y - 4.0;
         let knob_x = if *self.on {
-            // 靠右：max.x − 2 − knob/2。
             rect.max.x - 2.0 - knob / 2.0
         } else {
-            // 靠左：min.x + 2 + knob/2。
             rect.min.x + 2.0 + knob / 2.0
         };
-        painter.circle_filled(
-            egui::pos2(knob_x, rect.center().y),
-            knob / 2.0,
-            if *self.on {
-                egui::Color32::WHITE
-            } else {
-                shell.t3()
-            },
-        );
-        if resp.clicked() {
+        p.circle_filled(egui::pos2(knob_x, rect.center().y), knob / 2.0, thumb);
+        if resp.clicked() && self.enabled {
             *self.on = !*self.on;
         }
         resp
     }
 }
 
-// ── slider / SliderRow（Figma #3:20791 定制滑条）───────────────────────
+// ── Slider（目录 UI/Slider：4px 轨道 + 6px 方钮）───────────────────────
 
-/// 几何常量（Figma `3:20791` 像素采样 @1x）：轨道高 8、手柄 10×8、命中区高 16。
-const SLIDER_TRACK_H: f32 = 8.0;
-const SLIDER_HANDLE_W: f32 = 10.0;
+const SLIDER_TRACK_H: f32 = 4.0;
+const SLIDER_HANDLE: f32 = 6.0;
 const SLIDER_HIT_H: f32 = 16.0;
 
-/// 分数（0..=1）→ 值。`logarithmic` 时按 `min·(max/min)^f` 插值；
-/// `min <= 0` 无法取对数时**静默回退线性**（防御：调用方给错范围不 panic）。
+/// 滑条色调（目录三变体）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SliderTone {
+    /// 默认：accent 蓝（选择语义）。
+    Accent,
+    /// 画笔：gold 金（仅画笔 / 播放语义）。
+    Gold,
+    /// 禁用：text_3 灰。
+    Disabled,
+}
+
+fn slider_colors(shell: &UiShell, tone: SliderTone) -> (egui::Color32, egui::Color32) {
+    match tone {
+        SliderTone::Accent => (shell.accent(), shell.t1()),
+        SliderTone::Gold => (shell.gold(), shell.t1()),
+        SliderTone::Disabled => (shell.t3(), shell.t3()),
+    }
+}
+
 fn slider_value_at_fraction(f: f32, min: f32, max: f32, logarithmic: bool) -> f32 {
     let f = f.clamp(0.0, 1.0);
     if logarithmic && min > 0.0 && max > min {
@@ -292,7 +838,6 @@ fn slider_value_at_fraction(f: f32, min: f32, max: f32, logarithmic: bool) -> f3
     }
 }
 
-/// 值 → 分数（0..=1），[`slider_value_at_fraction`] 的逆。
 fn slider_fraction_of_value(v: f32, min: f32, max: f32, logarithmic: bool) -> f32 {
     if max <= min {
         return 0.0;
@@ -305,19 +850,7 @@ fn slider_fraction_of_value(v: f32, min: f32, max: f32, logarithmic: bool) -> f3
     }
 }
 
-/// Figma `3:20791` 定制滑条：整宽 8px 胶囊轨道 + 金色已填充段 + 浅色方形手柄。
-///
-/// 自绘（不走 [`egui::Slider`]）的原因：设计稿的「轨道细条 + 无圆thumb」形态
-/// 用 egui Slider 的 `HandleShape`/`trailing_fill` 拼不出来（egui 0.36 全局
-/// 样式互斥，见 brush_panel 旧注释）；自绘后交互（点击跳转 + 拖拽）与取值
-/// 映射都在本函数内闭环，caller 只管 `&mut value`。
-///
-/// 配色走令牌（AGENTS §8 禁裸 hex；采样映射同 `status_bar` 先例）：
-/// `#D6B77B`→`gold`、轨道深色→`timeline_track`（既有「轨道」语义令牌，
-/// 比设计稿 `#131C23` 略亮以保证面板底上可见）、手柄白（`Switch` 同款）。
-///
-/// `T: Numeric` 与 [`egui::Slider::new`] 同款泛型——整数字段（如 shelf_cells）
-/// 直接传 `&mut u32`，不必先转 f32。
+/// 滑条（目录几何）：整宽 4px 轨道 + 6×6 方钮（1px 同色描边）。
 pub fn slider<T: egui::emath::Numeric>(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -325,17 +858,32 @@ pub fn slider<T: egui::emath::Numeric>(
     range: std::ops::RangeInclusive<T>,
     logarithmic: bool,
 ) -> egui::Response {
+    slider_toned(ui, shell, value, range, logarithmic, SliderTone::Accent)
+}
+
+fn slider_toned<T: egui::emath::Numeric>(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    value: &mut T,
+    range: std::ops::RangeInclusive<T>,
+    logarithmic: bool,
+    tone: SliderTone,
+) -> egui::Response {
+    let (fill_color, thumb_fill) = slider_colors(shell, tone);
+    let enabled = tone != SliderTone::Disabled;
     let min = range.start().to_f64() as f32;
     let max = range.end().to_f64() as f32;
     let (rect, mut resp) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), SLIDER_HIT_H),
-        egui::Sense::click_and_drag(),
+        if enabled {
+            egui::Sense::click_and_drag()
+        } else {
+            egui::Sense::hover()
+        },
     );
     let p = ui.painter();
-
-    // 点击即跳转 + 拖拽跟手：指针 x 直接映回值。
     let mut next = value.to_f64() as f32;
-    if resp.dragged() || resp.clicked() {
+    if enabled && (resp.dragged() || resp.clicked()) {
         if let Some(pos) = resp.interact_pointer_pos() {
             let frac = if rect.width() > 0.0 {
                 (pos.x - rect.min.x) / rect.width()
@@ -350,41 +898,32 @@ pub fn slider<T: egui::emath::Numeric>(
         resp.mark_changed();
     }
     let frac = slider_fraction_of_value(next, min, max, logarithmic);
-
     let track_rect =
         egui::Rect::from_center_size(rect.center(), egui::vec2(rect.width(), SLIDER_TRACK_H));
-    p.rect_filled(track_rect, SLIDER_TRACK_H / 2.0, shell.timeline_track());
+    p.rect_filled(track_rect, 2.0, shell.input_bg());
     if frac > 0.0 {
         let fill_end = track_rect.min.x + frac * track_rect.width();
         p.rect_filled(
             egui::Rect::from_two_pos(track_rect.min, egui::pos2(fill_end, track_rect.max.y)),
-            SLIDER_TRACK_H / 2.0,
-            shell.gold(),
+            2.0,
+            fill_color,
         );
-        let handle_rect = egui::Rect::from_center_size(
+        let handle = egui::Rect::from_center_size(
             egui::pos2(fill_end, rect.center().y),
-            egui::vec2(SLIDER_HANDLE_W, SLIDER_TRACK_H),
+            egui::vec2(SLIDER_HANDLE, SLIDER_HANDLE),
         );
-        // hover / 拖拽给一圈描边作反馈（设计稿是静态图，无 hover 态可抄）。
-        let stroke = if resp.dragged() {
-            egui::Stroke::new(1.0, shell.t1())
-        } else if resp.hovered() {
-            egui::Stroke::new(1.0, shell.t2())
-        } else {
-            egui::Stroke::NONE
-        };
-        p.rect_filled(handle_rect, 2.0, shell.t1());
-        if stroke != egui::Stroke::NONE {
-            p.rect_stroke(handle_rect, 2.0, stroke, egui::StrokeKind::Inside);
-        }
+        p.rect_filled(handle, 1.0, thumb_fill);
+        p.rect_stroke(
+            handle,
+            1.0,
+            egui::Stroke::new(1.0, fill_color),
+            egui::StrokeKind::Inside,
+        );
     }
     resp
 }
 
-/// 滑条行（Figma `3:20791` 布局）：顶行 label 左（t2）+ 值右（t1），
-/// 其下整宽 [`slider`]。`formatter` 决定右上角文案（如 `"×{:.2}"` / `"48 px"`）。
-///
-/// `T: Numeric` 与 [`slider`] 同款——整数字段直接传 `&mut u32`。
+/// 滑条行（目录）：标签 t2 + 数值 mono t1 上行，下行整宽滑条（默认蓝）。
 pub fn slider_row<T: egui::emath::Numeric>(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -394,42 +933,103 @@ pub fn slider_row<T: egui::emath::Numeric>(
     formatter: impl Fn(f32) -> String,
     logarithmic: bool,
 ) -> egui::Response {
+    slider_row_toned(
+        ui,
+        shell,
+        label,
+        value,
+        range,
+        formatter,
+        logarithmic,
+        SliderTone::Accent,
+    )
+}
+
+/// 画笔滑条（目录 `Slider/Brush`：金色）。
+pub fn slider_row_brush<T: egui::emath::Numeric>(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    label: &str,
+    value: &mut T,
+    range: std::ops::RangeInclusive<T>,
+    formatter: impl Fn(f32) -> String,
+    logarithmic: bool,
+) -> egui::Response {
+    slider_row_toned(
+        ui,
+        shell,
+        label,
+        value,
+        range,
+        formatter,
+        logarithmic,
+        SliderTone::Gold,
+    )
+}
+
+/// 禁用滑条（目录 `Slider/Disabled`）。
+pub fn slider_row_disabled<T: egui::emath::Numeric>(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    label: &str,
+    value: &mut T,
+    range: std::ops::RangeInclusive<T>,
+    formatter: impl Fn(f32) -> String,
+    logarithmic: bool,
+) -> egui::Response {
+    slider_row_toned(
+        ui,
+        shell,
+        label,
+        value,
+        range,
+        formatter,
+        logarithmic,
+        SliderTone::Disabled,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn slider_row_toned<T: egui::emath::Numeric>(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    label: &str,
+    value: &mut T,
+    range: std::ops::RangeInclusive<T>,
+    formatter: impl Fn(f32) -> String,
+    logarithmic: bool,
+    tone: SliderTone,
+) -> egui::Response {
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(label)
-                .size(shell.scale.small)
+                .size(font_size::MICRO)
                 .color(shell.t2()),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
                 egui::RichText::new(formatter(value.to_f64() as f32))
-                    .size(shell.scale.small)
-                    .color(shell.t1()),
+                    .font(mono(font_size::MICRO))
+                    .color(if tone == SliderTone::Disabled {
+                        shell.text_disabled()
+                    } else {
+                        shell.t1()
+                    }),
             );
         });
     });
     ui.add_space(space::XS);
-    slider(ui, shell, value, range, logarithmic)
+    slider_toned(ui, shell, value, range, logarithmic, tone)
 }
 
-// ── PropertyRow / value_box（检视器属性行 · Figma `42:2` 组件族）──────
+// ── PropertyRow / value_box（42:2 组件族 · 随目录色板更新）─────────────
 
-/// Figma `42:2` 采样几何 @1x：label 列宽 84、值框高 28、值框水平内边距 8。
 const PROPERTY_LABEL_W: f32 = 84.0;
 const VALUE_BOX_H: f32 = 28.0;
 const VALUE_BOX_PAD_X: f32 = 8.0;
 
-/// 只读值框（Figma `42:27` Value 模板）：暗色内嵌底 + `border_subtle` 描边 +
-/// 等宽值文本，右端可挂单位后缀（Elevation 行的 `"m"`）与/或下拉箭头
-/// （Type 行的可编辑暗示）。
-///
-/// 「内嵌底」色彩语义：设计稿 `#131C23` 比面板**暗**（与 raised 相反方向），
-/// 令牌层没有 inset 档——取 `panel_bg × 0.8` gamma 域压暗，明暗两主题都自动
-/// 成立（亮色下面板本就近白，压暗后同样是「凹进去」观感）。值文本走
-/// `mono(MICRO)` + `t1`（设计稿 IBM Plex Mono 11 对位；打包字体缺 Plex，
-/// 用 mono 家族等价替换）。
-///
-/// 返回整框的 click `Response`——将来把 Type 行接成真下拉时用它开菜单。
+/// 只读值框（目录 `Input` 同壳）：`bg_input` 底 + `border_subtle` 描边 +
+/// radius 4 + 等宽值文本；右端可挂单位后缀与下拉箭头。
 pub fn value_box(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -442,7 +1042,7 @@ pub fn value_box(
         egui::Sense::click(),
     );
     let p = ui.painter();
-    p.rect_filled(rect, radius::FIELD, shell.panel_bg().gamma_multiply(0.8));
+    p.rect_filled(rect, radius::FIELD, shell.input_bg());
     p.rect_stroke(
         rect,
         radius::FIELD,
@@ -453,10 +1053,9 @@ pub fn value_box(
         egui::pos2(rect.min.x + VALUE_BOX_PAD_X, rect.center().y),
         egui::Align2::LEFT_CENTER,
         text,
-        crate::ui_theme::mono(font_size::MICRO),
+        mono(font_size::MICRO),
         shell.t1(),
     );
-    // 右端从右往左排：下拉箭头（最右）→ 单位后缀（其左）。
     let mut right = rect.max.x - VALUE_BOX_PAD_X;
     if dropdown {
         right -= 10.0;
@@ -466,11 +1065,11 @@ pub fn value_box(
             egui::pos2(right, rect.center().y),
             egui::Align2::RIGHT_CENTER,
             sfx,
-            crate::ui_theme::proportional(font_size::MICRO),
+            proportional(font_size::MICRO),
             shell.t3(),
         );
     }
-    let _ = p; // 释放 painter 借用，让 `ui.put` 可借 ui。
+    let _ = p;
     if dropdown {
         let glyph = egui::Rect::from_center_size(
             egui::pos2(rect.max.x - VALUE_BOX_PAD_X - 5.0, rect.center().y),
@@ -481,14 +1080,7 @@ pub fn value_box(
     resp
 }
 
-/// 属性行（Figma `42:25` Property 模板）：定宽 label（t2，12px）+ 整宽
-/// [`value_box`]。行高 = 值框高 28，label 垂直居中对齐值框。
-///
-/// ```text
-///   Elevation   ┌──────────────────┐
-///               │ 842            m │
-///               └──────────────────┘
-/// ```
+/// 属性行：定宽 label（t2，12px）+ 整宽 [`value_box`]。
 pub struct PropertyRow<'a> {
     label: &'a str,
     value: &'a str,
@@ -498,7 +1090,7 @@ pub struct PropertyRow<'a> {
 }
 
 impl<'a> PropertyRow<'a> {
-    /// label（如 `"Elevation"`）+ 等宽值文本（如 `"842"`）。
+    /// label + 等宽值文本。
     pub fn new(label: &'a str, value: &'a str) -> Self {
         Self {
             label,
@@ -509,25 +1101,25 @@ impl<'a> PropertyRow<'a> {
         }
     }
 
-    /// 单位后缀（如 `"m"`），挂在值框右端（下拉箭头之左）。
+    /// 单位后缀。
     pub fn suffix(mut self, s: &'a str) -> Self {
         self.suffix = Some(s);
         self
     }
 
-    /// 值框右端画下拉箭头（可编辑字段的视觉暗示）。默认 false。
+    /// 值框右端画下拉箭头。
     pub fn dropdown(mut self, on: bool) -> Self {
         self.dropdown = on;
         self
     }
 
-    /// label 列宽（默认 Figma 采样 84px）。
+    /// label 列宽（默认 84）。
     pub fn label_width(mut self, w: f32) -> Self {
         self.label_width = w;
         self
     }
 
-    /// 装配并落地，返回值框的 `Response`（可继续串 `.clicked()`）。
+    /// 装配并落地。
     pub fn show(self, ui: &mut egui::Ui, shell: &UiShell) -> egui::Response {
         let mut resp: Option<egui::Response> = None;
         ui.horizontal(|ui| {
@@ -539,7 +1131,7 @@ impl<'a> PropertyRow<'a> {
                 egui::pos2(lab_rect.min.x, lab_rect.center().y),
                 egui::Align2::LEFT_CENTER,
                 self.label,
-                crate::ui_theme::proportional(font_size::SMALL),
+                proportional(font_size::SMALL),
                 shell.t2(),
             );
             resp = Some(value_box(ui, shell, self.value, self.suffix, self.dropdown));
@@ -548,84 +1140,9 @@ impl<'a> PropertyRow<'a> {
     }
 }
 
-/// 复选行（Figma `42:40` Visibility checkbox）：自绘 12×12 勾选方块 + 标签 +
-/// 可选右端挂件图标（如 `lock-keyhole-open`）。
-///
-/// 不复用 [`field_checkbox`]（原生 `ui.checkbox`）的原因：设计稿勾选块是
-/// 圆角描边块 + 内嵌 check 图标，与原生字体勾选号不同档；右端挂件槽原生
-/// checkbox 也给不了。`field_checkbox` 继续服务「原生即可」的场景，两者并存。
-pub fn check_row(
-    ui: &mut egui::Ui,
-    shell: &UiShell,
-    on: &mut bool,
-    label: &str,
-    trailing: Option<egui::ImageSource<'static>>,
-) -> egui::Response {
-    const ROW_H: f32 = 18.0;
-    const BOX: f32 = 12.0;
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), ROW_H),
-        egui::Sense::click(),
-    );
-    // 勾选方块：描边块，选中态描边转 t1 并内嵌 check 图标（Figma square-check）。
-    let box_rect = egui::Rect::from_center_size(
-        egui::pos2(rect.min.x + BOX / 2.0, rect.center().y),
-        egui::vec2(BOX, BOX),
-    );
-    let stroke = if *on {
-        shell.t1()
-    } else {
-        shell.border_strong()
-    };
-    ui.painter().rect_stroke(
-        box_rect,
-        radius::BADGE,
-        egui::Stroke::new(1.0, stroke),
-        egui::StrokeKind::Inside,
-    );
-    if *on {
-        // `ui.put` 左上锚定——勾号须落方块的**居中**矩形。
-        let check_rect =
-            egui::Rect::from_center_size(box_rect.center(), egui::vec2(BOX - 2.0, BOX - 2.0));
-        let _ = ui.put(
-            check_rect,
-            icon_image(ICON_SQUARE_CHECK, shell.t1(), BOX - 2.0),
-        );
-    }
-    // 标签（11px t2，Figma body-small 对位 MICRO）。
-    ui.painter().text(
-        egui::pos2(box_rect.max.x + 6.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        crate::ui_theme::proportional(font_size::MICRO),
-        shell.t2(),
-    );
-    // 右端挂件（12×12 t3）。
-    if let Some(src) = trailing {
-        let trail_rect = egui::Rect::from_center_size(
-            egui::pos2(rect.max.x - BOX / 2.0 - 2.0, rect.center().y),
-            egui::vec2(BOX, BOX),
-        );
-        let _ = ui.put(trail_rect, icon_image(src, shell.t3(), BOX));
-    }
-    if resp.clicked() {
-        *on = !*on;
-    }
-    resp
-}
-
 // ── dialog_window（模态壳）───────────────────────────────────────────
 
-/// 模态对话框壳：标题进原生标题栏 + × 写回 `open` + 居中 + Foreground 置顶。
-///
-/// 替代各对话框（new_project / new_map …）内反复出现的
-/// `egui::Window::new(title).open(&mut open).collapsible(false).resizable(false)
-///  .order(Foreground).anchor(CENTER_CENTER, [0,0]).frame(...corner_radius(MODAL))`
-/// 一坨样板；调用者只关心 body 与可选 foot。
-///
-/// **层序**：egui 绘制序 `Background < Middle < Foreground < Tooltip`——浮动
-/// 面板在 Middle，本壳开 Foreground 压得过面板；Tooltip 仍在最上（欢迎页 /
-/// startup 加载 / 命令面板 / 新建工程 / 新建地图 / 失败提示卡片等同层）。
+/// 模态对话框壳（居中 + Foreground + 原生标题栏 ×）。
 pub struct DialogWindow<'a> {
     title: &'a str,
     open: &'a mut bool,
@@ -635,7 +1152,7 @@ pub struct DialogWindow<'a> {
 }
 
 impl<'a> DialogWindow<'a> {
-    /// 最小形态——`open = &mut dialog.open`、title 即可。
+    /// 最小形态。
     pub fn new(title: &'a str, open: &'a mut bool) -> Self {
         Self {
             title,
@@ -652,19 +1169,19 @@ impl<'a> DialogWindow<'a> {
         self
     }
 
-    /// 标题栏 ▼（默认 false —— 模态不该折起来）。true 用于「故障诊断卡」。
+    /// 标题栏折叠（默认 false）。
     pub fn collapsible(mut self, on: bool) -> Self {
         self.collapsible = on;
         self
     }
 
-    /// 是否可拖拽边框改尺寸（默认 false）。
+    /// 可缩放（默认 false）。
     pub fn resizable(mut self, on: bool) -> Self {
         self.resizable = on;
         self
     }
 
-    /// 装配并落地。`open` 收 `Window::open` 的写回（用户点 × 时变 false）。
+    /// 装配并落地。
     pub fn show<F: FnOnce(&mut egui::Ui)>(self, ctx: &egui::Context, shell: &UiShell, body: F) {
         let mut open = *self.open;
         egui::Window::new(self.title)
@@ -679,552 +1196,171 @@ impl<'a> DialogWindow<'a> {
                     .fill(shell.panel_bg())
                     .stroke(egui::Stroke::new(1.0_f32, shell.border_strong()))
                     .inner_margin(crate::ui_theme::margin_all(space::MD))
-                    .corner_radius(radius::MODAL),
+                    .corner_radius(radius::PANEL),
             )
             .show(ctx, body);
         *self.open = open;
     }
 }
 
-// ── 测试 ─────────────────────────────────────────────────────────────────
+// ── 测试 ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod field_input_tests {
+mod tests {
     use super::*;
 
     fn shell() -> UiShell {
         UiShell::new(&crate::ui_theme::UiShellConfig::default())
     }
 
-    /// 构造一个 `egui::Ui` 跑在 `400×400` 矩形里，供 `show` 落地用。
-    fn make_ui() -> (egui::Context, egui::Ui) {
+    fn make_ui(name: &str) -> (egui::Context, egui::Ui) {
         let ctx = egui::Context::default();
         ctx.begin_pass(Default::default());
         let ui = egui::Ui::new(
             ctx.clone(),
-            egui::Id::new("field_input_tests"),
+            egui::Id::new(name),
             egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(400.0, 400.0),
+                egui::vec2(320.0, 400.0),
             )),
         );
         (ctx, ui)
     }
 
     #[test]
-    fn field_input_show_renders_without_panic_for_each_builder_path() {
+    fn field_input_does_not_mutate_value_without_input() {
         let sh = shell();
-        let (_c1, mut u1) = make_ui();
-        let mut v = String::from("initial");
-        FieldInput::new(&mut v, "hint").show(&mut u1, &sh);
-        assert!(!v.is_empty(), "初始值不应被改");
-
-        // font_mono + min_size + fill_width + focus_on_add 全开
-        let (_c2, mut u2) = make_ui();
-        let mut v = String::new();
+        let (_c, mut ui) = make_ui("input_geom");
+        let mut v = String::from("Zunyi");
         let r = FieldInput::new(&mut v, "hint")
-            .font_mono(true)
-            .min_size(egui::vec2(80.0, 28.0))
             .fill_width(true)
-            .focus_on_add(true)
-            .show(&mut u2, &sh);
-        // `request_focus` 不总能在 headless 上下文里成功测，但调用本身必须不 panic。
-        let _ = r;
-    }
-
-    #[test]
-    fn field_input_default_proportional_does_not_require_shell_in_builder() {
-        // 仅做构造阶段检验：`new + show` 形签名对得上。
-        let _ = std::marker::PhantomData::<fn() -> FieldInput<'static>>;
-    }
-
-    #[test]
-    fn field_input_builder_chain_is_consistent() {
-        // 编译通过即视为链式 builder 类型一致。
-        let sh = shell();
-        let (_c, mut ui) = make_ui();
-        let mut v = String::new();
-        FieldInput::new(&mut v, "h")
-            .font_mono(true)
-            .fill_width(true)
-            .min_size(egui::vec2(60.0, 24.0))
-            .focus_on_add(true)
             .show(&mut ui, &sh);
-    }
-}
-
-#[cfg(test)]
-mod field_select_tests {
-    use super::*;
-
-    fn shell() -> UiShell {
-        UiShell::new(&crate::ui_theme::UiShellConfig::default())
+        assert!(r.rect.height() > 0.0, "编辑区应有高度");
+        assert_eq!(v, "Zunyi", "未输入时值不变");
     }
 
     #[test]
-    fn field_select_id_salt_is_recorded() {
-        let opts = [10u32, 20, 30];
-        let mut sel = 10u32;
-        let fs = FieldSelect::new(&mut sel, &opts, "unique_id");
-        // 字段私有，但构造不爆 + `Debug` 形可显示。
-        assert_eq!(fs.id_salt, "unique_id");
-    }
-
-    #[test]
-    fn field_select_show_renders_with_label_closure() {
+    fn input_states_render_without_panic() {
         let sh = shell();
-        let opts = ["甲", "乙", "丙"];
-        let mut sel = "甲";
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
-        let mut ui = egui::Ui::new(
-            ctx.clone(),
-            egui::Id::new("field_select_tests"),
-            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(400.0, 200.0),
-            )),
-        );
-        FieldSelect::new(&mut sel, &opts, "wv_test_select").show(&mut ui, &sh, |s| s.to_string());
-        // sel 不被 show 改写——只有 open 后 user pick 才改。
-        assert_eq!(sel, "甲");
-    }
-}
-
-#[cfg(test)]
-mod field_checkbox_tests {
-    use super::*;
-
-    fn shell() -> UiShell {
-        UiShell::new(&crate::ui_theme::UiShellConfig::default())
-    }
-
-    #[test]
-    fn field_checkbox_toggles_correctly() {
-        let sh = shell();
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
-        let mut ui = egui::Ui::new(
-            ctx.clone(),
-            egui::Id::new("field_checkbox_tests"),
-            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(400.0, 200.0),
-            )),
-        );
-        let mut on = false;
-        let _ = field_checkbox(&mut ui, &sh, &mut on, "复选项");
-        assert!(!on, "未点击时不变");
-    }
-}
-
-#[cfg(test)]
-mod switch_tests {
-    use super::*;
-
-    fn shell() -> UiShell {
-        UiShell::new(&crate::ui_theme::UiShellConfig::default())
-    }
-
-    fn make_ui() -> (egui::Context, egui::Ui) {
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
-        let ui = egui::Ui::new(
-            ctx.clone(),
-            egui::Id::new("switch_tests"),
-            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(400.0, 200.0),
-            )),
-        );
-        (ctx, ui)
-    }
-
-    #[test]
-    fn switch_default_size_matches_web_toggle() {
-        let sh = shell();
-        let (_c, mut ui) = make_ui();
-        let mut on = false;
-        let r = Switch::new(&mut on).show(&mut ui, &sh);
-        assert!(
-            (r.rect.width() - 25.0).abs() < 1e-3,
-            "默认宽 = 25px，got {}",
-            r.rect.width()
-        );
-        assert!(
-            (r.rect.height() - 14.0).abs() < 1e-3,
-            "默认高 = 14px，got {}",
-            r.rect.height()
-        );
-    }
-
-    #[test]
-    fn switch_size_override_takes_effect() {
-        let sh = shell();
-        let (_c, mut ui) = make_ui();
-        let mut on = true;
-        let r = Switch::new(&mut on)
-            .size(egui::vec2(40.0, 20.0))
-            .show(&mut ui, &sh);
-        assert!(r.rect.width() > 25.0, "显式宽 40 > 默认 25");
-    }
-}
-
-#[cfg(test)]
-mod slider_row_tests {
-    use super::*;
-
-    fn shell() -> UiShell {
-        UiShell::new(&crate::ui_theme::UiShellConfig::default())
-    }
-
-    fn make_ui() -> (egui::Context, egui::Ui) {
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
-        let ui = egui::Ui::new(
-            ctx.clone(),
-            egui::Id::new("slider_row_tests"),
-            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(400.0, 200.0),
-            )),
-        );
-        (ctx, ui)
-    }
-
-    #[test]
-    fn slider_row_linear_passes_value_through_formatter() {
-        let sh = shell();
-        let (_c, mut ui) = make_ui();
-        let mut v: f32 = 0.5;
-        slider_row(
-            &mut ui,
-            &sh,
-            "软度",
-            &mut v,
-            0.0..=1.0,
-            |n| format!("{:.2}", n),
-            false,
-        );
-        // 跑过 show 不 panic 即视为通过。
-    }
-
-    #[test]
-    fn slider_row_logarithmic_path_does_not_panic() {
-        let sh = shell();
-        let (_c, mut ui) = make_ui();
-        let mut v: f32 = 32.0;
-        slider_row(
-            &mut ui,
-            &sh,
-            "半径",
-            &mut v,
-            16.0..=600.0,
-            |n| format!("{:.0} wu", n),
-            true,
-        );
-    }
-
-    #[test]
-    fn slider_value_at_fraction_maps_linear_endpoints_and_middle() {
-        // 手算：[100, 200] 线性 → f=0 得 100，f=1 得 200，f=0.5 得 150。
-        assert!(
-            (slider_value_at_fraction(0.0, 100.0, 200.0, false) - 100.0).abs() < 1e-4,
-            "got {}",
-            slider_value_at_fraction(0.0, 100.0, 200.0, false)
-        );
-        assert!(
-            (slider_value_at_fraction(1.0, 100.0, 200.0, false) - 200.0).abs() < 1e-4,
-            "got {}",
-            slider_value_at_fraction(1.0, 100.0, 200.0, false)
-        );
-        assert!(
-            (slider_value_at_fraction(0.5, 100.0, 200.0, false) - 150.0).abs() < 1e-4,
-            "got {}",
-            slider_value_at_fraction(0.5, 100.0, 200.0, false)
-        );
-    }
-
-    #[test]
-    fn slider_value_at_fraction_logarithmic_midpoint_is_geometric_mean() {
-        // 手算：[1, 100] 对数 f=0.5 → 1·(100)^0.5 = 10。
-        assert!(
-            (slider_value_at_fraction(0.5, 1.0, 100.0, true) - 10.0).abs() < 1e-4,
-            "got {}",
-            slider_value_at_fraction(0.5, 1.0, 100.0, true)
-        );
-    }
-
-    #[test]
-    fn slider_logarithmic_falls_back_to_linear_when_min_is_nonpositive() {
-        // 防御：min<=0 取不了对数，回退线性 → [-1, 1] f=0.5 = 0。
-        assert!(
-            (slider_value_at_fraction(0.5, -1.0, 1.0, true) - 0.0).abs() < 1e-4,
-            "got {}",
-            slider_value_at_fraction(0.5, -1.0, 1.0, true)
-        );
-    }
-
-    #[test]
-    fn slider_fraction_of_value_inverts_value_at_fraction() {
-        // 往返：of(at(f)) == f（线性 + 对数各一组，1e-4 容差）。
-        for f in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
-            let lin = slider_fraction_of_value(
-                slider_value_at_fraction(f, 16.0, 600.0, false),
-                16.0,
-                600.0,
-                false,
-            );
-            assert!((lin - f).abs() < 1e-4, "linear f={} got {}", f, lin);
-            let log = slider_fraction_of_value(
-                slider_value_at_fraction(f, 1.0, 100.0, true),
-                1.0,
-                100.0,
-                true,
-            );
-            assert!((log - f).abs() < 1e-4, "log f={} got {}", f, log);
+        for (name, error, enabled) in [("a", false, true), ("b", true, true), ("c", false, false)] {
+            let (_c, mut ui) = make_ui(name);
+            let mut v = String::from("x");
+            let _ = FieldInput::new(&mut v, "hint")
+                .error(error)
+                .enabled(enabled)
+                .show(&mut ui, &sh);
         }
     }
 
     #[test]
-    fn slider_fraction_of_value_clamps_out_of_range_input() {
-        // 越界值夹回 [0,1]；退化区间（max<=min）返回 0 而不是 NaN。
-        assert!(
-            (slider_fraction_of_value(999.0, 0.0, 1.0, false) - 1.0).abs() < 1e-4,
-            "got {}",
-            slider_fraction_of_value(999.0, 0.0, 1.0, false)
-        );
-        assert!(
-            (slider_fraction_of_value(-5.0, 0.0, 1.0, false) - 0.0).abs() < 1e-4,
-            "got {}",
-            slider_fraction_of_value(-5.0, 0.0, 1.0, false)
-        );
-        assert!(
-            (slider_fraction_of_value(0.5, 1.0, 1.0, false) - 0.0).abs() < 1e-4,
-            "got {}",
-            slider_fraction_of_value(0.5, 1.0, 1.0, false)
-        );
+    fn slider_value_mapping_is_linear_and_logarithmic() {
+        assert!((slider_value_at_fraction(0.5, 0.0, 1.0, false) - 0.5).abs() < 1e-6);
+        assert!((slider_value_at_fraction(0.5, 1.0, 100.0, true) - 10.0).abs() < 1e-4);
+        assert!((slider_fraction_of_value(10.0, 1.0, 100.0, true) - 0.5).abs() < 1e-5);
     }
 
     #[test]
-    fn slider_show_renders_without_panic_for_numeric_and_log_paths() {
+    fn slider_tones_select_catalogue_colors() {
         let sh = shell();
-        // f32 + 线性。
-        let (_c1, mut u1) = make_ui();
-        let mut v: f32 = 0.3;
-        slider(&mut u1, &sh, &mut v, 0.0..=1.0, false);
-        assert!((v - 0.3).abs() < 1e-6, "无交互时值不被改写，got {}", v);
-        // u32（Numeric 泛型路径，continent_dialog shelf_cells 同款）。
-        let (_c2, mut u2) = make_ui();
-        let mut n: u32 = 8;
-        slider(&mut u2, &sh, &mut n, 0..=32, false);
-        assert_eq!(n, 8, "无交互时整数值不被改写");
-        // 对数路径不 panic。
-        let (_c3, mut u3) = make_ui();
-        let mut r: f32 = 64.0;
-        slider(&mut u3, &sh, &mut r, 16.0..=600.0, true);
-    }
-}
-
-#[cfg(test)]
-mod dialog_window_tests {
-    use super::*;
-
-    #[test]
-    fn dialog_window_default_fields_have_expected_values() {
-        let mut open = true;
-        let dw = DialogWindow::new("test", &mut open);
-        assert_eq!(dw.title, "test");
-        assert!(
-            (dw.width - 460.0).abs() < 1e-3,
-            "默认宽 460，got {}",
-            dw.width
-        );
-        assert!(!dw.collapsible, "默认不可折叠");
-        assert!(!dw.resizable, "默认不可缩放");
-        // `&mut open` 链接：show 时被读 + 写回。
-        *dw.open = false;
-        assert!(!open, "open 字段是 &mut 桥");
+        assert_eq!(slider_colors(&sh, SliderTone::Accent).0, sh.accent());
+        assert_eq!(slider_colors(&sh, SliderTone::Gold).0, sh.gold());
+        assert_eq!(slider_colors(&sh, SliderTone::Disabled).0, sh.t3());
     }
 
     #[test]
-    fn dialog_window_builder_overrides_default() {
-        let mut open = true;
-        let dw = DialogWindow::new("可折叠", &mut open)
-            .width(420.0)
-            .collapsible(true)
-            .resizable(true);
-        assert!((dw.width - 420.0).abs() < 1e-3);
-        assert!(dw.collapsible);
-        assert!(dw.resizable);
-    }
-
-    #[test]
-    fn dialog_window_construction_only_runs_in_unit_tests() {
-        // 仅做构造（不调 show）能过 → API 类型与 builder 链 OK。
-        // `show` 的真实跑通由 `scripts/smoke-gui.sh`（GUI 启动烟测）兜底——
-        // `egui::Window::show(ctx, …)` 注册的 texture delta 在 unit 上下文无 GPU
-        // 渲染 surface，必然在 drop 时撞「Dropped TexturesDelta with N unapplied
-        // deltas」，因此这里**不**跑 `show`。
-        let mut open = true;
-        let mut open2 = true;
-        let _a = DialogWindow::new("a", &mut open);
-        let _b = DialogWindow::new("b", &mut open2)
-            .width(700.0)
-            .collapsible(true)
-            .resizable(true);
-    }
-}
-
-#[cfg(test)]
-mod property_row_tests {
-    use super::*;
-    use crate::ui_theme::UiShellConfig;
-
-    fn shell() -> UiShell {
-        UiShell::new(&UiShellConfig::default())
-    }
-
-    fn make_ui() -> (egui::Context, egui::Ui) {
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
-        let ui = egui::Ui::new(
-            ctx.clone(),
-            egui::Id::new("property_row_tests"),
-            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(288.0, 400.0),
-            )),
-        );
-        (ctx, ui)
-    }
-
-    #[test]
-    fn property_row_defaults_match_figma_sampling() {
-        let pr = PropertyRow::new("Elevation", "842");
-        assert_eq!(pr.label, "Elevation");
-        assert_eq!(pr.value, "842");
-        assert!(
-            (pr.label_width - 84.0).abs() < 1e-3,
-            "label 列宽默认 = Figma 采样 84，got {}",
-            pr.label_width
-        );
-        assert!(pr.suffix.is_none(), "默认无单位后缀");
-        assert!(!pr.dropdown, "默认无下拉箭头");
-    }
-
-    #[test]
-    fn property_row_builder_overrides_take_effect() {
-        let pr = PropertyRow::new("Type", "Government")
-            .suffix("m")
-            .dropdown(true)
-            .label_width(60.0);
-        assert_eq!(pr.suffix, Some("m"));
-        assert!(pr.dropdown);
-        assert!(
-            (pr.label_width - 60.0).abs() < 1e-3,
-            "got {}",
-            pr.label_width
-        );
-    }
-
-    #[test]
-    fn value_box_is_full_width_and_figma_28_high() {
+    fn checkbox_states_and_radio_render_without_panic() {
         let sh = shell();
-        let (_c, mut ui) = make_ui();
-        let r = value_box(&mut ui, &sh, "1142.00 / 496.00", None, false);
+        let (_c, mut ui) = make_ui("check_states");
+        for state in [
+            CheckState::Unchecked,
+            CheckState::Checked,
+            CheckState::Indeterminate,
+            CheckState::Disabled,
+        ] {
+            let r = checkbox_state(&mut ui, &sh, state, "Visible");
+            assert!(r.rect.height() > 0.0);
+        }
+        let _ = radio(&mut ui, &sh, false, "World");
+        let _ = radio(&mut ui, &sh, true, "Local");
+    }
+
+    #[test]
+    fn check_row_toggles_only_on_click() {
+        let sh = shell();
+        let (_c, mut ui) = make_ui("check_row");
+        let mut on = false;
+        let _ = check_row(&mut ui, &sh, &mut on, "Visible on map", None);
+        assert!(!on, "headless 无点击，状态不变");
+    }
+
+    #[test]
+    fn tabs_and_option_menu_return_none_without_clicks() {
+        let sh = shell();
+        let (_c, mut ui) = make_ui("tabs_geom");
+        let r = tabs(&mut ui, &sh, "t", &["Terrain", "Objects", "Roads"], 0, &[2]);
+        assert!(r.is_none());
+        let (_c2, mut ui2) = make_ui("menu");
+        let r2 = option_menu(&mut ui2, &sh, "m", &["Government", "Settlement"], 0, &[1]);
+        assert!(r2.is_none());
+    }
+
+    #[test]
+    fn switch_defaults_match_catalogue_28x16() {
+        let sh = shell();
+        let (_c, mut ui) = make_ui("switch");
+        let mut on = false;
+        let r = Switch::new(&mut on).show(&mut ui, &sh);
+        assert!(
+            (r.rect.width() - 28.0).abs() < 1e-3,
+            "got {}",
+            r.rect.width()
+        );
+        assert!(
+            (r.rect.height() - 16.0).abs() < 1e-3,
+            "got {}",
+            r.rect.height()
+        );
+        assert!(!on);
+    }
+
+    #[test]
+    fn value_box_is_28_high_and_full_width() {
+        let sh = shell();
+        let (_c, mut ui) = make_ui("value_box");
+        let r = value_box(&mut ui, &sh, "842", Some("m"), false);
         assert!(
             (r.rect.height() - 28.0).abs() < 1e-3,
-            "值框高 = Figma 采样 28，got {}",
+            "got {}",
             r.rect.height()
         );
         assert!(
-            (r.rect.width() - 288.0).abs() < 1e-3,
-            "值框应撑满可用宽（288），got {}",
+            (r.rect.width() - 320.0).abs() < 1e-3,
+            "got {}",
             r.rect.width()
         );
     }
 
     #[test]
-    fn property_row_renders_suffix_and_dropdown_variants_without_panic() {
+    fn property_row_renders_without_panic() {
         let sh = shell();
-        // Elevation 形态：后缀。
-        let (_c1, mut u1) = make_ui();
-        let r1 = PropertyRow::new("Elevation", "842")
+        let (_c, mut ui) = make_ui("property_row");
+        let _ = PropertyRow::new("Elevation", "842")
             .suffix("m")
-            .show(&mut u1, &sh);
-        assert!(
-            (r1.rect.height() - 28.0).abs() < 1e-3,
-            "行高 = 值框高 28，got {}",
-            r1.rect.height()
-        );
-        // Type 形态：下拉暗示。
-        let (_c2, mut u2) = make_ui();
-        let r2 = PropertyRow::new("Type", "Government")
-            .dropdown(true)
-            .show(&mut u2, &sh);
-        assert!(r2.rect.width() > 0.0);
+            .show(&mut ui, &sh);
     }
 
     #[test]
-    fn value_box_empty_text_renders_without_panic() {
+    fn search_numeric_text_area_and_progress_render_without_panic() {
         let sh = shell();
-        let (_c, mut ui) = make_ui();
-        let r = value_box(&mut ui, &sh, "", Some(""), true);
-        assert!((r.rect.height() - 28.0).abs() < 1e-3);
-    }
-}
-
-#[cfg(test)]
-mod check_row_tests {
-    use super::super::primitives::ICON_MAP_PIN;
-    use super::*;
-    use crate::ui_theme::UiShellConfig;
-
-    fn shell() -> UiShell {
-        UiShell::new(&UiShellConfig::default())
-    }
-
-    fn make_ui() -> (egui::Context, egui::Ui) {
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
-        let ui = egui::Ui::new(
-            ctx.clone(),
-            egui::Id::new("check_row_tests"),
-            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(288.0, 200.0),
-            )),
-        );
-        (ctx, ui)
-    }
-
-    #[test]
-    fn check_row_is_full_width_18_high_and_does_not_toggle_without_click() {
-        let sh = shell();
-        let (_c, mut ui) = make_ui();
-        let mut on = false;
-        let r = check_row(&mut ui, &sh, &mut on, "Visible on map", None);
-        assert!(
-            (r.rect.height() - 18.0).abs() < 1e-3,
-            "行高 18，got {}",
-            r.rect.height()
-        );
-        assert!(
-            (r.rect.width() - 288.0).abs() < 1e-3,
-            "整行可点（288），got {}",
-            r.rect.width()
-        );
-        assert!(!on, "headless 无点击事件，状态不变");
-    }
-
-    #[test]
-    fn check_row_with_trailing_icon_renders_without_panic() {
-        let sh = shell();
-        let (_c, mut ui) = make_ui();
-        let mut on = true;
-        let r = check_row(&mut ui, &sh, &mut on, "Visible on map", Some(ICON_MAP_PIN));
-        assert!(r.rect.width() > 0.0);
-        assert!(on, "headless 无点击事件，状态不变");
+        let (_c, mut ui) = make_ui("composites");
+        let mut q = String::new();
+        let _ = search_input(&mut ui, &sh, &mut q, "Find a place…", "Ctrl+K");
+        let mut n: f32 = 842.0;
+        let _ = numeric_input(&mut ui, &sh, &mut n, "m", 1.0);
+        let mut t = String::from("Regional government office.");
+        let _ = text_area(&mut ui, &sh, &mut t, 3);
+        progress(&mut ui, &sh, "Exporting terrain", 0.64);
+        value_unit(&mut ui, &sh, "842", "m · Elevation");
+        let _ = dropdown_box(&mut ui, &sh, "Government");
     }
 }

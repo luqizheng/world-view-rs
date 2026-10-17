@@ -68,6 +68,26 @@ impl UiShell {
     pub fn raised_bg(&self) -> egui::Color32 {
         color32(self.palette.bg_raised)
     }
+    /// 输入框 / 值框内嵌底（目录 `ui.bg.input`）。
+    pub fn input_bg(&self) -> egui::Color32 {
+        color32(self.palette.bg_input)
+    }
+    /// 禁用态文字（目录 `ui.tx.disabled`）。
+    pub fn text_disabled(&self) -> egui::Color32 {
+        color32(self.palette.text_disabled)
+    }
+    /// 金色软底（当前画笔 / 选中工具）。
+    pub fn gold_soft(&self) -> egui::Color32 {
+        color32(self.palette.gold_soft)
+    }
+    /// 危险软底（Destructive 按钮）。
+    pub fn danger_soft(&self) -> egui::Color32 {
+        color32(self.palette.danger_soft)
+    }
+    /// 成功软底（内联成功提示）。
+    pub fn success_soft(&self) -> egui::Color32 {
+        color32(self.palette.success_soft)
+    }
     /// hover 底。
     pub fn hover_bg(&self) -> egui::Color32 {
         color32(self.palette.bg_hover)

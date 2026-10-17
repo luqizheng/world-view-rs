@@ -37,7 +37,8 @@ use wv_render::terrain_view::TerrainTexture;
 use super::shell::{terrain_name_at, UiShell};
 use super::timeline::undo_last_street_segment;
 use super::widgets::{
-    float_window, segmented_control::segmented, slider_row, terrain_grid, ToolButton, ToolIcon,
+    float_window, segmented_control::segmented, slider_row_brush, terrain_grid, ToolButton,
+    ToolIcon,
 };
 use super::{
     ICON_BRUSH, ICON_HILLS, ICON_LAKE, ICON_MOUNTAIN_RANGE, ICON_PLATEAU, ICON_RIVER, ICON_VOLCANO,
@@ -124,7 +125,7 @@ pub fn panel_brush(
 
             if brush.tool.is_intent() {
                 // ── 意图工具：强度 + 半径（河不用半径）+ 交互提示 ──
-                slider_row(
+                slider_row_brush(
                     ui,
                     &shell,
                     t_key(&current_loc, I18nKey::BrushStrengthLabel),
@@ -134,7 +135,7 @@ pub fn panel_brush(
                     false,
                 );
                 if brush.tool != BrushTool::River {
-                    slider_row(
+                    slider_row_brush(
                         ui,
                         &shell,
                         t_key(&current_loc, I18nKey::BrushRadiusLabel),
@@ -171,7 +172,7 @@ pub fn panel_brush(
                 ui.add_space(space::SM);
 
                 // ── 半径 / 软度滑条（Figma #3:20791：标签左、值右、轨在中）──
-                slider_row(
+                slider_row_brush(
                     ui,
                     &shell,
                     t_key(&current_loc, I18nKey::BrushRadiusLabel),
@@ -180,7 +181,7 @@ pub fn panel_brush(
                     |n| format!("{} m", (n / grid.cell_size * 10.0).round() as i32),
                     true,
                 );
-                slider_row(
+                slider_row_brush(
                     ui,
                     &shell,
                     t_key(&current_loc, I18nKey::BrushSoftnessLabel),

@@ -246,7 +246,7 @@ pub(crate) fn panel_head(
         ui.allocate_exact_size(egui::vec2(avail_w, head_h), egui::Sense::hover());
 
     // ── 右件几何先算（互不引用 ui，便于可变 borrow 切回） ──
-    let pad = 10.0_f32;
+    let pad = 12.0_f32;
     let center_y = head_rect.center().y;
     let tri_w = shell.head_h - 8.0; // ≈ 22 cozy / 18 compact
     let tri_rect = egui::Rect::from_center_size(

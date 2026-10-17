@@ -1,4 +1,4 @@
-﻿//! 界面主题装配 —— 把 [`crate::ui_tokens`] 的令牌投影成 egui 的 `Visuals`。
+//! 界面主题装配 —— 把 [`crate::ui_tokens`] 的令牌投影成 egui 的 `Visuals`。
 
 //! ## 职责
 //!
@@ -76,7 +76,7 @@ pub fn build_visuals(palette: ShellPalette) -> egui::Visuals {
     // 底色层级：app < panel < raised < hover < active。
     v.panel_fill = color32(palette.bg_panel);
     v.window_fill = color32(palette.bg_panel);
-    v.extreme_bg_color = color32(palette.bg_app);
+    v.extreme_bg_color = color32(palette.bg_input);
     v.faint_bg_color = color32(palette.bg_raised);
     v.code_bg_color = color32(palette.bg_raised);
     v.selection.bg_fill = color32(palette.accent);
@@ -84,7 +84,7 @@ pub fn build_visuals(palette: ShellPalette) -> egui::Visuals {
 
     // 文字三级。
     v.override_text_color = Some(color32(palette.text_1));
-    v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, color32(palette.text_2));
+    v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, color32(palette.text_disabled));
     v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0_f32, color32(palette.text_1));
     v.widgets.hovered.fg_stroke = egui::Stroke::new(1.0_f32, color32(palette.text_1));
     v.widgets.active.fg_stroke = egui::Stroke::new(1.0_f32, color32(palette.text_1));

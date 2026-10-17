@@ -1,5 +1,6 @@
-//! 段控件（web `.segmented`：容器 `bg_app` 底 + border + 圆角 7 + 内边距 2px；
-//! 选中段 `bg_active` 底 + 1px 投影 + `text_1`）。
+//! 段控件（Figma 公共组件目录 `UI/Segmented`：容器 `bg_input` 底 +
+//! `border_subtle` 1px + 圆角 6 + 内边距 2px；选中段 `accent_soft` 底 +
+//! `accent` 字；非选中 `t2` 字）。
 //!
 //! ## 职责
 //! - 抽「N 选 1」连续段控件为公共 widget——顶栏 2 处使用（Browse/Edit 段、
@@ -10,11 +11,11 @@
 //!   `ToolButton` 或 `ComboBox`。
 //! - **不**写主题令牌源头——所有颜色走 `UiShell` 解析。
 //!
-//! ## 视觉规格
-//! - 容器：`bg_app` 底 + `border_subtle` 1px 描边 + 7px 圆角 + 2px 内边距。
-//! - 选中段：`active_bg` 底 + 5px 圆角 + `t1` 字。
+//! ## 视觉规格（2026-10-18 对齐目录）
+//! - 容器：`bg_input` 底 + `border_subtle` 1px 描边 + 6px 圆角 + 2px 内边距。
+//! - 选中段：`accent_soft` 底 + 4px 圆角 + `accent` 字。
 //! - 非选中段：`t2` 字；hover 态走 `hover_bg`。
-//! - 命中区 = `seg_w_each` × `shell.hit`（顶栏 / 面板一致）。
+//! - 命中区 = `seg_w_each` × 28（目录 64×24 段 + 2px 内边距）。
 //!
 //! ## 已知使用点（2026-10-16 提公共后）
 //! - `top_bar::browse_edit_segment` —— Browse/Edit 段
@@ -24,7 +25,7 @@
 use bevy_egui::egui;
 
 use crate::shell::UiShell;
-use crate::ui_theme::{color32, proportional};
+use crate::ui_theme::proportional;
 
 /// 段控件：等宽 N 段，选中段高亮，点击触发 `on_pick(index)`。
 ///
@@ -48,10 +49,10 @@ pub fn segmented(
     let total_w = seg_w_each * labels.len() as f32;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(total_w, shell.hit), egui::Sense::hover());
     let painter = ui.painter();
-    painter.rect_filled(rect, 7.0, color32(shell.palette.bg_app));
+    painter.rect_filled(rect, 6.0, shell.input_bg());
     painter.rect_stroke(
         rect,
-        7.0,
+        6.0,
         egui::Stroke::new(1.0, shell.border_subtle()),
         egui::StrokeKind::Inside,
     );
@@ -64,13 +65,13 @@ pub fn segmented(
         );
         let resp = ui.interact(r, egui::Id::new((id, i)), egui::Sense::click());
         if i == active_index {
-            painter.rect_filled(r, 5.0, shell.active_bg());
+            painter.rect_filled(r, 4.0, shell.accent_soft());
             painter.text(
                 r.center(),
                 egui::Align2::CENTER_CENTER,
                 *label,
                 proportional(font_px),
-                shell.t1(),
+                shell.accent(),
             );
         } else {
             if resp.hovered() {
