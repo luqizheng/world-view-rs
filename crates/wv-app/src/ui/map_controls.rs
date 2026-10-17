@@ -374,8 +374,8 @@ mod map_control_tests {
         assert!((s - zoom.max).abs() < 1e-6, "got {s}, max {}", zoom.max);
     }
 
-    /// 视觉量计数（对齐原型 `.map-controls`）：6 个独立瓷砖 + 1 分隔。
-    /// 内容高度 = 6×TILE + 5×GAP + 2×SEPARATOR_PAD。
+    /// 视觉量计数（对齐原型 `.map-controls`）：8 个独立瓷砖 + 2 分隔。
+    /// 内容高度 = 8×TILE + 7×GAP + 2×SEPARATOR_PAD。
     ///
     /// 不直接渲染——egui 0.36 在 unit 上下文没有 GPU surface；
     /// 这里钉的是 layout 数学校验：模块顶部常量（`TILE_SIZE` = 34、

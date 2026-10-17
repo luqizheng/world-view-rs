@@ -41,6 +41,13 @@ fn intent_count_for(level: wv_core::map::MapLevel) -> usize {
     }
 }
 
+/// 菜单可见性：工具**启用**且选区已闭合。`enabled` 门必不可少——
+/// 「生成 → 关掉瓷砖 → Ctrl+Z 回驻留」会留下 enabled=false 的环，
+/// 环不可见也不可交互，菜单若浮现就是「从空气里生成」（终审 Important 2）。
+fn menu_visible(selection: &wv_render::state::SelectionState) -> bool {
+    selection.enabled && selection.is_closed()
+}
+
 /// 选区意图菜单：底部居中浮动条。`selection.is_closed()` 才画；
 /// 无意图图级显示占位文案（spec §12：不隐藏工具，要全图级一致）。
 ///
@@ -57,8 +64,8 @@ pub fn intent_menu(
     mut continent_dialog: ResMut<crate::ui::ContinentDialog>,
     startup_req: Res<StartupLoadRequest>,
 ) {
-    // 无工程锁 / 启动加载中 / 未闭合：与 map_controls 同源早返。
-    if !projection.has_open_project() || startup_req.0.is_some() || !selection.is_closed() {
+    // 无工程锁 / 启动加载中 / 工具未启用或未闭合：与 map_controls 同源早返。
+    if !projection.has_open_project() || startup_req.0.is_some() || !menu_visible(&selection) {
         return;
     }
     let loc = current_loc.0;
@@ -121,7 +128,7 @@ pub fn intent_menu(
 
 #[cfg(test)]
 mod tests {
-    use super::intent_count_for;
+    use super::{intent_count_for, menu_visible};
     use wv_core::map::MapLevel;
 
     #[test]
@@ -142,5 +149,32 @@ mod tests {
             1,
             "区域级同世界级（spec §4 裁定）"
         );
+    }
+
+    /// 终审 Important 2：生成 → 关掉选择瓷砖 → Ctrl+Z 回驻留选区——
+    /// 此时 `enabled = false`（环不可见、不可交互），菜单不得浮现，
+    /// 否则作者会「从空气里」生成一片大陆。
+    #[test]
+    fn intent_menu_requires_enabled_tool() {
+        use wv_render::state::SelectionState;
+        let ring = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)];
+        let disabled = SelectionState {
+            enabled: false,
+            closed: Some(ring.clone()),
+            ..Default::default()
+        };
+        assert!(!menu_visible(&disabled), "工具关着不得弹菜单");
+        let enabled = SelectionState {
+            enabled: true,
+            closed: Some(ring),
+            ..Default::default()
+        };
+        assert!(menu_visible(&enabled), "工具开着 + 选区闭合 → 弹菜单");
+        let drawing = SelectionState {
+            enabled: true,
+            draft: vec![(0.0, 0.0)],
+            ..Default::default()
+        };
+        assert!(!menu_visible(&drawing), "画中未闭合不弹菜单");
     }
 }

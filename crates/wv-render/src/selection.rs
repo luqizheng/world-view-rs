@@ -92,6 +92,9 @@ pub fn handle_click(sel: &mut SelectionState, p: (f32, f32), now: f64, tol: f32,
             if is_double {
                 sel.delete_anchor(i);
                 sel.selected_anchor = None;
+                // 复位双击判定——否则 0.4s 内的第三击再判成双击，连删第二个
+                // 锚点（终审 Important 1）。
+                sel.last_click = None;
             } else {
                 sel.selected_anchor = Some(i);
                 sel.last_click = Some((ring[i], now));
@@ -397,6 +400,25 @@ mod tests {
             "双击删除后剩 3 点仍闭合"
         );
         assert_eq!(s.selected_anchor, None, "删除后选中复位");
+    }
+
+    /// 终审 Important 1：双击删除后 `last_click` 必须复位——否则 0.4s 内的
+    /// 第三击又判成双击，连删第二个锚点；若第一删已把 3 环降级成 2 点草稿，
+    /// 失败的 try_close 还会把剩余草稿整个丢掉（一次手滑丢作品）。
+    #[test]
+    fn triple_click_after_anchor_delete_does_not_delete_twice() {
+        let mut s = closed_square();
+        handle_click(&mut s, (10.0, 0.0), 10.0, 0.5, 1.0); // 单击选中 1 号锚
+        handle_click(&mut s, (10.0, 0.0), 10.15, 0.5, 1.0); // 双击 → 删 1 号（剩 3 点）
+                                                            // 第三击落在原 2 号锚（删除后前移为 1）：应只是选中，不得再删。
+                                                            // （时刻取 10.3：距首击 0.3 < 0.4s 窗口；避开 10.4-10.0 的 f64 边界。）
+        handle_click(&mut s, (10.0, 10.0), 10.3, 0.5, 1.0);
+        assert_eq!(
+            s.closed.as_ref().map(Vec::len),
+            Some(3),
+            "三连击不得连删第二个锚点"
+        );
+        assert_eq!(s.selected_anchor, Some(1), "第三击应按单击语义选中该锚点");
     }
 
     /// 点击边线 = 该处插入锚点并选中（随后可拖）。
