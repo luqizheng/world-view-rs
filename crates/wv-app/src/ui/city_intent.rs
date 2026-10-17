@@ -14,6 +14,292 @@
 
 #![cfg(feature = "app")]
 
+use bevy::prelude::*;
+use bevy_egui::{egui, EguiContexts};
+
+use crate::edit::editing::EditHistory;
+use crate::i18n::{t, CurrentLocale, I18nKey};
+use crate::state::{DrillState, GridConfig, WorldProjection};
+use crate::theme::ui_theme::UiShellConfig;
+use crate::ui::shell::UiShell;
+use crate::ui::widgets::DialogWindow;
+use crate::ui_shell::{ShellNotice, StartupLoadRequest};
+use wv_core::map::{Extent, MapBase};
+
+/// 画布面积下限（wu²，≈10×10）——更小的「城市」是一颗图钉，不是一张图。
+pub const MIN_CITY_AREA: f32 = 100.0;
+
+/// 「生成城市」对话框跨帧状态（continent_dialog 同款 UI/apply 拆分）。
+///
+/// 预填后**自持全部确认所需数据**（质心 / 锚点 / 面积）——作者确认前按 Esc
+/// 清掉选区也不影响提交（spec Review Focus 1）。
+#[derive(Resource, Debug, Clone, PartialEq)]
+pub struct CityIntentDialog {
+    /// 是否打开。
+    pub open: bool,
+    /// 父图（当前图）。
+    pub parent_map: Option<wv_core::Id>,
+    /// 父图局部质心（确认时算 `extent.origin` 用）。
+    pub centroid: (f32, f32),
+    /// 钻入图标锚点（父图 extent 归一化，预填时算好并 clamp）。
+    pub anchor: [f32; 2],
+    /// 城市 ID（`[A-Za-z0-9_]+`，确认时校验）。
+    pub id: String,
+    /// 显示名。
+    pub name: String,
+    /// 底图。
+    pub base: MapBase,
+    /// 画布面积（wu²，下限 [`MIN_CITY_AREA`]）。
+    pub area: f32,
+    /// 面积文本框（parse 失败保持旧值，`parse_seed_text` 同款口径）。
+    pub area_text: String,
+}
+
+impl Default for CityIntentDialog {
+    fn default() -> Self {
+        Self {
+            open: false,
+            parent_map: None,
+            centroid: (0.0, 0.0),
+            anchor: [0.5, 0.5],
+            id: String::new(),
+            name: String::new(),
+            base: MapBase::Ocean,
+            area: MIN_CITY_AREA,
+            area_text: format!("{MIN_CITY_AREA}"),
+        }
+    }
+}
+
+/// 面积文本 → wu²：parse 失败保持旧值；过小 / 负值夹到 [`MIN_CITY_AREA`]。
+pub fn parse_area_text(text: &str, fallback: f32) -> f32 {
+    text.trim()
+        .parse::<f32>()
+        .map(|v| v.max(MIN_CITY_AREA))
+        .unwrap_or(fallback)
+}
+
+/// 城市 ID 校验：空 / 字符集 / 重名（沿用旧城市弹窗口径）。`None` = 放行。
+pub fn validate_city_id(id: &str, world: &wv_core::World) -> Option<String> {
+    if id.is_empty() {
+        return Some("ID 不能为空".into());
+    }
+    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Some("ID 只能含 [A-Za-z0-9_]".into());
+    }
+    let cid = wv_core::Id::new_unchecked(id);
+    if world.maps.iter().any(|m| m.id == cid) {
+        return Some(format!("ID `{id}` 已存在"));
+    }
+    None
+}
+
+/// 从闭合选区预填（spec §5：质心落点 + 包围盒面积 + anchor 归一化）。
+///
+/// anchor = 质心 ÷ 父图 extent（无 extent 用
+/// [`wv_render::drill::FALLBACK_EXTENT`]，与 `icon_local` 渲染口径一致——
+/// 选区局部帧与标记局部帧同源，见 README §12-26 的恒等映射口径）。
+pub fn prefill(
+    dialog: &mut CityIntentDialog,
+    selection: &wv_render::state::SelectionState,
+    parent_map: wv_core::Id,
+    parent_extent: Option<Extent>,
+    map_count: usize,
+) {
+    let Some(ring) = selection.closed.clone() else {
+        dialog.open = false;
+        return;
+    };
+    let eff = parent_extent.unwrap_or(wv_render::drill::FALLBACK_EXTENT);
+    let c = ring_centroid(&ring);
+    dialog.open = true;
+    dialog.parent_map = Some(parent_map);
+    dialog.centroid = c;
+    dialog.anchor = [
+        (c.0 / eff.width).clamp(0.0, 1.0),
+        (c.1 / eff.height).clamp(0.0, 1.0),
+    ];
+    dialog.area = ring_bbox_area(&ring).max(MIN_CITY_AREA);
+    dialog.area_text = format!("{:.0}", dialog.area);
+    dialog.id = format!("city_{map_count}");
+    dialog.name = format!("新城 {map_count}");
+}
+
+/// 提交：16:9 extent（origin = 质心居中）+ 局部矩形轮廓 +
+/// `AddCityCommand`（锚点显式落质心，不落哈希位）→ 自动钻入。
+///
+/// 失败只 notice、不关窗——作者填的名字 / ID / 面积不丢（V1 精神）。
+/// 返回 `true` = 建图成功（钻入失败会单独 notice，但不视作提交失败）。
+pub fn commit_city(
+    dialog: &CityIntentDialog,
+    projection: &mut WorldProjection,
+    edit: &mut EditHistory,
+    drill: &mut DrillState,
+    notice: &mut ShellNotice,
+    frame: u64,
+) -> bool {
+    let Some(parent_id) = dialog.parent_map.clone() else {
+        return false;
+    };
+    if let Some(err) = validate_city_id(&dialog.id, &projection.world) {
+        notice.error(err, frame);
+        return false;
+    }
+    let (w, h) = area_to_16_9(dialog.area.max(MIN_CITY_AREA));
+    let city_id = wv_core::Id::new_unchecked(&dialog.id);
+    let city = wv_core::map::MapNode {
+        id: city_id.clone(),
+        name: dialog.name.clone(),
+        level: wv_core::map::MapLevel::City,
+        parent: Some(parent_id),
+        extent: Some(Extent {
+            width: w,
+            height: h,
+            origin: Some(wv_core::geometry::Point {
+                x: dialog.centroid.0 - w * 0.5,
+                y: dialog.centroid.1 - h * 0.5,
+            }),
+        }),
+        outline_polygon: Some(wv_core::map::GeometryData::Polygon(vec![
+            0.0, 0.0, w, 0.0, w, h, 0.0, h,
+        ])),
+        base: Some(dialog.base),
+        ..wv_core::map::MapNode::default()
+    };
+    let icon_id = wv_core::Id::new_unchecked(format!("icon_{}", dialog.id));
+    let mut cmd = wv_edit::AddCityCommand::new(city, icon_id, wv_core::map::IconShape::Diamond);
+    cmd.icon_anchor = dialog.anchor;
+    let mut tx = wv_edit::Transaction::new();
+    tx.push(Box::new(cmd));
+    match edit.history.commit(&mut projection.world, tx) {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
+            projection.dirty = true;
+            notice.info(
+                format!("新建城市「{}」（{w:.0}×{h:.0} wu）", dialog.id),
+                frame,
+            );
+            // 自动钻入（spec D6）：失败不静默——图已建成，指引手动进入。
+            if !drill.enter(&projection.world, &city_id) {
+                notice.error("已建图但自动进入失败：请从地图树手动进入", frame);
+            }
+            true
+        }
+        Err(e) => {
+            notice.error(format!("新建城市未生效：{e}"), frame);
+            false
+        }
+    }
+}
+
+/// Bevy 系统：绘制对话框 + 「生成并进入」接 [`commit_city`]。
+#[allow(clippy::too_many_arguments)]
+pub fn city_intent_dialog_system(
+    mut contexts: EguiContexts,
+    shell_cfg: Res<UiShellConfig>,
+    current_loc: Res<CurrentLocale>,
+    mut dialog: ResMut<CityIntentDialog>,
+    mut projection: ResMut<WorldProjection>,
+    mut edit: ResMut<EditHistory>,
+    mut drill: ResMut<DrillState>,
+    _grid: Res<GridConfig>,
+    mut notice: ResMut<ShellNotice>,
+    time: Res<Time>,
+    startup_req: Res<StartupLoadRequest>,
+) {
+    if !dialog.open || !projection.has_open_project() || startup_req.0.is_some() {
+        return;
+    }
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
+    let shell = UiShell::new(&shell_cfg);
+    let loc = current_loc.0;
+    let frame = (time.elapsed_secs() * 60.0) as u64;
+    // 每帧以当前输入校验 ID（重名检测读世界——放闭包外，提交分支独占 &mut）。
+    let id_error = validate_city_id(&dialog.id, &projection.world);
+
+    // scratch bool：DialogWindow 的 × 关闭写回这里，确认/取消分支再写回
+    // `dialog.open`——避免 `&mut dialog.open` 与闭包内的字段借用相撞。
+    let mut shell_open = dialog.open;
+    let mut confirmed = false;
+    let mut cancelled = false;
+    DialogWindow::new(t(loc, I18nKey::CityDialogTitle), &mut shell_open)
+        .width(380.0)
+        .show(ctx, &shell, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(t(loc, I18nKey::CityDialogFieldId));
+                ui.text_edit_singleline(&mut dialog.id);
+            });
+            ui.horizontal(|ui| {
+                ui.label(t(loc, I18nKey::CityDialogFieldName));
+                ui.text_edit_singleline(&mut dialog.name);
+            });
+            ui.horizontal(|ui| {
+                ui.label(t(loc, I18nKey::CityDialogFieldArea));
+                let resp =
+                    ui.add(egui::TextEdit::singleline(&mut dialog.area_text).desired_width(120.0));
+                if resp.changed() {
+                    dialog.area = parse_area_text(&dialog.area_text, dialog.area);
+                }
+                ui.weak("wu²");
+            });
+            ui.horizontal(|ui| {
+                ui.label(t(loc, I18nKey::CityDialogFieldBase));
+                ui.selectable_value(
+                    &mut dialog.base,
+                    MapBase::Ocean,
+                    t(loc, I18nKey::CityDialogBaseOcean),
+                );
+                ui.selectable_value(
+                    &mut dialog.base,
+                    MapBase::Land,
+                    t(loc, I18nKey::CityDialogBaseLand),
+                );
+            });
+            if let Some(err) = &id_error {
+                ui.colored_label(egui::Color32::from_rgb(220, 90, 70), err);
+            }
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        id_error.is_none(),
+                        egui::Button::new(
+                            egui::RichText::new(t(loc, I18nKey::CityDialogOk)).strong(),
+                        ),
+                    )
+                    .clicked()
+                {
+                    confirmed = true;
+                }
+                if ui.button(t(loc, I18nKey::CityDialogCancel)).clicked() {
+                    cancelled = true;
+                }
+            });
+        });
+
+    if !shell_open {
+        cancelled = true; // 用户点了 ×
+    }
+    if cancelled {
+        dialog.open = false;
+        return;
+    }
+    if confirmed
+        && commit_city(
+            &dialog,
+            &mut projection,
+            &mut edit,
+            &mut drill,
+            &mut notice,
+            frame,
+        )
+    {
+        dialog.open = false;
+    }
+}
+
 /// 多边形质心（鞋带公式，面积加权）；退化（零面积）回退包围盒中心。
 ///
 /// 作者圈的环不保证凸也不保证不自交——鞋带公式对两类都给出确定值，
@@ -277,15 +563,17 @@ mod tests {
         drill.ensure_root(&projection.world);
         let mut notice = ShellNotice::default();
 
-        let mut d = CityIntentDialog::default();
-        d.open = true;
-        d.parent_map = Some(wv_core::Id::new_unchecked("world_main"));
-        d.centroid = (1000.0, 500.0);
-        d.anchor = [1000.0 / 4096.0, 500.0 / 4096.0];
-        d.id = "city_test".into();
-        d.name = "试作城".into();
-        d.base = MapBase::Land;
-        d.area = 14400.0;
+        let d = CityIntentDialog {
+            open: true,
+            parent_map: Some(wv_core::Id::new_unchecked("world_main")),
+            centroid: (1000.0, 500.0),
+            anchor: [1000.0 / 4096.0, 500.0 / 4096.0],
+            id: "city_test".into(),
+            name: "试作城".into(),
+            base: MapBase::Land,
+            area: 14400.0,
+            area_text: "14400".into(),
+        };
 
         assert!(
             commit_city(&d, &mut projection, &mut edit, &mut drill, &mut notice, 0),
@@ -309,12 +597,19 @@ mod tests {
             (o.x - 920.0).abs() < 1e-2 && (o.y - 455.0).abs() < 1e-2,
             "质心居中"
         );
-        // 钻入图标锚点 = 预填值（不得落哈希位）。
-        let icon = node
+        // 钻入图标挂在**父图** icons 上（AddCityCommand 语义），锚点 = 预填值
+        // （不得落哈希位）。
+        let parent = projection
+            .world
+            .maps
+            .iter()
+            .find(|m| m.id.as_str() == "world_main")
+            .expect("父图仍在");
+        let icon = parent
             .icons
             .iter()
-            .find(|i| i.drill_into.is_some())
-            .expect("应有钻入图标");
+            .find(|i| i.drill_into.as_ref().map(wv_core::Id::as_str) == Some("city_test"))
+            .expect("父图应有钻入图标");
         assert_eq!(icon.anchor, Some(d.anchor), "锚点显式落质心");
         // 自动钻入。
         assert_eq!(

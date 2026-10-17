@@ -854,6 +854,26 @@ pub enum I18nKey {
     /// 占位「本图暂无可用意图」
     IntentMenuNoIntents,
 
+    // ── 生成城市对话框（2026-10-17 选择工具 spec §5，M2 Task 3） ─────────
+    /// 标题「新建城市」
+    CityDialogTitle,
+    /// 字段「ID」
+    CityDialogFieldId,
+    /// 字段「名字」
+    CityDialogFieldName,
+    /// 字段「面积 (wu²)」
+    CityDialogFieldArea,
+    /// 字段「底图」
+    CityDialogFieldBase,
+    /// 选项「海洋」
+    CityDialogBaseOcean,
+    /// 选项「陆地」
+    CityDialogBaseLand,
+    /// 按钮「生成并进入」
+    CityDialogOk,
+    /// 按钮「取消」
+    CityDialogCancel,
+
     // ── 新建地图幅面比例（2026-10-17 ocean-default-16-9 Task 2） ────────
     /// 标签「宽高比」
     NewMapAspect,
