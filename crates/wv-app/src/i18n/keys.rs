@@ -859,6 +859,20 @@ pub enum I18nKey {
     IntentMenuPlains,
     /// 按钮「湖泊」
     IntentMenuLake,
+
+    // ── 地形/城市意图通知（终审 Important 2，spec §8） ─────────────────
+    /// 通知「该意图在选区内没有产生任何变化」
+    IntentNoticeNoOp,
+    /// 通知「已应用地形意图（Ctrl+Z 可撤销）」
+    IntentNoticeApplied,
+    /// 错误前缀「地形意图未生效」
+    IntentNoticeFailed,
+    /// 通知「新建城市」
+    CityNoticeCreated,
+    /// 错误「已建图但自动进入失败」
+    CityNoticeDrillFailed,
+    /// 错误前缀「新建城市未生效」
+    CityNoticeFailed,
     /// 弱化提示「Esc 取消选择」
     IntentMenuCancelHint,
     /// 占位「本图暂无可用意图」

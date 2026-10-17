@@ -876,6 +876,12 @@ fn apply_command(args: &[String]) -> Result<(), String> {
     project
         .save_world(&world, &[])
         .map_err(|e| format!("save_world 失败: {e}"))?;
+    // 4.5) **关键性能步** — 把 `distances/{places,edges}/<id>.yaml` × 169k
+    //      个散文件合并为单文件 `distances/places.yaml` + `distances/edges.yaml`。
+    //      不然 GUI 启动时 `load_world` 要逐文件 open+parse 169k 次，秒级 → 分钟级。
+    //      `wv-io` 的 loader 已有回退：目录空时读单文件（`project.rs:641-648`），
+    //      落盘就绪后 GUI 加载是 O(1) 次 read + 1 次 deserial。
+    compact_distances_to_single_file(&parsed.target, &world.distances)?;
 
     // 7) 收尾统计
     println!("[5/5] 完成。");
@@ -1135,6 +1141,63 @@ fn relative_geojson_path(args: &ApplyArgs) -> std::path::PathBuf {
     } else {
         abs_geo.clone()
     }
+}
+
+/// 把 `distances/{places,edges}/<id>.yaml` × N 个散文件合并为单文件 bulk YAML。
+///
+/// ## 为什么
+/// `wv-io::Project::save_world` 默认按「每实体一个 YAML」写入（§4.5 原则）；
+/// 对 Overture 量级（81k places + 87k edges = 169k 文件），GUI 启动时
+/// `load_world` 要逐个 open + parse + close，秒级操作滑到分钟级，**打不开窗口**。
+///
+/// `wv-io::Project::load_world` 已支持回退：`distances/places/` 目录空时
+/// 读单文件 `distances/places.yaml`（`project.rs:641-648`）。所以合并策略是：
+/// 1. 写 bulk 单文件（顶 YAML 列表 = `Vec<T>` 的 serde 形态）；
+/// 2. 删 `distances/{places,edges,vehicles}/` 目录——下次 load 走回退路径。
+///
+/// ## 不做
+/// - **不**改 `wv-io::save_world` 的全局行为——per-entity 仍是 Overture 之外
+///   的默认（作者手工建工程、几十个 Place 的常态）；只在大批量导入时用本函数。
+fn compact_distances_to_single_file(
+    target: &Path,
+    distances: &wv_core::distance::DistanceGraph,
+) -> Result<(), String> {
+    let distances_dir = target.join("distances");
+    if !distances_dir.is_dir() {
+        return Err(format!(
+            "distances/ 目录不存在：{}",
+            distances_dir.display()
+        ));
+    }
+
+    // 1) places 单文件
+    let places_yaml =
+        serde_yaml::to_string(&distances.places).map_err(|e| format!("序列化 places 失败: {e}"))?;
+    let places_path = distances_dir.join("places.yaml");
+    std::fs::write(&places_path, &places_yaml)
+        .map_err(|e| format!("写 {} 失败: {e}", places_path.display()))?;
+
+    // 2) edges 单文件
+    let edges_yaml =
+        serde_yaml::to_string(&distances.edges).map_err(|e| format!("序列化 edges 失败: {e}"))?;
+    let edges_path = distances_dir.join("edges.yaml");
+    std::fs::write(&edges_path, &edges_yaml)
+        .map_err(|e| format!("写 {} 失败: {e}", edges_path.display()))?;
+
+    // 3) vehicles（空数组也写——避免 loader 走回退时 N/A）
+    let vehicles_yaml = serde_yaml::to_string(&distances.vehicles)
+        .map_err(|e| format!("序列化 vehicles 失败: {e}"))?;
+    let vehicles_path = distances_dir.join("vehicles.yaml");
+    std::fs::write(&vehicles_path, &vehicles_yaml)
+        .map_err(|e| format!("写 {} 失败: {e}", vehicles_path.display()))?;
+
+    // 4) 删 per-entity 目录——下次 load_world 走「目录空 → 单文件」回退。
+    //    remove_dir_all 在目录不存在时返回 Err，用 `.ok()` 吞掉「已删」的边缘场景。
+    std::fs::remove_dir_all(distances_dir.join("places")).ok();
+    std::fs::remove_dir_all(distances_dir.join("edges")).ok();
+    std::fs::remove_dir_all(distances_dir.join("vehicles")).ok();
+
+    Ok(())
 }
 
 /// 从 `--cities` YAML 加载城市列表。
@@ -1715,25 +1778,46 @@ mod tests {
             assert!(city_idx.is_file(), "city_{} index.yaml 应在", c.id);
         }
 
-        // 3) 21 个城市 Place
+        // 3) 21 个城市 Place — 走 bulk 单文件（compact pass 已合并）
+        let places_yaml = target.join("distances/places.yaml");
+        assert!(places_yaml.is_file(), "places.yaml 单文件应落盘");
+        let ptext = std::fs::read_to_string(&places_yaml).unwrap();
         for c in DEFAULT_GUANGDONG_CITIES {
-            let place_yaml = target.join(format!("distances/places/place_{}.yaml", c.id));
-            assert!(place_yaml.is_file(), "place_{} 应落盘", c.id);
+            assert!(
+                ptext.contains(&format!("id: place_{}", c.id)),
+                "places.yaml 应含 place_{}",
+                c.id
+            );
         }
+        // 4 个路口 Place 也要在
+        assert!(
+            ptext.contains("place_int_aaaaaaaa"),
+            "应含 4 个路口 place_int_"
+        );
+        // 关键性能断言：per-entity 目录**不应**存在
+        assert!(
+            !target.join("distances/places").exists(),
+            "distances/places/ 目录应被 compact 删掉（性能关键）"
+        );
 
-        // 4) 至少 2 条 PlaceEdge（fixture 给了 2 段 motorway+trunk）
-        let edges_dir = target.join("distances/edges");
-        let edge_count = std::fs::read_dir(&edges_dir)
-            .expect("edges/ 目录应创建")
-            .filter_map(Result::ok)
-            .filter(|e| e.path().extension().is_some_and(|x| x == "yaml"))
+        // 4) 至少 2 条 PlaceEdge 走 bulk 单文件
+        let edges_yaml = target.join("distances/edges.yaml");
+        assert!(edges_yaml.is_file(), "edges.yaml 单文件应落盘");
+        let etext = std::fs::read_to_string(&edges_yaml).unwrap();
+        let edge_count = etext
+            .lines()
+            .filter(|l| l.trim_start().starts_with("- id: "))
             .count();
         assert!(
             edge_count >= 2,
             "应至少 2 条边（fixture 给了 2 段），实得 {edge_count}"
         );
+        assert!(
+            !target.join("distances/edges").exists(),
+            "distances/edges/ 目录应被 compact 删掉"
+        );
 
-        // 5) 重开 Project::open = 序列化 round-trip OK
+        // 5) 重开 Project::open = 序列化 round-trip OK（loader 走单文件回退）
         let project = wv_io::Project::open(&target).expect("重开应成功");
         assert_eq!(project.meta().name, "广东省");
         assert_eq!(project.meta().schema_version, 2);
@@ -1742,6 +1826,24 @@ mod tests {
         assert!(
             summary.contains("map_guangdong"),
             "summary 应提 root map: {summary}"
+        );
+        // 关键：load_world 也得能拉出所有 Place / Edge 验证 round-trip
+        let world = project.load_world().expect("load_world");
+        // fixture 有 3 个独立 connector（a/b/c，b 在两段间共享 → 去重 = 3）
+        let loaded_place_count = world
+            .distances
+            .places
+            .iter()
+            .filter(|p| p.id.as_str().starts_with("place_int_"))
+            .count();
+        assert_eq!(
+            loaded_place_count, 3,
+            "应回收到 3 个路口 place_int（fixture 给了 3 个独立 connector，b 共享）"
+        );
+        assert_eq!(
+            world.distances.edges.len(),
+            2,
+            "应回收到 2 条边（fixture 给了 2 段）"
         );
 
         std::fs::remove_dir_all(&dir).ok();
