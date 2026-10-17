@@ -121,7 +121,15 @@ fn chunk_grid(width: u32, height: u32) -> [u32; 2] {
     [width.div_ceil(CHUNK_SIZE), height.div_ceil(CHUNK_SIZE)]
 }
 
-/// 块在原图**逻辑格**坐标的矩形（半开 `[x0, y0, x1, y1]`，钳到 size 内）。
+/// 块的世界矩形（按块内实际格数 × cell_size）；非方形地图的尾块不是正方形。
+fn chunk_world_rect(cells: [u32; 4], cell_size: f32) -> Vec2 {
+    Vec2::new(
+        (cells[2] - cells[0]) as f32 * cell_size,
+        (cells[3] - cells[1]) as f32 * cell_size,
+    )
+}
+
+/// 块在原图**逻辑格**坐标的矩形（半开 `[x0, y0, x1, y1]`，钳到 width/height 内）。
 ///
 /// 单位 = 逻辑格。**像素坐标** = 格 × `tex.res`。
 fn chunk_cell_rect(coord: [u32; 2], width: u32, height: u32) -> [u32; 4] {
@@ -406,7 +414,10 @@ pub fn sync_terrain_chunks(
     for (coord, cells) in visible {
         let [gx0, gy0, gx1, gy1] = cells;
         let cmin = grid.raster_origin + Vec2::new(gx0 as f32, gy0 as f32) * cell_size;
-        let center = cmin + Vec2::splat(chunk_world_size * 0.5);
+        // 块的**世界矩形**按实际格数算：16:9 地图的右下尾块只有 32 格高，
+        // 不能拿 256×256 的方形去铺（会拉伸并画出地图边界）。
+        let chunk_rect = chunk_world_rect(cells, cell_size);
+        let center = cmin + chunk_rect * 0.5;
 
         if let Some(&entity) = chunk_entities.by_coord.get(&coord) {
             // 3a-0) 尺寸失配检测：tex.size/res 随世界切换变化（如 `-m` 加载
@@ -469,7 +480,7 @@ pub fn sync_terrain_chunks(
             .into_iter()
             .map(|img| images.add(img))
             .collect();
-        let mesh_handle = meshes.add(Rectangle::new(chunk_world_size, chunk_world_size));
+        let mesh_handle = meshes.add(Rectangle::new(chunk_rect.x, chunk_rect.y));
         let material = materials.add(ColorMaterial {
             // 图层透明度（ADR-0013）：作者 YAML 的 `opacity` 落在材质 alpha 上。
             color: Color::WHITE.with_alpha(layers.terrain.opacity),
@@ -1054,6 +1065,36 @@ mod tests {
         );
         assert_eq!(chunk_grid(128, 72), [1, 1]);
         assert_eq!(chunk_cell_rect([0, 0], 128, 72), [0, 0, 128, 72]);
+    }
+
+    /// 尾块的世界矩形按实际格数（右下 32 格高的块不得铺成正方形）。
+    #[test]
+    fn edge_chunks_use_their_true_world_rect() {
+        let full = chunk_world_rect([0, 0, 256, 256], 8.0);
+        assert_eq!(full, Vec2::splat(2048.0), "整块 256×256 格");
+        let edge = chunk_world_rect([256, 256, 512, 288], 8.0);
+        assert_eq!(
+            edge,
+            Vec2::new(2048.0, 256.0),
+            "16:9 右下尾块 = 256×32 格 = 2048×256 wu，得 {edge:?}"
+        );
+    }
+
+    /// 16:9 地图的**每一块**都能从源缓冲拷出（旧实现在右下块越界 panic）。
+    #[test]
+    fn every_chunk_of_a_16_9_map_copies_without_panic() {
+        let (w, h) = (512u32, 288u32);
+        let src = vec![7u8; (w * h * 4) as usize];
+        let [cw, ch] = chunk_grid(w, h);
+        assert_eq!([cw, ch], [2, 2]);
+        for cy in 0..ch {
+            for cx in 0..cw {
+                let cells = chunk_cell_rect([cx, cy], w, h);
+                let px = copy_chunk_pixels(&src, w, 1, cells[0], cells[1], cells[2], cells[3]);
+                let want = ((cells[2] - cells[0]) * (cells[3] - cells[1]) * 4) as usize;
+                assert_eq!(px.len(), want, "块 {cx},{cy} 像素数");
+            }
+        }
     }
 
     /// 非方形源缓冲：copy 的 stride 必须用**宽**而不是高，否则读越界/取错行。

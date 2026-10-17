@@ -71,6 +71,7 @@ pub struct GridLinesOverlay {
 #[derive(Debug, Clone, PartialEq)]
 struct GridKey {
     size: u32,
+    height: u32,
     cell_bits: u64,
     origin: (u64, u64),
     palette: MapPalette,
@@ -117,6 +118,7 @@ pub fn sync_grid_lines(
     }
     let key = GridKey {
         size: tex.size,
+        height: tex.height,
         cell_bits: grid.cell_size.to_bits() as u64,
         origin: (
             grid.raster_origin.x.to_bits() as u64,
@@ -151,7 +153,7 @@ pub fn sync_grid_lines(
     }
     // 线宽屏幕常量（乘 scale），不设世界下限——网格是编辑参照，远观淡去无妨。
     let half_w = GRID_LINE_PX * 0.5 * view.scale;
-    let chains = grid_chains(tex.size, half_w);
+    let chains = grid_chains(tex.size, tex.height, half_w);
     let Some(mesh) = build_stroke_mesh(&chains, grid.raster_origin, grid.cell_size) else {
         // 仅 `cell_size` 退化为 0 时可达：不插空网格（bevy #24874 误报
         // Use-after-free），退场即可——链装配是 O(size²) 便宜操作，下帧重算无妨。
@@ -182,15 +184,22 @@ pub fn sync_grid_lines(
 }
 
 /// 幅面 `size × size` 格的格线链：`(size+1)` 竖 + `(size+1)` 横，格坐标。
-fn grid_chains(size: u32, half_w: f32) -> Vec<(Vec<wv_terrain::isoline::Pt>, bool, f32)> {
+fn grid_chains(
+    width: u32,
+    height: u32,
+    half_w: f32,
+) -> Vec<(Vec<wv_terrain::isoline::Pt>, bool, f32)> {
     use wv_terrain::isoline::Pt;
-    let n = size;
-    let mut chains = Vec::with_capacity(2 * (n as usize + 1));
+    let mut chains = Vec::with_capacity(2 * (width as usize + height as usize + 2));
     let pt = |x: f32, y: f32| Pt { x, y };
-    for i in 0..=n {
+    let (w, h) = (width as f32, height as f32);
+    for i in 0..=width {
         let f = i as f32;
-        chains.push((vec![pt(f, 0.0), pt(f, n as f32)], false, half_w));
-        chains.push((vec![pt(0.0, f), pt(n as f32, f)], false, half_w));
+        chains.push((vec![pt(f, 0.0), pt(f, h)], false, half_w));
+    }
+    for i in 0..=height {
+        let f = i as f32;
+        chains.push((vec![pt(0.0, f), pt(w, f)], false, half_w));
     }
     chains
 }
@@ -229,7 +238,7 @@ mod tests {
     /// 2×2 幅面 → 3 竖 + 3 横 = 6 条链，每条 2 点 1 段：24 顶点 36 索引。
     #[test]
     fn grid_chains_cover_full_raster_extent() {
-        let chains = grid_chains(2, 0.5);
+        let chains = grid_chains(2, 2, 0.5);
         assert_eq!(chains.len(), 6, "3 竖 + 3 横");
         let mesh = build_stroke_mesh(&chains, Vec2::ZERO, 10.0).expect("规则格链应有 mesh");
         let idx = mesh.indices().expect("索引应存在").len();
@@ -239,7 +248,7 @@ mod tests {
     /// 网格线落在格缘整数位：2×2 幅面、格径 10 → 最外缘 x = 0 与 x = 20。
     #[test]
     fn grid_chains_span_raster_bounds_exactly() {
-        let chains = grid_chains(2, 0.0);
+        let chains = grid_chains(2, 2, 0.0);
         let mesh = build_stroke_mesh(&chains, Vec2::ZERO, 10.0).expect("规则格链应有 mesh");
         let pos = mesh
             .attribute(MeshVertexAttribute::new(
@@ -262,6 +271,15 @@ mod tests {
             ys.iter().all(|y| (0.0..=20.0).contains(y)),
             "ys 越界 {ys:?}"
         );
+    }
+
+    /// 非方形栅格：竖线条数按宽、横线按高，跨度各自到边。
+    #[test]
+    fn grid_chains_cover_non_square_raster() {
+        let chains = grid_chains(4, 2, 0.5);
+        assert_eq!(chains.len(), 5 + 3, "5 竖 + 3 横");
+        let mesh = build_stroke_mesh(&chains, Vec2::ZERO, 10.0).expect("应成网格");
+        assert!(mesh.indices().is_some());
     }
 
     /// 资源默认值：未构建过。

@@ -103,7 +103,7 @@ pub fn map_controls(
         .single()
         .map(|w| w.resolution.size())
         .unwrap_or(Vec2::new(1280.0, 800.0));
-    let raster_size = Vec2::splat(grid.cell_size * tex.size as f32);
+    let raster_size = Vec2::new(tex.size as f32, tex.height as f32) * grid.cell_size;
     let level_map_size =
         wv_render::zoom_level::map_size_of(&projection.world, drill.current(), raster_size);
     let zoom = wv_render::zoom_level::LevelZoom::for_map(level_map_size, window_size);

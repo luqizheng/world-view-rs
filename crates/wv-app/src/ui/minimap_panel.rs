@@ -71,11 +71,13 @@ pub fn panel_minimap(
             // view.scale（`view.scale` 的单位是世界单位/像素），两者相除即框占幅
             // 的比例。历史上写成 `1.0 / view.scale`，量纲反了：越深缩框越大，
             // 深缩时框占满整幅小地图，完全失去「我在哪」的指示作用。
-            let map_world = (grid.cell_size * tex.size as f32).max(f32::EPSILON);
-            let cx = 0.5 + ((view.camera_center.x / map_world) - 0.5).clamp(-0.5, 0.5);
-            let cy = 0.5 + ((view.camera_center.y / map_world) - 0.5).clamp(-0.5, 0.5);
-            let frac_x = ((view.window_size.x * view.scale) / map_world).clamp(0.05, 1.0);
-            let frac_y = ((view.window_size.y * view.scale) / map_world).clamp(0.05, 1.0);
+            let map_world = Vec2::new(tex.size as f32, tex.height as f32) * grid.cell_size;
+            let map_wx = map_world.x.max(f32::EPSILON);
+            let map_wy = map_world.y.max(f32::EPSILON);
+            let cx = 0.5 + ((view.camera_center.x / map_wx) - 0.5).clamp(-0.5, 0.5);
+            let cy = 0.5 + ((view.camera_center.y / map_wy) - 0.5).clamp(-0.5, 0.5);
+            let frac_x = ((view.window_size.x * view.scale) / map_wx).clamp(0.05, 1.0);
+            let frac_y = ((view.window_size.y * view.scale) / map_wy).clamp(0.05, 1.0);
             let vp = egui::Rect::from_center_size(
                 egui::pos2(
                     rect.left() + rect.width() * cx,
