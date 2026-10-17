@@ -55,9 +55,10 @@ pub const MAX_TERRAIN_CELLS: usize = 16_777_216;
 /// kind ≤ 1 是水（湖在山上也是水）、其余是陆（被压到海下的陆格仍是陆——
 /// 湿判定由读取侧的「海拔 < 0」兜住）。
 ///
-/// **与 `wv_terrain::biome` 的冻结编号表必须一致**（wv-io 不依赖 wv-terrain，
-/// 两表一致性由本模块的 `v1_payload_migrates_each_kind_to_authoring_truth`
-/// 表驱动测试钉死）。
+/// **与 `wv_terrain::biome` 的冻结编号表必须一致**（wv-io 运行时不依赖
+/// wv-terrain，但测试经 `[dev-dependencies]` 引用其常量——两表一致性由
+/// `migration_table_matches_wv_terrain_frozen_biome_ids` 真正钉死；
+/// `v1_payload_migrates_each_kind_to_authoring_truth` 的字面量只钉本表）。
 pub(crate) fn migrate_v1_kind(kind: u8) -> (u8, u8) {
     const WATER: u8 = 0;
     const LAND: u8 = 1;
@@ -386,6 +387,52 @@ mod tests {
         let v2 = encode_terrain(&once).unwrap();
         let twice = decode_terrain(&v2).unwrap();
         assert_eq!(once.cells, twice.cells, "migration must be idempotent");
+    }
+
+    /// 跨表一致性（终审 Important #1）：wv-io 迁移表的编号必须等于
+    /// `wv_terrain::biome` 的冻结常量——若上游重编号而本表未跟，此测试即红。
+    #[test]
+    fn migration_table_matches_wv_terrain_frozen_biome_ids() {
+        assert_eq!(
+            migrate_v1_kind(0),
+            (wv_terrain::SURFACE_WATER, wv_terrain::BIOME_NONE)
+        );
+        assert_eq!(
+            migrate_v1_kind(1),
+            (wv_terrain::SURFACE_WATER, wv_terrain::BIOME_NONE)
+        );
+        assert_eq!(
+            migrate_v1_kind(2),
+            (wv_terrain::SURFACE_LAND, wv_terrain::BIOME_DESERT)
+        );
+        assert_eq!(
+            migrate_v1_kind(3),
+            (wv_terrain::SURFACE_LAND, wv_terrain::BIOME_GRASSLAND)
+        );
+        assert_eq!(
+            migrate_v1_kind(4),
+            (wv_terrain::SURFACE_LAND, wv_terrain::BIOME_FOREST)
+        );
+        assert_eq!(
+            migrate_v1_kind(5),
+            (wv_terrain::SURFACE_LAND, wv_terrain::BIOME_NONE)
+        );
+        assert_eq!(
+            migrate_v1_kind(6),
+            (wv_terrain::SURFACE_LAND, wv_terrain::BIOME_NONE)
+        );
+        assert_eq!(
+            migrate_v1_kind(7),
+            (wv_terrain::SURFACE_LAND, wv_terrain::BIOME_NONE)
+        );
+        assert_eq!(
+            migrate_v1_kind(8),
+            (wv_terrain::SURFACE_LAND, wv_terrain::BIOME_SWAMP)
+        );
+        assert_eq!(
+            migrate_v1_kind(9),
+            (wv_terrain::SURFACE_LAND, wv_terrain::BIOME_ROAD)
+        );
     }
 
     #[test]
