@@ -47,6 +47,8 @@ pub mod continent_sketch;
 #[cfg(feature = "app")]
 pub mod drill;
 #[cfg(feature = "app")]
+pub mod selection;
+#[cfg(feature = "app")]
 pub mod editing_bridge;
 #[cfg(feature = "app")]
 pub mod faction_overlays;
