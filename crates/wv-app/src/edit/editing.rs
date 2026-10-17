@@ -445,7 +445,10 @@ pub fn apply_reset_terrain_to_base(
 ///
 /// **0 改动预检**（纯海丘陵 / 湖心在海等语义性无操作）：草稿栅格以同 seed
 /// 先跑一遍，`apply_intent` 返回 0 → 不提交、发通知、返回 `false`——空命令
-/// 不进撤销栈。成功返回 `true`；选区清空由调用方负责（spec §4：撤销不回驻留）。
+/// 不进撤销栈。预检目标 = `world.terrain_of(&map)`（**自有栅格**，与
+/// `IntentTerrainCommand::apply` 同一网格口径，终审 Important 1）。
+/// 播放中拒绝（基线 V37）。成功返回 `true`；选区清空由调用方负责
+/// （spec §4：撤销不回驻留）。
 ///
 /// 纹理脏矩形与 [`apply_reset_terrain_to_base`] 同款：前后 cells diff 出包围盒。
 #[allow(clippy::too_many_arguments)]
@@ -453,15 +456,21 @@ pub fn commit_region_intent(
     map: wv_core::Id,
     intent: Intent,
     cell_size: f32,
+    playback: &PlaybackState,
+    loc: crate::i18n::Locale,
     edit: &mut EditHistory,
     projection: &mut WorldProjection,
     tex: &mut TerrainTexture,
     notice: &mut crate::ui_shell::ShellNotice,
     frame: u64,
 ) -> bool {
-    // 预检：同 seed 草稿跑一遍，无改动就不进历史。
+    if playback.playing {
+        notice.error("播放中为只读：先暂停再应用地形意图", frame);
+        return false;
+    }
+    // 预检：自有栅格上以同 seed 草稿跑一遍，无改动就不进历史。
     let seed = intent.derive_seed(map.as_str());
-    let no_op = match wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(&map)) {
+    let no_op = match projection.world.terrain_of(&map) {
         Some(t) => {
             let cells: Vec<wv_terrain::TerrainCell> = t
                 .cells
@@ -480,15 +489,23 @@ pub fn commit_region_intent(
             };
             wv_terrain::intent::apply_intent(&mut scratch, &intent, seed, cell_size) == 0
         }
-        None => true,
+        None => {
+            notice.error(
+                format!("地图 `{map}` 没有自己的地形栅格，无法应用地形意图"),
+                frame,
+            );
+            return false;
+        }
     };
     if no_op {
-        notice.error("该意图在选区内没有产生任何变化", frame);
+        notice.error(
+            crate::i18n::t(loc, crate::i18n::I18nKey::IntentNoticeNoOp),
+            frame,
+        );
         return false;
     }
 
-    let before = wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(&map))
-        .map(|t| t.cells.clone());
+    let before = projection.world.terrain_of(&map).map(|t| t.cells.clone());
     let mut tx = Transaction::new();
     tx.push(Box::new(IntentTerrainCommand::new(
         map.clone(),
@@ -499,9 +516,10 @@ pub fn commit_region_intent(
         Ok(dirty) => {
             edit.record_dirty(dirty);
             projection.dirty = true;
-            let after =
-                wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(&map))
-                    .map(|t| (t.width.max(1), t.cells.clone()));
+            let after = projection
+                .world
+                .terrain_of(&map)
+                .map(|t| (t.width.max(1), t.cells.clone()));
             match (before, after) {
                 (Some(b), Some((w, a))) if b.len() == a.len() => {
                     if let Some(rect) = terrain_diff_bbox(&b, &a, w) {
@@ -510,11 +528,20 @@ pub fn commit_region_intent(
                 }
                 _ => tex.mark_all_dirty(),
             }
-            notice.info("已应用地形意图（Ctrl+Z 可撤销）", frame);
+            notice.info(
+                crate::i18n::t(loc, crate::i18n::I18nKey::IntentNoticeApplied),
+                frame,
+            );
             true
         }
         Err(e) => {
-            notice.error(format!("地形意图未生效：{e}"), frame);
+            notice.error(
+                format!(
+                    "{}：{e}",
+                    crate::i18n::t(loc, crate::i18n::I18nKey::IntentNoticeFailed)
+                ),
+                frame,
+            );
             false
         }
     }
@@ -1236,5 +1263,35 @@ mod tests {
         )
         .expect("重做别的命令");
         assert!(selection.is_closed(), "无关命令的 redo 不得消费选区");
+    }
+    /// 播放中只读（基线 V37，终审 Important 3）：地形意图在播放期拒绝。
+    #[test]
+    fn commit_region_intent_rejects_during_playback() {
+        let (mut projection, mut edit, mut tex, map) = continent_test_world(48);
+        let before = projection.world.terrain_of(&map).cloned().unwrap();
+        let mut notice = crate::ui_shell::ShellNotice::default();
+        let playing = PlaybackState {
+            playing: true,
+            ..PlaybackState::default()
+        };
+        assert!(!commit_region_intent(
+            map.clone(),
+            Intent::MountainMassif {
+                polygon: vec![(8.0, 8.0), (40.0, 8.0), (40.0, 40.0), (8.0, 40.0)],
+            },
+            1.0,
+            &playing,
+            crate::i18n::Locale::Zh,
+            &mut edit,
+            &mut projection,
+            &mut tex,
+            &mut notice,
+            0,
+        ));
+        assert_eq!(
+            projection.world.terrain_of(&map).cloned().unwrap(),
+            before,
+            "播放中不得改地形"
+        );
     }
 }

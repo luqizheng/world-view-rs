@@ -33,6 +33,12 @@ use crate::theme::ui_tokens::radius;
 const TILE_SIZE: f32 = 34.0;
 const ICON_INSET: f32 = 7.0;
 
+/// 地形意图可用性：当前图有**自有地形栅格**（spec §4 谓词后半句；
+/// 终审 Important 1——无栅格图的预检/提交口径不一致，按钮直接不给）。
+fn terrain_intents_available(world: &wv_core::World, map: &wv_core::Id) -> bool {
+    world.terrain_of(map).is_some()
+}
+
 /// 意图目录大小：按图级过滤（spec §4 裁定——有地形栅格 ∧ 图级 ∈
 /// {World, Region}；M1 目录只有「生成大陆」一项，森林随 M4 加入）。
 fn intent_count_for(level: wv_core::map::MapLevel) -> usize {
@@ -68,10 +74,14 @@ pub fn intent_menu(
     mut tex: ResMut<wv_render::terrain_view::TerrainTexture>,
     grid: Res<wv_render::state::GridConfig>,
     mut notice: ResMut<crate::ui_shell::ShellNotice>,
+    playback: Res<crate::state::PlaybackState>,
     time: Res<bevy::prelude::Time>,
     startup_req: Res<StartupLoadRequest>,
 ) {
-    // 无工程锁 / 启动加载中 / 工具未启用或未闭合：与 map_controls 同源早返。
+    // 无工程锁 / 启动加载中 / 播放中（V37）/ 工具未启用或未闭合：同源早返。
+    if playback.playing {
+        return;
+    }
     if !projection.has_open_project() || startup_req.0.is_some() || !menu_visible(&selection) {
         return;
     }
@@ -156,6 +166,12 @@ pub fn intent_menu(
                                     }
                                 }
                             }
+                            // 地形按钮栅格门（spec §4：有**自有**地形栅格才可用，
+                            // 终审 Important 1——无栅格图的预检/提交口径不一致）。
+                            let terrain_ok = drill
+                                .current()
+                                .map(|m| terrain_intents_available(&projection.world, m))
+                                .unwrap_or(false);
                             // 地形四意图（spec §4 D10：一键应用，无弹窗）。
                             let ring = selection.closed.clone();
                             let apply_map = drill.current().cloned();
@@ -166,6 +182,8 @@ pub fn intent_menu(
                                         map,
                                         kind,
                                         grid.cell_size,
+                                        &playback,
+                                        loc,
                                         &mut edit,
                                         &mut projection,
                                         &mut tex,
@@ -225,7 +243,7 @@ pub fn intent_menu(
 
 #[cfg(test)]
 mod tests {
-    use super::{intent_count_for, menu_visible};
+    use super::{intent_count_for, menu_visible, terrain_intents_available};
     use wv_core::map::MapLevel;
 
     #[test]
@@ -251,6 +269,41 @@ mod tests {
     /// 终审 Important 2：生成 → 关掉选择瓷砖 → Ctrl+Z 回驻留选区——
     /// 此时 `enabled = false`（环不可见、不可交互），菜单不得浮现，
     /// 否则作者会「从空气里」生成一片大陆。
+    /// 地形按钮栅格门（终审 Important 1）：无自有栅格的图不出地形按钮。
+    #[test]
+    fn terrain_intents_require_own_raster() {
+        use wv_core::map::{MapLevel, MapNode};
+        let mut world = wv_core::World::default();
+        world.maps.push(MapNode {
+            id: wv_core::Id::new_unchecked("bare_map"),
+            level: MapLevel::Region,
+            ..Default::default()
+        });
+        let bare = wv_core::Id::new_unchecked("bare_map");
+        assert!(
+            !terrain_intents_available(&world, &bare),
+            "无自有栅格 → 地形意图不可用"
+        );
+        world.set_terrain(
+            bare.clone(),
+            wv_core::terrain::TerrainData {
+                width: 8,
+                height: 8,
+                cells: vec![
+                    wv_core::terrain::TerrainCellData {
+                        height: 10,
+                        kind: 3
+                    };
+                    64
+                ],
+            },
+        );
+        assert!(
+            terrain_intents_available(&world, &bare),
+            "有自有栅格 → 可用"
+        );
+    }
+
     #[test]
     fn intent_menu_requires_enabled_tool() {
         use wv_render::state::SelectionState;
