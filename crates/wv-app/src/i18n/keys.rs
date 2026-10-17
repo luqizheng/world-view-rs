@@ -849,6 +849,8 @@ pub enum I18nKey {
     // ── 选区意图菜单（2026-10-17 选择工具 spec §4，M1 Task 6） ──────────
     /// 按钮「生成大陆…」
     IntentMenuGenerateContinent,
+    /// 按钮「生成城市…」
+    IntentMenuGenerateCity,
     /// 弱化提示「Esc 取消选择」
     IntentMenuCancelHint,
     /// 占位「本图暂无可用意图」

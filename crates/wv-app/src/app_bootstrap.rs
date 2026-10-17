@@ -153,6 +153,7 @@ pub fn run(config: AppConfig) {
     // 这里显式补一份，资源幂等，双保险防装配顺序遗漏）
     .init_resource::<wv_render::state::SelectionState>()
     .init_resource::<ui::ContinentDialog>()
+    .init_resource::<ui::city_intent::CityIntentDialog>()
     .init_resource::<crate::state::ContinentGenerationState>()
     .init_resource::<wv_render::measurement::MeasurementCache>()
     // 整图后台合成任务槽（CONTINUOUS_LOD M3）：落地校验在主线程读取。
@@ -387,6 +388,12 @@ pub fn run(config: AppConfig) {
     app.add_systems(
         bevy_egui::EguiPrimaryContextPass,
         ui::intent_menu.after(ui::map_controls),
+    );
+    // 「生成城市」对话框（意图菜单打开；居中模态窗）。与菜单同链尾段，
+    // 排在其后（先画菜单、后画它弹出的对话框，同帧即可）。
+    app.add_systems(
+        bevy_egui::EguiPrimaryContextPass,
+        ui::city_intent::city_intent_dialog_system.after(ui::intent_menu),
     );
 
     // 界面外壳（主题 / 快捷键 / 命令面板 / 布局持久化）与地图钻取（v0.2 §B）。

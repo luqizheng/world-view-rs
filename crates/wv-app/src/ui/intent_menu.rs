@@ -21,6 +21,7 @@ use bevy_egui::{egui, EguiContexts};
 use crate::i18n::{t, CurrentLocale, I18nKey};
 use crate::state::{DrillState, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
+use crate::ui::city_intent::{prefill, CityIntentDialog};
 use crate::ui_shell::StartupLoadRequest;
 
 use super::shell::UiShell;
@@ -36,7 +37,7 @@ const ICON_INSET: f32 = 7.0;
 /// {World, Region}；M1 目录只有「生成大陆」一项，森林随 M4 加入）。
 fn intent_count_for(level: wv_core::map::MapLevel) -> usize {
     match level {
-        wv_core::map::MapLevel::World | wv_core::map::MapLevel::Region => 1,
+        wv_core::map::MapLevel::World | wv_core::map::MapLevel::Region => 2,
         wv_core::map::MapLevel::City | wv_core::map::MapLevel::Interior => 0,
     }
 }
@@ -62,6 +63,7 @@ pub fn intent_menu(
     projection: Res<WorldProjection>,
     selection: Res<wv_render::state::SelectionState>,
     mut continent_dialog: ResMut<crate::ui::ContinentDialog>,
+    mut city_dialog: ResMut<CityIntentDialog>,
     startup_req: Res<StartupLoadRequest>,
 ) {
     // 无工程锁 / 启动加载中 / 工具未启用或未闭合：与 map_controls 同源早返。
@@ -108,7 +110,7 @@ pub fn intent_menu(
                             if ui
                                 .add(
                                     egui::Button::image_and_text(
-                                        icon,
+                                        icon.clone(),
                                         t(loc, I18nKey::IntentMenuGenerateContinent),
                                     )
                                     .fill(shell.accent())
@@ -118,6 +120,36 @@ pub fn intent_menu(
                             {
                                 // 只开面板；选区保持到面板确认时被消费（spec D5）。
                                 continent_dialog.open = true;
+                            }
+                            let icon = icon_image(
+                                ICON_MOUNTAIN_RANGE,
+                                egui::Color32::WHITE,
+                                TILE_SIZE - ICON_INSET,
+                            );
+                            if ui
+                                .add(
+                                    egui::Button::image_and_text(
+                                        icon,
+                                        t(loc, I18nKey::IntentMenuGenerateCity),
+                                    )
+                                    .fill(shell.accent())
+                                    .corner_radius(egui::CornerRadius::from(radius::PANEL)),
+                                )
+                                .clicked()
+                            {
+                                // 预填进对话框自持（spec Review Focus 1：确认前选区
+                                // 可被 Esc 清掉，不依赖存活）；确认后自动钻入。
+                                if let Some(node) = drill.current_node(&projection.world) {
+                                    if let Some(map) = drill.current() {
+                                        prefill(
+                                            &mut city_dialog,
+                                            &selection,
+                                            map.clone(),
+                                            node.extent,
+                                            projection.world.maps.len(),
+                                        );
+                                    }
+                                }
                             }
                         }
                         ui.weak(t(loc, I18nKey::IntentMenuCancelHint));
@@ -141,12 +173,12 @@ mod tests {
     fn intent_catalog_nonempty_for_world_and_region() {
         assert_eq!(
             intent_count_for(MapLevel::World),
-            1,
-            "世界级：仅生成大陆（M1）"
+            2,
+            "世界级：生成大陆 + 生成城市（M2）"
         );
         assert_eq!(
             intent_count_for(MapLevel::Region),
-            1,
+            2,
             "区域级同世界级（spec §4 裁定）"
         );
     }
