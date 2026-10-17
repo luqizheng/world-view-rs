@@ -28,6 +28,52 @@ use crate::ui_layout::LayoutFile;
 use super::shell::UiShell;
 use super::widgets::{badge, float_window, BadgeKind};
 
+// ---------------------------------------------------------------------------
+// 世界图尺度提示的参考载具（README §12-39）
+// ---------------------------------------------------------------------------
+
+/// 参考载具的施工模板：只填所需字段，其余默认。
+///
+/// 为什么是函数而不是 `const`：`Vehicle` 含 `Id` / `String` / `HashMap`，
+/// 无法 const 构造（计划原文写 `const REF_WALK: Vehicle`，见 ledger Ruling）。
+#[allow(dead_code)] // Task 3 面板行消费后移除
+fn ref_vehicle(
+    id: &str,
+    name: &str,
+    speed_kmh: f32,
+    daily_hours: f32,
+) -> wv_core::map::distance::Vehicle {
+    wv_core::map::distance::Vehicle {
+        id: wv_core::Id::new_unchecked(id),
+        name: name.to_owned(),
+        instant: false,
+        speed_kmh: Some(speed_kmh),
+        daily_hours: Some(daily_hours),
+        // 空 modifiers = 任何地形 ×1.0（平原 / 海面默认）。
+        terrain_modifiers: std::collections::HashMap::new(),
+        requires_endpoints: false,
+        requirements: Vec::new(),
+    }
+}
+
+/// 参考：步行（5 km/h × 8 h/日）。
+#[allow(dead_code)] // Task 3 面板行消费后移除
+pub(crate) fn ref_walk() -> wv_core::map::distance::Vehicle {
+    ref_vehicle("ref_walk", "步行", 5.0, 8.0)
+}
+
+/// 参考：骑马（8 km/h × 8 h/日）。
+#[allow(dead_code)] // Task 3 面板行消费后移除
+pub(crate) fn ref_horse() -> wv_core::map::distance::Vehicle {
+    ref_vehicle("ref_horse", "骑马", 8.0, 8.0)
+}
+
+/// 参考：帆船（10 km/h × 12 h/日）。
+#[allow(dead_code)] // Task 3 面板行消费后移除
+pub(crate) fn ref_sail() -> wv_core::map::distance::Vehicle {
+    ref_vehicle("ref_sail", "帆船", 10.0, 12.0)
+}
+
 /// 校验（P-8）。
 #[allow(clippy::too_many_arguments)]
 pub fn panel_validation(
@@ -215,4 +261,41 @@ pub fn panel_validation(
             }
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 参考载具的日速（手算，AGENTS §7.2/§7.4）。
+    ///
+    /// 唯一换算入口 `Vehicle::effective_daily_speed` 的现行公式是
+    /// `speed_kmh × (daily_hours / 24)`。因此 5 km/h·8h = 1.667「日速」，
+    /// 而不是直觉上的 40 km/日——公式单位问题见本文件的 Ruling 记录，
+    /// 改动它需要单独 ADR（会改变所有既有行程天数）。
+    #[test]
+    fn reference_vehicles_daily_speeds_match_hand_computed_values() {
+        let walk = ref_walk()
+            .effective_daily_speed("plain")
+            .expect("步行应有日速");
+        let horse = ref_horse()
+            .effective_daily_speed("plain")
+            .expect("骑马应有日速");
+        let sail = ref_sail()
+            .effective_daily_speed("sea")
+            .expect("帆船应有日速");
+        assert!((walk - 5.0 * 8.0 / 24.0).abs() < 1e-6, "步行得 {walk}");
+        assert!((horse - 8.0 * 8.0 / 24.0).abs() < 1e-6, "骑马得 {horse}");
+        assert!((sail - 10.0 * 12.0 / 24.0).abs() < 1e-6, "帆船得 {sail}");
+    }
+
+    /// 三种参考载具都可用（非 instant、参数齐全）。
+    #[test]
+    fn reference_vehicles_are_not_instant_and_have_params() {
+        for v in [ref_walk(), ref_horse(), ref_sail()] {
+            assert!(!v.instant, "参考载具不得是瞬时的");
+            assert!(v.speed_kmh.is_some(), "{} 缺 speed_kmh", v.id);
+            assert!(v.daily_hours.is_some(), "{} 缺 daily_hours", v.id);
+        }
+    }
 }
