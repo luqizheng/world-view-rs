@@ -164,6 +164,12 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::PanelCharacter => "人物登记",
         I18nKey::PanelEvent => "事件登记",
 
+        // ── 事实地界（theme overlay Task 7） ──
+        I18nKey::FeatureForestToolHint => "森林：圈地界；左键加点；双击/回车闭合；Esc 丢弃",
+        I18nKey::FeaturePlaceDialogTitle => "新建地理事实",
+        I18nKey::FeaturePlaceNameLabel => "名称",
+        I18nKey::FeaturePlaceCreate => "创建",
+
         // ── 地图层级 ──
         I18nKey::MapLevelWorld => "世界",
         I18nKey::MapLevelRegion => "区域",
@@ -598,6 +604,14 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::PanelCompass => "Compass",
         I18nKey::PanelCharacter => "Character log",
         I18nKey::PanelEvent => "Event log",
+
+        // ── Geographic features (theme overlay Task 7) ──
+        I18nKey::FeatureForestToolHint => {
+            "Forest: draw a territory; click to add points; double-click/Enter to close; Esc to discard"
+        }
+        I18nKey::FeaturePlaceDialogTitle => "New geographic feature",
+        I18nKey::FeaturePlaceNameLabel => "Name",
+        I18nKey::FeaturePlaceCreate => "Create",
 
         // ── Map levels ──
         I18nKey::MapLevelWorld => "World",

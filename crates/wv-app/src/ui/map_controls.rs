@@ -21,8 +21,8 @@
 //! - 右侧垂直居中、距窗体右缘 18px（原型 `right: 18px`）。
 //! - 圆角大框包裹整列：`panel_bg` 底 + `border_subtle` 描边 + `radius::PANEL` 圆角 + 投影。
 //! - 瓷砖 34×34px（原型 `.map-controls .button`），间距 4px，内边距 5px。
-//! - 6 块 = 2 测量工具 + 1 分隔 + 1 参照网格开关（2026-10-16 自地形设计器
-//!   迁入）+ 3 缩放/导航（笔刷切换已移除）。
+//! - 8 块 = 2 测量工具 + 1 城市 + 1 圈地界（theme overlay Task 7）+ 1 参照
+//!   网格开关（2026-10-16 自地形设计器迁入）+ 3 缩放/导航（笔刷切换已移除）。
 //! - 活动态：`shell.accent()` 蓝底 + 白图标。
 //! - 非活动态：`shell.raised_bg()` 灰底 + 白图标。
 //!
@@ -34,17 +34,21 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
+use crate::i18n::{t_key, CurrentLocale, I18nKey};
 use crate::state::{
-    CityToolMode, CityToolState, DrillState, GridConfig, MeasureMode, MeasureState, ViewState,
-    WorldProjection,
+    CityToolMode, CityToolState, DrillState, GridConfig, MeasureMode, MeasureState,
+    TerritorySketch, ViewState, WorldProjection,
 };
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::{radius, space};
 use crate::ui_shell::StartupLoadRequest;
+use wv_render::theme::overlays::FEATURE_FOREST;
 
 use super::shell::UiShell;
 use super::widgets::{icon_image, ToolIcon};
-use super::{ICON_GRID, ICON_LINE, ICON_MAXIMIZE, ICON_SQUARE, ICON_ZOOM_IN, ICON_ZOOM_OUT};
+use super::{
+    ICON_GRID, ICON_LINE, ICON_MAXIMIZE, ICON_SQUARE, ICON_TREES, ICON_ZOOM_IN, ICON_ZOOM_OUT,
+};
 
 /// 单瓷砖边长 34px（原型 `.map-controls .button`）。
 const TILE_SIZE: f32 = 34.0;
@@ -59,7 +63,7 @@ const PANEL_PAD: f32 = 5.0;
 /// 图标内嵌（tile 边长减去 `ICON_INSET * 2` = 34 − 14 = 20px 图标）。
 const ICON_INSET: f32 = 7.0;
 
-/// 右列纵向工具条（对齐原型 `.map-controls`：圆角大框 + 5 独立瓷砖）。
+/// 右列纵向工具条（对齐原型 `.map-controls`：圆角大框 + 8 独立瓷砖）。
 ///
 /// 顶部早返守卫与 `welcome_screen` 同源 —— 无工程时整条不渲染。
 #[allow(clippy::too_many_arguments)]
@@ -69,6 +73,8 @@ pub fn map_controls(
     mut view: ResMut<ViewState>,
     mut measure: ResMut<MeasureState>,
     mut city_tool: ResMut<CityToolState>,
+    mut sketch: ResMut<TerritorySketch>,
+    current_loc: Res<CurrentLocale>,
     drill: Res<DrillState>,
     grid: Res<GridConfig>,
     tex: Res<wv_render::terrain_view::TerrainTexture>,
@@ -104,6 +110,8 @@ pub fn map_controls(
     let line_active = measure.mode == MeasureMode::Line;
     let rect_active = measure.mode == MeasureMode::Rect;
     let city_active = city_tool.mode == CityToolMode::CreateArmed;
+    let forest_active = sketch.enabled;
+    let forest_hint = t_key(&current_loc, I18nKey::FeatureForestToolHint);
 
     // 位置：右侧垂直居中、距窗体右缘 18px（原型 `.map-controls`）。
     egui::Area::new(egui::Id::new("wv_map_controls_v05"))
@@ -140,6 +148,10 @@ pub fn map_controls(
                             measure.mode = if line_active {
                                 MeasureMode::Off
                             } else {
+                                // 互斥：开测量时关掉圈地界（同一左键不能两用）。
+                                sketch.enabled = false;
+                                sketch.discard_active();
+                                sketch.last_click = None;
                                 MeasureMode::Line
                             };
                             measure.clear_draft();
@@ -159,6 +171,10 @@ pub fn map_controls(
                             measure.mode = if rect_active {
                                 MeasureMode::Off
                             } else {
+                                // 互斥：开测量时关掉圈地界（同一左键不能两用）。
+                                sketch.enabled = false;
+                                sketch.discard_active();
+                                sketch.last_click = None;
                                 MeasureMode::Rect
                             };
                             measure.clear_draft();
@@ -186,12 +202,46 @@ pub fn map_controls(
                             city_tool.mode = if city_active {
                                 CityToolMode::Off
                             } else {
-                                // 互斥：开城市时关掉测量。
+                                // 互斥：开城市时关掉测量与圈地界。
                                 measure.mode = MeasureMode::Off;
                                 measure.clear_draft();
+                                sketch.enabled = false;
+                                sketch.discard_active();
+                                sketch.last_click = None;
                                 CityToolMode::CreateArmed
                             };
                             city_tool.draft = None;
+                        },
+                    );
+
+                    // ②.6 Forest — 圈地界工具（theme overlay Task 7）：
+                    //   左键多次落点，双击 / 回车 / 右键闭合；闭合后弹命名对话框
+                    //   落成 `AddFeaturePlaceCommand`（feature = 森林）。
+                    //   启用时互斥地关掉测量与城市工具。
+                    tile_button(
+                        ui,
+                        &shell,
+                        ToolIcon::Svg(ICON_TREES),
+                        forest_hint,
+                        forest_active,
+                        project_open,
+                        accent,
+                        raised_bg,
+                        || {
+                            if forest_active {
+                                sketch.enabled = false;
+                                sketch.discard_active();
+                                sketch.last_click = None;
+                            } else {
+                                measure.mode = MeasureMode::Off;
+                                measure.clear_draft();
+                                city_tool.mode = CityToolMode::Off;
+                                city_tool.draft = None;
+                                sketch.enabled = true;
+                                sketch.feature = FEATURE_FOREST;
+                                sketch.discard_active();
+                                sketch.last_click = None;
+                            }
                         },
                     );
 
@@ -345,23 +395,23 @@ mod map_control_tests {
         assert!((s - zoom.max).abs() < 1e-6, "got {s}, max {}", zoom.max);
     }
 
-    /// 视觉量计数（对齐原型 `.map-controls`）：6 个独立瓷砖 + 1 分隔。
-    /// 内容高度 = 6×TILE + 5×GAP + 2×SEPARATOR_PAD。
+    /// 视觉量计数（对齐原型 `.map-controls`）：8 个独立瓷砖 + 1 分隔。
+    /// 内容高度 = 8×TILE + 7×GAP + 2×SEPARATOR_PAD。
     ///
     /// 不直接渲染——egui 0.36 在 unit 上下文没有 GPU surface；
     /// 这里钉的是 layout 数学校验：模块顶部常量（`TILE_SIZE` = 34、
     /// `TILE_GAP` = 4、`SEPARATOR_PAD` = 8）若被改了，这里必须同步改。
     #[test]
     fn toolbar_layout_sums_to_expected_total_height() {
-        // 6 瓷砖 × 34 + 5 个 tile gap × 4 + 2 × 8 = 204 + 20 + 16 = 240
-        // （2026-10-16 加第 6 块「参照网格」瓷砖，自 5 块 202 迁移）
+        // 8 瓷砖 × 34 + 7 个 tile gap × 4 + 2 × 8 = 272 + 28 + 16 = 316
+        // （2026-10-17 加第 8 块「圈地界」瓷砖；第 7 块为「城市」）
         const TILE: f32 = 34.0;
         const GAP: f32 = 4.0;
         const SEP: f32 = 8.0;
-        let total = 6.0 * TILE + 5.0 * GAP + 2.0 * SEP;
+        let total = 8.0 * TILE + 7.0 * GAP + 2.0 * SEP;
         assert!(
-            (total - 240.0).abs() < 1e-3,
-            "总额不等于 240：模块顶部常量（TILE_SIZE/TILE_GAP/SEPARATOR_PAD）改了 \
+            (total - 316.0).abs() < 1e-3,
+            "总额不等于 316：模块顶部常量（TILE_SIZE/TILE_GAP/SEPARATOR_PAD）改了 \
              必须在测试里同步更新。got {total}",
         );
     }

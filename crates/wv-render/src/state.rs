@@ -480,6 +480,74 @@ impl MeasureState {
     }
 }
 
+/// 圈地界工具会话态（theme overlay Task 7）。
+///
+/// 与 [`MeasureState`] / [`BrushState`] 平级：**会话态，不落盘**。
+/// 作者的交互是「多次左键落点 → 双击 / 回车 / 右键闭合」，闭合后的整环
+/// 写入 [`Self::pending`]，由应用层命名对话框消费成 `AddFeaturePlaceCommand`；
+/// 本资源**不直接改世界**（AGENTS §3.3）。
+///
+/// 坐标为**当前图局部 wu**（与 `MeasureState::draft` 同口径），落盘前由
+/// `wv-edit` 的 `AddFeaturePlaceCommand` 原样写入 `GeometrySpan`。
+#[derive(Resource, Debug, Clone, PartialEq)]
+pub struct TerritorySketch {
+    /// 是否启用圈地界工具（工具条瓷砖切换）。
+    pub enabled: bool,
+    /// 当前工具要创建的 `Place.feature` 编号（主题覆盖物词汇表）。
+    ///
+    /// 默认 [`crate::theme::overlays::FEATURE_FOREST`]：v1 唯一开放的事实类型
+    /// 是森林；工具条启用时也会显式写回该值（两个来源同值，不会漂移）。
+    pub feature: u8,
+    /// 正在画的折线（未闭合；`None` = 未起笔）。
+    pub active: Option<Vec<(f32, f32)>>,
+    /// 上一次左键落点与时刻（双击收笔判定，`commit_territory_sketch_click` 用）。
+    pub last_click: Option<((f32, f32), f64)>,
+    /// 已闭合、等待命名的环（≥3 点）。`Some` 时命名对话框应打开；
+    /// 提交或取消后由应用层清空。
+    pub pending: Option<Vec<(f32, f32)>>,
+}
+
+impl Default for TerritorySketch {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            feature: crate::theme::overlays::FEATURE_FOREST,
+            active: None,
+            last_click: None,
+            pending: None,
+        }
+    }
+}
+
+impl TerritorySketch {
+    /// 左键落点：追加到当前折线（没有则起笔）。
+    pub fn add_point(&mut self, p: (f32, f32)) {
+        self.active.get_or_insert_with(Vec::new).push(p);
+    }
+
+    /// 收笔：≥ 3 点才写入 [`Self::pending`] 并返回 `true`；否则丢弃折线返回 `false`。
+    ///
+    /// 「≥3」是多边形面的硬前提：退化环在 `wv-core::geometry::point_in_ring`
+    /// 与 `Place::fit_anchor_to_ring`（`ring.len() < 6` 早返）里都没有意义；
+    /// 在交互层就挡住，作者不会得到「点了两次却没反应」的谜。
+    pub fn try_close(&mut self) -> bool {
+        match self.active.take() {
+            Some(pts) if pts.len() >= 3 => {
+                self.pending = Some(pts);
+                true
+            }
+            Some(_) => false,
+            None => false,
+        }
+    }
+
+    /// Esc / 切工具：丢弃未闭合的折线；已闭合待命名的 [`Self::pending`] 保留
+    /// （作者辛苦圈的地不因手滑蒸发——与 SelectionState 的 Esc 语义同源）。
+    pub fn discard_active(&mut self) {
+        self.active = None;
+    }
+}
+
 impl Default for BrushState {
     fn default() -> Self {
         Self {
@@ -1278,5 +1346,61 @@ mod tests {
         );
         // 跳到 `city_ghost` 自身则失败（不在 maps 里）。
         assert!(!d.drill_to(&w, &Id::new_unchecked("city_ghost")));
+    }
+
+    // -----------------------------------------------------------------------
+    // theme overlay Task 7：圈地界工具会话态（TerritorySketch）
+    // -----------------------------------------------------------------------
+
+    /// 三个落点收笔 → `pending` 拿到整环、`active` 清空。
+    #[test]
+    fn territory_sketch_closes_into_pending_with_three_points() {
+        let mut s = TerritorySketch::default();
+        s.add_point((0.0, 0.0));
+        s.add_point((10.0, 0.0));
+        s.add_point((10.0, 10.0));
+        assert_eq!(
+            s.active.as_ref().map(Vec::len),
+            Some(3),
+            "三次落点应三点折线"
+        );
+        assert!(s.try_close(), "≥3 点应能闭合");
+        assert_eq!(
+            s.pending.as_ref().map(Vec::len),
+            Some(3),
+            "闭合后整环进入 pending（等待命名对话框）"
+        );
+        assert!(s.active.is_none(), "闭合后 active 应清空");
+    }
+
+    /// 两点收笔不成环：返回 false、`pending` 不产生、`active` 清空。
+    #[test]
+    fn territory_sketch_discards_under_three_points() {
+        let mut s = TerritorySketch::default();
+        s.add_point((0.0, 0.0));
+        s.add_point((10.0, 10.0));
+        assert!(!s.try_close(), "两点不应成环");
+        assert!(s.pending.is_none(), "失败收笔不得产生 pending");
+        assert!(s.active.is_none(), "失败收笔也清掉 active");
+    }
+
+    /// Esc 只丢进行中的折线；已闭合待命名的 `pending` 必须保留。
+    #[test]
+    fn territory_sketch_discard_active_keeps_pending() {
+        let mut s = TerritorySketch::default();
+        s.add_point((0.0, 0.0));
+        s.add_point((10.0, 0.0));
+        s.add_point((10.0, 10.0));
+        assert!(s.try_close());
+        // 再起一笔，然后 Esc。
+        s.add_point((50.0, 50.0));
+        s.add_point((60.0, 50.0));
+        s.discard_active();
+        assert!(s.active.is_none(), "Esc 后 active 应丢弃");
+        assert_eq!(
+            s.pending.as_ref().map(Vec::len),
+            Some(3),
+            "Esc 不得清掉已闭合待命名的环"
+        );
     }
 }

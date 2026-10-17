@@ -300,6 +300,16 @@ pub enum I18nKey {
     /// 「事件登记」面板标题
     PanelEvent,
 
+    // ── 事实地界（theme overlay Task 7） ────────────────────────────
+    /// 工具条「森林地界」瓷砖的 hover 提示
+    FeatureForestToolHint,
+    /// 「新建地理事实」命名对话框标题
+    FeaturePlaceDialogTitle,
+    /// 命名对话框的「名称」标签
+    FeaturePlaceNameLabel,
+    /// 命名对话框的「创建」按钮
+    FeaturePlaceCreate,
+
     // ── 地图层级（state::map_level_label） ──────────────────────────
     /// 「世界」MapLevel
     MapLevelWorld,
@@ -813,7 +823,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 362] = [
+    pub const ALL: [I18nKey; 366] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -953,6 +963,11 @@ impl I18nKey {
         I18nKey::PanelCompass,
         I18nKey::PanelCharacter,
         I18nKey::PanelEvent,
+        // 事实地界（theme overlay Task 7，4）
+        I18nKey::FeatureForestToolHint,
+        I18nKey::FeaturePlaceDialogTitle,
+        I18nKey::FeaturePlaceNameLabel,
+        I18nKey::FeaturePlaceCreate,
         // 地图层级（4）
         I18nKey::MapLevelWorld,
         I18nKey::MapLevelRegion,

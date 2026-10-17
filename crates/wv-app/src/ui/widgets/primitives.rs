@@ -426,6 +426,9 @@ pub const ICON_PLUS: egui::ImageSource<'static> =
     egui::include_image!("../../../assets/ui/tool_icons/plus.svg");
 pub const ICON_FOLDER_OPEN: egui::ImageSource<'static> =
     egui::include_image!("../../../assets/ui/tool_icons/folder-open.svg");
+/// 圈地界工具图标（Lucide `trees`，theme overlay Task 7）。
+pub const ICON_TREES: egui::ImageSource<'static> =
+    egui::include_image!("../../../assets/ui/tool_icons/trees.svg");
 /// 笔刷意图工具图标（地形设计器三行行内瓷砖）。形态两两互异是硬要求——
 /// 瓷砖纯图标，识别全靠形：尖峰(山脉)/平顶(高原)/圆丘(丘陵)/开口锥+射线(火山)/
 /// 水滴(湖)/波线(河)。

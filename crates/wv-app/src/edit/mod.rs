@@ -6,6 +6,8 @@
 //! ## 职责
 //! - 把笔刷操作转成 `wv_edit::EditCommand`（`editing`）。
 //! - 把面板的「应用/拒绝」按钮转成 `EditCommand`（`faction_panel_actions`）。
+//! - 把圈地界工具闭合的环 + 名称转成 `AddFeaturePlaceCommand`
+//!   （`feature_place_actions`，theme overlay Task 7）。
 //! - 把校验面板点击「跳到位置」转成相机/选择变更（`validation_actions`）。
 //! - 把内存 `World` 派生 `Diagnostics` 给校验面板（`diagnostics_bridge`）。
 //!
@@ -18,6 +20,7 @@
 //! - `translate_edit_intents`（渲染编辑意图 → `EditCommand` 提交，ADR-0020 §2.5）—— 来自 `intent_translator`
 //! - `apply_brush_at`（笔刷提交）—— 来自 `editing`
 //! - `apply_faction_edit`（势力面板提交）—— 来自 `faction_panel_actions`
+//! - `add_feature_place_now`（地界提交）—— 来自 `feature_place_actions`
 //! - `jump_to_diagnostic`（校验面板跳转）—— 来自 `validation_actions`
 
 #[cfg(feature = "app")]
@@ -26,6 +29,8 @@ pub mod diagnostics_bridge;
 pub mod editing;
 #[cfg(feature = "app")]
 pub mod faction_panel_actions;
+#[cfg(feature = "app")]
+pub mod feature_place_actions;
 #[cfg(feature = "app")]
 pub mod intent_translator;
 #[cfg(feature = "app")]

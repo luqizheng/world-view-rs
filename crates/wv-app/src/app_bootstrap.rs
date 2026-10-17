@@ -136,6 +136,10 @@ pub fn run(config: AppConfig) {
     .init_resource::<streets::StreetEditorState>()
     .init_resource::<crate::state::MeasureState>()
     .init_resource::<crate::state::CityToolState>()
+    // 圈地界工具会话态（theme overlay Task 7）：`pending` 一出现，命名对话框
+    // 下一帧即打开；漏 init 会在首帧 panic。
+    .init_resource::<crate::state::TerritorySketch>()
+    .init_resource::<crate::ui::FeaturePlaceDialog>()
     .init_resource::<wv_render::measurement::MeasurementCache>()
     // 主题包（ADR-0023 M1）：当前 `map_palette` 仍为权威源，本 Resource 仅作
     // 入口就位、不被任何渲染系统消费；M2 切消费点时再写回 `view.theme_pack_id`。
@@ -259,6 +263,13 @@ pub fn run(config: AppConfig) {
         Update,
         brush_cursor::sync_brush_cursor.after(camera::track_cursor_world),
     )
+    // 圈地界工具（theme overlay Task 7）：点击采集排在光标世界坐标之后；
+    // 闭合只写 `TerritorySketch.pending`，命名对话框在 Egui pass 消费。
+    .add_systems(
+        Update,
+        wv_render::territory_sketch::commit_territory_sketch_click
+            .after(camera::track_cursor_world),
+    )
     // 编辑意图翻译（ADR-0020 §2.5）：渲染 commit_* 产意图 → 翻译器提交 wv-edit
     // → 渲染 apply_*_receipts 回填本地。必须晚于两个 commit 系统（同帧闭环）。
     .add_systems(
@@ -302,6 +313,8 @@ pub fn run(config: AppConfig) {
             world_projection::draw_brush_cursor,
             // 测量顶置渲染——与 gizmos 一起画。
             wv_render::measurement::render_measurements,
+            // 圈地界草稿（进行中折线 + 顶点 + 待命名环）——同一 gizmo 批。
+            wv_render::territory_sketch::draw_territory_sketch,
         ),
     )
     .add_systems(
@@ -347,6 +360,8 @@ pub fn run(config: AppConfig) {
             // 拆出来的目的是让 UI 系统跟 apply 系统都在 Bevy 0.19 的 16 系统
             // 参数上限内（详见 `new_project_dialog` 文档）。
             ui::new_project_apply_create,
+            // 「新建地理事实」命名对话框（圈地界闭合后打开；居中模态窗）。
+            ui::feature_place_dialog,
             // 状态栏最后画：它读得到的 `ShellNotice` 已是本帧最终值。
             ui::status_bar,
         )

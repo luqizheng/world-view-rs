@@ -11,6 +11,7 @@
 //! - 地形底图（色块 / 真实地形 / LOD tile atlas / 等值线矢量平涂）
 //! - 矢量层（道路 casing / fill / POI 红点白环）
 //! - 势力多边形叠加 + 笔刷光标 + 地图三级钻取
+//! - 事实地界圈选草稿（`territory_sketch`：左键落点 / 双击闭合 / Gizmos 预览）
 //! - 图层帧（`MapNode.layers[].z/visible/opacity` → 渲染绑定的唯一求值点，ADR-0013）
 //! - 渲染配色（古舆图 / 暮色旧纸 / Google 色板，ADR-0016）
 //! - 视图状态容器（`ViewState` / `WorldProjection` / `DrillState` 等，自 wv-app::state 迁入）
@@ -74,6 +75,8 @@ pub mod streets;
 pub mod terrain_chunks;
 #[cfg(feature = "app")]
 pub mod terrain_view;
+#[cfg(feature = "app")]
+pub mod territory_sketch;
 #[cfg(feature = "app")]
 pub mod theme;
 #[cfg(feature = "app")]

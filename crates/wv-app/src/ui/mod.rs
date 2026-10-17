@@ -21,6 +21,7 @@ pub mod brush_panel;
 pub mod command_palette_window;
 pub mod compass_panel;
 pub mod faction_panel;
+pub mod feature_place_dialog;
 pub mod hover_tooltip;
 pub mod inspector_panel;
 pub mod layers_panel;
@@ -44,6 +45,7 @@ pub use brush_panel::panel_brush;
 pub use command_palette_window::command_palette;
 pub use compass_panel::panel_compass;
 pub use faction_panel::panel_faction;
+pub use feature_place_dialog::{feature_place_dialog, FeaturePlaceDialog};
 pub use inspector_panel::panel_inspector;
 pub use layers_panel::{panel_layers, panel_map_tree};
 pub use list_panels_panel::{panel_character, panel_event};
@@ -107,6 +109,7 @@ pub use widgets::{
     ICON_RULER,
     ICON_SEARCH,
     ICON_SQUARE,
+    ICON_TREES,
     ICON_VOLCANO,
     ICON_ZOOM_IN,
     ICON_ZOOM_OUT,
