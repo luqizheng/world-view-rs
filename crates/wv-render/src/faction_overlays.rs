@@ -3,7 +3,7 @@
 //! ## 职责
 //! - 用世界空间 `Mesh2d` 把 `World.faction_geometry` 在 `current_day` 切片后的
 //!   多边形画出来——三角形扇逐顶点三角化，每势力一材质，颜色取 `Faction.color`。
-//! - 取代 `ViewMode::Faction` 之前仅"淡化底色"的占位（[`crate::terrain_view::shade_faded`]）。
+//! - 取代之前 `ViewMode::Faction` 模式仅"淡化底色"的占位（[`crate::terrain_view::shade_faded`]）。
 //!
 //! ## 边界（不做什么）
 //! - **不写时间比较**——通过 [`wv_core::factions_at`] 求值；禁止 `if day > …`。
@@ -84,10 +84,14 @@ pub fn sync_faction_overlays(
     playback: Res<crate::state::PlaybackState>,
     projection: Res<crate::state::WorldProjection>,
     layers: Res<LayerFrame>,
+    recipe: Res<crate::recipe::RenderRecipe>,
     mut layer: ResMut<FactionOverlayEntities>,
 ) {
-    // 关闭图层（YAML ∨ 会话）/ 视图模式不是 Faction → 全部 despawn。
-    if !view.factions_visible || !layers.influence.visible || !is_faction_mode(&view) {
+    // 关闭图层（YAML ∨ 会话）/ recipe 不画势力（仅 Faction 模式） → 全部 despawn。
+    if !view.factions_visible
+        || !layers.influence.visible
+        || !recipe.enabled(crate::recipe::PassId::Faction)
+    {
         layer.despawn_all(&mut commands);
         return;
     }
@@ -127,11 +131,6 @@ pub fn sync_faction_overlays(
             .id();
         layer.polygons.push(entity);
     }
-}
-
-/// 视图模式是否应画势力叠加。
-fn is_faction_mode(view: &ViewState) -> bool {
-    matches!(view.mode, crate::state::ViewMode::Faction)
 }
 
 /// 解析 `Faction.color` 为 sRGB 三分量；解析失败回退到中性蓝。

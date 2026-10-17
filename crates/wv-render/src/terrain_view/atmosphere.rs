@@ -25,7 +25,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::layer_frame::LayerFrame;
-use crate::state::{BrushState, GridConfig, ViewMode, ViewState};
+use crate::state::{BrushState, GridConfig, ViewState};
 use crate::theme::palette;
 
 use super::terrain_texture::TerrainTexture;
@@ -206,11 +206,13 @@ pub fn sync_atmosphere(
     tex: Res<TerrainTexture>,
     layers: Res<LayerFrame>,
     brush: Res<BrushState>,
+    recipe: Res<crate::recipe::RenderRecipe>,
     mut atm: ResMut<AtmosphereLayer>,
 ) {
-    // GoogleMap 有完整自有观感、Coastline 是黑底分析视图——都不铺纸面氛围。
+    // GoogleMap / Coastline 由 recipe 关 atmosphere pass；这里只关 texture
+    // 维度。LayerFrame.gate 与 view.mode 排除都在 recipe 里集中。
     if !layers.terrain.visible
-        || matches!(view.mode, ViewMode::GoogleMap | ViewMode::Coastline)
+        || !recipe.enabled(crate::recipe::PassId::Atmosphere)
         || tex.size == 0
     {
         atm.despawn(&mut commands);

@@ -139,6 +139,9 @@ pub fn run(config: AppConfig) {
     // 主题包（ADR-0023 M1）：当前 `map_palette` 仍为权威源，本 Resource 仅作
     // 入口就位、不被任何渲染系统消费；M2 切消费点时再写回 `view.theme_pack_id`。
     .init_resource::<wv_render::theme::theme_pack::ActiveThemePack>()
+    // 渲染配方（ADR-0021 D1）：每帧 PreUpdate 末尾单点求值，渲染 gate 改读
+    // `recipe.enabled(PassId::X)` 替代散落的 `matches!(view.mode, ...)`。
+    .init_resource::<wv_render::recipe::RenderRecipe>()
     // 势力多边形层（S12）：同属「每帧 despawn+spawn 的实体集合」资源，
     // 漏 init 会在首帧 panic（`could not access system parameter`）。
     .init_resource::<faction_overlays::FactionOverlayEntities>()
@@ -347,6 +350,10 @@ pub fn run(config: AppConfig) {
     // 两者各自成模块并各自注册，`gui.rs` 只负责调用顺序（见各处模块文档）。
     crate::ui_shell::register(&mut app);
     wv_render::drill::register(&mut app);
+    // 渲染配方求值（ADR-0021 D1）：PreUpdate 单点求值 RenderRecipe——已迁移的
+    // gate（buildings / faction_overlays / atmosphere）读 `recipe.enabled(...)`，
+    // **必须**挂本系统，否则 recipe 停留在 Default 全关、三个 pass 永不渲染。
+    wv_render::recipe::register_recipe_system(&mut app);
     // ADR-0020 §2.6：钻入标记界面色由应用层灌（渲染只读 DrillMarkerPalette）；
     // 悬停气泡（egui 浮窗）从 wv-render 链尾移回应用层，仍排海名标签之后。
     app.add_systems(

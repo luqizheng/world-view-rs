@@ -27,7 +27,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 
 use crate::layer_frame::LayerFrame;
-use crate::state::{lod_tier, GridConfig, LodTier, ViewMode, ViewState, WorldProjection};
+use crate::state::{lod_tier, GridConfig, LodTier, ViewState, WorldProjection};
 use crate::theme::palette;
 
 /// 挤出高度换算：世界单位 / 米。**待裁**（README §12-31(b)）：真实比例
@@ -203,13 +203,14 @@ pub fn sync_building_overlays(
     view: Res<ViewState>,
     layers: Res<LayerFrame>,
     mut cache: ResMut<BuildingOverlays>,
+    recipe: Res<crate::recipe::RenderRecipe>,
 ) {
     let current = drill.current();
     let tier = lod_tier(view.scale);
     if !layers.building.visible
         || tier == LodTier::Nation
         || grid.cell_size <= 0.0
-        || matches!(view.mode, ViewMode::GoogleMap | ViewMode::Coastline)
+        || !recipe.enabled(crate::recipe::PassId::Buildings)
     {
         cache.despawn(&mut commands);
         return;
