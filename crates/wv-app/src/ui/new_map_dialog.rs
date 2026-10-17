@@ -180,6 +180,11 @@ pub fn new_map_dialog(
     mut notice: ResMut<ShellNotice>,
     time: Res<Time>,
     current_loc: Res<CurrentLocale>,
+    // 建好即取景到新图（作者下一步就是在这张图上工作）。
+    mut view: ResMut<crate::state::ViewState>,
+    grid: Res<crate::state::GridConfig>,
+    windows: Query<&Window>,
+    mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
 ) {
     if !dialog.open {
         return;
@@ -362,12 +367,51 @@ pub fn new_map_dialog(
                 {
                     drill.enter(&projection.world, &id);
                 }
+                // 取景到新图：切换后旧相机的中心/缩放属于上一张图，
+                // 新图更小时会停在角落。窗口尺寸优先取真实窗口，取不到用视图镜像。
+                let window_size = windows
+                    .single()
+                    .map(|w| w.resolution.size())
+                    .unwrap_or(view.window_size);
+                if let Some((center, scale)) =
+                    fit_view_to_map(&id, &projection.world, &grid, &mut view, window_size)
+                {
+                    wv_render::camera::apply_view_to_camera(center, scale, &mut cameras);
+                }
                 notice.info(format!("已创建地图「{}」", dialog.name), frame);
                 dialog.open = false;
             }
             Err(e) => dialog.error = Some(e),
         }
     }
+}
+
+/// 把视图取景到指定地图（中心 = 图帧原点 + 幅面一半；缩放 = fit 两轴较紧者）。
+///
+/// 返回 `(center, scale)`，同时写回 [`ViewState`]；调用方再把它应用到相机。
+/// 与「适应全图」按钮（`ui_shell` 的 FitMap）同一套 `fit_scale` 口径。
+pub(crate) fn fit_view_to_map(
+    id: &Id,
+    world: &wv_core::World,
+    grid: &crate::state::GridConfig,
+    view: &mut crate::state::ViewState,
+    window_size: Vec2,
+) -> Option<(Vec2, f32)> {
+    let node = world.maps.iter().find(|m| &m.id == id)?;
+    let size = node
+        .extent
+        .as_ref()
+        .filter(|e| e.width > 0.0 && e.height > 0.0 && e.width.is_finite() && e.height.is_finite())
+        .map(|e| Vec2::new(e.width, e.height))
+        .unwrap_or(grid.map_size);
+    let origin = wv_core::resolve_frame_in(&world.maps, id)
+        .map(|f| Vec2::new(f.world_origin.x, f.world_origin.y))
+        .unwrap_or(grid.raster_origin);
+    let center = origin + size * 0.5;
+    let scale = wv_render::zoom_level::fit_scale(size, window_size);
+    view.camera_center = center;
+    view.scale = scale;
+    Some((center, scale))
 }
 
 /// 确认创建：组装 `AddMapCommand` 并提交 `History`。失败原因留在 `dialog.error`。
@@ -561,6 +605,52 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+
+    /// 新建地图后视图取景到新图（中心 = 新图中心，缩放 = fit 两轴较紧者）。
+    #[test]
+    fn creating_a_map_fits_the_view_to_it() {
+        let mut projection = WorldProjection::default();
+        projection.world.maps.push(MapNode {
+            id: Id::new_unchecked("map_root"),
+            name: "旧世界".into(),
+            level: MapLevel::World,
+            extent: Some(Extent::sized(512.0, 512.0)),
+            base: Some(MapBase::Ocean),
+            ..Default::default()
+        });
+        let mut drill = crate::state::DrillState::default();
+        drill.ensure_root(&projection.world);
+        let mut edit = crate::edit::editing::EditHistory::default();
+        let mut dialog = NewMapDialog {
+            open: true,
+            level: MapLevel::World,
+            ..Default::default()
+        };
+        let id = create_map(&mut dialog, &mut projection, &drill, &mut edit).expect("创建");
+        let mut view = crate::state::ViewState {
+            camera_center: Vec2::splat(9999.0),
+            scale: 0.01,
+            ..Default::default()
+        };
+        let window = Vec2::new(1280.0, 800.0);
+        let (center, scale) = fit_view_to_map(
+            &id,
+            &projection.world,
+            &crate::state::GridConfig::default(),
+            &mut view,
+            window,
+        )
+        .expect("新图必有 extent");
+        // 默认 4096×2304、父图无图标 → 图帧原点 (0,0)、中心 (2048, 1152)。
+        assert_eq!(center, Vec2::new(2048.0, 1152.0), "取景中心应是新图中心");
+        let want = (4096.0_f32 / 1280.0).max(2304.0 / 800.0);
+        assert!(
+            (scale - want).abs() < 1e-6,
+            "fit 缩放应取较紧一轴 {want}，得 {scale}"
+        );
+        assert_eq!(view.camera_center, center, "应写回 ViewState 中心");
+        assert_eq!(view.scale, scale, "应写回 ViewState 缩放");
     }
 
     /// 建第二张「世界」级地图后必须能钻入它（否则旧图留在主画面）。
