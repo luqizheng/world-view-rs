@@ -461,6 +461,9 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::Aspect16x9 => "16:9",
         I18nKey::Aspect4x3 => "4:3",
         I18nKey::Aspect1x1 => "1:1",
+        I18nKey::ScaleHintExtent => "图幅 {w}×{h} km",
+        I18nKey::ScaleHintLand => "陆地约 {w}×{h} km",
+        I18nKey::ScaleHintCrossing => "横穿约 步行{a}天 · 骑马{b}天 · 帆船{c}天",
     }
 }
 
@@ -918,5 +921,8 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::Aspect16x9 => "16:9",
         I18nKey::Aspect4x3 => "4:3",
         I18nKey::Aspect1x1 => "1:1",
+        I18nKey::ScaleHintExtent => "Map {w}×{h} km",
+        I18nKey::ScaleHintLand => "Land ≈ {w}×{h} km",
+        I18nKey::ScaleHintCrossing => "Crossing ≈ walk {a}d · horse {b}d · sail {c}d",
     }
 }

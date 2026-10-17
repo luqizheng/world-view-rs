@@ -855,11 +855,19 @@ pub enum I18nKey {
     Aspect4x3,
     /// 比例档「1:1」
     Aspect1x1,
+
+    // ── 世界图尺度只读提示（README §12-39） ─────────────────────────────
+    /// 「图幅 {w}×{h} km」
+    ScaleHintExtent,
+    /// 「陆地约 {w}×{h} km」
+    ScaleHintLand,
+    /// 「横穿约 步行{a}天 · 骑马{b}天 · 帆船{c}天」
+    ScaleHintCrossing,
 }
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 383] = [
+    pub const ALL: [I18nKey; 386] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1277,5 +1285,8 @@ impl I18nKey {
         I18nKey::Aspect16x9,
         I18nKey::Aspect4x3,
         I18nKey::Aspect1x1,
+        I18nKey::ScaleHintExtent,
+        I18nKey::ScaleHintLand,
+        I18nKey::ScaleHintCrossing,
     ];
 }

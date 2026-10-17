@@ -36,7 +36,6 @@ use super::widgets::{badge, float_window, BadgeKind};
 ///
 /// 为什么是函数而不是 `const`：`Vehicle` 含 `Id` / `String` / `HashMap`，
 /// 无法 const 构造（计划原文写 `const REF_WALK: Vehicle`，见 ledger Ruling）。
-#[allow(dead_code)] // Task 3 面板行消费后移除
 fn ref_vehicle(
     id: &str,
     name: &str,
@@ -57,21 +56,67 @@ fn ref_vehicle(
 }
 
 /// 参考：步行（5 km/h × 8 h/日）。
-#[allow(dead_code)] // Task 3 面板行消费后移除
 pub(crate) fn ref_walk() -> wv_core::map::distance::Vehicle {
     ref_vehicle("ref_walk", "步行", 5.0, 8.0)
 }
 
 /// 参考：骑马（8 km/h × 8 h/日）。
-#[allow(dead_code)] // Task 3 面板行消费后移除
 pub(crate) fn ref_horse() -> wv_core::map::distance::Vehicle {
     ref_vehicle("ref_horse", "骑马", 8.0, 8.0)
 }
 
 /// 参考：帆船（10 km/h × 12 h/日）。
-#[allow(dead_code)] // Task 3 面板行消费后移除
 pub(crate) fn ref_sail() -> wv_core::map::distance::Vehicle {
     ref_vehicle("ref_sail", "帆船", 10.0, 12.0)
+}
+
+/// 天数显示：< 10 天保留两位小数，较大时取整（「约」字已说明是粗估）。
+fn format_days(v: &wv_core::map::distance::Vehicle, km: f32, terrain: &str) -> String {
+    match v.segment_days(km, terrain) {
+        Some(d) if d < 10.0 => format!("{d:.2}"),
+        Some(d) => format!("{d:.0}"),
+        None => "—".to_string(),
+    }
+}
+
+/// 世界图尺度只读提示的三行文案（README §12-39）。
+///
+/// 返回 `None` 的条件：无当前图 / 无 `unit_per_km` / 无地形 / 无陆地——
+/// 缺数据是正常态，面板静默（V1 只提示）。
+///
+/// 图幅优先取 `MapNode.extent`；未声明时退回栅格尺寸。
+fn scale_hint_texts(
+    world: &wv_core::World,
+    map_id: &wv_core::Id,
+    cell_size: f32,
+    loc: crate::i18n::Locale,
+) -> Option<[String; 3]> {
+    let node = world.maps.iter().find(|m| &m.id == map_id)?;
+    let per_km = node.unit_per_km.filter(|p| *p > 0.0)?;
+    let data = world.terrain_of(map_id)?;
+    let (extent_w, extent_h) = node.extent.map(|e| (e.width, e.height)).unwrap_or((
+        data.width as f32 * cell_size,
+        data.height as f32 * cell_size,
+    ));
+    let extent_w_km = extent_w / per_km;
+    let extent_h_km = extent_h / per_km;
+
+    let land = wv_core::map::scale_hint::land_extent_km(world, map_id, cell_size)?;
+    let walk = format_days(&ref_walk(), land.diagonal_km, "plain");
+    let horse = format_days(&ref_horse(), land.diagonal_km, "plain");
+    let sail = format_days(&ref_sail(), land.diagonal_km, "sea");
+
+    let extent_line = crate::i18n::t(loc, I18nKey::ScaleHintExtent)
+        .replace("{w}", &format!("{extent_w_km:.1}"))
+        .replace("{h}", &format!("{extent_h_km:.1}"));
+    let land_line = crate::i18n::t(loc, I18nKey::ScaleHintLand)
+        .replace("{w}", &format!("{:.1}", land.width_km))
+        .replace("{h}", &format!("{:.1}", land.height_km));
+    let crossing_line = crate::i18n::t(loc, I18nKey::ScaleHintCrossing)
+        .replace("{a}", &walk)
+        .replace("{b}", &horse)
+        .replace("{c}", &sail);
+    Some([extent_line, land_line, crossing_line])
 }
 
 /// 校验（P-8）。
@@ -88,6 +133,7 @@ pub fn panel_validation(
     mut playback: ResMut<PlaybackState>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     current_loc: Res<CurrentLocale>,
+    grid: Res<crate::state::GridConfig>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -146,6 +192,21 @@ pub fn panel_validation(
                     .size(shell.scale.micro)
                     .color(shell.t3()),
             );
+            // 世界图尺度只读提示（README §12-39）：有 unit_per_km 且有陆地才出现。
+            if let Some(map_id) = drill.current().cloned() {
+                if let Some(lines) =
+                    scale_hint_texts(&projection.world, &map_id, grid.cell_size, current_loc.0)
+                {
+                    ui.add_space(space::SM);
+                    for line in lines {
+                        ui.label(
+                            egui::RichText::new(line)
+                                .size(shell.scale.small)
+                                .color(shell.t2()),
+                        );
+                    }
+                }
+            }
             ui.add_space(space::SM);
             // 错误列表（按指纹 dedup 后仍可能有 N 条同类）。
             if n_errors > 0 {
@@ -297,5 +358,93 @@ mod tests {
             assert!(v.speed_kmh.is_some(), "{} 缺 speed_kmh", v.id);
             assert!(v.daily_hours.is_some(), "{} 缺 daily_hours", v.id);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // 世界图尺度只读提示（README §12-39）
+    // -----------------------------------------------------------------------
+
+    fn scale_world(unit_per_km: Option<f32>, with_land: bool) -> (wv_core::World, wv_core::Id) {
+        let map = wv_core::Id::new_unchecked("map_world");
+        let mut world = wv_core::World::default();
+        world.maps.push(wv_core::map::MapNode {
+            id: map.clone(),
+            name: "世界".into(),
+            level: wv_core::map::MapLevel::World,
+            extent: Some(wv_core::map::Extent::sized(320.0, 320.0)),
+            unit_per_km,
+            ..Default::default()
+        });
+        let mut cells = vec![
+            wv_core::terrain::TerrainCellData {
+                height: -3500,
+                kind: 0,
+            };
+            40 * 40
+        ];
+        if with_land {
+            for y in 0..10 {
+                for x in 0..20 {
+                    cells[y * 40 + x] = wv_core::terrain::TerrainCellData {
+                        height: 500,
+                        kind: 3,
+                    };
+                }
+            }
+        }
+        world.set_terrain(
+            map.clone(),
+            wv_core::terrain::TerrainData {
+                width: 40,
+                height: 40,
+                cells,
+            },
+        );
+        (world, map)
+    }
+
+    /// 缺 `unit_per_km` / 无陆地 → 整段静默（V1：只提示，缺数据是正常态）。
+    #[test]
+    fn scale_hint_rows_hidden_without_unit_per_km_or_land() {
+        let loc = crate::i18n::Locale::Zh;
+        let (world, map) = scale_world(None, true);
+        assert_eq!(
+            scale_hint_texts(&world, &map, 8.0, loc),
+            None,
+            "缺 upk 应静默"
+        );
+        let (world, map) = scale_world(Some(100.0), false);
+        assert_eq!(
+            scale_hint_texts(&world, &map, 8.0, loc),
+            None,
+            "无陆地应静默"
+        );
+    }
+
+    /// 有数据时三行文案含手算值（20×10 陆格、cell 8、upk 100）。
+    #[test]
+    fn scale_hint_rows_show_hand_computed_km_and_days() {
+        let loc = crate::i18n::Locale::Zh;
+        let (world, map) = scale_world(Some(100.0), true);
+        let lines = scale_hint_texts(&world, &map, 8.0, loc).expect("应有提示");
+        // 图幅 320×320 wu / 100 = 3.2×3.2 km。
+        assert!(
+            lines[0].contains("3.2×3.2 km"),
+            "图幅行应含 3.2×3.2 km，得 {}",
+            lines[0]
+        );
+        // 陆地 20×8/100=1.6 km × 10×8/100=0.8 km。
+        assert!(
+            lines[1].contains("1.6×0.8 km"),
+            "陆地行应含 1.6×0.8 km，得 {}",
+            lines[1]
+        );
+        // 对角 √(1.6²+0.8²)=1.7889 km；现行日速 1.6667/2.6667/5.0
+        // → 1.07 / 0.67 / 0.36 天。
+        assert!(
+            lines[2].contains("1.07") && lines[2].contains("0.67") && lines[2].contains("0.36"),
+            "横穿行应含手算天数 1.07/0.67/0.36，得 {}",
+            lines[2]
+        );
     }
 }
