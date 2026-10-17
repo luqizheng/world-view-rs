@@ -35,10 +35,12 @@ pub struct Vehicle {
 impl Vehicle {
     /// 在给定地形上的有效日速度（km/天）。
     ///
-    /// 公式（§10.2）：
+    /// 公式（ADR-0024，单位修正）：
     /// ```text
-    /// 有效日速度 = speed_kmh × terrain_mult × (daily_hours / 24)
+    /// 有效日速度 = speed_kmh × terrain_mult × daily_hours   [km/日]
     /// ```
+    /// 旧式 `× daily_hours / 24` 得到的是 km/h 量纲，`segment_days` 因之
+    /// 放大 24 倍（2026-10-17 评审发现；ADR-0024 记录修正与影响面）。
     pub fn effective_daily_speed(&self, terrain: &str) -> Option<f32> {
         if self.instant {
             return None;
@@ -46,7 +48,7 @@ impl Vehicle {
         let speed = self.speed_kmh?;
         let hours = self.daily_hours?;
         let mult = self.terrain_modifiers.get(terrain).copied().unwrap_or(1.0);
-        Some(speed * mult * (hours / 24.0))
+        Some(speed * mult * hours)
     }
 
     /// 单段耗时（天）。返回 `None` 表示该工具无法使用（缺参数或瞬时）。
@@ -472,12 +474,12 @@ mod tests {
     fn effective_speed_applies_terrain_multiplier() {
         let g = fixture();
         let walk = g.vehicle(&vid("walk")).unwrap();
-        // 5 km/h × 1.2 (road) × (10/24) = 2.5 km/天
+        // 5 km/h × 1.2 (road) × 10 h = 60 km/日（ADR-0024 单位修正）
         let s = walk.effective_daily_speed("road").unwrap();
-        assert!((s - 2.5).abs() < 1e-6);
+        assert!((s - 60.0).abs() < 1e-6, "got {s}");
         // 未声明地形回退到 1.0
         let s2 = walk.effective_daily_speed("swamp").unwrap();
-        assert!((s2 - (5.0 * 1.0 * 10.0 / 24.0)).abs() < 1e-6);
+        assert!((s2 - 50.0).abs() < 1e-6, "got {s2}");
     }
 
     #[test]
@@ -491,14 +493,14 @@ mod tests {
     #[test]
     fn shortest_journey_uses_fastest_terrain() {
         let g = fixture();
-        // 300km 走官道：300 / (5*1.2*10/24) = 300 / 2.5   = 120 天
-        // 120km 走山道：120 / (5*0.4*10/24) = 120 / 0.8333 = 144 天
-        // 合计 264 天
+        // 300km 走官道：300 / (5*1.2*10) = 300 / 60 = 5 天
+        // 120km 走山道：120 / (5*0.4*10) = 120 / 20 = 6 天
+        // 合计 11 天
         let j = g
             .shortest_journey(&vid("city_qingyun"), &vid("pass_luoxia"), &[vid("walk")])
             .unwrap();
         assert_eq!(j.legs.len(), 2);
-        assert!((j.total_days - 264.0).abs() < 1e-3, "got {}", j.total_days);
+        assert!((j.total_days - 11.0).abs() < 1e-3, "got {}", j.total_days);
     }
 
     #[test]

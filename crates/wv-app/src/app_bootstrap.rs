@@ -565,7 +565,7 @@ fn fit_for_content(root_extent: (f32, f32), content_box: Option<(Vec2, Vec2)>) -
             )
         }
         None => (
-            Vec2::splat(root_extent.0 * 0.5),
+            Vec2::new(root_extent.0 * 0.5, root_extent.1 * 0.5),
             (root_extent.0 / 1280.0).max(root_extent.1 / 800.0).max(1.0),
         ),
     }

@@ -151,7 +151,7 @@ pub(crate) fn extent_quad_mesh(size: Vec2, uv_scale: Vec2) -> Mesh {
 #[derive(Debug, Clone, PartialEq)]
 struct AtmosphereKey {
     origin: (u32, u32),
-    extent: (u32, u32),
+    extent: (u32, u32, u32),
     scale_bucket: u32,
     /// 装饰旗标快照（ADR-0023 D4）：`(paper_fog, paper_grain)`。进 key 是为了
     /// 切主题导致旗标翻转时整体 despawn 重建（与幅面变化同口径），避免留下
@@ -225,13 +225,13 @@ pub fn sync_atmosphere(
             grid.raster_origin.x.to_bits(),
             grid.raster_origin.y.to_bits(),
         ),
-        extent: (tex.size, grid.cell_size.to_bits()),
+        extent: (tex.size, tex.height, grid.cell_size.to_bits()),
         scale_bucket: scale_bucket(view.scale),
         treatment: (treatment.paper_fog, treatment.paper_grain),
     };
     if atm.key.as_ref() != Some(&key) {
         atm.despawn(&mut commands);
-        let size = Vec2::splat(tex.size as f32 * grid.cell_size);
+        let size = Vec2::new(tex.size as f32, tex.height as f32) * grid.cell_size;
         // 手绘地图 #6：grain uv 随 `view.scale` 微调——近看 grain 翻倍密、远看
         // 减半；连续变化用 `scale_bucket` 量化到 1/8 octaves 档避免逐帧重建。
         let grain_tile = (GRAIN_TILE_WORLD / view.scale.max(0.05)).max(1.0);

@@ -363,6 +363,7 @@ mod tests {
         let tex = TerrainTexture {
             handle: Handle::default(),
             size: 0,
+            height: 0,
             res: 1,
             dirty: None,
             chunks_dirty: None,

@@ -88,6 +88,8 @@ const RIVER_ALPHA: f32 = 0.5;
 struct IsolineKey {
     map: Option<wv_core::Id>,
     size: u32,
+    /// 逻辑格行数（非方形地图下 != `size`）。
+    height: u32,
     res: u32,
     soften: bool,
     /// 几何相关装饰位 `[coast_halo, river_centerline, ink_sublinear]`
@@ -253,6 +255,7 @@ pub fn sync_isoline_overlay(
     let key = IsolineKey {
         map: tex.last_map.clone(),
         size: tex.size,
+        height: tex.height,
         res: tex.res,
         soften: tex.last_soften,
         treatment: [
@@ -648,6 +651,7 @@ mod tests {
             tol_q: 32,
             map: Some(wv_core::Id::new("m").expect("合法 id")),
             size: 512,
+            height: 512,
             res: 4,
             soften: false,
             treatment: [true, true, true],
@@ -751,6 +755,7 @@ mod tests {
             treatment: [true, true, true],
             map: Some(wv_core::Id::new("m").expect("合法 id")),
             size: 512,
+            height: 512,
             res: 4,
             soften: false,
             tol_q: 8,
@@ -767,6 +772,7 @@ mod tests {
             IsolineKey {
                 map: None,
                 size: 512,
+                height: 512,
                 res: 4,
                 soften: false,
                 treatment: base.treatment,
@@ -776,6 +782,7 @@ mod tests {
             IsolineKey {
                 map: base.map.clone(),
                 size: 256,
+                height: 512,
                 res: 4,
                 soften: false,
                 treatment: base.treatment,
@@ -785,6 +792,7 @@ mod tests {
             IsolineKey {
                 map: base.map.clone(),
                 size: 512,
+                height: 512,
                 res: 8,
                 soften: false,
                 treatment: base.treatment,
@@ -794,6 +802,7 @@ mod tests {
             IsolineKey {
                 map: base.map.clone(),
                 size: 512,
+                height: 512,
                 res: 4,
                 soften: true,
                 treatment: base.treatment,
@@ -803,6 +812,7 @@ mod tests {
             IsolineKey {
                 map: base.map.clone(),
                 size: 512,
+                height: 512,
                 res: 4,
                 soften: false,
                 treatment: base.treatment,
@@ -812,6 +822,7 @@ mod tests {
             IsolineKey {
                 map: base.map.clone(),
                 size: 512,
+                height: 512,
                 res: 4,
                 soften: false,
                 treatment: [false, true, true],
@@ -835,6 +846,7 @@ mod tests {
         let key_of = |t: crate::theme::theme_pack::TreatmentFlags| IsolineKey {
             map: Some(wv_core::Id::new("m").expect("合法 id")),
             size: 512,
+            height: 512,
             res: 4,
             soften: false,
             treatment: [t.coast_halo, t.river_centerline, t.ink_sublinear],

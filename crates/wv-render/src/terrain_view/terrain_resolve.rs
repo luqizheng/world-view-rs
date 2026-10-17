@@ -69,6 +69,7 @@ pub fn replace_terrain_texture(
     *tex = TerrainTexture {
         handle,
         size: data.width.max(1),
+        height: data.height.max(1),
         res,
         dirty: None,
         chunks_dirty: None,
@@ -186,6 +187,7 @@ mod tests {
         let mut tex = TerrainTexture {
             handle: Handle::default(),
             size: 64,
+            height: 64,
             res: 4,
             dirty: None,
             chunks_dirty: None,
@@ -200,6 +202,6 @@ mod tests {
         assert!(tex.last_map.is_none(), "last_map 应被清为 None");
         assert!(tex.dirty.is_some(), "dirty 矩形应被设置");
         // 全图 = [0, 0, size, size]
-        assert_eq!(tex.dirty, Some([0, 0, tex.size, tex.size]));
+        assert_eq!(tex.dirty, Some([0, 0, tex.size, tex.height]));
     }
 }

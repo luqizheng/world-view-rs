@@ -14,6 +14,9 @@ pub struct Transaction {
     commands: Vec<Box<dyn EditCommand>>,
     /// `commit` 成功后填入；`commit` 未被调用过则 `None`。
     committed_dirty: Option<Vec<String>>,
+    /// 提交序号（由 [`History::commit`] 分配）：应用层用它辨认「撤销/重做
+    /// 的是不是同一条命令」（大陆生成的撤销恢复圈依赖它）。
+    seq: u64,
 }
 
 impl Transaction {
@@ -21,6 +24,7 @@ impl Transaction {
         Self {
             commands: Vec::new(),
             committed_dirty: None,
+            seq: 0,
         }
     }
 
@@ -74,6 +78,8 @@ impl Default for Transaction {
 pub struct History {
     undo: Vec<Transaction>,
     redo: Vec<Transaction>,
+    /// 下一个事务序号（单调递增；undo/redo 不重排）。
+    next_seq: u64,
 }
 
 impl History {
@@ -87,6 +93,8 @@ impl History {
             return Ok(Vec::new());
         }
         let dirty = tx.commit(world)?;
+        tx.seq = self.next_seq;
+        self.next_seq += 1;
         self.undo.push(tx);
         self.redo.clear();
         Ok(dirty)
@@ -103,6 +111,16 @@ impl History {
     /// Undo 栈是否为空（与 [`Self::len`] 配对，满足 clippy `len_without_is_empty`）。
     pub fn is_empty(&self) -> bool {
         self.undo.is_empty()
+    }
+
+    /// 下一次 undo 会撤的那条事务的序号（栈空为 `None`）。
+    pub fn undo_top_seq(&self) -> Option<u64> {
+        self.undo.last().map(|tx| tx.seq)
+    }
+
+    /// 下一次 redo 会重做的那条事务的序号（栈空为 `None`）。
+    pub fn redo_top_seq(&self) -> Option<u64> {
+        self.redo.last().map(|tx| tx.seq)
     }
 
     pub fn can_undo(&self) -> bool {

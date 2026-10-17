@@ -249,7 +249,7 @@ pub fn sync_vector_layers(
         layers.road.opacity,
         &mut layer,
     );
-    let poi_materials_changed = ensure_poi_materials(
+    let _poi_materials_changed = ensure_poi_materials(
         &mut materials,
         view.mode,
         view.map_palette,
@@ -380,7 +380,6 @@ pub fn sync_vector_layers(
             poi_fade,
             &grid,
             place_z,
-            poi_materials_changed,
             &mut layer,
         );
     }
@@ -726,7 +725,6 @@ fn sync_poi(
     fade: f32,
     grid: &GridConfig,
     z_offset: f32,
-    material_changed: bool,
     layer: &mut VectorLayerEntities,
 ) {
     // 淡尽（系数 0）等价于旧 Nation 档硬剔除；城市 POI 恒保留。
@@ -815,7 +813,6 @@ fn sync_poi(
                 layer.poi_outer.mesh.entities[i],
                 outer_spec,
                 z_offset,
-                material_changed,
                 &mut layer.poi_outer.mesh.meshes[i],
                 &mut layer.poi_outer.specs[i],
                 ring_mat,
@@ -841,7 +838,6 @@ fn sync_poi(
                 layer.poi_inner.mesh.entities[i],
                 inner_spec,
                 z_offset,
-                material_changed,
                 &mut layer.poi_inner.mesh.meshes[i],
                 &mut layer.poi_inner.specs[i],
                 dot_mat,
@@ -857,7 +853,6 @@ fn update_poi_outer(
     entity: Entity,
     spec: PoiOuterSpec,
     z_offset: f32,
-    material_changed: bool,
     mesh_handle: &mut Handle<Mesh>,
     cached: &mut PoiOuterSpec,
     material: &Handle<ColorMaterial>,
@@ -872,11 +867,12 @@ fn update_poi_outer(
         });
         *cached = spec;
     }
-    if material_changed {
-        commands
-            .entity(entity)
-            .insert(MeshMaterial2d(material.clone()));
-    }
+    // 逐帧重绑材质：可见集合随淡出变化时实体按**下标**复用，
+    // 一个位置可能从「非城市点」换成「城市点」——只在 mode 变化时重绑会
+    // 让城市点继承非城市材质的 0 alpha（评审 Important #4）。
+    commands
+        .entity(entity)
+        .insert(MeshMaterial2d(material.clone()));
     commands.entity(entity).insert(Transform::from_translation(
         spec.pos.extend(POI_OUTER_Z + z_offset),
     ));
@@ -889,7 +885,6 @@ fn update_poi_inner(
     entity: Entity,
     spec: PoiInnerSpec,
     z_offset: f32,
-    material_changed: bool,
     mesh_handle: &mut Handle<Mesh>,
     cached: &mut PoiInnerSpec,
     material: &Handle<ColorMaterial>,
@@ -904,11 +899,12 @@ fn update_poi_inner(
         });
         *cached = spec;
     }
-    if material_changed {
-        commands
-            .entity(entity)
-            .insert(MeshMaterial2d(material.clone()));
-    }
+    // 逐帧重绑材质：可见集合随淡出变化时实体按**下标**复用，
+    // 一个位置可能从「非城市点」换成「城市点」——只在 mode 变化时重绑会
+    // 让城市点继承非城市材质的 0 alpha（评审 Important #4）。
+    commands
+        .entity(entity)
+        .insert(MeshMaterial2d(material.clone()));
     commands.entity(entity).insert(Transform::from_translation(
         spec.pos.extend(POI_INNER_Z + z_offset),
     ));
@@ -1080,7 +1076,7 @@ mod tests {
             cell_size: 4.0,
             raster_origin: Vec2::ZERO,
             map_origin,
-            map_size: 1024.0,
+            map_size: Vec2::splat(1024.0),
         });
         world.insert_resource(ProjectionFrame::default());
         world.init_resource::<VectorLayerEntities>();

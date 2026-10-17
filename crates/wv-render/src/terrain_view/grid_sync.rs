@@ -53,7 +53,7 @@ pub fn sync_grid_config(
     let source = active_terrain(&projection.world, drill.current()).map(|(node, _)| node);
     let extent = source
         .and_then(|n| n.extent.as_ref())
-        .map(|e| e.width.max(e.height))
+        .map(|e| e.width)
         .or_else(|| {
             projection
                 .world
@@ -67,7 +67,7 @@ pub fn sync_grid_config(
                         .find(|n| n.id == m.root_map)
                         .and_then(|n| n.extent.as_ref())
                 })
-                .map(|e| e.width.max(e.height))
+                .map(|e| e.width)
         })
         .unwrap_or(4096.0);
     // 纹理 size 格 × cell_size = extent，一格一格对齐地图。
@@ -85,9 +85,9 @@ pub fn sync_grid_config(
         .unwrap_or(grid.raster_origin);
     let map_size = current
         .and_then(|n| n.extent.as_ref())
-        .map(|e| e.width.max(e.height))
+        .map(|e| Vec2::new(e.width, e.height))
         // 没有 extent（内存造的图）→ 退回「栅格能盖住的范围」，与旧行为一致。
-        .unwrap_or(tex.size as f32 * grid.cell_size);
+        .unwrap_or(Vec2::new(tex.size as f32, tex.height as f32) * grid.cell_size);
     grid.map_origin = map_origin;
     grid.map_size = map_size;
 }

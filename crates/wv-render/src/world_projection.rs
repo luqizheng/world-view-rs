@@ -255,7 +255,7 @@ pub fn draw_map_gizmos(
         // 地图轮廓：边框用反白描线（深底上可见——LINE_ON_MID 是给浅底地形用的，
         // 在深色空白工程上等于隐形），并补 1/4 幅面参考网格，避免「一片黑看不到图在哪」。
         // 画的是**当前图**的幅面（与 `map_frame::sync_map_frame` 同口径，现由它接替）。
-        let size = grid.map_size;
+        let size = grid.map_size.x.max(grid.map_size.y);
         let min = grid.map_origin;
         let max = grid.map_origin + Vec2::splat(size);
         gizmos.rect_2d(

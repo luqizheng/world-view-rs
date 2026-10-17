@@ -57,6 +57,12 @@ pub struct PendingTerrainSynth {
 ///
 /// 快速连切 palette / 合成完成前换图 → 旧像素不得贴进新世界；丢弃后由
 /// `rebuild_texture_on_mode_change` 在后续帧按新条件重新触发。
+/// 落地前再看一眼视图输入：A→B→A 快速连切时，任务 B 完成时当前视图已是 A，
+/// 落地 B 会造成「旧调色板闪回」。
+pub fn ctx_matches_view(ctx: &SynthCtx, view: &ViewState) -> bool {
+    ctx.mode == view.mode && ctx.soften == view.terrain_soften && ctx.palette == view.map_palette
+}
+
 pub fn ctx_matches_world(
     ctx: &SynthCtx,
     world: &wv_core::World,
@@ -176,6 +182,7 @@ pub fn rebuild_texture_on_mode_change(
 /// 校验失败（快速连切 palette / 完成前换图）直接丢弃；`last_*` 未置位，
 /// 下一帧 `rebuild_texture_on_mode_change` 会按新条件重新触发。
 pub fn land_pending_terrain_synth(
+    view: Res<ViewState>,
     projection: Res<WorldProjection>,
     drill: Res<DrillState>,
     mut tex: ResMut<TerrainTexture>,
@@ -193,7 +200,9 @@ pub fn land_pending_terrain_synth(
     };
     let result = bevy::tasks::block_on(task);
     pending.ctx = None;
-    if !ctx_matches_world(&result.ctx, &projection.world, drill.current()) {
+    if !ctx_matches_view(&result.ctx, &view)
+        || !ctx_matches_world(&result.ctx, &projection.world, drill.current())
+    {
         // 世界已变：丢弃旧像素，重建条件会在下一帧重新触发。
         return;
     }
@@ -223,7 +232,7 @@ pub fn land_pending_terrain_synth(
         result.ctx.palette,
     );
     // 整图内容已整体替换：chunk 层需要全量重贴。
-    tex.chunks_dirty = Some([0, 0, tex.size, tex.size]);
+    tex.chunks_dirty = Some([0, 0, tex.size, tex.height]);
     tex.last_mode = Some(result.ctx.mode);
     tex.last_soften = result.ctx.soften;
     tex.last_palette = result.ctx.palette;
@@ -274,13 +283,13 @@ pub fn spawn_basemap_fadeout(
         return;
     };
     let handle = images.add(old.clone());
-    let size = tex.size as f32 * grid.cell_size;
-    let center = grid.raster_origin + Vec2::splat(size * 0.5);
+    let size = Vec2::new(tex.size as f32, tex.height as f32) * grid.cell_size;
+    let center = grid.raster_origin + size * 0.5;
     commands.spawn((
         BasemapFadeOut { alpha: 1.0 },
         Sprite {
             image: handle,
-            custom_size: Some(Vec2::splat(size)),
+            custom_size: Some(size),
             color: Color::WHITE,
             ..Default::default()
         },
@@ -364,5 +373,34 @@ mod tests {
             !ctx_matches_world(&other_map, &world, Some(&id_a)),
             "来源图变应拒绝"
         );
+    }
+
+    /// 快速 A→B→A 切 thematic：任务完成时视图已回到 A，B 的像素不得落地。
+    #[test]
+    fn ctx_validation_rejects_stale_view_inputs() {
+        let (world, id_a) = test_world_with_terrain("map_a", 8, -100);
+        let ctx = ctx_for(&world, &id_a);
+        let view = ViewState {
+            mode: ctx.mode,
+            terrain_soften: ctx.soften,
+            map_palette: ctx.palette,
+            ..Default::default()
+        };
+        assert!(ctx_matches_view(&ctx, &view), "同视图输入应放行");
+
+        let mut stale_palette = ctx.clone();
+        stale_palette.palette = crate::theme::palette::MapPalette::Dusk;
+        assert!(
+            !ctx_matches_view(&stale_palette, &view),
+            "palette 不符（A→B→A）应拒绝落地"
+        );
+
+        let other_view = ViewState {
+            mode: ViewMode::Schematic,
+            terrain_soften: ctx.soften,
+            map_palette: ctx.palette,
+            ..Default::default()
+        };
+        assert!(!ctx_matches_view(&ctx, &other_view), "模式变应拒绝落地");
     }
 }

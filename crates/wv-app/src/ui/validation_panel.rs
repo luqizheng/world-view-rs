@@ -330,10 +330,8 @@ mod tests {
 
     /// 参考载具的日速（手算，AGENTS §7.2/§7.4）。
     ///
-    /// 唯一换算入口 `Vehicle::effective_daily_speed` 的现行公式是
-    /// `speed_kmh × (daily_hours / 24)`。因此 5 km/h·8h = 1.667「日速」，
-    /// 而不是直觉上的 40 km/日——公式单位问题见本文件的 Ruling 记录，
-    /// 改动它需要单独 ADR（会改变所有既有行程天数）。
+    /// `Vehicle::effective_daily_speed` = `speed_kmh × daily_hours`（ADR-0024
+    /// 单位修正后）。5 km/h × 8 h = 40 km/日，与计划期望一致。
     #[test]
     fn reference_vehicles_daily_speeds_match_hand_computed_values() {
         let walk = ref_walk()
@@ -345,9 +343,9 @@ mod tests {
         let sail = ref_sail()
             .effective_daily_speed("sea")
             .expect("帆船应有日速");
-        assert!((walk - 5.0 * 8.0 / 24.0).abs() < 1e-6, "步行得 {walk}");
-        assert!((horse - 8.0 * 8.0 / 24.0).abs() < 1e-6, "骑马得 {horse}");
-        assert!((sail - 10.0 * 12.0 / 24.0).abs() < 1e-6, "帆船得 {sail}");
+        assert!((walk - 40.0).abs() < 1e-6, "步行得 {walk}");
+        assert!((horse - 64.0).abs() < 1e-6, "骑马得 {horse}");
+        assert!((sail - 120.0).abs() < 1e-6, "帆船得 {sail}");
     }
 
     /// 三种参考载具都可用（非 instant、参数齐全）。
@@ -439,11 +437,11 @@ mod tests {
             "陆地行应含 1.6×0.8 km，得 {}",
             lines[1]
         );
-        // 对角 √(1.6²+0.8²)=1.7889 km；现行日速 1.6667/2.6667/5.0
-        // → 1.07 / 0.67 / 0.36 天。
+        // 对角 √(1.6²+0.8²)=1.7889 km；日速 40/64/120 km/日（ADR-0024）
+        // → 0.04 / 0.03 / 0.01 天。
         assert!(
-            lines[2].contains("1.07") && lines[2].contains("0.67") && lines[2].contains("0.36"),
-            "横穿行应含手算天数 1.07/0.67/0.36，得 {}",
+            lines[2].contains("0.04") && lines[2].contains("0.03") && lines[2].contains("0.01"),
+            "横穿行应含手算天数 0.04/0.03/0.01，得 {}",
             lines[2]
         );
     }

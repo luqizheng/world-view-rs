@@ -1560,6 +1560,7 @@ mod tests {
         world.insert_resource(TerrainTexture {
             handle: Default::default(),
             size: 1,
+            height: 1,
             res: 1,
             dirty: None,
             chunks_dirty: None,
@@ -1732,6 +1733,7 @@ mod tests {
         world.insert_resource(TerrainTexture {
             handle: Default::default(),
             size: 1,
+            height: 1,
             res: 1,
             dirty: None,
             chunks_dirty: None,

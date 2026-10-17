@@ -110,25 +110,25 @@ pub fn sync_map_frame(
         (
             0,
             Vec2::new(center.x, max.y),
-            Vec2::new(size, stroke_world),
+            Vec2::new(size.x, stroke_world),
             0.0,
         ), // 顶
         (
             1,
             Vec2::new(center.x, min.y),
-            Vec2::new(size, stroke_world),
+            Vec2::new(size.x, stroke_world),
             0.0,
         ), // 底
         (
             2,
             Vec2::new(min.x, center.y),
-            Vec2::new(stroke_world, size),
+            Vec2::new(stroke_world, size.y),
             0.0,
         ), // 左
         (
             3,
             Vec2::new(max.x, center.y),
-            Vec2::new(stroke_world, size),
+            Vec2::new(stroke_world, size.y),
             0.0,
         ), // 右
     ];
@@ -164,9 +164,9 @@ pub fn sync_map_frame(
     let step = size / 4.0;
     // 3 条竖线（v1, v2, v3）：x = min.x + step*i，i ∈ 1..4。
     for i in 0..3 {
-        let x = min.x + step * (i as f32 + 1.0);
+        let x = min.x + step.x * (i as f32 + 1.0);
         let translation = Vec2::new(x, center.y);
-        let handle = meshes.add(Rectangle::new(stroke_world, size));
+        let handle = meshes.add(Rectangle::new(stroke_world, size.y));
         let transform = Transform::from_translation(translation.extend(GRID_Z));
         if let Some(e) = entities.grid[i] {
             commands.entity(e).insert((Mesh2d(handle), transform));
@@ -179,9 +179,9 @@ pub fn sync_map_frame(
     }
     // 3 条横线（h1, h2, h3）：y 同上。
     for i in 0..3 {
-        let y = min.y + step * (i as f32 + 1.0);
+        let y = min.y + step.y * (i as f32 + 1.0);
         let translation = Vec2::new(center.x, y);
-        let handle = meshes.add(Rectangle::new(size, stroke_world));
+        let handle = meshes.add(Rectangle::new(size.x, stroke_world));
         let transform = Transform::from_translation(translation.extend(GRID_Z));
         let idx = 3 + i;
         if let Some(e) = entities.grid[idx] {

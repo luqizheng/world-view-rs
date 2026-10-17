@@ -498,7 +498,7 @@ pub fn commit_continent_generation(
                 envelopes,
                 params,
                 seed,
-                committed_len: edit.history.len(),
+                tx_seq: edit.history.undo_top_seq().unwrap_or(0),
             });
             Ok(())
         }
@@ -523,13 +523,18 @@ pub fn sync_sketch_after_history_step(
     let Some(stash) = gen.stash.as_ref() else {
         return;
     };
-    let len = history.len();
     if redo {
-        if len >= stash.committed_len {
-            sketch.envelopes.clear();
+        if history.undo_top_seq() == Some(stash.tx_seq) {
+            // 重做生成：只移除这条生成消费掉的圈，保留作者之后新画的。
+            sketch.envelopes.retain(|e| !stash.envelopes.contains(e));
         }
-    } else if len < stash.committed_len {
-        sketch.envelopes = stash.envelopes.clone();
+    } else if history.redo_top_seq() == Some(stash.tx_seq) {
+        // 撤销生成：把被消费的圈放回，**不覆盖**作者之后新画的圈。
+        for e in &stash.envelopes {
+            if !sketch.envelopes.contains(e) {
+                sketch.envelopes.push(e.clone());
+            }
+        }
     }
 }
 
@@ -1019,6 +1024,7 @@ mod tests {
         let tex = TerrainTexture {
             handle: Handle::default(),
             size,
+            height: size,
             res: 1,
             dirty: None,
             chunks_dirty: None,
@@ -1183,5 +1189,119 @@ mod tests {
         )
         .expect("重做");
         assert!(sketch.envelopes.is_empty(), "重做生成 → 意图圈再次被消费");
+    }
+
+    /// 撤销生成不得吞掉作者之后新画的圈；重做只消费这条生成的那个圈。
+    #[test]
+    fn undo_of_generation_keeps_outlines_drawn_afterwards() {
+        let (mut projection, mut edit, mut tex, map) = continent_test_world(48);
+        let mut sketch = ContinentSketch::default();
+        let mut gen = ContinentGenerationState::default();
+        generate_once(
+            &mut projection,
+            &mut edit,
+            &mut tex,
+            &mut sketch,
+            &mut gen,
+            &map,
+        );
+        let outline_b = vec![(44.0, 44.0), (47.0, 44.0), (47.0, 47.0)];
+        sketch.envelopes.push(outline_b.clone());
+
+        apply_history_command(
+            false,
+            &mut edit,
+            &mut projection,
+            &mut tex,
+            &PlaybackState::default(),
+            &mut sketch,
+            &mut gen,
+        )
+        .expect("撤销");
+        assert_eq!(
+            sketch.envelopes.len(),
+            2,
+            "撤销生成应放回 A，同时保留作者之后画的 B"
+        );
+        assert!(sketch.envelopes.contains(&outline_b), "B 不得被覆盖");
+
+        apply_history_command(
+            true,
+            &mut edit,
+            &mut projection,
+            &mut tex,
+            &PlaybackState::default(),
+            &mut sketch,
+            &mut gen,
+        )
+        .expect("重做");
+        assert_eq!(
+            sketch.envelopes,
+            vec![outline_b],
+            "重做生成只消费 A，B 应保留"
+        );
+    }
+
+    /// 别的命令的 redo 不得消费意图圈（旧的长度启发式会误判）。
+    #[test]
+    fn redo_of_other_command_does_not_consume_envelopes() {
+        let (mut projection, mut edit, mut tex, map) = continent_test_world(48);
+        let mut sketch = ContinentSketch::default();
+        let mut gen = ContinentGenerationState::default();
+        generate_once(
+            &mut projection,
+            &mut edit,
+            &mut tex,
+            &mut sketch,
+            &mut gen,
+            &map,
+        );
+        apply_history_command(
+            false,
+            &mut edit,
+            &mut projection,
+            &mut tex,
+            &PlaybackState::default(),
+            &mut sketch,
+            &mut gen,
+        )
+        .expect("撤销生成");
+        assert_eq!(sketch.envelopes.len(), 1, "撤销后 A 回来");
+
+        // 提交另一条命令、撤销它、再重做它——意图圈必须原样保留。
+        let mut tx = Transaction::new();
+        tx.push(Box::new(IntentTerrainCommand::new(
+            map.clone(),
+            Intent::Hills {
+                pts: vec![(24.0, 24.0)],
+                radius: 4.0,
+                strength: 1.0,
+            },
+            1.0,
+        )));
+        edit.history
+            .commit(&mut projection.world, tx)
+            .expect("第二条命令");
+        apply_history_command(
+            false,
+            &mut edit,
+            &mut projection,
+            &mut tex,
+            &PlaybackState::default(),
+            &mut sketch,
+            &mut gen,
+        )
+        .expect("撤销别的命令");
+        apply_history_command(
+            true,
+            &mut edit,
+            &mut projection,
+            &mut tex,
+            &PlaybackState::default(),
+            &mut sketch,
+            &mut gen,
+        )
+        .expect("重做别的命令");
+        assert_eq!(sketch.envelopes.len(), 1, "无关命令的 redo 不得消费意图圈");
     }
 }

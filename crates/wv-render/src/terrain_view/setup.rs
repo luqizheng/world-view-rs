@@ -72,6 +72,7 @@ pub fn new_terrain_texture(
     TerrainTexture {
         handle: images.add(image),
         size: data.width.max(1),
+        height: data.height.max(1),
         res,
         dirty: None,
         chunks_dirty: None,

@@ -642,7 +642,9 @@ mod tests {
                 id: Id::new_unchecked("v_walk"),
                 name: "步行".into(),
                 instant: false,
-                speed_kmh: Some(10.0),
+                // 40 km/日（5 km/h × 8 h，ADR-0024 单位修正后）。100 km 边 → 2.5 天；
+                // 下面的预算用例以 2 天（缺口）与 50 天（充足）区分提示与否。
+                speed_kmh: Some(5.0),
                 daily_hours: Some(8.0),
                 terrain_modifiers: Default::default(),
                 requires_endpoints: false,
@@ -713,7 +715,7 @@ mod tests {
     /// 预算 ≥ 路径最少 → 不出 hint。
     #[test]
     fn travel_feasibility_silent_when_budget_covers_path_min() {
-        // fixture 中 A→B 实际需 30 天（10 km/h × 8 h/24 × 100 km），把 gap 调到 50。
+        // fixture 中 A→B 实际需 2.5 天（5 km/h × 8 h = 40 km/日，100 km），gap 50 足够。
         let w = world_with(
             fixture_graph(),
             vec![

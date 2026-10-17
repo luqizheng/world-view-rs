@@ -867,6 +867,7 @@ mod tests {
         let mut tex = TerrainTexture {
             handle: Handle::default(),
             size: 4,
+            height: 4,
             res: 1,
             dirty: None,
             chunks_dirty: None,
@@ -895,6 +896,7 @@ mod tests {
         let tex = TerrainTexture {
             handle: Handle::default(),
             size: 4,
+            height: 4,
             res: 1,
             dirty: None,
             chunks_dirty: None,
@@ -973,6 +975,7 @@ mod tests {
         app.insert_resource(TerrainTexture {
             handle: Handle::default(),
             size: 4,
+            height: 4,
             res: 1,
             dirty: None,
             chunks_dirty: None,
@@ -1014,7 +1017,8 @@ mod tests {
             grid.map_origin
         );
         assert_eq!(
-            grid.map_size, 1024.0,
+            grid.map_size,
+            Vec2::splat(1024.0),
             "幅面应取当前图（城市）的 extent，而不是世界图的 4096"
         );
     }

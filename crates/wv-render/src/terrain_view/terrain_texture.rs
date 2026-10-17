@@ -25,6 +25,9 @@ pub struct TerrainTexture {
     pub handle: Handle<Image>,
     /// 当前纹理覆盖的**逻辑格数**（每边）。像素边长 = `size × res`。
     pub size: u32,
+    /// 当前纹理覆盖的**逻辑格行数**（高）。非方形地图（16:9 缺省）下
+    /// `height != size`；方形图两者相等。
+    pub height: u32,
     /// 每逻辑格的纹理像素数（1 = 纯色平涂，>1 = 瓦片直铺）。
     pub res: u32,
     /// 上次上传后累计的脏矩形（像素坐标 `[x0,y0,x1,y1]`，半开）。
@@ -61,7 +64,7 @@ pub struct TerrainTexture {
 impl TerrainTexture {
     /// 标记整个纹理为脏（整图重传）。单位：逻辑格。
     pub fn mark_all_dirty(&mut self) {
-        let full = [0, 0, self.size, self.size];
+        let full = [0, 0, self.size, self.height];
         self.dirty = Some(full);
         self.chunks_dirty = Some(full);
     }

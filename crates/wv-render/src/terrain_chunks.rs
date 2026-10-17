@@ -117,20 +117,18 @@ impl TerrainChunkEntities {
 /// 计算地形按 `CHUNK_SIZE` 切块的二维网格尺寸。
 ///
 /// `size = 1024` → `chunks = (4, 4)`。**舍入到上**——不足一块的尾部也占一块。
-fn chunk_grid(size: u32) -> [u32; 2] {
-    let cw = size.div_ceil(CHUNK_SIZE);
-    let ch = size.div_ceil(CHUNK_SIZE);
-    [cw, ch]
+fn chunk_grid(width: u32, height: u32) -> [u32; 2] {
+    [width.div_ceil(CHUNK_SIZE), height.div_ceil(CHUNK_SIZE)]
 }
 
 /// 块在原图**逻辑格**坐标的矩形（半开 `[x0, y0, x1, y1]`，钳到 size 内）。
 ///
 /// 单位 = 逻辑格。**像素坐标** = 格 × `tex.res`。
-fn chunk_cell_rect(coord: [u32; 2], size: u32) -> [u32; 4] {
+fn chunk_cell_rect(coord: [u32; 2], width: u32, height: u32) -> [u32; 4] {
     let x0 = coord[0] * CHUNK_SIZE;
     let y0 = coord[1] * CHUNK_SIZE;
-    let x1 = ((coord[0] + 1) * CHUNK_SIZE).min(size);
-    let y1 = ((coord[1] + 1) * CHUNK_SIZE).min(size);
+    let x1 = ((coord[0] + 1) * CHUNK_SIZE).min(width);
+    let y1 = ((coord[1] + 1) * CHUNK_SIZE).min(height);
     [x0, y0, x1, y1]
 }
 
@@ -303,10 +301,10 @@ pub fn sync_terrain_chunks(
     let Ok(window) = windows.single() else {
         return;
     };
-    let size = tex.size;
+    let (size_w, size_h) = (tex.size, tex.height);
     let google_mode = view.mode == crate::state::ViewMode::GoogleMap;
     let cell_size = grid.cell_size;
-    let [cw, ch] = chunk_grid(size);
+    let [cw, ch] = chunk_grid(size_w, size_h);
     let res = tex.res;
 
     // 视口 AABB 与当前 mip 级。相机旋转（地图朝向）决定视口斜矩形的朝向。
@@ -326,7 +324,7 @@ pub fn sync_terrain_chunks(
     // 1) 视口外 chunk despawn。
     let mut to_despawn: Vec<[u32; 2]> = Vec::new();
     for &coord in chunk_entities.by_coord.keys() {
-        let [gx0, gy0, _, _] = chunk_cell_rect(coord, size);
+        let [gx0, gy0, _, _] = chunk_cell_rect(coord, size_w, size_h);
         let cmin = grid.raster_origin + Vec2::new(gx0 as f32, gy0 as f32) * cell_size;
         if !chunk_visible(cmin, chunk_world_size, vp_min, vp_max) {
             to_despawn.push(coord);
@@ -345,7 +343,7 @@ pub fn sync_terrain_chunks(
     for cy in 0..ch {
         for cx in 0..cw {
             let coord = [cx, cy];
-            let cells = chunk_cell_rect(coord, size);
+            let cells = chunk_cell_rect(coord, size_w, size_h);
             let cmin = grid.raster_origin + Vec2::new(cells[0] as f32, cells[1] as f32) * cell_size;
             if !chunk_visible(cmin, chunk_world_size, vp_min, vp_max) {
                 continue;
@@ -441,7 +439,7 @@ pub fn sync_terrain_chunks(
                 // 3a) dirty 相交 → patch mip0 像素，并逐级重建 mip1/mip2。
                 if let (Some(dirty), Some(src)) = (pending_dirty, src) {
                     if rects_intersect(dirty, cells) {
-                        patch_chunk_mips(&mut images, &chunk, src, size, res, cells, dirty);
+                        patch_chunk_mips(&mut images, &chunk, src, size_w, res, cells, dirty);
                         // Bevy 0.15：就地改 `Image` 数据不使既有 `ColorMaterial` 的
                         // bindgroup 失效——GPU 上仍采样旧纹理。触碰材质资产强制
                         // 重建 bindgroup，让本帧 patch 的像素真正上屏（模式切换 /
@@ -464,7 +462,7 @@ pub fn sync_terrain_chunks(
 
         // spawn：拷贝本块像素 + 建 mip 链 + 建几何与材质。
         let Some(src) = src else { continue };
-        let chunk_pixels = copy_chunk_pixels(src, size, res, gx0, gy0, gx1, gy1);
+        let chunk_pixels = copy_chunk_pixels(src, size_w, res, gx0, gy0, gx1, gy1);
         let pw = (gx1 - gx0) * res;
         let ph = (gy1 - gy0) * res;
         let mip_handles: Vec<Handle<Image>> = build_mip_chain(chunk_pixels, pw, ph, google_mode)
@@ -515,7 +513,7 @@ pub fn sync_terrain_chunks(
 /// 输出 = 矩形对应的像素子集（`((gx1-gx0) × res) × ((gy1-gy0) × res)`）。
 fn copy_chunk_pixels(
     src: &[u8],
-    size: u32,
+    src_width: u32,
     res: u32,
     gx0: u32,
     gy0: u32,
@@ -525,7 +523,7 @@ fn copy_chunk_pixels(
     let out_w = (gx1 - gx0) * res;
     let out_h = (gy1 - gy0) * res;
     let mut out = vec![0u8; (out_w * out_h * 4) as usize];
-    let src_pixel_size = size * res;
+    let src_pixel_size = src_width * res;
     let src_stride = src_pixel_size as usize * 4;
     for row in 0..out_h as usize {
         // 每 res 行对应同一逻辑行；src_y_pixel = (gy0 * res + row)。
@@ -594,7 +592,7 @@ fn patch_chunk_mips(
     images: &mut Assets<Image>,
     chunk: &TerrainChunk,
     src: &[u8],
-    size: u32,
+    src_width: u32,
     res: u32,
     cells: [u32; 4],
     dirty: [u32; 4],
@@ -610,7 +608,7 @@ fn patch_chunk_mips(
     }
     let chunk_w_px = (gx1 - gx0) * res;
     let chunk_h_px = (gy1 - gy0) * res;
-    let src_stride = (size * res) as usize * 4;
+    let src_stride = (src_width * res) as usize * 4;
     let (pw, ph) = ((ix1 - ix0) * res, (iy1 - iy0) * res);
     // 块内像素起点。
     let (px0, py0) = ((ix0 - gx0) * res, (iy0 - gy0) * res);
@@ -700,28 +698,28 @@ mod tests {
     #[test]
     fn chunk_grid_covers_terrain_with_256px_blocks() {
         // 256 = 整除 → 1 块
-        assert_eq!(chunk_grid(256), [1, 1]);
+        assert_eq!(chunk_grid(256, 256), [1, 1]);
         // 512 = 整除 → 2 块
-        assert_eq!(chunk_grid(512), [2, 2]);
+        assert_eq!(chunk_grid(512, 512), [2, 2]);
         // 1024 = 4 块
-        assert_eq!(chunk_grid(1024), [4, 4]);
+        assert_eq!(chunk_grid(1024, 1024), [4, 4]);
         // 1025 = 5 块（向上舍入）
-        assert_eq!(chunk_grid(1025), [5, 5]);
+        assert_eq!(chunk_grid(1025, 1025), [5, 5]);
         // 200 = 1 块（不足一块占一整块）
-        assert_eq!(chunk_grid(200), [1, 1]);
+        assert_eq!(chunk_grid(200, 200), [1, 1]);
         // 4096 = 16 块
-        assert_eq!(chunk_grid(4096), [16, 16]);
+        assert_eq!(chunk_grid(4096, 4096), [16, 16]);
     }
 
     #[test]
     fn chunk_cell_rect_within_terrain_bounds() {
         // size = 512（逻辑格），分 2 块。
-        let r00 = chunk_cell_rect([0, 0], 512);
+        let r00 = chunk_cell_rect([0, 0], 512, 512);
         assert_eq!(r00, [0, 0, 256, 256]);
-        let r11 = chunk_cell_rect([1, 1], 512);
+        let r11 = chunk_cell_rect([1, 1], 512, 512);
         assert_eq!(r11, [256, 256, 512, 512]);
         // size = 500，分 2 块但第二块尾部被钳到 500。
-        let r10 = chunk_cell_rect([1, 0], 500);
+        let r10 = chunk_cell_rect([1, 0], 500, 500);
         assert_eq!(r10, [256, 0, 500, 256]);
     }
 
@@ -1043,5 +1041,43 @@ mod tests {
     fn terrain_chunk_entities_default_is_empty() {
         let e = TerrainChunkEntities::default();
         assert!(e.by_coord.is_empty());
+    }
+
+    /// 16:9 地图（512×288 格）：块网格与块矩形按真实宽高切，不再按单边方形。
+    #[test]
+    fn non_square_maps_get_two_dimensional_chunk_grid() {
+        assert_eq!(chunk_grid(512, 288), [2, 2], "512×288 应为 2×2 块");
+        assert_eq!(
+            chunk_cell_rect([1, 1], 512, 288),
+            [256, 256, 512, 288],
+            "右下块的高必须钳到 288（旧实现会取到 512 → 越界）"
+        );
+        assert_eq!(chunk_grid(128, 72), [1, 1]);
+        assert_eq!(chunk_cell_rect([0, 0], 128, 72), [0, 0, 128, 72]);
+    }
+
+    /// 非方形源缓冲：copy 的 stride 必须用**宽**而不是高，否则读越界/取错行。
+    #[test]
+    fn copy_chunk_pixels_uses_width_stride_for_non_square_sources() {
+        // 4×3 源，每像素 R = 线性索引，便于手算行内容。
+        let (w, h) = (4u32, 3u32);
+        let src: Vec<u8> = (0..(w * h)).flat_map(|i| [i as u8, 0, 0, 255]).collect();
+        let out = copy_chunk_pixels(&src, w, 1, 2, 0, 4, 3);
+        assert_eq!(out.len(), 2 * 3 * 4, "2×3 格 × 4 字节");
+        assert_eq!(
+            &out[0..8],
+            &[2, 0, 0, 255, 3, 0, 0, 255],
+            "第一行 = 源 (2,0),(3,0)"
+        );
+        assert_eq!(
+            &out[8..16],
+            &[6, 0, 0, 255, 7, 0, 0, 255],
+            "第二行 = 源 (2,1),(3,1)"
+        );
+        assert_eq!(
+            &out[16..24],
+            &[10, 0, 0, 255, 11, 0, 0, 255],
+            "第三行 = 源 (2,2),(3,2)"
+        );
     }
 }

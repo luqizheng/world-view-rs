@@ -221,29 +221,35 @@ pub(crate) fn polygon_bbox(polys: &[Vec<(f32, f32)>]) -> Option<((f32, f32), (f3
 /// `amp = coast_wiggle × 0.10 × diag`：蜿蜒度 0 时扰动为零，海岸严格贴
 /// 多边形边（Task 5 的贴边性质测试依赖这一点）。fBm 采样坐标按 `diag × 0.25`
 /// 归一，使不同规模地图的「海岬尺度」观感一致。
-pub(crate) fn coast_field(
+/// 海岸距离场：返回（扰动后的有符号距离，**胜出包络**的下标）。
+///
+/// 多包络时每块大陆要用自己的内半径做高度剖面，不能用联合 bbox
+/// ——否则两块小大陆会被压平。
+fn coast_field_indexed(
     p: (f32, f32),
     polys: &[Vec<(f32, f32)>],
     params: &ContinentParams,
     noise: &Perlin,
     diag: f32,
-) -> f32 {
+) -> (f32, Option<usize>) {
     let mut d = f32::NEG_INFINITY;
-    for poly in polys {
+    let mut winner = None;
+    for (idx, poly) in polys.iter().enumerate() {
         if poly.len() < 3 {
             continue;
         }
         let sd = signed_distance(p, poly);
         if sd > d {
             d = sd;
+            winner = Some(idx);
         }
     }
     if !d.is_finite() {
-        return 0.0;
+        return (0.0, winner);
     }
     let amp = params.coast_wiggle * 0.10 * diag;
     if amp == 0.0 {
-        return d;
+        return (d, winner);
     }
     let scale = (diag * 0.25).max(f32::EPSILON);
     let n = noise.fbm(
@@ -254,7 +260,20 @@ pub(crate) fn coast_field(
         0.5,
     );
     let fbm01 = ((n * 0.5 + 1.0) as f32).clamp(0.0, 1.0);
-    d + amp * fbm01
+    (d + amp * fbm01, winner)
+}
+
+/// 单条包络的等效内半径：`0.5 × sqrt(bbox 面积)`。
+fn envelope_inradius(poly: &[(f32, f32)]) -> f32 {
+    let bbox = polygon_bbox(std::slice::from_ref(&poly.to_vec()));
+    match bbox {
+        Some((min, max)) => {
+            let w = (max.0 - min.0).max(0.0);
+            let h = (max.1 - min.1).max(0.0);
+            0.5 * (w * h).sqrt()
+        }
+        None => 1.0,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -456,9 +475,11 @@ pub fn generate_continents(
         return 0;
     }
     let diag = (w * w + h * h).sqrt();
-    // 内半径 = 0.5 × sqrt(bbox 面积)：方形包络下即半边长，
-    // 长条包络下按面积开方取等效半径（不会因一条窄带而高度骤降）。
-    let inradius = 0.5 * (w * h).sqrt();
+    // 每条包络自己的等效内半径（多块大陆各长各的，不能被联合 bbox 压平）。
+    let inradii: Vec<f32> = envelopes
+        .iter()
+        .map(|poly| envelope_inradius(poly))
+        .collect();
 
     let amp = params.coast_wiggle * 0.10 * diag;
     let shelf_wu = params.shelf_cells as f32 * cell_size;
@@ -481,11 +502,12 @@ pub fn generate_continents(
     for gy in y0..=y1 {
         for gx in x0..=x1 {
             let p = ((gx as f32 + 0.5) * cell_size, (gy as f32 + 0.5) * cell_size);
-            let d = coast_field(p, envelopes, params, &coast_noise, diag);
+            let (d, winner) = coast_field_indexed(p, envelopes, params, &coast_noise, diag);
             let Some(existing) = grid.get(gx, gy) else {
                 continue;
             };
             let new_cell = if d >= 0.0 {
+                let inradius = winner.and_then(|i| inradii.get(i).copied()).unwrap_or(1.0);
                 let height = land_height(d, inradius, params, &land_noise, p);
                 let kind = band_kind(height, d, params, &land_noise, p, diag, shelf_wu);
                 blended(existing, height, kind, d, cell_size)
@@ -575,7 +597,7 @@ mod tests {
             ..Default::default()
         };
         let n = Perlin::new(42);
-        let f = coast_field((50.0, 50.0), &sq, &p, &n, 141.42);
+        let f = coast_field_indexed((50.0, 50.0), &sq, &p, &n, 141.42).0;
         assert!((f - 50.0).abs() < 1e-3, "wiggle=0 应等于裸距离 50，got {f}");
     }
 
@@ -746,5 +768,27 @@ mod tests {
         let bowtie = vec![(0.0, 0.0), (10.0, 10.0), (10.0, 0.0), (0.0, 10.0)];
         let _ = signed_distance((5.0, 5.0), &bowtie); // 只要不 panic 即可
         let _ = point_in_polygon((2.0, 1.0), &bowtie);
+    }
+
+    /// 多包络：每块大陆用自己的内半径（联合 bbox 会把两块小大陆压平）。
+    #[test]
+    fn multi_envelope_uses_each_envelopes_own_inradius() {
+        let env = vec![
+            vec![(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)],
+            vec![
+                (400.0, 150.0),
+                (500.0, 150.0),
+                (500.0, 250.0),
+                (400.0, 250.0),
+            ],
+        ];
+        let mut grid = TerrainGrid::new(512, 256);
+        generate_continents(&mut grid, &env, &ContinentParams::default(), 5, 1.0);
+        let h = grid.get(50, 50).expect("in bounds").height;
+        assert!(
+            h > 900,
+            "第一块大陆中心应接近满高（per-envelope inradius=50），得 {h}；\
+             若用联合 bbox（≈177）只会到 500–700"
+        );
     }
 }

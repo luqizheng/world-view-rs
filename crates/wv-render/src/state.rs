@@ -626,9 +626,9 @@ pub struct GridConfig {
     pub raster_origin: Vec2,
     /// 当前图图帧原点的视图位置（上表：**本图局部内容**专用）。
     pub map_origin: Vec2,
-    /// 当前图幅面（`extent` 的长边，与 `cell_size` 同口径的方形边长）：
-    /// 地图外框与 1/4 参考网格用。
-    pub map_size: f32,
+    /// 当前图幅面（`extent` 的宽 × 高，世界单位）：地图外框与 1/4 参考网格用。
+    /// 16:9 缺省后不再是正方形——`x` / `y` 分开。
+    pub map_size: Vec2,
 }
 
 impl GridConfig {
@@ -647,7 +647,7 @@ impl Default for GridConfig {
             cell_size: 8.0,
             raster_origin: Vec2::ZERO,
             map_origin: Vec2::ZERO,
-            map_size: 4096.0,
+            map_size: Vec2::splat(4096.0),
         }
     }
 }
