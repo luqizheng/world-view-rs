@@ -13,14 +13,12 @@
 //! 图标常量 [`super::primitives::ICON_PEN`] 等集中在 `primitives`，
 //! 本模块只消费不定义。
 //!
-//! 历史来源：拆自原 [`crate::ui::widgets`]。
-
-#![cfg(feature = "app")]
+//! 历史来源：拆自原 [`crate::widgets`]。
 
 use bevy_egui::egui;
 
-use crate::theme::ui_tokens::{font_size, radius};
-use crate::ui::shell::UiShell;
+use crate::shell::UiShell;
+use crate::ui_tokens::{font_size, radius};
 
 use super::primitives::icon_image;
 
@@ -340,7 +338,7 @@ impl<'a> ToolButton<'a> {
 mod tool_button_tests {
     use super::super::primitives::{ICON_PEN, ICON_RULER};
     use super::*;
-    use crate::theme::ui_theme::UiShellConfig;
+    use crate::ui_theme::UiShellConfig;
 
     fn shell() -> UiShell {
         UiShell::new(&UiShellConfig::default())
@@ -467,7 +465,7 @@ mod button_factory_tests {
 
     use super::super::primitives::{ICON_FOLDER_OPEN, ICON_GLOBE, ICON_PLUS};
     use super::*;
-    use crate::theme::ui_theme::UiShellConfig;
+    use crate::ui_theme::UiShellConfig;
 
     fn shell() -> UiShell {
         UiShell::new(&UiShellConfig::default())

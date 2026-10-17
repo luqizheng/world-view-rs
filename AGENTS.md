@@ -47,9 +47,11 @@ wv-app  →  wv-edit  ───┐
    │                    │
    ├────→ wv-render ────┤
    │                    ├─→  wv-core
-   └────→ wv-io ────────┘            （wv-core 是唯一根）
+   ├────→ wv-ui ────────┤            （wv-core 是唯一根）
+   └────→ wv-io ────────┘
                                 wv-terrain（与 wv-core 平行，纯数据层叶子）
                                 wv-overture（与 wv-core 平行，CLI 数据导入辅助）
+                                wv-ui（与 wv-render 平行，egui 控件 + 界面令牌叶子，ADR-0026）
 ```
 
 > `wv-edit` 与 `wv-render` 是 **双子 crate**——前者写、后者读，**互不依赖**，由 `wv-app` 同时装配。
@@ -62,7 +64,15 @@ wv-app  →  wv-edit  ───┐
 | `wv-io` | `wv-core`, `serde`, `serde_yaml` | ❌ Bevy / 渲染库<br>❌ 反向依赖 `wv-edit` / `wv-render` / `wv-app` |
 | `wv-edit` | `wv-core`, `wv-terrain` | ❌ 直接读写文件（那是 `wv-io` 的职责）<br>❌ 渲染库<br>❌ 反向依赖 `wv-render` |
 | `wv-render` | `wv-core`, `wv-terrain`, `bevy`, `bevy_egui`, `egui_extras`（均 `optional = true`） | ❌ 直接读写文件<br>❌ 反向依赖 `wv-edit` / `wv-app`<br>❌ 直接持有 `wv-edit::EditHistory`（intent→dispatcher 翻译必走 wv-app）<br>❌ 直接构造 `wv_edit::EditCommand`（同上）|
-| `wv-app` | `wv-edit`, `wv-render`, `wv-io`, `wv-core`, `wv-terrain`, `wv-overture` | ❌ 作为世界的**权威存储**（source of truth 是磁盘 YAML）<br>❌ 绕过 `wv-edit` 直接改世界（必须走 `EditCommand` / `History`）<br>❌ 在 `System`（包括 wv-render 注册的）中 `ResMut<wv-edit::EditHistory>` 或 `ResMut<wv-app state>` 的世界数据<br>❌ 持有「当前值」形态的世界状态（应经 `TimelineQuery` 求值） |
+| `wv-ui` | `bevy`, `bevy_egui`, `egui_extras`（均**非 optional**，ADR-0026） | ❌ `wv-core` / `wv-terrain` / `wv-io` / `wv-edit` / `wv-render` / `wv-app` 任何依赖<br>❌ 文件系统 / 网络 / i18n / 世界色板 |
+| `wv-app` | `wv-edit`, `wv-render`, `wv-io`, `wv-core`, `wv-terrain`, `wv-overture`, `wv-ui` | ❌ 作为世界的**权威存储**（source of truth 是磁盘 YAML）<br>❌ 绕过 `wv-edit` 直接改世界（必须走 `EditCommand` / `History`）<br>❌ 在 `System`（包括 wv-render 注册的）中 `ResMut<wv-edit::EditHistory>` 或 `ResMut<wv-app state>` 的世界数据<br>❌ 持有「当前值」形态的世界状态（应经 `TimelineQuery` 求值） |
+
+> **`wv-ui` 补记**（2026-10-17，ADR-0026）：由 `ui/widgets` + `theme/{ui_tokens,ui_theme}` +
+> `ui/shell.rs::UiShell` 整建制独立而成的平行 leaf crate（先于 wv-render 补记阅读亦可）。
+> 封装 egui 控件与界面令牌，**不**依赖 wv-core、不做文件 IO、不含 i18n / 世界色板；
+> `float_window`（`Panel` 包装）与 `terrain_grid` 地形三件留在 wv-app（shim 保持
+> `crate::ui::widgets::X` 等旧路径）；tool_icons 图标资产随迁至
+> `crates/wv-ui/assets/ui/tool_icons/`。
 
 > **`wv-terrain` 补记**：它是与 `wv-core` **平行**的纯数据层叶子 crate（零第三方依赖，无 Bevy），承载地形网格（高度场 + 地形类型）与笔刷算法。`wv-edit` / `wv-render` / `wv-app` 均可直接依赖它。
 
@@ -86,6 +96,9 @@ cargo tree -p wv-edit   | grep -E 'tokio|axum|hyper|reqwest'
 
 # 确认 wv-render 反向不依赖 wv-edit / wv-app（应输出空；ADR-0020）
 cargo tree -p wv-render | grep -E 'wv-edit|wv-app'
+
+# 确认 wv-ui 不依赖任何兄弟 / 根 crate（应输出空；ADR-0026）
+cargo tree -p wv-ui | grep -E 'wv-core|wv-terrain|wv-io|wv-edit|wv-render|wv-app'
 
 # 确认无循环依赖
 cargo tree --workspace --duplicates
@@ -236,6 +249,12 @@ cargo test -p wv-app --features app
 cargo clippy -p wv-app --all-targets --features app -- -D warnings
 ```
 
+> **ADR-0026 后口径（2026-10-17）**：控件层已抽为 `wv-ui`（无 feature 门），
+> 标准 `cargo test --workspace` **天然编译并测试控件层全部单测**——上文
+> 「三条命令不编译它们」的盲区对 `wv-ui` 不再成立。`app-test` / `app-clippy`
+> 继续覆盖仍留在 feature 门后的 wv-app panel / dialog 层（panel 层脱离
+> feature 门为待裁项，README §12-39）。
+
 **GUI 启动烟测必须过一遍**（2026-10-15 追加，ADR-0016 followup）：上面所有闸门都在
 **测试层**——单元测试不实例化 Bevy 系统集，B0001（query 互斥证据缺失）、资源初始化
 顺序、Plugin 互依赖这类**运行期 panic** 只有真正启动 GUI 才暴露。ADR-0016 M2 文字晕边
@@ -312,6 +331,7 @@ assert!((j.total_days - 224.0).abs() < 1e-3, "got {}", j.total_days);
 - 错误类型用 `thiserror`，不用 `anyhow` 作为库的公开错误类型（应用层可例外）。
 - 中文注释与文档是**预期**的（本项目以中文为工作语言），但标识符、测试名、类型名一律英文。
 - 提交信息格式：`<scope>: <动作>`，如 `wv-core: 为 TimeSpan 增加 overlaps`。
+- **UI 图标一律取自 [Lucide](https://lucide.dev/icons/)**（2026-10-17 用户裁定；ADR-0026 后归 wv-ui），不引入其他图标库、不手绘图标。新增图标：在 Lucide 站内选好 → 下载 SVG → 落盘到 `crates/wv-ui/assets/ui/tool_icons/<lucide-name>.svg`（kebab-case，与 Lucide 同名）→ 代码里经 `egui::include_image!` 引用（现有用法见 `crates/wv-ui/src/widgets/primitives.rs`）。描边色必须烘焙为 `stroke="#ffffff"`，不得保留 `currentColor`。
 
 ---
 
@@ -338,6 +358,7 @@ assert!((j.total_days - 224.0).abs() < 1e-3, "got {}", j.total_days);
 - [ ] 新出现的未定论实现是否已标注待决？
 - [ ] `cargo test` / `clippy` / `fmt` 是否全绿？
 - [ ] 渲染层改动（`wv-render` / `wv-app/theme/palette`）是否额外跑过 `cargo app-test` 与 `cargo app-clippy` 与 `bash scripts/smoke-gui.sh`（§7.1）？
+- [ ] `wv-ui` 是否仍零兄弟/根依赖？§2.2 的 `cargo tree -p wv-ui` 断言是否跑过（ADR-0026）？
 - [ ] 数值断言是否附了上下文？
 
 ---

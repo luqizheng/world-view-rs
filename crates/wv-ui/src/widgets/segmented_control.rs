@@ -21,12 +21,10 @@
 //! - `top_bar::theme_segment` —— 地图主题段
 //! - `brush_panel::tool_segmented` —— 涂/塑/放 3 段
 
-#![cfg(feature = "app")]
-
 use bevy_egui::egui;
 
-use crate::theme::ui_theme::{color32, proportional};
-use crate::ui::shell::UiShell;
+use crate::shell::UiShell;
+use crate::ui_theme::{color32, proportional};
 
 /// 段控件：等宽 N 段，选中段高亮，点击触发 `on_pick(index)`。
 ///

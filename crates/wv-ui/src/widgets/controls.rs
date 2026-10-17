@@ -13,14 +13,12 @@
 //! - **不**承载浮窗外壳 / 多列布局 / 列表项 / Radio——各 panel 自管或留 in-place。
 //! - **不**写主题令牌源头 —— 调 `UiShell` getter 拿颜色。
 //!
-//! 历史来源：拆自原 [`crate::ui::widgets`]。
-
-#![cfg(feature = "app")]
+//! 历史来源：拆自原 [`crate::widgets`]。
 
 use bevy_egui::egui;
 
-use crate::theme::ui_tokens::{font_size, radius, space};
-use crate::ui::shell::UiShell;
+use crate::shell::UiShell;
+use crate::ui_tokens::{font_size, radius, space};
 
 use super::primitives::{icon_image, ICON_CHECK, ICON_CHEVRON_DOWN};
 
@@ -86,7 +84,7 @@ impl<'a> FieldInput<'a> {
             .hint_text(&self.hint)
             .desired_width(if self.fill_width { f32::INFINITY } else { 0.0 });
         if self.font_mono {
-            edit = edit.font(crate::theme::ui_theme::mono(shell.scale.input));
+            edit = edit.font(crate::ui_theme::mono(shell.scale.input));
         }
         if let Some(sz) = self.min_size {
             edit = edit.min_size(sz);
@@ -422,7 +420,7 @@ pub fn value_box(
         egui::pos2(rect.min.x + VALUE_BOX_PAD_X, rect.center().y),
         egui::Align2::LEFT_CENTER,
         text,
-        crate::theme::ui_theme::mono(font_size::MICRO),
+        crate::ui_theme::mono(font_size::MICRO),
         shell.t1(),
     );
     // 右端从右往左排：下拉箭头（最右）→ 单位后缀（其左）。
@@ -435,7 +433,7 @@ pub fn value_box(
             egui::pos2(right, rect.center().y),
             egui::Align2::RIGHT_CENTER,
             sfx,
-            crate::theme::ui_theme::proportional(font_size::MICRO),
+            crate::ui_theme::proportional(font_size::MICRO),
             shell.t3(),
         );
     }
@@ -508,7 +506,7 @@ impl<'a> PropertyRow<'a> {
                 egui::pos2(lab_rect.min.x, lab_rect.center().y),
                 egui::Align2::LEFT_CENTER,
                 self.label,
-                crate::theme::ui_theme::proportional(font_size::SMALL),
+                crate::ui_theme::proportional(font_size::SMALL),
                 shell.t2(),
             );
             resp = Some(value_box(ui, shell, self.value, self.suffix, self.dropdown));
@@ -563,7 +561,7 @@ pub fn check_row(
         egui::pos2(box_rect.max.x + 6.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
         label,
-        crate::theme::ui_theme::proportional(font_size::MICRO),
+        crate::ui_theme::proportional(font_size::MICRO),
         shell.t2(),
     );
     // 右端挂件（12×12 t3）。
@@ -644,7 +642,7 @@ impl<'a> DialogWindow<'a> {
                 egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
                     .fill(shell.panel_bg())
                     .stroke(egui::Stroke::new(1.0_f32, shell.border_strong()))
-                    .inner_margin(crate::theme::ui_theme::margin_all(space::MD))
+                    .inner_margin(crate::ui_theme::margin_all(space::MD))
                     .corner_radius(radius::MODAL),
             )
             .show(ctx, body);
@@ -659,7 +657,7 @@ mod field_input_tests {
     use super::*;
 
     fn shell() -> UiShell {
-        UiShell::new(&crate::theme::ui_theme::UiShellConfig::default())
+        UiShell::new(&crate::ui_theme::UiShellConfig::default())
     }
 
     /// 构造一个 `egui::Ui` 跑在 `400×400` 矩形里，供 `show` 落地用。
@@ -724,7 +722,7 @@ mod field_select_tests {
     use super::*;
 
     fn shell() -> UiShell {
-        UiShell::new(&crate::theme::ui_theme::UiShellConfig::default())
+        UiShell::new(&crate::ui_theme::UiShellConfig::default())
     }
 
     #[test]
@@ -762,7 +760,7 @@ mod field_checkbox_tests {
     use super::*;
 
     fn shell() -> UiShell {
-        UiShell::new(&crate::theme::ui_theme::UiShellConfig::default())
+        UiShell::new(&crate::ui_theme::UiShellConfig::default())
     }
 
     #[test]
@@ -789,7 +787,7 @@ mod switch_tests {
     use super::*;
 
     fn shell() -> UiShell {
-        UiShell::new(&crate::theme::ui_theme::UiShellConfig::default())
+        UiShell::new(&crate::ui_theme::UiShellConfig::default())
     }
 
     fn make_ui() -> (egui::Context, egui::Ui) {
@@ -841,7 +839,7 @@ mod slider_row_tests {
     use super::*;
 
     fn shell() -> UiShell {
-        UiShell::new(&crate::theme::ui_theme::UiShellConfig::default())
+        UiShell::new(&crate::ui_theme::UiShellConfig::default())
     }
 
     fn make_ui() -> (egui::Context, egui::Ui) {
@@ -1045,7 +1043,7 @@ mod dialog_window_tests {
 #[cfg(test)]
 mod property_row_tests {
     use super::*;
-    use crate::theme::ui_theme::UiShellConfig;
+    use crate::ui_theme::UiShellConfig;
 
     fn shell() -> UiShell {
         UiShell::new(&UiShellConfig::default())
@@ -1145,7 +1143,7 @@ mod property_row_tests {
 mod check_row_tests {
     use super::super::primitives::ICON_MAP_PIN;
     use super::*;
-    use crate::theme::ui_theme::UiShellConfig;
+    use crate::ui_theme::UiShellConfig;
 
     fn shell() -> UiShell {
         UiShell::new(&UiShellConfig::default())

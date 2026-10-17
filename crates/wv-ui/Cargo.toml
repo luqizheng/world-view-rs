@@ -1,0 +1,17 @@
+[package]
+name = "wv-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "World View 界面控件层：egui 控件 + 界面令牌（ADR-0026）"
+
+# 与 wv-render 相反，bevy 系依赖**非 optional**（ADR-0026 D2）：控件层的本体
+# 就是 egui，不存在「不装 Bevy 的消费方」；设门只会把「标准门禁不编译 UI」
+# 的旧病（AGENTS §7.1）带进新 crate。代价是数据层跑 `cargo test --workspace`
+# 时会拉起 Bevy 树（一次性编译缓存）。
+[dependencies]
+bevy = { workspace = true }
+bevy_egui = { workspace = true }
+# SVG → 像素解码器（svg_loader 安装进 egui）；与 wv-app 同一份 workspace 版本。
+egui_extras = { workspace = true }

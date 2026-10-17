@@ -1,5 +1,4 @@
 //! 界面外壳色令牌 —— `assets/ui-design/UI_DESIGN_SPEC_v0.1.md` §2.2 的唯一代码载体。
-#![cfg(feature = "app")]
 
 //! ## 纪律
 //!
@@ -8,7 +7,7 @@
 //!   不是第二权威——若两者冲突，改本文件。
 //! - **禁止**在 UI 代码里写裸十六进制色值：一律经本模块的令牌引用。
 //! - **`ui.*` 与 `world.*` 语义隔离**（设计规格 §2.1）：界面外壳色**不得**
-//!   从 [`crate::colors`]（世界色板）借色相。世界色归地图，界面色归界面。
+//!   从 wv-app 的世界色板（`crate::theme::colors`，本 crate 零依赖）借色相。世界色归地图，界面色归界面。
 //!   唯一例外是 [`ShellPalette::focus`] 的暗色值复用 `world.accent.select`（金），
 //!   因为「选中」语义本来就是世界状态（§4.4）。
 //!
@@ -318,7 +317,7 @@ pub struct ShellPalette {
 
 /// 徽标的 5 种语义档（设计规格 §4.7）。
 ///
-/// 与 [`crate::ui::BadgeKind`] 一一对应；这里再声明一次是为了让令牌层不必
+/// 与 [`crate::widgets::BadgeKind`] 一一对应；这里再声明一次是为了让令牌层不必
 /// 依赖 UI 组件层（令牌是规格投影，组件是它的使用者，方向不能反过来）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BadgeTone {
@@ -357,7 +356,7 @@ impl ShellPalette {
     ///
     /// 底色取自 `world.ui_link.*`（`#3F9B4E` 可达 / `#C9971F` 迟到 / `#B5453A`
     /// 不可达）与 `world.accent.event`（`#C08BD8`），**同色相**要求见 §4.7；
-    /// 它们与 `crate::colors` 的一致性由本文件测试守住。
+    /// 它们与 `crate::colors` 的一致性由 wv-app 侧测试守住（ADR-0026 D4）。
     pub fn badge(self, tone: BadgeTone) -> BadgeColors {
         let (fg, fill, fill_alpha) = match tone {
             BadgeTone::Neutral => (self.text_2, self.bg_active, 1.0),
@@ -883,46 +882,6 @@ mod tests {
         assert_eq!(light.badge_warn, Rgb::hex(0x7A4E00));
         assert_eq!(light.badge_err, Rgb::hex(0x992B22));
         assert_eq!(light.badge_event, Rgb::hex(0x6D3388));
-    }
-
-    /// 徽标底色取的是世界语义色，必须与 `crate::colors` 同值（§4.7「同色相」）。
-    ///
-    /// 令牌层刻意不依赖世界色板（方向是「色板 → 令牌」，不是反过来），
-    /// 所以这层一致性由测试守住，而不是靠 `use`。
-    #[test]
-    fn badge_fills_mirror_the_world_link_palette() {
-        let p = ShellPalette::DARK;
-        assert_eq!(
-            p.badge(BadgeTone::Ok).fill,
-            world_rgb(crate::theme::colors::UI_REACHABLE)
-        );
-        assert_eq!(
-            p.badge(BadgeTone::Warn).fill,
-            world_rgb(crate::theme::colors::UI_LATE)
-        );
-        assert_eq!(
-            p.badge(BadgeTone::Err).fill,
-            world_rgb(crate::theme::colors::UI_UNREACHABLE)
-        );
-        assert_eq!(
-            p.badge(BadgeTone::Event).fill,
-            world_rgb(crate::theme::colors::ACCENT_EVENT)
-        );
-        // 底色恒定，只有前景随主题走。
-        assert_eq!(
-            p.badge(BadgeTone::Ok).fill,
-            ShellPalette::LIGHT.badge(BadgeTone::Ok).fill
-        );
-    }
-
-    /// `bevy::Color` → 本模块的 `Rgb`（测试专用）。
-    fn world_rgb(c: bevy::prelude::Color) -> Rgb {
-        let [r, g, b, _] = crate::theme::colors::palette_to_color32(c).to_srgba_unmultiplied();
-        Rgb {
-            r: r as f32 / 255.0,
-            g: g as f32 / 255.0,
-            b: b as f32 / 255.0,
-        }
     }
 
     /// `to_color32_alpha` 必须是**非预乘**语义，否则浮层底会过亮。
