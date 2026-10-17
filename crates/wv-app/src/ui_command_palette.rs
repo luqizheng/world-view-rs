@@ -146,6 +146,9 @@ pub enum CommandId {
     /// 「底图」= `MapNode.base`，旧地图无 `base` 时按 `MapBase::Ocean` 兜底。
     /// 由 [`crate::edit::editing::apply_reset_terrain_to_base`] 执行。
     ResetTerrainToBase,
+    /// 打开「生成大陆」属性面板（2026-10-17 大陆生成 UI plan Task 5）。
+    /// 面板本身只收参数；生成走 `GenerateContinentCommand`（撤销恢复圈见 stash）。
+    GenerateContinent,
 }
 
 /// 一条命令：注册表的条目。
@@ -435,6 +438,13 @@ impl CommandRegistry {
             CommandId::ResetTerrainToBase,
             CommandGroup::Interface,
             I18nKey::CmdResetTerrainToBase,
+            None,
+        );
+        // 大陆生成：先圈意图包络（工具条「大陆」瓷砖），再从这里开属性面板。
+        push(
+            CommandId::GenerateContinent,
+            CommandGroup::Object,
+            I18nKey::ContinentDialogTitle,
             None,
         );
 

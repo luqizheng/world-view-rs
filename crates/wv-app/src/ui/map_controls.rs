@@ -46,7 +46,8 @@ use crate::ui_shell::StartupLoadRequest;
 use super::shell::UiShell;
 use super::widgets::{icon_image, ToolIcon};
 use super::{
-    ICON_GRID, ICON_HILLS, ICON_LINE, ICON_MAXIMIZE, ICON_SQUARE, ICON_ZOOM_IN, ICON_ZOOM_OUT,
+    ICON_GRID, ICON_HILLS, ICON_LINE, ICON_MAXIMIZE, ICON_MOUNTAIN_RANGE, ICON_SQUARE,
+    ICON_ZOOM_IN, ICON_ZOOM_OUT,
 };
 
 /// 单瓷砖边长 34px（原型 `.map-controls .button`）。
@@ -72,7 +73,10 @@ pub fn map_controls(
     mut view: ResMut<ViewState>,
     mut measure: ResMut<MeasureState>,
     mut city_tool: ResMut<CityToolState>,
-    mut sketch: ResMut<ContinentSketch>,
+    (mut sketch, mut continent_dialog): (
+        ResMut<ContinentSketch>,
+        ResMut<crate::ui::ContinentDialog>,
+    ),
     drill: Res<DrillState>,
     grid: Res<GridConfig>,
     tex: Res<wv_render::terrain_view::TerrainTexture>,
@@ -236,6 +240,22 @@ pub fn map_controls(
                             } else {
                                 sketch.discard_active();
                             }
+                        },
+                    );
+
+                    // ②.7 Generate — 打开「生成大陆」属性面板（八参数 + 种子）。
+                    //   面板本身只收参数，确认才派 `GenerateContinentCommand`。
+                    tile_button(
+                        ui,
+                        &shell,
+                        ToolIcon::Svg(ICON_MOUNTAIN_RANGE),
+                        "生成大陆…（八参数面板；先圈出意图包络）",
+                        continent_dialog.open,
+                        project_open,
+                        accent,
+                        raised_bg,
+                        || {
+                            continent_dialog.open = true;
                         },
                     );
 

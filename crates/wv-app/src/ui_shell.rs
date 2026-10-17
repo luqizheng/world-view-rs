@@ -1061,9 +1061,10 @@ fn apply_pending_commands(
     // 在对话框自身的系统里提交，见 `ui::new_map_dialog`）。
     // 「新建工程」对话框的开关同源（CommandId::NewProject / 欢迎页 → open）。
     // 两个 ResMut 折成一层元组：单系统参数上限 16，拆元组后每层元组算 1 个。
-    (mut new_map_dialog, mut new_project_dialog): (
+    (mut new_map_dialog, mut new_project_dialog, mut continent_dialog): (
         ResMut<crate::ui::NewMapDialog>,
         ResMut<crate::ui::NewProjectDialog>,
+        ResMut<crate::ui::ContinentDialog>,
     ),
     // 换世界接管（adopt_world_snapshot）所需：瓦片图集可缺席（纯色平涂回退）。
     (atlas, mut images): (
@@ -1098,6 +1099,7 @@ fn apply_pending_commands(
                 | CommandId::Save
                 | CommandId::SaveProjectAs
                 | CommandId::ExportProject
+                | CommandId::GenerateContinent
         )
     {
         notice.error(
@@ -1189,6 +1191,13 @@ fn apply_pending_commands(
             }
         }
         CommandId::ToggleGrid => view.grid_lines = !view.grid_lines,
+        // 大陆生成属性面板（面板本身只收参数；生成在 continent_dialog_system）。
+        CommandId::GenerateContinent => {
+            continent_dialog.open = true;
+            // 顺手打开圈画工具，作者不必再点一次工具条（与测量的互斥由
+            // map_controls 的瓷砖在启用路径上处理）。
+            sketch.enabled = true;
+        }
         // 撤销 / 重做走 `editing` 的公开入口（同一份逻辑，不复制）。
         CommandId::Undo | CommandId::Redo => {
             let redo = matches!(id, CommandId::Redo);
@@ -1534,6 +1543,7 @@ mod tests {
         world.init_resource::<crate::ui::NewProjectDialog>();
         world.init_resource::<crate::state::ContinentSketch>();
         world.init_resource::<crate::state::ContinentGenerationState>();
+        world.init_resource::<crate::ui::ContinentDialog>();
         // ADR-0018：UI 文案语言；默认 `Locale::Zh`（与 GUI 启动默认值一致）。
         world.init_resource::<crate::i18n::CurrentLocale>();
         world.init_resource::<LayoutFile>();
@@ -1707,6 +1717,7 @@ mod tests {
         world.init_resource::<crate::ui::NewProjectDialog>();
         world.init_resource::<crate::state::ContinentSketch>();
         world.init_resource::<crate::state::ContinentGenerationState>();
+        world.init_resource::<crate::ui::ContinentDialog>();
         // ADR-0018：UI 文案语言；默认 `Locale::Zh`（与 GUI 启动默认值一致）。
         world.init_resource::<crate::i18n::CurrentLocale>();
         world.init_resource::<LayoutFile>();
