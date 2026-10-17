@@ -284,11 +284,12 @@ fn envelope_inradius(poly: &[(f32, f32)]) -> f32 {
 
 /// 雪线（米）。取山地档缺省峰高（2000 m）之上、高山档峰高（4000 m）之下：
 /// 2000 m 峰顶不盖雪、4000 m 峰顶盖雪，与面板「起伏强度」三档观感自洽。
-const SNOW_LINE_M: i16 = 2600;
+/// `biome` 模块的显示回退引用同值（单一事实源在本模块）。
+pub(crate) const SNOW_LINE_M: i16 = 2600;
 /// 山地分带下沿（米）——对齐 `intent::PLATEAU_TOP_M`（高原顶面 1200 m）。
-const MOUNTAIN_MIN_M: i16 = 1200;
+pub(crate) const MOUNTAIN_MIN_M: i16 = 1200;
 /// 丘陵分带下沿（米）——对齐 `intent::HILLS_AMP_M`（丘陵起伏 300 m）。
-const HILL_MIN_M: i16 = 300;
+pub(crate) const HILL_MIN_M: i16 = 300;
 
 /// 径向高度剖面：海岸 0 → 中心 `relief.meters()`，内部叠 fBm 起伏。
 ///

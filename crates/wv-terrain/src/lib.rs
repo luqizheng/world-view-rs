@@ -36,6 +36,7 @@
 //! **height** = 纯海拔、**biome** = 生物群系开放编号。`terrain.bin` 的
 //! 「I16 高度 + U8 地表 + U8 群系」与之对应。
 
+pub mod biome;
 pub mod continent;
 pub mod edit;
 pub mod generate;
@@ -54,23 +55,7 @@ pub const SURFACE_WATER: Surface = 0;
 /// 陆地。
 pub const SURFACE_LAND: Surface = 1;
 
-/// 生物群系编号（开放集，设计稿 §6.1 的 19 清单 + 工程扩展）。
-///
-/// **占位**：全量常量与编号表由 `biome` 模块冻结（2026-10-18 计划 Task 2）；
-/// 此处先给出本 crate 内部迁移所需的最小集，编号已按冻结表取值。
-pub type Biome = u8;
-/// 无群系（高度派生显示）。
-pub const BIOME_NONE: Biome = 0;
-/// 森林。
-pub const BIOME_FOREST: Biome = 1;
-/// 草原。
-pub const BIOME_GRASSLAND: Biome = 3;
-/// 沙漠。
-pub const BIOME_DESERT: Biome = 5;
-/// 丘陵（意图笔刷戳记与离岸小岛用； continent 分带仍走高度派生）。
-pub const BIOME_HILLS: Biome = 12;
-/// 山地（意图笔刷戳记用）。
-pub const BIOME_MOUNTAINS: Biome = 13;
+pub use biome::*;
 
 /// 高度类型。`i16` 足以表达 ±32767 m，覆盖地球极值（plan v0.1 §8 Q1）。
 ///
