@@ -763,6 +763,7 @@ impl Project {
             tracks,
             narrations,
             factions,
+            faction_layers: Vec::new(),
             faction_geometry,
             place_geometry,
             regions,

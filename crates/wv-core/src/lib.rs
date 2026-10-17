@@ -72,7 +72,11 @@ pub use map::coord::{resolve_frame, resolve_frame_in, FrameNode, MapFrame};
 pub use map::unit::Unit;
 pub use model::character::Character;
 pub use model::event::{Event, EventLocation};
-pub use model::faction::{factions_at, Faction, FactionColorMode, FactionLayer, Membership};
+pub use model::faction::{
+    default_faction_layer, faction_territories_at, factions_at, membership_cycles, memberships_of,
+    query_at_point, resolve_faction_layer_id, resolved_faction_layers, subordinates_of, Faction,
+    FactionColorMode, FactionLayer, FactionTerritory, Membership, DEFAULT_FACTION_LAYER_ID,
+};
 pub use model::place_territory::place_territory_at;
 pub use model::region::Region;
 pub use source::building::{Building, BuildingLayer};
@@ -182,6 +186,11 @@ pub struct World {
     /// §4.5 原则「每实体一文件」：每个势力一个 `factions/<id>.yaml`。
     /// 势力占据地图的几何**不**内联在这里——见下方的 `faction_geometry`。
     pub factions: Vec<model::faction::Faction>,
+    /// 势力层（ADR-0027 D4）：作者命名的政治划分**维度**。
+    ///
+    /// 目录可缺失——旧工程为零 Vec；此时渲染 / 面板经
+    /// [`crate::resolved_faction_layers`] 在内存中合成默认层，**不写盘**。
+    pub faction_layers: Vec<model::faction::FactionLayer>,
     /// 势力的几何（含时间区间，§4.1 P6/P7）。
     ///
     /// `GeometrySpan.owner` 引用 `factions` 中的 `Faction.id`。

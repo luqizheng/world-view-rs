@@ -1,4 +1,4 @@
-﻿//! 势力维度。
+//! 势力维度。
 //!
 //! ## 与 `Unit.owner` 的边界（ADR-0004 派生物）
 //!
@@ -26,6 +26,8 @@
 //! `PolygonWithHoles` 变体。
 //!
 //! [`GeometrySpan`]: crate::map::GeometrySpan
+
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -145,25 +147,10 @@ pub fn factions_at<'a>(
     target_map: &Id,
     day: i64,
 ) -> Vec<(&'a Faction, &'a [f32])> {
-    let t = TimePoint::from_day(day);
-    let mut out = Vec::new();
-    for g in &world.faction_geometry {
-        if &g.map != target_map {
-            continue;
-        }
-        if !g.span.contains(&t) {
-            continue;
-        }
-        let Some(faction) = world.factions.iter().find(|f| f.id == g.owner) else {
-            // 几何引用的 owner 不在 factions 列表里——按 V1 静默跳过。
-            continue;
-        };
-        let GeometryDataView::Polygon(coords) = GeometryDataView::from(&g.geometry) else {
-            continue;
-        };
-        out.push((faction, coords));
-    }
-    out
+    faction_territories_at(world, target_map, day)
+        .into_iter()
+        .map(|t| (t.faction, t.vertices))
+        .collect()
 }
 
 /// 内部 enum view：避免在 `wv-core` 公共 API 暴露 `GeometryData` 的所有权语义。
@@ -193,6 +180,197 @@ impl<'a> From<&'a crate::map::GeometryData> for GeometryDataView<'a> {
 /// 重叠校验时挂载在此。
 pub fn allow_overlapping_spans(_a: &TimeSpan, _b: &TimeSpan) -> bool {
     true
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0027：势力层解析与多对多归属查询（Task 2）
+// ---------------------------------------------------------------------------
+
+/// 默认势力层 id：旧工程没有 `faction_layers/` 时在内存中合成。
+pub const DEFAULT_FACTION_LAYER_ID: &str = "faction_layer_default";
+
+/// 内存中的默认势力层（不写盘，除非作者编辑后被 save 流程覆盖）。
+pub fn default_faction_layer() -> FactionLayer {
+    FactionLayer {
+        id: Id::new_unchecked(DEFAULT_FACTION_LAYER_ID),
+        name: "势力".to_string(),
+        z: 0,
+        color_mode: FactionColorMode::Own,
+        visible: true,
+    }
+}
+
+/// 解析一个势力实际属于的层 id：显式层存在则用之，否则默认层。
+pub fn resolve_faction_layer_id(world: &crate::World, faction: &Faction) -> Id {
+    if let Some(id) = &faction.layer {
+        if world.faction_layers.iter().any(|l| &l.id == id) {
+            return id.clone();
+        }
+    }
+    Id::new_unchecked(DEFAULT_FACTION_LAYER_ID)
+}
+
+/// 解析后的层列表：已存层 +（必要时）默认层，按 `(z, id)` 升序。
+///
+/// **默认层只在两种情况下追加**：没有任何已存层，或存在未分层/悬空层的
+/// 势力。否则空的默认层会抢占 `FactionDisplay.active_layer`，势力图变空白。
+pub fn resolved_faction_layers(world: &crate::World) -> Vec<FactionLayer> {
+    let mut out = world.faction_layers.clone();
+    let has_default = out
+        .iter()
+        .any(|l| l.id.as_str() == DEFAULT_FACTION_LAYER_ID);
+    let needs_default = !has_default
+        && (out.is_empty()
+            || world
+                .factions
+                .iter()
+                .any(|f| resolve_faction_layer_id(world, f).as_str() == DEFAULT_FACTION_LAYER_ID));
+    if needs_default {
+        out.push(default_faction_layer());
+    }
+    out.sort_by(|a, b| (a.z, a.id.as_str()).cmp(&(b.z, b.id.as_str())));
+    out
+}
+
+/// 某地图某天生效的一条势力领土（层 + 势力 + 关系 + 顶点）。
+pub struct FactionTerritory<'a> {
+    pub layer: Id,
+    pub faction: &'a Faction,
+    pub relation: Option<&'a str>,
+    pub vertices: &'a [f32],
+}
+
+/// 某地图某天生效的全部势力领土（ADR-0027 D9）。
+///
+/// 沿用 [`factions_at`] 的扫描顺序与过滤；额外带层 id 与 relation。
+pub fn faction_territories_at<'a>(
+    world: &'a crate::World,
+    target_map: &Id,
+    day: i64,
+) -> Vec<FactionTerritory<'a>> {
+    let t = TimePoint::from_day(day);
+    let mut out = Vec::new();
+    for g in &world.faction_geometry {
+        if &g.map != target_map || !g.span.contains(&t) {
+            continue;
+        }
+        let Some(faction) = world.factions.iter().find(|f| f.id == g.owner) else {
+            // 几何引用的 owner 不在 factions 列表里——按 V1 静默跳过。
+            continue;
+        };
+        let GeometryDataView::Polygon(coords) = GeometryDataView::from(&g.geometry) else {
+            continue;
+        };
+        out.push(FactionTerritory {
+            layer: resolve_faction_layer_id(world, faction),
+            faction,
+            relation: g.relation.as_deref(),
+            vertices: coords,
+        });
+    }
+    out
+}
+
+/// 势力的出边（target = 上级/目标），按时刻过滤。
+pub fn memberships_of<'a>(world: &'a crate::World, faction: &Id, day: i64) -> Vec<&'a Membership> {
+    let t = TimePoint::from_day(day);
+    world
+        .factions
+        .iter()
+        .find(|f| &f.id == faction)
+        .map(|f| {
+            f.memberships
+                .iter()
+                .filter(|m| m.span.contains(&t))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 直接下级势力（谁把 `faction` 作为 target），按时刻过滤。
+pub fn subordinates_of<'a>(world: &'a crate::World, faction: &Id, day: i64) -> Vec<&'a Faction> {
+    let t = TimePoint::from_day(day);
+    world
+        .factions
+        .iter()
+        .filter(|f| {
+            f.memberships
+                .iter()
+                .any(|m| &m.target == faction && m.span.contains(&t))
+        })
+        .collect()
+}
+
+/// 点查询：返回覆盖该点的全部 `(层, 势力, relation)` 三元组。
+///
+/// 按三元组去重；重叠合法，不报错（ADR-0001 R1′）。
+pub fn query_at_point(
+    world: &crate::World,
+    map: &Id,
+    x: f32,
+    y: f32,
+    day: i64,
+) -> Vec<(Id, Id, Option<String>)> {
+    let mut out: Vec<(Id, Id, Option<String>)> = Vec::new();
+    for t in faction_territories_at(world, map, day) {
+        if !crate::geometry::point_in_ring(t.vertices, x, y) {
+            continue;
+        }
+        let item = (
+            t.layer,
+            t.faction.id.clone(),
+            t.relation.map(str::to_string),
+        );
+        if !out.contains(&item) {
+            out.push(item);
+        }
+    }
+    out
+}
+
+/// 归属边成环检测（诊断用）。返回每个环的路径（首尾同 id，不保证去重）。
+pub fn membership_cycles(world: &crate::World) -> Vec<Vec<Id>> {
+    let mut adj: HashMap<&Id, Vec<&Id>> = HashMap::new();
+    for f in &world.factions {
+        adj.insert(&f.id, f.memberships.iter().map(|m| &m.target).collect());
+    }
+    let mut color: HashMap<&Id, u8> = HashMap::new();
+    let mut stack: Vec<&Id> = Vec::new();
+    let mut out: Vec<Vec<Id>> = Vec::new();
+    for f in &world.factions {
+        if color.get(&f.id).copied().unwrap_or(0) == 0 {
+            dfs_cycles(&f.id, &adj, &mut color, &mut stack, &mut out);
+        }
+    }
+    out
+}
+
+fn dfs_cycles<'a>(
+    id: &'a Id,
+    adj: &HashMap<&'a Id, Vec<&'a Id>>,
+    color: &mut HashMap<&'a Id, u8>,
+    stack: &mut Vec<&'a Id>,
+    out: &mut Vec<Vec<Id>>,
+) {
+    color.insert(id, 1);
+    stack.push(id);
+    if let Some(nexts) = adj.get(id) {
+        for &n in nexts {
+            match color.get(n).copied().unwrap_or(0) {
+                0 => dfs_cycles(n, adj, color, stack, out),
+                1 => {
+                    if let Some(pos) = stack.iter().position(|x| *x == n) {
+                        let mut cyc: Vec<Id> = stack[pos..].iter().map(|x| (*x).clone()).collect();
+                        cyc.push(n.clone());
+                        out.push(cyc);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    stack.pop();
+    color.insert(id, 2);
 }
 
 #[cfg(test)]
@@ -424,5 +602,198 @@ mod tests {
         assert!(!yaml.contains("relation:"), "None 不应序列化，got {yaml}");
         let g2: GeometrySpan = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(g2.relation, None);
+    }
+
+    // ------------------------------------------------------------------
+    // ADR-0027：默认层 / 多对多归属 / 点查询 / 环检测（Task 2）
+    // ------------------------------------------------------------------
+
+    fn faction_with(id: &str, layer: Option<&str>, memberships: Vec<Membership>) -> Faction {
+        let mut f = Faction::new(Id::new_unchecked(id), id, Color("#000000".into()));
+        f.layer = layer.map(Id::new_unchecked);
+        f.memberships = memberships;
+        f
+    }
+
+    fn membership(target: &str, kind: &str, from: i64) -> Membership {
+        Membership {
+            target: Id::new_unchecked(target),
+            kind: Some(kind.into()),
+            span: TimeSpan::open(from),
+        }
+    }
+
+    #[test]
+    fn legacy_factions_resolve_to_default_layer() {
+        let mut w = World::default();
+        w.factions.push(faction_with("faction_qing", None, vec![]));
+        let layers = resolved_faction_layers(&w);
+        assert_eq!(layers.len(), 1, "只有默认层，got {}", layers.len());
+        assert_eq!(layers[0].id.as_str(), DEFAULT_FACTION_LAYER_ID);
+        assert_eq!(
+            resolve_faction_layer_id(&w, &w.factions[0]).as_str(),
+            DEFAULT_FACTION_LAYER_ID
+        );
+    }
+
+    #[test]
+    fn resolved_layers_sort_by_z_then_id() {
+        let mut w = World::default();
+        let mut a = default_faction_layer();
+        a.id = Id::new_unchecked("layer_a");
+        a.name = "A".into();
+        a.z = 0;
+        let mut b = a.clone();
+        b.id = Id::new_unchecked("layer_b");
+        b.name = "B".into();
+        b.z = 2;
+        let mut c = a.clone();
+        c.id = Id::new_unchecked("layer_c");
+        c.name = "C".into();
+        c.z = 0;
+        w.faction_layers = vec![b, a, c];
+        let layers = resolved_faction_layers(&w);
+        let ids: Vec<&str> = layers.iter().map(|l| l.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["layer_a", "layer_c", "layer_b"],
+            "同 z 按 id，got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn noble_controls_multiple_provinces_at_the_same_time() {
+        let mut w = World::default();
+        let lord = faction_with("faction_zhenbei", Some("layer_noble"), vec![]);
+        let p1 = faction_with(
+            "faction_north",
+            Some("layer_admin"),
+            vec![membership("faction_zhenbei", "实控", 1042)],
+        );
+        let p2 = faction_with(
+            "faction_hedong",
+            Some("layer_admin"),
+            vec![membership("faction_zhenbei", "实控", 1042)],
+        );
+        w.factions.extend([lord, p1, p2]);
+        let subs = subordinates_of(&w, &Id::new_unchecked("faction_zhenbei"), 1100);
+        assert_eq!(subs.len(), 2, "镇北侯应直接控制两省，got {}", subs.len());
+        let early = subordinates_of(&w, &Id::new_unchecked("faction_zhenbei"), 1000);
+        assert!(early.is_empty(), "1042 之前不应有下属，got {}", early.len());
+    }
+
+    #[test]
+    fn one_province_can_have_multiple_lords() {
+        let mut w = World::default();
+        let province = faction_with("faction_north", Some("layer_admin"), vec![]);
+        let a = faction_with(
+            "faction_lord_a",
+            Some("layer_noble"),
+            vec![membership("faction_north", "实控", 1)],
+        );
+        let b = faction_with(
+            "faction_lord_b",
+            Some("layer_noble"),
+            vec![membership("faction_north", "实控", 1)],
+        );
+        w.factions.extend([province, a, b]);
+        let subs = subordinates_of(&w, &Id::new_unchecked("faction_north"), 10);
+        assert_eq!(subs.len(), 2, "一省两贵族，got {}", subs.len());
+        // memberships_of 是出边：省自己没有出边。
+        let own = memberships_of(&w, &Id::new_unchecked("faction_north"), 10);
+        assert!(own.is_empty(), "省的出边为空，got {}", own.len());
+    }
+
+    #[test]
+    fn faction_territories_carry_layer_and_relation() {
+        let mut w = World::default();
+        w.factions
+            .push(faction_with("faction_north", Some("layer_admin"), vec![]));
+        w.faction_layers.push(FactionLayer {
+            id: Id::new_unchecked("layer_admin"),
+            name: "行政区".into(),
+            z: 1,
+            color_mode: FactionColorMode::Own,
+            visible: true,
+        });
+        w.faction_geometry.push(GeometrySpan {
+            map: Id::new_unchecked("map_world"),
+            owner: Id::new_unchecked("faction_north"),
+            span: TimeSpan::open(1),
+            geometry: GeometryData::Polygon(vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0]),
+            relation: Some("claim".into()),
+        });
+        let ts = faction_territories_at(&w, &Id::new_unchecked("map_world"), 5);
+        assert_eq!(ts.len(), 1);
+        assert_eq!(ts[0].layer.as_str(), "layer_admin");
+        assert_eq!(ts[0].relation, Some("claim"));
+        assert_eq!(ts[0].faction.id.as_str(), "faction_north");
+    }
+
+    #[test]
+    fn query_at_point_returns_all_overlapping_claims() {
+        let mut w = World::default();
+        w.factions
+            .push(faction_with("faction_north", Some("layer_admin"), vec![]));
+        w.factions
+            .push(faction_with("faction_zhenbei", Some("layer_noble"), vec![]));
+        let square = vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0];
+        for owner in ["faction_north", "faction_zhenbei"] {
+            w.faction_geometry.push(GeometrySpan {
+                map: Id::new_unchecked("map_world"),
+                owner: Id::new_unchecked(owner),
+                span: TimeSpan::open(1),
+                geometry: GeometryData::Polygon(square.clone()),
+                relation: None,
+            });
+        }
+        let hits = query_at_point(&w, &Id::new_unchecked("map_world"), 5.0, 5.0, 10);
+        assert_eq!(
+            hits.len(),
+            2,
+            "省 + 贵族两层同点应返回两项，got {}",
+            hits.len()
+        );
+    }
+
+    #[test]
+    fn membership_cycle_is_detected() {
+        let mut w = World::default();
+        w.factions.push(faction_with(
+            "faction_a",
+            None,
+            vec![membership("faction_b", "结盟", 1)],
+        ));
+        w.factions.push(faction_with(
+            "faction_b",
+            None,
+            vec![membership("faction_a", "结盟", 1)],
+        ));
+        let cycles = membership_cycles(&w);
+        assert!(!cycles.is_empty(), "A→B→A 应被检出");
+        assert!(
+            cycles[0].len() >= 3,
+            "环路径至少 a,b,a，got {:?}",
+            cycles[0]
+        );
+    }
+
+    #[test]
+    fn dangling_layer_falls_back_to_default() {
+        let mut w = World::default();
+        let mut f = faction_with("faction_qing", Some("layer_missing"), vec![]);
+        f.layer = Some(Id::new_unchecked("layer_missing"));
+        w.factions.push(f);
+        assert_eq!(
+            resolve_faction_layer_id(&w, &w.factions[0]).as_str(),
+            DEFAULT_FACTION_LAYER_ID
+        );
+        let layers = resolved_faction_layers(&w);
+        assert!(
+            layers
+                .iter()
+                .any(|l| l.id.as_str() == DEFAULT_FACTION_LAYER_ID),
+            "悬空层应回落默认层"
+        );
     }
 }
