@@ -25,7 +25,7 @@ use bevy::render::render_resource::{PrimitiveTopology, VertexFormat};
 use wv_terrain::isoline::{assemble_chains, chaikin, height_segments, kind_segments, simplify_dp};
 
 use crate::layer_frame::LayerFrame;
-use crate::state::{DrillState, GridConfig, ViewMode, ViewState, WorldProjection};
+use crate::state::{DrillState, GridConfig, ViewState, WorldProjection};
 use crate::theme::palette::{self, MapPalette};
 
 use super::terrain_resolve::texture_terrain;
@@ -173,11 +173,12 @@ pub fn sync_isoline_overlay(
     grid: Res<GridConfig>,
     tex: Res<TerrainTexture>,
     layers: Res<LayerFrame>,
+    recipe: Res<crate::recipe::RenderRecipe>,
     mut overlay: ResMut<IsolineOverlay>,
 ) {
-    // 只在 VectorFlat 浏览态存在；关图层（YAML ∨ 会话，ADR-0013）/ 换模式即退场
-    // （键随之清零，重进重算）。
-    if !layers.terrain.visible || view.mode != ViewMode::VectorFlat {
+    // 只在 VectorFlat 浏览态存在（recipe 表：Isoline 仅 VectorFlat = true）；
+    // 关图层（YAML ∨ 会话，ADR-0013）/ 换模式即退场（键随之清零，重进重算）。
+    if !layers.terrain.visible || !recipe.enabled(crate::recipe::PassId::Isoline) {
         overlay.despawn(&mut commands);
         return;
     }

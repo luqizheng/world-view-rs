@@ -141,16 +141,20 @@ impl Default for RenderRecipe {
 
 /// 模式 × pass 的可见性表（ADR-0021 §1.1 的"模式排除对"集中地）。
 ///
-/// 行 = 模式，列 = "该模式下是否参与"。**新增模式时**加一行；**改语义时**改
-/// 对应行；测试 [`tests::mode_table_known_modes_consistent_with_default`] 兜底
-/// 默认模式行为不变。
+/// 行 = 模式，列序 = [`PassId::ALL`] 声明序。**每格以迁移前散点判定的实际行为
+/// 为准**（等价迁移，不借机改语义）：
+/// - Isoline 仅 VectorFlat（`isoline_overlay.rs` 原 gate：`mode != VectorFlat → despawn`）；
+/// - Buildings / Atmosphere / Veil / Grain 排除 GoogleMap | Coastline；
+/// - Faction 仅 Faction 模式。
+///
+/// **新增模式时**加一行；**改语义时**改对应行并同步测试锚定。
 #[rustfmt::skip]
 const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
     // 默认浏览（plan v0.1 D3 A 类，ADR-0012 已接受）。
     (ViewMode::VectorFlat, [
         true,  // Terrain
         true,  // Isoline
-        true,  // GridLines（受 LayerFrame gates，不在 mode 表直接关）
+        true,  // GridLines（受 LayerFrame + 会话开关，mode 表不关）
         true,  // MapFrame
         true,  // Veil
         true,  // Grain
@@ -169,24 +173,24 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true,  // DrillMarkers
         true,  // Atmosphere
     ]),
-    // 真实地形（plan v0.1 D3 B 类）—— 与 VectorFlat 同步。
+    // 真实地形（plan v0.1 D3 B 类）——与 VectorFlat 同，除等值线（仅 VectorFlat）。
     (ViewMode::RealTerrain, [
-        true, true, true, true, true, true, true, true, true, true,
+        true, false, true, true, true, true, true, true, true, true,
         false, true, true, true, true, true, true, true, true, true,
     ]),
-    // 色块地形（plan v0.1 D3 C 类）
+    // 色块地形（plan v0.1 D3 C 类）——同上。
     (ViewMode::Schematic, [
-        true, true, true, true, true, true, true, true, true, true,
+        true, false, true, true, true, true, true, true, true, true,
         false, true, true, true, true, true, true, true, true, true,
     ]),
-    // Google 模式（plan v0.1 D3 C 类）—— 关闭大气（自带观感）、势力、雾霭
+    // Google 模式 —— 自带完整观感：等值线 / 氛围族 / 建筑不画。
     (ViewMode::GoogleMap, [
-        true, true, true, true, false, true, true, true, true, false,
+        true, false, true, true, false, true, true, true, true, false,
         false, true, true, true, true, true, true, true, true, false,
     ]),
-    // 势力图 —— 关闭沙盘式以外的大量要素。
+    // 势力图 —— 等值线不画，其余与真实地形同。
     (ViewMode::Faction, [
-        true, true, true, true, true, true, true, true, true, true,
+        true, false, true, true, true, true, true, true, true, true,
         true, true, true, true, true, true, true, true, true, true,
     ]),
     // 事件图 —— 极简底图。
@@ -413,6 +417,24 @@ mod tests {
         assert!(!r.enabled(PassId::Grain));
         assert!(!r.enabled(PassId::Buildings));
         assert!(!r.enabled(PassId::Faction));
+    }
+
+    /// Isoline 仅 VectorFlat（迁移前 `isoline_overlay` 的原 gate 行为——
+    /// `mode != VectorFlat → despawn`）。其余 6 模式一律关，防"顺手填 true"
+    /// 改变行为（本测试因第一次填错表而加）。
+    #[test]
+    fn isoline_only_draws_in_vector_flat() {
+        let (mut view, layers, world, drill, tex) = fixture();
+        for m in ViewMode::ALL {
+            view.mode = m;
+            let want = matches!(m, ViewMode::VectorFlat);
+            let r = resolve_render_recipe(&view, &layers, &world, &drill, &tex, None);
+            assert_eq!(
+                r.enabled(PassId::Isoline),
+                want,
+                "{m:?} 下 Isoline 应为 {want}"
+            );
+        }
     }
 
     /// Google 模式 = 自带观感：Atmosphere / Faction / Buildings 关。
