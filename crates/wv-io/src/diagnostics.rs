@@ -178,8 +178,188 @@ pub fn derive_hints(world: &wv_core::World) -> Diagnostics {
     // ADR-0022 M3 D4：跨级尺度一致性（V1 提示，不阻止）。
     d.items.extend(detect_cross_level_scale_hints(world));
 
+    // 主题覆盖物：feature 地界内没有对应地形格 / 孤儿地界（V1 提示，不阻止）。
+    d.items.extend(detect_feature_territory_hints(world));
+
     d.dedup_by_fingerprint();
     d
+}
+
+/// 森林的地理事实编号（`Place.feature` 的值）。
+///
+/// wv-io **不依赖 wv-render**（AGENTS §2.1），故这里是字面量；语义编号与
+/// `wv_render::theme::overlays::FEATURE_FOREST` 同源（同一张 TerrainKind 词汇表）。
+/// 本模块只把它用于「文案里怎么称呼这类事实」，判定用的仍是作者声明的编号。
+const FEATURE_FOREST: u8 = 4;
+
+/// 覆盖物地界的**事实一致性**提示（V1：只提示，不阻止保存）。
+///
+/// ## 口径
+///
+/// 1. 对每个 `feature: Some(kind)` 且 `map: Some(m)` 的地点，收集
+///    `place_geometry` 中 `owner == place.id`、`map == m` 的多边形 span；
+/// 2. **该图没有自带栅格**（`world.terrain_of(m)` 为 `None`）→ 跳过：
+///    继承底图的 kind 不属于本图，无法判断，也不该提示（晕/描边仍可见）；
+/// 3. `MapNode.extent` 缺失或非正 → 跳过（无法把地图局部坐标映射到格）；
+/// 4. 环的包围盒映射到候选格范围（`x / extent.width * data.width`、
+///    `y / extent.height * data.height`），逐格取**格心**的局部坐标做
+///    [`wv_core::geometry::point_in_ring`]，统计 `kind == 声明值` 的格；
+/// 5. 一个命中都没有 → [`hint`]（指纹 `feature-no-cells|{place_id}`）；
+/// 6. 任何 `place_geometry` span 的 `owner` 不在 `distances.places` 里 →
+///    [`hint`]（指纹 `feature-orphan-territory|{owner}`）——**不是** `Error`：
+///    地界求值会静默跳过它（`place_territory_at`），校验面板负责让作者看见。
+///
+/// 同一指纹只出现一次（函数内按指纹去重；`derive_hints` 末尾还会再兜一次）。
+///
+/// ## 为什么是 Hint
+///
+/// 作者可能故意圈了一片还没刷笔刷的森林（先摆事实、后画地形，或干脆只用
+/// 远带晕）。工具的职责是让他**看见**近景不会有树，不替他决定（AGENTS §7.5 V1）。
+pub fn detect_feature_territory_hints(world: &wv_core::World) -> Vec<Diagnostic> {
+    use std::collections::BTreeSet;
+
+    let mut out: Vec<Diagnostic> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+
+    // 孤儿地界：owner 不在 places 里。不依赖 feature / 栅格，逐 span 检查。
+    for g in &world.place_geometry {
+        if world.distances.place(&g.owner).is_some() {
+            continue;
+        }
+        let fp = format!("feature-orphan-territory|{}", g.owner);
+        if seen.insert(fp.clone()) {
+            out.push(hint(
+                fp,
+                format!(
+                    "地界引用的地点「{owner}」不存在（geometry/place 的 owner 未登记）：\
+                     该地界不会被渲染。仅提示，不阻止保存。",
+                    owner = g.owner
+                ),
+            ));
+        }
+    }
+
+    for place in &world.distances.places {
+        let Some(kind) = place.feature else {
+            continue;
+        };
+        let Some(map_id) = place.map.as_ref() else {
+            continue;
+        };
+        // 继承底图不在提示范围：只有本图自带栅格时才谈得上「刷没刷笔刷」。
+        let Some(terrain) = world.terrain_of(map_id) else {
+            continue;
+        };
+        let Some(map) = world.maps.iter().find(|m| &m.id == map_id) else {
+            continue;
+        };
+        let Some(extent) = map.extent else {
+            continue;
+        };
+        if extent.width <= 0.0 || extent.height <= 0.0 {
+            continue;
+        }
+        if terrain.width == 0 || terrain.height == 0 {
+            continue;
+        }
+
+        let mut checked_any_ring = false;
+        let mut hit = false;
+        for g in &world.place_geometry {
+            if g.owner != place.id || &g.map != map_id {
+                continue;
+            }
+            let wv_core::map::GeometryData::Polygon(ring) = &g.geometry else {
+                // Points / Ref：v0.1 不构成面，求值侧同样跳过。
+                continue;
+            };
+            if ring.len() < 6 {
+                continue;
+            }
+            checked_any_ring = true;
+            if ring_has_feature_cell(terrain, &extent, ring, kind) {
+                hit = true;
+                break;
+            }
+        }
+        if checked_any_ring && !hit {
+            let what = if kind == FEATURE_FOREST {
+                format!("kind={kind}（森林）")
+            } else {
+                format!("kind={kind}")
+            };
+            out.push(hint(
+                format!("feature-no-cells|{}", place.id),
+                format!(
+                    "地点「{name}」的地界内没有任何 {what} 地形格：远看仍会显示地界与名字，\
+                     但近景不会出现覆盖物符号。仅提示，不阻止保存。",
+                    name = place.name,
+                ),
+            ));
+        }
+    }
+
+    out
+}
+
+/// 环的包围盒内是否存在**格心落在环内且 kind 匹配**的地形格。
+///
+/// 只扫包围盒覆盖的格（含 1 格余量），避免大地图每次诊断全图遍历；
+/// 精确判定仍交给 [`wv_core::geometry::point_in_ring`]。
+fn ring_has_feature_cell(
+    terrain: &wv_core::terrain::TerrainData,
+    extent: &wv_core::map::Extent,
+    ring: &[f32],
+    kind: u8,
+) -> bool {
+    let (tw, th) = (terrain.width as usize, terrain.height as usize);
+    if tw == 0 || th == 0 || extent.width <= 0.0 || extent.height <= 0.0 {
+        return false;
+    }
+
+    // 包围盒（非有限坐标视为退化环，与渲染侧 `ring_bounds` 同口径）。
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for p in ring.chunks_exact(2) {
+        if !p[0].is_finite() || !p[1].is_finite() {
+            return false;
+        }
+        min_x = min_x.min(p[0]);
+        min_y = min_y.min(p[1]);
+        max_x = max_x.max(p[0]);
+        max_y = max_y.max(p[1]);
+    }
+    if !(min_x <= max_x && min_y <= max_y) {
+        return false;
+    }
+
+    // 地图局部包围盒 → 候选格范围（格心口径：格 g 覆盖 [g, g+1) 个格宽）。
+    // 两侧各放宽 1 格：包围盒边界上的格心由 `point_in_ring` 最终裁决。
+    let scale_x = terrain.width as f32 / extent.width;
+    let scale_y = terrain.height as f32 / extent.height;
+    let gx0 = ((min_x * scale_x).floor() as i64 - 1).clamp(0, tw as i64 - 1) as usize;
+    let gx1 = ((max_x * scale_x).ceil() as i64 + 1).clamp(0, tw as i64 - 1) as usize;
+    let gy0 = ((min_y * scale_y).floor() as i64 - 1).clamp(0, th as i64 - 1) as usize;
+    let gy1 = ((max_y * scale_y).ceil() as i64 + 1).clamp(0, th as i64 - 1) as usize;
+
+    for gy in gy0..=gy1 {
+        let cy = (gy as f32 + 0.5) / terrain.height as f32 * extent.height;
+        for gx in gx0..=gx1 {
+            let Some(cell) = terrain.cells.get(gy * tw + gx) else {
+                continue;
+            };
+            if cell.kind != kind {
+                continue;
+            }
+            let cx = (gx as f32 + 0.5) / terrain.width as f32 * extent.width;
+            if wv_core::geometry::point_in_ring(ring, cx, cy) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// 跨级尺度一致性提示（ADR-0022 D4 · 2026-10-16 接受）。
