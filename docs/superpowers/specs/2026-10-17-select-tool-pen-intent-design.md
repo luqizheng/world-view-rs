@@ -212,3 +212,16 @@ Drawing 守卫 + 选择瓷砖（9→8）+ 意图菜单骨架（`ui::intent_menu`
 门禁：workspace 三条 + app 两条全绿，`smoke-gui.sh` PASS（5s 存活无 panic）。
 架构决策随 [ADR-0025](../../adr/ADR-0025-selection-first-tooling.md) 留痕。
 M2（生成城市 + 自动钻入）待开工。
+
+---
+
+## M2 完成追记（2026-10-17）
+
+验收 4 全项落地（计划 `docs/superpowers/plans/2026-10-17-select-tool-m2-city.md`）：
+意图菜单「生成城市…」→ `ui::city_intent` 对话框（名字 / ID 校验 / 底图 / **面积预填
+= 选区包围盒面积可改**，下限 100 wu²）→ 确认建 **16:9 方正画布**
+（`extent.origin = 质心居中`）→ 钻入图标**锚点显式落质心**（父图 extent 归一化，
+无 extent 回退 `drill::FALLBACK_EXTENT` 4096²）→ **自动钻入**新城市图（失败 notice
+不静默）。对话框自持预填数据——确认前选区被 Esc 清掉不影响提交。
+顺手清偿 M1 延后项：双击容差 px 化（`DOUBLE_CLICK_PX × view.scale`）。
+门禁：workspace 813/0 + app 238/0 + clippy/fmt + smoke PASS。M3（地形四意图）待开工。
