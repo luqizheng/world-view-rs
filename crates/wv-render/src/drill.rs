@@ -60,7 +60,7 @@ pub const DRILL_TRANSITION_SECS: f32 = 0.380;
 const HIT_CELLS: f32 = 3.0;
 
 /// 子图没有 `extent` 时的兜底尺寸（与示例工程的 4096×4096 一致）。
-const FALLBACK_EXTENT: Extent = Extent::sized(4096.0, 4096.0);
+pub const FALLBACK_EXTENT: Extent = Extent::sized(4096.0, 4096.0);
 
 /// 双击判定的时间窗（秒）与位移容差（世界单位）。
 const DOUBLE_CLICK_SECS: f64 = 0.40;

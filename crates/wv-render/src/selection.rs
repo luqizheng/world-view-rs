@@ -29,9 +29,12 @@ use crate::state::{
 pub const PICK_TOLERANCE_PX: f32 = 8.0;
 /// 首锚闭合吸附半径（屏幕像素）。
 pub const CLOSE_SNAP_PX: f32 = 10.0;
-/// 双击判定窗口（秒）与位置容差（wu，≈1.5 格）——与 `continent_sketch` 同口径。
+/// 双击判定窗口（秒）；位移容差见 [`DOUBLE_CLICK_PX`]（按屏幕像素计）。
 pub const DOUBLE_CLICK_SECS: f64 = 0.4;
-pub const DOUBLE_CLICK_WU: f32 = 12.0;
+/// 双击位移容差（屏幕像素）——调用方按 `view.scale` 换算成 wu 再传入
+/// [`handle_click`]。原 12 wu 世界定长在深缩放下小于像素抖动（M1 终审 minor，
+/// M2 清偿）。
+pub const DOUBLE_CLICK_PX: f32 = 12.0;
 
 /// 命中最近锚点（容差内取距离最小者）。
 pub fn pick_anchor(pts: &[(f32, f32)], p: (f32, f32), tol: f32) -> Option<usize> {
@@ -78,10 +81,17 @@ pub fn hit_tests_claim_click(sel: &SelectionState, local: (f32, f32), tol: f32) 
 /// - Closed 态：锚点命中 → 单击选中（记 `last_click` 供双击判定）、双击删除；
 ///   边命中 → 插入并选中新锚点；空白 → 取消整个选区。
 /// - Drawing 态：≥3 点且点首锚吸附内 → 闭合；双击 → 收笔；否则落点。
-pub fn handle_click(sel: &mut SelectionState, p: (f32, f32), now: f64, tol: f32, snap: f32) {
+pub fn handle_click(
+    sel: &mut SelectionState,
+    p: (f32, f32),
+    now: f64,
+    tol: f32,
+    snap: f32,
+    dbl_tol: f32,
+) {
     let is_double = match sel.last_click {
         Some(((lx, ly), t)) => {
-            (p.0 - lx).hypot(p.1 - ly) <= DOUBLE_CLICK_WU && now - t <= DOUBLE_CLICK_SECS
+            (p.0 - lx).hypot(p.1 - ly) <= dbl_tol && now - t <= DOUBLE_CLICK_SECS
         }
         None => false,
     };
@@ -220,6 +230,7 @@ pub fn commit_selection_click(
         time.elapsed_secs_f64(),
         tol,
         snap,
+        DOUBLE_CLICK_PX * view.scale,
     );
 }
 
@@ -369,7 +380,7 @@ mod tests {
         s.add_point((0.0, 0.0));
         s.add_point((10.0, 0.0));
         s.add_point((10.0, 10.0));
-        handle_click(&mut s, (0.0, 0.0), 10.0, 0.5, 1.0);
+        handle_click(&mut s, (0.0, 0.0), 10.0, 0.5, 1.0, 12.0);
         assert!(s.is_closed(), "点首锚应闭合");
         assert!(!s.is_drawing(), "闭合后草稿清空");
     }
@@ -382,8 +393,8 @@ mod tests {
         s.add_point((10.0, 0.0));
         s.add_point((10.0, 10.0));
         // 在远离首锚的 (10,10) 附近快速二连击：第一击已入草稿并记 last_click。
-        handle_click(&mut s, (10.0, 10.0), 10.0, 0.5, 1.0);
-        handle_click(&mut s, (10.0, 10.0), 10.2, 0.5, 1.0);
+        handle_click(&mut s, (10.0, 10.0), 10.0, 0.5, 1.0, 12.0);
+        handle_click(&mut s, (10.0, 10.0), 10.2, 0.5, 1.0, 12.0);
         assert!(s.is_closed(), "双击应收笔闭合");
     }
 
@@ -391,9 +402,9 @@ mod tests {
     #[test]
     fn clicking_anchor_selects_and_double_click_deletes_it() {
         let mut s = closed_square();
-        handle_click(&mut s, (10.0, 0.0), 10.0, 0.5, 1.0);
+        handle_click(&mut s, (10.0, 0.0), 10.0, 0.5, 1.0, 12.0);
         assert_eq!(s.selected_anchor, Some(1), "单击应选中 1 号锚");
-        handle_click(&mut s, (10.0, 0.0), 10.2, 0.5, 1.0);
+        handle_click(&mut s, (10.0, 0.0), 10.2, 0.5, 1.0, 12.0);
         assert_eq!(
             s.closed.as_ref().map(Vec::len),
             Some(3),
@@ -408,11 +419,11 @@ mod tests {
     #[test]
     fn triple_click_after_anchor_delete_does_not_delete_twice() {
         let mut s = closed_square();
-        handle_click(&mut s, (10.0, 0.0), 10.0, 0.5, 1.0); // 单击选中 1 号锚
+        handle_click(&mut s, (10.0, 0.0), 10.0, 0.5, 1.0, 12.0); // 单击选中 1 号锚
         handle_click(&mut s, (10.0, 0.0), 10.15, 0.5, 1.0); // 双击 → 删 1 号（剩 3 点）
                                                             // 第三击落在原 2 号锚（删除后前移为 1）：应只是选中，不得再删。
                                                             // （时刻取 10.3：距首击 0.3 < 0.4s 窗口；避开 10.4-10.0 的 f64 边界。）
-        handle_click(&mut s, (10.0, 10.0), 10.3, 0.5, 1.0);
+        handle_click(&mut s, (10.0, 10.0), 10.3, 0.5, 1.0, 12.0);
         assert_eq!(
             s.closed.as_ref().map(Vec::len),
             Some(3),
@@ -425,7 +436,7 @@ mod tests {
     #[test]
     fn clicking_edge_inserts_and_selects_anchor() {
         let mut s = closed_square();
-        handle_click(&mut s, (5.0, 10.0), 10.0, 0.5, 1.0);
+        handle_click(&mut s, (5.0, 10.0), 10.0, 0.5, 1.0, 12.0);
         assert_eq!(s.closed.as_ref().map(Vec::len), Some(5), "插入后 5 点");
         assert_eq!(s.selected_anchor, Some(3), "新锚点应被选中");
         assert_eq!(s.last_click, None, "插入不走双击判定");
@@ -435,7 +446,7 @@ mod tests {
     #[test]
     fn clicking_empty_cancels_closed_selection() {
         let mut s = closed_square();
-        handle_click(&mut s, (50.0, 50.0), 10.0, 0.5, 1.0);
+        handle_click(&mut s, (50.0, 50.0), 10.0, 0.5, 1.0, 12.0);
         assert!(!s.is_closed(), "点空白应取消选区");
     }
 
