@@ -225,3 +225,20 @@ M2（生成城市 + 自动钻入）待开工。
 不静默）。对话框自持预填数据——确认前选区被 Esc 清掉不影响提交。
 顺手清偿 M1 延后项：双击容差 px 化（`DOUBLE_CLICK_PX × view.scale`）。
 门禁：workspace 813/0 + app 238/0 + clippy/fmt + smoke PASS。M3（地形四意图）待开工。
+
+---
+
+## M3 完成追记（2026-10-17）
+
+验收 5/6 全项落地（计划 `docs/superpowers/plans/2026-10-17-select-tool-m3-terrain.md`）：
+`Intent` 枚举新增四个区域变体（`MountainMassif / HillsRegion / PlainsRegion /
+LakeRegion`），`apply_intent` 内用「草稿克隆 → 内层效果 → 噪声扰动边界的栅格化
+掩膜回拷」组合——**掩膜外逐位不变由构造保证**（逐测试断言）。高山 = 选区主轴
+派生脊线（收缩 20%）跑既有 ridged 噪声（半径 = 短轴之半，跨海出岛链）；丘陵 /
+平原只在陆上（纯海选区 0 改动 → notice）；平原**主动压平**到 60±15 m 出草原；
+湖泊质心须陆上，碗剖面中心 ≈ -50 m / 边缘 ≈ -6 m。菜单四按钮**一键应用**
+（无弹窗），生效即选区清空；无操作不进撤销栈。
+**计划修正**：未新建 `RegionTerrainCommand` 命令族——`IntentTerrainCommand`
+（事务 / seed 随命令 / 撤销重放）零改动继承，wv-edit 仅补 label 四臂 + 2 复用
+验证测试。门禁：workspace 821/0 + app 253/0 + clippy/fmt + smoke PASS。
+M4（生成森林入口）骑覆盖物 v1，随其实现排期。
