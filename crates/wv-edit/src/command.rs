@@ -15,14 +15,15 @@ use wv_terrain::{TerrainCell, TerrainGrid};
 /// `wv-core::terrain::TerrainData` → `wv-terrain::TerrainGrid` 的桥。
 ///
 /// `wv-core` 不认识 `TerrainGrid`（不依赖 wv-terrain），因此两层的接缝在这里。
-/// `wv-io` 有对称的一对函数用于落盘，二者共享同一布局约定（行优先、双通道）。
+/// `wv-io` 有对称的一对函数用于落盘，二者共享同一布局约定（行优先、三通道）。
 fn to_grid(data: &TerrainData) -> EditResult<TerrainGrid> {
     let cells: Vec<TerrainCell> = data
         .cells
         .iter()
         .map(|c| TerrainCell {
             height: c.height,
-            kind: c.kind,
+            surface: c.surface,
+            biome: c.biome,
         })
         .collect();
     TerrainGrid::from_cells(data.width, data.height, cells)
@@ -37,7 +38,8 @@ fn from_grid(grid: TerrainGrid) -> TerrainData {
         .into_iter()
         .map(|c| TerrainCellData {
             height: c.height,
-            kind: c.kind,
+            surface: c.surface,
+            biome: c.biome,
         })
         .collect();
     TerrainData {
@@ -2624,20 +2626,28 @@ mod tests {
     }
 
     #[test]
-    fn paint_command_apply_then_revert_restores_grid() {
+    fn paint_command_writes_surface_and_biome_then_revert_restores() {
         let mut world = world_with_terrain(32);
         let before_snapshot = world.terrain_of(&test_map()).cloned().unwrap();
 
         let mut stroke = Stroke::new();
-        stroke.push(wv_terrain::edit::Brush::paint((10.5, 10.5), 5.0, 3));
+        stroke.push(wv_terrain::edit::Brush::paint(
+            (10.5, 10.5),
+            5.0,
+            wv_terrain::edit::PaintTarget {
+                surface: wv_terrain::SURFACE_LAND,
+                biome: wv_terrain::BIOME_GRASSLAND,
+            },
+        ));
         let cmd = PaintTerrainCommand::new(test_map(), stroke, 1.0);
 
         let dirty = cmd.apply(&mut world).unwrap();
         assert!(!dirty.is_empty(), "应报告脏文件");
         let after = world.terrain_of(&test_map()).cloned().unwrap();
         assert_ne!(before_snapshot, after, "apply 应改变地形");
-        // 中心格类型被写为 3
-        assert_eq!(after.cells[10 * 32 + 10].kind, 3);
+        // 中心格地表/群系被写为目标值
+        assert_eq!(after.cells[10 * 32 + 10].biome, wv_terrain::BIOME_GRASSLAND);
+        assert_eq!(after.cells[10 * 32 + 10].surface, wv_terrain::SURFACE_LAND);
 
         cmd.revert(&mut world).unwrap();
         assert_eq!(
@@ -2645,6 +2655,85 @@ mod tests {
             before_snapshot,
             "revert 应完全还原"
         );
+    }
+
+    /// 域对齐不回退（设计稿 D19/Review Focus 3）：画水把高度推过海平面下方。
+    #[test]
+    fn water_target_pushes_height_below_sea_level() {
+        let mut world = world_with_terrain(32);
+        // 先铺 +200 m 陆地。
+        let land: Vec<TerrainCellData> = vec![
+            TerrainCellData {
+                height: 200,
+                surface: 1,
+                biome: 0,
+            };
+            32 * 32
+        ];
+        world.set_terrain(
+            test_map(),
+            TerrainData {
+                width: 32,
+                height: 32,
+                cells: land,
+            },
+        );
+
+        let mut stroke = Stroke::new();
+        stroke.push(wv_terrain::edit::Brush::paint(
+            (10.5, 10.5),
+            5.0,
+            wv_terrain::edit::PaintTarget {
+                surface: wv_terrain::SURFACE_WATER,
+                biome: wv_terrain::BIOME_NONE,
+            },
+        ));
+        PaintTerrainCommand::new(test_map(), stroke, 1.0)
+            .apply(&mut world)
+            .unwrap();
+        let after = world.terrain_of(&test_map()).cloned().unwrap();
+        let c = &after.cells[10 * 32 + 10];
+        assert_eq!(c.surface, wv_terrain::SURFACE_WATER);
+        assert!(c.height < 0, "画水应推到海平面下，得 {}", c.height);
+    }
+
+    /// 域对齐对称侧：画陆把海底格抬到海平面上方。
+    #[test]
+    fn land_target_pushes_height_above_sea_level() {
+        let mut world = world_with_terrain(32);
+        let sea: Vec<TerrainCellData> = vec![
+            TerrainCellData {
+                height: -200,
+                surface: 0,
+                biome: 0,
+            };
+            32 * 32
+        ];
+        world.set_terrain(
+            test_map(),
+            TerrainData {
+                width: 32,
+                height: 32,
+                cells: sea,
+            },
+        );
+
+        let mut stroke = Stroke::new();
+        stroke.push(wv_terrain::edit::Brush::paint(
+            (10.5, 10.5),
+            5.0,
+            wv_terrain::edit::PaintTarget {
+                surface: wv_terrain::SURFACE_LAND,
+                biome: wv_terrain::BIOME_GRASSLAND,
+            },
+        ));
+        PaintTerrainCommand::new(test_map(), stroke, 1.0)
+            .apply(&mut world)
+            .unwrap();
+        let after = world.terrain_of(&test_map()).cloned().unwrap();
+        let c = &after.cells[10 * 32 + 10];
+        assert_eq!(c.surface, wv_terrain::SURFACE_LAND);
+        assert!(c.height >= 0, "画陆应抬到海平面上，得 {}", c.height);
     }
 
     #[test]
@@ -2656,7 +2745,14 @@ mod tests {
         let other_before = world.terrain_of(&other).cloned().unwrap();
 
         let mut stroke = Stroke::new();
-        stroke.push(wv_terrain::edit::Brush::paint((10.5, 10.5), 5.0, 3));
+        stroke.push(wv_terrain::edit::Brush::paint(
+            (10.5, 10.5),
+            5.0,
+            wv_terrain::edit::PaintTarget {
+                surface: wv_terrain::SURFACE_LAND,
+                biome: wv_terrain::BIOME_GRASSLAND,
+            },
+        ));
         let cmd = PaintTerrainCommand::new(test_map(), stroke, 1.0);
         cmd.apply(&mut world).unwrap();
 
@@ -2672,7 +2768,14 @@ mod tests {
     fn paint_command_without_terrain_reports_mismatch() {
         let mut world = World::default();
         let mut stroke = Stroke::new();
-        stroke.push(wv_terrain::edit::Brush::paint((0.0, 0.0), 1.0, 1));
+        stroke.push(wv_terrain::edit::Brush::paint(
+            (0.0, 0.0),
+            1.0,
+            wv_terrain::edit::PaintTarget {
+                surface: wv_terrain::SURFACE_WATER,
+                biome: wv_terrain::BIOME_NONE,
+            },
+        ));
         let cmd = PaintTerrainCommand::new(Id::new_unchecked("world_main"), stroke, 1.0);
         assert!(matches!(
             cmd.apply(&mut world),
@@ -3426,11 +3529,18 @@ mod tests {
         }
     }
 
-    fn flat_terrain(kind: u8, height: i16) -> TerrainData {
+    fn flat_terrain(biome: u8, height: i16) -> TerrainData {
         TerrainData {
             width: 4,
             height: 4,
-            cells: vec![TerrainCellData { height, kind }; 16],
+            cells: vec![
+                TerrainCellData {
+                    height,
+                    surface: if biome == 0 { 0 } else { 1 },
+                    biome,
+                };
+                16
+            ],
         }
     }
 
@@ -3460,7 +3570,7 @@ mod tests {
             .children
             .contains(&Id::new_unchecked("map_a")));
         assert_eq!(
-            w.terrain_of(&Id::new_unchecked("map_a")).unwrap().cells[0].kind,
+            w.terrain_of(&Id::new_unchecked("map_a")).unwrap().cells[0].surface,
             0
         );
 
