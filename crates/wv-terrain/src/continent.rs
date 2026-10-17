@@ -11,6 +11,94 @@
 //! - 确定性（D6）：同 `(envelopes, params, seed)` → 逐位一致的网格。
 
 // ---------------------------------------------------------------------------
+// 八参数（大陆配方属性面板 v1）
+// ---------------------------------------------------------------------------
+
+/// 起伏强度档：面板「起伏强度」低 / 中 / 高 → 中心最高点量级。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReliefLevel {
+    /// 丘陵——中心约 600 m。
+    Hills,
+    /// 山地——中心约 2000 m（裁决缺省）。
+    Mountains,
+    /// 高山——中心约 4000 m。
+    HighMountains,
+}
+
+impl ReliefLevel {
+    /// 中心最高点高度（米）。值即面板档位的量级承诺，实机校准只调这条。
+    pub fn meters(self) -> i16 {
+        match self {
+            Self::Hills => 600,
+            Self::Mountains => 2000,
+            Self::HighMountains => 4000,
+        }
+    }
+}
+
+/// 离岸小岛密度：海岸外侧低频噪声超过阈值才撒岛。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IslandDensity {
+    /// 不撒岛（裁决缺省）。
+    Off,
+    /// 稀疏。
+    Low,
+    /// 适中。
+    Medium,
+    /// 密集。
+    High,
+}
+
+impl IslandDensity {
+    /// 撒岛噪声阈值。`fbm01 > threshold` 才成岛——阈值越高岛越少。
+    pub fn threshold(self) -> f64 {
+        match self {
+            Self::Off => 0.0,
+            Self::Low => 0.60,
+            Self::Medium => 0.70,
+            Self::High => 0.78,
+        }
+    }
+}
+
+/// 大陆配方八参数（面板 v1 参数表；裁决缺省见 [`Default`]）。
+///
+/// 参数归属是**全局单一面板**（用户裁定「1 同意」）：每个意图包络不单独带
+/// 参数，同一批 envelope 共用一个 `ContinentParams`。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ContinentParams {
+    /// 海岸蜿蜒度 0–100%（fBm 对距离场的扰动幅度）。0 = 贴多边形边。
+    pub coast_wiggle: f32,
+    /// 海岸细节 = fBm octaves：低 2 / 中 4 / 高 6。
+    pub coast_octaves: u32,
+    /// 起伏强度档。
+    pub relief: ReliefLevel,
+    /// 森林覆盖 0–100%：内部森林子配方撒布比例。
+    pub forest_cover: f32,
+    /// 荒漠覆盖 0–100%：内部沙漠子配方撒布比例。
+    pub desert_cover: f32,
+    /// 大陆架宽度（格）：岸外浅水带厚度。
+    pub shelf_cells: u32,
+    /// 离岸小岛档。
+    pub islands: IslandDensity,
+}
+
+impl Default for ContinentParams {
+    /// 裁决缺省（plan v0.1 §8 参数表）。
+    fn default() -> Self {
+        Self {
+            coast_wiggle: 0.40,
+            coast_octaves: 4,
+            relief: ReliefLevel::Mountains,
+            forest_cover: 0.30,
+            desert_cover: 0.15,
+            shelf_cells: 8,
+            islands: IslandDensity::Off,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 多边形几何原语
 // ---------------------------------------------------------------------------
 
@@ -132,6 +220,18 @@ mod tests {
         assert!((d - 5.0).abs() < 1e-3, "中心到边 5.0，got {d}");
         let d_out = signed_distance((13.0, 5.0), &sq);
         assert!((d_out + 3.0).abs() < 1e-3, "外 3 单位 = -3.0，got {d_out}");
+    }
+
+    #[test]
+    fn default_params_match_ruling_values() {
+        let p = ContinentParams::default();
+        assert!((p.coast_wiggle - 0.40).abs() < 1e-6, "coast_wiggle 得 {}", p.coast_wiggle);
+        assert_eq!(p.coast_octaves, 4, "coast_octaves 得 {}", p.coast_octaves);
+        assert_eq!(p.relief, ReliefLevel::Mountains, "relief 得 {:?}", p.relief);
+        assert!((p.forest_cover - 0.30).abs() < 1e-6, "forest_cover 得 {}", p.forest_cover);
+        assert!((p.desert_cover - 0.15).abs() < 1e-6, "desert_cover 得 {}", p.desert_cover);
+        assert_eq!(p.shelf_cells, 8, "shelf_cells 得 {}", p.shelf_cells);
+        assert_eq!(p.islands, IslandDensity::Off, "islands 得 {:?}", p.islands);
     }
 
     #[test]
