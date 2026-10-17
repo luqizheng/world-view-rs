@@ -34,6 +34,7 @@
 //! 每格存 `(height: i16, terrain: u8)` 双通道，对应 `terrain.bin` 的
 //! 「I16 高度 + U8 类型」。合并在同一个网格里，因为二者总是一起被读写。
 
+pub mod continent;
 pub mod edit;
 pub mod generate;
 pub mod intent;
