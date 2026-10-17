@@ -25,8 +25,11 @@
 
 #![cfg(feature = "app")]
 
+use bevy::asset::RenderAssetUsages;
 use bevy::math::primitives::{Annulus, Circle};
 use bevy::prelude::*;
+use bevy::render::mesh::Indices;
+use bevy::render::render_resource::PrimitiveTopology;
 
 use crate::layer_frame::LayerFrame;
 use crate::state::{lod_fade, lod_tier, GridConfig, ViewState, LOD_NATION_SCALE};
@@ -34,7 +37,7 @@ use crate::theme::colors_google::{
     GOOGLE_PLACE_DOT, GOOGLE_POI_RING, GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL,
 };
 use crate::theme::palette::{self, MapPalette, PaletteColors};
-use crate::world_projection::{PlaceDot, ProjectionFrame};
+use crate::world_projection::{segments_fingerprint, PlaceDot, ProjectionFrame};
 
 /// Google 式道路外缘宽度（屏幕像素）。
 const GOOGLE_ROAD_CASING_PX: f32 = 6.0;
@@ -84,34 +87,58 @@ const STREET_PREVIEW_Z: f32 = 0.12;
 const POI_OUTER_Z: f32 = 0.21;
 const POI_INNER_Z: f32 = 0.22;
 
-/// 一条道路 stroke 的几何规格；只有字段变化时才重建 Mesh。
+/// 合批 stroke mesh 的重建判据（A2）：内容指纹 + 世界线宽 + Z，任一变化才换 mesh。
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct RoadMeshSpec {
-    center: Vec2,
-    length: f32,
-    angle: f32,
+struct StrokeBatchKey {
+    fingerprint: u64,
     world_thickness: f32,
+    z: f32,
 }
 
-impl RoadMeshSpec {
-    fn from_segment(a: Vec2, b: Vec2, view_scale: f32, stroke_px: f32) -> Self {
-        let delta = b - a;
+/// 把整组段合成**一个** Mesh：每段一个世界空间矩形（4 顶点 / 6 索引）。
+///
+/// A2（2026-10-18）：旧实现每段一个实体 + 一个 `Rectangle` mesh，规格含
+/// center 与随缩放的线宽——guangdong 若有 87k 段，相机平移/缩放的每一帧
+/// 都会全量 add+remove 87k 个 mesh 资产。合批后平移（纯相机运动，段坐标
+/// 不变）零重建；缩放 / 编辑整组换一个 mesh。z 由实体 Transform 承担，
+/// 顶点保持在 z=0 平面。
+///
+/// 线宽口径沿旧实现：屏幕像素 → 世界单位 `world = px * view_scale`
+/// （`view.scale` 是世界单位/像素，乘而不是除——历史 bug 见 git blame）。
+fn build_stroke_batch_mesh(segments: &[(Vec2, Vec2)], world_thickness: f32) -> Mesh {
+    let n = segments.len();
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n * 4);
+    let mut indices: Vec<u32> = Vec::with_capacity(n * 6);
+    let half = world_thickness * 0.5;
+    for (a, b) in segments {
+        let delta = *b - *a;
         let length = delta.length().max(f32::EPSILON);
-        let center = (a + b) * 0.5;
-        let angle = delta.y.atan2(delta.x);
-        // 屏幕像素 → 世界单位：`world = px * view_scale`。`view.scale` 的单位是
-        // **世界单位/像素**（见 `ViewState::scale` 的文档与 `terrain_chunks.rs` 的视口换算），
-        // 所以恒定的屏幕线宽必须**乘** scale。历史上这里写成 `px / view_scale`，
-        // 屏幕宽度实际变成 `stroke_px / scale²`：远观时细到几乎消失，深缩时胀成
-        // 占屏 40% 的巨带。
-        let world_thickness = (stroke_px * view_scale).max(f32::EPSILON);
-        Self {
-            center,
-            length,
-            angle,
-            world_thickness,
+        let dir = delta / length;
+        let side = Vec2::new(-dir.y, dir.x) * half;
+        let center = (*a + *b) * 0.5;
+        let ext = dir * (length * 0.5);
+        let base = positions.len() as u32;
+        for offset in [-ext - side, ext - side, ext + side, -ext + side] {
+            positions.push((center + offset).extend(0.0).to_array());
         }
+        indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     }
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
+}
+
+/// 屏幕像素 → 世界线宽：`world = px * view_scale`。`view.scale` 的单位是
+/// **世界单位/像素**（见 `ViewState::scale` 的文档与 `terrain_chunks.rs` 的
+/// 视口换算），所以恒定的屏幕线宽必须**乘** scale。历史上曾写成
+/// `px / view_scale`，屏幕宽度实际变成 `stroke_px / scale²`：远观时细到
+/// 几乎消失，深缩时胀成占屏 40% 的巨带——这个纯函数就是防它复发的单点。
+fn stroke_world_thickness(stroke_px: f32, view_scale: f32) -> f32 {
+    (stroke_px * view_scale).max(f32::EPSILON)
 }
 
 /// POI 外环规格。
@@ -177,11 +204,34 @@ impl MeshPool {
     }
 }
 
-/// 道路 stroke 池。
+/// 道路 stroke 合批池：一个 pass 一个合并 mesh + 一个实体（A2，2026-10-18）。
+///
+/// 旧实现每段一个实体 + 一个 `Rectangle` mesh，规格含 center 与随缩放的
+/// 线宽——guangdong 若有 87k 段，相机平移/缩放的每一帧都全量 add+remove
+/// 资产。现在 [`StrokeBatchKey`]（内容指纹 / 线宽 / Z）任一变化才整组换
+/// 一个 mesh；平移（纯相机运动，段坐标不变）零重建。
 #[derive(Default)]
 struct RoadLayerPool {
-    mesh: MeshPool,
-    specs: Vec<RoadMeshSpec>,
+    batch: Option<StrokeBatch>,
+}
+
+/// 一个合批 stroke 的实体与 Mesh 句柄。
+struct StrokeBatch {
+    entity: Entity,
+    mesh: Handle<Mesh>,
+    key: StrokeBatchKey,
+}
+
+impl RoadLayerPool {
+    /// 整组下线（图层不可见时）。实体与 Mesh 资产一起清，下次可见重新合批。
+    fn despawn(&mut self, commands: &mut Commands) {
+        if let Some(batch) = self.batch.take() {
+            commands.entity(batch.entity).despawn();
+            commands.queue(move |world: &mut World| {
+                world.resource_mut::<Assets<Mesh>>().remove(&batch.mesh);
+            });
+        }
+    }
 }
 
 /// POI 外环池。
@@ -275,18 +325,13 @@ pub fn sync_vector_layers(
     let place_z = layers.place.z_offset;
 
     if !layers.road.visible {
-        layer.road_casings.mesh.despawn(&mut commands);
-        layer.roads.mesh.despawn(&mut commands);
-        layer.road_casings.specs.clear();
-        layer.roads.specs.clear();
-        layer.street_major.mesh.despawn(&mut commands);
-        layer.street_minor.mesh.despawn(&mut commands);
-        layer.street_major_casing.mesh.despawn(&mut commands);
-        layer.street_minor_casing.mesh.despawn(&mut commands);
-        layer.street_major.specs.clear();
-        layer.street_minor.specs.clear();
-        layer.street_major_casing.specs.clear();
-        layer.street_minor_casing.specs.clear();
+        layer.road_casings.despawn(&mut commands);
+        layer.roads.despawn(&mut commands);
+        layer.street_major.despawn(&mut commands);
+        layer.street_minor.despawn(&mut commands);
+        layer.street_major_casing.despawn(&mut commands);
+        layer.street_minor_casing.despawn(&mut commands);
+        layer.street_preview.despawn(&mut commands);
     } else {
         let (casing, fill) = layer
             .road_materials
@@ -311,6 +356,7 @@ pub fn sync_vector_layers(
             &mut commands,
             &mut meshes,
             &frame.road_segments,
+            frame.road_fingerprint,
             view.scale,
             casing.clone(),
             GOOGLE_ROAD_CASING_PX,
@@ -322,6 +368,7 @@ pub fn sync_vector_layers(
             &mut commands,
             &mut meshes,
             &frame.road_segments,
+            frame.road_fingerprint,
             view.scale,
             fill.clone(),
             GOOGLE_ROAD_FILL_PX,
@@ -339,10 +386,12 @@ pub fn sync_vector_layers(
                 (true, Some(a), Some(b)) => vec![(a, b)],
                 _ => Vec::new(),
             };
+        let preview_fp = segments_fingerprint(&preview);
         sync_road_strokes(
             &mut commands,
             &mut meshes,
             &preview,
+            preview_fp,
             view.scale,
             fill.clone(),
             STREET_PREVIEW_PX,
@@ -602,10 +651,14 @@ fn sync_street_layers(
     }
     // casing 先画（Z 更低），fill 后画：两层的宽度差就是可见路缘。
     // 组内次序是编译期约束；整组再叠加 Road 图层的 z_offset（ADR-0013）。
+    // 内容指纹各算一次，casing / fill 两个 pass 共用。
+    let major_fp = segments_fingerprint(&major);
+    let minor_fp = segments_fingerprint(&minor);
     sync_road_strokes(
         commands,
         meshes,
         &major,
+        major_fp,
         view_scale,
         major_casing,
         STREET_MAJOR_PX + STREET_CASING_EXTRA_PX,
@@ -617,6 +670,7 @@ fn sync_street_layers(
         commands,
         meshes,
         &major,
+        major_fp,
         view_scale,
         major_fill,
         STREET_MAJOR_PX,
@@ -628,6 +682,7 @@ fn sync_street_layers(
         commands,
         meshes,
         &minor,
+        minor_fp,
         view_scale,
         minor_casing,
         STREET_MINOR_PX + STREET_CASING_EXTRA_PX,
@@ -639,6 +694,7 @@ fn sync_street_layers(
         commands,
         meshes,
         &minor,
+        minor_fp,
         view_scale,
         minor_fill,
         STREET_MINOR_PX,
@@ -648,12 +704,18 @@ fn sync_street_layers(
     );
 }
 
-/// 同步一层道路 stroke。规格不变时只更新 Transform，不新增 Mesh 资产。
+/// 同步一组道路 stroke 的**合批** mesh：内容指纹 / 线宽 / Z 任一变化才换
+/// mesh，材质变化只换绑 `MeshMaterial2d`（A2，2026-10-18）。
+///
+/// `fingerprint` 由调用方给定（路段列从 `ProjectionFrame.road_fingerprint`
+/// 现成拿来；街道 / 预览段列就地 [`segments_fingerprint`]）——同一组段在
+/// roads 与 casings 两个 pass 间不重复哈希。
 #[allow(clippy::too_many_arguments)]
 fn sync_road_strokes(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     segments: &[(Vec2, Vec2)],
+    fingerprint: u64,
     view_scale: f32,
     material: Handle<ColorMaterial>,
     stroke_px: f32,
@@ -661,57 +723,52 @@ fn sync_road_strokes(
     material_changed: bool,
     pool: &mut RoadLayerPool,
 ) {
-    if pool.mesh.entities.len() > segments.len() {
-        let keep = segments.len();
-        let removed_entities = pool.mesh.entities.split_off(keep);
-        let removed_meshes = pool.mesh.meshes.split_off(keep);
-        pool.specs.truncate(keep);
-        for (entity, handle) in removed_entities.into_iter().zip(removed_meshes) {
-            commands.entity(entity).despawn();
-            commands.queue(move |world: &mut World| {
-                world.resource_mut::<Assets<Mesh>>().remove(&handle);
-            });
-        }
-    }
-
-    for (i, (a, b)) in segments.iter().enumerate() {
-        let spec = RoadMeshSpec::from_segment(*a, *b, view_scale, stroke_px);
-        let transform = Transform::from_translation(spec.center.extend(z))
-            .with_rotation(Quat::from_rotation_z(spec.angle));
-
-        if i == pool.mesh.entities.len() {
-            let mesh = meshes.add(Rectangle::new(spec.length, spec.world_thickness));
+    let key = StrokeBatchKey {
+        fingerprint,
+        world_thickness: stroke_world_thickness(stroke_px, view_scale),
+        z,
+    };
+    match pool.batch.take() {
+        None => {
+            if segments.is_empty() {
+                return;
+            }
+            let mesh = meshes.add(build_stroke_batch_mesh(segments, key.world_thickness));
             let entity = commands
                 .spawn((
                     Mesh2d(mesh.clone()),
-                    MeshMaterial2d(material.clone()),
-                    transform,
+                    MeshMaterial2d(material),
+                    Transform::from_xyz(0.0, 0.0, key.z),
                 ))
                 .id();
-            pool.mesh.entities.push(entity);
-            pool.mesh.meshes.push(mesh);
-            pool.specs.push(spec);
-            continue;
+            pool.batch = Some(StrokeBatch { entity, mesh, key });
         }
-
-        let entity = pool.mesh.entities[i];
-        let spec_changed = pool.specs.get(i) != Some(&spec);
-        if spec_changed {
-            let next = meshes.add(Rectangle::new(spec.length, spec.world_thickness));
-            let old = pool.mesh.meshes[i].clone();
-            pool.mesh.meshes[i] = next.clone();
-            commands.entity(entity).insert(Mesh2d(next));
-            commands.queue(move |world: &mut World| {
-                world.resource_mut::<Assets<Mesh>>().remove(&old);
-            });
-            pool.specs[i] = spec;
+        Some(mut batch) => {
+            if segments.is_empty() {
+                commands.entity(batch.entity).despawn();
+                commands.queue(move |world: &mut World| {
+                    world.resource_mut::<Assets<Mesh>>().remove(&batch.mesh);
+                });
+                return;
+            }
+            if batch.key != key {
+                let next = meshes.add(build_stroke_batch_mesh(segments, key.world_thickness));
+                let old = std::mem::replace(&mut batch.mesh, next.clone());
+                commands
+                    .entity(batch.entity)
+                    .insert((Mesh2d(next), Transform::from_xyz(0.0, 0.0, key.z)));
+                commands.queue(move |world: &mut World| {
+                    world.resource_mut::<Assets<Mesh>>().remove(&old);
+                });
+                batch.key = key;
+            }
+            if material_changed {
+                commands
+                    .entity(batch.entity)
+                    .insert(MeshMaterial2d(material));
+            }
+            pool.batch = Some(batch);
         }
-        if material_changed {
-            commands
-                .entity(entity)
-                .insert(MeshMaterial2d(material.clone()));
-        }
-        commands.entity(entity).insert(transform);
     }
 }
 
@@ -913,19 +970,18 @@ fn update_poi_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::render::mesh::VertexAttributeValues;
 
     /// Google 式道路必须有灰 casing + 白 fill 双层，粗细差即路缘。
     #[test]
     fn google_road_casing_is_thicker_than_fill() {
-        let a = Vec2::ZERO;
-        let b = Vec2::X * 100.0;
-        let casing = RoadMeshSpec::from_segment(a, b, 1.0, GOOGLE_ROAD_CASING_PX);
-        let fill = RoadMeshSpec::from_segment(a, b, 1.0, GOOGLE_ROAD_FILL_PX);
+        let casing = stroke_world_thickness(GOOGLE_ROAD_CASING_PX, 1.0);
+        let fill = stroke_world_thickness(GOOGLE_ROAD_FILL_PX, 1.0);
         assert!(
-            casing.world_thickness > fill.world_thickness,
+            casing > fill,
             "casing 应厚于 fill：casing={} fill={}，期望 {}px > {}px",
-            casing.world_thickness,
-            fill.world_thickness,
+            casing,
+            fill,
             GOOGLE_ROAD_CASING_PX,
             GOOGLE_ROAD_FILL_PX
         );
@@ -936,7 +992,6 @@ mod tests {
     /// 落在近白底图上唯一看得见的就是这层浅灰 casing。
     #[test]
     fn street_casing_is_thicker_than_its_fill_and_keeps_the_z_order() {
-        let (a, b) = (Vec2::ZERO, Vec2::X * 100.0);
         for (tier, fill_px, fill_z, casing_z) in [
             (
                 "主干",
@@ -951,13 +1006,13 @@ mod tests {
                 STREET_MINOR_CASING_Z,
             ),
         ] {
-            let casing = RoadMeshSpec::from_segment(a, b, 1.0, fill_px + STREET_CASING_EXTRA_PX);
-            let fill = RoadMeshSpec::from_segment(a, b, 1.0, fill_px);
+            let casing = stroke_world_thickness(fill_px + STREET_CASING_EXTRA_PX, 1.0);
+            let fill = stroke_world_thickness(fill_px, 1.0);
             assert!(
-                casing.world_thickness > fill.world_thickness,
+                casing > fill,
                 "{tier} 街道 casing 应厚于 fill：casing={} fill={}，期望 {}px > {}px",
-                casing.world_thickness,
-                fill.world_thickness,
+                casing,
+                fill,
                 fill_px + STREET_CASING_EXTRA_PX,
                 fill_px
             );
@@ -970,24 +1025,43 @@ mod tests {
         // `const _: () = assert!(…)` 在**编译期**把关，这里不再重复。
     }
 
+    /// 合批 mesh 的四个角必须以线段两端为「端帽中点」：p0+p3 == 2a，p1+p2 == 2b。
+    /// 水平段与斜段各验一遍（斜段防「忘了旋转矩形」的回归）。
     #[test]
-    fn road_spec_midpoint_and_length_match_endpoints() {
-        let a = Vec2::new(100.0, 200.0);
-        let b = Vec2::new(300.0, 200.0);
-        let spec = RoadMeshSpec::from_segment(a, b, 1.0, GOOGLE_ROAD_FILL_PX);
-        let len = (b - a).length();
-        assert!((spec.length - len).abs() < 1e-4, "len={}", len);
-        assert!((spec.center - Vec2::new(200.0, 200.0)).length() < 1e-4);
-        assert!(spec.angle.abs() < 1e-4, "angle={}", spec.angle);
+    fn batch_mesh_caps_center_on_the_segment_endpoints() {
+        let cases = [
+            (Vec2::new(100.0, 200.0), Vec2::new(300.0, 200.0)), // 水平
+            (Vec2::ZERO, Vec2::new(3.0, 4.0)),                  // 3-4-5 斜段
+        ];
+        for (a, b) in cases {
+            let mesh = build_stroke_batch_mesh(&[(a, b)], 2.0);
+            let Some(VertexAttributeValues::Float32x3(positions)) =
+                mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+            else {
+                panic!("合批 mesh 必有 Float32x3 POSITION");
+            };
+            assert_eq!(positions.len(), 4, "一段 = 4 顶点");
+            let v = |i: usize| Vec2::new(positions[i][0], positions[i][1]);
+            assert!(
+                (v(0) + v(3) - a * 2.0).length() < 1e-4,
+                "起端帽中点应落在 a={a:?}，实得 {:?}",
+                (v(0) + v(3)) * 0.5
+            );
+            assert!(
+                (v(1) + v(2) - b * 2.0).length() < 1e-4,
+                "末端帽中点应落在 b={b:?}，实得 {:?}",
+                (v(1) + v(2)) * 0.5
+            );
+        }
     }
 
     /// 线宽公式：`world_thickness = stroke_px * view.scale`，屏幕宽度恒定
     /// （`world_thickness / view.scale == stroke_px`），不随缩放变化。
     #[test]
-    fn road_spec_screen_width_stays_constant_across_zoom() {
+    fn stroke_screen_width_stays_constant_across_zoom() {
         for scale in [0.1, 1.0, 8.0] {
-            let spec = RoadMeshSpec::from_segment(Vec2::ZERO, Vec2::X, scale, 3.0);
-            let screen_px = spec.world_thickness / scale;
+            let world_thickness = stroke_world_thickness(3.0, scale);
+            let screen_px = world_thickness / scale;
             assert!(
                 (screen_px - 3.0).abs() < 1e-4,
                 "scale={scale}: 屏幕宽度应恒为 3px，实得 {screen_px}px"
@@ -996,15 +1070,45 @@ mod tests {
     }
 
     #[test]
-    fn road_spec_handles_zero_length_segment() {
-        let spec = RoadMeshSpec::from_segment(
-            Vec2::new(5.0, 5.0),
-            Vec2::new(5.0, 5.0),
-            1.0,
+    fn batch_mesh_handles_zero_length_segment_without_nan() {
+        let mesh = build_stroke_batch_mesh(
+            &[(Vec2::new(5.0, 5.0), Vec2::new(5.0, 5.0))],
             GOOGLE_ROAD_FILL_PX,
         );
-        assert!(spec.length.is_finite());
-        assert!(spec.length >= f32::EPSILON, "len must not be 0");
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("合批 mesh 必有 Float32x3 POSITION");
+        };
+        assert!(positions.iter().all(|p| p.iter().all(|c| c.is_finite())));
+    }
+
+    /// N 段 = 4N 顶点 / 6N 索引：合批不是丢段。
+    #[test]
+    fn batch_mesh_carries_one_quad_per_segment() {
+        let segs = [
+            (Vec2::ZERO, Vec2::X * 10.0),
+            (Vec2::X * 10.0, Vec2::new(15.0, 3.0)),
+            (Vec2::new(15.0, 3.0), Vec2::new(-4.0, 8.0)),
+        ];
+        let mesh = build_stroke_batch_mesh(&segs, 1.5);
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("合批 mesh 必有 Float32x3 POSITION");
+        };
+        assert_eq!(
+            positions.len(),
+            segs.len() * 4,
+            "{} 段 = 12 顶点",
+            segs.len()
+        );
+        match mesh.indices() {
+            Some(Indices::U32(idx)) => {
+                assert_eq!(idx.len(), segs.len() * 6, "{} 段 = 18 索引", segs.len())
+            }
+            other => panic!("应为 U32 索引，实得 {other:?}"),
+        }
     }
 
     /// 既有语义不破：城市 POI 在 Nation 档不淡（`poi_kept_at_tier` 的保留位）。
@@ -1102,13 +1206,145 @@ mod tests {
         schedule.add_systems(sync_vector_layers);
         schedule.run(&mut world);
 
+        // 断言走合批 mesh 的顶点：1 段 = 4 顶点，端帽中点必须落在
+        // 「本图局部坐标 + 城市帧原点」换算后的端点上（若误用栅格原点，
+        // 会落在 (200,200)/(400,200)——即世界图左上角，视野之外）。
         let layer = world.resource::<VectorLayerEntities>();
-        assert_eq!(layer.street_major.specs.len(), 1, "应画出 1 段主干道");
-        let got = layer.street_major.specs[0].center;
-        let expect = map_origin + Vec2::new(200.0, 200.0);
+        let batch = layer
+            .street_major
+            .batch
+            .as_ref()
+            .expect("应画出 1 段主干道（合批）");
+        let mesh = world
+            .resource::<Assets<Mesh>>()
+            .get(&batch.mesh)
+            .expect("主干道合批 mesh 应在资产表中");
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("合批 mesh 必有 Float32x3 POSITION");
+        };
+        assert_eq!(positions.len(), 4, "1 段 = 4 顶点");
+        let v = |i: usize| Vec2::new(positions[i][0], positions[i][1]);
+        let a = map_origin + Vec2::new(100.0, 200.0);
+        let b = map_origin + Vec2::new(300.0, 200.0);
         assert!(
-            got.distance(expect) < 1e-3,
-            "街道中点应落在城市帧 {expect}；实得 {got}（若误用栅格原点会得到 (200,200)）"
+            (v(0) + v(3) - a * 2.0).length() < 1e-3,
+            "起端帽中点应落在城市帧 {a:?}；实得 {:?}（若误用栅格原点会得到 (200,200)）",
+            (v(0) + v(3)) * 0.5
+        );
+        assert!(
+            (v(1) + v(2) - b * 2.0).length() < 1e-3,
+            "末端帽中点应落在城市帧 {b:?}；实得 {:?}",
+            (v(1) + v(2)) * 0.5
+        );
+    }
+
+    /// 合批世界（A2 测试基建）：路网段列 + 全默认资源，跑一次 sync 前的最小装配。
+    fn world_with_roads(segments: Vec<(Vec2, Vec2)>) -> World {
+        let mut world = World::default();
+        world.insert_resource(Assets::<Mesh>::default());
+        world.insert_resource(Assets::<ColorMaterial>::default());
+        world.insert_resource(ViewState::default());
+        world.insert_resource(GridConfig::default());
+        world.insert_resource(ProjectionFrame {
+            road_fingerprint: segments_fingerprint(&segments),
+            road_segments: segments,
+            ..Default::default()
+        });
+        world.init_resource::<VectorLayerEntities>();
+        world.init_resource::<crate::streets::StreetLayerCache>();
+        world.init_resource::<crate::streets::StreetEditorState>();
+        world.init_resource::<crate::layer_frame::LayerFrame>();
+        world
+    }
+
+    /// 3 段路网只产生 2 个 Mesh（casing + fill 各一个合批），不是每段 2 个。
+    /// 旧实现（每段一个 Rectangle mesh）在同装配下是 6 个——本测试钉死合批语义。
+    #[test]
+    fn road_batch_uses_one_mesh_per_pass_not_one_per_segment() {
+        let mut world = world_with_roads(vec![
+            (Vec2::ZERO, Vec2::X * 100.0),
+            (Vec2::X * 100.0, Vec2::new(140.0, 30.0)),
+            (Vec2::new(140.0, 30.0), Vec2::new(-20.0, 80.0)),
+        ]);
+        let mut schedule = Schedule::default();
+        schedule.add_systems(sync_vector_layers);
+        schedule.run(&mut world);
+        let mesh_count = world.resource::<Assets<Mesh>>().iter().count();
+        assert_eq!(
+            mesh_count, 2,
+            "3 段应合批成 casing + fill 两个 mesh，实得 {mesh_count}"
+        );
+    }
+
+    /// 段列内容变化：整组换 mesh（旧的移除、新的加入），资产数不累积。
+    #[test]
+    fn road_batch_replaces_its_mesh_when_segments_change() {
+        let mut world = world_with_roads(vec![(Vec2::ZERO, Vec2::X * 100.0)]);
+        let mut schedule = Schedule::default();
+        schedule.add_systems(sync_vector_layers);
+        schedule.run(&mut world);
+        let old_handle = world
+            .resource::<VectorLayerEntities>()
+            .roads
+            .batch
+            .as_ref()
+            .expect("首帧应有 fill 合批")
+            .mesh
+            .clone();
+
+        let next = vec![(Vec2::ZERO, Vec2::new(50.0, 60.0))];
+        world.resource_mut::<ProjectionFrame>().road_segments = next.clone();
+        world.resource_mut::<ProjectionFrame>().road_fingerprint = segments_fingerprint(&next);
+        schedule.run(&mut world);
+
+        let layer = world.resource::<VectorLayerEntities>();
+        let new_handle = &layer
+            .roads
+            .batch
+            .as_ref()
+            .expect("次帧仍应有 fill 合批")
+            .mesh;
+        assert_ne!(
+            new_handle, &old_handle,
+            "内容变了必须换 mesh（否则画的是旧几何）"
+        );
+        let mesh_count = world.resource::<Assets<Mesh>>().iter().count();
+        assert_eq!(mesh_count, 2, "换 mesh 是替换不是累积，实得 {mesh_count}");
+    }
+
+    /// 缩放一步（线宽 key 变化）：整组换 mesh，资产数不累积。
+    #[test]
+    fn road_batch_swaps_mesh_on_zoom_without_accumulating() {
+        let mut world = world_with_roads(vec![(Vec2::ZERO, Vec2::X * 100.0)]);
+        let mut schedule = Schedule::default();
+        schedule.add_systems(sync_vector_layers);
+        schedule.run(&mut world);
+        let old_handle = world
+            .resource::<VectorLayerEntities>()
+            .roads
+            .batch
+            .as_ref()
+            .expect("首帧应有 fill 合批")
+            .mesh
+            .clone();
+
+        world.resource_mut::<ViewState>().scale = 2.0;
+        schedule.run(&mut world);
+
+        let layer = world.resource::<VectorLayerEntities>();
+        let new_handle = &layer
+            .roads
+            .batch
+            .as_ref()
+            .expect("缩放后仍应有 fill 合批")
+            .mesh;
+        assert_ne!(new_handle, &old_handle, "线宽变了必须换 mesh");
+        let mesh_count = world.resource::<Assets<Mesh>>().iter().count();
+        assert_eq!(
+            mesh_count, 2,
+            "缩放换 mesh 是替换不是累积，实得 {mesh_count}"
         );
     }
 }

@@ -131,6 +131,9 @@ pub fn run(config: AppConfig) {
     // 资源本体在 ui_shell::register 里也有 init，幂等，这里注册是就近可读）。
     .init_resource::<ui::NewProjectDialog>()
     .init_resource::<world_projection::ProjectionFrame>()
+    // 地点缓存索引（A1）：compute_projection 的端点解析 / POI 收集查表用。
+    // 渲染主链在本 crate 直装（不走 MapRenderPlugin），这里必须同注册。
+    .init_resource::<wv_render::world_projection::PlaceIndex>()
     // 图层帧（ADR-0013）：`MapNode.layers[].z/visible/opacity` 的每帧投影。
     .init_resource::<layer_frame::LayerFrame>()
     .init_resource::<camera::ActiveStroke>()

@@ -75,7 +75,9 @@ impl Plugin for MapRenderPlugin {
         .add_systems(
             Update,
             buildings::sync_building_overlays.after(vector_layers::sync_vector_layers),
-        );
+        )
+        // 地点缓存索引（A1）：compute_projection 的端点解析 / POI 收集查表用。
+        .init_resource::<world_projection::PlaceIndex>();
     }
 }
 

@@ -20,6 +20,8 @@
 
 use bevy::prelude::*;
 
+use std::collections::HashMap;
+
 use crate::layer_frame::LayerFrame;
 use crate::state::{BrushState, GridConfig, PlaybackState, ViewState, WorldProjection};
 use crate::theme::colors;
@@ -48,6 +50,12 @@ pub struct ProjectionFrame {
     /// （如关隘、渡口）为 `false`。国家级视野（[`crate::state::LodTier::Nation`]）
     /// 只画 `is_city == true` 的点标——Google 地图式「低层级只画高级要素」。
     pub place_dots: Vec<PlaceDot>,
+    /// 本帧 [`Self::road_segments`] 的内容指纹（A2，2026-10-18）。
+    ///
+    /// `sync_vector_layers` 的合批 mesh 以它判「路网内容变没变」：不变则连
+    /// mesh 规格比对都不必做。相机平移不改世界系段坐标（指纹不变 → 零重建），
+    /// 编辑与钻取切图才会改变它。
+    pub road_fingerprint: u64,
 }
 
 /// 一个 POI 点标的渲染数据。
@@ -59,10 +67,68 @@ pub struct PlaceDot {
     pub is_city: bool,
 }
 
+/// 地点缓存索引（A1，2026-10-18）：端点解析与 POI 收集的 O(1) 查表。
+///
+/// 背景：guangdong 工程（87,664 边 × 81,530 地点）的道路层每帧对每条边两个
+/// 端点各做一次全量线性 `find`，实测 **17.6 秒/帧**（release）——「打开即
+/// 卡死」即此。索引把端点解析变哈希查询，POI 收集变按图分桶直取。
+///
+/// 只缓存「`places` 下标 + 按图分组」，坐标 / 可见性等判定仍读
+/// [`WorldProjection::world`] 原始数据——索引不持数据副本，没有第二真相源；
+/// 重建以 `Res<WorldProjection>` 变更检测为号（世界替换 / 任何编辑都会命中），
+/// 81,530 点整表重建实测亚毫秒，编辑期可忽略。
+#[derive(Resource, Default)]
+pub struct PlaceIndex {
+    /// `Place.id` → `world.distances.places` 下标。**全量**（含无坐标的
+    /// 纯距离图节点，如 overture 路口——它们不锚定地图，端点解析时按
+    /// `map` 匹配自然落空）。
+    by_id: HashMap<wv_core::id::Id, u32>,
+    /// 锚定图 id → 该图上坐标齐备的地点下标（POI 点标循环直取，不再全量扫）。
+    anchored_by_map: HashMap<wv_core::id::Id, Vec<u32>>,
+}
+
+impl PlaceIndex {
+    /// 对整个世界的距离图建索引。单遍扫描，先 `by_id` 后分桶。
+    fn build(world: &wv_core::World) -> Self {
+        let places = &world.distances.places;
+        let mut index = Self {
+            by_id: HashMap::with_capacity(places.len()),
+            anchored_by_map: HashMap::new(),
+        };
+        for (i, p) in places.iter().enumerate() {
+            index.by_id.insert(p.id.clone(), i as u32);
+            if let (Some(map), Some(_), Some(_)) = (p.map.as_ref(), p.x, p.y) {
+                index
+                    .anchored_by_map
+                    .entry(map.clone())
+                    .or_default()
+                    .push(i as u32);
+            }
+        }
+        index
+    }
+}
+
+/// 段列内容指纹（FNV-1a over 坐标位型）：合批 mesh 的「内容变没变」判据。
+///
+/// 相机平移不改世界系段坐标（指纹不变 → 零重建）；编辑与钻取切图改变段列
+/// 才会改变指纹。空段列有唯一常量指纹。
+pub(crate) fn segments_fingerprint(segments: &[(Vec2, Vec2)]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for (a, b) in segments {
+        for v in [a.x, a.y, b.x, b.y] {
+            hash ^= u64::from(v.to_bits());
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    hash
+}
+
 /// 计算本帧投影。**所有时间判断集中在这里**，且走 `wv-core` 的纯函数。
 ///
 /// 图层可见性读 [`LayerFrame`]（ADR-0013：YAML 声明 ∧ 会话开关的合取投影），
 /// 不直接读 `ViewState` 的布尔——轨迹无对应 `LayerKind`，仍走会话开关。
+#[allow(clippy::too_many_arguments)]
 pub fn compute_projection(
     playback: Res<PlaybackState>,
     view: Res<ViewState>,
@@ -70,6 +136,7 @@ pub fn compute_projection(
     drill: Res<crate::state::DrillState>,
     projection: Res<WorldProjection>,
     layers: Res<LayerFrame>,
+    mut place_index: ResMut<PlaceIndex>,
     mut frame: ResMut<ProjectionFrame>,
 ) {
     frame.active_events.clear();
@@ -78,6 +145,14 @@ pub fn compute_projection(
     frame.track_hollow_starts.clear();
     frame.road_segments.clear();
     frame.place_dots.clear();
+    frame.road_fingerprint = segments_fingerprint(&frame.road_segments);
+
+    // 索引只在世界变更后整表重建（世界替换 / 任何编辑都命中变更检测；
+    // 未变更时这一行就是一次 tick 比较）。放在早退之前：图层全关的帧
+    // 也保持索引新鲜，重新打开图层的第一帧就能查。
+    if projection.is_changed() {
+        *place_index = PlaceIndex::build(&projection.world);
+    }
 
     if !layers.event_point.visible
         && !view.tracks_visible
@@ -135,12 +210,14 @@ pub fn compute_projection(
         if let Some(current) = drill.current_node(world) {
             // 只取锚定在当前地图、且坐标齐备的地点（与标记层「只画当前层级」同口径）。
             // 地点坐标是**本图局部**坐标 → `grid.map_to_view`（不是栅格原点）。
+            // 端点解析走 [`PlaceIndex`] 哈希查表——线性 `find` 在 guangdong
+            // 规模（8.7 万边 × 8.1 万点）下是 17.6s/帧的卡死源（A1）。
             let find_place = |id: &wv_core::id::Id| -> Option<Vec2> {
-                let p = world
-                    .distances
-                    .places
-                    .iter()
-                    .find(|p| &p.id == id && p.map.as_ref() == Some(&current.id))?;
+                let i = *place_index.by_id.get(id)?;
+                let p = &world.distances.places[i as usize];
+                if p.map.as_ref() != Some(&current.id) {
+                    return None;
+                }
                 Some(grid.map_to_view(Vec2::new(p.x?, p.y?)))
             };
             if layers.road.visible {
@@ -149,14 +226,18 @@ pub fn compute_projection(
                         frame.road_segments.push((a, b));
                     }
                 }
+                frame.road_fingerprint = segments_fingerprint(&frame.road_segments);
             }
             // POI 点标：当前地图上的全部锚定地点；带「是否城市级」标记供 LOD 筛选。
             // 事实地点（`feature = Some`）由 `feature_overlays` 画地界晕与符号，
             // 不再叠 POI 圆点（`place_dot_for` 统一裁决）。
+            // 走 [`PlaceIndex::anchored_by_map`] 直取本图桶，不全量扫（A1）。
             if layers.place.visible {
-                for p in &world.distances.places {
-                    if p.map.as_ref() == Some(&current.id) {
-                        if let Some(dot) = place_dot_for(p, &grid) {
+                if let Some(idxs) = place_index.anchored_by_map.get(&current.id) {
+                    for i in idxs {
+                        if let Some(dot) =
+                            place_dot_for(&world.distances.places[*i as usize], &grid)
+                        {
                             frame.place_dots.push(dot);
                         }
                     }
@@ -500,6 +581,211 @@ mod tests {
             dot.pos,
             grid.map_to_view(Vec2::new(1.0, 2.0)),
             "pos 应经地图局部 → 视图空间换算"
+        );
+    }
+
+    // ---- compute_projection 道路层 / POI（A1 索引化后的行为锚点）----
+
+    use wv_core::map::distance::PlaceEdge;
+
+    fn map(id: &str) -> wv_core::map::MapNode {
+        wv_core::map::MapNode {
+            id: Id::new_unchecked(id),
+            name: id.to_owned(),
+            level: wv_core::map::MapLevel::World,
+            parent: None,
+            children: Vec::new(),
+            layers: Vec::new(),
+            icons: Vec::new(),
+            extent: None,
+            raster: None,
+            geographic_source: None,
+            time_span: None,
+            unit_per_km: None,
+            orientation: 0.0,
+            base: None,
+            outline_polygon: None,
+        }
+    }
+
+    fn anchored_place(id: &str, map: &str, x: f32, y: f32) -> Place {
+        Place {
+            id: Id::new_unchecked(id),
+            name: id.to_owned(),
+            feature: None,
+            map: Some(Id::new_unchecked(map)),
+            x: Some(x),
+            y: Some(y),
+            w: Some(10.0),
+            h: Some(10.0),
+        }
+    }
+
+    fn graph_node(id: &str) -> Place {
+        // guangdong 的路口形态：纯距离图节点，不锚定地图、无坐标。
+        Place {
+            id: Id::new_unchecked(id),
+            name: "路口".into(),
+            feature: None,
+            map: None,
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+        }
+    }
+
+    fn edge(id: &str, a: &str, b: &str) -> PlaceEdge {
+        PlaceEdge {
+            id: Id::new_unchecked(id),
+            a: Id::new_unchecked(a),
+            b: Id::new_unchecked(b),
+            distance_km: 1.0,
+            terrain: "road".to_owned(),
+            bidirectional: true,
+        }
+    }
+
+    /// 最小投影装配：单图世界 + 全默认资源，返回 (bevy World, Schedule) 供
+    /// 调用方在两次 run 之间改世界（重建触发测试用）。
+    fn projection_app(world: wv_core::World) -> (World, Schedule) {
+        let mut app = World::default();
+        app.insert_resource(PlaybackState::default());
+        app.insert_resource(ViewState::default());
+        app.insert_resource(GridConfig::default());
+        let mut drill = crate::state::DrillState::default();
+        drill.ensure_root(&world);
+        app.insert_resource(drill);
+        app.insert_resource(WorldProjection {
+            world,
+            ..Default::default()
+        });
+        app.insert_resource(LayerFrame::default());
+        app.insert_resource(ProjectionFrame::default());
+        app.init_resource::<PlaceIndex>();
+        let mut schedule = Schedule::default();
+        schedule.add_systems(compute_projection);
+        (app, schedule)
+    }
+
+    fn run_once(app: &mut World, schedule: &mut Schedule) -> ProjectionFrame {
+        schedule.run(app);
+        app.remove_resource::<ProjectionFrame>().unwrap()
+    }
+
+    /// 锚定地点之间的边 → 一条道路段，端点经 `map_to_view` 换算（索引查表口径）。
+    #[test]
+    fn edge_between_anchored_places_becomes_one_road_segment() {
+        let grid = GridConfig::default();
+        let mut world = wv_core::World::default();
+        world.maps.push(map("m1"));
+        world.distances.places = vec![
+            anchored_place("pa", "m1", 10.0, 20.0),
+            anchored_place("pb", "m1", 30.0, 20.0),
+        ];
+        world.distances.edges = vec![edge("e1", "pa", "pb")];
+
+        let (mut app, mut schedule) = projection_app(world);
+        let frame = run_once(&mut app, &mut schedule);
+        assert_eq!(frame.road_segments.len(), 1, "一条边 = 一段");
+        assert_eq!(
+            frame.road_segments[0],
+            (
+                grid.map_to_view(Vec2::new(10.0, 20.0)),
+                grid.map_to_view(Vec2::new(30.0, 20.0))
+            ),
+            "端点应是视图空间坐标"
+        );
+    }
+
+    /// guangdong 回归：不锚定地图、无坐标的路口（纯图节点）参与多少条边，
+    /// 都不产生道路段——但扫描成本也必须可忽略（索引未命中即返回）。
+    #[test]
+    fn edges_with_unanchored_endpoints_draw_nothing() {
+        let mut world = wv_core::World::default();
+        world.maps.push(map("m1"));
+        world.distances.places = vec![graph_node("pi"), graph_node("pj")];
+        world.distances.edges = vec![edge("e1", "pi", "pj"), edge("e2", "pj", "pi")];
+
+        let (mut app, mut schedule) = projection_app(world);
+        let frame = run_once(&mut app, &mut schedule);
+        assert!(
+            frame.road_segments.is_empty(),
+            "端点未锚定 → 无段，实得 {} 段",
+            frame.road_segments.len()
+        );
+        assert!(
+            frame.place_dots.is_empty(),
+            "无锚定地点 → 无 POI 点，实得 {} 个",
+            frame.place_dots.len()
+        );
+    }
+
+    /// 世界替换 / 编辑后（`WorldProjection` 变更检测命中）索引必须重建：
+    /// 新地点不重建就查不到，新边会静默消失。
+    #[test]
+    fn place_index_rebuilds_after_world_mutation() {
+        let mut world = wv_core::World::default();
+        world.maps.push(map("m1"));
+        world.distances.places = vec![
+            anchored_place("pa", "m1", 10.0, 20.0),
+            anchored_place("pb", "m1", 30.0, 20.0),
+        ];
+        world.distances.edges = vec![edge("e1", "pa", "pb")];
+
+        let (mut app, mut schedule) = projection_app(world);
+        schedule.run(&mut app);
+        assert_eq!(
+            app.resource::<ProjectionFrame>().road_segments.len(),
+            1,
+            "首帧一条边"
+        );
+
+        // 编辑：新增地点 pc 与边 pb—pc（pc 不在旧索引里，必现重建必要性）。
+        let mut projection = app.resource_mut::<WorldProjection>();
+        projection
+            .world
+            .distances
+            .places
+            .push(anchored_place("pc", "m1", 50.0, 20.0));
+        projection
+            .world
+            .distances
+            .edges
+            .push(edge("e2", "pb", "pc"));
+
+        schedule.run(&mut app);
+        assert_eq!(
+            app.resource::<ProjectionFrame>().road_segments.len(),
+            2,
+            "世界变更后索引重建，新边应可解析"
+        );
+    }
+
+    /// POI 点标按当前图分桶直取：别图的锚定地点与未锚定图节点都不生成点。
+    #[test]
+    fn poi_dots_come_only_from_the_current_map_bucket() {
+        let grid = GridConfig::default();
+        let mut world = wv_core::World::default();
+        world.maps.push(map("m1"));
+        world.distances.places = vec![
+            anchored_place("pa", "m1", 10.0, 20.0),
+            anchored_place("pb", "m1", 30.0, 20.0),
+            anchored_place("p_other", "m2", 40.0, 40.0),
+            graph_node("pi"),
+        ];
+
+        let (mut app, mut schedule) = projection_app(world);
+        let frame = run_once(&mut app, &mut schedule);
+        assert_eq!(
+            frame.place_dots.len(),
+            2,
+            "只有当前图 m1 上的两个锚定地点有点"
+        );
+        assert_eq!(
+            frame.place_dots[0].pos,
+            grid.map_to_view(Vec2::new(10.0, 20.0)),
+            "点位置经 map_to_view 换算"
         );
     }
 }
