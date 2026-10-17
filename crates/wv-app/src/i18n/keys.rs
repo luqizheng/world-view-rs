@@ -851,6 +851,14 @@ pub enum I18nKey {
     IntentMenuGenerateContinent,
     /// 按钮「生成城市…」
     IntentMenuGenerateCity,
+    /// 按钮「高山」
+    IntentMenuMountains,
+    /// 按钮「丘陵」
+    IntentMenuHills,
+    /// 按钮「平原」
+    IntentMenuPlains,
+    /// 按钮「湖泊」
+    IntentMenuLake,
     /// 弱化提示「Esc 取消选择」
     IntentMenuCancelHint,
     /// 占位「本图暂无可用意图」

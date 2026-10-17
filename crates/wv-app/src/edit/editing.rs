@@ -441,6 +441,85 @@ pub fn apply_reset_terrain_to_base(
     }
 }
 
+/// 一键应用区域地形意图（选择工具 spec §4 D10：无弹窗、一意图一事务）。
+///
+/// **0 改动预检**（纯海丘陵 / 湖心在海等语义性无操作）：草稿栅格以同 seed
+/// 先跑一遍，`apply_intent` 返回 0 → 不提交、发通知、返回 `false`——空命令
+/// 不进撤销栈。成功返回 `true`；选区清空由调用方负责（spec §4：撤销不回驻留）。
+///
+/// 纹理脏矩形与 [`apply_reset_terrain_to_base`] 同款：前后 cells diff 出包围盒。
+#[allow(clippy::too_many_arguments)]
+pub fn commit_region_intent(
+    map: wv_core::Id,
+    intent: Intent,
+    cell_size: f32,
+    edit: &mut EditHistory,
+    projection: &mut WorldProjection,
+    tex: &mut TerrainTexture,
+    notice: &mut crate::ui_shell::ShellNotice,
+    frame: u64,
+) -> bool {
+    // 预检：同 seed 草稿跑一遍，无改动就不进历史。
+    let seed = intent.derive_seed(map.as_str());
+    let no_op = match wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(&map)) {
+        Some(t) => {
+            let cells: Vec<wv_terrain::TerrainCell> = t
+                .cells
+                .iter()
+                .map(|c| wv_terrain::TerrainCell {
+                    height: c.height,
+                    kind: c.kind,
+                })
+                .collect();
+            let mut scratch = match wv_terrain::TerrainGrid::from_cells(t.width, t.height, cells) {
+                Some(g) => g,
+                None => {
+                    notice.error("地形网格尺寸不一致，意图未生效", frame);
+                    return false;
+                }
+            };
+            wv_terrain::intent::apply_intent(&mut scratch, &intent, seed, cell_size) == 0
+        }
+        None => true,
+    };
+    if no_op {
+        notice.error("该意图在选区内没有产生任何变化", frame);
+        return false;
+    }
+
+    let before = wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(&map))
+        .map(|t| t.cells.clone());
+    let mut tx = Transaction::new();
+    tx.push(Box::new(IntentTerrainCommand::new(
+        map.clone(),
+        intent,
+        cell_size,
+    )));
+    match edit.history.commit(&mut projection.world, tx) {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
+            projection.dirty = true;
+            let after =
+                wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(&map))
+                    .map(|t| (t.width.max(1), t.cells.clone()));
+            match (before, after) {
+                (Some(b), Some((w, a))) if b.len() == a.len() => {
+                    if let Some(rect) = terrain_diff_bbox(&b, &a, w) {
+                        tex.mark_dirty(rect);
+                    }
+                }
+                _ => tex.mark_all_dirty(),
+            }
+            notice.info("已应用地形意图（Ctrl+Z 可撤销）", frame);
+            true
+        }
+        Err(e) => {
+            notice.error(format!("地形意图未生效：{e}"), frame);
+            false
+        }
+    }
+}
+
 /// 提交一次大陆生成（宏命令），成功后「生成即消费」选区并写恢复圈 stash。
 ///
 /// 调用方只克隆环、不预消费选区——失败时选区原样保留，作者画了半天的圈

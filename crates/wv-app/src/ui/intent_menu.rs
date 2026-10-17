@@ -19,14 +19,14 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::i18n::{t, CurrentLocale, I18nKey};
-use crate::state::{DrillState, WorldProjection};
+use crate::state::DrillState;
 use crate::theme::ui_theme::UiShellConfig;
 use crate::ui::city_intent::{prefill, CityIntentDialog};
 use crate::ui_shell::StartupLoadRequest;
 
 use super::shell::UiShell;
 use super::widgets::icon_image;
-use super::ICON_MOUNTAIN_RANGE;
+use super::{ICON_GLOBE, ICON_HILLS, ICON_LAKE, ICON_MAP_PIN, ICON_MOUNTAIN_RANGE, ICON_PLATEAU};
 use crate::theme::ui_tokens::radius;
 
 /// 单瓷砖边长与图标内嵌（视觉对齐 [`super::map_controls`] 的瓷砖规格）。
@@ -37,7 +37,7 @@ const ICON_INSET: f32 = 7.0;
 /// {World, Region}；M1 目录只有「生成大陆」一项，森林随 M4 加入）。
 fn intent_count_for(level: wv_core::map::MapLevel) -> usize {
     match level {
-        wv_core::map::MapLevel::World | wv_core::map::MapLevel::Region => 2,
+        wv_core::map::MapLevel::World | wv_core::map::MapLevel::Region => 6,
         wv_core::map::MapLevel::City | wv_core::map::MapLevel::Interior => 0,
     }
 }
@@ -60,10 +60,15 @@ pub fn intent_menu(
     shell_cfg: Res<UiShellConfig>,
     current_loc: Res<CurrentLocale>,
     drill: Res<DrillState>,
-    projection: Res<WorldProjection>,
-    selection: Res<wv_render::state::SelectionState>,
+    mut selection: ResMut<wv_render::state::SelectionState>,
     mut continent_dialog: ResMut<crate::ui::ContinentDialog>,
     mut city_dialog: ResMut<CityIntentDialog>,
+    mut projection: ResMut<wv_render::state::WorldProjection>,
+    mut edit: ResMut<crate::edit::editing::EditHistory>,
+    mut tex: ResMut<wv_render::terrain_view::TerrainTexture>,
+    grid: Res<wv_render::state::GridConfig>,
+    mut notice: ResMut<crate::ui_shell::ShellNotice>,
+    time: Res<bevy::prelude::Time>,
     startup_req: Res<StartupLoadRequest>,
 ) {
     // 无工程锁 / 启动加载中 / 工具未启用或未闭合：与 map_controls 同源早返。
@@ -103,7 +108,7 @@ pub fn intent_menu(
                             ui.weak(t(loc, I18nKey::IntentMenuNoIntents));
                         } else {
                             let icon = icon_image(
-                                ICON_MOUNTAIN_RANGE,
+                                ICON_GLOBE,
                                 egui::Color32::WHITE,
                                 TILE_SIZE - ICON_INSET,
                             );
@@ -122,7 +127,7 @@ pub fn intent_menu(
                                 continent_dialog.open = true;
                             }
                             let icon = icon_image(
-                                ICON_MOUNTAIN_RANGE,
+                                ICON_MAP_PIN,
                                 egui::Color32::WHITE,
                                 TILE_SIZE - ICON_INSET,
                             );
@@ -151,6 +156,66 @@ pub fn intent_menu(
                                     }
                                 }
                             }
+                            // 地形四意图（spec §4 D10：一键应用，无弹窗）。
+                            let ring = selection.closed.clone();
+                            let apply_map = drill.current().cloned();
+                            let mut apply = |kind: wv_terrain::intent::Intent| {
+                                if let Some(map) = apply_map.clone() {
+                                    let frame = (time.elapsed_secs() * 60.0) as u64;
+                                    if crate::edit::editing::commit_region_intent(
+                                        map,
+                                        kind,
+                                        grid.cell_size,
+                                        &mut edit,
+                                        &mut projection,
+                                        &mut tex,
+                                        &mut notice,
+                                        frame,
+                                    ) {
+                                        // 意图生效 → 选区清空（spec D9；撤销不回驻留）。
+                                        selection.cancel();
+                                    }
+                                }
+                            };
+                            let mut terrain_button =
+                                |icon: egui::ImageSource<'static>, label: &'static str| -> bool {
+                                    ui.add(
+                                        egui::Button::image_and_text(
+                                            icon_image(
+                                                icon,
+                                                egui::Color32::WHITE,
+                                                TILE_SIZE - ICON_INSET,
+                                            ),
+                                            label,
+                                        )
+                                        .fill(shell.accent())
+                                        .corner_radius(egui::CornerRadius::from(radius::PANEL)),
+                                    )
+                                    .clicked()
+                                };
+                            if terrain_button(
+                                ICON_MOUNTAIN_RANGE,
+                                t(loc, I18nKey::IntentMenuMountains),
+                            ) {
+                                apply(wv_terrain::intent::Intent::MountainMassif {
+                                    polygon: ring.clone().unwrap_or_default(),
+                                });
+                            }
+                            if terrain_button(ICON_HILLS, t(loc, I18nKey::IntentMenuHills)) {
+                                apply(wv_terrain::intent::Intent::HillsRegion {
+                                    polygon: ring.clone().unwrap_or_default(),
+                                });
+                            }
+                            if terrain_button(ICON_PLATEAU, t(loc, I18nKey::IntentMenuPlains)) {
+                                apply(wv_terrain::intent::Intent::PlainsRegion {
+                                    polygon: ring.clone().unwrap_or_default(),
+                                });
+                            }
+                            if terrain_button(ICON_LAKE, t(loc, I18nKey::IntentMenuLake)) {
+                                apply(wv_terrain::intent::Intent::LakeRegion {
+                                    polygon: ring.clone().unwrap_or_default(),
+                                });
+                            }
                         }
                         ui.weak(t(loc, I18nKey::IntentMenuCancelHint));
                     });
@@ -173,12 +238,12 @@ mod tests {
     fn intent_catalog_nonempty_for_world_and_region() {
         assert_eq!(
             intent_count_for(MapLevel::World),
-            2,
-            "世界级：生成大陆 + 生成城市（M2）"
+            6,
+            "世界级：大陆 + 城市 + 地形四意图（M3）"
         );
         assert_eq!(
             intent_count_for(MapLevel::Region),
-            2,
+            6,
             "区域级同世界级（spec §4 裁定）"
         );
     }
