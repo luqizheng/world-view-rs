@@ -282,9 +282,40 @@ pub fn lod_tier(view_scale: f32) -> LodTier {
     }
 }
 
+/// 淡出带位置 0..1：`scale` **大 = 远**。近端 `0.75×threshold` 之前为 0，
+/// 远端 `1.125×threshold` 之后为 1，中间 smoothstep `3t²−2t³`。
+///
+/// 语义是「离 Nation 档有多近」——**可见度 = `1 − lod_fade`**（城市 POI 例外，
+/// 见 `vector_layers::poi_alpha_multiplier`）。把它做成纯函数是为了让渲染层
+/// 所有硬 LOD 剔除点（建筑 / POI）共用同一条过渡曲线（spec §4.2 缺省）。
+pub fn lod_fade(scale: f32, threshold: f32) -> f32 {
+    let lo = threshold * 0.75;
+    let hi = threshold * 1.125;
+    if scale <= lo {
+        0.0
+    } else if scale >= hi {
+        1.0
+    } else {
+        let t = (scale - lo) / (hi - lo);
+        t * t * (3.0 - 2.0 * t)
+    }
+}
+
 #[cfg(test)]
 mod lod_tests {
     use super::*;
+
+    /// 淡出带锚点（手算）：lo=2.25（0）、阈值 3.0（t=2/3 → 0.740）、hi=3.375（1）。
+    #[test]
+    fn lod_fade_anchors_at_threshold_band() {
+        assert_eq!(lod_fade(2.25, 3.0), 0.0, "带下沿为 0");
+        assert_eq!(lod_fade(3.375, 3.0), 1.0, "带上沿为 1");
+        let mid = lod_fade(3.0, 3.0);
+        assert!(
+            (mid - 0.740).abs() < 1e-3,
+            "阈值处 smoothstep(2/3)≈0.740，得 {mid}"
+        );
+    }
 
     #[test]
     fn lod_tier_splits_at_exact_thresholds() {

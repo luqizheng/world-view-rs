@@ -27,7 +27,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 
 use crate::layer_frame::LayerFrame;
-use crate::state::{lod_tier, GridConfig, LodTier, ViewState, WorldProjection};
+use crate::state::{lod_fade, GridConfig, ViewState, WorldProjection, LOD_NATION_SCALE};
 use crate::theme::palette;
 
 /// 挤出高度换算：世界单位 / 米。**待裁**（README §12-31(b)）：真实比例
@@ -206,9 +206,10 @@ pub fn sync_building_overlays(
     recipe: Res<crate::recipe::RenderRecipe>,
 ) {
     let current = drill.current();
-    let tier = lod_tier(view.scale);
+    // Nation 档不再硬剔除：可见度随 `lod_fade` 平滑趋 0（spec §4.2）。
+    let vis = 1.0 - lod_fade(view.scale, LOD_NATION_SCALE);
     if !layers.building.visible
-        || tier == LodTier::Nation
+        || vis <= 0.0
         || grid.cell_size <= 0.0
         || !recipe.enabled(crate::recipe::PassId::Buildings)
     {
@@ -287,23 +288,23 @@ pub fn sync_building_overlays(
         };
         cache.shadow = spawn_slot(
             (!shadow_tris.is_empty()).then(|| meshes.add(triangles_to_mesh(&shadow_tris))),
-            pal.building_side.with_alpha(SHADOW_ALPHA),
+            pal.building_side.with_alpha(SHADOW_ALPHA * vis),
             BUILDING_SHADOW_Z,
         );
         cache.body = spawn_slot(
             (!side_quads.is_empty()).then(|| meshes.add(sides_mesh(&side_quads))),
-            pal.building_side,
+            pal.building_side.with_alpha(vis),
             BUILDING_BODY_Z,
         );
         cache.roof = spawn_slot(
             (!roof_tris.is_empty()).then(|| meshes.add(triangles_to_mesh(&roof_tris))),
-            pal.building_top,
+            pal.building_top.with_alpha(vis),
             BUILDING_ROOF_Z,
         );
         cache.key = Some(key);
     }
-    // 图层绑定变化（opacity / z）就地补丁，不重建几何（与 isoline 同款）。
-    if layers.is_changed() {
+    // 图层绑定变化（opacity / z）或缩放（淡出系数）就地补丁，不重建几何。
+    if layers.is_changed() || view.is_changed() {
         // ResMut 的 DerefMut 不支持同表达式拆字段借用——先整体解构。
         let cache_ref = &mut *cache;
         let BuildingOverlays {
@@ -317,9 +318,9 @@ pub fn sync_building_overlays(
         for (base_z, is_shadow, slot) in slots.iter_mut() {
             if let Some((entity, _, mat)) = slot {
                 let alpha = if *is_shadow {
-                    layers.building.opacity * SHADOW_ALPHA
+                    layers.building.opacity * SHADOW_ALPHA * vis
                 } else {
-                    layers.building.opacity
+                    layers.building.opacity * vis
                 };
                 if let Some(mut m) = materials.get_mut(mat) {
                     m.color = m.color.with_alpha(alpha);

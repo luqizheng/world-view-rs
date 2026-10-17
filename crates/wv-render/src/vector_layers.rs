@@ -29,7 +29,7 @@ use bevy::math::primitives::{Annulus, Circle};
 use bevy::prelude::*;
 
 use crate::layer_frame::LayerFrame;
-use crate::state::{lod_tier, GridConfig, LodTier, ViewState};
+use crate::state::{lod_fade, lod_tier, GridConfig, ViewState, LOD_NATION_SCALE};
 use crate::theme::colors_google::{
     GOOGLE_PLACE_DOT, GOOGLE_POI_RING, GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL,
 };
@@ -141,8 +141,12 @@ struct RoadMaterialSet {
 struct PoiMaterialSet {
     mode: crate::state::ViewMode,
     palette: MapPalette,
+    /// 非城市 POI：随 `lod_fade` 淡出（远观趋 0）。
     ring: Handle<ColorMaterial>,
     dot: Handle<ColorMaterial>,
+    /// 城市 POI：恒全显（Nation 档保留是既有语义）。
+    city_ring: Handle<ColorMaterial>,
+    city_dot: Handle<ColorMaterial>,
 }
 
 /// 按模式 + 主题缓存的街道材质（ADR-0014：主干 / 次干在古舆图里是两种色）。
@@ -263,8 +267,10 @@ pub fn sync_vector_layers(
     // z 偏移不需要这步——sync_road_strokes / sync_poi 每帧全量重写 Transform。
     if layers.is_changed() {
         apply_road_material_alpha(&mut materials, &layer, layers.road.opacity);
-        apply_poi_material_alpha(&mut materials, &layer, layers.place.opacity);
     }
+    // POI 的 alpha 还依赖缩放（非城市淡出）：每帧刷 4 个材质句柄，代价可忽略。
+    let poi_fade = lod_fade(view.scale, LOD_NATION_SCALE);
+    apply_poi_material_alpha(&mut materials, &layer, layers.place.opacity, poi_fade);
     let road_z = layers.road.z_offset;
     let place_z = layers.place.z_offset;
 
@@ -371,7 +377,7 @@ pub fn sync_vector_layers(
             &mut meshes,
             &frame.place_dots,
             view.scale,
-            lod_tier(view.scale),
+            poi_fade,
             &grid,
             place_z,
             poi_materials_changed,
@@ -430,26 +436,40 @@ fn apply_road_material_alpha(
     }
 }
 
-/// 把 Place 图层 opacity 刷进所有已缓存的 POI 材质。
+/// 把 Place 图层 opacity + 缩放淡出刷进所有已缓存的 POI 材质。
+///
+/// 城市 POI 恒全显（既有语义）；非城市乘 `1 − fade`。
 fn apply_poi_material_alpha(
     materials: &mut Assets<ColorMaterial>,
     layer: &VectorLayerEntities,
     opacity: f32,
+    fade: f32,
 ) {
     for set in &layer.poi_materials {
         let (ring, dot) = poi_base_colors(set.mode, palette::colors(set.palette));
+        let faded = (1.0 - fade).clamp(0.0, 1.0);
         if let Some(mut mat) = materials.get_mut(&set.ring) {
-            mat.color = ring.with_alpha(ring.alpha() * opacity);
+            mat.color = ring.with_alpha(ring.alpha() * opacity * faded);
         }
         if let Some(mut mat) = materials.get_mut(&set.dot) {
+            mat.color = dot.with_alpha(dot.alpha() * opacity * faded);
+        }
+        if let Some(mut mat) = materials.get_mut(&set.city_ring) {
+            mat.color = ring.with_alpha(ring.alpha() * opacity);
+        }
+        if let Some(mut mat) = materials.get_mut(&set.city_dot) {
             mat.color = dot.with_alpha(dot.alpha() * opacity);
         }
     }
 }
 
-/// LOD 口径：国家级只保留城市级 POI，省级 / 编辑级全保留。
-fn poi_kept_at_tier(dot: &PlaceDot, tier: LodTier) -> bool {
-    tier != LodTier::Nation || dot.is_city
+/// 单个 POI 的可见度系数：城市恒 1；非城市随淡出带趋 0。
+fn poi_alpha_multiplier(is_city: bool, fade: f32) -> f32 {
+    if is_city {
+        1.0
+    } else {
+        (1.0 - fade).clamp(0.0, 1.0)
+    }
 }
 
 fn ensure_road_materials(
@@ -502,6 +522,8 @@ fn ensure_poi_materials(
             palette: map_palette,
             ring: materials.add(with_opacity(ring)),
             dot: materials.add(with_opacity(dot)),
+            city_ring: materials.add(with_opacity(ring)),
+            city_dot: materials.add(with_opacity(dot)),
         });
     }
     layer.poi_material_mode = Some(mode);
@@ -701,13 +723,17 @@ fn sync_poi(
     meshes: &mut Assets<Mesh>,
     dots: &[PlaceDot],
     view_scale: f32,
-    tier: LodTier,
+    fade: f32,
     grid: &GridConfig,
     z_offset: f32,
     material_changed: bool,
     layer: &mut VectorLayerEntities,
 ) {
-    let visible: Vec<&PlaceDot> = dots.iter().filter(|d| poi_kept_at_tier(d, tier)).collect();
+    // 淡尽（系数 0）等价于旧 Nation 档硬剔除；城市 POI 恒保留。
+    let visible: Vec<&PlaceDot> = dots
+        .iter()
+        .filter(|d| poi_alpha_multiplier(d.is_city, fade) > 0.0)
+        .collect();
     let radius_outer = (grid.cell_size * 0.45).max(POI_MIN_SCREEN_PX * view_scale * 0.5);
     let radius_inner = radius_outer * 0.52;
     let ring_thickness = (1.5 * view_scale).max(f32::EPSILON);
@@ -715,11 +741,18 @@ fn sync_poi(
     let mode = layer
         .poi_material_mode
         .expect("ensure_poi_materials 必须已初始化");
-    let materials = layer
+    let (ring_plain, dot_plain, city_ring, city_dot) = layer
         .poi_materials
         .iter()
         .find(|m| m.mode == mode)
-        .map(|m| (m.ring.clone(), m.dot.clone()))
+        .map(|m| {
+            (
+                m.ring.clone(),
+                m.dot.clone(),
+                m.city_ring.clone(),
+                m.city_dot.clone(),
+            )
+        })
         .expect("ensure_poi_materials 必须已初始化");
 
     if layer.poi_outer.mesh.entities.len() > visible.len() {
@@ -748,6 +781,11 @@ fn sync_poi(
     }
 
     for (i, dot) in visible.iter().enumerate() {
+        let (ring_mat, dot_mat) = if dot.is_city {
+            (&city_ring, &city_dot)
+        } else {
+            (&ring_plain, &dot_plain)
+        };
         let outer_spec = PoiOuterSpec {
             pos: dot.pos,
             inner_radius: ring_inner,
@@ -763,7 +801,7 @@ fn sync_poi(
             let entity = commands
                 .spawn((
                     Mesh2d(mesh.clone()),
-                    MeshMaterial2d(materials.0.clone()),
+                    MeshMaterial2d(ring_mat.clone()),
                     Transform::from_translation(dot.pos.extend(POI_OUTER_Z + z_offset)),
                 ))
                 .id();
@@ -780,7 +818,7 @@ fn sync_poi(
                 material_changed,
                 &mut layer.poi_outer.mesh.meshes[i],
                 &mut layer.poi_outer.specs[i],
-                &materials.0,
+                ring_mat,
             );
         }
 
@@ -789,7 +827,7 @@ fn sync_poi(
             let entity = commands
                 .spawn((
                     Mesh2d(mesh.clone()),
-                    MeshMaterial2d(materials.1.clone()),
+                    MeshMaterial2d(dot_mat.clone()),
                     Transform::from_translation(dot.pos.extend(POI_INNER_Z + z_offset)),
                 ))
                 .id();
@@ -806,7 +844,7 @@ fn sync_poi(
                 material_changed,
                 &mut layer.poi_inner.mesh.meshes[i],
                 &mut layer.poi_inner.specs[i],
-                &materials.1,
+                dot_mat,
             );
         }
     }
@@ -973,20 +1011,17 @@ mod tests {
         assert!(spec.length >= f32::EPSILON, "len must not be 0");
     }
 
+    /// 既有语义不破：城市 POI 在 Nation 档不淡（`poi_kept_at_tier` 的保留位）。
     #[test]
-    fn nation_tier_keeps_only_city_pois() {
-        let city = PlaceDot {
-            pos: Vec2::ONE,
-            is_city: true,
-        };
-        let waypoint = PlaceDot {
-            pos: Vec2::ZERO,
-            is_city: false,
-        };
-        assert!(poi_kept_at_tier(&city, LodTier::Nation));
-        assert!(!poi_kept_at_tier(&waypoint, LodTier::Nation));
-        assert!(poi_kept_at_tier(&waypoint, LodTier::Region));
-        assert!(poi_kept_at_tier(&waypoint, LodTier::Edit));
+    fn city_pois_do_not_fade_at_nation_tier() {
+        let fade = lod_fade(LOD_NATION_SCALE * 2.0, LOD_NATION_SCALE);
+        assert_eq!(poi_alpha_multiplier(true, fade), 1.0, "is_city 恒不淡");
+        assert!(
+            poi_alpha_multiplier(false, fade) < 1e-6,
+            "非城市远端淡尽，得 {}",
+            poi_alpha_multiplier(false, fade)
+        );
+        assert_eq!(poi_alpha_multiplier(false, 0.0), 1.0, "近端非城市 POI 全显");
     }
 
     /// 同一投影连续两帧不应继续新增 Mesh / Material 资产。
