@@ -756,10 +756,7 @@ fn write_world_terrain(world: &mut World, map: &Id) {
             let t = ((n + 1.0) / 2.0).clamp(0.0, 1.0);
             let east = (x as f64 / w as f64) * 1.2;
             let t = (t * 0.55 + east * 0.45).clamp(0.0, 1.0);
-            cells.push(wv_core::terrain::TerrainCellData {
-                height: (t * 2000.0) as i16,
-                kind: terrain_kind(t),
-            });
+            cells.push(channels(terrain_kind(t), (t * 2000.0) as i16));
         }
     }
     world.set_terrain(
@@ -789,10 +786,7 @@ fn write_city_terrain(world: &mut World, map: &Id) {
             }
             let t = t.clamp(0.0, 1.0);
             // 低洼海滨：高度上限 600 m（与 2000 m 的世界图拉开层次）。
-            cells.push(wv_core::terrain::TerrainCellData {
-                height: (t * 600.0) as i16,
-                kind: terrain_kind(t),
-            });
+            cells.push(channels(terrain_kind(t), (t * 600.0) as i16));
         }
     }
     world.set_terrain(
@@ -823,5 +817,22 @@ fn terrain_kind(t: f64) -> u8 {
         6 // 山
     } else {
         7 // 雪
+    }
+}
+
+/// 旧 kind 槽位 → 三通道（与 `wv_io::terrain_bin::migrate_v1_kind` 同表）。
+fn channels(kind: u8, height: i16) -> wv_core::terrain::TerrainCellData {
+    let (surface, biome) = match kind {
+        0 | 1 => (0u8, 0u8),
+        2 => (1, 5),     // 沙 → 沙漠
+        3 => (1, 3),     // 草原
+        4 => (1, 1),     // 森林
+        5..=7 => (1, 0), // 丘/山/雪：高度派生
+        _ => (1, 0),
+    };
+    wv_core::terrain::TerrainCellData {
+        height,
+        surface,
+        biome,
     }
 }

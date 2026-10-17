@@ -159,7 +159,7 @@ pub fn commit_stroke_on_release(
                 center: (*x, *y),
                 radius: brush.radius,
                 softness: brush.softness,
-                kind: Some(brush.kind),
+                target: Some(crate::ui::shell::brush_target(brush.kind)),
                 height_delta: 0.0,
             });
         }
@@ -477,7 +477,8 @@ pub fn commit_region_intent(
                 .iter()
                 .map(|c| wv_terrain::TerrainCell {
                     height: c.height,
-                    kind: c.kind,
+                    surface: c.surface,
+                    biome: c.biome,
                 })
                 .collect();
             let mut scratch = match wv_terrain::TerrainGrid::from_cells(t.width, t.height, cells) {
@@ -762,7 +763,7 @@ mod tests {
             center: (50.0, 50.0), // 格 (5, 5)
             radius: 10.0,         // 1 格半径
             softness: 0.0,
-            kind: None,
+            target: None,
             height_delta: 0.0,
         });
         let bbox = stroke_bbox_in_cells(&stroke, &grid);
@@ -783,14 +784,14 @@ mod tests {
             center: (10.0, 10.0), // 格 (1, 1)
             radius: 5.0,
             softness: 0.0,
-            kind: None,
+            target: None,
             height_delta: 0.0,
         });
         stroke.push(Brush {
             center: (50.0, 50.0), // 格 (5, 5)
             radius: 5.0,
             softness: 0.0,
-            kind: None,
+            target: None,
             height_delta: 0.0,
         });
         let bbox = stroke_bbox_in_cells(&stroke, &grid);
@@ -811,7 +812,7 @@ mod tests {
             center: (5.0, 5.0), // 格 (0, 0) + radius 边距会到负
             radius: 100.0,      // 远大于 cell_size
             softness: 0.0,
-            kind: None,
+            target: None,
             height_delta: 0.0,
         });
         let bbox = stroke_bbox_in_cells(&stroke, &grid);
@@ -910,8 +911,12 @@ mod tests {
 
     use wv_core::terrain::TerrainCellData;
 
-    fn cell(kind: u8) -> TerrainCellData {
-        TerrainCellData { height: 0, kind }
+    fn cell(biome: u8) -> TerrainCellData {
+        TerrainCellData {
+            height: 0,
+            surface: if biome == 0 { 0 } else { 1 },
+            biome,
+        }
     }
 
     /// 无变化 → None。
@@ -967,7 +972,8 @@ mod tests {
             .into_iter()
             .map(|c| wv_core::terrain::TerrainCellData {
                 height: c.height,
-                kind: c.kind,
+                surface: c.surface,
+                biome: c.biome,
             })
             .collect();
         projection.world.set_terrain(

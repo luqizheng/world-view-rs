@@ -376,7 +376,8 @@ mod tests {
         let mut cells = vec![
             wv_core::terrain::TerrainCellData {
                 height: -3500,
-                kind: 0,
+                surface: 0,
+                biome: 0,
             };
             40 * 40
         ];
@@ -385,7 +386,8 @@ mod tests {
                 for x in 0..20 {
                     cells[y * 40 + x] = wv_core::terrain::TerrainCellData {
                         height: 500,
-                        kind: 3,
+                        surface: 1,
+                        biome: 3,
                     };
                 }
             }

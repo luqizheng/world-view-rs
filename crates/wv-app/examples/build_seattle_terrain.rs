@@ -45,10 +45,7 @@ fn main() {
     };
     let cells: Vec<TerrainCellData> = bytes[2..]
         .iter()
-        .map(|&kind| TerrainCellData {
-            height: height_of(kind),
-            kind,
-        })
+        .map(|&kind| channels(kind, height_of(kind)))
         .collect();
     let data = TerrainData {
         width: grid_w,
@@ -205,4 +202,21 @@ fn adler32(data: &[u8]) -> u32 {
         b = (b + a) % 65_521;
     }
     (b << 16) | a
+}
+
+/// 旧 kind 槽位 → 三通道（与 `wv_io::terrain_bin::migrate_v1_kind` 同表）。
+fn channels(kind: u8, height: i16) -> wv_core::terrain::TerrainCellData {
+    let (surface, biome) = match kind {
+        0 | 1 => (0u8, 0u8),
+        2 => (1, 5),     // 沙 → 沙漠
+        3 => (1, 3),     // 草原
+        4 => (1, 1),     // 森林
+        5..=7 => (1, 0), // 丘/山/雪：高度派生
+        _ => (1, 0),
+    };
+    wv_core::terrain::TerrainCellData {
+        height,
+        surface,
+        biome,
+    }
 }

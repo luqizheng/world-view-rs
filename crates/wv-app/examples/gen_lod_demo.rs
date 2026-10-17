@@ -138,10 +138,7 @@ fn build_world(meta: WorldMeta) -> World {
             } else {
                 7 // 雪
             };
-            cells.push(wv_core::terrain::TerrainCellData {
-                height: (t * 2000.0) as i16,
-                kind,
-            });
+            cells.push(channels(kind, (t * 2000.0) as i16));
         }
     }
     world.set_terrain(
@@ -336,4 +333,21 @@ fn build_world(meta: WorldMeta) -> World {
     ];
 
     world
+}
+
+/// 旧 kind 槽位 → 三通道（与 `wv_io::terrain_bin::migrate_v1_kind` 同表）。
+fn channels(kind: u8, height: i16) -> wv_core::terrain::TerrainCellData {
+    let (surface, biome) = match kind {
+        0 | 1 => (0u8, 0u8),
+        2 => (1, 5),     // 沙 → 沙漠
+        3 => (1, 3),     // 草原
+        4 => (1, 1),     // 森林
+        5..=7 => (1, 0), // 丘/山/雪：高度派生
+        _ => (1, 0),
+    };
+    wv_core::terrain::TerrainCellData {
+        height,
+        surface,
+        biome,
+    }
 }

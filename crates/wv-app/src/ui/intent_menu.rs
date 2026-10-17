@@ -320,7 +320,8 @@ mod tests {
                 cells: vec![
                     wv_core::terrain::TerrainCellData {
                         height: 10,
-                        kind: 3
+                        surface: 1,
+                        biome: 3,
                     };
                     64
                 ],

@@ -865,10 +865,10 @@ mod tests {
             "海洋底图高度应为负，实得 {}",
             ocean.height
         );
-        assert!(ocean.kind <= 1, "海洋底图类型应为水系");
+        assert!(ocean.surface == 0, "海洋底图地表应为水");
         let land = MapBase::Land.cell();
         assert!(land.height >= 0, "陆地底图高度应非负，实得 {}", land.height);
-        assert!(land.kind > 1, "陆地底图类型应为陆系");
+        assert!(land.surface == 1, "陆地底图地表应为陆");
     }
 
     /// 2026-10-16 用户裁定：新建对话框的默认底图 = 海洋。

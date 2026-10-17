@@ -535,7 +535,7 @@ mod tests {
         );
         let terrain = w.terrain_of(&map.id).expect("首图必须带预填充栅格");
         assert!(
-            terrain.cells.iter().all(|c| c.height < 0 && c.kind == 0),
+            terrain.cells.iter().all(|c| c.height < 0 && c.surface == 0),
             "首图预填充必须整图深水负高度"
         );
     }
@@ -570,8 +570,8 @@ mod tests {
             "海洋底图必须整片在海平面下"
         );
         assert!(
-            terrain.cells.iter().all(|c| c.kind == 0),
-            "海洋底图 kind 必须全部为 0（深水）"
+            terrain.cells.iter().all(|c| c.surface == 0),
+            "海洋底图地表必须全部为水"
         );
     }
 
