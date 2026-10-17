@@ -10,6 +10,8 @@
 //! - 零第三方依赖——坐标一律 `(f32, f32)`，不用 glam。
 //! - 确定性（D6）：同 `(envelopes, params, seed)` → 逐位一致的网格。
 
+use crate::generate::Perlin;
+
 // ---------------------------------------------------------------------------
 // 八参数（大陆配方属性面板 v1）
 // ---------------------------------------------------------------------------
@@ -207,6 +209,52 @@ pub(crate) fn polygon_bbox(polys: &[Vec<(f32, f32)>]) -> Option<((f32, f32), (f3
     any.then_some((min, max))
 }
 
+// ---------------------------------------------------------------------------
+// 海岸距离场
+// ---------------------------------------------------------------------------
+
+/// 海岸有符号距离场：多包络取「最近的包络」（各包络 `signed_distance` 的 max），
+/// 再叠 fBm 扰动。
+///
+/// `amp = coast_wiggle × 0.10 × diag`：蜿蜒度 0 时扰动为零，海岸严格贴
+/// 多边形边（Task 5 的贴边性质测试依赖这一点）。fBm 采样坐标按 `diag × 0.25`
+/// 归一，使不同规模地图的「海岬尺度」观感一致。
+pub(crate) fn coast_field(
+    p: (f32, f32),
+    polys: &[Vec<(f32, f32)>],
+    params: &ContinentParams,
+    noise: &Perlin,
+    diag: f32,
+) -> f32 {
+    let mut d = f32::NEG_INFINITY;
+    for poly in polys {
+        if poly.len() < 3 {
+            continue;
+        }
+        let sd = signed_distance(p, poly);
+        if sd > d {
+            d = sd;
+        }
+    }
+    if !d.is_finite() {
+        return 0.0;
+    }
+    let amp = params.coast_wiggle * 0.10 * diag;
+    if amp == 0.0 {
+        return d;
+    }
+    let scale = (diag * 0.25).max(f32::EPSILON);
+    let n = noise.fbm(
+        (p.0 / scale) as f64,
+        (p.1 / scale) as f64,
+        params.coast_octaves,
+        2.0,
+        0.5,
+    );
+    let fbm01 = ((n * 0.5 + 1.0) as f32).clamp(0.0, 1.0);
+    d + amp * fbm01
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +280,18 @@ mod tests {
         assert!((p.desert_cover - 0.15).abs() < 1e-6, "desert_cover 得 {}", p.desert_cover);
         assert_eq!(p.shelf_cells, 8, "shelf_cells 得 {}", p.shelf_cells);
         assert_eq!(p.islands, IslandDensity::Off, "islands 得 {:?}", p.islands);
+    }
+
+    #[test]
+    fn zero_wiggle_coast_field_equals_plain_signed_distance() {
+        let sq = vec![vec![(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]];
+        // 计划原文这里写 `default()` 却称 wiggle=0；缺省是 0.40，实际属性是
+        // 「wiggle=0 时扰动为零」，故显式置 0（Ruling 见 ledger）。
+        let mut p = ContinentParams::default();
+        p.coast_wiggle = 0.0;
+        let n = Perlin::new(42);
+        let f = coast_field((50.0, 50.0), &sq, &p, &n, 141.42);
+        assert!((f - 50.0).abs() < 1e-3, "wiggle=0 应等于裸距离 50，got {f}");
     }
 
     #[test]
