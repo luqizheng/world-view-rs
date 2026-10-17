@@ -32,7 +32,9 @@ use bevy::render::mesh::Indices;
 use bevy::render::render_resource::PrimitiveTopology;
 
 use crate::layer_frame::LayerFrame;
-use crate::state::{lod_fade, lod_tier, GridConfig, ViewState, LOD_NATION_SCALE};
+#[cfg(test)]
+use crate::state::LOD_NATION_SCALE;
+use crate::state::{lod_fade, lod_tier, GridConfig, ViewState, LOD_REGION_SCALE};
 use crate::theme::colors_google::{
     GOOGLE_PLACE_DOT, GOOGLE_POI_RING, GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL,
 };
@@ -319,7 +321,9 @@ pub fn sync_vector_layers(
         apply_road_material_alpha(&mut materials, &layer, layers.road.opacity);
     }
     // POI 的 alpha 还依赖缩放（非城市淡出）：每帧刷 4 个材质句柄，代价可忽略。
-    let poi_fade = lod_fade(view.scale, LOD_NATION_SCALE);
+    // 非城市阈值 = **Region**（2026-10-18）：Overture 路口这类无范围点标在大
+    // 工程里数以万计，只有近距（Edit 档）才该出现；城市材质不吃 fade。
+    let poi_fade = poi_fade_for(view.scale);
     apply_poi_material_alpha(&mut materials, &layer, layers.place.opacity, poi_fade);
     let road_z = layers.road.z_offset;
     let place_z = layers.place.z_offset;
@@ -509,6 +513,14 @@ fn apply_poi_material_alpha(
             mat.color = dot.with_alpha(dot.alpha() * opacity);
         }
     }
+}
+
+/// 非城市 POI 的缩放淡出（2026-10-18 起阈值 = Region）。
+///
+/// 见 `non_city_poi_fade_uses_region_threshold_not_nation` 的测试注释：
+/// 大工程（guangdong 8.1 万路口）的无范围点标只允许近距出现。
+fn poi_fade_for(view_scale: f32) -> f32 {
+    lod_fade(view_scale, LOD_REGION_SCALE)
 }
 
 /// 单个 POI 的可见度系数：城市恒 1；非城市随淡出带趋 0。
@@ -1122,6 +1134,35 @@ mod tests {
             poi_alpha_multiplier(false, fade)
         );
         assert_eq!(poi_alpha_multiplier(false, 0.0), 1.0, "近端非城市 POI 全显");
+    }
+
+    /// 非城市 POI 的淡出阈值是 **Region**（广东省导入缺口修，2026-10-18）：
+    /// Overture 路口（无 w/h 的非城市点标）全省 8.1 万个，若沿 Nation 阈值淡出，
+    /// 中距缩放会全部涌入 POI 池（每点 mesh × 每帧重建 = 掉帧）。收紧到
+    /// Region：Region/Nation 档淡尽、只近距（Edit 档）可见——与「低层级只画
+    /// 高级要素」的既有口径一致；城市点标不受影响（材质分城市/普通两套）。
+    #[test]
+    fn non_city_poi_fade_uses_region_threshold_not_nation() {
+        // Region 淡出带顶（threshold × 1.125 = 1.125，仍在 Region 档）：
+        // 非城市 POI 已淡尽。带内（1.0–1.125）保留少量过渡，符合 smoothstep。
+        let region_band_top = LOD_REGION_SCALE * 1.125;
+        assert_eq!(
+            crate::state::lod_tier(region_band_top),
+            crate::state::LodTier::Region,
+            "带顶仍在 Region 档"
+        );
+        assert!(
+            poi_alpha_multiplier(false, poi_fade_for(region_band_top)) < 1e-6,
+            "Region 带顶非城市应淡尽，得 {}",
+            poi_alpha_multiplier(false, poi_fade_for(region_band_top))
+        );
+        // Nation 档：同样淡尽（不回归）。
+        assert!(poi_fade_for(LOD_NATION_SCALE) >= 1.0);
+        // 近距（scale = 0.5，Edit 档）：全显。
+        assert_eq!(poi_fade_for(0.5), 0.0, "近端 fade 应为 0");
+        // 旧 Nation 阈值对照：同样的 scale 在旧口径下非城市点标仍满显
+        // （lod_fade(1.125, 3.0) = 0）——证明本改动真的收紧了门。
+        assert_eq!(lod_fade(region_band_top, LOD_NATION_SCALE), 0.0);
     }
 
     /// 同一投影连续两帧不应继续新增 Mesh / Material 资产。

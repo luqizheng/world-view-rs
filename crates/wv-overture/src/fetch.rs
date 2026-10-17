@@ -119,9 +119,15 @@ pub fn parse_geojson_segments_with_connectors(
         // Overture 数据按 `at` 升序：`at=0` 起点、`at=1` 终点；保险起见显式排序。
         let mut cons = feat.properties.connectors.clone();
         cons.sort_by(|a, b| a.at.partial_cmp(&b.at).unwrap_or(std::cmp::Ordering::Equal));
+        let first = coords.first().copied().unwrap_or(GeoCoord::new(0.0, 0.0));
+        let last = coords.last().copied().unwrap_or(GeoCoord::new(0.0, 0.0));
         out.push(SegmentWithConnectors {
             connector_a: cons[0].connector_id.clone(),
             connector_b: cons[1].connector_id.clone(),
+            a_lon: first.longitude,
+            a_lat: first.latitude,
+            b_lon: last.longitude,
+            b_lat: last.latitude,
             distance_km: (length_m / 1000.0) as f32,
             terrain: terrain.to_string(),
             road_class: feat.properties.class.clone(),
@@ -138,6 +144,12 @@ pub struct SegmentWithConnectors {
     pub connector_a: String,
     /// 终点 connector_id（`at=1`，Overture UUID）。
     pub connector_b: String,
+    /// 起点经纬度（LineString 首坐标，WGS84）——路口 Place 的锚定坐标来源。
+    pub a_lon: f64,
+    pub a_lat: f64,
+    /// 终点经纬度（LineString 末坐标）。
+    pub b_lon: f64,
+    pub b_lat: f64,
     /// Haversine 累加的线段长。
     pub distance_km: f32,
     /// 来自 `class_to_terrain` 的领域 terrain（"road" / "plain" / "mountain" ...）。
@@ -297,6 +309,56 @@ mod tests {
         }"#;
         let fc = parse_geojson_str(gj).unwrap();
         assert!(parse_geojson_segments(&fc).is_empty());
+    }
+
+    /// 端点坐标回归（广东省导入缺口修）：`parse_geojson_segments_with_connectors`
+    /// 必须携带 LineString 首/末坐标——`wv overture apply` 靠它给路口 Place
+    /// 写 x/y，缺失则道路边无法投影成线段（路网画不出来）。
+    #[test]
+    fn segments_with_connectors_carry_endpoint_coordinates() {
+        let gj = r#"{
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "id": "33333333-4444-5555-6666-777777777777",
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": [
+                            [113.10, 23.05],
+                            [113.20, 23.10],
+                            [113.30, 23.15]
+                        ]
+                    },
+                    "properties": {
+                        "subtype": "road",
+                        "class": "motorway",
+                        "connectors": [
+                            {"connector_id": "cafe0000-0000-0000-0000-000000000001", "at": 0},
+                            {"connector_id": "cafe0000-0000-0000-0000-000000000002", "at": 1}
+                        ]
+                    }
+                }
+            ]
+        }"#;
+        let fc = parse_geojson_str(gj).unwrap();
+        let segs = parse_geojson_segments_with_connectors(&fc);
+        assert_eq!(segs.len(), 1, "motorway 带 connectors 应保留");
+        let s = &segs[0];
+        assert_eq!(s.connector_a, "cafe0000-0000-0000-0000-000000000001");
+        assert_eq!(s.connector_b, "cafe0000-0000-0000-0000-000000000002");
+        assert!(
+            (s.a_lon - 113.10).abs() < 1e-9 && (s.a_lat - 23.05).abs() < 1e-9,
+            "a 端 = 首坐标，got ({}, {})",
+            s.a_lon,
+            s.a_lat
+        );
+        assert!(
+            (s.b_lon - 113.30).abs() < 1e-9 && (s.b_lat - 23.15).abs() < 1e-9,
+            "b 端 = 末坐标，got ({}, {})",
+            s.b_lon,
+            s.b_lat
+        );
     }
 
     #[test]

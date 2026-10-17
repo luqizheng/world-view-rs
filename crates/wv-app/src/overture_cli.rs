@@ -834,21 +834,27 @@ fn apply_command(args: &[String]) -> Result<(), String> {
         parsed.road_class.join(",")
     );
 
-    // 4) 收集 connector 端点去重 → 自动建 Place（路口）
+    // 4) 收集 connector 端点去重 → 自动建 Place（路口）。
     // 用 short_id 派生 Id：UUID 去掉 `-` 取前 12 位 hex，加 `place_int_` 前缀。
+    // 坐标取首见的 LineString 端点（同一 connector 被多段共享，首见即代表）；
+    // 路口必须锚定 map + x/y，否则道路边投影不出线段（广东省导入缺口修）。
     let mut connector_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut intersection_places: Vec<(String, String)> = Vec::new(); // (id, name)
+    let mut intersection_places: Vec<(String, String, f64, f64)> = Vec::new(); // (id, name, lon, lat)
     for s in &segments {
         if connector_seen.insert(s.connector_a.clone()) {
             intersection_places.push((
                 format!("place_int_{}", short_id_from_uuid(&s.connector_a)),
                 "路口".to_string(),
+                s.a_lon,
+                s.a_lat,
             ));
         }
         if connector_seen.insert(s.connector_b.clone()) {
             intersection_places.push((
                 format!("place_int_{}", short_id_from_uuid(&s.connector_b)),
                 "路口".to_string(),
+                s.b_lon,
+                s.b_lat,
             ));
         }
     }
@@ -933,7 +939,7 @@ fn short_id_from_uuid(uuid: &str) -> String {
 fn build_world(
     args: &ApplyArgs,
     cities: &[(String, String, f64, f64)],
-    intersection_places: &[(String, String)],
+    intersection_places: &[(String, String, f64, f64)],
     segments: &[SegmentWithConnectors],
 ) -> wv_core::World {
     // ---- 1) 计算 bbox（取城市 min/max 经纬度，外扩 0.5° 缓冲）---------
@@ -1035,15 +1041,17 @@ fn build_world(
         places.push(place);
     }
 
-    // ---- 4) 路口 Place（无 x/y，纯图节点）-------------------------------
-    for (id, name) in intersection_places {
+    // ---- 4) 路口 Place（锚定 root map + x/y——道路边投影的坐标源）---------
+    // 无 w/h：不占范围、不当城市 POI（`is_city = false`，随 LOD 淡出）。
+    for (id, name, lon, lat) in intersection_places {
+        let (x, y) = project_lat_lon_to_xy(*lat, *lon, &bbox, &extent_root);
         places.push(wv_core::distance::Place {
             id: wv_core::Id::new_unchecked(id),
             name: name.clone(),
             feature: None,
-            map: None,
-            x: None,
-            y: None,
+            map: Some(wv_core::Id::new_unchecked(ROOT_MAP_ID)),
+            x: Some(x),
+            y: Some(y),
             w: None,
             h: None,
         });
@@ -1793,11 +1801,31 @@ mod tests {
                 c.id
             );
         }
-        // 4 个路口 Place 也要在
+        // 4 个路口 Place 也要在，且**锚定 root map 带坐标**（道路边投影源）
         assert!(
             ptext.contains("place_int_aaaaaaaa"),
             "应含 4 个路口 place_int_"
         );
+        {
+            let blocks: Vec<&str> = ptext
+                .split("- id: ")
+                .filter(|b| b.starts_with("place_int_"))
+                .collect();
+            assert_eq!(
+                blocks.len(),
+                3,
+                "fixture 去重后 3 个路口，got {}",
+                blocks.len()
+            );
+            for b in &blocks {
+                assert!(b.contains("x:"), "路口必须有 x 坐标：{b}");
+                assert!(b.contains("y:"), "路口必须有 y 坐标：{b}");
+                assert!(
+                    b.contains(&format!("map: {ROOT_MAP_ID}")),
+                    "路口必须锚定 root map：{b}"
+                );
+            }
+        }
         // 关键性能断言：per-entity 目录**不应**存在
         assert!(
             !target.join("distances/places").exists(),
