@@ -1025,6 +1025,7 @@ fn build_world(
         let place = wv_core::distance::Place {
             id: wv_core::Id::new_unchecked(&place_id),
             name: name.clone(),
+            feature: None,
             map: Some(wv_core::Id::new_unchecked(ROOT_MAP_ID)),
             x: Some(x),
             y: Some(y),
@@ -1039,6 +1040,7 @@ fn build_world(
         places.push(wv_core::distance::Place {
             id: wv_core::Id::new_unchecked(id),
             name: name.clone(),
+            feature: None,
             map: None,
             x: None,
             y: None,
@@ -1102,6 +1104,7 @@ fn build_world(
         narrations: Vec::new(),
         factions: Vec::new(),
         faction_geometry: Vec::new(),
+        place_geometry: Vec::new(),
         regions: Vec::new(),
         terrains: std::collections::BTreeMap::new(),
         streets: std::collections::BTreeMap::new(),

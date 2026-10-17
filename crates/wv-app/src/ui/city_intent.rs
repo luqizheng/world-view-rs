@@ -130,10 +130,11 @@ pub fn prefill(
 ///
 /// 失败只 notice、不关窗——作者填的名字 / ID / 面积不丢（V1 精神）。
 /// 返回 `true` = 建图成功（钻入失败会单独 notice，但不视作提交失败）。
+#[allow(clippy::too_many_arguments)]
 pub fn commit_city(
     dialog: &CityIntentDialog,
     playback: &crate::state::PlaybackState,
-    loc: crate::i18n::Locale,
+    _loc: crate::i18n::Locale,
     projection: &mut WorldProjection,
     edit: &mut EditHistory,
     drill: &mut DrillState,

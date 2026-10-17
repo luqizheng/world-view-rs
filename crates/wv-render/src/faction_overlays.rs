@@ -150,7 +150,10 @@ fn faction_color(faction: &Faction) -> [u8; 3] {
 /// **为什么填 CCW 还是 CW 都画**：Bevy 2D Mesh 默认正反面都渲染（无 cull），
 /// CCW 错误最多是顺序问题；下面给顶点用 `add_vertex` 不传法线，材质是纯色
 /// 不依赖光照方向，无视觉问题。
-fn build_polygon_mesh(coords: &[f32]) -> Mesh {
+///
+/// `pub(crate)`：`feature_overlays` 复用它画事实地界的远带晕（同一种扇形
+/// 三角化口径，不复制实现）。
+pub(crate) fn build_polygon_mesh(coords: &[f32]) -> Mesh {
     let n = coords.len() / 2;
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n);
     for i in 0..n {

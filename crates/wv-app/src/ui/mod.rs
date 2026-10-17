@@ -23,6 +23,7 @@ pub mod command_palette_window;
 pub mod compass_panel;
 pub mod continent_dialog;
 pub mod faction_panel;
+pub mod feature_place_dialog;
 pub mod hover_tooltip;
 pub mod inspector_panel;
 pub mod intent_menu;
@@ -49,6 +50,7 @@ pub use command_palette_window::command_palette;
 pub use compass_panel::panel_compass;
 pub use continent_dialog::{continent_dialog, continent_dialog_system, ContinentDialog};
 pub use faction_panel::panel_faction;
+pub use feature_place_dialog::{feature_place_dialog, FeaturePlaceDialog};
 pub use inspector_panel::panel_inspector;
 pub use intent_menu::intent_menu;
 pub use layers_panel::{panel_layers, panel_map_tree};
@@ -114,6 +116,7 @@ pub use widgets::{
     ICON_RULER,
     ICON_SEARCH,
     ICON_SQUARE,
+    ICON_TREES,
     ICON_VOLCANO,
     ICON_ZOOM_IN,
     ICON_ZOOM_OUT,

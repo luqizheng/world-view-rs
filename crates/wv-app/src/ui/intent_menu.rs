@@ -26,7 +26,9 @@ use crate::ui_shell::StartupLoadRequest;
 
 use super::shell::UiShell;
 use super::widgets::icon_image;
-use super::{ICON_GLOBE, ICON_HILLS, ICON_LAKE, ICON_MAP_PIN, ICON_MOUNTAIN_RANGE, ICON_PLATEAU};
+use super::{
+    ICON_GLOBE, ICON_HILLS, ICON_LAKE, ICON_MAP_PIN, ICON_MOUNTAIN_RANGE, ICON_PLATEAU, ICON_TREES,
+};
 use crate::theme::ui_tokens::radius;
 
 /// 单瓷砖边长与图标内嵌（视觉对齐 [`super::map_controls`] 的瓷砖规格）。
@@ -40,10 +42,10 @@ fn terrain_intents_available(world: &wv_core::World, map: &wv_core::Id) -> bool 
 }
 
 /// 意图目录大小：按图级过滤（spec §4 裁定——有地形栅格 ∧ 图级 ∈
-/// {World, Region}；M1 目录只有「生成大陆」一项，森林随 M4 加入）。
+/// {World, Region}）。M4 起目录含「森林」：大陆 + 城市 + 森林 + 地形四意图。
 fn intent_count_for(level: wv_core::map::MapLevel) -> usize {
     match level {
-        wv_core::map::MapLevel::World | wv_core::map::MapLevel::Region => 6,
+        wv_core::map::MapLevel::World | wv_core::map::MapLevel::Region => 7,
         wv_core::map::MapLevel::City | wv_core::map::MapLevel::Interior => 0,
     }
 }
@@ -69,6 +71,7 @@ pub fn intent_menu(
     mut selection: ResMut<wv_render::state::SelectionState>,
     mut continent_dialog: ResMut<crate::ui::ContinentDialog>,
     mut city_dialog: ResMut<CityIntentDialog>,
+    mut feature_dialog: ResMut<crate::ui::FeaturePlaceDialog>,
     mut projection: ResMut<wv_render::state::WorldProjection>,
     mut edit: ResMut<crate::edit::editing::EditHistory>,
     mut tex: ResMut<wv_render::terrain_view::TerrainTexture>,
@@ -166,6 +169,30 @@ pub fn intent_menu(
                                     }
                                 }
                             }
+                            // 森林（M4）：只把环与**当前图 id** 搬进命名对话框，
+                            // 不消费选区——确认 / 取消都发生在对话框里。
+                            let icon = icon_image(
+                                ICON_TREES,
+                                egui::Color32::WHITE,
+                                TILE_SIZE - ICON_INSET,
+                            );
+                            if ui
+                                .add(
+                                    egui::Button::image_and_text(
+                                        icon,
+                                        t(loc, I18nKey::IntentMenuForest),
+                                    )
+                                    .fill(shell.accent())
+                                    .corner_radius(egui::CornerRadius::from(radius::PANEL)),
+                                )
+                                .clicked()
+                            {
+                                if let (Some(map), Some(ring)) =
+                                    (drill.current().cloned(), selection.closed.clone())
+                                {
+                                    feature_dialog.open_with(map, ring);
+                                }
+                            }
                             // 地形按钮栅格门（spec §4：有**自有**地形栅格才可用，
                             // 终审 Important 1——无栅格图的预检/提交口径不一致）。
                             let terrain_ok = drill
@@ -197,7 +224,8 @@ pub fn intent_menu(
                             };
                             let mut terrain_button =
                                 |icon: egui::ImageSource<'static>, label: &'static str| -> bool {
-                                    ui.add(
+                                    ui.add_enabled(
+                                        terrain_ok,
                                         egui::Button::image_and_text(
                                             icon_image(
                                                 icon,
@@ -256,12 +284,12 @@ mod tests {
     fn intent_catalog_nonempty_for_world_and_region() {
         assert_eq!(
             intent_count_for(MapLevel::World),
-            6,
-            "世界级：大陆 + 城市 + 地形四意图（M3）"
+            7,
+            "世界级：大陆 + 城市 + 森林（M4）+ 地形四意图（M3）"
         );
         assert_eq!(
             intent_count_for(MapLevel::Region),
-            6,
+            7,
             "区域级同世界级（spec §4 裁定）"
         );
     }

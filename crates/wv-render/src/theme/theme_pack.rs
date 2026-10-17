@@ -1,12 +1,13 @@
 //! 待批准：本文件在 `app` feature 下才编译。
 #![cfg(feature = "app")]
 
-//! 主题包（Theme Pack）—— 配色 / 装饰 / 贴图的聚合（ADR-0023 D1）。
+//! 主题包（Theme Pack）—— 配色 / 装饰 / 贴图 / 覆盖物规则的聚合（ADR-0023 D1）。
 //!
 //! ## 职责
 //! - 承载一个**完整视觉风格**的静态外观数据：色板（`PaletteColors`）+ 装饰旗标
 //!   （`TreatmentFlags`，待 ADR-0021 D2 落地后接线）+ 可选贴图（`Option<TileAtlasSpec>`
-//!   = 现有 `TileAtlas` 的薄包装，**不**造第二套贴图抽象）；
+//!   = 现有 `TileAtlas` 的薄包装，**不**造第二套贴图抽象）+ 覆盖物演绎规则
+//!   （`FeatureOverlaySet`，2026-10-17 主题覆盖物设计）；
 //! - 提供 `BuiltinPacks::DEFAULT` 作为本编辑器默认观感（= 现有 `PaletteColors::DAYLIGHT`），
 //!   保证 M1 零回归；
 //! - `ActiveThemePack` Resource 是渲染系统统一取色入口（M1 暂**不**切换消费点，
@@ -26,10 +27,11 @@
 
 use bevy::prelude::*;
 
+use super::overlays::{FeatureOverlaySet, FeatureRule};
 use super::palette::{MapPalette, PaletteColors};
 use crate::terrain_view::tile_atlas::TileAtlas;
 
-/// 主题包：色板 + 装饰 + 贴图的原子组合（ADR-0023 D1）。
+/// 主题包：色板 + 装饰 + 贴图 + 覆盖物规则的原子组合（ADR-0023 D1）。
 ///
 /// **全部字段 `Copy`**——主题切换是原子的、整组失效；任何 `&self -> Self` 风格
 /// 的修改都不应在这里出现，切换走"换 Resource 引用"。
@@ -53,6 +55,12 @@ pub struct ThemePack {
     /// 是 `env!("CARGO_MANIFEST_DIR")/assets`，外部主题 crate 的贴图进不来——这是
     /// D2 待解决的差距。M2 接入 `wv-theme-xxx` 时这里改为 `Some(TileAtlasSpec)` 即可。
     pub atlas: Option<TileAtlasSpec>,
+    /// 覆盖物演绎规则：feature 词汇 → 远 / 近带规则（晕、符号集、密度、采样参数）。
+    ///
+    /// v1 为代码常量（内置两包各一套、外部主题 crate 自带一本），YAML 化随
+    /// ADR-0023 M3 推迟（README §12-30）。换主题 = 整包换规则；主题没给某
+    /// feature 规则时渲染侧回退「地界描边 + 名字」，事实不消失。
+    pub overlays: FeatureOverlaySet,
 }
 
 /// 贴图规格（= 现有 `TileAtlas` 的薄包装，新增 `format_version` 与可选 `path` 元数据）。
@@ -199,6 +207,26 @@ pub mod builtin {
         palette: PaletteColors::DAYLIGHT,
         treatment: TreatmentFlags::HAND_DRAWN,
         atlas: None,
+        // 设计与取值依据：`docs/superpowers/specs/2026-10-17-theme-overlay-geo-fact-design.md`
+        // §6.4（D10：两内置包各一套，差异做在晕色 / 浓度 / 符号密度）。
+        // 日间：偏灰橄榄绿晕 + 深墨绿树冠。
+        //
+        // `symbol_size_px` 是**屏幕像素**（spec §6.6：树冠符号 24–40 px）；
+        // `symbol_size_px * view.scale`（world-units-per-pixel）换成世界边长。
+        // `symbol_spacing_wu` 是**世界单位**采样间距——放大符号后同步放宽，
+        // 否则近带树冠会重叠成一片糊。
+        overlays: FeatureOverlaySet {
+            forest: Some(FeatureRule {
+                halo_color: [0x5F, 0x7A, 0x4A],
+                halo_alpha: 0.30,
+                symbol_color: [0x3F, 0x5A, 0x35],
+                symbol_size_px: 28.0,
+                symbol_spacing_wu: 40.0,
+                // Task 9（D12）：日间走 3 变体树图集 + 森林盖层晕图章。
+                symbol_texture: Some("overlays/forest/tree_atlas_day.png"),
+                halo_texture: Some("overlays/forest/forest_fill.png"),
+            }),
+        },
     };
 
     /// 暮色旧纸包（与 `PaletteColors::DUSK` 同源；M1 提供作内置第二档，M2 再接持久化）。
@@ -208,6 +236,22 @@ pub mod builtin {
         palette: PaletteColors::DUSK,
         treatment: TreatmentFlags::HAND_DRAWN,
         atlas: None,
+        // 暮色：压暗的橄榄绿晕 + 更深的树冠，晕更淡（0.20）、符号略小
+        //（24 px，仍落在 spec §6.6 的 24–40 px）、采样比日间更密（32wu）
+        // ——与 DEFAULT 在 halo_color / halo_alpha / symbol_size / spacing
+        // 四项上都可见不同（D10 要求 ≥ 2 项）。
+        overlays: FeatureOverlaySet {
+            forest: Some(FeatureRule {
+                halo_color: [0x3E, 0x4A, 0x34],
+                halo_alpha: 0.20,
+                symbol_color: [0x28, 0x32, 0x24],
+                symbol_size_px: 24.0,
+                symbol_spacing_wu: 32.0,
+                // Task 9：暮色符号走浅墨图集；晕保持纯色（贴图校准留待后续）。
+                symbol_texture: Some("overlays/forest/tree_atlas_dusk.png"),
+                halo_texture: None,
+            }),
+        },
     };
 
     /// 内置包列表（M1 = `[DEFAULT]`；M2 改 `[DEFAULT, DUSK]` 后 `view.theme_pack_id` 即可持久化切换）。
@@ -324,5 +368,120 @@ mod tests {
     fn builtin_packs_carry_hand_drawn_treatment() {
         assert_eq!(builtin::DEFAULT.treatment, TreatmentFlags::HAND_DRAWN);
         assert_eq!(builtin::DUSK.treatment, TreatmentFlags::HAND_DRAWN);
+    }
+
+    /// 默认包必须给森林配置覆盖规则（D10：内置两包各一套），且值锁定为设计稿
+    /// 指定的日间古舆图参数——防手滑改成 DUSK 值或漏配 `overlays`。
+    #[test]
+    fn default_pack_has_forest_rule() {
+        let rule = builtin::DEFAULT
+            .overlays
+            .rule_for(crate::theme::overlays::FEATURE_FOREST)
+            .expect("默认包必须给 FEATURE_FOREST 配置规则");
+        assert_eq!(rule.halo_color, [0x5F, 0x7A, 0x4A], "日间晕色");
+        assert!(
+            (rule.halo_alpha - 0.30).abs() < 1e-6,
+            "日间晕浓度 alpha=0.30，got {}",
+            rule.halo_alpha
+        );
+        assert_eq!(rule.symbol_color, [0x3F, 0x5A, 0x35], "日间符号色");
+        assert!(
+            (rule.symbol_size_px - 28.0).abs() < 1e-6,
+            "日间符号尺寸 28px（spec §6.6：24–40px），got {}",
+            rule.symbol_size_px
+        );
+        assert!(
+            (rule.symbol_spacing_wu - 40.0).abs() < 1e-6,
+            "日间采样间距 40wu，got {}",
+            rule.symbol_spacing_wu
+        );
+        assert_eq!(
+            rule.symbol_texture,
+            Some("overlays/forest/tree_atlas_day.png"),
+            "日间符号走 3 变体树图集"
+        );
+        assert_eq!(
+            rule.halo_texture,
+            Some("overlays/forest/forest_fill.png"),
+            "日间晕走森林盖层图章"
+        );
+    }
+
+    /// 暮色包：符号用浅墨图集，晕**不**接贴图（保持纯色暮色晕，Task 9 裁定）。
+    #[test]
+    fn dusk_pack_uses_dusk_atlas_and_flat_halo() {
+        let rule = builtin::DUSK
+            .overlays
+            .rule_for(crate::theme::overlays::FEATURE_FOREST)
+            .expect("暮色包必须给 FEATURE_FOREST 配置规则");
+        assert_eq!(
+            rule.symbol_texture,
+            Some("overlays/forest/tree_atlas_dusk.png"),
+            "暮色符号走浅墨图集"
+        );
+        assert!(
+            rule.halo_texture.is_none(),
+            "暮色晕保持纯色（halo_texture = None）"
+        );
+    }
+
+    /// D10 验收口径：DUSK 与 DEFAULT 至少 2 项可见差异（晕色 / 晕浓度 / 符号
+    /// 尺寸 / 采样间距）。
+    #[test]
+    fn dusk_differs_from_default_in_at_least_two_visual_fields() {
+        use crate::theme::overlays::FEATURE_FOREST;
+        let day = builtin::DEFAULT
+            .overlays
+            .rule_for(FEATURE_FOREST)
+            .expect("默认包必须有森林规则");
+        let dusk = builtin::DUSK
+            .overlays
+            .rule_for(FEATURE_FOREST)
+            .expect("暮色包必须有森林规则");
+        let diffs = [
+            day.halo_color != dusk.halo_color,
+            (day.halo_alpha - dusk.halo_alpha).abs() > 1e-6,
+            (day.symbol_size_px - dusk.symbol_size_px).abs() > 1e-6,
+            (day.symbol_spacing_wu - dusk.symbol_spacing_wu).abs() > 1e-6,
+        ]
+        .into_iter()
+        .filter(|different| *different)
+        .count();
+        assert!(
+            diffs >= 2,
+            "D10 要求至少 2 项可见差异，实际 {diffs} 项；\
+             halo_color {:?} vs {:?}, alpha {} vs {}, size {} vs {}, spacing {} vs {}",
+            day.halo_color,
+            dusk.halo_color,
+            day.halo_alpha,
+            dusk.halo_alpha,
+            day.symbol_size_px,
+            dusk.symbol_size_px,
+            day.symbol_spacing_wu,
+            dusk.symbol_spacing_wu
+        );
+        assert!(
+            (dusk.symbol_size_px - 24.0).abs() < 1e-6,
+            "暮色符号尺寸 24px（spec §6.6 下限），got {}",
+            dusk.symbol_size_px
+        );
+        assert!(
+            (dusk.symbol_spacing_wu - 32.0).abs() < 1e-6,
+            "暮色采样间距 32wu（比日间 40wu 更密），got {}",
+            dusk.symbol_spacing_wu
+        );
+    }
+
+    /// 未知 feature 词汇没有规则——渲染侧回退「地界描边 + 名字」，不消失。
+    #[test]
+    fn unknown_feature_has_no_rule() {
+        assert!(
+            builtin::DEFAULT.overlays.rule_for(9).is_none(),
+            "feature=9 未登记，默认包应回 None"
+        );
+        assert!(
+            builtin::DUSK.overlays.rule_for(9).is_none(),
+            "feature=9 未登记，暮色包应回 None"
+        );
     }
 }

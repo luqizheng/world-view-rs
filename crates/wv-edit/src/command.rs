@@ -1970,6 +1970,215 @@ impl EditCommand for UpdateRegionCommand {
     }
 }
 
+// ── 事实地点与地界命令（theme overlay） ─────────────────────────────────────
+
+use wv_core::distance::Place;
+
+/// 事实地点创建命令的脏路径：`Place` 本体与地界几何分属两个落盘目录。
+///
+/// `distances/places` 是 §4.5「每实体一文件」的地点表（全量重写 + 删除传播），
+/// `geometry/place` 是地界 span 目录（`wv-io::save_world` 按目录写出）。
+fn place_geometry_dirty_paths() -> Vec<String> {
+    vec!["distances/places".into(), "geometry/place".into()]
+}
+
+/// 创建一个「事实地点」并同时写入它的初始地界。
+///
+/// ## 为什么地点与地界要一条命令
+///
+/// 地理事实（森林 / 沼泽 / 山脉）不是先有点、再补范围：作者画下一个地界时，
+/// 地点与几何是一体诞生的。拆成两条命令会让 Undo 出现「地点还在、地界没了」
+/// 的中间态（或反之），而 P6 要求一次编辑可整体回退。
+///
+/// ## 锚点同步
+///
+/// `Place.x/y/w/h` 是既有读取方（POI、标签远档判定、`EventLocation::resolve`）
+/// 的投影字段，地界多边形才是几何真值。`apply` 在入库前按地界环重拟合锚点，
+/// 使新旧两套字段一出生就一致（与 ADR-0022 D2「双字段同步」同口径）。
+///
+/// ## 幂等保护
+///
+/// 与 [`AddPlaceCommand`] 同源：ID 冲突时报 `Precondition`，不静默覆盖——
+/// Place 是引用网络的关键节点，静默覆盖会让 `PlaceEdge` / `Unit` 的端点变成
+/// 悬空引用（V1 会列出，但命令层不应主动制造）。
+#[derive(Debug)]
+pub struct AddFeaturePlaceCommand {
+    /// 要创建的地点（`feature` 为事实类型编号）。
+    pub place: Place,
+    /// 该地点的初始地界（`owner` 应为 `place.id`，几何为多边形环）。
+    pub territory: GeometrySpan,
+}
+
+impl AddFeaturePlaceCommand {
+    pub fn new(place: Place, territory: GeometrySpan) -> Self {
+        Self { place, territory }
+    }
+}
+
+impl EditCommand for AddFeaturePlaceCommand {
+    fn label(&self) -> String {
+        format!("新增事实地点「{}」", self.place.name)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        if world.distances.places.iter().any(|p| p.id == self.place.id) {
+            return Err(EditError::Precondition(format!(
+                "地点 `{}` 已存在",
+                self.place.id
+            )));
+        }
+        let mut place = self.place.clone();
+        if let GeometryData::Polygon(ring) = &self.territory.geometry {
+            place.fit_anchor_to_ring(ring);
+        }
+        world.distances.places.push(place);
+        world.place_geometry.push(self.territory.clone());
+        Ok(place_geometry_dirty_paths())
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        // 两处定位都先完成、再动世界：任一处缺失时整体失败，不留下
+        // 「地点删了、地界还在」的半回退状态（P6：一次编辑整体回退）。
+        let place_pos = world
+            .distances
+            .places
+            .iter()
+            .position(|p| p.id == self.place.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Place {}", self.place.id)))?;
+        // 按 (map, owner, span.from) 定位——span 的身份由这三元组决定，
+        // 与 UpdatePlaceTerritoryCommand 的查找口径一致。
+        let geo_pos = world
+            .place_geometry
+            .iter()
+            .position(|g| {
+                g.map == self.territory.map
+                    && g.owner == self.territory.owner
+                    && g.span.from == self.territory.span.from
+            })
+            .ok_or_else(|| {
+                EditError::TargetMissing(format!("Place geometry of {}", self.place.id))
+            })?;
+        world.distances.places.remove(place_pos);
+        world.place_geometry.remove(geo_pos);
+        Ok(())
+    }
+}
+
+/// 改写某地点某个地界 span 的多边形环，并重拟合锚点。
+///
+/// ## 为什么定位键是 `(map, owner, span.from)`
+///
+/// 同一地点在同一张图上可以有多个时间区间的地界（边界演化 = 追加 span，
+/// P6/P7），因此 `owner` 不足以唯一定位；`from` 是区间的起点，与
+/// [`GeometrySpan`] 的 `TimeSpan` 一起构成稳定身份。低层 `GeometrySpan` 没有
+/// 独立 ID，这是现有底座下最精确的定位方式。
+///
+/// ## 回滚
+///
+/// `apply` 缓存旧 `Place` 全字段与旧 `GeometrySpan`；`revert` 原样写回。
+/// 缓存整段 span（而非只缓存旧环）是为了让回滚与 apply 的改动面严格对称——
+/// 即使将来 apply 在此处多改一个字段，revert 也不会漏。
+#[derive(Debug)]
+pub struct UpdatePlaceTerritoryCommand {
+    /// 目标地点 ID（同时是 span 的 `owner`）。
+    pub place_id: wv_core::Id,
+    /// 目标地图 ID（span 的 `map`）。
+    pub map: wv_core::Id,
+    /// 目标 span 的区间起点（`span.from`）。
+    pub span_from: i64,
+    /// 新的多边形环（扁平 `[x0, y0, x1, y1, ...]`，首尾不重复）。
+    pub polygon: Vec<f32>,
+    /// `apply` 时缓存的旧值：`(旧 Place 全字段, 旧 GeometrySpan)`。
+    ///
+    /// 用 `Mutex` 而非 `RefCell`，使命令满足 `Send + Sync`（Bevy 资源约束）。
+    before: std::sync::Mutex<Option<(Place, GeometrySpan)>>,
+}
+
+impl UpdatePlaceTerritoryCommand {
+    pub fn new(place_id: wv_core::Id, map: wv_core::Id, span_from: i64, polygon: Vec<f32>) -> Self {
+        Self {
+            place_id,
+            map,
+            span_from,
+            polygon,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for UpdatePlaceTerritoryCommand {
+    fn label(&self) -> String {
+        format!("改地界「{}」", self.place_id)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let place_pos = world
+            .distances
+            .places
+            .iter()
+            .position(|p| p.id == self.place_id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Place {}", self.place_id)))?;
+        let geo_pos = world
+            .place_geometry
+            .iter()
+            .position(|g| {
+                g.map == self.map && g.owner == self.place_id && g.span.from == self.span_from
+            })
+            .ok_or_else(|| {
+                EditError::TargetMissing(format!(
+                    "Place geometry (map {}, owner {}, from {})",
+                    self.map, self.place_id, self.span_from
+                ))
+            })?;
+
+        let old_place = world.distances.places[place_pos].clone();
+        let old_span = world.place_geometry[geo_pos].clone();
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = Some((old_place, old_span));
+
+        world.place_geometry[geo_pos].geometry = GeometryData::Polygon(self.polygon.clone());
+        world.distances.places[place_pos].fit_anchor_to_ring(&self.polygon);
+        Ok(place_geometry_dirty_paths())
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let (old_place, old_span) = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("UpdatePlaceTerritory 尚未 apply".into()))?;
+
+        let place_pos = world
+            .distances
+            .places
+            .iter()
+            .position(|p| p.id == self.place_id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Place {}", self.place_id)))?;
+        let geo_pos = world
+            .place_geometry
+            .iter()
+            .position(|g| {
+                g.map == old_span.map
+                    && g.owner == old_span.owner
+                    && g.span.from == old_span.span.from
+            })
+            .ok_or_else(|| {
+                EditError::TargetMissing(format!(
+                    "Place geometry (map {}, owner {}, from {})",
+                    old_span.map, old_span.owner, old_span.span.from
+                ))
+            })?;
+
+        // 两处定位都成功后再写回，避免半回退。
+        world.distances.places[place_pos] = old_place;
+        world.place_geometry[geo_pos] = old_span;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3434,6 +3643,179 @@ mod tests {
         assert_eq!(
             world.terrain_of(&test_map()).cloned().unwrap(),
             before_snapshot
+        );
+    }
+
+    // ── 事实地点 / 地界命令测试（theme overlay）────────────────────────────
+    // ── 事实地点 / 地界命令测试（theme overlay）────────────────────────────
+
+    fn feature_place(id: &str) -> wv_core::distance::Place {
+        wv_core::distance::Place {
+            id: Id::new_unchecked(id),
+            name: format!("地点{id}"),
+            feature: Some(5),
+            map: None,
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+        }
+    }
+
+    fn territory(
+        map: &str,
+        owner: &str,
+        from: i64,
+        to: Option<i64>,
+        ring: Vec<f32>,
+    ) -> wv_core::map::GeometrySpan {
+        wv_core::map::GeometrySpan {
+            map: Id::new_unchecked(map),
+            owner: Id::new_unchecked(owner),
+            span: TimeSpan { from, to },
+            geometry: GeometryData::Polygon(ring),
+        }
+    }
+
+    #[test]
+    fn add_feature_place_sets_anchors_from_ring_and_revert_removes_both() {
+        let mut w = World::default();
+        let ring = vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0];
+        let cmd = AddFeaturePlaceCommand::new(
+            feature_place("place_forest"),
+            territory(TEST_MAP, "place_forest", 0, None, ring.clone()),
+        );
+
+        let dirty = cmd.apply(&mut w).expect("apply");
+        assert_eq!(
+            dirty,
+            vec!["distances/places".to_string(), "geometry/place".to_string()],
+            "脏路径应同时覆盖地点表与地界目录"
+        );
+        assert_eq!(w.distances.places.len(), 1, "应写入 1 个地点");
+        assert_eq!(w.place_geometry.len(), 1, "应写入 1 条地界");
+        let p = &w.distances.places[0];
+        assert_eq!(p.x, Some(5.0), "质心 X 应为 5，实际 {:?}", p.x);
+        assert_eq!(p.y, Some(5.0), "质心 Y 应为 5，实际 {:?}", p.y);
+        assert_eq!(p.w, Some(10.0), "包围盒宽应为 10，实际 {:?}", p.w);
+        assert_eq!(p.h, Some(10.0), "包围盒高应为 10，实际 {:?}", p.h);
+        assert_eq!(
+            w.place_geometry[0].geometry,
+            GeometryData::Polygon(ring),
+            "地界几何应原样写入"
+        );
+
+        cmd.revert(&mut w).expect("revert");
+        assert!(w.distances.places.is_empty(), "revert 应移除地点");
+        assert!(w.place_geometry.is_empty(), "revert 应移除地界");
+    }
+
+    #[test]
+    fn add_feature_place_rejects_duplicate_id() {
+        let mut w = World::default();
+        w.distances.places.push(feature_place("place_forest"));
+        let cmd = AddFeaturePlaceCommand::new(
+            feature_place("place_forest"),
+            territory(
+                TEST_MAP,
+                "place_forest",
+                0,
+                None,
+                vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0],
+            ),
+        );
+        assert!(
+            matches!(cmd.apply(&mut w), Err(EditError::Precondition(_))),
+            "重复 ID 应返回 Precondition"
+        );
+        assert_eq!(w.distances.places.len(), 1, "失败的 apply 不应写入地点");
+        assert!(w.place_geometry.is_empty(), "失败的 apply 不应写入地界");
+    }
+
+    #[test]
+    fn update_place_territory_replaces_ring_and_resyncs_anchors() {
+        let mut w = World::default();
+        let old_ring = vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0];
+        AddFeaturePlaceCommand::new(
+            feature_place("place_forest"),
+            territory(TEST_MAP, "place_forest", 0, None, old_ring.clone()),
+        )
+        .apply(&mut w)
+        .expect("prepare");
+        let old_place = w.distances.places[0].clone();
+
+        let new_ring = vec![0.0, 0.0, 20.0, 0.0, 20.0, 10.0, 0.0, 10.0];
+        let cmd = UpdatePlaceTerritoryCommand::new(
+            Id::new_unchecked("place_forest"),
+            test_map(),
+            0,
+            new_ring.clone(),
+        );
+        let dirty = cmd.apply(&mut w).expect("apply");
+        assert_eq!(
+            dirty,
+            vec!["distances/places".to_string(), "geometry/place".to_string()],
+            "脏路径应同时覆盖地点表与地界目录"
+        );
+        assert_eq!(w.place_geometry.len(), 1, "改地界不得追加 span");
+        assert_eq!(
+            w.place_geometry[0].geometry,
+            GeometryData::Polygon(new_ring),
+            "地界应替换为新环"
+        );
+        let p = &w.distances.places[0];
+        assert_eq!(p.x, Some(10.0), "新质心 X 应为 10，实际 {:?}", p.x);
+        assert_eq!(p.y, Some(5.0), "新质心 Y 应为 5，实际 {:?}", p.y);
+        assert_eq!(p.w, Some(20.0), "新宽应为 20，实际 {:?}", p.w);
+        assert_eq!(p.h, Some(10.0), "新高应为 10，实际 {:?}", p.h);
+
+        cmd.revert(&mut w).expect("revert");
+        assert_eq!(
+            w.place_geometry[0].geometry,
+            GeometryData::Polygon(old_ring),
+            "revert 应恢复旧环"
+        );
+        assert_eq!(
+            w.distances.places[0], old_place,
+            "revert 应恢复 Place 全字段（含旧锚点 x/y/w/h）"
+        );
+    }
+
+    #[test]
+    fn update_place_territory_missing_span_is_an_error() {
+        let mut w = World::default();
+        AddFeaturePlaceCommand::new(
+            feature_place("place_forest"),
+            territory(
+                TEST_MAP,
+                "place_forest",
+                0,
+                None,
+                vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0],
+            ),
+        )
+        .apply(&mut w)
+        .expect("prepare");
+
+        let cmd = UpdatePlaceTerritoryCommand::new(
+            Id::new_unchecked("place_forest"),
+            test_map(),
+            99,
+            vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0],
+        );
+        assert!(
+            matches!(cmd.apply(&mut w), Err(EditError::TargetMissing(_))),
+            "不存在的 span 应返回 TargetMissing"
+        );
+        assert_eq!(
+            w.place_geometry[0].geometry,
+            GeometryData::Polygon(vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0]),
+            "失败的 apply 不应改动地界"
+        );
+        assert_eq!(
+            w.distances.places[0].x,
+            Some(5.0),
+            "失败的 apply 不应改动锚点"
         );
     }
 }

@@ -164,6 +164,11 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::PanelCharacter => "人物登记",
         I18nKey::PanelEvent => "事件登记",
 
+        // ── 事实地界（theme overlay v1 / 选择工具 M4） ──
+        I18nKey::FeaturePlaceDialogTitle => "新建地理事实",
+        I18nKey::FeaturePlaceNameLabel => "名称",
+        I18nKey::FeaturePlaceCreate => "创建",
+
         // ── 地图层级 ──
         I18nKey::MapLevelWorld => "世界",
         I18nKey::MapLevelRegion => "区域",
@@ -459,6 +464,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::ContinentNoticeGenerateFailed => "生成失败",
         I18nKey::IntentMenuGenerateContinent => "生成大陆…",
         I18nKey::IntentMenuGenerateCity => "生成城市…",
+        I18nKey::IntentMenuForest => "森林…",
         I18nKey::IntentMenuMountains => "高山",
         I18nKey::IntentMenuHills => "丘陵",
         I18nKey::IntentMenuPlains => "平原",
@@ -646,6 +652,11 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::PanelCompass => "Compass",
         I18nKey::PanelCharacter => "Character log",
         I18nKey::PanelEvent => "Event log",
+
+        // ── Geographic features (theme overlay v1 / select tool M4) ──
+        I18nKey::FeaturePlaceDialogTitle => "New geographic feature",
+        I18nKey::FeaturePlaceNameLabel => "Name",
+        I18nKey::FeaturePlaceCreate => "Create",
 
         // ── Map levels ──
         I18nKey::MapLevelWorld => "World",
@@ -942,6 +953,7 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::ContinentNoticeGenerateFailed => "Generation failed",
         I18nKey::IntentMenuGenerateContinent => "Generate continent…",
         I18nKey::IntentMenuGenerateCity => "Generate city…",
+        I18nKey::IntentMenuForest => "Forest…",
         I18nKey::IntentMenuMountains => "Mountains",
         I18nKey::IntentMenuHills => "Hills",
         I18nKey::IntentMenuPlains => "Plains",

@@ -737,6 +737,12 @@ impl Project {
         let faction_geometry: Vec<wv_core::map::GeometrySpan> =
             load_dir(&self.root, "geometry/faction")?;
 
+        // Place 地界（theme overlay）：`geometry/place/` 与 `geometry/faction/`
+        // 逐字同构——每条 `GeometrySpan` 一个 YAML，目录可缺失（旧工程直接
+        // 得空 Vec，零迁移）。
+        let place_geometry: Vec<wv_core::map::GeometrySpan> =
+            load_dir(&self.root, "geometry/place")?;
+
         // 命名区域（ADR-0017 §2.2）：`regions/` 每区域一个 YAML，几何内联。
         // 目录可缺失——旧工程直接得空 Vec（零迁移）。
         // 海名（手绘地图 #13）：每实体一文件，落 `seas/<id>.yaml`，
@@ -758,6 +764,7 @@ impl Project {
             narrations,
             factions,
             faction_geometry,
+            place_geometry,
             regions,
             seas,
             terrains,
@@ -848,6 +855,15 @@ impl Project {
                     // 用这个 key，文件内容里仍是原始字段。
                     format!("{}__{}__{}", g.map.as_str(), g.owner.as_str(), g.span.from)
                 },
+            )?;
+        }
+        // Place 地界：与 faction 分支逐字同构——合成 id（map + owner + from）
+        // 作文件名，文件内容仍是原始字段。
+        if wants("geometry/place") {
+            save_entities(
+                &self.root.join("geometry/place"),
+                &world.place_geometry,
+                |g| format!("{}__{}__{}", g.map.as_str(), g.owner.as_str(), g.span.from),
             )?;
         }
         if wants("characters") {

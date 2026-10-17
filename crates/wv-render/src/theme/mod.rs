@@ -10,6 +10,7 @@
 //! - 暮色旧纸色板（`colors_dusk`，`colors` 的同槽位暗调镜像，ADR-0016）
 //! - 地图主题运行时分发（`palette`：`MapPalette` + `PaletteColors`，ADR-0016）
 //! - Google Default Map 色板（`colors_google`）
+//! - 覆盖物演绎规则（`overlays`：feature 规则、镜头分带淡化、近带确定性采样）
 //!
 //! - 打包字体装配（`fonts`，ADR-0019；`LoadedFonts` 消费方是本 crate 的
 //!   Text2d 标签系统 ×7，故随渲染走——ADR-0020 落地注记）
@@ -26,6 +27,8 @@ pub mod colors_dusk;
 pub mod colors_google;
 #[cfg(feature = "app")]
 pub mod fonts;
+#[cfg(feature = "app")]
+pub mod overlays;
 #[cfg(feature = "app")]
 pub mod palette;
 #[cfg(feature = "app")]

@@ -31,6 +31,7 @@ use wv_render::brush_cursor;
 use wv_render::buildings;
 use wv_render::camera;
 use wv_render::faction_overlays;
+use wv_render::feature_overlays;
 use wv_render::layer_frame;
 use wv_render::map_frame;
 use wv_render::streets;
@@ -155,6 +156,8 @@ pub fn run(config: AppConfig) {
     .init_resource::<ui::ContinentDialog>()
     .init_resource::<ui::city_intent::CityIntentDialog>()
     .init_resource::<crate::state::ContinentGenerationState>()
+    // 森林意图的命名对话框（选择工具 M4）：环 + 钉住图 id 自持在对话框里。
+    .init_resource::<ui::FeaturePlaceDialog>()
     .init_resource::<wv_render::measurement::MeasurementCache>()
     // 整图后台合成任务槽（CONTINUOUS_LOD M3）：落地校验在主线程读取。
     .init_resource::<wv_render::terrain_view::rebuild::PendingTerrainSynth>()
@@ -167,6 +170,9 @@ pub fn run(config: AppConfig) {
     // 势力多边形层（S12）：同属「每帧 despawn+spawn 的实体集合」资源，
     // 漏 init 会在首帧 panic（`could not access system parameter`）。
     .init_resource::<faction_overlays::FactionOverlayEntities>()
+    // 事实地界覆盖层（theme overlay）：与势力层同族的「每帧 despawn+spawn」
+    // 实体集合资源，漏 init 会在首帧 panic。
+    .init_resource::<feature_overlays::FeatureOverlayEntities>()
     .init_resource::<brush_cursor::BrushCursorEntities>()
     .init_resource::<map_frame::MapFrameEntities>()
     .init_resource::<terrain_chunks::TerrainChunkEntities>()
@@ -263,6 +269,9 @@ pub fn run(config: AppConfig) {
             streets::update_street_labels,
             // 势力多边形叠加层（S12 v0.1）：在矢量层之后、地图外框之前。
             faction_overlays::sync_faction_overlays,
+            // 事实地界覆盖层（theme overlay）：地盘随 (图, 日, 缩放) 求值，
+            // 排在势力层之后、地图外框之前（z 由各层常量决定，与顺序无关）。
+            feature_overlays::sync_feature_overlays,
             // 地图外框 + 1/4 幅面参考网格（外框需地形尺寸）。
             map_frame::sync_map_frame,
         )
@@ -382,6 +391,12 @@ pub fn run(config: AppConfig) {
             ui::status_bar,
         )
             .chain(),
+    );
+    // 「新建地理事实」命名对话框（选择工具 M4「森林」意图打开；居中模态窗）。
+    // 主链已顶满 20 元组上限，单独注册并排在状态栏之后。
+    app.add_systems(
+        bevy_egui::EguiPrimaryContextPass,
+        ui::feature_place_dialog.after(ui::status_bar),
     );
     // 选区意图菜单（底部居中浮动条；spec 2026-10-17 §4）。ego pass 主链已到
     // Bevy 元组上限（20），单独注册、排在 map_controls 之后即可（只读选区）。

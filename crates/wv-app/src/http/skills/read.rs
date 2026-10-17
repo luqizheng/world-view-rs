@@ -309,6 +309,7 @@ mod tests {
             y: Some(200.0),
             w: None,
             h: None,
+            feature: None,
         });
         (bridge, rx, world, wv_edit::History::default())
     }

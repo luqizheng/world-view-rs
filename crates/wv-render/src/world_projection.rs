@@ -151,14 +151,13 @@ pub fn compute_projection(
                 }
             }
             // POI 点标：当前地图上的全部锚定地点；带「是否城市级」标记供 LOD 筛选。
+            // 事实地点（`feature = Some`）由 `feature_overlays` 画地界晕与符号，
+            // 不再叠 POI 圆点（`place_dot_for` 统一裁决）。
             if layers.place.visible {
                 for p in &world.distances.places {
                     if p.map.as_ref() == Some(&current.id) {
-                        if let (Some(x), Some(y)) = (p.x, p.y) {
-                            frame.place_dots.push(PlaceDot {
-                                pos: grid.map_to_view(Vec2::new(x, y)),
-                                is_city: p.w.is_some() && p.h.is_some(),
-                            });
+                        if let Some(dot) = place_dot_for(p, &grid) {
+                            frame.place_dots.push(dot);
                         }
                     }
                 }
@@ -440,5 +439,67 @@ fn draw_dashed_circle(gizmos: &mut Gizmos, center: Vec2, radius: f32, color: Col
         let p0 = center + Vec2::new(a0.cos(), a0.sin()) * radius;
         let p1 = center + Vec2::new(a1.cos(), a1.sin()) * radius;
         gizmos.line_2d(p0, p1, color);
+    }
+}
+
+/// 一个地点在本帧应生成的 POI 点标；`None` = 不画。
+///
+/// **事实地点（`feature = Some(_)`）抑制 POI 圆点**（设计稿 §6.4）：森林 /
+/// 沼泽等由 `crate::feature_overlays` 画地界晕与近景符号，再叠一个 POI 圆点
+/// 只会让覆盖层中心出现一颗没有语义的红点。普通地点（`feature = None`）保持
+/// 原行为：锚定且有坐标 → 点标，`w/h` 齐备 → 城市级。
+fn place_dot_for(p: &wv_core::distance::Place, grid: &GridConfig) -> Option<PlaceDot> {
+    if p.feature.is_some() {
+        return None;
+    }
+    let (x, y) = (p.x?, p.y?);
+    Some(PlaceDot {
+        pos: grid.map_to_view(Vec2::new(x, y)),
+        is_city: p.w.is_some() && p.h.is_some(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    //! POI 抑制测试：事实地点不生成圆点，普通地点保持原行为。
+    use super::*;
+    use wv_core::distance::Place;
+    use wv_core::id::Id;
+
+    fn place(feature: Option<u8>) -> Place {
+        Place {
+            id: Id::new_unchecked("place_test"),
+            name: "测试地点".into(),
+            feature,
+            map: None,
+            x: Some(1.0),
+            y: Some(2.0),
+            w: Some(10.0),
+            h: Some(10.0),
+        }
+    }
+
+    /// 事实地点（森林，`feature = Some(4)`）→ 不生成 POI 点。
+    #[test]
+    fn feature_place_produces_no_poi_dot() {
+        let dot = place_dot_for(&place(Some(4)), &GridConfig::default());
+        assert_eq!(
+            dot, None,
+            "feature = Some(4) 的事实地点应由 feature_overlays 表现，不生成 POI 点"
+        );
+    }
+
+    /// 普通城市（`feature = None`，`w/h` 齐备）→ 点标且标记为城市级。
+    #[test]
+    fn ordinary_place_still_produces_city_dot() {
+        let grid = GridConfig::default();
+        let dot = place_dot_for(&place(None), &grid)
+            .expect("feature = None 且有坐标的普通地点应生成 POI 点");
+        assert!(dot.is_city, "w/h 齐备应标记为城市级");
+        assert_eq!(
+            dot.pos,
+            grid.map_to_view(Vec2::new(1.0, 2.0)),
+            "pos 应经地图局部 → 视图空间换算"
+        );
     }
 }
