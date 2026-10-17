@@ -35,8 +35,8 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::state::{
-    CityPending, CityToolMode, CityToolState, DrillState, GridConfig, MeasureMode, MeasureState,
-    ViewState, WorldProjection,
+    CityToolMode, CityToolState, DrillState, GridConfig, MeasureMode, MeasureState, ViewState,
+    WorldProjection,
 };
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::{radius, space};

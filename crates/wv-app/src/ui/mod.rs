@@ -20,6 +20,7 @@
 pub mod brush_panel;
 pub mod command_palette_window;
 pub mod compass_panel;
+pub mod continent_dialog;
 pub mod faction_panel;
 pub mod hover_tooltip;
 pub mod inspector_panel;
@@ -43,6 +44,7 @@ pub mod widgets;
 pub use brush_panel::panel_brush;
 pub use command_palette_window::command_palette;
 pub use compass_panel::panel_compass;
+pub use continent_dialog::{continent_dialog, ContinentDialog};
 pub use faction_panel::panel_faction;
 pub use inspector_panel::panel_inspector;
 pub use layers_panel::{panel_layers, panel_map_tree};

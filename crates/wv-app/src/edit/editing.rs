@@ -24,12 +24,10 @@ use crate::state::{
     BrushState, BrushTool, CityDraft, CityPending, CityToolMode, CityToolState, DrillState,
     GridConfig, PlaybackState, ViewState, WorldProjection,
 };
-use wv_core::map::{GeometryData, IconShape, MapLevel};
 use wv_edit::command::{
     EditCommand, IntentTerrainCommand, PaintTerrainCommand, ResetTerrainToBaseCommand,
 };
 use wv_edit::history::Transaction;
-use wv_edit::AddCityCommand;
 use wv_edit::History;
 use wv_render::camera::ActiveStroke;
 use wv_render::terrain_view::{image_from_terrain, TerrainTexture, TileAtlas};
@@ -615,8 +613,7 @@ pub fn commit_city_drag_on_release(
     mut city_tool: ResMut<CityToolState>,
     drill: Res<DrillState>,
     playback: Res<PlaybackState>,
-    mut projection: ResMut<WorldProjection>,
-    mut edit: ResMut<EditHistory>,
+    projection: ResMut<WorldProjection>,
     mut notice: ResMut<crate::ui_shell::ShellNotice>,
     time: Res<Time>,
 ) {

@@ -440,6 +440,19 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::HttpServeFailed => "HTTP 服务运行失败: ",
         I18nKey::HttpTokioStartFailed => "[wv-app http] 启 tokio 失败: ",
         I18nKey::HttpServerCrashed => "[wv-app http] server 退出: ",
+        // 大陆生成属性面板
+        I18nKey::ContinentDialogTitle => "生成大陆",
+        I18nKey::ContinentParamSeed => "种子",
+        I18nKey::ContinentParamCoastWiggle => "海岸蜿蜒度",
+        I18nKey::ContinentParamCoastDetail => "海岸细节",
+        I18nKey::ContinentParamRelief => "起伏强度",
+        I18nKey::ContinentParamForest => "森林覆盖",
+        I18nKey::ContinentParamDesert => "荒漠覆盖",
+        I18nKey::ContinentParamShelf => "大陆架宽度",
+        I18nKey::ContinentParamIslands => "离岸小岛",
+        I18nKey::ContinentGenerate => "生成",
+        I18nKey::ContinentCancel => "取消",
+        I18nKey::ContinentToolName => "圈画大陆",
     }
 }
 
@@ -876,5 +889,18 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::HttpServeFailed => "HTTP service failed: ",
         I18nKey::HttpTokioStartFailed => "[wv-app http] tokio start failed: ",
         I18nKey::HttpServerCrashed => "[wv-app http] server exited: ",
+        // 大陆生成属性面板
+        I18nKey::ContinentDialogTitle => "Generate Continent",
+        I18nKey::ContinentParamSeed => "Seed",
+        I18nKey::ContinentParamCoastWiggle => "Coast wiggle",
+        I18nKey::ContinentParamCoastDetail => "Coast detail",
+        I18nKey::ContinentParamRelief => "Relief",
+        I18nKey::ContinentParamForest => "Forest cover",
+        I18nKey::ContinentParamDesert => "Desert cover",
+        I18nKey::ContinentParamShelf => "Shelf width",
+        I18nKey::ContinentParamIslands => "Offshore islands",
+        I18nKey::ContinentGenerate => "Generate",
+        I18nKey::ContinentCancel => "Cancel",
+        I18nKey::ContinentToolName => "Draw continent",
     }
 }

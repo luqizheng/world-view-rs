@@ -811,11 +811,37 @@ pub enum I18nKey {
     HttpTokioStartFailed,
     /// 「[wv-app http] server 退出: 」http_integration 前缀
     HttpServerCrashed,
+
+    // ── 大陆生成属性面板（2026-10-17 大陆生成 UI plan Task 2） ──────────
+    /// 面板标题「生成大陆」
+    ContinentDialogTitle,
+    /// 参数「种子」
+    ContinentParamSeed,
+    /// 参数「海岸蜿蜒度」
+    ContinentParamCoastWiggle,
+    /// 参数「海岸细节」
+    ContinentParamCoastDetail,
+    /// 参数「起伏强度」
+    ContinentParamRelief,
+    /// 参数「森林覆盖」
+    ContinentParamForest,
+    /// 参数「荒漠覆盖」
+    ContinentParamDesert,
+    /// 参数「大陆架宽度」
+    ContinentParamShelf,
+    /// 参数「离岸小岛」
+    ContinentParamIslands,
+    /// 按钮「生成」
+    ContinentGenerate,
+    /// 按钮「取消」
+    ContinentCancel,
+    /// 工具名「圈画大陆」
+    ContinentToolName,
 }
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 363] = [
+    pub const ALL: [I18nKey; 375] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1212,5 +1238,18 @@ impl I18nKey {
         I18nKey::HttpServeFailed,
         I18nKey::HttpTokioStartFailed,
         I18nKey::HttpServerCrashed,
+        // 大陆生成属性面板（12）
+        I18nKey::ContinentDialogTitle,
+        I18nKey::ContinentParamSeed,
+        I18nKey::ContinentParamCoastWiggle,
+        I18nKey::ContinentParamCoastDetail,
+        I18nKey::ContinentParamRelief,
+        I18nKey::ContinentParamForest,
+        I18nKey::ContinentParamDesert,
+        I18nKey::ContinentParamShelf,
+        I18nKey::ContinentParamIslands,
+        I18nKey::ContinentGenerate,
+        I18nKey::ContinentCancel,
+        I18nKey::ContinentToolName,
     ];
 }
