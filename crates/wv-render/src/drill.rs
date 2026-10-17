@@ -80,6 +80,9 @@ pub fn register(app: &mut App) {
     app.init_resource::<DrillClick>()
         .init_resource::<DrillMarkerPalette>()
         .init_resource::<crate::label_pick::LabelHits>()
+        // `drill_pick` 的让位守卫要读选择工具会话态（spec §3 命中优先级）——
+        // 与 drill_pick 同生命周期注册，避免调用方漏 init。
+        .init_resource::<crate::state::SelectionState>()
         .init_resource::<crate::zoom_level::ZoomCrossRequest>()
         .add_systems(
             Update,
@@ -496,6 +499,7 @@ pub fn drill_pick(
     grid: Res<GridConfig>,
     view: Res<ViewState>,
     hits: Res<crate::label_pick::LabelHits>,
+    sel: Res<crate::state::SelectionState>,
     mut drill: ResMut<DrillState>,
     mut clicks: ResMut<DrillClick>,
 ) {
@@ -510,6 +514,28 @@ pub fn drill_pick(
     };
     let world_pos =
         crate::camera::screen_to_world(cursor, window.resolution.size(), transform, view.scale);
+
+    // 选择工具让位守卫（2026-10-17 选择工具 spec §3 命中优先级：锚点/边 > 图标下钻
+    // > 空白）——画中吞掉全部点击语义（防「图标旁收笔」被误判成下钻、草稿随切图
+    // 蒸发）；Closed 态只在锚点/边命中时让位，其余照旧走标签 / 下钻。
+    if sel.enabled {
+        if sel.is_drawing() {
+            return;
+        }
+        if let Some(ring) = &sel.closed {
+            if let Some(node) = drill.current_node(&projection.world) {
+                let origin = crate::drill::map_origin(&projection.world, node, &grid);
+                let local = world_pos - origin;
+                let tol = crate::selection::PICK_TOLERANCE_PX * view.scale;
+                let p = (local.x, local.y);
+                if crate::selection::pick_anchor(ring, p, tol).is_some()
+                    || crate::selection::pick_edge_insertion(ring, p, tol).is_some()
+                {
+                    return;
+                }
+            }
+        }
+    }
 
     let now = time.elapsed_secs_f64();
     let is_double = clicks

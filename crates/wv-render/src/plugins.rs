@@ -97,6 +97,19 @@ impl Plugin for EditorOverlayPlugin {
                 ),
             )
             .init_resource::<crate::state::ContinentSketch>()
+            .init_resource::<crate::state::SelectionState>()
+            .add_systems(
+                Update,
+                (
+                    crate::selection::sync_selection_map_change,
+                    crate::selection::commit_selection_click
+                        .after(crate::selection::sync_selection_map_change),
+                    crate::selection::drag_selected_anchor
+                        .after(crate::selection::commit_selection_click),
+                    crate::selection::draw_selection,
+                )
+                    .after(crate::camera::track_cursor_world),
+            )
             .add_systems(
                 Update,
                 (
