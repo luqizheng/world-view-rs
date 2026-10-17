@@ -619,6 +619,7 @@ mod tests {
                     y: Some(0.0),
                     w: None,
                     h: None,
+                    feature: None,
                 },
                 Place {
                     id: b.clone(),
@@ -628,6 +629,7 @@ mod tests {
                     y: Some(0.0),
                     w: None,
                     h: None,
+                    feature: None,
                 },
             ],
             edges: vec![PlaceEdge {

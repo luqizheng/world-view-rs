@@ -193,6 +193,7 @@ mod tests {
             y: Some(200.0),
             w: None,
             h: None,
+            feature: None,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();

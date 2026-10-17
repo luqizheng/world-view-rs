@@ -93,6 +93,13 @@ fn default_true() -> bool {
 pub struct Place {
     pub id: Id,
     pub name: String,
+    /// 地理事实类型（theme overlay 词汇，沿用 TerrainKind 的 u8 词汇表编号，
+    /// 编号→名称→演绎规则映射由 ThemePack 承载）。`None` = 普通地点（现状）。
+    ///
+    /// 注意：wv-core 不依赖 wv-terrain（AGENTS §2.1），故此处是裸 `u8`——
+    /// 语义上的 TerrainKind 编号，词汇对齐表见待裁 T4。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature: Option<u8>,
     /// 若该地点对应某张地图上的锚点，则引用其 ID。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub map: Option<Id>,
@@ -129,6 +136,39 @@ impl Place {
                 (px - cx).abs() <= EPS && (py - cy).abs() <= EPS
             }
         }
+    }
+
+    /// 按地界环拟合锚点与范围：质心写入 `x/y`，包围盒宽高写入 `w/h`。
+    ///
+    /// 为什么需要同步：POI、标签远档判定与 `EventLocation::resolve` 今天都只读
+    /// `x/y/w/h` 这四个投影字段；地界多边形才是几何真值。创建/编辑地界时在
+    /// `wv-edit` 侧调用本方法，把真值投影回既有字段（与 ADR-0022 D2「双字段
+    /// 同步」同口径），渲染与校验无需改读取方式。
+    ///
+    /// - 点数不足 3（无法构成多边形面）→ 原样返回，不改写任何字段；
+    /// - 质心 = 顶点简单平均（复用 `Region::centroid` 同口径，够用且稳定）；
+    /// - `w/h` = 包围盒宽高（不存旋转，与 `contains` 的轴对齐矩形判定一致）。
+    pub fn fit_anchor_to_ring(&mut self, ring: &[f32]) {
+        if ring.len() < 6 {
+            return;
+        }
+        let n = (ring.len() / 2) as f32;
+        let (mut sx, mut sy) = (0.0_f32, 0.0_f32);
+        let (mut min_x, mut min_y) = (f32::INFINITY, f32::INFINITY);
+        let (mut max_x, mut max_y) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+        for pair in ring.chunks_exact(2) {
+            let (px, py) = (pair[0], pair[1]);
+            sx += px;
+            sy += py;
+            min_x = min_x.min(px);
+            min_y = min_y.min(py);
+            max_x = max_x.max(px);
+            max_y = max_y.max(py);
+        }
+        self.x = Some(sx / n);
+        self.y = Some(sy / n);
+        self.w = Some(max_x - min_x);
+        self.h = Some(max_y - min_y);
     }
 }
 
@@ -398,6 +438,7 @@ mod tests {
                     y: None,
                     w: None,
                     h: None,
+                    feature: None,
                 },
                 Place {
                     id: vid("village_heishui"),
@@ -407,6 +448,7 @@ mod tests {
                     y: None,
                     w: None,
                     h: None,
+                    feature: None,
                 },
                 Place {
                     id: vid("pass_luoxia"),
@@ -416,6 +458,7 @@ mod tests {
                     y: None,
                     w: None,
                     h: None,
+                    feature: None,
                 },
             ],
             edges: vec![
@@ -536,6 +579,7 @@ mod tests {
             y: Some(200.0),
             w: Some(40.0),
             h: Some(20.0),
+            feature: None,
         }
     }
 
@@ -548,6 +592,7 @@ mod tests {
             y: Some(20.0),
             w: None,
             h: None,
+            feature: None,
         }
     }
 
@@ -560,6 +605,7 @@ mod tests {
             y: None,
             w: None,
             h: None,
+            feature: None,
         }
     }
 
@@ -635,6 +681,40 @@ mod tests {
         assert!(
             !p.contains(110.0, 200.0),
             "w without h degrades to a point, so 110 must not hit"
+        );
+    }
+
+    // ---- 地理事实类型 + 地界锚点拟合（theme overlay）----
+
+    fn feature_place(feature: Option<u8>) -> Place {
+        Place {
+            id: Id::new_unchecked("place_dark_forest"),
+            name: "黑森林".into(),
+            map: Some(Id::new_unchecked("map_world")),
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+            feature,
+        }
+    }
+
+    #[test]
+    fn fit_anchor_to_ring_sets_centroid_and_bbox() {
+        let mut p = feature_place(Some(4));
+        p.fit_anchor_to_ring(&[0.0, 0.0, 40.0, 0.0, 40.0, 20.0, 0.0, 20.0]);
+        assert_eq!((p.x, p.y), (Some(20.0), Some(10.0)), "质心为 (20,10)");
+        assert_eq!((p.w, p.h), (Some(40.0), Some(20.0)), "包围盒 40×20");
+    }
+
+    #[test]
+    fn fit_anchor_to_ring_with_degenerate_ring_leaves_anchors_untouched() {
+        let mut p = feature_place(Some(4));
+        p.fit_anchor_to_ring(&[1.0, 2.0]);
+        assert_eq!(
+            (p.x, p.y, p.w, p.h),
+            (None, None, None, None),
+            "不足 3 点不写锚点"
         );
     }
 }

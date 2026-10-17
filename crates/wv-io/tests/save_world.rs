@@ -880,6 +880,7 @@ fn place_edges_round_trip_per_file_format() {
         y: None,
         w: None,
         h: None,
+        feature: None,
     });
     world.distances.places.push(Place {
         id: Id::new_unchecked("p_b"),
@@ -889,6 +890,7 @@ fn place_edges_round_trip_per_file_format() {
         y: None,
         w: None,
         h: None,
+        feature: None,
     });
     world.distances.vehicles.push(Vehicle {
         id: Id::new_unchecked("v_walk"),

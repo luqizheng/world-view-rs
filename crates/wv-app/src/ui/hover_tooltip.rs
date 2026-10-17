@@ -211,6 +211,7 @@ mod tests {
             y: Some(0.0),
             w: None,
             h: None,
+            feature: None,
         };
         core.distances.places.push(place);
         let proj = WorldProjection {

@@ -67,6 +67,7 @@ mod tests {
             y: Some(0.0),
             w: None,
             h: None,
+            feature: None,
         };
         world.distances.places.push(place);
         world.seas.push(sample());

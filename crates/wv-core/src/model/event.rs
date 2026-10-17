@@ -168,6 +168,7 @@ mod tests {
             y,
             w,
             h,
+            feature: None,
         }
     }
 
