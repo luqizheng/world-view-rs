@@ -228,17 +228,29 @@ pub fn compute_projection(
                 }
                 frame.road_fingerprint = segments_fingerprint(&frame.road_segments);
             }
-            // POI 点标：当前地图上的全部锚定地点；带「是否城市级」标记供 LOD 筛选。
+            // POI 点标：当前地图上的**视口内**锚定地点；带「是否城市级」标记供 LOD 筛选。
             // 事实地点（`feature = Some`）由 `feature_overlays` 画地界晕与符号，
             // 不再叠 POI 圆点（`place_dot_for` 统一裁决）。
             // 走 [`PlaceIndex::anchored_by_map`] 直取本图桶，不全量扫（A1）。
+            //
+            // **视口裁剪（zoom-in 卡死回归，2026-10-18）**：`sync_poi` 每个可见点
+            // spawn 一对实体 + mesh，若桶里装全量锚定地点，guangdong 的 8.1 万
+            // 路口在 zoom in 越过淡出带后会一次性全涌入（16 万实体/帧 = 冻结）。
+            // 视口矩形 = 相机中心 ± (窗口逻辑尺寸 × scale / 2)，外加一圈余量
+            // （点径最大 ~16px 换算世界单位），拖动相机时边缘点不闪断。
             if layers.place.visible {
+                let margin = view.scale * 16.0;
+                let half = view.window_size * view.scale * 0.5 + Vec2::splat(margin);
+                let (cx, cy) = (view.camera_center.x, view.camera_center.y);
                 if let Some(idxs) = place_index.anchored_by_map.get(&current.id) {
                     for i in idxs {
                         if let Some(dot) =
                             place_dot_for(&world.distances.places[*i as usize], &grid)
                         {
-                            frame.place_dots.push(dot);
+                            if (dot.pos.x - cx).abs() <= half.x && (dot.pos.y - cy).abs() <= half.y
+                            {
+                                frame.place_dots.push(dot);
+                            }
                         }
                     }
                 }
@@ -787,5 +799,105 @@ mod tests {
             grid.map_to_view(Vec2::new(10.0, 20.0)),
             "点位置经 map_to_view 换算"
         );
+    }
+
+    /// POI 桶必须按**相机视口**裁剪（zoom-in 卡死回归，2026-10-18）：
+    /// guangdong 有 8.1 万个锚定路口；若不裁剪，zoom in 越过非城市淡出带
+    /// （scale < 0.75）后 `sync_poi` 会对**全量**点 spawn 实体 + mesh——
+    /// 首帧即 16 万实体，窗口冻结。视口内的保留、视口外的丢弃。
+    #[test]
+    fn poi_dots_are_culled_to_camera_viewport() {
+        let mut world = wv_core::World::default();
+        world.maps.push(map("m1"));
+        world.distances.places = vec![
+            anchored_place("p_in_a", "m1", 10.0, 20.0),
+            anchored_place("p_in_b", "m1", 600.0, 300.0),
+            // 1280×800 窗口、scale=1、相机在原点 → 半幅 (640, 400)：
+            // 这两个在视口外（右缘 640 + 余量，下缘 400 + 余量）。
+            anchored_place("p_out_x", "m1", 5000.0, 20.0),
+            anchored_place("p_out_y", "m1", 10.0, 5000.0),
+        ];
+
+        let (mut app, mut schedule) = projection_app(world);
+        {
+            let mut v = app.resource_mut::<ViewState>();
+            v.scale = 1.0;
+            v.camera_center = Vec2::ZERO;
+            v.window_size = Vec2::new(1280.0, 800.0);
+        }
+        let frame = run_once(&mut app, &mut schedule);
+        assert_eq!(
+            frame.place_dots.len(),
+            2,
+            "视口内两点保留、视口外两点裁掉，got {}",
+            frame.place_dots.len()
+        );
+    }
+
+    /// 缩放拉远时视口变大：上一帧被裁掉的点重新入桶（拉动式刷新语义）。
+    #[test]
+    fn poi_dots_return_when_viewport_widens() {
+        let mut world = wv_core::World::default();
+        world.maps.push(map("m1"));
+        world.distances.places = vec![
+            anchored_place("p_near", "m1", 10.0, 20.0),
+            anchored_place("p_far", "m1", 5000.0, 5000.0),
+        ];
+
+        let (mut app, mut schedule) = projection_app(world);
+        {
+            let mut v = app.resource_mut::<ViewState>();
+            v.scale = 1.0;
+            v.window_size = Vec2::new(1280.0, 800.0);
+        }
+        let near = run_once(&mut app, &mut schedule);
+        assert_eq!(near.place_dots.len(), 1, "近景只有 p_near 可见");
+        // run_once 会取走 ProjectionFrame 资源；二次运行前补一份。
+        app.insert_resource(ProjectionFrame::default());
+
+        // 拉远：scale=16 → 半幅 (10240, 6400)，p_far(5000,5000) 入镜。
+        {
+            let mut v = app.resource_mut::<ViewState>();
+            v.scale = 16.0;
+        }
+        let far = run_once(&mut app, &mut schedule);
+        assert_eq!(
+            far.place_dots.len(),
+            2,
+            "拉远后两点都应入桶，got {}",
+            far.place_dots.len()
+        );
+    }
+
+    /// 规模回归：guangdong 量级（8.1 万锚定路口）单帧投影的 POI 桶构建
+    /// 必须在毫秒级且输出被视口约束——防「不裁剪」以任何形式回归。
+    #[test]
+    fn guangdong_scale_places_project_within_frame_budget() {
+        let mut world = wv_core::World::default();
+        world.maps.push(map("m1"));
+        let mut places = Vec::with_capacity(81_509);
+        for i in 0..81_509 {
+            // 撒在 4096² 图内（网格状），全部锚定当前图。
+            let x = (i % 285) as f32 * 14.4;
+            let y = (i / 285) as f32 * 14.4;
+            places.push(anchored_place(&format!("p{i}"), "m1", x, y));
+        }
+        world.distances.places = places;
+
+        let (mut app, mut schedule) = projection_app(world);
+        {
+            let mut v = app.resource_mut::<ViewState>();
+            v.scale = 0.5; // zoom-in 越过淡出带——全量可见的场景
+            v.window_size = Vec2::new(1280.0, 800.0);
+        }
+        let t0 = std::time::Instant::now();
+        let frame = run_once(&mut app, &mut schedule);
+        let dt = t0.elapsed();
+        assert!(
+            frame.place_dots.len() < 5_000,
+            "视口 (1280/0.5)×(800/0.5) 只装得下视口内点，got {}",
+            frame.place_dots.len()
+        );
+        assert!(dt.as_millis() < 100, "8.1 万点投影应在毫秒级，实得 {dt:?}");
     }
 }
