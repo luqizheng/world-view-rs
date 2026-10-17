@@ -382,6 +382,12 @@ pub fn run(config: AppConfig) {
         )
             .chain(),
     );
+    // 选区意图菜单（底部居中浮动条；spec 2026-10-17 §4）。ego pass 主链已到
+    // Bevy 元组上限（20），单独注册、排在 map_controls 之后即可（只读选区）。
+    app.add_systems(
+        bevy_egui::EguiPrimaryContextPass,
+        ui::intent_menu.after(ui::map_controls),
+    );
 
     // 界面外壳（主题 / 快捷键 / 命令面板 / 布局持久化）与地图钻取（v0.2 §B）。
     // 两者各自成模块并各自注册，`gui.rs` 只负责调用顺序（见各处模块文档）。

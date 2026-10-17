@@ -24,6 +24,7 @@ pub mod continent_dialog;
 pub mod faction_panel;
 pub mod hover_tooltip;
 pub mod inspector_panel;
+pub mod intent_menu;
 pub mod layers_panel;
 pub mod list_panels_panel;
 pub mod map_controls;
@@ -47,6 +48,7 @@ pub use compass_panel::panel_compass;
 pub use continent_dialog::{continent_dialog, continent_dialog_system, ContinentDialog};
 pub use faction_panel::panel_faction;
 pub use inspector_panel::panel_inspector;
+pub use intent_menu::intent_menu;
 pub use layers_panel::{panel_layers, panel_map_tree};
 pub use list_panels_panel::{panel_character, panel_event};
 pub use map_controls::map_controls;
@@ -70,6 +72,7 @@ pub use widgets::{
     float_window,
     list_item,
     setup_egui_image_loaders,
+    slider,
     slider_row,
     BadgeKind,
     DialogWindow,

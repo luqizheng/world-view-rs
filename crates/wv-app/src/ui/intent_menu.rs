@@ -1,0 +1,146 @@
+//! 选区意图菜单（2026-10-17 选择工具 spec §4；M1 Task 6）。
+//!
+//! ## 职责
+//! - [`intent_menu`] —— 选区闭合时在画布**底部居中**浮现的浮动条：
+//!   列出当前图级可用的生成意图（M1 仅「生成大陆」入口，八参面板照旧）。
+//! - [`intent_count_for`] —— 意图目录按图级过滤的谓词（spec §4 裁定：
+//!   有地形栅格 ∧ 图级 ∈ {World, Region}；City / Interior 不出意图）。
+//!
+//! ## 边界（不做什么）
+//! - **不碰 `History` / 不构造 `EditCommand`**——只置 `ContinentDialog::open`
+//!   与取消选区；生成经既有 `continent_dialog_system` 提交（AGENTS §3.3）。
+//! - **不画选区几何**——那是 `wv_render::selection::draw_selection`。
+//! - **不隐藏工具**——无意图的图级显示占位文案而非隐藏（spec §12：选择优先
+//!   模型要全图级一致）。
+
+#![cfg(feature = "app")]
+
+use bevy::prelude::*;
+use bevy_egui::{egui, EguiContexts};
+
+use crate::i18n::{t, CurrentLocale, I18nKey};
+use crate::state::{DrillState, WorldProjection};
+use crate::theme::ui_theme::UiShellConfig;
+use crate::ui_shell::StartupLoadRequest;
+
+use super::shell::UiShell;
+use super::widgets::icon_image;
+use super::ICON_MOUNTAIN_RANGE;
+use crate::theme::ui_tokens::radius;
+
+/// 单瓷砖边长与图标内嵌（视觉对齐 [`super::map_controls`] 的瓷砖规格）。
+const TILE_SIZE: f32 = 34.0;
+const ICON_INSET: f32 = 7.0;
+
+/// 意图目录大小：按图级过滤（spec §4 裁定——有地形栅格 ∧ 图级 ∈
+/// {World, Region}；M1 目录只有「生成大陆」一项，森林随 M4 加入）。
+fn intent_count_for(level: wv_core::map::MapLevel) -> usize {
+    match level {
+        wv_core::map::MapLevel::World | wv_core::map::MapLevel::Region => 1,
+        wv_core::map::MapLevel::City | wv_core::map::MapLevel::Interior => 0,
+    }
+}
+
+/// 选区意图菜单：底部居中浮动条。`selection.is_closed()` 才画；
+/// 无意图图级显示占位文案（spec §12：不隐藏工具，要全图级一致）。
+///
+/// 「生成大陆」按钮只置 `ContinentDialog::open = true`——面板确认时经
+/// `continent_dialog_system` 从 `SelectionState` 取环提交，本系统不碰 History。
+#[allow(clippy::too_many_arguments)]
+pub fn intent_menu(
+    mut contexts: EguiContexts,
+    shell_cfg: Res<UiShellConfig>,
+    current_loc: Res<CurrentLocale>,
+    drill: Res<DrillState>,
+    projection: Res<WorldProjection>,
+    selection: Res<wv_render::state::SelectionState>,
+    mut continent_dialog: ResMut<crate::ui::ContinentDialog>,
+    startup_req: Res<StartupLoadRequest>,
+) {
+    // 无工程锁 / 启动加载中 / 未闭合：与 map_controls 同源早返。
+    if !projection.has_open_project() || startup_req.0.is_some() || !selection.is_closed() {
+        return;
+    }
+    let loc = current_loc.0;
+    let level = drill
+        .current_node(&projection.world)
+        .map(|n| n.level)
+        .unwrap_or(wv_core::map::MapLevel::World);
+    let shell = UiShell::new(&shell_cfg);
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
+
+    egui::Area::new(egui::Id::new("wv_intent_menu_v1"))
+        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -18.0))
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            // 视觉对齐 map_controls 的圆角大框：panel_bg + 描边 + 投影。
+            egui::Frame::NONE
+                .fill(shell.panel_bg())
+                .stroke(egui::Stroke::new(1.0, shell.border_subtle()))
+                .corner_radius(egui::CornerRadius::from(radius::PANEL))
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .shadow(egui::Shadow {
+                    offset: [0, 8],
+                    blur: 24,
+                    spread: 0,
+                    color: egui::Color32::from_black_alpha(71),
+                })
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if intent_count_for(level) == 0 {
+                            // 无意图图级：占位文案，不误导作者去别的工具。
+                            ui.weak(t(loc, I18nKey::IntentMenuNoIntents));
+                        } else {
+                            let icon = icon_image(
+                                ICON_MOUNTAIN_RANGE,
+                                egui::Color32::WHITE,
+                                TILE_SIZE - ICON_INSET,
+                            );
+                            if ui
+                                .add(
+                                    egui::Button::image_and_text(
+                                        icon,
+                                        t(loc, I18nKey::IntentMenuGenerateContinent),
+                                    )
+                                    .fill(shell.accent())
+                                    .corner_radius(egui::CornerRadius::from(radius::PANEL)),
+                                )
+                                .clicked()
+                            {
+                                // 只开面板；选区保持到面板确认时被消费（spec D5）。
+                                continent_dialog.open = true;
+                            }
+                        }
+                        ui.weak(t(loc, I18nKey::IntentMenuCancelHint));
+                    });
+                });
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::intent_count_for;
+    use wv_core::map::MapLevel;
+
+    #[test]
+    fn intent_catalog_empty_for_city_level() {
+        assert_eq!(intent_count_for(MapLevel::City), 0, "城市级 v1 无意图");
+        assert_eq!(intent_count_for(MapLevel::Interior), 0, "内景级 v1 无意图");
+    }
+
+    #[test]
+    fn intent_catalog_nonempty_for_world_and_region() {
+        assert_eq!(
+            intent_count_for(MapLevel::World),
+            1,
+            "世界级：仅生成大陆（M1）"
+        );
+        assert_eq!(
+            intent_count_for(MapLevel::Region),
+            1,
+            "区域级同世界级（spec §4 裁定）"
+        );
+    }
+}

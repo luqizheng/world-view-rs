@@ -846,6 +846,14 @@ pub enum I18nKey {
     /// 错误前缀「生成失败」
     ContinentNoticeGenerateFailed,
 
+    // ── 选区意图菜单（2026-10-17 选择工具 spec §4，M1 Task 6） ──────────
+    /// 按钮「生成大陆…」
+    IntentMenuGenerateContinent,
+    /// 弱化提示「Esc 取消选择」
+    IntentMenuCancelHint,
+    /// 占位「本图暂无可用意图」
+    IntentMenuNoIntents,
+
     // ── 新建地图幅面比例（2026-10-17 ocean-default-16-9 Task 2） ────────
     /// 标签「宽高比」
     NewMapAspect,
