@@ -563,6 +563,131 @@ impl ContinentSketch {
     }
 }
 
+/// 选择工具会话态（2026-10-17 选择工具 spec §3；M1 Task 1）。
+///
+/// pen 方法的数据底座：草稿锚点（Drawing）与闭合选区（Closed）二态互斥——
+/// `draft` 非空即画中，`closed` 为 `Some` 即已闭合。选区是**会话态**（spec D11）：
+/// 不落盘、不进 YAML；生成类意图确认时经 [`Self::consume_closed`] 取走。
+/// 坐标为**当前图局部 wu**（与 [`MeasureState::draft`] 同口径）。
+///
+/// 手感对齐 Figma pen：逐点 + 橡皮筋、双击 / 回车 / 点首锚闭合、
+/// 锚点可拖 / 双击删 / 点边插——交互语义见 `crate::selection`。
+#[derive(Resource, Debug, Default, Clone, PartialEq)]
+pub struct SelectionState {
+    /// 选择工具是否启用（工具条瓷砖切换；与测量的互斥由 wv-app 瓷砖 toggle 家族处理）。
+    pub enabled: bool,
+    /// 画中草稿锚点（未闭合）。
+    pub draft: Vec<(f32, f32)>,
+    /// 已闭合选区（≥3 点）。`Some` = Closed 态。
+    pub closed: Option<Vec<(f32, f32)>>,
+    /// Closed 态下被选中（待拖动）的锚点下标。
+    pub selected_anchor: Option<usize>,
+    /// 上一次左键落点与时刻（双击判定；与 [`ContinentSketch::last_click`] 同款）。
+    pub last_click: Option<((f32, f32), f64)>,
+    /// 草稿 / 选区绑定的图 ID——[`Self::on_map_change`] 变图即清（spec D9：切图 = 取消选择）。
+    pub last_map_id: Option<wv_core::Id>,
+}
+
+impl SelectionState {
+    /// 画中（草稿非空）。
+    pub fn is_drawing(&self) -> bool {
+        !self.draft.is_empty()
+    }
+
+    /// 已闭合。
+    pub fn is_closed(&self) -> bool {
+        self.closed.is_some()
+    }
+
+    /// 左键落点：追加到草稿（Closed 态的点击归 `crate::selection::handle_click`）。
+    pub fn add_point(&mut self, p: (f32, f32)) {
+        self.draft.push(p);
+    }
+
+    /// 收笔：≥3 点才成环（成功 `true`）；失败清空草稿——退化多边形不产生选区，
+    /// 作者不会得到一个点了两次却没反应的谜（内核硬前提在交互层挡住，
+    /// `ContinentSketch::try_close` 同语义）。
+    pub fn try_close(&mut self) -> bool {
+        match std::mem::take(&mut self.draft) {
+            pts if pts.len() >= 3 => {
+                self.closed = Some(pts);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Esc（画中）：只丢草稿，已闭合选区保留——作者辛苦圈的地不因手滑蒸发。
+    pub fn discard_draft(&mut self) {
+        self.draft.clear();
+    }
+
+    /// 取消选择：草稿与闭合一起清（点空白 / 切工具 / 切图）。不动 `enabled`——
+    /// 工具开关归瓷砖，取消的是「这次选择」不是「这个工具」。
+    pub fn cancel(&mut self) {
+        self.draft.clear();
+        self.closed = None;
+        self.selected_anchor = None;
+        self.last_click = None;
+    }
+
+    /// stash 回驻留（大陆生成撤销恢复圈，spec §4）：直接落为闭合选区（替换现状）。
+    pub fn close_with(&mut self, pts: Vec<(f32, f32)>) {
+        self.draft = Vec::new();
+        self.closed = Some(pts);
+        self.selected_anchor = None;
+        self.last_click = None;
+    }
+
+    /// 生成即消费：取走闭合选环并复位选中锚点。
+    pub fn consume_closed(&mut self) -> Option<Vec<(f32, f32)>> {
+        self.selected_anchor = None;
+        self.closed.take()
+    }
+
+    /// 拖动闭合选区的锚点；越界返回 `false`（防御——系统层按命中下标调用）。
+    pub fn move_anchor(&mut self, i: usize, p: (f32, f32)) -> bool {
+        match self.closed.as_mut() {
+            Some(ring) if i < ring.len() => {
+                ring[i] = p;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// 删锚（双击锚点）；剩余 <3 点时闭合**降级回画中**——绝不留下悬空的
+    /// 退化选区喂内核（spec Review Focus 3）。
+    pub fn delete_anchor(&mut self, i: usize) {
+        let Some(ring) = self.closed.as_mut() else {
+            return;
+        };
+        if i >= ring.len() {
+            return;
+        }
+        ring.remove(i);
+        if ring.len() < 3 {
+            self.draft = self.closed.take().unwrap_or_default();
+        }
+    }
+
+    /// 点边插入：在顶点 `splice`（1..=len，i-1 与 i%len 之间）处插入新锚点。
+    pub fn insert_anchor(&mut self, splice: usize, p: (f32, f32)) {
+        if let Some(ring) = self.closed.as_mut() {
+            let splice = splice.clamp(1, ring.len());
+            ring.insert(splice, p);
+        }
+    }
+
+    /// 变图清空（`MeasureState::on_map_change` 同款）——测量不能跨图，选区同理。
+    pub fn on_map_change(&mut self, new_map: Option<&wv_core::Id>) {
+        if self.last_map_id.as_ref() != new_map {
+            self.cancel();
+        }
+        self.last_map_id = new_map.cloned();
+    }
+}
+
 impl Default for BrushState {
     fn default() -> Self {
         Self {
@@ -1361,5 +1486,120 @@ mod tests {
         );
         // 跳到 `city_ghost` 自身则失败（不在 maps 里）。
         assert!(!d.drill_to(&w, &Id::new_unchecked("city_ghost")));
+    }
+
+    // ====== SelectionState（2026-10-17 选择工具 spec §3，M1 Task 1）======
+
+    fn closed_ring() -> Vec<(f32, f32)> {
+        vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)]
+    }
+
+    fn closed_selection() -> SelectionState {
+        SelectionState {
+            closed: Some(closed_ring()),
+            ..Default::default()
+        }
+    }
+
+    /// <3 点收笔：不成环，草稿清空（`ContinentSketch::try_close` 同语义——
+    /// 作者不会得到一个点了两次却没反应的谜）。
+    #[test]
+    fn closed_selection_requires_three_anchors() {
+        let mut s = SelectionState::default();
+        s.add_point((0.0, 0.0));
+        s.add_point((10.0, 0.0));
+        assert!(s.is_drawing(), "两次落点应处于画中");
+        assert!(!s.try_close(), "两点不应成环");
+        assert!(!s.is_drawing(), "失败的收笔也清掉草稿");
+        assert!(!s.is_closed(), "两点不得产生闭合选区");
+
+        s.add_point((0.0, 0.0));
+        s.add_point((10.0, 0.0));
+        s.add_point((10.0, 10.0));
+        assert!(s.try_close(), "三点应能闭合");
+        assert_eq!(s.closed.as_ref().map(Vec::len), Some(3), "got {:?}", s.closed);
+        assert!(!s.is_drawing(), "闭合后草稿应清空");
+    }
+
+    /// Esc 只丢草稿：已闭合选区保留（作者辛苦圈的地不会因为手滑 Esc 蒸发）。
+    #[test]
+    fn escape_discards_draft_keeps_closed_selection() {
+        let mut s = closed_selection();
+        s.add_point((50.0, 50.0));
+        s.add_point((60.0, 50.0));
+        s.discard_draft();
+        assert!(!s.is_drawing(), "Esc 后草稿应丢弃");
+        assert!(s.is_closed(), "已闭合选区不得被 discard_draft 清掉");
+        assert_eq!(s.closed, Some(closed_ring()), "闭合环内容不变");
+    }
+
+    /// 点空白 / 切工具：草稿与闭合一起清（selected 一并复位）。
+    #[test]
+    fn cancel_clears_both_draft_and_closed() {
+        let mut s = closed_selection();
+        s.selected_anchor = Some(1);
+        s.add_point((50.0, 50.0));
+        s.cancel();
+        assert!(!s.is_drawing() && !s.is_closed(), "cancel 应双清");
+        assert_eq!(s.selected_anchor, None, "选中锚点应复位");
+        assert_eq!(s.enabled, false, "cancel 不动 enabled——工具开关归瓷砖");
+    }
+
+    /// 删锚致 <3 点：闭合降级回画中（绝不留下悬空的退化选区喂内核）。
+    #[test]
+    fn deleting_anchor_below_three_dissolves_back_to_draft() {
+        let mut s = closed_selection();
+        s.delete_anchor(0);
+        assert!(!s.is_closed(), "两点后不得仍是闭合态");
+        assert!(s.is_drawing(), "剩余锚点应回到画中草稿");
+        assert_eq!(s.draft.len(), 2, "got {:?}", s.draft);
+    }
+
+    /// 点边插入：新点精确落在 splice 位（i-1 与 i%len 之间）。
+    #[test]
+    fn insert_anchor_splices_between_neighbors() {
+        // 方形：底边 (0,0)-(10,0)、右边 (10,0)-(10,10)、顶边 (10,10)-(0,10)、左边回到 (0,0)。
+        let mut s = SelectionState {
+            closed: Some(vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]),
+            ..Default::default()
+        };
+        let p = (5.0, 10.0);
+        s.insert_anchor(3, p); // 顶边中点：pts[2] 与 pts[3] 之间
+        let ring = s.closed.as_ref().expect("插入后仍闭合");
+        assert_eq!(ring.len(), 5, "got {ring:?}");
+        assert_eq!(ring[3], p, "新点应落在 splice=3 位");
+        assert_eq!(ring[2], (10.0, 10.0), "前驱不动");
+        assert_eq!(ring[4], (0.0, 10.0), "后继不动");
+    }
+
+    /// 生成即消费：取走环并清空闭合态。
+    #[test]
+    fn consume_closed_takes_ring_and_clears() {
+        let mut s = closed_selection();
+        s.selected_anchor = Some(0);
+        let ring = s.consume_closed();
+        assert_eq!(ring, Some(closed_ring()), "取走的应是原环");
+        assert!(!s.is_closed(), "消费后不再闭合");
+        assert_eq!(s.selected_anchor, None, "选中锚点应一并复位");
+        assert_eq!(s.consume_closed(), None, "二次消费应得 None");
+    }
+
+    /// 切图清空（`MeasureState::on_map_change` 同款）——测量不能跨图，选区同理。
+    /// 同步系统每帧都会以当前图重申（`sync_selection_map_change`），所以真实
+    /// 状态里 `last_map_id` 恒等于当前图；测试先钉住该前提再断言变图分支。
+    #[test]
+    fn map_change_clears_selection() {
+        let world = Id::new_unchecked("world_main");
+        let city = Id::new_unchecked("city_zunyi");
+        let mut s = closed_selection();
+        s.last_map_id = Some(world.clone());
+        s.on_map_change(Some(&world));
+        assert!(s.is_closed(), "同图重申不得清空");
+        s.on_map_change(Some(&city));
+        assert!(!s.is_closed(), "切图应清空选区");
+        assert!(!s.is_drawing(), "切图应清空草稿");
+        s.add_point((1.0, 1.0));
+        s.on_map_change(None);
+        assert!(!s.is_drawing(), "退到无图也应清空");
     }
 }
