@@ -835,6 +835,23 @@ impl DrillState {
         self.transition_from = None;
     }
 
+    /// 把当前图设为**唯一起点**：trail 只剩 `[id]`，访问痕迹与待播过渡全清。
+    ///
+    /// 与 [`Self::enter`] 的分工：`enter` 是「沿树往下走一步」（保留来路面包屑）；
+    /// 本方法是「导航上下文整体换新」——世界层级新图创建为**独立根图**后用。
+    /// 若沿用 `enter`，新图会带着旧图的面包屑，zoom-out 撞外界就弹回旧图
+    /// （2026-10-17 用户报告的「新建世界地图 zoom out 到最大加载前一张地图」即此）。
+    ///
+    /// 注意 `ensure_root` 不会搅局：它只在「trail 为空或当前图不在世界里」时
+    /// 重置，`[id]` 非空且 id 真实存在时每帧调用都是恒等。
+    pub fn settle_on(&mut self, id: wv_core::id::Id) {
+        self.trail.clear();
+        self.trail.push(id);
+        self.visited.clear();
+        self.last_depth = 0;
+        self.transition_from = None;
+    }
+
     /// 钻入某个子图。只有**当前图的直接子图**才能进入（拒绝越级，避免路径与
     /// `children` 引用不一致）。返回是否发生了钻取。
     pub fn enter(&mut self, world: &World, child: &wv_core::id::Id) -> bool {
@@ -1225,6 +1242,26 @@ mod tests {
         assert_eq!(d.current().map(Id::as_str), Some("world_main"));
         assert!(!d.up(), "根图之上没有更上级");
         assert_eq!(d.depth(), 0);
+    }
+
+    /// 独立根图落点（2026-10-17 新建世界图修复）：settle_on 后 trail 只含新图，
+    /// 旧访问痕迹清空，zoom-out（`up`）必须原地不动——不能弹回旧世界。
+    #[test]
+    fn settle_on_replaces_trail_and_zoom_out_stays_put() {
+        let w = demo_world();
+        let zunyi = Id::new_unchecked("city_zunyi");
+        let mut d = DrillState::default();
+        d.ensure_root(&w);
+        d.enter(&w, &zunyi);
+        d.up();
+        assert!(d.is_visited(&zunyi), "前置：钻出应留下访问痕迹");
+        let fresh = Id::new_unchecked("world_second");
+        d.settle_on(fresh.clone());
+        assert_eq!(d.current(), Some(&fresh), "当前图应只剩新图");
+        assert_eq!(d.depth(), 0, "独立根图深度为 0");
+        assert!(!d.is_visited(&zunyi), "旧访问痕迹应被清空");
+        assert!(!d.up(), "独立根图 zoom-out 不得换图（否则弹回旧世界）");
+        assert_eq!(d.current(), Some(&fresh), "zoom-out 后仍在新图");
     }
 
     #[test]

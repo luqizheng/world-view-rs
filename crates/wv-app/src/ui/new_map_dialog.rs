@@ -301,9 +301,15 @@ pub fn new_map_dialog(
             });
 
             ui.add_space(4.0);
-            // 落点：当前图是父图；空世界时它就是根。
+            // 落点：世界层级永远独立成根；其余层级挂当前图（空世界时它就是根）。
             if first_map {
                 ui.label("将成为世界地图（钻取树的根）");
+            } else if dialog.level == MapLevel::World {
+                ui.label("将成为独立的世界图（不挂在任何图之下；与现有世界并列）")
+                    .on_hover_text(
+                        "独立世界图没有上级：zoom-out 到最大就停在本图，\
+                         不会钻回之前打开的地图",
+                    );
             } else {
                 let parent = drill
                     .current()
@@ -355,14 +361,22 @@ pub fn new_map_dialog(
         return;
     }
     if confirmed {
+        let first_map = projection.world.maps.is_empty();
         match create_map(&mut dialog, &mut projection, &drill, &mut edit) {
-            Ok(id) => {
+            Ok((id, dirty)) => {
                 // 新栅格 / 新图都要让底图重走一遍：mark_all_dirty 触发整图重建，
                 // 钻入后 `rebuild_texture_on_mode_change` 认 last_map 变化再换图。
                 tex.mark_all_dirty();
                 diagnostics.needs_diagnose = true;
-                // 建好就钻进去：作者接下来八成是在这张图上修地形。
-                if drill.node(&projection.world, &id).is_some()
+                // 建好就切到新图。世界层级图是**独立根图**——导航上下文整体换新
+                // （settle_on：trail 只含新图、访问痕迹清空），绝不能 `enter`：
+                // enter 会留下旧图面包屑，zoom-out 撞外界就弹回旧图
+                // （2026-10-17 用户报告「新建世界地图 zoom out 加载前一张地图」）。
+                // 首图同理（没有导航上下文可沿）。其余层级沿用 enter：
+                // 子图钻出回父图是 P4 设计行为。
+                if first_map || dialog.level == MapLevel::World {
+                    drill.settle_on(id.clone());
+                } else if drill.node(&projection.world, &id).is_some()
                     && drill.current().map(|c| c != &id).unwrap_or(false)
                 {
                     drill.enter(&projection.world, &id);
@@ -377,6 +391,20 @@ pub fn new_map_dialog(
                     fit_view_to_map(&id, &projection.world, &grid, &mut view, window_size)
                 {
                     wv_render::camera::apply_view_to_camera(center, scale, &mut cameras);
+                }
+                // 创建即落盘（2026-10-17 用户建议：新建地图 = 创建新地图文件）：
+                // 新图 YAML + terrain.bin 立即写入，不等下一次手动保存。
+                // 失败不打断创建——dirty 集合仍持有这些路径，下次保存补写。
+                if let Some(dir) = projection.project_dir.clone() {
+                    match wv_io::Project::open(&dir)
+                        .and_then(|mut p| p.save_world(&projection.world, &dirty))
+                    {
+                        Ok(()) => {}
+                        Err(e) => notice.error(
+                            format!("新图落盘失败：{e}（已留脏标记，下次保存补写）"),
+                            frame,
+                        ),
+                    }
                 }
                 notice.info(format!("已创建地图「{}」", dialog.name), frame);
                 dialog.open = false;
@@ -415,21 +443,26 @@ pub(crate) fn fit_view_to_map(
 }
 
 /// 确认创建：组装 `AddMapCommand` 并提交 `History`。失败原因留在 `dialog.error`。
+///
+/// 成功返回 `(新图 id, 本次提交的 dirty 路径)`——调用方拿 dirty 路径做
+/// 「创建即落盘」（2026-10-17 用户建议：新建地图 = 创建新地图文件）。
 fn create_map(
     dialog: &mut NewMapDialog,
     projection: &mut WorldProjection,
     drill: &DrillState,
     edit: &mut EditHistory,
-) -> Result<Id, String> {
+) -> Result<(Id, Vec<String>), String> {
     let name = if dialog.name.trim().is_empty() {
         "新地图".to_owned()
     } else {
         dialog.name.trim().to_owned()
     };
     let id = dialog.next_free_id(&projection.world);
-    // 空世界的第一张图固定为世界图（父 = None）；否则挂在当前图下。
+    // 空世界的第一张图固定为世界图（父 = None）；世界层级图**永远**独立成根
+    // （2026-10-17 用户报告修复：世界挂在当前图下，zoom-out 撞外界就钻回旧图）。
+    // 其余层级挂在当前图下——子图钻出回父图是 P4 的设计行为。
     let first_map = projection.world.maps.is_empty();
-    let parent = if first_map {
+    let parent = if first_map || dialog.level == MapLevel::World {
         None
     } else {
         drill.current().cloned()
@@ -468,9 +501,9 @@ fn create_map(
     tx.push(Box::new(wv_edit::AddMapCommand::new(node, Some(terrain))));
     match edit.history.commit(&mut projection.world, tx) {
         Ok(dirty) => {
-            edit.record_dirty(dirty);
+            edit.record_dirty(dirty.clone());
             projection.dirty = true;
-            Ok(id)
+            Ok((id, dirty))
         }
         Err(e) => Err(format!("创建失败：{e}")),
     }
@@ -553,8 +586,11 @@ mod tests {
             level: MapLevel::World,
             ..Default::default()
         };
-        let new_id = create_map(&mut dialog, &mut projection, &drill, &mut edit).expect("创建");
-        assert!(drill.enter(&projection.world, &new_id), "应能钻入新图");
+        let new_id = create_map(&mut dialog, &mut projection, &drill, &mut edit)
+            .expect("创建")
+            .0;
+        // 世界层级新图是独立根图，导航切换走 settle_on（不能 enter——它不是旧图子图）。
+        drill.settle_on(new_id.clone());
 
         // 模拟一帧 UI 之后的渲染侧：旧纹理 + 新 current。
         let mut images = Assets::<Image>::default();
@@ -627,7 +663,7 @@ mod tests {
             level: MapLevel::World,
             ..Default::default()
         };
-        let id = create_map(&mut dialog, &mut projection, &drill, &mut edit).expect("创建");
+        let (id, _) = create_map(&mut dialog, &mut projection, &drill, &mut edit).expect("创建");
         let mut view = crate::state::ViewState {
             camera_center: Vec2::splat(9999.0),
             scale: 0.01,
@@ -653,9 +689,11 @@ mod tests {
         assert_eq!(view.scale, scale, "应写回 ViewState 缩放");
     }
 
-    /// 建第二张「世界」级地图后必须能钻入它（否则旧图留在主画面）。
+    /// 第二张「世界」级地图必须是**独立根图**（2026-10-17 用户报告修复）：
+    /// 不挂旧图之下（否则 zoom-out 撞外界会钻回旧图），导航 settle 到新图上，
+    /// 旧世界原样保留、children 不被改动。
     #[test]
-    fn creating_a_world_level_map_drills_into_it() {
+    fn creating_a_world_level_map_is_an_independent_root() {
         let mut projection = WorldProjection::default();
         let root = Id::new_unchecked("map_root");
         projection.world.maps.push(MapNode {
@@ -682,15 +720,85 @@ mod tests {
             level: MapLevel::World,
             ..Default::default()
         };
-        let id = create_map(&mut dialog, &mut projection, &drill, &mut edit).expect("创建应成功");
+        let (id, dirty) =
+            create_map(&mut dialog, &mut projection, &drill, &mut edit).expect("创建应成功");
+        let node = projection
+            .world
+            .maps
+            .iter()
+            .find(|m| m.id == id)
+            .expect("新图应在世界里");
+        assert_eq!(node.parent, None, "世界层级新图不得有父图");
         assert!(
-            drill.enter(&projection.world, &id),
-            "新建图应在 current.children 里"
+            !root_children_of(&projection.world, &root).contains(&id),
+            "旧世界 children 不得收录新图"
         );
-        assert_eq!(drill.current(), Some(&id), "应钻入新图");
+        assert!(
+            dirty.iter().any(|p| p == "maps"),
+            "dirty 路径应含 maps 目录（创建即落盘的路由依据）"
+        );
+        // 对话框层的导航分流：settle_on 后 zoom-out（up）原地不动——
+        // 这是「zoom out 到最大加载前一张地图」的直接回归断言。
+        drill.settle_on(id.clone());
+        assert_eq!(drill.current(), Some(&id), "应落在新图上");
+        assert!(!drill.up(), "新图上 zoom-out 不得弹回旧图");
         let (node, _) = wv_render::terrain_view::active_terrain(&projection.world, drill.current())
             .expect("新图应带地形");
         assert_eq!(node.id, id);
+    }
+
+    /// 世界之下的城市图仍走 P4 挂接（父引用 + 钻出回父图）——独立根图只限世界层级。
+    #[test]
+    fn creating_a_city_level_map_still_hangs_under_current() {
+        let mut projection = WorldProjection::default();
+        let root = Id::new_unchecked("map_root");
+        projection.world.maps.push(MapNode {
+            id: root.clone(),
+            name: "世界".into(),
+            level: MapLevel::World,
+            extent: Some(Extent::sized(512.0, 512.0)),
+            base: Some(MapBase::Ocean),
+            ..Default::default()
+        });
+        let mut drill = crate::state::DrillState::default();
+        drill.ensure_root(&projection.world);
+        let mut edit = crate::edit::editing::EditHistory::default();
+        let mut dialog = NewMapDialog {
+            open: true,
+            level: MapLevel::City,
+            ..Default::default()
+        };
+        let (id, _) =
+            create_map(&mut dialog, &mut projection, &drill, &mut edit).expect("创建应成功");
+        let node = projection
+            .world
+            .maps
+            .iter()
+            .find(|m| m.id == id)
+            .expect("新图应在世界里");
+        assert_eq!(
+            node.parent.as_ref(),
+            Some(&root),
+            "城市图应挂在当前图之下（P4）"
+        );
+        assert!(
+            drill.enter(&projection.world, &id),
+            "城市图应能从当前图钻入"
+        );
+        assert!(
+            drill.up(),
+            "钻出应回到父图（子图 zoom-out 回父图是设计行为）"
+        );
+    }
+
+    /// 从 `world.maps` 里取指定图的 children 克隆（测试辅助）。
+    fn root_children_of(world: &wv_core::World, id: &Id) -> Vec<Id> {
+        world
+            .maps
+            .iter()
+            .find(|m| &m.id == id)
+            .map(|m| m.children.clone())
+            .unwrap_or_default()
     }
 
     /// 幅面 → 栅格换算：4096×2304 wu / 8 wu每格 = 512×288（16:9 整数格）。
