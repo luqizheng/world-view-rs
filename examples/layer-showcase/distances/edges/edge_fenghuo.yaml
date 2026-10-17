@@ -1,0 +1,6 @@
+id: edge_fenghuo
+a: place_nanze
+b: place_fenghuo
+distance_km: 80.0
+terrain: plain
+bidirectional: true

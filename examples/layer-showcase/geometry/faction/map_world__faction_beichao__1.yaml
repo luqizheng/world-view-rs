@@ -1,0 +1,13 @@
+map: map_world
+owner: faction_beichao
+from: 1
+to: 120
+geometry:
+- 300.0
+- 300.0
+- 2600.0
+- 300.0
+- 2600.0
+- 1500.0
+- 300.0
+- 1500.0

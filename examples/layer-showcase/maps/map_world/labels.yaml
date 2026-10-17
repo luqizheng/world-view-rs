@@ -1,0 +1,10 @@
+entity_kinds:
+- place
+- faction
+- region
+min_zoom_tier: region
+font_size_ladder:
+  nation: 9.0
+  region: 11.0
+  edit: 14.0
+max_labels: 200

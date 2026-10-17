@@ -1,0 +1,9 @@
+id: evt_pass_war
+name: 落雁隘之战
+from: 120
+to: 128
+location:
+  place: place_luoyan
+participants: []
+outcome: 北府败退，让出东境四郡。
+effects: []

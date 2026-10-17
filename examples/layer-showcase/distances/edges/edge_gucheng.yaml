@@ -1,0 +1,6 @@
+id: edge_gucheng
+a: place_dongang
+b: place_gucheng
+distance_km: 110.0
+terrain: plain
+bidirectional: true

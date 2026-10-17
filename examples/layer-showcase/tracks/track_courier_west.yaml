@@ -1,0 +1,21 @@
+id: track_courier_west
+unit: unit_courier
+map: map_world
+from: 100
+to: 112
+waypoints:
+- day: 100
+  pos:
+    x: 500.0
+    y: 900.0
+  place: place_xiling
+- day: 105
+  pos:
+    x: 1600.0
+    y: 1200.0
+  place: place_qingshi
+- day: 110
+  pos:
+    x: 2400.0
+    y: 800.0
+  place: place_beiyuan

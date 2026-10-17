@@ -1,0 +1,9 @@
+id: evt_founding
+name: 西陵建城
+from: 1
+to: 15
+location:
+  place: place_xiling
+participants: []
+outcome: 新历元年，西陵城依山而立。
+effects: []

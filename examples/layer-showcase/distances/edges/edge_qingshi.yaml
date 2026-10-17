@@ -1,0 +1,6 @@
+id: edge_qingshi
+a: place_xiling
+b: place_qingshi
+distance_km: 120.0
+terrain: plain
+bidirectional: true

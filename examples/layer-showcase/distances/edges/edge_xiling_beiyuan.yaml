@@ -1,0 +1,6 @@
+id: edge_xiling_beiyuan
+a: place_xiling
+b: place_beiyuan
+distance_km: 520.0
+terrain: plain
+bidirectional: true

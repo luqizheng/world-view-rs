@@ -1,0 +1,6 @@
+id: edge_dongang_nanze
+a: place_dongang
+b: place_nanze
+distance_km: 780.0
+terrain: plain
+bidirectional: true

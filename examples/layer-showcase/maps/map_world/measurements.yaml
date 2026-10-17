@@ -1,0 +1,18 @@
+measurements:
+- id: meas_west_road
+  kind: polyline
+  points:
+  - x: 500.0
+    y: 900.0
+  - x: 1600.0
+    y: 1200.0
+  - x: 2400.0
+    y: 800.0
+- id: meas_se_block
+  kind: rectangle
+  points:
+  - x: 3000.0
+    y: 2600.0
+  - x: 3900.0
+    y: 3300.0
+  color: '#C4A24E'

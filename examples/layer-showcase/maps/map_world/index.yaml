@@ -1,0 +1,107 @@
+id: map_world
+name: 澜野九州
+level: world
+children:
+- map_city_dongang
+icons:
+- id: icon_xiling
+  anchor:
+  - 0.12207031
+  - 0.21972656
+  shape: circle
+  size: 12.0
+- id: icon_beiyuan
+  anchor:
+  - 0.5859375
+  - 0.1953125
+  shape: circle
+  size: 12.0
+- id: icon_dongang
+  anchor:
+  - 0.80566406
+  - 0.56152344
+  shape: diamond
+  drill_into: map_city_dongang
+- id: icon_nanze
+  anchor:
+  - 0.3173828
+  - 0.75683594
+  shape: circle
+  size: 12.0
+layers:
+- id: layer_terrain
+  name: 地形
+  kind: terrain
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+  source: maps/map_world/terrain.bin
+- id: layer_border_reserve
+  name: 疆界（预留）
+  kind: border
+  visible: true
+  locked: false
+  opacity: 0.8
+  z: 10
+- id: layer_roads
+  name: 官道
+  kind: road
+  visible: true
+  locked: false
+  opacity: 0.65
+  z: 4
+- id: layer_roads_backup
+  name: 官道（第二声明·不生效）
+  kind: road
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: -4
+- id: layer_places
+  name: 城邑
+  kind: place
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+- id: layer_events
+  name: 事件
+  kind: event_point
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+- id: layer_influence
+  name: 势力疆域
+  kind: influence
+  visible: true
+  locked: false
+  opacity: 0.75
+  z: -4
+- id: layer_labels
+  name: 标注
+  kind: label
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+  source: maps/map_world/labels.yaml
+- id: layer_notes
+  name: 私注（隐藏）
+  kind: custom
+  visible: false
+  locked: false
+  opacity: 0.9
+  z: 0
+extent:
+  width: 4096.0
+  height: 4096.0
+raster:
+  path: maps/map_world/terrain.bin
+  encoding: i16
+  width: 1024
+  height: 1024
+  chunk: 256
+  format_version: 1
+  checksum: e3d89a36

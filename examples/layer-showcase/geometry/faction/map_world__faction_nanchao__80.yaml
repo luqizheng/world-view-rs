@@ -1,0 +1,13 @@
+map: map_world
+owner: faction_nanchao
+from: 80
+to: 400
+geometry:
+- 700.0
+- 1800.0
+- 3000.0
+- 1800.0
+- 3000.0
+- 3400.0
+- 700.0
+- 3400.0

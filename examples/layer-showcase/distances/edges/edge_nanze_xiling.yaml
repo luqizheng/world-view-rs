@@ -1,0 +1,6 @@
+id: edge_nanze_xiling
+a: place_nanze
+b: place_xiling
+distance_km: 430.0
+terrain: plain
+bidirectional: true

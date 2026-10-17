@@ -1,0 +1,57 @@
+id: map_city_dongang
+name: 东港城
+level: city
+parent: map_world
+children: []
+icons: []
+layers:
+- id: layer_city_terrain
+  name: 城郭底图
+  kind: terrain
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+  source: maps/map_city_dongang/terrain.bin
+- id: layer_city_streets
+  name: 街巷
+  kind: road
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 1
+  source: maps/map_city_dongang/roads.yaml
+- id: layer_city_buildings
+  name: 建筑
+  kind: building
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+  source: maps/map_city_dongang/buildings.yaml
+- id: layer_city_places
+  name: 城内要地
+  kind: place
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+- id: layer_city_labels
+  name: 标注
+  kind: label
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+  source: maps/map_city_dongang/labels.yaml
+extent:
+  width: 1024.0
+  height: 1024.0
+raster:
+  path: maps/map_city_dongang/terrain.bin
+  encoding: i16
+  width: 256
+  height: 256
+  chunk: 256
+  format_version: 1
+  checksum: 098446fc

@@ -1,0 +1,28 @@
+calendar:
+  kind: simple
+  prefix: 新历
+  start_year: 1
+  days_per_year: 360
+  days_per_month: 30
+timeline_range:
+  from: 1
+  to: 401
+anchors:
+- id: anchor_founding
+  name: 西陵建城
+  day: 1
+- id: anchor_courier
+  name: 驿使出发
+  day: 100
+- id: anchor_nanchao
+  name: 南盟立旗
+  day: 80
+- id: anchor_pass_war
+  name: 落雁隘之战
+  day: 120
+- id: anchor_wall_demolish
+  name: 老墙拆除
+  day: 150
+- id: anchor_port_open
+  name: 东港开埠
+  day: 200

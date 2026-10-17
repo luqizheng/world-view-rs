@@ -1,0 +1,6 @@
+id: edge_luoyan
+a: place_beiyuan
+b: place_luoyan
+distance_km: 90.0
+terrain: hill
+bidirectional: true

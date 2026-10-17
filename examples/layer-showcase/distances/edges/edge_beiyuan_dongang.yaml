@@ -1,0 +1,6 @@
+id: edge_beiyuan_dongang
+a: place_beiyuan
+b: place_dongang
+distance_km: 610.0
+terrain: hill
+bidirectional: true

@@ -24,3 +24,9 @@ examples/*/snapshots/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 大体积外部数据（Overture GeoJSON 切片等）—— 只留生成脚本，数据本地自取
+examples/guangdong/
+
+# ZCode 会话内部文件（计划草稿等）
+.zcode/
