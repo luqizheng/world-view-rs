@@ -1,8 +1,9 @@
 //! 覆盖物地界的**提示级**校验（AGENTS §7.5 V1：只提示，不阻止保存）。
 //!
 //! 校验对象是「`Place.feature` 声明了某类地理事实，但地界内没有对应的地形格」：
-//! 作者圈了一片森林，却没刷森林笔刷——远带晕与名字照常可见，只是近景没有树。
-//! 这属于「你可能没注意到」，不是数据损坏，因此永远是 `DiagLevel::Hint`。
+//! 作者圈了一片森林，却没刷森林笔刷——远带晕与名字照常可见，近景符号则**回退**
+//! 到按陆地格（`height > 0`）泛化布点（`forest_sites` 的两遍规则），而不是只落在
+//! 森林格上。这属于「你可能没注意到」，不是数据损坏，因此永远是 `DiagLevel::Hint`。
 //!
 //! 另外守住孤儿地界（`owner` 不在 `distances.places` 里）也要被**列出**而
 //! 不是静默丢弃（与 `place_territory_at` 的「静默跳过」分工：求值不报错，
@@ -123,6 +124,11 @@ fn forest_territory_without_forest_cells_emits_hint() {
         "文案应声明不阻止保存（V1）：got {}",
         h.message
     );
+    assert!(
+        h.message.contains("回退") && h.message.contains("陆地"),
+        "文案应说明近景回退到陆地格布点，而不是声称没有符号：got {}",
+        h.message
+    );
 }
 
 /// (b) 地界内有森林格 → 不发提示。
@@ -198,4 +204,27 @@ fn derive_hints_includes_feature_territory_hints() {
         !d.has_errors(),
         "派生提示路径永不产生错误（AGENTS §7.5 V1）"
     );
+}
+
+/// (e) 极端有限坐标 × 极小 extent：坐标 × 缩放溢出 f32 时不得 panic。
+///
+/// `3e30 * 1e31` 溢出为正无穷，`as i64` 饱和到 `i64::MAX`；
+/// 旧实现的 `+ 1` / `- 1` 会在 debug 构建溢出 panic。畸形 YAML 不能炸掉诊断。
+#[test]
+fn extreme_coordinates_do_not_panic_on_cell_range_math() {
+    let mut span = square_span("place_forest");
+    span.geometry = GeometryData::Polygon(vec![
+        -3.0e30, -3.0e30, 3.0e30, -3.0e30, 3.0e30, 3.0e30, -3.0e30, 3.0e30,
+    ]);
+    let mut w = world_with(Some(forest_place()), span, Some(uniform_terrain(GRASSLAND)));
+    // 极小正 extent：scale = 10 / 1e-30 = 1e31，与巨大环坐标相乘必然溢出。
+    w.maps[0].extent = Some(Extent::sized(1.0e-30, 1.0e-30));
+    let hints = detect_feature_territory_hints(&w);
+    assert_eq!(
+        hints.len(),
+        1,
+        "全草原地形应得 1 条提示（且不得 panic），实得 {} 条",
+        hints.len()
+    );
+    assert_eq!(hints[0].level, DiagLevel::Hint);
 }

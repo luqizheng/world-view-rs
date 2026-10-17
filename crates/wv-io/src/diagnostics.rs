@@ -214,7 +214,8 @@ const FEATURE_FOREST: u8 = 4;
 /// ## 为什么是 Hint
 ///
 /// 作者可能故意圈了一片还没刷笔刷的森林（先摆事实、后画地形，或干脆只用
-/// 远带晕）。工具的职责是让他**看见**近景不会有树，不替他决定（AGENTS §7.5 V1）。
+/// 远带晕）。工具的职责是让他**看见**近景符号会回退到陆地格泛化布点
+/// （而不是他预期的森林），不替他决定（AGENTS §7.5 V1）。
 pub fn detect_feature_territory_hints(world: &wv_core::World) -> Vec<Diagnostic> {
     use std::collections::BTreeSet;
 
@@ -291,8 +292,9 @@ pub fn detect_feature_territory_hints(world: &wv_core::World) -> Vec<Diagnostic>
             out.push(hint(
                 format!("feature-no-cells|{}", place.id),
                 format!(
-                    "地点「{name}」的地界内没有任何 {what} 地形格：远看仍会显示地界与名字，\
-                     但近景不会出现覆盖物符号。仅提示，不阻止保存。",
+                    "地点「{name}」的地界内没有任何 {what} 地形格：近景覆盖物会回退到\
+                     按陆地格（height > 0）泛化布点，而不是只落在声明的类别上；\
+                     远看仍会显示地界与名字。仅提示，不阻止保存。",
                     name = place.name,
                 ),
             ));
@@ -339,10 +341,21 @@ fn ring_has_feature_cell(
     // 两侧各放宽 1 格：包围盒边界上的格心由 `point_in_ring` 最终裁决。
     let scale_x = terrain.width as f32 / extent.width;
     let scale_y = terrain.height as f32 / extent.height;
-    let gx0 = ((min_x * scale_x).floor() as i64 - 1).clamp(0, tw as i64 - 1) as usize;
-    let gx1 = ((max_x * scale_x).ceil() as i64 + 1).clamp(0, tw as i64 - 1) as usize;
-    let gy0 = ((min_y * scale_y).floor() as i64 - 1).clamp(0, th as i64 - 1) as usize;
-    let gy1 = ((max_y * scale_y).ceil() as i64 + 1).clamp(0, th as i64 - 1) as usize;
+    // 坐标 × 缩放可能溢出 f32（极端有限值 → ±inf），`as i64` 饱和到
+    // `i64::MIN` / `i64::MAX`；再用 `saturating_*` 放宽 1 格，确保畸形 YAML
+    // 永远不会在 debug 构建触发溢出 panic。
+    let gx0 = ((min_x * scale_x).floor() as i64)
+        .saturating_sub(1)
+        .clamp(0, tw as i64 - 1) as usize;
+    let gx1 = ((max_x * scale_x).ceil() as i64)
+        .saturating_add(1)
+        .clamp(0, tw as i64 - 1) as usize;
+    let gy0 = ((min_y * scale_y).floor() as i64)
+        .saturating_sub(1)
+        .clamp(0, th as i64 - 1) as usize;
+    let gy1 = ((max_y * scale_y).ceil() as i64)
+        .saturating_add(1)
+        .clamp(0, th as i64 - 1) as usize;
 
     for gy in gy0..=gy1 {
         let cy = (gy as f32 + 0.5) / terrain.height as f32 * extent.height;
