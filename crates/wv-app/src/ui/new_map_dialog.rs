@@ -31,7 +31,7 @@ use wv_render::terrain_view::TerrainTexture;
 
 use super::shell::UiShell;
 
-/// 幅面候选（世界单位，正方形）。栅格边长 = 幅面 / [`GRID_CELL_SIZE`]。
+/// 幅面候选（世界单位，作用于**宽**）。栅格宽 = 幅面 / [`GRID_CELL_SIZE`]。
 ///
 /// `pub(crate)`：`new_project_dialog` 的首图默认值与本列表同源（最大幅面），
 /// 开放引用而不是复制数字，两处口径才不会漂移。
@@ -39,6 +39,39 @@ pub(crate) const EXTENT_CHOICES: [f32; 4] = [4096.0, 2048.0, 1024.0, 512.0];
 
 /// 每格世界边长——与 `GridConfig::default().cell_size` 同一口径（8 wu/格）。
 pub(crate) const GRID_CELL_SIZE: f32 = 8.0;
+
+/// 缺省宽高比（2026-10-17 用户裁定：新建图默认 16:9，可改）。
+pub(crate) const DEFAULT_ASPECT: MapAspect = MapAspect::Wide16x9;
+
+/// 幅面宽高比档。**缺省不是约束**——作者可换回 4:3 / 1:1（V1）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MapAspect {
+    /// 16:9（缺省，适配主流窗口 / 视频帧）。
+    #[default]
+    Wide16x9,
+    /// 4:3（旧绘图习惯）。
+    Standard4x3,
+    /// 1:1（正方形，旧版默认）。
+    Square1x1,
+}
+
+impl MapAspect {
+    /// 宽 / 高。
+    pub fn ratio(self) -> f32 {
+        match self {
+            Self::Wide16x9 => 16.0 / 9.0,
+            Self::Standard4x3 => 4.0 / 3.0,
+            Self::Square1x1 => 1.0,
+        }
+    }
+
+    /// 面板档位顺序。
+    pub const ALL: [MapAspect; 3] = [
+        MapAspect::Wide16x9,
+        MapAspect::Standard4x3,
+        MapAspect::Square1x1,
+    ];
+}
 
 /// 「新建地图」对话框的跨帧状态。
 ///
@@ -52,8 +85,12 @@ pub struct NewMapDialog {
     pub name: String,
     /// 地图层级。
     pub level: MapLevel,
-    /// 幅面（世界单位，正方形边长）。
-    pub extent: f32,
+    /// 幅面宽（世界单位）。
+    pub extent_w: f32,
+    /// 幅面高（世界单位）——随宽 × 宽高比换算。
+    pub extent_h: f32,
+    /// 宽高比档（同一次打开内切换不丢）。
+    pub aspect: MapAspect,
     /// 底图（2026-10-16）。原 `NewMapPrefill` 已并入 [`MapBase`]——
     /// 字段语义「整图铺满的初始态」与「重置按钮回退目标」共享同一份枚举。
     pub prefill: MapBase,
@@ -67,7 +104,9 @@ impl Default for NewMapDialog {
             open: false,
             name: "新地图".into(),
             level: MapLevel::City,
-            extent: 4096.0,
+            extent_w: EXTENT_CHOICES[0],
+            extent_h: EXTENT_CHOICES[0] / DEFAULT_ASPECT.ratio(),
+            aspect: DEFAULT_ASPECT,
             // 2026-10-16 用户裁定：默认铺海（新建即满图海洋，便于「先画大陆」场景）。
             prefill: MapBase::Ocean,
             error: None,
@@ -91,10 +130,18 @@ impl NewMapDialog {
             } else {
                 MapLevel::City
             },
-            extent: 4096.0,
+            extent_w: EXTENT_CHOICES[0],
+            extent_h: EXTENT_CHOICES[0] / DEFAULT_ASPECT.ratio(),
+            aspect: DEFAULT_ASPECT,
             prefill: MapBase::Ocean,
             error: None,
         };
+    }
+
+    /// 切换宽高比：**只改高**，宽保持作者当前选择（review focus 3）。
+    pub fn apply_aspect(&mut self, aspect: MapAspect) {
+        self.aspect = aspect;
+        self.extent_h = self.extent_w / aspect.ratio();
     }
 
     /// 生成下一个空闲的 `map_N` 形式 ID（§4.4：ID 可读字符集）。
@@ -108,9 +155,14 @@ impl NewMapDialog {
         unreachable!("map_N 形式的 ID 不可能用尽 u32")
     }
 
-    /// 幅面 → 栅格边长（格数）。
-    fn grid_cells(&self) -> u32 {
-        ((self.extent / GRID_CELL_SIZE).round() as u32).max(1)
+    /// 幅面宽 → 栅格宽（格数）。
+    fn grid_cells_w(&self) -> u32 {
+        ((self.extent_w / GRID_CELL_SIZE).round() as u32).max(1)
+    }
+
+    /// 幅面高 → 栅格高（格数）。
+    fn grid_cells_h(&self) -> u32 {
+        ((self.extent_h / GRID_CELL_SIZE).round() as u32).max(1)
     }
 }
 
@@ -201,9 +253,34 @@ pub fn new_map_dialog(
             ui.horizontal(|ui| {
                 ui.label("幅面");
                 for e in EXTENT_CHOICES {
-                    ui.selectable_value(&mut dialog.extent, e, format!("{e:.0}"));
+                    if ui
+                        .selectable_value(&mut dialog.extent_w, e, format!("{e:.0}"))
+                        .clicked()
+                    {
+                        // 宽变了：高按当前比例重算（比例是持久选择）。
+                        dialog.extent_h = e / dialog.aspect.ratio();
+                    }
                 }
                 ui.label("wu");
+            });
+
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(crate::i18n::t_key(
+                    &current_loc,
+                    crate::i18n::I18nKey::NewMapAspect,
+                ));
+                for a in MapAspect::ALL {
+                    let key = match a {
+                        MapAspect::Wide16x9 => crate::i18n::I18nKey::Aspect16x9,
+                        MapAspect::Standard4x3 => crate::i18n::I18nKey::Aspect4x3,
+                        MapAspect::Square1x1 => crate::i18n::I18nKey::Aspect1x1,
+                    };
+                    let label = crate::i18n::t_key(&current_loc, key);
+                    if ui.selectable_value(&mut dialog.aspect, a, label).clicked() {
+                        dialog.apply_aspect(a);
+                    }
+                }
             });
 
             ui.add_space(4.0);
@@ -234,8 +311,8 @@ pub fn new_map_dialog(
             ui.label(
                 egui::RichText::new(format!(
                     "栅格 {}×{}（每格 {GRID_CELL_SIZE:.0} wu）",
-                    dialog.grid_cells(),
-                    dialog.grid_cells()
+                    dialog.grid_cells_w(),
+                    dialog.grid_cells_h()
                 ))
                 .text_style(egui::TextStyle::Small),
             );
@@ -326,7 +403,7 @@ fn create_map(
         children: Vec::new(),
         layers: Vec::new(),
         icons: Vec::new(),
-        extent: Some(Extent::sized(dialog.extent, dialog.extent)),
+        extent: Some(Extent::sized(dialog.extent_w, dialog.extent_h)),
         raster: None,
         geographic_source: None,
         time_span: None,
@@ -335,11 +412,12 @@ fn create_map(
         base: Some(dialog.prefill),
         outline_polygon: None,
     };
-    let n = dialog.grid_cells();
+    let w = dialog.grid_cells_w();
+    let h = dialog.grid_cells_h();
     let terrain = TerrainData {
-        width: n,
-        height: n,
-        cells: vec![dialog.prefill.cell(); (n * n) as usize],
+        width: w,
+        height: h,
+        cells: vec![dialog.prefill.cell(); (w * h) as usize],
     };
 
     let mut tx = wv_edit::Transaction::new();
@@ -402,19 +480,58 @@ mod tests {
         );
     }
 
-    /// 幅面 → 栅格换算：4096 wu / 8 wu每格 = 512²（与启动占位地形同量级）。
+    /// 幅面 → 栅格换算：4096×2304 wu / 8 wu每格 = 512×288（16:9 整数格）。
     #[test]
     fn grid_cells_derive_from_extent_divided_by_cell_size() {
         let dialog = NewMapDialog {
-            extent: 4096.0,
+            extent_w: 4096.0,
+            extent_h: 2304.0,
             ..Default::default()
         };
-        assert_eq!(dialog.grid_cells(), 512);
+        assert_eq!(dialog.grid_cells_w(), 512, "4096 wu / 8 = 512 格");
+        assert_eq!(dialog.grid_cells_h(), 288, "2304 wu / 8 = 288 格");
         let small = NewMapDialog {
-            extent: 512.0,
+            extent_w: 512.0,
+            extent_h: 512.0,
             ..Default::default()
         };
-        assert_eq!(small.grid_cells(), 64);
+        assert_eq!(small.grid_cells_w(), 64);
+        assert_eq!(small.grid_cells_h(), 64);
+    }
+
+    /// 缺省 16:9（2026-10-17 用户裁定）：4096×2304，栅格 512×288 无余数。
+    #[test]
+    fn default_new_map_extent_is_16_9_with_whole_cells() {
+        let dialog = NewMapDialog::default();
+        assert_eq!(dialog.aspect, MapAspect::Wide16x9, "缺省比例应为 16:9");
+        assert!(
+            (dialog.extent_w - 4096.0).abs() < 1e-3,
+            "缺省宽应为 4096，得 {}",
+            dialog.extent_w
+        );
+        assert!(
+            (dialog.extent_h - 2304.0).abs() < 1e-3,
+            "缺省高应为 2304，得 {}",
+            dialog.extent_h
+        );
+        assert_eq!(dialog.grid_cells_w(), 512, "宽 512 格");
+        assert_eq!(dialog.grid_cells_h(), 288, "高 288 格（无余数）");
+    }
+
+    /// 切比例只改高、不改宽；选择持久在同一会话里。
+    #[test]
+    fn aspect_switch_updates_height_only() {
+        let mut dialog = NewMapDialog::default();
+        dialog.apply_aspect(MapAspect::Standard4x3);
+        assert_eq!(dialog.grid_cells_w(), 512, "宽不应被比例切换改动");
+        assert!(
+            (dialog.extent_h - 3072.0).abs() < 1e-3,
+            "4:3 → 高 = 4096×3/4 = 3072，得 {}",
+            dialog.extent_h
+        );
+        dialog.apply_aspect(MapAspect::Square1x1);
+        assert!((dialog.extent_h - 4096.0).abs() < 1e-3, "1:1 → 高 = 宽");
+        assert_eq!(dialog.aspect, MapAspect::Square1x1, "选择应持久");
     }
 
     /// 底图语义：海洋必须在海平面下（高度 < 0）、陆地在海平面上（≥ 0）——

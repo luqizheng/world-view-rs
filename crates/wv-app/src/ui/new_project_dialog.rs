@@ -42,7 +42,7 @@ use wv_render::terrain_view::{TerrainTexture, TileAtlas};
 // 与「新建地图」对话框同一口径的幅面 / 预填充默认值（首图 = 空世界的第一张图，
 // 与 NewMapDialog::open_for 的空世界分支完全一致：世界级、最大幅面、海洋底图）。
 // 2026-10-16 用户裁定：底图默认 = 海洋（与 NewMapDialog 默认同源）。
-use super::new_map_dialog::{EXTENT_CHOICES, GRID_CELL_SIZE};
+use super::new_map_dialog::{DEFAULT_ASPECT, EXTENT_CHOICES, GRID_CELL_SIZE};
 use super::shell::UiShell;
 
 /// 新工程首张地图（世界图）的 ID。
@@ -156,7 +156,11 @@ impl NewProjectDialog {
 /// 海洋底图，2026-10-16 用户裁定），保证「新建工程」与「新建工程后新建第一张地图」
 /// 两条路径殊途同归。`MapNode.base` 也明确写出 → 「重置到底图」按钮可用。
 fn initial_world(name: &str) -> wv_core::World {
-    let side = ((EXTENT_CHOICES[0] / GRID_CELL_SIZE).round() as u32).max(1);
+    // 2026-10-17 用户裁定：新建图缺省 16:9（与 NewMapDialog 同源）。
+    let extent_w = EXTENT_CHOICES[0];
+    let extent_h = extent_w / DEFAULT_ASPECT.ratio();
+    let width = ((extent_w / GRID_CELL_SIZE).round() as u32).max(1);
+    let height = ((extent_h / GRID_CELL_SIZE).round() as u32).max(1);
     let id = Id::new_unchecked(FIRST_MAP_ID);
     let mut world = wv_core::World {
         meta: Some(wv_core::WorldMeta {
@@ -177,7 +181,7 @@ fn initial_world(name: &str) -> wv_core::World {
         children: Vec::new(),
         layers: Vec::new(),
         icons: Vec::new(),
-        extent: Some(Extent::sized(EXTENT_CHOICES[0], EXTENT_CHOICES[0])),
+        extent: Some(Extent::sized(extent_w, extent_h)),
         raster: None,
         geographic_source: None,
         time_span: None,
@@ -190,9 +194,9 @@ fn initial_world(name: &str) -> wv_core::World {
     world.set_terrain(
         id,
         TerrainData {
-            width: side,
-            height: side,
-            cells: vec![MapBase::Ocean.cell(); (side * side) as usize],
+            width,
+            height,
+            cells: vec![MapBase::Ocean.cell(); (width * height) as usize],
         },
     );
     world
@@ -559,8 +563,8 @@ mod tests {
             "首图必须声明 base = Ocean，让「重置到底图」按钮可用"
         );
         let terrain = w.terrain_of(&map.id).expect("首图必须带预填充栅格");
-        let side = (EXTENT_CHOICES[0] / GRID_CELL_SIZE).round() as u32;
-        assert_eq!((terrain.width, terrain.height), (side, side));
+        // 16:9：4096×2304 wu / 8 = 512×288 格（无余数）。
+        assert_eq!((terrain.width, terrain.height), (512, 288));
         assert!(
             terrain.cells.iter().all(|c| c.height < 0),
             "海洋底图必须整片在海平面下"

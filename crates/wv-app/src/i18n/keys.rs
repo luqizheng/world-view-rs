@@ -845,11 +845,21 @@ pub enum I18nKey {
     ContinentNoticeNoEnvelopes,
     /// 错误前缀「生成失败」
     ContinentNoticeGenerateFailed,
+
+    // ── 新建地图幅面比例（2026-10-17 ocean-default-16-9 Task 2） ────────
+    /// 标签「宽高比」
+    NewMapAspect,
+    /// 比例档「16:9」
+    Aspect16x9,
+    /// 比例档「4:3」
+    Aspect4x3,
+    /// 比例档「1:1」
+    Aspect1x1,
 }
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 379] = [
+    pub const ALL: [I18nKey; 383] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1263,5 +1273,9 @@ impl I18nKey {
         I18nKey::ContinentNoticeNoMap,
         I18nKey::ContinentNoticeNoEnvelopes,
         I18nKey::ContinentNoticeGenerateFailed,
+        I18nKey::NewMapAspect,
+        I18nKey::Aspect16x9,
+        I18nKey::Aspect4x3,
+        I18nKey::Aspect1x1,
     ];
 }

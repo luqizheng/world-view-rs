@@ -457,6 +457,10 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::ContinentNoticeNoMap => "没有当前地图：先打开或新建一张地图",
         I18nKey::ContinentNoticeNoEnvelopes => "没有圈出大陆范围：先用「圈画大陆」工具画至少一个闭合包络",
         I18nKey::ContinentNoticeGenerateFailed => "生成失败",
+        I18nKey::NewMapAspect => "宽高比",
+        I18nKey::Aspect16x9 => "16:9",
+        I18nKey::Aspect4x3 => "4:3",
+        I18nKey::Aspect1x1 => "1:1",
     }
 }
 
@@ -910,5 +914,9 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::ContinentNoticeNoMap => "No current map: open or create one first",
         I18nKey::ContinentNoticeNoEnvelopes => "Nothing to generate: draw at least one closed outline with the continent tool",
         I18nKey::ContinentNoticeGenerateFailed => "Generation failed",
+        I18nKey::NewMapAspect => "Aspect",
+        I18nKey::Aspect16x9 => "16:9",
+        I18nKey::Aspect4x3 => "4:3",
+        I18nKey::Aspect1x1 => "1:1",
     }
 }
