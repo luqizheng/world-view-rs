@@ -22,6 +22,7 @@
 
 #![cfg(feature = "app")]
 
+use wv_render::theme::overlays::{FeatureOverlaySet, FeatureRule};
 use wv_render::theme::palette::PaletteColors;
 use wv_render::theme::registry::ThemePackRegistry;
 use wv_render::theme::theme_pack::{ThemePack, TreatmentFlags};
@@ -41,6 +42,19 @@ pub static PACK: ThemePack = ThemePack {
     palette: PaletteColors::DAYLIGHT, // TODO(美术校准): 待白名单值就绪后替换
     treatment: TreatmentFlags::EMPTY,
     atlas: None,
+    // TODO(美术校准): 墨绿晕 / 符号色与「更疏」的采样间距均为占位值，
+    // 待美术侧给出水墨白名单后替换——v1 水墨包不可选，不参与验收（D13）。
+    overlays: FeatureOverlaySet {
+        forest: Some(FeatureRule {
+            halo_color: [0x44, 0x52, 0x42],
+            halo_alpha: 0.25,
+            symbol_color: [0x2B, 0x35, 0x2A],
+            symbol_size_px: 6.0,
+            symbol_spacing_wu: 32.0,
+            symbol_texture: None,
+            halo_texture: None,
+        }),
+    },
 };
 
 /// 注册表持有的静态切片（`&[...]` 临时数组的栈上生命周期不够 `&'static`，
@@ -103,5 +117,17 @@ mod tests {
     #[test]
     fn pack_palette_is_daylight_placeholder() {
         assert_eq!(PACK.palette.core, PaletteColors::DAYLIGHT.core);
+    }
+
+    /// 水墨包也装载森林覆盖规则（占位值）——验证外部主题 crate 加 `overlays`
+    /// 字段后规则通路仍成立。
+    #[test]
+    fn pack_has_forest_overlay_rule() {
+        assert!(
+            PACK.overlays
+                .rule_for(wv_render::theme::overlays::FEATURE_FOREST)
+                .is_some(),
+            "水墨包应给 FEATURE_FOREST 配置占位规则"
+        );
     }
 }
