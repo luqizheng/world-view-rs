@@ -389,6 +389,19 @@ mod tests {
         );
     }
 
+    /// 默认海洋锚定（2026-10-17 ocean-default-16-9 Task 1）：
+    /// `NewMapDialog::default()` 的预填充必须是 Ocean，且 Ocean 高度 < 0。
+    #[test]
+    fn new_map_dialog_default_prefill_is_ocean() {
+        let dialog = NewMapDialog::default();
+        assert_eq!(dialog.prefill, MapBase::Ocean, "默认预填充必须是海洋");
+        assert!(
+            MapBase::Ocean.cell().height < 0,
+            "Ocean 单格高度必须 < 0（海平面 = 0），得 {}",
+            MapBase::Ocean.cell().height
+        );
+    }
+
     /// 幅面 → 栅格换算：4096 wu / 8 wu每格 = 512²（与启动占位地形同量级）。
     #[test]
     fn grid_cells_derive_from_extent_divided_by_cell_size() {

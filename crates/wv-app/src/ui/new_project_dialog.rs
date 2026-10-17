@@ -516,6 +516,26 @@ mod tests {
         );
     }
 
+    /// 默认海洋锚定（2026-10-17 ocean-default-16-9 Task 1）：新建工程首图
+    /// 必须是 Ocean 底图，且 Ocean 单格高度在海平面以下——「全零格」在 Q1
+    /// 高度契约下是歧义态（0 = 海平面），预填负高度消歧。
+    #[test]
+    fn world_map_prefill_is_ocean_below_sea_level() {
+        let w = initial_world("海洋锚定");
+        let map = &w.maps[0];
+        assert_eq!(map.base, Some(MapBase::Ocean), "首图底图必须是 Ocean");
+        assert!(
+            MapBase::Ocean.cell().height < 0,
+            "Ocean 单格高度必须 < 0（海平面 = 0），得 {}",
+            MapBase::Ocean.cell().height
+        );
+        let terrain = w.terrain_of(&map.id).expect("首图必须带预填充栅格");
+        assert!(
+            terrain.cells.iter().all(|c| c.height < 0 && c.kind == 0),
+            "首图预填充必须整图深水负高度"
+        );
+    }
+
     /// 初始世界形状：meta 就位（root_map 与首图同名）、一张世界级根图、
     /// 海洋底图预填充栅格（2026-10-16 默认 = 海洋；幅面换算与「新建地图」同口径）。
     /// `MapNode.base` 也应明确为 Ocean，让「重置到底图」按钮可用。
