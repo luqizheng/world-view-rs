@@ -33,7 +33,9 @@ pub use wv_render::state::{
 ///
 /// - `Off` —— 不启用城市工具（默认）。
 /// - `CreateArmed` —— 已开工具，下一次拖拽出矩形 = 建城草稿起笔；
-///   松开左键 = 提交 `AddCityCommand`，模式自动回 `Off`。
+///   松开左键 = 进 `CreateConfirm` 弹窗，**不**立即 commit。
+/// - `CreateConfirm` —— 拖拽完已起矩形，弹窗里让用户填 ID / 名字 / 底图，
+///   点 OK 才派 `AddCityCommand`；Cancel 回 `Off`。
 /// - `Erase` —— 留待 V1.1：点击现有城市 outline = `SetCityOutlineCommand(None)`。
 ///
 /// 与笔刷 / 测量**互斥**：进 `CreateArmed` 时把 `BrushState.enabled = false`、
@@ -43,6 +45,7 @@ pub enum CityToolMode {
     #[default]
     Off,
     CreateArmed,
+    CreateConfirm,
 }
 
 impl CityToolMode {
@@ -51,6 +54,7 @@ impl CityToolMode {
     }
 
     /// 该模式是否「吃掉」左键（防止笔刷同时响应）。
+    /// `CreateConfirm` 不吃——等用户填弹窗，鼠标事件由 egui 弹窗处理。
     pub fn consumes_left_click(self) -> bool {
         self == Self::CreateArmed
     }
@@ -74,6 +78,23 @@ pub struct CityToolState {
     /// 跟光标；松手时由 `commit_city_drag_on_release` 用 start/end 矩形构造
     /// `AddCityCommand` + `outline_polygon` 提交。
     pub draft: Option<CityDraft>,
+    /// 弹窗暂存（`CreateConfirm` 时填，OK / Cancel 时清）。
+    /// 字段默认从拖拽矩形 + 当前 maps.len 派生。
+    pub pending: Option<CityPending>,
+}
+
+/// 城市弹窗暂存（ADR-0022 M2 D5）。
+///
+/// 用户拖完矩形 → commit 系统把矩形转 `CityPending` 并进 `CreateConfirm`；
+/// egui 弹窗渲染 `id` / `name` / `base` 三个字段让用户编辑；
+/// 点 OK 由 `commit_city_pending` 系统派 `AddCityCommand`。
+#[derive(Debug, Clone)]
+pub struct CityPending {
+    pub draft: CityDraft,
+    pub parent_id: wv_core::Id,
+    pub id: String,
+    pub name: String,
+    pub base: wv_core::map::MapBase,
 }
 
 /// [`ViewMode`](wv_render::state::ViewMode) 的顶栏显示名（ADR-0018：locale 查表）。

@@ -21,8 +21,8 @@
 use bevy::prelude::*;
 
 use crate::state::{
-    BrushState, BrushTool, CityDraft, CityToolMode, CityToolState, DrillState, GridConfig,
-    PlaybackState, ViewState, WorldProjection,
+    BrushState, BrushTool, CityDraft, CityPending, CityToolMode, CityToolState, DrillState,
+    GridConfig, PlaybackState, ViewState, WorldProjection,
 };
 use wv_core::map::{GeometryData, IconShape, MapLevel};
 use wv_edit::command::{
@@ -562,10 +562,12 @@ pub fn collect_city_drag(
         return;
     }
     if projection.project_dir.is_none() {
+        bevy::log::info!("[city] collect: project_dir = None（无工程）");
         city_tool.draft = None;
         return;
     }
     if drill.current().is_none() {
+        bevy::log::info!("[city] collect: drill.current() = None（无父图）");
         return;
     }
     let Ok(window) = windows.single() else {
@@ -584,6 +586,7 @@ pub fn collect_city_drag(
 
     if buttons.just_pressed(MouseButton::Left) {
         // 起笔：start = end = 当前点（避免橡皮筋"瞬移"到旧 end）。
+        bevy::log::info!("[city] collect: 起笔 pos=({:.0},{:.0})", pos.x, pos.y);
         city_tool.draft = Some(CityDraft {
             start: pos,
             end: pos,
@@ -592,10 +595,9 @@ pub fn collect_city_drag(
         if let Some(d) = city_tool.draft.as_mut() {
             d.end = pos;
         }
-    } else {
-        // 没按住左键：清草稿（关工具 / 切模式 / 取消）。
-        city_tool.draft = None;
     }
+    // 不在 else 分支清 draft——松手帧 `pressed` 变 false，commit 必须在同一帧
+    // 读 draft，否则被这个 else 抹掉。draft 的清空由 commit 收笔 / 按钮 toggle 负责。
 }
 
 /// 松手时把草稿矩形转 `AddCityCommand` 提交（ADR-0022 D2 + D5）。
@@ -625,9 +627,11 @@ pub fn commit_city_drag_on_release(
         return;
     }
     if playback.playing {
+        bevy::log::info!("[city] commit: 播放中拒绝");
         return;
     }
     let Some(parent_id) = drill.current().cloned() else {
+        bevy::log::warn!("[city] commit: drill.current() = None（无父图）");
         let frame = (time.elapsed_secs() * 60.0) as u64;
         notice.error(
             "城市工具未生效：当前没有父图（顶栏工程菜单 → 新建地图…）",
@@ -638,6 +642,7 @@ pub fn commit_city_drag_on_release(
         return;
     };
     let Some(draft) = city_tool.draft else {
+        bevy::log::warn!("[city] commit: draft = None（未拖动）");
         // 单击（未拖动）→ 视为取消。
         city_tool.mode = CityToolMode::Off;
         return;
@@ -649,8 +654,12 @@ pub fn commit_city_drag_on_release(
     let max_y = draft.start.y.max(draft.end.y);
     let width = max_x - min_x;
     let height = max_y - min_y;
+    bevy::log::info!(
+        "[city] commit: parent={parent_id} rect=({min_x:.0},{min_y:.0})..({max_x:.0},{max_y:.0}) {width:.0}×{height:.0} wu"
+    );
     // 矩形过小视为误触（< 8 wu 几乎不可见）。
     if width < 8.0 || height < 8.0 {
+        bevy::log::warn!("[city] commit: 矩形太小 {width:.0}×{height:.0} < 8");
         let frame = (time.elapsed_secs() * 60.0) as u64;
         notice.info(
             format!("城市工具：拖出矩形太小（{width:.0}×{height:.0} wu），已忽略"),
@@ -661,47 +670,21 @@ pub fn commit_city_drag_on_release(
         return;
     }
     let city_id = format!("city_{}", projection.world.maps.len());
-    let icon_id = format!("icon_{city_id}");
-    let extent = wv_core::map::Extent {
-        width,
-        height,
-        origin: Some(wv_core::geometry::Point { x: min_x, y: min_y }),
-    };
-    // outline_polygon 在子图 LOCAL 坐标：min_x..min_x+width, min_y..min_y+height。
-    let outline = GeometryData::Polygon(vec![0.0, 0.0, width, 0.0, width, height, 0.0, height]);
-    let city = wv_core::map::MapNode {
-        id: wv_core::Id::new_unchecked(&city_id),
-        name: format!("新城 {city_id}"),
-        level: MapLevel::City,
-        parent: Some(parent_id),
-        extent: Some(extent),
-        outline_polygon: Some(outline),
-        ..wv_core::map::MapNode::default()
-    };
-    let cmd = AddCityCommand::new(
-        city,
-        wv_core::Id::new_unchecked(&icon_id),
-        IconShape::Diamond,
-    );
-    let mut tx = Transaction::new();
-    tx.push(Box::new(cmd));
-    match edit.history.commit(&mut projection.world, tx) {
-        Ok(dirty) => {
-            edit.record_dirty(dirty);
-            projection.dirty = true;
-            let frame = (time.elapsed_secs() * 60.0) as u64;
-            notice.info(
-                format!("新建城市「{city_id}」（{width:.0}×{height:.0} wu）"),
-                frame,
-            );
-        }
-        Err(e) => {
-            let frame = (time.elapsed_secs() * 60.0) as u64;
-            notice.error(format!("新建城市未生效：{e}"), frame);
-        }
-    }
-    city_tool.mode = CityToolMode::Off;
+    // M2 D5 v2：松手不再直接 commit，先进 `CreateConfirm` 弹窗让用户填 ID/name/base。
+    // 默认值从拖拽矩形 + 当前 maps.len 派生，用户可改。
+    city_tool.pending = Some(CityPending {
+        draft: CityDraft {
+            start: draft.start,
+            end: draft.end,
+        },
+        parent_id: parent_id.clone(),
+        id: city_id,
+        name: format!("新城 {}", projection.world.maps.len()),
+        base: wv_core::map::MapBase::Ocean,
+    });
     city_tool.draft = None;
+    city_tool.mode = CityToolMode::CreateConfirm;
+    bevy::log::info!("[city] commit: 进 CreateConfirm，等待弹窗确认（{width:.0}×{height:.0} wu）");
 }
 
 #[cfg(test)]

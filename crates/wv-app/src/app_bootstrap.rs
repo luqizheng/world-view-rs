@@ -17,13 +17,14 @@
 //! - `run(config: AppConfig)` — 启动 GUI 的唯一入口。
 
 use bevy::prelude::*;
-use bevy::window::WindowResolution;
+use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy_egui::EguiPlugin;
 
 use crate::edit::editing;
 use crate::state::{
     BrushState, DrillState, GridConfig, PanelState, PlaybackState, ViewState, WorldProjection,
 };
+use crate::theme::ui_tokens::ShellPalette;
 use crate::ui;
 use crate::AppConfig;
 use wv_render::brush_cursor;
@@ -58,6 +59,14 @@ pub fn run(config: AppConfig) {
                 primary_window: Some(Window {
                     title: "World View · 地图编辑器".into(),
                     resolution: WindowResolution::new(1280, 800),
+                    // 隐藏起步（2026-10-17，修「启动数秒白屏」）：原生窗口一旦
+                    // 创建即以系统白底示人，而 wgpu 初始化、字体 atlas、管线
+                    // 编译全都发生在窗口已显示之后——首帧 present 之前用户只能
+                    // 干瞪白屏。改为隐藏创建，帧 1 末由
+                    // [`reveal_window_once_first_frame_presented`] 揭示：窗口亮起
+                    // 时首帧内容已在交换链上，第一眼就是欢迎页 / 加载遮罩。
+                    // （bevy_winit 对全隐藏窗口会强制驱动更新帧，事件循环不卡。）
+                    visible: false,
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -78,6 +87,12 @@ pub fn run(config: AppConfig) {
     // 状态栏 FPS 读数（Figma #3:21001 右段）：DefaultPlugins 只提供
     // DiagnosticsStore 容器，帧时间/帧率诊断要本插件显式注册。
     .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
+    // 清屏色对齐外壳暗色 bg_app：隐藏揭示若与 present 有毫秒级竞争，
+    // 用户瞥见的也是深底而非默认灰/白（防御性，正常时序下被欢迎页盖住）。
+    .insert_resource({
+        let bg = ShellPalette::DARK.bg_app;
+        ClearColor(Color::srgb(bg.r, bg.g, bg.b))
+    })
     // 播放范围：空编辑器起步先用默认值（1..180_001）；
     // 运行期加载工程成功后由 `startup_load` 按该工程 `timeline/axis.yaml` 重置。
     .insert_resource(PlaybackState {
@@ -350,6 +365,10 @@ pub fn run(config: AppConfig) {
     // 两者各自成模块并各自注册，`gui.rs` 只负责调用顺序（见各处模块文档）。
     crate::ui_shell::register(&mut app);
     wv_render::drill::register(&mut app);
+    // 隐藏起步的揭示（见 Window 配置注释）：帧 1 的 Update 翻转 `visible`，
+    // 本帧 `Last` 里 bevy_winit 的 `changed_windows` 调 `set_visible(true)`——
+    // 此时帧 0 已完整 present，窗口亮起即是有内容的画面。
+    app.add_systems(Update, reveal_window_once_first_frame_presented);
     // 渲染配方求值（ADR-0021 D1）：PreUpdate 单点求值 RenderRecipe——已迁移的
     // gate（buildings / faction_overlays / atmosphere）读 `recipe.enabled(...)`，
     // **必须**挂本系统，否则 recipe 停留在 Default 全关、三个 pass 永不渲染。
@@ -367,6 +386,42 @@ pub fn run(config: AppConfig) {
     );
 
     app.run();
+}
+
+/// 隐藏起步的揭示：第 2 个 Update tick 把主窗口放出来（一次性）。
+///
+/// ## 时序（与 [`crate::ui_shell::startup_load`] 的「帧 0/1 只画遮罩」咬合）
+///
+/// | 帧 | 发生什么 |
+/// |---|---|
+/// | 0 | 窗口隐藏创建（`Last` 里建 winit 窗口）；PreUpdate 装配 egui 字体；pass 画欢迎页/遮罩；render 编译管线并 present（不可见） |
+/// | 1 | Update 本系统翻转 `visible` → `Last` 应用 `set_visible(true)`，窗口亮起时屏上是帧 0 的完整画面 |
+/// | 2 起 | `startup_load` 才开始阻塞加载（阈值 `< 3`），`-m` 的加载遮罩已在屏上 |
+///
+/// ## 为什么是帧 1 而不是更早 / 更晚
+/// - 帧 0 翻转会在窗口刚建好、尚无任何 present 时就揭白底——白屏回来了；
+/// - 更晚（帧 2+）只会让用户多等，帧 0/1 的画面内容已无差别
+///   （字体 atlas 与 egui 管线都在帧 0 建齐）。
+///
+/// ## 为什么不用 `PipelineCache` 就绪信号
+/// 渲染管线的编译状态在渲染子世界，主世界拿不到（ADR-0020 后 render 已是
+/// 独立 crate 边界）；「多跑一帧」以 8~16ms 的代价换同等保证，简单一个量级。
+fn reveal_window_once_first_frame_presented(
+    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    (mut ticks, mut done): (Local<u32>, Local<bool>),
+) {
+    *ticks += 1;
+    if *done || *ticks < 2 {
+        return;
+    }
+    if let Ok(mut window) = windows.single_mut() {
+        if !window.visible {
+            window.visible = true;
+        }
+        *done = true;
+    }
+    // 窗口实体尚不存在（理论上不会：WindowPlugin 在插件构建期就生成主窗口）
+    // 时不置 `done`，下一 tick 重试。
 }
 
 /// 2D 正交相机。若启动前已装配好 `ViewState`（fit 缩放 + 根图中心），

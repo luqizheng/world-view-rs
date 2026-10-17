@@ -85,5 +85,5 @@ panels:
     visible: false
 theme: dark
 density: cozy
-map_theme: daylight
+map_theme: dusk
 language: zh

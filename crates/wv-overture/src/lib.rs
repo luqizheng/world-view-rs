@@ -23,6 +23,11 @@ pub mod geometry;
 pub mod index;
 pub mod transportation;
 
+pub use fetch::{
+    parse_geojson_segments, parse_geojson_segments_with_connectors, parse_geojson_str,
+    GeoJSONConnector, GeoJSONFeature, GeoJSONFeatureCollection, GeoJSONProperties,
+    SegmentWithConnectors,
+};
 pub use geometry::{haversine_m, segment_length_m, GeoCoord};
 
 /// Overture schema 版本号（ADR-0007 §理由（4）+ README §17 schema 升级策略）。

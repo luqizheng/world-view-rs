@@ -78,14 +78,46 @@ const RIVER_ALPHA: f32 = 0.5;
 /// 重算触发键：只含**结构性**输入——任一变化才重算派生几何。
 ///
 /// `view.scale` 只通过 `lod` 档（Q8 分档）进入，连续缩放不触发重算。
+///
+/// **palette 不进键**（2026-10-17 性能修正）：几何输出只依赖地形内容与
+/// treatment 的三个几何位（晕 / 河中线 / 亚线性描边宽），与墨色无关——内置
+/// 两包（日间 / 暮色）treatment 完全相同（`HAND_DRAWN` 零回归硬前提），
+/// 把 palette 放进键会让纯换色白付一整条 marching squares + Chaikin + DP
+/// 管线（1024² 图实测 ~75ms）。墨色变化走 `ink_palette` 快路径重上色。
 #[derive(Debug, Clone, PartialEq)]
 struct IsolineKey {
     map: Option<wv_core::Id>,
     size: u32,
     res: u32,
     soften: bool,
-    palette: MapPalette,
+    /// 几何相关装饰位 `[coast_halo, river_centerline, ink_sublinear]`
+    /// （`ThemePack.treatment` 的子集）。
+    treatment: [bool; 3],
     lod: u8,
+}
+
+/// 地形内容指纹（仅进程内缓存比较用，不落盘、不跨进程）：FNV-1a 扫
+/// `height + kind`。纯换色（palette 切换）会让整图重建置位 `chunks_dirty`，
+/// 但**不改编单元格**——指纹相同即「几何无需重算」，跳过派生管线。
+///
+/// 为什么不用 `DefaultHasher`：逐 cell 走 `Hash` trait 每字段一次虚分派，
+/// 1024² 图实测量级会到几十 ms，抵消快路径收益；手写 FNV 按字段折叠，
+/// 1M 格 ~3ms，只发生在「结构同键但有脏区待消费」的帧。
+fn terrain_data_hash(data: &wv_core::terrain::TerrainData) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut h = FNV_OFFSET;
+    for c in &data.cells {
+        h ^= (c.height as u16) as u64;
+        h = h.wrapping_mul(FNV_PRIME);
+        h ^= c.kind as u64;
+        h = h.wrapping_mul(FNV_PRIME);
+    }
+    // 尺寸折叠进尾部：不同 width/height 的同序列 cells 不共享指纹。
+    h ^= data.width as u64;
+    h = h.wrapping_mul(FNV_PRIME);
+    h ^= (data.height as u64) << 32;
+    h.wrapping_mul(FNV_PRIME)
 }
 
 /// 资源：等值线叠加实体 + 上次构建的键。
@@ -103,6 +135,11 @@ pub struct IsolineOverlay {
     /// 颜色）——civ-atlas 风格的"水边反光"。宽度 0.5× main，alpha 0.5。仅海岸。
     coast_river: Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)>,
     key: Option<IsolineKey>,
+    /// 最近一次构建时的地形内容指纹（[`terrain_data_hash`]）：辨认「脏区待消费
+    /// 但地形内容没变」（纯换色）用，见 `sync_isoline_overlay` 的快路径。
+    data_hash: Option<u64>,
+    /// 最近一次上墨色的调色板：palette 变化而几何不变时只需重上色，不重算。
+    ink_palette: Option<MapPalette>,
 }
 
 impl IsolineOverlay {
@@ -127,6 +164,8 @@ impl IsolineOverlay {
             });
         }
         self.key = None;
+        self.data_hash = None;
+        self.ink_palette = None;
     }
 
     /// 「建过一次且结论是无几何」：实体与 mesh 皆空但键还在。整图同类型
@@ -186,26 +225,40 @@ pub fn sync_isoline_overlay(
         overlay.despawn(&mut commands);
         return;
     };
+    let treatment = crate::theme::theme_pack::builtin::for_palette(view.map_palette).treatment;
     let key = IsolineKey {
         map: tex.last_map.clone(),
         size: tex.size,
         res: tex.res,
         soften: tex.last_soften,
-        palette: view.map_palette,
+        treatment: [
+            treatment.coast_halo,
+            treatment.river_centerline,
+            treatment.ink_sublinear,
+        ],
         lod: lod_bucket(view.scale),
     };
     let structural_same = overlay.key.as_ref() == Some(&key);
     let dirty_pending = tex.chunks_dirty.is_some();
-    if structural_same && !dirty_pending && (overlay.entity.is_some() || overlay.empty_settled()) {
+    // 「几何不必重算」判定：结构同键，且（无脏区 ∨ 脏区来自纯换色——地形内容
+    // 指纹未变）。palette 切换的整图重建会置全图 `chunks_dirty`，但 cells 逐格
+    // 未动：指纹比对（~3ms）换掉整条派生管线（1024² 实测 ~75ms）。
+    let geometry_unchanged = structural_same
+        && (overlay.entity.is_some() || overlay.empty_settled())
+        && (!dirty_pending || overlay.data_hash == Some(terrain_data_hash(data)));
+    if geometry_unchanged {
         // 结构没变也可能只是图层绑定变了（作者改 opacity/z）：就地补丁，
-        // 不重算派生几何。
-        if layers.is_changed() {
-            apply_material_alpha(
+        // 不重算派生几何。palette 变了同样只重上色（`ink_palette` 快路径）。
+        if layers.is_changed() || overlay.ink_palette != Some(view.map_palette) {
+            apply_material_colors(
                 &mut materials,
                 &overlay,
-                palette::colors(view.map_palette).isoline_ink,
+                palette::colors(view.map_palette),
                 layers.terrain.opacity,
             );
+            overlay.ink_palette = Some(view.map_palette);
+        }
+        if layers.is_changed() {
             if let Some(entity) = overlay.entity {
                 commands.entity(entity).insert(Transform::from_xyz(
                     0.0,
@@ -284,6 +337,8 @@ pub fn sync_isoline_overlay(
         // 下一帧走 `empty_settled` 快路，不重算。
         overlay.despawn(&mut commands);
         overlay.key = Some(key);
+        overlay.data_hash = Some(terrain_data_hash(data));
+        overlay.ink_palette = Some(view.map_palette);
         return;
     };
     let handle = meshes.add(mesh);
@@ -293,12 +348,7 @@ pub fn sync_isoline_overlay(
         .get_or_insert_with(|| materials.add(ColorMaterial::from_color(pal.isoline_ink)))
         .clone();
     // 材质跨重建复用（get_or_insert）：重算后也要按当前绑定刷新 alpha。
-    apply_material_alpha(
-        &mut materials,
-        &overlay,
-        pal.isoline_ink,
-        layers.terrain.opacity,
-    );
+    apply_material_colors(&mut materials, &overlay, pal, layers.terrain.opacity);
 
     overlay.despawn(&mut commands);
     let entity = commands
@@ -370,21 +420,42 @@ pub fn sync_isoline_overlay(
     }
 
     overlay.key = Some(key);
+    overlay.data_hash = Some(terrain_data_hash(data));
+    overlay.ink_palette = Some(view.map_palette);
 }
 
-/// 把 Terrain 图层绑定的 opacity 写到等值线材质 alpha 上。
+/// 按 palette 与图层 opacity 重写全部等值线材质颜色（主线 / 两圈水彩晕 / 河中线）。
 ///
-/// 材质是**缓存复用**的单例（`overlay.material`），改 alpha 走 `Assets::get_mut`，
-/// 不新建资产；实体 z 由 spawn 路径或结构不变路径的 Transform 补丁负责。
-fn apply_material_alpha(
+/// 材质是**缓存复用**的资产（`Assets::get_mut` 就地改，不新建）；快路径
+/// （纯换色 / 图层绑定变化）靠它把墨色刷到四类实体上，免去整条几何管线重算。
+///
+/// 2026-10-17 从 `apply_material_alpha` 扩展：晕与河中线的 alpha 原先只在
+/// spawn 时烘焙，改图层 opacity 不生效（既有不一致）；统一走本函数后四类
+/// 材质都响应 opacity 与 palette。
+fn apply_material_colors(
     materials: &mut Assets<ColorMaterial>,
     overlay: &IsolineOverlay,
-    ink: Color,
+    pal: &crate::theme::palette::PaletteColors,
     opacity: f32,
 ) {
     if let Some(handle) = &overlay.material {
         if let Some(mut mat) = materials.get_mut(handle) {
-            mat.color = ink.with_alpha(ISOLINE_BASE_ALPHA * opacity);
+            mat.color = pal.isoline_ink.with_alpha(ISOLINE_BASE_ALPHA * opacity);
+        }
+    }
+    for (slot, alpha) in [
+        (&overlay.halo_outer, HALO_1_ALPHA),
+        (&overlay.halo_outer_outer, HALO_2_ALPHA),
+    ] {
+        if let Some((_, _, handle)) = slot {
+            if let Some(mut mat) = materials.get_mut(handle) {
+                mat.color = pal.isoline_ink.with_alpha(alpha * opacity);
+            }
+        }
+    }
+    if let Some((_, _, handle)) = &overlay.coast_river {
+        if let Some(mut mat) = materials.get_mut(handle) {
+            mat.color = pal.label_water.with_alpha(RIVER_ALPHA * opacity);
         }
     }
 }
@@ -522,11 +593,12 @@ mod tests {
         assert_eq!(mesh.indices().expect("索引应存在").len(), 18);
     }
 
-    /// 结构键：图 / 尺寸 / 分辨率 / 淡化 / LOD 任一变化都判不等；瞬态脏位不进键。
+    /// 结构键：图 / 尺寸 / 分辨率 / 淡化 / LOD / 几何装饰位任一变化都判不等；
+    /// 瞬态脏位不进键。
     #[test]
     fn isoline_key_covers_structural_inputs_only() {
         let base = IsolineKey {
-            palette: Default::default(),
+            treatment: [true, true, true],
             map: Some(wv_core::Id::new("m").expect("合法 id")),
             size: 512,
             res: 4,
@@ -541,7 +613,7 @@ mod tests {
                 size: 512,
                 res: 4,
                 soften: false,
-                palette: base.palette,
+                treatment: base.treatment,
                 lod: 0,
             },
             IsolineKey {
@@ -549,7 +621,7 @@ mod tests {
                 size: 256,
                 res: 4,
                 soften: false,
-                palette: base.palette,
+                treatment: base.treatment,
                 lod: 0,
             },
             IsolineKey {
@@ -557,7 +629,7 @@ mod tests {
                 size: 512,
                 res: 8,
                 soften: false,
-                palette: base.palette,
+                treatment: base.treatment,
                 lod: 0,
             },
             IsolineKey {
@@ -565,7 +637,7 @@ mod tests {
                 size: 512,
                 res: 4,
                 soften: true,
-                palette: base.palette,
+                treatment: base.treatment,
                 lod: 0,
             },
             IsolineKey {
@@ -573,13 +645,77 @@ mod tests {
                 size: 512,
                 res: 4,
                 soften: false,
-                palette: base.palette,
+                treatment: base.treatment,
                 lod: 1,
+            },
+            IsolineKey {
+                map: base.map.clone(),
+                size: 512,
+                res: 4,
+                soften: false,
+                treatment: [false, true, true],
+                lod: 0,
             },
         ];
         for v in variants {
             assert_ne!(base, v, "键 {v:?} 应与基键不同");
         }
+    }
+
+    /// palette 不进结构键（2026-10-17 性能修正）：内置两包 treatment 的几何位
+    /// 完全相同，纯换色必须落进「同键 → 跳过几何重算」的快路径；几何装饰位
+    /// 变了才判不等。
+    #[test]
+    fn isoline_key_ignores_palette_but_respects_treatment_bits() {
+        let day = crate::theme::theme_pack::builtin::for_palette(MapPalette::Daylight).treatment;
+        let dusk = crate::theme::theme_pack::builtin::for_palette(MapPalette::Dusk).treatment;
+        // 零回归硬前提（theme_pack 同款断言）：两包几何位相同，键必须相等。
+        let key_of = |t: crate::theme::theme_pack::TreatmentFlags| IsolineKey {
+            map: Some(wv_core::Id::new("m").expect("合法 id")),
+            size: 512,
+            res: 4,
+            soften: false,
+            treatment: [t.coast_halo, t.river_centerline, t.ink_sublinear],
+            lod: 0,
+        };
+        assert_eq!(
+            key_of(day),
+            key_of(dusk),
+            "内置两包几何位相同 → 键相等（纯换色不重算几何）"
+        );
+    }
+
+    /// 内容指纹：同数据同指纹；任一 cell 的 height / kind 变了指纹必变；
+    /// 尺寸进指纹（同序列不同形状不共享）。
+    #[test]
+    fn terrain_data_hash_separates_content_and_shape() {
+        fn make(height: i16, kind: u8, w: u32, h: u32) -> wv_core::terrain::TerrainData {
+            wv_core::terrain::TerrainData {
+                width: w,
+                height: h,
+                cells: vec![wv_core::terrain::TerrainCellData { height, kind }; (w * h) as usize],
+            }
+        }
+        let base = make(10, 3, 4, 4);
+        assert_eq!(
+            terrain_data_hash(&base),
+            terrain_data_hash(&make(10, 3, 4, 4))
+        );
+        assert_ne!(
+            terrain_data_hash(&base),
+            terrain_data_hash(&make(11, 3, 4, 4)),
+            "height 变 → 指纹变"
+        );
+        assert_ne!(
+            terrain_data_hash(&base),
+            terrain_data_hash(&make(10, 4, 4, 4)),
+            "kind 变 → 指纹变"
+        );
+        assert_ne!(
+            terrain_data_hash(&base),
+            terrain_data_hash(&make(10, 3, 2, 8)),
+            "形状变（cells 数相同）→ 指纹变"
+        );
     }
 
     /// 端到端（纯函数段）：小地形 → 提取 → 装配 → 平滑 → 抽稀 → mesh 非空。

@@ -535,7 +535,15 @@ impl<'a> CellRenderer<'a> {
     ///
     /// 与 `write_boundary_cell` 共用同一 `wobble_px` 扰动——同一条海岸线在
     /// 全图合成与增量 patch 中揉出的曲线逐字节一致。
-    fn write_coast_boundary_cell(&self, pixels: &mut [u8], stride: u32, cx: u32, cy: u32) {
+    /// `gy` = 数据/采样行（全局），`out_row` = 输出写入行。
+    fn write_coast_boundary_cell(
+        &self,
+        pixels: &mut [u8],
+        stride: u32,
+        cx: u32,
+        gy: u32,
+        out_row: u32,
+    ) {
         let to_rgb = |c: Color| -> [f32; 3] {
             let Color::Srgba(s) = c else { return [0.0; 3] };
             [s.red * 255.0, s.green * 255.0, s.blue * 255.0]
@@ -547,12 +555,12 @@ impl<'a> CellRenderer<'a> {
         for ty in 0..res {
             for tx in 0..res {
                 let ox = (cx * res + tx) as f32;
-                let oy = (cy * res + ty) as f32;
-                let (wx, wy) = wobble_px(ox, oy, res);
+                let oy_read = (gy * res + ty) as f32;
+                let (wx, wy) = wobble_px(ox, oy_read, res);
                 let mut n_water = 0u32;
                 let mut n_land = 0u32;
                 for s in SUBSAMPLES {
-                    if self.sample_is_water(ox + s[0] + wx, oy + s[1] + wy) {
+                    if self.sample_is_water(ox + s[0] + wx, oy_read + s[1] + wy) {
                         n_water += 1;
                     } else {
                         n_land += 1;
@@ -563,7 +571,7 @@ impl<'a> CellRenderer<'a> {
                 // 边界像素：strength > 0.8 时画描边（1px 线）
                 let is_boundary = strength > 0.8;
                 let base = if n_water >= n_land { water } else { land };
-                let o = ((cy * res + ty) * stride + cx * res + tx) as usize * 4;
+                let o = ((out_row * res + ty) * stride + cx * res + tx) as usize * 4;
                 for ch in 0..3 {
                     pixels[o + ch] = if is_boundary {
                         // 边界像素直接用描边色（浅蓝）
@@ -582,15 +590,25 @@ impl<'a> CellRenderer<'a> {
 
     /// 边界格专用：先把自身与 8 邻域的瓦片块备齐（需要 `&mut`），
     /// 再逐像素扰动 + 4 样本超采样写 `res²` 像素。
-    fn write_boundary_cell(&mut self, pixels: &mut [u8], stride: u32, cx: u32, cy: u32) {
+    ///
+    /// `gy` = 数据/采样行（全局），`out_row` = 输出写入行（带内局部）——
+    /// 见 [`Self::write_cell_split`]。
+    fn write_boundary_cell(
+        &mut self,
+        pixels: &mut [u8],
+        stride: u32,
+        cx: u32,
+        gy: u32,
+        out_row: u32,
+    ) {
         // 轮廓图：海岸线有专用路径（水陆占比判定），不走颜色混合。
         if self.mode == ViewMode::Coastline {
-            self.write_coast_boundary_cell(pixels, stride, cx, cy);
+            self.write_coast_boundary_cell(pixels, stride, cx, gy, out_row);
             return;
         }
         for dy in -1i32..=1 {
             for dx in -1i32..=1 {
-                let (nx, ny) = (cx as i32 + dx, cy as i32 + dy);
+                let (nx, ny) = (cx as i32 + dx, gy as i32 + dy);
                 if nx < 0 || ny < 0 || nx >= self.w as i32 || ny >= self.h as i32 {
                     continue;
                 }
@@ -602,21 +620,23 @@ impl<'a> CellRenderer<'a> {
         for ty in 0..res {
             for tx in 0..res {
                 let ox = (cx * res + tx) as f32;
-                let oy = (cy * res + ty) as f32;
+                // 采样用**全局**像素 y（wobble 与格采样都是全图像素位置的函数）；
+                // 写入偏移用带内局部行。
+                let oy_read = (gy * res + ty) as f32;
                 let (wx, wy) = if self.wobble {
-                    wobble_px(ox, oy, res)
+                    wobble_px(ox, oy_read, res)
                 } else {
                     (0.0, 0.0)
                 };
                 let (mut r, mut g, mut b) = (0.0f32, 0.0f32, 0.0f32);
                 let mut c = [0.0f32; 3];
                 for s in SUBSAMPLES {
-                    self.sample_into(ox + s[0] + wx, oy + s[1] + wy, &mut c);
+                    self.sample_into(ox + s[0] + wx, oy_read + s[1] + wy, &mut c);
                     r += c[0];
                     g += c[1];
                     b += c[2];
                 }
-                let o = ((cy * res + ty) * stride + cx * res + tx) as usize * 4;
+                let o = ((out_row * res + ty) * stride + cx * res + tx) as usize * 4;
                 pixels[o] = (r / 4.0).round().clamp(0.0, 255.0) as u8;
                 pixels[o + 1] = (g / 4.0).round().clamp(0.0, 255.0) as u8;
                 pixels[o + 2] = (b / 4.0).round().clamp(0.0, 255.0) as u8;
@@ -626,12 +646,24 @@ impl<'a> CellRenderer<'a> {
     }
 
     /// 写一格像素：内部格快路径 / 边界格扰动路径。
+    ///
+    /// `cy` 同时是数据行与输出行（串行全图合成与 `patch_terrain_image` 的口径，
+    /// 行带并行请走 [`Self::write_cell_split`]）。
     fn write_cell(&mut self, pixels: &mut [u8], stride: u32, cx: u32, cy: u32) {
-        let idx = (cy * self.w + cx) as usize;
+        self.write_cell_split(pixels, stride, cx, cy, cy);
+    }
+
+    /// [`Self::write_cell`] 的坐标分离版：数据/采样行取 `gy`（全局格行），
+    /// 像素写入以 `out_row` 为缓冲第 0 行基准（行带并行：各带看自己的切片，
+    /// 写入行是带内局部号，取数行仍是全局行）。
+    ///
+    /// 串行与 patch 路径恒 `gy == out_row`——两条路径行为逐位不变。
+    fn write_cell_split(&mut self, pixels: &mut [u8], stride: u32, cx: u32, gy: u32, out_row: u32) {
+        let idx = (gy * self.w + cx) as usize;
         let Some(cell) = self.data.cells.get(idx) else {
             return;
         };
-        if !self.is_boundary(cx, cy) {
+        if !self.is_boundary(cx, gy) {
             // 内部格：与旧行为一致——整块直铺（快路径）。
             let kind = cell.kind;
             if self.block_for(kind).is_some() {
@@ -652,7 +684,7 @@ impl<'a> CellRenderer<'a> {
                         pixels,
                         stride,
                         cx * self.res,
-                        cy * self.res,
+                        out_row * self.res,
                     );
                 }
                 return;
@@ -687,7 +719,7 @@ impl<'a> CellRenderer<'a> {
             let Color::Srgba(c) = color else { return };
             let res = self.res;
             for ty in 0..res {
-                let o = ((cy * res + ty) * stride + cx * res) as usize * 4;
+                let o = ((out_row * res + ty) * stride + cx * res) as usize * 4;
                 for tx in 0..res {
                     let o = o + tx as usize * 4;
                     pixels[o] = (c.red * 255.0) as u8;
@@ -698,7 +730,7 @@ impl<'a> CellRenderer<'a> {
             }
             return;
         }
-        self.write_boundary_cell(pixels, stride, cx, cy);
+        self.write_boundary_cell(pixels, stride, cx, gy, out_row);
     }
 }
 
@@ -706,6 +738,13 @@ impl<'a> CellRenderer<'a> {
 ///
 /// 有图集且该格 kind 有映射 → 瓦片直铺（内部格）/ 扰动超采样（边界格）；
 /// 否则回退纯色 shader。返回 `(pixels, res)`。
+///
+/// **行带并行**（2026-10-17，修调色板切换卡顿）：`write_cell` 对**位置纯**
+/// （`wobble_px`/双线性采样都是坐标的确定函数——`patch_terrain_pixels` 增量
+/// 路径早已依赖该性质），唯一的可变状态是每 renderer 一份的 `blocks` 瓦片
+/// 缓存——纯缓存，不影响输出。因此按行带切成不相交切片、每带独立 renderer
+/// 并行渲染，输出与串行**逐字节一致**（测试 `banded_rendering_matches_serial`）。
+/// 1024² 图整图合成实测 317ms → 多核下接近带宽封顶。
 fn write_terrain_pixels(
     data: &TerrainData,
     mode: ViewMode,
@@ -714,15 +753,62 @@ fn write_terrain_pixels(
     palette: &PaletteColors,
     treatment: crate::theme::theme_pack::TreatmentFlags,
 ) -> (Vec<u8>, u32) {
-    let mut renderer = CellRenderer::new(data, mode, atlas, soften, palette, treatment);
-    let (w, h, res) = (renderer.w, renderer.h, renderer.res);
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    write_terrain_pixels_banded(data, mode, atlas, soften, palette, treatment, threads)
+}
+
+/// [`write_terrain_pixels`] 的带数参数化版本（测试注入带数用）。
+///
+/// `bands` 只是调度参数：任意带数下输出必须逐字节一致。
+fn write_terrain_pixels_banded(
+    data: &TerrainData,
+    mode: ViewMode,
+    atlas: Option<&TileAtlas>,
+    soften: bool,
+    palette: &PaletteColors,
+    treatment: crate::theme::theme_pack::TreatmentFlags,
+    bands: usize,
+) -> (Vec<u8>, u32) {
+    // 先建一个 renderer 只为推导 w/h/res（RealTerrain 的 hmin 折叠在它里面
+    // 做一次；各带的新 renderer 会重复这次纯比较折叠，代价每带亚毫秒）。
+    let probe = CellRenderer::new(data, mode, atlas, soften, palette, treatment);
+    let (w, h, res) = (probe.w, probe.h, probe.res);
     let stride = w * res;
     let mut pixels = vec![0u8; (stride * h * res * 4) as usize];
-    for cy in 0..h {
-        for cx in 0..w {
-            renderer.write_cell(&mut pixels, stride, cx, cy);
+    let row_bytes = (stride * res * 4) as usize;
+    // 行数太少不值得开线程（占位 64² 合成 <1ms，线程启动反而亏）。
+    let bands = bands.clamp(1, 16).min(h as usize);
+    if bands <= 1 || h < 128 {
+        let mut r = probe;
+        for cy in 0..h {
+            for cx in 0..w {
+                r.write_cell(&mut pixels, stride, cx, cy);
+            }
         }
+        return (pixels, res);
     }
+    let rows_per_band = h.div_ceil(bands as u32) as usize;
+    std::thread::scope(|s| {
+        for (bi, band) in pixels.chunks_mut(rows_per_band * row_bytes).enumerate() {
+            let y0 = (bi * rows_per_band) as u32;
+            s.spawn(move || {
+                let mut r = CellRenderer::new(data, mode, atlas, soften, palette, treatment);
+                let band_rows = (band.len() / row_bytes) as u32;
+                for ly in 0..band_rows {
+                    let gy = y0 + ly;
+                    if gy >= h {
+                        break;
+                    }
+                    for cx in 0..w {
+                        // gy：数据/采样行（全局）；ly：写入行（带内）。
+                        r.write_cell_split(band, stride, cx, gy, ly);
+                    }
+                }
+            });
+        }
+    });
     (pixels, res)
 }
 
@@ -835,6 +921,49 @@ mod tests {
         (data[o] as f32 / 255.0 - target.red).abs() < 0.02
             && (data[o + 1] as f32 / 255.0 - target.green).abs() < 0.02
             && (data[o + 2] as f32 / 255.0 - target.blue).abs() < 0.02
+    }
+
+    /// 行带并行与串行输出**逐字节一致**（含边界格扰动与瓦片直铺两种路径）：
+    /// 带数只是调度参数，任何线程切分都不允许改变像素。
+    #[test]
+    fn banded_rendering_matches_serial_rendering() {
+        // 24×160 地形（h≥128 绕开串行快路，bands=4 真正走多带分支），
+        // 内嵌异类陆块 → 边界格走扰动/超采样路径，内部格走直铺。
+        let (w, h) = (24u32, 160u32);
+        let cells: Vec<wv_core::terrain::TerrainCellData> = (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                let land = (6..=17).contains(&x) && (40..=119).contains(&y);
+                let snow = x == 12 && y == 80;
+                wv_core::terrain::TerrainCellData {
+                    height: if land { 80 } else { -60 },
+                    kind: if snow {
+                        7
+                    } else if land {
+                        3
+                    } else {
+                        0
+                    },
+                }
+            })
+            .collect();
+        let data = wv_core::terrain::TerrainData {
+            width: w,
+            height: h,
+            cells,
+        };
+        let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
+        let treatment = crate::theme::theme_pack::builtin::for_palette(
+            crate::theme::palette::MapPalette::Daylight,
+        )
+        .treatment;
+        let (p1, res1) =
+            write_terrain_pixels_banded(&data, ViewMode::Coastline, None, false, pal, treatment, 1);
+        let (p4, res4) =
+            write_terrain_pixels_banded(&data, ViewMode::Coastline, None, false, pal, treatment, 4);
+        assert_eq!(res1, res4, "带数不得影响 res 推导");
+        assert_eq!(p1.len(), p4.len(), "输出长度应一致");
+        assert_eq!(p1, p4, "带数不同 → 像素逐字节一致");
     }
 
     // -----------------------------------------------------------------------

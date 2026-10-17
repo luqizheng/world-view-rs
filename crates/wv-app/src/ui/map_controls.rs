@@ -35,11 +35,12 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::state::{
-    CityToolMode, CityToolState, DrillState, GridConfig, MeasureMode, MeasureState, ViewState,
-    WorldProjection,
+    CityPending, CityToolMode, CityToolState, DrillState, GridConfig, MeasureMode, MeasureState,
+    ViewState, WorldProjection,
 };
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::{radius, space};
+use crate::ui_shell::ShellNotice;
 use crate::ui_shell::StartupLoadRequest;
 
 use super::shell::UiShell;
@@ -72,9 +73,12 @@ pub fn map_controls(
     drill: Res<DrillState>,
     grid: Res<GridConfig>,
     tex: Res<wv_render::terrain_view::TerrainTexture>,
-    projection: Res<WorldProjection>,
+    mut projection: ResMut<WorldProjection>,
     windows: Query<&Window>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+    mut edit: ResMut<crate::edit::editing::EditHistory>,
+    mut notice: ResMut<ShellNotice>,
+    time: Res<Time>,
     startup_req: Res<StartupLoadRequest>,
 ) {
     // 无工程锁（图片规格 §首页不可见）：与 `welcome_screen` 共用同一信号。
@@ -183,7 +187,7 @@ pub fn map_controls(
                         accent,
                         raised_bg,
                         || {
-                            city_tool.mode = if city_active {
+                            let new_mode = if city_active {
                                 CityToolMode::Off
                             } else {
                                 // 互斥：开城市时关掉测量。
@@ -191,6 +195,12 @@ pub fn map_controls(
                                 measure.clear_draft();
                                 CityToolMode::CreateArmed
                             };
+                            bevy::log::info!(
+                                "[city] 按钮 toggle: {:?} → {:?}",
+                                city_tool.mode,
+                                new_mode
+                            );
+                            city_tool.mode = new_mode;
                             city_tool.draft = None;
                         },
                     );
@@ -266,6 +276,140 @@ pub fn map_controls(
                     );
                 });
         });
+
+    // ====== 城市工具弹窗（ADR-0022 M2 D5 v2）========================
+    // 松手已起矩形 + 进 `CreateConfirm`；在这里渲染 ID / 名字 / 底图 三字段，
+    // 用户点 OK 才派 `AddCityCommand`，Cancel 回 `Off`。
+    if city_tool.mode == CityToolMode::CreateConfirm {
+        if let Some(pending) = city_tool.pending.as_mut() {
+            let frame_id = egui::Id::new("wv_city_dialog_v1");
+            let mut clicked_ok = false;
+            let mut clicked_cancel = false;
+            let mut id_error: Option<String> = None;
+            egui::Window::new("新建城市")
+                .id(frame_id)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .default_size(egui::vec2(360.0, 200.0))
+                .show(ctx, |ui| {
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("ID");
+                            ui.text_edit_singleline(&mut pending.id);
+                        });
+                        // 校验 ID 字符集：`[A-Za-z0-9_]+`。
+                        if !pending
+                            .id
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        {
+                            id_error = Some("ID 只能含 [A-Za-z0-9_]".to_string());
+                        }
+                        if pending.id.is_empty() {
+                            id_error = Some("ID 不能为空".to_string());
+                        }
+                        // 重名检测（与已有 maps 或其它挂件冲突）。
+                        if id_error.is_none() {
+                            let id_check = wv_core::Id::new_unchecked(&pending.id);
+                            if projection.world.maps.iter().any(|m| m.id == id_check) {
+                                id_error = Some(format!("ID `{}` 已存在", pending.id));
+                            }
+                        }
+                        if let Some(err) = &id_error {
+                            ui.colored_label(egui::Color32::from_rgb(220, 90, 70), err);
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("名字");
+                            ui.text_edit_singleline(&mut pending.name);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("底图");
+                            ui.selectable_value(
+                                &mut pending.base,
+                                wv_core::map::MapBase::Ocean,
+                                "海洋",
+                            );
+                            ui.selectable_value(
+                                &mut pending.base,
+                                wv_core::map::MapBase::Land,
+                                "陆地",
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(id_error.is_none(), egui::Button::new("OK"))
+                                .clicked()
+                            {
+                                clicked_ok = true;
+                            }
+                            if ui.button("取消").clicked() {
+                                clicked_cancel = true;
+                            }
+                        });
+                    });
+                });
+            if clicked_cancel {
+                bevy::log::info!("[city] 弹窗：取消");
+                city_tool.mode = CityToolMode::Off;
+                city_tool.pending = None;
+            } else if clicked_ok {
+                let min_x = pending.draft.start.x.min(pending.draft.end.x);
+                let min_y = pending.draft.start.y.min(pending.draft.end.y);
+                let max_x = pending.draft.start.x.max(pending.draft.end.x);
+                let max_y = pending.draft.start.y.max(pending.draft.end.y);
+                let width = max_x - min_x;
+                let height = max_y - min_y;
+                let city_id_owned = pending.id.clone();
+                let icon_id_owned = format!("icon_{}", pending.id);
+                let city = wv_core::map::MapNode {
+                    id: wv_core::Id::new_unchecked(&pending.id),
+                    name: pending.name.clone(),
+                    level: wv_core::map::MapLevel::City,
+                    parent: Some(pending.parent_id.clone()),
+                    extent: Some(wv_core::map::Extent {
+                        width,
+                        height,
+                        origin: Some(wv_core::geometry::Point { x: min_x, y: min_y }),
+                    }),
+                    outline_polygon: Some(wv_core::map::GeometryData::Polygon(vec![
+                        0.0, 0.0, width, 0.0, width, height, 0.0, height,
+                    ])),
+                    base: Some(pending.base),
+                    ..wv_core::map::MapNode::default()
+                };
+                let cmd = wv_edit::AddCityCommand::new(
+                    city,
+                    wv_core::Id::new_unchecked(&icon_id_owned),
+                    wv_core::map::IconShape::Diamond,
+                );
+                let mut tx = wv_edit::Transaction::new();
+                tx.push(Box::new(cmd));
+                match edit.history.commit(&mut projection.world, tx) {
+                    Ok(dirty) => {
+                        edit.record_dirty(dirty);
+                        projection.dirty = true;
+                        let frame = (time.elapsed_secs() * 60.0) as u64;
+                        notice.info(
+                            format!("新建城市「{city_id_owned}」（{width:.0}×{height:.0} wu）"),
+                            frame,
+                        );
+                        bevy::log::info!("[city] 弹窗：OK 派命令 id={city_id_owned}");
+                    }
+                    Err(e) => {
+                        let frame = (time.elapsed_secs() * 60.0) as u64;
+                        notice.error(format!("新建城市未生效：{e}"), frame);
+                    }
+                }
+                city_tool.mode = CityToolMode::Off;
+                city_tool.pending = None;
+            }
+        } else {
+            // mode == CreateConfirm 但 pending 是 None — 异常态，自动复位。
+            bevy::log::warn!("[city] CreateConfirm 但 pending = None，自动复位");
+            city_tool.mode = CityToolMode::Off;
+        }
+    }
 }
 
 /// 工具条本地瓷砖按钮 helper（详见模块头注释 §职责）。

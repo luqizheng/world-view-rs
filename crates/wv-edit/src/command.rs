@@ -1211,6 +1211,52 @@ impl EditCommand for AddPlaceCommand {
         Ok(())
     }
 }
+
+/// 新增一条 `PlaceEdge`（距离图的边；`distances/edges/` 落盘）。
+///
+/// 与 [`AddPlaceCommand`] 同源：目标 ID 已存在时 `apply` 报错，不静默覆盖——
+/// `PlaceEdge` 起点终点的 `Place` 引用是关键网络节点，悄无声覆盖会让
+/// `DistanceGraph` 的拓扑在不可见处变化。
+///
+/// 悬空引用（`a` / `b` 指向不存在的 `Place`）按 AGENTS §7.5 V1 规则**不阻止
+/// 保存**：作者可以先放一两个 Place 再回头补边，作者主人在工具之上。
+#[derive(Debug)]
+pub struct AddPlaceEdgeCommand {
+    pub edge: wv_core::distance::PlaceEdge,
+}
+
+impl AddPlaceEdgeCommand {
+    pub fn new(edge: wv_core::distance::PlaceEdge) -> Self {
+        Self { edge }
+    }
+}
+
+impl EditCommand for AddPlaceEdgeCommand {
+    fn label(&self) -> String {
+        format!("新增边「{}」", self.edge.id)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        if world.distances.edges.iter().any(|e| e.id == self.edge.id) {
+            return Err(EditError::Precondition(format!(
+                "边 `{}` 已存在",
+                self.edge.id
+            )));
+        }
+        world.distances.edges.push(self.edge.clone());
+        Ok(vec!["distances/edges".into()])
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let pos = world
+            .distances
+            .edges
+            .iter()
+            .position(|e| e.id == self.edge.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("PlaceEdge {}", self.edge.id)))?;
+        world.distances.edges.remove(pos);
+        Ok(())
+    }
+}
+
 // 建筑编辑命令（ADR-0016 §6 落地项，2026-10-14）
 // ---------------------------------------------------------------------------
 
@@ -3090,5 +3136,67 @@ mod tests {
             cmd.apply(&mut w).is_err(),
             "<3 顶点的 polygon 应 Precondition 拒绝"
         );
+    }
+
+    // --- AddPlaceEdgeCommand 测试 ----------------------------------------
+
+    fn edge(id: &str, a: &str, b: &str) -> wv_core::distance::PlaceEdge {
+        wv_core::distance::PlaceEdge {
+            id: wv_core::Id::new_unchecked(id),
+            a: wv_core::Id::new_unchecked(a),
+            b: wv_core::Id::new_unchecked(b),
+            distance_km: 12.5,
+            terrain: "road".into(),
+            bidirectional: true,
+        }
+    }
+
+    #[test]
+    fn add_place_edge_appends_and_marks_dirty() {
+        let mut w = World::default();
+        let cmd = AddPlaceEdgeCommand::new(edge("edge_a_b", "place_a", "place_b"));
+        let dirty = cmd.apply(&mut w).expect("apply");
+        assert_eq!(dirty, vec!["distances/edges".to_string()]);
+        assert_eq!(w.distances.edges.len(), 1);
+        assert_eq!(w.distances.edges[0].id.as_str(), "edge_a_b");
+    }
+
+    #[test]
+    fn add_place_edge_rejects_duplicate_id() {
+        let mut w = World::default();
+        AddPlaceEdgeCommand::new(edge("edge_a_b", "place_a", "place_b"))
+            .apply(&mut w)
+            .expect("first apply");
+        let err = AddPlaceEdgeCommand::new(edge("edge_a_b", "place_c", "place_d"))
+            .apply(&mut w)
+            .expect_err("second apply with same id must fail");
+        assert!(matches!(err, EditError::Precondition(_)));
+    }
+
+    #[test]
+    fn add_place_edge_revert_removes_the_edge() {
+        let mut w = World::default();
+        let cmd = AddPlaceEdgeCommand::new(edge("edge_a_b", "place_a", "place_b"));
+        cmd.apply(&mut w).expect("apply");
+        assert_eq!(w.distances.edges.len(), 1);
+        cmd.revert(&mut w).expect("revert");
+        assert!(w.distances.edges.is_empty());
+    }
+
+    #[test]
+    fn add_place_edge_revert_target_missing_when_never_applied() {
+        let mut w = World::default();
+        let cmd = AddPlaceEdgeCommand::new(edge("edge_a_b", "place_a", "place_b"));
+        let err = cmd.revert(&mut w).expect_err("revert without apply");
+        assert!(matches!(err, EditError::TargetMissing(_)));
+    }
+
+    #[test]
+    fn add_place_edge_accepts_dangling_endpoints_per_v1() {
+        // AGENTS §7.5 V1：悬空引用只提示不阻止——本测试锁住这条契约。
+        let mut w = World::default();
+        let cmd = AddPlaceEdgeCommand::new(edge("edge_orphan", "place_does_not_exist", "place_x"));
+        cmd.apply(&mut w).expect("V1 允许悬空 endpoint");
+        assert_eq!(w.distances.edges.len(), 1);
     }
 }

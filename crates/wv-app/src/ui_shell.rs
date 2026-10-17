@@ -713,11 +713,12 @@ fn load_error_card(mut ctxs: EguiContexts, mut projection: ResMut<WorldProjectio
         });
 }
 
-/// 执行启动加载（`-m`）；帧 1 后才开始，给遮罩留出一帧 present。
+/// 执行启动加载（`-m`）；帧 2 后才开始，给遮罩留出「画 + present + 窗口揭示」。
 ///
 /// 为什么不在 `Startup` 里做：Bevy 要等首帧渲染完成才 present——在 Startup
-/// 阻塞加载，用户看到的仍是白屏。帧 0 画遮罩 → present；帧 1 遮罩已在屏上，
-/// 这时才做真正（阻塞）的磁盘加载；帧 2 起显示加载结果 / 失败卡片。
+/// 阻塞加载，用户看到的仍是白屏。帧 0 画遮罩 → present（窗口隐藏，见
+/// `app_bootstrap` 的隐藏起步）；帧 1 末窗口揭示、遮罩已在屏上；帧 2 这时
+/// 才做真正（阻塞）的磁盘加载；帧 3 起显示加载结果 / 失败卡片。
 /// 空编辑器起步（无 `-m`）时顺带给一条一次性状态栏指引。
 ///
 /// 参数已 16+1（基本类同 `apply_pending_commands`），按 Bevy 单系统 16 上限
@@ -740,8 +741,8 @@ fn startup_load(
     (time, current_loc): (Res<Time>, Res<crate::i18n::CurrentLocale>),
 ) {
     *frames += 1;
-    if *frames < 2 {
-        return; // 帧 0/1：只让遮罩画。
+    if *frames < 3 {
+        return; // 帧 0/1：只让遮罩画；帧 1 末窗口才揭示（隐藏起步），加载必须排在其后。
     }
     let frame = (time.elapsed_secs() * 60.0) as u64;
     let Some(dir) = req.0.take() else {

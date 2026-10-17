@@ -19,7 +19,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::i18n::Locale;
-use wv_overture::fetch::{parse_geojson_segments, parse_geojson_str};
+use wv_overture::fetch::{
+    parse_geojson_segments, parse_geojson_segments_with_connectors, parse_geojson_str,
+    SegmentWithConnectors,
+};
 use wv_overture::index::IndexedOvertures;
 
 /// 入口：`wv overture <子命令> <参数...>`。
@@ -31,6 +34,7 @@ pub fn overture_command(args: &[String], _loc: Locale) -> Result<(), String> {
     match sub {
         "fetch" => fetch_command(&args[1..]),
         "index" => index_command(&args[1..]),
+        "apply" => apply_command(&args[1..]),
         "--help" | "-h" | "" => {
             print_overture_help();
             Ok(())
@@ -499,8 +503,693 @@ const INDEX_HELP: &str = "\
 ";
 
 fn print_overture_help() {
-    println!("{FETCH_HELP}\n{INDEX_HELP}");
+    println!("{FETCH_HELP}\n{INDEX_HELP}\n{APPLY_HELP}");
 }
+
+// ===========================================================================
+// `wv overture apply` —— 把已下载 Overture GeoJSON 转成可加载的工程目录
+// ===========================================================================
+
+/// 默认嵌入的 21 个广东地级市种子。
+///
+/// 字段来源：广东行政区划公开数据（民政部 + 各地市统计公报），坐标取市府
+/// 近似几何中心（WGS84 经纬度）。**只**是骨架初值——作者可在 GUI 里用
+/// `SetCityOutlineCommand` 后续精修轮廓（ADR-0022 D5）。
+const DEFAULT_GUANGDONG_CITIES: &[CitySeed] = &[
+    CitySeed {
+        id: "guangzhou",
+        name: "广州市",
+        lat: 23.129_11,
+        lon: 113.264_39,
+    },
+    CitySeed {
+        id: "shenzhen",
+        name: "深圳市",
+        lat: 22.543_10,
+        lon: 114.057_87,
+    },
+    CitySeed {
+        id: "zhuhai",
+        name: "珠海市",
+        lat: 22.271_01,
+        lon: 113.576_40,
+    },
+    CitySeed {
+        id: "shantou",
+        name: "汕头市",
+        lat: 23.353_50,
+        lon: 116.681_97,
+    },
+    CitySeed {
+        id: "foshan",
+        name: "佛山市",
+        lat: 23.021_85,
+        lon: 113.121_92,
+    },
+    CitySeed {
+        id: "shaoguan",
+        name: "韶关市",
+        lat: 24.810_82,
+        lon: 113.597_23,
+    },
+    CitySeed {
+        id: "zhanjiang",
+        name: "湛江市",
+        lat: 21.270_99,
+        lon: 110.359_38,
+    },
+    CitySeed {
+        id: "jiangmen",
+        name: "江门市",
+        lat: 22.578_72,
+        lon: 113.081_73,
+    },
+    CitySeed {
+        id: "maoming",
+        name: "茂名市",
+        lat: 21.662_99,
+        lon: 110.925_46,
+    },
+    CitySeed {
+        id: "zhaoqing",
+        name: "肇庆市",
+        lat: 23.046_98,
+        lon: 112.465_43,
+    },
+    CitySeed {
+        id: "huizhou",
+        name: "惠州市",
+        lat: 23.111_53,
+        lon: 114.416_14,
+    },
+    CitySeed {
+        id: "meizhou",
+        name: "梅州市",
+        lat: 24.288_58,
+        lon: 116.122_64,
+    },
+    CitySeed {
+        id: "shanwei",
+        name: "汕尾市",
+        lat: 22.786_41,
+        lon: 115.375_44,
+    },
+    CitySeed {
+        id: "heyuan",
+        name: "河源市",
+        lat: 23.743_43,
+        lon: 114.697_47,
+    },
+    CitySeed {
+        id: "yangjiang",
+        name: "阳江市",
+        lat: 21.857_95,
+        lon: 111.982_59,
+    },
+    CitySeed {
+        id: "qingyuan",
+        name: "清远市",
+        lat: 23.681_74,
+        lon: 113.056_30,
+    },
+    CitySeed {
+        id: "dongguan",
+        name: "东莞市",
+        lat: 23.020_67,
+        lon: 113.751_82,
+    },
+    CitySeed {
+        id: "zhongshan",
+        name: "中山市",
+        lat: 22.517_58,
+        lon: 113.392_73,
+    },
+    CitySeed {
+        id: "chaozhou",
+        name: "潮州市",
+        lat: 23.661_81,
+        lon: 116.623_00,
+    },
+    CitySeed {
+        id: "jieyang",
+        name: "揭阳市",
+        lat: 23.549_84,
+        lon: 116.372_83,
+    },
+    CitySeed {
+        id: "yunfu",
+        name: "云浮市",
+        lat: 22.929_34,
+        lon: 112.044_45,
+    },
+];
+
+/// 单个城市的种子（CLI 内嵌或 `--cities` YAML 覆盖）。
+#[derive(Debug, Clone)]
+struct CitySeed {
+    id: &'static str,
+    name: &'static str,
+    lat: f64,
+    lon: f64,
+}
+
+/// `wv overture apply` 参数。
+#[derive(Debug)]
+struct ApplyArgs {
+    /// 已下载的 Overture GeoJSON 路径。
+    geojson: PathBuf,
+    /// 目标工程目录（不存在则建）。
+    target: PathBuf,
+    /// 工程名（写进 `world.yaml.name`）。
+    name: String,
+    /// 可选：覆盖默认 21 城的 YAML（schema = `CitySeed` 列表）。
+    cities: Option<PathBuf>,
+    /// 逗号分隔的 road class 白名单（默认 `motorway,trunk`）。
+    road_class: Vec<String>,
+    /// `--skip-edges` 时只建工程骨架不导边。
+    skip_edges: bool,
+    /// Overture release tag（写入 `geographic_source.release`）。
+    release: Option<String>,
+}
+
+impl ApplyArgs {
+    /// `release` 字段直接来自 `--release` 参数（如缺省则 `None`）。
+    fn release_tag(&self) -> Option<String> {
+        self.release.clone()
+    }
+}
+
+impl ApplyArgs {
+    /// 手写解析：与 `FetchArgs::parse` 同口径（避免引入 `clap`）。
+    fn parse(args: &[String]) -> Result<Self, String> {
+        let mut geojson: Option<PathBuf> = None;
+        let mut target: Option<PathBuf> = None;
+        let mut name: Option<String> = None;
+        let mut cities: Option<PathBuf> = None;
+        let mut road_class: Option<String> = None;
+        let mut release: Option<String> = None;
+        let mut skip_edges = false;
+
+        let mut i = 0;
+        while i < args.len() {
+            let key = &args[i];
+            match key.as_str() {
+                "--skip-edges" => {
+                    skip_edges = true;
+                    i += 1;
+                }
+                _ => {
+                    let val = args
+                        .get(i + 1)
+                        .ok_or_else(|| format!("flag `{key}` 需要一个值"))?;
+                    match key.as_str() {
+                        "--geojson" => {
+                            geojson = Some(PathBuf::from(val));
+                            i += 2;
+                        }
+                        "--target" => {
+                            target = Some(PathBuf::from(val));
+                            i += 2;
+                        }
+                        "--name" => {
+                            if val.is_empty() {
+                                return Err("--name 不能为空".into());
+                            }
+                            name = Some(val.clone());
+                            i += 2;
+                        }
+                        "--cities" => {
+                            cities = Some(PathBuf::from(val));
+                            i += 2;
+                        }
+                        "--road-class" => {
+                            road_class = Some(val.clone());
+                            i += 2;
+                        }
+                        "--release" => {
+                            release = Some(val.clone());
+                            i += 2;
+                        }
+                        other => return Err(format!("未知 flag: {other}")),
+                    }
+                }
+            }
+        }
+
+        Ok(Self {
+            geojson: geojson.ok_or("缺少 --geojson")?,
+            target: target.ok_or("缺少 --target")?,
+            name: name.unwrap_or_else(|| "广东省".to_string()),
+            cities,
+            road_class: road_class
+                .unwrap_or_else(|| "motorway,trunk".to_string())
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            skip_edges,
+            release,
+        })
+    }
+}
+
+/// `wv overture apply` 完整版：参数 → GeoJSON → World → 落盘。
+///
+/// 流程：
+/// 1. 解析 + 校验（`--geojson` 存在 / `--target` 不含 `world.yaml` / 城市列表非空）；
+/// 2. 读 GeoJSON 拿 `Vec<SegmentWithConnectors>`；
+/// 3. 按 `--road-class` 白名单过滤；
+/// 4. 收集 connector 端点去重 → 自动建 Place（路口）；
+/// 5. 21 城市（默认 / `--cities`）→ 落成子图 + Place + outline_polygon；
+/// 6. 每段 → PlaceEdge（`a` / `b` 引用两端 connector 的 Place.id）；
+/// 7. `Project::create` + `Project::save_world` 全量落盘。
+///
+/// 纪律（AGENTS §3.3）：
+/// - 不在 CLI 里塞 Bevy ECS / 不持可变工作副本；
+/// - 所有写盘走 `Project::save_world`（YAML 序列化在 `wv-io`）；
+/// - 城市子图用 `AddCityCommand`（验证 + 落 IconSpec + 挂 children），
+///   大批量 Place / PlaceEdge 用直接 Vec 追加（与 `new_project_dialog::create_project`
+///   同一口径，CLI 一次性导入不走 EditHistory 栈）。
+fn apply_command(args: &[String]) -> Result<(), String> {
+    let parsed = ApplyArgs::parse(args)?;
+
+    // 1) 校验文件 / 目录
+    if !parsed.geojson.is_file() {
+        return Err(format!(
+            "--geojson 路径不是文件或不存在: {}",
+            parsed.geojson.display()
+        ));
+    }
+    if parsed.target.join("world.yaml").is_file() {
+        return Err(format!(
+            "--target 已含 world.yaml，拒绝覆盖：{}",
+            parsed.target.display()
+        ));
+    }
+    let cities: Vec<(String, String, f64, f64)> = if let Some(p) = &parsed.cities {
+        load_cities_from_yaml(p)?
+    } else {
+        DEFAULT_GUANGDONG_CITIES
+            .iter()
+            .map(|c| (c.id.to_string(), c.name.to_string(), c.lat, c.lon))
+            .collect()
+    };
+    if cities.is_empty() {
+        return Err("城市列表为空（默认 21 城或 --cities 至少 1 条）".into());
+    }
+    if parsed.road_class.is_empty() {
+        return Err("--road-class 不能为空（至少 1 个 class）".into());
+    }
+
+    // 2) 读 GeoJSON → Vec<SegmentWithConnectors>
+    println!("[1/5] 读取 GeoJSON: {}", parsed.geojson.display());
+    let gj_text =
+        std::fs::read_to_string(&parsed.geojson).map_err(|e| format!("读 GeoJSON 失败: {e}"))?;
+    let fc = parse_geojson_str(&gj_text).map_err(|e| format!("GeoJSON 解析失败: {e}"))?;
+    let total_features = fc.features.len();
+    let all_segments = parse_geojson_segments_with_connectors(&fc);
+    println!(
+        "      总 features={}  含 connector 的段={}",
+        total_features,
+        all_segments.len()
+    );
+
+    // 3) 按 --road-class 白名单过滤
+    let segments: Vec<SegmentWithConnectors> = if parsed.skip_edges {
+        Vec::new()
+    } else {
+        all_segments
+            .into_iter()
+            .filter(|s| {
+                parsed
+                    .road_class
+                    .iter()
+                    .any(|c| s.road_class.eq_ignore_ascii_case(c))
+            })
+            .collect()
+    };
+    println!(
+        "      过滤后保留 {} 段（road-class={}）",
+        segments.len(),
+        parsed.road_class.join(",")
+    );
+
+    // 4) 收集 connector 端点去重 → 自动建 Place（路口）
+    // 用 short_id 派生 Id：UUID 去掉 `-` 取前 12 位 hex，加 `place_int_` 前缀。
+    let mut connector_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut intersection_places: Vec<(String, String)> = Vec::new(); // (id, name)
+    for s in &segments {
+        if connector_seen.insert(s.connector_a.clone()) {
+            intersection_places.push((
+                format!("place_int_{}", short_id_from_uuid(&s.connector_a)),
+                "路口".to_string(),
+            ));
+        }
+        if connector_seen.insert(s.connector_b.clone()) {
+            intersection_places.push((
+                format!("place_int_{}", short_id_from_uuid(&s.connector_b)),
+                "路口".to_string(),
+            ));
+        }
+    }
+    println!(
+        "      路口 Place 数：{}（来自 {} 段）",
+        intersection_places.len(),
+        segments.len()
+    );
+
+    // 5) 构造 World
+    println!(
+        "[2/5] 构造 World（root map + 21 城 + {} 路口 + {} 边）",
+        intersection_places.len(),
+        segments.len()
+    );
+    let world = build_world(&parsed, &cities, &intersection_places, &segments);
+
+    // 6) 落盘
+    println!("[3/5] 写 world.yaml: {}", parsed.target.display());
+    wv_io::Project::create(&parsed.target, &parsed.name)
+        .map_err(|e| format!("Project::create 失败: {e}"))?;
+    let mut project =
+        wv_io::Project::open(&parsed.target).map_err(|e| format!("Project::open 失败: {e}"))?;
+    println!("[4/5] save_world（全量）…");
+    project
+        .save_world(&world, &[])
+        .map_err(|e| format!("save_world 失败: {e}"))?;
+
+    // 7) 收尾统计
+    println!("[5/5] 完成。");
+    println!("  工程目录:    {}", parsed.target.display());
+    println!("  root_map:   {}", ROOT_MAP_ID);
+    println!("  城市子图:    {}", cities.len());
+    println!("  路口 Place:  {}", intersection_places.len());
+    println!("  PlaceEdge:   {}", segments.len());
+    println!("  City:        {}", cities.len());
+    println!();
+    println!("下一步:");
+    println!("  wv load {}", parsed.target.display());
+    println!("  wv validate {}", parsed.target.display());
+    Ok(())
+}
+
+/// 工程的 root map id（与 `world.yaml.root_map` 同名）。
+const ROOT_MAP_ID: &str = "map_guangdong";
+
+/// 把 `(lat, lon)` 投到 root map 的局部坐标（wu 单位）。
+///
+/// bbox 是 geographic_source 的经纬度范围；extent 是 root map 的 wu 范围。
+/// 返回 `(x, y)`，左上角为原点。
+fn project_lat_lon_to_xy(
+    lat: f64,
+    lon: f64,
+    bbox: &wv_core::LatLonBbox,
+    extent: &wv_core::map::Extent,
+) -> (f32, f32) {
+    let u = ((lon - bbox.west) / (bbox.east - bbox.west)).clamp(0.0, 1.0);
+    // 注意：Y 轴向下递增，纬度越大越靠上 → 屏幕 y 越小。
+    let v = (1.0 - (lat - bbox.south) / (bbox.north - bbox.south)).clamp(0.0, 1.0);
+    (u as f32 * extent.width, v as f32 * extent.height)
+}
+
+/// 把 Overture UUID 缩短为 12 hex 字符（取 UUID 头三段）——用作 Place.id 后缀。
+///
+/// UUID 形如 `79907159-398d-4f15-ae7a-ac4035e08c83`，头三段是
+/// `79907159398d4f15ae7aac4035e08c83` 的前 12 字符。`[A-Za-z0-9_]` 字符集 OK。
+fn short_id_from_uuid(uuid: &str) -> String {
+    uuid.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(12)
+        .collect()
+}
+
+/// 构造完整的 World（root map + 21 城子图 + Places + PlaceEdges）。
+#[allow(clippy::too_many_lines)]
+fn build_world(
+    args: &ApplyArgs,
+    cities: &[(String, String, f64, f64)],
+    intersection_places: &[(String, String)],
+    segments: &[SegmentWithConnectors],
+) -> wv_core::World {
+    // ---- 1) 计算 bbox（取城市 min/max 经纬度，外扩 0.5° 缓冲）---------
+    let bbox = compute_bbox(cities);
+    let extent_root = wv_core::map::Extent::sized(4096.0, 4096.0);
+    let extent_city = wv_core::map::Extent::sized(1024.0, 1024.0);
+
+    // ---- 2) 构造 root map ------------------------------------------------
+    let mut root = wv_core::map::MapNode {
+        id: wv_core::Id::new_unchecked(ROOT_MAP_ID),
+        name: args.name.clone(),
+        level: wv_core::map::MapLevel::World,
+        extent: Some(extent_root),
+        base: Some(wv_core::map::MapBase::Ocean),
+        ..Default::default()
+    };
+    root.geographic_source = Some(wv_core::GeographicSourceV1 {
+        theme: "transportation".into(),
+        bbox,
+        data_path: relative_geojson_path(args),
+        release: args.release_tag(),
+    });
+    root.layers = vec![wv_core::map::Layer {
+        id: wv_core::Id::new_unchecked("layer_terrain"),
+        name: "地形".into(),
+        kind: wv_core::map::LayerKind::Terrain,
+        visible: true,
+        locked: false,
+        opacity: 1.0,
+        z: 0,
+        source: Some(format!("maps/{ROOT_MAP_ID}/terrain.bin")),
+    }];
+
+    // ---- 3) 构造 21 个城市子图 + IconSpec + children ---------------------
+    let mut maps: Vec<wv_core::map::MapNode> = vec![root];
+    let mut places: Vec<wv_core::distance::Place> =
+        Vec::with_capacity(cities.len() + intersection_places.len());
+    for (id, name, lat, lon) in cities {
+        let (x, y) = project_lat_lon_to_xy(*lat, *lon, &bbox, &extent_root);
+        let wu_radius = 96.0; // ≈ 城图标在 root map 上的「半径」（~2.3% extent）
+        let half = wu_radius;
+
+        // outline_polygon：围绕 (x, y) 的正方形（4 顶点顺时针）
+        let poly = wv_core::map::GeometryData::Polygon(vec![
+            x - half,
+            y - half,
+            x + half,
+            y - half,
+            x + half,
+            y + half,
+            x - half,
+            y + half,
+        ]);
+
+        let icon_id_str = format!("icon_{id}");
+        maps.push(wv_core::map::MapNode {
+            id: wv_core::Id::new_unchecked(format!("city_{id}")),
+            name: name.clone(),
+            level: wv_core::map::MapLevel::City,
+            parent: Some(wv_core::Id::new_unchecked(ROOT_MAP_ID)),
+            children: Vec::new(),
+            icons: Vec::new(), // 由 root 的 icons 引用
+            layers: Vec::new(),
+            extent: Some(extent_city),
+            raster: None,
+            geographic_source: None,
+            time_span: None,
+            unit_per_km: None,
+            orientation: 0.0,
+            base: Some(wv_core::map::MapBase::Land),
+            outline_polygon: Some(poly),
+        });
+
+        // 挂 IconSpec 到 root.icons + children
+        let root = maps.first_mut().expect("root 在首位");
+        root.children
+            .push(wv_core::Id::new_unchecked(format!("city_{id}")));
+        root.icons.push(wv_core::map::IconSpec {
+            id: wv_core::Id::new_unchecked(icon_id_str),
+            anchor: Some([x / extent_root.width, y / extent_root.height]),
+            shape: wv_core::map::IconShape::Diamond,
+            size: Some(14.0),
+            color: None,
+            drill_into: Some(wv_core::Id::new_unchecked(format!("city_{id}"))),
+        });
+
+        // City Place（带 map + x/y + w/h 锚定）
+        let place_id = format!("place_{id}");
+        let place = wv_core::distance::Place {
+            id: wv_core::Id::new_unchecked(&place_id),
+            name: name.clone(),
+            map: Some(wv_core::Id::new_unchecked(ROOT_MAP_ID)),
+            x: Some(x),
+            y: Some(y),
+            w: Some(wu_radius * 2.0),
+            h: Some(wu_radius * 2.0),
+        };
+        places.push(place);
+    }
+
+    // ---- 4) 路口 Place（无 x/y，纯图节点）-------------------------------
+    for (id, name) in intersection_places {
+        places.push(wv_core::distance::Place {
+            id: wv_core::Id::new_unchecked(id),
+            name: name.clone(),
+            map: None,
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+        });
+    }
+
+    // ---- 5) PlaceEdge -----------------------------------------------------
+    let mut edges: Vec<wv_core::distance::PlaceEdge> = Vec::with_capacity(segments.len());
+    for s in segments {
+        let a = format!("place_int_{}", short_id_from_uuid(&s.connector_a));
+        let b = format!("place_int_{}", short_id_from_uuid(&s.connector_b));
+        // 同一对 (a, b) 可能有多个 segment 共享——id 加序号避免撞 ID。
+        let edge_id = format!(
+            "edge_{}__{}_at_{}",
+            a,
+            b,
+            s.overture_id
+                .as_ref()
+                .map(|o| o.as_str().to_string())
+                .unwrap_or_else(|| "unk".into())
+        );
+        edges.push(wv_core::distance::PlaceEdge {
+            id: wv_core::Id::new_unchecked(edge_id),
+            a: wv_core::Id::new_unchecked(a),
+            b: wv_core::Id::new_unchecked(b),
+            distance_km: s.distance_km,
+            terrain: s.terrain.clone(),
+            bidirectional: true,
+        });
+    }
+
+    // ---- 6) WorldMeta ----------------------------------------------------
+    let meta = wv_core::WorldMeta {
+        name: args.name.clone(),
+        version: "0.1".into(),
+        schema_version: wv_io::CURRENT_SCHEMA_VERSION,
+        root_map: wv_core::Id::new_unchecked(ROOT_MAP_ID),
+        timeline_range: wv_core::TimeSpan::new(1, 2).expect("TimeSpan::new(1,2)"),
+    };
+
+    let distances = wv_core::distance::DistanceGraph {
+        places,
+        edges,
+        vehicles: Vec::new(),
+    };
+
+    wv_core::World {
+        meta: Some(meta),
+        maps,
+        timeline: None,
+        characters: Vec::new(),
+        events: Vec::new(),
+        relations: Vec::new(),
+        distances,
+        seas: Vec::new(),
+        situations: Vec::new(),
+        units: Vec::new(),
+        tracks: Vec::new(),
+        narrations: Vec::new(),
+        factions: Vec::new(),
+        faction_geometry: Vec::new(),
+        regions: Vec::new(),
+        terrains: std::collections::BTreeMap::new(),
+        streets: std::collections::BTreeMap::new(),
+        measurements: std::collections::BTreeMap::new(),
+        buildings: std::collections::BTreeMap::new(),
+    }
+}
+
+/// 计算 bbox：城市 min/max 经纬度外扩 0.5°。
+fn compute_bbox(cities: &[(String, String, f64, f64)]) -> wv_core::LatLonBbox {
+    let pad = 0.5;
+    let mut west = f64::INFINITY;
+    let mut east = f64::NEG_INFINITY;
+    let mut south = f64::INFINITY;
+    let mut north = f64::NEG_INFINITY;
+    for (_id, _name, lat, lon) in cities {
+        west = west.min(*lon);
+        east = east.max(*lon);
+        south = south.min(*lat);
+        north = north.max(*lat);
+    }
+    wv_core::LatLonBbox {
+        west: (west - pad).max(-180.0),
+        east: (east + pad).min(180.0),
+        south: (south - pad).max(-90.0),
+        north: (north + pad).min(90.0),
+    }
+}
+
+/// `--geojson` 在工程目录里的相对路径（写到 `geographic_source.data_path`）。
+fn relative_geojson_path(args: &ApplyArgs) -> std::path::PathBuf {
+    // 取参数路径相对 target 的差；若 geojson 就在 target/overture/ 下，路径更短。
+    let abs_geo = &args.geojson;
+    let abs_target = &args.target;
+    if let Ok(rel) = abs_geo.strip_prefix(abs_target) {
+        rel.to_path_buf()
+    } else {
+        abs_geo.clone()
+    }
+}
+
+/// 从 `--cities` YAML 加载城市列表。
+///
+/// schema（简化版，仅本 CLI 用）：
+/// ```yaml
+/// cities:
+///   - id: guangzhou
+///     name: 广州市
+///     lat: 23.12911
+///     lon: 113.26439
+/// ```
+fn load_cities_from_yaml(path: &Path) -> Result<Vec<(String, String, f64, f64)>, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("读 --cities YAML 失败 {}: {e}", path.display()))?;
+    #[derive(serde::Deserialize)]
+    struct YamlCity {
+        id: String,
+        name: String,
+        lat: f64,
+        lon: f64,
+    }
+    #[derive(serde::Deserialize)]
+    struct YamlDoc {
+        cities: Vec<YamlCity>,
+    }
+    let doc: YamlDoc =
+        serde_yaml::from_str(&text).map_err(|e| format!("解析 --cities YAML 失败: {e}"))?;
+    Ok(doc
+        .cities
+        .into_iter()
+        .map(|c| (c.id, c.name, c.lat, c.lon))
+        .collect())
+}
+
+const APPLY_HELP: &str = "\
+用法: wv overture apply --geojson <path> --target <dir>
+            [--name <name>] [--cities <yaml>]
+            [--road-class motorway,trunk] [--skip-edges]
+
+把已下载 Overture GeoJSON 转成可加载工程目录：
+  - 21 个广东地级市子图（默认；可 --cities 覆盖）
+  - 主要公路 PlaceEdge（motorway+trunk；按 --road-class 调整）
+  - 路口 Place（Overture connector_id 去重，按频次 top-N 截断）
+
+参数:
+  --geojson <path>     已下载 Overture GeoJSON 路径（必填）
+  --target <dir>       目标工程目录（必填；已含 world.yaml 则拒绝）
+  --name <name>        工程名（默认「广东省」）
+  --cities <yaml>      覆盖默认 21 城的 YAML
+  --road-class <list>  逗号分隔的 road class 白名单（默认 motorway,trunk）
+  --skip-edges         只建工程骨架不导边
+
+依赖: wv-overture fetch 已成功跑过（提供 --geojson）
+";
 
 #[cfg(test)]
 mod tests {
@@ -766,5 +1455,295 @@ mod tests {
     fn index_args_rejects_unknown_flag() {
         let v = vec!["--in".into(), "x".into(), "--zoom".into(), "5".into()];
         assert!(IndexArgs::parse(&v).is_err());
+    }
+
+    // --- apply subcommand tests ------------------------------------------
+
+    #[test]
+    fn apply_args_requires_geojson_and_target() {
+        assert!(ApplyArgs::parse(&[]).is_err());
+        let only_geo = vec!["--geojson".into(), "x.geojson".into()];
+        assert!(ApplyArgs::parse(&only_geo).is_err(), "缺 --target 应拒");
+    }
+
+    #[test]
+    fn apply_args_defaults_name_and_road_class() {
+        let v = vec![
+            "--geojson".into(),
+            "x.geojson".into(),
+            "--target".into(),
+            "out".into(),
+        ];
+        let a = ApplyArgs::parse(&v).expect("parse ok");
+        assert_eq!(a.name, "广东省");
+        assert_eq!(
+            a.road_class,
+            vec!["motorway".to_string(), "trunk".to_string()]
+        );
+        assert!(!a.skip_edges);
+    }
+
+    #[test]
+    fn apply_args_parses_road_class_list() {
+        let v = vec![
+            "--geojson".into(),
+            "x.geojson".into(),
+            "--target".into(),
+            "out".into(),
+            "--road-class".into(),
+            "motorway, trunk , primary".into(),
+        ];
+        let a = ApplyArgs::parse(&v).expect("parse ok");
+        assert_eq!(
+            a.road_class,
+            vec![
+                "motorway".to_string(),
+                "trunk".to_string(),
+                "primary".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn apply_args_parses_skip_edges_flag() {
+        let v = vec![
+            "--geojson".into(),
+            "x.geojson".into(),
+            "--target".into(),
+            "out".into(),
+            "--skip-edges".into(),
+        ];
+        let a = ApplyArgs::parse(&v).expect("parse ok");
+        assert!(a.skip_edges);
+    }
+
+    #[test]
+    fn apply_args_rejects_empty_name() {
+        let v = vec![
+            "--geojson".into(),
+            "x.geojson".into(),
+            "--target".into(),
+            "out".into(),
+            "--name".into(),
+            "".into(),
+        ];
+        assert!(ApplyArgs::parse(&v).is_err());
+    }
+
+    #[test]
+    fn apply_args_rejects_unknown_flag() {
+        let v = vec![
+            "--geojson".into(),
+            "x.geojson".into(),
+            "--target".into(),
+            "out".into(),
+            "--bogus".into(),
+        ];
+        assert!(ApplyArgs::parse(&v).is_err());
+    }
+
+    #[test]
+    fn default_guangdong_cities_has_21_unique_ids() {
+        assert_eq!(DEFAULT_GUANGDONG_CITIES.len(), 21, "广东应恰好 21 个地级市");
+        let mut seen = std::collections::HashSet::new();
+        for c in DEFAULT_GUANGDONG_CITIES {
+            assert!(seen.insert(c.id), "城市 id 重复: {}", c.id);
+            assert!(!c.id.is_empty());
+            assert!(!c.name.is_empty());
+            // 字符集 §4.4：[A-Za-z0-9_]
+            for ch in c.id.chars() {
+                assert!(
+                    ch.is_ascii_alphanumeric() || ch == '_',
+                    "id 含非法字符: {ch}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn default_guangdong_cities_lie_within_province_bbox() {
+        // bbox = 109.5,20.2,117.3,25.5（与 GeoJSON 下载 bbox 一致）
+        for c in DEFAULT_GUANGDONG_CITIES {
+            assert!(
+                (109.5..=117.3).contains(&c.lon),
+                "{} lon {} 越界",
+                c.id,
+                c.lon
+            );
+            assert!(
+                (20.2..=25.5).contains(&c.lat),
+                "{} lat {} 越界",
+                c.id,
+                c.lat
+            );
+        }
+    }
+
+    #[test]
+    fn apply_command_skeleton_rejects_missing_geojson_file() {
+        // --geojson 指向不存在的文件 → 拒绝（不在静默创建）。
+        let dir =
+            std::env::temp_dir().join(format!("wv_apply_test_missing_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("project");
+        let v = vec![
+            "--geojson".into(),
+            dir.join("nope.geojson").to_string_lossy().into(),
+            "--target".into(),
+            target.to_string_lossy().into(),
+        ];
+        let err = apply_command(&v).expect_err("missing geojson 应拒");
+        assert!(err.contains("--geojson"), "错误信息应提 --geojson：{err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn apply_command_skeleton_rejects_existing_target() {
+        // --target 已含 world.yaml → 拒绝覆盖。
+        let dir =
+            std::env::temp_dir().join(format!("wv_apply_test_existing_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // 1) 先用一个有效 geojson（哪怕是空 FeatureCollection）骗过 --geojson 校验
+        let geojson = dir.join("fake.geojson");
+        std::fs::write(&geojson, r#"{"type":"FeatureCollection","features":[]}"#).unwrap();
+        // 2) target 里放一个 world.yaml 模拟「已建过工程」
+        let target = dir.join("project");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("world.yaml"), "name: x\nschema_version: 2\n").unwrap();
+
+        let v = vec![
+            "--geojson".into(),
+            geojson.to_string_lossy().into(),
+            "--target".into(),
+            target.to_string_lossy().into(),
+        ];
+        let err = apply_command(&v).expect_err("已含 world.yaml 应拒");
+        assert!(err.contains("world.yaml"), "错误信息应提 world.yaml：{err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 端到端集成：拿一份手工 Overture GeoJSON fixture → apply → 验目录结构。
+    ///
+    /// 测的是「apply 全流程能写出可加载的工程目录」：
+    /// - world.yaml 写入且 schema_version = 2
+    /// - maps/map_<root>/index.yaml 写入且含 `geographic_source`
+    /// - 21 个 city_<id>/index.yaml 都存在
+    /// - distances/places/place_<id>.yaml 写入（至少 21 条城市 Place）
+    /// - distances/edges/edge_*.yaml 写入（motorway 段）
+    /// - 重开 `Project::open` 成功 = 序列化 round-trip OK
+    #[test]
+    fn apply_command_writes_loadable_guangdong_like_project() {
+        // 用一个最小但合法的 Overture segment GeoJSON fixture：
+        // 2 段 motorway 直线（绕开百度深圳一带），覆盖 4 个 connector。
+        let fixture = r#"{
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "id": "11111111-1111-1111-1111-111111111111",
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": [[113.0, 23.0], [113.5, 23.5]]
+                    },
+                    "properties": {
+                        "subtype": "road",
+                        "class": "motorway",
+                        "connectors": [
+                            {"connector_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "at": 0.0},
+                            {"connector_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "at": 1.0}
+                        ]
+                    }
+                },
+                {
+                    "id": "22222222-2222-2222-2222-222222222222",
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": [[113.5, 23.5], [114.0, 24.0]]
+                    },
+                    "properties": {
+                        "subtype": "road",
+                        "class": "trunk",
+                        "connectors": [
+                            {"connector_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "at": 0.0},
+                            {"connector_id": "cccccccc-cccc-cccc-cccc-cccccccccccc", "at": 1.0}
+                        ]
+                    }
+                }
+            ]
+        }"#;
+
+        let dir = std::env::temp_dir().join(format!("wv_apply_e2e_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let geojson = dir.join("fixture.geojson");
+        std::fs::write(&geojson, fixture).unwrap();
+        let target = dir.join("proj");
+        std::fs::create_dir_all(&target).unwrap();
+
+        let v = vec![
+            "--geojson".into(),
+            geojson.to_string_lossy().into(),
+            "--target".into(),
+            target.to_string_lossy().into(),
+        ];
+        apply_command(&v).expect("apply 应成功");
+
+        // 1) world.yaml 存在且 schema_version = 2
+        let world_yaml = target.join("world.yaml");
+        assert!(world_yaml.is_file(), "world.yaml 应落盘");
+        let wtext = std::fs::read_to_string(&world_yaml).unwrap();
+        assert!(
+            wtext.contains("schema_version: 2"),
+            "schema_version 必须为 2"
+        );
+
+        // 2) root map + 21 city submaps
+        let root_index = target.join("maps/map_guangdong/index.yaml");
+        assert!(root_index.is_file(), "root map index.yaml 应在");
+        let rtext = std::fs::read_to_string(&root_index).unwrap();
+        assert!(
+            rtext.contains("geographic_source"),
+            "root 应带 geographic_source"
+        );
+        assert!(
+            rtext.contains("theme: transportation"),
+            "theme 应为 transportation"
+        );
+
+        for c in DEFAULT_GUANGDONG_CITIES {
+            let city_idx = target.join(format!("maps/city_{}/index.yaml", c.id));
+            assert!(city_idx.is_file(), "city_{} index.yaml 应在", c.id);
+        }
+
+        // 3) 21 个城市 Place
+        for c in DEFAULT_GUANGDONG_CITIES {
+            let place_yaml = target.join(format!("distances/places/place_{}.yaml", c.id));
+            assert!(place_yaml.is_file(), "place_{} 应落盘", c.id);
+        }
+
+        // 4) 至少 2 条 PlaceEdge（fixture 给了 2 段 motorway+trunk）
+        let edges_dir = target.join("distances/edges");
+        let edge_count = std::fs::read_dir(&edges_dir)
+            .expect("edges/ 目录应创建")
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|x| x == "yaml"))
+            .count();
+        assert!(
+            edge_count >= 2,
+            "应至少 2 条边（fixture 给了 2 段），实得 {edge_count}"
+        );
+
+        // 5) 重开 Project::open = 序列化 round-trip OK
+        let project = wv_io::Project::open(&target).expect("重开应成功");
+        assert_eq!(project.meta().name, "广东省");
+        assert_eq!(project.meta().schema_version, 2);
+        // summary() 应含 root_map = map_guangdong
+        let summary = project.summary();
+        assert!(
+            summary.contains("map_guangdong"),
+            "summary 应提 root map: {summary}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

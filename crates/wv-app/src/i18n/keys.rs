@@ -733,6 +733,8 @@ pub enum I18nKey {
     CliHelpRasterSlice,
     /// help banner「wv overture fetch ...」+ 描述
     CliHelpOvertureFetch,
+    /// help banner「wv overture apply ...」+ 描述
+    CliHelpOvertureApply,
     /// help banner「wv gui ...」+ 描述
     CliHelpGui,
     /// help banner「wv --help」+ 描述
@@ -813,7 +815,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 362] = [
+    pub const ALL: [I18nKey; 363] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1171,6 +1173,7 @@ impl I18nKey {
         I18nKey::CliHelpValidate,
         I18nKey::CliHelpRasterSlice,
         I18nKey::CliHelpOvertureFetch,
+        I18nKey::CliHelpOvertureApply,
         I18nKey::CliHelpGui,
         I18nKey::CliHelpHelp,
         I18nKey::CliUsageRasterSlice,

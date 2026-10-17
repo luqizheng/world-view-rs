@@ -66,6 +66,86 @@ pub struct GeoJSONProperties {
     pub subtype: String,
     #[serde(default)]
     pub class: String,
+    /// segment 端点连接器（Overture `connectors` 字段，每段最多 2 个）。
+    ///
+    /// 形如 `[{"connector_id": "<uuid>", "at": 0.0}, ...]`——`at` 表示该
+    /// connector 在线段归一化长度上的位置（0 = 起点，1 = 终点）。
+    ///
+    /// `wv overture apply` 借这两个端点把 segment 落成 `PlaceEdge`：
+    /// 每段 → `AddPlaceEdgeCommand { a: connector[0].id, b: connector[1].id, ... }`。
+    #[serde(default)]
+    pub connectors: Vec<GeoJSONConnector>,
+}
+
+/// 单个 connector 端点（Overture `connectors[*]` 元素）。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct GeoJSONConnector {
+    #[serde(default)]
+    pub connector_id: String,
+    #[serde(default)]
+    pub at: f64,
+}
+
+/// 在 [`parse_geojson_segments`] 基础上**额外**返回 connector 端点。
+///
+/// 适用场景：把 Overture segment 落地为 `PlaceEdge`（需要 `a` / `b` 引用）。
+/// 端点数 < 2（缺 connector）的 segment 会被跳过——它们没有可引用的两端。
+pub fn parse_geojson_segments_with_connectors(
+    gj: &GeoJSONFeatureCollection,
+) -> Vec<SegmentWithConnectors> {
+    let mut out = Vec::with_capacity(gj.features.len());
+    for feat in &gj.features {
+        let coords: Vec<GeoCoord> = match &feat.geometry {
+            GeoJSONGeometry::LineString { coordinates } => coordinates
+                .iter()
+                .map(|c| GeoCoord::new(c[0], c[1]))
+                .collect(),
+            _ => continue,
+        };
+        if !should_keep_subtype(&feat.properties.subtype) {
+            continue;
+        }
+        let terrain = match class_to_terrain(&feat.properties.class) {
+            Some(t) => t,
+            None => continue,
+        };
+        if feat.properties.connectors.len() < 2 {
+            continue; // 缺端点 → 不成图
+        }
+        let length_m = sum_haversine(&coords);
+        if length_m <= 0.0 {
+            continue;
+        }
+        // Overture 数据按 `at` 升序：`at=0` 起点、`at=1` 终点；保险起见显式排序。
+        let mut cons = feat.properties.connectors.clone();
+        cons.sort_by(|a, b| a.at.partial_cmp(&b.at).unwrap_or(std::cmp::Ordering::Equal));
+        out.push(SegmentWithConnectors {
+            connector_a: cons[0].connector_id.clone(),
+            connector_b: cons[1].connector_id.clone(),
+            distance_km: (length_m / 1000.0) as f32,
+            terrain: terrain.to_string(),
+            road_class: feat.properties.class.clone(),
+            overture_id: OvertureId::new(&feat.id).ok(),
+        });
+    }
+    out
+}
+
+/// 单条 segment 的「含端点」展开，给 `wv overture apply` 落 `PlaceEdge` 用。
+#[derive(Debug, Clone)]
+pub struct SegmentWithConnectors {
+    /// 起点 connector_id（`at=0`，Overture UUID）。
+    pub connector_a: String,
+    /// 终点 connector_id（`at=1`，Overture UUID）。
+    pub connector_b: String,
+    /// Haversine 累加的线段长。
+    pub distance_km: f32,
+    /// 来自 `class_to_terrain` 的领域 terrain（"road" / "plain" / "mountain" ...）。
+    pub terrain: String,
+    /// Overture `class` 原值（motorway / trunk / primary ...）——CLI `--road-class` 白名单匹配用。
+    pub road_class: String,
+    /// Overture segment UUID（构造失败时为 `None`）。
+    pub overture_id: Option<OvertureId>,
 }
 
 /// GeoJSON FeatureCollection → `PlaceEdgeCandidate` 列表。
