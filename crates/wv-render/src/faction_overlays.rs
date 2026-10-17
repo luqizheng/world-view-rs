@@ -29,9 +29,11 @@ use bevy::render::render_resource::{PrimitiveTopology, VertexFormat};
 
 use crate::layer_frame::LayerFrame;
 use crate::state::{PlaybackState, ViewState, WorldProjection};
+use crate::theme::palette;
 use crate::vector_layers::{build_stroke_batch_mesh, stroke_world_thickness};
 use wv_core::{
-    faction_territories_at, resolved_faction_layers, subordinates_of, Faction, Id, World,
+    faction_territories_at, memberships_of, resolved_faction_layers, subordinates_of, Faction,
+    FactionColorMode, Id, World,
 };
 
 /// 势力填充在 Z 轴上的基调：在矢量层（道路/POI）之上。
@@ -170,8 +172,21 @@ pub fn sync_faction_overlays(
             continue;
         };
 
-        let z = layer_z(layer_def.z, layers.influence.z_offset);
-        let color = faction_color(t.faction);
+        // 同 z 的层按解析顺序（z, id）加一个微小偏移，避免边界同深度 z-fight。
+        let layer_order = resolved.iter().position(|l| l.id == t.layer).unwrap_or(0);
+        let z = layer_z(layer_def.z, layers.influence.z_offset) + layer_order as f32 * 0.0001;
+        let color = if layer_def.color_mode == FactionColorMode::Inherit {
+            let p = palette::colors(view.map_palette).soften_toward.to_srgba();
+            let paper = [
+                (p.red * 255.0).round() as u8,
+                (p.green * 255.0).round() as u8,
+                (p.blue * 255.0).round() as u8,
+            ];
+            inherited_color(world, t.faction, day, paper)
+                .unwrap_or_else(|| faction_color(t.faction))
+        } else {
+            faction_color(t.faction)
+        };
 
         if let Some(fill) = style.fill_alpha {
             let mesh = meshes.add(build_polygon_mesh(t.vertices));
@@ -384,6 +399,21 @@ fn faction_color(faction: &Faction) -> [u8; 3] {
     faction.color.to_rgb().unwrap_or([128, 128, 200])
 }
 
+/// `color_mode = Inherit`：取第一条生效上级边的势力色，向主题纸面混 35%。
+///
+/// 无上级 / 上级不存在 → `None`，调用方回落自身色（V1：缺数据不崩）。
+fn inherited_color(world: &World, faction: &Faction, day: i64, paper: [u8; 3]) -> Option<[u8; 3]> {
+    let m = memberships_of(world, &faction.id, day).into_iter().next()?;
+    let parent = world.factions.iter().find(|f| f.id == m.target)?;
+    let base = faction_color(parent);
+    let mix = |a: u8, b: u8| (a as f32 * 0.65 + b as f32 * 0.35).round() as u8;
+    Some([
+        mix(base[0], paper[0]),
+        mix(base[1], paper[1]),
+        mix(base[2], paper[2]),
+    ])
+}
+
 /// 由扁平 `[x0, y0, x1, y1, ..., xn, yn]` 顶点构造一个**扇形三角化**的 mesh。
 ///
 /// 中心 = 首顶点（v0），所有三角形共享它：`[(v0, v_i, v_{i+1}) for i in 1..n-1]`。
@@ -423,7 +453,7 @@ mod tests {
     use super::*;
     use wv_core::map::{GeometryData, GeometrySpan};
     use wv_core::time::TimeSpan;
-    use wv_core::{Color, FactionColorMode, FactionLayer};
+    use wv_core::{Color, FactionLayer, Membership};
 
     fn square() -> Vec<f32> {
         vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0]
@@ -482,6 +512,34 @@ mod tests {
     fn faction_color_parses_hex() {
         let f = Faction::new(Id::new_unchecked("f1"), "F1", Color("#FF0000".into()));
         assert_eq!(faction_color(&f), [0xFF, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn inherit_takes_parent_color_mixed_with_paper() {
+        let mut w = World::default();
+        let parent = Faction::new(Id::new_unchecked("parent"), "P", Color("#000000".into()));
+        let mut child = Faction::new(Id::new_unchecked("child"), "C", Color("#FFFFFF".into()));
+        child.memberships.push(Membership {
+            target: Id::new_unchecked("parent"),
+            kind: None,
+            span: TimeSpan::open(1),
+        });
+        w.factions.push(parent);
+        w.factions.push(child);
+        let c = inherited_color(&w, &w.factions[1], 5, [255, 255, 255]).expect("parent exists");
+        // parent 0 × 0.65 + paper 255 × 0.35 = 89.25 → 89。
+        assert!((c[0] as i32 - 89).abs() <= 1, "got {c:?}");
+    }
+
+    #[test]
+    fn inherit_without_parent_falls_back_to_none() {
+        let mut w = World::default();
+        let child = Faction::new(Id::new_unchecked("child"), "C", Color("#FFFFFF".into()));
+        w.factions.push(child);
+        assert_eq!(
+            inherited_color(&w, &w.factions[0], 5, [255, 255, 255]),
+            None
+        );
     }
 
     #[test]
