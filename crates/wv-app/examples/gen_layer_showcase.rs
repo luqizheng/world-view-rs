@@ -406,6 +406,7 @@ fn build_world(meta: WorldMeta) -> World {
         owner: Id::new(owner).unwrap(),
         span: TimeSpan { from, to: Some(to) },
         geometry: GeometryData::Polygon(poly.to_vec()),
+        relation: None,
     };
     world.faction_geometry = vec![
         // 北府早期版图（day < 120）：北境大块。

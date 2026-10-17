@@ -283,7 +283,7 @@ impl CommandRegistry {
             None,
         );
 
-        // 视图（2026-10-14 起只列 BROWSING 两种，与顶栏分段控件同源）
+        // 视图（BROWSING 三项：矢量地形 / 色块地形 / 势力图，与顶栏同源）
         for (i, mode) in crate::state::ViewMode::BROWSING.iter().enumerate() {
             push(
                 CommandId::SetViewMode(i as u8),
@@ -291,10 +291,11 @@ impl CommandRegistry {
                 match mode {
                     crate::state::ViewMode::VectorFlat => I18nKey::CmdSwitchVectorFlatView,
                     crate::state::ViewMode::Schematic => I18nKey::CmdSwitchSchematicView,
+                    crate::state::ViewMode::Faction => I18nKey::CmdSwitchFactionView,
                     // BROWSING 之外的模式不再注册（枚举变体仍在，见 state.rs）。
                     _ => continue,
                 },
-                Some(["1", "2"][i]),
+                Some(["1", "2", "3"][i]),
             );
         }
         push(
@@ -591,8 +592,8 @@ mod tests {
                 "浏览视图模式 {i} 未注册命令"
             );
         }
-        // 2026-10-14 收敛：BROWSING 之外的模式不占命令面板（两种 → 只有 0/1）。
-        assert!(!all.iter().any(|c| c.id == CommandId::SetViewMode(2)));
+        // ADR-0027 D6：BROWSING 之外的模式不占命令面板（三项 → 只有 0/1/2）。
+        assert!(!all.iter().any(|c| c.id == CommandId::SetViewMode(3)));
     }
 
     #[test]

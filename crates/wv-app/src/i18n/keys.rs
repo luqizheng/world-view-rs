@@ -633,6 +633,8 @@ pub enum I18nKey {
     CmdSwitchVectorFlatView,
     /// 「切换到色块地形视图」
     CmdSwitchSchematicView,
+    /// 「切换到势力图」（ADR-0027 D6）
+    CmdSwitchFactionView,
     /// 「全览地图（视野归位）」
     CmdFitMap,
     /// 「放大地图」
@@ -931,7 +933,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 391] = [
+    pub const ALL: [I18nKey; 392] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1239,6 +1241,7 @@ impl I18nKey {
         I18nKey::CmdProjectSettings,
         I18nKey::CmdSwitchVectorFlatView,
         I18nKey::CmdSwitchSchematicView,
+        I18nKey::CmdSwitchFactionView,
         I18nKey::CmdFitMap,
         I18nKey::CmdZoomIn,
         I18nKey::CmdZoomOut,

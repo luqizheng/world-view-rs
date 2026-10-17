@@ -491,6 +491,12 @@ cargo run -p wv-app --features http -- gui --http-bind 127.0.0.1 --http-port 900
 > 现将 main 侧三条**重编号为 33/34/35**（palette.yaml / 建筑 / ui-layout），
 > 分支侧 30–32 不变，标签碰撞条目补录为 36。内容均未改动。
 
+42. **势力归属反向索引的失效策略（ADR-0027 T1）**：v1 `memberships_of` / `subordinates_of` 直接扫描全部势力（N 小）；`MembershipIndex` 反向索引的 build 时机 / 增量失效未定。关闭条件：势力/边数量超过 1 万的工程实测出现卡顿，或决定永久直接扫描。
+43. **贵族领地是否从归属派生（ADR-0027 T2）**：v1 贵族自持多边形（与省份重叠合法）；「territory = 自有 ∪ 下属领地」的派生（不重复几何）未做。关闭条件：作者反馈重复绘制同一块地不可接受，或边界并集算法落地。
+44. **每个势力层是否生成独立图层条目（ADR-0027 T3）**：v1 用 `Influence` 总开关 + 面板层选择器；ADR-0001 原定的「每个 FactionLayer 生成一个 Layer 条目」未做。关闭条件：面板层选择器无法满足「逐层显隐」需求。
+45. **人物是否也能有 memberships（ADR-0027 T6）**：v1 只做 Faction → Faction；`Character.memberships` 扩展未做。关闭条件：作者需要在人物面板里表达「某人效忠/加盟某势力」。
+46. **同一 (map, owner, from) 多条 relation 的文件名（ADR-0027 T7）**：v1 用 FNV-1a 稳定哈希后缀；若作者频繁同日起算 claim/control，文件名可读性差。关闭条件：出现实际工程依赖可读文件名，或改为给 span 加显式 id。
+
 ---
 
 ## 许可证

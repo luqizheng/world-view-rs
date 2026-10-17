@@ -55,6 +55,7 @@ fn square_span(owner: &str) -> GeometrySpan {
         owner: id(owner),
         span: TimeSpan { from: 1, to: None },
         geometry: GeometryData::Polygon(vec![20.0, 20.0, 80.0, 20.0, 80.0, 80.0, 20.0, 80.0]),
+        relation: None,
     }
 }
 

@@ -139,15 +139,18 @@ impl ViewMode {
         ViewMode::Coastline,
     ];
 
-    /// 当前对作者开放的浏览模式（2026-10-14 用户裁定：暂时只显示两种）。
+    /// 当前对作者开放的浏览模式。
     ///
     /// - [`ViewMode::VectorFlat`]：**矢量地形**——Google 地图矢量瓦片式渲染
     ///   （等值线描边 + 类型平涂，水陆边由高度场决定，ADR-0012）；
-    /// - [`ViewMode::Schematic`]：**色块地形**——一格一色，直接呈现每格的地形类型。
+    /// - [`ViewMode::Schematic`]：**色块地形**——一格一色，直接呈现每格的地形类型；
+    /// - [`ViewMode::Faction`]：**势力图**——分层填色 + 边界 + 声称/实控
+    ///   （ADR-0027 D6，2026-10-18 对「只开放两种」的单点例外）。
     ///
     /// 顶栏分段控件、数字快捷键与命令面板都只列这份；其余模式保留在
     /// [`Self::ALL`] 与枚举里（数据层纹理管线仍支持，随时可重新开放）。
-    pub const BROWSING: [ViewMode; 2] = [ViewMode::VectorFlat, ViewMode::Schematic];
+    pub const BROWSING: [ViewMode; 3] =
+        [ViewMode::VectorFlat, ViewMode::Schematic, ViewMode::Faction];
 
     // 顶栏显示名（`label(loc)`）留在 wv-app：i18n 文案查表是外壳关注点
     // （AGENTS §2 依赖方向），应用层以扩展 trait `ViewModeLabelExt` 提供
@@ -1026,14 +1029,12 @@ mod tests {
         assert!(ViewMode::ALL.contains(&ViewMode::GoogleMap));
     }
 
-    /// 2026-10-14 用户裁定：浏览态只开放两种——矢量地形（VectorFlat）与
-    /// 色块地形（Schematic）。顶栏 / 快捷键 / 命令面板都吃这份清单，
-    /// 默认模式必须也在其中，否则数字 1 按下去是空操作。
+    /// 2026-10-18（ADR-0027 D6）：浏览态开放第三项「势力图」。
     #[test]
-    fn browsing_list_offers_exactly_vector_flat_and_schematic() {
+    fn browsing_list_offers_vector_flat_schematic_and_faction() {
         assert_eq!(
             ViewMode::BROWSING,
-            [ViewMode::VectorFlat, ViewMode::Schematic]
+            [ViewMode::VectorFlat, ViewMode::Schematic, ViewMode::Faction]
         );
         assert!(ViewMode::BROWSING.contains(&ViewMode::default()));
     }

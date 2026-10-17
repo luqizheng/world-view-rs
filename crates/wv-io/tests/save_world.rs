@@ -277,6 +277,7 @@ fn faction_geometry_round_trip_via_synthetic_id() {
             to: Some(100),
         },
         geometry: GeometryData::Polygon(vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0]),
+        relation: None,
     });
     world.faction_geometry.push(GeometrySpan {
         map: Id::new_unchecked("map_main"),
@@ -286,6 +287,7 @@ fn faction_geometry_round_trip_via_synthetic_id() {
             to: None,
         },
         geometry: GeometryData::Polygon(vec![1.0, 1.0, 2.0, 1.0, 2.0, 2.0]),
+        relation: None,
     });
     proj.save_world(&world, &["geometry/faction".into()])
         .expect("save geometry");

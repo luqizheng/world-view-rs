@@ -1103,6 +1103,7 @@ fn build_world(
         tracks: Vec::new(),
         narrations: Vec::new(),
         factions: Vec::new(),
+        faction_layers: Vec::new(),
         faction_geometry: Vec::new(),
         place_geometry: Vec::new(),
         regions: Vec::new(),

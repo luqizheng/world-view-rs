@@ -173,6 +173,8 @@ pub fn run(config: AppConfig) {
     // 势力多边形层（S12）：同属「每帧 despawn+spawn 的实体集合」资源，
     // 漏 init 会在首帧 panic（`could not access system parameter`）。
     .init_resource::<faction_overlays::FactionOverlayEntities>()
+    // 势力图呈现（ADR-0027 D6）：当前层 / 其他层边界 / 声称 / focus 的会话状态。
+    .init_resource::<faction_overlays::FactionDisplay>()
     // 事实地界覆盖层（theme overlay）：与势力层同族的「每帧 despawn+spawn」
     // 实体集合资源，漏 init 会在首帧 panic。
     .init_resource::<feature_overlays::FeatureOverlayEntities>()

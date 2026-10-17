@@ -521,6 +521,10 @@ pub struct GeometrySpan {
     pub span: TimeSpan,
     /// 几何数据，WKT 风格或点列，格式待定（见 §13 待决问题）。
     pub geometry: GeometryData,
+    /// 势力领土的语义关系（ADR-0027 D5）：`None` = 实控（control）；
+    /// `"claim"` = 声称；其余自定义字符串。仅 `owner` 为势力时有意义。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relation: Option<String>,
 }
 
 /// 几何数据载体。具体编码是待裁问题，这里先给出最小可用表达。

@@ -44,11 +44,11 @@
 | `Terrain` | 地形底图（分块 / 瓦片图集 / 等值线平涂随模式）+ 参照网格 | 地形栅格（`RasterRef`，§5 二进制例外） | ADR-0013 / 0012 |
 | `Road` | 道路 casing/fill + 街道网 | 手绘落 `source` YAML；真实世界走 Overture 引用 | ADR-0013 / 0010 |
 | `Place` | POI 点标（红点白环）+ 地名标注 | 世界实体 `Place`（ID 引用，不内联） | ADR-0013 |
-| `Influence` | 势力多边形叠加 | 势力几何（faction_overlays） | ADR-0013 |
+| `Influence` | 势力多边形叠加 + 边界（ADR-0027：当前层填色、其他层只画边界、claim 虚线、focus） | 势力几何（faction_overlays） | ADR-0013 / 0027 |
 | `EventPoint` | 事件高亮（Gizmos） | 世界实体 `Event` | ADR-0013 |
 | `Building` | 2.5D 建筑挤出（阴影/侧面/顶面） | `source` → `BuildingLayer` YAML | ADR-0016 §6 |
 | `Label` | 标签层（地名/街名/海名的文本投影） | `source` 只存**配置**（白名单/字号阶梯/上限）；文本由实体经 `label_visible_at` 派生 | ADR-0017 |
-| `Border` | **无消费者**——预留声明位 | — | ADR-0013 §4 负③ |
+| `Border` | **无消费者**——预留声明位；势力边界在 `Influence` 的 Faction pass 内画（ADR-0027 D6），不复用本 kind | — | ADR-0013 §4 负③ / ADR-0027 |
 | `Custom` | **无消费者**——预留声明位 | — | 同上 |
 
 > 基线 `MAP_EDITOR_BASELINE_v1.md` §2.6 曾预想新增 `Faction` kind——实际以 `Influence` 落地（ADR-0013 表为准）。该节为历史讨论记录，按 AGENTS §6.3 不回改。
@@ -202,7 +202,7 @@ Update（MapRenderPlugin chain，plugins.rs）
 
 | # | 缺口 / 待裁 | 出处 |
 |---|---|---|
-| 1 | `Border` / `Custom` 声明位无渲染消费者 | ADR-0013 §4 负③ |
+| 1 | `Border` / `Custom` 声明位无渲染消费者；势力边界在 `Influence` 的 Faction pass 内画（ADR-0027），不是 `Border` 的消费者 | ADR-0013 §4 负③ / ADR-0027 |
 | 2 | `EventPoint` 的 z 偏移不生效（Gizmos 无逐实体 Z） | ADR-0013 §6 |
 | 3 | 轨迹（Track）无 LayerKind 变体，纯会话开关 | ADR-0013 §6 |
 | 4 | 图层面板**只读不写**——`SetLayerVisibilityCommand` 等写回 wv-edit 未做，作者改 YAML 靠手编 | ADR-0013 §6 |

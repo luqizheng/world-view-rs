@@ -609,6 +609,97 @@ pub fn error(fingerprint: impl Into<String>, message: impl Into<String>) -> Diag
     }
 }
 
+// ====== ADR-0027 · 势力层 / 归属边诊断（V1 只提示，不阻止保存） =============
+
+/// 势力层 / 归属边 / 声称实控的结构化诊断。
+///
+/// 全部进入 `diagnose()`（编辑器校验面板），**不进入** `validate()` 的保存闸门：
+/// - 悬空 `layer` / `membership.target` / `seat` → Error（数据坏了，但工程仍能打开）
+/// - 重复 `FactionLayer.id` → Error
+/// - `Membership.span.to < from` → Error
+/// - 归属边成环 → Hint（层级奇怪但仍是作者可表达的世界）
+pub fn derive_faction_diagnostics(world: &wv_core::World) -> Diagnostics {
+    use std::collections::HashSet;
+
+    let mut d = Diagnostics::default();
+    let layer_ids: HashSet<&str> = world.faction_layers.iter().map(|l| l.id.as_str()).collect();
+    let faction_ids: HashSet<&str> = world.factions.iter().map(|f| f.id.as_str()).collect();
+    let place_ids: HashSet<&str> = world
+        .distances
+        .places
+        .iter()
+        .map(|p| p.id.as_str())
+        .collect();
+
+    // 重复层 id（不同文件声明同一个 id）。
+    let mut seen = HashSet::new();
+    for l in &world.faction_layers {
+        if !seen.insert(l.id.as_str()) {
+            d.items.push(error(
+                format!("faction_layer:dup:{}", l.id),
+                format!("势力层 id 重复：{}（多个文件声明了同一个 id）", l.id),
+            ));
+        }
+    }
+
+    for f in &world.factions {
+        if let Some(layer) = &f.layer {
+            if !layer_ids.contains(layer.as_str()) {
+                d.items.push(error(
+                    format!("faction:{}:layer:{}", f.id, layer),
+                    format!(
+                        "势力「{}」引用了不存在的势力层「{}」，将回落默认层",
+                        f.name, layer
+                    ),
+                ));
+            }
+        }
+        if let Some(seat) = &f.seat {
+            if !place_ids.contains(seat.as_str()) {
+                d.items.push(error(
+                    format!("faction:{}:seat:{}", f.id, seat),
+                    format!("势力「{}」的驻地引用了不存在的地点「{}」", f.name, seat),
+                ));
+            }
+        }
+        for m in &f.memberships {
+            if !faction_ids.contains(m.target.as_str()) {
+                d.items.push(error(
+                    format!("faction:{}:membership:{}", f.id, m.target),
+                    format!("势力「{}」的归属边指向不存在的势力「{}」", f.name, m.target),
+                ));
+            }
+            if let Some(to) = m.span.to {
+                if to < m.span.from {
+                    d.items.push(error(
+                        format!(
+                            "faction:{}:membership:{}:{}:inverted",
+                            f.id, m.target, m.span.from
+                        ),
+                        format!(
+                            "势力「{}」→「{}」的归属区间倒置（from {} > to {}）",
+                            f.name, m.target, m.span.from, to
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    for cycle in wv_core::membership_cycles(world) {
+        let path: Vec<&str> = cycle.iter().map(|id| id.as_str()).collect();
+        d.items.push(hint(
+            format!("faction:cycle:{}", path.join(">")),
+            format!(
+                "势力归属成环：{}（层级可表达，但检查是否误连）",
+                path.join(" → ")
+            ),
+        ));
+    }
+
+    d
+}
+
 // ====== ADR-0022 M3 D4 · 跨级一致性 V1 提示 =================================
 
 #[cfg(test)]
@@ -1106,5 +1197,99 @@ mod tests {
         let late = wv_core::factions_at(&world, &map, 300);
         assert_eq!(late.len(), 1, "清廷结束日之后只剩革命军");
         assert_eq!(late[0].0.id.as_str(), "faction_rev");
+    }
+}
+
+#[cfg(test)]
+mod faction_diag_tests {
+    use super::*;
+    use wv_core::{Color, Faction, FactionColorMode, FactionLayer, Id, Membership, TimeSpan};
+
+    fn faction(id: &str) -> Faction {
+        Faction::new(Id::new_unchecked(id), id, Color("#000000".into()))
+    }
+
+    fn membership(target: &str, from: i64, to: Option<i64>) -> Membership {
+        Membership {
+            target: Id::new_unchecked(target),
+            kind: None,
+            span: TimeSpan { from, to },
+        }
+    }
+
+    fn layer(id: &str) -> FactionLayer {
+        FactionLayer {
+            id: Id::new_unchecked(id),
+            name: id.into(),
+            z: 0,
+            color_mode: FactionColorMode::Own,
+            visible: true,
+        }
+    }
+
+    #[test]
+    fn dangling_layer_target_and_seat_are_errors() {
+        let mut w = wv_core::World::default();
+        let mut f = faction("faction_a");
+        f.layer = Some(Id::new_unchecked("layer_missing"));
+        f.seat = Some(Id::new_unchecked("place_missing"));
+        f.memberships.push(membership("faction_missing", 1, None));
+        w.factions.push(f);
+        let d = derive_faction_diagnostics(&w);
+        assert_eq!(
+            d.errors().len(),
+            3,
+            "layer / target / seat 各一条，got {:?}",
+            d.items
+        );
+        assert!(d.hints().is_empty(), "不应有提示，got {:?}", d.hints());
+    }
+
+    #[test]
+    fn duplicate_layer_id_is_an_error() {
+        let mut w = wv_core::World::default();
+        w.faction_layers.push(layer("layer_admin"));
+        w.faction_layers.push(layer("layer_admin"));
+        let d = derive_faction_diagnostics(&w);
+        assert_eq!(d.errors().len(), 1, "got {:?}", d.items);
+        assert!(d.errors()[0].fingerprint.contains("dup"));
+    }
+
+    #[test]
+    fn inverted_membership_span_is_an_error() {
+        let mut w = wv_core::World::default();
+        w.factions.push(faction("faction_a"));
+        let mut b = faction("faction_b");
+        b.memberships.push(membership("faction_a", 10, Some(5)));
+        w.factions.push(b);
+        let d = derive_faction_diagnostics(&w);
+        assert!(
+            d.errors()
+                .iter()
+                .any(|e| e.fingerprint.contains("inverted")),
+            "got {:?}",
+            d.items
+        );
+    }
+
+    #[test]
+    fn membership_cycle_is_a_hint_not_an_error() {
+        let mut w = wv_core::World::default();
+        let mut a = faction("faction_a");
+        a.memberships.push(membership("faction_b", 1, None));
+        let mut b = faction("faction_b");
+        b.memberships.push(membership("faction_a", 1, None));
+        w.factions.extend([a, b]);
+        let d = derive_faction_diagnostics(&w);
+        assert!(
+            d.hints().iter().any(|h| h.fingerprint.contains("cycle")),
+            "got {:?}",
+            d.items
+        );
+        assert!(
+            d.errors().is_empty(),
+            "环本身不产生 Error，got {:?}",
+            d.errors()
+        );
     }
 }

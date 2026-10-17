@@ -180,11 +180,15 @@ fn hotkeys(
     if cmd && shift && input.key_pressed(bevy_egui::egui::Key::I) {
         panels.immersive = !panels.immersive;
     }
-    // 数字 1–2：切换浏览视图模式（2026-10-14 起 BROWSING 只开放两种，
-    // 见 `ViewMode::BROWSING`；其余模式不再占数字键）。
-    for (i, key) in [bevy_egui::egui::Key::Num1, bevy_egui::egui::Key::Num2]
-        .iter()
-        .enumerate()
+    // 数字 1–3：切换浏览视图模式（BROWSING 现行三项：矢量地形 / 色块地形 /
+    // 势力图，见 `ViewMode::BROWSING`；其余模式不占数字键）。
+    for (i, key) in [
+        bevy_egui::egui::Key::Num1,
+        bevy_egui::egui::Key::Num2,
+        bevy_egui::egui::Key::Num3,
+    ]
+    .iter()
+    .enumerate()
     {
         if input.key_pressed(*key) {
             palette.pending = Some(CommandId::SetViewMode(i as u8));

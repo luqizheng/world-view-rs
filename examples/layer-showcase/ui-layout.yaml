@@ -1,9 +1,9 @@
 panels:
   brush:
     x: 12.0
-    y: 414.40625
+    y: 578.0
     width: 274.0
-    height: 385.8125
+    height: 220.0
     collapsed: false
     visible: true
   character:
@@ -15,9 +15,9 @@ panels:
     visible: false
   compass:
     x: 332.0
-    y: 0.0
+    y: 56.0
     width: 216.0
-    height: 835.0
+    height: 300.0
     collapsed: false
     visible: true
   event:
@@ -63,8 +63,8 @@ panels:
     collapsed: false
     visible: false
   timeline:
-    x: 12.0
-    y: 636.0
+    x: 4.0
+    y: 506.40625
     width: 1256.0
     height: 164.0
     collapsed: false
@@ -85,5 +85,5 @@ panels:
     visible: false
 theme: dark
 density: cozy
-map_theme: dusk
+map_theme: daylight
 language: zh

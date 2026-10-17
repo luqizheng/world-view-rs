@@ -167,20 +167,21 @@ fn identity_segment(
     }
 }
 
-/// Browse / Edit 双段：`Browse` → `ViewMode::VectorFlat`（默认浏览）、
-/// `Edit` → `ViewMode::Schematic`（色块格子）。
+/// Browse / Edit / Faction 三段：`Browse` → `ViewMode::VectorFlat`（默认浏览）、
+/// `Edit` → `ViewMode::Schematic`（色块格子）、`Faction` → `ViewMode::Faction`
+/// （ADR-0027 D6 势力图）。
 ///
 /// 数据层 `view.mode` 仍按原枚举流转；命令面板 label 来自 `ViewMode::label()`
 /// （中文），不受影响（v0.3 用户拍板：仅顶栏用英文）。
 fn browse_edit_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
-    let labels = ["Browse", "Edit"];
-    let modes = [ViewMode::VectorFlat, ViewMode::Schematic];
+    let labels = ["Browse", "Edit", "Faction"];
+    let modes = [ViewMode::VectorFlat, ViewMode::Schematic, ViewMode::Faction];
     let active = modes.iter().position(|m| *m == view.mode).unwrap_or(0);
     segmented(
         ui,
         shell,
         "wv_browse_edit",
-        64.0,
+        120.0,
         &labels,
         active,
         font_size::SMALL,
