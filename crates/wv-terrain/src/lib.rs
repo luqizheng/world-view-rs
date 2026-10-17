@@ -29,10 +29,12 @@
 //! | [`intent`] | 写「意图笔刷」——按意图生成山脉 / 高原 / 火山 / 湖 / 河时。 |
 //! | [`isoline`] | 等值线提取 / 折线平滑抽稀（渲染派生，plan v0.1 M2）时。 |
 //!
-//! ## 双通道设计（基线 §2.3）
+//! ## 三通道设计（设计稿 `2026-10-18-world-from-zero-map-design.md` D11/D12）
 //!
-//! 每格存 `(height: i16, terrain: u8)` 双通道，对应 `terrain.bin` 的
-//! 「I16 高度 + U8 类型」。合并在同一个网格里，因为二者总是一起被读写。
+//! 每格存 `(height: i16, surface: u8, biome: u8)` 三通道：
+//! **surface** = 水/陆二值（authoring 真值，由生成动作写入、不由高度推断）、
+//! **height** = 纯海拔、**biome** = 生物群系开放编号。`terrain.bin` 的
+//! 「I16 高度 + U8 地表 + U8 群系」与之对应。
 
 pub mod continent;
 pub mod edit;
@@ -40,12 +42,35 @@ pub mod generate;
 pub mod intent;
 pub mod isoline;
 
-/// 地形类型编号。**刻意用 `u8` 而非枚举**。
+/// 地表二值通道（authoring 真值）。**刻意用 `u8` 常量而非枚举**：
+/// 与栅格二进制逐字节对应，`0` 与全零格（海平面深海）的 `Default` 语义对齐。
 ///
-/// 理由与 D2（势力层）同源：地形类型是**开放集**——Theme Pack 可增减地形种类，
-/// 硬编码枚举会逼出「用不上但必须在枚举里出现」的噪声变体。
-/// 编号 → 名称 → 色值的映射由 Theme Pack 承载，本层只做载体。
-pub type TerrainKind = u8;
+/// 水/陆由**生成动作**（标记、海生成、笔刷）写入，不由高度推断——
+/// 山上的湖（海拔 +10 m）是水，被塑笔刷压到海下的陆格仍是陆
+/// （渲染/笔刷的「湿判定」见 [`edit::is_water_cell`]，两口径分层）。
+pub type Surface = u8;
+/// 水面。
+pub const SURFACE_WATER: Surface = 0;
+/// 陆地。
+pub const SURFACE_LAND: Surface = 1;
+
+/// 生物群系编号（开放集，设计稿 §6.1 的 19 清单 + 工程扩展）。
+///
+/// **占位**：全量常量与编号表由 `biome` 模块冻结（2026-10-18 计划 Task 2）；
+/// 此处先给出本 crate 内部迁移所需的最小集，编号已按冻结表取值。
+pub type Biome = u8;
+/// 无群系（高度派生显示）。
+pub const BIOME_NONE: Biome = 0;
+/// 森林。
+pub const BIOME_FOREST: Biome = 1;
+/// 草原。
+pub const BIOME_GRASSLAND: Biome = 3;
+/// 沙漠。
+pub const BIOME_DESERT: Biome = 5;
+/// 丘陵（意图笔刷戳记与离岸小岛用； continent 分带仍走高度派生）。
+pub const BIOME_HILLS: Biome = 12;
+/// 山地（意图笔刷戳记用）。
+pub const BIOME_MOUNTAINS: Biome = 13;
 
 /// 高度类型。`i16` 足以表达 ±32767 m，覆盖地球极值（plan v0.1 §8 Q1）。
 ///
@@ -53,11 +78,12 @@ pub type TerrainKind = u8;
 /// `wv-terrain` 不感知定标层，**所有写入/读取均按 1 单位 = 1 米**解释。
 pub type Height = i16;
 
-/// 一格地形。高度 + 类型。
+/// 一格地形。海拔 + 地表二值 + 生物群系。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TerrainCell {
     pub height: Height,
-    pub kind: TerrainKind,
+    pub surface: Surface,
+    pub biome: Biome,
 }
 
 /// 栅格地形网格。本 crate 的核心数据结构。
@@ -188,7 +214,8 @@ mod tests {
         let mut g = TerrainGrid::new(4, 3);
         let cell = TerrainCell {
             height: 42,
-            kind: 7,
+            surface: SURFACE_LAND,
+            biome: BIOME_NONE,
         };
         g.set(2, 1, cell);
         // 行优先：2 + 1*4 = 6
@@ -209,7 +236,8 @@ mod tests {
             -5,
             TerrainCell {
                 height: 99,
-                kind: 9,
+                surface: SURFACE_LAND,
+                biome: BIOME_NONE,
             },
         );
         assert_eq!(g.get(0, 0), Some(TerrainCell::default()));
@@ -226,7 +254,11 @@ mod tests {
     #[test]
     fn sample_uv_clamps_at_far_edge() {
         let mut g = TerrainGrid::new(4, 4);
-        let corner = TerrainCell { height: 1, kind: 2 };
+        let corner = TerrainCell {
+            height: 1,
+            surface: SURFACE_LAND,
+            biome: BIOME_DESERT,
+        };
         g.set(3, 3, corner);
         assert_eq!(g.sample_uv(1.0, 1.0), Some(corner), "uv=1.0 应落最后一格");
     }
@@ -234,7 +266,11 @@ mod tests {
     #[test]
     fn sample_world_respects_origin_and_cell_size() {
         let mut g = TerrainGrid::new(10, 10);
-        let cell = TerrainCell { height: 5, kind: 1 };
+        let cell = TerrainCell {
+            height: 5,
+            surface: SURFACE_WATER,
+            biome: BIOME_NONE,
+        };
         g.set(2, 3, cell);
         // origin (100, 200)，cell_size 10 → 格 (2,3) 覆盖 x∈[120,130), y∈[230,240)
         assert_eq!(

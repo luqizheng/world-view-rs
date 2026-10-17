@@ -30,26 +30,12 @@
 
 use std::collections::HashSet;
 
-use crate::edit::is_water_kind;
+use crate::edit::is_water_cell;
 use crate::generate::Perlin;
-use crate::{Height, TerrainCell, TerrainGrid, TerrainKind};
-
-// ---------------------------------------------------------------------------
-// kind 编号（默认主题）
-// ---------------------------------------------------------------------------
-
-/// 以下 kind 编号对应当前默认主题（`wv-app/theme/colors.rs` 的 `CORE_TERRAIN`
-/// 索引）。wv-terrain 的 kind 是开放集（u8），但意图生成必须写**某种**类型——
-/// 在 Theme Pack 化（README §12-30 待裁）之前，先锚定默认编号；换主题时
-/// 这里是唯一的改点。
-/// 浅水（海岸带）。
-pub const KIND_WATER_SHALLOW: TerrainKind = 1;
-/// 草原 / 平原——新露出水面的低地默认给草原。
-pub const KIND_GRASS: TerrainKind = 3;
-/// 丘陵 / 荒原——高原顶面与丘陵区的类型。
-pub const KIND_HILL: TerrainKind = 5;
-/// 山地——山脊与火山锥的类型。
-pub const KIND_MOUNTAIN: TerrainKind = 6;
+use crate::{
+    Height, TerrainCell, TerrainGrid, BIOME_GRASSLAND, BIOME_HILLS, BIOME_MOUNTAINS, BIOME_NONE,
+    SURFACE_LAND, SURFACE_WATER,
+};
 
 // ---------------------------------------------------------------------------
 // 数值常量（各意图）
@@ -421,12 +407,6 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// 水域判定（kind 是水系 **或** 高度在海平面以下——VectorFlat 的海岸线按高度求值，
-/// 两个口径都要守住）。
-fn is_water_cell(c: TerrainCell) -> bool {
-    is_water_kind(c.kind) || c.height < 0
-}
-
 fn clamp_strength(s: f32) -> f32 {
     s.clamp(STRENGTH_MIN, STRENGTH_MAX)
 }
@@ -517,17 +497,21 @@ fn apply_mountain_range(
             if add < 0.5 && !core {
                 continue; // 量太小，不动这格
             }
-            let mut kind = cell0.kind;
+            let mut surface = cell0.surface;
+            let mut biome = cell0.biome;
             if new_h >= 0.0 {
                 if add >= RANGE_KIND_ADD_M {
-                    kind = KIND_MOUNTAIN;
+                    surface = SURFACE_LAND;
+                    biome = BIOME_MOUNTAINS;
                 } else if water0 {
-                    kind = KIND_GRASS; // 新露出水面的低肩是草原
+                    surface = SURFACE_LAND;
+                    biome = BIOME_GRASSLAND; // 新露出水面的低肩是草原
                 }
             }
             let new_cell = TerrainCell {
                 height: to_height(new_h),
-                kind,
+                surface,
+                biome,
             };
             if new_cell != cell0 {
                 grid.set(gx, gy, new_cell);
@@ -592,19 +576,21 @@ fn apply_plateau(
                 }
                 TerrainCell {
                     height: to_height(target.max(40.0)),
-                    kind: KIND_HILL,
+                    surface: SURFACE_LAND,
+                    biome: BIOME_HILLS,
                 }
             } else {
                 let h = (cell0.height as f32).max(target);
-                // 已有更高地形（如山脊穿过高原）不降、也不改类型。
-                let kind = if field >= 0.55 && target > cell0.height as f32 {
-                    KIND_HILL
+                // 已有更高地形（如山脊穿过高原）不降、也不改群系。
+                let biome = if field >= 0.55 && target > cell0.height as f32 {
+                    BIOME_HILLS
                 } else {
-                    cell0.kind
+                    cell0.biome
                 };
                 TerrainCell {
                     height: to_height(h),
-                    kind,
+                    surface: SURFACE_LAND,
+                    biome,
                 }
             };
             if new_cell != cell0 {
@@ -661,10 +647,15 @@ fn apply_hills(
                 continue; // 丘陵只在陆上长（MVP 裁决）
             }
             let bump = HILLS_AMP_M * s * (0.6 + 0.4 * bumps.at01(pn.qx, pn.qy)) * field;
-            let kind = if field >= 0.65 { KIND_HILL } else { cell0.kind };
+            let biome = if field >= 0.65 {
+                BIOME_HILLS
+            } else {
+                cell0.biome
+            };
             let new_cell = TerrainCell {
                 height: to_height(cell0.height as f32 + bump),
-                kind,
+                surface: SURFACE_LAND,
+                biome,
             };
             if new_cell != cell0 {
                 grid.set(gx, gy, new_cell);
@@ -762,17 +753,21 @@ fn apply_volcano(
             if (new_h - h0).abs() < 0.5 {
                 continue;
             }
-            let mut kind = cell0.kind;
+            let mut surface = cell0.surface;
+            let mut biome = cell0.biome;
             if new_h >= 0.0 {
                 if cone_h >= 400.0 {
-                    kind = KIND_MOUNTAIN;
+                    surface = SURFACE_LAND;
+                    biome = BIOME_MOUNTAINS;
                 } else if water0 {
-                    kind = KIND_GRASS;
+                    surface = SURFACE_LAND;
+                    biome = BIOME_GRASSLAND;
                 }
             }
             let new_cell = TerrainCell {
                 height: to_height(new_h),
-                kind,
+                surface,
+                biome,
             };
             if new_cell != cell0 {
                 grid.set(gx, gy, new_cell);
@@ -882,7 +877,8 @@ fn apply_lake(
         };
         let new_cell = TerrainCell {
             height: to_height((cell0.height as f32).min(target)),
-            kind: KIND_WATER_SHALLOW,
+            surface: SURFACE_WATER,
+            biome: BIOME_NONE,
         };
         if new_cell != cell0 {
             grid.set(gx, gy, new_cell);
@@ -984,7 +980,8 @@ fn apply_river(grid: &mut TerrainGrid, pts: &[(f32, f32)], strength: f32, cell_s
         e = e.min(prev - RIVER_DROP_M).max(1.0);
         let new_cell = TerrainCell {
             height: to_height(e),
-            kind: KIND_WATER_SHALLOW,
+            surface: SURFACE_WATER,
+            biome: BIOME_NONE,
         };
         if new_cell != cell0 {
             grid.set(cx, cy, new_cell);
@@ -1177,7 +1174,8 @@ fn apply_plains_region(
             let r = relief.at01(wx, wy) * 2.0 - 1.0;
             let new_cell = TerrainCell {
                 height: to_height(PLAINS_TARGET_M + PLAINS_NOISE_M * r),
-                kind: KIND_GRASS,
+                surface: SURFACE_LAND,
+                biome: BIOME_GRASSLAND,
             };
             if new_cell != cell0 {
                 grid.set(gx, gy, new_cell);
@@ -1231,7 +1229,8 @@ fn apply_lake_region(grid: &mut TerrainGrid, polygon: &[(f32, f32)], cell_size: 
             let target = -LAKE_DEPTH_M * (1.0 - tt * tt) - LAKE_LIP_M;
             let new_cell = TerrainCell {
                 height: to_height((cell0.height as f32).min(target)),
-                kind: KIND_WATER_SHALLOW,
+                surface: SURFACE_WATER,
+                biome: BIOME_NONE,
             };
             if new_cell != cell0 {
                 grid.set(gx, gy, new_cell);
@@ -1249,19 +1248,28 @@ fn apply_lake_region(grid: &mut TerrainGrid, polygon: &[(f32, f32)], cell_size: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{BIOME_NONE, SURFACE_LAND, SURFACE_WATER};
 
-    /// 平坦陆地网格：高度 `h`、类型草原。
+    /// 平坦陆地网格：高度 `h`、陆面草原。
     fn flat_land(w: u32, h: u32, height: i16) -> TerrainGrid {
         let mut g = TerrainGrid::new(w, h);
         for gy in 0..h as i32 {
             for gx in 0..w as i32 {
-                g.set(gx, gy, TerrainCell { height, kind: 3 });
+                g.set(
+                    gx,
+                    gy,
+                    TerrainCell {
+                        height,
+                        surface: SURFACE_LAND,
+                        biome: BIOME_GRASSLAND,
+                    },
+                );
             }
         }
         g
     }
 
-    /// 平坦海面网格：深度 `d`、类型深水。
+    /// 平坦海面网格：深度 `d`、水面。
     fn flat_sea(w: u32, h: u32, depth: i16) -> TerrainGrid {
         let mut g = TerrainGrid::new(w, h);
         for gy in 0..h as i32 {
@@ -1271,7 +1279,8 @@ mod tests {
                     gy,
                     TerrainCell {
                         height: depth,
-                        kind: 0,
+                        surface: SURFACE_WATER,
+                        biome: BIOME_NONE,
                     },
                 );
             }
@@ -1335,7 +1344,7 @@ mod tests {
             "中段 {mid} 应远高于端点 {end}（taper 收尖）"
         );
         assert_eq!(g.get(20, 39).unwrap().height, 0, "远处格不应被动");
-        assert_eq!(g.get(20, 20).unwrap().kind, KIND_MOUNTAIN, "脊上是山地");
+        assert_eq!(g.get(20, 20).unwrap().biome, BIOME_MOUNTAINS, "脊上是山地");
     }
 
     /// 海上拖一道山脉：沿线冒出岛 / 半岛（高度 > 0），远处海不动。
@@ -1353,14 +1362,14 @@ mod tests {
             .count();
         assert!(emerged >= 5, "沿线应至少冒出 5 格陆地，实得 {emerged}");
         assert_eq!(g.get(20, 39).unwrap().height, -200, "远海不应被动");
-        // 成岛处类型必须是陆系（山地或草原），不能是水系挂陆地高度。
+        // 成岛处必须是陆面，不能是水面挂陆地高度。
         for x in 5..=35 {
             if let Some(c) = g.get(x, 20) {
                 if c.height > 0 {
                     assert!(
-                        !is_water_kind(c.kind),
-                        "露出的格 ({x},20) kind={} 应为陆系",
-                        c.kind
+                        c.surface == SURFACE_LAND,
+                        "露出的格 ({x},20) surface={} 应为陆面",
+                        c.surface
                     );
                 }
             }
@@ -1383,11 +1392,7 @@ mod tests {
             (1015..=1205).contains(&top),
             "顶面应在 [1015,1205]，实得 {top}"
         );
-        assert_eq!(
-            g.get(15, 15).unwrap().kind,
-            KIND_HILL,
-            "顶面类型是丘陵/荒原"
-        );
+        assert_eq!(g.get(15, 15).unwrap().biome, BIOME_HILLS, "顶面群系是丘陵");
         let shoulder = g.get(15, 23).unwrap().height; // t≈1.0 的边缘
         assert!(shoulder < top, "边缘 {shoulder} 应低于顶面 {top}");
         assert_eq!(g.get(2, 2).unwrap().height, 0, "远处不动");
@@ -1416,7 +1421,7 @@ mod tests {
         );
         let spread = heights.iter().max().unwrap() - heights.iter().min().unwrap();
         assert!(spread > 30, "丘陵应有起伏（max-min={spread} > 30）");
-        assert_eq!(g.get(15, 15).unwrap().kind, KIND_HILL, "中心类型是丘陵");
+        assert_eq!(g.get(15, 15).unwrap().biome, BIOME_HILLS, "中心群系是丘陵");
     }
 
     /// 海上放火山：成岛（中心 > 0）、有火山口（中心低于环沿）、远处海不动。
@@ -1431,7 +1436,7 @@ mod tests {
         apply_intent(&mut g, &intent, 9, 1.0);
         let center = g.get(25, 25).unwrap();
         assert!(center.height > 0, "中心应成岛，实得 {}", center.height);
-        assert_eq!(center.kind, KIND_MOUNTAIN, "锥体类型是山地");
+        assert_eq!(center.biome, BIOME_MOUNTAINS, "锥体群系是山地");
         // 环沿附近应存在比中心（口底 ≈ 961）高得多的格（环沿 ≈ 1747）。
         let mut rim_max = 0;
         for gy in 22..=28 {
@@ -1468,7 +1473,7 @@ mod tests {
             "碗底应在 [42,50]，实得 {}",
             bottom.height
         );
-        assert_eq!(bottom.kind, KIND_WATER_SHALLOW, "碗内是浅水");
+        assert_eq!(bottom.surface, SURFACE_WATER, "碗内是水面");
         assert_eq!(g.get(2, 2).unwrap().height, 100, "碗外不动");
 
         // 湖心在海上：无操作。
@@ -1496,11 +1501,11 @@ mod tests {
         };
         let touched = apply_intent(&mut g, &intent, 1, 1.0);
         assert!(touched >= 14, "对角链应触及 ≥14 格，实得 {touched}");
-        // 收集链上格（类型被改成浅水的格）。
+        // 收集链上格（地表被改成水面的格）。
         let mut chain = Vec::new();
         for gy in 4..=21 {
             for gx in 4..=21 {
-                if g.get(gx, gy).unwrap().kind == KIND_WATER_SHALLOW {
+                if g.get(gx, gy).unwrap().surface == SURFACE_WATER {
                     chain.push((gx, gy, g.get(gx, gy).unwrap().height));
                 }
             }
@@ -1520,7 +1525,7 @@ mod tests {
             let mut low = i16::MAX;
             for (nx, ny) in [(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)] {
                 if let Some(c) = g.get(nx, ny) {
-                    if c.kind != KIND_WATER_SHALLOW {
+                    if c.surface != SURFACE_WATER {
                         low = low.min(c.height);
                     }
                 }
@@ -1776,7 +1781,7 @@ mod tests {
                     "({gx},{gy}) 应在 60±15 m：got {}",
                     c.height
                 );
-                assert_eq!(c.kind, KIND_GRASS, "平原出草原");
+                assert_eq!(c.biome, BIOME_GRASSLAND, "平原出草原");
             }
         }
         for gy in 0..64i32 {
@@ -1811,7 +1816,7 @@ mod tests {
         assert!(touched > 100, "掩膜内应成湖：touched={touched}");
         let center = g.get(32, 32).expect("湖心在界内");
         assert!(center.height < 0, "湖心应在水面以下：got {}", center.height);
-        assert_eq!(center.kind, KIND_WATER_SHALLOW, "湖面出浅水类型");
+        assert_eq!(center.surface, SURFACE_WATER, "湖面出水面");
         let rim = g.get(21, 32).expect("近边缘格在界内");
         assert!(rim.height < 0, "近边缘仍是水面：got {}", rim.height);
         assert!(
@@ -1864,5 +1869,39 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// 山上挖湖：碗底海拔为正，surface 仍为 WATER（设计稿 D14——水不再必然
+    /// 低于海平面，authoring 真值由 surface 通道承载）。
+    #[test]
+    fn lake_surface_water_survives_positive_height() {
+        let mut grid = TerrainGrid::new(64, 64);
+        // 先铺一块 200 m 高的陆地（surface LAND）。
+        for gy in 0..64 {
+            for gx in 0..64 {
+                grid.set(
+                    gx,
+                    gy,
+                    TerrainCell {
+                        height: 200,
+                        surface: SURFACE_LAND,
+                        biome: BIOME_NONE,
+                    },
+                );
+            }
+        }
+        apply_intent(
+            &mut grid,
+            &Intent::Lake {
+                center: (32.0, 32.0),
+                radius: 8.0,
+                strength: 1.0,
+            },
+            7,
+            1.0,
+        );
+        let c = grid.get(32, 32).unwrap();
+        assert_eq!(c.surface, SURFACE_WATER, "got surface {}", c.surface);
+        assert!(c.height > 0, "got {}", c.height);
     }
 }

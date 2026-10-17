@@ -12,24 +12,38 @@
 //! 否则「可视与实际不符 = 工具失信」。因此衰减函数 [`falloff_weight`] 是本 crate
 //! 的公开 API，`wv-app` 画光标时**调用同一个函数**，禁止另写一份。
 
-use crate::{Height, TerrainGrid, TerrainKind};
+use crate::{Biome, Height, Surface, TerrainCell, TerrainGrid, SURFACE_WATER};
 
-/// 水系 kind 的判定（唯一入口，`kind <= 1` = 深水/浅水）。
+/// **湿判定（唯一入口）**：surface 通道为水，**或**海拔低于海平面。
 ///
-/// **为什么放在 wv-terrain**：水陆二分是地形数据的领域规则，`wv-app` 的
+/// 两层口径（设计稿 D11）：surface 是 authoring 真值——湖在山上（海拔 +10 m）
+/// 仍是水、被塑笔刷压到海下的陆格仍是陆；但渲染海岸线与笔刷高度域对齐
+/// 需要「这格现在是不是湿的」，海拔低于海平面一律按湿处理（与旧
+/// 「kind 水系 ‖ 高度<0」混合判定逐点等价）。
+///
+/// **为什么放在 wv-terrain**：水陆二分是地形数据的领域规则，`wv-render` 的
 /// 轮廓图渲染（`cells.rs`）与笔刷的高度域对齐（[`apply_brush`]）都要用它；
 /// 放在渲染层会让数据层反向引用 UI，放在两处会造成口径漂移。
-pub fn is_water_kind(kind: TerrainKind) -> bool {
-    kind <= 1
+pub fn is_water_cell(c: TerrainCell) -> bool {
+    c.surface == SURFACE_WATER || c.height < 0
 }
 
-/// 涂出海时的保底深度：把陆格改成水系 kind 时，高度一并压到海平面以下。
+/// 涂出海时的保底深度：把陆格改成水面时，高度一并压到海平面以下。
 ///
 /// 不用极深值：与周边海格的高度差太大，VectorFlat 的双线性填充会在笔刷
 /// 边缘拉出陡峭的等值线带。
 pub const PAINT_SEA_DEPTH: Height = -40;
-/// 涂上陆地时的保底高度：把水格改成陆系 kind 时，高度一并抬到海平面以上。
+/// 涂上陆地时的保底高度：把水格改成陆面时，高度一并抬到海平面以上。
 pub const PAINT_LAND_HEIGHT: Height = 40;
+
+/// 一次涂抹要写入的地表目标：surface + biome 二元组（设计稿 D12/D19）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaintTarget {
+    /// 写入的地表二值（水/陆）。
+    pub surface: Surface,
+    /// 写入的生物群系编号（水目标常配 [`crate::BIOME_NONE`]，语义湖/河由标记段承载）。
+    pub biome: Biome,
+}
 
 /// 笔刷形状与参数。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -40,20 +54,20 @@ pub struct Brush {
     pub radius: f32,
     /// 衰减软度。`0` = 硬边（半径内权重恒为 1）；`1` = 完全软边（高斯）。
     pub softness: f32,
-    /// 本次涂抹要写入的地形类型。`None` 表示只改高度、不动类型（如海拔笔刷）。
-    pub kind: Option<TerrainKind>,
+    /// 本次涂抹要写入的地表目标。`None` 表示只改高度、不动地表（如海拔笔刷）。
+    pub target: Option<PaintTarget>,
     /// 本次要施加的高度增量（正=抬升，负=降低）。`0` 表示不动高度。
     pub height_delta: f32,
 }
 
 impl Brush {
-    /// 一个只改地形的圆形软边笔刷。
-    pub fn paint(center: (f32, f32), radius: f32, kind: TerrainKind) -> Self {
+    /// 一个只改地表的圆形软边笔刷。
+    pub fn paint(center: (f32, f32), radius: f32, target: PaintTarget) -> Self {
         Self {
             center,
             radius,
             softness: 0.5,
-            kind: Some(kind),
+            target: Some(target),
             height_delta: 0.0,
         }
     }
@@ -64,7 +78,7 @@ impl Brush {
             center,
             radius,
             softness: 0.7,
-            kind: None,
+            target: None,
             height_delta: amount,
         }
     }
@@ -174,16 +188,17 @@ fn apply_brush(grid: &mut TerrainGrid, brush: &Brush, cell_size: f32) -> usize {
             let Some(mut cell) = grid.get(gx, gy) else {
                 continue; // 越界格跳过（笔刷扫过边缘时的合法情形）
             };
-            // 地形类型：超过 50% 权重才写入——避免软边把边缘涂成半吊子色块。
-            // 高度域随类型对齐（2026-10-14 用户反馈「笔刷涂大地图没变化」）：
-            // VectorFlat 填充的水陆由**高度**决定（海平面 = 0），只写 kind 不写
-            // 高度时，「把海涂成陆地 / 把陆涂成海」在等值线视图下完全不可见，
-            // 笔刷等于失效。此处把跨域格的高度一并推过海平面，同域格不动
-            // （不抹平作者已有的起伏）。
-            if let Some(kind) = brush.kind {
+            // 地表目标：超过 50% 权重才写入——避免软边把边缘涂成半吊子色块。
+            // 高度域随目标对齐（2026-10-14 用户反馈「笔刷涂大地图没变化」）：
+            // VectorFlat 填充的湿判定含「海拔 < 0」（[`is_water_cell`]），只写
+            // surface 不写高度时，「把海涂成陆地 / 把陆涂成海」在等值线视图下
+            // 完全不可见，笔刷等于失效。此处把跨域格的高度一并推过海平面，
+            // 同域格不动（不抹平作者已有的起伏）。
+            if let Some(target) = brush.target {
                 if w >= 0.5 {
-                    cell.kind = kind;
-                    if is_water_kind(kind) {
+                    cell.surface = target.surface;
+                    cell.biome = target.biome;
+                    if target.surface == SURFACE_WATER {
                         if cell.height >= 0 {
                             cell.height = PAINT_SEA_DEPTH;
                         }
@@ -261,6 +276,7 @@ pub fn raise_region(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{BIOME_DESERT, BIOME_FOREST, BIOME_GRASSLAND, BIOME_NONE, SURFACE_LAND};
 
     #[test]
     fn falloff_is_one_at_center_and_zero_outside() {
@@ -293,21 +309,32 @@ mod tests {
     }
 
     #[test]
-    fn paint_writes_terrain_kind_at_center() {
+    fn paint_writes_target_at_center() {
         let mut g = TerrainGrid::new(20, 20);
         // cell_size 1.0，中心 (10.5,10.5) → 格 (10,10)
-        let b = Brush::paint((10.5, 10.5), 5.0, 3);
+        let b = Brush::paint(
+            (10.5, 10.5),
+            5.0,
+            PaintTarget {
+                surface: SURFACE_LAND,
+                biome: BIOME_GRASSLAND,
+            },
+        );
         let touched = paint(&mut g, &b, 1.0);
         assert!(touched > 0, "应有格被涂抹");
-        assert_eq!(g.get(10, 10).unwrap().kind, 3, "中心格类型应被写入");
-        assert_eq!(g.get(0, 0).unwrap().kind, 0, "远角不应被涂");
+        let center = g.get(10, 10).unwrap();
+        assert_eq!(center.biome, BIOME_GRASSLAND, "中心格群系应被写入");
+        assert_eq!(center.surface, SURFACE_LAND, "中心格地表应被写入");
+        let far = g.get(0, 0).unwrap();
+        assert_eq!(far.surface, SURFACE_WATER, "远角不应被涂（保持默认水面）");
+        assert_eq!(far.biome, BIOME_NONE, "远角不应被涂（保持无群系）");
     }
 
     /// 2026-10-14 用户反馈「笔刷涂大地图没变化」的核心修复：在 VectorFlat
-    /// 填充口径下（海平面 = 0，高度赢过类型），把海格涂成陆地时高度必须
+    /// 填充口径下（湿判定含「海拔 < 0」），把海格涂成陆地时高度必须
     /// 一并抬过海平面，否则画面纹丝不动。
     #[test]
-    fn painting_land_kind_over_sea_raises_height_above_sea_level() {
+    fn painting_land_target_over_sea_raises_height_above_sea_level() {
         let mut g = TerrainGrid::new(20, 20);
         // 造一片海：高度压到 -200。
         for gy in 0..20 {
@@ -317,10 +344,17 @@ mod tests {
                 g.set(gx, gy, c);
             }
         }
-        let b = Brush::paint((10.5, 10.5), 5.0, 3);
+        let b = Brush::paint(
+            (10.5, 10.5),
+            5.0,
+            PaintTarget {
+                surface: SURFACE_LAND,
+                biome: BIOME_GRASSLAND,
+            },
+        );
         paint(&mut g, &b, 1.0);
         let cell = g.get(10, 10).unwrap();
-        assert_eq!(cell.kind, 3, "中心格类型应写入");
+        assert_eq!(cell.biome, BIOME_GRASSLAND, "中心格群系应写入");
         assert!(
             cell.height >= 0,
             "海格涂陆后高度应 ≥ 0（海平面），实得 {}",
@@ -329,20 +363,33 @@ mod tests {
     }
 
     #[test]
-    fn painting_water_kind_over_land_lowers_height_below_sea_level() {
+    fn painting_water_target_over_land_lowers_height_below_sea_level() {
         let mut g = TerrainGrid::new(20, 20);
         // 造一片高原陆地：高度抬到 +300。
         for gy in 0..20 {
             for gx in 0..20 {
-                let mut c = g.get(gx, gy).unwrap();
-                c.height = 300;
-                g.set(gx, gy, c);
+                g.set(
+                    gx,
+                    gy,
+                    TerrainCell {
+                        height: 300,
+                        surface: SURFACE_LAND,
+                        biome: BIOME_NONE,
+                    },
+                );
             }
         }
-        let b = Brush::paint((10.5, 10.5), 5.0, 0);
+        let b = Brush::paint(
+            (10.5, 10.5),
+            5.0,
+            PaintTarget {
+                surface: SURFACE_WATER,
+                biome: BIOME_NONE,
+            },
+        );
         paint(&mut g, &b, 1.0);
         let cell = g.get(10, 10).unwrap();
-        assert_eq!(cell.kind, 0, "中心格类型应写入");
+        assert_eq!(cell.surface, SURFACE_WATER, "中心格地表应写入水面");
         assert!(
             cell.height < 0,
             "陆格涂海后高度应 < 0（海平面），实得 {}",
@@ -350,29 +397,49 @@ mod tests {
         );
     }
 
-    /// 同域涂抹不动高度：陆上换类（草原→森林）不得抹平作者已有的起伏。
+    /// 同域涂抹不动高度：陆上换群系（草原→森林）不得抹平作者已有的起伏。
     #[test]
-    fn painting_kind_within_the_same_domain_keeps_height() {
+    fn painting_target_within_the_same_domain_keeps_height() {
         let mut g = TerrainGrid::new(20, 20);
         for gy in 0..20 {
             for gx in 0..20 {
-                let mut c = g.get(gx, gy).unwrap();
-                c.height = 77;
-                g.set(gx, gy, c);
+                g.set(
+                    gx,
+                    gy,
+                    TerrainCell {
+                        height: 77,
+                        surface: SURFACE_LAND,
+                        biome: BIOME_GRASSLAND,
+                    },
+                );
             }
         }
-        let b = Brush::paint((10.5, 10.5), 5.0, 4);
+        let b = Brush::paint(
+            (10.5, 10.5),
+            5.0,
+            PaintTarget {
+                surface: SURFACE_LAND,
+                biome: BIOME_FOREST,
+            },
+        );
         paint(&mut g, &b, 1.0);
-        assert_eq!(g.get(10, 10).unwrap().height, 77, "陆→陆换类不应改高度");
+        assert_eq!(g.get(10, 10).unwrap().height, 77, "陆→陆换群系不应改高度");
     }
 
     #[test]
     fn paint_outside_grid_is_safe() {
         let mut g = TerrainGrid::new(10, 10);
-        let b = Brush::paint((-50.0, -50.0), 5.0, 1);
+        let b = Brush::paint(
+            (-50.0, -50.0),
+            5.0,
+            PaintTarget {
+                surface: SURFACE_WATER,
+                biome: BIOME_NONE,
+            },
+        );
         // 不 panic，且不产生改动。
         paint(&mut g, &b, 1.0);
-        assert_eq!(g.get(0, 0).unwrap().kind, 0);
+        assert_eq!(g.get(0, 0).unwrap().surface, SURFACE_WATER);
     }
 
     #[test]
@@ -393,7 +460,7 @@ mod tests {
             center: (5.5, 5.5),
             radius: 3.0,
             softness: 0.0,
-            kind: None,
+            target: None,
             height_delta: 100_000.0,
         };
         paint(&mut g, &b, 1.0);
@@ -422,10 +489,52 @@ mod tests {
     fn apply_stroke_accumulates_multiple_brushes() {
         let mut g = TerrainGrid::new(30, 30);
         let mut s = Stroke::new();
-        s.push(Brush::paint((5.5, 5.5), 3.0, 1));
-        s.push(Brush::paint((25.5, 25.5), 3.0, 2));
+        s.push(Brush::paint(
+            (5.5, 5.5),
+            3.0,
+            PaintTarget {
+                surface: SURFACE_WATER,
+                biome: BIOME_NONE,
+            },
+        ));
+        s.push(Brush::paint(
+            (25.5, 25.5),
+            3.0,
+            PaintTarget {
+                surface: SURFACE_LAND,
+                biome: BIOME_DESERT,
+            },
+        ));
         apply_stroke(&mut g, &s, 1.0);
-        assert_eq!(g.get(5, 5).unwrap().kind, 1);
-        assert_eq!(g.get(25, 25).unwrap().kind, 2);
+        assert_eq!(g.get(5, 5).unwrap().surface, SURFACE_WATER);
+        assert_eq!(g.get(25, 25).unwrap().biome, BIOME_DESERT);
+    }
+
+    /// 塑笔刷把陆格压到海平面以下：surface 通道保持 LAND（authoring 真值
+    /// 不因海拔翻案），但湿判定按「海拔 < 0」读出湿——设计稿 D11 两层口径。
+    #[test]
+    fn lowered_land_below_sea_level_stays_land_channel_but_reads_wet() {
+        let mut grid = TerrainGrid::new(64, 64);
+        for gy in 0..64 {
+            for gx in 0..64 {
+                grid.set(
+                    gx,
+                    gy,
+                    TerrainCell {
+                        height: 100,
+                        surface: SURFACE_LAND,
+                        biome: BIOME_NONE,
+                    },
+                );
+            }
+        }
+        paint(
+            &mut grid,
+            &Brush::raise_lower((32.0, 32.0), 8.0, -500.0),
+            1.0,
+        );
+        let c = grid.get(32, 32).unwrap();
+        assert_eq!(c.surface, SURFACE_LAND, "got surface {}", c.surface);
+        assert!(is_water_cell(c), "height {} should read wet", c.height);
     }
 }

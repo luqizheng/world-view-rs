@@ -1,4 +1,4 @@
-//! 大陆配方内核：意图包络 + 八参数 + 种子 → 双通道格子写入。
+//! 大陆配方内核：意图包络 + 八参数 + 种子 → 三通道格子写入。
 //!
 //! 裁决出处：`docs/TERRAIN_RENDER_AND_SKETCH_TOOL_PLAN_v0.1.md` §8
 //! 「2026-10-17 · 大陆生成工作流」+ README §12-40。坐标为**图内世界单位**
@@ -11,8 +11,10 @@
 //! - 确定性（D6）：同 `(envelopes, params, seed)` → 逐位一致的网格。
 
 use crate::generate::Perlin;
-use crate::intent::{KIND_GRASS, KIND_HILL, KIND_MOUNTAIN, KIND_WATER_SHALLOW};
-use crate::{TerrainCell, TerrainGrid, TerrainKind};
+use crate::{
+    Biome, Surface, TerrainCell, TerrainGrid, BIOME_DESERT, BIOME_FOREST, BIOME_GRASSLAND,
+    BIOME_HILLS, BIOME_NONE, SURFACE_LAND, SURFACE_WATER,
+};
 
 // ---------------------------------------------------------------------------
 // 八参数（大陆配方属性面板 v1）
@@ -280,14 +282,6 @@ fn envelope_inradius(poly: &[(f32, f32)]) -> f32 {
 // 高度剖面 / 分带 / 融合
 // ---------------------------------------------------------------------------
 
-/// 深水（kind 0）与雪原（kind 7）/ 荒漠沙地（kind 2）/ 森林（kind 4）编号：
-/// `intent.rs` 只锚定了水/草/丘/山四类，其余沿用默认主题
-/// `wv-render/theme/colors.rs` 的 `CORE_TERRAIN` 索引（同上文注释口径）。
-pub(crate) const KIND_WATER_DEEP: TerrainKind = 0;
-pub(crate) const KIND_SAND: TerrainKind = 2;
-pub(crate) const KIND_FOREST: TerrainKind = 4;
-pub(crate) const KIND_SNOW: TerrainKind = 7;
-
 /// 雪线（米）。取山地档缺省峰高（2000 m）之上、高山档峰高（4000 m）之下：
 /// 2000 m 峰顶不盖雪、4000 m 峰顶盖雪，与面板「起伏强度」三档观感自洽。
 const SNOW_LINE_M: i16 = 2600;
@@ -295,9 +289,6 @@ const SNOW_LINE_M: i16 = 2600;
 const MOUNTAIN_MIN_M: i16 = 1200;
 /// 丘陵分带下沿（米）——对齐 `intent::HILLS_AMP_M`（丘陵起伏 300 m）。
 const HILL_MIN_M: i16 = 300;
-/// 浅水与深水的高度分界（米）；仅用于「类型随高度走」的兜底判定，
-/// 真实浅水由大陆架距离带给出（Q5 优先序第一位）。
-const SHALLOW_WATER_MAX_DEPTH_M: i16 = -200;
 
 /// 径向高度剖面：海岸 0 → 中心 `relief.meters()`，内部叠 fBm 起伏。
 ///
@@ -322,20 +313,17 @@ pub(crate) fn land_height(
     h.round().clamp(0.0, i16::MAX as f32) as i16
 }
 
-/// 按高度给出分带类型（无森林/荒漠掩码）——供 [`blended`] 的海岸带使用。
-fn kind_for_height(height_m: i16) -> TerrainKind {
-    if height_m >= SNOW_LINE_M {
-        KIND_SNOW
-    } else if height_m >= MOUNTAIN_MIN_M {
-        KIND_MOUNTAIN
-    } else if height_m >= HILL_MIN_M {
-        KIND_HILL
+/// 按高度给出分带（地表 + 群系，无森林/荒漠掩码）——供 [`blended`] 的海岸带使用。
+///
+/// 雪/山/丘三带写 `BIOME_NONE`：它们本就是**高度阈值派生**的显示带（D16），
+/// 渲染层的 `display_kind` 回退会从同一组阈值复现同色。
+fn surface_biome_for_height(height_m: i16) -> (Surface, Biome) {
+    if height_m >= SNOW_LINE_M || height_m >= MOUNTAIN_MIN_M || height_m >= HILL_MIN_M {
+        (SURFACE_LAND, BIOME_NONE)
     } else if height_m >= 0 {
-        KIND_GRASS
-    } else if height_m > SHALLOW_WATER_MAX_DEPTH_M {
-        KIND_WATER_SHALLOW
+        (SURFACE_LAND, BIOME_GRASSLAND)
     } else {
-        KIND_WATER_DEEP
+        (SURFACE_WATER, BIOME_NONE)
     }
 }
 
@@ -344,12 +332,12 @@ fn fbm01(noise: &Perlin, x: f64, y: f64, octaves: u32) -> f32 {
     ((noise.fbm(x, y, octaves, 2.0, 0.5) * 0.5 + 1.0) as f32).clamp(0.0, 1.0)
 }
 
-/// Q5 优先序分带：大陆架浅水 → 雪原 → 山地 → 丘陵 → 森林 → 荒漠 → 平原；
-/// 水下且不在大陆架带内 → 深水。
+/// Q5 优先序分带：大陆架浅水 → 雪/山/丘（高度派生带，写 `BIOME_NONE`）→
+/// 森林 → 荒漠 → 草原；水下且不在大陆架带内 → 深水。
 ///
 /// `shelf_wu` = 大陆架宽度（世界单位，= `shelf_cells × cell_size`）；
 /// 由调用方换算后传入，保持本函数与格尺寸解耦。
-pub(crate) fn band_kind(
+pub(crate) fn band_surface_biome(
     height_m: i16,
     d: f32,
     params: &ContinentParams,
@@ -357,26 +345,26 @@ pub(crate) fn band_kind(
     p: (f32, f32),
     diag: f32,
     shelf_wu: f32,
-) -> TerrainKind {
+) -> (Surface, Biome) {
     if (-shelf_wu..0.0).contains(&d) {
-        return KIND_WATER_SHALLOW;
+        return (SURFACE_WATER, BIOME_NONE);
     }
     if height_m >= SNOW_LINE_M {
-        return KIND_SNOW;
+        return (SURFACE_LAND, BIOME_NONE);
     }
     if height_m >= MOUNTAIN_MIN_M {
-        return KIND_MOUNTAIN;
+        return (SURFACE_LAND, BIOME_NONE);
     }
     if height_m >= HILL_MIN_M {
-        return KIND_HILL;
+        return (SURFACE_LAND, BIOME_NONE);
     }
     if height_m < 0 {
-        return KIND_WATER_DEEP;
+        return (SURFACE_WATER, BIOME_NONE);
     }
     let scale = (diag * 0.5).max(1.0);
     let forest = fbm01(noise, (p.0 / scale) as f64, (p.1 / scale) as f64, 3);
     if forest < params.forest_cover {
-        return KIND_FOREST;
+        return (SURFACE_LAND, BIOME_FOREST);
     }
     // 荒漠用同族噪声的错位采样，避免与森林掩码完全相关。
     let desert = fbm01(
@@ -386,9 +374,9 @@ pub(crate) fn band_kind(
         3,
     );
     if desert < params.desert_cover {
-        return KIND_SAND;
+        return (SURFACE_LAND, BIOME_DESERT);
     }
-    KIND_GRASS
+    (SURFACE_LAND, BIOME_GRASSLAND)
 }
 
 /// 与既有地形融合：海岸带内按 `falloff_weight` 过渡，内部只增不减。
@@ -400,7 +388,8 @@ pub(crate) fn band_kind(
 pub(crate) fn blended(
     existing: TerrainCell,
     new_height: i16,
-    new_kind: TerrainKind,
+    new_surface: Surface,
+    new_biome: Biome,
     d: f32,
     cell_size: f32,
 ) -> TerrainCell {
@@ -414,17 +403,22 @@ pub(crate) fn blended(
         let h = (existing.height as f32 + (new_height as f32 - existing.height as f32) * w)
             .round()
             .clamp(i16::MIN as f32, i16::MAX as f32) as i16;
-        let kind = if h == new_height {
-            new_kind
+        let (surface, biome) = if h == new_height {
+            (new_surface, new_biome)
         } else {
-            kind_for_height(h)
+            surface_biome_for_height(h)
         };
-        TerrainCell { height: h, kind }
+        TerrainCell {
+            height: h,
+            surface,
+            biome,
+        }
     } else {
         let height = existing.height.max(new_height);
         TerrainCell {
             height,
-            kind: new_kind,
+            surface: new_surface,
+            biome: new_biome,
         }
     }
 }
@@ -509,8 +503,9 @@ pub fn generate_continents(
             let new_cell = if d >= 0.0 {
                 let inradius = winner.and_then(|i| inradii.get(i).copied()).unwrap_or(1.0);
                 let height = land_height(d, inradius, params, &land_noise, p);
-                let kind = band_kind(height, d, params, &land_noise, p, diag, shelf_wu);
-                blended(existing, height, kind, d, cell_size)
+                let (surface, biome) =
+                    band_surface_biome(height, d, params, &land_noise, p, diag, shelf_wu);
+                blended(existing, height, surface, biome, d, cell_size)
             } else if d > -shelf_wu {
                 // 大陆架：深水抬到浅水；既有陆地（含作者先画的岛）原样保留。
                 if existing.height > 0 {
@@ -518,7 +513,8 @@ pub fn generate_continents(
                 }
                 TerrainCell {
                     height: existing.height.max(SHELF_DEPTH_M),
-                    kind: KIND_WATER_SHALLOW,
+                    surface: SURFACE_WATER,
+                    biome: BIOME_NONE,
                 }
             } else if params.islands != IslandDensity::Off {
                 if existing.height > 0 {
@@ -532,9 +528,13 @@ pub fn generate_continents(
                 let height = (ISLAND_HEIGHT_M as f32 * (0.6 + 0.4 * n))
                     .round()
                     .clamp(0.0, i16::MAX as f32) as i16;
+                // 离岸小岛是「低丘陵档，远看一点深色」（v1 写丘陵色槽）——
+                // 写 BIOME_HILLS 保住该视觉身份（高度 96–120 m 不足 300 阈值，
+                // 靠高度派生会掉回草原色）。
                 TerrainCell {
                     height,
-                    kind: KIND_HILL,
+                    surface: SURFACE_LAND,
+                    biome: BIOME_HILLS,
                 }
             } else {
                 continue;
@@ -602,33 +602,29 @@ mod tests {
     }
 
     #[test]
-    fn higher_cells_never_have_lower_priority_kind() {
+    fn higher_cells_never_have_lower_priority_band() {
         let p = ContinentParams {
             forest_cover: 0.0,
             desert_cover: 0.0,
             ..Default::default()
         };
         let n = Perlin::new(7);
-        let rank = |k: TerrainKind| -> u8 {
-            match k {
-                KIND_WATER_DEEP => 0,
-                KIND_WATER_SHALLOW => 1,
-                KIND_SAND => 2,
-                KIND_GRASS => 3,
-                KIND_FOREST => 4,
-                KIND_HILL => 5,
-                KIND_MOUNTAIN => 6,
-                KIND_SNOW => 7,
+        // 分带优先序（旧 kind 槽位语义的延续）：水 1 < 草原 3 < 高度派生带 5。
+        let rank = |sb: (Surface, Biome)| -> u8 {
+            match sb {
+                (SURFACE_WATER, _) => 1,
+                (SURFACE_LAND, BIOME_GRASSLAND) => 3,
+                (SURFACE_LAND, BIOME_NONE) => 5,
                 _ => 255,
             }
         };
         let mut prev = 0u8;
         for h in [0i16, 300, 800, 2200, 4500] {
-            let k = band_kind(h, 500.0, &p, &n, (10.0, 10.0), 200.0, 64.0);
-            let r = rank(k);
+            let sb = band_surface_biome(h, 500.0, &p, &n, (10.0, 10.0), 200.0, 64.0);
+            let r = rank(sb);
             assert!(
                 r >= prev,
-                "高度 {h} m 的类型 {k} 优先序 {r} 低于前档 {prev}"
+                "高度 {h} m 的分带 {sb:?} 优先序 {r} 低于前档 {prev}"
             );
             prev = r;
         }
@@ -638,10 +634,18 @@ mod tests {
     fn blended_interior_never_lowers_existing_land() {
         let existing = TerrainCell {
             height: 800,
-            kind: KIND_HILL,
+            surface: SURFACE_LAND,
+            biome: BIOME_NONE,
         };
         let cell_size = 8.0;
-        let out = blended(existing, 50, KIND_GRASS, 100.0, cell_size);
+        let out = blended(
+            existing,
+            50,
+            SURFACE_LAND,
+            BIOME_GRASSLAND,
+            100.0,
+            cell_size,
+        );
         assert!(
             out.height >= 800,
             "内部（d=100 ≥ 6 格=48）既有陆地 800 不得被压低，got {}",
@@ -655,8 +659,10 @@ mod tests {
         let n = Perlin::new(3);
         let cell_size = 8.0;
         let shelf_wu = p.shelf_cells as f32 * cell_size;
-        let k = band_kind(-40, -2.0 * cell_size, &p, &n, (10.0, 10.0), 200.0, shelf_wu);
-        assert_eq!(k, crate::intent::KIND_WATER_SHALLOW, "大陆架带应为浅水");
+        let (surface, biome) =
+            band_surface_biome(-40, -2.0 * cell_size, &p, &n, (10.0, 10.0), 200.0, shelf_wu);
+        assert_eq!(surface, SURFACE_WATER, "大陆架带应为水面");
+        assert_eq!(biome, BIOME_NONE, "大陆架带不带群系");
     }
 
     #[test]
@@ -752,7 +758,8 @@ mod tests {
             15,
             TerrainCell {
                 height: 900,
-                kind: KIND_HILL,
+                surface: SURFACE_LAND,
+                biome: BIOME_HILLS,
             },
         );
         generate_continents(&mut g, &env, &p, 3, 8.0);
