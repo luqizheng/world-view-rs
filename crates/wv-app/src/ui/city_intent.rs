@@ -132,12 +132,19 @@ pub fn prefill(
 /// 返回 `true` = 建图成功（钻入失败会单独 notice，但不视作提交失败）。
 pub fn commit_city(
     dialog: &CityIntentDialog,
+    playback: &crate::state::PlaybackState,
+    loc: crate::i18n::Locale,
     projection: &mut WorldProjection,
     edit: &mut EditHistory,
     drill: &mut DrillState,
     notice: &mut ShellNotice,
     frame: u64,
 ) -> bool {
+    // 播放中只读（基线 V37，终审 Important 3）。
+    if playback.playing {
+        notice.error("播放中为只读：先暂停再生成城市", frame);
+        return false;
+    }
     let Some(parent_id) = dialog.parent_map.clone() else {
         return false;
     };
@@ -204,10 +211,15 @@ pub fn city_intent_dialog_system(
     mut drill: ResMut<DrillState>,
     _grid: Res<GridConfig>,
     mut notice: ResMut<ShellNotice>,
+    playback: Res<crate::state::PlaybackState>,
     time: Res<Time>,
     startup_req: Res<StartupLoadRequest>,
 ) {
     if !dialog.open || !projection.has_open_project() || startup_req.0.is_some() {
+        return;
+    }
+    // 播放中只读（基线 V37）：不渲染确认按钮路径。
+    if playback.playing {
         return;
     }
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -289,6 +301,8 @@ pub fn city_intent_dialog_system(
     if confirmed
         && commit_city(
             &dialog,
+            &playback,
+            loc,
             &mut projection,
             &mut edit,
             &mut drill,
@@ -576,7 +590,16 @@ mod tests {
         };
 
         assert!(
-            commit_city(&d, &mut projection, &mut edit, &mut drill, &mut notice, 0),
+            commit_city(
+                &d,
+                &crate::state::PlaybackState::default(),
+                crate::i18n::Locale::Zh,
+                &mut projection,
+                &mut edit,
+                &mut drill,
+                &mut notice,
+                0,
+            ),
             "提交应成功"
         );
 
@@ -616,6 +639,60 @@ mod tests {
             drill.trail().last().map(|i| i.as_str()),
             Some("city_test"),
             "确认后应自动钻入城市图"
+        );
+    }
+
+    /// 播放中只读（基线 V37，终审 Important 3）：生成城市在播放期拒绝。
+    #[test]
+    fn commit_city_rejects_during_playback() {
+        let mut world = World::default();
+        world.maps.push(wv_core::map::MapNode {
+            id: wv_core::Id::new_unchecked("world_main"),
+            level: MapLevel::World,
+            ..Default::default()
+        });
+        let mut projection = WorldProjection {
+            world,
+            project_dir: Some("t".into()),
+            dirty: false,
+            load_error: None,
+            selection: None,
+        };
+        let mut edit = EditHistory::default();
+        let mut drill = DrillState::default();
+        drill.ensure_root(&projection.world);
+        let mut notice = ShellNotice::default();
+
+        let d = CityIntentDialog {
+            open: true,
+            parent_map: Some(wv_core::Id::new_unchecked("world_main")),
+            id: "city_pb".into(),
+            ..Default::default()
+        };
+        let playing = crate::state::PlaybackState {
+            playing: true,
+            ..crate::state::PlaybackState::default()
+        };
+        assert!(
+            !commit_city(
+                &d,
+                &playing,
+                crate::i18n::Locale::Zh,
+                &mut projection,
+                &mut edit,
+                &mut drill,
+                &mut notice,
+                0,
+            ),
+            "播放中应拒绝提交"
+        );
+        assert!(
+            !projection
+                .world
+                .maps
+                .iter()
+                .any(|m| m.id.as_str() == "city_pb"),
+            "播放中不得建图"
         );
     }
 }
