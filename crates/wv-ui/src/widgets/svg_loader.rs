@@ -23,9 +23,7 @@
 //! `Startup` 调 `ctx_mut()` 必然 `Err`。**与 `setup_egui_fonts` 同口径**：
 //! 注册在 `PreUpdate` 链 `InitContexts` 之后，重试式 + 资源 marker 防重入。
 //!
-//! 历史来源：拆自原 `crate::ui::widgets`。
-
-#![cfg(feature = "app")]
+//! 历史来源：拆自原 `crate::widgets`。
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};

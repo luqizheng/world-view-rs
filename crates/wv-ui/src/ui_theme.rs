@@ -1,9 +1,8 @@
 ﻿//! 界面主题装配 —— 把 [`crate::ui_tokens`] 的令牌投影成 egui 的 `Visuals`。
-#![cfg(feature = "app")]
 
 //! ## 职责
 //!
-//! - 按当前 [`UiTheme`] 生成整套 egui 视觉样式（[`crate::ui::UiShell`] 读它）。
+//! - 按当前 [`UiTheme`] 生成整套 egui 视觉样式（[`crate::shell::UiShell`] 读它）。
 //! - 令牌值**只来自** [`crate::ui_tokens`]，本文件不出现任何色值常量
 //!   （设计规格 §2.2：色值唯一权威是令牌表）。
 //! - `ui.bg.map` 的注入：地图底衬色交给 Bevy 清屏色，不在 egui 里画。
@@ -12,17 +11,17 @@
 //!
 //! bevy_egui 每帧都可能重建/共享上下文，直接改全局 `Visuals` 会与
 //! egui 默认样式来回打架。我们把样式算成一个 `Visuals` 值，由
-//! [`crate::ui`] 每帧 `ctx.set_visuals(...)` 幂等写入——切换明暗时
+//! wv-app 每帧 `ctx.set_visuals(...)` 幂等写入——切换明暗时
 //! 只是换了令牌来源，幂等写入天然支持热切换（规格 §「双缓冲热交换」的简化版）。
 
 use bevy::prelude::*;
 use bevy_egui::egui;
 
-use crate::theme::ui_tokens::{font_size, radius, Rgb, ShellPalette, UiDensity, UiTheme};
+use crate::ui_tokens::{font_size, radius, Rgb, ShellPalette, UiDensity, UiTheme};
 
 /// 界面主题状态：明暗 + 密度。
 ///
-/// 作为独立 Resource 而不是塞进 [`crate::state::ViewState`]：
+/// 作为独立 Resource 而不是塞进 `ViewState`：
 /// 它是**界面自身**的状态，与世界视图无关（D2 世界色归世界、界面色归界面）。
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UiShellConfig {

@@ -8,6 +8,7 @@ members = [
     "crates/wv-edit",
     "crates/wv-app",
     "crates/wv-render",
+    "crates/wv-ui",
     "crates/wv-theme-chinese-ink",
 ]
 
@@ -32,6 +33,7 @@ wv-io = { path = "crates/wv-io" }
 wv-overture = { path = "crates/wv-overture" }
 wv-edit = { path = "crates/wv-edit" }
 wv-render = { path = "crates/wv-render" }
+wv-ui = { path = "crates/wv-ui" }
 wv-theme-chinese-ink = { path = "crates/wv-theme-chinese-ink" }
 wv-app = { path = "crates/wv-app" }
 

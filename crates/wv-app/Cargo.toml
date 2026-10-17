@@ -31,6 +31,10 @@ wv-terrain = { workspace = true }
 wv-io = { workspace = true }
 wv-edit = { workspace = true }
 wv-render = { workspace = true }
+# ADR-0026：界面控件层（egui 控件 + 界面令牌），**非 optional**——控件层
+# 本体就是 egui，标准 `cargo test --workspace` 必须编译它（消灭 §7.1 盲区）。
+# 不受 `app` feature 门控；`app` 门此后只管 panel / dialog 层。
+wv-ui = { workspace = true }
 wv-overture = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }

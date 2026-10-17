@@ -5,30 +5,25 @@
 //! - [`FloatWindow`] —— **公共浮窗外壳**（自 Figma `42:2` Inspector 面板提取）：
 //!   任何浮层给 `id_salt` + 标题即可装配，不耦合 `Panel` 枚举。层序、自绘
 //!   标题栏、折叠记忆、拖拽把手、缩放角标都在这里收敛。
-//! - [`float_window`] —— `Panel` 枚举特化薄包装：读 `PanelState` 可见性与
+//! - `float_window`（wv-app 域件，ADR-0026 D3） —— `Panel` 枚举特化薄包装：读 `PanelState` 可见性与
 //!   `ui-layout.yaml` 跨会话布局，其余全部委托 [`FloatWindow`]（既有面板
 //!   调用点零改动）。
 //!
 //! [`panel_head`] 是两者共用的自绘标题行（`pub(crate)` 给同目录复用）。
 //!
-//! 历史来源：拆自原 [`crate::ui::widgets`] 中段（D1「面板是客人，地图是主体」 +
+//! 历史来源：拆自原 [`crate::widgets`] 中段（D1「面板是客人，地图是主体」 +
 //! v0.3 Figma 重做后的自绘标题栏）；2026-10-17 按 Figma `42:2` 把外壳提取为
 //! 公共组件并补拖拽把手 / 缩放角标。
-
-#![cfg(feature = "app")]
 
 use std::sync::Arc;
 
 use bevy_egui::egui;
 
-use crate::i18n::Locale;
-use crate::state::{Panel, PanelState};
-use crate::theme::ui_theme::{color32, proportional};
-use crate::theme::ui_tokens::{font_size, radius, space};
-use crate::ui_layout::LayoutFile;
+use crate::ui_theme::{color32, proportional};
+use crate::ui_tokens::{font_size, radius, space};
 
 use super::primitives::{icon_image, BadgeKind};
-use crate::ui::shell::UiShell;
+use crate::shell::UiShell;
 
 /// 浮窗头部图标源：既有面板的几何字符，或 Lucide SVG（Figma `42:2` 形态）。
 #[derive(Clone)]
@@ -41,11 +36,11 @@ pub enum HeadIcon {
 
 /// 通用浮动窗体外壳（公共组件，Figma `42:2`「最外层浮动窗体」的代码对位）。
 ///
-/// 与 [`float_window`] 的分工：后者是 `Panel` 枚举特化（可见性 / 跨会话布局
+/// 与 `float_window`（wv-app 域件，ADR-0026 D3） 的分工：后者是 `Panel` 枚举特化（可见性 / 跨会话布局
 /// 都由 `PanelState` + `ui-layout.yaml` 管），本结构是**解耦版**——未来场景
 /// 编辑器、非面板浮窗直接给 `id_salt` + 标题装配，不必往 `Panel` 枚举里塞变体。
 ///
-/// ## 层序约定（与 [`float_window`] 共享，2026-10-14 固化）
+/// ## 层序约定（与 `float_window`（wv-app 域件，ADR-0026 D3） 共享，2026-10-14 固化）
 ///
 /// 默认 `Order::Middle`：面板互斥点击由 egui「点谁谁置顶」管理，永远压在
 /// Background 面板与 Bevy 地图之上。模态弹窗应显式 `.order(Order::Foreground)`
@@ -160,7 +155,7 @@ impl<'a> FloatWindow<'a> {
                 egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
                     .fill(shell.panel_bg().gamma_multiply(self.alpha))
                     .stroke(egui::Stroke::new(1.0_f32, shell.border_strong()))
-                    .inner_margin(crate::theme::ui_theme::margin_all(0.0))
+                    .inner_margin(crate::ui_theme::margin_all(0.0))
                     .corner_radius(radius::PANEL),
             );
         if let Some(p) = self.default_pos {
@@ -225,70 +220,6 @@ fn paint_resize_grip(ui: &mut egui::Ui, shell: &UiShell) {
     );
 }
 
-/// 浮动面板外壳（`Panel` 特化薄包装）。
-///
-/// 可见性 / 跨会话位置尺寸（`ui-layout.yaml`）/ 沉浸模式淡化在此解析后
-/// 全部委托 [`FloatWindow`]；本帧的拖动结果由 egui 按窗口 `Id` 自己记住，
-/// 并由 [`crate::ui_shell::persist_layout_on_change`] 回写磁盘
-/// （D1：面板是客人，地图是主体）。
-///
-/// ## 层序约定（2026-10-14 用户要求「弹窗/浮动都在最顶层」后固化）
-///
-/// 本外壳**不设** `order`——即 egui 缺省 `Middle`：面板互斥点击由 egui 的
-/// 「点谁谁置顶」管理，且永远压在 egui Background 面板（顶栏/状态栏）与
-/// Bevy 地图之上。模态弹窗（新建地图 / 新建工程 / 命令面板 / 欢迎页 /
-/// 启动加载）在 `Order::Foreground`—— egui 绘制序
-/// `Background < Middle < Foreground < Tooltip`，故弹窗压面板、悬浮提示仍在最上。
-/// 新增浮层时按此表对号入座，不要把弹窗放回 Middle。
-///
-/// ## 标题为什么改成自绘（v0.3 Figma 重做 · 2026-10-15）
-///
-/// 原生 `egui::Window` 的标题栏是「▼ … 标题 … ×」三件套，丢掉了 Figma 的
-/// `icon | title | status | ▼-collapse` 四段式（v0.3 `5E8BCBCmtGAHqk3ORibBlU`），
-/// 也无法把状态徽标（如 `ACTIVE`）放进标题栏。本实现走：
-///
-/// - `egui::Window::title_bar(false)` —— 关掉原生标题栏，标题不进 `Window::new`。
-/// - 自绘 [`panel_head`] 行（`shell.head_h` 密度感知 = Cozy 30 / Compact 26 px；
-///   略窄于原型的 34 px 但保留密度档语义，文字 `font_size::SMALL = 12 px`
-///   与 Figma body 等同）。
-/// - 折叠用 [`egui::collapsing_header::CollapsingState`]（Id = `(id,"head")`），
-///   与 `persist_layout_on_change` 现行读法无缝兼容，跨会话落盘零改动。
-/// - `title_bar(false)` 之后 [`egui::WindowDrag::OnTouch`] 解析为
-///   [`egui::WindowDrag::Anywhere`]（egui 0.36 `window.rs` 注释明文保证），
-///   整面任意位置都能拖动，**不需要**额外写 `area_mut`。
-/// - 关按钮被删：`v0.3` Figma 里浮动面板没有 ×，作者用 `Esc` / 菜单
-///   关掉面板（菜单入口已在顶栏，不在本外壳范围）。
-#[allow(clippy::too_many_arguments)]
-pub fn float_window(
-    ctx: &egui::Context,
-    shell: &UiShell,
-    layouts: &LayoutFile,
-    panels: &mut PanelState,
-    panel: Panel,
-    tag: Option<(BadgeKind, String)>,
-    loc: Locale,
-    body: impl FnOnce(&mut egui::Ui),
-) {
-    if !panels.is_visible(panel) {
-        return;
-    }
-
-    let layout = crate::ui_layout::current_layout(layouts, panels, panel);
-    let id = egui::Id::new(("wv_panel", panel));
-
-    // 沉浸模式：整体淡化但**仍可交互**（D3：状态永不抑制）。
-    let alpha = if panels.immersive { 0.10 } else { 0.96 };
-
-    FloatWindow::new(id, panel.title(loc))
-        .icon(HeadIcon::Char(panel.icon()))
-        .tag(tag)
-        .default_pos(egui::pos2(layout.x, layout.y))
-        .default_size(egui::vec2(layout.width, layout.height))
-        .default_open(!layout.collapsed)
-        .alpha(alpha)
-        .show(ctx, shell, body);
-}
-
 /// 自绘 `panel-head` 行（v0.3 Figma `5E8BCBCmtGAHqk3ORibBlU`，2026-10-17 按
 /// Figma `42:2` 补拖拽把手）：
 ///
@@ -338,7 +269,7 @@ pub(crate) fn panel_head(
     )> = if let Some((kind, text)) = tag {
         let colors = shell.palette.badge((*kind).into());
         let fg = color32(colors.fg);
-        let bg = crate::theme::ui_theme::color32_alpha(colors.fill, colors.fill_alpha);
+        let bg = crate::ui_theme::color32_alpha(colors.fill, colors.fill_alpha);
         let badge_pad = egui::vec2(space::XS * 1.5, 1.0);
         let font = proportional(font_size::MICRO);
         let galley = ui.painter().layout_no_wrap(text.to_string(), font, fg);
@@ -443,7 +374,7 @@ pub(crate) fn panel_head(
 mod tests {
     use super::super::primitives::ICON_CHEVRON_DOWN;
     use super::*;
-    use crate::theme::ui_theme::UiShellConfig;
+    use crate::ui_theme::UiShellConfig;
 
     fn shell() -> UiShell {
         UiShell::new(&UiShellConfig::default())

@@ -1,21 +1,18 @@
 //! 视觉原子 —— 徽标 / 空状态 / 列表项 / 描边 / 图标 tint 中央化 / 最近工程 /
-//! 地形网格 / 工具图标常量。
+//! 工具图标常量。（`terrain_grid` 域件留 wv-app，ADR-0026 D3。）
 //!
 //! 单一职责：**没有状态、没有 egui Window 外壳**，只画 widget 自身。
 //! 浮层（panel 外壳）、按钮（多 style 工厂）、表单（input/select/...）、
 //! SVG 解码器都不在本模块。
 //!
-//! 历史来源：拆自原 [`crate::ui::widgets`] 顶部块。
-
-#![cfg(feature = "app")]
+//! 历史来源：拆自原 [`crate::widgets`] 顶部块。
 
 use bevy_egui::egui;
 
-use crate::i18n::Locale;
-use crate::theme::ui_theme::{color32, mono, proportional};
-use crate::theme::ui_tokens::{font_size, radius, space, BadgeTone};
+use crate::ui_theme::{color32, mono, proportional};
+use crate::ui_tokens::{font_size, radius, space, BadgeTone};
 
-use crate::ui::shell::{terrain_name_at, terrain_swatch, UiShell};
+use crate::shell::UiShell;
 
 // ── 徽标 ─────────────────────────────────────────────────────────────────
 
@@ -56,7 +53,7 @@ impl From<BadgeKind> for BadgeTone {
 pub fn badge(ui: &mut egui::Ui, shell: &UiShell, kind: BadgeKind, text: &str) {
     let colors = shell.palette.badge(kind.into());
     let fg = color32(colors.fg);
-    let bg = crate::theme::ui_theme::color32_alpha(colors.fill, colors.fill_alpha);
+    let bg = crate::ui_theme::color32_alpha(colors.fill, colors.fill_alpha);
     let pad = egui::vec2(space::XS * 1.5, 1.0);
     let font = proportional(font_size::MICRO);
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, fg);
@@ -267,7 +264,7 @@ pub fn icon_image(
 // 提到 widgets 的目的是消除欢迎页 / 命令面板 / 项目菜单里重复写的 list-row
 // 代码（之前三处都用 `ui.allocate_exact_size + painter.text + Image::new`
 // 三件套手工写）。**`time_ago` 是 Figma 原型上的一栏**——之前欢迎页预留了接口
-// 但形参未到，这次跟 [`crate::state::RecentProject::last_opened_at`]
+// 但形参未到，这次跟 `crate::state::RecentProject::last_opened_at`（wv-app）
 // 一并对齐，由 caller 传 `Option<&str>` 字符串进来。
 //
 // 设计量（Figma `00_WelcomeScreen.RecentProjects`）：
@@ -384,53 +381,6 @@ pub fn format_time_ago(at: std::time::Instant, now: std::time::Instant) -> Strin
     }
 }
 
-// ── 笔刷面板用地形网格 ──────────────────────────────────────────────────
-
-/// 地形色块瓷砖网格（2026-10-16 改版：5 列 × 2 行纯色块，26 px 方块）。
-///
-/// 旧版 2 列 × 5 行「色块 + 名称」行高 22 px——名字占掉一半面板宽，
-/// 十种地形竖排近一掌高。改版后名称两处补偿：悬停 `on_hover_text`（逐块），
-/// 选中名由面板段标题常显（`TERRAIN MATERIAL · 草原`）。选中 = 1.5 px
-/// `focus` 金描边（截图验收过的既视感），hover = `hover_bg` 底。
-pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8, loc: Locale) {
-    const SWATCH: f32 = 26.0;
-    egui::Grid::new("terrain_swatches")
-        .num_columns(5)
-        .spacing([space::XS, space::XS])
-        .show(ui, |ui| {
-            for k in 0u8..10 {
-                let name = terrain_name_at(loc, k as usize);
-                let is_sel = *selected == k;
-                let (rect, resp) =
-                    ui.allocate_exact_size(egui::Vec2::splat(SWATCH), egui::Sense::click());
-                let painter = ui.painter();
-                if is_sel {
-                    painter.rect_filled(rect, radius::CONTROL, shell.active_bg());
-                    rect_stroke(
-                        painter,
-                        rect,
-                        radius::CONTROL,
-                        egui::Stroke::new(1.5_f32, shell.focus()),
-                    );
-                } else if resp.hovered() {
-                    painter.rect_filled(rect, radius::CONTROL, shell.hover_bg());
-                }
-                // 16px 色块居中（瓷砖是 26px 命中区，色块小一点留呼吸）。
-                let sw_size = 16.0;
-                let sw = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(sw_size));
-                painter.rect_filled(sw, radius::BADGE, terrain_swatch(k));
-                if resp.clicked() {
-                    *selected = k;
-                }
-                resp.on_hover_text(name);
-                // 5 列换行：10 块 = 2 行。
-                if (k + 1) % 5 == 0 {
-                    ui.end_row();
-                }
-            }
-        });
-}
-
 // ── 工具图标常量 ─────────────────────────────────────────────────────────
 //
 // `include_image!` 内部走 `include_bytes!`，路径**相对于调用它的源文件**，
@@ -439,70 +389,70 @@ pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8, loc: 
 // crates/wv-app/src/ui/，离根只需 2 层，故那里写的是 `../../`。
 
 pub const ICON_PEN: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/pen.svg");
+    egui::include_image!("../../assets/ui/tool_icons/pen.svg");
 pub const ICON_RULER: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/ruler.svg");
+    egui::include_image!("../../assets/ui/tool_icons/ruler.svg");
 pub const ICON_SQUARE: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/square.svg");
+    egui::include_image!("../../assets/ui/tool_icons/square.svg");
 pub const ICON_ERASER: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/eraser.svg");
+    egui::include_image!("../../assets/ui/tool_icons/eraser.svg");
 pub const ICON_ZOOM_IN: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/zoom-in.svg");
+    egui::include_image!("../../assets/ui/tool_icons/zoom-in.svg");
 pub const ICON_ZOOM_OUT: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/zoom-out.svg");
+    egui::include_image!("../../assets/ui/tool_icons/zoom-out.svg");
 pub const ICON_MAXIMIZE: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/maximize.svg");
+    egui::include_image!("../../assets/ui/tool_icons/maximize.svg");
 pub const ICON_CHEVRON_RIGHT: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/chevron-right.svg");
+    egui::include_image!("../../assets/ui/tool_icons/chevron-right.svg");
 pub const ICON_CHEVRON_DOWN: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/chevron-down.svg");
+    egui::include_image!("../../assets/ui/tool_icons/chevron-down.svg");
 pub const ICON_PLAY: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/play.svg");
+    egui::include_image!("../../assets/ui/tool_icons/play.svg");
 pub const ICON_REFRESH: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/refresh-cw.svg");
+    egui::include_image!("../../assets/ui/tool_icons/refresh-cw.svg");
 pub const ICON_SEARCH: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/search.svg");
+    egui::include_image!("../../assets/ui/tool_icons/search.svg");
 pub const ICON_LAYERS: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/layers.svg");
+    egui::include_image!("../../assets/ui/tool_icons/layers.svg");
 pub const ICON_MAP: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/map.svg");
+    egui::include_image!("../../assets/ui/tool_icons/map.svg");
 pub const ICON_BRUSH: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/paintbrush.svg");
+    egui::include_image!("../../assets/ui/tool_icons/paintbrush.svg");
 pub const ICON_GRID: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/layout-grid.svg");
+    egui::include_image!("../../assets/ui/tool_icons/layout-grid.svg");
 pub const ICON_LINE: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/minus.svg");
+    egui::include_image!("../../assets/ui/tool_icons/minus.svg");
 pub const ICON_PENCIL: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/pencil.svg");
+    egui::include_image!("../../assets/ui/tool_icons/pencil.svg");
 pub const ICON_ALERT: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/triangle-alert.svg");
+    egui::include_image!("../../assets/ui/tool_icons/triangle-alert.svg");
 pub const ICON_CHECK: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/circle-check.svg");
+    egui::include_image!("../../assets/ui/tool_icons/circle-check.svg");
 pub const ICON_COMMAND: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/command.svg");
+    egui::include_image!("../../assets/ui/tool_icons/command.svg");
 pub const ICON_MAP_PIN: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/map-pin.svg");
+    egui::include_image!("../../assets/ui/tool_icons/map-pin.svg");
 pub const ICON_GLOBE: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/globe.svg");
+    egui::include_image!("../../assets/ui/tool_icons/globe.svg");
 pub const ICON_PLUS: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/plus.svg");
+    egui::include_image!("../../assets/ui/tool_icons/plus.svg");
 pub const ICON_FOLDER_OPEN: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/folder-open.svg");
+    egui::include_image!("../../assets/ui/tool_icons/folder-open.svg");
 /// 笔刷意图工具图标（地形设计器三行行内瓷砖）。形态两两互异是硬要求——
 /// 瓷砖纯图标，识别全靠形：尖峰(山脉)/平顶(高原)/圆丘(丘陵)/开口锥+射线(火山)/
 /// 水滴(湖)/波线(河)。
 pub const ICON_MOUNTAIN_RANGE: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/mountain-range.svg");
+    egui::include_image!("../../assets/ui/tool_icons/mountain-range.svg");
 pub const ICON_PLATEAU: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/plateau.svg");
+    egui::include_image!("../../assets/ui/tool_icons/plateau.svg");
 pub const ICON_HILLS: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/hills.svg");
+    egui::include_image!("../../assets/ui/tool_icons/hills.svg");
 pub const ICON_VOLCANO: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/volcano.svg");
+    egui::include_image!("../../assets/ui/tool_icons/volcano.svg");
 pub const ICON_LAKE: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/lake.svg");
+    egui::include_image!("../../assets/ui/tool_icons/lake.svg");
 pub const ICON_RIVER: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/ui/tool_icons/river.svg");
+    egui::include_image!("../../assets/ui/tool_icons/river.svg");
 
 // ── 测试 ─────────────────────────────────────────────────────────────────
 
@@ -512,7 +462,7 @@ mod recent_row_and_time_ago_tests {
     //! [`super::format_time_ago`] 的回归。
 
     use super::*;
-    use crate::theme::ui_theme::UiShellConfig;
+    use crate::ui_theme::UiShellConfig;
     use std::time::{Duration, Instant};
 
     fn shell() -> UiShell {
@@ -621,7 +571,7 @@ mod identity_header_tests {
     use super::*;
 
     fn shell() -> UiShell {
-        UiShell::new(&crate::theme::ui_theme::UiShellConfig::default())
+        UiShell::new(&crate::ui_theme::UiShellConfig::default())
     }
 
     fn make_ui(name: &str) -> (egui::Context, egui::Ui) {
