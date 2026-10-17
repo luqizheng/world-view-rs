@@ -420,7 +420,7 @@ mod tests {
     fn triple_click_after_anchor_delete_does_not_delete_twice() {
         let mut s = closed_square();
         handle_click(&mut s, (10.0, 0.0), 10.0, 0.5, 1.0, 12.0); // 单击选中 1 号锚
-        handle_click(&mut s, (10.0, 0.0), 10.15, 0.5, 1.0); // 双击 → 删 1 号（剩 3 点）
+        handle_click(&mut s, (10.0, 0.0), 10.15, 0.5, 1.0, 12.0); // 双击 → 删 1 号（剩 3 点）
                                                             // 第三击落在原 2 号锚（删除后前移为 1）：应只是选中，不得再删。
                                                             // （时刻取 10.3：距首击 0.3 < 0.4s 窗口；避开 10.4-10.0 的 f64 边界。）
         handle_click(&mut s, (10.0, 10.0), 10.3, 0.5, 1.0, 12.0);
