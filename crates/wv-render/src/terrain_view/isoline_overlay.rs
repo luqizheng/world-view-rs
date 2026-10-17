@@ -93,7 +93,8 @@ struct IsolineKey {
     /// 几何相关装饰位 `[coast_halo, river_centerline, ink_sublinear]`
     /// （`ThemePack.treatment` 的子集）。
     treatment: [bool; 3],
-    lod: u8,
+    /// 量化后的 DP 容差档（1/64 格）：缩放跨过量化步长才重算。
+    tol_q: u8,
 }
 
 /// 地形内容指纹（仅进程内缓存比较用，不落盘、不跨进程）：FNV-1a 扫
@@ -177,25 +178,20 @@ impl IsolineOverlay {
     }
 }
 
-/// DP 容差的 LOD 分档（plan Q8：远 0.5 格 / 中 0.25 / 近 0.125）。
+/// DP 抽稀容差（连续档，spec M1/M2）：**近细远粗**。
 ///
-/// ⚠️ 2026-10-15 侧记：本分档与旧 chunk mip 阈值 `[0.5, 0.25]` 同源、疑似同款
-/// 「scale 大 = 近」方向反装（按现行 world-per-px 口径，近观 scale<0.25 反而
-/// 拿最粗容差 0.5，远观恒拿最细 0.125）。mip 已按 texel 屏幕尺寸修正
-/// （`terrain_chunks::select_mip`），本分档**暂未动**——改动会改变描边观感，
-/// 待用户拍板后另行处理。
-fn lod_bucket(scale: f32) -> u8 {
-    if scale >= 0.5 {
-        0
-    } else if scale >= 0.25 {
-        1
-    } else {
-        2
-    }
+/// `view.scale` 口径 = 世界单位/屏幕像素，**大 = 远**（spec §0 三证据）。
+/// `0.5 × scale` 钳到 `[0.125, 0.5]`：锚点 0.25→0.125、0.5→0.25、≥1.0→0.5。
+/// 这同时关掉了 2026-10-15 侧记的「三档方向反装」——连续函数在锚点上即
+/// 方向修正（spec CONTINUOUS_LOD_PLAN_v0.1 §3.2）。
+fn dp_tol_continuous(scale: f32) -> f32 {
+    (0.5 * scale).clamp(0.125, 0.5)
 }
 
-fn dp_tol_for(scale: f32) -> f32 {
-    [0.125, 0.25, 0.5][lod_bucket(scale) as usize]
+/// 容差量化到 1/64 格，作为结构键的一部分：缩放连续变化时只有跨过
+/// 1/64 步长才触发重算（否则逐帧重跑 DP + 建网格）。
+fn tol_quantum(scale: f32) -> u8 {
+    (dp_tol_continuous(scale) * 64.0) as u8
 }
 
 /// 同步等值线叠加层。排在 [`super::terrain_chunks::sync_terrain_chunks`]
@@ -236,7 +232,7 @@ pub fn sync_isoline_overlay(
             treatment.river_centerline,
             treatment.ink_sublinear,
         ],
-        lod: lod_bucket(view.scale),
+        tol_q: tol_quantum(view.scale),
     };
     let structural_same = overlay.key.as_ref() == Some(&key);
     let dirty_pending = tex.chunks_dirty.is_some();
@@ -276,7 +272,7 @@ pub fn sync_isoline_overlay(
     let cell = |x: u32, y: u32| &data.cells[(y * w + x) as usize];
     let coast = height_segments(w, h, |x, y| cell(x, y).height as f32, 0.0);
     let kinds = kind_segments(w, h, |x, y| cell(x, y).kind);
-    let tol = dp_tol_for(view.scale);
+    let tol = dp_tol_continuous(view.scale);
     // 装饰旗标（ADR-0023 D4）：从当前主题包派生。内置两包都是 HAND_DRAWN（全
     // `true`）——所有 gate 分支在 `true` 时走与历史恒开**逐位相同**的路径。
     let treatment = crate::theme::theme_pack::builtin::for_palette(view.map_palette).treatment;
@@ -531,13 +527,36 @@ mod tests {
 
     /// Q8 分档：缩放 1.0 / 0.3 / 0.1 分别落近 / 中 / 远档。
     #[test]
-    fn dp_tolerance_buckets_match_plan_q8() {
-        assert!((dp_tol_for(1.0) - 0.125).abs() < 1e-6);
-        assert!((dp_tol_for(0.3) - 0.25).abs() < 1e-6);
-        assert!((dp_tol_for(0.1) - 0.5).abs() < 1e-6);
-        // 档界与 mip 选级同口径：0.5 归近档、0.25 归中档。
-        assert!((dp_tol_for(0.5) - 0.125).abs() < 1e-6);
-        assert!((dp_tol_for(0.25) - 0.25).abs() < 1e-6);
+    fn continuous_dp_tolerance_hits_anchor_points() {
+        let cases = [
+            (0.1_f32, 0.125_f32), // 深缩（近）→ 钳到最细
+            (0.25, 0.125),        // 恰锚点
+            (0.5, 0.25),          // 恰锚点
+            (1.0, 0.5),           // 恰锚点
+            (4.0, 0.5),           // 远观 → 钳到最粗
+        ];
+        for (scale, want) in cases {
+            let got = dp_tol_continuous(scale);
+            assert!(
+                (got - want).abs() < 1e-6,
+                "scale={scale} 得 {got}，应 {want}"
+            );
+        }
+    }
+
+    /// 量化档位有限：缩放跨越 1/64 容差步长才变档；两端钳位区同档。
+    #[test]
+    fn tol_quantum_changes_only_at_sixty_fourth_steps() {
+        assert_eq!(tol_quantum(0.25), 8, "0.125×64");
+        assert_eq!(tol_quantum(0.1), 8, "钳位区同档");
+        assert_eq!(tol_quantum(1.0), 32, "0.5×64");
+        assert_eq!(tol_quantum(4.0), 32, "钳位区同档");
+        assert!(
+            tol_quantum(0.3) < tol_quantum(0.7),
+            "中间值应分档：{} vs {}",
+            tol_quantum(0.3),
+            tol_quantum(0.7)
+        );
     }
 
     /// 全退化链（空表 / 单点链）→ 无 mesh：渲染层不得插 0 顶点网格
@@ -603,18 +622,23 @@ mod tests {
             size: 512,
             res: 4,
             soften: false,
-            lod: 0,
+            tol_q: 8,
         };
         let same = base.clone();
         assert_eq!(base, same);
         let variants = [
+            // 容差档变 → key 必须不等（缩放跨量化步长要重算）。
+            IsolineKey {
+                tol_q: base.tol_q + 1,
+                ..base.clone()
+            },
             IsolineKey {
                 map: None,
                 size: 512,
                 res: 4,
                 soften: false,
                 treatment: base.treatment,
-                lod: 0,
+                tol_q: 8,
             },
             IsolineKey {
                 map: base.map.clone(),
@@ -622,7 +646,7 @@ mod tests {
                 res: 4,
                 soften: false,
                 treatment: base.treatment,
-                lod: 0,
+                tol_q: 8,
             },
             IsolineKey {
                 map: base.map.clone(),
@@ -630,7 +654,7 @@ mod tests {
                 res: 8,
                 soften: false,
                 treatment: base.treatment,
-                lod: 0,
+                tol_q: 8,
             },
             IsolineKey {
                 map: base.map.clone(),
@@ -638,7 +662,7 @@ mod tests {
                 res: 4,
                 soften: true,
                 treatment: base.treatment,
-                lod: 0,
+                tol_q: 8,
             },
             IsolineKey {
                 map: base.map.clone(),
@@ -646,7 +670,7 @@ mod tests {
                 res: 4,
                 soften: false,
                 treatment: base.treatment,
-                lod: 1,
+                tol_q: 9,
             },
             IsolineKey {
                 map: base.map.clone(),
@@ -654,7 +678,7 @@ mod tests {
                 res: 4,
                 soften: false,
                 treatment: [false, true, true],
-                lod: 0,
+                tol_q: 8,
             },
         ];
         for v in variants {
@@ -676,7 +700,7 @@ mod tests {
             res: 4,
             soften: false,
             treatment: [t.coast_halo, t.river_centerline, t.ink_sublinear],
-            lod: 0,
+            tol_q: 8,
         };
         assert_eq!(
             key_of(day),
