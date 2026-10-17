@@ -758,6 +758,9 @@ impl Project {
             narrations,
             factions,
             faction_geometry,
+            // Place 地界（`geometry/place/`）的读写由 wv-io 的后续步骤接入；
+            // 当前读入为空集合，先保持聚合形状完整（零语义变化）。
+            place_geometry: Vec::new(),
             regions,
             seas,
             terrains,

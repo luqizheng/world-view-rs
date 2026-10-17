@@ -73,6 +73,7 @@ pub use map::unit::Unit;
 pub use model::character::Character;
 pub use model::event::{Event, EventLocation};
 pub use model::faction::{factions_at, Faction};
+pub use model::place_territory::place_territory_at;
 pub use model::region::Region;
 pub use source::building::{Building, BuildingLayer};
 pub use source::geographic_source::{GeographicSourceV1, LatLonBbox};
@@ -186,6 +187,17 @@ pub struct World {
     /// `GeometrySpan.owner` 引用 `factions` 中的 `Faction.id`。
     /// 想要「某时刻某地图上所有势力 + 多边形」走 [`crate::factions_at`]。
     pub faction_geometry: Vec<map::GeometrySpan>,
+    /// Place 的地界几何（[`map::GeometrySpan`]，`owner = Place.id`）。
+    ///
+    /// 与 [`World::faction_geometry`] **同构并列**，不泛化为共用集合（统一
+    /// territory 底座留待将来 ADR）。地界随时间演化 = 追加新 span、不覆盖
+    /// 旧 span（P6/P7）；想要「某时刻某地图上所有地界」走
+    /// [`crate::place_territory_at`]。
+    ///
+    /// `Place` 的锚点 / 范围投影（`x/y/w/h`）由编辑命令经
+    /// [`crate::map::distance::Place::fit_anchor_to_ring`] 同步；本集合是
+    /// 几何真值。
+    pub place_geometry: Vec<map::GeometrySpan>,
     /// 命名区域（ADR-0017 §2.2 · `EntityKind::Region`）。
     ///
     /// §4.5「每实体一文件」：每个区域一个 `regions/<id>.yaml`，几何内联
