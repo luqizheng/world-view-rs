@@ -46,7 +46,9 @@ pub mod svg_loader;
 
 // ── 路径兼容 re-export（保持 `crate::ui::widgets::X` 不变） ───────────────
 pub use button::{button, ButtonContent, ButtonStyle, ToolButton, ToolButtonContent, ToolIcon};
-pub use controls::{field_checkbox, slider_row, DialogWindow, FieldInput, FieldSelect, Switch};
+pub use controls::{
+    field_checkbox, slider, slider_row, DialogWindow, FieldInput, FieldSelect, Switch,
+};
 pub use floater::float_window;
 pub use primitives::{
     badge,

@@ -511,58 +511,6 @@ impl MeasureState {
     }
 }
 
-/// 大陆生成「意图包络」会话态（2026-10-17 大陆生成 UI plan Task 3）。
-///
-/// 包络是**会话态**——不落盘（spec §8「意图包络」）：生成即消费，撤销时经
-/// `ContinentGenerationStash` 回驻留（Task 4）。
-///
-/// 坐标为**当前图局部坐标**（与 [`MeasureState::draft`] 同口径），
-/// 生成时直接交给 `GenerateContinentCommand`。
-#[derive(Resource, Debug, Default, Clone, PartialEq)]
-pub struct ContinentSketch {
-    /// 是否启用画圈工具（工具条瓷砖切换）。
-    pub enabled: bool,
-    /// 已闭合的意图包络（每条 ≥ 3 点）。
-    pub envelopes: Vec<Vec<(f32, f32)>>,
-    /// 正在画的折线（未闭合）。
-    pub active: Option<Vec<(f32, f32)>>,
-    /// 上一次左键落点与时刻（双击收笔判定，`commit_continent_sketch_click` 用）。
-    pub last_click: Option<((f32, f32), f64)>,
-}
-
-impl ContinentSketch {
-    /// 左键落点：追加到当前折线（没有则起笔）。
-    pub fn add_point(&mut self, p: (f32, f32)) {
-        self.active.get_or_insert_with(Vec::new).push(p);
-    }
-
-    /// 收笔：≥ 3 点才成一条包络，否则丢弃并返回 false。
-    ///
-    /// 「≥3」是内核的硬前提（退化多边形零改动），在交互层就挡住，
-    /// 作者不会得到一个点了三次却没反应的谜。
-    pub fn try_close(&mut self) -> bool {
-        match self.active.take() {
-            Some(pts) if pts.len() >= 3 => {
-                self.envelopes.push(pts);
-                true
-            }
-            Some(_) => false,
-            None => false,
-        }
-    }
-
-    /// Esc / 切工具：丢弃未闭合的折线，已闭合包络保留。
-    pub fn discard_active(&mut self) {
-        self.active = None;
-    }
-
-    /// 生成即消费：取走全部包络并清空。
-    pub fn take_envelopes(&mut self) -> Vec<Vec<(f32, f32)>> {
-        self.active = None;
-        std::mem::take(&mut self.envelopes)
-    }
-}
-
 /// 选择工具会话态（2026-10-17 选择工具 spec §3；M1 Task 1）。
 ///
 /// pen 方法的数据底座：草稿锚点（Drawing）与闭合选区（Closed）二态互斥——
@@ -582,7 +530,7 @@ pub struct SelectionState {
     pub closed: Option<Vec<(f32, f32)>>,
     /// Closed 态下被选中（待拖动）的锚点下标。
     pub selected_anchor: Option<usize>,
-    /// 上一次左键落点与时刻（双击判定；与 [`ContinentSketch::last_click`] 同款）。
+    /// 上一次左键落点与时刻（双击判定，`crate::selection::handle_click` 用）。
     pub last_click: Option<((f32, f32), f64)>,
     /// 草稿 / 选区绑定的图 ID——[`Self::on_map_change`] 变图即清（spec D9：切图 = 取消选择）。
     pub last_map_id: Option<wv_core::Id>,
@@ -1517,7 +1465,12 @@ mod tests {
         s.add_point((10.0, 0.0));
         s.add_point((10.0, 10.0));
         assert!(s.try_close(), "三点应能闭合");
-        assert_eq!(s.closed.as_ref().map(Vec::len), Some(3), "got {:?}", s.closed);
+        assert_eq!(
+            s.closed.as_ref().map(Vec::len),
+            Some(3),
+            "got {:?}",
+            s.closed
+        );
         assert!(!s.is_drawing(), "闭合后草稿应清空");
     }
 

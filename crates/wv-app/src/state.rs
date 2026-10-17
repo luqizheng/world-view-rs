@@ -19,8 +19,8 @@ use bevy::prelude::*;
 use wv_io::diagnostics::Diagnostics;
 
 pub use wv_render::state::{
-    lod_tier, BrushState, BrushTool, BrushToolGroup, ContinentSketch, DrillState, GridConfig,
-    LodTier, MeasureMode, MeasureState, PlaybackState, ViewMode, ViewState, WorldProjection,
+    lod_tier, BrushState, BrushTool, BrushToolGroup, DrillState, GridConfig, LodTier, MeasureMode,
+    MeasureState, PlaybackState, SelectionState, ViewMode, ViewState, WorldProjection,
     LOD_NATION_SCALE, LOD_REGION_SCALE,
 };
 

@@ -240,36 +240,142 @@ impl<'a> Switch<'a> {
     }
 }
 
-// ── SliderRow（label-on-top + Slider + 自定义 format）──────────────────
+// ── slider / SliderRow（Figma #3:20791 定制滑条）───────────────────────
 
-/// 滑条行：顶行 label（shell.t2 + scale.small），其下整宽 Slider。
+/// 几何常量（Figma `3:20791` 像素采样 @1x）：轨道高 8、手柄 10×8、命中区高 16。
+const SLIDER_TRACK_H: f32 = 8.0;
+const SLIDER_HANDLE_W: f32 = 10.0;
+const SLIDER_HIT_H: f32 = 16.0;
+
+/// 分数（0..=1）→ 值。`logarithmic` 时按 `min·(max/min)^f` 插值；
+/// `min <= 0` 无法取对数时**静默回退线性**（防御：调用方给错范围不 panic）。
+fn slider_value_at_fraction(f: f32, min: f32, max: f32, logarithmic: bool) -> f32 {
+    let f = f.clamp(0.0, 1.0);
+    if logarithmic && min > 0.0 && max > min {
+        min * (max / min).powf(f)
+    } else {
+        min + f * (max - min)
+    }
+}
+
+/// 值 → 分数（0..=1），[`slider_value_at_fraction`] 的逆。
+fn slider_fraction_of_value(v: f32, min: f32, max: f32, logarithmic: bool) -> f32 {
+    if max <= min {
+        return 0.0;
+    }
+    let v = v.clamp(min, max);
+    if logarithmic && min > 0.0 {
+        ((v / min).ln() / (max / min).ln()).clamp(0.0, 1.0)
+    } else {
+        ((v - min) / (max - min)).clamp(0.0, 1.0)
+    }
+}
+
+/// Figma `3:20791` 定制滑条：整宽 8px 胶囊轨道 + 金色已填充段 + 浅色方形手柄。
 ///
-/// 自带 `show_value(false)`——拖动时浮标内是 `custom_formatter` 的渲染。
+/// 自绘（不走 [`egui::Slider`]）的原因：设计稿的「轨道细条 + 无圆thumb」形态
+/// 用 egui Slider 的 `HandleShape`/`trailing_fill` 拼不出来（egui 0.36 全局
+/// 样式互斥，见 brush_panel 旧注释）；自绘后交互（点击跳转 + 拖拽）与取值
+/// 映射都在本函数内闭环，caller 只管 `&mut value`。
 ///
-/// `formatter` 必须是 `Fn(f32) -> String + Send + Sync + 'static`——
-/// `egui::Slider::custom_formatter` 要求 `'static` 闭包；egui 0.36 的
-/// formatter 接收 `f64`，实现里 `as f32` 后再交给 caller。
-pub fn slider_row(
+/// 配色走令牌（AGENTS §8 禁裸 hex；采样映射同 `status_bar` 先例）：
+/// `#D6B77B`→`gold`、轨道深色→`timeline_track`（既有「轨道」语义令牌，
+/// 比设计稿 `#131C23` 略亮以保证面板底上可见）、手柄白（`Switch` 同款）。
+///
+/// `T: Numeric` 与 [`egui::Slider::new`] 同款泛型——整数字段（如 shelf_cells）
+/// 直接传 `&mut u32`，不必先转 f32。
+pub fn slider<T: egui::emath::Numeric>(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    value: &mut T,
+    range: std::ops::RangeInclusive<T>,
+    logarithmic: bool,
+) -> egui::Response {
+    let min = range.start().to_f64() as f32;
+    let max = range.end().to_f64() as f32;
+    let (rect, mut resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), SLIDER_HIT_H),
+        egui::Sense::click_and_drag(),
+    );
+    let p = ui.painter();
+
+    // 点击即跳转 + 拖拽跟手：指针 x 直接映回值。
+    let mut next = value.to_f64() as f32;
+    if resp.dragged() || resp.clicked() {
+        if let Some(pos) = resp.interact_pointer_pos() {
+            let frac = if rect.width() > 0.0 {
+                (pos.x - rect.min.x) / rect.width()
+            } else {
+                0.0
+            };
+            next = slider_value_at_fraction(frac, min, max, logarithmic);
+        }
+    }
+    if (next - value.to_f64() as f32).abs() > f32::EPSILON {
+        *value = T::from_f64(next as f64);
+        resp.mark_changed();
+    }
+    let frac = slider_fraction_of_value(next, min, max, logarithmic);
+
+    let track_rect =
+        egui::Rect::from_center_size(rect.center(), egui::vec2(rect.width(), SLIDER_TRACK_H));
+    p.rect_filled(track_rect, SLIDER_TRACK_H / 2.0, shell.timeline_track());
+    if frac > 0.0 {
+        let fill_end = track_rect.min.x + frac * track_rect.width();
+        p.rect_filled(
+            egui::Rect::from_two_pos(track_rect.min, egui::pos2(fill_end, track_rect.max.y)),
+            SLIDER_TRACK_H / 2.0,
+            shell.gold(),
+        );
+        let handle_rect = egui::Rect::from_center_size(
+            egui::pos2(fill_end, rect.center().y),
+            egui::vec2(SLIDER_HANDLE_W, SLIDER_TRACK_H),
+        );
+        // hover / 拖拽给一圈描边作反馈（设计稿是静态图，无 hover 态可抄）。
+        let stroke = if resp.dragged() {
+            egui::Stroke::new(1.0, shell.t1())
+        } else if resp.hovered() {
+            egui::Stroke::new(1.0, shell.t2())
+        } else {
+            egui::Stroke::NONE
+        };
+        p.rect_filled(handle_rect, 2.0, shell.t1());
+        if stroke != egui::Stroke::NONE {
+            p.rect_stroke(handle_rect, 2.0, stroke, egui::StrokeKind::Inside);
+        }
+    }
+    resp
+}
+
+/// 滑条行（Figma `3:20791` 布局）：顶行 label 左（t2）+ 值右（t1），
+/// 其下整宽 [`slider`]。`formatter` 决定右上角文案（如 `"×{:.2}"` / `"48 px"`）。
+///
+/// `T: Numeric` 与 [`slider`] 同款——整数字段直接传 `&mut u32`。
+pub fn slider_row<T: egui::emath::Numeric>(
     ui: &mut egui::Ui,
     shell: &UiShell,
     label: &str,
-    value: &mut f32,
-    range: std::ops::RangeInclusive<f32>,
-    formatter: impl Fn(f32) -> String + Send + Sync + 'static,
+    value: &mut T,
+    range: std::ops::RangeInclusive<T>,
+    formatter: impl Fn(f32) -> String,
     logarithmic: bool,
 ) -> egui::Response {
-    ui.label(
-        egui::RichText::new(label)
-            .size(shell.scale.small)
-            .color(shell.t2()),
-    );
-    let mut slider = egui::Slider::new(value, range)
-        .show_value(true)
-        .custom_formatter(move |n: f64, _| formatter(n as f32));
-    if logarithmic {
-        slider = slider.logarithmic(true);
-    }
-    ui.add(slider)
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(label)
+                .size(shell.scale.small)
+                .color(shell.t2()),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(formatter(value.to_f64() as f32))
+                    .size(shell.scale.small)
+                    .color(shell.t1()),
+            );
+        });
+    });
+    ui.add_space(space::XS);
+    slider(ui, shell, value, range, logarithmic)
 }
 
 // ── dialog_window（模态壳）───────────────────────────────────────────
@@ -581,6 +687,106 @@ mod slider_row_tests {
             |n| format!("{:.0} wu", n),
             true,
         );
+    }
+
+    #[test]
+    fn slider_value_at_fraction_maps_linear_endpoints_and_middle() {
+        // 手算：[100, 200] 线性 → f=0 得 100，f=1 得 200，f=0.5 得 150。
+        assert!(
+            (slider_value_at_fraction(0.0, 100.0, 200.0, false) - 100.0).abs() < 1e-4,
+            "got {}",
+            slider_value_at_fraction(0.0, 100.0, 200.0, false)
+        );
+        assert!(
+            (slider_value_at_fraction(1.0, 100.0, 200.0, false) - 200.0).abs() < 1e-4,
+            "got {}",
+            slider_value_at_fraction(1.0, 100.0, 200.0, false)
+        );
+        assert!(
+            (slider_value_at_fraction(0.5, 100.0, 200.0, false) - 150.0).abs() < 1e-4,
+            "got {}",
+            slider_value_at_fraction(0.5, 100.0, 200.0, false)
+        );
+    }
+
+    #[test]
+    fn slider_value_at_fraction_logarithmic_midpoint_is_geometric_mean() {
+        // 手算：[1, 100] 对数 f=0.5 → 1·(100)^0.5 = 10。
+        assert!(
+            (slider_value_at_fraction(0.5, 1.0, 100.0, true) - 10.0).abs() < 1e-4,
+            "got {}",
+            slider_value_at_fraction(0.5, 1.0, 100.0, true)
+        );
+    }
+
+    #[test]
+    fn slider_logarithmic_falls_back_to_linear_when_min_is_nonpositive() {
+        // 防御：min<=0 取不了对数，回退线性 → [-1, 1] f=0.5 = 0。
+        assert!(
+            (slider_value_at_fraction(0.5, -1.0, 1.0, true) - 0.0).abs() < 1e-4,
+            "got {}",
+            slider_value_at_fraction(0.5, -1.0, 1.0, true)
+        );
+    }
+
+    #[test]
+    fn slider_fraction_of_value_inverts_value_at_fraction() {
+        // 往返：of(at(f)) == f（线性 + 对数各一组，1e-4 容差）。
+        for f in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
+            let lin = slider_fraction_of_value(
+                slider_value_at_fraction(f, 16.0, 600.0, false),
+                16.0,
+                600.0,
+                false,
+            );
+            assert!((lin - f).abs() < 1e-4, "linear f={} got {}", f, lin);
+            let log = slider_fraction_of_value(
+                slider_value_at_fraction(f, 1.0, 100.0, true),
+                1.0,
+                100.0,
+                true,
+            );
+            assert!((log - f).abs() < 1e-4, "log f={} got {}", f, log);
+        }
+    }
+
+    #[test]
+    fn slider_fraction_of_value_clamps_out_of_range_input() {
+        // 越界值夹回 [0,1]；退化区间（max<=min）返回 0 而不是 NaN。
+        assert!(
+            (slider_fraction_of_value(999.0, 0.0, 1.0, false) - 1.0).abs() < 1e-4,
+            "got {}",
+            slider_fraction_of_value(999.0, 0.0, 1.0, false)
+        );
+        assert!(
+            (slider_fraction_of_value(-5.0, 0.0, 1.0, false) - 0.0).abs() < 1e-4,
+            "got {}",
+            slider_fraction_of_value(-5.0, 0.0, 1.0, false)
+        );
+        assert!(
+            (slider_fraction_of_value(0.5, 1.0, 1.0, false) - 0.0).abs() < 1e-4,
+            "got {}",
+            slider_fraction_of_value(0.5, 1.0, 1.0, false)
+        );
+    }
+
+    #[test]
+    fn slider_show_renders_without_panic_for_numeric_and_log_paths() {
+        let sh = shell();
+        // f32 + 线性。
+        let (_c1, mut u1) = make_ui();
+        let mut v: f32 = 0.3;
+        slider(&mut u1, &sh, &mut v, 0.0..=1.0, false);
+        assert!((v - 0.3).abs() < 1e-6, "无交互时值不被改写，got {}", v);
+        // u32（Numeric 泛型路径，continent_dialog shelf_cells 同款）。
+        let (_c2, mut u2) = make_ui();
+        let mut n: u32 = 8;
+        slider(&mut u2, &sh, &mut n, 0..=32, false);
+        assert_eq!(n, 8, "无交互时整数值不被改写");
+        // 对数路径不 panic。
+        let (_c3, mut u3) = make_ui();
+        let mut r: f32 = 64.0;
+        slider(&mut u3, &sh, &mut r, 16.0..=600.0, true);
     }
 }
 

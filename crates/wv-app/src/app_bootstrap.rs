@@ -149,8 +149,6 @@ pub fn run(config: AppConfig) {
     .init_resource::<streets::StreetLayerCache>()
     .init_resource::<streets::StreetEditorState>()
     .init_resource::<crate::state::MeasureState>()
-    // 大陆生成意图包络 / 属性面板 / 撤销恢复圈（会话态；不落盘）
-    .init_resource::<wv_render::state::ContinentSketch>()
     // 选择工具会话态（2026-10-17 选择工具 spec；drill::register 也会 init——
     // 这里显式补一份，资源幂等，双保险防装配顺序遗漏）
     .init_resource::<wv_render::state::SelectionState>()
@@ -309,12 +307,6 @@ pub fn run(config: AppConfig) {
                 .after(wv_render::measurement::reload_measurement_cache),
         ),
     )
-    // 大陆生成的意图包络：点击采集（与测量同一条光标坐标链）。
-    .add_systems(
-        Update,
-        wv_render::continent_sketch::commit_continent_sketch_click
-            .after(camera::track_cursor_world),
-    )
     // 选择工具（pen 方法）：变图清空 → 点击采集 → 拖动移锚，同一条光标坐标链。
     .add_systems(
         Update,
@@ -336,8 +328,6 @@ pub fn run(config: AppConfig) {
             world_projection::draw_brush_cursor,
             // 测量顶置渲染——与 gizmos 一起画。
             wv_render::measurement::render_measurements,
-            // 大陆生成意图包络（白线 + 当前折线）。
-            wv_render::continent_sketch::draw_continent_sketch,
             // 选择工具（草稿折线 + 橡皮筋 / 闭合环 + 选中锚点）。
             wv_render::selection::draw_selection,
         ),

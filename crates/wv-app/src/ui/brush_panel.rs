@@ -37,7 +37,7 @@ use wv_render::terrain_view::TerrainTexture;
 use super::shell::{terrain_name_at, UiShell};
 use super::timeline::undo_last_street_segment;
 use super::widgets::{
-    float_window, segmented_control::segmented, terrain_grid, ToolButton, ToolIcon,
+    float_window, segmented_control::segmented, slider_row, terrain_grid, ToolButton, ToolIcon,
 };
 use super::{
     ICON_BRUSH, ICON_HILLS, ICON_LAKE, ICON_MOUNTAIN_RANGE, ICON_PLATEAU, ICON_RIVER, ICON_VOLCANO,
@@ -128,20 +128,20 @@ pub fn panel_brush(
                     ui,
                     &shell,
                     t_key(&current_loc, I18nKey::BrushStrengthLabel),
-                    &format!("×{:.2}", brush.strength),
-                    egui::Slider::new(&mut brush.strength, 0.2..=2.0),
+                    &mut brush.strength,
+                    0.2..=2.0,
+                    |n| format!("×{:.2}", n),
+                    false,
                 );
                 if brush.tool != BrushTool::River {
                     slider_row(
                         ui,
                         &shell,
                         t_key(&current_loc, I18nKey::BrushRadiusLabel),
-                        &format!(
-                            "{} m",
-                            (brush.radius / grid.cell_size * 10.0).round() as i32
-                        ),
-                        egui::Slider::new(&mut brush.radius, grid.cell_size * 2.0..=600.0)
-                            .logarithmic(true),
+                        &mut brush.radius,
+                        grid.cell_size * 2.0..=600.0,
+                        |n| format!("{} m", (n / grid.cell_size * 10.0).round() as i32),
+                        true,
                     );
                 }
                 ui.add_space(space::XS);
@@ -170,24 +170,24 @@ pub fn panel_brush(
                 terrain_grid(ui, &shell, &mut brush.kind, loc);
                 ui.add_space(space::SM);
 
-                // ── 半径 / 软度滑条（Figma 风格：标签左、值右、轨在中）──
+                // ── 半径 / 软度滑条（Figma #3:20791：标签左、值右、轨在中）──
                 slider_row(
                     ui,
                     &shell,
                     t_key(&current_loc, I18nKey::BrushRadiusLabel),
-                    &format!(
-                        "{} m",
-                        (brush.radius / grid.cell_size * 10.0).round() as i32
-                    ),
-                    egui::Slider::new(&mut brush.radius, grid.cell_size * 2.0..=600.0)
-                        .logarithmic(true),
+                    &mut brush.radius,
+                    grid.cell_size * 2.0..=600.0,
+                    |n| format!("{} m", (n / grid.cell_size * 10.0).round() as i32),
+                    true,
                 );
                 slider_row(
                     ui,
                     &shell,
                     t_key(&current_loc, I18nKey::BrushSoftnessLabel),
-                    &format!("{}%", (brush.softness * 100.0).round() as i32),
-                    egui::Slider::new(&mut brush.softness, 0.0..=1.0),
+                    &mut brush.softness,
+                    0.0..=1.0,
+                    |n| format!("{}%", (n * 100.0).round() as i32),
+                    false,
                 );
                 ui.add_space(space::XS);
                 // 快捷提示 + 交互提示合一行（t3 小字，不抢材料区的视觉）。
@@ -389,64 +389,6 @@ fn tool_hint_key(tool: BrushTool) -> I18nKey {
         BrushTool::Lake => I18nKey::BrushHintLake,
         BrushTool::River => I18nKey::BrushHintRiver,
     }
-}
-
-/// Figma 风格滑条：标签左、值右、滑条在中。
-///
-/// 对齐原型 `World-View UI Prototype/src/index.css` 的 `.range-label` /
-/// `input[type="range]`：
-///
-/// - 整行单条 record：label 与值各占固定底端宽度，两端对齐；滑条吃掉剩余空间。
-/// - 字号 11px（最贴原型 10px；§2.3 阶梯 MICRO=11，BASE=13 不用于滑条行）。
-/// - value 不走 monospace（原型用 `font-weight: 500` Proportional，本处用 t1）。
-/// - 滑条内嵌 `show_value(false)`——值已显示在右侧，外侧不再叠气泡。
-/// - 强制 `trailing_fill(true)` + `HandleShape::Circle`：
-///   egui 0.36 全局默认 `slider_trailing_fill=false`、`handle_shape=Rect`，
-///   不开这两项就是空心方框 thumb + 无蓝色选中轨。选中轨颜色由
-///   `ui.visuals().selection.bg_fill` 决定（见 `build_visuals`，已把这一项
-///   路由到 `palette.accent`）。
-fn slider_row(ui: &mut egui::Ui, shell: &UiShell, label: &str, value: &str, slider: egui::Slider) {
-    // label / value 锁宽：让中间滑条吃光剩余宽度（最贴近原型 `justify-content:
-    // space-between` 两端对齐）。具体宽度由字号 * 经验上限推得，留 2px 余量。
-    let label_w = shell.scale.micro * 5.0;
-    let value_w = shell.scale.micro * 4.0;
-    ui.horizontal(|ui| {
-        ui.allocate_exact_size(
-            egui::vec2(label_w, ui.spacing().interact_size.y),
-            egui::Sense::hover(),
-        );
-        ui.label(
-            egui::RichText::new(label)
-                .size(shell.scale.micro)
-                .color(shell.t2()),
-        );
-        ui.add_space(space::SM);
-        // 滑条宽度 = 当前行剩余宽度 - value 宽度 - 两侧 spacing。
-        let remaining = ui.available_width() - value_w - space::SM;
-        ui.allocate_ui(
-            egui::vec2(remaining.max(64.0), ui.spacing().interact_size.y),
-            |ui| {
-                ui.add(
-                    slider
-                        .show_value(false)
-                        .trailing_fill(true)
-                        .handle_shape(egui::style::HandleShape::Circle),
-                );
-            },
-        );
-        ui.add_space(space::SM);
-        ui.allocate_exact_size(
-            egui::vec2(value_w, ui.spacing().interact_size.y),
-            egui::Sense::hover(),
-        );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                egui::RichText::new(value)
-                    .size(shell.scale.micro)
-                    .color(shell.t1()),
-            );
-        });
-    });
 }
 
 #[cfg(test)]

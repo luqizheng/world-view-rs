@@ -19,7 +19,7 @@ use wv_terrain::continent::{ContinentParams, IslandDensity, ReliefLevel};
 
 use crate::i18n::{t, I18nKey};
 use crate::ui::shell::UiShell;
-use crate::ui::widgets::DialogWindow;
+use crate::ui::widgets::{slider_row, DialogWindow};
 
 /// 对话框跨帧状态。
 #[derive(bevy::prelude::Resource, Debug, Clone, PartialEq)]
@@ -92,13 +92,15 @@ pub fn continent_dialog(
             });
 
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.label(t(loc, I18nKey::ContinentParamCoastWiggle));
-                ui.add(
-                    egui::Slider::new(&mut dialog.params.coast_wiggle, 0.0..=1.0).show_value(false),
-                );
-                ui.label(format!("{:.0}%", dialog.params.coast_wiggle * 100.0));
-            });
+            slider_row(
+                ui,
+                shell,
+                t(loc, I18nKey::ContinentParamCoastWiggle),
+                &mut dialog.params.coast_wiggle,
+                0.0..=1.0,
+                |n| format!("{:.0}%", (n * 100.0).round()),
+                false,
+            );
 
             ui.horizontal(|ui| {
                 ui.label(t(loc, I18nKey::ContinentParamCoastDetail));
@@ -118,27 +120,35 @@ pub fn continent_dialog(
                 }
             });
 
-            ui.horizontal(|ui| {
-                ui.label(t(loc, I18nKey::ContinentParamForest));
-                ui.add(
-                    egui::Slider::new(&mut dialog.params.forest_cover, 0.0..=1.0).show_value(false),
-                );
-                ui.label(format!("{:.0}%", dialog.params.forest_cover * 100.0));
-            });
+            slider_row(
+                ui,
+                shell,
+                t(loc, I18nKey::ContinentParamForest),
+                &mut dialog.params.forest_cover,
+                0.0..=1.0,
+                |n| format!("{:.0}%", (n * 100.0).round()),
+                false,
+            );
 
-            ui.horizontal(|ui| {
-                ui.label(t(loc, I18nKey::ContinentParamDesert));
-                ui.add(
-                    egui::Slider::new(&mut dialog.params.desert_cover, 0.0..=1.0).show_value(false),
-                );
-                ui.label(format!("{:.0}%", dialog.params.desert_cover * 100.0));
-            });
+            slider_row(
+                ui,
+                shell,
+                t(loc, I18nKey::ContinentParamDesert),
+                &mut dialog.params.desert_cover,
+                0.0..=1.0,
+                |n| format!("{:.0}%", (n * 100.0).round()),
+                false,
+            );
 
-            ui.horizontal(|ui| {
-                ui.label(t(loc, I18nKey::ContinentParamShelf));
-                ui.add(egui::Slider::new(&mut dialog.params.shelf_cells, 0..=32));
-                ui.label("cells");
-            });
+            slider_row(
+                ui,
+                shell,
+                t(loc, I18nKey::ContinentParamShelf),
+                &mut dialog.params.shelf_cells,
+                0..=32,
+                |n| format!("{:.0} cells", n),
+                false,
+            );
 
             ui.horizontal(|ui| {
                 ui.label(t(loc, I18nKey::ContinentParamIslands));
@@ -192,7 +202,7 @@ pub fn continent_dialog_system(
     mut projection: bevy::prelude::ResMut<crate::state::WorldProjection>,
     mut edit: bevy::prelude::ResMut<crate::edit::editing::EditHistory>,
     mut tex: bevy::prelude::ResMut<wv_render::terrain_view::TerrainTexture>,
-    mut sketch: bevy::prelude::ResMut<crate::state::ContinentSketch>,
+    mut selection: bevy::prelude::ResMut<crate::state::SelectionState>,
     mut gen: bevy::prelude::ResMut<crate::state::ContinentGenerationState>,
     mut notice: bevy::prelude::ResMut<crate::ui_shell::ShellNotice>,
     time: bevy::prelude::Res<bevy::prelude::Time>,
@@ -214,21 +224,22 @@ pub fn continent_dialog_system(
             notice.error(t(loc, I18nKey::ContinentNoticeNoMap), frame);
             return;
         };
-        if sketch.envelopes.is_empty() {
+        // 选区即意图包络（spec D5）：确认时克隆环提交；失败不预消费，
+        // 选区原样保留（作者画的圈不因一次提交失败消失）。
+        let Some(ring) = selection.closed.clone() else {
             notice.error(t(loc, I18nKey::ContinentNoticeNoEnvelopes), frame);
             return;
-        }
-        let envelopes = std::mem::take(&mut sketch.envelopes);
+        };
         match crate::edit::editing::commit_continent_generation(
             map,
-            envelopes,
+            vec![ring],
             params,
             seed,
             cell_size,
             &mut edit,
             &mut projection,
             &mut tex,
-            &mut sketch,
+            &mut selection,
             &mut gen,
         ) {
             Ok(()) => notice.info(t(loc, I18nKey::ContinentNoticeGenerated), frame),

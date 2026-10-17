@@ -21,8 +21,8 @@
 use bevy::prelude::*;
 
 use crate::state::{
-    BrushState, BrushTool, ContinentGenerationStash, ContinentGenerationState, ContinentSketch,
-    DrillState, GridConfig, PlaybackState, ViewState, WorldProjection,
+    BrushState, BrushTool, ContinentGenerationStash, ContinentGenerationState, DrillState,
+    GridConfig, PlaybackState, SelectionState, ViewState, WorldProjection,
 };
 use wv_edit::command::{
     EditCommand, GenerateContinentCommand, IntentTerrainCommand, PaintTerrainCommand,
@@ -441,10 +441,10 @@ pub fn apply_reset_terrain_to_base(
     }
 }
 
-/// 提交一次大陆生成（宏命令），成功后「生成即消费」包络并写恢复圈 stash。
+/// 提交一次大陆生成（宏命令），成功后「生成即消费」选区并写恢复圈 stash。
 ///
-/// 失败时把包络放回 `sketch.envelopes`——作者画了半天的圈不能因为一次提交
-/// 失败就消失（V1 精神：只提示，不替你决定）。
+/// 调用方只克隆环、不预消费选区——失败时选区原样保留，作者画了半天的圈
+/// 不能因为一次提交失败就消失（V1 精神：只提示，不替你决定）。
 ///
 /// 纹理脏矩形与 [`apply_reset_terrain_to_base`] 同款：前后 cells diff 出
 /// 包围盒，避免整图重建。
@@ -458,11 +458,11 @@ pub fn commit_continent_generation(
     edit: &mut EditHistory,
     projection: &mut WorldProjection,
     tex: &mut TerrainTexture,
-    sketch: &mut ContinentSketch,
+    selection: &mut SelectionState,
     gen: &mut ContinentGenerationState,
 ) -> Result<(), String> {
     if envelopes.is_empty() {
-        return Err("没有圈出大陆范围：先用「圈画大陆」工具画至少一个闭合包络".into());
+        return Err("没有圈出大陆范围：先用「选择」工具圈一块闭合区域".into());
     }
 
     let before = wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(&map))
@@ -490,9 +490,8 @@ pub fn commit_continent_generation(
                 }
                 _ => tex.mark_all_dirty(),
             }
-            // 生成即消费 + 记录恢复圈（commit 后的长度）。
-            sketch.envelopes.clear();
-            sketch.discard_active();
+            // 生成即消费选区 + 记录恢复圈（spec §4：撤销回驻留、单槽位让位）。
+            selection.cancel();
             gen.stash = Some(ContinentGenerationStash {
                 envelopes,
                 params,
@@ -502,37 +501,45 @@ pub fn commit_continent_generation(
             Ok(())
         }
         Err(e) => {
-            sketch.envelopes = envelopes;
+            // 调用方在提交前只克隆环、不预消费选区——失败即无事发生。
             Err(format!("生成失败：{e}"))
         }
     }
 }
 
-/// 撤销 / 重做成功后的意图包络恢复圈判定（纯逻辑，便于单测）。
+/// 撤销 / 重做成功后的**选区**恢复圈判定（纯逻辑，便于单测；spec §4 裁定）。
 ///
-/// - undo 且 `len < committed_len`：撤到生成命令之前 → 圈回驻留；
-/// - undo 且 `len >= committed_len`：撤的是别的命令 → 不动；
-/// - redo 且 `len >= committed_len`：生成命令重新生效 → 再消费。
-pub fn sync_sketch_after_history_step(
+/// 选区是单槽位，与旧多包络 `ContinentSketch` 不同：
+///
+/// - undo 且 redo 栈顶正是生成事务：槽位**空闲**（无闭合、无草稿）才回驻留；
+///   作者已画新选区则新选区赢、stash 丢弃；
+/// - redo 且 undo 栈顶正是生成事务：若当前选区正是被消费的那条 → 再消费；
+///   作者的新选区不动。
+pub fn sync_selection_after_history_step(
     redo: bool,
     history: &History,
-    sketch: &mut ContinentSketch,
+    selection: &mut SelectionState,
     gen: &mut ContinentGenerationState,
 ) {
-    let Some(stash) = gen.stash.as_ref() else {
-        return;
+    let (stash_ring, tx_seq) = match gen.stash.as_ref() {
+        Some(s) => (s.envelopes.first().cloned(), s.tx_seq),
+        None => return,
     };
     if redo {
-        if history.undo_top_seq() == Some(stash.tx_seq) {
-            // 重做生成：只移除这条生成消费掉的圈，保留作者之后新画的。
-            sketch.envelopes.retain(|e| !stash.envelopes.contains(e));
-        }
-    } else if history.redo_top_seq() == Some(stash.tx_seq) {
-        // 撤销生成：把被消费的圈放回，**不覆盖**作者之后新画的圈。
-        for e in &stash.envelopes {
-            if !sketch.envelopes.contains(e) {
-                sketch.envelopes.push(e.clone());
+        if history.undo_top_seq() == Some(tx_seq) {
+            // 重做生成：当前选区正是被消费的那条 → 再消费；新选区不动。
+            if selection.closed.as_ref() == stash_ring.as_ref() {
+                selection.cancel();
             }
+        }
+    } else if history.redo_top_seq() == Some(tx_seq) {
+        // 撤销生成：槽位空闲才回驻留；作者已画新选区则新选区赢、stash 丢弃。
+        if selection.closed.is_none() && !selection.is_drawing() {
+            if let Some(ring) = stash_ring {
+                selection.close_with(ring);
+            }
+        } else {
+            gen.stash = None;
         }
     }
 }
@@ -550,7 +557,7 @@ pub fn apply_history_command(
     projection: &mut WorldProjection,
     tex: &mut TerrainTexture,
     playback: &PlaybackState,
-    sketch: &mut ContinentSketch,
+    selection: &mut SelectionState,
     gen: &mut ContinentGenerationState,
 ) -> Result<String, String> {
     if playback.playing {
@@ -575,7 +582,7 @@ pub fn apply_history_command(
         Ok((true, _dirty_paths)) => {
             projection.dirty = true;
             // 大陆生成恢复圈：撤掉生成命令 → 消费掉的意图圈回来；redo → 再消费。
-            sync_sketch_after_history_step(redo, &edit.history, sketch, gen);
+            sync_selection_after_history_step(redo, &edit.history, selection, gen);
             let after = wv_render::terrain_view::texture_terrain(tex, &projection.world, None)
                 .map(|t| (t.width.max(1), t.cells.clone()));
             match (before, after) {
@@ -888,47 +895,47 @@ mod tests {
         projection: &mut WorldProjection,
         edit: &mut EditHistory,
         tex: &mut TerrainTexture,
-        sketch: &mut ContinentSketch,
+        selection: &mut SelectionState,
         gen: &mut ContinentGenerationState,
         map: &wv_core::Id,
     ) {
-        sketch.envelopes = vec![square_envelope()];
-        let envelopes = sketch.take_envelopes();
+        selection.close_with(square_envelope());
+        let ring = selection.consume_closed().expect("选区已闭合，消费应得环");
         commit_continent_generation(
             map.clone(),
-            envelopes,
+            vec![ring],
             ContinentParams::default(),
             7,
             1.0,
             edit,
             projection,
             tex,
-            sketch,
+            selection,
             gen,
         )
         .expect("生成应成功");
     }
 
     #[test]
-    fn undo_after_generate_restores_envelopes_and_grid() {
+    fn undo_after_generate_restores_selection_and_grid() {
         let (mut projection, mut edit, mut tex, map) = continent_test_world(48);
         let before = projection
             .world
             .terrain_of(&map)
             .cloned()
             .expect("地形存在");
-        let mut sketch = ContinentSketch::default();
+        let mut selection = SelectionState::default();
         let mut gen = ContinentGenerationState::default();
 
         generate_once(
             &mut projection,
             &mut edit,
             &mut tex,
-            &mut sketch,
+            &mut selection,
             &mut gen,
             &map,
         );
-        assert!(sketch.envelopes.is_empty(), "生成即消费意图圈");
+        assert!(!selection.is_closed(), "生成即消费选区");
         assert!(gen.stash.is_some(), "生成后应留恢复圈 stash");
         let after = projection.world.terrain_of(&map).cloned().unwrap();
         assert_ne!(before, after, "生成应改变地形");
@@ -940,7 +947,7 @@ mod tests {
             &mut projection,
             &mut tex,
             &PlaybackState::default(),
-            &mut sketch,
+            &mut selection,
             &mut gen,
         )
         .expect("撤销应成功");
@@ -949,19 +956,24 @@ mod tests {
             before,
             "撤销后网格应逐格复原"
         );
-        assert_eq!(sketch.envelopes.len(), 1, "撤销生成 → 意图圈回驻留");
+        assert!(selection.is_closed(), "撤销生成 → 选区回驻留");
+        assert_eq!(
+            selection.closed,
+            Some(square_envelope()),
+            "回驻留的应是原选区"
+        );
     }
 
     #[test]
-    fn undo_of_other_command_does_not_restore_envelopes() {
+    fn undo_of_other_command_does_not_restore_selection() {
         let (mut projection, mut edit, mut tex, map) = continent_test_world(48);
-        let mut sketch = ContinentSketch::default();
+        let mut selection = SelectionState::default();
         let mut gen = ContinentGenerationState::default();
         generate_once(
             &mut projection,
             &mut edit,
             &mut tex,
-            &mut sketch,
+            &mut selection,
             &mut gen,
             &map,
         );
@@ -987,26 +999,23 @@ mod tests {
             &mut projection,
             &mut tex,
             &PlaybackState::default(),
-            &mut sketch,
+            &mut selection,
             &mut gen,
         )
         .expect("撤销应成功");
-        assert!(
-            sketch.envelopes.is_empty(),
-            "撤销的是另一条命令，意图圈不得回驻留"
-        );
+        assert!(!selection.is_closed(), "撤销的是另一条命令，选区不得回驻留");
     }
 
     #[test]
-    fn redo_reconsumes_envelopes() {
+    fn redo_reconsumes_selection() {
         let (mut projection, mut edit, mut tex, map) = continent_test_world(48);
-        let mut sketch = ContinentSketch::default();
+        let mut selection = SelectionState::default();
         let mut gen = ContinentGenerationState::default();
         generate_once(
             &mut projection,
             &mut edit,
             &mut tex,
-            &mut sketch,
+            &mut selection,
             &mut gen,
             &map,
         );
@@ -1016,11 +1025,11 @@ mod tests {
             &mut projection,
             &mut tex,
             &PlaybackState::default(),
-            &mut sketch,
+            &mut selection,
             &mut gen,
         )
         .expect("撤销");
-        assert_eq!(sketch.envelopes.len(), 1, "撤销后圈回来");
+        assert_eq!(selection.closed, Some(square_envelope()), "撤销后选区回来");
 
         apply_history_command(
             true,
@@ -1028,29 +1037,30 @@ mod tests {
             &mut projection,
             &mut tex,
             &PlaybackState::default(),
-            &mut sketch,
+            &mut selection,
             &mut gen,
         )
         .expect("重做");
-        assert!(sketch.envelopes.is_empty(), "重做生成 → 意图圈再次被消费");
+        assert!(!selection.is_closed(), "重做生成 → 选区再次被消费");
     }
 
-    /// 撤销生成不得吞掉作者之后新画的圈；重做只消费这条生成的那个圈。
+    /// 撤销生成时作者已画了新选区 → 新选区赢、stash 丢弃（spec §4 裁定：
+    /// 选区是单槽位，回驻留仅在空闲时发生；重做因此无从再消费）。
     #[test]
-    fn undo_of_generation_keeps_outlines_drawn_afterwards() {
+    fn undo_of_generation_yields_to_newly_drawn_selection() {
         let (mut projection, mut edit, mut tex, map) = continent_test_world(48);
-        let mut sketch = ContinentSketch::default();
+        let mut selection = SelectionState::default();
         let mut gen = ContinentGenerationState::default();
         generate_once(
             &mut projection,
             &mut edit,
             &mut tex,
-            &mut sketch,
+            &mut selection,
             &mut gen,
             &map,
         );
         let outline_b = vec![(44.0, 44.0), (47.0, 44.0), (47.0, 47.0)];
-        sketch.envelopes.push(outline_b.clone());
+        selection.close_with(outline_b.clone());
 
         apply_history_command(
             false,
@@ -1058,16 +1068,16 @@ mod tests {
             &mut projection,
             &mut tex,
             &PlaybackState::default(),
-            &mut sketch,
+            &mut selection,
             &mut gen,
         )
         .expect("撤销");
         assert_eq!(
-            sketch.envelopes.len(),
-            2,
-            "撤销生成应放回 A，同时保留作者之后画的 B"
+            selection.closed,
+            Some(outline_b.clone()),
+            "作者新画的 B 不得被旧圈 A 覆盖"
         );
-        assert!(sketch.envelopes.contains(&outline_b), "B 不得被覆盖");
+        assert!(gen.stash.is_none(), "新选区赢 → 恢复圈 stash 丢弃");
 
         apply_history_command(
             true,
@@ -1075,28 +1085,28 @@ mod tests {
             &mut projection,
             &mut tex,
             &PlaybackState::default(),
-            &mut sketch,
+            &mut selection,
             &mut gen,
         )
         .expect("重做");
         assert_eq!(
-            sketch.envelopes,
-            vec![outline_b],
-            "重做生成只消费 A，B 应保留"
+            selection.closed,
+            Some(outline_b),
+            "stash 已丢弃，B 原样保留"
         );
     }
 
     /// 别的命令的 redo 不得消费意图圈（旧的长度启发式会误判）。
     #[test]
-    fn redo_of_other_command_does_not_consume_envelopes() {
+    fn redo_of_other_command_does_not_consume_selection() {
         let (mut projection, mut edit, mut tex, map) = continent_test_world(48);
-        let mut sketch = ContinentSketch::default();
+        let mut selection = SelectionState::default();
         let mut gen = ContinentGenerationState::default();
         generate_once(
             &mut projection,
             &mut edit,
             &mut tex,
-            &mut sketch,
+            &mut selection,
             &mut gen,
             &map,
         );
@@ -1106,11 +1116,11 @@ mod tests {
             &mut projection,
             &mut tex,
             &PlaybackState::default(),
-            &mut sketch,
+            &mut selection,
             &mut gen,
         )
         .expect("撤销生成");
-        assert_eq!(sketch.envelopes.len(), 1, "撤销后 A 回来");
+        assert_eq!(selection.closed, Some(square_envelope()), "撤销后 A 回来");
 
         // 提交另一条命令、撤销它、再重做它——意图圈必须原样保留。
         let mut tx = Transaction::new();
@@ -1132,7 +1142,7 @@ mod tests {
             &mut projection,
             &mut tex,
             &PlaybackState::default(),
-            &mut sketch,
+            &mut selection,
             &mut gen,
         )
         .expect("撤销别的命令");
@@ -1142,10 +1152,10 @@ mod tests {
             &mut projection,
             &mut tex,
             &PlaybackState::default(),
-            &mut sketch,
+            &mut selection,
             &mut gen,
         )
         .expect("重做别的命令");
-        assert_eq!(sketch.envelopes.len(), 1, "无关命令的 redo 不得消费意图圈");
+        assert!(selection.is_closed(), "无关命令的 redo 不得消费选区");
     }
 }
