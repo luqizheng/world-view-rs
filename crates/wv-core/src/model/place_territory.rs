@@ -125,6 +125,7 @@ mod tests {
             owner: p.id.clone(),
             span: span(1, 100),
             geometry: GeometryData::Polygon(square_polygon(0.0, 0.0, 10.0, 10.0)),
+            relation: None,
         }];
         let w = world_with_place(p, geos);
         let other_map = vid("map_other");
@@ -142,6 +143,7 @@ mod tests {
             owner: p.id.clone(),
             span: span(10, 20),
             geometry: GeometryData::Polygon(square_polygon(0.0, 0.0, 1.0, 1.0)),
+            relation: None,
         }];
         let w = world_with_place(p, geos);
         assert_eq!(place_territory_at(&w, &map, 9).len(), 0, "区间之前");
@@ -160,6 +162,7 @@ mod tests {
             owner: p.id.clone(),
             span: TimeSpan { from: 1, to: None },
             geometry: GeometryData::Polygon(square_polygon(0.0, 0.0, 1.0, 1.0)),
+            relation: None,
         }];
         let w = world_with_place(p, geos);
         assert_eq!(place_territory_at(&w, &map, 1).len(), 1);
@@ -178,6 +181,7 @@ mod tests {
                 owner: vid("place_ghost"),
                 span: span(1, 100),
                 geometry: GeometryData::Polygon(square_polygon(0.0, 0.0, 1.0, 1.0)),
+                relation: None,
             }],
         );
         assert!(
@@ -196,6 +200,7 @@ mod tests {
             owner: p.id.clone(),
             span: span(1, 100),
             geometry: GeometryData::Points(vec![0.0, 0.0]),
+            relation: None,
         }];
         let w = world_with_place(p, geos);
         assert!(
@@ -215,6 +220,7 @@ mod tests {
             owner: p.id.clone(),
             span: span(1, 100),
             geometry: GeometryData::Polygon(coords.clone()),
+            relation: None,
         }];
         let w = world_with_place(p, geos);
         let result = place_territory_at(&w, &map, 50);
@@ -246,12 +252,14 @@ mod tests {
                 owner: p1.id,
                 span: span(1, 100),
                 geometry: GeometryData::Polygon(square_polygon(0.0, 0.0, 1.0, 1.0)),
+                relation: None,
             },
             GeometrySpan {
                 map: map.clone(),
                 owner: p2.id,
                 span: span(50, 200),
                 geometry: GeometryData::Polygon(square_polygon(2.0, 2.0, 3.0, 3.0)),
+                relation: None,
             },
         ];
         // day=10：p1 生效，p2 未开始。

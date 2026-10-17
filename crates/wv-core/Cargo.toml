@@ -9,3 +9,6 @@ description = "World View 数据层：纯领域模型，零 Bevy 依赖"
 [dependencies]
 serde = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_yaml = { workspace = true }

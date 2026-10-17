@@ -2402,6 +2402,7 @@ mod tests {
             owner: Id::new_unchecked(owner),
             span: TimeSpan { from, to },
             geometry: GeometryData::Polygon(vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0]),
+            relation: None,
         }
     }
 
@@ -3674,6 +3675,7 @@ mod tests {
             owner: Id::new_unchecked(owner),
             span: TimeSpan { from, to },
             geometry: GeometryData::Polygon(ring),
+            relation: None,
         }
     }
 

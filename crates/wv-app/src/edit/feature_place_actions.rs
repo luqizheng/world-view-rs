@@ -87,6 +87,7 @@ pub fn add_feature_place_now(
             to: None,
         },
         geometry: GeometryData::Polygon(flat),
+        relation: None,
     };
 
     let mut tx = Transaction::new();

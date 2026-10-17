@@ -103,6 +103,7 @@ pub fn upsert_geometry_now(
         // 最小占位三角形：1×1 世界单位。本位置覆盖地图角落；
         // v0.2 暂不接点位编辑器，作者后续可手改 YAML。
         geometry: GeometryData::Polygon(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+        relation: None,
     };
     push_cmd(
         world,

@@ -36,6 +36,7 @@ fn sample_geometry() -> GeometrySpan {
         // 开放区间：至今有效（P7 时间轴驱动的常态表达）。
         span: TimeSpan { from: 1, to: None },
         geometry: GeometryData::Polygon(vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0]),
+        relation: None,
     }
 }
 

@@ -72,7 +72,7 @@ pub use map::coord::{resolve_frame, resolve_frame_in, FrameNode, MapFrame};
 pub use map::unit::Unit;
 pub use model::character::Character;
 pub use model::event::{Event, EventLocation};
-pub use model::faction::{factions_at, Faction};
+pub use model::faction::{factions_at, Faction, FactionColorMode, FactionLayer, Membership};
 pub use model::place_territory::place_territory_at;
 pub use model::region::Region;
 pub use source::building::{Building, BuildingLayer};

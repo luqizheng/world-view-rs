@@ -45,6 +45,20 @@ pub struct Faction {
     /// 势力色。YAML 里写 `"#RRGGBB"` 字符串。解析失败由渲染层回退到主题色，
     /// **不会**让工程打不开（`AGENTS.md` §7.5V1）。
     pub color: Color,
+    /// 所属势力层（ADR-0027）。`None` = 默认层，兼容旧 YAML。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<Id>,
+    /// 渲染提示（自由字符串，**不是层级**）：`kingdom` / `province` /
+    /// `noble_house` / `free_city` / `tribe` / `order` …… 未知值照收，
+    /// 只影响边框粗细与面板徽标。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank: Option<String>,
+    /// 可选：政治实体的驻地 / 首府（引用 `Place.id`，P4 只存引用）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seat: Option<Id>,
+    /// 本势力对其他势力的归属边（有向、多对多、带时间）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub memberships: Vec<Membership>,
 }
 
 impl Faction {
@@ -54,8 +68,62 @@ impl Faction {
             id,
             name: name.into(),
             color,
+            layer: None,
+            rank: None,
+            seat: None,
+            memberships: Vec::new(),
         }
     }
+}
+
+/// 势力层（ADR-0027 D4）：作者命名的一个政治划分**维度**。
+///
+/// 国界 / 行政区 / 贵族领 / 派系 / 教团 / 行会都是本结构的实例；
+/// 层是数据，不是枚举——新增一种政治维度不需要改代码。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactionLayer {
+    pub id: Id,
+    /// 作者命名："国界" / "行政区" / "贵族领" / "派系" ……
+    pub name: String,
+    /// 绘制顺序：数值越大越靠上。同 z 按 id 字典序稳定排序。
+    #[serde(default)]
+    pub z: i32,
+    /// 配色策略：Own = 每个势力用自己的 color；Inherit = 优先继承上级势力色。
+    #[serde(default)]
+    pub color_mode: FactionColorMode,
+    /// 数据级可见性（与会话总开关 `ViewState.factions_visible` 合取）。
+    #[serde(default = "default_true")]
+    pub visible: bool,
+}
+
+/// 势力层配色策略（ADR-0027 D6）。闭合的渲染策略，不是世界内容。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FactionColorMode {
+    #[default]
+    Own,
+    Inherit,
+}
+
+/// 势力归属边（ADR-0027 D3）：有向、多对多、带时间区间。
+///
+/// **字段名 `target` 不是 `to`**：ADR-0001 原文的 `to` 与扁平化的
+/// `TimeSpan.to` 同名，serde 会把结束日静默吞掉。改名是硬要求。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Membership {
+    /// 上级 / 目标势力的 ID。
+    pub target: Id,
+    /// 关系类型（自由字符串，不设枚举）："行政隶属" / "实控" /
+    /// "名义归属" / "效忠" / "加盟" / "纳贡" ……
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// 关系有效期。半开区间 `[from, to)`。
+    #[serde(flatten)]
+    pub span: TimeSpan,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// 给定 (地图, 天)，列出该地图该时刻所有生效的势力及其多边形顶点。
@@ -161,6 +229,7 @@ mod tests {
             owner: f.id.clone(),
             span: span(1, 100),
             geometry: GeometryData::Polygon(square_polygon(0.0, 0.0, 10.0, 10.0)),
+            relation: None,
         }];
         let w = world_with_faction(f, geos);
         let other_map = Id::new_unchecked("map_other");
@@ -178,6 +247,7 @@ mod tests {
             owner: f.id.clone(),
             span: span(10, 20),
             geometry: GeometryData::Polygon(square_polygon(0.0, 0.0, 1.0, 1.0)),
+            relation: None,
         }];
         let w = world_with_faction(f, geos);
         // 区间 [10,20) 半开。
@@ -197,6 +267,7 @@ mod tests {
             owner: f.id.clone(),
             span: TimeSpan { from: 1, to: None },
             geometry: GeometryData::Polygon(square_polygon(0.0, 0.0, 1.0, 1.0)),
+            relation: None,
         }];
         let w = world_with_faction(f, geos);
         assert_eq!(factions_at(&w, &map, 1).len(), 1);
@@ -216,6 +287,7 @@ mod tests {
                 owner: orphan_owner,
                 span: span(1, 100),
                 geometry: GeometryData::Polygon(square_polygon(0.0, 0.0, 1.0, 1.0)),
+                relation: None,
             }],
         );
         assert!(factions_at(&w, &map, 50).is_empty());
@@ -231,6 +303,7 @@ mod tests {
             owner: f.id.clone(),
             span: span(1, 100),
             geometry: GeometryData::Points(vec![0.0, 0.0]),
+            relation: None,
         }];
         let w = world_with_faction(f, geos);
         assert!(factions_at(&w, &map, 50).is_empty());
@@ -248,6 +321,7 @@ mod tests {
             owner: f.id.clone(),
             span: span(1, 100),
             geometry: GeometryData::Polygon(coords.clone()),
+            relation: None,
         }];
         let w = world_with_faction(f, geos);
         let result = factions_at(&w, &map, 50);
@@ -269,12 +343,14 @@ mod tests {
                 owner: f1.id.clone(),
                 span: span(1, 100),
                 geometry: GeometryData::Polygon(square_polygon(0.0, 0.0, 1.0, 1.0)),
+                relation: None,
             },
             GeometrySpan {
                 map: map.clone(),
                 owner: f2.id.clone(),
                 span: span(50, 200),
                 geometry: GeometryData::Polygon(square_polygon(2.0, 2.0, 3.0, 3.0)),
+                relation: None,
             },
         ];
         let mut w = World::default();
@@ -292,5 +368,61 @@ mod tests {
         assert_eq!(factions_at(&w, &map, 199).len(), 1);
         // day=200：双方都结束。
         assert_eq!(factions_at(&w, &map, 200).len(), 0);
+    }
+
+    // ------------------------------------------------------------------
+    // ADR-0027：势力层 / 归属边 / 声称实控（Task 1，serde 兼容）
+    // ------------------------------------------------------------------
+
+    /// ADR-0027 D4 回归：`Membership.target` + 扁平 `from/to` 的 serde
+    /// round-trip——上级字段若沿用 ADR-0001 原文的名字 `to`，会与
+    /// `#[serde(flatten)] TimeSpan { from, to }` 的结束日撞名而被静默吞掉。
+    #[test]
+    fn membership_end_day_survives_flattened_round_trip() {
+        let yaml = "target: faction_kingdom_chen\nkind: 行政隶属\nfrom: 1000\nto: 1200\n";
+        let m: Membership = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(m.target.as_str(), "faction_kingdom_chen");
+        assert_eq!(m.span.from, 1000);
+        assert_eq!(m.span.to, Some(1200), "结束日不能被 serde flatten 吞掉");
+        let back = serde_yaml::to_string(&m).unwrap();
+        let m2: Membership = serde_yaml::from_str(&back).unwrap();
+        assert_eq!(m, m2, "round-trip 必须稳定");
+    }
+
+    /// 旧 YAML（无 layer/rank/seat/memberships）必须零迁移加载。
+    #[test]
+    fn legacy_faction_yaml_without_new_fields_loads() {
+        let yaml = "id: faction_qing\nname: 清廷\ncolor: \"#3366AA\"\n";
+        let f: Faction = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(f.layer, None);
+        assert_eq!(f.rank, None);
+        assert_eq!(f.seat, None);
+        assert!(f.memberships.is_empty());
+    }
+
+    /// `FactionLayer` 缺省：z=0、color_mode=Own、visible=true。
+    #[test]
+    fn faction_layer_color_mode_is_own_by_default() {
+        let l: FactionLayer = serde_yaml::from_str("id: layer_admin\nname: 行政区\n").unwrap();
+        assert_eq!(l.color_mode, FactionColorMode::Own);
+        assert_eq!(l.z, 0);
+        assert!(l.visible, "缺省可见");
+    }
+
+    /// `GeometrySpan.relation` 缺省 None 且**不序列化**——旧工程保存后
+    /// 文件里不得出现 `relation: null` 噪音（V1：作者没动就别改文件）。
+    #[test]
+    fn geometry_span_relation_is_none_by_default() {
+        let g = GeometrySpan {
+            map: Id::new_unchecked("map_world"),
+            owner: Id::new_unchecked("faction_qing"),
+            span: TimeSpan::open(100),
+            geometry: GeometryData::Polygon(vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0]),
+            relation: None,
+        };
+        let yaml = serde_yaml::to_string(&g).unwrap();
+        assert!(!yaml.contains("relation:"), "None 不应序列化，got {yaml}");
+        let g2: GeometrySpan = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(g2.relation, None);
     }
 }

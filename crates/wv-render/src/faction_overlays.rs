@@ -253,6 +253,7 @@ mod tests {
             owner: Id::new_unchecked("f1"),
             span: TimeSpan { from: 1, to: None },
             geometry: GeometryData::Polygon(square()),
+            relation: None,
         });
         let map = Id::new_unchecked("map_w");
         let overlays = factions_at(&w, &map, 5);
