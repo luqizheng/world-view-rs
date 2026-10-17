@@ -108,6 +108,12 @@ pub fn panel_faction(
                         .small()
                         .color(shell.t2()),
                 );
+                if ui
+                    .selectable_label(display.active_layer.is_none(), "自动")
+                    .clicked()
+                {
+                    display.active_layer = None;
+                }
                 let selected = display.active_layer.clone();
                 for l in &layers {
                     if ui
@@ -117,6 +123,10 @@ pub fn panel_faction(
                         display.active_layer = Some(l.id.clone());
                     }
                 }
+            });
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut display.show_other_borders, "其他层边界");
+                ui.checkbox(&mut display.show_claims, "声称");
             });
             ui.add_space(space::SM);
 
