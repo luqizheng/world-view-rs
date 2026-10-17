@@ -336,11 +336,14 @@ impl World {
 /// - 读写 `terrain.bin` 时用 `TerrainData`；
 /// - 编辑时 `wv-edit` 把它转成 `TerrainGrid`，改完再转回。
 pub mod terrain {
-    /// 一格地形（与 `wv_terrain::TerrainCell` 布局一致）。
+    /// 一格地形（与 `wv_terrain::TerrainCell` 布局一致：海拔 + 地表二值 + 群系）。
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
     pub struct TerrainCellData {
         pub height: i16,
-        pub kind: u8,
+        /// 地表二值（0 = 水，1 = 陆）。authoring 真值，不由高度推断。
+        pub surface: u8,
+        /// 生物群系编号（开放集，冻结表见 `wv_terrain::biome`）。
+        pub biome: u8,
     }
 
     /// 栅格地形数据。

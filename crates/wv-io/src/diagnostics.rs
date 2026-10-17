@@ -188,8 +188,9 @@ pub fn derive_hints(world: &wv_core::World) -> Diagnostics {
 /// 森林的地理事实编号（`Place.feature` 的值）。
 ///
 /// wv-io **不依赖 wv-render**（AGENTS §2.1），故这里是字面量；语义编号与
-/// `wv_render::theme::overlays::FEATURE_FOREST` 同源（同一张 TerrainKind 词汇表）。
-/// 本模块只把它用于「文案里怎么称呼这类事实」，判定用的仍是作者声明的编号。
+/// `wv_render::theme::overlays::FEATURE_FOREST` 同源（同一张旧 TerrainKind
+/// 词汇表）。本模块只把它用于「文案里怎么称呼这类事实」，判定用的仍是
+/// 作者声明的编号（经 `migrate_v1_kind` 换算到格子群系通道后比较）。
 const FEATURE_FOREST: u8 = 4;
 
 /// 覆盖物地界的**事实一致性**提示（V1：只提示，不阻止保存）。
@@ -278,7 +279,10 @@ pub fn detect_feature_territory_hints(world: &wv_core::World) -> Vec<Diagnostic>
                 continue;
             }
             checked_any_ring = true;
-            if ring_has_feature_cell(terrain, &extent, ring, kind) {
+            // feature 词汇表是旧 kind 编号（作者声明面），格子群系是 biome 编号
+            // （三通道后）——经 v1 迁移表换算后比较，旧 YAML 的 feature 不失效。
+            let feature_biome = crate::terrain_bin::migrate_v1_kind(kind).1;
+            if ring_has_feature_cell(terrain, &extent, ring, feature_biome) {
                 hit = true;
                 break;
             }
@@ -363,7 +367,7 @@ fn ring_has_feature_cell(
             let Some(cell) = terrain.cells.get(gy * tw + gx) else {
                 continue;
             };
-            if cell.kind != kind {
+            if cell.biome != kind {
                 continue;
             }
             let cx = (gx as f32 + 0.5) / terrain.width as f32 * extent.width;

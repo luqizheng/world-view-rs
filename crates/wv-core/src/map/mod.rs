@@ -186,11 +186,13 @@ impl MapBase {
         match self {
             MapBase::Ocean => TerrainCellData {
                 height: -3500,
-                kind: 0,
+                surface: 0,
+                biome: 0,
             },
             MapBase::Land => TerrainCellData {
                 height: 80,
-                kind: 3,
+                surface: 1,
+                biome: 3,
             },
         }
     }

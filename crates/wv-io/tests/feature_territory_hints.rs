@@ -18,8 +18,10 @@ use wv_io::diagnostics::{detect_feature_territory_hints, DiagLevel};
 /// 森林的地理事实编号（`wv_render::theme::overlays::FEATURE_FOREST` 的字面量；
 /// wv-io 不依赖 wv-render，测试同样只引用语义编号）。
 const FOREST: u8 = 4;
-/// 草原（非森林）的地形 kind。
-const GRASSLAND: u8 = 3;
+/// 草原（非森林）格子的群系编号（biome 冻结表）。
+const GRASSLAND_BIOME: u8 = 3;
+/// 森林格子的群系编号（biome 冻结表；feature 声明值 4 经 v1 迁移表映射到此）。
+const FOREST_BIOME: u8 = 1;
 
 fn id(s: &str) -> Id {
     Id::new_unchecked(s)
@@ -59,21 +61,28 @@ fn square_span(owner: &str) -> GeometrySpan {
     }
 }
 
-/// 10×10 全同 kind 的陆地栅格（世界 100×100 → 每格 10 wu，格心 5/15/…/95）。
-fn uniform_terrain(kind: u8) -> TerrainData {
+/// 10×10 全同群系的陆地栅格（世界 100×100 → 每格 10 wu，格心 5/15/…/95）。
+fn uniform_terrain(biome: u8) -> TerrainData {
     TerrainData {
         width: 10,
         height: 10,
-        cells: vec![TerrainCellData { height: 10, kind }; 100],
+        cells: vec![
+            TerrainCellData {
+                height: 10,
+                surface: 1,
+                biome,
+            };
+            100
+        ],
     }
 }
 
 /// 10×10 栅格：只有地界内的中央 6×6 格是森林，其余草原。
 fn patched_forest_terrain() -> TerrainData {
-    let mut t = uniform_terrain(GRASSLAND);
+    let mut t = uniform_terrain(GRASSLAND_BIOME);
     for gy in 2..8usize {
         for gx in 2..8usize {
-            t.cells[gy * t.width as usize + gx].kind = FOREST;
+            t.cells[gy * t.width as usize + gx].biome = FOREST_BIOME;
         }
     }
     t
@@ -98,7 +107,7 @@ fn forest_territory_without_forest_cells_emits_hint() {
     let w = world_with(
         Some(forest_place()),
         square_span("place_forest"),
-        Some(uniform_terrain(GRASSLAND)),
+        Some(uniform_terrain(GRASSLAND_BIOME)),
     );
     let hints = detect_feature_territory_hints(&w);
     assert_eq!(
@@ -186,7 +195,7 @@ fn derive_hints_includes_feature_territory_hints() {
     let w = world_with(
         Some(forest_place()),
         square_span("place_forest"),
-        Some(uniform_terrain(GRASSLAND)),
+        Some(uniform_terrain(GRASSLAND_BIOME)),
     );
     let d = wv_io::derive_hints(&w);
     let matching: Vec<_> = d
@@ -217,7 +226,11 @@ fn extreme_coordinates_do_not_panic_on_cell_range_math() {
     span.geometry = GeometryData::Polygon(vec![
         -3.0e30, -3.0e30, 3.0e30, -3.0e30, 3.0e30, 3.0e30, -3.0e30, 3.0e30,
     ]);
-    let mut w = world_with(Some(forest_place()), span, Some(uniform_terrain(GRASSLAND)));
+    let mut w = world_with(
+        Some(forest_place()),
+        span,
+        Some(uniform_terrain(GRASSLAND_BIOME)),
+    );
     // 极小正 extent：scale = 10 / 1e-30 = 1e31，与巨大环坐标相乘必然溢出。
     w.maps[0].extent = Some(Extent::sized(1.0e-30, 1.0e-30));
     let hints = detect_feature_territory_hints(&w);

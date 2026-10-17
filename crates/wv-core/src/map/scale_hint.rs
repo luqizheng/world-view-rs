@@ -100,7 +100,8 @@ mod tests {
         let mut cells = vec![
             TerrainCellData {
                 height: -3500,
-                kind: 0,
+                surface: 0,
+                biome: 0,
             };
             (width * height) as usize
         ];
@@ -108,7 +109,8 @@ mod tests {
             for x in 0..land_w {
                 cells[(y * width + x) as usize] = TerrainCellData {
                     height: 500,
-                    kind: 3,
+                    surface: 1,
+                    biome: 3,
                 };
             }
         }
@@ -159,7 +161,8 @@ mod tests {
         let mut cells = terrain.cells;
         cells[0] = TerrainCellData {
             height: -120,
-            kind: 3,
+            surface: 1,
+            biome: 3,
         };
         world.set_terrain(
             map.clone(),

@@ -48,14 +48,15 @@ fn parse_map(yaml: &str) -> wv_core::map::MapNode {
     serde_yaml::from_str(yaml).expect("解析 MapNode")
 }
 
-/// 父图 8×8 栅格：height = x*10 + y（可手算），kind = x。
+/// 父图 8×8 栅格：height = x*10 + y（可手算），biome = x（全通道随切片继承）。
 fn parent_terrain() -> TerrainData {
     let mut cells = Vec::with_capacity(64);
     for y in 0..8i32 {
         for x in 0..8i32 {
             cells.push(TerrainCellData {
                 height: (x * 10 + y) as i16,
-                kind: x as u8,
+                surface: 1,
+                biome: x as u8,
             });
         }
     }
@@ -80,13 +81,13 @@ fn sliced_child_raster_samples_the_parent_region_it_covers() {
     // → height = 2*10+1 = 21, kind = 2。
     let c = sliced.cells[0];
     assert_eq!(c.height, 21, "格(0,0) 应取父图 (2,1)，实际 {:?}", c);
-    assert_eq!(c.kind, 2, "格(0,0) 类别应继承父图列号，实际 {:?}", c);
+    assert_eq!(c.biome, 2, "格(0,0) 群系应继承父图列号，实际 {:?}", c);
 
     // 子图格 (3,3) 格心 = 本图 (896,896) → 世界 (1920,1408) → 父图格 (3,2)
     // → height = 32, kind = 3。
     let c = sliced.cells[3 * 4 + 3];
     assert_eq!(c.height, 32, "格(3,3) 应取父图 (3,2)，实际 {:?}", c);
-    assert_eq!(c.kind, 3, "格(3,3) 类别应继承父图列号，实际 {:?}", c);
+    assert_eq!(c.biome, 3, "格(3,3) 群系应继承父图列号，实际 {:?}", c);
 }
 
 #[test]

@@ -37,15 +37,55 @@ P3（YAML 为主格式）的例外只开一扇门：**超大地图的高度场 /
 
 ---
 
+## 2.1 `format_version = 2`（2026-10-18 追写）
+
+三通道化（设计稿 `docs/superpowers/specs/2026-10-18-world-from-zero-map-design.md` D11/D12）：
+
+```
+偏移   长度    内容
+0x00   4       magic  = ASCII "WVTR"
+0x04   4       version = u32 LE（当前 2）
+0x08   4       width   = u32 LE
+0x0C   4       height  = u32 LE
+0x10   ...     payload = zstd( bincode( Vec<(i16, u8, u8)> ) )
+```
+
+- **载荷**：行优先的 `(height: i16, surface: u8, biome: u8)` 元组序列。
+  `surface` = 地表二值（0 水 / 1 陆，authoring 真值，不由高度推断）；
+  `biome` = 生物群系编号（开放集，冻结表见 `wv_terrain::biome`）。
+- **v1 迁移（只读）**：读 v1 时按 **authoring 真值**换算，**不看高度**——
+
+  | v1 kind | → (surface, biome) | 语义 |
+  |---|---|---|
+  | 0 / 1 | (0, 0) | 水（湖在山上仍是水） |
+  | 2 | (1, 5) | 沙 → 沙漠 |
+  | 3 | (1, 3) | 草原 |
+  | 4 | (1, 1) | 森林 |
+  | 5 / 6 / 7 | (1, 0) | 丘陵/山地/雪（高度派生带） |
+  | 8 | (1, 6) | 沼泽 |
+  | 9 | (1, 20) | 道路（工程扩展编号） |
+  | 其他 | (1, 0) | 未知编号按陆面兜底 |
+
+  v1 的「海拔 < 0 即湿」行为由读取侧湿判定（`wv_terrain::edit::is_water_cell`：
+  surface 水 **或** 海拔 < 0）延续，无需在数据上翻案。
+  实现唯一入口 `wv_io::terrain_bin::migrate_v1_kind`，与 `wv_terrain::biome`
+  冻结表的一致性由表驱动迁移测试钉死。
+- **写一律 v2**：`write_terrain` 回写 `RasterRef.format_version: 2`。
+
+---
+
 ## 3. 版本策略
 
 | 版本 | 变更 | 兼容 |
 |---|---|---|
 | `1` | 初版：`(i16, u8)` 双通道 + zstd | — |
+| `2` | 三通道 `(i16, u8, u8)`（surface/biome） | 读 1（迁移）与 2，写 2 |
 
-- 读取时 `version != 1` → `IoError::Binary`，**拒绝加载**（不做静默降级）。
-- 未来若载荷布局变化（如新增第三通道），**升 version 并保留旧版本解码分支**；
-  不得原地改写 version 1 的语义。
+- ~~读取时 `version != 1` → `IoError::Binary`，**拒绝加载**（不做静默降级）。~~
+  **修正（2026-10-18，§2.1）**：v2 落地后读取接受 1 与 2，其余版本照旧拒绝；
+  v1 走只读迁移分支，v1 记载（§2）不因此改写。
+- 未来若载荷布局变化，**升 version 并保留旧版本解码分支**；
+  不得原地改写既有版本的语义。
 
 ---
 

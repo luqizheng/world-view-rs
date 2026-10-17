@@ -8,7 +8,7 @@
 //! 3. 声明 `format_version`，并在 `docs/` 中补充《二进制格式规格》对应条目；
 //! 4. 元数据只存引用（路径 + 尺寸 + 编码 + 校验和），**不得内联数据**。
 //!
-//! ## 文件布局（`format_version = 1`）
+//! ## 文件布局
 //!
 //! 本模块**自带魔数与版本头**，因此 `terrain.bin` 可独立自描述，
 //! 不依赖外层 YAML 才知道怎么读。头之后是 zstd 压缩的 bincode 载荷：
@@ -16,15 +16,18 @@
 //! ```text
 //! ┌───────────────────────────────────────────────┐
 //! │ magic   : 4 字节  ASCII "WVTR"                │
-//! │ version : u32 LE  格式版本（当前 1）           │
+//! │ version : u32 LE  格式版本（当前 2）           │
 //! │ width   : u32 LE                               │
 //! │ height  : u32 LE                               │
-//! │ payload : zstd(bincode(Vec<(i16, u8)>))        │
+//! │ payload : zstd(bincode(…))                     │
 //! └───────────────────────────────────────────────┘
 //! ```
 //!
-//! 双通道 `(height: i16, kind: u8)` 打包为一个元组序列，对应基线 §2.3 的
-//! 「I16 高度 + U8 类型，双通道」。
+//! - **v2（当前）**：`payload = zstd(bincode(Vec<(i16, u8, u8)>))`，
+//!   三通道 `(height, surface, biome)`——设计稿 D11/D12。
+//! - **v1（只读）**：`payload = zstd(bincode(Vec<(i16, u8)>))`，双通道
+//!   `(height, kind)`；读取时经 [`migrate_v1_kind`] 按 authoring 真值迁移，
+//!   规格记载见 `docs/BINARY_FORMAT_SPEC.md` §2.1。写一律 v2。
 //!
 //! ## 性能门禁（基线 §2.19）
 //!
@@ -41,9 +44,34 @@ use crate::error::{IoError, IoResult};
 /// `terrain.bin` 的魔数。
 pub const TERRAIN_MAGIC: [u8; 4] = *b"WVTR";
 /// 当前支持的 `terrain.bin` 格式版本。
-pub const TERRAIN_FORMAT_VERSION: u32 = 1;
+///
+/// v2（2026-10-18）：载荷升为三通道 `(i16, u8, u8)` = (海拔, 地表, 群系)；
+/// v1 `(i16, u8)` 保留**只读迁移分支**（`migrate_v1_kind`），写一律 v2。
+pub const TERRAIN_FORMAT_VERSION: u32 = 2;
 /// 单张栅格的格数上限（基线 §2.19 门禁：4096×4096）。
 pub const MAX_TERRAIN_CELLS: usize = 16_777_216;
+
+/// v1 kind（旧「类型」词汇）→ v2 `(surface, biome)`。**authoring 真值，不看高度**：
+/// kind ≤ 1 是水（湖在山上也是水）、其余是陆（被压到海下的陆格仍是陆——
+/// 湿判定由读取侧的「海拔 < 0」兜住）。
+///
+/// **与 `wv_terrain::biome` 的冻结编号表必须一致**（wv-io 不依赖 wv-terrain，
+/// 两表一致性由本模块的 `v1_payload_migrates_each_kind_to_authoring_truth`
+/// 表驱动测试钉死）。
+pub(crate) fn migrate_v1_kind(kind: u8) -> (u8, u8) {
+    const WATER: u8 = 0;
+    const LAND: u8 = 1;
+    match kind {
+        0 | 1 => (WATER, 0),
+        2 => (LAND, 5),     // 沙 → 沙漠
+        3 => (LAND, 3),     // 草原
+        4 => (LAND, 1),     // 森林
+        5..=7 => (LAND, 0), // 丘陵/山地/雪：高度派生带，无群系
+        8 => (LAND, 6),     // 沼泽
+        9 => (LAND, 20),    // 道路（工程扩展编号）
+        _ => (LAND, 0),
+    }
+}
 
 /// 把一段字节序列化为 `terrain.bin` 格式。
 ///
@@ -64,8 +92,12 @@ pub fn encode_terrain(data: &TerrainData) -> IoResult<Vec<u8>> {
         )));
     }
 
-    // 打包成 (i16, u8) 序列供 bincode。
-    let packed: Vec<(i16, u8)> = data.cells.iter().map(|c| (c.height, c.kind)).collect();
+    // 打包成 (i16, u8, u8) 序列供 bincode。
+    let packed: Vec<(i16, u8, u8)> = data
+        .cells
+        .iter()
+        .map(|c| (c.height, c.surface, c.biome))
+        .collect();
     let raw = bincode::serialize(&packed)
         .map_err(|e| IoError::Binary(format!("bincode 序列化失败: {e}")))?;
     let compressed = zstd::encode_all(raw.as_slice(), 3)
@@ -86,7 +118,7 @@ pub fn decode_terrain(bytes: &[u8]) -> IoResult<TerrainData> {
         return Err(IoError::Binary("terrain.bin 魔数不符".into()));
     }
     let version = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
-    if version != TERRAIN_FORMAT_VERSION {
+    if version != 1 && version != 2 {
         return Err(IoError::Binary(format!(
             "terrain.bin 格式版本 {version} 不受支持（当前 {TERRAIN_FORMAT_VERSION}）"
         )));
@@ -103,22 +135,51 @@ pub fn decode_terrain(bytes: &[u8]) -> IoResult<TerrainData> {
 
     let raw = zstd::decode_all(&bytes[16..])
         .map_err(|e| IoError::Binary(format!("zstd 解压失败: {e}")))?;
-    let packed: Vec<(i16, u8)> = bincode::deserialize(&raw)
-        .map_err(|e| IoError::Binary(format!("bincode 反序列化失败: {e}")))?;
 
-    if packed.len() != cell_count {
-        return Err(IoError::Binary(format!(
-            "载荷格数 {} 与头声明 {}x{} = {cell_count} 不符",
-            packed.len(),
-            width,
-            height
-        )));
-    }
+    let cells: Vec<TerrainCellData> = if version == 2 {
+        let packed: Vec<(i16, u8, u8)> = bincode::deserialize(&raw)
+            .map_err(|e| IoError::Binary(format!("bincode 反序列化失败: {e}")))?;
+        if packed.len() != cell_count {
+            return Err(IoError::Binary(format!(
+                "载荷格数 {} 与头声明 {}x{} = {cell_count} 不符",
+                packed.len(),
+                width,
+                height
+            )));
+        }
+        packed
+            .into_iter()
+            .map(|(height, surface, biome)| TerrainCellData {
+                height,
+                surface,
+                biome,
+            })
+            .collect()
+    } else {
+        // v1 只读迁移：authoring 真值映射（见 `migrate_v1_kind`）。
+        let packed: Vec<(i16, u8)> = bincode::deserialize(&raw)
+            .map_err(|e| IoError::Binary(format!("bincode 反序列化失败: {e}")))?;
+        if packed.len() != cell_count {
+            return Err(IoError::Binary(format!(
+                "载荷格数 {} 与头声明 {}x{} = {cell_count} 不符",
+                packed.len(),
+                width,
+                height
+            )));
+        }
+        packed
+            .into_iter()
+            .map(|(height, kind)| {
+                let (surface, biome) = migrate_v1_kind(kind);
+                TerrainCellData {
+                    height,
+                    surface,
+                    biome,
+                }
+            })
+            .collect()
+    };
 
-    let cells = packed
-        .into_iter()
-        .map(|(height, kind)| TerrainCellData { height, kind })
-        .collect();
     Ok(TerrainData {
         width,
         height,
@@ -205,7 +266,8 @@ mod tests {
             for x in 0..width {
                 cells.push(TerrainCellData {
                     height: (y as i16) * 10 - 5,
-                    kind: (x % 5) as u8,
+                    surface: (x % 2) as u8,
+                    biome: ((x * 7 + y) % 21) as u8,
                 });
             }
         }
@@ -214,6 +276,20 @@ mod tests {
             height,
             cells,
         }
+    }
+
+    /// 按 v1 布局手工拼字节（version=1 + `zstd(bincode(Vec<(i16,u8)>))`），
+    /// 供迁移测试构造旧格式输入。
+    fn v1_encode_for_test(width: u32, height: u32, cells: &[(i16, u8)]) -> Vec<u8> {
+        let raw = bincode::serialize(cells).unwrap();
+        let compressed = zstd::encode_all(raw.as_slice(), 3).unwrap();
+        let mut out = Vec::new();
+        out.extend_from_slice(&TERRAIN_MAGIC);
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&width.to_le_bytes());
+        out.extend_from_slice(&height.to_le_bytes());
+        out.extend_from_slice(&compressed);
+        out
     }
 
     #[test]
@@ -229,17 +305,17 @@ mod tests {
         let data = sample(10, 20);
         let bytes = encode_terrain(&data).unwrap();
         assert_eq!(&bytes[0..4], &TERRAIN_MAGIC);
-        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 2);
         assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 10);
         assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 20);
     }
 
     #[test]
     fn zstd_compresses_repetitive_data() {
-        // 大量重复格应被显著压缩：压缩后应远小于「每格 3 字节」。
+        // 大量重复格应被显著压缩：压缩后应远小于「每格 4 字节」。
         let data = sample(256, 256);
         let bytes = encode_terrain(&data).unwrap();
-        let uncompressed = 256usize * 256 * 3;
+        let uncompressed = 256usize * 256 * 4;
         assert!(
             bytes.len() < uncompressed / 2,
             "重复数据压缩率不足: {} vs {}",
@@ -261,6 +337,55 @@ mod tests {
         bytes[4..8].copy_from_slice(&99u32.to_le_bytes());
         let err = decode_terrain(&bytes).unwrap_err();
         assert!(format!("{err}").contains("99"));
+    }
+
+    #[test]
+    fn v1_payload_migrates_each_kind_to_authoring_truth() {
+        // 表驱动：8 旧 kind + 笔刷扩展 8/9 → (surface, biome)；不看高度
+        // （authoring 真值：kind≤1 是水、其余是陆，海拔不翻案）。
+        let cases: [(u8, u8, u8); 10] = [
+            (0, 0, 0),
+            (1, 0, 0),
+            (2, 1, 5),
+            (3, 1, 3),
+            (4, 1, 1),
+            (5, 1, 0),
+            (6, 1, 0),
+            (7, 1, 0),
+            (8, 1, 6),
+            (9, 1, 20),
+        ];
+        for (kind, surface, biome) in cases {
+            let bytes = v1_encode_for_test(4, 4, &[(100, kind); 16]);
+            let data = decode_terrain(&bytes).unwrap();
+            let c = &data.cells[0];
+            assert_eq!(
+                (c.surface, c.biome),
+                (surface, biome),
+                "kind {kind} 迁移得 {:?}",
+                (c.surface, c.biome)
+            );
+        }
+    }
+
+    #[test]
+    fn v1_lake_at_positive_height_stays_water_after_migration() {
+        // kind=1（浅水）+ 高度 +10：authoring 真值是水，不因正海拔翻案。
+        let bytes = v1_encode_for_test(2, 2, &[(10, 1); 4]);
+        let data = decode_terrain(&bytes).unwrap();
+        assert_eq!(data.cells[0].surface, 0, "got {:?}", data.cells[0]);
+        assert_eq!(data.cells[0].height, 10);
+    }
+
+    #[test]
+    fn v1_read_resave_v2_round_trips_stably() {
+        // 10 种 kind 全覆盖、高度跨正负：迁移 → 保存 → 再读必须逐格相等（幂等）。
+        let v1_cells: Vec<(i16, u8)> = (0..16).map(|i| (i as i16 * 7 - 50, i as u8 % 10)).collect();
+        let v1 = v1_encode_for_test(4, 4, &v1_cells);
+        let once = decode_terrain(&v1).unwrap();
+        let v2 = encode_terrain(&once).unwrap();
+        let twice = decode_terrain(&v2).unwrap();
+        assert_eq!(once.cells, twice.cells, "migration must be idempotent");
     }
 
     #[test]

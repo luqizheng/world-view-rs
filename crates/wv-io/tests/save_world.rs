@@ -414,13 +414,14 @@ fn terrain_bin_round_trip_via_save_and_load() {
     let mut world = proj.load_world().expect("load");
     assert!(world.terrains.is_empty(), "初始状态：一张栅格都没有");
 
-    // 装一块 8×6 的栅格：每格 (height=i16, kind=u8) 写入。
+    // 装一块 8×6 的栅格：每格 (height, surface, biome) 写入。
     let mut cells = Vec::with_capacity(8 * 6);
     for y in 0..6i32 {
         for x in 0..8i32 {
             cells.push(TerrainCellData {
                 height: (x * 100 + y) as i16,
-                kind: ((x + y) % 5) as u8,
+                surface: ((x + y) % 2) as u8,
+                biome: ((x + y) % 5) as u8,
             });
         }
     }
@@ -497,7 +498,16 @@ fn each_map_keeps_its_own_terrain_raster() {
 
     let world_id = Id::new_unchecked("map_main");
     let city_id = Id::new_unchecked("map_city");
-    let cell = |k: u8| vec![TerrainCellData { height: 7, kind: k }; 4];
+    let cell = |b: u8| {
+        vec![
+            TerrainCellData {
+                height: 7,
+                surface: 1,
+                biome: b
+            };
+            4
+        ]
+    };
     world.set_terrain(
         world_id.clone(),
         TerrainData {
@@ -619,7 +629,14 @@ fn terrain_bin_written_on_full_dirty_save() {
         TerrainData {
             width: 4,
             height: 4,
-            cells: vec![TerrainCellData { height: 0, kind: 0 }; 16],
+            cells: vec![
+                TerrainCellData {
+                    height: 0,
+                    surface: 0,
+                    biome: 0
+                };
+                16
+            ],
         },
     );
     proj.save_world(&world, &[]).expect("全量 save");
