@@ -29,12 +29,13 @@ pub mod terrain_texture;
 pub mod tile_atlas;
 
 // ── 路径兼容 re-export（保持 `crate::terrain_view::X` 不变） ─────────────────
-pub use cells::{image_from_terrain, patch_terrain_image};
+pub use cells::{image_from_terrain, patch_terrain_image, terrain_pixels};
 pub use grid_lines::{grid_lines_visible, sync_grid_lines, GridLinesOverlay};
 pub use grid_sync::sync_grid_config;
 pub use isoline_overlay::{sync_isoline_overlay, IsolineOverlay};
 pub use rebuild::{
-    rebuild_texture_on_mode_change, tick_basemap_fadeout, BasemapFadeOut, LEVEL_FADE_SECS,
+    land_pending_terrain_synth, rebuild_texture_on_mode_change, tick_basemap_fadeout,
+    BasemapFadeOut, LEVEL_FADE_SECS,
 };
 pub use setup::{new_terrain_texture, placeholder_terrain, setup_terrain_texture};
 pub use terrain_resolve::{
@@ -1143,6 +1144,7 @@ mod tests {
         world.insert_resource(GridConfig::default());
         world.insert_resource(tex);
         world.insert_resource(images);
+        world.init_resource::<crate::terrain_view::rebuild::PendingTerrainSynth>();
 
         let count_fades = |world: &mut World| -> usize {
             let mut q = world.query::<&BasemapFadeOut>();

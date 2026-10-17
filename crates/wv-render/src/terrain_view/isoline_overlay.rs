@@ -106,7 +106,7 @@ struct IsolineKey {
 /// 为什么不用 `DefaultHasher`：逐 cell 走 `Hash` trait 每字段一次虚分派，
 /// 1024² 图实测量级会到几十 ms，抵消快路径收益；手写 FNV 按字段折叠，
 /// 1M 格 ~3ms，只发生在「结构同键但有脏区待消费」的帧。
-fn terrain_data_hash(data: &wv_core::terrain::TerrainData) -> u64 {
+pub(crate) fn terrain_data_hash(data: &wv_core::terrain::TerrainData) -> u64 {
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
     let mut h = FNV_OFFSET;

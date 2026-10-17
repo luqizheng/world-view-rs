@@ -155,6 +155,8 @@ pub fn run(config: AppConfig) {
     .init_resource::<ui::ContinentDialog>()
     .init_resource::<crate::state::ContinentGenerationState>()
     .init_resource::<wv_render::measurement::MeasurementCache>()
+    // 整图后台合成任务槽（CONTINUOUS_LOD M3）：落地校验在主线程读取。
+    .init_resource::<wv_render::terrain_view::rebuild::PendingTerrainSynth>()
     // 主题包（ADR-0023 M1）：当前 `map_palette` 仍为权威源，本 Resource 仅作
     // 入口就位、不被任何渲染系统消费；M2 切消费点时再写回 `view.theme_pack_id`。
     .init_resource::<wv_render::theme::theme_pack::ActiveThemePack>()
@@ -231,6 +233,9 @@ pub fn run(config: AppConfig) {
                 world_projection::advance_playback,
                 // 纹理先于网格几何：`grid.cell_size` 取自纹理的来源图与格数。
                 terrain_view::rebuild_texture_on_mode_change,
+                // 后台合成落地（M3）：必须在重建触发之后、网格几何之前——
+                // 它写 tex.size，`sync_grid_config` 同帧要读到。
+                terrain_view::land_pending_terrain_synth,
                 // 网格几何（`raster_origin` / `map_origin` 两套原点）必须先于所有
                 // 消费它的系统：投影里的地点、街道、街道名、地图外框都按 `GridConfig`
                 // 换算，顺序反了就会拿上一帧的原点画一帧——钻取那一帧最明显。

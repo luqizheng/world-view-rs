@@ -745,7 +745,7 @@ impl<'a> CellRenderer<'a> {
 /// 缓存——纯缓存，不影响输出。因此按行带切成不相交切片、每带独立 renderer
 /// 并行渲染，输出与串行**逐字节一致**（测试 `banded_rendering_matches_serial`）。
 /// 1024² 图整图合成实测 317ms → 多核下接近带宽封顶。
-fn write_terrain_pixels(
+pub fn terrain_pixels(
     data: &TerrainData,
     mode: ViewMode,
     atlas: Option<&TileAtlas>,
@@ -756,13 +756,13 @@ fn write_terrain_pixels(
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
-    write_terrain_pixels_banded(data, mode, atlas, soften, palette, treatment, threads)
+    terrain_pixels_banded(data, mode, atlas, soften, palette, treatment, threads)
 }
 
 /// [`write_terrain_pixels`] 的带数参数化版本（测试注入带数用）。
 ///
 /// `bands` 只是调度参数：任意带数下输出必须逐字节一致。
-fn write_terrain_pixels_banded(
+fn terrain_pixels_banded(
     data: &TerrainData,
     mode: ViewMode,
     atlas: Option<&TileAtlas>,
@@ -830,7 +830,7 @@ pub fn image_from_terrain(
     palette: &PaletteColors,
     treatment: crate::theme::theme_pack::TreatmentFlags,
 ) -> Image {
-    let (pixels, res) = write_terrain_pixels(data, mode, atlas, soften, palette, treatment);
+    let (pixels, res) = terrain_pixels(data, mode, atlas, soften, palette, treatment);
     let (w, h) = (data.width.max(1), data.height.max(1));
     Image::new(
         Extent3d {
@@ -958,9 +958,9 @@ mod tests {
         )
         .treatment;
         let (p1, res1) =
-            write_terrain_pixels_banded(&data, ViewMode::Coastline, None, false, pal, treatment, 1);
+            terrain_pixels_banded(&data, ViewMode::Coastline, None, false, pal, treatment, 1);
         let (p4, res4) =
-            write_terrain_pixels_banded(&data, ViewMode::Coastline, None, false, pal, treatment, 4);
+            terrain_pixels_banded(&data, ViewMode::Coastline, None, false, pal, treatment, 4);
         assert_eq!(res1, res4, "带数不得影响 res 推导");
         assert_eq!(p1.len(), p4.len(), "输出长度应一致");
         assert_eq!(p1, p4, "带数不同 → 像素逐字节一致");
