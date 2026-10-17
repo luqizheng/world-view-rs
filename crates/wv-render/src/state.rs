@@ -1542,7 +1542,7 @@ mod tests {
         s.cancel();
         assert!(!s.is_drawing() && !s.is_closed(), "cancel 应双清");
         assert_eq!(s.selected_anchor, None, "选中锚点应复位");
-        assert_eq!(s.enabled, false, "cancel 不动 enabled——工具开关归瓷砖");
+        assert!(!s.enabled, "cancel 不动 enabled——工具开关归瓷砖");
     }
 
     /// 删锚致 <3 点：闭合降级回画中（绝不留下悬空的退化选区喂内核）。
