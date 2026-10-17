@@ -795,7 +795,7 @@ impl EditCommand for SetCityOutlineCommand {
 // ---------------------------------------------------------------------------
 
 use wv_core::map::GeometrySpan;
-use wv_core::{Color, Faction};
+use wv_core::{Color, Faction, FactionColorMode, FactionLayer, Membership};
 
 /// 受影响的目录相对路径，供 `DirtySet` 落盘聚合。
 ///
@@ -804,6 +804,11 @@ use wv_core::{Color, Faction};
 /// 具体文件名（owner 字符串），只声明目录，IO 落盘时再具体化。
 fn faction_dirty_paths() -> Vec<String> {
     vec!["factions".into(), "geometry/faction".into()]
+}
+
+/// 势力层命令的脏路径：层与势力都写（删层会把成员的 `layer` 置空）。
+fn faction_layer_dirty_paths() -> Vec<String> {
+    vec!["faction_layers".into(), "factions".into()]
 }
 
 /// 新增一个 `Faction`。
@@ -982,12 +987,426 @@ impl EditCommand for UpdateFactionCommand {
     }
 }
 
-/// 替换/新增一个势力的几何（按 `(map, owner, span.from)` 视为同一实体的多版本）。
+// ---------------------------------------------------------------------------
+// 势力层 / 归属边命令（ADR-0027）
+// ---------------------------------------------------------------------------
+
+/// 新增一个势力层。
+#[derive(Debug)]
+pub struct AddFactionLayerCommand {
+    pub layer: FactionLayer,
+}
+
+impl AddFactionLayerCommand {
+    pub fn new(layer: FactionLayer) -> Self {
+        Self { layer }
+    }
+}
+
+impl EditCommand for AddFactionLayerCommand {
+    fn label(&self) -> String {
+        format!("新增势力层「{}」", self.layer.name)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        if world.faction_layers.iter().any(|l| l.id == self.layer.id) {
+            return Err(EditError::Precondition(format!(
+                "势力层 `{}` 已存在",
+                self.layer.id
+            )));
+        }
+        world.faction_layers.push(self.layer.clone());
+        Ok(faction_layer_dirty_paths())
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let pos = world
+            .faction_layers
+            .iter()
+            .position(|l| l.id == self.layer.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("FactionLayer {}", self.layer.id)))?;
+        world.faction_layers.remove(pos);
+        Ok(())
+    }
+}
+
+/// 修改一个势力层的名称 / z / 配色策略 / 可见性（全字段快照，undo 原样恢复）。
+#[derive(Debug)]
+pub struct UpdateFactionLayerCommand {
+    pub id: wv_core::Id,
+    pub new_name: String,
+    pub new_z: i32,
+    pub new_color_mode: FactionColorMode,
+    pub new_visible: bool,
+    before: std::sync::Mutex<Option<FactionLayer>>,
+}
+
+impl UpdateFactionLayerCommand {
+    pub fn new(
+        id: wv_core::Id,
+        new_name: String,
+        new_z: i32,
+        new_color_mode: FactionColorMode,
+        new_visible: bool,
+    ) -> Self {
+        Self {
+            id,
+            new_name,
+            new_z,
+            new_color_mode,
+            new_visible,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for UpdateFactionLayerCommand {
+    fn label(&self) -> String {
+        format!("改势力层「{}」", self.id)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let l = world
+            .faction_layers
+            .iter_mut()
+            .find(|l| l.id == self.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("FactionLayer {}", self.id)))?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = Some(l.clone());
+        l.name = self.new_name.clone();
+        l.z = self.new_z;
+        l.color_mode = self.new_color_mode;
+        l.visible = self.new_visible;
+        Ok(faction_layer_dirty_paths())
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let prev = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("UpdateFactionLayer 尚未 apply".into()))?;
+        let l = world
+            .faction_layers
+            .iter_mut()
+            .find(|l| l.id == self.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("FactionLayer {}", self.id)))?;
+        *l = prev;
+        Ok(())
+    }
+}
+
+/// 删除一个势力层：层下势力 `layer` 置 `None`（回落默认层），**不删势力本体**。
+#[derive(Debug)]
+pub struct RemoveFactionLayerCommand {
+    pub id: wv_core::Id,
+    before_layer: std::sync::Mutex<Option<(usize, FactionLayer)>>,
+    before_factions: std::sync::Mutex<Vec<(wv_core::Id, Option<wv_core::Id>)>>,
+}
+
+impl RemoveFactionLayerCommand {
+    pub fn new(id: wv_core::Id) -> Self {
+        Self {
+            id,
+            before_layer: std::sync::Mutex::new(None),
+            before_factions: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl EditCommand for RemoveFactionLayerCommand {
+    fn label(&self) -> String {
+        format!("删除势力层「{}」", self.id)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let pos = world
+            .faction_layers
+            .iter()
+            .position(|l| l.id == self.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("FactionLayer {}", self.id)))?;
+        let layer = world.faction_layers.remove(pos);
+        let mut affected = Vec::new();
+        for f in &mut world.factions {
+            if f.layer.as_ref() == Some(&self.id) {
+                affected.push((f.id.clone(), f.layer.clone()));
+                f.layer = None;
+            }
+        }
+        *self
+            .before_layer
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = Some((pos, layer));
+        *self
+            .before_factions
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = affected;
+        Ok(faction_layer_dirty_paths())
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let (pos, layer) = self
+            .before_layer
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("RemoveFactionLayer 尚未 apply".into()))?;
+        let affected = self
+            .before_factions
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))?
+            .clone();
+        for (fid, old_layer) in affected {
+            if let Some(f) = world.factions.iter_mut().find(|f| f.id == fid) {
+                f.layer = old_layer;
+            }
+        }
+        let at = pos.min(world.faction_layers.len());
+        world.faction_layers.insert(at, layer);
+        Ok(())
+    }
+}
+
+/// 把势力挂到某个层（`None` = 默认层）。
+#[derive(Debug)]
+pub struct SetFactionLayerCommand {
+    pub id: wv_core::Id,
+    pub layer: Option<wv_core::Id>,
+    before: std::sync::Mutex<Option<Faction>>,
+}
+
+impl SetFactionLayerCommand {
+    pub fn new(id: wv_core::Id, layer: Option<wv_core::Id>) -> Self {
+        Self {
+            id,
+            layer,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for SetFactionLayerCommand {
+    fn label(&self) -> String {
+        format!("改势力「{}」的势力层", self.id)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let f = world
+            .factions
+            .iter_mut()
+            .find(|f| f.id == self.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Faction {}", self.id)))?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = Some(f.clone());
+        f.layer = self.layer.clone();
+        Ok(faction_layer_dirty_paths())
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        restore_faction_snapshot(world, &self.id, &self.before, "SetFactionLayer")
+    }
+}
+
+/// 改势力的等级提示（自由字符串，不参与层级判定）。
+#[derive(Debug)]
+pub struct SetFactionRankCommand {
+    pub id: wv_core::Id,
+    pub rank: Option<String>,
+    before: std::sync::Mutex<Option<Faction>>,
+}
+
+impl SetFactionRankCommand {
+    pub fn new(id: wv_core::Id, rank: Option<String>) -> Self {
+        Self {
+            id,
+            rank,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for SetFactionRankCommand {
+    fn label(&self) -> String {
+        format!("改势力「{}」的等级提示", self.id)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let f = world
+            .factions
+            .iter_mut()
+            .find(|f| f.id == self.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Faction {}", self.id)))?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = Some(f.clone());
+        f.rank = self.rank.clone();
+        Ok(faction_layer_dirty_paths())
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        restore_faction_snapshot(world, &self.id, &self.before, "SetFactionRank")
+    }
+}
+
+/// 改势力的驻地 / 首府引用（`None` = 不锚定）。
+#[derive(Debug)]
+pub struct SetFactionSeatCommand {
+    pub id: wv_core::Id,
+    pub seat: Option<wv_core::Id>,
+    before: std::sync::Mutex<Option<Faction>>,
+}
+
+impl SetFactionSeatCommand {
+    pub fn new(id: wv_core::Id, seat: Option<wv_core::Id>) -> Self {
+        Self {
+            id,
+            seat,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for SetFactionSeatCommand {
+    fn label(&self) -> String {
+        format!("改势力「{}」的驻地", self.id)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let f = world
+            .factions
+            .iter_mut()
+            .find(|f| f.id == self.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Faction {}", self.id)))?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = Some(f.clone());
+        f.seat = self.seat.clone();
+        Ok(faction_layer_dirty_paths())
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        restore_faction_snapshot(world, &self.id, &self.before, "SetFactionSeat")
+    }
+}
+
+/// 追加一条归属边。同一 target 不同 from 的多条边**不合并**（多对多 + 时间）。
+#[derive(Debug)]
+pub struct AddMembershipCommand {
+    pub faction: wv_core::Id,
+    pub membership: Membership,
+    before: std::sync::Mutex<Option<Faction>>,
+}
+
+impl AddMembershipCommand {
+    pub fn new(faction: wv_core::Id, membership: Membership) -> Self {
+        Self {
+            faction,
+            membership,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for AddMembershipCommand {
+    fn label(&self) -> String {
+        format!(
+            "给势力「{}」添加归属 →「{}」",
+            self.faction, self.membership.target
+        )
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let f = world
+            .factions
+            .iter_mut()
+            .find(|f| f.id == self.faction)
+            .ok_or_else(|| EditError::TargetMissing(format!("Faction {}", self.faction)))?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = Some(f.clone());
+        f.memberships.push(self.membership.clone());
+        Ok(faction_layer_dirty_paths())
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        restore_faction_snapshot(world, &self.faction, &self.before, "AddMembership")
+    }
+}
+
+/// 删除一条归属边（按 `(target, from)` 定位；同 target 可有多条不同 from）。
+#[derive(Debug)]
+pub struct RemoveMembershipCommand {
+    pub faction: wv_core::Id,
+    pub target: wv_core::Id,
+    pub from: i64,
+    before: std::sync::Mutex<Option<Faction>>,
+}
+
+impl RemoveMembershipCommand {
+    pub fn new(faction: wv_core::Id, target: wv_core::Id, from: i64) -> Self {
+        Self {
+            faction,
+            target,
+            from,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for RemoveMembershipCommand {
+    fn label(&self) -> String {
+        format!("删除势力「{}」的归属 →「{}」", self.faction, self.target)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let f = world
+            .factions
+            .iter_mut()
+            .find(|f| f.id == self.faction)
+            .ok_or_else(|| EditError::TargetMissing(format!("Faction {}", self.faction)))?;
+        let pos = f
+            .memberships
+            .iter()
+            .position(|m| m.target == self.target && m.span.from == self.from)
+            .ok_or_else(|| {
+                EditError::TargetMissing(format!(
+                    "Membership {} -> {} from {}",
+                    self.faction, self.target, self.from
+                ))
+            })?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = Some(f.clone());
+        f.memberships.remove(pos);
+        Ok(faction_layer_dirty_paths())
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        restore_faction_snapshot(world, &self.faction, &self.before, "RemoveMembership")
+    }
+}
+
+/// 用已缓存的整份 `Faction` 快照恢复（恢复全部字段，不只被改的那一个）。
+fn restore_faction_snapshot(
+    world: &mut World,
+    id: &wv_core::Id,
+    before: &std::sync::Mutex<Option<Faction>>,
+    what: &str,
+) -> EditResult<()> {
+    let prev = before
+        .lock()
+        .map_err(|_| EditError::Precondition("锁中毒".into()))?
+        .clone()
+        .ok_or_else(|| EditError::Precondition(format!("{what} 尚未 apply")))?;
+    let f = world
+        .factions
+        .iter_mut()
+        .find(|f| &f.id == id)
+        .ok_or_else(|| EditError::TargetMissing(format!("Faction {id}")))?;
+    *f = prev;
+    Ok(())
+}
+
+/// 替换/新增一个势力的几何（按 `(map, owner, span.from, relation)` 视为同一实体的多版本）。
 ///
 /// **同一性**：`GeometrySpan` 自身没有 `id` 字段（看 `map.rs`），但 路线图 §4.1
-/// 原则六要求「同一实体同一维度的状态片段不覆盖」——这里把 `(map, owner, from)`
-/// 三元组视为「实体的某次疆界变更」；`from` 相同 → 是同一次变更的更新（**只允许一
-/// 条**），不同 → 是不同次变更（多版本并存）。
+/// 原则六要求「同一实体同一维度的状态片段不覆盖」——这里把
+/// `(map, owner, from, relation)` 四元组视为「实体的某次疆界变更」；四元组相同
+/// → 是同一次变更的更新（**只允许一条**），不同 → 是不同次变更（多版本并存）。
+/// 加入 `relation` 是 ADR-0027 的必要条件：同一势力同一天可以既有实控又有声称。
 ///
 /// `apply` 若发现同 `(map, owner, from)` 已存在 → 替换；否则追加。`revert` 用
 /// 缓存的"原位置 + 旧值"还原。
@@ -1025,7 +1444,10 @@ impl EditCommand for UpsertFactionGeometryCommand {
         }
         let new_from = self.span.span.from;
         let pos = world.faction_geometry.iter().position(|g| {
-            g.map == self.span.map && g.owner == self.span.owner && g.span.from == new_from
+            g.map == self.span.map
+                && g.owner == self.span.owner
+                && g.span.from == new_from
+                && g.relation == self.span.relation
         });
         match pos {
             Some(i) => {
@@ -2404,6 +2826,166 @@ mod tests {
             geometry: GeometryData::Polygon(vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0]),
             relation: None,
         }
+    }
+
+    fn layer(id: &str) -> FactionLayer {
+        FactionLayer {
+            id: Id::new_unchecked(id),
+            name: id.into(),
+            z: 0,
+            color_mode: FactionColorMode::Own,
+            visible: true,
+        }
+    }
+
+    fn mem(target: &str, from: i64) -> Membership {
+        Membership {
+            target: Id::new_unchecked(target),
+            kind: Some("实控".into()),
+            span: TimeSpan::open(from),
+        }
+    }
+
+    #[test]
+    fn add_faction_layer_apply_then_revert_removes() {
+        let mut w = World::default();
+        let cmd = AddFactionLayerCommand::new(layer("layer_admin"));
+        let dirty = cmd.apply(&mut w).unwrap();
+        assert_eq!(w.faction_layers.len(), 1);
+        assert!(dirty.contains(&"faction_layers".to_string()));
+        cmd.revert(&mut w).unwrap();
+        assert!(w.faction_layers.is_empty());
+    }
+
+    #[test]
+    fn update_faction_layer_round_trip() {
+        let mut w = World::default();
+        AddFactionLayerCommand::new(layer("layer_admin"))
+            .apply(&mut w)
+            .unwrap();
+        let cmd = UpdateFactionLayerCommand::new(
+            Id::new_unchecked("layer_admin"),
+            "行政区".into(),
+            5,
+            FactionColorMode::Inherit,
+            false,
+        );
+        cmd.apply(&mut w).unwrap();
+        assert_eq!(w.faction_layers[0].name, "行政区");
+        assert_eq!(w.faction_layers[0].z, 5);
+        assert_eq!(w.faction_layers[0].color_mode, FactionColorMode::Inherit);
+        assert!(!w.faction_layers[0].visible);
+        cmd.revert(&mut w).unwrap();
+        assert_eq!(w.faction_layers[0].name, "layer_admin");
+        assert_eq!(w.faction_layers[0].z, 0);
+    }
+
+    #[test]
+    fn remove_faction_layer_reassigns_and_undo_restores() {
+        let mut w = World::default();
+        AddFactionLayerCommand::new(layer("layer_admin"))
+            .apply(&mut w)
+            .unwrap();
+        let mut faction = f("f1", "F1");
+        faction.layer = Some(Id::new_unchecked("layer_admin"));
+        w.factions.push(faction);
+
+        let cmd = RemoveFactionLayerCommand::new(Id::new_unchecked("layer_admin"));
+        cmd.apply(&mut w).unwrap();
+        assert!(w.faction_layers.is_empty());
+        assert_eq!(w.factions[0].layer, None, "删层不得删势力，成员回落默认层");
+
+        cmd.revert(&mut w).unwrap();
+        assert_eq!(w.faction_layers.len(), 1);
+        assert_eq!(
+            w.factions[0].layer.as_ref().map(|i| i.as_str()),
+            Some("layer_admin")
+        );
+    }
+
+    #[test]
+    fn set_faction_layer_rank_and_seat_round_trip() {
+        let mut w = World::default();
+        w.factions.push(f("f1", "F1"));
+
+        let set_layer = SetFactionLayerCommand::new(
+            Id::new_unchecked("f1"),
+            Some(Id::new_unchecked("layer_admin")),
+        );
+        set_layer.apply(&mut w).unwrap();
+        assert_eq!(
+            w.factions[0].layer.as_ref().map(|i| i.as_str()),
+            Some("layer_admin")
+        );
+        set_layer.revert(&mut w).unwrap();
+        assert_eq!(w.factions[0].layer, None);
+
+        let set_rank = SetFactionRankCommand::new(Id::new_unchecked("f1"), Some("province".into()));
+        set_rank.apply(&mut w).unwrap();
+        assert_eq!(w.factions[0].rank.as_deref(), Some("province"));
+        set_rank.revert(&mut w).unwrap();
+        assert_eq!(w.factions[0].rank, None);
+
+        let set_seat =
+            SetFactionSeatCommand::new(Id::new_unchecked("f1"), Some(Id::new_unchecked("p1")));
+        set_seat.apply(&mut w).unwrap();
+        assert_eq!(w.factions[0].seat.as_ref().map(|i| i.as_str()), Some("p1"));
+        set_seat.revert(&mut w).unwrap();
+        assert_eq!(w.factions[0].seat, None);
+    }
+
+    #[test]
+    fn add_membership_keeps_same_target_with_different_from() {
+        let mut w = World::default();
+        w.factions.push(f("f1", "F1"));
+        AddMembershipCommand::new(Id::new_unchecked("f1"), mem("f2", 1))
+            .apply(&mut w)
+            .unwrap();
+        AddMembershipCommand::new(Id::new_unchecked("f1"), mem("f2", 2))
+            .apply(&mut w)
+            .unwrap();
+        assert_eq!(
+            w.factions[0].memberships.len(),
+            2,
+            "同一 target 不同 from 是两条独立边，不得合并"
+        );
+    }
+
+    #[test]
+    fn remove_membership_by_target_and_from_round_trip() {
+        let mut w = World::default();
+        let mut faction = f("f1", "F1");
+        faction.memberships.push(mem("f2", 1));
+        faction.memberships.push(mem("f2", 2));
+        w.factions.push(faction);
+
+        let cmd = RemoveMembershipCommand::new(Id::new_unchecked("f1"), Id::new_unchecked("f2"), 1);
+        cmd.apply(&mut w).unwrap();
+        assert_eq!(w.factions[0].memberships.len(), 1);
+        assert_eq!(w.factions[0].memberships[0].span.from, 2);
+        cmd.revert(&mut w).unwrap();
+        assert_eq!(w.factions[0].memberships.len(), 2);
+    }
+
+    #[test]
+    fn upsert_geometry_keeps_claim_and_control_with_same_from() {
+        let mut w = World::default();
+        AddFactionCommand::new(f("f1", "F1")).apply(&mut w).unwrap();
+        let mut control = geo("m", "f1", 1, None);
+        control.relation = None;
+        let mut claim = geo("m", "f1", 1, None);
+        claim.relation = Some("claim".into());
+        UpsertFactionGeometryCommand::new(control)
+            .apply(&mut w)
+            .unwrap();
+        UpsertFactionGeometryCommand::new(claim)
+            .apply(&mut w)
+            .unwrap();
+        assert_eq!(
+            w.faction_geometry.len(),
+            2,
+            "同 map+owner+from 的 claim/control 必须并存（ADR-0027 D5）"
+        );
     }
 
     #[test]
