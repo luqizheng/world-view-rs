@@ -340,3 +340,29 @@
 | 离岸小岛 | 关 / 低 / 中 / 高 / 缺省关 | 海岸外侧低频噪声阈值撒岛 |
 
 **civ-atlas 参考边界**（2026-10-15 评估 + 本日确认）：交互形态（圈选 → 生成 → 可重复）可参考；生成内核**不照搬**——整球种子生成、球面网格、纬度气候带均不做（本仓 = 意图驱动 + 平面图 + 高度分带，气候带已裁忽略）；**AGPL 源码零接触**，算法走通用技术（距离场 + fBm）。
+
+### 2026-10-17 · 实施与终审记录
+
+**实施**（M4 落定）：四份实施计划 + 主链 9 个提交 + 终审 1 个，已合 main。
+
+| 计划 | 主链提交 | 落点 |
+|---|---|---|
+| 大陆配方内核（plan #1） | `8ee682b` 多边形距离场原语 → `eac8dd4` 八参数结构 → `dfa752e` 海岸 fBm 扰动 → `daa8745` 高度剖面/Q5 分带/大陆架/融合 → `014f4d4` 组装入口 `generate_continents` | `wv-terrain::continent` 新模块；零新增依赖 |
+| 大陆生成 UI（plan #2） | `86cf83b` `GenerateContinentCommand` → `5a85d7a` 八参属性面板 + i18n → `388a01f` 意图包络工具 + 预览 → `766e846` 生成接线（生成即消费/撤销恢复圈）→ `03c2cb8` 入口收口 + GUI 烟测 | `wv-edit` + `wv-render` + `wv-app` 三层接线 |
+| 默认海洋 + 16:9（plan #3） | 与终审合流 | `MapBase::Ocean` 锚定测试 + `NewMapDialog` 宽高双字段 |
+| 大陆尺度只读提示（plan #4） | 与终审合流 | `wv-core::land_extent_km` + 校验面板三行（extent / land / crossing-days） |
+
+**终审修复**（commit `1469179`，修 6 处 Critical/Important，§6.3 追写）：
+
+| # | 严重度 | 问题 | 修复 | 回归测试 |
+|---|---|---|---|---|
+| 1 | **Critical** | 16:9 非方形地图的 chunk 管线按单边方形切块/拷贝 → 首屏越界 panic | `TerrainTexture` 增 `height`，chunk grid/rect/copy/patch 全部二维化；栅格外框/雾霭/换级淡出/相机取景改用真实宽高 | 非方形 chunk / copy stride |
+| 2 | Important | 多包络共用联合 bbox 内半径 → 每块大陆失真 | 每块大陆用自己包络的内半径 | 多包络 |
+| 3 | Important | POI 实体按下标复用且只在 mode 变化时重绑材质 → 淡出后城市点可能继承 0 alpha | 逐帧重绑 | — |
+| 4 | Important | `Vehicle.effective_daily_speed` 单位错误（`speed×hours/24` 实为 km/h）→ 计划 #4 尺度提示天数放大 24 倍 | 修正为 `speed×hours`，**新建 [ADR-0024 日速单位](adr/ADR-0024-vehicle-daily-speed-unit.md)** | 更新受影响测试 |
+| 5 | Important | 异步合成落地只校验世界不校验视图 → A→B→A 切色会落回旧 palette | 落地前同时校验 mode/soften/palette | 落地视图校验 |
+| 6 | Important | 撤销恢复圈用历史长度启发式 → 覆盖作者新画的圈、无关 redo 误消费 | `Transaction` 增提交序号，**按命令身份**恢复/消费；stash 保留 `envelopes` 集合，撤销时用 `retain(!contains)` 防止吞掉作者新画的圈 | 撤销保留新圈 / 无关 redo 不消费 |
+
+**未变的口径**（实施未触及）：Q1–Q17 全部保留；八参数缺省值（plan #1 测试锚定）；「生成即消费」语义改为「按命令身份精准消费」（更精确的同向细化，非推翻）；气候带**仍忽略**；**AGPL 源码零接触**——civ-atlas 参考限于交互形态。
+
+**关闭条件**（README §12-40）已全部满足：M4 落地 + 全门禁绿 + GUI 烟测过 + 八参数缺省实机校准（计划 #1 Task 2 `default_params_match_ruling_values` 钉死）。本条关闭时记得移除 §12-40 追踪条目（AGENTS §12 关闭口径：示例工程实测通过）。
