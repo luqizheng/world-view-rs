@@ -123,11 +123,15 @@ mod tests {
     /// 字段后规则通路仍成立。
     #[test]
     fn pack_has_forest_overlay_rule() {
+        let rule = PACK
+            .overlays
+            .rule_for(wv_render::theme::overlays::FEATURE_FOREST)
+            .expect("水墨包应给 FEATURE_FOREST 配置占位规则");
+        // Task 9 裁定：水墨包暂不接贴图（纯色回退），待美术校准后再定
+        // 水墨树 / 晕资产——避免把日间古舆图图集错配到水墨主题。
         assert!(
-            PACK.overlays
-                .rule_for(wv_render::theme::overlays::FEATURE_FOREST)
-                .is_some(),
-            "水墨包应给 FEATURE_FOREST 配置占位规则"
+            rule.symbol_texture.is_none() && rule.halo_texture.is_none(),
+            "水墨包暂留纯色路径（贴图待美术校准）"
         );
     }
 }

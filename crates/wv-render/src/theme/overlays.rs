@@ -40,8 +40,10 @@ const JITTER_FRACTION: f32 = 0.35;
 /// **归属**：一个主题包对一类地理事实的「长相」；作者只声明事实（`Place.feature`），
 /// 不直接写这些值（D1）。v1 为代码常量，YAML 化随 ADR-0023 M3 推迟。
 ///
-/// **贴图字段恒 `None`**：v1 用纯色 quad / 半透明多边形跑通管线；Task 9 接
-/// `symbol_texture` / `halo_texture` 后才有值（D12 资产契约）。
+/// **贴图字段**（D12 资产契约）：写主题资产根下的相对路径，由渲染侧映射到
+/// 编译期嵌入的 PNG（`feature_overlays::embedded_texture`）。`None` = 纯色路径；
+/// 键未知 / 解码失败同样回退纯色——缺资产不崩、不空帧。水墨包暂留 `None`，
+/// 待美术校准后接线。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FeatureRule {
     /// 远带地界晕的 RGB（sRGB 字节）。渲染色 = 本色 × alpha，不随 palette 走。
@@ -54,9 +56,9 @@ pub struct FeatureRule {
     pub symbol_size_px: f32,
     /// 近带采样间距（世界单位）——同时是抖动幅度的基准（见 [`JITTER_FRACTION`]）。
     pub symbol_spacing_wu: f32,
-    /// 近带符号贴图（相对主题资产根的路径）；v1 恒 `None`。
+    /// 近带符号贴图（相对主题资产根的路径；3 格横向图集）。`None` = 纯色 quad。
     pub symbol_texture: Option<&'static str>,
-    /// 远带晕贴图（按地界包围盒拉伸的单张图章）；v1 恒 `None`。
+    /// 远带晕贴图（按地界包围盒拉伸的单张图章）。`None` = 纯色多边形。
     pub halo_texture: Option<&'static str>,
 }
 

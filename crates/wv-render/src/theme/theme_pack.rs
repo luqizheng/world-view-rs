@@ -217,8 +217,9 @@ pub mod builtin {
                 symbol_color: [0x3F, 0x5A, 0x35],
                 symbol_size_px: 5.0,
                 symbol_spacing_wu: 24.0,
-                symbol_texture: None,
-                halo_texture: None,
+                // Task 9（D12）：日间走 3 变体树图集 + 森林盖层晕图章。
+                symbol_texture: Some("overlays/forest/tree_atlas_day.png"),
+                halo_texture: Some("overlays/forest/forest_fill.png"),
             }),
         },
     };
@@ -240,7 +241,8 @@ pub mod builtin {
                 symbol_color: [0x28, 0x32, 0x24],
                 symbol_size_px: 4.0,
                 symbol_spacing_wu: 16.0,
-                symbol_texture: None,
+                // Task 9：暮色符号走浅墨图集；晕保持纯色（贴图校准留待后续）。
+                symbol_texture: Some("overlays/forest/tree_atlas_dusk.png"),
                 halo_texture: None,
             }),
         },
@@ -387,8 +389,34 @@ mod tests {
             "日间采样间距 24wu，got {}",
             rule.symbol_spacing_wu
         );
-        assert!(rule.symbol_texture.is_none(), "v1 纯色符号，贴图恒 None");
-        assert!(rule.halo_texture.is_none(), "v1 纯色晕，贴图恒 None");
+        assert_eq!(
+            rule.symbol_texture,
+            Some("overlays/forest/tree_atlas_day.png"),
+            "日间符号走 3 变体树图集"
+        );
+        assert_eq!(
+            rule.halo_texture,
+            Some("overlays/forest/forest_fill.png"),
+            "日间晕走森林盖层图章"
+        );
+    }
+
+    /// 暮色包：符号用浅墨图集，晕**不**接贴图（保持纯色暮色晕，Task 9 裁定）。
+    #[test]
+    fn dusk_pack_uses_dusk_atlas_and_flat_halo() {
+        let rule = builtin::DUSK
+            .overlays
+            .rule_for(crate::theme::overlays::FEATURE_FOREST)
+            .expect("暮色包必须给 FEATURE_FOREST 配置规则");
+        assert_eq!(
+            rule.symbol_texture,
+            Some("overlays/forest/tree_atlas_dusk.png"),
+            "暮色符号走浅墨图集"
+        );
+        assert!(
+            rule.halo_texture.is_none(),
+            "暮色晕保持纯色（halo_texture = None）"
+        );
     }
 
     /// D10 验收口径：DUSK 与 DEFAULT 至少 2 项可见差异（晕色 / 晕浓度 / 符号
