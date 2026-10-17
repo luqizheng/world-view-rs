@@ -32,10 +32,12 @@ use crate::edit::editing::EditHistory;
 use crate::state::{ViewState, WorldProjection};
 use wv_core::map::{GeometryData, GeometrySpan};
 use wv_core::time::TimeSpan;
-use wv_core::{Color, Faction, Id};
+use wv_core::{Color, Faction, FactionColorMode, FactionLayer, Id, Membership};
 use wv_edit::command::{
-    AddFactionCommand, EditCommand, RemoveFactionCommand, RemoveFactionGeometryCommand,
-    UpdateFactionCommand, UpsertFactionGeometryCommand,
+    AddFactionCommand, AddFactionLayerCommand, AddMembershipCommand, EditCommand,
+    RemoveFactionCommand, RemoveFactionGeometryCommand, RemoveFactionLayerCommand,
+    RemoveMembershipCommand, SetFactionLayerCommand, SetFactionRankCommand, SetFactionSeatCommand,
+    UpdateFactionCommand, UpdateFactionLayerCommand, UpsertFactionGeometryCommand,
 };
 use wv_edit::history::Transaction;
 
@@ -127,6 +129,148 @@ pub fn remove_geometry_now(
         edit,
         view,
         Box::new(RemoveFactionGeometryCommand::new(map, owner, from)),
+    );
+}
+
+/// 新建一个势力层（ADR-0027）。
+pub fn add_layer_now(
+    world: &mut WorldProjection,
+    edit: &mut EditHistory,
+    view: &ViewState,
+    name: String,
+    z: i32,
+) {
+    let id_str = format!("faction_layer_{}", current_unix_ms());
+    let layer = FactionLayer {
+        id: Id::new_unchecked(&id_str),
+        name,
+        z,
+        color_mode: FactionColorMode::Own,
+        visible: true,
+    };
+    push_cmd(
+        world,
+        edit,
+        view,
+        Box::new(AddFactionLayerCommand::new(layer)),
+    );
+}
+
+/// 更新势力层的名称 / z / 配色策略 / 可见性。
+#[allow(clippy::too_many_arguments)]
+pub fn update_layer_now(
+    world: &mut WorldProjection,
+    edit: &mut EditHistory,
+    view: &ViewState,
+    id: Id,
+    name: String,
+    z: i32,
+    color_mode: FactionColorMode,
+    visible: bool,
+) {
+    push_cmd(
+        world,
+        edit,
+        view,
+        Box::new(UpdateFactionLayerCommand::new(
+            id, name, z, color_mode, visible,
+        )),
+    );
+}
+
+/// 删除一个势力层（其下势力回落默认层，不删势力本体）。
+pub fn remove_layer_now(
+    world: &mut WorldProjection,
+    edit: &mut EditHistory,
+    view: &ViewState,
+    id: Id,
+) {
+    push_cmd(
+        world,
+        edit,
+        view,
+        Box::new(RemoveFactionLayerCommand::new(id)),
+    );
+}
+
+/// 把势力挂到某个层（`None` = 默认层）。
+pub fn set_faction_layer_now(
+    world: &mut WorldProjection,
+    edit: &mut EditHistory,
+    view: &ViewState,
+    id: Id,
+    layer: Option<Id>,
+) {
+    push_cmd(
+        world,
+        edit,
+        view,
+        Box::new(SetFactionLayerCommand::new(id, layer)),
+    );
+}
+
+/// 改势力的等级提示（自由字符串）。
+pub fn set_faction_rank_now(
+    world: &mut WorldProjection,
+    edit: &mut EditHistory,
+    view: &ViewState,
+    id: Id,
+    rank: Option<String>,
+) {
+    push_cmd(
+        world,
+        edit,
+        view,
+        Box::new(SetFactionRankCommand::new(id, rank)),
+    );
+}
+
+/// 改势力的驻地引用。
+pub fn set_faction_seat_now(
+    world: &mut WorldProjection,
+    edit: &mut EditHistory,
+    view: &ViewState,
+    id: Id,
+    seat: Option<Id>,
+) {
+    push_cmd(
+        world,
+        edit,
+        view,
+        Box::new(SetFactionSeatCommand::new(id, seat)),
+    );
+}
+
+/// 追加一条归属边。
+pub fn add_membership_now(
+    world: &mut WorldProjection,
+    edit: &mut EditHistory,
+    view: &ViewState,
+    faction: Id,
+    membership: Membership,
+) {
+    push_cmd(
+        world,
+        edit,
+        view,
+        Box::new(AddMembershipCommand::new(faction, membership)),
+    );
+}
+
+/// 删除一条归属边（按 target + from 定位）。
+pub fn remove_membership_now(
+    world: &mut WorldProjection,
+    edit: &mut EditHistory,
+    view: &ViewState,
+    faction: Id,
+    target: Id,
+    from: i64,
+) {
+    push_cmd(
+        world,
+        edit,
+        view,
+        Box::new(RemoveMembershipCommand::new(faction, target, from)),
     );
 }
 
