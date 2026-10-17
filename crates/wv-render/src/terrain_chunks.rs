@@ -160,6 +160,11 @@ fn select_mip(scale: f32, texel_world: f32) -> u32 {
     mip
 }
 
+/// 块坐标是否已超出当前块网格（换到更小的图后，旧图的尾块必须强制清掉）。
+fn chunk_out_of_grid(coord: [u32; 2], grid: [u32; 2]) -> bool {
+    coord[0] >= grid[0] || coord[1] >= grid[1]
+}
+
 /// 两个半开矩形（`[x0, y0, x1, y1]`）是否相交。边贴边不算相交。
 fn rects_intersect(a: [u32; 4], b: [u32; 4]) -> bool {
     a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1]
@@ -329,9 +334,17 @@ pub fn sync_terrain_chunks(
     let mip_now = select_mip(view.scale, cell_size / res as f32);
     let chunk_world_size = CHUNK_SIZE as f32 * cell_size;
 
-    // 1) 视口外 chunk despawn。
+    // 1) 视口外 chunk despawn，**并强制清掉超出当前块网格的旧图残块**。
+    //    换图后新图更小（如 1024² → 512×288）时，旧图右下角的块坐标已不在
+    //    新网格内；它们的 `chunk_cell_rect` 退化成空矩形、原点又可能仍在
+    //    视口内，只靠可见性判断会把这些旧像素留在画面上（评审用户报告的
+    //    「新建地图后旧图还留在主画面」）。
     let mut to_despawn: Vec<[u32; 2]> = Vec::new();
     for &coord in chunk_entities.by_coord.keys() {
+        if chunk_out_of_grid(coord, [cw, ch]) {
+            to_despawn.push(coord);
+            continue;
+        }
         let [gx0, gy0, _, _] = chunk_cell_rect(coord, size_w, size_h);
         let cmin = grid.raster_origin + Vec2::new(gx0 as f32, gy0 as f32) * cell_size;
         if !chunk_visible(cmin, chunk_world_size, vp_min, vp_max) {
@@ -1078,6 +1091,17 @@ mod tests {
             Vec2::new(2048.0, 256.0),
             "16:9 右下尾块 = 256×32 格 = 2048×256 wu，得 {edge:?}"
         );
+    }
+
+    /// 换到更小的图：旧图超出新块网格的坐标必须被判定为待清理
+    /// （否则它们会以空矩形留在视口里，把旧像素留在画面上）。
+    #[test]
+    fn chunks_outside_the_new_grid_are_evicted() {
+        let new_grid = chunk_grid(512, 288); // (2,2)
+        assert!(chunk_out_of_grid([2, 0], new_grid), "右侧旧块应清");
+        assert!(chunk_out_of_grid([0, 2], new_grid), "下侧旧块应清");
+        assert!(chunk_out_of_grid([3, 3], new_grid), "旧图角块应清");
+        assert!(!chunk_out_of_grid([1, 1], new_grid), "新网格内应保留");
     }
 
     /// 16:9 地图的**每一块**都能从源缓冲拷出（旧实现在右下块越界 panic）。

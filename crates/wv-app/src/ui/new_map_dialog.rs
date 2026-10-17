@@ -480,6 +480,129 @@ mod tests {
         );
     }
 
+    /// 新建地图并钻入后，底图纹理必须换成新图（旧图不得留在主画面）。
+    #[test]
+    fn creating_a_new_map_swaps_the_basemap_texture() {
+        let mut projection = WorldProjection::default();
+        let root = Id::new_unchecked("map_root");
+        projection.world.maps.push(MapNode {
+            id: root.clone(),
+            name: "旧世界".into(),
+            level: MapLevel::World,
+            extent: Some(Extent::sized(512.0, 512.0)),
+            base: Some(MapBase::Ocean),
+            ..Default::default()
+        });
+        let old_terrain = TerrainData {
+            width: 64,
+            height: 64,
+            cells: vec![MapBase::Ocean.cell(); 64 * 64],
+        };
+        projection
+            .world
+            .set_terrain(root.clone(), old_terrain.clone());
+        let mut drill = crate::state::DrillState::default();
+        drill.ensure_root(&projection.world);
+        let mut edit = crate::edit::editing::EditHistory::default();
+        let mut dialog = NewMapDialog {
+            open: true,
+            level: MapLevel::World,
+            ..Default::default()
+        };
+        let new_id = create_map(&mut dialog, &mut projection, &drill, &mut edit).expect("创建");
+        assert!(drill.enter(&projection.world, &new_id), "应能钻入新图");
+
+        // 模拟一帧 UI 之后的渲染侧：旧纹理 + 新 current。
+        let mut images = Assets::<Image>::default();
+        let image = wv_render::terrain_view::image_from_terrain(
+            &old_terrain,
+            wv_render::state::ViewMode::VectorFlat,
+            None,
+            false,
+            wv_render::theme::palette::colors(wv_render::theme::palette::MapPalette::Daylight),
+            wv_render::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+        );
+        let tex = wv_render::terrain_view::new_terrain_texture(
+            &mut images,
+            image,
+            &old_terrain,
+            Some(root.clone()),
+            wv_render::state::ViewMode::VectorFlat,
+            false,
+            wv_render::theme::palette::MapPalette::Daylight,
+        );
+        let mut bevy_world = bevy::prelude::World::new();
+        bevy_world.insert_resource(images);
+        bevy_world.insert_resource(tex);
+        bevy_world.insert_resource(crate::state::ViewState::default());
+        bevy_world.insert_resource(projection);
+        bevy_world.insert_resource(drill);
+        bevy_world.insert_resource(crate::state::GridConfig::default());
+        bevy_world
+            .insert_resource(wv_render::terrain_view::rebuild::PendingTerrainSynth::default());
+        let mut sched = Schedule::default();
+        sched.add_systems((
+            wv_render::terrain_view::rebuild_texture_on_mode_change,
+            wv_render::terrain_view::land_pending_terrain_synth,
+        ));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            sched.run(&mut bevy_world);
+            let t = bevy_world.resource::<wv_render::terrain_view::TerrainTexture>();
+            if t.last_map.as_ref() == Some(&new_id) {
+                assert_eq!(t.size, 512, "新图栅格宽");
+                assert_eq!(t.height, 288, "新图栅格高");
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "3s 内底图未换成新图（last_map={:?}）",
+                t.last_map
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// 建第二张「世界」级地图后必须能钻入它（否则旧图留在主画面）。
+    #[test]
+    fn creating_a_world_level_map_drills_into_it() {
+        let mut projection = WorldProjection::default();
+        let root = Id::new_unchecked("map_root");
+        projection.world.maps.push(MapNode {
+            id: root.clone(),
+            name: "世界".into(),
+            level: MapLevel::World,
+            extent: Some(Extent::sized(512.0, 512.0)),
+            base: Some(MapBase::Ocean),
+            ..Default::default()
+        });
+        projection.world.set_terrain(
+            root.clone(),
+            TerrainData {
+                width: 64,
+                height: 64,
+                cells: vec![MapBase::Ocean.cell(); 64 * 64],
+            },
+        );
+        let mut drill = crate::state::DrillState::default();
+        drill.ensure_root(&projection.world);
+        let mut edit = crate::edit::editing::EditHistory::default();
+        let mut dialog = NewMapDialog {
+            open: true,
+            level: MapLevel::World,
+            ..Default::default()
+        };
+        let id = create_map(&mut dialog, &mut projection, &drill, &mut edit).expect("创建应成功");
+        assert!(
+            drill.enter(&projection.world, &id),
+            "新建图应在 current.children 里"
+        );
+        assert_eq!(drill.current(), Some(&id), "应钻入新图");
+        let (node, _) = wv_render::terrain_view::active_terrain(&projection.world, drill.current())
+            .expect("新图应带地形");
+        assert_eq!(node.id, id);
+    }
+
     /// 幅面 → 栅格换算：4096×2304 wu / 8 wu每格 = 512×288（16:9 整数格）。
     #[test]
     fn grid_cells_derive_from_extent_divided_by_cell_size() {
