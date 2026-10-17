@@ -19,7 +19,11 @@
 
 #![cfg(feature = "app")]
 
-use crate::state::SelectionState;
+use bevy::prelude::*;
+
+use crate::state::{
+    DrillState, GridConfig, PlaybackState, SelectionState, ViewState, WorldProjection,
+};
 
 /// 锚点 / 边命中容差（屏幕像素）——调用方按 `view.scale` 反比换算成 wu。
 pub const PICK_TOLERANCE_PX: f32 = 8.0;
@@ -62,7 +66,8 @@ pub fn hit_tests_claim_click(sel: &SelectionState, local: (f32, f32), tol: f32) 
     }
     match &sel.closed {
         Some(ring) => {
-            pick_anchor(ring, local, tol).is_some() || pick_edge_insertion(ring, local, tol).is_some()
+            pick_anchor(ring, local, tol).is_some()
+                || pick_edge_insertion(ring, local, tol).is_some()
         }
         None => false,
     }
@@ -76,8 +81,7 @@ pub fn hit_tests_claim_click(sel: &SelectionState, local: (f32, f32), tol: f32) 
 pub fn handle_click(sel: &mut SelectionState, p: (f32, f32), now: f64, tol: f32, snap: f32) {
     let is_double = match sel.last_click {
         Some(((lx, ly), t)) => {
-            (p.0 - lx).hypot(p.1 - ly) <= DOUBLE_CLICK_WU
-                && now - t <= DOUBLE_CLICK_SECS
+            (p.0 - lx).hypot(p.1 - ly) <= DOUBLE_CLICK_WU && now - t <= DOUBLE_CLICK_SECS
         }
         None => false,
     };
@@ -137,6 +141,178 @@ fn dist_point_segment(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
     let dx = apx - t * abx;
     let dy = apy - t * aby;
     dx.hypot(dy)
+}
+
+// ====== Bevy 系统（薄壳：守卫链与坐标转换，逻辑都在上面纯函数里）======
+
+/// 顶点半径（屏幕像素）——绘制按 `view.scale` 换算成世界单位。
+const VERTEX_PX: f32 = 3.0;
+
+/// 每帧以当前图重申选区绑定——变图即清（spec D9：切图 = 取消选择）。
+pub fn sync_selection_map_change(drill: Res<DrillState>, mut sel: ResMut<SelectionState>) {
+    sel.on_map_change(drill.current());
+}
+
+/// 左键 + 键盘 → [`handle_click`]。守卫链逐字照抄
+/// `commit_continent_sketch_click`（UI 指针 / 播放 / 缩放下限 / 无工程锁）。
+#[allow(clippy::too_many_arguments)]
+pub fn commit_selection_click(
+    buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    view: Res<ViewState>,
+    playback: Res<PlaybackState>,
+    ui: Res<crate::camera::PointerOverUi>,
+    grid: Res<GridConfig>,
+    drill: Res<DrillState>,
+    projection: Res<WorldProjection>,
+    time: Res<Time>,
+    mut sel: ResMut<SelectionState>,
+) {
+    if !sel.enabled {
+        return;
+    }
+    if ui.wants_pointer || playback.playing || view.scale < 0.15 {
+        return;
+    }
+    if projection.project_dir.is_none() {
+        return;
+    }
+
+    // Esc：Closed → 取消整个选区；画中 → 只丢草稿（spec §3）。
+    if keys.just_pressed(KeyCode::Escape) {
+        if sel.is_closed() {
+            sel.cancel();
+        } else {
+            sel.discard_draft();
+        }
+        return;
+    }
+    // Backspace：画中删上一锚点。
+    if keys.just_pressed(KeyCode::Backspace) {
+        sel.draft.pop();
+        return;
+    }
+    // Enter：收笔（≥3 点成环；<3 点丢弃）。
+    if keys.just_pressed(KeyCode::Enter) {
+        sel.try_close();
+        sel.last_click = None;
+        return;
+    }
+    if !buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+    let Some(cursor_world) = view.cursor_world else {
+        return;
+    };
+    let Some(node) = drill.current_node(&projection.world) else {
+        return;
+    };
+    let origin = crate::drill::map_origin(&projection.world, node, &grid);
+    let local = cursor_world - origin;
+    let tol = PICK_TOLERANCE_PX * view.scale;
+    let snap = CLOSE_SNAP_PX * view.scale;
+    handle_click(
+        &mut sel,
+        (local.x, local.y),
+        time.elapsed_secs_f64(),
+        tol,
+        snap,
+    );
+}
+
+/// 按住左键拖动选中锚点（平移是右 / 中键的 `camera_pan`，左键拖不冲突）。
+#[allow(clippy::too_many_arguments)]
+pub fn drag_selected_anchor(
+    buttons: Res<ButtonInput<MouseButton>>,
+    view: Res<ViewState>,
+    playback: Res<PlaybackState>,
+    ui: Res<crate::camera::PointerOverUi>,
+    grid: Res<GridConfig>,
+    drill: Res<DrillState>,
+    projection: Res<WorldProjection>,
+    mut sel: ResMut<SelectionState>,
+) {
+    let Some(i) = sel.selected_anchor else {
+        return;
+    };
+    if !sel.enabled || ui.wants_pointer || playback.playing {
+        return;
+    }
+    if !buttons.pressed(MouseButton::Left) {
+        return;
+    }
+    let Some(cursor_world) = view.cursor_world else {
+        return;
+    };
+    let Some(node) = drill.current_node(&projection.world) else {
+        return;
+    };
+    let origin = crate::drill::map_origin(&projection.world, node, &grid);
+    let local = cursor_world - origin;
+    sel.move_anchor(i, (local.x, local.y));
+}
+
+/// 绘制选区（Gizmos，与 `draw_continent_sketch` 同层口径，不做 z 排序）：
+/// Drawing = 白折线 + 顶点 + 橡皮筋（末锚→光标）+ ≥3 点首尾虚线提示 +
+/// 吸附圈内首锚闭合圈；Closed = 金描边环 + 顶点（选中锚点加大）。
+///
+/// 注：bevy Gizmos 没有多边形填充原语——spec §3 的「半透明填充」延后
+/// （spec 追记已记偏差），v1 只有描边 + 顶点。
+pub fn draw_selection(
+    mut gizmos: Gizmos,
+    view: Res<ViewState>,
+    sel: Res<SelectionState>,
+    grid: Res<GridConfig>,
+) {
+    if !sel.enabled {
+        return;
+    }
+    let stroke = Color::WHITE.with_alpha(0.9);
+    let closed = Color::srgb(1.0, 0.78, 0.18).with_alpha(0.95);
+    let vertex_r = (VERTEX_PX * view.scale).max(0.5);
+    let to_view = |p: (f32, f32)| grid.map_to_view(Vec2::new(p.0, p.1));
+
+    if let Some(ring) = &sel.closed {
+        let pts: Vec<Vec2> = ring.iter().map(|&q| to_view(q)).collect();
+        for w in 0..pts.len() {
+            gizmos.line_2d(pts[w], pts[(w + 1) % pts.len()], closed);
+        }
+        for (i, sp) in pts.iter().enumerate() {
+            let r = if sel.selected_anchor == Some(i) {
+                vertex_r * 1.8
+            } else {
+                vertex_r
+            };
+            gizmos.circle_2d(Isometry2d::from_translation(*sp), r, closed);
+        }
+    }
+
+    if !sel.draft.is_empty() {
+        let pts: Vec<Vec2> = sel.draft.iter().map(|&q| to_view(q)).collect();
+        for w in pts.windows(2) {
+            gizmos.line_2d(w[0], w[1], stroke);
+        }
+        for sp in &pts {
+            gizmos.circle_2d(Isometry2d::from_translation(*sp), vertex_r, stroke);
+        }
+        // 橡皮筋：末锚 → 光标（spec §3 的 Figma pen 手感）。
+        if let Some(cursor_world) = view.cursor_world {
+            let cursor_view = grid.map_to_view(cursor_world);
+            if let Some(last) = pts.last() {
+                gizmos.line_2d(*last, cursor_view, stroke.with_alpha(0.6));
+            }
+        }
+        // ≥3 点提示「再点一下即可闭合」+ 光标吸附近首锚画闭合圈。
+        if pts.len() >= 3 {
+            gizmos.line_2d(*pts.last().expect("非空"), pts[0], stroke.with_alpha(0.35));
+            if let Some(cursor_world) = view.cursor_world {
+                let snap = CLOSE_SNAP_PX * view.scale;
+                if dist2((cursor_world.x, cursor_world.y), sel.draft[0]) <= snap * snap {
+                    gizmos.circle_2d(Isometry2d::from_translation(pts[0]), vertex_r * 2.0, closed);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -247,9 +423,15 @@ mod tests {
     fn hit_tests_claim_click_in_drawing_and_on_anchors() {
         let mut drawing = SelectionState::default();
         drawing.add_point((0.0, 0.0));
-        assert!(hit_tests_claim_click(&drawing, (100.0, 100.0), 0.5), "画中全吃");
+        assert!(
+            hit_tests_claim_click(&drawing, (100.0, 100.0), 0.5),
+            "画中全吃"
+        );
 
-        assert!(hit_tests_claim_click(&closed_square(), (10.1, 0.0), 0.5), "锚点命中");
+        assert!(
+            hit_tests_claim_click(&closed_square(), (10.1, 0.0), 0.5),
+            "锚点命中"
+        );
         assert!(
             hit_tests_claim_click(&closed_square(), (5.0, 10.0), 0.5),
             "边线命中"

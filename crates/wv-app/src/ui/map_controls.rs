@@ -1,8 +1,10 @@
 //! 右列纵向工具条（对齐原型 `.map-controls` · 2026-10-15）。
 //!
 //! ## 职责
-//! - `map_controls` —— 右侧工具条（line / square · sep · ＋ / − / 全图）。
-//!   笔刷/拖动切换已从地图工具移除（用户裁定）。
+//! - `map_controls` —— 右侧工具条（line / square · sep · 选择 · 生成大陆 · sep ·
+//!   ＋ / − / 全图）。笔刷/拖动切换已从地图工具移除（用户裁定）；
+//!   大陆圈画与城市落点两块瓷砖 2026-10-17 退役（选择工具 spec D5/D6）——
+//!   圈选由「选择」瓷砖接管（意图菜单见 [`super::intent_menu`]）。
 //! - `set_map_scale` —— 写入缩放并同步相机 Transform（Camera 是渲染真源）。
 //! - `tile_button` —— **本模块本地**的瓷砖按钮 helper：`fill = active ? accent : raised_bg`，
 //!   角圆随 `UiShell.radius::PANEL`，图标 = tile − `ICON_INSET × 2`。与 [`super::widgets::ToolButton`]
@@ -21,8 +23,8 @@
 //! - 右侧垂直居中、距窗体右缘 18px（原型 `right: 18px`）。
 //! - 圆角大框包裹整列：`panel_bg` 底 + `border_subtle` 描边 + `radius::PANEL` 圆角 + 投影。
 //! - 瓷砖 34×34px（原型 `.map-controls .button`），间距 4px，内边距 5px。
-//! - 6 块 = 2 测量工具 + 1 分隔 + 1 参照网格开关（2026-10-16 自地形设计器
-//!   迁入）+ 3 缩放/导航（笔刷切换已移除）。
+//! - 8 块 = 2 测量 + 1 选择（2026-10-17 M1）+ 1 生成大陆面板 + 1 网格开关
+//!   + 3 缩放/导航，两组分隔。
 //! - 活动态：`shell.accent()` 蓝底 + 白图标。
 //! - 非活动态：`shell.raised_bg()` 灰底 + 白图标。
 //!
@@ -34,20 +36,16 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use crate::state::{
-    CityToolMode, CityToolState, ContinentSketch, DrillState, GridConfig, MeasureMode,
-    MeasureState, ViewState, WorldProjection,
-};
+use crate::state::{DrillState, GridConfig, MeasureMode, MeasureState, ViewState, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::{radius, space};
-use crate::ui_shell::ShellNotice;
 use crate::ui_shell::StartupLoadRequest;
 
 use super::shell::UiShell;
 use super::widgets::{icon_image, ToolIcon};
 use super::{
-    ICON_GRID, ICON_HILLS, ICON_LINE, ICON_MAXIMIZE, ICON_MOUNTAIN_RANGE, ICON_SQUARE,
-    ICON_ZOOM_IN, ICON_ZOOM_OUT,
+    ICON_GRID, ICON_LINE, ICON_MAXIMIZE, ICON_MOUNTAIN_RANGE, ICON_PEN, ICON_SQUARE, ICON_ZOOM_IN,
+    ICON_ZOOM_OUT,
 };
 
 /// 单瓷砖边长 34px（原型 `.map-controls .button`）。
@@ -72,20 +70,14 @@ pub fn map_controls(
     shell_cfg: Res<UiShellConfig>,
     mut view: ResMut<ViewState>,
     mut measure: ResMut<MeasureState>,
-    mut city_tool: ResMut<CityToolState>,
-    (mut sketch, mut continent_dialog): (
-        ResMut<ContinentSketch>,
-        ResMut<crate::ui::ContinentDialog>,
-    ),
+    mut selection: ResMut<wv_render::state::SelectionState>,
+    mut continent_dialog: ResMut<crate::ui::ContinentDialog>,
     drill: Res<DrillState>,
     grid: Res<GridConfig>,
     tex: Res<wv_render::terrain_view::TerrainTexture>,
-    mut projection: ResMut<WorldProjection>,
+    projection: Res<WorldProjection>,
     windows: Query<&Window>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
-    mut edit: ResMut<crate::edit::editing::EditHistory>,
-    mut notice: ResMut<ShellNotice>,
-    time: Res<Time>,
     startup_req: Res<StartupLoadRequest>,
 ) {
     // 无工程锁（图片规格 §首页不可见）：与 `welcome_screen` 共用同一信号。
@@ -114,8 +106,7 @@ pub fn map_controls(
     let project_open = projection.project_dir.is_some();
     let line_active = measure.mode == MeasureMode::Line;
     let rect_active = measure.mode == MeasureMode::Rect;
-    let city_active = city_tool.mode == CityToolMode::CreateArmed;
-    let sketch_active = sketch.enabled;
+    let select_active = selection.enabled;
 
     // 位置：右侧垂直居中、距窗体右缘 18px（原型 `.map-controls`）。
     egui::Area::new(egui::Id::new("wv_map_controls_v05"))
@@ -152,8 +143,9 @@ pub fn map_controls(
                             measure.mode = if line_active {
                                 MeasureMode::Off
                             } else {
-                                // 互斥：开测量时关掉大陆圈画。
-                                sketch.enabled = false;
+                                // 互斥：开测量时关掉选择工具。
+                                selection.enabled = false;
+                                selection.cancel();
                                 MeasureMode::Line
                             };
                             measure.clear_draft();
@@ -173,7 +165,8 @@ pub fn map_controls(
                             measure.mode = if rect_active {
                                 MeasureMode::Off
                             } else {
-                                sketch.enabled = false;
+                                selection.enabled = false;
+                                selection.cancel();
                                 MeasureMode::Rect
                             };
                             measure.clear_draft();
@@ -185,71 +178,38 @@ pub fn map_controls(
                     ui.separator();
                     ui.add_space(SEPARATOR_PAD);
 
-                    // ②.5 City — 城市子图工具（ADR-0022 D2 UI 接入）
-                    //   M2 简化：单击落一个默认 256×256 wu 的城市在点击点（drag-to-draw 矩形
-                    //   留 v1.1）；启用时互斥地关掉 measure。详见 `commit_city_click` 系统。
+                    // ③ Select — 选择工具（pen 方法；2026-10-17 选择工具 spec D1/D2）。
+                    //   圈选 → 底部意图菜单（`ui::intent_menu`）→ 意图生效。
+                    //   闭合手势：点首锚 / 双击 / 回车；Esc 丢弃；完成后锚点可编辑。
                     tile_button(
                         ui,
                         &shell,
-                        ToolIcon::Svg(ICON_SQUARE), // 暂复用 SQUARE 图标；V1.1 换专属 ICON_CITY
-                        "城市：在父图上单击落一个 256×256 wu 的城市子图（ADR-0022 M2）",
-                        city_active,
+                        ToolIcon::Svg(ICON_PEN),
+                        "选择：圈选区域（左键加点；双击/回车/点首锚闭合；Esc 丢弃）",
+                        select_active,
                         project_open,
                         accent,
                         raised_bg,
                         || {
-                            let new_mode = if city_active {
-                                CityToolMode::Off
-                            } else {
-                                // 互斥：开城市时关掉测量与大陆圈画。
-                                sketch.enabled = false;
+                            selection.enabled = !select_active;
+                            if selection.enabled {
+                                // 互斥：开选择时关掉测量。
                                 measure.mode = MeasureMode::Off;
                                 measure.clear_draft();
-                                CityToolMode::CreateArmed
-                            };
-                            bevy::log::info!(
-                                "[city] 按钮 toggle: {:?} → {:?}",
-                                city_tool.mode,
-                                new_mode
-                            );
-                            city_tool.mode = new_mode;
-                            city_tool.draft = None;
-                        },
-                    );
-
-                    // ②.6 Continent — 大陆生成意图包络（2026-10-17 大陆生成 UI plan）。
-                    //   左键逐点画圈；≥3 点后双击 / 回车 / 右键闭合；Esc 丢弃当前折线。
-                    //   包络是会话态，生成按钮在「生成大陆」面板（Task 4 接线）。
-                    tile_button(
-                        ui,
-                        &shell,
-                        ToolIcon::Svg(ICON_HILLS),
-                        "大陆：圈出意图包络（左键加点；双击/回车闭合；Esc 丢弃）",
-                        sketch_active,
-                        project_open,
-                        accent,
-                        raised_bg,
-                        || {
-                            sketch.enabled = !sketch_active;
-                            if sketch.enabled {
-                                // 互斥：开圈画时关掉测量与城市工具。
-                                measure.mode = MeasureMode::Off;
-                                measure.clear_draft();
-                                city_tool.mode = CityToolMode::Off;
-                                city_tool.draft = None;
                             } else {
-                                sketch.discard_active();
+                                selection.cancel();
                             }
                         },
                     );
 
-                    // ②.7 Generate — 打开「生成大陆」属性面板（八参数 + 种子）。
-                    //   面板本身只收参数，确认才派 `GenerateContinentCommand`。
+                    // ④ Generate — 打开「生成大陆」属性面板（八参数 + 种子）。
+                    //   面板本身只收参数；选区即意图包络——确认时从
+                    //   `SelectionState` 取走闭合环（spec D5）。
                     tile_button(
                         ui,
                         &shell,
                         ToolIcon::Svg(ICON_MOUNTAIN_RANGE),
-                        "生成大陆…（八参数面板；先圈出意图包络）",
+                        "生成大陆…（八参数面板；用「选择」工具圈出意图包络）",
                         continent_dialog.open,
                         project_open,
                         accent,
@@ -258,6 +218,11 @@ pub fn map_controls(
                             continent_dialog.open = true;
                         },
                     );
+
+                    // ====== 分隔 ======
+                    ui.add_space(SEPARATOR_PAD);
+                    ui.separator();
+                    ui.add_space(SEPARATOR_PAD);
 
                     // ====== 视图 / 导航组：网格 / ＋ / − / 全图 ======
                     // ③ 网格 — 参照网格开关。状态在 `ViewState.grid_lines`
@@ -330,140 +295,6 @@ pub fn map_controls(
                     );
                 });
         });
-
-    // ====== 城市工具弹窗（ADR-0022 M2 D5 v2）========================
-    // 松手已起矩形 + 进 `CreateConfirm`；在这里渲染 ID / 名字 / 底图 三字段，
-    // 用户点 OK 才派 `AddCityCommand`，Cancel 回 `Off`。
-    if city_tool.mode == CityToolMode::CreateConfirm {
-        if let Some(pending) = city_tool.pending.as_mut() {
-            let frame_id = egui::Id::new("wv_city_dialog_v1");
-            let mut clicked_ok = false;
-            let mut clicked_cancel = false;
-            let mut id_error: Option<String> = None;
-            egui::Window::new("新建城市")
-                .id(frame_id)
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .default_size(egui::vec2(360.0, 200.0))
-                .show(ctx, |ui| {
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("ID");
-                            ui.text_edit_singleline(&mut pending.id);
-                        });
-                        // 校验 ID 字符集：`[A-Za-z0-9_]+`。
-                        if !pending
-                            .id
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || c == '_')
-                        {
-                            id_error = Some("ID 只能含 [A-Za-z0-9_]".to_string());
-                        }
-                        if pending.id.is_empty() {
-                            id_error = Some("ID 不能为空".to_string());
-                        }
-                        // 重名检测（与已有 maps 或其它挂件冲突）。
-                        if id_error.is_none() {
-                            let id_check = wv_core::Id::new_unchecked(&pending.id);
-                            if projection.world.maps.iter().any(|m| m.id == id_check) {
-                                id_error = Some(format!("ID `{}` 已存在", pending.id));
-                            }
-                        }
-                        if let Some(err) = &id_error {
-                            ui.colored_label(egui::Color32::from_rgb(220, 90, 70), err);
-                        }
-                        ui.horizontal(|ui| {
-                            ui.label("名字");
-                            ui.text_edit_singleline(&mut pending.name);
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("底图");
-                            ui.selectable_value(
-                                &mut pending.base,
-                                wv_core::map::MapBase::Ocean,
-                                "海洋",
-                            );
-                            ui.selectable_value(
-                                &mut pending.base,
-                                wv_core::map::MapBase::Land,
-                                "陆地",
-                            );
-                        });
-                        ui.horizontal(|ui| {
-                            if ui
-                                .add_enabled(id_error.is_none(), egui::Button::new("OK"))
-                                .clicked()
-                            {
-                                clicked_ok = true;
-                            }
-                            if ui.button("取消").clicked() {
-                                clicked_cancel = true;
-                            }
-                        });
-                    });
-                });
-            if clicked_cancel {
-                bevy::log::info!("[city] 弹窗：取消");
-                city_tool.mode = CityToolMode::Off;
-                city_tool.pending = None;
-            } else if clicked_ok {
-                let min_x = pending.draft.start.x.min(pending.draft.end.x);
-                let min_y = pending.draft.start.y.min(pending.draft.end.y);
-                let max_x = pending.draft.start.x.max(pending.draft.end.x);
-                let max_y = pending.draft.start.y.max(pending.draft.end.y);
-                let width = max_x - min_x;
-                let height = max_y - min_y;
-                let city_id_owned = pending.id.clone();
-                let icon_id_owned = format!("icon_{}", pending.id);
-                let city = wv_core::map::MapNode {
-                    id: wv_core::Id::new_unchecked(&pending.id),
-                    name: pending.name.clone(),
-                    level: wv_core::map::MapLevel::City,
-                    parent: Some(pending.parent_id.clone()),
-                    extent: Some(wv_core::map::Extent {
-                        width,
-                        height,
-                        origin: Some(wv_core::geometry::Point { x: min_x, y: min_y }),
-                    }),
-                    outline_polygon: Some(wv_core::map::GeometryData::Polygon(vec![
-                        0.0, 0.0, width, 0.0, width, height, 0.0, height,
-                    ])),
-                    base: Some(pending.base),
-                    ..wv_core::map::MapNode::default()
-                };
-                let cmd = wv_edit::AddCityCommand::new(
-                    city,
-                    wv_core::Id::new_unchecked(&icon_id_owned),
-                    wv_core::map::IconShape::Diamond,
-                );
-                let mut tx = wv_edit::Transaction::new();
-                tx.push(Box::new(cmd));
-                match edit.history.commit(&mut projection.world, tx) {
-                    Ok(dirty) => {
-                        edit.record_dirty(dirty);
-                        projection.dirty = true;
-                        let frame = (time.elapsed_secs() * 60.0) as u64;
-                        notice.info(
-                            format!("新建城市「{city_id_owned}」（{width:.0}×{height:.0} wu）"),
-                            frame,
-                        );
-                        bevy::log::info!("[city] 弹窗：OK 派命令 id={city_id_owned}");
-                    }
-                    Err(e) => {
-                        let frame = (time.elapsed_secs() * 60.0) as u64;
-                        notice.error(format!("新建城市未生效：{e}"), frame);
-                    }
-                }
-                city_tool.mode = CityToolMode::Off;
-                city_tool.pending = None;
-            }
-        } else {
-            // mode == CreateConfirm 但 pending 是 None — 异常态，自动复位。
-            bevy::log::warn!("[city] CreateConfirm 但 pending = None，自动复位");
-            city_tool.mode = CityToolMode::Off;
-        }
-    }
 }
 
 /// 工具条本地瓷砖按钮 helper（详见模块头注释 §职责）。
@@ -551,15 +382,15 @@ mod map_control_tests {
     /// `TILE_GAP` = 4、`SEPARATOR_PAD` = 8）若被改了，这里必须同步改。
     #[test]
     fn toolbar_layout_sums_to_expected_total_height() {
-        // 6 瓷砖 × 34 + 5 个 tile gap × 4 + 2 × 8 = 204 + 20 + 16 = 240
-        // （2026-10-16 加第 6 块「参照网格」瓷砖，自 5 块 202 迁移）
+        // 8 瓷砖 × 34 + 7 个 tile gap × 4 + 2 × 8 = 272 + 28 + 16 = 316
+        // （2026-10-17 选择工具 M1 重排：−大陆圈画 −城市落点 +选择，两分隔）
         const TILE: f32 = 34.0;
         const GAP: f32 = 4.0;
         const SEP: f32 = 8.0;
-        let total = 6.0 * TILE + 5.0 * GAP + 2.0 * SEP;
+        let total = 8.0 * TILE + 7.0 * GAP + 2.0 * SEP;
         assert!(
-            (total - 240.0).abs() < 1e-3,
-            "总额不等于 240：模块顶部常量（TILE_SIZE/TILE_GAP/SEPARATOR_PAD）改了 \
+            (total - 316.0).abs() < 1e-3,
+            "总额不等于 316：模块顶部常量（TILE_SIZE/TILE_GAP/SEPARATOR_PAD）改了 \
              必须在测试里同步更新。got {total}",
         );
     }

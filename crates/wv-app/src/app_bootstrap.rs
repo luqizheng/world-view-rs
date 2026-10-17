@@ -149,9 +149,11 @@ pub fn run(config: AppConfig) {
     .init_resource::<streets::StreetLayerCache>()
     .init_resource::<streets::StreetEditorState>()
     .init_resource::<crate::state::MeasureState>()
-    .init_resource::<crate::state::CityToolState>()
     // 大陆生成意图包络 / 属性面板 / 撤销恢复圈（会话态；不落盘）
     .init_resource::<wv_render::state::ContinentSketch>()
+    // 选择工具会话态（2026-10-17 选择工具 spec；drill::register 也会 init——
+    // 这里显式补一份，资源幂等，双保险防装配顺序遗漏）
+    .init_resource::<wv_render::state::SelectionState>()
     .init_resource::<ui::ContinentDialog>()
     .init_resource::<crate::state::ContinentGenerationState>()
     .init_resource::<wv_render::measurement::MeasurementCache>()
@@ -221,9 +223,6 @@ pub fn run(config: AppConfig) {
                 camera::collect_brush_stroke,
                 // 编辑（笔触 → 命令 → History）
                 editing::commit_stroke_on_release,
-                // ADR-0022 M2：城市工具——拖拽草稿 + 收笔提交。
-                editing::collect_city_drag,
-                editing::commit_city_drag_on_release,
                 streets::commit_street_click,
                 // 撤销 / 重做不再在这里单独监听 Ctrl+Z：快捷键统一由
                 // `ui_shell::hotkeys` 收（那里已经处理了「输入框聚焦时失效」），
@@ -316,6 +315,18 @@ pub fn run(config: AppConfig) {
         wv_render::continent_sketch::commit_continent_sketch_click
             .after(camera::track_cursor_world),
     )
+    // 选择工具（pen 方法）：变图清空 → 点击采集 → 拖动移锚，同一条光标坐标链。
+    .add_systems(
+        Update,
+        (
+            wv_render::selection::sync_selection_map_change,
+            wv_render::selection::commit_selection_click
+                .after(wv_render::selection::sync_selection_map_change),
+            wv_render::selection::drag_selected_anchor
+                .after(wv_render::selection::commit_selection_click),
+        )
+            .after(camera::track_cursor_world),
+    )
     .add_systems(
         Update,
         (
@@ -327,6 +338,8 @@ pub fn run(config: AppConfig) {
             wv_render::measurement::render_measurements,
             // 大陆生成意图包络（白线 + 当前折线）。
             wv_render::continent_sketch::draw_continent_sketch,
+            // 选择工具（草稿折线 + 橡皮筋 / 闭合环 + 选中锚点）。
+            wv_render::selection::draw_selection,
         ),
     )
     .add_systems(
