@@ -105,7 +105,7 @@ struct StrokeBatchKey {
 ///
 /// 线宽口径沿旧实现：屏幕像素 → 世界单位 `world = px * view_scale`
 /// （`view.scale` 是世界单位/像素，乘而不是除——历史 bug 见 git blame）。
-fn build_stroke_batch_mesh(segments: &[(Vec2, Vec2)], world_thickness: f32) -> Mesh {
+pub(crate) fn build_stroke_batch_mesh(segments: &[(Vec2, Vec2)], world_thickness: f32) -> Mesh {
     let n = segments.len();
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n * 4);
     let mut indices: Vec<u32> = Vec::with_capacity(n * 6);
@@ -137,7 +137,7 @@ fn build_stroke_batch_mesh(segments: &[(Vec2, Vec2)], world_thickness: f32) -> M
 /// 视口换算），所以恒定的屏幕线宽必须**乘** scale。历史上曾写成
 /// `px / view_scale`，屏幕宽度实际变成 `stroke_px / scale²`：远观时细到
 /// 几乎消失，深缩时胀成占屏 40% 的巨带——这个纯函数就是防它复发的单点。
-fn stroke_world_thickness(stroke_px: f32, view_scale: f32) -> f32 {
+pub(crate) fn stroke_world_thickness(stroke_px: f32, view_scale: f32) -> f32 {
     (stroke_px * view_scale).max(f32::EPSILON)
 }
 
