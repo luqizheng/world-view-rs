@@ -246,3 +246,15 @@ ender/（地图渲染）、edit/（UI 动作→EditCommand）、ui/（面板/组
 | **渲染配方** | RenderRecipe | 渲染「该不该画」的**单点求值**（ADR-0021 D1）：`recipe.rs` 每帧 **PreUpdate** 纯函数求值出 20 条 `PassId` 通道的 enabled 真值——输入 = `ViewState`（模式轴：查 MODE_TABLE 七模式 × 20 通道真值表）+ `LayerFrame`（声明轴级联叠加：terrain 不可见 → Terrain/Isoline/GridLines/MapFrame/Atmosphere 全关，余类推）+ `ThemePack.treatment`（视为输入）。fail-safe：未知模式 = 全关、新通道默认 disabled。**只管开不开，不管怎么画**；与 LayerFrame 两轴正交、不合并。首次出现：ADR-0021 + `crates/wv-render/src/recipe.rs` | 渲染 |
 | **渲染通道** | Pass（`PassId`） | 一条 pass = 一类渲染工作，共 20 条：Terrain / Isoline / GridLines / MapFrame / Veil / Grain / Roads / Streets / Poi / Buildings / Faction / PlaceLabels / StreetLabels / SeaLabels / Measurement / BrushCursor / Tracks / EventDots / DrillMarkers / Atmosphere。消费点只读 `recipe.enabled(PassId::X)`，不再散点 `matches!(view.mode, …)`。新增通道四步：枚举加项 + `PassPlan` 默认 false + 真值表加列 + 测试追加行（漏任一步被表测试抓住）。首次出现：ADR-0021 + `crates/wv-render/src/recipe.rs` | 渲染 |
 | **模态置顶** | Modal pinning | UI 层序约定（2026-10-14 用户要求「弹窗/浮动都在最顶层」）：egui 绘制序 `Background < Middle < Foreground < Tooltip`。浮动面板走缺省 `Middle`（点谁谁置顶）；**一切模态弹窗**（新建地图 / 新建工程 / 命令面板 / 欢迎页 / 启动加载）必须在 `Order::Foreground` 压住面板；Tooltip 在 Foreground 之上，弹窗内 `on_hover_text` 不受影响。命令面板窗口曾缺省 Middle 而**低于**自己的 Foreground 遮罩——鼠标点击全被遮罩吃掉（已修）。约定表见 `ui/widgets.rs` `float_window` 文档。首次出现：2026-10-14 用户需求 + `ui/new_map_dialog.rs` / `ui/command_palette_window.rs` / `ui/widgets.rs` | 工程 / 渲染 |
+
+## 主题覆盖物与地理事实（2026-10 · 讨论中，ADR-0023 扩展方向）
+
+> 来源：2026-10-17 theme 覆盖物机制头脑风暴。已收敛口径：作者定事实、主题按镜头演绎、城市编辑器管细化；同图连续缩放（非跨图跳转）。语义讨论中，随收敛冻结。
+
+| 术语 | 英文 / 拼音 | 定义 | 所属维度 |
+|---|---|---|---|
+| **主题覆盖物** | theme overlay / decoration | 主题包提供的地图装饰表现层（山形符号、树冠、田块等），来源可为贴图或程序生成；同一地理事实在不同镜头档下由主题给出不同覆盖物。首次出现：2026-10-17 theme 覆盖物讨论 | 美术 / 渲染 |
+| **地理事实** | geo fact | 作者声明的事实（「这里有一条山脉 / 一片黑森林」）：类型 + 几何 + 少量意向参数，**不存视觉结论**（§4.2 只存参数口径）；长相由主题按镜头分带演绎。承载已收敛为 **Place 扩展**：`feature` 类型（复用 kind 词汇）+ 地界 + 可选 `spine` 脊线。首次出现：2026-10-17 theme 覆盖物讨论 | 地理 |
+| **地界** | territory (of a Place) | Place 的领域边界：**多边形 + 时间区间**，骑在与势力领地同一套 `GeometrySpan` 底座上（`owner = Place.id`，`factions_at` 同款求值）；「黑森林萎缩」= 追加新 span 不覆盖（P6/P7）。与势力**共底座、不共语义**——地界只有事实层，无声称/实控双层。首次出现：2026-10-17 用户裁定「每一个 Place 都有地界，与势力图一致」 | 地理 |
+| **走向（脊线）** | ridge line | 山脉类事实的线状几何：远镜头下山形符号沿其排布的依据。多边形圈不住走向，山脉事实需要线状几何。首次出现：同上 | 地理 |
+| **镜头分带** | zoom band | 同一张图内按缩放连续划分的演绎档位（远 = 符号化 / 中 = 过渡 / 近 = 质感化），每档主题给出不同覆盖物表现；与 isoline `lod_bucket`、连续 LOD 共用「屏幕像素对应多少世界单位」的度量衡。首次出现：同上 | 渲染 |
