@@ -2168,6 +2168,9 @@ pub struct RegenerateBiomeMarkerCommand {
     pub place_id: wv_core::Id,
     /// 新 span 的生效日（调用方取当前时间轴日）。
     pub day: i64,
+    /// 展示名（动作层构造时从 World 捕获；`label` 无 World 访问权，
+    /// 缺省回退 id——撤销栈给人看，不该是 `place_marker_176…` 机器串）。
+    name: Option<String>,
     before: std::sync::Mutex<BeforeRegen>,
 }
 
@@ -2176,7 +2179,16 @@ impl RegenerateBiomeMarkerCommand {
         Self {
             place_id,
             day,
+            name: None,
             before: std::sync::Mutex::new(BeforeRegen::default()),
+        }
+    }
+
+    /// 带展示名构造（撤销栈 / 通知文案用）。
+    pub fn named(place_id: wv_core::Id, day: i64, name: impl Into<String>) -> Self {
+        Self {
+            name: Some(name.into()),
+            ..Self::new(place_id, day)
         }
     }
 }
@@ -2191,7 +2203,10 @@ fn envelope_points(flat: &[f32]) -> Option<Vec<(f32, f32)>> {
 
 impl EditCommand for RegenerateBiomeMarkerCommand {
     fn label(&self) -> String {
-        format!("重生成标记「{}」", self.place_id)
+        format!(
+            "重生成标记「{}」",
+            self.name.as_deref().unwrap_or(self.place_id.as_str())
+        )
     }
 
     fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
@@ -5927,9 +5942,13 @@ mod tests {
         set_biome_block(&mut w, 20, 0, 64, 64, 3);
         let terrain_before = w.terrain_of(&test_map()).cloned().unwrap();
 
-        RegenerateBiomeMarkerCommand::new(id.clone(), 9)
+        let dirty = RegenerateBiomeMarkerCommand::new(id.clone(), 9)
             .apply(&mut w)
             .expect("重生成应成功");
+        assert!(
+            !dirty.iter().any(|p| p.contains("terrain.bin")),
+            "识别分支不写格子，dirty 不得含地形路径（省一次无谓的 terrain.bin 重写），实得 {dirty:?}"
+        );
         assert_eq!(
             w.terrain_of(&test_map()).cloned().unwrap(),
             terrain_before,
@@ -6128,6 +6147,110 @@ mod tests {
         assert_eq!(w.terrain_of(&test_map()).cloned().unwrap(), terrain_before);
         assert_eq!(w.place_geometry, spans_before, "失败不得改动 span");
         assert_eq!(w.distances.places, places_before, "失败不得改动地点");
+    }
+
+    /// undo 最险路径：redo（同实例再次 apply）→ 再 revert，仍逐位还原。
+    /// `History::redo` 对命令重调 `apply`——快照被重写、span 处于已还原态，
+    /// 这条回环必须有测试锁定。
+    #[test]
+    fn regenerate_revert_redo_cycle_restores_bitwise_each_time() {
+        let mut w = land_world(64);
+        w.maps.push(map_with_extent(TEST_MAP, Some((64.0, 64.0))));
+        let id = create_marker(
+            &mut w,
+            "place_dark_forest",
+            1.0,
+            vec![(10.0, 10.0), (30.0, 10.0), (30.0, 30.0), (10.0, 30.0)],
+        );
+        set_biome_block(&mut w, 10, 10, 30, 30, 3);
+        let snapshot = |w: &World| {
+            (
+                w.terrain_of(&test_map()).cloned().unwrap(),
+                w.distances.places.clone(),
+                w.place_geometry.clone(),
+            )
+        };
+        let original = snapshot(&w);
+
+        let cmd = RegenerateBiomeMarkerCommand::new(id, 9);
+        cmd.apply(&mut w).expect("首次 apply");
+        cmd.revert(&mut w).expect("首次 revert");
+        assert_eq!(snapshot(&w), original, "第一次回环后应逐位还原");
+        cmd.apply(&mut w).expect("redo（同实例再次 apply）");
+        cmd.revert(&mut w).expect("redo 后再 revert");
+        assert_eq!(snapshot(&w), original, "redo 回环后仍应逐位还原");
+    }
+
+    /// owner 名下多条旧 span 与外部 span 交错：revert 按原索引升序回插，
+    /// 全表顺序必须与 apply 前一致。
+    #[test]
+    fn regenerate_revert_restores_interleaved_spans_in_original_order() {
+        let mut w = land_world(64);
+        w.maps.push(map_with_extent(TEST_MAP, Some((64.0, 64.0))));
+        let id = create_marker(
+            &mut w,
+            "place_dark_forest",
+            1.0,
+            vec![(8.0, 8.0), (32.0, 8.0), (32.0, 32.0), (8.0, 32.0)],
+        );
+        let mk_span = |owner: &str, from: i64| GeometrySpan {
+            map: test_map(),
+            owner: Id::new_unchecked(owner),
+            span: wv_core::time::TimeSpan { from, to: None },
+            geometry: GeometryData::Polygon(vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0]),
+            relation: None,
+        };
+        // 重排成 [外部A, marker(5), 外部B, marker 旧史 span(2)] —— owner 与
+        // 外部交错，回插顺序是本命令最精巧的不变式。
+        let marker_span = w.place_geometry.remove(0);
+        w.place_geometry = vec![
+            mk_span("place_other_a", 1),
+            marker_span,
+            mk_span("place_other_b", 3),
+            mk_span(id.as_str(), 2),
+        ];
+        let before = w.place_geometry.clone();
+
+        let cmd = RegenerateBiomeMarkerCommand::new(id.clone(), 9);
+        cmd.apply(&mut w).expect("重生成应替换两条 owner span");
+        let owner_spans: Vec<&GeometrySpan> = w
+            .place_geometry
+            .iter()
+            .filter(|g| g.owner.as_ref() == id.as_str())
+            .collect();
+        assert_eq!(
+            owner_spans.len(),
+            1,
+            "重生成后 owner 名下应只剩 1 条新 span，实得 {}",
+            owner_spans.len()
+        );
+        assert_eq!(owner_spans[0].span.from, 9);
+        cmd.revert(&mut w).expect("revert");
+        assert_eq!(
+            w.place_geometry, before,
+            "revert 应把交错的多条旧 span 按原顺序全表还原"
+        );
+    }
+
+    /// 手改 YAML 可能留下畸形包络（奇数长度 / 少于 3 点）→ 人话错误、零改动。
+    #[test]
+    fn regenerate_rejects_malformed_envelope_flat_array() {
+        let mut w = land_world(64);
+        w.maps.push(map_with_extent(TEST_MAP, Some((64.0, 64.0))));
+        let mut p = marker_place("place_bad", "坏包络", 1);
+        p.map = Some(test_map());
+        w.distances.places.push(p);
+        let terrain_before = w.terrain_of(&test_map()).cloned().unwrap();
+
+        for bad in [vec![1.0, 2.0, 3.0], vec![1.0, 2.0, 3.0, 4.0, 5.0]] {
+            w.distances.places[0].envelope = Some(bad.clone());
+            let err = RegenerateBiomeMarkerCommand::new(Id::new_unchecked("place_bad"), 9)
+                .apply(&mut w)
+                .unwrap_err();
+            assert!(matches!(err, EditError::Precondition(_)), "实得 {err:?}");
+        }
+        assert_eq!(w.terrain_of(&test_map()).cloned().unwrap(), terrain_before);
+        assert!(w.place_geometry.is_empty(), "畸形包络不得写入任何 span");
     }
 
     #[test]

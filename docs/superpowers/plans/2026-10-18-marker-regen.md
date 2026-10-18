@@ -1,6 +1,6 @@
 # 生物群系标记 M2：重生成（feat/marker-regen）
 
-> 日期：2026-10-18 · 状态：**执行中**（三决策已由用户授权按推荐执行）
+> 日期：2026-10-18 · 状态：**已完成**（T0–T8 全部落地；终审 2 Important + 4 Minor 已修，全门禁绿）
 > 上游：ADR-0029（已接受）· spec `2026-10-18-world-from-zero-map-design.md` D9/D13/D14 + 追记二
 
 ## 已拍板决策（2026-10-18「你来决定」）
@@ -34,7 +34,7 @@
 | T5 | wv-render：晕（earcut 复用 + UV 洞版）/ `forest_sites` 跳洞 | 洞内无三角形质心 / 洞内无采样点；单环回归 |
 | T6 | wv-app `regenerate_marker_now` + Region 面板小节 + i18n | 动作提交 + 脏纹理；播放中拒绝；列表只列当前图标记 |
 | T7 | spec 追记三 + GLOSSARY + 全量门禁（workspace 三条 + app 两条 + smoke-gui + §2.2 依赖断言） | — |
-| T8 | 独立 reviewer 终审 → 修 Critical/Important → 本地 `--no-ff` 合 main（不推送） | — |
+| T8 | 独立 reviewer 终审 → 修 Critical/Important → 本地 `--no-ff` 合 main（不推送） | 终审结论「需修后合」：Critical 0；I-1 io 诊断带洞盲区（修：外环判定+测试）、I-2 redo/多 span 回插零覆盖（修：+2 测试）；M-1 emoji、M-2 label 机器串（named 构造器）、M-3 识别分支 dirty 负向断言、M-4 畸形包络单测，全修 |
 
 ## 范围外
 

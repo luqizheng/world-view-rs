@@ -154,7 +154,8 @@ pub fn panel_region(
                     for (id, name, biome_id) in markers {
                         ui.horizontal(|ui| {
                             let biome = marker_biome_name(current_loc.0, biome_id);
-                            ui.label(format!("🏷 {name} · {biome}"));
+                            // 不加装饰字形：AGENTS §8 图标一律 Lucide（emoji 跨平台字形不稳）。
+                            ui.label(format!("{name} · {biome}"));
                             if ui
                                 .button(t_key(&current_loc, I18nKey::RegionPanelMarkerRegenBtn))
                                 .clicked()

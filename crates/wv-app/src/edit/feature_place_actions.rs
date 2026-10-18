@@ -116,16 +116,23 @@ pub fn regenerate_marker_now(
     if playback.playing {
         return Err("播放中为只读：先暂停再重生成标记".into());
     }
-    let map = world
+    let place = world
         .world
         .distances
         .places
         .iter()
         .find(|p| p.id == place_id)
-        .and_then(|p| p.map.clone())
-        .ok_or_else(|| format!("地点 `{place_id}` 不存在或未锚定地图"))?;
+        .ok_or_else(|| format!("地点 `{place_id}` 不存在"))?;
+    let (map, name) = (
+        place
+            .map
+            .clone()
+            .ok_or_else(|| format!("地点 `{place_id}` 未锚定地图"))?,
+        place.name.clone(),
+    );
     let before_cells = world.world.terrain_of(&map).map(|t| t.cells.clone());
-    let cmd = wv_edit::command::RegenerateBiomeMarkerCommand::new(place_id, playback.current_day);
+    let cmd =
+        wv_edit::command::RegenerateBiomeMarkerCommand::named(place_id, playback.current_day, name);
     let mut tx = Transaction::new();
     tx.push(Box::new(cmd));
     match edit.history.commit(&mut world.world, tx) {

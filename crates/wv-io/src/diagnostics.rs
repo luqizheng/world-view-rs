@@ -273,9 +273,15 @@ pub fn detect_feature_territory_hints(world: &wv_core::World) -> Vec<Diagnostic>
             if g.owner != place.id || &g.map != map_id {
                 continue;
             }
-            let wv_core::map::GeometryData::Polygon(ring) = &g.geometry else {
+            // 带洞地界（ADR-0029 M2）按外环判定——与锚点拟合 / 渲染晕「只看
+            // 外环」同一取舍，洞内（湖面/草地芯）本就不该有目标群系格。
+            let ring: &Vec<f32> = match &g.geometry {
+                wv_core::map::GeometryData::Polygon(ring) => ring,
+                wv_core::map::GeometryData::PolygonWithHoles { outer, .. } => outer,
                 // Points / Ref：v0.1 不构成面，求值侧同样跳过。
-                continue;
+                wv_core::map::GeometryData::Points(_) | wv_core::map::GeometryData::Ref(_) => {
+                    continue
+                }
             };
             if ring.len() < 6 {
                 continue;
@@ -1047,6 +1053,105 @@ mod tests {
             .filter(|x| x.fingerprint.starts_with("travel_feasibility|"))
             .count();
         assert_eq!(travel, 0, "无共同参与者不应出提示");
+    }
+
+    /// 带洞地界按**外环**做 feature-no-cells 判定（ADR-0029 M2）：洞不参与，
+    /// 外环内无目标群系格 → 提示；格刷对 → 提示消失。
+    #[test]
+    fn marker_with_holes_geometry_is_checked_by_outer_ring() {
+        use wv_core::map::{Extent, GeometryData, GeometrySpan};
+        use wv_core::terrain::{TerrainCellData, TerrainData};
+
+        fn marker_world() -> wv_core::World {
+            let map = Id::new_unchecked("m");
+            let mut w = wv_core::World::default();
+            w.maps.push(wv_core::map::MapNode {
+                id: map.clone(),
+                name: "M".into(),
+                level: wv_core::map::MapLevel::World,
+                parent: None,
+                children: Vec::new(),
+                layers: Vec::new(),
+                icons: Vec::new(),
+                extent: Some(Extent::sized(64.0, 64.0)),
+                raster: None,
+                geographic_source: None,
+                time_span: None,
+                unit_per_km: None,
+                orientation: 0.0,
+                base: None,
+                outline_polygon: None,
+            });
+            w.set_terrain(
+                map.clone(),
+                TerrainData {
+                    width: 64,
+                    height: 64,
+                    cells: vec![
+                        TerrainCellData {
+                            height: 100,
+                            surface: 1,
+                            biome: 3,
+                        };
+                        64 * 64
+                    ],
+                },
+            );
+            let place_id = Id::new_unchecked("place_ring_woods");
+            w.distances.places.push(Place {
+                id: place_id.clone(),
+                name: "环湖林地".into(),
+                map: Some(map.clone()),
+                x: None,
+                y: None,
+                w: None,
+                h: None,
+                feature: None,
+                biome: Some(1),
+                envelope: None,
+                rank: None,
+            });
+            w.place_geometry.push(GeometrySpan {
+                map,
+                owner: place_id,
+                span: TimeSpan { from: 0, to: None },
+                geometry: GeometryData::PolygonWithHoles {
+                    outer: vec![10.0, 10.0, 30.0, 10.0, 30.0, 30.0, 10.0, 30.0],
+                    holes: vec![vec![18.0, 18.0, 22.0, 18.0, 22.0, 22.0, 18.0, 22.0]],
+                },
+                relation: None,
+            });
+            w
+        }
+
+        // 外环内全是草原（biome 3），声明的却是森林（biome 1）→ 应提示。
+        let w = marker_world();
+        let d = derive_hints(&w);
+        assert!(
+            d.items
+                .iter()
+                .any(|x| x.fingerprint == "feature-no-cells|place_ring_woods"),
+            "带洞地界不得被 feature-no-cells 静默跳过，got {:?}",
+            d.items
+        );
+
+        // 对照：外环内刷成森林 → 提示消失（洞内保持草原不影响）。
+        let mut w2 = marker_world();
+        let mut data = w2.terrain_of(&Id::new_unchecked("m")).cloned().unwrap();
+        for y in 10..30 {
+            for x in 10..30 {
+                data.cells[y * 64 + x].biome = 1;
+            }
+        }
+        w2.set_terrain(Id::new_unchecked("m"), data);
+        let d2 = derive_hints(&w2);
+        assert!(
+            !d2.items
+                .iter()
+                .any(|x| x.fingerprint == "feature-no-cells|place_ring_woods"),
+            "外环内有目标群系格时不应提示，got {:?}",
+            d2.items
+        );
     }
 
     /// 同地点 → 不出 hint。
