@@ -1583,9 +1583,10 @@ impl EditCommand for RemoveFactionGeometryCommand {
 }
 
 /// 划分模式（ADR-0028 D5）：与 `wv_terrain::divide::EdgeMode` 同义。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DivisionMode {
     /// 边界吸附地物线（水陆界面 / 河链 / 山脊峰值）。
+    #[default]
     Snap,
     /// 无视地貌，保留栅格提取的平滑边框。
     Straight,

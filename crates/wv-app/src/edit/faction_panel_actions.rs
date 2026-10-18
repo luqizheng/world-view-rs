@@ -1,4 +1,4 @@
-﻿//! 势力面板 → 提交 `wv_edit::command` 的动作层。
+//! 势力面板 → 提交 `wv_edit::command` 的动作层。
 //!
 //! ## 职责
 //!
@@ -29,15 +29,16 @@
 #![cfg(feature = "app")]
 
 use crate::edit::editing::EditHistory;
-use crate::state::{ViewState, WorldProjection};
+use crate::state::{PlaybackState, ViewState, WorldProjection};
 use wv_core::map::{GeometryData, GeometrySpan};
 use wv_core::time::TimeSpan;
 use wv_core::{Color, Faction, FactionColorMode, FactionLayer, Id, Membership};
 use wv_edit::command::{
-    AddFactionCommand, AddFactionLayerCommand, AddMembershipCommand, EditCommand,
-    RemoveFactionCommand, RemoveFactionGeometryCommand, RemoveFactionLayerCommand,
-    RemoveMembershipCommand, SetFactionLayerCommand, SetFactionRankCommand, SetFactionSeatCommand,
-    UpdateFactionCommand, UpdateFactionLayerCommand, UpsertFactionGeometryCommand,
+    AddFactionCommand, AddFactionLayerCommand, AddMembershipCommand, DivideFactionCommand,
+    DivisionMode, EditCommand, RemoveFactionCommand, RemoveFactionGeometryCommand,
+    RemoveFactionLayerCommand, RemoveMembershipCommand, SetFactionLayerCommand,
+    SetFactionRankCommand, SetFactionSeatCommand, UpdateFactionCommand, UpdateFactionLayerCommand,
+    UpsertFactionGeometryCommand,
 };
 use wv_edit::history::Transaction;
 
@@ -275,6 +276,52 @@ pub fn remove_membership_now(
 }
 
 /// 内部：单条命令包成事务提交，失败时 warn 不抛。
+/// 从宿主（或空势力）划分出一个新势力（ADR-0028 / M1 Task 6）。
+///
+/// 与其它 `*_now` 不同，本动作**返回结果**：对话框要区分成功（清空选区 +
+/// 成功回执）与失败（留在框内 + 人话回执），不能像面板那样一 warn 了事。
+///
+/// - `host = None`：空势力宿主（全图陆地，水域扣除）；
+/// - `intent`：捕获图局部 wu 的意图环；
+/// - `cell_size`：图内一格的世界单位（wu → 格坐标）。
+#[allow(clippy::too_many_arguments)]
+pub fn divide_faction_now(
+    world: &mut WorldProjection,
+    edit: &mut EditHistory,
+    playback: &PlaybackState,
+    map: Id,
+    host: Option<Id>,
+    intent: Vec<(f32, f32)>,
+    mode: DivisionMode,
+    name: String,
+    cell_size: f32,
+) -> Result<Id, String> {
+    let id = Id::new_unchecked(format!("faction_{}", current_unix_ms()));
+    let faction = Faction::new(id.clone(), name, Color("#6f7fa8".into()));
+    let cmd = DivideFactionCommand::new(
+        map,
+        host,
+        intent,
+        mode,
+        faction,
+        playback.current_day,
+        cell_size,
+    );
+    let mut tx = Transaction::new();
+    tx.push(Box::new(cmd));
+    match edit.history.commit(&mut world.world, tx) {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
+            world.dirty = true;
+            Ok(id)
+        }
+        Err(e) => {
+            bevy::log::warn!("势力划分失败: {e}");
+            Err(format!("{e}"))
+        }
+    }
+}
+
 fn push_cmd(
     world: &mut WorldProjection,
     edit: &mut EditHistory,

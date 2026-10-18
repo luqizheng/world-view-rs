@@ -308,6 +308,30 @@ pub enum I18nKey {
     /// 命名对话框的「创建」按钮
     FeaturePlaceCreate,
 
+    // ── 势力划分（ADR-0028 / 势力交互 M1） ─────────────────────────
+    /// 选区意图菜单「划分势力」按钮
+    IntentMenuDivideFaction,
+    /// 「划分势力」对话框标题
+    FactionDivisionDialogTitle,
+    /// 对话框「名称」标签
+    DivisionNameLabel,
+    /// 对话框「宿主」标签
+    DivisionHostLabel,
+    /// 无宿主（空势力陆地）
+    DivisionHostNone,
+    /// 对话框「边界」标签
+    DivisionModeLabel,
+    /// 边界模式：贴地（沿河流/山脊/湖岸）
+    DivisionModeSnap,
+    /// 边界模式：越地（无视地貌）
+    DivisionModeStraight,
+    /// 对话框「创建」按钮
+    DivisionCreate,
+    /// 成功回执（有宿主）：已从 {host} 划分出「{name}」
+    DivisionNoticeCreatedFromHost,
+    /// 成功回执（空势力）：已创建势力「{name}」
+    DivisionNoticeCreated,
+
     // ── 地图层级（state::map_level_label） ──────────────────────────
     /// 「世界」MapLevel
     MapLevelWorld,

@@ -160,6 +160,7 @@ pub fn run(config: AppConfig) {
     .init_resource::<ui::city_intent::CityIntentDialog>()
     .init_resource::<crate::state::ContinentGenerationState>()
     // 森林意图的命名对话框（选择工具 M4）：环 + 钉住图 id 自持在对话框里。
+    .init_resource::<ui::FactionDivisionDialog>()
     .init_resource::<ui::FeaturePlaceDialog>()
     .init_resource::<wv_render::measurement::MeasurementCache>()
     // 整图后台合成任务槽（CONTINUOUS_LOD M3）：落地校验在主线程读取。
@@ -401,7 +402,10 @@ pub fn run(config: AppConfig) {
     // 主链已顶满 20 元组上限，单独注册并排在状态栏之后。
     app.add_systems(
         bevy_egui::EguiPrimaryContextPass,
-        ui::feature_place_dialog.after(ui::status_bar),
+        (
+            ui::feature_place_dialog.after(ui::status_bar),
+            ui::faction_divide_dialog.after(ui::feature_place_dialog),
+        ),
     );
     // 选区意图菜单（底部居中浮动条；spec 2026-10-17 §4）。ego pass 主链已到
     // Bevy 元组上限（20），单独注册、排在 map_controls 之后即可（只读选区）。

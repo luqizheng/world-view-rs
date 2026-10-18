@@ -27,7 +27,8 @@ use crate::ui_shell::StartupLoadRequest;
 use super::shell::UiShell;
 use super::widgets::icon_image;
 use super::{
-    ICON_GLOBE, ICON_HILLS, ICON_LAKE, ICON_MAP_PIN, ICON_MOUNTAIN_RANGE, ICON_PLATEAU, ICON_TREES,
+    ICON_GLOBE, ICON_HILLS, ICON_LAKE, ICON_LAYERS, ICON_MAP_PIN, ICON_MOUNTAIN_RANGE,
+    ICON_PLATEAU, ICON_TREES,
 };
 use crate::theme::ui_tokens::radius;
 
@@ -45,9 +46,30 @@ fn terrain_intents_available(world: &wv_core::World, map: &wv_core::Id) -> bool 
 /// {World, Region}）。M4 起目录含「森林」：大陆 + 城市 + 森林 + 地形四意图。
 fn intent_count_for(level: wv_core::map::MapLevel) -> usize {
     match level {
-        wv_core::map::MapLevel::World | wv_core::map::MapLevel::Region => 7,
+        wv_core::map::MapLevel::World | wv_core::map::MapLevel::Region => 8,
         wv_core::map::MapLevel::City | wv_core::map::MapLevel::Interior => 0,
     }
+}
+
+/// 意图菜单要打开的四个对话框（打包成一个 SystemParam）。
+///
+/// **为什么打包**：`intent_menu` 的参数已顶到 Bevy 的 16 元组上限
+/// （2026-10-17 对话框拆分时的同一条经验）；每加一个对话框就超限。
+/// 打包后 4 个资源只占 1 个参数槽。
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct IntentMenuDialogs<'w> {
+    pub continent: ResMut<'w, crate::ui::ContinentDialog>,
+    pub city: ResMut<'w, CityIntentDialog>,
+    pub feature: ResMut<'w, crate::ui::FeaturePlaceDialog>,
+    pub divide: ResMut<'w, crate::ui::FactionDivisionDialog>,
+}
+
+/// 划分势力按钮的可用性：当前图有自有地形栅格（与地形意图同门）。
+fn terrain_ok_for_divide(world: &wv_core::World, drill: &DrillState) -> bool {
+    drill
+        .current()
+        .map(|m| terrain_intents_available(world, m))
+        .unwrap_or(false)
 }
 
 /// 菜单可见性：工具**启用**且选区已闭合。`enabled` 门必不可少——
@@ -69,9 +91,7 @@ pub fn intent_menu(
     current_loc: Res<CurrentLocale>,
     drill: Res<DrillState>,
     mut selection: ResMut<wv_render::state::SelectionState>,
-    mut continent_dialog: ResMut<crate::ui::ContinentDialog>,
-    mut city_dialog: ResMut<CityIntentDialog>,
-    mut feature_dialog: ResMut<crate::ui::FeaturePlaceDialog>,
+    mut dialogs: IntentMenuDialogs,
     mut projection: ResMut<wv_render::state::WorldProjection>,
     mut edit: ResMut<crate::edit::editing::EditHistory>,
     mut tex: ResMut<wv_render::terrain_view::TerrainTexture>,
@@ -137,7 +157,7 @@ pub fn intent_menu(
                                 .clicked()
                             {
                                 // 只开面板；选区保持到面板确认时被消费（spec D5）。
-                                continent_dialog.open = true;
+                                dialogs.continent.open = true;
                             }
                             let icon = icon_image(
                                 ICON_MAP_PIN,
@@ -160,7 +180,7 @@ pub fn intent_menu(
                                 if let Some(node) = drill.current_node(&projection.world) {
                                     if let Some(map) = drill.current() {
                                         prefill(
-                                            &mut city_dialog,
+                                            &mut dialogs.city,
                                             &selection,
                                             map.clone(),
                                             node.extent,
@@ -190,7 +210,38 @@ pub fn intent_menu(
                                 if let (Some(map), Some(ring)) =
                                     (drill.current().cloned(), selection.closed.clone())
                                 {
-                                    feature_dialog.open_with(map, ring);
+                                    dialogs.feature.open_with(map, ring);
+                                }
+                            }
+                            // 划分势力（ADR-0028）：把闭合环 + 当前图 + 解析出的宿主
+                            // 搬进对话框；宿主解析只认实控、取面积最小的含入势力。
+                            let icon = icon_image(
+                                ICON_LAYERS,
+                                egui::Color32::WHITE,
+                                TILE_SIZE - ICON_INSET,
+                            );
+                            if ui
+                                .add_enabled(
+                                    terrain_ok_for_divide(&projection.world, &drill),
+                                    egui::Button::image_and_text(
+                                        icon,
+                                        t(loc, I18nKey::IntentMenuDivideFaction),
+                                    )
+                                    .fill(shell.accent())
+                                    .corner_radius(egui::CornerRadius::from(radius::PANEL)),
+                                )
+                                .clicked()
+                            {
+                                if let (Some(map), Some(ring)) =
+                                    (drill.current().cloned(), selection.closed.clone())
+                                {
+                                    let host = crate::ui::faction_divide_dialog::resolve_host(
+                                        &projection.world,
+                                        &map,
+                                        &ring,
+                                        playback.current_day,
+                                    );
+                                    dialogs.divide.open_with(map, ring, host);
                                 }
                             }
                             // 地形按钮栅格门（spec §4：有**自有**地形栅格才可用，
@@ -284,12 +335,12 @@ mod tests {
     fn intent_catalog_nonempty_for_world_and_region() {
         assert_eq!(
             intent_count_for(MapLevel::World),
-            7,
-            "世界级：大陆 + 城市 + 森林（M4）+ 地形四意图（M3）"
+            8,
+            "世界级：大陆 + 城市 + 森林（M4）+ 划分势力（ADR-0028）+ 地形四意图（M3）"
         );
         assert_eq!(
             intent_count_for(MapLevel::Region),
-            7,
+            8,
             "区域级同世界级（spec §4 裁定）"
         );
     }
