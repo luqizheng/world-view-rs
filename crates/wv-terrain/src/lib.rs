@@ -38,6 +38,7 @@
 
 pub mod biome;
 pub mod continent;
+pub mod divide;
 pub mod edit;
 pub mod generate;
 pub mod intent;

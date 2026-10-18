@@ -1077,7 +1077,7 @@ pub fn region_spine(polygon: &[(f32, f32)]) -> Option<(Vec<(f32, f32)>, f32)> {
 }
 
 /// even-odd 射线法点包含测试（自交环按栅格化口径处理，spec §12 裁定）。
-fn point_in_polygon(p: (f32, f32), polygon: &[(f32, f32)]) -> bool {
+pub(crate) fn point_in_polygon(p: (f32, f32), polygon: &[(f32, f32)]) -> bool {
     let (x, y) = p;
     let n = polygon.len();
     let mut inside = false;
