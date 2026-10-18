@@ -1,6 +1,6 @@
 # ADR-0028: 势力领地表示与划分语义（势力交互 M1）
 
-> 状态：**提议**（2026-10-18 起草；实现按本 ADR 进行，用户可否决后重开）
+> 状态：**已接受（Accepted）**（2026-10-18 起草并实现；2026-10-18 用户确认接受）
 > 关联：ADR-0027（势力层多兼容模型，已接受——D2「势力自持几何、渲染不推导领地」**继续有效**）、
 > spec `docs/superpowers/specs/2026-10-18-world-from-zero-map-design.md` §5 + 追记一、
 > 计划 `docs/superpowers/plans/2026-10-18-faction-interaction-m1.md`
