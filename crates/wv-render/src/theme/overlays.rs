@@ -112,7 +112,8 @@ pub fn overlay_far_blend(scale: f32) -> f32 {
 /// 2. 每个候选做 `±0.35 × spacing_wu` 的确定性抖动——哈希输入
 ///    `seed ^ (gx << 32) ^ gy`，经 splitmix64 展开；**不用 `rand`**，跨进程 /
 ///    跨平台同 seed 同布局（重开工程树冠不跳变）；
-/// 3. 只保留 `point_in_ring` 内的候选；
+/// 3. 只保留 `point_in_ring` 内的候选；`holes`（带洞地界，ADR-0029 M2）内的
+///    候选剔除——湖面 / 草地芯不落树；
 /// 4. 局部点 + `raster_offset` 映射到地形格（`(p + offset) / cell_size`，向下取整），
 ///    越界候选丢弃；两遍规则——**有森林群系格就只收它们**
 ///    （作者刷过森林笔刷），否则收 `height > 0` 的陆地格（未刷 kind 的兜底）。
@@ -125,6 +126,7 @@ pub fn overlay_far_blend(scale: f32) -> f32 {
 /// 一律返回空——渲染侧据此回退为「远带晕 + 地界描边 + 名字」，不画树。
 pub fn forest_sites(
     ring_local: &[f32],
+    holes: &[&[f32]],
     terrain: Option<&TerrainData>,
     cell_size: f32,
     raster_offset: (f32, f32),
@@ -160,6 +162,10 @@ pub fn forest_sites(
             let x = center_x + signed_unit(hash as u32) * jitter;
             let y = center_y + signed_unit((hash >> 32) as u32) * jitter;
             if !point_in_ring(ring_local, x, y) {
+                continue;
+            }
+            // 带洞地界（ADR-0029 M2）：洞内（湖面 / 草地芯）不落树。
+            if holes.iter().any(|h| point_in_ring(h, x, y)) {
                 continue;
             }
             let Some(cell) = cell_at(terrain, cell_size, raster_offset, x, y) else {
@@ -307,8 +313,24 @@ mod tests {
     fn forest_sites_are_inside_the_ring_and_deterministic() {
         let ring = square_ring();
         let terrain = uniform_grid(10, 10, 1, 3, 10);
-        let a = forest_sites(&ring, Some(&terrain), 10.0, (0.0, 0.0), 0x5EED_1234, 25.0);
-        let b = forest_sites(&ring, Some(&terrain), 10.0, (0.0, 0.0), 0x5EED_1234, 25.0);
+        let a = forest_sites(
+            &ring,
+            &[],
+            Some(&terrain),
+            10.0,
+            (0.0, 0.0),
+            0x5EED_1234,
+            25.0,
+        );
+        let b = forest_sites(
+            &ring,
+            &[],
+            Some(&terrain),
+            10.0,
+            (0.0, 0.0),
+            0x5EED_1234,
+            25.0,
+        );
         assert_eq!(a, b, "同 seed + 同网格两次调用必须逐元素相等");
         assert_eq!(
             a.len(),
@@ -329,6 +351,7 @@ mod tests {
         let terrain = half_forest_grid();
         let sites = forest_sites(
             &square_ring(),
+            &[],
             Some(&terrain),
             10.0,
             (0.0, 0.0),
@@ -355,6 +378,7 @@ mod tests {
         let terrain = uniform_grid(10, 10, 1, 3, 10);
         let sites = forest_sites(
             &square_ring(),
+            &[],
             Some(&terrain),
             10.0,
             (0.0, 0.0),
@@ -374,6 +398,7 @@ mod tests {
         let terrain = uniform_grid(10, 10, 0, 0, -5);
         let sites = forest_sites(
             &square_ring(),
+            &[],
             Some(&terrain),
             10.0,
             (0.0, 0.0),
@@ -389,7 +414,15 @@ mod tests {
 
     #[test]
     fn forest_sites_return_empty_without_terrain() {
-        let sites = forest_sites(&square_ring(), None, 10.0, (0.0, 0.0), 0x5EED_1234, 25.0);
+        let sites = forest_sites(
+            &square_ring(),
+            &[],
+            None,
+            10.0,
+            (0.0, 0.0),
+            0x5EED_1234,
+            25.0,
+        );
         assert!(
             sites.is_empty(),
             "无栅格地形时回退远带晕、不画树，got {}",
@@ -397,12 +430,58 @@ mod tests {
         );
     }
 
+    /// 带洞地界：洞内候选不落树（M2）。100×100 环、中央 30..70 洞、
+    /// 间距 25 → 4×4 候选中去掉洞内 4 个，剩 12。
+    #[test]
+    fn forest_sites_skips_sites_inside_holes() {
+        let ring = square_ring();
+        let terrain = uniform_grid(10, 10, 1, 3, 10);
+        let hole = vec![30.0, 30.0, 70.0, 30.0, 70.0, 70.0, 30.0, 70.0];
+        let sites = forest_sites(
+            &ring,
+            &[&hole],
+            Some(&terrain),
+            10.0,
+            (0.0, 0.0),
+            0x5EED_1234,
+            25.0,
+        );
+        assert_eq!(
+            sites.len(),
+            12,
+            "4×4 候选应剔除洞内 4 个（候选 37.5/62.5 × 37.5/62.5），got {}",
+            sites.len()
+        );
+        for &(x, y) in &sites {
+            assert!(
+                !wv_core::geometry::point_in_ring(&hole, x, y),
+                "点 ({x}, {y}) 不得落在洞内"
+            );
+        }
+    }
+
     #[test]
     fn forest_sites_honor_raster_offset() {
         let terrain = half_forest_grid();
         let ring = square_ring();
-        let base = forest_sites(&ring, Some(&terrain), 10.0, (0.0, 0.0), 0x5EED_1234, 25.0);
-        let shifted = forest_sites(&ring, Some(&terrain), 10.0, (10.0, 10.0), 0x5EED_1234, 25.0);
+        let base = forest_sites(
+            &ring,
+            &[],
+            Some(&terrain),
+            10.0,
+            (0.0, 0.0),
+            0x5EED_1234,
+            25.0,
+        );
+        let shifted = forest_sites(
+            &ring,
+            &[],
+            Some(&terrain),
+            10.0,
+            (10.0, 10.0),
+            0x5EED_1234,
+            25.0,
+        );
         assert!(
             !base.is_empty() && !shifted.is_empty(),
             "base / shifted 都应非空（got {} / {}）",

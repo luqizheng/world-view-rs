@@ -44,7 +44,9 @@ use bevy::render::render_resource::{PrimitiveTopology, VertexFormat};
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use crate::faction_overlays::build_polygon_mesh;
+use crate::faction_overlays::{
+    build_polygon_mesh, build_polygon_with_holes_mesh, earcut_with_holes,
+};
 use crate::layer_frame::LayerFrame;
 use crate::recipe::{PassId, RenderRecipe};
 use crate::state::{GridConfig, PlaybackState, ViewState, WorldProjection};
@@ -52,7 +54,7 @@ use crate::terrain_view::terrain_resolve::active_terrain;
 use crate::theme::overlays::{forest_sites, overlay_far_blend};
 use crate::theme::theme_pack::builtin;
 use wv_core::id::Id;
-use wv_core::place_territory_at;
+use wv_core::{place_territory_at, TerritoryShape};
 
 /// 远带地界晕的 Z。
 ///
@@ -241,15 +243,19 @@ pub fn sync_feature_overlays(
     // 地形只用于近带采样；拿不到 = 空采样回退（只画晕）。
     let terrain = active_terrain(&projection.world, Some(&map_id)).map(|(_, data)| data);
 
-    for (place, ring) in territories {
+    for (place, shape) in territories {
         // 普通地点不发覆盖层：它的表现是 POI 点 + 标签（feature_overlays 与
         // `world_projection::place_dot_for` 的抑制规则互为镜像）。
         let Some(feature) = overlay_feature_for_place(place) else {
             continue;
         };
-        // 顶点不足 3 个（< 6 个 float）无法成面——`build_polygon_mesh` 的扇形
-        // 三角化要求 n ≥ 3。
-        if ring.len() < 6 {
+        // 带洞地界（ADR-0029 M2）：晕按外环 + 洞三角化，符号采样避开洞。
+        let (outer, holes): (&[f32], Vec<&[f32]>) = match shape {
+            TerritoryShape::Solid(ring) => (ring, Vec::new()),
+            TerritoryShape::WithHoles { outer, holes } => (outer, holes),
+        };
+        // 顶点不足 3 个（< 6 个 float）无法成面——扇形 / earcut 都要求 n ≥ 3。
+        if outer.len() < 6 {
             continue;
         }
 
@@ -270,7 +276,11 @@ pub fn sync_feature_overlays(
                     &mut commands,
                     &mut meshes,
                     &mut materials,
-                    build_polygon_mesh_uv(ring),
+                    if holes.is_empty() {
+                        build_polygon_mesh_uv(outer)
+                    } else {
+                        build_polygon_mesh_uv_with_holes(outer, &holes)
+                    },
                     texture,
                     halo_alpha,
                     map_origin + Vec3::Z * halo_z,
@@ -279,7 +289,11 @@ pub fn sync_feature_overlays(
                     &mut commands,
                     &mut meshes,
                     &mut materials,
-                    build_polygon_mesh(ring),
+                    if holes.is_empty() {
+                        build_polygon_mesh(outer)
+                    } else {
+                        build_polygon_with_holes_mesh(outer, &holes)
+                    },
                     halo_color,
                     halo_alpha,
                     map_origin + Vec3::Z * halo_z,
@@ -297,7 +311,8 @@ pub fn sync_feature_overlays(
         }
         let seed = stable_hash(place.id.as_str());
         let sites = forest_sites(
-            ring,
+            outer,
+            &holes,
             terrain,
             grid.cell_size,
             raster_offset,
@@ -440,6 +455,39 @@ fn build_polygon_mesh_uv(coords: &[f32]) -> Mesh {
         indices.push(i + 1);
     }
 
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
+}
+
+/// 带洞地界的**带 UV** 晕 mesh（ADR-0029 M2）：外环 − 洞经 [`earcut_with_holes`]
+/// 三角化，每个顶点补外环包围盒归一化 UV——单张 `forest_fill` 图章按包围盒
+/// 拉伸铺面，与 [`build_polygon_mesh_uv`] 同口径；洞内不产生三角形（晕不盖
+/// 湖面 / 草地芯）。
+fn build_polygon_mesh_uv_with_holes(outer: &[f32], holes: &[&[f32]]) -> Mesh {
+    let tris = earcut_with_holes(outer, holes);
+    let (mut min_x, mut min_y) = (f32::INFINITY, f32::INFINITY);
+    let (mut max_x, mut max_y) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for point in outer.chunks_exact(2) {
+        min_x = min_x.min(point[0]);
+        min_y = min_y.min(point[1]);
+        max_x = max_x.max(point[0]);
+        max_y = max_y.max(point[1]);
+    }
+    // 退化轴（零宽 / 零高环）避免除零；UV 全部压到 0。
+    let w = (max_x - min_x).max(f32::EPSILON);
+    let h = (max_y - min_y).max(f32::EPSILON);
+    let positions: Vec<[f32; 3]> = tris.iter().map(|p| [p[0], p[1], 0.0]).collect();
+    let uvs: Vec<[f32; 2]> = tris
+        .iter()
+        .map(|p| [(p[0] - min_x) / w, (p[1] - min_y) / h])
+        .collect();
+    let indices: Vec<u32> = (0..positions.len() as u32).collect();
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
@@ -730,6 +778,54 @@ mod tests {
         let (_, a) = build_symbol_mesh_uv_seeded(&sites, 2.0, 0x5EED_0001, 3);
         let (_, b) = build_symbol_mesh_uv_seeded(&sites, 2.0, 0x5EED_0002, 3);
         assert_ne!(a, b, "不同地点种子的变体序列应不同");
+    }
+
+    /// 带洞晕 mesh：任一三角形质心不得落进洞；总面积 ≈ 外环 − 洞；UV 归一化。
+    #[test]
+    fn halo_mesh_with_holes_leaves_hole_interior_uncovered() {
+        let outer = vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0];
+        let hole = vec![4.0, 4.0, 6.0, 4.0, 6.0, 6.0, 4.0, 6.0];
+        let mesh = build_polygon_mesh_uv_with_holes(&outer, &[&hole]);
+        let positions: &[[f32; 3]] = mesh
+            .attribute(MeshVertexAttribute::new(
+                "Vertex_Position",
+                0,
+                VertexFormat::Float32x3,
+            ))
+            .expect("位置属性应存在")
+            .as_float3()
+            .expect("应是 f32x3");
+        assert!(
+            positions.len().is_multiple_of(3),
+            "三角 soup 顶点数应为 3 的倍数，实得 {}",
+            positions.len()
+        );
+        let mut area = 0.0f32;
+        for tri in positions.chunks(3) {
+            let (a, b, c) = (tri[0], tri[1], tri[2]);
+            let centroid = ((a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0);
+            assert!(
+                !(centroid.0 > 4.0 && centroid.0 < 6.0 && centroid.1 > 4.0 && centroid.1 < 6.0),
+                "三角形质心 {centroid:?} 不得落在洞 (4..6)² 内"
+            );
+            area += ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() / 2.0;
+        }
+        assert!(
+            (area - 96.0).abs() < 1.0,
+            "带洞晕面积应 ≈ 100−4=96，实得 {area}"
+        );
+        let bevy::render::mesh::VertexAttributeValues::Float32x2(uvs) =
+            mesh.attribute(Mesh::ATTRIBUTE_UV_0).expect("UV 应存在")
+        else {
+            panic!("UV 应为 Float32x2");
+        };
+        assert_eq!(uvs.len(), positions.len(), "每顶点一个 UV");
+        for (i, uv) in uvs.iter().enumerate() {
+            assert!(
+                uv[0] >= -1e-6 && uv[0] <= 1.0 + 1e-6 && uv[1] >= -1e-6 && uv[1] <= 1.0 + 1e-6,
+                "UV {i} = {uv:?} 应归一化到外环包围盒 [0,1]²"
+            );
+        }
     }
 
     /// 晕多边形补 UV：顶点 UV = ((x-min_x)/w, (y-min_y)/h)（拉伸单张图章）。
