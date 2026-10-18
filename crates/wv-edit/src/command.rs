@@ -3793,6 +3793,95 @@ mod tests {
         w
     }
 
+    /// 宿主疆界的外环（武: 带洞时取 outer），wu。
+    fn faction_ring(w: &World, owner: &str) -> Vec<(f32, f32)> {
+        let g = w
+            .faction_geometry
+            .iter()
+            .find(|g| g.owner.as_str() == owner && g.relation.is_none())
+            .expect("宿主疆界应存在");
+        let flat = match &g.geometry {
+            GeometryData::Polygon(v) => v.clone(),
+            GeometryData::PolygonWithHoles { outer, .. } => outer.clone(),
+            other => panic!("意外的几何形态：{other:?}"),
+        };
+        flat.chunks_exact(2).map(|c| (c[0], c[1])).collect()
+    }
+
+    /// 连续两次划分：第二次没碰到的宿主外沿必须**逐点**不变（M2 切弧拼接），
+    /// 且两次 undo 逐位回到划分前。
+    #[test]
+    fn two_divisions_keep_untouched_host_edges_pointwise_and_undo() {
+        let mut w = world_with_host_faction();
+        let host = Id::new_unchecked("faction_host");
+        let first = DivideFactionCommand::new(
+            test_map(),
+            Some(host.clone()),
+            vec![(4.0, 4.0), (24.0, 4.0), (24.0, 24.0), (4.0, 24.0)],
+            DivisionMode::Straight,
+            f("faction_a", "A 国"),
+            0,
+            1.0,
+        );
+        first.apply(&mut w).expect("第一次划分");
+        let rem1 = faction_ring(&w, "faction_host");
+        assert!(rem1.len() >= 4, "余部应是环，实得 {rem1:?}");
+
+        let second = DivideFactionCommand::new(
+            test_map(),
+            Some(host.clone()),
+            // 完全在宿主内部的切块（不碰任何外沿）——这样外沿的「未触碰」语义
+            // 才没有歧义。
+            vec![(30.0, 30.0), (50.0, 30.0), (50.0, 50.0), (30.0, 50.0)],
+            DivisionMode::Straight,
+            f("faction_b", "B 国"),
+            0,
+            1.0,
+        );
+        second.apply(&mut w).expect("第二次划分");
+        let rem2 = faction_ring(&w, "faction_host");
+
+        // 「未触碰的边」= rem1 中两端都落在宿主原外沿线上的边段。
+        let on_outer = |p: (f32, f32)| {
+            (p.0 - 4.0).abs() < 1e-4
+                || (p.1 - 4.0).abs() < 1e-4
+                || (p.0 - 60.0).abs() < 1e-4
+                || (p.1 - 60.0).abs() < 1e-4
+        };
+        let n = rem1.len();
+        let mut checked = 0usize;
+        for i in 0..n {
+            let pair = [rem1[i], rem1[(i + 1) % n]];
+            if !(on_outer(pair[0]) && on_outer(pair[1])) {
+                continue;
+            }
+            checked += 1;
+            assert!(
+                rem2.windows(2)
+                    .any(|w| w == pair || (w[0] == pair[1] && w[1] == pair[0])),
+                "未触碰的宿主外沿边段 {pair:?} 必须在第二次划分后逐点不变；rem2={rem2:?}"
+            );
+        }
+        assert!(checked >= 4, "应有足够多的未触碰边段，实得 {checked}");
+
+        // undo 第二次：宿主疆界必须逐点回到 rem1。
+        second.revert(&mut w).expect("撤销第二次划分");
+        assert_eq!(
+            faction_ring(&w, "faction_host"),
+            rem1,
+            "撤销第二次划分后宿主疆界必须与第一次的余部逐点一致"
+        );
+        // undo 第一次：回到原始方形。
+        first.revert(&mut w).expect("撤销第一次划分");
+        let back = faction_ring(&w, "faction_host");
+        assert_eq!(
+            back,
+            vec![(4.0, 4.0), (60.0, 4.0), (60.0, 60.0), (4.0, 60.0)],
+            "撤销第一次划分后宿主应回到原方形，实得 {back:?}"
+        );
+        assert!(w.factions.iter().all(|f| f.id.as_str() == "faction_host"));
+    }
+
     #[test]
     fn divide_creates_faction_and_shrinks_host_atomically() {
         let mut w = world_with_host_faction();
