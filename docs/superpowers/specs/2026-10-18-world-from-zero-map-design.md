@@ -157,3 +157,14 @@
 | 洞 | 国中国 → `PolygonWithHoles` | D5 划分出 enclave 时宿主余部 = 带洞环，`GeometryData` 新增 `PolygonWithHoles { outer, holes }` 变体（untagged 序居 `Polygon` 之后）；query/render/io 三处接洞。 |
 
 **洞非本次脑暴原话，是实现 D5（「在某个势力中间画一个多边形」）的必然推论**——单环几何表达不了「环形疆域」，记为此轮补齐。
+
+---
+
+## 追记二：命名段（生物群系标记）实现口径（2026-10-18）
+
+- **数据**：`Place.biome: Option<u8>` + `Place.envelope: Option<Vec<f32>>`（serde default，旧 YAML 零迁移）；生成边界存既有 `place_geometry`（单环）。详见 ADR-0029。
+- **识别/生成**：包络内目标群系占比 ≥8% 且 ≥4 格 → 识别（不写格子，边界=已有格子的连通边界最大外环）；否则生成（写群系；陆群系跳过水格；水群系写水 + 就地海拔）。
+- **湖（D14 落地）**：`LAKE` 标记 = 包络陆格 → `surface=WATER`、`biome=LAKE`、`height=包络中位海拔`（湖面平）。既有 `LakeRegion` 挖碗意图保留为地形工具，两者互不覆盖。
+- **RIVER 群系**：M1 不做（线状标记另立 M2）。
+- **渲染过渡**：主题覆盖物规则仍以旧 feature 4 为键；`biome` 森林族（森林/丛林/热带雨林）映射到 4，其余 None；`place.feature` 作旧工程回退。词汇统一仍归 D18 后续。
+- **调整路径**：重圈包络重生成（D13）；笔刷不自动改标记边界（M2 再评派生渲染）。
