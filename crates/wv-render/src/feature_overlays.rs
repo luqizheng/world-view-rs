@@ -244,7 +244,7 @@ pub fn sync_feature_overlays(
     for (place, ring) in territories {
         // 普通地点不发覆盖层：它的表现是 POI 点 + 标签（feature_overlays 与
         // `world_projection::place_dot_for` 的抑制规则互为镜像）。
-        let Some(feature) = place.feature else {
+        let Some(feature) = overlay_feature_for_place(place) else {
             continue;
         };
         // 顶点不足 3 个（< 6 个 float）无法成面——`build_polygon_mesh` 的扇形
@@ -570,11 +570,58 @@ pub fn stable_hash(id: &str) -> u64 {
     hasher.finish()
 }
 
+/// 标记的群系 → 主题覆盖物词汇（ADR-0029 D5 的过渡桥）。
+///
+/// 主题 pack 的规则仍以旧 `FEATURE_FOREST = 4` 为键（D18 词汇统一延后）。
+/// 有 `biome` 时：森林族（森林/丛林/热带雨林）映射到 4，其余群系无覆盖物
+/// （名字与格子色仍然可见）；无 `biome` 的旧工程回退到 `place.feature`。
+pub(crate) fn overlay_feature_for_place(place: &wv_core::distance::Place) -> Option<u8> {
+    match place.biome {
+        Some(wv_terrain::biome::BIOME_FOREST)
+        | Some(wv_terrain::biome::BIOME_JUNGLE)
+        | Some(wv_terrain::biome::BIOME_TROPICAL_RAINFOREST) => {
+            Some(crate::theme::overlays::FEATURE_FOREST)
+        }
+        Some(_) => None,
+        None => place.feature,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// `stable_hash` 是纯函数：同 id 每次调用同值，不同 id 不撞。
+    #[test]
+    fn forest_biome_maps_to_legacy_feature_four() {
+        let mut p = wv_core::distance::Place {
+            id: wv_core::Id::new_unchecked("p"),
+            name: "p".into(),
+            feature: None,
+            biome: Some(wv_terrain::biome::BIOME_JUNGLE),
+            envelope: None,
+            map: None,
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+        };
+        assert_eq!(
+            overlay_feature_for_place(&p),
+            Some(crate::theme::overlays::FEATURE_FOREST),
+            "森林族群系应映射到旧 feature 4"
+        );
+        p.biome = Some(wv_terrain::biome::BIOME_GRASSLAND);
+        assert_eq!(overlay_feature_for_place(&p), None, "非森林群系无覆盖物");
+        p.biome = None;
+        p.feature = Some(4);
+        assert_eq!(
+            overlay_feature_for_place(&p),
+            Some(4),
+            "旧工程只有 feature 时走回退"
+        );
+    }
+
     #[test]
     fn stable_hash_is_stable_across_calls() {
         assert_eq!(
