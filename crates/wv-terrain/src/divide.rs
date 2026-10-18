@@ -45,9 +45,9 @@ pub struct DivisionGeometry {
 }
 
 /// 布尔栅格。行优先，`index = y * w + x`。
-type Mask = Vec<bool>;
+pub(crate) type Mask = Vec<bool>;
 
-fn point_in_mask(mask: &Mask, w: u32, h: u32, x: i64, y: i64) -> bool {
+fn point_in_mask(mask: &[bool], w: u32, h: u32, x: i64, y: i64) -> bool {
     if x < 0 || y < 0 || x >= w as i64 || y >= h as i64 {
         return false;
     }
@@ -91,7 +91,7 @@ pub fn rasterize_ring(w: u32, h: u32, ring: &[(f32, f32)]) -> Mask {
 /// 再 chaikin 平滑 + Douglas-Peucker 抽稀。
 ///
 /// 环的方向携带语义：外环与洞的 shoelace 符号相反——调用方据此分捡。
-fn mask_boundary_rings(mask: &Mask, w: u32, h: u32) -> Vec<Vec<(f32, f32)>> {
+pub(crate) fn mask_boundary_rings(mask: &[bool], w: u32, h: u32) -> Vec<Vec<(f32, f32)>> {
     // 有向边：内部在左。key = 起点（格点，整数），value = 终点列表。
     use std::collections::BTreeMap;
     let mut edges: BTreeMap<(i64, i64), Vec<(i64, i64)>> = BTreeMap::new();
@@ -161,13 +161,13 @@ fn ring_signed_area(ring: &[(f32, f32)]) -> f32 {
 }
 
 /// 环 = 点列（格坐标）。
-type Ring = Vec<(f32, f32)>;
+pub(crate) type Ring = Vec<(f32, f32)>;
 
 /// 外环列表 + 每个外环的洞列表（下标对应）。
-type OutersWithHoles = (Vec<Ring>, Vec<Vec<Ring>>);
+pub(crate) type OutersWithHoles = (Vec<Ring>, Vec<Vec<Ring>>);
 
 /// 分捡「外环 + 隶属洞」：面积符号相反者为洞，按洞代表点落入哪个外环归组。
-fn split_outers_and_holes(rings: Vec<Ring>) -> OutersWithHoles {
+pub(crate) fn split_outers_and_holes(rings: Vec<Ring>) -> OutersWithHoles {
     let mut outers: Vec<Vec<(f32, f32)>> = Vec::new();
     let mut holes: Vec<Vec<(f32, f32)>> = Vec::new();
     for r in rings {

@@ -43,6 +43,7 @@ pub mod edit;
 pub mod generate;
 pub mod intent;
 pub mod isoline;
+pub mod marker;
 
 /// 地表二值通道（authoring 真值）。**刻意用 `u8` 常量而非枚举**：
 /// 与栅格二进制逐字节对应，`0` 与全零格（海平面深海）的 `Default` 语义对齐。
