@@ -1012,19 +1012,39 @@ pub fn update_faction_labels(
         if let Some(current) = drill.current_node(&projection.world) {
             let map_span = current.time_span.as_ref();
             if wv_core::label_visible_at(map_span, None, t) {
-                // factions_at 已按 GeometrySpan.span 过滤（时间维度），
-                // 此处只需过滤图级窗口。
-                let factions = wv_core::factions_at(&projection.world, &current.id, t);
-                for (faction, coords) in factions {
+                // faction_territories_at 已按 GeometrySpan.span 过滤（时间维度），
+                // 并带出洞环（ADR-0028 D3）：国中国的宿主标签不能落在洞里。
+                let territories =
+                    wv_core::faction_territories_at(&projection.world, &current.id, t);
+                for territory in territories {
+                    let faction = territory.faction;
+                    let coords = territory.vertices;
                     // 计算多边形质心（简单平均）。
-                    if coords.len() >= 2 {
+                    if coords.len() >= 6 {
                         let n = (coords.len() / 2) as f32;
                         let (mut sx, mut sy) = (0.0_f32, 0.0_f32);
                         for pair in coords.chunks(2) {
                             sx += pair[0];
                             sy += pair[1];
                         }
-                        let center = Vec2::new(sx / n, sy / n);
+                        let mut center = Vec2::new(sx / n, sy / n);
+                        // 洞感知（终审 I2）：质心落在洞里 → 沿「质心 → 最远外环
+                        // 顶点」的中点挪出去，否则环形宿主（如被切出国中国的余部）
+                        // 的名字会画在内国头顶上。
+                        let in_hole = territory
+                            .holes
+                            .iter()
+                            .any(|h| wv_core::geometry::point_in_ring(h, center.x, center.y));
+                        if in_hole {
+                            let mut far = (coords[0], coords[1], -1.0f32);
+                            for pair in coords.chunks_exact(2) {
+                                let d = (pair[0] - center.x).powi(2) + (pair[1] - center.y).powi(2);
+                                if d > far.2 {
+                                    far = (pair[0], pair[1], d);
+                                }
+                            }
+                            center = Vec2::new((center.x + far.0) / 2.0, (center.y + far.1) / 2.0);
+                        }
                         // v0.1 优先级：文本长度（与地名同一口径）。
                         candidates.push(crate::label_collision::LabelCandidate {
                             pos: grid.map_to_view(center),

@@ -241,7 +241,13 @@ pub fn intent_menu(
                                         &ring,
                                         playback.current_day,
                                     );
-                                    dialogs.divide.open_with(map, ring, host);
+                                    dialogs.divide.open_with(
+                                        map,
+                                        ring,
+                                        host,
+                                        grid.cell_size,
+                                        playback.current_day,
+                                    );
                                 }
                             }
                             // 地形按钮栅格门（spec §4：有**自有**地形栅格才可用，

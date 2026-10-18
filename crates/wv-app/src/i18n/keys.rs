@@ -331,6 +331,10 @@ pub enum I18nKey {
     DivisionNoticeCreatedFromHost,
     /// 成功回执（空势力）：已创建势力「{name}」
     DivisionNoticeCreated,
+    /// 贴地退化提示：窗口内没找到地物，边界按直线生成
+    DivisionNoticeSnapDegraded,
+    /// 重叠提示（空势力路径）：该范围与既有势力重叠
+    DivisionNoticeOverlap,
 
     // ── 地图层级（state::map_level_label） ──────────────────────────
     /// 「世界」MapLevel

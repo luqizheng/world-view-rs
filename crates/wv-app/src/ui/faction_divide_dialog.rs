@@ -27,7 +27,7 @@ use bevy_egui::{egui, EguiContexts};
 use crate::edit::editing::EditHistory;
 use crate::edit::faction_panel_actions::divide_faction_now;
 use crate::i18n::{t, CurrentLocale, I18nKey};
-use crate::state::{PlaybackState, WorldProjection};
+use crate::state::WorldProjection;
 use crate::theme::ui_theme::UiShellConfig;
 use crate::ui::widgets::{button as widget_button, ButtonContent, ButtonStyle};
 use wv_edit::command::DivisionMode;
@@ -53,6 +53,11 @@ pub struct FactionDivisionDialog {
     pub mode: DivisionMode,
     /// 宿主势力；`None` = 空势力（全图陆地）。
     pub host: Option<wv_core::Id>,
+    /// 捕获那一刻钉住的格尺寸（wu/格）——打开后作者可能下钻换图，
+    /// 提交时必须用捕获图的口径（M6）。
+    pub cell_size: f32,
+    /// 捕获那一刻钉住的时间轴日（宿主解析与 span.from 同一天）。
+    pub from: i64,
 }
 
 impl FactionDivisionDialog {
@@ -62,6 +67,8 @@ impl FactionDivisionDialog {
         map: wv_core::Id,
         ring: Vec<(f32, f32)>,
         host: Option<wv_core::Id>,
+        cell_size: f32,
+        from: i64,
     ) {
         self.open = true;
         self.name = "新势力".into();
@@ -69,6 +76,8 @@ impl FactionDivisionDialog {
         self.ring = ring;
         self.mode = DivisionMode::Snap;
         self.host = host;
+        self.cell_size = cell_size;
+        self.from = from;
     }
 
     /// 关闭并清空一切（取消 / X / 无工程 / 提交成功）。
@@ -78,6 +87,8 @@ impl FactionDivisionDialog {
         self.map = None;
         self.ring.clear();
         self.host = None;
+        self.cell_size = 0.0;
+        self.from = 0;
     }
 }
 
@@ -120,12 +131,22 @@ pub fn resolve_host(
     let (cx, cy) = centroid(ring)?;
     let t = wv_core::time::TimePoint::from_day(day);
     let mut best: Option<(wv_core::Id, f32)> = None;
-    for (_, faction_id, _relation) in wv_core::faction::query_at_point(world, map, cx, cy, day) {
+    for (_, faction_id, relation) in wv_core::faction::query_at_point(world, map, cx, cy, day) {
+        // **只认实控命中**（终审 I1）：声称命中不能当宿主——混合场景下
+        // （点在声称 span 里、实控 span 在别处）必须跳过，否则会划到
+        // 一个并不覆盖该点的实控疆界上。
+        if relation.is_some() {
+            continue;
+        }
         let Some(span) = world.faction_geometry.iter().find(|g| {
             &g.map == map && g.owner == faction_id && g.relation.is_none() && g.span.contains(&t)
         }) else {
             continue;
         };
+        // 双重保险：该 span 必须真的覆盖质心（洞内不算）。
+        if !wv_core::geometry::point_in_geometry(&span.geometry, cx, cy) {
+            continue;
+        }
         let area = match &span.geometry {
             wv_core::map::GeometryData::Polygon(v) => ring_area(v),
             wv_core::map::GeometryData::PolygonWithHoles { outer, .. } => ring_area(outer),
@@ -138,6 +159,53 @@ pub fn resolve_host(
     best.map(|(id, _)| id)
 }
 
+/// 空势力路径的重叠提示（终审 I6）：意图环与既有实控疆界是否明显重叠。
+///
+/// 7×7 采样（确定性、便宜）；≥5% 采样点落在既有势力内 → true。
+/// V1 只提示不阻止：作者可能正是要画出交叠的争议区。
+pub fn ring_overlaps_existing(
+    world: &wv_core::World,
+    map: &wv_core::Id,
+    ring: &[(f32, f32)],
+    day: i64,
+) -> bool {
+    if ring.len() < 3 {
+        return false;
+    }
+    let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
+    let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+    for &(x, y) in ring {
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+    }
+    let flat: Vec<f32> = ring.iter().flat_map(|p| [p.0, p.1]).collect();
+    let t = wv_core::time::TimePoint::from_day(day);
+    let mut inside = 0usize;
+    let mut hits = 0usize;
+    for i in 0..7 {
+        for j in 0..7 {
+            let x = min_x + (max_x - min_x) * i as f32 / 6.0;
+            let y = min_y + (max_y - min_y) * j as f32 / 6.0;
+            if !wv_core::geometry::point_in_ring(&flat, x, y) {
+                continue;
+            }
+            inside += 1;
+            let covered = world.faction_geometry.iter().any(|g| {
+                &g.map == map
+                    && g.relation.is_none()
+                    && g.span.contains(&t)
+                    && wv_core::geometry::point_in_geometry(&g.geometry, x, y)
+            });
+            if covered {
+                hits += 1;
+            }
+        }
+    }
+    inside > 0 && hits * 100 >= inside * 5
+}
+
 /// 划分对话框：绘制 + 确认提交。
 ///
 /// 提交成功后清空选择工具选区（与地形 / 大陆意图「意图生效即选区清空」同口径）。
@@ -148,11 +216,9 @@ pub fn faction_divide_dialog(
     mut dialog: ResMut<FactionDivisionDialog>,
     mut projection: ResMut<WorldProjection>,
     mut edit: ResMut<EditHistory>,
-    playback: Res<PlaybackState>,
     current_loc: Res<CurrentLocale>,
     mut selection: ResMut<wv_render::state::SelectionState>,
     mut notice: ResMut<crate::ui_shell::ShellNotice>,
-    grid: Res<wv_render::state::GridConfig>,
     time: Res<Time>,
 ) {
     if !projection.has_open_project() {
@@ -273,16 +339,22 @@ pub fn faction_divide_dialog(
         };
         let frame = (time.elapsed_secs() * 60.0) as u64;
         let loc = current_loc.0;
+        let overlap = dialog.host.is_none()
+            && ring_overlaps_existing(&projection.world, &map, &dialog.ring, dialog.from);
+        let mode = dialog.mode;
+        let host = dialog.host.clone();
+        let cell_size = dialog.cell_size;
+        let from = dialog.from;
         match divide_faction_now(
             &mut projection,
             &mut edit,
-            &playback,
             map,
-            dialog.host.clone(),
+            host,
             dialog.ring.clone(),
-            dialog.mode,
+            mode,
             name.clone(),
-            grid.cell_size,
+            cell_size,
+            from,
         ) {
             Ok(created) => {
                 let host_name = dialog
@@ -296,7 +368,17 @@ pub fn faction_divide_dialog(
                         .replace("{name}", &name),
                     None => t(loc, I18nKey::DivisionNoticeCreated).replace("{name}", &name),
                 };
-                let _ = created;
+                let mut text = text;
+                // Q2 退化回执：贴地没吸到任何地物 → 明确告诉作者用的是直线。
+                if mode == DivisionMode::Snap && !created.snapped {
+                    text.push('\n');
+                    text.push_str(t(loc, I18nKey::DivisionNoticeSnapDegraded));
+                }
+                if overlap {
+                    text.push('\n');
+                    text.push_str(t(loc, I18nKey::DivisionNoticeOverlap));
+                }
+                let _ = created.id;
                 notice.info(text, frame);
                 selection.cancel();
                 dialog.close();
@@ -333,12 +415,38 @@ mod tests {
     }
 
     #[test]
+    fn host_resolution_skips_claim_hit_when_control_is_elsewhere() {
+        // 终审 I1：同一势力在质心处只有声称、实控在地图另一角 → 不能当宿主。
+        let mut w = wv_core::World::default();
+        w.factions.push(faction("faction_mixed"));
+        let mut claim = span(
+            "faction_mixed",
+            vec![0.0, 0.0, 100.0, 0.0, 100.0, 100.0, 0.0, 100.0],
+        );
+        claim.relation = Some("claim".into());
+        w.faction_geometry.push(claim);
+        w.faction_geometry.push(span(
+            "faction_mixed",
+            vec![200.0, 200.0, 300.0, 200.0, 300.0, 300.0, 200.0, 300.0],
+        ));
+        let map = wv_core::Id::new_unchecked("map_world");
+        let ring = vec![(40.0, 40.0), (60.0, 40.0), (60.0, 60.0), (40.0, 60.0)];
+        assert_eq!(
+            resolve_host(&w, &map, &ring, 0),
+            None,
+            "声称命中 + 实控不覆盖 = 无宿主"
+        );
+    }
+
+    #[test]
     fn dialog_prefills_name_and_defaults_to_snap_mode() {
         let mut d = FactionDivisionDialog::default();
         d.open_with(
             wv_core::Id::new_unchecked("map_world"),
             vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)],
             None,
+            8.0,
+            0,
         );
         assert!(d.open);
         assert_eq!(d.name, "新势力", "默认名应预填");

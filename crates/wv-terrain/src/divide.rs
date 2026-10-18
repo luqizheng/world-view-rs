@@ -39,6 +39,9 @@ pub struct DivisionGeometry {
     pub remainder_outer: Vec<Vec<(f32, f32)>>,
     /// 余部的洞（与 `remainder_outer` 按下标对应；无洞为空）。
     pub remainder_holes: Vec<Vec<Vec<(f32, f32)>>>,
+    /// 贴地是否真的吸附到了地物（Q2 退化回执用）：`Snap` 模式下为 false
+    /// 表示窗口内没有地物、边界按原直线生成，调用方应给作者提示。
+    pub snapped: bool,
 }
 
 /// 布尔栅格。行优先，`index = y * w + x`。
@@ -54,11 +57,30 @@ fn point_in_mask(mask: &Mask, w: u32, h: u32, x: i64, y: i64) -> bool {
 /// 把多边形环栅格化：格心落在环内 → true（even-odd，边界算在内）。
 pub fn rasterize_ring(w: u32, h: u32, ring: &[(f32, f32)]) -> Mask {
     let mut mask = vec![false; (w * h) as usize];
-    for y in 0..h as i64 {
-        for x in 0..w as i64 {
+    if ring.len() < 3 || w == 0 || h == 0 {
+        return mask;
+    }
+    // 只扫环的 bbox（+1 格余量）：4096² 地图上全图 × 每条边是平方级浪费。
+    let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
+    let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+    for &(x, y) in ring {
+        if !x.is_finite() || !y.is_finite() {
+            return mask;
+        }
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+    }
+    let x0 = ((min_x.floor() as i64) - 1).clamp(0, w as i64 - 1) as u32;
+    let y0 = ((min_y.floor() as i64) - 1).clamp(0, h as i64 - 1) as u32;
+    let x1 = ((max_x.ceil() as i64) + 1).clamp(0, w as i64 - 1) as u32;
+    let y1 = ((max_y.ceil() as i64) + 1).clamp(0, h as i64 - 1) as u32;
+    for y in y0..=y1 {
+        for x in x0..=x1 {
             let c = (x as f32 + 0.5, y as f32 + 0.5);
             if crate::intent::point_in_polygon(c, ring) {
-                mask[(y as u32 * w + x as u32) as usize] = true;
+                mask[(y * w + x) as usize] = true;
             }
         }
     }
@@ -219,6 +241,7 @@ pub fn divide_geometry(
         inside_holes,
         remainder_outer,
         remainder_holes,
+        snapped: false,
     })
 }
 
@@ -285,7 +308,11 @@ pub fn extract_features(grid: &TerrainGrid) -> Features {
                     river_points.push((x as f32 + 0.5, y as f32 + 0.5));
                 }
             } else if cell.height >= RIDGE_MIN_M {
+                // 「3×3 局部极大 **且至少一个邻居严格更低**」：高原/平台内部
+                // 每格都同高，不加严格项会把整片高原当山脊（候选爆炸 +
+                // 「山脊线」语义错成「高原轮廓」）。
                 let mut is_local_max = true;
+                let mut has_lower = false;
                 'scan: for dy in -1..=1 {
                     for dx in -1..=1 {
                         if dx == 0 && dy == 0 {
@@ -296,10 +323,13 @@ pub fn extract_features(grid: &TerrainGrid) -> Features {
                                 is_local_max = false;
                                 break 'scan;
                             }
+                            if n.height < cell.height {
+                                has_lower = true;
+                            }
                         }
                     }
                 }
-                if is_local_max {
+                if is_local_max && has_lower {
                     ridge_points.push((x as f32 + 0.5, y as f32 + 0.5));
                 }
             }
@@ -349,15 +379,34 @@ pub fn snap_ring(ring: &[(f32, f32)], features: &Features, search: f32) -> Vec<(
     if candidates.is_empty() {
         return ring.to_vec();
     }
+    // 候选按格分桶（零依赖空间索引）：大地图上水陆界面动辄 10^5 点，
+    // 逐顶点全扫是 O(V×F) 的点击卡顿源。桶键 = 候选点所在格。
+    let mut buckets: std::collections::HashMap<(i32, i32), Vec<(f32, f32)>> =
+        std::collections::HashMap::new();
+    for &(cx, cy) in &candidates {
+        buckets
+            .entry((cx.floor() as i32, cy.floor() as i32))
+            .or_default()
+            .push((cx, cy));
+    }
+    let span = search.ceil() as i32;
     ring.iter()
         .map(|&(vx, vy)| {
+            let (bx, by) = (vx.floor() as i32, vy.floor() as i32);
             let mut best = (vx, vy);
             let mut best_d2 = search * search;
-            for &(cx, cy) in &candidates {
-                let d2 = (cx - vx).powi(2) + (cy - vy).powi(2);
-                if d2 <= best_d2 {
-                    best_d2 = d2;
-                    best = (cx, cy);
+            for dy in -span..=span {
+                for dx in -span..=span {
+                    let Some(list) = buckets.get(&(bx + dx, by + dy)) else {
+                        continue;
+                    };
+                    for &(cx, cy) in list {
+                        let d2 = (cx - vx).powi(2) + (cy - vy).powi(2);
+                        if d2 <= best_d2 {
+                            best_d2 = d2;
+                            best = (cx, cy);
+                        }
+                    }
                 }
             }
             best
@@ -389,11 +438,46 @@ pub fn divide(
         let features = extract_features(grid);
         for ring in &mut geo.inside {
             let dense = densify_ring(ring, (search_cells * 0.5).max(0.25));
-            *ring = snap_ring(&dense, &features, search_cells);
+            let snapped = snap_ring(&dense, &features, search_cells);
+            // 钳制（M3）：吸附点必须仍在宿主内——否则切边会被拉到宿主外，
+            // 新势力越界压到邻国。越界的顶点退回未吸附位置。
+            let clamped: Vec<(f32, f32)> = snapped
+                .iter()
+                .zip(dense.iter())
+                .map(|(&(sx, sy), &raw)| {
+                    let inside_host = crate::intent::point_in_polygon((sx, sy), host_outer)
+                        && !host_holes
+                            .iter()
+                            .any(|h| crate::intent::point_in_polygon((sx, sy), h));
+                    if inside_host {
+                        (sx, sy)
+                    } else {
+                        raw
+                    }
+                })
+                .collect();
+            let deduped = dedup_ring(&clamped);
+            geo.snapped |= deduped != dense;
+            *ring = deduped;
         }
     }
     mirror_shared_edge(&mut geo, raw_inside_area);
     Ok(geo)
+}
+
+/// 去掉相邻重复点（吸附可能把多个顶点吸到同一个地物点）。
+fn dedup_ring(ring: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    let mut out: Vec<(f32, f32)> = Vec::with_capacity(ring.len());
+    for &p in ring {
+        if out.last().map(|q| *q != p).unwrap_or(true) {
+            out.push(p);
+        }
+    }
+    // 首尾重复也要去（闭合环）。
+    if out.len() > 1 && out.first() == out.last() {
+        out.pop();
+    }
+    out
 }
 
 /// 共边硬约束（D3）：把余部中「与新势力同一条边」的洞换成**反序的新势力环**。
@@ -462,11 +546,31 @@ pub fn divide_land_host(
             remainder: 0,
         });
     }
+    let mut snapped_any = false;
     if mode == EdgeMode::Snap && search_cells.is_finite() && search_cells > 0.0 {
         let features = extract_features(grid);
         for ring in &mut inside {
             let dense = densify_ring(ring, (search_cells * 0.5).max(0.25));
-            *ring = snap_ring(&dense, &features, search_cells);
+            let snapped = snap_ring(&dense, &features, search_cells);
+            // 钳制到陆地：吸附点落在水域（如湖心）时退回未吸附位置。
+            let clamped: Vec<(f32, f32)> = snapped
+                .iter()
+                .zip(dense.iter())
+                .map(|(&(sx, sy), &raw)| {
+                    let land = grid
+                        .get(sx.floor() as i32, sy.floor() as i32)
+                        .map(|c| !crate::edit::is_water_cell(c))
+                        .unwrap_or(false);
+                    if land {
+                        (sx, sy)
+                    } else {
+                        raw
+                    }
+                })
+                .collect();
+            let deduped = dedup_ring(&clamped);
+            snapped_any |= deduped != dense;
+            *ring = deduped;
         }
     }
     Ok(DivisionGeometry {
@@ -474,6 +578,7 @@ pub fn divide_land_host(
         inside_holes,
         remainder_outer: Vec::new(),
         remainder_holes: Vec::new(),
+        snapped: snapped_any,
     })
 }
 
@@ -649,6 +754,33 @@ mod tests {
         let mut rev = snapped.inside[0].clone();
         rev.reverse();
         assert_eq!(hole, &rev, "贴地后余部洞沿必须是同一条环（D3）");
+    }
+
+    #[test]
+    fn snapping_never_pulls_vertices_outside_the_host() {
+        // 湖在宿主**外**（西侧）：贴地窗口够得着，但钳制必须把越界的吸附
+        // 退回原位——否则切边被拉出宿主、新势力压到邻国（终审 M3）。
+        let mut grid = flat_land(64, 64, 100);
+        crate::intent::apply_intent(
+            &mut grid,
+            &crate::intent::Intent::Lake {
+                center: (8.0, 32.0),
+                radius: 5.0,
+                strength: 1.0,
+            },
+            13,
+            1.0,
+        );
+        let host = sq(14.0, 12.0, 52.0, 52.0);
+        let intent = sq(15.0, 16.0, 34.0, 48.0);
+        let g = divide(&grid, &host, &[], &intent, EdgeMode::Snap, 6.0).expect("划分");
+        for &(x, y) in &g.inside[0] {
+            assert!(
+                (14.0 - 0.01..=52.0 + 0.01).contains(&x)
+                    && (12.0 - 0.01..=52.0 + 0.01).contains(&y),
+                "吸附后顶点 ({x},{y}) 越出宿主 14..52 / 12..52"
+            );
+        }
     }
 
     #[test]

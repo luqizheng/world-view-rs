@@ -29,7 +29,7 @@
 #![cfg(feature = "app")]
 
 use crate::edit::editing::EditHistory;
-use crate::state::{PlaybackState, ViewState, WorldProjection};
+use crate::state::{ViewState, WorldProjection};
 use wv_core::map::{GeometryData, GeometrySpan};
 use wv_core::time::TimeSpan;
 use wv_core::{Color, Faction, FactionColorMode, FactionLayer, Id, Membership};
@@ -275,7 +275,6 @@ pub fn remove_membership_now(
     );
 }
 
-/// 内部：单条命令包成事务提交，失败时 warn 不抛。
 /// 从宿主（或空势力）划分出一个新势力（ADR-0028 / M1 Task 6）。
 ///
 /// 与其它 `*_now` 不同，本动作**返回结果**：对话框要区分成功（清空选区 +
@@ -283,37 +282,43 @@ pub fn remove_membership_now(
 ///
 /// - `host = None`：空势力宿主（全图陆地，水域扣除）；
 /// - `intent`：捕获图局部 wu 的意图环；
-/// - `cell_size`：图内一格的世界单位（wu → 格坐标）。
+/// - `cell_size`：图内一格的世界单位（wu → 格坐标）；
+/// - `day`：钉住的生效日（与打开对话框那一刻一致，M6）。
+///
+/// 划分结果：新势力 id + 贴地是否真的吸附到地物（Q2 退化回执）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DivisionOutcome {
+    pub id: Id,
+    pub snapped: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn divide_faction_now(
     world: &mut WorldProjection,
     edit: &mut EditHistory,
-    playback: &PlaybackState,
     map: Id,
     host: Option<Id>,
     intent: Vec<(f32, f32)>,
     mode: DivisionMode,
     name: String,
     cell_size: f32,
-) -> Result<Id, String> {
+    day: i64,
+) -> Result<DivisionOutcome, String> {
     let id = Id::new_unchecked(format!("faction_{}", current_unix_ms()));
     let faction = Faction::new(id.clone(), name, Color("#6f7fa8".into()));
-    let cmd = DivideFactionCommand::new(
-        map,
-        host,
-        intent,
-        mode,
-        faction,
-        playback.current_day,
-        cell_size,
-    );
+    let cmd = DivideFactionCommand::new(map, host, intent, mode, faction, day, cell_size);
+    let snapped_flag = cmd.snapped_flag();
     let mut tx = Transaction::new();
     tx.push(Box::new(cmd));
     match edit.history.commit(&mut world.world, tx) {
         Ok(dirty) => {
             edit.record_dirty(dirty);
             world.dirty = true;
-            Ok(id)
+            let snapped = snapped_flag
+                .lock()
+                .map(|f| *f)
+                .unwrap_or_else(|poisoned| *poisoned.into_inner());
+            Ok(DivisionOutcome { id, snapped })
         }
         Err(e) => {
             bevy::log::warn!("势力划分失败: {e}");
@@ -322,6 +327,7 @@ pub fn divide_faction_now(
     }
 }
 
+/// 内部：单条命令包成事务提交，失败时 warn 不抛。
 fn push_cmd(
     world: &mut WorldProjection,
     edit: &mut EditHistory,

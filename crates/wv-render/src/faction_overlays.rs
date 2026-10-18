@@ -548,11 +548,13 @@ pub(crate) fn earcut_with_holes(outer: &[f32], holes: &[&[f32]]) -> Vec<[f32; 2]
         let bm = b.iter().fold(f32::MIN, |m, p| m.max(p[0]));
         bm.partial_cmp(&am).unwrap_or(std::cmp::Ordering::Equal)
     });
-    let flat_ring: Vec<f32> = ring.iter().flat_map(|p| [p[0], p[1]]).collect();
     for hole in &holes {
         if hole.is_empty() {
             continue;
         }
+        // 可见性测试必须用**当前**（已桥接过的）环：第二、第三个洞的桥不能
+        // 穿过先前洞的零宽走廊（终审 M2）。
+        let flat_ring: Vec<f32> = ring.iter().flat_map(|p| [p[0], p[1]]).collect();
         // 洞的 max-x 顶点。
         let (hi, _) = hole
             .iter()
@@ -620,11 +622,13 @@ pub(crate) fn earcut_with_holes(outer: &[f32], holes: &[&[f32]]) -> Vec<[f32; 2]
             break;
         }
         if !clipped {
-            // 数值兜底：残余顶点扇形收尾（不 panic，V1 精神）。
-            for w in idx.windows(3) {
+            // 数值兜底：以 idx[0] 为轴的**真扇形**收尾（不 panic，V1 精神）。
+            // 逐窗口连发是条带不是扇形，会产出重叠三角形。
+            let pivot = ring[idx[0]];
+            for w in idx.windows(2).skip(1) {
+                tris.push(pivot);
                 tris.push(ring[w[0]]);
                 tris.push(ring[w[1]]);
-                tris.push(ring[w[2]]);
             }
             break;
         }
@@ -703,6 +707,19 @@ mod hole_tessellation_tests {
                 "洞心被三角形覆盖"
             );
         }
+    }
+
+    #[test]
+    fn earcut_covers_outer_minus_two_holes() {
+        // 两个 2×2 洞：面积 = 100 − 4 − 4 = 92（多洞桥接不得穿透已有洞）。
+        let h1 = vec![2.0, 2.0, 4.0, 2.0, 4.0, 4.0, 2.0, 4.0];
+        let h2 = vec![7.0, 7.0, 9.0, 7.0, 9.0, 9.0, 7.0, 9.0];
+        let tris = earcut_with_holes(&outer_square(), &[&h1, &h2]);
+        let area = triangle_area_sum(&tris);
+        assert!(
+            (area - 92.0).abs() < 0.5,
+            "双洞三角化面积应 ≈92，实得 {area}"
+        );
     }
 
     #[test]

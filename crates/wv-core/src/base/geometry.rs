@@ -1,5 +1,5 @@
-//! 几何辅助。几何编码方式仍是 §13 待裁问题；本模块现提供无洞单环的
-//! 点包含谓词 [`point_in_ring`]。
+//! 几何辅助。几何编码方式仍是 §13 待裁问题；本模块提供单环点包含
+//! [`point_in_ring`] 与洞感知的唯一入口 [`point_in_geometry`]（ADR-0028 D3）。
 
 /// 二维点。
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]

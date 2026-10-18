@@ -18,12 +18,12 @@
 //! `GeometrySpan.owner = Faction.id`，`span` 限定有效时间。
 //! 想要「某时刻某地图上的所有势力及其多边形」，走 `World::factions_at(map, day)`。
 //!
-//! ## 待决 §12-8：带洞多边形
+//! ## §12-8（带洞多边形）：已由 ADR-0028 D3 落地
 //!
-//! **v0.1 仅支持无洞单环多边形**（`GeometryData::Polygon(Vec<f32>)`），
-//! 扁平坐标、首尾不重复。如要表达「环形的飞地」请拆成多个 polygon。
-//! 这是 §12-8 待裁问题的第一版落地——文档已记录，等真用上再升级为
-//! `PolygonWithHoles` 变体。
+//! 原 v0.1 只支持无洞单环；势力划分引入国中国后，宿主余部必须是环形飞地，
+//! 因此 [`crate::map::GeometryData`] 增加了 `PolygonWithHoles` 变体
+//! （2026-10-18，ADR-0028）。点包含判定统一走
+//! [`crate::geometry::point_in_geometry`]（洞内 = 不在领地）。
 //!
 //! [`GeometrySpan`]: crate::map::GeometrySpan
 
@@ -134,7 +134,7 @@ fn default_true() -> bool {
 ///
 /// - 遍历 `world.faction_geometry`，过滤 `map == target_map` 且 `span.contains(day)`；
 /// - 通过 `owner` 在 `world.factions` 中查 `Faction`（**找不到**→ 跳过，V1 守约）；
-/// - 只取 `GeometryData::Polygon` 变体（其他变体 v0.1 不画，跳过）；
+/// - 只取多边形变体（`Polygon` / `PolygonWithHoles` 取外环；`Points`/`Ref` 跳过）；
 /// - 一次返回 (Faction 引用, 顶点切片) 对，**不**排序。
 ///
 /// ## 为什么不在 `wv-app` 而在 `wv-core`
@@ -326,14 +326,16 @@ pub fn query_at_point(
 ) -> Vec<(Id, Id, Option<String>)> {
     let mut out: Vec<(Id, Id, Option<String>)> = Vec::new();
     for t in faction_territories_at(world, map, day) {
-        // 洞感知（ADR-0028 D3）：外环内但落在洞里 = 不在领地。
-        if !crate::geometry::point_in_ring(t.vertices, x, y) {
-            continue;
-        }
-        if t.holes
-            .iter()
-            .any(|h| crate::geometry::point_in_ring(h, x, y))
-        {
+        // 洞感知（ADR-0028 D3）：统一走 `point_in_geometry`（唯一判定入口）。
+        let geometry = if t.holes.is_empty() {
+            crate::map::GeometryData::Polygon(t.vertices.to_vec())
+        } else {
+            crate::map::GeometryData::PolygonWithHoles {
+                outer: t.vertices.to_vec(),
+                holes: t.holes.iter().map(|h| h.to_vec()).collect(),
+            }
+        };
+        if !crate::geometry::point_in_geometry(&geometry, x, y) {
             continue;
         }
         let item = (

@@ -622,7 +622,7 @@ impl EditCommand for AddCityCommand {
 ///
 /// 把城市在父图坐标系里平移 `delta`（wu）：
 /// - `extent.origin` += delta（若 `Some`）
-/// - `outline_polygon`（若 `Some` 且为 `Polygon` 变体）所有顶点 += delta
+/// - `outline_polygon`（`Polygon` / `PolygonWithHoles`，含洞环）所有顶点 += delta
 /// - 子图 LOCAL 几何（街道、地点、building）**不动**——per ADR-0009 §9 「本图 local」
 /// - 引用该城市的 `Place` / `Track` / `Faction` **不动**——它们是独立实体
 ///
@@ -1606,6 +1606,10 @@ impl DivisionMode {
 struct BeforeDivision {
     host_index: Option<usize>,
     host_before: Option<GeometrySpan>,
+    /// 宿主 span 被整体移除（意图吃光宿主）时 `revert` 需要插回。
+    host_removed: bool,
+    /// 历史切分时新插入的余部 span 下标（`revert` 删除）。
+    remainder_index: Option<usize>,
 }
 
 /// 从宿主中间划出新势力（ADR-0028 D1/D2，势力交互 M1 Task 5）。
@@ -1639,6 +1643,9 @@ pub struct DivideFactionCommand {
     /// 贴地搜索窗口（格）。4 格 ≈ 4×cell_size wu。
     search_cells: f32,
     before: std::sync::Mutex<BeforeDivision>,
+    /// `apply` 后置位：贴地是否真的吸附到地物（Q2 退化回执）。
+    /// 由调用方经 [`Self::snapped_flag`] 共享读取（命令会被装进 `Box<dyn>`）。
+    snapped: std::sync::Arc<std::sync::Mutex<bool>>,
 }
 
 impl DivideFactionCommand {
@@ -1661,7 +1668,13 @@ impl DivideFactionCommand {
             cell_size,
             search_cells: 4.0,
             before: std::sync::Mutex::new(BeforeDivision::default()),
+            snapped: std::sync::Arc::new(std::sync::Mutex::new(false)),
         }
+    }
+
+    /// 共享的「贴地是否吸附到地物」标志（`apply` 之后读）。
+    pub fn snapped_flag(&self) -> std::sync::Arc<std::sync::Mutex<bool>> {
+        self.snapped.clone()
     }
 }
 
@@ -1756,26 +1769,45 @@ impl EditCommand for DivideFactionCommand {
             .map(|&(x, y)| (x / self.cell_size, y / self.cell_size))
             .collect();
 
-        let (host_index, host_before, new_geometry) = match &self.host {
+        let (host_index, host_before, host_removed, remainder_index, new_geometry) = match &self
+            .host
+        {
             Some(host) => {
                 if !world.factions.iter().any(|f| &f.id == host) {
                     return Err(EditError::Precondition(format!("宿主势力 `{host}` 不存在")));
                 }
                 let t = TimePoint::from_day(self.from);
+                // 只认**实控** span（ADR-0027：同一 (map, owner, from) 可同时有
+                // 声称与实控；划到声称上会留下实控未被切分、新势力重叠的烂摊子）。
                 let idx = world
                     .faction_geometry
                     .iter()
-                    .position(|g| g.map == self.map && &g.owner == host && g.span.contains(&t))
+                    .position(|g| {
+                        g.map == self.map
+                            && &g.owner == host
+                            && g.relation.is_none()
+                            && g.span.contains(&t)
+                    })
                     .ok_or_else(|| {
                         EditError::Precondition(format!(
-                            "宿主势力 `{host}` 在 {} 没有生效的疆界",
+                            "宿主势力 `{host}` 在 {} 没有生效的实控疆界",
                             self.from
                         ))
                     })?;
                 let before = world.faction_geometry[idx].clone();
-                let (outer, holes) = geometry_rings(&before.geometry).ok_or_else(|| {
+                let (outer_wu, holes_wu) = geometry_rings(&before.geometry).ok_or_else(|| {
                     EditError::Precondition("宿主疆界不是多边形，无法划分".into())
                 })?;
+                // **单位换算（终审 C1）**：宿主几何是 wu，内核吃格坐标；
+                // 意图在上方已换算，宿主这里同样必须除 cell_size，否则默认
+                // 8 wu/格的工程里宿主会被当成「整张图」或直接落到图外。
+                let to_cells = |ring: &[(f32, f32)]| -> Vec<(f32, f32)> {
+                    ring.iter()
+                        .map(|&(x, y)| (x / self.cell_size, y / self.cell_size))
+                        .collect()
+                };
+                let outer = to_cells(&outer_wu);
+                let holes: Vec<Vec<(f32, f32)>> = holes_wu.iter().map(|h| to_cells(h)).collect();
                 let d = wv_terrain::divide::divide(
                     &grid,
                     &outer,
@@ -1785,17 +1817,50 @@ impl EditCommand for DivideFactionCommand {
                     self.search_cells,
                 )
                 .map_err(divide_edit_error)?;
-                // 宿主余部原位替换（from / relation 不变）。
-                world.faction_geometry[idx] = GeometrySpan {
-                    map: before.map.clone(),
-                    owner: before.owner.clone(),
-                    span: before.span,
-                    geometry: rings_to_geometry(
-                        &d.remainder_outer,
-                        &d.remainder_holes,
-                        self.cell_size,
-                    ),
-                    relation: before.relation.clone(),
+                if let Ok(mut flag) = self.snapped.lock() {
+                    *flag = d.snapped;
+                }
+                let remainder_geometry =
+                    rings_to_geometry(&d.remainder_outer, &d.remainder_holes, self.cell_size);
+                let has_remainder = !d.remainder_outer.is_empty();
+                // 历史切分（终审 I4 / ADR-0028 D6）：宿主 span 早于划分日开始时，
+                // 把旧段截到 `from`、余部从 `from` 起新开一段——回拨时间轴仍能
+                // 看到划分前的完整版图。
+                let split_at_from = before.span.from < self.from
+                    && before.span.to.map(|to| to > self.from).unwrap_or(true);
+                let (host_index, host_before, host_removed, remainder_index) = if split_at_from {
+                    let mut old = before.clone();
+                    old.span.to = Some(self.from);
+                    world.faction_geometry[idx] = old;
+                    let mut rem_idx = None;
+                    if has_remainder {
+                        world.faction_geometry.push(GeometrySpan {
+                            map: before.map.clone(),
+                            owner: before.owner.clone(),
+                            span: wv_core::time::TimeSpan {
+                                from: self.from,
+                                to: before.span.to,
+                            },
+                            geometry: remainder_geometry,
+                            relation: before.relation.clone(),
+                        });
+                        rem_idx = Some(world.faction_geometry.len() - 1);
+                    }
+                    (Some(idx), Some(before), false, rem_idx)
+                } else if has_remainder {
+                    world.faction_geometry[idx] = GeometrySpan {
+                        map: before.map.clone(),
+                        owner: before.owner.clone(),
+                        span: before.span,
+                        geometry: remainder_geometry,
+                        relation: before.relation.clone(),
+                    };
+                    (Some(idx), Some(before), false, None)
+                } else {
+                    // 意图吃光宿主：移除宿主 span（留空 Polygon 会让后续划分
+                    // 报「意图不在宿主内」的误导错误）。
+                    world.faction_geometry.remove(idx);
+                    (Some(idx), Some(before), true, None)
                 };
                 let new_geometry = GeometrySpan {
                     map: self.map.clone(),
@@ -1807,7 +1872,13 @@ impl EditCommand for DivideFactionCommand {
                     geometry: rings_to_geometry(&d.inside, &d.inside_holes, self.cell_size),
                     relation: None,
                 };
-                (Some(idx), Some(before), new_geometry)
+                (
+                    host_index,
+                    host_before,
+                    host_removed,
+                    remainder_index,
+                    new_geometry,
+                )
             }
             None => {
                 let d = wv_terrain::divide::divide_land_host(
@@ -1817,6 +1888,9 @@ impl EditCommand for DivideFactionCommand {
                     self.search_cells,
                 )
                 .map_err(divide_edit_error)?;
+                if let Ok(mut flag) = self.snapped.lock() {
+                    *flag = d.snapped;
+                }
                 let new_geometry = GeometrySpan {
                     map: self.map.clone(),
                     owner: self.faction.id.clone(),
@@ -1827,7 +1901,7 @@ impl EditCommand for DivideFactionCommand {
                     geometry: rings_to_geometry(&d.inside, &d.inside_holes, self.cell_size),
                     relation: None,
                 };
-                (None, None, new_geometry)
+                (None, None, false, None, new_geometry)
             }
         };
 
@@ -1839,6 +1913,8 @@ impl EditCommand for DivideFactionCommand {
             .map_err(|_| EditError::Precondition("锁中毒".into()))? = BeforeDivision {
             host_index,
             host_before,
+            host_removed,
+            remainder_index,
         };
         Ok(faction_dirty_paths())
     }
@@ -1853,8 +1929,18 @@ impl EditCommand for DivideFactionCommand {
         world
             .faction_geometry
             .retain(|g| g.owner != self.faction.id);
+        // 历史切分插入的余部段：按记录下标移除（它先于新势力几何 push，
+        // 上面 retain 移除新几何不会移动它）。
+        if let Some(i) = before.remainder_index {
+            if i < world.faction_geometry.len() {
+                world.faction_geometry.remove(i);
+            }
+        }
         if let (Some(idx), Some(prev)) = (before.host_index, before.host_before) {
-            if idx < world.faction_geometry.len() {
+            if before.host_removed {
+                let at = idx.min(world.faction_geometry.len());
+                world.faction_geometry.insert(at, prev);
+            } else if idx < world.faction_geometry.len() {
                 world.faction_geometry[idx] = prev;
             } else {
                 return Err(EditError::Precondition("revert 时宿主疆界位置越界".into()));
@@ -3310,6 +3396,120 @@ mod tests {
     }
 
     #[test]
+    fn divide_at_real_cell_size_keeps_remainder_inside_host() {
+        // C1 回归：宿主几何是 wu，内核吃格坐标——cell_size=8 时宿主必须
+        // 先除再进内核。宿主 80..480 wu（格 10..60），意图 160..320 wu（格 20..40）。
+        let mut w = world_with_land_terrain();
+        let cell = 8.0;
+        let land: Vec<TerrainCellData> = vec![
+            TerrainCellData {
+                height: 100,
+                surface: 1,
+                biome: 3,
+            };
+            64 * 64
+        ];
+        w.set_terrain(
+            test_map(),
+            TerrainData {
+                width: 64,
+                height: 64,
+                cells: land,
+            },
+        );
+        w.factions
+            .push(f(Id::new_unchecked("faction_host").as_str(), "宿主国"));
+        w.factions.last_mut().expect("刚推入").id = Id::new_unchecked("faction_host");
+        w.faction_geometry.push(GeometrySpan {
+            map: test_map(),
+            owner: Id::new_unchecked("faction_host"),
+            span: TimeSpan { from: 0, to: None },
+            geometry: GeometryData::Polygon(square_ring(80.0, 80.0, 480.0, 480.0)),
+            relation: None,
+        });
+        let cmd = DivideFactionCommand::new(
+            test_map(),
+            Some(Id::new_unchecked("faction_host")),
+            vec![
+                (160.0, 160.0),
+                (320.0, 160.0),
+                (320.0, 320.0),
+                (160.0, 320.0),
+            ],
+            DivisionMode::Straight,
+            f(Id::new_unchecked("faction_new").as_str(), "新国"),
+            0,
+            cell,
+        );
+        cmd.apply(&mut w).expect("cell_size=8 的划分应成功");
+
+        let host = w
+            .faction_geometry
+            .iter()
+            .find(|g| g.owner == Id::new_unchecked("faction_host"))
+            .expect("宿主疆界仍在");
+        let bbox = |flat: &[f32]| -> (f32, f32, f32, f32) {
+            let mut b = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for p in flat.chunks_exact(2) {
+                b.0 = b.0.min(p[0]);
+                b.1 = b.1.min(p[1]);
+                b.2 = b.2.max(p[0]);
+                b.3 = b.3.max(p[1]);
+            }
+            b
+        };
+        let host_outer = match &host.geometry {
+            GeometryData::PolygonWithHoles { outer, .. } => outer.clone(),
+            GeometryData::Polygon(v) => v.clone(),
+            other => panic!("宿主余部应为多边形，实得 {other:?}"),
+        };
+        let hb = bbox(&host_outer);
+        assert!(
+            hb.0 >= 72.0 && hb.1 >= 72.0 && hb.2 <= 488.0 && hb.3 <= 488.0,
+            "宿主余部必须留在原宿主 80..480 wu 内，实得 bbox {hb:?}"
+        );
+        let new_geo = w
+            .faction_geometry
+            .iter()
+            .find(|g| g.owner == Id::new_unchecked("faction_new"))
+            .expect("新势力疆界");
+        let new_outer = match &new_geo.geometry {
+            GeometryData::Polygon(v) => v.clone(),
+            GeometryData::PolygonWithHoles { outer, .. } => outer.clone(),
+            other => panic!("新势力应为多边形，实得 {other:?}"),
+        };
+        let nb = bbox(&new_outer);
+        assert!(
+            nb.0 >= 152.0 && nb.1 >= 152.0 && nb.2 <= 328.0 && nb.3 <= 328.0,
+            "新势力必须落在意图 160..320 wu 附近，实得 bbox {nb:?}"
+        );
+        // 余部面积应约为宿主减新势力（不是整张图）。
+        let area = |flat: &[f32]| -> f32 {
+            let n = flat.len() / 2;
+            let mut a = 0.0;
+            for i in 0..n {
+                let (x0, y0) = (flat[2 * i], flat[2 * i + 1]);
+                let (x1, y1) = (flat[2 * ((i + 1) % n)], flat[2 * ((i + 1) % n) + 1]);
+                a += x0 * y1 - x1 * y0;
+            }
+            (a / 2.0).abs()
+        };
+        let host_area = area(&host_outer);
+        assert!(
+            (150_000.0..=170_000.0).contains(&host_area),
+            "宿主余部外环应 ≈400×400=160000 wu²（不是整图），实得 {host_area}"
+        );
+        let GeometryData::PolygonWithHoles { holes, .. } = &host.geometry else {
+            panic!("居中切应产生带洞余部，实得 {:?}", host.geometry);
+        };
+        let hole_area = area(&holes[0]);
+        assert!(
+            (24_000.0..=28_000.0).contains(&hole_area),
+            "洞应 ≈160×160=25600 wu²，实得 {hole_area}"
+        );
+    }
+
+    #[test]
     fn divide_undo_restores_host_and_removes_new_faction_bitwise() {
         let mut w = world_with_host_faction();
         let factions_before = w.factions.clone();
@@ -3954,6 +4154,55 @@ mod tests {
             1,
             "失败的命令不得改动文档"
         );
+    }
+
+    #[test]
+    fn move_city_translates_holed_outline_including_holes() {
+        use wv_core::map::{MapLevel, MapNode};
+        use wv_core::Id;
+
+        let mut w = World::default();
+        w.maps.push(MapNode {
+            id: Id::new_unchecked("map_city"),
+            name: "城".into(),
+            level: MapLevel::City,
+            parent: None,
+            children: vec![],
+            icons: vec![],
+            layers: vec![],
+            extent: None,
+            raster: None,
+            geographic_source: None,
+            time_span: None,
+            unit_per_km: None,
+            orientation: 0.0,
+            base: None,
+            outline_polygon: Some(GeometryData::PolygonWithHoles {
+                outer: vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0],
+                holes: vec![vec![4.0, 4.0, 6.0, 4.0, 6.0, 6.0, 4.0, 6.0]],
+            }),
+        });
+        let cmd = MoveCityCommand::new(
+            Id::new_unchecked("map_city"),
+            wv_core::Point::new(5.0, -3.0),
+        );
+        cmd.apply(&mut w).expect("带洞轮廓应可平移");
+        let GeometryData::PolygonWithHoles { outer, holes } =
+            w.maps[0].outline_polygon.clone().expect("轮廓仍在")
+        else {
+            panic!("变体不应变化");
+        };
+        assert_eq!(outer[0], 5.0, "外环 x 应 +5，实得 {}", outer[0]);
+        assert_eq!(outer[1], -3.0, "外环 y 应 -3，实得 {}", outer[1]);
+        assert_eq!(holes[0][0], 9.0, "洞环 x 也应 +5，实得 {}", holes[0][0]);
+        assert_eq!(holes[0][1], 1.0, "洞环 y 也应 -3，实得 {}", holes[0][1]);
+        cmd.revert(&mut w).expect("revert");
+        let GeometryData::PolygonWithHoles { outer, .. } =
+            w.maps[0].outline_polygon.clone().expect("轮廓仍在")
+        else {
+            panic!("变体不应变化");
+        };
+        assert_eq!(outer[0], 0.0, "revert 应还原");
     }
 
     #[test]
