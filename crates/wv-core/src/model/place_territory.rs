@@ -27,6 +27,21 @@ use crate::map::distance::Place;
 use crate::map::GeometryData;
 use crate::time::TimePoint;
 
+/// 一条地界的形状：单环或带洞（ADR-0029 M2 起标记边界可带洞）。
+///
+/// 引用语义（切片指回 `World.place_geometry`，零拷贝）；洞环列表仅在
+/// `WithHoles` 下分配。渲染侧据变体选择扇形或 earcut 填充。
+#[derive(Debug, Clone, PartialEq)]
+pub enum TerritoryShape<'a> {
+    /// 单外环（扁平坐标，首尾不重复）。
+    Solid(&'a [f32]),
+    /// 外环 + 洞环（如环湖林地的湖面）。
+    WithHoles {
+        outer: &'a [f32],
+        holes: Vec<&'a [f32]>,
+    },
+}
+
 /// 给定 (地图, 天)，列出该地图该时刻所有生效的 Place 地界及其多边形顶点。
 ///
 /// ## 行为
@@ -35,8 +50,9 @@ use crate::time::TimePoint;
 ///   `span.contains(day)`（半开区间 `[from, to)`；`to == None` = 至今有效）；
 /// - 通过 `owner` 在 `world.distances.places` 中查 `Place`（**找不到** → 跳过，
 ///   V1 守约：悬空引用由校验面板列出，不阻止求值）；
-/// - 只取 [`GeometryData::Polygon`] 变体（`Points` / `Ref` v0.1 不画，跳过）；
-/// - 一次返回 `(Place 引用, 顶点切片)` 对，**不**排序（返回顺序即
+/// - 取 [`GeometryData::Polygon`] / [`GeometryData::PolygonWithHoles`] 变体
+///   （`Points` / `Ref` v0.1 不画，跳过），包装为 [`TerritoryShape`]；
+/// - 一次返回 `(Place 引用, 形状)` 对，**不**排序（返回顺序即
 ///   `World.place_geometry` 的声明顺序，渲染层按「后画覆盖前画」处理重叠）。
 ///
 /// ## 为什么是渲染层的唯一入口
@@ -52,7 +68,7 @@ pub fn place_territory_at<'a>(
     world: &'a crate::World,
     target_map: &Id,
     day: i64,
-) -> Vec<(&'a Place, &'a [f32])> {
+) -> Vec<(&'a Place, TerritoryShape<'a>)> {
     let t = TimePoint::from_day(day);
     let mut out = Vec::new();
     for g in &world.place_geometry {
@@ -66,10 +82,16 @@ pub fn place_territory_at<'a>(
             // 几何引用的 owner 不在 distances.places 里——按 V1 静默跳过。
             continue;
         };
-        let GeometryData::Polygon(coords) = &g.geometry else {
-            continue;
+        let shape = match &g.geometry {
+            GeometryData::Polygon(coords) => TerritoryShape::Solid(coords.as_slice()),
+            GeometryData::PolygonWithHoles { outer, holes } => TerritoryShape::WithHoles {
+                outer: outer.as_slice(),
+                holes: holes.iter().map(|h| h.as_slice()).collect(),
+            },
+            // Points / Ref v0.1 不画。
+            GeometryData::Points(_) | GeometryData::Ref(_) => continue,
         };
-        out.push((place, coords.as_slice()));
+        out.push((place, shape));
     }
     out
 }
@@ -117,6 +139,66 @@ mod tests {
 
     fn square_polygon(x0: f32, y0: f32, x1: f32, y1: f32) -> Vec<f32> {
         vec![x0, y0, x1, y0, x1, y1, x0, y1]
+    }
+
+    /// PolygonWithHoles → WithHoles 返回外环与洞切片；单环 → Solid（M2 标记带洞）。
+    #[test]
+    fn place_territory_at_returns_holes_of_polygon_with_holes() {
+        let ring_place = place("place_ring_woods");
+        let plain_place = place("place_plain");
+        let map = vid("map_w");
+        let geos = vec![
+            GeometrySpan {
+                map: map.clone(),
+                owner: ring_place.id.clone(),
+                span: TimeSpan { from: 1, to: None },
+                geometry: GeometryData::PolygonWithHoles {
+                    outer: square_polygon(0.0, 0.0, 10.0, 10.0),
+                    holes: vec![square_polygon(4.0, 4.0, 6.0, 6.0)],
+                },
+                relation: None,
+            },
+            GeometrySpan {
+                map: map.clone(),
+                owner: plain_place.id.clone(),
+                span: TimeSpan { from: 1, to: None },
+                geometry: GeometryData::Polygon(square_polygon(0.0, 0.0, 1.0, 1.0)),
+                relation: None,
+            },
+        ];
+        let mut w = world_with_place(ring_place, geos);
+        w.distances.places.push(plain_place);
+        let result = place_territory_at(&w, &map, 50);
+        assert_eq!(result.len(), 2, "两条地界都应生效");
+        let (_, ring_shape) = result
+            .iter()
+            .find(|(p, _)| p.id.as_str() == "place_ring_woods")
+            .expect("带洞地界应在列");
+        match ring_shape {
+            TerritoryShape::WithHoles { outer, holes } => {
+                assert_eq!(
+                    *outer,
+                    &[0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0][..],
+                    "外环应原样返回"
+                );
+                assert_eq!(holes.len(), 1, "应返回 1 个洞环，实得 {}", holes.len());
+                assert_eq!(
+                    holes[0],
+                    &[4.0, 4.0, 6.0, 4.0, 6.0, 6.0, 4.0, 6.0][..],
+                    "洞环应原样返回"
+                );
+            }
+            TerritoryShape::Solid(ring) => panic!("带洞几何不得降级为单环：{ring:?}"),
+        }
+        let (_, plain_shape) = result
+            .iter()
+            .find(|(p, _)| p.id.as_str() == "place_plain")
+            .expect("单环地界应在列");
+        assert_eq!(
+            *plain_shape,
+            TerritoryShape::Solid(&[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0][..]),
+            "单环几何应包装为 Solid"
+        );
     }
 
     /// 地图不匹配 → 不返回。
@@ -229,13 +311,16 @@ mod tests {
         let result = place_territory_at(&w, &map, 50);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0.id.as_str(), "place_forest");
-        assert_eq!(result[0].1.len(), coords.len(), "顶点数量应原样返回");
-        assert_eq!(result[0].1, &coords[..], "坐标值应与写入时一致");
+        let TerritoryShape::Solid(ring) = result[0].1 else {
+            panic!("单环几何应包装为 Solid，实得 {:?}", result[0].1);
+        };
+        assert_eq!(ring.len(), coords.len(), "顶点数量应原样返回");
+        assert_eq!(ring, &coords[..], "坐标值应与写入时一致");
         let GeometryData::Polygon(stored) = &w.place_geometry[0].geometry else {
             panic!("测试前提：写入的是 Polygon");
         };
         assert!(
-            std::ptr::eq(result[0].1.as_ptr(), stored.as_ptr()),
+            std::ptr::eq(ring.as_ptr(), stored.as_ptr()),
             "应返回 World 内部切片的引用，而不是拷贝"
         );
     }
