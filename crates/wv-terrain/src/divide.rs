@@ -243,7 +243,16 @@ pub fn divide_geometry(
         grid_w,
         grid_h,
     )?;
-    Ok(finish_division(&core, smooth_chain))
+    let closed = core
+        .spliced
+        .as_ref()
+        .map(|p| p.is_closed_cut())
+        .unwrap_or(false);
+    Ok(if closed {
+        finish_division(&core, smooth_ring)
+    } else {
+        finish_division(&core, smooth_chain)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -462,7 +471,9 @@ pub fn divide(
         }
     }
 
-    let mut geo = finish_division(&core, smooth_chain);
+    // I3（终审）：兜底必须走**旧路径几何**，不能再让 finish_division 取一次拼接
+    // 结果——否则吸附后的 inside 与未吸附的余部不共边，且 mirror 会误配既有洞。
+    let mut geo = legacy_geometry(&core);
     let raw_inside_area = geo.inside.first().map(|r| ring_area(r)).unwrap_or(0.0);
     if mode == EdgeMode::Snap && search_cells.is_finite() && search_cells > 0.0 {
         let features = extract_features(grid);
@@ -491,7 +502,7 @@ pub fn divide(
             *ring = deduped;
         }
     }
-    mirror_shared_edge(&mut geo, raw_inside_area);
+    mirror_shared_edge(&mut geo, raw_inside_area, host_holes);
     Ok(geo)
 }
 
@@ -515,13 +526,28 @@ fn dedup_ring(ring: &[(f32, f32)]) -> Vec<(f32, f32)> {
 /// 两种模式都做——inside 与 remainder 来自两张不同掩膜的边界提取，平滑后
 /// 只是「近似相同」；不镜像就不是严格共边。匹配按面积最近（两者本出自
 /// 同一掩膜边界，面积差只来自平滑）；容差 25% 防止误配既有洞。
-fn mirror_shared_edge(geo: &mut DivisionGeometry, raw_inside_area: f32) {
+fn mirror_shared_edge(
+    geo: &mut DivisionGeometry,
+    raw_inside_area: f32,
+    preserved_holes: &[Vec<(f32, f32)>],
+) {
     let Some(holes) = geo.remainder_holes.first_mut() else {
         return;
+    };
+    // 终审 I3：不得把宿主**原有**的洞当成「本次切出的洞」替换掉——面积接近时
+    // 会误配（作者手画的国中国凭空变成新势力形状）。按点列近似相等排除。
+    let is_preserved = |h: &[(f32, f32)]| -> bool {
+        preserved_holes.iter().any(|p| {
+            p.len() == h.len()
+                && p.iter()
+                    .zip(h.iter())
+                    .all(|(a, b)| (a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3)
+        })
     };
     let Some(idx) = holes
         .iter()
         .enumerate()
+        .filter(|(_, h)| !is_preserved(h))
         .map(|(i, h)| (i, (ring_area(h) - raw_inside_area).abs()))
         .filter(|(_, d)| *d <= raw_inside_area * 0.25)
         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
@@ -588,6 +614,13 @@ struct SplicedDivision {
     preserved_holes: Vec<Vec<(f32, f32)>>,
     /// 宿主原始外环（拼接时逐点拷贝的来源）。
     host_outer: Vec<(f32, f32)>,
+}
+
+impl SplicedDivision {
+    /// 意图完全含于宿主（无宿主弧）：切口是一条**闭环**，平滑要按闭链做。
+    fn is_closed_cut(&self) -> bool {
+        !self.segs.iter().any(|s| matches!(s, ArcSeg::Host { .. }))
+    }
 }
 
 /// 划分核心：拼接方案（可空）+ 旧路径所需的平滑几何。
@@ -709,7 +742,7 @@ fn classify_against_host(raw: &[(f32, f32)], host: &[(f32, f32)]) -> Option<Vec<
     let mut near = Vec::with_capacity(n);
     for &p in raw {
         let (d, pos) = project_on_ring(p, host)?;
-        near.push(d <= HOST_ARC_TOL);
+        near.push(d < HOST_ARC_TOL);
         proj.push(pos);
     }
     // 整条环都贴着宿主 = 意图吃光宿主：交兜底（旧路径给空余部）。
@@ -855,7 +888,7 @@ fn try_spliced(
     if host_holes.iter().any(|hole| {
         inside_raw.iter().any(|&p| {
             project_on_ring(p, hole)
-                .map(|(d, _)| d <= HOST_ARC_TOL)
+                .map(|(d, _)| d < HOST_ARC_TOL)
                 .unwrap_or(false)
         })
     }) {
@@ -873,6 +906,17 @@ fn try_spliced(
     if cuts.len() != 1 {
         return None;
     }
+    // C1（终审）：宿主弧退化成单点（近段只有 1 个顶点）时「补弧」也是同一个点，
+    // 余部会塌缩成新势力本身、宿主静默丢地。整条弧几乎覆盖宿主环时同理（补弧退化）。
+    let n = host_outer.len() as f32;
+    for seg in &segs {
+        if let ArcSeg::Host { from, to, .. } = seg {
+            let span = (to.scalar() - from.scalar()).rem_euclid(n);
+            if span <= 1e-6 || span >= n - 1e-6 {
+                return None;
+            }
+        }
+    }
     let cut = cuts.into_iter().next()?;
     Some(SplicedDivision {
         segs,
@@ -882,8 +926,11 @@ fn try_spliced(
     })
 }
 
-/// 切口环序位置：返回（切口前宿主弧的发射终点, 切口后宿主弧的发射起点）。
-fn cut_neighbors(segs: &[ArcSeg]) -> Option<(RingPos, RingPos)> {
+/// 切口环序位置：返回（切口前宿主弧的发射终点, 切口后宿主弧的发射起点, 是否反序）。
+///
+/// 单切口时必然恰有一个 Host 段，prev 与 next 是同一段；`reverse` 指出该段
+/// 相对宿主环正向是否反序发射（宿主环与掩膜环 winding 相反时为 true）。
+fn cut_neighbors(segs: &[ArcSeg]) -> Option<(RingPos, RingPos, bool)> {
     let ci = segs.iter().position(|s| matches!(s, ArcSeg::Cut(_)))?;
     let prev = &segs[(ci + segs.len() - 1) % segs.len()];
     let next = &segs[(ci + 1) % segs.len()];
@@ -905,7 +952,11 @@ fn cut_neighbors(segs: &[ArcSeg]) -> Option<(RingPos, RingPos)> {
     };
     // prev 的发射终点：reverse 时发射 from，否则发射 to。
     // next 的发射起点：reverse 时发射 to，否则发射 from。
-    Some((if *pr { *pf } else { *pt }, if *nr { *nt } else { *nf }))
+    Some((
+        if *pr { *pf } else { *pt },
+        if *nr { *nt } else { *nf },
+        *pr && *nr,
+    ))
 }
 
 /// 由拼接方案组装最终几何（切口弧已平滑/吸附）。
@@ -938,12 +989,22 @@ fn build_spliced(plan: &SplicedDivision, cut: &[(f32, f32)]) -> Option<DivisionG
         holes.extend(plan.preserved_holes.iter().cloned());
         (host.to_vec(), holes)
     } else {
-        let (cut_start, cut_end) = cut_neighbors(&plan.segs)?;
-        // 余部 = 宿主补弧（正向 cut_start → cut_end）+ 反序切口。
-        let mut rem: Vec<(f32, f32)> = host_arc_points(host, cut_start, cut_end);
+        let (cut_start, cut_end, reverse) = cut_neighbors(&plan.segs)?;
+        // 余部 = 宿主**补弧** + 反序切口。
+        // 正向 winding：补弧 = forward(cut_start → cut_end)。
+        // 反向 winding（C2，终审）：inside 用的是 forward(from_s → to_s)，补弧是
+        // 另一条弧 = forward(cut_end → cut_start) **反序**发射，否则取回的是
+        // inside 自己那条弧，余部塌缩。
+        let mut rem: Vec<(f32, f32)> = if reverse {
+            let mut arc = host_arc_points(host, cut_end, cut_start);
+            arc.reverse();
+            arc
+        } else {
+            host_arc_points(host, cut_start, cut_end)
+        };
         rem.extend(cut.iter().rev().copied());
         let rem = dedup_ring(&rem);
-        if rem.len() < 3 {
+        if rem.len() < 3 || ring_area(&rem) <= 0.0 {
             return None;
         }
         (rem, plan.preserved_holes.clone())
@@ -959,13 +1020,46 @@ fn build_spliced(plan: &SplicedDivision, cut: &[(f32, f32)]) -> Option<DivisionG
 }
 
 /// 面积校验：拼接环与旧路径环差异过大 = 分类误判（拼接环不可信）。
+///
+/// 终审 I1：**两端都查**（inside 与余部净面积）——只查 inside 会漏掉
+/// 「inside 对、余部塌缩」的错误（C1/C2 就属于这一类）。
 fn area_is_sane(geo: &DivisionGeometry, core: &DivisionCore) -> bool {
-    let built = geo.inside.first().map(|r| ring_area(r)).unwrap_or(0.0);
-    let legacy = core.inside.first().map(|r| ring_area(r)).unwrap_or(0.0);
-    if built <= 0.0 || legacy <= 0.0 {
+    let net = |outer: &[Ring], holes: &[Vec<Ring>]| -> Option<f32> {
+        let outer_area = outer.first().map(|r| ring_area(r))?;
+        let hole_area: f32 = holes
+            .first()
+            .map(|hs| hs.iter().map(|h| ring_area(h)).sum())
+            .unwrap_or(0.0);
+        Some(outer_area - hole_area)
+    };
+    let built_inside = net(&geo.inside, &geo.inside_holes);
+    let legacy_inside = net(&core.inside, &core.inside_holes);
+    let (Some(bi), Some(li)) = (built_inside, legacy_inside) else {
+        return false;
+    };
+    if bi <= 0.0 || li <= 0.0 || (bi - li).abs() > li * 0.35 {
         return false;
     }
-    (built - legacy).abs() <= legacy * 0.35
+    // 余部：任一侧为空时要求另一侧也为空（吃光宿主）。
+    match (
+        net(&geo.remainder_outer, &geo.remainder_holes),
+        net(&core.remainder_outer, &core.remainder_holes),
+    ) {
+        (None, None) => true,
+        (Some(br), Some(lr)) => br > 0.0 && lr > 0.0 && (br - lr).abs() <= lr * 0.35,
+        _ => false,
+    }
+}
+
+/// 旧路径几何（拼接不可用时使用；不含任何吸附）。
+fn legacy_geometry(core: &DivisionCore) -> DivisionGeometry {
+    DivisionGeometry {
+        inside: core.inside.clone(),
+        inside_holes: core.inside_holes.clone(),
+        remainder_outer: core.remainder_outer.clone(),
+        remainder_holes: core.remainder_holes.clone(),
+        snapped: false,
+    }
 }
 
 /// 组装最终几何：拼接可用且面积合理 → 拼接；否则旧路径。
@@ -1383,6 +1477,98 @@ mod tests {
         assert!(
             snapped.iter().any(|p| dist(*p, peak) < 1.0),
             "至少一个顶点应被吸到峰点，实得 {snapped:?}"
+        );
+    }
+
+    // ---- M2 终审回归：winding / 退化宿主弧 / 吸附共边 / 既有洞 ----
+
+    /// 顺时针 winding 的宿主（YAML 合法输入）：余部必须取**补弧**，不得塌缩。
+    #[test]
+    fn clockwise_host_winding_keeps_remainder_intact() {
+        let host = vec![(0.0, 0.0), (0.0, 20.0), (20.0, 20.0), (20.0, 0.0)];
+        let intent = sq(0.0, 0.0, 10.0, 10.0);
+        let g = divide_geometry(40, 40, &host, &[], &intent).expect("顺时针宿主也应可划分");
+        let rem = ring_area(&g.remainder_outer[0]).abs();
+        assert!(
+            (rem - 300.0).abs() < 20.0,
+            "顺时针宿主的余部应 ≈ 400−100 = 300，实得 {rem}（塌缩说明补弧取错）"
+        );
+        assert!(
+            g.remainder_holes[0].is_empty(),
+            "贴边切不应产生洞，实得 {:?}",
+            g.remainder_holes[0]
+        );
+    }
+
+    /// 斜边宿主 + 很小的贴边意图：近段可能只有单个顶点（宿主弧退化）——
+    /// 必须回退旧路径，余部不得塌缩成新势力。
+    #[test]
+    fn slanted_host_tiny_edge_cut_never_collapses_remainder() {
+        let host = vec![(8.0, 0.0), (24.0, 4.0), (20.0, 20.0), (4.0, 16.0)];
+        let intent = vec![(8.21, 9.29), (16.37, 9.29), (16.37, 16.16), (8.21, 16.16)];
+        let host_area = ring_area(&host);
+        let g = divide_geometry(40, 40, &host, &[], &intent).expect("斜边宿主应可划分");
+        let inside = ring_area(&g.inside[0]);
+        let rem = ring_area(&g.remainder_outer[0]).abs();
+        assert!(
+            rem > host_area * 0.5,
+            "余部不得塌缩（宿主 {host_area}，inside {inside}，余部 {rem}）"
+        );
+        assert!(
+            (inside + rem - host_area).abs() < host_area * 0.25,
+            "面积应守恒：inside {inside} + 余部 {rem} ≈ 宿主 {host_area}"
+        );
+    }
+
+    /// 贴地（Snap）模式的贴边切割：吸附只动切口，两侧切口弧仍逐点互为反序。
+    #[test]
+    fn snapped_edge_cut_keeps_shared_arc_pointwise() {
+        let mut grid = flat_land(64, 64, 100);
+        // 湖在切口附近，保证吸附真的发生。
+        crate::intent::apply_intent(
+            &mut grid,
+            &crate::intent::Intent::Lake {
+                center: (26.0, 26.0),
+                radius: 6.0,
+                strength: 1.0,
+            },
+            13,
+            1.0,
+        );
+        let host = sq(4.0, 4.0, 60.0, 60.0);
+        let intent = sq(4.0, 4.0, 30.0, 30.0); // 贴左上角
+        let g = divide(&grid, &host, &[], &intent, EdgeMode::Snap, 3.0).expect("贴地划分");
+        let rem = &g.remainder_outer[0];
+        let cuts = groups_outside_host(&g.inside[0], &host);
+        assert!(!cuts.is_empty(), "贴边切割应有切口弧");
+        for cut in &cuts {
+            assert!(
+                contains_reversed_run(rem, cut),
+                "吸附后切口弧 {cut:?} 的反序仍须逐点出现在余部外环"
+            );
+        }
+    }
+
+    /// 既有洞 + 贴边切割：作者的洞必须原样留在余部，不得被 mirror 误配。
+    #[test]
+    fn edge_cut_preserves_existing_host_hole() {
+        let host = sq(0.0, 0.0, 40.0, 40.0);
+        let existing_hole = sq(28.0, 28.0, 34.0, 36.0);
+        let intent = sq(0.0, 0.0, 10.0, 10.0);
+        let g = divide_geometry(48, 48, &host, std::slice::from_ref(&existing_hole), &intent)
+            .expect("划分");
+        let holes = &g.remainder_holes[0];
+        assert_eq!(
+            holes.len(),
+            1,
+            "余部应恰有 1 个洞（原有洞），实得 {holes:?}"
+        );
+        assert!(
+            (ring_area(&holes[0]) - ring_area(&existing_hole)).abs() < 1e-3,
+            "原有洞面积必须不变（{} vs {}），实得 {:?}",
+            ring_area(&holes[0]),
+            ring_area(&existing_hole),
+            holes[0]
         );
     }
 

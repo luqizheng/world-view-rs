@@ -1,6 +1,6 @@
 # 势力划分 M2：切弧拼接（共边逐点保真）
 
-> 日期：2026-10-18 · 状态：**已完成**（T0–T6；终审见文末追记）
+> 日期：2026-10-18 · 状态：**已完成**（T0–T6；终审 2 Critical + 4 Important 已修）
 > 上游：ADR-0028（已接受，文末「追记」把 M1 的亚格偏差显式记为 M2 候选）· spec `2026-10-18-world-from-zero-map-design.md` D3/D5/D8 + 追记一
 
 ## 问题（ADR-0028 追记的两种近似）
@@ -46,3 +46,19 @@
 `cargo test --workspace` · `cargo clippy --workspace --all-targets -- -D warnings` ·
 `cargo fmt --all -- --check` · `cargo app-test` · `cargo app-clippy` · `bash scripts/smoke-gui.sh` ·
 §2.2 依赖断言。
+
+## 终审结论与修复（2026-10-18）
+
+独立 reviewer 判「需修后合」，2 Critical + 4 Important：
+
+| # | 问题 | 修复 |
+|---|---|---|
+| C1 | 近段只有单个原始顶点（斜边宿主贴边小切口）→ 宿主弧退化，余部塌缩成新势力，宿主静默丢地 | `try_spliced` 拒绝 span≈0 或 ≈整环的宿主弧；`build_spliced` 校验余部环 ≥3 点且面积 >0 |
+| C2 | 顺时针 winding 宿主：补弧取回的是 inside 自己那条弧，余部同样塌缩 | `cut_neighbors` 返回 reverse 标志；reverse 时余部用 forward(cut_end→cut_start) 反序 |
+| I1 | 面积校验只查 inside | 改为 inside + 余部**净面积**双端校验 |
+| I2 | 容差 `<=1.0` 把边界内侧正好 1 格的意图外扩到宿主边界 | 改严格 `d < 1.0`，并在 ADR 记录该语义后果 |
+| I3 | 兜底路径复用 `finish_division`（会再取拼接结果）→ 吸附破坏共边；`mirror_shared_edge` 可误配既有洞 | 兜底直接用 `legacy_geometry(&core)`；mirror 跳过点列近似等于既有洞的候选 |
+| I4 | ADR 追记二与实现不符 | 追记二补齐真实回退条件与 winding/吸附约束 |
+
+新增回归：`clockwise_host_winding_keeps_remainder_intact` · `slanted_host_tiny_edge_cut_never_collapses_remainder` ·
+`snapped_edge_cut_keeps_shared_arc_pointwise` · `edge_cut_preserves_existing_host_hole`。
