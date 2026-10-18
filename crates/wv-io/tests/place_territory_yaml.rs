@@ -26,6 +26,7 @@ fn sample_place(feature: Option<u8>) -> Place {
         y: Some(20.0),
         w: Some(4.0),
         h: Some(2.0),
+        rank: None,
     }
 }
 

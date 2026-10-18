@@ -47,6 +47,7 @@ fn forest_place() -> Place {
         y: Some(50.0),
         w: Some(60.0),
         h: Some(60.0),
+        rank: None,
     }
 }
 

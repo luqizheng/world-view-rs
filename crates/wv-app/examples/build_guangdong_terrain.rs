@@ -23,6 +23,8 @@ use wv_terrain::{
 };
 
 /// 海面填充高度（prep 脚本同值）：渲染上处于 `water_deep` 区间。
+/// 本工具不直接消费它（DEM 已含水面高度），保留作契约文档；见 classify。
+#[allow(dead_code)]
 const SEA_DEPTH: i16 = -350;
 
 /// 真实高度 → (surface, biome)（`wv-terrain` 冻结表同源）。

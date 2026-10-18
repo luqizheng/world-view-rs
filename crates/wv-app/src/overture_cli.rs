@@ -1037,6 +1037,7 @@ fn build_world(
             y: Some(y),
             w: Some(wu_radius * 2.0),
             h: Some(wu_radius * 2.0),
+            rank: Some(3),
         };
         places.push(place);
     }
@@ -1054,6 +1055,7 @@ fn build_world(
             y: Some(y),
             w: None,
             h: None,
+            rank: Some(0),
         });
     }
 

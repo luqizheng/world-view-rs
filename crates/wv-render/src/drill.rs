@@ -44,9 +44,7 @@
 use bevy::prelude::*;
 
 use crate::layer_frame::LayerFrame;
-use crate::state::{
-    lod_tier, DrillState, GridConfig, LodTier, PlaybackState, ViewState, WorldProjection,
-};
+use crate::state::{lod_tier, DrillState, GridConfig, PlaybackState, ViewState, WorldProjection};
 use wv_core::id::Id;
 use wv_core::map::{Extent, IconShape, IconSpec, MapLevel, MapNode};
 
@@ -757,14 +755,6 @@ pub struct RegionLabel;
 #[derive(Component)]
 pub struct SeaLabel;
 
-/// 当前 LOD 下是否保留地名标注。
-///
-/// Google 式地图在国家级视野只给“城市级”地点留标签；渡口、关隘等点状小地点
-/// 等用户拉近后再出现，避免世界图被一屏小字淹没。
-fn place_label_kept_at_tier(w: Option<f32>, h: Option<f32>, tier: LodTier) -> bool {
-    tier != LodTier::Nation || matches!((w, h), (Some(_), Some(_)))
-}
-
 /// 更新当前层级的地名标注池。
 ///
 /// **屏幕对齐**（2026-10-14 用户裁定）：地图随 `MapNode.orientation` 旋转后，
@@ -777,6 +767,7 @@ fn place_label_kept_at_tier(w: Option<f32>, h: Option<f32>, tier: LodTier) -> bo
 pub fn update_place_labels(
     mut commands: Commands,
     projection: Res<WorldProjection>,
+    place_index: Res<crate::world_projection::PlaceIndex>,
     drill: Res<DrillState>,
     grid: Res<GridConfig>,
     view: Res<ViewState>,
@@ -820,27 +811,39 @@ pub fn update_place_labels(
     if layers.place.visible && layers.label.visible {
         if let Some(current) = drill.current_node(&projection.world) {
             let map_span = current.time_span.as_ref();
-            for p in &projection.world.distances.places {
-                if p.map.as_ref() == Some(&current.id)
-                    && place_label_kept_at_tier(p.w, p.h, tier)
-                    && wv_core::label_visible_at(map_span, None, t)
+            // 走锚定桶 + 视口裁剪 + 级别硬门（ADR-0030 D6）：碰撞过滤是 O(n²)
+            //（ADR-0017 v0.1「n ≤ 200」假设），输入必须先压到屏幕量级——
+            // guangdong 的 8.1 万地点全量进候选是悬顶之剑。
+            let margin = view.scale * 24.0;
+            let half = view.window_size * view.scale * 0.5 + Vec2::splat(margin);
+            let (cx, cy) = (view.camera_center.x, view.camera_center.y);
+            let index = place_index.anchored_by_map.get(&current.id);
+            let anchored = index.map(|v| v.as_slice()).unwrap_or(&[]);
+            for i in anchored {
+                let p = &projection.world.distances.places[*i as usize];
+                if !crate::state::poi_visible_at_rank(p.effective_rank(), tier)
+                    || !wv_core::label_visible_at(map_span, None, t)
                 {
-                    if let (Some(x), Some(y)) = (p.x, p.y) {
-                        // 地点坐标是本图局部 → 视图空间（`map_to_view`，非栅格原点）。
-                        let pos = grid.map_to_view(Vec2::new(x, y));
-                        // v0.1 优先级：文本长度（长标签优先保留，短标签更容易被遮挡）。
-                        let priority = p.name.len() as u32;
-                        candidates.push(crate::label_collision::LabelCandidate {
-                            pos,
-                            name: p.name.clone(),
-                            priority,
-                            // ADR-0017 §2.7：地点标签可拾取——点击选中该地点。
-                            target: Some(wv_core::SelectedEntity::new(
-                                wv_core::EntityKind::Place,
-                                p.id.clone(),
-                            )),
-                        });
+                    continue;
+                }
+                if let (Some(x), Some(y)) = (p.x, p.y) {
+                    // 地点坐标是本图局部 → 视图空间（`map_to_view`，非栅格原点）。
+                    let pos = grid.map_to_view(Vec2::new(x, y));
+                    if (pos.x - cx).abs() > half.x || (pos.y - cy).abs() > half.y {
+                        continue;
                     }
+                    // v0.1 优先级：文本长度（长标签优先保留，短标签更容易被遮挡）。
+                    let priority = p.name.len() as u32;
+                    candidates.push(crate::label_collision::LabelCandidate {
+                        pos,
+                        name: p.name.clone(),
+                        priority,
+                        // ADR-0017 §2.7：地点标签可拾取——点击选中该地点。
+                        target: Some(wv_core::SelectedEntity::new(
+                            wv_core::EntityKind::Place,
+                            p.id.clone(),
+                        )),
+                    });
                 }
             }
         }
@@ -1756,20 +1759,37 @@ fn draw_diamond(gizmos: &mut Gizmos, center: Vec2, half: f32, color: Color) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::LodTier;
     use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
     use wv_core::World;
 
+    /// 标签门槛与 POI 点标同一把尺（ADR-0030 D6）：旧两档工程（无 rank）经
+    /// `effective_rank` 折算后，Nation 档只留城市（w/h）标签的行为不回归。
     #[test]
-    fn nation_tier_keeps_only_city_labels() {
-        assert!(place_label_kept_at_tier(
-            Some(12.0),
-            Some(8.0),
-            LodTier::Nation
-        ));
-        assert!(!place_label_kept_at_tier(None, None, LodTier::Nation));
-        assert!(!place_label_kept_at_tier(Some(12.0), None, LodTier::Nation));
-        assert!(place_label_kept_at_tier(None, None, LodTier::Region));
-        assert!(place_label_kept_at_tier(None, None, LodTier::Edit));
+    fn label_gate_folds_legacy_places_identically_to_pois() {
+        let place = |w: Option<f32>, h: Option<f32>, rank: Option<u8>| wv_core::distance::Place {
+            id: wv_core::Id::new_unchecked("p"),
+            name: "地名".into(),
+            feature: None,
+            map: None,
+            x: None,
+            y: None,
+            w,
+            h,
+            rank,
+        };
+        let gate = |p: &wv_core::distance::Place, tier: LodTier| {
+            crate::state::poi_visible_at_rank(p.effective_rank(), tier)
+        };
+        // 旧两档：Nation 档只留城市标签（w/h 齐备）。
+        assert!(gate(&place(Some(12.0), Some(8.0), None), LodTier::Nation));
+        assert!(!gate(&place(None, None, None), LodTier::Nation));
+        assert!(!gate(&place(Some(12.0), None, None), LodTier::Nation));
+        // 分级：显式 rank 3 的点标在 Nation 档也拿得到标签；rank 0 网络节点
+        // 只有 Edit 档才出现。
+        assert!(gate(&place(None, None, Some(3)), LodTier::Nation));
+        assert!(!gate(&place(None, None, Some(0)), LodTier::Region));
+        assert!(gate(&place(None, None, Some(0)), LodTier::Edit));
     }
 
     fn node(id: &str, level: MapLevel, parent: Option<&str>, children: &[&str]) -> MapNode {

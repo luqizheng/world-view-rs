@@ -165,6 +165,7 @@ pub async fn dispatch_write(
                 orientation: 0.0,
                 // v0.1 不声明底图；后续 skill 可单独设，或直接「重置到底图」（按 Ocean 兜底）。
                 base: None,
+                outline_polygon: None,
             };
             // v0.1 不带预填充栅格；地形由后续 skill 单独填。
             let cmd: Box<dyn wv_edit::EditCommand> =
@@ -206,6 +207,7 @@ pub async fn dispatch_write(
                 w: input.w,
                 h: input.h,
                 feature: None,
+                rank: None,
             };
             let cmd: Box<dyn wv_edit::EditCommand> = Box::new(wv_edit::AddPlaceCommand::new(place));
             let dirty = bridge.apply(cmd).await.map_err(|e| {
@@ -361,6 +363,7 @@ mod tests {
                     unit_per_km: None,
                     orientation: 0.0,
                     base: None,
+                    outline_polygon: None,
                 });
                 dispatch_write_with_drain(
                     bridge,
