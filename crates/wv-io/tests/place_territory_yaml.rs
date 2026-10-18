@@ -227,3 +227,145 @@ fn save_after_migration_writes_biome_and_drops_feature() {
     assert_eq!(p.biome, Some(1), "群系保持不变");
     assert_eq!(p.feature, None, "首次保存后迁移收敛：旧字段从内存消失");
 }
+
+// ---------------------------------------------------------------------------
+// 迁移边界（终审 Important #3/#5、Minor #9）
+// ---------------------------------------------------------------------------
+
+/// 双字段并存：作者手写的 `biome` 为胜，加载迁移不得覆盖它；旧 feature
+/// 原值保留（供提示），写回只写 biome。
+#[test]
+fn explicit_biome_wins_over_legacy_feature_on_load() {
+    let tmp = TempDir::new("both_fields");
+    let proj = open_min_project(&tmp.0);
+    let places_dir = tmp.0.join("distances/places");
+    std::fs::create_dir_all(&places_dir).expect("建 places 目录");
+    let yaml = "id: place_linan\nname: 临安\nmap: map_world\nfeature: 4\nbiome: 5\n";
+    std::fs::write(places_dir.join("place_linan.yaml"), yaml).expect("写混合 YAML");
+
+    let world = proj.load_world().expect("加载");
+    let p = &world.distances.places[0];
+    assert_eq!(
+        p.biome,
+        Some(5),
+        "并存时 biome=5（沙漠）必须为胜，实得 {:?}",
+        p.biome
+    );
+    assert_eq!(p.feature, Some(4), "旧字段保留供迁移提示");
+}
+
+/// 词汇表外垃圾值（42）：不迁移，biome 保持 None，地点照常加载与保存。
+#[test]
+fn out_of_vocabulary_feature_does_not_migrate_and_still_loads() {
+    let tmp = TempDir::new("garbage");
+    let mut proj = open_min_project(&tmp.0);
+    let places_dir = tmp.0.join("distances/places");
+    std::fs::create_dir_all(&places_dir).expect("建 places 目录");
+    std::fs::write(
+        places_dir.join("place_linan.yaml"),
+        "id: place_linan\nname: 临安\nmap: map_world\nfeature: 42\n",
+    )
+    .expect("写垃圾值 YAML");
+
+    let world = proj.load_world().expect("垃圾值也必须能加载");
+    let p = &world.distances.places[0];
+    assert_eq!(p.biome, None, "词汇表外不迁移");
+    assert_eq!(p.feature, Some(42), "保留原值供未映射提示");
+
+    proj.save_world(&world, &["distances/places".into()])
+        .expect("保存");
+    let back = proj.load_world().expect("重载");
+    assert_eq!(back.distances.places.len(), 1, "地点不得丢失");
+    assert_eq!(back.distances.places[0].feature, None, "旧键保存后移除");
+}
+
+/// 单文件回退布局（`distances/places.yaml`）同样走加载迁移——该分支与目录分支
+/// 共用同一段迁移循环，此处钉住结构风险最高的路径。
+#[test]
+fn single_file_places_layout_also_migrates_feature() {
+    let tmp = TempDir::new("single_file");
+    let proj = open_min_project(&tmp.0);
+    std::fs::create_dir_all(tmp.0.join("distances")).expect("建 distances/");
+    std::fs::write(
+        tmp.0.join("distances/places.yaml"),
+        "- id: place_linan\n  name: 临安\n  map: map_world\n  feature: 4\n",
+    )
+    .expect("写单文件 places.yaml");
+
+    let world = proj.load_world().expect("加载");
+    assert_eq!(
+        world.distances.places.len(),
+        1,
+        "单文件布局应加载出 1 个地点"
+    );
+    assert_eq!(
+        world.distances.places[0].biome,
+        Some(1),
+        "单文件回退路径也必须迁移为 biome=1"
+    );
+}
+
+/// 提示生命周期端到端：旧 YAML 加载后 → feature-migrated 在场；保存地点后重载
+/// → 提示消失（ADR-0032 D3 的「保存即收敛」）。
+#[test]
+fn migration_hint_lifecycle_ends_after_places_are_saved() {
+    let tmp = TempDir::new("hint_lifecycle");
+    let mut proj = open_min_project(&tmp.0);
+    let places_dir = tmp.0.join("distances/places");
+    std::fs::create_dir_all(&places_dir).expect("建 places 目录");
+    std::fs::write(
+        places_dir.join("place_linan.yaml"),
+        "id: place_linan\nname: 临安\nmap: map_world\nfeature: 4\n",
+    )
+    .expect("写旧 YAML");
+
+    let world = proj.load_world().expect("加载");
+    let hints = wv_io::derive_hints(&world);
+    assert!(
+        hints
+            .items
+            .iter()
+            .any(|h| h.fingerprint == "feature-migrated|place_linan"),
+        "加载后应有迁移提示，实得 {:?}",
+        hints.items
+    );
+
+    proj.save_world(&world, &["distances/places".into()])
+        .expect("保存地点");
+    let reloaded = proj.load_world().expect("重载");
+    let after = wv_io::derive_hints(&reloaded);
+    assert!(
+        !after
+            .items
+            .iter()
+            .any(|h| h.fingerprint.starts_with("feature-")),
+        "保存收敛后不应再有迁移提示，实得 {:?}",
+        after.items
+    );
+}
+
+/// 脏区路由（ADR-0032 D3 注记）：只保存其他子树时 places 不被重写，旧字段
+/// 留在磁盘上、提示保留——这是「下次保存地点才收敛」口径的依据。
+#[test]
+fn partial_save_leaves_legacy_feature_on_disk() {
+    let tmp = TempDir::new("partial_save");
+    let mut proj = open_min_project(&tmp.0);
+    let places_dir = tmp.0.join("distances/places");
+    std::fs::create_dir_all(&places_dir).expect("建 places 目录");
+    std::fs::write(
+        places_dir.join("place_linan.yaml"),
+        "id: place_linan\nname: 临安\nmap: map_world\nfeature: 4\n",
+    )
+    .expect("写旧 YAML");
+
+    let world = proj.load_world().expect("加载");
+    // 模拟「只改了地形/事件」的保存：dirty 不含 distances/places 子树。
+    proj.save_world(&world, &["timeline/events".into()])
+        .expect("部分保存");
+
+    let text = std::fs::read_to_string(places_dir.join("place_linan.yaml")).expect("读落盘");
+    assert!(
+        text.contains("feature: 4"),
+        "未触及 places 的保存不得重写地点文件，实得:\n{text}"
+    );
+}

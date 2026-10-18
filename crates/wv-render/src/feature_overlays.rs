@@ -672,6 +672,34 @@ mod tests {
         );
     }
 
+    /// ADR-0032 代价节的显式记录：无规则的族（v1 只有森林族有规则）**仍然**
+    /// 进入渲染并画回退晕 + 地界 + 名字，而不是像旧口径那样整体跳过。
+    /// 这钉住「事实不因换主题消失」的延伸语义——若将来要恢复「无规则不画」，
+    /// 收敛点是进回退分支前按 `rule.is_some()` 门控（ADR-0032 代价节）。
+    #[test]
+    fn ruleless_family_still_produces_a_fallback_overlay() {
+        let p = wv_core::distance::Place {
+            id: wv_core::Id::new_unchecked("p_desert"),
+            name: "沙漠".into(),
+            feature: None,
+            biome: Some(wv_terrain::biome::BIOME_DESERT),
+            envelope: None,
+            map: None,
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+            rank: None,
+        };
+        let family = overlay_family_for_place(&p).expect("沙漠应归族（进入渲染）");
+        assert_eq!(family, wv_terrain::biome::BiomeFamily::Desert);
+        let pack = builtin::for_palette(crate::theme::palette::MapPalette::Daylight);
+        assert!(
+            pack.overlays.rule_for(family).is_none(),
+            "v1 内置主题不给干旱族规则，渲染走 FALLBACK_HALO 分支"
+        );
+    }
+
     #[test]
     fn stable_hash_is_stable_across_calls() {
         assert_eq!(

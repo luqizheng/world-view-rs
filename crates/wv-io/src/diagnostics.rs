@@ -319,10 +319,13 @@ pub fn detect_feature_territory_hints(world: &wv_core::World) -> Vec<Diagnostic>
 /// 词汇迁移提示（ADR-0032 D3/D7 · V1 只提示，不阻止保存）。
 ///
 /// Place 仍携带旧 `feature` 字段只在两种情形发生：
-/// 1. **旧工程加载后、首次保存前**——加载迁移已把群系写入 `biome`，feature
-///    原值作为提示证据驻留内存；作者保存后旧字段从 YAML 消失、重载后本提示
-///    随之消散（指纹可认领）；
-/// 2. 值在旧词汇表（0–9）外——无法迁移，按普通地点处理。
+/// 1. **旧工程加载后、地点数据首次回写前**——加载迁移已把群系写入 `biome`，
+///    feature 原值作为提示证据驻留内存；作者保存地点（`distances/places`
+///    脏区被写入）后旧字段从 YAML 消失、重载后本提示随之消散（指纹可认领）。
+///    注意只保存地形等其他子树**不会**重写 places（`save_world` 的脏区路由），
+///    提示会保留到下一次地点回写或重新打开工程；
+/// 2. 值在旧词汇表（0–9）外——无法迁移；无 biome 时按普通地点处理（迁移
+///    窗口内 POI 抑制仍读 `feature`，点标暂不出现，见 ADR-0032 代价）。
 ///
 /// 指纹 = `feature-migrated|{place_id}` / `feature-unmapped|{place_id}`，
 /// 不含内容值——同一地点反复出现是同一条，认领状态跨会话稳定。
@@ -332,27 +335,36 @@ pub fn detect_feature_migration_hints(world: &wv_core::World) -> Vec<Diagnostic>
         let Some(f) = place.feature else {
             continue;
         };
-        // 以 biome 为胜（作者手工并存时以新词汇为准）；biome 缺席时给映射目标。
-        match place
-            .biome
-            .or(crate::terrain_bin::place_feature_to_biome(f))
-        {
-            Some(b) => out.push(hint(
-                format!("feature-migrated|{}", place.id),
-                format!(
-                    "地点「{name}」使用旧词汇 feature={f}（ADR-0032 已收口）：以 biome={b} 为准；\
-                     保存后 feature 键将从 YAML 移除，本提示随之消失。仅提示，不阻止保存。",
-                    name = place.name,
-                ),
-            )),
-            None => out.push(hint(
-                format!("feature-unmapped|{}", place.id),
-                format!(
-                    "地点「{name}」的 feature={f} 不在旧词汇表（0–9）内且无群系等价，\
-                     已按普通地点处理；如需标记请改用 biome 字段。仅提示，不阻止保存。",
-                    name = place.name,
-                ),
-            )),
+        match crate::terrain_bin::place_feature_to_biome(f) {
+            // 旧词汇有效：迁移提示；并存时以作者手写的 biome 为胜。
+            Some(mapped) => {
+                let target = place.biome.unwrap_or(mapped);
+                out.push(hint(
+                    format!("feature-migrated|{}", place.id),
+                    format!(
+                        "地点「{name}」使用旧词汇 feature={f}（ADR-0032 已收口）：以 biome={target} 为准；\
+                         下次保存地点（或重新打开工程）后 feature 键从 YAML 移除，本提示随之消失。\
+                         仅提示，不阻止保存。",
+                        name = place.name,
+                    ),
+                ));
+            }
+            // 词汇表外：无等价群系。若作者已写 biome，旧键只是待清理的外来值。
+            None => {
+                let tail = match place.biome {
+                    Some(b) => format!("已按 biome={b} 展示；保存后旧键移除"),
+                    None => "已按普通地点处理（迁移窗口内仍不显示点标）；如需标记请改用 biome 字段"
+                        .to_string(),
+                };
+                out.push(hint(
+                    format!("feature-unmapped|{}", place.id),
+                    format!(
+                        "地点「{name}」的 feature={f} 不在旧词汇表（0–9）内，{tail}。\
+                         仅提示，不阻止保存。",
+                        name = place.name,
+                    ),
+                ));
+            }
         }
     }
     out

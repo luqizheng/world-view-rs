@@ -7,8 +7,8 @@
 //! - 把笔刷操作转成 `wv_edit::EditCommand`（`editing`）。
 //! - 把面板的「应用/拒绝」按钮转成 `EditCommand`（`faction_panel_actions`）。
 //! - 把意图菜单闭合的环 + 名称/群系转成 `PlaceBiomeMarkerCommand`
-//!   （`feature_place_actions`；ADR-0032 D6 后旧 `AddFeaturePlaceCommand`
-//!   动作层已删）。
+//!   （`feature_place_actions`；ADR-0032 D6 后旧词汇的动作层与命令
+//!   `AddFeaturePlaceCommand` 均已删除）。
 //! - 把校验面板点击「跳到位置」转成相机/选择变更（`validation_actions`）。
 //! - 把内存 `World` 派生 `Diagnostics` 给校验面板（`diagnostics_bridge`）。
 //!

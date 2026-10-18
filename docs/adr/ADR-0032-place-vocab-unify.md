@@ -47,16 +47,19 @@ API 再导出给主题 crate，外部主题 crate 不直接摸 wv-terrain）。�
 | Road 道路族 | 20 道路 | 9 |
 | （无族） | 0 NONE、未登记编号 | 高度回退 |
 
-族界与既有 `display_kind` 的陆面槽位分带**逐槽对齐**（绿洲入草原族即从此先例），并以
-钉测固化「同族陆面群系同槽位」不变式。`FeatureOverlaySet` 改为**全族字段**（v1 内置
+族界与既有 `display_kind` 的陆面槽位分带对齐（绿洲入草原族即从此先例）。
+钉测固化的不变式是**槽位划分细分族划分**：同槽位的陆面群系必同族；族**可以**
+跨多个槽位（高地族横跨丘陵 5 / 山地 6 两槽位；水域族 0/1 按深度分档而非按群系）。`FeatureOverlaySet` 改为**全族字段**（v1 内置
 主题仅 forest 有值），`rule_for(family: BiomeFamily)`。一次性定型全集字段：族已对冻结
 表穷尽，未来不给外部主题 crate 制造第二次破坏性变更。
 
 **D3 · 加载迁移，写回只写 biome**。wv-io 载入 places 时：`biome` 空且 `feature` 有 →
 按表（D4）写入 `biome`；`biome` 已在 → biome 胜，不做迁移。**内存中保留 feature 原值**
 作为提示的状态证据：`derive_hints` 看见 `feature` 在场即发迁移提示（指纹
-`feature-migrated|{place_id}`，文案以 biome 字段为准）——作者首次保存后 feature 从磁盘
-消失，重载后提示自然消散（指纹可认领），零新管道。磁盘旧文件在作者保存前一字不动
+`feature-migrated|{place_id}`，文案以 biome 字段为准）——作者下次保存**地点数据**（`save_world` 的
+`distances/places` 脏区被写入）后 feature 从磁盘消失，重载后提示自然消散（指纹
+可认领），零新管道。注意脏区路由：只保存地形等其他子树不会重写 places，提示
+会保留到下一次地点回写或重开工程——提示文案已按此口径措辞。磁盘旧文件在作者保存前一字不动
 （P6 非破坏）；词汇表外垃圾值发 `feature-unmapped|{place_id}`，按普通地点处理。
 
 **D4 · place 级迁移表（wv-io `place_feature_to_biome`，紧邻 `migrate_v1_kind`）**：
@@ -86,7 +89,7 @@ API 再导出给主题 crate，外部主题 crate 不直接摸 wv-terrain）。�
 **D8 · round-trip 契约的显式修订（§6.3 追写）**。迁移窗口内 `load(save(w)) == w` 对
 「携带旧 feature 的世界」不再字面成立（save 掉 feature）——契约改为两条：① 对不含旧
 字段的世界严格等价不变（现有测试主体）；② 迁移收敛性 `load(save(save(w))) ==
-load(save(w))`（首次保存即物理完成迁移，二次保存恒等）。旧 fixture（wv-core
+load(save(w))`（首次**地点数据**保存即物理完成迁移，二次保存恒等）。旧 fixture（wv-core
 `distance.rs` 的「旧 feature 字段保留」、wv-io `place_territory_yaml.rs` 的
 `feature: 4`）按新契约翻转。下版本删字段后契约回归严格等价。
 
@@ -102,9 +105,16 @@ ADR-0031 装饰采样全挂在它上），feature 只有森林一条规则在消
 ## 代价
 
 - round-trip 契约修订一次（D8，显式留痕，§7.2 的口径修正）；
-- M-A 使 0/1/5/6/7 声明的旧地点可能**新出现** feature-no-cells 提示（今日对 5..7 恒
-  静默的假阴性被纠正——提示噪音变化，非视觉回退）；
+- M-A 使 0/1/5/6/7 声明的旧地点可能**新出现** feature-no-cells 提示——旧口径把
+  5..7 归 biome 0，只有在格心群系为 NONE 的格上才「命中而静默」（假阴性）；
+  新口径升级为真实群系后，这些地界内若没有对应群系格就会提示（噪音变化，非视觉回退）；
 - 外部主题 crate **破坏性 API 变更**（chinese-ink 同 PR 修复，作兼容样例）；
+- **非森林族标记现在会画回退晕**（有意）：旧口径只给森林族开覆盖物门（其余 biome
+  直接跳过、完全不可见）；族键化后 17 群系标记都会进入渲染，无规则的族得到中性
+  回退晕（`FALLBACK_HALO_ALPHA` 0.12）+ 地界 + 名字——这是「事实不因换主题消失」
+  原则的延伸，也让「有标记却没有任何边界」的旧观感统一为可见边界。若将来要恢复
+  「无规则族不画」，收敛点 = `sync_feature_overlays` 在进回退分支前按
+  `rule.is_some()` 门控（单行改动）。
 - 迁移窗口内 Place 双字段并存，POI 抑制暂保持 `feature||biome`（对窗口内非法 feature
   值仍抑制点标），下版本收敛为 biome 单条件并机械清扫 ~30 处 `feature: None` 字面量。
 

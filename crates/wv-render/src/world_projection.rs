@@ -564,7 +564,7 @@ fn draw_dashed_circle(gizmos: &mut Gizmos, center: Vec2, radius: f32, color: Col
 /// 覆盖层中心出现一颗没有语义的红点。普通地点保持原行为：锚定且有坐标 →
 /// 点标，`w/h` 齐备 → 城市级。
 ///
-/// 迁移窗口内（ADR-0032 D1）保留 `feature` 双条件：未经加载器的手工世界若
+/// 迁移窗口内（ADR-0032 代价节）保留 `feature` 双条件：未经加载器的手工世界若
 /// 携带旧字段（含词汇表外垃圾值）仍不冒点；下版本删字段后收敛为单条件。
 fn place_dot_for(p: &wv_core::distance::Place, grid: &GridConfig) -> Option<PlaceDot> {
     if p.feature.is_some() || p.biome.is_some() {
