@@ -699,7 +699,7 @@ mod hole_tessellation_tests {
             let has_neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
             let has_pos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
             assert!(
-                !(has_neg == false && has_pos == false) || (has_neg && has_pos),
+                !(has_neg || has_pos) || (has_neg && has_pos), // 全零面积三角形（点恰在边上）不视为覆盖
                 "洞心被三角形覆盖"
             );
         }
@@ -728,6 +728,7 @@ mod hole_tessellation_tests {
     }
 }
 
+#[cfg(test)]
 mod tests {
     //! 纯函数测试：层选择 / 渲染决策 / rank 线宽 / 边与虚线 / 扇形网格。
     use super::*;
