@@ -689,9 +689,21 @@ impl EditCommand for MoveCityCommand {
                         chunk[1] += self.delta.y;
                     }
                 }
+                GeometryData::PolygonWithHoles { outer, holes } => {
+                    for chunk in outer.chunks_exact_mut(2) {
+                        chunk[0] += self.delta.x;
+                        chunk[1] += self.delta.y;
+                    }
+                    for hole in holes {
+                        for chunk in hole.chunks_exact_mut(2) {
+                            chunk[0] += self.delta.x;
+                            chunk[1] += self.delta.y;
+                        }
+                    }
+                }
                 GeometryData::Points(_) | GeometryData::Ref(_) => {
                     return Err(EditError::Precondition(format!(
-                        "城市「{}」的 outline_polygon 不是 Polygon 变体，不支持平移",
+                        "城市「{}」的 outline_polygon 不是多边形变体，不支持平移",
                         self.city_id
                     )));
                 }
@@ -1566,6 +1578,287 @@ impl EditCommand for RemoveFactionGeometryCommand {
             .ok_or_else(|| EditError::Precondition("RemoveGeometry 尚未 apply".into()))?;
         let insert_at = pos.min(world.faction_geometry.len());
         world.faction_geometry.insert(insert_at, prev);
+        Ok(())
+    }
+}
+
+/// 划分模式（ADR-0028 D5）：与 `wv_terrain::divide::EdgeMode` 同义。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DivisionMode {
+    /// 边界吸附地物线（水陆界面 / 河链 / 山脊峰值）。
+    Snap,
+    /// 无视地貌，保留栅格提取的平滑边框。
+    Straight,
+}
+
+impl DivisionMode {
+    fn edge_mode(self) -> wv_terrain::divide::EdgeMode {
+        match self {
+            Self::Snap => wv_terrain::divide::EdgeMode::Snap,
+            Self::Straight => wv_terrain::divide::EdgeMode::Straight,
+        }
+    }
+}
+
+/// 划分执行前的宿主快照（revert 用）。
+#[derive(Debug, Clone, Default)]
+struct BeforeDivision {
+    host_index: Option<usize>,
+    host_before: Option<GeometrySpan>,
+}
+
+/// 从宿主中间划出新势力（ADR-0028 D1/D2，势力交互 M1 Task 5）。
+///
+/// # 语义
+///
+/// - `host = Some(id)`：在该势力**生效中的疆界**里切下意图多边形——新势力
+///   疆界 = 意图 ∩ 宿主，宿主疆界原位替换为余部（可为带洞环）。两环来自
+///   同一次掩膜边界提取，**共边由构造保证**（D3）。
+/// - `host = None`：空势力宿主——整张图的**陆格**都是宿主（水域归空势力，
+///   D4/Q3）；只写新势力疆界，**不写任何宿主 span**。
+///
+/// # 原子性
+///
+/// 单命令单事务：失败（碎块化 / 意图不在宿主内 / 无地形）→ `Precondition`，
+/// 世界零改动；`revert` 移除新势力及其全部几何并逐位还原宿主 span。
+#[derive(Debug)]
+pub struct DivideFactionCommand {
+    pub map: wv_core::Id,
+    /// 宿主势力；`None` = 空势力。
+    pub host: Option<wv_core::Id>,
+    /// 意图多边形（图内局部 wu）。
+    pub intent: Vec<(f32, f32)>,
+    pub mode: DivisionMode,
+    /// 新势力（id / name / color 由调用方准备）。
+    pub faction: Faction,
+    /// 生效日（`TimeSpan::from`）。
+    pub from: i64,
+    /// 图内一格的世界单位（wu → 格坐标换算）。
+    pub cell_size: f32,
+    /// 贴地搜索窗口（格）。4 格 ≈ 4×cell_size wu。
+    search_cells: f32,
+    before: std::sync::Mutex<BeforeDivision>,
+}
+
+impl DivideFactionCommand {
+    pub fn new(
+        map: wv_core::Id,
+        host: Option<wv_core::Id>,
+        intent: Vec<(f32, f32)>,
+        mode: DivisionMode,
+        faction: Faction,
+        from: i64,
+        cell_size: f32,
+    ) -> Self {
+        Self {
+            map,
+            host,
+            intent,
+            mode,
+            faction,
+            from,
+            cell_size,
+            search_cells: 4.0,
+            before: std::sync::Mutex::new(BeforeDivision::default()),
+        }
+    }
+}
+
+/// `divide` 的领域错误 → 编辑错误（全部是 Precondition：可以直接改意图重试）。
+fn divide_edit_error(e: wv_terrain::divide::DivideError) -> EditError {
+    use wv_terrain::divide::DivideError;
+    match e {
+        DivideError::TooFewPoints => {
+            EditError::Precondition("意图多边形至少需要 3 个点".into())
+        }
+        DivideError::NotInsideHost => {
+            EditError::Precondition("意图多边形不在宿主（或陆地）范围内".into())
+        }
+        DivideError::Fragmented { inside, remainder } => EditError::Precondition(format!(
+            "这次划分会把领地切成多块（v1 不支持）：新势力 {inside} 块、余部 {remainder} 块；请分步划分"
+        )),
+    }
+}
+
+fn flat_to_pts(flat: &[f32]) -> Vec<(f32, f32)> {
+    flat.chunks_exact(2).map(|c| (c[0], c[1])).collect()
+}
+
+/// 扁平点列的环（wu）。
+type Ring = Vec<(f32, f32)>;
+
+/// 疆界几何 →（外环 + 洞环），wu。非多边形 → `None`。
+fn geometry_rings(geo: &GeometryData) -> Option<(Ring, Vec<Ring>)> {
+    match geo {
+        GeometryData::Polygon(v) => Some((flat_to_pts(v), Vec::new())),
+        GeometryData::PolygonWithHoles { outer, holes } => Some((
+            flat_to_pts(outer),
+            holes.iter().map(|h| flat_to_pts(h)).collect(),
+        )),
+        GeometryData::Points(_) | GeometryData::Ref(_) => None,
+    }
+}
+
+/// 划分产物（格坐标）→ 疆界几何（wu）。
+fn rings_to_geometry(
+    outers: &[Vec<(f32, f32)>],
+    holes: &[Vec<Vec<(f32, f32)>>],
+    cell_size: f32,
+) -> GeometryData {
+    let flat = |ring: &[(f32, f32)]| -> Vec<f32> {
+        ring.iter()
+            .flat_map(|&(x, y)| [x * cell_size, y * cell_size])
+            .collect()
+    };
+    let outer = outers.first().map(|r| flat(r)).unwrap_or_default();
+    let hole_rings: Vec<Vec<f32>> = holes
+        .first()
+        .map(|hs| hs.iter().map(|h| flat(h)).collect())
+        .unwrap_or_default();
+    if hole_rings.is_empty() {
+        GeometryData::Polygon(outer)
+    } else {
+        GeometryData::PolygonWithHoles {
+            outer,
+            holes: hole_rings,
+        }
+    }
+}
+
+impl EditCommand for DivideFactionCommand {
+    fn label(&self) -> String {
+        match &self.host {
+            Some(host) => format!("从「{host}」划分出「{}」", self.faction.name),
+            None => format!("新建势力「{}」", self.faction.name),
+        }
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        use wv_core::time::TimePoint;
+
+        if world.factions.iter().any(|f| f.id == self.faction.id) {
+            return Err(EditError::Precondition(format!(
+                "势力 `{}` 已存在",
+                self.faction.id
+            )));
+        }
+        if self.cell_size <= 0.0 || !self.cell_size.is_finite() {
+            return Err(EditError::Precondition("格尺寸必须为正".into()));
+        }
+        let data = world.terrain_of(&self.map).ok_or_else(|| {
+            EditError::Precondition(format!("地图 `{}` 没有地形栅格，无法划分势力", self.map))
+        })?;
+        let grid = to_grid(data)?;
+        let intent_grid: Vec<(f32, f32)> = self
+            .intent
+            .iter()
+            .map(|&(x, y)| (x / self.cell_size, y / self.cell_size))
+            .collect();
+
+        let (host_index, host_before, new_geometry) = match &self.host {
+            Some(host) => {
+                if !world.factions.iter().any(|f| &f.id == host) {
+                    return Err(EditError::Precondition(format!("宿主势力 `{host}` 不存在")));
+                }
+                let t = TimePoint::from_day(self.from);
+                let idx = world
+                    .faction_geometry
+                    .iter()
+                    .position(|g| g.map == self.map && &g.owner == host && g.span.contains(&t))
+                    .ok_or_else(|| {
+                        EditError::Precondition(format!(
+                            "宿主势力 `{host}` 在 {} 没有生效的疆界",
+                            self.from
+                        ))
+                    })?;
+                let before = world.faction_geometry[idx].clone();
+                let (outer, holes) = geometry_rings(&before.geometry).ok_or_else(|| {
+                    EditError::Precondition("宿主疆界不是多边形，无法划分".into())
+                })?;
+                let d = wv_terrain::divide::divide(
+                    &grid,
+                    &outer,
+                    &holes,
+                    &intent_grid,
+                    self.mode.edge_mode(),
+                    self.search_cells,
+                )
+                .map_err(divide_edit_error)?;
+                // 宿主余部原位替换（from / relation 不变）。
+                world.faction_geometry[idx] = GeometrySpan {
+                    map: before.map.clone(),
+                    owner: before.owner.clone(),
+                    span: before.span,
+                    geometry: rings_to_geometry(
+                        &d.remainder_outer,
+                        &d.remainder_holes,
+                        self.cell_size,
+                    ),
+                    relation: before.relation.clone(),
+                };
+                let new_geometry = GeometrySpan {
+                    map: self.map.clone(),
+                    owner: self.faction.id.clone(),
+                    span: wv_core::time::TimeSpan {
+                        from: self.from,
+                        to: None,
+                    },
+                    geometry: rings_to_geometry(&d.inside, &d.inside_holes, self.cell_size),
+                    relation: None,
+                };
+                (Some(idx), Some(before), new_geometry)
+            }
+            None => {
+                let d = wv_terrain::divide::divide_land_host(
+                    &grid,
+                    &intent_grid,
+                    self.mode.edge_mode(),
+                    self.search_cells,
+                )
+                .map_err(divide_edit_error)?;
+                let new_geometry = GeometrySpan {
+                    map: self.map.clone(),
+                    owner: self.faction.id.clone(),
+                    span: wv_core::time::TimeSpan {
+                        from: self.from,
+                        to: None,
+                    },
+                    geometry: rings_to_geometry(&d.inside, &d.inside_holes, self.cell_size),
+                    relation: None,
+                };
+                (None, None, new_geometry)
+            }
+        };
+
+        world.factions.push(self.faction.clone());
+        world.faction_geometry.push(new_geometry);
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = BeforeDivision {
+            host_index,
+            host_before,
+        };
+        Ok(faction_dirty_paths())
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let before = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))?
+            .clone();
+        world.factions.retain(|f| f.id != self.faction.id);
+        world
+            .faction_geometry
+            .retain(|g| g.owner != self.faction.id);
+        if let (Some(idx), Some(prev)) = (before.host_index, before.host_before) {
+            if idx < world.faction_geometry.len() {
+                world.faction_geometry[idx] = prev;
+            } else {
+                return Err(EditError::Precondition("revert 时宿主疆界位置越界".into()));
+            }
+        }
         Ok(())
     }
 }
@@ -2947,6 +3240,214 @@ mod tests {
             kind: Some("实控".into()),
             span: TimeSpan::open(from),
         }
+    }
+
+    // ---- 势力划分（ADR-0028 / 势力交互 M1 Task 5） ----
+
+    fn square_ring(x0: f32, y0: f32, x1: f32, y1: f32) -> Vec<f32> {
+        vec![x0, y0, x1, y0, x1, y1, x0, y1]
+    }
+
+    /// 一张带方形宿主势力 `faction_host` 的世界（地图 = TEST_MAP，格 1 wu）。
+    fn world_with_host_faction() -> World {
+        let mut w = world_with_terrain(64);
+        w.factions
+            .push(f(Id::new_unchecked("faction_host").as_str(), "宿主国"));
+        w.factions.last_mut().expect("刚推入").id = Id::new_unchecked("faction_host");
+        w.faction_geometry.push(GeometrySpan {
+            map: test_map(),
+            owner: Id::new_unchecked("faction_host"),
+            span: TimeSpan { from: 0, to: None },
+            geometry: GeometryData::Polygon(square_ring(4.0, 4.0, 60.0, 60.0)),
+            relation: None,
+        });
+        w
+    }
+
+    #[test]
+    fn divide_creates_faction_and_shrinks_host_atomically() {
+        let mut w = world_with_host_faction();
+        let cmd = DivideFactionCommand::new(
+            test_map(),
+            Some(Id::new_unchecked("faction_host")),
+            vec![(24.0, 24.0), (40.0, 24.0), (40.0, 40.0), (24.0, 40.0)],
+            DivisionMode::Straight,
+            f(Id::new_unchecked("faction_new").as_str(), "新国"),
+            0,
+            1.0,
+        );
+        let dirty = cmd.apply(&mut w).expect("划分应成功");
+        assert!(dirty.contains(&"factions".to_string()));
+        assert_eq!(w.factions.len(), 2, "新势力应入场");
+        assert_eq!(w.faction_geometry.len(), 2, "新势力疆界应入场");
+        // 宿主余部变成带洞环：1 个洞。
+        let host = w
+            .faction_geometry
+            .iter()
+            .find(|g| g.owner == Id::new_unchecked("faction_host"))
+            .expect("宿主疆界仍在");
+        let GeometryData::PolygonWithHoles { holes, .. } = &host.geometry else {
+            panic!("宿主余部应为带洞环，实得 {:?}", host.geometry);
+        };
+        assert_eq!(holes.len(), 1, "宿主余部应有 1 个洞");
+        // 共边（D3）：新势力外环 == 宿主洞沿反序（逐点相等）。
+        let new_geo = w
+            .faction_geometry
+            .iter()
+            .find(|g| g.owner == Id::new_unchecked("faction_new"))
+            .expect("新势力疆界");
+        let GeometryData::Polygon(new_outer) = &new_geo.geometry else {
+            panic!("新势力应为单环，实得 {:?}", new_geo.geometry);
+        };
+        let mut reversed = new_outer.clone();
+        let n = reversed.len() / 2;
+        let mut pts: Vec<[f32; 2]> = reversed.chunks_exact(2).map(|c| [c[0], c[1]]).collect();
+        pts.reverse();
+        reversed = pts.into_iter().flatten().collect();
+        assert_eq!(&holes[0], &reversed, "共边必须逐点相等（D3）");
+        assert_eq!(n * 2, new_outer.len(), "顶点数自洽");
+    }
+
+    #[test]
+    fn divide_undo_restores_host_and_removes_new_faction_bitwise() {
+        let mut w = world_with_host_faction();
+        let factions_before = w.factions.clone();
+        let geometry_before = w.faction_geometry.clone();
+        let cmd = DivideFactionCommand::new(
+            test_map(),
+            Some(Id::new_unchecked("faction_host")),
+            vec![(24.0, 24.0), (40.0, 24.0), (40.0, 40.0), (24.0, 40.0)],
+            DivisionMode::Straight,
+            f(Id::new_unchecked("faction_new").as_str(), "新国"),
+            0,
+            1.0,
+        );
+        cmd.apply(&mut w).unwrap();
+        cmd.revert(&mut w).unwrap();
+        assert_eq!(w.factions, factions_before, "revert 应移除新势力");
+        assert_eq!(
+            w.faction_geometry, geometry_before,
+            "revert 应逐位还原宿主疆界"
+        );
+    }
+
+    /// 全陆地地形（格 1 wu）：空势力宿主的划分对象。
+    fn world_with_land_terrain() -> World {
+        let mut w = world_with_terrain(64);
+        let land: Vec<TerrainCellData> = vec![
+            TerrainCellData {
+                height: 100,
+                surface: 1,
+                biome: 3,
+            };
+            64 * 64
+        ];
+        w.set_terrain(
+            test_map(),
+            TerrainData {
+                width: 64,
+                height: 64,
+                cells: land,
+            },
+        );
+        w
+    }
+
+    #[test]
+    fn divide_from_null_host_writes_no_host_span() {
+        let mut w = world_with_land_terrain();
+        let before_count = w.faction_geometry.len();
+        let cmd = DivideFactionCommand::new(
+            test_map(),
+            None,
+            vec![(24.0, 24.0), (40.0, 24.0), (40.0, 40.0), (24.0, 40.0)],
+            DivisionMode::Straight,
+            f(Id::new_unchecked("faction_new").as_str(), "新国"),
+            0,
+            1.0,
+        );
+        cmd.apply(&mut w).expect("空势力划分应成功");
+        assert_eq!(w.factions.len(), 1);
+        assert_eq!(w.faction_geometry.len(), before_count + 1, "只加新势力疆界");
+    }
+
+    #[test]
+    fn null_host_excludes_water_from_the_new_faction() {
+        // 意图正中有一片水（湖/海）：新势力应带洞（水域归空势力，D4/Q3）。
+        let mut w = world_with_land_terrain();
+        let mut cells = w.terrain_of(&test_map()).cloned().unwrap().cells;
+        for y in 26..38 {
+            for x in 26..38 {
+                let c = &mut cells[y * 64 + x];
+                c.height = -20;
+                c.surface = 0;
+                c.biome = 0;
+            }
+        }
+        w.set_terrain(
+            test_map(),
+            TerrainData {
+                width: 64,
+                height: 64,
+                cells,
+            },
+        );
+        let cmd = DivideFactionCommand::new(
+            test_map(),
+            None,
+            vec![(16.0, 16.0), (48.0, 16.0), (48.0, 48.0), (16.0, 48.0)],
+            DivisionMode::Straight,
+            f(Id::new_unchecked("faction_new").as_str(), "环湖国"),
+            0,
+            1.0,
+        );
+        cmd.apply(&mut w).expect("环湖划分应成功");
+        let geo = &w.faction_geometry[0];
+        let GeometryData::PolygonWithHoles { holes, .. } = &geo.geometry else {
+            panic!("环湖国应带洞，实得 {:?}", geo.geometry);
+        };
+        assert_eq!(holes.len(), 1, "湖应成为一个洞");
+    }
+
+    #[test]
+    fn divide_fragmenting_intent_is_precondition_error() {
+        let mut w = world_with_host_faction();
+        // 宿主改成哑铃形：两间房 + 1 格走廊（横切走廊 → 余部碎块化）。
+        w.faction_geometry[0].geometry = GeometryData::Polygon(vec![
+            4.0, 4.0, 24.0, 4.0, 24.0, 24.0, 26.0, 24.0, 26.0, 4.0, 46.0, 4.0, 46.0, 44.0, 26.0,
+            44.0, 26.0, 24.0, 24.0, 24.0, 24.0, 44.0, 4.0, 44.0,
+        ]);
+        let cmd = DivideFactionCommand::new(
+            test_map(),
+            Some(Id::new_unchecked("faction_host")),
+            vec![(22.0, 0.0), (28.0, 0.0), (28.0, 50.0), (22.0, 50.0)],
+            DivisionMode::Straight,
+            f(Id::new_unchecked("faction_new").as_str(), "新国"),
+            0,
+            1.0,
+        );
+        let err = cmd.apply(&mut w).expect_err("碎块化必须被拒绝");
+        assert!(
+            matches!(err, EditError::Precondition(_)),
+            "应是 Precondition，实得 {err:?}"
+        );
+        assert_eq!(w.factions.len(), 1, "失败不得改动世界");
+        assert_eq!(w.faction_geometry.len(), 1, "失败不得改动疆界");
+    }
+
+    #[test]
+    fn divide_duplicate_faction_id_is_precondition_error() {
+        let mut w = world_with_host_faction();
+        let cmd = DivideFactionCommand::new(
+            test_map(),
+            Some(Id::new_unchecked("faction_host")),
+            vec![(24.0, 24.0), (40.0, 24.0), (40.0, 40.0), (24.0, 40.0)],
+            DivisionMode::Straight,
+            f(Id::new_unchecked("faction_host").as_str(), "重名"),
+            0,
+            1.0,
+        );
+        assert!(matches!(cmd.apply(&mut w), Err(EditError::Precondition(_))));
     }
 
     #[test]

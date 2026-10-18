@@ -33,6 +33,8 @@ pub enum DivideError {
 pub struct DivisionGeometry {
     /// 新势力的边境环（v1 恰 1 个）。
     pub inside: Vec<Vec<(f32, f32)>>,
+    /// 新势力的洞（与 `inside` 按下标对应；意图圈住既有国中国时非空）。
+    pub inside_holes: Vec<Vec<Vec<(f32, f32)>>>,
     /// 宿主余部的外环（v1 恰 1 个）。
     pub remainder_outer: Vec<Vec<(f32, f32)>>,
     /// 余部的洞（与 `remainder_outer` 按下标对应；无洞为空）。
@@ -204,7 +206,7 @@ pub fn divide_geometry(
     }
     let inside_rings = mask_boundary_rings(&inside_mask, grid_w, grid_h);
     let remainder_rings = mask_boundary_rings(&remainder_mask, grid_w, grid_h);
-    let (inside, _) = split_outers_and_holes(inside_rings);
+    let (inside, inside_holes) = split_outers_and_holes(inside_rings);
     let (remainder_outer, remainder_holes) = split_outers_and_holes(remainder_rings);
     if inside.len() != 1 || remainder_outer.len() > 1 {
         return Err(DivideError::Fragmented {
@@ -214,6 +216,7 @@ pub fn divide_geometry(
     }
     Ok(DivisionGeometry {
         inside,
+        inside_holes,
         remainder_outer,
         remainder_holes,
     })
@@ -381,32 +384,97 @@ pub fn divide(
     search_cells: f32,
 ) -> Result<DivisionGeometry, DivideError> {
     let mut geo = divide_geometry(grid.width(), grid.height(), host_outer, host_holes, intent)?;
-    if mode == EdgeMode::Straight || !search_cells.is_finite() || search_cells <= 0.0 {
-        return Ok(geo);
-    }
-    let features = extract_features(grid);
     let raw_inside_area = geo.inside.first().map(|r| ring_area(r)).unwrap_or(0.0);
-    for ring in &mut geo.inside {
-        let dense = densify_ring(ring, (search_cells * 0.5).max(0.25));
-        *ring = snap_ring(&dense, &features, search_cells);
-    }
-    // 共边硬约束：把余部中「与新势力同一条边」的洞换成反序的新环。
-    // 匹配按面积最近（两者本出自同一掩膜边界，面积差只来自平滑）。
-    if let Some(holes) = geo.remainder_holes.first_mut() {
-        if let Some(idx) = holes
-            .iter()
-            .enumerate()
-            .map(|(i, h)| (i, (ring_area(h) - raw_inside_area).abs()))
-            .filter(|(_, d)| *d <= raw_inside_area * 0.25)
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(i, _)| i)
-        {
-            let mut reversed = geo.inside[0].clone();
-            reversed.reverse();
-            holes[idx] = reversed;
+    if mode == EdgeMode::Snap && search_cells.is_finite() && search_cells > 0.0 {
+        let features = extract_features(grid);
+        for ring in &mut geo.inside {
+            let dense = densify_ring(ring, (search_cells * 0.5).max(0.25));
+            *ring = snap_ring(&dense, &features, search_cells);
         }
     }
+    mirror_shared_edge(&mut geo, raw_inside_area);
     Ok(geo)
+}
+
+/// 共边硬约束（D3）：把余部中「与新势力同一条边」的洞换成**反序的新势力环**。
+///
+/// 两种模式都做——inside 与 remainder 来自两张不同掩膜的边界提取，平滑后
+/// 只是「近似相同」；不镜像就不是严格共边。匹配按面积最近（两者本出自
+/// 同一掩膜边界，面积差只来自平滑）；容差 25% 防止误配既有洞。
+fn mirror_shared_edge(geo: &mut DivisionGeometry, raw_inside_area: f32) {
+    let Some(holes) = geo.remainder_holes.first_mut() else {
+        return;
+    };
+    let Some(idx) = holes
+        .iter()
+        .enumerate()
+        .map(|(i, h)| (i, (ring_area(h) - raw_inside_area).abs()))
+        .filter(|(_, d)| *d <= raw_inside_area * 0.25)
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i)
+    else {
+        return;
+    };
+    let mut reversed = geo.inside[0].clone();
+    reversed.reverse();
+    holes[idx] = reversed;
+}
+
+/// 空势力宿主划分（ADR-0028 D4/Q3）：整张图的**陆格**就是宿主。
+///
+/// 意图圈住的水域不进入新势力（湖/海归空势力），因此新势力可能带洞。
+/// 余部是「未分配的陆」——没有实体承载，**不产出也不写回**（空势力 v1 是
+/// 派生补集，不建实体）。
+pub fn divide_land_host(
+    grid: &TerrainGrid,
+    intent: &[(f32, f32)],
+    mode: EdgeMode,
+    search_cells: f32,
+) -> Result<DivisionGeometry, DivideError> {
+    let (w, h) = (grid.width(), grid.height());
+    if intent.len() < 3 {
+        return Err(DivideError::TooFewPoints);
+    }
+    let intent_mask = rasterize_ring(w, h, intent);
+    let mut inside_mask = vec![false; (w * h) as usize];
+    for y in 0..h as i64 {
+        for x in 0..w as i64 {
+            if !point_in_mask(&intent_mask, w, h, x, y) {
+                continue;
+            }
+            let Some(cell) = grid.get(x as i32, y as i32) else {
+                continue;
+            };
+            if crate::edit::is_water_cell(cell) {
+                continue;
+            }
+            inside_mask[(y as u32 * w + x as u32) as usize] = true;
+        }
+    }
+    if !inside_mask.iter().any(|&b| b) {
+        return Err(DivideError::NotInsideHost);
+    }
+    let rings = mask_boundary_rings(&inside_mask, w, h);
+    let (mut inside, inside_holes) = split_outers_and_holes(rings);
+    if inside.len() != 1 {
+        return Err(DivideError::Fragmented {
+            inside: inside.len(),
+            remainder: 0,
+        });
+    }
+    if mode == EdgeMode::Snap && search_cells.is_finite() && search_cells > 0.0 {
+        let features = extract_features(grid);
+        for ring in &mut inside {
+            let dense = densify_ring(ring, (search_cells * 0.5).max(0.25));
+            *ring = snap_ring(&dense, &features, search_cells);
+        }
+    }
+    Ok(DivisionGeometry {
+        inside,
+        inside_holes,
+        remainder_outer: Vec::new(),
+        remainder_holes: Vec::new(),
+    })
 }
 
 #[cfg(test)]
