@@ -3,8 +3,8 @@
 //! `accent` 字；非选中 `t2` 字）。
 //!
 //! ## 职责
-//! - 抽「N 选 1」连续段控件为公共 widget——顶栏 2 处使用（Browse/Edit 段、
-//!   地图主题段），笔刷面板 1 处使用（涂/塑/放 3 段）。
+//! - 抽「N 选 1」连续段控件为公共 widget——顶栏 1 处使用（Browse/Edit 段），
+//!   笔刷面板 1 处使用（涂/塑/放 3 段）。
 //!
 //! ## 边界（不做什么）
 //! - **不**承载下拉菜单 / 嵌套控件 / 工具提示——段就是段，多一层就走
@@ -18,8 +18,8 @@
 //! - 命中区 = `seg_w_each` × `shell.hit`（目录 64×24 段 + 2px 内边距）。
 //!
 //! ## 已知使用点（2026-10-16 提公共后）
-//! - `top_bar::browse_edit_segment` —— Browse/Edit 段
-//! - `top_bar::theme_segment` —— 地图主题段
+//! - `top_bar::browse_edit_segment` —— Browse/Edit 段（2026-10-19 起 Faction
+//!   与地图主题段已移除，地图主题改走命令面板）
 //! - `brush_panel::tool_segmented` —— 涂/塑/放 3 段
 
 use bevy_egui::egui;

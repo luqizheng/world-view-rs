@@ -41,6 +41,13 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::TopBarNoProjectLoaded => "工程未加载",
         I18nKey::TopBarSwitchToDay => "切换到界面日间模式（Ctrl+J）",
         I18nKey::TopBarSwitchToNight => "切换到界面夜间模式（Ctrl+J）",
+        I18nKey::TopBarThemeDark => "夜间",
+        I18nKey::TopBarThemeLight => "日间",
+        I18nKey::TopBarSettingsTooltip => "设置",
+        I18nKey::SettingsDialogTitle => "设置",
+        I18nKey::SettingsPanelsSection => "浮动窗口",
+        I18nKey::SettingsPanelsHint => "勾选要在工作区显示的窗口",
+        I18nKey::SettingsResetPanels => "重置浮动窗口位置",
 
         // ── 顶栏右侧计数（拆为纯片段） ──
         I18nKey::TopBarCountUnits => "Unit",
@@ -261,8 +268,6 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::ProjectMenuCloseProject => "关闭工程",
         I18nKey::ProjectMenuProjectSettings => "项目设置",
         I18nKey::ProjectMenuProjectSection => "工程",
-        I18nKey::ProjectMenuPanelsSection => "面板",
-        I18nKey::ProjectMenuResetPanels => "重置所有面板位置",
 
         // ── 区间 ──
         I18nKey::SpanDayPrefix => "第 ",
@@ -561,6 +566,13 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::TopBarNoProjectLoaded => "No project loaded",
         I18nKey::TopBarSwitchToDay => "Switch UI to day mode (Ctrl+J)",
         I18nKey::TopBarSwitchToNight => "Switch UI to night mode (Ctrl+J)",
+        I18nKey::TopBarThemeDark => "Dark",
+        I18nKey::TopBarThemeLight => "Light",
+        I18nKey::TopBarSettingsTooltip => "Settings",
+        I18nKey::SettingsDialogTitle => "Settings",
+        I18nKey::SettingsPanelsSection => "Floating windows",
+        I18nKey::SettingsPanelsHint => "Choose which windows to show in the workspace",
+        I18nKey::SettingsResetPanels => "Reset floating window positions",
 
         // ── Top bar status counts (split into plain fragments) ──
         I18nKey::TopBarCountUnits => "Unit",
@@ -789,8 +801,6 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::ProjectMenuCloseProject => "Close project",
         I18nKey::ProjectMenuProjectSettings => "Project settings",
         I18nKey::ProjectMenuProjectSection => "Project",
-        I18nKey::ProjectMenuPanelsSection => "Panels",
-        I18nKey::ProjectMenuResetPanels => "Reset all panel positions",
 
         // ── Span fragments (W2: timeline / list_panels date strings) ──
         I18nKey::SpanDayPrefix => "Day ",

@@ -767,6 +767,12 @@ pub const ICON_SUN: egui::ImageSource<'static> =
 /// 夜间模式（Lucide `moon`）：亮色下点击切到暗色。
 pub const ICON_MOON: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/moon.svg");
+/// 设置入口（Lucide `settings-2`）：顶栏最右，打开应用设置对话框。
+pub const ICON_SETTINGS: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/settings-2.svg");
+/// 语言选择器（Lucide `languages`）：顶栏「简 / EN」控件的行首图标。
+pub const ICON_LANGUAGES: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/languages.svg");
 
 // ── 面板头部 + 图层面板（Figma `3:20892` Layers / `42:2` Inspector） ──
 //

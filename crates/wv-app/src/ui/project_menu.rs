@@ -20,7 +20,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use crate::state::{DrillState, Panel, PanelState, RecentProject, WorldProjection};
+use crate::state::{DrillState, PanelState, RecentProject, WorldProjection};
 use crate::theme::ui_theme::{mono, proportional, UiShellConfig};
 use crate::theme::ui_tokens::{font_size, radius, space};
 
@@ -58,8 +58,10 @@ struct MenuRow {
 /// 规格明确要求「**不用固定菜单栏**」——那会破坏顶栏的三段式密度（§3.2）。
 /// 于是入口就是身份段的工程名本身：点它展开，焦点落在当前项上。
 ///
-/// 菜单内容顺序（与原型一致）：最近工程 → 工程操作 → 面板显隐。
+/// 菜单内容顺序（与原型一致）：最近工程 → 工程操作。
 /// **保存 / 撤销不进这个菜单**：它们已有独立位置（§A）。
+/// **面板显隐 / 重置位置也不在这里**（2026-10-19 用户裁定）：工作区窗口属于
+/// 应用设置，入口是顶栏最右 `settings-2`（见 [`super::settings_dialog`]）。
 ///
 /// 开合状态存放在 egui memory（`Popup` 的 `OpenKind::Memory`）里，**只在点击工程名时打开**；
 /// 它不是一个「常驻浮层」——常驻会盖住左上角的面包屑（当前图名）。
@@ -68,7 +70,6 @@ pub(crate) fn project_menu_inner(
     shell: &UiShell,
     projection: &WorldProjection,
     recents: &[RecentProject],
-    panels: &mut PanelState,
     state: &mut ProjectMenuState,
     loc: crate::i18n::Locale,
 ) {
@@ -255,31 +256,6 @@ pub(crate) fn project_menu_inner(
                 if menu_row(ui, shell, &r.label, r.keys, highlighted, true).clicked() {
                     clicked_id = Some(r.id);
                 }
-            }
-            // 面板显隐 + 重置位置：v0.1 的「窗口菜单」内容保留在这里，
-            // 它是三级可发现性的第 3 级，不能删（§6.2）。
-            ui.separator();
-            menu_section(
-                ui,
-                shell,
-                crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuPanelsSection),
-            );
-            for p in Panel::ALL {
-                let mut on = panels.is_visible(p);
-                if ui.checkbox(&mut on, p.title(loc)).changed() {
-                    panels.set_visible(p, on);
-                }
-            }
-            ui.separator();
-            if ui
-                .button(crate::i18n::t(
-                    loc,
-                    crate::i18n::I18nKey::ProjectMenuResetPanels,
-                ))
-                .clicked()
-            {
-                panels.reset_requested = true;
-                egui::Popup::close_all(ui.ctx());
             }
         });
     if let Some(id) = clicked_id {

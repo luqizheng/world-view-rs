@@ -54,7 +54,15 @@ use crate::i18n::{parse as parse_locale, CurrentLocale};
 ///
 /// 调用顺序：在 `EguiPlugin` 之后、UI 面板系统之前。
 pub fn register(app: &mut App) {
-    app.init_resource::<UiShellConfig>()
+    // 应用设置对话框（顶栏 settings-2）：只存开关，关闭即无开销。
+    // `WV_SETTINGS_OPEN=1` 启动即打开——截图验收探针，与 `WV_SHOT` 同族
+    //（GUI 点击注入在本机拿不到前台焦点，视觉验收靠它）。
+    let mut settings_dialog = crate::ui::SettingsDialog::default();
+    if std::env::var_os("WV_SETTINGS_OPEN").is_some() {
+        settings_dialog.open = true;
+    }
+    app.insert_resource(settings_dialog)
+        .init_resource::<UiShellConfig>()
         .init_resource::<CommandPalette>()
         .init_resource::<crate::ui::ProjectMenuState>()
         .init_resource::<ShellNotice>()
@@ -78,6 +86,8 @@ pub fn register(app: &mut App) {
                 // 主题投影必须晚于 hotkeys（Ctrl+J 同帧生效）、早于所有 UI 绘制。
                 // 只在 `UiShellConfig` 变化时写 egui，避免每帧重建样式。
                 apply_ui_theme.after(hotkeys),
+                // 窗口位置重置：必须早于本帧面板绘制，否则旧位置会先画一遍。
+                apply_panel_reset.after(apply_ui_theme),
                 poll_open_project_dialog,
             ),
         )
@@ -274,6 +284,43 @@ fn apply_ui_theme(mut contexts: EguiContexts, cfg: Res<UiShellConfig>) {
         return;
     };
     wv_ui::ui_theme::apply_ui_theme(ctx, &cfg);
+}
+
+/// 消费「重置浮动窗口位置」信号（设置对话框 / 命令面板 `ResetPanelLayout`）。
+///
+/// 位置的真相有两份：egui 自己的窗口记忆（`Memory::area_rect`，拖动后再也不看
+/// `default_pos`）和 `ui-layout.yaml` 的内存副本。只清一份不能复位——清磁盘
+/// 不清 memory，窗口仍停在旧处；清 memory 不清磁盘，下一帧 `persist_layout_on_change`
+/// 会把旧矩形写回来。因此这里两处同时抹掉：
+/// - `reset_areas()`：所有 egui Area（含 12 个浮动面板）回到首次布局；
+/// - `LayoutFile.panels.clear()`：`get` 回退 [`crate::ui_layout::default_layout`]。
+///
+/// 只清 `panels`，**不动** `theme` / `language` / `map_theme`——重置的是位置，
+/// 不是用户偏好（用户裁定 2026-10-19：设置里的「重置浮动窗口位置」只对窗口几何）。
+///
+/// 放在 `PreUpdate`（`apply_ui_theme` 之后）：本帧面板绘制前生效，避免旧位置
+/// 先闪一帧。
+fn apply_panel_reset(
+    mut contexts: EguiContexts,
+    mut panels: ResMut<PanelState>,
+    mut layouts: ResMut<LayoutFile>,
+    projection: Res<WorldProjection>,
+) {
+    if !panels.reset_requested {
+        return;
+    }
+    panels.reset_requested = false;
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
+    ctx.memory_mut(|m| m.reset_areas());
+    layouts.panels.clear();
+    // 磁盘也要复位：否则下次启动 `load_layout_on_project_open` 又把旧几何读回来。
+    // 这里保留 `theme` / `density` / `map_theme` / `language`——重置的是窗口位置，
+    // 不是用户偏好。
+    if let Some(path) = crate::ui_layout::layout_path(projection.project_dir.as_deref()) {
+        layouts.save(&path);
+    }
 }
 
 /// 窗口清屏色跟随界面外壳底色（日夜模式切换时）。

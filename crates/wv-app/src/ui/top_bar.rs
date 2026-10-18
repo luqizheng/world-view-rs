@@ -1,10 +1,19 @@
 //! 顶栏（38px v0.3 · web `.topbar` 对齐）+ 状态栏（28px · Figma #3:21001）。
 //!
 //! ## 职责
-//! - `top_bar` —— web `grid: 1fr auto 1fr` 三区：左 = 项目按钮（蓝 logo +
+//! - `top_bar` —— Figma `3:20966` 三区：左 = 项目按钮（蓝 logo +
 //!   粗体名 + 下翻箭头，见 [`super::project_menu`]）+ 面包屑；**中 = Browse /
-//!   Edit 分段 + 地图主题分段 + Rebuild 按钮（独立 Area 锚视口顶部居中）**；
-//!   右 = zoom / entities / 脏态徽标 / ⌘K 按钮 / 语言选择器 / **日夜模式按钮**。
+//!   Edit 分段（独立 Area 锚视口顶部居中）**；右 = 保存态 / 分隔线 /
+//!   **日夜模式控件** / **语言控件** / **Rebuild** / **设置入口（`settings-2`）**。
+//!
+//! ## 右区对齐（2026-10-19 用户裁定）
+//! - Figma 的 `Cozy`（密度）与 `Dusk`（地图主题）两个 26px 控件**不建**：
+//!   密度与地图主题都走命令面板（`Ctrl+K`）。顶栏中区的地图主题分段也已于
+//!   同日移除——`Faction` 同理（命令面板「视图」组 + 快捷键 `3` 仍可切）。
+//! - `settings-2` 是应用设置入口：浮动窗口显隐 + 重置位置（见
+//!   [`super::settings_dialog`]）；工程菜单因此只剩工程基本操作。
+//! - zoom / entities / ⌘K 不再占顶栏：对象计数在状态栏、缩放控件在地图工具条、
+//!   命令面板仍是 `Ctrl+K`。
 //! - `status_bar`（2026-10-16 按 Figma `Untitled` #3:21001 重做）——
 //!   左 = `WORLD–VIEW` + 版本 + 工程目录名；中 = 光标世界坐标 X/Y +
 //!   经纬度（真实地理图才有）+ EPSG；右 = 对象计数 + 选中数 + 警告徽标 +
@@ -14,9 +23,9 @@
 //! - 高度 38px（`.topbar`）；底色 `bg_app` 96% + 底边框 + `0 4px 20px` 投影。
 //! - 分段控件（`.segmented`）：容器 `bg_app` 底 + border + 圆角 7、内边距 2px；
 //!   选中段 `bg_active` 底 + `text_1`，**内嵌**于容器而非顶满。
-//! - 主题分段按 web 顺序与文案：`Dusk Old Paper` / `Sunlit Ancient Atlas`
-//!   （10px 字）；数据层仍映射 [`crate::theme::palette::MapPalette`]。
-//! - `Rebuild` / `⌘K` 是**图标+文字**的 raised 按钮（web `.button`），非裸图标。
+//! - 中区段宽 64/段（Figma Mode selector）。`Rebuild` 2026-10-19 起移到右区
+//!   语言控件之后，与日夜控件同款 26px 偏好控件（图标 + 文字 + `F5`）。
+//! - ⌘K 按钮已退出顶栏（`Ctrl+K` 仍可开命令面板）。
 //! - 面包屑末级 `text_2`（web `b` 标签色），非末级 `text_3`。
 //!
 //! ## 边界
@@ -32,14 +41,14 @@ use crate::i18n::{CurrentLocale, I18nKey};
 use crate::state::{
     DrillState, RecentProject, RecentProjects, ViewMode, ViewState, WorldProjection,
 };
-use crate::theme::palette::MapPalette;
-use crate::theme::ui_theme::{color32, color32_alpha, mono, UiShellConfig};
+use crate::theme::ui_theme::{color32, color32_alpha, mono, proportional, UiShellConfig};
 
 use super::project_menu::{project_menu_inner, ProjectMenuState};
+use super::settings_dialog::SettingsDialog;
 use super::shell::UiShell;
 use super::widgets::{
-    badge, icon_image, BadgeKind, ICON_CHEVRON_RIGHT, ICON_COMMAND, ICON_FOLDER_OPEN, ICON_MOON,
-    ICON_REFRESH, ICON_SUN,
+    badge, icon_image, BadgeKind, ICON_CHEVRON_DOWN, ICON_CHEVRON_RIGHT, ICON_FOLDER_OPEN,
+    ICON_LANGUAGES, ICON_MOON, ICON_REFRESH, ICON_SETTINGS, ICON_SUN,
 };
 use crate::theme::ui_tokens::{font_size, radius, space};
 use crate::ui::widgets::segmented_control::segmented;
@@ -55,7 +64,7 @@ pub fn top_bar(
     mut menu: ResMut<ProjectMenuState>,
     mut palette: ResMut<crate::ui_command_palette::CommandPalette>,
     mut view: ResMut<ViewState>,
-    mut panels: ResMut<crate::state::PanelState>,
+    mut settings: ResMut<SettingsDialog>,
     mut current_loc: ResMut<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
@@ -90,22 +99,21 @@ pub fn top_bar(
                     &projection,
                     &view,
                     &recents,
-                    &mut panels,
                     &mut menu,
                     &current_loc,
                 );
-                // ── 右区：zoom / entities / 脏态徽标 / ⌘K（web .top-right，
-                //    L→R 次序 zoom→entities→badge→⌘K，故 RTL 添加序相反）──
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    readout_segment(
-                        ui,
-                        &shell,
-                        &view,
-                        &projection,
-                        &mut current_loc,
-                        &mut shell_cfg,
-                    );
-                });
+                // ── 右区：保存态 / 分隔线 / 日夜 / 语言 / Rebuild / 设置 ──
+                // 几何按右缘绝对反推（见 `readout_segment` 文档），
+                // 不再依赖 `right_to_left` 的游标推进。
+                readout_segment(
+                    ui,
+                    &shell,
+                    &projection,
+                    &mut current_loc,
+                    &mut shell_cfg,
+                    &mut settings,
+                    &mut palette,
+                );
             });
         });
 
@@ -121,10 +129,6 @@ pub fn top_bar(
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 browse_edit_segment(ui, &shell, &mut view);
-                ui.add_space(6.0);
-                theme_segment(ui, &shell, &mut view);
-                ui.add_space(6.0);
-                rebuild_button(ui, &shell, &mut palette);
             });
         });
 }
@@ -136,12 +140,11 @@ fn identity_segment(
     projection: &WorldProjection,
     view: &ViewState,
     recents: &[RecentProject],
-    panels: &mut crate::state::PanelState,
     menu: &mut ProjectMenuState,
     current_loc: &CurrentLocale,
 ) {
     // 项目按钮（logo + 粗体名 + chevron，见 project_menu）+ 组间距。
-    project_menu_inner(ui, shell, projection, recents, panels, menu, current_loc.0);
+    project_menu_inner(ui, shell, projection, recents, menu, current_loc.0);
     ui.add_space(space::MD);
 
     // 面包屑（web .breadcrumbs：gap 4、上级 text_3、**末级 text_2**）。
@@ -175,21 +178,29 @@ fn identity_segment(
     }
 }
 
-/// Browse / Edit / Faction 三段：`Browse` → `ViewMode::VectorFlat`（默认浏览）、
-/// `Edit` → `ViewMode::Schematic`（色块格子）、`Faction` → `ViewMode::Faction`
-/// （ADR-0027 D6 势力图）。
+/// Browse / Edit 两段：`Browse` → `ViewMode::VectorFlat`（默认浏览）、
+/// `Edit` → `ViewMode::Schematic`（色块格子）。
+///
+/// `Faction` 已从顶栏移除（2026-10-19 用户裁定），但 `ViewMode::Faction`
+/// 本身仍在——命令面板「视图」组 + 快捷键 `3` 可切（见
+/// [`crate::ui_command_palette`]）。段宽 64 对齐 Figma Mode selector。
 ///
 /// 数据层 `view.mode` 仍按原枚举流转；命令面板 label 来自 `ViewMode::label()`
 /// （中文），不受影响（v0.3 用户拍板：仅顶栏用英文）。
 fn browse_edit_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
-    let labels = ["Browse", "Edit", "Faction"];
-    let modes = [ViewMode::VectorFlat, ViewMode::Schematic, ViewMode::Faction];
-    let active = modes.iter().position(|m| *m == view.mode).unwrap_or(0);
+    let labels = ["Browse", "Edit"];
+    let modes = [ViewMode::VectorFlat, ViewMode::Schematic];
+    // 当前若是 Faction（从命令面板进入），`usize::MAX` 让两段都不高亮，
+    // 不误报 Browse；不改 `view.mode`（V1：不阻止）。
+    let active = modes
+        .iter()
+        .position(|m| *m == view.mode)
+        .unwrap_or(usize::MAX);
     segmented(
         ui,
         shell,
         "wv_browse_edit",
-        120.0,
+        64.0,
         &labels,
         active,
         font_size::SMALL,
@@ -199,174 +210,393 @@ fn browse_edit_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState)
     );
 }
 
-/// 地图主题分段（web `.theme-toggle`：`Dusk Old Paper / Sunlit Ancient Atlas`，
-/// 10px 字，Dusk 在前）。数据层仍映射 [`MapPalette`]（Daylight/Dusk）。
-fn theme_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
-    let order = [MapPalette::Dusk, MapPalette::Daylight];
-    let labels = ["Dusk Old Paper", "Sunlit Ancient Atlas"];
-    let active = order
-        .iter()
-        .position(|p| *p == view.map_palette)
-        .unwrap_or(0);
-    segmented(
-        ui,
-        shell,
-        "wv_theme_seg",
-        96.0,
-        &labels,
-        active,
-        10.0,
-        |i| {
-            view.map_palette = order[i];
-        },
-    );
-}
-
-/// Rebuild 按钮（web：`<Button><Icon redo/> Rebuild</Button>`——raised 底 +
-/// border 的标准按钮，非裸图标）。
+/// 顶栏右区（Figma `3:20980`「Workspace preferences」）。
 ///
-/// **走 [`icon_image`] helper 而不是 [`crate::ui::widgets::button`] 工厂**：因为
-/// 本按钮 stroke 是 `border_subtle`（与工厂默认 `border_strong` 不一致——顶栏设计稿
-/// 用浅边，与对话/CTA 的强边区分）。工厂升级时若统一改 stroke，可以并入。
-fn rebuild_button(
+/// 从左到右：保存态 → 分隔线 → 日夜 → 语言 → Rebuild → 设置。
+///
+/// **几何全部按视口右缘反推、绝对定宽**，不依赖 `ui` 当前方向：
+/// 该段原先挂在 `right_to_left` 布局里，而 `egui::Ui::put`（放图标）会按子矩形
+/// **推进游标**——每个控件的尾随 icon 都把下一件的起点顶偏，结果两个 26px
+/// 控件互相叠了 27px（2026-10-19 实机量 rect 确认）。改成「先算宽度、从右往左
+/// 摆」，`put` 再推游标也不影响任何其它控件。
+fn readout_segment(
     ui: &mut egui::Ui,
     shell: &UiShell,
+    projection: &WorldProjection,
+    current_loc: &mut CurrentLocale,
+    shell_cfg: &mut UiShellConfig,
+    settings: &mut SettingsDialog,
     palette: &mut crate::ui_command_palette::CommandPalette,
 ) {
-    let resp = ui.add(
-        egui::Button::image_and_text(
-            icon_image(ICON_REFRESH, shell.t2(), shell.hit - 8.0),
-            egui::RichText::new("Rebuild").size(shell.scale.small),
-        )
-        .fill(shell.raised_bg())
-        .stroke(egui::Stroke::new(1.0, color32(shell.palette.border_subtle)))
-        .corner_radius(radius::CONTROL)
-        .min_size(egui::vec2(0.0, shell.hit)),
+    /// 右区相邻控件间距（Figma Workspace preferences `gap: 8px`）。
+    const GAP: f32 = space::SM;
+
+    let bar = ui.max_rect();
+    let cy = bar.center().y;
+    let mut right = bar.right();
+
+    // ── 设置入口（最右）：28×28 命中区、14px Lucide `settings-2` ──
+    right -= shell.hit;
+    let hit_rect = egui::Rect::from_min_max(
+        egui::pos2(right, cy - shell.hit * 0.5),
+        egui::pos2(right + shell.hit, cy + shell.hit * 0.5),
     );
+    settings_button(ui, shell, hit_rect, settings, current_loc);
+    right -= GAP;
+
+    // ── Rebuild（2026-10-19 用户裁定：移到语言控件之后，与日夜同款 26px 控件）──
+    let rebuild_w = preference_width(ui, "Rebuild", PrefTrailing::Shortcut("F5"));
+    right -= rebuild_w;
+    let rebuild_rect = egui::Rect::from_min_max(
+        egui::pos2(right, cy - PREF_HEIGHT * 0.5),
+        egui::pos2(right + rebuild_w, cy + PREF_HEIGHT * 0.5),
+    );
+    rebuild_control(ui, shell, rebuild_rect, palette, current_loc);
+    right -= GAP;
+
+    // ── 语言控件（ADR-0018）：图标 + 短标签 + chevron，点击弹菜单 ──
+    let short = language_short(current_loc.0);
+    let lang_w = preference_width(ui, short, PrefTrailing::Chevron);
+    right -= lang_w;
+    let lang_rect = egui::Rect::from_min_max(
+        egui::pos2(right, cy - PREF_HEIGHT * 0.5),
+        egui::pos2(right + lang_w, cy + PREF_HEIGHT * 0.5),
+    );
+    language_control(ui, shell, lang_rect, short, current_loc);
+    right -= GAP;
+
+    // ── 日夜控件（D2：只切界面外壳，不碰 `view.map_palette` 的地图配色）──
+    let (icon, label_key, hint_key) = theme_parts(shell_cfg);
+    let label = crate::i18n::t(current_loc.0, label_key);
+    let theme_w = preference_width(ui, label, PrefTrailing::Shortcut("Ctrl+J"));
+    right -= theme_w;
+    let theme_rect = egui::Rect::from_min_max(
+        egui::pos2(right, cy - PREF_HEIGHT * 0.5),
+        egui::pos2(right + theme_w, cy + PREF_HEIGHT * 0.5),
+    );
+    theme_control(
+        ui,
+        shell,
+        theme_rect,
+        icon,
+        label,
+        hint_key,
+        shell_cfg,
+        current_loc,
+    );
+    right -= GAP;
+
+    // ── 分隔线（1×16，Figma Separator）──
+    right -= 1.0;
+    vsep_h_at(ui, shell.border_subtle(), 16.0, egui::pos2(right, cy));
+    right -= GAP;
+
+    // ── 保存态：绿点 + Saved / 橙点 + Unsaved。未加载工程时整段不画 ──
+    if projection.project_dir.is_some() {
+        save_indicator(ui, shell, projection.dirty, current_loc.0, right, cy);
+    }
+}
+
+/// 偏好控件高度（Figma `EL-bf36dfe9` 26px）。
+const PREF_HEIGHT: f32 = 26.0;
+/// 偏好控件左右内边距（Figma `padding: 0px 8px`）。
+const PREF_PAD: f32 = 8.0;
+/// 偏好控件子项间距（Figma `gap: 6px`）。
+const PREF_GAP: f32 = 6.0;
+/// 偏好控件图标尺寸（Figma 12×12）。
+const PREF_ICON: f32 = 12.0;
+
+/// 语言短标签（Zh=「简」/ En=「EN」）。
+fn language_short(loc: crate::i18n::Locale) -> &'static str {
+    match loc {
+        crate::i18n::Locale::Zh => "简",
+        crate::i18n::Locale::En => "EN",
+    }
+}
+
+/// 日夜控件的（图标, 当前模式标签, 切换提示）——图标表示**当前**模式。
+fn theme_parts(cfg: &UiShellConfig) -> (egui::ImageSource<'static>, I18nKey, I18nKey) {
+    if cfg.theme.is_dark() {
+        (
+            ICON_MOON,
+            I18nKey::TopBarThemeDark,
+            I18nKey::TopBarSwitchToDay,
+        )
+    } else {
+        (
+            ICON_SUN,
+            I18nKey::TopBarThemeLight,
+            I18nKey::TopBarSwitchToNight,
+        )
+    }
+}
+
+/// 保存态（Figma `3:20981/3:20982`：5px 圆点 + 11px 弱文本）。
+///
+/// 设计稿示例带时刻（`Saved 14:32`），但工程目前**不持久化保存时间戳**；
+/// 不拿「当前时钟」冒充保存时刻（会骗人），只报已保存 / 未保存。
+fn save_indicator(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    dirty: bool,
+    loc: crate::i18n::Locale,
+    right: f32,
+    cy: f32,
+) {
+    let (dot, key) = if dirty {
+        (color32(shell.palette.badge_warn), I18nKey::TopBarUnsaved)
+    } else {
+        (shell.success(), I18nKey::TopBarSaved)
+    };
+    let galley = ui.painter().layout_no_wrap(
+        crate::i18n::t(loc, key).to_owned(),
+        proportional(font_size::MICRO),
+        shell.t3(),
+    );
+    let text_x = right - galley.size().x;
+    ui.painter().galley(
+        egui::pos2(text_x, cy - galley.size().y * 0.5),
+        galley,
+        shell.t3(),
+    );
+    let dot_center = egui::pos2(text_x - space::XS - 2.5, cy);
+    ui.painter().circle_filled(dot_center, 2.5, dot);
+}
+
+/// 偏好控件尾随内容（Figma：快捷键文本 / 下翻 chevron）。
+#[derive(Clone, Copy)]
+enum PrefTrailing<'a> {
+    Shortcut(&'a str),
+    Chevron,
+}
+
+/// 偏好控件总宽（含左右内边距）。
+fn preference_width(ui: &egui::Ui, label: &str, trailing: PrefTrailing<'_>) -> f32 {
+    let label_w = ui
+        .painter()
+        .layout_no_wrap(
+            label.to_owned(),
+            proportional(font_size::MICRO),
+            ui.visuals().text_color(),
+        )
+        .size()
+        .x;
+    let trail_w = match trailing {
+        PrefTrailing::Shortcut(keys) => {
+            ui.painter()
+                .layout_no_wrap(keys.to_owned(), mono(10.0), ui.visuals().weak_text_color())
+                .size()
+                .x
+        }
+        PrefTrailing::Chevron => PREF_ICON,
+    };
+    PREF_PAD + PREF_ICON + PREF_GAP + label_w + PREF_GAP + trail_w + PREF_PAD
+}
+
+/// 26px 偏好控件（Figma `EL-bf36dfe9`）：raised 底 + 1px 描边 + 圆角 4，
+/// 内边距左右 8、子项间距 6。整块可点（含 padding 区）。
+///
+/// 内容全部在**给定矩形内**左起绝对定位——不参与父布局方向。
+fn preference_control(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    rect: egui::Rect,
+    icon: egui::ImageSource<'static>,
+    label: &str,
+    trailing: PrefTrailing<'_>,
+) -> egui::Response {
+    ui.painter().rect(
+        rect,
+        radius::BADGE,
+        shell.raised_bg(),
+        egui::Stroke::new(1.0, shell.border_subtle()),
+        egui::StrokeKind::Inside,
+    );
+
+    let label_galley =
+        ui.painter()
+            .layout_no_wrap(label.to_owned(), proportional(font_size::MICRO), shell.t1());
+    let trail_galley = match trailing {
+        PrefTrailing::Shortcut(keys) => Some(ui.painter().layout_no_wrap(
+            keys.to_owned(),
+            mono(10.0),
+            shell.t3(),
+        )),
+        PrefTrailing::Chevron => None,
+    };
+
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.min.x + PREF_PAD + PREF_ICON * 0.5, rect.center().y),
+        egui::vec2(PREF_ICON, PREF_ICON),
+    );
+    let _ = ui.put(icon_rect, icon_image(icon, shell.t2(), PREF_ICON));
+
+    let label_x = icon_rect.max.x + PREF_GAP;
+    let trail_x = label_x + label_galley.size().x + PREF_GAP;
+    ui.painter().galley(
+        egui::pos2(label_x, rect.center().y - label_galley.size().y * 0.5),
+        label_galley,
+        shell.t1(),
+    );
+    match trail_galley {
+        Some(galley) => {
+            ui.painter().galley(
+                egui::pos2(trail_x, rect.center().y - galley.size().y * 0.5),
+                galley,
+                shell.t3(),
+            );
+        }
+        None => {
+            let chevron_rect = egui::Rect::from_center_size(
+                egui::pos2(trail_x + PREF_ICON * 0.5, rect.center().y),
+                egui::vec2(PREF_ICON, PREF_ICON),
+            );
+            let _ = ui.put(
+                chevron_rect,
+                egui::Image::new(ICON_CHEVRON_DOWN)
+                    .tint(shell.t3())
+                    .fit_to_exact_size(egui::vec2(PREF_ICON, PREF_ICON)),
+            );
+        }
+    }
+
+    // 交互矩形**最后注册**：图标 `put` 进来的 hover 区不会挡住整块点击。
+    let resp = ui.allocate_rect(rect, egui::Sense::click());
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp
+}
+
+/// 日夜模式控件：点击只写 [`UiShellConfig::theme`]；真正投影到 egui
+/// 由 [`crate::ui_shell`] 的 `apply_ui_theme` 在 `PreUpdate` 统一完成。
+#[allow(clippy::too_many_arguments)]
+fn theme_control(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    rect: egui::Rect,
+    icon: egui::ImageSource<'static>,
+    label: &str,
+    hint: I18nKey,
+    cfg: &mut UiShellConfig,
+    current_loc: &CurrentLocale,
+) {
+    let resp = preference_control(
+        ui,
+        shell,
+        rect,
+        icon,
+        label,
+        PrefTrailing::Shortcut("Ctrl+J"),
+    )
+    .on_hover_text(crate::i18n::t(current_loc.0, hint));
+    if resp.clicked() {
+        cfg.theme = cfg.theme.toggled();
+    }
+}
+
+/// Rebuild 控件（2026-10-19 用户裁定：位置移到语言之后、样式与日夜控件同款）。
+///
+/// 只排队命令，不直接碰渲染资源——`ForceRebuildTexture` 由
+/// [`crate::ui_shell::apply_pending_commands`] 统一执行。
+fn rebuild_control(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    rect: egui::Rect,
+    palette: &mut crate::ui_command_palette::CommandPalette,
+    current_loc: &CurrentLocale,
+) {
+    let resp = preference_control(
+        ui,
+        shell,
+        rect,
+        ICON_REFRESH,
+        "Rebuild",
+        PrefTrailing::Shortcut("F5"),
+    )
+    .on_hover_text(crate::i18n::t(
+        current_loc.0,
+        I18nKey::TopBarForceRedrawTooltip,
+    ));
     if resp.clicked() {
         palette.pending = Some(CommandId::ForceRebuildTexture);
     }
 }
 
-fn readout_segment(
+/// 语言控件（ADR-0018）：图标 + 短标签 + chevron，点击弹出全名菜单。
+///
+/// 用 [`egui::Popup::from_toggle_button_response`]（memory 驱动）而不是
+/// `from_response`：后者默认常开（egui 0.36 迁移坑，详见
+/// [`super::project_menu`] 同款注释）。
+fn language_control(
     ui: &mut egui::Ui,
     shell: &UiShell,
-    view: &ViewState,
-    projection: &WorldProjection,
+    rect: egui::Rect,
+    short: &str,
     current_loc: &mut CurrentLocale,
-    shell_cfg: &mut UiShellConfig,
 ) {
-    // 右至左排布；web `.top-right` 从左到右是 zoom / entities / 脏态徽标 / ⌘K，
-    // 故本段添加顺序：日夜 → 语言 → ⌘K → 脏态 → entities → zoom，间距 12px（web gap）。
-
-    // 日夜模式按钮（2026-10-18）：图标表示**点击后要去**的模式——暗色时显示太阳，
-    // 亮色时显示月亮。只切界面外壳（`UiShellConfig`），不碰 `view.map_palette`
-    // 的地图配色（D2：世界色归世界、界面色归界面）。
-    theme_toggle_button(ui, shell, shell_cfg, current_loc);
-    ui.add_space(space::LG);
-
-    // 语言选择器（ADR-0018）：最右端。按钮显示单字（Zh=「简」/ En=「EN」），
-    // 点击弹出全名菜单（简体中文 / English）。`menu_button` 即
-    // 「Button 点击开菜单」——不是 select 框，符合 2026-10-15 用户裁定。
-    {
-        let short = match current_loc.0 {
-            crate::i18n::Locale::Zh => "简",
-            crate::i18n::Locale::En => "EN",
-        };
-        ui.menu_button(
-            egui::RichText::new(short)
-                .size(shell.scale.small)
-                .color(shell.t2()),
-            |ui| {
-                let mut pick = |ui: &mut egui::Ui, label: &str, loc: crate::i18n::Locale| {
-                    let selected = current_loc.0 == loc;
-                    if ui
-                        .add(egui::Button::new(
-                            egui::RichText::new(label)
-                                .size(shell.scale.small)
-                                .color(if selected { shell.t1() } else { shell.t2() }),
-                        ))
-                        .clicked()
-                    {
-                        current_loc.0 = loc;
-                        ui.close();
-                    }
-                };
-                pick(ui, "简体中文", crate::i18n::Locale::Zh);
-                pick(ui, "English", crate::i18n::Locale::En);
-            },
-        );
-        ui.add_space(space::LG);
-    }
-
-    // ⌘K 按钮（web：command 图标 + K 的 raised 按钮；tooltip 提示快捷键）
-    let cmdk = ui.add(
-        egui::Button::image_and_text(
-            icon_image(ICON_COMMAND, shell.t2(), shell.hit - 8.0),
-            egui::RichText::new("K").size(shell.scale.small),
-        )
-        .fill(shell.raised_bg())
-        .stroke(egui::Stroke::new(1.0, color32(shell.palette.border_subtle)))
-        .corner_radius(radius::CONTROL)
-        .min_size(egui::vec2(0.0, shell.hit)),
+    let resp = preference_control(
+        ui,
+        shell,
+        rect,
+        ICON_LANGUAGES,
+        short,
+        PrefTrailing::Chevron,
     );
-    let _ = cmdk.on_hover_text("命令面板（Ctrl+K / ⌘K）");
-    ui.add_space(space::LG);
 
-    // 脏态徽标（web `.badge.warn`：橙底 + 圆点；已保存时不画，状态栏负责）。
-    if projection.dirty {
-        badge(ui, shell, BadgeKind::Warn, "● Unsaved changes");
-        ui.add_space(space::LG);
-    }
-
-    // 实体计数（"128 entities"）
-    let entity_count = count_entities(projection);
-    ui.label(
-        egui::RichText::new(format!("{entity_count} entities"))
-            .size(shell.scale.small)
-            .color(shell.t2())
-            .font(mono(shell.scale.small)),
-    );
-    ui.add_space(space::LG);
-
-    // 缩放百分比（"86%"）
-    let pct = (view.scale * 100.0).round() as i32;
-    ui.label(
-        egui::RichText::new(format!("{pct}%"))
-            .size(shell.scale.small)
-            .color(shell.t2())
-            .font(mono(shell.scale.small)),
-    );
+    egui::Popup::from_toggle_button_response(&resp)
+        .id(egui::Id::new("wv_language_menu"))
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            ui.set_min_width(140.0);
+            for (label, loc) in [
+                ("简体中文", crate::i18n::Locale::Zh),
+                ("English", crate::i18n::Locale::En),
+            ] {
+                let selected = current_loc.0 == loc;
+                if ui
+                    .add(egui::Button::new(
+                        egui::RichText::new(label)
+                            .size(shell.scale.small)
+                            .color(if selected { shell.t1() } else { shell.t2() }),
+                    ))
+                    .clicked()
+                {
+                    current_loc.0 = loc;
+                    egui::Popup::close_all(ui.ctx());
+                }
+            }
+        });
 }
 
-/// 日夜模式切换按钮（图标表示**点击后**的模式）。
-///
-/// 放在顶栏右侧读数段（与语言选择器相邻）：这是应用级外观开关，不是地图主题——
-/// 地图主题仍是中区的 `Dusk Old Paper / Sunlit Ancient Atlas` 分段，两者互不影响。
-/// 点击只写 [`UiShellConfig::theme`]；真正投影到 egui 由
-/// [`crate::ui_shell`] 的 `apply_ui_theme` 在 `PreUpdate` 统一完成。
-fn theme_toggle_button(
+/// 设置入口（Figma `3:22599` `settings-2`，裸图标 14×14，悬停才有底色）。
+fn settings_button(
     ui: &mut egui::Ui,
     shell: &UiShell,
-    cfg: &mut UiShellConfig,
+    rect: egui::Rect,
+    settings: &mut SettingsDialog,
     current_loc: &CurrentLocale,
 ) {
-    let (icon, hint) = if cfg.theme.is_dark() {
-        (ICON_SUN, I18nKey::TopBarSwitchToDay)
-    } else {
-        (ICON_MOON, I18nKey::TopBarSwitchToNight)
-    };
+    if ui.rect_contains_pointer(rect) {
+        ui.painter()
+            .rect_filled(rect, radius::CONTROL, shell.hover_bg());
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let icon_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(14.0, 14.0));
+    let _ = ui.put(
+        icon_rect,
+        egui::Image::new(ICON_SETTINGS)
+            .tint(shell.t2())
+            .fit_to_exact_size(egui::vec2(14.0, 14.0)),
+    );
     let resp = ui
-        .add(
-            egui::Button::image(icon_image(icon, shell.t2(), shell.hit - 8.0))
-                .min_size(egui::vec2(shell.hit, shell.hit))
-                .fill(shell.raised_bg())
-                .stroke(egui::Stroke::new(1.0, color32(shell.palette.border_subtle)))
-                .corner_radius(radius::CONTROL),
-        )
-        .on_hover_text(crate::i18n::t_key(current_loc, hint));
+        .allocate_rect(rect, egui::Sense::click())
+        .on_hover_text(crate::i18n::t(
+            current_loc.0,
+            I18nKey::TopBarSettingsTooltip,
+        ));
     if resp.clicked() {
-        cfg.theme = cfg.theme.toggled();
+        settings.open = true;
     }
 }
 
@@ -628,9 +858,21 @@ fn scene_statistics_segment(
     );
 }
 
-/// 1×12px 竖分隔线（Figma「Separator」#3:21005）。
+/// 1×12px 竖分隔线（Figma 状态栏「Separator」#3:21005）。
 fn vsep(ui: &mut egui::Ui, color: egui::Color32) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 12.0), egui::Sense::hover());
+    vsep_h(ui, color, 12.0);
+}
+
+/// 任意高度的 1px 竖分隔线（顶栏 `3:20973` = 16px，状态栏 = 12px）。
+fn vsep_h(ui: &mut egui::Ui, color: egui::Color32, height: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, height), egui::Sense::hover());
+    ui.painter().rect_filled(rect, 0.0, color);
+}
+
+/// 不占布局游标的竖分隔线：以 `center` 为中心画 1×`height`。
+/// 顶栏右区按绝对矩形排版，用这个而不是 [`vsep_h`]。
+fn vsep_h_at(ui: &egui::Ui, color: egui::Color32, height: f32, center: egui::Pos2) {
+    let rect = egui::Rect::from_center_size(center, egui::vec2(1.0, height));
     ui.painter().rect_filled(rect, 0.0, color);
 }
 

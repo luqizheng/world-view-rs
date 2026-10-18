@@ -408,6 +408,9 @@ pub fn run(config: AppConfig) {
         (
             ui::feature_place_dialog.after(ui::status_bar),
             ui::faction_divide_dialog.after(ui::feature_place_dialog),
+            // 应用设置（顶栏 settings-2）：与状态栏同帧、压在所有面板之上
+            // （`DialogWindow` 走 `Order::Foreground`）。
+            ui::settings_dialog.after(ui::status_bar),
         ),
     );
     // 选区意图菜单（底部居中浮动条；spec 2026-10-17 §4）。ego pass 主链已到

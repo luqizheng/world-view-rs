@@ -36,6 +36,7 @@ pub mod new_map_dialog;
 pub mod new_project_dialog;
 pub mod project_menu;
 pub mod region_panel;
+pub mod settings_dialog;
 pub mod shell;
 pub mod situation_panel;
 pub mod timeline;
@@ -65,6 +66,7 @@ pub use new_project_dialog::{
 };
 pub use project_menu::{breadcrumb, ProjectMenuState};
 pub use region_panel::panel_region;
+pub use settings_dialog::{settings_dialog, SettingsDialog};
 pub use shell::{terrain_name_at, terrain_swatch, UiShell};
 pub use situation_panel::panel_situation;
 pub use timeline::{panel_timeline, undo_last_street_segment, TimelineLayer};

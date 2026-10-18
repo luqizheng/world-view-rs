@@ -66,6 +66,22 @@ pub enum I18nKey {
     TopBarSwitchToDay,
     /// 顶栏日夜按钮 tooltip——当前亮色，点击切到夜间
     TopBarSwitchToNight,
+    /// 顶栏日夜控件标签——当前为夜间（暗色）模式
+    TopBarThemeDark,
+    /// 顶栏日夜控件标签——当前为日间（亮色）模式
+    TopBarThemeLight,
+    /// 顶栏最右设置入口 tooltip
+    TopBarSettingsTooltip,
+
+    // ── 应用设置对话框（顶栏 settings-2 打开） ──────────────────
+    /// 对话框标题
+    SettingsDialogTitle,
+    /// 「浮动窗口」分组标题
+    SettingsPanelsSection,
+    /// 浮动窗口分组说明（勾选要显示的窗口）
+    SettingsPanelsHint,
+    /// 「重置浮动窗口位置」按钮
+    SettingsResetPanels,
 
     // ── 顶栏右侧计数（拆为不带占位符的纯片段，按 ADR-0018 用户裁定
     //    「调用点负责 format!」）────────────────────────────────
@@ -483,10 +499,6 @@ pub enum I18nKey {
     ProjectMenuProjectSettings,
     /// 「工程」分组
     ProjectMenuProjectSection,
-    /// 「面板」分组
-    ProjectMenuPanelsSection,
-    /// 「重置所有面板位置」按钮
-    ProjectMenuResetPanels,
 
     // ── 时段 / 区间（公共：第 N 天、跨越时间段） ──────────────────────
     /// 「第 」时段前缀
@@ -1009,7 +1021,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 416] = [
+    pub const ALL: [I18nKey; 421] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1042,7 +1054,7 @@ impl I18nKey {
         I18nKey::CommonNew,
         I18nKey::CommonUnknown,
         I18nKey::CommonDeleteEntire,
-        // 顶栏（8）
+        // 顶栏（11）
         I18nKey::TopBarUnsaved,
         I18nKey::TopBarSaved,
         I18nKey::TopBarUnsavedDot,
@@ -1051,6 +1063,14 @@ impl I18nKey {
         I18nKey::TopBarNoProjectLoaded,
         I18nKey::TopBarSwitchToDay,
         I18nKey::TopBarSwitchToNight,
+        I18nKey::TopBarThemeDark,
+        I18nKey::TopBarThemeLight,
+        I18nKey::TopBarSettingsTooltip,
+        // 应用设置对话框（4）
+        I18nKey::SettingsDialogTitle,
+        I18nKey::SettingsPanelsSection,
+        I18nKey::SettingsPanelsHint,
+        I18nKey::SettingsResetPanels,
         // 顶栏右侧计数（拆为不带占位符的纯片段，6）
         I18nKey::TopBarCountUnits,
         I18nKey::TopBarCountCharacters,
@@ -1228,8 +1248,6 @@ impl I18nKey {
         I18nKey::ProjectMenuCloseProject,
         I18nKey::ProjectMenuProjectSettings,
         I18nKey::ProjectMenuProjectSection,
-        I18nKey::ProjectMenuPanelsSection,
-        I18nKey::ProjectMenuResetPanels,
         // 区间（4）
         I18nKey::SpanDayPrefix,
         I18nKey::SpanDaySuffix,
