@@ -352,7 +352,7 @@ pub fn detect_feature_migration_hints(world: &wv_core::World) -> Vec<Diagnostic>
             // 词汇表外：无等价群系。若作者已写 biome，旧键只是待清理的外来值。
             None => {
                 let tail = match place.biome {
-                    Some(b) => format!("已按 biome={b} 展示；保存后旧键移除"),
+                    Some(b) => format!("已按 biome={b} 展示；下次保存地点后旧键移除"),
                     None => "已按普通地点处理（迁移窗口内仍不显示点标）；如需标记请改用 biome 字段"
                         .to_string(),
                 };
