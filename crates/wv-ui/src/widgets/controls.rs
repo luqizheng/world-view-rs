@@ -20,7 +20,9 @@ use bevy_egui::egui;
 use crate::shell::UiShell;
 use crate::ui_theme::{margin_xy, mono, proportional};
 use crate::ui_tokens::{font_size, radius, space};
-use crate::widgets::primitives::{icon_image, ICON_CHECK, ICON_CHEVRON_DOWN, ICON_SEARCH};
+use crate::widgets::primitives::{
+    icon_image, paint_selected_row, row_rect, ICON_CHECK, ICON_CHEVRON_DOWN, ICON_SEARCH,
+};
 
 const CONTROL_H: f32 = 28.0;
 const COMPACT_H: f32 = 24.0;
@@ -363,10 +365,13 @@ pub fn dropdown_box(ui: &mut egui::Ui, shell: &UiShell, text: &str) -> egui::Res
 /// 展开的选项菜单（目录 `UI/OptionMenu/Expanded`）：内嵌底 + border_strong
 /// 描边 + radius 6 + 4px 内边距；选项 28 高，选中 = accent_soft 底 + accent
 /// 字 + check 图标；禁用 = text_disabled。返回被点击的选项下标。
+///
+/// `id` 作为各行交互 id 的命名空间（同 [`crate::widgets::segmented_control::segmented`]）：
+/// 同一面板内并存多个 OptionMenu 时，靠它避免 egui 自动 id 相互覆盖。
 pub fn option_menu(
     ui: &mut egui::Ui,
     shell: &UiShell,
-    _id: &str,
+    id: &str,
     labels: &[&str],
     selected: usize,
     disabled: &[usize],
@@ -381,18 +386,18 @@ pub fn option_menu(
             ui.spacing_mut().item_spacing.y = 2.0;
             for (i, label) in labels.iter().enumerate() {
                 let is_disabled = disabled.contains(&i);
-                let (rect, resp) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), CONTROL_H),
-                    if is_disabled {
-                        egui::Sense::hover()
-                    } else {
-                        egui::Sense::click()
-                    },
-                );
+                let sense = if is_disabled {
+                    egui::Sense::hover()
+                } else {
+                    egui::Sense::click()
+                };
+                // 行 id 由 `id` 命名空间派生（同 `segmented`），不依赖 egui 自动 id。
+                let (rect, _) = row_rect(ui, CONTROL_H, egui::Sense::hover());
+                let resp = ui.interact(rect, egui::Id::new((id, i)), sense);
                 let is_sel = i == selected;
                 let p = ui.painter();
                 if is_sel {
-                    p.rect_filled(rect, radius::FIELD, shell.accent_soft());
+                    paint_selected_row(p, rect, shell, radius::FIELD, false);
                 } else if resp.hovered() && !is_disabled {
                     p.rect_filled(rect, radius::FIELD, shell.hover_bg());
                 }
@@ -716,27 +721,17 @@ impl<'a, T: Copy + PartialEq> FieldSelect<'a, T> {
     where
         F: Fn(&T) -> String,
     {
-        let combo =
+        let mut combo =
             egui::ComboBox::from_id_salt(&self.id_salt).selected_text(label_for(self.selected));
-        let _ = self.fill_width;
+        if self.fill_width {
+            combo = combo.width(ui.available_width());
+        }
         combo.show_ui(ui, |ui| {
             for opt in self.options.iter() {
                 ui.selectable_value(self.selected, *opt, label_for(opt));
             }
         });
     }
-}
-
-// ── FieldCheckbox（原生复选项 · 存量）──────────────────────────────────
-
-/// 原生复选项 + 标签（存量 API；目录样式用 [`checkbox_state`] / [`check_row`]）。
-pub fn field_checkbox(
-    ui: &mut egui::Ui,
-    _shell: &UiShell,
-    on: &mut bool,
-    label: &str,
-) -> egui::Response {
-    ui.checkbox(on, label)
 }
 
 // ── Switch（目录 UI/Switch）───────────────────────────────────────────
@@ -1208,23 +1203,11 @@ impl<'a> DialogWindow<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::widgets::test_support::shell;
 
-    fn shell() -> UiShell {
-        UiShell::new(&crate::ui_theme::UiShellConfig::default())
-    }
-
+    /// 本模块控件默认落在 320×400 的 headless 画布内。
     fn make_ui(name: &str) -> (egui::Context, egui::Ui) {
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
-        let ui = egui::Ui::new(
-            ctx.clone(),
-            egui::Id::new(name),
-            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(320.0, 400.0),
-            )),
-        );
-        (ctx, ui)
+        crate::widgets::test_support::make_ui(name, 320.0, 400.0)
     }
 
     #[test]

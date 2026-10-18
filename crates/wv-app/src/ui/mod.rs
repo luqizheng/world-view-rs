@@ -74,7 +74,6 @@ pub use welcome_screen::welcome_screen;
 pub use widgets::{
     badge,
     empty_state,
-    field_checkbox,
     float_window,
     list_item,
     setup_egui_image_loaders,

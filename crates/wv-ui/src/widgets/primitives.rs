@@ -122,16 +122,10 @@ pub fn list_item(
     meta: &str,
     selected: bool,
 ) -> egui::Response {
-    let (rect, resp) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), egui::Sense::click());
+    let (rect, resp) = row_rect(ui, 28.0, egui::Sense::click());
     let painter = ui.painter();
     if selected {
-        painter.rect_filled(rect, radius::FIELD, shell.accent_soft());
-        painter.rect_filled(
-            egui::Rect::from_min_size(rect.min, egui::vec2(2.0, rect.height())),
-            0.0,
-            shell.accent(),
-        );
+        paint_selected_row(painter, rect, shell, radius::FIELD, true);
     } else if resp.hovered() {
         painter.rect_filled(rect, radius::FIELD, shell.hover_bg());
     }
@@ -291,17 +285,15 @@ pub fn menu_item(
     label: &str,
     state: MenuState,
 ) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), 28.0),
-        if state == MenuState::Disabled {
-            egui::Sense::hover()
-        } else {
-            egui::Sense::click()
-        },
-    );
+    let sense = if state == MenuState::Disabled {
+        egui::Sense::hover()
+    } else {
+        egui::Sense::click()
+    };
+    let (rect, resp) = row_rect(ui, 28.0, sense);
     let p = ui.painter();
     if state == MenuState::Selected {
-        p.rect_filled(rect, radius::FIELD, shell.accent_soft());
+        paint_selected_row(p, rect, shell, radius::FIELD, false);
     } else if resp.hovered() && state != MenuState::Disabled {
         p.rect_filled(rect, radius::FIELD, shell.hover_bg());
     }
@@ -356,16 +348,10 @@ pub fn tree_row(
     expanded: bool,
     selected: bool,
 ) -> egui::Response {
-    let (rect, resp) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::click());
+    let (rect, resp) = row_rect(ui, 24.0, egui::Sense::click());
     let p = ui.painter();
     if selected {
-        p.rect_filled(rect, radius::FIELD, shell.accent_soft());
-        p.rect_filled(
-            egui::Rect::from_min_size(rect.min, egui::vec2(2.0, rect.height())),
-            0.0,
-            shell.accent(),
-        );
+        paint_selected_row(p, rect, shell, radius::FIELD, true);
     } else if resp.hovered() {
         p.rect_filled(rect, radius::FIELD, shell.hover_bg());
     }
@@ -411,8 +397,7 @@ pub fn layer_row(
     visible: bool,
     locked: bool,
 ) -> egui::Response {
-    let (rect, resp) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::click());
+    let (rect, resp) = row_rect(ui, 24.0, egui::Sense::click());
     let p = ui.painter();
     if resp.hovered() {
         p.rect_filled(rect, radius::FIELD, shell.hover_bg());
@@ -536,6 +521,43 @@ pub fn icon_image(
         .fit_to_exact_size(egui::Vec2::splat(px))
 }
 
+// ── 行控件公共骨架 ───────────────────────────────────────────────────────
+
+/// 分配「整宽 × `height`」的行矩形 + 交互 `Response`。
+///
+/// 收敛 `list_item` / `tree_row` / `layer_row` / `menu_item` / `recent_row` /
+/// `option_menu` 各处反复手写的
+/// `ui.allocate_exact_size(egui::vec2(ui.available_width(), H), …)`。底色 / 文字 /
+/// 挂件由 caller 自绘——各行选中态细节不同，不在此一并统一。
+pub(crate) fn row_rect(
+    ui: &mut egui::Ui,
+    height: f32,
+    sense: egui::Sense,
+) -> (egui::Rect, egui::Response) {
+    ui.allocate_exact_size(egui::vec2(ui.available_width(), height), sense)
+}
+
+/// 选中行底：`accent_soft` 整块 +（`left_bar` 时）左缘 2px `accent` 选中条。
+///
+/// `list_item` / `tree_row`（带左缘条）与 `menu_item` / `option_menu`（无左缘条，
+/// 传 `left_bar = false`）共用同一实现，消除两处逐行重抄的选中底代码。
+pub(crate) fn paint_selected_row(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    shell: &UiShell,
+    corner: f32,
+    left_bar: bool,
+) {
+    painter.rect_filled(rect, corner, shell.accent_soft());
+    if left_bar {
+        painter.rect_filled(
+            egui::Rect::from_min_size(rect.min, egui::vec2(2.0, rect.height())),
+            0.0,
+            shell.accent(),
+        );
+    }
+}
+
 // ── 最近工程行 + 相对时间格式化 ─────────────────────────────────────────
 
 // ── 最近工程行（Figma `RecentItem` · 2026-10-15）────────────────────────
@@ -573,10 +595,7 @@ pub fn recent_row(
     dir: &str,
     time_ago: Option<&str>,
 ) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), RECENT_ROW_H),
-        egui::Sense::click(),
-    );
+    let (rect, resp) = row_rect(ui, RECENT_ROW_H, egui::Sense::click());
     let painter = ui.painter();
     // 1. hover 底。
     if resp.hovered() {
@@ -663,9 +682,9 @@ pub fn format_time_ago(at: std::time::Instant, now: std::time::Instant) -> Strin
 // ── 工具图标常量 ─────────────────────────────────────────────────────────
 //
 // `include_image!` 内部走 `include_bytes!`，路径**相对于调用它的源文件**，
-// 不是 `CARGO_MANIFEST_DIR`。本模块位于 crates/wv-app/src/ui/widgets/，
-// 回到 crates/wv-app/ 需 3 层 `../../../`。原 widgets.rs 在
-// crates/wv-app/src/ui/，离根只需 2 层，故那里写的是 `../../`。
+// 不是 `CARGO_MANIFEST_DIR`。ADR-0026 后本模块随控件层迁至
+// crates/wv-ui/src/widgets/，回到 crate 根（crates/wv-ui/）需 2 层 `../../`
+// ——图标资产落在 crates/wv-ui/assets/ui/tool_icons/。
 
 pub const ICON_PEN: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/pen.svg");
@@ -751,12 +770,8 @@ mod recent_row_and_time_ago_tests {
     //! [`super::format_time_ago`] 的回归。
 
     use super::*;
-    use crate::ui_theme::UiShellConfig;
+    use crate::widgets::test_support::{make_ui, shell};
     use std::time::{Duration, Instant};
-
-    fn shell() -> UiShell {
-        UiShell::new(&UiShellConfig::default())
-    }
 
     #[test]
     fn format_time_ago_spans_cover_every_bucket() {
@@ -819,16 +834,7 @@ mod recent_row_and_time_ago_tests {
     #[test]
     fn recent_row_handles_time_ago_none_and_some() {
         let sh = shell();
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
-        let mut ui = egui::Ui::new(
-            ctx.clone(),
-            egui::Id::new("recent_row_tests"),
-            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(400.0, 100.0),
-            )),
-        );
+        let (_c, mut ui) = make_ui("recent_row_tests", 400.0, 100.0);
         let r_none = recent_row(&mut ui, &sh, ICON_GLOBE, "name", "dir", None);
         assert!(
             r_none.rect.height() > 0.0,
@@ -836,16 +842,7 @@ mod recent_row_and_time_ago_tests {
             r_none.rect.height()
         );
 
-        let ctx2 = egui::Context::default();
-        ctx2.begin_pass(Default::default());
-        let mut ui2 = egui::Ui::new(
-            ctx2.clone(),
-            egui::Id::new("recent_row_tests_2"),
-            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(400.0, 100.0),
-            )),
-        );
+        let (_c2, mut ui2) = make_ui("recent_row_tests_2", 400.0, 100.0);
         let r_some = recent_row(&mut ui2, &sh, ICON_GLOBE, "name", "dir", Some("5m ago"));
         assert!(
             r_some.rect.height() > 0.0,
@@ -858,23 +855,11 @@ mod recent_row_and_time_ago_tests {
 #[cfg(test)]
 mod identity_header_tests {
     use super::*;
+    use crate::widgets::test_support::shell;
 
-    fn shell() -> UiShell {
-        UiShell::new(&crate::ui_theme::UiShellConfig::default())
-    }
-
+    /// 瓦片宽度按 Figma 采样 288 铺满画布。
     fn make_ui(name: &str) -> (egui::Context, egui::Ui) {
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
-        let ui = egui::Ui::new(
-            ctx.clone(),
-            egui::Id::new(name),
-            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(288.0, 100.0),
-            )),
-        );
-        (ctx, ui)
+        crate::widgets::test_support::make_ui(name, 288.0, 100.0)
     }
 
     #[test]

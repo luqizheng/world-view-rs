@@ -15,7 +15,7 @@
 //! - 容器：`bg_input` 底 + `border_subtle` 1px 描边 + 6px 圆角 + 2px 内边距。
 //! - 选中段：`accent_soft` 底 + 4px 圆角 + `accent` 字。
 //! - 非选中段：`t2` 字；hover 态走 `hover_bg`。
-//! - 命中区 = `seg_w_each` × 28（目录 64×24 段 + 2px 内边距）。
+//! - 命中区 = `seg_w_each` × `shell.hit`（目录 64×24 段 + 2px 内边距）。
 //!
 //! ## 已知使用点（2026-10-16 提公共后）
 //! - `top_bar::browse_edit_segment` —— Browse/Edit 段
@@ -93,37 +93,112 @@ pub fn segmented(
 
 #[cfg(test)]
 mod tests {
-    //! 段控件是纯绘制——`on_pick(index)` 是唯一动作，layout 数学是它的不变量。
-    //! 不直接渲染（egui 0.36 unit 上下文无 GPU surface），钉两件事：
-    //! 1. 总宽 = `seg_w_each * len`；内边距缩 2 px 后 5 段均分。
-    //! 2. 选中段数学：active_index 越界不 panic，按 0 处理（与顶栏既有语义一致）。
+    //! 段控件是纯绘制 + 交互：`on_pick(index)` 是唯一动作。
+    //!
+    //! 用**真实 headless `egui::Ui`** 装配 [`segmented`]（不再用与实现同款的
+    //! 算术式自证那类空转断言——那种写法从不调用被测函数，等于没测）：
+    //! 1. 分配矩形宽 = `seg_w_each * len`、高 = `shell.hit`。
+    //! 2. 无输入时不触发 `on_pick`。
+    //! 3. 越界 `active_index` 不 panic。
+    //! 4. 三帧驱动真实指针事件 → 命中段触发 `on_pick(index)`（覆盖
+    //!    `resp.clicked() → on_pick` 路径）。
+
+    use super::*;
+    use crate::widgets::test_support::{make_ui, shell};
 
     #[test]
-    fn total_width_is_segments_times_each() {
-        // 顶栏 Browse/Edit：2 段 × 64 px = 128；3 段工具选择 = 3 × 60 = 180。
-        assert_eq!(2.0 * 64.0, 128.0);
-        assert_eq!(3.0 * 60.0, 180.0);
-    }
-
-    #[test]
-    fn inner_rect_shrinks_by_two_each_side_before_dividing() {
-        // 容器 60×N，缩 2 px 后内框 (60N − 4) × (h − 4)；N 段均分。
-        let total_w = 60.0 * 3.0;
-        let inner_w = total_w - 4.0;
-        let each = inner_w / 3.0;
+    fn segmented_occupies_seg_w_times_len_by_hit() {
+        let sh = shell();
+        let (_c, mut ui) = make_ui("segmented_geom", 400.0, 60.0);
+        let mut picks = Vec::new();
+        segmented(
+            &mut ui,
+            &sh,
+            "seg_geom",
+            64.0,
+            &["Browse", "Edit"],
+            1,
+            12.0,
+            |i| picks.push(i),
+        );
+        let size = ui.min_rect().size();
         assert!(
-            (each - (60.0_f32 - 4.0_f32 / 3.0_f32)).abs() < 1e-3_f32,
-            "got {each}"
+            (size.x - 128.0).abs() < 1e-3,
+            "2 × 64 = 128 宽，got {}",
+            size.x
+        );
+        assert!(
+            (size.y - sh.hit).abs() < 1e-3,
+            "高应 = shell.hit({})，got {}",
+            sh.hit,
+            size.y
+        );
+        assert!(
+            picks.is_empty(),
+            "headless 无点击不应触发 on_pick，got {picks:?}"
         );
     }
 
-    /// 选中段越界时不 panic：调用方传 usize，超长时按 0 兜底。
-    /// `top_bar::browse_edit_segment` / `theme_segment` 既有语义：
-    /// `position(...).unwrap_or(0)`——不在列表里就归 0。
     #[test]
-    fn out_of_range_active_index_falls_back_to_zero() {
-        let modes = ["A", "B", "C"];
-        let active: Option<usize> = modes.iter().position(|m| *m == "Z");
-        assert_eq!(active.unwrap_or(0), 0, "未命中应兜底为 0");
+    fn segmented_tolerates_out_of_range_active_index() {
+        let sh = shell();
+        let (_c, mut ui) = make_ui("segmented_oob", 200.0, 60.0);
+        // active_index = 99 越界（与顶栏 `unwrap_or(0)` 语义一致）不应 panic。
+        segmented(&mut ui, &sh, "seg_oob", 50.0, &["A", "B"], 99, 12.0, |_| {});
+    }
+
+    /// 真点击：三帧驱动（hover → 按下 → 抬起），指针落在第 1 段中心，
+    /// 断言 `on_pick(1)` 被触发——这是唯一真正覆盖点击链路的断言。
+    #[test]
+    fn segmented_reports_clicked_segment_index() {
+        let sh = shell();
+        let seg_w = 60.0;
+        let labels = ["A", "B", "C"];
+        // 容器从 (0,0) 起（见下 `Frame::default()` 零边距），内缩 2 → 第 1 段
+        // 覆盖 x ≈ [60.67, 119.33]；指针取其中心 (90, hit/2)。
+        let pos = egui::pos2(seg_w * 1.5, sh.hit * 0.5);
+        let mut picks: Vec<usize> = Vec::new();
+        let ctx = egui::Context::default();
+        for frame in 0..3 {
+            let events = match frame {
+                0 => vec![egui::Event::PointerMoved(pos)],
+                1 => vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                }],
+                _ => vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                }],
+            };
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 200.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ctx| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::default())
+                    .show(ctx, |ui| {
+                        segmented(ui, &sh, "seg_click", seg_w, &labels, 0, 12.0, |i| {
+                            picks.push(i)
+                        });
+                    });
+            });
+            // headless 无 GPU surface：丢弃未应用的纹理增量，避免 epaint
+            // 「Dropped TexturesDelta with unapplied deltas」panic。
+            output.textures_delta.clear();
+        }
+        assert!(
+            picks.contains(&1),
+            "第 1 段被点击应触发 on_pick(1)，got {picks:?}"
+        );
     }
 }

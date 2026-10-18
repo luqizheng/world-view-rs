@@ -12,8 +12,8 @@
 //! - [`button`] —— 统一按钮工厂（多 style × 多 content 形态）+
 //!   `ToolButton` 工具栏按钮封装 + 全部 `ICON_*` 常量。
 //! - [`controls`] —— 表单 / 浮层控件：`FieldInput` / `FieldSelect` /
-//!   `field_checkbox` / `Switch` / `slider_row` / `PropertyRow`+`value_box`+
-//!   `check_row`（检视器组件族）/ `DialogWindow`。
+//!   `Switch` / `slider_row` / `PropertyRow`+`value_box`+`check_row`（检视器
+//!   组件族）/ `DialogWindow`。
 //! - [`svg_loader`] —— egui SVG 解码器的运行时安装（Bevy 资源 + image-loader
 //!   marker）。
 //!
@@ -44,6 +44,8 @@ pub mod floater;
 pub mod primitives;
 pub mod segmented_control;
 pub mod svg_loader;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 // ── 路径兼容 re-export（保持 `crate::widgets::X` 不变） ───────────────
 pub use button::{
@@ -51,10 +53,10 @@ pub use button::{
     ToolIcon,
 };
 pub use controls::{
-    check_row, checkbox_state, dropdown_box, field_checkbox, numeric_input, option_menu, progress,
-    radio, search_input, slider, slider_row, slider_row_brush, slider_row_disabled, tabs,
-    text_area, value_box, value_unit, CheckState, DialogWindow, FieldInput, FieldSelect,
-    PropertyRow, SliderTone, Switch,
+    check_row, checkbox_state, dropdown_box, numeric_input, option_menu, progress, radio,
+    search_input, slider, slider_row, slider_row_brush, slider_row_disabled, tabs, text_area,
+    value_box, value_unit, CheckState, DialogWindow, FieldInput, FieldSelect, PropertyRow,
+    SliderTone, Switch,
 };
 pub use floater::{FloatWindow, HeadIcon};
 pub use primitives::{

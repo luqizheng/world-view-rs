@@ -374,25 +374,11 @@ pub(crate) fn panel_head(
 mod tests {
     use super::super::primitives::ICON_CHEVRON_DOWN;
     use super::*;
-    use crate::ui_theme::UiShellConfig;
-
-    fn shell() -> UiShell {
-        UiShell::new(&UiShellConfig::default())
-    }
+    use crate::widgets::test_support::shell;
 
     /// 构造一个 `egui::Ui` 跑在 `400×300` 矩形里，供 `panel_head` 落地用。
     fn make_ui() -> (egui::Context, egui::Ui) {
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
-        let ui = egui::Ui::new(
-            ctx.clone(),
-            egui::Id::new("floater_tests"),
-            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(400.0, 300.0),
-            )),
-        );
-        (ctx, ui)
+        crate::widgets::test_support::make_ui("floater_tests", 400.0, 300.0)
     }
 
     #[test]

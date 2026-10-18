@@ -18,7 +18,7 @@
 use bevy_egui::egui;
 
 use crate::shell::UiShell;
-use crate::ui_tokens::{font_size, radius};
+use crate::ui_tokens::radius;
 
 use super::primitives::icon_image;
 
@@ -95,7 +95,7 @@ pub fn button(
             shell.raised_bg(),
             Some(egui::Stroke::new(1.0, shell.border_subtle())),
             shell.text_disabled(),
-            font_size::SMALL,
+            shell.scale.small,
             radius::FIELD,
         )
     } else {
@@ -104,28 +104,28 @@ pub fn button(
                 shell.accent_soft(),
                 Some(egui::Stroke::new(1.0, shell.accent())),
                 shell.accent(),
-                font_size::SMALL,
+                shell.scale.small,
                 radius::FIELD,
             ),
             ButtonStyle::Raised => (
                 shell.raised_bg(),
                 Some(egui::Stroke::new(1.0, shell.border_subtle())),
                 shell.t1(),
-                font_size::SMALL,
+                shell.scale.small,
                 radius::FIELD,
             ),
             ButtonStyle::Ghost => (
                 shell.panel_bg(),
                 Some(egui::Stroke::new(1.0, shell.panel_bg())),
                 shell.t1(),
-                font_size::SMALL,
+                shell.scale.small,
                 radius::FIELD,
             ),
             ButtonStyle::Destructive => (
                 shell.danger_soft(),
                 Some(egui::Stroke::new(1.0, shell.danger())),
                 shell.danger(),
-                font_size::SMALL,
+                shell.scale.small,
                 radius::FIELD,
             ),
             ButtonStyle::Subtle => (
@@ -138,11 +138,13 @@ pub fn button(
         }
     };
 
-    // 目录几何：文字/图标+文字 28 高；纯图标 28×28。横向内边距 10 由
-    // `egui::Button` 的默认 padding 近似（`min_size.x` 只兜底 0）。
+    // 目录几何：文字/图标+文字 高 = `shell.hit`（Cozy 28 / Compact 24）；
+    // 纯图标 = `shell.hit` 方块。横向内边距 10 由 `egui::Button` 的默认
+    // padding 近似（`min_size.x` 只兜底 0）。尺寸随密度走 `shell.hit`，与
+    // [`ToolButton`] 同口径——不得硬编码 28，否则 Compact 下两套按钮分叉。
     let default_min = match &content {
-        ButtonContent::Text(_) | ButtonContent::ImageText(_, _) => egui::vec2(0.0, 28.0),
-        ButtonContent::Image(_) => egui::Vec2::splat(28.0),
+        ButtonContent::Text(_) | ButtonContent::ImageText(_, _) => egui::vec2(0.0, shell.hit),
+        ButtonContent::Image(_) => egui::Vec2::splat(shell.hit),
     };
     let min_size = min_size_override.unwrap_or(default_min);
 
@@ -165,8 +167,9 @@ pub fn button(
 
 // ── 目录组件：IconButton / ToolbarTool（Figma 公共组件目录 01）──────────
 
-/// 图标按钮（目录 `UI/IconButton`）：28×28、raised 底、border_subtle 描边、
-/// radius 4、图标 12。返回 `Response`，caller 自行判断点击。
+/// 图标按钮（目录 `UI/IconButton`）：`hit × hit` 方块、raised 底、border_subtle
+/// 描边、radius 4、图标 12。尺寸随密度走 `shell.hit`（Cozy 28 / Compact 24），
+/// 与 [`ToolButton::icon`] 同口径。返回 `Response`，caller 自行判断点击。
 pub fn icon_button(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -184,7 +187,7 @@ pub fn icon_button(
         shell.panel_bg()
     };
     let btn = egui::Button::image(icon_image(icon, tint, 12.0))
-        .min_size(egui::Vec2::splat(28.0))
+        .min_size(egui::Vec2::splat(shell.hit))
         .fill(fill)
         .stroke(egui::Stroke::new(1.0, shell.border_subtle()))
         .corner_radius(radius::FIELD);
@@ -433,11 +436,7 @@ impl<'a> ToolButton<'a> {
 mod tool_button_tests {
     use super::super::primitives::{ICON_PEN, ICON_RULER};
     use super::*;
-    use crate::ui_theme::UiShellConfig;
-
-    fn shell() -> UiShell {
-        UiShell::new(&UiShellConfig::default())
-    }
+    use crate::widgets::test_support::{ctx, shell, ui_in};
 
     /// 默认样式必须来自 `UiShell` 令牌：曾经默认 `tint = WHITE`，
     /// caller 忘了 `.tint()` 就会在浅色底上隐身——现在默认解析不再有这个坑。
@@ -513,16 +512,8 @@ mod tool_button_tests {
     #[test]
     fn show_renders_all_three_content_variants_without_panic() {
         let sh = shell();
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
-        let mut ui = egui::Ui::new(
-            ctx.clone(),
-            egui::Id::new("tool_button_tests"),
-            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(400.0, 400.0),
-            )),
-        );
+        let c = ctx();
+        let mut ui = ui_in(&c, "tool_button_tests", 400.0, 400.0);
         let r1 = ToolButton::icon(ToolIcon::Svg(ICON_PEN), "图标").show(&mut ui, &sh, || {});
         let r2 = ToolButton::text("文字按钮", "文字").show(&mut ui, &sh, || {});
         let r3 = ToolButton::icon_text(ToolIcon::Svg(ICON_RULER), "测量", "混合").show(
@@ -560,21 +551,10 @@ mod button_factory_tests {
 
     use super::super::primitives::{ICON_FOLDER_OPEN, ICON_GLOBE, ICON_PLUS};
     use super::*;
-    use crate::ui_theme::UiShellConfig;
-
-    fn shell() -> UiShell {
-        UiShell::new(&UiShellConfig::default())
-    }
+    use crate::widgets::test_support::{ctx, shell, ui_in};
 
     fn new_ui(ctx: &egui::Context, w: f32, h: f32) -> egui::Ui {
-        egui::Ui::new(
-            ctx.clone(),
-            egui::Id::new("button_factory_tests"),
-            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(w, h),
-            )),
-        )
+        ui_in(ctx, "button_factory_tests", w, h)
     }
 
     /// 4 种 style 都能真实装配进 egui 而不 panic（API 签名 / Image tint /
@@ -582,8 +562,7 @@ mod button_factory_tests {
     #[test]
     fn factory_renders_all_four_styles_into_egui_without_panic() {
         let sh = shell();
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
+        let ctx = ctx();
         let mut ui = new_ui(&ctx, 600.0, 200.0);
 
         let r_a = button(
@@ -648,8 +627,7 @@ mod button_factory_tests {
     #[test]
     fn image_only_button_is_hit_square() {
         let sh = shell();
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
+        let ctx = ctx();
         let mut ui = new_ui(&ctx, 200.0, 200.0);
 
         let r = button(
@@ -674,8 +652,7 @@ mod button_factory_tests {
     #[test]
     fn min_size_override_wins_over_factory_default() {
         let sh = shell();
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
+        let ctx = ctx();
         let mut ui = new_ui(&ctx, 600.0, 100.0);
         let r = button(
             &mut ui,
@@ -702,8 +679,7 @@ mod button_factory_tests {
     #[test]
     fn enabled_false_renders_button_disabled() {
         let sh = shell();
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
+        let ctx = ctx();
         let mut ui = new_ui(&ctx, 200.0, 200.0);
 
         let r = button(
@@ -743,8 +719,7 @@ mod button_factory_tests {
     /// 不暴露 getter；走渲染出口拿 `Response.rect` —— 钉死 28×28。
     #[test]
     fn icon_image_paints_at_exact_pixel_size() {
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
+        let ctx = ctx();
         let mut ui = new_ui(&ctx, 200.0, 200.0);
         let img = icon_image(ICON_GLOBE, egui::Color32::WHITE, 28.0);
         let r = ui.add(img);
