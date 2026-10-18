@@ -129,15 +129,16 @@ impl LatLonBbox {
     /// 图内归一化坐标（UV）→ 经纬度（WGS84，单位度）。
     ///
     /// UV 口径与 [`crate::map::IconSpec::anchor`] / [`crate::map::coord::MapFrame::world_to_uv`]
-    /// 一致：`[0,1]²`、**左上角为原点、y 向下**——`[0,0]` 是本图**西北角**，
-    /// `[1,1]` 是东南角。调用链是 `世界坐标 → (coord 模块) UV → 本方法`，
-    /// 本方法只负责最后一段线性映射，不碰世界坐标。
+    /// 一致：`[0,1]²`、**左下角（西南角）为原点、y 向上**——`[0,0]` 是本图
+    /// **西南角**，`[1,1]` 是东北角（ADR-0034「上北下南」）。调用链是
+    /// `世界坐标 → (coord 模块) UV → 本方法`，本方法只负责最后一段线性映射，
+    /// 不碰世界坐标。
     ///
     /// 返回 `(纬度 lat, 经度 lon)`。越界输入按线性外推（不夹取）——
     /// 「光标是否在图幅内、要不要显示经纬度」是**可见性**判断，归调用方。
     pub fn uv_to_lat_lon(&self, uv: [f64; 2]) -> (f64, f64) {
         let n = self.normalized();
-        let lat = n.north - uv[1] * n.height();
+        let lat = n.south + uv[1] * n.height();
         let lon = n.west + uv[0] * n.width();
         (lat, lon)
     }
@@ -257,9 +258,9 @@ mod tests {
     }
 
     /// UV 四角与中心的手算对位（西雅图式 bbox）：
-    /// `[0,0]` = 西北角 (47.75, -122.50)，`[1,1]` = 东南角 (47.50, -122.25)，
-    /// `[0.5,0.5]` = 中心 (47.625, -122.375)。UV 左上原点、y 向下，
-    /// 因此 **v 越大纬度越小**（v=1 落在南边界）。
+    /// `[0,0]` = 西南角 (47.50, -122.50)，`[1,1]` = 东北角 (47.75, -122.25)，
+    /// `[0.5,0.5]` = 中心 (47.625, -122.375)。UV 左下原点、y 向上（ADR-0034），
+    /// 因此 **v 越大纬度越大**（v=1 落在北边界）。
     #[test]
     fn uv_to_lat_lon_maps_corners_and_center() {
         let bbox = LatLonBbox {
@@ -269,12 +270,12 @@ mod tests {
             north: 47.75,
         };
         let (lat, lon) = bbox.uv_to_lat_lon([0.0, 0.0]);
-        assert!((lat - 47.75).abs() < 1e-9, "西北角纬度，got {lat}");
-        assert!((lon - (-122.50)).abs() < 1e-9, "西北角经度，got {lon}");
+        assert!((lat - 47.50).abs() < 1e-9, "西南角纬度，got {lat}");
+        assert!((lon - (-122.50)).abs() < 1e-9, "西南角经度，got {lon}");
 
         let (lat, lon) = bbox.uv_to_lat_lon([1.0, 1.0]);
-        assert!((lat - 47.50).abs() < 1e-9, "东南角纬度，got {lat}");
-        assert!((lon - (-122.25)).abs() < 1e-9, "东南角经度，got {lon}");
+        assert!((lat - 47.75).abs() < 1e-9, "东北角纬度，got {lat}");
+        assert!((lon - (-122.25)).abs() < 1e-9, "东北角经度，got {lon}");
 
         let (lat, lon) = bbox.uv_to_lat_lon([0.5, 0.5]);
         assert!((lat - 47.625).abs() < 1e-9, "中心纬度，got {lat}");
@@ -292,10 +293,10 @@ mod tests {
             north: 47.50,
         };
         let (lat, lon) = raw.uv_to_lat_lon([0.0, 0.0]);
-        assert!((lat - 47.75).abs() < 1e-9, "归位后西北角纬度，got {lat}");
+        assert!((lat - 47.50).abs() < 1e-9, "归位后西南角纬度，got {lat}");
         assert!(
             (lon - (-122.50)).abs() < 1e-9,
-            "归位后西北角经度，got {lon}"
+            "归位后西南角经度，got {lon}"
         );
     }
 
@@ -308,9 +309,9 @@ mod tests {
             east: 1.0,
             north: 1.0,
         };
-        // v = 2：越过南边界一格 → lat = 1 - 2 = -1。
+        // v = 2：越过北边界一格 → lat = 0 + 2 = 2（y 向上，ADR-0034）。
         let (lat, lon) = bbox.uv_to_lat_lon([0.0, 2.0]);
-        assert!((lat - (-1.0)).abs() < 1e-9, "南向外推纬度，got {lat}");
+        assert!((lat - 2.0).abs() < 1e-9, "北向外推纬度，got {lat}");
         assert!((lon - 0.0).abs() < 1e-9, "经度不外推，got {lon}");
     }
 }

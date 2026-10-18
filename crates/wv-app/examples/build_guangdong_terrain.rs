@@ -4,6 +4,7 @@
 //!
 //! 中间格式（`target/dem_gd/prep_guangdong_dem.py` 产出，seattle kinds 先例）：
 //! 头 2 字节小端 u16 宽 + 2 字节 u16 高 + 行优先 i16 高度（米，海 = -350）。
+//! **行 0 = 最南行**（ADR-0034「上北下南」：世界 +Y 向上，北在上）。
 //!
 //! 用法：`cargo run -p wv-app --features app --example build_guangdong_terrain`
 //!

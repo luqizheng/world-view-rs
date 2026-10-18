@@ -918,8 +918,10 @@ fn project_lat_lon_to_xy(
     extent: &wv_core::map::Extent,
 ) -> (f32, f32) {
     let u = ((lon - bbox.west) / (bbox.east - bbox.west)).clamp(0.0, 1.0);
-    // 注意：Y 轴向下递增，纬度越大越靠上 → 屏幕 y 越小。
-    let v = (1.0 - (lat - bbox.south) / (bbox.north - bbox.south)).clamp(0.0, 1.0);
+    // 纬度越大 → y 越大。世界坐标 +Y 向上（`camera.rs`），所以北在上、南在下
+    // （ADR-0034「上北下南」）。2026-10-18 之前这里是 `1 - (lat-south)/range`，
+    // 与渲染的 +Y 方向相反，整幅广东在屏幕上上下颠倒。
+    let v = ((lat - bbox.south) / (bbox.north - bbox.south)).clamp(0.0, 1.0);
     (u as f32 * extent.width, v as f32 * extent.height)
 }
 
