@@ -246,7 +246,7 @@ pub fn sync_feature_overlays(
     for (place, shape) in territories {
         // 普通地点不发覆盖层：它的表现是 POI 点 + 标签（feature_overlays 与
         // `world_projection::place_dot_for` 的抑制规则互为镜像）。
-        let Some(feature) = overlay_feature_for_place(place) else {
+        let Some(family) = overlay_family_for_place(place) else {
             continue;
         };
         // 带洞地界（ADR-0029 M2）：晕按外环 + 洞三角化，符号采样避开洞。
@@ -259,7 +259,7 @@ pub fn sync_feature_overlays(
             continue;
         }
 
-        let rule = pack.overlays.rule_for(feature);
+        let rule = pack.overlays.rule_for(family);
         let (halo_color, halo_alpha) = match rule {
             Some(rule) => (rule.halo_color, rule.halo_alpha * halo_band * opacity),
             // 主题缺规则的回退：中性灰绿晕，事实不因换主题消失。
@@ -618,28 +618,26 @@ pub fn stable_hash(id: &str) -> u64 {
     hasher.finish()
 }
 
-/// 标记的群系 → 主题覆盖物词汇（ADR-0029 D5 的过渡桥）。
+/// 标记的群系 → 主题覆盖物规则键（ADR-0032 D5：族即键，桥已退役）。
 ///
-/// 主题 pack 的规则仍以旧 `FEATURE_FOREST = 4` 为键（D18 词汇统一延后）。
-/// 有 `biome` 时：森林族（森林/丛林/热带雨林）映射到 4，其余群系无覆盖物
-/// （名字与格子色仍然可见）；无 `biome` 的旧工程回退到 `place.feature`。
-pub(crate) fn overlay_feature_for_place(place: &wv_core::distance::Place) -> Option<u8> {
-    match place.biome {
-        Some(b) if wv_terrain::biome::is_forest_family(b) => {
-            Some(crate::theme::overlays::FEATURE_FOREST)
-        }
-        Some(_) => None,
-        None => place.feature,
-    }
+/// `biome` 是唯一词汇：群系经 `family_of` 归族后查主题规则；无群系（普通
+/// 地点 / 未登记编号）无覆盖物（名字与格子色仍然可见）。旧 `feature`
+/// 三臂桥（ADR-0029 D5）退役——加载迁移（`place_feature_to_biome`）保证
+/// 旧 YAML 的 feature 在进渲染前已变成 biome，渲染层不再知道旧词汇。
+pub(crate) fn overlay_family_for_place(
+    place: &wv_core::distance::Place,
+) -> Option<wv_terrain::biome::BiomeFamily> {
+    place.biome.and_then(wv_terrain::biome::family_of)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// `stable_hash` 是纯函数：同 id 每次调用同值，不同 id 不撞。
+    /// 族即键（ADR-0032 D5）：群系经 `family_of` 归族；旧 feature 桥退役——
+    /// 只有 feature 的地点（不经加载器的手工世界）不再产生覆盖物规则键。
     #[test]
-    fn forest_biome_maps_to_legacy_feature_four() {
+    fn forest_family_biomes_resolve_to_their_family() {
         let mut p = wv_core::distance::Place {
             id: wv_core::Id::new_unchecked("p"),
             name: "p".into(),
@@ -654,18 +652,23 @@ mod tests {
             rank: None,
         };
         assert_eq!(
-            overlay_feature_for_place(&p),
-            Some(crate::theme::overlays::FEATURE_FOREST),
-            "森林族群系应映射到旧 feature 4"
+            overlay_family_for_place(&p),
+            Some(wv_terrain::biome::BiomeFamily::Forest),
+            "丛林应归森林族（族键覆盖 1/10/11）"
         );
         p.biome = Some(wv_terrain::biome::BIOME_GRASSLAND);
-        assert_eq!(overlay_feature_for_place(&p), None, "非森林群系无覆盖物");
+        assert_eq!(
+            overlay_family_for_place(&p),
+            Some(wv_terrain::biome::BiomeFamily::Grassland),
+            "草原归草原族"
+        );
         p.biome = None;
+        assert_eq!(overlay_family_for_place(&p), None, "普通地点无覆盖物");
         p.feature = Some(4);
         assert_eq!(
-            overlay_feature_for_place(&p),
-            Some(4),
-            "旧工程只有 feature 时走回退"
+            overlay_family_for_place(&p),
+            None,
+            "旧 feature 桥已退役：渲染层不再读旧词汇"
         );
     }
 

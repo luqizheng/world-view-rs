@@ -54,6 +54,14 @@ pub static PACK: ThemePack = ThemePack {
             symbol_texture: None,
             halo_texture: None,
         }),
+        // 其余族 v1 无演绎（ADR-0032 D2：字段一次定型，规则待美术校准）。
+        grassland: None,
+        desert: None,
+        wetland: None,
+        cold: None,
+        highland: None,
+        water: None,
+        road: None,
     },
 };
 
@@ -119,14 +127,14 @@ mod tests {
         assert_eq!(PACK.palette.core, PaletteColors::DAYLIGHT.core);
     }
 
-    /// 水墨包也装载森林覆盖规则（占位值）——验证外部主题 crate 加 `overlays`
-    /// 字段后规则通路仍成立。
+    /// 水墨包也装载森林族覆盖规则（占位值）——验证外部主题 crate 在族键 API
+    /// （ADR-0032）下 `overlays` 规则通路仍成立（族类型经 wv-render 再导出）。
     #[test]
     fn pack_has_forest_overlay_rule() {
         let rule = PACK
             .overlays
-            .rule_for(wv_render::theme::overlays::FEATURE_FOREST)
-            .expect("水墨包应给 FEATURE_FOREST 配置占位规则");
+            .rule_for(wv_render::theme::overlays::BiomeFamily::Forest)
+            .expect("水墨包应给森林族配置占位规则");
         // Task 9 裁定：水墨包暂不接贴图（纯色回退），待美术校准后再定
         // 水墨树 / 晕资产——避免把日间古舆图图集错配到水墨主题。
         assert!(

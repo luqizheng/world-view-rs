@@ -1,9 +1,9 @@
-//! 主题覆盖物（theme overlay）的**纯数据核**：每主题的 feature 规则、镜头分带
+//! 主题覆盖物（theme overlay）的**纯数据核**：每主题的群系族规则、镜头分带
 //! 交叉淡化、近带确定性采样。
 //!
 //! ## 职责
-//! - [`FeatureRule`] / [`FeatureOverlaySet`] —— 一个主题包对某类地理事实
-//!   （v1 只有森林）的演绎参数：远带晕 + 近带符号；
+//! - [`FeatureRule`] / [`FeatureOverlaySet`] —— 一个主题包对一类群系族
+//!   （v1 只有森林族）的演绎参数：远带晕 + 近带符号；
 //! - [`overlay_far_blend`] —— 同一张图内按缩放（世界单位 : 像素）求远 / 近带
 //!   交叉淡化系数的纯函数；
 //! - [`forest_sites`] —— 地界 ∩ 栅格网格的确定性采样（树冠落位）。
@@ -21,13 +21,9 @@
 use wv_core::geometry::point_in_ring;
 use wv_core::terrain::{TerrainCellData, TerrainData};
 
-/// 森林的地理事实编号（`Place.feature` 的值）。
-///
-/// 与 `theme::colors::CORE_TERRAIN` 的索引 4（森林）同一张词汇表；默认主题的
-/// 网格 kind 编号同源（`wv-terrain::intent` 文档：草原 3 / 丘陵 5 / 山地 6）。
-/// `Place.feature` 在 `wv-core` 里是裸 `u8`（数据层不依赖渲染层），编号到
-/// 演绎规则的映射由本模块的 [`FeatureOverlaySet::rule_for`] 承担。
-pub const FEATURE_FOREST: u8 = 4;
+/// 群系族（ADR-0032 D2 规则键）。**经本模块再导出**：外部主题 crate 只依赖
+/// wv-render（ADR-0023 契约），不必直接摸 wv-terrain。
+pub use wv_terrain::biome::BiomeFamily;
 
 /// 抖动幅度占采样间距的比例（`±0.35 × spacing_wu`）。
 ///
@@ -35,10 +31,11 @@ pub const FEATURE_FOREST: u8 = 4;
 /// 仍落在自己的采样格附近，不互相穿插、密度均匀。
 const JITTER_FRACTION: f32 = 0.35;
 
-/// 单个 feature 的演绎参数（远带晕 + 近带符号）。
+/// 单个群系族的演绎参数（远带晕 + 近带符号）。
 ///
-/// **归属**：一个主题包对一类地理事实的「长相」；作者只声明事实（`Place.feature`），
-/// 不直接写这些值（D1）。v1 为代码常量，YAML 化随 ADR-0023 M3 推迟。
+/// **归属**：一个主题包对一族地理事实的「长相」；作者只声明事实
+/// （`Place.biome`，经 [`wv_terrain::biome::family_of`] 归族），不直接写这些值。
+/// v1 为代码常量，YAML 化随 ADR-0023 M3 推迟。
 ///
 /// **贴图字段**（D12 资产契约）：写主题资产根下的相对路径，由渲染侧映射到
 /// 编译期嵌入的 PNG（`feature_overlays::embedded_texture`）。`None` = 纯色路径；
@@ -62,26 +59,51 @@ pub struct FeatureRule {
     pub halo_texture: Option<&'static str>,
 }
 
-/// 一套主题的 feature 词汇 → 演绎规则映射。
+/// 一套主题的群系族 → 演绎规则映射（ADR-0032 D2：规则键 = 群系族）。
 ///
-/// **缺省回退是硬要求**（设计稿 §6.4）：主题没给某 feature 规则时
-/// [`Self::rule_for`] 返回 `None`，渲染侧仍画地界描边 + 名字——事实不因换主题
-/// 而消失。v1 只登记森林一个条目。
+/// 族划分穷尽冻结群系表（[`BiomeFamily`]），字段**一次定型**：未来加规则
+/// 内容不破此结构（外部主题 crate 的 API 稳定面，ADR-0023 D2）。
+///
+/// **缺省回退是硬要求**（设计稿 §6.4）：主题没给某族规则时
+/// [`Self::rule_for`] 返回 `None`，渲染侧仍画地界晕（回退色）+ 地界 + 名字
+/// ——事实不因换主题而消失。v1 只有森林族有内置演绎，其余族留 `None`
+/// 待美术校准。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FeatureOverlaySet {
-    /// 森林（[`FEATURE_FOREST`]）的规则；`None` = 本主题不演绎森林。
+    /// 森林族（森林/丛林/热带雨林）的规则；`None` = 本主题不演绎。
     pub forest: Option<FeatureRule>,
+    /// 草原族（平原/草原/绿洲/稀树草原）的规则。
+    pub grassland: Option<FeatureRule>,
+    /// 干旱族（戈壁/沙漠/盐碱地）的规则。
+    pub desert: Option<FeatureRule>,
+    /// 湿地族（沼泽/湿地）的规则。
+    pub wetland: Option<FeatureRule>,
+    /// 寒带族（苔原/雪原）的规则。
+    pub cold: Option<FeatureRule>,
+    /// 高地族（丘陵/山地）的规则。
+    pub highland: Option<FeatureRule>,
+    /// 水域族（海洋/湖泊/河流）的规则。
+    pub water: Option<FeatureRule>,
+    /// 道路族（道路）的规则。
+    pub road: Option<FeatureRule>,
 }
 
 impl FeatureOverlaySet {
-    /// 按 `Place.feature` 的词汇编号取规则。
+    /// 按群系族取规则。
     ///
-    /// v1 仅识别 [`FEATURE_FOREST`]；其余编号（含未来山脉等）返回 `None`，
-    /// 走「只画地界描边 + 名字」的回退，不静默消失。
-    pub fn rule_for(&self, feature: u8) -> Option<&FeatureRule> {
-        match feature {
-            FEATURE_FOREST => self.forest.as_ref(),
-            _ => None,
+    /// 族无规则返回 `None`，走「回退色晕 + 地界 + 名字」的回退，不静默消失。
+    /// 写一条族规则即覆盖同族全部群系——森林族一条规则同时服务森林、丛林、
+    /// 热带雨林三种 `biome`（旧数字键「写 1 漏 10/11」的碎裂就此消除）。
+    pub fn rule_for(&self, family: BiomeFamily) -> Option<&FeatureRule> {
+        match family {
+            BiomeFamily::Forest => self.forest.as_ref(),
+            BiomeFamily::Grassland => self.grassland.as_ref(),
+            BiomeFamily::Desert => self.desert.as_ref(),
+            BiomeFamily::Wetland => self.wetland.as_ref(),
+            BiomeFamily::Cold => self.cold.as_ref(),
+            BiomeFamily::Highland => self.highland.as_ref(),
+            BiomeFamily::Water => self.water.as_ref(),
+            BiomeFamily::Road => self.road.as_ref(),
         }
     }
 }
@@ -171,8 +193,7 @@ pub fn forest_sites(
             let Some(cell) = cell_at(terrain, cell_size, raster_offset, x, y) else {
                 continue;
             };
-            // 格子侧比较**森林群系**编号（biome 冻结表）；`FEATURE_FOREST`(4)
-            // 是 Place.feature 的旧 kind 词汇表，两者经 v1 迁移表对应。
+            // 格子侧比较**森林族**（biome 冻结表 + family_of，ADR-0032）。
             if wv_terrain::biome::is_forest_family(cell.biome) {
                 forest.push((x, y));
             }
@@ -270,7 +291,7 @@ mod tests {
         }
     }
 
-    /// 森林格子的群系编号（biome 冻结表；feature 4 经 v1 迁移表映射到此）。
+    /// 森林格子的群系编号（biome 冻结表）。
     const FOREST_BIOME: u8 = 1;
 
     /// 10×10 格（格边长 10）：左半列森林群系、右半列草原群系，
@@ -301,6 +322,61 @@ mod tests {
             "中点 smoothstep=0.5，got {}",
             overlay_far_blend(1.0)
         );
+    }
+
+    /// 仅森林族有规则的集合（其余族 None，主题包 v1 的实况）。
+    fn forest_only_set() -> FeatureOverlaySet {
+        FeatureOverlaySet {
+            forest: Some(FeatureRule {
+                halo_color: [1, 2, 3],
+                halo_alpha: 0.5,
+                symbol_color: [4, 5, 6],
+                symbol_size_px: 10.0,
+                symbol_spacing_wu: 20.0,
+                symbol_texture: None,
+                halo_texture: None,
+            }),
+            grassland: None,
+            desert: None,
+            wetland: None,
+            cold: None,
+            highland: None,
+            water: None,
+            road: None,
+        }
+    }
+
+    /// 族键的收口收益（ADR-0032 D2）：森林族**一条**规则同时服务森林、丛林、
+    /// 热带雨林三种群系（旧数字键「写 1 漏 10/11」的碎裂消除）；无规则族回退
+    /// `None` 走渲染侧回退，不静默消失。
+    #[test]
+    fn forest_family_rule_covers_all_forest_biomes_and_others_fall_back() {
+        let set = forest_only_set();
+        for b in [
+            wv_terrain::biome::BIOME_FOREST,
+            wv_terrain::biome::BIOME_JUNGLE,
+            wv_terrain::biome::BIOME_TROPICAL_RAINFOREST,
+        ] {
+            let family = wv_terrain::biome::family_of(b).expect("森林族群系必有族");
+            assert!(
+                set.rule_for(family).is_some(),
+                "群系 {b}（族 {family:?}）应取到森林族规则"
+            );
+        }
+        for family in [
+            BiomeFamily::Grassland,
+            BiomeFamily::Desert,
+            BiomeFamily::Wetland,
+            BiomeFamily::Cold,
+            BiomeFamily::Highland,
+            BiomeFamily::Water,
+            BiomeFamily::Road,
+        ] {
+            assert!(
+                set.rule_for(family).is_none(),
+                "族 {family:?} 无规则时应回退 None"
+            );
+        }
     }
 
     #[test]
