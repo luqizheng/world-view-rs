@@ -242,3 +242,22 @@ LakeRegion`），`apply_intent` 内用「草稿克隆 → 内层效果 → 噪�
 （事务 / seed 随命令 / 撤销重放）零改动继承，wv-edit 仅补 label 四臂 + 2 复用
 验证测试。门禁：workspace 821/0 + app 253/0 + clippy/fmt + smoke PASS。
 M4（生成森林入口）骑覆盖物 v1，随其实现排期。
+
+---
+
+## 2026-10-18 追记：意图生效后保留选区（ADR-0033）
+
+> 本追记**取代** §2 D9 的「意图生效 → 选区清空」与 §4「地形四意图撤销 →
+> 选区不回驻留」「生成即消费」。决策与代价见
+> [ADR-0033](../../adr/ADR-0033-selection-retained-after-intent.md)。
+
+- 不切图的全部意图（生成大陆 / 高山 / 丘陵 / 平原 / 湖泊 / 森林 / 划分势力）
+  成功后**不再清空选区**；作者可继续加锚点、调轮廓、重复点意图。
+- 选区仍按 §3 既有规则被以下动作清空：点空白、Esc、切工具、切图。
+  「生成城市」确认后自动钻入新图，选区随切图清空——不在保留范围内。
+- 撤销/重做只回滚世界数据，**不触碰选区**；`ContinentGenerationStash` /
+  `sync_selection_after_history_step` / `ContinentGenerationState` 已删除，
+  `apply_history_command` 不再接收 `SelectionState`。
+- 验收画面 3（大陆撤销回驻留）改写为：生成后选区仍在；撤销仅地形复原；
+  作者在生成后改画的新选区不会被撤销/重做换回旧圈。
+

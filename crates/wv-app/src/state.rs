@@ -24,35 +24,9 @@ pub use wv_render::state::{
     LOD_NATION_SCALE, LOD_REGION_SCALE,
 };
 
-/// 大陆生成的撤销恢复圈暂存（2026-10-17 大陆生成 UI plan Task 4）。
-///
-/// 生成即消费意图包络（spec §8 裁定 2），但 Ctrl+Z 撤销那条宏命令时圈要
-/// 回驻留（裁定 3 的配套机制）。`committed_len` 记录提交后 `History::len()`：
-///
-/// - undo 栈顶正是生成事务（`History::undo_top_seq == tx_seq`）→ 圈回来；
-/// - redo 栈顶正是生成事务 → 再消费；
-/// - 任何其它命令的撤销/重做都不动意图圈。
-///
-/// 不清 stash：redo 还要用；参数也一并留着，作者「撤销 → 调参 → 再生成」时
-/// 面板能回到上次的值（面板自身状态由 `ContinentDialog` 持有）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ContinentGenerationStash {
-    /// 被消费的意图包络（当前图局部坐标）。
-    pub envelopes: Vec<Vec<(f32, f32)>>,
-    /// 上次生成用的参数。
-    pub params: wv_terrain::continent::ContinentParams,
-    /// 上次生成用的种子。
-    pub seed: u64,
-    /// 生成事务的提交序号（`History::undo_top_seq` / `redo_top_seq` 用它
-    /// 精确辨认「这条命令」——长度启发式会在无关命令的 redo 上误判）。
-    pub tx_seq: u64,
-}
-
-/// 大陆生成恢复圈资源（`Option` 包裹——没有生成过就是 `None`）。
-#[derive(bevy::prelude::Resource, Debug, Default)]
-pub struct ContinentGenerationState {
-    pub stash: Option<ContinentGenerationStash>,
-}
+// 2026-10-18（ADR-0033）：`ContinentGenerationStash` / `ContinentGenerationState`
+// 已删除。意图生效不再消费选区，撤销/重做无需把意图圈「还回来」——
+// 选区自始至终留在 `SelectionState`。
 
 /// [`ViewMode`](wv_render::state::ViewMode) 的顶栏显示名（ADR-0018：locale 查表）。
 ///

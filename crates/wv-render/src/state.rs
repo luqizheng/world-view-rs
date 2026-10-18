@@ -562,7 +562,8 @@ impl MeasureState {
 ///
 /// pen 方法的数据底座：草稿锚点（Drawing）与闭合选区（Closed）二态互斥——
 /// `draft` 非空即画中，`closed` 为 `Some` 即已闭合。选区是**会话态**（spec D11）：
-/// 不落盘、不进 YAML；生成类意图确认时经 [`Self::consume_closed`] 取走。
+/// 不落盘、不进 YAML；意图确认时由 wv-app **只读克隆**环后自行提交
+/// （ADR-0033：不再经 [`Self::consume_closed`] 消费；该方法保留为通用原语）。
 /// 坐标为**当前图局部 wu**（与 [`MeasureState::draft`] 同口径）。
 ///
 /// 手感对齐 Figma pen：逐点 + 橡皮筋、双击 / 回车 / 点首锚闭合、
@@ -634,7 +635,7 @@ impl SelectionState {
         self.last_click = None;
     }
 
-    /// 生成即消费：取走闭合选环并复位选中锚点。
+    /// 取走闭合选环并复位选中锚点（通用会话态原语；ADR-0033 后意图不再调用它）。
     pub fn consume_closed(&mut self) -> Option<Vec<(f32, f32)>> {
         self.selected_anchor = None;
         self.closed.take()

@@ -90,7 +90,7 @@ pub fn intent_menu(
     shell_cfg: Res<UiShellConfig>,
     current_loc: Res<CurrentLocale>,
     drill: Res<DrillState>,
-    mut selection: ResMut<wv_render::state::SelectionState>,
+    selection: Res<wv_render::state::SelectionState>,
     mut dialogs: IntentMenuDialogs,
     mut projection: ResMut<wv_render::state::WorldProjection>,
     mut edit: ResMut<crate::edit::editing::EditHistory>,
@@ -262,12 +262,14 @@ pub fn intent_menu(
                                 .map(|m| terrain_intents_available(&projection.world, m))
                                 .unwrap_or(false);
                             // 地形四意图（spec §4 D10：一键应用，无弹窗）。
+                            // ADR-0033：生效后**不清空选区**——作者可继续加锚点 /
+                            // 调轮廓再点其它意图；撤销只回滚地形。
                             let ring = selection.closed.clone();
                             let apply_map = drill.current().cloned();
                             let mut apply = |kind: wv_terrain::intent::Intent| {
                                 if let Some(map) = apply_map.clone() {
                                     let frame = (time.elapsed_secs() * 60.0) as u64;
-                                    if crate::edit::editing::commit_region_intent(
+                                    let _ = crate::edit::editing::commit_region_intent(
                                         map,
                                         kind,
                                         grid.cell_size,
@@ -278,10 +280,7 @@ pub fn intent_menu(
                                         &mut tex,
                                         &mut notice,
                                         frame,
-                                    ) {
-                                        // 意图生效 → 选区清空（spec D9；撤销不回驻留）。
-                                        selection.cancel();
-                                    }
+                                    );
                                 }
                             };
                             let mut terrain_button =

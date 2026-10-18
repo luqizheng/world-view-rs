@@ -202,8 +202,7 @@ pub fn continent_dialog_system(
     mut projection: bevy::prelude::ResMut<crate::state::WorldProjection>,
     mut edit: bevy::prelude::ResMut<crate::edit::editing::EditHistory>,
     mut tex: bevy::prelude::ResMut<wv_render::terrain_view::TerrainTexture>,
-    mut selection: bevy::prelude::ResMut<crate::state::SelectionState>,
-    mut gen: bevy::prelude::ResMut<crate::state::ContinentGenerationState>,
+    selection: bevy::prelude::Res<crate::state::SelectionState>,
     mut notice: bevy::prelude::ResMut<crate::ui_shell::ShellNotice>,
     time: bevy::prelude::Res<bevy::prelude::Time>,
 ) {
@@ -224,8 +223,8 @@ pub fn continent_dialog_system(
             notice.error(t(loc, I18nKey::ContinentNoticeNoMap), frame);
             return;
         };
-        // 选区即意图包络（spec D5）：确认时克隆环提交；失败不预消费，
-        // 选区原样保留（作者画的圈不因一次提交失败消失）。
+        // 选区即意图包络（spec D5）：确认时克隆环提交；成功/失败都不消费
+        // 选区（ADR-0033：作者可继续加锚点调轮廓再生成）。
         let Some(ring) = selection.closed.clone() else {
             notice.error(t(loc, I18nKey::ContinentNoticeNoEnvelopes), frame);
             return;
@@ -239,8 +238,6 @@ pub fn continent_dialog_system(
             &mut edit,
             &mut projection,
             &mut tex,
-            &mut selection,
-            &mut gen,
         ) {
             Ok(()) => notice.info(t(loc, I18nKey::ContinentNoticeGenerated), frame),
             Err(e) => notice.error(

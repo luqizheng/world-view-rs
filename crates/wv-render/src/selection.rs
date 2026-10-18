@@ -14,8 +14,8 @@
 //! 共用同一条早退链（UI 指针 / 播放 / 缩放下限 / 无工程锁 / `map_origin` 同源链）。
 //!
 //! ## 边界
-//! - 不生成地形、不碰 `History`、不落盘——生成类意图由 wv-app 经
-//!   `SelectionState::consume_closed` 取走后自行提交（AGENTS §2.1 红线）。
+//! - 不生成地形、不碰 `History`、不落盘——生成类意图由 wv-app 只读克隆环后
+//!   自行提交（ADR-0033：不再消费选区；AGENTS §2.1 红线）。
 
 #![cfg(feature = "app")]
 
