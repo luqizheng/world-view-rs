@@ -630,7 +630,7 @@ geometry:
   - 10.0
   - 10.0
 ";
-        let span: GeometrySpan = serde_yaml::from_str(&yaml).expect("旧形态必须照常加载");
+        let span: GeometrySpan = serde_yaml::from_str(yaml).expect("旧形态必须照常加载");
         assert!(
             matches!(span.geometry, GeometryData::Polygon(_)),
             "裸数组必须仍命中 Polygon 变体（untagged 顺序红线），got {:?}",
