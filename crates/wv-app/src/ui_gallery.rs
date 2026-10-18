@@ -33,7 +33,6 @@ use bevy_egui::{egui, EguiContexts, EguiPlugin};
 
 use crate::theme::ui_theme::UiShellConfig;
 use wv_ui::shell::UiShell;
-use wv_ui::ui_theme::build_visuals;
 use wv_ui::ui_tokens::{font_size, space, UiDensity, UiTheme};
 use wv_ui::widgets::{
     badge, breadcrumb, button, checkbox_state, divider, dropdown_box, empty_state, icon_button,
@@ -175,7 +174,13 @@ fn draw_gallery(mut contexts: EguiContexts, cfg: Res<UiShellConfig>, mut st: Loc
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
-    ctx.set_visuals(build_visuals(shell.palette));
+    wv_ui::ui_theme::apply_ui_theme(
+        ctx,
+        &UiShellConfig {
+            theme: st.theme,
+            density: st.density,
+        },
+    );
 
     let frame = egui::Frame::default()
         .fill(shell.palette.bg_app.to_color32())

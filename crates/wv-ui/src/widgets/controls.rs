@@ -1187,7 +1187,8 @@ impl<'a> DialogWindow<'a> {
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .frame(
-                egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
+                // 跟随应用当前日夜模式，而不是钉死暗色样式。
+                egui::Frame::window(&ctx.style_of(ctx.theme()))
                     .fill(shell.panel_bg())
                     .stroke(egui::Stroke::new(1.0_f32, shell.border_strong()))
                     .inner_margin(crate::ui_theme::margin_all(space::MD))

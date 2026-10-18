@@ -11,8 +11,8 @@
 //!
 //! bevy_egui 每帧都可能重建/共享上下文，直接改全局 `Visuals` 会与
 //! egui 默认样式来回打架。我们把样式算成一个 `Visuals` 值，由
-//! wv-app 每帧 `ctx.set_visuals(...)` 幂等写入——切换明暗时
-//! 只是换了令牌来源，幂等写入天然支持热切换（规格 §「双缓冲热交换」的简化版）。
+//! wv-app 在 `UiShellConfig` 变化时调用 [`apply_ui_theme`] 幂等写入——
+//! 切换明暗时只是换了令牌来源，幂等写入天然支持热切换（规格 §「双缓冲热交换」的简化版）。
 
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -70,8 +70,16 @@ pub fn margin_xy(x: f32, y: f32) -> egui::Margin {
 ///
 /// 只配置**界面外壳**会用到的槽位；地图、世界高亮一律不经过 egui
 /// （D2：世界色归世界）。
+///
+/// 基底随主题选 `Visuals::dark()` / `Visuals::light()`：基底决定未显式覆写槽位
+/// （超链接色、文本颜色变换等）的默认值。此前一律从暗色基底起步，亮色主题会
+/// 残留暗色默认值。
 pub fn build_visuals(palette: ShellPalette) -> egui::Visuals {
-    let mut v = egui::Visuals::dark();
+    let mut v = if palette.is_dark() {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
 
     // 底色层级：app < panel < raised < hover < active。
     v.panel_fill = color32(palette.bg_panel);
@@ -123,6 +131,25 @@ pub fn build_visuals(palette: ShellPalette) -> egui::Visuals {
     };
 
     v
+}
+
+/// 把当前主题写入 egui 上下文（**幂等**，只在 `UiShellConfig` 变化时调用）。
+///
+/// 做两件事：
+/// 1. `ctx.set_theme(...)` —— 让 egui 自己知道当前是暗/亮，后续新建的菜单、
+///    弹窗、滚动条、输入框等系统控件都按对应风格绘制；
+/// 2. `ctx.set_visuals_of(...)` —— 把**壳层令牌**投影进这套风格，覆盖 egui 默认色。
+///
+/// 两套主题都写：`set_visuals_of` 是按主题归档的，这样任何 `style_of(Theme::X)`
+/// 取值处都不会拿到 egui 默认色（避免亮色模式下某个回调仍按暗色样式画）。
+pub fn apply_ui_theme(ctx: &egui::Context, cfg: &UiShellConfig) {
+    ctx.set_theme(cfg.theme.egui_theme());
+    for theme in [UiTheme::Dark, UiTheme::Light] {
+        ctx.set_visuals_of(
+            theme.egui_theme(),
+            build_visuals(ShellPalette::for_theme(theme)),
+        );
+    }
 }
 
 /// 由密度档生成 egui 字体尺寸阶梯（§2.3：7 级）。
@@ -194,6 +221,36 @@ mod tests {
             light.selection.stroke.color,
             ShellPalette::DARK.focus.to_color32(),
             "亮色焦点环不得复用暗色金色（白底仅 1.62:1）"
+        );
+    }
+
+    #[test]
+    fn visuals_start_from_the_base_matching_the_palette() {
+        // 基底决定未覆写槽位（超链接 / 文本变换）的默认值，不能一律暗色起步。
+        assert!(build_visuals(ShellPalette::DARK).dark_mode);
+        assert!(!build_visuals(ShellPalette::LIGHT).dark_mode);
+    }
+
+    #[test]
+    fn apply_ui_theme_drives_context_theme_and_shell_visuals() {
+        let ctx = egui::Context::default();
+        apply_ui_theme(
+            &ctx,
+            &UiShellConfig {
+                theme: UiTheme::Light,
+                density: UiDensity::Cozy,
+            },
+        );
+        assert_eq!(ctx.theme(), egui::Theme::Light);
+        assert_eq!(
+            ctx.style_of(egui::Theme::Light).visuals.panel_fill,
+            ShellPalette::LIGHT.bg_panel.to_color32(),
+            "亮色上下文的面板底必须来自 LIGHT 令牌"
+        );
+        assert_eq!(
+            ctx.style_of(egui::Theme::Dark).visuals.panel_fill,
+            ShellPalette::DARK.bg_panel.to_color32(),
+            "两套样式都要写入，避免任何 style_of 取值处拿到 egui 默认色"
         );
     }
 

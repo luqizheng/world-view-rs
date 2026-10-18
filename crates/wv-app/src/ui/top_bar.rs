@@ -4,7 +4,7 @@
 //! - `top_bar` —— web `grid: 1fr auto 1fr` 三区：左 = 项目按钮（蓝 logo +
 //!   粗体名 + 下翻箭头，见 [`super::project_menu`]）+ 面包屑；**中 = Browse /
 //!   Edit 分段 + 地图主题分段 + Rebuild 按钮（独立 Area 锚视口顶部居中）**；
-//!   右 = zoom / entities / 脏态徽标 / ⌘K 按钮。
+//!   右 = zoom / entities / 脏态徽标 / ⌘K 按钮 / 语言选择器 / **日夜模式按钮**。
 //! - `status_bar`（2026-10-16 按 Figma `Untitled` #3:21001 重做）——
 //!   左 = `WORLD–VIEW` + 版本 + 工程目录名；中 = 光标世界坐标 X/Y +
 //!   经纬度（真实地理图才有）+ EPSG；右 = 对象计数 + 选中数 + 警告徽标 +
@@ -28,7 +28,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use crate::i18n::CurrentLocale;
+use crate::i18n::{CurrentLocale, I18nKey};
 use crate::state::{
     DrillState, RecentProject, RecentProjects, ViewMode, ViewState, WorldProjection,
 };
@@ -38,7 +38,8 @@ use crate::theme::ui_theme::{color32, color32_alpha, mono, UiShellConfig};
 use super::project_menu::{project_menu_inner, ProjectMenuState};
 use super::shell::UiShell;
 use super::widgets::{
-    badge, icon_image, BadgeKind, ICON_CHEVRON_RIGHT, ICON_COMMAND, ICON_FOLDER_OPEN, ICON_REFRESH,
+    badge, icon_image, BadgeKind, ICON_CHEVRON_RIGHT, ICON_COMMAND, ICON_FOLDER_OPEN, ICON_MOON,
+    ICON_REFRESH, ICON_SUN,
 };
 use crate::theme::ui_tokens::{font_size, radius, space};
 use crate::ui::widgets::segmented_control::segmented;
@@ -48,7 +49,7 @@ use crate::ui_command_palette::CommandId;
 #[allow(clippy::too_many_arguments)]
 pub fn top_bar(
     mut contexts: EguiContexts,
-    shell_cfg: Res<UiShellConfig>,
+    mut shell_cfg: ResMut<UiShellConfig>,
     projection: Res<WorldProjection>,
     recents_res: Res<RecentProjects>,
     mut menu: ResMut<ProjectMenuState>,
@@ -96,7 +97,14 @@ pub fn top_bar(
                 // ── 右区：zoom / entities / 脏态徽标 / ⌘K（web .top-right，
                 //    L→R 次序 zoom→entities→badge→⌘K，故 RTL 添加序相反）──
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    readout_segment(ui, &shell, &view, &projection, &mut current_loc);
+                    readout_segment(
+                        ui,
+                        &shell,
+                        &view,
+                        &projection,
+                        &mut current_loc,
+                        &mut shell_cfg,
+                    );
                 });
             });
         });
@@ -246,9 +254,16 @@ fn readout_segment(
     view: &ViewState,
     projection: &WorldProjection,
     current_loc: &mut CurrentLocale,
+    shell_cfg: &mut UiShellConfig,
 ) {
     // 右至左排布；web `.top-right` 从左到右是 zoom / entities / 脏态徽标 / ⌘K，
-    // 故本段添加顺序：⌘K → 脏态 → entities → zoom，间距 12px（web gap）。
+    // 故本段添加顺序：日夜 → 语言 → ⌘K → 脏态 → entities → zoom，间距 12px（web gap）。
+
+    // 日夜模式按钮（2026-10-18）：图标表示**点击后要去**的模式——暗色时显示太阳，
+    // 亮色时显示月亮。只切界面外壳（`UiShellConfig`），不碰 `view.map_palette`
+    // 的地图配色（D2：世界色归世界、界面色归界面）。
+    theme_toggle_button(ui, shell, shell_cfg, current_loc);
+    ui.add_space(space::LG);
 
     // 语言选择器（ADR-0018）：最右端。按钮显示单字（Zh=「简」/ En=「EN」），
     // 点击弹出全名菜单（简体中文 / English）。`menu_button` 即
@@ -322,6 +337,37 @@ fn readout_segment(
             .color(shell.t2())
             .font(mono(shell.scale.small)),
     );
+}
+
+/// 日夜模式切换按钮（图标表示**点击后**的模式）。
+///
+/// 放在顶栏右侧读数段（与语言选择器相邻）：这是应用级外观开关，不是地图主题——
+/// 地图主题仍是中区的 `Dusk Old Paper / Sunlit Ancient Atlas` 分段，两者互不影响。
+/// 点击只写 [`UiShellConfig::theme`]；真正投影到 egui 由
+/// [`crate::ui_shell`] 的 `apply_ui_theme` 在 `PreUpdate` 统一完成。
+fn theme_toggle_button(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    cfg: &mut UiShellConfig,
+    current_loc: &CurrentLocale,
+) {
+    let (icon, hint) = if cfg.theme.is_dark() {
+        (ICON_SUN, I18nKey::TopBarSwitchToDay)
+    } else {
+        (ICON_MOON, I18nKey::TopBarSwitchToNight)
+    };
+    let resp = ui
+        .add(
+            egui::Button::image(icon_image(icon, shell.t2(), shell.hit - 8.0))
+                .min_size(egui::vec2(shell.hit, shell.hit))
+                .fill(shell.raised_bg())
+                .stroke(egui::Stroke::new(1.0, color32(shell.palette.border_subtle)))
+                .corner_radius(radius::CONTROL),
+        )
+        .on_hover_text(crate::i18n::t_key(current_loc, hint));
+    if resp.clicked() {
+        cfg.theme = cfg.theme.toggled();
+    }
 }
 
 fn count_entities(projection: &WorldProjection) -> usize {

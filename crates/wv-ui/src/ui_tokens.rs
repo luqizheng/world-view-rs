@@ -28,11 +28,41 @@ pub enum UiTheme {
 }
 
 impl UiTheme {
-    /// 切换明暗（`Ctrl+J`）。
+    /// 切换明暗（`Ctrl+J` / 顶栏日夜按钮）。
     pub fn toggled(self) -> Self {
         match self {
             UiTheme::Dark => UiTheme::Light,
             UiTheme::Light => UiTheme::Dark,
+        }
+    }
+
+    /// 是否为夜间（暗色）模式。
+    pub fn is_dark(self) -> bool {
+        matches!(self, UiTheme::Dark)
+    }
+
+    /// 持久化键（`ui-layout.yaml#theme`）。与 [`Self::from_key`] 成对，禁止就地写裸字符串。
+    pub fn key(self) -> &'static str {
+        match self {
+            UiTheme::Dark => "dark",
+            UiTheme::Light => "light",
+        }
+    }
+
+    /// 从持久化键解析；不可识别返回 `None`（V1：静默回退当前值，不阻塞加载）。
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "dark" => Some(UiTheme::Dark),
+            "light" => Some(UiTheme::Light),
+            _ => None,
+        }
+    }
+
+    /// 投影成 egui 的主题偏好（控制 `Context::theme()` 与系统控件取哪套样式）。
+    pub fn egui_theme(self) -> bevy_egui::egui::Theme {
+        match self {
+            UiTheme::Dark => bevy_egui::egui::Theme::Dark,
+            UiTheme::Light => bevy_egui::egui::Theme::Light,
         }
     }
 }
@@ -53,6 +83,23 @@ impl UiDensity {
         match self {
             UiDensity::Cozy => UiDensity::Compact,
             UiDensity::Compact => UiDensity::Cozy,
+        }
+    }
+
+    /// 持久化键（`ui-layout.yaml#density`）。
+    pub fn key(self) -> &'static str {
+        match self {
+            UiDensity::Cozy => "cozy",
+            UiDensity::Compact => "compact",
+        }
+    }
+
+    /// 从持久化键解析；不可识别返回 `None`（V1：静默忽略）。
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "cozy" => Some(UiDensity::Cozy),
+            "compact" => Some(UiDensity::Compact),
+            _ => None,
         }
     }
 
@@ -479,6 +526,15 @@ impl ShellPalette {
         }
     }
 
+    /// 这套令牌是否属于暗色主题。
+    ///
+    /// 由底色亮度推断而不是存一个布尔字段：令牌表是规格投影，主题名不进色表；
+    /// `build_visuals` 需要它来选择 `egui::Visuals::dark()/light()` 基底
+    /// （基底决定未显式覆写槽位的默认值，比如超链接色与文本色变换）。
+    pub fn is_dark(self) -> bool {
+        self.bg_app.relative_luminance() < 0.5
+    }
+
     /// 浮层底色（`ui.bg.float`）连同其标定过的不透明度。
     pub fn float_fill(self) -> (Rgb, f32) {
         (self.bg_float, self.float_alpha)
@@ -501,6 +557,32 @@ mod tests {
     fn theme_toggle_round_trips() {
         assert_eq!(UiTheme::Dark.toggled(), UiTheme::Light);
         assert_eq!(UiTheme::Light.toggled(), UiTheme::Dark);
+    }
+
+    #[test]
+    fn theme_persistence_keys_round_trip() {
+        for theme in [UiTheme::Dark, UiTheme::Light] {
+            assert_eq!(UiTheme::from_key(theme.key()), Some(theme));
+        }
+        // V1：不可识别的键静默忽略，由调用方保留当前值。
+        assert_eq!(UiTheme::from_key("parchment"), None);
+        assert_eq!(UiTheme::from_key(""), None);
+    }
+
+    #[test]
+    fn density_persistence_keys_round_trip() {
+        for density in [UiDensity::Cozy, UiDensity::Compact] {
+            assert_eq!(UiDensity::from_key(density.key()), Some(density));
+        }
+        assert_eq!(UiDensity::from_key("roomy"), None);
+    }
+
+    #[test]
+    fn palette_darkness_follows_the_theme() {
+        assert!(ShellPalette::DARK.is_dark());
+        assert!(!ShellPalette::LIGHT.is_dark());
+        assert!(UiTheme::Dark.is_dark());
+        assert!(!UiTheme::Light.is_dark());
     }
 
     #[test]

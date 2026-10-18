@@ -152,7 +152,8 @@ impl<'a> FloatWindow<'a> {
             .title_bar(false)
             .order(self.order)
             .frame(
-                egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
+                // 跟随应用当前日夜模式（亮色下面板阴影走亮色样式）。
+                egui::Frame::window(&ctx.style_of(ctx.theme()))
                     .fill(shell.panel_bg().gamma_multiply(self.alpha))
                     .stroke(egui::Stroke::new(1.0_f32, shell.border_strong()))
                     .inner_margin(crate::ui_theme::margin_all(0.0))

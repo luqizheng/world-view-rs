@@ -130,7 +130,8 @@ pub fn welcome_screen(
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .default_width(CARD_WIDTH)
         .frame(
-            egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
+            // 跟随应用当前日夜模式（亮色下阴影/圆角取亮色样式）。
+            egui::Frame::window(&ctx.style_of(ctx.theme()))
                 .fill(shell.panel_bg())
                 .stroke(egui::Stroke::new(1.0_f32, shell.border_subtle()))
                 .inner_margin(egui::Margin::same(CARD_PADDING as i8))

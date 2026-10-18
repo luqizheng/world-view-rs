@@ -71,7 +71,8 @@ pub fn command_palette(
         .title_bar(false)
         .resizable(false)
         .frame(
-            egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
+            // 跟随应用当前日夜模式，而不是钉死暗色（否则亮色下弹窗边框/阴影走暗色默认值）。
+            egui::Frame::window(&ctx.style_of(ctx.theme()))
                 .fill(shell.panel_bg())
                 .stroke(egui::Stroke::new(1.0_f32, shell.border_strong()))
                 .inner_margin(crate::theme::ui_theme::margin_all(space::MD))

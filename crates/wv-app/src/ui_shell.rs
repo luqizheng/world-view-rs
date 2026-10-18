@@ -25,7 +25,7 @@
 //!
 //! ## 职责分段（grep `// ── 段名 ──` 可快速跳转）
 //!
-//! 1. `register` 装配；2. DrillState 同步；3. hotkeys 快捷键；
+//! 1. `register` 装配；2. DrillState 同步；3. hotkeys 快捷键 + 日夜主题投影；
 //! 4. 文件 / 目录对话框任务；5. 启动期工程接管；6. 保存落盘；
 //! 7. **唯一**命令分发器；8. 布局写盘。
 //!
@@ -43,7 +43,7 @@ use crate::state::{
 };
 use crate::theme::palette::MapPalette;
 use crate::theme::ui_theme::UiShellConfig;
-use crate::theme::ui_tokens::{UiDensity, UiTheme};
+use crate::theme::ui_tokens::UiTheme;
 use crate::ui_command_palette::{CommandId, CommandPalette};
 use crate::ui_layout::LayoutFile;
 use wv_render::terrain_view::{TerrainTexture, TileAtlas};
@@ -75,6 +75,9 @@ pub fn register(app: &mut App) {
             (
                 seed_drill_state,
                 hotkeys.after(bevy_egui::EguiPreUpdateSet::InitContexts),
+                // 主题投影必须晚于 hotkeys（Ctrl+J 同帧生效）、早于所有 UI 绘制。
+                // 只在 `UiShellConfig` 变化时写 egui，避免每帧重建样式。
+                apply_ui_theme.after(hotkeys),
                 poll_open_project_dialog,
             ),
         )
@@ -84,8 +87,11 @@ pub fn register(app: &mut App) {
             (
                 apply_pending_commands,
                 sync_drill_mirror,
-                load_layout_on_project_open,
-                persist_layout_on_change,
+                // **必须先读后写**：两者都拿 `LayoutFile`，无序时 persist 可能抢先
+                // 用「默认 Dark」把磁盘上的 `theme: light` 覆盖掉，随后 load 读到的
+                // 就是它自己刚写坏的默认值（打开工程永远回不到用户上次的日夜模式）。
+                (load_layout_on_project_open, persist_layout_on_change).chain(),
+                sync_window_clear_color,
             ),
         )
         // bevy_egui 0.42：UI 系统进 pass 调度（见 gui.rs 同款注释）；
@@ -250,6 +256,36 @@ fn hotkeys(
     if input.key_pressed(bevy_egui::egui::Key::F5) {
         palette.pending = Some(CommandId::ForceRebuildTexture);
     }
+}
+
+/// 把 [`UiShellConfig`] 投影进 egui 上下文（日夜模式的**唯一**全局写入口）。
+///
+/// 只在配置变化时执行：`Res::is_changed()` 覆盖「资源首次加入」与「切换主题」
+/// 两种情形。写入内容见 [`wv_ui::ui_theme::apply_ui_theme`]——`set_theme` 决定
+/// egui 自带控件取哪套风格，`set_visuals_of` 把令牌投影上去。
+///
+/// 这里只改**界面外壳**；地图配色走 [`MapPalette`]（`ViewState::map_palette`），
+/// 两条线互不影响（D2：世界色归世界、界面色归界面）。
+fn apply_ui_theme(mut contexts: EguiContexts, cfg: Res<UiShellConfig>) {
+    if !cfg.is_changed() {
+        return;
+    }
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
+    wv_ui::ui_theme::apply_ui_theme(ctx, &cfg);
+}
+
+/// 窗口清屏色跟随界面外壳底色（日夜模式切换时）。
+///
+/// 清屏色只在**地图外**可见（地图铺满时被完全盖住），属于应用外壳而非地图配色；
+/// 亮色模式下若仍留着暗色底，窗口边缘会有一圈割裂的黑边。
+fn sync_window_clear_color(cfg: Res<UiShellConfig>, mut clear: ResMut<ClearColor>) {
+    if !cfg.is_changed() {
+        return;
+    }
+    let bg = cfg.palette().bg_app;
+    *clear = ClearColor(Color::srgb(bg.r, bg.g, bg.b));
 }
 
 /// 一次用户可见的操作结果回执（成功 / 失败都显示）。
@@ -1366,16 +1402,24 @@ fn apply_pending_commands(
 /// 打开工程时读回 `ui-layout.yaml` 里**当前已落盘的 layout 偏好**。
 ///
 /// 当前覆盖：
+/// - `theme`（2026-10-18：界面日夜模式，`dark` / `light`）
 /// - `map_theme`（ADR-0016：日间 / 暮色）
 /// - `language`（ADR-0018：zh / en，注入 `CurrentLocale`）
 ///
+/// 界面 theme 与地图 map_theme 是两条独立的线（D2）：前者只影响外壳与 egui
+/// 系统控件，后者只影响地图配色。不可识别值静默保留当前值（V1，不阻塞加载）。
+///
+/// **追加说明（2026-10-18）**：此前本系统刻意不读回软件壳 `theme` / `density`，
+/// 理由是「避免修一个字段扩成激活整套壳配置」。日夜模式落地后，`theme` 必须随
+/// 工程恢复（否则按钮切完下次打开又回到默认）；`density` 仍不读回，保持原状，
+/// 待单独裁定。
+///
 /// 面板几何由 egui 自带的窗口记忆按 panel id 接管，不属于本函数职责。
-/// 软件壳 theme / density 的读回是独立待决（README §12-32），本系统刻意不碰，
-/// 避免「修一个字段」扩成「激活整套壳配置」。
 fn load_layout_on_project_open(
     project: Res<WorldProjection>,
     mut layout: ResMut<LayoutFile>,
     mut view: ResMut<ViewState>,
+    mut shell_cfg: ResMut<UiShellConfig>,
     mut current_loc: ResMut<CurrentLocale>,
     mut loaded_dir: Local<Option<String>>,
 ) {
@@ -1389,6 +1433,9 @@ fn load_layout_on_project_open(
         return;
     };
     let file = LayoutFile::load(&path);
+    if let Some(theme) = file.theme.as_deref().and_then(UiTheme::from_key) {
+        shell_cfg.theme = theme;
+    }
     if let Some(t) = file.map_theme.as_deref().and_then(MapPalette::from_key) {
         view.map_palette = t;
     }
@@ -1420,14 +1467,8 @@ fn persist_layout_on_change(
     };
 
     let mut file = (*layout).clone();
-    file.theme = Some(match cfg.theme {
-        UiTheme::Dark => "dark".into(),
-        UiTheme::Light => "light".into(),
-    });
-    file.density = Some(match cfg.density {
-        UiDensity::Cozy => "cozy".into(),
-        UiDensity::Compact => "compact".into(),
-    });
+    file.theme = Some(cfg.theme.key().into());
+    file.density = Some(cfg.density.key().into());
     file.map_theme = Some(view.map_palette.key().to_string());
     file.language = Some(current_loc.0.as_str().to_string());
 

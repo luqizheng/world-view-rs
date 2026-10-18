@@ -179,7 +179,8 @@ pub fn panel_timeline(
         .resizable(true)
         .title_bar(false)
         .frame(
-            egui::Frame::window(&ctx.style_of(egui::Theme::Dark))
+            // 跟随应用当前日夜模式（面板底仍由 shell 令牌决定）。
+            egui::Frame::window(&ctx.style_of(ctx.theme()))
                 .fill(shell.panel_bg().gamma_multiply(alpha))
                 .stroke(egui::Stroke::new(1.0_f32, shell.border_strong()))
                 // web 的顶排底线 / 轨道网格都是通栏的：面板内容零内边距，

@@ -39,6 +39,8 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::TopBarUnsavedSubtitle => "有未保存的改动",
         I18nKey::TopBarForceRedrawTooltip => "强制重画地形（F5）",
         I18nKey::TopBarNoProjectLoaded => "工程未加载",
+        I18nKey::TopBarSwitchToDay => "切换到界面日间模式（Ctrl+J）",
+        I18nKey::TopBarSwitchToNight => "切换到界面夜间模式（Ctrl+J）",
 
         // ── 顶栏右侧计数（拆为纯片段） ──
         I18nKey::TopBarCountUnits => "Unit",
@@ -411,7 +413,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CmdTogglePlay => "播放 / 暂停时间轴",
         I18nKey::CmdJumpToStart => "跳到时间轴起点",
         I18nKey::CmdJumpToEnd => "跳到时间轴终点",
-        I18nKey::CmdToggleTheme => "切换明暗主题",
+        I18nKey::CmdToggleTheme => "切换界面日间 / 夜间模式",
         I18nKey::CmdToggleDensity => "切换紧凑 / 标准密度",
         I18nKey::CmdToggleMapPalette => "切换地图主题（日间古舆图 / 暮色旧纸）",
         I18nKey::CmdForceRebuildTexture => "强制重画地形（怀疑没跟上时点一下）",
@@ -557,6 +559,8 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::TopBarUnsavedSubtitle => "There are unsaved changes",
         I18nKey::TopBarForceRedrawTooltip => "Force redraw terrain (F5)",
         I18nKey::TopBarNoProjectLoaded => "No project loaded",
+        I18nKey::TopBarSwitchToDay => "Switch UI to day mode (Ctrl+J)",
+        I18nKey::TopBarSwitchToNight => "Switch UI to night mode (Ctrl+J)",
 
         // ── Top bar status counts (split into plain fragments) ──
         I18nKey::TopBarCountUnits => "Unit",
@@ -937,7 +941,7 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CmdTogglePlay => "Play / pause timeline",
         I18nKey::CmdJumpToStart => "Jump to timeline start",
         I18nKey::CmdJumpToEnd => "Jump to timeline end",
-        I18nKey::CmdToggleTheme => "Toggle light / dark theme",
+        I18nKey::CmdToggleTheme => "Toggle UI day / night mode",
         I18nKey::CmdToggleDensity => "Toggle compact / standard density",
         I18nKey::CmdToggleMapPalette => "Toggle map theme (Daylight Antique / Dusk Old Paper)",
         I18nKey::CmdForceRebuildTexture => "Force terrain redraw (when the image lags)",

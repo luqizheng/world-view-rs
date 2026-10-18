@@ -761,6 +761,12 @@ pub const ICON_LAKE: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/lake.svg");
 pub const ICON_RIVER: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/river.svg");
+/// 日间模式（Lucide `sun`）：暗色下点击切到亮色。
+pub const ICON_SUN: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/sun.svg");
+/// 夜间模式（Lucide `moon`）：亮色下点击切到暗色。
+pub const ICON_MOON: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/moon.svg");
 
 // ── 测试 ─────────────────────────────────────────────────────────────────
 

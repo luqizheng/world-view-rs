@@ -62,6 +62,10 @@ pub enum I18nKey {
     TopBarForceRedrawTooltip,
     /// 「工程未加载」红色 badge
     TopBarNoProjectLoaded,
+    /// 顶栏日夜按钮 tooltip——当前暗色，点击切到日间
+    TopBarSwitchToDay,
+    /// 顶栏日夜按钮 tooltip——当前亮色，点击切到夜间
+    TopBarSwitchToNight,
 
     // ── 顶栏右侧计数（拆为不带占位符的纯片段，按 ADR-0018 用户裁定
     //    「调用点负责 format!」）────────────────────────────────
@@ -1005,7 +1009,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 414] = [
+    pub const ALL: [I18nKey; 416] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1038,13 +1042,15 @@ impl I18nKey {
         I18nKey::CommonNew,
         I18nKey::CommonUnknown,
         I18nKey::CommonDeleteEntire,
-        // 顶栏（6）
+        // 顶栏（8）
         I18nKey::TopBarUnsaved,
         I18nKey::TopBarSaved,
         I18nKey::TopBarUnsavedDot,
         I18nKey::TopBarUnsavedSubtitle,
         I18nKey::TopBarForceRedrawTooltip,
         I18nKey::TopBarNoProjectLoaded,
+        I18nKey::TopBarSwitchToDay,
+        I18nKey::TopBarSwitchToNight,
         // 顶栏右侧计数（拆为不带占位符的纯片段，6）
         I18nKey::TopBarCountUnits,
         I18nKey::TopBarCountCharacters,
