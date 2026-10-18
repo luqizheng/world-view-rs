@@ -72,9 +72,59 @@ pub type Biome = u8;
 /// 迁入本模块（三通道后分带不再需要它，显示投影仍需要）。
 const SHALLOW_WATER_MAX_DEPTH_M: i16 = -200;
 
+/// 群系族（ADR-0032 D2）：主题覆盖物等**演绎规则**的键粒度。
+///
+/// 冻结群系表 21 编号按 `display_kind` 陆面槽位语义划分为八族 + 水域族，
+/// 划分**穷尽**全部编号：同族陆面群系同槽位（不变式由测试
+/// `slot_partition_refines_family_partition` 钉死）。主题包以族为规则键——
+/// 写一条 `Forest` 规则即覆盖森林/丛林/热带雨林三群系，杜绝旧数字键
+/// 「写 1 漏 10/11」的碎裂。未来新增群系编号必须归入既有族或新开族
+/// （后者是 ADR 事件）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BiomeFamily {
+    /// 森林族：森林(1)、丛林(10)、热带雨林(11)。
+    Forest,
+    /// 草原族：平原(2)、草原(3)、绿洲(17)、稀树草原(18)。
+    Grassland,
+    /// 干旱族：戈壁(4)、沙漠(5)、盐碱地(19)。
+    Desert,
+    /// 湿地族：沼泽(6)、湿地(7)。
+    Wetland,
+    /// 寒带族：苔原(8)、雪原(9)。
+    Cold,
+    /// 高地族：丘陵(12)、山地(13)。
+    Highland,
+    /// 水域族：海洋(14)、湖泊(15)、河流(16)。
+    Water,
+    /// 道路族：道路(20)。
+    Road,
+}
+
+/// 群系编号 → 所属族；`BIOME_NONE`(0) 与未登记编号（开放集）返回 `None`。
+///
+/// 族界与 [`display_kind`] 的陆面槽位分带逐槽对齐（绿洲入草原族即从该
+/// 先例）；`is_forest_family` 经此单源实现。
+pub fn family_of(b: Biome) -> Option<BiomeFamily> {
+    match b {
+        BIOME_FOREST | BIOME_JUNGLE | BIOME_TROPICAL_RAINFOREST => Some(BiomeFamily::Forest),
+        BIOME_PLAINS | BIOME_GRASSLAND | BIOME_SAVANNA | BIOME_OASIS => {
+            Some(BiomeFamily::Grassland)
+        }
+        BIOME_GOBI | BIOME_DESERT | BIOME_SALT_FLAT => Some(BiomeFamily::Desert),
+        BIOME_SWAMP | BIOME_WETLAND => Some(BiomeFamily::Wetland),
+        BIOME_TUNDRA | BIOME_SNOWFIELD => Some(BiomeFamily::Cold),
+        BIOME_HILLS | BIOME_MOUNTAINS => Some(BiomeFamily::Highland),
+        BIOME_OCEAN | BIOME_LAKE | BIOME_RIVER => Some(BiomeFamily::Water),
+        BIOME_ROAD => Some(BiomeFamily::Road),
+        _ => None,
+    }
+}
+
 /// 森林族（森林 / 丛林 / 热带雨林）：主题覆盖物与近景符号共用的判定。
+///
+/// ADR-0032 后经 [`family_of`] 单源实现（`Some(BiomeFamily::Forest)`）。
 pub fn is_forest_family(b: Biome) -> bool {
-    matches!(b, BIOME_FOREST | BIOME_JUNGLE | BIOME_TROPICAL_RAINFOREST)
+    matches!(family_of(b), Some(BiomeFamily::Forest))
 }
 
 /// 群系的默认地表：海洋/湖泊/河流是水，其余（含 `NONE`）按陆处理。
@@ -206,5 +256,101 @@ mod tests {
         assert_eq!(surface_for_biome(BIOME_RIVER), SURFACE_WATER);
         assert_eq!(surface_for_biome(BIOME_FOREST), SURFACE_LAND);
         assert_eq!(surface_for_biome(BIOME_NONE), SURFACE_LAND);
+    }
+
+    // -----------------------------------------------------------------------
+    // 群系族（ADR-0032 D2）
+    // -----------------------------------------------------------------------
+
+    /// 冻结表 21 编号的期望族归属，逐条断言（含 NONE → None）。
+    #[test]
+    fn family_of_covers_every_frozen_biome_id() {
+        assert_eq!(family_of(BIOME_NONE), None, "NONE 无族");
+        assert_eq!(family_of(BIOME_FOREST), Some(BiomeFamily::Forest));
+        assert_eq!(family_of(BIOME_JUNGLE), Some(BiomeFamily::Forest));
+        assert_eq!(
+            family_of(BIOME_TROPICAL_RAINFOREST),
+            Some(BiomeFamily::Forest)
+        );
+        assert_eq!(family_of(BIOME_PLAINS), Some(BiomeFamily::Grassland));
+        assert_eq!(family_of(BIOME_GRASSLAND), Some(BiomeFamily::Grassland));
+        assert_eq!(family_of(BIOME_OASIS), Some(BiomeFamily::Grassland));
+        assert_eq!(family_of(BIOME_SAVANNA), Some(BiomeFamily::Grassland));
+        assert_eq!(family_of(BIOME_GOBI), Some(BiomeFamily::Desert));
+        assert_eq!(family_of(BIOME_DESERT), Some(BiomeFamily::Desert));
+        assert_eq!(family_of(BIOME_SALT_FLAT), Some(BiomeFamily::Desert));
+        assert_eq!(family_of(BIOME_SWAMP), Some(BiomeFamily::Wetland));
+        assert_eq!(family_of(BIOME_WETLAND), Some(BiomeFamily::Wetland));
+        assert_eq!(family_of(BIOME_TUNDRA), Some(BiomeFamily::Cold));
+        assert_eq!(family_of(BIOME_SNOWFIELD), Some(BiomeFamily::Cold));
+        assert_eq!(family_of(BIOME_HILLS), Some(BiomeFamily::Highland));
+        assert_eq!(family_of(BIOME_MOUNTAINS), Some(BiomeFamily::Highland));
+        assert_eq!(family_of(BIOME_OCEAN), Some(BiomeFamily::Water));
+        assert_eq!(family_of(BIOME_LAKE), Some(BiomeFamily::Water));
+        assert_eq!(family_of(BIOME_RIVER), Some(BiomeFamily::Water));
+        assert_eq!(family_of(BIOME_ROAD), Some(BiomeFamily::Road));
+    }
+
+    /// 开放集的未登记编号（≥ 21）无族——主题包自定群系不落入内置规则。
+    #[test]
+    fn family_of_returns_none_for_unregistered_ids() {
+        for b in [21u8, 42, 100, 255] {
+            assert_eq!(family_of(b), None, "编号 {b} 应无族");
+        }
+    }
+
+    /// 森林族判定与 `family_of` 单源一致：全编号域上
+    /// `is_forest_family(b) == (family_of(b) == Some(Forest))`。
+    #[test]
+    fn is_forest_family_agrees_with_family_of_forest() {
+        for b in 0..=255u8 {
+            assert_eq!(
+                is_forest_family(b),
+                family_of(b) == Some(BiomeFamily::Forest),
+                "编号 {b} 两口径不一致"
+            );
+        }
+    }
+
+    /// 不变式（ADR-0032 D2）：槽位划分**细分**族划分——同槽位的两个陆面
+    /// 群系必同族（高地族横跨丘陵/山地两槽位是唯一允许的合并方向）。
+    #[test]
+    fn slot_partition_refines_family_partition() {
+        let land: [Biome; 16] = [
+            BIOME_FOREST,
+            BIOME_JUNGLE,
+            BIOME_TROPICAL_RAINFOREST,
+            BIOME_PLAINS,
+            BIOME_GRASSLAND,
+            BIOME_OASIS,
+            BIOME_SAVANNA,
+            BIOME_GOBI,
+            BIOME_DESERT,
+            BIOME_SALT_FLAT,
+            BIOME_SWAMP,
+            BIOME_WETLAND,
+            BIOME_TUNDRA,
+            BIOME_SNOWFIELD,
+            BIOME_HILLS,
+            BIOME_MOUNTAINS,
+        ];
+        let cell = |b: Biome| TerrainCell {
+            height: 100,
+            surface: SURFACE_LAND,
+            biome: b,
+        };
+        for a in land {
+            for b in land {
+                let slot_a = display_kind(&cell(a));
+                let slot_b = display_kind(&cell(b));
+                if slot_a == slot_b {
+                    assert_eq!(
+                        family_of(a),
+                        family_of(b),
+                        "槽位相同（{slot_a}）的 {a} 与 {b} 必须同族"
+                    );
+                }
+            }
+        }
     }
 }
