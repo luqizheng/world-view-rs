@@ -36,12 +36,14 @@ use wv_ui::shell::UiShell;
 use wv_ui::ui_tokens::{font_size, space, UiDensity, UiTheme};
 use wv_ui::widgets::{
     badge, breadcrumb, button, checkbox_state, divider, dropdown_box, empty_state, icon_button,
-    inline_alert, keycap, layer_row, list_item, loading, menu_item, numeric_input, option_menu,
-    progress, radio, search_input, segmented_control::segmented, slider_row, slider_row_brush,
-    slider_row_disabled, tabs, text_area, toolbar_tool, tree_row, value_box, value_unit, AlertKind,
-    BadgeKind, ButtonContent, ButtonStyle, CheckState, DialogWindow, FieldInput, FieldSelect,
-    FloatWindow, HeadIcon, MenuState, PropertyRow, Switch, ICON_BRUSH, ICON_CHECK, ICON_GRID,
-    ICON_MAP_PIN, ICON_MAXIMIZE, ICON_MOUSE_POINTER, ICON_PLAY, ICON_PLUS, ICON_RULER, ICON_TRASH,
+    inline_alert, keycap, layer_panel, layer_row, list_item, loading, menu_item, numeric_input,
+    option_menu, progress, radio, search_input, segmented_control::segmented, slider_row,
+    slider_row_brush, slider_row_disabled, tabs, text_area, toolbar_tool, tree_row, value_box,
+    value_unit, AlertKind, BadgeKind, ButtonContent, ButtonStyle, CheckState, DialogWindow,
+    FieldInput, FieldSelect, FloatWindow, HeadIcon, LayerEntry, LayerPanelAction, LayerPanelState,
+    MenuState, PropertyRow, Switch, ICON_BRUSH, ICON_CHECK, ICON_GRID, ICON_IMAGE, ICON_LANDMARK,
+    ICON_LAYERS, ICON_MAP_PIN, ICON_MAXIMIZE, ICON_MOUNTAIN, ICON_MOUSE_POINTER, ICON_PLAY,
+    ICON_PLUS, ICON_ROUTE, ICON_RULER, ICON_TRASH, ICON_TYPE, ICON_WAVES,
     ICON_ZOOM_IN as ICON_TOOL_ZOOM_IN, ICON_ZOOM_OUT as ICON_TOOL_ZOOM_OUT,
 };
 
@@ -75,6 +77,11 @@ struct GalleryState {
     brush: f32,
     numeric: f32,
     dialog_open: bool,
+    /// 图层样张：选中行 / 不透明度 / 可见性 / 锁定（纯展示）。
+    layer_selected: usize,
+    layer_opacity: f32,
+    layer_visible: [bool; 6],
+    layer_locked: [bool; 6],
 }
 
 impl Default for GalleryState {
@@ -99,6 +106,10 @@ impl Default for GalleryState {
             brush: 0.60,
             numeric: 842.0,
             dialog_open: false,
+            layer_selected: 1,
+            layer_opacity: 1.0,
+            layer_visible: [true, true, true, true, true, false],
+            layer_locked: [false, false, false, false, true, false],
         }
     }
 }
@@ -380,7 +391,7 @@ fn draw_gallery(mut contexts: EguiContexts, cfg: Res<UiShellConfig>, mut st: Loc
                     });
                     ui.add_space(space::LG);
 
-                    section(ui, &shell, "06 / 面板与外壳 Chrome", "PanelHeader / FloatingPanel / Divider / ZoomControl / Playback / EventRow / Selectors");
+                    section(ui, &shell, "06 / 面板与外壳 Chrome", "PanelHeader / FloatingPanel / LayerPanel / Divider / ZoomControl / Playback / EventRow / Selectors");
                     PropertyRow::new("Type", "Government").dropdown(true).show(ui, &shell);
                     ui.add_space(space::XS);
                     PropertyRow::new("Elevation", "842").suffix("m").show(ui, &shell);
@@ -462,6 +473,76 @@ fn draw_gallery(mut contexts: EguiContexts, cfg: Res<UiShellConfig>, mut st: Loc
                     menu_item(ui, &shell, Some(ICON_CHECK), "Verified", MenuState::Checked);
                     keycap(ui, &shell, "Ctrl+K");
                 });
+        });
+
+    // 图层样张：Figma `3:20892` Layers 的逐项对位（2026-10-18）——
+    // 动作行 `DRAW ORDER` + 6 行列表 + 分隔线 + 不透明度行。
+    FloatWindow::new("gallery_layers", "Layers")
+        .icon(HeadIcon::Svg(ICON_LAYERS))
+        .default_pos(egui::pos2(500.0, 560.0))
+        .default_size(egui::vec2(268.0, 324.0))
+        .show(ctx, &shell, |ui| {
+            let entries = vec![
+                LayerEntry {
+                    label: "Labels",
+                    count: Some(128),
+                    visible: st.layer_visible[0],
+                    locked: st.layer_locked[0],
+                    icon: ICON_TYPE,
+                },
+                LayerEntry {
+                    label: "Settlements",
+                    count: Some(42),
+                    visible: st.layer_visible[1],
+                    locked: st.layer_locked[1],
+                    icon: ICON_LANDMARK,
+                },
+                LayerEntry {
+                    label: "Roads & paths",
+                    count: Some(86),
+                    visible: st.layer_visible[2],
+                    locked: st.layer_locked[2],
+                    icon: ICON_ROUTE,
+                },
+                LayerEntry {
+                    label: "Rivers & water",
+                    count: Some(24),
+                    visible: st.layer_visible[3],
+                    locked: st.layer_locked[3],
+                    icon: ICON_WAVES,
+                },
+                LayerEntry {
+                    label: "Terrain",
+                    count: Some(1),
+                    visible: st.layer_visible[4],
+                    locked: st.layer_locked[4],
+                    icon: ICON_MOUNTAIN,
+                },
+                LayerEntry {
+                    label: "Reference sketch",
+                    count: Some(1),
+                    visible: st.layer_visible[5],
+                    locked: st.layer_locked[5],
+                    icon: ICON_IMAGE,
+                },
+            ];
+            let mut panel = LayerPanelState {
+                actions_label: "DRAW ORDER · TOP TO BOTTOM",
+                entries,
+                selected: st.layer_selected,
+                opacity: st.layer_opacity,
+            };
+            if let Some(action) = layer_panel(ui, &shell, &mut panel) {
+                match action {
+                    LayerPanelAction::Select(i) => st.layer_selected = i,
+                    LayerPanelAction::ToggleVisible(i) => {
+                        st.layer_visible[i] = !st.layer_visible[i]
+                    }
+                    LayerPanelAction::ToggleLocked(i) => st.layer_locked[i] = !st.layer_locked[i],
+                    LayerPanelAction::NewGroup | LayerPanelAction::NewLayer => {}
+                }
+            }
+            st.layer_opacity = panel.opacity;
         });
 
     if st.dialog_open {

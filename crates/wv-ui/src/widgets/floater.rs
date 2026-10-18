@@ -22,15 +22,18 @@ use bevy_egui::egui;
 use crate::ui_theme::{color32, proportional};
 use crate::ui_tokens::{font_size, radius, space};
 
-use super::primitives::{icon_image, BadgeKind};
+use super::primitives::{icon_image, BadgeKind, ICON_GRID};
 use crate::shell::UiShell;
 
-/// 浮窗头部图标源：既有面板的几何字符，或 Lucide SVG（Figma `42:2` 形态）。
+/// 浮窗头部图标源：几何字符（**遗留形态**），或 Lucide SVG（设计稿形态）。
+///
+/// `wv-app` 的 13 个面板已全部改用 [`HeadIcon::Svg`]（2026-10-18）——几何
+/// 字符里 ◈/◧/⬡ 在打包字体无字形、会落成豆腐块，`Char` 仅为外部调用兼容保留。
 #[derive(Clone)]
 pub enum HeadIcon {
-    /// 几何字符（`Panel::icon()` 现状），着 `t3` 弱色——存量面板观感不变。
+    /// 几何字符，着 `t2`。
     Char(&'static str),
-    /// Lucide SVG 图标（12×12），着 `t1`——设计稿头部图标与标题同亮。
+    /// Lucide SVG 图标（12×12），着 `t2`（Figma `3:22510` 描边 #A3B1BA）。
     Svg(egui::ImageSource<'static>),
 }
 
@@ -47,14 +50,17 @@ pub enum HeadIcon {
 /// —— egui 绘制序 `Background < Middle < Foreground < Tooltip`，故弹窗压
 /// 面板、悬浮提示仍在最上。新增浮层按此表对号入座。
 ///
-/// ## 结构规格（Figma `42:2` 采样 @1x）
+/// ## 结构规格（Figma `3:20892` Layers / `42:2` Inspector 采样 @1x）
 ///
 /// - 窗体：`radius::PANEL`=10 圆角、`border_strong` 1px 描边、`panel_bg`
 ///   按 `alpha` 合成（设计稿 `rgba(27,35,42,.96)`，色彩走令牌对位）；
-/// - 头部：`icon | title | … | 拖拽把手 | 折叠三角`（把手 = 2×3 圆点阵，
-///   对位设计稿 `⠿`——打包字体缺盲文点字字形，故用 painter 画点而非文字）；
-/// - 右下角缩放角标（`resizable(true)` 时）：两条对角短线，对位设计稿
-///   `Resize handle`（`42:55`）。交互本身由 egui Window 边框自带，角标纯指示。
+/// - 头行：满宽、左右内边距 12、子项间距 8；顶行两角**跟窗体同半径**——
+///   方角会啃掉窗体圆角（2026-10-18 实机截图确认）；
+/// - 头行内容：`icon 12 | title | … | ⠿ | ⌄`，chevron 是描边形态（非填充
+///   三角）；把手 = 2×3 圆点阵（打包字体缺盲文点字字形，painter 画点）；
+/// - 面板体：四周内边距 12（`Panel content` padding），即内容不贴边；
+/// - 右下角缩放角标（`resizable(true)` 时）：8×8 两条 45° 短线、距内缘 4 px
+///   （`Resize handle` `3:20947`）。交互由 egui Window 边框自带，角标纯指示。
 pub struct FloatWindow<'a> {
     id: egui::Id,
     title: &'a str,
@@ -68,6 +74,18 @@ pub struct FloatWindow<'a> {
     order: egui::Order,
 }
 
+/// 面板内容内边距（Figma `3:20892` Panel content `padding: 12`）。
+///
+/// 头行是满宽的（贴窗体内缘），体内容左右下各缩进 12——两者别混用同一个
+/// margin 值，头行的 12 是 `paddingLeft/Right`，体的 12 是容器 padding。
+const CONTENT_PAD: f32 = 12.0;
+/// 头部左/右内边距（Figma `3:20893` Panel header `paddingLeft/Right: 12`）。
+const HEAD_PAD: f32 = 12.0;
+/// 头部子项间距（Figma itemSpacing 8）。
+const HEAD_GAP: f32 = 8.0;
+/// 头部图标尺寸（Figma 12×12）。
+const HEAD_ICON: f32 = 12.0;
+
 impl<'a> FloatWindow<'a> {
     /// 最小形态：egui 记忆 `Id`（拖动 / 折叠状态挂它上）+ 标题。
     ///
@@ -77,7 +95,9 @@ impl<'a> FloatWindow<'a> {
         Self {
             id: egui::Id::new(id_salt),
             title,
-            icon: HeadIcon::Char("□"),
+            // 缺省用 Lucide `layout-grid`：几何字符（`□`）在打包字体里会缺字形，
+            // 落成豆腐块（Figma 头部图标一律 12×12 SVG，见 `3:20893`）。
+            icon: HeadIcon::Svg(ICON_GRID),
             tag: None,
             default_pos: None,
             default_size: None,
@@ -169,6 +189,14 @@ impl<'a> FloatWindow<'a> {
         let icon = self.icon;
         let tag = self.tag;
         let alpha = self.alpha;
+        // egui Window 自带 3 线缩放角标（`resize_corner_size` 缺省 12）；设计稿
+        // `Resize handle` 是 8×8 两笔。临时关掉内置角标、由本文件自绘，画完
+        // 立刻恢复（只影响本次 show 的绘制样式）。
+        let theme = ctx.theme();
+        let prev_corner = ctx.style_of(theme).visuals.resize_corner_size;
+        if self.resizable {
+            ctx.style_mut_of(theme, |s| s.visuals.resize_corner_size = 0.0);
+        }
         win.show(ctx, |ui| {
             panel_head(
                 ui,
@@ -180,42 +208,42 @@ impl<'a> FloatWindow<'a> {
                 alpha,
             );
             if state.is_open() {
-                // 折叠关闭时不画体；体与头间留 `space::SM` 与壳内边距同步。
-                state.show_body_unindented(ui, |ui| {
-                    ui.add_space(space::SM);
-                    body(ui);
-                });
+                // 折叠关闭时不画体。内容四周各留 12（Figma `Panel content`
+                // padding），头行贴边、体不贴边。
+                let body = egui::Frame::new()
+                    .inner_margin(crate::ui_theme::margin_all(CONTENT_PAD))
+                    .show(ui, body);
                 if self.resizable {
-                    paint_resize_grip(ui, shell);
+                    paint_resize_grip(ui, shell, body.response.rect);
                 }
             } else {
                 state.store(ctx);
             }
         });
+        if self.resizable {
+            ctx.style_mut_of(theme, |s| s.visuals.resize_corner_size = prev_corner);
+        }
     }
 }
 
-/// 右下角缩放角标：两条对角短线（Figma `42:55`，8×8 双斜线）。
+/// 右下角缩放角标：两条 45° 短线（Figma `3:20947` / `42:55`，8×8 双斜线）。
 ///
-/// 纯视觉指示——缩放交互由 egui Window 可拖边框自带；画在体内容之后，
-/// 借 [`egui::Ui::min_rect`] 定位到实际内容的右下角（折叠态不画）。
-fn paint_resize_grip(ui: &mut egui::Ui, shell: &UiShell) {
-    let br = ui.min_rect().right_bottom();
+/// 纯视觉指示——缩放交互由 egui Window 可拖边框自带。`body_rect` 是内容
+/// 外框（已含 12 padding），角标再外扩 8 → 距窗体右下内缘 4 px，与设计稿
+/// `Resize handle` 同位（折叠态不画）。
+fn paint_resize_grip(ui: &mut egui::Ui, shell: &UiShell, body_rect: egui::Rect) {
+    let br = body_rect.right_bottom() + egui::vec2(8.0, 8.0);
     let p = ui.painter();
     let stroke = egui::Stroke::new(1.0, shell.t3());
-    let inset = 4.0_f32;
-    // 内缩 4px，两条 45° 短线：短臂 5px、长臂 10px。
+    // 长臂 8（对角整条），短臂 8−5.33≈2.67（Figma path 第二段 5.333→8）。
     p.line_segment(
-        [
-            egui::pos2(br.x - inset - 5.0, br.y - inset),
-            egui::pos2(br.x - inset, br.y - inset - 5.0),
-        ],
+        [egui::pos2(br.x - 8.0, br.y), egui::pos2(br.x, br.y - 8.0)],
         stroke,
     );
     p.line_segment(
         [
-            egui::pos2(br.x - inset - 10.0, br.y - inset),
-            egui::pos2(br.x - inset, br.y - inset - 10.0),
+            egui::pos2(br.x - 8.0 + 5.333, br.y),
+            egui::pos2(br.x, br.y - 8.0 + 5.333),
         ],
         stroke,
     );
@@ -224,8 +252,9 @@ fn paint_resize_grip(ui: &mut egui::Ui, shell: &UiShell) {
 /// 自绘 `panel-head` 行（v0.3 Figma `5E8BCBCmtGAHqk3ORibBlU`，2026-10-17 按
 /// Figma `42:2` 补拖拽把手）：
 ///
-/// `icon | title | … | ⠿ | ▼` 水平一字排列，圆形三角随 openness 旋转。
-/// 三角点中切 [`egui::collapsing_header::CollapsingState`]。整个头可视为
+/// `icon | title | … | ⠿ | ⌄` 水平一字排列，`⌄` 随 openness 在「右尖」与
+/// 「下尖」之间插值（Lucide chevron 形态，非填充三角）。chevron 点中切
+/// [`egui::collapsing_header::CollapsingState`]。整个头可视为
 /// `egui::Window` 的 drag-anywhere 区域的一份（egui 0.36 `title_bar=false`
 /// 会把 `OnTouch` 降级为 `Anywhere`，无需自管 `area_mut`）。
 ///
@@ -247,18 +276,20 @@ pub(crate) fn panel_head(
         ui.allocate_exact_size(egui::vec2(avail_w, head_h), egui::Sense::hover());
 
     // ── 右件几何先算（互不引用 ui，便于可变 borrow 切回） ──
-    let pad = 12.0_f32;
     let center_y = head_rect.center().y;
-    let tri_w = shell.head_h - 8.0; // ≈ 22 cozy / 18 compact
-    let tri_rect = egui::Rect::from_center_size(
-        egui::pos2(head_rect.max.x - 8.0 - tri_w / 2.0, center_y),
-        egui::vec2(tri_w, tri_w),
+    // 折叠 chevron：12×12，右缘距头右缘 12（Figma `3:22512` 12×12 @ 右 12）。
+    let chev_rect = egui::Rect::from_min_size(
+        egui::pos2(
+            head_rect.max.x - HEAD_PAD - HEAD_ICON,
+            center_y - HEAD_ICON / 2.0,
+        ),
+        egui::vec2(HEAD_ICON, HEAD_ICON),
     );
-    // 拖拽把手（Figma `⠿`）：2×3 圆点阵，紧贴折叠三角左侧。打包字体
+    // 拖拽把手（Figma `⠿`）：2×3 圆点阵，紧贴 chevron 左侧 8 px。打包字体
     // （Inter + Noto SC）缺盲文点字字形，画点比画字稳。
-    let dots_gap = 3.5_f32;
-    let dots_right = tri_rect.min.x - 4.0;
-    let dots_cx = [dots_right - dots_gap, dots_right - dots_gap - dots_gap];
+    let dots_gap = 3.0_f32;
+    let dots_right = chev_rect.min.x - HEAD_GAP;
+    let dots_cx = [dots_right - 2.0, dots_right - 5.0];
 
     // ── 算徽标矩形（含则备好） ──
     let badge_rect: Option<(
@@ -275,7 +306,7 @@ pub(crate) fn panel_head(
         let font = proportional(font_size::MICRO);
         let galley = ui.painter().layout_no_wrap(text.to_string(), font, fg);
         let size = galley.size() + badge_pad * 2.0;
-        let right_edge = dots_cx[1] - dots_gap - 6.0;
+        let right_edge = dots_cx[1] - 1.5 - HEAD_GAP;
         let r = egui::Rect::from_min_size(
             egui::pos2(right_edge - size.x, center_y - size.y / 2.0),
             egui::vec2(size.x, size.y),
@@ -291,38 +322,48 @@ pub(crate) fn panel_head(
     }
 
     // ── 自绘背景、底线、icon、title、徽标、拖拽把手、折叠图标 ──
+    let openness = state.openness(ui.ctx());
     let p = ui.painter();
-    // 头底 = panel_bg（与窗体无缝拼接）；底线 1px border_subtle（Figma `.panel-head`）。
-    p.rect_filled(head_rect, 0.0, shell.panel_bg().gamma_multiply(alpha));
+    // 头底 = panel_bg（与窗体无缝拼接）。顶部两角必须跟窗体同半径：若按方角
+    // 铺满，会把窗体圆角描边「啃」掉一块（2026-10-18 实机截图确认）。
+    // 折叠态头就是整个窗体，底部两角同样要跟随窗体圆角。
+    let r = radius::PANEL as u8;
+    let bottom_r = (((1.0 - openness.clamp(0.0, 1.0)) * radius::PANEL).round()) as u8;
+    let head_radius = egui::CornerRadius {
+        nw: r,
+        ne: r,
+        sw: bottom_r,
+        se: bottom_r,
+    };
+    p.rect_filled(
+        head_rect,
+        head_radius,
+        shell.panel_bg().gamma_multiply(alpha),
+    );
+    // 底线 1px border_subtle（Figma Panel header 只描底边，`3:20893`）。
     p.line_segment(
         [
             egui::pos2(head_rect.min.x, head_rect.max.y),
             egui::pos2(head_rect.max.x, head_rect.max.y),
         ],
-        egui::Stroke::new(1.0, shell.border_subtle()), // = Figma `--border`
+        egui::Stroke::new(1.0, shell.border_subtle()),
     );
 
     let title_font = proportional(font_size::SMALL); // 12 px = Figma body
 
-    // 左：icon + title。icon 槽宽随形态（Char ≈ 12px 字符 + 6 gap；Svg = 12 + 6）。
+    // 左：icon + title。Figma `3:20893`：12 内边距 + 12 图标 + 8 间距 → 标题 x=32。
     let title_x = match icon {
         HeadIcon::Char(ch) => {
             p.text(
-                egui::pos2(head_rect.min.x + pad, center_y),
+                egui::pos2(head_rect.min.x + HEAD_PAD, center_y),
                 egui::Align2::LEFT_CENTER,
                 *ch,
                 title_font.clone(),
-                shell.t3(),
+                shell.t2(),
             );
-            // icon 字符约 12 px 宽，加上 6 px gap；几何字符取 1-unicode，
-            // 宽度用 18 px 经验值避错位。
-            head_rect.min.x + pad + 18.0
+            head_rect.min.x + HEAD_PAD + 18.0
         }
-        HeadIcon::Svg(_) => {
-            // painter 借用要先释放才能 `ui.put`——标题先用 painter 画，
-            // SVG 图标放行到下方 `ui.put`（两者无重叠，绘制序无关）。
-            head_rect.min.x + pad + 12.0 + 6.0
-        }
+        HeadIcon::Svg(_) => head_rect.min.x + HEAD_PAD + HEAD_ICON + HEAD_GAP,
     };
     p.text(
         egui::pos2(title_x, center_y),
@@ -332,36 +373,55 @@ pub(crate) fn panel_head(
         shell.t1(),
     );
 
-    // 右：徽标 → 拖拽把手 → 折叠三角。
+    // 右：徽标 → 拖拽把手 → 折叠 chevron。
     if let Some((r, fg, bg, galley, pad)) = badge_rect {
         p.rect_filled(r, radius::BADGE, bg);
         p.galley(r.min + pad, galley, fg);
     }
+    // ⠿ 点阵：设计稿 t3（#778994）。
     for cx in dots_cx {
         for row in 0..3 {
             let cy = center_y + (row as f32 - 1.0) * dots_gap;
             p.circle_filled(egui::pos2(cx, cy), 1.0, shell.t3());
         }
     }
-    let _ = p; // 释放对 ui 的不可变借用，让 `ui.put` / `interact` 可借 ui。
+    let _ = p; // 释放对 ui 的不可变借用，让 `paint_at` / `interact` 可借 ui。
 
-    // SVG 头图标（t1，与标题同亮；Figma `42:4` sliders-horizontal 同位）。
+    // SVG 头图标：t2（Figma `3:22510` 描边 #A3B1BA），12×12 居左内边距。
     if let HeadIcon::Svg(src) = icon {
-        let icon_rect = egui::Rect::from_center_size(
-            egui::pos2(head_rect.min.x + pad + 6.0, center_y),
-            egui::vec2(12.0, 12.0),
+        let icon_rect = egui::Rect::from_min_size(
+            egui::pos2(head_rect.min.x + HEAD_PAD, center_y - HEAD_ICON / 2.0),
+            egui::vec2(HEAD_ICON, HEAD_ICON),
         );
-        let _ = ui.put(icon_rect, icon_image(src.clone(), shell.t1(), 12.0));
+        // `paint_at` 而非 `put`：put 会把光标推进到图标矩形，后面的面板体
+        // 会从头上沿开始（压住头行）。
+        icon_image(src.clone(), shell.t2(), HEAD_ICON).paint_at(ui, icon_rect);
     }
 
-    // 三角点中切 state。
-    let tri_resp = ui.interact(tri_rect, ui.id().with("tri"), egui::Sense::click());
-    let openness = state.openness(ui.ctx());
-    egui::collapsing_header::paint_default_icon(ui, openness, &tri_resp);
+    // chevron 点中切 state（12×12 命中区比 6×3 的笔画大，好点）。
+    let tri_resp = ui.interact(chev_rect, ui.id().with("tri"), egui::Sense::click());
+    paint_chevron(ui, shell, chev_rect.center(), openness);
     if tri_resp.clicked() {
         state.toggle(ui);
     }
     state.store(ui.ctx());
+}
+
+/// 描边 chevron（Figma `3:22513` 6×3 圆头两笔）：openness 0 = 右尖 `›`，
+/// 1 = 下尖 `˅`，中间线性插值。
+///
+/// 不用 `egui::collapsing_header::paint_default_icon`——它画的是**填充三角**，
+/// 与设计稿的细线 chevron 形态不同（实机截图对比确认）。
+pub(crate) fn paint_chevron(ui: &egui::Ui, shell: &UiShell, center: egui::Pos2, openness: f32) {
+    let t = openness.clamp(0.0, 1.0);
+    let lerp = |a: egui::Vec2, b: egui::Vec2| a + (b - a) * t;
+    let a = lerp(egui::vec2(-1.5, -3.0), egui::vec2(-3.0, -1.5));
+    let tip = lerp(egui::vec2(1.5, 0.0), egui::vec2(0.0, 1.5));
+    let b = lerp(egui::vec2(-1.5, 3.0), egui::vec2(3.0, -1.5));
+    ui.painter().add(egui::Shape::line(
+        vec![center + a, center + tip, center + b],
+        egui::Stroke::new(1.5_f32, shell.t2()),
+    ));
 }
 
 // ── 测试 ────────────────────────────────────────────────────────────
@@ -449,6 +509,28 @@ mod tests {
             sh.head_h,
             ui.min_rect().height()
         );
+    }
+
+    #[test]
+    fn chevron_paints_at_both_extremes_without_panic() {
+        let sh = shell();
+        let (_ctx, ui) = make_ui();
+        for t in [0.0, 0.5, 1.0] {
+            paint_chevron(&ui, &sh, egui::pos2(50.0, 50.0), t);
+        }
+    }
+
+    #[test]
+    fn content_padding_matches_figma_12() {
+        assert!(
+            (CONTENT_PAD - 12.0).abs() < 1e-6,
+            "Figma Panel content padding 12"
+        );
+        assert!(
+            (HEAD_PAD - 12.0).abs() < 1e-6,
+            "Figma Panel header padding 12"
+        );
+        assert!((HEAD_ICON - 12.0).abs() < 1e-6, "Figma 头图标 12×12");
     }
 
     #[test]

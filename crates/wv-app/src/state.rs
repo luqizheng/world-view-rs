@@ -224,29 +224,31 @@ impl Panel {
         }
     }
 
-    /// 面板头类型图标（§4.1：类型图标着 `ui.accent` 色）。
+    /// 面板头类型图标（Figma 头部图标一律 Lucide 12×12，见 `3:20893` / `42:4`）。
     ///
-    /// 用几何字符而非 emoji：emoji 跨系统字形差异大（§4.5 的教训）。
-    /// 2026-10-16 打包字体上线（ADR-0019）后这里仍是**已知缺口**：
-    /// ◈(U+25C8) ◧(U+25E7) ⬡(U+2B21) 在 Inter / Noto Sans SC 中均无字形，
-    /// egui 以替换符 ◻ 呈现（打包前的系统雅黑同样缺这三个，非回归）。
-    /// 真修复：改 SVG 图标（Figma 原型即 Lucide，见 `assets/ui/tool_icons/`）。
-    pub fn icon(self) -> &'static str {
-        match self {
-            Panel::MapTree => "◈",
-            Panel::Layers => "▤",
-            Panel::Brush => "◧",
-            Panel::Inspector => "◉",
-            Panel::Timeline => "═",
-            Panel::Faction => "◆",
-            Panel::Region => "⬡",
-            Panel::Situation => "▣",
-            Panel::Validation => "△",
-            Panel::Minimap => "□",
-            Panel::Compass => "◐",
-            Panel::Character => "◎",
-            Panel::Event => "○",
-        }
+    /// 2026-10-18 由几何字符改 SVG：旧字符里 ◈ ◧ ⬡ 在打包字体（Inter +
+    /// Noto Sans SC）无字形，egui 落成豆腐块——实机截图确认，非渲染问题。
+    /// 图标资产在 `crates/wv-ui/assets/ui/tool_icons/`（AGENTS.md §8）。
+    pub fn icon(self) -> wv_ui::widgets::HeadIcon {
+        use wv_ui::widgets::{
+            HeadIcon, ICON_ALERT, ICON_BRUSH, ICON_CALENDAR, ICON_CLOCK, ICON_COMPASS, ICON_FLAG,
+            ICON_GLOBE, ICON_LANDMARK, ICON_LAYERS, ICON_LIST, ICON_MAP, ICON_SLIDERS, ICON_USER,
+        };
+        HeadIcon::Svg(match self {
+            Panel::MapTree => ICON_GLOBE,
+            Panel::Layers => ICON_LAYERS,
+            Panel::Brush => ICON_BRUSH,
+            Panel::Inspector => ICON_SLIDERS,
+            Panel::Timeline => ICON_CLOCK,
+            Panel::Faction => ICON_FLAG,
+            Panel::Region => ICON_LANDMARK,
+            Panel::Situation => ICON_LIST,
+            Panel::Validation => ICON_ALERT,
+            Panel::Minimap => ICON_MAP,
+            Panel::Compass => ICON_COMPASS,
+            Panel::Character => ICON_USER,
+            Panel::Event => ICON_CALENDAR,
+        })
     }
 
     /// 是否「数据面板」（§9.2 `data_opt()`：小窗可隐藏，`<900px` 窗口默认收起）。

@@ -768,6 +768,62 @@ pub const ICON_SUN: egui::ImageSource<'static> =
 pub const ICON_MOON: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/moon.svg");
 
+// ── 面板头部 + 图层面板（Figma `3:20892` Layers / `42:2` Inspector） ──
+//
+// 图层面板行内图标与头部图标同源（Lucide 12×12、`t2` 着色），见
+// [`crate::widgets::layer_panel`]。
+
+/// 面板头部：检视器 / 属性（Lucide `sliders-horizontal`，Figma `42:4`）。
+pub const ICON_SLIDERS: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/sliders-horizontal.svg");
+/// 图层可见（Lucide `eye`）。
+pub const ICON_EYE: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/eye.svg");
+/// 图层隐藏（Lucide `eye-off`）。
+pub const ICON_EYE_OFF: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/eye-off.svg");
+/// 图层锁定（Lucide `lock-keyhole`）。
+pub const ICON_LOCK: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/lock-keyhole.svg");
+/// 新建图层组（Lucide `folder-plus`）。
+pub const ICON_FOLDER_PLUS: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/folder-plus.svg");
+/// 图层类型：参考图（Lucide `image`）。
+pub const ICON_IMAGE: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/image.svg");
+/// 图层类型：道路（Lucide `route`）。
+pub const ICON_ROUTE: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/route.svg");
+/// 图层类型：水系（Lucide `waves`）。
+pub const ICON_WAVES: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/waves.svg");
+/// 图层类型：地形（Lucide `mountain`）。
+pub const ICON_MOUNTAIN: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/mountain.svg");
+/// 图层类型：聚落 / 势力驻地（Lucide `landmark`）。
+pub const ICON_LANDMARK: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/landmark.svg");
+/// 面板头部：指南针（Lucide `compass`）。
+pub const ICON_COMPASS: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/compass.svg");
+/// 面板头部：势力（Lucide `flag`）。
+pub const ICON_FLAG: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/flag.svg");
+/// 面板头部：态势列表（Lucide `list`）。
+pub const ICON_LIST: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/list.svg");
+/// 面板头部：事件 / 时间轴（Lucide `calendar` / `clock`）。
+pub const ICON_CALENDAR: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/calendar.svg");
+pub const ICON_CLOCK: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/clock.svg");
+/// 面板头部：角色（Lucide `user`）。
+pub const ICON_USER: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/user.svg");
+/// 图层类型：文字 / 标注（Lucide `type`）。
+pub const ICON_TYPE: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/type.svg");
+
 // ── 测试 ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

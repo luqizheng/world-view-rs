@@ -2,13 +2,15 @@
 //!
 //! 历史背景：原文件 [`widgets.rs`](self) 长达 2193 行，覆盖 8 类相互独立的
 //! 职责。读起来要在 `ui_theme` / `egui` / `LayoutFile` 之间来回切换，严重
-//! 影响 grep 效率，也不利于单测就近放置。现拆为 5 个职责内聚的子模块：
+//! 影响 grep 效率，也不利于单测就近放置。现拆为 6 个职责内聚的子模块：
 //!
 //! - [`primitives`] —— 徽标 / 空状态 / 列表项 / 描边 helper / 图标 tint
 //!   中央化 / 最近工程行 + `time_ago` 格式化 。
 //! - [`floater`] —— 浮动面板外壳：公共 [`FloatWindow`]（Figma `42:2` 提取，
 //!   解耦 `Panel`）+ 自绘 panel-head。`Panel` 特化包装 `float_window` 留
 //!   wv-app（ADR-0026 D3）。
+//! - [`layer_panel`] —— 图层面板控件族（Figma `3:20892`）：`layer_panel` /
+//!   `layer_list_row` / `opacity_row`，尺寸逐项对位设计稿。
 //! - [`button`] —— 统一按钮工厂（多 style × 多 content 形态）+
 //!   `ToolButton` 工具栏按钮封装 + 全部 `ICON_*` 常量。
 //! - [`controls`] —— 表单 / 浮层控件：`FieldInput` / `FieldSelect` /
@@ -41,6 +43,7 @@
 pub mod button;
 pub mod controls;
 pub mod floater;
+pub mod layer_panel;
 pub mod primitives;
 pub mod segmented_control;
 pub mod svg_loader;
@@ -59,6 +62,10 @@ pub use controls::{
     SliderTone, Switch,
 };
 pub use floater::{FloatWindow, HeadIcon};
+pub use layer_panel::{
+    layer_actions, layer_list, layer_list_row, layer_panel, opacity_row, LayerEntry,
+    LayerPanelAction, LayerPanelState,
+};
 pub use primitives::{
     badge,
     breadcrumb,
@@ -81,22 +88,34 @@ pub use primitives::{
     MenuState,
     ICON_ALERT,
     ICON_BRUSH,
+    ICON_CALENDAR,
     ICON_CHECK,
     ICON_CHEVRON_DOWN,
     ICON_CHEVRON_RIGHT,
+    ICON_CLOCK,
     ICON_COMMAND,
+    ICON_COMPASS,
     ICON_ERASER,
+    ICON_EYE,
+    ICON_EYE_OFF,
+    ICON_FLAG,
     ICON_FOLDER_OPEN,
+    ICON_FOLDER_PLUS,
     ICON_GLOBE,
     ICON_GRID,
     ICON_HILLS,
+    ICON_IMAGE,
     ICON_LAKE,
+    ICON_LANDMARK,
     ICON_LAYERS,
     ICON_LINE,
+    ICON_LIST,
+    ICON_LOCK,
     ICON_MAP,
     ICON_MAP_PIN,
     ICON_MAXIMIZE,
     ICON_MOON,
+    ICON_MOUNTAIN,
     ICON_MOUNTAIN_RANGE,
     ICON_MOUSE_POINTER,
     ICON_PEN,
@@ -106,14 +125,19 @@ pub use primitives::{
     ICON_PLUS,
     ICON_REFRESH,
     ICON_RIVER,
+    ICON_ROUTE,
     ICON_RULER,
     ICON_SEARCH,
+    ICON_SLIDERS,
     ICON_SQUARE,
     ICON_SQUARE_CHECK,
     ICON_SUN,
     ICON_TRASH,
     ICON_TREES,
+    ICON_TYPE,
+    ICON_USER,
     ICON_VOLCANO,
+    ICON_WAVES,
     ICON_ZOOM_IN,
     ICON_ZOOM_OUT,
     RECENT_ROW_H,

@@ -15,7 +15,7 @@ use crate::ui::shell::{terrain_name_at, terrain_swatch};
 use crate::ui_layout::LayoutFile;
 use wv_ui::shell::UiShell;
 use wv_ui::ui_tokens::{radius, space};
-use wv_ui::widgets::{rect_stroke, BadgeKind, FloatWindow, HeadIcon};
+use wv_ui::widgets::{rect_stroke, BadgeKind, FloatWindow};
 
 /// 浮动面板外壳（`Panel` 特化薄包装，ADR-0026 D3 留守 wv-app）。
 ///
@@ -54,7 +54,7 @@ pub fn float_window(
     let alpha = if panels.immersive { 0.10 } else { 0.96 };
 
     FloatWindow::new(id, panel.title(loc))
-        .icon(HeadIcon::Char(panel.icon()))
+        .icon(panel.icon())
         .tag(tag)
         .default_pos(egui::pos2(layout.x, layout.y))
         .default_size(egui::vec2(layout.width, layout.height))

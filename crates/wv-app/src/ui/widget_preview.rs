@@ -18,7 +18,7 @@
 //!
 //! ## 占位说明（验收时须知的刻意偏差）
 //!
-//! - 头部图标用 `ICON_GRID` 顶替设计稿的 `sliders-horizontal`；
+//! - 头部图标用 `ICON_SLIDERS`（Lucide `sliders-horizontal`，Figma `42:4`）；
 //! - 身份块瓦片底 = `gold × 0.35` 顶替设计稿类别色 `#4B422E`；
 //! - 按钮图标用 `ICON_MAXIMIZE` / `ICON_PENCIL` 顶替 `scan` / `square-pen`；
 //! - 挂件用 `ICON_MAP_PIN`（金 tint）/ `ICON_CHECK` 顶替 `pin` / `lock`。
@@ -33,7 +33,7 @@ use crate::theme::ui_theme::{mono, proportional, UiShellConfig};
 use crate::ui::shell::UiShell;
 use crate::ui::widgets::{
     button, check_row, divider, identity_header, ButtonContent, ButtonStyle, FloatWindow, HeadIcon,
-    PropertyRow, ICON_CHECK, ICON_GLOBE, ICON_GRID, ICON_MAP_PIN, ICON_MAXIMIZE, ICON_PENCIL,
+    PropertyRow, ICON_CHECK, ICON_GLOBE, ICON_MAP_PIN, ICON_MAXIMIZE, ICON_PENCIL, ICON_SLIDERS,
 };
 
 /// 预览浮窗系统（`EguiPrimaryContextPass` 调度，环境变量不设时直接返回）。
@@ -51,7 +51,7 @@ fn widget_preview(
     };
 
     FloatWindow::new("wv_widget_preview", "Inspector")
-        .icon(HeadIcon::Svg(ICON_GRID))
+        .icon(HeadIcon::Svg(ICON_SLIDERS))
         .default_pos(egui::pos2(700.0, 60.0))
         .default_size(egui::vec2(288.0, 340.0))
         .show(ctx, &shell, |ui| {
