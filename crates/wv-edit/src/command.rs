@@ -2005,6 +2005,30 @@ fn marker_error(e: wv_terrain::marker::MarkerError) -> EditError {
     }
 }
 
+/// 环（格坐标）→ 扁平 wu 环（`[x0, y0, x1, y1, …]`）。
+fn ring_wu(ring: &[(f32, f32)], cell_size: f32) -> Vec<f32> {
+    ring.iter()
+        .flat_map(|&(x, y)| [x * cell_size, y * cell_size])
+        .collect()
+}
+
+/// 标记区域 → 地界几何（M2：有洞存 `PolygonWithHoles`，无洞单环）。
+///
+/// 锚点拟合只看外环（`fit_anchor_to_ring`），洞不参与质心/包围盒——与
+/// 渲染侧「晕按外环铺、符号避开洞」同一取舍。创建与重生成两命令共用，
+/// 保证两条路径的几何形态永不漂移。
+fn marker_geometry(region: &wv_terrain::marker::MarkerRegion, cell_size: f32) -> GeometryData {
+    let outer = ring_wu(&region.outer, cell_size);
+    if region.holes.is_empty() {
+        GeometryData::Polygon(outer)
+    } else {
+        GeometryData::PolygonWithHoles {
+            holes: region.holes.iter().map(|h| ring_wu(h, cell_size)).collect(),
+            outer,
+        }
+    }
+}
+
 impl EditCommand for PlaceBiomeMarkerCommand {
     fn label(&self) -> String {
         format!("标记「{}」", self.place.name)
@@ -2048,21 +2072,13 @@ impl EditCommand for PlaceBiomeMarkerCommand {
             world.set_terrain(self.map.clone(), from_grid(grid));
         }
 
-        // Place：写 biome / envelope；锚点按生成边界拟合。
+        // Place：写 biome / envelope；锚点按生成边界外环拟合（洞不参与）。
         let mut place = self.place.clone();
         place.map = Some(self.map.clone());
         place.biome = Some(biome);
         place.envelope = Some(self.envelope.iter().flat_map(|&(x, y)| [x, y]).collect());
-        let outer_wu: Vec<f32> = region
-            .outer
-            .iter()
-            .flat_map(|&(x, y)| [x * self.cell_size, y * self.cell_size])
-            .collect();
-        place.fit_anchor_to_ring(&outer_wu);
-        // v1：place_geometry 单环渲染（place_territory_at 只认 Polygon）。
-        // 生成区域带洞（包络圈住湖等）时暂只存外环——M2 扩洞支持（ADR-0029 代价节）。
-        // wv-edit 不依赖日志框架，故此处不告警；作者看得到光晕跨湖的观感。
-        let _ = &region.holes;
+        place.fit_anchor_to_ring(&ring_wu(&region.outer, self.cell_size));
+        let geometry = marker_geometry(&region, self.cell_size);
 
         world.distances.places.push(place);
         world.place_geometry.push(GeometrySpan {
@@ -2072,7 +2088,7 @@ impl EditCommand for PlaceBiomeMarkerCommand {
                 from: self.day,
                 to: None,
             },
-            geometry: GeometryData::Polygon(outer_wu),
+            geometry,
             relation: None,
         });
         *self
@@ -2115,6 +2131,244 @@ impl EditCommand for PlaceBiomeMarkerCommand {
 // 把 `Color` / `GeometryData` 隐式导入给测试用——避免测试模块再加 use。
 #[allow(unused_imports)]
 use wv_core::{Color as _Color, Faction as _Faction};
+
+/// Place 锚点四元组（x, y, w, h；各自可缺省）。
+type Anchor = (Option<f32>, Option<f32>, Option<f32>, Option<f32>);
+
+/// 重生成命令 apply 前的快照（undo 用）。
+#[derive(Debug, Default, Clone)]
+struct BeforeRegen {
+    /// 生成分支被改动的格（旧值）；识别分支恒空。
+    cells: Vec<(i32, i32, TerrainCell)>,
+    /// 覆盖前的锚点四元组；`None` = 未 apply（revert 须为无操作）。
+    anchor: Option<Anchor>,
+    /// 被替换掉的旧 span（原索引，升序记录）。
+    spans: Vec<(usize, GeometrySpan)>,
+}
+
+/// 重生成一个生物群系标记（ADR-0029 D2「重圈重生成」的 M2 落地）。
+///
+/// 以 Place **已存的** `envelope` + `biome` 为唯一事实源重跑识别/生成，
+/// 替换边界 span 与锚点。单事务原子，`revert` 逐位还原格子 / 锚点 / span。
+///
+/// ## 为什么不带 cell_size / envelope 参数
+///
+/// 格尺寸由 [`marker_cell_size`] 从目标图 raster **在 apply 内**推导
+/// （ADR-0029 终审 C1：捕获时与会话态 `GridConfig` 漂移的教训——干脆不给
+/// 调用方传错的机会）；包络读已存值，重生成语义就是「按原意图重算」。
+///
+/// ## span 语义 = 替换（R2，2026-10-18 拍板）
+///
+/// 删除 owner 的全部旧 span、写入一条 `[day, None)`。边界是「生成快照」
+/// （ADR-0029 D2）而非领域状态区间：地形格本身不分区间版本化，保留旧 span
+/// 会在时间轴回拨时出现「旧边界盖新地形」的错位，故替换而非追加历史。
+#[derive(Debug)]
+pub struct RegenerateBiomeMarkerCommand {
+    /// 目标标记（Place）的 ID。
+    pub place_id: wv_core::Id,
+    /// 新 span 的生效日（调用方取当前时间轴日）。
+    pub day: i64,
+    /// 展示名（动作层构造时从 World 捕获；`label` 无 World 访问权，
+    /// 缺省回退 id——撤销栈给人看，不该是 `place_marker_176…` 机器串）。
+    name: Option<String>,
+    before: std::sync::Mutex<BeforeRegen>,
+}
+
+impl RegenerateBiomeMarkerCommand {
+    pub fn new(place_id: wv_core::Id, day: i64) -> Self {
+        Self {
+            place_id,
+            day,
+            name: None,
+            before: std::sync::Mutex::new(BeforeRegen::default()),
+        }
+    }
+
+    /// 带展示名构造（撤销栈 / 通知文案用）。
+    pub fn named(place_id: wv_core::Id, day: i64, name: impl Into<String>) -> Self {
+        Self {
+            name: Some(name.into()),
+            ..Self::new(place_id, day)
+        }
+    }
+}
+
+/// 扁平包络 `[x0, y0, x1, y1, …]` → 点列；奇数长度 / 少于 3 点返回 `None`。
+fn envelope_points(flat: &[f32]) -> Option<Vec<(f32, f32)>> {
+    if flat.len() < 6 || !flat.len().is_multiple_of(2) {
+        return None;
+    }
+    Some(flat.chunks_exact(2).map(|c| (c[0], c[1])).collect())
+}
+
+impl EditCommand for RegenerateBiomeMarkerCommand {
+    fn label(&self) -> String {
+        format!(
+            "重生成标记「{}」",
+            self.name.as_deref().unwrap_or(self.place_id.as_str())
+        )
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let idx = world
+            .distances
+            .places
+            .iter()
+            .position(|p| p.id == self.place_id)
+            .ok_or_else(|| EditError::TargetMissing(format!("地点 `{}` 不存在", self.place_id)))?;
+        let biome = world.distances.places[idx]
+            .biome
+            .ok_or_else(|| EditError::Precondition("该地点没有生物群系类型，不是标记".into()))?;
+        let envelope_flat = world.distances.places[idx]
+            .envelope
+            .clone()
+            .ok_or_else(|| {
+                EditError::Precondition("标记缺少意图包络（envelope），无法重生成".into())
+            })?;
+        let envelope = envelope_points(&envelope_flat).ok_or_else(|| {
+            EditError::Precondition("意图包络格式非法（少于 3 点或坐标不成对）".into())
+        })?;
+        let map = world.distances.places[idx]
+            .map
+            .clone()
+            .ok_or_else(|| EditError::Precondition("标记未锚定地图".into()))?;
+        let cell_size = marker_cell_size(world, &map).ok_or_else(|| {
+            EditError::Precondition(format!("地图 `{map}` 没有地形栅格，无法重生成标记"))
+        })?;
+        let data = world
+            .terrain_of(&map)
+            .cloned()
+            .ok_or_else(|| EditError::Precondition("地图地形在推导格尺寸后消失".into()))?;
+        let mut grid = to_grid(&data)?;
+        let snapshot = grid.cells().to_vec();
+        let region = wv_terrain::marker::mark_region(&mut grid, &envelope, biome, cell_size)
+            .map_err(marker_error)?;
+
+        // 生成分支才写回地形；识别分支 grid 未被改动（与创建命令同构）。
+        let mut changed: Vec<(i32, i32, TerrainCell)> = Vec::new();
+        if region.outcome == wv_terrain::marker::MarkerOutcome::Generated {
+            for (i, after) in grid.cells().iter().enumerate() {
+                if *after != snapshot[i] {
+                    let (x, y) = (
+                        (i % grid.width() as usize) as i32,
+                        (i / grid.width() as usize) as i32,
+                    );
+                    changed.push((x, y, snapshot[i]));
+                }
+            }
+            world.set_terrain(map.clone(), from_grid(grid));
+        }
+
+        // R2 替换：记录并移除 owner 全部旧 span，新 span 落在首个旧位（无旧位则追加）。
+        let spans: Vec<(usize, GeometrySpan)> = world
+            .place_geometry
+            .iter()
+            .enumerate()
+            .filter(|(_, g)| g.map == map && g.owner == self.place_id)
+            .map(|(i, g)| (i, g.clone()))
+            .collect();
+        let insert_at = spans
+            .first()
+            .map(|&(i, _)| i)
+            .unwrap_or(world.place_geometry.len());
+        world
+            .place_geometry
+            .retain(|g| !(g.map == map && g.owner == self.place_id));
+        world.place_geometry.insert(
+            insert_at,
+            GeometrySpan {
+                map: map.clone(),
+                owner: self.place_id.clone(),
+                span: wv_core::time::TimeSpan {
+                    from: self.day,
+                    to: None,
+                },
+                geometry: marker_geometry(&region, cell_size),
+                relation: None,
+            },
+        );
+
+        // 锚点按新外环重拟合（洞不参与）。
+        let place = &mut world.distances.places[idx];
+        let anchor = (place.x, place.y, place.w, place.h);
+        place.fit_anchor_to_ring(&ring_wu(&region.outer, cell_size));
+
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = BeforeRegen {
+            cells: changed,
+            anchor: Some(anchor),
+            spans,
+        };
+
+        let mut dirty = place_geometry_dirty_paths();
+        if region.outcome == wv_terrain::marker::MarkerOutcome::Generated {
+            dirty.push(format!("maps/{}/terrain.bin", map));
+        }
+        Ok(dirty)
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let before = (*self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))?)
+        .clone();
+        // 未 apply 过的实例（anchor == None）必须是无操作——不抹锚点、不动 span。
+        let Some(anchor) = before.anchor else {
+            return Ok(());
+        };
+        // 先移除新 span（apply 后 owner 名下只有它），再按原索引升序回插旧 span。
+        let map = before
+            .spans
+            .first()
+            .map(|(_, g)| g.map.clone())
+            .or_else(|| {
+                world
+                    .distances
+                    .places
+                    .iter()
+                    .find(|p| p.id == self.place_id)
+                    .and_then(|p| p.map.clone())
+            });
+        if let Some(map) = &map {
+            world
+                .place_geometry
+                .retain(|g| !(g.map == *map && g.owner == self.place_id));
+        }
+        for (i, g) in before.spans {
+            let at = i.min(world.place_geometry.len());
+            world.place_geometry.insert(at, g);
+        }
+        if let Some(place) = world
+            .distances
+            .places
+            .iter_mut()
+            .find(|p| p.id == self.place_id)
+        {
+            place.x = anchor.0;
+            place.y = anchor.1;
+            place.w = anchor.2;
+            place.h = anchor.3;
+        }
+        if !before.cells.is_empty() {
+            let map = map.ok_or_else(|| {
+                EditError::Precondition("revert 时既无旧 span 也无地点锚图，无法还原地形".into())
+            })?;
+            let data = world
+                .terrain_of(&map)
+                .cloned()
+                .ok_or_else(|| EditError::Precondition("revert 时地图地形缺失".into()))?;
+            let mut grid = to_grid(&data)?;
+            for (x, y, cell) in before.cells {
+                grid.set(x, y, cell);
+            }
+            world.set_terrain(map.clone(), from_grid(grid));
+        }
+        Ok(())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // 街道编辑命令（ADR-0010 待做第 3 项，2026-10-13）
@@ -2946,6 +3200,32 @@ use wv_core::distance::Place;
 /// `geometry/place` 是地界 span 目录（`wv-io::save_world` 按目录写出）。
 fn place_geometry_dirty_paths() -> Vec<String> {
     vec!["distances/places".into(), "geometry/place".into()]
+}
+
+/// 从 World 数据推导目标图的格尺寸（wu/格）——标记命令的唯一格口径。
+///
+/// 逐条镜像渲染层 `grid_sync` 的推导（图幅 extent / 栅格宽），但**纯从
+/// World 数据算**：wv-edit 结构上摸不到会话态 `GridConfig`，「捕获时与提交时
+/// 格口径漂移」的 C1 类 bug 在这里无法发生。回退链与 `grid_sync` 一致：
+/// 本图 extent → 根图 extent → 4096；无地形栅格返回 `None`（调用方拒绝）。
+fn marker_cell_size(world: &World, map: &wv_core::Id) -> Option<f32> {
+    let data = world.terrain_of(map)?;
+    let extent = world
+        .maps
+        .iter()
+        .find(|m| m.id == *map)
+        .and_then(|m| m.extent.as_ref())
+        .or_else(|| {
+            let root = world.meta.as_ref().map(|m| m.root_map.clone())?;
+            world
+                .maps
+                .iter()
+                .find(|n| n.id == root)
+                .and_then(|n| n.extent.as_ref())
+        })
+        .map(|e| e.width)
+        .unwrap_or(4096.0);
+    Some((extent / data.width.max(1) as f32).max(0.01))
 }
 
 /// 创建一个「事实地点」并同时写入它的初始地界。
@@ -5446,6 +5726,573 @@ mod tests {
         let t = w.terrain_of(&test_map()).unwrap();
         assert_eq!(t.cells[20 * 64 + 20].biome, 1, "格 (20,20) 应被标记");
         assert_eq!(t.cells[2 * 64 + 2].biome, 3, "包络外格不应被动");
+    }
+
+    // ---- 标记重生成 M2（feat/marker-regen Task 1/4） ----
+
+    fn map_with_extent(id: &str, extent: Option<(f32, f32)>) -> wv_core::map::MapNode {
+        let mut n = map_node(id, None, wv_core::map::MapLevel::World);
+        n.extent = extent.map(|(w, h)| wv_core::map::Extent::sized(w, h));
+        n
+    }
+
+    #[test]
+    fn marker_cell_size_derives_from_map_extent_over_raster_width() {
+        let mut w = land_world(64);
+        w.maps.push(map_with_extent(TEST_MAP, Some((512.0, 512.0))));
+        let cs = marker_cell_size(&w, &test_map()).expect("有地形就应推出格尺寸");
+        assert!(
+            (cs - 8.0).abs() < 1e-6,
+            "extent 512 / 栅格 64 格应得 8.0 wu/格，实得 {cs}"
+        );
+    }
+
+    #[test]
+    fn marker_cell_size_falls_back_to_root_extent_then_default() {
+        // 目标图未声明 extent → 根图 extent 兜底；再无 → 4096（grid_sync 同链）。
+        let mut w = land_world(64);
+        w.maps.push(map_with_extent(TEST_MAP, None));
+        w.maps
+            .push(map_with_extent("root_map", Some((2048.0, 2048.0))));
+        w.meta = Some(wv_core::WorldMeta {
+            name: "t".into(),
+            version: "1".into(),
+            schema_version: 2,
+            root_map: Id::new_unchecked("root_map"),
+            timeline_range: wv_core::time::TimeSpan { from: 0, to: None },
+        });
+        let cs = marker_cell_size(&w, &test_map()).expect("应回退根图 extent");
+        assert!(
+            (cs - 32.0).abs() < 1e-6,
+            "根图 2048 / 64 格应得 32.0，实得 {cs}"
+        );
+
+        // 连根图也没声明 → 4096 / 64 = 64。
+        let mut bare = land_world(64);
+        bare.maps.push(map_with_extent(TEST_MAP, None));
+        let cs = marker_cell_size(&bare, &test_map()).expect("无 extent 应回退 4096");
+        assert!(
+            (cs - 64.0).abs() < 1e-6,
+            "缺省 4096 / 64 格应得 64.0，实得 {cs}"
+        );
+    }
+
+    #[test]
+    fn marker_cell_size_is_none_without_terrain() {
+        let w = World::default();
+        assert!(
+            marker_cell_size(&w, &test_map()).is_none(),
+            "无地形栅格的图不该有格尺寸（调用方应拒绝重生成）"
+        );
+    }
+
+    #[test]
+    fn marker_command_stores_holes_when_generated_region_encloses_water() {
+        // 陆群系包络套住一片水：生成分支掩膜带洞（水域格不写）→ 几何存洞。
+        let mut w = land_world(64);
+        let mut cells = w.terrain_of(&test_map()).unwrap().cells.clone();
+        for y in 24..40 {
+            for x in 24..40 {
+                cells[y * 64 + x] = TerrainCellData {
+                    height: -20,
+                    surface: 0,
+                    biome: 0,
+                };
+            }
+        }
+        w.set_terrain(
+            test_map(),
+            TerrainData {
+                width: 64,
+                height: 64,
+                cells,
+            },
+        );
+        let cmd = PlaceBiomeMarkerCommand::new(
+            test_map(),
+            1.0,
+            5,
+            marker_place("place_ring_woods", "环湖林地", 1),
+            vec![(16.0, 16.0), (48.0, 16.0), (48.0, 48.0), (16.0, 48.0)],
+        );
+        cmd.apply(&mut w).expect("生成应成功");
+        let span = w
+            .place_geometry
+            .iter()
+            .find(|g| g.owner == Id::new_unchecked("place_ring_woods"))
+            .expect("边界应入场");
+        let GeometryData::PolygonWithHoles { outer, holes } = &span.geometry else {
+            panic!("包络套水应存带洞几何，实得 {:?}", span.geometry);
+        };
+        assert!(outer.len() >= 6, "外环应成环，实得 {outer:?}");
+        assert!(!holes.is_empty(), "水域芯应至少成一个洞环，实得 {holes:?}");
+        // 洞应贴着水域块 24..40 格（cell_size=1 → 24..40 wu，±1 格容差）。
+        let hx: Vec<f32> = holes[0].chunks_exact(2).map(|c| c[0]).collect();
+        let (min_x, max_x) = (
+            hx.iter().cloned().fold(f32::MAX, f32::min),
+            hx.iter().cloned().fold(f32::MIN, f32::max),
+        );
+        assert!(
+            (23.0..=25.0).contains(&min_x) && (39.0..=41.0).contains(&max_x),
+            "洞应贴水域 24..40 wu，实得 {min_x}..{max_x}"
+        );
+    }
+
+    #[test]
+    fn marker_command_identify_stores_holes_of_matched_mask() {
+        // 森林环 + 草地芯：识别分支的命中掩膜同样是环 → 边界带洞，地形逐位不动。
+        let mut w = land_world(64);
+        let mut cells = w.terrain_of(&test_map()).unwrap().cells.clone();
+        for y in 10..30 {
+            for x in 10..30 {
+                if (16..24).contains(&x) && (16..24).contains(&y) {
+                    continue; // 草地芯
+                }
+                cells[y * 64 + x].biome = 1;
+            }
+        }
+        w.set_terrain(
+            test_map(),
+            TerrainData {
+                width: 64,
+                height: 64,
+                cells,
+            },
+        );
+        let before = w.terrain_of(&test_map()).cloned().unwrap();
+        let cmd = PlaceBiomeMarkerCommand::new(
+            test_map(),
+            1.0,
+            5,
+            marker_place("place_hollow_forest", "空心森林", 1),
+            vec![(8.0, 8.0), (32.0, 8.0), (32.0, 32.0), (8.0, 32.0)],
+        );
+        cmd.apply(&mut w).expect("识别应成功");
+        assert_eq!(
+            w.terrain_of(&test_map()).cloned().unwrap(),
+            before,
+            "识别分支不得改动地形"
+        );
+        let span = w
+            .place_geometry
+            .iter()
+            .find(|g| g.owner == Id::new_unchecked("place_hollow_forest"))
+            .expect("边界应入场");
+        let GeometryData::PolygonWithHoles { holes, .. } = &span.geometry else {
+            panic!("草地芯应使识别边界带洞，实得 {:?}", span.geometry);
+        };
+        assert!(!holes.is_empty(), "草地芯应至少成一个洞环，实得 {holes:?}");
+    }
+
+    // ---- 重生成命令（M2 Task 4） ----
+
+    fn create_marker(
+        w: &mut World,
+        id: &str,
+        cell_size: f32,
+        envelope: Vec<(f32, f32)>,
+    ) -> wv_core::Id {
+        let place_id = Id::new_unchecked(id);
+        let cmd = PlaceBiomeMarkerCommand::new(
+            test_map(),
+            cell_size,
+            5,
+            marker_place(id, id, 1),
+            envelope,
+        );
+        cmd.apply(w).expect("创建标记应成功");
+        place_id
+    }
+
+    fn set_biome_block(w: &mut World, x0: i32, y0: i32, x1: i32, y1: i32, biome: u8) {
+        let mut data = w.terrain_of(&test_map()).cloned().unwrap();
+        for y in y0..y1 {
+            for x in x0..x1 {
+                data.cells[(y * data.width as i32 + x) as usize].biome = biome;
+            }
+        }
+        w.set_terrain(test_map(), data);
+    }
+
+    fn span_ring_of(w: &World, owner: &Id) -> Vec<f32> {
+        let span = w
+            .place_geometry
+            .iter()
+            .find(|g| &g.owner == owner)
+            .unwrap_or_else(|| panic!("标记 {owner} 应有边界 span"));
+        match &span.geometry {
+            GeometryData::Polygon(ring) => ring.clone(),
+            GeometryData::PolygonWithHoles { outer, .. } => outer.clone(),
+            other => panic!("意外的几何形态：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn regenerate_rewrites_stale_boundary_after_brush_without_touching_terrain() {
+        // ②主场景：笔刷吃掉半片森林 → 重生成走识别分支，边界收缩、地形逐位不动。
+        let mut w = land_world(64);
+        w.maps.push(map_with_extent(TEST_MAP, Some((64.0, 64.0))));
+        let id = create_marker(
+            &mut w,
+            "place_dark_forest",
+            1.0,
+            vec![(8.0, 8.0), (32.0, 8.0), (32.0, 32.0), (8.0, 32.0)],
+        );
+        // 笔刷把 x ≥ 20 的森林改回草原（模拟作者手改 / 后续涂刷）。
+        set_biome_block(&mut w, 20, 0, 64, 64, 3);
+        let terrain_before = w.terrain_of(&test_map()).cloned().unwrap();
+
+        let dirty = RegenerateBiomeMarkerCommand::new(id.clone(), 9)
+            .apply(&mut w)
+            .expect("重生成应成功");
+        assert!(
+            !dirty.iter().any(|p| p.contains("terrain.bin")),
+            "识别分支不写格子，dirty 不得含地形路径（省一次无谓的 terrain.bin 重写），实得 {dirty:?}"
+        );
+        assert_eq!(
+            w.terrain_of(&test_map()).cloned().unwrap(),
+            terrain_before,
+            "识别分支的重生成不得改动地形格子"
+        );
+        // span 替换且只剩一条，from 取重生成日。
+        let spans: Vec<&GeometrySpan> = w.place_geometry.iter().filter(|g| g.owner == id).collect();
+        assert_eq!(spans.len(), 1, "重生成后 owner 名下应恰好 1 条 span");
+        assert_eq!(spans[0].span.from, 9, "新 span.from 应取重生成日");
+        // 边界收缩到剩余森林（≈8..20 wu）。
+        let ring = span_ring_of(&w, &id);
+        let xs: Vec<f32> = ring.chunks_exact(2).map(|c| c[0]).collect();
+        let max_x = xs.iter().cloned().fold(f32::MIN, f32::max);
+        assert!(
+            (18.0..=23.0).contains(&max_x),
+            "边界应收缩到剩余森林（max_x≈20），实得 {max_x}"
+        );
+        // 锚点随新边界移动（原 8..32 中点 20 → 剩余 8..20 中点 ≈14）。
+        let place = w.distances.places.iter().find(|p| p.id == id).unwrap();
+        let x = place.x.expect("锚点应已重拟合");
+        assert!(
+            (x - 14.0).abs() < 3.0,
+            "锚点应随收缩后的边界重拟合（≈14），实得 {x}"
+        );
+    }
+
+    #[test]
+    fn regenerate_generated_branch_rewrites_cells_and_undo_restores_bitwise() {
+        let mut w = land_world(64);
+        w.maps.push(map_with_extent(TEST_MAP, Some((64.0, 64.0))));
+        let id = create_marker(
+            &mut w,
+            "place_dark_forest",
+            1.0,
+            vec![(10.0, 10.0), (30.0, 10.0), (30.0, 30.0), (10.0, 30.0)],
+        );
+        // 清空包络内森林 → 重生成必须走生成分支重新写格。
+        set_biome_block(&mut w, 10, 10, 30, 30, 3);
+        let terrain_cleared = w.terrain_of(&test_map()).cloned().unwrap();
+        let (anchor_before, span_before) = {
+            let p = w.distances.places.iter().find(|p| p.id == id).unwrap();
+            (p.x, w.place_geometry.clone())
+        };
+
+        let cmd = RegenerateBiomeMarkerCommand::new(id.clone(), 9);
+        let dirty = cmd.apply(&mut w).expect("生成分支重生成应成功");
+        assert!(
+            dirty.contains(&format!("maps/{}/terrain.bin", test_map())),
+            "写格子必须报地形脏路径：{dirty:?}"
+        );
+        let t = w.terrain_of(&test_map()).unwrap();
+        assert_eq!(t.cells[20 * 64 + 20].biome, 1, "包络内应重新生成森林");
+        assert_eq!(t.cells[2 * 64 + 2].biome, 3, "包络外格不应被动");
+
+        cmd.revert(&mut w).expect("revert 应成功");
+        assert_eq!(
+            w.terrain_of(&test_map()).cloned().unwrap(),
+            terrain_cleared,
+            "revert 应逐位还原到 apply 前的（已清空）地形"
+        );
+        let p = w.distances.places.iter().find(|p| p.id == id).unwrap();
+        assert_eq!(p.x, anchor_before, "revert 应还原锚点");
+        assert_eq!(w.place_geometry, span_before, "revert 应逐条还原 span 列表");
+    }
+
+    #[test]
+    fn regenerate_replaces_span_instead_of_appending() {
+        let mut w = land_world(64);
+        w.maps.push(map_with_extent(TEST_MAP, Some((64.0, 64.0))));
+        let id = create_marker(
+            &mut w,
+            "place_dark_forest",
+            1.0,
+            vec![(8.0, 8.0), (32.0, 8.0), (32.0, 32.0), (8.0, 32.0)],
+        );
+        // 裸实例（未 apply）revert 必须无操作：不抹锚点、不动 span。
+        RegenerateBiomeMarkerCommand::new(id.clone(), 99)
+            .revert(&mut w)
+            .expect("未 apply 的 revert 应无操作成功");
+        assert!(
+            w.place_geometry.iter().any(|g| g.owner == id),
+            "无操作 revert 不得动 span"
+        );
+        assert!(
+            w.distances
+                .places
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap()
+                .x
+                .is_some(),
+            "无操作 revert 不得抹锚点"
+        );
+
+        RegenerateBiomeMarkerCommand::new(id.clone(), 9)
+            .apply(&mut w)
+            .expect("第一次重生成");
+        RegenerateBiomeMarkerCommand::new(id.clone(), 12)
+            .apply(&mut w)
+            .expect("第二次重生成");
+        let spans: Vec<&GeometrySpan> = w.place_geometry.iter().filter(|g| g.owner == id).collect();
+        assert_eq!(
+            spans.len(),
+            1,
+            "两次重生成后 owner 名下仍应恰好 1 条 span（R2 替换），实得 {}",
+            spans.len()
+        );
+        assert_eq!(spans[0].span.from, 12, "最新 span.from 应取第二次重生成日");
+    }
+
+    #[test]
+    fn regenerate_uses_raster_derived_cell_size() {
+        // extent 512 / 栅格 64 格 → 推导 cell_size=8；包络 80..320 wu = 格 10..40。
+        // 若格尺寸漂移（如按 1.0 算），包络会越界成 80..320 格 → 空区域错误。
+        let mut w = land_world(64);
+        w.maps.push(map_with_extent(TEST_MAP, Some((512.0, 512.0))));
+        let id = create_marker(
+            &mut w,
+            "place_dark_forest",
+            8.0,
+            vec![(80.0, 80.0), (320.0, 80.0), (320.0, 320.0), (80.0, 320.0)],
+        );
+        set_biome_block(&mut w, 10, 10, 40, 40, 3);
+        RegenerateBiomeMarkerCommand::new(id.clone(), 9)
+            .apply(&mut w)
+            .expect("重生成应按 raster 推导的格尺寸成功（C1 回归）");
+        let t = w.terrain_of(&test_map()).unwrap();
+        assert_eq!(t.cells[20 * 64 + 20].biome, 1, "格 (20,20) 应重新生成森林");
+        assert_eq!(t.cells[5 * 64 + 5].biome, 3, "包络外格不应被动");
+    }
+
+    #[test]
+    fn regenerate_errors_without_biome_or_envelope() {
+        let mut w = land_world(64);
+        let mut p = marker_place("place_plain", "普通地点", 1);
+        p.biome = None;
+        p.map = Some(test_map());
+        w.distances.places.push(p);
+        let terrain_before = w.terrain_of(&test_map()).cloned().unwrap();
+        let err = RegenerateBiomeMarkerCommand::new(Id::new_unchecked("place_plain"), 9)
+            .apply(&mut w)
+            .expect_err("缺 biome 的地点不是标记");
+        assert!(
+            matches!(err, EditError::Precondition(_)),
+            "应为前置条件错误，实得 {err:?}"
+        );
+        assert_eq!(w.terrain_of(&test_map()).cloned().unwrap(), terrain_before);
+
+        w.distances.places[0].biome = Some(1);
+        w.distances.places[0].envelope = None;
+        let err = RegenerateBiomeMarkerCommand::new(Id::new_unchecked("place_plain"), 9)
+            .apply(&mut w)
+            .expect_err("缺 envelope 无法重生成");
+        assert!(
+            matches!(err, EditError::Precondition(_)),
+            "应为前置条件错误，实得 {err:?}"
+        );
+        assert!(w.place_geometry.is_empty(), "失败不得写入任何 span");
+
+        let err = RegenerateBiomeMarkerCommand::new(Id::new_unchecked("place_ghost"), 9)
+            .apply(&mut w)
+            .expect_err("不存在的地点应报 TargetMissing");
+        assert!(matches!(err, EditError::TargetMissing(_)), "实得 {err:?}");
+    }
+
+    #[test]
+    fn regenerate_errors_when_envelope_now_all_water_leaving_world_untouched() {
+        let mut w = land_world(64);
+        w.maps.push(map_with_extent(TEST_MAP, Some((64.0, 64.0))));
+        let id = create_marker(
+            &mut w,
+            "place_dark_forest",
+            1.0,
+            vec![(10.0, 10.0), (30.0, 10.0), (30.0, 30.0), (10.0, 30.0)],
+        );
+        // 沧海桑田：包络整体沉成海（陆群系无处可写 → EmptyRegion）。
+        let mut data = w.terrain_of(&test_map()).cloned().unwrap();
+        for y in 10..30 {
+            for x in 10..30 {
+                data.cells[y * 64 + x] = TerrainCellData {
+                    height: -30,
+                    surface: 0,
+                    biome: 0,
+                };
+            }
+        }
+        w.set_terrain(test_map(), data);
+        let terrain_before = w.terrain_of(&test_map()).cloned().unwrap();
+        let spans_before = w.place_geometry.clone();
+        let places_before = w.distances.places.clone();
+
+        let err = RegenerateBiomeMarkerCommand::new(id.clone(), 9)
+            .apply(&mut w)
+            .expect_err("全水包络 + 陆群系应空区域失败");
+        assert!(matches!(err, EditError::Precondition(_)), "实得 {err:?}");
+        assert_eq!(w.terrain_of(&test_map()).cloned().unwrap(), terrain_before);
+        assert_eq!(w.place_geometry, spans_before, "失败不得改动 span");
+        assert_eq!(w.distances.places, places_before, "失败不得改动地点");
+    }
+
+    /// undo 最险路径：redo（同实例再次 apply）→ 再 revert，仍逐位还原。
+    /// `History::redo` 对命令重调 `apply`——快照被重写、span 处于已还原态，
+    /// 这条回环必须有测试锁定。
+    #[test]
+    fn regenerate_revert_redo_cycle_restores_bitwise_each_time() {
+        let mut w = land_world(64);
+        w.maps.push(map_with_extent(TEST_MAP, Some((64.0, 64.0))));
+        let id = create_marker(
+            &mut w,
+            "place_dark_forest",
+            1.0,
+            vec![(10.0, 10.0), (30.0, 10.0), (30.0, 30.0), (10.0, 30.0)],
+        );
+        set_biome_block(&mut w, 10, 10, 30, 30, 3);
+        let snapshot = |w: &World| {
+            (
+                w.terrain_of(&test_map()).cloned().unwrap(),
+                w.distances.places.clone(),
+                w.place_geometry.clone(),
+            )
+        };
+        let original = snapshot(&w);
+
+        let cmd = RegenerateBiomeMarkerCommand::new(id, 9);
+        cmd.apply(&mut w).expect("首次 apply");
+        cmd.revert(&mut w).expect("首次 revert");
+        assert_eq!(snapshot(&w), original, "第一次回环后应逐位还原");
+        cmd.apply(&mut w).expect("redo（同实例再次 apply）");
+        cmd.revert(&mut w).expect("redo 后再 revert");
+        assert_eq!(snapshot(&w), original, "redo 回环后仍应逐位还原");
+    }
+
+    /// owner 名下多条旧 span 与外部 span 交错：revert 按原索引升序回插，
+    /// 全表顺序必须与 apply 前一致。
+    #[test]
+    fn regenerate_revert_restores_interleaved_spans_in_original_order() {
+        let mut w = land_world(64);
+        w.maps.push(map_with_extent(TEST_MAP, Some((64.0, 64.0))));
+        let id = create_marker(
+            &mut w,
+            "place_dark_forest",
+            1.0,
+            vec![(8.0, 8.0), (32.0, 8.0), (32.0, 32.0), (8.0, 32.0)],
+        );
+        let mk_span = |owner: &str, from: i64| GeometrySpan {
+            map: test_map(),
+            owner: Id::new_unchecked(owner),
+            span: wv_core::time::TimeSpan { from, to: None },
+            geometry: GeometryData::Polygon(vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0]),
+            relation: None,
+        };
+        // 重排成 [外部A, marker(5), 外部B, marker 旧史 span(2)] —— owner 与
+        // 外部交错，回插顺序是本命令最精巧的不变式。
+        let marker_span = w.place_geometry.remove(0);
+        w.place_geometry = vec![
+            mk_span("place_other_a", 1),
+            marker_span,
+            mk_span("place_other_b", 3),
+            mk_span(id.as_str(), 2),
+        ];
+        let before = w.place_geometry.clone();
+
+        let cmd = RegenerateBiomeMarkerCommand::new(id.clone(), 9);
+        cmd.apply(&mut w).expect("重生成应替换两条 owner span");
+        let owner_spans: Vec<&GeometrySpan> = w
+            .place_geometry
+            .iter()
+            .filter(|g| g.owner.as_ref() == id.as_str())
+            .collect();
+        assert_eq!(
+            owner_spans.len(),
+            1,
+            "重生成后 owner 名下应只剩 1 条新 span，实得 {}",
+            owner_spans.len()
+        );
+        assert_eq!(owner_spans[0].span.from, 9);
+        cmd.revert(&mut w).expect("revert");
+        assert_eq!(
+            w.place_geometry, before,
+            "revert 应把交错的多条旧 span 按原顺序全表还原"
+        );
+    }
+
+    /// 手改 YAML 可能留下畸形包络（奇数长度 / 少于 3 点）→ 人话错误、零改动。
+    #[test]
+    fn regenerate_rejects_malformed_envelope_flat_array() {
+        let mut w = land_world(64);
+        w.maps.push(map_with_extent(TEST_MAP, Some((64.0, 64.0))));
+        let mut p = marker_place("place_bad", "坏包络", 1);
+        p.map = Some(test_map());
+        w.distances.places.push(p);
+        let terrain_before = w.terrain_of(&test_map()).cloned().unwrap();
+
+        for bad in [vec![1.0, 2.0, 3.0], vec![1.0, 2.0, 3.0, 4.0, 5.0]] {
+            w.distances.places[0].envelope = Some(bad.clone());
+            let err = RegenerateBiomeMarkerCommand::new(Id::new_unchecked("place_bad"), 9)
+                .apply(&mut w)
+                .unwrap_err();
+            assert!(matches!(err, EditError::Precondition(_)), "实得 {err:?}");
+        }
+        assert_eq!(w.terrain_of(&test_map()).cloned().unwrap(), terrain_before);
+        assert!(w.place_geometry.is_empty(), "畸形包络不得写入任何 span");
+    }
+
+    #[test]
+    fn regenerate_stores_holes_as_polygon_with_holes() {
+        // 生成时是实心林块；后来中间挖出湖 → 重生成识别分支命中掩膜成环 → 带洞。
+        let mut w = land_world(64);
+        w.maps.push(map_with_extent(TEST_MAP, Some((64.0, 64.0))));
+        let id = create_marker(
+            &mut w,
+            "place_dark_forest",
+            1.0,
+            vec![(16.0, 16.0), (48.0, 16.0), (48.0, 48.0), (16.0, 48.0)],
+        );
+        let mut data = w.terrain_of(&test_map()).cloned().unwrap();
+        for y in 24..40 {
+            for x in 24..40 {
+                data.cells[y * 64 + x] = TerrainCellData {
+                    height: -20,
+                    surface: 0,
+                    biome: 0,
+                };
+            }
+        }
+        w.set_terrain(test_map(), data);
+        let terrain_before = w.terrain_of(&test_map()).cloned().unwrap();
+        RegenerateBiomeMarkerCommand::new(id.clone(), 9)
+            .apply(&mut w)
+            .expect("重生成应成功");
+        assert_eq!(
+            w.terrain_of(&test_map()).cloned().unwrap(),
+            terrain_before,
+            "识别分支不得改动地形"
+        );
+        let span = w
+            .place_geometry
+            .iter()
+            .find(|g| g.owner == id)
+            .expect("span 应存在");
+        let GeometryData::PolygonWithHoles { holes, .. } = &span.geometry else {
+            panic!("湖芯应使重生成边界带洞，实得 {:?}", span.geometry);
+        };
+        assert!(!holes.is_empty(), "应至少一个洞环，实得 {holes:?}");
     }
 
     #[test]

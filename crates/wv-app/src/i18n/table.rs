@@ -285,6 +285,9 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::RegionPanelOutlineSuffix => " 个顶点",
         I18nKey::RegionPanelOutlinePlaceholder => "（未绘制）",
         I18nKey::RegionPanelDeleteBtn => "删除区域",
+        I18nKey::RegionPanelMarkerSection => "生物群系标记",
+        I18nKey::RegionPanelMarkerEmpty => "当前地图暂无标记（用选区意图菜单「标记」创建）",
+        I18nKey::RegionPanelMarkerRegenBtn => "重生成边界",
 
         // ── 势力 ──
         I18nKey::FactionPanelAddBtn => "+ 新建势力",
@@ -808,6 +811,9 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::RegionPanelOutlineSuffix => " vertex/vertices",
         I18nKey::RegionPanelOutlinePlaceholder => "(none drawn)",
         I18nKey::RegionPanelDeleteBtn => "Delete region",
+        I18nKey::RegionPanelMarkerSection => "Biome markers",
+        I18nKey::RegionPanelMarkerEmpty => "No markers on this map (use the selection intent menu)",
+        I18nKey::RegionPanelMarkerRegenBtn => "Regenerate boundary",
 
         // ── Faction panel ──
         I18nKey::FactionPanelAddBtn => "+ New faction",

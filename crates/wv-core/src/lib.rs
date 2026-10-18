@@ -77,7 +77,7 @@ pub use model::faction::{
     query_at_point, resolve_faction_layer_id, resolved_faction_layers, subordinates_of, Faction,
     FactionColorMode, FactionLayer, FactionTerritory, Membership, DEFAULT_FACTION_LAYER_ID,
 };
-pub use model::place_territory::place_territory_at;
+pub use model::place_territory::{place_territory_at, TerritoryShape};
 pub use model::region::Region;
 pub use source::building::{Building, BuildingLayer};
 pub use source::geographic_source::{GeographicSourceV1, LatLonBbox};

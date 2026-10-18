@@ -525,6 +525,12 @@ pub enum I18nKey {
     RegionPanelOutlinePlaceholder,
     /// 「删除区域」按钮
     RegionPanelDeleteBtn,
+    /// 「生物群系标记」小节标题（区域面板）
+    RegionPanelMarkerSection,
+    /// 当前地图暂无标记的空态提示
+    RegionPanelMarkerEmpty,
+    /// 「重生成边界」按钮（标记行）
+    RegionPanelMarkerRegenBtn,
 
     // ── 势力面板 ─────────────────────────────────────────────────────
     /// 「+ 新建势力」按钮
@@ -999,7 +1005,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 411] = [
+    pub const ALL: [I18nKey; 414] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1227,7 +1233,7 @@ impl I18nKey {
         I18nKey::SituationPanelEmptyTitle,
         I18nKey::SituationPanelEmptyHint,
         I18nKey::SituationPanelEmptyAction,
-        // 区域（11）
+        // 区域（14）
         I18nKey::RegionPanelAddBtn,
         I18nKey::RegionPanelDefaultName,
         I18nKey::RegionPanelCurrentMapPrefix,
@@ -1239,6 +1245,9 @@ impl I18nKey {
         I18nKey::RegionPanelOutlineSuffix,
         I18nKey::RegionPanelOutlinePlaceholder,
         I18nKey::RegionPanelDeleteBtn,
+        I18nKey::RegionPanelMarkerSection,
+        I18nKey::RegionPanelMarkerEmpty,
+        I18nKey::RegionPanelMarkerRegenBtn,
         // 势力（15）
         I18nKey::FactionPanelAddBtn,
         I18nKey::FactionPanelAddBoundaryBtn,
