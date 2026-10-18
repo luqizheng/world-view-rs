@@ -189,7 +189,11 @@ pub fn sync_faction_overlays(
         };
 
         if let Some(fill) = style.fill_alpha {
-            let mesh = meshes.add(build_polygon_mesh(t.vertices));
+            let mesh = meshes.add(if t.holes.is_empty() {
+                build_polygon_mesh(t.vertices)
+            } else {
+                build_polygon_with_holes_mesh(t.vertices, &t.holes)
+            });
             let material = materials.add(ColorMaterial {
                 color: Color::srgba(
                     color[0] as f32 / 255.0,
@@ -210,69 +214,107 @@ pub fn sync_faction_overlays(
         }
 
         if let Some(border_alpha) = style.border_alpha {
-            let edges = polygon_edges(t.vertices);
-            if edges.is_empty() {
-                continue;
-            }
             let px = border_px_for(t.faction.rank.as_deref(), !t.faction.memberships.is_empty());
-            let segments = if style.dashed {
-                dash_segments(
-                    &edges,
-                    stroke_world_thickness(DASH_PX, view.scale),
-                    stroke_world_thickness(GAP_PX, view.scale),
-                )
-            } else {
-                edges
-            };
-            if segments.is_empty() {
-                continue;
+            // 外环 + 每个洞环都要描边（国中国的「洞沿」就是内国边界）。
+            for ring in territory_rings(t.vertices, &t.holes) {
+                draw_border_ring(
+                    ring,
+                    &mut meshes,
+                    &mut materials,
+                    &mut layer,
+                    &mut commands,
+                    &view,
+                    style,
+                    px,
+                    border_alpha,
+                    opacity,
+                    color,
+                    z,
+                );
             }
-            // casing：深墨外圈；inner：势力色内线。相邻两国共用边界时自然形成
-            // 「墨线夹两色」（各自画自己一侧）。
-            let casing = meshes.add(build_stroke_batch_mesh(
-                &segments,
-                stroke_world_thickness(px + 2.0, view.scale),
-            ));
-            let casing_mat = materials.add(ColorMaterial {
-                color: Color::srgba(
-                    BORDER_INK[0] as f32 / 255.0,
-                    BORDER_INK[1] as f32 / 255.0,
-                    BORDER_INK[2] as f32 / 255.0,
-                    (border_alpha * 0.85 * opacity).clamp(0.0, 1.0),
-                ),
-                ..default()
-            });
-            let casing_entity = commands
-                .spawn((
-                    Mesh2d(casing),
-                    MeshMaterial2d(casing_mat),
-                    Transform::from_translation(Vec3::new(0.0, 0.0, z + 0.001)),
-                ))
-                .id();
-            layer.borders.push(casing_entity);
-
-            let inner = meshes.add(build_stroke_batch_mesh(
-                &segments,
-                stroke_world_thickness(px, view.scale),
-            ));
-            let inner_mat = materials.add(ColorMaterial {
-                color: Color::srgba(
-                    color[0] as f32 / 255.0,
-                    color[1] as f32 / 255.0,
-                    color[2] as f32 / 255.0,
-                    (border_alpha * opacity).clamp(0.0, 1.0),
-                ),
-                ..default()
-            });
-            let inner_entity = commands
-                .spawn((
-                    Mesh2d(inner),
-                    MeshMaterial2d(inner_mat),
-                    Transform::from_translation(Vec3::new(0.0, 0.0, z + 0.002)),
-                ))
-                .id();
-            layer.borders.push(inner_entity);
         }
+    }
+}
+
+/// 单条边界环的描边（casing + inner 两层线）。从 `sync_faction_overlays` 提出，
+/// 供外环与洞环共用。
+#[allow(clippy::too_many_arguments)]
+fn draw_border_ring(
+    ring: &[f32],
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<ColorMaterial>,
+    layer: &mut FactionOverlayEntities,
+    commands: &mut Commands,
+    view: &ViewState,
+    style: TerritoryStyle,
+    px: f32,
+    border_alpha: f32,
+    opacity: f32,
+    color: [u8; 3],
+    z: f32,
+) {
+    {
+        let edges = polygon_edges(ring);
+        if edges.is_empty() {
+            return;
+        }
+        let segments = if style.dashed {
+            dash_segments(
+                &edges,
+                stroke_world_thickness(DASH_PX, view.scale),
+                stroke_world_thickness(GAP_PX, view.scale),
+            )
+        } else {
+            edges
+        };
+        if segments.is_empty() {
+            return;
+        }
+        // casing：深墨外圈；inner：势力色内线。相邻两国共用边界时自然形成
+        // 「墨线夹两色」（各自画自己一侧）。
+        let casing = meshes.add(build_stroke_batch_mesh(
+            &segments,
+            stroke_world_thickness(px + 2.0, view.scale),
+        ));
+        let casing_mat = materials.add(ColorMaterial {
+            color: Color::srgba(
+                BORDER_INK[0] as f32 / 255.0,
+                BORDER_INK[1] as f32 / 255.0,
+                BORDER_INK[2] as f32 / 255.0,
+                (border_alpha * 0.85 * opacity).clamp(0.0, 1.0),
+            ),
+            ..default()
+        });
+        let casing_entity = commands
+            .spawn((
+                Mesh2d(casing),
+                MeshMaterial2d(casing_mat),
+                Transform::from_translation(Vec3::new(0.0, 0.0, z + 0.001)),
+            ))
+            .id();
+        layer.borders.push(casing_entity);
+
+        let inner = meshes.add(build_stroke_batch_mesh(
+            &segments,
+            stroke_world_thickness(px, view.scale),
+        ));
+        let inner_mat = materials.add(ColorMaterial {
+            color: Color::srgba(
+                color[0] as f32 / 255.0,
+                color[1] as f32 / 255.0,
+                color[2] as f32 / 255.0,
+                (border_alpha * opacity).clamp(0.0, 1.0),
+            ),
+            ..default()
+        });
+        let inner_entity = commands
+            .spawn((
+                Mesh2d(inner),
+                MeshMaterial2d(inner_mat),
+                Transform::from_translation(Vec3::new(0.0, 0.0, z + 0.002)),
+            ))
+            .id();
+        layer.borders.push(inner_entity);
     }
 }
 
@@ -447,7 +489,245 @@ pub(crate) fn build_polygon_mesh(coords: &[f32]) -> Mesh {
     mesh
 }
 
+// ---------------------------------------------------------------------------
+// 带洞三角化（ADR-0028 D3；自写 earcut，零新依赖）
+// ---------------------------------------------------------------------------
+
+/// 环的有符号面积（shoelace）；正 = 逆时针。
+fn ring_signed_area(ring: &[[f32; 2]]) -> f32 {
+    let n = ring.len();
+    let mut a = 0.0f32;
+    for i in 0..n {
+        let p = ring[i];
+        let q = ring[(i + 1) % n];
+        a += p[0] * q[1] - q[0] * p[1];
+    }
+    a / 2.0
+}
+
+fn flat_to_ring(flat: &[f32]) -> Vec<[f32; 2]> {
+    flat.chunks_exact(2).map(|c| [c[0], c[1]]).collect()
+}
+
+/// 点是否在三角形**严格内部**（不含边界）。耳剪的 contains 测试必须用
+/// 严格版：桥接产生的重复点落在候选耳顶点/边上时不算「环内其他点」，
+/// 否则所有耳被毙、三角化退化成兜底扇形。
+fn point_in_triangle(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> bool {
+    let d1 = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+    let d2 = (c[0] - b[0]) * (p[1] - b[1]) - (c[1] - b[1]) * (p[0] - b[0]);
+    let d3 = (a[0] - c[0]) * (p[1] - c[1]) - (a[1] - c[1]) * (p[0] - c[0]);
+    (d1 > 0.0 && d2 > 0.0 && d3 > 0.0) || (d1 < 0.0 && d2 < 0.0 && d3 < 0.0)
+}
+
+/// 带洞三角化：洞环按 max-x 桥接进外环（桥上顶点各复制一次形成零宽走廊），
+/// 合成单一环后经典耳剪。输出三角形 soup（顶点重复，渲染等价）。
+///
+/// 确定性：无随机、无浮点排序不稳定项（max-x 平局按环序）。
+pub(crate) fn earcut_with_holes(outer: &[f32], holes: &[&[f32]]) -> Vec<[f32; 2]> {
+    let mut ring = flat_to_ring(outer);
+    if ring.len() < 3 {
+        return Vec::new();
+    }
+    if ring_signed_area(&ring) < 0.0 {
+        ring.reverse();
+    }
+    let mut holes: Vec<Vec<[f32; 2]>> = holes
+        .iter()
+        .map(|h| {
+            let mut v = flat_to_ring(h);
+            // 洞环统一顺时针（面积符号与外环相反）。
+            if ring_signed_area(&v) > 0.0 {
+                v.reverse();
+            }
+            v
+        })
+        .collect();
+    // max-x 大的洞先桥（earcut 惯例：桥不穿过未处理洞的概率更高）。
+    holes.sort_by(|a, b| {
+        let am = a.iter().fold(f32::MIN, |m, p| m.max(p[0]));
+        let bm = b.iter().fold(f32::MIN, |m, p| m.max(p[0]));
+        bm.partial_cmp(&am).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let flat_ring: Vec<f32> = ring.iter().flat_map(|p| [p[0], p[1]]).collect();
+    for hole in &holes {
+        if hole.is_empty() {
+            continue;
+        }
+        // 洞的 max-x 顶点。
+        let (hi, _) = hole
+            .iter()
+            .enumerate()
+            .fold((0usize, f32::MIN), |(bi, bx), (i, p)| {
+                if p[0] > bx {
+                    (i, p[0])
+                } else {
+                    (bi, bx)
+                }
+            });
+        let h = hole[hi];
+        // 可见桥点：外环顶点里离洞点最近、且连线中点在（当前）环内部者。
+        let mut best: Option<(usize, f32)> = None;
+        for (k, o) in ring.iter().enumerate() {
+            let mid = [(o[0] + h[0]) / 2.0, (o[1] + h[1]) / 2.0];
+            if !wv_core::geometry::point_in_ring(&flat_ring, mid[0], mid[1]) {
+                continue;
+            }
+            let d2 = (o[0] - h[0]) * (o[0] - h[0]) + (o[1] - h[1]) * (o[1] - h[1]);
+            if best.map(|(_, bd)| d2 < bd).unwrap_or(true) {
+                best = Some((k, d2));
+            }
+        }
+        let Some(k) = best.map(|(k, _)| k) else {
+            continue; // 无可见桥点（退化）——跳过该洞（V1：不 panic，宁可多填一块）
+        };
+        // 拼接：外环 0..=k + 洞 hi..end + 洞 0..=hi + 外环 k（桥走两遍）。
+        let mut next: Vec<[f32; 2]> = Vec::with_capacity(ring.len() + hole.len() + 2);
+        next.extend_from_slice(&ring[..=k]);
+        next.extend_from_slice(&hole[hi..]);
+        next.extend_from_slice(&hole[..=hi]);
+        next.push(ring[k]);
+        next.extend_from_slice(&ring[k + 1..]);
+        ring = next;
+    }
+    // 经典耳剪。
+    let mut tris: Vec<[f32; 2]> = Vec::new();
+    let mut idx: Vec<usize> = (0..ring.len()).collect();
+    let mut guard = 0usize;
+    while idx.len() >= 3 && guard < idx.len() * idx.len() + 64 {
+        guard += 1;
+        let mut clipped = false;
+        let n = idx.len();
+        for i in 0..n {
+            let (ia, ib, ic) = (idx[i], idx[(i + 1) % n], idx[(i + 2) % n]);
+            let (a, b, c) = (ring[ia], ring[ib], ring[ic]);
+            // 凸性（严格；零面积耳跳过——桥的退化点在这里自然消解）。
+            let cross = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+            if cross <= 1e-9 {
+                continue;
+            }
+            let contains_other = idx.iter().enumerate().any(|(pos, &j)| {
+                let is_ear_vertex = pos == i || pos == (i + 1) % n || pos == (i + 2) % n;
+                !is_ear_vertex && point_in_triangle(ring[j], a, b, c)
+            });
+            if contains_other {
+                continue;
+            }
+            tris.push(a);
+            tris.push(b);
+            tris.push(c);
+            idx.remove((i + 1) % n);
+            clipped = true;
+            break;
+        }
+        if !clipped {
+            // 数值兜底：残余顶点扇形收尾（不 panic，V1 精神）。
+            for w in idx.windows(3) {
+                tris.push(ring[w[0]]);
+                tris.push(ring[w[1]]);
+                tris.push(ring[w[2]]);
+            }
+            break;
+        }
+    }
+    tris
+}
+
+/// 领土的全部描边环：外环 + 每个洞环。
+pub(crate) fn territory_rings<'a>(vertices: &'a [f32], holes: &'a [&'a [f32]]) -> Vec<&'a [f32]> {
+    let mut rings = vec![vertices];
+    rings.extend(holes.iter().copied());
+    rings
+}
+
+/// 带洞填充网格：三角 soup → TriangleList（顺序索引）。
+pub(crate) fn build_polygon_with_holes_mesh(outer: &[f32], holes: &[&[f32]]) -> Mesh {
+    let tris = earcut_with_holes(outer, holes);
+    let positions: Vec<[f32; 3]> = tris.iter().map(|p| [p[0], p[1], 0.0]).collect();
+    let indices: Vec<u32> = (0..positions.len() as u32).collect();
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+    );
+    mesh.insert_attribute(
+        MeshVertexAttribute::new("Vertex_Position", 0, VertexFormat::Float32x3),
+        positions,
+    );
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
+}
+
 #[cfg(test)]
+mod hole_tessellation_tests {
+    use super::*;
+
+    fn outer_square() -> Vec<f32> {
+        vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0]
+    }
+
+    fn hole_square() -> Vec<f32> {
+        vec![2.0, 2.0, 6.0, 2.0, 6.0, 6.0, 2.0, 6.0]
+    }
+
+    fn triangle_area_sum(tris: &[[f32; 2]]) -> f32 {
+        tris.chunks_exact(3)
+            .map(|t| {
+                let (a, b, c) = (t[0], t[1], t[2]);
+                ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() / 2.0
+            })
+            .sum()
+    }
+
+    #[test]
+    fn earcut_rectangles_outer_with_one_hole_covers_area_excluding_hole() {
+        let hole = hole_square();
+        let tris = earcut_with_holes(&outer_square(), &[&hole]);
+        // 面积不变式：三角 soup 总面积 == 外环 - 洞（10×10 - 4×4 = 84）。
+        let area = triangle_area_sum(&tris);
+        assert!((area - 84.0).abs() < 0.5, "三角化总面积应 ≈84，实得 {area}");
+        // 洞心不被任何三角形覆盖（点在三角内测试）。
+        let hole_center = [4.0f32, 4.0];
+        for t in tris.chunks_exact(3) {
+            let (a, b, c) = (t[0], t[1], t[2]);
+            let sign = |p: [f32; 2], q: [f32; 2], r: [f32; 2]| {
+                (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+            };
+            let (d1, d2, d3) = (
+                sign(a, b, hole_center),
+                sign(b, c, hole_center),
+                sign(c, a, hole_center),
+            );
+            let has_neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
+            let has_pos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
+            assert!(
+                !(has_neg == false && has_pos == false) || (has_neg && has_pos),
+                "洞心被三角形覆盖"
+            );
+        }
+    }
+
+    #[test]
+    fn polygon_with_holes_mesh_is_a_triangle_list_with_soup_indices() {
+        let hole = hole_square();
+        let mesh = build_polygon_with_holes_mesh(&outer_square(), &[&hole]);
+        assert!(matches!(
+            mesh.primitive_topology(),
+            bevy::render::render_resource::PrimitiveTopology::TriangleList
+        ));
+        let indices = mesh.indices().expect("应有索引");
+        assert_eq!(indices.len() % 3, 0, "索引必须是三角形倍数");
+    }
+
+    #[test]
+    fn territory_rings_include_outer_and_every_hole() {
+        let hole = hole_square();
+        let outer = outer_square();
+        let holes: Vec<&[f32]> = vec![&hole];
+        let rings = territory_rings(&outer, &holes);
+        assert_eq!(rings.len(), 2, "外环 + 1 洞 = 2 条描边环");
+        assert_eq!(rings[1], hole.as_slice());
+    }
+}
+
 mod tests {
     //! 纯函数测试：层选择 / 渲染决策 / rank 线宽 / 边与虚线 / 扇形网格。
     use super::*;
