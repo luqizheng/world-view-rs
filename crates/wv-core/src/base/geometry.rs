@@ -59,6 +59,21 @@ pub fn point_in_ring(ring: &[f32], x: f32, y: f32) -> bool {
     inside
 }
 
+/// 「点在领地内」的唯一判定入口（ADR-0028 D3）：多边形看环，带洞环看
+/// 外环**且不在任何洞内**；`Points`/`Ref` 不构成面 → 恒 `false`。
+///
+/// 洞语义 = even-odd 的显式版：外环内且洞外才算领地。`query_at_point`
+/// 与未来的空间查询一律走本函数，禁止各自再写射线法。
+pub fn point_in_geometry(geo: &crate::map::GeometryData, x: f32, y: f32) -> bool {
+    match geo {
+        crate::map::GeometryData::Polygon(ring) => point_in_ring(ring, x, y),
+        crate::map::GeometryData::PolygonWithHoles { outer, holes } => {
+            point_in_ring(outer, x, y) && !holes.iter().any(|h| point_in_ring(h, x, y))
+        }
+        crate::map::GeometryData::Points(_) | crate::map::GeometryData::Ref(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

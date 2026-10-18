@@ -546,6 +546,15 @@ pub struct GeometrySpan {
 pub enum GeometryData {
     /// 多边形环，扁平存储，首尾不重复。
     Polygon(Vec<f32>),
+    /// 带洞多边形（ADR-0028 D3）：外环 + 若干洞环（国中国的宿主余部）。
+    /// untagged 序居 `Polygon` 之后——它的 YAML 形态是映射而非裸数组，
+    /// 不会与 `Polygon` 抢匹配；旧 YAML 零迁移。
+    PolygonWithHoles {
+        /// 外环，扁平坐标，首尾不重复。
+        outer: Vec<f32>,
+        /// 洞环列表（每个都是扁平坐标，首尾不重复）。
+        holes: Vec<Vec<f32>>,
+    },
     /// 点列坐标，扁平存储 `[x0, y0, x1, y1, ...]`。
     /// 仅限 Rust 代码构造——YAML 裸数组会被 `Polygon` 优先匹配。
     Points(Vec<f32>),
@@ -554,10 +563,14 @@ pub enum GeometryData {
 }
 
 impl GeometryData {
-    /// 顶点数：Points/Polygon 是 2D 平面 → `len() / 2`；Ref 引用外部 → 0。
+    /// 顶点数：Points/Polygon 是 2D 平面 → `len() / 2`；带洞环 = 外环 + 全部洞；
+    /// Ref 引用外部 → 0。
     pub fn point_count(&self) -> usize {
         match self {
             GeometryData::Points(v) | GeometryData::Polygon(v) => v.len() / 2,
+            GeometryData::PolygonWithHoles { outer, holes } => {
+                outer.len() / 2 + holes.iter().map(|h| h.len() / 2).sum::<usize>()
+            }
             GeometryData::Ref(_) => 0,
         }
     }
@@ -589,6 +602,40 @@ mod geometry_data_tests {
     fn ref_point_count_is_zero() {
         let g = GeometryData::Ref("geometry/ext.bin".into());
         assert_eq!(g.point_count(), 0, "Ref 引用不计顶点");
+    }
+
+    #[test]
+    fn polygon_with_holes_round_trips_through_yaml() {
+        let g = GeometryData::PolygonWithHoles {
+            outer: vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0],
+            holes: vec![vec![2.0, 2.0, 4.0, 2.0, 4.0, 4.0, 2.0, 4.0]],
+        };
+        let yaml = serde_yaml::to_string(&g).expect("序列化");
+        let back: GeometryData = serde_yaml::from_str(&yaml).expect("反序列化");
+        assert_eq!(g, back, "带洞环 YAML round-trip 必须无损");
+        // 顶点数 = outer 4 + hole 4。
+        assert_eq!(g.point_count(), 8, "got {}", g.point_count());
+    }
+
+    #[test]
+    fn legacy_polygon_yaml_still_loads_and_serializes_as_before() {
+        let yaml = "map: world_main
+owner: faction_a
+from: 100
+geometry:
+  - 0.0
+  - 0.0
+  - 10.0
+  - 0.0
+  - 10.0
+  - 10.0
+";
+        let span: GeometrySpan = serde_yaml::from_str(&yaml).expect("旧形态必须照常加载");
+        assert!(
+            matches!(span.geometry, GeometryData::Polygon(_)),
+            "裸数组必须仍命中 Polygon 变体（untagged 顺序红线），got {:?}",
+            span.geometry
+        );
     }
 }
 

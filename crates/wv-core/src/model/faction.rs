@@ -157,6 +157,10 @@ pub fn factions_at<'a>(
 /// 等价于 `GeometryData::Polygon` 的「看一眼」版本——只读切片。
 enum GeometryDataView<'a> {
     Polygon(&'a [f32]),
+    PolygonWithHoles {
+        outer: &'a [f32],
+        holes: Vec<&'a [f32]>,
+    },
     Other,
 }
 
@@ -165,6 +169,10 @@ impl<'a> From<&'a crate::map::GeometryData> for GeometryDataView<'a> {
         use crate::map::GeometryData;
         match g {
             GeometryData::Polygon(v) => GeometryDataView::Polygon(v.as_slice()),
+            GeometryData::PolygonWithHoles { outer, holes } => GeometryDataView::PolygonWithHoles {
+                outer: outer.as_slice(),
+                holes: holes.iter().map(|h| h.as_slice()).collect(),
+            },
             GeometryData::Points(_) | GeometryData::Ref(_) => GeometryDataView::Other,
         }
     }
@@ -238,6 +246,8 @@ pub struct FactionTerritory<'a> {
     pub faction: &'a Faction,
     pub relation: Option<&'a str>,
     pub vertices: &'a [f32],
+    /// 洞环列表（ADR-0028 D3；无洞势力为空）。渲染填充与描边都要消费。
+    pub holes: Vec<&'a [f32]>,
 }
 
 /// 某地图某天生效的全部势力领土（ADR-0027 D9）。
@@ -258,14 +268,17 @@ pub fn faction_territories_at<'a>(
             // 几何引用的 owner 不在 factions 列表里——按 V1 静默跳过。
             continue;
         };
-        let GeometryDataView::Polygon(coords) = GeometryDataView::from(&g.geometry) else {
-            continue;
+        let (coords, holes) = match GeometryDataView::from(&g.geometry) {
+            GeometryDataView::Polygon(v) => (v, Vec::new()),
+            GeometryDataView::PolygonWithHoles { outer, holes } => (outer, holes),
+            GeometryDataView::Other => continue,
         };
         out.push(FactionTerritory {
             layer: resolve_faction_layer_id(world, faction),
             faction,
             relation: g.relation.as_deref(),
             vertices: coords,
+            holes,
         });
     }
     out
@@ -313,7 +326,14 @@ pub fn query_at_point(
 ) -> Vec<(Id, Id, Option<String>)> {
     let mut out: Vec<(Id, Id, Option<String>)> = Vec::new();
     for t in faction_territories_at(world, map, day) {
+        // 洞感知（ADR-0028 D3）：外环内但落在洞里 = 不在领地。
         if !crate::geometry::point_in_ring(t.vertices, x, y) {
+            continue;
+        }
+        if t.holes
+            .iter()
+            .any(|h| crate::geometry::point_in_ring(h, x, y))
+        {
             continue;
         }
         let item = (
@@ -795,5 +815,56 @@ mod tests {
                 .any(|l| l.id.as_str() == DEFAULT_FACTION_LAYER_ID),
             "悬空层应回落默认层"
         );
+    }
+}
+
+#[cfg(test)]
+mod hole_tests {
+    use super::*;
+    use crate::map::{GeometryData, GeometrySpan};
+    use crate::{Id, TimeSpan};
+
+    fn world_with_holed_faction() -> crate::World {
+        let mut w = crate::World::default();
+        w.factions.push(Faction::new(
+            Id::new_unchecked("faction_ring"),
+            "环国",
+            Color("#000000".into()),
+        ));
+        w.faction_geometry.push(GeometrySpan {
+            map: Id::new_unchecked("map_world"),
+            owner: Id::new_unchecked("faction_ring"),
+            span: TimeSpan { from: 1, to: None },
+            geometry: GeometryData::PolygonWithHoles {
+                outer: vec![0.0, 0.0, 100.0, 0.0, 100.0, 100.0, 0.0, 100.0],
+                holes: vec![vec![40.0, 40.0, 60.0, 40.0, 60.0, 60.0, 40.0, 60.0]],
+            },
+            relation: None,
+        });
+        w
+    }
+
+    #[test]
+    fn query_at_point_misses_points_inside_holes() {
+        let w = world_with_holed_faction();
+        let map = Id::new_unchecked("map_world");
+        // 外环内、洞外 → 命中。
+        assert_eq!(query_at_point(&w, &map, 20.0, 20.0, 2).len(), 1);
+        // 洞内 → 不命中（ADR-0028 D3）。
+        assert!(
+            query_at_point(&w, &map, 50.0, 50.0, 2).is_empty(),
+            "洞内的点不属于领地"
+        );
+    }
+
+    #[test]
+    fn faction_territory_carries_holes_for_render() {
+        let w = world_with_holed_faction();
+        let map = Id::new_unchecked("map_world");
+        let ts = faction_territories_at(&w, &map, 2);
+        assert_eq!(ts.len(), 1);
+        assert_eq!(ts[0].holes.len(), 1, "渲染侧必须拿到洞环");
+        assert_eq!(ts[0].holes[0].len(), 8);
+        assert_eq!(ts[0].vertices.len(), 8);
     }
 }
