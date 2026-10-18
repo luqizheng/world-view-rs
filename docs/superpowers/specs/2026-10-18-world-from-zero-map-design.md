@@ -194,3 +194,21 @@ ADR-0029 D2 把边界定为「生成快照」后，笔刷改格会让快照过�
   同 owner 同 from 会互相覆盖，多块需 io 侧改造，留待后续批次。
 - **入口**：区域面板「生物群系标记」小节（列当前图标记 + 逐个 [重生成边界]）；
   重圈改 envelope 的完整 D13 路径不在本批。
+
+---
+
+## 追记四：Place 词汇统一（D18 收口，ADR-0032，2026-10-18）
+
+- **唯一词汇 = `biome`（冻结群系表）**：`Place.feature`（旧 TerrainKind 0–9）降级为
+  serde 只读迁移脚手架（`skip_serializing`），加载时按 wv-io `place_feature_to_biome`
+  表迁移为群系编号并发诊断提示；写回只写 biome。迁移窗口一个版本周期，下版本删字段。
+- **迁移表**：{2,3,4,8,9} 与格子侧 `migrate_v1_kind(f).1` 同值（诊断逐位不变）；
+  {0,1} → 海洋、{5,6,7} → 丘陵/山地/雪原（升级为真实群系，纠正旧「归 0」假阴性）；
+  词汇表外垃圾值 → 不迁移 + 未映射提示。
+- **主题规则键 = 群系族**：`BiomeFamily` 落 `wv_terrain::biome`（21 编号 → 8 族全覆盖，
+  族界与 `display_kind` 陆面槽位对齐）；`FeatureOverlaySet` 全族字段 + `rule_for(family)`；
+  `FEATURE_FOREST=4` 与渲染三臂桥退役，渲染取 `place.biome.and_then(family_of)`。
+- **旧工程视觉不回退**：森林（含旧 `feature: 4`）迁移为 biome 1 后晕与树符号照旧；
+  POI 抑制窗口内保持 `feature||biome` 双条件。
+- **round-trip 修订**：迁移窗口内 `load(save(w))==w` 仅对无旧字段世界字面成立；
+  收敛性 `load(save(save(w)))==load(save(w))` 由测试钉死。详见 ADR-0032 D8。

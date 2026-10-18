@@ -95,12 +95,13 @@ fn default_true() -> bool {
 pub struct Place {
     pub id: Id,
     pub name: String,
-    /// 地理事实类型（theme overlay 词汇，沿用 TerrainKind 的 u8 词汇表编号，
-    /// 编号→名称→演绎规则映射由 ThemePack 承载）。`None` = 普通地点（现状）。
+    /// 地理事实类型的**旧词汇**（TerrainKind 0–9；ADR-0032 D1 已收口）。
     ///
-    /// 注意：wv-core 不依赖 wv-terrain（AGENTS §2.1），故此处是裸 `u8`——
-    /// 语义上的 TerrainKind 编号，词汇对齐表见待裁 T4。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// 唯一词汇是 [`Self::biome`]（冻结群系表）。本字段降级为 serde 只读
+    /// 迁移脚手架：旧 YAML 照常读入（迁移窗口，一个版本周期），序列化
+    /// **不再输出**；wv-io 加载时把它迁入 `biome`（见
+    /// `place_feature_to_biome`）并发诊断提示。下版本删除本字段。
+    #[serde(default, skip_serializing)]
     pub feature: Option<u8>,
     /// 若该地点对应某张地图上的锚点，则引用其 ID。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -818,7 +819,7 @@ mod tests {
 
     #[test]
     fn place_biome_and_envelope_round_trip_through_yaml() {
-        let mut p = feature_place(Some(4));
+        let mut p = feature_place(None);
         p.biome = Some(1);
         p.envelope = Some(vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0]);
         let yaml = serde_yaml::to_string(&p).expect("序列化");
@@ -828,6 +829,8 @@ mod tests {
         assert_eq!(back, p, "带标记字段的 Place 往返必须无损");
     }
 
+    /// 旧 feature 字段：读取侧保留（迁移窗口），写入侧不再落盘（ADR-0032 D1）。
+    /// 严格 round-trip 契约自此只对「不含旧字段的世界」字面成立（ADR-0032 D8）。
     #[test]
     fn legacy_place_without_marker_fields_loads() {
         let yaml = "id: place_old
@@ -837,7 +840,12 @@ feature: 4
         let p: Place = serde_yaml::from_str(yaml).expect("旧 YAML 必须照常加载");
         assert_eq!(p.biome, None, "缺省为 None");
         assert_eq!(p.envelope, None, "缺省为 None");
-        assert_eq!(p.feature, Some(4), "旧 feature 字段保留");
+        assert_eq!(p.feature, Some(4), "读取侧：旧 feature 字段保留");
+        let out = serde_yaml::to_string(&p).expect("序列化");
+        assert!(
+            !out.contains("feature"),
+            "写入侧：feature 不得再落盘（ADR-0032 D1），实得:\n{out}"
+        );
     }
 
     #[test]

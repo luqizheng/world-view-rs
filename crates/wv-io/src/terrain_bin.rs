@@ -74,6 +74,32 @@ pub(crate) fn migrate_v1_kind(kind: u8) -> (u8, u8) {
     }
 }
 
+/// 旧 `Place.feature`（TerrainKind 0–9 词汇）→ 冻结群系编号（ADR-0032 D4）。
+///
+/// **place 侧不继承格子侧的「高度派生带归 0」取舍**：{0,1} 深水/浅水升级为
+/// 海洋、{5,6,7} 丘陵/山地/雪升级为对应群系——声明了丘陵的地点在新词汇下
+/// 就该是丘陵标记（可进区域面板、可重生成）；{2,3,4,8,9} 与 [`migrate_v1_kind`]
+/// 的群系分量**同值**（这几类旧声明的诊断比较逐位不变）。词汇表外的值返回
+/// `None`（不迁移 + 未映射提示）。
+///
+/// 与 `wv_terrain::biome` 冻结编号的一致性由
+/// `place_feature_migration_table_covers_old_vocabulary` 钉死（同
+/// `migrate_v1_kind` 的 dev-dep 先例）；运行时 wv-io 不依赖 wv-terrain。
+pub(crate) fn place_feature_to_biome(feature: u8) -> Option<u8> {
+    match feature {
+        0 | 1 => Some(14), // 深水/浅水 → 海洋
+        2 => Some(5),      // 沙 → 沙漠
+        3 => Some(3),      // 草原
+        4 => Some(1),      // 森林
+        5 => Some(12),     // 丘陵
+        6 => Some(13),     // 山地
+        7 => Some(9),      // 雪 → 雪原
+        8 => Some(6),      // 沼泽
+        9 => Some(20),     // 道路（工程扩展编号）
+        _ => None,
+    }
+}
+
 /// 把一段字节序列化为 `terrain.bin` 格式。
 ///
 /// 只做编码，不碰文件系统——这样测试无需落盘即可验证 round-trip。
@@ -433,6 +459,36 @@ mod tests {
             migrate_v1_kind(9),
             (wv_terrain::SURFACE_LAND, wv_terrain::BIOME_ROAD)
         );
+    }
+
+    /// place 级迁移表（ADR-0032 D4）：旧 feature 全词汇 0–9 逐条钉到冻结常量。
+    #[test]
+    fn place_feature_migration_table_covers_old_vocabulary() {
+        assert_eq!(place_feature_to_biome(0), Some(wv_terrain::BIOME_OCEAN));
+        assert_eq!(place_feature_to_biome(1), Some(wv_terrain::BIOME_OCEAN));
+        assert_eq!(place_feature_to_biome(2), Some(wv_terrain::BIOME_DESERT));
+        assert_eq!(place_feature_to_biome(3), Some(wv_terrain::BIOME_GRASSLAND));
+        assert_eq!(place_feature_to_biome(4), Some(wv_terrain::BIOME_FOREST));
+        assert_eq!(place_feature_to_biome(5), Some(wv_terrain::BIOME_HILLS));
+        assert_eq!(place_feature_to_biome(6), Some(wv_terrain::BIOME_MOUNTAINS));
+        assert_eq!(place_feature_to_biome(7), Some(wv_terrain::BIOME_SNOWFIELD));
+        assert_eq!(place_feature_to_biome(8), Some(wv_terrain::BIOME_SWAMP));
+        assert_eq!(place_feature_to_biome(9), Some(wv_terrain::BIOME_ROAD));
+        assert_eq!(place_feature_to_biome(10), None, "词汇表外垃圾值不迁移");
+        assert_eq!(place_feature_to_biome(255), None, "词汇表外垃圾值不迁移");
+    }
+
+    /// 共同槽位 {2,3,4,8,9} 上，place 侧表必须与格子侧 v1 迁移表同值
+    /// （ADR-0032 D4：这几类旧声明的诊断行为逐位不变）。
+    #[test]
+    fn place_feature_table_agrees_with_terrain_v1_table_on_shared_slots() {
+        for f in [2u8, 3, 4, 8, 9] {
+            assert_eq!(
+                place_feature_to_biome(f),
+                Some(migrate_v1_kind(f).1),
+                "feature {f} 的 place 迁移值应与格子侧 v1 迁移表同值"
+            );
+        }
     }
 
     #[test]

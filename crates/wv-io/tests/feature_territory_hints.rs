@@ -15,8 +15,8 @@ use wv_core::terrain::{TerrainCellData, TerrainData};
 use wv_core::{Id, TimeSpan, World};
 use wv_io::diagnostics::{detect_feature_territory_hints, DiagLevel};
 
-/// 森林的地理事实编号（`wv_render::theme::overlays::FEATURE_FOREST` 的字面量；
-/// wv-io 不依赖 wv-render，测试同样只引用语义编号）。
+/// 旧 `Place.feature` 词汇里的森林编号（ADR-0032 后该词汇不再写入，仅作
+/// 迁移夹具体现旧 YAML 的读取兼容）。
 const FOREST: u8 = 4;
 /// 草原（非森林）格子的群系编号（biome 冻结表）。
 const GRASSLAND_BIOME: u8 = 3;
@@ -248,6 +248,35 @@ fn derive_hints_includes_feature_territory_hints() {
     assert!(
         !d.has_errors(),
         "派生提示路径永不产生错误（AGENTS §7.5 V1）"
+    );
+}
+
+/// ADR-0032 D4 的假阴性纠正：feature=5（丘陵）旧代码经 `migrate_v1_kind`
+/// 归 **biome 0（NONE）**——在群系为 NONE 的格上会「命中」而**恒静默**；
+/// 新表升级为 biome 12，同样一批 NONE 格不再命中，应照常提示。
+///
+/// fixture 必须用 `uniform_terrain(0)`（NONE）才复现旧假阴性：用草原格（3）
+/// 时旧代码 5→0 本来就与 3 不等、也会提示，测不出差异。
+#[test]
+fn hills_feature_declaration_reports_missing_cells_like_other_markers() {
+    let mut place = forest_place();
+    place.feature = Some(5); // 旧词汇：丘陵
+    let w = world_with(
+        Some(place),
+        square_span("place_forest"),
+        Some(uniform_terrain(0)),
+    );
+    let hints = detect_feature_territory_hints(&w);
+    assert_eq!(
+        hints.len(),
+        1,
+        "丘陵声明 + 全 NONE 格应提示（旧实现 5→0 命中 NONE 而静默），实得 {} 条",
+        hints.len()
+    );
+    assert!(
+        hints[0].message.contains("biome=12"),
+        "文案应以迁移后的群系编号表述：got {}",
+        hints[0].message
     );
 }
 

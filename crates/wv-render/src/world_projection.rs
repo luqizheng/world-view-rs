@@ -559,13 +559,16 @@ fn draw_dashed_circle(gizmos: &mut Gizmos, center: Vec2, radius: f32, color: Col
 
 /// 一个地点在本帧应生成的 POI 点标；`None` = 不画。
 ///
-/// **事实地点（`feature = Some(_)`）抑制 POI 圆点**（设计稿 §6.4）：森林 /
-/// 沼泽等由 `crate::feature_overlays` 画地界晕与近景符号，再叠一个 POI 圆点
-/// 只会让覆盖层中心出现一颗没有语义的红点。普通地点（`feature = None`）保持
-/// 原行为：锚定且有坐标 → 点标，`w/h` 齐备 → 城市级。
+/// **标记（`biome = Some(_)`）抑制 POI 圆点**（设计稿 §6.4）：标记由
+/// `crate::feature_overlays` 画地界晕与近景符号，再叠一个 POI 圆点只会让
+/// 覆盖层中心出现一颗没有语义的红点。普通地点保持原行为：锚定且有坐标 →
+/// 点标，`w/h` 齐备 → 城市级。
+///
+/// 迁移窗口内（ADR-0032 代价节）保留 `feature` 双条件：未经加载器的手工世界若
+/// 携带旧字段（含词汇表外垃圾值）仍不冒点；下版本删字段后收敛为单条件。
 fn place_dot_for(p: &wv_core::distance::Place, grid: &GridConfig) -> Option<PlaceDot> {
     if p.feature.is_some() || p.biome.is_some() {
-        // 标记（ADR-0029）：覆盖层/标签负责表现，不再生成城市点。
+        // 标记（ADR-0029/0032）：覆盖层/标签负责表现，不再生成城市点。
         return None;
     }
     let (x, y) = (p.x?, p.y?);

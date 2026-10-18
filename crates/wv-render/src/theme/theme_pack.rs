@@ -226,6 +226,14 @@ pub mod builtin {
                 symbol_texture: Some("overlays/forest/tree_atlas_day.png"),
                 halo_texture: Some("overlays/forest/forest_fill.png"),
             }),
+            // 其余族 v1 无内置演绎（ADR-0032 D2：字段一次定型，规则内容待美术）。
+            grassland: None,
+            desert: None,
+            wetland: None,
+            cold: None,
+            highland: None,
+            water: None,
+            road: None,
         },
     };
 
@@ -251,6 +259,14 @@ pub mod builtin {
                 symbol_texture: Some("overlays/forest/tree_atlas_dusk.png"),
                 halo_texture: None,
             }),
+            // 其余族 v1 无内置演绎（ADR-0032 D2）。
+            grassland: None,
+            desert: None,
+            wetland: None,
+            cold: None,
+            highland: None,
+            water: None,
+            road: None,
         },
     };
 
@@ -370,14 +386,14 @@ mod tests {
         assert_eq!(builtin::DUSK.treatment, TreatmentFlags::HAND_DRAWN);
     }
 
-    /// 默认包必须给森林配置覆盖规则（D10：内置两包各一套），且值锁定为设计稿
+    /// 默认包必须给森林族配置覆盖规则（D10：内置两包各一套），且值锁定为设计稿
     /// 指定的日间古舆图参数——防手滑改成 DUSK 值或漏配 `overlays`。
     #[test]
     fn default_pack_has_forest_rule() {
         let rule = builtin::DEFAULT
             .overlays
-            .rule_for(crate::theme::overlays::FEATURE_FOREST)
-            .expect("默认包必须给 FEATURE_FOREST 配置规则");
+            .rule_for(wv_terrain::biome::BiomeFamily::Forest)
+            .expect("默认包必须给森林族配置规则");
         assert_eq!(rule.halo_color, [0x5F, 0x7A, 0x4A], "日间晕色");
         assert!(
             (rule.halo_alpha - 0.30).abs() < 1e-6,
@@ -412,8 +428,8 @@ mod tests {
     fn dusk_pack_uses_dusk_atlas_and_flat_halo() {
         let rule = builtin::DUSK
             .overlays
-            .rule_for(crate::theme::overlays::FEATURE_FOREST)
-            .expect("暮色包必须给 FEATURE_FOREST 配置规则");
+            .rule_for(wv_terrain::biome::BiomeFamily::Forest)
+            .expect("暮色包必须给森林族配置规则");
         assert_eq!(
             rule.symbol_texture,
             Some("overlays/forest/tree_atlas_dusk.png"),
@@ -429,15 +445,14 @@ mod tests {
     /// 尺寸 / 采样间距）。
     #[test]
     fn dusk_differs_from_default_in_at_least_two_visual_fields() {
-        use crate::theme::overlays::FEATURE_FOREST;
         let day = builtin::DEFAULT
             .overlays
-            .rule_for(FEATURE_FOREST)
-            .expect("默认包必须有森林规则");
+            .rule_for(wv_terrain::biome::BiomeFamily::Forest)
+            .expect("默认包必须有森林族规则");
         let dusk = builtin::DUSK
             .overlays
-            .rule_for(FEATURE_FOREST)
-            .expect("暮色包必须有森林规则");
+            .rule_for(wv_terrain::biome::BiomeFamily::Forest)
+            .expect("暮色包必须有森林族规则");
         let diffs = [
             day.halo_color != dusk.halo_color,
             (day.halo_alpha - dusk.halo_alpha).abs() > 1e-6,
@@ -472,16 +487,23 @@ mod tests {
         );
     }
 
-    /// 未知 feature 词汇没有规则——渲染侧回退「地界描边 + 名字」，不消失。
+    /// 无规则族没有规则——渲染侧回退「地界晕（回退色）+ 名字」，不消失
+    /// （ADR-0032 D2：v1 内置两包只演绎森林族）。
     #[test]
-    fn unknown_feature_has_no_rule() {
+    fn ruleless_family_falls_back_to_none() {
         assert!(
-            builtin::DEFAULT.overlays.rule_for(9).is_none(),
-            "feature=9 未登记，默认包应回 None"
+            builtin::DEFAULT
+                .overlays
+                .rule_for(wv_terrain::biome::BiomeFamily::Highland)
+                .is_none(),
+            "高地族未演绎，默认包应回 None"
         );
         assert!(
-            builtin::DUSK.overlays.rule_for(9).is_none(),
-            "feature=9 未登记，暮色包应回 None"
+            builtin::DUSK
+                .overlays
+                .rule_for(wv_terrain::biome::BiomeFamily::Highland)
+                .is_none(),
+            "高地族未演绎，暮色包应回 None"
         );
     }
 }

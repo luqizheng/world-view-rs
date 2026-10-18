@@ -3228,88 +3228,6 @@ fn marker_cell_size(world: &World, map: &wv_core::Id) -> Option<f32> {
     Some((extent / data.width.max(1) as f32).max(0.01))
 }
 
-/// 创建一个「事实地点」并同时写入它的初始地界。
-///
-/// ## 为什么地点与地界要一条命令
-///
-/// 地理事实（森林 / 沼泽 / 山脉）不是先有点、再补范围：作者画下一个地界时，
-/// 地点与几何是一体诞生的。拆成两条命令会让 Undo 出现「地点还在、地界没了」
-/// 的中间态（或反之），而 P6 要求一次编辑可整体回退。
-///
-/// ## 锚点同步
-///
-/// `Place.x/y/w/h` 是既有读取方（POI、标签远档判定、`EventLocation::resolve`）
-/// 的投影字段，地界多边形才是几何真值。`apply` 在入库前按地界环重拟合锚点，
-/// 使新旧两套字段一出生就一致（与 ADR-0022 D2「双字段同步」同口径）。
-///
-/// ## 幂等保护
-///
-/// 与 [`AddPlaceCommand`] 同源：ID 冲突时报 `Precondition`，不静默覆盖——
-/// Place 是引用网络的关键节点，静默覆盖会让 `PlaceEdge` / `Unit` 的端点变成
-/// 悬空引用（V1 会列出，但命令层不应主动制造）。
-#[derive(Debug)]
-pub struct AddFeaturePlaceCommand {
-    /// 要创建的地点（`feature` 为事实类型编号）。
-    pub place: Place,
-    /// 该地点的初始地界（`owner` 应为 `place.id`，几何为多边形环）。
-    pub territory: GeometrySpan,
-}
-
-impl AddFeaturePlaceCommand {
-    pub fn new(place: Place, territory: GeometrySpan) -> Self {
-        Self { place, territory }
-    }
-}
-
-impl EditCommand for AddFeaturePlaceCommand {
-    fn label(&self) -> String {
-        format!("新增事实地点「{}」", self.place.name)
-    }
-
-    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
-        if world.distances.places.iter().any(|p| p.id == self.place.id) {
-            return Err(EditError::Precondition(format!(
-                "地点 `{}` 已存在",
-                self.place.id
-            )));
-        }
-        let mut place = self.place.clone();
-        if let GeometryData::Polygon(ring) = &self.territory.geometry {
-            place.fit_anchor_to_ring(ring);
-        }
-        world.distances.places.push(place);
-        world.place_geometry.push(self.territory.clone());
-        Ok(place_geometry_dirty_paths())
-    }
-
-    fn revert(&self, world: &mut World) -> EditResult<()> {
-        // 两处定位都先完成、再动世界：任一处缺失时整体失败，不留下
-        // 「地点删了、地界还在」的半回退状态（P6：一次编辑整体回退）。
-        let place_pos = world
-            .distances
-            .places
-            .iter()
-            .position(|p| p.id == self.place.id)
-            .ok_or_else(|| EditError::TargetMissing(format!("Place {}", self.place.id)))?;
-        // 按 (map, owner, span.from) 定位——span 的身份由这三元组决定，
-        // 与 UpdatePlaceTerritoryCommand 的查找口径一致。
-        let geo_pos = world
-            .place_geometry
-            .iter()
-            .position(|g| {
-                g.map == self.territory.map
-                    && g.owner == self.territory.owner
-                    && g.span.from == self.territory.span.from
-            })
-            .ok_or_else(|| {
-                EditError::TargetMissing(format!("Place geometry of {}", self.place.id))
-            })?;
-        world.distances.places.remove(place_pos);
-        world.place_geometry.remove(geo_pos);
-        Ok(())
-    }
-}
-
 /// 改写某地点某个地界 span 的多边形环，并重拟合锚点。
 ///
 /// ## 为什么定位键是 `(map, owner, span.from)`
@@ -5535,12 +5453,13 @@ mod tests {
     // ── 事实地点 / 地界命令测试（theme overlay）────────────────────────────
     // ── 事实地点 / 地界命令测试（theme overlay）────────────────────────────
 
-    fn feature_place(id: &str) -> wv_core::distance::Place {
+    /// 标记地点 fixture（ADR-0032：fixture 也只写 biome，不写旧 feature 词汇）。
+    fn span_fixture_place(id: &str) -> wv_core::distance::Place {
         wv_core::distance::Place {
             id: Id::new_unchecked(id),
             name: format!("地点{id}"),
-            feature: Some(5),
-            biome: None,
+            feature: None,
+            biome: Some(wv_terrain::biome::BIOME_HILLS),
             envelope: None,
             map: None,
             x: None,
@@ -6296,70 +6215,19 @@ mod tests {
     }
 
     #[test]
-    fn add_feature_place_sets_anchors_from_ring_and_revert_removes_both() {
-        let mut w = World::default();
-        let ring = vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0];
-        let cmd = AddFeaturePlaceCommand::new(
-            feature_place("place_forest"),
-            territory(TEST_MAP, "place_forest", 0, None, ring.clone()),
-        );
-
-        let dirty = cmd.apply(&mut w).expect("apply");
-        assert_eq!(
-            dirty,
-            vec!["distances/places".to_string(), "geometry/place".to_string()],
-            "脏路径应同时覆盖地点表与地界目录"
-        );
-        assert_eq!(w.distances.places.len(), 1, "应写入 1 个地点");
-        assert_eq!(w.place_geometry.len(), 1, "应写入 1 条地界");
-        let p = &w.distances.places[0];
-        assert_eq!(p.x, Some(5.0), "质心 X 应为 5，实际 {:?}", p.x);
-        assert_eq!(p.y, Some(5.0), "质心 Y 应为 5，实际 {:?}", p.y);
-        assert_eq!(p.w, Some(10.0), "包围盒宽应为 10，实际 {:?}", p.w);
-        assert_eq!(p.h, Some(10.0), "包围盒高应为 10，实际 {:?}", p.h);
-        assert_eq!(
-            w.place_geometry[0].geometry,
-            GeometryData::Polygon(ring),
-            "地界几何应原样写入"
-        );
-
-        cmd.revert(&mut w).expect("revert");
-        assert!(w.distances.places.is_empty(), "revert 应移除地点");
-        assert!(w.place_geometry.is_empty(), "revert 应移除地界");
-    }
-
-    #[test]
-    fn add_feature_place_rejects_duplicate_id() {
-        let mut w = World::default();
-        w.distances.places.push(feature_place("place_forest"));
-        let cmd = AddFeaturePlaceCommand::new(
-            feature_place("place_forest"),
-            territory(
-                TEST_MAP,
-                "place_forest",
-                0,
-                None,
-                vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0],
-            ),
-        );
-        assert!(
-            matches!(cmd.apply(&mut w), Err(EditError::Precondition(_))),
-            "重复 ID 应返回 Precondition"
-        );
-        assert_eq!(w.distances.places.len(), 1, "失败的 apply 不应写入地点");
-        assert!(w.place_geometry.is_empty(), "失败的 apply 不应写入地界");
-    }
-
-    #[test]
     fn update_place_territory_replaces_ring_and_resyncs_anchors() {
         let mut w = World::default();
         let old_ring = vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0];
-        AddFeaturePlaceCommand::new(
-            feature_place("place_forest"),
-            territory(TEST_MAP, "place_forest", 0, None, old_ring.clone()),
-        )
-        .apply(&mut w)
-        .expect("prepare");
+        let mut place = span_fixture_place("place_forest");
+        place.fit_anchor_to_ring(&old_ring);
+        w.distances.places.push(place);
+        w.place_geometry.push(territory(
+            TEST_MAP,
+            "place_forest",
+            0,
+            None,
+            old_ring.clone(),
+        ));
         let old_place = w.distances.places[0].clone();
 
         let new_ring = vec![0.0, 0.0, 20.0, 0.0, 20.0, 10.0, 0.0, 10.0];
@@ -6402,18 +6270,16 @@ mod tests {
     #[test]
     fn update_place_territory_missing_span_is_an_error() {
         let mut w = World::default();
-        AddFeaturePlaceCommand::new(
-            feature_place("place_forest"),
-            territory(
-                TEST_MAP,
-                "place_forest",
-                0,
-                None,
-                vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0],
-            ),
-        )
-        .apply(&mut w)
-        .expect("prepare");
+        let mut place = span_fixture_place("place_forest");
+        place.fit_anchor_to_ring(&[0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0]);
+        w.distances.places.push(place);
+        w.place_geometry.push(territory(
+            TEST_MAP,
+            "place_forest",
+            0,
+            None,
+            vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0],
+        ));
 
         let cmd = UpdatePlaceTerritoryCommand::new(
             Id::new_unchecked("place_forest"),
