@@ -180,10 +180,14 @@ impl PaletteColors {
         }
     }
 
-    /// 日间古舆图：值源 = [`colors`]（`colors.rs` 是 ART_STYLE_SPEC §1.4.4 的投影）。
+    /// 日间 JRPG：值源 = [`colors`]（`colors.rs` 是色板的投影）。
+    ///
+    /// 2026-10-18 A 方案：中高饱和地形色配 `soften_keep = 0.85`——旧古舆图的
+    /// 0.35（65% 向纸面洗）是为低饱和色设计的；JRPG 色若仍洗 65% 会退回灰白
+    /// （实测截图）。淡化语义保留（笔迹对比仍可让位），只轻微起效。
     pub const DAYLIGHT: PaletteColors = PaletteColors {
         core: colors::CORE_TERRAIN,
-        soften_keep: colors::SOFTEN_KEEP,
+        soften_keep: colors::JRPG_SOFTEN_KEEP,
         soften_toward: colors::SOFTEN_TOWARD,
         poi_dot: colors::PLACE_DOT,
         poi_ring: colors::POI_RING,
@@ -220,7 +224,8 @@ impl PaletteColors {
         deep_ocean_blue: colors::DEEP_OCEAN_BLUE,
     };
 
-    /// 暮色旧纸：值源 = [`colors_dusk`]（同槽位镜像）。
+    /// 暮色旧纸：值源 = [`colors_dusk`]（同槽位镜像）。暮色地形基色未换，
+    /// 沿用古舆图淡化强度。
     pub const DUSK: PaletteColors = PaletteColors {
         core: colors_dusk::DUSK_CORE_TERRAIN,
         soften_keep: colors::SOFTEN_KEEP,
@@ -303,10 +308,19 @@ mod tests {
         };
         assert_eq!(
             f(PaletteColors::DAYLIGHT.core[1]),
-            [0x98, 0xA9, 0xB9],
-            "浅水"
+            [0x57, 0xA0, 0xC0],
+            "浅水（JRPG，2026-10-18 A 方案）"
         );
-        assert_eq!(f(PaletteColors::DAYLIGHT.core[3]), [0xA8, 0xB8, 0x98], "草");
+        assert_eq!(
+            f(PaletteColors::DAYLIGHT.core[3]),
+            [0x8C, 0xB9, 0x5F],
+            "草（JRPG）"
+        );
+        assert_eq!(
+            f(PaletteColors::DAYLIGHT.core[4]),
+            [0x3F, 0x7A, 0x46],
+            "林（JRPG）"
+        );
         assert_eq!(
             f(PaletteColors::DAYLIGHT.soften_toward),
             [0xF2, 0xEA, 0xD8],

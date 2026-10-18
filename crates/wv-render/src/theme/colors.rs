@@ -40,22 +40,22 @@ const fn hex(rgb: u32) -> Color {
 
 /// 地形基色（`core.*`）。索引即 `TerrainKind` 编号（0..10）。
 ///
-/// **「日间古舆图」（2026-10-14 用户定稿，ADR-0016）**：泛黄宣纸底 + 低饱和
-/// 褐墨线 + 雾感褪色蓝水系 + 灰橄榄绿地，历史感 JRPG。顺序刻意与「色块地形」
-/// 视图模式的默认图例一致：0 为最低（深水）→ 8 为最高（雪），9 为道路。
-/// 作者改 `kind` 编号即可换色，无需改代码。标「待复核」的值由主题色系推导，
-/// 实机校准后可能微调（定稿记录见 ART_STYLE_SPEC §1.4.4）。
+/// **「日间 JRPG」（2026-10-18 用户定稿，A 方案中高饱和）**：16-bit 晚期
+/// JRPG 的鲜明地形色——草/林靠明度差区分（色弱冗余）、山地→雪山在雪线附近
+/// 留过渡、阴影同色相压暗。顺序刻意与「色块地形」视图模式的默认图例一致：
+/// 0 为最低（深水）→ 8 为最高（雪），9 为道路。作者改 `kind` 编号即可换色，
+/// 无需改代码。（原「日间古舆图」低饱和版见 ART_STYLE_SPEC §1.4.4 历史记录。）
 pub const CORE_TERRAIN: [Color; 10] = [
-    hex(0x8FA2B3), // 0 core.water_deep   深水（远海；#98A9B9 同族压深）待复核
-    hex(0x98A9B9), // 1 core.water_shallow 浅水 / 海岸带（雾感褪色蓝）用户定稿
-    hex(0xE3D5BC), // 2 core.sand         沙 / 沙漠（纸调暖沙）待复核
-    hex(0xA8B898), // 3 core.grass        草原 / 平原（灰橄榄绿）用户定稿
-    hex(0x93A684), // 4 core.forest       森林（草色同族压深）待复核
-    hex(0xDCCBAF), // 5 core.hill         丘陵 / 荒原 待复核
-    hex(0xB7A388), // 6 core.mountain     山地（与主干道官道棕同族）待复核
-    hex(0xF8F4EA), // 7 core.snow         雪线 / 冰原（提亮一档，与纸面可辨；2026-10-15 #3）
-    hex(0x9AA88C), // 8 core.marsh        沼泽 待复核
-    hex(0x735D48), // 9 core.road         道路 / 区域分界（= 城墙墨棕）用户定稿
+    hex(0x2C6389), // 0 core.water_deep   深水（远海，明确的蓝）
+    hex(0x57A0C0), // 1 core.water_shallow 浅水 / 海岸带
+    hex(0xE8D6A2), // 2 core.sand         沙 / 沙漠（暖沙）
+    hex(0x8CB95F), // 3 core.grass        草原 / 平原（鲜明草绿）
+    hex(0x3F7A46), // 4 core.forest       森林（深林绿，与草靠明度+色相差区分）
+    hex(0xB5A765), // 5 core.hill         丘陵（干草黄）
+    hex(0x8A7A66), // 6 core.mountain     山地（岩褐）
+    hex(0xF5F8F9), // 7 core.snow         雪线 / 冰原（冷白）
+    hex(0x6F8564), // 8 core.marsh        沼泽（湿绿）
+    hex(0xC8A272), // 9 core.road         道路 / 区域分界（土路棕）
 ];
 
 /// 海岸线描边色（轮廓图模式专用三色之一；模式语义，不随 [`super::palette`] 切换）。
@@ -157,9 +157,10 @@ pub const TEXT_EVENT: Color = hex(0x8050A0); // 紫深
 // 雪色双调（手绘地图呈现 #3，2026-10-15）
 // ---------------------------------------------------------------------------
 
-/// 雪格"亮面"——比 `core.snow` 更亮一档、近白带暖（高光面、迎光坡）。
+/// 雪格"亮面"——比 `core.snow` 更亮一档、近白（高光面、迎光坡）。
 /// civ-atlas `SNOW_PAINT` 思路。手绘地图 #3：让雪原从一片纸面中跳出来。
-pub const SNOW_HIGHLIGHT: Color = hex(0xFBF7EB);
+/// JRPG 雪 `#F5F8F9` 已近满亮，highlight 提到冷白满档。
+pub const SNOW_HIGHLIGHT: Color = hex(0xFCFEFF);
 /// 雪格"冷阴影"——冷蓝灰，叠在高海拔/背光雪格上模拟阴影（civ-atlas
 /// `SNOW_SHADOW #AEBBC3` 思路）。`cells.rs` 在 RealTerrain 模式下对
 /// kind=7 的格按高度混合叠这个色。
@@ -211,7 +212,17 @@ pub const COAST_LAND: Color = hex(0x1A1E24); // 陆地：深灰（与水可辨�
 ///
 /// 0.35 = 与势力图淡化同源（`shade_faded` 的 k=0.45 略再淡一档），
 /// 目标是「仍可辨山川骨架，但饱和度让位给路线与地标」。
+/// 底图淡化保留比例（旧古舆图默认：35% 本色 + 65% 纸面）。
+///
+/// 2026-10-18 起日间主题换 JRPG 色板后改用 [`JRPG_SOFTEN_KEEP`]；
+/// 本值仍被暮色主题引用。
 pub const SOFTEN_KEEP: f32 = 0.35;
+
+/// JRPG 主题的底图淡化保留比例：85% 本色 + 15% 纸面。
+///
+/// 中高饱和色若仍按 0.35 洗，草绿 `#8CB95F` 会退成 `#CED9AE` 灰白
+/// （soften 语义本身保留——笔迹/要素对比让位的机制不动，只调强度）。
+pub const JRPG_SOFTEN_KEEP: f32 = 0.85;
 /// 底图淡化目标色：= 纸面色（2026-10-14 用户定稿）。
 pub const SOFTEN_TOWARD: Color = hex(0xF2EAD8);
 
