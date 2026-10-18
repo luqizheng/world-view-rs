@@ -5098,6 +5098,8 @@ mod tests {
             id: Id::new_unchecked(id),
             name: format!("地点{id}"),
             feature: Some(5),
+            biome: None,
+            envelope: None,
             map: None,
             x: None,
             y: None,

@@ -42,6 +42,8 @@ fn forest_place() -> Place {
         id: id("place_forest"),
         name: "黑森林".into(),
         feature: Some(FOREST),
+        biome: None,
+        envelope: None,
         map: Some(id("map_world")),
         x: Some(50.0),
         y: Some(50.0),
@@ -138,6 +140,38 @@ fn forest_territory_without_forest_cells_emits_hint() {
         h.message.contains("回退") && h.message.contains("陆地"),
         "文案应说明近景回退到陆地格布点，而不是声称没有符号：got {}",
         h.message
+    );
+}
+
+/// 标记（ADR-0029）：有 `biome` 时按群系编号直接比较，不走旧 feature 词汇。
+#[test]
+fn biome_marker_compares_cell_biome_directly() {
+    let mut place = forest_place();
+    place.biome = Some(GRASSLAND_BIOME); // 声称草原
+    place.feature = None;
+    let w = world_with(
+        Some(place),
+        square_span("place_forest"),
+        Some(uniform_terrain(GRASSLAND_BIOME)),
+    );
+    assert!(
+        detect_feature_territory_hints(&w).is_empty(),
+        "包络内已是草原 → 不应提示缺失"
+    );
+
+    // 同一标记换成森林群系，而地形是草原 → 应提示。
+    let mut place = forest_place();
+    place.biome = Some(FOREST_BIOME);
+    place.feature = None;
+    let w = world_with(
+        Some(place),
+        square_span("place_forest"),
+        Some(uniform_terrain(GRASSLAND_BIOME)),
+    );
+    assert_eq!(
+        detect_feature_territory_hints(&w).len(),
+        1,
+        "群系不匹配应提示"
     );
 }
 

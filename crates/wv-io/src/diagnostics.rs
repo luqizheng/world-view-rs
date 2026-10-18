@@ -242,7 +242,9 @@ pub fn detect_feature_territory_hints(world: &wv_core::World) -> Vec<Diagnostic>
     }
 
     for place in &world.distances.places {
-        let Some(kind) = place.feature else {
+        // 标记（ADR-0029）：有 `biome` 时按群系编号判定；旧工程只有 `feature`
+        // （旧 kind 词汇）时经迁移表换算。两者都没有 = 普通地点，跳过。
+        let Some(kind) = place.biome.or(place.feature) else {
             continue;
         };
         let Some(map_id) = place.map.as_ref() else {
@@ -279,9 +281,12 @@ pub fn detect_feature_territory_hints(world: &wv_core::World) -> Vec<Diagnostic>
                 continue;
             }
             checked_any_ring = true;
-            // feature 词汇表是旧 kind 编号（作者声明面），格子群系是 biome 编号
-            // （三通道后）——经 v1 迁移表换算后比较，旧 YAML 的 feature 不失效。
-            let feature_biome = crate::terrain_bin::migrate_v1_kind(kind).1;
+            // biome 标记直接比较群系编号；旧 feature（旧 kind 词汇）经 v1 迁移表
+            // 换算——旧 YAML 的 feature 不失效（ADR-0029 D5）。
+            let feature_biome = match place.biome {
+                Some(b) => b,
+                None => crate::terrain_bin::migrate_v1_kind(kind).1,
+            };
             if ring_has_feature_cell(terrain, &extent, ring, feature_biome) {
                 hit = true;
                 break;
@@ -908,6 +913,8 @@ mod tests {
                     w: None,
                     h: None,
                     feature: None,
+                    biome: None,
+                    envelope: None,
                 },
                 Place {
                     id: b.clone(),
@@ -918,6 +925,8 @@ mod tests {
                     w: None,
                     h: None,
                     feature: None,
+                    biome: None,
+                    envelope: None,
                 },
             ],
             edges: vec![PlaceEdge {

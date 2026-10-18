@@ -93,6 +93,8 @@ mod tests {
             id: vid(id),
             name: id.to_string(),
             feature: None,
+            biome: None,
+            envelope: None,
             map: None,
             x: None,
             y: None,

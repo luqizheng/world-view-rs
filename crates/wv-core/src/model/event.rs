@@ -169,6 +169,8 @@ mod tests {
             w,
             h,
             feature: None,
+            biome: None,
+            envelope: None,
         }
     }
 

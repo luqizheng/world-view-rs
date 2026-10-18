@@ -212,6 +212,8 @@ mod tests {
             w: None,
             h: None,
             feature: None,
+            biome: None,
+            envelope: None,
         };
         core.distances.places.push(place);
         let proj = WorldProjection {

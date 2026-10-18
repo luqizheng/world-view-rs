@@ -72,6 +72,8 @@ pub fn add_feature_place_now(
         id: id.clone(),
         name,
         feature: Some(feature),
+        biome: None,
+        envelope: None,
         map: Some(map.clone()),
         x: None,
         y: None,

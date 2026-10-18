@@ -68,6 +68,8 @@ mod tests {
             w: None,
             h: None,
             feature: None,
+            biome: None,
+            envelope: None,
         };
         world.distances.places.push(place);
         world.seas.push(sample());

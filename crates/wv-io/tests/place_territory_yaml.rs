@@ -21,6 +21,8 @@ fn sample_place(feature: Option<u8>) -> Place {
         id: Id::new_unchecked("place_linan"),
         name: "临安".into(),
         feature,
+        biome: None,
+        envelope: None,
         map: Some(Id::new_unchecked("map_world")),
         x: Some(10.0),
         y: Some(20.0),

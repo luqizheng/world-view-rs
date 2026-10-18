@@ -117,6 +117,14 @@ pub struct Place {
     /// 范围高度（须与 `w` 成对出现）。`None` = 点 icon。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub h: Option<f32>,
+    /// 生物群系编号（ADR-0029 D1；冻结表在 `wv_terrain::biome`）。
+    /// `None` = 普通地点（或旧工程只有 `feature`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub biome: Option<u8>,
+    /// 标记包络（意图多边形，图内局部 wu 扁平点列；ADR-0029 D1）。
+    /// 最终边界在 `place_geometry`（生成快照），包络只用于重圈重生成。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub envelope: Option<Vec<f32>>,
 }
 
 impl Place {
@@ -441,6 +449,8 @@ mod tests {
                     w: None,
                     h: None,
                     feature: None,
+                    biome: None,
+                    envelope: None,
                 },
                 Place {
                     id: vid("village_heishui"),
@@ -451,6 +461,8 @@ mod tests {
                     w: None,
                     h: None,
                     feature: None,
+                    biome: None,
+                    envelope: None,
                 },
                 Place {
                     id: vid("pass_luoxia"),
@@ -461,6 +473,8 @@ mod tests {
                     w: None,
                     h: None,
                     feature: None,
+                    biome: None,
+                    envelope: None,
                 },
             ],
             edges: vec![
@@ -582,6 +596,8 @@ mod tests {
             w: Some(40.0),
             h: Some(20.0),
             feature: None,
+            biome: None,
+            envelope: None,
         }
     }
 
@@ -595,6 +611,8 @@ mod tests {
             w: None,
             h: None,
             feature: None,
+            biome: None,
+            envelope: None,
         }
     }
 
@@ -608,6 +626,8 @@ mod tests {
             w: None,
             h: None,
             feature: None,
+            biome: None,
+            envelope: None,
         }
     }
 
@@ -698,7 +718,33 @@ mod tests {
             w: None,
             h: None,
             feature,
+            biome: None,
+            envelope: None,
         }
+    }
+
+    #[test]
+    fn place_biome_and_envelope_round_trip_through_yaml() {
+        let mut p = feature_place(Some(4));
+        p.biome = Some(1);
+        p.envelope = Some(vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0]);
+        let yaml = serde_yaml::to_string(&p).expect("序列化");
+        let back: Place = serde_yaml::from_str(&yaml).expect("反序列化");
+        assert_eq!(back.biome, Some(1));
+        assert_eq!(back.envelope.as_deref().map(|v| v.len()), Some(6));
+        assert_eq!(back, p, "带标记字段的 Place 往返必须无损");
+    }
+
+    #[test]
+    fn legacy_place_without_marker_fields_loads() {
+        let yaml = "id: place_old
+name: 旧地
+feature: 4
+";
+        let p: Place = serde_yaml::from_str(yaml).expect("旧 YAML 必须照常加载");
+        assert_eq!(p.biome, None, "缺省为 None");
+        assert_eq!(p.envelope, None, "缺省为 None");
+        assert_eq!(p.feature, Some(4), "旧 feature 字段保留");
     }
 
     #[test]
