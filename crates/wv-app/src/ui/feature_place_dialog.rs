@@ -95,7 +95,7 @@ pub fn marker_biome_name(loc: crate::i18n::Locale, biome: u8) -> &'static str {
 /// 环与地图 id **自持**（不读渲染层会话态）：意图按钮点击那一刻把
 /// `SelectionState.closed` 与 `drill.current()` 拷进来，之后选区怎么变、
 /// 地图怎么下钻都与这次提交无关。
-#[derive(Resource, Debug, Clone, Default, PartialEq)]
+#[derive(Resource, Debug, Clone, PartialEq)]
 pub struct FeaturePlaceDialog {
     /// 是否打开。
     pub open: bool,
@@ -107,18 +107,45 @@ pub struct FeaturePlaceDialog {
     pub ring: Vec<(f32, f32)>,
     /// 生物群系类型（ADR-0029；缺省森林）。
     pub biome: u8,
+    /// 捕获那一刻钉住的格尺寸（wu/格）——打开后作者可下钻换图，
+    /// 提交必须用捕获图的口径（终审 C1）。
+    pub cell_size: f32,
+    /// 捕获那一刻钉住的时间轴日。
+    pub from: i64,
+}
+
+impl Default for FeaturePlaceDialog {
+    fn default() -> Self {
+        Self {
+            open: false,
+            name: String::new(),
+            map: None,
+            ring: Vec::new(),
+            biome: wv_terrain::biome::BIOME_FOREST,
+            cell_size: 0.0,
+            from: 0,
+        }
+    }
 }
 
 impl FeaturePlaceDialog {
-    /// 用选区环 + 当前图 id 打开（意图菜单点击「森林」时调用）。
+    /// 用选区环 + 当前图 id 打开（意图菜单点击「标记…」时调用）。
     ///
     /// 不触碰选区——选区保持到作者确认或取消（intent-menu 契约）。
-    pub fn open_with(&mut self, map: wv_core::Id, ring: Vec<(f32, f32)>) {
+    pub fn open_with(
+        &mut self,
+        map: wv_core::Id,
+        ring: Vec<(f32, f32)>,
+        cell_size: f32,
+        from: i64,
+    ) {
         self.open = true;
         self.name.clear();
         self.map = Some(map);
         self.ring = ring;
         self.biome = wv_terrain::biome::BIOME_FOREST;
+        self.cell_size = cell_size;
+        self.from = from;
     }
 
     /// 关闭并清空一切（取消 / X / 无工程 / 提交成功）。
@@ -128,6 +155,8 @@ impl FeaturePlaceDialog {
         self.map = None;
         self.ring.clear();
         self.biome = wv_terrain::biome::BIOME_FOREST;
+        self.cell_size = 0.0;
+        self.from = 0;
     }
 
     /// 提交参数：钉住的图 id + 环（调用方已确认 `open` 且环非空）。
@@ -150,8 +179,9 @@ pub fn feature_place_dialog(
     playback: Res<PlaybackState>,
     current_loc: Res<CurrentLocale>,
     mut selection: ResMut<wv_render::state::SelectionState>,
-    grid: Res<wv_render::state::GridConfig>,
     mut tex: ResMut<wv_render::terrain_view::TerrainTexture>,
+    mut notice: ResMut<crate::ui_shell::ShellNotice>,
+    time: Res<Time>,
 ) {
     // 无工程（关工程 / 加载失败）：不弹新建框，顺手回归无待提交状态。
     if !projection.has_open_project() {
@@ -256,7 +286,8 @@ pub fn feature_place_dialog(
             dialog.close();
             return;
         };
-        if place_biome_marker_now(
+        let frame = (time.elapsed_secs() * 60.0) as u64;
+        match place_biome_marker_now(
             &mut projection,
             &mut edit,
             &playback,
@@ -265,13 +296,18 @@ pub fn feature_place_dialog(
             name,
             dialog.biome,
             &ring,
-            grid.cell_size,
-        )
-        .is_some()
-        {
-            // 意图生效 → 选区清空（与地形 / 大陆意图同口径，spec D9）。
-            selection.cancel();
-            dialog.close();
+            dialog.cell_size,
+            dialog.from,
+        ) {
+            Ok(_) => {
+                // 意图生效 → 选区清空（与地形 / 大陆意图同口径，spec D9）。
+                selection.cancel();
+                dialog.close();
+            }
+            Err(msg) => {
+                // 失败留在框内（作者可改群系/重圈），回执给人话（终审 I4）。
+                notice.error(msg, frame);
+            }
         }
     }
 }
@@ -286,8 +322,12 @@ mod tests {
         d.open_with(
             wv_core::Id::new_unchecked("map_world"),
             vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)],
+            8.0,
+            7,
         );
         assert_eq!(d.biome, wv_terrain::biome::BIOME_FOREST, "缺省群系应为森林");
+        assert_eq!(d.cell_size, 8.0, "打开时应钉住格尺寸（终审 C1）");
+        assert_eq!(d.from, 7, "打开时应钉住时间轴日");
         d.close();
         assert_eq!(d.biome, wv_terrain::biome::BIOME_FOREST);
     }

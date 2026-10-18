@@ -210,7 +210,12 @@ pub fn intent_menu(
                                 if let (Some(map), Some(ring)) =
                                     (drill.current().cloned(), selection.closed.clone())
                                 {
-                                    dialogs.feature.open_with(map, ring);
+                                    dialogs.feature.open_with(
+                                        map,
+                                        ring,
+                                        grid.cell_size,
+                                        playback.current_day,
+                                    );
                                 }
                             }
                             // 划分势力（ADR-0028）：把闭合环 + 当前图 + 解析出的宿主

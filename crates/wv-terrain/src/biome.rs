@@ -72,6 +72,11 @@ pub type Biome = u8;
 /// 迁入本模块（三通道后分带不再需要它，显示投影仍需要）。
 const SHALLOW_WATER_MAX_DEPTH_M: i16 = -200;
 
+/// 森林族（森林 / 丛林 / 热带雨林）：主题覆盖物与近景符号共用的判定。
+pub fn is_forest_family(b: Biome) -> bool {
+    matches!(b, BIOME_FOREST | BIOME_JUNGLE | BIOME_TROPICAL_RAINFOREST)
+}
+
 /// 群系的默认地表：海洋/湖泊/河流是水，其余（含 `NONE`）按陆处理。
 pub fn surface_for_biome(b: Biome) -> Surface {
     match b {

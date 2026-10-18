@@ -293,10 +293,10 @@ pub fn detect_feature_territory_hints(world: &wv_core::World) -> Vec<Diagnostic>
             }
         }
         if checked_any_ring && !hit {
-            let what = if kind == FEATURE_FOREST {
-                format!("kind={kind}（森林）")
-            } else {
-                format!("kind={kind}")
+            let what = match place.biome {
+                Some(b) => format!("biome={b}"),
+                None if kind == FEATURE_FOREST => format!("kind={kind}（森林）"),
+                None => format!("kind={kind}"),
             };
             out.push(hint(
                 format!("feature-no-cells|{}", place.id),

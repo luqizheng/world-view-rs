@@ -577,9 +577,7 @@ pub fn stable_hash(id: &str) -> u64 {
 /// （名字与格子色仍然可见）；无 `biome` 的旧工程回退到 `place.feature`。
 pub(crate) fn overlay_feature_for_place(place: &wv_core::distance::Place) -> Option<u8> {
     match place.biome {
-        Some(wv_terrain::biome::BIOME_FOREST)
-        | Some(wv_terrain::biome::BIOME_JUNGLE)
-        | Some(wv_terrain::biome::BIOME_TROPICAL_RAINFOREST) => {
+        Some(b) if wv_terrain::biome::is_forest_family(b) => {
             Some(crate::theme::overlays::FEATURE_FOREST)
         }
         Some(_) => None,

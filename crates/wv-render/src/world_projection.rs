@@ -542,7 +542,8 @@ fn draw_dashed_circle(gizmos: &mut Gizmos, center: Vec2, radius: f32, color: Col
 /// 只会让覆盖层中心出现一颗没有语义的红点。普通地点（`feature = None`）保持
 /// 原行为：锚定且有坐标 → 点标，`w/h` 齐备 → 城市级。
 fn place_dot_for(p: &wv_core::distance::Place, grid: &GridConfig) -> Option<PlaceDot> {
-    if p.feature.is_some() {
+    if p.feature.is_some() || p.biome.is_some() {
+        // 标记（ADR-0029）：覆盖层/标签负责表现，不再生成城市点。
         return None;
     }
     let (x, y) = (p.x?, p.y?);
@@ -572,6 +573,16 @@ mod tests {
             w: Some(10.0),
             h: Some(10.0),
         }
+    }
+
+    /// 生物群系标记（`biome = Some(_)`）→ 不生成 POI 点（ADR-0029）。
+    #[test]
+    fn biome_marker_produces_no_poi_dot() {
+        let mut p = place(None);
+        p.biome = Some(wv_terrain::biome::BIOME_FOREST);
+        p.feature = None;
+        let dot = place_dot_for(&p, &GridConfig::default());
+        assert_eq!(dot, None, "标记由覆盖层/标签表现，不得生成城市点");
     }
 
     /// 事实地点（森林，`feature = Some(4)`）→ 不生成 POI 点。

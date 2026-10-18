@@ -999,10 +999,29 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 392] = [
+    pub const ALL: [I18nKey; 411] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
+        I18nKey::IntentMenuMarker,
+        I18nKey::MarkerBiomeLabel,
+        I18nKey::MarkerBiomeForest,
+        I18nKey::MarkerBiomePlains,
+        I18nKey::MarkerBiomeGrassland,
+        I18nKey::MarkerBiomeGobi,
+        I18nKey::MarkerBiomeDesert,
+        I18nKey::MarkerBiomeSwamp,
+        I18nKey::MarkerBiomeWetland,
+        I18nKey::MarkerBiomeTundra,
+        I18nKey::MarkerBiomeSnowfield,
+        I18nKey::MarkerBiomeJungle,
+        I18nKey::MarkerBiomeTropicalRainforest,
+        I18nKey::MarkerBiomeHills,
+        I18nKey::MarkerBiomeMountains,
+        I18nKey::MarkerBiomeOasis,
+        I18nKey::MarkerBiomeSavanna,
+        I18nKey::MarkerBiomeSaltFlat,
+        I18nKey::MarkerBiomeLake,
         I18nKey::CommonOk,
         I18nKey::CommonConfirm,
         I18nKey::CommonSave,

@@ -42,9 +42,13 @@ pub fn place_biome_marker_now(
     biome: u8,
     ring: &[(f32, f32)],
     cell_size: f32,
-) -> Option<wv_core::Id> {
+    day: i64,
+) -> Result<wv_core::Id, String> {
+    if playback.playing {
+        return Err("播放中为只读：先暂停再放置标记".into());
+    }
     if ring.len() < 3 || cell_size <= 0.0 {
-        return None;
+        return Err("标记包络至少需要 3 个点".into());
     }
     let id = wv_core::Id::new_unchecked(format!("place_marker_{}", current_unix_ms()));
     let place = Place {
@@ -63,7 +67,7 @@ pub fn place_biome_marker_now(
     let cmd = wv_edit::command::PlaceBiomeMarkerCommand::new(
         map.clone(),
         cell_size,
-        playback.current_day,
+        day,
         place,
         ring.to_vec(),
     );
@@ -86,17 +90,18 @@ pub fn place_biome_marker_now(
                     tex.mark_dirty(rect);
                 }
             }
-            Some(id)
+            Ok(id)
         }
         Err(e) => {
             bevy::log::warn!("生物群系标记失败: {e}");
-            None
+            Err(format!("{e}"))
         }
     }
 }
 
-/// 两版 cells 的差异包围盒（格坐标 `[x0,y0,x1,y1]` 含端点）。
-fn cells_diff_rect(
+/// 两版 cells 的差异包围盒（**半开** `[x0,y0,x1,y1)`；与
+/// `TerrainTexture::mark_dirty` / `patch_terrain_image` 的迭代口径一致）。
+pub(crate) fn cells_diff_rect(
     before: &[wv_core::terrain::TerrainCellData],
     after: &[wv_core::terrain::TerrainCellData],
     width: u32,
@@ -112,8 +117,9 @@ fn cells_diff_rect(
         let x = (i % width as usize) as u32;
         let y = (i / width as usize) as u32;
         rect = Some(match rect {
-            None => [x, y, x, y],
-            Some(r) => [r[0].min(x), r[1].min(y), r[2].max(x), r[3].max(y)],
+            // 半开：单格变化也要 ≥1 宽高，末端 +1。
+            None => [x, y, x + 1, y + 1],
+            Some(r) => [r[0].min(x), r[1].min(y), r[2].max(x + 1), r[3].max(y + 1)],
         });
     }
     rect
@@ -325,5 +331,40 @@ mod tests {
             edit.history.undo(&mut world.world).is_ok(),
             "钉图路径同样整体可撤销"
         );
+    }
+}
+
+#[cfg(test)]
+mod marker_action_tests {
+    use super::*;
+
+    fn flat(size: u32, biome: u8) -> wv_core::terrain::TerrainData {
+        wv_core::terrain::TerrainData {
+            width: size,
+            height: size,
+            cells: vec![
+                wv_core::terrain::TerrainCellData {
+                    height: 100,
+                    surface: 1,
+                    biome,
+                };
+                (size * size) as usize
+            ],
+        }
+    }
+
+    #[test]
+    fn cells_diff_rect_is_half_open_and_covers_the_last_cell() {
+        let before = flat(4, 3);
+        let mut after = before.clone();
+        after.cells[3 * 4 + 3].biome = 1; // 右下角单格
+        let rect = cells_diff_rect(&before.cells, &after.cells, 4).expect("应有差异");
+        assert_eq!(rect, [3, 3, 4, 4], "半开区间且覆盖末格");
+    }
+
+    #[test]
+    fn cells_diff_rect_none_when_identical() {
+        let before = flat(4, 3);
+        assert_eq!(cells_diff_rect(&before.cells, &before.cells, 4), None);
     }
 }

@@ -167,7 +167,7 @@ pub fn forest_sites(
             };
             // 格子侧比较**森林群系**编号（biome 冻结表）；`FEATURE_FOREST`(4)
             // 是 Place.feature 的旧 kind 词汇表，两者经 v1 迁移表对应。
-            if cell.biome == wv_terrain::biome::BIOME_FOREST {
+            if wv_terrain::biome::is_forest_family(cell.biome) {
                 forest.push((x, y));
             }
             if cell.height > 0 {

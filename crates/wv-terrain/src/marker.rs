@@ -89,7 +89,15 @@ pub fn mark_region(
         }
         let (x, y) = ((i % w as usize) as i32, (i / w as usize) as i32);
         if let Some(cell) = grid.get(x, y) {
-            if cell.biome == biome && cell.surface == target_surface {
+            // 与生成分支同一湿判定口径（surface 水 ‖ 海拔 < 0），避免
+            // 「识别把沉海陆格算命中、生成却跳过」的定义漂移（终审 M10）。
+            let wet = crate::edit::is_water_cell(cell);
+            let same_domain = if target_surface == SURFACE_WATER {
+                wet
+            } else {
+                !wet
+            };
+            if cell.biome == biome && same_domain {
                 matched[i] = true;
                 matched_count += 1;
             }
@@ -304,6 +312,50 @@ mod tests {
             (perim - 64.0).abs() < 8.0,
             "识别边界应贴 16×16 森林块（周长≈64），实得 {perim}"
         );
+    }
+
+    #[test]
+    fn lake_median_is_the_middle_land_height_not_the_mean() {
+        // 高度 80..120 的斜坡：中位数 = 100（均值也≈100——用右偏分布区分：
+        // 90 格给 80 m、10 格给 200 m → 中位 80、均值 92）。
+        let mut g = flat_land(64, 64, 80);
+        for y in 20..30 {
+            for x in 20..30 {
+                let mut c = g.get(x, y).unwrap();
+                c.height = 200;
+                g.set(x, y, c);
+            }
+        }
+        let envelope = sq(20.0, 20.0, 50.0, 50.0);
+        mark_region(&mut g, &envelope, BIOME_LAKE, 1.0).expect("湖");
+        // 包络内 900 格中 100 格是 200 m，其余 800 格 80 m → 中位 80。
+        let c = g.get(40, 40).unwrap();
+        assert!(c.surface == SURFACE_WATER);
+        assert_eq!(c.height, 80, "湖面应取中位海拔 80（不是均值）");
+    }
+
+    #[test]
+    fn land_biome_over_all_water_errors_without_writing() {
+        let mut g = TerrainGrid::new(32, 32);
+        for y in 0..32 {
+            for x in 0..32 {
+                g.set(
+                    x,
+                    y,
+                    crate::TerrainCell {
+                        height: -50,
+                        surface: SURFACE_WATER,
+                        biome: crate::BIOME_NONE,
+                    },
+                );
+            }
+        }
+        let before = g.clone();
+        assert_eq!(
+            mark_region(&mut g, &sq(4.0, 4.0, 20.0, 20.0), BIOME_FOREST, 1.0),
+            Err(MarkerError::EmptyRegion)
+        );
+        assert_eq!(g, before, "失败不得改动地形");
     }
 
     #[test]
