@@ -178,37 +178,37 @@ pub fn derive_hints(world: &wv_core::World) -> Diagnostics {
     // ADR-0022 M3 D4：跨级尺度一致性（V1 提示，不阻止）。
     d.items.extend(detect_cross_level_scale_hints(world));
 
-    // 主题覆盖物：feature 地界内没有对应地形格 / 孤儿地界（V1 提示，不阻止）。
+    // 主题覆盖物：地界内没有对应群系格 / 孤儿地界（V1 提示，不阻止）。
     d.items.extend(detect_feature_territory_hints(world));
+
+    // 词汇迁移（ADR-0032 D3）：Place 仍携带旧 feature 字段时的迁移/未映射提示。
+    d.items.extend(detect_feature_migration_hints(world));
 
     d.dedup_by_fingerprint();
     d
 }
 
-/// 森林的地理事实编号（`Place.feature` 的值）。
-///
-/// wv-io **不依赖 wv-render**（AGENTS §2.1），故这里是字面量；语义编号与
-/// `wv_render::theme::overlays::FEATURE_FOREST` 同源（同一张旧 TerrainKind
-/// 词汇表）。本模块只把它用于「文案里怎么称呼这类事实」，判定用的仍是
-/// 作者声明的编号（经 `migrate_v1_kind` 换算到格子群系通道后比较）。
-const FEATURE_FOREST: u8 = 4;
-
 /// 覆盖物地界的**事实一致性**提示（V1：只提示，不阻止保存）。
 ///
 /// ## 口径
 ///
-/// 1. 对每个 `feature: Some(kind)` 且 `map: Some(m)` 的地点，收集
-///    `place_geometry` 中 `owner == place.id`、`map == m` 的多边形 span；
+/// 1. 对每个声明了标记（`biome`，或旧 `feature` 经
+///    [`crate::terrain_bin::place_feature_to_biome`] 换算）且 `map: Some(m)`
+///    的地点，收集 `place_geometry` 中 `owner == place.id`、`map == m` 的
+///    多边形 span；
 /// 2. **该图没有自带栅格**（`world.terrain_of(m)` 为 `None`）→ 跳过：
-///    继承底图的 kind 不属于本图，无法判断，也不该提示（晕/描边仍可见）；
+///    继承底图的栅格不属于本图，无法判断，也不该提示（晕/描边仍可见）；
 /// 3. `MapNode.extent` 缺失或非正 → 跳过（无法把地图局部坐标映射到格）；
 /// 4. 环的包围盒映射到候选格范围（`x / extent.width * data.width`、
 ///    `y / extent.height * data.height`），逐格取**格心**的局部坐标做
-///    [`wv_core::geometry::point_in_ring`]，统计 `kind == 声明值` 的格；
+///    [`wv_core::geometry::point_in_ring`]，统计群系匹配的格；
 /// 5. 一个命中都没有 → [`hint`]（指纹 `feature-no-cells|{place_id}`）；
 /// 6. 任何 `place_geometry` span 的 `owner` 不在 `distances.places` 里 →
 ///    [`hint`]（指纹 `feature-orphan-territory|{owner}`）——**不是** `Error`：
 ///    地界求值会静默跳过它（`place_territory_at`），校验面板负责让作者看见。
+///
+/// 指纹字符串保持 `feature-*` 前缀**不改**（ADR-0032 D7）：UI 的已读/忽略
+/// 状态锚定在指纹上，换指纹等于重置作者的认领记录。
 ///
 /// 同一指纹只出现一次（函数内按指纹去重；`derive_hints` 末尾还会再兜一次）。
 ///
@@ -223,7 +223,7 @@ pub fn detect_feature_territory_hints(world: &wv_core::World) -> Vec<Diagnostic>
     let mut out: Vec<Diagnostic> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
 
-    // 孤儿地界：owner 不在 places 里。不依赖 feature / 栅格，逐 span 检查。
+    // 孤儿地界：owner 不在 places 里。不依赖标记字段 / 栅格，逐 span 检查。
     for g in &world.place_geometry {
         if world.distances.place(&g.owner).is_some() {
             continue;
@@ -242,9 +242,14 @@ pub fn detect_feature_territory_hints(world: &wv_core::World) -> Vec<Diagnostic>
     }
 
     for place in &world.distances.places {
-        // 标记（ADR-0029）：有 `biome` 时按群系编号判定；旧工程只有 `feature`
-        // （旧 kind 词汇）时经迁移表换算。两者都没有 = 普通地点，跳过。
-        let Some(kind) = place.biome.or(place.feature) else {
+        // 标记（ADR-0029/0032）：以 `biome` 为准；旧 `feature`（旧 kind 词汇）
+        // 经 place 迁移表换算（D4——{0,1,5,6,7} 升级为真实群系，纠正旧
+        // `migrate_v1_kind` 归 0 的假阴性）。两者皆无（或垃圾值）= 普通地点。
+        let Some(biome_id) = place.biome.or_else(|| {
+            place
+                .feature
+                .and_then(crate::terrain_bin::place_feature_to_biome)
+        }) else {
             continue;
         };
         let Some(map_id) = place.map.as_ref() else {
@@ -287,23 +292,15 @@ pub fn detect_feature_territory_hints(world: &wv_core::World) -> Vec<Diagnostic>
                 continue;
             }
             checked_any_ring = true;
-            // biome 标记直接比较群系编号；旧 feature（旧 kind 词汇）经 v1 迁移表
-            // 换算——旧 YAML 的 feature 不失效（ADR-0029 D5）。
-            let feature_biome = match place.biome {
-                Some(b) => b,
-                None => crate::terrain_bin::migrate_v1_kind(kind).1,
-            };
-            if ring_has_feature_cell(terrain, &extent, ring, feature_biome) {
+            // 群系编号直接比较——biome 已是唯一词汇（ADR-0032），feature 兜底
+            // 在上面已经迁移表换算过。
+            if ring_has_feature_cell(terrain, &extent, ring, biome_id) {
                 hit = true;
                 break;
             }
         }
         if checked_any_ring && !hit {
-            let what = match place.biome {
-                Some(b) => format!("biome={b}"),
-                None if kind == FEATURE_FOREST => format!("kind={kind}（森林）"),
-                None => format!("kind={kind}"),
-            };
+            let what = format!("biome={biome_id}");
             out.push(hint(
                 format!("feature-no-cells|{}", place.id),
                 format!(
@@ -319,7 +316,49 @@ pub fn detect_feature_territory_hints(world: &wv_core::World) -> Vec<Diagnostic>
     out
 }
 
-/// 环的包围盒内是否存在**格心落在环内且 kind 匹配**的地形格。
+/// 词汇迁移提示（ADR-0032 D3/D7 · V1 只提示，不阻止保存）。
+///
+/// Place 仍携带旧 `feature` 字段只在两种情形发生：
+/// 1. **旧工程加载后、首次保存前**——加载迁移已把群系写入 `biome`，feature
+///    原值作为提示证据驻留内存；作者保存后旧字段从 YAML 消失、重载后本提示
+///    随之消散（指纹可认领）；
+/// 2. 值在旧词汇表（0–9）外——无法迁移，按普通地点处理。
+///
+/// 指纹 = `feature-migrated|{place_id}` / `feature-unmapped|{place_id}`，
+/// 不含内容值——同一地点反复出现是同一条，认领状态跨会话稳定。
+pub fn detect_feature_migration_hints(world: &wv_core::World) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    for place in &world.distances.places {
+        let Some(f) = place.feature else {
+            continue;
+        };
+        // 以 biome 为胜（作者手工并存时以新词汇为准）；biome 缺席时给映射目标。
+        match place
+            .biome
+            .or(crate::terrain_bin::place_feature_to_biome(f))
+        {
+            Some(b) => out.push(hint(
+                format!("feature-migrated|{}", place.id),
+                format!(
+                    "地点「{name}」使用旧词汇 feature={f}（ADR-0032 已收口）：以 biome={b} 为准；\
+                     保存后 feature 键将从 YAML 移除，本提示随之消失。仅提示，不阻止保存。",
+                    name = place.name,
+                ),
+            )),
+            None => out.push(hint(
+                format!("feature-unmapped|{}", place.id),
+                format!(
+                    "地点「{name}」的 feature={f} 不在旧词汇表（0–9）内且无群系等价，\
+                     已按普通地点处理；如需标记请改用 biome 字段。仅提示，不阻止保存。",
+                    name = place.name,
+                ),
+            )),
+        }
+    }
+    out
+}
+
+/// 环的包围盒内是否存在**格心落在环内且群系匹配**的地形格。
 ///
 /// 只扫包围盒覆盖的格（含 1 格余量），避免大地图每次诊断全图遍历；
 /// 精确判定仍交给 [`wv_core::geometry::point_in_ring`]。
@@ -327,7 +366,7 @@ fn ring_has_feature_cell(
     terrain: &wv_core::terrain::TerrainData,
     extent: &wv_core::map::Extent,
     ring: &[f32],
-    kind: u8,
+    biome: u8,
 ) -> bool {
     let (tw, th) = (terrain.width as usize, terrain.height as usize);
     if tw == 0 || th == 0 || extent.width <= 0.0 || extent.height <= 0.0 {
@@ -378,7 +417,7 @@ fn ring_has_feature_cell(
             let Some(cell) = terrain.cells.get(gy * tw + gx) else {
                 continue;
             };
-            if cell.biome != kind {
+            if cell.biome != biome {
                 continue;
             }
             let cx = (gx as f32 + 0.5) / terrain.width as f32 * extent.width;

@@ -251,6 +251,32 @@ fn derive_hints_includes_feature_territory_hints() {
     );
 }
 
+/// ADR-0032 D4 的假阴性纠正：feature=5（丘陵）旧代码经 `migrate_v1_kind`
+/// 归 0、与草原格（biome 3）比较恒命中而**恒静默**；新表升级为 biome 12，
+/// 地界内没有丘陵格时应照常提示。
+#[test]
+fn hills_feature_declaration_reports_missing_cells_like_other_markers() {
+    let mut place = forest_place();
+    place.feature = Some(5); // 旧词汇：丘陵
+    let w = world_with(
+        Some(place),
+        square_span("place_forest"),
+        Some(uniform_terrain(GRASSLAND_BIOME)),
+    );
+    let hints = detect_feature_territory_hints(&w);
+    assert_eq!(
+        hints.len(),
+        1,
+        "丘陵声明 + 无丘陵格应提示（旧实现假阴性），实得 {} 条",
+        hints.len()
+    );
+    assert!(
+        hints[0].message.contains("biome=12"),
+        "文案应以迁移后的群系编号表述：got {}",
+        hints[0].message
+    );
+}
+
 /// (e) 极端有限坐标 × 极小 extent：坐标 × 缩放溢出 f32 时不得 panic。
 ///
 /// `3e30 * 1e31` 溢出为正无穷，`as i64` 饱和到 `i64::MAX`；

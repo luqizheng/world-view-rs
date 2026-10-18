@@ -1,27 +1,29 @@
-//! Place 地界（`geometry/place/`）与 `Place.feature` 的读写验证。
+//! Place 地界（`geometry/place/`）与标记字段的读写验证。
 //!
 //! 存储形态与势力几何（`geometry/faction/`）逐字同构：
 //! 每条 [`GeometrySpan`] 一个 YAML，文件名用合成 id
 //! `{map}__{owner}__{from}.yaml`（§4.5 每实体一文件；几何无独立 id 的
-//! IO 层妥协见 `save_entities` 文档）。`Place.feature` 随
-//! `distances/places/<id>.yaml` 自动 round-trip。
+//! IO 层妥协见 `save_entities` 文档）。标记字段随
+//! `distances/places/<id>.yaml` round-trip。
 //!
-//! 验证：
-//! 1. `Place.feature` 的 YAML round-trip（`Some(4)`）与缺席语义（`None` 不写键）；
+//! 验证（ADR-0032）：
+//! 1. 词汇收口：`biome` 正常写回；旧 `feature` **只读不写**（迁移窗口）；
 //! 2. Project 级 save（`wants("distances/places")` + `wants("geometry/place")`）
 //!    → load round-trip，含一条开放区间地界；
-//! 3. 零迁移：无 `geometry/place/` 目录的既有工程加载得空 Vec。
+//! 3. 加载迁移：旧 YAML 的 `feature` 在 load 时迁入 `biome`，证据驻留内存、
+//!    首次保存后收敛（`feature` 键消失）；
+//! 4. 零迁移：无 `geometry/place/` 目录的既有工程加载得空 Vec。
 
 use wv_core::distance::Place;
 use wv_core::map::{GeometryData, GeometrySpan};
 use wv_core::{Id, TimeSpan, World};
 
-fn sample_place(feature: Option<u8>) -> Place {
+fn sample_place(biome: Option<u8>) -> Place {
     Place {
         id: Id::new_unchecked("place_linan"),
         name: "临安".into(),
-        feature,
-        biome: None,
+        feature: None,
+        biome,
         envelope: None,
         map: Some(Id::new_unchecked("map_world")),
         x: Some(10.0),
@@ -43,26 +45,24 @@ fn sample_geometry() -> GeometrySpan {
     }
 }
 
+/// ADR-0032 D1：旧 `feature` 字段**只读不写**——旧 YAML 照常读入（迁移窗口），
+/// 序列化一律不再输出 feature 键（写回只写 biome）。
 #[test]
-fn place_feature_round_trips_through_yaml() {
-    let place = sample_place(Some(4));
+fn legacy_feature_field_is_read_but_never_written() {
+    let place = sample_place(Some(1));
     let text = serde_yaml::to_string(&place).expect("序列化");
-    assert!(
-        text.contains("feature: 4"),
-        "Some(4) 应写成 feature: 4，实得:\n{text}"
-    );
-    let back: Place = serde_yaml::from_str(&text).expect("反序列化");
-    assert_eq!(back, place, "带 feature 的 Place YAML round-trip 应无损");
+    assert!(text.contains("biome: 1"), "biome 应正常写回，实得:\n{text}");
 
-    // None = 普通地点：不写键，旧工程与旧读取端都不受影响。
-    let plain = sample_place(None);
-    let text = serde_yaml::to_string(&plain).expect("序列化");
+    let legacy = "id: place_linan\nname: 临安\nfeature: 4\n";
+    let back: Place = serde_yaml::from_str(legacy).expect("旧 YAML 必须照常加载");
+    assert_eq!(back.feature, Some(4), "读取侧：旧 feature 字段保留");
+    assert_eq!(back.biome, None, "纯 serde 层不做迁移（迁移在 io 加载层）");
+
+    let out = serde_yaml::to_string(&back).expect("序列化");
     assert!(
-        !text.contains("feature"),
-        "feature: None 不应输出 feature 键，实得:\n{text}"
+        !out.contains("feature"),
+        "写入侧：feature 不得再落盘（ADR-0032 D1），实得:\n{out}"
     );
-    let back: Place = serde_yaml::from_str(&text).expect("反序列化");
-    assert_eq!(back, plain, "无 feature 键的 Place YAML round-trip 应无损");
 }
 
 /// 极简 tempdir（与 `region_yaml.rs` 同法）。
@@ -104,7 +104,7 @@ fn project_saves_then_loads_place_geometry_round_trip() {
     let mut proj = open_min_project(&tmp.0);
 
     let mut world = World::default();
-    world.distances.places.push(sample_place(Some(4)));
+    world.distances.places.push(sample_place(Some(1)));
     world.place_geometry.push(sample_geometry());
 
     proj.save_world(
@@ -135,8 +135,8 @@ fn project_saves_then_loads_place_geometry_round_trip() {
     assert_eq!(back.distances.places.len(), 1, "应加载出 1 个地点");
     assert_eq!(
         back.distances.places[0],
-        sample_place(Some(4)),
-        "Place（含 feature=Some(4)）round-trip 应无损"
+        sample_place(Some(1)),
+        "Place（含 biome=Some(1)）round-trip 应无损"
     );
     assert_eq!(back.place_geometry.len(), 1, "应加载出 1 条地界");
     assert_eq!(
@@ -153,7 +153,7 @@ fn project_without_geometry_place_dir_loads_empty_vec() {
     let mut proj = open_min_project(&tmp.0);
 
     let mut world = World::default();
-    world.distances.places.push(sample_place(Some(4)));
+    world.distances.places.push(sample_place(Some(1)));
     proj.save_world(&world, &["distances/places".into()])
         .expect("只保存地点");
     assert!(
@@ -173,4 +173,57 @@ fn project_without_geometry_place_dir_loads_empty_vec() {
         "无 geometry/place 目录的工程应得空 Vec，实得 {} 条",
         back.place_geometry.len()
     );
+}
+
+/// ADR-0032 D3：旧 YAML 的 `feature: 4` 在 load 时迁移为 `biome=1`（森林），
+/// feature 原值驻留内存作为迁移提示的证据（`detect_feature_migration_hints`）。
+#[test]
+fn legacy_feature_migrates_to_biome_on_load_and_keeps_evidence() {
+    let tmp = TempDir::new("migrate");
+    let proj = open_min_project(&tmp.0);
+    let places_dir = tmp.0.join("distances/places");
+    std::fs::create_dir_all(&places_dir).expect("建 places 目录");
+    let yaml = "id: place_linan\nname: 临安\nmap: map_world\nx: 10.0\ny: 20.0\nw: 4.0\nh: 2.0\nfeature: 4\n";
+    std::fs::write(places_dir.join("place_linan.yaml"), yaml).expect("写旧 YAML");
+
+    let world = proj.load_world().expect("加载");
+    assert_eq!(world.distances.places.len(), 1, "应加载出 1 个地点");
+    let p = &world.distances.places[0];
+    assert_eq!(
+        p.biome,
+        Some(1),
+        "feature=4 应在加载时迁移为 biome=1（森林）"
+    );
+    assert_eq!(p.feature, Some(4), "内存保留 feature 原值作为迁移提示证据");
+}
+
+/// ADR-0032 D3/D8：迁移后的世界首次保存即物理收敛——磁盘只写 biome、不再写
+/// feature；重载后旧字段从内存消失（迁移提示随之消散）。
+#[test]
+fn save_after_migration_writes_biome_and_drops_feature() {
+    let tmp = TempDir::new("migrate_save");
+    let mut proj = open_min_project(&tmp.0);
+    let places_dir = tmp.0.join("distances/places");
+    std::fs::create_dir_all(&places_dir).expect("建 places 目录");
+    let yaml = "id: place_linan\nname: 临安\nmap: map_world\nfeature: 4\n";
+    std::fs::write(places_dir.join("place_linan.yaml"), yaml).expect("写旧 YAML");
+
+    let world = proj.load_world().expect("加载");
+    proj.save_world(&world, &["distances/places".into()])
+        .expect("保存");
+
+    let text = std::fs::read_to_string(places_dir.join("place_linan.yaml")).expect("读回落盘");
+    assert!(
+        text.contains("biome: 1"),
+        "迁移后的群系应落盘，实得:\n{text}"
+    );
+    assert!(
+        !text.contains("feature"),
+        "旧字段不得再写回（ADR-0032 D1），实得:\n{text}"
+    );
+
+    let back = proj.load_world().expect("重载");
+    let p = &back.distances.places[0];
+    assert_eq!(p.biome, Some(1), "群系保持不变");
+    assert_eq!(p.feature, None, "首次保存后迁移收敛：旧字段从内存消失");
 }

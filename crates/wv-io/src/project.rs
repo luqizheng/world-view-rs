@@ -669,6 +669,19 @@ impl Project {
             if vehicles.is_empty() {
                 vehicles = read_single_file_list(&self.root.join("distances/vehicles.yaml"))?;
             }
+            // 词汇迁移（ADR-0032 D3）：旧 `Place.feature`（TerrainKind 0–9 词汇）
+            // 在加载时迁入 `biome`——仅 biome 为空且 feature 有值时迁；biome 已在
+            // 则以 biome 为胜。内存中**保留 feature 原值**，供诊断层发「已迁移、
+            // 保存后旧字段移除」提示（`detect_feature_migration_hints`）；写回只
+            // 写 biome（Place.feature 已 skip_serializing），首次保存即物理完成
+            // 迁移，磁盘旧文件在作者保存前一字不动（P6 非破坏）。
+            for place in &mut places {
+                if place.biome.is_none() {
+                    if let Some(f) = place.feature {
+                        place.biome = crate::terrain_bin::place_feature_to_biome(f);
+                    }
+                }
+            }
             wv_core::distance::DistanceGraph {
                 places,
                 edges,
