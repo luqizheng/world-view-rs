@@ -36,6 +36,7 @@ use wv_render::layer_frame;
 use wv_render::map_frame;
 use wv_render::streets;
 use wv_render::terrain_chunks;
+use wv_render::terrain_decor;
 use wv_render::terrain_view;
 use wv_render::vector_layers::{self, VectorLayerEntities};
 use wv_render::world_projection;
@@ -179,6 +180,8 @@ pub fn run(config: AppConfig) {
     // 事实地界覆盖层（theme overlay）：与势力层同族的「每帧 despawn+spawn」
     // 实体集合资源，漏 init 会在首帧 panic。
     .init_resource::<feature_overlays::FeatureOverlayEntities>()
+    // 地形装饰（ADR-0031）：六桶合批池 + 每桶材质，惰性创建。
+    .init_resource::<terrain_decor::TerrainDecorPools>()
     .init_resource::<brush_cursor::BrushCursorEntities>()
     .init_resource::<map_frame::MapFrameEntities>()
     .init_resource::<terrain_chunks::TerrainChunkEntities>()
@@ -278,6 +281,7 @@ pub fn run(config: AppConfig) {
             // 事实地界覆盖层（theme overlay）：地盘随 (图, 日, 缩放) 求值，
             // 排在势力层之后、地图外框之前（z 由各层常量决定，与顺序无关）。
             feature_overlays::sync_feature_overlays,
+            terrain_decor::sync_terrain_decor,
             // 地图外框 + 1/4 幅面参考网格（外框需地形尺寸）。
             map_frame::sync_map_frame,
         )

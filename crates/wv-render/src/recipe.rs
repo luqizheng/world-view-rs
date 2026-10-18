@@ -55,6 +55,7 @@ pub enum PassId {
     DrillMarkers,
     Atmosphere,
     FeatureOverlay,
+    TerrainDecor,
 }
 
 impl PassId {
@@ -81,10 +82,11 @@ impl PassId {
         PassId::DrillMarkers,
         PassId::Atmosphere,
         PassId::FeatureOverlay,
+        PassId::TerrainDecor,
     ];
 
     /// pass 总数（数组长度 = `PassId::COUNT`）。
-    pub const COUNT: usize = 21;
+    pub const COUNT: usize = 22;
 }
 
 /// 单条 pass 的元信息（ADR-0021 §2 D1 §3）。
@@ -176,42 +178,49 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true,  // DrillMarkers
         true,  // Atmosphere
         true,  // FeatureOverlay
+        true, // TerrainDecor
     ]),
     // 真实地形（plan v0.1 D3 B 类）——与 VectorFlat 同，除等值线（仅 VectorFlat）。
     (ViewMode::RealTerrain, [
         true, false, true, true, true, true, true, true, true, true,
         false, true, true, true, true, true, true, true, true, true,
         true,
+        true, // TerrainDecor
     ]),
     // 色块地形（plan v0.1 D3 C 类）——同上。
     (ViewMode::Schematic, [
         true, false, true, true, true, true, true, true, true, true,
         false, true, true, true, true, true, true, true, true, true,
         true,
+        true, // TerrainDecor
     ]),
     // Google 模式 —— 自带完整观感：等值线 / 氛围族 / 建筑不画。
     (ViewMode::GoogleMap, [
         true, false, true, true, false, true, true, true, true, false,
         false, true, true, true, true, true, true, true, true, false,
         true,
+        false, // TerrainDecor
     ]),
     // 势力图 —— 等值线不画，其余与真实地形同。
     (ViewMode::Faction, [
         true, false, true, true, true, true, true, true, true, true,
         true, true, true, true, true, true, true, true, true, true,
         true,
+        true, // TerrainDecor
     ]),
     // 事件图 —— 极简底图。
     (ViewMode::Event, [
         true, false, true, true, true, true, true, true, true, true,
         false, true, true, true, true, true, true, true, true, true,
         true,
+        false, // TerrainDecor
     ]),
     // 轮廓图（黑底分析视图）—— 大部分装饰关。
     (ViewMode::Coastline, [
         true, false, true, true, false, false, true, true, true, false,
         false, true, true, true, true, true, true, true, true, false,
         false, // FeatureOverlay：轮廓图只留轮廓
+        false, // TerrainDecor
     ]),
 ];
 
@@ -243,6 +252,7 @@ pub fn resolve_render_recipe(
             PassId::GridLines,
             PassId::MapFrame,
             PassId::Atmosphere,
+            PassId::TerrainDecor,
         ] {
             passes[id as usize].enabled = false;
         }

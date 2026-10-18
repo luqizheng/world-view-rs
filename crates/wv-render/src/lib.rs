@@ -74,6 +74,7 @@ pub mod state;
 pub mod streets;
 #[cfg(feature = "app")]
 pub mod terrain_chunks;
+pub mod terrain_decor;
 #[cfg(feature = "app")]
 pub mod terrain_view;
 #[cfg(feature = "app")]
