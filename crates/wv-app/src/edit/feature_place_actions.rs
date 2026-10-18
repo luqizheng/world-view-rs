@@ -26,6 +26,99 @@ use wv_core::time::TimeSpan;
 use wv_edit::command::AddFeaturePlaceCommand;
 use wv_edit::history::Transaction;
 
+/// 放置一个生物群系标记（ADR-0029 / 命名段 M1 Task 4）。
+///
+/// 与旧 `add_feature_place_now` 的区别：走 `PlaceBiomeMarkerCommand`——
+/// 包络是意图、边界由内核识别/生成、生成分支写地形格子，三件事单事务原子。
+/// 地形若被改写，按 cells 前后差集标纹理脏区（与 `commit_region_intent` 同口径）。
+#[allow(clippy::too_many_arguments)]
+pub fn place_biome_marker_now(
+    world: &mut WorldProjection,
+    edit: &mut EditHistory,
+    playback: &PlaybackState,
+    tex: &mut wv_render::terrain_view::TerrainTexture,
+    map: wv_core::Id,
+    name: String,
+    biome: u8,
+    ring: &[(f32, f32)],
+    cell_size: f32,
+) -> Option<wv_core::Id> {
+    if ring.len() < 3 || cell_size <= 0.0 {
+        return None;
+    }
+    let id = wv_core::Id::new_unchecked(format!("place_marker_{}", current_unix_ms()));
+    let place = Place {
+        id: id.clone(),
+        name,
+        feature: None,
+        biome: Some(biome),
+        envelope: None,
+        map: Some(map.clone()),
+        x: None,
+        y: None,
+        w: None,
+        h: None,
+    };
+    let before_cells = world.world.terrain_of(&map).map(|t| t.cells.clone());
+    let cmd = wv_edit::command::PlaceBiomeMarkerCommand::new(
+        map.clone(),
+        cell_size,
+        playback.current_day,
+        place,
+        ring.to_vec(),
+    );
+    let mut tx = Transaction::new();
+    tx.push(Box::new(cmd));
+    match edit.history.commit(&mut world.world, tx) {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
+            world.dirty = true;
+            // 纹理脏区：生成分支改了格子才需要重传。
+            if let (Some(before), Some(after)) = (
+                before_cells,
+                world.world.terrain_of(&map).map(|t| t.cells.clone()),
+            ) {
+                if let Some(rect) = cells_diff_rect(
+                    &before,
+                    &after,
+                    world.world.terrain_of(&map).map(|t| t.width).unwrap_or(0),
+                ) {
+                    tex.mark_dirty(rect);
+                }
+            }
+            Some(id)
+        }
+        Err(e) => {
+            bevy::log::warn!("生物群系标记失败: {e}");
+            None
+        }
+    }
+}
+
+/// 两版 cells 的差异包围盒（格坐标 `[x0,y0,x1,y1]` 含端点）。
+fn cells_diff_rect(
+    before: &[wv_core::terrain::TerrainCellData],
+    after: &[wv_core::terrain::TerrainCellData],
+    width: u32,
+) -> Option<[u32; 4]> {
+    if width == 0 || before.len() != after.len() {
+        return None;
+    }
+    let mut rect: Option<[u32; 4]> = None;
+    for (i, (a, b)) in before.iter().zip(after.iter()).enumerate() {
+        if a == b {
+            continue;
+        }
+        let x = (i % width as usize) as u32;
+        let y = (i / width as usize) as u32;
+        rect = Some(match rect {
+            None => [x, y, x, y],
+            Some(r) => [r[0].min(x), r[1].min(y), r[2].max(x), r[3].max(y)],
+        });
+    }
+    rect
+}
+
 /// 把一圈地界落成事实地点 + 初始地界。
 ///
 /// ## 为什么地点与地界一条命令

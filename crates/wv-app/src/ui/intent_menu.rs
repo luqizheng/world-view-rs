@@ -200,7 +200,7 @@ pub fn intent_menu(
                                 .add(
                                     egui::Button::image_and_text(
                                         icon,
-                                        t(loc, I18nKey::IntentMenuForest),
+                                        t(loc, I18nKey::IntentMenuMarker),
                                     )
                                     .fill(shell.accent())
                                     .corner_radius(egui::CornerRadius::from(radius::PANEL)),

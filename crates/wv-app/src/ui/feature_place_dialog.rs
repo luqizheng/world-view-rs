@@ -26,14 +26,66 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::edit::editing::EditHistory;
-use crate::edit::feature_place_actions::add_feature_place_now;
+use crate::edit::feature_place_actions::place_biome_marker_now;
 use crate::i18n::{t_key, CurrentLocale, I18nKey};
 use crate::state::{PlaybackState, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::ui::widgets::{button as widget_button, ButtonContent, ButtonStyle};
-use wv_render::theme::overlays::FEATURE_FOREST;
 
 use super::shell::UiShell;
+
+/// 标记可选的生物群系目录（ADR-0029；海洋/河流不做——后者是线状，M2）。
+///
+/// 顺序即下拉框顺序：常见面状群系在前。
+pub const MARKER_BIOMES: [(u8, I18nKey); 17] = [
+    (wv_terrain::biome::BIOME_FOREST, I18nKey::MarkerBiomeForest),
+    (wv_terrain::biome::BIOME_PLAINS, I18nKey::MarkerBiomePlains),
+    (
+        wv_terrain::biome::BIOME_GRASSLAND,
+        I18nKey::MarkerBiomeGrassland,
+    ),
+    (wv_terrain::biome::BIOME_GOBI, I18nKey::MarkerBiomeGobi),
+    (wv_terrain::biome::BIOME_DESERT, I18nKey::MarkerBiomeDesert),
+    (wv_terrain::biome::BIOME_SWAMP, I18nKey::MarkerBiomeSwamp),
+    (
+        wv_terrain::biome::BIOME_WETLAND,
+        I18nKey::MarkerBiomeWetland,
+    ),
+    (wv_terrain::biome::BIOME_TUNDRA, I18nKey::MarkerBiomeTundra),
+    (
+        wv_terrain::biome::BIOME_SNOWFIELD,
+        I18nKey::MarkerBiomeSnowfield,
+    ),
+    (wv_terrain::biome::BIOME_JUNGLE, I18nKey::MarkerBiomeJungle),
+    (
+        wv_terrain::biome::BIOME_TROPICAL_RAINFOREST,
+        I18nKey::MarkerBiomeTropicalRainforest,
+    ),
+    (wv_terrain::biome::BIOME_HILLS, I18nKey::MarkerBiomeHills),
+    (
+        wv_terrain::biome::BIOME_MOUNTAINS,
+        I18nKey::MarkerBiomeMountains,
+    ),
+    (wv_terrain::biome::BIOME_OASIS, I18nKey::MarkerBiomeOasis),
+    (
+        wv_terrain::biome::BIOME_SAVANNA,
+        I18nKey::MarkerBiomeSavanna,
+    ),
+    (
+        wv_terrain::biome::BIOME_SALT_FLAT,
+        I18nKey::MarkerBiomeSaltFlat,
+    ),
+    (wv_terrain::biome::BIOME_LAKE, I18nKey::MarkerBiomeLake),
+];
+
+/// 群系的本地化名（目录外返回 `"?"`，防御性兜底不 panic）。
+pub fn marker_biome_name(loc: crate::i18n::Locale, biome: u8) -> &'static str {
+    MARKER_BIOMES
+        .iter()
+        .find(|(b, _)| *b == biome)
+        .map(|(_, key)| crate::i18n::t(loc, *key))
+        .unwrap_or("?")
+}
 
 /// 「新建地理事实」对话框的跨帧状态。
 ///
@@ -53,6 +105,8 @@ pub struct FeaturePlaceDialog {
     pub map: Option<wv_core::Id>,
     /// 待落盘的闭合环（**捕获图局部 wu**，首尾不重复，≥3 点）。
     pub ring: Vec<(f32, f32)>,
+    /// 生物群系类型（ADR-0029；缺省森林）。
+    pub biome: u8,
 }
 
 impl FeaturePlaceDialog {
@@ -64,6 +118,7 @@ impl FeaturePlaceDialog {
         self.name.clear();
         self.map = Some(map);
         self.ring = ring;
+        self.biome = wv_terrain::biome::BIOME_FOREST;
     }
 
     /// 关闭并清空一切（取消 / X / 无工程 / 提交成功）。
@@ -72,6 +127,7 @@ impl FeaturePlaceDialog {
         self.name.clear();
         self.map = None;
         self.ring.clear();
+        self.biome = wv_terrain::biome::BIOME_FOREST;
     }
 
     /// 提交参数：钉住的图 id + 环（调用方已确认 `open` 且环非空）。
@@ -94,6 +150,8 @@ pub fn feature_place_dialog(
     playback: Res<PlaybackState>,
     current_loc: Res<CurrentLocale>,
     mut selection: ResMut<wv_render::state::SelectionState>,
+    grid: Res<wv_render::state::GridConfig>,
+    mut tex: ResMut<wv_render::terrain_view::TerrainTexture>,
 ) {
     // 无工程（关工程 / 加载失败）：不弹新建框，顺手回归无待提交状态。
     if !projection.has_open_project() {
@@ -141,6 +199,22 @@ pub fn feature_place_dialog(
                     dialog.name = name;
                 }
             });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(t_key(&current_loc, I18nKey::MarkerBiomeLabel));
+                let loc = current_loc.0;
+                egui::ComboBox::from_id_salt("wv_marker_biome")
+                    .selected_text(marker_biome_name(loc, dialog.biome))
+                    .show_ui(ui, |ui| {
+                        for (biome, _) in MARKER_BIOMES {
+                            ui.selectable_value(
+                                &mut dialog.biome,
+                                biome,
+                                marker_biome_name(loc, biome),
+                            );
+                        }
+                    });
+            });
             ui.add_space(8.0);
             ui.separator();
             ui.add_space(4.0);
@@ -182,20 +256,64 @@ pub fn feature_place_dialog(
             dialog.close();
             return;
         };
-        if add_feature_place_now(
+        if place_biome_marker_now(
             &mut projection,
             &mut edit,
             &playback,
+            &mut tex,
+            map,
             name,
-            FEATURE_FOREST,
-            &map,
+            dialog.biome,
             &ring,
+            grid.cell_size,
         )
         .is_some()
         {
             // 意图生效 → 选区清空（与地形 / 大陆意图同口径，spec D9）。
             selection.cancel();
             dialog.close();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dialog_defaults_to_forest_biome() {
+        let mut d = FeaturePlaceDialog::default();
+        d.open_with(
+            wv_core::Id::new_unchecked("map_world"),
+            vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)],
+        );
+        assert_eq!(d.biome, wv_terrain::biome::BIOME_FOREST, "缺省群系应为森林");
+        d.close();
+        assert_eq!(d.biome, wv_terrain::biome::BIOME_FOREST);
+    }
+
+    #[test]
+    fn biome_catalog_has_no_ocean_or_river() {
+        assert!(
+            !MARKER_BIOMES
+                .iter()
+                .any(|(b, _)| *b == wv_terrain::biome::BIOME_OCEAN),
+            "海洋不做标记（空势力/水域）"
+        );
+        assert!(
+            !MARKER_BIOMES
+                .iter()
+                .any(|(b, _)| *b == wv_terrain::biome::BIOME_RIVER),
+            "河流是线状标记，M2 再做"
+        );
+        assert_eq!(MARKER_BIOMES.len(), 17, "目录应有 17 个面状群系");
+        // 每个群系都能取到本地化名（不存在 "?" 兜底）。
+        for (b, _) in MARKER_BIOMES {
+            assert_ne!(
+                marker_biome_name(crate::i18n::Locale::Zh, b),
+                "?",
+                "群系 {b} 缺中文名"
+            );
         }
     }
 }

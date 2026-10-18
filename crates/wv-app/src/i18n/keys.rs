@@ -301,6 +301,44 @@ pub enum I18nKey {
     PanelEvent,
 
     // ── 事实地界（theme overlay v1 / 选择工具 M4） ──────────────────
+    /// 意图菜单「标记…」按钮（ADR-0029：原「森林…」升级为全群系标记）
+    IntentMenuMarker,
+    /// 标记对话框「生物群系」标签
+    MarkerBiomeLabel,
+    /// 群系名：森林
+    MarkerBiomeForest,
+    /// 群系名：平原
+    MarkerBiomePlains,
+    /// 群系名：草原
+    MarkerBiomeGrassland,
+    /// 群系名：戈壁
+    MarkerBiomeGobi,
+    /// 群系名：沙漠
+    MarkerBiomeDesert,
+    /// 群系名：沼泽
+    MarkerBiomeSwamp,
+    /// 群系名：湿地
+    MarkerBiomeWetland,
+    /// 群系名：苔原
+    MarkerBiomeTundra,
+    /// 群系名：雪原
+    MarkerBiomeSnowfield,
+    /// 群系名：丛林
+    MarkerBiomeJungle,
+    /// 群系名：热带雨林
+    MarkerBiomeTropicalRainforest,
+    /// 群系名：丘陵
+    MarkerBiomeHills,
+    /// 群系名：山地
+    MarkerBiomeMountains,
+    /// 群系名：绿洲
+    MarkerBiomeOasis,
+    /// 群系名：稀树草原
+    MarkerBiomeSavanna,
+    /// 群系名：盐碱地
+    MarkerBiomeSaltFlat,
+    /// 群系名：湖泊
+    MarkerBiomeLake,
     /// 「新建地理事实」命名对话框标题
     FeaturePlaceDialogTitle,
     /// 命名对话框的「名称」标签
