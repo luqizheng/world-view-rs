@@ -288,9 +288,9 @@ pub fn lod_tier(view_scale: f32) -> LodTier {
 /// 淡出带位置 0..1：`scale` **大 = 远**。近端 `0.75×threshold` 之前为 0，
 /// 远端 `1.125×threshold` 之后为 1，中间 smoothstep `3t²−2t³`。
 ///
-/// 语义是「离 Nation 档有多近」——**可见度 = `1 − lod_fade`**（城市 POI 例外，
-/// 见 `vector_layers::poi_alpha_multiplier`）。把它做成纯函数是为了让渲染层
-/// 所有硬 LOD 剔除点（建筑 / POI）共用同一条过渡曲线（spec §4.2 缺省）。
+/// 语义是「离 Nation 档有多近」——**可见度 = `1 − lod_fade`**。把它做成纯函数
+/// 是为了让渲染层所有硬 LOD 剔除点（建筑）共用同一条过渡曲线（spec §4.2 缺省）。
+/// POI 已改走 [`poi_visible_at_rank`] 的档位硬门（ADR-0030 D2），不再吃淡出带。
 pub fn lod_fade(scale: f32, threshold: f32) -> f32 {
     let lo = threshold * 0.75;
     let hi = threshold * 1.125;
@@ -301,6 +301,20 @@ pub fn lod_fade(scale: f32, threshold: f32) -> f32 {
     } else {
         let t = (scale - lo) / (hi - lo);
         t * t * (3.0 - 2.0 * t)
+    }
+}
+
+/// POI 呈现门槛（ADR-0030 D2）：视野档位 × 最低级别，**硬门**。
+///
+/// Nation 档只画 rank ≥ 3（国家级），Region 档 ≥ 2（市镇级起），Edit 档全见。
+/// 以硬门取代旧「非城市淡出带」：档位边界处点标直接出现/消失（缩放运动掩盖
+/// pop-in，Google 同款）。`rank` 缺省的旧工程经 `Place::effective_rank` 折算
+/// （w/h → 3，否则 1）后，与引入分级前的两档行为逐位一致。
+pub fn poi_visible_at_rank(rank: u8, tier: LodTier) -> bool {
+    match tier {
+        LodTier::Nation => rank >= 3,
+        LodTier::Region => rank >= 2,
+        LodTier::Edit => true,
     }
 }
 
@@ -330,6 +344,36 @@ mod lod_tests {
         assert_eq!(lod_tier(0.1), LodTier::Edit);
         assert_eq!(lod_tier(1.5), LodTier::Region);
         assert_eq!(lod_tier(5.12), LodTier::Nation);
+    }
+
+    /// 呈现门槛逐档手算（ADR-0030 D2）：Nation 只放行 3，Region 放行 2+，
+    /// Edit 全放行。rank 0（网络节点）任何档都不被 Nation/Region 放行。
+    #[test]
+    fn poi_gate_admits_higher_ranks_at_closer_tiers() {
+        for r in 0..=2u8 {
+            assert!(
+                !poi_visible_at_rank(r, LodTier::Nation),
+                "Nation 档不放行 rank {r}"
+            );
+        }
+        assert!(
+            poi_visible_at_rank(3, LodTier::Nation),
+            "Nation 档放行 rank 3"
+        );
+        assert!(
+            !poi_visible_at_rank(1, LodTier::Region),
+            "Region 档不放行 rank 1"
+        );
+        assert!(
+            poi_visible_at_rank(2, LodTier::Region),
+            "Region 档放行 rank 2"
+        );
+        for r in 0..=3u8 {
+            assert!(
+                poi_visible_at_rank(r, LodTier::Edit),
+                "Edit 档放行 rank {r}"
+            );
+        }
     }
 }
 

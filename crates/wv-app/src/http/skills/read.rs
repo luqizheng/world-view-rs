@@ -310,6 +310,7 @@ mod tests {
             w: None,
             h: None,
             feature: None,
+            rank: None,
         });
         (bridge, rx, world, wv_edit::History::default())
     }

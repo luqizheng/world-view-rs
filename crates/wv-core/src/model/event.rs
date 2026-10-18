@@ -169,6 +169,7 @@ mod tests {
             w,
             h,
             feature: None,
+            rank: None,
         }
     }
 

@@ -524,6 +524,7 @@ mod tests {
             w: None,
             h: None,
             feature: None,
+            rank: None,
         });
         w.distances.places.push(wv_core::distance::Place {
             id: Id::new_unchecked("wuhan"),
@@ -534,6 +535,7 @@ mod tests {
             w: None,
             h: None,
             feature: None,
+            rank: None,
         });
         let f = Filter::parse("name ~ '青'").unwrap();
         let reply = handle_read(
@@ -568,6 +570,7 @@ mod tests {
                 w: None,
                 h: None,
                 feature: None,
+                rank: None,
             });
         }
         let reply = handle_read(
@@ -601,6 +604,7 @@ mod tests {
                 w: None,
                 h: None,
                 feature: None,
+                rank: None,
             });
         }
         // 第一页
@@ -655,6 +659,7 @@ mod tests {
             w: None,
             h: None,
             feature: None,
+            rank: None,
         };
         // 同步入队（apply_send 不 poll future，消息直接进 mpsc）。
         let cmd: Box<dyn EditCommand> = Box::new(wv_edit::AddPlaceCommand::new(place));
@@ -687,6 +692,7 @@ mod tests {
             w: None,
             h: None,
             feature: None,
+            rank: None,
         };
         let cmd: Box<dyn EditCommand> = Box::new(wv_edit::AddPlaceCommand::new(place));
         let apply_reply = bridge.apply_send(cmd);

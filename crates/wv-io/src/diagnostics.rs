@@ -908,6 +908,7 @@ mod tests {
                     w: None,
                     h: None,
                     feature: None,
+                    rank: None,
                 },
                 Place {
                     id: b.clone(),
@@ -918,6 +919,7 @@ mod tests {
                     w: None,
                     h: None,
                     feature: None,
+                    rank: None,
                 },
             ],
             edges: vec![PlaceEdge {

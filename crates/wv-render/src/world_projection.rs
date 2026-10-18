@@ -46,9 +46,8 @@ pub struct ProjectionFrame {
     pub road_segments: Vec<(Vec2, Vec2)>,
     /// 本帧地点（POI）点标（世界坐标），锚定在当前地图的地点。
     ///
-    /// `is_city` = 该地点声明了矩形范围（`w/h` 齐备，如城市）；无范围的点标
-    /// （如关隘、渡口）为 `false`。国家级视野（[`crate::state::LodTier::Nation`]）
-    /// 只画 `is_city == true` 的点标——Google 地图式「低层级只画高级要素」。
+    /// 已按视口裁剪（0c01491）；级别门槛与密度上限在 `sync_poi` 按
+    /// [`PlaceDot::rank`] 执行（ADR-0030 D2/D3）。
     pub place_dots: Vec<PlaceDot>,
     /// 本帧 [`Self::road_segments`] 的内容指纹（A2，2026-10-18）。
     ///
@@ -56,6 +55,10 @@ pub struct ProjectionFrame {
     /// mesh 规格比对都不必做。相机平移不改世界系段坐标（指纹不变 → 零重建），
     /// 编辑与钻取切图才会改变它。
     pub road_fingerprint: u64,
+    /// 路段列缓存键（ADR-0030 D5a）。`None` = 失效。段坐标在**根图帧系**，
+    /// 不随相机平移/缩放变——只有世界编辑、钻取换图、栅格换图或 Road 图层
+    /// 可见性翻转才需要重算段列与指纹，其余帧这一步是零工作。
+    pub road_key: Option<bool>,
 }
 
 /// 一个 POI 点标的渲染数据。
@@ -63,8 +66,15 @@ pub struct ProjectionFrame {
 pub struct PlaceDot {
     /// 视图空间坐标（本图局部经 [`GridConfig::map_to_view`] 换算而来）。
     pub pos: Vec2,
-    /// 是否为「城市级」地点（`Place.w/h` 齐备）。
+    /// 是否为「城市级」地点（`Place.w/h` 齐备）。**只剩材质语义**：城市用
+    /// 城市材质；可见性一律走 [`Self::rank`] 的档位门槛（ADR-0030 D2）。
     pub is_city: bool,
+    /// 有效呈现级别（`Place::effective_rank` 的投影，ADR-0030）：门槛
+    /// `poi_visible_at_rank` 与密度上限的优先级排序都读它。
+    pub rank: u8,
+    /// 名字字符数（密度上限的第三优先级：更长者信息量更大，与标签碰撞
+    /// 优先级同一惯例）。
+    pub name_len: u32,
 }
 
 /// 地点缓存索引（A1，2026-10-18）：端点解析与 POI 收集的 O(1) 查表。
@@ -143,9 +153,21 @@ pub fn compute_projection(
     frame.track_polylines.clear();
     frame.track_heads.clear();
     frame.track_hollow_starts.clear();
-    frame.road_segments.clear();
     frame.place_dots.clear();
-    frame.road_fingerprint = segments_fingerprint(&frame.road_segments);
+
+    // 路段列缓存门（ADR-0030 D5a）：段坐标在根图帧系，不随相机平移/缩放变，
+    // 只有世界编辑 / 钻取换图 / 栅格换图 / Road 图层可见性翻转才重算。
+    // grid 变更已含在变更检测里（sync_grid_config 未变时早退，不逐帧置脏）。
+    let road_key = Some(layers.road.visible);
+    let road_stale = frame.road_key != road_key
+        || projection.is_changed()
+        || drill.is_changed()
+        || grid.is_changed();
+    frame.road_key = road_key;
+    if road_stale {
+        frame.road_segments.clear();
+        frame.road_fingerprint = segments_fingerprint(&frame.road_segments);
+    }
 
     // 索引只在世界变更后整表重建（世界替换 / 任何编辑都命中变更检测；
     // 未变更时这一行就是一次 tick 比较）。放在早退之前：图层全关的帧
@@ -220,7 +242,7 @@ pub fn compute_projection(
                 }
                 Some(grid.map_to_view(Vec2::new(p.x?, p.y?)))
             };
-            if layers.road.visible {
+            if layers.road.visible && road_stale {
                 for edge in &world.distances.edges {
                     if let (Some(a), Some(b)) = (find_place(&edge.a), find_place(&edge.b)) {
                         frame.road_segments.push((a, b));
@@ -549,6 +571,8 @@ fn place_dot_for(p: &wv_core::distance::Place, grid: &GridConfig) -> Option<Plac
     Some(PlaceDot {
         pos: grid.map_to_view(Vec2::new(x, y)),
         is_city: p.w.is_some() && p.h.is_some(),
+        rank: p.effective_rank(),
+        name_len: p.name.chars().count() as u32,
     })
 }
 
@@ -569,6 +593,7 @@ mod tests {
             y: Some(2.0),
             w: Some(10.0),
             h: Some(10.0),
+            rank: None,
         }
     }
 
@@ -630,6 +655,7 @@ mod tests {
             y: Some(y),
             w: Some(10.0),
             h: Some(10.0),
+            rank: None,
         }
     }
 
@@ -644,6 +670,7 @@ mod tests {
             y: None,
             w: None,
             h: None,
+            rank: None,
         }
     }
 
@@ -898,6 +925,8 @@ mod tests {
             "视口 (1280/0.5)×(800/0.5) 只装得下视口内点，got {}",
             frame.place_dots.len()
         );
-        assert!(dt.as_millis() < 100, "8.1 万点投影应在毫秒级，实得 {dt:?}");
+        // 预算 250ms：单跑 ~10ms，但全量并行跑测试时会被机器负载击穿
+        // （曾 100ms 假失败）。守的意义是「毫秒级而非秒级」（无裁剪时 17s+）。
+        assert!(dt.as_millis() < 250, "8.1 万点投影应在毫秒级，实得 {dt:?}");
     }
 }

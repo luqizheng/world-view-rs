@@ -22,9 +22,6 @@ use wv_terrain::{
     SURFACE_LAND, SURFACE_WATER,
 };
 
-/// 海面填充高度（prep 脚本同值）：渲染上处于 `water_deep` 区间。
-const SEA_DEPTH: i16 = -350;
-
 /// 真实高度 → (surface, biome)（`wv-terrain` 冻结表同源）。
 ///
 /// 分带按广东实际高程分布校准（COP90 实测：p90=654 / p95=812 / p99=1139 /

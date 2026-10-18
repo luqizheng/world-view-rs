@@ -194,6 +194,7 @@ mod tests {
             w: None,
             h: None,
             feature: None,
+            rank: None,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();

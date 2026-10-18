@@ -77,6 +77,7 @@ pub fn add_feature_place_now(
         y: None,
         w: None,
         h: None,
+        rank: None,
     };
     let flat: Vec<f32> = ring.iter().flat_map(|&(x, y)| [x, y]).collect();
     let territory = GeometrySpan {
