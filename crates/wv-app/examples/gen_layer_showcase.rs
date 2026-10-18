@@ -298,6 +298,7 @@ fn build_world(meta: WorldMeta) -> World {
         feature: None,
         biome: None,
         envelope: None,
+        rank: None,
     };
     let dot = |id: &str, name: &str, x: f32, y: f32| Place {
         id: Id::new(id).unwrap(),
@@ -310,6 +311,7 @@ fn build_world(meta: WorldMeta) -> World {
         feature: None,
         biome: None,
         envelope: None,
+        rank: None,
     };
     world.distances.places = vec![
         city("place_xiling", "西陵城", 500.0, 900.0),
@@ -703,6 +705,7 @@ fn dot_inner(id: &str, name: &str, x: f32, y: f32, map: &Id) -> Place {
         feature: None,
         biome: None,
         envelope: None,
+        rank: None,
     }
 }
 

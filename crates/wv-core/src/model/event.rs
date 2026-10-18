@@ -171,6 +171,7 @@ mod tests {
             feature: None,
             biome: None,
             envelope: None,
+            rank: None,
         }
     }
 

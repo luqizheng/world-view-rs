@@ -5267,6 +5267,7 @@ mod tests {
             y: None,
             w: None,
             h: None,
+            rank: None,
         }
     }
 
@@ -5300,6 +5301,7 @@ mod tests {
             y: None,
             w: None,
             h: None,
+            rank: None,
         }
     }
 

@@ -125,9 +125,39 @@ pub struct Place {
     /// 最终边界在 `place_geometry`（生成快照），包络只用于重圈重生成。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub envelope: Option<Vec<f32>>,
+    /// 呈现级别（ADR-0030 D1）：数值越大越重要，渲染层按「视野档位 × 最低级别」
+    /// 决定点标/标签是否出现（Nation ≥ 3 / Region ≥ 2 / Edit 全见）。
+    ///
+    /// 词汇表（GLOSSARY「呈现级别」）：`3` 国家级、`2` 市镇级、`1` 普通地点、
+    /// `0` 网络节点/微点（路网交点这类只为锚定边存在的点）。
+    ///
+    /// `None`（缺省）= 按旧两档折算（[`Self::effective_rank`]）：有 `w/h` → 3，
+    /// 否则 → 1——既有工程零迁移、渲染行为与引入前逐位一致。折算规则是冻结
+    /// 契约（测试 `effective_rank_folds_legacy_two_tier_by_wh` 钉死），改动它
+    /// 等于改旧工程的可视行为。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank: Option<u8>,
 }
 
 impl Place {
+    /// 有效呈现级别（ADR-0030 D1 的折算入口，渲染层唯一可用的级别读法）。
+    ///
+    /// 显式 `rank` 原样返回；`None` 按旧两档折算：有 `w/h` → 3（城市，Nation
+    /// 档即可见），否则 → 1（普通点，Edit 档才可见）——与引入 `rank` 前
+    /// 「城市恒显 / 普通点 Region 带以下才现」的行为逐位一致。
+    pub fn effective_rank(&self) -> u8 {
+        match self.rank {
+            Some(r) => r,
+            None => {
+                if self.w.is_some() && self.h.is_some() {
+                    3
+                } else {
+                    1
+                }
+            }
+        }
+    }
+
     /// 点是否落在地点的范围内（含边界）。
     ///
     /// - `w` / `h` 都是 `Some` → 矩形判定（含边界）；
@@ -451,6 +481,7 @@ mod tests {
                     feature: None,
                     biome: None,
                     envelope: None,
+                    rank: None,
                 },
                 Place {
                     id: vid("village_heishui"),
@@ -463,6 +494,7 @@ mod tests {
                     feature: None,
                     biome: None,
                     envelope: None,
+                    rank: None,
                 },
                 Place {
                     id: vid("pass_luoxia"),
@@ -475,6 +507,7 @@ mod tests {
                     feature: None,
                     biome: None,
                     envelope: None,
+                    rank: None,
                 },
             ],
             edges: vec![
@@ -598,6 +631,7 @@ mod tests {
             feature: None,
             biome: None,
             envelope: None,
+            rank: None,
         }
     }
 
@@ -613,6 +647,7 @@ mod tests {
             feature: None,
             biome: None,
             envelope: None,
+            rank: None,
         }
     }
 
@@ -628,6 +663,7 @@ mod tests {
             feature: None,
             biome: None,
             envelope: None,
+            rank: None,
         }
     }
 
@@ -638,6 +674,62 @@ mod tests {
             rect_place().contains(81.0, 191.0),
             "inner point must be inside"
         );
+    }
+
+    // ---- 呈现级别（ADR-0030 D1）----
+
+    /// 冻结契约：`rank = None` 的折算规则——有 `w/h` → 3（城市，Nation 档即可见），
+    /// 否则 → 1（普通点，Edit 档才可见）。改动本测试的期望 = 改旧工程的可视行为，
+    /// 必须走 ADR。
+    #[test]
+    fn effective_rank_folds_legacy_two_tier_by_wh() {
+        assert_eq!(
+            rect_place().effective_rank(),
+            3,
+            "有 w/h 的城市折算为国家级"
+        );
+        assert_eq!(
+            point_place().effective_rank(),
+            1,
+            "无 w/h 的普通点折算为普通地点"
+        );
+        assert_eq!(
+            unanchored_place().effective_rank(),
+            1,
+            "未锚定地点同样按无 w/h 折算"
+        );
+    }
+
+    /// 显式 `rank` 原样生效，压过 w/h 折算（作者显式降级/升级城市都成立）。
+    #[test]
+    fn explicit_rank_overrides_the_wh_fold() {
+        let mut p = rect_place();
+        p.rank = Some(0);
+        assert_eq!(p.effective_rank(), 0, "显式 rank 压过 w/h 折算");
+        let mut q = point_place();
+        q.rank = Some(3);
+        assert_eq!(q.effective_rank(), 3, "显式 rank 可把点标升到国家级");
+    }
+
+    /// rank 序列化遵循可选字段惯例：Some 写键、None 不写键（旧 YAML 无 rank
+    /// 键照常加载，round-trip 无损）。
+    #[test]
+    fn rank_round_trips_through_yaml_and_none_stays_absent() {
+        let mut p = rect_place();
+        p.rank = Some(2);
+        let text = serde_yaml::to_string(&p).expect("序列化");
+        assert!(text.contains("rank: 2"), "Some(2) 应写键，实得:\n{text}");
+        let back: Place = serde_yaml::from_str(&text).expect("反序列化");
+        assert_eq!(back, p, "带 rank 的 Place YAML round-trip 应无损");
+
+        let plain_text = serde_yaml::to_string(&point_place()).expect("序列化");
+        assert!(
+            !plain_text.contains("rank"),
+            "None 不应写 rank 键（旧读取端兼容），实得:\n{plain_text}"
+        );
+        let plain_back: Place =
+            serde_yaml::from_str(&plain_text).expect("无 rank 键的旧 YAML 应照常加载");
+        assert_eq!(plain_back, point_place(), "无 rank 键 round-trip 无损");
     }
 
     #[test]
@@ -720,6 +812,7 @@ mod tests {
             feature,
             biome: None,
             envelope: None,
+            rank: None,
         }
     }
 

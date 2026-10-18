@@ -284,6 +284,7 @@ mod tests {
             unit_per_km: None,
             orientation: 0.0,
             base: None,
+            outline_polygon: None,
         });
         world.maps.push(MapNode {
             id: Id::new_unchecked("city_a"),
@@ -300,6 +301,7 @@ mod tests {
             unit_per_km: None,
             orientation: 0.0,
             base: None,
+            outline_polygon: None,
         });
         world.distances.places.push(wv_core::distance::Place {
             id: Id::new_unchecked("qingyun"),
@@ -310,6 +312,9 @@ mod tests {
             w: None,
             h: None,
             feature: None,
+            biome: None,
+            envelope: None,
+            rank: None,
         });
         (bridge, rx, world, wv_edit::History::default())
     }

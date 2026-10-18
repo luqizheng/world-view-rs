@@ -603,6 +603,7 @@ mod tests {
             y: None,
             w: None,
             h: None,
+            rank: None,
         };
         assert_eq!(
             overlay_feature_for_place(&p),

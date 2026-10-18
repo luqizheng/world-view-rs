@@ -183,6 +183,7 @@ mod tests {
             unit_per_km: None,
             orientation: 0.0,
             base: None,
+            outline_polygon: None,
         });
 
         let place = wv_core::distance::Place {
@@ -194,6 +195,9 @@ mod tests {
             w: None,
             h: None,
             feature: None,
+            biome: None,
+            envelope: None,
+            rank: None,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();

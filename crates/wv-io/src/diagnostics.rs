@@ -915,6 +915,7 @@ mod tests {
                     feature: None,
                     biome: None,
                     envelope: None,
+                    rank: None,
                 },
                 Place {
                     id: b.clone(),
@@ -927,6 +928,7 @@ mod tests {
                     feature: None,
                     biome: None,
                     envelope: None,
+                    rank: None,
                 },
             ],
             edges: vec![PlaceEdge {

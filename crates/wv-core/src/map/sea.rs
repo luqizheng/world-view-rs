@@ -70,6 +70,7 @@ mod tests {
             feature: None,
             biome: None,
             envelope: None,
+            rank: None,
         };
         world.distances.places.push(place);
         world.seas.push(sample());

@@ -62,6 +62,7 @@ pub fn place_biome_marker_now(
         y: None,
         w: None,
         h: None,
+        rank: None,
     };
     let before_cells = world.world.terrain_of(&map).map(|t| t.cells.clone());
     let cmd = wv_edit::command::PlaceBiomeMarkerCommand::new(
@@ -178,6 +179,7 @@ pub fn add_feature_place_now(
         y: None,
         w: None,
         h: None,
+        rank: None,
     };
     let flat: Vec<f32> = ring.iter().flat_map(|&(x, y)| [x, y]).collect();
     let territory = GeometrySpan {

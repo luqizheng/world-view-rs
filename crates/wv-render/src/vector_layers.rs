@@ -26,15 +26,12 @@
 #![cfg(feature = "app")]
 
 use bevy::asset::RenderAssetUsages;
-use bevy::math::primitives::{Annulus, Circle};
 use bevy::prelude::*;
 use bevy::render::mesh::Indices;
 use bevy::render::render_resource::PrimitiveTopology;
 
 use crate::layer_frame::LayerFrame;
-#[cfg(test)]
-use crate::state::LOD_NATION_SCALE;
-use crate::state::{lod_fade, lod_tier, GridConfig, ViewState, LOD_REGION_SCALE};
+use crate::state::{lod_tier, GridConfig, ViewState};
 use crate::theme::colors_google::{
     GOOGLE_PLACE_DOT, GOOGLE_POI_RING, GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL,
 };
@@ -134,6 +131,50 @@ pub(crate) fn build_stroke_batch_mesh(segments: &[(Vec2, Vec2)], world_thickness
     mesh
 }
 
+/// 屏幕密度预算（ADR-0030 D3）：本帧点标上限。视口只是第一道门，「看到的
+/// 地方」在 PRD 这种高密度簇里本身就有上万个——成本预算必须与屏幕挂钩。
+/// 超出按优先级裁剪，**纯渲染投影**：不写数据、不阻编辑（V1 无涉）。
+const POI_MAX_DOTS: usize = 400;
+/// POI 圆周段数：12 段近似（半径 ≤10px 时圆度损失不可见，ADR-0030 D4）。
+const POI_CIRCLE_SEGMENTS: usize = 12;
+
+/// POI 合批 mesh 的重建判据（ADR-0030 D4）：集合指纹 + 半径 + Z。
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PoiBatchKey {
+    fingerprint: u64,
+    radius: f32,
+    z: f32,
+}
+
+/// POI 材质桶池：一个材质一个合批 mesh + 一个实体（ADR-0030 D4）。
+///
+/// 旧实现每点一对实体 + 逐点 mesh，半径 ∝ `view.scale` 让缩放期间每帧重建
+/// 上万个小 mesh 资产（guangdong 实测实体 704 → 35,988、1.8 FPS）。合批后
+/// 「每点成本」变「每桶成本」：可见集或半径变化才换 ≤4 个 mesh。
+#[derive(Default)]
+struct PoiBatchPool {
+    batch: Option<PoiBatch>,
+}
+
+/// 一个 POI 材质桶的实体与 Mesh 句柄。
+struct PoiBatch {
+    entity: Entity,
+    mesh: Handle<Mesh>,
+    key: PoiBatchKey,
+}
+
+impl PoiBatchPool {
+    /// 整组下线（Place 图层不可见时）。实体与 Mesh 资产一起清。
+    fn despawn(&mut self, commands: &mut Commands) {
+        if let Some(batch) = self.batch.take() {
+            commands.entity(batch.entity).despawn();
+            commands.queue(move |world: &mut World| {
+                world.resource_mut::<Assets<Mesh>>().remove(&batch.mesh);
+            });
+        }
+    }
+}
+
 /// 屏幕像素 → 世界线宽：`world = px * view_scale`。`view.scale` 的单位是
 /// **世界单位/像素**（见 `ViewState::scale` 的文档与 `terrain_chunks.rs` 的
 /// 视口换算），所以恒定的屏幕线宽必须**乘** scale。历史上曾写成
@@ -143,19 +184,114 @@ pub(crate) fn stroke_world_thickness(stroke_px: f32, view_scale: f32) -> f32 {
     (stroke_px * view_scale).max(f32::EPSILON)
 }
 
-/// POI 外环规格。
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct PoiOuterSpec {
-    pos: Vec2,
-    inner_radius: f32,
-    outer_radius: f32,
+/// 线宽量化（ADR-0030 D5b）：相对漂移超过 4% 才算「变了」。
+///
+/// 屏幕线宽误差 ≤ 4%（6px casing 差 0.24px，不可见）；连续缩放（~1.5%/帧）
+/// 下重建频率降约 3 倍。`b` 是已烘焙进几何的线宽，恒 > 0（`max(EPSILON)`）。
+pub(crate) fn thickness_drifted(next: f32, baked: f32) -> bool {
+    (next - baked).abs() > 0.04 * baked.max(f32::EPSILON)
 }
 
-/// POI 内芯规格。
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct PoiInnerSpec {
-    pos: Vec2,
-    radius: f32,
+/// POI 门槛 + 密度上限选择（ADR-0030 D2/D3）。
+///
+/// 输入 = `compute_projection` 已视口裁剪的本帧点标；输出 = 过级别硬门
+/// [`crate::state::poi_visible_at_rank`] 后按优先级降序截断到
+/// [`POI_MAX_DOTS`] 的幸存者。优先级序：`rank` > `is_city` > 名字长度
+/// （更长者信息量更大，与标签碰撞优先级同一惯例）。排序稳定，同优先级
+/// 保持原序（确定性好测试）。
+fn select_pois(dots: &[PlaceDot], tier: crate::state::LodTier) -> Vec<&PlaceDot> {
+    let mut visible: Vec<&PlaceDot> = dots
+        .iter()
+        .filter(|d| crate::state::poi_visible_at_rank(d.rank, tier))
+        .collect();
+    visible.sort_by(|a, b| {
+        b.rank
+            .cmp(&a.rank)
+            .then_with(|| b.is_city.cmp(&a.is_city))
+            .then_with(|| b.name_len.cmp(&a.name_len))
+    });
+    visible.truncate(POI_MAX_DOTS);
+    visible
+}
+
+/// 点集内容指纹（ADR-0030 D4）：合批 mesh 的「集合变没变」判据。
+/// 只哈希坐标位型——半径 / Z 在 [`PoiBatchKey`] 里单独成字段。
+pub(crate) fn dots_fingerprint(dots: &[Vec2]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for p in dots {
+        for v in [p.x, p.y] {
+            hash ^= u64::from(v.to_bits());
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    hash
+}
+
+/// 把点集合批成**一个**环带 Mesh：每点一个 12 段 annulus（内外圈各 12 顶点
+/// 共享，`24N` 顶点 / `72N` 索引），圆心即点位置，z=0（实体 Transform 承担）。
+pub(crate) fn build_poi_ring_batch_mesh(
+    dots: &[Vec2],
+    inner_radius: f32,
+    outer_radius: f32,
+) -> Mesh {
+    let n = dots.len();
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n * POI_CIRCLE_SEGMENTS * 2);
+    let mut indices: Vec<u32> = Vec::with_capacity(n * POI_CIRCLE_SEGMENTS * 6);
+    for pos in dots {
+        let base = positions.len() as u32;
+        // 内外圈各 12 顶点共享：偶数下标 = 内圈，奇数下标 = 外圈。
+        for s in 0..POI_CIRCLE_SEGMENTS {
+            let a = std::f32::consts::TAU * s as f32 / POI_CIRCLE_SEGMENTS as f32;
+            let (c, s_) = (a.cos(), a.sin());
+            positions.push([pos.x + inner_radius * c, pos.y + inner_radius * s_, 0.0]);
+            positions.push([pos.x + outer_radius * c, pos.y + outer_radius * s_, 0.0]);
+        }
+        for s in 0..POI_CIRCLE_SEGMENTS {
+            let i0 = base + 2 * s as u32;
+            let i1 = base + 2 * ((s + 1) % POI_CIRCLE_SEGMENTS) as u32;
+            let (o0, o1) = (i0 + 1, i1 + 1);
+            indices.extend([i0, i1, o1, i0, o1, o0]);
+        }
+    }
+    finish_batch_mesh(positions, indices)
+}
+
+/// 把点集合批成**一个**扇形圆 Mesh：每点中心 + 12 圈顶点（`13N` 顶点 /
+/// `36N` 索引），圆心即点位置。
+pub(crate) fn build_poi_dot_batch_mesh(dots: &[Vec2], radius: f32) -> Mesh {
+    let n = dots.len();
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n * (POI_CIRCLE_SEGMENTS + 1));
+    let mut indices: Vec<u32> = Vec::with_capacity(n * POI_CIRCLE_SEGMENTS * 3);
+    for pos in dots {
+        let base = positions.len() as u32;
+        positions.push([pos.x, pos.y, 0.0]);
+        for s in 0..POI_CIRCLE_SEGMENTS {
+            let a = std::f32::consts::TAU * s as f32 / POI_CIRCLE_SEGMENTS as f32;
+            positions.push([pos.x + radius * a.cos(), pos.y + radius * a.sin(), 0.0]);
+        }
+        for s in 0..POI_CIRCLE_SEGMENTS {
+            let q = base + 1 + s as u32;
+            let q_next = if s + 1 == POI_CIRCLE_SEGMENTS {
+                base + 1
+            } else {
+                q + 1
+            };
+            indices.extend([base, q, q_next]);
+        }
+    }
+    finish_batch_mesh(positions, indices)
+}
+
+/// 合批 Mesh 的公共收尾：三角形 + 双世界驻留（与 `build_stroke_batch_mesh`
+/// 同款资产口径）。
+fn finish_batch_mesh(positions: Vec<[f32; 3]>, indices: Vec<u32>) -> Mesh {
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
 }
 
 /// 按模式缓存的道路材质。
@@ -188,24 +324,6 @@ struct StreetMaterialSet {
     minor_fill: Handle<ColorMaterial>,
 }
 
-/// 实体与 Mesh 句柄的一一对应缓存。
-#[derive(Default)]
-struct MeshPool {
-    entities: Vec<Entity>,
-    meshes: Vec<Handle<Mesh>>,
-}
-
-impl MeshPool {
-    fn despawn(&mut self, commands: &mut Commands) {
-        for (entity, handle) in self.entities.drain(..).zip(self.meshes.drain(..)) {
-            commands.entity(entity).despawn();
-            commands.queue(move |world: &mut World| {
-                world.resource_mut::<Assets<Mesh>>().remove(&handle);
-            });
-        }
-    }
-}
-
 /// 道路 stroke 合批池：一个 pass 一个合并 mesh + 一个实体（A2，2026-10-18）。
 ///
 /// 旧实现每段一个实体 + 一个 `Rectangle` mesh，规格含 center 与随缩放的
@@ -236,20 +354,6 @@ impl RoadLayerPool {
     }
 }
 
-/// POI 外环池。
-#[derive(Default)]
-struct PoiOuterPool {
-    mesh: MeshPool,
-    specs: Vec<PoiOuterSpec>,
-}
-
-/// POI 内芯池。
-#[derive(Default)]
-struct PoiInnerPool {
-    mesh: MeshPool,
-    specs: Vec<PoiInnerSpec>,
-}
-
 /// 矢量层实体与可复用资产规格缓存。
 #[derive(Resource, Default)]
 pub struct VectorLayerEntities {
@@ -265,8 +369,14 @@ pub struct VectorLayerEntities {
     street_minor_casing: RoadLayerPool,
     /// 街道编辑器的橡皮筋预览（上一落点 → 光标）。
     street_preview: RoadLayerPool,
-    poi_outer: PoiOuterPool,
-    poi_inner: PoiInnerPool,
+    /// POI 外环合批（非城市材质，ADR-0030 D4）。
+    poi_ring_plain: PoiBatchPool,
+    /// POI 外环合批（城市材质）。
+    poi_ring_city: PoiBatchPool,
+    /// POI 内芯合批（非城市材质）。
+    poi_dot_plain: PoiBatchPool,
+    /// POI 内芯合批（城市材质）。
+    poi_dot_city: PoiBatchPool,
     road_materials: Vec<RoadMaterialSet>,
     road_material_mode: Option<crate::state::ViewMode>,
     poi_materials: Vec<PoiMaterialSet>,
@@ -320,11 +430,9 @@ pub fn sync_vector_layers(
     if layers.is_changed() {
         apply_road_material_alpha(&mut materials, &layer, layers.road.opacity);
     }
-    // POI 的 alpha 还依赖缩放（非城市淡出）：每帧刷 4 个材质句柄，代价可忽略。
-    // 非城市阈值 = **Region**（2026-10-18）：Overture 路口这类无范围点标在大
-    // 工程里数以万计，只有近距（Edit 档）才该出现；城市材质不吃 fade。
-    let poi_fade = poi_fade_for(view.scale);
-    apply_poi_material_alpha(&mut materials, &layer, layers.place.opacity, poi_fade);
+    // POI 的 alpha 只依赖 Place 图层 opacity（级别门槛是硬门，不再有缩放
+    // 淡出，ADR-0030 D2）：每帧刷 4 个材质句柄，代价可忽略。
+    apply_poi_material_alpha(&mut materials, &layer, layers.place.opacity);
     let road_z = layers.road.z_offset;
     let place_z = layers.place.z_offset;
 
@@ -420,17 +528,16 @@ pub fn sync_vector_layers(
     }
 
     if !layers.place.visible {
-        layer.poi_outer.mesh.despawn(&mut commands);
-        layer.poi_inner.mesh.despawn(&mut commands);
-        layer.poi_outer.specs.clear();
-        layer.poi_inner.specs.clear();
+        layer.poi_ring_plain.despawn(&mut commands);
+        layer.poi_ring_city.despawn(&mut commands);
+        layer.poi_dot_plain.despawn(&mut commands);
+        layer.poi_dot_city.despawn(&mut commands);
     } else {
         sync_poi(
             &mut commands,
             &mut meshes,
             &frame.place_dots,
             view.scale,
-            poi_fade,
             &grid,
             place_z,
             &mut layer,
@@ -488,23 +595,22 @@ fn apply_road_material_alpha(
     }
 }
 
-/// 把 Place 图层 opacity + 缩放淡出刷进所有已缓存的 POI 材质。
+/// 把 Place 图层 opacity 刷进所有已缓存的 POI 材质。
 ///
-/// 城市 POI 恒全显（既有语义）；非城市乘 `1 − fade`。
+/// 级别可见性是档位硬门（ADR-0030 D2），不再有缩放淡出系数——过了门槛的
+/// 点标全显，城市/非城市材质只差配色。
 fn apply_poi_material_alpha(
     materials: &mut Assets<ColorMaterial>,
     layer: &VectorLayerEntities,
     opacity: f32,
-    fade: f32,
 ) {
     for set in &layer.poi_materials {
         let (ring, dot) = poi_base_colors(set.mode, palette::colors(set.palette));
-        let faded = (1.0 - fade).clamp(0.0, 1.0);
         if let Some(mut mat) = materials.get_mut(&set.ring) {
-            mat.color = ring.with_alpha(ring.alpha() * opacity * faded);
+            mat.color = ring.with_alpha(ring.alpha() * opacity);
         }
         if let Some(mut mat) = materials.get_mut(&set.dot) {
-            mat.color = dot.with_alpha(dot.alpha() * opacity * faded);
+            mat.color = dot.with_alpha(dot.alpha() * opacity);
         }
         if let Some(mut mat) = materials.get_mut(&set.city_ring) {
             mat.color = ring.with_alpha(ring.alpha() * opacity);
@@ -512,23 +618,6 @@ fn apply_poi_material_alpha(
         if let Some(mut mat) = materials.get_mut(&set.city_dot) {
             mat.color = dot.with_alpha(dot.alpha() * opacity);
         }
-    }
-}
-
-/// 非城市 POI 的缩放淡出（2026-10-18 起阈值 = Region）。
-///
-/// 见 `non_city_poi_fade_uses_region_threshold_not_nation` 的测试注释：
-/// 大工程（guangdong 8.1 万路口）的无范围点标只允许近距出现。
-fn poi_fade_for(view_scale: f32) -> f32 {
-    lod_fade(view_scale, LOD_REGION_SCALE)
-}
-
-/// 单个 POI 的可见度系数：城市恒 1；非城市随淡出带趋 0。
-fn poi_alpha_multiplier(is_city: bool, fade: f32) -> f32 {
-    if is_city {
-        1.0
-    } else {
-        (1.0 - fade).clamp(0.0, 1.0)
     }
 }
 
@@ -763,7 +852,15 @@ fn sync_road_strokes(
                 });
                 return;
             }
-            if batch.key != key {
+            // 线宽量化（ADR-0030 D5b）：内容与 Z 不变、线宽漂移 ≤4% 时不换
+            // 几何——连续缩放下把 87k 段 × 2 pass 的重建频率降约 3 倍，屏幕
+            // 线宽误差 ≤ 0.24px（6px casing）。`batch.key` 保留**已烘焙**值，
+            // 漂移永远相对几何实际线宽累计。
+            let rebuilt = batch.key.fingerprint != key.fingerprint
+                || batch.key.z != key.z
+                || thickness_drifted(key.world_thickness, batch.key.world_thickness);
+            if rebuilt {
+                batch.key = key;
                 let next = meshes.add(build_stroke_batch_mesh(segments, key.world_thickness));
                 let old = std::mem::replace(&mut batch.mesh, next.clone());
                 commands
@@ -772,7 +869,6 @@ fn sync_road_strokes(
                 commands.queue(move |world: &mut World| {
                     world.resource_mut::<Assets<Mesh>>().remove(&old);
                 });
-                batch.key = key;
             }
             if material_changed {
                 commands
@@ -784,23 +880,24 @@ fn sync_road_strokes(
     }
 }
 
-/// 同步红点白环 POI；Mesh 只在半径变化时重建。`z_offset` 是 Place 图层的槽位偏移。
+/// 同步红点白环 POI（ADR-0030 D4 合批版）。
+///
+/// 门槛 + 密度上限（[`select_pois`]）幸存的点标按 4 个材质桶各合批成
+/// **一个** mesh（外环/内芯 × 城市/非城市）；半径或集合变化才换该桶 mesh
+/// （旧资产延迟移除，A2 同款）。`z_offset` 是 Place 图层的槽位偏移；
+/// 外环/内芯各占一个 Z 槽，桶内共享。
 #[allow(clippy::too_many_arguments)]
 fn sync_poi(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     dots: &[PlaceDot],
     view_scale: f32,
-    fade: f32,
     grid: &GridConfig,
     z_offset: f32,
     layer: &mut VectorLayerEntities,
 ) {
-    // 淡尽（系数 0）等价于旧 Nation 档硬剔除；城市 POI 恒保留。
-    let visible: Vec<&PlaceDot> = dots
-        .iter()
-        .filter(|d| poi_alpha_multiplier(d.is_city, fade) > 0.0)
-        .collect();
+    let tier = crate::state::lod_tier(view_scale);
+    let selected = select_pois(dots, tier);
     let radius_outer = (grid.cell_size * 0.45).max(POI_MIN_SCREEN_PX * view_scale * 0.5);
     let radius_inner = radius_outer * 0.52;
     let ring_thickness = (1.5 * view_scale).max(f32::EPSILON);
@@ -822,161 +919,140 @@ fn sync_poi(
         })
         .expect("ensure_poi_materials 必须已初始化");
 
-    if layer.poi_outer.mesh.entities.len() > visible.len() {
-        let keep = visible.len();
-        let removed_entities = layer.poi_outer.mesh.entities.split_off(keep);
-        let removed_meshes = layer.poi_outer.mesh.meshes.split_off(keep);
-        layer.poi_outer.specs.truncate(keep);
-        for (entity, handle) in removed_entities.into_iter().zip(removed_meshes) {
-            commands.entity(entity).despawn();
-            commands.queue(move |world: &mut World| {
-                world.resource_mut::<Assets<Mesh>>().remove(&handle);
-            });
+    // 按材质分桶取坐标（桶内几何只依赖坐标 + 统一半径）。
+    let mut plain: Vec<Vec2> = Vec::new();
+    let mut city: Vec<Vec2> = Vec::new();
+    for d in &selected {
+        if d.is_city {
+            city.push(d.pos);
+        } else {
+            plain.push(d.pos);
         }
     }
-    if layer.poi_inner.mesh.entities.len() > visible.len() {
-        let keep = visible.len();
-        let removed_entities = layer.poi_inner.mesh.entities.split_off(keep);
-        let removed_meshes = layer.poi_inner.mesh.meshes.split_off(keep);
-        layer.poi_inner.specs.truncate(keep);
-        for (entity, handle) in removed_entities.into_iter().zip(removed_meshes) {
-            commands.entity(entity).despawn();
-            commands.queue(move |world: &mut World| {
-                world.resource_mut::<Assets<Mesh>>().remove(&handle);
-            });
+    let plain_fp = dots_fingerprint(&plain);
+    let city_fp = dots_fingerprint(&city);
+    let z_outer = POI_OUTER_Z + z_offset;
+    let z_inner = POI_INNER_Z + z_offset;
+
+    sync_poi_batch(
+        commands,
+        meshes,
+        &plain,
+        plain_fp,
+        (ring_inner, radius_outer),
+        z_outer,
+        ring_plain,
+        &mut layer.poi_ring_plain,
+        build_poi_ring_batch_mesh,
+    );
+    sync_poi_batch(
+        commands,
+        meshes,
+        &city,
+        city_fp,
+        (ring_inner, radius_outer),
+        z_outer,
+        city_ring,
+        &mut layer.poi_ring_city,
+        build_poi_ring_batch_mesh,
+    );
+    sync_poi_batch(
+        commands,
+        meshes,
+        &plain,
+        plain_fp,
+        (radius_inner, radius_inner),
+        z_inner,
+        dot_plain,
+        &mut layer.poi_dot_plain,
+        |dots, r, _| build_poi_dot_batch_mesh(dots, r),
+    );
+    sync_poi_batch(
+        commands,
+        meshes,
+        &city,
+        city_fp,
+        (radius_inner, radius_inner),
+        z_inner,
+        city_dot,
+        &mut layer.poi_dot_city,
+        |dots, r, _| build_poi_dot_batch_mesh(dots, r),
+    );
+}
+
+/// 同步一个 POI 材质桶的合批 mesh：指纹/半径/Z 任一变化才换 mesh。
+///
+/// `build` 由调用方给定（外环要 (inner, outer) 双半径，内芯只用单半径——
+/// 传 `(r, r)` 复用同一条同步路径，两个桶字段不必各写一份）。
+#[allow(clippy::too_many_arguments)]
+fn sync_poi_batch(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    dots: &[Vec2],
+    fingerprint: u64,
+    radii: (f32, f32),
+    z: f32,
+    material: Handle<ColorMaterial>,
+    pool: &mut PoiBatchPool,
+    build: impl Fn(&[Vec2], f32, f32) -> Mesh,
+) {
+    let key = PoiBatchKey {
+        fingerprint,
+        radius: radii.1,
+        z,
+    };
+    match pool.batch.take() {
+        None => {
+            if dots.is_empty() {
+                return;
+            }
+            spawn_poi_batch(commands, meshes, dots, key, radii, material, pool, build);
         }
-    }
-
-    for (i, dot) in visible.iter().enumerate() {
-        let (ring_mat, dot_mat) = if dot.is_city {
-            (&city_ring, &city_dot)
-        } else {
-            (&ring_plain, &dot_plain)
-        };
-        let outer_spec = PoiOuterSpec {
-            pos: dot.pos,
-            inner_radius: ring_inner,
-            outer_radius: radius_outer,
-        };
-        let inner_spec = PoiInnerSpec {
-            pos: dot.pos,
-            radius: radius_inner,
-        };
-
-        if i == layer.poi_outer.mesh.entities.len() {
-            let mesh = meshes.add(Annulus::new(ring_inner, radius_outer));
-            let entity = commands
-                .spawn((
-                    Mesh2d(mesh.clone()),
-                    MeshMaterial2d(ring_mat.clone()),
-                    Transform::from_translation(dot.pos.extend(POI_OUTER_Z + z_offset)),
-                ))
-                .id();
-            layer.poi_outer.mesh.entities.push(entity);
-            layer.poi_outer.mesh.meshes.push(mesh);
-            layer.poi_outer.specs.push(outer_spec);
-        } else {
-            update_poi_outer(
-                commands,
-                meshes,
-                layer.poi_outer.mesh.entities[i],
-                outer_spec,
-                z_offset,
-                &mut layer.poi_outer.mesh.meshes[i],
-                &mut layer.poi_outer.specs[i],
-                ring_mat,
-            );
-        }
-
-        if i == layer.poi_inner.mesh.entities.len() {
-            let mesh = meshes.add(Circle::new(radius_inner));
-            let entity = commands
-                .spawn((
-                    Mesh2d(mesh.clone()),
-                    MeshMaterial2d(dot_mat.clone()),
-                    Transform::from_translation(dot.pos.extend(POI_INNER_Z + z_offset)),
-                ))
-                .id();
-            layer.poi_inner.mesh.entities.push(entity);
-            layer.poi_inner.mesh.meshes.push(mesh);
-            layer.poi_inner.specs.push(inner_spec);
-        } else {
-            update_poi_inner(
-                commands,
-                meshes,
-                layer.poi_inner.mesh.entities[i],
-                inner_spec,
-                z_offset,
-                &mut layer.poi_inner.mesh.meshes[i],
-                &mut layer.poi_inner.specs[i],
-                dot_mat,
-            );
+        Some(mut batch) => {
+            if dots.is_empty() {
+                commands.entity(batch.entity).despawn();
+                commands.queue(move |world: &mut World| {
+                    world.resource_mut::<Assets<Mesh>>().remove(&batch.mesh);
+                });
+                return;
+            }
+            if batch.key != key {
+                let next = meshes.add(build(dots, radii.0, radii.1));
+                let old = std::mem::replace(&mut batch.mesh, next.clone());
+                commands
+                    .entity(batch.entity)
+                    .insert((Mesh2d(next), Transform::from_xyz(0.0, 0.0, key.z)));
+                commands.queue(move |world: &mut World| {
+                    world.resource_mut::<Assets<Mesh>>().remove(&old);
+                });
+                batch.key = key;
+            }
+            pool.batch = Some(batch);
         }
     }
 }
 
+/// 首次生成一个 POI 桶的合批实体。
 #[allow(clippy::too_many_arguments)]
-fn update_poi_outer(
+fn spawn_poi_batch(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    entity: Entity,
-    spec: PoiOuterSpec,
-    z_offset: f32,
-    mesh_handle: &mut Handle<Mesh>,
-    cached: &mut PoiOuterSpec,
-    material: &Handle<ColorMaterial>,
+    dots: &[Vec2],
+    key: PoiBatchKey,
+    radii: (f32, f32),
+    material: Handle<ColorMaterial>,
+    pool: &mut PoiBatchPool,
+    build: impl Fn(&[Vec2], f32, f32) -> Mesh,
 ) {
-    if *cached != spec {
-        let next = meshes.add(Annulus::new(spec.inner_radius, spec.outer_radius));
-        let old = mesh_handle.clone();
-        *mesh_handle = next.clone();
-        commands.entity(entity).insert(Mesh2d(next));
-        commands.queue(move |world: &mut World| {
-            world.resource_mut::<Assets<Mesh>>().remove(&old);
-        });
-        *cached = spec;
-    }
-    // 逐帧重绑材质：可见集合随淡出变化时实体按**下标**复用，
-    // 一个位置可能从「非城市点」换成「城市点」——只在 mode 变化时重绑会
-    // 让城市点继承非城市材质的 0 alpha（评审 Important #4）。
-    commands
-        .entity(entity)
-        .insert(MeshMaterial2d(material.clone()));
-    commands.entity(entity).insert(Transform::from_translation(
-        spec.pos.extend(POI_OUTER_Z + z_offset),
-    ));
-}
-
-#[allow(clippy::too_many_arguments)]
-fn update_poi_inner(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    entity: Entity,
-    spec: PoiInnerSpec,
-    z_offset: f32,
-    mesh_handle: &mut Handle<Mesh>,
-    cached: &mut PoiInnerSpec,
-    material: &Handle<ColorMaterial>,
-) {
-    if *cached != spec {
-        let next = meshes.add(Circle::new(spec.radius));
-        let old = mesh_handle.clone();
-        *mesh_handle = next.clone();
-        commands.entity(entity).insert(Mesh2d(next));
-        commands.queue(move |world: &mut World| {
-            world.resource_mut::<Assets<Mesh>>().remove(&old);
-        });
-        *cached = spec;
-    }
-    // 逐帧重绑材质：可见集合随淡出变化时实体按**下标**复用，
-    // 一个位置可能从「非城市点」换成「城市点」——只在 mode 变化时重绑会
-    // 让城市点继承非城市材质的 0 alpha（评审 Important #4）。
-    commands
-        .entity(entity)
-        .insert(MeshMaterial2d(material.clone()));
-    commands.entity(entity).insert(Transform::from_translation(
-        spec.pos.extend(POI_INNER_Z + z_offset),
-    ));
+    let mesh = meshes.add(build(dots, radii.0, radii.1));
+    let entity = commands
+        .spawn((
+            Mesh2d(mesh.clone()),
+            MeshMaterial2d(material),
+            Transform::from_xyz(0.0, 0.0, key.z),
+        ))
+        .id();
+    pool.batch = Some(PoiBatch { entity, mesh, key });
 }
 
 #[cfg(test)]
@@ -1123,46 +1199,104 @@ mod tests {
         }
     }
 
-    /// 既有语义不破：城市 POI 在 Nation 档不淡（`poi_kept_at_tier` 的保留位）。
+    /// 呈现门槛端到端（ADR-0030 D2/D3）：Nation 档只放行 rank 3，密度上限
+    /// 截断后保的是高优先级（rank > is_city > 名字长）。
     #[test]
-    fn city_pois_do_not_fade_at_nation_tier() {
-        let fade = lod_fade(LOD_NATION_SCALE * 2.0, LOD_NATION_SCALE);
-        assert_eq!(poi_alpha_multiplier(true, fade), 1.0, "is_city 恒不淡");
-        assert!(
-            poi_alpha_multiplier(false, fade) < 1e-6,
-            "非城市远端淡尽，得 {}",
-            poi_alpha_multiplier(false, fade)
+    fn select_pois_gates_by_rank_then_caps_by_priority() {
+        use crate::state::LodTier;
+        let dot = |rank: u8, is_city: bool, name_len: u32| PlaceDot {
+            pos: Vec2::ZERO,
+            is_city,
+            rank,
+            name_len,
+        };
+        let dots = vec![
+            dot(1, false, 4),  // 普通点：Nation 档出局
+            dot(3, false, 6),  // 国家级
+            dot(2, false, 99), // 市镇级
+            dot(3, true, 2),   // 城市级材质的国家级
+        ];
+        let nation: Vec<&PlaceDot> = select_pois(&dots, LodTier::Nation);
+        assert_eq!(nation.len(), 2, "Nation 档只放行 rank 3，实得 {nation:?}");
+        assert!(nation.iter().all(|d| d.rank == 3));
+        // 上限截断：rank 优先保 3，其次 is_city，再次名字长。
+        let many: Vec<PlaceDot> = (0..(POI_MAX_DOTS + 50))
+            .map(|i| dot(2, false, i as u32))
+            .collect();
+        let capped = select_pois(&many, LodTier::Edit);
+        assert_eq!(capped.len(), POI_MAX_DOTS, "超预算必须截断到上限");
+        let min_kept = capped.iter().map(|d| d.name_len).min();
+        assert_eq!(
+            min_kept,
+            Some(50),
+            "450 个候选截到 400，保的是名字最长的 400 个（最短 50）"
         );
-        assert_eq!(poi_alpha_multiplier(false, 0.0), 1.0, "近端非城市 POI 全显");
     }
 
-    /// 非城市 POI 的淡出阈值是 **Region**（广东省导入缺口修，2026-10-18）：
-    /// Overture 路口（无 w/h 的非城市点标）全省 8.1 万个，若沿 Nation 阈值淡出，
-    /// 中距缩放会全部涌入 POI 池（每点 mesh × 每帧重建 = 掉帧）。收紧到
-    /// Region：Region/Nation 档淡尽、只近距（Edit 档）可见——与「低层级只画
-    /// 高级要素」的既有口径一致；城市点标不受影响（材质分城市/普通两套）。
+    /// POI 点集指纹：坐标位型变化才变，顺序无关性不要求（合批列表本身有序）。
     #[test]
-    fn non_city_poi_fade_uses_region_threshold_not_nation() {
-        // Region 淡出带顶（threshold × 1.125 = 1.125，仍在 Region 档）：
-        // 非城市 POI 已淡尽。带内（1.0–1.125）保留少量过渡，符合 smoothstep。
-        let region_band_top = LOD_REGION_SCALE * 1.125;
+    fn dots_fingerprint_changes_with_positions_only() {
+        let a = vec![Vec2::new(1.0, 2.0), Vec2::new(3.0, 4.0)];
+        let b = vec![Vec2::new(1.0, 2.0), Vec2::new(3.0, 4.5)];
+        assert_ne!(dots_fingerprint(&a), dots_fingerprint(&b), "坐标变指纹必变");
         assert_eq!(
-            crate::state::lod_tier(region_band_top),
-            crate::state::LodTier::Region,
-            "带顶仍在 Region 档"
+            dots_fingerprint(&a),
+            dots_fingerprint(&a.clone()),
+            "同集合指纹稳定"
         );
+    }
+
+    /// 环带合批的顶点账：N 点 = 24N 顶点 / 72N 索引（12 段共享内外圈）。
+    #[test]
+    fn poi_ring_batch_carries_twelve_segments_per_dot() {
+        let dots = [Vec2::ZERO, Vec2::new(50.0, 20.0), Vec2::new(-30.0, 8.0)];
+        let mesh = build_poi_ring_batch_mesh(&dots, 3.0, 5.0);
+        let Some(bevy::render::mesh::VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("环带合批 mesh 必有 Float32x3 POSITION");
+        };
+        assert_eq!(positions.len(), dots.len() * 24, "每点 12 段 × 2 圈顶点");
+        match mesh.indices() {
+            Some(bevy::render::mesh::Indices::U32(idx)) => {
+                assert_eq!(idx.len(), dots.len() * 72, "每点 12 段 × 6 索引")
+            }
+            other => panic!("应为 U32 索引，实得 {other:?}"),
+        }
+        // 外圈顶点半径必须是 outer_radius（角 0 处的外圈顶点 = 下标 1）。
         assert!(
-            poi_alpha_multiplier(false, poi_fade_for(region_band_top)) < 1e-6,
-            "Region 带顶非城市应淡尽，得 {}",
-            poi_alpha_multiplier(false, poi_fade_for(region_band_top))
+            (positions[1][0] - 5.0).abs() < 1e-5 && positions[1][1].abs() < 1e-5,
+            "外圈顶点应落在 outer_radius 上，实得 {:?}",
+            positions[1]
         );
-        // Nation 档：同样淡尽（不回归）。
-        assert!(poi_fade_for(LOD_NATION_SCALE) >= 1.0);
-        // 近距（scale = 0.5，Edit 档）：全显。
-        assert_eq!(poi_fade_for(0.5), 0.0, "近端 fade 应为 0");
-        // 旧 Nation 阈值对照：同样的 scale 在旧口径下非城市点标仍满显
-        // （lod_fade(1.125, 3.0) = 0）——证明本改动真的收紧了门。
-        assert_eq!(lod_fade(region_band_top, LOD_NATION_SCALE), 0.0);
+    }
+
+    /// 内芯合批的顶点账：N 点 = 13N 顶点 / 36N 索引（中心 + 12 圈）。
+    #[test]
+    fn poi_dot_batch_carries_center_fan_per_dot() {
+        let dots = [Vec2::ZERO, Vec2::new(10.0, 10.0)];
+        let mesh = build_poi_dot_batch_mesh(&dots, 2.5);
+        let Some(bevy::render::mesh::VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("内芯合批 mesh 必有 Float32x3 POSITION");
+        };
+        assert_eq!(positions.len(), dots.len() * 13, "每点中心 + 12 圈顶点");
+        match mesh.indices() {
+            Some(bevy::render::mesh::Indices::U32(idx)) => {
+                assert_eq!(idx.len(), dots.len() * 36, "每点 12 扇区 × 3 索引")
+            }
+            other => panic!("应为 U32 索引，实得 {other:?}"),
+        }
+    }
+
+    /// 线宽量化（ADR-0030 D5b）：漂移 ≤4% 视为未变，>4% 才触发重建。
+    #[test]
+    fn thickness_quantization_tolerates_four_percent_drift() {
+        assert!(!thickness_drifted(6.0, 6.0));
+        assert!(!thickness_drifted(6.2, 6.0), "3.3% 漂移在容差内");
+        assert!(thickness_drifted(6.3, 6.0), "5% 漂移必须重建");
+        assert!(thickness_drifted(5.0, 6.0), "缩小的漂移同样计入");
     }
 
     /// 同一投影连续两帧不应继续新增 Mesh / Material 资产。
@@ -1178,6 +1312,8 @@ mod tests {
             place_dots: vec![PlaceDot {
                 pos: Vec2::new(20.0, 20.0),
                 is_city: true,
+                rank: 3,
+                name_len: 3,
             }],
             ..Default::default()
         });
@@ -1387,5 +1523,47 @@ mod tests {
             mesh_count, 2,
             "缩放换 mesh 是替换不是累积，实得 {mesh_count}"
         );
+    }
+
+    /// 线宽量化（ADR-0030 D5b）：缩放漂移 ≤4% 时**不**换 mesh（几何保留），
+    /// 超过 4% 的下一步才换——连续缩放下重建频率因此降约 3 倍。
+    #[test]
+    fn road_batch_keeps_mesh_within_four_percent_thickness_drift() {
+        let mut world = world_with_roads(vec![(Vec2::ZERO, Vec2::X * 100.0)]);
+        let mut schedule = Schedule::default();
+        schedule.add_systems(sync_vector_layers);
+        schedule.run(&mut world);
+        let baked = world
+            .resource::<VectorLayerEntities>()
+            .roads
+            .batch
+            .as_ref()
+            .expect("首帧应有 fill 合批")
+            .mesh
+            .clone();
+
+        world.resource_mut::<ViewState>().scale = 1.02;
+        schedule.run(&mut world);
+        let after_small = world
+            .resource::<VectorLayerEntities>()
+            .roads
+            .batch
+            .as_ref()
+            .expect("2% 缩放后仍应有 fill 合批")
+            .mesh
+            .clone();
+        assert_eq!(after_small, baked, "2% 线宽漂移在容差内，不得换 mesh");
+
+        world.resource_mut::<ViewState>().scale = 1.10;
+        schedule.run(&mut world);
+        let after_big = world
+            .resource::<VectorLayerEntities>()
+            .roads
+            .batch
+            .as_ref()
+            .expect("10% 缩放后仍应有 fill 合批")
+            .mesh
+            .clone();
+        assert_ne!(after_big, baked, "10% 线宽漂移必须换 mesh");
     }
 }
