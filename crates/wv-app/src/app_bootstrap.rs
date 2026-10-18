@@ -159,7 +159,6 @@ pub fn run(config: AppConfig) {
     .init_resource::<wv_render::state::SelectionState>()
     .init_resource::<ui::ContinentDialog>()
     .init_resource::<ui::city_intent::CityIntentDialog>()
-    .init_resource::<crate::state::ContinentGenerationState>()
     // 森林意图的命名对话框（选择工具 M4）：环 + 钉住图 id 自持在对话框里。
     .init_resource::<ui::FactionDivisionDialog>()
     .init_resource::<ui::FeaturePlaceDialog>()

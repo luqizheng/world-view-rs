@@ -6,7 +6,7 @@
 //! - [`feature_place_dialog`] —— 绘制 + 确认提交：把对话框自持的环经
 //!   [`crate::edit::feature_place_actions::place_biome_marker_now`] 落成
 //!   `PlaceBiomeMarkerCommand`（ADR-0029：包络是意图、边界由内核识别/生成）；
-//!   成功后清空选区。
+//!   成功后**不清空**选区（ADR-0033）。
 //!
 //! ## 打开 / 关闭的单一来源
 //!
@@ -168,8 +168,8 @@ impl FeaturePlaceDialog {
 
 /// 命名对话框：绘制 + 确认提交。
 ///
-/// 提交成功后清空选择工具选区（`SelectionState::cancel`）——与地形 / 大陆
-/// 意图「意图生效即选区清空」同口径（spec D9）；撤销不回驻留。
+/// 提交成功后**不清空**选择工具选区（ADR-0033：意图生效不再消费选区，
+/// 作者可继续调轮廓再生成；撤销只回滚命令本身）。
 #[allow(clippy::too_many_arguments)]
 pub fn feature_place_dialog(
     mut ctxs: EguiContexts,
@@ -179,7 +179,6 @@ pub fn feature_place_dialog(
     mut edit: ResMut<EditHistory>,
     playback: Res<PlaybackState>,
     current_loc: Res<CurrentLocale>,
-    mut selection: ResMut<wv_render::state::SelectionState>,
     mut tex: ResMut<wv_render::terrain_view::TerrainTexture>,
     mut notice: ResMut<crate::ui_shell::ShellNotice>,
     time: Res<Time>,
@@ -301,8 +300,7 @@ pub fn feature_place_dialog(
             dialog.from,
         ) {
             Ok(_) => {
-                // 意图生效 → 选区清空（与地形 / 大陆意图同口径，spec D9）。
-                selection.cancel();
+                // 选区保持不动（ADR-0033）。
                 dialog.close();
             }
             Err(msg) => {
