@@ -4,8 +4,9 @@
 //! - [`FeaturePlaceDialog`] —— 对话框的跨帧 UI 状态：打开标志、名称、以及
 //!   **待落盘环 + 闭合那一刻钉住的地图 id**。
 //! - [`feature_place_dialog`] —— 绘制 + 确认提交：把对话框自持的环经
-//!   [`crate::edit::feature_place_actions::add_feature_place_now`] 落成
-//!   `AddFeaturePlaceCommand`；成功后清空选区。
+//!   [`crate::edit::feature_place_actions::place_biome_marker_now`] 落成
+//!   `PlaceBiomeMarkerCommand`（ADR-0029：包络是意图、边界由内核识别/生成）；
+//!   成功后清空选区。
 //!
 //! ## 打开 / 关闭的单一来源
 //!
