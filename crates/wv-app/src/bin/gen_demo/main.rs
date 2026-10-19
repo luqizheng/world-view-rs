@@ -190,7 +190,7 @@ fn rasterize(coast: &[F], rivers: Option<&[F]>, seas: Option<&[F]>) -> TerrainDa
     };
 
     let coast_rings = rings(coast);
-    let sea_rings = rings(seas.as_deref().unwrap_or(&[]));
+    let sea_rings = rings(seas.unwrap_or(&[]));
     let river_lines = lines(rivers.unwrap_or(&[]));
 
     let n = (WIDTH * HEIGHT) as usize;
@@ -503,9 +503,7 @@ fn dump_debug_png(data: &TerrainData, path: &Path) {
                 (col[0] as f32 * lum) as u8,
             ]);
         }
-        for _ in 0..row_pad {
-            out.push(0);
-        }
+        out.resize(out.len() + row_pad, 0);
     }
     std::fs::write(path, out).expect("write debug bmp");
 }
