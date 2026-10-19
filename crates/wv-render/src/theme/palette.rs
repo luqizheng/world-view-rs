@@ -182,7 +182,7 @@ impl PaletteColors {
 
     /// 日间 JRPG：值源 = [`colors`]（`colors.rs` 是色板的投影）。
     ///
-    /// 2026-10-18 A 方案：中高饱和地形色配 `soften_keep = 0.85`——旧古舆图的
+    /// 2026-10-18 A 方案（ADR-0035）：中高饱和地形色配 `soften_keep = 0.85`——旧古舆图的
     /// 0.35（65% 向纸面洗）是为低饱和色设计的；JRPG 色若仍洗 65% 会退回灰白
     /// （实测截图）。淡化语义保留（笔迹对比仍可让位），只轻微起效。
     pub const DAYLIGHT: PaletteColors = PaletteColors {
