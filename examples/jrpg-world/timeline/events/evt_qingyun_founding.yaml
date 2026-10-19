@@ -1,0 +1,16 @@
+# 事件：青云城立城（示例）· schema v2
+# 演示事件用 TimeSpan 而非 TimePoint —— 支持「持续一段时间」的事件。
+# from/to 是天数计数器；half-open [from, to)。
+id: evt_qingyun_founding
+name: 青云城立城
+from: 107641        # 无仙 300 年 1 月 1 日
+to: 107650          # 无仙 300 年 1 月 10 日
+location:
+  place: city_qingyun
+participants:
+  - char_shenyan
+outcome: 青云宗于落霞关北立城，始为一方宗门。
+effects:
+  - kind: set_title
+    character: char_shenyan
+    title: 外门弟子

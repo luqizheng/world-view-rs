@@ -37,6 +37,7 @@ fn main() {
             from: 1,
             to: Some(180_001),
         },
+        template: None,
     };
 
     // 先写 world.yaml（Project::open 的准入凭证），再走标准保存链路。

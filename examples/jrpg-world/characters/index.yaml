@@ -1,0 +1,4 @@
+# 人物索引（示例）
+characters:
+  - id: char_shenyan
+    file: char_shenyan.yaml

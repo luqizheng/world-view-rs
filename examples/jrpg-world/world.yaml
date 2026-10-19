@@ -1,0 +1,11 @@
+name: JRPG 演示世界
+version: '0.1'
+schema_version: 2
+root_map: world_main
+timeline_range:
+  from: 1
+  to: 180001
+template:
+  kind: cold_north
+  seed: 14355373301798
+  rivers_seed: 11400709311604153395

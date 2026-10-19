@@ -59,6 +59,15 @@ pub struct ProjectionFrame {
     /// 不随相机平移/缩放变——只有世界编辑、钻取换图、栅格换图或 Road 图层
     /// 可见性翻转才需要重算段列与指纹，其余帧这一步是零工作。
     pub road_key: Option<bool>,
+    /// 本帧河流折线（ADR-0037 D5）：`terrain + rivers_seed` 的确定性派生，
+    /// 视图空间坐标（同 [`Self::road_segments`] 的换算口径）。
+    ///
+    /// **派生数据不落盘**（AGENTS 4.2 只存参数）：种子在 `WorldMeta.template`，
+    /// 高度场在 `terrain.bin`，两者齐备即可逐点复现；重生成换种子河流自动跟随。
+    pub river_polylines: Vec<Vec<Vec2>>,
+    /// 河流派生缓存键：`(当前图 id, rivers_seed)`。`None` = 失效。
+    /// 世界编辑 / 钻取换图 / 栅格换图都会重算；纯相机运动零工作。
+    pub river_key: Option<(String, u64)>,
 }
 
 /// 一个 POI 点标的渲染数据。
@@ -169,11 +178,66 @@ pub fn compute_projection(
         frame.road_fingerprint = segments_fingerprint(&frame.road_segments);
     }
 
+    // 河流派生缓存（ADR-0037 D5）：键 = (当前图, rivers_seed)；世界编辑 /
+    // 钻取换图 / 栅格换图即重算，纯相机运动零工作（与路网缓存同款纪律）。
+    let river_seed = projection
+        .world
+        .meta
+        .as_ref()
+        .and_then(|m| m.template.as_ref())
+        .map(|t| t.rivers_seed);
+    let current_for_river = drill.current().cloned();
+    let river_wanted = match (&current_for_river, river_seed) {
+        (Some(map_id), Some(seed)) => Some((map_id.as_str().to_owned(), seed)),
+        _ => None,
+    };
+    let river_stale = frame.river_key != river_wanted
+        || projection.is_changed()
+        || drill.is_changed()
+        || grid.is_changed();
+    frame.river_key = river_wanted;
+    if river_stale {
+        frame.river_polylines.clear();
+    }
+
     // 索引只在世界变更后整表重建（世界替换 / 任何编辑都命中变更检测；
     // 未变更时这一行就是一次 tick 比较）。放在早退之前：图层全关的帧
     // 也保持索引新鲜，重新打开图层的第一帧就能查。
     if projection.is_changed() {
         *place_index = PlaceIndex::build(&projection.world);
+    }
+
+    // 河流重算放在图层早退之前：河流属地形族（terrain 图层在渲染侧 gate），
+    // 关掉全部矢量图层再重新打开的第一帧就要有河可画。
+    if river_stale {
+        let world = &projection.world;
+        if let (Some(map_id), Some(seed)) = (&current_for_river, river_seed) {
+            if let Some(node) = world.maps.iter().find(|m| &m.id == map_id) {
+                if let (Some(extent), Some(terrain)) = (node.extent, world.terrain_of(map_id)) {
+                    let heights: Vec<i16> = terrain.cells.iter().map(|c| c.height).collect();
+                    let polys = wv_terrain::climate::generate_rivers(
+                        terrain.width,
+                        terrain.height,
+                        &heights,
+                        seed,
+                        12,
+                    );
+                    frame.river_polylines = polys
+                        .into_iter()
+                        .map(|pts| {
+                            pts.into_iter()
+                                .map(|[nx, ny]| {
+                                    grid.map_to_view(Vec2::new(
+                                        nx * extent.width,
+                                        ny * extent.height,
+                                    ))
+                                })
+                                .collect()
+                        })
+                        .collect();
+                }
+            }
+        }
     }
 
     if !layers.event_point.visible

@@ -142,6 +142,8 @@ pub enum CommandId {
     /// 把 `TerrainTexture.last_mode/last_map/soften` 一起重置为「未知」，
     /// 下一帧 `rebuild_texture_on_mode_change` 必然走全图重建路径。
     ForceRebuildTexture,
+    /// 重新生成世界地形（ADR-0037 D4）：按新种子重跑模板生成。
+    RegenWorld,
     /// 重置当前图的地形到底图（2026-10-16 用户需求）。
     /// 「底图」= `MapNode.base`，旧地图无 `base` 时按 `MapBase::Ocean` 兜底。
     /// 由 [`crate::edit::editing::apply_reset_terrain_to_base`] 执行。
@@ -455,6 +457,14 @@ impl CommandRegistry {
             CommandGroup::Interface,
             I18nKey::CmdForceRebuildTexture,
             Some("F5"),
+        );
+
+        // ADR-0037 D4：完全重生成世界地形（模板 + 新种子）。
+        push(
+            CommandId::RegenWorld,
+            CommandGroup::Object,
+            I18nKey::CmdRegenWorld,
+            None,
         );
 
         // 2026-10-16 用户需求：笔刷面板的「重置到底图」按钮同样入口；

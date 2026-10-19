@@ -30,3 +30,6 @@ examples/guangdong/
 
 # ZCode 会话内部文件（计划草稿等）
 .zcode/
+
+# Figma 截图与工作区副产物（只供人工/截图验收，不入仓）
+.figma-ref/

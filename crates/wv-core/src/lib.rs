@@ -121,6 +121,30 @@ impl SelectedEntity {
     }
 }
 
+/// 世界模板种类（ADR-0037 D1）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorldTemplateKind {
+    /// 空海洋：新建工程的既有默认（零迁移基线）。
+    Ocean,
+    /// 冷北—绿中—干旱南双大陆（ADR-0037 M2-1）。
+    ColdNorth,
+    /// 单一赤道干旱带（预留；M2 未实现）。
+    AridBelt,
+}
+
+/// 模板生成记录：种类 + 地形种子 + 河流种子（ADR-0037 D2/D4）。
+///
+/// `rivers_seed` 独立于 `seed`：地形与河流可以分开重抽。JSON/YAML 里
+/// 缺失时按 0 处理（旧工程 / 未来新增字段的兼容路径）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WorldTemplate {
+    pub kind: WorldTemplateKind,
+    pub seed: u64,
+    #[serde(default)]
+    pub rivers_seed: u64,
+}
+
 /// 工程级元数据。对应工程根目录的 `world.yaml`。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct WorldMeta {
@@ -139,6 +163,9 @@ pub struct WorldMeta {
     pub root_map: Id,
     /// 时间轴覆盖范围。
     pub timeline_range: TimeSpan,
+    /// 世界模板生成记录（ADR-0037）。`None` = 旧工程 / 空海洋模板。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<WorldTemplate>,
 }
 
 fn default_version() -> String {

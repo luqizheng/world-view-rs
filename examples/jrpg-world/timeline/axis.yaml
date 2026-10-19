@@ -1,0 +1,13 @@
+calendar:
+  kind: simple
+  prefix: 无仙
+  start_year: 1
+  days_per_year: 360
+  days_per_month: 30
+timeline_range:
+  from: 1
+  to: 180001
+anchors:
+- id: anchor_founding
+  name: 青云城建城
+  day: 107641

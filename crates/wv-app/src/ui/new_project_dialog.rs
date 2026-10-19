@@ -27,7 +27,8 @@ use bevy_egui::{egui, EguiContexts};
 
 use wv_core::map::{Extent, MapBase, MapLevel, MapNode};
 use wv_core::terrain::TerrainData;
-use wv_core::{Id, TimeSpan};
+use wv_core::{Id, TimeSpan, WorldTemplate, WorldTemplateKind};
+use wv_terrain::climate::{generate_cold_north, pick_city_sites};
 
 use crate::edit::editing::EditHistory;
 use crate::i18n::CurrentLocale;
@@ -66,6 +67,8 @@ pub struct NewProjectIntent {
     pub name: String,
     /// `time.elapsed_secs() * 60.0` 计算出的帧号，给 `ShellNotice` 用。
     pub frame: u64,
+    /// 新建世界采用的模板（ADR-0037 D1/D2）。
+    pub template: WorldTemplateKind,
 }
 
 /// 「新建工程」对话框的跨帧状态。
@@ -80,6 +83,8 @@ pub struct NewProjectDialog {
     pub name: String,
     /// 位置（父目录的绝对路径；「浏览…」由原生目录对话框回填）。
     pub location: String,
+    /// 新建世界采用的模板（ADR-0037 D1/D2，缺省空海洋）。
+    pub template: WorldTemplateKind,
     /// 上次创建失败的错误（留在框内，作者改完再试；成功即清）。
     pub error: Option<String>,
     /// UI 系统按下「创建」时把已校验的输入打包放这里，下一帧 apply 系统取走
@@ -93,6 +98,7 @@ impl Default for NewProjectDialog {
             open: false,
             name: "新工程".into(),
             location: String::new(),
+            template: WorldTemplateKind::Ocean,
             error: None,
             pending_apply: None,
         }
@@ -150,12 +156,16 @@ impl NewProjectDialog {
     }
 }
 
-/// 新工程的初始世界：工程元数据 + 一张世界级根图 + 海洋底图预填充栅格。
+/// 新工程的初始世界：工程元数据 + 一张世界级根图 + 模板地形。
 ///
 /// 首图参数与「新建地图」对话框对空世界的第一张图完全一致（世界级 / 最大幅面 /
-/// 海洋底图，2026-10-16 用户裁定），保证「新建工程」与「新建工程后新建第一张地图」
-/// 两条路径殊途同归。`MapNode.base` 也明确写出 → 「重置到底图」按钮可用。
-fn initial_world(name: &str) -> wv_core::World {
+/// 16:9，2026-10-16 / 2026-10-17 用户裁定），保证「新建工程」与「新建工程后
+/// 新建第一张地图」两条路径殊途同归。`Ocean` 模板明确写 `MapNode.base` →
+/// 「重置到底图」按钮可用；生成模板不写 `base`（重置会毁掉模板，按钮自动禁用）。
+///
+/// 生成模板（ADR-0037）用 `seed` 决定海岸线 / 山脉；同 seed 同结果，
+/// 重生成命令（M2-4）靠它复现。
+fn initial_world(name: &str, template: WorldTemplateKind, seed: u64) -> wv_core::World {
     // 2026-10-17 用户裁定：新建图缺省 16:9（与 NewMapDialog 同源）。
     let extent_w = EXTENT_CHOICES[0];
     let extent_h = extent_w / DEFAULT_ASPECT.ratio();
@@ -170,6 +180,11 @@ fn initial_world(name: &str) -> wv_core::World {
             root_map: id.clone(),
             // 与 `Project::create` 的占位同口径：作者随后可改。
             timeline_range: TimeSpan::new(0, 1).expect("0..1 是合法 TimeSpan（from < to 恒成立）"),
+            template: (template != WorldTemplateKind::Ocean).then_some(WorldTemplate {
+                kind: template,
+                seed,
+                rivers_seed: seed ^ 0x9E37_79B9_7F4A_7C15,
+            }),
         }),
         ..Default::default()
     };
@@ -187,18 +202,83 @@ fn initial_world(name: &str) -> wv_core::World {
         time_span: None,
         unit_per_km: None,
         orientation: 0.0,
-        // 2026-10-16：底图 = 海洋（与 NewMapDialog 默认同源；旧 Land 已切换）。
-        base: Some(MapBase::Ocean),
+        // 2026-10-16：空海洋模板写 base（重置到底图可用）；生成模板不写 base。
+        base: (template == WorldTemplateKind::Ocean).then_some(MapBase::Ocean),
         outline_polygon: None,
     });
-    world.set_terrain(
-        id,
-        TerrainData {
+    let mut city_sites: Option<(Vec<[f32; 2]>, u32, u32)> = None;
+    let terrain = match template {
+        WorldTemplateKind::Ocean => TerrainData {
             width,
             height,
             cells: vec![MapBase::Ocean.cell(); (width * height) as usize],
         },
-    );
+        WorldTemplateKind::ColdNorth => {
+            // 模板按 16:9 的栅格尺寸生成（与首图幅面同源），不强制 1024²。
+            let generated = generate_cold_north(width, height, seed);
+            // 城市初布点（ADR-0037 D6）：宜居群系散 8 城（前 2 城 rank 3）。
+            // 与河流同一「派生」精神，但城市是**作者实体**（可改名 / 拖动 /
+            // 删除，V2），所以落盘为 Place 而不是运行时派生。
+            let heights: Vec<i16> = generated.cells.iter().map(|c| c.height).collect();
+            let biomes: Vec<u8> = generated.cells.iter().map(|c| c.biome).collect();
+            let sites = pick_city_sites(
+                generated.width,
+                generated.height,
+                &heights,
+                &biomes,
+                seed ^ 0x9E37_79B9_7F4A_7C15,
+                8,
+            );
+            city_sites = Some((sites, generated.width, generated.height));
+            TerrainData {
+                width: generated.width,
+                height: generated.height,
+                cells: generated
+                    .cells
+                    .into_iter()
+                    .map(|c| wv_core::terrain::TerrainCellData {
+                        height: c.height,
+                        surface: c.surface,
+                        biome: c.biome,
+                    })
+                    .collect(),
+            }
+        }
+        WorldTemplateKind::AridBelt => TerrainData {
+            // 预留模板：M2 未实现，按空海洋兜底（V1：不崩、不阻止创建）。
+            width,
+            height,
+            cells: vec![MapBase::Ocean.cell(); (width * height) as usize],
+        },
+    };
+    world.set_terrain(id.clone(), terrain);
+
+    // 城市初布点（ADR-0037 D6）：归一化落点 -> 图局部坐标（左上原点、y 向下，
+    // 与 icon anchor 同一口径）。名字走「新城 N」占位，作者随便改（V2）。
+    if let Some((sites, gw, gh)) = city_sites {
+        let extent = world
+            .maps
+            .iter()
+            .find(|m| m.id == id)
+            .and_then(|m| m.extent)
+            .unwrap_or_else(|| Extent::sized(gw as f32, gh as f32));
+        for (i, [nx, ny]) in sites.into_iter().enumerate() {
+            let rank = if i < 2 { 3 } else { 2 };
+            world.distances.places.push(wv_core::map::distance::Place {
+                id: Id::new_unchecked(format!("city_new_{}", i + 1)),
+                name: format!("新城 {}", i + 1),
+                feature: None,
+                map: Some(id.clone()),
+                x: Some(nx * extent.width),
+                y: Some(ny * extent.height),
+                w: None,
+                h: None,
+                biome: None,
+                envelope: None,
+                rank: Some(rank),
+            });
+        }
+    }
     world
 }
 
@@ -280,6 +360,26 @@ pub fn new_project_dialog(
                 }
             });
 
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label("世界模板")
+                    .on_hover_text("冷北世界会生成双大陆 + 气候带；空海洋是空白起点");
+                egui::ComboBox::from_id_salt("new_project_template")
+                    .selected_text(template_label(dialog.template))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut dialog.template,
+                            WorldTemplateKind::Ocean,
+                            "空海洋（空白起点）",
+                        );
+                        ui.selectable_value(
+                            &mut dialog.template,
+                            WorldTemplateKind::ColdNorth,
+                            "冷北世界（大陆 + 气候带）",
+                        );
+                    });
+            });
+
             ui.add_space(6.0);
             // 路径预览（用户需求原文：显示「项目将会在 [位置]\项目名称 创建目录」）。
             let preview = if dialog.ready() {
@@ -324,6 +424,7 @@ pub fn new_project_dialog(
                                 path,
                                 name: dialog.name.trim().to_owned(),
                                 frame,
+                                template: dialog.template,
                             });
                         }
                         Err(e) => dialog.error = Some(e),
@@ -390,6 +491,23 @@ pub fn new_project_apply_create(
     }
 }
 
+/// 模板下拉的显示名。
+fn template_label(template: WorldTemplateKind) -> &'static str {
+    match template {
+        WorldTemplateKind::Ocean => "空海洋（空白起点）",
+        WorldTemplateKind::ColdNorth => "冷北世界（大陆 + 气候带）",
+        WorldTemplateKind::AridBelt => "干旱世界（预留）",
+    }
+}
+
+/// 墙钟种子：纳秒低位足够区分连续创建的工程。
+pub(crate) fn seed_from_clock() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x0D0E_5EED_2026)
+}
+
 /// 确认创建：校验 → 组初始世界 → 磁盘立骨架 + 全量落盘 → 从磁盘打开。
 ///
 /// 落盘三步走（与「另存为到新目录」的 `save_world_to_dir` 同源，但**必然**造首图）：
@@ -420,7 +538,9 @@ fn create_project(
     let path = intent.path.clone();
     let name = intent.name.clone();
     let frame = intent.frame;
-    let world = initial_world(&name);
+    // 墙钟种子：每次新建拿到不同的海岸线；种子随 meta 落盘，重生成可复现。
+    let seed = seed_from_clock();
+    let world = initial_world(&name, intent.template, seed);
 
     wv_io::Project::create(&path, &name).map_err(|e| format!("创建工程失败：{e}"))?;
     let mut project = wv_io::Project::open(&path).map_err(|e| format!("写入工程文件失败：{e}"))?;
@@ -525,7 +645,7 @@ mod tests {
     /// 高度契约下是歧义态（0 = 海平面），预填负高度消歧。
     #[test]
     fn world_map_prefill_is_ocean_below_sea_level() {
-        let w = initial_world("海洋锚定");
+        let w = initial_world("海洋锚定", WorldTemplateKind::Ocean, 0);
         let map = &w.maps[0];
         assert_eq!(map.base, Some(MapBase::Ocean), "首图底图必须是 Ocean");
         assert!(
@@ -545,7 +665,7 @@ mod tests {
     /// `MapNode.base` 也应明确为 Ocean，让「重置到底图」按钮可用。
     #[test]
     fn initial_world_has_meta_world_root_map_and_ocean_raster() {
-        let w = initial_world("美洲大陆");
+        let w = initial_world("美洲大陆", WorldTemplateKind::Ocean, 0);
         let meta = w
             .meta
             .clone()
@@ -586,7 +706,7 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        let world = initial_world("美洲大陆");
+        let world = initial_world("美洲大陆", WorldTemplateKind::Ocean, 0);
         wv_io::Project::create(&dir, "美洲大陆").expect("create 骨架");
         let mut project = wv_io::Project::open(&dir).expect("open 骨架");
         project
@@ -605,6 +725,73 @@ mod tests {
             loaded.meta.as_ref().map(|m| m.name.as_str()),
             Some("美洲大陆")
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 冷北模板：生成双大陆栅格（有海有陆）+ 模板种子写进 meta + 不写 base。
+    #[test]
+    fn cold_north_template_generates_land_and_records_seed() {
+        let w = initial_world("冷北", WorldTemplateKind::ColdNorth, 42);
+        let map = &w.maps[0];
+        assert_eq!(map.base, None, "生成模板不能写 base——重置到底图会毁掉模板");
+        let terrain = w.terrain_of(&map.id).expect("模板必须带栅格");
+        assert_eq!(
+            (terrain.width, terrain.height),
+            (512, 288),
+            "首图 16:9 / cell 8 的栅格尺寸"
+        );
+        assert!(
+            terrain.cells.iter().any(|c| c.surface == 1),
+            "冷北模板必须生成陆地"
+        );
+        assert!(
+            terrain.cells.iter().any(|c| c.surface == 0),
+            "冷北模板必须生成海"
+        );
+        let meta = w.meta.expect("初始世界必须带 meta");
+        let t = meta.template.expect("模板记录必须写入 meta");
+        assert_eq!(t.kind, WorldTemplateKind::ColdNorth);
+        assert_eq!(t.seed, 42, "种子必须原样记录，重生成才可复现");
+        assert_ne!(t.rivers_seed, t.seed, "河流种子必须独立");
+        // 城市初布点（ADR-0037 D6）：模板世界自带占位城市，全部锚定首图。
+        assert!(!w.distances.places.is_empty(), "冷北模板必须自带城市");
+        for p in &w.distances.places {
+            assert_eq!(p.map.as_ref(), Some(&map.id), "城市必须锚定首图");
+            assert!(p.x.is_some() && p.y.is_some(), "城市必须有坐标");
+            assert!(p.effective_rank() >= 2, "模板城市 rank >= 2");
+        }
+        assert!(
+            meta.template.is_some() && map.base.is_none(),
+            "模板记录与 base 的互斥口径"
+        );
+    }
+
+    /// 冷北模板的 meta（含 seed）必须能过磁盘 round-trip。
+    #[test]
+    fn cold_north_template_round_trips_through_disk() {
+        let dir = std::env::temp_dir().join(format!(
+            "wv_cold_north_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let world = initial_world("冷北", WorldTemplateKind::ColdNorth, 777);
+        wv_io::Project::create(&dir, "冷北").expect("create 骨架");
+        let mut project = wv_io::Project::open(&dir).expect("open 骨架");
+        project.save_world(&world, &[]).expect("全量落盘");
+
+        let loaded = project.load_world().expect("读回");
+        let t = loaded
+            .meta
+            .as_ref()
+            .expect("meta 必须写回 world.yaml")
+            .template
+            .expect("template 字段必须写回 world.yaml");
+        assert_eq!(t.kind, WorldTemplateKind::ColdNorth);
+        assert_eq!(t.seed, 777);
+        assert!(loaded.terrain_of(&loaded.maps[0].id).is_some());
 
         std::fs::remove_dir_all(&dir).ok();
     }

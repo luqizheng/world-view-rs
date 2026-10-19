@@ -1418,6 +1418,60 @@ fn apply_pending_commands(
                 Err(msg) => notice.error(msg, frame),
             }
         }
+        // 重新生成世界地形（ADR-0037 D4）：新种子重跑冷北模板，单事务可撤销。
+        // 备份文件在提交前落盘——重生成是破坏性的，必须给作者退路。
+        CommandId::RegenWorld => {
+            let Some(map_id) = drill.current().cloned() else {
+                notice.error(
+                    crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::NoticeRegenNoMap),
+                    frame,
+                );
+                return;
+            };
+            let (w, h) = projection
+                .world
+                .terrain_of(&map_id)
+                .map(|t| (t.width.max(2), t.height.max(2)))
+                .unwrap_or((512, 288));
+            let seed = crate::ui::new_project_dialog::seed_from_clock();
+            let generated = wv_terrain::climate::generate_cold_north(w, h, seed);
+            let terrain = wv_core::terrain::TerrainData {
+                width: generated.width,
+                height: generated.height,
+                cells: generated
+                    .cells
+                    .into_iter()
+                    .map(|c| wv_core::terrain::TerrainCellData {
+                        height: c.height,
+                        surface: c.surface,
+                        biome: c.biome,
+                    })
+                    .collect(),
+            };
+            let template = wv_core::WorldTemplate {
+                kind: wv_core::WorldTemplateKind::ColdNorth,
+                seed,
+                rivers_seed: seed ^ 0x9E37_79B9_7F4A_7C15,
+            };
+            if let Some(dir) = projection.project_dir.clone() {
+                backup_terrain_before_regen(&dir, &map_id, &projection.world);
+            }
+            match crate::edit::editing::apply_regen_world(
+                &map_id,
+                terrain,
+                template,
+                &mut edit,
+                &mut projection,
+                &mut tex,
+                &playback,
+            ) {
+                Ok(msg) => {
+                    diagnostics.needs_diagnose = true;
+                    notice.info(msg, frame);
+                }
+                Err(msg) => notice.error(msg, frame),
+            }
+        }
         // 保存（阶段七 v0.2）：走 `wv_io::Project::save_world`，只重写 dirty
         // 目录。`take_dirty` 原子取空集合；空 Vec 走全量路径（首次保存、
         // 刚加载、刚撤销等场景）。失败不排空——脏标记仍在，下次保存能补上。
@@ -1672,7 +1726,61 @@ fn persist_layout_on_change(
     *layout = file;
 }
 
-#[cfg(test)]
+/// 重生成前备份磁盘上的 `terrain.bin`：`<file>.bak.<unix_ts>`，最多保留 5 份。
+///
+/// 备份失败不阻止重生成（V1：诊断可提示，但不把作者挡在门外）；文件不存在
+/// （新建工程尚未保存）时静默跳过。
+fn backup_terrain_before_regen(project_dir: &str, map_id: &wv_core::Id, world: &wv_core::World) {
+    let rel = world
+        .maps
+        .iter()
+        .find(|m| &m.id == map_id)
+        .and_then(|m| m.raster.as_ref())
+        .map(|r| r.path.clone())
+        .unwrap_or_else(|| format!("maps/{map_id}/terrain.bin"));
+    let path = std::path::Path::new(project_dir).join(rel);
+    if !path.is_file() {
+        return;
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let bak = path.with_extension(format!("bin.bak.{ts}"));
+    if std::fs::copy(&path, &bak).is_ok() {
+        prune_terrain_backups(&path, 5);
+    }
+}
+
+/// 只保留最近 `keep` 份 `terrain.bin.bak.<ts>`（按文件名时间戳排序）。
+fn prune_terrain_backups(path: &std::path::Path, keep: usize) {
+    let Some(dir) = path.parent() else {
+        return;
+    };
+    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+        return;
+    };
+    let prefix = format!("{name}.bak.");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut backups: Vec<std::path::PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|s| s.to_str())
+                .is_some_and(|s| s.starts_with(&prefix))
+        })
+        .collect();
+    backups.sort();
+    if backups.len() > keep {
+        for old in &backups[..backups.len() - keep] {
+            let _ = std::fs::remove_file(old);
+        }
+    }
+}
+
 mod tests {
     use super::*;
 
@@ -1730,6 +1838,7 @@ mod tests {
     /// `AsyncComputeTaskPool::get_or_init`：分发器走对话框路径时会 `get()`，
     /// 裸单测没有 TaskPoolPlugin 未初始化会 panic；应用运行时 Bevy 已初始化，
     /// 这里 init 是幂等的。
+    #[allow(dead_code)] // helper used by tests; warnings emitted in non-test lib build
     fn dispatcher_world(project_dir: Option<&str>, dirty: bool, pending: CommandId) -> World {
         AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
         let mut world = World::new();

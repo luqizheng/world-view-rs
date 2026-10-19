@@ -31,6 +31,7 @@ use bevy::render::mesh::Indices;
 use bevy::render::render_resource::PrimitiveTopology;
 
 use crate::layer_frame::LayerFrame;
+use crate::recipe::{PassId, RenderRecipe};
 use crate::state::{lod_tier, GridConfig, ViewState};
 use crate::theme::colors_google::{
     GOOGLE_PLACE_DOT, GOOGLE_POI_RING, GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL,
@@ -49,6 +50,12 @@ const POI_MIN_SCREEN_PX: f32 = 5.0;
 const ROAD_CASING_Z: f32 = 0.09;
 /// 道路 fill 在 Z 轴上的偏移。
 const ROAD_Z: f32 = 0.1;
+
+/// 河流折线 Z（ADR-0037 D5）：地形装饰（0.075）之上、道路 casing（0.09）之下
+/// ——河是底图水系，从地形上长出来，但让路桥压在河上。
+const RIVER_Z: f32 = 0.082;
+/// 河流描线宽（屏幕像素）：比道路 fill（3.5px）细一档，参考图的细蜿蜒蓝线。
+const RIVER_STROKE_PX: f32 = 2.2;
 /// 街道主干档（rank ≤ 2）宽度（屏幕像素）。
 const STREET_MAJOR_PX: f32 = 4.5;
 /// 街道次干 / 支路档宽度（屏幕像素）。
@@ -369,6 +376,10 @@ pub struct VectorLayerEntities {
     street_minor_casing: RoadLayerPool,
     /// 街道编辑器的橡皮筋预览（上一落点 → 光标）。
     street_preview: RoadLayerPool,
+    /// 河流折线合批（ADR-0037 D5）：模板世界派生水系，一段折线多个连续段。
+    rivers: RoadLayerPool,
+    /// 河流材质（惰性建一次；固定水蓝，主题化随 README §12-30 后继）。
+    river_material: Option<Handle<ColorMaterial>>,
     /// POI 外环合批（非城市材质，ADR-0030 D4）。
     poi_ring_plain: PoiBatchPool,
     /// POI 外环合批（城市材质）。
@@ -400,6 +411,7 @@ pub fn sync_vector_layers(
     grid: Res<GridConfig>,
     frame: Res<ProjectionFrame>,
     layers: Res<LayerFrame>,
+    recipe: Res<RenderRecipe>,
     streets: Res<crate::streets::StreetLayerCache>,
     editor: Res<crate::streets::StreetEditorState>,
     mut layer: ResMut<VectorLayerEntities>,
@@ -439,6 +451,8 @@ pub fn sync_vector_layers(
     if !layers.road.visible {
         layer.road_casings.despawn(&mut commands);
         layer.roads.despawn(&mut commands);
+        layer.rivers.despawn(&mut commands);
+        layer.river_material = None;
         layer.street_major.despawn(&mut commands);
         layer.street_minor.despawn(&mut commands);
         layer.street_major_casing.despawn(&mut commands);
@@ -464,6 +478,35 @@ pub fn sync_vector_layers(
                 )
             })
             .expect("ensure_street_materials 必须已初始化");
+        // 河流（ADR-0037 D5）：地形族水系，gate = MODE_TABLE(Rivers) ∧ terrain 图层。
+        // 与 road_stale 无关——river_polylines 的生命周期由 compute_projection 的
+        // river_key 缓存管；这里只做「可见才合批」。
+        if recipe.enabled(PassId::Rivers) && layers.terrain.visible {
+            let mat = layer.river_material.get_or_insert_with(|| {
+                materials.add(ColorMaterial::from_color(Color::srgb(0.29, 0.53, 0.68)))
+            });
+            let mut river_segments: Vec<(Vec2, Vec2)> = Vec::new();
+            for pts in &frame.river_polylines {
+                for pair in pts.windows(2) {
+                    river_segments.push((pair[0], pair[1]));
+                }
+            }
+            let fp = segments_fingerprint(&river_segments);
+            sync_road_strokes(
+                &mut commands,
+                &mut meshes,
+                &river_segments,
+                fp,
+                view.scale,
+                mat.clone(),
+                RIVER_STROKE_PX,
+                RIVER_Z,
+                false,
+                &mut layer.rivers,
+            );
+        } else {
+            layer.rivers.despawn(&mut commands);
+        }
         sync_road_strokes(
             &mut commands,
             &mut meshes,
@@ -1321,6 +1364,7 @@ mod tests {
         world.init_resource::<crate::streets::StreetLayerCache>();
         world.init_resource::<crate::streets::StreetEditorState>();
         world.init_resource::<crate::layer_frame::LayerFrame>();
+        world.init_resource::<crate::recipe::RenderRecipe>();
 
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);
@@ -1378,6 +1422,7 @@ mod tests {
         });
         world.init_resource::<crate::streets::StreetEditorState>();
         world.init_resource::<crate::layer_frame::LayerFrame>();
+        world.init_resource::<crate::recipe::RenderRecipe>();
 
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);
@@ -1433,6 +1478,7 @@ mod tests {
         world.init_resource::<crate::streets::StreetLayerCache>();
         world.init_resource::<crate::streets::StreetEditorState>();
         world.init_resource::<crate::layer_frame::LayerFrame>();
+        world.init_resource::<crate::recipe::RenderRecipe>();
         world
     }
 

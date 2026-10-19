@@ -591,6 +591,7 @@ impl Project {
             schema_version: crate::CURRENT_SCHEMA_VERSION,
             root_map: wv_core::Id::new_unchecked("world"),
             timeline_range: wv_core::TimeSpan::new(0, 1).map_err(IoError::Core)?,
+            template: None,
         };
         let text = serde_yaml::to_string(&meta).map_err(|source| IoError::Yaml {
             path: index.display().to_string(),

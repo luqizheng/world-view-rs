@@ -37,6 +37,7 @@
 //! 「I16 高度 + U8 地表 + U8 群系」与之对应。
 
 pub mod biome;
+pub mod climate;
 pub mod continent;
 pub mod divide;
 pub mod edit;

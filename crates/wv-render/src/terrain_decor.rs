@@ -33,8 +33,9 @@ use crate::recipe::{PassId, RenderRecipe};
 use crate::state::{lod_tier, GridConfig, ViewState, WorldProjection};
 use crate::terrain_view::terrain_resolve::active_terrain;
 use wv_terrain::biome::{
-    BIOME_FOREST, BIOME_GRASSLAND, BIOME_HILLS, BIOME_JUNGLE, BIOME_MOUNTAINS, BIOME_OASIS,
-    BIOME_PLAINS, BIOME_SAVANNA, BIOME_SNOWFIELD, BIOME_SWAMP, BIOME_TUNDRA, BIOME_WETLAND,
+    BIOME_DESERT, BIOME_FOREST, BIOME_GOBI, BIOME_GRASSLAND, BIOME_HILLS, BIOME_JUNGLE,
+    BIOME_MOUNTAINS, BIOME_OASIS, BIOME_PLAINS, BIOME_SAVANNA, BIOME_SNOWFIELD, BIOME_SWAMP,
+    BIOME_TUNDRA, BIOME_WETLAND,
 };
 
 /// 装饰 Z：地形族之上（等值线 0.04 / 雾霭 0.06 / 地界符号 0.07）、道路（0.09）之下。
@@ -45,12 +46,15 @@ const BUCKET_Z_STEP: f32 = 0.0004;
 const SPACING_PX_EDIT: f32 = 26.0;
 /// Region 档采样步距（屏幕像素）：更疏，避免省级视野糊成噪点。
 const SPACING_PX_REGION: f32 = 46.0;
+/// Nation 档采样步距（屏幕像素）：全局视野只保留「大地貌团」，
+/// 步距够大才不会把整块大陆糊成噪点（ADR-0036）。
+const SPACING_PX_NATION: f32 = 96.0;
 /// 单类单帧符号组数上限（步距本身已把数量压到屏幕量级，此为兜底）。
 const MAX_SITES_PER_KIND: usize = 2200;
 /// 视口外扩余量（屏幕像素）：拖动相机时边缘符号不闪断。
 const VIEWPORT_MARGIN_PX: f32 = 32.0;
 
-/// 装饰类别（六类）。下标即渲染桶序号。
+/// 装饰类别（七类）。下标即渲染桶序号。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecorKind {
     Forest = 0,
@@ -59,17 +63,19 @@ pub enum DecorKind {
     Mountain = 3,
     Snow = 4,
     Marsh = 5,
+    Desert = 6,
 }
 
 impl DecorKind {
     /// 全部类别（按桶序号）。
-    pub const ALL: [DecorKind; 6] = [
+    pub const ALL: [DecorKind; 7] = [
         DecorKind::Forest,
         DecorKind::Plains,
         DecorKind::Hills,
         DecorKind::Mountain,
         DecorKind::Snow,
         DecorKind::Marsh,
+        DecorKind::Desert,
     ];
 
     /// 类别的符号墨色（sRGB 字节 + alpha）。v1 常量；主题化后继。
@@ -81,6 +87,7 @@ impl DecorKind {
             DecorKind::Mountain => ([0x4C, 0x44, 0x3A], 0.65),
             DecorKind::Snow => ([0xFD, 0xFE, 0xFF], 0.90),
             DecorKind::Marsh => ([0x4E, 0x6B, 0x5A], 0.65),
+            DecorKind::Desert => ([0xA8, 0x84, 0x52], 0.55),
         }
     }
 }
@@ -96,22 +103,25 @@ pub fn decor_kind_for_biome(biome: u8) -> Option<DecorKind> {
         BIOME_MOUNTAINS => Some(DecorKind::Mountain),
         BIOME_SNOWFIELD | BIOME_TUNDRA => Some(DecorKind::Snow),
         BIOME_SWAMP | BIOME_WETLAND => Some(DecorKind::Marsh),
-        // 水系（14/15/16）与荒漠（4/5/19）不画装饰：海面有水彩带、沙漠留纯色。
+        BIOME_DESERT | BIOME_GOBI => Some(DecorKind::Desert),
+        // 水系（14/15/16）与盐滩（19）不画装饰：海面有水彩带，盐滩保持纯色平面。
         _ => None,
     }
 }
 
-/// 装饰 LOD 档：Nation 不画（色块承带），Region 粗 / Edit 细。
+/// 装饰 LOD 档：Nation 粗步距（大地貌团）/ Region 粗 / Edit 细。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecorBand {
+    Nation,
     Region,
     Edit,
 }
 
-/// 缩放 → 装饰档。`None` = 本帧不画（Nation 档）。
+/// 缩放 → 装饰档。三档都画：Nation 档是新默认观感的全局地貌层
+/// （ADR-0036 取代 ADR-0031 D2「Nation 不画」的旧口径）。
 pub fn decor_band(view_scale: f32) -> Option<DecorBand> {
     match lod_tier(view_scale) {
-        crate::state::LodTier::Nation => None,
+        crate::state::LodTier::Nation => Some(DecorBand::Nation),
         crate::state::LodTier::Region => Some(DecorBand::Region),
         crate::state::LodTier::Edit => Some(DecorBand::Edit),
     }
@@ -121,14 +131,16 @@ impl DecorBand {
     /// 采样步距（屏幕像素）。
     fn spacing_px(self) -> f32 {
         match self {
+            DecorBand::Nation => SPACING_PX_NATION,
             DecorBand::Region => SPACING_PX_REGION,
             DecorBand::Edit => SPACING_PX_EDIT,
         }
     }
 
-    /// 符号尺寸系数（Region 档稍小一号，让「放大出现更多细节」有层次）。
+    /// 符号尺寸系数（全局档放大，抵消粗步距带来的稀疏感）。
     fn size_mul(self) -> f32 {
         match self {
+            DecorBand::Nation => 1.45,
             DecorBand::Region => 0.8,
             DecorBand::Edit => 1.0,
         }
@@ -228,6 +240,24 @@ pub fn site_primitives(
                 5.0 * m,
                 4.0 * m,
             ));
+        }
+        DecorKind::Desert => {
+            // 沙丘：两道扁半圆脊错位叠出风向（宽 9/7px、高 3.2/2.6px）。
+            out.push(SitePrim::half_disc(
+                kind,
+                (r1 - 0.5) * 3.0 * m,
+                1.0 * m,
+                4.5 * m,
+                3.2 * m,
+            ));
+            out.push(SitePrim::half_disc(
+                kind,
+                (r2 - 0.5) * 3.0 * m + 2.6 * m,
+                -1.2 * m,
+                3.5 * m,
+                2.6 * m,
+            ));
+            let _ = r3;
         }
         DecorKind::Marsh => {
             // 芦苇：2 根细三角（高 6px）+ 底部水线意象由半圆替代。
@@ -398,11 +428,11 @@ impl DecorBatchPool {
     }
 }
 
-/// 六桶池 + 每桶材质句柄。
+/// 七桶池 + 每桶材质句柄。
 #[derive(Resource, Default)]
 pub struct TerrainDecorPools {
-    pools: [DecorBatchPool; 6],
-    materials: Option<[Handle<ColorMaterial>; 6]>,
+    pools: [DecorBatchPool; 7],
+    materials: Option<[Handle<ColorMaterial>; 7]>,
 }
 
 impl TerrainDecorPools {
@@ -417,7 +447,7 @@ impl TerrainDecorPools {
 fn ensure_materials(
     pools: &mut TerrainDecorPools,
     materials: &mut Assets<ColorMaterial>,
-) -> [Handle<ColorMaterial>; 6] {
+) -> [Handle<ColorMaterial>; 7] {
     if let Some(handles) = &pools.materials {
         return handles.clone();
     }
@@ -456,7 +486,7 @@ pub fn sync_terrain_decor(
         pools.despawn_all(&mut commands);
         return;
     }
-    // Nation 档不画：色块承带（ADR-0031 D3）。
+    // Nation 档画粗步距大地貌团（ADR-0036 取代 ADR-0031 D2/D3）。
     let Some(band) = decor_band(view.scale) else {
         pools.despawn_all(&mut commands);
         return;
@@ -489,10 +519,10 @@ pub fn sync_terrain_decor(
     let cx1 = (((rect_max.x - origin.x) / cell).ceil() as i64 + stride) / stride * stride;
     let cy1 = (((rect_max.y - origin.y) / cell).ceil() as i64 + stride) / stride * stride;
 
-    // 六桶顶点 / 索引。
+    // 七桶顶点 / 索引。
     let mut buckets: Vec<(Vec<[f32; 3]>, Vec<u32>)> =
-        (0..6).map(|_| (Vec::new(), Vec::new())).collect();
-    let mut site_counts = [0usize; 6];
+        (0..7).map(|_| (Vec::new(), Vec::new())).collect();
+    let mut site_counts = [0usize; 7];
 
     let mut cy = cy0;
     while cy <= cy1 {
@@ -518,6 +548,7 @@ pub fn sync_terrain_decor(
             };
             let keep_prob = match kind {
                 DecorKind::Forest | DecorKind::Mountain | DecorKind::Snow | DecorKind::Marsh => 1.0,
+                DecorKind::Desert => 0.7,
                 DecorKind::Plains | DecorKind::Hills => 0.4,
             };
             if hash01(cx, gy, 77) > keep_prob {
@@ -541,9 +572,9 @@ pub fn sync_terrain_decor(
         }
         cy += stride;
     }
-    // 同步六桶。
+    // 同步七桶。
     let size_q = band.spacing_px() * view.scale * band.size_mul();
-    for i in 0..6 {
+    for i in 0..7 {
         let (verts, indices) = &mut buckets[i];
         let geom = DecorGeom {
             verts: core::mem::take(verts),
@@ -676,16 +707,28 @@ mod tests {
             Some(DecorKind::Plains)
         );
         assert_eq!(decor_kind_for_biome(BIOME_OCEAN), None, "海面不画装饰");
-        assert_eq!(decor_kind_for_biome(BIOME_DESERT), None, "沙漠留纯色");
-        assert_eq!(decor_kind_for_biome(BIOME_GOBI), None);
-        let _ = BIOME_SALT_FLAT;
+        assert_eq!(
+            decor_kind_for_biome(BIOME_DESERT),
+            Some(DecorKind::Desert),
+            "沙漠画沙丘脊"
+        );
+        assert_eq!(decor_kind_for_biome(BIOME_GOBI), Some(DecorKind::Desert));
+        assert_eq!(decor_kind_for_biome(BIOME_SALT_FLAT), None, "盐滩保持纯色");
     }
 
     #[test]
-    fn nation_band_draws_nothing_region_and_edit_do() {
-        assert_eq!(decor_band(5.0), None, "Nation 档不画");
+    fn all_three_bands_draw_and_nation_is_coarsest() {
+        assert_eq!(decor_band(5.0), Some(DecorBand::Nation));
         assert_eq!(decor_band(2.0), Some(DecorBand::Region));
         assert_eq!(decor_band(0.5), Some(DecorBand::Edit));
+        assert!(
+            DecorBand::Nation.spacing_px() > DecorBand::Region.spacing_px(),
+            "Nation 档步距必须最粗"
+        );
+        assert!(
+            DecorBand::Nation.size_mul() > DecorBand::Edit.size_mul(),
+            "Nation 档符号必须更大"
+        );
     }
 
     #[test]
@@ -752,9 +795,10 @@ mod tests {
     }
 
     /// 系统级集成：Edit 档生成装饰桶 mesh（森林 64² 全林网格）、二帧资产稳定、
-    /// 拉到 Nation 档整组下线——ADR-0031 D2/D4 的端到端契约。
+    /// 拉到 Nation 档保留粗步距地貌团（ADR-0036 取代 ADR-0031 D2）、
+    /// 关掉 pass 才整组下线。
     #[test]
-    fn decor_system_spawns_at_edit_and_clears_at_nation() {
+    fn decor_system_spawns_at_edit_keeps_nation_band_and_clears_when_disabled() {
         use crate::layer_frame::LayerFrame;
         use crate::recipe::{PassId, PassPlan, RenderRecipe};
         use crate::state::DrillState;
@@ -828,10 +872,20 @@ mod tests {
         let second = app.resource::<Assets<Mesh>>().iter().count();
         assert_eq!(second, first, "第二帧不应新增 mesh");
 
-        // Nation 档：整组下线。
+        // Nation 档：仍在画（粗步距大地貌团），原地改写而不是新增资产。
         app.resource_mut::<ViewState>().scale = 5.0;
         schedule.run(&mut app);
         let nation = app.resource::<Assets<Mesh>>().iter().count();
-        assert_eq!(nation, 0, "Nation 档装饰应全部清除，got {nation}");
+        assert_eq!(
+            nation, 1,
+            "Nation 档应保留森林地貌团（ADR-0036），got {nation}"
+        );
+
+        // 关掉 TerrainDecor pass：整组下线。
+        let mut recipe = app.resource_mut::<RenderRecipe>();
+        recipe.passes[PassId::TerrainDecor as usize] = PassPlan::disabled();
+        schedule.run(&mut app);
+        let off = app.resource::<Assets<Mesh>>().iter().count();
+        assert_eq!(off, 0, "pass 关闭后装饰应全部清除，got {off}");
     }
 }

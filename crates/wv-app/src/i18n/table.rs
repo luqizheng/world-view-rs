@@ -76,6 +76,10 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::NewProjectDialogLocationHint => "项目将创建在这个目录下",
         I18nKey::NewProjectDialogBrowseDir => "浏览…",
         I18nKey::NewProjectDialogCreateBtn => "创建",
+        I18nKey::NewProjectDialogTemplateLabel => "世界模板",
+        I18nKey::NewProjectDialogTemplateHint => "冷北世界会生成双大陆 + 气候带；空海洋是空白起点",
+        I18nKey::NewProjectTemplateOcean => "空海洋（空白起点）",
+        I18nKey::NewProjectTemplateColdNorth => "冷北世界（大陆 + 气候带）",
         I18nKey::NewProjectDialogPreviewForPrefix => "项目将在 ",
         I18nKey::NewProjectDialogPreviewForSuffix => " 创建目录",
         I18nKey::NewProjectDialogPreviewEmpty => "项目将在 位置\\项目名称 创建目录（先填名称、选位置）",
@@ -375,6 +379,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::NoticeNeedProjectFirst => "请先新建或打开工程，再执行该操作",
         I18nKey::NoticeForceRedrawn => "已强制重画地形",
         I18nKey::NoticeResetTerrainNoMap => "当前没有地图，无法重置地形",
+        I18nKey::NoticeRegenNoMap => "当前没有地图，无法重生成世界",
 
         // ── ui_time 日期 ──
         I18nKey::TimeNoCalZhPrefix => "第 ",
@@ -423,6 +428,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CmdToggleMapPalette => "切换地图主题（日间古舆图 / 暮色旧纸）",
         I18nKey::CmdForceRebuildTexture => "强制重画地形（怀疑没跟上时点一下）",
         I18nKey::CmdResetTerrainToBase => "重置当前图地形到底图",
+        I18nKey::CmdRegenWorld => "重新生成世界地形（新种子）",
         I18nKey::CmdBrushRadiusUp => "增大笔刷半径",
         I18nKey::CmdBrushRadiusDown => "减小笔刷半径",
         I18nKey::CmdSelectBrushToolPaint => "笔刷：涂抹",
@@ -601,6 +607,10 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::NewProjectDialogLocationHint => "Project will be created under this directory",
         I18nKey::NewProjectDialogBrowseDir => "Browse…",
         I18nKey::NewProjectDialogCreateBtn => "Create",
+        I18nKey::NewProjectDialogTemplateLabel => "World template",
+        I18nKey::NewProjectDialogTemplateHint => "Cold-north world generates two continents and a climate band; empty ocean is a blank start",
+        I18nKey::NewProjectTemplateOcean => "Empty ocean (blank start)",
+        I18nKey::NewProjectTemplateColdNorth => "Cold-north world (continents + climate band)",
         I18nKey::NewProjectDialogPreviewForPrefix => "Project will be created at ",
         I18nKey::NewProjectDialogPreviewForSuffix => "",
         I18nKey::NewProjectDialogPreviewEmpty => "Project will be created at <location>/<name> (fill both to preview)",
@@ -908,6 +918,7 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::NoticeNeedProjectFirst => "Create or open a project before running this command",
         I18nKey::NoticeForceRedrawn => "Forced terrain redraw",
         I18nKey::NoticeResetTerrainNoMap => "No current map — cannot reset terrain",
+        I18nKey::NoticeRegenNoMap => "No current map — cannot regenerate the world",
 
         // ── ui_time dates ──
         I18nKey::TimeNoCalZhPrefix => "",
@@ -956,6 +967,7 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CmdToggleMapPalette => "Toggle map theme (Daylight Antique / Dusk Old Paper)",
         I18nKey::CmdForceRebuildTexture => "Force terrain redraw (when the image lags)",
         I18nKey::CmdResetTerrainToBase => "Reset current map's terrain to its base",
+        I18nKey::CmdRegenWorld => "Regenerate world terrain (new seed)",
         I18nKey::CmdBrushRadiusUp => "Increase brush radius",
         I18nKey::CmdBrushRadiusDown => "Decrease brush radius",
         I18nKey::CmdSelectBrushToolPaint => "Brush: Paint",

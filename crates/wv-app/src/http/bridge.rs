@@ -477,6 +477,7 @@ mod tests {
             schema_version: 2,
             root_map: Id::new_unchecked("world_main"),
             timeline_range: TimeSpan::new(0, 1).unwrap(),
+            template: None,
         });
         w
     }

@@ -3343,6 +3343,76 @@ impl EditCommand for UpdatePlaceTerritoryCommand {
     }
 }
 
+/// 重生成世界地形（ADR-0037 D4）：整张栅格换成模板生成的新版本。
+///
+/// 与 [`PaintTerrainCommand`] 的区别：这里换的是**整图**（模板重生成），
+/// 不是局部笔触。`before` 缓存旧栅格 + 旧 `WorldTemplate`，撤销时原样还原。
+///
+/// 文件系统动作（`terrain.bin.bak.<ts>` 备份）在 app 层的命令分发器里做——
+/// 本 crate 不碰磁盘（AGENTS §2.1）。
+#[derive(Debug)]
+pub struct RegenWorldTerrainCommand {
+    map: wv_core::Id,
+    new_terrain: TerrainData,
+    new_template: wv_core::WorldTemplate,
+    before: std::sync::Mutex<Option<(TerrainData, Option<wv_core::WorldTemplate>)>>,
+}
+
+impl RegenWorldTerrainCommand {
+    pub fn new(
+        map: wv_core::Id,
+        new_terrain: TerrainData,
+        new_template: wv_core::WorldTemplate,
+    ) -> Self {
+        Self {
+            map,
+            new_terrain,
+            new_template,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for RegenWorldTerrainCommand {
+    fn label(&self) -> String {
+        "重生成世界地形".into()
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let old = world
+            .terrain_of(&self.map)
+            .cloned()
+            .ok_or_else(|| EditError::TerrainMismatch(format!("地图 `{}` 无地形网格", self.map)))?;
+        let old_template = world.meta.as_ref().and_then(|m| m.template);
+        *self
+            .before
+            .lock()
+            .expect("RegenWorldTerrainCommand::before 锁") = Some((old, old_template));
+
+        world.set_terrain(self.map.clone(), self.new_terrain.clone());
+        if let Some(meta) = world.meta.as_mut() {
+            meta.template = Some(self.new_template);
+        }
+        Ok(vec![format!("maps/{}/terrain.bin", self.map)])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let guard = self
+            .before
+            .lock()
+            .expect("RegenWorldTerrainCommand::before 锁");
+        let Some((old, old_template)) = guard.as_ref() else {
+            // apply 未成功（或未调用）→ 无可回退。
+            return Ok(());
+        };
+        world.set_terrain(self.map.clone(), old.clone());
+        if let Some(meta) = world.meta.as_mut() {
+            meta.template = *old_template;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5768,6 +5838,7 @@ mod tests {
             schema_version: 2,
             root_map: Id::new_unchecked("root_map"),
             timeline_range: wv_core::time::TimeSpan { from: 0, to: None },
+            template: None,
         });
         let cs = marker_cell_size(&w, &test_map()).expect("应回退根图 extent");
         assert!(
@@ -6390,5 +6461,92 @@ mod tests {
             Some(5.0),
             "失败的 apply 不应改动锚点"
         );
+    }
+
+    /// ADR-0037 D4：重生成命令必须可撤销——地形与模板记录一起还原。
+    #[test]
+    fn regen_world_command_restores_terrain_and_template_on_revert() {
+        use wv_core::WorldTemplateKind;
+
+        let map = wv_core::Id::new_unchecked("world");
+        let old_cells = vec![
+            TerrainCellData {
+                height: -100,
+                surface: 0,
+                biome: 0,
+            };
+            4
+        ];
+        let new_cells = vec![
+            TerrainCellData {
+                height: 320,
+                surface: 1,
+                biome: 3,
+            };
+            4
+        ];
+        let mut world = World {
+            meta: Some(wv_core::WorldMeta {
+                name: "t".into(),
+                version: "0.1".into(),
+                schema_version: 2,
+                root_map: map.clone(),
+                timeline_range: wv_core::time::TimeSpan { from: 0, to: None },
+                template: Some(wv_core::WorldTemplate {
+                    kind: WorldTemplateKind::Ocean,
+                    seed: 1,
+                    rivers_seed: 2,
+                }),
+            }),
+            ..World::default()
+        };
+        world.set_terrain(
+            map.clone(),
+            TerrainData {
+                width: 2,
+                height: 2,
+                cells: old_cells.clone(),
+            },
+        );
+
+        let cmd = RegenWorldTerrainCommand::new(
+            map.clone(),
+            TerrainData {
+                width: 2,
+                height: 2,
+                cells: new_cells.clone(),
+            },
+            wv_core::WorldTemplate {
+                kind: WorldTemplateKind::ColdNorth,
+                seed: 7,
+                rivers_seed: 8,
+            },
+        );
+        let dirty = cmd.apply(&mut world).expect("apply");
+        assert_eq!(dirty, vec!["maps/world/terrain.bin".to_owned()]);
+        assert_eq!(
+            world.terrain_of(&map).map(|t| t.cells.clone()),
+            Some(new_cells),
+            "apply 后必须是新栅格"
+        );
+        let t = world
+            .meta
+            .as_ref()
+            .and_then(|m| m.template)
+            .expect("模板记录");
+        assert_eq!(t.seed, 7);
+
+        cmd.revert(&mut world).expect("revert");
+        assert_eq!(
+            world.terrain_of(&map).map(|t| t.cells.clone()),
+            Some(old_cells),
+            "revert 后必须逐格还原"
+        );
+        let t = world
+            .meta
+            .as_ref()
+            .and_then(|m| m.template)
+            .expect("模板记录");
+        assert_eq!(t.seed, 1, "模板记录也必须还原");
     }
 }

@@ -1206,6 +1206,7 @@ mod tests {
                 schema_version: 2,
                 root_map: Id::new_unchecked("world_main"),
                 timeline_range: TimeSpan::new(1, 180_001).expect("测试区间合法"),
+                template: None,
             }),
             ..World::default()
         };

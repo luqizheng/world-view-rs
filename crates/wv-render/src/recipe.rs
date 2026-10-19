@@ -56,6 +56,9 @@ pub enum PassId {
     Atmosphere,
     FeatureOverlay,
     TerrainDecor,
+    /// 河流折线（ADR-0037 D5）：模板世界由 terrain+rivers_seed 派生的水系。
+    /// 与 TerrainDecor 同口径（VectorFlat/RealTerrain/Schematic/Faction 开）。
+    Rivers,
 }
 
 impl PassId {
@@ -83,10 +86,11 @@ impl PassId {
         PassId::Atmosphere,
         PassId::FeatureOverlay,
         PassId::TerrainDecor,
+        PassId::Rivers,
     ];
 
     /// pass 总数（数组长度 = `PassId::COUNT`）。
-    pub const COUNT: usize = 22;
+    pub const COUNT: usize = 23;
 }
 
 /// 单条 pass 的元信息（ADR-0021 §2 D1 §3）。
@@ -179,6 +183,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true,  // Atmosphere
         true,  // FeatureOverlay
         true, // TerrainDecor
+        true, // Rivers
     ]),
     // 真实地形（plan v0.1 D3 B 类）——与 VectorFlat 同，除等值线（仅 VectorFlat）。
     (ViewMode::RealTerrain, [
@@ -186,6 +191,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         false, true, true, true, true, true, true, true, true, true,
         true,
         true, // TerrainDecor
+        true, // Rivers
     ]),
     // 色块地形（plan v0.1 D3 C 类）——同上。
     (ViewMode::Schematic, [
@@ -193,6 +199,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         false, true, true, true, true, true, true, true, true, true,
         true,
         true, // TerrainDecor
+        true, // Rivers
     ]),
     // Google 模式 —— 自带完整观感：等值线 / 氛围族 / 建筑不画。
     (ViewMode::GoogleMap, [
@@ -200,6 +207,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         false, true, true, true, true, true, true, true, true, false,
         true,
         false, // TerrainDecor
+        true, // Rivers：Google 也画河（自有观感但水系照常）
     ]),
     // 势力图 —— 等值线不画，其余与真实地形同。
     (ViewMode::Faction, [
@@ -207,6 +215,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true, true, true, true, true, true, true, true, true, true,
         true,
         true, // TerrainDecor
+        true, // Rivers
     ]),
     // 事件图 —— 极简底图。
     (ViewMode::Event, [
@@ -214,6 +223,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         false, true, true, true, true, true, true, true, true, true,
         true,
         false, // TerrainDecor
+        false, // Rivers：极简底图不画
     ]),
     // 轮廓图（黑底分析视图）—— 大部分装饰关。
     (ViewMode::Coastline, [
@@ -221,6 +231,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         false, true, true, true, true, true, true, true, true, false,
         false, // FeatureOverlay：轮廓图只留轮廓
         false, // TerrainDecor
+        false, // Rivers
     ]),
 ];
 

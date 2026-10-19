@@ -1,0 +1,19 @@
+id: map_1
+name: 新地图
+level: city
+parent: world_main
+children: []
+icons: []
+layers: []
+extent:
+  width: 4096.0
+  height: 2304.0
+raster:
+  path: maps/map_1/terrain.bin
+  encoding: i16
+  width: 512
+  height: 288
+  chunk: 256
+  format_version: 2
+  checksum: fe4b3347
+base: ocean

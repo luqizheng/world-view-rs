@@ -135,6 +135,14 @@ pub enum I18nKey {
     NewProjectDialogCreateBtn,
     /// 路径预览前缀「项目将在 」
     NewProjectDialogPreviewForPrefix,
+    /// 「世界模板」整段（新建工程对话框）
+    NewProjectDialogTemplateLabel,
+    /// 「冷北世界会生成双大陆 + 气候带；空海洋是空白起点」hover
+    NewProjectDialogTemplateHint,
+    /// 「空海洋（空白起点）」下拉选项
+    NewProjectTemplateOcean,
+    /// 「冷北世界（大陆 + 气候带）」下拉选项
+    NewProjectTemplateColdNorth,
     /// 路径预览后缀「 创建目录」
     NewProjectDialogPreviewForSuffix,
     /// 路径预览空态（先填名称、选位置）
@@ -691,6 +699,8 @@ pub enum I18nKey {
     NoticeForceRedrawn,
     /// 「当前没有地图，无法重置地形」整段（2026-10-16）
     NoticeResetTerrainNoMap,
+    /// 「当前没有地图，无法重生成世界」整段（ADR-0037）
+    NoticeRegenNoMap,
 
     // ── W3：ui_time 日期格式（中文 zh / 英文 en 不同） ────────────────
     /// 时间无日历 zh prefix：「第 」
@@ -783,6 +793,8 @@ pub enum I18nKey {
     CmdForceRebuildTexture,
     /// 「重置当前图地形到底图」（2026-10-16）
     CmdResetTerrainToBase,
+    /// 「重新生成世界地形」（ADR-0037 D4）
+    CmdRegenWorld,
     /// 「增大笔刷半径」
     CmdBrushRadiusUp,
     /// 「减小笔刷半径」
@@ -1021,7 +1033,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 421] = [
+    pub const ALL: [I18nKey; 427] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1098,6 +1110,10 @@ impl I18nKey {
         I18nKey::NewProjectDialogCreateBtn,
         I18nKey::NewProjectDialogPreviewForPrefix,
         I18nKey::NewProjectDialogPreviewForSuffix,
+        I18nKey::NewProjectDialogTemplateLabel,
+        I18nKey::NewProjectDialogTemplateHint,
+        I18nKey::NewProjectTemplateOcean,
+        I18nKey::NewProjectTemplateColdNorth,
         I18nKey::NewProjectDialogPreviewEmpty,
         I18nKey::NewProjectDialogDefaultName,
         I18nKey::NewProjectDialogDefaultFirstMapName,
@@ -1344,6 +1360,7 @@ impl I18nKey {
         I18nKey::NoticeNeedProjectFirst,
         I18nKey::NoticeForceRedrawn,
         I18nKey::NoticeResetTerrainNoMap,
+        I18nKey::NoticeRegenNoMap,
         // ui_time（4）
         I18nKey::TimeNoCalZhPrefix,
         I18nKey::TimeNoCalZhSuffix,
@@ -1390,6 +1407,7 @@ impl I18nKey {
         I18nKey::CmdToggleMapPalette,
         I18nKey::CmdForceRebuildTexture,
         I18nKey::CmdResetTerrainToBase,
+        I18nKey::CmdRegenWorld,
         I18nKey::CmdBrushRadiusUp,
         I18nKey::CmdBrushRadiusDown,
         // 笔刷工具 7 条 + 参照网格（2026-10-16）

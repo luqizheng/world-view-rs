@@ -153,6 +153,39 @@ fn water_depth_t(height: i16) -> f32 {
     depth / 3500.0
 }
 
+/// 坡度浮雕强度：每米高差对应的明度增量。
+///
+/// 1024² 栅格上相邻格高差通常 10–200m；0.0012 让 100m 坡面增减约 12%，
+/// 正好落在「看得出山、不变成灰噪点」的区间（ADR-0036）。
+const RELIEF_PER_METER: f32 = 0.0012;
+/// 浮雕明度乘子下限 / 上限（钳制，防陡崖把颜色压黑或打爆）。
+const RELIEF_MIN: f32 = 0.84;
+const RELIEF_MAX: f32 = 1.16;
+
+/// 坡度浮雕系数：邻格高差 → 明度乘子，光源固定在**左上 45°**
+/// （与 ART_STYLE_SPEC §1.5 的主光方向一致）。
+///
+/// 纯函数、只读高度场：同一格在任何渲染路径（全图烘焙 / 笔刷 patch）
+/// 得到同一乘子，不需要额外的缓存或随机种子。
+fn relief_mul(data: &TerrainData, cx: u32, cy: u32) -> f32 {
+    let w = data.width as i64;
+    let h = data.height as i64;
+    if w < 2 || h < 2 {
+        return 1.0;
+    }
+    let at = |x: i64, y: i64| -> f32 {
+        let xi = x.clamp(0, w - 1) as usize;
+        let yi = y.clamp(0, h - 1) as usize;
+        data.cells[yi * w as usize + xi].height as f32
+    };
+    let (x, y) = (cx as i64, cy as i64);
+    let dx = (at(x + 1, y) - at(x - 1, y)) * 0.5;
+    let dy = (at(x, y + 1) - at(x, y - 1)) * 0.5;
+    // 数据行号向下增大；坡面朝左上（dx < 0 且 dy < 0）受光最亮。
+    let lit = -(dx + dy);
+    (1.0 + lit * RELIEF_PER_METER).clamp(RELIEF_MIN, RELIEF_MAX)
+}
+
 /// 水域按高度的渐变色——lerp `water_shallow → water_deep`，并对深色带
 /// 提一点蓝饱和（海沟观感）。所有视图模式下的水域**内部格**都走这条；
 /// 边界格的双线性高度采样会通过 `sample_vector_flat` 拿到亚格高度，
@@ -737,6 +770,18 @@ impl<'a> CellRenderer<'a> {
                     (c.blue * mul).clamp(0.0, 1.0),
                 );
             }
+            // 坡度浮雕：全局 / 区域档靠明暗读出山脉体积（ADR-0036）。
+            // 只在陆格生效——水域已有深度渐变，再叠坡度会脏。
+            if matches!(self.mode, ViewMode::VectorFlat | ViewMode::RealTerrain) && cell.height >= 0
+            {
+                let mul = relief_mul(self.data, cx, gy);
+                let Color::Srgba(c) = color else { return };
+                color = Color::srgb(
+                    (c.red * mul).clamp(0.0, 1.0),
+                    (c.green * mul).clamp(0.0, 1.0),
+                    (c.blue * mul).clamp(0.0, 1.0),
+                );
+            }
             let Color::Srgba(c) = color else { return };
             let res = self.res;
             for ty in 0..res {
@@ -933,6 +978,62 @@ mod tests {
 
     use super::*;
     use crate::terrain_view::terrain_texture::terrain_res_for;
+
+    /// 3×3 fixture：`h(x, y)` 给定每格高度，surface/biome 不影响浮雕。
+    fn relief_fixture(h: impl Fn(u32, u32) -> i16) -> wv_core::terrain::TerrainData {
+        let cells = (0..9)
+            .map(|i| {
+                let (x, y) = (i % 3, i / 3);
+                wv_core::terrain::TerrainCellData {
+                    height: h(x, y),
+                    surface: 1,
+                    biome: 3,
+                }
+            })
+            .collect();
+        wv_core::terrain::TerrainData {
+            width: 3,
+            height: 3,
+            cells,
+        }
+    }
+
+    #[test]
+    fn relief_is_flat_on_flat_ground() {
+        let data = relief_fixture(|_, _| 100);
+        assert!(
+            (relief_mul(&data, 1, 1) - 1.0).abs() < 1e-6,
+            "平地不得有任何明暗偏移"
+        );
+    }
+
+    #[test]
+    fn relief_brightens_left_top_slopes_and_darkens_the_opposite() {
+        // 左列高、右列低 → 坡面朝左上（受光）→ 变亮。
+        let lit = relief_fixture(|x, _| if x == 0 { 300 } else { 0 });
+        assert!(
+            relief_mul(&lit, 1, 1) > 1.0,
+            "朝左上的坡面应亮于 1.0，得 {}",
+            relief_mul(&lit, 1, 1)
+        );
+        // 右列高、左列低 → 坡面朝右下（背光）→ 变暗。
+        let shade = relief_fixture(|x, _| if x == 2 { 300 } else { 0 });
+        assert!(
+            relief_mul(&shade, 1, 1) < 1.0,
+            "朝右下的坡面应暗于 1.0，得 {}",
+            relief_mul(&shade, 1, 1)
+        );
+        // 上排高、下排低且横向平 → 朝上受光，但 y 轴单独也要成立。
+        let north = relief_fixture(|_, y| if y == 0 { 300 } else { 0 });
+        assert!(relief_mul(&north, 1, 1) > 1.0, "朝上的坡面应受光");
+    }
+
+    #[test]
+    fn relief_is_clamped_for_extreme_cliffs() {
+        let cliff = relief_fixture(|x, _| if x == 0 { 9000 } else { -9000 });
+        let m = relief_mul(&cliff, 1, 1);
+        assert!((RELIEF_MIN..=RELIEF_MAX).contains(&m), "必须钳制，得 {m}");
+    }
 
     /// 像素颜色是否接近目标 sRGB 色（±2/255，吸收 u8 舍入）。
     fn pixel_near(img: &Image, x: u32, y: u32, target: bevy::color::Srgba) -> bool {

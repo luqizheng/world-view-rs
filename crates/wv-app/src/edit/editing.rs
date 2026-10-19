@@ -25,7 +25,7 @@ use crate::state::{
 };
 use wv_edit::command::{
     EditCommand, GenerateContinentCommand, IntentTerrainCommand, PaintTerrainCommand,
-    ResetTerrainToBaseCommand,
+    RegenWorldTerrainCommand, ResetTerrainToBaseCommand,
 };
 use wv_edit::history::Transaction;
 use wv_edit::History;
@@ -437,6 +437,56 @@ pub fn apply_reset_terrain_to_base(
             Ok("已重置到底图".into())
         }
         Err(e) => Err(format!("重置失败：{e}")),
+    }
+}
+
+/// 重生成世界地形（ADR-0037 D4）：整图替换 + 模板记录更新，单事务可撤销。
+///
+/// 与 [`apply_reset_terrain_to_base`] 同款：前后 cells diff 出脏矩形，
+/// 避免 `mark_all_dirty` 的整图重建。磁盘备份（`terrain.bin.bak.<ts>`）
+/// 由调用方在提交前做——本函数只负责世界数据与纹理。
+#[allow(clippy::too_many_arguments)]
+pub fn apply_regen_world(
+    map_id: &wv_core::Id,
+    new_terrain: wv_core::terrain::TerrainData,
+    new_template: wv_core::WorldTemplate,
+    edit: &mut EditHistory,
+    projection: &mut WorldProjection,
+    tex: &mut TerrainTexture,
+    playback: &PlaybackState,
+) -> Result<String, String> {
+    if playback.playing {
+        return Err("播放中为只读：先暂停再重生成".into());
+    }
+
+    let before = wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(map_id))
+        .map(|t| t.cells.clone());
+
+    let mut tx = Transaction::new();
+    tx.push(Box::new(RegenWorldTerrainCommand::new(
+        map_id.clone(),
+        new_terrain,
+        new_template,
+    )));
+    match edit.history.commit(&mut projection.world, tx) {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
+            projection.dirty = true;
+
+            let after =
+                wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(map_id))
+                    .map(|t| (t.width.max(1), t.cells.clone()));
+            match (before, after) {
+                (Some(b), Some((w, a))) if b.len() == a.len() => {
+                    if let Some(rect) = terrain_diff_bbox(&b, &a, w) {
+                        tex.mark_dirty(rect);
+                    }
+                }
+                _ => tex.mark_all_dirty(),
+            }
+            Ok("已重生成世界地形".into())
+        }
+        Err(e) => Err(format!("重生成失败：{e}")),
     }
 }
 

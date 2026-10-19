@@ -198,6 +198,9 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
 4. 决策者确认后改为「已接受」。
 5. **更新本文件 §4 的表格**。
 6. 若本 ADR 取代了旧 ADR：把旧 ADR 头部状态改为「**被取代**」并写明 `被 ADR-NNNN 取代`。**不要删改旧 ADR 的正文**。
+| [ADR-0036](ADR-0036-nation-decor-and-relief.md) | 全局档地貌呈现——Nation 装饰带 + 坡度浮雕 + 雾降档 + 沙漠装饰 | 已接受（Accepted，2026-10-19，用户对话拍板） | 新增 `DecorBand::Nation`（96px 步距 / 符号 1.45×，三档都画）；栅格烘焙加坡度浮雕（邻格高差 → 明度乘子，光源左上，clamp 0.84–1.16，只陆格 / VectorFlat+RealTerrain）；`VEIL_MAX_ALPHA` 0.35→0.18；新增 `DecorKind::Desert`（沙漠/戈壁/盐滩 → 沙丘脊，第 7 桶）。数据零迁移。**⚠️ 取代 ADR-0031 D2「Nation 不画」** | P3 / P5、AGENTS §6.3 / §6.4、ADR-0031（D2 被取代）/ 0035（色板）/ 0016（雾）/ 0023（ThemePack） |
+| [ADR-0037](ADR-0037-world-template-and-regen.md) | 世界模板（冷北/空海洋）+ 完全重生成 | 已接受（Accepted，2026-10-19，用户按推荐拍板） | 新建工程对话框加「世界模板」下拉（ADR-0037 D1/D2）：`Ocean`（既有默认）/ `ColdNorth`（双大陆 + 单纬度温度轴，算法落 `wv_terrain::climate`）。`WorldMeta.template: Option<WorldTemplate{kind,seed,rivers_seed}>` 随 `world.yaml` 落盘（`None` = 旧工程，零迁移）；生成模板不写 `MapNode.base`（重置会毁模板）。后续「完全重生成」走 `RegenWorldCommand`（M2-4，命令面板入口 + `terrain.bin.bak.<ts>` 留退路） | P1 / P2 / P3 / P7、ADR-0036（观感）、ADR-0029（群系表）、README §12-40 |
+
 
 ---
 

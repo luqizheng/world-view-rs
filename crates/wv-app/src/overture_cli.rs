@@ -1097,6 +1097,7 @@ fn build_world(
         schema_version: wv_io::CURRENT_SCHEMA_VERSION,
         root_map: wv_core::Id::new_unchecked(ROOT_MAP_ID),
         timeline_range: wv_core::TimeSpan::new(1, 2).expect("TimeSpan::new(1,2)"),
+        template: None,
     };
 
     let distances = wv_core::distance::DistanceGraph {
