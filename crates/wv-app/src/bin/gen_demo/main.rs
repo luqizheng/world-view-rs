@@ -52,9 +52,17 @@ fn main() {
     let _bin = args.next();
     let mut root = PathBuf::from(DEMO_DIR);
     let mut dump: Option<PathBuf> = None;
+    let mut peaks: f64 = 3400.0; // 峰顶高度（米）；RPG 幻想山可拉到 10000
     while let Some(a) = args.next() {
         match a.as_str() {
             "--dump-png" => dump = args.next().map(PathBuf::from),
+            "--peaks" => {
+                peaks = args
+                    .next()
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .filter(|v| *v >= 500.0 && *v <= 30000.0)
+                    .unwrap_or(3400.0);
+            }
             _ => root = PathBuf::from(a),
         }
     }
@@ -63,7 +71,7 @@ fn main() {
     let map_dir = root.join("maps").join(MAP_ID);
     std::fs::create_dir_all(&map_dir).expect("create maps/world_main");
 
-    let (data, basis) = build_grid(&data_dir);
+    let (data, basis) = build_grid(&data_dir, peaks);
     let seed = seed_now();
     let land = data.cells.iter().any(|c| c.surface == 1);
     let kind = if land { "cold_north" } else { "ocean" };
@@ -94,7 +102,7 @@ fn seed_now() -> u64 {
 }
 
 /// 探测 NE GeoJSON 产物；缺文件 / 解析失败 → 程序冷北兜底。
-fn build_grid(data_dir: &Path) -> (TerrainData, &'static str) {
+fn build_grid(data_dir: &Path, peaks: f64) -> (TerrainData, &'static str) {
     let coast_path = data_dir.join("coastlines.geojson");
     let rivers_path = data_dir.join("rivers.geojson");
     let seas_path = data_dir.join("seas.geojson");
@@ -119,7 +127,7 @@ fn build_grid(data_dir: &Path) -> (TerrainData, &'static str) {
         .then(|| geo::read(&seas_path))
         .and_then(|r| r.ok());
     (
-        rasterize(&coast, rivers.as_deref(), seas.as_deref()),
+        rasterize(&coast, rivers.as_deref(), seas.as_deref(), peaks),
         "natural-earth",
     )
 }
@@ -147,7 +155,7 @@ fn program_north() -> TerrainData {
 /// 3. 海岸国界多边形内 → 陆；
 /// 4. 陆格按「距最近海岸线」距离分高度带，群系按纬度带（0=北）；
 /// 5. 河流线刷 BIOME_RIVER + 河床 -2m。
-fn rasterize(coast: &[F], rivers: Option<&[F]>, seas: Option<&[F]>) -> TerrainData {
+fn rasterize(coast: &[F], rivers: Option<&[F]>, seas: Option<&[F]>, peaks: f64) -> TerrainData {
     let to_x = |lon: f64| ((lon - LON.0) / (LON.1 - LON.0) * WIDTH as f64).floor() as i32;
     let to_y = |lat: f64| ((LAT.1 - lat) / (LAT.1 - LAT.0) * HEIGHT as f64).floor() as i32;
     let rings = |fs: &[F]| -> Vec<Vec<[i32; 2]>> {
@@ -290,17 +298,23 @@ fn rasterize(coast: &[F], rivers: Option<&[F]>, seas: Option<&[F]>) -> TerrainDa
             // 陆地：
             let d_coast = geo::min_dist_to_rings(x, y, &coast_rings);
             let d_ridge = geo::min_dist_to_rings(x, y, std::slice::from_ref(&ridge_pts));
-            // 基础 = 沿海平原；高度主场 = 山脊高斯（宽 ~90 格）+ perlin 起伏
-            let ridge_lift = (-(d_ridge as f64) / 22.0).exp() * 2400.0;
+            // 基础 = 沿海平原；高度主场 = 山脊高斯（宽 ~22 格）+ perlin 起伏。
+            // 峰顶 lift ≈ peaks * 0.9（脊线上 d≈0）。
+            // 峰越高衰减越快（width ∝ 1/peaks）：尖峰造型 + 雪带宽度稳定。
+            let width = (22.0 * (3400.0 / peaks)).max(6.0);
+            let ridge_lift = (-(d_ridge as f64) / width).exp() * peaks * 0.9;
             let detail = fbm(x as f64 * 0.03, y as f64 * 0.03) * 260.0 - 60.0;
             let h = if d_coast <= 1 {
                 20.0
             } else {
-                (60.0 + ridge_lift + detail + (d_coast as f64 * 4.0)).clamp(10.0, 3400.0)
+                (60.0 + ridge_lift + detail + (d_coast as f64 * 4.0)).clamp(10.0, peaks * 1.05)
             };
             height[idx] = h as i16;
-            // 群系：纬度气候为主，山只认高度
-            biome[idx] = if h >= 2250.0 {
+            // 群系：纬度气候为主，山只认高度。
+            // 雪线随世界峰值缩放（3400 世界 2250 / 10000 世界 ~6600）——
+            // 「山有多高」是美术尺度，雪线跟着山走，否则高世界整条山脉全白。
+            let snow_line = 2250.0 * (peaks / 3400.0).max(1.0);
+            biome[idx] = if h >= snow_line {
                 9 // SNOWFIELD（高山雪线：阿尔卑斯/高加索峰顶）
             } else if h >= 1150.0 {
                 13 // MOUNTAINS

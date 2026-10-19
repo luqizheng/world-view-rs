@@ -13,7 +13,7 @@ raster:
   height: 768
   chunk: 256
   format_version: 2
-  checksum: ddd762de
+  checksum: 5ffeb76e
 layers:
   - id: layer_terrain
     name: 地形
