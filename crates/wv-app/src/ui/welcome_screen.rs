@@ -55,6 +55,11 @@ use crate::ui_shell::{DialogPurpose, OpenProjectTask, StartupLoadRequest};
 
 use super::shell::UiShell;
 
+/// 卡片窗口 id（也是 egui 里它的 Area/Layer id）。
+///
+/// 抽成常量是为了在 [`welcome_screen`] 尾部能把卡片层显式钉回顶层——
+/// 见那里关于「暗层点击上浮盖住卡片」的回归说明。
+const CARD_ID: &str = "wv_welcome_card";
 /// 欢迎页上最多列几条最近工程（列表本身存 8 条，首屏别太长）。
 const WELCOME_RECENTS_MAX: usize = 5;
 /// 卡片宽度（Figma 规定值，`00_WelcomeCard.width = 520`）。
@@ -122,7 +127,7 @@ pub fn welcome_screen(
 
     // 居中卡片——`title_bar(false)` 拿掉 egui 默认标题栏与 × 按钮；自定义
     // `Frame` 复写 fill / stroke / 内边距 / 圆角以贴近 Figma。
-    egui::Window::new("wv_welcome_card")
+    egui::Window::new(CARD_ID)
         .order(egui::Order::Foreground)
         .title_bar(false)
         .resizable(false)
@@ -197,6 +202,30 @@ pub fn welcome_screen(
                 });
             });
         });
+
+    // 卡片钉回 Foreground 顶层（2026-10-19 回归修复）。
+    //
+    // 上面的暗层是**全屏可交互** Area（要吞掉地图/浮窗的点击）。egui 在
+    // `Area::begin` 里对「按在自己身上」的 Area 调 `move_to_top`——同 order 内
+    // 暗层会浮到卡片之上；而暗层是全屏**不透明**填充，于是「关闭工程回到欢迎页
+    // 后点一下空白处，整页只剩暗底、卡片消失」（实机复现：Bevy `Screenshot`
+    // 也拍到只剩底色）。层级顺序在帧末统一结算，所以这里在画完卡片后显式把它
+    // 钉回顶层：同帧即生效，下一帧的命中测试也仍从卡片开始。
+    pin_card_on_top(ctx);
+}
+
+/// 把欢迎卡片钉回 Foreground 顶层（见 [`welcome_screen`] 尾部回归说明）。
+fn pin_card_on_top(ctx: &egui::Context) {
+    ctx.move_to_top(card_layer());
+}
+
+/// 卡片在 egui 里的层 id。
+///
+/// `Window::new` 走 `Area::new(Id::new(title.text()))`，而 `Atoms::text()`
+/// 返回 `Option<&str>`——所以它的 id 是 `Id::new(Some(name))`，不是
+/// `Id::new(name)`。两者哈希不同，钉错了层就会「看起来改完还是盖住」。
+fn card_layer() -> egui::LayerId {
+    egui::LayerId::new(egui::Order::Foreground, egui::Id::new(Some(CARD_ID)))
 }
 
 /// 56×56 accent 圆角方块 + 28×28 地球图标（Figma `AppIcon`）。
@@ -301,4 +330,74 @@ fn recents_section(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 回归（2026-10-19）：欢迎页的全屏暗层是可交互 Area（吞点击）。egui 在
+    /// 按下时会把它 `move_to_top`，同 order 内浮到卡片之上——暗层是**不透明**
+    /// 全屏填充，于是用户看到的是「关闭工程回到欢迎页后点一下空白，卡片消失、
+    /// 整页只剩暗底」。修复靠画完卡片后 `pin_card_on_top` 把它钉回顶层。
+    ///
+    /// 用 headless `Context` 驱动真实点击链：hover → 按下暗层（卡片之外）→ 抬起，
+    /// 断言卡片中心的顶层 layer 仍是卡片。没有 `pin_card_on_top` 时这里会
+    /// 返回 `wv_welcome_dim`（实机/headless 双向验证过）。
+    #[test]
+    fn clicking_the_dim_keeps_the_welcome_card_on_top() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+        let center = screen.center();
+        // 卡片 520 宽且居中 → x∈[380,900]；取左下角空白处，确保点在暗层上。
+        let dim_pos = egui::pos2(100.0, 700.0);
+
+        let draw = |events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ctx| {
+                egui::Area::new(egui::Id::new("wv_welcome_dim"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(screen.min)
+                    .interactable(true)
+                    .show(ctx, |ui| {
+                        let (rect, _) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
+                        ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
+                    });
+                egui::Window::new(CARD_ID)
+                    .order(egui::Order::Foreground)
+                    .title_bar(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        ui.label("card");
+                    });
+                pin_card_on_top(ctx);
+            });
+            // headless 无 GPU surface：丢弃未应用的纹理增量，避免 epaint
+            // 「Dropped TexturesDelta with unapplied deltas」panic。
+            output.textures_delta.clear();
+        };
+
+        // 暖机三帧：Area 首帧是 sizing pass（不可交互、也不计入层级），
+        // 直接点会被忽略；这与真实运行（欢迎页已稳定显示数帧）一致。
+        for _ in 0..3 {
+            draw(vec![]);
+        }
+        draw(vec![egui::Event::PointerMoved(dim_pos)]);
+        draw(vec![egui::Event::PointerButton {
+            pos: dim_pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::default(),
+        }]);
+
+        assert_eq!(
+            ctx.layer_id_at(center),
+            Some(card_layer()),
+            "点击全屏暗层后，卡片必须仍在 Foreground 顶层（否则暗底会盖住卡片）"
+        );
+    }
 }
