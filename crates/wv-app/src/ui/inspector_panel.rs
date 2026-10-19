@@ -29,26 +29,36 @@ use crate::i18n::CurrentLocale;
 use crate::state::{Panel, PanelState, WorldProjection};
 use crate::theme::ui_theme::{color32, proportional, UiShellConfig};
 use crate::theme::ui_tokens::{radius, space};
+use crate::ui_command_palette::{CommandId, CommandPalette};
 use crate::ui_layout::LayoutFile;
+use crate::i18n::{t, I18nKey};
 
 use super::shell::UiShell;
 use super::widgets::{empty_state, float_window, BadgeKind, ICON_CHEVRON_RIGHT};
+use wv_render::state::EditCellState;
+use wv_terrain::biome::{BiomeFamily, family_of};
 
-/// 检视器面板。
+/// Inspector 面板。
 #[allow(clippy::too_many_arguments)]
 pub fn panel_inspector(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,
     layouts: Res<LayoutFile>,
     mut panels: ResMut<PanelState>,
-    projection: Res<WorldProjection>,
+    mut projection: ResMut<WorldProjection>,
+    mut edit_cell: ResMut<EditCellState>,
+    mut edit: ResMut<crate::edit::editing::EditHistory>,
     current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
-    let selected = projection.selection.as_ref();
+    // 借位记得在闭包前释放 —— render_cell_section 需要 `&mut projection.world`,
+    // 而 `projection.selection` 这一行会持续借用整个 `projection` 到方法末尾。
+    // 走 clone 释放借用。
+    let selection_clone = projection.selection.clone();
+    let selected = selection_clone.as_ref();
 
     float_window(
         ctx,
@@ -101,6 +111,24 @@ pub fn panel_inspector(
                     format!("{}", projection.world.distances.places.len()),
                 ),
             );
+
+            // 单格编辑折叠区([ADR-0040])。仅 EditCell 工具激活且
+            // 选了一格才显示。把 surface/height/biome 三字段做成
+            // 真正的可改 widget —— 改完字段 → 直接构造 `EditCellCommand`
+            // 走 `History::commit`（经 `commit_stroke_on_release` 同源路径）。
+            if edit_cell.tool_active {
+                if let Some((gx, gy)) = edit_cell.selected {
+                    render_cell_section(
+                        ui,
+                        &shell,
+                        &mut projection,
+                        &mut edit_cell,
+                        &mut edit,
+                        (gx, gy),
+                        current_loc.0,
+                    );
+                }
+            }
         },
     );
 }
@@ -267,6 +295,184 @@ fn kind_label(k: wv_core::EntityKind) -> &'static str {
 //
 // `panel_inspector` 是 Bevy 系统 + egui 渲染，集成测试要起 App 太重；
 // 单元测试只覆盖纯函数，渲染覆盖由 smoke-gui + 人工验收承担。
+
+/// 单格编辑折叠区([ADR-0040] §决策 6 Inspector Panel)。
+#[allow(clippy::too_many_arguments)]
+fn render_cell_section(
+    ui: &mut egui::Ui,
+    _shell: &UiShell,
+    projection: &mut WorldProjection,
+    edit_cell: &mut EditCellState,
+    edit: &mut crate::edit::editing::EditHistory,
+    (gx, gy): (i32, i32),
+    loc: crate::i18n::Locale,
+) {
+    let _ = _shell;
+    let Some(target_map) = edit_cell.last_map_id.clone() else {
+        return;
+    };
+    // 借用 `'1`:`&WorldProjection`(投影 `world` 的 `terrain_of`) + 索引 → before;
+    // borrow 在本块结束就放掉,闭包内才能 `&mut projection.world` 提交。
+    let before = {
+        let Some(terrain) = projection.world.terrain_of(&target_map) else {
+            return;
+        };
+        let w = terrain.width as i32;
+        let h = terrain.height as i32;
+        if gx < 0 || gy < 0 || gx >= w || gy >= h {
+            return;
+        }
+        let idx = (gy as usize) * (w as usize) + (gx as usize);
+        terrain.cells.get(idx).copied()
+    };
+    let Some(before) = before else {
+        return;
+    };
+
+    ui.collapsing(t(loc, I18nKey::CellInspectorSection), |ui| {
+        ui.label(format!("{} ({}, {})", t(loc, I18nKey::CellInspectorCoord), gx, gy));
+
+        let mut new_surface = before.surface;
+        ui.horizontal(|ui| {
+            ui.label(t(loc, I18nKey::CellInspectorSurface));
+            if ui
+                .selectable_label(new_surface == wv_terrain::SURFACE_WATER, "水 (0)")
+                .clicked()
+            {
+                new_surface = wv_terrain::SURFACE_WATER;
+            }
+            if ui
+                .selectable_label(new_surface == wv_terrain::SURFACE_LAND, "陆 (1)")
+                .clicked()
+            {
+                new_surface = wv_terrain::SURFACE_LAND;
+            }
+        });
+
+        let mut new_height = before.height;
+        ui.horizontal(|ui| {
+            ui.label(t(loc, I18nKey::CellInspectorHeight));
+            ui.add(egui::DragValue::new(&mut new_height).speed(1.0).suffix(" m"));
+        });
+
+        let mut new_biome = before.biome;
+        ui.horizontal(|ui| {
+            ui.label(t(loc, I18nKey::CellInspectorBiome));
+            egui::ComboBox::new("cell-biome", "")
+                .selected_text(biome_label(before.biome))
+                .show_ui(ui, |ui| {
+                    if ui.selectable_label(new_biome == 0, "<NONE>").clicked() {
+                        new_biome = 0;
+                    }
+                    for family in [
+                        BiomeFamily::Forest,
+                        BiomeFamily::Grassland,
+                        BiomeFamily::Desert,
+                        BiomeFamily::Wetland,
+                        BiomeFamily::Cold,
+                        BiomeFamily::Highland,
+                        BiomeFamily::Water,
+                        BiomeFamily::Road,
+                    ] {
+                        ui.separator();
+                        ui.label(format!("{:?}", family));
+                        for &(num, name) in biomes_in_family(family) {
+                            if ui
+                                .selectable_label(new_biome == num, format!("{name} ({num})"))
+                                .clicked()
+                            {
+                                new_biome = num;
+                            }
+                        }
+                    }
+                });
+        });
+
+        let after = wv_core::terrain::TerrainCellData {
+            height: new_height,
+            surface: new_surface,
+            biome: new_biome,
+        };
+        if after != before {
+            push_cell_edit(edit, &mut projection.world, &target_map, (gx, gy), before, after);
+        }
+    });
+}
+
+/// 单格编辑提交到 `wv_edit::History`(`EditCellCommand::apply`)——
+/// 走 `region_panel_actions::push_cmd` 同款 4 步模式(snapshot-diff-revert)。
+#[allow(clippy::too_many_arguments)]
+fn push_cell_edit(
+    edit: &mut crate::edit::editing::EditHistory,
+    world: &mut wv_core::World,
+    map: &wv_core::id::Id,
+    (gx, gy): (i32, i32),
+    before: wv_core::terrain::TerrainCellData,
+    after: wv_core::terrain::TerrainCellData,
+) {
+    // Stale-snapshot 校验。
+    let current = world.terrain_of(map).and_then(|t| {
+        let w = t.width as i32;
+        let h = t.height as i32;
+        if gx < 0 || gy < 0 || gx >= w || gy >= h {
+            return None;
+        }
+        t.cells
+            .get((gy as usize) * (w as usize) + (gx as usize))
+            .copied()
+    });
+    if current != Some(before) {
+        bevy::log::warn!(
+            "EditCell commit 拒收: cell ({gx}, {gy}) 当前值已不是你 Inspector 上看到的值"
+        );
+        return;
+    }
+    let cmd = wv_edit::command::EditCellCommand::new(map.clone(), gx, gy, before, after);
+    use wv_edit::EditCommand;
+    let mut tx = wv_edit::history::Transaction::new();
+    tx.push(Box::new(cmd));
+    match edit.history.commit(world, tx) {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
+        }
+        Err(e) => {
+            bevy::log::warn!("EditCell commit 失败: {e}");
+        }
+    }
+}
+
+/// 静态映射(`BiomeFamily` 内全部编号 + 名称,冻结表)。
+fn biomes_in_family(family: BiomeFamily) -> &'static [(u8, &'static str)] {
+    match family {
+        BiomeFamily::Forest => &[(1, "Forest"), (10, "Jungle"), (11, "Tropical Rainforest")],
+        BiomeFamily::Grassland => &[
+            (2, "Plains"),
+            (3, "Grassland"),
+            (17, "Oasis"),
+            (18, "Savanna"),
+        ],
+        BiomeFamily::Desert => &[(4, "Gobi"), (5, "Desert"), (19, "Salt Flat")],
+        BiomeFamily::Wetland => &[(6, "Swamp"), (7, "Wetland")],
+        BiomeFamily::Cold => &[(8, "Tundra"), (9, "Snowfield")],
+        BiomeFamily::Highland => &[(12, "Hills"), (13, "Mountains")],
+        BiomeFamily::Water => &[(14, "Ocean"), (15, "Lake"), (16, "River")],
+        BiomeFamily::Road => &[(20, "Road")],
+    }
+}
+
+fn biome_label(num: u8) -> String {
+    if let Some(family) = family_of(num) {
+        for &(n, name) in biomes_in_family(family) {
+            if n == num {
+                return format!("{name} ({num})");
+            }
+        }
+    }
+    if num == 0 {
+        return "<NONE>".into();
+    }
+    format!("#{num}")
+}
 
 #[cfg(test)]
 mod tests {

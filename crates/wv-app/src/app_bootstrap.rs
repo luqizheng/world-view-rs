@@ -236,6 +236,8 @@ pub fn run(config: AppConfig) {
                 camera::collect_brush_stroke,
                 // 编辑（笔触 → 命令 → History）
                 editing::commit_stroke_on_release,
+                // 单格编辑（[ADR-0040]）：点击 → cell_pick → EditCellState.selected
+                editing::commit_edit_cell_on_click,
                 streets::commit_street_click,
                 // 撤销 / 重做不再在这里单独监听 Ctrl+Z：快捷键统一由
                 // `ui_shell::hotkeys` 收（那里已经处理了「输入框聚焦时失效」），

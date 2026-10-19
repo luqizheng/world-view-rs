@@ -163,6 +163,13 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::ViewModeCoastline => "轮廓图",
         I18nKey::ViewModeTopographic => "等高分析",
 
+        // ── Cell Inspector Section ──
+        I18nKey::CellInspectorSection => "Cell",
+        I18nKey::CellInspectorCoord => "坐标",
+        I18nKey::CellInspectorSurface => "地表",
+        I18nKey::CellInspectorHeight => "海拔",
+        I18nKey::CellInspectorBiome => "群系",
+
         // ── 图层面板标题 ──
         I18nKey::PanelMapTree => "地图树",
         I18nKey::PanelLayers => "图层管理",
@@ -700,6 +707,13 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::ViewModeEvent => "Event map",
         I18nKey::ViewModeCoastline => "Coastline",
         I18nKey::ViewModeTopographic => "Topographic",
+
+        // ── Cell Inspector Section ──
+        I18nKey::CellInspectorSection => "Cell",
+        I18nKey::CellInspectorCoord => "Coord",
+        I18nKey::CellInspectorSurface => "Surface",
+        I18nKey::CellInspectorHeight => "Height",
+        I18nKey::CellInspectorBiome => "Biome",
 
         // ── Panel titles ──
         I18nKey::PanelMapTree => "Map tree",

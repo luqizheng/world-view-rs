@@ -302,6 +302,18 @@ pub enum I18nKey {
     /// 「等高分析」Topographic（[ADR-0039]，水/陆 + height 3 阶着色）
     ViewModeTopographic,
 
+    // ── 单格编辑 Inspector 折叠区（[ADR-0040] §决策 6） ─────────────
+    /// "Cell" 折叠区标题
+    CellInspectorSection,
+    /// "坐标" 标签
+    CellInspectorCoord,
+    /// "地表" 标签（水 / 陆二选一）
+    CellInspectorSurface,
+    /// "海拔" 标签（米）
+    CellInspectorHeight,
+    /// "群系" 标签（按 BiomeFamily 分组下拉）
+    CellInspectorBiome,
+
     // ── 图层面板（state::Panel::title） ─────────────────────────────
     /// 「地图树」面板标题
     PanelMapTree,

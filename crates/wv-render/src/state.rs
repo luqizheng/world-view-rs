@@ -629,33 +629,61 @@ pub struct SelectionState {
     pub last_map_id: Option<wv_core::Id>,
 }
 
+/// Inspector Panel 写 → `apply_pending_commands` 读 → `EditCellCommand::apply`
+/// 的草稿载荷([ADR-0040] §决策 5)。
+///
+/// 为什么存进 `EditCellState.pending` 而不是 `CommandId::EditCell(...)` 嵌套 5 字段:
+/// - 与 `SelectionState.draft` 同款「draft → take」节奏,降低心智；
+/// - 编辑面板多字段一次性封装成不可变快照,与其他 Edit* 命令一致；
+/// - 枚举 variant 写 5 字段会让 pattern match 笨拙。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditCellPending {
+    pub map: wv_core::Id,
+    pub gx: i32,
+    pub gy: i32,
+    pub before: wv_core::terrain::TerrainCellData,
+    pub after: wv_core::terrain::TerrainCellData,
+}
+
 /// 单格编辑工具状态（[ADR-0040] §决策 5）。
 ///
 /// 与 [`SelectionState`] 平级：**会话态,本地图使用**——
 /// `last_map_id` 变即清空（防「切换图后旧 hover 卡在画面上」）。
 ///
-/// **两层状态**：
+/// **三层状态**：
 /// - `hover` = 当前鼠标压在哪一格（即时刷新,Inspector 不必读）；
 /// - `selected` = 点选 committed 的那一格（Inspector 与 PassId::CellSelection
-///   必读,ESC 清空）。
+///   必读,ESC 清空）；
+/// - `pending` = Inspector 字段改完之后,等待 `apply_pending_commands` 取走
+///   的草稿（[EditCellPending]）。分发器读 + `take()` 后由 EditCellCommand
+///   走 [wv_edit] 的 snapshot-diff-revert 路径落盘。
 ///
-/// hover 与 selected 共存不冲突——hover 来自光标移动,selected 来自点击。
+/// hover 与 selected 与 pending 共存不冲突——hover 来自光标,selected 来自点击,
+/// pending 来自字段改。
 #[derive(Resource, Debug, Default, Clone, PartialEq)]
 pub struct EditCellState {
+    /// EditCell 工具是否激活（与 [`BrushState::enabled`] 同款会话布尔）。
+    /// 由命令分发器在 `SelectMapTool(EditCell)` 翻 true / 切走其它工具翻 false。
+    pub tool_active: bool,
     /// 当前鼠标压住的格 (gx, gy)；`None` 表示鼠标不在地图内。
     pub hover: Option<(i32, i32)>,
     /// 点击落定的格 (gx, gy)。ESC 清空 / 切图也清空。
     pub selected: Option<(i32, i32)>,
+    /// Inspector 待分发的字段变化草稿。
+    pub pending: Option<EditCellPending>,
     /// 绑定的图 ID；变图即清空选中格(与 [`SelectionState::last_map_id`]
     /// 一致语义,统一通过 [`EditCellState::on_map_change`] 处理)。
     pub last_map_id: Option<wv_core::Id>,
 }
 
 impl EditCellState {
-    /// 清空 hover + selected；**不会**清 `last_map_id`（那是别处碰）。
+    /// 清空 tool_active + hover + selected + pending；
+    /// **不会**清 `last_map_id`（那是别处碰）。
     pub fn clear(&mut self) {
+        self.tool_active = false;
         self.hover = None;
         self.selected = None;
+        self.pending = None;
     }
 
     /// 切换图时调用——如果新图 ≠ 上次记录的图,清空所有格相关字段
