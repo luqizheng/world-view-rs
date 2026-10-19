@@ -688,6 +688,24 @@ pub fn format_time_ago(at: std::time::Instant, now: std::time::Instant) -> Strin
 
 pub const ICON_PEN: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/pen.svg");
+/// 抓手（平移）工具 —— Lucide `hand`（地图工具条 H）。
+pub const ICON_HAND: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/hand.svg");
+/// 撤销 —— Lucide `undo-2`（地图工具条）。
+pub const ICON_UNDO: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/undo-2.svg");
+/// 重做 —— Lucide `redo-2`（地图工具条）。
+pub const ICON_REDO: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/redo-2.svg");
+/// 吸附开关 —— Lucide `magnet`（地图工具条）。
+pub const ICON_MAGNET: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/magnet.svg");
+/// 工具条切换为纵向 —— Lucide `move-vertical`。
+pub const ICON_MOVE_VERTICAL: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/move-vertical.svg");
+/// 工具条切换为横向 —— Lucide `move-horizontal`。
+pub const ICON_MOVE_HORIZONTAL: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/move-horizontal.svg");
 pub const ICON_RULER: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/ruler.svg");
 pub const ICON_SQUARE: egui::ImageSource<'static> =

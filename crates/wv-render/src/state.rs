@@ -208,6 +208,13 @@ pub struct ViewState {
     /// 地图工具条（`map_controls` 瓷砖），它本来就是「看图方式」而非「笔刷参数」，
     /// 与 `labels_visible` 等同族。
     pub grid_lines: bool,
+    /// 抓手工具（手形 H）：开启后**左键拖拽**平移地图。
+    ///
+    /// 会话态、不写盘：与 [`MeasureMode`] 同口径（每次重启从关闭起）。
+    /// 归属视图态而不是 `BrushState`——它改的是相机，不是笔刷参数；由
+    /// `map_controls` 与 `CommandId::SelectMapTool` 互斥地写入（开抓手 =
+    /// 关选区 / 测量 / 笔刷 / 街道），`camera::camera_pan` 只读它。
+    pub pan_tool: bool,
     /// 鼠标在地图上的世界坐标（顶栏坐标显示用）。
     pub cursor_world: Option<Vec2>,
     /// 主窗口逻辑尺寸——分级缩放区间（`zoom_level`）算 `fit` 需要它。
@@ -236,6 +243,7 @@ impl Default for ViewState {
             buildings_visible: true,
             factions_visible: true,
             grid_lines: false,
+            pan_tool: false,
             cursor_world: None,
             window_size: Vec2::new(1280.0, 800.0),
             current_map: "world_main".into(),

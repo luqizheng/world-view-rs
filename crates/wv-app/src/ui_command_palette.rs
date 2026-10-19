@@ -149,6 +149,30 @@ pub enum CommandId {
     /// 打开「生成大陆」属性面板（2026-10-17 大陆生成 UI plan Task 5）。
     /// 面板本身只收参数；生成走 `GenerateContinentCommand`（撤销恢复圈见 stash）。
     GenerateContinent,
+    /// 地图工具条单选工具（2026-10-19 Figma `3:21848`）。
+    ///
+    /// **唯一入口**：工具条瓷砖与 V/H/B/E/L/M/P 快捷键都排这一条，由分发器
+    /// 统一做互斥（开一个工具 = 关掉其它工具），避免两套逻辑漂移。
+    SelectMapTool(MapToolId),
+}
+
+/// 地图工具条的工具标识（[`CommandId::SelectMapTool`] 的载荷）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MapToolId {
+    /// 选择（圈选意图包络）。
+    Select,
+    /// 抓手：左键拖拽平移。
+    Pan,
+    /// 笔刷：开关地形涂抹。
+    Brush,
+    /// 折线测量。
+    MeasureLine,
+    /// 矩形测量。
+    MeasureRect,
+    /// 测量橡皮。
+    MeasureEraser,
+    /// 打开「生成大陆」面板（不是互斥工具，只开门）。
+    Continent,
 }
 
 /// 一条命令：注册表的条目。

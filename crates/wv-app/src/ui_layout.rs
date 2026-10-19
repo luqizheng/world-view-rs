@@ -78,6 +78,19 @@ pub struct LayoutFile {
     /// 静默忽略，**不**阻塞启动（V1 守约）。
     #[serde(default)]
     pub language: Option<String>,
+    /// 地图工具条朝向（2026-10-19：`vertical` / `horizontal`）。
+    ///
+    /// 缺省 `None` = 默认纵向；不可识别字符串由
+    /// [`crate::ui::map_controls::MapDockOrientation::from_key`] 返回 `None`
+    /// 静默回退（V1 守约）。
+    #[serde(default)]
+    pub map_dock: Option<String>,
+    /// 地图工具条吸附开关（magnet，2026-10-19）。
+    ///
+    /// 缺省 `None` = 默认开启（与 Figma `Snapping enabled` 及划分势力
+    /// 默认「贴地」一致）。
+    #[serde(default)]
+    pub map_snap: Option<bool>,
 }
 
 /// 布局文件路径：工程目录下的 `ui-layout.yaml`（P2：目录即工程）。
@@ -317,5 +330,30 @@ mod tests {
         assert_eq!(f.theme.as_deref(), Some("dark"));
         assert_eq!(f.density.as_deref(), Some("cozy"));
         assert_eq!(f.language, None);
+    }
+
+    // ── 地图工具条偏好（2026-10-19 Figma 3:21848） ──────────────────
+
+    #[test]
+    fn map_dock_preferences_round_trip_through_yaml() {
+        let f = LayoutFile {
+            map_dock: Some("horizontal".into()),
+            map_snap: Some(false),
+            ..Default::default()
+        };
+        let text = serde_yaml::to_string(&f).expect("序列化应成功");
+        assert!(text.contains("map_dock: horizontal"), "yaml 应有 map_dock");
+        assert!(text.contains("map_snap: false"), "yaml 应有 map_snap");
+        let back: LayoutFile = serde_yaml::from_str(&text).expect("反序列化应成功");
+        assert_eq!(back.map_dock.as_deref(), Some("horizontal"));
+        assert_eq!(back.map_snap, Some(false));
+    }
+
+    #[test]
+    fn missing_map_dock_fields_load_as_none() {
+        // 旧工程 yaml 没有这两个字段 → None（调用方保留默认：纵向 + 吸附开）。
+        let f: LayoutFile = serde_yaml::from_str("panels: {}\n").expect("缺字段应被兜底");
+        assert_eq!(f.map_dock, None);
+        assert_eq!(f.map_snap, None);
     }
 }

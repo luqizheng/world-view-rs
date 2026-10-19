@@ -55,13 +55,15 @@ fn intent_count_for(level: wv_core::map::MapLevel) -> usize {
 ///
 /// **为什么打包**：`intent_menu` 的参数已顶到 Bevy 的 16 元组上限
 /// （2026-10-17 对话框拆分时的同一条经验）；每加一个对话框就超限。
-/// 打包后 4 个资源只占 1 个参数槽。
+/// 打包后资源只占 1 个参数槽。2026-10-19：地图工具条偏好（吸附开关）
+/// 也搭这一层——划分势力的默认边界模式由它决定。
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct IntentMenuDialogs<'w> {
     pub continent: ResMut<'w, crate::ui::ContinentDialog>,
     pub city: ResMut<'w, CityIntentDialog>,
     pub feature: ResMut<'w, crate::ui::FeaturePlaceDialog>,
     pub divide: ResMut<'w, crate::ui::FactionDivisionDialog>,
+    pub dock: Res<'w, crate::ui::map_controls::MapDockState>,
 }
 
 /// 划分势力按钮的可用性：当前图有自有地形栅格（与地形意图同门）。
@@ -252,6 +254,7 @@ pub fn intent_menu(
                                         host,
                                         grid.cell_size,
                                         playback.current_day,
+                                        dialogs.dock.snapping,
                                     );
                                 }
                             }

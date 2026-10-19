@@ -232,7 +232,7 @@ pub fn camera_zoom(
 }
 
 /// 平移：右键 / 中键拖拽（零惯性，当帧跟随）。
-/// 左键拖拽平移地图（右键/中键始终可平移；画笔或街道模式开启时左键让渡）。
+/// 平移：右键 / 中键拖拽（零惯性，当帧跟随）；抓手工具（H）开启时左键也可拖拽。
 #[allow(clippy::too_many_arguments)]
 pub fn camera_pan(
     buttons: Res<ButtonInput<MouseButton>>,
@@ -248,9 +248,12 @@ pub fn camera_pan(
     if ui.wants_pointer {
         return;
     }
-    // 启用笔刷 / 街道 / 测量时，左键让渡给对应工具（与笔刷同一条手势让渡规则）。
-    let any_tool_active = brush.enabled || streets.enabled || measure.mode.is_active();
-    if !pan_button_pressed(&buttons, any_tool_active) {
+    // 左键只在抓手工具独占时平移：笔刷 / 街道 / 测量任一开着就先让渡给它们
+    // （互斥由 `CommandId::SelectMapTool` 保证，这里再兜一层——工具状态若被
+    // 其它路径写脏，也不会出现「一边画一边拖地图」）。
+    let left_for_pan =
+        view.pan_tool && !(brush.enabled || streets.enabled || measure.mode.is_active());
+    if !pan_button_pressed(&buttons, left_for_pan) {
         return;
     }
     let Ok(window) = windows.single() else {
@@ -279,13 +282,15 @@ pub fn camera_pan(
 
 /// 当前按下的按钮是否应该平移地图。
 ///
-/// 平移按键口径（2026-10-14 用户裁定：**右键 / 中键**承担平移，左键让给
-/// 测量工具——保证「左键点落点 = 起笔/收笔/橡皮」不与地图拖动冲突）。
+/// 平移按键口径（2026-10-14 用户裁定 + 2026-10-19 抓手工具）：
 ///
 /// - **右键 / 中键**：始终保留给平移，与工具状态无关。
-/// - **左键**：**任何情况下都不平移**——空操作，让工具（笔刷 / 街道 / 测量）自取。
-fn pan_button_pressed(buttons: &ButtonInput<MouseButton>, _any_tool_active: bool) -> bool {
-    buttons.pressed(MouseButton::Right) || buttons.pressed(MouseButton::Middle)
+/// - **左键**：仅在抓手工具（手形 H）开启、且没有笔刷 / 街道 / 测量占用时平移。
+///   其余情况左键让给工具（「左键点落点 = 起笔/收笔/橡皮」）。
+fn pan_button_pressed(buttons: &ButtonInput<MouseButton>, left_for_pan: bool) -> bool {
+    buttons.pressed(MouseButton::Right)
+        || buttons.pressed(MouseButton::Middle)
+        || (left_for_pan && buttons.pressed(MouseButton::Left))
 }
 
 /// 屏幕坐标 → 世界坐标（基线 §2.15 变换链，唯一实现）。
@@ -478,18 +483,18 @@ mod tests {
     use wv_core::id::Id;
     use wv_core::map::{IconShape, IconSpec, MapLevel, MapNode};
 
-    /// 2026-10-14 用户裁定：右键 / 中键承担平移，左键让给工具。
-    /// - 工具全部关闭时：左键**不**再平移（空操作，留给未来测量 / 笔刷外的工具）。
-    /// - 工具关闭时：右键 / 中键始终平移。
-    /// - 工具开启时：左键让给工具，平移继续走右键 / 中键。
+    /// 2026-10-14 用户裁定 + 2026-10-19 抓手工具：
+    /// - 默认（无抓手）：左键**不**平移，让给笔刷 / 街道 / 测量。
+    /// - 右键 / 中键：始终平移。
+    /// - 抓手工具独占时：左键也平移。
     #[test]
-    fn pan_keys_are_right_and_middle_by_default() {
+    fn pan_keys_are_right_and_middle_unless_hand_tool_is_active() {
         let mut buttons = ButtonInput::<MouseButton>::default();
-        // 无工具：左键 → 不平移（释放给测量等工具）。
+        // 无抓手：左键 → 不平移（释放给其它工具）。
         buttons.press(MouseButton::Left);
         assert!(
             !pan_button_pressed(&buttons, false),
-            "无工具时左键不应平移（2026-10-14 用户裁定）"
+            "无抓手时左键不应平移（2026-10-14 用户裁定）"
         );
         // 右键 / 中键始终平移。
         let mut buttons = ButtonInput::<MouseButton>::default();
@@ -498,12 +503,12 @@ mod tests {
         buttons.release(MouseButton::Right);
         buttons.press(MouseButton::Middle);
         assert!(pan_button_pressed(&buttons, false));
-        // 工具开启时左键让给工具（不平移）；右键仍平移。
+        // 抓手工具独占时：左键也平移。
         let mut buttons = ButtonInput::<MouseButton>::default();
         buttons.press(MouseButton::Left);
         assert!(
-            !pan_button_pressed(&buttons, true),
-            "工具开启时左键让给工具"
+            pan_button_pressed(&buttons, true),
+            "抓手工具开启时左键应平移"
         );
         buttons.release(MouseButton::Left);
         buttons.press(MouseButton::Right);

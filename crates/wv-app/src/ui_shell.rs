@@ -69,6 +69,9 @@ pub fn register(app: &mut App) {
         .init_resource::<DrillState>()
         .init_resource::<RecentProjects>()
         .init_resource::<LayoutFile>()
+        // 地图工具条朝向 + 吸附（2026-10-19）：由 `ui-layout.yaml` 的
+        // `map_dock` / `map_snap` 读写；`map_controls` 与分发器共享同一份状态。
+        .init_resource::<crate::ui::map_controls::MapDockState>()
         // ADR-0018：UI 文案语言；默认 `Locale::Zh`。`load_layout_on_project_open`
         // 在切工程时回灌；`persist_layout_on_change` 在用户切换时落盘。
         .init_resource::<CurrentLocale>()
@@ -265,6 +268,27 @@ fn hotkeys(
     // F5：强制重画地形（2026-10-14 用户需求）。和 FitMap 的 F 不冲突。
     if input.key_pressed(bevy_egui::egui::Key::F5) {
         palette.pending = Some(CommandId::ForceRebuildTexture);
+    }
+
+    // ── 地图工具条字母键（2026-10-19 Figma `3:21848`） ──────────────────
+    // 与瓷砖上的字母一一对应；**只在无修饰键时生效**——Ctrl+E 是导出，
+    // 不能被测量橡皮抢走。互斥逻辑统一在 `CommandId::SelectMapTool`。
+    if !cmd && !shift {
+        use crate::ui_command_palette::MapToolId;
+        let tool = [
+            (bevy_egui::egui::Key::V, MapToolId::Select),
+            (bevy_egui::egui::Key::H, MapToolId::Pan),
+            (bevy_egui::egui::Key::B, MapToolId::Brush),
+            (bevy_egui::egui::Key::E, MapToolId::MeasureEraser),
+            (bevy_egui::egui::Key::L, MapToolId::MeasureLine),
+            (bevy_egui::egui::Key::M, MapToolId::MeasureRect),
+            (bevy_egui::egui::Key::P, MapToolId::Continent),
+        ]
+        .into_iter()
+        .find(|(key, _)| input.key_pressed(*key));
+        if let Some((_, tool)) = tool {
+            palette.pending = Some(CommandId::SelectMapTool(tool));
+        }
     }
 }
 
@@ -1117,7 +1141,7 @@ fn dispatch_project_command(
 /// `take()` 会在「谁先拿到」上产生时序耦合。菜单的写入发生在
 /// `EguiPrimaryContextPass`（晚于本 `Update`），所以菜单命令在下一帧这里被执行，
 /// 一帧延迟与快捷键「PreUpdate 写 / 本帧 Update 收」同量级，用户不可感。
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn apply_pending_commands(
     // Bevy 单个函数系统的参数上限是 16 个；汇入菜单队列、换世界接管资源后
     // 到这里共 19 个，超限报「not a valid system」。按职责折成嵌套元组——
@@ -1132,8 +1156,10 @@ fn apply_pending_commands(
         ResMut<ViewState>,
         ResMut<crate::state::PlaybackState>,
     ),
-    (mut brush, mut projection, mut drill): (
+    (mut brush, mut measure, mut streets, mut projection, mut drill): (
         ResMut<crate::state::BrushState>,
+        ResMut<crate::state::MeasureState>,
+        ResMut<wv_render::streets::StreetEditorState>,
         ResMut<WorldProjection>,
         ResMut<DrillState>,
     ),
@@ -1278,6 +1304,68 @@ fn apply_pending_commands(
             }
         }
         CommandId::ToggleGrid => view.grid_lines = !view.grid_lines,
+        // 地图工具条单选工具（2026-10-19）：**互斥的唯一实现**。
+        // 工具条瓷砖与 V/H/B/E/L/M/P 快捷键都排到这里，先关掉所有工具再开目标，
+        // 保证「左键」永远只有一个消费者（相机平移 / 选区 / 笔刷 / 测量 / 街道）。
+        CommandId::SelectMapTool(tool) => {
+            use crate::state::MeasureMode;
+            use crate::ui_command_palette::MapToolId;
+
+            // 目标工具当前是否已启用（再次点击 = 关闭）。
+            let already_on = match tool {
+                MapToolId::Select => selection.enabled,
+                MapToolId::Pan => view.pan_tool,
+                MapToolId::Brush => brush.enabled,
+                MapToolId::MeasureLine => measure.mode == MeasureMode::Line,
+                MapToolId::MeasureRect => measure.mode == MeasureMode::Rect,
+                MapToolId::MeasureEraser => measure.mode == MeasureMode::Eraser,
+                MapToolId::Continent => false,
+            };
+
+            if matches!(tool, MapToolId::Continent) {
+                // 「生成大陆」是开门动作，不是互斥工具：沿用旧语义——只开面板 +
+                // 顺手启用选择工具（圈出意图包络）。
+                continent_dialog.open = true;
+                selection.enabled = true;
+            } else {
+                // ① 先全关：互斥。切走时清掉草稿/半边选区，避免「看不见的手」。
+                let had_selection = selection.enabled;
+                let had_measure = measure.mode != MeasureMode::Off;
+                selection.enabled = false;
+                view.pan_tool = false;
+                brush.enabled = false;
+                streets.enabled = false;
+                measure.mode = MeasureMode::Off;
+                if had_selection {
+                    selection.cancel();
+                }
+                if had_measure {
+                    measure.clear_draft();
+                }
+
+                // ② 再按需打开（已启用 → 保持全关，即切换关闭）。
+                if !already_on {
+                    match tool {
+                        MapToolId::Select => selection.enabled = true,
+                        MapToolId::Pan => view.pan_tool = true,
+                        MapToolId::Brush => brush.enabled = true,
+                        MapToolId::MeasureLine => {
+                            measure.clear_draft();
+                            measure.mode = MeasureMode::Line;
+                        }
+                        MapToolId::MeasureRect => {
+                            measure.clear_draft();
+                            measure.mode = MeasureMode::Rect;
+                        }
+                        MapToolId::MeasureEraser => {
+                            measure.clear_draft();
+                            measure.mode = MeasureMode::Eraser;
+                        }
+                        MapToolId::Continent => unreachable!("Continent 已在上方分支处理"),
+                    }
+                }
+            }
+        }
         // 大陆生成属性面板（面板本身只收参数；生成在 continent_dialog_system）。
         CommandId::GenerateContinent => {
             continent_dialog.open = true;
@@ -1452,6 +1540,7 @@ fn apply_pending_commands(
 /// - `theme`（2026-10-18：界面日夜模式，`dark` / `light`）
 /// - `map_theme`（ADR-0016：日间 / 暮色）
 /// - `language`（ADR-0018：zh / en，注入 `CurrentLocale`）
+/// - `map_dock` / `map_snap`（2026-10-19：地图工具条朝向与吸附开关）
 ///
 /// 界面 theme 与地图 map_theme 是两条独立的线（D2）：前者只影响外壳与 egui
 /// 系统控件，后者只影响地图配色。不可识别值静默保留当前值（V1，不阻塞加载）。
@@ -1468,6 +1557,7 @@ fn load_layout_on_project_open(
     mut view: ResMut<ViewState>,
     mut shell_cfg: ResMut<UiShellConfig>,
     mut current_loc: ResMut<CurrentLocale>,
+    mut dock: ResMut<crate::ui::map_controls::MapDockState>,
     mut loaded_dir: Local<Option<String>>,
 ) {
     let Some(dir) = project.project_dir.clone() else {
@@ -1493,10 +1583,22 @@ fn load_layout_on_project_open(
             current_loc.0 = loc;
         }
     }
+    // 地图工具条偏好（2026-10-19）：缺字段 / 不可识别 → 保留当前值（V1）。
+    if let Some(orient) = file
+        .map_dock
+        .as_deref()
+        .and_then(crate::ui::map_controls::MapDockOrientation::from_key)
+    {
+        dock.orientation = orient;
+    }
+    if let Some(snap) = file.map_snap {
+        dock.snapping = snap;
+    }
     *layout = file;
     *loaded_dir = Some(dir);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn persist_layout_on_change(
     mut contexts: EguiContexts,
     panels: Res<PanelState>,
@@ -1505,6 +1607,7 @@ fn persist_layout_on_change(
     project: Res<WorldProjection>,
     view: Res<ViewState>,
     current_loc: Res<CurrentLocale>,
+    dock: Res<crate::ui::map_controls::MapDockState>,
 ) {
     let Some(path) = crate::ui_layout::layout_path(project.project_dir.as_deref()) else {
         return;
@@ -1518,6 +1621,8 @@ fn persist_layout_on_change(
     file.density = Some(cfg.density.key().into());
     file.map_theme = Some(view.map_palette.key().to_string());
     file.language = Some(current_loc.0.as_str().to_string());
+    file.map_dock = Some(dock.orientation.key().to_string());
+    file.map_snap = Some(dock.snapping);
 
     let mut changed = false;
     // 语言切换本身就让 layout 跟着变；与面板几何检测并入同一个 `changed` 累加器。
@@ -1525,6 +1630,8 @@ fn persist_layout_on_change(
         || file.theme != layout.theme
         || file.density != layout.density
         || file.map_theme != layout.map_theme
+        || file.map_dock != layout.map_dock
+        || file.map_snap != layout.map_snap
     {
         changed = true;
     }
@@ -1632,6 +1739,9 @@ mod tests {
         world.init_resource::<crate::ui::NewMapDialog>();
         world.init_resource::<crate::ui::NewProjectDialog>();
         world.init_resource::<crate::state::SelectionState>();
+        // 2026-10-19 地图工具条：分发器互斥工具需要测量 / 街道会话态。
+        world.init_resource::<crate::state::MeasureState>();
+        world.init_resource::<wv_render::streets::StreetEditorState>();
         world.init_resource::<crate::ui::ContinentDialog>();
         // ADR-0018：UI 文案语言；默认 `Locale::Zh`（与 GUI 启动默认值一致）。
         world.init_resource::<crate::i18n::CurrentLocale>();
@@ -1759,6 +1869,61 @@ mod tests {
         assert!(!brush.enabled, "越界不激活笔刷");
     }
 
+    /// 地图工具条互斥（2026-10-19）：开抓手 = 关笔刷 / 选区 / 测量 / 街道；
+    /// 再点一次同一工具 = 关闭。左键永远只有一个消费者。
+    #[test]
+    fn map_tool_selection_is_mutually_exclusive_and_toggles_off() {
+        use crate::ui_command_palette::MapToolId;
+        use bevy::ecs::system::RunSystemOnce;
+
+        // 先激活笔刷（与工具条 B 同语义的既有命令）。
+        let mut world = dispatcher_world(None, false, CommandId::SelectBrushTool(0));
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+        assert!(world.resource::<crate::state::BrushState>().enabled);
+
+        // 点 H：开抓手，笔刷让位。
+        world.resource_mut::<CommandPalette>().pending =
+            Some(CommandId::SelectMapTool(MapToolId::Pan));
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+        assert!(world.resource::<ViewState>().pan_tool, "H 应开启抓手工具");
+        assert!(
+            !world.resource::<crate::state::BrushState>().enabled,
+            "开抓手应关掉笔刷（互斥）"
+        );
+        assert!(
+            !world.resource::<crate::state::SelectionState>().enabled,
+            "开抓手应关掉选区"
+        );
+
+        // 再点 H：关闭抓手。
+        world.resource_mut::<CommandPalette>().pending =
+            Some(CommandId::SelectMapTool(MapToolId::Pan));
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+        assert!(
+            !world.resource::<ViewState>().pan_tool,
+            "再次点击同一工具应关闭"
+        );
+
+        // 点 L：折线测量，且选区仍关闭。
+        world.resource_mut::<CommandPalette>().pending =
+            Some(CommandId::SelectMapTool(MapToolId::MeasureLine));
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+        assert_eq!(
+            world.resource::<crate::state::MeasureState>().mode,
+            crate::state::MeasureMode::Line,
+            "L 应进入折线测量"
+        );
+        assert!(!world.resource::<crate::state::SelectionState>().enabled);
+    }
+
     #[test]
     fn toggle_grid_command_flips_the_view_flag() {
         use bevy::ecs::system::RunSystemOnce;
@@ -1806,6 +1971,9 @@ mod tests {
         world.init_resource::<crate::ui::NewMapDialog>();
         world.init_resource::<crate::ui::NewProjectDialog>();
         world.init_resource::<crate::state::SelectionState>();
+        // 2026-10-19 地图工具条：分发器互斥工具需要测量 / 街道会话态。
+        world.init_resource::<crate::state::MeasureState>();
+        world.init_resource::<wv_render::streets::StreetEditorState>();
         world.init_resource::<crate::ui::ContinentDialog>();
         // ADR-0018：UI 文案语言；默认 `Locale::Zh`（与 GUI 启动默认值一致）。
         world.init_resource::<crate::i18n::CurrentLocale>();

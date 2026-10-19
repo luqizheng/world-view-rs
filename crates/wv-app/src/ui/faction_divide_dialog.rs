@@ -62,6 +62,9 @@ pub struct FactionDivisionDialog {
 
 impl FactionDivisionDialog {
     /// 用选区环 + 当前图 id + 解析好的宿主打开（意图菜单点击时调用）。
+    ///
+    /// `snap` 来自地图工具条的 magnet（[`crate::ui::map_controls::MapDockState`]）：
+    /// 开启 = 默认「贴地」，关闭 = 默认保留栅格平滑边框。作者仍可在对话框里改。
     pub fn open_with(
         &mut self,
         map: wv_core::Id,
@@ -69,12 +72,17 @@ impl FactionDivisionDialog {
         host: Option<wv_core::Id>,
         cell_size: f32,
         from: i64,
+        snap: bool,
     ) {
         self.open = true;
         self.name = "新势力".into();
         self.map = Some(map);
         self.ring = ring;
-        self.mode = DivisionMode::Snap;
+        self.mode = if snap {
+            DivisionMode::Snap
+        } else {
+            DivisionMode::Straight
+        };
         self.host = host;
         self.cell_size = cell_size;
         self.from = from;
@@ -446,14 +454,30 @@ mod tests {
             None,
             8.0,
             0,
+            true,
         );
         assert!(d.open);
         assert_eq!(d.name, "新势力", "默认名应预填");
-        assert_eq!(d.mode, DivisionMode::Snap, "默认应为贴地");
+        assert_eq!(d.mode, DivisionMode::Snap, "吸附开启时应默认贴地");
         d.close();
         assert!(!d.open);
         assert!(d.name.is_empty());
         assert!(d.ring.is_empty());
+    }
+
+    /// 吸附关闭（magnet off）时，划分对话框默认保留栅格平滑边框。
+    #[test]
+    fn dialog_defaults_to_straight_when_snapping_is_off() {
+        let mut d = FactionDivisionDialog::default();
+        d.open_with(
+            wv_core::Id::new_unchecked("map_world"),
+            vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)],
+            None,
+            8.0,
+            0,
+            false,
+        );
+        assert_eq!(d.mode, DivisionMode::Straight, "吸附关闭时应默认直线");
     }
 
     #[test]
