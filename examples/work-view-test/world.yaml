@@ -22,5 +22,5 @@ timeline_range:
   to: 1000
 template:
   kind: cold_north
-  seed: 1792406584655425100
-  rivers_seed: 9721180271566344793
+  seed: 1792410316581613900
+  rivers_seed: 9721180422303239513

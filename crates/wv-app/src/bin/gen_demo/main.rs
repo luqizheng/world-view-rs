@@ -48,10 +48,16 @@ const LON: (f64, f64) = (-12.0, 37.0);
 const LAT: (f64, f64) = (30.0, 48.0);
 
 fn main() {
-    let root = std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEMO_DIR));
+    let mut args = std::env::args().peekable();
+    let _bin = args.next();
+    let mut root = PathBuf::from(DEMO_DIR);
+    let mut dump: Option<PathBuf> = None;
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--dump-png" => dump = args.next().map(PathBuf::from),
+            _ => root = PathBuf::from(a),
+        }
+    }
     println!("工程目录：{}", root.display());
     let data_dir = root.join(DATA_SUB);
     let map_dir = root.join("maps").join(MAP_ID);
@@ -61,6 +67,11 @@ fn main() {
     let seed = seed_now();
     let land = data.cells.iter().any(|c| c.surface == 1);
     let kind = if land { "cold_north" } else { "ocean" };
+
+    if let Some(png_path) = &dump {
+        dump_debug_png(&data, png_path);
+        println!("[debug] biome map -> {}", png_path.display());
+    }
 
     let raster = write_terrain(&root, MAP_ID, &data).expect("write terrain.bin");
     println!(
@@ -179,8 +190,8 @@ fn rasterize(coast: &[F], rivers: Option<&[F]>, seas: Option<&[F]>) -> TerrainDa
     };
 
     let coast_rings = rings(coast);
-    let sea_rings = seas.map(rings).unwrap_or_default();
-    let river_lines = rivers.map(lines).unwrap_or_default();
+    let sea_rings = rings(seas.as_deref().unwrap_or(&[]));
+    let river_lines = lines(rivers.unwrap_or(&[]));
 
     let n = (WIDTH * HEIGHT) as usize;
     let mut surface = vec![0u8; n]; // 水
@@ -194,29 +205,62 @@ fn rasterize(coast: &[F], rivers: Option<&[F]>, seas: Option<&[F]>) -> TerrainDa
         geo::fill_polygon(&mut surface, 1, ring, WIDTH as i32, HEIGHT as i32);
     }
 
+    // 真实山系脊线（经纬度折线）：阿尔卑斯 / 阿平宁 / 迪纳拉 / 阿特拉斯 /
+    // 托罗斯—安纳托利亚 / 高加索。高度主场从「距海岸」改为「距山脊」。
+    const RIDGES: &[&[[f64; 2]]] = &[
+        // 阿尔卑斯
+        &[[-6.0, 44.0], [0.0, 45.5], [7.0, 46.5], [13.0, 47.0], [16.0, 46.5]],
+        // 阿平宁
+        &[[9.5, 44.2], [12.5, 43.0], [14.5, 41.8], [16.0, 39.5]],
+        // 迪纳拉—品都斯
+        &[[14.0, 45.5], [17.0, 43.5], [19.5, 42.0], [21.5, 40.5]],
+        // 阿特拉斯
+        &[[-8.0, 31.0], [-4.0, 32.5], [0.0, 34.0], [5.0, 35.0], [9.0, 35.5]],
+        // 托罗斯—安纳托利亚—本廷
+        &[[28.0, 37.0], [32.0, 37.5], [36.0, 38.5], [40.0, 40.0], [44.0, 41.0]],
+        // 高加索
+        &[[39.5, 43.5], [43.0, 42.8], [47.0, 42.0]],
+        // 伊比利亚：坎塔布连 + 内华达
+        &[[-6.0, 43.0], [-3.0, 43.0], [-1.0, 42.5]],
+        &[[-3.5, 37.2], [-1.0, 37.3]],
+    ];
+
+    // 脊线换算到格坐标，并预采样点集（算距离用）。
+    let to_x = |lon: f64| ((lon - LON.0) / (LON.1 - LON.0) * WIDTH as f64).floor() as i32;
+    let to_y = |lat: f64| ((LAT.1 - lat) / (LAT.1 - LAT.0) * HEIGHT as f64).floor() as i32;
+    let ridge_pts: Vec<[i32; 2]> = RIDGES
+        .iter()
+        .flat_map(|line| {
+            line.windows(2).flat_map(move |w| {
+                // 每段线性插值采样（约每 2 格一个点，够距离场用）
+                let (ax, ay) = (to_x(w[0][0]), to_y(w[0][1]));
+                let (bx, by) = (to_x(w[1][0]), to_y(w[1][1]));
+                let steps = ((bx - ax).abs().max((by - ay).abs()).max(1)) as usize;
+                (0..=steps)
+                    .map(move |s| {
+                        let t = s as f32 / steps as f32;
+                        [
+                            (ax as f32 * (1.0 - t) + bx as f32 * t).round() as i32,
+                            (ay as f32 * (1.0 - t) + by as f32 * t).round() as i32,
+                        ]
+                    })
+            })
+        })
+        .collect();
+
+    // Perlin detail（wv-terrain 自带，零依赖）
+    let perlin = wv_terrain::generate::Perlin::new(0xC0FFEE);
+    let fbm = |x: f64, y: f64| -> f64 {
+        let v = perlin.fbm(x, y, 4, 2.0, 0.5);
+        ((v + 1.0) * 0.5).clamp(0.0, 1.0)
+    };
+
     for y in 0..HEIGHT as i32 {
         for x in 0..WIDTH as i32 {
             let idx = (y as u32 * WIDTH + x as u32) as usize;
-            let lat = y as f32 / HEIGHT as f32; // 0=北
-            if surface[idx] == 1 {
-                let d = geo::min_dist_to_rings(x, y, &coast_rings);
-                height[idx] = match d {
-                    0..=1 => 30,
-                    2..=5 => 150,
-                    6..=13 => 700,
-                    14..=22 => 1500,
-                    _ => 2300,
-                };
-                biome[idx] = match (lat, height[idx]) {
-                    (_, h) if h >= 1250 => 13, // MOUNTAINS
-                    (_, h) if h >= 250 => 12,  // HILLS
-                    (l, _) if l < 0.18 => 9,   // SNOWFIELD
-                    (l, _) if l < 0.28 => 1,   // FOREST
-                    (l, _) if l > 0.75 => 5,   // DESERT
-                    (l, _) if l > 0.55 => 3,   // GRASSLAND
-                    _ => 2,                    // PLAINS
-                };
-            } else {
+            let fy = y as f64 / HEIGHT as f64; // 0=北
+            if surface[idx] != 1 {
+                // 海：距海岸浅→深
                 let d = geo::min_dist_to_rings(x, y, &coast_rings);
                 height[idx] = match d {
                     0..=1 => -10,
@@ -224,7 +268,36 @@ fn rasterize(coast: &[F], rivers: Option<&[F]>, seas: Option<&[F]>) -> TerrainDa
                     7..=20 => -400,
                     _ => -1500,
                 };
+                continue;
             }
+            // 陆地：
+            let d_coast = geo::min_dist_to_rings(x, y, &coast_rings);
+            let d_ridge = geo::min_dist_to_rings(x, y, std::slice::from_ref(&ridge_pts));
+            // 基础 = 沿海平原；高度主场 = 山脊高斯（宽 ~90 格）+ perlin 起伏
+            let ridge_lift = (-(d_ridge as f64) / 22.0).exp() * 2400.0;
+            let detail = fbm(x as f64 * 0.03, y as f64 * 0.03) * 260.0 - 60.0;
+            let h = if d_coast <= 1 {
+                20.0
+            } else {
+                (60.0 + ridge_lift + detail + (d_coast as f64 * 4.0)).clamp(10.0, 3400.0)
+            };
+            height[idx] = h as i16;
+            // 群系：纬度气候为主，山只认高度
+            biome[idx] = if h >= 2250.0 {
+                9 // SNOWFIELD（高山雪线：阿尔卑斯/高加索峰顶）
+            } else if h >= 1150.0 {
+                13 // MOUNTAINS
+            } else if h >= 550.0 {
+                12 // HILLS
+            } else if fy < 0.30 {
+                1 // FOREST（中欧森林）
+            } else if fy < 0.42 {
+                3 // GRASSLAND
+            } else if fy < 0.72 {
+                2 // PLAINS（地中海硬叶/农田）
+            } else {
+                5 // DESERT（撒哈拉）
+            };
         }
     }
 
@@ -375,4 +448,64 @@ fn patch_template(root: &Path, kind: &str, seed: u64) -> Result<(), String> {
         "template:\n  kind: {kind}\n  seed: {seed}\n  rivers_seed: {rivers_seed}\n"
     ));
     std::fs::write(&p, out).map_err(|e| e.to_string())
+}
+
+/// 调试输出：biome 伪彩 BMP（无需图像库，手写 BMP 头）。
+fn dump_debug_png(data: &TerrainData, path: &Path) {
+    const COLORS: [[u8; 3]; 21] = [
+        [40, 40, 40],   // 0 NONE 深灰
+        [30, 120, 60],  // 1 FOREST 绿
+        [140, 200, 90], // 2 PLAINS 浅绿
+        [170, 210, 100],// 3 GRASSLAND 黄绿
+        [190, 175, 130],// 4 GOBI 灰黄
+        [235, 200, 120],// 5 DESERT 沙
+        [90, 130, 110], // 6 SWAMP
+        [110, 150, 120],// 7 WETLAND
+        [180, 190, 200],// 8 TUNDRA
+        [245, 248, 249],// 9 SNOW 白
+        [40, 150, 60],  // 10 JUNGLE
+        [50, 170, 70],  // 11 RAINFOREST
+        [180, 160, 90], // 12 HILLS
+        [130, 110, 90], // 13 MOUNTAINS 棕
+        [60, 110, 160], // 14 OCEAN 蓝
+        [90, 160, 200], // 15 LAKE
+        [40, 90, 200],  // 16 RIVER 深蓝
+        [220, 190, 90], // 17 OASIS
+        [200, 190, 80], // 18 SAVANNA
+        [230, 230, 220],// 19 SALT_FLAT 近白
+        [90, 70, 50],   // 20 ROAD
+    ];
+    let (w, h) = (data.width as usize, data.height as usize);
+    let row_pad = (w * 3) % 4;
+    let row_size = w * 3 + row_pad;
+    let img_size = (row_size * h + 54) as u32;
+    let mut out = Vec::with_capacity(54 + row_size * h);
+    out.extend_from_slice(b"BM");
+    out.extend_from_slice(&img_size.to_le_bytes());
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&54u32.to_le_bytes());
+    out.extend_from_slice(&40u32.to_le_bytes());
+    out.extend_from_slice(&(w as u32).to_le_bytes());
+    out.extend_from_slice(&(h as u32).to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&24u16.to_le_bytes());
+    out.extend_from_slice(&[0; 24]);
+    // BMP 自底向上：从最后一行写起
+    for y in (0..h).rev() {
+        for x in 0..w {
+            let c = data.cells[y * w + x];
+            let col = COLORS.get(c.biome as usize).copied().unwrap_or([255, 0, 255]);
+            // 按高度调一点明度让分带可见
+            let lum = if c.height >= 1250 { 0.8 } else if c.height < 0 { 0.85 } else { 1.0 };
+            out.extend_from_slice(&[
+                (col[2] as f32 * lum) as u8,
+                (col[1] as f32 * lum) as u8,
+                (col[0] as f32 * lum) as u8,
+            ]);
+        }
+        for _ in 0..row_pad {
+            out.push(0);
+        }
+    }
+    std::fs::write(path, out).expect("write debug bmp");
 }

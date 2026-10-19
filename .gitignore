@@ -44,3 +44,5 @@ examples/work-view-test/data/ne/*.dbf
 examples/work-view-test/data/ne/*.prj
 examples/work-view-test/data/ne/*.shx
 examples/work-view-test/data/ne/*.cpg
+examples/work-view-test/data/ne/ne_*.geojson
+examples/work-view-test/data/ne/listing.json
