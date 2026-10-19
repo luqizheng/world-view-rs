@@ -1,9 +1,11 @@
 //! 地图三级钻取的**导航层**（v0.2 §B）：标记布局、命中测试、相机过渡。
 //!
 //! ## 职责
-//! - 显示当前图的下级 `MapNode`，按 `MapNode.icons` 在屏幕上落点，可点击下钻。
-//! - 命中测试：点击 marker 时经 `wv-edit` 的 `DrillToNodeCommand` 改 `DrillState`，
-//!   然后交给 [`crate::zoom_level::clamp_to_level`] 选级区间并过渡相机。
+//! - 显示当前图的下级 `MapNode`，按 `MapNode.icons` 在屏幕上落点，**双击下钻**。
+//! - 命中测试：双击 marker 时经 `wv-edit` 的 `DrillToNodeCommand` 改 `DrillState`，
+//!   然后交给 [`crate::zoom_level::fly_in_scale`] 定飞入终点并过渡相机。
+//! - 消费「撞外界继续往外滚」的请求回父级（[`crate::zoom_level::ZoomCrossRequest`]）；
+//!   **进入方向没有滚轮路径**（ADR-0038）——双击图标是进入子图的唯一手势。
 //!
 //! ## 边界（不做什么）
 //! - **不维护钻取状态**——那是 [`crate::state::DrillState`]；本模块只读写它。
@@ -109,12 +111,15 @@ pub fn register(app: &mut App) {
         );
 }
 
-/// 消费滚轮换级请求：撞到当前级的边界后继续同向滚动 = 换到相邻级（ADR-0009 §2 决策 ⑤/⑦）。
+/// 消费滚轮换级请求：撞到当前级**外界**后继续往外滚动 = 回父级（ADR-0009 §2⑤）。
+///
+/// **往里没有滚轮路径**（ADR-0038）：进入子图的唯一手势是双击钻入图标，
+/// 走下面的双击输入路径；撞内界继续往里滚只会被级区间夹住停住。
 ///
 /// ## 为什么换级**不改缩放**
 ///
-/// 子图 `extent` 比父图小，故 `child.min < parent.min`——滚到父图内界时那个 scale
-/// 早已落在子图区间内（[`crate::zoom_level`] 的模块文档有推导）。所以换级只需换
+/// 子图 `extent` 比父图小，故 `child.max < parent.max`——滚到子图外界时那个 scale
+/// 早已落在父图区间内（[`crate::zoom_level`] 的模块文档有推导）。所以换级只需换
 /// 「现在显示哪张图的哪一块」，相机一个像素都不用动，手感才是连续的。
 ///
 /// ## 为什么吃掉深度变化标记
@@ -137,8 +142,6 @@ fn apply_zoom_cross(
     let moved = match request {
         // 继续往外：回到父级。根图再往外没有父级，`up()` 自己会拒绝。
         crate::zoom_level::ZoomCross::Out => drill.up(),
-        // 继续往里：进到光标所在的那个子图（`enter` 只接受真子图，越级会被拒）。
-        crate::zoom_level::ZoomCross::Into(child) => drill.enter(&projection.world, &child),
     };
     if !moved {
         return;
@@ -156,8 +159,8 @@ fn apply_zoom_cross(
         window_size,
         Vec2::splat(crate::zoom_level::FALLBACK_MAP_SIZE),
     );
-    // 新级区间比旧级更宽（往外）或更深（往里），夹一下以防数据异常把 scale
-    // 留在新级之外；正常情况下 `clamp` 是恒等变换。
+    // 新级区间（父图）比子图更宽，夹一下以防数据异常把 scale 留在新级之外；
+    // 正常情况下 `clamp` 是恒等变换。
     view.scale = zoom.clamp(view.scale);
     crate::camera::apply_view_to_camera(view.camera_center, view.scale, &mut camera);
 }
@@ -2342,36 +2345,6 @@ mod tests {
         );
     }
 
-    /// 滚轮往里换级：进入到请求指定的子图，缩放同样不动。
-    #[test]
-    fn zoom_cross_into_enters_the_requested_child() {
-        let mut app = zoom_cross_app(two_level_world());
-        {
-            let world = app.world().resource::<WorldProjection>().world.clone();
-            app.world_mut()
-                .resource_mut::<DrillState>()
-                .ensure_root(&world);
-        }
-        app.world_mut().resource_mut::<ViewState>().scale = 1.0;
-        app.world_mut()
-            .resource_mut::<crate::zoom_level::ZoomCrossRequest>()
-            .pending = Some(crate::zoom_level::ZoomCross::Into(Id::new_unchecked(
-            "city_a",
-        )));
-
-        app.update();
-
-        let drill = app.world().resource::<DrillState>();
-        assert_eq!(drill.depth(), 1, "应进入城市级");
-        assert_eq!(drill.current(), Some(&Id::new_unchecked("city_a")));
-        let view = app.world().resource::<ViewState>();
-        assert!(
-            (view.scale - 1.0).abs() < 1e-6,
-            "换级不得改缩放，got {}",
-            view.scale
-        );
-    }
-
     /// 根级再往外没有父级：请求被吃掉、状态不变，不留悬挂请求
     /// （否则下一次往外滚动会莫名其妙地生效）。
     #[test]
@@ -2400,15 +2373,16 @@ mod tests {
     }
 
     /// **端到端**：真滚一次滚轮（`camera_zoom` 生产请求 + `apply_zoom_cross` 消费）
-    /// → 真的从世界级进到城市级。
+    /// → 撞内界继续往里滚**不**进城（ADR-0038），缩放停在内界、层级不变。
     ///
     /// 为什么必须在这里钉住：合成鼠标输入进不了 winit（实测 `SendInput` 双击
-    /// 无法触发钻取），所以「滚轮换级」这条核心行为在 GUI 里无法自动化验证，
+    /// 无法触发钻取），所以「滚轮不换级」这条核心行为在 GUI 里无法自动化验证，
     /// 只能让生产端与消费端在同一 App 里真跑一遍。
     #[test]
-    fn a_real_wheel_event_past_the_inner_limit_enters_the_child_level() {
+    fn a_real_wheel_event_past_the_inner_limit_stays_put() {
         let mut world = two_level_world();
-        // 世界图上给城市一个入口图标，摆在正中 (2048,2048)。
+        // 世界图上给城市一个入口图标，摆在正中 (2048,2048)——即便指针压着它，
+        // 往里滚也不得进城（ADR-0038 废除「悬停图标 + 缩放越界」入口）。
         if let Some(node) = world
             .maps
             .iter_mut()
@@ -2470,9 +2444,15 @@ mod tests {
         let drill = app.world().resource::<DrillState>();
         assert_eq!(
             drill.current(),
-            Some(&Id::new_unchecked("city_a")),
-            "内界上继续往里滚，应真的进入城市级"
+            Some(&Id::new_unchecked("world_main")),
+            "内界上继续往里滚不得进城（ADR-0038）"
         );
-        assert_eq!(drill.depth(), 1);
+        assert_eq!(drill.depth(), 0);
+        let view = app.world().resource::<ViewState>();
+        assert!(
+            (view.scale - inner).abs() <= inner * 1e-3,
+            "缩放必须停在内界，got {} (inner = {inner})",
+            view.scale
+        );
     }
 }

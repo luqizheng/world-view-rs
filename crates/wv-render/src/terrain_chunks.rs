@@ -748,10 +748,11 @@ mod tests {
     }
 
     /// texel 被放大或 1:1 时恒用 mip0（最细分辨率）——近看的锐利不许被 mip 吃掉。
-    /// 512 格图（res 8 → texel 1 世界单位）：内界 0.064 到 1:1000 全段 mip0。
+    /// 512 格图（res 8 → texel 1 世界单位）：内界 0.16（ADR-0038 的 32× 上限）到
+    /// 1:1000 全段 mip0。
     #[test]
     fn select_mip_stays_finest_while_texel_is_magnified() {
-        assert_eq!(select_mip(0.064, 1.0), 0, "深度放大应 mip0");
+        assert_eq!(select_mip(0.16, 1.0), 0, "内界深度放大应 mip0");
         assert_eq!(select_mip(0.5, 1.0), 0, "2px/texel 放大应 mip0");
         assert_eq!(select_mip(1.0, 1.0), 0, "1:1 恰好 1px/texel 应 mip0");
     }

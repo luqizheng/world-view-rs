@@ -134,9 +134,12 @@ pub fn poll_egui_wants_input(mut contexts: EguiContexts, mut flag: ResMut<Pointe
 /// 滚轮缩放：锚点 = 鼠标指针（零惯性）。
 ///
 /// 缩放区间按当前级实时算（`crate::zoom_level`），故需要 `projection`（读 `extent`）
-/// 与 `drill`（读「现在在哪一级」）。撞到级的边界后**继续同向滚动**表示「换级」，
+/// 与 `drill`（读「现在在哪一级」）。撞到级**外界**后继续往外滚动表示「回父级」，
 /// 本函数只把意图写进 [`crate::zoom_level::ZoomCrossRequest`]，真正的换级由
 /// [`crate::drill::apply_zoom_cross`] 执行（地图路径的写入口只有 `DrillState`）。
+///
+/// **撞内界继续往里滚不再进入子图**（ADR-0038）：缩放被夹在内界停住，
+/// 进入子图的唯一手势是双击钻入图标（`drill.rs` 的双击路径）。
 ///
 /// Bevy 系统的参数即「依赖声明」，宽签名是框架惯例而非坏味道（同 `drill.rs`）。
 #[allow(clippy::too_many_arguments)]
@@ -147,7 +150,6 @@ pub fn camera_zoom(
     mut view: ResMut<ViewState>,
     projection: Res<WorldProjection>,
     drill: Res<DrillState>,
-    grid: Res<GridConfig>,
     mut cross: ResMut<crate::zoom_level::ZoomCrossRequest>,
     ui: Res<PointerOverUi>,
 ) {
@@ -196,23 +198,12 @@ pub fn camera_zoom(
     let cursor_world_before = transform.translation.truncate()
         + screen_vec_to_world(cursor_ndc * (size * 0.5) * old_scale, cam_rot);
 
-    // 撞界后继续同向滚动 = 请求换级。**必须在「值没变就返回」之前判**：
+    // 撞外界后继续往外滚动 = 请求回父级。**必须在「值没变就返回」之前判**：
     // 撞界时 `new_scale == old_scale`，恰恰是下面那个提前返回会吞掉的情形。
+    // 往里没有对称路径（ADR-0038）：撞内界继续往里滚只会被 `clamp` 夹住停住。
     if factor > 1.0 && zoom.at_outer_limit(old_scale) {
         // 继续往外：回到父级（世界级再往外没有父级，消费方会自行忽略）。
         cross.pending = Some(crate::zoom_level::ZoomCross::Out);
-    } else if factor < 1.0 && zoom.at_inner_limit(old_scale) {
-        // 继续往里：光标所在的那个子图。用与双击同一套命中测试——不然
-        // 「双击能进的图，滚轮进不去」会让人以为坏了。
-        if let Some(child) = crate::drill::marker_hit(
-            &projection.world,
-            &drill,
-            &grid,
-            cursor_world_before,
-            old_scale,
-        ) {
-            cross.pending = Some(crate::zoom_level::ZoomCross::Into(child));
-        }
     }
 
     if (new_scale - old_scale).abs() < f32::EPSILON {
@@ -515,7 +506,7 @@ mod tests {
         assert!(pan_button_pressed(&buttons, true));
     }
 
-    /// 世界 4096²（`fit` 5.12 → 区间 `[0.064, 8.0]`）+ 一座 1024² 的城市，
+    /// 世界 4096²（`fit` 5.12 → 区间 `[0.16, 8.0]`，ADR-0038 后内界 32×）+ 一座 1024² 的城市，
     /// 城市入口图标摆在世界图正中 (2048,2048)。
     fn two_level_world() -> wv_core::World {
         let icon = IconSpec {
@@ -571,8 +562,7 @@ mod tests {
         }
     }
 
-    /// 一个只装了 `camera_zoom` 的 App：相机在世界图正中，指针停在窗口正中，
-    /// 于是「指针处的世界坐标」恰好是城市入口图标 (2048,2048)。
+    /// 一个只装了 `camera_zoom` 的 App：相机在世界图正中，指针停在窗口正中。
     fn zoom_app(scale: f32) -> App {
         let world = two_level_world();
         let mut drill = DrillState::default();
@@ -584,7 +574,6 @@ mod tests {
             ..Default::default()
         };
         app.init_resource::<PointerOverUi>()
-            .init_resource::<GridConfig>()
             .init_resource::<crate::zoom_level::ZoomCrossRequest>()
             .add_message::<MouseWheel>()
             .insert_resource(view)
@@ -649,20 +638,26 @@ mod tests {
         );
     }
 
-    /// 已在**内界**且指针压在城市入口上时继续往里滚 = 请求进入该城。
+    /// 已在**内界**继续往里滚 = **不**进入子图（ADR-0038）：不发换级请求，
+    /// 缩放被夹在内界停住——进入子图的唯一手势是双击钻入图标。
     #[test]
-    fn camera_zoom_requests_a_step_into_the_child_under_the_cursor() {
-        let mut app = zoom_app(world_band().min);
+    fn camera_zoom_at_inner_limit_stays_clamped_and_does_not_enter_child() {
+        let min = world_band().min;
+        let mut app = zoom_app(min);
         scroll(&mut app, -1.0); // y < 0 → factor < 1 → 放大（往里）
         app.update();
         assert_eq!(
             app.world()
                 .resource::<crate::zoom_level::ZoomCrossRequest>()
                 .pending,
-            Some(crate::zoom_level::ZoomCross::Into(Id::new_unchecked(
-                "city_a"
-            ))),
-            "指针在城市图标上继续往里滚，必须请求进入该城"
+            None,
+            "撞内界继续往里滚不得请求进入子图（ADR-0038）"
+        );
+        let view = app.world().resource::<ViewState>();
+        assert!(
+            (view.scale - min).abs() <= min * 1e-3,
+            "缩放必须停在内界，got {} (min = {min})",
+            view.scale
         );
     }
 
