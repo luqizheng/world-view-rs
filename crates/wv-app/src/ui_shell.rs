@@ -1597,6 +1597,9 @@ fn load_layout_on_project_open(
     if let Some([x, y]) = file.map_dock_pos {
         dock.pos = Some(crate::ui::map_controls::MapDockPos { x, y });
     }
+    if let Some([x, y]) = file.map_zoom_strip_pos {
+        dock.zoom_strip_pos = Some(crate::ui::map_controls::MapDockPos { x, y });
+    }
     *layout = file;
     *loaded_dir = Some(dir);
 }
@@ -1627,6 +1630,7 @@ fn persist_layout_on_change(
     file.map_dock = Some(dock.orientation.key().to_string());
     file.map_snap = Some(dock.snapping);
     file.map_dock_pos = dock.pos.map(|p| [p.x, p.y]);
+    file.map_zoom_strip_pos = dock.zoom_strip_pos.map(|p| [p.x, p.y]);
 
     let mut changed = false;
     // 语言切换本身就让 layout 跟着变；与面板几何检测并入同一个 `changed` 累加器。
@@ -1637,6 +1641,7 @@ fn persist_layout_on_change(
         || file.map_dock != layout.map_dock
         || file.map_snap != layout.map_snap
         || file.map_dock_pos != layout.map_dock_pos
+        || file.map_zoom_strip_pos != layout.map_zoom_strip_pos
     {
         changed = true;
     }

@@ -16,7 +16,7 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::i18n::{t_key, CurrentLocale, I18nKey};
-use crate::state::{GridConfig, Panel, PanelState, ViewState};
+use crate::state::{GridConfig, Panel, PanelState, ViewState, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::{radius, space};
 use crate::ui_layout::LayoutFile;
@@ -33,6 +33,7 @@ pub fn panel_minimap(
     mut panels: ResMut<PanelState>,
     mut view: ResMut<ViewState>,
     grid: Res<GridConfig>,
+    projection: Res<WorldProjection>,
     tex: Res<wv_render::terrain_view::TerrainTexture>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     current_loc: Res<CurrentLocale>,
@@ -107,6 +108,69 @@ pub fn panel_minimap(
                     );
                 }
             }
+            // 缩放控件条（`wv-ui::zoom_controls` · Figma 3:21882）——
+            // 与地图工具条共用同一组件，差异：这里不需要 grip 拖动（窗口
+            // 整体已可拖），所以把 `pos` 留在 `None`。
+            //
+            // 当前图的自适应区间（与 `map_controls` 同源 `LevelZoom::for_map`）。
+            let window_size = ctx.input(|i| i.content_rect()).size();
+            let map_size =
+                wv_render::zoom_level::map_size_of(&projection.world, None, Vec2::splat(0.0));
+            let zoom_band = wv_render::zoom_level::LevelZoom::for_map(
+                if map_size.x > 0.0 {
+                    map_size
+                } else {
+                    Vec2::new(tex.size as f32, tex.height as f32) * grid.cell_size
+                },
+                Vec2::new(window_size.x, window_size.y),
+            );
+            let can_zoom_in = !zoom_band.at_inner_limit(view.scale);
+            let can_zoom_out = !zoom_band.at_outer_limit(view.scale);
+            ui.add_space(space::SM);
+            // 闭包持三处冲突的 `&mut`，与 `map_controls` 同款处理：三个 bool。
+            let mut zoom_in_clicked = false;
+            let mut zoom_out_clicked = false;
+            let mut zoom_fit_clicked = false;
+            let mut strip_state = super::widgets::ZoomControlsState::default();
+            super::widgets::zoom_controls(
+                ui,
+                &shell,
+                &mut strip_state,
+                view.scale,
+                can_zoom_in,
+                can_zoom_out,
+                || zoom_in_clicked = true,
+                || zoom_out_clicked = true,
+                || zoom_fit_clicked = true,
+            );
+            if zoom_in_clicked {
+                let next = zoom_band.clamp(view.scale / 1.6);
+                view.scale = next;
+                wv_render::camera::apply_view_to_camera(
+                    view.camera_center,
+                    view.scale,
+                    &mut cameras,
+                );
+            } else if zoom_out_clicked {
+                let next = zoom_band.clamp(view.scale * 1.6);
+                view.scale = next;
+                wv_render::camera::apply_view_to_camera(
+                    view.camera_center,
+                    view.scale,
+                    &mut cameras,
+                );
+            } else if zoom_fit_clicked {
+                let (center, fit_scale) =
+                    crate::app_bootstrap::fit_view_for_world(&projection.world);
+                view.camera_center = center;
+                view.scale = fit_scale;
+                wv_render::camera::apply_view_to_camera(
+                    view.camera_center,
+                    view.scale,
+                    &mut cameras,
+                );
+            }
+
             // 图层开关排到地形缩略图**两侧**：左侧 = 地点 / 轨迹，右侧 = 事件 / 道路；
             // "地形" 与 "图层" 标题共用顶部行，保持视觉对齐。
             ui.add_space(space::SM);

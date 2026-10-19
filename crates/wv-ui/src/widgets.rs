@@ -49,6 +49,7 @@ pub mod segmented_control;
 pub mod svg_loader;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub mod zoom_controls;
 
 // ── 路径兼容 re-export（保持 `crate::widgets::X` 不变） ───────────────
 pub use button::{
@@ -153,3 +154,4 @@ pub use primitives::{
     RECENT_ROW_PAD_X,
 };
 pub use svg_loader::{install_svg_decoder, setup_egui_image_loaders, EguiImageLoadersInstalled};
+pub use zoom_controls::{scale_to_percent, zoom_controls, ZoomControlsState};

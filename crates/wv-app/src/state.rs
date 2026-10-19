@@ -289,7 +289,7 @@ impl Default for PanelState {
             visible.insert(p, false);
         }
         visible.insert(Panel::Brush, true);
-        // visible.insert(Panel::Minimap, true); // TODO: 恢复小地图后取消注释
+        visible.insert(Panel::Minimap, true);
         visible.insert(Panel::Compass, true);
         visible.insert(Panel::Timeline, true);
         Self {

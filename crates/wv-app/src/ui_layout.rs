@@ -97,6 +97,10 @@ pub struct LayoutFile {
     /// 接管，序列化形式为 `[x, y]`。两个朝向独立记位置。
     #[serde(default)]
     pub map_dock_pos: Option<[f32; 2]>,
+    /// 缩放控件条（`zoom_controls` widget）的独立位置偏移。
+    /// `None` = 贴到地图工具条对侧。
+    #[serde(default)]
+    pub map_zoom_strip_pos: Option<[f32; 2]>,
 }
 
 /// 布局文件路径：工程目录下的 `ui-layout.yaml`（P2：目录即工程）。
@@ -362,6 +366,7 @@ mod tests {
         assert_eq!(f.map_dock, None);
         assert_eq!(f.map_snap, None);
         assert_eq!(f.map_dock_pos, None);
+        assert_eq!(f.map_zoom_strip_pos, None);
     }
 
     #[test]

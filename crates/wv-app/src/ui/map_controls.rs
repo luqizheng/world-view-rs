@@ -67,9 +67,9 @@ use wv_render::state::{BrushState, SelectionState};
 use super::shell::UiShell;
 use super::widgets::icon_image;
 use super::{
-    ICON_BRUSH, ICON_ERASER, ICON_GRID, ICON_HAND, ICON_MAGNET, ICON_MAXIMIZE, ICON_MOUNTAIN_RANGE,
+    ICON_BRUSH, ICON_ERASER, ICON_GRID, ICON_HAND, ICON_MAGNET, ICON_MOUNTAIN_RANGE,
     ICON_MOUSE_POINTER, ICON_MOVE_HORIZONTAL, ICON_MOVE_VERTICAL, ICON_REDO, ICON_ROUTE,
-    ICON_SQUARE, ICON_UNDO, ICON_ZOOM_IN, ICON_ZOOM_OUT,
+    ICON_SQUARE, ICON_UNDO,
 };
 
 /// 贴边距离（原型 `right: 18px`）。
@@ -201,6 +201,10 @@ pub struct MapDockState {
     /// 用户拖动 grip 后的位置偏移（绝对像素，与 `orientation` 联动解释）。
     /// `None` = 用默认锚点。
     pub pos: Option<MapDockPos>,
+    /// 缩放控件条（grip + − / ＋ / 适配）的独立位置偏移。
+    /// `None` = 默认贴在地图工具条**对侧**：
+    ///   纵向 dock 时贴左缘中央；横向 dock 时贴顶中央。
+    pub zoom_strip_pos: Option<MapDockPos>,
 }
 
 impl Default for MapDockState {
@@ -216,6 +220,7 @@ impl Default for MapDockState {
             // 势力默认贴地」的历史默认（`DivisionMode::Snap`）一致。
             snapping: true,
             pos: None,
+            zoom_strip_pos: None,
         }
     }
 }
@@ -483,7 +488,7 @@ pub fn map_controls(
 
                         separator(ui, &shell, metrics, vertical);
 
-                        // ── 视图 / 导航组（保留既有功能） ─────────────────
+                        // ── 视图组 ──────────────────────────────────────
                         // 网格：参照网格开关（`ViewState.grid_lines`）。
                         if icon_tile(
                             ui,
@@ -497,32 +502,15 @@ pub fn map_controls(
                         {
                             view.grid_lines = !view.grid_lines;
                         }
-                        // ＋：放大（步进 1.6×，夹在当前级区间内）。
-                        if icon_tile(ui, &shell, metrics, ICON_ZOOM_IN, false, "放大").clicked() {
-                            let next = view.scale / 1.6;
-                            set_map_scale(&mut view, &mut cameras, next, zoom);
-                        }
-                        // −：缩小。
-                        if icon_tile(ui, &shell, metrics, ICON_ZOOM_OUT, false, "缩小").clicked()
-                        {
-                            let next = view.scale * 1.6;
-                            set_map_scale(&mut view, &mut cameras, next, zoom);
-                        }
-                        // 全图：缩放到当前级 fit + 相机中心钉到帧中心。
-                        if icon_tile(ui, &shell, metrics, ICON_MAXIMIZE, false, "缩放到全图")
-                            .clicked()
-                        {
-                            let frame_origin = drill
-                                .current()
-                                .and_then(|id| {
-                                    wv_core::resolve_frame_in(&projection.world.maps, id)
-                                })
-                                .map(|f| Vec2::new(f.world_origin.x, f.world_origin.y))
-                                .unwrap_or(grid.map_origin);
-                            view.camera_center = frame_origin + level_map_size * 0.5;
-                            set_map_scale(&mut view, &mut cameras, zoom.fit, zoom);
-                        }
                     };
+
+                    // ── 缩放控件条（`wv-ui::zoom_controls` · Figma 3:21882） ──
+                    //
+                    // 替代原先的 `icon_tile(zoom_in/zoom_out/maximize)` 三块：
+                    // 把 − / ＋ / 百分比 / 适配 / grip 收成一个公共组件，
+                    // 既缩小组件列表也复用到小地图。回调里只改 `view.scale`，
+                    // 相机由 `set_map_scale` 同步（避免双真相）。
+                    let _ = line_active;
 
                     ui.spacing_mut().item_spacing = egui::vec2(metrics.gap, metrics.gap);
                     if vertical {
@@ -532,6 +520,80 @@ pub fn map_controls(
                     }
                 });
         });
+
+    // ── 缩放控件条（独立 Area，grip 可拖） ──────────────────────────
+    //
+    // 与 dock 是兄弟关系：dock 是「工具集合」，zoom_strip 是「相机操作」。
+    // 二者共享 [`MapDockState`]（同一份持久化），但位置偏移独立记
+    // `zoom_strip_pos` —— dock 横向 / 纵向切换时，strip 默认贴到对侧。
+    //
+    // Figma `3:21882` 的 strip 只能横排（设计上 32 高一行），dock 任何朝向
+    // 下 strip 都是横排。默认位置：纵向 dock → 贴左缘**底**（让开顶栏
+    // 顶区域，避开左下方的笔刷/小地图面板）；横向 dock → 贴顶栏下沿
+    // **右**（让开顶栏的"主世界/日夜"标题，让开 dock 占的底部位置）。
+    let (zoom_anchor, zoom_default) = if vertical {
+        (
+            egui::Align2::LEFT_BOTTOM,
+            egui::vec2(EDGE_OFFSET, -EDGE_OFFSET),
+        )
+    } else {
+        (
+            egui::Align2::RIGHT_TOP,
+            egui::vec2(-EDGE_OFFSET, EDGE_OFFSET),
+        )
+    };
+    let zoom_offset = dock
+        .zoom_strip_pos
+        .map(|p| egui::vec2(p.x, p.y))
+        .unwrap_or(zoom_default);
+    let mut zoom_state = super::widgets::ZoomControlsState {
+        pos: dock.zoom_strip_pos.map(|p| [p.x, p.y]),
+        show_scale_text: true,
+    };
+    let can_zoom_in = !zoom.at_inner_limit(view.scale);
+    let can_zoom_out = !zoom.at_outer_limit(view.scale);
+    // 三个回调都需要 `&mut view` + `&mut cameras`；闭包同时持三份会撞借用。
+    // 折中：闭包内只产生**意图**（写三个互斥 bool），闭包外统一执行。
+    // 同时存目标的 `target_scale`，让 `set_map_scale` 在外边单写。
+    let mut zoom_in_clicked = false;
+    let mut zoom_out_clicked = false;
+    let mut zoom_fit_clicked = false;
+    egui::Area::new(egui::Id::new("wv_zoom_controls_v01"))
+        .anchor(zoom_anchor, zoom_offset)
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            let current_scale = view.scale;
+            super::widgets::zoom_controls(
+                ui,
+                &shell,
+                &mut zoom_state,
+                current_scale,
+                can_zoom_in,
+                can_zoom_out,
+                || zoom_in_clicked = true,
+                || zoom_out_clicked = true,
+                || zoom_fit_clicked = true,
+            );
+        });
+    if zoom_in_clicked {
+        let target = view.scale / 1.6;
+        set_map_scale(&mut view, &mut cameras, target, zoom);
+    } else if zoom_out_clicked {
+        let target = view.scale * 1.6;
+        set_map_scale(&mut view, &mut cameras, target, zoom);
+    } else if zoom_fit_clicked {
+        let frame_origin = drill
+            .current()
+            .and_then(|id| wv_core::resolve_frame_in(&projection.world.maps, id))
+            .map(|f| Vec2::new(f.world_origin.x, f.world_origin.y))
+            .unwrap_or(grid.map_origin);
+        view.camera_center = frame_origin + level_map_size * 0.5;
+        set_map_scale(&mut view, &mut cameras, zoom.fit, zoom);
+    }
+    // strip 的拖动位置回灌到 dock（落盘由 caller 负责）。
+    dock.zoom_strip_pos = zoom_state.pos.map(|[x, y]| MapDockPos { x, y });
+
+    let _ = line_active;
 }
 
 /// 工具瓷砖：图标 +（横向时）快捷键字母。
