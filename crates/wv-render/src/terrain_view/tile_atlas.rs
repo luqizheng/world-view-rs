@@ -166,6 +166,9 @@ pub(crate) fn tile_tint_for_mode(mode: ViewMode) -> TileTint {
         // TODO(plan v0.1 D3-A): 等值线矢量平涂管线未落地前，瓦片按原色直铺
         // （平涂家族，与 shade_for_mode 的 shade_flat 回退同一口径）。
         ViewMode::VectorFlat => TileTint::Identity,
+        // Topographic 分析视图（[ADR-0039]）—— 不经瓦片管线（`CellRenderer::new`
+        // 已经 `atlas = None`）；`TileTint::Identity` 是兜底，本路径不会被调用。
+        ViewMode::Topographic => TileTint::Identity,
     }
 }
 

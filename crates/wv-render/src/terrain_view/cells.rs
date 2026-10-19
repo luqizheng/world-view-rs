@@ -55,6 +55,36 @@ fn slot_is_water(kind: u8) -> bool {
     kind <= 1
 }
 
+/// Topographic viewmode 百分位阈值（[ADR-0039] 决策 4 / 5）。
+///
+/// **PR-1 暂未使用**——shade_for_mode 的 Topographic 分支占位返 `palette.soften_toward`，
+/// cell-by-cell 着色留给 PR-1b（详见 `shade_topographic` 注释）。本 helper 是
+/// PR-1b 落地时的现成钩子：消费 `wv_core::terrain::TerrainCellData`，与
+/// `wv_terrain::TerrainGrid::compute_height_percentiles` 同语义，避免
+/// wv-render 反向依赖 wv-terrain 内部 cell 类型。
+///
+/// [ADR-0039]: ../docs/adr/ADR-0039-topographic-viewmode.md
+#[allow(dead_code)] // PR-1b 启用
+pub(crate) fn topographic_thresholds_for(
+    cells: &[wv_core::terrain::TerrainCellData],
+    p_low: f32,
+    p_high: f32,
+) -> (i16, i16) {
+    assert!(
+        (0.0..=1.0).contains(&p_low) && (0.0..=1.0).contains(&p_high) && p_low <= p_high,
+        "p_low ({p_low}) 和 p_high ({p_high}) 必须在 [0, 1] 且 p_low ≤ p_high"
+    );
+    if cells.is_empty() {
+        return (0, 0);
+    }
+    let mut heights: Vec<i16> = cells.iter().map(|c| c.height).collect();
+    heights.sort_unstable();
+    let len = heights.len();
+    let idx_low = ((len as f32 * p_low).floor() as usize).min(len - 1);
+    let idx_high = ((len as f32 * p_high).floor() as usize).min(len - 1);
+    (heights[idx_low], heights[idx_high])
+}
+
 /// 把一个着色函数应用到一格，返回 sRGB 线性分量。
 ///
 /// 第三参 = 当前主题色板（ADR-0016）：主题相关色一律经它取，禁止直引常量。
@@ -80,7 +110,34 @@ fn shade_for_mode(mode: ViewMode) -> Shader {
         // 类型色平涂；边界格的水陆由 `sample_vector_flat` 的双线性高度采样
         // 决定——填充边与 `isoline_overlay` 的等值线描边同源吻合。
         ViewMode::VectorFlat => shade_flat,
+        // Topographic 分析视图（[ADR-0039]）—— PR-1 **占位**：
+        // 仅返主题纸面色（`palette.soften_toward`），正确的 cell-by-cell 水/陆
+        // + height 3 阶着色 PR-1b 落地（独立 worktree；详见 `shade_topographic`
+        // 的 doc-comment 与 ADR-0039 §6 落点列表的 "1 cell" 行）。
+        //
+        // **为什么不现在做**：本 shader 类型签名不持 cell 坐标——
+        // `fn(&TerrainData, u8, &PaletteColors) -> Color`——无法在着色路径里
+        // 查 `data.cells[gy * w + cx]` 拿到 cell.height + cell.surface；
+        // cell-by-cell 着色需 `write_cell_split` 早返回分支，依赖
+        // `CellRenderer` 持有百分位阈值（PR-1b 在 `state.rs::topographic_thresholds`
+        // 上加 ResMut 写回，仍是 fixable）。
+        ViewMode::Topographic => shade_topographic,
     }
+}
+
+/// Topographic viewmode 着色占位（[ADR-0039]）。
+///
+/// **PR-1 限制**：返主题纸面色 `palette.soften_toward`，不读 cell 数据，
+/// 不切分 3 阶。PR-1b 会在 `write_cell_split` 早返回分支按 cell.height +
+/// cell.surface 走 `topographic::pick` 取 water / land_low / land_mid / land_high。
+///
+/// 当前返纸面色是为了：(a) match 不漏分支；(b) 切到 Topographic mode 时不
+/// 渲染崩溃，且提供「底图变空」的视觉提示——方便用户知道「Topographic 模式
+/// 接通了，但视觉细节等 PR-1b」。
+///
+/// [ADR-0039]: ../docs/adr/ADR-0039-topographic-viewmode.md
+fn shade_topographic(_data: &TerrainData, _kind: u8, pal: &PaletteColors) -> Color {
+    pal.soften_toward
 }
 
 fn shade_google(_data: &TerrainData, kind: u8, _pal: &PaletteColors) -> Color {
@@ -361,7 +418,9 @@ impl<'a> CellRenderer<'a> {
     ) -> Self {
         let (w, h) = (data.width.max(1), data.height.max(1));
         // 事件图与轮廓图都不铺瓦片：前者灰白底，后者水陆三色。
-        let atlas = if matches!(mode, ViewMode::Event | ViewMode::Coastline) {
+        // Topographic（[ADR-0039]）也不铺瓦片——它按 cell.height + cell.surface
+        // 走独立着色管线，不依赖瓦片图集。
+        let atlas = if matches!(mode, ViewMode::Event | ViewMode::Coastline | ViewMode::Topographic) {
             None
         } else {
             atlas

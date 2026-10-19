@@ -299,6 +299,8 @@ pub enum I18nKey {
     ViewModeEvent,
     /// 「轮廓图」Coastline
     ViewModeCoastline,
+    /// 「等高分析」Topographic（[ADR-0039]，水/陆 + height 3 阶着色）
+    ViewModeTopographic,
 
     // ── 图层面板（state::Panel::title） ─────────────────────────────
     /// 「地图树」面板标题

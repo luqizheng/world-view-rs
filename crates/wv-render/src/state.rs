@@ -126,10 +126,21 @@ pub enum ViewMode {
     /// F. 轮廓图：黑底 + 海岸线 + 城市路线（2026-11 用户需求：
     /// 地形纹理完全退场，只留水陆轮廓，要素对比度最大化）。
     Coastline,
+    /// T. Topographic（水/陆 + height 3 阶着色，[ADR-0039]）。
+    ///
+    /// **不**走 ThemePack core 10 色，独立调色（`theme::topographic::TopographicPalette`）。
+    /// 关 Roads / Streets / POI / Buildings / Faction / Labels / Veil / Atmosphere /
+    /// TerrainDecor / FeatureOverlay——只留 Terrain（+ Isoline 子开关默认开）。
+    ///
+    /// biome 字段**存在但不参与显示**（X 路线，[ADR-0039] §1.3 / 决策 5）。
+    /// 适合「快速读懂陌生地形」的分析视图，不强调 JRPG / 古舆图美术。
+    ///
+    /// [ADR-0039]: ../docs/adr/ADR-0039-topographic-viewmode.md
+    Topographic,
 }
 
 impl ViewMode {
-    pub const ALL: [ViewMode; 7] = [
+    pub const ALL: [ViewMode; 8] = [
         ViewMode::VectorFlat,
         ViewMode::GoogleMap,
         ViewMode::RealTerrain,
@@ -137,6 +148,7 @@ impl ViewMode {
         ViewMode::Faction,
         ViewMode::Event,
         ViewMode::Coastline,
+        ViewMode::Topographic,
     ];
 
     /// 当前对作者开放的浏览模式。
@@ -223,6 +235,29 @@ pub struct ViewState {
     pub window_size: Vec2,
     /// 当前地图 ID。
     pub current_map: String,
+    /// Topographic viewmode 百分位阈值缓存（[ADR-0039] 决策 5）。
+    ///
+    /// Key = map id（与 `current_map` 同口径字符串）；Value = (`p33`, `p66`) 两个
+    /// height 阈值（米）。**首次进入 Topographic mode 时按图填一次**，
+    /// `data_hash` 变化时（编辑/地形重构）才重算。
+    ///
+    /// biome 通道不参与计算（[ADR-0039] X 路线）。
+    /// 用 `String` key 而非 `wv_core::Id` 是为了与 `current_map` 同款（避免
+    /// 跨 crate 的 `Id` 耦合；map id 在 wv-render 是字符串口径）。
+    ///
+    /// [ADR-0039]: ../docs/adr/ADR-0039-topographic-viewmode.md
+    pub topographic_thresholds: std::collections::HashMap<String, (i16, i16)>,
+    /// 2.5D vertex Z 挤压开关（[ADR-0039] 决策 6 / [ADR-0041]）。
+    ///
+    /// **本字段是预埋**——本 PR-1 仅声明不写行为；由 PR-3 ([ADR-0041]) 在
+    /// `resolve_render_recipe` PreUpdate 阶段落地以下耦合：
+    /// `view.mode == Topographic && !terrain_2_5d_enabled` → 自动 on。
+    ///
+    /// 当前默认 `false`；mode-coupled on 行为落地前，Topographic mode 下
+    /// 高度立体感不启用（仅 3 阶着色）。
+    ///
+    /// [ADR-0041]: ../docs/adr/ADR-0041-topographic-2-5d-vertex-z.md
+    pub terrain_2_5d_enabled: bool,
 }
 
 impl Default for ViewState {
@@ -247,6 +282,8 @@ impl Default for ViewState {
             cursor_world: None,
             window_size: Vec2::new(1280.0, 800.0),
             current_map: "world_main".into(),
+            topographic_thresholds: std::collections::HashMap::new(),
+            terrain_2_5d_enabled: false,
         }
     }
 }

@@ -35,3 +35,10 @@ pub mod palette;
 pub mod registry;
 #[cfg(feature = "app")]
 pub mod theme_pack;
+// Topographic 调色（[ADR-0039]）。**无 cfg 门**：因为它仅是数据（`[f32;3]` sRGB
+// 数组），由 wv-render 主体（不带 feature）持有定义，`sync_terrain_chunks`
+// 在 `cfg(feature="app")` 路径下用 `Color::srgb` 把数据转材质颜色。Module 全
+// 静态，零 bevy 依赖，避免被 feature 门门掉。
+//
+// [ADR-0039]: ../../../docs/adr/ADR-0039-topographic-viewmode.md
+pub mod topographic;

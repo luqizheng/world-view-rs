@@ -182,6 +182,32 @@ impl TerrainGrid {
         let gy = gy.min(self.height as i32 - 1);
         self.get(gx, gy)
     }
+
+    /// 按给定分位求 `height` 通道分位值（米）。
+    ///
+    /// 给 Topographic viewmode（[ADR-0039]）用：抽 33% / 66% 两个阈值，
+    /// 把陆格分三档着色。**只读 `height`**，biome / surface 不参与。
+    /// 全零高度格（默认网格）两个分位都返 `0`。
+    ///
+    /// 排序 O(N log N)；对 1024² ≈ 1 ms 量级，大图调用点
+    /// 缓存结果（`ViewState::topographic_thresholds`，[ADR-0039] 决策 5）。
+    ///
+    /// [ADR-0039]: ../docs/adr/ADR-0039-topographic-viewmode.md
+    pub fn compute_height_percentiles(&self, p_low: f32, p_high: f32) -> (i16, i16) {
+        assert!(
+            (0.0..=1.0).contains(&p_low) && (0.0..=1.0).contains(&p_high) && p_low <= p_high,
+            "p_low ({p_low}) 和 p_high ({p_high}) 必须在 [0, 1] 且 p_low ≤ p_high"
+        );
+        if self.cells.is_empty() {
+            return (0, 0);
+        }
+        let mut heights: Vec<i16> = self.cells.iter().map(|c| c.height).collect();
+        heights.sort_unstable();
+        let len = heights.len();
+        let idx_low = ((len as f32 * p_low).floor() as usize).min(len - 1);
+        let idx_high = ((len as f32 * p_high).floor() as usize).min(len - 1);
+        (heights[idx_low], heights[idx_high])
+    }
 }
 
 #[cfg(test)]
@@ -265,5 +291,42 @@ mod tests {
             g.sample_world(125.0, 235.0, (100.0, 200.0), 10.0),
             Some(cell)
         );
+    }
+
+    /// `compute_height_percentiles` 在 100 格有序高度场上正确切分
+    /// （3 阶切分用的 33% / 66% 阈值，[ADR-0039] 决策 4）。
+    #[test]
+    fn compute_height_percentiles_on_sorted_grid() {
+        let mut g = TerrainGrid::new(10, 10);
+        for (i, h) in (0i16..100).enumerate() {
+            let cell = TerrainCell {
+                height: h,
+                surface: SURFACE_LAND,
+                biome: BIOME_NONE,
+            };
+            g.set((i % 10) as i32, (i / 10) as i32, cell);
+        }
+        // 100 格按 sort_unstable 后下标 [floor(100*0.33)=33]=33, [floor(100*0.66)=66]=66
+        assert_eq!(g.compute_height_percentiles(0.33, 0.66), (33, 66));
+    }
+
+    /// `compute_height_percentiles` 在空网格上不 panic、返 `(0, 0)`。
+    /// 0×0 与全零（非空但 height 都为 0）两种 fixture 都覆盖。
+    #[test]
+    fn compute_height_percentiles_handles_zero_cells() {
+        // 真正的 0×0
+        let g = TerrainGrid::new(0, 0);
+        assert_eq!(g.compute_height_percentiles(0.33, 0.66), (0, 0));
+        // 全零非空网格
+        let g = TerrainGrid::new(4, 4);
+        assert_eq!(g.compute_height_percentiles(0.33, 0.66), (0, 0));
+    }
+
+    /// `compute_height_percentiles` 严守分位参数边界（参数非法则 panic）。
+    #[test]
+    #[should_panic(expected = "p_low")]
+    fn compute_height_percentiles_rejects_out_of_range_p_low() {
+        let g = TerrainGrid::new(4, 4);
+        let _ = g.compute_height_percentiles(1.5, 0.66);
     }
 }

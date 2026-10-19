@@ -233,6 +233,41 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         false, // TerrainDecor
         false, // Rivers
     ]),
+    // Topographic 分析视图（[ADR-0039]）：水/陆 + height 3 阶着色，关其它装饰族。
+    // 仅 Terrain + Isoline + Rivers 留——
+    //   • Terrain 是核心显示（用独立 `TopographicPalette`，不走 ThemePack core）
+    //   • Isoline 是分析视图默认（决策 7 子开关默认开）
+    //   • Rivers 是水系边界（与水/陆判定直接相关）
+    // DrillMarkers / BrushCursor / Measurement / FeatureOverlay / Decor 全关——
+    // 分析视图不要任何交互叠加或美术装饰（决策 2）。
+    //
+    // biome 通道在此 mode 下**不参与显示**（X 路线，[ADR-0039] §1.3 / 决策 5），
+    // 由 `sync_terrain_chunks` 的 match 分支实现。
+    (ViewMode::Topographic, [
+        true,  // Terrain（核心，水/陆 + 3 阶 height，topographic 分支）
+        true,  // Isoline（分析视图默认开）
+        false, // GridLines（分析视图不要编辑格）
+        false, // MapFrame
+        false, // Veil
+        false, // Grain
+        false, // Roads
+        false, // Streets
+        false, // Poi
+        false, // Buildings
+        false, // Faction
+        false, // PlaceLabels
+        false, // StreetLabels
+        false, // SeaLabels
+        false, // Measurement（不要测量叠加）
+        false, // BrushCursor（分析视图不要笔刷光标）
+        false, // Tracks
+        false, // EventDots
+        false, // DrillMarkers（分析视图不要钻入子图入口叠加）
+        false, // Atmosphere
+        false, // FeatureOverlay（分析视图不要地物）
+        false, // TerrainDecor
+        true,  // Rivers：水系边界是水/陆判定的关键
+    ]),
 ];
 
 /// 求值 `RenderRecipe`（每帧单点调一次，ADR-0021 D1 §1）。
@@ -426,14 +461,17 @@ mod tests {
         );
     }
 
-    /// FeatureOverlay 在除轮廓图外的全部模式默认开：主题地界晕 / 近景符号
-    /// 是浏览态的一等图层，不是某模式专属装饰。
+    /// FeatureOverlay 在除「分析视图」外的全部浏览模式默认开（主题地界晕 /
+    /// 近景符号是浏览态的一等图层，不是某模式专属装饰）。
+    ///
+    /// **分析视图**（Coastline + Topographic，[ADR-0039]）一律关——它们的目标
+    /// 是「看清底层数据」，地物覆盖层会污染信息密度。
     #[test]
-    fn feature_overlay_enabled_in_all_modes_except_coastline() {
+    fn feature_overlay_enabled_in_all_modes_except_analysis_views() {
         let (mut view, layers, world, drill, tex) = fixture();
         for m in ViewMode::ALL {
             view.mode = m;
-            let want = !matches!(m, ViewMode::Coastline);
+            let want = !matches!(m, ViewMode::Coastline | ViewMode::Topographic);
             let r = resolve_render_recipe(&view, &layers, &world, &drill, &tex, None);
             assert_eq!(
                 r.enabled(PassId::FeatureOverlay),
@@ -486,15 +524,16 @@ mod tests {
         assert!(!r.enabled(PassId::Faction));
     }
 
-    /// Isoline 仅 VectorFlat（迁移前 `isoline_overlay` 的原 gate 行为——
-    /// `mode != VectorFlat → despawn`）。其余 6 模式一律关，防"顺手填 true"
-    /// 改变行为（本测试因第一次填错表而加）。
+    /// Isoline 在 VectorFlat 与 Topographic 默认开（迁移前 `isoline_overlay`
+    /// 的原 gate 行为——`mode != VectorFlat → despawn`）；**Topographic
+    /// ([ADR-0039]) 也开** —— 等高线对分析视图是核心信息。
+    /// 其余 6 模式一律关，防"顺手填 true"改变行为（本测试因第一次填错表而加）。
     #[test]
-    fn isoline_only_draws_in_vector_flat() {
+    fn isoline_draws_in_vector_flat_and_topographic_only() {
         let (mut view, layers, world, drill, tex) = fixture();
         for m in ViewMode::ALL {
             view.mode = m;
-            let want = matches!(m, ViewMode::VectorFlat);
+            let want = matches!(m, ViewMode::VectorFlat | ViewMode::Topographic);
             let r = resolve_render_recipe(&view, &layers, &world, &drill, &tex, None);
             assert_eq!(
                 r.enabled(PassId::Isoline),

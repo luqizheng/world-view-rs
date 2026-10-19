@@ -161,6 +161,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::ViewModeFaction => "势力图",
         I18nKey::ViewModeEvent => "事件图",
         I18nKey::ViewModeCoastline => "轮廓图",
+        I18nKey::ViewModeTopographic => "等高分析",
 
         // ── 图层面板标题 ──
         I18nKey::PanelMapTree => "地图树",
@@ -698,6 +699,7 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::ViewModeFaction => "Faction map",
         I18nKey::ViewModeEvent => "Event map",
         I18nKey::ViewModeCoastline => "Coastline",
+        I18nKey::ViewModeTopographic => "Topographic",
 
         // ── Panel titles ──
         I18nKey::PanelMapTree => "Map tree",

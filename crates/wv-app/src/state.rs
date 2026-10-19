@@ -51,6 +51,7 @@ impl ViewModeLabelExt for wv_render::state::ViewMode {
             wv_render::state::ViewMode::Faction => t(loc, I18nKey::ViewModeFaction),
             wv_render::state::ViewMode::Event => t(loc, I18nKey::ViewModeEvent),
             wv_render::state::ViewMode::Coastline => t(loc, I18nKey::ViewModeCoastline),
+            wv_render::state::ViewMode::Topographic => t(loc, I18nKey::ViewModeTopographic),
         }
     }
 }
