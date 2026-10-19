@@ -63,8 +63,8 @@ panels:
     collapsed: false
     visible: false
   timeline:
-    x: 12.0
-    y: 636.0
+    x: 4.0
+    y: 506.40625
     width: 1256.0
     height: 164.0
     collapsed: false
@@ -87,7 +87,3 @@ theme: dark
 density: cozy
 map_theme: daylight
 language: zh
-map_dock: vertical
-map_snap: true
-map_dock_pos: null
-map_zoom_strip_pos: null
