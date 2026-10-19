@@ -209,15 +209,33 @@ fn rasterize(coast: &[F], rivers: Option<&[F]>, seas: Option<&[F]>) -> TerrainDa
     // 托罗斯—安纳托利亚 / 高加索。高度主场从「距海岸」改为「距山脊」。
     const RIDGES: &[&[[f64; 2]]] = &[
         // 阿尔卑斯
-        &[[-6.0, 44.0], [0.0, 45.5], [7.0, 46.5], [13.0, 47.0], [16.0, 46.5]],
+        &[
+            [-6.0, 44.0],
+            [0.0, 45.5],
+            [7.0, 46.5],
+            [13.0, 47.0],
+            [16.0, 46.5],
+        ],
         // 阿平宁
         &[[9.5, 44.2], [12.5, 43.0], [14.5, 41.8], [16.0, 39.5]],
         // 迪纳拉—品都斯
         &[[14.0, 45.5], [17.0, 43.5], [19.5, 42.0], [21.5, 40.5]],
         // 阿特拉斯
-        &[[-8.0, 31.0], [-4.0, 32.5], [0.0, 34.0], [5.0, 35.0], [9.0, 35.5]],
+        &[
+            [-8.0, 31.0],
+            [-4.0, 32.5],
+            [0.0, 34.0],
+            [5.0, 35.0],
+            [9.0, 35.5],
+        ],
         // 托罗斯—安纳托利亚—本廷
-        &[[28.0, 37.0], [32.0, 37.5], [36.0, 38.5], [40.0, 40.0], [44.0, 41.0]],
+        &[
+            [28.0, 37.0],
+            [32.0, 37.5],
+            [36.0, 38.5],
+            [40.0, 40.0],
+            [44.0, 41.0],
+        ],
         // 高加索
         &[[39.5, 43.5], [43.0, 42.8], [47.0, 42.0]],
         // 伊比利亚：坎塔布连 + 内华达
@@ -236,14 +254,13 @@ fn rasterize(coast: &[F], rivers: Option<&[F]>, seas: Option<&[F]>) -> TerrainDa
                 let (ax, ay) = (to_x(w[0][0]), to_y(w[0][1]));
                 let (bx, by) = (to_x(w[1][0]), to_y(w[1][1]));
                 let steps = ((bx - ax).abs().max((by - ay).abs()).max(1)) as usize;
-                (0..=steps)
-                    .map(move |s| {
-                        let t = s as f32 / steps as f32;
-                        [
-                            (ax as f32 * (1.0 - t) + bx as f32 * t).round() as i32,
-                            (ay as f32 * (1.0 - t) + by as f32 * t).round() as i32,
-                        ]
-                    })
+                (0..=steps).map(move |s| {
+                    let t = s as f32 / steps as f32;
+                    [
+                        (ax as f32 * (1.0 - t) + bx as f32 * t).round() as i32,
+                        (ay as f32 * (1.0 - t) + by as f32 * t).round() as i32,
+                    ]
+                })
             })
         })
         .collect();
@@ -453,27 +470,27 @@ fn patch_template(root: &Path, kind: &str, seed: u64) -> Result<(), String> {
 /// 调试输出：biome 伪彩 BMP（无需图像库，手写 BMP 头）。
 fn dump_debug_png(data: &TerrainData, path: &Path) {
     const COLORS: [[u8; 3]; 21] = [
-        [40, 40, 40],   // 0 NONE 深灰
-        [30, 120, 60],  // 1 FOREST 绿
-        [140, 200, 90], // 2 PLAINS 浅绿
-        [170, 210, 100],// 3 GRASSLAND 黄绿
-        [190, 175, 130],// 4 GOBI 灰黄
-        [235, 200, 120],// 5 DESERT 沙
-        [90, 130, 110], // 6 SWAMP
-        [110, 150, 120],// 7 WETLAND
-        [180, 190, 200],// 8 TUNDRA
-        [245, 248, 249],// 9 SNOW 白
-        [40, 150, 60],  // 10 JUNGLE
-        [50, 170, 70],  // 11 RAINFOREST
-        [180, 160, 90], // 12 HILLS
-        [130, 110, 90], // 13 MOUNTAINS 棕
-        [60, 110, 160], // 14 OCEAN 蓝
-        [90, 160, 200], // 15 LAKE
-        [40, 90, 200],  // 16 RIVER 深蓝
-        [220, 190, 90], // 17 OASIS
-        [200, 190, 80], // 18 SAVANNA
-        [230, 230, 220],// 19 SALT_FLAT 近白
-        [90, 70, 50],   // 20 ROAD
+        [40, 40, 40],    // 0 NONE 深灰
+        [30, 120, 60],   // 1 FOREST 绿
+        [140, 200, 90],  // 2 PLAINS 浅绿
+        [170, 210, 100], // 3 GRASSLAND 黄绿
+        [190, 175, 130], // 4 GOBI 灰黄
+        [235, 200, 120], // 5 DESERT 沙
+        [90, 130, 110],  // 6 SWAMP
+        [110, 150, 120], // 7 WETLAND
+        [180, 190, 200], // 8 TUNDRA
+        [245, 248, 249], // 9 SNOW 白
+        [40, 150, 60],   // 10 JUNGLE
+        [50, 170, 70],   // 11 RAINFOREST
+        [180, 160, 90],  // 12 HILLS
+        [130, 110, 90],  // 13 MOUNTAINS 棕
+        [60, 110, 160],  // 14 OCEAN 蓝
+        [90, 160, 200],  // 15 LAKE
+        [40, 90, 200],   // 16 RIVER 深蓝
+        [220, 190, 90],  // 17 OASIS
+        [200, 190, 80],  // 18 SAVANNA
+        [230, 230, 220], // 19 SALT_FLAT 近白
+        [90, 70, 50],    // 20 ROAD
     ];
     let (w, h) = (data.width as usize, data.height as usize);
     let row_pad = (w * 3) % 4;
@@ -494,9 +511,18 @@ fn dump_debug_png(data: &TerrainData, path: &Path) {
     for y in (0..h).rev() {
         for x in 0..w {
             let c = data.cells[y * w + x];
-            let col = COLORS.get(c.biome as usize).copied().unwrap_or([255, 0, 255]);
+            let col = COLORS
+                .get(c.biome as usize)
+                .copied()
+                .unwrap_or([255, 0, 255]);
             // 按高度调一点明度让分带可见
-            let lum = if c.height >= 1250 { 0.8 } else if c.height < 0 { 0.85 } else { 1.0 };
+            let lum = if c.height >= 1250 {
+                0.8
+            } else if c.height < 0 {
+                0.85
+            } else {
+                1.0
+            };
             out.extend_from_slice(&[
                 (col[2] as f32 * lum) as u8,
                 (col[1] as f32 * lum) as u8,

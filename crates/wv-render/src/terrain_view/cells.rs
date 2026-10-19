@@ -420,7 +420,10 @@ impl<'a> CellRenderer<'a> {
         // 事件图与轮廓图都不铺瓦片：前者灰白底，后者水陆三色。
         // Topographic（[ADR-0039]）也不铺瓦片——它按 cell.height + cell.surface
         // 走独立着色管线，不依赖瓦片图集。
-        let atlas = if matches!(mode, ViewMode::Event | ViewMode::Coastline | ViewMode::Topographic) {
+        let atlas = if matches!(
+            mode,
+            ViewMode::Event | ViewMode::Coastline | ViewMode::Topographic
+        ) {
             None
         } else {
             atlas
