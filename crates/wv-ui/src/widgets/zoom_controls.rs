@@ -88,6 +88,10 @@ pub fn zoom_controls(
     on_fit: impl FnOnce(),
 ) {
     // 大框：Figma `3:21882` —— float_fill + border_strong + radius 6。
+    //
+    // 高度 32 = 行高 16 + 上下内边距 8×2。**不能**用 `set_min_height(32)`
+    // 撑高父容器——横向子行会贴在容器顶部，图标与文字全部偏上（2026-10-19
+    // 实测截图）。用上下内边距让 `ui.horizontal` 的 Align::Center 真正生效。
     let bg = shell.float_fill();
     let stroke_color = shell.border_strong();
     let frame = egui::Frame::NONE
@@ -97,13 +101,11 @@ pub fn zoom_controls(
         .inner_margin(egui::Margin {
             left: 12,
             right: 12,
-            top: 0,
-            bottom: 0,
+            top: 8,
+            bottom: 8,
         });
     frame.show(ui, |ui| {
         ui.horizontal(|ui| {
-            // 等高单行；高度由 32 像素框决定（Frame inner_margin 0 × 上下 padding 0）。
-            ui.set_min_height(32.0);
             ui.spacing_mut().item_spacing = egui::vec2(12.0, 0.0);
 
             // ── Grip（把柄） ───────────────────────────────────────────
@@ -147,14 +149,28 @@ pub fn zoom_controls(
             }
 
             // ── 百分比（Figma `125%`） ────────────────────────────────
+            //
+            // 与 icon 同高：分配 14×14 矩形（同 `zoom_button`），用
+            // `Align2::CENTER_CENTER` 把文字**整体**（galley 行框）对准矩形
+            // 中心。不要手算「行高 × 系数」——那依赖字体 ascent/descent，
+            // 换字体就漂；`CENTER_CENTER` 是 egui 全局标签的对齐口径，
+            // 与图标 `fit_to_exact_size` 的视觉中心同源。
             if state.show_scale_text {
                 let pct = scale_to_percent(scale);
                 let galley = ui
                     .painter()
                     .layout_no_wrap(format!("{pct}%"), mono(11.0), shell.t1());
-                let pos = ui.next_widget_position();
-                ui.painter().galley(pos, galley.clone(), shell.t1());
-                ui.advance_cursor_after_rect(egui::Rect::from_min_size(pos, galley.size()));
+                let (text_rect, _) = ui.allocate_exact_size(
+                    egui::vec2(galley.size().x.max(14.0), 14.0),
+                    egui::Sense::hover(),
+                );
+                ui.painter().text(
+                    text_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{pct}%"),
+                    mono(11.0),
+                    shell.t1(),
+                );
             }
 
             // ── ＋（放大） ─────────────────────────────────────────────
