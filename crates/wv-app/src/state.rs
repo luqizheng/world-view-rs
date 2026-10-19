@@ -19,9 +19,9 @@ use bevy::prelude::*;
 use wv_io::diagnostics::Diagnostics;
 
 pub use wv_render::state::{
-    lod_tier, BrushState, BrushTool, BrushToolGroup, DrillState, GridConfig, LodTier, MeasureMode,
-    MeasureState, PlaybackState, SelectionState, ViewMode, ViewState, WorldProjection,
-    LOD_NATION_SCALE, LOD_REGION_SCALE,
+    lod_tier, BrushState, BrushTool, BrushToolGroup, DrillState, EditCellState, GridConfig,
+    LodTier, MeasureMode, MeasureState, PlaybackState, SelectionState, ViewMode, ViewState,
+    WorldProjection, LOD_NATION_SCALE, LOD_REGION_SCALE,
 };
 
 // 2026-10-18（ADR-0033）：`ContinentGenerationStash` / `ContinentGenerationState`

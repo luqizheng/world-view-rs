@@ -175,6 +175,13 @@ pub enum MapToolId {
     MeasureEraser,
     /// 打开「生成大陆」面板（不是互斥工具，只开门）。
     Continent,
+    /// 单格编辑（[ADR-0040]）：点选一格改 surface/height/biome 三通道。
+    ///
+    /// 与 `Brush` 是**两类工具**：`Brush` 是批改（沿 stroke 改多格）,
+    /// `EditCell` 是最 detail 的精细编辑器（一次一格,每格 1 command）——
+    /// 故**不入 `BrushTool` 枚举,与现有工具平级进 `MapToolId`**。
+    /// 由 `ui::cell_pick` 做命中测试,由 `inspector_panel` 渲染字段编辑 UI。
+    EditCell,
 }
 
 /// 一条命令：注册表的条目。

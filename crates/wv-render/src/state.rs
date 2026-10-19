@@ -629,6 +629,46 @@ pub struct SelectionState {
     pub last_map_id: Option<wv_core::Id>,
 }
 
+/// 单格编辑工具状态（[ADR-0040] §决策 5）。
+///
+/// 与 [`SelectionState`] 平级：**会话态,本地图使用**——
+/// `last_map_id` 变即清空（防「切换图后旧 hover 卡在画面上」）。
+///
+/// **两层状态**：
+/// - `hover` = 当前鼠标压在哪一格（即时刷新,Inspector 不必读）；
+/// - `selected` = 点选 committed 的那一格（Inspector 与 PassId::CellSelection
+///   必读,ESC 清空）。
+///
+/// hover 与 selected 共存不冲突——hover 来自光标移动,selected 来自点击。
+#[derive(Resource, Debug, Default, Clone, PartialEq)]
+pub struct EditCellState {
+    /// 当前鼠标压住的格 (gx, gy)；`None` 表示鼠标不在地图内。
+    pub hover: Option<(i32, i32)>,
+    /// 点击落定的格 (gx, gy)。ESC 清空 / 切图也清空。
+    pub selected: Option<(i32, i32)>,
+    /// 绑定的图 ID；变图即清空选中格(与 [`SelectionState::last_map_id`]
+    /// 一致语义,统一通过 [`EditCellState::on_map_change`] 处理)。
+    pub last_map_id: Option<wv_core::Id>,
+}
+
+impl EditCellState {
+    /// 清空 hover + selected；**不会**清 `last_map_id`（那是别处碰）。
+    pub fn clear(&mut self) {
+        self.hover = None;
+        self.selected = None;
+    }
+
+    /// 切换图时调用——如果新图 ≠ 上次记录的图,清空所有格相关字段
+    /// （与 [`SelectionState`] 的 `on_map_change` 同口径）。
+    pub fn on_map_change(&mut self, new_map: &wv_core::Id) {
+        if self.last_map_id.as_ref() != Some(new_map) {
+            self.hover = None;
+            self.selected = None;
+        }
+        self.last_map_id = Some(new_map.clone());
+    }
+}
+
 impl SelectionState {
     /// 画中（草稿非空）。
     pub fn is_drawing(&self) -> bool {

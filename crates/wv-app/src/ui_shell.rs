@@ -1189,6 +1189,8 @@ fn apply_pending_commands(
     ),
     // 选择工具会话态：命令面板「生成大陆…」顺手启用选择工具。
     mut selection: ResMut<crate::state::SelectionState>,
+    // 单格编辑工具会话态（[ADR-0040]）：跟 selection 同款粒度。
+    mut edit_cell: ResMut<crate::state::EditCellState>,
     current_loc: Res<CurrentLocale>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     time: Res<Time>,
@@ -1320,6 +1322,7 @@ fn apply_pending_commands(
                 MapToolId::MeasureRect => measure.mode == MeasureMode::Rect,
                 MapToolId::MeasureEraser => measure.mode == MeasureMode::Eraser,
                 MapToolId::Continent => false,
+                MapToolId::EditCell => edit_cell.selected.is_some(),
             };
 
             if matches!(tool, MapToolId::Continent) {
@@ -1342,6 +1345,8 @@ fn apply_pending_commands(
                 if had_measure {
                     measure.clear_draft();
                 }
+                // 关掉 EditCell 时清空状态(避免「切走工具后旧选择留着」)。
+                edit_cell.clear();
 
                 // ② 再按需打开（已启用 → 保持全关，即切换关闭）。
                 if !already_on {
@@ -1362,6 +1367,13 @@ fn apply_pending_commands(
                             measure.mode = MeasureMode::Eraser;
                         }
                         MapToolId::Continent => unreachable!("Continent 已在上方分支处理"),
+                        // EditCell 工具激活:`selected` 仍为 None,要等用户点击一格
+                        // 才出 Inspector 字段 + PassId::CellSelection 高亮。
+                        // (这里**不**自动开 selection.enabled——那是 Circle Select 工具)
+                        MapToolId::EditCell => {
+                            // No-op: `edit_cell.selected` 在点击时由 cell_pick 写入,
+                            // 见 ui_shell::map_click_handler。
+                        }
                     }
                 }
             }
@@ -1861,6 +1873,9 @@ mod tests {
         // 2026-10-19 地图工具条：分发器互斥工具需要测量 / 街道会话态。
         world.init_resource::<crate::state::MeasureState>();
         world.init_resource::<wv_render::streets::StreetEditorState>();
+        // 2026-10-19 单格编辑工具（[ADR-0040]）:分发器需要 EditCellState 才能
+        // 运行 `apply_pending_commands` 的 SelectMapTool(EditCell) 分支。
+        world.init_resource::<crate::state::EditCellState>();
         world.init_resource::<crate::ui::ContinentDialog>();
         // ADR-0018：UI 文案语言；默认 `Locale::Zh`（与 GUI 启动默认值一致）。
         world.init_resource::<crate::i18n::CurrentLocale>();
@@ -2093,6 +2108,9 @@ mod tests {
         // 2026-10-19 地图工具条：分发器互斥工具需要测量 / 街道会话态。
         world.init_resource::<crate::state::MeasureState>();
         world.init_resource::<wv_render::streets::StreetEditorState>();
+        // 2026-10-19 单格编辑工具（[ADR-0040]）:分发器需要 EditCellState 才能
+        // 运行 `apply_pending_commands` 的 SelectMapTool(EditCell) 分支。
+        world.init_resource::<crate::state::EditCellState>();
         world.init_resource::<crate::ui::ContinentDialog>();
         // ADR-0018：UI 文案语言；默认 `Locale::Zh`（与 GUI 启动默认值一致）。
         world.init_resource::<crate::i18n::CurrentLocale>();

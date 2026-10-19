@@ -59,10 +59,19 @@ pub enum PassId {
     /// 河流折线（ADR-0037 D5）：模板世界由 terrain+rivers_seed 派生的水系。
     /// 与 TerrainDecor 同口径（VectorFlat/RealTerrain/Schematic/Faction 开）。
     Rivers,
+    /// 单格编辑工具的「选中高亮」(ADR-0040 §决策 4)：1 格 outline + 半透底色。
+    ///
+    /// **会话轴 pass** —— 与 `tracks_visible` 同款处理：不进 `LayerFrame`
+    /// 级联,由 `ToolKind::EditCell` + `EditCellState.selected` 联合控制
+    /// (后者是 hover / selected 双态,见 [ADR-0040] §决策 5)。
+    /// 默认 disabled,Mode 表 8 行**全部关** —— 仅当 `selected.is_some()`
+    /// 时由 `resolve_render_recipe` 单独开启;
+    /// hover 不画(免闪烁),仅 selected 1 格画 outline。
+    CellSelection,
 }
 
 impl PassId {
-    /// 全部 pass（遍历测试用）。
+    /// 全部 pass(遍历测试用)。
     pub const ALL: &'static [PassId] = &[
         PassId::Terrain,
         PassId::Isoline,
@@ -87,10 +96,11 @@ impl PassId {
         PassId::FeatureOverlay,
         PassId::TerrainDecor,
         PassId::Rivers,
+        PassId::CellSelection,
     ];
 
-    /// pass 总数（数组长度 = `PassId::COUNT`）。
-    pub const COUNT: usize = 23;
+    /// pass 总数(数组长度 = `PassId::COUNT`)。
+    pub const COUNT: usize = 24;
 }
 
 /// 单条 pass 的元信息（ADR-0021 §2 D1 §3）。
@@ -160,7 +170,7 @@ impl Default for RenderRecipe {
 #[rustfmt::skip]
 const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
     // 默认浏览（plan v0.1 D3 A 类，ADR-0012 已接受）。
-    (ViewMode::VectorFlat, [
+(ViewMode::VectorFlat, [
         true,  // Terrain
         true,  // Isoline
         true,  // GridLines（受 LayerFrame + 会话开关，mode 表不关）
@@ -184,6 +194,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true,  // FeatureOverlay
         true, // TerrainDecor
         true, // Rivers
+        true, // CellSelection（[ADR-0040]：会话轴,8 mode 默认开,运行时由 selected 控）
     ]),
     // 真实地形（plan v0.1 D3 B 类）——与 VectorFlat 同，除等值线（仅 VectorFlat）。
     (ViewMode::RealTerrain, [
@@ -192,6 +203,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true,
         true, // TerrainDecor
         true, // Rivers
+        true, // CellSelection
     ]),
     // 色块地形（plan v0.1 D3 C 类）——同上。
     (ViewMode::Schematic, [
@@ -200,6 +212,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true,
         true, // TerrainDecor
         true, // Rivers
+        true, // CellSelection
     ]),
     // Google 模式 —— 自带完整观感：等值线 / 氛围族 / 建筑不画。
     (ViewMode::GoogleMap, [
@@ -208,6 +221,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true,
         false, // TerrainDecor
         true, // Rivers：Google 也画河（自有观感但水系照常）
+        true, // CellSelection
     ]),
     // 势力图 —— 等值线不画，其余与真实地形同。
     (ViewMode::Faction, [
@@ -216,6 +230,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true,
         true, // TerrainDecor
         true, // Rivers
+        true, // CellSelection
     ]),
     // 事件图 —— 极简底图。
     (ViewMode::Event, [
@@ -224,6 +239,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true,
         false, // TerrainDecor
         false, // Rivers：极简底图不画
+        true, // CellSelection
     ]),
     // 轮廓图（黑底分析视图）—— 大部分装饰关。
     (ViewMode::Coastline, [
@@ -232,6 +248,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         false, // FeatureOverlay：轮廓图只留轮廓
         false, // TerrainDecor
         false, // Rivers
+        true, // CellSelection
     ]),
     // Topographic 分析视图（[ADR-0039]）：水/陆 + height 3 阶着色，关其它装饰族。
     // 仅 Terrain + Isoline + Rivers 留——
@@ -267,6 +284,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         false, // FeatureOverlay（分析视图不要地物）
         false, // TerrainDecor
         true,  // Rivers：水系边界是水/陆判定的关键
+        true,  // CellSelection（会话轴，Topographic 也开——EditCell 工具可与任何 viewmode 叠加）
     ]),
 ];
 
