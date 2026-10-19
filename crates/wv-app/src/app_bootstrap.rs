@@ -372,7 +372,6 @@ pub fn run(config: AppConfig) {
             ui::panel_layers,
             ui::panel_brush,
             // ui::panel_minimap, // TODO: 恢复小地图后取消注释
-            ui::panel_compass,
             ui::panel_timeline,
             ui::panel_event,
             ui::panel_situation,

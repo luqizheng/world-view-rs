@@ -95,7 +95,6 @@ pub use primitives::{
     ICON_CHEVRON_RIGHT,
     ICON_CLOCK,
     ICON_COMMAND,
-    ICON_COMPASS,
     ICON_ERASER,
     ICON_EYE,
     ICON_EYE_OFF,

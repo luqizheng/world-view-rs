@@ -105,8 +105,6 @@ pub enum Panel {
     Validation,
     /// 小地图（用户 1.2 要求，含图层开关）。
     Minimap,
-    /// 指南针（临时替换小地图，显示地图朝向）。
-    Compass,
     /// 人物登记（用户 1.4 要求）。
     Character,
     /// 事件登记（用户 1.4 要求，可从时间轴进入）。
@@ -115,11 +113,10 @@ pub enum Panel {
 
 impl Panel {
     /// 全部面板（菜单按此顺序列出）。
-    pub const ALL: [Panel; 12] = [
+    pub const ALL: [Panel; 11] = [
         Panel::MapTree,
         Panel::Layers,
         Panel::Brush,
-        Panel::Compass,
         Panel::Timeline,
         Panel::Event,
         Panel::Situation,
@@ -144,7 +141,6 @@ impl Panel {
             Panel::Situation => t(loc, I18nKey::PanelSituation),
             Panel::Validation => t(loc, I18nKey::PanelValidation),
             Panel::Minimap => t(loc, I18nKey::PanelMinimap),
-            Panel::Compass => t(loc, I18nKey::PanelCompass),
             Panel::Character => t(loc, I18nKey::PanelCharacter),
             Panel::Event => t(loc, I18nKey::PanelEvent),
         }
@@ -168,7 +164,6 @@ impl Panel {
             Panel::Layers => [12.0, 398.0],
             Panel::Brush => [12.0, 578.0],
             Panel::Minimap => [332.0, 56.0],
-            Panel::Compass => [332.0, 56.0],
             Panel::Faction => [332.0, 368.0],
             Panel::Region => [332.0, 680.0],
             Panel::Event => [652.0, 56.0],
@@ -191,7 +186,6 @@ impl Panel {
             Panel::Layers => [204.0, 168.0],
             Panel::Brush => [274.0, 220.0],
             Panel::Minimap => [216.0, 300.0],
-            Panel::Compass => [216.0, 300.0],
             // 通栏：1280 − 12×2 = 1256；高 164 对齐 web `.timeline`（50 顶排 + 轨道）。
             Panel::Timeline => [1256.0, 164.0],
             Panel::Event => [300.0, 312.0],
@@ -218,7 +212,6 @@ impl Panel {
             Panel::Situation => "situation",
             Panel::Validation => "validation",
             Panel::Minimap => "minimap",
-            Panel::Compass => "compass",
             Panel::Character => "character",
             Panel::Event => "event",
         }
@@ -231,8 +224,8 @@ impl Panel {
     /// 图标资产在 `crates/wv-ui/assets/ui/tool_icons/`（AGENTS.md §8）。
     pub fn icon(self) -> wv_ui::widgets::HeadIcon {
         use wv_ui::widgets::{
-            HeadIcon, ICON_ALERT, ICON_BRUSH, ICON_CALENDAR, ICON_CLOCK, ICON_COMPASS, ICON_FLAG,
-            ICON_GLOBE, ICON_LANDMARK, ICON_LAYERS, ICON_LIST, ICON_MAP, ICON_SLIDERS, ICON_USER,
+            HeadIcon, ICON_ALERT, ICON_BRUSH, ICON_CALENDAR, ICON_CLOCK, ICON_FLAG, ICON_GLOBE,
+            ICON_LANDMARK, ICON_LAYERS, ICON_LIST, ICON_MAP, ICON_SLIDERS, ICON_USER,
         };
         HeadIcon::Svg(match self {
             Panel::MapTree => ICON_GLOBE,
@@ -245,7 +238,6 @@ impl Panel {
             Panel::Situation => ICON_LIST,
             Panel::Validation => ICON_ALERT,
             Panel::Minimap => ICON_MAP,
-            Panel::Compass => ICON_COMPASS,
             Panel::Character => ICON_USER,
             Panel::Event => ICON_CALENDAR,
         })
@@ -255,13 +247,13 @@ impl Panel {
     pub fn data_opt(self) -> bool {
         matches!(
             self,
-            Panel::Brush | Panel::Compass | Panel::Layers | Panel::Region | Panel::Validation
+            Panel::Brush | Panel::Layers | Panel::Region | Panel::Validation
         )
     }
 
     /// 首次启动的默认可见性（地图为主，D1：默认开的面板尽量少）。
     pub fn default_visible(self) -> bool {
-        matches!(self, Panel::Brush | Panel::Compass | Panel::Timeline)
+        matches!(self, Panel::Brush | Panel::Timeline)
     }
 }
 
@@ -289,8 +281,7 @@ impl Default for PanelState {
             visible.insert(p, false);
         }
         visible.insert(Panel::Brush, true);
-        visible.insert(Panel::Minimap, true);
-        visible.insert(Panel::Compass, true);
+        // visible.insert(Panel::Minimap, true); // TODO: 恢复小地图后取消注释
         visible.insert(Panel::Timeline, true);
         Self {
             visible,

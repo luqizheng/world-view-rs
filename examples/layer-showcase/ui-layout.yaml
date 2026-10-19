@@ -13,13 +13,6 @@ panels:
     height: 260.0
     collapsed: false
     visible: false
-  compass:
-    x: 332.0
-    y: 56.0
-    width: 216.0
-    height: 300.0
-    collapsed: false
-    visible: true
   event:
     x: 652.0
     y: 56.0

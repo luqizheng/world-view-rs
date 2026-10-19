@@ -321,8 +321,6 @@ pub enum I18nKey {
     PanelValidation,
     /// 「小地图」面板标题
     PanelMinimap,
-    /// 「指南针」面板标题
-    PanelCompass,
     /// 「人物登记」面板标题
     PanelCharacter,
     /// 「事件登记」面板标题
@@ -757,8 +755,6 @@ pub enum I18nKey {
     CmdTogglePanelBrush,
     /// 「显隐小地图面板」
     CmdTogglePanelMinimap,
-    /// 「显隐指南针面板」
-    CmdTogglePanelCompass,
     /// 「显隐时间轴」
     CmdTogglePanelTimeline,
     /// 「显隐事件登记面板」
@@ -1033,7 +1029,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 427] = [
+    pub const ALL: [I18nKey; 425] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1203,7 +1199,6 @@ impl I18nKey {
         I18nKey::PanelSituation,
         I18nKey::PanelValidation,
         I18nKey::PanelMinimap,
-        I18nKey::PanelCompass,
         I18nKey::PanelCharacter,
         I18nKey::PanelEvent,
         // 事实地界（theme overlay v1 / 选择工具 M4，3）
@@ -1389,7 +1384,6 @@ impl I18nKey {
         I18nKey::CmdTogglePanelLayers,
         I18nKey::CmdTogglePanelBrush,
         I18nKey::CmdTogglePanelMinimap,
-        I18nKey::CmdTogglePanelCompass,
         I18nKey::CmdTogglePanelTimeline,
         I18nKey::CmdTogglePanelEvent,
         I18nKey::CmdTogglePanelSituation,

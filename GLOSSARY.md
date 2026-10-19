@@ -115,7 +115,7 @@
 | **Google Default Map 式地图壳** | Google Default Map-style map shell | 离线模仿 Google 普通地图的信息层级与交互：近白陆地、淡水、公园绿、白路灰缘、红点白环 POI、左键拖动平移、贴边缩放控件；**不接入在线瓦片或专有数据**。首次出现：用户 2026-10-13 要求与 ADR-0008 | 地理 / UI |
 | **道路双层描边** | Road casing and fill | 道路用浅灰外缘（casing）与白色主体（fill）两层表示；两层宽度差形成 Google 式路缘。首次出现：ADR-0008。（2026-10-14 追记：**街道**自 ADR-0010 §5「街道双层描边」起同口径——两个宽度档各画 casing + fill 两层；此前只画 fill，地图模式下白 fill 落在近白土地上等于隐形） | 地理 / 渲染 |
 | **亚像素渲染** | Subpixel rendering | 每个逻辑地形格输出多个纹理像素，使水陆 / 绿地边界在放大与线性采样下得到平滑过渡；分辨率受 4096² 纹理预算约束。首次出现：ADR-0008 | 地理 / 渲染 |
-| **地图朝向** | Map orientation | `MapNode.orientation`（度）：本图在屏幕上的旋转角，**0 = 正北朝上，正值 = 顺时针偏转**（90 = 北朝右）。是**地图的属性**（作者决定这张图的「北」朝哪）而非相机状态——YAML 是唯一存储处，渲染层只读（2026-10-14 起由 `wv-app` 的 `camera::apply_map_orientation` 每帧写进相机旋转，视图真正随它转动）。指南针面板经 `SetMapOrientationCommand` 编辑此值。首次出现：`crates/wv-core/src/map/mod.rs` + 指南针面板（e84eec9） | 地理 / 渲染 |
+| **地图朝向** | Map orientation | `MapNode.orientation`（度）：本图在屏幕上的旋转角，**0 = 正北朝上，正值 = 顺时针偏转**（90 = 北朝右）。是**地图的属性**（作者决定这张图的「北」朝哪）而非相机状态——YAML 是唯一存储处，渲染层只读（2026-10-14 起由 `wv-app` 的 `camera::apply_map_orientation` 每帧写进相机旋转，视图真正随它转动）。通过 `wv_edit::SetMapOrientationCommand` 修改此值（2026-10-19 起 UI 浮窗指南针面板已删除，未来的作者编辑入口属于 `wv-render` 地图呈现的一部分）。首次出现：`crates/wv-core/src/map/mod.rs` + 旧指南针面板（e84eec9） | 地理 / 渲染 |
 | **屏幕对齐文字** | Screen-aligned labels | 地名 / 街道名标注**不随地图旋转**的约束（2026-10-14 用户裁定）：地图按朝向旋转后，`Text2d` 标注实体取相机旋转的**逆**叠加，屏幕角恒为零；标注相对 POI 的「上移避让」偏移也按**屏幕上方**取世界方向（`camera::screen_vec_to_world`）。Google Maps 旋转时标签保持水平的同款行为。首次出现：`crates/wv-app/src/render/{camera,drill,streets}.rs`（2026-10-14） | 地理 / 渲染 |
 
 ## 缩放到街道：分级缩放与街道图层（2026-10）

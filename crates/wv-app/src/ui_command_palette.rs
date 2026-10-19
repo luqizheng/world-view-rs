@@ -388,7 +388,6 @@ impl CommandRegistry {
                 Panel::Layers => I18nKey::CmdTogglePanelLayers,
                 Panel::Brush => I18nKey::CmdTogglePanelBrush,
                 Panel::Minimap => I18nKey::CmdTogglePanelMinimap,
-                Panel::Compass => I18nKey::CmdTogglePanelCompass,
                 Panel::Timeline => I18nKey::CmdTogglePanelTimeline,
                 Panel::Event => I18nKey::CmdTogglePanelEvent,
                 Panel::Situation => I18nKey::CmdTogglePanelSituation,

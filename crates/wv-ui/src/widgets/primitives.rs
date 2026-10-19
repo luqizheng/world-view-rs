@@ -827,9 +827,6 @@ pub const ICON_MOUNTAIN: egui::ImageSource<'static> =
 /// 图层类型：聚落 / 势力驻地（Lucide `landmark`）。
 pub const ICON_LANDMARK: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/landmark.svg");
-/// 面板头部：指南针（Lucide `compass`）。
-pub const ICON_COMPASS: egui::ImageSource<'static> =
-    egui::include_image!("../../assets/ui/tool_icons/compass.svg");
 /// 面板头部：势力（Lucide `flag`）。
 pub const ICON_FLAG: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/flag.svg");

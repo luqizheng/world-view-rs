@@ -173,7 +173,6 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::PanelSituation => "事态登记",
         I18nKey::PanelValidation => "校验面板",
         I18nKey::PanelMinimap => "小地图",
-        I18nKey::PanelCompass => "指南针",
         I18nKey::PanelCharacter => "人物登记",
         I18nKey::PanelEvent => "事件登记",
 
@@ -410,7 +409,6 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CmdTogglePanelLayers => "显隐图层面板",
         I18nKey::CmdTogglePanelBrush => "显隐地形笔刷面板",
         I18nKey::CmdTogglePanelMinimap => "显隐小地图面板",
-        I18nKey::CmdTogglePanelCompass => "显隐指南针面板",
         I18nKey::CmdTogglePanelTimeline => "显隐时间轴",
         I18nKey::CmdTogglePanelEvent => "显隐事件登记面板",
         I18nKey::CmdTogglePanelSituation => "显隐事态登记面板",
@@ -712,7 +710,6 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::PanelSituation => "Situation log",
         I18nKey::PanelValidation => "Validation",
         I18nKey::PanelMinimap => "Minimap",
-        I18nKey::PanelCompass => "Compass",
         I18nKey::PanelCharacter => "Character log",
         I18nKey::PanelEvent => "Event log",
 
@@ -949,7 +946,6 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CmdTogglePanelLayers => "Toggle layers panel",
         I18nKey::CmdTogglePanelBrush => "Toggle terrain-brush panel",
         I18nKey::CmdTogglePanelMinimap => "Toggle minimap panel",
-        I18nKey::CmdTogglePanelCompass => "Toggle compass panel",
         I18nKey::CmdTogglePanelTimeline => "Toggle timeline",
         I18nKey::CmdTogglePanelEvent => "Toggle event log",
         I18nKey::CmdTogglePanelSituation => "Toggle situation log",
