@@ -537,9 +537,11 @@ pub fn map_controls(
             egui::vec2(EDGE_OFFSET, -EDGE_OFFSET),
         )
     } else {
+        // 贴顶栏**下沿**（DOCK_TOP_CLEARANCE = 顶栏 38 + 8）；只偏移 18 会
+        // 落在 38px 顶栏内部，压住 Rebuild / settings 按钮（2026-10-19 实测）。
         (
             egui::Align2::RIGHT_TOP,
-            egui::vec2(-EDGE_OFFSET, EDGE_OFFSET),
+            egui::vec2(-EDGE_OFFSET, DOCK_TOP_CLEARANCE),
         )
     };
     let zoom_offset = dock
