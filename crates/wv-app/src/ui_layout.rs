@@ -91,6 +91,12 @@ pub struct LayoutFile {
     /// 默认「贴地」一致）。
     #[serde(default)]
     pub map_snap: Option<bool>,
+    /// 地图工具条拖动位置（2026-10-19 grip 拖动）。
+    ///
+    /// 缺省 `None` = 用默认锚点；用户拖动 grip 后由 [`MapDockState::pos`]
+    /// 接管，序列化形式为 `[x, y]`。两个朝向独立记位置。
+    #[serde(default)]
+    pub map_dock_pos: Option<[f32; 2]>,
 }
 
 /// 布局文件路径：工程目录下的 `ui-layout.yaml`（P2：目录即工程）。
@@ -355,5 +361,17 @@ mod tests {
         let f: LayoutFile = serde_yaml::from_str("panels: {}\n").expect("缺字段应被兜底");
         assert_eq!(f.map_dock, None);
         assert_eq!(f.map_snap, None);
+        assert_eq!(f.map_dock_pos, None);
+    }
+
+    #[test]
+    fn map_dock_pos_round_trips_through_yaml() {
+        let f = LayoutFile {
+            map_dock_pos: Some([100.5, -200.0]),
+            ..Default::default()
+        };
+        let text = serde_yaml::to_string(&f).expect("序列化应成功");
+        let back: LayoutFile = serde_yaml::from_str(&text).expect("反序列化应成功");
+        assert_eq!(back.map_dock_pos, Some([100.5, -200.0]));
     }
 }

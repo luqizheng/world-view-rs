@@ -1594,6 +1594,9 @@ fn load_layout_on_project_open(
     if let Some(snap) = file.map_snap {
         dock.snapping = snap;
     }
+    if let Some([x, y]) = file.map_dock_pos {
+        dock.pos = Some(crate::ui::map_controls::MapDockPos { x, y });
+    }
     *layout = file;
     *loaded_dir = Some(dir);
 }
@@ -1623,6 +1626,7 @@ fn persist_layout_on_change(
     file.language = Some(current_loc.0.as_str().to_string());
     file.map_dock = Some(dock.orientation.key().to_string());
     file.map_snap = Some(dock.snapping);
+    file.map_dock_pos = dock.pos.map(|p| [p.x, p.y]);
 
     let mut changed = false;
     // 语言切换本身就让 layout 跟着变；与面板几何检测并入同一个 `changed` 累加器。
@@ -1632,6 +1636,7 @@ fn persist_layout_on_change(
         || file.map_theme != layout.map_theme
         || file.map_dock != layout.map_dock
         || file.map_snap != layout.map_snap
+        || file.map_dock_pos != layout.map_dock_pos
     {
         changed = true;
     }

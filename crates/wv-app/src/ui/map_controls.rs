@@ -52,6 +52,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
+use serde::{Deserialize, Serialize};
 
 use crate::edit::editing::EditHistory;
 use crate::state::{
@@ -169,6 +170,26 @@ impl MapDockOrientation {
     }
 }
 
+/// 工具条相对锚点的偏移（屏幕像素）。
+///
+/// 纵向模式：x = 离右缘的负偏移，y = 离顶栏下沿的偏移。
+/// 横向模式：x = 离水平中心的偏移，y = 离窗体下沿的负偏移。
+///
+/// 持久化键 = `ui-layout.yaml::map_dock_pos`，自由 `[x, y]`。
+/// `None` = 用默认锚点（项目历史位置）。
+///
+/// **设计要点**：用户能用 grip-vertical 把工具条拖到屏幕任意位置。拖到的
+/// 位置存进本字段，下次启动自动恢复。这与其它面板的窗口记忆（egui `Memory`
+/// 的 `area_rect`）平行——但工具条走自己的 `MapDockState`，不进 `LayoutFile`
+/// 的 `panels` 表，因为它不是浮动面板。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Resource, Default)]
+pub struct MapDockPos {
+    /// x 偏移（像素）。
+    pub x: f32,
+    /// y 偏移（像素）。
+    pub y: f32,
+}
+
 /// 地图工具条偏好（随工程落盘）。
 #[derive(Debug, Clone, PartialEq, Resource)]
 pub struct MapDockState {
@@ -177,6 +198,9 @@ pub struct MapDockState {
     /// 吸附开关（magnet）。当前消费点：势力划分对话框的默认边界模式——
     /// 开启 = 默认「贴地」（沿河流 / 山脊 / 湖岸），关闭 = 默认直线。
     pub snapping: bool,
+    /// 用户拖动 grip 后的位置偏移（绝对像素，与 `orientation` 联动解释）。
+    /// `None` = 用默认锚点。
+    pub pos: Option<MapDockPos>,
 }
 
 impl Default for MapDockState {
@@ -191,6 +215,7 @@ impl Default for MapDockState {
             // Figma 原稿的 magnet 是启用态（`Snapping enabled`）；与「划分
             // 势力默认贴地」的历史默认（`DivisionMode::Snap`）一致。
             snapping: true,
+            pos: None,
         }
     }
 }
@@ -249,9 +274,8 @@ pub fn map_controls(
 
     let vertical = dock.orientation == MapDockOrientation::Vertical;
     let metrics = DockMetrics::for_orientation(vertical);
-    // 纵向贴顶（避开顶栏与底部时间轴）；横向贴底，但**让开时间轴**——
-    // 时间轴默认贴窗体底边且全宽，横排工具条若直接贴底会被它整条盖住。
-    let (anchor, offset) = if vertical {
+    // 默认锚点（无拖动历史时）：纵向贴顶、横向贴底让时间轴。
+    let (anchor, default_offset) = if vertical {
         (
             egui::Align2::RIGHT_TOP,
             egui::vec2(-EDGE_OFFSET, DOCK_TOP_CLEARANCE),
@@ -267,6 +291,16 @@ pub fn map_controls(
             EDGE_OFFSET
         };
         (egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -bottom_lift))
+    };
+    // 用户拖动 grip 后的位置偏移：仍是「相对锚点的屏幕偏移」，但不再
+    // 是「贴边 -18」，而是任意 (x, y)。把它折成同样的 `vec2(x, y)`：
+    //   纵向：`RIGHT_TOP` + (offset_x, offset_y) —— x 越负越往左，y 越正越往下；
+    //   横向：`CENTER_BOTTOM` + (offset_x, offset_y) —— 允许工具条在底部
+    //   中心附近水平滑动，y 越负越往上。
+    let offset = if let Some(p) = dock.pos {
+        egui::vec2(p.x, p.y)
+    } else {
+        default_offset
     };
     let margin = margin_xy(metrics.pad_x, metrics.pad_y);
 
@@ -288,17 +322,37 @@ pub fn map_controls(
                 })
                 .show(ui, |ui| {
                     let mut slots = |ui: &mut egui::Ui| {
-                        // ── 朝向切换（Figma 左侧 grip 的位置） ──────────────
-                        // 图标表示**点击后的动作**：当前纵向 → 显示横向箭头。
+                        // ── 朝向切换 + 拖动手柄（Figma grip-vertical） ─────
+                        // grip-vertical 是 Figma 原稿的首图标，对应我们的两条
+                        // 职责：① 拖动 = 整条工具条跟随；② 单击 = 切换朝向。
+                        // 视觉上独占一个 icon_btn 槽（纵向 28px、横向 32px），
+                        // hover 显 `bg_hover`。
                         let (swap_icon, swap_hint) = if vertical {
-                            (ICON_MOVE_HORIZONTAL, "切换为横向工具条")
+                            (ICON_MOVE_HORIZONTAL, "拖动移动 / 单击切换为横向工具条")
                         } else {
-                            (ICON_MOVE_VERTICAL, "切换为纵向工具条")
+                            (ICON_MOVE_VERTICAL, "拖动移动 / 单击切换为纵向工具条")
                         };
-                        if icon_button(ui, &shell, metrics, swap_icon, false, true, swap_hint)
-                            .clicked()
-                        {
+                        let grip_resp = grip_handle(ui, &shell, metrics, swap_icon, swap_hint);
+                        if grip_resp.dragged() {
+                            // 把 grip 的拖动量累计到 `MapDockState::pos`：
+                            //   纵向模式：anchor=RIGHT_TOP，pos.x 越负越靠左；
+                            //   横向模式：anchor=CENTER_BOTTOM，pos.x 决定水平偏移。
+                            // 两种模式的「屏幕 x 方向」一致（正方向 = 右），
+                            // 不用换算；屏幕 y 方向在两个 anchor 下都一致（正 = 下）。
+                            // 「(x, y) 相对锚点」与「(x, y) 相对 grip 起手」同义，
+                            // 直接用 drag_delta 累加；松手后 dock.pos 落到新位置。
+                            let pos = dock.pos.get_or_insert(MapDockPos {
+                                x: default_offset.x,
+                                y: default_offset.y,
+                            });
+                            pos.x += grip_resp.drag_delta().x;
+                            pos.y += grip_resp.drag_delta().y;
+                        }
+                        if grip_resp.clicked() {
                             dock.orientation = dock.orientation.toggled();
+                            // 朝向切换后旧 pos 不再合身：清掉，回到默认锚点，
+                            // 下次重新拖动时再记录新坐标。
+                            dock.pos = None;
                         }
 
                         // ── 工具组（V / H / B / E / L / P / M） ─────────────
@@ -661,6 +715,51 @@ fn separator(ui: &mut egui::Ui, shell: &UiShell, metrics: DockMetrics, vertical:
         [rect.center_top(), rect.center_bottom()]
     };
     ui.painter().line_segment([a, b], stroke);
+}
+
+/// 拖动手柄 + 朝向切换按钮（grip-vertical，对应 Figma `3:21848` 的 grip）。
+///
+/// **双重语义**：
+/// - 拖动（`Sense::drag`）→ 整条工具条跟随，调用方累计 `drag_delta` 到
+///   `MapDockState::pos`。
+/// - 单击（`Sense::click`）→ 切换朝向（与拖动不冲突：拖动距离足够大时
+///   `clicked()` 不会触发——egui 0.36 内部阈值）。
+///
+/// 视觉上与 `icon_button` 风格一致：t1 文字色，hover 走 `hover_bg`，
+/// 鼠标在把柄上时**显 `Grab` 光标**提示可拖。
+fn grip_handle(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    metrics: DockMetrics,
+    icon: egui::ImageSource<'static>,
+    hint: &str,
+) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::Vec2::splat(metrics.icon_btn),
+        egui::Sense::click_and_drag(),
+    );
+    let hovered = resp.hovered();
+    let fill = if hovered || resp.dragged() {
+        shell.hover_bg()
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, TILE_RADIUS, fill);
+    let tint = if hovered || resp.dragged() {
+        shell.t1()
+    } else {
+        shell.t3()
+    };
+    icon_image(icon, tint, metrics.icon_btn_icon).paint_at(
+        ui,
+        egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(metrics.icon_btn_icon)),
+    );
+    if resp.dragged() {
+        resp.on_hover_cursor(egui::CursorIcon::Grabbing)
+    } else {
+        resp.on_hover_cursor(egui::CursorIcon::Grab)
+    }
+    .on_hover_text(hint)
 }
 
 /// 写入缩放并同步相机，避免 ViewState 与 Camera 变成两个真相。
