@@ -3477,9 +3477,7 @@ impl EditCommand for EditCellCommand {
     fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
         let mut data = world
             .terrain_of(&self.map)
-            .ok_or_else(|| {
-                EditError::TerrainMismatch(format!("地图 `{}` 无地形网格", self.map))
-            })?
+            .ok_or_else(|| EditError::TerrainMismatch(format!("地图 `{}` 无地形网格", self.map)))?
             .clone();
         let idx = self.cell_index(&data)?;
         if data.cells[idx] != self.before_cell {
@@ -3497,9 +3495,7 @@ impl EditCommand for EditCellCommand {
     fn revert(&self, world: &mut World) -> EditResult<()> {
         let mut data = world
             .terrain_of(&self.map)
-            .ok_or_else(|| {
-                EditError::TerrainMismatch(format!("地图 `{}` 无地形网格", self.map))
-            })?
+            .ok_or_else(|| EditError::TerrainMismatch(format!("地图 `{}` 无地形网格", self.map)))?
             .clone();
         let idx = self.cell_index(&data)?;
         data.cells[idx] = self.before_cell;
@@ -3537,7 +3533,11 @@ mod edit_cell_tests {
 
     fn world_with_terrain(n: u32, surface: u8, height: i16, biome: u8) -> World {
         let cells = vec![
-            TerrainCellData { height, surface, biome };
+            TerrainCellData {
+                height,
+                surface,
+                biome
+            };
             (n as usize) * (n as usize)
         ];
         let mut world = World::default();
@@ -3595,7 +3595,11 @@ mod edit_cell_tests {
             surface: SURFACE_WATER,
             biome: 99,
         };
-        let after = TerrainCellData { height: 0, surface: SURFACE_LAND, biome: 0 };
+        let after = TerrainCellData {
+            height: 0,
+            surface: SURFACE_LAND,
+            biome: 0,
+        };
         let cmd = EditCellCommand::new(test_map(), 0, 0, wrong_before, after);
         let err = cmd.apply(&mut world).expect_err("stale before must fail");
         assert!(matches!(err, EditError::Precondition(_)), "got {err:?}");
@@ -3611,7 +3615,11 @@ mod edit_cell_tests {
     #[test]
     fn edit_cell_command_rejects_out_of_bounds() {
         let mut world = world_with_terrain(4, SURFACE_LAND, 0, 0);
-        let cell = TerrainCellData { height: 0, surface: 0, biome: 0 };
+        let cell = TerrainCellData {
+            height: 0,
+            surface: 0,
+            biome: 0,
+        };
         let cmd = EditCellCommand::new(test_map(), 99, 99, cell, cell);
         let err = cmd.apply(&mut world).expect_err("oob must fail");
         assert!(matches!(err, EditError::Precondition(_)));
@@ -3621,7 +3629,11 @@ mod edit_cell_tests {
     #[test]
     fn edit_cell_command_missing_map_returns_terrain_mismatch() {
         let mut world = World::default();
-        let cell = TerrainCellData { height: 0, surface: 0, biome: 0 };
+        let cell = TerrainCellData {
+            height: 0,
+            surface: 0,
+            biome: 0,
+        };
         let cmd = EditCellCommand::new(test_map(), 0, 0, cell, cell);
         let err = cmd.apply(&mut world).expect_err("missing must fail");
         assert!(matches!(err, EditError::TerrainMismatch(_)), "got {err:?}");

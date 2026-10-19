@@ -216,6 +216,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let mut mixed = 0usize;
         for px in img
@@ -246,6 +247,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let b = image_from_terrain(
             &data,
@@ -254,6 +256,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         assert_eq!(a.data, b.data);
     }
@@ -289,6 +292,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         assert_eq!(img.width(), 4 * 64); // 4 格 → res 上限 64
         let img_flat = image_from_terrain(
@@ -298,6 +302,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         assert_eq!(img_flat.width(), 4);
         // 事件图不铺瓦片：有图集也按纯色 1px/格。
@@ -308,6 +313,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         assert_eq!(img_event.width(), 4);
     }
@@ -329,6 +335,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         // 用 0 标记所有像素。
         for px in img.data.as_mut().expect("地形图必须有像素数据").iter_mut() {
@@ -371,6 +378,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         // 把整图刷成 0xFF 哨兵值。
         for px in img.data.as_mut().expect("地形图必须有像素数据").iter_mut() {
@@ -428,6 +436,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let Color::Srgba(water) = colors::COAST_WATER else {
             unreachable!()
@@ -476,6 +485,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let b = image_from_terrain(
             &data,
@@ -484,6 +494,7 @@ mod tests {
             true,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         assert_eq!(a.data, b.data, "轮廓图应忽略 soften 开关");
     }
@@ -500,6 +511,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         )
         .width()
             / data.width;
@@ -525,6 +537,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let res = image.width() / data.width;
         data.cells[5].surface = 0;
@@ -553,6 +566,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         assert!(
             img.width() > data.width,
@@ -573,6 +587,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let b = image_from_terrain(
             &data,
@@ -581,6 +596,7 @@ mod tests {
             true,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         assert_eq!(a.data, b.data, "Google 模式应忽略 soften 开关");
     }
@@ -602,6 +618,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let Color::Srgba(land) = colors_google::GOOGLE_CORE_TERRAIN[2] else {
             unreachable!("GOOGLE_CORE_TERRAIN[2] 应为 Srgba")
@@ -645,6 +662,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let res = img.width() / data.width;
         let cell_center = |cell: usize| {
@@ -673,6 +691,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let soft = image_from_terrain(
             &data,
@@ -681,6 +700,7 @@ mod tests {
             true,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let Color::Srgba(t) = colors::SOFTEN_TOWARD else {
             unreachable!("SOFTEN_TOWARD 应为 Srgba")
@@ -726,6 +746,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let mut patched = image_from_terrain(
             &data,
@@ -734,6 +755,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         patch_terrain_image(
             &mut patched,
@@ -935,6 +957,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let mut images = Assets::<Image>::default();
         let held = wv_core::Id::new_unchecked("map_city");
@@ -1074,6 +1097,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let tex = new_terrain_texture(
             &mut images,
@@ -1142,6 +1166,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let tex = new_terrain_texture(
             &mut images,

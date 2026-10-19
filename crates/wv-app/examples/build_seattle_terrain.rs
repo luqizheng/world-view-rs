@@ -106,6 +106,7 @@ fn main() {
         true,
         wv_render::theme::palette::colors(Default::default()),
         wv_render::theme::theme_pack::builtin::for_palette(Default::default()).treatment,
+        0.0,
     );
     let out = root.join("target/map_preview/seattle_google.png");
     write_png(
@@ -125,6 +126,7 @@ fn main() {
         true,
         wv_render::theme::palette::colors(Default::default()),
         wv_render::theme::theme_pack::builtin::for_palette(Default::default()).treatment,
+        0.0,
     );
     let out_rt = root.join("target/map_preview/seattle_real.png");
     write_png(

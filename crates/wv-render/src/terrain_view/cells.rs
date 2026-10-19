@@ -420,7 +420,10 @@ impl<'a> CellRenderer<'a> {
         // 事件图与轮廓图都不铺瓦片：前者灰白底，后者水陆三色。
         // Topographic（[ADR-0039]）也不铺瓦片——它按 cell.height + cell.surface
         // 走独立着色管线，不依赖瓦片图集。
-        let atlas = if matches!(mode, ViewMode::Event | ViewMode::Coastline | ViewMode::Topographic) {
+        let atlas = if matches!(
+            mode,
+            ViewMode::Event | ViewMode::Coastline | ViewMode::Topographic
+        ) {
             None
         } else {
             atlas
@@ -947,6 +950,12 @@ fn a_tile(atlas: Option<&TileAtlas>, kind: u8) -> Option<[u32; 2]> {
 ///
 /// `soften` = 底图淡化（`ViewState.terrain_soften`）；`palette` = 地图主题
 /// （ADR-0014：切主题 = 按新色板整图重建）。
+///
+/// **oblique 烘焙**（[ADR-0041] §3 texture-bake 方案）：仅在 Topographic
+/// mode 下把生成的 RGBA 像素沿 x 方向按行斜切 `(y − h/2) × compression`，
+/// 矩形纹理烘焙成平行四边形——视觉上等同 oblique projection，且不引入 Camera3d。
+/// `compression <= 0`（非 Topographic mode）跳过；这就是 Camera2d 平面渲染的
+/// 退化路径——既有 mode 表的 Terrain pass 不会受影响。
 pub fn image_from_terrain(
     data: &TerrainData,
     mode: ViewMode,
@@ -954,9 +963,13 @@ pub fn image_from_terrain(
     soften: bool,
     palette: &PaletteColors,
     treatment: crate::theme::theme_pack::TreatmentFlags,
+    compression: f32,
 ) -> Image {
-    let (pixels, res) = terrain_pixels(data, mode, atlas, soften, palette, treatment);
+    let (mut pixels, res) = terrain_pixels(data, mode, atlas, soften, palette, treatment);
     let (w, h) = (data.width.max(1), data.height.max(1));
+    if mode == ViewMode::Topographic && compression > 0.0 {
+        oblique_skew_pixels(&mut pixels, w * res, h * res, compression);
+    }
     Image::new(
         Extent3d {
             width: w * res,
@@ -969,6 +982,95 @@ pub fn image_from_terrain(
         TextureFormat::Rgba8UnormSrgb,
         bevy::asset::RenderAssetUsages::RENDER_WORLD | bevy::asset::RenderAssetUsages::MAIN_WORLD,
     )
+}
+
+/// 把 RGBA8 像素按行 x 方向斜切 ([ADR-0041] §3 oblique 烘焙方案)。
+///
+/// 每行 `y` 沿 x 平移 `(y − h/2) × compression` 像素：
+/// - 中间行 (y = h/2) 偏移 0
+/// - 顶行 (y = 0) 偏移 `−h/2 × compression`（左移）
+/// - 底行 (y = h − 1) 偏移 `+(h/2 − 1) × compression`（右移）
+///
+/// **超出原图边界的像素用「右/左边缘复制填充」**——这是 oblique 投影的视觉
+/// 后果（顶视俯瞰下,边缘的像素会"溢出"到地图外,与相机看真实地图一致）。
+///
+/// 复杂度 O(w × h)，单次 1024² ≈ 4M 次拷贝 ~10 ms（一次性 texture bake，
+/// 不在 render loop），与现有 `terrain_pixels` 同量级。
+///
+/// **本函数不接受 compression > 1.0**——超出 (与 ART_STYLE_SPEC §1.1 的
+/// `vertical 0.5×` 上限一致)。调用方负责 clamp。
+pub(crate) fn oblique_skew_pixels(pixels: &mut [u8], w: u32, h: u32, compression: f32) {
+    assert!(
+        (0.0..=1.0).contains(&compression),
+        "oblique_skew_pixels: compression {compression} 越界 [0,1]"
+    );
+    assert_eq!(
+        pixels.len() as u32,
+        w * h * 4,
+        "oblique_skew_pixels: 像素缓冲长度不匹配 w*h*4"
+    );
+    if compression == 0.0 || w < 2 || h < 2 {
+        return;
+    }
+    // 临时缓冲(整张拷贝 → 写入像素;原缓冲行内 read+write 会脏读)
+    let mut buf: Vec<u8> = pixels.to_vec();
+    let stride = (w as usize) * 4;
+    let h_half = (h as f32) / 2.0;
+    for y in 0..h {
+        // 整数偏移(向下取整 + 半像素对齐):让中线行严格不动。
+        let offset = ((y as f32 - h_half) * compression).round() as i32;
+        let src_row_start = (y as usize) * stride;
+        // dst 写入位置:`pixels` 的 y 行(原 y 不动——oblique 不上下移)
+        let dst_row_start = src_row_start;
+        if offset == 0 {
+            // 同行拷贝
+            buf[src_row_start..src_row_start + stride]
+                .copy_from_slice(&pixels[src_row_start..src_row_start + stride]);
+            continue;
+        }
+        // 边界 clamp:offset > 0 → 左侧边缘用 src[0] 复制;offset < 0 → 右侧
+        // 边缘用 src[w-1] 复制。
+        if offset > 0 {
+            let o = offset as usize;
+            // 左侧 o 像素填充 src[0]
+            for x in 0..o.min(w as usize) {
+                let dst = dst_row_start + x * 4;
+                let src = src_row_start;
+                buf[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
+            }
+            // 中段 src[x-o] → dst[x]
+            let mid_len = w as usize - o;
+            for x in 0..mid_len {
+                let dst = dst_row_start + (x + o) * 4;
+                let src = src_row_start + x * 4;
+                buf[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
+            }
+        } else {
+            // offset < 0:右移 |offset| 像素 → 右侧 |offset| 用 src[w-1] 复制
+            let o = (-offset) as usize;
+            // 中段 src[x] → dst[x + o]
+            let mid_len = w as usize - o;
+            for x in 0..mid_len {
+                let dst = dst_row_start + x * 4;
+                let src = src_row_start + (x + o) * 4;
+                buf[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
+            }
+            // 右侧 |o| 像素填充 src[w-1]
+            for x in (mid_len..w as usize).rev() {
+                let dst = dst_row_start + (x + o - 1) * 4;
+                // 修正:dst_index 实际是 mid_len + (i)...
+                // 简化:从右往左写
+                let _ = dst;
+            }
+            // 重新算 dst 索引
+            for i in 0..o {
+                let dst = dst_row_start + (mid_len + i) * 4;
+                let src = src_row_start + (w as usize - 1) * 4;
+                buf[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
+            }
+        }
+    }
+    pixels.copy_from_slice(&buf);
 }
 
 /// 把 `data` 的 dirty 矩形 patch 进**已有 Image**（原地改 `image.data` 切片）。
@@ -1037,6 +1139,102 @@ mod tests {
 
     use super::*;
     use crate::terrain_view::terrain_texture::terrain_res_for;
+
+    /// `oblique_skew_pixels` 应等价于「每行 x 偏移 = `(y - h/2) × compression`,
+    /// round 到整数」。
+    ///
+    /// 用 h = 4, compression = 1.0——offset 是 -2 / -1 / 0 / +1 的整数倍,
+    /// 与 Rust `f32::round` 的 half-to-even 行为无歧义。
+    ///
+    /// **oblique 投影的几何直觉**:row 0(地图顶端)向左偏 → 内容看起来
+    /// 从左侧"溢出"(map col 0 跌出屏幕左,屏幕 col 0 显示 map col o);
+    /// row h-1(地图底端)向右偏 → 内容从右侧"涌入"。
+    /// 公式上,**offset > 0 = 内容右移**(dst[x+o] = src[x]);**offset < 0 = 内容左移**
+    /// (dst[x] = src[x+o],o = |offset|)。
+    /// 边界钳制:左溢出用 src[0] 复制,右溢出用 src[w-1] 复制。
+    #[test]
+    fn oblique_skew_pixels_offsets_each_row_by_signed_pixel_count() {
+        let mut px = vec![0u8; 4 * 4 * 4];
+        for y in 0..4 {
+            for x in 0..4 {
+                let i = (y * 4 + x) * 4;
+                px[i] = (y * 10 + x) as u8;
+            }
+        }
+        // h = 4,h/2 = 2.0,compression = 1.0,offset = round((y - 2.0) * 1.0):
+        //   y=0 → -2  (内容左移 2)
+        //   y=1 → -1  (内容左移 1)
+        //   y=2 →  0  (中线)
+        //   y=3 → +1  (内容右移 1)
+        oblique_skew_pixels(&mut px, 4, 4, 1.0);
+
+        // row 2 (offset=0):逐列原样保留 → R = 20+col。
+        for x in 0..4 {
+            let i = (2 * 4 + x) * 4;
+            assert_eq!(px[i], 20 + x as u8, "row 2 col {x} 应保持原值(offset=0)");
+        }
+
+        // row 0 (offset=-2,内容左移 2):dst[x] = src[x+2],左 o=2 用 src[w-1]=src[3] 填充。
+        // 行 0 R 通道原 = [0,1,2,3];斜切后 = [src[2]=2, src[3]=3, src[3]=3, src[3]=3] = [2, 3, 3, 3]。
+        for x in 0..4 {
+            let i = x * 4;
+            assert_eq!(
+                px[i],
+                if x < 2 { x as u8 + 2 } else { 3 },
+                "row 0 col {x} 左移 2"
+            );
+        }
+
+        // row 1 (offset=-1,内容左移 1):dst[x] = src[x+1],左 1 用 src[3] 填充。
+        // 行 1 R 通道原 = [10,11,12,13];斜切后 = [src[1]=11, src[2]=12, src[3]=13, src[3]=13] = [11, 12, 13, 13]。
+        for x in 0..4 {
+            let i = (4 + x) * 4;
+            assert_eq!(
+                px[i],
+                if x < 3 { 10 + (x + 1) as u8 } else { 13 },
+                "row 1 col {x} 左移 1"
+            );
+        }
+
+        // row 3 (offset=+1,内容右移 1):dst[x+1] = src[x],dst[0] 用 src[0] 填充。
+        // 行 3 R 通道原 = [30,31,32,33];斜切后 = [src[0]=30, src[0]=30, src[1]=31, src[2]=32] = [30, 30, 31, 32]。
+        for x in 0..4 {
+            let i = (3 * 4 + x) * 4;
+            assert_eq!(
+                px[i],
+                if x == 0 { 30 } else { 30 + (x - 1) as u8 },
+                "row 3 col {x} 右移 1"
+            );
+        }
+    }
+
+    /// `oblique_skew_pixels(compression=0)` 是 no-op(空检查),不写任何像素。
+    #[test]
+    fn oblique_skew_pixels_zero_compression_is_no_op() {
+        let mut px = vec![7u8; 4 * 4 * 4];
+        let snapshot = px.clone();
+        oblique_skew_pixels(&mut px, 4, 4, 0.0);
+        assert_eq!(px, snapshot, "compression=0 不应改任何像素");
+    }
+
+    /// `oblique_skew_pixels` 边界钳制:左/右溢出用左/右边缘像素复制填充。
+    /// h=4,compression=1.0:row 0 offset=-2(全溢出)、row 3 offset=+1(无溢出)。
+    /// row 0 原 = [0,1,2,3];斜切后(dst[x]=src[x+2],左 2 用 src[w-1]=3 填):
+    ///   = [src[2]=2, src[3]=3, src[3]=3, src[3]=3] = [2, 3, 3, 3]。
+    #[test]
+    fn oblique_skew_pixels_clamps_overflow_with_edge_repeat() {
+        let mut px = vec![0u8; 4 * 4 * 4];
+        for x in 0..4 {
+            let i = x * 4;
+            px[i] = x as u8;
+        }
+        oblique_skew_pixels(&mut px, 4, 4, 1.0);
+        let expected = [2u8, 3, 3, 3];
+        for (x, &want) in expected.iter().enumerate() {
+            let i = x * 4;
+            assert_eq!(px[i], want, "row 0 col {x} 边缘钳制 (offset=-2)");
+        }
+    }
 
     /// 3×3 fixture：`h(x, y)` 给定每格高度，surface/biome 不影响浮雕。
     fn relief_fixture(h: impl Fn(u32, u32) -> i16) -> wv_core::terrain::TerrainData {
@@ -1233,6 +1431,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let Color::Srgba(grass) = colors::core_terrain(3) else {
             unreachable!()
@@ -1272,6 +1471,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         // 深水渐变（手绘地图 #1）启用后：深水中心像素 = water_shade_at(−3500)，
         // 不再是 core_terrain(0) 原色。统一从 water_shade_at 取色源，避免硬编码颜色。
@@ -1328,6 +1528,7 @@ mod tests {
             true,
             crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let px = img.data.as_ref().expect("image 必有像素");
         let res = (img.width() / 4) as usize;
@@ -1363,6 +1564,7 @@ mod tests {
             true,
             pal,
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let px = img.data.as_ref().expect("image 必有像素");
         let res = (img.width() / 4) as usize;
@@ -1402,6 +1604,7 @@ mod tests {
             true,
             crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let px = img.data.as_ref().expect("image 必有像素");
         let res = (img.width() / 4) as usize;
@@ -1452,6 +1655,7 @@ mod tests {
             true,
             palette,
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let land_img = image_from_terrain(
             &land_data,
@@ -1460,6 +1664,7 @@ mod tests {
             true,
             palette,
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
 
         // 2. 取中心像素（在 image_from_terrain 之后，这一步相当于「无雾」底色）。
@@ -1557,6 +1762,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let tex = crate::terrain_view::new_terrain_texture(
             &mut images,
@@ -1604,6 +1810,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         if let Some(mut img) = images.get_mut(&handle) {
             *img = new_image;
@@ -1677,6 +1884,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let mut tex = crate::terrain_view::new_terrain_texture(
             &mut images,
@@ -1696,6 +1904,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         crate::terrain_view::replace_terrain_texture(
             &mut tex,

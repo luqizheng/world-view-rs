@@ -542,6 +542,7 @@ fn setup_terrain_texture_after_world(
         view.terrain_soften,
         crate::theme::palette::colors(view.map_palette),
         wv_render::theme::theme_pack::builtin::for_palette(view.map_palette).treatment,
+        0.0,
     );
     commands.insert_resource(terrain_view::new_terrain_texture(
         &mut images,

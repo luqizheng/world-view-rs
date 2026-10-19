@@ -358,7 +358,31 @@ pub fn resolve_render_recipe(
 /// 跑（Update 主链）；只要 recipe 在 Update 之前已被写入即可。
 pub fn register_recipe_system(app: &mut App) {
     app.init_resource::<RenderRecipe>();
-    app.add_systems(bevy::prelude::PreUpdate, resolve_recipe_system);
+    // Order:couple system 先(写 `terrain_2_5d_enabled`),recipe system 后(读)。
+    // 同一 schedule 里 `chain()` 强制顺序;`chain` 也意味着「同 schedule
+    // 串行执行」,避免跨 schedule 的 timing 漂移。
+    app.add_systems(
+        bevy::prelude::PreUpdate,
+        (couple_terrain_2_5d_to_mode, resolve_recipe_system).chain(),
+    );
+}
+
+/// 模式→开关的耦合([ADR-0041] 决策 4):Topographic mode 进/出时,自动同步
+/// `ViewState.terrain_2_5d_enabled` 让 vertex Z 挤压与 mode 共进退。
+///
+/// 行为规则:
+/// - `mode == Topographic && !terrain_2_5d_enabled` → **自动 on**(进 Topographic)
+/// - `mode == Topographic && terrain_2_5d_enabled` → 保持 on(无副作用)
+/// - `mode != Topographic && terrain_2_5d_enabled` → **自动 off**(切走;不删作者手动开)
+/// - `mode != Topographic && !terrain_2_5d_enabled` → 保持 off
+///
+/// **作者手动切回 `false` 仅在 Topographic mode 内有效**——切到其它 mode 时
+/// 本系统会再次覆盖为 `false`。这是 ADR-0041 §4.1.2 接受的「切走工具即清理」语义。
+fn couple_terrain_2_5d_to_mode(mut view: ResMut<ViewState>) {
+    let should_be_on = view.mode == ViewMode::Topographic;
+    if view.terrain_2_5d_enabled != should_be_on {
+        view.terrain_2_5d_enabled = should_be_on;
+    }
 }
 
 /// 实际求值系统（包装为 Bevy 系统以注入 `Res`）。

@@ -109,7 +109,7 @@ mod tests {
     fn pick_at_out_of_bounds_returns_none() {
         let g = grid(8.0, 0.0, 0.0);
         let t = terrain(10, 10); // 10×10 → gx ∈ [0,9],gy ∈ [0,9]
-        // 上方越界
+                                 // 上方越界
         assert_eq!(pick_at((5.0, -1.0), &g, &t), None);
         // 右方越界
         assert_eq!(pick_at((80.0, 5.0), &g, &t), None);

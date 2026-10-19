@@ -936,6 +936,7 @@ fn adopt_world_snapshot(
         view.terrain_soften,
         crate::theme::palette::colors(view.map_palette),
         wv_render::theme::theme_pack::builtin::for_palette(view.map_palette).treatment,
+        0.0,
     );
     wv_render::terrain_view::replace_terrain_texture(
         tex,
@@ -1410,7 +1411,8 @@ fn apply_pending_commands(
                     if pending.gx < 0 || pending.gy < 0 || pending.gx >= w || pending.gy >= h {
                         return None;
                     }
-                    t.cells.get((pending.gy as usize) * (w as usize) + (pending.gx as usize))
+                    t.cells
+                        .get((pending.gy as usize) * (w as usize) + (pending.gx as usize))
                 })
                 .map(|c| *c == pending.before)
                 .unwrap_or(false);

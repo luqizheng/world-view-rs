@@ -26,17 +26,17 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::i18n::CurrentLocale;
+use crate::i18n::{t, I18nKey};
 use crate::state::{Panel, PanelState, WorldProjection};
 use crate::theme::ui_theme::{color32, proportional, UiShellConfig};
 use crate::theme::ui_tokens::{radius, space};
 use crate::ui_command_palette::{CommandId, CommandPalette};
 use crate::ui_layout::LayoutFile;
-use crate::i18n::{t, I18nKey};
 
 use super::shell::UiShell;
 use super::widgets::{empty_state, float_window, BadgeKind, ICON_CHEVRON_RIGHT};
 use wv_render::state::EditCellState;
-use wv_terrain::biome::{BiomeFamily, family_of};
+use wv_terrain::biome::{family_of, BiomeFamily};
 
 /// Inspector 面板。
 #[allow(clippy::too_many_arguments)]
@@ -330,7 +330,12 @@ fn render_cell_section(
     };
 
     ui.collapsing(t(loc, I18nKey::CellInspectorSection), |ui| {
-        ui.label(format!("{} ({}, {})", t(loc, I18nKey::CellInspectorCoord), gx, gy));
+        ui.label(format!(
+            "{} ({}, {})",
+            t(loc, I18nKey::CellInspectorCoord),
+            gx,
+            gy
+        ));
 
         let mut new_surface = before.surface;
         ui.horizontal(|ui| {
@@ -352,7 +357,11 @@ fn render_cell_section(
         let mut new_height = before.height;
         ui.horizontal(|ui| {
             ui.label(t(loc, I18nKey::CellInspectorHeight));
-            ui.add(egui::DragValue::new(&mut new_height).speed(1.0).suffix(" m"));
+            ui.add(
+                egui::DragValue::new(&mut new_height)
+                    .speed(1.0)
+                    .suffix(" m"),
+            );
         });
 
         let mut new_biome = before.biome;
@@ -394,7 +403,14 @@ fn render_cell_section(
             biome: new_biome,
         };
         if after != before {
-            push_cell_edit(edit, &mut projection.world, &target_map, (gx, gy), before, after);
+            push_cell_edit(
+                edit,
+                &mut projection.world,
+                &target_map,
+                (gx, gy),
+                before,
+                after,
+            );
         }
     });
 }

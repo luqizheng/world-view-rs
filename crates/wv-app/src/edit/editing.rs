@@ -18,22 +18,22 @@
 //! - 资源 `History` / `EditMode` 由 `state.rs` 暴露；本模块只读 / 提交。
 //! - 测试 `mod tests` 覆盖 painting / undo / 播放拒绝。
 
-use bevy::input::ButtonInput;
 use bevy::input::mouse::MouseButton;
+use bevy::input::ButtonInput;
 use bevy::prelude::*;
 
 use crate::state::{
     BrushState, BrushTool, DrillState, GridConfig, PlaybackState, ViewState, WorldProjection,
 };
 use crate::ui::cell_pick;
-use wv_render::state::EditCellState;
 use wv_edit::command::{
-    EditCommand, GenerateContinentCommand, IntentTerrainCommand,
-    PaintTerrainCommand, RegenWorldTerrainCommand, ResetTerrainToBaseCommand,
+    EditCommand, GenerateContinentCommand, IntentTerrainCommand, PaintTerrainCommand,
+    RegenWorldTerrainCommand, ResetTerrainToBaseCommand,
 };
 use wv_edit::history::Transaction;
 use wv_edit::History;
 use wv_render::camera::ActiveStroke;
+use wv_render::state::EditCellState;
 use wv_render::terrain_view::{image_from_terrain, TerrainTexture, TileAtlas};
 use wv_terrain::continent::ContinentParams;
 use wv_terrain::edit::{Brush, Stroke as TerrainStroke};
@@ -341,6 +341,7 @@ pub fn flush_terrain_texture(
             view.terrain_soften,
             crate::theme::palette::colors(view.map_palette),
             wv_render::theme::theme_pack::builtin::for_palette(view.map_palette).treatment,
+            0.0,
         );
         if let Some(mut img) = images.get_mut(&tex.handle) {
             *img = image;
@@ -1357,7 +1358,10 @@ mod tests {
         world.insert_resource(projection);
 
         let mut drill = crate::state::DrillState::default();
-        drill.drill_to(&world.resource::<crate::state::WorldProjection>().world, &map);
+        drill.drill_to(
+            &world.resource::<crate::state::WorldProjection>().world,
+            &map,
+        );
         world.insert_resource(drill);
 
         world.insert_resource(crate::state::GridConfig {
