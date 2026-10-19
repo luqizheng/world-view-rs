@@ -271,6 +271,8 @@ pub fn run(config: AppConfig) {
             editing::refresh_project_diagnostics,
             // 街道图层缓存：当前图变化时重读（ADR-0010），先于 sync_vector_layers。
             streets::reload_street_cache,
+            // 地物符号 PNG 发起加载（一次）。
+            wv_render::vector_layers::ensure_landmark_png_loaded,
             // 矢量叠加层（道路 + POI）：在 compute_projection 之后跑。
             vector_layers::sync_vector_layers,
             // 街道名标注：消费同一份 StreetLayerCache，在街道画完之后对齐标签。

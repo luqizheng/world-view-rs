@@ -60,6 +60,8 @@ impl Plugin for MapRenderPlugin {
                 terrain_chunks::sync_terrain_chunks,
                 // 街道图层缓存：当前图变化时重读（ADR-0010）
                 streets::reload_street_cache,
+                // 地物符号 PNG 发起加载（一次；sync_vector_layers 消费加载结果）
+                vector_layers::ensure_landmark_png_loaded,
                 // 矢量叠加层（道路 + POI）
                 vector_layers::sync_vector_layers,
                 // 街道名标注

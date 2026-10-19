@@ -57,6 +57,8 @@ pub mod label_halo;
 #[cfg(feature = "app")]
 pub mod label_pick;
 #[cfg(feature = "app")]
+pub mod landmark_symbols;
+#[cfg(feature = "app")]
 pub mod layer_frame;
 #[cfg(feature = "app")]
 pub mod map_frame;

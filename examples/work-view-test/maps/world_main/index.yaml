@@ -1,0 +1,24 @@
+# work-view-test 首图索引（wv-gen-demo 生成）
+id: world_main
+name: 策展 JRPG 世界（地中海 + 北非）
+level: world
+children: []
+extent:
+  width: 4096
+  height: 3072
+raster:
+  path: maps/world_main/terrain.bin
+  encoding: i16
+  width: 1024
+  height: 768
+  chunk: 256
+  format_version: 2
+  checksum: ffaa9408
+layers:
+  - id: layer_terrain
+    name: 地形
+    kind: terrain
+    visible: true
+    locked: false
+    opacity: 1.0
+    z: 0

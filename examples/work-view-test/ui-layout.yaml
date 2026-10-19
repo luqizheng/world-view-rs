@@ -1,0 +1,5 @@
+# work-view-test 默认界面偏好：日间地图主题 + 暗色软件壳。
+theme: dark
+density: cozy
+map_theme: daylight
+language: zh

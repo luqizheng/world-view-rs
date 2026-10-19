@@ -14,7 +14,7 @@ description = "World View 应用层：Bevy 渲染、UI、输入，转发编辑�
 [features]
 default = []
 app = ["wv-render/app", "dep:bevy", "dep:bevy_egui", "dep:egui_extras", "dep:rfd", "dep:icu_provider"]
-http = ["app", "dep:axum", "dep:tokio", "dep:async-trait", "dep:serde_json"]
+http = ["app", "dep:axum", "dep:tokio", "dep:async-trait"]
 
 # dev-only：axum `Router::oneshot` 走 `tower::ServiceExt`，与 `body::to_bytes`、
 # `Body::from` 配对做端到端 smoke（HTTP 测试模块 `server.rs`）。
@@ -52,12 +52,17 @@ icu_provider = { version = "2.3", optional = true, features = ["logging"] }
 axum = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
+serde_json = { workspace = true }
 
 [[bin]]
 name = "wv"
 path = "src/main.rs"
 required-features = ["app"]
+
+# 独立数据工具：生成 work-view-test 演示底座（无 GUI、无 app feature、零网络）。
+[[bin]]
+name = "wv-gen-demo"
+path = "src/bin/gen_demo/main.rs"
 
 # 这些示例直接使用 app-only 渲染模块；无 feature 的 `--all-targets` 不应编译它们。
 [[example]]
