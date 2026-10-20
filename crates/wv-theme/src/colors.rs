@@ -248,6 +248,16 @@ pub const SOFTEN_TOWARD: Color = hex(0xF2EAD8);
 /// `veil (alpha=0.261)` 后 ≈ (182, 184, 216)，仍辨为「海」。
 pub const DEEP_OCEAN_BLUE: Color = hex(0x0C32C8); // ≈ (12, 50, 200) 明确深蓝
 
+/// 近岸浅滩色（2026-10-21 S2，海洋表现方案）：离岸 ≤ `SHORE_BAND_CELLS`
+/// 格的水格向本色偏移的「极浅滩」色——比 `core.water_shallow` 明显更亮、
+/// 更淡（色相略抬向青），水线处读出「薄水覆沙」的观感。
+///
+/// 与 `water_shallow` 的分工：浅水是**深度带**色（DEM 深度 lerp 端点），
+/// 浅滩是**离岸几何带**色（`wv_terrain::shore` 距离场驱动）——近岸剖面
+/// 陡的图（水深 200 m 贴岸）照样有浅滩带。消费点：`cells::base_color_of`
+/// （`TreatmentFlags::shore_shallow` 开时）。
+pub const WATER_SHORE: Color = hex(0xA9D3D5); // ≈ (169, 211, 213) 淡青滩色
+
 /// 底图淡化混合（所有视图模式共用的唯一实现；禁止散落重写）。
 pub fn soften_color(base: Color) -> Color {
     let (Color::Srgba(b), Color::Srgba(t)) = (base, SOFTEN_TOWARD) else {

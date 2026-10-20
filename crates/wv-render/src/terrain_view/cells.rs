@@ -333,6 +333,9 @@ const BLEED_RADIUS: u32 = 2;
 /// 即旧「内部格直铺」在颗粒 / 淡化 / 浮雕**之前**的那一步。抽成纯函数是
 /// 为了让 [`CellRenderer::blended_base`]（5×5 模糊）与内部格直铺共用
 /// 同一取色口径：模糊的输入 = 直铺的输出，两条路径永不漂移。
+// shore 参数与既有 7 参同属「一个取色闭包的完备输入」（颜色 = f(数据, 位置,
+// 主题, 旗标, 场)），收拢成结构体反而稀释调用点可读性——特此豁免。
+#[allow(clippy::too_many_arguments)]
 fn base_color_of(
     data: &TerrainData,
     kind: u8,
@@ -341,6 +344,7 @@ fn base_color_of(
     pal: &PaletteColors,
     treatment: &crate::theme::theme_pack::TreatmentFlags,
     mode: ViewMode,
+    shore: Option<&[u16]>,
 ) -> Color {
     let cell = &data.cells[(cy as usize) * data.width as usize + cx as usize];
     let mut color = shade_for_mode(mode)(data, kind, pal);
@@ -350,7 +354,70 @@ fn base_color_of(
     if treatment.snow_shade && kind == 7 && mode != ViewMode::Coastline {
         color = snow_shade_at(cell.height, pal);
     }
+    // 近岸浅滩带（2026-10-21 S2）：离岸近的水格向主题 `water_shore` 偏移。
+    // 放在**基色**这一步——模糊（bleed）的输入 = 直铺的输出，两条路径
+    // 经同一函数取色永不漂移；颗粒 / 淡化 / 浮雕照旧在其后叠加。
+    if let (true, Some(field)) = (treatment.shore_shallow, shore) {
+        if slot_is_water(kind) && mode != ViewMode::Coastline {
+            let idx = (cy as usize) * data.width as usize + cx as usize;
+            if let Some(d) = field.get(idx) {
+                let k = shore_band_strength(*d);
+                if k > 0.0 {
+                    let (Color::Srgba(c), Color::Srgba(s)) = (color, pal.water_shore) else {
+                        return color;
+                    };
+                    color = Color::srgb(
+                        c.red + (s.red - c.red) * k,
+                        c.green + (s.green - c.green) * k,
+                        c.blue + (s.blue - c.blue) * k,
+                    );
+                }
+            }
+        }
+    }
     color
+}
+
+/// 近岸浅滩带宽度（格，S2 制图参数）：离岸 ≤ 该值的水格参与着色。
+/// 6 格在 work-view-test（4 wu/格）≈ 24 wu——全局档下是「贴岸一圈薄水」，
+/// 不至于把整片近海洗成滩。
+const SHORE_BAND_CELLS: f32 = 6.0;
+/// 水线处的着色峰值强度：向 `water_shore` 的最大混合比。留 15% 底色
+/// 让深度渐变在水线附近仍可读，不至于一圈死白。
+const SHORE_TINT_MAX: f32 = 0.85;
+
+/// 离岸距离 → 浅滩混合比 [0, 1]：smoothstep 衰减（水线最浓，带缘归零，
+/// 无接缝）。`d ≥ SHORE_BAND_CELLS` 恒 0——带外的格与「旗标关」逐位一致。
+fn shore_band_strength(d: u16) -> f32 {
+    let t = (1.0 - d as f32 / SHORE_BAND_CELLS).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t) * SHORE_TINT_MAX
+}
+
+/// 近岸浅滩带的离岸距离场（S2 消费口径）：旗标开 ∧ 平涂两模式
+///（VectorFlat / Schematic，与 `bleed` 同口径——浅滩是平涂语法）时现算。
+/// O(N) BFS，1024² ≈ 数 ms，摊进整图合成 / patch 的量级
+///（同 Topographic 阈值「每次合成重算」的取舍，[ADR-0039] §4.1.1）。
+fn shore_field_for(
+    data: &TerrainData,
+    mode: ViewMode,
+    treatment: &crate::theme::theme_pack::TreatmentFlags,
+) -> Option<Vec<u16>> {
+    if !treatment.shore_shallow || !matches!(mode, ViewMode::VectorFlat | ViewMode::Schematic) {
+        return None;
+    }
+    let (w, h) = (data.width.max(1), data.height.max(1));
+    // 湿判定与渲染同口径（surface 通道 ‖ 高度 < 0，`wv_terrain::edit::is_water_cell`），
+    // 闭包直读 `TerrainCellData` 免去整场 cell 拷贝。
+    let field = wv_terrain::shore::shore_distance_field(
+        w,
+        h,
+        |x, y| {
+            let c = &data.cells[(y as usize) * w as usize + x as usize];
+            !(c.surface == wv_terrain::SURFACE_WATER || c.height < 0)
+        },
+        wv_terrain::shore::DEFAULT_MAX_DIST,
+    );
+    Some(field)
 }
 
 /// 水彩晕开（ADR-0044 D1）：`(cx, cy)` 处的 **5×5 盒式模糊基色**。
@@ -365,6 +432,7 @@ fn blended_base(
     pal: &PaletteColors,
     treatment: &crate::theme::theme_pack::TreatmentFlags,
     mode: ViewMode,
+    shore: Option<&[u16]>,
 ) -> Color {
     let w = data.width;
     let h = data.height;
@@ -383,7 +451,8 @@ fn blended_base(
     for y in y0..=y1 {
         for x in x0..=x1 {
             let kind = display_slot(&data.cells[(y * w + x) as usize]);
-            let Color::Srgba(c) = base_color_of(data, kind, x, y, pal, treatment, mode) else {
+            let Color::Srgba(c) = base_color_of(data, kind, x, y, pal, treatment, mode, shore)
+            else {
                 continue;
             };
             ar += c.red;
@@ -516,6 +585,11 @@ struct CellRenderer<'a> {
     /// Topographic mode 专用：(p33, p66) 两个 height 阈值（米）。
     /// 非 Topographic mode 为 `None`（[ADR-0039] 决策 4/5）。
     topographic: Option<(i16, i16)>,
+    /// 近岸浅滩带用的离岸距离场（S2；行优先，长度 = w×h）。`None` =
+    /// 旗标关 / 模式不参与——着色路径零开销。由驱动方（`terrain_pixels`
+    /// / `patch_terrain_image`）**整场算一次**后共享给各带 renderer
+    /// （行带并行契约：场与带数无关，任意切分逐字节一致）。
+    shore: Option<&'a [u16]>,
 }
 
 impl<'a> CellRenderer<'a> {
@@ -526,6 +600,7 @@ impl<'a> CellRenderer<'a> {
         soften: bool,
         palette: &'a PaletteColors,
         treatment: crate::theme::theme_pack::TreatmentFlags,
+        shore: Option<&'a [u16]>,
     ) -> Self {
         let (w, h) = (data.width.max(1), data.height.max(1));
         // 事件图与轮廓图都不铺瓦片：前者灰白底，后者水陆三色。
@@ -605,6 +680,7 @@ impl<'a> CellRenderer<'a> {
             blocks: std::array::from_fn(|_| None),
             tried: [false; 10],
             topographic,
+            shore,
         }
     }
 
@@ -743,7 +819,15 @@ impl<'a> CellRenderer<'a> {
         // 水彩晕开（ADR-0044 D1）：边界像素取最近格的 5×5 模糊基色——
         // 水陆交界两侧的填充色被邻域互相拉柔和（「湿岸」水彩效果）。
         let c = if self.bleed {
-            blended_base(self.data, cx, cy, self.palette, &self.treatment, self.mode)
+            blended_base(
+                self.data,
+                cx,
+                cy,
+                self.palette,
+                &self.treatment,
+                self.mode,
+                self.shore,
+            )
         } else {
             (self.shader)(self.data, kind, self.palette)
         };
@@ -996,7 +1080,15 @@ impl<'a> CellRenderer<'a> {
             // 2 格内的格子颜色被邻域拉柔和；纯色内部格模糊值 ≈ 本色（全部
             // 同 kind 时严格相等），高频邻域才付 25 次取色的钱。
             let mut color = if self.bleed {
-                blended_base(self.data, cx, gy, self.palette, &self.treatment, self.mode)
+                blended_base(
+                    self.data,
+                    cx,
+                    gy,
+                    self.palette,
+                    &self.treatment,
+                    self.mode,
+                    self.shore,
+                )
             } else {
                 (self.shader)(self.data, kind, self.palette)
             };
@@ -1115,9 +1207,14 @@ fn terrain_pixels_banded(
     treatment: crate::theme::theme_pack::TreatmentFlags,
     bands: usize,
 ) -> (Vec<u8>, u32) {
+    // 近岸浅滩场（S2）整场算一次，共享给全部带 renderer——它与带数无关，
+    // 任意切分下逐字节一致（行带并行契约）。
+    let shore = shore_field_for(data, mode, &treatment);
+    // `Option<&[u16]>` 是 Copy——先借好，各带 move 闭包共享同一份引用。
+    let shore_ref = shore.as_deref();
     // 先建一个 renderer 只为推导 w/h/res（RealTerrain 的 hmin 折叠在它里面
     // 做一次；各带的新 renderer 会重复这次纯比较折叠，代价每带亚毫秒）。
-    let probe = CellRenderer::new(data, mode, atlas, soften, palette, treatment);
+    let probe = CellRenderer::new(data, mode, atlas, soften, palette, treatment, shore_ref);
     let (w, h, res) = (probe.w, probe.h, probe.res);
     let stride = w * res;
     let mut pixels = vec![0u8; (stride * h * res * 4) as usize];
@@ -1138,7 +1235,8 @@ fn terrain_pixels_banded(
         for (bi, band) in pixels.chunks_mut(rows_per_band * row_bytes).enumerate() {
             let y0 = (bi * rows_per_band) as u32;
             s.spawn(move || {
-                let mut r = CellRenderer::new(data, mode, atlas, soften, palette, treatment);
+                let mut r =
+                    CellRenderer::new(data, mode, atlas, soften, palette, treatment, shore_ref);
                 let band_rows = (band.len() / row_bytes) as u32;
                 for ly in 0..band_rows {
                     let gy = y0 + ly;
@@ -1328,8 +1426,35 @@ pub fn patch_terrain_image(
     let gx1 = gx1.min(w);
     let gy1 = gy1.min(h);
 
+    // 近岸浅滩场（S2）——与全图合成同口径（`shore_field_for`）。
+    let shore = shore_field_for(data, mode, &treatment);
+    // **脏区按场支撑半径膨胀**：浅滩着色是「离岸距离」的连续函数，距离场
+    // 的有界支撑 = `DEFAULT_MAX_DIST`——岸线附近改一格水陆，±12 格内的
+    // 水格距离（连带颜色）都会变。不膨胀则局部 patch 与全图重算不一致
+    // （「填掉一个小湾，湾缘浅滩带残留」这类暗斑）。膨胀是 patch 契约的
+    // 一部分，收在 patch 内部，调用方无需感知。
+    let [gx0, gy0, gx1, gy1] = if shore.is_some() {
+        let r = wv_terrain::shore::DEFAULT_MAX_DIST as u32;
+        [
+            gx0.saturating_sub(r),
+            gy0.saturating_sub(r),
+            (gx1 + r).min(w),
+            (gy1 + r).min(h),
+        ]
+    } else {
+        [gx0, gy0, gx1, gy1]
+    };
+
     // 与全图合成共用一个渲染器（边界扰动必须一致，否则笔刷区出现拼接裂缝）。
-    let mut renderer = CellRenderer::new(data, mode, atlas, soften, palette, treatment);
+    let mut renderer = CellRenderer::new(
+        data,
+        mode,
+        atlas,
+        soften,
+        palette,
+        treatment,
+        shore.as_deref(),
+    );
     // 调用方传入的 res 与渲染器推导的 res 必须一致（同一张纹理）。
     debug_assert_eq!(
         renderer.res, res,
@@ -1662,6 +1787,154 @@ mod tests {
         (data[o] as f32 / 255.0 - target.red).abs() < 0.02
             && (data[o + 1] as f32 / 255.0 - target.green).abs() < 0.02
             && (data[o + 2] as f32 / 255.0 - target.blue).abs() < 0.02
+    }
+
+    /// 读一格中心像素的 RGB（u8）。
+    fn px(img: &Image, x: u32, y: u32) -> [u8; 3] {
+        let data = img.data.as_ref().expect("地形图必须有像素数据");
+        let o = ((y * img.width() + x) * 4) as usize;
+        [data[o], data[o + 1], data[o + 2]]
+    }
+
+    /// 近岸浅滩带（S2）：水线格被提亮、带外格与旗标关逐位一致。
+    ///
+    /// 10×1：col 0 陆（草 +50），col 1..10 水（−40）。单行网格上离岸距离
+    /// d(i) = i（切比雪夫 = 列距），带宽 6 → col 1..5 着色、col ≥ 6 不动。
+    #[test]
+    fn shore_shallow_tint_lightens_waterline_and_spares_offshore() {
+        let mut cells = Vec::new();
+        cells.push(wv_core::terrain::TerrainCellData {
+            height: 50,
+            surface: 1,
+            biome: 3,
+        });
+        for _ in 0..9 {
+            cells.push(wv_core::terrain::TerrainCellData {
+                height: -40,
+                surface: 0,
+                biome: 0,
+            });
+        }
+        let data = TerrainData {
+            width: 10,
+            height: 1,
+            cells,
+        };
+        let pal = crate::theme::palette::colors(Default::default());
+        let on = image_from_terrain(
+            &data,
+            ViewMode::VectorFlat,
+            None,
+            false,
+            pal,
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN, // shore_shallow: true
+            0.0,
+        );
+        let off_treatment = crate::theme::theme_pack::TreatmentFlags {
+            shore_shallow: false,
+            ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+        };
+        let off = image_from_terrain(
+            &data,
+            ViewMode::VectorFlat,
+            None,
+            false,
+            pal,
+            off_treatment,
+            0.0,
+        );
+
+        // res = clamp(4096/10, 4, 8) = 8：col i 占像素 [8i, 8i+8)，采样格心 x = 8i+4。
+        let (near_on, near_off) = (px(&on, 12, 4), px(&off, 12, 4)); // col 1（d=1，带内）
+        let (far_on, far_off) = (px(&on, 68, 4), px(&off, 68, 4)); // col 8（d=8，带外）
+        assert_ne!(
+            near_on, near_off,
+            "水线格（d=1）应被浅滩带提亮，实得 on {near_on:?} off {near_off:?}"
+        );
+        assert_eq!(
+            far_on, far_off,
+            "带外格（d≥6）必须与旗标关逐位一致（strength 恒 0）"
+        );
+        let sum = |c: [u8; 3]| c[0] as u32 + c[1] as u32 + c[2] as u32;
+        assert!(
+            sum(near_on) > sum(near_off),
+            "浅滩 tint 应为提亮方向：on 和={} off 和={}",
+            sum(near_on),
+            sum(near_off)
+        );
+    }
+
+    /// 近岸浅滩带的 patch 一致性（S2 契约）：岸线附近改一格水陆后，
+    /// 「旧图 + 小脏区 patch（内部膨胀）」必须与「新图全图重算」逐字节一致。
+    #[test]
+    fn shore_tint_patch_with_dilated_rect_matches_full_bake() {
+        // 24×3：全水（−40），col 23 列陆。data2 把 (2,1) 改成陆岛——
+        // 距离场在 x ≤ 12 一段随之改变（旧最近陆在右列，新岛更近）。
+        let cell = |height: i16, surface: u8, biome: u8| wv_core::terrain::TerrainCellData {
+            height,
+            surface,
+            biome,
+        };
+        let make = |island: bool| {
+            let mut cells = Vec::new();
+            for y in 0..3u32 {
+                for x in 0..24u32 {
+                    if x == 23 {
+                        cells.push(cell(50, 1, 3));
+                    } else if island && (x, y) == (2, 1) {
+                        cells.push(cell(50, 1, 3));
+                    } else {
+                        cells.push(cell(-40, 0, 0));
+                    }
+                }
+            }
+            TerrainData {
+                width: 24,
+                height: 3,
+                cells,
+            }
+        };
+        let data1 = make(false);
+        let data2 = make(true);
+        let pal = crate::theme::palette::colors(Default::default());
+        let treatment = crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN;
+
+        // 旧图全图烘焙 → 以小脏区（只盖新岛那一格）patch 成新图。
+        let mut patched = image_from_terrain(
+            &data1,
+            ViewMode::VectorFlat,
+            None,
+            false,
+            pal,
+            treatment,
+            0.0,
+        );
+        patch_terrain_image(
+            &mut patched,
+            &data2,
+            ViewMode::VectorFlat,
+            None,
+            [2, 1, 3, 2],
+            8,
+            false,
+            pal,
+            treatment,
+        );
+        // 新图全图重算。
+        let full = image_from_terrain(
+            &data2,
+            ViewMode::VectorFlat,
+            None,
+            false,
+            pal,
+            treatment,
+            0.0,
+        );
+        assert_eq!(
+            patched.data.as_deref(),
+            full.data.as_deref(),
+            "膨胀后的局部 patch 必须与全图重算逐字节一致（S2 距离场支撑半径契约）"
+        );
     }
 
     /// 行带并行与串行输出**逐字节一致**（含边界格扰动与瓦片直铺两种路径）：
@@ -2134,7 +2407,12 @@ mod tests {
             None,
             false,
             crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            // 关 shore_shallow（S2）：本测试钉「中心格 = 纯水深色」，浅滩带
+            // 是按离岸距离的装饰混色，会把断言色稀释（同 mod.rs 哨兵测试口径）。
+            crate::theme::theme_pack::TreatmentFlags {
+                shore_shallow: false,
+                ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+            },
             0.0,
         );
         let tex = crate::terrain_view::new_terrain_texture(
@@ -2175,14 +2453,18 @@ mod tests {
         assert!(after.cells[4 * 64 + 4].height < 0, "海格高度应在海平面下");
         assert_eq!(after.cells[4 * 64 + 4].surface, 0);
 
-        // 全图重建（同 `flush_terrain_texture` 的整图分支）。
+        // 全图重建（同 `flush_terrain_texture` 的整图分支；关 shore_shallow，
+        // 理由见首烘处——水深语义测试不掺浅滩装饰）。
         let new_image = image_from_terrain(
             after,
             ViewMode::VectorFlat,
             None,
             false,
             crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::TreatmentFlags {
+                shore_shallow: false,
+                ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+            },
             0.0,
         );
         if let Some(mut img) = images.get_mut(&handle) {

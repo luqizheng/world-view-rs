@@ -341,6 +341,13 @@ mod tests {
         for px in img.data.as_mut().expect("地形图必须有像素数据").iter_mut() {
             *px = 0;
         }
+        // 关掉近岸浅滩带（S2）：本测试钉「patch 只动矩形内」的机械语义，
+        // 4×4 小图上距离场支撑半径（12 格）会把整图圈进膨胀区，与哨兵
+        // 断言冲突——装饰语义不该稀释机械契约（同 d43f618 关 bleed 的口径）。
+        let treatment = crate::theme::theme_pack::TreatmentFlags {
+            shore_shallow: false,
+            ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+        };
         // patch 矩形 (1,1)-(3,3) = 2×2 = 4 像素。
         patch_terrain_image(
             &mut img,
@@ -351,7 +358,7 @@ mod tests {
             1,
             false,
             crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            treatment,
         );
         // 矩形外的像素仍是 0。
         // 索引 (0,0) → 像素 0..4。
@@ -384,6 +391,12 @@ mod tests {
         for px in img.data.as_mut().expect("地形图必须有像素数据").iter_mut() {
             *px = 0xFF;
         }
+        // 关 shore_shallow：同 `patch_terrain_image_runs_on_small_input`——
+        // 机械哨兵测试不掺 S2 距离场膨胀。
+        let treatment = crate::theme::theme_pack::TreatmentFlags {
+            shore_shallow: false,
+            ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+        };
         // patch 矩形 (1,1)-(2,2) = 1 像素。
         patch_terrain_image(
             &mut img,
@@ -394,7 +407,7 @@ mod tests {
             1,
             false,
             crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            treatment,
         );
         // (0,0) 像素仍是 0xFF。
         assert_eq!(img.data.as_ref().expect("地形图必须有像素数据")[0], 0xFF);
