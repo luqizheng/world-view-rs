@@ -183,6 +183,12 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::PanelMinimap => "小地图",
         I18nKey::PanelCharacter => "人物登记",
         I18nKey::PanelEvent => "事件登记",
+        I18nKey::PanelCellEditor => "Cell 编辑器",
+        I18nKey::CellEditorEmptyTitle => "未选中格",
+        I18nKey::CellEditorEmptyHint => "点击地图任一格开始编辑
+（水陆 / 海拔 / 群系）",
+        I18nKey::CellEditorWater => "水",
+        I18nKey::CellEditorLand => "陆",
 
         // ── 事实地界（theme overlay v1 / 选择工具 M4） ──
         I18nKey::IntentMenuDivideFaction => "划分势力",
@@ -425,6 +431,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CmdTogglePanelFaction => "显隐势力层面板",
         I18nKey::CmdTogglePanelRegion => "显隐区域面板",
         I18nKey::CmdTogglePanelInspector => "显隐检视器面板",
+        I18nKey::CmdTogglePanelCellEditor => "显隐 Cell 编辑器面板",
         I18nKey::CmdTogglePanelValidation => "显隐校验面板",
         I18nKey::CmdResetPanelLayout => "重置所有面板位置",
         I18nKey::CmdTogglePlay => "播放 / 暂停时间轴",
@@ -729,6 +736,12 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::PanelMinimap => "Minimap",
         I18nKey::PanelCharacter => "Character log",
         I18nKey::PanelEvent => "Event log",
+        I18nKey::PanelCellEditor => "Cell editor",
+        I18nKey::CellEditorEmptyTitle => "No cell selected",
+        I18nKey::CellEditorEmptyHint => "Click any cell on the map to edit
+(water/land, height, biome)",
+        I18nKey::CellEditorWater => "Water",
+        I18nKey::CellEditorLand => "Land",
 
         // ── Geographic features (theme overlay v1 / select tool M4) ──
         I18nKey::IntentMenuDivideFaction => "Divide faction",
@@ -971,6 +984,7 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CmdTogglePanelFaction => "Toggle faction panel",
         I18nKey::CmdTogglePanelRegion => "Toggle region panel",
         I18nKey::CmdTogglePanelInspector => "Toggle inspector",
+        I18nKey::CmdTogglePanelCellEditor => "Toggle cell editor",
         I18nKey::CmdTogglePanelValidation => "Toggle validation",
         I18nKey::CmdResetPanelLayout => "Reset all panel positions",
         I18nKey::CmdTogglePlay => "Play / pause timeline",

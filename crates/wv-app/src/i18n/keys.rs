@@ -755,6 +755,16 @@ pub enum I18nKey {
     CmdToggleImmersive,
     /// 「单格编辑」工具（[ADR-0040]，快捷键 C；CellMap 工作区核心工具）
     CmdToolEditCell,
+    /// 「Cell 编辑器」面板标题（独立面板，2026-10-20）
+    PanelCellEditor,
+    /// 空态标题（未选中格）
+    CellEditorEmptyTitle,
+    /// 空态提示（先点地图选格）
+    CellEditorEmptyHint,
+    /// 地表分段「水」
+    CellEditorWater,
+    /// 地表分段「陆」
+    CellEditorLand,
     /// 「打开命令面板」
     CmdOpenCommandPalette,
     /// 「保存工程」
@@ -785,6 +795,8 @@ pub enum I18nKey {
     CmdTogglePanelRegion,
     /// 「显隐检视器面板」
     CmdTogglePanelInspector,
+    /// 「显隐 Cell 编辑器面板」
+    CmdTogglePanelCellEditor,
     /// 「显隐校验面板」
     CmdTogglePanelValidation,
     /// 「重置所有面板位置」

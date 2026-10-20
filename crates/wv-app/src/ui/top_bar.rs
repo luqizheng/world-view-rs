@@ -251,7 +251,7 @@ fn browse_edit_segment(
                         for p in Panel::ALL {
                             panels.set_visible(p, false);
                         }
-                        panels.set_visible(Panel::Inspector, true);
+                        panels.set_visible(Panel::CellEditor, true);
                         palette.pending = Some(CommandId::SelectMapTool(MapToolId::EditCell));
                         view.mode = ViewMode::Topographic;
                     }

@@ -389,6 +389,7 @@ pub fn run(config: AppConfig) {
             // v0.3：Inspector 整体右移后绘在最后（右上角，离顶栏最近），
             // 避免被左列 / 中列面板遮挡。
             ui::panel_inspector,
+            ui::panel_cell_editor,
             ui::panel_validation,
             // 「新建地图」对话框（CommandId::NewMap 打开；居中模态窗）。
             ui::new_map_dialog,

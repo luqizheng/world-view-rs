@@ -419,6 +419,7 @@ impl CommandRegistry {
                 Panel::Faction => I18nKey::CmdTogglePanelFaction,
                 Panel::Region => I18nKey::CmdTogglePanelRegion,
                 Panel::Inspector => I18nKey::CmdTogglePanelInspector,
+                Panel::CellEditor => I18nKey::CmdTogglePanelCellEditor,
                 Panel::Validation => I18nKey::CmdTogglePanelValidation,
             };
             push(
