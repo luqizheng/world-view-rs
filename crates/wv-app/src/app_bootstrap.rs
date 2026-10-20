@@ -157,6 +157,10 @@ pub fn run(config: AppConfig) {
     // 选择工具会话态（2026-10-17 选择工具 spec；drill::register 也会 init——
     // 这里显式补一份，资源幂等，双保险防装配顺序遗漏）
     .init_resource::<wv_render::state::SelectionState>()
+    // 单格编辑工具会话态（[ADR-0040]）：commit_edit_cell_on_click 与
+    // apply_pending_commands 都 ResMut 它——漏 init 即启动期 panic
+    // （2026-10-20 实机验收抓到：测试 fixture 手动 init 掩盖了装配遗漏）。
+    .init_resource::<wv_render::state::EditCellState>()
     .init_resource::<ui::ContinentDialog>()
     .init_resource::<ui::city_intent::CityIntentDialog>()
     // 森林意图的命名对话框（选择工具 M4）：环 + 钉住图 id 自持在对话框里。
