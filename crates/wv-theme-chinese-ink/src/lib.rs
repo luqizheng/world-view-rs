@@ -7,7 +7,7 @@
 //! ## 加载方式（游戏 app 视角）
 //!
 //! ```ignore
-//! use wv_render::theme::registry::{MergedThemeRegistry, ThemePackRegistry};
+//! use wv_theme::registry::{MergedThemeRegistry, ThemePackRegistry};
 //! use wv_theme_chinese_ink::ChineseInkRegistry;
 //!
 //! let merged = MergedThemeRegistry::merge(&[&ChineseInkRegistry]);
@@ -20,12 +20,10 @@
 //! - **不**做 i18n：主题名走 i18n 是 M3 议题（M2 用 `display_name: &'static str` 单语）；
 //! - **不**改 `wv-render` 任何源码——验证"加风格零改核心"。
 
-#![cfg(feature = "app")]
-
-use wv_render::theme::overlays::{FeatureOverlaySet, FeatureRule};
-use wv_render::theme::palette::PaletteColors;
-use wv_render::theme::registry::ThemePackRegistry;
-use wv_render::theme::theme_pack::{ThemePack, TreatmentFlags};
+use wv_theme::overlays::{FeatureOverlaySet, FeatureRule};
+use wv_theme::palette::PaletteColors;
+use wv_theme::registry::ThemePackRegistry;
+use wv_theme::theme_pack::{ThemePack, TreatmentFlags};
 
 /// 水墨主题包占位。
 ///
@@ -84,8 +82,8 @@ impl ThemePackRegistry for ChineseInkRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wv_render::theme::palette::PaletteColors;
-    use wv_render::theme::registry::MergedThemeRegistry;
+    use wv_theme::palette::PaletteColors;
+    use wv_theme::registry::MergedThemeRegistry;
 
     /// 主题包 id 稳定（持久化键 / 跨工程引用依赖）。
     #[test]
@@ -109,7 +107,7 @@ mod tests {
         struct BuiltinOnly;
         impl ThemePackRegistry for BuiltinOnly {
             fn packs(&self) -> &'static [(&'static str, &'static ThemePack)] {
-                wv_render::theme::theme_pack::builtin::ALL
+                wv_theme::theme_pack::builtin::ALL
             }
             fn registry_id(&self) -> &'static str {
                 "builtin_only"
@@ -133,7 +131,7 @@ mod tests {
     fn pack_has_forest_overlay_rule() {
         let rule = PACK
             .overlays
-            .rule_for(wv_render::theme::overlays::BiomeFamily::Forest)
+            .rule_for(wv_theme::overlays::BiomeFamily::Forest)
             .expect("水墨包应给森林族配置占位规则");
         // Task 9 裁定：水墨包暂不接贴图（纯色回退），待美术校准后再定
         // 水墨树 / 晕资产——避免把日间古舆图图集错配到水墨主题。

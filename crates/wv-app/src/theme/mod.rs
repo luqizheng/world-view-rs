@@ -28,9 +28,28 @@
 #[cfg(feature = "app")]
 pub use wv_ui::{ui_theme, ui_tokens};
 
-// 渲染配色四件：本体在 wv-render（ADR-0020），这里 `pub use` 保持
-// `crate::theme::colors::*` 等既有路径对全部 UI 代码继续可达。
-pub use wv_render::theme::{colors, colors_dusk, colors_google, fonts, palette};
+// 渲染配色：色板 / 装饰旗标 / 覆盖物规则的**本体在 wv-theme**（ADR-0043），
+// 这里 `pub use` 保持 `crate::theme::colors::*` 等既有路径对全部 UI 代码继续可达。
+// `fonts` 留在 wv-render（字体装配的消费方是渲染侧的 Text2d 标签系统）。
+pub use wv_render::theme::fonts;
+pub use wv_theme::{colors, colors_dusk, colors_google, palette};
+
+/// 世界色令牌 → egui 颜色（UI 层画世界语义色时经此桥接）。
+///
+/// **为什么在 UI 侧而不是 `wv-theme`**（ADR-0043 D1）：egui 是界面关注点，
+/// 主题数据层不该依赖它（`wv-theme` 的依赖只有 bevy + wv-terrain）。桥接
+/// 留在 UI 侧；原 `crate::theme::palette_to_color32` 路径随之改为
+/// `crate::theme::palette_to_color32`（调用点 5 处，同 commit 内改齐）。
+pub fn palette_to_color32(c: bevy::color::Color) -> bevy_egui::egui::Color32 {
+    let bevy::color::Color::Srgba(s) = c else {
+        return bevy_egui::egui::Color32::GRAY;
+    };
+    bevy_egui::egui::Color32::from_rgb(
+        (s.red * 255.0).round() as u8,
+        (s.green * 255.0).round() as u8,
+        (s.blue * 255.0).round() as u8,
+    )
+}
 
 #[cfg(all(test, feature = "app"))]
 mod wv_ui_world_color_parity_tests {
@@ -44,7 +63,7 @@ mod wv_ui_world_color_parity_tests {
 
     /// `bevy::Color` → 令牌层 `Rgb`（原 ui_tokens 测试 helper）。
     fn world_rgb(c: bevy::prelude::Color) -> Rgb {
-        let [r, g, b, _] = crate::theme::colors::palette_to_color32(c).to_srgba_unmultiplied();
+        let [r, g, b, _] = crate::theme::palette_to_color32(c).to_srgba_unmultiplied();
         Rgb {
             r: r as f32 / 255.0,
             g: g as f32 / 255.0,

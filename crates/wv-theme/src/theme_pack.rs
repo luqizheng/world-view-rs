@@ -1,6 +1,4 @@
 //! 待批准：本文件在 `app` feature 下才编译。
-#![cfg(feature = "app")]
-
 //! 主题包（Theme Pack）—— 配色 / 装饰 / 贴图 / 覆盖物规则的聚合（ADR-0023 D1）。
 //!
 //! ## 职责
@@ -29,7 +27,6 @@ use bevy::prelude::*;
 
 use super::overlays::{FeatureOverlaySet, FeatureRule};
 use super::palette::{MapPalette, PaletteColors};
-use crate::terrain_view::tile_atlas::TileAtlas;
 
 /// 主题包：色板 + 装饰 + 贴图 + 覆盖物规则的原子组合（ADR-0023 D1）。
 ///
@@ -75,9 +72,13 @@ pub struct TileAtlasSpec {
 }
 
 impl TileAtlasSpec {
-    /// 由已加载的 `TileAtlas` 推导规格（M2 接入时用，M1 不消费）。
-    pub fn from_atlas(_atlas: &TileAtlas) -> Self {
-        Self { format_version: 1 }
+    /// 由已加载的图集的 `format_version` 推导规格（M2 接入时用，M1 不消费）。
+    ///
+    /// **签名刻意不收 `TileAtlas`**：那是 `wv-render` 的运行时类型，契约层
+    /// 引用它就等于契约反向依赖渲染层（ADR-0043 D2 的红线）。调用方
+    /// （`wv-render`）自己取字段传进来。
+    pub fn from_format_version(format_version: u32) -> Self {
+        Self { format_version }
     }
 }
 

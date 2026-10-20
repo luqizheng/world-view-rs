@@ -6,11 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 description = "示例主题包：水墨（chinese_ink）—— ADR-0023 M2 演示"
 
-# 主题包默认不编译：依赖 wv-render 的 `app` feature（与 wv-render 自身红线同档）。
-# 游戏 app / 编辑器显式 `features = ["app"]` 才会拉入。
-[features]
-default = []
-app = ["wv-render/app"]
-
+# ADR-0043 D2：主题 crate 只依赖 `wv-theme`，**不再依赖 `wv-render`**——
+# 「加新风格 = 加新 crate、零改渲染层源码」得以成立的关键。
+# 原先的 `app` feature 门随该依赖一起撤销（它只是为了门住 wv-render）。
 [dependencies]
-wv-render = { workspace = true }
+wv-theme = { workspace = true }
