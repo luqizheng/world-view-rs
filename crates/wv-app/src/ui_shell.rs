@@ -1437,7 +1437,6 @@ fn apply_pending_commands(
                 pending.before,
                 pending.after,
             );
-            use wv_edit::EditCommand;
             let mut tx = wv_edit::history::Transaction::new();
             tx.push(Box::new(cmd));
             match edit.history.commit(&mut projection.world, tx) {

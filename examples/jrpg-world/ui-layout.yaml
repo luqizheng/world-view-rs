@@ -13,13 +13,6 @@ panels:
     height: 260.0
     collapsed: false
     visible: false
-  compass:
-    x: 332.0
-    y: 56.0
-    width: 216.0
-    height: 300.0
-    collapsed: false
-    visible: true
   event:
     x: 652.0
     y: 56.0
@@ -40,7 +33,7 @@ panels:
     width: 264.0
     height: 240.0
     collapsed: false
-    visible: false
+    visible: true
   layers:
     x: 12.0
     y: 398.0
@@ -54,7 +47,7 @@ panels:
     width: 280.0
     height: 200.0
     collapsed: false
-    visible: false
+    visible: true
   situation:
     x: 652.0
     y: 380.0
@@ -64,7 +57,7 @@ panels:
     visible: false
   timeline:
     x: 12.0
-    y: 636.0
+    y: 880.0
     width: 1256.0
     height: 164.0
     collapsed: false
@@ -83,7 +76,11 @@ panels:
     height: 60.0
     collapsed: false
     visible: false
-theme: dark
+theme: light
 density: cozy
 map_theme: daylight
 language: zh
+map_dock: vertical
+map_snap: true
+map_dock_pos: null
+map_zoom_strip_pos: null

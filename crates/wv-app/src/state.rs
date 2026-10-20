@@ -270,6 +270,12 @@ pub struct PanelState {
     pub reset_requested: bool,
     /// 沉浸模式（`Tab`）：所有面板淡出但**仍可点击**（动画 §4 规范：alpha 0.10）。
     pub immersive: bool,
+    /// CellMap 工作区（顶栏第三段，2026-10-20）进入时的面板可见性快照。
+    ///
+    /// 进 CellMap：快照当前全部面板 visible → 只开 Inspector（Cell 编辑唯一
+    /// 相关面板）；退 CellMap（点 Browse/Edit 或再点 CellMap）：还原快照并清
+    /// `None`。`None` = 不在工作区。
+    pub cell_workspace_backup: Option<Vec<(Panel, bool)>>,
 }
 
 impl Default for PanelState {
@@ -288,6 +294,7 @@ impl Default for PanelState {
             visible,
             reset_requested: false,
             immersive: false,
+            cell_workspace_backup: None,
         }
     }
 }

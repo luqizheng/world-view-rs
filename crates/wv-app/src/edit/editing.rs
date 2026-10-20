@@ -1370,14 +1370,18 @@ mod tests {
             map_origin: Vec2::ZERO,
             map_size: Vec2::new(80.0, 80.0),
         });
-        let mut view = crate::state::ViewState::default();
         // 命中 (gx=3, gy=4):世界坐标 (35,45) 落在 [30,40) × [40,50)。
-        view.cursor_world = Some(Vec2::new(35.0, 45.0));
+        let view = crate::state::ViewState {
+            cursor_world: Some(Vec2::new(35.0, 45.0)),
+            ..Default::default()
+        };
         world.insert_resource(view);
         world.insert_resource(crate::state::PlaybackState::default());
 
-        let mut edit_cell = EditCellState::default();
-        edit_cell.tool_active = true;
+        let edit_cell = EditCellState {
+            tool_active: true,
+            ..Default::default()
+        };
         world.insert_resource(edit_cell);
 
         let mut buttons = ButtonInput::<MouseButton>::default();
@@ -1406,8 +1410,10 @@ mod tests {
         world.insert_resource(crate::state::WorldProjection::default());
         world.insert_resource(crate::state::DrillState::default());
         world.insert_resource(crate::state::GridConfig::default());
-        let mut view = crate::state::ViewState::default();
-        view.cursor_world = Some(Vec2::new(35.0, 45.0));
+        let view = crate::state::ViewState {
+            cursor_world: Some(Vec2::new(35.0, 45.0)),
+            ..Default::default()
+        };
         world.insert_resource(view);
         world.insert_resource(crate::state::PlaybackState::default());
         world.insert_resource(EditCellState::default());

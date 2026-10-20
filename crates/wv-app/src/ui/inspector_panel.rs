@@ -30,7 +30,6 @@ use crate::i18n::{t, I18nKey};
 use crate::state::{Panel, PanelState, WorldProjection};
 use crate::theme::ui_theme::{color32, proportional, UiShellConfig};
 use crate::theme::ui_tokens::{radius, space};
-use crate::ui_command_palette::{CommandId, CommandPalette};
 use crate::ui_layout::LayoutFile;
 
 use super::shell::UiShell;
@@ -444,7 +443,6 @@ fn push_cell_edit(
         return;
     }
     let cmd = wv_edit::command::EditCellCommand::new(map.clone(), gx, gy, before, after);
-    use wv_edit::EditCommand;
     let mut tx = wv_edit::history::Transaction::new();
     tx.push(Box::new(cmd));
     match edit.history.commit(world, tx) {

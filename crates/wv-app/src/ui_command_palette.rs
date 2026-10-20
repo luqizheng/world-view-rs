@@ -377,6 +377,15 @@ impl CommandRegistry {
             I18nKey::CmdOpenCommandPalette,
             Some("Ctrl+K"),
         );
+        // 单格编辑工具（[ADR-0040]）：与瓷砖/快捷键同源，排 SelectMapTool
+        // 由分发器做互斥。dock 瓷砖被 16 系统参数上限卡住（ADR-0040 §6），
+        // 命令面板 + 快捷键 C 是现行入口。
+        push(
+            CommandId::SelectMapTool(MapToolId::EditCell),
+            CommandGroup::Edit,
+            I18nKey::CmdToolEditCell,
+            Some("C"),
+        );
         push(
             CommandId::Save,
             CommandGroup::Edit,

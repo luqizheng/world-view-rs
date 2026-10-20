@@ -64,6 +64,7 @@ pub fn top_bar(
     mut menu: ResMut<ProjectMenuState>,
     mut palette: ResMut<crate::ui_command_palette::CommandPalette>,
     mut view: ResMut<ViewState>,
+    mut panels: ResMut<crate::state::PanelState>,
     mut settings: ResMut<SettingsDialog>,
     mut current_loc: ResMut<CurrentLocale>,
 ) {
@@ -128,7 +129,7 @@ pub fn top_bar(
         .order(egui::Order::Middle)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                browse_edit_segment(ui, &shell, &mut view);
+                browse_edit_segment(ui, &shell, &mut view, &mut panels, &mut palette);
             });
         });
 }
@@ -178,19 +179,41 @@ fn identity_segment(
     }
 }
 
-/// Browse / Edit 两段：`Browse` → `ViewMode::VectorFlat`（默认浏览）、
-/// `Edit` → `ViewMode::Schematic`（色块格子）。
+/// Browse / Edit / CellMap 三段：`Browse` → `ViewMode::VectorFlat`（默认浏览）、
+/// `Edit` → `ViewMode::Schematic`（色块格子）、`CellMap` → 单格编辑工作区
+/// （2026-10-20 用户提案：等高分析底图 + EditCell 工具 + 只留相关面板）。
 ///
 /// `Faction` 已从顶栏移除（2026-10-19 用户裁定），但 `ViewMode::Faction`
 /// 本身仍在——命令面板「视图」组 + 快捷键 `3` 可切（见
 /// [`crate::ui_command_palette`]）。段宽 64 对齐 Figma Mode selector。
 ///
+/// **CellMap 是 UI 工作区编排**，不是新 ViewMode——渲染技法复用
+/// `ViewMode::Topographic`（ADR-0039），叠加三件事：
+/// ① `view.mode = Topographic`；② 经 `CommandPalette` 排
+/// `SelectMapTool(EditCell)`（互斥/开关语义全在分发器，不重复实现）；
+/// ③ 面板编排——快照全部面板可见性到
+/// `PanelState::cell_workspace_backup`，只开 Inspector；退出时还原。
+/// 再点 CellMap = 退出（回快照 + 关工具）；点 Browse/Edit 也退出。
+///
 /// 数据层 `view.mode` 仍按原枚举流转；命令面板 label 来自 `ViewMode::label()`
-/// （中文），不受影响（v0.3 用户拍板：仅顶栏用英文）。
-fn browse_edit_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState) {
-    let labels = ["Browse", "Edit"];
-    let modes = [ViewMode::VectorFlat, ViewMode::Schematic];
-    // 当前若是 Faction（从命令面板进入），`usize::MAX` 让两段都不高亮，
+/// （中文），不受影响（v0.3 用户拍板：仅顶栏用英文，段名硬编码英文字符串）。
+fn browse_edit_segment(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    view: &mut ViewState,
+    panels: &mut crate::state::PanelState,
+    palette: &mut crate::ui_command_palette::CommandPalette,
+) {
+    use crate::state::Panel;
+    use crate::ui_command_palette::{CommandId, MapToolId};
+
+    let labels = ["Browse", "Edit", "CellMap"];
+    let modes = [
+        ViewMode::VectorFlat,
+        ViewMode::Schematic,
+        ViewMode::Topographic,
+    ];
+    // 当前若是 Faction 等段外模式，`usize::MAX` 让各段都不高亮，
     // 不误报 Browse；不改 `view.mode`（V1：不阻止）。
     let active = modes
         .iter()
@@ -205,7 +228,46 @@ fn browse_edit_segment(ui: &mut egui::Ui, shell: &UiShell, view: &mut ViewState)
         active,
         font_size::SMALL,
         |i| {
-            view.mode = modes[i];
+            match i {
+                // ── CellMap：进/出工作区 ──
+                2 => {
+                    if view.mode == ViewMode::Topographic {
+                        // 已在工作区 → 退出：还原面板快照 + 关 EditCell 工具
+                        // （排 toggle 语义的 SelectMapTool，分发器统一关）。
+                        if let Some(backup) = panels.cell_workspace_backup.take() {
+                            for (p, v) in backup {
+                                panels.set_visible(p, v);
+                            }
+                        }
+                        palette.pending = Some(CommandId::SelectMapTool(MapToolId::EditCell));
+                        view.mode = ViewMode::Schematic;
+                    } else {
+                        // 进入：快照面板 → 只开 Inspector → 排 EditCell 工具。
+                        let backup = Panel::ALL
+                            .iter()
+                            .map(|p| (*p, panels.is_visible(*p)))
+                            .collect();
+                        panels.cell_workspace_backup = Some(backup);
+                        for p in Panel::ALL {
+                            panels.set_visible(p, false);
+                        }
+                        panels.set_visible(Panel::Inspector, true);
+                        palette.pending = Some(CommandId::SelectMapTool(MapToolId::EditCell));
+                        view.mode = ViewMode::Topographic;
+                    }
+                }
+                // ── Browse / Edit：先退工作区（若在），再切底图模式 ──
+                plain => {
+                    if let Some(backup) = panels.cell_workspace_backup.take() {
+                        for (p, v) in backup {
+                            panels.set_visible(p, v);
+                        }
+                        // 从 CellMap 切走：关 EditCell 工具（toggle）。
+                        palette.pending = Some(CommandId::SelectMapTool(MapToolId::EditCell));
+                    }
+                    view.mode = modes[plain];
+                }
+            }
         },
     );
 }

@@ -753,6 +753,8 @@ pub enum I18nKey {
     CmdZoomOut,
     /// 「沉浸模式（只留地图与时间轴）」
     CmdToggleImmersive,
+    /// 「单格编辑」工具（[ADR-0040]，快捷键 C；CellMap 工作区核心工具）
+    CmdToolEditCell,
     /// 「打开命令面板」
     CmdOpenCommandPalette,
     /// 「保存工程」
