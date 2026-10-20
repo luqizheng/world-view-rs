@@ -161,6 +161,9 @@ pub fn run(config: AppConfig) {
     // apply_pending_commands 都 ResMut 它——漏 init 即启动期 panic
     // （2026-10-20 实机验收抓到：测试 fixture 手动 init 掩盖了装配遗漏）。
     .init_resource::<wv_render::state::EditCellState>()
+    // Cell 编辑器的「单格 / 批量」工作模式（[ADR-0040] 补 B）——面板系统
+    // ResMut 它,漏 init 即启动期 panic(同 EditCellState 的教训)。
+    .init_resource::<crate::ui::cell_editor_panel::CellPanelMode>()
     .init_resource::<ui::ContinentDialog>()
     .init_resource::<ui::city_intent::CityIntentDialog>()
     // 森林意图的命名对话框（选择工具 M4）：环 + 钉住图 id 自持在对话框里。

@@ -769,6 +769,20 @@ pub enum I18nKey {
     BatchCellsHeightDelta,
     /// 批量区「应用」
     BatchCellsApply,
+    /// 批量区「设为」（海拔整体设值）
+    BatchCellsSet,
+    /// 模式切换「单格」
+    CellEditorModeSingle,
+    /// 模式切换「批量」
+    CellEditorModeBatch,
+    /// 批量读数「海拔」
+    BatchStatsHeight,
+    /// 批量读数「群系」
+    BatchStatsBiome,
+    /// 批量空态标题（未圈选）
+    BatchCellsEmptyTitle,
+    /// 批量空态提示（先用 V 圈选）
+    BatchCellsEmptyHint,
     /// identity 副标「网格单元 · 已选中」（金色）
     CellEditorSubtitle,
     /// 位置段 heading

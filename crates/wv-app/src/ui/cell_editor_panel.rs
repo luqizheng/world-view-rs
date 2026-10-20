@@ -38,6 +38,20 @@ use super::widgets::{
 };
 use wv_render::state::EditCellState;
 use wv_ui::widgets::controls::{numeric_input_bounded, option_menu, radio};
+
+/// Cell 编辑器的两个工作模式（[ADR-0040] 补 B）。
+///
+/// **两态互斥**——杜绝「以为在改整片、实际只改了一格」的歧义：
+/// - `Single` —— 编辑当前点选的 1 格（`EditCellState.selected`）；
+/// - `Batch`  —— 编辑多边形贴合的 N 格（`EditCellState.region_cells`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, bevy::prelude::Resource)]
+pub enum CellPanelMode {
+    /// 单格（默认）。
+    #[default]
+    Single,
+    /// 批量（多边形选区）。
+    Batch,
+}
 use wv_ui::widgets::segmented_control::segmented;
 
 /// Cell 编辑器面板。
@@ -50,13 +64,15 @@ pub fn panel_cell_editor(
     mut projection: ResMut<WorldProjection>,
     edit_cell: Res<EditCellState>,
     mut edit: ResMut<crate::edit::editing::EditHistory>,
-    mut selection: ResMut<SelectionState>,
+    // Bevy 单系统参数上限 16：把两个会话态折成一层元组（每层元组算 1 参）。
+    (mut selection, mut cell_panel_mode): (ResMut<SelectionState>, ResMut<CellPanelMode>),
     current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
+    let mut mode_pick = *cell_panel_mode;
     float_window(
         ctx,
         &shell,
@@ -66,63 +82,109 @@ pub fn panel_cell_editor(
         None,
         current_loc.0,
         |ui| {
-            // ── 批量模式：多边形选区贴合的方格集合非空 ──
-            if !edit_cell.region_cells.is_empty() {
-                render_batch_section(
-                    ui,
-                    &shell,
-                    &mut projection,
-                    &edit_cell,
-                    &mut edit,
-                    &mut selection,
-                    current_loc.0,
-                );
-                divider(ui, &shell);
-                ui.add_space(6.0);
-            }
-            // ── 单格：选中态 / 空态 ──
-            match edit_cell.selected {
-                Some((gx, gy)) => {
-                    let Some(before) = read_cell(&projection, &edit_cell, gx, gy) else {
-                        return;
+            // ── 模式切换：单格 / 批量（[ADR-0040] 补 B）──
+            // 有多边形选区时自动落在「批量」（用户刚圈完，意图明确）；
+            // 用户可手动切回「单格」——两态互斥，杜绝「以为在改整片、
+            // 实际只改了一格」的歧义。
+            let has_region = !edit_cell.region_cells.is_empty();
+            let eff_mode = match mode_pick {
+                CellPanelMode::Single => CellPanelMode::Single,
+                CellPanelMode::Batch => {
+                    if has_region {
+                        CellPanelMode::Batch
+                    } else {
+                        CellPanelMode::Single
+                    }
+                }
+            };
+            // 「有选区但当前在单格态」→ 提示可切批量（不强制）。
+            let mode_labels = [
+                t(current_loc.0, I18nKey::CellEditorModeSingle),
+                t(current_loc.0, I18nKey::CellEditorModeBatch),
+            ];
+            segmented(
+                ui,
+                &shell,
+                "cell_editor_mode",
+                64.0,
+                &mode_labels,
+                match eff_mode {
+                    CellPanelMode::Single => 0,
+                    CellPanelMode::Batch => 1,
+                },
+                font_size::SMALL,
+                |i| {
+                    mode_pick = if i == 0 {
+                        CellPanelMode::Single
+                    } else {
+                        CellPanelMode::Batch
                     };
-                    render_identity(ui, &shell, gx, gy);
-                    divider(ui, &shell);
-                    render_fields(
+                },
+            );
+            ui.add_space(6.0);
+
+            match eff_mode {
+                CellPanelMode::Batch => {
+                    render_batch_section(
                         ui,
                         &shell,
                         &mut projection,
                         &edit_cell,
                         &mut edit,
-                        (gx, gy),
-                        before,
+                        &mut selection,
                         current_loc.0,
                     );
-                    divider(ui, &shell);
-                    // 尾注（Figma "Selection scope"）：focus 图标 + 提示。
-                    // 禁止 cursor 手算 + ui.put（见 section_heading 注释）。
-                    ui.horizontal(|ui| {
-                        ui.add(icon_image(ICON_FOCUS, shell.t3(), 12.0));
-                        ui.label(
-                            egui::RichText::new(t(current_loc.0, I18nKey::CellEditorScopeHint))
-                                .size(font_size::MICRO)
-                                .color(shell.t3()),
-                        );
-                    });
                 }
-                None => {
-                    empty_state(
-                        ui,
-                        &shell,
-                        "▣",
-                        t(current_loc.0, I18nKey::CellEditorEmptyTitle),
-                        t(current_loc.0, I18nKey::CellEditorEmptyHint),
-                        "",
-                    );
+                CellPanelMode::Single => {}
+            }
+
+            // ── 单格：选中态 / 空态 ──
+            if eff_mode == CellPanelMode::Single {
+                match edit_cell.selected {
+                    Some((gx, gy)) => {
+                        let Some(before) = read_cell(&projection, &edit_cell, gx, gy) else {
+                            return;
+                        };
+                        render_identity(ui, &shell, gx, gy);
+                        divider(ui, &shell);
+                        render_fields(
+                            ui,
+                            &shell,
+                            &mut projection,
+                            &edit_cell,
+                            &mut edit,
+                            (gx, gy),
+                            before,
+                            current_loc.0,
+                        );
+                        divider(ui, &shell);
+                        // 尾注（Figma "Selection scope"）：focus 图标 + 提示。
+                        // 禁止 cursor 手算 + ui.put（见 section_heading 注释）。
+                        ui.horizontal(|ui| {
+                            ui.add(icon_image(ICON_FOCUS, shell.t3(), 12.0));
+                            ui.label(
+                                egui::RichText::new(t(current_loc.0, I18nKey::CellEditorScopeHint))
+                                    .size(font_size::MICRO)
+                                    .color(shell.t3()),
+                            );
+                        });
+                    }
+                    None => {
+                        empty_state(
+                            ui,
+                            &shell,
+                            "▣",
+                            t(current_loc.0, I18nKey::CellEditorEmptyTitle),
+                            t(current_loc.0, I18nKey::CellEditorEmptyHint),
+                            "",
+                        );
+                    }
                 }
             }
         },
     );
+    // 模式选择回写（面板内改的）。
+    *cell_panel_mode = mode_pick;
 }
 
 /// identity 两行（Figma "Object identity"）：主标 `Cell · X, Y` + 金副标。
@@ -344,7 +406,69 @@ fn biome_groups() -> &'static [&'static [(u8, &'static str)]] {
     ]
 }
 
-/// 批量编辑区（多边形选区贴合 N 格）：海拔增减 / 设水陆 / 设群系，
+/// 批量区读数：N 格 / 平均海拔 / 群系分布（[ADR-0040] 补 A）。
+///
+/// 「这一片现在是什么」必须可读——否则用户只能盲改。
+struct RegionStats {
+    /// 选区格数。
+    pub count: usize,
+    /// 平均海拔（米，四舍五入）。
+    pub avg_height: i32,
+    /// 最高 / 最低海拔（米）。
+    pub max_height: i32,
+    pub min_height: i32,
+    /// 群系分布：(编号, 出现次数)，按次数降序、编号升序。
+    pub biome_hist: Vec<(u8, usize)>,
+}
+
+/// 统计选区当前值（读 world，不改）。
+fn region_stats(
+    projection: &WorldProjection,
+    map: &wv_core::id::Id,
+    cells: &[(i32, i32)],
+) -> Option<RegionStats> {
+    let terrain = projection.world.terrain_of(map)?;
+    let w = terrain.width as i32;
+    let h = terrain.height as i32;
+    let mut count = 0usize;
+    let mut sum_h = 0i64;
+    let mut max_h = i32::MIN;
+    let mut min_h = i32::MAX;
+    let mut hist: std::collections::BTreeMap<u8, usize> = std::collections::BTreeMap::new();
+    for (gx, gy) in cells {
+        if *gx < 0 || *gy < 0 || *gx >= w || *gy >= h {
+            continue;
+        }
+        let idx = (*gy as usize) * (w as usize) + (*gx as usize);
+        let Some(cell) = terrain.cells.get(idx) else {
+            continue;
+        };
+        count += 1;
+        sum_h += cell.height as i64;
+        max_h = max_h.max(cell.height as i32);
+        min_h = min_h.min(cell.height as i32);
+        *hist.entry(cell.biome).or_insert(0) += 1;
+    }
+    if count == 0 {
+        return None;
+    }
+    let mut biome_hist: Vec<(u8, usize)> = hist.into_iter().collect();
+    biome_hist.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    Some(RegionStats {
+        count,
+        avg_height: (sum_h / count as i64) as i32,
+        max_height: max_h,
+        min_height: min_h,
+        biome_hist,
+    })
+}
+
+/// 批量编辑区（多边形选区贴合 N 格）：
+///
+/// **读数**（补 A）：N 格 / 平均海拔 / 最高最低 / 群系分布；
+/// **写入**：海拔整体设值、海拔增减（delta）、设水陆、设群系（7 组 radio，
+/// 与单格布局同款）。
+///
 /// 每次应用 = 1 条 `BatchEditCellsCommand`（N 格 1 个撤销单位）。
 #[allow(clippy::too_many_arguments)]
 fn render_batch_section(
@@ -377,22 +501,120 @@ fn render_batch_section(
             selection.cancel();
         }
     });
-    ui.add_space(4.0);
+    ui.add_space(6.0);
 
     let Some(map) = edit_cell.last_map_id.clone() else {
         return;
     };
+    // 无选区 → 批量态空态（提示先用 V 圈选）。
+    if n == 0 {
+        empty_state(
+            ui,
+            shell,
+            "▦",
+            t(loc, I18nKey::BatchCellsEmptyTitle),
+            t(loc, I18nKey::BatchCellsEmptyHint),
+            "",
+        );
+        return;
+    }
 
-    // ── 海拔增减 ──
-    ui.label(
-        egui::RichText::new(t(loc, I18nKey::BatchCellsHeightDelta))
-            .size(font_size::SMALL)
-            .color(shell.t2()),
-    );
-    let mut delta = 0.0f32;
-    numeric_input_bounded(ui, shell, &mut delta, "m", 10.0, -32767.0, 32767.0);
-    if delta != 0.0
-        && super::widgets::button(
+    // ── 读数区（补 A）──
+    let Some(stats) = region_stats(projection, &map, &edit_cell.region_cells) else {
+        return;
+    };
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(t(loc, I18nKey::BatchStatsHeight))
+                .size(font_size::SMALL)
+                .color(shell.t2()),
+        );
+        ui.label(
+            egui::RichText::new(format!(
+                "{} m  ({} ~ {})",
+                stats.avg_height, stats.min_height, stats.max_height
+            ))
+            .monospace()
+            .size(font_size::MICRO)
+            .color(shell.t1()),
+        );
+    });
+    ui.add_space(4.0);
+    // 群系分布读数：「森林 ×12 · 平原 ×4 · …」（超过 3 种显示「+N」）。
+    let biome_text = {
+        let mut parts: Vec<String> = stats
+            .biome_hist
+            .iter()
+            .take(3)
+            .map(|(b, c)| format!("{} ×{}", biome_label(*b), c))
+            .collect();
+        if stats.biome_hist.len() > 3 {
+            parts.push(format!("+{}", stats.biome_hist.len() - 3));
+        }
+        parts.join(" · ")
+    };
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(t(loc, I18nKey::BatchStatsBiome))
+                .size(font_size::SMALL)
+                .color(shell.t2()),
+        );
+        ui.label(
+            egui::RichText::new(biome_text)
+                .size(font_size::MICRO)
+                .color(shell.t1()),
+        );
+    });
+    ui.add_space(8.0);
+    divider(ui, &shell);
+    ui.add_space(6.0);
+
+    // ── 海拔：整体设值（绝对）──
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(t(loc, I18nKey::CellInspectorHeight))
+                .size(font_size::SMALL)
+                .color(shell.t2()),
+        );
+        let mut abs = stats.avg_height as f32;
+        ui.allocate_ui(egui::vec2(120.0, 28.0), |ui| {
+            numeric_input_bounded(
+                ui,
+                shell,
+                &mut abs,
+                "m",
+                10.0,
+                i16::MIN as f32,
+                i16::MAX as f32,
+            );
+        });
+        if super::widgets::button(
+            ui,
+            shell,
+            ButtonContent::Text(t(loc, I18nKey::BatchCellsSet)),
+            ButtonStyle::Raised,
+            None,
+            true,
+        )
+        .clicked()
+        {
+            let target = abs.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+            apply_batch(projection, edit, &map, edit_cell, |c| {
+                wv_core::terrain::TerrainCellData {
+                    height: target,
+                    ..c
+                }
+            });
+        }
+    });
+    ui.add_space(4.0);
+    // ── 海拔：增减（相对）──
+    ui.horizontal(|ui| {
+        let mut delta = 0.0f32;
+        ui.allocate_ui(egui::vec2(120.0, 28.0), |ui| {
+            numeric_input_bounded(ui, shell, &mut delta, "m", 10.0, -32767.0, 32767.0);
+        });
+        if super::widgets::button(
             ui,
             shell,
             ButtonContent::Text(t(loc, I18nKey::BatchCellsApply)),
@@ -401,18 +623,19 @@ fn render_batch_section(
             true,
         )
         .clicked()
-    {
-        apply_batch(projection, edit, &map, edit_cell, |c| {
-            wv_core::terrain::TerrainCellData {
-                height: (c.height as i32 + delta as i32).clamp(i16::MIN as i32, i16::MAX as i32)
-                    as i16,
-                ..c
-            }
-        });
-    }
-    ui.add_space(4.0);
+        {
+            let d = delta as i32;
+            apply_batch(projection, edit, &map, edit_cell, |c| {
+                wv_core::terrain::TerrainCellData {
+                    height: (c.height as i32 + d).clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                    ..c
+                }
+            });
+        }
+    });
+    ui.add_space(8.0);
 
-    // ── 设水陆 ──
+    // ── 地表：整体设水 / 陆 ──
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(t(loc, I18nKey::CellInspectorSurface))
@@ -454,20 +677,38 @@ fn render_batch_section(
             });
         }
     });
-    ui.add_space(4.0);
+    ui.add_space(8.0);
+    divider(ui, &shell);
+    ui.add_space(6.0);
 
-    // ── 设群系 ──
-    ui.label(
-        egui::RichText::new(t(loc, I18nKey::CellInspectorBiome))
-            .size(font_size::SMALL)
-            .color(shell.t2()),
-    );
-    let labels = biome_menu_labels();
-    if let Some(picked) = option_menu(ui, shell, "cell_batch_biome", &labels, 0, &[]) {
-        let biome = menu_index_to_biome(picked);
-        apply_batch(projection, edit, &map, edit_cell, |c| {
-            wv_core::terrain::TerrainCellData { biome, ..c }
+    // ── 群系：7 组 radio（与单格布局同款）──
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(t(loc, I18nKey::CellInspectorBiome))
+                .size(font_size::SMALL)
+                .color(shell.t2()),
+        );
+        ui.label(
+            egui::RichText::new(t(loc, I18nKey::CellEditorBiomeExclusive))
+                .size(font_size::MICRO)
+                .color(shell.t3()),
+        );
+    });
+    ui.add_space(4.0);
+    // 混合选区不显示选中态（radios 全不亮）——点谁就整片设为谁。
+    for group in biome_groups() {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for (num, name) in group.iter() {
+                if radio(ui, shell, false, name).clicked() {
+                    let biome = *num;
+                    apply_batch(projection, edit, &map, edit_cell, |c| {
+                        wv_core::terrain::TerrainCellData { biome, ..c }
+                    });
+                }
+            }
         });
+        ui.add_space(4.0);
     }
 }
 
@@ -571,6 +812,18 @@ fn read_cell(
         .copied()
 }
 
+/// 群系编号 → 显示名（读数用；未登记编号回落 `#N`）。
+fn biome_label(num: u8) -> String {
+    for group in biome_groups() {
+        for (n, name) in group.iter() {
+            if *n == num {
+                return (*name).to_string();
+            }
+        }
+    }
+    format!("#{num}")
+}
+
 /// 批量下拉项标签（NONE + 冻结表 20 编号；下标即编号）。
 fn biome_menu_labels() -> Vec<&'static str> {
     const NAMES: [&str; 21] = [
@@ -606,4 +859,88 @@ fn biome_menu_labels() -> Vec<&'static str> {
 /// 下拉下标 → biome 编号。
 fn menu_index_to_biome(index: usize) -> u8 {
     index as u8
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 构造 4×4 地形：给定 (gx, gy) → (height, biome)。
+    fn terrain_of(cells: &[(i32, i32, i16, u8)]) -> (WorldProjection, wv_core::id::Id) {
+        let map = wv_core::id::Id::new_unchecked("world_main");
+        let mut all = vec![
+            wv_core::terrain::TerrainCellData {
+                height: 0,
+                surface: 1,
+                biome: 0
+            };
+            16
+        ];
+        for (gx, gy, h, b) in cells {
+            all[(*gy as usize) * 4 + *gx as usize] = wv_core::terrain::TerrainCellData {
+                height: *h,
+                surface: 1,
+                biome: *b,
+            };
+        }
+        let mut projection = WorldProjection::default();
+        projection.world.set_terrain(
+            map.clone(),
+            wv_core::terrain::TerrainData {
+                width: 4,
+                height: 4,
+                cells: all,
+            },
+        );
+        (projection, map)
+    }
+
+    /// 批量读数：N 格 / 平均海拔 / 最高最低 / 群系分布（次数降序）。
+    #[test]
+    fn region_stats_summarizes_selection() {
+        let (projection, map) = terrain_of(&[
+            (0, 0, 100, 1), // 森林
+            (1, 0, 200, 1), // 森林
+            (2, 0, 300, 3), // 草原
+            (3, 0, 400, 3), // 草原
+        ]);
+        let cells = vec![(0, 0), (1, 0), (2, 0), (3, 0)];
+        let s = region_stats(&projection, &map, &cells).expect("stats");
+        assert_eq!(s.count, 4);
+        assert_eq!(s.avg_height, 250, "(100+200+300+400)/4");
+        assert_eq!(s.min_height, 100);
+        assert_eq!(s.max_height, 400);
+        // 群系分布：森林 2 / 草原 2 → 同数按编号升序（森林=1 在前）
+        assert_eq!(s.biome_hist, vec![(1, 2), (3, 2)]);
+    }
+
+    /// 越界格被跳过，不影响统计。
+    #[test]
+    fn region_stats_skips_out_of_bounds_cells() {
+        let (projection, map) = terrain_of(&[(0, 0, 50, 1)]);
+        let cells = vec![(0, 0), (99, 99)];
+        let s = region_stats(&projection, &map, &cells).expect("stats");
+        assert_eq!(s.count, 1, "越界格应被跳过");
+        assert_eq!(s.avg_height, 50);
+    }
+
+    /// 空选区 → None（面板据此显示空态）。
+    #[test]
+    fn region_stats_returns_none_for_empty_selection() {
+        let (projection, map) = terrain_of(&[]);
+        assert!(region_stats(&projection, &map, &[]).is_none());
+    }
+
+    /// 群系分布按次数降序（多数在前）。
+    #[test]
+    fn region_stats_sorts_biome_hist_by_count_desc() {
+        let (projection, map) = terrain_of(&[
+            (0, 0, 0, 1), // 森林 ×1
+            (1, 0, 0, 3), // 草原 ×2
+            (2, 0, 0, 3),
+        ]);
+        let cells = vec![(0, 0), (1, 0), (2, 0)];
+        let s = region_stats(&projection, &map, &cells).expect("stats");
+        assert_eq!(s.biome_hist, vec![(3, 2), (1, 1)], "次数多的在前");
+    }
 }

@@ -49,7 +49,7 @@ pub mod widgets;
 
 // ── 路径兼容 re-export（保持 `crate::ui::X` 不变） ───────────────────────
 pub use brush_panel::panel_brush;
-pub use cell_editor_panel::panel_cell_editor;
+pub use cell_editor_panel::{panel_cell_editor, CellPanelMode};
 pub use command_palette_window::command_palette;
 pub use continent_dialog::{continent_dialog, continent_dialog_system, ContinentDialog};
 pub use faction_divide_dialog::{faction_divide_dialog, FactionDivisionDialog};
