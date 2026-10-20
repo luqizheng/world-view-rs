@@ -264,24 +264,42 @@ pub fn site_primitives(
             // 三角山（ADR-0042 手绘化）：主三角右侧叠一道深色背光面——
             // 参考图的山是「受光面 + 背光面」两面体，单色三角只是剪影。
             // 宽 13px 高 11px；海拔 ≥ 1800m 顶部叠雪帽（小三角，雪桶）。
+            //
+            // D13 变体化：同一种三角山在全图重复会像「栅栏」。按格哈希给
+            // 每座山 ±35% 尺寸 + 两成概率簇生第二峰——山链有大小起伏，
+            // 且不再是一个模子刻出来的。
+            let size_k = 0.68 + 0.64 * r3;
             let dx = (r1 - 0.5) * 5.0 * m;
-            out.push(SitePrim::triangle(kind, dx, 2.0 * m, 6.5 * m, 11.0 * m));
+            let w = 6.5 * m * size_k;
+            let h = 11.0 * m * size_k;
+            out.push(SitePrim::triangle(kind, dx, 2.0 * m, w, h));
             out.push(SitePrim::colored(
                 kind,
-                dx + 2.4 * m,
+                dx + w * 0.37,
                 2.0 * m,
-                4.2 * m,
-                8.4 * m,
+                w * 0.65,
+                h * 0.76,
                 PrimShape::Triangle,
                 [0.28, 0.24, 0.20, 0.85], // 背光面（压暗右侧）
             ));
+            // 簇生次峰：约 30% 的山旁再起一座小的（低 35%、偏移随机）。
+            if r2 > 0.70 {
+                let ox = (r2 - 0.5) * 14.0 * m;
+                out.push(SitePrim::triangle(
+                    kind,
+                    dx + ox,
+                    2.0 * m,
+                    w * 0.55,
+                    h * 0.62,
+                ));
+            }
             if height_m >= 1800 {
                 out.push(SitePrim::triangle(
                     DecorKind::Snow,
                     0.0,
-                    4.5 * m,
-                    2.6 * m,
-                    3.5 * m,
+                    4.5 * m * size_k,
+                    2.6 * m * size_k,
+                    3.5 * m * size_k,
                 ));
             }
             // 极高山露岩（ADR-0039 D4）：>=3400m 雪帽内缘叠黄褐岩三角
@@ -290,9 +308,9 @@ pub fn site_primitives(
                 out.push(SitePrim::colored(
                     DecorKind::Snow,
                     0.0,
-                    3.2 * m,
-                    1.5 * m,
-                    2.2 * m,
+                    3.2 * m * size_k,
+                    1.5 * m * size_k,
+                    2.2 * m * size_k,
                     PrimShape::Triangle,
                     [0.79, 0.73, 0.54, 0.95], // #C9B98A 露岩
                 ));
@@ -704,8 +722,14 @@ pub fn sync_terrain_decor(
                 continue;
             }
             site_counts[bucket_idx] += 1;
-            let wx = origin.x + (cx as f32 + 0.5) * cell;
-            let wy = origin.y + (gy as f32 + 0.5) * cell;
+            // 站点级大抖动（ADR-0042 追记 D13）：旧实现 `wx/wy` 恒等于步距
+            // 网格的格心，符号排成一张完美的棋盘——zoom out 一眼看出「整齐」
+            //（用户实机反馈）。按 ±0.45 步距抖动，把规则网格揉成自然散布。
+            let step_world = stride as f32 * cell;
+            let jx = (hash01(cx, gy, 0x51) - 0.5) * step_world * 0.9;
+            let jy = (hash01(cx, gy, 0x52) - 0.5) * step_world * 0.9;
+            let wx = origin.x + (cx as f32 + 0.5) * cell + jx;
+            let wy = origin.y + (gy as f32 + 0.5) * cell + jy;
             // 气候带（ADR-0039 D3）：归一化 y（0=北）。
             let fy = gy as f32 / data.height as f32;
             // 图元占位色 → 桶默认 ink（构造器 [0;4] 时回填；变体色原样透传）。

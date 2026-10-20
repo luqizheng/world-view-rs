@@ -307,17 +307,27 @@ fn rasterize(coast: &[F], rivers: Option<&[F]>, seas: Option<&[F]>, peaks: f64) 
             // 陆地：
             let d_coast = geo::min_dist_to_rings(x, y, &coast_rings);
             let d_ridge = geo::min_dist_to_rings(x, y, std::slice::from_ref(&ridge_pts));
+            // 脊线距离噪声扭曲（ADR-0042 追记 D13）：NE 脊线本体是几段直线
+            // 折线，直距离场 + 高度分类会拉出一条笔直的白色雪带——zoom out
+            // 时读作「道路」（用户 2026-10-20 实机反馈）。对**距离场**做低频
+            // 扰动让山脉走向自然蜿蜒，而不是只调亮度。
+            // 振幅必须小于山宽（宽 ~7–10 格）：±3 格只横向挪动脊线；
+            // ±7 格会把峰高削掉一半（实测：整条阿尔卑斯退化成丘陵）。
+            let warp = (fbm(x as f64 * 0.022, y as f64 * 0.022) - 0.5) * 6.0;
+            let d_ridge = (d_ridge as f64 + warp).max(0.0);
             // 基础 = 沿海平原；高度主场 = 山脊高斯（宽 ~10 格）+ perlin 起伏。
             // 峰顶 lift ≈ peaks * 0.9（脊线上 d≈0）。
             // 峰越高衰减越快（width ∝ 1/peaks）：尖峰造型 + 雪带宽度稳定。
             // ADR-0042：22 → 10——旧宽度让每条山脉两侧 ~40 格的山地走廊
             // 把整个半岛吞成雪原条带（实机截图确认），10 格收回「山脉是链
             // 不是高原」的参考图构图。
-            let width = (10.0 * (3400.0 / peaks)).max(5.0);
+            // D13：宽度沿线起伏（±35%）——同一条山脊忽宽忽窄，避免等宽缎带。
+            let width_base = (10.0 * (3400.0 / peaks)).max(5.0);
+            let width = width_base * (0.65 + 0.7 * fbm(x as f64 * 0.05, y as f64 * 0.05));
             // 边缘噪声化：等高线不再是干净平行条带——山体内部疏密起伏，
             // 群系边界跟着碎成有机曲线。
             let ridge_noise = 0.65 + 0.7 * fbm(x as f64 * 0.09, y as f64 * 0.09);
-            let ridge_lift = (-(d_ridge as f64) / width).exp() * peaks * 0.9 * ridge_noise;
+            let ridge_lift = (-(d_ridge / width)).exp() * peaks * 0.9 * ridge_noise;
             let detail = fbm(x as f64 * 0.03, y as f64 * 0.03) * 260.0 - 60.0;
             let h = if d_coast <= 1 {
                 20.0
@@ -332,9 +342,16 @@ fn rasterize(coast: &[F], rivers: Option<&[F]>, seas: Option<&[F]>, peaks: f64) 
             // 气候边界噪声化（ADR-0042）：纯纬度阈值画出横贯全图的水平条带
             //（实机截图确认）；低频噪声把纬度线揉成有机曲线，幅度 ±0.07 纬度幅。
             let fy_wob = fy + (fbm(x as f64 * 0.045, y as f64 * 0.045) - 0.5) * 0.14;
-            biome[idx] = if h >= snow_line {
+            // 雪线内掺岩斑（D13）：高海拔格按高频噪声三成留作岩（MOUNTAINS）——
+            // 纯白雪原连成整条白带读作道路（用户实机反馈）；掺入岩斑后
+            // 山脊变成「雪顶 + 岩壁」的斑驳峰群。
+            let rock_break = fbm(x as f64 * 0.14, y as f64 * 0.14) > 0.34;
+            // 山体碎裂（D13）：脊线内部按高频噪声约三成回落为丘陵——连续的
+            // 山地填充带会被拆成一串峰群（参考图的山是离散山簇，不是等高带）。
+            let ridge_break = fbm(x as f64 * 0.11 + 17.0, y as f64 * 0.11) > 0.36;
+            biome[idx] = if h >= snow_line && !rock_break {
                 9 // SNOWFIELD（高山雪线：阿尔卑斯/高加索峰顶）
-            } else if h >= 1500.0 {
+            } else if h >= 1500.0 && !ridge_break {
                 13 // MOUNTAINS
             } else if h >= 550.0 {
                 12 // HILLS

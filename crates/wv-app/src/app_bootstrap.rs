@@ -83,7 +83,14 @@ pub fn run(config: AppConfig) {
                 filter: "naga=warn,wgpu=error,icu_provider=off".into(),
                 level: bevy::log::Level::INFO,
                 ..Default::default()
-            }),
+            })
+            // 编辑器无任何音频功能：不装 AudioPlugin。理由（2026-10-20 实测）：
+            // 音频设备中途切换 / 摘除时 rodio 抛 `audio stream error: The
+            // requested device is no longer available`，进程随之退出且日志只剩
+            // 启动行——用户在长时间看图时被无预警关窗。拔掉这个永不使用的
+            // 插件即整类崩溃源消失（未来加音效时再按需装回来）。
+            .build()
+            .disable::<bevy::audio::AudioPlugin>(),
     )
     .add_plugins(EguiPlugin::default())
     // 状态栏 FPS 读数（Figma #3:21001 右段）：DefaultPlugins 只提供
