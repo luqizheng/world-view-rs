@@ -1153,9 +1153,19 @@ fn sync_landmarks(
     material: Handle<ColorMaterial>,
 ) {
     use crate::landmark_symbols::BASE_H_PX;
+    use crate::state::lod_tier;
     use crate::world_projection::LANDMARK_KINDS;
-    // 尺寸口径与 mesh 版一致：符号画布边长（世界单位）。
-    let side_wu = BASE_H_PX * 0.04 * view_scale;
+    // 尺寸口径（ADR-0042 修正）：**屏幕像素恒定**，按 LOD 档微调——旧公式
+    // `BASE_H_PX * 0.04 * scale` 折算屏幕恒 1.04px，城堡图标从未真正显示过
+    //（实机截图确认）。参考图全球档城堡 ~30px；档位越近稍大（贴近
+    // Google Maps marker 的恒定手感）。
+    let side_px = match lod_tier(view_scale) {
+        crate::state::LodTier::Nation => BASE_H_PX,
+        crate::state::LodTier::Region => BASE_H_PX * 1.25,
+        crate::state::LodTier::Edit => BASE_H_PX * 1.5,
+    };
+    // 符号画布边长（世界单位）= 屏幕像素 × 每像素世界单位。
+    let side_wu = side_px * view_scale;
 
     // PNG 句柄由 `ensure_landmark_png_loaded` 发起；`None`（测试夹具 / ensure
     // 未注册）→ 走顶点色 mesh 兜底路径。
@@ -1253,13 +1263,20 @@ fn sync_landmark_mesh_batches(
     material: Handle<ColorMaterial>,
 ) {
     use crate::landmark_symbols::{build_landmark_mesh, LandmarkBatch, BASE_H_PX};
+    use crate::state::lod_tier;
     for e in pool.sprites.drain(..) {
         commands.entity(e).despawn();
     }
+    // 尺寸口径与 Sprite 路径一致（ADR-0042）：屏幕像素恒定按档位微调。
+    let side_px = match lod_tier(view_scale) {
+        crate::state::LodTier::Nation => BASE_H_PX,
+        crate::state::LodTier::Region => BASE_H_PX * 1.25,
+        crate::state::LodTier::Edit => BASE_H_PX * 1.5,
+    };
     let mut batch = LandmarkBatch::new();
     for d in frame_landmarks {
         if d.kind == kind {
-            let s = BASE_H_PX * 0.04 * view_scale;
+            let s = side_px * view_scale;
             match d.kind {
                 crate::world_projection::LandmarkKind::Citadel => batch.push_citadel(d.pos, s),
                 crate::world_projection::LandmarkKind::Town => batch.push_town(d.pos, s),

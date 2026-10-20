@@ -62,3 +62,21 @@
 | `crates/wv-render/src/terrain_decor.rs` | D8–D10 |
 | `examples/work-view-test/maps/world_main/{terrain.bin,index.yaml}` | 再生成 |
 | `docs/ART_STYLE_SPEC_v0.1.md` | §1.4.5 追记修正条目 |
+
+---
+
+## 追记（2026-10-20 同日，纸纹 + 地标尺寸落地）
+
+原「被否决的备选」中「纸纹叠加留下一轮」与「书法字体留下一轮」，当日续做前者：
+
+- **D11 纸纹叠加（D3 裁决 = 程序化噪声）**：新模块 `wv_render::paper_overlay`——
+  两张 256² 程序化贴图（暖褐斑驳 α≤0.13 可平铺三阶 value noise；椭圆径向晕影
+  α≤0.16），以两张全幅面四边形叠在装饰（0.075）之上、河流（0.082）之下
+  （斑驳 0.080 / 晕影 0.0805）。`GridConfig` 幅面值指纹变化时重建（钻取进城
+  自动跟随）；贴图逐字节确定性生成（P7 派生），零外部资产。
+- **D12 地标尺寸修复**：`sync_landmarks` 旧公式 `BASE_H_PX * 0.04 * scale`
+  折算屏幕恒 **1.04px**——城堡图标自实现以来从未真正显示过（实机截图确认）。
+  改为屏幕像素恒定按档微调：Nation 26px / Region 32.5px / Edit 39px
+  （`BASE_H_PX` × 1 / 1.25 / 1.5），Sprite 与 mesh 兜底两路同口径。
+
+书法字体（D4）仍待裁——10–20MB 资产入库是不可逆决策，等用户拍板。

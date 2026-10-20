@@ -65,6 +65,7 @@ pub mod map_frame;
 #[cfg(feature = "app")]
 pub mod measurement;
 #[cfg(feature = "app")]
+pub mod paper_overlay;
 pub mod plugins;
 #[cfg(feature = "app")]
 pub mod recipe;

@@ -33,6 +33,7 @@ use crate::faction_overlays;
 use crate::layer_frame;
 use crate::map_frame;
 use crate::measurement;
+use crate::paper_overlay;
 use crate::streets;
 use crate::terrain_chunks;
 use crate::terrain_view;
@@ -58,6 +59,8 @@ impl Plugin for MapRenderPlugin {
                 terrain_view::sync_isoline_overlay,
                 // 地形分块 + mip + 视口拣选（优化项 3a/3b/3c）
                 terrain_chunks::sync_terrain_chunks,
+                // 纸纹叠加（ADR-0042）：斑驳 + 晕影，图幅变化时重建
+                paper_overlay::sync_paper_overlay,
                 // 街道图层缓存：当前图变化时重读（ADR-0010）
                 streets::reload_street_cache,
                 // 地物符号 PNG 发起加载（一次；sync_vector_layers 消费加载结果）
@@ -79,7 +82,9 @@ impl Plugin for MapRenderPlugin {
             buildings::sync_building_overlays.after(vector_layers::sync_vector_layers),
         )
         // 地点缓存索引（A1）：compute_projection 的端点解析 / POI 收集查表用。
-        .init_resource::<world_projection::PlaceIndex>();
+        .init_resource::<world_projection::PlaceIndex>()
+        // 纸纹叠层运行时状态（贴图句柄 + 当前台实体，ADR-0042）。
+        .init_resource::<paper_overlay::PaperOverlay>();
     }
 }
 
