@@ -1083,6 +1083,7 @@ fn build_world(
                 .unwrap_or_else(|| "unk".into())
         );
         edges.push(wv_core::distance::PlaceEdge {
+            rank: None,
             id: wv_core::Id::new_unchecked(edge_id),
             a: wv_core::Id::new_unchecked(a),
             b: wv_core::Id::new_unchecked(b),

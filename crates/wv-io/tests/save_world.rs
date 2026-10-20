@@ -931,6 +931,7 @@ fn place_edges_round_trip_per_file_format() {
     });
     let edges = vec![
         PlaceEdge {
+            rank: None,
             id: Id::new_unchecked("e_a_b"),
             a: Id::new_unchecked("p_a"),
             b: Id::new_unchecked("p_b"),
@@ -939,6 +940,7 @@ fn place_edges_round_trip_per_file_format() {
             bidirectional: true,
         },
         PlaceEdge {
+            rank: None,
             id: Id::new_unchecked("e_b_a"),
             a: Id::new_unchecked("p_b"),
             b: Id::new_unchecked("p_a"),

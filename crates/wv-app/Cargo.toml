@@ -78,3 +78,7 @@ required-features = ["app"]
 [[example]]
 name = "game_consumer"
 required-features = ["app"]
+
+[[example]]
+name = "diag_sea_bake"
+required-features = ["app"]

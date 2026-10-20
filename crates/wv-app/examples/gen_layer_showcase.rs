@@ -332,6 +332,7 @@ fn build_world(meta: WorldMeta) -> World {
     ];
 
     let edge = |id: &str, a: &str, b: &str, km: f32, terrain: &str| PlaceEdge {
+        rank: None,
         id: Id::new(id).unwrap(),
         a: Id::new(a).unwrap(),
         b: Id::new(b).unwrap(),

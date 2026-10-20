@@ -5898,6 +5898,7 @@ mod tests {
 
     fn edge(id: &str, a: &str, b: &str) -> wv_core::distance::PlaceEdge {
         wv_core::distance::PlaceEdge {
+            rank: None,
             id: wv_core::Id::new_unchecked(id),
             a: wv_core::Id::new_unchecked(a),
             b: wv_core::Id::new_unchecked(b),

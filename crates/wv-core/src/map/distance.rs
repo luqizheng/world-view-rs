@@ -76,6 +76,36 @@ pub struct PlaceEdge {
     pub terrain: String,
     #[serde(default = "default_true")]
     pub bidirectional: bool,
+    /// 呈现级别（ADR-0047 D1，与 [`Place::rank`] 同约定）：数值越大越重要，
+    /// 渲染层按「视野档位 × 最低级别」决定这条边画不画
+    /// （Nation ≥ 3 / Region ≥ 2 / Edit 全见）。
+    ///
+    /// 词汇（GLOSSARY「呈现级别」，与 `Place::rank` 同一张表）：
+    /// `3` 国家级干线、`2` 区域级、`1` 局部道路、`0` 仅编辑级可见。
+    ///
+    /// `None`（缺省）= 按 `distance_km` 折算（[`Self::effective_rank`]）：
+    /// ≥ 100 km → 3、≥ 30 km → 2、否则 → 1——长边是城际干线的天然代理，
+    /// 导入工程（Overture 路口网）不改 YAML 即获得主干优先的呈现。折算规则
+    /// 是冻结契约（测试 `place_edge_effective_rank_folds_by_distance` 钉死），
+    /// 改动它等于改旧工程的可视行为。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank: Option<u8>,
+}
+
+impl PlaceEdge {
+    /// 有效呈现级别（ADR-0047 D1 的折算入口，渲染层唯一可用的级别读法）。
+    ///
+    /// 显式 `rank` 原样返回；`None` 按距离折算：≥ 100 km → 3（城际干线，
+    /// Nation 档即可见）、≥ 30 km → 2（城镇间）、否则 → 1（局部，仅
+    /// Region 及更近档可见）。
+    pub fn effective_rank(&self) -> u8 {
+        match self.rank {
+            Some(r) => r,
+            None if self.distance_km >= 100.0 => 3,
+            None if self.distance_km >= 30.0 => 2,
+            None => 1,
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -587,6 +617,7 @@ mod tests {
                     distance_km: 300.0,
                     terrain: "road".into(),
                     bidirectional: true,
+                    rank: None,
                 },
                 PlaceEdge {
                     id: vid("e_heishui_luoxia"),
@@ -595,6 +626,7 @@ mod tests {
                     distance_km: 120.0,
                     terrain: "mountain".into(),
                     bidirectional: true,
+                    rank: None,
                 },
             ],
             vehicles: vec![
@@ -802,6 +834,73 @@ mod tests {
         let plain_back: Place =
             serde_yaml::from_str(&plain_text).expect("无 rank 键的旧 YAML 应照常加载");
         assert_eq!(plain_back, point_place(), "无 rank 键 round-trip 无损");
+    }
+
+    /// PlaceEdge 距离折算（ADR-0047 D1 冻结契约，逐值手算）：
+    /// ≥ 100 km → 3、≥ 30 km → 2、否则 → 1。边界值取「恰在门槛上归高档」。
+    #[test]
+    fn place_edge_effective_rank_folds_by_distance() {
+        let edge = |km: f32| PlaceEdge {
+            id: Id::new_unchecked("edge_probe"),
+            a: Id::new_unchecked("place_a"),
+            b: Id::new_unchecked("place_b"),
+            distance_km: km,
+            terrain: "road".into(),
+            bidirectional: true,
+            rank: None,
+        };
+        assert_eq!(edge(100.0).effective_rank(), 3, "100 km 恰在干线门槛上");
+        assert_eq!(edge(520.0).effective_rank(), 3, "城际长边是干线");
+        assert_eq!(edge(99.9).effective_rank(), 2, "门槛下沿归区域级");
+        assert_eq!(edge(30.0).effective_rank(), 2, "30 km 恰在区域门槛上");
+        assert_eq!(edge(29.9).effective_rank(), 1, "门槛下沿归局部");
+        assert_eq!(edge(5.0).effective_rank(), 1, "短边是局部道路");
+    }
+
+    /// 显式 rank 压过距离折算（与 Place 同款：作者显式定级永远赢）。
+    #[test]
+    fn place_edge_explicit_rank_overrides_distance_fold() {
+        let mut e = PlaceEdge {
+            id: Id::new_unchecked("edge_probe"),
+            a: Id::new_unchecked("place_a"),
+            b: Id::new_unchecked("place_b"),
+            distance_km: 500.0,
+            terrain: "road".into(),
+            bidirectional: true,
+            rank: Some(1),
+        };
+        assert_eq!(e.effective_rank(), 1, "显式 rank 把长边降为局部道路");
+        e.rank = Some(0);
+        e.distance_km = 5.0;
+        assert_eq!(e.effective_rank(), 0, "显式 0 = 仅编辑级可见");
+    }
+
+    /// PlaceEdge.rank 的 YAML 惯例与 Place.rank 同款：None 不写键、Some 写键。
+    #[test]
+    fn place_edge_rank_round_trips_through_yaml_and_none_stays_absent() {
+        let mut e = PlaceEdge {
+            id: Id::new_unchecked("edge_yaml"),
+            a: Id::new_unchecked("place_a"),
+            b: Id::new_unchecked("place_b"),
+            distance_km: 42.0,
+            terrain: "road".into(),
+            bidirectional: true,
+            rank: Some(3),
+        };
+        let text = serde_yaml::to_string(&e).expect("序列化");
+        assert!(text.contains("rank: 3"), "Some(3) 应写键，实得:\n{text}");
+        let back: PlaceEdge = serde_yaml::from_str(&text).expect("反序列化");
+        assert_eq!(back, e, "带 rank 的 PlaceEdge YAML round-trip 应无损");
+
+        e.rank = None;
+        let plain_text = serde_yaml::to_string(&e).expect("序列化");
+        assert!(
+            !plain_text.contains("rank"),
+            "None 不应写 rank 键（旧 YAML 兼容），实得:\n{plain_text}"
+        );
+        let plain_back: PlaceEdge =
+            serde_yaml::from_str(&plain_text).expect("无 rank 键的旧 YAML 应照常加载");
+        assert_eq!(plain_back, e, "无 rank 键 round-trip 无损");
     }
 
     #[test]
