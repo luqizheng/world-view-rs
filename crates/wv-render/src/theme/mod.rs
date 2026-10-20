@@ -19,8 +19,13 @@
 //! **全部子模块在 `app` feature 之下**——`wv-theme` 依赖 `bevy`（非 optional，
 //! 同 wv-ui 的 ADR-0026 D2 口径），而本 crate 的红线是「不带 feature 时零
 //! Bevy 依赖树」（ADR-0020）。故 `wv-theme` 是 optional 依赖，随 `app` 一起
-//! 打开。代价：`theme::topographic` 由「无 cfg 门」改为有门——它当前只被
-//! 文档引用，无实际消费点（ADR-0043 追记）。
+//! 打开。代价：`theme::topographic` 由「无 cfg 门」改为有门（ADR-0043 追记）。
+//!
+//! **2026-10-20 合并追记**：合并 `feat/cell-selection` 后本模块**已有实际
+//! 消费点**——`terrain_view::cells`（Topographic per-cell 着色）与
+//! `cell_selection`（选中高亮）都经 `crate::theme::topographic::pick` 取色。
+//! 两者都在 `app` feature 之下，与本模块的 cfg 门一致，门的位置无碍；
+//! 此处修正 ADR-0043 追记里「无实际消费点」的表述。
 
 // 数据与契约（ADR-0043 D3：重导出，路径零变更）。
 #[cfg(feature = "app")]
