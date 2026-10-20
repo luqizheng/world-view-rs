@@ -37,7 +37,7 @@ use super::widgets::{
     ICON_FOCUS, ICON_LOCK_KEYHOLE,
 };
 use wv_render::state::EditCellState;
-use wv_ui::widgets::controls::{numeric_input_bounded, option_menu, radio};
+use wv_ui::widgets::controls::{numeric_input_bounded, radio};
 
 /// Cell 编辑器的两个工作模式（[ADR-0040] 补 B）。
 ///
@@ -481,13 +481,8 @@ fn render_batch_section(
     loc: crate::i18n::Locale,
 ) {
     let n = edit_cell.region_cells.len();
-    // ── 头：选区规模 + 取消按钮 ──
+    // ── 头：取消按钮（格数在读数区显示，用 stats.count 真实值）──
     ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(format!("{} {}", n, t(loc, I18nKey::BatchCellsCount)))
-                .size(font_size::SMALL)
-                .color(shell.accent()),
-        );
         if super::widgets::button(
             ui,
             shell,
@@ -523,6 +518,18 @@ fn render_batch_section(
     let Some(stats) = region_stats(projection, &map, &edit_cell.region_cells) else {
         return;
     };
+    // 头部计数改用 stats.count（越界格跳过的真实格数，与读数一致）。
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!(
+                "{} {}",
+                stats.count,
+                t(loc, I18nKey::BatchCellsCount)
+            ))
+            .size(font_size::SMALL)
+            .color(shell.accent()),
+        );
+    });
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(t(loc, I18nKey::BatchStatsHeight))
@@ -822,43 +829,6 @@ fn biome_label(num: u8) -> String {
         }
     }
     format!("#{num}")
-}
-
-/// 批量下拉项标签（NONE + 冻结表 20 编号；下标即编号）。
-fn biome_menu_labels() -> Vec<&'static str> {
-    const NAMES: [&str; 21] = [
-        "NONE",
-        "森林",
-        "平原",
-        "草原",
-        "戈壁",
-        "沙漠",
-        "沼泽",
-        "湿地",
-        "苔原",
-        "雪原",
-        "丛林",
-        "热带雨林",
-        "丘陵",
-        "山地",
-        "海洋",
-        "湖泊",
-        "河流",
-        "绿洲",
-        "稀树草原",
-        "盐碱地",
-        "道路",
-    ];
-    NAMES
-        .iter()
-        .enumerate()
-        .map(|(i, n)| if i == 0 { "NONE" } else { *n })
-        .collect()
-}
-
-/// 下拉下标 → biome 编号。
-fn menu_index_to_biome(index: usize) -> u8 {
-    index as u8
 }
 
 #[cfg(test)]
