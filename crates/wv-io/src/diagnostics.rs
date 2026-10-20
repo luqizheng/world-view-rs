@@ -991,6 +991,7 @@ mod tests {
                 },
             ],
             edges: vec![PlaceEdge {
+                rank: None,
                 id: Id::new_unchecked("e_ab"),
                 a: a.clone(),
                 b: b.clone(),

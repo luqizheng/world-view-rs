@@ -78,17 +78,16 @@ pub fn reload_street_cache(
     }
 }
 
-/// LOD 口径：越远的视野只保留 `lod_rank` 越小（越主干）的街道。
+/// LOD 口径：越远的视野只保留越主干（`lod_rank` 越小）的街道。
 ///
-/// 阈值与 [`crate::vector_layers::poi_kept_at_tier`] 同一档位体系：
-/// 国家档只留 rank ≤ 2（motorway / trunk / primary），省级 ≤ 5，
-/// 编辑级全保留。首版阈值可调，登记在 ADR-0010 §5。
+/// ADR-0047 D3 起：`lod_rank` 先经 `RoadClass::presentation_rank_from_lod`
+/// 折算成统一呈现级别，再过统一门槛 [`crate::state::rank_visible_at_tier`]。
+/// 折算表（0–2→3 / 3–5→2 / 6–7→1）使本函数与旧硬编码阈值（Nation ≤ 2 /
+/// Region ≤ 5 / Edit 全见）**逐档等价**——等价性由
+/// `street_tier_gate_equals_legacy_thresholds` 钉死；改门槛只动
+/// `rank_visible_at_tier`，不再各处散落。
 pub fn street_kept_at_tier(rank: u8, tier: LodTier) -> bool {
-    match tier {
-        LodTier::Nation => rank <= 2,
-        LodTier::Region => rank <= 5,
-        LodTier::Edit => true,
-    }
+    crate::state::rank_visible_at_tier(wv_core::RoadClass::presentation_rank_from_lod(rank), tier)
 }
 
 /// 把缓存里的全部文档展开成「路段流」：`(lod_rank, 折线段列表)`。
@@ -537,6 +536,27 @@ mod tests {
             RoadClass::Path.lod_rank(),
             LodTier::Edit
         ));
+    }
+
+    /// ADR-0047 D3 等价性：折算 + 统一门槛的结果必须与**旧硬编码阈值**
+    /// （Nation ≤ 2 / Region ≤ 5 / Edit 全见）在全部 8 个 lod 档 × 3 视野档
+    /// 上逐位一致——这是「街道呈现行为零变化」的客观证据。
+    #[test]
+    fn street_tier_gate_equals_legacy_thresholds() {
+        let legacy = |rank: u8, tier: LodTier| match tier {
+            LodTier::Nation => rank <= 2,
+            LodTier::Region => rank <= 5,
+            LodTier::Edit => true,
+        };
+        for lod in 0..=7u8 {
+            for tier in [LodTier::Edit, LodTier::Region, LodTier::Nation] {
+                assert_eq!(
+                    street_kept_at_tier(lod, tier),
+                    legacy(lod, tier),
+                    "lod {lod} × {tier:?}：新折算门槛必须与旧阈值同值"
+                );
+            }
+        }
     }
 
     #[test]

@@ -204,10 +204,16 @@ fn shade_coast(_data: &TerrainData, kind: u8, _pal: &PaletteColors) -> Color {
 ///
 /// 端口区间按 civ-atlas 的 `sea` 频谱：近岸 0 段 / 浅海 −200 / 大陆坡拐点
 /// −1500 / 老洋底 −3000。钳到 [−3500, 0] 之外 → 0 或 1。
+///
+/// **平方曲线**（2026-10-20 S0 调参，实测 work-view-test）：线性量程下近岸
+/// 带塌缩——该图 1/4 的水格深 <400 m（线性 t ≤ 0.11），近岸与远海在色板上
+/// 几乎同色，海面成一片平涂。`sqrt` 把浅水段的动态范围放大约 3×（400 m：
+/// 0.11 → 0.34），近岸/远海一眼可辨；深水端相应上移（中位 1500 m：
+/// 0.43 → 0.65），深海色只在大洋中心出现——与手绘海图的观感一致。
 fn water_depth_t(height: i16) -> f32 {
-    // 把 i16 高度转成「深度」（正值 = 越深）。
+    // 把 i16 高度转成「深度」（正值 = 越深），平方曲线展开浅水段。
     let depth = (-height as f32).clamp(0.0, 3500.0);
-    depth / 3500.0
+    (depth / 3500.0).sqrt()
 }
 
 /// 坡度浮雕强度：每米高差对应的明度增量。
@@ -2306,9 +2312,15 @@ mod tests {
         );
         assert_eq!(water_depth_t(-5000), 1.0, "更深应钳到 1.0");
         assert_eq!(water_depth_t(5000), 0.0, "陆上高度应钳到 0.0");
-        // 中点：−1750 → 0.5。
+        // 平方曲线中点：sqrt(1/2) = 0.70711 → 深度 −1750 m。
         let mid = water_depth_t(-1750);
-        assert!((mid - 0.5).abs() < 1e-6, "−1750 m 应为 0.5，实得 {mid}");
+        assert!(
+            (mid - 0.5_f32.sqrt()).abs() < 1e-6,
+            "−1750 m 应为 sqrt(0.5)，实得 {mid}"
+        );
+        // 平方曲线半程点：sqrt(1/4) = 0.5 → 深度 −875 m（浅水段被展开）。
+        let half = water_depth_t(-875);
+        assert!((half - 0.5).abs() < 1e-6, "−875 m 应为 0.5，实得 {half}");
     }
 
     /// 渐变色：海平面 = water_shallow，−3500 = water_deep。中间深度居中。
@@ -2350,7 +2362,7 @@ mod tests {
     #[test]
     fn water_shade_at_deep_band_gets_cooler_tint() {
         let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
-        let at_70pct = water_shade_at(-2450, pal); // t = 0.7
+        let at_70pct = water_shade_at(-1715, pal); // sqrt(1715/3500) = t = 0.7
         let at_100pct = water_shade_at(-3500, pal); // t = 1.0
         let (Color::Srgba(a), Color::Srgba(b)) = (at_70pct, at_100pct) else {
             panic!()

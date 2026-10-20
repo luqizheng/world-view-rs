@@ -77,6 +77,22 @@ impl RoadClass {
         }
     }
 
+    /// `lod_rank` → 统一呈现级别（ADR-0047 D3）。
+    ///
+    /// 与 `Place::rank` / `PlaceEdge::rank` 同一张呈现级别词表（数值越大越
+    /// 重要）：lod 0–2（高速/干道/主干道）→ `3`、3–5（次干/支路/住宅/未定级）
+    /// → `2`、6–7（服务/土路/小径类）→ `1`。折算表经
+    /// `lod_presentation_mapping_preserves_street_tier_gates` 钉死：换算后走
+    /// 统一门槛 `rank_visible_at_tier`，与旧阈值（Nation ≤ 2 / Region ≤ 5 /
+    /// Edit 全见）逐档等价——即街道呈现行为零变化，只是并入统一口径。
+    pub fn presentation_rank_from_lod(lod_rank: u8) -> u8 {
+        match lod_rank {
+            0..=2 => 3,
+            3..=5 => 2,
+            _ => 1,
+        }
+    }
+
     /// 编辑器 UI 的中文显示名（**纯显示**，YAML 仍存 snake_case 英文键）。
     pub fn label(self) -> &'static str {
         match self {
@@ -366,6 +382,36 @@ mod tests {
             "secondary rank {} 应小于 service {}",
             RoadClass::Secondary.lod_rank(),
             RoadClass::Service.lod_rank()
+        );
+    }
+
+    /// ADR-0047 D3 折算表逐档钉死：lod 0–2 → 3、3–5 → 2、6–7 → 1，
+    /// 且与旧 street 阈值（Nation ≤ 2 / Region ≤ 5 / Edit 全见）**逐档等价**——
+    /// 换算本身在这里断言（等价性的渲染侧半段在 wv-render streets.rs）。
+    #[test]
+    fn lod_to_presentation_mapping_is_total_and_monotone() {
+        let expect = [
+            (0u8, 3u8),
+            (1, 3),
+            (2, 3), // 主干族 → 国家级
+            (3, 2),
+            (4, 2),
+            (5, 2), // 次干族 → 区域级
+            (6, 1),
+            (7, 1), // 支末族 → 局部
+        ];
+        for (lod, pres) in expect {
+            assert_eq!(
+                RoadClass::presentation_rank_from_lod(lod),
+                pres,
+                "lod {lod} 应折算为呈现级别 {pres}"
+            );
+        }
+        // 越界 lod（未来新增类别没跟上折算表）按最末档处理，不 panic。
+        assert_eq!(
+            RoadClass::presentation_rank_from_lod(8),
+            1,
+            "未知 lod 归最低呈现档"
         );
     }
 
