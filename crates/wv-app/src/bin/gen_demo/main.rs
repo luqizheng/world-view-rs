@@ -291,18 +291,33 @@ fn rasterize(coast: &[F], rivers: Option<&[F]>, seas: Option<&[F]>, peaks: f64) 
                     0..=1 => -10,
                     2..=6 => -60,
                     7..=20 => -400,
-                    _ => -1500,
+                    21..=55 => -1500,
+                    // 大洋盆（ADR-0042）：压到 -3200 让渲染端 water_shade_at 的
+                    // 深度渐变（t = depth/3500）真正走到深蓝段——旧值 -1500 封顶
+                    // t≈0.43，海面永远停在中间蓝（2026-10-20 实机截图确认）。
+                    // 55 格外按距离线性下探（约 40 格过渡到全深）——硬档位边界
+                    // 会在海面画出锐利的多边形色块（第一轮实机截图确认）。
+                    _ => {
+                        let dd = ((d - 55) as f64).min(40.0);
+                        (-1500.0 - 1700.0 * dd / 40.0) as i16
+                    }
                 };
                 continue;
             }
             // 陆地：
             let d_coast = geo::min_dist_to_rings(x, y, &coast_rings);
             let d_ridge = geo::min_dist_to_rings(x, y, std::slice::from_ref(&ridge_pts));
-            // 基础 = 沿海平原；高度主场 = 山脊高斯（宽 ~22 格）+ perlin 起伏。
+            // 基础 = 沿海平原；高度主场 = 山脊高斯（宽 ~10 格）+ perlin 起伏。
             // 峰顶 lift ≈ peaks * 0.9（脊线上 d≈0）。
             // 峰越高衰减越快（width ∝ 1/peaks）：尖峰造型 + 雪带宽度稳定。
-            let width = (22.0 * (3400.0 / peaks)).max(6.0);
-            let ridge_lift = (-(d_ridge as f64) / width).exp() * peaks * 0.9;
+            // ADR-0042：22 → 10——旧宽度让每条山脉两侧 ~40 格的山地走廊
+            // 把整个半岛吞成雪原条带（实机截图确认），10 格收回「山脉是链
+            // 不是高原」的参考图构图。
+            let width = (10.0 * (3400.0 / peaks)).max(5.0);
+            // 边缘噪声化：等高线不再是干净平行条带——山体内部疏密起伏，
+            // 群系边界跟着碎成有机曲线。
+            let ridge_noise = 0.65 + 0.7 * fbm(x as f64 * 0.09, y as f64 * 0.09);
+            let ridge_lift = (-(d_ridge as f64) / width).exp() * peaks * 0.9 * ridge_noise;
             let detail = fbm(x as f64 * 0.03, y as f64 * 0.03) * 260.0 - 60.0;
             let h = if d_coast <= 1 {
                 20.0
@@ -313,18 +328,21 @@ fn rasterize(coast: &[F], rivers: Option<&[F]>, seas: Option<&[F]>, peaks: f64) 
             // 群系：纬度气候为主，山只认高度。
             // 雪线随世界峰值缩放（3400 世界 2250 / 10000 世界 ~6600）——
             // 「山有多高」是美术尺度，雪线跟着山走，否则高世界整条山脉全白。
-            let snow_line = 2250.0 * (peaks / 3400.0).max(1.0);
+            let snow_line = 2750.0 * (peaks / 3400.0).max(1.0);
+            // 气候边界噪声化（ADR-0042）：纯纬度阈值画出横贯全图的水平条带
+            //（实机截图确认）；低频噪声把纬度线揉成有机曲线，幅度 ±0.07 纬度幅。
+            let fy_wob = fy + (fbm(x as f64 * 0.045, y as f64 * 0.045) - 0.5) * 0.14;
             biome[idx] = if h >= snow_line {
                 9 // SNOWFIELD（高山雪线：阿尔卑斯/高加索峰顶）
-            } else if h >= 1150.0 {
+            } else if h >= 1500.0 {
                 13 // MOUNTAINS
             } else if h >= 550.0 {
                 12 // HILLS
-            } else if fy < 0.30 {
+            } else if fy_wob < 0.30 {
                 1 // FOREST（中欧森林）
-            } else if fy < 0.42 {
+            } else if fy_wob < 0.42 {
                 3 // GRASSLAND
-            } else if fy < 0.72 {
+            } else if fy_wob < 0.72 {
                 2 // PLAINS（地中海硬叶/农田）
             } else {
                 5 // DESERT（撒哈拉）

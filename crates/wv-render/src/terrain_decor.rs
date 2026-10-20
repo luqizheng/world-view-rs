@@ -48,7 +48,8 @@ const SPACING_PX_EDIT: f32 = 26.0;
 const SPACING_PX_REGION: f32 = 46.0;
 /// Nation 档采样步距（屏幕像素）：全局视野只保留「大地貌团」，
 /// 步距够大才不会把整块大陆糊成噪点（ADR-0036）。
-const SPACING_PX_NATION: f32 = 96.0;
+/// ADR-0042：96 → 72——山链图标要成「链」而不是孤点（实机截图确认）。
+const SPACING_PX_NATION: f32 = 72.0;
 /// 单类单帧符号组数上限（步距本身已把数量压到屏幕量级，此为兜底）。
 const MAX_SITES_PER_KIND: usize = 2200;
 /// 视口外扩余量（屏幕像素）：拖动相机时边缘符号不闪断。
@@ -144,7 +145,8 @@ impl DecorBand {
     /// 符号尺寸系数（全局档放大，抵消粗步距带来的稀疏感）。
     fn size_mul(self) -> f32 {
         match self {
-            DecorBand::Nation => 1.45,
+            // ADR-0042：1.45 → 1.6，Nation 档山形/树团在全局视野读得出笔触。
+            DecorBand::Nation => 1.6,
             DecorBand::Region => 0.8,
             DecorBand::Edit => 1.0,
         }
@@ -259,13 +261,19 @@ pub fn site_primitives(
             ));
         }
         DecorKind::Mountain => {
-            // 三角山：宽 13px 高 11px；海拔 ≥ 1800m 顶部叠雪帽（小三角，雪桶）。
-            out.push(SitePrim::triangle(
+            // 三角山（ADR-0042 手绘化）：主三角右侧叠一道深色背光面——
+            // 参考图的山是「受光面 + 背光面」两面体，单色三角只是剪影。
+            // 宽 13px 高 11px；海拔 ≥ 1800m 顶部叠雪帽（小三角，雪桶）。
+            let dx = (r1 - 0.5) * 5.0 * m;
+            out.push(SitePrim::triangle(kind, dx, 2.0 * m, 6.5 * m, 11.0 * m));
+            out.push(SitePrim::colored(
                 kind,
-                (r1 - 0.5) * 5.0 * m,
+                dx + 2.4 * m,
                 2.0 * m,
-                6.5 * m,
-                11.0 * m,
+                4.2 * m,
+                8.4 * m,
+                PrimShape::Triangle,
+                [0.28, 0.24, 0.20, 0.85], // 背光面（压暗右侧）
             ));
             if height_m >= 1800 {
                 out.push(SitePrim::triangle(
@@ -319,17 +327,19 @@ pub fn site_primitives(
             let _ = r3;
         }
         DecorKind::OceanWaves => {
-            // 浅海白波（ADR-0039 D2）：1 条细弧，色 = 顶点白 alpha 0.5。
+            // 浅海白波（ADR-0039 D2，ADR-0042 提密提亮）：1 条细弧。
+            // 旧值 2.4×1.4 @ alpha 0.5 在 Nation 档几乎不可见（实机截图
+            // 确认）；放大到 3.4×2.0 @ alpha 0.62 后远处读得出「海在动」。
             // 密度衰减由调用方 keep_prob 处理（深度越深越稀）。
             let _ = (r2, r3);
             out.push(SitePrim::colored(
                 kind,
                 (r1 - 0.5) * 6.0 * m,
                 (r2 - 0.5) * 4.0 * m,
-                2.4 * m,
-                1.4 * m,
+                3.4 * m,
+                2.0 * m,
                 PrimShape::Arc,
-                [0.99, 0.99, 1.0, 0.5], // 白波
+                [0.99, 0.99, 1.0, 0.62], // 白波
             ));
         }
         DecorKind::Marsh => {

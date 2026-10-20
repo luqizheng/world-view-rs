@@ -308,6 +308,29 @@ fn hash01(xi: i64, yi: i64, seed: u64) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
+// 陆格颗粒（ADR-0042 手绘 Nation 表现层）
+// ---------------------------------------------------------------------------
+
+/// 陆格明度抖动总幅度：±4.5%。
+///
+/// 参考图（手绘 JRPG）的陆地是水彩颗粒而不是平涂；逐格确定性抖动把
+/// 「塑料平色块 + 纬度条带」揉出纸面颗粒。幅度太小看不出、太大会成
+/// 色噪点——4.5% 在实机 26% 缩放下恰好是「细看有颗粒、远看是均匀
+/// 水彩」的区间。
+const LAND_GRAIN: f32 = 0.09;
+
+/// 陆格颗粒乘子：水系两槽（0 深水 / 1 浅水）恒 1.0——等深渐变是连续
+/// 函数，叠噪声会打架；陆上各类（沙/草/林/丘/山/雪/沼/路）按格抖动。
+/// 全渲染路径共用（全图烘焙 / 增量 patch / VectorFlat 采样），同一格
+/// 任何时刻得到同一乘子（P7 派生确定性）。
+fn land_grain(kind: u8, cx: u32, cy: u32) -> f32 {
+    if kind <= 1 {
+        return 1.0;
+    }
+    1.0 - LAND_GRAIN * 0.5 + LAND_GRAIN * hash01(cx as i64, cy as i64, 0x5EED_C0DE)
+}
+
+// ---------------------------------------------------------------------------
 // 雪格双调（手绘地图呈现 #3，2026-10-15）
 // ---------------------------------------------------------------------------
 
@@ -398,6 +421,10 @@ struct CellRenderer<'a> {
     /// 边界扰动开关：Google 模式关闭（Google 普通地图的边界是干净的直线/平滑
     /// 曲线；手绘感揉边与「普通地图」气质相悖）。
     wobble: bool,
+    /// 陆格颗粒开关（ADR-0042 D6）：`TreatmentFlags.land_grain` ∧ 非 Google
+    /// 模式——「折叠成同一陆色」是 Google 模式的硬契约，逐格抖动会重新
+    /// 引入马赛克。
+    grain: bool,
     /// 装饰旗标（ADR-0023 D4：`ThemePack.treatment`）。HandDrawn 全 `true` 时
     /// 所有 gate 与历史恒开行为逐位一致。
     treatment: crate::theme::theme_pack::TreatmentFlags,
@@ -458,6 +485,7 @@ impl<'a> CellRenderer<'a> {
             // 主题装饰旗标（ADR-0023 D4）是第三道闸：EMPTY 类主题整体关揉边。
             wobble: treatment.boundary_wobble
                 && !matches!(mode, ViewMode::GoogleMap | ViewMode::VectorFlat),
+            grain: treatment.land_grain && mode != ViewMode::GoogleMap,
             treatment,
             blocks: std::array::from_fn(|_| None),
             tried: [false; 10],
@@ -599,9 +627,15 @@ impl<'a> CellRenderer<'a> {
         let Color::Srgba(c) = (self.shader)(self.data, kind, self.palette) else {
             return;
         };
-        out[0] = c.red * 255.0;
-        out[1] = c.green * 255.0;
-        out[2] = c.blue * 255.0;
+        // 陆格颗粒（ADR-0042）：每格 ±4.5% 明度抖动，平涂色块出纸面颗粒感。
+        let g = if self.grain {
+            land_grain(kind, cx, cy)
+        } else {
+            1.0
+        };
+        out[0] = c.red * 255.0 * g;
+        out[1] = c.green * 255.0 * g;
+        out[2] = c.blue * 255.0 * g;
     }
 
     /// 通用模式采样：最近格着色 / 瓦片块，供 `sample_into` 分派。
@@ -617,14 +651,24 @@ impl<'a> CellRenderer<'a> {
             let tx = ((u * r as f32) as usize).min(r - 1);
             let ty = ((v * r as f32) as usize).min(r - 1);
             let o = (ty * r + tx) * 4;
-            out[0] = block[o] as f32 * mul;
-            out[1] = block[o + 1] as f32 * mul;
-            out[2] = block[o + 2] as f32 * mul;
+            let g = if self.grain {
+                land_grain(kind, gx, gy)
+            } else {
+                1.0
+            };
+            out[0] = block[o] as f32 * mul * g;
+            out[1] = block[o + 1] as f32 * mul * g;
+            out[2] = block[o + 2] as f32 * mul * g;
         } else {
             if let Color::Srgba(c) = (self.shader)(self.data, kind, self.palette) {
-                out[0] = c.red * 255.0 * mul;
-                out[1] = c.green * 255.0 * mul;
-                out[2] = c.blue * 255.0 * mul;
+                let g = if self.grain {
+                    land_grain(kind, gx, gy)
+                } else {
+                    1.0
+                };
+                out[0] = c.red * 255.0 * mul * g;
+                out[1] = c.green * 255.0 * mul * g;
+                out[2] = c.blue * 255.0 * mul * g;
             }
         }
     }
@@ -819,6 +863,22 @@ impl<'a> CellRenderer<'a> {
             // 模式之外也给 highlight 视觉——海报感的"近白雪"）。轮廓图模式不动。
             if self.treatment.snow_shade && kind == 7 && self.mode != ViewMode::Coastline {
                 color = snow_shade_at(cell.height, self.palette);
+            }
+            // 陆格颗粒（ADR-0042）：与采样路径（sample_vector_flat /
+            // sample_kind）同位置同源——先颗粒、后淡化，两条路径同格同色。
+            // 瓦片直铺（Google 模式）刻意不抖：普通地图气质要干净边界。
+            {
+                let g = if self.grain {
+                    land_grain(kind, cx, gy)
+                } else {
+                    1.0
+                };
+                let Color::Srgba(c0) = color else { return };
+                color = Color::srgb(
+                    (c0.red * g).clamp(0.0, 1.0),
+                    (c0.green * g).clamp(0.0, 1.0),
+                    (c0.blue * g).clamp(0.0, 1.0),
+                );
             }
             if self.soften {
                 color = self.palette.soften_color(color);
@@ -1240,13 +1300,17 @@ mod tests {
         let Color::Srgba(grass) = colors::core_terrain(3) else {
             unreachable!()
         };
+        // 陆格颗粒（ADR-0042 D6）作用于左半格（最近格 (0,0)，biome 3）：
+        // 期望色 = 草色 × 该格确定性颗粒乘子。
+        let g0 = land_grain(3, 0, 0);
+        let grass = bevy::color::Color::srgb(grass.red * g0, grass.green * g0, grass.blue * g0);
         // 沉入海下的陆格按湿判定显示（surface 陆 + 海拔 -50 → 浅水槽位）。
         let Color::Srgba(shallow) = colors::core_terrain(1) else {
             unreachable!()
         };
         // 2 格 ≤1024 → res = clamp(4096/2, 4, 8) = 8：图像 16×8。
         // 等值线在格缘 gx=1.0 → 像素 x∈0..8 陆、x∈8..16 水。
-        assert!(pixel_near(&img, 2, 2, grass), "左半应为草色");
+        assert!(pixel_near(&img, 2, 2, grass.into()), "左半应为草色");
         assert!(
             pixel_near(&img, 12, 2, shallow),
             "右半应为浅水色（authored 陆地被海拔判湿 → 按水深给浅水）"

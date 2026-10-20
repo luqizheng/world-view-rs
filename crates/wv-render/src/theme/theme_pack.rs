@@ -115,6 +115,9 @@ pub struct TreatmentFlags {
     pub ink_sublinear: bool,
     /// 是否启用纸面雾霭 + 远缩放 veil（ADR-0016 M2，`atmosphere.rs`）。
     pub paper_fog: bool,
+    /// 是否启用陆格明度颗粒（ADR-0042 D6：每格 ±4.5% 确定性抖动，
+    /// 平涂色块出水彩颗粒）。Google 类「干净普通地图」主题关。
+    pub land_grain: bool,
 }
 
 impl TreatmentFlags {
@@ -132,6 +135,7 @@ impl TreatmentFlags {
         boundary_wobble: true,
         ink_sublinear: true,
         paper_fog: true,
+        land_grain: true,
     };
 
     /// 全 `false`（「干净矢量」观感的基准，未来 Skyline 类主题的起点；
@@ -146,6 +150,7 @@ impl TreatmentFlags {
         boundary_wobble: false,
         ink_sublinear: false,
         paper_fog: false,
+        land_grain: false,
     };
 }
 

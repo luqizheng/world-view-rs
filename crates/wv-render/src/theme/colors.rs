@@ -53,7 +53,9 @@ pub const CORE_TERRAIN: [Color; 10] = [
     hex(0x8CB95F), // 3 core.grass        草原 / 平原（鲜明草绿）
     hex(0x3F7A46), // 4 core.forest       森林（深林绿，与草靠明度+色相差区分）
     hex(0xB5A765), // 5 core.hill         丘陵（干草黄）
-    hex(0x8A7A66), // 6 core.mountain     山地（岩褐）
+    hex(0x9E9070), // 6 core.mountain     山地（暖岩灰；ADR-0042 由 #8A7A66 提暖收
+    //                      近丘陵——山体身份交给装饰图标承担，
+    //                      填充色只做「高地变灰」的水彩过渡）
     hex(0xF5F8F9), // 7 core.snow         雪线 / 冰原（冷白）
     hex(0x6F8564), // 8 core.marsh        沼泽（湿绿）
     hex(0xC8A272), // 9 core.road         道路 / 区域分界（土路棕）
