@@ -126,10 +126,21 @@ pub enum ViewMode {
     /// F. 轮廓图：黑底 + 海岸线 + 城市路线（2026-11 用户需求：
     /// 地形纹理完全退场，只留水陆轮廓，要素对比度最大化）。
     Coastline,
+    /// T. Topographic（水/陆 + height 3 阶着色，[ADR-0039]）。
+    ///
+    /// **不**走 ThemePack core 10 色，独立调色（`theme::topographic::TopographicPalette`）。
+    /// 关 Roads / Streets / POI / Buildings / Faction / Labels / Veil / Atmosphere /
+    /// TerrainDecor / FeatureOverlay——只留 Terrain（+ Isoline 子开关默认开）。
+    ///
+    /// biome 字段**存在但不参与显示**（X 路线，[ADR-0039] §1.3 / 决策 5）。
+    /// 适合「快速读懂陌生地形」的分析视图，不强调 JRPG / 古舆图美术。
+    ///
+    /// [ADR-0039]: ../docs/adr/ADR-0039-topographic-viewmode.md
+    Topographic,
 }
 
 impl ViewMode {
-    pub const ALL: [ViewMode; 7] = [
+    pub const ALL: [ViewMode; 8] = [
         ViewMode::VectorFlat,
         ViewMode::GoogleMap,
         ViewMode::RealTerrain,
@@ -137,6 +148,7 @@ impl ViewMode {
         ViewMode::Faction,
         ViewMode::Event,
         ViewMode::Coastline,
+        ViewMode::Topographic,
     ];
 
     /// 当前对作者开放的浏览模式。
@@ -223,6 +235,43 @@ pub struct ViewState {
     pub window_size: Vec2,
     /// 当前地图 ID。
     pub current_map: String,
+    /// Topographic viewmode 百分位阈值缓存（[ADR-0039] 决策 5）。
+    ///
+    /// Key = map id（与 `current_map` 同口径字符串）；Value = (`p33`, `p66`) 两个
+    /// height 阈值（米）。**首次进入 Topographic mode 时按图填一次**，
+    /// `data_hash` 变化时（编辑/地形重构）才重算。
+    ///
+    /// biome 通道不参与计算（[ADR-0039] X 路线）。
+    /// 用 `String` key 而非 `wv_core::Id` 是为了与 `current_map` 同款（避免
+    /// 跨 crate 的 `Id` 耦合；map id 在 wv-render 是字符串口径）。
+    ///
+    /// [ADR-0039]: ../docs/adr/ADR-0039-topographic-viewmode.md
+    pub topographic_thresholds: std::collections::HashMap<String, (i16, i16)>,
+    /// 2.5D vertex Z 挤压开关（[ADR-0039] 决策 6 / [ADR-0041]）。
+    ///
+    /// **本字段是预埋**——本 PR-1 仅声明不写行为；由 PR-3 ([ADR-0041]) 在
+    /// `resolve_render_recipe` PreUpdate 阶段落地以下耦合：
+    /// `view.mode == Topographic && !terrain_2_5d_enabled` → 自动 on。
+    ///
+    /// 当前默认 `false`；mode-coupled on 行为落地前，Topographic mode 下
+    /// 高度立体感不启用（仅 3 阶着色）。
+    ///
+    /// [ADR-0041]: ../docs/adr/ADR-0041-topographic-2-5d-vertex-z.md
+    pub terrain_2_5d_enabled: bool,
+    /// 2.5D vertex Z 挤压系数（[ADR-0041] 决策 2）。
+    ///
+    /// mesh 顶点 z = `cell.height × compression × effective_scale`。
+    ///
+    /// - 默认 `0.3`（长途跨度地形专用，[ADR-0041] §3 推荐），
+    ///   而非 [ART_STYLE_SPEC §1.1](docs/ART_STYLE_SPEC_v0.1.md) 默认的
+    ///   `0.5×`——后者适合 32× 起步的城市子图，前者适合 guangdong 级（50km 跨度）
+    ///   长途地形（避免山峰过度耸立遮挡背后内容）。
+    /// - 范围 `[0.0, 1.0]`：>1.0 时画面像城市场景，与 Topographic 语义不符；
+    ///   `0.0` 即纯 2D（无立体感）。
+    /// - 切换即触发 chunk mesh rebuild（`data_hash` 联动 + compression cache key）。
+    ///
+    /// 后续 v2 留口:per-mode 自适应（子图用 0.5，长途用 0.3，DrillState.zoom_level 联动）。
+    pub topographic_compression: f32,
 }
 
 impl Default for ViewState {
@@ -247,6 +296,9 @@ impl Default for ViewState {
             cursor_world: None,
             window_size: Vec2::new(1280.0, 800.0),
             current_map: "world_main".into(),
+            topographic_thresholds: std::collections::HashMap::new(),
+            terrain_2_5d_enabled: false,
+            topographic_compression: 0.3,
         }
     }
 }
@@ -678,6 +730,86 @@ pub struct SelectionState {
     pub last_click: Option<((f32, f32), f64)>,
     /// 草稿 / 选区绑定的图 ID——[`Self::on_map_change`] 变图即清（spec D9：切图 = 取消选择）。
     pub last_map_id: Option<wv_core::Id>,
+}
+
+/// Inspector Panel 写 → `apply_pending_commands` 读 → `EditCellCommand::apply`
+/// 的草稿载荷([ADR-0040] §决策 5)。
+///
+/// 为什么存进 `EditCellState.pending` 而不是 `CommandId::EditCell(...)` 嵌套 5 字段:
+/// - 与 `SelectionState.draft` 同款「draft → take」节奏,降低心智；
+/// - 编辑面板多字段一次性封装成不可变快照,与其他 Edit* 命令一致；
+/// - 枚举 variant 写 5 字段会让 pattern match 笨拙。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditCellPending {
+    pub map: wv_core::Id,
+    pub gx: i32,
+    pub gy: i32,
+    pub before: wv_core::terrain::TerrainCellData,
+    pub after: wv_core::terrain::TerrainCellData,
+}
+
+/// 单格编辑工具状态（[ADR-0040] §决策 5）。
+///
+/// 与 [`SelectionState`] 平级：**会话态,本地图使用**——
+/// `last_map_id` 变即清空（防「切换图后旧 hover 卡在画面上」）。
+///
+/// **三层状态**：
+/// - `hover` = 当前鼠标压在哪一格（即时刷新,Inspector 不必读）；
+/// - `selected` = 点选 committed 的那一格（Inspector 与 PassId::CellSelection
+///   必读,ESC 清空）；
+/// - `pending` = Inspector 字段改完之后,等待 `apply_pending_commands` 取走
+///   的草稿（[EditCellPending]）。分发器读 + `take()` 后由 EditCellCommand
+///   走 [wv_edit] 的 snapshot-diff-revert 路径落盘。
+///
+/// hover 与 selected 与 pending 共存不冲突——hover 来自光标,selected 来自点击,
+/// pending 来自字段改。
+#[derive(Resource, Debug, Default, Clone, PartialEq)]
+pub struct EditCellState {
+    /// EditCell 工具是否激活（与 [`BrushState::enabled`] 同款会话布尔）。
+    /// 由命令分发器在 `SelectMapTool(EditCell)` 翻 true / 切走其它工具翻 false。
+    pub tool_active: bool,
+    /// 当前鼠标压住的格 (gx, gy)；`None` 表示鼠标不在地图内。
+    pub hover: Option<(i32, i32)>,
+    /// 点击落定的格 (gx, gy)。ESC 清空 / 切图也清空。
+    pub selected: Option<(i32, i32)>,
+    /// Inspector 待分发的字段变化草稿。
+    pub pending: Option<EditCellPending>,
+    /// 多边形选区贴合的方格集合（2026-10-20 批量编辑）：V 工具闭合多边形后
+    /// 由 `sync_region_cells` 栅格化写入（cell 中心点落在多边形内即选中）。
+    /// 空 = 无区域选区。高亮渲染与批量应用（BatchEditCellsCommand）都消费它。
+    pub region_cells: Vec<(i32, i32)>,
+    /// 上次栅格化时**多边形**的指纹（2026-10-20 性能修）。
+    ///
+    /// `sync_region_cells` 每帧都会跑；多边形没变时**不必重算**格集合
+    /// （栅格化是 O(bbox 格数 × 边数)，大选区每帧重算会明显吃帧）。
+    /// 指纹变了（或为 0 = 从未算过）才重算。
+    pub region_fingerprint: u64,
+    /// 绑定的图 ID；变图即清空选中格(与 [`SelectionState::last_map_id`]
+    /// 一致语义,统一通过 [`EditCellState::on_map_change`] 处理)。
+    pub last_map_id: Option<wv_core::Id>,
+}
+
+impl EditCellState {
+    /// 清空 tool_active + hover + selected + pending；
+    /// **不会**清 `last_map_id`（那是别处碰）。
+    pub fn clear(&mut self) {
+        self.tool_active = false;
+        self.hover = None;
+        self.selected = None;
+        self.pending = None;
+        self.region_cells.clear();
+        self.region_fingerprint = 0;
+    }
+
+    /// 切换图时调用——如果新图 ≠ 上次记录的图,清空所有格相关字段
+    /// （与 [`SelectionState`] 的 `on_map_change` 同口径）。
+    pub fn on_map_change(&mut self, new_map: &wv_core::Id) {
+        if self.last_map_id.as_ref() != Some(new_map) {
+            self.hover = None;
+            self.selected = None;
+        }
+        self.last_map_id = Some(new_map.clone());
+    }
 }
 
 impl SelectionState {

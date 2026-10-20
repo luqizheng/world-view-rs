@@ -1,0 +1,22 @@
+# 轨迹 2：中央地中海主线（罗马 → 那不勒斯 → 巴勒莫 → 雅典）
+id: trk_rome_athens
+unit: unit_roman_envoy
+map: world_main
+from: 100
+to: 600
+waypoints:
+  - day: 100
+    place: city_rome
+    pos: {x: 1744.0, y: 1576.0}
+  - day: 200
+    place: city_naples
+    pos: {x: 1928.0, y: 1372.0}
+  - day: 350
+    place: city_palermo
+    pos: {x: 1888.0, y: 1116.0}
+  - day: 480
+    place: city_athens
+    pos: {x: 2724.0, y: 1204.0}
+  - day: 600
+    place: city_thessaloniki
+    pos: {x: 2672.0, y: 1672.0}

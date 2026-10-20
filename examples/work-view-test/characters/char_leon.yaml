@@ -1,0 +1,21 @@
+# 人物：莱昂（无势力游侠，用来演示多段足迹）
+id: char_leon
+name: 莱昂
+alias: 无旗骑士
+traits: [沉默, 好奇, 守诺]
+state_spans:
+  - from: 1
+    to: 200
+    place: city_lisbon
+    title: 游侠
+  - from: 200
+    to: 500
+    place: city_rome
+    title: 佣兵
+  - from: 500
+    to: 800
+    place: city_athens
+    title: 教国客卿
+  - from: 800
+    place: city_antalya
+    title: 自由骑士

@@ -19,9 +19,9 @@ use bevy::prelude::*;
 use wv_io::diagnostics::Diagnostics;
 
 pub use wv_render::state::{
-    lod_tier, BrushState, BrushTool, BrushToolGroup, DrillState, GridConfig, LodTier, MeasureMode,
-    MeasureState, PlaybackState, SelectionState, ViewMode, ViewState, WorldProjection,
-    LOD_NATION_SCALE, LOD_REGION_SCALE,
+    lod_tier, BrushState, BrushTool, BrushToolGroup, DrillState, EditCellState, GridConfig,
+    LodTier, MeasureMode, MeasureState, PlaybackState, SelectionState, ViewMode, ViewState,
+    WorldProjection, LOD_NATION_SCALE, LOD_REGION_SCALE,
 };
 
 // 2026-10-18（ADR-0033）：`ContinentGenerationStash` / `ContinentGenerationState`
@@ -51,6 +51,7 @@ impl ViewModeLabelExt for wv_render::state::ViewMode {
             wv_render::state::ViewMode::Faction => t(loc, I18nKey::ViewModeFaction),
             wv_render::state::ViewMode::Event => t(loc, I18nKey::ViewModeEvent),
             wv_render::state::ViewMode::Coastline => t(loc, I18nKey::ViewModeCoastline),
+            wv_render::state::ViewMode::Topographic => t(loc, I18nKey::ViewModeTopographic),
         }
     }
 }
@@ -109,11 +110,13 @@ pub enum Panel {
     Character,
     /// 事件登记（用户 1.4 要求，可从时间轴进入）。
     Event,
+    /// Cell 编辑器（[ADR-0040]，2026-10-20 独立面板化）：单格水陆/海拔/群系编辑。
+    CellEditor,
 }
 
 impl Panel {
     /// 全部面板（菜单按此顺序列出）。
-    pub const ALL: [Panel; 11] = [
+    pub const ALL: [Panel; 12] = [
         Panel::MapTree,
         Panel::Layers,
         Panel::Brush,
@@ -125,6 +128,7 @@ impl Panel {
         Panel::Region,
         Panel::Inspector,
         Panel::Validation,
+        Panel::CellEditor,
     ];
 
     /// 菜单 / 标题显示名（ADR-0018：locale-dependent 文案查表）。
@@ -143,6 +147,7 @@ impl Panel {
             Panel::Minimap => t(loc, I18nKey::PanelMinimap),
             Panel::Character => t(loc, I18nKey::PanelCharacter),
             Panel::Event => t(loc, I18nKey::PanelEvent),
+            Panel::CellEditor => t(loc, I18nKey::PanelCellEditor),
         }
     }
 
@@ -172,6 +177,9 @@ impl Panel {
             // 旧位 972,308 让给 Validation；Character / Event 错开避免矩形重叠。
             Panel::Validation => [12.0, 808.0],
             Panel::Inspector => [992.0, 56.0],
+            // Cell 编辑器：右列 Inspector 下方（56+240=296 底，留 14 间隙），
+            // 310+198=508 ≤ Character 顶 520，右列三面板互不重叠。
+            Panel::CellEditor => [992.0, 310.0],
             Panel::Character => [992.0, 520.0],
             // 底部通栏（§3.3 P-5）。
             Panel::Timeline => [12.0, 880.0],
@@ -194,6 +202,11 @@ impl Panel {
             Panel::Faction => [280.0, 300.0],
             Panel::Region => [280.0, 200.0],
             Panel::Inspector => [264.0, 240.0],
+            // Cell 编辑器：与 Inspector 同宽；高度 = 头部 + 4 字段 + 提示一行。
+            // 高 210 = 右列空隙（Inspector 底 296 → Character 顶 520 不重叠；
+            // 布局互斥测试 §9.3-1）。egui Window hug 内容会自动撑高——
+            // 群系 7 组 radio 全展开约 460px，CellMap 工作区下其余面板默认关，无遮挡。
+            Panel::CellEditor => [288.0, 210.0],
             // v0.3：Validation 改成 240 高（默认隐藏，validation 触发时才出现）
             Panel::Validation => [300.0, 60.0],
         }
@@ -214,6 +227,7 @@ impl Panel {
             Panel::Minimap => "minimap",
             Panel::Character => "character",
             Panel::Event => "event",
+            Panel::CellEditor => "cell_editor",
         }
     }
 
@@ -225,7 +239,7 @@ impl Panel {
     pub fn icon(self) -> wv_ui::widgets::HeadIcon {
         use wv_ui::widgets::{
             HeadIcon, ICON_ALERT, ICON_BRUSH, ICON_CALENDAR, ICON_CLOCK, ICON_FLAG, ICON_GLOBE,
-            ICON_LANDMARK, ICON_LAYERS, ICON_LIST, ICON_MAP, ICON_SLIDERS, ICON_USER,
+            ICON_LANDMARK, ICON_LAYERS, ICON_LIST, ICON_MAP, ICON_MAP_PIN, ICON_SLIDERS, ICON_USER,
         };
         HeadIcon::Svg(match self {
             Panel::MapTree => ICON_GLOBE,
@@ -240,6 +254,7 @@ impl Panel {
             Panel::Minimap => ICON_MAP,
             Panel::Character => ICON_USER,
             Panel::Event => ICON_CALENDAR,
+            Panel::CellEditor => ICON_MAP_PIN,
         })
     }
 
@@ -269,6 +284,12 @@ pub struct PanelState {
     pub reset_requested: bool,
     /// 沉浸模式（`Tab`）：所有面板淡出但**仍可点击**（动画 §4 规范：alpha 0.10）。
     pub immersive: bool,
+    /// CellMap 工作区（顶栏第三段，2026-10-20）进入时的面板可见性快照。
+    ///
+    /// 进 CellMap：快照当前全部面板 visible → 只开 Inspector（Cell 编辑唯一
+    /// 相关面板）；退 CellMap（点 Browse/Edit 或再点 CellMap）：还原快照并清
+    /// `None`。`None` = 不在工作区。
+    pub cell_workspace_backup: Option<Vec<(Panel, bool)>>,
 }
 
 impl Default for PanelState {
@@ -287,6 +308,7 @@ impl Default for PanelState {
             visible,
             reset_requested: false,
             immersive: false,
+            cell_workspace_backup: None,
         }
     }
 }

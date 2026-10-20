@@ -1,0 +1,244 @@
+# 地点节点（work-view-test：地中海 + 北非 + 部分欧洲；共 33 个，5 个势力）
+# 坐标 = 地图局部坐标（extent 空间 4096×3072；栅格 1024×768 ×4）。
+# rank 3 = 国家级 / rank 2 = 市镇 / rank 1 = 关隘哨所。
+# name 双语（中文显示用主名；如要单语保留中文即可）。
+# biome 仅在需要覆盖 NE 生成器分类时填；缺省按 wv-gen-demo 的气候轴派生。
+
+# ── 伊比利亚 ──
+- id: city_seville
+  name: 塞维利亚
+  map: world_main
+  x: 624
+  y: 1416
+  rank: 3
+
+- id: city_lisbon
+  name: 里斯本
+  map: world_main
+  x: 304
+  y: 1368
+  rank: 3
+
+- id: city_barcelona
+  name: 巴塞罗那
+  map: world_main
+  x: 976
+  y: 1828
+  rank: 3
+
+- id: city_toledo
+  name: 托莱多
+  map: world_main
+  x: 728
+  y: 1488
+  rank: 2
+
+- id: city_granada
+  name: 格拉纳达
+  map: world_main
+  x: 792
+  y: 1240
+  rank: 2
+
+# ── 法兰西地中海沿岸 ──
+- id: city_marseille
+  name: 马赛
+  map: world_main
+  x: 1228
+  y: 2000
+  rank: 3
+
+- id: city_montpellier
+  name: 蒙彼利埃
+  map: world_main
+  x: 1096
+  y: 1944
+  rank: 2
+
+- id: city_lyon
+  name: 里昂
+  map: world_main
+  x: 1232
+  y: 2232
+  rank: 2
+
+# ── 意大利半岛 ──
+- id: city_rome
+  name: 罗马
+  map: world_main
+  x: 1744
+  y: 1576
+  rank: 3
+
+- id: city_milan
+  name: 米兰
+  map: world_main
+  x: 1604
+  y: 2176
+  rank: 3
+
+- id: city_venice
+  name: 威尼斯
+  map: world_main
+  x: 1848
+  y: 2124
+  rank: 2
+
+- id: city_naples
+  name: 那不勒斯
+  map: world_main
+  x: 1928
+  y: 1372
+  rank: 3
+
+- id: city_florence
+  name: 佛罗伦萨
+  map: world_main
+  x: 1756
+  y: 1788
+  rank: 2
+
+# ── 西西里岛 + 亚平宁海岛 ──
+- id: city_palermo
+  name: 巴勒莫
+  map: world_main
+  x: 1888
+  y: 1116
+  rank: 2
+
+- id: city_catania
+  name: 卡塔尼亚
+  map: world_main
+  x: 2008
+  y: 996
+  rank: 2
+
+- id: city_sardinia
+  name: 卡利亚里
+  map: world_main
+  x: 1668
+  y: 1116
+  rank: 1
+
+- id: city_cagliari
+  name: 卡利亚里古城
+  map: world_main
+  x: 1684
+  y: 1048
+  rank: 2
+
+# ── 巴尔干半岛 ──
+- id: city_athens
+  name: 雅典
+  map: world_main
+  x: 2724
+  y: 1204
+  rank: 3
+
+- id: city_thessaloniki
+  name: 塞萨洛尼基
+  map: world_main
+  x: 2672
+  y: 1672
+  rank: 3
+
+- id: city_split
+  name: 斯普利特
+  map: world_main
+  x: 2388
+  y: 1912
+  rank: 2
+
+- id: city_belgrade
+  name: 贝尔格莱德
+  map: world_main
+  x: 2628
+  y: 2196
+  rank: 2
+
+# ── 安纳托利亚 ──
+- id: city_istanbul
+  name: 伊斯坦布尔
+  map: world_main
+  x: 3252
+  y: 1716
+  rank: 3
+
+- id: city_izmir
+  name: 伊兹密尔
+  map: world_main
+  x: 3144
+  y: 1284
+  rank: 2
+
+- id: city_antalya
+  name: 安塔利亚
+  map: world_main
+  x: 3424
+  y: 1136
+  rank: 2
+
+# ── 北非 ──
+- id: city_casablanca
+  name: 卡萨布兰卡
+  map: world_main
+  x: 672
+  y: 420
+  rank: 2
+
+- id: city_algeria
+  name: 阿尔及尔
+  map: world_main
+  x: 1304
+  y: 352
+  rank: 3
+
+- id: city_tunis
+  name: 突尼斯
+  map: world_main
+  x: 1836
+  y: 428
+  rank: 3
+
+- id: city_tripoli
+  name: 的黎波里
+  map: world_main
+  x: 2456
+  y: 200
+  rank: 2
+
+- id: city_cairo
+  name: 开罗
+  map: world_main
+  x: 3968
+  y: 44
+  rank: 3
+
+- id: city_benghazi
+  name: 班加西
+  map: world_main
+  x: 3072
+  y: 156
+  rank: 2
+
+# ── 地中海东部边角 ──
+- id: city_beirut
+  name: 贝鲁特
+  map: world_main
+  x: 3756
+  y: 1064
+  rank: 2
+
+- id: city_jerusalem
+  name: 耶路撒冷
+  map: world_main
+  x: 3732
+  y: 968
+  rank: 2
+
+- id: city_nicosia
+  name: 尼科西亚
+  map: world_main
+  x: 3500
+  y: 972
+  rank: 1

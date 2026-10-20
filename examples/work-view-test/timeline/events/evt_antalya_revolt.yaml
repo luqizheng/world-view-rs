@@ -1,0 +1,19 @@
+# 事件 4：安塔利亚反攻（安纳托利亚叛军起事）
+# 时间：day 895..930
+id: evt_antalya_revolt
+name: 安塔利亚反攻
+from: 895
+to: 930
+location:
+  place: city_antalya
+participants:
+  - char_kerim
+  - char_marcus
+outcome: 安纳托利亚叛军在托罗斯山口击溃元老院驻军，攻陷安塔利亚。
+effects:
+  - kind: claim_region
+    region: city_antalya
+    at: 895
+  - kind: set_title
+    character: char_kerim
+    title: 叛军领袖

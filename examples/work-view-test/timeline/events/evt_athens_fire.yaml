@@ -1,0 +1,14 @@
+# 事件 3：雅典大火（圣安德烈教国内部动荡）
+# 时间：day 595..610
+id: evt_athens_fire
+name: 雅典大火
+from: 595
+to: 610
+location:
+  place: city_athens
+participants:
+  - char_andrew
+outcome: 教国圣殿大火，神器失落；教国转入守势。
+effects:
+  - kind: custom
+    note: 圣殿焚毁、神器失落，教国转入守势

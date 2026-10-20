@@ -10,8 +10,17 @@
 |---|---|---|---|---|
 | `Inter-Regular.ttf` | Inter Regular | 4.001 | SIL OFL-1.1 | 拉丁（比例族 `Proportional` 首位） |
 | `NotoSansSC-Regular.ttf` | Noto Sans SC Regular | 2.004 | SIL OFL-1.1 | 中文（比例族回退）+ Bevy `Text2d` 地名标注 |
+| `LXGWWenKai-Regular.ttf` | 霞鹜文楷（LXGW WenKai）Regular | 1.530 | SIL OFL-1.1 | **画布标签书法体**（ADR-0042 D4）：地名 / 街道名 / 测量标注（`LoadedFonts::label_handle`）；egui 命名族 `wv_map_label`。UI 面板**不用**它 |
 
-两个字体均为 **SIL Open Font License 1.1**（可自由嵌入 / 再分发；
+霞鹜文楷同为 **SIL Open Font License 1.1**（许可全文见
+[`lxgw/LxgwWenKai`](https://github.com/lxgw/LxgwWenKai/blob/main/OFL.txt)；
+v1.530 Release 直接下载，经本机代理：
+
+```bash
+curl -L -x http://localhost:10808 -o LXGWWenKai-Regular.ttf   "https://github.com/lxgw/LxgwWenKai/releases/download/v1.530/LXGWWenKai-Regular.ttf"
+```
+
+）。三个字体均为 **SIL Open Font License 1.1**（可自由嵌入 / 再分发；
 许可全文见上游仓库，如 [`rsms/inter`](https://github.com/rsms/inter/blob/master/LICENSE.txt)
 与 [`notofonts/noto-cjk`](https://github.com/notofonts/noto-cjk/blob/main/LICENSE)）。
 

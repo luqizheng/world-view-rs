@@ -1,6 +1,4 @@
 //! 待批准：本文件在 `app` feature 下才编译。
-#![cfg(feature = "app")]
-
 //! 主题包（Theme Pack）—— 配色 / 装饰 / 贴图 / 覆盖物规则的聚合（ADR-0023 D1）。
 //!
 //! ## 职责
@@ -29,7 +27,6 @@ use bevy::prelude::*;
 
 use super::overlays::{FeatureOverlaySet, FeatureRule};
 use super::palette::{MapPalette, PaletteColors};
-use crate::terrain_view::tile_atlas::TileAtlas;
 
 /// 主题包：色板 + 装饰 + 贴图 + 覆盖物规则的原子组合（ADR-0023 D1）。
 ///
@@ -75,9 +72,13 @@ pub struct TileAtlasSpec {
 }
 
 impl TileAtlasSpec {
-    /// 由已加载的 `TileAtlas` 推导规格（M2 接入时用，M1 不消费）。
-    pub fn from_atlas(_atlas: &TileAtlas) -> Self {
-        Self { format_version: 1 }
+    /// 由已加载的图集的 `format_version` 推导规格（M2 接入时用，M1 不消费）。
+    ///
+    /// **签名刻意不收 `TileAtlas`**：那是 `wv-render` 的运行时类型，契约层
+    /// 引用它就等于契约反向依赖渲染层（ADR-0043 D2 的红线）。调用方
+    /// （`wv-render`）自己取字段传进来。
+    pub fn from_format_version(format_version: u32) -> Self {
+        Self { format_version }
     }
 }
 
@@ -115,6 +116,14 @@ pub struct TreatmentFlags {
     pub ink_sublinear: bool,
     /// 是否启用纸面雾霭 + 远缩放 veil（ADR-0016 M2，`atmosphere.rs`）。
     pub paper_fog: bool,
+    /// 是否启用陆格明度颗粒（ADR-0042 D6：每格 ±4.5% 确定性抖动，
+    /// 平涂色块出水彩颗粒）。Google 类「干净普通地图」主题关。
+    pub land_grain: bool,
+    /// 是否启用**水彩晕开**（ADR-0044 D1，学 civ-atlas `paintBase` 的
+    /// `boxBlurWrap`：先把「每格基色」做 5×5 盒式模糊再上屏，群系边界
+    /// 从硬切格边变成 2 格宽的柔和渐变）。实现走纯函数（任意格的模糊色
+    /// 只依赖邻域），全图烘焙与增量 patch 天然逐字节一致。
+    pub watercolor_bleed: bool,
 }
 
 impl TreatmentFlags {
@@ -132,6 +141,8 @@ impl TreatmentFlags {
         boundary_wobble: true,
         ink_sublinear: true,
         paper_fog: true,
+        land_grain: true,
+        watercolor_bleed: true,
     };
 
     /// 全 `false`（「干净矢量」观感的基准，未来 Skyline 类主题的起点；
@@ -146,6 +157,8 @@ impl TreatmentFlags {
         boundary_wobble: false,
         ink_sublinear: false,
         paper_fog: false,
+        land_grain: false,
+        watercolor_bleed: false,
     };
 }
 

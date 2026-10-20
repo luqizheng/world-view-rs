@@ -59,10 +59,19 @@ pub enum PassId {
     /// 河流折线（ADR-0037 D5）：模板世界由 terrain+rivers_seed 派生的水系。
     /// 与 TerrainDecor 同口径（VectorFlat/RealTerrain/Schematic/Faction 开）。
     Rivers,
+    /// 单格编辑工具的「选中高亮」(ADR-0040 §决策 4)：1 格 outline + 半透底色。
+    ///
+    /// **会话轴 pass** —— 与 `tracks_visible` 同款处理：不进 `LayerFrame`
+    /// 级联,由 `ToolKind::EditCell` + `EditCellState.selected` 联合控制
+    /// (后者是 hover / selected 双态,见 [ADR-0040] §决策 5)。
+    /// 默认 disabled,Mode 表 8 行**全部关** —— 仅当 `selected.is_some()`
+    /// 时由 `resolve_render_recipe` 单独开启;
+    /// hover 不画(免闪烁),仅 selected 1 格画 outline。
+    CellSelection,
 }
 
 impl PassId {
-    /// 全部 pass（遍历测试用）。
+    /// 全部 pass(遍历测试用)。
     pub const ALL: &'static [PassId] = &[
         PassId::Terrain,
         PassId::Isoline,
@@ -87,10 +96,11 @@ impl PassId {
         PassId::FeatureOverlay,
         PassId::TerrainDecor,
         PassId::Rivers,
+        PassId::CellSelection,
     ];
 
-    /// pass 总数（数组长度 = `PassId::COUNT`）。
-    pub const COUNT: usize = 23;
+    /// pass 总数(数组长度 = `PassId::COUNT`)。
+    pub const COUNT: usize = 24;
 }
 
 /// 单条 pass 的元信息（ADR-0021 §2 D1 §3）。
@@ -160,7 +170,7 @@ impl Default for RenderRecipe {
 #[rustfmt::skip]
 const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
     // 默认浏览（plan v0.1 D3 A 类，ADR-0012 已接受）。
-    (ViewMode::VectorFlat, [
+(ViewMode::VectorFlat, [
         true,  // Terrain
         true,  // Isoline
         true,  // GridLines（受 LayerFrame + 会话开关，mode 表不关）
@@ -184,6 +194,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true,  // FeatureOverlay
         true, // TerrainDecor
         true, // Rivers
+        true, // CellSelection（[ADR-0040]：会话轴,8 mode 默认开,运行时由 selected 控）
     ]),
     // 真实地形（plan v0.1 D3 B 类）——与 VectorFlat 同，除等值线（仅 VectorFlat）。
     (ViewMode::RealTerrain, [
@@ -192,6 +203,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true,
         true, // TerrainDecor
         true, // Rivers
+        true, // CellSelection
     ]),
     // 色块地形（plan v0.1 D3 C 类）——同上。
     (ViewMode::Schematic, [
@@ -200,6 +212,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true,
         true, // TerrainDecor
         true, // Rivers
+        true, // CellSelection
     ]),
     // Google 模式 —— 自带完整观感：等值线 / 氛围族 / 建筑不画。
     (ViewMode::GoogleMap, [
@@ -208,6 +221,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true,
         false, // TerrainDecor
         true, // Rivers：Google 也画河（自有观感但水系照常）
+        true, // CellSelection
     ]),
     // 势力图 —— 等值线不画，其余与真实地形同。
     (ViewMode::Faction, [
@@ -216,6 +230,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true,
         true, // TerrainDecor
         true, // Rivers
+        true, // CellSelection
     ]),
     // 事件图 —— 极简底图。
     (ViewMode::Event, [
@@ -224,6 +239,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true,
         false, // TerrainDecor
         false, // Rivers：极简底图不画
+        true, // CellSelection
     ]),
     // 轮廓图（黑底分析视图）—— 大部分装饰关。
     (ViewMode::Coastline, [
@@ -232,6 +248,43 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         false, // FeatureOverlay：轮廓图只留轮廓
         false, // TerrainDecor
         false, // Rivers
+        true, // CellSelection
+    ]),
+    // Topographic 分析视图（[ADR-0039]）：水/陆 + height 3 阶着色，关其它装饰族。
+    // 仅 Terrain + Isoline + Rivers 留——
+    //   • Terrain 是核心显示（用独立 `TopographicPalette`，不走 ThemePack core）
+    //   • Isoline 是分析视图默认（决策 7 子开关默认开）
+    //   • Rivers 是水系边界（与水/陆判定直接相关）
+    // DrillMarkers / BrushCursor / Measurement / FeatureOverlay / Decor 全关——
+    // 分析视图不要任何交互叠加或美术装饰（决策 2）。
+    //
+    // biome 通道在此 mode 下**不参与显示**（X 路线，[ADR-0039] §1.3 / 决策 5），
+    // 由 `sync_terrain_chunks` 的 match 分支实现。
+    (ViewMode::Topographic, [
+        true,  // Terrain（核心，水/陆 + 3 阶 height，topographic 分支）
+        true,  // Isoline（分析视图默认开）
+        false, // GridLines（分析视图不要编辑格）
+        false, // MapFrame
+        false, // Veil
+        false, // Grain
+        false, // Roads
+        false, // Streets
+        false, // Poi
+        false, // Buildings
+        false, // Faction
+        false, // PlaceLabels
+        false, // StreetLabels
+        false, // SeaLabels
+        false, // Measurement（不要测量叠加）
+        false, // BrushCursor（分析视图不要笔刷光标）
+        false, // Tracks
+        false, // EventDots
+        false, // DrillMarkers（分析视图不要钻入子图入口叠加）
+        false, // Atmosphere
+        false, // FeatureOverlay（分析视图不要地物）
+        false, // TerrainDecor
+        true,  // Rivers：水系边界是水/陆判定的关键
+        true,  // CellSelection（会话轴，Topographic 也开——EditCell 工具可与任何 viewmode 叠加）
     ]),
 ];
 
@@ -305,7 +358,31 @@ pub fn resolve_render_recipe(
 /// 跑（Update 主链）；只要 recipe 在 Update 之前已被写入即可。
 pub fn register_recipe_system(app: &mut App) {
     app.init_resource::<RenderRecipe>();
-    app.add_systems(bevy::prelude::PreUpdate, resolve_recipe_system);
+    // Order:couple system 先(写 `terrain_2_5d_enabled`),recipe system 后(读)。
+    // 同一 schedule 里 `chain()` 强制顺序;`chain` 也意味着「同 schedule
+    // 串行执行」,避免跨 schedule 的 timing 漂移。
+    app.add_systems(
+        bevy::prelude::PreUpdate,
+        (couple_terrain_2_5d_to_mode, resolve_recipe_system).chain(),
+    );
+}
+
+/// 模式→开关的耦合([ADR-0041] 决策 4):Topographic mode 进/出时,自动同步
+/// `ViewState.terrain_2_5d_enabled` 让 vertex Z 挤压与 mode 共进退。
+///
+/// 行为规则:
+/// - `mode == Topographic && !terrain_2_5d_enabled` → **自动 on**(进 Topographic)
+/// - `mode == Topographic && terrain_2_5d_enabled` → 保持 on(无副作用)
+/// - `mode != Topographic && terrain_2_5d_enabled` → **自动 off**(切走;不删作者手动开)
+/// - `mode != Topographic && !terrain_2_5d_enabled` → 保持 off
+///
+/// **作者手动切回 `false` 仅在 Topographic mode 内有效**——切到其它 mode 时
+/// 本系统会再次覆盖为 `false`。这是 ADR-0041 §4.1.2 接受的「切走工具即清理」语义。
+fn couple_terrain_2_5d_to_mode(mut view: ResMut<ViewState>) {
+    let should_be_on = view.mode == ViewMode::Topographic;
+    if view.terrain_2_5d_enabled != should_be_on {
+        view.terrain_2_5d_enabled = should_be_on;
+    }
 }
 
 /// 实际求值系统（包装为 Bevy 系统以注入 `Res`）。
@@ -426,14 +503,17 @@ mod tests {
         );
     }
 
-    /// FeatureOverlay 在除轮廓图外的全部模式默认开：主题地界晕 / 近景符号
-    /// 是浏览态的一等图层，不是某模式专属装饰。
+    /// FeatureOverlay 在除「分析视图」外的全部浏览模式默认开（主题地界晕 /
+    /// 近景符号是浏览态的一等图层，不是某模式专属装饰）。
+    ///
+    /// **分析视图**（Coastline + Topographic，[ADR-0039]）一律关——它们的目标
+    /// 是「看清底层数据」，地物覆盖层会污染信息密度。
     #[test]
-    fn feature_overlay_enabled_in_all_modes_except_coastline() {
+    fn feature_overlay_enabled_in_all_modes_except_analysis_views() {
         let (mut view, layers, world, drill, tex) = fixture();
         for m in ViewMode::ALL {
             view.mode = m;
-            let want = !matches!(m, ViewMode::Coastline);
+            let want = !matches!(m, ViewMode::Coastline | ViewMode::Topographic);
             let r = resolve_render_recipe(&view, &layers, &world, &drill, &tex, None);
             assert_eq!(
                 r.enabled(PassId::FeatureOverlay),
@@ -486,15 +566,16 @@ mod tests {
         assert!(!r.enabled(PassId::Faction));
     }
 
-    /// Isoline 仅 VectorFlat（迁移前 `isoline_overlay` 的原 gate 行为——
-    /// `mode != VectorFlat → despawn`）。其余 6 模式一律关，防"顺手填 true"
-    /// 改变行为（本测试因第一次填错表而加）。
+    /// Isoline 在 VectorFlat 与 Topographic 默认开（迁移前 `isoline_overlay`
+    /// 的原 gate 行为——`mode != VectorFlat → despawn`）；**Topographic
+    /// ([ADR-0039]) 也开** —— 等高线对分析视图是核心信息。
+    /// 其余 6 模式一律关，防"顺手填 true"改变行为（本测试因第一次填错表而加）。
     #[test]
-    fn isoline_only_draws_in_vector_flat() {
+    fn isoline_draws_in_vector_flat_and_topographic_only() {
         let (mut view, layers, world, drill, tex) = fixture();
         for m in ViewMode::ALL {
             view.mode = m;
-            let want = matches!(m, ViewMode::VectorFlat);
+            let want = matches!(m, ViewMode::VectorFlat | ViewMode::Topographic);
             let r = resolve_render_recipe(&view, &layers, &world, &drill, &tex, None);
             assert_eq!(
                 r.enabled(PassId::Isoline),

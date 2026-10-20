@@ -1,6 +1,4 @@
 //! 待批准：本文件在 `app` feature 下才编译。
-#![cfg(feature = "app")]
-
 //! 色板令牌 —— `ART_STYLE_SPEC_v0.1.md` §1.4 的 **28 色**骨架值的唯一代码载体。
 //!
 //! ## 纪律
@@ -53,7 +51,9 @@ pub const CORE_TERRAIN: [Color; 10] = [
     hex(0x8CB95F), // 3 core.grass        草原 / 平原（鲜明草绿）
     hex(0x3F7A46), // 4 core.forest       森林（深林绿，与草靠明度+色相差区分）
     hex(0xB5A765), // 5 core.hill         丘陵（干草黄）
-    hex(0x8A7A66), // 6 core.mountain     山地（岩褐）
+    hex(0x9E9070), // 6 core.mountain     山地（暖岩灰；ADR-0042 由 #8A7A66 提暖收
+    //                      近丘陵——山体身份交给装饰图标承担，
+    //                      填充色只做「高地变灰」的水彩过渡）
     hex(0xF5F8F9), // 7 core.snow         雪线 / 冰原（冷白）
     hex(0x6F8564), // 8 core.marsh        沼泽（湿绿）
     hex(0xC8A272), // 9 core.road         道路 / 区域分界（土路棕）
@@ -271,22 +271,6 @@ pub const TILE_SIZE_STEPS: [f32; 5] = [16.0, 24.0, 32.0, 48.0, 64.0];
 
 /// 描线线宽 = `TILE_BASE / 16`（美术 §3.2：32px → 2px）。
 pub const OUTLINE_WIDTH: f32 = TILE_BASE / 16.0;
-
-/// 世界色令牌 → egui 颜色（UI 层画世界语义色时经此桥接）。
-///
-/// 为什么需要：UI（egui）要画事件紫 / 游标橙红，但本文件的令牌是
-/// `bevy::Color`。直接在 UI 代码里写裸 hex 会破坏「世界色唯一真源」，
-/// 所以在这里做一次桥接（§9.2：palette.rs 只增不改）。
-pub fn palette_to_color32(c: Color) -> bevy_egui::egui::Color32 {
-    let Color::Srgba(s) = c else {
-        return bevy_egui::egui::Color32::GRAY;
-    };
-    bevy_egui::egui::Color32::from_rgb(
-        (s.red * 255.0).round() as u8,
-        (s.green * 255.0).round() as u8,
-        (s.blue * 255.0).round() as u8,
-    )
-}
 
 #[cfg(test)]
 mod tests {

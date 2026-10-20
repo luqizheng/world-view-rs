@@ -1,6 +1,4 @@
 //! 待批准：本文件在 `app` feature 下才编译。
-#![cfg(feature = "app")]
-
 //! 主题包注册表（ADR-0023 D2）—— 把多个主题 crate 的 pack 列表合并成单一查询表。
 //!
 //! ## 职责
@@ -138,7 +136,7 @@ impl ThemePackRegistry for BuiltinRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::palette::PaletteColors;
+    use crate::palette::PaletteColors;
 
     /// 测试用：第一个注册表。
     struct FakeRegistryA;
@@ -195,7 +193,7 @@ mod tests {
         struct BuiltinOnly;
         impl ThemePackRegistry for BuiltinOnly {
             fn packs(&self) -> &'static [(&'static str, &'static ThemePack)] {
-                crate::theme::theme_pack::builtin::ALL
+                crate::theme_pack::builtin::ALL
             }
             fn registry_id(&self) -> &'static str {
                 "builtin_only"
@@ -212,7 +210,7 @@ mod tests {
         struct Dup;
         impl ThemePackRegistry for Dup {
             fn packs(&self) -> &'static [(&'static str, &'static ThemePack)] {
-                crate::theme::theme_pack::builtin::ALL // 重复 antique_default
+                crate::theme_pack::builtin::ALL // 重复 antique_default
             }
             fn registry_id(&self) -> &'static str {
                 "dup"

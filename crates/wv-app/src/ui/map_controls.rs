@@ -430,6 +430,10 @@ pub fn map_controls(
                             &mut params.palette,
                             MapToolId::BrushErase,
                         );
+                        // EditCell 工具的 dock 瓷砖:[ADR-0040] §决策 UI 后做(独立 commit)。
+                        // map_controls 当前 16 个系统参数已满,本 PR-2 仅做后端 plumbing
+                        // (EditCellCommand + EditCellState + cell_pick + dispatch) ——
+                        // 工具调用走命令面板 (MapToolId::EditCell 注册在 ui_command_palette.rs)。
 
                         separator(ui, &shell, metrics, vertical);
 

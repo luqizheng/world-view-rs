@@ -55,6 +55,36 @@ fn slot_is_water(kind: u8) -> bool {
     kind <= 1
 }
 
+/// Topographic viewmode 百分位阈值（[ADR-0039] 决策 4 / 5）。
+///
+/// 在 `&[TerrainCellData]` 上按 `p_low` / `p_high` 切两个高度阈值；
+/// 只读 `height` 通道，biome / surface 不参与（X 路线）。
+///
+/// **与 `wv_terrain::TerrainGrid::compute_height_percentiles` 同语义**，
+/// 但本函数消费 `wv_core::terrain::TerrainCellData`（数据层中立 cell），
+/// 避免 wv-render 反向依赖 wv-terrain 内部 cell 类型。
+///
+/// [ADR-0039]: ../docs/adr/ADR-0039-topographic-viewmode.md
+pub(crate) fn topographic_thresholds_for(
+    cells: &[wv_core::terrain::TerrainCellData],
+    p_low: f32,
+    p_high: f32,
+) -> (i16, i16) {
+    assert!(
+        (0.0..=1.0).contains(&p_low) && (0.0..=1.0).contains(&p_high) && p_low <= p_high,
+        "p_low ({p_low}) 和 p_high ({p_high}) 必须在 [0, 1] 且 p_low ≤ p_high"
+    );
+    if cells.is_empty() {
+        return (0, 0);
+    }
+    let mut heights: Vec<i16> = cells.iter().map(|c| c.height).collect();
+    heights.sort_unstable();
+    let len = heights.len();
+    let idx_low = ((len as f32 * p_low).floor() as usize).min(len - 1);
+    let idx_high = ((len as f32 * p_high).floor() as usize).min(len - 1);
+    (heights[idx_low], heights[idx_high])
+}
+
 /// 把一个着色函数应用到一格，返回 sRGB 线性分量。
 ///
 /// 第三参 = 当前主题色板（ADR-0016）：主题相关色一律经它取，禁止直引常量。
@@ -80,7 +110,34 @@ fn shade_for_mode(mode: ViewMode) -> Shader {
         // 类型色平涂；边界格的水陆由 `sample_vector_flat` 的双线性高度采样
         // 决定——填充边与 `isoline_overlay` 的等值线描边同源吻合。
         ViewMode::VectorFlat => shade_flat,
+        // Topographic 分析视图（[ADR-0039]）—— PR-1 **占位**：
+        // 仅返主题纸面色（`palette.soften_toward`），正确的 cell-by-cell 水/陆
+        // + height 3 阶着色 PR-1b 落地（独立 worktree；详见 `shade_topographic`
+        // 的 doc-comment 与 ADR-0039 §6 落点列表的 "1 cell" 行）。
+        //
+        // **为什么不现在做**：本 shader 类型签名不持 cell 坐标——
+        // `fn(&TerrainData, u8, &PaletteColors) -> Color`——无法在着色路径里
+        // 查 `data.cells[gy * w + cx]` 拿到 cell.height + cell.surface；
+        // cell-by-cell 着色需 `write_cell_split` 早返回分支，依赖
+        // `CellRenderer` 持有百分位阈值（PR-1b 在 `state.rs::topographic_thresholds`
+        // 上加 ResMut 写回，仍是 fixable）。
+        ViewMode::Topographic => shade_topographic,
     }
+}
+
+/// Topographic viewmode 着色占位（[ADR-0039]）。
+///
+/// **PR-1 限制**：返主题纸面色 `palette.soften_toward`，不读 cell 数据，
+/// 不切分 3 阶。PR-1b 会在 `write_cell_split` 早返回分支按 cell.height +
+/// cell.surface 走 `topographic::pick` 取 water / land_low / land_mid / land_high。
+///
+/// 当前返纸面色是为了：(a) match 不漏分支；(b) 切到 Topographic mode 时不
+/// 渲染崩溃，且提供「底图变空」的视觉提示——方便用户知道「Topographic 模式
+/// 接通了，但视觉细节等 PR-1b」。
+///
+/// [ADR-0039]: ../docs/adr/ADR-0039-topographic-viewmode.md
+fn shade_topographic(_data: &TerrainData, _kind: u8, pal: &PaletteColors) -> Color {
+    pal.soften_toward
 }
 
 fn shade_google(_data: &TerrainData, kind: u8, _pal: &PaletteColors) -> Color {
@@ -251,6 +308,100 @@ fn hash01(xi: i64, yi: i64, seed: u64) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
+// 陆格颗粒（ADR-0042 手绘 Nation 表现层）
+// ---------------------------------------------------------------------------
+
+/// 陆格明度抖动总幅度：±4.5%。
+///
+/// 参考图（手绘 JRPG）的陆地是水彩颗粒而不是平涂；逐格确定性抖动把
+/// 「塑料平色块 + 纬度条带」揉出纸面颗粒。幅度太小看不出、太大会成
+/// 色噪点——4.5% 在实机 26% 缩放下恰好是「细看有颗粒、远看是均匀
+/// 水彩」的区间。
+const LAND_GRAIN: f32 = 0.09;
+
+/// 水彩晕开的模糊半径（格）：5×5 窗 ≈ 2 格过渡带（civ-atlas `paintBase`
+/// 的 `boxBlurWrap(3×S)` 同量级）。1 = 看不出，3 = 群系糊成一片。
+const BLEED_RADIUS: u32 = 2;
+
+/// 一格的**基色**（ADR-0044 D1）：shader 色 + 水深渐变 + 雪双调——
+/// 即旧「内部格直铺」在颗粒 / 淡化 / 浮雕**之前**的那一步。抽成纯函数是
+/// 为了让 [`CellRenderer::blended_base`]（5×5 模糊）与内部格直铺共用
+/// 同一取色口径：模糊的输入 = 直铺的输出，两条路径永不漂移。
+fn base_color_of(
+    data: &TerrainData,
+    kind: u8,
+    cx: u32,
+    cy: u32,
+    pal: &PaletteColors,
+    treatment: &crate::theme::theme_pack::TreatmentFlags,
+    mode: ViewMode,
+) -> Color {
+    let cell = &data.cells[(cy as usize) * data.width as usize + cx as usize];
+    let mut color = shade_for_mode(mode)(data, kind, pal);
+    if treatment.water_gradient && slot_is_water(kind) && mode != ViewMode::Coastline {
+        color = water_shade_at(cell.height, pal);
+    }
+    if treatment.snow_shade && kind == 7 && mode != ViewMode::Coastline {
+        color = snow_shade_at(cell.height, pal);
+    }
+    color
+}
+
+/// 水彩晕开（ADR-0044 D1）：`(cx, cy)` 处的 **5×5 盒式模糊基色**。
+///
+/// 纯函数——只依赖 `data` 邻域，任意带数 / 任意批次下逐字节一致
+/// （行带并行契约、增量 patch 契约同时保住）。邻域越界钳边。
+/// 模糊的是**基色**（直铺口径），颗粒 / 淡化 / 浮雕照旧在其后逐格叠加。
+fn blended_base(
+    data: &TerrainData,
+    cx: u32,
+    cy: u32,
+    pal: &PaletteColors,
+    treatment: &crate::theme::theme_pack::TreatmentFlags,
+    mode: ViewMode,
+) -> Color {
+    let w = data.width;
+    let h = data.height;
+    let (x0, y0) = (
+        cx.saturating_sub(BLEED_RADIUS),
+        cy.saturating_sub(BLEED_RADIUS),
+    );
+    let (x1, y1) = (
+        (cx + BLEED_RADIUS).min(w - 1),
+        (cy + BLEED_RADIUS).min(h - 1),
+    );
+    let mut ar = 0.0f32;
+    let mut ag = 0.0f32;
+    let mut ab = 0.0f32;
+    let mut n = 0u32;
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let kind = display_slot(&data.cells[(y * w + x) as usize]);
+            let Color::Srgba(c) = base_color_of(data, kind, x, y, pal, treatment, mode) else {
+                continue;
+            };
+            ar += c.red;
+            ag += c.green;
+            ab += c.blue;
+            n += 1;
+        }
+    }
+    let n = n.max(1) as f32;
+    Color::srgb(ar / n, ag / n, ab / n)
+}
+
+/// 陆格颗粒乘子：水系两槽（0 深水 / 1 浅水）恒 1.0——等深渐变是连续
+/// 函数，叠噪声会打架；陆上各类（沙/草/林/丘/山/雪/沼/路）按格抖动。
+/// 全渲染路径共用（全图烘焙 / 增量 patch / VectorFlat 采样），同一格
+/// 任何时刻得到同一乘子（P7 派生确定性）。
+fn land_grain(kind: u8, cx: u32, cy: u32) -> f32 {
+    if kind <= 1 {
+        return 1.0;
+    }
+    1.0 - LAND_GRAIN * 0.5 + LAND_GRAIN * hash01(cx as i64, cy as i64, 0x5EED_C0DE)
+}
+
+// ---------------------------------------------------------------------------
 // 雪格双调（手绘地图呈现 #3，2026-10-15）
 // ---------------------------------------------------------------------------
 
@@ -341,6 +492,14 @@ struct CellRenderer<'a> {
     /// 边界扰动开关：Google 模式关闭（Google 普通地图的边界是干净的直线/平滑
     /// 曲线；手绘感揉边与「普通地图」气质相悖）。
     wobble: bool,
+    /// 陆格颗粒开关（ADR-0042 D6）：`TreatmentFlags.land_grain` ∧ 非 Google
+    /// 模式——「折叠成同一陆色」是 Google 模式的硬契约，逐格抖动会重新
+    /// 引入马赛克。
+    grain: bool,
+    /// 水彩晕开开关（ADR-0044 D1）：`TreatmentFlags.watercolor_bleed` ∧ 仅
+    /// VectorFlat / Schematic——水彩是平涂语法；Google（干净）、RealTerrain
+    ///（高度写真）、Coastline / Event / Topographic（自有三色/管线）都不掺。
+    bleed: bool,
     /// 装饰旗标（ADR-0023 D4：`ThemePack.treatment`）。HandDrawn 全 `true` 时
     /// 所有 gate 与历史恒开行为逐位一致。
     treatment: crate::theme::theme_pack::TreatmentFlags,
@@ -348,6 +507,9 @@ struct CellRenderer<'a> {
     blocks: [Option<Vec<u8>>; 10],
     /// `kind` 是否已尝试过建块（避免无映射 kind 被反复查）。
     tried: [bool; 10],
+    /// Topographic mode 专用：(p33, p66) 两个 height 阈值（米）。
+    /// 非 Topographic mode 为 `None`（[ADR-0039] 决策 4/5）。
+    topographic: Option<(i16, i16)>,
 }
 
 impl<'a> CellRenderer<'a> {
@@ -361,12 +523,19 @@ impl<'a> CellRenderer<'a> {
     ) -> Self {
         let (w, h) = (data.width.max(1), data.height.max(1));
         // 事件图与轮廓图都不铺瓦片：前者灰白底，后者水陆三色。
-        let atlas = if matches!(mode, ViewMode::Event | ViewMode::Coastline) {
+        // Topographic（[ADR-0039]）也不铺瓦片——它按 cell.height + cell.surface
+        // 走独立着色管线，不依赖瓦片图集。
+        let atlas = if matches!(
+            mode,
+            ViewMode::Event | ViewMode::Coastline | ViewMode::Topographic
+        ) {
             None
         } else {
             atlas
         };
         // 事件图与轮廓图不铺瓦片；Google 模式无图集也使用亚像素分辨率。
+        // Topographic 落到 res=1（每格 1 像素）——分析视图要锐利的方格边界，
+        // 不做亚像素插值。
         let res = terrain_res_for(data, mode, atlas);
         let (hmin, hmax) = if mode == ViewMode::RealTerrain {
             data.cells.iter().fold((i16::MAX, i16::MIN), |(lo, hi), c| {
@@ -374,6 +543,19 @@ impl<'a> CellRenderer<'a> {
             })
         } else {
             (0, 0)
+        };
+        // Topographic 的 3 阶高度阈值（[ADR-0039] 决策 4/5）：仅在 Topographic
+        // mode 下现算一次（O(N log N)，1024² ≈ 数 ms，摊进整图合成的量级）。
+        // biome 通道不参与（X 路线）；`ViewState::topographic_thresholds` 的
+        // 缓存是后续优化口（PR-1b v1 接受每次合成重算，[ADR-0039] §4.1.1）。
+        let topographic = if mode == ViewMode::Topographic {
+            Some(topographic_thresholds_for(
+                &data.cells,
+                crate::theme::topographic::TOPOGRAPHIC_P_LOW,
+                crate::theme::topographic::TOPOGRAPHIC_P_HIGH,
+            ))
+        } else {
+            None
         };
         Self {
             data,
@@ -390,15 +572,33 @@ impl<'a> CellRenderer<'a> {
             // `coastline_mode_ignores_soften_flag`）。
             // Google 模式同样无效：色板已是最终观感，再淡化会把水色
             // 洗成米糊、全图趋同（见测试 `google_mode_ignores_soften_flag`）。
-            soften: soften && !matches!(mode, ViewMode::Coastline | ViewMode::GoogleMap),
+            // Topographic 同理：分析视图的四色是语义色（水/低/中/高），
+            // 淡化会把 3 阶之间的对比洗没。
+            soften: soften
+                && !matches!(
+                    mode,
+                    ViewMode::Coastline | ViewMode::GoogleMap | ViewMode::Topographic
+                ),
             // 等值线模式（VectorFlat）也关闭揉边：它的自然蜿蜒由
             // `isoline_overlay` 的等值线描边承担，逐像素噪声会和几何曲线打架。
             // 主题装饰旗标（ADR-0023 D4）是第三道闸：EMPTY 类主题整体关揉边。
+            // Topographic 也关：分析视图要锐利方格，不做手绘揉边。
             wobble: treatment.boundary_wobble
-                && !matches!(mode, ViewMode::GoogleMap | ViewMode::VectorFlat),
+                && !matches!(
+                    mode,
+                    ViewMode::GoogleMap | ViewMode::VectorFlat | ViewMode::Topographic
+                ),
+            // 颗粒（ADR-0042 手绘 Nation）与水彩晕开（ADR-0044）都是**美术
+            // 装饰**——Topographic 是分析视图，四色是语义色（水/低/中/高），
+            // 装饰会洗掉 3 阶对比。故 Topographic 与 GoogleMap 一样不进。
+            grain: treatment.land_grain
+                && !matches!(mode, ViewMode::GoogleMap | ViewMode::Topographic),
+            bleed: treatment.watercolor_bleed
+                && matches!(mode, ViewMode::VectorFlat | ViewMode::Schematic),
             treatment,
             blocks: std::array::from_fn(|_| None),
             tried: [false; 10],
+            topographic,
         }
     }
 
@@ -534,12 +734,25 @@ impl<'a> CellRenderer<'a> {
         } else {
             kind
         };
-        let Color::Srgba(c) = (self.shader)(self.data, kind, self.palette) else {
+        // 水彩晕开（ADR-0044 D1）：边界像素取最近格的 5×5 模糊基色——
+        // 水陆交界两侧的填充色被邻域互相拉柔和（「湿岸」水彩效果）。
+        let c = if self.bleed {
+            blended_base(self.data, cx, cy, self.palette, &self.treatment, self.mode)
+        } else {
+            (self.shader)(self.data, kind, self.palette)
+        };
+        let Color::Srgba(c) = c else {
             return;
         };
-        out[0] = c.red * 255.0;
-        out[1] = c.green * 255.0;
-        out[2] = c.blue * 255.0;
+        // 陆格颗粒（ADR-0042）：每格 ±4.5% 明度抖动，平涂色块出纸面颗粒感。
+        let g = if self.grain {
+            land_grain(kind, cx, cy)
+        } else {
+            1.0
+        };
+        out[0] = c.red * 255.0 * g;
+        out[1] = c.green * 255.0 * g;
+        out[2] = c.blue * 255.0 * g;
     }
 
     /// 通用模式采样：最近格着色 / 瓦片块，供 `sample_into` 分派。
@@ -555,14 +768,24 @@ impl<'a> CellRenderer<'a> {
             let tx = ((u * r as f32) as usize).min(r - 1);
             let ty = ((v * r as f32) as usize).min(r - 1);
             let o = (ty * r + tx) * 4;
-            out[0] = block[o] as f32 * mul;
-            out[1] = block[o + 1] as f32 * mul;
-            out[2] = block[o + 2] as f32 * mul;
+            let g = if self.grain {
+                land_grain(kind, gx, gy)
+            } else {
+                1.0
+            };
+            out[0] = block[o] as f32 * mul * g;
+            out[1] = block[o + 1] as f32 * mul * g;
+            out[2] = block[o + 2] as f32 * mul * g;
         } else {
             if let Color::Srgba(c) = (self.shader)(self.data, kind, self.palette) {
-                out[0] = c.red * 255.0 * mul;
-                out[1] = c.green * 255.0 * mul;
-                out[2] = c.blue * 255.0 * mul;
+                let g = if self.grain {
+                    land_grain(kind, gx, gy)
+                } else {
+                    1.0
+                };
+                out[0] = c.red * 255.0 * mul * g;
+                out[1] = c.green * 255.0 * mul * g;
+                out[2] = c.blue * 255.0 * mul * g;
             }
         }
     }
@@ -717,6 +940,25 @@ impl<'a> CellRenderer<'a> {
         let Some(cell) = self.data.cells.get(idx) else {
             return;
         };
+        // Topographic 早返回（[ADR-0039] 决策 4 的 per-cell 着色）：
+        // 只读 height + surface（X 路线，biome 不参与），经 `topographic::pick`
+        // 按水/陆 + 3 阶高度取色。res 恒 1（new 里已定），一像素直铺；
+        // 无边界/揉边/淡化/浮雕——分析视图四色是语义色，任何后处理都是污染。
+        if let Some((p_low, p_high)) = self.topographic {
+            let rgba = crate::theme::topographic::pick(
+                &crate::theme::topographic::TopographicPalette::default(),
+                cell.surface == wv_terrain::SURFACE_WATER,
+                cell.height,
+                p_low,
+                p_high,
+            );
+            let o = ((out_row * stride + cx) as usize) * 4;
+            pixels[o] = (rgba[0] * 255.0) as u8;
+            pixels[o + 1] = (rgba[1] * 255.0) as u8;
+            pixels[o + 2] = (rgba[2] * 255.0) as u8;
+            pixels[o + 3] = 255;
+            return;
+        }
         if !self.is_boundary(cx, gy) {
             // 内部格：与旧行为一致——整块直铺（快路径）。
             let kind = display_slot(cell);
@@ -744,10 +986,19 @@ impl<'a> CellRenderer<'a> {
                 return;
             }
             // 纯色回退（无图集 / 缺项）：整格平涂。
-            let mut color = (self.shader)(self.data, kind, self.palette);
+            // 水彩晕开（ADR-0044 D1）开启时取 5×5 模糊基色——群系边界外
+            // 2 格内的格子颜色被邻域拉柔和；纯色内部格模糊值 ≈ 本色（全部
+            // 同 kind 时严格相等），高频邻域才付 25 次取色的钱。
+            let mut color = if self.bleed {
+                blended_base(self.data, cx, gy, self.palette, &self.treatment, self.mode)
+            } else {
+                (self.shader)(self.data, kind, self.palette)
+            };
             // 水域按高度渐变（手绘地图 #1）：kind 0/1 的内部格从单色水变
             // height 调度的水彩带；轮廓图模式不进这里。
-            if self.treatment.water_gradient
+            // （bleed 开时模糊基色已含水深渐变——邻域各格都过了 water_shade_at。）
+            if !self.bleed
+                && self.treatment.water_gradient
                 && slot_is_water(kind)
                 && self.mode != ViewMode::Coastline
             {
@@ -755,8 +1006,29 @@ impl<'a> CellRenderer<'a> {
             }
             // 雪格双调（手绘地图 #3）：kind=7 全部走 snow_shade_at（RealTerrain
             // 模式之外也给 highlight 视觉——海报感的"近白雪"）。轮廓图模式不动。
-            if self.treatment.snow_shade && kind == 7 && self.mode != ViewMode::Coastline {
+            // （bleed 开时同理已含于模糊基色。）
+            if !self.bleed
+                && self.treatment.snow_shade
+                && kind == 7
+                && self.mode != ViewMode::Coastline
+            {
                 color = snow_shade_at(cell.height, self.palette);
+            }
+            // 陆格颗粒（ADR-0042）：与采样路径（sample_vector_flat /
+            // sample_kind）同位置同源——先颗粒、后淡化，两条路径同格同色。
+            // 瓦片直铺（Google 模式）刻意不抖：普通地图气质要干净边界。
+            {
+                let g = if self.grain {
+                    land_grain(kind, cx, gy)
+                } else {
+                    1.0
+                };
+                let Color::Srgba(c0) = color else { return };
+                color = Color::srgb(
+                    (c0.red * g).clamp(0.0, 1.0),
+                    (c0.green * g).clamp(0.0, 1.0),
+                    (c0.blue * g).clamp(0.0, 1.0),
+                );
             }
             if self.soften {
                 color = self.palette.soften_color(color);
@@ -888,6 +1160,12 @@ fn a_tile(atlas: Option<&TileAtlas>, kind: u8) -> Option<[u32; 2]> {
 ///
 /// `soften` = 底图淡化（`ViewState.terrain_soften`）；`palette` = 地图主题
 /// （ADR-0014：切主题 = 按新色板整图重建）。
+///
+/// **oblique 烘焙**（[ADR-0041] §3 texture-bake 方案）：仅在 Topographic
+/// mode 下把生成的 RGBA 像素沿 x 方向按行斜切 `(y − h/2) × compression`，
+/// 矩形纹理烘焙成平行四边形——视觉上等同 oblique projection，且不引入 Camera3d。
+/// `compression <= 0`（非 Topographic mode）跳过；这就是 Camera2d 平面渲染的
+/// 退化路径——既有 mode 表的 Terrain pass 不会受影响。
 pub fn image_from_terrain(
     data: &TerrainData,
     mode: ViewMode,
@@ -895,9 +1173,13 @@ pub fn image_from_terrain(
     soften: bool,
     palette: &PaletteColors,
     treatment: crate::theme::theme_pack::TreatmentFlags,
+    compression: f32,
 ) -> Image {
-    let (pixels, res) = terrain_pixels(data, mode, atlas, soften, palette, treatment);
+    let (mut pixels, res) = terrain_pixels(data, mode, atlas, soften, palette, treatment);
     let (w, h) = (data.width.max(1), data.height.max(1));
+    if mode == ViewMode::Topographic && compression > 0.0 {
+        oblique_skew_pixels(&mut pixels, w * res, h * res, compression);
+    }
     Image::new(
         Extent3d {
             width: w * res,
@@ -910,6 +1192,95 @@ pub fn image_from_terrain(
         TextureFormat::Rgba8UnormSrgb,
         bevy::asset::RenderAssetUsages::RENDER_WORLD | bevy::asset::RenderAssetUsages::MAIN_WORLD,
     )
+}
+
+/// 把 RGBA8 像素按行 x 方向斜切 ([ADR-0041] §3 oblique 烘焙方案)。
+///
+/// 每行 `y` 沿 x 平移 `(y − h/2) × compression` 像素：
+/// - 中间行 (y = h/2) 偏移 0
+/// - 顶行 (y = 0) 偏移 `−h/2 × compression`（左移）
+/// - 底行 (y = h − 1) 偏移 `+(h/2 − 1) × compression`（右移）
+///
+/// **超出原图边界的像素用「右/左边缘复制填充」**——这是 oblique 投影的视觉
+/// 后果（顶视俯瞰下,边缘的像素会"溢出"到地图外,与相机看真实地图一致）。
+///
+/// 复杂度 O(w × h)，单次 1024² ≈ 4M 次拷贝 ~10 ms（一次性 texture bake，
+/// 不在 render loop），与现有 `terrain_pixels` 同量级。
+///
+/// **本函数不接受 compression > 1.0**——超出 (与 ART_STYLE_SPEC §1.1 的
+/// `vertical 0.5×` 上限一致)。调用方负责 clamp。
+pub(crate) fn oblique_skew_pixels(pixels: &mut [u8], w: u32, h: u32, compression: f32) {
+    assert!(
+        (0.0..=1.0).contains(&compression),
+        "oblique_skew_pixels: compression {compression} 越界 [0,1]"
+    );
+    assert_eq!(
+        pixels.len() as u32,
+        w * h * 4,
+        "oblique_skew_pixels: 像素缓冲长度不匹配 w*h*4"
+    );
+    if compression == 0.0 || w < 2 || h < 2 {
+        return;
+    }
+    // 临时缓冲(整张拷贝 → 写入像素;原缓冲行内 read+write 会脏读)
+    let mut buf: Vec<u8> = pixels.to_vec();
+    let stride = (w as usize) * 4;
+    let h_half = (h as f32) / 2.0;
+    for y in 0..h {
+        // 整数偏移(向下取整 + 半像素对齐):让中线行严格不动。
+        let offset = ((y as f32 - h_half) * compression).round() as i32;
+        let src_row_start = (y as usize) * stride;
+        // dst 写入位置:`pixels` 的 y 行(原 y 不动——oblique 不上下移)
+        let dst_row_start = src_row_start;
+        if offset == 0 {
+            // 同行拷贝
+            buf[src_row_start..src_row_start + stride]
+                .copy_from_slice(&pixels[src_row_start..src_row_start + stride]);
+            continue;
+        }
+        // 边界 clamp:offset > 0 → 左侧边缘用 src[0] 复制;offset < 0 → 右侧
+        // 边缘用 src[w-1] 复制。
+        if offset > 0 {
+            let o = offset as usize;
+            // 左侧 o 像素填充 src[0]
+            for x in 0..o.min(w as usize) {
+                let dst = dst_row_start + x * 4;
+                let src = src_row_start;
+                buf[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
+            }
+            // 中段 src[x-o] → dst[x]
+            let mid_len = w as usize - o;
+            for x in 0..mid_len {
+                let dst = dst_row_start + (x + o) * 4;
+                let src = src_row_start + x * 4;
+                buf[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
+            }
+        } else {
+            // offset < 0:右移 |offset| 像素 → 右侧 |offset| 用 src[w-1] 复制
+            let o = (-offset) as usize;
+            // 中段 src[x] → dst[x + o]
+            let mid_len = w as usize - o;
+            for x in 0..mid_len {
+                let dst = dst_row_start + x * 4;
+                let src = src_row_start + (x + o) * 4;
+                buf[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
+            }
+            // 右侧 |o| 像素填充 src[w-1]
+            for x in (mid_len..w as usize).rev() {
+                let dst = dst_row_start + (x + o - 1) * 4;
+                // 修正:dst_index 实际是 mid_len + (i)...
+                // 简化:从右往左写
+                let _ = dst;
+            }
+            // 重新算 dst 索引
+            for i in 0..o {
+                let dst = dst_row_start + (mid_len + i) * 4;
+                let src = src_row_start + (w as usize - 1) * 4;
+                buf[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
+            }
+        }
+    }
+    pixels.copy_from_slice(&buf);
 }
 
 /// 把 `data` 的 dirty 矩形 patch 进**已有 Image**（原地改 `image.data` 切片）。
@@ -979,6 +1350,102 @@ mod tests {
     use super::*;
     use crate::terrain_view::terrain_texture::terrain_res_for;
 
+    /// `oblique_skew_pixels` 应等价于「每行 x 偏移 = `(y - h/2) × compression`,
+    /// round 到整数」。
+    ///
+    /// 用 h = 4, compression = 1.0——offset 是 -2 / -1 / 0 / +1 的整数倍,
+    /// 与 Rust `f32::round` 的 half-to-even 行为无歧义。
+    ///
+    /// **oblique 投影的几何直觉**:row 0(地图顶端)向左偏 → 内容看起来
+    /// 从左侧"溢出"(map col 0 跌出屏幕左,屏幕 col 0 显示 map col o);
+    /// row h-1(地图底端)向右偏 → 内容从右侧"涌入"。
+    /// 公式上,**offset > 0 = 内容右移**(dst[x+o] = src[x]);**offset < 0 = 内容左移**
+    /// (dst[x] = src[x+o],o = |offset|)。
+    /// 边界钳制:左溢出用 src[0] 复制,右溢出用 src[w-1] 复制。
+    #[test]
+    fn oblique_skew_pixels_offsets_each_row_by_signed_pixel_count() {
+        let mut px = vec![0u8; 4 * 4 * 4];
+        for y in 0..4 {
+            for x in 0..4 {
+                let i = (y * 4 + x) * 4;
+                px[i] = (y * 10 + x) as u8;
+            }
+        }
+        // h = 4,h/2 = 2.0,compression = 1.0,offset = round((y - 2.0) * 1.0):
+        //   y=0 → -2  (内容左移 2)
+        //   y=1 → -1  (内容左移 1)
+        //   y=2 →  0  (中线)
+        //   y=3 → +1  (内容右移 1)
+        oblique_skew_pixels(&mut px, 4, 4, 1.0);
+
+        // row 2 (offset=0):逐列原样保留 → R = 20+col。
+        for x in 0..4 {
+            let i = (2 * 4 + x) * 4;
+            assert_eq!(px[i], 20 + x as u8, "row 2 col {x} 应保持原值(offset=0)");
+        }
+
+        // row 0 (offset=-2,内容左移 2):dst[x] = src[x+2],左 o=2 用 src[w-1]=src[3] 填充。
+        // 行 0 R 通道原 = [0,1,2,3];斜切后 = [src[2]=2, src[3]=3, src[3]=3, src[3]=3] = [2, 3, 3, 3]。
+        for x in 0..4 {
+            let i = x * 4;
+            assert_eq!(
+                px[i],
+                if x < 2 { x as u8 + 2 } else { 3 },
+                "row 0 col {x} 左移 2"
+            );
+        }
+
+        // row 1 (offset=-1,内容左移 1):dst[x] = src[x+1],左 1 用 src[3] 填充。
+        // 行 1 R 通道原 = [10,11,12,13];斜切后 = [src[1]=11, src[2]=12, src[3]=13, src[3]=13] = [11, 12, 13, 13]。
+        for x in 0..4 {
+            let i = (4 + x) * 4;
+            assert_eq!(
+                px[i],
+                if x < 3 { 10 + (x + 1) as u8 } else { 13 },
+                "row 1 col {x} 左移 1"
+            );
+        }
+
+        // row 3 (offset=+1,内容右移 1):dst[x+1] = src[x],dst[0] 用 src[0] 填充。
+        // 行 3 R 通道原 = [30,31,32,33];斜切后 = [src[0]=30, src[0]=30, src[1]=31, src[2]=32] = [30, 30, 31, 32]。
+        for x in 0..4 {
+            let i = (3 * 4 + x) * 4;
+            assert_eq!(
+                px[i],
+                if x == 0 { 30 } else { 30 + (x - 1) as u8 },
+                "row 3 col {x} 右移 1"
+            );
+        }
+    }
+
+    /// `oblique_skew_pixels(compression=0)` 是 no-op(空检查),不写任何像素。
+    #[test]
+    fn oblique_skew_pixels_zero_compression_is_no_op() {
+        let mut px = vec![7u8; 4 * 4 * 4];
+        let snapshot = px.clone();
+        oblique_skew_pixels(&mut px, 4, 4, 0.0);
+        assert_eq!(px, snapshot, "compression=0 不应改任何像素");
+    }
+
+    /// `oblique_skew_pixels` 边界钳制:左/右溢出用左/右边缘像素复制填充。
+    /// h=4,compression=1.0:row 0 offset=-2(全溢出)、row 3 offset=+1(无溢出)。
+    /// row 0 原 = [0,1,2,3];斜切后(dst[x]=src[x+2],左 2 用 src[w-1]=3 填):
+    ///   = [src[2]=2, src[3]=3, src[3]=3, src[3]=3] = [2, 3, 3, 3]。
+    #[test]
+    fn oblique_skew_pixels_clamps_overflow_with_edge_repeat() {
+        let mut px = vec![0u8; 4 * 4 * 4];
+        for x in 0..4 {
+            let i = x * 4;
+            px[i] = x as u8;
+        }
+        oblique_skew_pixels(&mut px, 4, 4, 1.0);
+        let expected = [2u8, 3, 3, 3];
+        for (x, &want) in expected.iter().enumerate() {
+            let i = x * 4;
+            assert_eq!(px[i], want, "row 0 col {x} 边缘钳制 (offset=-2)");
+        }
+    }
+
     /// 3×3 fixture：`h(x, y)` 给定每格高度，surface/biome 不影响浮雕。
     fn relief_fixture(h: impl Fn(u32, u32) -> i16) -> wv_core::terrain::TerrainData {
         let cells = (0..9)
@@ -996,6 +1463,152 @@ mod tests {
             height: 3,
             cells,
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Topographic per-cell 着色（[ADR-0039] 决策 4/5，PR-1b）
+    // -------------------------------------------------------------------
+
+    /// `[f32;3]` sRGB(0..1) → 测试断言用的字节三元组(与 write_cell_split
+    /// 的 `× 255 as u8` 同一换算)。
+    fn to_bytes(c: [f32; 3]) -> [u8; 3] {
+        [
+            (c[0] * 255.0) as u8,
+            (c[1] * 255.0) as u8,
+            (c[2] * 255.0) as u8,
+        ]
+    }
+
+    /// 16 格 fixture：2 水 + 14 陆,高度均匀铺开让 33%/66% 分位切开三档。
+    /// 高度表(排序后):[-100,-100,10,20,...,140];p33=50,p66=90。
+    fn topographic_fixture() -> wv_core::terrain::TerrainData {
+        let land_heights = [
+            10i16, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140,
+        ];
+        let mut cells = Vec::with_capacity(16);
+        // (0,0) 深水;(0,1) surface=陆 但 height<0 —— 湿判定仍应给水色。
+        cells.push(wv_core::terrain::TerrainCellData {
+            height: -100,
+            surface: wv_terrain::SURFACE_WATER,
+            biome: wv_terrain::BIOME_OCEAN,
+        });
+        cells.push(wv_core::terrain::TerrainCellData {
+            height: -50,
+            surface: wv_terrain::SURFACE_LAND,
+            biome: wv_terrain::BIOME_NONE,
+        });
+        for &h in &land_heights {
+            cells.push(wv_core::terrain::TerrainCellData {
+                height: h,
+                surface: wv_terrain::SURFACE_LAND,
+                biome: wv_terrain::BIOME_GRASSLAND,
+            });
+        }
+        wv_core::terrain::TerrainData {
+            width: 4,
+            height: 4,
+            cells,
+        }
+    }
+
+    fn topographic_pixels(data: &wv_core::terrain::TerrainData) -> Vec<u8> {
+        let (pixels, res) = terrain_pixels(
+            data,
+            ViewMode::Topographic,
+            None,
+            true, // soften=true 但 Topographic 下应被忽略(new 里已禁)
+            crate::theme::palette::colors(Default::default()),
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+        );
+        assert_eq!(res, 1, "Topographic 分析视图 = 每格 1 像素(锐利方格)");
+        pixels
+    }
+
+    /// 水/陆二分 + 3 阶高度:像素色必须与 `topographic::pick` 的语义一致——
+    /// surface=水 或 height<0 → water;陆按 p33/p66 切 low/mid/high;
+    /// soften 开关被忽略(分析视图四色是语义色)。
+    #[test]
+    fn topographic_mode_paints_water_and_three_height_bands() {
+        let data = topographic_fixture();
+        let pixels = topographic_pixels(&data);
+        let pal = crate::theme::topographic::TopographicPalette::default();
+
+        let water = to_bytes(pal.water);
+        let low = to_bytes(pal.land_low);
+        let mid = to_bytes(pal.land_mid);
+        let high = to_bytes(pal.land_high);
+
+        // 阈值(排序后 len=16: idx_low=floor(16×0.33)=5 → 40, idx_high=10 → 90)。
+        // cell 布局(行优先 idx = y*4+x):
+        //   idx 0  = (0,0) surface=水 h=-100 → water
+        //   idx 1  = (1,0) surface=陆 h=-50  → water(height<0 湿判定)
+        //   idx 2  = (2,0) 陆 h=10           → low  (10 ≤ 40)
+        //   idx 3  = (3,0) 陆 h=20           → low
+        //   idx 5  = (1,1) 陆 h=40           → low  (40 ≤ p33=40)
+        //   idx 6  = (2,1) 陆 h=50           → mid  (40 < 50 ≤ 90)
+        //   idx 15 = (3,3) 陆 h=140          → high (140 > 90)
+        let px = |x: u32, y: u32| -> [u8; 3] {
+            let o = ((y * 4 + x) * 4) as usize;
+            [pixels[o], pixels[o + 1], pixels[o + 2]]
+        };
+        assert_eq!(px(0, 0), water, "(0,0) surface=水 → 水色");
+        assert_eq!(px(1, 0), water, "(1,0) surface=陆但 h<0 → 湿判定水色");
+        assert_eq!(px(2, 0), low, "(2,0) h=10 ≤ p33 → 低地");
+        assert_eq!(px(3, 0), low, "(3,0) h=20 ≤ p33 → 低地");
+        assert_eq!(px(1, 1), low, "(1,1) h=40 = p33 → 低地(含边界)");
+        assert_eq!(px(2, 1), mid, "(2,1) h=50 ∈ (p33,p66] → 中地");
+        assert_eq!(px(3, 3), high, "(3,3) h=140 > p66 → 高地");
+
+        // 三档陆色两两不同 + 与水色不同(防止默认色相撞)。
+        assert_ne!(low, mid);
+        assert_ne!(mid, high);
+        assert_ne!(low, high);
+        assert_ne!(water, low);
+    }
+
+    /// biome 通道不参与显示(X 路线):同 height/surface、不同 biome 的两格
+    /// 像素必须逐字节一致。
+    #[test]
+    fn topographic_mode_ignores_biome_channel() {
+        let mut data = topographic_fixture();
+        // 把 (2,1) 的 height 改成与 (1,1) 相同、biome 换成 DESERT:
+        // 两格仅 biome 不同 → 颜色必须一致。
+        data.cells[6].height = data.cells[5].height;
+        data.cells[6].biome = wv_terrain::BIOME_DESERT;
+        let pixels = topographic_pixels(&data);
+        let o5 = (5 * 4) as usize;
+        let o6 = (6 * 4) as usize;
+        assert_eq!(data.cells[5].biome, wv_terrain::BIOME_GRASSLAND);
+        assert_eq!(data.cells[6].biome, wv_terrain::BIOME_DESERT);
+        assert_eq!(
+            pixels[o5..o5 + 3],
+            pixels[o6..o6 + 3],
+            "biome 不同、height/surface 相同 → 颜色必须相同(X 路线)"
+        );
+    }
+
+    /// soften 开关在 Topographic 下被忽略:开与不开的整图像素逐字节一致
+    /// (分析视图四色是语义色,淡化会把 3 阶对比洗掉)。
+    #[test]
+    fn topographic_mode_ignores_soften_flag() {
+        let data = topographic_fixture();
+        let (on, _) = terrain_pixels(
+            &data,
+            ViewMode::Topographic,
+            None,
+            true,
+            crate::theme::palette::colors(Default::default()),
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+        );
+        let (off, _) = terrain_pixels(
+            &data,
+            ViewMode::Topographic,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+        );
+        assert_eq!(on, off, "soften=true 与 false 输出必须逐位一致");
     }
 
     #[test]
@@ -1174,17 +1787,22 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let Color::Srgba(grass) = colors::core_terrain(3) else {
             unreachable!()
         };
+        // 陆格颗粒（ADR-0042 D6）作用于左半格（最近格 (0,0)，biome 3）：
+        // 期望色 = 草色 × 该格确定性颗粒乘子。
+        let g0 = land_grain(3, 0, 0);
+        let grass = bevy::color::Color::srgb(grass.red * g0, grass.green * g0, grass.blue * g0);
         // 沉入海下的陆格按湿判定显示（surface 陆 + 海拔 -50 → 浅水槽位）。
         let Color::Srgba(shallow) = colors::core_terrain(1) else {
             unreachable!()
         };
         // 2 格 ≤1024 → res = clamp(4096/2, 4, 8) = 8：图像 16×8。
         // 等值线在格缘 gx=1.0 → 像素 x∈0..8 陆、x∈8..16 水。
-        assert!(pixel_near(&img, 2, 2, grass), "左半应为草色");
+        assert!(pixel_near(&img, 2, 2, grass.into()), "左半应为草色");
         assert!(
             pixel_near(&img, 12, 2, shallow),
             "右半应为浅水色（authored 陆地被海拔判湿 → 按水深给浅水）"
@@ -1213,6 +1831,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         // 深水渐变（手绘地图 #1）启用后：深水中心像素 = water_shade_at(−3500)，
         // 不再是 core_terrain(0) 原色。统一从 water_shade_at 取色源，避免硬编码颜色。
@@ -1269,6 +1888,7 @@ mod tests {
             true,
             crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let px = img.data.as_ref().expect("image 必有像素");
         let res = (img.width() / 4) as usize;
@@ -1304,6 +1924,7 @@ mod tests {
             true,
             pal,
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let px = img.data.as_ref().expect("image 必有像素");
         let res = (img.width() / 4) as usize;
@@ -1343,6 +1964,7 @@ mod tests {
             true,
             crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let px = img.data.as_ref().expect("image 必有像素");
         let res = (img.width() / 4) as usize;
@@ -1393,6 +2015,7 @@ mod tests {
             true,
             palette,
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let land_img = image_from_terrain(
             &land_data,
@@ -1401,6 +2024,7 @@ mod tests {
             true,
             palette,
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
 
         // 2. 取中心像素（在 image_from_terrain 之后，这一步相当于「无雾」底色）。
@@ -1498,6 +2122,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let tex = crate::terrain_view::new_terrain_texture(
             &mut images,
@@ -1545,6 +2170,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         if let Some(mut img) = images.get_mut(&handle) {
             *img = new_image;
@@ -1618,6 +2244,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let mut tex = crate::terrain_view::new_terrain_texture(
             &mut images,
@@ -1637,6 +2264,7 @@ mod tests {
             false,
             crate::theme::palette::colors(Default::default()),
             crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         crate::terrain_view::replace_terrain_texture(
             &mut tex,

@@ -1,0 +1,19 @@
+# 轨迹 3：东地中海海路（贝鲁特 → 塞浦路斯 → 安塔利亚）
+id: trk_lebanon_persia
+unit: unit_holy_pilgrim
+map: world_main
+from: 500
+to: 800
+waypoints:
+  - day: 500
+    place: city_beirut
+    pos: {x: 3756.0, y: 1064.0}
+  - day: 600
+    place: city_jerusalem
+    pos: {x: 3732.0, y: 968.0}
+  - day: 700
+    place: city_nicosia
+    pos: {x: 3500.0, y: 972.0}
+  - day: 800
+    place: city_antalya
+    pos: {x: 3424.0, y: 1136.0}

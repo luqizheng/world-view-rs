@@ -83,7 +83,14 @@ pub fn run(config: AppConfig) {
                 filter: "naga=warn,wgpu=error,icu_provider=off".into(),
                 level: bevy::log::Level::INFO,
                 ..Default::default()
-            }),
+            })
+            // 编辑器无任何音频功能：不装 AudioPlugin。理由（2026-10-20 实测）：
+            // 音频设备中途切换 / 摘除时 rodio 抛 `audio stream error: The
+            // requested device is no longer available`，进程随之退出且日志只剩
+            // 启动行——用户在长时间看图时被无预警关窗。拔掉这个永不使用的
+            // 插件即整类崩溃源消失（未来加音效时再按需装回来）。
+            .build()
+            .disable::<bevy::audio::AudioPlugin>(),
     )
     .add_plugins(EguiPlugin::default())
     // 状态栏 FPS 读数（Figma #3:21001 右段）：DefaultPlugins 只提供
@@ -157,6 +164,13 @@ pub fn run(config: AppConfig) {
     // 选择工具会话态（2026-10-17 选择工具 spec；drill::register 也会 init——
     // 这里显式补一份，资源幂等，双保险防装配顺序遗漏）
     .init_resource::<wv_render::state::SelectionState>()
+    // 单格编辑工具会话态（[ADR-0040]）：commit_edit_cell_on_click 与
+    // apply_pending_commands 都 ResMut 它——漏 init 即启动期 panic
+    // （2026-10-20 实机验收抓到：测试 fixture 手动 init 掩盖了装配遗漏）。
+    .init_resource::<wv_render::state::EditCellState>()
+    // Cell 编辑器的「单格 / 批量」工作模式（[ADR-0040] 补 B）——面板系统
+    // ResMut 它,漏 init 即启动期 panic(同 EditCellState 的教训)。
+    .init_resource::<crate::ui::cell_editor_panel::CellPanelMode>()
     .init_resource::<ui::ContinentDialog>()
     .init_resource::<ui::city_intent::CityIntentDialog>()
     // 森林意图的命名对话框（选择工具 M4）：环 + 钉住图 id 自持在对话框里。
@@ -236,6 +250,10 @@ pub fn run(config: AppConfig) {
                 camera::collect_brush_stroke,
                 // 编辑（笔触 → 命令 → History）
                 editing::commit_stroke_on_release,
+                // 单格编辑（[ADR-0040]）：点击 → cell_pick → EditCellState.selected
+                editing::commit_edit_cell_on_click,
+                // 批量选区（2026-10-20）：多边形闭合 → 栅格化贴合方格
+                editing::sync_region_cells.after(camera::track_cursor_world),
                 streets::commit_street_click,
                 // 撤销 / 重做不再在这里单独监听 Ctrl+Z：快捷键统一由
                 // `ui_shell::hotkeys` 收（那里已经处理了「输入框聚焦时失效」），
@@ -271,6 +289,8 @@ pub fn run(config: AppConfig) {
             editing::refresh_project_diagnostics,
             // 街道图层缓存：当前图变化时重读（ADR-0010），先于 sync_vector_layers。
             streets::reload_street_cache,
+            // 地物符号 PNG 发起加载（一次）。
+            wv_render::vector_layers::ensure_landmark_png_loaded,
             // 矢量叠加层（道路 + POI）：在 compute_projection 之后跑。
             vector_layers::sync_vector_layers,
             // 街道名标注：消费同一份 StreetLayerCache，在街道画完之后对齐标签。
@@ -385,6 +405,7 @@ pub fn run(config: AppConfig) {
             // v0.3：Inspector 整体右移后绘在最后（右上角，离顶栏最近），
             // 避免被左列 / 中列面板遮挡。
             ui::panel_inspector,
+            ui::panel_cell_editor,
             ui::panel_validation,
             // 「新建地图」对话框（CommandId::NewMap 打开；居中模态窗）。
             ui::new_map_dialog,
@@ -542,6 +563,7 @@ fn setup_terrain_texture_after_world(
         view.terrain_soften,
         crate::theme::palette::colors(view.map_palette),
         wv_render::theme::theme_pack::builtin::for_palette(view.map_palette).treatment,
+        0.0,
     );
     commands.insert_resource(terrain_view::new_terrain_texture(
         &mut images,

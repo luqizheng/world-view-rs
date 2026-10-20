@@ -1,0 +1,15 @@
+# 事件 1：塞维利亚的婚礼（外交联姻）
+# 时间：day 75..85（半开区间 [75, 85)）
+id: evt_seville_wedding
+name: 塞维利亚的婚礼
+from: 75
+to: 85
+location:
+  place: city_seville
+participants:
+  - char_isabel
+  - char_marcus
+outcome: 王室与元老院通过联姻结成政治联盟，塞维利亚-罗马同盟正式缔约。
+effects:
+  - kind: custom
+    note: 塞维利亚与罗马元老院缔结同盟（seville-rome alliance）

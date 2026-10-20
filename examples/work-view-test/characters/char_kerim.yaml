@@ -1,0 +1,17 @@
+# 人物：凯里姆（安纳托利亚叛军领袖）
+id: char_kerim
+name: 凯里姆·托罗斯
+alias: 山口之鹰
+traits: [暴躁, 重义, 军事天才]
+attributes:
+  faction: anatolian_rebels
+state_spans:
+  - from: 1
+    to: 895
+    place: city_antalya
+    title: 矿工头领
+    power: 0.3
+  - from: 895
+    place: city_antalya
+    title: 叛军领袖
+    power: 0.6

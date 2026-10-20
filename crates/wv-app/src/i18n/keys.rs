@@ -307,6 +307,20 @@ pub enum I18nKey {
     ViewModeEvent,
     /// 「轮廓图」Coastline
     ViewModeCoastline,
+    /// 「等高分析」Topographic（[ADR-0039]，水/陆 + height 3 阶着色）
+    ViewModeTopographic,
+
+    // ── 单格编辑 Inspector 折叠区（[ADR-0040] §决策 6） ─────────────
+    /// "Cell" 折叠区标题
+    CellInspectorSection,
+    /// "坐标" 标签
+    CellInspectorCoord,
+    /// "地表" 标签（水 / 陆二选一）
+    CellInspectorSurface,
+    /// "海拔" 标签（米）
+    CellInspectorHeight,
+    /// "群系" 标签（按 BiomeFamily 分组下拉）
+    CellInspectorBiome,
 
     // ── 图层面板（state::Panel::title） ─────────────────────────────
     /// 「地图树」面板标题
@@ -769,6 +783,50 @@ pub enum I18nKey {
     CmdZoomOut,
     /// 「沉浸模式（只留地图与时间轴）」
     CmdToggleImmersive,
+    /// 「单格编辑」工具（[ADR-0040]，快捷键 C；CellMap 工作区核心工具）
+    CmdToolEditCell,
+    /// 「Cell 编辑器」面板标题（独立面板，2026-10-20）
+    PanelCellEditor,
+    /// 空态标题（未选中格）
+    CellEditorEmptyTitle,
+    /// 空态提示（先点地图选格）
+    CellEditorEmptyHint,
+    /// 批量区「N 格」计数
+    BatchCellsCount,
+    /// 批量区「取消选区」
+    BatchCellsClear,
+    /// 批量区「海拔增减」
+    BatchCellsHeightDelta,
+    /// 批量区「应用」
+    BatchCellsApply,
+    /// 模式切换「单格」
+    CellEditorModeSingle,
+    /// 模式切换「批量」
+    CellEditorModeBatch,
+    /// 批量读数「海拔」
+    BatchStatsHeight,
+    /// 批量读数「群系」
+    BatchStatsBiome,
+    /// 批量空态标题（未圈选）
+    BatchCellsEmptyTitle,
+    /// 批量空态提示（先用 V 圈选）
+    BatchCellsEmptyHint,
+    /// identity 副标「网格单元 · 已选中」（金色）
+    CellEditorSubtitle,
+    /// 位置段 heading
+    CellInspectorPosition,
+    /// 「只读坐标」徽标
+    CellEditorReadonly,
+    /// 海拔范围提示
+    CellEditorHeightRange,
+    /// 群系「互斥单选」徽标
+    CellEditorBiomeExclusive,
+    /// 尾注「仅编辑当前选中的 cell」
+    CellEditorScopeHint,
+    /// 地表分段「水」
+    CellEditorWater,
+    /// 地表分段「陆」
+    CellEditorLand,
     /// 「打开命令面板」
     CmdOpenCommandPalette,
     /// 「保存工程」
@@ -799,6 +857,8 @@ pub enum I18nKey {
     CmdTogglePanelRegion,
     /// 「显隐检视器面板」
     CmdTogglePanelInspector,
+    /// 「显隐 Cell 编辑器面板」
+    CmdTogglePanelCellEditor,
     /// 「显隐校验面板」
     CmdTogglePanelValidation,
     /// 「重置所有面板位置」

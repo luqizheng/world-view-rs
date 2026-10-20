@@ -154,9 +154,17 @@ pub enum CommandId {
     GenerateContinent,
     /// 地图工具条单选工具（2026-10-19 Figma `3:21848`）。
     ///
-    /// **唯一入口**：工具条瓷砖与 V/H/B/E/L/M/P 快捷键都排这一条，由分发器
+    /// **唯一入口**：工具条瓷砖与 V/H/B/E/L/M/P 快捷键都排这一条,由分发器
     /// 统一做互斥（开一个工具 = 关掉其它工具），避免两套逻辑漂移。
     SelectMapTool(MapToolId),
+    /// 单格编辑工具的提交命令（[ADR-0040]）。Inspector 字段改完写
+    /// `EditCellState.pending`,本命令唤醒 `apply_pending_commands`
+    /// 消费 pending → `EditCellCommand::apply`。
+    ///
+    /// 与 `MapToolId::EditCell`（激活工具）正交——一个是模式切,一个是 IPC。
+    /// 故挂 `CommandId` 上,而不是 `MapToolId`（后者仅承载互相斥的
+    /// 工具槽）。
+    CommitEditCell,
 }
 
 /// 地图工具条的工具标识（[`CommandId::SelectMapTool`] 的载荷）。
@@ -184,6 +192,13 @@ pub enum MapToolId {
     MeasureEraser,
     /// 打开「生成大陆」面板（不是互斥工具，只开门）。
     Continent,
+    /// 单格编辑（[ADR-0040]）：点选一格改 surface/height/biome 三通道。
+    ///
+    /// 与 `Brush` 是**两类工具**：`Brush` 是批改（沿 stroke 改多格）,
+    /// `EditCell` 是最 detail 的精细编辑器（一次一格,每格 1 command）——
+    /// 故**不入 `BrushTool` 枚举,与现有工具平级进 `MapToolId`**。
+    /// 由 `ui::cell_pick` 做命中测试,由 `inspector_panel` 渲染字段编辑 UI。
+    EditCell,
 }
 
 /// 一条命令：注册表的条目。
@@ -371,6 +386,15 @@ impl CommandRegistry {
             I18nKey::CmdOpenCommandPalette,
             Some("Ctrl+K"),
         );
+        // 单格编辑工具（[ADR-0040]）：与瓷砖/快捷键同源，排 SelectMapTool
+        // 由分发器做互斥。dock 瓷砖被 16 系统参数上限卡住（ADR-0040 §6），
+        // 命令面板 + 快捷键 C 是现行入口。
+        push(
+            CommandId::SelectMapTool(MapToolId::EditCell),
+            CommandGroup::Edit,
+            I18nKey::CmdToolEditCell,
+            Some("C"),
+        );
         push(
             CommandId::Save,
             CommandGroup::Edit,
@@ -404,6 +428,7 @@ impl CommandRegistry {
                 Panel::Faction => I18nKey::CmdTogglePanelFaction,
                 Panel::Region => I18nKey::CmdTogglePanelRegion,
                 Panel::Inspector => I18nKey::CmdTogglePanelInspector,
+                Panel::CellEditor => I18nKey::CmdTogglePanelCellEditor,
                 Panel::Validation => I18nKey::CmdTogglePanelValidation,
             };
             push(

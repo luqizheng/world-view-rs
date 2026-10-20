@@ -159,7 +159,10 @@ pub fn sync_map_frame(
     let mat_grid = materials.add(
         crate::theme::palette::colors(view.map_palette)
             .line_on_dark
-            .with_alpha(0.35),
+            // ADR-0042 手绘风校准（外部诊断有效项）：0.35 的深线横贯全图
+            // 会打断画面整体感（「编辑器 Debug 感」的来源之一）。参考手绘
+            // 图的 graticule 是隐约可辨的淡墨线——压到 0.10，仍可读但不抢戏。
+            .with_alpha(0.10),
     );
     let step = size / 4.0;
     // 3 条竖线（v1, v2, v3）：x = min.x + step*i，i ∈ 1..4。

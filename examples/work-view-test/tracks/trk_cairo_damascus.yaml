@@ -1,0 +1,19 @@
+# 轨迹 4：北非 → 黎凡特（开罗 → 班加西 → 的黎波里 → 贝鲁特）
+id: trk_cairo_damascus
+unit: unit_atlas_caravan
+map: world_main
+from: 200
+to: 700
+waypoints:
+  - day: 200
+    place: city_cairo
+    pos: {x: 3968.0, y: 44.0}
+  - day: 350
+    place: city_benghazi
+    pos: {x: 3072.0, y: 156.0}
+  - day: 500
+    place: city_tripoli
+    pos: {x: 2456.0, y: 200.0}
+  - day: 700
+    place: city_beirut
+    pos: {x: 3756.0, y: 1064.0}

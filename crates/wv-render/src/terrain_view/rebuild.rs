@@ -34,6 +34,15 @@ pub struct SynthCtx {
     pub map: Option<wv_core::Id>,
     /// 内容指纹（height+kind FNV-1a，与等值线缓存同源）。
     pub data_hash: u64,
+    /// Topographic mode 专用：(p33, p66) 两个 height 阈值（米）。
+    ///
+    /// **仅 Topographic mode 有效**；其它 mode = `(0, 0)` 哨兵。
+    /// 任务提交时由 [`rebuild_texture_on_mode_change`] 计算（先查
+    /// `ViewState::topographic_thresholds` 缓存，未命中按本图 cell heights
+    /// 临时求一次）；本字段保证后台着色纯函数无资源依赖。
+    ///
+    /// [ADR-0039]: ../../../../docs/adr/ADR-0039-topographic-viewmode.md
+    pub topographic_thresholds: (i16, i16),
 }
 
 /// 后台合成结果：像素 + 每格分辨率 + 指纹。
@@ -132,6 +141,7 @@ pub fn rebuild_texture_on_mode_change(
         palette: view.map_palette,
         map: Some(node.id.clone()),
         data_hash: terrain_data_hash(data),
+        topographic_thresholds: (0, 0), // PR-1 占位；PR-1b 由 `topographic_thresholds_for` 填真值。
     };
     // 已有同指纹任务在跑：等它落地，不重复排。
     if pending.task.is_some() && pending.ctx.as_ref() == Some(&ctx) {
@@ -357,6 +367,7 @@ mod tests {
             palette: crate::theme::palette::MapPalette::default(),
             map: Some(map.clone()),
             data_hash: terrain_data_hash(data),
+            topographic_thresholds: (0, 0),
         }
     }
 

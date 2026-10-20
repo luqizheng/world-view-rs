@@ -11,7 +11,9 @@ description = "World View 渲染层：Bevy 地图渲染、渲染配色与视图�
 # `app` feature 打开后才有全部渲染模块；wv-app 的 `app` feature 会传递打开它。
 [features]
 default = []
-app = ["dep:bevy", "dep:bevy_egui"]
+# `wv-theme` 随 app 一起打开：它非 optional 依赖 bevy（ADR-0043 D1/D2），
+# 而本 crate 的红线是「不带 feature 时零 Bevy 依赖树」（ADR-0020）。
+app = ["dep:bevy", "dep:bevy_egui", "dep:wv-theme"]
 
 [dependencies]
 wv-core = { workspace = true }
@@ -24,3 +26,5 @@ bevy = { workspace = true, optional = true }
 # camera / drill / brush_cursor 需要读「指针是否悬在 UI 上」（bevy_egui 的 EguiContext）；
 # 纯渲染路径不使用 egui 面板（那是 wv-app 的事）。
 bevy_egui = { workspace = true, optional = true }
+# 主题层（色板 / 装饰旗标 / 覆盖物规则 / 主题包契约）——ADR-0043 D2。
+wv-theme = { workspace = true, optional = true }

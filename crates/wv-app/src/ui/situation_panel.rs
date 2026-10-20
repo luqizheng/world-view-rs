@@ -71,9 +71,7 @@ pub fn panel_situation(
                     list_item(
                         ui,
                         &shell,
-                        crate::theme::colors::palette_to_color32(
-                            crate::theme::colors::ACCENT_EVENT,
-                        ),
+                        crate::theme::palette_to_color32(crate::theme::colors::ACCENT_EVENT),
                         &s.name,
                         &meta,
                         false,

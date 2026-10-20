@@ -134,7 +134,7 @@ fn kind_color(kind: EntityKind, pal: &palette::PaletteColors) -> egui::Color32 {
         EntityKind::Event => pal.dot_event,
         EntityKind::StreetSegment => return egui::Color32::GRAY,
     };
-    crate::theme::colors::palette_to_color32(c)
+    crate::theme::palette_to_color32(c)
 }
 
 /// POI hover 文字色（手绘地图 #12）：与 `kind_color` 同色族但更深的
@@ -145,11 +145,9 @@ fn kind_text_color(kind: EntityKind, pal: &palette::PaletteColors) -> egui::Colo
         EntityKind::Region => pal.text_region,
         EntityKind::Faction => pal.text_faction,
         EntityKind::Event => pal.text_event,
-        EntityKind::StreetSegment => {
-            return crate::theme::colors::palette_to_color32(pal.label_fill)
-        }
+        EntityKind::StreetSegment => return crate::theme::palette_to_color32(pal.label_fill),
     };
-    crate::theme::colors::palette_to_color32(c)
+    crate::theme::palette_to_color32(c)
 }
 
 /// 从 `WorldProjection.world` 解析 `(name, subtitle)`。

@@ -1,6 +1,4 @@
 //! 待批准：本文件在 `app` feature 下才编译。
-#![cfg(feature = "app")]
-
 //! 暮色旧纸色板 —— 「日间古舆图」（[`colors`]）的暗调同槽位镜像（ADR-0016）。
 //!
 //! ## 职责
@@ -132,11 +130,11 @@ mod tests {
             (s.red + s.green + s.blue) / 3.0
         };
         assert!(
-            lum(DUSK_CORE_TERRAIN[3]) < lum(crate::theme::colors::CORE_TERRAIN[3]),
+            lum(DUSK_CORE_TERRAIN[3]) < lum(crate::colors::CORE_TERRAIN[3]),
             "暮色草色应比日间暗"
         );
         assert!(
-            lum(DUSK_LABEL_FILL) > lum(crate::theme::colors::LABEL_FILL),
+            lum(DUSK_LABEL_FILL) > lum(crate::colors::LABEL_FILL),
             "暗纸上的文字应比日间浅"
         );
     }

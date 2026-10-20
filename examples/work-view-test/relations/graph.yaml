@@ -1,0 +1,33 @@
+# 关系网（work-view-test：5 势力 + 1 内部联盟 + 2 世仇 + 1 朝贡）
+# 关系类型沿 base/relation：alliance / war / tributary / neutral
+# relation 字段可缺省（=neutral）
+relations:
+  - a: crown_of_seville
+    b: roman_senate
+    kind: alliance
+    weight: 0.5
+    note: 塞维利亚与罗马通过联姻结盟
+
+  - a: roman_senate
+    b: atlas_guild
+    kind: war
+    weight: 1.0
+    note: 元老院向阿特拉斯开战（控制 room_andreagio）
+
+  - a: atlas_guild
+    b: holy_order_of_st_andrew
+    kind: alliance
+    weight: 0.6
+    note: 行会资助圣安德烈教国（东地中海海路让利）
+
+  - a: holy_order_of_st_andrew
+    b: anatolian_rebels
+    kind: war
+    weight: 1.0
+    note: 教国与安纳托利亚叛军对战
+
+  - a: anatolian_rebels
+    b: roman_senate
+    kind: tributary
+    weight: 0.4
+    note: 叛军向元老院纳贡（避免两线作战）

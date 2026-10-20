@@ -129,9 +129,7 @@ pub fn panel_event(
                     list_item(
                         ui,
                         &shell,
-                        crate::theme::colors::palette_to_color32(
-                            crate::theme::colors::ACCENT_EVENT,
-                        ),
+                        crate::theme::palette_to_color32(crate::theme::colors::ACCENT_EVENT),
                         e.id.as_str(),
                         &meta,
                         false,

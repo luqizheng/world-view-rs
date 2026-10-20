@@ -33,3 +33,24 @@ examples/guangdong/
 
 # Figma 截图与工作区副产物（只供人工/截图验收，不入仓）
 .figma-ref/
+
+# work-view-test：保留 convert.py（数据转换脚本），忽略其产物与下载源
+examples/work-view-test/data/ne/convert.py
+examples/work-view-test/data/coastlines.geojson
+examples/work-view-test/data/rivers.geojson
+examples/work-view-test/data/seas.geojson
+examples/work-view-test/data/ne/*.shp
+examples/work-view-test/data/ne/*.dbf
+examples/work-view-test/data/ne/*.prj
+examples/work-view-test/data/ne/*.shx
+examples/work-view-test/data/ne/*.cpg
+examples/work-view-test/data/ne/ne_*.geojson
+examples/work-view-test/data/ne/listing.json
+
+# 实机验收临时产物（截图 / 点击脚本）
+shot-*.png
+shot-*.bmp
+wvclick.py
+
+# 验收期临时 python 脚本
+patch_*.py

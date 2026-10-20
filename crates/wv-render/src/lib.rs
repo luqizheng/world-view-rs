@@ -42,6 +42,7 @@ pub mod brush_cursor;
 pub mod buildings;
 #[cfg(feature = "app")]
 pub mod camera;
+pub mod cell_selection;
 #[cfg(feature = "app")]
 pub mod drill;
 #[cfg(feature = "app")]
@@ -57,12 +58,15 @@ pub mod label_halo;
 #[cfg(feature = "app")]
 pub mod label_pick;
 #[cfg(feature = "app")]
+pub mod landmark_symbols;
+#[cfg(feature = "app")]
 pub mod layer_frame;
 #[cfg(feature = "app")]
 pub mod map_frame;
 #[cfg(feature = "app")]
 pub mod measurement;
 #[cfg(feature = "app")]
+pub mod paper_overlay;
 pub mod plugins;
 #[cfg(feature = "app")]
 pub mod recipe;

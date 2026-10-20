@@ -1,0 +1,19 @@
+# 事件 2：阿尔及尔围城（罗马元老院 vs 阿特拉斯行会）
+# 时间：day 295..360
+id: evt_alger_siege
+name: 阿尔及尔围城
+from: 295
+to: 360
+location:
+  place: city_algeria
+participants:
+  - char_marcus
+  - char_yusuf
+outcome: 元老院舰队围攻阿特拉斯行会重镇阿尔及尔三个月，最终城破行会南撤。
+effects:
+  - kind: claim_region
+    region: city_algeria
+    at: 360
+  - kind: move_character
+    character: char_yusuf
+    to: city_tunis

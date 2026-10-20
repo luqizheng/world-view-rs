@@ -7007,6 +7007,7 @@ dependencies = [
  "wv-overture",
  "wv-render",
  "wv-terrain",
+ "wv-theme",
  "wv-theme-chinese-ink",
  "wv-ui",
 ]
@@ -7062,6 +7063,7 @@ dependencies = [
  "serde_yaml",
  "wv-core",
  "wv-terrain",
+ "wv-theme",
 ]
 
 [[package]]
@@ -7069,10 +7071,18 @@ name = "wv-terrain"
 version = "0.1.0"
 
 [[package]]
+name = "wv-theme"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "wv-terrain",
+]
+
+[[package]]
 name = "wv-theme-chinese-ink"
 version = "0.1.0"
 dependencies = [
- "wv-render",
+ "wv-theme",
 ]
 
 [[package]]

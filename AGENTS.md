@@ -52,6 +52,7 @@ wv-app  →  wv-edit  ───┐
                                 wv-terrain（与 wv-core 平行，纯数据层叶子）
                                 wv-overture（与 wv-core 平行，CLI 数据导入辅助）
                                 wv-ui（与 wv-render 平行，egui 控件 + 界面令牌叶子，ADR-0026）
+                                wv-theme（与 wv-render 平行，色板 + 主题包契约叶子，ADR-0043）
 ```
 
 > `wv-edit` 与 `wv-render` 是 **双子 crate**——前者写、后者读，**互不依赖**，由 `wv-app` 同时装配。
@@ -65,7 +66,17 @@ wv-app  →  wv-edit  ───┐
 | `wv-edit` | `wv-core`, `wv-terrain` | ❌ 直接读写文件（那是 `wv-io` 的职责）<br>❌ 渲染库<br>❌ 反向依赖 `wv-render` |
 | `wv-render` | `wv-core`, `wv-terrain`, `bevy`, `bevy_egui`, `egui_extras`（均 `optional = true`） | ❌ 直接读写文件<br>❌ 反向依赖 `wv-edit` / `wv-app`<br>❌ 直接持有 `wv-edit::EditHistory`（intent→dispatcher 翻译必走 wv-app）<br>❌ 直接构造 `wv_edit::EditCommand`（同上）|
 | `wv-ui` | `bevy`, `bevy_egui`, `egui_extras`（均**非 optional**，ADR-0026） | ❌ `wv-core` / `wv-terrain` / `wv-io` / `wv-edit` / `wv-render` / `wv-app` 任何依赖<br>❌ 文件系统 / 网络 / i18n / 世界色板 |
+| `wv-theme` | `bevy`（**非 optional**，ADR-0043 D1）、`wv-terrain`（纯数据叶子，取 `BiomeFamily`） | ❌ `wv-core` / `wv-io` / `wv-edit` / `wv-render` / `wv-app` 任何依赖<br>❌ `bevy_egui`（egui 是界面关注点，桥接在 wv-app 侧）<br>❌ 文件系统 / 网络 |
 | `wv-app` | `wv-edit`, `wv-render`, `wv-io`, `wv-core`, `wv-terrain`, `wv-overture`, `wv-ui` | ❌ 作为世界的**权威存储**（source of truth 是磁盘 YAML）<br>❌ 绕过 `wv-edit` 直接改世界（必须走 `EditCommand` / `History`）<br>❌ 在 `System`（包括 wv-render 注册的）中 `ResMut<wv-edit::EditHistory>` 或 `ResMut<wv-app state>` 的世界数据<br>❌ 持有「当前值」形态的世界状态（应经 `TimelineQuery` 求值） |
+
+> **`wv-theme` 补记**（2026-10-20，ADR-0043）：主题层（色板 / 装饰旗标 /
+> 覆盖物规则 / 主题包契约）从 `wv-render` 整建制独立成平行叶子 crate
+> `wv-theme`。`wv-render` 侧只留**重导出**（`crate::theme::colors::X` 等
+> 既有路径零改动）与**渲染运行时**（字体装配、树冠采样、镜头分带）。
+> 外部主题 crate（如 `wv-theme-chinese-ink`）只依赖 `wv-theme`，
+> **不再依赖 `wv-render`**——「加新风格 = 加新 crate、零改渲染层源码」
+> 至此成立。`wv-render` 对 `wv-theme` 的依赖是 **optional**，随 `app`
+> feature 打开（不带 feature 仍零 Bevy 依赖树）。
 
 > **`wv-ui` 补记**（2026-10-17，ADR-0026）：由 `ui/widgets` + `theme/{ui_tokens,ui_theme}` +
 > `ui/shell.rs::UiShell` 整建制独立而成的平行 leaf crate（先于 wv-render 补记阅读亦可）。

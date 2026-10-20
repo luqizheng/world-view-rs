@@ -88,6 +88,12 @@ const FOOTER_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"), " — World
 ///
 /// 渲染条件：没有打开工程、且不在启动加载中、且命令面板 / 新建工程对话框
 /// 都未打开——这三层"让位"避免与启动加载遮罩或更聚焦的浮层叠绘。
+///
+/// **加载失败时也让位**：`StartupLoadRequest` 在帧末被 `startup_load` 取走后，
+/// 下一帧起「无工程」条件成立——若还画欢迎页，就会把居中的
+/// [`crate::ui_shell::load_error_card`] 盖住（全屏底色 + 卡片压在同为
+/// `Order::Foreground` 的错误窗之上），用户只看到欢迎页、看不到失败原因。
+/// 让位后错误卡片是唯一可见的浮层，作者能立刻读到路径或 YAML 错误。
 #[allow(clippy::too_many_arguments)]
 pub fn welcome_screen(
     mut ctxs: EguiContexts,
@@ -100,7 +106,7 @@ pub fn welcome_screen(
     mut new_project: ResMut<NewProjectDialog>,
     startup_req: Res<StartupLoadRequest>,
 ) {
-    if projection.has_open_project() || startup_req.0.is_some() {
+    if projection.has_open_project() || startup_req.0.is_some() || projection.load_error.is_some() {
         return;
     }
     if palette.open || new_project.open {

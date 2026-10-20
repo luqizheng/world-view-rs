@@ -1,0 +1,18 @@
+# 人物：伊莎贝尔（塞维利亚王室）
+id: char_isabel
+name: 伊莎贝尔·德·塞维利亚
+alias: 南方女王
+traits: [果断, 务实, 护短]
+attributes:
+  faction: crown_of_seville
+born_at: 1
+state_spans:
+  - from: 1
+    to: 76
+    place: city_seville
+    title: 公主
+    power: 0.4
+  - from: 76
+    place: city_seville
+    title: 塞维利亚女王
+    power: 0.9

@@ -5,6 +5,13 @@ panels:
     width: 274.0
     height: 220.0
     collapsed: false
+    visible: false
+  cell_editor:
+    x: 992.0
+    y: 310.0
+    width: 264.0
+    height: 198.0
+    collapsed: false
     visible: true
   character:
     x: 992.0
@@ -13,13 +20,6 @@ panels:
     height: 260.0
     collapsed: false
     visible: false
-  compass:
-    x: 332.0
-    y: 56.0
-    width: 216.0
-    height: 300.0
-    collapsed: false
-    visible: true
   event:
     x: 652.0
     y: 56.0
@@ -68,7 +68,7 @@ panels:
     width: 1256.0
     height: 164.0
     collapsed: false
-    visible: true
+    visible: false
   tree:
     x: 12.0
     y: 56.0
@@ -87,3 +87,9 @@ theme: dark
 density: cozy
 map_theme: daylight
 language: zh
+map_dock: vertical
+map_snap: false
+map_dock_pos: null
+map_zoom_strip_pos:
+- 662.39996
+- -709.60004

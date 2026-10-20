@@ -1,112 +1,28 @@
-//! 主题覆盖物（theme overlay）的**纯数据核**：每主题的群系族规则、镜头分带
-//! 交叉淡化、近带确定性采样。
+//! 主题覆盖物的**渲染运行时**：镜头分带交叉淡化 + 近带确定性采样。
 //!
 //! ## 职责
-//! - [`FeatureRule`] / [`FeatureOverlaySet`] —— 一个主题包对一类群系族
-//!   （v1 只有森林族）的演绎参数：远带晕 + 近带符号；
 //! - [`overlay_far_blend`] —— 同一张图内按缩放（世界单位 : 像素）求远 / 近带
 //!   交叉淡化系数的纯函数；
 //! - [`forest_sites`] —— 地界 ∩ 栅格网格的确定性采样（树冠落位）。
 //!
-//! ## 边界（不做什么）
-//! - **不画任何东西**：本模块零 Bevy 类型、零 ECS 访问；渲染系统
-//!   （`crate::feature_overlays`，Task 6）消费本模块的输出；
-//! - **不做时间比较**：地界由 `wv_core::place_territory_at` 求值后传入
-//!   （AGENTS §3）；本模块只看到「此刻的环」；
-//! - **不引入 `rand`**：抖动是手写 splitmix64 哈希，跨进程 / 跨平台稳定
-//!   （重开工程树冠不跳变）。
+//! ## 边界
+//! - **数据契约在 wv-theme**（`FeatureRule` / `FeatureOverlaySet`，ADR-0043 D4）——
+//!   本模块经 `pub use` 重导出它们，既有调用点路径不变。
 
 #![cfg(feature = "app")]
 
 use wv_core::geometry::point_in_ring;
 use wv_core::terrain::{TerrainCellData, TerrainData};
 
-/// 群系族（ADR-0032 D2 规则键）。**经本模块再导出**：外部主题 crate 只依赖
-/// wv-render（ADR-0023 契约），不必直接摸 wv-terrain。
-pub use wv_terrain::biome::BiomeFamily;
+// 数据契约重导出（ADR-0043 D4）：`crate::theme::overlays::{FeatureRule, …}`
+// 路径不变，外部主题 crate 则从 `wv_theme::overlays` 取。
+pub use wv_theme::overlays::{BiomeFamily, FeatureOverlaySet, FeatureRule};
 
 /// 抖动幅度占采样间距的比例（`±0.35 × spacing_wu`）。
 ///
 /// 上界必须 < 0.5：候选点按 `spacing_wu` 均布，抖动不到半格才能保证每个候选
 /// 仍落在自己的采样格附近，不互相穿插、密度均匀。
 const JITTER_FRACTION: f32 = 0.35;
-
-/// 单个群系族的演绎参数（远带晕 + 近带符号）。
-///
-/// **归属**：一个主题包对一族地理事实的「长相」；作者只声明事实
-/// （`Place.biome`，经 [`wv_terrain::biome::family_of`] 归族），不直接写这些值。
-/// v1 为代码常量，YAML 化随 ADR-0023 M3 推迟。
-///
-/// **贴图字段**（D12 资产契约）：写主题资产根下的相对路径，由渲染侧映射到
-/// 编译期嵌入的 PNG（`feature_overlays::embedded_texture`）。`None` = 纯色路径；
-/// 键未知 / 解码失败同样回退纯色——缺资产不崩、不空帧。水墨包暂留 `None`，
-/// 待美术校准后接线。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct FeatureRule {
-    /// 远带地界晕的 RGB（sRGB 字节）。渲染色 = 本色 × alpha，不随 palette 走。
-    pub halo_color: [u8; 3],
-    /// 远带晕浓度（0..=1）；近带交叉淡化时由渲染系统乘 `0.4 + 0.6×blend`。
-    pub halo_alpha: f32,
-    /// 近带树冠符号的 RGB（sRGB 字节）。
-    pub symbol_color: [u8; 3],
-    /// 近带符号的屏幕尺寸（像素）；渲染时乘 `ViewState.scale` 换世界尺寸。
-    pub symbol_size_px: f32,
-    /// 近带采样间距（世界单位）——同时是抖动幅度的基准（见 [`JITTER_FRACTION`]）。
-    pub symbol_spacing_wu: f32,
-    /// 近带符号贴图（相对主题资产根的路径；3 格横向图集）。`None` = 纯色 quad。
-    pub symbol_texture: Option<&'static str>,
-    /// 远带晕贴图（按地界包围盒拉伸的单张图章）。`None` = 纯色多边形。
-    pub halo_texture: Option<&'static str>,
-}
-
-/// 一套主题的群系族 → 演绎规则映射（ADR-0032 D2：规则键 = 群系族）。
-///
-/// 族划分穷尽冻结群系表（[`BiomeFamily`]），字段**一次定型**：未来加规则
-/// 内容不破此结构（外部主题 crate 的 API 稳定面，ADR-0023 D2）。
-///
-/// **缺省回退是硬要求**（设计稿 §6.4）：主题没给某族规则时
-/// [`Self::rule_for`] 返回 `None`，渲染侧仍画地界晕（回退色）+ 地界 + 名字
-/// ——事实不因换主题而消失。v1 只有森林族有内置演绎，其余族留 `None`
-/// 待美术校准。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct FeatureOverlaySet {
-    /// 森林族（森林/丛林/热带雨林）的规则；`None` = 本主题不演绎。
-    pub forest: Option<FeatureRule>,
-    /// 草原族（平原/草原/绿洲/稀树草原）的规则。
-    pub grassland: Option<FeatureRule>,
-    /// 干旱族（戈壁/沙漠/盐碱地）的规则。
-    pub desert: Option<FeatureRule>,
-    /// 湿地族（沼泽/湿地）的规则。
-    pub wetland: Option<FeatureRule>,
-    /// 寒带族（苔原/雪原）的规则。
-    pub cold: Option<FeatureRule>,
-    /// 高地族（丘陵/山地）的规则。
-    pub highland: Option<FeatureRule>,
-    /// 水域族（海洋/湖泊/河流）的规则。
-    pub water: Option<FeatureRule>,
-    /// 道路族（道路）的规则。
-    pub road: Option<FeatureRule>,
-}
-
-impl FeatureOverlaySet {
-    /// 按群系族取规则。
-    ///
-    /// 族无规则返回 `None`，走「回退色晕 + 地界 + 名字」的回退，不静默消失。
-    /// 写一条族规则即覆盖同族全部群系——森林族一条规则同时服务森林、丛林、
-    /// 热带雨林三种 `biome`（旧数字键「写 1 漏 10/11」的碎裂就此消除）。
-    pub fn rule_for(&self, family: BiomeFamily) -> Option<&FeatureRule> {
-        match family {
-            BiomeFamily::Forest => self.forest.as_ref(),
-            BiomeFamily::Grassland => self.grassland.as_ref(),
-            BiomeFamily::Desert => self.desert.as_ref(),
-            BiomeFamily::Wetland => self.wetland.as_ref(),
-            BiomeFamily::Cold => self.cold.as_ref(),
-            BiomeFamily::Highland => self.highland.as_ref(),
-            BiomeFamily::Water => self.water.as_ref(),
-            BiomeFamily::Road => self.road.as_ref(),
-        }
-    }
-}
 
 /// 远带交叉淡化系数：`scale` 越大（视野越远）返回值越接近 1。
 ///

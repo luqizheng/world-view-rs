@@ -1,0 +1,26 @@
+# Curated JRPG 演示世界（ADR-0037 模板 + M2 装饰层 + 你的手作内容）
+#
+# 这是「只跑一次就要像样」的演示工程，名字定位：work-view-test——以后 demo /
+# 视觉验收 / 新模块试跑都复用这一个工程，不再新建一次性工程。
+#
+# 底座：Natural Earth 110m 公共领域 → wv-overture 管线 →
+#       gen_work_view_world（crates/wv-app/examples/） → terrain.bin。
+# 内容：手作 30 实体（地名+势力+事件+路线）—— 你的活。
+# 风格：现成 JRPG A 调色板 + M1 装饰（Nation 山形/沙漠/浮雕）+ M2 河流/城市。
+#
+# 运行：
+#   wv load examples/work-view-test
+#   wv validate examples/work-view-test
+#   cargo run -p wv-app --example gen_work_view_world -- examples/work-view-test
+
+name: 策展 JRPG 演示世界
+version: "0.1"
+schema_version: 2
+root_map: world_main
+timeline_range:
+  from: 1
+  to: 1000
+template:
+  kind: cold_north
+  seed: 1792478400636418100
+  rivers_seed: 9716322831225324577

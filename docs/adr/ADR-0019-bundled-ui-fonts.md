@@ -130,3 +130,17 @@ macOS 探测 PingFang，Linux 探测 Noto Sans CJK；**不打包任何字体文�
 1. 600 字重接线（第二份文件 + egui 命名族 + 面板标题位点）；
 2. ◈◧⬡ 面板头图标 SVG 化（清掉最后的替换符 ◻）；
 3. 字重 / 字形视觉验收（与 web 原型逐屏比对）。
+
+---
+
+## 追记（2026-10-20，ADR-0042 D4：画布标签书法体）
+
+原决策「只用 Regular、Inter + Noto 两个文件」**追加**（不改原文）第三份字体：
+
+- **霞鹜文楷（LXGW WenKai）Regular v1.530**（SIL OFL-1.1，GitHub Releases 下载，
+  25.9 MB）——**只用于画布标签**（地名 / 街道名 / 测量标注，Bevy `Text2d` 经
+  `LoadedFonts::label_handle`；egui 侧注册命名族 `wv_map_label` 备用）。
+- **UI 面板仍走 Inter + Noto Sans SC**——楷体做界面正文可读性差，Proportional
+  族顺序不变。
+- 背景：手绘 JRPG 参考图（ADR-0042）的画布需要书法体地名；这是 D4 用户拍板
+  的资产决策（10–20MB 级入库）。

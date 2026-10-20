@@ -68,6 +68,25 @@ pub struct ProjectionFrame {
     /// 河流派生缓存键：`(当前图 id, rivers_seed)`。`None` = 失效。
     /// 世界编辑 / 钻取换图 / 栅格换图都会重算；纯相机运动零工作。
     pub river_key: Option<(String, u64)>,
+    /// 本帧地物符号（rank ≥ 2 的地点，视图空间坐标）：国家档与更近档都画，
+    /// 靠视口裁剪防密集点（参照 `place_dots` A1 索引）。
+    pub landmark_dots: Vec<LandmarkDot>,
+}
+
+/// 一个地物符号的渲染数据。`kind` 决定 `sync_landmarks` 烘哪个顶点流。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LandmarkKind {
+    Citadel,
+    Town,
+}
+
+/// `LandmarkKind` 稳定数组（合批键 / 遍历用）。
+pub const LANDMARK_KINDS: [LandmarkKind; 2] = [LandmarkKind::Citadel, LandmarkKind::Town];
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LandmarkDot {
+    pub pos: Vec2,
+    pub kind: LandmarkKind,
 }
 
 /// 一个 POI 点标的渲染数据。
@@ -163,6 +182,7 @@ pub fn compute_projection(
     frame.track_heads.clear();
     frame.track_hollow_starts.clear();
     frame.place_dots.clear();
+    frame.landmark_dots.clear();
 
     // 路段列缓存门（ADR-0030 D5a）：段坐标在根图帧系，不随相机平移/缩放变，
     // 只有世界编辑 / 钻取换图 / 栅格换图 / Road 图层可见性翻转才重算。
@@ -336,6 +356,23 @@ pub fn compute_projection(
                             if (dot.pos.x - cx).abs() <= half.x && (dot.pos.y - cy).abs() <= half.y
                             {
                                 frame.place_dots.push(dot);
+                            }
+                        }
+                        // 地物符号：rank ≥ 2 走程序化插画（rank 1 路网交点仍按点标）。
+                        // rank 3 永远画国家级，rank 2 全档都画（参考图期望：全球档可见城市符号）。
+                        let p = &world.distances.places[*i as usize];
+                        if let (Some(_), Some(_)) = (p.x, p.y) {
+                            let rank = p.effective_rank();
+                            if rank >= 2 {
+                                let pos = grid.map_to_view(Vec2::new(p.x.unwrap(), p.y.unwrap()));
+                                if (pos.x - cx).abs() <= half.x && (pos.y - cy).abs() <= half.y {
+                                    let kind = if rank >= 3 {
+                                        LandmarkKind::Citadel
+                                    } else {
+                                        LandmarkKind::Town
+                                    };
+                                    frame.landmark_dots.push(LandmarkDot { pos, kind });
+                                }
                             }
                         }
                     }
