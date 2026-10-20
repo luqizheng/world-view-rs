@@ -579,50 +579,23 @@ fn render_batch_section(
     divider(ui, &shell);
     ui.add_space(6.0);
 
-    // ── 海拔：整体设值（绝对）──
+    // ── 海拔：**只做增减**（相对量）──
+    // 用户 2026-10-20 裁定：批量编辑只提供「整体加减多少米」，
+    // **不提供「统一设为某值」**——绝对设值会让「这一片本来多高」的信息
+    // 被覆盖掉，且与「读数区已显示平均海拔」重复。
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(t(loc, I18nKey::CellInspectorHeight))
                 .size(font_size::SMALL)
                 .color(shell.t2()),
         );
-        let mut abs = stats.avg_height as f32;
-        ui.allocate_ui(egui::vec2(120.0, 28.0), |ui| {
-            numeric_input_bounded(
-                ui,
-                shell,
-                &mut abs,
-                "m",
-                10.0,
-                i16::MIN as f32,
-                i16::MAX as f32,
-            );
-        });
-        if super::widgets::button(
-            ui,
-            shell,
-            ButtonContent::Text(t(loc, I18nKey::BatchCellsSet)),
-            ButtonStyle::Raised,
-            None,
-            true,
-        )
-        .clicked()
-        {
-            let target = abs.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
-            apply_batch(projection, edit, &map, edit_cell, |c| {
-                wv_core::terrain::TerrainCellData {
-                    height: target,
-                    ..c
-                }
-            });
-        }
-    });
-    ui.add_space(4.0);
-    // ── 海拔：增减（相对）──
-    ui.horizontal(|ui| {
         let mut delta = 0.0f32;
-        ui.allocate_ui(egui::vec2(120.0, 28.0), |ui| {
-            numeric_input_bounded(ui, shell, &mut delta, "m", 10.0, -32767.0, 32767.0);
+        // push_id:数值输入与单格海拔输入必须不同 id（egui 同 scope 同 id 会
+        // 弹「First use of widget ID」告警并让控件状态互串）。
+        ui.push_id("batch_height_delta", |ui| {
+            ui.allocate_ui(egui::vec2(120.0, 28.0), |ui| {
+                numeric_input_bounded(ui, shell, &mut delta, "m", 10.0, -32767.0, 32767.0);
+            });
         });
         if super::widgets::button(
             ui,

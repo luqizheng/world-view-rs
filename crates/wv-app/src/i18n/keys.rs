@@ -769,8 +769,6 @@ pub enum I18nKey {
     BatchCellsHeightDelta,
     /// 批量区「应用」
     BatchCellsApply,
-    /// 批量区「设为」（海拔整体设值）
-    BatchCellsSet,
     /// 模式切换「单格」
     CellEditorModeSingle,
     /// 模式切换「批量」
