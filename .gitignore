@@ -51,3 +51,6 @@ examples/work-view-test/data/ne/listing.json
 shot-*.png
 shot-*.bmp
 wvclick.py
+
+# 验收期临时 python 脚本
+patch_*.py
