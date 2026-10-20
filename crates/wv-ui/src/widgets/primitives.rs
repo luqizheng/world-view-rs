@@ -706,6 +706,12 @@ pub const ICON_MOVE_VERTICAL: egui::ImageSource<'static> =
 /// 工具条切换为横向 —— Lucide `move-horizontal`。
 pub const ICON_MOVE_HORIZONTAL: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/move-horizontal.svg");
+/// 只读指示（Cell 编辑器「位置」段，Lucide `lock-keyhole`）。
+pub const ICON_LOCK_KEYHOLE: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/lock-keyhole.svg");
+/// 选区范围指示（Cell 编辑器尾注，Lucide `focus`）。
+pub const ICON_FOCUS: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/focus.svg");
 pub const ICON_RULER: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/ruler.svg");
 pub const ICON_SQUARE: egui::ImageSource<'static> =

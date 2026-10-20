@@ -57,10 +57,10 @@ pub use button::{
     ToolIcon,
 };
 pub use controls::{
-    check_row, checkbox_state, dropdown_box, numeric_input, option_menu, progress, radio,
-    search_input, slider, slider_row, slider_row_brush, slider_row_disabled, tabs, text_area,
-    value_box, value_unit, CheckState, DialogWindow, FieldInput, FieldSelect, PropertyRow,
-    SliderTone, Switch,
+    check_row, checkbox_state, dropdown_box, numeric_input, numeric_input_bounded, option_menu,
+    progress, radio, search_input, slider, slider_row, slider_row_brush, slider_row_disabled, tabs,
+    text_area, value_box, value_unit, CheckState, DialogWindow, FieldInput, FieldSelect,
+    PropertyRow, SliderTone, Switch,
 };
 pub use floater::{FloatWindow, HeadIcon};
 pub use layer_panel::{
@@ -99,6 +99,7 @@ pub use primitives::{
     ICON_EYE,
     ICON_EYE_OFF,
     ICON_FLAG,
+    ICON_FOCUS,
     ICON_FOLDER_OPEN,
     ICON_FOLDER_PLUS,
     ICON_GLOBE,
@@ -113,6 +114,7 @@ pub use primitives::{
     ICON_LINE,
     ICON_LIST,
     ICON_LOCK,
+    ICON_LOCK_KEYHOLE,
     ICON_MAGNET,
     ICON_MAP,
     ICON_MAP_PIN,

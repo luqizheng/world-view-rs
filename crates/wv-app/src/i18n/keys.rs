@@ -769,6 +769,18 @@ pub enum I18nKey {
     BatchCellsHeightDelta,
     /// 批量区「应用」
     BatchCellsApply,
+    /// identity 副标「网格单元 · 已选中」（金色）
+    CellEditorSubtitle,
+    /// 位置段 heading
+    CellInspectorPosition,
+    /// 「只读坐标」徽标
+    CellEditorReadonly,
+    /// 海拔范围提示
+    CellEditorHeightRange,
+    /// 群系「互斥单选」徽标
+    CellEditorBiomeExclusive,
+    /// 尾注「仅编辑当前选中的 cell」
+    CellEditorScopeHint,
     /// 地表分段「水」
     CellEditorWater,
     /// 地表分段「陆」

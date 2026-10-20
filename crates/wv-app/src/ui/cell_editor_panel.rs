@@ -1,22 +1,24 @@
-//! Cell 编辑器面板（[ADR-0040] · 2026-10-20 独立面板化）。
+//! Cell 编辑器面板（[ADR-0040] · 2026-10-20 Figma `99-293` 对齐版）。
 //!
-//! ## 职责
-//! - `panel_cell_editor` —— CellMap 工作区的核心编辑面板：选中格的
-//!   **坐标（只读）/ 地表（水陆分段）/ 海拔（数值输入）/ 群系（下拉）**。
-//! - 任一字段变更即提交 `EditCellCommand`（每格 1 command 进撤销栈，
-//!   [ADR-0040] §决策 8；stale 快照校验防叠加冲突）。
+//! ## 设计对照（Figma `world view rs` node `99-293` "Cell 编辑器 · 选中属性"）
 //!
-//! ## 控件口径（用户 2026-10-20 要求：空间尽量用 wv-ui）
-//! - 壳：[`float_window`]（与 Region / Faction 面板同款浮动壳）；
-//! - 头：[`identity_header`]（色点 + 标题 + 副标题）；
-//! - 地表：[`segmented`]（水 / 陆两段，与顶栏 Browse/Edit 同款分段控件）；
-//! - 海拔：[`numeric_input`]（等宽字体 + 单位后缀，步长 1 m）；
-//! - 群系：[`option_menu`]（NONE + 20 编号平铺，冻结表顺序）；
-//! - 只读坐标：[`PropertyRow`]（label + value_box）。
+//! 288px 暗色浮动面板，自上而下：
+//! 1. **Selected cell 头**：`float_window`（图标/标题/把手/折叠 chevron 已由壳画）
+//!    + identity 两行（`Cell · X, Y` 主标 + `网格单元 · 已选中` 金色副标）；
+//! 2. **位置**：heading「位置」+ 右侧 `lock-keyhole 只读坐标`；X/Y 两列
+//!    Mono 标签 + [`value_box`] 只读值；
+//! 3. **地表**：heading + 右侧 [`segmented`]（水 / 陆地，段宽 64）；
+//! 4. **海拔**：heading + [`numeric_input_bounded`]（i16 米全域钳制，stepper
+//!    步长 1）+ 下方范围提示；
+//! 5. **群系**：heading「群系 / 互斥单选」+ 设计稿 7 组 [`radio`]
+//!    （森林系/干旱系/湿寒系/高地草原系/水系/道路河流/无群系），选中即改；
+//! 6. 尾注：`focus` 图标 + 「仅编辑当前选中的 cell」。
 //!
-//! ## 与 Inspector 的关系
-//! Inspector 的 Cell 折叠区**退役**（本面板取代）——CellMap 工作区编排改为
-//! 只开本面板。Inspector 回归纯「世界实体」检查器。
+//! 批量编辑区（多边形选区）保留在面板底部（divider 之下），设计稿未画、
+//! 为 2026-10-20 批量需求的延续。
+//!
+//! 控件全部出自 wv-ui（用户 2026-10-20 要求）；缺的
+//! [`numeric_input_bounded`] 已新建为公共组件。
 
 #![cfg(feature = "app")]
 
@@ -30,10 +32,12 @@ use crate::theme::ui_tokens::font_size;
 use crate::ui_layout::LayoutFile;
 
 use super::shell::UiShell;
-use super::widgets::float_window;
+use super::widgets::{
+    divider, empty_state, float_window, value_box, ButtonContent, ButtonStyle, ICON_FOCUS,
+    ICON_LOCK_KEYHOLE,
+};
 use wv_render::state::EditCellState;
-use wv_ui::widgets::controls::{numeric_input, option_menu};
-use wv_ui::widgets::primitives::{divider, identity_header};
+use wv_ui::widgets::controls::{numeric_input_bounded, option_menu, radio};
 use wv_ui::widgets::segmented_control::segmented;
 
 /// Cell 编辑器面板。
@@ -74,26 +78,16 @@ pub fn panel_cell_editor(
                     current_loc.0,
                 );
                 divider(ui, &shell);
+                ui.add_space(6.0);
             }
-            // ── 头：选中态 / 空态 ──
+            // ── 单格：选中态 / 空态 ──
             match edit_cell.selected {
                 Some((gx, gy)) => {
-                    identity_header(
-                        ui,
-                        &shell,
-                        shell.accent(),
-                        super::widgets::ICON_MAP,
-                        &format!("Cell ({gx}, {gy})"),
-                        t(current_loc.0, I18nKey::CellInspectorCoord),
-                        None,
-                    );
-                    divider(ui, &shell);
-                    // 借位隔离：读 before → 放掉不可变借用 → 控件闭包内可
-                    // `&mut projection.world` 提交（与 Inspector 版同款手法）。
-                    let before = read_cell(&projection, &edit_cell, gx, gy);
-                    let Some(before) = before else {
+                    let Some(before) = read_cell(&projection, &edit_cell, gx, gy) else {
                         return;
                     };
+                    render_identity(ui, &shell, gx, gy);
+                    divider(ui, &shell);
                     render_fields(
                         ui,
                         &shell,
@@ -104,9 +98,27 @@ pub fn panel_cell_editor(
                         before,
                         current_loc.0,
                     );
+                    divider(ui, &shell);
+                    // 尾注（Figma "Selection scope"）：focus 图标 + 提示。
+                    ui.horizontal(|ui| {
+                        let y = ui.cursor().center().y;
+                        let icon_x = ui.cursor().left() + 6.0;
+                        ui.put(
+                            egui::Rect::from_min_size(
+                                egui::pos2(icon_x, y - 6.0),
+                                egui::vec2(12.0, 12.0),
+                            ),
+                            egui::Image::new(ICON_FOCUS).tint(shell.t3()),
+                        );
+                        ui.label(
+                            egui::RichText::new(t(current_loc.0, I18nKey::CellEditorScopeHint))
+                                .size(font_size::MICRO)
+                                .color(shell.t3()),
+                        );
+                    });
                 }
                 None => {
-                    super::widgets::empty_state(
+                    empty_state(
                         ui,
                         &shell,
                         "▣",
@@ -118,6 +130,219 @@ pub fn panel_cell_editor(
             }
         },
     );
+}
+
+/// identity 两行（Figma "Object identity"）：主标 `Cell · X, Y` + 金副标。
+fn render_identity(ui: &mut egui::Ui, shell: &UiShell, gx: i32, gy: i32) {
+    ui.add_space(2.0);
+    ui.label(
+        egui::RichText::new(format!("Cell · {gx}, {gy}"))
+            .size(13.0)
+            .color(shell.t1()),
+    );
+    ui.label(
+        egui::RichText::new(t(crate::i18n::Locale::Zh, I18nKey::CellEditorSubtitle))
+            .size(font_size::MICRO)
+            .color(shell.accent()),
+    );
+    ui.add_space(4.0);
+}
+
+/// 设计稿单格四段（位置 / 地表 / 海拔 / 群系）。
+#[allow(clippy::too_many_arguments)]
+fn render_fields(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    projection: &mut WorldProjection,
+    edit_cell: &EditCellState,
+    edit: &mut crate::edit::editing::EditHistory,
+    (gx, gy): (i32, i32),
+    before: wv_core::terrain::TerrainCellData,
+    loc: crate::i18n::Locale,
+) {
+    let mut next = before;
+    ui.add_space(6.0);
+
+    // ── 位置（只读）：heading + 🔒 只读坐标；X / Y 两列 ──
+    section_heading(ui, shell, t(loc, I18nKey::CellInspectorPosition), true);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 12.0;
+        for (label, v) in [("X", gx), ("Y", gy)] {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.label(
+                    egui::RichText::new(label)
+                        .monospace()
+                        .size(11.0)
+                        .color(shell.t3()),
+                );
+                value_box(ui, shell, &v.to_string(), None, false);
+            });
+        }
+    });
+    ui.add_space(8.0);
+
+    // ── 地表：heading + 分段（水 / 陆地）──
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(t(loc, I18nKey::CellInspectorSurface))
+                .size(font_size::SMALL)
+                .color(shell.t2()),
+        );
+        segmented(
+            ui,
+            shell,
+            "cell_editor_surface",
+            64.0,
+            &[
+                t(loc, I18nKey::CellEditorWater),
+                t(loc, I18nKey::CellEditorLand),
+            ],
+            if before.surface == wv_terrain::SURFACE_WATER {
+                0
+            } else {
+                1
+            },
+            font_size::SMALL,
+            |i| {
+                next.surface = if i == 0 {
+                    wv_terrain::SURFACE_WATER
+                } else {
+                    wv_terrain::SURFACE_LAND
+                };
+            },
+        );
+    });
+    ui.add_space(8.0);
+
+    // ── 海拔：heading + stepper 数值（i16 米全域钳制）+ 范围提示 ──
+    let mut height_f = before.height as f32;
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(t(loc, I18nKey::CellInspectorHeight))
+                .size(font_size::SMALL)
+                .color(shell.t2()),
+        );
+        ui.allocate_ui(egui::vec2(168.0, 28.0), |ui| {
+            numeric_input_bounded(
+                ui,
+                shell,
+                &mut height_f,
+                "m",
+                1.0,
+                i16::MIN as f32,
+                i16::MAX as f32,
+            );
+        });
+    });
+    next.height = height_f.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+    ui.label(
+        egui::RichText::new(t(loc, I18nKey::CellEditorHeightRange))
+            .size(font_size::MICRO)
+            .color(shell.t3()),
+    );
+    ui.add_space(8.0);
+    divider(ui, &shell);
+    ui.add_space(6.0);
+
+    // ── 群系：heading（互斥单选）+ 设计稿 7 组 radio ──
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(t(loc, I18nKey::CellInspectorBiome))
+                .size(font_size::SMALL)
+                .color(shell.t2()),
+        );
+        ui.label(
+            egui::RichText::new(t(loc, I18nKey::CellEditorBiomeExclusive))
+                .size(font_size::MICRO)
+                .color(shell.t3()),
+        );
+    });
+    ui.add_space(4.0);
+    for group in biome_groups() {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for (num, name) in group.iter() {
+                if radio(ui, shell, next.biome == *num, name).clicked() {
+                    next.biome = *num;
+                }
+            }
+        });
+        ui.add_space(4.0);
+    }
+
+    // ── 即改即提交（每格 1 command，[ADR-0040] §决策 8）──
+    if next != before {
+        push_cell_edit(
+            edit,
+            &mut projection.world,
+            edit_cell,
+            (gx, gy),
+            before,
+            next,
+        );
+    }
+}
+
+/// 段落 heading 行：左标题 + 右侧可选「🔒 只读」徽标（Figma Position heading）。
+fn section_heading(ui: &mut egui::Ui, shell: &UiShell, title: &str, readonly_badge: bool) {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(title)
+                .size(font_size::SMALL)
+                .color(shell.t2()),
+        );
+        if readonly_badge {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let text = t(crate::i18n::Locale::Zh, I18nKey::CellEditorReadonly);
+                ui.label(
+                    egui::RichText::new(text)
+                        .size(font_size::MICRO)
+                        .color(shell.t3()),
+                );
+                let y = ui.cursor().center().y;
+                let icon_x = ui.cursor().left() + 5.0;
+                ui.put(
+                    egui::Rect::from_min_size(egui::pos2(icon_x, y - 5.0), egui::vec2(10.0, 10.0)),
+                    egui::Image::new(ICON_LOCK_KEYHOLE).tint(shell.t3()),
+                );
+            });
+        }
+    });
+}
+
+/// 设计稿的群系 7 组（顺序、分组与 Figma `99-356` "Biome options" 一致）。
+/// 每项 = (冻结编号, 显示名)；编号全部引用 `wv_terrain` 冻结常量，防手滑。
+fn biome_groups() -> &'static [&'static [(u8, &'static str)]] {
+    use wv_terrain::*;
+    &[
+        &[
+            (BIOME_FOREST, "森林"),
+            (BIOME_JUNGLE, "丛林"),
+            (BIOME_TROPICAL_RAINFOREST, "热带雨林"),
+        ],
+        &[
+            (BIOME_GOBI, "戈壁"),
+            (BIOME_DESERT, "沙漠"),
+            (BIOME_SALT_FLAT, "盐碱地"),
+            (BIOME_OASIS, "绿洲"),
+        ],
+        &[
+            (BIOME_SWAMP, "沼泽"),
+            (BIOME_WETLAND, "湿地"),
+            (BIOME_TUNDRA, "苔原"),
+            (BIOME_SNOWFIELD, "雪原"),
+        ],
+        &[
+            (BIOME_HILLS, "丘陵"),
+            (BIOME_SAVANNA, "稀树草原"),
+            (BIOME_PLAINS, "平原"),
+            (BIOME_GRASSLAND, "草原"),
+        ],
+        &[(BIOME_OCEAN, "海洋"), (BIOME_LAKE, "湖泊")],
+        &[(BIOME_ROAD, "道路"), (BIOME_RIVER, "河流")],
+        &[(BIOME_NONE, "无群系")],
+    ]
 }
 
 /// 批量编辑区（多边形选区贴合 N 格）：海拔增减 / 设水陆 / 设群系，
@@ -132,8 +357,6 @@ fn render_batch_section(
     selection: &mut SelectionState,
     loc: crate::i18n::Locale,
 ) {
-    use wv_ui::widgets::{button, ButtonContent, ButtonStyle};
-
     let n = edit_cell.region_cells.len();
     // ── 头：选区规模 + 取消按钮 ──
     ui.horizontal(|ui| {
@@ -142,7 +365,7 @@ fn render_batch_section(
                 .size(font_size::SMALL)
                 .color(shell.accent()),
         );
-        if button(
+        if super::widgets::button(
             ui,
             shell,
             ButtonContent::Text(t(loc, I18nKey::BatchCellsClear)),
@@ -153,14 +376,10 @@ fn render_batch_section(
         .clicked()
         {
             selection.cancel();
-            // cancel 只清 SelectionState；region_cells 由 sync_region_cells
-            // 下帧清空（closed=None 分支）。此处顺手清，省一帧高亮残留。
-            // （edit_cell 是 Res 只读，改不了——直接借 selection 清即可。）
         }
     });
     ui.add_space(4.0);
 
-    // 读当前格值构建 changes 的借用隔离：先取 last_map_id。
     let Some(map) = edit_cell.last_map_id.clone() else {
         return;
     };
@@ -172,9 +391,9 @@ fn render_batch_section(
             .color(shell.t2()),
     );
     let mut delta = 0.0f32;
-    numeric_input(ui, shell, &mut delta, "m", 10.0);
+    numeric_input_bounded(ui, shell, &mut delta, "m", 10.0, -32767.0, 32767.0);
     if delta != 0.0
-        && button(
+        && super::widgets::button(
             ui,
             shell,
             ButtonContent::Text(t(loc, I18nKey::BatchCellsApply)),
@@ -201,7 +420,7 @@ fn render_batch_section(
                 .size(font_size::SMALL)
                 .color(shell.t2()),
         );
-        if button(
+        if super::widgets::button(
             ui,
             shell,
             ButtonContent::Text(t(loc, I18nKey::CellEditorWater)),
@@ -218,7 +437,7 @@ fn render_batch_section(
                 }
             });
         }
-        if button(
+        if super::widgets::button(
             ui,
             shell,
             ButtonContent::Text(t(loc, I18nKey::CellEditorLand)),
@@ -297,6 +516,41 @@ fn apply_batch(
     }
 }
 
+/// 单格提交（stale 快照校验 + History 落盘；每格 1 command）。
+fn push_cell_edit(
+    edit: &mut crate::edit::editing::EditHistory,
+    world: &mut wv_core::World,
+    edit_cell: &EditCellState,
+    (gx, gy): (i32, i32),
+    before: wv_core::terrain::TerrainCellData,
+    after: wv_core::terrain::TerrainCellData,
+) {
+    let Some(map) = edit_cell.last_map_id.clone() else {
+        return;
+    };
+    let current = world.terrain_of(&map).and_then(|t| {
+        let w = t.width as i32;
+        let h = t.height as i32;
+        if gx < 0 || gy < 0 || gx >= w || gy >= h {
+            return None;
+        }
+        t.cells
+            .get((gy as usize) * (w as usize) + (gx as usize))
+            .copied()
+    });
+    if current != Some(before) {
+        bevy::log::warn!("EditCell commit 拒收: cell ({gx}, {gy}) 当前值已不是面板上看到的值");
+        return;
+    }
+    let cmd = wv_edit::command::EditCellCommand::new(map, gx, gy, before, after);
+    let mut tx = wv_edit::history::Transaction::new();
+    tx.push(Box::new(cmd));
+    match edit.history.commit(world, tx) {
+        Ok(dirty) => edit.record_dirty(dirty),
+        Err(e) => bevy::log::warn!("EditCell commit 失败: {e}"),
+    }
+}
+
 /// 读选中格当前值（`EditCellState.last_map_id` 定图）。
 fn read_cell(
     projection: &WorldProjection,
@@ -318,128 +572,7 @@ fn read_cell(
         .copied()
 }
 
-/// 四字段渲染 + 即改即提交。
-#[allow(clippy::too_many_arguments)]
-fn render_fields(
-    ui: &mut egui::Ui,
-    shell: &UiShell,
-    projection: &mut WorldProjection,
-    edit_cell: &EditCellState,
-    edit: &mut crate::edit::editing::EditHistory,
-    (gx, gy): (i32, i32),
-    before: wv_core::terrain::TerrainCellData,
-    loc: crate::i18n::Locale,
-) {
-    let mut next = before;
-
-    // ── 地表：水 / 陆 分段 ──
-    ui.label(
-        egui::RichText::new(t(loc, I18nKey::CellInspectorSurface))
-            .size(12.0)
-            .color(shell.t2()),
-    );
-    let mut surface_seg = if before.surface == wv_terrain::SURFACE_WATER {
-        0
-    } else {
-        1
-    };
-    segmented(
-        ui,
-        shell,
-        "cell_editor_surface",
-        56.0,
-        &[
-            t(loc, I18nKey::CellEditorWater),
-            t(loc, I18nKey::CellEditorLand),
-        ],
-        surface_seg,
-        font_size::SMALL,
-        |i| surface_seg = i,
-    );
-    next.surface = if surface_seg == 0 {
-        wv_terrain::SURFACE_WATER
-    } else {
-        wv_terrain::SURFACE_LAND
-    };
-    ui.add_space(6.0);
-
-    // ── 海拔：数值输入（米，步长 1）──
-    ui.label(
-        egui::RichText::new(t(loc, I18nKey::CellInspectorHeight))
-            .size(12.0)
-            .color(shell.t2()),
-    );
-    let mut height_f = before.height as f32;
-    numeric_input(ui, shell, &mut height_f, "m", 1.0);
-    next.height = height_f.clamp(i16::MIN as f32, i16::MAX as f32).round() as i16;
-    ui.add_space(6.0);
-
-    // ── 群系：下拉（NONE + 冻结表 20 编号）──
-    ui.label(
-        egui::RichText::new(t(loc, I18nKey::CellInspectorBiome))
-            .size(12.0)
-            .color(shell.t2()),
-    );
-    let labels: Vec<&str> = biome_menu_labels();
-    let selected = biome_menu_index(before.biome);
-    if let Some(picked) = option_menu(ui, shell, "cell_editor_biome", &labels, selected, &[]) {
-        next.biome = menu_index_to_biome(picked);
-    }
-
-    // ── 即改即提交（每格 1 command，[ADR-0040] §决策 8）──
-    if next != before {
-        push_cell_edit(
-            edit,
-            &mut projection.world,
-            edit_cell,
-            (gx, gy),
-            before,
-            next,
-        );
-    }
-}
-
-/// 提交一格编辑（stale 快照校验 + History 落盘；从 Inspector 版原样迁入）。
-fn push_cell_edit(
-    edit: &mut crate::edit::editing::EditHistory,
-    world: &mut wv_core::World,
-    edit_cell: &EditCellState,
-    (gx, gy): (i32, i32),
-    before: wv_core::terrain::TerrainCellData,
-    after: wv_core::terrain::TerrainCellData,
-) {
-    let Some(map) = edit_cell.last_map_id.clone() else {
-        return;
-    };
-    // Stale 校验：Inspector/面板打开期间值被别的系统改过 → 拒收（防叠加冲突）。
-    let current = world.terrain_of(&map).and_then(|ter| {
-        let w = ter.width as i32;
-        let h = ter.height as i32;
-        if gx < 0 || gy < 0 || gx >= w || gy >= h {
-            return None;
-        }
-        ter.cells
-            .get((gy as usize) * (w as usize) + (gx as usize))
-            .copied()
-    });
-    if current != Some(before) {
-        bevy::log::warn!("EditCell commit 拒收: cell ({gx}, {gy}) 当前值已不是面板上看到的值");
-        return;
-    }
-    let cmd = wv_edit::command::EditCellCommand::new(map, gx, gy, before, after);
-    let mut tx = wv_edit::history::Transaction::new();
-    tx.push(Box::new(cmd));
-    match edit.history.commit(world, tx) {
-        Ok(dirty) => edit.record_dirty(dirty),
-        Err(e) => bevy::log::warn!("EditCell commit 失败: {e}"),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 冻结表下拉数据（NONE + 20 编号，顺序 = wv_terrain::biome 冻结表）
-// ---------------------------------------------------------------------------
-
-/// 下拉项标签（下标 0 = NONE，其后按冻结编号 1..=20 顺序）。
+/// 批量下拉项标签（NONE + 冻结表 20 编号；下标即编号）。
 fn biome_menu_labels() -> Vec<&'static str> {
     const NAMES: [&str; 21] = [
         "NONE",
@@ -467,17 +600,8 @@ fn biome_menu_labels() -> Vec<&'static str> {
     NAMES
         .iter()
         .enumerate()
-        .map(|(i, n)| match i {
-            0 => "NONE",
-            _ => n,
-        })
+        .map(|(i, n)| if i == 0 { "NONE" } else { *n })
         .collect()
-}
-
-/// biome 编号 → 下拉下标（编号即下标：冻结表 0..=20 与菜单顺序一致；
-/// 开放集未登记编号回落 NONE 项——显示近似，不崩）。
-fn biome_menu_index(biome: u8) -> usize {
-    (biome as usize).min(20)
 }
 
 /// 下拉下标 → biome 编号。

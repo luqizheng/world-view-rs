@@ -203,7 +203,10 @@ impl Panel {
             Panel::Region => [280.0, 200.0],
             Panel::Inspector => [264.0, 240.0],
             // Cell 编辑器：与 Inspector 同宽；高度 = 头部 + 4 字段 + 提示一行。
-            Panel::CellEditor => [264.0, 198.0],
+            // 高 210 = 右列空隙（Inspector 底 296 → Character 顶 520 不重叠；
+            // 布局互斥测试 §9.3-1）。egui Window hug 内容会自动撑高——
+            // 群系 7 组 radio 全展开约 460px，CellMap 工作区下其余面板默认关，无遮挡。
+            Panel::CellEditor => [288.0, 210.0],
             // v0.3：Validation 改成 240 高（默认隐藏，validation 触发时才出现）
             Panel::Validation => [300.0, 60.0],
         }

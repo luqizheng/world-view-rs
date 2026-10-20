@@ -222,6 +222,22 @@ pub fn numeric_input(
     unit: &str,
     step: f32,
 ) -> egui::Response {
+    numeric_input_bounded(ui, shell, value, unit, step, f32::MIN, f32::MAX)
+}
+
+/// [`numeric_input`] 的**带边界变体**（目录 UI/NumericInput/Dark/Default）：
+/// stepper 与任何写入都会被钳到 `[min, max]`——Cell 编辑器海拔（i16 米）
+/// 等有真实值域的字段用这个，调用方不再需要事后 clamp。
+pub fn numeric_input_bounded(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    value: &mut f32,
+    unit: &str,
+    step: f32,
+    min: f32,
+    max: f32,
+) -> egui::Response {
+    let _ = (min, max); // 占位：实现体在下方（原 numeric_input 主体迁移于此）
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), CONTROL_H),
         egui::Sense::hover(),
@@ -289,10 +305,10 @@ pub fn numeric_input(
         egui::Sense::click(),
     );
     if up.clicked() {
-        *value += step;
+        *value = (*value + step).clamp(min, max);
     }
     if down.clicked() {
-        *value -= step;
+        *value = (*value - step).clamp(min, max);
     }
     ui.interact(rect, ui.id().with("numeric_body"), egui::Sense::hover())
 }
