@@ -33,8 +33,8 @@ use crate::ui_layout::LayoutFile;
 
 use super::shell::UiShell;
 use super::widgets::{
-    divider, empty_state, float_window, value_box, ButtonContent, ButtonStyle, ICON_FOCUS,
-    ICON_LOCK_KEYHOLE,
+    divider, empty_state, float_window, icon_image, value_box, ButtonContent, ButtonStyle,
+    ICON_FOCUS, ICON_LOCK_KEYHOLE,
 };
 use wv_render::state::EditCellState;
 use wv_ui::widgets::controls::{numeric_input_bounded, option_menu, radio};
@@ -100,16 +100,9 @@ pub fn panel_cell_editor(
                     );
                     divider(ui, &shell);
                     // 尾注（Figma "Selection scope"）：focus 图标 + 提示。
+                    // 禁止 cursor 手算 + ui.put（见 section_heading 注释）。
                     ui.horizontal(|ui| {
-                        let y = ui.cursor().center().y;
-                        let icon_x = ui.cursor().left() + 6.0;
-                        ui.put(
-                            egui::Rect::from_min_size(
-                                egui::pos2(icon_x, y - 6.0),
-                                egui::vec2(12.0, 12.0),
-                            ),
-                            egui::Image::new(ICON_FOCUS).tint(shell.t3()),
-                        );
+                        ui.add(icon_image(ICON_FOCUS, shell.t3(), 12.0));
                         ui.label(
                             egui::RichText::new(t(current_loc.0, I18nKey::CellEditorScopeHint))
                                 .size(font_size::MICRO)
@@ -176,7 +169,10 @@ fn render_fields(
                         .size(11.0)
                         .color(shell.t3()),
                 );
-                value_box(ui, shell, &v.to_string(), None, false);
+                // value_box 吃 available_width:不限定宽会把 Y 列挤出面板。
+                ui.allocate_ui(egui::vec2(96.0, 28.0), |ui| {
+                    value_box(ui, shell, &v.to_string(), None, false);
+                });
             });
         }
     });
@@ -300,12 +296,15 @@ fn section_heading(ui: &mut egui::Ui, shell: &UiShell, title: &str, readonly_bad
                         .size(font_size::MICRO)
                         .color(shell.t3()),
                 );
-                let y = ui.cursor().center().y;
-                let icon_x = ui.cursor().left() + 5.0;
-                ui.put(
-                    egui::Rect::from_min_size(egui::pos2(icon_x, y - 5.0), egui::vec2(10.0, 10.0)),
-                    egui::Image::new(ICON_LOCK_KEYHOLE).tint(shell.t3()),
-                );
+                // RTL 布局里第一个 add 的在最右 → label 先、icon 后 = 锁在文字左。
+                // 禁止 ui.cursor() 手算 + ui.put:空 RTL 的 cursor.left 是未定义
+                // (-inf/NaN),egui 0.36 断言 frame_rect is NaN 直接崩
+                // (2026-10-20 实机「CellMap 一点击即退出」根因)。
+                ui.add(super::widgets::icon_image(
+                    ICON_LOCK_KEYHOLE,
+                    shell.t3(),
+                    10.0,
+                ));
             });
         }
     });
