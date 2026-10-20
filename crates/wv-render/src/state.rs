@@ -385,7 +385,8 @@ mod lod_tests {
     }
 }
 
-/// 笔刷工具（意图笔刷 plan v0.1）：直接涂类型，或六种「给意图、程序生成」。
+/// 笔刷工具（意图笔刷 plan v0.1）：直接涂类型、六种「给意图、程序生成」，
+/// 或地形橡皮刷。
 ///
 /// 会话态，不写盘；工具选择不跨会话保留。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -405,11 +406,21 @@ pub enum BrushTool {
     Lake,
     /// 意图：从源头拖到河口，程序拓扑挖出河床。
     River,
+    /// 地形橡皮刷（ADR-0043）：把笔下格子**整格回填成本图的底图态**——
+    /// 底图是海洋就擦成海洋，底图是陆地就擦成陆地。
+    ///
+    /// 与 [`Self::PaintKind`] 的分工：涂是「按色板写入某一种地形」，擦是
+    /// 「撤销回该图的初始态」。两者共用 `PaintTerrainCommand` 的撤销 / 脏矩形
+    /// 管线，差别只在写入什么格子（见 `wv_terrain::edit::Brush::exact_fill`）。
+    ///
+    /// **枚举里必须排末位**：`CommandId::SelectBrushTool(i)` 按下标索引
+    /// [`Self::ALL`]，中间插入会静默改掉后面所有工具的命令面板绑定。
+    Eraser,
 }
 
 impl BrushTool {
-    /// 面板遍历用。
-    pub const ALL: [BrushTool; 7] = [
+    /// 面板遍历用。顺序即 `CommandId::SelectBrushTool` 的下标，**只增不改**。
+    pub const ALL: [BrushTool; 8] = [
         BrushTool::PaintKind,
         BrushTool::MountainRange,
         BrushTool::Plateau,
@@ -417,6 +428,7 @@ impl BrushTool {
         BrushTool::Volcano,
         BrushTool::Lake,
         BrushTool::River,
+        BrushTool::Eraser,
     ];
 
     /// 「塑」组（拖拽骨架、程序生成）四工具——面板第二行。
@@ -433,7 +445,7 @@ impl BrushTool {
     /// 所属分组（面板三行行内布局与命令面板注册共用同一口径）。
     pub fn group(self) -> BrushToolGroup {
         match self {
-            Self::PaintKind => BrushToolGroup::Paint,
+            Self::PaintKind | Self::Eraser => BrushToolGroup::Paint,
             Self::MountainRange | Self::Plateau | Self::Hills | Self::River => {
                 BrushToolGroup::Shape
             }
@@ -445,6 +457,12 @@ impl BrushTool {
     pub fn is_intent(self) -> bool {
         self.group() != BrushToolGroup::Paint
     }
+
+    /// 「涂」组（[`BrushToolGroup::Paint`]）两工具——面板第一行。
+    ///
+    /// 涂与擦同组：两者都是「对既有地表做增量写入」，只是写入目标不同；
+    /// 分成两组会让分段控件多出一格，而那一格承载不了实质区别。
+    pub const PAINT: [BrushTool; 2] = [BrushTool::PaintKind, BrushTool::Eraser];
 }
 
 /// 笔刷工具的三个操作语义分组（面板行内布局的行首标签）。
@@ -566,9 +584,75 @@ impl MeasureState {
     }
 }
 
-/// 选择工具会话态（2026-10-17 选择工具 spec §3；M1 Task 1）。
+/// 选择器的形状（ADR-0043）。
 ///
-/// pen 方法的数据底座：草稿锚点（Drawing）与闭合选区（Closed）二态互斥——
+/// **三种形状在数据层没有区别**——成形后都只是 `SelectionState::closed` 里的一
+/// 条点环。下游（意图菜单 / 大陆生成 / 城镇 / 地物标记 / 势力划分 / CellMap 批量
+/// 改）读的全都是那条环，因此新增矩形与椭圆对它们**零改动**。
+///
+/// 差别只发生在**交互期**：多边形逐点点击成环，矩形 / 椭圆按住拖拽一次成形。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SelectionShape {
+    /// 多边形：逐点点击 + 橡皮筋，锚点可拖 / 双击删 / 点边插（Figma pen）。
+    #[default]
+    Polygon,
+    /// 矩形：按住拖出对角框；成形后整体可拖、拖角缩放。
+    Rect,
+    /// 椭圆：按住拖出内接椭圆框；成形后整体可拖、拖角缩放。
+    Ellipse,
+}
+
+impl SelectionShape {
+    /// 是否逐点成环（只有多边形是）。false = 按住拖拽成形。
+    pub fn is_polygon(self) -> bool {
+        self == Self::Polygon
+    }
+}
+
+/// 框选形状的拖拽会话（ADR-0043）。
+///
+/// 三种手势共用「按下点 → 当前点」这一对坐标，区别只在松手时怎么用：
+/// - [`Self::Draw`]：还没成形，拖出一个新框；
+/// - [`Self::Move`]：已成形的形状整体平移；
+/// - [`Self::Resize`]：已成形的形状按包围盒重算。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShapeDrag {
+    /// 拖出新框：`from` = 按下点（不动），`to` = 当前点。
+    Draw { from: Vec2, to: Vec2 },
+    /// 整体平移：`from` / `to` 是同一手势的按下点与当前点，位移 = `to - from`。
+    Move { from: Vec2, to: Vec2 },
+    /// 缩放：把原包围盒整体按 `to - from` 推移后重算边界。
+    Resize { from: Vec2, to: Vec2 },
+}
+
+impl ShapeDrag {
+    /// 按下点。
+    pub fn from(&self) -> Vec2 {
+        match *self {
+            Self::Draw { from, .. } | Self::Move { from, .. } | Self::Resize { from, .. } => from,
+        }
+    }
+
+    /// 当前点。
+    pub fn to(&self) -> Vec2 {
+        match *self {
+            Self::Draw { to, .. } | Self::Move { to, .. } | Self::Resize { to, .. } => to,
+        }
+    }
+
+    /// 更新当前点（按住拖动时逐帧调）。
+    pub fn set_to(&mut self, to: Vec2) {
+        match self {
+            Self::Draw { to: t, .. } | Self::Move { to: t, .. } | Self::Resize { to: t, .. } => {
+                *t = to;
+            }
+        }
+    }
+}
+
+/// 选择工具会话态（2026-10-17 选择工具 spec §3；M1 Task 1；ADR-0043 增形状）。
+///
+/// pen 方法的数据底座：草稿锚点（Drawing）和闭合选区（Closed）二态互斥——
 /// `draft` 非空即画中，`closed` 为 `Some` 即已闭合。选区是**会话态**（spec D11）：
 /// 不落盘、不进 YAML；意图确认时由 wv-app **只读克隆**环后自行提交
 /// （ADR-0033：不再经 [`Self::consume_closed`] 消费；该方法保留为通用原语）。
@@ -580,6 +664,10 @@ impl MeasureState {
 pub struct SelectionState {
     /// 选择工具是否启用（工具条瓷砖切换；与测量的互斥由 wv-app 瓷砖 toggle 家族处理）。
     pub enabled: bool,
+    /// 当前形状（ADR-0043）。`Polygon` 走原有的逐点交互，另两种走拖拽成形。
+    pub shape: SelectionShape,
+    /// 框选的进行中手势。`Some` = 左键正按住。
+    pub drag: Option<ShapeDrag>,
     /// 画中草稿锚点（未闭合）。
     pub draft: Vec<(f32, f32)>,
     /// 已闭合选区（≥3 点）。`Some` = Closed 态。
@@ -633,6 +721,43 @@ impl SelectionState {
         self.closed = None;
         self.selected_anchor = None;
         self.last_click = None;
+        self.drag = None;
+    }
+
+    /// 整体平移闭合选环（ADR-0043 框选的 Move 手势）。
+    ///
+    /// 走**逐点平移**而不是「只挪包围盒」——两者对矩形 / 椭圆等价，但逐点平移
+    /// 让这段代码对任何环都正确，将来加第五种形状时不必再想一遍。
+    pub fn translate_closed(&mut self, delta: Vec2) -> bool {
+        match self.closed.as_mut() {
+            Some(ring) => {
+                for p in ring.iter_mut() {
+                    p.0 += delta.x;
+                    p.1 += delta.y;
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 用新的两角点重算整个选环（ADR-0043 框选的 Resize 手势）。
+    ///
+    /// 形状由 [`Self::shape`] 决定：矩形出 4 角，椭圆出 48 段。**不是**在旧环上
+    /// 插删点——那样椭圆会被拉成多边形。旧环的包围盒偏移量由调用方算好传进来。
+    pub fn rebuild_closed(&mut self, a: Vec2, b: Vec2) -> bool {
+        if a.x == b.x && a.y == b.y {
+            return false;
+        }
+        let ring = match self.shape {
+            SelectionShape::Rect => crate::selection::rect_ring(a, b),
+            SelectionShape::Ellipse => crate::selection::ellipse_ring(a, b),
+            // 多边形没有「重算边界」这回事——它的边界就是作者逐点敲出来的。
+            SelectionShape::Polygon => return false,
+        };
+        self.closed = Some(ring);
+        self.selected_anchor = None;
+        true
     }
 
     /// stash 回驻留（大陆生成撤销恢复圈，spec §4）：直接落为闭合选区（替换现状）。
@@ -1097,11 +1222,11 @@ mod tests {
         assert!(!BrushState::default().enabled);
     }
 
-    /// 三组（涂 / 塑 / 放）必须恰好划分全体 7 工具：面板三行与命令面板
-    /// 注册都按组枚举，任何工具漏组 = 面板上点不到它。
+    /// 三组（涂 / 塑 / 放）必须恰好划分全体工具（ADR-0043 后 8 个）：面板三行
+    /// 与命令面板注册都按组枚举，任何工具漏组 = 面板上点不到它。
     #[test]
-    fn tool_groups_partition_all_seven_tools() {
-        let mut grouped = vec![BrushTool::PaintKind];
+    fn tool_groups_partition_all_tools() {
+        let mut grouped = BrushTool::PAINT.to_vec();
         grouped.extend(BrushTool::SHAPE);
         grouped.extend(BrushTool::PLACE);
         assert_eq!(
@@ -1128,7 +1253,11 @@ mod tests {
             assert_eq!(t.group(), BrushToolGroup::Place, "{t:?}");
             assert!(t.is_intent(), "{t:?} 应走 IntentTerrainCommand");
         }
-        assert!(!BrushTool::PaintKind.is_intent());
+        // 涂组两个工具（涂抹 / 橡皮）都走 PaintTerrainCommand，不是意图。
+        for t in BrushTool::PAINT {
+            assert_eq!(t.group(), BrushToolGroup::Paint, "{t:?}");
+            assert!(!t.is_intent(), "{t:?} 应走 PaintTerrainCommand");
+        }
     }
 
     /// 段路径：`on_group_changed` 强制 `tool` 落到该组第一个，与旧 tool 无

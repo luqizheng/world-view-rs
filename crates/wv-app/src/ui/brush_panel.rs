@@ -41,7 +41,8 @@ use super::widgets::{
     ToolIcon,
 };
 use super::{
-    ICON_BRUSH, ICON_HILLS, ICON_LAKE, ICON_MOUNTAIN_RANGE, ICON_PLATEAU, ICON_RIVER, ICON_VOLCANO,
+    ICON_BRUSH, ICON_ERASER, ICON_HILLS, ICON_LAKE, ICON_MOUNTAIN_RANGE, ICON_PLATEAU, ICON_RIVER,
+    ICON_VOLCANO,
 };
 
 /// 地形笔刷 + 街道编辑器面板（P-3 / ADR-0010 编辑器 UI）。
@@ -150,6 +151,62 @@ pub fn panel_brush(
                     egui::RichText::new(t(loc, tool_hint_key(brush.tool)))
                         .size(shell.scale.small)
                         .color(shell.t3()),
+                );
+            } else if brush.tool == BrushTool::Eraser {
+                // ── 地形橡皮刷（ADR-0043）：只留半径 + 软度 ──
+                //
+                // **刻意不渲染 10 格地形材料选择器**：橡皮写入的是本图底图态
+                // （`MapBase`），`brush.kind` 在这条路径上完全不参与。若照常
+                // 画出来，面板会一边显示「当前材质 · 草原」一边把材质忽略掉——
+                // 那是一句谎话，而且比不画更糟：作者会以为自己擦出来的草原
+                // 是他选的那块草原。
+                ui.label(
+                    egui::RichText::new(t_key(&current_loc, I18nKey::BrushBaseLabel))
+                        .size(shell.scale.micro)
+                        .color(shell.t3()),
+                );
+                ui.add_space(space::XS);
+                slider_row_brush(
+                    ui,
+                    &shell,
+                    t_key(&current_loc, I18nKey::BrushRadiusLabel),
+                    &mut brush.radius,
+                    grid.cell_size * 2.0..=600.0,
+                    |n| format!("{} m", (n / grid.cell_size * 10.0).round() as i32),
+                    true,
+                );
+                slider_row_brush(
+                    ui,
+                    &shell,
+                    t_key(&current_loc, I18nKey::BrushSoftnessLabel),
+                    &mut brush.softness,
+                    0.0..=1.0,
+                    |n| format!("{}%", (n * 100.0).round() as i32),
+                    false,
+                );
+                ui.add_space(space::XS);
+                // 明确说出「擦成什么」——底图是海洋还是陆地，是作者下笔前
+                // 必须知道的一件事，且它随图而变（切子图就可能变）。
+                let base_zh = drill
+                    .current()
+                    .and_then(|id| {
+                        projection
+                            .world
+                            .maps
+                            .iter()
+                            .find(|m| Some(&m.id) == Some(id))
+                    })
+                    .and_then(|m| m.base)
+                    .unwrap_or(wv_core::map::MapBase::Ocean)
+                    .zh_label();
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} · {}",
+                        t_key(&current_loc, I18nKey::BrushHintErase),
+                        t_key(&current_loc, I18nKey::BrushBaseNow).replace("{base}", base_zh)
+                    ))
+                    .size(shell.scale.small)
+                    .color(shell.t3()),
                 );
             } else {
                 // ── 涂抹：地形材料（5×2 色块瓷砖，选中名常显在段标题旁）──
@@ -336,7 +393,10 @@ fn tool_segmented(ui: &mut egui::Ui, shell: &UiShell, brush: &mut BrushState, lo
 /// 1 击选工具，跨组 = 先段 1 击再瓷砖 1 击。
 fn tool_row_for_group(ui: &mut egui::Ui, shell: &UiShell, brush: &mut BrushState, loc: Locale) {
     let tools: &[(egui::ImageSource<'static>, BrushTool)] = match brush.tool_group {
-        BrushToolGroup::Paint => &[(ICON_BRUSH, BrushTool::PaintKind)],
+        BrushToolGroup::Paint => &[
+            (ICON_BRUSH, BrushTool::PaintKind),
+            (ICON_ERASER, BrushTool::Eraser),
+        ],
         BrushToolGroup::Shape => &[
             (ICON_MOUNTAIN_RANGE, BrushTool::MountainRange),
             (ICON_PLATEAU, BrushTool::Plateau),
@@ -376,6 +436,7 @@ fn tool_name_key(tool: BrushTool) -> I18nKey {
         BrushTool::Volcano => I18nKey::BrushToolNameVolcano,
         BrushTool::Lake => I18nKey::BrushToolNameLake,
         BrushTool::River => I18nKey::BrushToolNameRiver,
+        BrushTool::Eraser => I18nKey::BrushToolNameErase,
     }
 }
 
@@ -389,6 +450,7 @@ fn tool_hint_key(tool: BrushTool) -> I18nKey {
         BrushTool::Volcano => I18nKey::BrushHintVolcano,
         BrushTool::Lake => I18nKey::BrushHintLake,
         BrushTool::River => I18nKey::BrushHintRiver,
+        BrushTool::Eraser => I18nKey::BrushHintErase,
     }
 }
 

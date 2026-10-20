@@ -1,76 +1,90 @@
-//! 地图工具条（对图 Figma `3:21848` · Map tool dock，2026-10-19）。
+//! 地图工具条（2026-10-20 重构 · ADR-0043；原对图 Figma `3:21848` 平铺版）。
 //!
 //! ## 职责
 //! - `map_controls` —— 地图工具条。**横 / 纵两种朝向**，首个按钮切换；
 //!   朝向与吸附开关随工程落盘到 `ui-layout.yaml`（[`MapDockState`]）。
 //! - `MapDockState` / `MapDockOrientation` —— 工具条偏好（朝向 + 吸附），
 //!   由 `ui_shell` 的布局读写系统负责持久化。
-//! - `tool_tile` / `icon_tile` / `icon_button` / `separator` —— 本模块私有的
-//!   自绘控件，严格按 Figma 规格（40×38 工具瓷砖、32×32 图标钮、1×24 分隔条）。
+//! - `tool_tile` / `icon_tile` / `icon_button` / `separator` / `grip_handle`
+//!   —— 本模块私有的自绘控件，严格按 Figma 规格（40×38 工具瓷砖、32×32
+//!   图标钮、1×24 分隔条）。
 //!
-//! ## 工具映射（Figma → 本项目）
+//! ## 布局（ADR-0043 · 11 槽）
 //!
-//! | Figma | 键 | 本项目语义 |
+//! ```text
+//! ⇅    ✋    ┊    ◆◢    ◻    ┊    📏◢    ┊    ↷   ↶   ▦
+//! grip pan  sep 选择组 橡皮  sep  测量组  sep  redo undo grid
+//! ```
+//!
+//! 「选择组」与「测量组」是两枚**分裂按钮**（[`wv_ui::widgets::split_button`]）：
+//! 主区点按 = 立即用当前子项，右下角小三角 = 弹出菜单换子项。主区图标**跟着
+//! 当前子项走**（选了矩形，主区就显示方块）。
+//!
+//! | 槽 | 内容 | 快捷键 |
 //! |---|---|---|
-//! | mouse-pointer-2 | V | 选择工具（圈选意图包络） |
-//! | hand | H | 抓手：左键拖拽平移地图 |
-//! | paintbrush | B | 笔刷（开关地形涂抹） |
-//! | eraser | E | 测量橡皮（删除测量） |
-//! | spline | L | 折线测量 |
-//! | pentagon | P | 生成大陆（多边形包络 → 八参数面板） |
-//! | ruler | M | 矩形测量 |
-//! | undo-2 / redo-2 | — | 撤销 / 重做（同一分发入口 `CommandId::Undo/Redo`） |
-//! | magnet | — | 吸附：势力划分默认「贴地」（沿河流 / 山脊 / 湖岸） |
-//! | — | — | 网格 / 放大 / 缩小 / 全图（保留既有视图组） |
+//! | 0 | grip：拖动 = 移动工具条，单击 = 切换横/纵 | — |
+//! | 1 | 抓手 | `H` |
+//! | 3 | 选择组：多边形（默认）/ 矩形 / 椭圆 | `V` |
+//! | 4 | 地形橡皮刷（擦回本图底图） | `E` |
+//! | 6 | 测量组：线段距离（默认）/ 面积 | `L` / `M` |
+//! | 8/9 | 重做 / 撤销 | `Ctrl+Shift+Z` / `Ctrl+Z` |
+//! | 10 | 网格开关（开启高亮） | `G` |
 //!
-//! Figma 原稿的 `T`（文字）在项目中还没有文字落点工具，故不设入口——宁可
-//! 少一个假按钮，也不放一个点了没反应的瓷砖。
+//! ## 与 v0.6 的差异（ADR-0043 裁定）
+//!
+//! 画笔（B）、生成大陆（P）、磁吸三枚瓷砖**退出工具条**——快捷键与命令面板
+//! 入口原样保留；`MapToolId::Brush / Continent / MeasureEraser` 变体不删，
+//! 删了会让那两个入口静默失效。测量橡皮同样只剩命令面板入口（`E` 键让位给
+//! 地形橡皮刷，两把刷子一个键位族）。
 //!
 //! ## 交互与架构边界
-//! - 工具切换**不直接改状态**：点击瓷砖只把 `CommandId::SelectMapTool(_)`
-//!   排进 [`CommandPalette::pending`]，由 `ui_shell::apply_pending_commands`
-//!   统一做互斥（开一个工具 = 关掉其它工具）。快捷键 V/H/B/E/L/M/P 同源，
-//!   避免两套逻辑漂移。
-//! - 视图组（网格 / 缩放 / 全图）与「切换朝向」直接写 [`ViewState`] /
-//!   [`MapDockState`]——它们不改世界数据，也不涉及工具互斥。
+//! - 工具切换**不直接改状态**：点击只把 `CommandId::SelectMapTool(_)` 排进
+//!   [`CommandPalette::pending`]，由 `ui_shell::apply_pending_commands`
+//!   统一做互斥（开一个工具 = 关掉其它工具）。快捷键同源，避免两套逻辑漂移。
+//! - 视图组（网格）与「切换朝向」直接写 [`ViewState`] / [`MapDockState`]——
+//!   它们不改世界数据，也不涉及工具互斥。
 //! - 不在无工程时显示（与 `welcome_screen` 共用 [`StartupLoadRequest`] 信号）。
 //!
 //! ## 视觉规格（Figma `3:21848`，经 shell 令牌投影）
 //! - 大框：`float_fill`（暗色 `#1B232A @ .96`）+ `border_strong`（`#46525B`）
 //!   + 圆角 10 + 投影 `0 8 24 rgba(0,0,0,.2)`。
-//! - 工具瓷砖 40×38：图标 16 + 间隙 2 + 8px 字母；活动态 `gold_soft` 底 +
-//!   `gold` 描边与前景（Figma 的 `#4B422E` / `#D6B77B`）。
-//! - 图标钮 32×32：活动态 `accent_soft` 底（Figma `#2C465F`）+ accent 图标。
-//! - 分隔条 1×24，色 `border_subtle`（Figma `#303B43`）。
-//! - 间距 6px；横向贴底居中，纵向贴右居中，均距窗体边缘 18px。
+//! - 工具瓷砖 40×38（纵排紧凑 34×34）：活动态 `gold_soft` 底 + `gold` 描边
+//!   与前景；分裂按钮的小三角画在右下角 13px 命中区正中。
+//! - 图标钮 32×32：活动态 `accent_soft` 底 + accent 图标。
+//! - 分隔条 1×24，色 `border_subtle`。
+//! - 间距 6px；横向贴底居中，纵向贴顶右缘，均距窗体边缘 18px。
 //!
 //! ## 主要导出
 //! - [`map_controls`] —— Bevy 系统。
-//! - [`MapDockState`] / [`MapDockOrientation`] —— 持久化偏好。
+//! - [`MapDockState`] / [`MapDockOrientation`] / [`DockParams`] —— 持久化偏好
+//!   与参数包。
 
 #![cfg(feature = "app")]
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use serde::{Deserialize, Serialize};
 
 use crate::edit::editing::EditHistory;
+use crate::i18n::{t, CurrentLocale, I18nKey, Locale};
 use crate::state::{
     DrillState, GridConfig, MeasureMode, MeasureState, Panel, PanelState, ViewState,
     WorldProjection,
 };
-use crate::theme::ui_theme::{margin_xy, mono, UiShellConfig};
+use crate::theme::ui_theme::{margin_xy, UiShellConfig};
 use crate::ui_command_palette::{CommandId, CommandPalette, MapToolId};
 use crate::ui_shell::StartupLoadRequest;
-use wv_render::state::{BrushState, SelectionState};
+use wv_render::state::{BrushState, BrushTool, SelectionShape, SelectionState};
+use wv_ui::widgets::{split_button, SplitButtonMetrics, SplitMenuItem};
 
 use super::shell::UiShell;
 use super::widgets::icon_image;
-use super::{
-    ICON_BRUSH, ICON_ERASER, ICON_GRID, ICON_HAND, ICON_MAGNET, ICON_MOUNTAIN_RANGE,
-    ICON_MOUSE_POINTER, ICON_MOVE_HORIZONTAL, ICON_MOVE_VERTICAL, ICON_REDO, ICON_ROUTE,
-    ICON_SQUARE, ICON_UNDO,
+use super::widgets::{
+    ICON_ELLIPSE, ICON_MOVE_HORIZONTAL, ICON_MOVE_VERTICAL, ICON_RULER_DIMENSION_LINE,
+    ICON_SQUARES_UNITE, ICON_VECTOR_POLYGON, ICON_VECTOR_SQUARE,
 };
+use super::{ICON_ERASER, ICON_GRID, ICON_HAND, ICON_REDO, ICON_UNDO};
 
 /// 贴边距离（原型 `right: 18px`）。
 const EDGE_OFFSET: f32 = 18.0;
@@ -84,23 +98,26 @@ const TILE_RADIUS: f32 = 5.0;
 
 /// 两种朝向的尺寸表。
 ///
-/// - **横向**严格按 Figma `3:21848`：瓷砖 40×38（图标 16 + 字母 8）、图标钮
-///   32×32、间距 6、大框内边距 10/7。
-/// - **纵向**是紧凑变体：瓷砖 34×34（仅图标 18，不重复字母）、图标钮 28×28、
-///   间距 4、内边距 6/10。原因见 [`DOCK_TOP_CLEARANCE`] 与实测截图：13 项
-///   按 40×38 纵排会侵占时间轴；字母标签在纵向也读不清，保留在横向即可。
+/// - **横向**按 Figma `3:21848` 的瓷砖规格：瓷砖 40×38、图标钮 32×32、
+///   间距 6、大框内边距 10/7。
+/// - **纵向**是紧凑变体：瓷砖 34×34（图标 18）、图标钮 28×28、间距 4、
+///   内边距 6/10。原因见 [`DOCK_TOP_CLEARANCE`] 与实测截图：13 项按 40×38
+///   纵排会侵占时间轴。
+///
+/// 两种朝向都**不画快捷键字母**（2026-10-20 用户裁定）：分裂按钮不占字母位
+/// 之后，仅剩的几枚纯工具瓷砖带字母反而显得孤立，字母统一退到 tooltip。
 #[derive(Clone, Copy)]
 struct DockMetrics {
     tile: egui::Vec2,
     tile_icon: f32,
-    /// `Some(size)` = 画快捷键字母（仅横向）；`None` = 纯图标。
-    label: Option<f32>,
     icon_btn: f32,
     icon_btn_icon: f32,
     gap: f32,
     sep_len: f32,
     pad_x: f32,
     pad_y: f32,
+    /// 分裂按钮右下角小三角的命中区边长。
+    chevron_hit: f32,
 }
 
 impl DockMetrics {
@@ -109,26 +126,45 @@ impl DockMetrics {
             Self {
                 tile: egui::vec2(34.0, 34.0),
                 tile_icon: 18.0,
-                label: None,
                 icon_btn: 28.0,
                 icon_btn_icon: 16.0,
                 gap: 4.0,
                 sep_len: 20.0,
                 pad_x: 6.0,
                 pad_y: 10.0,
+                chevron_hit: 12.0,
             }
         } else {
             Self {
                 tile: egui::vec2(40.0, 38.0),
                 tile_icon: 16.0,
-                label: Some(8.0),
                 icon_btn: 32.0,
                 icon_btn_icon: 16.0,
                 gap: 6.0,
                 sep_len: 24.0,
                 pad_x: 10.0,
                 pad_y: 7.0,
+                chevron_hit: 13.0,
             }
+        }
+    }
+
+    /// 投影成 [`SplitButtonMetrics`]——几何只在尺寸表里定义一次。
+    ///
+    /// 小三角方位随朝向（2026-10-20 用户裁定，两轮迭代终版）：横排 =
+    /// 右缘垂直居中（右下角会把图标往上挤），纵排 = 下缘水平居中（图标正
+    /// 下方）。两种方位三角都朝下。
+    fn split_metrics(&self, vertical: bool) -> SplitButtonMetrics {
+        SplitButtonMetrics {
+            tile: self.tile,
+            icon: self.tile_icon,
+            chevron_hit: self.chevron_hit,
+            radius: TILE_RADIUS,
+            chevron_side: if vertical {
+                wv_ui::widgets::ChevronSide::BottomCenter
+            } else {
+                wv_ui::widgets::ChevronSide::RightCenter
+            },
         }
     }
 }
@@ -197,6 +233,9 @@ pub struct MapDockState {
     pub orientation: MapDockOrientation,
     /// 吸附开关（magnet）。当前消费点：势力划分对话框的默认边界模式——
     /// 开启 = 默认「贴地」（沿河流 / 山脊 / 湖岸），关闭 = 默认直线。
+    ///
+    /// ADR-0043 后工具条上没有这枚瓷砖了；开关仍在（意图菜单 → 划分势力
+    /// 读取），`ui-layout.yaml` 的读写两端都不动。
     pub snapping: bool,
     /// 用户拖动 grip 后的位置偏移（绝对像素，与 `orientation` 联动解释）。
     /// `None` = 用默认锚点。
@@ -216,13 +255,25 @@ impl Default for MapDockState {
                 Ok("horizontal") => MapDockOrientation::Horizontal,
                 _ => MapDockOrientation::Vertical,
             },
-            // Figma 原稿的 magnet 是启用态（`Snapping enabled`）；与「划分
-            // 势力默认贴地」的历史默认（`DivisionMode::Snap`）一致。
+            // 与「划分势力默认贴地」的历史默认（`DivisionMode::Snap`）一致。
             snapping: true,
             pos: None,
             zoom_strip_pos: None,
         }
     }
+}
+
+/// 工具条要写的三份资源（打包成一个 SystemParam）。
+///
+/// **为什么打包**：`map_controls` 的参数顶在 Bevy 16 元组上限（v0.6 就已是
+/// 16 个）；ADR-0043 要再加 `Res<CurrentLocale>`（tooltip 走 i18n），不打包
+/// 就超限。三个资源在语义上也确实是一伙的——「工具条自身的输入输出」，
+/// 与视图 / 世界资源不同伙。
+#[derive(SystemParam)]
+pub struct DockParams<'w> {
+    pub dock: ResMut<'w, MapDockState>,
+    pub palette: ResMut<'w, CommandPalette>,
+    pub locale: Res<'w, CurrentLocale>,
 }
 
 /// 地图工具条（横向 / 纵向两形态）。
@@ -242,8 +293,7 @@ pub fn map_controls(
     projection: Res<WorldProjection>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     startup_req: Res<StartupLoadRequest>,
-    mut dock: ResMut<MapDockState>,
-    mut palette: ResMut<CommandPalette>,
+    mut params: DockParams,
     edit: Res<EditHistory>,
     panels: Res<PanelState>,
 ) {
@@ -256,6 +306,7 @@ pub fn map_controls(
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
+    let loc = params.locale.0;
 
     // 当前级的缩放区间与「全图」尺寸。
     let screen = ctx.content_rect().size();
@@ -268,16 +319,13 @@ pub fn map_controls(
     // 工具活动态（全部从资源读；工具切换本身走命令分发）。
     let select_active = selection.enabled;
     let pan_active = view.pan_tool;
-    let brush_active = brush.enabled;
-    let eraser_active = measure.mode == MeasureMode::Eraser;
-    let line_active = measure.mode == MeasureMode::Line;
-    let rect_active = measure.mode == MeasureMode::Rect;
+    let eraser_active = brush.enabled && brush.tool == BrushTool::Eraser;
+    let measure_active = measure.mode.is_active();
     let grid_active = view.grid_lines;
-    let snap_active = dock.snapping;
     let can_undo = edit.history.can_undo();
     let can_redo = edit.history.can_redo();
 
-    let vertical = dock.orientation == MapDockOrientation::Vertical;
+    let vertical = params.dock.orientation == MapDockOrientation::Vertical;
     let metrics = DockMetrics::for_orientation(vertical);
     // 默认锚点（无拖动历史时）：纵向贴顶、横向贴底让时间轴。
     let (anchor, default_offset) = if vertical {
@@ -298,22 +346,19 @@ pub fn map_controls(
         (egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -bottom_lift))
     };
     // 用户拖动 grip 后的位置偏移：仍是「相对锚点的屏幕偏移」，但不再
-    // 是「贴边 -18」，而是任意 (x, y)。把它折成同样的 `vec2(x, y)`：
-    //   纵向：`RIGHT_TOP` + (offset_x, offset_y) —— x 越负越往左，y 越正越往下；
-    //   横向：`CENTER_BOTTOM` + (offset_x, offset_y) —— 允许工具条在底部
-    //   中心附近水平滑动，y 越负越往上。
-    let offset = if let Some(p) = dock.pos {
-        egui::vec2(p.x, p.y)
-    } else {
-        default_offset
-    };
+    // 是「贴边 -18」，而是任意 (x, y)。
+    let offset = params
+        .dock
+        .pos
+        .map(|p| egui::vec2(p.x, p.y))
+        .unwrap_or(default_offset);
     let margin = margin_xy(metrics.pad_x, metrics.pad_y);
 
-    egui::Area::new(egui::Id::new("wv_map_controls_v06"))
+    egui::Area::new(egui::Id::new("wv_map_controls_v07"))
         .anchor(anchor, offset)
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
-            // 圆角大框：float_fill 底 + border_strong 描边 + 投影（Figma `3:21848`）。
+            // 圆角大框：float_fill 底 + border_strong 描边 + 投影。
             egui::Frame::NONE
                 .fill(shell.float_fill())
                 .stroke(egui::Stroke::new(1.0, shell.border_strong()))
@@ -327,11 +372,7 @@ pub fn map_controls(
                 })
                 .show(ui, |ui| {
                     let mut slots = |ui: &mut egui::Ui| {
-                        // ── 朝向切换 + 拖动手柄（Figma grip-vertical） ─────
-                        // grip-vertical 是 Figma 原稿的首图标，对应我们的两条
-                        // 职责：① 拖动 = 整条工具条跟随；② 单击 = 切换朝向。
-                        // 视觉上独占一个 icon_btn 槽（纵向 28px、横向 32px），
-                        // hover 显 `bg_hover`。
+                        // ── 槽 0：朝向切换 + 拖动手柄（grip-vertical） ─────
                         let (swap_icon, swap_hint) = if vertical {
                             (ICON_MOVE_HORIZONTAL, "拖动移动 / 单击切换为横向工具条")
                         } else {
@@ -339,14 +380,7 @@ pub fn map_controls(
                         };
                         let grip_resp = grip_handle(ui, &shell, metrics, swap_icon, swap_hint);
                         if grip_resp.dragged() {
-                            // 把 grip 的拖动量累计到 `MapDockState::pos`：
-                            //   纵向模式：anchor=RIGHT_TOP，pos.x 越负越靠左；
-                            //   横向模式：anchor=CENTER_BOTTOM，pos.x 决定水平偏移。
-                            // 两种模式的「屏幕 x 方向」一致（正方向 = 右），
-                            // 不用换算；屏幕 y 方向在两个 anchor 下都一致（正 = 下）。
-                            // 「(x, y) 相对锚点」与「(x, y) 相对 grip 起手」同义，
-                            // 直接用 drag_delta 累加；松手后 dock.pos 落到新位置。
-                            let pos = dock.pos.get_or_insert(MapDockPos {
+                            let pos = params.dock.pos.get_or_insert(MapDockPos {
                                 x: default_offset.x,
                                 y: default_offset.y,
                             });
@@ -354,107 +388,66 @@ pub fn map_controls(
                             pos.y += grip_resp.drag_delta().y;
                         }
                         if grip_resp.clicked() {
-                            dock.orientation = dock.orientation.toggled();
-                            // 朝向切换后旧 pos 不再合身：清掉，回到默认锚点，
-                            // 下次重新拖动时再记录新坐标。
-                            dock.pos = None;
+                            params.dock.orientation = params.dock.orientation.toggled();
+                            // 朝向切换后旧 pos 不再合身：清掉，回到默认锚点。
+                            params.dock.pos = None;
                         }
 
-                        // ── 工具组（V / H / B / E / L / P / M） ─────────────
-                        tool_tile(
-                            ui,
-                            &shell,
-                            metrics,
-                            ICON_MOUSE_POINTER,
-                            "V",
-                            "选择：圈选区域（左键加点；双击/回车/点首锚闭合；Esc 丢弃）",
-                            select_active,
-                            &mut palette,
-                            MapToolId::Select,
-                        );
+                        // ── 槽 1：抓手 ────────────────────────────────────
                         tool_tile(
                             ui,
                             &shell,
                             metrics,
                             ICON_HAND,
-                            "H",
-                            "抓手：左键拖拽平移地图（右键/中键始终可平移）",
+                            t(loc, I18nKey::MapControlsPanHint),
                             pan_active,
-                            &mut palette,
+                            &mut params.palette,
                             MapToolId::Pan,
                         );
-                        tool_tile(
+
+                        separator(ui, &shell, metrics, vertical);
+
+                        // ── 槽 3：选择组（分裂按钮） ──────────────────────
+                        selection_split(
                             ui,
                             &shell,
                             metrics,
-                            ICON_BRUSH,
-                            "B",
-                            "笔刷：涂抹地形（再次点击关闭；半径/强度见笔刷面板）",
-                            brush_active,
-                            &mut palette,
-                            MapToolId::Brush,
+                            vertical,
+                            loc,
+                            selection.shape,
+                            select_active,
+                            &mut params.palette,
                         );
+
+                        // ── 槽 4：地形橡皮刷 ─────────────────────────────
                         tool_tile(
                             ui,
                             &shell,
                             metrics,
                             ICON_ERASER,
-                            "E",
-                            "测量橡皮：点击删除测量",
+                            t(loc, I18nKey::MapControlsEraserHint),
                             eraser_active,
-                            &mut palette,
-                            MapToolId::MeasureEraser,
-                        );
-                        tool_tile(
-                            ui,
-                            &shell,
-                            metrics,
-                            ICON_ROUTE,
-                            "L",
-                            "折线测量：多段测量；右键/Esc 收笔",
-                            line_active,
-                            &mut palette,
-                            MapToolId::MeasureLine,
-                        );
-                        tool_tile(
-                            ui,
-                            &shell,
-                            metrics,
-                            ICON_MOUNTAIN_RANGE,
-                            "P",
-                            "生成大陆…（八参数面板；用「选择」工具圈出意图包络）",
-                            false,
-                            &mut palette,
-                            MapToolId::Continent,
-                        );
-                        tool_tile(
-                            ui,
-                            &shell,
-                            metrics,
-                            ICON_SQUARE,
-                            "M",
-                            "矩形测量：两点确定长×宽",
-                            rect_active,
-                            &mut palette,
-                            MapToolId::MeasureRect,
+                            &mut params.palette,
+                            MapToolId::BrushErase,
                         );
 
                         separator(ui, &shell, metrics, vertical);
 
-                        // ── 撤销 / 重做 ───────────────────────────────────
-                        if icon_button(
+                        // ── 槽 6：测量组（分裂按钮） ──────────────────────
+                        measure_split(
                             ui,
                             &shell,
                             metrics,
-                            ICON_UNDO,
-                            false,
-                            can_undo,
-                            "撤销 (Ctrl+Z)",
-                        )
-                        .clicked()
-                        {
-                            palette.pending = Some(CommandId::Undo);
-                        }
+                            vertical,
+                            loc,
+                            measure.mode,
+                            measure_active,
+                            &mut params.palette,
+                        );
+
+                        separator(ui, &shell, metrics, vertical);
+
+                        // ── 槽 8/9：重做 / 撤销 ───────────────────────────
                         if icon_button(
                             ui,
                             &shell,
@@ -466,37 +459,30 @@ pub fn map_controls(
                         )
                         .clicked()
                         {
-                            palette.pending = Some(CommandId::Redo);
+                            params.palette.pending = Some(CommandId::Redo);
                         }
-
-                        separator(ui, &shell, metrics, vertical);
-
-                        // ── 吸附（magnet） ────────────────────────────────
                         if icon_button(
                             ui,
                             &shell,
                             metrics,
-                            ICON_MAGNET,
-                            snap_active,
-                            true,
-                            "吸附：开启后势力划分默认「贴地」（沿河流 / 山脊 / 湖岸）",
+                            ICON_UNDO,
+                            false,
+                            can_undo,
+                            "撤销 (Ctrl+Z)",
                         )
                         .clicked()
                         {
-                            dock.snapping = !dock.snapping;
+                            params.palette.pending = Some(CommandId::Undo);
                         }
 
-                        separator(ui, &shell, metrics, vertical);
-
-                        // ── 视图组 ──────────────────────────────────────
-                        // 网格：参照网格开关（`ViewState.grid_lines`）。
+                        // ── 槽 10：网格 ──────────────────────────────────
                         if icon_tile(
                             ui,
                             &shell,
                             metrics,
                             ICON_GRID,
                             grid_active,
-                            "显示参照网格（独立于笔刷）",
+                            "显示参照网格（G）",
                         )
                         .clicked()
                         {
@@ -504,14 +490,13 @@ pub fn map_controls(
                         }
                     };
 
-                    // ── 缩放控件条（`wv-ui::zoom_controls` · Figma 3:21882） ──
-                    //
-                    // 替代原先的 `icon_tile(zoom_in/zoom_out/maximize)` 三块：
-                    // 把 − / ＋ / 百分比 / 适配 / grip 收成一个公共组件，
-                    // 既缩小组件列表也复用到小地图。回调里只改 `view.scale`，
-                    // 相机由 `set_map_scale` 同步（避免双真相）。
-                    let _ = line_active;
-
+                    // **不用**交叉轴 `Align::Center`（2026-10-20 教训）：大框的
+                    // 内容 Ui 铺满整屏，Center 会把小钮摆到屏幕中央，而
+                    // `Frame` 按 `min_rect` 收缩——min_rect 从锚点一路扩张到
+                    // 屏幕中央，整条工具条鼓成一块盖住半个屏幕的面板。
+                    // 对齐改由**槽位统一**解决：小钮 / 分隔条与瓷砖占同样的
+                    // `metrics.tile` 槽位，视觉内容在槽内居中（见 `icon_button`
+                    // / `grip_handle` / `separator`），帧自然贴合。
                     ui.spacing_mut().item_spacing = egui::vec2(metrics.gap, metrics.gap);
                     if vertical {
                         ui.vertical(|ui| slots(ui));
@@ -544,12 +529,13 @@ pub fn map_controls(
             egui::vec2(-EDGE_OFFSET, DOCK_TOP_CLEARANCE),
         )
     };
-    let zoom_offset = dock
+    let zoom_offset = params
+        .dock
         .zoom_strip_pos
         .map(|p| egui::vec2(p.x, p.y))
         .unwrap_or(zoom_default);
     let mut zoom_state = super::widgets::ZoomControlsState {
-        pos: dock.zoom_strip_pos.map(|p| [p.x, p.y]),
+        pos: params.dock.zoom_strip_pos.map(|p| [p.x, p.y]),
         show_scale_text: true,
     };
     let can_zoom_in = !zoom.at_inner_limit(view.scale);
@@ -593,22 +579,162 @@ pub fn map_controls(
         set_map_scale(&mut view, &mut cameras, zoom.fit, zoom);
     }
     // strip 的拖动位置回灌到 dock（落盘由 caller 负责）。
-    dock.zoom_strip_pos = zoom_state.pos.map(|[x, y]| MapDockPos { x, y });
-
-    let _ = line_active;
+    params.dock.zoom_strip_pos = zoom_state.pos.map(|[x, y]| MapDockPos { x, y });
 }
 
-/// 工具瓷砖：图标 +（横向时）快捷键字母。
+/// 槽 3 —— 选择组的分裂按钮（ADR-0043）。
+///
+/// 主区图标**跟着当前形状走**：多边形显示 `vector-polygon`、矩形显示
+/// `vector-square`、椭圆显示 `ellipse`。点主区 = 用当前形状开关选择工具；
+/// 点小三角 = 弹层里换形状（换形状即重开选择工具——分发器语义：
+/// 不同形状开着 = 换，不关）。
+///
+/// 两个待发命令用两个局部变量接（主区回调是 `FnOnce`、选中回调是 `FnMut`，
+/// 两者不能同时可变借用同一份 `palette`），闭包外统一入队——与缩放条
+/// 三 bool 模式同款。
+#[allow(clippy::too_many_arguments)]
+fn selection_split(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    metrics: DockMetrics,
+    vertical: bool,
+    loc: Locale,
+    shape: SelectionShape,
+    active: bool,
+    palette: &mut CommandPalette,
+) {
+    let items = [
+        SplitMenuItem::new(
+            ICON_VECTOR_POLYGON,
+            t(loc, I18nKey::MapControlsSelectPolygon),
+        )
+        .with_hint("V"),
+        SplitMenuItem::new(ICON_VECTOR_SQUARE, t(loc, I18nKey::MapControlsSelectRect)),
+        SplitMenuItem::new(ICON_ELLIPSE, t(loc, I18nKey::MapControlsSelectEllipse)),
+    ];
+    let selected = match shape {
+        SelectionShape::Polygon => 0,
+        SelectionShape::Rect => 1,
+        SelectionShape::Ellipse => 2,
+    };
+    let icon = match shape {
+        SelectionShape::Polygon => ICON_VECTOR_POLYGON,
+        SelectionShape::Rect => ICON_VECTOR_SQUARE,
+        SelectionShape::Ellipse => ICON_ELLIPSE,
+    };
+    let hint = match shape {
+        SelectionShape::Polygon => t(loc, I18nKey::MapControlsSelectGroupHint),
+        SelectionShape::Rect => t(loc, I18nKey::MapControlsSelectRectHint),
+        SelectionShape::Ellipse => t(loc, I18nKey::MapControlsSelectEllipseHint),
+    };
+    let mut main_cmd: Option<CommandId> = None;
+    let mut pick_cmd: Option<CommandId> = None;
+    split_button(
+        ui,
+        shell,
+        "wv_split_select",
+        metrics.split_metrics(vertical),
+        icon,
+        active,
+        hint,
+        &items,
+        selected,
+        || main_cmd = Some(CommandId::SelectMapTool(MapToolId::Select(shape))),
+        |i| {
+            let picked = [
+                SelectionShape::Polygon,
+                SelectionShape::Rect,
+                SelectionShape::Ellipse,
+            ][i];
+            pick_cmd = Some(CommandId::SelectMapTool(MapToolId::Select(picked)));
+        },
+    );
+    if let Some(c) = main_cmd.or(pick_cmd) {
+        palette.pending = Some(c);
+    }
+}
+
+/// 槽 6 —— 测量组的分裂按钮（ADR-0043）。
+///
+/// 两项语义（用户裁定：功能不变，只换图标）：
+/// - **线段距离**（`ruler-dimension-line`，默认）= 现有折线测量
+///   （多点累积，每段读数 + Σ 总长）；
+/// - **面积**（`squares-unite`）= 现有矩形测量（两点定对角，长 × 宽）。
+#[allow(clippy::too_many_arguments)]
+fn measure_split(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    metrics: DockMetrics,
+    vertical: bool,
+    loc: Locale,
+    mode: MeasureMode,
+    active: bool,
+    palette: &mut CommandPalette,
+) {
+    let items = [
+        SplitMenuItem::new(
+            ICON_RULER_DIMENSION_LINE,
+            t(loc, I18nKey::MapControlsMeasureDistance),
+        )
+        .with_hint("L"),
+        SplitMenuItem::new(ICON_SQUARES_UNITE, t(loc, I18nKey::MapControlsMeasureArea))
+            .with_hint("M"),
+    ];
+    // Off 时主区显示默认项（线段距离）——「默认工具」的含义就是没开过也长这样。
+    let rect_mode = mode == MeasureMode::Rect;
+    let icon = if rect_mode {
+        ICON_SQUARES_UNITE
+    } else {
+        ICON_RULER_DIMENSION_LINE
+    };
+    let hint = if rect_mode {
+        t(loc, I18nKey::MapControlsMeasureRectHint)
+    } else {
+        t(loc, I18nKey::MapControlsMeasurePolylineHint)
+    };
+    let mut main_cmd: Option<CommandId> = None;
+    let mut pick_cmd: Option<CommandId> = None;
+    split_button(
+        ui,
+        shell,
+        "wv_split_measure",
+        metrics.split_metrics(vertical),
+        icon,
+        active,
+        hint,
+        &items,
+        usize::from(rect_mode),
+        || {
+            main_cmd = Some(CommandId::SelectMapTool(if rect_mode {
+                MapToolId::MeasureRect
+            } else {
+                MapToolId::MeasureLine
+            }))
+        },
+        |i| {
+            pick_cmd = Some(CommandId::SelectMapTool(if i == 1 {
+                MapToolId::MeasureRect
+            } else {
+                MapToolId::MeasureLine
+            }));
+        },
+    );
+    if let Some(c) = main_cmd.or(pick_cmd) {
+        palette.pending = Some(c);
+    }
+}
+
+/// 工具瓷砖：纯图标居中（2026-10-20 用户裁定：不画快捷键字母，字母退到
+/// tooltip 与 i18n 提示里）。
 ///
 /// 点击只排队 [`CommandId::SelectMapTool`]——互斥与状态写入统一在分发器，
-/// 本函数不碰任何工具资源（见模块头「交互与架构边界」）。
+/// 本函数不碰任何工具资源。
 #[allow(clippy::too_many_arguments)]
 fn tool_tile(
     ui: &mut egui::Ui,
     shell: &UiShell,
     metrics: DockMetrics,
     icon: egui::ImageSource<'static>,
-    letter: &str,
     hint: &str,
     active: bool,
     palette: &mut CommandPalette,
@@ -638,30 +764,10 @@ fn tool_tile(
     } else {
         shell.t3()
     };
-    match metrics.label {
-        // 横向（Figma）：图标上、字母下。
-        Some(label_size) => {
-            let icon_rect = egui::Rect::from_center_size(
-                egui::pos2(rect.center().x, rect.top() + 2.0 + metrics.tile_icon * 0.5),
-                egui::Vec2::splat(metrics.tile_icon),
-            );
-            icon_image(icon, tint, metrics.tile_icon).paint_at(ui, icon_rect);
-            ui.painter().text(
-                egui::pos2(rect.center().x, rect.top() + 28.0),
-                egui::Align2::CENTER_CENTER,
-                letter,
-                mono(label_size),
-                tint,
-            );
-        }
-        // 纵向紧凑：纯图标居中（字母只保留在横向，纵向 34px 内读不清）。
-        None => {
-            icon_image(icon, tint, metrics.tile_icon).paint_at(
-                ui,
-                egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(metrics.tile_icon)),
-            );
-        }
-    }
+    icon_image(icon, tint, metrics.tile_icon).paint_at(
+        ui,
+        egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(metrics.tile_icon)),
+    );
 
     if resp.clicked() {
         palette.pending = Some(CommandId::SelectMapTool(tool));
@@ -713,7 +819,7 @@ fn icon_tile(
 
 /// 图标钮（Figma `Undo` / `Redo` / `Snapping` 32×32）。
 ///
-/// `active` 走 `accent_soft` 底 + accent 图标（Figma magnet 的启用态）；
+/// `active` 走 `accent_soft` 底 + accent 图标；
 /// `enabled=false` 用禁用色且不可点（撤销栈空 / 重做栈空）。
 fn icon_button(
     ui: &mut egui::Ui,
@@ -724,14 +830,18 @@ fn icon_button(
     enabled: bool,
     hint: &str,
 ) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::Vec2::splat(metrics.icon_btn),
+    // 槽位对齐（2026-10-20）：小钮与瓷砖占**同样大小**的槽（`metrics.tile`），
+    // 视觉钮（28/32px）画在槽正中。这样纵向排里小钮不会贴左、横向排里不会
+    // 贴顶，整条天然成列；命中区也比视觉钮大一圈，更好点。
+    let (slot, resp) = ui.allocate_exact_size(
+        metrics.tile,
         if enabled {
             egui::Sense::click()
         } else {
             egui::Sense::hover()
         },
     );
+    let rect = egui::Rect::from_center_size(slot.center(), egui::Vec2::splat(metrics.icon_btn));
     let hovered = enabled && resp.hovered();
     let fill = if active {
         shell.accent_soft()
@@ -765,23 +875,36 @@ fn icon_button(
 }
 
 /// 分隔条：横向布局画 1×24 竖线，纵向布局画 24×1 横线（Figma `Tool separator`）。
+///
+/// 占一个完整瓷砖槽（竖排 = tile 宽 ×1，横排 = 1×tile 高），线段在槽内居中
+/// ——与 [`icon_button`] 的槽位对齐同一口径。
 fn separator(ui: &mut egui::Ui, shell: &UiShell, metrics: DockMetrics, vertical: bool) {
     let size = if vertical {
-        egui::vec2(metrics.sep_len, 1.0)
+        egui::vec2(metrics.tile.x, 1.0)
     } else {
-        egui::vec2(1.0, metrics.sep_len)
+        egui::vec2(1.0, metrics.tile.y)
     };
-    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let (slot, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let stroke = egui::Stroke::new(1.0, shell.border_subtle());
     let [a, b] = if vertical {
-        [rect.left_center(), rect.right_center()]
+        let y = slot.center().y;
+        let half = metrics.sep_len * 0.5;
+        [
+            egui::pos2(slot.center().x - half, y),
+            egui::pos2(slot.center().x + half, y),
+        ]
     } else {
-        [rect.center_top(), rect.center_bottom()]
+        let x = slot.center().x;
+        let half = metrics.sep_len * 0.5;
+        [
+            egui::pos2(x, slot.center().y - half),
+            egui::pos2(x, slot.center().y + half),
+        ]
     };
     ui.painter().line_segment([a, b], stroke);
 }
 
-/// 拖动手柄 + 朝向切换按钮（grip-vertical，对应 Figma `3:21848` 的 grip）。
+/// 拖动手柄 + 朝向切换按钮（grip-vertical）。
 ///
 /// **双重语义**：
 /// - 拖动（`Sense::drag`）→ 整条工具条跟随，调用方累计 `drag_delta` 到
@@ -798,10 +921,9 @@ fn grip_handle(
     icon: egui::ImageSource<'static>,
     hint: &str,
 ) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::Vec2::splat(metrics.icon_btn),
-        egui::Sense::click_and_drag(),
-    );
+    // 槽位对齐同 `icon_button`：占满一个瓷砖槽，视觉钮画在槽正中。
+    let (slot, resp) = ui.allocate_exact_size(metrics.tile, egui::Sense::click_and_drag());
+    let rect = egui::Rect::from_center_size(slot.center(), egui::Vec2::splat(metrics.icon_btn));
     let hovered = resp.hovered();
     let fill = if hovered || resp.dragged() {
         shell.hover_bg()
@@ -879,23 +1001,25 @@ mod map_control_tests {
         );
     }
 
-    /// 横向内容宽度（15 个元素 + 3 分隔 + 17 间距 + 左右内边距）必须在
-    /// 1280 窗口内留出两侧空白——否则贴底居中的工具条会被窗口裁掉。
+    /// 横向内容宽度：**11 个等宽槽**（5 瓷砖 + 3 图标钮 + 3 分隔，槽位统一
+    /// 后全部 = `tile.x`）+ 10 间距 + 左右内边距。必须在 1280 窗口内留出两侧
+    /// 空白——否则贴底居中的工具条会被窗口裁掉。**元素数与 `slots` 闭包的
+    /// 排布一一对应**，改布局必须同步改这条。
     #[test]
     fn horizontal_dock_fits_a_1280_window() {
         let m = DockMetrics::for_orientation(false);
-        let content = 11.0 * m.tile.x + 4.0 * m.icon_btn + 3.0 * 1.0 + 17.0 * m.gap;
+        let content = 11.0 * m.tile.x + 10.0 * m.gap;
         let framed = content + 2.0 * m.pad_x;
         assert!(framed < 1280.0, "横向工具条 {framed}px 超出 1280 窗口宽度");
     }
 
     /// 纵向紧凑形态必须在时间轴之上收口：800 高窗口 − 顶栏 38 − 时间轴
-    /// 约 152 − 边距，可用高度约 600；13 项按横向尺寸纵排会超（实测截图
-    /// 压到时间轴），紧凑尺寸必须留出余量。
+    /// 约 152 − 边距，可用高度约 648；11 个等高槽纵排必须留出余量。
+    /// **元素数与 `slots` 闭包一一对应**，改布局必须同步改这条。
     #[test]
     fn vertical_dock_fits_above_the_timeline() {
         let m = DockMetrics::for_orientation(true);
-        let height = 11.0 * m.tile.y + 4.0 * m.icon_btn + 3.0 * 1.0 + 17.0 * m.gap + 2.0 * m.pad_y;
+        let height = 11.0 * m.tile.y + 10.0 * m.gap + 2.0 * m.pad_y;
         let available = 800.0 - 152.0;
         assert!(
             DOCK_TOP_CLEARANCE + height < available,
@@ -903,5 +1027,31 @@ mod map_control_tests {
             DOCK_TOP_CLEARANCE + height,
             available
         );
+    }
+
+    /// 分裂按钮的几何必须从 `DockMetrics` 单点投影——两处各写一遍尺寸表，
+    /// 早晚漂移成「弹层锚点歪了」这类难查的视觉 bug。
+    #[test]
+    fn split_metrics_project_from_dock_metrics() {
+        for vertical in [false, true] {
+            let m = DockMetrics::for_orientation(vertical);
+            let s = m.split_metrics(vertical);
+            assert_eq!(s.tile, m.tile);
+            assert_eq!(s.icon, m.tile_icon);
+            assert_eq!(s.chevron_hit, m.chevron_hit);
+            assert_eq!(s.radius, TILE_RADIUS);
+            assert_eq!(
+                s.chevron_side,
+                if vertical {
+                    wv_ui::widgets::ChevronSide::BottomCenter
+                } else {
+                    wv_ui::widgets::ChevronSide::RightCenter
+                },
+                "小三角方位应随朝向"
+            );
+            // 小三角命中区必须完全在瓷砖内（wv-ui 侧测试再验几何，这里验的是
+            // 我们喂进去的尺寸本身合法）。
+            assert!(m.chevron_hit < m.tile.x.min(m.tile.y));
+        }
     }
 }

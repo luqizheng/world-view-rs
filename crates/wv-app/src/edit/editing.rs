@@ -136,7 +136,7 @@ pub fn commit_stroke_on_release(
         return;
     };
 
-    // 按工具分派：意图工具 → IntentTerrainCommand；Paint → PaintTerrainCommand。
+    // 按工具分派：意图工具 → IntentTerrainCommand；涂 / 擦 → PaintTerrainCommand。
     let (cmd, dirty_rect) = if brush.tool.is_intent() {
         let Some(intent) = intent_from_stroke(brush.tool, &pts_local, brush.radius, brush.strength)
         else {
@@ -153,13 +153,20 @@ pub fn commit_stroke_on_release(
         )
     } else {
         let mut stroke = TerrainStroke::new();
+        // 地形橡皮刷（ADR-0043）：整格回填本图底图态，走 `exact` 直写通道；
+        // 涂抹则按色板写 `PaintTarget`，高度交给跨域规则。
+        let base_cell = (brush.tool == BrushTool::Eraser)
+            .then(|| crate::ui::shell::eraser_base_cell(&projection.world, &target_map));
         for (x, y) in &pts_local {
             stroke.push(Brush {
                 center: (*x, *y),
                 radius: brush.radius,
                 softness: brush.softness,
-                target: Some(crate::ui::shell::brush_target(brush.kind)),
+                target: base_cell
+                    .is_none()
+                    .then(|| crate::ui::shell::brush_target(brush.kind)),
                 height_delta: 0.0,
+                exact: base_cell,
             });
         }
         // 笔触世界包围盒（在构造 `cmd` 之前算——`stroke` move 给 cmd 后不可用）。
@@ -264,7 +271,7 @@ fn intent_from_stroke(
             pts: pts.to_vec(),
             strength,
         },
-        BrushTool::PaintKind => return None,
+        BrushTool::PaintKind | BrushTool::Eraser => return None,
     })
 }
 
@@ -767,6 +774,7 @@ mod tests {
             softness: 0.0,
             target: None,
             height_delta: 0.0,
+            exact: None,
         });
         let bbox = stroke_bbox_in_cells(&stroke, &grid);
         // center = 5, pad = ceil(10/10) + 1 = 2
@@ -788,6 +796,7 @@ mod tests {
             softness: 0.0,
             target: None,
             height_delta: 0.0,
+            exact: None,
         });
         stroke.push(Brush {
             center: (50.0, 50.0), // 格 (5, 5)
@@ -795,6 +804,7 @@ mod tests {
             softness: 0.0,
             target: None,
             height_delta: 0.0,
+            exact: None,
         });
         let bbox = stroke_bbox_in_cells(&stroke, &grid);
         // pad = ceil(5/10) + 1 = 1 + 1 = 2
@@ -816,6 +826,7 @@ mod tests {
             softness: 0.0,
             target: None,
             height_delta: 0.0,
+            exact: None,
         });
         let bbox = stroke_bbox_in_cells(&stroke, &grid);
         // gx0/gx1 在负值会被 clamp 到 0

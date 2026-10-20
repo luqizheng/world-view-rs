@@ -792,6 +792,27 @@ pub const ICON_SETTINGS: egui::ImageSource<'static> =
 pub const ICON_LANGUAGES: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/languages.svg");
 
+// ── 地图工具条下拉组（ADR-0043 · 2026-10-20） ────────────────────────────
+//
+// 「选择组」「测量组」两组的子项图标。形状三件（多边形 / 矩形 / 椭圆）与
+// 测量两件（线段距离 / 面积）在业界有稳定共识，一比一取 Lucide 现成图标，
+// 不自绘——AGENTS §8 要求 UI 图标一律取自 Lucide。
+/// 选择组·多边形（Lucide `vector-polygon`，ADR-0043 选择组默认项）。
+pub const ICON_VECTOR_POLYGON: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/vector-polygon.svg");
+/// 选择组·矩形（Lucide `vector-square`）。
+pub const ICON_VECTOR_SQUARE: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/vector-square.svg");
+/// 选择组·椭圆（Lucide `ellipse`）。
+pub const ICON_ELLIPSE: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/ellipse.svg");
+/// 测量组·线段距离（Lucide `ruler-dimension-line`，ADR-0043 测量组默认项）。
+pub const ICON_RULER_DIMENSION_LINE: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/ruler-dimension-line.svg");
+/// 测量组·面积（Lucide `squares-unite`）。
+pub const ICON_SQUARES_UNITE: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/squares-unite.svg");
+
 // ── 面板头部 + 图层面板（Figma `3:20892` Layers / `42:2` Inspector） ──
 //
 // 图层面板行内图标与头部图标同源（Lucide 12×12、`t2` 着色），见

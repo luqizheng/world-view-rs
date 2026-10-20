@@ -45,7 +45,7 @@ use bevy::math::primitives::{Annulus, Rectangle};
 use bevy::prelude::*;
 
 use crate::camera::{screen_to_world, PointerOverUi};
-use crate::state::{BrushState, DrillState, ViewState};
+use crate::state::{BrushState, BrushTool, DrillState, ViewState};
 use crate::theme::colors;
 
 /// 屏幕像素描边（外环 / 十字线宽）。
@@ -151,8 +151,16 @@ pub fn sync_brush_cursor(
     let dash_world = (DASH_PX * view.scale).max(f32::EPSILON);
     let cross_world = (CROSS_PX * view.scale).max(f32::EPSILON);
 
-    let mat_select = materials.add(colors::ACCENT_SELECT);
-    let mat_select_dim = materials.add(colors::ACCENT_SELECT.with_alpha(0.6));
+    // 地形橡皮刷（ADR-0043）用危险色画环：光标是「这一下会擦掉东西」的唯一
+    // 事前提示，颜色是最省字的差别。涂抹仍是金色——两者的手感和后果都不同，
+    // 不该共用一个颜色。
+    let ring = if brush.tool == BrushTool::Eraser {
+        colors::ACCENT_CURSOR
+    } else {
+        colors::ACCENT_SELECT
+    };
+    let mat_select = materials.add(ring);
+    let mat_select_dim = materials.add(ring.with_alpha(0.6));
 
     // ---- 外环（Annulus，屏幕 2px 描边）----
     let outer_radius = brush.radius;

@@ -46,6 +46,7 @@ use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::UiTheme;
 use crate::ui_command_palette::{CommandId, CommandPalette};
 use crate::ui_layout::LayoutFile;
+use wv_render::state::SelectionShape;
 use wv_render::terrain_view::{TerrainTexture, TileAtlas};
 
 use crate::i18n::{parse as parse_locale, CurrentLocale};
@@ -276,10 +277,16 @@ fn hotkeys(
     if !cmd && !shift {
         use crate::ui_command_palette::MapToolId;
         let tool = [
-            (bevy_egui::egui::Key::V, MapToolId::Select),
+            (
+                bevy_egui::egui::Key::V,
+                MapToolId::Select(SelectionShape::Polygon),
+            ),
             (bevy_egui::egui::Key::H, MapToolId::Pan),
             (bevy_egui::egui::Key::B, MapToolId::Brush),
-            (bevy_egui::egui::Key::E, MapToolId::MeasureEraser),
+            // 橡皮贴着涂抹：两把刷子一个键位族。E 原属「测量橡皮」——那枚
+            // 瓷砖已随 ADR-0043 退出工具条，E 顺位给地形橡皮刷（测量橡皮
+            // 仍可从命令面板 Ctrl+K 进入）。
+            (bevy_egui::egui::Key::E, MapToolId::BrushErase),
             (bevy_egui::egui::Key::L, MapToolId::MeasureLine),
             (bevy_egui::egui::Key::M, MapToolId::MeasureRect),
             (bevy_egui::egui::Key::P, MapToolId::Continent),
@@ -288,6 +295,11 @@ fn hotkeys(
         .find(|(key, _)| input.key_pressed(*key));
         if let Some((_, tool)) = tool {
             palette.pending = Some(CommandId::SelectMapTool(tool));
+        }
+        // G：参照网格开关（ADR-0043 把网格瓷砖留在工具条末位，给它配同款
+        // 字母键；此前该命令无快捷键）。
+        if input.key_pressed(bevy_egui::egui::Key::G) {
+            palette.pending = Some(CommandId::ToggleGrid);
         }
     }
 }
@@ -1312,10 +1324,17 @@ fn apply_pending_commands(
             use crate::ui_command_palette::MapToolId;
 
             // 目标工具当前是否已启用（再次点击 = 关闭）。
+            //
+            // `Select(shape)` 的口径是「同形状开着 = 关；不同形状开着 = 换形状」
+            // ——三个形状是同一把选择工具的三种笔尖，V 快捷键在多边形 / 矩形 /
+            // 椭圆之间走一圈时不应出现「先关再开把选区弄丢」的顿挫。
             let already_on = match tool {
-                MapToolId::Select => selection.enabled,
+                MapToolId::Select(shape) => selection.enabled && selection.shape == shape,
                 MapToolId::Pan => view.pan_tool,
-                MapToolId::Brush => brush.enabled,
+                MapToolId::Brush => brush.enabled && brush.tool != crate::state::BrushTool::Eraser,
+                MapToolId::BrushErase => {
+                    brush.enabled && brush.tool == crate::state::BrushTool::Eraser
+                }
                 MapToolId::MeasureLine => measure.mode == MeasureMode::Line,
                 MapToolId::MeasureRect => measure.mode == MeasureMode::Rect,
                 MapToolId::MeasureEraser => measure.mode == MeasureMode::Eraser,
@@ -1346,9 +1365,19 @@ fn apply_pending_commands(
                 // ② 再按需打开（已启用 → 保持全关，即切换关闭）。
                 if !already_on {
                     match tool {
-                        MapToolId::Select => selection.enabled = true,
+                        MapToolId::Select(shape) => {
+                            selection.shape = shape;
+                            selection.enabled = true;
+                        }
                         MapToolId::Pan => view.pan_tool = true,
                         MapToolId::Brush => brush.enabled = true,
+                        // 橡皮与涂抹共用 `BrushState`，只差 `tool` 指到哪把；
+                        // `on_tool_changed` 同步 tool_group（面板段控件双真相防漂）。
+                        MapToolId::BrushErase => {
+                            brush.tool = crate::state::BrushTool::Eraser;
+                            brush.on_tool_changed();
+                            brush.enabled = true;
+                        }
                         MapToolId::MeasureLine => {
                             measure.clear_draft();
                             measure.mode = MeasureMode::Line;

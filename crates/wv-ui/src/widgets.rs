@@ -46,6 +46,7 @@ pub mod floater;
 pub mod layer_panel;
 pub mod primitives;
 pub mod segmented_control;
+pub mod split_button;
 pub mod svg_loader;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -95,6 +96,7 @@ pub use primitives::{
     ICON_CHEVRON_RIGHT,
     ICON_CLOCK,
     ICON_COMMAND,
+    ICON_ELLIPSE,
     ICON_ERASER,
     ICON_EYE,
     ICON_EYE_OFF,
@@ -133,10 +135,12 @@ pub use primitives::{
     ICON_RIVER,
     ICON_ROUTE,
     ICON_RULER,
+    ICON_RULER_DIMENSION_LINE,
     ICON_SEARCH,
     ICON_SETTINGS,
     ICON_SLIDERS,
     ICON_SQUARE,
+    ICON_SQUARES_UNITE,
     ICON_SQUARE_CHECK,
     ICON_SUN,
     ICON_TRASH,
@@ -144,6 +148,8 @@ pub use primitives::{
     ICON_TYPE,
     ICON_UNDO,
     ICON_USER,
+    ICON_VECTOR_POLYGON,
+    ICON_VECTOR_SQUARE,
     ICON_VOLCANO,
     ICON_WAVES,
     ICON_ZOOM_IN,
@@ -152,5 +158,6 @@ pub use primitives::{
     RECENT_ROW_ICON,
     RECENT_ROW_PAD_X,
 };
+pub use split_button::{split_button, ChevronSide, SplitButtonMetrics, SplitMenuItem};
 pub use svg_loader::{install_svg_decoder, setup_egui_image_loaders, EguiImageLoadersInstalled};
 pub use zoom_controls::{scale_to_percent, zoom_controls, ZoomControlsState};

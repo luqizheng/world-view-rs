@@ -58,6 +58,21 @@ pub struct Brush {
     pub target: Option<PaintTarget>,
     /// 本次要施加的高度增量（正=抬升，负=降低）。`0` 表示不动高度。
     pub height_delta: f32,
+    /// 整格直写（地形橡皮刷用，ADR-0043）。
+    ///
+    /// `Some(cell)` 时**三通道整格覆盖**（height / surface / biome），完全
+    /// 绕过 `target` 那条「跨域必须把高度推过海平面」的自动规则。
+    ///
+    /// **为什么需要它**：[`target`] 只有 surface + biome，高度由
+    /// [`apply_brush`] 按 `cell.height >= 0` 就地替换成 [`PAINT_SEA_DEPTH`]（-40）
+    /// 或 [`PAINT_LAND_HEIGHT`]（+40）。那是为「涂抹」设计的软化高度——作者涂
+    /// 一片陆时不该凭空多出一道 40 m 的坎。但橡皮要的是**底图态**：`MapBase::Ocean`
+    /// 是 -3500 m 整片深水、`MapBase::Land` 是 +80 m 整片草原（`wv_core` 的
+    /// `MapBase::cell()`，整图同值正是为了让 VectorFlat 双线性采样保持常数）。
+    /// 靠 `target` 永远够不着这两个值——所以整格直写另开一条路。
+    ///
+    /// 优先级：`exact` 高于 `target`，两者同时给时只认 `exact`。
+    pub exact: Option<TerrainCell>,
 }
 
 impl Brush {
@@ -69,6 +84,7 @@ impl Brush {
             softness: 0.5,
             target: Some(target),
             height_delta: 0.0,
+            exact: None,
         }
     }
 
@@ -80,6 +96,24 @@ impl Brush {
             softness: 0.7,
             target: None,
             height_delta: amount,
+            exact: None,
+        }
+    }
+
+    /// 整格直写笔刷（地形橡皮刷）：把半径内权重 ≥50% 的格子**原样覆盖**为
+    /// `cell`，不走「地表目标 + 跨域推高度」的自动规则。
+    ///
+    /// `softness` 默认给 `0.7`（与 [`Self::raise_lower`] 一致）——橡皮要的是
+    /// 一圈边界清楚的洞，不要拖尾。边缘仍是硬边：整格覆盖在 `w >= 0.5` 处
+    /// 一步到位，没有半格渐变。
+    pub fn exact_fill(center: (f32, f32), radius: f32, softness: f32, cell: TerrainCell) -> Self {
+        Self {
+            center,
+            radius,
+            softness,
+            target: None,
+            height_delta: 0.0,
+            exact: Some(cell),
         }
     }
 }
@@ -188,13 +222,18 @@ fn apply_brush(grid: &mut TerrainGrid, brush: &Brush, cell_size: f32) -> usize {
             let Some(mut cell) = grid.get(gx, gy) else {
                 continue; // 越界格跳过（笔刷扫过边缘时的合法情形）
             };
-            // 地表目标：超过 50% 权重才写入——避免软边把边缘涂成半吊子色块。
-            // 高度域随目标对齐（2026-10-14 用户反馈「笔刷涂大地图没变化」）：
-            // VectorFlat 填充的湿判定含「海拔 < 0」（[`is_water_cell`]），只写
-            // surface 不写高度时，「把海涂成陆地 / 把陆涂成海」在等值线视图下
-            // 完全不可见，笔刷等于失效。此处把跨域格的高度一并推过海平面，
-            // 同域格不动（不抹平作者已有的起伏）。
-            if let Some(target) = brush.target {
+            // 整格直写（橡皮）：优先于 `target`，一步覆盖三通道。
+            if let Some(exact) = brush.exact {
+                if w >= 0.5 {
+                    cell = exact;
+                }
+            } else if let Some(target) = brush.target {
+                // 地表目标：超过 50% 权重才写入——避免软边把边缘涂成半吊子色块。
+                // 高度域随目标对齐（2026-10-14 用户反馈「笔刷涂大地图没变化」）：
+                // VectorFlat 填充的湿判定含「海拔 < 0」（[`is_water_cell`]），只写
+                // surface 不写高度时，「把海涂成陆地 / 把陆涂成海」在等值线视图下
+                // 完全不可见，笔刷等于失效。此处把跨域格的高度一并推过海平面，
+                // 同域格不动（不抹平作者已有的起伏）。
                 if w >= 0.5 {
                     cell.surface = target.surface;
                     cell.biome = target.biome;
@@ -462,6 +501,7 @@ mod tests {
             softness: 0.0,
             target: None,
             height_delta: 100_000.0,
+            exact: None,
         };
         paint(&mut g, &b, 1.0);
         assert_eq!(
@@ -508,6 +548,79 @@ mod tests {
         apply_stroke(&mut g, &s, 1.0);
         assert_eq!(g.get(5, 5).unwrap().surface, SURFACE_WATER);
         assert_eq!(g.get(25, 25).unwrap().biome, BIOME_DESERT);
+    }
+
+    /// 整格直写（`exact`）必须三通道一起覆盖，且**不受**「跨域推高度」规则
+    /// 影响——橡皮要的就是底图那一个整值（-3500 / +80），不是 `PAINT_SEA_DEPTH`。
+    ///
+    /// 用一个「陆地 + 高山」的格子作被擦对象：若误走 `target` 分支，高度会被
+    /// 压到 `PAINT_SEA_DEPTH`（-40）或压根不动，绝不是 -3500。
+    #[test]
+    fn exact_fill_overwrites_all_three_channels_verbatim() {
+        let mut g = TerrainGrid::new(20, 20);
+        // 先把整图铺成「高山陆地」，再拿橡皮擦中心那一块。
+        for y in 0..20i32 {
+            for x in 0..20i32 {
+                g.set(
+                    x,
+                    y,
+                    TerrainCell {
+                        height: 2000,
+                        surface: SURFACE_LAND,
+                        biome: crate::BIOME_MOUNTAINS,
+                    },
+                );
+            }
+        }
+        let base_ocean = TerrainCell {
+            height: -3500,
+            surface: SURFACE_WATER,
+            biome: crate::BIOME_NONE,
+        };
+        let b = Brush::exact_fill((10.0, 10.0), 4.0, 0.7, base_ocean);
+        let touched = paint(&mut g, &b, 1.0);
+
+        assert!(touched > 0, "橡皮应触及若干格，实得 {touched}");
+        assert_eq!(
+            g.get(9, 9).unwrap(),
+            base_ocean,
+            "中心格应被整格覆盖为底图海洋"
+        );
+        assert_eq!(g.get(0, 0).unwrap().height, 2000, "半径外的高山不应被动到");
+    }
+
+    /// `exact` 优先级高于 `target`：两者同时给时只认 `exact`。这条优先级是
+    /// 显式约定，不靠「谁写在 `if` 前面」的巧合。
+    #[test]
+    fn exact_takes_precedence_over_target() {
+        let mut g = TerrainGrid::new(20, 20);
+        let b = Brush {
+            center: (10.0, 10.0),
+            radius: 4.0,
+            softness: 0.0,
+            // 若 `exact` 缺席，这条 target 会把格子推成 +40 m 陆地。
+            target: Some(PaintTarget {
+                surface: SURFACE_LAND,
+                biome: crate::BIOME_DESERT,
+            }),
+            height_delta: 0.0,
+            exact: Some(TerrainCell {
+                height: 80,
+                surface: SURFACE_LAND,
+                biome: crate::BIOME_GRASSLAND,
+            }),
+        };
+        paint(&mut g, &b, 1.0);
+        assert_eq!(
+            g.get(10, 10).unwrap().biome,
+            crate::BIOME_GRASSLAND,
+            "`exact` 应胜出，不该被 target 改成沙漠"
+        );
+        assert_eq!(
+            g.get(10, 10).unwrap().height,
+            80,
+            "`exact` 给了 80 就该是 80，不该被跨域规则推到 +40"
+        );
     }
 
     /// 塑笔刷把陆格压到海平面以下：surface 通道保持 LAND（authoring 真值

@@ -275,6 +275,14 @@ pub enum I18nKey {
     BrushHintRiver,
     /// 「地形材料」段标题（旁附当前选中材质名）
     BrushMaterialHeader,
+    /// 工具名「橡皮」（地形橡皮刷，ADR-0043）
+    BrushToolNameErase,
+    /// 地形橡皮刷交互提示
+    BrushHintErase,
+    /// 「底图」段标题（橡皮面板用；橡皮不选材质，只显示擦回的目标态）
+    BrushBaseLabel,
+    /// 橡皮面板的「当前底图：{base}」（`{base}` = 海洋 / 陆地）
+    BrushBaseNow,
     /// 「半径」滑条标签
     BrushRadiusLabel,
     /// 「软度」滑条标签
@@ -653,6 +661,28 @@ pub enum I18nKey {
     MapControlsZoomOut,
     /// 「缩放到全图」
     MapControlsFitMap,
+    /// 抓手瓷砖 tooltip（ADR-0043）
+    MapControlsPanHint,
+    /// 地形橡皮刷瓷砖 tooltip（ADR-0043）
+    MapControlsEraserHint,
+    /// 选择组主区 tooltip（ADR-0043）
+    MapControlsSelectGroupHint,
+    /// 选择组·多边形（默认项）
+    MapControlsSelectPolygon,
+    /// 选择组·矩形
+    MapControlsSelectRect,
+    /// 选择组·椭圆
+    MapControlsSelectEllipse,
+    /// 矩形选择器的交互提示（按住拖出框）
+    MapControlsSelectRectHint,
+    /// 椭圆选择器的交互提示（按住拖出框）
+    MapControlsSelectEllipseHint,
+    /// 测量组主区 tooltip（ADR-0043）
+    MapControlsMeasureGroupHint,
+    /// 测量组·线段距离（默认项）
+    MapControlsMeasureDistance,
+    /// 测量组·面积
+    MapControlsMeasureArea,
 
     // ── W3：ui_shell 通知 toast 文本 ────────────────────────────────
     /// 「已保存到 」前缀（后接 dir）
@@ -809,6 +839,8 @@ pub enum I18nKey {
     CmdSelectBrushToolLake,
     /// 「笔刷：河流」
     CmdSelectBrushToolRiver,
+    /// 「笔刷：橡皮」（索引 7 = `BrushTool::Eraser`，ADR-0043）
+    CmdSelectBrushToolErase,
     /// 「显示参照网格」（地图工具条瓷砖同源）
     CmdToggleGrid,
     /// 「钻回世界地图」
@@ -1029,7 +1061,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 425] = [
+    pub const ALL: [I18nKey; 441] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1176,6 +1208,10 @@ impl I18nKey {
         I18nKey::BrushHintLake,
         I18nKey::BrushHintRiver,
         I18nKey::BrushMaterialHeader,
+        I18nKey::BrushToolNameErase,
+        I18nKey::BrushHintErase,
+        I18nKey::BrushBaseLabel,
+        I18nKey::BrushBaseNow,
         I18nKey::BrushRadiusLabel,
         I18nKey::BrushSoftnessLabel,
         I18nKey::BrushStrengthLabel,
@@ -1333,6 +1369,17 @@ impl I18nKey {
         I18nKey::MapControlsZoomIn,
         I18nKey::MapControlsZoomOut,
         I18nKey::MapControlsFitMap,
+        I18nKey::MapControlsPanHint,
+        I18nKey::MapControlsEraserHint,
+        I18nKey::MapControlsSelectGroupHint,
+        I18nKey::MapControlsSelectPolygon,
+        I18nKey::MapControlsSelectRect,
+        I18nKey::MapControlsSelectEllipse,
+        I18nKey::MapControlsSelectRectHint,
+        I18nKey::MapControlsSelectEllipseHint,
+        I18nKey::MapControlsMeasureGroupHint,
+        I18nKey::MapControlsMeasureDistance,
+        I18nKey::MapControlsMeasureArea,
         // ui_shell 通知（16）
         I18nKey::NoticeSavedToPrefix,
         I18nKey::NoticeSavedScopePrefix,
@@ -1412,6 +1459,7 @@ impl I18nKey {
         I18nKey::CmdSelectBrushToolVolcano,
         I18nKey::CmdSelectBrushToolLake,
         I18nKey::CmdSelectBrushToolRiver,
+        I18nKey::CmdSelectBrushToolErase,
         I18nKey::CmdToggleGrid,
         I18nKey::CmdDrillToRoot,
         I18nKey::CmdDrillUp,

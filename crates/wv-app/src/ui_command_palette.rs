@@ -19,6 +19,7 @@ use bevy::prelude::*;
 use crate::i18n::I18nKey;
 
 use crate::state::{Panel, RecentProject};
+use wv_render::state::SelectionShape;
 
 /// 命令分组（§6.3，v0.2 §C 新增「项目」「导航」两组）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,14 +160,22 @@ pub enum CommandId {
 }
 
 /// 地图工具条的工具标识（[`CommandId::SelectMapTool`] 的载荷）。
+///
+/// **形态说明（ADR-0043）**：工具条上只剩「选择组」「测量组」两枚分裂按钮与
+/// 一枚橡皮瓷砖；`Brush` / `Continent` / `MeasureEraser` 三个变体不再有瓷砖，
+/// 但**必须保留**——快捷键（B / P / E）与命令面板仍指向它们，删变体会让
+/// 那两个入口静默失效。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapToolId {
-    /// 选择（圈选意图包络）。
-    Select,
+    /// 选择（圈选意图包络）。载荷 = 选区形状（多边形 / 矩形 / 椭圆）。
+    Select(SelectionShape),
     /// 抓手：左键拖拽平移。
     Pan,
-    /// 笔刷：开关地形涂抹。
+    /// 笔刷：开关地形涂抹（按 `BrushState.tool` 当前值走；工具条无瓷砖，
+    /// B 快捷键 + 笔刷面板入口）。
     Brush,
+    /// 地形橡皮刷：开关橡皮模式（`BrushTool::Eraser`）。
+    BrushErase,
     /// 折线测量。
     MeasureLine,
     /// 矩形测量。
@@ -495,7 +504,9 @@ impl CommandRegistry {
             I18nKey::CmdBrushRadiusDown,
             Some("["),
         );
-        // 笔刷工具 7 条（索引 = BrushTool::ALL 下标，命令面板与面板瓷砖同一口径）
+        // 笔刷工具 8 条（索引 = BrushTool::ALL 下标，命令面板与面板瓷砖同一口径）。
+        // **顺序必须与 `BrushTool::ALL` 逐项对齐**——按下标索引，插队会让后面
+        // 所有工具的命令面板条目指向错误的工具。
         for (i, key) in [
             I18nKey::CmdSelectBrushToolPaint,
             I18nKey::CmdSelectBrushToolRange,
@@ -504,6 +515,7 @@ impl CommandRegistry {
             I18nKey::CmdSelectBrushToolVolcano,
             I18nKey::CmdSelectBrushToolLake,
             I18nKey::CmdSelectBrushToolRiver,
+            I18nKey::CmdSelectBrushToolErase,
         ]
         .into_iter()
         .enumerate()
@@ -647,8 +659,11 @@ mod tests {
         );
     }
 
-    /// 7 个笔刷工具全部注册且中文可搜（「零隐藏功能」D5：工具瓷砖之外，
-    /// Ctrl+K 是第二入口）；网格开关注册在视图组。
+    /// 全部笔刷工具（`BrushTool::ALL` 逐项）注册且中文可搜（「零隐藏功能」D5：
+    /// 工具瓷砖之外，Ctrl+K 是第二入口）；网格开关注册在视图组。
+    ///
+    /// 断言按 `ALL.len()` 循环，**不是**写死个数——往 `ALL` 加工具而忘了在
+    /// 注册表补条目，这条会立刻失败（反之，写死个数则新增时静默通过）。
     #[test]
     fn every_brush_tool_and_grid_toggle_are_registered_and_searchable() {
         let all = CommandRegistry::all();

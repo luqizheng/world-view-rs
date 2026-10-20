@@ -335,6 +335,10 @@ pub fn run(config: AppConfig) {
                 .after(wv_render::selection::sync_selection_map_change),
             wv_render::selection::drag_selected_anchor
                 .after(wv_render::selection::commit_selection_click),
+            // 框选形状（ADR-0043）：按住拖拽的那一套手势。与上面三个系统读同
+            // 一批资源、各自在函数开头按形状早退（互斥，不会同时改状态）。
+            wv_render::selection::commit_selection_shape_drag
+                .after(wv_render::selection::sync_selection_map_change),
         )
             .after(camera::track_cursor_world),
     )
