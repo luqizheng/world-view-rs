@@ -319,6 +319,77 @@ fn hash01(xi: i64, yi: i64, seed: u64) -> f32 {
 /// 水彩」的区间。
 const LAND_GRAIN: f32 = 0.09;
 
+/// 水彩晕开的模糊半径（格）：5×5 窗 ≈ 2 格过渡带（civ-atlas `paintBase`
+/// 的 `boxBlurWrap(3×S)` 同量级）。1 = 看不出，3 = 群系糊成一片。
+const BLEED_RADIUS: u32 = 2;
+
+/// 一格的**基色**（ADR-0044 D1）：shader 色 + 水深渐变 + 雪双调——
+/// 即旧「内部格直铺」在颗粒 / 淡化 / 浮雕**之前**的那一步。抽成纯函数是
+/// 为了让 [`CellRenderer::blended_base`]（5×5 模糊）与内部格直铺共用
+/// 同一取色口径：模糊的输入 = 直铺的输出，两条路径永不漂移。
+fn base_color_of(
+    data: &TerrainData,
+    kind: u8,
+    cx: u32,
+    cy: u32,
+    pal: &PaletteColors,
+    treatment: &crate::theme::theme_pack::TreatmentFlags,
+    mode: ViewMode,
+) -> Color {
+    let cell = &data.cells[(cy as usize) * data.width as usize + cx as usize];
+    let mut color = shade_for_mode(mode)(data, kind, pal);
+    if treatment.water_gradient && slot_is_water(kind) && mode != ViewMode::Coastline {
+        color = water_shade_at(cell.height, pal);
+    }
+    if treatment.snow_shade && kind == 7 && mode != ViewMode::Coastline {
+        color = snow_shade_at(cell.height, pal);
+    }
+    color
+}
+
+/// 水彩晕开（ADR-0044 D1）：`(cx, cy)` 处的 **5×5 盒式模糊基色**。
+///
+/// 纯函数——只依赖 `data` 邻域，任意带数 / 任意批次下逐字节一致
+/// （行带并行契约、增量 patch 契约同时保住）。邻域越界钳边。
+/// 模糊的是**基色**（直铺口径），颗粒 / 淡化 / 浮雕照旧在其后逐格叠加。
+fn blended_base(
+    data: &TerrainData,
+    cx: u32,
+    cy: u32,
+    pal: &PaletteColors,
+    treatment: &crate::theme::theme_pack::TreatmentFlags,
+    mode: ViewMode,
+) -> Color {
+    let w = data.width;
+    let h = data.height;
+    let (x0, y0) = (
+        cx.saturating_sub(BLEED_RADIUS),
+        cy.saturating_sub(BLEED_RADIUS),
+    );
+    let (x1, y1) = (
+        (cx + BLEED_RADIUS).min(w - 1),
+        (cy + BLEED_RADIUS).min(h - 1),
+    );
+    let mut ar = 0.0f32;
+    let mut ag = 0.0f32;
+    let mut ab = 0.0f32;
+    let mut n = 0u32;
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let kind = display_slot(&data.cells[(y * w + x) as usize]);
+            let Color::Srgba(c) = base_color_of(data, kind, x, y, pal, treatment, mode) else {
+                continue;
+            };
+            ar += c.red;
+            ag += c.green;
+            ab += c.blue;
+            n += 1;
+        }
+    }
+    let n = n.max(1) as f32;
+    Color::srgb(ar / n, ag / n, ab / n)
+}
+
 /// 陆格颗粒乘子：水系两槽（0 深水 / 1 浅水）恒 1.0——等深渐变是连续
 /// 函数，叠噪声会打架；陆上各类（沙/草/林/丘/山/雪/沼/路）按格抖动。
 /// 全渲染路径共用（全图烘焙 / 增量 patch / VectorFlat 采样），同一格
@@ -425,6 +496,10 @@ struct CellRenderer<'a> {
     /// 模式——「折叠成同一陆色」是 Google 模式的硬契约，逐格抖动会重新
     /// 引入马赛克。
     grain: bool,
+    /// 水彩晕开开关（ADR-0044 D1）：`TreatmentFlags.watercolor_bleed` ∧ 仅
+    /// VectorFlat / Schematic——水彩是平涂语法；Google（干净）、RealTerrain
+    ///（高度写真）、Coastline / Event / Topographic（自有三色/管线）都不掺。
+    bleed: bool,
     /// 装饰旗标（ADR-0023 D4：`ThemePack.treatment`）。HandDrawn 全 `true` 时
     /// 所有 gate 与历史恒开行为逐位一致。
     treatment: crate::theme::theme_pack::TreatmentFlags,
@@ -486,6 +561,8 @@ impl<'a> CellRenderer<'a> {
             wobble: treatment.boundary_wobble
                 && !matches!(mode, ViewMode::GoogleMap | ViewMode::VectorFlat),
             grain: treatment.land_grain && mode != ViewMode::GoogleMap,
+            bleed: treatment.watercolor_bleed
+                && matches!(mode, ViewMode::VectorFlat | ViewMode::Schematic),
             treatment,
             blocks: std::array::from_fn(|_| None),
             tried: [false; 10],
@@ -624,7 +701,14 @@ impl<'a> CellRenderer<'a> {
         } else {
             kind
         };
-        let Color::Srgba(c) = (self.shader)(self.data, kind, self.palette) else {
+        // 水彩晕开（ADR-0044 D1）：边界像素取最近格的 5×5 模糊基色——
+        // 水陆交界两侧的填充色被邻域互相拉柔和（「湿岸」水彩效果）。
+        let c = if self.bleed {
+            blended_base(self.data, cx, cy, self.palette, &self.treatment, self.mode)
+        } else {
+            (self.shader)(self.data, kind, self.palette)
+        };
+        let Color::Srgba(c) = c else {
             return;
         };
         // 陆格颗粒（ADR-0042）：每格 ±4.5% 明度抖动，平涂色块出纸面颗粒感。
@@ -850,10 +934,19 @@ impl<'a> CellRenderer<'a> {
                 return;
             }
             // 纯色回退（无图集 / 缺项）：整格平涂。
-            let mut color = (self.shader)(self.data, kind, self.palette);
+            // 水彩晕开（ADR-0044 D1）开启时取 5×5 模糊基色——群系边界外
+            // 2 格内的格子颜色被邻域拉柔和；纯色内部格模糊值 ≈ 本色（全部
+            // 同 kind 时严格相等），高频邻域才付 25 次取色的钱。
+            let mut color = if self.bleed {
+                blended_base(self.data, cx, gy, self.palette, &self.treatment, self.mode)
+            } else {
+                (self.shader)(self.data, kind, self.palette)
+            };
             // 水域按高度渐变（手绘地图 #1）：kind 0/1 的内部格从单色水变
             // height 调度的水彩带；轮廓图模式不进这里。
-            if self.treatment.water_gradient
+            // （bleed 开时模糊基色已含水深渐变——邻域各格都过了 water_shade_at。）
+            if !self.bleed
+                && self.treatment.water_gradient
                 && slot_is_water(kind)
                 && self.mode != ViewMode::Coastline
             {
@@ -861,7 +954,12 @@ impl<'a> CellRenderer<'a> {
             }
             // 雪格双调（手绘地图 #3）：kind=7 全部走 snow_shade_at（RealTerrain
             // 模式之外也给 highlight 视觉——海报感的"近白雪"）。轮廓图模式不动。
-            if self.treatment.snow_shade && kind == 7 && self.mode != ViewMode::Coastline {
+            // （bleed 开时同理已含于模糊基色。）
+            if !self.bleed
+                && self.treatment.snow_shade
+                && kind == 7
+                && self.mode != ViewMode::Coastline
+            {
                 color = snow_shade_at(cell.height, self.palette);
             }
             // 陆格颗粒（ADR-0042）：与采样路径（sample_vector_flat /

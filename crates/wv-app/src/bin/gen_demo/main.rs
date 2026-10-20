@@ -337,24 +337,20 @@ fn rasterize(coast: &[F], rivers: Option<&[F]>, seas: Option<&[F]>, peaks: f64) 
             height[idx] = h as i16;
             // 群系：纬度气候为主，山只认高度。
             // 雪线随世界峰值缩放（3400 世界 2250 / 10000 世界 ~6600）——
-            // 「山有多高」是美术尺度，雪线跟着山走，否则高世界整条山脉全白。
-            let snow_line = 2750.0 * (peaks / 3400.0).max(1.0);
             // 气候边界噪声化（ADR-0042）：纯纬度阈值画出横贯全图的水平条带
             //（实机截图确认）；低频噪声把纬度线揉成有机曲线，幅度 ±0.07 纬度幅。
             let fy_wob = fy + (fbm(x as f64 * 0.045, y as f64 * 0.045) - 0.5) * 0.14;
-            // 雪线内掺岩斑（D13）：高海拔格按高频噪声三成留作岩（MOUNTAINS）——
-            // 纯白雪原连成整条白带读作道路（用户实机反馈）；掺入岩斑后
-            // 山脊变成「雪顶 + 岩壁」的斑驳峰群。
-            let rock_break = fbm(x as f64 * 0.14, y as f64 * 0.14) > 0.34;
-            // 山体碎裂（D13）：脊线内部按高频噪声约三成回落为丘陵——连续的
-            // 山地填充带会被拆成一串峰群（参考图的山是离散山簇，不是等高带）。
-            let ridge_break = fbm(x as f64 * 0.11 + 17.0, y as f64 * 0.11) > 0.36;
-            biome[idx] = if h >= snow_line && !rock_break {
-                9 // SNOWFIELD（高山雪线：阿尔卑斯/高加索峰顶）
-            } else if h >= 1500.0 && !ridge_break {
-                13 // MOUNTAINS
-            } else if h >= 550.0 {
-                12 // HILLS
+            // ADR-0044 D2（学 civ-atlas）：**山不是颜色**。civ-atlas 的 biome
+            // 枚举（温度+降水的 Whittaker 图）里没有 MOUNTAINS/SNOWFIELD——
+            // 高地的地面色就是气候色，山的身份全部由符号层承担。此前按高度
+            // 分带出 MOUNTAINS(岩褐)/SNOWFIELD(冷白)，连成一条高对比缎带，
+            // zoom out 读作道路（用户两轮实机反馈）——从根上拆掉：
+            // 高地一律落 HILLS（干草黄，SPEC §1.4 既有色），山形与雪帽由
+            // 装饰层按**高度**出图标（terrain_decor 高度优先规则，同 ADR）。
+            // 作者仍可用笔刷手涂 MOUNTAINS/SNOWFIELD biome（笔刷意图优先，
+            // 渲染层 biome 回退规则保留，两条路互不干扰）。
+            biome[idx] = if h >= 550.0 {
+                12 // HILLS（高地干草黄；山形 = 符号，见 terrain_decor）
             } else if fy_wob < 0.30 {
                 1 // FOREST（中欧森林）
             } else if fy_wob < 0.42 {

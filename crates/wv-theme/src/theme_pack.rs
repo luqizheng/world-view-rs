@@ -119,6 +119,11 @@ pub struct TreatmentFlags {
     /// 是否启用陆格明度颗粒（ADR-0042 D6：每格 ±4.5% 确定性抖动，
     /// 平涂色块出水彩颗粒）。Google 类「干净普通地图」主题关。
     pub land_grain: bool,
+    /// 是否启用**水彩晕开**（ADR-0044 D1，学 civ-atlas `paintBase` 的
+    /// `boxBlurWrap`：先把「每格基色」做 5×5 盒式模糊再上屏，群系边界
+    /// 从硬切格边变成 2 格宽的柔和渐变）。实现走纯函数（任意格的模糊色
+    /// 只依赖邻域），全图烘焙与增量 patch 天然逐字节一致。
+    pub watercolor_bleed: bool,
 }
 
 impl TreatmentFlags {
@@ -137,6 +142,7 @@ impl TreatmentFlags {
         ink_sublinear: true,
         paper_fog: true,
         land_grain: true,
+        watercolor_bleed: true,
     };
 
     /// 全 `false`（「干净矢量」观感的基准，未来 Skyline 类主题的起点；
@@ -152,6 +158,7 @@ impl TreatmentFlags {
         ink_sublinear: false,
         paper_fog: false,
         land_grain: false,
+        watercolor_bleed: false,
     };
 }
 

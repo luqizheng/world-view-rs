@@ -97,3 +97,36 @@
 实施踩坑记录：把 `exp(-d/w)` 写成了 `-(exp(d/w))`（括号位置），负指数变巨大负数，
 山高全部被 clamp 到 10 m——**满图没有山**且 terrain 校验和三轮不变，靠对比 warp=0/±3
 的校验和才发现（校验和相同 = 代码路径没生效，是最好的回归信号）。
+
+---
+
+## 追记三（2026-10-20，ADR-0044 方法论：水彩晕开 + 山是符号不是颜色）
+
+用户看了 `.ref/civ-atlas` 后裁定：**采用 civ-atlas 的实现方式，不采用其色板**
+——颜色仍是 `ART_STYLE_SPEC §1.4` 的定稿值。核实 civ-atlas 源码得到两个关键
+事实并落地：
+
+### 背景：civ-atlas 怎么做的（源码证据）
+
+- `src/gen/biomes.ts`：biome 枚举（温度+降水 Whittaker 图）**没有 MOUNTAINS /
+  SNOWFIELD**——山不是颜色；同一张表带 `real`（写实）/ `paint`（水彩）两套色。
+- `src/render/fantasy.ts`：分两层——像素层 `fantasyBase`（纸 + 群系水彩 +
+  `boxBlurWrap(3×S)` 晕开 + 海按离岸距离分深浅 + 海岸墨线）；矢量符号层
+  `planGlyphs`（山沿**检测出的脊线**放、密度按**坡度**、格内随机偏移 +
+  最小间距去重、尺寸按脊走向）。
+
+### 落地（色板零改动）
+
+| # | 改动 | 落点 |
+|---|---|---|
+| D1 | **水彩晕开**：`TreatmentFlags.watercolor_bleed` 新旗标；`cells.rs` 新增纯函数 `base_color_of`（单格直铺口径）与 `blended_base`（5×5 盒式模糊），内部格直铺与 VectorFlat 边界采样在 bleed 开时取模糊基色——群系边界从硬切格边变 2 格宽的柔和渐变；全图烘焙 / 行带并行 / 增量 patch 天然逐字节一致（纯函数）。仅 VectorFlat / Schematic 生效 | `wv-theme::theme_pack` + `wv-render::cells` |
+| D2 | **山退出 biome 分类**：gen_demo 删 MOUNTAINS / SNOWFIELD 高度分带（含 D13 的 rock_break / ridge_break——它们是在粉饰色带，方向就错了），高地落 HILLS（干草黄，SPEC 既有色） | `wv-gen-demo` |
+| D3 | **山由符号承担 + 脊点吸附**：装饰层按**高度**出山形（`≥1500 → Mountain`、`≥550 → Hills`，biome 显式声明作笔刷意图回退）；每个步距块内扫最高格，≥1500 把符号**放到峰上**（吸附抖动收半）——山链沿脊线连续成串，密度与脊线长度成正比 | `wv-render::terrain_decor` |
+
+D13 的脊线 warp / 宽度起伏 / 边缘噪声保留——它们塑造的是**高度场**，符号
+链的走向正是跟随它。
+
+### 效果（实机截图 `wvt_ridge.png`）
+
+白色 / 岩褐缎带消失；群系边界水彩化；山链沿蜿蜒脊线连续排布——与参考图
+的构图语法一致，且颜色仍是 SPEC 定稿值。

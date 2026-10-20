@@ -677,6 +677,9 @@ pub fn sync_terrain_decor(
                 continue;
             }
             let idx = (gy as u32) * data.width + cx as u32;
+            // 脊点吸附（ADR-0044 D3）：Some((kind, 峰格x, 峰格y, 峰高))——
+            // 山符号改放到块内峰格上，位置/高度用峰，哈希种子仍用网格点。
+            let mut kind_override: Option<(DecorKind, i64, i64, i16)> = None;
             let Some(c) = data.cells.get(idx as usize) else {
                 cx += stride;
                 continue;
@@ -695,11 +698,61 @@ pub fn sync_terrain_decor(
                 }
                 DecorKind::OceanWaves
             } else {
-                match decor_kind_for_biome(c.biome) {
-                    Some(k) => k,
-                    None => {
-                        cx += stride;
-                        continue;
+                // ADR-0044 D3（civ-atlas 语法）：**山 = 符号，不是颜色**。
+                // 生成端（wv-gen-demo）已不再把高地分类成 MOUNTAINS/SNOWFIELD
+                // 色带，山形与雪帽改按**高度场**出图标——山链走向跟随
+                // 脊线（含 warp 扭曲），笔直色带从根上不存在。
+                // biome 显式声明仍优先（作者用笔刷手涂山地/丘陵时意图 wins，
+                // 与高度规则取或——两条路互不干扰）。
+                //
+                // **脊点吸附**（D13 后高度带只有 2–13 格宽，步距网格点大多
+                // 落在山外——直接按网格点采样会得到稀疏的孤峰）：在每个
+                // 步距块内扫最高格，≥1500 就把符号**放到峰上**。效果 = 山链
+                // 沿脊线连续成串（每步距一座），密度与脊线长度成正比。
+                let by_biome = decor_kind_for_biome(c.biome);
+                let mut peak = (cx, gy, c.height);
+                if c.height < 1500 {
+                    let r = (stride / 2).max(1);
+                    let step = (stride / 8).max(1);
+                    let mut bx = cx - r;
+                    while bx <= cx + r {
+                        let mut by = gy - r;
+                        while by <= gy + r {
+                            if bx >= 0
+                                && by >= 0
+                                && bx < data.width as i64
+                                && by < data.height as i64
+                            {
+                                let o = (by as u32 * data.width + bx as u32) as usize;
+                                let cell = &data.cells[o];
+                                if !wv_terrain::edit::is_water_cell(wv_terrain::TerrainCell {
+                                    height: cell.height,
+                                    surface: cell.surface,
+                                    biome: cell.biome,
+                                }) && cell.height > peak.2
+                                {
+                                    peak = (bx, by, cell.height);
+                                }
+                            }
+                            by += step;
+                        }
+                        bx += step;
+                    }
+                }
+                let (site_cx, site_cy, site_h) = peak;
+                if site_h >= 1500 || by_biome == Some(DecorKind::Mountain) {
+                    // 覆盖本块的符号位置/高度：峰格（哈希种子仍用网格点，确定性不变）。
+                    kind_override = Some((DecorKind::Mountain, site_cx, site_cy, site_h));
+                    DecorKind::Mountain
+                } else if c.height >= 550 || by_biome == Some(DecorKind::Hills) {
+                    DecorKind::Hills
+                } else {
+                    match by_biome {
+                        Some(k) => k,
+                        None => {
+                            cx += stride;
+                            continue;
+                        }
                     }
                 }
             };
@@ -711,6 +764,12 @@ pub fn sync_terrain_decor(
                     ((220.0 + c.height as f32) / 220.0).clamp(0.15, 1.0)
                 }
                 DecorKind::Plains | DecorKind::Hills => 0.4,
+            };
+            // 脊点吸附命中：山符号的位置/高度切换到峰格。
+            let (px, py, ph) = if let Some((_, sx, sy, sh)) = kind_override {
+                (sx, sy, sh)
+            } else {
+                (cx, gy, c.height)
             };
             if hash01(cx, gy, 77) > keep_prob {
                 cx += stride;
@@ -726,10 +785,12 @@ pub fn sync_terrain_decor(
             // 网格的格心，符号排成一张完美的棋盘——zoom out 一眼看出「整齐」
             //（用户实机反馈）。按 ±0.45 步距抖动，把规则网格揉成自然散布。
             let step_world = stride as f32 * cell;
-            let jx = (hash01(cx, gy, 0x51) - 0.5) * step_world * 0.9;
-            let jy = (hash01(cx, gy, 0x52) - 0.5) * step_world * 0.9;
-            let wx = origin.x + (cx as f32 + 0.5) * cell + jx;
-            let wy = origin.y + (gy as f32 + 0.5) * cell + jy;
+            // 吸附命中时抖动幅度收半（峰位本身就是定位，大幅抖动会掉下脊线）。
+            let jmul = if kind_override.is_some() { 0.25 } else { 0.9 };
+            let jx = (hash01(cx, gy, 0x51) - 0.5) * step_world * jmul;
+            let jy = (hash01(cx, gy, 0x52) - 0.5) * step_world * jmul;
+            let wx = origin.x + (px as f32 + 0.5) * cell + jx;
+            let wy = origin.y + (py as f32 + 0.5) * cell + jy;
             // 气候带（ADR-0039 D3）：归一化 y（0=北）。
             let fy = gy as f32 / data.height as f32;
             // 图元占位色 → 桶默认 ink（构造器 [0;4] 时回填；变体色原样透传）。
@@ -740,7 +801,7 @@ pub fn sync_terrain_decor(
                 ink_rgb[2] as f32 / 255.0,
                 ink_a,
             ];
-            for mut prim in site_primitives(kind, band, cx, gy, c.height, fy) {
+            for mut prim in site_primitives(kind, band, cx, gy, ph, fy) {
                 if prim.color == [0.0, 0.0, 0.0, 0.0] {
                     prim.color = ink;
                 }
