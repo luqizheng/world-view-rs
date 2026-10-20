@@ -3520,6 +3520,190 @@ impl EditCellCommand {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 批量单格编辑命令（2026-10-20 多边形选区批量修改）
+// ---------------------------------------------------------------------------
+
+/// 批量单格变更载荷：一格的 before / after。
+#[derive(Debug, Clone)]
+pub struct CellChange {
+    pub gx: i32,
+    pub gy: i32,
+    pub before: wv_core::terrain::TerrainCellData,
+    pub after: wv_core::terrain::TerrainCellData,
+}
+
+/// 批量单格编辑命令：多边形选区贴合方格后，**整体**修改 N 格。
+///
+/// 与 [`EditCellCommand`]（单格）的关系：同一提交语义，N 格合 **1 个撤销
+/// 单位**——用户「圈一片 → 一次改 → 一次撤」的心智。changes 在 UI 侧构建时
+/// 即从当前 world 读取 before（无并发编辑场景），apply 直接逐格写 after；
+/// revert 逐格写回 before。
+#[derive(Debug, Clone)]
+pub struct BatchEditCellsCommand {
+    /// 目标地图 ID。
+    pub map: wv_core::Id,
+    /// 逐格变更（调用方保证各格不重复）。
+    pub changes: Vec<CellChange>,
+}
+
+impl BatchEditCellsCommand {
+    pub fn new(map: wv_core::Id, changes: Vec<CellChange>) -> Self {
+        Self { map, changes }
+    }
+}
+
+impl EditCommand for BatchEditCellsCommand {
+    fn label(&self) -> String {
+        format!("批量改 {} 格", self.changes.len())
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let mut data = world
+            .terrain_of(&self.map)
+            .ok_or_else(|| EditError::TerrainMismatch(format!("地图 `{}` 无地形网格", self.map)))?
+            .clone();
+        let w = data.width as i32;
+        let h = data.height as i32;
+        for c in &self.changes {
+            if c.gx < 0 || c.gy < 0 || c.gx >= w || c.gy >= h {
+                return Err(EditError::Precondition(format!(
+                    "cell 坐标 ({}, {}) 超出地形范围 {}x{}",
+                    c.gx, c.gy, w, h
+                )));
+            }
+            let idx = (c.gy as usize) * (w as usize) + (c.gx as usize);
+            data.cells[idx] = c.after;
+        }
+        world.set_terrain(self.map.clone(), data);
+        Ok(vec![format!("maps/{}/terrain.bin", self.map)])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let mut data = world
+            .terrain_of(&self.map)
+            .ok_or_else(|| EditError::TerrainMismatch(format!("地图 `{}` 无地形网格", self.map)))?
+            .clone();
+        let w = data.width as i32;
+        for c in &self.changes {
+            let idx = (c.gy as usize) * (w as usize) + (c.gx as usize);
+            if idx < data.cells.len() {
+                data.cells[idx] = c.before;
+            }
+        }
+        world.set_terrain(self.map.clone(), data);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod batch_edit_cells_tests {
+    use super::*;
+    use wv_terrain::SURFACE_LAND;
+
+    const TEST_MAP: &str = "world_main";
+
+    fn test_map() -> Id {
+        Id::new_unchecked(TEST_MAP)
+    }
+
+    fn world_with_terrain(n: u32) -> World {
+        let cells = vec![
+            wv_core::terrain::TerrainCellData {
+                height: 0,
+                surface: 0,
+                biome: 0
+            };
+            (n * n) as usize
+        ];
+        let mut world = World::default();
+        world.set_terrain(
+            test_map(),
+            wv_core::terrain::TerrainData {
+                width: n,
+                height: n,
+                cells,
+            },
+        );
+        world
+    }
+
+    /// 批量 apply 写 N 格 / revert 逐格还原；1 个撤销单位。
+    #[test]
+    fn batch_edit_cells_applies_and_reverts_all_changes() {
+        let mut world = world_with_terrain(8);
+        let cell_at =
+            |t: &wv_core::terrain::TerrainData, gx: i32, gy: i32| t.cells[(gy * 8 + gx) as usize];
+        let t0 = world.terrain_of(&test_map()).unwrap().clone();
+        let changes = vec![
+            CellChange {
+                gx: 1,
+                gy: 1,
+                before: cell_at(&t0, 1, 1),
+                after: wv_core::terrain::TerrainCellData {
+                    height: 100,
+                    surface: SURFACE_LAND,
+                    biome: 3,
+                },
+            },
+            CellChange {
+                gx: 2,
+                gy: 1,
+                before: cell_at(&t0, 2, 1),
+                after: wv_core::terrain::TerrainCellData {
+                    height: 200,
+                    surface: 0,
+                    biome: 14,
+                },
+            },
+        ];
+        let cmd = BatchEditCellsCommand::new(test_map(), changes);
+        let dirty = cmd.apply(&mut world).expect("apply");
+        assert_eq!(dirty, vec![format!("maps/{TEST_MAP}/terrain.bin")]);
+        let t1 = world.terrain_of(&test_map()).unwrap().clone();
+        assert_eq!(cell_at(&t1, 1, 1).height, 100);
+        assert_eq!(cell_at(&t1, 2, 1).height, 200);
+        assert_eq!(cell_at(&t1, 3, 1), cell_at(&t0, 3, 1), "未选格不动");
+
+        cmd.revert(&mut world).expect("revert");
+        assert_eq!(
+            world.terrain_of(&test_map()).unwrap().cells,
+            t0.cells,
+            "revert 后全图逐格还原"
+        );
+    }
+
+    /// 任一格越界 → 整批拒收（不动 world）。
+    #[test]
+    fn batch_edit_cells_rejects_on_any_out_of_bounds() {
+        let mut world = world_with_terrain(4);
+        let cell = wv_core::terrain::TerrainCellData {
+            height: 0,
+            surface: 0,
+            biome: 0,
+        };
+        let cmd = BatchEditCellsCommand::new(
+            test_map(),
+            vec![
+                CellChange {
+                    gx: 0,
+                    gy: 0,
+                    before: cell,
+                    after: cell,
+                },
+                CellChange {
+                    gx: 99,
+                    gy: 0,
+                    before: cell,
+                    after: cell,
+                },
+            ],
+        );
+        let err = cmd.apply(&mut world).expect_err("越界必须整批拒收");
+        assert!(matches!(err, EditError::Precondition(_)));
+    }
+}
+
 #[cfg(test)]
 mod edit_cell_tests {
     use super::*;

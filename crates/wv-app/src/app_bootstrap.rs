@@ -242,6 +242,8 @@ pub fn run(config: AppConfig) {
                 editing::commit_stroke_on_release,
                 // 单格编辑（[ADR-0040]）：点击 → cell_pick → EditCellState.selected
                 editing::commit_edit_cell_on_click,
+                // 批量选区（2026-10-20）：多边形闭合 → 栅格化贴合方格
+                editing::sync_region_cells.after(camera::track_cursor_world),
                 streets::commit_street_click,
                 // 撤销 / 重做不再在这里单独监听 Ctrl+Z：快捷键统一由
                 // `ui_shell::hotkeys` 收（那里已经处理了「输入框聚焦时失效」），

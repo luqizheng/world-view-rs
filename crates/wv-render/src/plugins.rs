@@ -93,8 +93,10 @@ pub struct EditorOverlayPlugin;
 impl Plugin for EditorOverlayPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<cell_selection::CellSelectionEntities>()
+            .init_resource::<cell_selection::CellRegionEntities>()
             .add_systems(Update, brush_cursor::sync_brush_cursor)
             .add_systems(Update, cell_selection::sync_cell_selection)
+            .add_systems(Update, cell_selection::sync_cell_region)
             .add_systems(
                 Update,
                 (

@@ -815,6 +815,42 @@ pub fn commit_edit_cell_on_click(
     }
 }
 
+/// 多边形选区 → 方格集合同步（2026-10-20 批量编辑）。
+///
+/// `SelectionState.closed`（V 工具闭合的多边形，世界坐标）变化时重栅格化
+/// （cell 中心落入即选中，[`wv_render::cell_selection::rasterize_polygon_cells`]），
+/// 写入 `EditCellState.region_cells`——区域高亮渲染与批量应用（面板）都读它。
+/// 闭合取消 / 切图 → 清空。
+pub fn sync_region_cells(
+    selection: Res<crate::state::SelectionState>,
+    grid: Res<GridConfig>,
+    drill: Res<DrillState>,
+    projection: Res<WorldProjection>,
+    mut edit_cell: ResMut<EditCellState>,
+) {
+    use wv_render::cell_selection::rasterize_polygon_cells;
+    let Some(poly) = selection.closed.as_ref() else {
+        if !edit_cell.region_cells.is_empty() {
+            edit_cell.region_cells.clear();
+        }
+        return;
+    };
+    // 来源图地形（无地形 = 无可贴合方格，清空）。
+    let Some(target_map) = drill.current() else {
+        edit_cell.region_cells.clear();
+        return;
+    };
+    let Some(terrain) = projection.world.terrain_of(target_map) else {
+        edit_cell.region_cells.clear();
+        return;
+    };
+    // 变化检测：多边形点数 + 首点 + 栅格口径没变就跳过（避免每帧 O(N) 重算）。
+    // 粗指纹够用——锚点拖动必然改首点或点数以外的坐标，此处选择每次
+    // closed 存在就重算：8×8~512² 栅格 bbox 扫描 <1ms，拖锚帧率可承受。
+    edit_cell.region_cells = rasterize_polygon_cells(poly, &grid, terrain.width, terrain.height);
+    edit_cell.last_map_id = Some(target_map.clone());
+}
+
 #[cfg(test)]
 mod tests {
     //! 笔触包围盒 → dirty 矩形（优化项 3d 的入口算法）。

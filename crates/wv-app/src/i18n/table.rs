@@ -187,6 +187,10 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CellEditorEmptyTitle => "未选中格",
         I18nKey::CellEditorEmptyHint => "点击地图任一格开始编辑
 （水陆 / 海拔 / 群系）",
+        I18nKey::BatchCellsCount => "格已选",
+        I18nKey::BatchCellsClear => "取消选区",
+        I18nKey::BatchCellsHeightDelta => "海拔增减（整体）",
+        I18nKey::BatchCellsApply => "应用海拔",
         I18nKey::CellEditorWater => "水",
         I18nKey::CellEditorLand => "陆",
 
@@ -740,6 +744,10 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CellEditorEmptyTitle => "No cell selected",
         I18nKey::CellEditorEmptyHint => "Click any cell on the map to edit
 (water/land, height, biome)",
+        I18nKey::BatchCellsCount => "cells selected",
+        I18nKey::BatchCellsClear => "Clear selection",
+        I18nKey::BatchCellsHeightDelta => "Height delta (batch)",
+        I18nKey::BatchCellsApply => "Apply height",
         I18nKey::CellEditorWater => "Water",
         I18nKey::CellEditorLand => "Land",
 

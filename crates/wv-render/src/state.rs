@@ -686,6 +686,10 @@ pub struct EditCellState {
     pub selected: Option<(i32, i32)>,
     /// Inspector 待分发的字段变化草稿。
     pub pending: Option<EditCellPending>,
+    /// 多边形选区贴合的方格集合（2026-10-20 批量编辑）：V 工具闭合多边形后
+    /// 由 `sync_region_cells` 栅格化写入（cell 中心点落在多边形内即选中）。
+    /// 空 = 无区域选区。高亮渲染与批量应用（BatchEditCellsCommand）都消费它。
+    pub region_cells: Vec<(i32, i32)>,
     /// 绑定的图 ID；变图即清空选中格(与 [`SelectionState::last_map_id`]
     /// 一致语义,统一通过 [`EditCellState::on_map_change`] 处理)。
     pub last_map_id: Option<wv_core::Id>,
@@ -699,6 +703,7 @@ impl EditCellState {
         self.hover = None;
         self.selected = None;
         self.pending = None;
+        self.region_cells.clear();
     }
 
     /// 切换图时调用——如果新图 ≠ 上次记录的图,清空所有格相关字段

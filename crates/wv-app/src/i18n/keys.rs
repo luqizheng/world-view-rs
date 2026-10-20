@@ -761,6 +761,14 @@ pub enum I18nKey {
     CellEditorEmptyTitle,
     /// 空态提示（先点地图选格）
     CellEditorEmptyHint,
+    /// 批量区「N 格」计数
+    BatchCellsCount,
+    /// 批量区「取消选区」
+    BatchCellsClear,
+    /// 批量区「海拔增减」
+    BatchCellsHeightDelta,
+    /// 批量区「应用」
+    BatchCellsApply,
     /// 地表分段「水」
     CellEditorWater,
     /// 地表分段「陆」
