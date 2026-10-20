@@ -225,7 +225,7 @@ pub fn update_street_labels(
         .single()
         .map(|t| t.rotation.inverse())
         .unwrap_or(Quat::IDENTITY);
-    let cjk = fonts.cjk_font.clone();
+    let cjk = fonts.label_handle();
     let label_color = match view.mode {
         crate::state::ViewMode::GoogleMap => crate::theme::colors_google::GOOGLE_LABEL_FILL,
         // 古舆图 / 暮色：深褐墨（暮色为浅米），不再回退纯白（ADR-0016）。

@@ -889,7 +889,7 @@ pub fn update_place_labels(
     }
     let wanted = filtered;
     // CJK 字体（fonts.rs 在 Startup 注册）：缺省字体无中文字形，地名会成方块。
-    let cjk = fonts.cjk_font.clone();
+    let cjk = fonts.label_handle();
     // 文字色按视图模式走 palette：Google Default Map 用深灰标签；Text2d
     // 光晕描边需自定义 shader，后续再补白 halo。透明度随 Place 图层（ADR-0013）。
     // 手绘地图 #2：place 走 `label_place` 槽位（与 `label_fill` 同色，避免回归），
@@ -1098,7 +1098,7 @@ pub fn update_faction_labels(
         }
     }
     let wanted = filtered;
-    let cjk = fonts.cjk_font.clone();
+    let cjk = fonts.label_handle();
     // ADR-0017 Q1：势力标签色随 Label 渲染组透明度；色值走 Google 文字深灰
     // （与地名标签同一族，v0.1 不做 per-PlaceKind 主题映射——ADR-0016 §6.1 Q5）。
     // 手绘地图 #2：势力 / 区域用 `label_region`（最深墨）+ 字号 ×1.4（国/大区字重更重）。
@@ -1286,7 +1286,7 @@ pub fn update_event_labels(
         }
     }
     let wanted = filtered;
-    let cjk = fonts.cjk_font.clone();
+    let cjk = fonts.label_handle();
     // 事件标签色同势力标签（Label 渲染组透明度 + Google 文字深灰）。
     let label_color =
         crate::theme::colors_google::GOOGLE_CONTROL_TEXT.with_alpha(layers.label.opacity);
@@ -1457,7 +1457,7 @@ pub fn update_region_labels(
     }
     let wanted = filtered;
 
-    let cjk = fonts.cjk_font.clone();
+    let cjk = fonts.label_handle();
     // 区域标签色同势力/事件标签（Label 渲染组透明度 + Google 文字深灰）。
     // 手绘地图 #2：region 走 `label_region`（最深墨）+ 字号 ×1.4。
     let region_font_size = font_size * 1.4;
@@ -1625,7 +1625,7 @@ pub fn update_sea_labels(
     }
     let wanted = filtered;
 
-    let cjk = fonts.cjk_font.clone();
+    let cjk = fonts.label_handle();
     // 字色：古舆图走 `label_water`（青蓝色族 #3F5B6A · DUSK #5A7A88）；Google
     // 走 `GOOGLE_LABEL_FILL` 深灰（与地名同族，v0.1 不做 water 主题区分）。
     let label_color = match view.mode {

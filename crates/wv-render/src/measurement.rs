@@ -276,7 +276,7 @@ pub fn render_measurements(
     }
 
     let font_size = label_world;
-    let cjk = fonts.cjk_font.clone();
+    let cjk = fonts.label_handle();
     let label_color = bevy::color::Color::WHITE;
     // 描边：全不透明黑（2026-10-14 用户反馈：半透明黑压不住黄底）。
     let shadow_color = bevy::color::Color::srgba(0.0, 0.0, 0.0, 1.0);

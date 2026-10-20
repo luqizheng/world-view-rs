@@ -224,6 +224,18 @@ MyWorld/
 
 关于 `bevy_reflect`：**优先使用纯 serde**，因为 YAML round-trip 的稳定性比反射便利更重要。
 
+### 8.1 打包字体（`crates/wv-render/assets/fonts/`，编译期嵌入）
+
+| 字体 | 版本 | 许可 | 用途 |
+|---|---|---|---|
+| **Inter** Regular | 4.001 | SIL OFL-1.1 | UI 拉丁（`Proportional` 首位） |
+| **Noto Sans SC** Regular | 2.004 | SIL OFL-1.1 | UI 中文（回退）+ 画布标注兜底 |
+| **霞鹜文楷（LXGW WenKai）** Regular | 1.530 | SIL OFL-1.1 | **画布标签书法体**：地名 / 街道名 / 测量标注（ADR-0042 D4） |
+
+三份字体全部为 SIL Open Font License 1.1（可自由嵌入 / 再分发）。
+来源、更新方法与获取直链见 `crates/wv-render/assets/fonts/README.md`；
+字体装配决议见 ADR-0019（Inter + Noto）/ ADR-0042 追记（文楷）。
+
 ---
 
 ## 9. 开发路线图
