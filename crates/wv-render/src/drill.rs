@@ -890,8 +890,9 @@ pub fn update_place_labels(
     let wanted = filtered;
     // CJK 字体（fonts.rs 在 Startup 注册）：缺省字体无中文字形，地名会成方块。
     let cjk = fonts.label_handle();
-    // 文字色按视图模式走 palette：Google Default Map 用深灰标签；Text2d
-    // 光晕描边需自定义 shader，后续再补白 halo。透明度随 Place 图层（ADR-0013）。
+    // 文字色按视图模式走 palette：Google Default Map 用深灰标签。透明度随
+    // Place 图层（ADR-0013）。晕边已落地（下方 halo_color + sync_halo，
+    // ADR-0016 M2 的 8 向纸色副本）——旧注释「后续再补白 halo」已过时。
     // 手绘地图 #2：place 走 `label_place` 槽位（与 `label_fill` 同色，避免回归），
     // 字号保持 LABEL_PX 不动。区域 / 势力 大字走 `label_region` + ×1.4 倍字号。
     let label_color = match view.mode {
