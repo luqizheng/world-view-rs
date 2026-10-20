@@ -1,0 +1,12 @@
+# 人物：安德烈大主教（圣安德烈教国）
+id: char_andrew
+name: 安德烈二世
+alias: 守火者
+traits: [虔诚, 多疑, 坚忍]
+attributes:
+  faction: holy_order_of_st_andrew
+state_spans:
+  - from: 1
+    place: city_athens
+    title: 大主教
+    power: 0.8

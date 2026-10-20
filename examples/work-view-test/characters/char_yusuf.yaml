@@ -1,0 +1,17 @@
+# 人物：优素福（阿特拉斯行会会长）
+id: char_yusuf
+name: 优素福·本·阿里
+alias: 沙漠商路之主
+traits: [精明, 记仇, 慷慨]
+attributes:
+  faction: atlas_guild
+state_spans:
+  - from: 1
+    to: 360
+    place: city_algeria
+    title: 行会长
+    power: 0.7
+  - from: 360
+    place: city_tunis
+    title: 流亡行会长
+    power: 0.5

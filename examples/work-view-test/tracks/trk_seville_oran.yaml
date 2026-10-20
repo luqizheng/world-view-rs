@@ -1,0 +1,20 @@
+# 轨迹 1：地中海西海岸贸易线（塞维利亚 → 阿尔及尔 → 突尼斯）
+# 演示 §2.7：带 day 的锚点 → 线性插值；运行主体 Unit 1。
+id: trk_seville_oran
+unit: unit_seville_trader
+map: world_main
+from: 80
+to: 300
+waypoints:
+  - day: 80
+    place: city_seville
+    pos: {x: 624.0, y: 1416.0}
+  - day: 150
+    place: city_granada
+    pos: {x: 792.0, y: 1240.0}
+  - day: 220
+    place: city_algeria
+    pos: {x: 1304.0, y: 352.0}
+  - day: 300
+    place: city_tunis
+    pos: {x: 1836.0, y: 428.0}

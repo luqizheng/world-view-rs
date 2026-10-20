@@ -1,0 +1,12 @@
+# 势力索引（work-view-test）
+factions:
+  - id: crown_of_seville
+    file: seville_kingdom.yaml
+  - id: roman_senate
+    file: roman_senate.yaml
+  - id: atlas_guild
+    file: atlas_guild.yaml
+  - id: holy_order_of_st_andrew
+    file: holy_order_of_st_andrew.yaml
+  - id: anatolian_rebels
+    file: anatolian_rebels.yaml

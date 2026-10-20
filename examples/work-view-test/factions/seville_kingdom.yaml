@@ -1,0 +1,7 @@
+# 势力：塞维利亚王廷（伊比利亚南部）
+# rank 是渲染提示字符串（kingdom / free_city / order / tribe ……），不是层级。
+id: crown_of_seville
+name: 塞维利亚王廷
+color: "#C8A24A"
+rank: kingdom
+seat: city_seville

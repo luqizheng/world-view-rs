@@ -1,2 +1,10 @@
-# 单位索引（占位）
-units: []
+# 单位索引（work-view-test：轨迹用主体）
+units:
+  - id: unit_seville_trader
+    file: unit_seville_trader.yaml
+  - id: unit_roman_envoy
+    file: unit_roman_envoy.yaml
+  - id: unit_holy_pilgrim
+    file: unit_holy_pilgrim.yaml
+  - id: unit_atlas_caravan
+    file: unit_atlas_caravan.yaml

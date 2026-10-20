@@ -1,0 +1,13 @@
+# 人物：马尔库斯（罗马元老院首席）
+id: char_marcus
+name: 马尔库斯·瓦勒里乌斯
+alias: 首席元老
+traits: [老练, 保守, 善谋]
+attributes:
+  faction: roman_senate
+born_at: 1
+state_spans:
+  - from: 1
+    place: city_rome
+    title: 首席元老
+    power: 0.9

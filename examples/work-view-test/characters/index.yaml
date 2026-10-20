@@ -1,2 +1,14 @@
-# 人物索引（占位：内容层待作者手作）
-characters: []
+# 人物索引（work-view-test：6 个关键人物）
+characters:
+  - id: char_isabel
+    file: char_isabel.yaml
+  - id: char_marcus
+    file: char_marcus.yaml
+  - id: char_yusuf
+    file: char_yusuf.yaml
+  - id: char_andrew
+    file: char_andrew.yaml
+  - id: char_kerim
+    file: char_kerim.yaml
+  - id: char_leon
+    file: char_leon.yaml
