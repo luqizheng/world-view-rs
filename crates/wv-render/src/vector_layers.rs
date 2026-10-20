@@ -516,20 +516,30 @@ pub fn sync_vector_layers(
         // 河流（ADR-0037 D5）：地形族水系，gate = MODE_TABLE(Rivers) ∧ terrain 图层。
         // 与 road_stale 无关——river_polylines 的生命周期由 compute_projection 的
         // river_key 缓存管；这里只做「可见才合批」。
+        // 级别门槛（ADR-0047 D5）：派生河与作者河都带 rank（长度占比折算），
+        // 过统一门槛——Nation 档只画横贯级主河，Region 档加区域河，Edit 全见。
         if recipe.enabled(PassId::Rivers) && layers.terrain.visible {
             let mat = layer.river_material.get_or_insert_with(|| {
                 materials.add(ColorMaterial::from_color(Color::srgb(0.29, 0.53, 0.68)))
             });
+            let river_tier = lod_tier(view.scale);
             let mut river_segments: Vec<(Vec2, Vec2)> = Vec::new();
-            for pts in &frame.river_polylines {
-                for pair in pts.windows(2) {
+            for line in &frame.river_polylines {
+                if !crate::state::rank_visible_at_tier(line.rank, river_tier) {
+                    continue;
+                }
+                for pair in line.pts.windows(2) {
                     river_segments.push((pair[0], pair[1]));
                 }
             }
             // 作者手绘河（ADR-0046 D4）：与派生水系**双供给**——作者小河是
             // 亚格线状数据（`Place.line`），与模板世界的 `rivers_seed` 派生河并存。
-            for pts in &frame.author_river_polylines {
-                for pair in pts.windows(2) {
+            // 同一呈现门槛（ADR-0047 D5：双供给同一级别语义）。
+            for line in &frame.author_river_polylines {
+                if !crate::state::rank_visible_at_tier(line.rank, river_tier) {
+                    continue;
+                }
+                for pair in line.pts.windows(2) {
                     river_segments.push((pair[0], pair[1]));
                 }
             }
@@ -549,11 +559,17 @@ pub fn sync_vector_layers(
         } else {
             layer.rivers.despawn(&mut commands);
         }
+        // 世界道路（ADR-0047 D4）：按当前视野档位取降序前缀切片——Nation 档
+        // 只画城际干线（rank ≥ 3），Region 加区域级，Edit 全量。缩放不重算
+        // 段列（缓存门 road_key 不含 scale），跨档只换 mesh（分档指纹）。
+        let road_tier = lod_tier(view.scale);
+        let road_segments = frame.road_slice_at(road_tier);
+        let road_fingerprint = frame.road_fingerprint_at(road_tier);
         sync_road_strokes(
             &mut commands,
             &mut meshes,
-            &frame.road_segments,
-            frame.road_fingerprint,
+            road_segments,
+            road_fingerprint,
             view.scale,
             casing.clone(),
             GOOGLE_ROAD_CASING_PX,
@@ -564,8 +580,8 @@ pub fn sync_vector_layers(
         sync_road_strokes(
             &mut commands,
             &mut meshes,
-            &frame.road_segments,
-            frame.road_fingerprint,
+            road_segments,
+            road_fingerprint,
             view.scale,
             fill.clone(),
             GOOGLE_ROAD_FILL_PX,
@@ -923,8 +939,8 @@ fn sync_street_layers(
 /// 同步一组道路 stroke 的**合批** mesh：内容指纹 / 线宽 / Z 任一变化才换
 /// mesh，材质变化只换绑 `MeshMaterial2d`（A2，2026-10-18）。
 ///
-/// `fingerprint` 由调用方给定（路段列从 `ProjectionFrame.road_fingerprint`
-/// 现成拿来；街道 / 预览段列就地 [`segments_fingerprint`]）——同一组段在
+/// `fingerprint` 由调用方给定（世界道路取档位切片的 `road_fingerprint_at`；
+/// 街道 / 预览 / 河流段列就地 [`segments_fingerprint`]）——同一组段在
 /// roads 与 casings 两个 pass 间不重复哈希。
 #[allow(clippy::too_many_arguments)]
 fn sync_road_strokes(
@@ -1666,16 +1682,15 @@ mod tests {
         world.insert_resource(Assets::<Image>::default());
         world.insert_resource(ViewState::default());
         world.insert_resource(GridConfig::default());
-        world.insert_resource(ProjectionFrame {
-            road_segments: vec![(Vec2::ZERO, Vec2::X * 100.0)],
-            place_dots: vec![PlaceDot {
+        world.insert_resource(projection_frame_with_roads(
+            vec![(3, Vec2::ZERO, Vec2::X * 100.0)],
+            vec![PlaceDot {
                 pos: Vec2::new(20.0, 20.0),
                 is_city: true,
                 rank: 3,
                 name_len: 3,
             }],
-            ..Default::default()
-        });
+        ));
         world.init_resource::<VectorLayerEntities>();
         world.init_resource::<crate::streets::StreetLayerCache>();
         world.init_resource::<crate::streets::StreetEditorState>();
@@ -1787,17 +1802,34 @@ mod tests {
         world.insert_resource(Assets::<Image>::default());
         world.insert_resource(ViewState::default());
         world.insert_resource(GridConfig::default());
-        world.insert_resource(ProjectionFrame {
-            road_fingerprint: segments_fingerprint(&segments),
-            road_segments: segments,
-            ..Default::default()
-        });
+        world.insert_resource(projection_frame_with_roads(
+            segments.into_iter().map(|(a, b)| (3u8, a, b)).collect(),
+            Vec::new(),
+        ));
         world.init_resource::<VectorLayerEntities>();
         world.init_resource::<crate::streets::StreetLayerCache>();
         world.init_resource::<crate::streets::StreetEditorState>();
         world.init_resource::<crate::layer_frame::LayerFrame>();
         world.init_resource::<crate::recipe::RenderRecipe>();
         world
+    }
+
+    /// 带道路的投影帧（ADR-0047 D4 测试装配）：带级别段列经
+    /// `build_road_tier_view` 算齐切片位与三档指纹——与 `compute_projection`
+    /// 同一构建入口，测试数据不会绕过档位切片语义。
+    fn projection_frame_with_roads(
+        ranked: Vec<(u8, Vec2, Vec2)>,
+        place_dots: Vec<PlaceDot>,
+    ) -> ProjectionFrame {
+        let (segments, cuts, fingerprints) = crate::world_projection::build_road_tier_view(ranked);
+        ProjectionFrame {
+            road_segments: segments,
+            road_rank_cuts: cuts,
+            road_tier_fingerprints: fingerprints,
+            road_fingerprint: fingerprints[0],
+            place_dots,
+            ..Default::default()
+        }
     }
 
     /// 3 段路网只产生 2 个 Mesh（casing + fill 各一个合批），不是每段 2 个。
@@ -1819,6 +1851,63 @@ mod tests {
         );
     }
 
+    /// 档位门槛端到端（ADR-0047 D4）：同一份混合级别路网（1 干线 + 2 局部），
+    /// Nation 档 fill 合批只含 rank ≥ 3 前缀——顶点数必须比 Edit 档少。
+    #[test]
+    fn nation_tier_draws_only_high_rank_road_prefix() {
+        let fill_vertices = |world: &World| -> usize {
+            let layer = world.resource::<VectorLayerEntities>();
+            let handle = &layer
+                .roads
+                .batch
+                .as_ref()
+                .expect("路网非空，应有 fill 合批")
+                .mesh;
+            world
+                .resource::<Assets<Mesh>>()
+                .get(handle)
+                .expect("fill mesh 在册")
+                .count_vertices()
+        };
+
+        let mut world = World::default();
+        world.insert_resource(Assets::<Mesh>::default());
+        world.insert_resource(Assets::<ColorMaterial>::default());
+        world.insert_resource(Assets::<Image>::default());
+        world.insert_resource(ViewState::default());
+        world.insert_resource(GridConfig::default());
+        world.insert_resource(projection_frame_with_roads(
+            vec![
+                (3u8, Vec2::ZERO, Vec2::X * 100.0),
+                (1u8, Vec2::X * 100.0, Vec2::new(140.0, 30.0)),
+                (1u8, Vec2::new(140.0, 30.0), Vec2::new(-20.0, 80.0)),
+            ],
+            Vec::new(),
+        ));
+        world.init_resource::<VectorLayerEntities>();
+        world.init_resource::<crate::streets::StreetLayerCache>();
+        world.init_resource::<crate::streets::StreetEditorState>();
+        world.init_resource::<crate::layer_frame::LayerFrame>();
+        world.init_resource::<crate::recipe::RenderRecipe>();
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(sync_vector_layers);
+        // ViewState::default() 的 scale=1.0 恰落在 Region 档（阈值含闭区间），
+        // 先显式拉到 Edit 档再对比。
+        world.resource_mut::<ViewState>().scale = 0.5;
+        schedule.run(&mut world);
+        let edit_vertices = fill_vertices(&world);
+
+        world.resource_mut::<ViewState>().scale = 4.0; // Nation 档
+        schedule.run(&mut world);
+        let nation_vertices = fill_vertices(&world);
+
+        assert!(
+            nation_vertices < edit_vertices,
+            "Nation 档只画 rank≥3 前缀（1/3 段），顶点应更少：edit={edit_vertices} nation={nation_vertices}"
+        );
+    }
+
     /// 段列内容变化：整组换 mesh（旧的移除、新的加入），资产数不累积。
     #[test]
     fn road_batch_replaces_its_mesh_when_segments_change() {
@@ -1836,8 +1925,8 @@ mod tests {
             .clone();
 
         let next = vec![(Vec2::ZERO, Vec2::new(50.0, 60.0))];
-        world.resource_mut::<ProjectionFrame>().road_segments = next.clone();
-        world.resource_mut::<ProjectionFrame>().road_fingerprint = segments_fingerprint(&next);
+        *world.resource_mut::<ProjectionFrame>() =
+            projection_frame_with_roads(vec![(3u8, next[0].0, next[0].1)], Vec::new());
         schedule.run(&mut world);
 
         let layer = world.resource::<VectorLayerEntities>();

@@ -43,7 +43,17 @@ pub struct ProjectionFrame {
     ///
     /// 只画**两端都锚定在当前地图**的边（`Place.map == 当前图 id` 且 `x/y` 齐备），
     /// 与 [`crate::drill::resolve_markers`] 的「只画当前层级」口径一致。
+    ///
+    /// **已按 `PlaceEdge::effective_rank` 降序排序**（ADR-0047 D4）：每档视野
+    /// 可见的段集 = 降序前缀，切片见 [`Self::road_slice_at`]；消费者不得依赖
+    /// 段顺序之外的任何排列语义（同 mesh 内顶点序不影响绘制结果）。
     pub road_segments: Vec<(Vec2, Vec2)>,
+    /// 每档视野的道路段可见前缀长度（ADR-0047 D4），下标序 `[Edit, Region, Nation]`。
+    ///
+    /// 与 `road_segments` 的降序排列配套：Nation 档画 `[..cuts[2]]`，
+    /// Region 档 `[..cuts[1]]`，Edit 档全量。缩放**不**重算段列（缓存门
+    /// `road_key` 不含 scale），档位切换只是 O(1) 前缀切片。
+    pub road_rank_cuts: [usize; 3],
     /// 本帧地点（POI）点标（世界坐标），锚定在当前地图的地点。
     ///
     /// 已按视口裁剪（0c01491）；级别门槛与密度上限在 `sync_poi` 按
@@ -53,8 +63,13 @@ pub struct ProjectionFrame {
     ///
     /// `sync_vector_layers` 的合批 mesh 以它判「路网内容变没变」：不变则连
     /// mesh 规格比对都不必做。相机平移不改世界系段坐标（指纹不变 → 零重建），
-    /// 编辑与钻取切图才会改变它。
+    /// 编辑与钻取切图才会改变它。**语义 = Edit 档（全量）指纹**；分档指纹见
+    /// [`Self::road_tier_fingerprints`] / [`Self::road_fingerprint_at`]。
     pub road_fingerprint: u64,
+    /// 每档视野的段列内容指纹（ADR-0047 D4），下标序同 [`Self::road_rank_cuts`]。
+    ///
+    /// 三档各算各的：缩放跨档只换 mesh（前缀内容变了），不重算段列。
+    pub road_tier_fingerprints: [u64; 3],
     /// 路段列缓存键（ADR-0030 D5a）。`None` = 失效。段坐标在**根图帧系**，
     /// 不随相机平移/缩放变——只有世界编辑、钻取换图、栅格换图或 Road 图层
     /// 可见性翻转才需要重算段列与指纹，其余帧这一步是零工作。
@@ -64,7 +79,8 @@ pub struct ProjectionFrame {
     ///
     /// **派生数据不落盘**（AGENTS 4.2 只存参数）：种子在 `WorldMeta.template`，
     /// 高度场在 `terrain.bin`，两者齐备即可逐点复现；重生成换种子河流自动跟随。
-    pub river_polylines: Vec<Vec<Vec2>>,
+    /// 每条折线带派生呈现级别（ADR-0047 D5，[`RiverLine::rank`]）。
+    pub river_polylines: Vec<RiverLine>,
     /// 河流派生缓存键：`(当前图 id, rivers_seed)`。`None` = 失效。
     /// 世界编辑 / 钻取换图 / 栅格换图都会重算；纯相机运动零工作。
     pub river_key: Option<(String, u64)>,
@@ -76,7 +92,84 @@ pub struct ProjectionFrame {
     /// 视图空间坐标（同 [`Self::river_polylines`] 口径）。来源 = 当前图上
     /// 带 `Place.line` 的地点（亚格线状作者数据）；与派生的 `rivers_seed`
     /// 水系**并存**——派生是模板世界的确定性资产，作者河是补充，不是替代。
-    pub author_river_polylines: Vec<Vec<Vec2>>,
+    /// 呈现级别与派生河同折算（长度占比，ADR-0047 D5）；图幅未知时归 rank 1
+    /// （亚格数据本质是局部细节，宁可少显示）。
+    pub author_river_polylines: Vec<RiverLine>,
+}
+
+/// 一条河流折线的渲染数据（ADR-0047 D5）：顶点 + 派生呈现级别。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RiverLine {
+    /// 派生呈现级别（[`river_rank_from_length_frac`] 折算）；绘制侧过统一
+    /// 门槛 [`crate::state::rank_visible_at_tier`]。
+    pub rank: u8,
+    /// 视图空间顶点（≥ 2 个才构成可见折线）。
+    pub pts: Vec<Vec2>,
+}
+
+/// 河流呈现级别折算（ADR-0047 D5）：折线长度 ÷ 图幅宽度 ≥ 0.40 → 3（横贯级
+/// 主河），≥ 0.15 → 2（区域河），否则 → 1（溪流）。
+///
+/// 占比口径与图幅尺寸无关——4096² 世界图与 512² 城市图同一把尺；派生河
+/// 与作者手绘河共用（双供给同一呈现语义）。阈值是表现层参数，登记在
+/// ADR-0047 §D5，调整只动这里 + 对应测试。
+pub fn river_rank_from_length_frac(frac: f32) -> u8 {
+    if frac >= 0.40 {
+        3
+    } else if frac >= 0.15 {
+        2
+    } else {
+        1
+    }
+}
+
+/// 折线总长（相邻顶点距离和）。
+fn polyline_len(pts: &[Vec2]) -> f32 {
+    pts.windows(2).map(|w| w[0].distance(w[1])).sum()
+}
+
+impl ProjectionFrame {
+    /// 档位 `tier` 可见的道路段切片（ADR-0047 D4）：降序前缀，O(1)。
+    pub fn road_slice_at(&self, tier: crate::state::LodTier) -> &[(Vec2, Vec2)] {
+        let i = match tier {
+            crate::state::LodTier::Edit => 0,
+            crate::state::LodTier::Region => 1,
+            crate::state::LodTier::Nation => 2,
+        };
+        &self.road_segments[..self.road_rank_cuts[i]]
+    }
+
+    /// 档位 `tier` 的道路段内容指纹（ADR-0047 D4）。
+    pub fn road_fingerprint_at(&self, tier: crate::state::LodTier) -> u64 {
+        let i = match tier {
+            crate::state::LodTier::Edit => 0,
+            crate::state::LodTier::Region => 1,
+            crate::state::LodTier::Nation => 2,
+        };
+        self.road_tier_fingerprints[i]
+    }
+}
+
+/// 由「带呈现级别的段列」构建档位切片视图（ADR-0047 D4）。
+///
+/// 按 rank 降序排序后每档可见集恰为降序前缀：Edit 全量、Region 取 rank ≥ 2、
+/// Nation 取 rank ≥ 3（[`crate::state::rank_visible_at_tier`] 的前缀化）；
+/// 三档指纹各自独立。纯函数，`compute_projection` 与测试共用同一实现，
+/// 避免「构建」与「切片」两套真相。
+pub(crate) fn build_road_tier_view(
+    mut ranked: Vec<(u8, Vec2, Vec2)>,
+) -> (Vec<(Vec2, Vec2)>, [usize; 3], [u64; 3]) {
+    ranked.sort_unstable_by_key(|x| std::cmp::Reverse(x.0));
+    let segments: Vec<(Vec2, Vec2)> = ranked.iter().map(|(_, a, b)| (*a, *b)).collect();
+    let min_rank = [0u8, 2, 3]; // Edit 全量 / Region ≥ 2 / Nation ≥ 3
+    let mut cuts = [0usize; 3];
+    let mut fingerprints = [0u64; 3];
+    for (ti, cut) in cuts.iter_mut().enumerate() {
+        // 段列按 rank 降序 → 谓词 `rank ≥ min_rank` 的真前缀长度即切割位。
+        *cut = ranked.partition_point(|(r, _, _)| *r >= min_rank[ti]);
+        fingerprints[ti] = segments_fingerprint(&segments[..*cut]);
+    }
+    (segments, cuts, fingerprints)
 }
 
 /// 一个地物符号的渲染数据。`kind` 决定 `sync_landmarks` 烘哪个顶点流。
@@ -202,6 +295,8 @@ pub fn compute_projection(
     frame.road_key = road_key;
     if road_stale {
         frame.road_segments.clear();
+        frame.road_rank_cuts = [0; 3];
+        frame.road_tier_fingerprints = [segments_fingerprint(&[]); 3];
         frame.road_fingerprint = segments_fingerprint(&frame.road_segments);
     }
 
@@ -237,7 +332,17 @@ pub fn compute_projection(
     // 作者手绘河（ADR-0046 D4）：当前图上带 `Place.line` 的地点 → 折线。
     // 与派生水系**双供给**（先例：街道的手绘 YAML / Overture 双供给）。
     // 坐标：折线是**图内局部 wu** → `map_to_view` 转视图空间（同 POI 口径）。
+    // 级别（ADR-0047 D5）：与派生河同折算（长度 ÷ 图幅宽）；图幅未知归 1。
     if river_stale {
+        let extent_w = current_for_river.as_ref().and_then(|map_id| {
+            projection
+                .world
+                .maps
+                .iter()
+                .find(|m| &m.id == map_id)
+                .and_then(|n| n.extent)
+                .map(|e| e.width)
+        });
         if let Some(map_id) = &current_for_river {
             if let Some(idxs) = place_index.anchored_by_map.get(map_id) {
                 for i in idxs {
@@ -251,7 +356,10 @@ pub fn compute_projection(
                         .map(|p| grid.map_to_view(Vec2::new(p[0], p[1])))
                         .collect();
                     if pts.len() >= 2 {
-                        frame.author_river_polylines.push(pts);
+                        let rank = extent_w
+                            .map(|w| river_rank_from_length_frac(polyline_len(&pts) / w.max(1.0)))
+                            .unwrap_or(1);
+                        frame.author_river_polylines.push(RiverLine { rank, pts });
                     }
                 }
             }
@@ -273,17 +381,24 @@ pub fn compute_projection(
                         seed,
                         12,
                     );
+                    // 级别（ADR-0047 D5）：折线长度 ÷ 图幅宽。视图空间长度 ==
+                    // 图内 wu 长度（map_to_view 只平移），占比口径与图幅无关。
                     frame.river_polylines = polys
                         .into_iter()
                         .map(|pts| {
-                            pts.into_iter()
+                            let pts: Vec<Vec2> = pts
+                                .into_iter()
                                 .map(|[nx, ny]| {
                                     grid.map_to_view(Vec2::new(
                                         nx * extent.width,
                                         ny * extent.height,
                                     ))
                                 })
-                                .collect()
+                                .collect();
+                            let rank = river_rank_from_length_frac(
+                                polyline_len(&pts) / extent.width.max(1.0),
+                            );
+                            RiverLine { rank, pts }
                         })
                         .collect();
                 }
@@ -358,12 +473,19 @@ pub fn compute_projection(
                 Some(grid.map_to_view(Vec2::new(p.x?, p.y?)))
             };
             if layers.road.visible && road_stale {
+                // 带级别收集（ADR-0047 D4）：`effective_rank`（显式 rank 或
+                // 距离折算）→ 降序排序 → 三档前缀切割位与各自指纹一次算齐。
+                let mut ranked: Vec<(u8, Vec2, Vec2)> = Vec::new();
                 for edge in &world.distances.edges {
                     if let (Some(a), Some(b)) = (find_place(&edge.a), find_place(&edge.b)) {
-                        frame.road_segments.push((a, b));
+                        ranked.push((edge.effective_rank(), a, b));
                     }
                 }
-                frame.road_fingerprint = segments_fingerprint(&frame.road_segments);
+                let (segments, cuts, fingerprints) = build_road_tier_view(ranked);
+                frame.road_segments = segments;
+                frame.road_rank_cuts = cuts;
+                frame.road_tier_fingerprints = fingerprints;
+                frame.road_fingerprint = frame.road_tier_fingerprints[0];
             }
             // POI 点标：当前地图上的**视口内**锚定地点；带「是否城市级」标记供 LOD 筛选。
             // 事实地点（`feature = Some`）由 `feature_overlays` 画地界晕与符号，
@@ -955,6 +1077,76 @@ mod tests {
             2,
             "世界变更后索引重建，新边应可解析"
         );
+    }
+
+    /// 档位切片（ADR-0047 D4 手算）：rank [3,2,1,1] 降序前缀——Edit 全量 4 段、
+    /// Region 切在 rank<2 处剩 2 段、Nation 剩 1 段；三档指纹互不相同，
+    /// 且 Edit 档指纹 == 旧 `road_fingerprint` 语义（全量）。
+    #[test]
+    fn road_tier_view_cuts_descending_prefixes_per_tier() {
+        let seg = |i: f32| (Vec2::new(i, 0.0), Vec2::new(i + 1.0, 1.0));
+        let ranked = vec![
+            (1u8, seg(3.0).0, seg(3.0).1),
+            (3u8, seg(1.0).0, seg(1.0).1),
+            (1u8, seg(4.0).0, seg(4.0).1),
+            (2u8, seg(2.0).0, seg(2.0).1),
+        ];
+        let (segments, cuts, fingerprints) = build_road_tier_view(ranked);
+        assert_eq!(segments.len(), 4);
+        // 降序：rank 3,2,1,1。
+        assert_eq!(
+            cuts,
+            [4, 2, 1],
+            "Edit 全量 / Region 取 rank≥2 / Nation 取 rank≥3，实得 {cuts:?}"
+        );
+        assert_eq!(frame_slice_lens(&segments, cuts), (4, 2, 1));
+        assert_ne!(fingerprints[0], fingerprints[1]);
+        assert_ne!(fingerprints[1], fingerprints[2]);
+        assert_eq!(
+            fingerprints[0],
+            segments_fingerprint(&segments),
+            "Edit 档指纹必须等于全量指纹（road_fingerprint 旧语义）"
+        );
+    }
+
+    /// 同一排序下三档前缀的切片长度（ road_slice_at 的纯数据影射）。
+    fn frame_slice_lens(segments: &[(Vec2, Vec2)], cuts: [usize; 3]) -> (usize, usize, usize) {
+        let frame = ProjectionFrame {
+            road_segments: segments.to_vec(),
+            road_rank_cuts: cuts,
+            road_tier_fingerprints: [0; 3],
+            ..Default::default()
+        };
+        use crate::state::LodTier;
+        (
+            frame.road_slice_at(LodTier::Edit).len(),
+            frame.road_slice_at(LodTier::Region).len(),
+            frame.road_slice_at(LodTier::Nation).len(),
+        )
+    }
+
+    /// 全部同级的段列：三档切片同长（全见或全不见），指纹全等——
+    /// 「缩放跨档不换 mesh」的前置条件。
+    #[test]
+    fn uniform_rank_road_view_has_identical_tier_slices() {
+        let ranked = vec![(3u8, Vec2::ZERO, Vec2::X), (3u8, Vec2::X, Vec2::X * 2.0)];
+        let (segments, cuts, fingerprints) = build_road_tier_view(ranked);
+        assert_eq!(cuts, [2, 2, 2], "全 rank 3 时三档同切片");
+        assert_eq!(fingerprints[0], fingerprints[1]);
+        assert_eq!(fingerprints[1], fingerprints[2]);
+        assert_eq!(segments.len(), 2);
+    }
+
+    /// 河流长度占比折算（ADR-0047 D5 冻结契约，逐值手算）：
+    /// ≥ 0.40 → 3、≥ 0.15 → 2、否则 → 1；边界值恰在门槛上归高档。
+    #[test]
+    fn river_rank_folds_by_length_fraction() {
+        assert_eq!(river_rank_from_length_frac(0.40), 3, "恰在主河门槛上");
+        assert_eq!(river_rank_from_length_frac(0.9), 3, "横贯图幅是主河");
+        assert_eq!(river_rank_from_length_frac(0.39), 2, "门槛下沿归区域河");
+        assert_eq!(river_rank_from_length_frac(0.15), 2, "恰在区域门槛上");
+        assert_eq!(river_rank_from_length_frac(0.14), 1, "门槛下沿归溪流");
+        assert_eq!(river_rank_from_length_frac(0.0), 1, "退化折线也是溪流");
     }
 
     /// POI 点标按当前图分桶直取：别图的锚定地点与未锚定图节点都不生成点。

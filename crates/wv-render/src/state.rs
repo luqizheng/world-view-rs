@@ -370,7 +370,26 @@ pub fn lod_fade(scale: f32, threshold: f32) -> f32 {
 /// 以硬门取代旧「非城市淡出带」：档位边界处点标直接出现/消失（缩放运动掩盖
 /// pop-in，Google 同款）。`rank` 缺省的旧工程经 `Place::effective_rank` 折算
 /// （w/h → 3，否则 1）后，与引入分级前的两档行为逐位一致。
+///
+/// ADR-0047 D2 起本函数只是 [`rank_visible_at_tier`] 的 POI 别名——门槛数值
+/// 只有这一份，POI / 道路 / 街道 / 河流共用。
 pub fn poi_visible_at_rank(rank: u8, tier: LodTier) -> bool {
+    rank_visible_at_tier(rank, tier)
+}
+
+/// 统一呈现门槛（ADR-0047 D2）：视野档位 × 最低级别，**硬门**，全要素共用。
+///
+/// 词表即 GLOSSARY「呈现级别」：`3` 国家级、`2` 区域/市镇级、`1` 局部、
+/// `0` 网络节点/微点。Nation 档放行 rank ≥ 3，Region 档 ≥ 2，Edit 档全见。
+///
+/// 消费方与各自的级别来源：
+/// - POI：`Place::effective_rank`（w/h 折算）→ 本函数；
+/// - 世界道路：`PlaceEdge::effective_rank`（距离折算）→ 本函数；
+/// - 城市街道：`RoadClass::presentation_rank_from_lod`（lod 折算）→ 本函数；
+/// - 河流：派生长度定级（`compute_projection` 内）→ 本函数。
+///
+/// 阈值是表现层参数，收口在这一个 match 里；改门槛 = 改这里 + 对应测试。
+pub fn rank_visible_at_tier(rank: u8, tier: LodTier) -> bool {
     match tier {
         LodTier::Nation => rank >= 3,
         LodTier::Region => rank >= 2,
@@ -434,6 +453,26 @@ mod lod_tests {
                 "Edit 档放行 rank {r}"
             );
         }
+    }
+
+    /// 统一门槛（ADR-0047 D2）与 POI 别名同值（门槽数值只有一份的证据），
+    /// 且 Nation/Region 两档的边界行为与手算一致。
+    #[test]
+    fn unified_rank_gate_matches_poi_alias_and_hand_bounds() {
+        for r in 0..=4u8 {
+            for tier in [LodTier::Edit, LodTier::Region, LodTier::Nation] {
+                assert_eq!(
+                    rank_visible_at_tier(r, tier),
+                    poi_visible_at_rank(r, tier),
+                    "rank {r} × {tier:?}：统一门槛必须与 POI 别名同值"
+                );
+            }
+        }
+        assert!(rank_visible_at_tier(3, LodTier::Nation));
+        assert!(!rank_visible_at_tier(2, LodTier::Nation));
+        assert!(rank_visible_at_tier(2, LodTier::Region));
+        assert!(!rank_visible_at_tier(1, LodTier::Region));
+        assert!(rank_visible_at_tier(0, LodTier::Edit));
     }
 }
 
