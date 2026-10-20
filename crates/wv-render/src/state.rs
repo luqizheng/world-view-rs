@@ -690,6 +690,12 @@ pub struct EditCellState {
     /// 由 `sync_region_cells` 栅格化写入（cell 中心点落在多边形内即选中）。
     /// 空 = 无区域选区。高亮渲染与批量应用（BatchEditCellsCommand）都消费它。
     pub region_cells: Vec<(i32, i32)>,
+    /// 上次栅格化时**多边形**的指纹（2026-10-20 性能修）。
+    ///
+    /// `sync_region_cells` 每帧都会跑；多边形没变时**不必重算**格集合
+    /// （栅格化是 O(bbox 格数 × 边数)，大选区每帧重算会明显吃帧）。
+    /// 指纹变了（或为 0 = 从未算过）才重算。
+    pub region_fingerprint: u64,
     /// 绑定的图 ID；变图即清空选中格(与 [`SelectionState::last_map_id`]
     /// 一致语义,统一通过 [`EditCellState::on_map_change`] 处理)。
     pub last_map_id: Option<wv_core::Id>,
@@ -704,6 +710,7 @@ impl EditCellState {
         self.selected = None;
         self.pending = None;
         self.region_cells.clear();
+        self.region_fingerprint = 0;
     }
 
     /// 切换图时调用——如果新图 ≠ 上次记录的图,清空所有格相关字段

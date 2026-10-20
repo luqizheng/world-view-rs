@@ -823,6 +823,23 @@ pub fn commit_edit_cell_on_click(
     }
 }
 
+/// 多边形顶点指纹（FNV-1a）——「多边形变没变」的判据。
+///
+/// 0 表示「无有效指纹」（空多边形）。
+fn polygon_fingerprint(poly: &[(f32, f32)]) -> u64 {
+    if poly.len() < 3 {
+        return 0;
+    }
+    let mut h: u64 = 0xcbf29ce484222325;
+    for (x, y) in poly {
+        for v in [x.to_bits() as u64, y.to_bits() as u64] {
+            h ^= v;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+    }
+    h
+}
+
 /// 多边形选区 → 方格集合同步（2026-10-20 批量编辑）。
 ///
 /// `SelectionState.closed`（V 工具闭合的多边形，世界坐标）变化时重栅格化
@@ -859,12 +876,22 @@ pub fn sync_region_cells(
     // `local = cursor_world − map_origin`）——栅格化必须补上同一个
     // `map_origin` 才落在同一套坐标系（2026-10-20 实机：三角形只圈住
     // 一个小岛，却选出 21974 格——差的正是这个原点偏移）。
+    // 多边形指纹：没变就跳过重栅格化（2026-10-20 性能修——大选区每帧
+    // O(bbox×边数) 重算会明显吃帧）。
+    let fingerprint = polygon_fingerprint(poly);
+    if fingerprint != 0
+        && fingerprint == edit_cell.region_fingerprint
+        && !edit_cell.region_cells.is_empty()
+    {
+        return;
+    }
     let origin = match drill.current_node(&projection.world) {
         Some(node) => wv_render::drill::map_origin(&projection.world, node, &grid),
         None => grid.raster_origin,
     };
     edit_cell.region_cells =
         rasterize_polygon_cells(poly, origin, &grid, terrain.width, terrain.height);
+    edit_cell.region_fingerprint = fingerprint;
     edit_cell.last_map_id = Some(target_map.clone());
 }
 
@@ -1453,6 +1480,24 @@ mod tests {
             Some((3, 4)),
             "cursor_world=(35,45) + cell_size=10 + origin=0 → 命中 (gx=3, gy=4)"
         );
+    }
+
+    /// 指纹：同一多边形 → 同指纹；改一个顶点 → 变。
+    #[test]
+    fn polygon_fingerprint_is_stable_and_change_sensitive() {
+        let a = [(0.0f32, 0.0f32), (10.0, 0.0), (10.0, 10.0)];
+        let b = [(0.0f32, 0.0f32), (10.0, 0.0), (10.0, 10.5)];
+        assert_eq!(
+            polygon_fingerprint(&a),
+            polygon_fingerprint(&a),
+            "同一多边形指纹稳定"
+        );
+        assert_ne!(
+            polygon_fingerprint(&a),
+            polygon_fingerprint(&b),
+            "动一个顶点指纹即变"
+        );
+        assert_eq!(polygon_fingerprint(&[(0.0, 0.0)]), 0, "少于 3 顶点 → 0");
     }
 
     /// 工具未激活时点击 = 不写 selected。与 `Brush.enabled` flag 同口径。

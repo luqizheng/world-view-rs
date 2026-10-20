@@ -678,12 +678,19 @@ fn render_batch_section(
         );
     });
     ui.add_space(4.0);
-    // 混合选区不显示选中态（radios 全不亮）——点谁就整片设为谁。
+    // **选区群系统一时亮对应 radio**（用户 2026-10-20 实机反馈：
+    // 「统一改为草原,草原的 radio 并没有 checked」）。
+    // 混合选区（全不亮）→ 点谁整片设为谁；统一后 → 该项自动亮起。
+    let uniform_biome = if stats.biome_hist.len() == 1 {
+        Some(stats.biome_hist[0].0)
+    } else {
+        None
+    };
     for group in biome_groups() {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             for (num, name) in group.iter() {
-                if radio(ui, shell, false, name).clicked() {
+                if radio(ui, shell, uniform_biome == Some(*num), name).clicked() {
                     let biome = *num;
                     apply_batch(projection, edit, &map, edit_cell, |c| {
                         wv_core::terrain::TerrainCellData { biome, ..c }
