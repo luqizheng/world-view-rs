@@ -288,7 +288,7 @@ pub fn icon_local(extent: Option<Extent>, icon: &IconSpec) -> Vec2 {
 ///
 /// 坐标链断掉（图不在工程列表里 / 无 `extent`）时退回 `grid.raster_origin`——
 /// 摆位宁可回到旧行为（「本图就是栅格那张图」），也不能让整层标记消失。
-pub(crate) fn map_origin(world: &wv_core::World, node: &MapNode, grid: &GridConfig) -> Vec2 {
+pub fn map_origin(world: &wv_core::World, node: &MapNode, grid: &GridConfig) -> Vec2 {
     match wv_core::resolve_frame_in(&world.maps, &node.id) {
         Some(frame) => Vec2::new(frame.world_origin.x, frame.world_origin.y),
         None => grid.raster_origin,

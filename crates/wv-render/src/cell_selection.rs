@@ -105,22 +105,38 @@ fn point_in_polygon(px: f32, py: f32, poly: &[(f32, f32)]) -> bool {
 /// 扫描范围钳在多边形包围盒 ∩ 栅格范围，O(bbox_cells × 多边形边数)。
 /// 结果按扫描序返回（行优先，天然稳定，测试可断言）。
 pub fn rasterize_polygon_cells(
-    closed: &[(f32, f32)],
+    closed_local: &[(f32, f32)],
+    content_origin: Vec2,
     grid: &GridConfig,
     terrain_w: u32,
     terrain_h: u32,
 ) -> Vec<(i32, i32)> {
-    if closed.len() < 3 {
+    if closed_local.len() < 3 {
         return Vec::new();
     }
     let cs = grid.cell_size;
     if cs <= 0.0 {
         return Vec::new();
     }
+    // **坐标链（关键）**：选区锚点存的是**本图局部坐标**
+    // （`SelectionState.draft` ← `cursor_world − map_origin`，见
+    // `selection::commit_selection_click`），而地形栅格在**世界坐标**
+    // `raster_origin + cell·cs`（见 `terrain_chunks::sync_terrain_chunks`）。
+    // 两套原点不同（`map_origin` = 本图图帧原点，`raster_origin` = 栅格原点，
+    // 城市子图继承父图栅格时二者不等）——必须先补 `content_origin` 再减
+    // `raster_origin`，否则选区会整体错位（本轮实机症状：三角形只圈住
+    // 一个小岛，却选出 21974 格）。
+    //
+    // 矩形体（`cell_world_rect`）与点拾取（`cell_pick::pick_at`）都直接用
+    // 世界坐标，与此处同源。
+    let poly_world: Vec<(f32, f32)> = closed_local
+        .iter()
+        .map(|(x, y)| (x + content_origin.x, y + content_origin.y))
+        .collect();
     // 多边形包围盒（世界坐标）。
     let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
     let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
-    for (x, y) in closed {
+    for (x, y) in &poly_world {
         min_x = min_x.min(*x);
         min_y = min_y.min(*y);
         max_x = max_x.max(*x);
@@ -131,13 +147,12 @@ pub fn rasterize_polygon_cells(
     let gy0 = (((min_y - grid.raster_origin.y) / cs).floor() as i32).clamp(0, terrain_h as i32 - 1);
     let gx1 = (((max_x - grid.raster_origin.x) / cs).ceil() as i32).clamp(0, terrain_w as i32);
     let gy1 = (((max_y - grid.raster_origin.y) / cs).ceil() as i32).clamp(0, terrain_h as i32);
-    let poly: Vec<(f32, f32)> = closed.to_vec();
     let mut cells = Vec::new();
     for gy in gy0..gy1 {
         for gx in gx0..gx1 {
             let cx = grid.raster_origin.x + (gx as f32 + 0.5) * cs;
             let cy = grid.raster_origin.y + (gy as f32 + 0.5) * cs;
-            if point_in_polygon(cx, cy, &poly) {
+            if point_in_polygon(cx, cy, &poly_world) {
                 cells.push((gx, gy));
             }
         }
@@ -415,7 +430,7 @@ mod tests {
         let g = grid(10.0, 0.0, 0.0);
         // 覆盖格 (2,2)-(4,4) 中心：世界 [20,50)²；取多边形 (21,21)-(49,49)。
         let poly = [(21.0, 21.0), (49.0, 21.0), (49.0, 49.0), (21.0, 49.0)];
-        let cells = rasterize_polygon_cells(&poly, &g, 8, 8);
+        let cells = rasterize_polygon_cells(&poly, Vec2::ZERO, &g, 8, 8);
         assert_eq!(cells.len(), 9, "3×3 方阵");
         for gy in 2..=4 {
             for gx in 2..=4 {
@@ -434,17 +449,44 @@ mod tests {
             (100.0, 100.0),
             (-100.0, 100.0),
         ];
-        let cells = rasterize_polygon_cells(&poly, &g, 4, 4);
+        let cells = rasterize_polygon_cells(&poly, Vec2::ZERO, &g, 4, 4);
         assert_eq!(cells.len(), 16, "4×4 全选中");
+    }
+
+    /// **content_origin ≠ 0 的坐标链回归**（2026-10-20 实机 bug）：
+    /// 选区锚点存本图局部坐标，而栅格在 raster_origin 处——两者原点不同。
+    /// 若漏补 `content_origin`，三角形会整体错位（实测：圈住一个小岛却
+    /// 选出 21974 格）。本例：栅格在 (100, 200)，多边形局部坐标围住栅格的
+    /// (2,2)-(4,4) → 世界坐标 = content_origin + local。
+    #[test]
+    fn rasterize_polygon_respects_content_origin_offset() {
+        // 栅格原点 (100, 200)，cell 10；多边形局部坐标围住栅格格 (2,2)-(4,4)
+        // 的世界区域 [120,150)² → 局部 = 世界 − content_origin(50, 60)
+        let g = grid(10.0, 100.0, 200.0);
+        let content_origin = Vec2::new(50.0, 60.0);
+        // 栅格格 (2..4, 2..4) 的世界区域 = x[120,150) y[220,250)
+        //   → 局部 = 世界 − content_origin(50,60) = x[70,100) y[160,190)
+        let poly = [(71.0, 161.0), (99.0, 161.0), (99.0, 189.0), (71.0, 189.0)];
+        let cells = rasterize_polygon_cells(&poly, content_origin, &g, 8, 8);
+        assert_eq!(cells.len(), 9, "3×3 方阵(栅格格 2..4)");
+        for gy in 2..=4 {
+            for gx in 2..=4 {
+                assert!(cells.contains(&(gx, gy)), "缺格 ({gx},{gy})");
+            }
+        }
     }
 
     /// 退化输入（<3 顶点 / cell_size=0）返空，不 panic。
     #[test]
     fn rasterize_polygon_rejects_degenerate_input() {
         let g = grid(0.0, 0.0, 0.0);
-        assert!(rasterize_polygon_cells(&[(0.0, 0.0), (1.0, 1.0)], &g, 4, 4).is_empty());
+        assert!(
+            rasterize_polygon_cells(&[(0.0, 0.0), (1.0, 1.0)], Vec2::ZERO, &g, 4, 4).is_empty()
+        );
         let g = grid(10.0, 0.0, 0.0);
-        assert!(rasterize_polygon_cells(&[(0.0, 0.0), (1.0, 1.0)], &g, 4, 4).is_empty());
+        assert!(
+            rasterize_polygon_cells(&[(0.0, 0.0), (1.0, 1.0)], Vec2::ZERO, &g, 4, 4).is_empty()
+        );
     }
 
     /// 填充 mesh：9 格 → 36 顶点 54 索引，包围盒 = 3 格见方。

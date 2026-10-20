@@ -281,16 +281,19 @@ fn render_fields(
                 .size(font_size::SMALL)
                 .color(shell.t2()),
         );
-        ui.allocate_ui(egui::vec2(168.0, 28.0), |ui| {
-            numeric_input_bounded(
-                ui,
-                shell,
-                &mut height_f,
-                "m",
-                1.0,
-                i16::MIN as f32,
-                i16::MAX as f32,
-            );
+        // push_id:与批量区的两个数值输入区分 id(egui 同 scope 同 id 冲突告警)。
+        ui.push_id("cell_height", |ui| {
+            ui.allocate_ui(egui::vec2(168.0, 28.0), |ui| {
+                numeric_input_bounded(
+                    ui,
+                    shell,
+                    &mut height_f,
+                    "m",
+                    1.0,
+                    i16::MIN as f32,
+                    i16::MAX as f32,
+                );
+            });
         });
     });
     next.height = height_f.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;

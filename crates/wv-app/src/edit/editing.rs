@@ -855,7 +855,16 @@ pub fn sync_region_cells(
     // 变化检测：多边形点数 + 首点 + 栅格口径没变就跳过（避免每帧 O(N) 重算）。
     // 粗指纹够用——锚点拖动必然改首点或点数以外的坐标，此处选择每次
     // closed 存在就重算：8×8~512² 栅格 bbox 扫描 <1ms，拖锚帧率可承受。
-    edit_cell.region_cells = rasterize_polygon_cells(poly, &grid, terrain.width, terrain.height);
+    // 选区锚点存的是**本图局部坐标**（selection::commit_selection_click:
+    // `local = cursor_world − map_origin`）——栅格化必须补上同一个
+    // `map_origin` 才落在同一套坐标系（2026-10-20 实机：三角形只圈住
+    // 一个小岛，却选出 21974 格——差的正是这个原点偏移）。
+    let origin = match drill.current_node(&projection.world) {
+        Some(node) => wv_render::drill::map_origin(&projection.world, node, &grid),
+        None => grid.raster_origin,
+    };
+    edit_cell.region_cells =
+        rasterize_polygon_cells(poly, origin, &grid, terrain.width, terrain.height);
     edit_cell.last_map_id = Some(target_map.clone());
 }
 
