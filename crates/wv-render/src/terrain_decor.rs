@@ -1266,6 +1266,9 @@ mod tests {
         app.init_resource::<TerrainDecorPools>();
         app.init_resource::<Assets<Mesh>>();
         app.init_resource::<Assets<ColorMaterial>>();
+        // 覆盖物规则索引（ADR-0045 D9）：sync_terrain_decor 的必选依赖，
+        // 测试装配漏初始化会让系统参数校验 panic（b43b24e 接线后的缺口）。
+        app.init_resource::<crate::region_overlay::RegionOverlayIndex>();
 
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_terrain_decor);

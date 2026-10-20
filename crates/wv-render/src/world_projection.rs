@@ -953,6 +953,7 @@ mod tests {
 
     fn edge(id: &str, a: &str, b: &str) -> PlaceEdge {
         PlaceEdge {
+            rank: None,
             id: Id::new_unchecked(id),
             a: Id::new_unchecked(a),
             b: Id::new_unchecked(b),

@@ -1786,13 +1786,20 @@ mod tests {
                 },
             ],
         };
+        // 关掉水彩晕开（ADR-0044 D1）：本测试钉的是「填充边随高度」的平涂
+        // 语义；晕开是邻域混合装饰（2×1 图上整幅都在边界带内，会把左右两半
+        // 混成同一色），eef816c 接线后由此长期带病——装饰语义不该稀释本测试。
+        let treatment = crate::theme::theme_pack::TreatmentFlags {
+            watercolor_bleed: false,
+            ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+        };
         let img = image_from_terrain(
             &data,
             ViewMode::VectorFlat,
             None,
             false,
             crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            treatment,
             0.0,
         );
         let Color::Srgba(grass) = colors::core_terrain(3) else {
