@@ -18,8 +18,13 @@
 
 #![cfg(feature = "app")]
 
+use bevy::prelude::{Local, Res, ResMut};
+
 use crate::edit::editing::EditHistory;
 use crate::state::{ViewState, WorldProjection};
+
+// 候选区预览的输入 Resource（`CandidateRegionInput`）定义在渲染层
+// （`wv_render::region_outline`）——渲染系统消费它，app 层只写。
 use wv_core::model::region::{Region, RegionKind};
 use wv_core::Id;
 use wv_edit::command::EditCommand;
@@ -182,6 +187,65 @@ pub fn set_region_kind_now(
 ) -> Result<(), String> {
     let cmd = SetRegionKindCommand::new(id, kind);
     commit_cmd(world, edit, view, Box::new(cmd), "设置区域类别")
+}
+
+/// 每帧刷新候选区预览的输入（ADR-0045 D4 的可视化面）。
+///
+/// 读光标格（`cell_pick`）→ 查该格的 biome 连通区 → 换算成视空间环。
+/// **节流**：光标格没变就不重查（连通区计算是 O(格数)，147k 格毫秒级，
+/// 但没必要每帧算）。
+pub fn sync_candidate_input(
+    view: Res<crate::state::ViewState>,
+    grid: Res<crate::state::GridConfig>,
+    projection: Res<WorldProjection>,
+    mut out: ResMut<wv_render::region_outline::CandidateRegionInput>,
+    mut last_cell: Local<Option<(i32, i64)>>,
+) {
+    let cursor_cell = view.cursor_world.and_then(|c| {
+        let map = wv_core::Id::new_unchecked(&view.current_map);
+        let terrain = projection.world.terrain_of(&map)?;
+        crate::ui::cell_pick::pick_at((c.x, c.y), &grid, terrain).map(|p| (p.gx, p.gy as i64))
+    });
+    if cursor_cell == *last_cell {
+        return; // 光标格没变 → 环不变
+    }
+    *last_cell = cursor_cell;
+    let Some((gx, gy)) = cursor_cell else {
+        out.ring = None;
+        return;
+    };
+    let map = wv_core::Id::new_unchecked(&view.current_map);
+    let Some(data) = projection.world.terrain_of(&map) else {
+        out.ring = None;
+        return;
+    };
+    let cells: Vec<wv_terrain::TerrainCell> = data
+        .cells
+        .iter()
+        .map(|c| wv_terrain::TerrainCell {
+            height: c.height,
+            surface: c.surface,
+            biome: c.biome,
+        })
+        .collect();
+    let Some(gr) = wv_terrain::TerrainGrid::from_cells(data.width, data.height, cells) else {
+        out.ring = None;
+        return;
+    };
+    let Some(region) = wv_terrain::region::biome_region_at(&gr, gx, gy) else {
+        out.ring = None;
+        return;
+    };
+    // 格坐标 → 图内局部 wu → 视空间（加回两套原点的差）。
+    let offset = grid.map_origin - grid.raster_origin;
+    let cell = grid.cell_size;
+    let mut ring: Vec<bevy::math::Vec2> = region
+        .outer
+        .iter()
+        .map(|&(x, y)| bevy::math::Vec2::new(x * cell + offset.x, y * cell + offset.y))
+        .collect();
+    ring.dedup();
+    out.ring = (ring.len() >= 3).then_some(ring);
 }
 
 /// 提交一条命令（失败给作者一句人话）。

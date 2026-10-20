@@ -21,6 +21,7 @@ use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy_egui::EguiPlugin;
 
 use crate::edit::editing;
+use crate::edit::nature_region_actions;
 use crate::state::{
     BrushState, DrillState, GridConfig, PanelState, PlaybackState, ViewState, WorldProjection,
 };
@@ -34,6 +35,8 @@ use wv_render::faction_overlays;
 use wv_render::feature_overlays;
 use wv_render::layer_frame;
 use wv_render::map_frame;
+use wv_render::place_line;
+use wv_render::region_outline;
 use wv_render::region_overlay;
 use wv_render::streets;
 use wv_render::terrain_chunks;
@@ -201,6 +204,12 @@ pub fn run(config: AppConfig) {
     // 区域覆盖物解析索引 + 缺失标记运行时资源（ADR-0045）。
     .init_resource::<region_overlay::RegionOverlayIndex>()
     .init_resource::<region_overlay::MissingMarkerAssets>()
+    // 区域轮廓 / 底色覆盖的运行时资源（ADR-0045 追记四）。
+    .init_resource::<region_outline::RegionOutlinePool>()
+    .init_resource::<region_outline::CandidateRegionInput>()
+    // 作者小河的会话态与预览资源（ADR-0046）。
+    .init_resource::<place_line::PlaceLineEditorState>()
+    .init_resource::<place_line::PlaceLinePreviewPool>()
     .init_resource::<brush_cursor::BrushCursorEntities>()
     .init_resource::<map_frame::MapFrameEntities>()
     .init_resource::<terrain_chunks::TerrainChunkEntities>()
@@ -293,6 +302,8 @@ pub fn run(config: AppConfig) {
             terrain_chunks::sync_terrain_chunks,
             // 派生诊断刷新：在 flush 之后、UI 之前；面板本帧即可读新值。
             editing::refresh_project_diagnostics,
+            // 候选区预览输入（ADR-0045 追记四）：光标格 → biome 连通区环。
+            nature_region_actions::sync_candidate_input,
             // 街道图层缓存：当前图变化时重读（ADR-0010），先于 sync_vector_layers。
             streets::reload_street_cache,
             // 地物符号 PNG 发起加载（一次）。
@@ -309,6 +320,20 @@ pub fn run(config: AppConfig) {
             terrain_decor::sync_terrain_decor,
             // 地图外框 + 1/4 幅面参考网格（外框需地形尺寸）。
             map_frame::sync_map_frame,
+        )
+            .chain(),
+    )
+    // 主链已顶满 Bevy 系统元组上限：新三件单独成链，显式排序——
+    // 候选输入在主链（diagnostics 之后天然有序），轮廓/预览消费它。
+    .add_systems(
+        Update,
+        (
+            // 区域轮廓 + 底色覆盖 + 候选区预览（ADR-0045 追记四）：区域的
+            // 地理边界此前只有标签没有轮廓——作者看不出圈了哪块地。
+            region_outline::sync_region_outlines.after(map_frame::sync_map_frame),
+            // 作者小河的落笔 + 预览（ADR-0046）：左键加点 / 右键收线。
+            place_line::commit_place_line_click,
+            place_line::sync_place_line_preview.after(place_line::commit_place_line_click),
         )
             .chain(),
     )

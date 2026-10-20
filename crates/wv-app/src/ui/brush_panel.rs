@@ -31,6 +31,7 @@ use crate::theme::ui_theme::{proportional, UiShellConfig};
 use crate::theme::ui_tokens::{font_size, radius, space};
 use crate::ui_layout::LayoutFile;
 use crate::ui_shell::ShellNotice;
+use wv_render::place_line::PlaceLineEditorState;
 use wv_render::streets;
 use wv_render::terrain_view::TerrainTexture;
 
@@ -54,6 +55,7 @@ pub fn panel_brush(
     mut panels: ResMut<PanelState>,
     mut brush: ResMut<BrushState>,
     mut streets: ResMut<streets::StreetEditorState>,
+    mut rivers: ResMut<PlaceLineEditorState>,
     mut projection: ResMut<WorldProjection>,
     drill: Res<DrillState>,
     mut edit: ResMut<editing::EditHistory>,
@@ -346,6 +348,58 @@ pub fn panel_brush(
                             streets.drawn = streets.drawn.saturating_sub(1);
                         }
                     });
+                }
+            });
+
+            // 小河区（ADR-0046）：左键逐点连线 / 右键收线；收线 = 建一个带
+            // 折线的地点（亚格矢量，不占格）。
+            ui.add_space(space::SM);
+            egui::CollapsingHeader::new(format!(
+                "{} · {}{}",
+                t_key(&current_loc, I18nKey::BrushRiverDrawingHeader),
+                rivers.drawn,
+                t_key(&current_loc, I18nKey::BrushRiversDrawnUnit),
+            ))
+            .default_open(rivers.enabled || rivers.drawn > 0)
+            .show(ui, |ui| {
+                ui.checkbox(
+                    &mut rivers.enabled,
+                    t_key(&current_loc, I18nKey::BrushRiverToggle),
+                );
+                // 互斥：画小河与画街道都吃左键，同开没法用。
+                if rivers.enabled && streets.enabled {
+                    streets.enabled = false;
+                }
+                if rivers.enabled {
+                    ui.horizontal(|ui| {
+                        ui.label(t_key(&current_loc, I18nKey::BrushRiverNameLabel));
+                        ui.text_edit_singleline(&mut rivers.name);
+                    });
+                    ui.horizontal(|ui| {
+                        let finish = ui.add_enabled(
+                            rivers.can_finish(),
+                            egui::Button::new(
+                                egui::RichText::new(t_key(
+                                    &current_loc,
+                                    I18nKey::BrushRiverFinishBtn,
+                                ))
+                                .size(shell.scale.base)
+                                .color(shell.t1()),
+                            ),
+                        );
+                        if finish.clicked() {
+                            rivers.clear_stroke();
+                        }
+                        if ui.button("✕").clicked() {
+                            rivers.enabled = false;
+                            rivers.clear_stroke();
+                        }
+                    });
+                    ui.label(
+                        egui::RichText::new("收线 = 沿折线建一条小河（亚格矢量，不占格）")
+                            .small()
+                            .color(shell.t2()),
+                    );
                 }
             });
         },

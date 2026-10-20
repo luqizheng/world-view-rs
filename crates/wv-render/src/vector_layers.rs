@@ -56,6 +56,11 @@ const ROAD_Z: f32 = 0.1;
 const RIVER_Z: f32 = 0.082;
 /// 河流描线宽（屏幕像素）：比道路 fill（3.5px）细一档，参考图的细蜿蜒蓝线。
 const RIVER_STROKE_PX: f32 = 2.2;
+/// 作者手绘河的线宽（屏幕像素）：比派生河细一档——小溪本来就该比大河细。
+const AUTHOR_RIVER_STROKE_PX: f32 = 1.6;
+/// 作者手绘河的 Z：派生河（0.082）之上、道路 casing（0.09）之下——
+/// 作者的声明压在派生资产之上（"我画的"优先显形），又不进道路带。
+const AUTHOR_RIVER_Z: f32 = 0.084;
 /// 街道主干档（rank ≤ 2）宽度（屏幕像素）。
 const STREET_MAJOR_PX: f32 = 4.5;
 /// 街道次干 / 支路档宽度（屏幕像素）。
@@ -403,6 +408,11 @@ pub struct VectorLayerEntities {
     rivers: RoadLayerPool,
     /// 河流材质（惰性建一次；固定水蓝，主题化随 README §12-30 后继）。
     river_material: Option<Handle<ColorMaterial>>,
+    /// **作者手绘**河合批（ADR-0046 D4 + F3 样式区分）：与派生河**分池分材质**
+    /// ——作者河更亮更细，实机可辨「这条是我画的」。
+    author_rivers: RoadLayerPool,
+    /// 作者河材质（惰性建一次；比派生河亮一档的青蓝）。
+    author_river_material: Option<Handle<ColorMaterial>>,
     /// 地物符号合批（每类一个 mesh + 一个实体，共 2 个）；与 decor 同款
     /// 「原地改写」纪律。顶点色已在 mesh 端烘好 → 配白色 ColorMaterial。
     landmarks: [LandmarkPool; 2],
@@ -485,6 +495,8 @@ pub fn sync_vector_layers(
         layer.roads.despawn(&mut commands);
         layer.rivers.despawn(&mut commands);
         layer.river_material = None;
+        layer.author_rivers.despawn(&mut commands);
+        layer.author_river_material = None;
         for p in &mut layer.landmarks {
             p.despawn(&mut commands);
         }
@@ -526,13 +538,6 @@ pub fn sync_vector_layers(
                     river_segments.push((pair[0], pair[1]));
                 }
             }
-            // 作者手绘河（ADR-0046 D4）：与派生水系**双供给**——作者小河是
-            // 亚格线状数据（`Place.line`），与模板世界的 `rivers_seed` 派生河并存。
-            for pts in &frame.author_river_polylines {
-                for pair in pts.windows(2) {
-                    river_segments.push((pair[0], pair[1]));
-                }
-            }
             let fp = segments_fingerprint(&river_segments);
             sync_road_strokes(
                 &mut commands,
@@ -546,8 +551,34 @@ pub fn sync_vector_layers(
                 false,
                 &mut layer.rivers,
             );
+            // 作者手绘河（ADR-0046 D4）：与派生水系**双供给**，且**分池分材质**
+            // （F3 样式区分）：更亮一档的青蓝 + 更细的线——实机可辨「这条是我
+            // 画的」；派生河是模板世界的确定性资产，两者视觉职责不同。
+            let mut author_segments: Vec<(Vec2, Vec2)> = Vec::new();
+            for pts in &frame.author_river_polylines {
+                for pair in pts.windows(2) {
+                    author_segments.push((pair[0], pair[1]));
+                }
+            }
+            let author_mat = layer.author_river_material.get_or_insert_with(|| {
+                materials.add(ColorMaterial::from_color(Color::srgb(0.42, 0.70, 0.88)))
+            });
+            let author_fp = segments_fingerprint(&author_segments);
+            sync_road_strokes(
+                &mut commands,
+                &mut meshes,
+                &author_segments,
+                author_fp,
+                view.scale,
+                author_mat.clone(),
+                AUTHOR_RIVER_STROKE_PX,
+                AUTHOR_RIVER_Z,
+                false,
+                &mut layer.author_rivers,
+            );
         } else {
             layer.rivers.despawn(&mut commands);
+            layer.author_rivers.despawn(&mut commands);
         }
         sync_road_strokes(
             &mut commands,
