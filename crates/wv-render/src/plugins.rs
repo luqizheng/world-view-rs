@@ -29,6 +29,7 @@ use bevy::prelude::*;
 
 use crate::brush_cursor;
 use crate::buildings;
+use crate::cell_selection;
 use crate::faction_overlays;
 use crate::layer_frame;
 use crate::map_frame;
@@ -91,7 +92,9 @@ pub struct EditorOverlayPlugin;
 
 impl Plugin for EditorOverlayPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, brush_cursor::sync_brush_cursor)
+        app.init_resource::<cell_selection::CellSelectionEntities>()
+            .add_systems(Update, brush_cursor::sync_brush_cursor)
+            .add_systems(Update, cell_selection::sync_cell_selection)
             .add_systems(
                 Update,
                 (

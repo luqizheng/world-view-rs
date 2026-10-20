@@ -42,6 +42,7 @@ pub mod brush_cursor;
 pub mod buildings;
 #[cfg(feature = "app")]
 pub mod camera;
+pub mod cell_selection;
 #[cfg(feature = "app")]
 pub mod drill;
 #[cfg(feature = "app")]

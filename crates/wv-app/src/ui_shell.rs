@@ -283,6 +283,9 @@ fn hotkeys(
             (bevy_egui::egui::Key::L, MapToolId::MeasureLine),
             (bevy_egui::egui::Key::M, MapToolId::MeasureRect),
             (bevy_egui::egui::Key::P, MapToolId::Continent),
+            // 单格编辑（[ADR-0040]）：C = Cell。与 Ctrl+C 复制不冲突
+            // （本表只在无修饰键时生效，见上方 `!cmd && !shift` gate）。
+            (bevy_egui::egui::Key::C, MapToolId::EditCell),
         ]
         .into_iter()
         .find(|(key, _)| input.key_pressed(*key));
