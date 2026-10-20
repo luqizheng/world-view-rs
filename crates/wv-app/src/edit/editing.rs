@@ -776,12 +776,20 @@ pub fn commit_edit_cell_on_click(
     grid: Res<GridConfig>,
     drill: Res<DrillState>,
     projection: Res<WorldProjection>,
+    ui: Res<wv_render::camera::PointerOverUi>,
     mut edit_cell: ResMut<EditCellState>,
 ) {
     if !buttons.just_pressed(MouseButton::Left) {
         return;
     }
     if !edit_cell.tool_active {
+        return;
+    }
+    // 指针压在 egui 面板/顶栏上：这是面板交互（拖数值、按按钮、拖窗口），
+    // 不是「选格」——吃了它会把面板底下那格误设为选中，Inspector 字段
+    // 全部跟着跳（2026-10-20 实机 bug：点面板即丢焦点）。与 drill /
+    // brush_cursor 的 PointerOverUi gate 同口径。
+    if ui.wants_pointer {
         return;
     }
     if playback.playing {
@@ -1413,6 +1421,8 @@ mod tests {
         };
         world.insert_resource(view);
         world.insert_resource(crate::state::PlaybackState::default());
+        // 系统签名含 PointerOverUi gate（2026-10-20 面板焦点 bug 修复）。
+        world.insert_resource(wv_render::camera::PointerOverUi::default());
 
         let edit_cell = EditCellState {
             tool_active: true,
@@ -1453,6 +1463,7 @@ mod tests {
         world.insert_resource(view);
         world.insert_resource(crate::state::PlaybackState::default());
         world.insert_resource(EditCellState::default());
+        world.insert_resource(wv_render::camera::PointerOverUi::default());
 
         let mut buttons = ButtonInput::<MouseButton>::default();
         buttons.press(MouseButton::Left);

@@ -26,7 +26,6 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::i18n::CurrentLocale;
-use crate::i18n::{t, I18nKey};
 use crate::state::{Panel, PanelState, WorldProjection};
 use crate::theme::ui_theme::{color32, proportional, UiShellConfig};
 use crate::theme::ui_tokens::{radius, space};
@@ -42,7 +41,7 @@ pub fn panel_inspector(
     shell_cfg: Res<UiShellConfig>,
     layouts: Res<LayoutFile>,
     mut panels: ResMut<PanelState>,
-    mut projection: ResMut<WorldProjection>,
+    projection: Res<WorldProjection>,
     current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);

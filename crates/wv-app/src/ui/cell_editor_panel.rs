@@ -84,7 +84,7 @@ pub fn panel_cell_editor(
                         shell.accent(),
                         super::widgets::ICON_MAP,
                         &format!("Cell ({gx}, {gy})"),
-                        &t(current_loc.0, I18nKey::CellInspectorCoord),
+                        t(current_loc.0, I18nKey::CellInspectorCoord),
                         None,
                     );
                     divider(ui, &shell);
@@ -110,8 +110,8 @@ pub fn panel_cell_editor(
                         ui,
                         &shell,
                         "▣",
-                        &t(current_loc.0, I18nKey::CellEditorEmptyTitle),
-                        &t(current_loc.0, I18nKey::CellEditorEmptyHint),
+                        t(current_loc.0, I18nKey::CellEditorEmptyTitle),
+                        t(current_loc.0, I18nKey::CellEditorEmptyHint),
                         "",
                     );
                 }
