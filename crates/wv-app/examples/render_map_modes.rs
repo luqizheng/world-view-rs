@@ -44,6 +44,7 @@ fn main() {
             true,
             wv_render::theme::palette::colors(Default::default()),
             wv_render::theme::theme_pack::builtin::for_palette(Default::default()).treatment,
+            0.0,
         );
         // atlas=None 时多数模式 res=1（每格 1 像素）；GoogleMap / VectorFlat
         // 走亚像素（plan v0.1 M2）——尺寸以 Image 实际边长为准。

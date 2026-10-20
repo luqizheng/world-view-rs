@@ -18,11 +18,14 @@
 //! - 资源 `History` / `EditMode` 由 `state.rs` 暴露；本模块只读 / 提交。
 //! - 测试 `mod tests` 覆盖 painting / undo / 播放拒绝。
 
+use bevy::input::mouse::MouseButton;
+use bevy::input::ButtonInput;
 use bevy::prelude::*;
 
 use crate::state::{
     BrushState, BrushTool, DrillState, GridConfig, PlaybackState, ViewState, WorldProjection,
 };
+use crate::ui::cell_pick;
 use wv_edit::command::{
     EditCommand, GenerateContinentCommand, IntentTerrainCommand, PaintTerrainCommand,
     RegenWorldTerrainCommand, ResetTerrainToBaseCommand,
@@ -30,6 +33,7 @@ use wv_edit::command::{
 use wv_edit::history::Transaction;
 use wv_edit::History;
 use wv_render::camera::ActiveStroke;
+use wv_render::state::EditCellState;
 use wv_render::terrain_view::{image_from_terrain, TerrainTexture, TileAtlas};
 use wv_terrain::continent::ContinentParams;
 use wv_terrain::edit::{Brush, Stroke as TerrainStroke};
@@ -337,6 +341,7 @@ pub fn flush_terrain_texture(
             view.terrain_soften,
             crate::theme::palette::colors(view.map_palette),
             wv_render::theme::theme_pack::builtin::for_palette(view.map_palette).treatment,
+            0.0,
         );
         if let Some(mut img) = images.get_mut(&tex.handle) {
             *img = image;
@@ -744,6 +749,150 @@ pub fn refresh_project_diagnostics(
     diagnostics.last_count = d.items.len();
     diagnostics.diagnostics = d;
     diagnostics.needs_diagnose = false;
+}
+
+/// 单格编辑工具的鼠标点击处理器（[ADR-0040] §决策 3 + §决策 5）。
+///
+/// 只在 [`EditCellState::tool_active`] 为 true 时生效——
+/// 由 `apply_pending_commands` 的 `SelectMapTool(EditCell)` 分支翻 on。
+///
+/// 行为：
+/// 1. 收 `MouseButton::Left` **按下**而非松开（点击即选中,不需要拖拽）
+/// 2. 拿 `view.cursor_world` 与 `drill.current()` 的图地形；
+/// 3. 用 [`cell_pick::pick_at`] 反查 (gx, gy),写入 [`EditCellState::selected`]。
+///
+/// 与笔刷（commit_stroke_on_release）**有意分开**：笔刷是按 stroke 批改,
+/// 这里是一次一格、点选就够；混进 commit_stroke 会让 `btn.just_released`、
+/// `btn.just_pressed` 互相打架。
+///
+/// 播放中只读（基线 §1.8 / V37）：直接跳过,不写 selected。
+/// PointerOverUi 暂不实现（已有 `app_bootstrap` 初始化但无人写——UI 顶栏/状态栏
+/// 的 egui 优先级由 egui 自己 take_pointer 处理,不影响 canvas 直接点击）。
+#[allow(clippy::too_many_arguments)]
+pub fn commit_edit_cell_on_click(
+    buttons: Res<ButtonInput<MouseButton>>,
+    playback: Res<PlaybackState>,
+    view: Res<ViewState>,
+    grid: Res<GridConfig>,
+    drill: Res<DrillState>,
+    projection: Res<WorldProjection>,
+    ui: Res<wv_render::camera::PointerOverUi>,
+    mut edit_cell: ResMut<EditCellState>,
+) {
+    if !buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+    if !edit_cell.tool_active {
+        return;
+    }
+    // 指针压在 egui 面板/顶栏上：这是面板交互（拖数值、按按钮、拖窗口），
+    // 不是「选格」——吃了它会把面板底下那格误设为选中，Inspector 字段
+    // 全部跟着跳（2026-10-20 实机 bug：点面板即丢焦点）。与 drill /
+    // brush_cursor 的 PointerOverUi gate 同口径。
+    if ui.wants_pointer {
+        return;
+    }
+    if playback.playing {
+        // 时间游标在动 → 当前 world 是投影 → 不要写。
+        return;
+    }
+    let Some(cursor) = view.cursor_world else {
+        edit_cell.selected = None;
+        return;
+    };
+    let Some(target_map) = drill.current() else {
+        // 没图 = 没有地形；与切图同语义,清空。
+        edit_cell.selected = None;
+        return;
+    };
+    let Some(terrain) = projection.world.terrain_of(target_map) else {
+        // 子图继承父图栅格时 `terrain_of` 会返 None,这里走清空分支。
+        edit_cell.selected = None;
+        return;
+    };
+
+    edit_cell.last_map_id = Some(target_map.clone());
+
+    if let Some(pick) = cell_pick::pick_at((cursor.x, cursor.y), &grid, terrain) {
+        edit_cell.selected = Some((pick.gx, pick.gy));
+        // 每图一次 hit-test 顺路更新 last_map_id；on_map_change 的语义保留
+        // 给切图等"用户切到另一张图"路径。
+    } else {
+        // 点在地图外 = 取消选中（与 BatchSelect tool 同样克制："点空白 = 取消当前选"）。
+        edit_cell.selected = None;
+    }
+}
+
+/// 多边形顶点指纹（FNV-1a）——「多边形变没变」的判据。
+///
+/// 0 表示「无有效指纹」（空多边形）。
+fn polygon_fingerprint(poly: &[(f32, f32)]) -> u64 {
+    if poly.len() < 3 {
+        return 0;
+    }
+    let mut h: u64 = 0xcbf29ce484222325;
+    for (x, y) in poly {
+        for v in [x.to_bits() as u64, y.to_bits() as u64] {
+            h ^= v;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+    }
+    h
+}
+
+/// 多边形选区 → 方格集合同步（2026-10-20 批量编辑）。
+///
+/// `SelectionState.closed`（V 工具闭合的多边形，世界坐标）变化时重栅格化
+/// （cell 中心落入即选中，[`wv_render::cell_selection::rasterize_polygon_cells`]），
+/// 写入 `EditCellState.region_cells`——区域高亮渲染与批量应用（面板）都读它。
+/// 闭合取消 / 切图 → 清空。
+pub fn sync_region_cells(
+    selection: Res<crate::state::SelectionState>,
+    grid: Res<GridConfig>,
+    drill: Res<DrillState>,
+    projection: Res<WorldProjection>,
+    mut edit_cell: ResMut<EditCellState>,
+) {
+    use wv_render::cell_selection::rasterize_polygon_cells;
+    let Some(poly) = selection.closed.as_ref() else {
+        if !edit_cell.region_cells.is_empty() {
+            edit_cell.region_cells.clear();
+        }
+        return;
+    };
+    // 来源图地形（无地形 = 无可贴合方格，清空）。
+    let Some(target_map) = drill.current() else {
+        edit_cell.region_cells.clear();
+        return;
+    };
+    let Some(terrain) = projection.world.terrain_of(target_map) else {
+        edit_cell.region_cells.clear();
+        return;
+    };
+    // 变化检测：多边形点数 + 首点 + 栅格口径没变就跳过（避免每帧 O(N) 重算）。
+    // 粗指纹够用——锚点拖动必然改首点或点数以外的坐标，此处选择每次
+    // closed 存在就重算：8×8~512² 栅格 bbox 扫描 <1ms，拖锚帧率可承受。
+    // 选区锚点存的是**本图局部坐标**（selection::commit_selection_click:
+    // `local = cursor_world − map_origin`）——栅格化必须补上同一个
+    // `map_origin` 才落在同一套坐标系（2026-10-20 实机：三角形只圈住
+    // 一个小岛，却选出 21974 格——差的正是这个原点偏移）。
+    // 多边形指纹：没变就跳过重栅格化（2026-10-20 性能修——大选区每帧
+    // O(bbox×边数) 重算会明显吃帧）。
+    let fingerprint = polygon_fingerprint(poly);
+    if fingerprint != 0
+        && fingerprint == edit_cell.region_fingerprint
+        && !edit_cell.region_cells.is_empty()
+    {
+        return;
+    }
+    let origin = match drill.current_node(&projection.world) {
+        Some(node) => wv_render::drill::map_origin(&projection.world, node, &grid),
+        None => grid.raster_origin,
+    };
+    edit_cell.region_cells =
+        rasterize_polygon_cells(poly, origin, &grid, terrain.width, terrain.height);
+    edit_cell.region_fingerprint = fingerprint;
+    edit_cell.last_map_id = Some(target_map.clone());
 }
 
 #[cfg(test)]
@@ -1251,5 +1400,134 @@ mod tests {
             before,
             "播放中不得改地形"
         );
+    }
+
+    /// 鼠标按下 + tool_active=true → cell_pick 命中 → 写入 selected。
+    /// [ADR-0040] §决策 3 + §决策 5。
+    #[test]
+    fn cell_edit_on_click_records_the_hit_under_the_cursor() {
+        use wv_render::state::EditCellState;
+
+        let mut world = World::new();
+        world.init_resource::<Assets<Image>>();
+
+        // 设置投影: 1 张 root map + 8×8 地形(全 0);drill_to() 落地 trail。
+        let map = wv_core::Id::new_unchecked("world_main");
+        let mut projection = crate::state::WorldProjection::default();
+        projection.world.meta = Some(wv_core::WorldMeta {
+            name: "test".into(),
+            version: "0.1".into(),
+            schema_version: 2,
+            root_map: map.clone(),
+            timeline_range: wv_core::time::TimeSpan { from: 0, to: None },
+            template: None,
+        });
+        projection.world.maps.push(wv_core::map::MapNode {
+            id: map.clone(),
+            level: wv_core::map::MapLevel::World,
+            ..Default::default()
+        });
+        projection.world.set_terrain(
+            map.clone(),
+            wv_core::terrain::TerrainData {
+                width: 8,
+                height: 8,
+                cells: vec![wv_core::terrain::TerrainCellData::default(); 64],
+            },
+        );
+        world.insert_resource(projection);
+
+        let mut drill = crate::state::DrillState::default();
+        drill.drill_to(
+            &world.resource::<crate::state::WorldProjection>().world,
+            &map,
+        );
+        world.insert_resource(drill);
+
+        world.insert_resource(crate::state::GridConfig {
+            cell_size: 10.0,
+            raster_origin: Vec2::ZERO,
+            map_origin: Vec2::ZERO,
+            map_size: Vec2::new(80.0, 80.0),
+        });
+        // 命中 (gx=3, gy=4):世界坐标 (35,45) 落在 [30,40) × [40,50)。
+        let view = crate::state::ViewState {
+            cursor_world: Some(Vec2::new(35.0, 45.0)),
+            ..Default::default()
+        };
+        world.insert_resource(view);
+        world.insert_resource(crate::state::PlaybackState::default());
+        // 系统签名含 PointerOverUi gate（2026-10-20 面板焦点 bug 修复）。
+        world.insert_resource(wv_render::camera::PointerOverUi::default());
+
+        let edit_cell = EditCellState {
+            tool_active: true,
+            ..Default::default()
+        };
+        world.insert_resource(edit_cell);
+
+        let mut buttons = ButtonInput::<MouseButton>::default();
+        buttons.press(MouseButton::Left);
+        world.insert_resource(buttons);
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(commit_edit_cell_on_click);
+        schedule.run(&mut world);
+
+        let ec = world.resource::<EditCellState>();
+        assert_eq!(
+            ec.selected,
+            Some((3, 4)),
+            "cursor_world=(35,45) + cell_size=10 + origin=0 → 命中 (gx=3, gy=4)"
+        );
+    }
+
+    /// 指纹：同一多边形 → 同指纹；改一个顶点 → 变。
+    #[test]
+    fn polygon_fingerprint_is_stable_and_change_sensitive() {
+        let a = [(0.0f32, 0.0f32), (10.0, 0.0), (10.0, 10.0)];
+        let b = [(0.0f32, 0.0f32), (10.0, 0.0), (10.0, 10.5)];
+        assert_eq!(
+            polygon_fingerprint(&a),
+            polygon_fingerprint(&a),
+            "同一多边形指纹稳定"
+        );
+        assert_ne!(
+            polygon_fingerprint(&a),
+            polygon_fingerprint(&b),
+            "动一个顶点指纹即变"
+        );
+        assert_eq!(polygon_fingerprint(&[(0.0, 0.0)]), 0, "少于 3 顶点 → 0");
+    }
+
+    /// 工具未激活时点击 = 不写 selected。与 `Brush.enabled` flag 同口径。
+    #[test]
+    fn cell_edit_on_click_noop_when_tool_inactive() {
+        use wv_render::state::EditCellState;
+
+        let mut world = World::new();
+        world.init_resource::<Assets<Image>>();
+        world.insert_resource(crate::state::WorldProjection::default());
+        world.insert_resource(crate::state::DrillState::default());
+        world.insert_resource(crate::state::GridConfig::default());
+        let view = crate::state::ViewState {
+            cursor_world: Some(Vec2::new(35.0, 45.0)),
+            ..Default::default()
+        };
+        world.insert_resource(view);
+        world.insert_resource(crate::state::PlaybackState::default());
+        world.insert_resource(EditCellState::default());
+        world.insert_resource(wv_render::camera::PointerOverUi::default());
+
+        let mut buttons = ButtonInput::<MouseButton>::default();
+        buttons.press(MouseButton::Left);
+        world.insert_resource(buttons);
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(commit_edit_cell_on_click);
+        schedule.run(&mut world);
+
+        let ec = world.resource::<EditCellState>();
+        assert_eq!(ec.selected, None, "tool 没激活 = 不动 selected");
     }
 }

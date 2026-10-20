@@ -222,6 +222,49 @@ pub fn numeric_input(
     unit: &str,
     step: f32,
 ) -> egui::Response {
+    numeric_input_bounded(ui, shell, value, unit, step, f32::MIN, f32::MAX)
+}
+
+/// [`numeric_input`] 的**带边界变体**（目录 UI/NumericInput/Dark/Default）：
+/// stepper 与任何写入都会被钳到 `[min, max]`——Cell 编辑器海拔（i16 米）
+/// 等有真实值域的字段用这个，调用方不再需要事后 clamp。
+pub fn numeric_input_bounded(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    value: &mut f32,
+    unit: &str,
+    step: f32,
+    min: f32,
+    max: f32,
+) -> egui::Response {
+    // **id 唯一性（根治）**：本控件内部用 `ui.id()` 派生的 id 登记 stepper
+    // 三个交互区（up / down / body）。同一 Ui scope 里放**两个**数值输入时，
+    // 两者的 `ui.id()` 相同 → egui 报「First use of widget ID …」并让控件
+    // 状态互串（2026-10-20 实机：批量区「绝对值 + 增减」两个输入告警）。
+    //
+    // 修法：按「被编辑值的地址」派生一个盐，把整个控件放进 push_id 作用域
+    // ——同一 scope 的不同输入框地址不同 → id 天然不同；同一输入框跨帧
+    // 地址稳定 → id 稳定（步进器状态不丢）。
+    let salt = value as *mut f32 as usize;
+    let mut resp: Option<egui::Response> = None;
+    ui.push_id(salt, |ui| {
+        resp = Some(numeric_input_bounded_inner(
+            ui, shell, value, unit, step, min, max,
+        ));
+    });
+    resp.expect("push_id 闭包必然执行一次")
+}
+
+/// [`numeric_input_bounded`] 的实际实现（调用方已保证 id 作用域隔离）。
+fn numeric_input_bounded_inner(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    value: &mut f32,
+    unit: &str,
+    step: f32,
+    min: f32,
+    max: f32,
+) -> egui::Response {
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), CONTROL_H),
         egui::Sense::hover(),
@@ -289,10 +332,10 @@ pub fn numeric_input(
         egui::Sense::click(),
     );
     if up.clicked() {
-        *value += step;
+        *value = (*value + step).clamp(min, max);
     }
     if down.clicked() {
-        *value -= step;
+        *value = (*value - step).clamp(min, max);
     }
     ui.interact(rect, ui.id().with("numeric_body"), egui::Sense::hover())
 }

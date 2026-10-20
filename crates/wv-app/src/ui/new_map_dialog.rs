@@ -601,6 +601,7 @@ mod tests {
             false,
             wv_render::theme::palette::colors(wv_render::theme::palette::MapPalette::Daylight),
             wv_render::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            0.0,
         );
         let tex = wv_render::terrain_view::new_terrain_texture(
             &mut images,

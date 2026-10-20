@@ -34,7 +34,7 @@ use crate::ui_layout::LayoutFile;
 use super::shell::UiShell;
 use super::widgets::{empty_state, float_window, BadgeKind, ICON_CHEVRON_RIGHT};
 
-/// 检视器面板。
+/// Inspector 面板。
 #[allow(clippy::too_many_arguments)]
 pub fn panel_inspector(
     mut contexts: EguiContexts,
@@ -48,7 +48,8 @@ pub fn panel_inspector(
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
-    let selected = projection.selection.as_ref();
+    let selection_clone = projection.selection.clone();
+    let selected = selection_clone.as_ref();
 
     float_window(
         ctx,

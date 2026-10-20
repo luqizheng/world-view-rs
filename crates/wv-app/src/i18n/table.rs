@@ -163,6 +163,13 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::ViewModeCoastline => "轮廓图",
         I18nKey::ViewModeTopographic => "等高分析",
 
+        // ── Cell Inspector Section ──
+        I18nKey::CellInspectorSection => "Cell",
+        I18nKey::CellInspectorCoord => "坐标",
+        I18nKey::CellInspectorSurface => "地表",
+        I18nKey::CellInspectorHeight => "海拔",
+        I18nKey::CellInspectorBiome => "群系",
+
         // ── 图层面板标题 ──
         I18nKey::PanelMapTree => "地图树",
         I18nKey::PanelLayers => "图层管理",
@@ -176,6 +183,29 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::PanelMinimap => "小地图",
         I18nKey::PanelCharacter => "人物登记",
         I18nKey::PanelEvent => "事件登记",
+        I18nKey::PanelCellEditor => "Cell 编辑器",
+        I18nKey::CellEditorEmptyTitle => "未选中格",
+        I18nKey::CellEditorEmptyHint => "点击地图任一格开始编辑
+（水陆 / 海拔 / 群系）",
+        I18nKey::BatchCellsCount => "格已选",
+        I18nKey::BatchCellsClear => "取消选区",
+        I18nKey::BatchCellsHeightDelta => "海拔增减（整体）",
+        I18nKey::BatchCellsApply => "应用海拔",
+        I18nKey::CellEditorModeSingle => "单格",
+        I18nKey::CellEditorModeBatch => "批量",
+        I18nKey::BatchStatsHeight => "海拔",
+        I18nKey::BatchStatsBiome => "群系",
+        I18nKey::BatchCellsEmptyTitle => "未圈选区域",
+        I18nKey::BatchCellsEmptyHint => "用 V 工具圈一片区域
+（自动贴合方格）",
+        I18nKey::CellEditorSubtitle => "网格单元 · 已选中",
+        I18nKey::CellInspectorPosition => "位置",
+        I18nKey::CellEditorReadonly => "只读坐标",
+        I18nKey::CellEditorHeightRange => "允许范围：-32767 至 32767 米",
+        I18nKey::CellEditorBiomeExclusive => "互斥单选",
+        I18nKey::CellEditorScopeHint => "仅编辑当前选中的 cell",
+        I18nKey::CellEditorWater => "水",
+        I18nKey::CellEditorLand => "陆",
 
         // ── 事实地界（theme overlay v1 / 选择工具 M4） ──
         I18nKey::IntentMenuDivideFaction => "划分势力",
@@ -402,6 +432,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CmdZoomIn => "放大地图",
         I18nKey::CmdZoomOut => "缩小地图",
         I18nKey::CmdToggleImmersive => "沉浸模式（只留地图与时间轴）",
+        I18nKey::CmdToolEditCell => "单格编辑（点选一格改水陆/海拔/群系）",
         I18nKey::CmdOpenCommandPalette => "打开命令面板",
         I18nKey::CmdSave => "保存工程",
         I18nKey::CmdUndo => "撤销",
@@ -417,6 +448,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CmdTogglePanelFaction => "显隐势力层面板",
         I18nKey::CmdTogglePanelRegion => "显隐区域面板",
         I18nKey::CmdTogglePanelInspector => "显隐检视器面板",
+        I18nKey::CmdTogglePanelCellEditor => "显隐 Cell 编辑器面板",
         I18nKey::CmdTogglePanelValidation => "显隐校验面板",
         I18nKey::CmdResetPanelLayout => "重置所有面板位置",
         I18nKey::CmdTogglePlay => "播放 / 暂停时间轴",
@@ -701,6 +733,13 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::ViewModeCoastline => "Coastline",
         I18nKey::ViewModeTopographic => "Topographic",
 
+        // ── Cell Inspector Section ──
+        I18nKey::CellInspectorSection => "Cell",
+        I18nKey::CellInspectorCoord => "Coord",
+        I18nKey::CellInspectorSurface => "Surface",
+        I18nKey::CellInspectorHeight => "Height",
+        I18nKey::CellInspectorBiome => "Biome",
+
         // ── Panel titles ──
         I18nKey::PanelMapTree => "Map tree",
         I18nKey::PanelLayers => "Layers",
@@ -714,6 +753,29 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::PanelMinimap => "Minimap",
         I18nKey::PanelCharacter => "Character log",
         I18nKey::PanelEvent => "Event log",
+        I18nKey::PanelCellEditor => "Cell editor",
+        I18nKey::CellEditorEmptyTitle => "No cell selected",
+        I18nKey::CellEditorEmptyHint => "Click any cell on the map to edit
+(water/land, height, biome)",
+        I18nKey::BatchCellsCount => "cells selected",
+        I18nKey::BatchCellsClear => "Clear selection",
+        I18nKey::BatchCellsHeightDelta => "Height delta (batch)",
+        I18nKey::BatchCellsApply => "Apply height",
+        I18nKey::CellEditorModeSingle => "Single",
+        I18nKey::CellEditorModeBatch => "Batch",
+        I18nKey::BatchStatsHeight => "Height",
+        I18nKey::BatchStatsBiome => "Biome",
+        I18nKey::BatchCellsEmptyTitle => "No region selected",
+        I18nKey::BatchCellsEmptyHint => "Draw a region with the V tool
+(cells snap automatically)",
+        I18nKey::CellEditorSubtitle => "Grid cell · selected",
+        I18nKey::CellInspectorPosition => "Position",
+        I18nKey::CellEditorReadonly => "read-only",
+        I18nKey::CellEditorHeightRange => "Allowed range: -32767 to 32767 m",
+        I18nKey::CellEditorBiomeExclusive => "exclusive",
+        I18nKey::CellEditorScopeHint => "Edits apply to the selected cell only",
+        I18nKey::CellEditorWater => "Water",
+        I18nKey::CellEditorLand => "Land",
 
         // ── Geographic features (theme overlay v1 / select tool M4) ──
         I18nKey::IntentMenuDivideFaction => "Divide faction",
@@ -940,6 +1002,7 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CmdZoomIn => "Zoom in",
         I18nKey::CmdZoomOut => "Zoom out",
         I18nKey::CmdToggleImmersive => "Immersive mode (map + timeline only)",
+        I18nKey::CmdToolEditCell => "Edit cell (pick one cell: water/land, height, biome)",
         I18nKey::CmdOpenCommandPalette => "Open command palette",
         I18nKey::CmdSave => "Save project",
         I18nKey::CmdUndo => "Undo",
@@ -955,6 +1018,7 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CmdTogglePanelFaction => "Toggle faction panel",
         I18nKey::CmdTogglePanelRegion => "Toggle region panel",
         I18nKey::CmdTogglePanelInspector => "Toggle inspector",
+        I18nKey::CmdTogglePanelCellEditor => "Toggle cell editor",
         I18nKey::CmdTogglePanelValidation => "Toggle validation",
         I18nKey::CmdResetPanelLayout => "Reset all panel positions",
         I18nKey::CmdTogglePlay => "Play / pause timeline",
