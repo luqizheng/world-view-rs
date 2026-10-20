@@ -524,6 +524,7 @@ cargo run -p wv-app --features http -- gui --http-bind 127.0.0.1 --http-port 900
     - **道路呈现级别**（会话内称 ADR-0047 D1/D3）：`PlaceEdge.rank`（`None` 时按 `distance_km` 折算：≥ 100 km → 3 城际干线 / ≥ 30 km → 2 城镇间 / 否则 1 局部道路，规则被测试 `place_edge_effective_rank_folds_by_distance` 钉死）+ `StreetSegment.lod_rank` → 统一呈现级别词表（与 `Place::rank` 同一张表）。**缺**：为什么这样折算、为什么落到边而不是只落地点、与 ADR-0030 的呈现级别体系是什么关系（扩表还是新表）、未来是否扩到更多实体。
     - **海洋表现 S1**（离岸距离场 `wv-terrain::shore`）：每格到最近陆格的**切比雪夫格距**（8 连通 BFS，截断在 `max_dist`），给「近岸浅滩带 / 浪花带」提供几何事实（水深 ≠ 离岸远近：DEM 近岸剖面陡缓不一）。渲染侧 **S2/S3（浅滩着色 / 浪花几何）未接**；配套的 S0 调参（浅水段 sqrt 量程、veil 0.18→0.12、底图淡化保留 0.85→0.92）实机归因记在 `wv-theme/src/colors.rs` 与 `terrain_view/cells.rs` 的注释里。**缺**：S1→S2/S3 的推进判据、距离场与主题的耦合方式（距离场属主题层还是渲染层）。
     关闭条件：补 ADR-0047（道路呈现级别）与海洋表现 ADR（S1→S3 判据），并把 `docs/adr/README.md` 索引补上；或明确砍掉其中一块。**在此之前该 WIP 不并入 main**。
+    - **2026-10-20 追记（收口进度）**：道路呈现级别半边已关闭——`docs/adr/ADR-0047-uniform-presentation-rank.md` 已落盘（已接受），含 §12-48 要求的四问（折算理由 / 级别落边的理由 / 与 ADR-0030 的扩表关系 / 扩展方向），索引已补。海洋表现 S1 半边仍待其 ADR（S1→S2/S3 推进判据 + 距离场归属），本条对海洋半边继续有效。另：本条「在此之前该 WIP 不并入 main」的告诫已被并行会话越过（呈现级别接线经 `feat/adr-0047-presentation-rank` 先行合入 main，commit `b43b24e` / `8cd5128`），ADR 现已补齐，事实状态对齐。
 
 ---
 
