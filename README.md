@@ -4,6 +4,16 @@
 
 **版本** v0.1（草案） · **状态** 项目起点，用于对齐方向，后续可迭代
 
+> **文档地图（阅读顺序）** —— 本仓库文档分工与优先级：
+> 1. 本 README —— 定位、五维度、七原则、架构分层
+> 2. [`AGENTS.md`](AGENTS.md) —— 架构纪律、模块边界、术语与留痕规则
+> 3. [`docs/MAP_EDITOR_BASELINE_v1.md`](docs/MAP_EDITOR_BASELINE_v1.md) —— **设计意图基线**（Phase 1/2 快照，非现行决策）
+> 4. [`docs/adr/README.md`](docs/adr/README.md) —— **现行决策**的「为什么」与 ADR 索引
+> 5. [`GLOSSARY.md`](GLOSSARY.md) —— 术语唯一权威源
+> 6. `docs/*_SPEC_v0.1.md` 与 `docs/superpowers/{specs,plans}/` —— 各域现状规格与设计定稿
+>
+> **优先级**：基线答「是什么」，ADR 答「为什么是这个而不是别的」（AGENTS §6.4）；**现行决策以 `docs/adr/` 为准**，二者冲突时以 ADR 为准（沿用 `docs/MAP_LAYER_RENDERING_SPEC_v0.1.md` §4 口径）。
+
 ---
 
 ## 1. 这是什么

@@ -1,5 +1,8 @@
 # 风格可替换架构方案
 
+> **⚠️ 历史设计稿（2026 Q1）· 不作为现行规格**：本文面向 **Tauri v2 + Vite + TypeScript** 前端，**未对接到当前 Rust + Bevy 现状**（技术栈、渲染后端 `svg/canvas2d/webgl2`、`theme.yaml`/`view.yaml` 资源加载模型均已落后）。其「地图层可替换 / 软件壳不替换」的核心原则与契约骨架，已被 [ADR-0016](adr/ADR-0016-jrpg-antique-map-default-theme.md)（常量层前身）与 [ADR-0023：主题包注入契约](adr/ADR-0023-theme-pack-injection-contract.md)（Rust 移植，其 §5 C 显式记录本稿偏离项）承接。
+> **本文保留用途**：作为「契约骨架来源」的历史出处与溯源依据，被 ADR-0008 / 0016 / 0023、`crates/wv-render/src/drill.rs`、README §12-12/§12-33 引用。正文按 AGENTS §6.3 不改，仅此状态头为追记。
+>
 > 项目：world-view-rs（《暗流涅槃》sim 层「世界观视图层」前端子项目）
 > 技术栈基线：Tauri v2 + Vite + TypeScript；渲染以 Web 技术（SVG / Canvas / WebGL 视具体）为主
 > 项目惯例：配置严格走 YAML，禁止硬编码
