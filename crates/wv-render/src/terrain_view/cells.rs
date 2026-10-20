@@ -57,14 +57,14 @@ fn slot_is_water(kind: u8) -> bool {
 
 /// Topographic viewmode 百分位阈值（[ADR-0039] 决策 4 / 5）。
 ///
-/// **PR-1 暂未使用**——shade_for_mode 的 Topographic 分支占位返 `palette.soften_toward`，
-/// cell-by-cell 着色留给 PR-1b（详见 `shade_topographic` 注释）。本 helper 是
-/// PR-1b 落地时的现成钩子：消费 `wv_core::terrain::TerrainCellData`，与
-/// `wv_terrain::TerrainGrid::compute_height_percentiles` 同语义，避免
-/// wv-render 反向依赖 wv-terrain 内部 cell 类型。
+/// 在 `&[TerrainCellData]` 上按 `p_low` / `p_high` 切两个高度阈值；
+/// 只读 `height` 通道，biome / surface 不参与（X 路线）。
+///
+/// **与 `wv_terrain::TerrainGrid::compute_height_percentiles` 同语义**，
+/// 但本函数消费 `wv_core::terrain::TerrainCellData`（数据层中立 cell），
+/// 避免 wv-render 反向依赖 wv-terrain 内部 cell 类型。
 ///
 /// [ADR-0039]: ../docs/adr/ADR-0039-topographic-viewmode.md
-#[allow(dead_code)] // PR-1b 启用
 pub(crate) fn topographic_thresholds_for(
     cells: &[wv_core::terrain::TerrainCellData],
     p_low: f32,
@@ -405,6 +405,9 @@ struct CellRenderer<'a> {
     blocks: [Option<Vec<u8>>; 10],
     /// `kind` 是否已尝试过建块（避免无映射 kind 被反复查）。
     tried: [bool; 10],
+    /// Topographic mode 专用：(p33, p66) 两个 height 阈值（米）。
+    /// 非 Topographic mode 为 `None`（[ADR-0039] 决策 4/5）。
+    topographic: Option<(i16, i16)>,
 }
 
 impl<'a> CellRenderer<'a> {
@@ -429,6 +432,8 @@ impl<'a> CellRenderer<'a> {
             atlas
         };
         // 事件图与轮廓图不铺瓦片；Google 模式无图集也使用亚像素分辨率。
+        // Topographic 落到 res=1（每格 1 像素）——分析视图要锐利的方格边界，
+        // 不做亚像素插值。
         let res = terrain_res_for(data, mode, atlas);
         let (hmin, hmax) = if mode == ViewMode::RealTerrain {
             data.cells.iter().fold((i16::MAX, i16::MIN), |(lo, hi), c| {
@@ -436,6 +441,19 @@ impl<'a> CellRenderer<'a> {
             })
         } else {
             (0, 0)
+        };
+        // Topographic 的 3 阶高度阈值（[ADR-0039] 决策 4/5）：仅在 Topographic
+        // mode 下现算一次（O(N log N)，1024² ≈ 数 ms，摊进整图合成的量级）。
+        // biome 通道不参与（X 路线）；`ViewState::topographic_thresholds` 的
+        // 缓存是后续优化口（PR-1b v1 接受每次合成重算，[ADR-0039] §4.1.1）。
+        let topographic = if mode == ViewMode::Topographic {
+            Some(topographic_thresholds_for(
+                &data.cells,
+                crate::theme::topographic::TOPOGRAPHIC_P_LOW,
+                crate::theme::topographic::TOPOGRAPHIC_P_HIGH,
+            ))
+        } else {
+            None
         };
         Self {
             data,
@@ -452,15 +470,26 @@ impl<'a> CellRenderer<'a> {
             // `coastline_mode_ignores_soften_flag`）。
             // Google 模式同样无效：色板已是最终观感，再淡化会把水色
             // 洗成米糊、全图趋同（见测试 `google_mode_ignores_soften_flag`）。
-            soften: soften && !matches!(mode, ViewMode::Coastline | ViewMode::GoogleMap),
+            // Topographic 同理：分析视图的四色是语义色（水/低/中/高），
+            // 淡化会把 3 阶之间的对比洗没。
+            soften: soften
+                && !matches!(
+                    mode,
+                    ViewMode::Coastline | ViewMode::GoogleMap | ViewMode::Topographic
+                ),
             // 等值线模式（VectorFlat）也关闭揉边：它的自然蜿蜒由
             // `isoline_overlay` 的等值线描边承担，逐像素噪声会和几何曲线打架。
             // 主题装饰旗标（ADR-0023 D4）是第三道闸：EMPTY 类主题整体关揉边。
+            // Topographic 也关：分析视图要锐利方格，不做手绘揉边。
             wobble: treatment.boundary_wobble
-                && !matches!(mode, ViewMode::GoogleMap | ViewMode::VectorFlat),
+                && !matches!(
+                    mode,
+                    ViewMode::GoogleMap | ViewMode::VectorFlat | ViewMode::Topographic
+                ),
             treatment,
             blocks: std::array::from_fn(|_| None),
             tried: [false; 10],
+            topographic,
         }
     }
 
@@ -779,6 +808,25 @@ impl<'a> CellRenderer<'a> {
         let Some(cell) = self.data.cells.get(idx) else {
             return;
         };
+        // Topographic 早返回（[ADR-0039] 决策 4 的 per-cell 着色）：
+        // 只读 height + surface（X 路线，biome 不参与），经 `topographic::pick`
+        // 按水/陆 + 3 阶高度取色。res 恒 1（new 里已定），一像素直铺；
+        // 无边界/揉边/淡化/浮雕——分析视图四色是语义色，任何后处理都是污染。
+        if let Some((p_low, p_high)) = self.topographic {
+            let rgba = crate::theme::topographic::pick(
+                &crate::theme::topographic::TopographicPalette::default(),
+                cell.surface == wv_terrain::SURFACE_WATER,
+                cell.height,
+                p_low,
+                p_high,
+            );
+            let o = ((out_row * stride + cx) as usize) * 4;
+            pixels[o] = (rgba[0] * 255.0) as u8;
+            pixels[o + 1] = (rgba[1] * 255.0) as u8;
+            pixels[o + 2] = (rgba[2] * 255.0) as u8;
+            pixels[o + 3] = 255;
+            return;
+        }
         if !self.is_boundary(cx, gy) {
             // 内部格：与旧行为一致——整块直铺（快路径）。
             let kind = display_slot(cell);
@@ -1253,6 +1301,152 @@ mod tests {
             height: 3,
             cells,
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Topographic per-cell 着色（[ADR-0039] 决策 4/5，PR-1b）
+    // -------------------------------------------------------------------
+
+    /// `[f32;3]` sRGB(0..1) → 测试断言用的字节三元组(与 write_cell_split
+    /// 的 `× 255 as u8` 同一换算)。
+    fn to_bytes(c: [f32; 3]) -> [u8; 3] {
+        [
+            (c[0] * 255.0) as u8,
+            (c[1] * 255.0) as u8,
+            (c[2] * 255.0) as u8,
+        ]
+    }
+
+    /// 16 格 fixture：2 水 + 14 陆,高度均匀铺开让 33%/66% 分位切开三档。
+    /// 高度表(排序后):[-100,-100,10,20,...,140];p33=50,p66=90。
+    fn topographic_fixture() -> wv_core::terrain::TerrainData {
+        let land_heights = [
+            10i16, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140,
+        ];
+        let mut cells = Vec::with_capacity(16);
+        // (0,0) 深水;(0,1) surface=陆 但 height<0 —— 湿判定仍应给水色。
+        cells.push(wv_core::terrain::TerrainCellData {
+            height: -100,
+            surface: wv_terrain::SURFACE_WATER,
+            biome: wv_terrain::BIOME_OCEAN,
+        });
+        cells.push(wv_core::terrain::TerrainCellData {
+            height: -50,
+            surface: wv_terrain::SURFACE_LAND,
+            biome: wv_terrain::BIOME_NONE,
+        });
+        for &h in &land_heights {
+            cells.push(wv_core::terrain::TerrainCellData {
+                height: h,
+                surface: wv_terrain::SURFACE_LAND,
+                biome: wv_terrain::BIOME_GRASSLAND,
+            });
+        }
+        wv_core::terrain::TerrainData {
+            width: 4,
+            height: 4,
+            cells,
+        }
+    }
+
+    fn topographic_pixels(data: &wv_core::terrain::TerrainData) -> Vec<u8> {
+        let (pixels, res) = terrain_pixels(
+            data,
+            ViewMode::Topographic,
+            None,
+            true, // soften=true 但 Topographic 下应被忽略(new 里已禁)
+            crate::theme::palette::colors(Default::default()),
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+        );
+        assert_eq!(res, 1, "Topographic 分析视图 = 每格 1 像素(锐利方格)");
+        pixels
+    }
+
+    /// 水/陆二分 + 3 阶高度:像素色必须与 `topographic::pick` 的语义一致——
+    /// surface=水 或 height<0 → water;陆按 p33/p66 切 low/mid/high;
+    /// soften 开关被忽略(分析视图四色是语义色)。
+    #[test]
+    fn topographic_mode_paints_water_and_three_height_bands() {
+        let data = topographic_fixture();
+        let pixels = topographic_pixels(&data);
+        let pal = crate::theme::topographic::TopographicPalette::default();
+
+        let water = to_bytes(pal.water);
+        let low = to_bytes(pal.land_low);
+        let mid = to_bytes(pal.land_mid);
+        let high = to_bytes(pal.land_high);
+
+        // 阈值(排序后 len=16: idx_low=floor(16×0.33)=5 → 40, idx_high=10 → 90)。
+        // cell 布局(行优先 idx = y*4+x):
+        //   idx 0  = (0,0) surface=水 h=-100 → water
+        //   idx 1  = (1,0) surface=陆 h=-50  → water(height<0 湿判定)
+        //   idx 2  = (2,0) 陆 h=10           → low  (10 ≤ 40)
+        //   idx 3  = (3,0) 陆 h=20           → low
+        //   idx 5  = (1,1) 陆 h=40           → low  (40 ≤ p33=40)
+        //   idx 6  = (2,1) 陆 h=50           → mid  (40 < 50 ≤ 90)
+        //   idx 15 = (3,3) 陆 h=140          → high (140 > 90)
+        let px = |x: u32, y: u32| -> [u8; 3] {
+            let o = ((y * 4 + x) * 4) as usize;
+            [pixels[o], pixels[o + 1], pixels[o + 2]]
+        };
+        assert_eq!(px(0, 0), water, "(0,0) surface=水 → 水色");
+        assert_eq!(px(1, 0), water, "(1,0) surface=陆但 h<0 → 湿判定水色");
+        assert_eq!(px(2, 0), low, "(2,0) h=10 ≤ p33 → 低地");
+        assert_eq!(px(3, 0), low, "(3,0) h=20 ≤ p33 → 低地");
+        assert_eq!(px(1, 1), low, "(1,1) h=40 = p33 → 低地(含边界)");
+        assert_eq!(px(2, 1), mid, "(2,1) h=50 ∈ (p33,p66] → 中地");
+        assert_eq!(px(3, 3), high, "(3,3) h=140 > p66 → 高地");
+
+        // 三档陆色两两不同 + 与水色不同(防止默认色相撞)。
+        assert_ne!(low, mid);
+        assert_ne!(mid, high);
+        assert_ne!(low, high);
+        assert_ne!(water, low);
+    }
+
+    /// biome 通道不参与显示(X 路线):同 height/surface、不同 biome 的两格
+    /// 像素必须逐字节一致。
+    #[test]
+    fn topographic_mode_ignores_biome_channel() {
+        let mut data = topographic_fixture();
+        // 把 (2,1) 的 height 改成与 (1,1) 相同、biome 换成 DESERT:
+        // 两格仅 biome 不同 → 颜色必须一致。
+        data.cells[6].height = data.cells[5].height;
+        data.cells[6].biome = wv_terrain::BIOME_DESERT;
+        let pixels = topographic_pixels(&data);
+        let o5 = (5 * 4) as usize;
+        let o6 = (6 * 4) as usize;
+        assert_eq!(data.cells[5].biome, wv_terrain::BIOME_GRASSLAND);
+        assert_eq!(data.cells[6].biome, wv_terrain::BIOME_DESERT);
+        assert_eq!(
+            pixels[o5..o5 + 3],
+            pixels[o6..o6 + 3],
+            "biome 不同、height/surface 相同 → 颜色必须相同(X 路线)"
+        );
+    }
+
+    /// soften 开关在 Topographic 下被忽略:开与不开的整图像素逐字节一致
+    /// (分析视图四色是语义色,淡化会把 3 阶对比洗掉)。
+    #[test]
+    fn topographic_mode_ignores_soften_flag() {
+        let data = topographic_fixture();
+        let (on, _) = terrain_pixels(
+            &data,
+            ViewMode::Topographic,
+            None,
+            true,
+            crate::theme::palette::colors(Default::default()),
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+        );
+        let (off, _) = terrain_pixels(
+            &data,
+            ViewMode::Topographic,
+            None,
+            false,
+            crate::theme::palette::colors(Default::default()),
+            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+        );
+        assert_eq!(on, off, "soften=true 与 false 输出必须逐位一致");
     }
 
     #[test]
