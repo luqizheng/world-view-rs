@@ -14,7 +14,7 @@ examples/*/snapshots/
 # WorkBuddy 工具态（项目记忆、UI 校验产物等）—— 不纳入版本控制
 .workbuddy/
 
-# 隔离工作区（本地 git worktree 落点，commit 临时工作）
+# 隔离工作区（本地 git worktree 落点，commit 临时工作；目录名=分支名）
 .worktrees/
 
 # 构建 / 验证日志（本地跑 cargo 留的尾迹，不进版本管理）
