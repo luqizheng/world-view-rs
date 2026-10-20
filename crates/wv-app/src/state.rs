@@ -80,6 +80,16 @@ pub struct ProjectDiagnostics {
     pub needs_diagnose: bool,
 }
 
+/// 自然区域面板的**会话态**（ADR-0045 D4「命名即物化」）。
+///
+/// 面板是无状态的渲染函数，跨帧的输入文本必须有处放——独立 Resource 而非
+/// `PanelState`（浮窗闭包与 `PanelState` 互斥借用）。
+#[derive(Resource, Debug, Default)]
+pub struct NatureRegionUiState {
+    /// 物化时用的名字（作者输入；物化成功后由面板清空）。
+    pub name: String,
+}
+
 /// 可浮动的面板枚举（基线 §1.11 的 8 个面板 + 小地图）。
 ///
 /// **关键**：面板是浮动的（`egui::Window`），**不推挤地图**（§1.11 R1/R2）。

@@ -21,6 +21,7 @@ use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy_egui::EguiPlugin;
 
 use crate::edit::editing;
+use crate::edit::nature_region_actions;
 use crate::state::{
     BrushState, DrillState, GridConfig, PanelState, PlaybackState, ViewState, WorldProjection,
 };
@@ -34,6 +35,9 @@ use wv_render::faction_overlays;
 use wv_render::feature_overlays;
 use wv_render::layer_frame;
 use wv_render::map_frame;
+use wv_render::place_line;
+use wv_render::region_outline;
+use wv_render::region_overlay;
 use wv_render::streets;
 use wv_render::terrain_chunks;
 use wv_render::terrain_decor;
@@ -132,6 +136,8 @@ pub fn run(config: AppConfig) {
     })
     .init_resource::<BrushState>()
     .init_resource::<PanelState>()
+    // 自然区域面板的会话态（物化时的名字输入，ADR-0045 D4）。
+    .init_resource::<crate::state::NatureRegionUiState>()
     .init_resource::<GridConfig>()
     // 「新建地图」对话框状态（ui_shell 分发器与对话框系统共用）。
     .init_resource::<ui::NewMapDialog>()
@@ -195,6 +201,15 @@ pub fn run(config: AppConfig) {
     .init_resource::<feature_overlays::FeatureOverlayEntities>()
     // 地形装饰（ADR-0031）：六桶合批池 + 每桶材质，惰性创建。
     .init_resource::<terrain_decor::TerrainDecorPools>()
+    // 区域覆盖物解析索引 + 缺失标记运行时资源（ADR-0045）。
+    .init_resource::<region_overlay::RegionOverlayIndex>()
+    .init_resource::<region_overlay::MissingMarkerAssets>()
+    // 区域轮廓 / 底色覆盖的运行时资源（ADR-0045 追记四）。
+    .init_resource::<region_outline::RegionOutlinePool>()
+    .init_resource::<region_outline::CandidateRegionInput>()
+    // 作者小河的会话态与预览资源（ADR-0046）。
+    .init_resource::<place_line::PlaceLineEditorState>()
+    .init_resource::<place_line::PlaceLinePreviewPool>()
     .init_resource::<brush_cursor::BrushCursorEntities>()
     .init_resource::<map_frame::MapFrameEntities>()
     .init_resource::<terrain_chunks::TerrainChunkEntities>()
@@ -287,6 +302,8 @@ pub fn run(config: AppConfig) {
             terrain_chunks::sync_terrain_chunks,
             // 派生诊断刷新：在 flush 之后、UI 之前；面板本帧即可读新值。
             editing::refresh_project_diagnostics,
+            // 候选区预览输入（ADR-0045 追记四）：光标格 → biome 连通区环。
+            nature_region_actions::sync_candidate_input,
             // 街道图层缓存：当前图变化时重读（ADR-0010），先于 sync_vector_layers。
             streets::reload_street_cache,
             // 地物符号 PNG 发起加载（一次）。
@@ -305,6 +322,33 @@ pub fn run(config: AppConfig) {
             map_frame::sync_map_frame,
         )
             .chain(),
+    )
+    // 主链已顶满 Bevy 系统元组上限：新三件单独成链，显式排序——
+    // 候选输入在主链（diagnostics 之后天然有序），轮廓/预览消费它。
+    .add_systems(
+        Update,
+        (
+            // 区域轮廓 + 底色覆盖 + 候选区预览（ADR-0045 追记四）：区域的
+            // 地理边界此前只有标签没有轮廓——作者看不出圈了哪块地。
+            region_outline::sync_region_outlines.after(map_frame::sync_map_frame),
+            // 作者小河的落笔 + 预览（ADR-0046）：左键加点 / 右键收线。
+            place_line::commit_place_line_click,
+            place_line::sync_place_line_preview.after(place_line::commit_place_line_click),
+        )
+            .chain(),
+    )
+    // 区域覆盖物解析（ADR-0045 D8/D9/D10）：**必须早于装饰采样**（装饰要按
+    // region 的声明换覆盖物变体 / 颜色），缺失标记紧随其后。
+    .add_systems(
+        Update,
+        region_overlay::sync_region_overlay_index
+            .after(terrain_view::sync_grid_config)
+            .before(terrain_decor::sync_terrain_decor),
+    )
+    .add_systems(
+        Update,
+        region_overlay::sync_missing_overlay_markers
+            .after(region_overlay::sync_region_overlay_index),
     )
     // 主链已顶满 Bevy 系统元组的 20 参上限（all_tuples，bevy_ecs
     // function_system.rs），笔刷光标单独注册、显式排在光标取世界坐标之后。

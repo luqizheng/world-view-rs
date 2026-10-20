@@ -15,13 +15,17 @@ use bevy_egui::{egui, EguiContexts};
 
 use crate::edit::editing;
 use crate::edit::feature_place_actions::regenerate_marker_now;
+use crate::edit::nature_region_actions;
 use crate::edit::region_panel_actions;
 use crate::i18n::{t_key, CurrentLocale, I18nKey};
-use crate::state::{Panel, PanelState, PlaybackState, ViewState, WorldProjection};
+use crate::state::{
+    NatureRegionUiState, Panel, PanelState, PlaybackState, ViewState, WorldProjection,
+};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::space;
 use crate::ui_layout::LayoutFile;
 
+use crate::ui::cell_pick;
 use crate::ui::feature_place_dialog::marker_biome_name;
 use crate::ui_shell::ShellNotice;
 
@@ -43,6 +47,8 @@ pub fn panel_region(
     mut notice: ResMut<ShellNotice>,
     time: Res<Time>,
     current_loc: Res<CurrentLocale>,
+    grid: Res<wv_render::state::GridConfig>,
+    mut nature_state: ResMut<NatureRegionUiState>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -107,6 +113,15 @@ pub fn panel_region(
                 return;
             }
 
+            // 主题支持的覆盖物键（词表由主题拥有，ADR-0045 D10）。
+            let theme = wv_render::theme::theme_pack::builtin::for_palette(view.map_palette);
+            let overlay_keys: Vec<&'static str> = theme.region_overlays.keys().collect();
+            // 两套原点的差（区域多边形 = 图内局部 wu；格子属于栅格所在的图）。
+            let raster_to_map = (
+                grid.map_origin.x - grid.raster_origin.x,
+                grid.map_origin.y - grid.raster_origin.y,
+            );
+
             for r in &regions {
                 region_card(
                     ui,
@@ -116,9 +131,89 @@ pub fn panel_region(
                     &mut projection,
                     &mut edit,
                     &current_loc,
+                    &overlay_keys,
+                    grid.cell_size,
+                    raster_to_map,
+                    &mut notice,
+                    time.elapsed_secs() as u64,
                 );
                 ui.add_space(space::XS);
             }
+
+            // 自然区域（ADR-0045 D4）：**命名即物化**——自动分区候选不落盘，
+            // 作者在光标处点一个候选区、起了名，才生成 regions/<id>.yaml。
+            ui.add_space(space::SM);
+            ui.separator();
+            ui.add_space(space::SM);
+            egui::CollapsingHeader::new("自然区域")
+                .default_open(true)
+                .show(ui, |ui| {
+                    let frame = (time.elapsed_secs() * 60.0) as u64;
+                    ui.horizontal(|ui| {
+                        ui.label("名称");
+                        ui.text_edit_singleline(&mut nature_state.name);
+                    });
+                    // 光标所在格（按 `cell_pick` 口径：栅格原点）。
+                    let cursor_cell = view.cursor_world.and_then(|c| {
+                        let terrain = projection.world.terrain_of(&map_id)?;
+                        cell_pick::pick_at((c.x, c.y), &grid, terrain).map(|p| (p.gx, p.gy))
+                    });
+                    ui.horizontal(|ui| {
+                        match cursor_cell {
+                            Some((gx, gy)) => {
+                                // 顺带告诉作者「这里是什么」——物化出来的是
+                                // 这一整片同群系连通区（不是只有一格）。
+                                let what = nature_region_actions::candidate_at(
+                                    &projection,
+                                    &map_id,
+                                    (gx, gy),
+                                )
+                                .map(|(biome, cells)| format!("群系 {} · {cells} 格", biome))
+                                .unwrap_or_else(|| "无候选区".to_string());
+                                ui.label(
+                                    egui::RichText::new(format!("光标格 ({gx}, {gy}) · {what}"))
+                                        .small()
+                                        .color(shell.t2()),
+                                );
+                            }
+                            None => {
+                                ui.label(
+                                    egui::RichText::new("光标不在地形上")
+                                        .small()
+                                        .color(shell.t2()),
+                                );
+                            }
+                        }
+                        let can_materialize =
+                            cursor_cell.is_some() && !nature_state.name.trim().is_empty();
+                        let btn = ui.add_enabled(can_materialize, egui::Button::new("物化自然区"));
+                        if btn.clicked() {
+                            let Some((gx, gy)) = cursor_cell else {
+                                return;
+                            };
+                            let name = nature_state.name.trim().to_string();
+                            match nature_region_actions::materialize_nature_region_now(
+                                &mut projection,
+                                &mut edit,
+                                &view,
+                                name,
+                                (gx, gy),
+                                grid.cell_size,
+                                raster_to_map,
+                            ) {
+                                Ok(_) => nature_state.name.clear(),
+                                Err(msg) => notice.error(msg, frame),
+                            }
+                        }
+                    });
+                    ui.label(
+                        egui::RichText::new(
+                            "自动分区候选不落盘——命名后才生成 regions/<id>.yaml（ADR-0045 D4）。",
+                        )
+                        .small()
+                        .color(shell.t2()),
+                    );
+                });
 
             // 生物群系标记（ADR-0029 M2）：列当前图标记 + 逐个重生成边界。
             ui.add_space(space::SM);
@@ -206,6 +301,11 @@ fn region_card(
     projection: &mut WorldProjection,
     edit: &mut editing::EditHistory,
     current_loc: &CurrentLocale,
+    overlay_keys: &[&'static str],
+    cell_size: f32,
+    raster_to_map: (f32, f32),
+    notice: &mut ShellNotice,
+    frame: u64,
 ) {
     let id = region.id.clone();
     let vertex_count = region.polygon.len() / 2;
@@ -256,6 +356,104 @@ fn region_card(
             }
         });
 
+        // 类别互转（ADR-0045 D3）：普通区域 ↔ 自然区。
+        // 「普通区域」不承载覆盖物（`declared_overlay()` 对 area 一律 None）——
+        // 作者想加覆盖物声明，得先转成自然区。
+        if ui
+            .button(if region.is_nature() {
+                "转为普通区域"
+            } else {
+                "转为自然区（可加覆盖物）"
+            })
+            .clicked()
+        {
+            let kind = if region.is_nature() {
+                wv_core::model::region::RegionKind::Area
+            } else {
+                wv_core::model::region::RegionKind::Nature
+            };
+            let _ = nature_region_actions::set_region_kind_now(
+                projection,
+                edit,
+                view,
+                id.clone(),
+                kind,
+            );
+        }
+
+        // 自然区专属（ADR-0045 D2 / D6）：类别 + 覆盖物键 + 重生成边界。
+        if region.is_nature() {
+            ui.add_space(space::XS);
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "自然区 · 覆盖物：{}",
+                        region.declared_overlay().unwrap_or("（无声明）")
+                    ))
+                    .small()
+                    .color(shell.t2()),
+                );
+            });
+            // 覆盖物键下拉：词表由主题拥有（ADR-0045 D10）；未登记的键照样能写
+            // （开放词表）——但地图上会画成**缺失覆盖物标记**（白底红斜线）。
+            let current_key = region.declared_overlay().unwrap_or("").to_string();
+            egui::ComboBox::from_id_salt(("region_overlay", id.as_str()))
+                .selected_text(if current_key.is_empty() {
+                    "（无声明）".to_string()
+                } else {
+                    current_key.clone()
+                })
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(current_key.is_empty(), "（无声明）")
+                        .clicked()
+                    {
+                        let _ = nature_region_actions::set_region_overlay_now(
+                            projection,
+                            edit,
+                            view,
+                            id.clone(),
+                            None,
+                        );
+                    }
+                    for key in overlay_keys {
+                        if ui.selectable_label(current_key == *key, *key).clicked() {
+                            let _ = nature_region_actions::set_region_overlay_now(
+                                projection,
+                                edit,
+                                view,
+                                id.clone(),
+                                Some((*key).to_string()),
+                            );
+                        }
+                    }
+                });
+            // 键在当前主题无规则 → 提示（地图上以缺失标记标出）。
+            if let Some(key) = region.declared_overlay() {
+                if !overlay_keys.contains(&key) {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "键「{key}」在当前主题无规则——地图上以白底红斜线标出。"
+                        ))
+                        .small()
+                        .color(egui::Color32::from_rgb(214, 69, 69)),
+                    );
+                }
+            }
+            if ui.button("重生成边界（按当前地形）").clicked() {
+                if let Err(msg) = nature_region_actions::regenerate_nature_region_now(
+                    projection,
+                    edit,
+                    view,
+                    id.clone(),
+                    cell_size,
+                    raster_to_map,
+                ) {
+                    notice.error(msg, frame);
+                }
+            }
+        }
+
         ui.add_space(space::XS);
         if ui
             .button(
@@ -277,6 +475,7 @@ mod tests {
 
     fn place(id: &str, biome: Option<u8>, map: Option<&str>) -> Place {
         Place {
+            line: None,
             id: Id::new_unchecked(id),
             name: id.to_string(),
             feature: None,

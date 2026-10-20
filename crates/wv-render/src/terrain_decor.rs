@@ -114,6 +114,36 @@ pub fn decor_kind_for_biome(biome: u8) -> Option<DecorKind> {
     }
 }
 
+/// 覆盖物**变体**（ADR-0045 D2/D9）：同一符号族的不同长相。
+///
+/// **键由主题拥有**（`ThemePack::region_overlays`），渲染层只负责把键映射到
+/// 程序化形状；未登记的键 → `None` → 沿用 cell 派生的默认形状（事实不消失）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecorVariant {
+    /// 针叶（细三角成排）。
+    Conifer,
+    /// 阔叶（圆团）。
+    Broadleaf,
+    /// 稀树（单颗小团）。
+    Sparse,
+    /// 乱石滩涂（几块小石 + 碎砾）——与族无关的专用形状。
+    Boulder,
+}
+
+/// 覆盖物键 → 变体（渲染侧的映射表）。
+///
+/// **开放词表**：主题可以给任意键；这里只登记**渲染层能画**的那些。
+/// 未登记的键 → `None` → 用 cell 派生的默认形状 + 主题给的颜色。
+pub fn decor_variant_for_key(key: &str) -> Option<DecorVariant> {
+    match key {
+        "conifer" => Some(DecorVariant::Conifer),
+        "broadleaf" => Some(DecorVariant::Broadleaf),
+        "sparse" => Some(DecorVariant::Sparse),
+        "boulder" => Some(DecorVariant::Boulder),
+        _ => None,
+    }
+}
+
 /// 装饰 LOD 档：Nation 粗步距（大地貌团）/ Region 粗 / Edit 细。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecorBand {
@@ -185,9 +215,27 @@ pub fn site_primitives(
     cy: i64,
     height_m: i16,
     fy: f32,
+    variant: Option<DecorVariant>,
 ) -> Vec<SitePrim> {
     let mut out = Vec::new();
     let m = band.size_mul();
+    // 乱石滩涂：与族无关的专用形状（region 覆盖物键 `boulder_field`）。
+    if variant == Some(DecorVariant::Boulder) {
+        for k in 0..4u64 {
+            let jx = (hash01(cx, cy, 30 + k) - 0.5) * 9.0;
+            let jy = (hash01(cx, cy, 40 + k) - 0.5) * 8.0;
+            out.push(SitePrim::colored(
+                kind,
+                jx * m,
+                jy * m,
+                1.7 * m,
+                2.0 * m,
+                PrimShape::Triangle,
+                [0.54, 0.52, 0.46, 0.85],
+            ));
+        }
+        return out;
+    }
     let r1 = hash01(cx, cy, 1);
     let r2 = hash01(cx, cy, 2);
     let r3 = hash01(cx, cy, 3);
@@ -198,7 +246,23 @@ pub fn site_primitives(
             const BOREAL: [f32; 4] = [0.18, 0.36, 0.21, 0.85]; // 针叶深绿
             const TEMPERATE: [f32; 4] = [0.17, 0.34, 0.19, 0.85]; // 阔叶墨绿（≈旧 ink）
             const OASIS: [f32; 4] = [0.29, 0.42, 0.21, 0.80]; // 绿洲暖绿
-            if fy < 0.30 {
+                                                              // **region 覆盖物可强制变体**（ADR-0045 D2/D9）：作者声明「这片用
+                                                              // 针叶画」→ 变体由声明决定，**优先于** y 轴气候带派生。
+            let variant = match variant {
+                Some(
+                    v @ (DecorVariant::Conifer | DecorVariant::Broadleaf | DecorVariant::Sparse),
+                ) => v,
+                _ => {
+                    if fy < 0.30 {
+                        DecorVariant::Conifer
+                    } else if fy < 0.72 {
+                        DecorVariant::Broadleaf
+                    } else {
+                        DecorVariant::Sparse
+                    }
+                }
+            };
+            if variant == DecorVariant::Conifer {
                 // 针叶：3 棵细三角（宽窄高挑），成排。
                 for s in 0..3u64 {
                     let jx = (hash01(cx, cy, 10 + s) - 0.5) * 9.0;
@@ -213,7 +277,7 @@ pub fn site_primitives(
                         BOREAL,
                     ));
                 }
-            } else if fy < 0.72 {
+            } else if variant == DecorVariant::Broadleaf {
                 // 阔叶：3 颗小圆（径 2.6px），确定性散布在 ±5px 内。
                 for s in 0..3u64 {
                     let jx = (hash01(cx, cy, 10 + s) - 0.5) * 10.0;
@@ -621,6 +685,7 @@ pub fn sync_terrain_decor(
     grid: Res<GridConfig>,
     layers: Res<LayerFrame>,
     recipe: Res<RenderRecipe>,
+    overlay_index: Res<crate::region_overlay::RegionOverlayIndex>,
     mut pools: ResMut<TerrainDecorPools>,
 ) {
     let enabled = recipe.enabled(PassId::TerrainDecor) && layers.terrain.visible;
@@ -677,6 +742,16 @@ pub fn sync_terrain_decor(
                 continue;
             }
             let idx = (gy as u32) * data.width + cx as u32;
+            // 缺失覆盖物标记（ADR-0045 追记一）：白底红斜线**接管**该区域 →
+            // 装饰符号跳过（标记画在上面）。
+            if overlay_index.is_missing_cell(idx) {
+                cx += stride;
+                continue;
+            }
+            // region 覆盖物规则（ADR-0045 D9：最深优先——索引已按深度降序归属）。
+            let overlay_rule = overlay_index.rule_at(idx);
+            let variant = overlay_rule.and_then(|r| decor_variant_for_key(r.variant));
+            let size_scale = overlay_rule.map(|r| r.size_scale);
             // 脊点吸附（ADR-0044 D3）：Some((kind, 峰格x, 峰格y, 峰高))——
             // 山符号改放到块内峰格上，位置/高度用峰，哈希种子仍用网格点。
             let mut kind_override: Option<(DecorKind, i64, i64, i16)> = None;
@@ -765,6 +840,11 @@ pub fn sync_terrain_decor(
                 }
                 DecorKind::Plains | DecorKind::Hills => 0.4,
             };
+            // 覆盖物规则的间距倍率（> 1 = 更疏；固定步距下"更密"不可达 → 夹到 1）。
+            let keep_prob = match overlay_rule {
+                Some(r) if r.spacing_scale > 1.0 => keep_prob / r.spacing_scale,
+                _ => keep_prob,
+            };
             // 脊点吸附命中：山符号的位置/高度切换到峰格。
             let (px, py, ph) = if let Some((_, sx, sy, sh)) = kind_override {
                 (sx, sy, sh)
@@ -801,9 +881,23 @@ pub fn sync_terrain_decor(
                 ink_rgb[2] as f32 / 255.0,
                 ink_a,
             ];
-            for mut prim in site_primitives(kind, band, cx, gy, ph, fy) {
+            for mut prim in site_primitives(kind, band, cx, gy, ph, fy, variant) {
                 if prim.color == [0.0, 0.0, 0.0, 0.0] {
                     prim.color = ink;
+                }
+                // 覆盖物规则的颜色（主题拥有）覆盖变体色 / 桶默认墨色。
+                if let Some(rule) = overlay_rule {
+                    prim.color = [
+                        rule.color[0] as f32 / 255.0,
+                        rule.color[1] as f32 / 255.0,
+                        rule.color[2] as f32 / 255.0,
+                        rule.alpha.unwrap_or(prim.color[3]),
+                    ];
+                }
+                // 尺寸倍率（主题规则）。
+                if let Some(k) = size_scale {
+                    prim.half_w *= k;
+                    prim.half_h *= k;
                 }
                 let b = prim.bucket as usize;
                 let (bv, bc, bi) = &mut buckets[b];
@@ -986,21 +1080,21 @@ mod tests {
 
     #[test]
     fn site_primitives_are_deterministic() {
-        let a = site_primitives(DecorKind::Forest, DecorBand::Edit, 100, 200, 500, 0.5);
-        let b = site_primitives(DecorKind::Forest, DecorBand::Edit, 100, 200, 500, 0.5);
+        let a = site_primitives(DecorKind::Forest, DecorBand::Edit, 100, 200, 500, 0.5, None);
+        let b = site_primitives(DecorKind::Forest, DecorBand::Edit, 100, 200, 500, 0.5, None);
         assert_eq!(a, b, "同输入必须同符号（确定性）");
-        let c = site_primitives(DecorKind::Forest, DecorBand::Edit, 101, 200, 500, 0.5);
+        let c = site_primitives(DecorKind::Forest, DecorBand::Edit, 101, 200, 500, 0.5, None);
         assert_ne!(a, c, "不同格应有不同抖动");
     }
 
     #[test]
     fn mountains_above_snow_line_get_a_snow_cap_prim() {
-        let high = site_primitives(DecorKind::Mountain, DecorBand::Edit, 5, 5, 2200, 0.5);
+        let high = site_primitives(DecorKind::Mountain, DecorBand::Edit, 5, 5, 2200, 0.5, None);
         assert!(
             high.iter().any(|p| p.bucket == DecorKind::Snow),
             "2200m 山应有雪帽图元"
         );
-        let low = site_primitives(DecorKind::Mountain, DecorBand::Edit, 5, 5, 800, 0.5);
+        let low = site_primitives(DecorKind::Mountain, DecorBand::Edit, 5, 5, 800, 0.5, None);
         assert!(
             low.iter().all(|p| p.bucket != DecorKind::Snow),
             "800m 山不应有雪帽"
@@ -1010,7 +1104,15 @@ mod tests {
     #[test]
     fn ocean_waves_spawn_in_shallow_band_only() {
         // ADR-0039 D2：-10m（浅海）有波浪图元；陆地/深海没有。
-        let shallow = site_primitives(DecorKind::OceanWaves, DecorBand::Edit, 10, 10, -10, 0.5);
+        let shallow = site_primitives(
+            DecorKind::OceanWaves,
+            DecorBand::Edit,
+            10,
+            10,
+            -10,
+            0.5,
+            None,
+        );
         assert!(
             shallow.iter().all(|p| p.bucket == DecorKind::OceanWaves),
             "浅海波浪应落在 OceanWaves 桶"
@@ -1027,9 +1129,9 @@ mod tests {
     #[test]
     fn forest_climate_variants_differ_by_fy() {
         // ADR-0039 D3：针叶（北）= 细三角；阔叶（中）= 圆团；绿洲（南）= 孤团。
-        let boreal = site_primitives(DecorKind::Forest, DecorBand::Edit, 10, 10, 300, 0.15);
-        let temperate = site_primitives(DecorKind::Forest, DecorBand::Edit, 10, 10, 300, 0.5);
-        let oasis = site_primitives(DecorKind::Forest, DecorBand::Edit, 10, 10, 300, 0.85);
+        let boreal = site_primitives(DecorKind::Forest, DecorBand::Edit, 10, 10, 300, 0.15, None);
+        let temperate = site_primitives(DecorKind::Forest, DecorBand::Edit, 10, 10, 300, 0.5, None);
+        let oasis = site_primitives(DecorKind::Forest, DecorBand::Edit, 10, 10, 300, 0.85, None);
         assert!(
             boreal.iter().all(|p| p.kind == PrimShape::Triangle),
             "针叶应为细三角"
@@ -1052,13 +1154,13 @@ mod tests {
     #[test]
     fn alpine_peaks_get_rock_accent() {
         // ADR-0039 D4：>=3400m 雪帽 + 帽缘露岩（Snow 桶第二图元，黄褐）。
-        let peak = site_primitives(DecorKind::Mountain, DecorBand::Edit, 5, 5, 3500, 0.5);
+        let peak = site_primitives(DecorKind::Mountain, DecorBand::Edit, 5, 5, 3500, 0.5, None);
         let rocks: Vec<_> = peak
             .iter()
             .filter(|p| p.bucket == DecorKind::Snow && p.color[0] > 0.7 && p.color[2] < 0.7)
             .collect();
         assert_eq!(rocks.len(), 1, "3500m 峰应有 1 块露岩，得 {}", rocks.len());
-        let low = site_primitives(DecorKind::Mountain, DecorBand::Edit, 5, 5, 2000, 0.5);
+        let low = site_primitives(DecorKind::Mountain, DecorBand::Edit, 5, 5, 2000, 0.5, None);
         assert!(
             low.iter()
                 .all(|p| !(p.bucket == DecorKind::Snow && p.color[0] > 0.7 && p.color[2] < 0.7),),

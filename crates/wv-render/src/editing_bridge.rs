@@ -37,6 +37,19 @@ pub struct StreetSegmentIntent {
     pub segment: StreetSegment,
 }
 
+/// 作者手绘小河意图：在 `map_id` 图上新建一个带折线的地点（ADR-0046）。
+///
+/// 折线是**图内局部 wu**（与 `Place.line` 同一坐标口径）。
+#[derive(Debug, Clone)]
+pub struct PlaceLineIntent {
+    /// 目标图 id。
+    pub map_id: Id,
+    /// 地点名（空串 = 翻译层给默认名）。
+    pub name: String,
+    /// 折线点列（**图内局部 wu**，扁平 `[x0,y0,x1,y1,...]`）。
+    pub line: Vec<f32>,
+}
+
 /// 测量编辑动作。
 #[derive(Debug, Clone)]
 pub enum MeasurementOp {
@@ -64,6 +77,7 @@ pub struct EditIntents {
     next_seq: u64,
     street_segments: Vec<(u64, StreetSegmentIntent)>,
     measurements: Vec<(u64, MeasurementIntent)>,
+    place_lines: Vec<(u64, PlaceLineIntent)>,
 }
 
 impl EditIntents {
@@ -81,6 +95,19 @@ impl EditIntents {
         self.next_seq += 1;
         self.measurements.push((seq, intent));
         seq
+    }
+
+    /// 提交一条作者小河意图，返回其序号（回执凭据）。
+    pub fn push_place_line(&mut self, intent: PlaceLineIntent) -> u64 {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.place_lines.push((seq, intent));
+        seq
+    }
+
+    /// 排空全部作者小河意图（应用层翻译器专用）。
+    pub fn drain_place_lines(&mut self) -> Vec<(u64, PlaceLineIntent)> {
+        std::mem::take(&mut self.place_lines)
     }
 
     /// 排空全部街道意图（应用层翻译器专用）。

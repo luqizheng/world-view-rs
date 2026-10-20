@@ -15,6 +15,7 @@ fn id(s: &str) -> Id {
 
 fn place_with(feature: Option<u8>, biome: Option<u8>) -> Place {
     Place {
+        line: None,
         id: id("place_legacy"),
         name: "临安".into(),
         feature,

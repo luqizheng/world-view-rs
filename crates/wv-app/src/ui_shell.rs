@@ -734,7 +734,8 @@ pub(crate) fn load_project_into(
             // 系统链上 `refresh_project_diagnostics` 也会重算（并清 `needs_diagnose`），
             // 但本帧若不立刻灌，UI 会先看到旧工程的诊断，视觉闪烁。
             // 走 `derive_diagnostics`（错误+提示），不只 `derive_hints`。
-            let d = crate::edit::diagnostics_bridge::derive_diagnostics(&projection.world);
+            let theme = wv_render::theme::theme_pack::builtin::for_palette(view.map_palette);
+            let d = crate::edit::diagnostics_bridge::derive_diagnostics(&projection.world, theme);
             diagnostics.last_count = d.items.len();
             diagnostics.diagnostics = d;
             diagnostics.needs_diagnose = false;

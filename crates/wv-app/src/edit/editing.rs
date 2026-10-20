@@ -745,6 +745,7 @@ pub fn apply_history_command(
 /// 亚毫秒，无须防抖。若规模上来再加重算预算。
 pub fn refresh_project_diagnostics(
     projection: Res<WorldProjection>,
+    view: Res<crate::state::ViewState>,
     mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
 ) {
     if !diagnostics.needs_diagnose {
@@ -752,7 +753,11 @@ pub fn refresh_project_diagnostics(
     }
     // 错误 + 提示。复用 `wv-io` 的引用校验逻辑（与 `Project::diagnose` 共享底层），
     // 但走的是**内存里的** `World` 而不是磁盘——编辑器不应当每帧都敲盘。
-    let d = crate::edit::diagnostics_bridge::derive_diagnostics(&projection.world);
+    //
+    // 主题（`view.map_palette`）一并传入：区域覆盖物键是否可解析**依赖当前
+    // 主题**（ADR-0045 追记一——换主题会让某个键失配，提示随之增减）。
+    let theme = wv_render::theme::theme_pack::builtin::for_palette(view.map_palette);
+    let d = crate::edit::diagnostics_bridge::derive_diagnostics(&projection.world, theme);
     diagnostics.last_count = d.items.len();
     diagnostics.diagnostics = d;
     diagnostics.needs_diagnose = false;

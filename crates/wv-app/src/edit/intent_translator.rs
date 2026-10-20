@@ -11,9 +11,14 @@
 //! → `apply_street_receipts` / `apply_measurement_receipts`（wv-render，回填本地）。
 
 use bevy::prelude::*;
-use wv_edit::{AddMeasurementCommand, AddStreetSegmentCommand, RemoveMeasurementCommand};
+use wv_core::distance::Place;
+use wv_edit::{
+    AddMeasurementCommand, AddPlaceCommand, AddPlaceLineCommand, AddStreetSegmentCommand,
+    RemoveMeasurementCommand,
+};
 use wv_render::editing_bridge::{
-    EditIntents, EditReceipts, MeasurementIntent, MeasurementOp, StreetSegmentIntent,
+    EditIntents, EditReceipts, MeasurementIntent, MeasurementOp, PlaceLineIntent,
+    StreetSegmentIntent,
 };
 use wv_render::state::WorldProjection;
 
@@ -46,6 +51,41 @@ pub fn translate_edit_intents(
         }
     }
 
+    // 作者手绘小河（ADR-0046）：**一个事务两条命令**——先建地点、再挂折线，
+    // 一次撤销整体回退（作者不会看到「有地点没线」的中间态）。
+    for (seq, PlaceLineIntent { map_id, name, line }) in intents.drain_place_lines() {
+        let place_id = wv_core::Id::new_unchecked(format!("place_river_{}", now_millis()));
+        let place = Place {
+            id: place_id.clone(),
+            name: if name.is_empty() {
+                "小河".to_string()
+            } else {
+                name
+            },
+            feature: None,
+            map: Some(map_id),
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+            biome: None,
+            envelope: None,
+            rank: None,
+            line: None,
+        };
+        let mut tx = wv_edit::Transaction::new();
+        tx.push(Box::new(AddPlaceCommand::new(place)));
+        tx.push(Box::new(AddPlaceLineCommand::new(place_id, line)));
+        match edit.history.commit(&mut projection.world, tx) {
+            Ok(dirty) => {
+                edit.record_dirty(dirty);
+                projection.dirty = true;
+                receipts.commit(seq);
+            }
+            Err(e) => bevy::log::warn!("作者小河命令失败: {e}"),
+        }
+    }
+
     for (seq, MeasurementIntent { map_id, op }) in intents.drain_measurements() {
         let cmd: Box<dyn wv_edit::EditCommand> = match op {
             MeasurementOp::Add(m) => Box::new(AddMeasurementCommand::new(map_id, m)),
@@ -61,6 +101,99 @@ pub fn translate_edit_intents(
             }
             Err(e) => bevy::log::warn!("测量命令失败: {e}"),
         }
+    }
+}
+
+/// 毫秒时间戳（地点 id 后缀；id 由**应用层**生成——渲染层不造 id）。
+fn now_millis() -> u128 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod place_line_tests {
+    use super::*;
+
+    /// 小河意图 = **一个事务两条命令**：撤销一次，地点与折线一起回退。
+    #[test]
+    fn place_line_intent_creates_place_with_line_and_undo_reverts_both() {
+        let world = wv_core::World::default();
+        let mut app_world = bevy::prelude::World::default();
+        app_world.insert_resource(WorldProjection {
+            world,
+            project_dir: Some("/test/project".into()),
+            ..WorldProjection::default()
+        });
+        app_world.insert_resource(editing::EditHistory::default());
+        let mut intents = EditIntents::default();
+        intents.push_place_line(PlaceLineIntent {
+            map_id: wv_core::Id::new_unchecked("map_world"),
+            name: "通天河".into(),
+            line: vec![0.0, 0.0, 10.0, 5.0],
+        });
+        app_world.insert_resource(intents);
+        app_world.insert_resource(EditReceipts::default());
+
+        let mut schedule = bevy::ecs::schedule::Schedule::default();
+        schedule.add_systems(translate_edit_intents);
+        schedule.run(&mut app_world);
+
+        let projection = app_world.resource::<WorldProjection>();
+        assert_eq!(projection.world.distances.places.len(), 1, "应建一个地点");
+        let place = &projection.world.distances.places[0];
+        assert_eq!(place.name, "通天河");
+        assert!(place.line.is_some(), "地点应带折线");
+        assert_eq!(place.line.as_deref(), Some(&[0.0, 0.0, 10.0, 5.0][..]));
+        assert!(projection.dirty, "提交后应标脏");
+
+        // 撤销一次：地点整体消失（地点 + 折线同一事务）。
+        {
+            let mut edit = app_world
+                .remove_resource::<editing::EditHistory>()
+                .expect("历史");
+            let mut projection = app_world
+                .remove_resource::<WorldProjection>()
+                .expect("投影");
+            assert!(edit.history.undo(&mut projection.world).is_ok(), "应可撤销");
+            app_world.insert_resource(projection);
+            app_world.insert_resource(edit);
+        }
+        let projection = app_world.resource::<WorldProjection>();
+        assert!(
+            projection.world.distances.places.is_empty(),
+            "撤销后地点（连同折线）应整体消失"
+        );
+    }
+
+    /// 空名 → 默认名「小河」。
+    #[test]
+    fn place_line_intent_with_empty_name_gets_default() {
+        let world = wv_core::World::default();
+        let mut app_world = bevy::prelude::World::default();
+        app_world.insert_resource(WorldProjection {
+            world,
+            project_dir: Some("/test/project".into()),
+            ..WorldProjection::default()
+        });
+        app_world.insert_resource(editing::EditHistory::default());
+        let mut intents = EditIntents::default();
+        intents.push_place_line(PlaceLineIntent {
+            map_id: wv_core::Id::new_unchecked("map_world"),
+            name: String::new(),
+            line: vec![0.0, 0.0, 1.0, 1.0],
+        });
+        app_world.insert_resource(intents);
+        app_world.insert_resource(EditReceipts::default());
+
+        let mut schedule = bevy::ecs::schedule::Schedule::default();
+        schedule.add_systems(translate_edit_intents);
+        schedule.run(&mut app_world);
+
+        let projection = app_world.resource::<WorldProjection>();
+        assert_eq!(projection.world.distances.places[0].name, "小河");
     }
 }
 

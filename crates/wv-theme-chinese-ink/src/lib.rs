@@ -20,7 +20,7 @@
 //! - **不**做 i18n：主题名走 i18n 是 M3 议题（M2 用 `display_name: &'static str` 单语）；
 //! - **不**改 `wv-render` 任何源码——验证"加风格零改核心"。
 
-use wv_theme::overlays::{FeatureOverlaySet, FeatureRule};
+use wv_theme::overlays::{FeatureOverlaySet, FeatureRule, RegionOverlayRule, RegionOverlaySet};
 use wv_theme::palette::PaletteColors;
 use wv_theme::registry::ThemePackRegistry;
 use wv_theme::theme_pack::{ThemePack, TreatmentFlags};
@@ -61,6 +61,51 @@ pub static PACK: ThemePack = ThemePack {
         water: None,
         road: None,
     },
+    // 区域覆盖物键（ADR-0045 D10）：水墨版四档，墨色更灰、采样更疏。
+    // 键集与内置古舆图**同款**——换主题不应让作者的区域声明突然"失配"
+    // （那会画成缺失覆盖物标记）；差异做在颜色 / 尺寸 / 间距上。
+    region_overlays: RegionOverlaySet::new(&[
+        (
+            "conifer",
+            RegionOverlayRule {
+                variant: "conifer",
+                color: [0x2A, 0x33, 0x2A],
+                alpha: None,
+                size_scale: 0.85,
+                spacing_scale: 1.15,
+            },
+        ),
+        (
+            "broadleaf",
+            RegionOverlayRule {
+                variant: "broadleaf",
+                color: [0x2B, 0x35, 0x2A],
+                alpha: None,
+                size_scale: 0.85,
+                spacing_scale: 1.15,
+            },
+        ),
+        (
+            "sparse",
+            RegionOverlayRule {
+                variant: "sparse",
+                color: [0x3A, 0x44, 0x36],
+                alpha: None,
+                size_scale: 0.85,
+                spacing_scale: 1.15,
+            },
+        ),
+        (
+            "boulder_field",
+            RegionOverlayRule {
+                variant: "boulder",
+                color: [0x5C, 0x5A, 0x52],
+                alpha: Some(0.75),
+                size_scale: 0.85,
+                spacing_scale: 1.3,
+            },
+        ),
+    ]),
 };
 
 /// 注册表持有的静态切片（`&[...]` 临时数组的栈上生命周期不够 `&'static`，

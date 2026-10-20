@@ -154,6 +154,7 @@ fn build_world(meta: WorldMeta) -> World {
     // ---- 距离图：4 城（is_city）+ 6 点标（!is_city）--------------------
     // 城市有 w/h；点标只有锚点坐标（AGENTS §「双重身份」：None = 点 icon）。
     let city = |id: &str, name: &str, x: f32, y: f32| Place {
+        line: None,
         id: Id::new(id).unwrap(),
         name: name.into(),
         map: Some(Id::new("map_world").unwrap()),
@@ -167,6 +168,7 @@ fn build_world(meta: WorldMeta) -> World {
         rank: None,
     };
     let dot = |id: &str, name: &str, x: f32, y: f32| Place {
+        line: None,
         id: Id::new(id).unwrap(),
         name: name.into(),
         map: Some(Id::new("map_world").unwrap()),

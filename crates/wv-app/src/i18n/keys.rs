@@ -233,6 +233,16 @@ pub enum I18nKey {
     BrushStreetsDrawnUnit,
     /// 「结束连线」按钮
     BrushFinishLineBtn,
+    /// 小河分块折叠头
+    BrushRiverDrawingHeader,
+    /// 「画小河模式（左键逐点连线，右键收线）」
+    BrushRiverToggle,
+    /// 「河名」字段标签
+    BrushRiverNameLabel,
+    /// 「收线」按钮
+    BrushRiverFinishBtn,
+    /// 「已画 {} 条」前缀（小河）
+    BrushRiversDrawnUnit,
     /// 「撤销上一段」按钮
     BrushUndoLastSegmentBtn,
     /// 「Ctrl+滚轮改半径」底部提示

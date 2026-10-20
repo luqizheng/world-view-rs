@@ -289,6 +289,7 @@ fn build_world(meta: WorldMeta) -> World {
 
     // ---- 距离图：4 城（is_city）+ 4 点标 ---------------------------------
     let city = |id: &str, name: &str, x: f32, y: f32| Place {
+        line: None,
         id: Id::new(id).unwrap(),
         name: name.into(),
         map: Some(map_world.clone()),
@@ -302,6 +303,7 @@ fn build_world(meta: WorldMeta) -> World {
         rank: None,
     };
     let dot = |id: &str, name: &str, x: f32, y: f32| Place {
+        line: None,
         id: Id::new(id).unwrap(),
         name: name.into(),
         map: Some(map_world.clone()),
@@ -533,6 +535,11 @@ fn build_world(meta: WorldMeta) -> World {
         name: "沃野郡".into(),
         map: map_world.clone(),
         polygon: vec![400.0, 2000.0, 1400.0, 2000.0, 1400.0, 2900.0, 400.0, 2900.0],
+        // ADR-0045 D3：洞环 / 类别 / 父区 / 覆盖物键——旧语义区域全缺省。
+        holes: Vec::new(),
+        kind: wv_core::model::region::RegionKind::Area,
+        parent: None,
+        overlay: None,
     }];
 
     // ---- 测量（工具产物：不走 LayerKind，每图一份 YAML）------------------
@@ -696,6 +703,7 @@ fn build_world(meta: WorldMeta) -> World {
 /// 挂子图的点标（无范围）。
 fn dot_inner(id: &str, name: &str, x: f32, y: f32, map: &Id) -> Place {
     Place {
+        line: None,
         id: Id::new(id).unwrap(),
         name: name.into(),
         map: Some(map.clone()),

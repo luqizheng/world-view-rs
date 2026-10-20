@@ -31,6 +31,7 @@
 
 use wv_core::World;
 use wv_io::diagnostics::{self, derive_hints, Diagnostics};
+use wv_theme::theme_pack::ThemePack;
 
 /// 对内存里的 `World` 派生一份 `Diagnostics`：错误 + 提示 + 去重。
 ///
@@ -39,7 +40,7 @@ use wv_io::diagnostics::{self, derive_hints, Diagnostics};
 /// 悬空引用集合一致。
 ///
 /// **为什么不**直接调 `Project::diagnose`：编辑器不应当每帧都敲盘；内存视图足够。
-pub fn derive_diagnostics(world: &World) -> Diagnostics {
+pub fn derive_diagnostics(world: &World, theme: &ThemePack) -> Diagnostics {
     let mut d = Diagnostics::default();
 
     // 引用完整性 → Error 级诊断。**一次性检出全部**，不是遇到第一个就停。
@@ -90,6 +91,53 @@ pub fn derive_diagnostics(world: &World) -> Diagnostics {
 
     // 派生提示（相遇却未写事件）——**永不**产生 Error。
     d.extend(derive_hints(world));
+
+    // 区域覆盖物键在当前主题中无规则（ADR-0045 追记一）——**提示级**，
+    // 不阻止保存（V1）：地图上该区域画的是「缺失覆盖物标记」（白底红斜线），
+    // 面板这一行告诉作者「是哪个键、哪个区域」。
+    for region in &world.regions {
+        let Some(key) = region.declared_overlay() else {
+            continue;
+        };
+        if theme.region_overlays.rule_for(key).is_none() {
+            d.items.push(diagnostics::hint(
+                format!("region-overlay-missing:{}:{}", region.id, key),
+                format!(
+                    "区域「{}」的覆盖物键「{}」在当前主题中无规则（地图上以缺失标记标出）",
+                    region.name, key
+                ),
+            ));
+        }
+    }
+
+    // 地点折线的三条提示（ADR-0046 D8）——**提示级**，不阻止保存（V1）。
+    for place in &world.distances.places {
+        let Some(line) = place.line.as_ref() else {
+            continue;
+        };
+        if line.len() < 4 {
+            d.items.push(diagnostics::hint(
+                format!("place-line-degenerate:{}", place.id),
+                format!("地点「{}」的折线退化（点数 < 2），画不出来", place.name),
+            ));
+        }
+        if place.map.is_none() {
+            d.items.push(diagnostics::hint(
+                format!("place-line-unanchored:{}", place.id),
+                format!("地点「{}」的折线未锚定到地图，不可见", place.name),
+            ));
+        }
+        if place.envelope.is_some() {
+            d.items.push(diagnostics::hint(
+                format!("place-line-and-envelope:{}", place.id),
+                format!(
+                    "地点「{}」同时有折线与面包络（互斥），折线优先生效",
+                    place.name
+                ),
+            ));
+        }
+    }
+
     d.dedup_by_fingerprint();
     d
 }
@@ -155,7 +203,7 @@ mod tests {
         w.units.push(unit_of("u_xinhai"));
         w.maps.push(map_of("map_main"));
         w.tracks.push(track_of("u_xinhai", "map_main"));
-        let d = derive_diagnostics(&w);
+        let d = derive_diagnostics(&w, &wv_render::theme::theme_pack::builtin::DEFAULT);
         assert!(
             d.errors().is_empty(),
             "happy world 不应产生错误，实际：{:?}",
@@ -176,7 +224,7 @@ mod tests {
             id: Id::new_unchecked("t_orphan"),
             ..track_of("u_ghost", "map_main")
         });
-        let d = derive_diagnostics(&w);
+        let d = derive_diagnostics(&w, &wv_render::theme::theme_pack::builtin::DEFAULT);
         let errs = d.errors();
         assert_eq!(errs.len(), 1, "应恰好一个悬空单位错误，实际：{:?}", errs);
         assert!(
@@ -185,7 +233,7 @@ mod tests {
             errs[0].message
         );
         // 指纹稳定——同一份 world 重跑，错误仍能被认领。
-        let d2 = derive_diagnostics(&w);
+        let d2 = derive_diagnostics(&w, &wv_render::theme::theme_pack::builtin::DEFAULT);
         let f1 = &d.items[0].fingerprint;
         let f2 = &d2.items[0].fingerprint;
         assert_eq!(f1, f2, "指纹应稳定");
@@ -198,7 +246,7 @@ mod tests {
         let mut w = World::default();
         w.maps.push(map_of("map_main"));
         w.tracks.push(track_of("u_ghost", "map_main"));
-        let d = derive_diagnostics(&w);
+        let d = derive_diagnostics(&w, &wv_render::theme::theme_pack::builtin::DEFAULT);
         let errs = d.errors();
         assert!(!errs.is_empty(), "测试前提：应有错误");
         for err in errs {
@@ -207,5 +255,51 @@ mod tests {
                 "悬空引用错误无 anchor（CoreError 不携带 map/day）"
             );
         }
+    }
+    /// 区域覆盖物键在当前主题无规则 → **提示级**诊断（V1：不阻止保存）。
+    #[test]
+    fn region_overlay_key_missing_in_theme_yields_hint_not_error() {
+        use wv_core::model::region::{Region, RegionKind};
+        let mut w = World::default();
+        w.regions.push(Region {
+            id: Id::new_unchecked("nr_miyansenlin"),
+            name: "迷幻深林".into(),
+            map: Id::new_unchecked("map_world"),
+            polygon: vec![0.0, 0.0, 2.0, 0.0, 2.0, 2.0],
+            holes: vec![],
+            kind: RegionKind::Nature,
+            parent: None,
+            overlay: Some("no_such_key".into()),
+        });
+        let theme = wv_render::theme::theme_pack::builtin::DEFAULT;
+        let d = derive_diagnostics(&w, &theme);
+        assert!(
+            d.hints().iter().any(|h| h.message.contains("no_such_key")),
+            "应提示该键在当前主题无规则"
+        );
+        assert!(d.errors().is_empty(), "V1：只提示不阻止（不得产生错误）");
+    }
+
+    /// 键在主题中存在 → 不产生提示。
+    #[test]
+    fn resolvable_region_overlay_key_produces_no_hint() {
+        use wv_core::model::region::{Region, RegionKind};
+        let mut w = World::default();
+        w.regions.push(Region {
+            id: Id::new_unchecked("nr_ok"),
+            name: "针叶林".into(),
+            map: Id::new_unchecked("map_world"),
+            polygon: vec![0.0, 0.0, 2.0, 0.0, 2.0, 2.0],
+            holes: vec![],
+            kind: RegionKind::Nature,
+            parent: None,
+            overlay: Some("conifer".into()),
+        });
+        let theme = wv_render::theme::theme_pack::builtin::DEFAULT;
+        let d = derive_diagnostics(&w, &theme);
+        assert!(
+            !d.hints().iter().any(|h| h.message.contains("conifer")),
+            "可解析的键不应产生提示"
+        );
     }
 }

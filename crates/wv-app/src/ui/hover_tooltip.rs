@@ -202,6 +202,7 @@ mod tests {
     fn setup_world_with_place() -> (WorldProjection, SelectedEntity) {
         let mut core = CoreWorld::default();
         let place = Place {
+            line: None,
             id: Id::new_unchecked("p1"),
             name: "落云城".into(),
             map: None,
