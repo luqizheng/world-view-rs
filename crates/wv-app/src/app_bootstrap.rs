@@ -34,6 +34,7 @@ use wv_render::faction_overlays;
 use wv_render::feature_overlays;
 use wv_render::layer_frame;
 use wv_render::map_frame;
+use wv_render::region_overlay;
 use wv_render::streets;
 use wv_render::terrain_chunks;
 use wv_render::terrain_decor;
@@ -132,6 +133,8 @@ pub fn run(config: AppConfig) {
     })
     .init_resource::<BrushState>()
     .init_resource::<PanelState>()
+    // 自然区域面板的会话态（物化时的名字输入，ADR-0045 D4）。
+    .init_resource::<crate::state::NatureRegionUiState>()
     .init_resource::<GridConfig>()
     // 「新建地图」对话框状态（ui_shell 分发器与对话框系统共用）。
     .init_resource::<ui::NewMapDialog>()
@@ -195,6 +198,9 @@ pub fn run(config: AppConfig) {
     .init_resource::<feature_overlays::FeatureOverlayEntities>()
     // 地形装饰（ADR-0031）：六桶合批池 + 每桶材质，惰性创建。
     .init_resource::<terrain_decor::TerrainDecorPools>()
+    // 区域覆盖物解析索引 + 缺失标记运行时资源（ADR-0045）。
+    .init_resource::<region_overlay::RegionOverlayIndex>()
+    .init_resource::<region_overlay::MissingMarkerAssets>()
     .init_resource::<brush_cursor::BrushCursorEntities>()
     .init_resource::<map_frame::MapFrameEntities>()
     .init_resource::<terrain_chunks::TerrainChunkEntities>()
@@ -305,6 +311,19 @@ pub fn run(config: AppConfig) {
             map_frame::sync_map_frame,
         )
             .chain(),
+    )
+    // 区域覆盖物解析（ADR-0045 D8/D9/D10）：**必须早于装饰采样**（装饰要按
+    // region 的声明换覆盖物变体 / 颜色），缺失标记紧随其后。
+    .add_systems(
+        Update,
+        region_overlay::sync_region_overlay_index
+            .after(terrain_view::sync_grid_config)
+            .before(terrain_decor::sync_terrain_decor),
+    )
+    .add_systems(
+        Update,
+        region_overlay::sync_missing_overlay_markers
+            .after(region_overlay::sync_region_overlay_index),
     )
     // 主链已顶满 Bevy 系统元组的 20 参上限（all_tuples，bevy_ecs
     // function_system.rs），笔刷光标单独注册、显式排在光标取世界坐标之后。

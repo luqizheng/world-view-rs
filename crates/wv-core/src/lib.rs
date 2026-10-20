@@ -78,7 +78,7 @@ pub use model::faction::{
     FactionColorMode, FactionLayer, FactionTerritory, Membership, DEFAULT_FACTION_LAYER_ID,
 };
 pub use model::place_territory::{place_territory_at, TerritoryShape};
-pub use model::region::Region;
+pub use model::region::{Region, RegionKind};
 pub use source::building::{Building, BuildingLayer};
 pub use source::geographic_source::{GeographicSourceV1, LatLonBbox};
 pub use source::label::{label_visible_at, EntityKind, LabelLayerConfig, ZoomTier};

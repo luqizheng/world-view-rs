@@ -71,6 +71,12 @@ pub struct ProjectionFrame {
     /// 本帧地物符号（rank ≥ 2 的地点，视图空间坐标）：国家档与更近档都画，
     /// 靠视口裁剪防密集点（参照 `place_dots` A1 索引）。
     pub landmark_dots: Vec<LandmarkDot>,
+    /// 本帧**作者手绘**河流折线（ADR-0046 D4 双供给的作者那一路）。
+    ///
+    /// 视图空间坐标（同 [`Self::river_polylines`] 口径）。来源 = 当前图上
+    /// 带 `Place.line` 的地点（亚格线状作者数据）；与派生的 `rivers_seed`
+    /// 水系**并存**——派生是模板世界的确定性资产，作者河是补充，不是替代。
+    pub author_river_polylines: Vec<Vec<Vec2>>,
 }
 
 /// 一个地物符号的渲染数据。`kind` 决定 `sync_landmarks` 烘哪个顶点流。
@@ -183,6 +189,7 @@ pub fn compute_projection(
     frame.track_hollow_starts.clear();
     frame.place_dots.clear();
     frame.landmark_dots.clear();
+    frame.author_river_polylines.clear();
 
     // 路段列缓存门（ADR-0030 D5a）：段坐标在根图帧系，不随相机平移/缩放变，
     // 只有世界编辑 / 钻取换图 / 栅格换图 / Road 图层可见性翻转才重算。
@@ -225,6 +232,30 @@ pub fn compute_projection(
     // 也保持索引新鲜，重新打开图层的第一帧就能查。
     if projection.is_changed() {
         *place_index = PlaceIndex::build(&projection.world);
+    }
+
+    // 作者手绘河（ADR-0046 D4）：当前图上带 `Place.line` 的地点 → 折线。
+    // 与派生水系**双供给**（先例：街道的手绘 YAML / Overture 双供给）。
+    // 坐标：折线是**图内局部 wu** → `map_to_view` 转视图空间（同 POI 口径）。
+    if river_stale {
+        if let Some(map_id) = &current_for_river {
+            if let Some(idxs) = place_index.anchored_by_map.get(map_id) {
+                for i in idxs {
+                    let place = &projection.world.distances.places[*i as usize];
+                    let Some(line) = place.line.as_ref() else {
+                        continue;
+                    };
+                    let pts: Vec<Vec2> = line
+                        .chunks(2)
+                        .filter(|p| p.len() == 2)
+                        .map(|p| grid.map_to_view(Vec2::new(p[0], p[1])))
+                        .collect();
+                    if pts.len() >= 2 {
+                        frame.author_river_polylines.push(pts);
+                    }
+                }
+            }
+        }
     }
 
     // 河流重算放在图层早退之前：河流属地形族（terrain 图层在渲染侧 gate），
@@ -690,6 +721,7 @@ mod tests {
 
     fn place(feature: Option<u8>) -> Place {
         Place {
+            line: None,
             id: Id::new_unchecked("place_test"),
             name: "测试地点".into(),
             feature,
@@ -764,6 +796,7 @@ mod tests {
 
     fn anchored_place(id: &str, map: &str, x: f32, y: f32) -> Place {
         Place {
+            line: None,
             id: Id::new_unchecked(id),
             name: id.to_owned(),
             feature: None,
@@ -781,6 +814,7 @@ mod tests {
     fn graph_node(id: &str) -> Place {
         // guangdong 的路口形态：纯距离图节点，不锚定地图、无坐标。
         Place {
+            line: None,
             id: Id::new_unchecked(id),
             name: "路口".into(),
             feature: None,
@@ -797,6 +831,7 @@ mod tests {
 
     fn edge(id: &str, a: &str, b: &str) -> PlaceEdge {
         PlaceEdge {
+            rank: None,
             id: Id::new_unchecked(id),
             a: Id::new_unchecked(a),
             b: Id::new_unchecked(b),

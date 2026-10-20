@@ -25,7 +25,7 @@
 
 use bevy::prelude::*;
 
-use super::overlays::{FeatureOverlaySet, FeatureRule};
+use super::overlays::{FeatureOverlaySet, FeatureRule, RegionOverlayRule, RegionOverlaySet};
 use super::palette::{MapPalette, PaletteColors};
 
 /// 主题包：色板 + 装饰 + 贴图 + 覆盖物规则的原子组合（ADR-0023 D1）。
@@ -58,6 +58,13 @@ pub struct ThemePack {
     /// ADR-0023 M3 推迟（README §12-30）。换主题 = 整包换规则；主题没给某
     /// feature 规则时渲染侧回退「地界描边 + 名字」，事实不消失。
     pub overlays: FeatureOverlaySet,
+    /// 区域覆盖物规则表（ADR-0045 D10）：「自然区域声明的覆盖物键」→ 长相。
+    ///
+    /// 键是**开放字符串**，词表由主题拥有（外部主题 crate 各自带一本）。
+    /// 区域声明的键在当前主题查无此键时，**不回退**到 cell 派生默认（那等于
+    /// 拿另一个变体冒充作者声明），而是画**缺失覆盖物标记**（白底红斜线，
+    /// ADR-0045 追记一）——本表同时充当「键存在性查询」的实现。
+    pub region_overlays: RegionOverlaySet,
 }
 
 /// 贴图规格（= 现有 `TileAtlas` 的薄包装，新增 `format_version` 与可选 `path` 元数据）。
@@ -248,6 +255,51 @@ pub mod builtin {
             water: None,
             road: None,
         },
+        // 区域覆盖物键（ADR-0045 D10）：日间古舆图的四档变体。
+        // 变体色与 `terrain_decor` 现有气候带变体同源（针叶深绿 / 阔叶墨绿 /
+        // 稀树暖绿），乱石滩涂是新增的灰褐档。
+        region_overlays: RegionOverlaySet::new(&[
+            (
+                "conifer",
+                RegionOverlayRule {
+                    variant: "conifer",
+                    color: [0x2E, 0x5C, 0x36],
+                    alpha: None,
+                    size_scale: 1.0,
+                    spacing_scale: 1.0,
+                },
+            ),
+            (
+                "broadleaf",
+                RegionOverlayRule {
+                    variant: "broadleaf",
+                    color: [0x2B, 0x57, 0x31],
+                    alpha: None,
+                    size_scale: 1.0,
+                    spacing_scale: 1.0,
+                },
+            ),
+            (
+                "sparse",
+                RegionOverlayRule {
+                    variant: "sparse",
+                    color: [0x4A, 0x6B, 0x35],
+                    alpha: None,
+                    size_scale: 1.0,
+                    spacing_scale: 1.0,
+                },
+            ),
+            (
+                "boulder_field",
+                RegionOverlayRule {
+                    variant: "boulder",
+                    color: [0x8A, 0x84, 0x74],
+                    alpha: Some(0.80),
+                    size_scale: 1.0,
+                    spacing_scale: 1.2,
+                },
+            ),
+        ]),
     };
 
     /// 暮色旧纸包（与 `PaletteColors::DUSK` 同源；M1 提供作内置第二档，M2 再接持久化）。
@@ -281,6 +333,49 @@ pub mod builtin {
             water: None,
             road: None,
         },
+        // 区域覆盖物键（ADR-0045 D10）：暮色版压暗一档，与 DEFAULT 可见不同。
+        region_overlays: RegionOverlaySet::new(&[
+            (
+                "conifer",
+                RegionOverlayRule {
+                    variant: "conifer",
+                    color: [0x25, 0x46, 0x2C],
+                    alpha: None,
+                    size_scale: 0.9,
+                    spacing_scale: 1.0,
+                },
+            ),
+            (
+                "broadleaf",
+                RegionOverlayRule {
+                    variant: "broadleaf",
+                    color: [0x23, 0x43, 0x28],
+                    alpha: None,
+                    size_scale: 0.9,
+                    spacing_scale: 1.0,
+                },
+            ),
+            (
+                "sparse",
+                RegionOverlayRule {
+                    variant: "sparse",
+                    color: [0x3B, 0x55, 0x2A],
+                    alpha: None,
+                    size_scale: 0.9,
+                    spacing_scale: 1.0,
+                },
+            ),
+            (
+                "boulder_field",
+                RegionOverlayRule {
+                    variant: "boulder",
+                    color: [0x6E, 0x69, 0x5C],
+                    alpha: Some(0.78),
+                    size_scale: 0.9,
+                    spacing_scale: 1.2,
+                },
+            ),
+        ]),
     };
 
     /// 内置包列表（M1 = `[DEFAULT]`；M2 改 `[DEFAULT, DUSK]` 后 `view.theme_pack_id` 即可持久化切换）。

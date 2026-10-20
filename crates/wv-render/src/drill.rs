@@ -1406,6 +1406,12 @@ pub fn update_region_labels(
                     if region.map != current.id {
                         continue;
                     }
+                    // 无名区域**不显示在地图上**（ADR-0045 D7）：`name` 为空串
+                    // = 作者还没起名。自动分区候选根本不落盘（命名即物化），
+                    // 无名的物化区域同样不显示。
+                    if region.is_unnamed() {
+                        continue;
+                    }
                     // 非 Polygon / 空轮廓没有锚点（centroid 回 None）——静默跳过，
                     // 与势力几何的「非 Polygon 变体 v0.1 不画」同一口径。
                     let Some(centroid) = region.centroid() else {
@@ -1772,6 +1778,7 @@ mod tests {
     #[test]
     fn label_gate_folds_legacy_places_identically_to_pois() {
         let place = |w: Option<f32>, h: Option<f32>, rank: Option<u8>| wv_core::distance::Place {
+            line: None,
             id: wv_core::Id::new_unchecked("p"),
             name: "地名".into(),
             feature: None,

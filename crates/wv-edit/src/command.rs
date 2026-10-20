@@ -16,7 +16,7 @@ use wv_terrain::{TerrainCell, TerrainGrid};
 ///
 /// `wv-core` 不认识 `TerrainGrid`（不依赖 wv-terrain），因此两层的接缝在这里。
 /// `wv-io` 有对称的一对函数用于落盘，二者共享同一布局约定（行优先、三通道）。
-fn to_grid(data: &TerrainData) -> EditResult<TerrainGrid> {
+pub(crate) fn to_grid(data: &TerrainData) -> EditResult<TerrainGrid> {
     let cells: Vec<TerrainCell> = data
         .cells
         .iter()
@@ -2006,7 +2006,7 @@ fn marker_error(e: wv_terrain::marker::MarkerError) -> EditError {
 }
 
 /// 环（格坐标）→ 扁平 wu 环（`[x0, y0, x1, y1, …]`）。
-fn ring_wu(ring: &[(f32, f32)], cell_size: f32) -> Vec<f32> {
+pub(crate) fn ring_wu(ring: &[(f32, f32)], cell_size: f32) -> Vec<f32> {
     ring.iter()
         .flat_map(|&(x, y)| [x * cell_size, y * cell_size])
         .collect()
@@ -3042,7 +3042,7 @@ impl EditCommand for ClearMeasurementsCommand {
 
 use wv_core::Region;
 
-fn region_dirty_paths() -> Vec<String> {
+pub(crate) fn region_dirty_paths() -> Vec<String> {
     vec!["regions".into()]
 }
 
@@ -5527,6 +5527,11 @@ mod tests {
             name: name.into(),
             map: Id::new_unchecked(TEST_MAP),
             polygon: vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0],
+            // ADR-0045 D3：洞环 / 类别 / 父区 / 覆盖物键。
+            holes: Vec::new(),
+            kind: wv_core::model::region::RegionKind::Area,
+            parent: None,
+            overlay: None,
         }
     }
 
@@ -6026,6 +6031,7 @@ mod tests {
     /// 标记地点 fixture（ADR-0032：fixture 也只写 biome，不写旧 feature 词汇）。
     fn span_fixture_place(id: &str) -> wv_core::distance::Place {
         wv_core::distance::Place {
+            line: None,
             id: Id::new_unchecked(id),
             name: format!("地点{id}"),
             feature: None,
@@ -6060,6 +6066,7 @@ mod tests {
 
     fn marker_place(id: &str, name: &str, biome: u8) -> wv_core::distance::Place {
         wv_core::distance::Place {
+            line: None,
             id: wv_core::Id::new_unchecked(id),
             name: name.into(),
             feature: None,

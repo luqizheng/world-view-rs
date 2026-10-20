@@ -34,6 +34,7 @@ pub mod faction_panel_actions;
 pub mod feature_place_actions;
 #[cfg(feature = "app")]
 pub mod intent_translator;
+pub mod nature_region_actions;
 #[cfg(feature = "app")]
 pub mod region_panel_actions;
 #[cfg(feature = "app")]

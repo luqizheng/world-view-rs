@@ -6,7 +6,10 @@
 //! 2. Project 级 save（`wants("regions")`）→ load round-trip；
 //! 3. 零迁移：无 `regions/` 目录的既有工程加载得空 Vec。
 
-use wv_core::{model::region::Region, Id, World};
+use wv_core::{
+    model::region::{Region, RegionKind},
+    Id, World,
+};
 
 fn sample_region() -> Region {
     Region {
@@ -14,6 +17,24 @@ fn sample_region() -> Region {
         name: "关中平原".into(),
         map: Id::new_unchecked("map_world"),
         polygon: vec![0.0, 0.0, 40.0, 0.0, 40.0, 30.0, 0.0, 30.0],
+        holes: Vec::new(),
+        kind: RegionKind::Area,
+        parent: None,
+        overlay: None,
+    }
+}
+
+/// 自然区域（ADR-0045）：带洞 + 类别 + 父区 + 覆盖物键的全字段样本。
+fn sample_nature_region() -> Region {
+    Region {
+        id: Id::new_unchecked("region_miyansenlin"),
+        name: "迷幻深林".into(),
+        map: Id::new_unchecked("map_world"),
+        polygon: vec![0.0, 0.0, 40.0, 0.0, 40.0, 30.0, 0.0, 30.0],
+        holes: vec![vec![10.0, 10.0, 20.0, 10.0, 20.0, 20.0, 10.0, 20.0]],
+        kind: RegionKind::Nature,
+        parent: Some(Id::new_unchecked("region_mountains")),
+        overlay: Some("conifer".into()),
     }
 }
 
@@ -23,6 +44,35 @@ fn region_round_trips_through_yaml() {
     let text = serde_yaml::to_string(&region).expect("序列化");
     let back: Region = serde_yaml::from_str(&text).expect("反序列化");
     assert_eq!(back, region, "Region YAML round-trip 应无损");
+}
+
+/// 自然区域（ADR-0045）：洞环 / 类别 / 父区 / 覆盖物键全字段 round-trip。
+#[test]
+fn nature_region_round_trips_with_holes_kind_parent_and_overlay() {
+    let region = sample_nature_region();
+    let text = serde_yaml::to_string(&region).expect("序列化");
+    let back: Region = serde_yaml::from_str(&text).expect("反序列化");
+    assert_eq!(back, region, "自然区域 YAML round-trip 应无损");
+    assert_eq!(back.kind, RegionKind::Nature);
+    assert_eq!(back.holes.len(), 1, "洞环应保留");
+    assert_eq!(
+        back.parent.as_ref().map(|p| p.as_str()),
+        Some("region_mountains")
+    );
+    assert_eq!(back.overlay.as_deref(), Some("conifer"));
+    assert_eq!(back.declared_overlay(), Some("conifer"));
+}
+
+/// 旧 YAML（无新字段）零迁移：缺省即 `Area` 语义。
+#[test]
+fn legacy_region_yaml_without_new_fields_loads_as_area() {
+    let legacy = "id: region_legacy\nname: 关中\nmap: map_world\npolygon: [0, 0, 4, 0, 4, 4]\n";
+    let region: Region = serde_yaml::from_str(legacy).expect("旧 YAML 应可读");
+    assert_eq!(region.kind, RegionKind::Area);
+    assert!(region.holes.is_empty());
+    assert!(region.parent.is_none());
+    assert!(region.overlay.is_none());
+    assert!(region.declared_overlay().is_none());
 }
 
 /// 极简 tempdir（与 save_world.rs 同法）。

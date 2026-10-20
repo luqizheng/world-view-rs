@@ -303,7 +303,7 @@ fn render_fields(
             .color(shell.t3()),
     );
     ui.add_space(8.0);
-    divider(ui, &shell);
+    divider(ui, shell);
     ui.add_space(6.0);
 
     // ── 群系：heading（互斥单选）+ 设计稿 7 组 radio ──
@@ -576,7 +576,7 @@ fn render_batch_section(
         );
     });
     ui.add_space(8.0);
-    divider(ui, &shell);
+    divider(ui, shell);
     ui.add_space(6.0);
 
     // ── 海拔：**只做增减**（相对量）──
@@ -661,7 +661,7 @@ fn render_batch_section(
         }
     });
     ui.add_space(8.0);
-    divider(ui, &shell);
+    divider(ui, shell);
     ui.add_space(6.0);
 
     // ── 群系：7 组 radio（与单格布局同款）──

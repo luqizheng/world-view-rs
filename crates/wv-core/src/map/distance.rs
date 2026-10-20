@@ -138,6 +138,19 @@ pub struct Place {
     /// 等于改旧工程的可视行为。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rank: Option<u8>,
+    /// 作者手绘的**折线**几何（ADR-0046 D1；图内局部 wu 扁平点列）。
+    ///
+    /// `None` = 点状地点（绝大多数）；`Some` = 线状地点——作者手绘的小溪 / 小河。
+    /// 小于一个 cell 的水系无法用格子表达（ADR-0046 处境），故走矢量。
+    ///
+    /// 与 `envelope`（面）**正交**：一个 Place 要么是点、要么是线，不兼得。
+    /// 折线**不占格、不写 biome**（ADR-0046 D3）——与一格宽的笔刷河
+    /// （`wv_terrain::intent::Intent::River`）并存。
+    ///
+    /// 锚点：`x` / `y` 缺省时由**折线中点**派生（沿用街道 `polyline_midpoint()`
+    /// 先例，见 `Place::anchor_from_line`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<Vec<f32>>,
 }
 
 impl Place {
@@ -156,6 +169,58 @@ impl Place {
                     1
                 }
             }
+        }
+    }
+
+    /// 线状地点的**锚点**（ADR-0046 D2）：折线中点。
+    ///
+    /// 口径与街道的 `polyline_midpoint()` 同款（`wv_core::source::street`）：
+    /// 取**弧长中点**（不是顶点平均）——折线弯折时顶点平均会偏向拐角。
+    ///
+    /// - 无折线 / 折线不足 2 点 → `None`；
+    /// - 折线退化（所有点重合）→ `None`。
+    pub fn anchor_from_line(&self) -> Option<(f32, f32)> {
+        let line = self.line.as_ref()?;
+        let pts: Vec<(f32, f32)> = line
+            .chunks(2)
+            .filter(|p| p.len() == 2)
+            .map(|p| (p[0], p[1]))
+            .collect();
+        if pts.len() < 2 {
+            return None;
+        }
+        // 弧长中点：累计各段长度，找跨越总长一半的那一段并线性插值。
+        let seg_len: Vec<f32> = pts
+            .windows(2)
+            .map(|w| ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt())
+            .collect();
+        let total: f32 = seg_len.iter().sum();
+        if total <= 0.0 {
+            return None;
+        }
+        let half = total / 2.0;
+        let mut acc = 0.0f32;
+        for (i, len) in seg_len.iter().enumerate() {
+            if acc + *len >= half {
+                let t = if *len > 0.0 { (half - acc) / *len } else { 0.0 };
+                let a = pts[i];
+                let b = pts[i + 1];
+                return Some((a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t));
+            }
+            acc += *len;
+        }
+        let last = pts[pts.len() - 1];
+        Some((last.0, last.1))
+    }
+
+    /// 地点的**有效锚点**（ADR-0046 D2）：显式 `x` / `y` 优先，缺省时由折线
+    /// 中点派生。
+    ///
+    /// 渲染与拾取取锚点的**唯一入口**（点状地点的 `x/y` 恒 `Some`，行为不变）。
+    pub fn effective_anchor(&self) -> Option<(f32, f32)> {
+        match (self.x, self.y) {
+            (Some(x), Some(y)) => Some((x, y)),
+            _ => self.anchor_from_line(),
         }
     }
 
@@ -472,6 +537,7 @@ mod tests {
         DistanceGraph {
             places: vec![
                 Place {
+                    line: None,
                     id: vid("city_qingyun"),
                     name: "青云城".into(),
                     map: None,
@@ -485,6 +551,7 @@ mod tests {
                     rank: None,
                 },
                 Place {
+                    line: None,
                     id: vid("village_heishui"),
                     name: "黑水村".into(),
                     map: None,
@@ -498,6 +565,7 @@ mod tests {
                     rank: None,
                 },
                 Place {
+                    line: None,
                     id: vid("pass_luoxia"),
                     name: "落霞关".into(),
                     map: None,
@@ -622,6 +690,7 @@ mod tests {
     /// 矩形地点：中心 (100, 200)，宽 40、高 20 → x ∈ [80, 120]，y ∈ [190, 210]。
     fn rect_place() -> Place {
         Place {
+            line: None,
             id: vid("city_rect"),
             name: "rect city".into(),
             map: Some(vid("map_world")),
@@ -638,6 +707,7 @@ mod tests {
 
     fn point_place() -> Place {
         Place {
+            line: None,
             id: vid("pass_point"),
             name: "point pass".into(),
             map: Some(vid("map_world")),
@@ -654,6 +724,7 @@ mod tests {
 
     fn unanchored_place() -> Place {
         Place {
+            line: None,
             id: vid("place_nomap"),
             name: "unanchored".into(),
             map: None,
@@ -803,6 +874,7 @@ mod tests {
 
     fn feature_place(feature: Option<u8>) -> Place {
         Place {
+            line: None,
             id: Id::new_unchecked("place_dark_forest"),
             name: "黑森林".into(),
             map: Some(Id::new_unchecked("map_world")),

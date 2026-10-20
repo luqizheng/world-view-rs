@@ -71,6 +71,8 @@ pub mod plugins;
 #[cfg(feature = "app")]
 pub mod recipe;
 #[cfg(feature = "app")]
+pub mod region_overlay;
+#[cfg(feature = "app")]
 pub mod selection;
 #[cfg(feature = "app")]
 pub mod state;

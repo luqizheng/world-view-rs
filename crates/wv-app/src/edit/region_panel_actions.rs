@@ -32,6 +32,11 @@ pub fn add_region_now(
         name,
         map,
         polygon: Vec::new(),
+        // ADR-0045 D3：新建的普通区域不带洞 / 不嵌套 / 无覆盖物。
+        holes: Vec::new(),
+        kind: wv_core::model::region::RegionKind::Area,
+        parent: None,
+        overlay: None,
     };
     push_cmd(world, edit, view, Box::new(AddRegionCommand::new(r)));
 }

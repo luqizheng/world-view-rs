@@ -265,6 +265,7 @@ fn initial_world(name: &str, template: WorldTemplateKind, seed: u64) -> wv_core:
         for (i, [nx, ny]) in sites.into_iter().enumerate() {
             let rank = if i < 2 { 3 } else { 2 };
             world.distances.places.push(wv_core::map::distance::Place {
+                line: None,
                 id: Id::new_unchecked(format!("city_new_{}", i + 1)),
                 name: format!("新城 {}", i + 1),
                 feature: None,

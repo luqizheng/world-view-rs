@@ -54,6 +54,7 @@ pub fn place_biome_marker_now(
     }
     let id = wv_core::Id::new_unchecked(format!("place_marker_{}", current_unix_ms()));
     let place = Place {
+        line: None,
         id: id.clone(),
         name,
         feature: None,

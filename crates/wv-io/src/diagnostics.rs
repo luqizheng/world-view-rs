@@ -962,6 +962,7 @@ mod tests {
         DistanceGraph {
             places: vec![
                 Place {
+                    line: None,
                     id: a.clone(),
                     name: "A".into(),
                     map: Some(Id::new_unchecked("m")),
@@ -975,6 +976,7 @@ mod tests {
                     rank: None,
                 },
                 Place {
+                    line: None,
                     id: b.clone(),
                     name: "B".into(),
                     map: Some(Id::new_unchecked("m")),
@@ -1150,6 +1152,7 @@ mod tests {
             );
             let place_id = Id::new_unchecked("place_ring_woods");
             w.distances.places.push(Place {
+                line: None,
                 id: place_id.clone(),
                 name: "环湖林地".into(),
                 map: Some(map.clone()),

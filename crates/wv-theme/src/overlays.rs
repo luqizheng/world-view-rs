@@ -94,3 +94,74 @@ impl FeatureOverlaySet {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// 区域覆盖物规则（ADR-0045 D2 / D10）
+// ---------------------------------------------------------------------------
+
+/// 区域覆盖物规则（ADR-0045 D10）：主题为「自然区域声明的覆盖物键」提供的长相。
+///
+/// **归属**：区域声明的是**表现层**——「这片深林用针叶画」，不是「这片是什么」
+/// （那是 `cell.biome` 的本质分类）。故本规则只管**怎么画**，不管**是什么**。
+///
+/// **键是开放字符串**（AGENTS ADR-0001 D2「数据承载开放集」；ADR-0032 的碎裂教训
+/// ——枚举化会裂成「写 1 漏 10/11」）。词表由主题拥有，数据侧只存字符串。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RegionOverlayRule {
+    /// 变体键（渲染层映射到程序化符号变体：`conifer` / `broadleaf` / `sparse` /
+    /// `boulder` / …）。
+    ///
+    /// **未知变体不回退到「什么都不画」**：渲染层回退到该格群系派生的默认形状
+    /// （事实不消失），只保留本规则的颜色 / 尺寸 / 间距。
+    pub variant: &'static str,
+    /// 符号颜色（sRGB 字节）——覆盖该族默认墨色。
+    pub color: [u8; 3],
+    /// 符号不透明度（0..=1）；`None` = 用该族默认 alpha。
+    pub alpha: Option<f32>,
+    /// 符号尺寸倍率（相对默认尺寸；`1.0` = 不变）。
+    pub size_scale: f32,
+    /// 采样间距倍率（相对默认间距；`< 1.0` = 更密）。
+    pub spacing_scale: f32,
+}
+
+/// 一套主题的「区域覆盖物键 → 规则」表（ADR-0045 D10）。
+///
+/// **缺省回退是硬要求**：当前主题没有某键时 [`Self::rule_for`] 返回 `None`，
+/// 渲染侧**不静默回退到 cell 派生默认**——那等于拿另一个变体冒充作者声明
+/// （ADR-0045 追记一）——而是画**缺失覆盖物标记**（白底红斜线）。
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct RegionOverlaySet {
+    rules: &'static [(&'static str, RegionOverlayRule)],
+}
+
+impl RegionOverlaySet {
+    /// 空表（主题不提供任何区域覆盖物）。
+    pub const EMPTY: RegionOverlaySet = RegionOverlaySet { rules: &[] };
+
+    /// 由静态表构造（外部主题 crate 的构造面）。
+    pub const fn new(rules: &'static [(&'static str, RegionOverlayRule)]) -> Self {
+        Self { rules }
+    }
+
+    /// 按覆盖物键取规则。
+    ///
+    /// 键不存在 → `None`（调用方据此画缺失覆盖物标记；**不静默回退**）。
+    pub fn rule_for(&self, key: &str) -> Option<&RegionOverlayRule> {
+        self.rules.iter().find(|(k, _)| *k == key).map(|(_, r)| r)
+    }
+
+    /// 全部键（诊断面板列「本主题支持哪些覆盖物」用）。
+    pub fn keys(&self) -> impl Iterator<Item = &'static str> {
+        self.rules.iter().map(|(k, _)| *k)
+    }
+
+    /// 规则条数。
+    pub fn len(&self) -> usize {
+        self.rules.len()
+    }
+
+    /// 是否空表。
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
+    }
+}

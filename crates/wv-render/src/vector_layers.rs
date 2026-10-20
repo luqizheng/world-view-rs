@@ -526,6 +526,13 @@ pub fn sync_vector_layers(
                     river_segments.push((pair[0], pair[1]));
                 }
             }
+            // 作者手绘河（ADR-0046 D4）：与派生水系**双供给**——作者小河是
+            // 亚格线状数据（`Place.line`），与模板世界的 `rivers_seed` 派生河并存。
+            for pts in &frame.author_river_polylines {
+                for pair in pts.windows(2) {
+                    river_segments.push((pair[0], pair[1]));
+                }
+            }
             let fp = segments_fingerprint(&river_segments);
             sync_road_strokes(
                 &mut commands,

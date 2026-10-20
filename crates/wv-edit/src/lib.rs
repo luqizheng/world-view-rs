@@ -17,6 +17,7 @@
 
 pub mod command;
 pub mod history;
+pub mod nature_region;
 
 pub use command::{
     AddBuildingCommand, AddCityCommand, AddMapCommand, AddMeasurementCommand, AddPlaceCommand,
@@ -26,6 +27,11 @@ pub use command::{
     SetCityOutlineCommand, SetMapOrientationCommand, UpdateRegionCommand,
 };
 pub use history::{History, Transaction};
+pub use nature_region::{
+    AddPlaceLineCommand, DeletePlaceLineCommand, MaterializeNatureRegionCommand,
+    MergeNatureRegionCommand, RegenerateNatureRegionCommand, SetRegionKindCommand,
+    SetRegionOverlayCommand, SetRegionParentCommand, UpdatePlaceLineCommand,
+};
 
 /// 脏数据集合：记录哪些文件在下次保存时需要写回。
 ///
