@@ -46,3 +46,8 @@ examples/work-view-test/data/ne/*.shx
 examples/work-view-test/data/ne/*.cpg
 examples/work-view-test/data/ne/ne_*.geojson
 examples/work-view-test/data/ne/listing.json
+
+# 实机验收临时产物（截图 / 点击脚本）
+shot-*.png
+shot-*.bmp
+wvclick.py
