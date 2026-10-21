@@ -13,7 +13,8 @@
 use crate::generate::Perlin;
 use crate::{
     Biome, Surface, TerrainCell, TerrainGrid, BIOME_DESERT, BIOME_FOREST, BIOME_GRASSLAND,
-    BIOME_HILLS, BIOME_NONE, SURFACE_LAND, SURFACE_WATER,
+    BIOME_HILLS, BIOME_JUNGLE, BIOME_NONE, BIOME_SNOWFIELD, BIOME_TUNDRA, SURFACE_LAND,
+    SURFACE_WATER,
 };
 
 // ---------------------------------------------------------------------------
@@ -79,9 +80,9 @@ pub struct ContinentParams {
     pub coast_octaves: u32,
     /// 起伏强度档。
     pub relief: ReliefLevel,
-    /// 森林覆盖 0–100%：内部森林子配方撒布比例。
+    /// 森林覆盖倾向 0–100%：越高，森林阈值越低（不是精确面积比）。
     pub forest_cover: f32,
-    /// 荒漠覆盖 0–100%：内部沙漠子配方撒布比例。
+    /// 荒漠覆盖倾向 0–100%：越高，荒漠阈值越低（不是精确面积比）。
     pub desert_cover: f32,
     /// 大陆架宽度（格）：岸外浅水带厚度。
     pub shelf_cells: u32,
@@ -329,15 +330,133 @@ fn surface_biome_for_height(height_m: i16) -> (Surface, Biome) {
 }
 
 /// fBm 归一化到 0..1。
+///
+/// **必须是 `(v + 1) * 0.5`**：`Perlin::fbm` 返回 `[-1, 1]`。旧式
+/// `v * 0.5 + 1.0` 会映射到 `[0.5, 1.5]` 再钳制到 1，阈值掩码因此恒不命中
+/// （森林/荒漠长期失效的根因）。
 fn fbm01(noise: &Perlin, x: f64, y: f64, octaves: u32) -> f32 {
     (((noise.fbm(x, y, octaves, 2.0, 0.5) + 1.0) * 0.5) as f32).clamp(0.0, 1.0)
 }
 
-/// Q5 优先序分带：大陆架浅水 → 雪/山/丘（高度派生带，写 `BIOME_NONE`）→
-/// 森林 → 荒漠 → 草原；水下且不在大陆架带内 → 深水。
+/// 气候采样：温度与湿度都归一化到 0..1，**生成期派生、不落盘**。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ClimateSample {
+    /// 0 = 极寒，1 = 赤道暖。
+    pub temperature: f32,
+    /// 0 = 极干，1 = 极湿。
+    pub moisture: f32,
+}
+
+/// 采样一格的温度与湿度。
+///
+/// `y_norm` = 格心在图内的归一化纵坐标（0 = 北，1 = 南）；按「赤道暖、
+/// 两极冷」解释（`warmth = 1 - |y_norm - 0.5| * 2`）。`d` 是到海岸包络的
+/// 有符号距离，只用于给近岸加湿——真正的「离水距离」由 `shore` 场另行派生，
+/// 这里不引入第二套距离场。
+///
+/// 温度 = 纬度暖度 − 海拔递减 + 小噪声；湿度 = fBm + 近岸加成。
+/// 两者只服务低地分带，高地带仍由高度阈值决定（雪线/山/丘的观感不变）。
+pub(crate) fn climate_at(
+    p: (f32, f32),
+    y_norm: f32,
+    height_m: i16,
+    d: f32,
+    diag: f32,
+    noise: &Perlin,
+) -> ClimateSample {
+    let warmth = (1.0 - (y_norm - 0.5).abs() * 2.0).clamp(0.0, 1.0);
+    let altitude = (height_m.max(0) as f32 / 4000.0).clamp(0.0, 1.0);
+    let t_scale = (diag * 0.9).max(1.0);
+    let t_noise = fbm01(
+        noise,
+        (p.0 / t_scale) as f64 + 11.0,
+        (p.1 / t_scale) as f64 - 7.0,
+        2,
+    );
+    let temperature =
+        (0.12 + 0.88 * warmth - 0.55 * altitude + 0.05 * (t_noise - 0.5)).clamp(0.0, 1.0);
+
+    let m_scale = (diag * 0.25).max(1.0);
+    let m_noise = fbm01(
+        noise,
+        (p.0 / m_scale) as f64 + 3.1,
+        (p.1 / m_scale) as f64 - 1.7,
+        4,
+    );
+    let coast_wet = (1.0 - (d / m_scale).clamp(0.0, 1.0)) * 0.06;
+    let moisture = (0.10 + 0.75 * m_noise + coast_wet).clamp(0.0, 1.0);
+
+    ClimateSample {
+        temperature,
+        moisture,
+    }
+}
+
+/// 低地群系：冷带 → 热带雨林 → 干旱 → 森林 → 草原。
+///
+/// 「覆盖」参数是**倾向**不是精确比例：`forest_cover` 越高，森林阈值越低；
+/// `desert_cover` 越高，荒漠阈值越低。缺省 0.30 / 0.15 是首轮标定值，
+/// 视觉验收后再调。
+fn lowland_biome(
+    temperature: f32,
+    moisture: f32,
+    params: &ContinentParams,
+    noise: &Perlin,
+    p: (f32, f32),
+    diag: f32,
+) -> Biome {
+    if temperature < 0.20 {
+        return BIOME_SNOWFIELD;
+    }
+    if temperature < 0.34 {
+        return BIOME_TUNDRA;
+    }
+    if temperature > 0.72 && moisture > 0.68 {
+        return BIOME_JUNGLE;
+    }
+
+    let wet = ((moisture - 0.35) / 0.55).clamp(0.0, 1.0);
+    let temperate = (1.0 - (temperature - 0.55).abs() * 1.7).clamp(0.0, 1.0);
+    let density = wet * temperate;
+
+    let hot = smoothstep01(0.45, 0.85, temperature);
+    let aridity = (1.0 - moisture).clamp(0.0, 1.0) * hot;
+    let dry_scale = (diag * 0.18).max(1.0);
+    let dry_patch = fbm01(
+        noise,
+        (p.0 / dry_scale) as f64 + 3.7,
+        (p.1 / dry_scale) as f64 - 2.3,
+        3,
+    );
+
+    let forest_threshold = (0.38 - 0.15 * params.forest_cover).clamp(0.20, 0.80);
+    let desert_threshold = (0.50 - 0.40 * params.desert_cover).clamp(0.25, 0.85);
+    let desert_patch = params.desert_cover * 1.6;
+
+    if aridity > desert_threshold || (hot > 0.35 && dry_patch < desert_patch) {
+        return BIOME_DESERT;
+    }
+    if density > forest_threshold {
+        return BIOME_FOREST;
+    }
+    BIOME_GRASSLAND
+}
+
+/// 归一化 smoothstep；输入区间退化时返回 0/1 的阶跃（不 panic）。
+fn smoothstep01(a: f32, b: f32, x: f32) -> f32 {
+    if (b - a).abs() <= f32::EPSILON {
+        return if x >= b { 1.0 } else { 0.0 };
+    }
+    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// 分带：大陆架浅水 → 雪/山/丘（高度派生带）→ 低地气候群系 → 深水。
 ///
 /// `shelf_wu` = 大陆架宽度（世界单位，= `shelf_cells × cell_size`）；
-/// 由调用方换算后传入，保持本函数与格尺寸解耦。
+/// `y_norm` = 格心归一化纵坐标（0 = 北，1 = 南），用于气候采样。
+/// 高地带**先于**气候判定：雪线/山/丘的既有观感不变，气候只接管 300 m 以下。
+#[allow(clippy::too_many_arguments)] // 几何 + 参数 + 气候坐标，拆结构体反而更难读
 pub(crate) fn band_surface_biome(
     height_m: i16,
     d: f32,
@@ -346,6 +465,7 @@ pub(crate) fn band_surface_biome(
     p: (f32, f32),
     diag: f32,
     shelf_wu: f32,
+    y_norm: f32,
 ) -> (Surface, Biome) {
     if (-shelf_wu..0.0).contains(&d) {
         return (SURFACE_WATER, BIOME_NONE);
@@ -362,22 +482,18 @@ pub(crate) fn band_surface_biome(
     if height_m < 0 {
         return (SURFACE_WATER, BIOME_NONE);
     }
-    let scale = (diag * 0.5).max(1.0);
-    let forest = fbm01(noise, (p.0 / scale) as f64, (p.1 / scale) as f64, 3);
-    if forest < params.forest_cover {
-        return (SURFACE_LAND, BIOME_FOREST);
-    }
-    // 荒漠用同族噪声的错位采样，避免与森林掩码完全相关。
-    let desert = fbm01(
-        noise,
-        ((p.0 + diag * 0.37) / scale) as f64,
-        ((p.1 + diag * 0.71) / scale) as f64,
-        3,
-    );
-    if desert < params.desert_cover {
-        return (SURFACE_LAND, BIOME_DESERT);
-    }
-    (SURFACE_LAND, BIOME_GRASSLAND)
+    let climate = climate_at(p, y_norm, height_m, d, diag, noise);
+    (
+        SURFACE_LAND,
+        lowland_biome(
+            climate.temperature,
+            climate.moisture,
+            params,
+            noise,
+            p,
+            diag,
+        ),
+    )
 }
 
 /// 与既有地形融合：海岸带内按 `falloff_weight` 过渡，内部只增不减。
@@ -406,8 +522,15 @@ pub(crate) fn blended(
             .clamp(i16::MIN as f32, i16::MAX as f32) as i16;
         let (surface, biome) = if h == new_height {
             (new_surface, new_biome)
-        } else {
+        } else if h >= HILL_MIN_M {
+            // 高地带的群系由高度派生（雪/山/丘写 NONE），与旧口径一致。
             surface_biome_for_height(h)
+        } else if h < 0 {
+            (SURFACE_WATER, BIOME_NONE)
+        } else {
+            // 低地：融合只改高度，气候群系仍然成立——不能退回草原，
+            // 否则整条海岸低地带都会被 `surface_biome_for_height` 刷成草地。
+            (SURFACE_LAND, new_biome)
         };
         TerrainCell {
             height: h,
@@ -495,17 +618,18 @@ pub fn generate_continents(
 
     let mut touched = 0usize;
     for gy in y0..=y1 {
+        let y_norm = (gy as f32 + 0.5) / grid.height() as f32;
         for gx in x0..=x1 {
             let p = ((gx as f32 + 0.5) * cell_size, (gy as f32 + 0.5) * cell_size);
             let (d, winner) = coast_field_indexed(p, envelopes, params, &coast_noise, diag);
             let Some(existing) = grid.get(gx, gy) else {
                 continue;
             };
-            let new_cell = if d >= 0.0 {
+            let mut new_cell = if d >= 0.0 {
                 let inradius = winner.and_then(|i| inradii.get(i).copied()).unwrap_or(1.0);
                 let height = land_height(d, inradius, params, &land_noise, p);
                 let (surface, biome) =
-                    band_surface_biome(height, d, params, &land_noise, p, diag, shelf_wu);
+                    band_surface_biome(height, d, params, &land_noise, p, diag, shelf_wu, y_norm);
                 blended(existing, height, surface, biome, d, cell_size)
             } else if d > -shelf_wu {
                 // 大陆架：深水抬到浅水；既有陆地（含作者先画的岛）原样保留。
@@ -540,6 +664,24 @@ pub fn generate_continents(
             } else {
                 continue;
             };
+            // 融合把高度从高地压回低地时，旧 biome 是高度派生的 `NONE`；
+            // 低地必须重新按气候分类，否则海岸带会出现大片「无群系」。
+            if new_cell.surface == SURFACE_LAND
+                && new_cell.height < HILL_MIN_M
+                && new_cell.biome == BIOME_NONE
+            {
+                let (_, biome) = band_surface_biome(
+                    new_cell.height,
+                    d,
+                    params,
+                    &land_noise,
+                    p,
+                    diag,
+                    shelf_wu,
+                    y_norm,
+                );
+                new_cell.biome = biome;
+            }
             if new_cell != existing {
                 grid.set(gx, gy, new_cell);
                 touched += 1;
@@ -552,6 +694,13 @@ pub fn generate_continents(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 低地分类的固定采样点：坐标与 diag 只影响 `dry_patch`，测试里固定，
+    /// 让「温度/湿度 → 群系」的断言不被随机 patch 干扰。
+    fn classify(t: f32, m: f32, p: &ContinentParams) -> Biome {
+        let n = Perlin::new(1);
+        lowland_biome(t, m, p, &n, (10.0, 10.0), 200.0)
+    }
 
     #[test]
     fn square_polygon_point_in_polygon_and_signed_distance() {
@@ -610,18 +759,18 @@ mod tests {
             ..Default::default()
         };
         let n = Perlin::new(7);
-        // 分带优先序（旧 kind 槽位语义的延续）：水 1 < 草原 3 < 高度派生带 5。
+        // 分带优先序：水 1 < 低地气候群系 3 < 高度派生带 5。
         let rank = |sb: (Surface, Biome)| -> u8 {
             match sb {
                 (SURFACE_WATER, _) => 1,
-                (SURFACE_LAND, BIOME_GRASSLAND) => 3,
                 (SURFACE_LAND, BIOME_NONE) => 5,
+                (SURFACE_LAND, _) => 3,
                 _ => 255,
             }
         };
         let mut prev = 0u8;
         for h in [0i16, 300, 800, 2200, 4500] {
-            let sb = band_surface_biome(h, 500.0, &p, &n, (10.0, 10.0), 200.0, 64.0);
+            let sb = band_surface_biome(h, 500.0, &p, &n, (10.0, 10.0), 200.0, 64.0, 0.5);
             let r = rank(sb);
             assert!(
                 r >= prev,
@@ -660,10 +809,106 @@ mod tests {
         let n = Perlin::new(3);
         let cell_size = 8.0;
         let shelf_wu = p.shelf_cells as f32 * cell_size;
-        let (surface, biome) =
-            band_surface_biome(-40, -2.0 * cell_size, &p, &n, (10.0, 10.0), 200.0, shelf_wu);
+        let (surface, biome) = band_surface_biome(
+            -40,
+            -2.0 * cell_size,
+            &p,
+            &n,
+            (10.0, 10.0),
+            200.0,
+            shelf_wu,
+            0.5,
+        );
         assert_eq!(surface, SURFACE_WATER, "大陆架带应为水面");
         assert_eq!(biome, BIOME_NONE, "大陆架带不带群系");
+    }
+
+    #[test]
+    fn temperature_drops_toward_poles_and_with_altitude() {
+        let n = Perlin::new(9);
+        let equator_sea = climate_at((50.0, 50.0), 0.5, 0, 100.0, 200.0, &n).temperature;
+        let pole_sea = climate_at((50.0, 50.0), 0.0, 0, 100.0, 200.0, &n).temperature;
+        let equator_high = climate_at((50.0, 50.0), 0.5, 3000, 100.0, 200.0, &n).temperature;
+        assert!(
+            equator_sea > pole_sea,
+            "赤道海平面 {equator_sea} 应暖于极地海平面 {pole_sea}"
+        );
+        assert!(
+            equator_sea > equator_high,
+            "赤道海平面 {equator_sea} 应暖于赤道 3000 m {equator_high}"
+        );
+    }
+
+    #[test]
+    fn moisture_is_higher_near_the_coast() {
+        let n = Perlin::new(10);
+        let near = climate_at((50.0, 50.0), 0.5, 0, 0.0, 200.0, &n).moisture;
+        let far = climate_at((50.0, 50.0), 0.5, 0, 200.0, 200.0, &n).moisture;
+        assert!(near > far, "近岸 {near} 应湿于内陆 {far}");
+    }
+
+    #[test]
+    fn cold_lowland_becomes_tundra_then_snowfield() {
+        let p = ContinentParams::default();
+        assert_eq!(classify(0.10, 0.5, &p), BIOME_SNOWFIELD, "极寒低地应为雪原");
+        assert_eq!(classify(0.28, 0.5, &p), BIOME_TUNDRA, "寒冷低地应为苔原");
+    }
+
+    #[test]
+    fn moist_temperate_lowland_becomes_forest() {
+        let p = ContinentParams::default();
+        assert_eq!(
+            classify(0.55, 0.90, &p),
+            BIOME_FOREST,
+            "温带湿润低地应为森林"
+        );
+    }
+
+    #[test]
+    fn hot_dry_lowland_becomes_desert() {
+        let p = ContinentParams::default();
+        assert_eq!(
+            classify(0.75, 0.10, &p),
+            BIOME_DESERT,
+            "炎热干旱低地应为荒漠"
+        );
+    }
+
+    #[test]
+    fn hot_wet_lowland_becomes_jungle() {
+        let p = ContinentParams::default();
+        assert_eq!(classify(0.85, 0.90, &p), BIOME_JUNGLE, "湿热低地应为丛林");
+    }
+
+    /// 端到端：同一张图应同时出现森林、草原与南北冷带——
+    /// 证明气候场不是「把整图换成一种群系」。
+    #[test]
+    fn generated_continent_contains_climate_variety() {
+        let env = vec![vec![(0.0, 0.0), (512.0, 0.0), (512.0, 512.0), (0.0, 512.0)]];
+        let p = ContinentParams::default();
+        let mut g = TerrainGrid::new(64, 64);
+        generate_continents(&mut g, &env, &p, 13, 8.0);
+
+        let mut forest = 0;
+        let mut grass = 0;
+        let mut cold = 0;
+        let mut desert = 0;
+        for c in g.cells() {
+            if c.surface != SURFACE_LAND {
+                continue;
+            }
+            match c.biome {
+                BIOME_FOREST => forest += 1,
+                BIOME_GRASSLAND => grass += 1,
+                BIOME_TUNDRA | BIOME_SNOWFIELD => cold += 1,
+                BIOME_DESERT => desert += 1,
+                _ => {}
+            }
+        }
+        assert!(forest > 0, "应有森林，得 {forest}");
+        assert!(grass > 0, "应有草原，得 {grass}");
+        assert!(cold > 0, "南北边缘应有冷带，得 {cold}");
+        assert!(desert > 0, "干热低地应有荒漠，得 {desert}");
     }
 
     #[test]
