@@ -13,6 +13,8 @@
 //! - [`theme_pack`] —— 主题包契约：`ThemePack` / `TreatmentFlags` /
 //!   `TileAtlasSpec`；
 //! - [`registry`] —— 主题注册表：`ThemePackRegistry` / `MergedThemeRegistry`；
+//! - [`sea`] —— 海的画法配方 `SeaRecipe`（深度量程 / 浅滩带 / 纸纹 / 墨线波纹，
+//!   ADR-0048）：与 [`overlays`] 同构——数值配方住主题层，执行器在渲染层；
 //! - [`topographic`] —— Topographic 视图模式的调色数据。
 //!
 //! ## 边界（不做什么）
@@ -43,5 +45,6 @@ pub mod colors_google;
 pub mod overlays;
 pub mod palette;
 pub mod registry;
+pub mod sea;
 pub mod theme_pack;
 pub mod topographic;

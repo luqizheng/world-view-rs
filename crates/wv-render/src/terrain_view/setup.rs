@@ -41,8 +41,7 @@ pub fn setup_terrain_texture(
         view.mode,
         atlas.as_ref(),
         view.terrain_soften,
-        crate::theme::palette::colors(view.map_palette),
-        crate::theme::theme_pack::builtin::for_palette(view.map_palette).treatment,
+        crate::theme::theme_pack::builtin::for_palette(view.map_palette),
         0.0,
     );
     commands.insert_resource(new_terrain_texture(

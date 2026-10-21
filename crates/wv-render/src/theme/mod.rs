@@ -39,6 +39,8 @@ pub use wv_theme::palette;
 #[cfg(feature = "app")]
 pub use wv_theme::registry;
 #[cfg(feature = "app")]
+pub use wv_theme::sea;
+#[cfg(feature = "app")]
 pub use wv_theme::theme_pack;
 
 // Topographic 调色（[ADR-0039]）——纯数据。

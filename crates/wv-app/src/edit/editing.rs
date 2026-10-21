@@ -346,8 +346,7 @@ pub fn flush_terrain_texture(
             view.mode,
             atlas.as_deref(),
             view.terrain_soften,
-            crate::theme::palette::colors(view.map_palette),
-            wv_render::theme::theme_pack::builtin::for_palette(view.map_palette).treatment,
+            wv_render::theme::theme_pack::builtin::for_palette(view.map_palette),
             0.0,
         );
         if let Some(mut img) = images.get_mut(&tex.handle) {
@@ -367,8 +366,7 @@ pub fn flush_terrain_texture(
             rect,
             res,
             view.terrain_soften,
-            crate::theme::palette::colors(view.map_palette),
-            wv_render::theme::theme_pack::builtin::for_palette(view.map_palette).treatment,
+            wv_render::theme::theme_pack::builtin::for_palette(view.map_palette),
         );
     }
     tex.dirty = None;

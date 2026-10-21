@@ -27,6 +27,7 @@ use bevy::prelude::*;
 
 use super::overlays::{FeatureOverlaySet, FeatureRule, RegionOverlayRule, RegionOverlaySet};
 use super::palette::{MapPalette, PaletteColors};
+use super::sea::{SeaRecipe, WATERCOLOR, WATERCOLOR_DUSK};
 
 /// 主题包：色板 + 装饰 + 贴图 + 覆盖物规则的原子组合（ADR-0023 D1）。
 ///
@@ -52,6 +53,10 @@ pub struct ThemePack {
     /// 是 `env!("CARGO_MANIFEST_DIR")/assets`，外部主题 crate 的贴图进不来——这是
     /// D2 待解决的差距。M2 接入 `wv-theme-xxx` 时这里改为 `Some(TileAtlasSpec)` 即可。
     pub atlas: Option<TileAtlasSpec>,
+    /// 海的画法配方（ADR-0048）：深度量程 / 曲线、近岸浅滩带、水面纸纹、
+    /// 离岸墨线波纹、墨色。**数值配方住主题层**（与 [`Self::overlays`] 同构）——
+    /// 渲染层只做执行器，换风格不改渲染源码（ADR-0043）。
+    pub sea: SeaRecipe,
     /// 覆盖物演绎规则：feature 词汇 → 远 / 近带规则（晕、符号集、密度、采样参数）。
     ///
     /// v1 为代码常量（内置两包各一套、外部主题 crate 自带一本），YAML 化随
@@ -93,7 +98,9 @@ impl TileAtlasSpec {
 ///
 /// **归入本结构的 9 项**：水彩晕（#4）、海色渐变（#1）、雪调（#3）、海冰（#5，渲染
 /// 未接线、旗标预留）、纸纹（#6）、河中线（#8）、边界扰动（wobble）、墨线亚线性
-///（#10）、纸面雾霭。**不归入**（归各自既有轴，ADR-0021 §2 D2 §4）：标注字重（#2）、
+///（#10）、纸面雾霭。
+/// **追加归入**（原 9 项之后按落地时间增补）：陆格明度颗粒（ADR-0042 D6）、
+/// 水彩晕开（ADR-0044 D1）、近岸浅滩带（2026-10-21 S2，`shore_shallow`）。**不归入**（归各自既有轴，ADR-0021 §2 D2 §4）：标注字重（#2）、
 /// POI 行为与 hover（#7/#9/#12）、海名（#13/#14）、笔刷内环（#11，编辑态反馈）。
 ///
 /// 两极常量：[`TreatmentFlags::HAND_DRAWN`]（手绘全开）/ [`TreatmentFlags::EMPTY`]
@@ -131,6 +138,11 @@ pub struct TreatmentFlags {
     /// 从硬切格边变成 2 格宽的柔和渐变）。实现走纯函数（任意格的模糊色
     /// 只依赖邻域），全图烘焙与增量 patch 天然逐字节一致。
     pub watercolor_bleed: bool,
+    /// 是否启用**近岸浅滩带**（2026-10-21 S2，海洋表现方案）：离岸
+    /// ≤ `SHORE_BAND_CELLS` 格的水格向主题 `water_shore` 色偏移，由
+    /// `wv_terrain::shore` 距离场驱动（水深 ≠ 离岸远近；近岸剖面陡的图
+    /// 照样有浅滩带）。仅平涂语法两模式（VectorFlat / Schematic）参与。
+    pub shore_shallow: bool,
 }
 
 impl TreatmentFlags {
@@ -150,6 +162,7 @@ impl TreatmentFlags {
         paper_fog: true,
         land_grain: true,
         watercolor_bleed: true,
+        shore_shallow: true,
     };
 
     /// 全 `false`（「干净矢量」观感的基准，未来 Skyline 类主题的起点；
@@ -166,6 +179,7 @@ impl TreatmentFlags {
         paper_fog: false,
         land_grain: false,
         watercolor_bleed: false,
+        shore_shallow: false,
     };
 }
 
@@ -227,6 +241,7 @@ pub mod builtin {
         palette: PaletteColors::DAYLIGHT,
         treatment: TreatmentFlags::HAND_DRAWN,
         atlas: None,
+        sea: WATERCOLOR,
         // 设计与取值依据：`docs/superpowers/specs/2026-10-17-theme-overlay-geo-fact-design.md`
         // §6.4（D10：两内置包各一套，差异做在晕色 / 浓度 / 符号密度）。
         // 日间：偏灰橄榄绿晕 + 深墨绿树冠。
@@ -309,6 +324,7 @@ pub mod builtin {
         palette: PaletteColors::DUSK,
         treatment: TreatmentFlags::HAND_DRAWN,
         atlas: None,
+        sea: WATERCOLOR_DUSK,
         // 暮色：压暗的橄榄绿晕 + 更深的树冠，晕更淡（0.20）、符号略小
         //（24 px，仍落在 spec §6.6 的 24–40 px）、采样比日间更密（32wu）
         // ——与 DEFAULT 在 halo_color / halo_alpha / symbol_size / spacing
@@ -484,6 +500,9 @@ mod tests {
         assert!(h.boundary_wobble && !e.boundary_wobble);
         assert!(h.ink_sublinear && !e.ink_sublinear);
         assert!(h.paper_fog && !e.paper_fog);
+        assert!(h.land_grain && !e.land_grain);
+        assert!(h.watercolor_bleed && !e.watercolor_bleed);
+        assert!(h.shore_shallow && !e.shore_shallow);
     }
 
     /// 内置两包都装载 `HAND_DRAWN`（零回归硬前提：渲染 gate 读到的旗标全 `true`

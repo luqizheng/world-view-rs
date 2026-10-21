@@ -23,6 +23,7 @@
 use wv_theme::overlays::{FeatureOverlaySet, FeatureRule, RegionOverlayRule, RegionOverlaySet};
 use wv_theme::palette::PaletteColors;
 use wv_theme::registry::ThemePackRegistry;
+use wv_theme::sea::{RippleSpec, SeaRecipe};
 use wv_theme::theme_pack::{ThemePack, TreatmentFlags};
 
 /// 水墨主题包占位。
@@ -40,6 +41,30 @@ pub static PACK: ThemePack = ThemePack {
     palette: PaletteColors::DAYLIGHT, // TODO(美术校准): 待白名单值就绪后替换
     treatment: TreatmentFlags::EMPTY,
     atlas: None,
+    // 海的画法配方（ADR-0048）：水墨包的海不画浅滩色带、不画纸纹颗粒——
+    // 留白是水墨的语法；离岸墨线波纹仍保留但更疏更淡（皴法的水岸线）。
+    // TODO(美术校准): 参数为占位值，待水墨白名单就绪后替换。
+    sea: SeaRecipe {
+        depth_scale_m: 2000.0,
+        depth_exponent: 1.0,
+        shore_band_cells: 0.0,
+        shore_peak: 0.0,
+        water_grain: 0.0,
+        ripple_warp_cells: 1.5,
+        ripples: &[
+            RippleSpec {
+                dist_cells: 5.0,
+                sigma_cells: 0.7,
+                alpha: 0.20,
+            },
+            RippleSpec {
+                dist_cells: 12.0,
+                sigma_cells: 0.9,
+                alpha: 0.10,
+            },
+        ],
+        ink: [0x3A, 0x38, 0x34],
+    },
     // TODO(美术校准): 墨绿晕 / 符号色与「更疏」的采样间距均为占位值，
     // 待美术侧给出水墨白名单后替换——v1 水墨包不可选，不参与验收（D13）。
     overlays: FeatureOverlaySet {

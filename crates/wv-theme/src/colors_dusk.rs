@@ -105,6 +105,12 @@ pub const DUSK_EVENT_VIEW_BACKDROP: Color = hex(0x3A342E);
 /// 过 `soften + veil` 后仍能辨为「海」。
 pub const DUSK_DEEP_OCEAN_BLUE: Color = hex(0x061882);
 
+/// 近岸浅滩色——暮色版（2026-10-21 S2 与日间版同日同步）。
+///
+/// 暮色浅水 `DUSK_CORE_TERRAIN[1] = #44505C` 的亮一档镜像：暗纸上的
+/// 「薄水覆沙」读作灰青高光，不能像日间那样亮到发白（会像月光反光）。
+pub const DUSK_WATER_SHORE: Color = hex(0x6C8090);
+
 /// 描线三档：暗纸上全档浅墨 推导·待复核。
 pub const DUSK_LINE_ON_LIGHT: Color = hex(0xC9BBA8);
 pub const DUSK_LINE_ON_MID: Color = hex(0xB5A68F);
