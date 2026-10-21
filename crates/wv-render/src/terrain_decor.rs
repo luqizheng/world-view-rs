@@ -17,9 +17,9 @@
 //! ## 边界（不做什么）
 //! - **不写时间比较 / 不写世界**（AGENTS §3）；
 //! - **不引入位图瓦片**——底图仍由 `terrain_view::cells` 逐格程序化合成
-//!   （JRPG 瓦片图集已弃用）。**地物符号**可走主题贴图（ADR-0049）：
+//!   （JRPG 瓦片图集已弃用）。**地物符号**可走主题贴图（ADR-0050）：
 //!   森林族由 `DecorRecipe::forest_art` 给出手绘树图集，缺资产回退本文件的
-//!   程序化图元（不空帧）。「底图瓦片」与「地物符号」是两回事，见 ADR-0049；
+//!   程序化图元（不空帧）。「底图瓦片」与「地物符号」是两回事，见 ADR-0050；
 //! - 符号颜色 / 步距 / 尺寸由主题配方（[`DecorRecipe`]）给定，渲染层只做执行器。
 
 #![cfg(feature = "app")]
@@ -57,7 +57,7 @@ const VIEWPORT_MARGIN_PX: f32 = 32.0;
 /// 相邻树冠轻微重叠成「林」，而不是一颗颗孤立图标。
 const TEXTURE_SIZE_OF_SPACING: f32 = 0.9;
 
-/// 编译期嵌入的装饰贴图（ADR-0049）。
+/// 编译期嵌入的装饰贴图（ADR-0050）。
 ///
 /// 与 `feature_overlays::embedded_texture` 同一手法（`include_bytes!`，不走
 /// `AssetServer`）：路径是主题配方给的相对路径，未知键返回 `None`，渲染侧回退
@@ -698,7 +698,7 @@ impl DecorBatchPool {
 #[derive(Resource, Default)]
 pub struct TerrainDecorPools {
     pools: [DecorBatchPool; 8],
-    /// 森林贴图桶（ADR-0049）：与程序化八桶分开存，因为它的 mesh 带 UV、
+    /// 森林贴图桶（ADR-0050）：与程序化八桶分开存，因为它的 mesh 带 UV、
     /// 材质带纹理，重建判据不同。
     textured_forest: DecorBatchPool,
     material: Option<Handle<ColorMaterial>>,
@@ -844,7 +844,7 @@ pub fn sync_terrain_decor(
 
     let material = ensure_material(&mut pools, &mut materials);
 
-    // 森林贴图（ADR-0049）：配方给图集且解码成功才走贴图路径；否则森林族继续
+    // 森林贴图（ADR-0050）：配方给图集且解码成功才走贴图路径；否则森林族继续
     // 走下面的程序化图元（回退不空帧）。句柄跨帧缓存，不重复解码。
     let forest_art = recipe
         .forest_art
@@ -875,7 +875,7 @@ pub fn sync_terrain_decor(
         .map(|_| (Vec::new(), Vec::new(), Vec::new()))
         .collect();
     let mut site_counts = [0usize; 8];
-    // 森林贴图站点：世界坐标 + 图集格号（ADR-0049）。
+    // 森林贴图站点：世界坐标 + 图集格号（ADR-0050）。
     let mut textured_sites: Vec<(f32, f32, u32)> = Vec::new();
 
     let mut cy = cy0;
@@ -1020,10 +1020,10 @@ pub fn sync_terrain_decor(
             let wy = origin.y + (py as f32 + 0.5) * cell + jy;
             // 气候带（ADR-0039 D3）：归一化 y（0=北）。
             let fy = gy as f32 / data.height as f32;
-            // 森林走贴图（ADR-0049）：只换「长相」，落位 / 密度 / 抖动复用同一条链。
+            // 森林走贴图（ADR-0050）：只换「长相」，落位 / 密度 / 抖动复用同一条链。
             if kind == DecorKind::Forest {
                 if let Some((art, _)) = forest_art.as_ref() {
-                    let v = forest_variant(fy, variant, &recipe);
+                    let v = forest_variant(fy, variant, recipe);
                     textured_sites.push((wx, wy, forest_art_cell(v, art.cells)));
                     cx += stride;
                     continue;
@@ -1063,9 +1063,9 @@ pub fn sync_terrain_decor(
         }
         cy += stride;
     }
-    // 森林贴图桶（ADR-0049）：与程序化八桶互斥——有贴图时 Forest 桶为空。
+    // 森林贴图桶（ADR-0050）：与程序化八桶互斥——有贴图时 Forest 桶为空。
     // 缺资产 / 解码失败 → 清掉可能残留的贴图批，森林回到程序化图元。
-    let tex_size = band.spacing_px(&recipe) * view.scale * TEXTURE_SIZE_OF_SPACING;
+    let tex_size = band.spacing_px(recipe) * view.scale * TEXTURE_SIZE_OF_SPACING;
     match forest_art {
         Some((art, texture)) => {
             let (verts, uvs, indices) = textured_quads(&textured_sites, tex_size, art.cells);
@@ -1240,7 +1240,7 @@ fn build_mesh(verts: Vec<[f32; 3]>, colors: Vec<[f32; 4]>, indices: Vec<u32>) ->
     mesh
 }
 
-/// 森林贴图站点 → 每站一个轴对齐 quad 的顶点 / UV / 索引（ADR-0049）。
+/// 森林贴图站点 → 每站一个轴对齐 quad 的顶点 / UV / 索引（ADR-0050）。
 ///
 /// **锚点 = 底边中心**：树根坐落在采样点上（`y .. y + size`），而不是居中——
 /// 居中会让树干穿过地面点、树冠下方留出一截空白。
@@ -1623,7 +1623,7 @@ mod tests {
         app.init_resource::<TerrainDecorPools>();
         app.init_resource::<Assets<Mesh>>();
         app.init_resource::<Assets<ColorMaterial>>();
-        // 森林贴图（ADR-0049）：系统会解码内嵌图集，测试必须提供 Image 资产库。
+        // 森林贴图（ADR-0050）：系统会解码内嵌图集，测试必须提供 Image 资产库。
         app.init_resource::<Assets<Image>>();
         // 覆盖物规则索引（ADR-0045 D9）：sync_terrain_decor 的必选依赖，
         // 测试装配漏初始化会让系统参数校验 panic（b43b24e 接线后的缺口）。

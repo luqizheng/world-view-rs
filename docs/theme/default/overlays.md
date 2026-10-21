@@ -1,6 +1,6 @@
 # 默认主题：地表覆盖物（Terrain Decor Overlay）
 
-> 地图**森林格**的手绘树图集（`terrain_decor` 的贴图路径，ADR-0049）。
+> 地图**森林格**的手绘树图集（`terrain_decor` 的贴图路径，ADR-0050）。
 > 与 [`README.md`](README.md)（地物符号 / POI）并列，**本文是覆盖物贴图的提示词与
 > 制作规范唯一权威**——重制 / 扩图时照抄，不凭记忆重写提示词。
 >
@@ -111,12 +111,12 @@ PY="C:/Users/leo/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/pytho
 
 - `wv-theme::decor::WATERCOLOR.forest_art = Some(DecorArt::new("overlays/forest/decor_atlas_day.png", 3))`；
   `WATERCOLOR_DUSK` 指向 `decor_atlas_dusk.png`；
-- `terrain_decor` 的 Forest 桶走 UV quad 路径（ADR-0049 D3），其余族仍程序化；
+- `terrain_decor` 的 Forest 桶走 UV quad 路径（ADR-0050 D3），其余族仍程序化；
 - 新增 / 替换图集：换文件 → 改 `DecorArt` 路径（若文件名变了）→ 跑 `cargo test -p wv-render --features app`。
 
 ## 六、已知限制
 
 - **不能随主题调色**：一套墨色服务一套底色，换色必须重出图（见上文「浅墨版」）；
-- **格数固定 3**：加第 4 变体要同时改 `DecorArt.cells`、`forest_art_cell`、图集与 ADR-0049 D2；
+- **格数固定 3**：加第 4 变体要同时改 `DecorArt.cells`、`forest_art_cell`、图集与 ADR-0050 D2；
 - **与地界树图集并存**：`feature_overlays` 仍用旧的 `tree_atlas_{day,dusk}.png`（淡彩），
   两条通道观感略有差异，合并列为后续小任务。

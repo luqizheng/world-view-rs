@@ -62,7 +62,7 @@ impl VariantInk {
     }
 }
 
-/// 一类符号的贴图资产（图集路径 + 横向格数）——ADR-0049。
+/// 一类符号的贴图资产（图集路径 + 横向格数）——ADR-0050。
 ///
 /// **贴图是「地物符号」不是「底图瓦片」**：底图仍由 `terrain_view::cells` 逐格
 /// 程序化合成（JRPG 瓦片图集已弃用），本结构只给 `terrain_decor` 的**符号**
@@ -155,7 +155,7 @@ pub struct DecorRecipe {
     /// 密度衰减深度尺度（米）：`-10 m` 全画，`-wave_depth_scale_m` 稀到 0.15。
     pub wave_depth_scale_m: f32,
 
-    // ── 贴图（ADR-0049）────────────────────────────────────────
+    // ── 贴图（ADR-0050）────────────────────────────────────────
     /// 森林族的手绘贴图；`None` = 走程序化图元（回退路径，缺资产不空帧）。
     ///
     /// 只有森林族有贴图：它是地图上覆盖面积最大、重复感最强的一族；
@@ -193,7 +193,7 @@ pub const WATERCOLOR: DecorRecipe = DecorRecipe {
     size_mul_nation: 1.6,
     wave_max_depth_m: 220,
     wave_depth_scale_m: 220.0,
-    // 日间森林贴图（ADR-0049）：3 格横排 = 针叶 / 阔叶 / 稀树。
+    // 日间森林贴图（ADR-0050）：3 格横排 = 针叶 / 阔叶 / 稀树。
     forest_art: Some(DecorArt::new("overlays/forest/decor_atlas_day.png", 3)),
 };
 
@@ -288,7 +288,7 @@ mod tests {
         assert_ne!(WATERCOLOR.size_mul_nation, WATERCOLOR_DUSK.size_mul_nation);
     }
 
-    /// 森林贴图在两套配方里都已接线，且各指各的图集（ADR-0049）。
+    /// 森林贴图在两套配方里都已接线，且各指各的图集（ADR-0050）。
     ///
     /// 格数必须 = 3：渲染层按「针叶 / 阔叶 / 稀树」三变体取格，少一格会越界。
     #[test]
