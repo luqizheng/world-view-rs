@@ -24,7 +24,7 @@ use bevy::prelude::*;
 
 use crate::layer_frame::LayerFrame;
 use crate::state::{GridConfig, ViewState};
-use crate::theme::palette::{self, MapPalette};
+use crate::theme::palette::MapPalette;
 
 use super::isoline_overlay::build_stroke_mesh;
 use super::terrain_texture::TerrainTexture;
@@ -127,7 +127,7 @@ pub fn sync_grid_lines(
         palette: view.map_palette,
         scale_bits: view.scale.to_bits() as u64,
     };
-    let grid_ink = palette::colors(view.map_palette).grid_line;
+    let grid_ink = view.active_theme.palette.grid_line;
     if overlay.key.as_ref() == Some(&key) && overlay.entity.is_some() {
         // 结构没变也可能只是图层绑定变了（作者改 opacity/z）：就地补丁。
         if layers.is_changed() {

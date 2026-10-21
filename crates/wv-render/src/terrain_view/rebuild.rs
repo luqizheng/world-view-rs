@@ -25,11 +25,17 @@ use super::terrain_texture::TerrainTexture;
 use super::tile_atlas::TileAtlas;
 
 /// 后台合成的上下文指纹：落地时校验「世界还是那个世界」。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct SynthCtx {
     pub mode: ViewMode,
     pub soften: bool,
-    pub palette: crate::theme::palette::MapPalette,
+    /// 合成时生效的**主题包 id**（ADR-0023 M2：权威源 = `view.theme_pack_id`）。
+    ///
+    /// 为什么不用 `MapPalette` 作指纹：主题包可以是外部 crate 提供的（不止
+    /// Daylight / Dusk 两档），`MapPalette` 表达不了。id 是稳定字符串标识。
+    pub theme_id: &'static str,
+    /// 合成时生效的主题包（闭包捕获用；`&'static ThemePack` 是 Copy）。
+    pub pack: &'static crate::theme::theme_pack::ThemePack,
     /// 被合成地形所属的图（`active_terrain` 给出的来源图）。
     pub map: Option<wv_core::Id>,
     /// 内容指纹（height+kind FNV-1a，与等值线缓存同源）。
@@ -43,6 +49,19 @@ pub struct SynthCtx {
     ///
     /// [ADR-0039]: ../../../../docs/adr/ADR-0039-topographic-viewmode.md
     pub topographic_thresholds: (i16, i16),
+}
+
+impl PartialEq for SynthCtx {
+    /// **只比 `theme_id` 与内容指纹**——`pack` 由 `theme_id` 唯一决定，
+    /// 且 `ThemePack` 不实现 `PartialEq`（含 f32 字段）。
+    fn eq(&self, other: &Self) -> bool {
+        self.mode == other.mode
+            && self.soften == other.soften
+            && self.theme_id == other.theme_id
+            && self.map == other.map
+            && self.data_hash == other.data_hash
+            && self.topographic_thresholds == other.topographic_thresholds
+    }
 }
 
 /// 后台合成结果：像素 + 每格分辨率 + 指纹。
@@ -69,7 +88,9 @@ pub struct PendingTerrainSynth {
 /// 落地前再看一眼视图输入：A→B→A 快速连切时，任务 B 完成时当前视图已是 A，
 /// 落地 B 会造成「旧调色板闪回」。
 pub fn ctx_matches_view(ctx: &SynthCtx, view: &ViewState) -> bool {
-    ctx.mode == view.mode && ctx.soften == view.terrain_soften && ctx.palette == view.map_palette
+    ctx.mode == view.mode
+        && ctx.soften == view.terrain_soften
+        && ctx.theme_id == view.active_theme.id
 }
 
 pub fn ctx_matches_world(
@@ -127,7 +148,7 @@ pub fn rebuild_texture_on_mode_change(
     if !map_changed
         && tex.last_mode == Some(view.mode)
         && tex.last_soften == view.terrain_soften
-        && tex.last_palette == view.map_palette
+        && tex.last_theme_id == view.active_theme.id
     {
         return;
     }
@@ -138,7 +159,8 @@ pub fn rebuild_texture_on_mode_change(
     let ctx = SynthCtx {
         mode: view.mode,
         soften: view.terrain_soften,
-        palette: view.map_palette,
+        theme_id: view.active_theme.id,
+        pack: view.active_theme,
         map: Some(node.id.clone()),
         data_hash: terrain_data_hash(data),
         topographic_thresholds: (0, 0), // PR-1 占位；PR-1b 由 `topographic_thresholds_for` 填真值。
@@ -166,7 +188,9 @@ pub fn rebuild_texture_on_mode_change(
     let task_ctx = ctx.clone();
     let task = bevy::tasks::AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default)
         .spawn(async move {
-            let pack = crate::theme::theme_pack::builtin::for_palette(task_ctx.palette);
+            // 主题包由闭包捕获（`&'static ThemePack` 是 Copy）——异步任务里
+            // 拿不到 registry，只能在提交时捕获。
+            let pack = task_ctx.pack;
             let (pixels, res) = terrain_pixels(
                 &data_clone,
                 task_ctx.mode,
@@ -236,13 +260,13 @@ pub fn land_pending_terrain_synth(
         Some(node.id.clone()),
         result.ctx.mode,
         result.ctx.soften,
-        result.ctx.palette,
+        result.ctx.theme_id,
     );
     // 整图内容已整体替换：chunk 层需要全量重贴。
     tex.chunks_dirty = Some([0, 0, tex.size, tex.height]);
     tex.last_mode = Some(result.ctx.mode);
     tex.last_soften = result.ctx.soften;
-    tex.last_palette = result.ctx.palette;
+    tex.last_theme_id = result.ctx.theme_id;
     tex.last_map = Some(node.id.clone());
     // 这次换图的淡出精灵已经就位；下一次换图再重新判定。
     pending.fade_for_map = None;
@@ -361,7 +385,8 @@ mod tests {
         SynthCtx {
             mode: ViewMode::VectorFlat,
             soften: false,
-            palette: crate::theme::palette::MapPalette::default(),
+            theme_id: crate::theme::theme_pack::builtin::DEFAULT.id,
+            pack: &crate::theme::theme_pack::builtin::DEFAULT,
             map: Some(map.clone()),
             data_hash: terrain_data_hash(data),
             topographic_thresholds: (0, 0),
@@ -398,22 +423,23 @@ mod tests {
         let view = ViewState {
             mode: ctx.mode,
             terrain_soften: ctx.soften,
-            map_palette: ctx.palette,
+            theme_pack_id: Some(ctx.theme_id.to_string()),
             ..Default::default()
         };
         assert!(ctx_matches_view(&ctx, &view), "同视图输入应放行");
 
-        let mut stale_palette = ctx.clone();
-        stale_palette.palette = crate::theme::palette::MapPalette::Dusk;
+        // 主题包换了（A→B→A 快速连切）→ 旧像素不得贴进新世界。
+        let mut stale_theme = ctx.clone();
+        stale_theme.theme_id = "some_other_theme";
         assert!(
-            !ctx_matches_view(&stale_palette, &view),
-            "palette 不符（A→B→A）应拒绝落地"
+            !ctx_matches_view(&stale_theme, &view),
+            "主题包不符（A→B→A）应拒绝落地"
         );
 
         let other_view = ViewState {
             mode: ViewMode::Schematic,
             terrain_soften: ctx.soften,
-            map_palette: ctx.palette,
+            theme_pack_id: Some(ctx.theme_id.to_string()),
             ..Default::default()
         };
         assert!(!ctx_matches_view(&ctx, &other_view), "模式变应拒绝落地");

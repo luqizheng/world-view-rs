@@ -28,7 +28,6 @@ use bevy::prelude::*;
 
 use crate::layer_frame::LayerFrame;
 use crate::state::{lod_fade, GridConfig, ViewState, WorldProjection, LOD_NATION_SCALE};
-use crate::theme::palette;
 
 /// 挤出高度换算：世界单位 / 米。**待裁**（README §12-31(b)）：真实比例
 /// 还是美化夸张未定；1.0 直译是最易回退的起点。
@@ -224,7 +223,7 @@ pub fn sync_building_overlays(
     };
     if cache.key.as_ref() != Some(&key) {
         cache.despawn(&mut commands);
-        let pal = palette::colors(view.map_palette);
+        let pal = &view.active_theme.palette;
         // 收集当前图全部 Building 图层的建筑（合并多图层；作者可按片区分文件）。
         let node = current.and_then(|id| projection.world.maps.iter().find(|m| &m.id == id));
         let mut shadow_tris: Vec<[Vec2; 3]> = Vec::new();

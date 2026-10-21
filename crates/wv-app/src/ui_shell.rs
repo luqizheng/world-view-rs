@@ -92,7 +92,8 @@ pub fn register(app: &mut App) {
                 apply_ui_theme.after(hotkeys),
                 // 窗口位置重置：必须早于本帧面板绘制，否则旧位置会先画一遍。
                 apply_panel_reset.after(apply_ui_theme),
-                poll_open_project_dialog,
+                // 必须在主题包同步之后：本 system 会用当前主题包烘焙底图。
+                poll_open_project_dialog.after(wv_render::theme::switch::sync_active_theme_pack),
             ),
         )
         .add_systems(
@@ -961,7 +962,7 @@ fn adopt_world_snapshot(
         map,
         view.mode,
         view.terrain_soften,
-        view.map_palette,
+        view.active_theme.id,
     );
     // 整图内容已整体替换：chunk 层全量重贴。
     tex.mark_all_dirty();
@@ -1199,9 +1200,10 @@ fn apply_pending_commands(
         ResMut<crate::ui::ContinentDialog>,
     ),
     // 换世界接管（adopt_world_snapshot）所需：瓦片图集可缺席（纯色平涂回退）。
-    (atlas, mut images): (
+    (atlas, mut images, theme_registry): (
         Option<Res<wv_render::terrain_view::TileAtlas>>,
         ResMut<Assets<Image>>,
+        Res<wv_render::theme::switch::ThemeRegistry>,
     ),
     // 选择工具会话态：命令面板「生成大陆…」顺手启用选择工具。
     mut selection: ResMut<crate::state::SelectionState>,
@@ -1277,7 +1279,24 @@ fn apply_pending_commands(
         CommandId::NewMap => new_map_dialog.open_for(&projection.world),
         CommandId::ToggleTheme => cfg.theme = cfg.theme.toggled(),
         CommandId::ToggleDensity => cfg.density = cfg.density.toggled(),
-        CommandId::ToggleMapPalette => view.map_palette = view.map_palette.toggled(),
+        CommandId::ToggleMapPalette => {
+            // 循环切换**所有注册的主题包**（ADR-0023 M2）：内置日间 / 暮色 /
+            // 外部包（如水墨）。`view.theme_pack_id` 是权威；`view.map_palette`
+            // 同步成内置包的快捷选择（顶栏日夜按钮仍走它）。
+            let ids: Vec<&'static str> = theme_registry.0.iter().map(|(id, _)| *id).collect();
+            if !ids.is_empty() {
+                let cur = view
+                    .theme_pack_id
+                    .as_deref()
+                    .unwrap_or_else(|| view.map_palette.key());
+                let idx = ids.iter().position(|id| *id == cur).unwrap_or(0);
+                let next = ids[(idx + 1) % ids.len()];
+                view.theme_pack_id = Some(next.to_string());
+                if let Some(pal) = MapPalette::from_key(next) {
+                    view.map_palette = pal;
+                }
+            }
+        }
         CommandId::ToggleImmersive => panels.immersive = !panels.immersive,
         CommandId::TogglePanel(p) => panels.toggle(p),
         CommandId::ResetPanelLayout => panels.reset_requested = true,
@@ -1744,8 +1763,15 @@ fn load_layout_on_project_open(
     if let Some(theme) = file.theme.as_deref().and_then(UiTheme::from_key) {
         shell_cfg.theme = theme;
     }
-    if let Some(t) = file.map_theme.as_deref().and_then(MapPalette::from_key) {
-        view.map_palette = t;
+    // 地图主题（ADR-0023 M2）：`map_theme` 存**主题包 id**。
+    // 存量工程存的是 `MapPalette::key()`（"daylight" / "dusk"）——由
+    // `switch::resolve_pack` 的兼容回退解析（内置包 id 与之不同名），零迁移。
+    if let Some(t) = file.map_theme.as_deref() {
+        view.theme_pack_id = Some(t.to_string());
+        // 兼容：存量键映射回 `map_palette`（内置包的快捷选择器）。
+        if let Some(pal) = MapPalette::from_key(t) {
+            view.map_palette = pal;
+        }
     }
     if let Some(lang) = file.language.as_deref() {
         if let Some(loc) = parse_locale(lang) {
@@ -1796,7 +1822,12 @@ fn persist_layout_on_change(
     let mut file = (*layout).clone();
     file.theme = Some(cfg.theme.key().into());
     file.density = Some(cfg.density.key().into());
-    file.map_theme = Some(view.map_palette.key().to_string());
+    // 主题包 id 优先；未设时回落到内置包的 key（存量格式，零迁移）。
+    file.map_theme = Some(
+        view.theme_pack_id
+            .clone()
+            .unwrap_or_else(|| view.map_palette.key().to_string()),
+    );
     file.language = Some(current_loc.0.as_str().to_string());
     file.map_dock = Some(dock.orientation.key().to_string());
     file.map_snap = Some(dock.snapping);
@@ -1960,6 +1991,13 @@ mod tests {
         AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
         let mut world = World::new();
         world.init_resource::<CommandPalette>();
+        // 主题包注册表（ADR-0023 M2）：命令分发器要遍历它做主题包循环切换。
+        world.insert_resource(wv_render::theme::switch::ThemeRegistry(
+            wv_theme::registry::MergedThemeRegistry::merge(&[
+                &wv_theme::registry::BuiltinRegistry,
+                &wv_theme_chinese_ink::ChineseInkRegistry,
+            ]),
+        ));
         world.init_resource::<crate::ui::ProjectMenuState>();
         world.init_resource::<PanelState>();
         world.init_resource::<UiShellConfig>();
@@ -2004,7 +2042,7 @@ mod tests {
             chunks_dirty: None,
             last_mode: None,
             last_soften: false,
-            last_palette: Default::default(),
+            last_theme_id: wv_render::theme::theme_pack::builtin::DEFAULT.id,
             last_map: None,
         });
         world.insert_resource(Time::<()>::default());
@@ -2195,6 +2233,13 @@ mod tests {
 
         let mut world = World::new();
         world.init_resource::<CommandPalette>();
+        // 主题包注册表（ADR-0023 M2）：命令分发器要遍历它做主题包循环切换。
+        world.insert_resource(wv_render::theme::switch::ThemeRegistry(
+            wv_theme::registry::MergedThemeRegistry::merge(&[
+                &wv_theme::registry::BuiltinRegistry,
+                &wv_theme_chinese_ink::ChineseInkRegistry,
+            ]),
+        ));
         world.init_resource::<ProjectMenuState>();
         world.init_resource::<PanelState>();
         world.init_resource::<UiShellConfig>();
@@ -2237,7 +2282,7 @@ mod tests {
             chunks_dirty: None,
             last_mode: None,
             last_soften: false,
-            last_palette: Default::default(),
+            last_theme_id: wv_render::theme::theme_pack::builtin::DEFAULT.id,
             last_map: None,
         });
         world.insert_resource(Time::<()>::default());

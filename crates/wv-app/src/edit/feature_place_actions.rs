@@ -231,7 +231,7 @@ mod marker_action_tests {
             chunks_dirty: None,
             last_mode: None,
             last_soften: false,
-            last_palette: Default::default(),
+            last_theme_id: wv_render::theme::theme_pack::builtin::DEFAULT.id,
             last_map: None,
         }
     }

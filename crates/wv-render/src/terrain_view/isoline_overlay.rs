@@ -26,7 +26,7 @@ use wv_terrain::isoline::{assemble_chains, chaikin, height_segments, kind_segmen
 
 use crate::layer_frame::LayerFrame;
 use crate::state::{DrillState, GridConfig, ViewState, WorldProjection};
-use crate::theme::palette::{self, MapPalette};
+use crate::theme::palette::MapPalette;
 
 use super::terrain_resolve::texture_terrain;
 use super::terrain_texture::TerrainTexture;
@@ -256,7 +256,7 @@ pub fn sync_isoline_overlay(
         overlay.despawn(&mut commands);
         return;
     };
-    let treatment = crate::theme::theme_pack::builtin::for_palette(view.map_palette).treatment;
+    let treatment = view.active_theme.treatment;
     let nation = view.scale >= crate::state::LOD_NATION_SCALE;
     let key = IsolineKey {
         map: tex.last_map.clone(),
@@ -287,7 +287,7 @@ pub fn sync_isoline_overlay(
             apply_material_colors(
                 &mut materials,
                 &overlay,
-                palette::colors(view.map_palette),
+                &view.active_theme.palette,
                 layers.terrain.opacity,
             );
             overlay.ink_palette = Some(view.map_palette);
@@ -311,7 +311,7 @@ pub fn sync_isoline_overlay(
     let tol = dp_tol_continuous(view.scale);
     // 装饰旗标（ADR-0023 D4）：从当前主题包派生。内置两包都是 HAND_DRAWN（全
     // `true`）——所有 gate 分支在 `true` 时走与历史恒开**逐位相同**的路径。
-    let treatment = crate::theme::theme_pack::builtin::for_palette(view.map_palette).treatment;
+    let treatment = view.active_theme.treatment;
     // 描边世界半宽（手绘地图 #10，2026-10-15）：**亚线性**缩放——
     // 世界半宽 = px × scale^0.78 而非 px × scale（ADR-0008 §8 乘口径的
     // 修正式）。civ-atlas GLYPH_SHRINK=0.22 同款思路：放大 4 倍时墨线的
@@ -401,7 +401,7 @@ pub fn sync_isoline_overlay(
         return;
     };
     let handle = meshes.add(mesh);
-    let pal = palette::colors(view.map_palette);
+    let pal = &view.active_theme.palette;
     let material = overlay
         .material
         .get_or_insert_with(|| materials.add(ColorMaterial::from_color(pal.isoline_ink)))

@@ -114,7 +114,7 @@ pub fn panel_region(
             }
 
             // 主题支持的覆盖物键（词表由主题拥有，ADR-0045 D10）。
-            let theme = wv_render::theme::theme_pack::builtin::for_palette(view.map_palette);
+            let theme = &view.active_theme;
             let overlay_keys: Vec<&'static str> = theme.region_overlays.keys().collect();
             // 两套原点的差（区域多边形 = 图内局部 wu；格子属于栅格所在的图）。
             let raster_to_map = (

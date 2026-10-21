@@ -26,7 +26,6 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::layer_frame::LayerFrame;
 use crate::state::{BrushState, GridConfig, ViewState};
-use crate::theme::palette;
 
 use super::terrain_texture::TerrainTexture;
 
@@ -225,7 +224,7 @@ pub fn sync_atmosphere(
         return;
     }
     // 装饰旗标（ADR-0023 D4）：从当前主题包派生；内置两包都是 HAND_DRAWN。
-    let treatment = crate::theme::theme_pack::builtin::for_palette(view.map_palette).treatment;
+    let treatment = view.active_theme.treatment;
     let key = AtmosphereKey {
         origin: (
             grid.raster_origin.x.to_bits(),
@@ -283,7 +282,7 @@ pub fn sync_atmosphere(
     }
     // 雾霭 alpha 逐帧连续更新（缩放的空气感 + 编辑态免雾）；颜色随主题纸面
     //（ADR-0016）。免雾只动 alpha 不拆实体：笔刷一关，下一帧雾即回来。
-    let pal = palette::colors(view.map_palette);
+    let pal = &view.active_theme.palette;
     if let Some((_, _, mat)) = &atm.veil {
         if let Some(mut m) = materials.get_mut(mat) {
             m.color = pal

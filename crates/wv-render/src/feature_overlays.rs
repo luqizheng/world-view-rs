@@ -52,7 +52,6 @@ use crate::recipe::{PassId, RenderRecipe};
 use crate::state::{GridConfig, PlaybackState, ViewState, WorldProjection};
 use crate::terrain_view::terrain_resolve::active_terrain;
 use crate::theme::overlays::{forest_sites, overlay_far_blend};
-use crate::theme::theme_pack::builtin;
 use wv_core::id::Id;
 use wv_core::{place_territory_at, TerritoryShape};
 
@@ -234,7 +233,7 @@ pub fn sync_feature_overlays(
     let symbol_z = SYMBOL_Z + layers.place.z_offset;
 
     // 主题规则取内置包（D10）——不读 `ActiveThemePack`（尚无同步系统）。
-    let pack = builtin::for_palette(view.map_palette);
+    let pack = view.active_theme;
     let map_origin = Vec3::new(grid.map_origin.x, grid.map_origin.y, 0.0);
     let raster_offset = (
         grid.map_origin.x - grid.raster_origin.x,
@@ -695,7 +694,9 @@ mod tests {
         };
         let family = overlay_family_for_place(&p).expect("沙漠应归族（进入渲染）");
         assert_eq!(family, wv_terrain::biome::BiomeFamily::Desert);
-        let pack = builtin::for_palette(crate::theme::palette::MapPalette::Daylight);
+        let pack = crate::theme::theme_pack::builtin::for_palette(
+            crate::theme::palette::MapPalette::Daylight,
+        );
         assert!(
             pack.overlays.rule_for(family).is_none(),
             "v1 内置主题不给干旱族规则，渲染走 FALLBACK_HALO 分支"
@@ -912,7 +913,7 @@ mod tests {
     /// 缺失贴图的纯决策：规则键未知 → 纯色回退；纯色 mesh 仍可生成（不空帧）。
     #[test]
     fn missing_texture_falls_back_to_flat_color() {
-        let mut rule = *builtin::DEFAULT
+        let mut rule = *crate::theme::theme_pack::builtin::DEFAULT
             .overlays
             .forest
             .as_ref()

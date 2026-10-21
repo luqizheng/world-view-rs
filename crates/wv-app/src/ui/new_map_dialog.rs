@@ -599,9 +599,7 @@ mod tests {
             wv_render::state::ViewMode::VectorFlat,
             None,
             false,
-            wv_render::theme::theme_pack::builtin::for_palette(
-                wv_render::theme::palette::MapPalette::Daylight,
-            ),
+            &wv_render::theme::theme_pack::builtin::DEFAULT,
             0.0,
         );
         let tex = wv_render::terrain_view::new_terrain_texture(
@@ -611,7 +609,7 @@ mod tests {
             Some(root.clone()),
             wv_render::state::ViewMode::VectorFlat,
             false,
-            wv_render::theme::palette::MapPalette::Daylight,
+            wv_render::theme::theme_pack::builtin::DEFAULT.id,
         );
         let mut bevy_world = bevy::prelude::World::new();
         bevy_world.insert_resource(images);

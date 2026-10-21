@@ -230,6 +230,38 @@ impl Default for ActiveThemePack {
     }
 }
 
+impl ActiveThemePack {
+    /// 当前生效的色板（ADR-0023 M2：色板随包走，不再由 `MapPalette` 派生）。
+    pub fn palette(&self) -> &PaletteColors {
+        &self.0.palette
+    }
+
+    /// 当前生效的装饰旗标。
+    pub fn treatment(&self) -> &TreatmentFlags {
+        &self.0.treatment
+    }
+
+    /// 当前生效的海面画法配方（ADR-0048）。
+    pub fn sea(&self) -> &super::sea::SeaRecipe {
+        &self.0.sea
+    }
+
+    /// 当前生效的装饰画法配方（ADR-0048 追记二）。
+    pub fn decor(&self) -> &super::decor::DecorRecipe {
+        &self.0.decor
+    }
+
+    /// 当前生效的 Place 覆盖物规则。
+    pub fn overlays(&self) -> &super::overlays::FeatureOverlaySet {
+        &self.0.overlays
+    }
+
+    /// 当前生效的 Region 覆盖物规则。
+    pub fn region_overlays(&self) -> &super::overlays::RegionOverlaySet {
+        &self.0.region_overlays
+    }
+}
+
 /// 内置主题包（M1 唯一，M2+ 接 `wv-theme-xxx` 时扩展）。
 ///
 /// `DEFAULT = DAYLIGHT`：值源 = `PaletteColors::DAYLIGHT`，**逐位一致**

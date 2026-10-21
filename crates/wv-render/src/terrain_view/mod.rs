@@ -923,7 +923,7 @@ mod tests {
             chunks_dirty: None,
             last_mode: None,
             last_soften: false,
-            last_palette: Default::default(),
+            last_theme_id: crate::theme::theme_pack::builtin::DEFAULT.id,
             last_map: Some(wv_core::Id::new_unchecked("map_world")),
         };
         let data = texture_terrain(&tex, &world, Some(&city)).expect("应取世界图地形");
@@ -952,7 +952,7 @@ mod tests {
             chunks_dirty: None,
             last_mode: None,
             last_soften: false,
-            last_palette: Default::default(),
+            last_theme_id: crate::theme::theme_pack::builtin::DEFAULT.id,
             last_map: None,
         };
         let data = texture_terrain(&tex, &world, Some(&city)).expect("应退回继承口径");
@@ -1031,7 +1031,7 @@ mod tests {
             chunks_dirty: None,
             last_mode: None,
             last_soften: false,
-            last_palette: Default::default(),
+            last_theme_id: crate::theme::theme_pack::builtin::DEFAULT.id,
             // 纹理装的是世界图底图；钻入城市后**不会**重建（继承同一个来源）。
             last_map: Some(wv_core::Id::new_unchecked("map_world")),
         });
