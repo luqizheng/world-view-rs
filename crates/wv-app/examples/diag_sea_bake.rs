@@ -51,7 +51,11 @@ fn main() {
     println!("\n色板锚点: water_shallow {shallow:?}  water_deep {deep:?}");
 
     for soften in [true, false] {
+        // 烘焙耗时（配方调参的性能锚点：水纹 / 墨线是逐像素工作）。
+        let t0 = std::time::Instant::now();
         let img = image_from_terrain(&data, ViewMode::VectorFlat, None, soften, pack, 0.0);
+        let bake_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        println!("  [bake] {:.0} ms", bake_ms);
         let (w, h) = (img.width() as usize, img.height() as usize);
         let px = img.data.as_ref().expect("地形图必须有像素数据");
         let name = if soften {
