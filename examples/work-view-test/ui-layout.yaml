@@ -5,14 +5,14 @@ panels:
     width: 274.0
     height: 220.0
     collapsed: false
-    visible: false
+    visible: true
   cell_editor:
     x: 992.0
     y: 310.0
     width: 288.0
     height: 210.0
     collapsed: false
-    visible: true
+    visible: false
   character:
     x: 992.0
     y: 520.0
@@ -68,7 +68,7 @@ panels:
     width: 1256.0
     height: 164.0
     collapsed: false
-    visible: false
+    visible: true
   tree:
     x: 12.0
     y: 56.0
