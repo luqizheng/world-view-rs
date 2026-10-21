@@ -261,7 +261,7 @@ fn coast_field_indexed(
         2.0,
         0.5,
     );
-    let fbm01 = ((n * 0.5 + 1.0) as f32).clamp(0.0, 1.0);
+    let fbm01 = (((n + 1.0) * 0.5) as f32).clamp(0.0, 1.0);
     (d + amp * fbm01, winner)
 }
 
@@ -309,7 +309,7 @@ pub(crate) fn land_height(
     let base = peak * t;
     let scale = (inradius * 0.25).max(1.0);
     let n = noise.fbm((p.0 / scale) as f64, (p.1 / scale) as f64, 4, 2.0, 0.5);
-    let fbm01 = ((n * 0.5 + 1.0) as f32).clamp(0.0, 1.0);
+    let fbm01 = (((n + 1.0) * 0.5) as f32).clamp(0.0, 1.0);
     let h = base * (0.7 + 0.6 * fbm01);
     h.round().clamp(0.0, i16::MAX as f32) as i16
 }
@@ -330,7 +330,7 @@ fn surface_biome_for_height(height_m: i16) -> (Surface, Biome) {
 
 /// fBm 归一化到 0..1。
 fn fbm01(noise: &Perlin, x: f64, y: f64, octaves: u32) -> f32 {
-    ((noise.fbm(x, y, octaves, 2.0, 0.5) * 0.5 + 1.0) as f32).clamp(0.0, 1.0)
+    (((noise.fbm(x, y, octaves, 2.0, 0.5) + 1.0) * 0.5) as f32).clamp(0.0, 1.0)
 }
 
 /// Q5 优先序分带：大陆架浅水 → 雪/山/丘（高度派生带，写 `BIOME_NONE`）→
