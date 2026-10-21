@@ -62,6 +62,29 @@ impl VariantInk {
     }
 }
 
+/// 一类符号的贴图资产（图集路径 + 横向格数）——ADR-0049。
+///
+/// **贴图是「地物符号」不是「底图瓦片」**：底图仍由 `terrain_view::cells` 逐格
+/// 程序化合成（JRPG 瓦片图集已弃用），本结构只给 `terrain_decor` 的**符号**
+/// 提供手绘 PNG。二者是规格 §2.B 里 `props_atlas` 与 `terrain_atlas` 的区别。
+///
+/// **格序是契约**：森林图集必须按「针叶 / 阔叶 / 稀树」从左到右排列，
+/// 与渲染层的 `DecorVariant` 三个值一一对应；乱序会让针叶格长阔叶树。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DecorArt {
+    /// 相对 `crates/wv-render/assets/` 的路径（编译期 `include_bytes!` 嵌入）。
+    pub atlas: &'static str,
+    /// 图集横向格数（当前森林族固定 3）。
+    pub cells: u8,
+}
+
+impl DecorArt {
+    /// 构造（便于常量表书写）。
+    pub const fn new(atlas: &'static str, cells: u8) -> Self {
+        Self { atlas, cells }
+    }
+}
+
 /// 地形装饰的画法配方。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DecorRecipe {
@@ -131,6 +154,13 @@ pub struct DecorRecipe {
     pub wave_max_depth_m: i16,
     /// 密度衰减深度尺度（米）：`-10 m` 全画，`-wave_depth_scale_m` 稀到 0.15。
     pub wave_depth_scale_m: f32,
+
+    // ── 贴图（ADR-0049）────────────────────────────────────────
+    /// 森林族的手绘贴图；`None` = 走程序化图元（回退路径，缺资产不空帧）。
+    ///
+    /// 只有森林族有贴图：它是地图上覆盖面积最大、重复感最强的一族；
+    /// 其余族继续程序化，避免一次性引入 8 张图集。
+    pub forest_art: Option<DecorArt>,
 }
 
 /// 水彩装饰配方（日间）——与 2026-10-21 之前的渲染层硬编码**逐位一致**
@@ -163,6 +193,8 @@ pub const WATERCOLOR: DecorRecipe = DecorRecipe {
     size_mul_nation: 1.6,
     wave_max_depth_m: 220,
     wave_depth_scale_m: 220.0,
+    // 日间森林贴图（ADR-0049）：3 格横排 = 针叶 / 阔叶 / 稀树。
+    forest_art: Some(DecorArt::new("overlays/forest/decor_atlas_day.png", 3)),
 };
 
 /// 暮色装饰配方——暗纸上的符号要更沉、更疏。
@@ -174,6 +206,8 @@ pub const WATERCOLOR_DUSK: DecorRecipe = DecorRecipe {
     size_mul_edit: 0.9,
     size_mul_region: 0.75,
     size_mul_nation: 1.4,
+    // 暮色走浅墨图集：暗底上深墨会糊成黑块（材质 tint 是乘法，提亮不了深墨）。
+    forest_art: Some(DecorArt::new("overlays/forest/decor_atlas_dusk.png", 3)),
     ..WATERCOLOR
 };
 
@@ -252,5 +286,20 @@ mod tests {
             WATERCOLOR_DUSK.spacing_px_nation
         );
         assert_ne!(WATERCOLOR.size_mul_nation, WATERCOLOR_DUSK.size_mul_nation);
+    }
+
+    /// 森林贴图在两套配方里都已接线，且各指各的图集（ADR-0049）。
+    ///
+    /// 格数必须 = 3：渲染层按「针叶 / 阔叶 / 稀树」三变体取格，少一格会越界。
+    #[test]
+    fn forest_art_is_wired_for_both_palettes_with_three_cells() {
+        let day = WATERCOLOR.forest_art.expect("日间必须有森林贴图");
+        let dusk = WATERCOLOR_DUSK.forest_art.expect("暮色必须有森林贴图");
+        assert_eq!(day.cells, 3, "森林图集格数 = 三变体");
+        assert_eq!(dusk.cells, 3, "森林图集格数 = 三变体");
+        assert_ne!(
+            day.atlas, dusk.atlas,
+            "日/暮各指各的图集（深墨在暗底上会糊成黑块）"
+        );
     }
 }

@@ -16,17 +16,21 @@
 //!
 //! ## 边界（不做什么）
 //! - **不写时间比较 / 不写世界**（AGENTS §3）；
-//! - **不引入位图瓦片**（JRPG 图集已弃用；全部程序化三角化）；
-//! - 符号颜色是 v1 常量（每类一枚「墨色」），主题化随 ThemePack 演绎规则后继
-//!   （README §12-30 同款延期）。
+//! - **不引入位图瓦片**——底图仍由 `terrain_view::cells` 逐格程序化合成
+//!   （JRPG 瓦片图集已弃用）。**地物符号**可走主题贴图（ADR-0049）：
+//!   森林族由 `DecorRecipe::forest_art` 给出手绘树图集，缺资产回退本文件的
+//!   程序化图元（不空帧）。「底图瓦片」与「地物符号」是两回事，见 ADR-0049；
+//! - 符号颜色 / 步距 / 尺寸由主题配方（[`DecorRecipe`]）给定，渲染层只做执行器。
 
 #![cfg(feature = "app")]
 
 use bevy::asset::RenderAssetUsages;
+use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
 use bevy::render::mesh::Mesh;
 use bevy::render::mesh::{Indices, MeshVertexAttribute};
 use bevy::render::render_resource::{PrimitiveTopology, VertexFormat};
+use std::collections::{HashMap, HashSet};
 
 use crate::layer_frame::LayerFrame;
 use crate::recipe::{PassId, RenderRecipe};
@@ -49,6 +53,25 @@ const BUCKET_Z_STEP: f32 = 0.0004;
 const MAX_SITES_PER_KIND: usize = 2200;
 /// 视口外扩余量（屏幕像素）：拖动相机时边缘符号不闪断。
 const VIEWPORT_MARGIN_PX: f32 = 32.0;
+/// 贴图符号的边长占采样步距的比例——图集里树冠四周有留白，取 0.9 让
+/// 相邻树冠轻微重叠成「林」，而不是一颗颗孤立图标。
+const TEXTURE_SIZE_OF_SPACING: f32 = 0.9;
+
+/// 编译期嵌入的装饰贴图（ADR-0049）。
+///
+/// 与 `feature_overlays::embedded_texture` 同一手法（`include_bytes!`，不走
+/// `AssetServer`）：路径是主题配方给的相对路径，未知键返回 `None`，渲染侧回退
+/// 程序化图元——缺资产不 panic、不空帧。
+const EMBEDDED_DECOR: &[(&str, &[u8])] = &[
+    (
+        "overlays/forest/decor_atlas_day.png",
+        include_bytes!("../assets/overlays/forest/decor_atlas_day.png"),
+    ),
+    (
+        "overlays/forest/decor_atlas_dusk.png",
+        include_bytes!("../assets/overlays/forest/decor_atlas_dusk.png"),
+    ),
+];
 
 /// 装饰类别（八类）。下标即渲染桶序号。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +161,42 @@ pub fn decor_variant_for_key(key: &str) -> Option<DecorVariant> {
         "boulder" => Some(DecorVariant::Boulder),
         _ => None,
     }
+}
+
+/// 森林族的变体判定（气候带 + region 覆盖物强制）——程序化与贴图两条路径共用。
+///
+/// 抽成公开纯函数是为了让两条路径**不可能**对同一格给出不同变体：
+/// 一旦分叉，同一棵针叶会用阔叶格画，或反之。
+pub fn forest_variant(fy: f32, forced: Option<DecorVariant>, recipe: &DecorRecipe) -> DecorVariant {
+    match forced {
+        Some(v @ (DecorVariant::Conifer | DecorVariant::Broadleaf | DecorVariant::Sparse)) => v,
+        _ => {
+            if fy < recipe.climate_cuts[0] {
+                DecorVariant::Conifer
+            } else if fy < recipe.climate_cuts[1] {
+                DecorVariant::Broadleaf
+            } else {
+                DecorVariant::Sparse
+            }
+        }
+    }
+}
+
+/// 变体 → 图集格号。**格序契约**：针叶 0 / 阔叶 1 / 稀树 2（`DecorArt` 文档）。
+///
+/// `boulder` 不是森林族的变体（乱石滩涂），落回阔叶格；`cells` 小于 3 时钳到
+/// 最后一格——宁可复用一格，也不越界取到相邻格。
+pub fn forest_art_cell(variant: DecorVariant, cells: u8) -> u32 {
+    if cells == 0 {
+        return 0;
+    }
+    let cell = match variant {
+        DecorVariant::Conifer => 0,
+        DecorVariant::Broadleaf => 1,
+        DecorVariant::Sparse => 2,
+        DecorVariant::Boulder => 1,
+    };
+    cell.min(cells as u32 - 1)
 }
 
 /// 装饰 LOD 档：Nation 粗步距（大地貌团）/ Region 粗 / Edit 细。
@@ -246,20 +305,7 @@ pub fn site_primitives(
             let oasis = recipe.oasis_ink.to_rgba();
             // **region 覆盖物可强制变体**（ADR-0045 D2/D9）：作者声明「这片用
             // 针叶画」→ 变体由声明决定，**优先于** y 轴气候带派生。
-            let variant = match variant {
-                Some(
-                    v @ (DecorVariant::Conifer | DecorVariant::Broadleaf | DecorVariant::Sparse),
-                ) => v,
-                _ => {
-                    if fy < recipe.climate_cuts[0] {
-                        DecorVariant::Conifer
-                    } else if fy < recipe.climate_cuts[1] {
-                        DecorVariant::Broadleaf
-                    } else {
-                        DecorVariant::Sparse
-                    }
-                }
-            };
+            let variant = forest_variant(fy, variant, recipe);
             if variant == DecorVariant::Conifer {
                 // 针叶：3 棵细三角（宽窄高挑），成排。
                 for s in 0..3u64 {
@@ -612,12 +658,16 @@ const POI_LIKE_SEGMENTS: usize = 12;
 // 渲染侧：六桶合批池
 // ---------------------------------------------------------------------------
 
-/// 桶合批的重建判据：可见集指纹 + 符号尺寸 + Z。
+/// 桶合批的重建判据：可见集指纹 + 符号尺寸 + Z + 贴图键。
+///
+/// `tex` 进 key 是必要的：贴图符号的**顶点**在换主题时可能完全相同（同样的
+/// 落位与尺寸），只有图集换了——不把它算进判据，换主题会继续用旧图集。
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct DecorBatchKey {
     fingerprint: u64,
     size: f32,
     z: f32,
+    tex: Option<&'static str>,
 }
 
 /// 一个桶的实体与 Mesh 句柄。
@@ -644,11 +694,20 @@ impl DecorBatchPool {
     }
 }
 
-/// 七桶池 + 每桶材质句柄。
+/// 八桶池 + 森林贴图桶 + 每桶材质句柄。
 #[derive(Resource, Default)]
 pub struct TerrainDecorPools {
     pools: [DecorBatchPool; 8],
+    /// 森林贴图桶（ADR-0049）：与程序化八桶分开存，因为它的 mesh 带 UV、
+    /// 材质带纹理，重建判据不同。
+    textured_forest: DecorBatchPool,
     material: Option<Handle<ColorMaterial>>,
+    /// 装饰贴图句柄缓存（图集键 → 句柄，跨帧复用；解码远贵于重建 mesh）。
+    textures: HashMap<&'static str, Handle<Image>>,
+    /// 解码失败 / 未知的贴图键（只告警一次，之后静默回退程序化）。
+    failed_textures: HashSet<&'static str>,
+    /// 贴图材质缓存（图集键 → 材质）。
+    textured_materials: HashMap<&'static str, Handle<ColorMaterial>>,
 }
 
 impl TerrainDecorPools {
@@ -656,7 +715,81 @@ impl TerrainDecorPools {
         for p in &mut self.pools {
             p.despawn(commands);
         }
+        self.textured_forest.despawn(commands);
     }
+
+    /// 图集键 → 已解码句柄；未知键 / 解码失败返回 `None`（调用方回退程序化）。
+    ///
+    /// **首帧语义**：解码同步完成，第一帧要么拿到句柄要么确定失败——不存在
+    /// 「句柄未就绪」的空白帧。失败按键记忆，避免每帧重复解码与重复告警。
+    fn texture(&mut self, key: &'static str, images: &mut Assets<Image>) -> Option<Handle<Image>> {
+        if let Some(handle) = self.textures.get(key) {
+            return Some(handle.clone());
+        }
+        if self.failed_textures.contains(key) {
+            return None;
+        }
+        let Some(bytes) = embedded_decor_texture(key) else {
+            warn!("装饰贴图键不在内嵌表：{key}；回退程序化符号");
+            self.failed_textures.insert(key);
+            return None;
+        };
+        match decode_decor_texture(bytes) {
+            Some(image) => {
+                let handle = images.add(image);
+                self.textures.insert(key, handle.clone());
+                Some(handle)
+            }
+            None => {
+                warn!("装饰贴图解码失败：{key}；回退程序化符号");
+                self.failed_textures.insert(key);
+                None
+            }
+        }
+    }
+
+    /// 图集键 + 句柄 → 贴图材质（同键复用；`alpha_mode: Blend` 保留 PNG 软边）。
+    fn textured_material(
+        &mut self,
+        key: &'static str,
+        texture: Handle<Image>,
+        materials: &mut Assets<ColorMaterial>,
+    ) -> Handle<ColorMaterial> {
+        if let Some(handle) = self.textured_materials.get(key) {
+            return handle.clone();
+        }
+        let handle = materials.add(ColorMaterial {
+            color: Color::WHITE,
+            texture: Some(texture),
+            alpha_mode: bevy::sprite_render::AlphaMode2d::Blend,
+            ..default()
+        });
+        self.textured_materials.insert(key, handle.clone());
+        handle
+    }
+}
+
+/// 贴图键 → 编译期嵌入的 PNG 字节（纯函数，零 ECS 访问；可单测）。
+pub fn embedded_decor_texture(key: &str) -> Option<&'static [u8]> {
+    EMBEDDED_DECOR
+        .iter()
+        .find_map(|(candidate, bytes)| (*candidate == key).then_some(*bytes))
+}
+
+/// 解码内嵌 PNG 为 Bevy `Image`；失败返回 `None`（调用方回退程序化）。
+///
+/// `is_srgb = true`：手绘稿按 sRGB 创作；`ImageSampler::Default` 走线性过滤，
+/// 缩小树冠图集时不出硬边。
+fn decode_decor_texture(bytes: &[u8]) -> Option<Image> {
+    Image::from_buffer(
+        bytes,
+        ImageType::Extension("png"),
+        CompressedImageFormats::NONE,
+        true,
+        ImageSampler::Default,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    )
+    .ok()
 }
 
 /// 保证装饰材质存在（ADR-0039：顶点色承载全部颜色 → 单一白材质，
@@ -677,6 +810,7 @@ pub fn sync_terrain_decor(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     view: Res<ViewState>,
     projection: Res<WorldProjection>,
     drill: Res<crate::state::DrillState>,
@@ -710,6 +844,12 @@ pub fn sync_terrain_decor(
 
     let material = ensure_material(&mut pools, &mut materials);
 
+    // 森林贴图（ADR-0049）：配方给图集且解码成功才走贴图路径；否则森林族继续
+    // 走下面的程序化图元（回退不空帧）。句柄跨帧缓存，不重复解码。
+    let forest_art = recipe
+        .forest_art
+        .and_then(|art| pools.texture(art.atlas, &mut images).map(|tex| (art, tex)));
+
     // 视口矩形（视图空间）+ 外扩余量。
     let half = view.window_size * view.scale * 0.5 + Vec2::splat(VIEWPORT_MARGIN_PX * view.scale);
     let rect_min = view.camera_center - half;
@@ -735,6 +875,8 @@ pub fn sync_terrain_decor(
         .map(|_| (Vec::new(), Vec::new(), Vec::new()))
         .collect();
     let mut site_counts = [0usize; 8];
+    // 森林贴图站点：世界坐标 + 图集格号（ADR-0049）。
+    let mut textured_sites: Vec<(f32, f32, u32)> = Vec::new();
 
     let mut cy = cy0;
     while cy <= cy1 {
@@ -878,6 +1020,15 @@ pub fn sync_terrain_decor(
             let wy = origin.y + (py as f32 + 0.5) * cell + jy;
             // 气候带（ADR-0039 D3）：归一化 y（0=北）。
             let fy = gy as f32 / data.height as f32;
+            // 森林走贴图（ADR-0049）：只换「长相」，落位 / 密度 / 抖动复用同一条链。
+            if kind == DecorKind::Forest {
+                if let Some((art, _)) = forest_art.as_ref() {
+                    let v = forest_variant(fy, variant, &recipe);
+                    textured_sites.push((wx, wy, forest_art_cell(v, art.cells)));
+                    cx += stride;
+                    continue;
+                }
+            }
             // 图元占位色 → 桶默认 ink（构造器 [0;4] 时回填；变体色原样透传）。
             let (ink_rgb, ink_a) = kind.ink(&recipe);
             let ink = [
@@ -912,6 +1063,33 @@ pub fn sync_terrain_decor(
         }
         cy += stride;
     }
+    // 森林贴图桶（ADR-0049）：与程序化八桶互斥——有贴图时 Forest 桶为空。
+    // 缺资产 / 解码失败 → 清掉可能残留的贴图批，森林回到程序化图元。
+    let tex_size = band.spacing_px(&recipe) * view.scale * TEXTURE_SIZE_OF_SPACING;
+    match forest_art {
+        Some((art, texture)) => {
+            let (verts, uvs, indices) = textured_quads(&textured_sites, tex_size, art.cells);
+            let material = pools.textured_material(art.atlas, texture, &mut materials);
+            let geom = DecorGeom {
+                verts,
+                colors: Vec::new(),
+                indices,
+                uvs: Some(uvs),
+                tex: Some(art.atlas),
+                size: tex_size,
+                z: DECOR_Z,
+            };
+            sync_decor_bucket(
+                &mut commands,
+                &mut meshes,
+                geom,
+                &material,
+                &mut pools.textured_forest,
+            );
+        }
+        None => pools.textured_forest.despawn(&mut commands),
+    }
+
     // 同步八桶。
     let size_q = band.spacing_px(&recipe) * view.scale * band.size_mul(&recipe);
     for (i, (verts, colors, indices)) in buckets.iter_mut().enumerate() {
@@ -919,6 +1097,8 @@ pub fn sync_terrain_decor(
             verts: core::mem::take(verts),
             colors: core::mem::take(colors),
             indices: core::mem::take(indices),
+            uvs: None,
+            tex: None,
             size: size_q,
             z: DECOR_Z + i as f32 * BUCKET_Z_STEP,
         };
@@ -935,16 +1115,22 @@ pub fn sync_terrain_decor(
 /// 桶缓冲：位置 + 顶点色 + 索引。
 type BucketBuf = (Vec<[f32; 3]>, Vec<[f32; 4]>, Vec<u32>);
 
-/// 一帧的桶几何（顶点 / 索引 + 重建判据的尺寸 / Z 分量）。
+/// 一帧的桶几何（顶点 / 索引 + 重建判据的尺寸 / Z / 贴图键）。
+///
+/// `uvs = Some(..)` 时走贴图 mesh（顶点色置空、只带 UV）；`None` = 程序化
+/// 顶点色 mesh。两条路径共用同一套桶同步逻辑，区别集中在 [`build_mesh`] /
+/// [`build_textured_mesh`] 两个构造函数。
 struct DecorGeom {
     verts: Vec<[f32; 3]>,
     colors: Vec<[f32; 4]>,
     indices: Vec<u32>,
+    uvs: Option<Vec<[f32; 2]>>,
+    tex: Option<&'static str>,
     size: f32,
     z: f32,
 }
 
-/// 单桶合批同步：指纹 / 尺寸 / Z 变化才原地改写顶点。
+/// 单桶合批同步：指纹 / 尺寸 / Z / 贴图键变化才原地改写顶点。
 fn sync_decor_bucket(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -956,6 +1142,8 @@ fn sync_decor_bucket(
         verts,
         colors,
         indices,
+        uvs,
+        tex,
         size,
         z,
     } = geom;
@@ -964,13 +1152,32 @@ fn sync_decor_bucket(
         fingerprint,
         size,
         z,
+        tex,
     };
+    let mesh = match uvs {
+        Some(uvs) if !verts.is_empty() => Some(build_textured_mesh(verts, uvs, indices)),
+        Some(_) => None,
+        None if !verts.is_empty() => Some(build_mesh(verts, colors, indices)),
+        None => None,
+    };
+    sync_batch(commands, meshes, mesh, material, key, pool);
+}
+
+/// 桶批本的增 / 改 / 删（mesh 为 `None` 即「本帧无符号」→ 拆除）。
+fn sync_batch(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    mesh: Option<Mesh>,
+    material: &Handle<ColorMaterial>,
+    key: DecorBatchKey,
+    pool: &mut DecorBatchPool,
+) {
     match pool.batch.take() {
         None => {
-            if verts.is_empty() {
+            let Some(mesh) = mesh else {
                 return;
-            }
-            let mesh = meshes.add(build_mesh(verts, colors, indices));
+            };
+            let mesh = meshes.add(mesh);
             let entity = commands
                 .spawn((
                     Mesh2d(mesh.clone()),
@@ -981,16 +1188,16 @@ fn sync_decor_bucket(
             pool.batch = Some(DecorBatch { entity, mesh, key });
         }
         Some(mut batch) => {
-            if verts.is_empty() {
+            let Some(mesh) = mesh else {
                 commands.entity(batch.entity).despawn();
                 commands.queue(move |world: &mut World| {
                     world.resource_mut::<Assets<Mesh>>().remove(&batch.mesh);
                 });
                 return;
-            }
+            };
             if batch.key != key {
                 if let Some(mut m) = meshes.get_mut(&batch.mesh) {
-                    *m = build_mesh(verts, colors, indices);
+                    *m = mesh;
                 }
                 if batch.key.z != key.z {
                     commands
@@ -1029,6 +1236,55 @@ fn build_mesh(verts: Vec<[f32; 3]>, colors: Vec<[f32; 4]>, indices: Vec<u32>) ->
         verts,
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
+}
+
+/// 森林贴图站点 → 每站一个轴对齐 quad 的顶点 / UV / 索引（ADR-0049）。
+///
+/// **锚点 = 底边中心**：树根坐落在采样点上（`y .. y + size`），而不是居中——
+/// 居中会让树干穿过地面点、树冠下方留出一截空白。
+///
+/// **UV 口径**与 `feature_overlays::build_symbol_mesh_uv_seeded` 一致：
+/// v=0 是图集顶行（树冠），v=1 是树根；世界 +Y 朝屏幕上方，故 +Y 顶点绑 v=0。
+pub fn textured_quads(
+    sites: &[(f32, f32, u32)],
+    size: f32,
+    cells: u8,
+) -> (Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<u32>) {
+    let half = size * 0.5;
+    let cells = cells.max(1) as f32;
+    let mut verts = Vec::with_capacity(sites.len() * 4);
+    let mut uvs = Vec::with_capacity(sites.len() * 4);
+    let mut indices = Vec::with_capacity(sites.len() * 6);
+    for &(x, y, cell) in sites {
+        let u0 = cell as f32 / cells;
+        let u1 = (cell as f32 + 1.0) / cells;
+        let base = verts.len() as u32;
+        verts.push([x - half, y, 0.0]);
+        verts.push([x + half, y, 0.0]);
+        verts.push([x + half, y + size, 0.0]);
+        verts.push([x - half, y + size, 0.0]);
+        uvs.push([u0, 1.0]);
+        uvs.push([u1, 1.0]);
+        uvs.push([u1, 0.0]);
+        uvs.push([u0, 0.0]);
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    (verts, uvs, indices)
+}
+
+/// 带 UV 的桶 mesh（贴图路径）。不写顶点色：颜色由纹理决定，材质 `color` 为白。
+fn build_textured_mesh(verts: Vec<[f32; 3]>, uvs: Vec<[f32; 2]>, indices: Vec<u32>) -> Mesh {
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+    );
+    mesh.insert_attribute(
+        MeshVertexAttribute::new("Vertex_Position", 0, VertexFormat::Float32x3),
+        verts,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
     mesh.insert_indices(Indices::U32(indices));
     mesh
 }
@@ -1367,6 +1623,8 @@ mod tests {
         app.init_resource::<TerrainDecorPools>();
         app.init_resource::<Assets<Mesh>>();
         app.init_resource::<Assets<ColorMaterial>>();
+        // 森林贴图（ADR-0049）：系统会解码内嵌图集，测试必须提供 Image 资产库。
+        app.init_resource::<Assets<Image>>();
         // 覆盖物规则索引（ADR-0045 D9）：sync_terrain_decor 的必选依赖，
         // 测试装配漏初始化会让系统参数校验 panic（b43b24e 接线后的缺口）。
         app.init_resource::<crate::region_overlay::RegionOverlayIndex>();
@@ -1402,5 +1660,89 @@ mod tests {
         schedule.run(&mut app);
         let off = app.resource::<Assets<Mesh>>().iter().count();
         assert_eq!(off, 0, "pass 关闭后装饰应全部清除，got {off}");
+    }
+
+    /// 变体判定：气候带切点来自配方，region 覆盖物的显式声明优先。
+    #[test]
+    fn forest_variant_follows_climate_cuts_and_region_override() {
+        let r = recipe();
+        assert_eq!(
+            forest_variant(0.0, None, &r),
+            DecorVariant::Conifer,
+            "最北 = 针叶"
+        );
+        assert_eq!(
+            forest_variant(0.5, None, &r),
+            DecorVariant::Broadleaf,
+            "温带 = 阔叶"
+        );
+        assert_eq!(
+            forest_variant(0.95, None, &r),
+            DecorVariant::Sparse,
+            "最南 = 稀树"
+        );
+        assert_eq!(
+            forest_variant(0.95, Some(DecorVariant::Conifer), &r),
+            DecorVariant::Conifer,
+            "region 声明优先于气候带"
+        );
+        assert_eq!(
+            forest_variant(0.0, Some(DecorVariant::Boulder), &r),
+            DecorVariant::Conifer,
+            "boulder 不是森林变体，落回气候带派生"
+        );
+    }
+
+    /// 图集格序契约：针叶 0 / 阔叶 1 / 稀树 2；格数不足时钳到最后一格。
+    #[test]
+    fn forest_art_cell_maps_variants_to_atlas_order() {
+        assert_eq!(forest_art_cell(DecorVariant::Conifer, 3), 0);
+        assert_eq!(forest_art_cell(DecorVariant::Broadleaf, 3), 1);
+        assert_eq!(forest_art_cell(DecorVariant::Sparse, 3), 2);
+        assert_eq!(forest_art_cell(DecorVariant::Sparse, 2), 1, "钳到最后一格");
+        assert_eq!(forest_art_cell(DecorVariant::Conifer, 0), 0, "零格不 panic");
+    }
+
+    /// 贴图 quad：每站点 4 顶点 / 6 索引，UV 落各自格，底边锚定在采样点。
+    #[test]
+    fn textured_quads_put_one_quad_per_site_with_cell_uv() {
+        let sites = [(0.0_f32, 0.0_f32, 0u32), (10.0, 20.0, 1), (0.0, 0.0, 2)];
+        let (verts, uvs, indices) = textured_quads(&sites, 10.0, 3);
+        assert_eq!(verts.len(), 12, "3 站点 × 4 顶点");
+        assert_eq!(uvs.len(), 12);
+        assert_eq!(indices.len(), 18, "3 站点 × 6 索引");
+
+        // 第一站点：底边在 y=0，顶边在 y=size（底边锚定）。
+        assert_eq!((verts[0][0], verts[0][1]), (-5.0, 0.0));
+        assert_eq!(verts[2][1], 10.0, "顶边 = 采样点 + size");
+        // v=0 绑顶边（树冠），v=1 绑底边（树根）。
+        assert_eq!((uvs[0][1], uvs[2][1]), (1.0, 0.0));
+
+        // 格号 → u 区间：0 → [0, 1/3]，1 → [1/3, 2/3]，2 → [2/3, 1]。
+        for (site, (u0, u1)) in [
+            (0usize, (0.0_f32, 1.0 / 3.0)),
+            (1, (1.0 / 3.0, 2.0 / 3.0)),
+            (2, (2.0 / 3.0, 1.0)),
+        ] {
+            assert!(
+                (uvs[site * 4][0] - u0).abs() < 1e-6 && (uvs[site * 4 + 1][0] - u1).abs() < 1e-6,
+                "站点 {site} 的 u 区间应为 {u0}..{u1}，got {}..{}",
+                uvs[site * 4][0],
+                uvs[site * 4 + 1][0]
+            );
+        }
+    }
+
+    /// 内嵌表登记日 / 暮两套图集；未知键返回 `None`（调用方回退程序化）。
+    #[test]
+    fn embedded_decor_textures_cover_both_palettes_and_reject_unknown_keys() {
+        for key in [
+            "overlays/forest/decor_atlas_day.png",
+            "overlays/forest/decor_atlas_dusk.png",
+        ] {
+            let bytes = embedded_decor_texture(key).unwrap_or_else(|| panic!("{key} 应内嵌"));
+            assert!(bytes.len() > 1024, "{key} 应是真实 PNG");
+        }
+        assert!(embedded_decor_texture("overlays/forest/does_not_exist.png").is_none());
     }
 }
