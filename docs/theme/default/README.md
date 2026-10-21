@@ -66,3 +66,7 @@
 - 渲染：Bevy `Sprite` + 独立 `Anchor` 组件（`BOTTOM_CENTER`），`custom_size` = `26px 基高 × 0.04 × view.scale`（与 mesh 兜底同尺寸语义）；
 - PNG 未加载（冷启动头几帧 / 资产缺失）→ 自动回退顶点色 mesh（`landmark_symbols.rs` 的程序化城堡 / 小屋），双路径共存；
 - 新符号接入：扩 `LandmarkKind` + `LANDMARK_KINDS` + `sync_landmarks` 的 match + 落盘 PNG，四处小改。
+
+## 五、相关文档
+
+- **地表覆盖物（森林树图集）**：见 [`overlays.md`](overlays.md)——提示词、处理管线、格序契约与验收口径（ADR-0049）。
