@@ -214,8 +214,7 @@ mod tests {
             ViewMode::Schematic,
             Some(&atlas),
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         let mut mixed = 0usize;
@@ -245,8 +244,7 @@ mod tests {
             ViewMode::Schematic,
             Some(&atlas),
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         let b = image_from_terrain(
@@ -254,8 +252,7 @@ mod tests {
             ViewMode::Schematic,
             Some(&atlas),
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         assert_eq!(a.data, b.data);
@@ -290,8 +287,7 @@ mod tests {
             ViewMode::Schematic,
             Some(&atlas),
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         assert_eq!(img.width(), 4 * 64); // 4 格 → res 上限 64
@@ -300,8 +296,7 @@ mod tests {
             ViewMode::Schematic,
             None,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         assert_eq!(img_flat.width(), 4);
@@ -311,8 +306,7 @@ mod tests {
             ViewMode::Event,
             Some(&atlas),
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         assert_eq!(img_event.width(), 4);
@@ -333,8 +327,7 @@ mod tests {
             ViewMode::Schematic,
             None,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         // 用 0 标记所有像素。
@@ -344,9 +337,22 @@ mod tests {
         // 关掉近岸浅滩带（S2）：本测试钉「patch 只动矩形内」的机械语义，
         // 4×4 小图上距离场支撑半径（12 格）会把整图圈进膨胀区，与哨兵
         // 断言冲突——装饰语义不该稀释机械契约（同 d43f618 关 bleed 的口径）。
-        let treatment = crate::theme::theme_pack::TreatmentFlags {
-            shore_shallow: false,
-            ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+        // 关全部「位置相关」的水面细节：浅滩带 + 离岸墨线都会让 patch 的
+        // 脏区按距离场支撑半径膨胀（棚格测试要的是「只动矩形内」的机械语义）。
+        // 纸纹颗粒不在此列——它是坐标的纯函数，不影响脏区。
+        let pack = &crate::theme::theme_pack::ThemePack {
+            treatment: crate::theme::theme_pack::TreatmentFlags {
+                shore_shallow: false,
+                ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+            },
+            sea: crate::theme::sea::SeaRecipe {
+                shore_band_cells: 0.0,
+                shore_peak: 0.0,
+                ripples: &[],
+                ripple_warp_cells: 0.0,
+                ..crate::theme::sea::WATERCOLOR
+            },
+            ..*crate::theme::theme_pack::builtin::for_palette(Default::default())
         };
         // patch 矩形 (1,1)-(3,3) = 2×2 = 4 像素。
         patch_terrain_image(
@@ -357,8 +363,7 @@ mod tests {
             [1, 1, 3, 3],
             1,
             false,
-            crate::theme::palette::colors(Default::default()),
-            treatment,
+            pack,
         );
         // 矩形外的像素仍是 0。
         // 索引 (0,0) → 像素 0..4。
@@ -383,8 +388,7 @@ mod tests {
             ViewMode::Schematic,
             None,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         // 把整图刷成 0xFF 哨兵值。
@@ -393,9 +397,22 @@ mod tests {
         }
         // 关 shore_shallow：同 `patch_terrain_image_runs_on_small_input`——
         // 机械哨兵测试不掺 S2 距离场膨胀。
-        let treatment = crate::theme::theme_pack::TreatmentFlags {
-            shore_shallow: false,
-            ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+        // 关全部「位置相关」的水面细节：浅滩带 + 离岸墨线都会让 patch 的
+        // 脏区按距离场支撑半径膨胀（棚格测试要的是「只动矩形内」的机械语义）。
+        // 纸纹颗粒不在此列——它是坐标的纯函数，不影响脏区。
+        let pack = &crate::theme::theme_pack::ThemePack {
+            treatment: crate::theme::theme_pack::TreatmentFlags {
+                shore_shallow: false,
+                ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+            },
+            sea: crate::theme::sea::SeaRecipe {
+                shore_band_cells: 0.0,
+                shore_peak: 0.0,
+                ripples: &[],
+                ripple_warp_cells: 0.0,
+                ..crate::theme::sea::WATERCOLOR
+            },
+            ..*crate::theme::theme_pack::builtin::for_palette(Default::default())
         };
         // patch 矩形 (1,1)-(2,2) = 1 像素。
         patch_terrain_image(
@@ -406,8 +423,7 @@ mod tests {
             [1, 1, 2, 2],
             1,
             false,
-            crate::theme::palette::colors(Default::default()),
-            treatment,
+            pack,
         );
         // (0,0) 像素仍是 0xFF。
         assert_eq!(img.data.as_ref().expect("地形图必须有像素数据")[0], 0xFF);
@@ -447,8 +463,7 @@ mod tests {
             ViewMode::Coastline,
             None,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         let Color::Srgba(water) = colors::COAST_WATER else {
@@ -496,8 +511,7 @@ mod tests {
             ViewMode::Coastline,
             None,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         let b = image_from_terrain(
@@ -505,8 +519,7 @@ mod tests {
             ViewMode::Coastline,
             None,
             true,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         assert_eq!(a.data, b.data, "轮廓图应忽略 soften 开关");
@@ -522,8 +535,7 @@ mod tests {
             ViewMode::GoogleMap,
             None,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         )
         .width()
@@ -548,8 +560,7 @@ mod tests {
             ViewMode::GoogleMap,
             None,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         let res = image.width() / data.width;
@@ -563,8 +574,7 @@ mod tests {
             [1, 1, 2, 2],
             res,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
         );
         assert!(image.width() > data.width, "patch 不应缩小纹理分辨率");
     }
@@ -577,8 +587,7 @@ mod tests {
             ViewMode::GoogleMap,
             None,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         assert!(
@@ -598,8 +607,7 @@ mod tests {
             ViewMode::GoogleMap,
             None,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         let b = image_from_terrain(
@@ -607,8 +615,7 @@ mod tests {
             ViewMode::GoogleMap,
             None,
             true,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         assert_eq!(a.data, b.data, "Google 模式应忽略 soften 开关");
@@ -629,8 +636,7 @@ mod tests {
             ViewMode::GoogleMap,
             None,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         let Color::Srgba(land) = colors_google::GOOGLE_CORE_TERRAIN[2] else {
@@ -673,8 +679,7 @@ mod tests {
             ViewMode::GoogleMap,
             None,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         let res = img.width() / data.width;
@@ -702,8 +707,7 @@ mod tests {
             ViewMode::Schematic,
             None,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         let soft = image_from_terrain(
@@ -711,8 +715,7 @@ mod tests {
             ViewMode::Schematic,
             None,
             true,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         let Color::Srgba(t) = colors::SOFTEN_TOWARD else {
@@ -757,8 +760,7 @@ mod tests {
             ViewMode::Coastline,
             None,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         let mut patched = image_from_terrain(
@@ -766,8 +768,7 @@ mod tests {
             ViewMode::Coastline,
             None,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         patch_terrain_image(
@@ -778,8 +779,7 @@ mod tests {
             [2, 2, 6, 6],
             1,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
         );
         assert_eq!(full.data, patched.data, "轮廓图 patch 与全图应逐字节一致");
     }
@@ -968,8 +968,7 @@ mod tests {
             ViewMode::GoogleMap,
             None,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         let mut images = Assets::<Image>::default();
@@ -1108,8 +1107,7 @@ mod tests {
             ViewMode::GoogleMap,
             None,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         let tex = new_terrain_texture(
@@ -1177,8 +1175,7 @@ mod tests {
             ViewMode::GoogleMap,
             None,
             false,
-            crate::theme::palette::colors(Default::default()),
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
+            crate::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         let tex = new_terrain_texture(

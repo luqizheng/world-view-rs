@@ -104,8 +104,7 @@ fn main() {
         ViewMode::GoogleMap,
         None,
         true,
-        wv_render::theme::palette::colors(Default::default()),
-        wv_render::theme::theme_pack::builtin::for_palette(Default::default()).treatment,
+        wv_render::theme::theme_pack::builtin::for_palette(Default::default()),
         0.0,
     );
     let out = root.join("target/map_preview/seattle_google.png");
@@ -124,8 +123,7 @@ fn main() {
         ViewMode::RealTerrain,
         None,
         true,
-        wv_render::theme::palette::colors(Default::default()),
-        wv_render::theme::theme_pack::builtin::for_palette(Default::default()).treatment,
+        wv_render::theme::theme_pack::builtin::for_palette(Default::default()),
         0.0,
     );
     let out_rt = root.join("target/map_preview/seattle_real.png");

@@ -45,21 +45,13 @@ fn main() {
     print_depth_stats(&data);
 
     let pal = colors(MapPalette::Daylight);
-    let treatment = builtin::for_palette(MapPalette::Daylight).treatment;
+    let pack = builtin::for_palette(MapPalette::Daylight);
     let shallow = pal.core_terrain(1);
     let deep = pal.core_terrain(0);
     println!("\n色板锚点: water_shallow {shallow:?}  water_deep {deep:?}");
 
     for soften in [true, false] {
-        let img = image_from_terrain(
-            &data,
-            ViewMode::VectorFlat,
-            None,
-            soften,
-            pal,
-            treatment,
-            0.0,
-        );
+        let img = image_from_terrain(&data, ViewMode::VectorFlat, None, soften, pack, 0.0);
         let (w, h) = (img.width() as usize, img.height() as usize);
         let px = img.data.as_ref().expect("地形图必须有像素数据");
         let name = if soften {

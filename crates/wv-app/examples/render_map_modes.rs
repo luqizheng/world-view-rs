@@ -42,8 +42,7 @@ fn main() {
             mode,
             None,
             true,
-            wv_render::theme::palette::colors(Default::default()),
-            wv_render::theme::theme_pack::builtin::for_palette(Default::default()).treatment,
+            wv_render::theme::theme_pack::builtin::for_palette(Default::default()),
             0.0,
         );
         // atlas=None 时多数模式 res=1（每格 1 像素）；GoogleMap / VectorFlat

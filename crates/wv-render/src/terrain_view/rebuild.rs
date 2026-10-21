@@ -166,16 +166,13 @@ pub fn rebuild_texture_on_mode_change(
     let task_ctx = ctx.clone();
     let task = bevy::tasks::AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default)
         .spawn(async move {
-            let colors = crate::theme::palette::colors(task_ctx.palette);
-            let treatment =
-                crate::theme::theme_pack::builtin::for_palette(task_ctx.palette).treatment;
+            let pack = crate::theme::theme_pack::builtin::for_palette(task_ctx.palette);
             let (pixels, res) = terrain_pixels(
                 &data_clone,
                 task_ctx.mode,
                 atlas_clone.as_ref(),
                 task_ctx.soften,
-                colors,
-                treatment,
+                pack,
             );
             SynthResult {
                 pixels,

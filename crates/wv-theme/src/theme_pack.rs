@@ -27,6 +27,7 @@ use bevy::prelude::*;
 
 use super::overlays::{FeatureOverlaySet, FeatureRule, RegionOverlayRule, RegionOverlaySet};
 use super::palette::{MapPalette, PaletteColors};
+use super::sea::{SeaRecipe, WATERCOLOR, WATERCOLOR_DUSK};
 
 /// 主题包：色板 + 装饰 + 贴图 + 覆盖物规则的原子组合（ADR-0023 D1）。
 ///
@@ -52,6 +53,10 @@ pub struct ThemePack {
     /// 是 `env!("CARGO_MANIFEST_DIR")/assets`，外部主题 crate 的贴图进不来——这是
     /// D2 待解决的差距。M2 接入 `wv-theme-xxx` 时这里改为 `Some(TileAtlasSpec)` 即可。
     pub atlas: Option<TileAtlasSpec>,
+    /// 海的画法配方（ADR-0048）：深度量程 / 曲线、近岸浅滩带、水面纸纹、
+    /// 离岸墨线波纹、墨色。**数值配方住主题层**（与 [`Self::overlays`] 同构）——
+    /// 渲染层只做执行器，换风格不改渲染源码（ADR-0043）。
+    pub sea: SeaRecipe,
     /// 覆盖物演绎规则：feature 词汇 → 远 / 近带规则（晕、符号集、密度、采样参数）。
     ///
     /// v1 为代码常量（内置两包各一套、外部主题 crate 自带一本），YAML 化随
@@ -236,6 +241,7 @@ pub mod builtin {
         palette: PaletteColors::DAYLIGHT,
         treatment: TreatmentFlags::HAND_DRAWN,
         atlas: None,
+        sea: WATERCOLOR,
         // 设计与取值依据：`docs/superpowers/specs/2026-10-17-theme-overlay-geo-fact-design.md`
         // §6.4（D10：两内置包各一套，差异做在晕色 / 浓度 / 符号密度）。
         // 日间：偏灰橄榄绿晕 + 深墨绿树冠。
@@ -318,6 +324,7 @@ pub mod builtin {
         palette: PaletteColors::DUSK,
         treatment: TreatmentFlags::HAND_DRAWN,
         atlas: None,
+        sea: WATERCOLOR_DUSK,
         // 暮色：压暗的橄榄绿晕 + 更深的树冠，晕更淡（0.20）、符号略小
         //（24 px，仍落在 spec §6.6 的 24–40 px）、采样比日间更密（32wu）
         // ——与 DEFAULT 在 halo_color / halo_alpha / symbol_size / spacing
