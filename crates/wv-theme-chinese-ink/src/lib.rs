@@ -20,6 +20,7 @@
 //! - **不**做 i18n：主题名走 i18n 是 M3 议题（M2 用 `display_name: &'static str` 单语）；
 //! - **不**改 `wv-render` 任何源码——验证"加风格零改核心"。
 
+use wv_theme::decor::{DecorInk, DecorRecipe, VariantInk as DecorVariantInk};
 use wv_theme::overlays::{FeatureOverlaySet, FeatureRule, RegionOverlayRule, RegionOverlaySet};
 use wv_theme::palette::PaletteColors;
 use wv_theme::registry::ThemePackRegistry;
@@ -44,6 +45,31 @@ pub static PACK: ThemePack = ThemePack {
     // 海的画法配方（ADR-0048）：水墨包的海不画浅滩色带、不画纸纹颗粒——
     // 留白是水墨的语法；离岸墨线波纹仍保留但更疏更淡（皴法的水岸线）。
     // TODO(美术校准): 参数为占位值，待水墨白名单就绪后替换。
+    // 装饰配方（ADR-0048 追记二）：水墨的装饰比水彩**更疏更沉**——
+    // 留白是水墨的语法，密匝匝的符号会把纸面填满。高度阈值与气候带同源
+    // （地形事实），差异做在墨色（更灰）与密度（步距更宽、符号更小）。
+    decor: DecorRecipe {
+        spacing_px_edit: 40.0,
+        spacing_px_region: 64.0,
+        spacing_px_nation: 96.0,
+        size_mul_edit: 0.8,
+        size_mul_region: 0.65,
+        size_mul_nation: 1.2,
+        conifer_ink: DecorVariantInk::new(0.16, 0.24, 0.18, 0.80),
+        temperate_ink: DecorVariantInk::new(0.18, 0.22, 0.17, 0.78),
+        oasis_ink: DecorVariantInk::new(0.22, 0.28, 0.18, 0.70),
+        rock_ink: DecorVariantInk::new(0.40, 0.39, 0.35, 0.85),
+        mountain_shade_ink: DecorVariantInk::new(0.20, 0.19, 0.17, 0.70),
+        forest_ink: DecorInk::new([0x2A, 0x33, 0x28], 0.75),
+        plains_ink: DecorInk::new([0x4A, 0x52, 0x40], 0.45),
+        hills_ink: DecorInk::new([0x55, 0x50, 0x3E], 0.50),
+        mountain_ink: DecorInk::new([0x33, 0x32, 0x2E], 0.60),
+        snow_ink: DecorInk::new([0xE8, 0xEA, 0xE4], 0.80),
+        marsh_ink: DecorInk::new([0x35, 0x44, 0x39], 0.55),
+        desert_ink: DecorInk::new([0x6B, 0x5E, 0x46], 0.45),
+        wave_ink: DecorInk::new([0xD8, 0xDC, 0xD6], 0.35),
+        ..wv_theme::decor::WATERCOLOR
+    },
     sea: SeaRecipe {
         depth_scale_m: 2000.0,
         depth_exponent: 1.0,
@@ -64,6 +90,17 @@ pub static PACK: ThemePack = ThemePack {
             },
         ],
         ink: [0x3A, 0x38, 0x34],
+        // 水墨的浪花是「皴」不是「白浪」：一道贴岸的淡墨痕，强度远低于
+        // 水彩的白泡沫，且不破碎——水墨的岸线是连续的皴笔。
+        foam: &[RippleSpec {
+            dist_cells: 1.2,
+            sigma_cells: 0.75,
+            alpha: 0.16,
+        }],
+        foam_ink: [0x6A, 0x68, 0x62],
+        foam_break: 0.0,
+        foam_warp_cells: 1.4,
+        foam_break_freq: 0.0,
     },
     // TODO(美术校准): 墨绿晕 / 符号色与「更疏」的采样间距均为占位值，
     // 待美术侧给出水墨白名单后替换——v1 水墨包不可选，不参与验收（D13）。

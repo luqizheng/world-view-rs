@@ -25,6 +25,9 @@
 
 use bevy::prelude::*;
 
+use super::decor::{
+    DecorRecipe, WATERCOLOR as DECOR_WATERCOLOR, WATERCOLOR_DUSK as DECOR_WATERCOLOR_DUSK,
+};
 use super::overlays::{FeatureOverlaySet, FeatureRule, RegionOverlayRule, RegionOverlaySet};
 use super::palette::{MapPalette, PaletteColors};
 use super::sea::{SeaRecipe, WATERCOLOR, WATERCOLOR_DUSK};
@@ -53,6 +56,11 @@ pub struct ThemePack {
     /// 是 `env!("CARGO_MANIFEST_DIR")/assets`，外部主题 crate 的贴图进不来——这是
     /// D2 待解决的差距。M2 接入 `wv-theme-xxx` 时这里改为 `Some(TileAtlasSpec)` 即可。
     pub atlas: Option<TileAtlasSpec>,
+    /// 地形装饰的画法配方（ADR-0048 追记二）：高度阈值、气候带切点、变体与
+    /// 族墨色、LOD 步距与尺寸、浅海白波带。**数值配方住主题层**（与
+    /// [`Self::sea`] 同构）——ADR-0039 D1 挂账的「迁 ThemePack」在此补上，
+    /// 换风格不再需要改渲染层源码（ADR-0043）。
+    pub decor: DecorRecipe,
     /// 海的画法配方（ADR-0048）：深度量程 / 曲线、近岸浅滩带、水面纸纹、
     /// 离岸墨线波纹、墨色。**数值配方住主题层**（与 [`Self::overlays`] 同构）——
     /// 渲染层只做执行器，换风格不改渲染源码（ADR-0043）。
@@ -242,6 +250,7 @@ pub mod builtin {
         treatment: TreatmentFlags::HAND_DRAWN,
         atlas: None,
         sea: WATERCOLOR,
+        decor: DECOR_WATERCOLOR,
         // 设计与取值依据：`docs/superpowers/specs/2026-10-17-theme-overlay-geo-fact-design.md`
         // §6.4（D10：两内置包各一套，差异做在晕色 / 浓度 / 符号密度）。
         // 日间：偏灰橄榄绿晕 + 深墨绿树冠。
@@ -325,6 +334,7 @@ pub mod builtin {
         treatment: TreatmentFlags::HAND_DRAWN,
         atlas: None,
         sea: WATERCOLOR_DUSK,
+        decor: DECOR_WATERCOLOR_DUSK,
         // 暮色：压暗的橄榄绿晕 + 更深的树冠，晕更淡（0.20）、符号略小
         //（24 px，仍落在 spec §6.6 的 24–40 px）、采样比日间更密（32wu）
         // ——与 DEFAULT 在 halo_color / halo_alpha / symbol_size / spacing

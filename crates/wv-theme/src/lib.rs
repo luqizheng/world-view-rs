@@ -13,6 +13,9 @@
 //! - [`theme_pack`] —— 主题包契约：`ThemePack` / `TreatmentFlags` /
 //!   `TileAtlasSpec`；
 //! - [`registry`] —— 主题注册表：`ThemePackRegistry` / `MergedThemeRegistry`；
+//! - [`decor`] —— 地形装饰的画法配方 `DecorRecipe`（高度阈值 / 气候带 /
+//!   墨色 / LOD 步距，ADR-0048 追记二）：ADR-0039 D1 挂账的「随 ADR-0023 M3
+//!   迁 ThemePack」在本次补上——**数值配方住主题层，执行器在渲染层**；
 //! - [`sea`] —— 海的画法配方 `SeaRecipe`（深度量程 / 浅滩带 / 纸纹 / 墨线波纹，
 //!   ADR-0048）：与 [`overlays`] 同构——数值配方住主题层，执行器在渲染层；
 //! - [`topographic`] —— Topographic 视图模式的调色数据。
@@ -42,6 +45,7 @@
 pub mod colors;
 pub mod colors_dusk;
 pub mod colors_google;
+pub mod decor;
 pub mod overlays;
 pub mod palette;
 pub mod registry;

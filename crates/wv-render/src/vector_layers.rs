@@ -1955,7 +1955,7 @@ mod tests {
             .mesh
             .clone();
 
-        let next = vec![(Vec2::ZERO, Vec2::new(50.0, 60.0))];
+        let next = [(Vec2::ZERO, Vec2::new(50.0, 60.0))];
         *world.resource_mut::<ProjectionFrame>() =
             projection_frame_with_roads(vec![(3u8, next[0].0, next[0].1)], Vec::new());
         schedule.run(&mut world);

@@ -72,6 +72,27 @@ pub struct SeaRecipe {
     pub ripples: &'static [RippleSpec],
     /// 波纹墨色（sRGB 字节）。不随色板走——墨是纸上的固定媒介色。
     pub ink: [u8; 3],
+    /// 近岸白色泡沫带（浪花）：贴岸的破碎白带。
+    ///
+    /// 与 [`Self::ripples`] 同一套机制（离岸距离的高斯带），但**色不同**、
+    /// **位不同**：泡沫贴岸（离岸 1~3 格）、墨线在外圈（4/9/15 格）——
+    /// 三层叠起来才是手绘海图的水岸层次：岸线墨 → 白浪花 → 离岸波纹。
+    /// 空 = 不画。
+    pub foam: &'static [RippleSpec],
+    /// 泡沫色（sRGB 字节）：近白偏冷（浪花反光），与海色区分。
+    pub foam_ink: [u8; 3],
+    /// 泡沫破碎度（0..=1）：噪声对泡沫强度的调制幅度。
+    /// 0 = 连续的整条白带（机械）；1 = 强烈断续（真实的碎浪）。
+    pub foam_break: f32,
+    /// 泡沫带的边缘参差幅度（格）：噪声对**位置**的扰动。
+    /// 与 [`Self::ripple_warp_cells`] 同理，但独立取值——泡沫的参差
+    /// 应比墨线更强（碎浪的不规则）。
+    pub foam_warp_cells: f32,
+    /// 泡沫破碎噪声的频率（每格）：碎块的细密程度。
+    ///
+    /// 1.0 上下 = 每格约一个碎块；数值越大碎块越细碎（高频）。
+    /// 0 = 不破碎（连续白带）。
+    pub foam_break_freq: f32,
 }
 
 impl SeaRecipe {
@@ -151,6 +172,23 @@ pub const WATERCOLOR: SeaRecipe = SeaRecipe {
         },
     ],
     ink: [0x5A, 0x4E, 0x42],
+    // 近岸碎浪：两道贴岸白带（离岸 1 / 2.6 格），破碎度 0.55、边缘参差 1.0 格。
+    foam: &[
+        RippleSpec {
+            dist_cells: 1.0,
+            sigma_cells: 0.45,
+            alpha: 0.60,
+        },
+        RippleSpec {
+            dist_cells: 2.6,
+            sigma_cells: 0.50,
+            alpha: 0.26,
+        },
+    ],
+    foam_ink: [0xF2, 0xF6, 0xF2],
+    foam_break: 0.78,
+    foam_warp_cells: 1.4,
+    foam_break_freq: 1.15,
 };
 
 /// 水彩配方（暮色）——暗纸上的浅滩与墨线都要更含蓄。
@@ -174,6 +212,16 @@ pub const WATERCOLOR_DUSK: SeaRecipe = SeaRecipe {
         },
     ],
     ink: [0xAC, 0x9E, 0x88],
+    // 暮色：泡沫更弱更暗（暗纸上白浪刺眼），且只留贴岸一道。
+    foam: &[RippleSpec {
+        dist_cells: 1.1,
+        sigma_cells: 0.60,
+        alpha: 0.30,
+    }],
+    foam_ink: [0xC8, 0xD0, 0xC8],
+    foam_break: 0.45,
+    foam_warp_cells: 1.1,
+    foam_break_freq: 0.8,
 };
 
 #[cfg(test)]

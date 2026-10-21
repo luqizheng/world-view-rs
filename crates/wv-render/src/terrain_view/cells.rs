@@ -722,7 +722,7 @@ impl<'a> CellRenderer<'a> {
     /// - `gx` / `gy`：连续格坐标（距离插值用，亚格精度才有平滑墨线）。
     fn water_detail(&self, c: [f32; 3], px: f32, py: f32, gx: f32, gy: f32) -> [f32; 3] {
         let sea = &self.sea;
-        if sea.water_grain <= 0.0 && sea.ripples.is_empty() {
+        if sea.water_grain <= 0.0 && sea.ripples.is_empty() && sea.foam.is_empty() {
             return c;
         }
         let mut out = c;
@@ -754,6 +754,40 @@ impl<'a> CellRenderer<'a> {
                     for (i, ch) in out.iter_mut().enumerate() {
                         let ink = sea.ink[i] as f32 / 255.0;
                         *ch += (ink - *ch) * ink_a;
+                    }
+                }
+            }
+        }
+        // ③ 近岸白色泡沫（浪花）：贴岸的破碎白带（S3）。
+        // 与墨线同一套距离场机制，但**色白、位更靠岸**——三层叠起来才是
+        // 手绘海图的水岸层次：岸线墨 → 白浪花 → 离岸波纹墨。
+        if !sea.foam.is_empty() {
+            if let Some(field) = self.shore {
+                let mut d = wv_terrain::shore::sample_bilinear(field, self.w, self.h, gx, gy);
+                if sea.foam_warp_cells > 0.0 {
+                    // 边缘参差：泡沫带的边界本就比墨线更不规则。
+                    let w = value_noise(gx * 0.14, gy * 0.14, 0x5EA6_A103) - 0.5;
+                    d += w * 2.0 * sea.foam_warp_cells;
+                }
+                let mut foam_a = 0.0f32;
+                for fp in sea.foam {
+                    let sigma = fp.sigma_cells.max(1e-3);
+                    let u = (d - fp.dist_cells) / sigma;
+                    foam_a = foam_a.max((-u * u).exp() * fp.alpha);
+                }
+                if foam_a > 0.0 {
+                    // 破碎：高频噪声调制强度——碎浪是断续的，不是连续白带。
+                    if sea.foam_break > 0.0 {
+                        let freq = sea.foam_break_freq.max(0.01);
+                        let n = value_noise(gx * freq, gy * freq, 0x5EA6_A104);
+                        let k = 1.0 - sea.foam_break + sea.foam_break * (n * 1.6).min(1.0);
+                        foam_a *= k;
+                    }
+                    if foam_a > 0.0 {
+                        for (i, ch) in out.iter_mut().enumerate() {
+                            let foam = sea.foam_ink[i] as f32 / 255.0;
+                            *ch += (foam - *ch) * foam_a;
+                        }
                     }
                 }
             }
@@ -1958,9 +1992,7 @@ mod tests {
             let mut cells = Vec::new();
             for y in 0..3u32 {
                 for x in 0..24u32 {
-                    if x == 23 {
-                        cells.push(cell(50, 1, 3));
-                    } else if island && (x, y) == (2, 1) {
+                    if x == 23 || (island && (x, y) == (2, 1)) {
                         cells.push(cell(50, 1, 3));
                     } else {
                         cells.push(cell(-40, 0, 0));
@@ -2119,10 +2151,22 @@ mod tests {
         // 关掉水彩晕开（ADR-0044 D1）：本测试钉的是「填充边随高度」的平涂
         // 语义；晕开是邻域混合装饰（2×1 图上整幅都在边界带内，会把左右两半
         // 混成同一色），eef816c 接线后由此长期带病——装饰语义不该稀释本测试。
+        // 关掉全部「位置相关」的水面效果：晕开（邻域混合）、浅滩带、离岸
+        // 墨线、近岸泡沫——本测试钉的是「填充边随高度」的**平涂**语义，
+        // 装饰不该稀释它（同 d43f618 关 bleed 的口径）。纸纹颗粒不在此列
+        // （它是坐标的纯函数，不影响边缘判定）。
         let pack = &crate::theme::theme_pack::ThemePack {
             treatment: crate::theme::theme_pack::TreatmentFlags {
                 watercolor_bleed: false,
+                shore_shallow: false,
                 ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+            },
+            sea: crate::theme::sea::SeaRecipe {
+                shore_band_cells: 0.0,
+                shore_peak: 0.0,
+                ripples: &[],
+                foam: &[],
+                ..crate::theme::sea::WATERCOLOR
             },
             ..*crate::theme::theme_pack::builtin::for_palette(Default::default())
         };
@@ -2453,6 +2497,15 @@ mod tests {
                     shore_shallow: false,
                     ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
                 },
+                // 关位置相关的水面效果（浅滩带 / 墨线 / 泡沫）：本测试钉
+                // 「中心格 = 纯水深色」，装饰混色会稀释断言色。
+                sea: crate::theme::sea::SeaRecipe {
+                    shore_band_cells: 0.0,
+                    shore_peak: 0.0,
+                    ripples: &[],
+                    foam: &[],
+                    ..crate::theme::sea::WATERCOLOR
+                },
                 ..*crate::theme::theme_pack::builtin::for_palette(Default::default())
             },
             0.0,
@@ -2506,6 +2559,15 @@ mod tests {
                 treatment: crate::theme::theme_pack::TreatmentFlags {
                     shore_shallow: false,
                     ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+                },
+                // 关位置相关的水面效果（浅滩带 / 墨线 / 泡沫）：本测试钉
+                // 「中心格 = 纯水深色」，装饰混色会稀释断言色。
+                sea: crate::theme::sea::SeaRecipe {
+                    shore_band_cells: 0.0,
+                    shore_peak: 0.0,
+                    ripples: &[],
+                    foam: &[],
+                    ..crate::theme::sea::WATERCOLOR
                 },
                 ..*crate::theme::theme_pack::builtin::for_palette(Default::default())
             },

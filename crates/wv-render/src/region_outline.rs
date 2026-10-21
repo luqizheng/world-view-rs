@@ -536,7 +536,7 @@ mod tests {
         );
         let mesh = region_fill_mesh(&r, &grid()).expect("应能三角化");
         let pos = mesh.attribute(Mesh::ATTRIBUTE_POSITION).expect("位置属性");
-        let area = triangle_signed_area(&pos);
+        let area = triangle_signed_area(pos);
         // 外环 6×6 = 36，洞 2×2 = 4 → 净面积 32。
         assert!(
             (area - 32.0).abs() < 0.01,
@@ -549,7 +549,7 @@ mod tests {
         let r = region_with(vec![0.0, 0.0, 4.0, 0.0, 4.0, 4.0, 0.0, 4.0], vec![]);
         let mesh = region_fill_mesh(&r, &grid()).expect("应能三角化");
         let pos = mesh.attribute(Mesh::ATTRIBUTE_POSITION).expect("位置属性");
-        let area = triangle_signed_area(&pos);
+        let area = triangle_signed_area(pos);
         assert!((area - 16.0).abs() < 0.01, "面积应为 16，实得 {area}");
     }
 
@@ -598,22 +598,5 @@ mod tests {
             area += ((b.0 - a.0) * (c.1 - a.1) - (c.0 - a.0) * (b.1 - a.1)) / 2.0;
         }
         area.abs()
-    }
-
-    /// 三角网面积（叉积求和 / 2）——验证「洞被扣掉」。
-    fn triangle_area(pos: &bevy::mesh::VertexAttributeValues) -> f32 {
-        let bevy::mesh::VertexAttributeValues::Float32x3(v) = pos else {
-            panic!("应为 Float32x3");
-        };
-        let mut area = 0.0f32;
-        for tri in v.chunks(3) {
-            let (a, b, c) = (
-                (tri[0][0], tri[0][1]),
-                (tri[1][0], tri[1][1]),
-                (tri[2][0], tri[2][1]),
-            );
-            area += ((b.0 - a.0) * (c.1 - a.1) - (c.0 - a.0) * (b.1 - a.1)).abs() / 2.0;
-        }
-        area
     }
 }

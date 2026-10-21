@@ -32,6 +32,7 @@ use crate::layer_frame::LayerFrame;
 use crate::recipe::{PassId, RenderRecipe};
 use crate::state::{lod_tier, GridConfig, ViewState, WorldProjection};
 use crate::terrain_view::terrain_resolve::active_terrain;
+use crate::theme::decor::DecorRecipe;
 use wv_terrain::biome::{
     BIOME_DESERT, BIOME_FOREST, BIOME_GOBI, BIOME_GRASSLAND, BIOME_HILLS, BIOME_JUNGLE,
     BIOME_MOUNTAINS, BIOME_OASIS, BIOME_PLAINS, BIOME_SAVANNA, BIOME_SNOWFIELD, BIOME_SWAMP,
@@ -42,14 +43,8 @@ use wv_terrain::biome::{
 const DECOR_Z: f32 = 0.075;
 /// 桶间 Z 微差（六桶按序号错开，防同深度闪烁）。
 const BUCKET_Z_STEP: f32 = 0.0004;
-/// Edit 档采样步距（屏幕像素）：树冠团间隔的观感基准。
-const SPACING_PX_EDIT: f32 = 26.0;
-/// Region 档采样步距（屏幕像素）：更疏，避免省级视野糊成噪点。
-const SPACING_PX_REGION: f32 = 46.0;
-/// Nation 档采样步距（屏幕像素）：全局视野只保留「大地貌团」，
-/// 步距够大才不会把整块大陆糊成噪点（ADR-0036）。
-/// ADR-0042：96 → 72——山链图标要成「链」而不是孤点（实机截图确认）。
-const SPACING_PX_NATION: f32 = 72.0;
+// 采样步距 / 尺寸系数已迁入主题配方（`wv_theme::decor::DecorRecipe`，
+// ADR-0048 追记二）——渲染层不再持有美术常量。
 /// 单类单帧符号组数上限（步距本身已把数量压到屏幕量级，此为兜底）。
 const MAX_SITES_PER_KIND: usize = 2200;
 /// 视口外扩余量（屏幕像素）：拖动相机时边缘符号不闪断。
@@ -83,17 +78,18 @@ impl DecorKind {
     ];
 
     /// 类别的符号墨色（sRGB 字节 + alpha）。v1 常量；主题化后继。
-    fn ink(self) -> ([u8; 3], f32) {
-        match self {
-            DecorKind::Forest => ([0x2B, 0x57, 0x31], 0.85),
-            DecorKind::Plains => ([0x6B, 0x8F, 0x4E], 0.55),
-            DecorKind::Hills => ([0x8A, 0x74, 0x44], 0.60),
-            DecorKind::Mountain => ([0x4C, 0x44, 0x3A], 0.65),
-            DecorKind::Snow => ([0xFD, 0xFE, 0xFF], 0.90),
-            DecorKind::Marsh => ([0x4E, 0x6B, 0x5A], 0.65),
-            DecorKind::Desert => ([0xA8, 0x84, 0x52], 0.55),
-            DecorKind::OceanWaves => ([0xFD, 0xFE, 0xFF], 0.50),
-        }
+    fn ink(self, recipe: &DecorRecipe) -> ([u8; 3], f32) {
+        let i = match self {
+            DecorKind::Forest => recipe.forest_ink,
+            DecorKind::Plains => recipe.plains_ink,
+            DecorKind::Hills => recipe.hills_ink,
+            DecorKind::Mountain => recipe.mountain_ink,
+            DecorKind::Snow => recipe.snow_ink,
+            DecorKind::Marsh => recipe.marsh_ink,
+            DecorKind::Desert => recipe.desert_ink,
+            DecorKind::OceanWaves => recipe.wave_ink,
+        };
+        (i.color, i.alpha)
     }
 }
 
@@ -163,22 +159,21 @@ pub fn decor_band(view_scale: f32) -> Option<DecorBand> {
 }
 
 impl DecorBand {
-    /// 采样步距（屏幕像素）。
-    fn spacing_px(self) -> f32 {
+    /// 采样步距（屏幕像素）——由主题配方给定（ADR-0048 追记二）。
+    fn spacing_px(self, recipe: &DecorRecipe) -> f32 {
         match self {
-            DecorBand::Nation => SPACING_PX_NATION,
-            DecorBand::Region => SPACING_PX_REGION,
-            DecorBand::Edit => SPACING_PX_EDIT,
+            DecorBand::Nation => recipe.spacing_px_nation,
+            DecorBand::Region => recipe.spacing_px_region,
+            DecorBand::Edit => recipe.spacing_px_edit,
         }
     }
 
-    /// 符号尺寸系数（全局档放大，抵消粗步距带来的稀疏感）。
-    fn size_mul(self) -> f32 {
+    /// 符号尺寸系数（全局档放大，抵消粗步距带来的稀疏感）——主题配方给定。
+    fn size_mul(self, recipe: &DecorRecipe) -> f32 {
         match self {
-            // ADR-0042：1.45 → 1.6，Nation 档山形/树团在全局视野读得出笔触。
-            DecorBand::Nation => 1.6,
-            DecorBand::Region => 0.8,
-            DecorBand::Edit => 1.0,
+            DecorBand::Nation => recipe.size_mul_nation,
+            DecorBand::Region => recipe.size_mul_region,
+            DecorBand::Edit => recipe.size_mul_edit,
         }
     }
 }
@@ -208,6 +203,7 @@ fn hash01(x: i64, y: i64, seed: u64) -> f32 {
 ///
 /// v1 用「相对偏移 + 半径」的圆 / 半圆 / 三角参数化，避免在每个采样点手写
 /// 顶点循环：三角化集中在 mesh 构建一处（改形状只动一处）。
+#[allow(clippy::too_many_arguments)] // 符号参数（kind/位置/高度/气候带/变体）+ 主题配方
 pub fn site_primitives(
     kind: DecorKind,
     band: DecorBand,
@@ -216,9 +212,10 @@ pub fn site_primitives(
     height_m: i16,
     fy: f32,
     variant: Option<DecorVariant>,
+    recipe: &DecorRecipe,
 ) -> Vec<SitePrim> {
     let mut out = Vec::new();
-    let m = band.size_mul();
+    let m = band.size_mul(recipe);
     // 乱石滩涂：与族无关的专用形状（region 覆盖物键 `boulder_field`）。
     if variant == Some(DecorVariant::Boulder) {
         for k in 0..4u64 {
@@ -243,19 +240,20 @@ pub fn site_primitives(
         DecorKind::Forest => {
             // 气候变体（ADR-0039 D3）：沿 y 轴（0=北）三档。
             // 颜色 = 顶点色（桶材质为白）；形状区分针叶排 / 阔叶团 / 绿洲稀树。
-            const BOREAL: [f32; 4] = [0.18, 0.36, 0.21, 0.85]; // 针叶深绿
-            const TEMPERATE: [f32; 4] = [0.17, 0.34, 0.19, 0.85]; // 阔叶墨绿（≈旧 ink）
-            const OASIS: [f32; 4] = [0.29, 0.42, 0.21, 0.80]; // 绿洲暖绿
-                                                              // **region 覆盖物可强制变体**（ADR-0045 D2/D9）：作者声明「这片用
-                                                              // 针叶画」→ 变体由声明决定，**优先于** y 轴气候带派生。
+            // 变体色由主题配方给定（ADR-0048 追记二）。
+            let boreal = recipe.conifer_ink.to_rgba();
+            let temperate = recipe.temperate_ink.to_rgba();
+            let oasis = recipe.oasis_ink.to_rgba();
+            // **region 覆盖物可强制变体**（ADR-0045 D2/D9）：作者声明「这片用
+            // 针叶画」→ 变体由声明决定，**优先于** y 轴气候带派生。
             let variant = match variant {
                 Some(
                     v @ (DecorVariant::Conifer | DecorVariant::Broadleaf | DecorVariant::Sparse),
                 ) => v,
                 _ => {
-                    if fy < 0.30 {
+                    if fy < recipe.climate_cuts[0] {
                         DecorVariant::Conifer
-                    } else if fy < 0.72 {
+                    } else if fy < recipe.climate_cuts[1] {
                         DecorVariant::Broadleaf
                     } else {
                         DecorVariant::Sparse
@@ -274,7 +272,7 @@ pub fn site_primitives(
                         1.7 * m,
                         3.4 * m,
                         PrimShape::Triangle,
-                        BOREAL,
+                        boreal,
                     ));
                 }
             } else if variant == DecorVariant::Broadleaf {
@@ -289,7 +287,7 @@ pub fn site_primitives(
                         2.6 * m,
                         2.6 * m,
                         PrimShape::Circle,
-                        TEMPERATE,
+                        temperate,
                     ));
                 }
             } else {
@@ -301,7 +299,7 @@ pub fn site_primitives(
                     1.8 * m,
                     1.8 * m,
                     PrimShape::Circle,
-                    OASIS,
+                    oasis,
                 ));
             }
         }
@@ -344,7 +342,7 @@ pub fn site_primitives(
                 w * 0.65,
                 h * 0.76,
                 PrimShape::Triangle,
-                [0.28, 0.24, 0.20, 0.85], // 背光面（压暗右侧）
+                recipe.mountain_shade_ink.to_rgba(), // 背光面（压暗右侧）
             ));
             // 簇生次峰：约 30% 的山旁再起一座小的（低 35%、偏移随机）。
             if r2 > 0.70 {
@@ -357,7 +355,7 @@ pub fn site_primitives(
                     h * 0.62,
                 ));
             }
-            if height_m >= 1800 {
+            if height_m >= recipe.snow_cap_h {
                 out.push(SitePrim::triangle(
                     DecorKind::Snow,
                     0.0,
@@ -368,7 +366,7 @@ pub fn site_primitives(
             }
             // 极高山露岩（ADR-0039 D4）：>=3400m 雪帽内缘叠黄褐岩三角
             // （进 Snow 桶第二层图元，顶点色区分）。
-            if height_m >= 3400 {
+            if height_m >= recipe.rock_h {
                 out.push(SitePrim::colored(
                     DecorKind::Snow,
                     0.0,
@@ -706,6 +704,10 @@ pub fn sync_terrain_decor(
         return;
     }
 
+    // 主题的装饰配方（ADR-0048 追记二）：高度阈值 / 气候带 / 墨色 / 步距
+    // 全部由主题给定——渲染层只做执行器。
+    let recipe = crate::theme::theme_pack::builtin::for_palette(view.map_palette).decor;
+
     let material = ensure_material(&mut pools, &mut materials);
 
     // 视口矩形（视图空间）+ 外扩余量。
@@ -719,7 +721,9 @@ pub fn sync_terrain_decor(
     let px_to_wu = view.scale;
 
     // 步距（格）：由屏幕步距换算，至少 1。
-    let stride = ((band.spacing_px() * view.scale) / cell).ceil().max(1.0) as i64;
+    let stride = ((band.spacing_px(&recipe) * view.scale) / cell)
+        .ceil()
+        .max(1.0) as i64;
     // 覆盖视口的格范围（钳到栅格）。
     let cx0 = (((rect_min.x - origin.x) / cell).floor() as i64 / stride) * stride;
     let cy0 = (((rect_min.y - origin.y) / cell).floor() as i64 / stride) * stride;
@@ -767,7 +771,7 @@ pub fn sync_terrain_decor(
                 surface: c.surface,
                 biome: c.biome,
             }) {
-                if c.height < -220 || c.height >= 0 {
+                if c.height < -recipe.wave_max_depth_m || c.height >= 0 {
                     cx += stride;
                     continue;
                 }
@@ -786,7 +790,7 @@ pub fn sync_terrain_decor(
                 // 沿脊线连续成串（每步距一座），密度与脊线长度成正比。
                 let by_biome = decor_kind_for_biome(c.biome);
                 let mut peak = (cx, gy, c.height);
-                if c.height < 1500 {
+                if c.height < recipe.ridge_snap_min_h {
                     let r = (stride / 2).max(1);
                     let step = (stride / 8).max(1);
                     let mut bx = cx - r;
@@ -815,11 +819,11 @@ pub fn sync_terrain_decor(
                     }
                 }
                 let (site_cx, site_cy, site_h) = peak;
-                if site_h >= 1500 || by_biome == Some(DecorKind::Mountain) {
+                if site_h >= recipe.mountain_min_h || by_biome == Some(DecorKind::Mountain) {
                     // 覆盖本块的符号位置/高度：峰格（哈希种子仍用网格点，确定性不变）。
                     kind_override = Some((DecorKind::Mountain, site_cx, site_cy, site_h));
                     DecorKind::Mountain
-                } else if c.height >= 550 || by_biome == Some(DecorKind::Hills) {
+                } else if c.height >= recipe.hill_min_h || by_biome == Some(DecorKind::Hills) {
                     DecorKind::Hills
                 } else {
                     match by_biome {
@@ -836,7 +840,8 @@ pub fn sync_terrain_decor(
                 DecorKind::Desert => 0.7,
                 DecorKind::OceanWaves => {
                     // 密度随深度线性衰减：-10m 全画，-220m 稀至 0.15。
-                    ((220.0 + c.height as f32) / 220.0).clamp(0.15, 1.0)
+                    ((recipe.wave_depth_scale_m + c.height as f32) / recipe.wave_depth_scale_m)
+                        .clamp(0.15, 1.0)
                 }
                 DecorKind::Plains | DecorKind::Hills => 0.4,
             };
@@ -874,14 +879,14 @@ pub fn sync_terrain_decor(
             // 气候带（ADR-0039 D3）：归一化 y（0=北）。
             let fy = gy as f32 / data.height as f32;
             // 图元占位色 → 桶默认 ink（构造器 [0;4] 时回填；变体色原样透传）。
-            let (ink_rgb, ink_a) = kind.ink();
+            let (ink_rgb, ink_a) = kind.ink(&recipe);
             let ink = [
                 ink_rgb[0] as f32 / 255.0,
                 ink_rgb[1] as f32 / 255.0,
                 ink_rgb[2] as f32 / 255.0,
                 ink_a,
             ];
-            for mut prim in site_primitives(kind, band, cx, gy, ph, fy, variant) {
+            for mut prim in site_primitives(kind, band, cx, gy, ph, fy, variant, &recipe) {
                 if prim.color == [0.0, 0.0, 0.0, 0.0] {
                     prim.color = ink;
                 }
@@ -908,7 +913,7 @@ pub fn sync_terrain_decor(
         cy += stride;
     }
     // 同步八桶。
-    let size_q = band.spacing_px() * view.scale * band.size_mul();
+    let size_q = band.spacing_px(&recipe) * view.scale * band.size_mul(&recipe);
     for (i, (verts, colors, indices)) in buckets.iter_mut().enumerate() {
         let geom = DecorGeom {
             verts: core::mem::take(verts),
@@ -1057,44 +1062,94 @@ mod tests {
         assert_eq!(decor_kind_for_biome(BIOME_SALT_FLAT), None, "盐滩保持纯色");
     }
 
+    /// 测试用配方 = 日间水彩（ADR-0048 追记二：抽取前的渲染层硬编码值）。
+    fn recipe() -> DecorRecipe {
+        crate::theme::decor::WATERCOLOR
+    }
+
     #[test]
     fn all_three_bands_draw_and_nation_is_coarsest() {
         assert_eq!(decor_band(5.0), Some(DecorBand::Nation));
         assert_eq!(decor_band(2.0), Some(DecorBand::Region));
         assert_eq!(decor_band(0.5), Some(DecorBand::Edit));
         assert!(
-            DecorBand::Nation.spacing_px() > DecorBand::Region.spacing_px(),
+            DecorBand::Nation.spacing_px(&recipe()) > DecorBand::Region.spacing_px(&recipe()),
             "Nation 档步距必须最粗"
         );
         assert!(
-            DecorBand::Nation.size_mul() > DecorBand::Edit.size_mul(),
+            DecorBand::Nation.size_mul(&recipe()) > DecorBand::Edit.size_mul(&recipe()),
             "Nation 档符号必须更大"
         );
     }
 
     #[test]
     fn region_band_spacing_is_coarser_than_edit() {
-        assert!(DecorBand::Region.spacing_px() > DecorBand::Edit.spacing_px());
-        assert!(DecorBand::Region.size_mul() < DecorBand::Edit.size_mul());
+        assert!(DecorBand::Region.spacing_px(&recipe()) > DecorBand::Edit.spacing_px(&recipe()));
+        assert!(DecorBand::Region.size_mul(&recipe()) < DecorBand::Edit.size_mul(&recipe()));
     }
 
     #[test]
     fn site_primitives_are_deterministic() {
-        let a = site_primitives(DecorKind::Forest, DecorBand::Edit, 100, 200, 500, 0.5, None);
-        let b = site_primitives(DecorKind::Forest, DecorBand::Edit, 100, 200, 500, 0.5, None);
+        let a = site_primitives(
+            DecorKind::Forest,
+            DecorBand::Edit,
+            100,
+            200,
+            500,
+            0.5,
+            None,
+            &recipe(),
+        );
+        let b = site_primitives(
+            DecorKind::Forest,
+            DecorBand::Edit,
+            100,
+            200,
+            500,
+            0.5,
+            None,
+            &recipe(),
+        );
         assert_eq!(a, b, "同输入必须同符号（确定性）");
-        let c = site_primitives(DecorKind::Forest, DecorBand::Edit, 101, 200, 500, 0.5, None);
+        let c = site_primitives(
+            DecorKind::Forest,
+            DecorBand::Edit,
+            101,
+            200,
+            500,
+            0.5,
+            None,
+            &recipe(),
+        );
         assert_ne!(a, c, "不同格应有不同抖动");
     }
 
     #[test]
     fn mountains_above_snow_line_get_a_snow_cap_prim() {
-        let high = site_primitives(DecorKind::Mountain, DecorBand::Edit, 5, 5, 2200, 0.5, None);
+        let high = site_primitives(
+            DecorKind::Mountain,
+            DecorBand::Edit,
+            5,
+            5,
+            2200,
+            0.5,
+            None,
+            &recipe(),
+        );
         assert!(
             high.iter().any(|p| p.bucket == DecorKind::Snow),
             "2200m 山应有雪帽图元"
         );
-        let low = site_primitives(DecorKind::Mountain, DecorBand::Edit, 5, 5, 800, 0.5, None);
+        let low = site_primitives(
+            DecorKind::Mountain,
+            DecorBand::Edit,
+            5,
+            5,
+            800,
+            0.5,
+            None,
+            &recipe(),
+        );
         assert!(
             low.iter().all(|p| p.bucket != DecorKind::Snow),
             "800m 山不应有雪帽"
@@ -1112,6 +1167,7 @@ mod tests {
             -10,
             0.5,
             None,
+            &recipe(),
         );
         assert!(
             shallow.iter().all(|p| p.bucket == DecorKind::OceanWaves),
@@ -1129,9 +1185,36 @@ mod tests {
     #[test]
     fn forest_climate_variants_differ_by_fy() {
         // ADR-0039 D3：针叶（北）= 细三角；阔叶（中）= 圆团；绿洲（南）= 孤团。
-        let boreal = site_primitives(DecorKind::Forest, DecorBand::Edit, 10, 10, 300, 0.15, None);
-        let temperate = site_primitives(DecorKind::Forest, DecorBand::Edit, 10, 10, 300, 0.5, None);
-        let oasis = site_primitives(DecorKind::Forest, DecorBand::Edit, 10, 10, 300, 0.85, None);
+        let boreal = site_primitives(
+            DecorKind::Forest,
+            DecorBand::Edit,
+            10,
+            10,
+            300,
+            0.15,
+            None,
+            &recipe(),
+        );
+        let temperate = site_primitives(
+            DecorKind::Forest,
+            DecorBand::Edit,
+            10,
+            10,
+            300,
+            0.5,
+            None,
+            &recipe(),
+        );
+        let oasis = site_primitives(
+            DecorKind::Forest,
+            DecorBand::Edit,
+            10,
+            10,
+            300,
+            0.85,
+            None,
+            &recipe(),
+        );
         assert!(
             boreal.iter().all(|p| p.kind == PrimShape::Triangle),
             "针叶应为细三角"
@@ -1154,13 +1237,31 @@ mod tests {
     #[test]
     fn alpine_peaks_get_rock_accent() {
         // ADR-0039 D4：>=3400m 雪帽 + 帽缘露岩（Snow 桶第二图元，黄褐）。
-        let peak = site_primitives(DecorKind::Mountain, DecorBand::Edit, 5, 5, 3500, 0.5, None);
+        let peak = site_primitives(
+            DecorKind::Mountain,
+            DecorBand::Edit,
+            5,
+            5,
+            3500,
+            0.5,
+            None,
+            &recipe(),
+        );
         let rocks: Vec<_> = peak
             .iter()
             .filter(|p| p.bucket == DecorKind::Snow && p.color[0] > 0.7 && p.color[2] < 0.7)
             .collect();
         assert_eq!(rocks.len(), 1, "3500m 峰应有 1 块露岩，得 {}", rocks.len());
-        let low = site_primitives(DecorKind::Mountain, DecorBand::Edit, 5, 5, 2000, 0.5, None);
+        let low = site_primitives(
+            DecorKind::Mountain,
+            DecorBand::Edit,
+            5,
+            5,
+            2000,
+            0.5,
+            None,
+            &recipe(),
+        );
         assert!(
             low.iter()
                 .all(|p| !(p.bucket == DecorKind::Snow && p.color[0] > 0.7 && p.color[2] < 0.7),),

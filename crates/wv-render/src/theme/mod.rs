@@ -35,6 +35,8 @@ pub use wv_theme::colors_dusk;
 #[cfg(feature = "app")]
 pub use wv_theme::colors_google;
 #[cfg(feature = "app")]
+pub use wv_theme::decor;
+#[cfg(feature = "app")]
 pub use wv_theme::palette;
 #[cfg(feature = "app")]
 pub use wv_theme::registry;
