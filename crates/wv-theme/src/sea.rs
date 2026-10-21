@@ -37,6 +37,29 @@ pub struct RippleSpec {
     pub alpha: f32,
 }
 
+/// 近岸排线（hatching）规格——手绘海图在浅海里画的平行短线。
+///
+/// 照 civ-atlas `fantasy.ts` 的 `HATCH_D` / `HATCH_A`（`src/render/fantasy.ts:2726`）：
+/// 离岸一定距离内、每隔若干行画一道横线，墨量很淡。
+///
+/// **这是水彩感的关键缺失件**：civ-atlas 的近岸三件套是「岸线墨线 + 近岸排线
+/// + 离岸波纹墨线」，我们此前只有后两件。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HatchSpec {
+    /// 排线的**径向长度**（格）：横线段从岸线向外延伸多远。
+    ///
+    /// 语义照 civ-atlas：线段的一端**停在海岸线上**、另一端向海外伸出——
+    /// 故长度由岸线形状决定，不是固定长度也不是整行实心。
+    pub dist_cells: f32,
+    /// 行距（**纹理像素**）：每隔多少像素画一行。
+    ///
+    /// 纹理空间而非屏幕空间——烘焙与缩放解耦，实现零新架构；代价是缩放时
+    /// 行距的**屏幕观感**会变（缩小时变密、放大时变疏），近似手绘的疏密变化。
+    pub row_spacing_px: u32,
+    /// 墨量（0..=1）：往 [`SeaRecipe::ink`] 混合的最大比例。
+    pub alpha: f32,
+}
+
 /// 海的画法配方。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SeaRecipe {
@@ -88,6 +111,22 @@ pub struct SeaRecipe {
     /// 与 [`Self::ripple_warp_cells`] 同理，但独立取值——泡沫的参差
     /// 应比墨线更强（碎浪的不规则）。
     pub foam_warp_cells: f32,
+    /// 近岸排线规格。`None` = 不画排线。
+    ///
+    /// 排线是**离岸带**（贴岸那一圈）的手绘质感，与离岸波纹墨线（更外圈、
+    /// 平行于岸线的等距线）不同族：排线是屏幕横向的平行短线，波纹是随岸线
+    /// 起伏的等距线。
+    pub shore_hatch: Option<HatchSpec>,
+    /// 浅滩带**外缘的积墨**（水彩边缘效应）强度（0..=1）：0 = 不画。
+    ///
+    /// 水彩颜料在湿边堆积，色块交界处会形成一圈略深的轮廓。近岸浅滩带的
+    /// 外缘正是这样的交界——加一道淡墨环，浅滩就不再是「发光的渐变」而是
+    /// 「有边缘的水彩色块」。
+    pub shore_edge_strength: f32,
+    /// 浅滩带外缘积墨环的宽度（格）。
+    pub shore_edge_width_cells: f32,
+    /// 浅滩带外缘积墨的颜色（sRGB 字节）。`None` = 复用 [`Self::ink`]。
+    pub shore_edge_ink: Option<[u8; 3]>,
     /// 泡沫破碎噪声的频率（每格）：碎块的细密程度。
     ///
     /// 1.0 上下 = 每格约一个碎块；数值越大碎块越细碎（高频）。
@@ -149,7 +188,9 @@ impl SeaRecipe {
 pub const WATERCOLOR: SeaRecipe = SeaRecipe {
     depth_scale_m: 3500.0,
     depth_exponent: 0.5,
-    shore_band_cells: 6.0,
+    // 浅滩带 6 → 4 格（2026-10-21 P1）：实机评审「发光感太强、太宽」——
+    // 4 格 ≈ 6 屏幕像素（26% 缩放下），是「薄水覆沙」而非「一滩光」。
+    shore_band_cells: 4.0,
     shore_peak: 0.55,
     water_grain: 0.035,
     ripple_warp_cells: 1.2,
@@ -189,6 +230,18 @@ pub const WATERCOLOR: SeaRecipe = SeaRecipe {
     foam_break: 0.78,
     foam_warp_cells: 1.4,
     foam_break_freq: 1.15,
+    // 近岸排线（civ-atlas HATCH 语义）：离岸 9 格内、每 7 纹理像素一道横线，
+    // 墨量 0.16（照搬参考值）。
+    shore_hatch: Some(HatchSpec {
+        dist_cells: 4.5,
+        row_spacing_px: 16,
+        alpha: 0.16,
+    }),
+    // 浅滩带外缘的积墨环：宽度 1.2 格、强度 0.30 —— 让浅滩从「发光渐变」
+    // 变成「有边缘的水彩色块」（水彩颜料在湿边堆积）。
+    shore_edge_strength: 0.30,
+    shore_edge_width_cells: 1.2,
+    shore_edge_ink: None,
 };
 
 /// 水彩配方（暮色）——暗纸上的浅滩与墨线都要更含蓄。
@@ -222,6 +275,15 @@ pub const WATERCOLOR_DUSK: SeaRecipe = SeaRecipe {
     foam_break: 0.45,
     foam_warp_cells: 1.1,
     foam_break_freq: 0.8,
+    // 暮色：排线更疏更淡（暗纸上重墨会脏）。
+    shore_hatch: Some(HatchSpec {
+        dist_cells: 3.5,
+        row_spacing_px: 20,
+        alpha: 0.10,
+    }),
+    shore_edge_strength: 0.20,
+    shore_edge_width_cells: 1.0,
+    shore_edge_ink: None,
 };
 
 #[cfg(test)]

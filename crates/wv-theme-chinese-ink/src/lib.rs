@@ -27,19 +27,81 @@ use wv_theme::registry::ThemePackRegistry;
 use wv_theme::sea::{RippleSpec, SeaRecipe};
 use wv_theme::theme_pack::{ThemePack, TreatmentFlags};
 
-/// 水墨主题包占位。
+/// 水墨地形色板（初值 · 2026-10-21）。
 ///
-/// **色值与内置古舆图完全相同**（M2 仅做契约演示，不引入未经校准的色值）——
-/// 游戏接入后视觉上与"日间古舆图"无差异，但 id 路径走的是 `chinese_ink`，
-/// 验证"ThemePackRegistry lookup + per-pack rendering"通路。
+/// **依据**：civ-atlas `fantasy.ts` 的水墨海色三档（`SEA = #8fabb0` /
+/// `SEA_SHELF = #a8c2bd` / `SEA_DEEP = #6f8f99`）与宣纸底（`#E8E0CE`），
+/// 陆色按「淡墨 + 留白」的原则给出低饱和初值。
 ///
-/// M2 验收：装载后报"色值未校准"告警 + 兜底到内置默认——本 M2 阶段**不**实现
-/// 告警路径（M2 验收点见 ADR-0023 §6.2 §5）；色值校准时由美术侧提供白名单
-/// 槽位值后逐项替换。
+/// **待美术校准**（ADR-0023 M2 的白名单流程尚未就绪）：这组值是**可调的初值**
+/// 而非定稿——换主题时改这个常量即可，不必碰渲染层。
+const INK_CORE_TERRAIN: [wv_theme::Color; 10] = [
+    wv_theme::colors::hex(0x6F8F99), // 0 深水（墨青）
+    wv_theme::colors::hex(0x8FABB0), // 1 浅水（淡青灰）
+    wv_theme::colors::hex(0xD8CDB4), // 2 沙 / 宣纸赭
+    wv_theme::colors::hex(0x9AA88C), // 3 草（淡墨绿）
+    wv_theme::colors::hex(0x6E7F63), // 4 森林（墨绿）
+    wv_theme::colors::hex(0xB5A88C), // 5 丘陵（淡赭）
+    wv_theme::colors::hex(0x8A857A), // 6 山地（墨灰）
+    wv_theme::colors::hex(0xEDE9DF), // 7 雪（纸白）
+    wv_theme::colors::hex(0x8A9484), // 8 沼泽（灰绿）
+    wv_theme::colors::hex(0xB09A78), // 9 道路（淡赭）
+];
+
+/// 水墨色板（`PaletteColors` 全 36 槽）。
+///
+/// 地形 10 槽 + 纸色 / 深海 / 浅滩 / 等值线墨色走水墨值；其余槽位（POI /
+/// 道路 / 标签 / 建筑）**沿用日间值**——它们与「水墨」观感关联最弱，等
+/// 美术给出白名单后再逐项替换。
+const INK_PALETTE: PaletteColors = PaletteColors {
+    core: INK_CORE_TERRAIN,
+    // 水墨的底图淡化更弱（纸面本身就淡，无需再洗）。
+    soften_keep: 0.92,
+    // 宣纸底色。
+    soften_toward: wv_theme::colors::hex(0xE8E0CE),
+    poi_dot: wv_theme::colors::PLACE_DOT,
+    poi_ring: wv_theme::colors::POI_RING,
+    road_stroke: wv_theme::colors::ROAD_STROKE,
+    road_casing: wv_theme::colors::ROAD_CASING,
+    street_major: wv_theme::colors::STREET_MAJOR,
+    street_minor: wv_theme::colors::STREET_MINOR,
+    label_fill: wv_theme::colors::LABEL_FILL,
+    label_region: wv_theme::colors::LABEL_REGION,
+    label_place: wv_theme::colors::LABEL_PLACE,
+    label_water: wv_theme::colors::LABEL_WATER,
+    dot_place: wv_theme::colors::DOT_PLACE,
+    dot_region: wv_theme::colors::DOT_REGION,
+    dot_faction: wv_theme::colors::DOT_FACTION,
+    dot_event: wv_theme::colors::DOT_EVENT,
+    text_place: wv_theme::colors::TEXT_PLACE,
+    text_region: wv_theme::colors::TEXT_REGION,
+    text_faction: wv_theme::colors::TEXT_FACTION,
+    text_event: wv_theme::colors::TEXT_EVENT,
+    snow_highlight: wv_theme::colors::SNOW_HIGHLIGHT,
+    snow_shadow: wv_theme::colors::SNOW_SHADOW,
+    ice_paper: wv_theme::colors::ICE_PAPER,
+    ice_ink: wv_theme::colors::ICE_INK,
+    ice_shadow: wv_theme::colors::ICE_SHADOW,
+    halo_fill: wv_theme::colors::HALO_FILL,
+    // 等值线墨色：淡墨（不是日间的褐墨）。
+    isoline_ink: wv_theme::colors::hex(0x3A3834),
+    grid_line: wv_theme::colors::GRID_LINE,
+    building_top: wv_theme::colors::BUILDING_TOP,
+    building_side: wv_theme::colors::BUILDING_SIDE,
+    event_backdrop: wv_theme::colors::EVENT_VIEW_BACKDROP,
+    line_on_light: wv_theme::colors::LINE_ON_LIGHT,
+    line_on_mid: wv_theme::colors::LINE_ON_MID,
+    line_on_dark: wv_theme::colors::LINE_ON_DARK,
+    // 深海：墨青（不是日间的饱和深蓝）。
+    deep_ocean_blue: wv_theme::colors::hex(0x4A6B78),
+    // 近岸浅滩：淡青（与水墨海色同族）。
+    water_shore: wv_theme::colors::hex(0xB4C7C0),
+};
+
 pub static PACK: ThemePack = ThemePack {
     id: "chinese_ink",
     display_name: "水墨（占位）",
-    palette: PaletteColors::DAYLIGHT, // TODO(美术校准): 待白名单值就绪后替换
+    palette: INK_PALETTE, // 水墨色板（初值，见上方注释；待美术校准）
     treatment: TreatmentFlags::EMPTY,
     atlas: None,
     // 海的画法配方（ADR-0048）：水墨包的海不画浅滩色带、不画纸纹颗粒——
@@ -101,6 +163,13 @@ pub static PACK: ThemePack = ThemePack {
         foam_break: 0.0,
         foam_warp_cells: 1.4,
         foam_break_freq: 0.0,
+        // 水墨的近岸不画排线（那是钢笔/铜版画的手法）——留白 + 一道淡墨皴线。
+        shore_hatch: None,
+        // 外缘积墨环：水墨的边缘更硬（墨是顿出来的，不是化开的）——强度更高、
+        // 宽度更窄。
+        shore_edge_strength: 0.45,
+        shore_edge_width_cells: 0.8,
+        shore_edge_ink: Some([0x2E, 0x2C, 0x28]),
     },
     // TODO(美术校准): 墨绿晕 / 符号色与「更疏」的采样间距均为占位值，
     // 待美术侧给出水墨白名单后替换——v1 水墨包不可选，不参与验收（D13）。
@@ -228,8 +297,30 @@ mod tests {
 
     /// 色值占位 = DAYLIGHT（M2 契约演示；M2+ 美术校准后此测试改"逐位匹配 chinese_ink 白名单"）。
     #[test]
-    fn pack_palette_is_daylight_placeholder() {
-        assert_eq!(PACK.palette.core, PaletteColors::DAYLIGHT.core);
+    fn pack_palette_is_the_ink_palette_not_daylight() {
+        // 2026-10-21：占位期结束——PACK 自带水墨色板（不再沿用 DAYLIGHT）。
+        // 关键槽位锚点：海两槽来自 civ-atlas 的水墨海色，纸色是宣纸底。
+        assert_ne!(
+            PACK.palette.core,
+            PaletteColors::DAYLIGHT.core,
+            "水墨色板不应再是 DAYLIGHT"
+        );
+        // 直接与 hex 构造的对拍值比较（`wv_theme::colors::hex` 是同一来源）。
+        assert_eq!(
+            PACK.palette.core[0],
+            wv_theme::colors::hex(0x6F8F99),
+            "深水 = 墨青"
+        );
+        assert_eq!(
+            PACK.palette.core[1],
+            wv_theme::colors::hex(0x8FABB0),
+            "浅水 = 淡青灰"
+        );
+        assert_eq!(
+            PACK.palette.soften_toward,
+            wv_theme::colors::hex(0xE8E0CE),
+            "纸色 = 宣纸底"
+        );
     }
 
     /// 水墨包也装载森林族覆盖规则（占位值）——验证外部主题 crate 在族键 API

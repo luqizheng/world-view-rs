@@ -27,8 +27,12 @@
 
 use bevy::prelude::*;
 
-/// 从 sRGB 十六进制构造 `Color`。
-const fn hex(rgb: u32) -> Color {
+/// 从 sRGB 十六进制构造 `Color`（`0xRRGGBB`）。
+///
+/// **公开**（2026-10-21）：外部主题 crate（如 `wv-theme-chinese-ink`）要自建
+/// 自己的色板就得能造 `Color`——此前 `hex` 是私有的，外部包只能沿用内置值，
+/// 谈不���「各主题各带色板」。
+pub const fn hex(rgb: u32) -> Color {
     Color::srgb(
         ((rgb >> 16) & 0xFF) as f32 / 255.0,
         ((rgb >> 8) & 0xFF) as f32 / 255.0,
