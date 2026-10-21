@@ -112,6 +112,7 @@ PY="C:/Users/leo/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/pytho
 - `wv-theme::decor::WATERCOLOR.forest_art = Some(DecorArt::new("overlays/forest/decor_atlas_day.png", 3))`；
   `WATERCOLOR_DUSK` 指向 `decor_atlas_dusk.png`；
 - `terrain_decor` 的 Forest 桶走 UV quad 路径（ADR-0050 D3），其余族仍程序化；
+- 配方经 `ViewState.active_theme.decor` 注入（ADR-0049 主题包切换后）：换包即换图集；
 - 新增 / 替换图集：换文件 → 改 `DecorArt` 路径（若文件名变了）→ 跑 `cargo test -p wv-render --features app`。
 
 ## 六、已知限制

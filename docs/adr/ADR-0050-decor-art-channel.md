@@ -94,3 +94,12 @@ Bevy 材质 tint 是乘法，深墨乘浅色仍是深墨）。**格序是契约*
   逐个评估；山的优先级最高（§3.4 的 11 类地物符号里山体尚无手绘版本）。
 - 两套树图集（地界 / 地表）合并为一份，作为独立小任务。
 - 图集加变体（第 4 格）时，需同步改 `DecorArt.cells`、`forest_art_cell` 与本文 D2。
+
+## 追记一（2026-10-21，与主线合并后）
+
+主线并行落地的 `ADR-0049-theme-pack-switching` 把 `sync_terrain_decor` 的配方来源
+从 `builtin::for_palette(view.map_palette)` 改为 `ViewState.active_theme.decor`。
+本次合并已适配：`forest_art` **随活动主题包走**，换主题同时换树图集
+（`DecorBatchKey.tex` 保证 mesh 重建、材质重新绑定）；本文 D2「日 / 暮各一套」
+不变——两套内置包各自指向自己的图集，第三方包也可以自带。
+原先「贴图只能挂内置两包」的限制随之解除，本条不再需要单独的接线任务。
