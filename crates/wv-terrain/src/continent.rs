@@ -294,8 +294,10 @@ pub(crate) const HILL_MIN_M: i16 = 300;
 
 /// 径向高度剖面：海岸 0 → 中心 `relief.meters()`，内部叠 fBm 起伏。
 ///
-/// `t = d / (0.6 × inradius)`：距海岸 60% 内半径处到达满高，再往里有平台期，
-/// 避免圆锥顶点感；`inradius` 由调用方按包络面积开方估算（Task 5）。
+/// `t = d / (0.8 × inradius)` 后取**平方**：海岸到 80% 内半径为满高，
+/// 平方曲线让低地/丘陵占更大面积、山体收在中心——避免「整块大陆都是山」，
+/// 也让气候带（只接管 300 m 以下）有足够的落点。
+/// `inradius` 由调用方按包络面积开方估算（Task 5）。
 /// 调制系数 `0.7 + 0.6·fbm01` ∈ [0.7, 1.3]：中心高度不会被噪声甩出档位承诺。
 pub(crate) fn land_height(
     d: f32,
@@ -305,9 +307,9 @@ pub(crate) fn land_height(
     p: (f32, f32),
 ) -> i16 {
     let peak = params.relief.meters() as f32;
-    let denom = (0.6 * inradius).max(f32::EPSILON);
+    let denom = (0.8 * inradius).max(f32::EPSILON);
     let t = (d / denom).clamp(0.0, 1.0);
-    let base = peak * t;
+    let base = peak * t * t;
     let scale = (inradius * 0.25).max(1.0);
     let n = noise.fbm((p.0 / scale) as f64, (p.1 / scale) as f64, 4, 2.0, 0.5);
     let fbm01 = (((n + 1.0) * 0.5) as f32).clamp(0.0, 1.0);
