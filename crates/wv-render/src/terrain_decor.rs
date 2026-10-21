@@ -879,6 +879,13 @@ pub fn sync_terrain_decor(
     let cell = grid.cell_size;
     let px_to_wu = view.scale;
 
+    // 本图图框（世界单位）。**贴图符号必须夹在框内**：边界行的落点抖动
+    // （±0.45 步距）会把树推出图框，落在图外的纯底色上——2026-10-21 实机
+    // 截图里图框下方那排树就是这么来的。程序化符号只有几像素，不在此列。
+    let frame_min = grid.map_origin;
+    let frame_max = grid.map_origin + grid.map_size;
+    let tex_size = band.texture_size_px() * view.scale;
+
     // 步距（格）：由屏幕步距换算，至少 1。
     let stride = ((band.spacing_px(recipe) * view.scale) / cell)
         .ceil()
@@ -1043,7 +1050,11 @@ pub fn sync_terrain_decor(
             if kind == DecorKind::Forest {
                 if let Some((art, _)) = forest_art.as_ref() {
                     let v = forest_variant(fy, variant, recipe);
-                    textured_sites.push((wx, wy, forest_art_cell(v, art.cells)));
+                    if let Some((sx, sy)) =
+                        clamp_texture_site(wx, wy, tex_size, frame_min, frame_max)
+                    {
+                        textured_sites.push((sx, sy, forest_art_cell(v, art.cells)));
+                    }
                     cx += stride;
                     continue;
                 }
@@ -1084,7 +1095,6 @@ pub fn sync_terrain_decor(
     }
     // 森林贴图桶（ADR-0050）：与程序化八桶互斥——有贴图时 Forest 桶为空。
     // 缺资产 / 解码失败 → 清掉可能残留的贴图批，森林回到程序化图元。
-    let tex_size = band.texture_size_px() * view.scale;
     match forest_art {
         Some((art, texture)) => {
             let (verts, uvs, indices) = textured_quads(&textured_sites, tex_size, art.cells);
@@ -1257,6 +1267,28 @@ fn build_mesh(verts: Vec<[f32; 3]>, colors: Vec<[f32; 4]>, indices: Vec<u32>) ->
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh.insert_indices(Indices::U32(indices));
     mesh
+}
+
+/// 把贴图站点夹进本图图框；图框比符号还小时返回 `None`（不画，不越界）。
+///
+/// 贴图符号**底边锚定**（占 `y .. y + size`），所以纵向夹取范围是
+/// `[min.y, max.y - size]`，横向留半个身位。边界行的落点抖动（±0.45 步距）
+/// 会把树推出图框，落在图外的纯底色上——2026-10-21 实机截图的「图框下方
+/// 一排树」正是这个原因。
+pub fn clamp_texture_site(
+    x: f32,
+    y: f32,
+    size: f32,
+    frame_min: Vec2,
+    frame_max: Vec2,
+) -> Option<(f32, f32)> {
+    let half = size * 0.5;
+    let (min_x, max_x) = (frame_min.x + half, frame_max.x - half);
+    let (min_y, max_y) = (frame_min.y, frame_max.y - size);
+    if min_x > max_x || min_y > max_y {
+        return None;
+    }
+    Some((x.clamp(min_x, max_x), y.clamp(min_y, max_y)))
 }
 
 /// 森林贴图站点 → 每站一个轴对齐 quad 的顶点 / UV / 索引（ADR-0050）。
@@ -1782,6 +1814,31 @@ mod tests {
                 uvs[site * 4 + 1][0]
             );
         }
+    }
+
+    /// 贴图站点必须夹在本图图框内：框内不动、框外夹回、框太小则丢弃。
+    #[test]
+    fn texture_sites_are_clamped_inside_the_map_frame() {
+        let min = Vec2::ZERO;
+        let max = Vec2::new(100.0, 100.0);
+
+        let inside = clamp_texture_site(50.0, 50.0, 20.0, min, max).expect("框内应有值");
+        assert_eq!(inside, (50.0, 50.0), "框内站点不得被移动");
+
+        let (x, y) = clamp_texture_site(-10.0, -30.0, 20.0, min, max).expect("可夹取");
+        assert_eq!(
+            (x, y),
+            (10.0, 0.0),
+            "越左/越下夹回框内（底边锚定，y 下界是框底）"
+        );
+
+        let (x, y) = clamp_texture_site(500.0, 500.0, 20.0, min, max).expect("可夹取");
+        assert_eq!((x, y), (90.0, 80.0), "越右/越上夹回框内");
+
+        assert!(
+            clamp_texture_site(50.0, 50.0, 200.0, min, max).is_none(),
+            "图框比符号还小时应丢弃，而不是画一半在框外"
+        );
     }
 
     /// 内嵌表登记日 / 暮两套图集；未知键返回 `None`（调用方回退程序化）。

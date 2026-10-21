@@ -109,6 +109,16 @@ pub fn forest_sites(
             let Some(cell) = cell_at(terrain, cell_size, raster_offset, x, y) else {
                 continue;
             };
+            // 水面剔除（2026-10-21 实机截图）：**湖面 = 就地海拔**，湖心格常是
+            // `height > 0` 的水格——旧判据只看高度，于是湖里长树。水陆二分只认
+            // `is_water_cell`（surface 通道 ‖ 海平面以下），与渲染海岸线同源。
+            if wv_terrain::edit::is_water_cell(wv_terrain::TerrainCell {
+                height: cell.height,
+                surface: cell.surface,
+                biome: cell.biome,
+            }) {
+                continue;
+            }
             // 格子侧比较**森林族**（biome 冻结表 + family_of，ADR-0032）。
             if wv_terrain::biome::is_forest_family(cell.biome) {
                 forest.push((x, y));
@@ -491,5 +501,27 @@ mod tests {
                 "偏移后点 ({x}, {y}) 应落在森林格"
             );
         }
+    }
+
+    /// 湖面 = 就地海拔：水格 `height` 为正也不能种树（2026-10-21 实机截图：
+    /// 湖心格 `height = +10`、biome 仍是森林，旧判据只看高度就落了树）。
+    #[test]
+    fn forest_sites_reject_lakes_above_sea_level() {
+        // surface = 0（水）、height = +10（湖面海拔）、biome = 森林。
+        let terrain = uniform_grid(10, 10, 0, FOREST_BIOME, 10);
+        let sites = forest_sites(
+            &square_ring(),
+            &[],
+            Some(&terrain),
+            10.0,
+            (0.0, 0.0),
+            0x5EED_1234,
+            25.0,
+        );
+        assert!(
+            sites.is_empty(),
+            "全图为水（surface=0 / height=+10）时不得落树，got {}",
+            sites.len()
+        );
     }
 }
