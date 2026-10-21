@@ -170,6 +170,155 @@ pub fn decor_variant_for_key(key: &str) -> Option<DecorVariant> {
     }
 }
 
+/// 画一棵 **civ-atlas 式**树：描边层 + 填充层 + 树干（ADR-0050 追记三）。
+///
+/// `(dx, dy)` 是**树根**在站点局部坐标里的偏移；`s` 是像素缩放（已含镜头档
+/// 尺寸系数与每棵抖动）。描边 = 同形状放大半个像素、色值 ×0.38；填充 =
+/// 族墨色提亮（阔叶浅绿 / 针叶中绿）。**先描边后填充**，重叠处只剩外轮廓——
+/// 这是「平涂 + 硬边描线」能像手绘地图而不是贴纸的关键。
+#[allow(clippy::too_many_arguments)]
+fn push_forest_glyph(
+    out: &mut Vec<SitePrim>,
+    kind: DecorKind,
+    variant: DecorVariant,
+    dx: f32,
+    dy: f32,
+    s: f32,
+    boreal: [f32; 4],
+    temperate: [f32; 4],
+    oasis: [f32; 4],
+    trunk: [f32; 4],
+) {
+    let outline = |c: [f32; 4]| [c[0] * 0.38, c[1] * 0.38, c[2] * 0.38, 1.0];
+    let canopy = |c: [f32; 4]| {
+        [
+            (c[0] * 1.15 + 0.22).min(1.0),
+            (c[1] * 1.15 + 0.22).min(1.0),
+            (c[2] * 1.15 + 0.22).min(1.0),
+            1.0,
+        ]
+    };
+    let ground = |out: &mut Vec<SitePrim>, h: f32| {
+        out.push(SitePrim::colored(
+            kind,
+            dx,
+            dy + h * 0.5,
+            0.55 * s,
+            h * 0.5,
+            PrimShape::Triangle,
+            trunk,
+        ));
+    };
+
+    match variant {
+        DecorVariant::Conifer => {
+            // 针叶：三层塔形（下宽上窄），中绿填充 + 更深描边。
+            ground(out, 2.2 * s);
+            let rim = outline(boreal);
+            let fill = [
+                (boreal[0] * 1.35 + 0.12).min(1.0),
+                (boreal[1] * 1.35 + 0.12).min(1.0),
+                (boreal[2] * 1.35 + 0.12).min(1.0),
+                1.0,
+            ];
+            let tiers = [(3.6, 5.4, 2.0), (2.9, 4.4, 4.6), (2.2, 3.4, 7.0)];
+            for (w, h, y0) in tiers {
+                out.push(SitePrim::colored(
+                    kind,
+                    dx,
+                    dy + (y0 + h * 0.5) * s,
+                    (w + 0.6) * s,
+                    (h * 0.5 + 0.35) * s,
+                    PrimShape::Triangle,
+                    rim,
+                ));
+            }
+            for (w, h, y0) in tiers {
+                out.push(SitePrim::colored(
+                    kind,
+                    dx,
+                    dy + (y0 + h * 0.5) * s,
+                    (w - 0.12) * s,
+                    (h * 0.5 - 0.1) * s,
+                    PrimShape::Triangle,
+                    fill,
+                ));
+            }
+        }
+        DecorVariant::Sparse => {
+            // 稀树：两团稀疏冠 + 细干（暖绿，树冠更小更透）。
+            ground(out, 2.2 * s);
+            let rim = outline(oasis);
+            let fill = canopy(oasis);
+            let r = 4.6 * s;
+            let cy = dy + 2.2 * s + r * 1.0;
+            let lobes = [
+                (dx - 0.9 * r, cy, 0.82 * r),
+                (dx + 0.75 * r, cy - 0.2 * r, 0.66 * r),
+            ];
+            for (x, y, rr) in lobes {
+                out.push(SitePrim::colored(
+                    kind,
+                    x,
+                    y,
+                    rr + 0.55 * s,
+                    rr + 0.55 * s,
+                    PrimShape::Circle,
+                    rim,
+                ));
+            }
+            for (x, y, rr) in lobes {
+                out.push(SitePrim::colored(
+                    kind,
+                    x,
+                    y,
+                    rr,
+                    rr,
+                    PrimShape::Circle,
+                    fill,
+                ));
+            }
+        }
+        // 阔叶（含 boulder 兜底，后者在函数开头已分流）
+        _ => {
+            // 阔叶：四团扇贝冠（主团 + 左右 + 下缘）+ 短干，浅绿填充 + 深描边。
+            ground(out, 2.4 * s);
+            let rim = outline(temperate);
+            let fill = canopy(temperate);
+            let r = 5.0 * s;
+            let cy = dy + 2.4 * s + r * 1.05;
+            let lobes = [
+                (0.0, 0.0, r),
+                (-0.80 * r, -0.12 * r, 0.66 * r),
+                (0.82 * r, -0.06 * r, 0.64 * r),
+                (0.04 * r, 0.58 * r, 0.58 * r),
+            ];
+            for (ox, oy, rr) in lobes {
+                out.push(SitePrim::colored(
+                    kind,
+                    dx + ox,
+                    cy + oy,
+                    rr + 0.55 * s,
+                    rr + 0.55 * s,
+                    PrimShape::Circle,
+                    rim,
+                ));
+            }
+            for (ox, oy, rr) in lobes {
+                out.push(SitePrim::colored(
+                    kind,
+                    dx + ox,
+                    cy + oy,
+                    rr,
+                    rr,
+                    PrimShape::Circle,
+                    fill,
+                ));
+            }
+        }
+    }
+}
+
 /// 森林族的变体判定（气候带 + region 覆盖物强制）——程序化与贴图两条路径共用。
 ///
 /// 抽成公开纯函数是为了让两条路径**不可能**对同一格给出不同变体：
@@ -317,56 +466,48 @@ pub fn site_primitives(
     match kind {
         DecorKind::Forest => {
             // 气候变体（ADR-0039 D3）：沿 y 轴（0=北）三档。
-            // 颜色 = 顶点色（桶材质为白）；形状区分针叶排 / 阔叶团 / 绿洲稀树。
-            // 变体色由主题配方给定（ADR-0048 追记二）。
+            //
+            // **画法照 civ-atlas（ADR-0050 追记三）**：符号 = 平涂色块 + 深色
+            // 描边，不是写实贴图。每棵树 = 描边层（整组先画一遍压暗轮廓）+
+            // 填充层（扇贝状树冠）+ 树干；颜色全部由主题配方的族墨色派生，
+            // 因此与底图同一色族。远景下多棵叠成「暗色林斑」，拉近才看出单棵。
             let boreal = recipe.conifer_ink.to_rgba();
             let temperate = recipe.temperate_ink.to_rgba();
             let oasis = recipe.oasis_ink.to_rgba();
+            // 树干取山墨（暖褐灰）压暗。
+            let trunk = {
+                let c = recipe.mountain_ink.color;
+                [
+                    c[0] as f32 / 255.0 * 0.62,
+                    c[1] as f32 / 255.0 * 0.62,
+                    c[2] as f32 / 255.0 * 0.62,
+                    0.96,
+                ]
+            };
             // **region 覆盖物可强制变体**（ADR-0045 D2/D9）：作者声明「这片用
             // 针叶画」→ 变体由声明决定，**优先于** y 轴气候带派生。
             let variant = forest_variant(fy, variant, recipe);
-            if variant == DecorVariant::Conifer {
-                // 针叶：3 棵细三角（宽窄高挑），成排。
-                for s in 0..3u64 {
-                    let jx = (hash01(cx, cy, 10 + s) - 0.5) * 9.0;
-                    let jy = (hash01(cx, cy, 20 + s) - 0.5) * 8.0;
-                    out.push(SitePrim::colored(
-                        kind,
-                        jx * m,
-                        jy * m,
-                        1.7 * m,
-                        3.4 * m,
-                        PrimShape::Triangle,
-                        boreal,
-                    ));
-                }
-            } else if variant == DecorVariant::Broadleaf {
-                // 阔叶：3 颗小圆（径 2.6px），确定性散布在 ±5px 内。
-                for s in 0..3u64 {
-                    let jx = (hash01(cx, cy, 10 + s) - 0.5) * 10.0;
-                    let jy = (hash01(cx, cy, 20 + s) - 0.5) * 8.0;
-                    out.push(SitePrim::colored(
-                        kind,
-                        jx * m,
-                        jy * m,
-                        2.6 * m,
-                        2.6 * m,
-                        PrimShape::Circle,
-                        temperate,
-                    ));
-                }
-            } else {
-                // 绿洲稀树：1 颗暖绿小团（密度减半由 keep_prob 处理）。
-                out.push(SitePrim::colored(
+            // 每棵树的尺寸抖动 ±10%（同格重开不变，跨格不同）。
+            let k = 0.90 + 0.20 * r3;
+            let s = m * k;
+            // 第二棵（更小、偏左上）破重复感：约一半站点补一棵。
+            if r1 > 0.45 {
+                push_forest_glyph(
+                    &mut out,
                     kind,
-                    (r1 - 0.5) * 6.0 * m,
-                    (r2 - 0.5) * 6.0 * m,
-                    1.8 * m,
-                    1.8 * m,
-                    PrimShape::Circle,
+                    variant,
+                    -3.6 * m,
+                    1.4 * m,
+                    s * 0.7,
+                    boreal,
+                    temperate,
                     oasis,
-                ));
+                    trunk,
+                );
             }
+            push_forest_glyph(
+                &mut out, kind, variant, 0.0, 0.0, s, boreal, temperate, oasis, trunk,
+            );
         }
         DecorKind::Plains => {
             // 草点：单颗 1.2px 微圆，稀疏感靠步距。
@@ -1554,21 +1695,41 @@ mod tests {
             None,
             &recipe(),
         );
+        // 针叶：三层塔形 ×（描边 + 填充）= 6 片三角冠；站点补第二棵时翻倍。
+        let conifer_crowns = boreal
+            .iter()
+            .filter(|p| p.kind == PrimShape::Triangle && p.color[1] > p.color[0])
+            .count();
         assert!(
-            boreal.iter().all(|p| p.kind == PrimShape::Triangle),
-            "针叶应为细三角"
+            conifer_crowns >= 6 && conifer_crowns % 6 == 0,
+            "针叶应为 3 层 × 描边/填充 的三角冠（6 或 12 片），got {conifer_crowns}"
+        );
+        // 阔叶：四团扇贝冠 ×（描边 + 填充）= 8 个圆；描边暗、填充亮。
+        let broadleaf_circles: Vec<_> = temperate
+            .iter()
+            .filter(|p| p.kind == PrimShape::Circle)
+            .collect();
+        assert!(
+            broadleaf_circles.len() >= 8,
+            "阔叶应为 4 团 × 描边/填充（≥8 个圆），got {}",
+            broadleaf_circles.len()
         );
         assert!(
-            boreal.iter().all(|p| p.color[0] < 0.25 && p.color[1] > 0.3),
-            "针叶应深绿"
+            broadleaf_circles.iter().any(|p| p.color[1] < 0.2),
+            "阔叶必须有深色描边层"
         );
         assert!(
-            temperate.iter().all(|p| p.kind == PrimShape::Circle),
-            "阔叶应为圆团"
+            broadleaf_circles.iter().any(|p| p.color[1] > 0.4),
+            "阔叶必须有浅色填充层"
         );
-        assert_eq!(oasis.len(), 1, "绿洲稀树应只有 1 颗");
+        // 稀树：两团冠 ×（描边 + 填充）= 4 个圆。
+        let sparse_crowns = oasis.iter().filter(|p| p.kind == PrimShape::Circle).count();
         assert!(
-            oasis.iter().all(|p| p.color[0] > 0.25),
+            sparse_crowns >= 4,
+            "稀树应为 2 团 × 描边/填充（≥4 个圆），got {sparse_crowns}"
+        );
+        assert!(
+            oasis.iter().any(|p| p.color[0] > 0.25),
             "绿洲应暖绿（R 分量更高）"
         );
     }
@@ -1814,6 +1975,156 @@ mod tests {
                 uvs[site * 4 + 1][0]
             );
         }
+    }
+
+    /// 树的绘制顺序：树干 → 描边层 → 填充层。后端按索引顺序覆盖，
+    /// 顺序错了描边会盖住填充（整棵变黑）。
+    #[test]
+    fn forest_glyph_draws_trunk_then_outline_then_fill() {
+        let mut prims = Vec::new();
+        push_forest_glyph(
+            &mut prims,
+            DecorKind::Forest,
+            DecorVariant::Broadleaf,
+            0.0,
+            0.0,
+            1.0,
+            [0.18, 0.36, 0.21, 0.9],
+            [0.17, 0.34, 0.19, 0.9],
+            [0.29, 0.42, 0.21, 0.8],
+            [0.30, 0.20, 0.15, 1.0],
+        );
+        assert_eq!(prims[0].kind, PrimShape::Triangle, "先画树干");
+        assert!(
+            prims[1..5].iter().all(|p| p.color[1] < 0.2),
+            "第 1–4 个是描边层（暗）"
+        );
+        assert!(
+            prims[5..9].iter().all(|p| p.color[1] > 0.4),
+            "第 5–8 个是填充层（亮）"
+        );
+    }
+
+    /// 美术迭代用的离线预览（**忽略态**，不参与门禁）：把森林字形按顶点
+    /// 顺序光栅化到 PPM，人工看「像不像手绘地图」。
+    ///
+    /// `cargo test -p wv-render --features app dump_forest_preview -- --ignored --nocapture`
+    /// 产物：`crates/wv-render/target/decor_preview/forest.ppm`。
+    #[test]
+    #[ignore = "art preview, writes target/decor_preview/forest.ppm"]
+    fn dump_forest_preview() {
+        const W: usize = 380;
+        const H: usize = 240;
+        let mut px = vec![[0x8c_u8, 0xb9, 0x5f]; W * H];
+        let mut blend = |x: i32, y: i32, c: [f32; 4]| {
+            if x < 0 || y < 0 || x >= W as i32 || y >= H as i32 {
+                return;
+            }
+            let a = c[3].clamp(0.0, 1.0);
+            let i = y as usize * W + x as usize;
+            for k in 0..3 {
+                px[i][k] = ((c[k] * 255.0) * a + px[i][k] as f32 * (1.0 - a)).round() as u8;
+            }
+        };
+        let r = recipe();
+        let mut draw = |site_x: f32, site_y: f32, prims: &[SitePrim]| {
+            for p in prims {
+                let (cx, cy) = (site_x + p.dx, site_y - p.dy);
+                match p.kind {
+                    PrimShape::Circle => {
+                        for y in (cy - p.half_h).floor() as i32..=(cy + p.half_h).ceil() as i32 {
+                            for x in (cx - p.half_w).floor() as i32..=(cx + p.half_w).ceil() as i32
+                            {
+                                let nx = (x as f32 - cx) / p.half_w.max(0.01);
+                                let ny = (y as f32 - cy) / p.half_h.max(0.01);
+                                if nx * nx + ny * ny <= 1.0 {
+                                    blend(x, y, p.color);
+                                }
+                            }
+                        }
+                    }
+                    PrimShape::Triangle => {
+                        let v = [
+                            (cx - p.half_w, cy + p.half_h),
+                            (cx + p.half_w, cy + p.half_h),
+                            (cx, cy - p.half_h),
+                        ];
+                        let area = |a: (f32, f32), b: (f32, f32), c: (f32, f32)| {
+                            (b.0 - a.0) * (c.1 - a.1) - (c.0 - a.0) * (b.1 - a.1)
+                        };
+                        let a0 = area(v[0], v[1], v[2]).signum();
+                        for y in (cy - p.half_h).floor() as i32..=(cy + p.half_h).ceil() as i32 {
+                            for x in (cx - p.half_w).floor() as i32..=(cx + p.half_w).ceil() as i32
+                            {
+                                let q = (x as f32, y as f32);
+                                let w0 = area(v[0], v[1], q) * a0;
+                                let w1 = area(v[1], v[2], q) * a0;
+                                let w2 = area(v[2], v[0], q) * a0;
+                                if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
+                                    blend(x, y, p.color);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        };
+        // 左半：阔叶簇；右上：稀树；右下：针叶簇。
+        for gy in 0..7 {
+            for gx in 0..8 {
+                let prims = site_primitives(
+                    DecorKind::Forest,
+                    DecorBand::Edit,
+                    gx,
+                    gy,
+                    300,
+                    0.5,
+                    None,
+                    &r,
+                );
+                draw(30.0 + gx as f32 * 17.0, 170.0 - gy as f32 * 17.0, &prims);
+            }
+        }
+        for gy in 0..5 {
+            for gx in 0..6 {
+                let prims = site_primitives(
+                    DecorKind::Forest,
+                    DecorBand::Edit,
+                    gx,
+                    gy + 40,
+                    300,
+                    0.15,
+                    None,
+                    &r,
+                );
+                draw(190.0 + gx as f32 * 18.0, 215.0 - gy as f32 * 18.0, &prims);
+            }
+        }
+        for gx in 0..5 {
+            let prims = site_primitives(
+                DecorKind::Forest,
+                DecorBand::Edit,
+                gx,
+                90,
+                300,
+                0.85,
+                None,
+                &r,
+            );
+            draw(210.0 + gx as f32 * 18.0, 50.0, &prims);
+        }
+
+        let dir = std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../target/decor_preview"
+        ));
+        std::fs::create_dir_all(dir).unwrap();
+        let mut out = format!("P6\n{W} {H}\n255\n").into_bytes();
+        for p in &px {
+            out.extend_from_slice(p);
+        }
+        std::fs::write(dir.join("forest.ppm"), out).unwrap();
     }
 
     /// 贴图站点必须夹在本图图框内：框内不动、框外夹回、框太小则丢弃。

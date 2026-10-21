@@ -193,8 +193,9 @@ pub const WATERCOLOR: DecorRecipe = DecorRecipe {
     size_mul_nation: 1.6,
     wave_max_depth_m: 220,
     wave_depth_scale_m: 220.0,
-    // 日间森林贴图（ADR-0050）：3 格横排 = 针叶 / 阔叶 / 稀树。
-    forest_art: Some(DecorArt::new("overlays/forest/decor_atlas_day.png", 3)),
+    // 默认**走程序化墨树**（ADR-0050 追记三：学 civ-atlas——符号是形状 + 墨色，
+    // 不是贴纸）。贴图通道保留给自带图集的 pack；内置两包不贴图。
+    forest_art: None,
 };
 
 /// 暮色装饰配方——暗纸上的符号要更沉、更疏。
@@ -206,8 +207,8 @@ pub const WATERCOLOR_DUSK: DecorRecipe = DecorRecipe {
     size_mul_edit: 0.9,
     size_mul_region: 0.75,
     size_mul_nation: 1.4,
-    // 暮色走浅墨图集：暗底上深墨会糊成黑块（材质 tint 是乘法，提亮不了深墨）。
-    forest_art: Some(DecorArt::new("overlays/forest/decor_atlas_dusk.png", 3)),
+    // 暮色同样走程序化墨树；浅墨图集留在资产目录，供想要贴图的 pack 选用。
+    forest_art: None,
     ..WATERCOLOR
 };
 
@@ -288,18 +289,15 @@ mod tests {
         assert_ne!(WATERCOLOR.size_mul_nation, WATERCOLOR_DUSK.size_mul_nation);
     }
 
-    /// 森林贴图在两套配方里都已接线，且各指各的图集（ADR-0050）。
-    ///
-    /// 格数必须 = 3：渲染层按「针叶 / 阔叶 / 稀树」三变体取格，少一格会越界。
+    /// 内置两包的森林默认**走程序化墨树**（ADR-0050 追记三：学 civ-atlas，
+    /// 符号是形状 + 墨色，不是贴纸）。贴图通道仍可用——某 pack 想贴图就设
+    /// `forest_art: Some(DecorArt { … })`，渲染层会自动切过去。
     #[test]
-    fn forest_art_is_wired_for_both_palettes_with_three_cells() {
-        let day = WATERCOLOR.forest_art.expect("日间必须有森林贴图");
-        let dusk = WATERCOLOR_DUSK.forest_art.expect("暮色必须有森林贴图");
-        assert_eq!(day.cells, 3, "森林图集格数 = 三变体");
-        assert_eq!(dusk.cells, 3, "森林图集格数 = 三变体");
-        assert_ne!(
-            day.atlas, dusk.atlas,
-            "日/暮各指各的图集（深墨在暗底上会糊成黑块）"
+    fn builtin_packs_use_procedural_forest_by_default() {
+        assert!(WATERCOLOR.forest_art.is_none(), "日间内置包走程序化墨树");
+        assert!(
+            WATERCOLOR_DUSK.forest_art.is_none(),
+            "暮色内置包走程序化墨树"
         );
     }
 }

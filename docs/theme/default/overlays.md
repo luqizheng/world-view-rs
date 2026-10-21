@@ -1,11 +1,13 @@
 # 默认主题：地表覆盖物（Terrain Decor Overlay）
 
-> 地图**森林格**的手绘树图集（`terrain_decor` 的贴图路径，ADR-0050）。
-> 与 [`README.md`](README.md)（地物符号 / POI）并列，**本文是覆盖物贴图的提示词与
-> 制作规范唯一权威**——重制 / 扩图时照抄，不凭记忆重写提示词。
+> 地图**森林格**的地表覆盖物规范（`terrain_decor`，ADR-0050）。
+> 与 [`README.md`](README.md)（地物符号 / POI）并列，**本文是覆盖物画法 / 提示词的
+> 唯一权威**——重制时照此执行，不凭记忆重写。
 >
-> 资产由 AI 生成（智谱 `glm-image`，2026-10-21），经 `scripts/build_decor_atlas.py`
-> 归一化拼接后入库；**源图不入库**（体积大、可复现），只入库 384×128 图集。
+> **2026-10-21 状态（重要）**：默认已改回**程序化字形**（civ-atlas 画法：平涂 +
+> 深色描边，见 §七）。下面 §二 的 AI 水彩树提示词**保留作历史**，其产物已不作为
+> 默认——写实贴图与本项目的地图字形语言不兼容（用户实机判定）。贴图通道本身仍
+> 可用：某 pack 想要贴图时设 `DecorRecipe::forest_art = Some(...)`。
 
 ## 一、技术规范（生成与入库约定）
 
@@ -121,3 +123,32 @@ PY="C:/Users/leo/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/pytho
 - **格数固定 3**：加第 4 变体要同时改 `DecorArt.cells`、`forest_art_cell`、图集与 ADR-0050 D2；
 - **与地界树图集并存**：`feature_overlays` 仍用旧的 `tree_atlas_{day,dusk}.png`（淡彩），
   两条通道观感略有差异，合并列为后续小任务。
+
+## 七、现行画法：程序化字形（civ-atlas 式，2026-10-21 起）
+
+**为什么不贴图**：civ-atlas 的树是「平涂色块 + 深色描边」的**字形**——远景读作
+暗色林斑，拉近才看出扇贝状树冠；写实水彩贴图无论尺寸怎么调都像贴纸（用户实机判定）。
+
+**字形构成**（`terrain_decor::push_forest_glyph`）：
+
+| 变体 | 形状 | 填充 | 描边 |
+|---|---|---|---|
+| 阔叶 | 四团扇贝圆（主团 + 左右 + 下缘）+ 短干 | 族墨色 ×1.15 + 0.22（浅绿） | 同形状 +0.55px、色值 ×0.38 |
+| 针叶 | 三层塔形（下宽上窄）+ 树干 | 族墨色 ×1.35 + 0.12（中绿） | 同形状 +0.6px、×0.38 |
+| 稀树 | 两团稀冠 + 细干 | 绿洲墨 ×1.15 + 0.22（暖绿） | 同形状 +0.55px、×0.38 |
+
+- 绘制顺序 **树干 → 整组描边 → 整组填充**：重叠处只剩外轮廓（单测
+  `forest_glyph_draws_trunk_then_outline_then_fill` 钉死）；
+- 约一半站点补一棵 0.7× 的小树（偏移 −3.6 / +1.4 px），破重复感；
+- 尺寸走 `DecorBand::size_mul`（Edit 1.0 / Region 0.8 / Nation 1.6）。
+
+**预览（不启 GUI）**：
+
+```bash
+cargo test -p wv-render --features app dump_forest_preview -- --ignored
+# 产物：target/decor_preview/forest.ppm（转 PNG 即可看）
+```
+
+**验收**：远景（Nation）成片读作暗绿林斑、不出现整齐棋盘；拉近（Edit）每棵能看出
+树冠分团与描边；颜色必须落在 `core.forest` 同色族，不出现鲜绿/灰白。
+
