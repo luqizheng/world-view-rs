@@ -104,7 +104,7 @@ pub fn sync_map_frame(
     // ---- 外框：4 段 Rectangle ----
     // 顶 / 底：水平方向，长度 = size。
     // 左 / 右：垂直方向，长度 = size。
-    let mat_frame = materials.add(crate::theme::palette::colors(view.map_palette).line_on_dark);
+    let mat_frame = materials.add(view.active_theme.palette.line_on_dark);
     let segs: [(usize, Vec2, Vec2, f32); 4] = [
         // (idx, translation, scale, rotation_rad)
         (
@@ -157,7 +157,8 @@ pub fn sync_map_frame(
         return;
     }
     let mat_grid = materials.add(
-        crate::theme::palette::colors(view.map_palette)
+        view.active_theme
+            .palette
             .line_on_dark
             // ADR-0042 手绘风校准（外部诊断有效项）：0.35 的深线横贯全图
             // 会打断画面整体感（「编辑器 Debug 感」的来源之一）。参考手绘

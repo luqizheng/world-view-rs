@@ -56,3 +56,6 @@ pub use wv_theme::topographic;
 pub mod fonts;
 #[cfg(feature = "app")]
 pub mod overlays;
+/// 主题包切换（ADR-0023 M2）：`ViewState.theme_pack_id` → `ActiveThemePack`。
+#[cfg(feature = "app")]
+pub mod switch;

@@ -346,7 +346,7 @@ pub fn flush_terrain_texture(
             view.mode,
             atlas.as_deref(),
             view.terrain_soften,
-            wv_render::theme::theme_pack::builtin::for_palette(view.map_palette),
+            view.active_theme,
             0.0,
         );
         if let Some(mut img) = images.get_mut(&tex.handle) {
@@ -366,7 +366,7 @@ pub fn flush_terrain_texture(
             rect,
             res,
             view.terrain_soften,
-            wv_render::theme::theme_pack::builtin::for_palette(view.map_palette),
+            view.active_theme,
         );
     }
     tex.dirty = None;
@@ -1158,7 +1158,7 @@ mod tests {
             chunks_dirty: None,
             last_mode: None,
             last_soften: false,
-            last_palette: Default::default(),
+            last_theme_id: wv_render::theme::theme_pack::builtin::DEFAULT.id,
             last_map: Some(map.clone()),
         };
         (projection, EditHistory::default(), tex, map)

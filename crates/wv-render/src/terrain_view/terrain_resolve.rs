@@ -55,7 +55,7 @@ pub fn replace_terrain_texture(
     map: Option<wv_core::Id>,
     mode: ViewMode,
     soften: bool,
-    palette: crate::theme::palette::MapPalette,
+    theme_id: &'static str,
 ) {
     let res = image.width() / data.width.max(1);
     let handle = if images.get_mut(&tex.handle).is_some() {
@@ -75,7 +75,7 @@ pub fn replace_terrain_texture(
         chunks_dirty: None,
         last_mode: Some(mode),
         last_soften: soften,
-        last_palette: palette,
+        last_theme_id: theme_id,
         last_map: map,
     };
 }
@@ -171,7 +171,7 @@ pub fn active_terrain_or_placeholder(
 pub fn force_rebuild(tex: &mut TerrainTexture) {
     tex.last_mode = None;
     tex.last_soften = false; // 与 `Default` 一致即可；不与 view.terrain_soften 比
-    tex.last_palette = Default::default(); // 与 `Default` 一致即可；不与 view.map_palette 比
+    tex.last_theme_id = ""; // 空串 = 不可能命中的 id → 必走全图重建
     tex.last_map = None;
     tex.mark_all_dirty();
 }
@@ -193,7 +193,7 @@ mod tests {
             chunks_dirty: None,
             last_mode: Some(ViewMode::VectorFlat),
             last_soften: true,
-            last_palette: Default::default(),
+            last_theme_id: crate::theme::theme_pack::builtin::DEFAULT.id,
             last_map: Some(wv_core::Id::new_unchecked("map_x")),
         };
         force_rebuild(&mut tex);

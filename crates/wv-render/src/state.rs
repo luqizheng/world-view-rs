@@ -183,6 +183,16 @@ pub struct ViewState {
     /// 持久化键沿用 `ui-layout.yaml::map_theme` 字符串（D3 零迁移）；内置主题
     /// id 与 `MapPalette` key 同名（`daylight` / `dusk`），存量 YAML 不动。
     pub theme_pack_id: Option<String>,
+    /// **当前生效的主题包**（ADR-0023 M2：权威源 = `theme_pack_id`）。
+    ///
+    /// 为什么挂在 `ViewState` 上而不是独立的 `ActiveThemePack` Resource：
+    /// Bevy 的 system 参数上限是 16，`wv-app` 的几个重载 system 已经贴着上限
+    /// （`poll_open_project_dialog` 原本正好 16 个）——再加一个 Resource 参数
+    /// 就超限。`ViewState` 是所有消费点**本来就持有**的载体，挂这里零参数成本。
+    ///
+    /// 值由 `wv_render::theme::switch::sync_active_theme_pack` 写入（PreUpdate
+    /// 最前，**先于**所有消费点）。
+    pub active_theme: &'static crate::theme::theme_pack::ThemePack,
     /// 相机缩放（渲染层钳制范围）。
     pub scale: f32,
     /// 相机中心（世界坐标）。
@@ -281,6 +291,7 @@ impl Default for ViewState {
             scale: 1.0,
             map_palette: Default::default(),
             theme_pack_id: None,
+            active_theme: &crate::theme::theme_pack::builtin::DEFAULT,
             camera_center: Vec2::ZERO,
             terrain_visible: true,
             terrain_soften: true,
