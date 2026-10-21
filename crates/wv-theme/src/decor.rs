@@ -149,17 +149,26 @@ pub struct DecorRecipe {
     /// Nation 档符号尺寸系数。
     pub size_mul_nation: f32,
 
-    // ── 浅海白波 ────────────────────────────────────────────────
-    /// 白波上界（米）：浅于 `-wave_max_depth_m` 才画。
-    pub wave_max_depth_m: i16,
-    /// 密度衰减深度尺度（米）：`-10 m` 全画，`-wave_depth_scale_m` 稀到 0.15。
-    pub wave_depth_scale_m: f32,
+    // ── 浅海白波（离岸驱动 · ADR-0048 追记四）────────────────────
+    /// 白波离岸带的内界（格）：`d >= wave_band_min` 才画。
+    ///
+    /// **2026-10-21 追记四：判定从「绝对深度」改为「离岸距离」。** 旧判定
+    /// （`height ∈ [-220, 0]`）与新引入的近岸泡沫带 / 浅滩带在同一位置叠加，
+    /// 两套白色元素打架；改为离岸驱动后白弧退到「泡沫带之外、墨线圈之内」
+    /// 的空隙带，成为两层之间的填充。
+    pub wave_band_min_cells: u16,
+    /// 白波离岸带的外界（格）：`d > wave_band_max` 不画（远海是安静的）。
+    pub wave_band_max_cells: u16,
+    /// 密度衰减尺度（格）：`d = wave_band_min` 全画，`d = wave_band_max`
+    /// 稀到 0.15（线性衰减，与旧深度衰减同构、自变量换掉）。
+    pub wave_density_span_cells: u16,
 
     // ── 贴图（ADR-0050）────────────────────────────────────────
-    /// 森林族的手绘贴图；`None` = 走程序化图元（回退路径，缺资产不空帧）。
+    /// 森林族的手绘贴图；`None` = 走程序化图元（默认，civ-atlas 字形）。
     ///
-    /// 只有森林族有贴图：它是地图上覆盖面积最大、重复感最强的一族；
-    /// 其余族继续程序化，避免一次性引入 8 张图集。
+    /// 只有森林族有贴图槽位：它是地图上覆盖面积最大、重复感最强的一族；
+    /// 其余族继续程序化，避免一次性引入 8 张图集。**内置两包为 `None`**
+    /// （ADR-0050 追记三），通道留给自带图集的第三方 pack。
     pub forest_art: Option<DecorArt>,
 }
 
@@ -191,8 +200,9 @@ pub const WATERCOLOR: DecorRecipe = DecorRecipe {
     size_mul_edit: 1.0,
     size_mul_region: 0.8,
     size_mul_nation: 1.6,
-    wave_max_depth_m: 220,
-    wave_depth_scale_m: 220.0,
+    wave_band_min_cells: 3,
+    wave_band_max_cells: 9,
+    wave_density_span_cells: 6,
     // 默认**走程序化墨树**（ADR-0050 追记三：学 civ-atlas——符号是形状 + 墨色，
     // 不是贴纸）。贴图通道保留给自带图集的 pack；内置两包不贴图。
     forest_art: None,
@@ -234,8 +244,9 @@ mod tests {
         assert!((r.size_mul_edit - 1.0).abs() < 1e-6, "Edit 尺寸");
         assert!((r.size_mul_region - 0.8).abs() < 1e-6, "Region 尺寸");
         assert!((r.size_mul_nation - 1.6).abs() < 1e-6, "Nation 尺寸");
-        assert_eq!(r.wave_max_depth_m, 220, "白波深度上界");
-        assert!((r.wave_depth_scale_m - 220.0).abs() < 1e-6, "白波密度尺度");
+        assert_eq!(r.wave_band_min_cells, 3, "白波离岸带内界");
+        assert_eq!(r.wave_band_max_cells, 9, "白波离岸带外界");
+        assert_eq!(r.wave_density_span_cells, 6, "白波密度衰减尺度");
     }
 
     /// 变体色必须是配方值（旧值是函数体里的 const）。

@@ -722,7 +722,12 @@ impl<'a> CellRenderer<'a> {
     /// - `gx` / `gy`：连续格坐标（距离插值用，亚格精度才有平滑墨线）。
     fn water_detail(&self, c: [f32; 3], px: f32, py: f32, gx: f32, gy: f32) -> [f32; 3] {
         let sea = &self.sea;
-        if sea.water_grain <= 0.0 && sea.ripples.is_empty() && sea.foam.is_empty() {
+        if sea.water_grain <= 0.0
+            && sea.ripples.is_empty()
+            && sea.foam.is_empty()
+            && sea.shore_hatch.is_none()
+            && sea.shore_edge_strength <= 0.0
+        {
             return c;
         }
         let mut out = c;
@@ -788,6 +793,49 @@ impl<'a> CellRenderer<'a> {
                             let foam = sea.foam_ink[i] as f32 / 255.0;
                             *ch += (foam - *ch) * foam_a;
                         }
+                    }
+                }
+            }
+        }
+        // ④ 近岸排线（hatching）：离岸带内每隔若干像素一道横线（手绘海图
+        // 表示浅水波纹的经典手法；civ-atlas `HATCH_D` / `HATCH_A` 同款）。
+        // 排线只画在水格、且只在横线的那些行上——线是**纹理空间**的
+        // （烘焙与缩放解耦，代价是缩放时行距的屏幕观感会变）。
+        if let Some(h) = sea.shore_hatch {
+            if h.alpha > 0.0 && h.row_spacing_px > 0 {
+                if let Some(field) = self.shore {
+                    let d = wv_terrain::shore::sample_bilinear(field, self.w, self.h, gx, gy);
+                    if d < h.dist_cells {
+                        // 横线段：从岸线向外延伸（径向长度 = `dist_cells`），
+                        // 行的疏密由 `row_spacing_px` 定。墨量按噪声调制 →
+                        // 手工感（不是机械的等距线）。
+                        let row = (py as u32) % h.row_spacing_px;
+                        if row == 0 {
+                            // 墨量按噪声调制 → 手工感（不是机械的等距线）。
+                            let n = value_noise(px * 0.13, py * 0.13, 0x5EA6_A105);
+                            let a = h.alpha * (0.55 + 0.45 * n);
+                            for (i, ch) in out.iter_mut().enumerate() {
+                                let ink = sea.ink[i] as f32 / 255.0;
+                                *ch += (ink - *ch) * a;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // ⑤ 浅滩带外缘的积墨环（水彩边缘效应）：浅滩带与深水的交界处压一道
+        // 淡墨，让浅滩从「发光的渐变」变成「有边缘的水彩色块」。
+        if sea.shore_edge_strength > 0.0 && sea.shore_edge_width_cells > 0.0 {
+            if let Some(field) = self.shore {
+                let d = wv_terrain::shore::sample_bilinear(field, self.w, self.h, gx, gy);
+                let w = sea.shore_edge_width_cells;
+                let u = (d - sea.shore_band_cells) / w;
+                let ring = (-u * u).exp() * sea.shore_edge_strength;
+                if ring > 0.0 {
+                    let edge_ink = sea.shore_edge_ink.unwrap_or(sea.ink);
+                    for (i, ch) in out.iter_mut().enumerate() {
+                        let ink = edge_ink[i] as f32 / 255.0;
+                        *ch += (ink - *ch) * ring;
                     }
                 }
             }
