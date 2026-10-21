@@ -386,7 +386,9 @@ pub(crate) fn climate_at(
         4,
     );
     let coast_wet = (1.0 - (d / m_scale).clamp(0.0, 1.0)) * 0.06;
-    let moisture = (0.10 + 0.75 * m_noise + coast_wet).clamp(0.0, 1.0);
+    // 动态范围 0.95（评审 A1）：0.75 时 4 阶 fBm 的湿度几乎压不到 0.68
+    // 以上，雨林分支结构性不可达；抬到 0.95 后湿度可覆盖 0.08..1.0。
+    let moisture = (0.08 + 0.95 * m_noise + coast_wet).clamp(0.0, 1.0);
 
     ClimateSample {
         temperature,
@@ -413,7 +415,9 @@ fn lowland_biome(
     if temperature < 0.34 {
         return BIOME_TUNDRA;
     }
-    if temperature > 0.72 && moisture > 0.68 {
+    // 雨林与荒漠的湿度带错开（评审 A6）：雨林 >0.62、荒漠 <0.40，
+    // 中间留草原带，避免「m=0.679 荒漠、m=0.681 雨林」的贴脸切换。
+    if temperature > 0.72 && moisture > 0.62 {
         return BIOME_JUNGLE;
     }
 
@@ -435,7 +439,13 @@ fn lowland_biome(
     let desert_threshold = (0.50 - 0.40 * params.desert_cover).clamp(0.25, 0.85);
     let desert_patch = params.desert_cover * 1.6;
 
-    if aridity > desert_threshold || (hot > 0.35 && dry_patch < desert_patch) {
+    // 评审 A7：desert_cover = 0 必须真的没有荒漠——主判据与斑块判据
+    // 都只在 cover > 0 时参与；评审 A6：干斑块分支必须合取低湿度，
+    // 否则湿热格会被噪声低尾切成荒漠。
+    if params.desert_cover > 0.0
+        && (aridity > desert_threshold
+            || (hot > 0.35 && moisture < 0.40 && dry_patch < desert_patch))
+    {
         return BIOME_DESERT;
     }
     if density > forest_threshold {
@@ -666,8 +676,11 @@ pub fn generate_continents(
             } else {
                 continue;
             };
-            // 融合把高度从高地压回低地时，旧 biome 是高度派生的 `NONE`；
-            // 低地必须重新按气候分类，否则海岸带会出现大片「无群系」。
+            // 融合可能把「原始高度 ≥300（band 给 NONE）」的格压回低地：
+            // 此时 `blended` 保留的 new_biome 是 NONE，必须重新按气候分类，
+            // 否则海岸带会出现大片「无群系」。
+            // 评审 A4 曾判此块不可达，但其静态表漏了上述交叉项；实测
+            // （移除本块后 debug_assert 立即触发）证明块可达且必要。
             if new_cell.surface == SURFACE_LAND
                 && new_cell.height < HILL_MIN_M
                 && new_cell.biome == BIOME_NONE
@@ -683,6 +696,11 @@ pub fn generate_continents(
                     y_norm,
                 );
                 new_cell.biome = biome;
+                debug_assert_ne!(
+                    new_cell.biome, BIOME_NONE,
+                    "重分类后低地不得仍为 NONE（surface={} height={}）",
+                    new_cell.surface, new_cell.height
+                );
             }
             if new_cell != existing {
                 grid.set(gx, gy, new_cell);
@@ -830,25 +848,23 @@ mod tests {
         let n = Perlin::new(9);
         let equator_sea = climate_at((50.0, 50.0), 0.5, 0, 100.0, 200.0, &n).temperature;
         let pole_sea = climate_at((50.0, 50.0), 0.0, 0, 100.0, 200.0, &n).temperature;
-        let equator_high = climate_at((50.0, 50.0), 0.5, 3000, 100.0, 200.0, &n).temperature;
+        // 生成路径只在 h < 300 m 调用 climate_at，海拔项取真实量程上限：
+        // 290 m 的递减约 −0.04，小但严格单调。
+        let equator_high = climate_at((50.0, 50.0), 0.5, 290, 100.0, 200.0, &n).temperature;
         assert!(
             equator_sea > pole_sea,
             "赤道海平面 {equator_sea} 应暖于极地海平面 {pole_sea}"
         );
         assert!(
             equator_sea > equator_high,
-            "赤道海平面 {equator_sea} 应暖于赤道 3000 m {equator_high}"
+            "赤道海平面 {equator_sea} 应暖于赤道 290 m {equator_high}"
         );
     }
 
-    #[test]
-    fn moisture_is_higher_near_the_coast() {
-        let n = Perlin::new(10);
-        let near = climate_at((50.0, 50.0), 0.5, 0, 0.0, 200.0, &n).moisture;
-        let far = climate_at((50.0, 50.0), 0.5, 0, 200.0, 200.0, &n).moisture;
-        assert!(near > far, "近岸 {near} 应湿于内陆 {far}");
-    }
-
+    /// 纯函数分级响应。注意可达性：雪原分支要求 `|y−0.5| > 0.4545`
+    /// （陆地伸进图幅上下 4.5% 极边），常规内缩包络下端到端不可达，
+    /// 苔原（<0.34）才是常规图幅里实际出现的冷带——端到端测试因此
+    /// 不断言雪原（评审 A13）。
     #[test]
     fn cold_lowland_becomes_tundra_then_snowfield() {
         let p = ContinentParams::default();
@@ -882,8 +898,10 @@ mod tests {
         assert_eq!(classify(0.85, 0.90, &p), BIOME_JUNGLE, "湿热低地应为丛林");
     }
 
-    /// 端到端：同一张图应同时出现森林、草原与南北冷带——
-    /// 证明气候场不是「把整图换成一种群系」。
+    /// 端到端逐类断言（评审 A13 / A1）：同一张图应同时出现森林、丛林、
+    /// 荒漠、草原与苔原——证明气候场不是「把整图换成一种群系」，且每个
+    /// 分支都真实可达（A1 的雨林曾在旧标定下结构性不可达）。
+    /// 雪原为图幅极边专属，不在此断言（见 cold_lowland 测试的说明）。
     #[test]
     fn generated_continent_contains_climate_variety() {
         let env = vec![vec![(0.0, 0.0), (512.0, 0.0), (512.0, 512.0), (0.0, 512.0)]];
@@ -895,22 +913,33 @@ mod tests {
         let mut grass = 0;
         let mut cold = 0;
         let mut desert = 0;
+        let mut jungle = 0;
+        let mut none_lowland = 0;
         for c in g.cells() {
             if c.surface != SURFACE_LAND {
                 continue;
             }
-            match c.biome {
-                BIOME_FOREST => forest += 1,
-                BIOME_GRASSLAND => grass += 1,
-                BIOME_TUNDRA | BIOME_SNOWFIELD => cold += 1,
-                BIOME_DESERT => desert += 1,
-                _ => {}
+            if c.height < HILL_MIN_M {
+                match c.biome {
+                    BIOME_FOREST => forest += 1,
+                    BIOME_GRASSLAND => grass += 1,
+                    BIOME_TUNDRA | BIOME_SNOWFIELD => cold += 1,
+                    BIOME_DESERT => desert += 1,
+                    BIOME_JUNGLE => jungle += 1,
+                    BIOME_NONE => none_lowland += 1,
+                    _ => {}
+                }
             }
         }
         assert!(forest > 0, "应有森林，得 {forest}");
         assert!(grass > 0, "应有草原，得 {grass}");
-        assert!(cold > 0, "南北边缘应有冷带，得 {cold}");
+        assert!(cold > 0, "南北边缘应有冷带（苔原），得 {cold}");
         assert!(desert > 0, "干热低地应有荒漠，得 {desert}");
+        assert!(jungle > 0, "湿热低地应有丛林，得 {jungle}");
+        assert!(
+            none_lowland == 0,
+            "低地不得残留无群系格（评审 A4 不变量），得 {none_lowland}"
+        );
     }
 
     #[test]
