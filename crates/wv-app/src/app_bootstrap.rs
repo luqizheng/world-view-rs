@@ -210,6 +210,9 @@ pub fn run(config: AppConfig) {
     .init_resource::<feature_overlays::FeatureOverlayEntities>()
     // 地形装饰（ADR-0031）：六桶合批池 + 每桶材质，惰性创建。
     .init_resource::<terrain_decor::TerrainDecorPools>()
+    // 离岸距离场缓存（ADR-0048 追记四）：OceanWaves 的离岸带判定用，
+    // 按 terrain hash 键控（地形没变就复用）。
+    .init_resource::<terrain_decor::ShoreFieldCache>()
     // 区域覆盖物解析索引 + 缺失标记运行时资源（ADR-0045）。
     .init_resource::<region_overlay::RegionOverlayIndex>()
     .init_resource::<region_overlay::MissingMarkerAssets>()

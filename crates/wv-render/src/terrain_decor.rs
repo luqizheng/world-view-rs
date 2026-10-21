@@ -671,6 +671,55 @@ fn ensure_material(
         .clone()
 }
 
+/// 离岸距离场的缓存（ADR-0048 追记四）——`sync_terrain_decor` 按视口采样
+/// 格子判 OceanWaves 用。
+///
+/// **为什么缓存**：离岸距离是全局量（某格的值取决于全场水陆分布），不能像
+/// 逐格属性那样采样即得；每帧重算 O(N) BFS（1024² ≈ 数 ms）虽不致命但纯浪费
+/// ——地形没变时场不会变。**键 = `terrain_data_hash`**（与 isoline 缓存同源）：
+/// hash 不变直接复用，变了整场重算。
+///
+/// 与烘焙路径（`cells.rs` 的 `shore_field_for`）**不共享**：烘焙是纯函数管线
+/// （每次自算，行带并行契约），装饰是增量同步管线（缓存复用）——两条管线
+/// 的生命周期不同，强行共用会把纯函数签名撕开。
+#[derive(Resource, Default)]
+pub struct ShoreFieldCache {
+    hash: u64,
+    field: std::sync::Arc<Vec<u16>>,
+    w: u32,
+    h: u32,
+}
+
+impl ShoreFieldCache {
+    /// 取当前地形的离岸距离场（hash 不匹配则重算）。
+    fn get_or_compute(
+        &mut self,
+        data: &wv_core::terrain::TerrainData,
+        radius: u16,
+    ) -> std::sync::Arc<Vec<u16>> {
+        let hash = crate::terrain_view::isoline_overlay::terrain_data_hash(data);
+        let (w, h) = (data.width.max(1), data.height.max(1));
+        if self.hash != hash || self.w != w || self.h != h {
+            let field = wv_terrain::shore::shore_distance_field(
+                w,
+                h,
+                |x, y| {
+                    let c = &data.cells[(y as usize) * w as usize + x as usize];
+                    !(c.surface == wv_terrain::SURFACE_WATER || c.height < 0)
+                },
+                radius,
+            );
+            *self = Self {
+                hash,
+                field: std::sync::Arc::new(field),
+                w,
+                h,
+            };
+        }
+        self.field.clone()
+    }
+}
+
 /// 地形装饰主 system。
 #[allow(clippy::too_many_arguments)]
 pub fn sync_terrain_decor(
@@ -685,6 +734,7 @@ pub fn sync_terrain_decor(
     recipe: Res<RenderRecipe>,
     overlay_index: Res<crate::region_overlay::RegionOverlayIndex>,
     mut pools: ResMut<TerrainDecorPools>,
+    mut shore_cache: ResMut<ShoreFieldCache>,
 ) {
     let enabled = recipe.enabled(PassId::TerrainDecor) && layers.terrain.visible;
     if !enabled {
@@ -707,6 +757,10 @@ pub fn sync_terrain_decor(
     // 主题的装饰配方（ADR-0048 追记二）：高度阈值 / 气候带 / 墨色 / 步距
     // 全部由主题给定——渲染层只做执行器。
     let recipe = &view.active_theme.decor;
+
+    // 离岸距离场（ADR-0048 追记四）：OceanWaves 的离岸带判定用。缓存 Resource
+    // 按 terrain hash 键控，地形没变就复用（O(N) BFS 只在编辑后算一次）。
+    let shore_field = shore_cache.get_or_compute(data, recipe.wave_band_max_cells);
 
     let material = ensure_material(&mut pools, &mut materials);
 
@@ -771,7 +825,12 @@ pub fn sync_terrain_decor(
                 surface: c.surface,
                 biome: c.biome,
             }) {
-                if c.height < -recipe.wave_max_depth_m || c.height >= 0 {
+                // 离岸驱动（ADR-0048 追记四）：白弧只落在「泡沫带之外、墨线圈
+                // 之内」的空隙带——按绝对深度判定会与新浅滩带 / 泡沫带在同一
+                // 位置叠两套白色元素。深度不再参与（近岸浅滩的白浪花已由烘焙
+                // 泡沫带承担）。
+                let d = shore_field[gy as usize * data.width as usize + cx as usize];
+                if d < recipe.wave_band_min_cells || d > recipe.wave_band_max_cells {
                     cx += stride;
                     continue;
                 }
@@ -839,9 +898,11 @@ pub fn sync_terrain_decor(
                 DecorKind::Forest | DecorKind::Mountain | DecorKind::Snow | DecorKind::Marsh => 1.0,
                 DecorKind::Desert => 0.7,
                 DecorKind::OceanWaves => {
-                    // 密度随深度线性衰减：-10m 全画，-220m 稀至 0.15。
-                    ((recipe.wave_depth_scale_m + c.height as f32) / recipe.wave_depth_scale_m)
-                        .clamp(0.15, 1.0)
+                    // 密度随离岸距离线性衰减：带内缘全画，外缘稀至 0.15。
+                    let d = shore_field[gy as usize * data.width as usize + cx as usize];
+                    let span = recipe.wave_density_span_cells.max(1) as f32;
+                    let t = (d - recipe.wave_band_min_cells) as f32 / span;
+                    (1.0 - t).clamp(0.15, 1.0)
                 }
                 DecorKind::Plains | DecorKind::Hills => 0.4,
             };
@@ -1365,6 +1426,7 @@ mod tests {
         recipe.passes[PassId::TerrainDecor as usize] = PassPlan::enabled();
         app.insert_resource(recipe);
         app.init_resource::<TerrainDecorPools>();
+        app.init_resource::<ShoreFieldCache>();
         app.init_resource::<Assets<Mesh>>();
         app.init_resource::<Assets<ColorMaterial>>();
         // 覆盖物规则索引（ADR-0045 D9）：sync_terrain_decor 的必选依赖，
