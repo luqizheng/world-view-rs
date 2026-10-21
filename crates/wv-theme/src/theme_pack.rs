@@ -294,13 +294,18 @@ pub mod builtin {
         overlays: FeatureOverlaySet {
             forest: Some(FeatureRule {
                 halo_color: [0x5F, 0x7A, 0x4A],
-                halo_alpha: 0.30,
+                // 无图章遮罩后整片都是实心填充，浓度按「没有纹理打散」重新标定：
+                // 0.30 → 0.22（沿用旧值会比带图章时更抢眼——图章的留白原本在减淡）。
+                halo_alpha: 0.22,
                 symbol_color: [0x3F, 0x5A, 0x35],
                 symbol_size_px: 28.0,
                 symbol_spacing_wu: 40.0,
-                // Task 9（D12）：日间走 3 变体树图集 + 森林盖层晕图章。
+                // Task 9（D12）：日间符号走 3 变体树图集。
                 symbol_texture: Some("overlays/forest/tree_atlas_day.png"),
-                halo_texture: Some("overlays/forest/forest_fill.png"),
+                // 远带晕**不再贴图章**（2026-10-21 用户裁定 A）：512² 的林冠图章
+                // 被拉伸到地界包围盒后，缩成一块块「斑点饼干」，比符号更抢眼。
+                // 回纯色半透明晕——只提示「这片是林」，细节交给地表树。
+                halo_texture: None,
             }),
             // 其余族 v1 无内置演绎（ADR-0032 D2：字段一次定型，规则内容待美术）。
             grassland: None,
@@ -565,8 +570,8 @@ mod tests {
             .expect("默认包必须给森林族配置规则");
         assert_eq!(rule.halo_color, [0x5F, 0x7A, 0x4A], "日间晕色");
         assert!(
-            (rule.halo_alpha - 0.30).abs() < 1e-6,
-            "日间晕浓度 alpha=0.30，got {}",
+            (rule.halo_alpha - 0.22).abs() < 1e-6,
+            "日间晕浓度 alpha=0.22（无图章后重新标定），got {}",
             rule.halo_alpha
         );
         assert_eq!(rule.symbol_color, [0x3F, 0x5A, 0x35], "日间符号色");
@@ -586,9 +591,8 @@ mod tests {
             "日间符号走 3 变体树图集"
         );
         assert_eq!(
-            rule.halo_texture,
-            Some("overlays/forest/forest_fill.png"),
-            "日间晕走森林盖层图章"
+            rule.halo_texture, None,
+            "日间晕回纯色半透明（2026-10-21 用户裁定 A：地界晕不贴图章）"
         );
     }
 
