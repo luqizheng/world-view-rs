@@ -42,6 +42,10 @@
 //! 主题 crate 只依赖 `wv-theme`，**不依赖 `wv-render`**（ADR-0043 D2）——
 //! 这正是「加新风格 = 加新 crate、零改渲染层源码」得以成立的前提。
 
+/// `bevy::color::Color` 的重导出——外部主题 crate 构造自己的色板时需要
+/// （否则它们得自己依赖 bevy，而 ADR-0043 的注入契约要求「只依赖 wv-theme」）。
+pub use bevy::color::Color;
+
 pub mod colors;
 pub mod colors_dusk;
 pub mod colors_google;
