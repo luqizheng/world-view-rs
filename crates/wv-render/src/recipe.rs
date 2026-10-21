@@ -477,7 +477,7 @@ mod tests {
             chunks_dirty: None,
             last_mode: None,
             last_soften: false,
-            last_palette: crate::theme::palette::MapPalette::Daylight,
+            last_theme_id: crate::theme::theme_pack::builtin::DEFAULT.id,
             last_map: None,
         };
         (view, layers, world, drill, tex)

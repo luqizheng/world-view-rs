@@ -38,7 +38,6 @@ use crate::layer_frame::LayerFrame;
 use crate::recipe::RenderRecipe;
 use crate::state::{DrillState, GridConfig, ViewState, WorldProjection};
 use crate::theme::palette::MapPalette;
-use crate::theme::theme_pack::builtin;
 
 /// 缺失覆盖物标记的 Z：地形装饰（0.075）之上、道路（0.09）之下——属底图族，
 /// 不压过 POI 与标注（ADR-0045 追记一）。
@@ -301,7 +300,7 @@ pub fn sync_region_overlay_index(
     mut index: ResMut<RegionOverlayIndex>,
 ) {
     let map_id = drill.current().cloned();
-    let theme = builtin::for_palette(view.map_palette);
+    let theme = view.active_theme;
     let (Some(map_id), Some((w, h))) = (map_id, terrain_dims(&projection.world, &drill)) else {
         index.entries.clear();
         index.cell_owner.clear();

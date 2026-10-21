@@ -629,7 +629,7 @@ pub fn draw_map_gizmos(
         gizmos.rect_2d(
             Isometry2d::from_translation((min + max) * 0.5),
             Vec2::splat(size),
-            crate::theme::palette::colors(view.map_palette).line_on_dark,
+            view.active_theme.palette.line_on_dark,
         );
         let step = size / 4.0;
         for i in 1..4 {
@@ -637,17 +637,13 @@ pub fn draw_map_gizmos(
             gizmos.line_2d(
                 Vec2::new(x, min.y),
                 Vec2::new(x, max.y),
-                crate::theme::palette::colors(view.map_palette)
-                    .line_on_dark
-                    .with_alpha(0.35),
+                view.active_theme.palette.line_on_dark.with_alpha(0.35),
             );
             let y = min.y + step * i as f32;
             gizmos.line_2d(
                 Vec2::new(min.x, y),
                 Vec2::new(max.x, y),
-                crate::theme::palette::colors(view.map_palette)
-                    .line_on_dark
-                    .with_alpha(0.35),
+                view.active_theme.palette.line_on_dark.with_alpha(0.35),
             );
         }
     }
@@ -674,12 +670,12 @@ pub fn draw_map_gizmos(
             gizmos.circle_2d(
                 Isometry2d::from_translation(dot.pos),
                 r,
-                crate::theme::palette::colors(view.map_palette).line_on_dark,
+                view.active_theme.palette.line_on_dark,
             );
             gizmos.circle_2d(
                 Isometry2d::from_translation(dot.pos),
                 r * 0.5,
-                crate::theme::palette::colors(view.map_palette).line_on_mid,
+                view.active_theme.palette.line_on_mid,
             );
         }
     }
@@ -720,7 +716,7 @@ pub fn draw_map_gizmos(
             gizmos.circle_2d(
                 Isometry2d::from_translation(*s),
                 grid.cell_size * 0.6,
-                crate::theme::palette::colors(view.map_palette).line_on_light,
+                view.active_theme.palette.line_on_light,
             );
         }
     }

@@ -840,7 +840,7 @@ pub fn sync_terrain_decor(
 
     // 主题的装饰配方（ADR-0048 追记二）：高度阈值 / 气候带 / 墨色 / 步距
     // 全部由主题给定——渲染层只做执行器。
-    let recipe = crate::theme::theme_pack::builtin::for_palette(view.map_palette).decor;
+    let recipe = &view.active_theme.decor;
 
     let material = ensure_material(&mut pools, &mut materials);
 
@@ -861,7 +861,7 @@ pub fn sync_terrain_decor(
     let px_to_wu = view.scale;
 
     // 步距（格）：由屏幕步距换算，至少 1。
-    let stride = ((band.spacing_px(&recipe) * view.scale) / cell)
+    let stride = ((band.spacing_px(recipe) * view.scale) / cell)
         .ceil()
         .max(1.0) as i64;
     // 覆盖视口的格范围（钳到栅格）。
@@ -1030,14 +1030,14 @@ pub fn sync_terrain_decor(
                 }
             }
             // 图元占位色 → 桶默认 ink（构造器 [0;4] 时回填；变体色原样透传）。
-            let (ink_rgb, ink_a) = kind.ink(&recipe);
+            let (ink_rgb, ink_a) = kind.ink(recipe);
             let ink = [
                 ink_rgb[0] as f32 / 255.0,
                 ink_rgb[1] as f32 / 255.0,
                 ink_rgb[2] as f32 / 255.0,
                 ink_a,
             ];
-            for mut prim in site_primitives(kind, band, cx, gy, ph, fy, variant, &recipe) {
+            for mut prim in site_primitives(kind, band, cx, gy, ph, fy, variant, recipe) {
                 if prim.color == [0.0, 0.0, 0.0, 0.0] {
                     prim.color = ink;
                 }
@@ -1091,7 +1091,7 @@ pub fn sync_terrain_decor(
     }
 
     // 同步八桶。
-    let size_q = band.spacing_px(&recipe) * view.scale * band.size_mul(&recipe);
+    let size_q = band.spacing_px(recipe) * view.scale * band.size_mul(recipe);
     for (i, (verts, colors, indices)) in buckets.iter_mut().enumerate() {
         let geom = DecorGeom {
             verts: core::mem::take(verts),

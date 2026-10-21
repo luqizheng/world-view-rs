@@ -188,6 +188,15 @@ pub fn run(config: AppConfig) {
     // 主题包（ADR-0023 M1）：当前 `map_palette` 仍为权威源，本 Resource 仅作
     // 入口就位、不被任何渲染系统消费；M2 切消费点时再写回 `view.theme_pack_id`。
     .init_resource::<wv_render::theme::theme_pack::ActiveThemePack>()
+    // 主题包注册表（ADR-0023 M2）：内置包 + 外部主题 crate（`wv-theme-chinese-ink`）。
+    // **显式声明接入哪些包**——游戏 app 写自己的 merge 列表即可看到完整装配
+    // （ADR-0023 D2 §3：不用隐式默认）。
+    .insert_resource(wv_render::theme::switch::ThemeRegistry(
+        wv_theme::registry::MergedThemeRegistry::merge(&[
+            &wv_theme::registry::BuiltinRegistry,
+            &wv_theme_chinese_ink::ChineseInkRegistry,
+        ]),
+    ))
     // 渲染配方（ADR-0021 D1）：每帧 PreUpdate 末尾单点求值，渲染 gate 改读
     // `recipe.enabled(PassId::X)` 替代散落的 `matches!(view.mode, ...)`。
     .init_resource::<wv_render::recipe::RenderRecipe>()
@@ -235,6 +244,11 @@ pub fn run(config: AppConfig) {
     app.add_plugins(crate::http_integration::HttpServerPlugin {
         config: config.http_server_config.clone(),
     });
+    // 主题包同步（ADR-0023 M2）：`ViewState.theme_pack_id` → `ViewState.active_theme`。
+    // **必须先于所有消费点**——挂在 PreUpdate 最前；渲染消费点在 Update（PreUpdate
+    // 一定先于 Update），唯一同在 PreUpdate 的消费者（`poll_open_project_dialog`）
+    // 由 ui_shell 侧显式 `.before()` 保证。
+    app.add_systems(PreUpdate, wv_render::theme::switch::sync_active_theme_pack);
     app.add_systems(
         PreUpdate,
         // 必须排在 bevy_egui 建上下文之后：否则首帧 ctx_mut() 对未初始化
@@ -605,7 +619,7 @@ fn setup_terrain_texture_after_world(
         view.mode,
         atlas.as_ref(),
         view.terrain_soften,
-        wv_render::theme::theme_pack::builtin::for_palette(view.map_palette),
+        view.active_theme,
         0.0,
     );
     commands.insert_resource(terrain_view::new_terrain_texture(
@@ -615,7 +629,7 @@ fn setup_terrain_texture_after_world(
         map,
         view.mode,
         view.terrain_soften,
-        view.map_palette,
+        view.active_theme.id,
     ));
 }
 

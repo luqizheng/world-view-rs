@@ -228,13 +228,13 @@ pub fn update_street_labels(
     let label_color = match view.mode {
         crate::state::ViewMode::GoogleMap => crate::theme::colors_google::GOOGLE_LABEL_FILL,
         // 古舆图 / 暮色：深褐墨（暮色为浅米），不再回退纯白（ADR-0016）。
-        _ => crate::theme::palette::colors(view.map_palette).label_fill,
+        _ => view.active_theme.palette.label_fill,
     }
     .with_alpha(layers.label.opacity);
     // 晕边色（ADR-0016 M2）：与地名同口径（Google 白晕兜底）。
     let halo_color = match view.mode {
         crate::state::ViewMode::GoogleMap => bevy::color::Color::WHITE,
-        _ => crate::theme::palette::colors(view.map_palette).halo_fill,
+        _ => view.active_theme.palette.halo_fill,
     }
     .with_alpha(layers.label.opacity);
     let halo_offset = crate::label_halo::HALO_PX * view.scale.max(0.05);

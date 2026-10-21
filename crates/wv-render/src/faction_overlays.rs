@@ -29,7 +29,6 @@ use bevy::render::render_resource::{PrimitiveTopology, VertexFormat};
 
 use crate::layer_frame::LayerFrame;
 use crate::state::{PlaybackState, ViewState, WorldProjection};
-use crate::theme::palette;
 use crate::vector_layers::{build_stroke_batch_mesh, stroke_world_thickness};
 use wv_core::{
     faction_territories_at, memberships_of, resolved_faction_layers, subordinates_of, Faction,
@@ -176,7 +175,7 @@ pub fn sync_faction_overlays(
         let layer_order = resolved.iter().position(|l| l.id == t.layer).unwrap_or(0);
         let z = layer_z(layer_def.z, layers.influence.z_offset) + layer_order as f32 * 0.0001;
         let color = if layer_def.color_mode == FactionColorMode::Inherit {
-            let p = palette::colors(view.map_palette).soften_toward.to_srgba();
+            let p = view.active_theme.palette.soften_toward.to_srgba();
             let paper = [
                 (p.red * 255.0).round() as u8,
                 (p.green * 255.0).round() as u8,

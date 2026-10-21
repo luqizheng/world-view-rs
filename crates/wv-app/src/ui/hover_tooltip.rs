@@ -72,7 +72,7 @@ pub fn hover_tooltip_system(
 
     // 4. egui 浮窗（屏幕位置 = 光标 + 8px 偏移）
     let pos = [cursor_screen.x + 8.0, cursor_screen.y + 8.0];
-    let pal = palette::colors(view.map_palette);
+    let pal = &view.active_theme.palette;
     let kind_dot = kind_color(target.kind, pal);
     let text_color = kind_text_color(target.kind, pal);
     let sub_text = if subtitle.is_empty() {

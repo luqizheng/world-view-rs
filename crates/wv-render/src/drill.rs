@@ -898,13 +898,13 @@ pub fn update_place_labels(
     let label_color = match view.mode {
         crate::state::ViewMode::GoogleMap => crate::theme::colors_google::GOOGLE_LABEL_FILL,
         // 古舆图 / 暮色：place 用 `label_place`（= `label_fill` 同色，避免回归）。
-        _ => crate::theme::palette::colors(view.map_palette).label_place,
+        _ => view.active_theme.palette.label_place,
     }
     .with_alpha(layers.place.opacity);
     // 晕边色（ADR-0016 M2）：纸面色系（Google 用白晕兜底），随 Place 图层透明度。
     let halo_color = match view.mode {
         crate::state::ViewMode::GoogleMap => bevy::color::Color::WHITE,
-        _ => crate::theme::palette::colors(view.map_palette).halo_fill,
+        _ => view.active_theme.palette.halo_fill,
     }
     .with_alpha(layers.place.opacity);
     let halo_offset = crate::label_halo::HALO_PX * view.scale.max(0.05);
@@ -1108,7 +1108,9 @@ pub fn update_faction_labels(
         crate::state::ViewMode::GoogleMap => {
             crate::theme::colors_google::GOOGLE_CONTROL_TEXT.with_alpha(layers.label.opacity)
         }
-        _ => crate::theme::palette::colors(view.map_palette)
+        _ => view
+            .active_theme
+            .palette
             .label_region
             .with_alpha(layers.label.opacity),
     };
@@ -1472,7 +1474,9 @@ pub fn update_region_labels(
         crate::state::ViewMode::GoogleMap => {
             crate::theme::colors_google::GOOGLE_CONTROL_TEXT.with_alpha(layers.label.opacity)
         }
-        _ => crate::theme::palette::colors(view.map_palette)
+        _ => view
+            .active_theme
+            .palette
             .label_region
             .with_alpha(layers.label.opacity),
     };
@@ -1637,13 +1641,13 @@ pub fn update_sea_labels(
     // 走 `GOOGLE_LABEL_FILL` 深灰（与地名同族，v0.1 不做 water 主题区分）。
     let label_color = match view.mode {
         crate::state::ViewMode::GoogleMap => crate::theme::colors_google::GOOGLE_LABEL_FILL,
-        _ => crate::theme::palette::colors(view.map_palette).label_water,
+        _ => view.active_theme.palette.label_water,
     }
     .with_alpha(layers.label.opacity);
     // 晕边色：海面上托出文字，走纸面色（古舆图）/ 白（Google）。
     let halo_color = match view.mode {
         crate::state::ViewMode::GoogleMap => bevy::color::Color::WHITE,
-        _ => crate::theme::palette::colors(view.map_palette).halo_fill,
+        _ => view.active_theme.palette.halo_fill,
     }
     .with_alpha(layers.label.opacity);
     let halo_offset = crate::label_halo::HALO_PX * view.scale.max(0.05);

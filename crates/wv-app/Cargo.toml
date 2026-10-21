@@ -20,11 +20,6 @@ http = ["app", "dep:axum", "dep:tokio", "dep:async-trait"]
 # `Body::from` 配对做端到端 smoke（HTTP 测试模块 `server.rs`）。
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-# ADR-0023 M2 验收：`game_consumer` 示例演示"游戏 app 接入 wv-render + 主题包"
-# 的最小路径（只装 MapRenderPlugin / MapShellPlugin、不装 EditorOverlayPlugin）。
-# dev-dep 因为这是"插件接入契约"演示、非 wv-app 运行时依赖。
-wv-theme-chinese-ink = { workspace = true }
-
 [dependencies]
 wv-core = { workspace = true }
 wv-terrain = { workspace = true }
@@ -33,6 +28,10 @@ wv-edit = { workspace = true }
 wv-render = { workspace = true }
 # 主题层（ADR-0043 D2）：UI 侧直接重导出主题数据，不再经 wv-render 中转。
 wv-theme = { workspace = true }
+# 外部主题包（ADR-0023 M2）：编辑器**运行时**依赖——主题切换链路接通后，
+# 用户能在界面里选到水墨包（`wv-theme-chinese-ink` 只依赖 `wv-theme`，
+# 不依赖 wv-render——ADR-0043 的注入契约）。
+wv-theme-chinese-ink = { workspace = true }
 # ADR-0026：界面控件层（egui 控件 + 界面令牌），**非 optional**——控件层
 # 本体就是 egui，标准 `cargo test --workspace` 必须编译它（消灭 §7.1 盲区）。
 # 不受 `app` feature 门控；`app` 门此后只管 panel / dialog 层。

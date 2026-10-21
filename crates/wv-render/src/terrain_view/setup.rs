@@ -41,7 +41,7 @@ pub fn setup_terrain_texture(
         view.mode,
         atlas.as_ref(),
         view.terrain_soften,
-        crate::theme::theme_pack::builtin::for_palette(view.map_palette),
+        view.active_theme,
         0.0,
     );
     commands.insert_resource(new_terrain_texture(
@@ -51,7 +51,7 @@ pub fn setup_terrain_texture(
         map,
         view.mode,
         view.terrain_soften,
-        view.map_palette,
+        view.active_theme.id,
     ));
 }
 
@@ -66,7 +66,7 @@ pub fn new_terrain_texture(
     map: Option<wv_core::Id>,
     mode: crate::state::ViewMode,
     soften: bool,
-    palette: crate::theme::palette::MapPalette,
+    theme_id: &'static str,
 ) -> TerrainTexture {
     let res = image.width() / data.width.max(1);
     TerrainTexture {
@@ -78,7 +78,7 @@ pub fn new_terrain_texture(
         chunks_dirty: None,
         last_mode: Some(mode),
         last_soften: soften,
-        last_palette: palette,
+        last_theme_id: theme_id,
         last_map: map,
     }
 }
