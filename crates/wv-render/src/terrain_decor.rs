@@ -53,9 +53,16 @@ const BUCKET_Z_STEP: f32 = 0.0004;
 const MAX_SITES_PER_KIND: usize = 2200;
 /// 视口外扩余量（屏幕像素）：拖动相机时边缘符号不闪断。
 const VIEWPORT_MARGIN_PX: f32 = 32.0;
-/// 贴图符号的边长占采样步距的比例——图集里树冠四周有留白，取 0.9 让
-/// 相邻树冠轻微重叠成「林」，而不是一颗颗孤立图标。
-const TEXTURE_SIZE_OF_SPACING: f32 = 0.9;
+/// 贴图符号的屏幕边长（px）——**按镜头档给绝对值，不与采样步距成比例**。
+///
+/// 教训（2026-10-21 实机截图）：早期取 `0.9 × 采样步距`，Nation 档单棵树
+/// 65 px，比地名（12 px）大 5 倍，整片森林像一排巨型盆栽。树是**地表纹理**
+/// 不是地标，必须比地名小一档；放大档位时只允许缓慢增长，不许跟着步距翻倍。
+const TEXTURE_SIZE_PX_EDIT: f32 = 14.0;
+/// Region 档贴图边长（px）。
+const TEXTURE_SIZE_PX_REGION: f32 = 20.0;
+/// Nation 档贴图边长（px）。
+const TEXTURE_SIZE_PX_NATION: f32 = 24.0;
 
 /// 编译期嵌入的装饰贴图（ADR-0050）。
 ///
@@ -233,6 +240,18 @@ impl DecorBand {
             DecorBand::Nation => recipe.size_mul_nation,
             DecorBand::Region => recipe.size_mul_region,
             DecorBand::Edit => recipe.size_mul_edit,
+        }
+    }
+
+    /// 贴图符号的屏幕边长（px，尚未乘 `view.scale`）。
+    ///
+    /// 与 [`Self::spacing_px`] **解耦**：步距可随配方变大，树不能跟着一起长
+    /// ——否则 Nation 档会出现「一棵树比五个地名还大」（2026-10-21 实机截图）。
+    fn texture_size_px(self) -> f32 {
+        match self {
+            DecorBand::Nation => TEXTURE_SIZE_PX_NATION,
+            DecorBand::Region => TEXTURE_SIZE_PX_REGION,
+            DecorBand::Edit => TEXTURE_SIZE_PX_EDIT,
         }
     }
 }
@@ -1065,7 +1084,7 @@ pub fn sync_terrain_decor(
     }
     // 森林贴图桶（ADR-0050）：与程序化八桶互斥——有贴图时 Forest 桶为空。
     // 缺资产 / 解码失败 → 清掉可能残留的贴图批，森林回到程序化图元。
-    let tex_size = band.spacing_px(recipe) * view.scale * TEXTURE_SIZE_OF_SPACING;
+    let tex_size = band.texture_size_px() * view.scale;
     match forest_art {
         Some((art, texture)) => {
             let (verts, uvs, indices) = textured_quads(&textured_sites, tex_size, art.cells);
@@ -1342,6 +1361,38 @@ mod tests {
     fn region_band_spacing_is_coarser_than_edit() {
         assert!(DecorBand::Region.spacing_px(&recipe()) > DecorBand::Edit.spacing_px(&recipe()));
         assert!(DecorBand::Region.size_mul(&recipe()) < DecorBand::Edit.size_mul(&recipe()));
+    }
+
+    /// 贴图树必须**明显小于采样步距**，且三档绝对值不随步距翻倍——
+    /// 早期 `0.9 × 步距` 在 Nation 档出过 65 px 的巨型树（2026-10-21 实机截图）。
+    #[test]
+    fn texture_sprite_stays_much_smaller_than_the_sampling_stride() {
+        let r = recipe();
+        // 三档的「树 / 步距」占比上限：Edit 允许最密（树几乎贴着走），
+        // Nation 最松（放大档位下树只能占步距的一小半，否则一片林变一排盆栽）。
+        for (band, cap) in [
+            (DecorBand::Edit, 0.6),
+            (DecorBand::Region, 0.5),
+            (DecorBand::Nation, 0.4),
+        ] {
+            let size = band.texture_size_px();
+            let stride = band.spacing_px(&r);
+            assert!(
+                size <= stride * cap,
+                "{band:?}: 树 {size} px 不得超过步距 {stride} 的 {:.0}%",
+                cap * 100.0
+            );
+        }
+        assert!(
+            DecorBand::Nation.texture_size_px() <= 26.0,
+            "Nation 档树高上限 26 px（地名 12 px 的两倍余量），got {}",
+            DecorBand::Nation.texture_size_px()
+        );
+        assert!(
+            DecorBand::Edit.texture_size_px() >= 12.0,
+            "Edit 档不得小于 12 px（再小看不清树种），got {}",
+            DecorBand::Edit.texture_size_px()
+        );
     }
 
     #[test]

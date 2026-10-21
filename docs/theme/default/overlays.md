@@ -18,7 +18,7 @@
 | 文件名 | `crates/wv-render/assets/overlays/forest/decor_atlas_{day,dusk}.png` |
 | 内容 | 单主体 / 一组主体、居中、完整可见、四周留白；**无文字、无边框、无地面草地** |
 | 墨色 | 日间 = 深墨彩色；暮色 = 浅墨单色（`--light 242,234,216`，与既有 `tree_atlas_dusk` 同法） |
-| 屏显尺寸 | Edit ≈ 23 px、Region ≈ 41 px、Nation ≈ 65 px（`0.9 × 采样步距`）——**按 24 px 可读性验收** |
+| 屏显尺寸 | **Edit 14 / Region 20 / Nation 24 px**（三档绝对值，与采样步距解耦——树是地表纹理，不许跟着步距放大） |
 
 ### 为什么要有「浅墨版」
 
