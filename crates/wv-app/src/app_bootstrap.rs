@@ -473,7 +473,8 @@ pub fn run(config: AppConfig) {
             // v0.3：Inspector 整体右移后绘在最后（右上角，离顶栏最近），
             // 避免被左列 / 中列面板遮挡。
             ui::panel_inspector,
-            ui::panel_cell_editor,
+            // 2026-10-22 统一 Inspector：Cell 编辑器的**内容**已迁入 Inspector
+            // 的「属性」页签，独立浮窗不再注册（枚举项暂留，退役见 M4）。
             ui::panel_validation,
             // 「新建地图」对话框（CommandId::NewMap 打开；居中模态窗）。
             ui::new_map_dialog,

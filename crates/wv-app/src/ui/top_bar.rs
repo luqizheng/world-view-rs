@@ -251,7 +251,10 @@ fn browse_edit_segment(
                         for p in Panel::ALL {
                             panels.set_visible(p, false);
                         }
-                        panels.set_visible(Panel::CellEditor, true);
+                        // 2026-10-22 统一 Inspector：Cell 编辑已并入 Inspector 的
+                        // 「属性」页签（EditCell 工具激活时自动出 Cell 表单），
+                        // 故工作区开的是 Inspector 而不是已停渲染的 CellEditor。
+                        panels.set_visible(Panel::Inspector, true);
                         palette.pending = Some(CommandId::SelectMapTool(MapToolId::EditCell));
                         view.mode = ViewMode::Topographic;
                     }
