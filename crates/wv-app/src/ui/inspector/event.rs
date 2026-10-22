@@ -132,7 +132,10 @@ pub fn event_form(
         .unwrap_or_default();
     ui.horizontal(|ui| {
         ui.label("地点：");
-        if ui.text_edit_singleline(&mut loc_place).changed() {
+        if ui
+            .add(egui::TextEdit::singleline(&mut loc_place).desired_width(160.0))
+            .changed()
+        {
             let mut patch = EventFieldPatch::from_event(event);
             patch.location = if loc_place.trim().is_empty() {
                 None
@@ -194,7 +197,7 @@ pub fn event_form(
         .add(
             egui::TextEdit::multiline(&mut narrative_buf)
                 .desired_rows(3)
-                .desired_width(f32::INFINITY),
+                .desired_width(252.0),
         )
         .changed()
     {
@@ -216,7 +219,7 @@ pub fn event_form(
         .add(
             egui::TextEdit::multiline(&mut outcome_buf)
                 .desired_rows(2)
-                .desired_width(f32::INFINITY),
+                .desired_width(252.0),
         )
         .changed()
     {
@@ -233,17 +236,23 @@ pub fn event_form(
     ui.add_space(space::XS);
     ui.horizontal(|ui| {
         ui.label("效果（只读）：");
-        value_box(ui, shell, &event.effects.len().to_string(), None, false);
+        ui.allocate_ui(egui::vec2(220.0, 28.0), |ui| {
+            value_box(ui, shell, &event.effects.len().to_string(), None, false);
+        });
     });
     ui.horizontal(|ui| {
         ui.label("旁白（只读）：");
-        value_box(ui, shell, &event.narrations.len().to_string(), None, false);
+        ui.allocate_ui(egui::vec2(220.0, 28.0), |ui| {
+            value_box(ui, shell, &event.narrations.len().to_string(), None, false);
+        });
     });
 
     // ── 稳定 ID（只读）──────────────────────────────────────────────
     ui.horizontal(|ui| {
         ui.label("ID：");
-        value_box(ui, shell, event.id.as_str(), None, false);
+        ui.allocate_ui(egui::vec2(220.0, 28.0), |ui| {
+            value_box(ui, shell, event.id.as_str(), None, false);
+        });
     });
 }
 

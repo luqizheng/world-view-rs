@@ -59,7 +59,32 @@ pub fn faction_form(
         });
         ui.horizontal(|ui| {
             ui.label("颜色：");
-            if ui.text_edit_singleline(&mut color_buf).changed() {
+            // 取色器：egui 内置 color picker 弹窗（用户 2026-10-22 要求）。
+            // 与文本框双向——任一侧改动都走同一条提交路径；解析失败的
+            // 文本（如打到一半的 "#0"）不动色板，色板改动才回写文本。
+            if let Some(mut rgb) = wv_core::color::Color(color_buf.clone()).to_rgb() {
+                if egui::color_picker::color_edit_button_srgb(ui, &mut rgb).changed() {
+                    color_buf = format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
+                    changed = true;
+                }
+            } else {
+                // 当前文本解析不出颜色：给一块「无效色」占位（斜纹感用暗红），
+                // 点它不弹窗——先把文本修成合法 #RRGGBB。
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                ui.painter()
+                    .rect_filled(rect, 4.0, egui::Color32::from_rgb(90, 40, 40));
+                ui.painter().rect_stroke(
+                    rect,
+                    4.0,
+                    egui::Stroke::new(1.0, shell.border_subtle()),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            if ui
+                .add(egui::TextEdit::singleline(&mut color_buf).desired_width(90.0))
+                .changed()
+            {
                 changed = true;
             }
         });

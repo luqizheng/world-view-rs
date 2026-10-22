@@ -139,6 +139,30 @@ pub fn update_place_now(
     }
 }
 
+/// 只读值框的**固定宽槽位**（220px）。
+///
+/// `value_box` 吃 `available_width()`——在 egui Window 的无界测量 pass 里
+/// 那是屏幕级宽，会把窗口撑到全屏且缩不回来（Resize 只扩不缩，
+/// 2026-10-22 实机 bug）。一切 Inspector 表单里的 `value_box` /
+/// `numeric_input_bounded` 都必须先包固定宽的 `allocate_ui`
+/// （cell_editor 的既有先例）。
+fn value_slot(ui: &mut egui::Ui, shell: &UiShell, text: &str) {
+    ui.allocate_ui(egui::vec2(220.0, 28.0), |ui| {
+        value_box(ui, shell, text, None, false);
+    });
+}
+
+/// 可编辑数值输入的**固定宽槽位**（110px）。
+fn numeric_slot(ui: &mut egui::Ui, shell: &UiShell, value: &mut f32) -> egui::Response {
+    let mut resp = None;
+    ui.allocate_ui(egui::vec2(110.0, 28.0), |ui| {
+        resp = Some(numeric_input_bounded(
+            ui, shell, value, "", 1.0, -100_000.0, 100_000.0,
+        ));
+    });
+    resp.expect("allocate_ui 闭包必然执行一次")
+}
+
 /// 地点属性表单。
 #[allow(clippy::too_many_arguments)]
 pub fn place_form(
@@ -204,10 +228,13 @@ pub fn place_form(
         let mut x_buf = place.x.unwrap_or(0.0);
         let mut y_buf = place.y.unwrap_or(0.0);
         if anchor_editable {
-            let x_resp =
-                numeric_input_bounded(ui, shell, &mut x_buf, "", 1.0, -100_000.0, 100_000.0);
-            let y_resp =
-                numeric_input_bounded(ui, shell, &mut y_buf, "", 1.0, -100_000.0, 100_000.0);
+            // 固定宽槽位——**必须**包 allocate_ui：value_box / numeric 吃
+            // `available_width()`，而 egui Window 偶发做无界测量（表单切换 /
+            // 重开），那一刻 available 是屏幕级宽 → 内容期望宽撑到全屏 →
+            // Resize 只扩不缩，窗口永久变成全屏宽（2026-10-22 实机 bug）。
+            // cell_editor 的既有用法（allocate_ui(96×28 / 168×28)）就是这层。
+            let x_resp = numeric_slot(ui, shell, &mut x_buf);
+            let y_resp = numeric_slot(ui, shell, &mut y_buf);
             if x_resp.changed() || y_resp.changed() {
                 update_place_now(
                     projection,
@@ -217,7 +244,7 @@ pub fn place_form(
                 );
             }
         } else {
-            value_box(
+            value_slot(
                 ui,
                 shell,
                 &format!(
@@ -225,15 +252,13 @@ pub fn place_form(
                     place.x.unwrap_or(0.0),
                     place.y.unwrap_or(0.0)
                 ),
-                None,
-                false,
             );
         }
     });
     ui.horizontal(|ui| {
         ui.label("范围：");
         // 范围是包围盒的推论——与锚点同源，故始终只读。
-        value_box(
+        value_slot(
             ui,
             shell,
             &format!(
@@ -241,8 +266,6 @@ pub fn place_form(
                 place.w.unwrap_or(0.0),
                 place.h.unwrap_or(0.0)
             ),
-            None,
-            false,
         );
     });
     if !anchor_editable {
@@ -256,7 +279,7 @@ pub fn place_form(
     // ── 群系（只读 + 重生成标记）──────────────────────────────────────
     ui.horizontal(|ui| {
         ui.label("群系：");
-        value_box(ui, shell, &biome_name(place.biome), None, false);
+        value_slot(ui, shell, &biome_name(place.biome));
     });
     if ui
         .button(t_key(current_loc, I18nKey::InspectorPlaceRegenMarker))
@@ -284,17 +307,15 @@ pub fn place_form(
     // ── 所属地图 / 稳定 ID（只读）─────────────────────────────────────
     ui.horizontal(|ui| {
         ui.label("所属地图：");
-        value_box(
+        value_slot(
             ui,
             shell,
             place.map.as_ref().map(|m| m.as_str()).unwrap_or("—"),
-            None,
-            false,
         );
     });
     ui.horizontal(|ui| {
         ui.label("ID：");
-        value_box(ui, shell, place.id.as_str(), None, false);
+        value_slot(ui, shell, place.id.as_str());
     });
 }
 
