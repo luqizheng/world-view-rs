@@ -721,3 +721,47 @@ let trees = generate_trees(
 **仍未做**：§九-1 森林底色蒙版（WGSL 混深绿，属地形着色管线，须另裁）、
 §九-3 Chunk 级生成（待大地图性能/接缝问题显现）、
 §七 的 Sprite 形态（留待「手绘森林是产品硬需求」时独立裁决）。
+
+## 追记二（2026-10-22，视觉落地回合）：§九-1 与 §七 已裁并落地（ADR-0050）
+
+**用户裁定**（2026-10-22）：「**§七 A + §九-1 A（视觉向）**」——形态契约扩展到
+**地形驱动的森林**（位图形态可选，程序化仍是默认），林底色**混在 CPU 烘焙路径**
+（**不**走 WGSL）。决议全文见 **`docs/adr/ADR-0050-forest-visual-layer.md`**；
+ADR-0031 的 D5 相应**追记二**修正为「默认形态 = 程序化」（D5 的实现不变）。
+
+### §九-1 森林底色蒙版：CPU 烘焙（不是 WGSL）
+
+| Codex 原文 | 本仓库落点 | 理由 |
+|---|---|---|
+| WGSL 混深绿 | `terrain_view::cells::base_color_of` 里混 `PaletteColors.forest_floor` | 仓库**零自定义材质**（地形是 CPU 烘焙 RGBA → 分块 → `ColorMaterial`）；引入 WGSL 须重写 tint/soften/alpha/mip，且与 ADR-0044 的烘焙渗色抢同一段管线 |
+| 逐像素 mask | 逐格密度场（`wv_terrain::forest::forest_density_cell`） | 烘焙契约要求「一格的取值只依赖该格及其邻域」，故把密度公式暴露为**纯函数**（整图场 = 逐格循环版，单测锁定二者恒等） |
+| 强度 / 阈值 | `DecorRecipe.forest_base_strength`（默认 0.55）/ `forest_base_min_density`（默认 0.40） | 数值住主题层（ADR-0048 追记二的配方纪律） |
+
+**混色位点选在 `base_color_of` 内** → 林底色跟着 ADR-0044 的 5×5 水彩渗色一起
+晕开：森林边缘不是硬边，是洇出来的（手绘古舆图观感）。
+**影响面**：仅 VectorFlat / Schematic 两档；瓦片图集档（RealTerrain）与分析档
+（Topographic / GoogleMap / Event / Coastline）**按设计不受影响**。
+
+### §七 Sprite 形态：主题可选的第二形态（形态二选一）
+
+- `DecorRecipe.forest_symbol: Option<ForestSymbolSpec>` —— `None` = 程序化形态
+  （ADR-0031 D5 原样），`Some` = 位图形态（`overlays/forest/tree_atlas_day.png`，
+  3 变体 × 128²）。**形态是主题的一次性选择，不是运行时开关。**
+- 新增渲染层 `wv_render::forest_canopy`：按密度场撒手绘树（密度定疏密与树冠
+  大小，密度分级定 tint），Z = 0.078，画家算法定前后关系，贴图按 key 缓存。
+- **形态二选一**：位图形态下，程序化森林桶（ADR-0031）让位；贴图缺失时告警并
+  不画，**不静默回退**到程序化形态。
+- 水墨主题（`wv-theme-chinese-ink`）**保持程序化形态**（`forest_symbol: None`）
+  + 弱林底（`0.28`）——水墨的树是「点苔」，位图树会破坏画意。
+
+### 与 Codex 原文的偏差（留痕）
+
+| # | Codex 原文 | 偏差 | 原因 |
+|---|---|---|---|
+| a | 树种按温度分流（针叶 / 阔叶 / 棕榈） | **只按密度分级 tint**，不分流树种 | 温度是生成期派生量、**不落盘**，渲染期拿不到（ADR-0031 追记一已定：群系驱动） |
+| b | 树图集 8 变体 | 当前 **3 变体**（`tree_atlas_day.png` 实为 384×128 = 3×128²） | 资产待补；`variants` 是参数，补资产即补变体，**不改代码** |
+| c | 树根 y 偏移（`y += 0.05`） | 改为**图集格底边下沉 15%** | 实测图集着墨底边在格高 85%/95%/93%——不补偿则树**浮空**（`TREE_BASE_SINK`） |
+| d | WGSL 蒙版 | CPU 烘焙 | 见上表 |
+
+**仍未做**：**§九-3 Chunk 级生成**（待大地图性能/接缝问题显现再启）、
+树图集资产扩充（3 → 更多变体）、树种分流（待温度落盘口径确立）。
