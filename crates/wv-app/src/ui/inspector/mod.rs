@@ -50,6 +50,8 @@ use super::widgets::{empty_state, float_window, BadgeKind, ICON_CHEVRON_RIGHT};
 
 use wv_core::{EntityKind, SelectedEntity};
 
+pub mod place;
+
 /// Inspector 的页签。**会话态**——不落 `ui-layout.yaml`
 /// （那是布局记忆，不是 UI 偏好）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -157,8 +159,9 @@ pub fn selection_alive(world: &wv_core::World, sel: &SelectedEntity) -> bool {
 #[allow(clippy::too_many_arguments)]
 pub fn panel_inspector(
     mut contexts: EguiContexts,
-    // `projection` 目前只读（M2 的表单落地后才需要可变引用）。
-    (projection, mut edit): (
+    // `projection` 需可变：属性表单要提交 EditCommand（经 `EditHistory`），
+    // 而命令的 `apply` 会写回 `projection.world`。
+    (mut projection, mut edit): (
         ResMut<WorldProjection>,
         ResMut<crate::edit::editing::EditHistory>,
     ),
@@ -218,7 +221,7 @@ pub fn panel_inspector(
                         ui,
                         &shell,
                         selected,
-                        &projection,
+                        &mut projection,
                         &mut edit,
                         &view,
                         &playback,
@@ -253,16 +256,16 @@ fn render_properties(
     ui: &mut egui::Ui,
     shell: &UiShell,
     selected: Option<&SelectedEntity>,
-    projection: &WorldProjection,
-    _edit: &mut crate::edit::editing::EditHistory,
-    _view: &crate::state::ViewState,
-    _playback: &crate::state::PlaybackState,
+    projection: &mut WorldProjection,
+    edit: &mut crate::edit::editing::EditHistory,
+    view: &crate::state::ViewState,
+    playback: &crate::state::PlaybackState,
     _grid: &wv_render::state::GridConfig,
     _edit_cell: &mut wv_render::state::EditCellState,
     _display: &mut wv_render::faction_overlays::FactionDisplay,
-    _tex: &mut wv_render::terrain_view::TerrainTexture,
-    _notice: &mut crate::ui_shell::ShellNotice,
-    _time: &Time,
+    tex: &mut wv_render::terrain_view::TerrainTexture,
+    notice: &mut crate::ui_shell::ShellNotice,
+    time: &Time,
     _loc: crate::i18n::Locale,
 ) {
     let form = resolve_form(selected, false);
@@ -279,7 +282,47 @@ fn render_properties(
         FormKind::Cell => {
             ui.label("Cell 表单（M2 接入）");
         }
-        FormKind::Place | FormKind::Region | FormKind::Faction | FormKind::Event => {
+        FormKind::Place => {
+            // 存活守卫。
+            let Some(sel) = selected else {
+                render_empty(ui, shell);
+                return;
+            };
+            if !selection_alive(&projection.world, sel) {
+                render_empty(ui, shell);
+                return;
+            }
+            render_selection_header(ui, shell, sel);
+            // 取出该地点的**克隆**再渲染——表单要可变引用（写命令），
+            // 而 `projection.world` 的借用不能与写冲突。克隆是必要的代价：
+            // Place 是小结构体（几个 Option），克隆成本可忽略。
+            let Some(place) = projection
+                .world
+                .distances
+                .places
+                .iter()
+                .find(|p| p.id == sel.id)
+                .cloned()
+            else {
+                render_empty(ui, shell);
+                return;
+            };
+            let has_territory = place::place_has_territory(&projection.world, &place.id);
+            place::place_form(
+                ui,
+                shell,
+                &place,
+                has_territory,
+                projection,
+                edit,
+                view,
+                tex,
+                notice,
+                time,
+                playback,
+            );
+        }
+        FormKind::Region | FormKind::Faction | FormKind::Event => {
             // 存活守卫。
             let Some(sel) = selected else {
                 render_empty(ui, shell);
@@ -291,7 +334,6 @@ fn render_properties(
             }
             render_selection_header(ui, shell, sel);
             let label = match form {
-                FormKind::Place => "Place 表单（M2 接入）",
                 FormKind::Region => "Region 表单（M2 接入）",
                 FormKind::Faction => "Faction 表单（M2 接入）",
                 FormKind::Event => "Event 表单（M2 接入）",
