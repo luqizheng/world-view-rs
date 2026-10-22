@@ -91,6 +91,16 @@ impl InspectorTab {
     }
 }
 
+/// CellMap 工作区下势力层/事态两页签**禁用**（用户裁定：CellMap 只关注
+/// 自然，其他不管）——禁用而非隐藏，布局不跳。返回 `tabs` 的 `disabled` 切片。
+fn inspector_disabled_tabs(workspace_active: bool) -> &'static [usize] {
+    if workspace_active {
+        &[1, 2]
+    } else {
+        &[]
+    }
+}
+
 /// Inspector 的 UI 会话状态（当前页签）。
 ///
 /// 与 [`PanelState`]（可见性 / 位置）同层——都是**会话态**，不落盘。
@@ -201,6 +211,8 @@ pub fn panel_inspector(
     };
     let selection_clone = projection.selection.clone();
     let selected = selection_clone.as_ref();
+    // CellMap 工作区是否激活（在 float_window 借用 panels 之前快照）。
+    let workspace_active = panels.cell_workspace_backup.is_some();
 
     float_window(
         ctx,
@@ -228,7 +240,7 @@ pub fn panel_inspector(
                 "inspector_tabs",
                 &labels,
                 inspector.tab.index(),
-                &[],
+                inspector_disabled_tabs(workspace_active),
             ) {
                 inspector.tab = InspectorTab::from_index(idx);
             }
@@ -770,6 +782,19 @@ mod tests {
         // 街道段无稳定 id，无法判定存活——恒 false。
         let w = wv_core::World::default();
         assert!(!selection_alive(&w, &sel(EntityKind::StreetSegment, "s1")));
+    }
+
+    #[test]
+    fn inspector_tabs_disabled_only_in_cell_workspace() {
+        assert_eq!(
+            inspector_disabled_tabs(true),
+            &[1, 2],
+            "工作区：势力层/事态禁用"
+        );
+        assert!(
+            inspector_disabled_tabs(false).is_empty(),
+            "非工作区：全部可点"
+        );
     }
 
     #[test]
