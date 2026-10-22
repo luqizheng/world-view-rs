@@ -50,6 +50,7 @@ use super::widgets::{empty_state, float_window, BadgeKind, ICON_CHEVRON_RIGHT};
 
 use wv_core::{EntityKind, SelectedEntity};
 
+pub mod faction;
 pub mod place;
 pub mod region;
 
@@ -263,7 +264,7 @@ fn render_properties(
     playback: &crate::state::PlaybackState,
     grid: &wv_render::state::GridConfig,
     _edit_cell: &mut wv_render::state::EditCellState,
-    _display: &mut wv_render::faction_overlays::FactionDisplay,
+    display: &mut wv_render::faction_overlays::FactionDisplay,
     tex: &mut wv_render::terrain_view::TerrainTexture,
     notice: &mut crate::ui_shell::ShellNotice,
     time: &Time,
@@ -367,7 +368,7 @@ fn render_properties(
                 time.elapsed_secs() as u64,
             );
         }
-        FormKind::Faction | FormKind::Event => {
+        FormKind::Faction => {
             // 存活守卫。
             let Some(sel) = selected else {
                 render_empty(ui, shell);
@@ -378,12 +379,35 @@ fn render_properties(
                 return;
             }
             render_selection_header(ui, shell, sel);
-            let label = match form {
-                FormKind::Faction => "Faction 表单（M2 接入）",
-                FormKind::Event => "Event 表单（M2 接入）",
-                _ => unreachable!("已由外层 match 收窄"),
+            let Some(faction) = projection
+                .world
+                .factions
+                .iter()
+                .find(|f| f.id == sel.id)
+                .cloned()
+            else {
+                render_empty(ui, shell);
+                return;
             };
-            ui.label(label);
+            // 势力层词表（供「所属层」下拉用）。
+            let layers = wv_core::resolved_faction_layers(&projection.world);
+            let map_id = wv_core::Id::new_unchecked(view.current_map.clone());
+            faction::faction_form(
+                ui, shell, &faction, &layers, view, playback, &map_id, projection, edit, display,
+            );
+        }
+        FormKind::Event => {
+            // 存活守卫。
+            let Some(sel) = selected else {
+                render_empty(ui, shell);
+                return;
+            };
+            if !selection_alive(&projection.world, sel) {
+                render_empty(ui, shell);
+                return;
+            }
+            render_selection_header(ui, shell, sel);
+            ui.label("Event 表单（M2 接入）");
         }
     }
 }
