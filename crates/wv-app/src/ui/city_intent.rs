@@ -23,7 +23,7 @@ use crate::state::{DrillState, GridConfig, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::ui::shell::UiShell;
 use crate::ui::widgets::DialogWindow;
-use crate::ui_shell::{ShellNotice, StartupLoadRequest};
+use crate::ui_shell::ShellNotice;
 use wv_core::map::{Extent, MapBase};
 
 /// 画布面积下限（wu²，≈10×10）——更小的「城市」是一颗图钉，不是一张图。
@@ -214,9 +214,9 @@ pub fn city_intent_dialog_system(
     mut notice: ResMut<ShellNotice>,
     playback: Res<crate::state::PlaybackState>,
     time: Res<Time>,
-    startup_req: Res<StartupLoadRequest>,
+    screen: Res<crate::app_screen::AppScreen>,
 ) {
-    if !dialog.open || !projection.has_open_project() || startup_req.0.is_some() {
+    if !dialog.open || !screen.editor_visible() {
         return;
     }
     // 播放中只读（基线 V37）：不渲染确认按钮路径。

@@ -751,6 +751,8 @@ pub enum I18nKey {
     NoticeAlreadyAtLevel,
     /// 「请先新建或打开工程，再执行该操作」整段
     NoticeNeedProjectFirst,
+    /// 「正在加载工程，请稍候再执行该操作」整段（2026-10-22，异步加载期间）
+    NoticeProjectLoading,
     /// 「已强制重画地形」整段
     NoticeForceRedrawn,
     /// 「当前没有地图，无法重置地形」整段（2026-10-16）
@@ -1135,7 +1137,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 441] = [
+    pub const ALL: [I18nKey; 442] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1474,6 +1476,7 @@ impl I18nKey {
         I18nKey::NoticeAlreadyWorldMap,
         I18nKey::NoticeAlreadyAtLevel,
         I18nKey::NoticeNeedProjectFirst,
+        I18nKey::NoticeProjectLoading,
         I18nKey::NoticeForceRedrawn,
         I18nKey::NoticeResetTerrainNoMap,
         I18nKey::NoticeRegenNoMap,

@@ -206,7 +206,7 @@ pub fn new_map_dialog(
         // 模态置顶（2026-10-14 用户要求）：egui 绘制序 Background < Middle <
         // Foreground < Tooltip——浮动面板是 Middle，弹窗必须在 Foreground 才
         // 压得住面板；Tooltip 在 Foreground 之上，窗内 on_hover_text 不受影响。
-        // 与 welcome_screen / startup_load 的先例同层。
+        // 与 welcome_screen / drive_project_load 的先例同层。
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {

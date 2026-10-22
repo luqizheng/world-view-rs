@@ -18,7 +18,7 @@
 //! ## 主要导出
 //! - `register(app: &mut App)` — Bevy App 装配入口。
 //! - `apply_pending_commands` / `dispatch_project_command` — **唯一**命令分发器与子派发器。
-//! - `startup_load` / `load_error_card` — 启动期工程加载与失败卡片；
+//! - `drive_project_load` / `load_error_card` — 工程加载驱动（后台线程）与失败卡片；
 //!   `adopt_world_snapshot` — 运行期换世界（加载 / 新建 / 关闭）的视图接管。
 //! - `save_world_to_dir` / `poll_open_project_dialog` — 工程加载与落盘收口。
 //! - `persist_layout_on_change` — 布局写盘系统。
@@ -49,7 +49,9 @@ use crate::ui_layout::LayoutFile;
 use wv_render::state::SelectionShape;
 use wv_render::terrain_view::{TerrainTexture, TileAtlas};
 
+use crate::app_screen::AppScreen;
 use crate::i18n::{parse as parse_locale, CurrentLocale};
+use crate::project_loader::{PendingProjectLoad, ProjectLoadTask};
 
 /// 把界面外壳的资源与系统注册进 `App`。
 ///
@@ -81,6 +83,14 @@ pub fn register(app: &mut App) {
         .init_resource::<crate::ui::NewProjectDialog>()
         // CLI `-m` 的启动加载请求（`gui::run` 已注入值，这里只兜底默认）。
         .init_resource::<StartupLoadRequest>()
+        // 工程加载排队 + 后台任务（2026-10-22 C 档）：加载派发与结果应用
+        // 都走 `drive_project_load`，这里是它的两个资源。
+        .init_resource::<PendingProjectLoad>()
+        .init_resource::<ProjectLoadTask>()
+        // 应用屏状态（2026-10-22 B 档）：每帧由 `sync_app_screen` 求值。
+        // 初始值由 `app_bootstrap` 插入（按「有没有 CLI 加载请求」给）——
+        // `init_resource` 不覆盖已存在的资源。
+        .init_resource::<AppScreen>()
         // 根图落位必须早于所有读 `DrillState` 的 UI 系统（同一 `Update` 里靠顺序保证）。
         .add_systems(
             PreUpdate,
@@ -96,6 +106,19 @@ pub fn register(app: &mut App) {
                 poll_open_project_dialog.after(wv_render::theme::switch::sync_active_theme_pack),
             ),
         )
+        // 工程加载驱动 + 屏状态求值（2026-10-22）。
+        //
+        // 顺序：`drive_project_load` 先跑（它会改 `has_project` / `load_error`，
+        // 即屏状态的两个来源），`sync_app_screen` 再把结果写进资源——UI 系统
+        // （在 egui pass 里）读到的必须是本帧最新的屏。
+        .add_systems(
+            PreUpdate,
+            (
+                drive_project_load.after(poll_open_project_dialog),
+                crate::app_screen::sync_app_screen.after(drive_project_load),
+            )
+                .chain(),
+        )
         .add_systems(
             Update,
             // 世界侧派生状态：每帧先于 pass 里的 UI 刷新。
@@ -109,12 +132,13 @@ pub fn register(app: &mut App) {
                 sync_window_clear_color,
             ),
         )
-        // bevy_egui 0.42：UI 系统进 pass 调度（见 gui.rs 同款注释）；
-        // `startup_load` 虽不碰 egui，但必须跟遮罩同调度并排在其后，
-        // 否则 Update 先阻塞加载、遮罩永远赶不上渲染。
+        // bevy_egui 0.42：UI 系统进 pass 调度（见 gui.rs 同款注释）。
+        //
+        // 2026-10-22：加载本身已移出本链（`drive_project_load` 在 PreUpdate，
+        // IO 走后台线程），这里只留**画**的部分。
         //
         // `welcome_screen`（无工程闸门）排在遮罩之后、失败卡片之前：
-        // 启动加载期间（req 有值）它自己会让位；失败卡片画在其后压在其上。
+        // 加载期间它自己会让位；失败卡片画在其后压在其上。
         .add_systems(
             bevy_egui::EguiPrimaryContextPass,
             (
@@ -122,7 +146,6 @@ pub fn register(app: &mut App) {
                 startup_load_overlay,
                 crate::ui::welcome_screen,
                 load_error_card,
-                startup_load,
             )
                 .chain(),
         );
@@ -449,7 +472,8 @@ pub struct OpenProjectTask {
 /// 目录选择对话框的意图（v0.3 §B；2026-10-14 追加第三个）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DialogPurpose {
-    /// 打开已有工程：选完走 [`load_project_into`]。
+    /// 打开已有工程：选完**排队**（[`PendingProjectLoad`]），加载由
+    /// `drive_project_load` 在后台线程派发。
     #[default]
     Open,
     /// 另存为 / 新工程首次保存：选完 `Project::create`（或 `open`）+ 全量保存。
@@ -528,7 +552,7 @@ impl OpenProjectTask {
 /// CLI `-m <目录>` 带来的启动加载请求。
 ///
 /// 需求（用户裁定）：启动**不主动加载**任何地图——`None` = 空编辑器起步；
-/// `Some(dir)` = 启动后加载。由 [`startup_load`] 在遮罩画出并 present 之后
+/// `Some(dir)` = 启动后加载。由 [`drive_project_load`] 在遮罩画出并 present 之后
 /// 消费：直接在 `Startup` 里做阻塞加载，遮罩来不及画，「白屏无反馈」
 /// 只会从启动前挪到首帧前。
 #[derive(Resource, Debug, Default)]
@@ -544,18 +568,10 @@ pub struct StartupLoadRequest(pub Option<String>);
 fn poll_open_project_dialog(
     mut task: ResMut<OpenProjectTask>,
     mut new_project_dialog: ResMut<crate::ui::NewProjectDialog>,
+    mut pending: ResMut<PendingProjectLoad>,
     mut projection: ResMut<WorldProjection>,
-    mut drill: ResMut<DrillState>,
-    mut recents: ResMut<RecentProjects>,
-    mut notice: ResMut<ShellNotice>,
-    mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
     mut edit: ResMut<crate::edit::editing::EditHistory>,
-    mut playback: ResMut<PlaybackState>,
-    mut view: ResMut<ViewState>,
-    mut tex: ResMut<TerrainTexture>,
-    atlas: Option<Res<TileAtlas>>,
-    mut images: ResMut<Assets<Image>>,
-    mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+    mut notice: ResMut<ShellNotice>,
     time: Res<Time>,
     current_loc: Res<crate::i18n::CurrentLocale>,
 ) {
@@ -576,24 +592,9 @@ fn poll_open_project_dialog(
     };
     match task.purpose() {
         DialogPurpose::Open => {
-            let dir = path.to_string_lossy().into_owned();
-            load_project_into(
-                &dir,
-                &mut projection,
-                &mut drill,
-                &mut recents,
-                &mut notice,
-                &mut diagnostics,
-                &mut edit,
-                &mut playback,
-                &mut view,
-                &mut tex,
-                atlas.as_deref(),
-                &mut images,
-                &mut cameras,
-                frame,
-                &current_loc,
-            );
+            // 只**排队**，不直接加载：加载由 `drive_project_load` 在后台线程
+            // 派发（2026-10-22 C 档）——这里同步加载会冻住整个窗口。
+            pending.0 = Some(path.to_string_lossy().into_owned());
         }
         DialogPurpose::SaveAs => {
             let dir = path.to_string_lossy().into_owned();
@@ -683,10 +684,12 @@ fn save_world_to_dir(
     }
 }
 
-/// 从磁盘加载一个工程并替换当前工作副本（v0.2 §A「切换最近工程」）。
+/// 把**已加载到内存**的工程接管为当前工作副本（v0.2 §A「切换最近工程」）。
 ///
 /// **运行期换世界唯一完整入口**：对话框打开（`poll_open_project_dialog`）、
-/// 最近工程（`OpenRecentProject`）、启动加载（`startup_load`）都从这里过。
+/// 最近工程（`OpenRecentProject`）、启动加载（`drive_project_load`）最终都落到
+/// 这里——但**只在主线程**落。
+///
 /// 成功后必须同时做四件事，缺一不可：
 /// 1. 替换 [`WorldProjection::world`] 与 `project_dir`、清 `dirty`；
 /// 2. [`DrillState::reset_to_world`]——**重置地图层级回世界**，否则新工程的
@@ -694,8 +697,16 @@ fn save_world_to_dir(
 /// 3. 推进 [`RecentProjects`] 的顺序；
 /// 4. [`adopt_world_snapshot`] 接管纹理 / 相机 / 播放——漏了它就是「加载完成
 ///    像没加载」：底图停在旧工程、相机纹丝不动（见该函数文档的回归记录）。
+///
+/// ## 与旧 `load_project_into` 的差别（2026-10-22，C 档）
+///
+/// 旧函数自己同步做 `Project::open` + `load_world`（磁盘 IO + YAML 解析），
+/// 在 egui pass 的某一帧里**阻塞整个 UI**。现在 IO 与解析在后台线程完成
+/// （见 [`crate::project_loader`]），本函数只负责**应用副作用**——它要写
+/// `Assets<Image>`、改相机 transform / projection，**必须留在主线程**。
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn load_project_into(
+fn apply_loaded_world(
+    world: wv_core::World,
     dir: &str,
     projection: &mut WorldProjection,
     drill: &mut DrillState,
@@ -712,89 +723,107 @@ pub(crate) fn load_project_into(
     frame: u64,
     current_loc: &crate::i18n::CurrentLocale,
 ) {
-    match wv_io::Project::open(dir).and_then(|p| p.load_world()) {
-        Ok(world) => {
-            let name = world
-                .meta
-                .as_ref()
-                .map(|m| m.name.clone())
-                .unwrap_or_else(|| dir.to_owned());
-            recents.remember(dir, &name);
-            projection.world = world;
-            projection.project_dir = Some(dir.to_owned());
-            projection.dirty = false;
-            projection.load_error = None;
-            // 新工程：清空历史与 dirty 集合，避免旧工程的脏目录被误重写。
-            // 历史也清空——切工程后旧撤销栈没有意义（V2 守约：作者是新工程的主人）。
-            edit.history = Default::default();
-            edit.clear_dirty();
-            // §A：切工程要重置地图层级并清访问痕迹（`reset_to_world` 两者都做）。
-            drill.reset_to_world();
-            drill.ensure_root(&projection.world);
-            // 加载成功：立刻灌一次诊断，避免面板首帧空白。
-            // 系统链上 `refresh_project_diagnostics` 也会重算（并清 `needs_diagnose`），
-            // 但本帧若不立刻灌，UI 会先看到旧工程的诊断，视觉闪烁。
-            // 走 `derive_diagnostics`（错误+提示），不只 `derive_hints`。
-            let theme = wv_render::theme::theme_pack::builtin::for_palette(view.map_palette);
-            let d = crate::edit::diagnostics_bridge::derive_diagnostics(&projection.world, theme);
-            diagnostics.last_count = d.items.len();
-            diagnostics.diagnostics = d;
-            diagnostics.needs_diagnose = false;
-            notice.info(
-                format!(
-                    "{}{}{}",
-                    crate::i18n::t_key(
-                        current_loc,
-                        crate::i18n::I18nKey::NoticeProjectLoadedPrefix
-                    ),
-                    name,
-                    crate::i18n::t_key(
-                        current_loc,
-                        crate::i18n::I18nKey::NoticeProjectLoadedSuffix
-                    )
-                ),
-                frame,
-            );
-            adopt_world_snapshot(
-                projection, drill, playback, view, tex, atlas, images, cameras,
-            );
-        }
-        Err(e) => {
-            projection.load_error = Some(format!("打开工程 `{dir}` 失败: {e}"));
-            notice.error(
-                format!(
-                    "{}{}",
-                    crate::i18n::t_key(
-                        current_loc,
-                        crate::i18n::I18nKey::NoticeOpenProjectFailedPrefix
-                    ),
-                    e
-                ),
-                frame,
-            );
-        }
-    }
+    let name = world
+        .meta
+        .as_ref()
+        .map(|m| m.name.clone())
+        .unwrap_or_else(|| dir.to_owned());
+    recents.remember(dir, &name);
+    projection.world = world;
+    projection.project_dir = Some(dir.to_owned());
+    projection.dirty = false;
+    projection.load_error = None;
+    // 新工程：清空历史与 dirty 集合，避免旧工程的脏目录被误重写。
+    // 历史也清空——切工程后旧撤销栈没有意义（V2 守约：作者是新工程的主人）。
+    edit.history = Default::default();
+    edit.clear_dirty();
+    // §A：切工程要重置地图层级并清访问痕迹（`reset_to_world` 两者都做）。
+    drill.reset_to_world();
+    drill.ensure_root(&projection.world);
+    // 加载成功：立刻灌一次诊断，避免面板首帧空白。
+    // 系统链上 `refresh_project_diagnostics` 也会重算（并清 `needs_diagnose`），
+    // 但本帧若不立刻灌，UI 会先看到旧工程的诊断，视觉闪烁。
+    // 走 `derive_diagnostics`（错误+提示），不只 `derive_hints`。
+    let theme = wv_render::theme::theme_pack::builtin::for_palette(view.map_palette);
+    let d = crate::edit::diagnostics_bridge::derive_diagnostics(&projection.world, theme);
+    diagnostics.last_count = d.items.len();
+    diagnostics.diagnostics = d;
+    diagnostics.needs_diagnose = false;
+    notice.info(
+        format!(
+            "{}{}{}",
+            crate::i18n::t_key(current_loc, crate::i18n::I18nKey::NoticeProjectLoadedPrefix),
+            name,
+            crate::i18n::t_key(current_loc, crate::i18n::I18nKey::NoticeProjectLoadedSuffix)
+        ),
+        frame,
+    );
+    adopt_world_snapshot(
+        projection, drill, playback, view, tex, atlas, images, cameras,
+    );
 }
 
-/// 启动加载遮罩：[`StartupLoadRequest`] 未消费期间全屏压暗 + 居中「正在加载」。
+/// 加载失败：把原因显示出来（V1——**必须**在窗口内可见，不能静默退化成空白）。
+///
+/// `message` 是后台线程已经格式化好的完整原因（`打开工程 \`dir\` 失败: …`），
+/// 主线程不再拼——它只负责把原因放进 `load_error`（错误卡片读它）与状态栏回执。
+fn apply_load_failure(
+    message: &str,
+    projection: &mut WorldProjection,
+    notice: &mut ShellNotice,
+    frame: u64,
+    current_loc: &crate::i18n::CurrentLocale,
+) {
+    projection.load_error = Some(message.to_owned());
+    notice.error(
+        format!(
+            "{}{}",
+            crate::i18n::t_key(
+                current_loc,
+                crate::i18n::I18nKey::NoticeOpenProjectFailedPrefix
+            ),
+            message
+        ),
+        frame,
+    );
+}
+
+/// 加载遮罩：正在加载工程时全屏压暗 + 居中「正在加载」（2026-10-22 起按
+/// [`AppScreen`] 求值，见 `app_screen` 模块）。
+///
+/// 旧口径是「[`StartupLoadRequest`] 有值」——那只覆盖 CLI `-m`。现在加载有
+/// 三个发起点（`-m` / 打开对话框 / 最近工程），遮罩必须跟着**屏状态**走，
+/// 否则运行期换工程时没有「正在加载」的反馈。
 ///
 /// 用 [`EguiContexts::try_ctx_mut`] 而非 `ctx_mut`：主窗口销毁后同一帧
 /// 仍可能轮到本系统（bevy_egui 0.32 关窗路径的已知 panic），此时直接跳过，
 /// 不给关窗级联添新的触发点。
-fn startup_load_overlay(mut ctxs: EguiContexts, req: Res<StartupLoadRequest>) {
-    let Some(dir) = req.0.as_deref() else {
+fn startup_load_overlay(
+    mut ctxs: EguiContexts,
+    screen: Res<AppScreen>,
+    startup_req: Res<StartupLoadRequest>,
+    pending: Res<PendingProjectLoad>,
+    task: Res<ProjectLoadTask>,
+) {
+    if !screen.shows_loading_overlay() {
         return;
-    };
+    }
     let Ok(ctx) = ctxs.ctx_mut() else {
         return;
     };
-    let screen = ctx.viewport_rect();
+    // 正在加载的目录：在跑的任务 > 排队中的 > 还没派发的启动请求。
+    let dir = task
+        .dir()
+        .or(pending.0.as_deref())
+        .or(startup_req.0.as_deref())
+        .unwrap_or_default();
+    let screen_rect = ctx.viewport_rect();
     egui::Area::new(egui::Id::new("wv_startup_load_dim"))
         .order(egui::Order::Foreground)
-        .fixed_pos(screen.min)
+        .fixed_pos(screen_rect.min)
         .show(ctx, |ui| {
             ui.painter()
-                .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(150));
+                .rect_filled(screen_rect, 0.0, egui::Color32::from_black_alpha(150));
         });
     egui::Window::new("正在加载工程…")
         .order(egui::Order::Foreground)
@@ -807,7 +836,9 @@ fn startup_load_overlay(mut ctxs: EguiContexts, req: Res<StartupLoadRequest>) {
                 |ui| {
                     ui.add(egui::Spinner::new().size(32.0));
                     ui.add_space(6.0);
-                    ui.label(dir);
+                    if !dir.is_empty() {
+                        ui.label(dir);
+                    }
                 },
             );
         });
@@ -817,8 +848,15 @@ fn startup_load_overlay(mut ctxs: EguiContexts, req: Res<StartupLoadRequest>) {
 ///
 /// 需求（用户裁定）：加载失败**必须在窗口内显示原因**——控制台日志一闪
 /// 而过，用户只看到「没画出来」，无从知道是路径错了还是 YAML 坏了。
-/// 对话框打开工程失败（[`load_project_into`] 的失败分支）同样落到这里。
-fn load_error_card(mut ctxs: EguiContexts, mut projection: ResMut<WorldProjection>) {
+/// 对话框打开工程失败（[`apply_load_failure`]）同样落到这里。
+fn load_error_card(
+    mut ctxs: EguiContexts,
+    mut projection: ResMut<WorldProjection>,
+    screen: Res<AppScreen>,
+) {
+    if !screen.shows_error_card() {
+        return;
+    }
     let Some(err) = projection.load_error.clone() else {
         return;
     };
@@ -844,19 +882,34 @@ fn load_error_card(mut ctxs: EguiContexts, mut projection: ResMut<WorldProjectio
         });
 }
 
-/// 执行启动加载（`-m`）；帧 2 后才开始，给遮罩留出「画 + present + 窗口揭示」。
+/// 工程加载驱动：**派发后台线程 + 主线程轮询结果并应用**（2026-10-22，C 档）。
 ///
-/// 为什么不在 `Startup` 里做：Bevy 要等首帧渲染完成才 present——在 Startup
-/// 阻塞加载，用户看到的仍是白屏。帧 0 画遮罩 → present（窗口隐藏，见
-/// `app_bootstrap` 的隐藏起步）；帧 1 末窗口揭示、遮罩已在屏上；帧 2 这时
-/// 才做真正（阻塞）的磁盘加载；帧 3 起显示加载结果 / 失败卡片。
-/// 空编辑器起步（无 `-m`）时顺带给一条一次性状态栏指引。
+/// ## 三步
 ///
-/// 参数已 16+1（基本类同 `apply_pending_commands`），按 Bevy 单系统 16 上限
-/// 把可成对的 Resources 折成元组：`time` + `current_loc` 一组，省一个位置。
+/// 1. **收口排队意图**：CLI `-m`（[`StartupLoadRequest`]）与运行期排队
+///    （对话框 / 最近工程 → [`PendingProjectLoad`]）汇到一处；
+/// 2. **派发后台线程**：没有任务在跑且有排队 → [`ProjectLoadTask::start`]。
+///    IO 与 YAML 解析在后台跑，**主线程不阻塞**（旧实现在 egui pass 里同步
+///    加载，大工程加载期间窗口直接冻住）；
+/// 3. **主线程应用**：结果回来 → [`apply_loaded_world`] / [`apply_load_failure`]
+///    （这一步要写 `Assets<Image>`、改相机，**只能**在主线程做）。
+///
+/// ## 为什么不再有「帧 3 才开始加载」的门槛
+///
+/// 旧门槛是为**阻塞式**加载设计的：帧 0/1 画遮罩 + 揭示窗口，帧 2 才加载，
+/// 好让用户先看到遮罩在转。现在加载在后台线程，**派发本身不耗时**，
+/// 早派发 = 早开始 = 早出图——这正是「加快系统第一版面」的收益所在。
+/// 窗口揭示时机（`reveal_window_once_first_frame_presented`）不受影响。
+///
+/// ## 参数
+///
+/// Bevy 单系统参数上限 16（本系统 15）。可成对的 Resources 已折成元组：
+/// `time` + `current_loc` 一组。
 #[allow(clippy::too_many_arguments)]
-fn startup_load(
-    mut req: ResMut<StartupLoadRequest>,
+fn drive_project_load(
+    mut startup_req: ResMut<StartupLoadRequest>,
+    mut pending: ResMut<PendingProjectLoad>,
+    mut task: ResMut<ProjectLoadTask>,
     (mut frames, mut hinted): (Local<u32>, Local<bool>),
     mut projection: ResMut<WorldProjection>,
     mut drill: ResMut<DrillState>,
@@ -872,39 +925,59 @@ fn startup_load(
     (time, current_loc): (Res<Time>, Res<crate::i18n::CurrentLocale>),
 ) {
     *frames += 1;
-    if *frames < 3 {
-        return; // 帧 0/1：只让遮罩画；帧 1 末窗口才揭示（隐藏起步），加载必须排在其后。
+    // 1) CLI `-m` 的请求**只消费一次**（转成排队意图）。
+    //    若此刻已有别的排队（用户刚点了「打开工程…」），CLI 请求作废——
+    //    用户的显式操作优先；且绝不能让它「等排队空了再补跑」，
+    //    否则刚换好的工程会被 CLI 指定的旧工程再覆盖一次。
+    if let Some(dir) = startup_req.0.take() {
+        if pending.0.is_none() {
+            pending.0 = Some(dir);
+        }
+    }
+    // 2) 派发后台线程（已有任务在跑则跳过——同一时刻只加载一个工程）。
+    if !task.is_active() {
+        if let Some(dir) = pending.0.take() {
+            *hinted = true;
+            task.start(dir);
+        }
     }
     let frame = (time.elapsed_secs() * 60.0) as u64;
-    let Some(dir) = req.0.take() else {
-        if !*hinted {
-            *hinted = true;
-            // 2026-10-14 起无工程时欢迎页全屏接管，指引跟着改口。
-            notice.info(
-                crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::NoticeNoProjectNeed),
+    // 3) 主线程应用结果。
+    if let Some((dir, outcome)) = task.poll() {
+        match outcome {
+            Ok(world) => apply_loaded_world(
+                world,
+                &dir,
+                &mut projection,
+                &mut drill,
+                &mut recents,
+                &mut notice,
+                &mut diagnostics,
+                &mut edit,
+                &mut playback,
+                &mut view,
+                &mut tex,
+                atlas.as_deref(),
+                &mut images,
+                &mut cameras,
                 frame,
-            );
+                &current_loc,
+            ),
+            Err(message) => {
+                apply_load_failure(&message, &mut projection, &mut notice, frame, &current_loc)
+            }
         }
-        return;
-    };
-    *hinted = true;
-    load_project_into(
-        &dir,
-        &mut projection,
-        &mut drill,
-        &mut recents,
-        &mut notice,
-        &mut diagnostics,
-        &mut edit,
-        &mut playback,
-        &mut view,
-        &mut tex,
-        atlas.as_deref(),
-        &mut images,
-        &mut cameras,
-        frame,
-        &current_loc,
-    );
+    }
+    // 4) 空编辑器起步（无 `-m`、也没有别的加载）时给一条一次性状态栏指引。
+    //    帧 3 之后才说：让窗口先把欢迎页亮出来（隐藏起步的揭示在帧 1 末）。
+    if *frames >= 3 && !*hinted && !task.is_active() && pending.0.is_none() {
+        *hinted = true;
+        // 2026-10-14 起无工程时欢迎页全屏接管，指引跟着改口。
+        notice.info(
+            crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::NoticeNoProjectNeed),
+            frame,
+        );
+    }
 }
 
 /// 工作副本整体替换后的视图 / 纹理 / 播放接管——**加载成功 / 关闭工程 / 新建工程**
@@ -1002,7 +1075,7 @@ fn adopt_world_snapshot(
 /// 能力边界（如实回执，不假装成功）：
 ///
 /// - 打开工程… → ✅ 原生目录选择对话框（`rfd`），加载走 `wv_io::Project::open`
-/// - 打开最近工程 → ✅ 真加载 + 视图接管（`load_project_into` 内含 adopt）
+/// - 打开最近工程 → ✅ 真加载 + 视图接管（排队 → 后台线程 → `apply_loaded_world` 内含 adopt）
 /// - 新建工程 → ✅ 弹「新建工程」对话框（名称 + 位置 + 路径预览）；确认后在
 ///   `位置\名称` 落盘（含首张世界地图）并打开（2026-10-14 改版，取代旧的
 ///   「内存空白工程 + 首次保存再选目录」链路）
@@ -1029,6 +1102,7 @@ fn dispatch_project_command(
     atlas: Option<&TileAtlas>,
     images: &mut Assets<Image>,
     cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+    pending: &mut PendingProjectLoad,
     frame: u64,
     current_loc: &crate::i18n::CurrentLocale,
 ) -> bool {
@@ -1038,23 +1112,9 @@ fn dispatch_project_command(
             match list.get(*i as usize) {
                 Some(entry) => {
                     let dir = entry.dir.clone();
-                    load_project_into(
-                        &dir,
-                        projection,
-                        drill,
-                        recents,
-                        notice,
-                        diagnostics,
-                        edit,
-                        playback,
-                        view,
-                        tex,
-                        atlas,
-                        images,
-                        cameras,
-                        frame,
-                        current_loc,
-                    );
+                    // 只排队——加载由 `drive_project_load` 在后台线程派发
+                    //（2026-10-22 C 档）。
+                    pending.0 = Some(dir);
                 }
                 None => notice.error(
                     crate::i18n::t_key(current_loc, crate::i18n::I18nKey::NoticeRecentsChanged),
@@ -1097,7 +1157,7 @@ fn dispatch_project_command(
         CommandId::OpenProject => {
             // 排队「打开工程」对话框意图（不阻塞）；下一帧由
             // `poll_open_project_dialog` 发起、收口，复用 `OpenRecentProject`
-            // 的同一条 `load_project_into` 加载路径——结果就只是「多了一条最近工程」。
+            // 的同一条加载路径（排队 → 后台线程）——结果就只是「多了一条最近工程」。
             open_task.request(DialogPurpose::Open);
             true
         }
@@ -1190,6 +1250,9 @@ fn apply_pending_commands(
         ResMut<OpenProjectTask>,
         ResMut<crate::state::ProjectDiagnostics>,
     ),
+    // 工程加载排队（2026-10-22 C 档）：「打开工程…」对话框 / 「打开最近工程」
+    // 只排队，加载由 `drive_project_load` 在后台线程派发（不冻窗口）。
+    mut pending: ResMut<PendingProjectLoad>,
     // 「新建地图」对话框的开关（CommandId::NewMap → open_for；真正的创建
     // 在对话框自身的系统里提交，见 `ui::new_map_dialog`）。
     // 「新建工程」对话框的开关同源（CommandId::NewProject / 欢迎页 → open）。
@@ -1212,6 +1275,8 @@ fn apply_pending_commands(
     current_loc: Res<CurrentLocale>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     time: Res<Time>,
+    // 应用屏状态（2026-10-22 B 档）：「谁该显示」的唯一裁决点。
+    screen: Res<AppScreen>,
 ) {
     // 菜单队列优先（egui 一帧最多产生一条），命令面板其次。
     let id = menu.pending.take().or_else(|| palette.pending.take());
@@ -1225,21 +1290,32 @@ fn apply_pending_commands(
     // 需要工程上下文」的命令一律挡下并指出下一步——欢迎页是唯一入口。
     // NewProject / OpenProject / CloseProject（本身就是入口）与视图 / 面板
     // 命令不在其列；笔刷与街道的输入侧另有同口径门禁（见 collect_brush_stroke）。
-    if !projection.has_open_project()
-        && matches!(
-            id,
-            CommandId::NewMap
-                | CommandId::Save
-                | CommandId::SaveProjectAs
-                | CommandId::ExportProject
-                | CommandId::GenerateContinent
-        )
-    {
-        notice.error(
-            crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::NoticeNeedProjectFirst),
-            frame,
-        );
-        return;
+    //
+    // 2026-10-22（异步加载）：加载期间**也**挡下同一批命令——世界即将被替换，
+    // 此时落盘会写错工程（改的是旧世界、存的是新目录）。但回执话术要分开：
+    // 「没有工程」与「正在加载」是两回事，不能用同一句。
+    if matches!(
+        id,
+        CommandId::NewMap
+            | CommandId::Save
+            | CommandId::SaveProjectAs
+            | CommandId::ExportProject
+            | CommandId::GenerateContinent
+    ) {
+        if screen.shows_loading_overlay() {
+            notice.error(
+                crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::NoticeProjectLoading),
+                frame,
+            );
+            return;
+        }
+        if !screen.has_project {
+            notice.error(
+                crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::NoticeNeedProjectFirst),
+                frame,
+            );
+            return;
+        }
     }
 
     // 工程 / 导航类先试（它们改的是世界与路径，与下面的视图状态互不重叠）。
@@ -1259,6 +1335,7 @@ fn apply_pending_commands(
         atlas.as_deref(),
         &mut images,
         &mut cameras,
+        &mut pending,
         frame,
         &current_loc,
     ) {
@@ -2033,6 +2110,16 @@ mod tests {
             load_error: None,
             selection: None,
         });
+        // 应用屏状态与加载排队（2026-10-22）：分发器签名新增的依赖。
+        // 初值按 `project_dir` 推导，与生产端 `current_screen` 同口径——
+        // 测试装的是「稳定世界」，永远不处于加载中。
+        world.insert_resource(crate::app_screen::AppScreen {
+            has_project: project_dir.is_some(),
+            loading: false,
+            load_error: false,
+        });
+        world.init_resource::<crate::project_loader::PendingProjectLoad>();
+        world.init_resource::<crate::project_loader::ProjectLoadTask>();
         world.insert_resource(TerrainTexture {
             handle: Default::default(),
             size: 1,
@@ -2273,6 +2360,14 @@ mod tests {
             load_error: None,
             selection: None,
         });
+        // 应用屏状态与加载排队（2026-10-22）：分发器签名新增的依赖。
+        world.insert_resource(crate::app_screen::AppScreen {
+            has_project: true,
+            loading: false,
+            load_error: false,
+        });
+        world.init_resource::<crate::project_loader::PendingProjectLoad>();
+        world.init_resource::<crate::project_loader::ProjectLoadTask>();
         world.insert_resource(TerrainTexture {
             handle: Default::default(),
             size: 1,

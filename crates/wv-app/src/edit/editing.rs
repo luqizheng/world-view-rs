@@ -48,7 +48,7 @@ use wv_terrain::intent::Intent;
 ///
 /// 持久化模型：
 /// - 编辑（commit/redo）→ `record_dirty` 累加
-/// - 加载新工程（`load_project_into`）→ `clear_dirty` 重置
+/// - 加载新工程（`apply_loaded_world`）→ `clear_dirty` 重置
 /// - 保存成功 → `take_dirty` 排空
 /// - 撤销（undo）→ 当前版本暂**不**回滚 dirty 集合（接受一定过度写盘换取
 ///   实现简单性；保存仍是幂等的 round-trip）
@@ -101,8 +101,15 @@ pub fn commit_stroke_on_release(
     mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
     mut notice: ResMut<crate::ui_shell::ShellNotice>,
     time: Res<Time>,
+    // 应用屏状态（2026-10-22 C 档）：加载期间禁写——世界即将被替换，
+    // 此刻的笔迹会被整份覆盖丢弃（旧实现加载是同步的，不存在这个窗口）。
+    screen: Res<crate::app_screen::AppScreen>,
 ) {
     if !buttons.just_released(MouseButton::Left) {
+        return;
+    }
+    if screen.shows_loading_overlay() {
+        active.points.clear();
         return;
     }
     if active.points.is_empty() {
@@ -732,7 +739,7 @@ pub fn apply_history_command(
 /// 阶段六收尾：刷新 `ProjectDiagnostics`。
 ///
 /// **触发条件**：`ProjectDiagnostics::needs_diagnose` 为 true。
-/// 三个 set 点：`load_project_into`（加载后立刻灌过，标志被清回 false，
+/// 三个 set 点：`apply_loaded_world`（加载后立刻灌过，标志被清回 false，
 /// 这里只在新工程/编辑/撤销时跑）、`commit_stroke_on_release`、
 /// `cmd_dispatch`（撤销/重做成功时）。
 ///
@@ -788,8 +795,13 @@ pub fn commit_edit_cell_on_click(
     projection: Res<WorldProjection>,
     ui: Res<wv_render::camera::PointerOverUi>,
     mut edit_cell: ResMut<EditCellState>,
+    screen: Res<crate::app_screen::AppScreen>,
 ) {
     if !buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+    // 加载期间不选格：选中的 id 来自旧世界，对不上新世界。
+    if screen.shows_loading_overlay() {
         return;
     }
     if !edit_cell.tool_active {
@@ -1473,6 +1485,8 @@ mod tests {
         world.insert_resource(crate::state::PlaybackState::default());
         // 系统签名含 PointerOverUi gate（2026-10-20 面板焦点 bug 修复）。
         world.insert_resource(wv_render::camera::PointerOverUi::default());
+        // 系统签名含 AppScreen gate（2026-10-22 异步加载：加载期不选格）。
+        world.insert_resource(crate::app_screen::AppScreen::default());
 
         let edit_cell = EditCellState {
             tool_active: true,
@@ -1532,6 +1546,7 @@ mod tests {
         world.insert_resource(crate::state::PlaybackState::default());
         world.insert_resource(EditCellState::default());
         world.insert_resource(wv_render::camera::PointerOverUi::default());
+        world.insert_resource(crate::app_screen::AppScreen::default());
 
         let mut buttons = ButtonInput::<MouseButton>::default();
         buttons.press(MouseButton::Left);

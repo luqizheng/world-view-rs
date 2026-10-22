@@ -33,9 +33,20 @@ pub fn translate_edit_intents(
     mut receipts: ResMut<EditReceipts>,
     mut edit: ResMut<editing::EditHistory>,
     mut projection: ResMut<WorldProjection>,
+    screen: Res<crate::app_screen::AppScreen>,
 ) {
     // 冲掉上一帧残余（正常情况下回执同帧即被取走；此处是防御）。
     receipts.clear();
+    // 加载期间丢弃全部意图（2026-10-22 C 档）：世界即将被替换，此刻提交的
+    // 命令会随旧世界一起消失，且**不能**留到加载完再补——那时它们会落到
+    // 新世界上（错的图、错的点）。
+    if screen.shows_loading_overlay() {
+        // 三类意图全排空（`EditIntents` 没有 `clear`，只有分类型 drain）。
+        intents.drain_streets();
+        intents.drain_place_lines();
+        intents.drain_measurements();
+        return;
+    }
 
     for (seq, StreetSegmentIntent { layer_id, segment }) in intents.drain_streets() {
         let cmd = AddStreetSegmentCommand::new(layer_id, segment);
@@ -136,6 +147,7 @@ mod place_line_tests {
         });
         app_world.insert_resource(intents);
         app_world.insert_resource(EditReceipts::default());
+        app_world.insert_resource(crate::app_screen::AppScreen::default());
 
         let mut schedule = bevy::ecs::schedule::Schedule::default();
         schedule.add_systems(translate_edit_intents);
@@ -187,6 +199,7 @@ mod place_line_tests {
         });
         app_world.insert_resource(intents);
         app_world.insert_resource(EditReceipts::default());
+        app_world.insert_resource(crate::app_screen::AppScreen::default());
 
         let mut schedule = bevy::ecs::schedule::Schedule::default();
         schedule.add_systems(translate_edit_intents);
@@ -256,6 +269,7 @@ mod tests {
         });
         app_world.insert_resource(intents);
         app_world.insert_resource(EditReceipts::default());
+        app_world.insert_resource(crate::app_screen::AppScreen::default());
 
         let mut schedule = bevy::ecs::schedule::Schedule::default();
         schedule.add_systems(translate_edit_intents);
@@ -304,6 +318,7 @@ mod tests {
         });
         app_world.insert_resource(intents);
         app_world.insert_resource(EditReceipts::default());
+        app_world.insert_resource(crate::app_screen::AppScreen::default());
 
         let mut schedule = bevy::ecs::schedule::Schedule::default();
         schedule.add_systems(translate_edit_intents);

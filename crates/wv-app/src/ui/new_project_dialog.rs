@@ -3,14 +3,14 @@
 //! ## 职责
 //! - [`NewProjectDialog`] —— 对话框的跨帧 UI 状态（名称 / 位置 / 错误）。
 //! - [`new_project_dialog`] —— 绘制 + 确认创建：在「位置\项目名称」下**落盘**
-//!   一个新工程（含第一张世界地图），随后经 `load_project_into` 打开它。
+//!   一个新工程（含第一张世界地图），随后**排队**由后台线程打开它。
 //!
 //! ## 边界（不做什么）
 //! - **不**弹原生目录选择框——「浏览…」只排队意图（`DialogPurpose::PickNewProjectLocation`），
 //!   发起与收口都在 `ui_shell::poll_open_project_dialog`（与打开 / 另存为同一条纪律：
 //!   分发器与对话框保持纯状态，测试里不会弹真窗口）。
 //! - **不**经 `wv-edit` 的命令链构造世界——这里造的是**全新世界**并整体落盘，
-//!   成功后由 [`crate::ui_shell::load_project_into`] 整体替换工作副本。这与
+//!   成功后由后台加载任务（[`crate::project_loader`]）整体替换工作副本。这与
 //!   「加载 / 关闭工程」同类，是 shell 级换世界操作，不是 System 编辑世界
 //!   （§3.3 的约束对象）；首图栅格也由 `save_world` 写 `terrain.bin`，不绕过
 //!   任何落盘语义。
@@ -30,15 +30,10 @@ use wv_core::terrain::TerrainData;
 use wv_core::{Id, TimeSpan, WorldTemplate, WorldTemplateKind};
 use wv_terrain::climate::{generate_cold_north, pick_city_sites};
 
-use crate::edit::editing::EditHistory;
-use crate::i18n::CurrentLocale;
-use crate::state::{
-    DrillState, PlaybackState, ProjectDiagnostics, RecentProjects, ViewState, WorldProjection,
-};
+use crate::project_loader::PendingProjectLoad;
 use crate::theme::ui_theme::UiShellConfig;
 use crate::ui::widgets::{button as widget_button, ButtonContent, ButtonStyle};
-use crate::ui_shell::{load_project_into, DialogPurpose, OpenProjectTask, ShellNotice};
-use wv_render::terrain_view::{TerrainTexture, TileAtlas};
+use crate::ui_shell::{DialogPurpose, OpenProjectTask, ShellNotice};
 
 // 与「新建地图」对话框同一口径的幅面 / 预填充默认值（首图 = 空世界的第一张图，
 // 与 NewMapDialog::open_for 的空世界分支完全一致：世界级、最大幅面、海洋底图）。
@@ -453,39 +448,13 @@ pub fn new_project_dialog(
 #[allow(clippy::too_many_arguments)]
 pub fn new_project_apply_create(
     mut dialog: ResMut<NewProjectDialog>,
-    mut projection: ResMut<WorldProjection>,
-    mut drill: ResMut<DrillState>,
-    mut recents: ResMut<RecentProjects>,
+    mut pending: ResMut<PendingProjectLoad>,
     mut notice: ResMut<ShellNotice>,
-    mut diagnostics: ResMut<ProjectDiagnostics>,
-    mut edit: ResMut<EditHistory>,
-    mut playback: ResMut<PlaybackState>,
-    mut view: ResMut<ViewState>,
-    mut tex: ResMut<TerrainTexture>,
-    atlas: Option<Res<TileAtlas>>,
-    mut images: ResMut<Assets<Image>>,
-    mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
-    current_loc: Res<CurrentLocale>,
 ) {
     let Some(intent) = dialog.pending_apply.take() else {
         return;
     };
-    if let Err(e) = create_project(
-        &intent,
-        &mut projection,
-        &mut drill,
-        &mut recents,
-        &mut notice,
-        &mut diagnostics,
-        &mut edit,
-        &mut playback,
-        &mut view,
-        &mut tex,
-        atlas.as_deref(),
-        &mut images,
-        &mut cameras,
-        &current_loc,
-    ) {
+    if let Err(e) = create_project(&intent, &mut pending, &mut notice) {
         // 失败时让对话框再次打开让作者改。
         dialog.error = Some(e);
         dialog.open = true;
@@ -514,27 +483,15 @@ pub(crate) fn seed_from_clock() -> u64 {
 /// 落盘三步走（与「另存为到新目录」的 `save_world_to_dir` 同源，但**必然**造首图）：
 /// 1. `Project::create`：写 `world.yaml` 骨架（拒绝覆盖已有工程）；
 /// 2. `save_world(全量)`：首图的 `index.yaml` + `terrain.bin` + meta 覆写；
-/// 3. `load_project_into`：从磁盘打开（最近工程 / 视图 / 纹理 / 播放全部接管，
-///    顺带验证刚写下的东西真能读回来）。
+/// 3. **排队**由后台加载任务打开（最近工程 / 视图 / 纹理 / 播放全部接管，
+///    顺带验证刚写下的东西真能读回来）——2026-10-22 起打开不再阻塞窗口。
 ///
 /// 输入校验已在 UI 系统打包 [`NewProjectIntent`] 时完成（`validated_path()`），
 /// 此处不再重复。
-#[allow(clippy::too_many_arguments)]
 fn create_project(
     intent: &NewProjectIntent,
-    projection: &mut WorldProjection,
-    drill: &mut DrillState,
-    recents: &mut RecentProjects,
+    pending: &mut PendingProjectLoad,
     notice: &mut ShellNotice,
-    diagnostics: &mut ProjectDiagnostics,
-    edit: &mut EditHistory,
-    playback: &mut PlaybackState,
-    view: &mut ViewState,
-    tex: &mut TerrainTexture,
-    atlas: Option<&TileAtlas>,
-    images: &mut Assets<Image>,
-    cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
-    current_loc: &CurrentLocale,
 ) -> Result<(), String> {
     let path = intent.path.clone();
     let name = intent.name.clone();
@@ -550,31 +507,10 @@ fn create_project(
         .map_err(|e| format!("写入工程文件失败：{e}（目录已建，修好后可重试）"))?;
 
     let dir = path.display().to_string();
-    load_project_into(
-        &dir,
-        projection,
-        drill,
-        recents,
-        notice,
-        diagnostics,
-        edit,
-        playback,
-        view,
-        tex,
-        atlas,
-        images,
-        cameras,
-        frame,
-        current_loc,
-    );
-    if projection.project_dir.as_deref() != Some(dir.as_str()) {
-        // load_project_into 失败分支已写 load_error + 状态栏回执；这里给对话框
-        // 一份同样的原因（作者不用去找被欢迎页挡住的状态栏）。
-        return Err(format!(
-            "工程已落盘但打开失败：{}",
-            projection.load_error.clone().unwrap_or_default()
-        ));
-    }
+    // 打开**排队**即可：真正的读取在后台线程（`project_loader`），主线程
+    // 轮询结果后接管工作副本。打开失败的原因由加载错误卡片展示（窗口内
+    // 可见，V1），不再由本函数同步判定。
+    pending.0 = Some(dir.clone());
     notice.info(format!("已创建工程「{name}」：{dir}"), frame);
     Ok(())
 }

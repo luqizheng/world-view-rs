@@ -42,7 +42,7 @@
 //! - **不**加载 / 创建——按钮只排队意图：打开 → [`OpenProjectTask`]，
 //!   新建 → [`NewProjectDialog`]，最近工程 → `CommandPalette::pending`
 //!   （走唯一分发器，与菜单点「打开最近工程」同一条路）。
-//! - **不**在加载中画——`StartupLoadRequest` 有值时让位给启动加载遮罩，
+//! - **不**在加载中画——加载期间让位给启动加载遮罩，
 //!   避免两层压暗叠一起；命令面板 / 新建工程对话框打开时也让位
 //!   （它们与本页同为 Foreground 层，抢顶层）。
 //!
@@ -54,8 +54,9 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
+use crate::app_screen::AppScreen;
 use crate::i18n::{t_key, CurrentLocale, I18nKey};
-use crate::state::{RecentProjects, WorldProjection};
+use crate::state::RecentProjects;
 use crate::theme::ui_theme::{proportional, UiShellConfig};
 use crate::theme::ui_tokens::{font_size, space};
 use std::time::Instant;
@@ -67,7 +68,7 @@ use crate::ui::widgets::{
 };
 use crate::ui::NewProjectDialog;
 use crate::ui_command_palette::{CommandId, CommandPalette};
-use crate::ui_shell::{DialogPurpose, OpenProjectTask, StartupLoadRequest};
+use crate::ui_shell::{DialogPurpose, OpenProjectTask};
 
 use super::shell::UiShell;
 
@@ -102,10 +103,11 @@ const FOOTER_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"), " — World
 
 /// 无工程时的欢迎页（Figma `Zw4tonExV5lIY_EJamjPRw` · `00_WelcomeScreen`）。
 ///
-/// 渲染条件：没有打开工程、且不在启动加载中、且命令面板 / 新建工程对话框
-/// 都未打开——这三层"让位"避免与启动加载遮罩或更聚焦的浮层叠绘。
+/// 渲染条件（2026-10-22 B 档起由 [`AppScreen`] 一句话裁决）：
+/// 没有打开工程、且不在加载中、且没有加载失败——这三层「让位」避免与
+/// 加载遮罩或错误卡片叠绘。命令面板 / 新建工程对话框打开时也额外让位。
 ///
-/// **加载失败时也让位**：`StartupLoadRequest` 在帧末被 `startup_load` 取走后，
+/// **加载失败时也让位**：加载失败后屏状态转为「错误」时，
 /// 下一帧起「无工程」条件成立——若还画欢迎页，就会把居中的
 /// [`crate::ui_shell::load_error_card`] 盖住（全屏底色 + 卡片压在同为
 /// `Order::Foreground` 的错误窗之上），用户只看到欢迎页、看不到失败原因。
@@ -114,15 +116,16 @@ const FOOTER_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"), " — World
 pub fn welcome_screen(
     mut ctxs: EguiContexts,
     shell_cfg: Res<UiShellConfig>,
-    projection: Res<WorldProjection>,
     recents: Res<RecentProjects>,
     current_loc: Res<CurrentLocale>,
     mut open_task: ResMut<OpenProjectTask>,
     mut palette: ResMut<CommandPalette>,
     mut new_project: ResMut<NewProjectDialog>,
-    startup_req: Res<StartupLoadRequest>,
+    // 应用屏状态（2026-10-22 B 档）：「该不该显示欢迎页」由它一句话决定，
+    // 不再在本页拼 `has_open_project || 加载中 || 出错` 三个条件。
+    screen: Res<AppScreen>,
 ) {
-    if projection.has_open_project() || startup_req.0.is_some() || projection.load_error.is_some() {
+    if !screen.shows_welcome() {
         return;
     }
     if palette.open || new_project.open {
@@ -132,17 +135,17 @@ pub fn welcome_screen(
         return;
     };
     let shell = UiShell::new(&shell_cfg);
-    let screen = ctx.viewport_rect();
+    let viewport = ctx.viewport_rect();
 
     // 全屏点击吞吃层 + `bg_app` 底色（Figma `00_WelcomeScreen` 的整体底色）：
     // 视觉上与空场景一致，功能上仍挡住下面所有 UI（地图 + 浮窗都点不到——
     // 「什么都不能做，先立工程」）。
     egui::Area::new(egui::Id::new("wv_welcome_dim"))
         .order(egui::Order::Foreground)
-        .fixed_pos(screen.min)
+        .fixed_pos(viewport.min)
         .interactable(true)
         .show(ctx, |ui| {
-            let (rect, _) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
+            let (rect, _) = ui.allocate_exact_size(viewport.size(), egui::Sense::click());
             ui.painter()
                 .rect_filled(rect, 0.0, shell.palette.bg_app.to_color32());
         });
