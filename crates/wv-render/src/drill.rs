@@ -496,6 +496,7 @@ pub fn drill_pick(
     camera: Query<&Transform, With<Camera2d>>,
     time: Res<Time>,
     ui: Res<crate::camera::PointerOverUi>,
+    recipe: Res<crate::recipe::RenderRecipe>,
     mut projection: ResMut<WorldProjection>,
     grid: Res<GridConfig>,
     view: Res<ViewState>,
@@ -504,6 +505,11 @@ pub fn drill_pick(
     mut drill: ResMut<DrillState>,
     mut clicks: ResMut<DrillClick>,
 ) {
+    // 2026-10-22 内容矩阵：DrillMarkers 关（Topographic）⇒ 钻入入口整体
+    // 禁用——标记不画，双击也不应钻（中途钻子图还会打断 EditCell 的图绑定）。
+    if !recipe.enabled(crate::recipe::PassId::DrillMarkers) {
+        return;
+    }
     if ui.wants_pointer || !buttons.just_pressed(MouseButton::Left) {
         return;
     }

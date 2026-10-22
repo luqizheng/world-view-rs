@@ -418,6 +418,7 @@ pub fn compute_projection(
     let t = playback.current_day;
 
     // ---- 事件高亮：用 TimelineQuery::at 求「t 时刻正在发生的事件」----
+    // （frame 是数据投影，不做模式门——EventDots 的门在绘制侧 draw_map_gizmos。）
     if layers.event_point.visible {
         let spans: Vec<(TimeSpan, usize)> = world
             .events
@@ -614,6 +615,7 @@ pub fn draw_map_gizmos(
     view: Res<ViewState>,
     frame: Res<ProjectionFrame>,
     layers: Res<LayerFrame>,
+    recipe: Res<crate::recipe::RenderRecipe>,
 ) {
     let _ = &*tex; // suppress unused warning
     if false {
@@ -682,7 +684,9 @@ pub fn draw_map_gizmos(
 
     // 事件高点亮：常驻底环 + 内芯（特效 §4.2：状态永不抑制）。
     // 图层门 + 透明度走 LayerFrame（ADR-0013）；Gizmos 无逐实体 Z，z 偏移不适用。
-    if layers.event_point.visible {
+    // 2026-10-22 内容矩阵：接 MODE_TABLE(EventDots)——Topographic/Schematic
+    // 下不画（事件有时间性，编辑态隐藏；用户裁定）。
+    if layers.event_point.visible && recipe.enabled(crate::recipe::PassId::EventDots) {
         let alpha = layers.event_point.opacity;
         for (_id, pos) in &frame.active_events {
             gizmos.circle_2d(
