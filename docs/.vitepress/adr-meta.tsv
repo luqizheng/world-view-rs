@@ -1,0 +1,49 @@
+ADR-0001-faction-layer-model	数据模型与本体	无（ADR-0027 为其实现补充，不修改本文）
+ADR-0002-situation-ontology	数据模型与本体	Q4（谁怎么动记在哪里）被 ADR-0004 修正——轨迹归单位；A1/A2 继续有效
+ADR-0003-cross-map-reference	地图层级与导航	无
+ADR-0004-unit-ontology	数据模型与本体	无（本文修正 ADR-0002 的 Q4 答案与基线 §1.6 原口径）
+ADR-0005-encounter-hint	数据模型与本体	无
+ADR-0006-gregorian-calendar	数据模型与本体	无
+ADR-0007-overture-real-geography	外部数据	无
+ADR-0008-google-default-map-experience	渲染架构与主题	§2④（亚像素纹理底图）被 ADR-0012 部分修正；其余七项决策继续有效
+ADR-0009-graded-tile-zoom-to-street	地图层级与导航	§2⑤「往里缩放换级」被 ADR-0038 修正（改为双击钻入）
+ADR-0010-street-vector-layer	外部数据	无
+ADR-0011-bevy-0-19-upgrade	平台与基础设施	无
+ADR-0012-terrain-default-vector-flat-shading	渲染架构与主题	无（本文部分修正 ADR-0008 §2④）
+ADR-0013-layer-frame-binding	渲染架构与主题	无
+ADR-0014-mcp-http-server	平台与基础设施	无
+ADR-0015-city-submap-time-versioning	地图层级与导航	无
+ADR-0016-jrpg-antique-map-default-theme	渲染架构与主题	日间地形十色与日间淡化强度被 ADR-0035 取代；§2② 色板语义被显式取代；暮色旧纸与其余令牌继续有效
+ADR-0017-label-layer	呈现与 LOD	无（原编号 ADR-0016 撞号后重编号，文件头有追记）
+ADR-0018-i18n	平台与基础设施	无
+ADR-0019-bundled-ui-fonts	平台与基础设施	提议态（待用户确认转已接受）
+ADR-0020-wv-render-crate	渲染架构与主题	无
+ADR-0021-render-recipe-and-treatment	渲染架构与主题	D2（装饰族独立轴）被 ADR-0023 D4 修订——TreatmentFlags 归入 ThemePack
+ADR-0022-city-submap-spatial-form	地图层级与导航	无
+ADR-0023-theme-pack-injection-contract	渲染架构与主题	无（本文 D4 修订 ADR-0021 D2；M3 YAML 化推迟，见 README §12-33）
+ADR-0024-vehicle-daily-speed-unit	数据模型与本体	无（执行期裁决，用户复核可推翻）
+ADR-0025-selection-first-tooling	编辑工具与交互	D1「意图生效即选区清空」被 ADR-0033 取代；其余决策有效
+ADR-0026-wv-ui-ui-widget-crate	渲染架构与主题	无
+ADR-0027-faction-layer-multi-compatible	数据模型与本体	无（ADR-0001 的实现补充，不修改 ADR-0001 正文）
+ADR-0028-faction-division-and-territory	数据模型与本体	无
+ADR-0029-biome-marker	数据模型与本体	D5（过渡桥）被 ADR-0032 取代；其余决定不动摇
+ADR-0030-poi-rank-and-density-budget	呈现与 LOD	提议态；词表被 ADR-0047 扩表接入（非取代）
+ADR-0031-terrain-decor	地形与装饰	D2「Nation 不画装饰」被 ADR-0036 取代；D4 合批纪律延续
+ADR-0032-place-vocab-unify	数据模型与本体	无（本文取代 ADR-0029 D5）
+ADR-0033-selection-retained-after-intent	编辑工具与交互	无（本文取代 ADR-0025 D1）
+ADR-0034-north-up-coordinate-convention	地图层级与导航	无
+ADR-0035-jrpg-saturated-daylight-palette	渲染架构与主题	取代 ADR-0016 日间地形十色与淡化强度；其 D7 的 core.mountain 色被 ADR-0042 修正
+ADR-0036-nation-decor-and-relief	地形与装饰	无（本文取代 ADR-0031 D2）
+ADR-0037-world-template-and-regen	地图层级与导航	无（D5 rivers_seed 由 ADR-0046 补作者侧，不取代）
+ADR-0038-icon-click-drill-in	地图层级与导航	无（本文修正 ADR-0009 §2⑤ 的进入半边）
+ADR-0039-theme-derivation-rules	地形与装饰	提议态（索引表写「已接受」系滞后，以本文头部为准）
+ADR-0039-topographic-viewmode	地形与装饰	无（与 ADR-0039-theme-derivation-rules 撞号并行，引用须带文件名全称）
+ADR-0040-cell-inspector-tool	编辑工具与交互	无
+ADR-0041-topographic-2-5d-vertex-z	地形与装饰	无
+ADR-0042-hand-drawn-nation-style	渲染架构与主题	修正 ADR-0035 的 core.mountain 色值；调整 ADR-0036 的 Nation 步距与尺寸；追记三撤销自身 D13 的 rock_break / ridge_break
+ADR-0043-map-dock-split-buttons	编辑工具与交互	无
+ADR-0043-theme-crate-extraction	渲染架构与主题	无（与 ADR-0043-map-dock-split-buttons 撞号，引用须带文件名全称）
+ADR-0045-nature-region-model	数据模型与本体	无（不推翻 ADR-0039 的「cell 派生变体不持久化」）
+ADR-0046-sub-cell-author-line-data	数据模型与本体	无（补 ADR-0037 D5 的作者侧，不取代派生河流）
+ADR-0047-uniform-presentation-rank	呈现与 LOD	无（扩 ADR-0030 词表，非新表）
+ADR-0048-ocean-shore-presentation	地形与装饰	无ADR-0049-theme-pack-switching	渲染架构与主题	无（ADR-0023 M2 的落地实现，接通主题切换链路）
