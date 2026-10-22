@@ -44,7 +44,7 @@ use crate::forest_density::ForestDensityCache;
 use crate::layer_frame::LayerFrame;
 use crate::recipe::{PassId, RenderRecipe};
 use crate::state::{GridConfig, ViewState, WorldProjection};
-use crate::terrain_decor::{hash01, points_fingerprint};
+use crate::terrain_decor::{decor_band, hash01, points_fingerprint, DecorBand};
 use crate::terrain_view::terrain_resolve::active_terrain;
 
 /// 填充层 Z：地形装饰（0.075）之上、边缘团块与单株树之下。
@@ -224,6 +224,12 @@ pub fn sync_forest_mass(
         return;
     };
     if !recipe.enabled(PassId::TerrainDecor) || !layers.terrain.visible {
+        pool.fill.clear(&mut commands);
+        pool.patch.clear(&mut commands);
+        return;
+    }
+    // **档位门控**（ADR-0052 追记二）：世界级视距不画树簇（同单株，靠林底色调）。
+    if decor_band(view.scale) == Some(DecorBand::Nation) && !spec.nation_visible {
         pool.fill.clear(&mut commands);
         pool.patch.clear(&mut commands);
         return;
@@ -555,6 +561,29 @@ mod tests {
     /// 把主题换成「显式打开底纹」的夹具（默认配方不铺底纹）。
     fn use_fill_theme(app: &mut World) {
         app.resource_mut::<ViewState>().active_theme = theme_with_fill();
+    }
+
+    /// **档位门控**（ADR-0052 追记二）：世界级视距（Nation）不画树簇。
+    #[test]
+    fn clusters_are_hidden_at_the_nation_band() {
+        let (mut app, mut schedule) = mass_app(BIOME_DESERT);
+        app.resource_mut::<ViewState>().scale = 5.0;
+        schedule.run(&mut app);
+        let pool = app.resource::<ForestMassPool>();
+        assert!(pool.patch.entity.is_none(), "Nation 档不该贴树簇");
+        assert!(pool.fill.entity.is_none(), "Nation 档也不该铺填充");
+    }
+
+    /// 同一条门控的正面：Region 档照画。
+    #[test]
+    fn clusters_appear_at_the_region_band() {
+        let (mut app, mut schedule) = mass_app(BIOME_DESERT);
+        app.resource_mut::<ViewState>().scale = 1.5;
+        schedule.run(&mut app);
+        assert!(
+            app.resource::<ForestMassPool>().patch.entity.is_some(),
+            "Region 档应有树簇"
+        );
     }
 
     /// 默认配方（树簇堆叠成片、不铺底纹）→ 只有树簇层，没有填充层。

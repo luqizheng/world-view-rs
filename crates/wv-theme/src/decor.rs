@@ -99,6 +99,13 @@ pub struct ForestSymbolSpec {
     /// **为什么需要**：委托设计的素材格不是正方形（单株 192×260），
     /// 用正方形 quad 会把树拉扁。`size_px` 记的是**高度**，宽度 = 高度 × 本值。
     pub cell_aspect: f32,
+    /// **世界级视距（Nation 档）是否也画**；默认 `false`。
+    ///
+    /// **为什么默认不画**：这套素材是**近景语言**（一棵树占几十像素、带透视
+    /// 与阴影）。世界级视距下一屏要看整块大陆，几十像素的树贴上去只会像
+    /// 「贴纸」；那个尺度该由**林底色调**（烘焙进地形纹理）承担，符号只在
+    /// Region / Edit 档出现。
+    pub nation_visible: bool,
     /// 符号不透明度（0..=1）。
     pub alpha: f32,
     /// Edit 档参数（最近）。
@@ -121,6 +128,7 @@ impl ForestSymbolSpec {
         texture: &'static str,
         variants: u32,
         cell_aspect: f32,
+        nation_visible: bool,
         alpha: f32,
         band_edit: ForestSymbolBand,
         band_region: ForestSymbolBand,
@@ -133,6 +141,7 @@ impl ForestSymbolSpec {
             texture,
             variants,
             cell_aspect,
+            nation_visible,
             alpha,
             band_edit,
             band_region,
@@ -315,6 +324,8 @@ pub struct ForestMassSpec {
     /// 边缘团块单格**宽高比**（宽 ÷ 高）：这批手绘格是 192×225，非正方形，
     /// 用正方形 quad 会把树冠压扁。
     pub patch_aspect: f32,
+    /// **世界级视距是否也画树簇**；默认 `false`（同 `ForestSymbolSpec`）。
+    pub nation_visible: bool,
     /// 边缘团块**高度**（屏幕像素）。
     pub patch_px: f32,
     /// 边缘团块不透明度。
@@ -336,6 +347,7 @@ impl ForestMassSpec {
         patch_texture: Option<&'static str>,
         patch_variants: u32,
         patch_aspect: f32,
+        nation_visible: bool,
         patch_px: f32,
         patch_alpha: f32,
         patch_tint: [u8; 3],
@@ -350,6 +362,7 @@ impl ForestMassSpec {
             patch_texture,
             patch_variants,
             patch_aspect,
+            nation_visible,
             patch_px,
             patch_alpha,
             patch_tint,
@@ -400,6 +413,8 @@ pub const WATERCOLOR: DecorRecipe = DecorRecipe {
         "overlays/forest/tree_atlas16.png",
         16,
         192.0 / 260.0,
+        // 世界级视距不画单株（那尺度由林底色调承担）。
+        false,
         0.95,
         ForestSymbolBand {
             spacing_px: 34.0,
@@ -438,6 +453,8 @@ pub const WATERCOLOR: DecorRecipe = DecorRecipe {
         Some("overlays/forest/forest_cluster16.png"),
         16,
         192.0 / 225.0,
+        // 世界级视距不画树簇（同上）。
+        false,
         118.0,
         0.95,
         [236, 242, 230],
@@ -460,6 +477,7 @@ pub const WATERCOLOR_DUSK: DecorRecipe = DecorRecipe {
         "overlays/forest/tree_atlas16_dusk.png",
         16,
         192.0 / 260.0,
+        false,
         0.92,
         ForestSymbolBand {
             spacing_px: 36.0,
@@ -489,6 +507,7 @@ pub const WATERCOLOR_DUSK: DecorRecipe = DecorRecipe {
         Some("overlays/forest/forest_cluster16_dusk.png"),
         16,
         192.0 / 225.0,
+        false,
         118.0,
         0.93,
         [204, 212, 200],

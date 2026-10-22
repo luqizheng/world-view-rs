@@ -173,6 +173,12 @@ pub fn sync_forest_canopy(
         pool.clear(&mut commands);
         return;
     };
+    // **档位门控**（ADR-0052 追记二）：世界级视距不画单株——那个尺度由
+    // 烘焙进地形纹理的**林底色调**承担，符号只在 Region / Edit 出现。
+    if band == DecorBand::Nation && !spec.nation_visible {
+        pool.clear(&mut commands);
+        return;
+    }
     let Some((_, data)) = active_terrain(&projection.world, drill.current()) else {
         pool.clear(&mut commands);
         return;
@@ -715,6 +721,30 @@ mod tests {
                 after.len()
             );
         }
+    }
+
+    /// **档位门控**（ADR-0052 追记二）：世界级视距（Nation）不画单株。
+    #[test]
+    fn trees_are_hidden_at_the_nation_band() {
+        let (mut app, mut schedule) = app_with(BIOME_FOREST, true);
+        app.resource_mut::<ViewState>().scale = 5.0; // >= LOD_NATION_SCALE
+        schedule.run(&mut app);
+        assert!(
+            app.resource::<ForestCanopyPool>().entity.is_none(),
+            "世界级视距不该贴单株（那尺度由林底色调承担）"
+        );
+    }
+
+    /// 同一条门控的正面：Region 档照画（缩放进来树才出现）。
+    #[test]
+    fn trees_appear_at_the_region_band() {
+        let (mut app, mut schedule) = app_with(BIOME_FOREST, true);
+        app.resource_mut::<ViewState>().scale = 1.5; // Region
+        schedule.run(&mut app);
+        assert!(
+            app.resource::<ForestCanopyPool>().entity.is_some(),
+            "Region 档应有单株"
+        );
     }
 
     /// 密度场按块惰性计算（§九-3）：一帧只算**扫到的块**，不整场预算 32² 块。
