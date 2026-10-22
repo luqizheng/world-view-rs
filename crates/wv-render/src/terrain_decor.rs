@@ -671,6 +671,70 @@ fn ensure_material(
         .clone()
 }
 
+/// 森林密度场的缓存（方案 1）——`sync_terrain_decor` 用它调制森林符号的保留率。
+///
+/// **为什么缓存**：森林密度是**全局量**（一片林的疏密取决于整张图的聚集噪声），
+/// 不能像逐格属性那样采样即得；每帧重算 1024² × 2 层 Perlin 噪声是纯浪费
+/// ——地形没变时场不会变。**键 = `terrain_data_hash`**（与离岸场缓存同源）：
+/// hash 不变直接复用，变了整场重算。
+///
+/// **与离岸场缓存同构、不同源**：离岸场用 BFS 距离，森林场用
+/// [`wv_terrain::forest::generate_forest_density_from_biome`]（群系 + 林线 +
+/// 聚集噪声）。两者生命周期相同（地形变则重算），故各自独立缓存。
+#[derive(Resource, Default)]
+pub struct ForestDensityCache {
+    hash: u64,
+    field: std::sync::Arc<Vec<f32>>,
+    w: u32,
+    h: u32,
+}
+
+/// 森林密度场的固定种子。
+///
+/// 密度场是**视觉派生量**（森林疏密），不是世界事实，故用常量种子而非世界
+/// 种子：同一张地形在任何机器、任何次重开都得到同一片林。
+/// 接入世界种子的收敛点：把本常量换成 `projection.world` 的种子派生值。
+const FOREST_DENSITY_SEED: u64 = 0x4653_5441; // "FSTA"
+
+/// 森林桶的保留率 = 密度场 × 主题增益（裁剪到 `0..=1`）。
+///
+/// **为什么抽成纯函数**：疏密是「地形事实 × 主题参数」的乘积，两侧都可独立
+/// 断言——密度场由 `wv_terrain::forest` 测，主题增益在这里测。
+pub(crate) fn forest_keep_prob(density: f32, gain: f32) -> f32 {
+    (density * gain).clamp(0.0, 1.0)
+}
+
+impl ForestDensityCache {
+    /// 取当前地形的森林密度场（hash 不匹配则重算）。
+    fn get_or_compute(&mut self, data: &wv_core::terrain::TerrainData) -> std::sync::Arc<Vec<f32>> {
+        let hash = crate::terrain_view::isoline_overlay::terrain_data_hash(data);
+        let (w, h) = (data.width.max(1), data.height.max(1));
+        if self.hash != hash || self.w != w || self.h != h {
+            let n = (w as usize) * (h as usize);
+            let mut biomes = vec![0u8; n];
+            let mut heights = vec![0i16; n];
+            for (i, c) in data.cells.iter().take(n).enumerate() {
+                biomes[i] = c.biome;
+                heights[i] = c.height;
+            }
+            let field = wv_terrain::forest::generate_forest_density_from_biome(
+                w as usize,
+                h as usize,
+                &biomes,
+                &heights,
+                FOREST_DENSITY_SEED,
+            );
+            *self = Self {
+                hash,
+                field: std::sync::Arc::new(field),
+                w,
+                h,
+            };
+        }
+        self.field.clone()
+    }
+}
+
 /// 离岸距离场的缓存（ADR-0048 追记四）——`sync_terrain_decor` 按视口采样
 /// 格子判 OceanWaves 用。
 ///
@@ -735,6 +799,7 @@ pub fn sync_terrain_decor(
     overlay_index: Res<crate::region_overlay::RegionOverlayIndex>,
     mut pools: ResMut<TerrainDecorPools>,
     mut shore_cache: ResMut<ShoreFieldCache>,
+    mut forest_cache: ResMut<ForestDensityCache>,
 ) {
     let enabled = recipe.enabled(PassId::TerrainDecor) && layers.terrain.visible;
     if !enabled {
@@ -761,6 +826,10 @@ pub fn sync_terrain_decor(
     // 离岸距离场（ADR-0048 追记四）：OceanWaves 的离岸带判定用。缓存 Resource
     // 按 terrain hash 键控，地形没变就复用（O(N) BFS 只在编辑后算一次）。
     let shore_field = shore_cache.get_or_compute(data, recipe.wave_band_max_cells);
+
+    // 森林密度场（方案 1）：「哪里有林 / 多密」由地形事实（群系 + 林线 +
+    // 聚集噪声）给出，主题再用 `forest_density_gain` 调制疏密。
+    let forest_density = forest_cache.get_or_compute(data);
 
     let material = ensure_material(&mut pools, &mut materials);
 
@@ -895,7 +964,14 @@ pub fn sync_terrain_decor(
                 }
             };
             let keep_prob = match kind {
-                DecorKind::Forest | DecorKind::Mountain | DecorKind::Snow | DecorKind::Marsh => 1.0,
+                // 森林桶（方案 1）：保留率 = 密度场 × 主题增益。
+                // 密度场已经含群系基础密度、林线衰减与聚集噪声，故此处
+                // 不再是「有森林群系就画满」——林间空地自然出现。
+                DecorKind::Forest => {
+                    let d = forest_density[gy as usize * data.width as usize + cx as usize];
+                    forest_keep_prob(d, recipe.forest_density_gain)
+                }
+                DecorKind::Mountain | DecorKind::Snow | DecorKind::Marsh => 1.0,
                 DecorKind::Desert => 0.7,
                 DecorKind::OceanWaves => {
                     // 密度随离岸距离线性衰减：带内缘全画，外缘稀至 0.15。
@@ -1427,6 +1503,8 @@ mod tests {
         app.insert_resource(recipe);
         app.init_resource::<TerrainDecorPools>();
         app.init_resource::<ShoreFieldCache>();
+        // 森林密度场缓存（方案 1）：森林桶的保留率由它调制，漏初始化会 panic。
+        app.init_resource::<ForestDensityCache>();
         app.init_resource::<Assets<Mesh>>();
         app.init_resource::<Assets<ColorMaterial>>();
         // 覆盖物规则索引（ADR-0045 D9）：sync_terrain_decor 的必选依赖，
@@ -1464,5 +1542,59 @@ mod tests {
         schedule.run(&mut app);
         let off = app.resource::<Assets<Mesh>>().iter().count();
         assert_eq!(off, 0, "pass 关闭后装饰应全部清除，got {off}");
+    }
+
+    /// 森林密度场：森林群系得正密度，荒漠得零（方案 1 的数据源断言）。
+    #[test]
+    fn forest_density_cache_marks_forest_and_rejects_desert() {
+        use wv_core::terrain::{TerrainCellData, TerrainData};
+
+        // 2×2：左上 = 森林（100 m），其余 = 荒漠。
+        let cells = vec![
+            TerrainCellData {
+                height: 100,
+                surface: 1,
+                biome: BIOME_FOREST,
+            },
+            TerrainCellData {
+                height: 100,
+                surface: 1,
+                biome: BIOME_DESERT,
+            },
+            TerrainCellData {
+                height: 100,
+                surface: 1,
+                biome: BIOME_DESERT,
+            },
+            TerrainCellData {
+                height: 100,
+                surface: 1,
+                biome: BIOME_DESERT,
+            },
+        ];
+        let data = TerrainData {
+            width: 2,
+            height: 2,
+            cells,
+        };
+        let mut cache = ForestDensityCache::default();
+        let field = cache.get_or_compute(&data);
+        assert_eq!(field.len(), 4, "密度场长度应为 4");
+        assert!(field[0] > 0.0, "森林格应有正密度，got {}", field[0]);
+        assert_eq!(field[1], 0.0, "荒漠格应无密度，got {}", field[1]);
+        assert_eq!(field[2], 0.0, "荒漠格应无密度，got {}", field[2]);
+        assert_eq!(field[3], 0.0, "荒漠格应无密度，got {}", field[3]);
+    }
+
+    /// 主题增益：0 = 不画森林符号，1 = 照密度场，2 = 提到满格。
+    #[test]
+    fn forest_keep_prob_applies_theme_gain() {
+        assert_eq!(forest_keep_prob(0.8, 0.0), 0.0, "增益 0 应无符号");
+        assert!(
+            (forest_keep_prob(0.8, 1.0) - 0.8).abs() < 1e-6,
+            "增益 1 照密度场"
+        );
+        assert_eq!(forest_keep_prob(0.8, 2.0), 1.0, "增益 2 应夹到满格");
+        assert_eq!(forest_keep_prob(0.8, -1.0), 0.0, "负增益应夹到 0");
     }
 }

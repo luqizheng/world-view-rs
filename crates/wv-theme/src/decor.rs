@@ -139,6 +139,19 @@ pub struct DecorRecipe {
     /// 密度衰减尺度（格）：`d = wave_band_min` 全画，`d = wave_band_max`
     /// 稀到 0.15（线性衰减，与旧深度衰减同构、自变量换掉）。
     pub wave_density_span_cells: u16,
+
+    // ── 森林密度调制（密度场 × 主题增益）────────────────────────
+    /// 森林符号保留率增益：主题对森林疏密的**整体**调制倍率。
+    ///
+    /// **分工**：「哪里有森林」由地形事实决定——`wv_terrain::forest`
+    /// 的密度场（群系 + 林线 + 聚集噪声，见
+    /// `generate_forest_density_from_biome`）；「多密」由主题决定。
+    /// 渲染层的实际保留率 = `密度场值 × 本增益`（裁剪到 `0..=1`）。
+    ///
+    /// `1.0` = 照密度场原样；`< 1.0` 更疏（林间空地更多）；`> 1.0` 更密。
+    /// 归属理由：ADR-0048 追记二「数值配方住主题层，执行器留在渲染层」——
+    /// 疏密是美术参数，主题该管「多密」，正如它管「长什么样、多大」。
+    pub forest_density_gain: f32,
 }
 
 /// 水彩装饰配方（日间）——与 2026-10-21 之前的渲染层硬编码**逐位一致**
@@ -172,6 +185,8 @@ pub const WATERCOLOR: DecorRecipe = DecorRecipe {
     wave_band_min_cells: 3,
     wave_band_max_cells: 9,
     wave_density_span_cells: 6,
+    // 森林密度照密度场原样（1.0 = 不额外调制）。
+    forest_density_gain: 1.0,
 };
 
 /// 暮色装饰配方——暗纸上的符号要更沉、更疏。

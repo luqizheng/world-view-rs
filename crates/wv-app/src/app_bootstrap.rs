@@ -213,6 +213,10 @@ pub fn run(config: AppConfig) {
     // 离岸距离场缓存（ADR-0048 追记四）：OceanWaves 的离岸带判定用，
     // 按 terrain hash 键控（地形没变就复用）。
     .init_resource::<terrain_decor::ShoreFieldCache>()
+    // 森林密度场缓存（方案 1）：森林符号的疏密由地形事实（群系 + 林线 +
+    // 聚集噪声）给出，主题再乘 `forest_density_gain` 调制；按 terrain hash
+    // 键控（地形没变就复用）。
+    .init_resource::<terrain_decor::ForestDensityCache>()
     // 区域覆盖物解析索引 + 缺失标记运行时资源（ADR-0045）。
     .init_resource::<region_overlay::RegionOverlayIndex>()
     .init_resource::<region_overlay::MissingMarkerAssets>()
