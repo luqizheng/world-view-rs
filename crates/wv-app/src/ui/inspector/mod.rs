@@ -50,6 +50,7 @@ use super::widgets::{empty_state, float_window, BadgeKind, ICON_CHEVRON_RIGHT};
 
 use wv_core::{EntityKind, SelectedEntity};
 
+pub mod event;
 pub mod faction;
 pub mod place;
 pub mod region;
@@ -407,7 +408,17 @@ fn render_properties(
                 return;
             }
             render_selection_header(ui, shell, sel);
-            ui.label("Event 表单（M2 接入）");
+            let Some(event) = projection
+                .world
+                .events
+                .iter()
+                .find(|e| e.id == sel.id)
+                .cloned()
+            else {
+                render_empty(ui, shell);
+                return;
+            };
+            event::event_form(ui, shell, &event, projection, edit, view);
         }
     }
 }
