@@ -1206,14 +1206,12 @@ impl<'a> CellRenderer<'a> {
         // 只读 height + surface（X 路线，biome 不参与），经 `topographic::pick`
         // 按水/陆 + 3 阶高度取色。res 恒 1（new 里已定），一像素直铺；
         // 无边界/揉边/淡化/浮雕——分析视图四色是语义色，任何后处理都是污染。
-        if let Some((p_low, p_high)) = self.topographic {
-            let rgba = crate::theme::topographic::pick(
-                &crate::theme::topographic::TopographicPalette::default(),
-                cell.surface == wv_terrain::SURFACE_WATER,
-                cell.height,
-                p_low,
-                p_high,
-            );
+        if let Some((_p_low, _p_high)) = self.topographic {
+            // 2026-10-22 三模式内容矩阵（spec §2.5）：CellMap = 群系固定色块
+            // ——颜色编码 biome，固定色板不随 ThemePack/TreatmentFlags；
+            // 高度不参与（海拔参照交给等高线叠加）。修正 ADR-0039 的
+            // 「等高分析底图」画法（ADR-0051）。
+            let rgba = crate::terrain_view::biome_raw::pick(cell.biome, cell.surface);
             let o = ((out_row * stride + cx) as usize) * 4;
             pixels[o] = (rgba[0] * 255.0) as u8;
             pixels[o + 1] = (rgba[1] * 255.0) as u8;
@@ -1829,66 +1827,59 @@ mod tests {
         pixels
     }
 
-    /// 水/陆二分 + 3 阶高度:像素色必须与 `topographic::pick` 的语义一致——
-    /// surface=水 或 height<0 → water;陆按 p33/p66 切 low/mid/high;
-    /// soften 开关被忽略(分析视图四色是语义色)。
+    /// 群系色块底图（2026-10-22 spec §2.5，修正 ADR-0039 的 3 阶高度画法）：
+    /// 像素色必须 = `biome_raw::pick` 的语义——颜色编码 biome（固定色板），
+    /// biome=NONE 按 surface 回退；soften 开关被忽略（数据视图要诚实）。
     #[test]
-    fn topographic_mode_paints_water_and_three_height_bands() {
-        let data = topographic_fixture();
+    fn topographic_mode_paints_fixed_biome_colors() {
+        let mut data = topographic_fixture();
+        // 给几格明确群系（原 fixture biome 多为 NONE）。
+        data.cells[2].biome = wv_terrain::BIOME_FOREST;
+        data.cells[6].biome = wv_terrain::BIOME_DESERT;
+        data.cells[15].biome = wv_terrain::BIOME_OCEAN;
         let pixels = topographic_pixels(&data);
-        let pal = crate::theme::topographic::TopographicPalette::default();
 
-        let water = to_bytes(pal.water);
-        let low = to_bytes(pal.land_low);
-        let mid = to_bytes(pal.land_mid);
-        let high = to_bytes(pal.land_high);
-
-        // 阈值(排序后 len=16: idx_low=floor(16×0.33)=5 → 40, idx_high=10 → 90)。
-        // cell 布局(行优先 idx = y*4+x):
-        //   idx 0  = (0,0) surface=水 h=-100 → water
-        //   idx 1  = (1,0) surface=陆 h=-50  → water(height<0 湿判定)
-        //   idx 2  = (2,0) 陆 h=10           → low  (10 ≤ 40)
-        //   idx 3  = (3,0) 陆 h=20           → low
-        //   idx 5  = (1,1) 陆 h=40           → low  (40 ≤ p33=40)
-        //   idx 6  = (2,1) 陆 h=50           → mid  (40 < 50 ≤ 90)
-        //   idx 15 = (3,3) 陆 h=140          → high (140 > 90)
         let px = |x: u32, y: u32| -> [u8; 3] {
             let o = ((y * 4 + x) * 4) as usize;
             [pixels[o], pixels[o + 1], pixels[o + 2]]
         };
-        assert_eq!(px(0, 0), water, "(0,0) surface=水 → 水色");
-        assert_eq!(px(1, 0), water, "(1,0) surface=陆但 h<0 → 湿判定水色");
-        assert_eq!(px(2, 0), low, "(2,0) h=10 ≤ p33 → 低地");
-        assert_eq!(px(3, 0), low, "(3,0) h=20 ≤ p33 → 低地");
-        assert_eq!(px(1, 1), low, "(1,1) h=40 = p33 → 低地(含边界)");
-        assert_eq!(px(2, 1), mid, "(2,1) h=50 ∈ (p33,p66] → 中地");
-        assert_eq!(px(3, 3), high, "(3,3) h=140 > p66 → 高地");
+        let to_bytes3 = |c: [u8; 3]| c;
+        let forest = to_bytes3(
+            crate::terrain_view::biome_raw::BIOME_RAW_COLORS[wv_terrain::BIOME_FOREST as usize],
+        );
+        let desert = to_bytes3(
+            crate::terrain_view::biome_raw::BIOME_RAW_COLORS[wv_terrain::BIOME_DESERT as usize],
+        );
+        let ocean = to_bytes3(
+            crate::terrain_view::biome_raw::BIOME_RAW_COLORS[wv_terrain::BIOME_OCEAN as usize],
+        );
 
-        // 三档陆色两两不同 + 与水色不同(防止默认色相撞)。
-        assert_ne!(low, mid);
-        assert_ne!(mid, high);
-        assert_ne!(low, high);
-        assert_ne!(water, low);
+        // 布局(行优先 idx = y*4+x)：idx2=(2,0) 陆森林、idx6=(2,1) 陆沙漠、
+        // idx15=(3,3) 海洋；idx0=(0,0) surface=水 + NONE → 水面回退。
+        assert_eq!(px(2, 0), forest, "(2,0) biome=森林 → 固定森林色");
+        assert_eq!(px(2, 1), desert, "(2,1) biome=沙漠 → 固定沙漠色");
+        assert_eq!(px(3, 3), ocean, "(3,3) biome=海洋 → 固定海洋色");
+        assert_ne!(px(0, 0), forest, "(0,0) NONE+水 → 回退水蓝，不得撞森林色");
     }
 
-    /// biome 通道不参与显示(X 路线):同 height/surface、不同 biome 的两格
-    /// 像素必须逐字节一致。
+    /// 群系主导着色（修正原「biome 不参与」语义）：同 height/surface、
+    /// 不同 biome 的两格颜色必须**不同**——颜色编码 biome 本身。
     #[test]
-    fn topographic_mode_ignores_biome_channel() {
+    fn topographic_mode_paints_biome_channel() {
         let mut data = topographic_fixture();
-        // 把 (2,1) 的 height 改成与 (1,1) 相同、biome 换成 DESERT:
-        // 两格仅 biome 不同 → 颜色必须一致。
+        // (1,1) 与 (2,1) 同 height/surface，仅 biome 不同 → 颜色必须不同。
         data.cells[6].height = data.cells[5].height;
         data.cells[6].biome = wv_terrain::BIOME_DESERT;
+        data.cells[5].biome = wv_terrain::BIOME_FOREST;
         let pixels = topographic_pixels(&data);
         let o5 = (5 * 4) as usize;
         let o6 = (6 * 4) as usize;
-        assert_eq!(data.cells[5].biome, wv_terrain::BIOME_GRASSLAND);
+        assert_eq!(data.cells[5].biome, wv_terrain::BIOME_FOREST);
         assert_eq!(data.cells[6].biome, wv_terrain::BIOME_DESERT);
-        assert_eq!(
+        assert_ne!(
             pixels[o5..o5 + 3],
             pixels[o6..o6 + 3],
-            "biome 不同、height/surface 相同 → 颜色必须相同(X 路线)"
+            "仅 biome 不同 → 颜色必须不同(群系色块语义)"
         );
     }
 
