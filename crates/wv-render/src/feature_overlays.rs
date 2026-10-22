@@ -83,8 +83,8 @@ const SYMBOL_ATLAS_VARIANTS: usize = 3;
 /// `crates/wv-render/assets`（Bevy 默认资产根之外）。`include_bytes!` 让二进制
 /// 自带贴图、无运行期 IO 失败分支；解码失败仅是纯色回退（不 panic）。
 ///
-/// 只登记运行期真正消费的 3 张：图集（日 / 暮）+ 地界晕图章。单株 `tree_a/b/c`
-/// 与 `forest_patch` 是归一化中间产物，不参与运行时轮换。
+/// 只登记运行期真正消费的 4 张：图集（日 / 暮）+ 地界晕图章 + 森林团块。
+/// 单株 `tree_a/b/c` 是归一化中间产物（图集已包含），不参与运行时轮换。
 const EMBEDDED_TEXTURES: &[(&str, &[u8])] = &[
     (
         "overlays/forest/tree_atlas_day.png",
@@ -97,6 +97,31 @@ const EMBEDDED_TEXTURES: &[(&str, &[u8])] = &[
     (
         "overlays/forest/forest_fill.png",
         include_bytes!("../assets/overlays/forest/forest_fill.png"),
+    ),
+    // 森林团块（§七 第二尺度，`forest_mass` 的边缘层）：一小丛林，自带
+    // 不规则边缘——用来把填充层的格状边界打散成树冠轮廓。
+    (
+        "overlays/forest/forest_patch.png",
+        include_bytes!("../assets/overlays/forest/forest_patch.png"),
+    ),
+    // ── 2026-10-22 生成素材（俯视树冠，GLM 出图 + 洋红抠像）──────────
+    // 旧三张是暖褐水彩 / 手绘素描，铺在 JRPG 浅绿底图上会「焦土」。
+    // 新四张统一为**俯视**视角与鼠尾草绿调，故森林三层的观感一致。
+    (
+        "overlays/forest/tree_atlas_day_gen.png",
+        include_bytes!("../assets/overlays/forest/tree_atlas_day_gen.png"),
+    ),
+    (
+        "overlays/forest/tree_atlas_dusk_gen.png",
+        include_bytes!("../assets/overlays/forest/tree_atlas_dusk_gen.png"),
+    ),
+    (
+        "overlays/forest/forest_fill_gen.png",
+        include_bytes!("../assets/overlays/forest/forest_fill_gen.png"),
+    ),
+    (
+        "overlays/forest/forest_patch_gen.png",
+        include_bytes!("../assets/overlays/forest/forest_patch_gen.png"),
     ),
 ];
 
@@ -882,13 +907,15 @@ mod tests {
         assert_eq!(uvs[3], [0.0, 1.0], "左上 → (0,1)");
     }
 
-    /// 已知贴图键 → 编译期嵌入的 PNG 字节（三条运行时资产全在册）。
+    /// 已知贴图键 → 编译期嵌入的 PNG 字节（四条运行时资产全在册）。
     #[test]
     fn known_texture_keys_map_to_embedded_bytes() {
         for key in [
             "overlays/forest/tree_atlas_day.png",
             "overlays/forest/tree_atlas_dusk.png",
             "overlays/forest/forest_fill.png",
+            // 团块层（§七 第二尺度）的边缘贴图。
+            "overlays/forest/forest_patch.png",
         ] {
             let bytes = embedded_texture(key).unwrap_or_else(|| panic!("{key} 应有内嵌字节"));
             assert_eq!(&bytes[..4], b"\x89PNG", "{key} 应是 PNG 魔数开头");

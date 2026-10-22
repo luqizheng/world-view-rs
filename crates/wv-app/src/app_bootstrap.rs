@@ -35,6 +35,7 @@ use wv_render::faction_overlays;
 use wv_render::feature_overlays;
 use wv_render::forest_canopy;
 use wv_render::forest_density;
+use wv_render::forest_mass;
 use wv_render::layer_frame;
 use wv_render::map_frame;
 use wv_render::place_line;
@@ -222,6 +223,9 @@ pub fn run(config: AppConfig) {
     // 森林形态时，本层按密度场撒手绘树；实体 / mesh / 材质 / 贴图句柄都
     // 缓存在池里（跨帧复用，避免每帧重解码 PNG）。
     .init_resource::<forest_canopy::ForestCanopyPool>()
+    // 地形森林的**团块层**（§七 第二尺度）：森林底纹逐块铺满林地 + 边界盖团块，
+    // 让森林在地图尺度上读作「一整片」而不是「零星几棵树」。
+    .init_resource::<forest_mass::ForestMassPool>()
     // 区域覆盖物解析索引 + 缺失标记运行时资源（ADR-0045）。
     .init_resource::<region_overlay::RegionOverlayIndex>()
     .init_resource::<region_overlay::MissingMarkerAssets>()
@@ -347,6 +351,9 @@ pub fn run(config: AppConfig) {
             // 位图树冠层（§七）：排在装饰之后——两者互斥（形态二选一），
             // 但同帧内先算出装饰的森林桶、再决定树冠，避免同帧两种形态并存。
             forest_canopy::sync_forest_canopy,
+            // 森林团块层（§七 第二尺度）：填充 + 边缘团块，Z 低于单株树，
+            // 故先算它再算树冠（同帧内 z 已定，顺序只影响可见帧的一致性）。
+            forest_mass::sync_forest_mass,
             // 地图外框 + 1/4 幅面参考网格（外框需地形尺寸）。
             map_frame::sync_map_frame,
         )
