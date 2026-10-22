@@ -138,6 +138,10 @@ pub static PACK: ThemePack = ThemePack {
         // 森林形态（§七）：水墨**不用位图树**——手绘树的写实轮廓与水墨的
         // 皴笔语法不合；水墨的林仍是程序化墨点（ADR-0031 D5 的默认形态）。
         forest_symbol: None,
+        // 森林团块（§七 第二尺度）：水墨也**不铺**——`forest_fill` / `forest_patch`
+        // 是水彩底纹，铺上去会变成「纸上贴水彩」，与墨戏不是一路。水墨的林靠
+        // 林底（薄）+ 程序化墨点，留白本身参与画面。
+        forest_mass: None,
         ..wv_theme::decor::WATERCOLOR
     },
     sea: SeaRecipe {
