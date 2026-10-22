@@ -1416,7 +1416,15 @@ pub fn update_region_labels(
     let t = playback.current_day;
     let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
     // Label 层可见性（ADR-0017 Q1）
-    if layers.label.visible && recipe.enabled(crate::recipe::PassId::RegionLayers) {
+    if layers.label.visible
+        && crate::region_overlay::region_layer_visible(
+            view.mode,
+            view.nature_overlay,
+            wv_core::model::region::RegionKind::Nature,
+            recipe.enabled(crate::recipe::PassId::RegionLayers),
+            true,
+        )
+    {
         if let Some(current) = drill.current_node(&projection.world) {
             let map_span = current.time_span.as_ref();
             if wv_core::label_visible_at(map_span, None, t) {

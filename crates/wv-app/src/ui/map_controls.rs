@@ -83,7 +83,7 @@ use super::widgets::{
     ICON_ELLIPSE, ICON_MOVE_HORIZONTAL, ICON_MOVE_VERTICAL, ICON_RULER_DIMENSION_LINE,
     ICON_SQUARES_UNITE, ICON_VECTOR_POLYGON, ICON_VECTOR_SQUARE,
 };
-use super::{ICON_ERASER, ICON_GRID, ICON_HAND, ICON_REDO, ICON_UNDO};
+use super::{ICON_ERASER, ICON_GRID, ICON_HAND, ICON_REDO, ICON_TREES, ICON_UNDO};
 
 /// 贴边距离（原型 `right: 18px`）。
 const EDGE_OFFSET: f32 = 18.0;
@@ -492,6 +492,22 @@ pub fn map_controls(
                         .clicked()
                         {
                             view.grid_lines = !view.grid_lines;
+                        }
+
+                        // ── 槽 11：自然区（2026-10-22 内容矩阵 §2.6）──────
+                        // CellMap 里显示 Nature 类区域 + 未命名候选高亮；
+                        // 仅 Topographic 有意义（其他模式区域层本就画）。
+                        if icon_tile(
+                            ui,
+                            &shell,
+                            metrics,
+                            ICON_TREES,
+                            view.nature_overlay,
+                            "显示自然区与候选（CellMap）",
+                        )
+                        .clicked()
+                        {
+                            view.nature_overlay = !view.nature_overlay;
                         }
                     };
 

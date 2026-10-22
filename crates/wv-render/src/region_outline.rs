@@ -220,7 +220,14 @@ pub fn sync_region_outlines(
 ) {
     // 2026-10-22 内容矩阵：区域层从 TerrainDecor 拆到独立 pass——Schematic
     // 下装饰 ✓ 而区域 ✗，共享一格做不到（ADR-0051）。
-    let enabled = recipe.enabled(PassId::RegionLayers) && layers.terrain.visible;
+    // CellMap（Topographic）：nature_overlay 放行 Nature 类（判定入口唯一）。
+    let enabled = crate::region_overlay::region_layer_visible(
+        view.mode,
+        view.nature_overlay,
+        wv_core::model::region::RegionKind::Nature,
+        recipe.enabled(PassId::RegionLayers),
+        layers.terrain.visible,
+    );
     let Some(map_id) = drill.current().cloned() else {
         pool.despawn_all(&mut commands);
         return;
@@ -229,11 +236,14 @@ pub fn sync_region_outlines(
         pool.despawn_all(&mut commands);
         return;
     }
+    let in_cellmap = matches!(view.mode, crate::state::ViewMode::Topographic);
     let regions: Vec<&Region> = projection
         .world
         .regions
         .iter()
         .filter(|r| r.map == map_id && !r.polygon.is_empty())
+        // CellMap 只显示 Nature 类（Area 属内容，永远藏）
+        .filter(|r| !in_cellmap || matches!(r.kind, wv_core::model::region::RegionKind::Nature))
         .collect();
     if regions.is_empty() {
         pool.despawn_all(&mut commands);

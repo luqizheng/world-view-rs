@@ -230,6 +230,10 @@ pub struct ViewState {
     /// 地图工具条（`map_controls` 瓷砖），它本来就是「看图方式」而非「笔刷参数」，
     /// 与 `labels_visible` 等同族。
     pub grid_lines: bool,
+    /// CellMap 自然区开关（2026-10-22 内容矩阵 §2.6）：开启时 Topographic 下
+    /// 显示 `kind == Nature` 的区域层 + 全图未命名候选高亮。会话态，不落盘。
+    /// 仅 Topographic 有意义——其他模式的区域层不受本开关影响。
+    pub nature_overlay: bool,
     /// 抓手工具（手形 H）：开启后**左键拖拽**平移地图。
     ///
     /// 会话态、不写盘：与 [`MeasureMode`] 同口径（每次重启从关闭起）。
@@ -303,6 +307,7 @@ impl Default for ViewState {
             buildings_visible: true,
             factions_visible: true,
             grid_lines: false,
+            nature_overlay: false,
             pan_tool: false,
             cursor_world: None,
             window_size: Vec2::new(1280.0, 800.0),

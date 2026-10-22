@@ -37,6 +37,110 @@ use crate::faction_overlays::earcut_with_holes;
 use crate::layer_frame::LayerFrame;
 use crate::recipe::RenderRecipe;
 use crate::state::{DrillState, GridConfig, ViewState, WorldProjection};
+
+/// 区域层在本帧是否可见（2026-10-22 内容矩阵 §2.6 的唯一判定入口）。
+///
+/// - **CellMap（Topographic）**：只看 `nature_overlay` 开关，且**仅 Nature 类**
+///   放行（Area 区属内容，CellMap 永远藏）；recipe 格（false）被旁路。
+/// - **其他模式**：走 recipe（RegionLayers 行）∧ 图层。
+///   Schematic 行=false ⇒ 编辑态区域消失（用户裁定：区域有时间性）。
+pub(crate) fn region_layer_visible(
+    mode: crate::state::ViewMode,
+    nature_overlay: bool,
+    kind: wv_core::model::region::RegionKind,
+    recipe_enabled: bool,
+    layer_visible: bool,
+) -> bool {
+    use crate::state::ViewMode;
+    use wv_core::model::region::RegionKind;
+    if !layer_visible {
+        return false;
+    }
+    if matches!(mode, ViewMode::Topographic) {
+        return nature_overlay && matches!(kind, RegionKind::Nature);
+    }
+    recipe_enabled
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+    use crate::state::ViewMode;
+    use wv_core::model::region::RegionKind;
+
+    #[test]
+    fn region_layer_in_cellmap_shows_nature_only_when_overlay_on() {
+        let kinds = [RegionKind::Nature, RegionKind::Area];
+        // 开关开：Nature ✓、Area ✗
+        assert!(region_layer_visible(
+            ViewMode::Topographic,
+            true,
+            kinds[0],
+            false,
+            true
+        ));
+        assert!(!region_layer_visible(
+            ViewMode::Topographic,
+            true,
+            kinds[1],
+            false,
+            true
+        ));
+        // 开关关：全隐（recipe 格本就 false）
+        assert!(!region_layer_visible(
+            ViewMode::Topographic,
+            false,
+            kinds[0],
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn region_layer_outside_cellmap_follows_recipe() {
+        let nature = RegionKind::Nature;
+        assert!(region_layer_visible(
+            ViewMode::VectorFlat,
+            false,
+            nature,
+            true,
+            true
+        ));
+        assert!(!region_layer_visible(
+            ViewMode::VectorFlat,
+            false,
+            nature,
+            false,
+            true
+        ));
+        // Schematic：recipe 格=false ⇒ 无论开关都藏（开关只在 CellMap 有意义）
+        assert!(!region_layer_visible(
+            ViewMode::Schematic,
+            true,
+            nature,
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn region_layer_respects_layer_visibility_everywhere() {
+        assert!(!region_layer_visible(
+            ViewMode::VectorFlat,
+            false,
+            RegionKind::Nature,
+            true,
+            false
+        ));
+        assert!(!region_layer_visible(
+            ViewMode::Topographic,
+            true,
+            RegionKind::Nature,
+            false,
+            false
+        ));
+    }
+}
 use crate::theme::palette::MapPalette;
 
 /// 缺失覆盖物标记的 Z：地形装饰（0.075）之上、道路（0.09）之下——属底图族，
@@ -367,12 +471,20 @@ pub fn sync_missing_overlay_markers(
     mut images: ResMut<Assets<Image>>,
     index: Res<RegionOverlayIndex>,
     grid: Res<GridConfig>,
+    view: Res<ViewState>,
     recipe: Res<RenderRecipe>,
     layers: Res<LayerFrame>,
     mut assets: ResMut<MissingMarkerAssets>,
 ) {
     // 2026-10-22 内容矩阵：区域层从 TerrainDecor 拆到独立 pass（ADR-0051）。
-    let enabled = recipe.enabled(crate::recipe::PassId::RegionLayers) && layers.terrain.visible;
+    // CellMap（Topographic）：nature_overlay 放行 Nature 类（判定入口唯一）。
+    let enabled = crate::region_overlay::region_layer_visible(
+        view.mode,
+        view.nature_overlay,
+        wv_core::model::region::RegionKind::Nature,
+        recipe.enabled(crate::recipe::PassId::RegionLayers),
+        layers.terrain.visible,
+    );
     if !enabled || index.missing_shapes.is_empty() {
         for e in assets.entities.drain(..) {
             commands.entity(e).despawn();
