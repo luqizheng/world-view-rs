@@ -37,6 +37,7 @@
 //! - `draw_vector_layers` —— 来自 `vector_layers`
 
 #[cfg(feature = "app")]
+pub mod biome_boundary;
 pub mod brush_cursor;
 #[cfg(feature = "app")]
 pub mod buildings;
