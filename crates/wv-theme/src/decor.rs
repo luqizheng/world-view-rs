@@ -278,6 +278,10 @@ pub struct DecorRecipe {
     /// 上半部分的团块就是这种读法。两者是不同尺度，**可以叠加**（团块打底、
     /// 单株点缀），不冲突；缺团块时只有单株，缺单株时只有团块，都能独立成立。
     pub forest_mass: Option<ForestMassSpec>,
+
+    // ── 林下植被（§七 第三尺度：灌木草丛）──────────────────────────
+    /// 林下植被规格；`None` = 不铺。**只在该主题允许的近景（Edit 档）出现。**
+    pub forest_understory: Option<ForestUnderstorySpec>,
 }
 
 /// 地形森林的**团块**规格（§七 的第二尺度，2026-10-22 追记）。
@@ -366,6 +370,60 @@ impl ForestMassSpec {
             patch_px,
             patch_alpha,
             patch_tint,
+        }
+    }
+}
+
+/// 林下植被（灌木草丛）规格——§七 的**第三尺度**，2026-10-22 追记三。
+///
+/// **只在 Edit 档出现**：它是最小尺度的一层（一丛几十像素），Region 档
+/// 一屏看几座山时只会变成噪点。摆放由「森林群系 + 密度 + 林缘加成」决定。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ForestUnderstorySpec {
+    /// 贴图键（横向图集，变体自左向右）。
+    pub texture: &'static str,
+    /// 图集变体数。
+    pub variants: u32,
+    /// 单格宽高比（宽 ÷ 高）；`size_px` 记高度。
+    pub cell_aspect: f32,
+    /// 采样步距（屏幕像素）：相邻两丛的名义间距。
+    pub spacing_px: f32,
+    /// 单丛高度（屏幕像素）。
+    pub size_px: f32,
+    /// 起铺密度（密度场值）。
+    pub min_density: f32,
+    /// 基准保留率。
+    pub keep_prob: f32,
+    /// 林缘保留率倍数（>1 = 边缘更密）。
+    pub edge_boost: f32,
+    /// 不透明度。
+    pub alpha: f32,
+}
+
+impl ForestUnderstorySpec {
+    /// 构造（便于常量表书写）。
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new(
+        texture: &'static str,
+        variants: u32,
+        cell_aspect: f32,
+        spacing_px: f32,
+        size_px: f32,
+        min_density: f32,
+        keep_prob: f32,
+        edge_boost: f32,
+        alpha: f32,
+    ) -> Self {
+        Self {
+            texture,
+            variants,
+            cell_aspect,
+            spacing_px,
+            size_px,
+            min_density,
+            keep_prob,
+            edge_boost,
+            alpha,
         }
     }
 }
@@ -459,6 +517,18 @@ pub const WATERCOLOR: DecorRecipe = DecorRecipe {
         0.95,
         [236, 242, 230],
     )),
+    // 林下植被（行5 灌木草丛 8 变体）：只在 Edit 档，林缘更密。
+    forest_understory: Some(ForestUnderstorySpec::new(
+        "overlays/forest/bush_atlas8.png",
+        8,
+        192.0 / 130.0,
+        46.0,
+        26.0,
+        0.40,
+        0.30,
+        1.9,
+        0.92,
+    )),
 };
 
 /// 暮色装饰配方——暗纸上的符号要更沉、更疏。
@@ -511,6 +581,18 @@ pub const WATERCOLOR_DUSK: DecorRecipe = DecorRecipe {
         118.0,
         0.93,
         [204, 212, 200],
+    )),
+    // 暮色的灌木草丛：同一套图集的暗调版。
+    forest_understory: Some(ForestUnderstorySpec::new(
+        "overlays/forest/bush_atlas8_dusk.png",
+        8,
+        192.0 / 130.0,
+        46.0,
+        26.0,
+        0.40,
+        0.30,
+        1.9,
+        0.90,
     )),
     ..WATERCOLOR
 };
@@ -696,6 +778,41 @@ mod tests {
         // 边缘团块比填充更大也更不透明才压得住边界。
         assert!(m.patch_alpha > 0.0 && m.patch_alpha <= 1.0);
         assert!(m.fill_alpha > 0.0 && m.fill_alpha <= 1.0);
+    }
+
+    /// 林下植被（§七 第三尺度）：行5 灌木草丛 8 变体，林缘保留率更高。
+    #[test]
+    fn watercolor_recipe_declares_understory() {
+        let u = WATERCOLOR
+            .forest_understory
+            .expect("日间水彩应声明林下植被");
+        assert_eq!(
+            u.texture, "overlays/forest/bush_atlas8.png",
+            "林下植被应指向行5 灌木草丛图集"
+        );
+        assert_eq!(u.variants, 8, "灌木草丛应是 8 变体");
+        assert!(
+            u.edge_boost > 1.0,
+            "林缘应更密（edge_boost > 1），got {}",
+            u.edge_boost
+        );
+        assert!(
+            (0.0..=1.0).contains(&u.keep_prob),
+            "保留率应在 0..=1，got {}",
+            u.keep_prob
+        );
+        assert!(
+            u.spacing_px > u.size_px,
+            "步距应大于单丛尺寸（否则叠死），got {} vs {}",
+            u.spacing_px,
+            u.size_px
+        );
+        // 暮色用暗调版图集。
+        let dusk = WATERCOLOR_DUSK
+            .forest_understory
+            .expect("暮色也应有林下植被");
+        assert_eq!(dusk.texture, "overlays/forest/bush_atlas8_dusk.png");
+        assert_eq!(dusk.variants, u.variants);
     }
 
     /// 暮色团块：同一套贴图、tint 更沉（暗纸上再铺亮绿会发灰）。

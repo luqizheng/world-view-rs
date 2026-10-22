@@ -142,6 +142,8 @@ pub static PACK: ThemePack = ThemePack {
         // 是水彩底纹，铺上去会变成「纸上贴水彩」，与墨戏不是一路。水墨的林靠
         // 林底（薄）+ 程序化墨点，留白本身参与画面。
         forest_mass: None,
+        // 林下植被同样不用（水墨的地面留白）。
+        forest_understory: None,
         ..wv_theme::decor::WATERCOLOR
     },
     sea: SeaRecipe {

@@ -36,6 +36,7 @@ use wv_render::feature_overlays;
 use wv_render::forest_canopy;
 use wv_render::forest_density;
 use wv_render::forest_mass;
+use wv_render::forest_understory;
 use wv_render::layer_frame;
 use wv_render::map_frame;
 use wv_render::place_line;
@@ -226,6 +227,8 @@ pub fn run(config: AppConfig) {
     // 地形森林的**团块层**（§七 第二尺度）：森林底纹逐块铺满林地 + 边界盖团块，
     // 让森林在地图尺度上读作「一整片」而不是「零星几棵树」。
     .init_resource::<forest_mass::ForestMassPool>()
+    // 地形森林的**林下植被层**（§七 第三尺度）：灌木草丛，只在 Edit 档。
+    .init_resource::<forest_understory::ForestUnderstoryPool>()
     // 区域覆盖物解析索引 + 缺失标记运行时资源（ADR-0045）。
     .init_resource::<region_overlay::RegionOverlayIndex>()
     .init_resource::<region_overlay::MissingMarkerAssets>()
@@ -354,6 +357,8 @@ pub fn run(config: AppConfig) {
             // 森林团块层（§七 第二尺度）：填充 + 边缘团块，Z 低于单株树，
             // 故先算它再算树冠（同帧内 z 已定，顺序只影响可见帧的一致性）。
             forest_mass::sync_forest_mass,
+            // 林下植被（§七 第三尺度）：Z 在树簇之上、单株之下，只在 Edit 档。
+            forest_understory::sync_forest_understory,
             // 地图外框 + 1/4 幅面参考网格（外框需地形尺寸）。
             map_frame::sync_map_frame,
         )

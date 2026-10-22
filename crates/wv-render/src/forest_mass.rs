@@ -66,7 +66,7 @@ const MAX_PATCHES: usize = 4_000;
 /// **为什么拆子结构**：系统里要跨函数传「这一层的全部可变状态」，把它们打包
 /// 才能一次借出（`&mut pool.fill`），否则 Rust 不允许同时借多个字段。
 #[derive(Default)]
-struct LayerPool {
+pub(crate) struct LayerPool {
     entity: Option<Entity>,
     mesh: Option<Handle<Mesh>>,
     material: Option<Handle<ColorMaterial>>,
@@ -81,8 +81,13 @@ struct LayerPool {
 }
 
 impl LayerPool {
+    /// 当前 mesh 句柄（诊断 / 单测用）。
+    pub(crate) fn mesh(&self) -> Option<&Handle<Mesh>> {
+        self.mesh.as_ref()
+    }
+
     /// 下线：实体与 mesh / 材质回收（贴图句柄保留，换回来时还能用）。
-    fn clear(&mut self, commands: &mut Commands) {
+    pub(crate) fn clear(&mut self, commands: &mut Commands) {
         if let Some(e) = self.entity.take() {
             commands.entity(e).despawn();
         }
@@ -100,7 +105,7 @@ impl LayerPool {
     }
 
     /// 取内嵌贴图（按 key 缓存；换 key 才重解码）。
-    fn ensure_texture(
+    pub(crate) fn ensure_texture(
         &mut self,
         images: &mut Assets<Image>,
         commands: &mut Commands,
@@ -134,7 +139,7 @@ impl LayerPool {
     }
 
     /// 几何 → 实体（空则下线；非空则新建或原地改写）。
-    fn sync_geometry(
+    pub(crate) fn sync_geometry(
         &mut self,
         commands: &mut Commands,
         meshes: &mut Assets<Mesh>,

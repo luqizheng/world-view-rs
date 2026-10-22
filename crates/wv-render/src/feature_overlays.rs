@@ -146,6 +146,10 @@ const EMBEDDED_TEXTURES: &[(&str, &[u8])] = &[
         "overlays/forest/bush_atlas8.png",
         include_bytes!("../assets/overlays/forest/bush_atlas8.png"),
     ),
+    (
+        "overlays/forest/bush_atlas8_dusk.png",
+        include_bytes!("../assets/overlays/forest/bush_atlas8_dusk.png"),
+    ),
 ];
 
 /// 事实覆盖层的实体集合（每帧 despawn + spawn，不跨帧复用）。

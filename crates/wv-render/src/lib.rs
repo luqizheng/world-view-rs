@@ -58,6 +58,8 @@ pub mod forest_density;
 #[cfg(feature = "app")]
 pub mod forest_mass;
 #[cfg(feature = "app")]
+pub mod forest_understory;
+#[cfg(feature = "app")]
 pub mod label_collision;
 #[cfg(feature = "app")]
 pub mod label_halo;
