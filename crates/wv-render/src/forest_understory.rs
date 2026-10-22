@@ -88,11 +88,11 @@ pub fn sync_forest_understory(
         pool.layer.clear(&mut commands);
         return;
     }
-    // **档位门控**：只在 Edit 档出现（最小尺度的一层，见模块文档）。
-    if decor_band(view.scale) != Some(DecorBand::Edit) {
-        pool.layer.clear(&mut commands);
-        return;
-    }
+    // **「太远不画」**（ADR-0052 追记五）：物理口径优先（声明了
+    // 「1 格 = 多少 km」就按 km 判定），未声明尺度才退回档位/整图口径。
+    // 林下植被：仅 Edit 档（最小尺度的一层）。
+    let band = decor_band(view.scale);
+    let too_far_band = band != Some(DecorBand::Edit);
     let Some((_, data)) = active_terrain(&projection.world, drill.current()) else {
         pool.layer.clear(&mut commands);
         return;
@@ -113,8 +113,12 @@ pub fn sync_forest_understory(
     let half = view.window_size * view.scale * 0.5 + Vec2::splat(VIEWPORT_MARGIN_PX * view.scale);
     let rect_min = view.camera_center - half;
     let rect_max = view.camera_center + half;
-    // **整图可见门控**（同 forest_canopy，ADR-0052 追记四）。
-    if grid.whole_map_visible(rect_max - rect_min) {
+    let span = rect_max - rect_min;
+    let km_per_wu = drill
+        .current_node(&projection.world)
+        .and_then(|n| n.km_per_wu())
+        .map(|(kx, ky)| (kx + ky) * 0.5);
+    if grid.forest_sprites_too_far(span, km_per_wu, too_far_band, false) {
         pool.layer.clear(&mut commands);
         return;
     }

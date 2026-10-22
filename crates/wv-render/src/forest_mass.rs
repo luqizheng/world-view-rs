@@ -233,12 +233,11 @@ pub fn sync_forest_mass(
         pool.patch.clear(&mut commands);
         return;
     }
-    // **档位门控**（ADR-0052 追记二）：世界级视距不画树簇（同单株，靠林底色调）。
-    if decor_band(view.scale) == Some(DecorBand::Nation) && !spec.nation_visible {
-        pool.fill.clear(&mut commands);
-        pool.patch.clear(&mut commands);
-        return;
-    }
+    // **「太远不画」**（ADR-0052 追记五）：物理口径优先（声明了
+    // 「1 格 = 多少 km」就按 km 判定），未声明尺度才退回档位/整图口径。
+    // 树簇：Region 档以上出现；林下植被：仅 Edit 档。
+    let band = decor_band(view.scale);
+    let too_far_band = band == Some(DecorBand::Nation);
     let Some((_, data)) = active_terrain(&projection.world, drill.current()) else {
         pool.fill.clear(&mut commands);
         pool.patch.clear(&mut commands);
@@ -263,8 +262,12 @@ pub fn sync_forest_mass(
     let half = view.window_size * view.scale * 0.5 + Vec2::splat(VIEWPORT_MARGIN_PX * view.scale);
     let rect_min = view.camera_center - half;
     let rect_max = view.camera_center + half;
-    // **整图可见门控**（同 forest_canopy，ADR-0052 追记四）。
-    if grid.whole_map_visible(rect_max - rect_min) {
+    let span = rect_max - rect_min;
+    let km_per_wu = drill
+        .current_node(&projection.world)
+        .and_then(|n| n.km_per_wu())
+        .map(|(kx, ky)| (kx + ky) * 0.5);
+    if grid.forest_sprites_too_far(span, km_per_wu, too_far_band, spec.nation_visible) {
         pool.fill.clear(&mut commands);
         pool.patch.clear(&mut commands);
         return;

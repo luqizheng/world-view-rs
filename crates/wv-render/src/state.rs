@@ -1067,6 +1067,14 @@ pub struct GridConfig {
     pub map_size: Vec2,
 }
 
+/// 森林符号（单株 / 树簇 / 灌木草丛）可读的**最大视野跨度**（km）。\n///\n/// **150 是符号口径不是实物口径**：手绘地图上的树簇是「树林」的符号，\n/// 一团横跨几公里很正常；按实物（几十米）算线会苛刻到永远不画。
+///
+/// **物理口径**：树在真实世界里是几十米的东西；视野跨度一超过几十公里，
+/// 单棵树在屏上不足一像素，贴图只会变成「贴纸」。地图只要声明了
+/// 「1 格 = 多少 km」（`MapNode::unit_per_km` / 真实底图），就按这条物理线
+/// 决定要不要画；没声明才退回几何口径（整图可见）。
+pub const FOREST_SPRITE_MAX_SPAN_KM: f32 = 150.0;
+
 /// 一屏看完整张图的判定线：视口跨度 ≥ 图幅的 60% 即视为「整图可见」。
 ///
 /// **为什么是 60%**：更大 = 整张图（连边缘海）都在屏上，读者看的是
@@ -1110,6 +1118,35 @@ impl GridConfig {
     pub fn whole_map_visible(&self, span: Vec2) -> bool {
         span.x >= self.map_size.x * WHOLE_MAP_VISIBLE_RATIO
             || span.y >= self.map_size.y * WHOLE_MAP_VISIBLE_RATIO
+    }
+
+    /// 森林贴图（单株 / 树簇 / 灌木草丛）的「**太远**」判定。
+    ///
+    /// **物理口径优先**：地图声明了「1 wu = 多少 km」（`km_per_wu`，来自
+    /// `unit_per_km` 或真实底图）→ 视口跨度折成 km，超过
+    /// [`FOREST_SPRITE_MAX_SPAN_KM`] 即太远——树在真实世界只有几十米，
+    /// 视野几十公里宽时单棵树不足一像素，贴图必成「贴纸」。
+    ///
+    /// **几何口径兜底**：地图没声明尺度时无法折算 km，退回
+    /// [`Self::whole_map_visible`]（整图可见）与 Nation 档判定。
+    ///
+    /// `nation_visible` = 主题显式要求「多远都画」，命中时本判定直接放行。
+    pub fn forest_sprites_too_far(
+        &self,
+        span: Vec2,
+        km_per_wu: Option<f64>,
+        nation_band: bool,
+        nation_visible: bool,
+    ) -> bool {
+        if nation_visible {
+            return false;
+        }
+        match km_per_wu {
+            Some(km) => {
+                span.x.max(span.y) as f64 * km > crate::state::FOREST_SPRITE_MAX_SPAN_KM as f64
+            }
+            None => nation_band || self.whole_map_visible(span),
+        }
     }
 
     /// 本图局部坐标 → 视图空间。

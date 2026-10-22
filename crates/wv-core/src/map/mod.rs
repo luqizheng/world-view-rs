@@ -451,7 +451,8 @@ impl MapNode {
     /// 等价于真实尺度；对高纬度图存在轻微偏差，是可接受的近似）。
     ///
     /// **不**进任何坐标链 / 距离换算（与 `Extent` / `PlaceEdge` / `Track` 的
-    /// 单位无关），仅供「测量标签」的展示使用。
+    /// 单位无关）；除测量标签展示外，还供**渲染层的细节门控**消费——
+    /// 森林贴图按「视野跨度折多少 km」决定要不要画（ADR-0052 追记五）。
     pub fn km_per_wu(&self) -> Option<(f64, f64)> {
         if let Some(src) = &self.geographic_source {
             // 真图：用 bbox + extent 折算（已实现，见 geographic_source 模块）。

@@ -173,12 +173,6 @@ pub fn sync_forest_canopy(
         pool.clear(&mut commands);
         return;
     };
-    // **档位门控**（ADR-0052 追记二）：世界级视距不画单株——那个尺度由
-    // 烘焙进地形纹理的**林底色调**承担，符号只在 Region / Edit 出现。
-    if band == DecorBand::Nation && !spec.nation_visible {
-        pool.clear(&mut commands);
-        return;
-    }
     let Some((_, data)) = active_terrain(&projection.world, drill.current()) else {
         pool.clear(&mut commands);
         return;
@@ -205,9 +199,20 @@ pub fn sync_forest_canopy(
     let half = view.window_size * view.scale * 0.5 + Vec2::splat(VIEWPORT_MARGIN_PX * view.scale);
     let rect_min = view.camera_center - half;
     let rect_max = view.camera_center + half;
-    // **整图可见门控**：一屏基本看完整张图时不贴树（绝对缩放值做不到——
-    // 同一 scale 在大陆图与小岛图上看到的范围完全不同，实测踩过）。
-    if grid.whole_map_visible(rect_max - rect_min) {
+    // **「太远不画」**（ADR-0052 追记五）：物理口径优先——地图声明了
+    // 「1 格 = 多少 km」就按 km 判定（树是几十米的东西，视野几十公里宽时
+    // 单株不足一像素）；未声明尺度才退回几何口径（Nation 档 / 整图可见）。
+    let span = rect_max - rect_min;
+    let km_per_wu = drill
+        .current_node(&projection.world)
+        .and_then(|n| n.km_per_wu())
+        .map(|(kx, ky)| (kx + ky) * 0.5);
+    if grid.forest_sprites_too_far(
+        span,
+        km_per_wu,
+        band == DecorBand::Nation,
+        spec.nation_visible,
+    ) {
         pool.clear(&mut commands);
         return;
     }
@@ -750,6 +755,39 @@ mod tests {
         assert!(
             app.resource::<ForestCanopyPool>().entity.is_some(),
             "Region 档应有单株"
+        );
+    }
+
+    /// **物理口径**：地图声明「1 格 = 多少 km」（`unit_per_km`）→ 按 km 判定，
+    /// 与绝对缩放值无关——同一视口，大陆图（视野几百 km）不画，区域图（视野
+    /// 十几 km）照画。
+    #[test]
+    fn trees_follow_the_declared_km_scale() {
+        let (mut app, mut schedule) = app_with(BIOME_FOREST, true);
+        // 1 wu = 1 km：Edit 档视口 640 wu = 640 km ⇒ 太远，不画。
+        {
+            let mut proj = app.resource_mut::<WorldProjection>();
+            if let Some(m) = proj.world.maps.first_mut() {
+                m.unit_per_km = Some(1.0);
+            }
+        }
+        schedule.run(&mut app);
+        assert!(
+            app.resource::<ForestCanopyPool>().entity.is_none(),
+            "640 km 视野不该画单株（树在真实世界只有几十米）"
+        );
+
+        // 同一视口，改成 1 km = 64 wu：视野只有 10 km ⇒ 画。
+        {
+            let mut proj = app.resource_mut::<WorldProjection>();
+            if let Some(m) = proj.world.maps.first_mut() {
+                m.unit_per_km = Some(64.0);
+            }
+        }
+        schedule.run(&mut app);
+        assert!(
+            app.resource::<ForestCanopyPool>().entity.is_some(),
+            "10 km 视野应画单株"
         );
     }
 

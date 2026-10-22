@@ -10,6 +10,9 @@ children: []
 extent:
   width: 4096.0
   height: 4096.0
+# 比例尺（作者自报，ADR-0052 追记五）：1 km = 16 wu，即 1 格 = 0.25 km、
+# 图幅 256 km。渲染层的细节门控（森林贴图等）按它把视野跨度折成公里。
+unit_per_km: 16.0
 raster:
   path: maps/world/terrain.bin
   encoding: i16
