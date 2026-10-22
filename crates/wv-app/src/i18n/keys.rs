@@ -98,12 +98,16 @@ pub enum I18nKey {
     /// 「缩放 」缩放标签前缀
     TopBarZoomPrefix,
 
-    // ── 欢迎页 ──────────────────────────────────────────────────
-    /// 欢迎页大标题（无工程锁）
+    // ── 欢迎页与窗口标题 ────────────────────────────────────────
+    /// **窗口标题**（`World View · 地图编辑器`）。
+    ///
+    /// 不是欢迎页卡片里的大标题——卡片上的品牌名 `World-View` 属产品定位，
+    /// 两语统一不本地化（见 `README.md` §1）。本 key 消费方只有
+    /// `app_bootstrap`（窗口标题 + 跟随语言切换）。
     WelcomeHeading,
-    /// 欢迎页副标题（一句话描述）
+    /// 欢迎页副标题（一句话描述产品定位）
     WelcomeTagline,
-    /// 欢迎页提示（`还没有打开的工程…`）
+    /// 欢迎页底部状态说明（`还没有打开的工程…`）——「无工程闸门」的白话版
     WelcomeHelpText,
     /// 欢迎页「打开工程」按钮
     WelcomeOpenProjectBtn,
@@ -778,6 +782,8 @@ pub enum I18nKey {
     NoticeAlreadyAtLevel,
     /// 「请先新建或打开工程，再执行该操作」整段
     NoticeNeedProjectFirst,
+    /// 「正在加载工程，请稍候再执行该操作」整段（2026-10-22，异步加载期间）
+    NoticeProjectLoading,
     /// 「已强制重画地形」整段
     NoticeForceRedrawn,
     /// 「当前没有地图，无法重置地形」整段（2026-10-16）
@@ -1162,7 +1168,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 456] = [
+    pub const ALL: [I18nKey; 457] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1516,6 +1522,7 @@ impl I18nKey {
         I18nKey::NoticeAlreadyWorldMap,
         I18nKey::NoticeAlreadyAtLevel,
         I18nKey::NoticeNeedProjectFirst,
+        I18nKey::NoticeProjectLoading,
         I18nKey::NoticeForceRedrawn,
         I18nKey::NoticeResetTerrainNoMap,
         I18nKey::NoticeRegenNoMap,

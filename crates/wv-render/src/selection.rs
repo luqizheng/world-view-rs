@@ -11,7 +11,7 @@
 //!
 //! ## 与 `continent_sketch` / `measurement` 的对照
 //!
-//! 共用同一条早退链（UI 指针 / 播放 / 缩放下限 / 无工程锁 / `map_origin` 同源链）。
+//! 共用同一条早退链（UI 指针 / 播放 / 缩放下限 / 无工程闸门 / `map_origin` 同源链）。
 //!
 //! ## 边界
 //! - 不生成地形、不碰 `History`、不落盘——生成类意图由 wv-app 只读克隆环后
@@ -305,7 +305,7 @@ pub fn sync_selection_map_change(drill: Res<DrillState>, mut sel: ResMut<Selecti
 }
 
 /// 左键 + 键盘 → [`handle_click`]。守卫链逐字照抄
-/// `commit_continent_sketch_click`（UI 指针 / 播放 / 缩放下限 / 无工程锁）。
+/// `commit_continent_sketch_click`（UI 指针 / 播放 / 缩放下限 / 无工程闸门）。
 #[allow(clippy::too_many_arguments)]
 pub fn commit_selection_click(
     buttons: Res<ButtonInput<MouseButton>>,
@@ -430,7 +430,7 @@ pub fn drag_selected_anchor(
 /// 取消没有。
 ///
 /// 守卫链与 [`commit_selection_click`] 逐条一致（UI 指针 / 播放 / 缩放下限 /
-/// 无工程锁），两套输入因此不会在同一个左键上打架。
+/// 无工程闸门），两套输入因此不会在同一个左键上打架。
 #[allow(clippy::too_many_arguments)]
 pub fn commit_selection_shape_drag(
     buttons: Res<ButtonInput<MouseButton>>,

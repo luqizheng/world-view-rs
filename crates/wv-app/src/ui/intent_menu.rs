@@ -22,7 +22,6 @@ use crate::i18n::{t, CurrentLocale, I18nKey};
 use crate::state::DrillState;
 use crate::theme::ui_theme::UiShellConfig;
 use crate::ui::city_intent::{prefill, CityIntentDialog};
-use crate::ui_shell::StartupLoadRequest;
 
 use super::shell::UiShell;
 use super::widgets::icon_image;
@@ -101,13 +100,13 @@ pub fn intent_menu(
     mut notice: ResMut<crate::ui_shell::ShellNotice>,
     playback: Res<crate::state::PlaybackState>,
     time: Res<bevy::prelude::Time>,
-    startup_req: Res<StartupLoadRequest>,
+    screen: Res<crate::app_screen::AppScreen>,
 ) {
-    // 无工程锁 / 启动加载中 / 播放中（V37）/ 工具未启用或未闭合：同源早返。
+    // 无工程闸门 / 启动加载中 / 播放中（V37）/ 工具未启用或未闭合：同源早返。
     if playback.playing {
         return;
     }
-    if !projection.has_open_project() || startup_req.0.is_some() || !menu_visible(&selection) {
+    if !screen.editor_visible() || !menu_visible(&selection) {
         return;
     }
     let loc = current_loc.0;

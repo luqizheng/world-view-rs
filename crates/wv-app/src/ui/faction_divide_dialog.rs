@@ -227,8 +227,9 @@ pub fn faction_divide_dialog(
     current_loc: Res<CurrentLocale>,
     mut notice: ResMut<crate::ui_shell::ShellNotice>,
     time: Res<Time>,
+    screen: Res<crate::app_screen::AppScreen>,
 ) {
-    if !projection.has_open_project() {
+    if !screen.editor_visible() {
         if dialog.open {
             dialog.close();
         }

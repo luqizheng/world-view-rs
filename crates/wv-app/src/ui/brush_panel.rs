@@ -265,7 +265,7 @@ pub fn panel_brush(
             ui.add_space(space::SM);
             // ── 「重置到底图」（2026-10-16）──
             // 破坏性操作：撤销栈兜底（EditCommand 走 History），所以不弹确认窗。
-            // 「无工程锁 / 无当前图」时按钮置灰——避免误触空指针。
+            // 「无工程闸门 / 无当前图」时按钮置灰——避免误触空指针。
             let has_map = drill.current().is_some();
             if ui
                 .add_enabled(

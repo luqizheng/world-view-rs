@@ -15,7 +15,7 @@
 //!
 //! ## 与 `streets::commit_street_click` 的对照
 //!
-//! 共用「enabled 闸 → UI / 播放 / 缩放下限闸 → 无工程锁闸 → 坐标走
+//! 共用「enabled 闸 → UI / 播放 / 缩放下限闸 → 无工程闸门闸 → 坐标走
 //! `drill::map_origin` 同源链 → 命令经 `EditHistory`」纪律，但：
 //! - **测量模式更复杂**：三态分支（Line / Rect / Eraser），Line 是多段累积。
 //! - **切图时清草稿**：草稿绑 map_id，切图丢弃（不污染新图）。
@@ -540,7 +540,7 @@ fn next_measurement_id(world: &wv_core::World, map_id: &wv_core::Id) -> wv_core:
 /// 系统纪律（与街道 / 笔刷同款）：
 /// - enabled 闸（`mode != Off`）；
 /// - 不悬 UI / 不在播放 / 不在过低缩放；
-/// - 无工程锁；
+/// - 无工程闸门；
 /// - 经 [`crate::editing_bridge`] 意图提交（wv-app 翻译成 `EditCommand`），不直改 `World`；
 /// - 落点要 `cursor_world` 存在。
 #[allow(clippy::too_many_arguments)]

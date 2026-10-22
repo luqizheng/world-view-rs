@@ -74,7 +74,6 @@ use crate::state::{
 };
 use crate::theme::ui_theme::{margin_xy, UiShellConfig};
 use crate::ui_command_palette::{CommandId, CommandPalette, MapToolId};
-use crate::ui_shell::StartupLoadRequest;
 use wv_render::state::{BrushState, BrushTool, SelectionShape, SelectionState};
 use wv_ui::widgets::{split_button, SplitButtonMetrics, SplitMenuItem};
 
@@ -292,13 +291,15 @@ pub fn map_controls(
     tex: Res<wv_render::terrain_view::TerrainTexture>,
     projection: Res<WorldProjection>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
-    startup_req: Res<StartupLoadRequest>,
+    screen: Res<crate::app_screen::AppScreen>,
     mut params: DockParams,
     edit: Res<EditHistory>,
     panels: Res<PanelState>,
 ) {
-    // 无工程锁（图片规格 §首页不可见）：与 `welcome_screen` 共用同一信号。
-    if !projection.has_open_project() || startup_req.0.is_some() {
+    // 无工程闸门（图片规格 §首页不可见）：与 `welcome_screen` 共用同一信号。
+    // 2026-10-22（B 档）：改读 `AppScreen`——「首页不可见」的口径由屏状态
+    // 一处裁决，不再在本系统重拼 `has_open_project || 加载中`。
+    if !screen.editor_visible() {
         return;
     }
 

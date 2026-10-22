@@ -182,9 +182,10 @@ pub fn feature_place_dialog(
     mut tex: ResMut<wv_render::terrain_view::TerrainTexture>,
     mut notice: ResMut<crate::ui_shell::ShellNotice>,
     time: Res<Time>,
+    screen: Res<crate::app_screen::AppScreen>,
 ) {
     // 无工程（关工程 / 加载失败）：不弹新建框，顺手回归无待提交状态。
-    if !projection.has_open_project() {
+    if !screen.editor_visible() {
         if dialog.open {
             dialog.close();
         }

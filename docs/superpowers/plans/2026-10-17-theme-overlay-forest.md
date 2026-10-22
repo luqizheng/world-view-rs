@@ -411,7 +411,7 @@ cargo test -p wv-render --features app && git add -A && git commit -m "wv-render
 
 - [ ] **Step 2: 实现状态机 + 点击/绘制系统**
 
-镜像 `continent_sketch.rs` 的早退链（UI 指针 / 播放 / 无工程锁 / 光标坐标），差异：`try_close` 写入 `pending` 而非 `envelopes`；`pending` 存在时启用对话框。绘制：进行中折线 + 顶点（Gizmos，同款常量）。
+镜像 `continent_sketch.rs` 的早退链（UI 指针 / 播放 / 无工程闸门 / 光标坐标），差异：`try_close` 写入 `pending` 而非 `envelopes`；`pending` 存在时启用对话框。绘制：进行中折线 + 顶点（Gizmos，同款常量）。
 
 - [ ] **Step 3: 写失败测试（提交动作）**
 

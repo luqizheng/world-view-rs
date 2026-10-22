@@ -88,11 +88,15 @@ pub struct AppConfig {
 #[cfg(feature = "app")]
 pub mod app_bootstrap;
 #[cfg(feature = "app")]
+pub mod app_screen;
+#[cfg(feature = "app")]
 pub mod edit;
 #[cfg(feature = "app")]
 pub mod i18n;
 #[cfg(feature = "app")]
 pub mod overture_cli;
+#[cfg(feature = "app")]
+pub mod project_loader;
 #[cfg(feature = "app")]
 pub mod render_bridge;
 #[cfg(feature = "app")]

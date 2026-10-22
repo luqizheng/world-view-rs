@@ -28,6 +28,14 @@ desktop.ini
 # 大体积外部数据（Overture GeoJSON 切片等）—— 只留生成脚本，数据本地自取
 examples/guangdong/
 
+# VitePress 设计文档站点（站点根 = docs/，直接读 docs/ 真源）
+# 配置版本化（.vitepress/config.js、adr-meta.tsv、package.json），仅忽略依赖与构建产物
+docs/node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
+docs/.vitepress/*.timestamp-*.mjs
+docs/.vite-docs.bak-*/
+
 # ZCode 会话内部文件（计划草稿等）
 .zcode/
 

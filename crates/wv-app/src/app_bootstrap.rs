@@ -10,7 +10,7 @@
 //! - **feature 门控**——整个模块只在 `--features app` 下编译，让数据层（`wv-core` /
 //!   `wv-io` / `wv-edit` / `wv-terrain`）开发不受 Bevy 全量编译影响（AGENTS §7.1）。
 //! - **不画 UI**——只把面板注册进 schedule；面板绘制在 `ui.rs`，快捷键在 `ui_shell.rs`。
-//! - **不加载工程**——`startup_project` 为 `Some(_)` 时，由 `ui_shell::startup_load`
+//! - **不加载工程**——`startup_project` 为 `Some(_)` 时，由 `ui_shell::drive_project_load`
 //!   在窗口内做异步加载并显示进度 / 失败原因。
 //!
 //! ## 主要导出
@@ -46,7 +46,8 @@ use wv_render::vector_layers::{self, VectorLayerEntities};
 use wv_render::world_projection;
 
 /// 启动 GUI。`startup_project` 为 `None` 时进空编辑器（占位地形），
-/// `Some(dir)` 时启动后由 `ui_shell::startup_load` 在窗口内加载并显示进度/失败原因。
+/// `Some(dir)` 时启动后由 `ui_shell::drive_project_load` 在后台线程加载，
+/// 窗口内显示进度 / 失败原因。
 pub fn run(config: AppConfig) {
     // 注意：这里**不做任何工程加载**（用户裁定：启动不主动加载地图）。
     // App 以空世界起步立刻开窗——首帧即是可交互的编辑器；
@@ -63,7 +64,15 @@ pub fn run(config: AppConfig) {
         DefaultPlugins
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "World View · 地图编辑器".into(),
+                    // 窗口标题走 i18n（`WelcomeHeading`）：此前是硬编码中文串，
+                    // 英文界面下标题栏仍显示中文。启动语言取 CLI `--language`
+                    // （`cli_locale()`，未指定时为 zh）；运行期切换语言由
+                    // [`sync_window_title_with_locale`] 跟随。
+                    title: crate::i18n::t(
+                        crate::i18n::cli_locale(),
+                        crate::i18n::I18nKey::WelcomeHeading,
+                    )
+                    .to_owned(),
                     resolution: WindowResolution::new(1280, 800),
                     // 隐藏起步（2026-10-17，修「启动数秒白屏」）：原生窗口一旦
                     // 创建即以系统白底示人，而 wgpu 初始化、字体 atlas、管线
@@ -107,7 +116,7 @@ pub fn run(config: AppConfig) {
         ClearColor(Color::srgb(bg.r, bg.g, bg.b))
     })
     // 播放范围：空编辑器起步先用默认值（1..180_001）；
-    // 运行期加载工程成功后由 `startup_load` 按该工程 `timeline/axis.yaml` 重置。
+    // 运行期加载工程成功后由 `apply_loaded_world` 按该工程 `timeline/axis.yaml` 重置。
     .insert_resource(PlaybackState {
         range_from: 1,
         range_to: 180_001,
@@ -129,6 +138,12 @@ pub fn run(config: AppConfig) {
     .insert_resource(crate::ui_shell::StartupLoadRequest(
         config.startup_project.clone(),
     ))
+    // 应用屏状态（2026-10-22 B 档）：初值按「有没有 CLI 加载请求」给——
+    // 有 `-m` 时第一帧就处于「加载中」，欢迎页不会抢在加载遮罩前面闪一下。
+    .insert_resource(crate::app_screen::AppScreen {
+        loading: config.startup_project.is_some(),
+        ..Default::default()
+    })
     .insert_resource(ViewState {
         camera_center: center,
         scale: fit_scale,
@@ -531,6 +546,8 @@ pub fn run(config: AppConfig) {
     // 本帧 `Last` 里 bevy_winit 的 `changed_windows` 调 `set_visible(true)`——
     // 此时帧 0 已完整 present，窗口亮起即是有内容的画面。
     app.add_systems(Update, reveal_window_once_first_frame_presented);
+    // 窗口标题跟随界面语言（见 [`sync_window_title_with_locale`]）。
+    app.add_systems(Update, sync_window_title_with_locale);
     // 渲染配方求值（ADR-0021 D1）：PreUpdate 单点求值 RenderRecipe——已迁移的
     // gate（buildings / faction_overlays / atmosphere）读 `recipe.enabled(...)`，
     // **必须**挂本系统，否则 recipe 停留在 Default 全关、三个 pass 永不渲染。
@@ -552,13 +569,13 @@ pub fn run(config: AppConfig) {
 
 /// 隐藏起步的揭示：第 2 个 Update tick 把主窗口放出来（一次性）。
 ///
-/// ## 时序（与 [`crate::ui_shell::startup_load`] 的「帧 0/1 只画遮罩」咬合）
+/// ## 时序（与 [`crate::ui_shell::drive_project_load`] 的后台加载咬合）
 ///
 /// | 帧 | 发生什么 |
 /// |---|---|
-/// | 0 | 窗口隐藏创建（`Last` 里建 winit 窗口）；PreUpdate 装配 egui 字体；pass 画欢迎页/遮罩；render 编译管线并 present（不可见） |
+/// | 0 | 窗口隐藏创建（`Last` 里建 winit 窗口）；PreUpdate 装配 egui 字体、**派发后台加载**；pass 画欢迎页/遮罩；render 编译管线并 present（不可见） |
 /// | 1 | Update 本系统翻转 `visible` → `Last` 应用 `set_visible(true)`，窗口亮起时屏上是帧 0 的完整画面 |
-/// | 2 起 | `startup_load` 才开始阻塞加载（阈值 `< 3`），`-m` 的加载遮罩已在屏上 |
+/// | 1 起 | 后台线程在读盘；主线程每帧轮询，结果到手即接管（遮罩全程在屏上转圈） |
 ///
 /// ## 为什么是帧 1 而不是更早 / 更晚
 /// - 帧 0 翻转会在窗口刚建好、尚无任何 present 时就揭白底——白屏回来了；
@@ -584,6 +601,31 @@ fn reveal_window_once_first_frame_presented(
     }
     // 窗口实体尚不存在（理论上不会：WindowPlugin 在插件构建期就生成主窗口）
     // 时不置 `done`，下一 tick 重试。
+}
+
+/// 窗口标题跟随界面语言切换（2026-10-22）。
+///
+/// `I18nKey::WelcomeHeading`（「World View · 地图编辑器」/「World View · Map editor」）
+/// 此前登记在文案表里却**无任何调用点**——窗口标题一直是 `app_bootstrap` 里
+/// 硬编码的中文串，英文界面下标题栏仍显示中文。本系统把
+/// [`CurrentLocale`](crate::i18n::CurrentLocale) 的变化映射到主窗口标题，
+/// 使标题与界面语言一致。
+///
+/// 幂等：只在语言**真的变了**时写标题（`Local` 缓存上次值），避免每帧
+/// 触碰窗口导致无谓的重绘 / 事件。
+fn sync_window_title_with_locale(
+    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    loc: Res<crate::i18n::CurrentLocale>,
+    mut last: Local<Option<crate::i18n::Locale>>,
+) {
+    if last.as_ref() == Some(&loc.0) {
+        return;
+    }
+    *last = Some(loc.0);
+    let title = crate::i18n::t(loc.0, crate::i18n::I18nKey::WelcomeHeading);
+    if let Ok(mut window) = windows.single_mut() {
+        window.title = title.to_owned();
+    }
 }
 
 /// 2D 正交相机。若启动前已装配好 `ViewState`（fit 缩放 + 根图中心），
@@ -654,7 +696,7 @@ fn setup_terrain_texture_after_world(
 ///   一小块时，按整图 fit 会把内容挤成屏幕中心的一撮点、四周全是空黑；
 /// - 无内容/空世界时退回根图 extent（缺省 4096²）的中心。
 ///
-/// Startup（`run` 装配）与运行期加载（`ui_shell::startup_load`）共用，
+/// Startup（`run` 装配）与运行期加载（`ui_shell::apply_loaded_world`）共用，
 /// 保证「加载工程后看到的取景」与「启动即加载」完全一致。
 pub(crate) fn fit_view_for_world(world: &wv_core::World) -> (Vec2, f32) {
     let root_id = world
