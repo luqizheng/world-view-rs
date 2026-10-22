@@ -157,14 +157,6 @@ pub enum CommandId {
     /// **唯一入口**：工具条瓷砖与 V/H/B/E/L/M/P 快捷键都排这一条,由分发器
     /// 统一做互斥（开一个工具 = 关掉其它工具），避免两套逻辑漂移。
     SelectMapTool(MapToolId),
-    /// 单格编辑工具的提交命令（[ADR-0040]）。Inspector 字段改完写
-    /// `EditCellState.pending`,本命令唤醒 `apply_pending_commands`
-    /// 消费 pending → `EditCellCommand::apply`。
-    ///
-    /// 与 `MapToolId::EditCell`（激活工具）正交——一个是模式切,一个是 IPC。
-    /// 故挂 `CommandId` 上,而不是 `MapToolId`（后者仅承载互相斥的
-    /// 工具槽）。
-    CommitEditCell,
 }
 
 /// 地图工具条的工具标识（[`CommandId::SelectMapTool`] 的载荷）。

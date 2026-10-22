@@ -50,6 +50,7 @@ use super::widgets::{empty_state, float_window, BadgeKind, ICON_CHEVRON_RIGHT};
 
 use wv_core::{EntityKind, SelectedEntity};
 
+pub mod cell;
 pub mod event;
 pub mod faction;
 pub mod place;
@@ -178,6 +179,11 @@ pub fn panel_inspector(
         ResMut<wv_render::state::EditCellState>,
         ResMut<wv_render::faction_overlays::FactionDisplay>,
     ),
+    // Cell 表单的另两个会话态：多边形选区（批量模式用）+ 单格/批量模式切换。
+    (mut selection, mut cell_mode): (
+        ResMut<wv_render::state::SelectionState>,
+        ResMut<cell::CellPanelMode>,
+    ),
     (shell_cfg, layouts, current_loc): (Res<UiShellConfig>, Res<LayoutFile>, Res<CurrentLocale>),
     (mut tex, mut notice, time): (
         ResMut<wv_render::terrain_view::TerrainTexture>,
@@ -231,6 +237,8 @@ pub fn panel_inspector(
                         &grid,
                         &mut edit_cell,
                         &mut display,
+                        &mut selection,
+                        &mut cell_mode,
                         &mut tex,
                         &mut notice,
                         &time,
@@ -264,14 +272,16 @@ fn render_properties(
     view: &crate::state::ViewState,
     playback: &crate::state::PlaybackState,
     grid: &wv_render::state::GridConfig,
-    _edit_cell: &mut wv_render::state::EditCellState,
+    edit_cell: &mut wv_render::state::EditCellState,
     display: &mut wv_render::faction_overlays::FactionDisplay,
+    selection: &mut wv_render::state::SelectionState,
+    cell_mode: &mut cell::CellPanelMode,
     tex: &mut wv_render::terrain_view::TerrainTexture,
     notice: &mut crate::ui_shell::ShellNotice,
     time: &Time,
     current_loc: crate::i18n::Locale,
 ) {
-    let form = resolve_form(selected, false);
+    let form = resolve_form(selected, edit_cell.tool_active);
     match form {
         FormKind::None => {
             // 空态：空态卡 + 四条计数行 + 事态卡（现状不变）。
@@ -283,7 +293,17 @@ fn render_properties(
             ui.label("街道段暂无可编辑属性");
         }
         FormKind::Cell => {
-            ui.label("Cell 表单（M2 接入）");
+            cell::cell_form(
+                ui,
+                shell,
+                projection,
+                edit_cell,
+                edit,
+                selection,
+                tex,
+                current_loc,
+                cell_mode,
+            );
         }
         FormKind::Place => {
             // 存活守卫。

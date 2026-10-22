@@ -782,22 +782,6 @@ pub struct SelectionState {
     pub last_map_id: Option<wv_core::Id>,
 }
 
-/// Inspector Panel 写 → `apply_pending_commands` 读 → `EditCellCommand::apply`
-/// 的草稿载荷([ADR-0040] §决策 5)。
-///
-/// 为什么存进 `EditCellState.pending` 而不是 `CommandId::EditCell(...)` 嵌套 5 字段:
-/// - 与 `SelectionState.draft` 同款「draft → take」节奏,降低心智；
-/// - 编辑面板多字段一次性封装成不可变快照,与其他 Edit* 命令一致；
-/// - 枚举 variant 写 5 字段会让 pattern match 笨拙。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EditCellPending {
-    pub map: wv_core::Id,
-    pub gx: i32,
-    pub gy: i32,
-    pub before: wv_core::terrain::TerrainCellData,
-    pub after: wv_core::terrain::TerrainCellData,
-}
-
 /// 单格编辑工具状态（[ADR-0040] §决策 5）。
 ///
 /// 与 [`SelectionState`] 平级：**会话态,本地图使用**——
@@ -807,12 +791,14 @@ pub struct EditCellPending {
 /// - `hover` = 当前鼠标压在哪一格（即时刷新,Inspector 不必读）；
 /// - `selected` = 点选 committed 的那一格（Inspector 与 PassId::CellSelection
 ///   必读,ESC 清空）；
-/// - `pending` = Inspector 字段改完之后,等待 `apply_pending_commands` 取走
-///   的草稿（[EditCellPending]）。分发器读 + `take()` 后由 EditCellCommand
-///   走 [wv_edit] 的 snapshot-diff-revert 路径落盘。
+/// - `region_cells` = 多边形选区贴合的方格集合（批量编辑用）。
 ///
-/// hover 与 selected 与 pending 共存不冲突——hover 来自光标,selected 来自点击,
-/// pending 来自字段改。
+/// hover 与 selected 共存不冲突——hover 来自光标,selected 来自点击。
+///
+/// **2026-10-22 统一 Inspector**：原先还有第四层 `pending`（字段改完的草稿，
+/// 交 `apply_pending_commands` 分发）——**全仓无人写入**，那条链是死代码，
+/// 已连同 [`EditCellPending`] 一并删除。活的写入路径是 Inspector 的 Cell
+/// 表单**直提** `EditCellCommand` / `BatchEditCellsCommand`。
 #[derive(Resource, Debug, Default, Clone, PartialEq)]
 pub struct EditCellState {
     /// EditCell 工具是否激活（与 [`BrushState::enabled`] 同款会话布尔）。
@@ -822,8 +808,6 @@ pub struct EditCellState {
     pub hover: Option<(i32, i32)>,
     /// 点击落定的格 (gx, gy)。ESC 清空 / 切图也清空。
     pub selected: Option<(i32, i32)>,
-    /// Inspector 待分发的字段变化草稿。
-    pub pending: Option<EditCellPending>,
     /// 多边形选区贴合的方格集合（2026-10-20 批量编辑）：V 工具闭合多边形后
     /// 由 `sync_region_cells` 栅格化写入（cell 中心点落在多边形内即选中）。
     /// 空 = 无区域选区。高亮渲染与批量应用（BatchEditCellsCommand）都消费它。
@@ -840,13 +824,12 @@ pub struct EditCellState {
 }
 
 impl EditCellState {
-    /// 清空 tool_active + hover + selected + pending；
+    /// 清空 tool_active + hover + selected + region_cells；
     /// **不会**清 `last_map_id`（那是别处碰）。
     pub fn clear(&mut self) {
         self.tool_active = false;
         self.hover = None;
         self.selected = None;
-        self.pending = None;
         self.region_cells.clear();
         self.region_fingerprint = 0;
     }
