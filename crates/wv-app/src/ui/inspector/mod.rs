@@ -51,6 +51,7 @@ use super::widgets::{empty_state, float_window, BadgeKind, ICON_CHEVRON_RIGHT};
 use wv_core::{EntityKind, SelectedEntity};
 
 pub mod place;
+pub mod region;
 
 /// Inspector 的页签。**会话态**——不落 `ui-layout.yaml`
 /// （那是布局记忆，不是 UI 偏好）。
@@ -260,13 +261,13 @@ fn render_properties(
     edit: &mut crate::edit::editing::EditHistory,
     view: &crate::state::ViewState,
     playback: &crate::state::PlaybackState,
-    _grid: &wv_render::state::GridConfig,
+    grid: &wv_render::state::GridConfig,
     _edit_cell: &mut wv_render::state::EditCellState,
     _display: &mut wv_render::faction_overlays::FactionDisplay,
     tex: &mut wv_render::terrain_view::TerrainTexture,
     notice: &mut crate::ui_shell::ShellNotice,
     time: &Time,
-    _loc: crate::i18n::Locale,
+    current_loc: crate::i18n::Locale,
 ) {
     let form = resolve_form(selected, false);
     match form {
@@ -322,7 +323,51 @@ fn render_properties(
                 playback,
             );
         }
-        FormKind::Region | FormKind::Faction | FormKind::Event => {
+        FormKind::Region => {
+            // 存活守卫。
+            let Some(sel) = selected else {
+                render_empty(ui, shell);
+                return;
+            };
+            if !selection_alive(&projection.world, sel) {
+                render_empty(ui, shell);
+                return;
+            }
+            render_selection_header(ui, shell, sel);
+            let Some(region) = projection
+                .world
+                .regions
+                .iter()
+                .find(|r| r.id == sel.id)
+                .cloned()
+            else {
+                render_empty(ui, shell);
+                return;
+            };
+            // 主题支持的覆盖物键（词表由主题拥有，ADR-0045 D10）。
+            let overlay_keys: Vec<&'static str> =
+                view.active_theme.region_overlays.keys().collect();
+            // 两套原点的差（区域多边形 = 图内局部 wu；格子属于栅格所在的图）。
+            let raster_to_map = (
+                grid.map_origin.x - grid.raster_origin.x,
+                grid.map_origin.y - grid.raster_origin.y,
+            );
+            region::region_form(
+                ui,
+                shell,
+                &region,
+                view,
+                projection,
+                edit,
+                &CurrentLocale(current_loc),
+                &overlay_keys,
+                grid.cell_size,
+                raster_to_map,
+                notice,
+                time.elapsed_secs() as u64,
+            );
+        }
+        FormKind::Faction | FormKind::Event => {
             // 存活守卫。
             let Some(sel) = selected else {
                 render_empty(ui, shell);
@@ -334,7 +379,6 @@ fn render_properties(
             }
             render_selection_header(ui, shell, sel);
             let label = match form {
-                FormKind::Region => "Region 表单（M2 接入）",
                 FormKind::Faction => "Faction 表单（M2 接入）",
                 FormKind::Event => "Event 表单（M2 接入）",
                 _ => unreachable!("已由外层 match 收窄"),
