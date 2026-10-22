@@ -20,6 +20,10 @@
 //! 同一 `(尺寸, 三张场图, 种子)` 必须产出逐树一致的结果（与 [`crate::climate`]
 //! 的「逐格一致」纪律同源），单测覆盖。
 
+use crate::biome::{
+    BIOME_FOREST, BIOME_GRASSLAND, BIOME_HILLS, BIOME_JUNGLE, BIOME_OASIS, BIOME_PLAINS,
+    BIOME_SAVANNA, BIOME_SWAMP, BIOME_TROPICAL_RAINFOREST, BIOME_WETLAND,
+};
 use crate::generate::Perlin;
 
 // ============================================================================
@@ -142,14 +146,112 @@ pub const LARGE_NOISE_FREQ: f64 = 0.008;
 /// 小尺度边缘破碎噪声频率：越大，边缘越破碎。
 pub const DETAIL_NOISE_FREQ: f64 = 0.035;
 
-/// 生成森林密度场：`suitability × patch`，patch 由双层聚集噪声平滑得出。
+/// 林线下沿（米）：超过此海拔开始出现林线衰减。
+pub const TREE_LINE_M: f32 = 2000.0;
+/// 林线上沿（米）：超过此海拔森林密度归零。
+pub const TREE_LINE_FULL_M: f32 = 2800.0;
+
+/// 群系 → 森林基础密度（`0..=1`）。
+///
+/// **为什么用群系而不是气候**：温度/湿度是生成期派生量、不落盘
+/// （见 [`crate::continent`]），渲染期只能拿到 `terrain.bin` 的三通道
+/// （height / surface / biome）。群系已经把「温度 + 湿度 → 植被带」的推理
+/// 固化下来，渲染期直接查表即可，不必重算气候。
+///
+/// 取值语义：热带雨林最密，森林次之，草原/丘陵稀，沼泽/湿地中等，
+/// 荒漠/戈壁/雪原/苔原/水面为 0。
+fn biome_forest_density(biome: u8) -> f32 {
+    match biome {
+        BIOME_TROPICAL_RAINFOREST | BIOME_JUNGLE => 0.95,
+        BIOME_FOREST => 0.85,
+        BIOME_SWAMP | BIOME_WETLAND => 0.45,
+        BIOME_HILLS => 0.35,
+        BIOME_OASIS => 0.30,
+        BIOME_GRASSLAND | BIOME_PLAINS => 0.22,
+        BIOME_SAVANNA => 0.12,
+        _ => 0.0,
+    }
+}
+
+/// 生成森林密度场（**群系驱动**，渲染期可用）。
+///
+/// 输入：`biomes`（`terrain.bin` 的 biome 通道）+ `heights_m`（海拔，米）。
+/// 输出与 [`generate_forest_density_from_climate`] 同构：行优先
+/// `index = y * width + x` 的 `0..=1` 连续密度场。
+///
+/// 组成：`群系基础密度 × 林线衰减 × 聚集噪声 patch`。
+/// - **林线**：`TREE_LINE_M..TREE_LINE_FULL_M` 平滑衰减到 0；
+/// - **聚集噪声**：与气候版同参（[`LARGE_NOISE_FREQ`] / [`DETAIL_NOISE_FREQ`]），
+///   使森林成片、边缘破碎，并在同群系内部形成疏密变化（林间空地）。
+///
+/// 零基础密度格（荒漠 / 水面 / 雪原…）直接短路，不做噪声采样——噪声只在
+/// 可能有树的格上计算，整图开销因此主要落在森林面积上。
+pub fn generate_forest_density_from_biome(
+    width: usize,
+    height: usize,
+    biomes: &[u8],
+    heights_m: &[i16],
+    seed: u64,
+) -> Vec<f32> {
+    assert_eq!(biomes.len(), width * height, "biomes 场尺寸不符");
+    assert_eq!(heights_m.len(), width * height, "heights 场尺寸不符");
+
+    let noise = Perlin::new(seed);
+    let mut density = vec![0.0_f32; width * height];
+
+    for y in 0..height {
+        for x in 0..width {
+            let i = y * width + x;
+
+            let base = biome_forest_density(biomes[i]);
+            if base <= 0.0 {
+                continue;
+            }
+
+            // 林线衰减（米）
+            let h = heights_m[i] as f32;
+            let altitude = 1.0 - smoothstep(TREE_LINE_M, TREE_LINE_FULL_M, h);
+            if altitude <= 0.0 {
+                continue;
+            }
+
+            // 大尺度噪声：森林整体分布
+            let large =
+                noise.noise2d(x as f64 * LARGE_NOISE_FREQ, y as f64 * LARGE_NOISE_FREQ) as f32;
+
+            // 小尺度噪声：森林边缘破碎（+100 偏移与大尺度解相）
+            let detail = noise.noise2d(
+                x as f64 * DETAIL_NOISE_FREQ + 100.0,
+                y as f64 * DETAIL_NOISE_FREQ + 100.0,
+            ) as f32;
+
+            let cluster = (0.5 + large * 0.38 + detail * 0.12).clamp(0.0, 1.0);
+            let patch = smoothstep(0.25, 0.65, cluster);
+
+            // **疏密调制而非砍半**：群系已判定「这里是森林」，聚集噪声只该
+            // 制造林间空地与密林核心，不该把整片森林稀释成稀树草原。
+            // 故取 `0.5 + 0.5 × patch`（0.5..=1.0），森林格永远保有基础密度。
+            let patch_gain = 0.5 + 0.5 * patch;
+
+            density[i] = base * altitude * patch_gain;
+        }
+    }
+
+    density
+}
+
+/// 生成森林密度场（**气候驱动**）：`suitability × patch`，patch 由双层聚集噪声平滑得出。
 ///
 /// 三张输入必须等长 `width * height`，行优先、坐标一一对应（文档 §八前提）。
 ///
 /// 与文档原式的差异：`noise::OpenSimplex` → [`Perlin`]（复用现有手写噪声，
 /// 保持 `wv-terrain` 零依赖）；噪声值域同为约 `[-1, 1]`，后续
 /// `0.5 + large*0.38 + detail*0.12` 的抬升与 clamp 语义不变。
-pub fn generate_forest_density(
+///
+/// **适用边界**：温度/湿度是**生成期派生、不落盘**的量（见
+/// [`crate::continent`]），渲染期拿不到——渲染期请用
+/// [`generate_forest_density_from_biome`]。本函数供生成期/CLI/离线批处理使用。
+pub fn generate_forest_density_from_climate(
     width: usize,
     height: usize,
     heights: &[f32],
@@ -374,9 +476,13 @@ pub fn generate_trees(
     trees
 }
 
-/// 一步到位：密度场 + 树木实例（文档 §八的串联入口）。
+/// 一步到位：密度场 + 树木实例（文档 §八的串联入口，**气候驱动**）。
 ///
 /// 两个种子分开：密度噪声一个、采样一个；均须由调用侧存 YAML（P3）。
+///
+/// **适用边界**：这是**离线整图**路径（生成期 / CLI / 批处理）。渲染期走
+/// LOD 采样——密度场由 [`generate_forest_density_from_biome`] 给出，
+/// 站点采样复用渲染层既有的 LOD 纪律（ADR-0031 D2/D3）。
 pub fn generate_forest(
     width: usize,
     height: usize,
@@ -386,7 +492,7 @@ pub fn generate_forest(
     density_seed: u64,
     tree_seed: u64,
 ) -> ForestMap {
-    let density = generate_forest_density(
+    let density = generate_forest_density_from_climate(
         width,
         height,
         heights,
@@ -497,7 +603,7 @@ mod tests {
         let heights = vec![0.0_f32; n * n];
         let temps = vec![0.5_f32; n * n];
         let moist = vec![1.0_f32; n * n];
-        let d = generate_forest_density(n, n, &heights, &temps, &moist, 42);
+        let d = generate_forest_density_from_climate(n, n, &heights, &temps, &moist, 42);
         assert!(
             d.iter().all(|&v| v == 0.0),
             "全海图不应出现密度，got max {:?}",
@@ -512,8 +618,8 @@ mod tests {
         let heights: Vec<f32> = (0..n * n).map(|i| 0.5 + (i % 7) as f32 * 0.01).collect();
         let temps: Vec<f32> = (0..n * n).map(|i| 0.4 + (i % 5) as f32 * 0.02).collect();
         let moist: Vec<f32> = (0..n * n).map(|i| 0.3 + (i % 11) as f32 * 0.05).collect();
-        let a = generate_forest_density(n, n, &heights, &temps, &moist, 7);
-        let b = generate_forest_density(n, n, &heights, &temps, &moist, 7);
+        let a = generate_forest_density_from_climate(n, n, &heights, &temps, &moist, 7);
+        let b = generate_forest_density_from_climate(n, n, &heights, &temps, &moist, 7);
         assert_eq!(a, b, "同种子密度场必须逐格一致");
     }
 
@@ -523,7 +629,7 @@ mod tests {
         let heights: Vec<f32> = (0..n * n).map(|i| (i % 13) as f32 / 13.0).collect();
         let temps: Vec<f32> = (0..n * n).map(|i| (i % 17) as f32 / 17.0).collect();
         let moist: Vec<f32> = (0..n * n).map(|i| (i % 19) as f32 / 19.0).collect();
-        let d = generate_forest_density(n, n, &heights, &temps, &moist, 1);
+        let d = generate_forest_density_from_climate(n, n, &heights, &temps, &moist, 1);
         assert!(
             d.iter().all(|&v| (0.0..=1.0).contains(&v)),
             "密度越界：{:?}",
@@ -675,6 +781,85 @@ mod tests {
             map.trees.is_empty(),
             "全海不应有树，got {}",
             map.trees.len()
+        );
+    }
+
+    // ---- generate_forest_density_from_biome（渲染期路径）----
+
+    #[test]
+    fn biome_density_is_zero_for_non_forest_biomes() {
+        // 沙漠 / 雪原 / 水面 / 戈壁：基础密度 0 → 整格密度 0（2×2 网格）
+        let biomes = vec![
+            crate::biome::BIOME_DESERT,
+            crate::biome::BIOME_SNOWFIELD,
+            crate::biome::BIOME_OCEAN,
+            crate::biome::BIOME_GOBI,
+        ];
+        let heights = vec![100_i16; 4];
+        let d = generate_forest_density_from_biome(2, 2, &biomes, &heights, 1);
+        assert!(
+            d.iter().all(|&v| v == 0.0),
+            "非森林群系不应有密度，got {:?}",
+            d
+        );
+    }
+
+    #[test]
+    fn biome_density_ranks_rainforest_above_grassland() {
+        // 群系基础密度排序：热带雨林 > 森林 > 草原。
+        // 用同一 seed 同一坐标比较，排除噪声差异干扰。
+        let n = 1;
+        let heights = vec![100_i16];
+        let rain = generate_forest_density_from_biome(
+            n,
+            n,
+            &[crate::biome::BIOME_TROPICAL_RAINFOREST],
+            &heights,
+            7,
+        )[0];
+        let forest =
+            generate_forest_density_from_biome(n, n, &[crate::biome::BIOME_FOREST], &heights, 7)[0];
+        let grass =
+            generate_forest_density_from_biome(n, n, &[crate::biome::BIOME_GRASSLAND], &heights, 7)
+                [0];
+        assert!(
+            rain > forest && forest > grass,
+            "排序错误：rain={rain} forest={forest} grass={grass}"
+        );
+    }
+
+    #[test]
+    fn biome_density_vanishes_above_tree_line() {
+        // 3000 m > TREE_LINE_FULL_M(2800) → 林线以上密度为 0
+        let n = 1;
+        let d =
+            generate_forest_density_from_biome(n, n, &[crate::biome::BIOME_FOREST], &[3000_i16], 7);
+        assert_eq!(d[0], 0.0, "林线以上应为 0，got {}", d[0]);
+    }
+
+    #[test]
+    fn biome_density_is_deterministic_and_bounded() {
+        let n = 32;
+        let biomes: Vec<u8> = (0..n * n)
+            .map(|i| {
+                if i % 3 == 0 {
+                    crate::biome::BIOME_FOREST
+                } else {
+                    crate::biome::BIOME_GRASSLAND
+                }
+            })
+            .collect();
+        let heights = vec![120_i16; n * n];
+        let a = generate_forest_density_from_biome(n, n, &biomes, &heights, 21);
+        let b = generate_forest_density_from_biome(n, n, &biomes, &heights, 21);
+        assert_eq!(a, b, "同种子密度场必须逐格一致");
+        assert!(
+            a.iter().all(|&v| (0.0..=1.0).contains(&v)),
+            "密度越界：{:?}",
+            a.iter()
+                .filter(|&&v| !(0.0..=1.0).contains(&v))
+                .take(5)
+                .collect::<Vec<_>>()
         );
     }
 }
