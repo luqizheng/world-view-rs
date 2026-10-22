@@ -466,9 +466,10 @@ pub fn run(config: AppConfig) {
             // ui::panel_minimap, // TODO: 恢复小地图后取消注释
             ui::panel_timeline,
             ui::panel_event,
-            ui::panel_situation,
             ui::panel_character,
-            ui::panel_faction,
+            // 2026-10-22 统一 Inspector：panel_situation / panel_faction /
+            // panel_cell_editor 均已退役——内容分别成为 Inspector 的
+            // 「事态」「势力层」「属性（Cell）」页签。
             ui::panel_region,
             // v0.3：Inspector 整体右移后绘在最后（右上角，离顶栏最近），
             // 避免被左列 / 中列面板遮挡。

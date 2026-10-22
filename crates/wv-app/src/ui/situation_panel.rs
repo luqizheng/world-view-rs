@@ -1,15 +1,10 @@
-//! 事态登记面板（P-6 · v0.3 Figma 视觉重做）。
+//! 事态登记面板（P-6 · **已退役的浮窗**）。
 //!
-//! ## 职责
-//! - `panel_situation` —— 事态列表（带计数徽标 + Figma `Y214 D40 — Y215 D12`
-//!   风格元信息）；空时显示空状态卡。
+//! **2026-10-22 统一 Inspector**：本面板整体退役——事态列表已成为
+//! Inspector 的「事态」页签（[`crate::ui::inspector::situations::situations_tab`]）。
+//! `panel_situation` 不再注册（`app_bootstrap`），浮窗不再渲染。
+//! 文件暂留：`format_span_v03` 被 Inspector 的新模块引用。
 //!
-//! ## 边界
-//! - **不**改事态数据 —— 列表只读，编辑由 [`crate::editing`] 的命令走。
-//!
-//! ## 主要导出
-//! - `panel_situation` —— Bevy 系统。
-
 #![cfg(feature = "app")]
 
 use bevy::prelude::*;
@@ -86,7 +81,7 @@ pub fn panel_situation(
 ///
 /// 当前没有 wv_core 历法接口可用时按 360 天 / 年简化（与 timeline.rs
 /// `season_of_day` 同口径）；M2 接 `wv_core::Calendar::format` 后替换。
-fn format_span_v03(from: i64, to: Option<i64>) -> String {
+pub fn format_span_v03(from: i64, to: Option<i64>) -> String {
     let f = day_to_yd(from);
     match to {
         Some(t) => {

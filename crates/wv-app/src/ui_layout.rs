@@ -203,15 +203,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn retired_cell_editor_absent_from_panel_all() {
-        // 2026-10-22 统一 Inspector：Cell 编辑器的内容已迁入 Inspector 的
-        // 「属性」页签，独立浮窗不再渲染。它**不得**回到 `Panel::ALL`——
+    fn retired_panels_absent_from_all() {
+        // 2026-10-22 统一 Inspector：三个面板的内容已迁入 Inspector
+        // （CellEditor→属性页签、Faction→势力层页签、Situation→事态页签），
+        // 独立浮窗不再渲染。它们**不得**回到 `Panel::ALL`——
         // 本表驱动用户可见的列表面（命令面板 / 设置对话框 / 布局落盘），
         // 留在表里 = 菜单出现「点了没反应」的死项。
-        assert!(
-            !Panel::ALL.contains(&Panel::CellEditor),
-            "CellEditor 已停渲染，不得回到 Panel::ALL（否则菜单出现死项）"
-        );
+        for p in [Panel::CellEditor, Panel::Faction, Panel::Situation] {
+            assert!(
+                !Panel::ALL.contains(&p),
+                "{p:?} 已停渲染，不得回到 Panel::ALL（否则菜单出现死项）"
+            );
+        }
     }
 
     #[test]
@@ -261,15 +264,14 @@ mod tests {
     fn default_panel_rects_never_overlap() {
         // §9.3 验证项 1：默认位置两两不重叠（含折叠态）。
         //
-        // `Panel::CellEditor` 除外：它的内容已迁入统一 Inspector 的「属性」
-        // 页签（2026-10-22 设计），**不再单独渲染**——一个不显示的面板
-        // 不该参与「默认位置互不重叠」的验收（它的旧默认位 [992,310] 与
-        // 变宽后的 Inspector [992,56]+300×420 重叠，但两者不会同屏出现）。
-        // 枚举项与默认位暂留，兼容存量 `ui-layout.yaml` 的 `cell_editor` 键。
+        // 三个退役面板除外：CellEditor / Faction / Situation 的内容已迁入
+        // 统一 Inspector（2026-10-22 设计），**不再单独渲染**——一个不显示
+        // 的面板不该参与「默认位置互不重叠」的验收。枚举变体与默认位暂留，
+        // 兼容存量 `ui-layout.yaml` 里的对应键。
         let panels: Vec<Panel> = Panel::ALL
             .iter()
             .copied()
-            .filter(|p| *p != Panel::CellEditor)
+            .filter(|p| !matches!(p, Panel::CellEditor | Panel::Faction | Panel::Situation))
             .collect();
         for (i, a) in panels.iter().enumerate() {
             let la = default_layout(*a);

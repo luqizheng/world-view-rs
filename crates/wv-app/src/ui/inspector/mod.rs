@@ -53,8 +53,10 @@ use wv_core::{EntityKind, SelectedEntity};
 pub mod cell;
 pub mod event;
 pub mod faction;
+pub mod layers;
 pub mod place;
 pub mod region;
+pub mod situations;
 
 /// Inspector 的页签。**会话态**——不落 `ui-layout.yaml`
 /// （那是布局记忆，不是 UI 偏好）。
@@ -246,10 +248,10 @@ pub fn panel_inspector(
                     );
                 }
                 InspectorTab::FactionLayers => {
-                    ui.label("势力层（M4 接入）");
+                    layers::layers_tab(ui, &shell, &view, &mut projection, &mut edit, &mut display);
                 }
                 InspectorTab::Situations => {
-                    ui.label("事态（M4 接入）");
+                    situations::situations_tab(ui, &shell, &projection);
                 }
             }
         },

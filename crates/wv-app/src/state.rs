@@ -127,24 +127,22 @@ pub enum Panel {
 impl Panel {
     /// 全部面板（菜单按此顺序列出）。
     ///
-    /// **2026-10-22 统一 Inspector**：`Panel::CellEditor` 已从中移除——
-    /// 它的内容迁进了 Inspector 的「属性」页签，独立浮窗不再渲染
-    /// （`app_bootstrap` 不再注册 `panel_cell_editor`）。本表驱动
+    /// **2026-10-22 统一 Inspector**：`CellEditor` / `Faction` / `Situation`
+    /// 三个面板已从中移除——CellEditor 的内容迁进了 Inspector 的「属性」页签；
+    /// Faction 与 Situation 分别成为 Inspector 的「势力层」「事态」页签。
+    /// 独立浮窗均不再渲染（`app_bootstrap` 不再注册对应系统）。本表驱动
     /// **用户可见的列表面**（命令面板 / 设置对话框 / 布局落盘），
     /// 故一个不渲染的面板留在本表里 = 菜单里出现「点了没反应」的死项。
     ///
-    /// 枚举变体本身**暂留**（`key()` 仍返 `"cell_editor"`）——存量工程的
-    /// `ui-layout.yaml` 里有这个键，删枚举会让旧文件的该项变成孤儿。
-    /// 退役（连枚举变体一起删）见 M4。
-    pub const ALL: [Panel; 11] = [
+    /// 枚举变体本身**暂留**——存量工程的 `ui-layout.yaml` 里有对应键，
+    /// 删枚举会让旧文件的该项变成孤儿。
+    pub const ALL: [Panel; 9] = [
         Panel::MapTree,
         Panel::Layers,
         Panel::Brush,
         Panel::Timeline,
         Panel::Event,
-        Panel::Situation,
         Panel::Character,
-        Panel::Faction,
         Panel::Region,
         Panel::Inspector,
         Panel::Validation,

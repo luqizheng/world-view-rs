@@ -1,14 +1,14 @@
 //! 势力层（P-7；ADR-0027 多势力层）。
 //!
-//! ## 职责
-//! - `panel_faction` —— 按势力层分组：层头（名称 / z / 配色 / 可见 / 删除）+
-//!   「当前填色层」选择器 + 层内势力**列表**。
+//! ## 职责（**已退役的浮窗**）
 //!
-//! **2026-10-22 统一 Inspector**：单个势力的**属性编辑**（名称 / 颜色 / 层 /
-//! 等级 / 驻地 / 归属边 / 几何列表 / focus）已迁入 Inspector 的「属性」页签
-//! （[`crate::ui::inspector::faction::faction_form`］）。本面板现在只当
-//! **选择器**用——列出「有哪些势力」+ 点行选中。层头的增删改在 M4 迁入
-//! Inspector 的「势力层」页签。
+//! **2026-10-22 统一 Inspector**：本面板整体退役——
+//! - 势力的**属性编辑** → Inspector「属性」页签（[`crate::ui::inspector::faction::faction_form`]）；
+//! - 层管理 + 势力列表 → Inspector「势力层」页签（[`crate::ui::inspector::layers::layers_tab`]）。
+//!
+//! `panel_faction` 不再注册（`app_bootstrap`），浮窗不再渲染。文件暂留，
+//! 因为 `layer_controls` / `faction_selection` / `faction_is_selected` 三个
+//! 公开函数被 Inspector 的新模块引用；待 M5 视觉收尾后一并归位。
 //!
 //! ## 边界（不做什么）
 //! - **不**直接改世界 —— 改动经 [`crate::edit::faction_panel_actions`] 提交
@@ -215,7 +215,7 @@ pub fn faction_is_selected(selection: Option<&wv_core::SelectedEntity>, id: &Id)
 }
 
 /// 层头：名称 / z / 配色策略 / 可见性 / 删除。返回 true 表示本帧点了删除。
-fn layer_controls(
+pub fn layer_controls(
     ui: &mut egui::Ui,
     shell: &UiShell,
     layer: &FactionLayer,
