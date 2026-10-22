@@ -297,7 +297,7 @@ pub fn map_controls(
     edit: Res<EditHistory>,
     panels: Res<PanelState>,
 ) {
-    // 无工程锁（图片规格 §首页不可见）：与 `welcome_screen` 共用同一信号。
+    // 无工程闸门（图片规格 §首页不可见）：与 `welcome_screen` 共用同一信号。
     if !projection.has_open_project() || startup_req.0.is_some() {
         return;
     }

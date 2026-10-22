@@ -146,8 +146,8 @@
 | **虚拟脏路径** | Virtual dirty path | 街道编辑命令上报的落盘标记 `streets/<layer_id>`——不是真实文件路径，由 `wv-io` 落盘时映射回 `maps/<map>/<source>`。为什么绕一层：街道文件物理上在 `maps/<map>/` 下，若直接报真实路径，`terrain_is_dirty` 的 `maps/<map>/` 前缀匹配会把「画一笔街道」误判成「整张图地形脏了」而白白重写 `.bin`。首次出现：ADR-0010 §5（第 3 项） | 地理 / 数据流 |
 | **来源图** | Source map (of the displayed raster) | 当前视图**实际**显示其栅格的那张图。当前图自带 `raster` 时就是它自己；否则是沿 `parent` 向上**最近**一张自带栅格的祖先。由 `DrillState` 的当前图推得，**不落进 `World`**（P7）；`grid.cell_size` / `grid.raster_origin` 一律与来源图同源（**2026-10-14 更名**：原 `grid.origin` 即今天的 `raster_origin`；本图局部内容改走**图帧原点**，原字段一名两用是 ADR-0009 §9 那个偏移 bug 的成因）。首次出现：ADR-0009 §7 + `crates/wv-app/src/render/terrain_view/mod.rs` | 地理 / 渲染 |
 | **底图继承** | Raster inheritance | 图没有自带栅格时，沿 `parent` 向上取最近一张来源图的地形**直接渲染**，不复制数据。理由：工程是渐进长出来的，城市还没刷地形时城市视图应继续看到父图那一块，而不是黑屏；城市一旦有了 `terrain.bin`，纹理自动切过去。代价：继承来的精度就是父图的精度（街道级会糊，README §12-24）。首次出现：ADR-0009 §7 | 地理 / 渲染 |
-| **级缩放区间** | Level zoom band | 一级允许的缩放范围，锚在「整幅图适配窗口」的尺度上：`fit = max(w/window.w, h/window.h)`、`min = fit/32`（**2026-10-19 [ADR-0038](/adr/adr-0038-icon-click-drill-in) 收浅**；旧值 `fit/80` 是「滚轮进城」的遗产，深放大无内容支撑）、`max = fit*1.5625`。**各区间的绝对数值有意重叠**（子图区间跨过父图外界），故往外换级时 `scale` 无需改动。由 `crates/wv-render/src/zoom_level.rs` 的 `LevelZoom` 承担（ADR-0020 前在 `wv-app/src/render/`）；旧的全局常量 `SCALE_MIN=0.1` / `SCALE_MAX=8.0` 已删除。首次出现：ADR-0009 §8 + `crates/wv-render/src/zoom_level.rs` | 地理 / 渲染 |
-| **换级** | Level crossing | 滚轮撞到当前级**外界**后继续往外滚动所触发的层级切换：往外 → 上一级（`drill.up()`）。触发条件因此是「已在边界 **且** 继续滚」，不是「进入区间」；意图经 `ZoomCrossRequest` 交给 `drill::apply_zoom_cross` 独家执行。**连续性的证明**：子图 `fit` 更小 ⇒ `child.max < parent.max`，故回父级前后 `scale` 同值合法。~~往里 → 光标下的子图~~ **（2026-10-19 [ADR-0038](/adr/adr-0038-icon-click-drill-in) 修正：往里方向撤销**——撞内界继续往里滚只被级区间夹住停住，进入子图的唯一手势是双击钻入图标；修正理由与被否决备选见该 ADR）。首次出现：ADR-0009 §8 + `crates/wv-render/src/{camera,drill}.rs` | 地理 / 交互 |
+| **级缩放区间** | Level zoom band | 一级允许的缩放范围，锚在「整幅图适配窗口」的尺度上：`fit = max(w/window.w, h/window.h)`、`min = fit/32`（**2026-10-19 [ADR-0038](docs/adr/ADR-0038-icon-click-drill-in.md) 收浅**；旧值 `fit/80` 是「滚轮进城」的遗产，深放大无内容支撑）、`max = fit*1.5625`。**各区间的绝对数值有意重叠**（子图区间跨过父图外界），故往外换级时 `scale` 无需改动。由 `crates/wv-render/src/zoom_level.rs` 的 `LevelZoom` 承担（ADR-0020 前在 `wv-app/src/render/`）；旧的全局常量 `SCALE_MIN=0.1` / `SCALE_MAX=8.0` 已删除。首次出现：ADR-0009 §8 + `crates/wv-render/src/zoom_level.rs` | 地理 / 渲染 |
+| **换级** | Level crossing | 滚轮撞到当前级**外界**后继续往外滚动所触发的层级切换：往外 → 上一级（`drill.up()`）。触发条件因此是「已在边界 **且** 继续滚」，不是「进入区间」；意图经 `ZoomCrossRequest` 交给 `drill::apply_zoom_cross` 独家执行。**连续性的证明**：子图 `fit` 更小 ⇒ `child.max < parent.max`，故回父级前后 `scale` 同值合法。~~往里 → 光标下的子图~~ **（2026-10-19 [ADR-0038](docs/adr/ADR-0038-icon-click-drill-in.md) 修正：往里方向撤销**——撞内界继续往里滚只被级区间夹住停住，进入子图的唯一手势是双击钻入图标；修正理由与被否决备选见该 ADR）。首次出现：ADR-0009 §8 + `crates/wv-render/src/{camera,drill}.rs` | 地理 / 交互 |
 | **图标钻取** | Icon drill-in | 进入子图的**唯一手势**：双击父图上带 `drill_into` 的钻入图标（界面蓝菱形；`outline_polygon` 轮廓热区为后续可选增强）。缩放（滚轮/缩放条）只在级区间内工作，不再触发进入——意图分离：点击=「我要进去」，缩放=「我要看更细」。飞入终点由 `fly_in_scale` 给出（整幅子图铺满窗口）。面包屑是退出/平级跳转的补充通道，非进入通道。首次出现：ADR-0038 + `crates/wv-render/src/drill.rs` | 地理 / 交互 |
 | **钻取过渡目标缩放** | Fly-in target scale | 双击/面包屑换级时相机过渡的终点缩放 = `clamp(min(from_scale, child.fit))`：整幅子图铺满窗口，但作者已贴得更近时不为换级拉远视野；末尾 clamp 保证终点必落在**新级区间**内。取代历史上硬编码的 `4.0`（分级后会越界，进城后第一次滚轮被硬拽）。首次出现：ADR-0009 §8 + `render::zoom_level::fly_in_scale` | 地理 / 交互 |
 
@@ -249,11 +249,10 @@
 | 换级淡化 | Level-cross basemap fade | 换图（换级/钻取）时的视觉过渡：新底图**同帧即时重建**（切换不延迟），旧底图以克隆像素的淡出精灵（`BasemapFadeOut`，z=0.05，盖分块底图、在道路之下）在 `LEVEL_FADE_SECS = 0.4s` 内线性降透明至归零回收。只淡出旧图、不淡入新图；无位移插值；换模式/换 soften 不触发。实现：`crates/wv-app/src/render/terrain_view/mod.rs`。首次出现：ADR-0009 §5 追写 + `terrain_view.rs` | 地理 / 渲染 |
 | 淡出精灵 | Fade-out sprite | 换级淡化的载体：`spawn_basemap_fadeout` 把**旧纹理像素克隆**成新 `Image`（句柄会被原地覆写，不克隆会瞬间变新图）挂到 `Sprite` 上逐帧降 alpha，归零即 despawn。首次出现：ADR-0009 §5 追写 + `terrain_view.rs` | 地理 / 渲染 |
 
-| **职责域目录** | Domain directory | wv-app 与 wv-core 按职责域分目录：前者 
-ender/（地图渲染）、edit/（UI 动作→EditCommand）、ui/（面板/组件）、	heme/（外观令牌）；后者 ase/ 	ime/ map/ model/ derived/ source/。**目的**：让 AI 通过目录名快速定位（无需扫 28 个平铺文件）。模块挂点与公开 API 不变。首次出现：2026-10-14 目录级别重构 + docs/adr/README.md §5 | 工程 |
+| **职责域目录** | Domain directory | wv-app 与 wv-core 按职责域分目录：前者 `render/`（地图渲染）、`edit/`（UI 动作→EditCommand）、`ui/`（面板/组件）、`theme/`（外观令牌）；后者 `base/` `time/` `map/` `model/` `derived/` `source/`。**目的**：让 AI 通过目录名快速定位（无需扫 28 个平铺文件）。模块挂点与公开 API 不变。首次出现：2026-10-14 目录级别重构 + docs/adr/README.md §5 | 工程 |
 | **保路径重导出** | Path-preserving re-export | wv-core 因 AGENTS.md §3 与文档直接引用顶层路径（如 wv_core::time::TimelineQuery），lib.rs 用 pub use base::id;（**模块**）与 pub use base::id::Id;（**类型**）两套并存的 re-export 让「wv_core::id 模块路径」与「wv_core::Id 类型路径」都仍可达。**命名空间不同**，不冲突。**作用**：目录重构不动公共 API。首次出现：2026-10-14 目录级别重构 + docs/adr/README.md §5 | 工程 |
-| **欢迎页** | Welcome screen | 无工程在手时的全屏接管界面（压暗 + 居中卡片）：「新建工程… / 打开工程… / 最近工程」。点不到地图与面板；是「先立工程才能画」的 UI 侧入口。判据 `WorldProjection::has_open_project()`（= `project_dir.is_some()`）。首次出现：2026-10-14 用户需求（新建项目对话框 + 启动锁定）+ `crates/wv-app/src/ui/welcome_screen.rs` | 工程 / 编辑 |
-| **无工程锁** | No-project lock | 「程序刚打开不能画图」的三道门禁同一判据（`has_open_project`）：① 欢迎页压暗吃点击（UI 侧）；② `collect_brush_stroke` / `commit_street_click` 直接早退（数据侧，防穿透）；③ 命令分发器挡下 NewMap / Save / SaveAs / Export（命令侧）。NewProject / OpenProject / CloseProject 是入口本身，不拦。首次出现：2026-10-14 用户需求 + `ui_shell.rs` / `camera.rs` / `streets.rs` | 工程 / 编辑 |
+| **欢迎页** | Welcome Screen | 无工程在手时**接管全屏**的着陆页（压暗 + 居中卡片）：「新建工程… / 打开工程… / 最近工程」。点不到地图与面板；是「先立工程才能画」的 UI 侧入口。**它是一个终点态**——用户在此新建 / 打开工程后离开；与「启动屏」（过场态）是两种角色，**不可合并**。判据 = 「无工程闸门」（`WorldProjection::has_open_project()`，= `project_dir.is_some()`）。首次出现：2026-10-14 用户需求（新建项目对话框 + 启动锁定）+ `crates/wv-app/src/ui/welcome_screen.rs`；术语规范 2026-10-22 | 工程 / 编辑 |
+| **无工程闸门** | No-project gate | 「程序刚打开不能画图」的三道门禁同一判据（`has_open_project`）：① 欢迎页压暗吃点击（UI 侧）；② `collect_brush_stroke` / `commit_street_click` 直接早退（数据侧，防穿透）；③ 命令分发器挡下 NewMap / Save / SaveAs / Export（命令侧）。NewProject / OpenProject / CloseProject 是入口本身，不拦。**它是一条恒定规则，不是某张页面**——旧称「无工程锁」，2026-10-22 改名：它不是一把可开可锁的锁，是一道判据。首次出现：2026-10-14 用户需求 + `ui_shell.rs` / `camera.rs` / `streets.rs` | 工程 / 编辑 |
 | **图层帧** | LayerFrame | `MapNode.layers[].z / visible / opacity` 的**每帧投影**：`render/layer_frame.rs` 的 `resolve_layer_frame` 从当前图（`DrillState` 所指）的 layers + `ViewState` 会话开关求值出九类渲染组（Terrain/Border/Influence/Road/EventPoint/Place/Building/Label/Custom——Building/Label 系 ADR-0016 §6 / ADR-0017 后补）各自的 `LayerBinding`，写入 `LayerFrame` 资源。求值是纯函数、拉动式（AGENTS §3）；手动相等比较，绑定不变不触发 Bevy change detection。**kind→渲染组映射与全部语义的唯一出处**（ADR-0013）。首次出现：2026-10-14 六层渲染架构方案 C + ADR-0013 + `render/layer_frame.rs`；as-is 总览导览见 `docs/MAP_LAYER_RENDERING_SPEC_v0.1.md` | 渲染 |
 | **图层绑定** | LayerBinding | 一个渲染组从作者图层声明求出的三元绑定：`visible`（**YAML 声明 ∧ 会话开关**的合取）、`opacity`（clamp 0..=1，落材质 alpha）、`z_offset`（槽位偏移的世界 Z 值）。未声明 kind = 中性绑定（沿用会话开关、不透明、不偏移）——既有地图渲染零变化。首次出现：ADR-0013 + `render/layer_frame.rs` | 渲染 |
 | **槽位偏移** | Slot offset | ADR-0013 对作者 `z: i32` 的 v1 语义：按每格 `SLOT_STEP = 0.05` 世界 Z 平移该 kind 渲染组的**内建槽位**（各渲染模块的既有 Z 常量：道路 0.09–0.12、POI 0.21–0.22、势力 0.3、标注 0.35/0.4……），clamp ±`Z_CLAMP = 4` 格。**不是**「按 z 排序全量分带」——那会拆掉组内次序编译期断言、冲突标注远偏移，留待 v2（ADR-0013 §6 待裁）。`z` 全缺省时渲染与历史版本逐位一致。首次出现：ADR-0013 + `render/layer_frame.rs` | 渲染 |
@@ -364,3 +363,23 @@ ender/（地图渲染）、edit/（UI 动作→EditCommand）、ui/（面板/组
 |---|---|---|---|
 | **派生气候场** | derived climate field | 大陆生成期按格采样的温度/湿度（各归一化 0..1）：温度 = 纬度暖度 − 海拔递减 + 小噪声，湿度 = fBm + 近岸加成。**生成期派生、不落盘**（地形三通道不变，无第二真相源）；只服务低地分带，高地带（雪线/山/丘）仍由高度阈值决定。同 (参数, 种子, 坐标) 必出同气候。纬度基准当前为**图幅相对**（README §12-49 待裁）。首次出现：2026-10-21 feat/climate-derived-fields | 地理 |
 | **低地群系** | lowland biome | 低地（< 300 m）按派生气候场分出的群系：冷带（雪原/苔原）→ 雨林（热×湿）→ 荒漠（热×干）→ 森林（温×湿）→ 草原（其余）。取代旧「森林/荒漠噪声掩码」（该掩码因 `continent::fbm01` 归一化 bug 长期恒不命中）。与高地带的分工：**高度带优先于气候带**。首次出现：2026-10-21 feat/climate-derived-fields | 地理 |
+
+## 应用外壳与场景编辑器术语（2026-10-22 · 术语规范）
+
+> 起因：2026-10-22 讨论「欢迎页是不是一个场景」时发现，项目里「场景」一词
+> 同时指向**应用层界面**与**世界内容**两种东西。本节划清边界：
+> **应用外壳族**（启动屏 / 欢迎页 / 主界面）与**场景族**（场景 / 场景编辑器）
+> 分属两族，**「场景」一词专属于后者**。
+>
+> 同时结清《场景编辑器设计 v0.1》§8「实施首个 PR 顺带补」的术语欠账。
+
+| 术语 | 英文 / 拼音 | 定义 | 所属维度 |
+|---|---|---|---|
+| **启动屏** | Boot Screen | 进程启动到世界数据就绪之间的**过场屏**：窗口隐藏起步（2026-10-17 修「启动数秒白屏」）→ 首帧绘「正在加载工程…」遮罩 → 加载完成后揭示窗口，转入「主界面」（有工程）或「欢迎页」（无工程）。**必然一闪而过**，不是用户停留的界面；不承载任何世界数据 | 界面 |
+| **主界面** | Editor Shell | 手握工程后的工作界面：地图画布 + 顶栏 + 浮动面板 + 时间轴。它渲染的是**世界内容**（世界图 / 区域图 / 城市图等场景图），本身**不是**场景 | 界面 |
+| **场景** | Scene | **一张地点图**（城市 / 地下城 / 森林 / 村落）：`MapLevel::City` 或 `Interior` 的 `MapNode`，带 `scene_type`、自己的 `TerrainGrid`（分区走 kind 通道）、标记点与道路图层。判定按「图级 ≠ World」而非语义。**与启动屏 / 欢迎页 / 主界面不是一回事**——后者是应用层界面，前者是世界内容 | 地理 |
+| **场景编辑器** | Scene Editor | 通用场景编辑器（2026-10-17 设计定稿，`docs/superpowers/specs/2026-10-17-scene-editor-design.md`）：城市 / 地下城 / 森林 / 村落同一套范式——分区色块 + 线性要素 + 标记点 + 点放物件，只是词表不同。**尚未实现**（M1 计划已写，未开工） | 编辑 |
+| **场景类型** | Scene Type | `MapNode.scene_type`（可选）：`Settlement` / `Farmland` / `Forest` / `Dungeon`。建图时选、属性里可改；驱动笔刷面板的分区词表与生成器的参数集。不落数据的话，作者每次进图都得重选词表 | 地理 |
+| **分区** | District | 场景图上一块均质区域（城市 = 贫民 / 富人 / 住宅 / 商业 / 工业；地下城 = 房间 / 走廊 / 大殿）。**不新建数据结构**——走每图一张 `TerrainGrid` 的 kind 通道；kind 编号须 > 1（水域判定 `kind <= 1` 是唯一入口，跨水陆会改写高度） | 地理 |
+| **填色器** | Filler | 生成器的形态：壳子（轮廓 / 河流 / 海山环境）从父图现成拿，生成只负责往壳子里按配比填分区。**不是「从零生成」**；地下城不进填色器范围（房间连通性是拓扑问题，按配比随机填出的是互不连通的噪声块） | 编辑 |
+| **存在时间段** | Existence Span | 场景图整图的**可选**存在时段（`MapNode.time_span` 字段已有，缺写入口）：时间轴拨到哪年显示活着的那张图；同址先后城市 = 多张图各带各的时段；时段结束无后继 → 校验面板 Hint 级提示（不拦保存，V1）。分区本身不带时间 | 时间 |

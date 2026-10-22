@@ -346,7 +346,7 @@ pub fn collect_brush_stroke(
         stroke.points.clear();
         return;
     }
-    // 无工程锁（2026-10-14 用户需求）：没有打开任何工程时不允许落笔。欢迎页
+    // 无工程闸门（2026-10-14 用户需求）：没有打开任何工程时不允许落笔。欢迎页
     // 会盖住画布（UI 侧第一道），这里是数据侧的第二道——防指针穿透边角、
     // 也防测试直跑本系统时绕过 UI。
     if projection.project_dir.is_none() {

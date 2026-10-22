@@ -354,7 +354,7 @@ pub fn commit_street_click(
         return;
     }
     // 悬在 UI 上 / 播放中只读 / 极低缩放禁画（与地形笔刷同口径）。
-    // 无工程锁同口径（2026-10-14）：没打开任何工程时不允许落笔。
+    // 无工程闸门同口径（2026-10-14）：没打开任何工程时不允许落笔。
     if ui.wants_pointer || playback.playing || view.scale < 0.15 {
         return;
     }

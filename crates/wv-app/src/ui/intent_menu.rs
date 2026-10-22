@@ -103,7 +103,7 @@ pub fn intent_menu(
     time: Res<bevy::prelude::Time>,
     startup_req: Res<StartupLoadRequest>,
 ) {
-    // 无工程锁 / 启动加载中 / 播放中（V37）/ 工具未启用或未闭合：同源早返。
+    // 无工程闸门 / 启动加载中 / 播放中（V37）/ 工具未启用或未闭合：同源早返。
     if playback.playing {
         return;
     }

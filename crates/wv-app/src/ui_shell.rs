@@ -113,7 +113,7 @@ pub fn register(app: &mut App) {
         // `startup_load` 虽不碰 egui，但必须跟遮罩同调度并排在其后，
         // 否则 Update 先阻塞加载、遮罩永远赶不上渲染。
         //
-        // `welcome_screen`（无工程锁）排在遮罩之后、失败卡片之前：
+        // `welcome_screen`（无工程闸门）排在遮罩之后、失败卡片之前：
         // 启动加载期间（req 有值）它自己会让位；失败卡片画在其后压在其上。
         .add_systems(
             bevy_egui::EguiPrimaryContextPass,
@@ -1221,7 +1221,7 @@ fn apply_pending_commands(
     // 帧号：回执过期判断只依赖它，不引入计时器资源。
     let frame = (time.elapsed_secs() * 60.0) as u64;
 
-    // 无工程锁（2026-10-14 用户需求）：没有打开任何工程时，一切「改数据 /
+    // 无工程闸门（2026-10-14 用户需求）：没有打开任何工程时，一切「改数据 /
     // 需要工程上下文」的命令一律挡下并指出下一步——欢迎页是唯一入口。
     // NewProject / OpenProject / CloseProject（本身就是入口）与视图 / 面板
     // 命令不在其列；笔刷与街道的输入侧另有同口径门禁（见 collect_brush_stroke）。
@@ -2050,7 +2050,7 @@ mod tests {
         world
     }
 
-    /// 无工程锁（2026-10-14）：没有打开任何工程时，「保存」不再排队「选保存
+    /// 无工程闸门（2026-10-14）：没有打开任何工程时，「保存」不再排队「选保存
     /// 位置」对话框（那是旧的「内存空白工程」链路），而是挡下并给出下一步
     /// 指引——欢迎页是唯一入口。有工程在手时才走原有的 dirty 保存路径。
     #[test]
@@ -2315,7 +2315,7 @@ mod tests {
     }
 
     /// 2026-10-14 改版：`CommandId::NewProject` 只负责弹「新建工程」对话框，
-    /// 不再默默清世界 / 标脏（创建与落盘在对话框确认后发生）。无工程锁下的
+    /// 不再默默清世界 / 标脏（创建与落盘在对话框确认后发生）。无工程闸门下的
     /// 门禁不拦它——它就是入口之一。
     #[test]
     fn new_project_command_opens_the_dialog_not_a_blank_world() {
@@ -2335,7 +2335,7 @@ mod tests {
         );
     }
 
-    /// 无工程锁：`CommandId::NewMap`（同样改数据）在无工程时必须被挡下，
+    /// 无工程闸门：`CommandId::NewMap`（同样改数据）在无工程时必须被挡下，
     /// 对话框不打开、世界不动、回执给指引。
     #[test]
     fn new_map_is_blocked_until_a_project_is_open() {

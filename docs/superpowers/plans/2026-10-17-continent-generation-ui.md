@@ -23,7 +23,7 @@
 
 ## Review Focus
 
-1. **无工程锁穿透**（AGENTS 值班判据 `has_open_project`）：无工程时工具点击/生成必须早退——Task 3 测试。
+1. **无工程闸门穿透**（AGENTS 值班判据 `has_open_project`）：无工程时工具点击/生成必须早退——Task 3 测试。
 2. **撤销恢复圈的边界**：撤销**别的**命令（如先画一笔再生成）不得误恢复圈；redo 再消费——Task 4 测试。
 3. **生成命令撤销后网格逐格复原**（before 缓存完整性）——Task 1 测试。
 4. **缺地形图时命令报 `TerrainMismatch`** 而非 panic（不替作者凭空造尺寸）——Task 1 测试。

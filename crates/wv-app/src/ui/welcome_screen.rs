@@ -1,12 +1,26 @@
-//! 欢迎页 / 无工程锁（2026-10-15 用户需求：把无工程欢迎页对齐
+//! 欢迎页 / 无工程闸门（2026-10-15 用户需求：把无工程欢迎页对齐
 //! Figma 设计稿 [`Zw4tonExV5lIY_EJamjPRw`](https://pixso.cn/app/design/Zw4tonExV5lIY_EJamjPRw)
 //! 的 `00_WelcomeScreen` 帧）。
+//!
+//! ## 术语（2026-10-22 规范）
+//! - **欢迎页** = 本页。**无工程时接管全屏的着陆页**，是一个**终点态**：
+//!   用户在此新建 / 打开工程，抑或就此离开。
+//! - **无工程闸门** = 判据 `WorldProjection::has_open_project()`
+//!   （= `project_dir.is_some()`）。**不是本页的名字**，而是一条恒定规则：
+//!   UI 侧决定本页是否接管，渲染侧禁止落笔 / 框选 / 测量。
+//!   （旧称「无工程锁」——2026-10-22 改名：它不是一把可开可锁的锁。）
+//! - **启动屏** = 进程启动到世界数据就绪之间的过场屏（`ui_shell` 的
+//!   `startup_load_overlay`）。与本页是**两种角色**，不可合并：启动屏必然
+//!   一闪而过，欢迎页是用户停留的界面。
+//! - **场景** 在本项目专指「地点图」（城市 / 地下城 / 森林 / 村落，见
+//!   场景编辑器设计），与上述三者都不是一回事。
 //!
 //! ## 设计要点
 //! - 暗色壳背景 + 居中卡片（520px 宽，14 圆角，32 内边距）。
 //! - 卡内三段竖向 auto-layout（间距 24px）：
 //!   **Header**（地球图标 + 主副标题）/ **ActionGroup**（主+次 CTA）/
-//!   **RecentProjects**（小标题 + 列表 + 时间水印待补）/ **Footer**（版本水印）。
+//!   **RecentProjects**（小标题 + 列表 + 时间水印待补）/ **Footer**（状态
+//!   说明 + 版本水印）。
 //! - **无标题栏 / 无关闭按钮**：Figma 没有 × 与拖动条；用户只能经由
 //!   「新建工程…」「打开工程…」或点击最近工程离开本页。
 //! - 颜色全部走 [`crate::theme::ui_tokens::ShellPalette`] 令牌，未写裸 hex
@@ -15,9 +29,11 @@
 //!   都达标（≥4.5），但 `text_on_accent` 是历史暗色基底，本页统一用白以匹配原型）。
 //!
 //! ## 本地化（ADR-0018 收尾）
-//! - 5 处文案经 `Res<CurrentLocale>` 注入 `t_key(...)` 走 `I18nKey` 表：
-//!   `WelcomeTagline` / `WelcomeNewProjectBtn` / `WelcomeOpenProjectBtn` /
-//!   `WelcomeRecentHeading` / `WelcomeRecentEmpty`。
+//! - 6 处文案经 `Res<CurrentLocale>` 注入 `t_key(...)` 走 `I18nKey` 表：
+//!   `WelcomeTagline` / `WelcomeHelpText` / `WelcomeNewProjectBtn` /
+//!   `WelcomeOpenProjectBtn` / `WelcomeRecentHeading` / `WelcomeRecentEmpty`。
+//!   （`WelcomeHeading` 不在本页——它是**窗口标题**，由
+//!   `app_bootstrap::sync_window_title_with_locale` 消费。）
 //! - 品牌名 `World-View` 与底部 `World-View Alpha` 后缀两语统一不本地化
 //!   （产品定位决定——见 `README.md` §1）。
 //! - `widgets::format_time_ago` 暂未本地化，待 widgets 模块后续 PR 单独处理。
@@ -197,9 +213,18 @@ pub fn welcome_screen(
                 // ── RecentProjects ──────────────────────────────
                 recents_section(ui, &shell, &recents, &mut palette, &current_loc);
 
-                // ── Footer version ──────────────────────────────
+                // ── Footer：无工程提示 + 版本水印 ────────────────
                 ui.add_space(space::SM);
                 ui.vertical_centered(|ui| {
+                    // 一句白话说明「现在为什么什么都不能画」——「无工程闸门」
+                    // 的日常版。此前这条文案（`WelcomeHelpText`）登记在 i18n
+                    // 表里却没有调用点，页面只说了「这是什么产品」，没说
+                    // 「你现在处在哪个状态、要先做什么」。
+                    ui.label(
+                        egui::RichText::new(t_key(&current_loc, I18nKey::WelcomeHelpText))
+                            .font(proportional(font_size::MICRO))
+                            .color(shell.t3()),
+                    );
                     ui.label(
                         egui::RichText::new(FOOTER_VERSION)
                             .font(proportional(font_size::MICRO))

@@ -408,7 +408,7 @@ fn terrain_diff_bbox(
 /// 不需要绕过 dispatcher。
 ///
 /// 播放中只读（基线 V37）：拒绝重置并说明原因，而不是静默无反应。
-/// 无工程锁由 [`crate::ui_shell`] 提前把 `CommandId::ResetTerrainToBase`
+/// 无工程闸门由 [`crate::ui_shell`] 提前把 `CommandId::ResetTerrainToBase`
 /// 挡掉，本函数不再重复。
 pub fn apply_reset_terrain_to_base(
     map_id: &wv_core::Id,

@@ -63,7 +63,15 @@ pub fn run(config: AppConfig) {
         DefaultPlugins
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "World View · 地图编辑器".into(),
+                    // 窗口标题走 i18n（`WelcomeHeading`）：此前是硬编码中文串，
+                    // 英文界面下标题栏仍显示中文。启动语言取 CLI `--language`
+                    // （`cli_locale()`，未指定时为 zh）；运行期切换语言由
+                    // [`sync_window_title_with_locale`] 跟随。
+                    title: crate::i18n::t(
+                        crate::i18n::cli_locale(),
+                        crate::i18n::I18nKey::WelcomeHeading,
+                    )
+                    .to_owned(),
                     resolution: WindowResolution::new(1280, 800),
                     // 隐藏起步（2026-10-17，修「启动数秒白屏」）：原生窗口一旦
                     // 创建即以系统白底示人，而 wgpu 初始化、字体 atlas、管线
@@ -523,6 +531,8 @@ pub fn run(config: AppConfig) {
     // 本帧 `Last` 里 bevy_winit 的 `changed_windows` 调 `set_visible(true)`——
     // 此时帧 0 已完整 present，窗口亮起即是有内容的画面。
     app.add_systems(Update, reveal_window_once_first_frame_presented);
+    // 窗口标题跟随界面语言（见 [`sync_window_title_with_locale`]）。
+    app.add_systems(Update, sync_window_title_with_locale);
     // 渲染配方求值（ADR-0021 D1）：PreUpdate 单点求值 RenderRecipe——已迁移的
     // gate（buildings / faction_overlays / atmosphere）读 `recipe.enabled(...)`，
     // **必须**挂本系统，否则 recipe 停留在 Default 全关、三个 pass 永不渲染。
@@ -576,6 +586,31 @@ fn reveal_window_once_first_frame_presented(
     }
     // 窗口实体尚不存在（理论上不会：WindowPlugin 在插件构建期就生成主窗口）
     // 时不置 `done`，下一 tick 重试。
+}
+
+/// 窗口标题跟随界面语言切换（2026-10-22）。
+///
+/// `I18nKey::WelcomeHeading`（「World View · 地图编辑器」/「World View · Map editor」）
+/// 此前登记在文案表里却**无任何调用点**——窗口标题一直是 `app_bootstrap` 里
+/// 硬编码的中文串，英文界面下标题栏仍显示中文。本系统把
+/// [`CurrentLocale`](crate::i18n::CurrentLocale) 的变化映射到主窗口标题，
+/// 使标题与界面语言一致。
+///
+/// 幂等：只在语言**真的变了**时写标题（`Local` 缓存上次值），避免每帧
+/// 触碰窗口导致无谓的重绘 / 事件。
+fn sync_window_title_with_locale(
+    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    loc: Res<crate::i18n::CurrentLocale>,
+    mut last: Local<Option<crate::i18n::Locale>>,
+) {
+    if last.as_ref() == Some(&loc.0) {
+        return;
+    }
+    *last = Some(loc.0);
+    let title = crate::i18n::t(loc.0, crate::i18n::I18nKey::WelcomeHeading);
+    if let Ok(mut window) = windows.single_mut() {
+        window.title = title.to_owned();
+    }
 }
 
 /// 2D 正交相机。若启动前已装配好 `ViewState`（fit 缩放 + 根图中心），
