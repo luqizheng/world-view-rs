@@ -380,3 +380,25 @@
 | **分区** | District | 场景图上一块均质区域（城市 = 贫民 / 富人 / 住宅 / 商业 / 工业；地下城 = 房间 / 走廊 / 大殿）。**不新建数据结构**——走每图一张 `TerrainGrid` 的 kind 通道；kind 编号须 > 1（水域判定 `kind <= 1` 是唯一入口，跨水陆会改写高度） | 地理 |
 | **填色器** | Filler | 生成器的形态：壳子（轮廓 / 河流 / 海山环境）从父图现成拿，生成只负责往壳子里按配比填分区。**不是「从零生成」**；地下城不进填色器范围（房间连通性是拓扑问题，按配比随机填出的是互不连通的噪声块） | 编辑 |
 | **存在时间段** | Existence Span | 场景图整图的**可选**存在时段（`MapNode.time_span` 字段已有，缺写入口）：时间轴拨到哪年显示活着的那张图；同址先后城市 = 多张图各带各的时段；时段结束无后继 → 校验面板 Hint 级提示（不拦保存，V1）。分区本身不带时间 | 时间 |
+
+
+## 群系色块底图（Biome Raw View）
+
+- **英文名**：Biome Raw View / Fixed Biome Colors
+- **定义**：CellMap（Topographic）的地形画法——每格颜色直接编码其 `biome`（`BIOME_RAW_COLORS[21]` 固定色板，不随 ThemePack / TreatmentFlags），biome=NONE 按 surface 回退。数据视图语义：编辑器看原始数据，主题色只属于「看世界」的 Browse。
+- **首次出现**：2026-10-22 三模式内容矩阵设计（ADR-0051 §5）
+- **所属维度**：呈现（渲染）
+
+## 内容层门控（Content Layer Gating）
+
+- **英文名**：Content Layer Gating / MODE_TABLE wiring
+- **定义**：内容系统（POI/路网/标签/势力/事件点/钻入标记/区域层）按 `RenderRecipe::enabled(PassId)` 决定是否渲染与注册命中——模式观感集中在 ADR-0021 的 MODE_TABLE，不散布 `view.mode` if。标签门必须走「wanted 置空 → 池隐藏尾部」（池是持久实体），`hits.clear()` 归链首照常。
+- **首次出现**：2026-10-22 三模式内容矩阵设计（ADR-0051 §2.1）
+- **所属维度**：呈现（渲染）
+
+## 群系分界线（Biome Boundary Line）
+
+- **英文名**：Biome Boundary Line / `ToolKind::BiomeBoundary`
+- **定义**：CellMap 的群系编辑工具——一条可拖动的线段，两侧各绑一个群系；拖动推移分界，扫过格中「退让侧」群系改为「推进侧」（第三种群系不动）。线是会话工具不落盘；一次拖动 = 1 条 `BatchEditCellsCommand`；落盘真相仍是 cell.biome（P3/P7），区域轮廓继续由连通性派生。
+- **首次出现**：2026-10-22 三模式内容矩阵设计（ADR-0051 §2.7）
+- **所属维度**：编辑（地形）
