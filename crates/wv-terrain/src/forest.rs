@@ -151,6 +151,15 @@ pub const TREE_LINE_M: f32 = 2000.0;
 /// 林线上沿（米）：超过此海拔森林密度归零。
 pub const TREE_LINE_FULL_M: f32 = 2800.0;
 
+/// 森林密度场的固定种子。
+///
+/// **为什么是常量而不是世界种子**：密度场是**视觉派生量**（森林疏密），
+/// 不是世界事实——同一张地形在任何机器、任何次重开都得到同一片林，
+/// 换世界种子不该让「森林长在别处」。
+///
+/// 接入世界种子的收敛点：把本常量换成派生自 `World` 种子的值。
+pub const DENSITY_SEED: u64 = 0x4653_5441; // "FSTA"
+
 /// 群系 → 森林基础密度（`0..=1`）。
 ///
 /// **为什么用群系而不是气候**：温度/湿度是生成期派生量、不落盘
@@ -173,6 +182,50 @@ fn biome_forest_density(biome: u8) -> f32 {
     }
 }
 
+/// 逐格森林密度（**纯函数**：一格的取值只依赖该格自身）。
+///
+/// **为什么要有逐格入口**：整图密度场是「一次算全图」的实现细节，而森林底色
+/// 蒙版（设计文档 §九-1）在**烘焙期**是逐格求值的——烘焙契约要求
+/// 「一格的取值只依赖该格及其邻域」，否则增量 patch（改了 3 格却要重算整图）
+/// 与行带并行（各行带独立算同一格）都不再逐字节一致。
+/// 本函数把密度公式暴露为纯函数，全图场与逐格求值**共用同一公式**，二者恒等。
+///
+/// **噪声实例由调用方持有**（`Perlin::new(DENSITY_SEED)`）——逐格调用不重建
+/// 置换表；构造一次、复用整图，是本函数存在的另一半理由。
+///
+/// 参数：`biome` = 群系通道值，`height_m` = 海拔（米），`(x, y)` = 格坐标。
+pub fn forest_density_cell(noise: &Perlin, biome: u8, height_m: i16, x: usize, y: usize) -> f32 {
+    let base = biome_forest_density(biome);
+    if base <= 0.0 {
+        return 0.0;
+    }
+
+    // 林线衰减（米）
+    let altitude = 1.0 - smoothstep(TREE_LINE_M, TREE_LINE_FULL_M, height_m as f32);
+    if altitude <= 0.0 {
+        return 0.0;
+    }
+
+    // 大尺度噪声：森林整体分布
+    let large = noise.noise2d(x as f64 * LARGE_NOISE_FREQ, y as f64 * LARGE_NOISE_FREQ) as f32;
+
+    // 小尺度噪声：森林边缘破碎（+100 偏移与大尺度解相）
+    let detail = noise.noise2d(
+        x as f64 * DETAIL_NOISE_FREQ + 100.0,
+        y as f64 * DETAIL_NOISE_FREQ + 100.0,
+    ) as f32;
+
+    let cluster = (0.5 + large * 0.38 + detail * 0.12).clamp(0.0, 1.0);
+    let patch = smoothstep(0.25, 0.65, cluster);
+
+    // **疏密调制而非砍半**：群系已判定「这里是森林」，聚集噪声只该制造
+    // 林间空地与密林核心，不该把整片森林稀释成稀树草原。
+    // 故取 `0.5 + 0.5 × patch`（0.5..=1.0），森林格永远保有基础密度。
+    let patch_gain = 0.5 + 0.5 * patch;
+
+    base * altitude * patch_gain
+}
+
 /// 生成森林密度场（**群系驱动**，渲染期可用）。
 ///
 /// 输入：`biomes`（`terrain.bin` 的 biome 通道）+ `heights_m`（海拔，米）。
@@ -186,6 +239,9 @@ fn biome_forest_density(biome: u8) -> f32 {
 ///
 /// 零基础密度格（荒漠 / 水面 / 雪原…）直接短路，不做噪声采样——噪声只在
 /// 可能有树的格上计算，整图开销因此主要落在森林面积上。
+///
+/// **逐格口径**：本函数只是 [`forest_density_cell`] 的整图循环版——
+/// 公式只有一处，逐格调用与整图场恒等（单测 `per_cell_density_matches_full_field` 锁定）。
 pub fn generate_forest_density_from_biome(
     width: usize,
     height: usize,
@@ -202,38 +258,7 @@ pub fn generate_forest_density_from_biome(
     for y in 0..height {
         for x in 0..width {
             let i = y * width + x;
-
-            let base = biome_forest_density(biomes[i]);
-            if base <= 0.0 {
-                continue;
-            }
-
-            // 林线衰减（米）
-            let h = heights_m[i] as f32;
-            let altitude = 1.0 - smoothstep(TREE_LINE_M, TREE_LINE_FULL_M, h);
-            if altitude <= 0.0 {
-                continue;
-            }
-
-            // 大尺度噪声：森林整体分布
-            let large =
-                noise.noise2d(x as f64 * LARGE_NOISE_FREQ, y as f64 * LARGE_NOISE_FREQ) as f32;
-
-            // 小尺度噪声：森林边缘破碎（+100 偏移与大尺度解相）
-            let detail = noise.noise2d(
-                x as f64 * DETAIL_NOISE_FREQ + 100.0,
-                y as f64 * DETAIL_NOISE_FREQ + 100.0,
-            ) as f32;
-
-            let cluster = (0.5 + large * 0.38 + detail * 0.12).clamp(0.0, 1.0);
-            let patch = smoothstep(0.25, 0.65, cluster);
-
-            // **疏密调制而非砍半**：群系已判定「这里是森林」，聚集噪声只该
-            // 制造林间空地与密林核心，不该把整片森林稀释成稀树草原。
-            // 故取 `0.5 + 0.5 × patch`（0.5..=1.0），森林格永远保有基础密度。
-            let patch_gain = 0.5 + 0.5 * patch;
-
-            density[i] = base * altitude * patch_gain;
+            density[i] = forest_density_cell(&noise, biomes[i], heights_m[i], x, y);
         }
     }
 
@@ -861,5 +886,58 @@ mod tests {
                 .take(5)
                 .collect::<Vec<_>>()
         );
+    }
+
+    // ---- 逐格口径（§九-1 底色蒙版的烘焙入口）------------------------
+
+    #[test]
+    fn per_cell_density_matches_full_field() {
+        // 逐格入口与整图场**恒等**——两条路径共用同一公式，
+        // 谁改了另一条必须同步（否则底色蒙版与符号疏密会各画各的）。
+        let n = 24;
+        let biomes: Vec<u8> = (0..n * n)
+            .map(|i| match i % 5 {
+                0 => crate::biome::BIOME_TROPICAL_RAINFOREST,
+                1 => crate::biome::BIOME_FOREST,
+                2 => crate::biome::BIOME_GRASSLAND,
+                3 => crate::biome::BIOME_DESERT,
+                _ => crate::biome::BIOME_SWAMP,
+            })
+            .collect();
+        let heights: Vec<i16> = (0..n * n).map(|i| (i as i16 % 3000) - 200).collect();
+        let field = generate_forest_density_from_biome(n, n, &biomes, &heights, 33);
+        let noise = Perlin::new(33);
+        for y in 0..n {
+            for x in 0..n {
+                let i = y * n + x;
+                let cell = forest_density_cell(&noise, biomes[i], heights[i], x, y);
+                assert_eq!(
+                    cell, field[i],
+                    "({x},{y}) 逐格值 {cell} 与整图场 {} 不符",
+                    field[i]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn per_cell_density_is_zero_for_non_forest_biome() {
+        let noise = Perlin::new(DENSITY_SEED);
+        let d = forest_density_cell(&noise, crate::biome::BIOME_DESERT, 100, 3, 4);
+        assert_eq!(d, 0.0, "荒漠格不应有森林密度，got {d}");
+    }
+
+    #[test]
+    fn per_cell_density_vanishes_above_tree_line() {
+        let noise = Perlin::new(DENSITY_SEED);
+        let d = forest_density_cell(&noise, crate::biome::BIOME_FOREST, 3000, 3, 4);
+        assert_eq!(d, 0.0, "林线以上应为 0，got {d}");
+    }
+
+    #[test]
+    fn density_seed_is_anchored() {
+        // 种子是**视觉恒定量**：改了它 → 同一张地形上的森林会整体换位置
+        // （观感回归）。锚点防手滑。
+        assert_eq!(DENSITY_SEED, 0x4653_5441, "密度种子被改动");
     }
 }
