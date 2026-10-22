@@ -33,6 +33,7 @@ use wv_render::buildings;
 use wv_render::camera;
 use wv_render::faction_overlays;
 use wv_render::feature_overlays;
+use wv_render::forest_canopy;
 use wv_render::layer_frame;
 use wv_render::map_frame;
 use wv_render::place_line;
@@ -217,6 +218,10 @@ pub fn run(config: AppConfig) {
     // 聚集噪声）给出，主题再乘 `forest_density_gain` 调制；按 terrain hash
     // 键控（地形没变就复用）。
     .init_resource::<terrain_decor::ForestDensityCache>()
+    // 地形森林的位图树冠层（§七 Sprite 形态，2026-10-22）：主题声明位图
+    // 森林形态时，本层按密度场撒手绘树；实体 / mesh / 材质 / 贴图句柄都
+    // 缓存在池里（跨帧复用，避免每帧重解码 PNG）。
+    .init_resource::<forest_canopy::ForestCanopyPool>()
     // 区域覆盖物解析索引 + 缺失标记运行时资源（ADR-0045）。
     .init_resource::<region_overlay::RegionOverlayIndex>()
     .init_resource::<region_overlay::MissingMarkerAssets>()
@@ -339,6 +344,9 @@ pub fn run(config: AppConfig) {
             // 排在势力层之后、地图外框之前（z 由各层常量决定，与顺序无关）。
             feature_overlays::sync_feature_overlays,
             terrain_decor::sync_terrain_decor,
+            // 位图树冠层（§七）：排在装饰之后——两者互斥（形态二选一），
+            // 但同帧内先算出装饰的森林桶、再决定树冠，避免同帧两种形态并存。
+            forest_canopy::sync_forest_canopy,
             // 地图外框 + 1/4 幅面参考网格（外框需地形尺寸）。
             map_frame::sync_map_frame,
         )

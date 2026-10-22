@@ -172,7 +172,10 @@ pub fn embedded_texture(key: &str) -> Option<&'static [u8]> {
 ///
 /// `is_srgb = true`：墨稿 / 彩色稿都是 sRGB 创作；`ImageSampler::Default`
 /// 走 `ImagePlugin` 的线性过滤，缩小图集符号时不出硬边。
-fn decode_texture(bytes: &[u8]) -> Option<Image> {
+///
+/// `pub(crate)`：`forest_canopy`（§七 位图树冠层）复用同一张内嵌资产表
+/// 与同一套解码口径——森林位图树与地界覆盖物共用一张树图集。
+pub(crate) fn decode_texture(bytes: &[u8]) -> Option<Image> {
     Image::from_buffer(
         bytes,
         ImageType::Extension("png"),

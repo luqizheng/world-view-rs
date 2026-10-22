@@ -186,7 +186,13 @@ fn splitmix64(state: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-fn hash01(x: i64, y: i64, seed: u64) -> f32 {
+/// 格点哈希 → `[0,1)`（落点抖动 / 变体选择 / 保留率判定的熵源）。
+///
+/// `pub(crate)`：`forest_canopy`（§七 位图树冠层）复用同一族哈希——
+///
+/// 两处若各写一份，森林底色与树冠的随机性会分家（视觉上「林是一片、
+/// 树是另一片」）。
+pub(crate) fn hash01(x: i64, y: i64, seed: u64) -> f32 {
     let h = splitmix64(
         (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
             ^ (y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
@@ -691,10 +697,15 @@ pub struct ForestDensityCache {
 
 /// 森林密度场的固定种子。
 ///
+/// **单一来源**：`wv_terrain::forest::DENSITY_SEED`（数据层持有）。
 /// 密度场是**视觉派生量**（森林疏密），不是世界事实，故用常量种子而非世界
 /// 种子：同一张地形在任何机器、任何次重开都得到同一片林。
-/// 接入世界种子的收敛点：把本常量换成 `projection.world` 的种子派生值。
-const FOREST_DENSITY_SEED: u64 = 0x4653_5441; // "FSTA"
+/// 接入世界种子的收敛点：把数据层那个常量换成 `projection.world` 的种子派生值。
+///
+/// 本模块只引用、不另立——森林底色蒙版（`cells.rs` 的 `ForestFloor`）与
+/// 装饰符号疏密共用同一片林，两处种子若不同步，地上会出现「底色一片林、
+/// 树长在别处」的错位。
+const FOREST_DENSITY_SEED: u64 = wv_terrain::forest::DENSITY_SEED;
 
 /// 森林桶的保留率 = 密度场 × 主题增益（裁剪到 `0..=1`）。
 ///
@@ -706,7 +717,13 @@ pub(crate) fn forest_keep_prob(density: f32, gain: f32) -> f32 {
 
 impl ForestDensityCache {
     /// 取当前地形的森林密度场（hash 不匹配则重算）。
-    fn get_or_compute(&mut self, data: &wv_core::terrain::TerrainData) -> std::sync::Arc<Vec<f32>> {
+    ///
+    /// `pub(crate)`：`forest_canopy`（§七 位图树冠层）复用同一片密度场——
+    /// 底色与树必须落在同一片林上（两处各算一片会「底色一片林、树长别处」）。
+    pub(crate) fn get_or_compute(
+        &mut self,
+        data: &wv_core::terrain::TerrainData,
+    ) -> std::sync::Arc<Vec<f32>> {
         let hash = crate::terrain_view::isoline_overlay::terrain_data_hash(data);
         let (w, h) = (data.width.max(1), data.height.max(1));
         if self.hash != hash || self.w != w || self.h != h {
@@ -963,6 +980,12 @@ pub fn sync_terrain_decor(
                     }
                 }
             };
+            // 形态二选一（§七 / ADR-0050）：主题声明了**位图树**形态 → 程序化
+            // 林冠点让位（同时画会得到「树上长树点」的脏画面）。
+            if kind == DecorKind::Forest && recipe.forest_symbol.is_some() {
+                cx += stride;
+                continue;
+            }
             let keep_prob = match kind {
                 // 森林桶（方案 1）：保留率 = 密度场 × 主题增益。
                 // 密度场已经含群系基础密度、林线衰减与聚集噪声，故此处
@@ -1145,7 +1168,7 @@ fn sync_decor_bucket(
 }
 
 /// 顶点指纹（FNV-1a over f32 bits）——可见集或符号尺寸变化即换 key。
-fn points_fingerprint(verts: &[[f32; 3]]) -> u64 {
+pub(crate) fn points_fingerprint(verts: &[[f32; 3]]) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for v in verts {
         for c in v {
@@ -1202,6 +1225,23 @@ mod tests {
     /// 测试用配方 = 日间水彩（ADR-0048 追记二：抽取前的渲染层硬编码值）。
     fn recipe() -> DecorRecipe {
         crate::theme::decor::WATERCOLOR
+    }
+
+    /// **程序化形态**主题（`forest_symbol: None`）——对照夹具。
+    ///
+    /// **为什么需要它**：内置水彩包在 §七 之后默认声明**位图**森林形态，
+    /// 程序化林冠点会让位——装饰层的系统级断言必须显式钉住「程序化形态」
+    /// 才测得到森林桶本身。
+    fn procedural_theme() -> &'static crate::theme::theme_pack::ThemePack {
+        static PACK: std::sync::OnceLock<crate::theme::theme_pack::ThemePack> =
+            std::sync::OnceLock::new();
+        PACK.get_or_init(|| crate::theme::theme_pack::ThemePack {
+            decor: crate::theme::decor::DecorRecipe {
+                forest_symbol: None,
+                ..crate::theme::decor::WATERCOLOR
+            },
+            ..*crate::theme::theme_pack::builtin::for_palette(Default::default())
+        })
     }
 
     #[test]
@@ -1443,11 +1483,10 @@ mod tests {
         assert_eq!(points_fingerprint(&a), points_fingerprint(&a));
     }
 
-    /// 系统级集成：Edit 档生成装饰桶 mesh（森林 64² 全林网格）、二帧资产稳定、
-    /// 拉到 Nation 档保留粗步距地貌团（ADR-0036 取代 ADR-0031 D2）、
-    /// 关掉 pass 才整组下线。
-    #[test]
-    fn decor_system_spawns_at_edit_keeps_nation_band_and_clears_when_disabled() {
+    /// 装饰系统的系统级夹具：64² 全林世界 + Edit 档视口 + 装饰 pass 开启。
+    ///
+    /// `theme` 决定**森林形态**（程序化 / 位图），两种形态的断言各用一个。
+    fn forest_decor_app(theme: &'static crate::theme::theme_pack::ThemePack) -> (World, Schedule) {
         use crate::layer_frame::LayerFrame;
         use crate::recipe::{PassId, PassPlan, RenderRecipe};
         use crate::state::DrillState;
@@ -1484,6 +1523,7 @@ mod tests {
             scale: 0.5, // Edit 档
             camera_center: Vec2::splat(n as f32 * 4.0 / 2.0),
             window_size: Vec2::new(1280.0, 800.0),
+            active_theme: theme,
             ..Default::default()
         });
         app.insert_resource(GridConfig {
@@ -1513,7 +1553,34 @@ mod tests {
 
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_terrain_decor);
+        (app, schedule)
+    }
 
+    /// 形态二选一（§七 / ADR-0050）：主题声明**位图树**形态 → 程序化森林桶
+    /// 让位给树冠层（同时画会得到「树上长树点」）。
+    #[test]
+    fn procedural_forest_bucket_yields_to_bitmap_form() {
+        let bitmap_theme = crate::theme::theme_pack::builtin::for_palette(Default::default());
+        assert!(
+            bitmap_theme.decor.forest_symbol.is_some(),
+            "内置水彩包应声明位图森林形态（否则本测试无意义）"
+        );
+        let (mut app, mut schedule) = forest_decor_app(bitmap_theme);
+        schedule.run(&mut app);
+        let meshes = app.resource::<Assets<Mesh>>().iter().count();
+        assert_eq!(
+            meshes, 0,
+            "位图形态下程序化森林桶应让位（got {meshes} 个 mesh）"
+        );
+    }
+
+    /// 系统级集成：Edit 档生成装饰桶 mesh（森林 64² 全林网格）、二帧资产稳定、
+    /// 拉到 Nation 档保留粗步距地貌团（ADR-0036 取代 ADR-0031 D2）、
+    /// 关掉 pass 才整组下线。
+    #[test]
+    fn decor_system_spawns_at_edit_keeps_nation_band_and_clears_when_disabled() {
+        use crate::recipe::PassPlan;
+        let (mut app, mut schedule) = forest_decor_app(procedural_theme());
         schedule.run(&mut app);
         let meshes = app.resource::<Assets<Mesh>>();
         let first = meshes.iter().count();

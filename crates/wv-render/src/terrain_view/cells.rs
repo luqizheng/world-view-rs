@@ -314,6 +314,87 @@ const LAND_GRAIN: f32 = 0.09;
 /// 的 `boxBlurWrap(3×S)` 同量级）。1 = 看不出，3 = 群系糊成一片。
 const BLEED_RADIUS: u32 = 2;
 
+// ---------------------------------------------------------------------------
+// 森林底色蒙版（设计文档 §九-1）
+// ---------------------------------------------------------------------------
+
+/// 森林底色蒙版的执行参数（主题给的色与强度 + 数据层给的密度口径）。
+///
+/// **为什么噪声实例住在渲染层**：密度场的聚集噪声是**逐格纯函数**
+/// （[`wv_terrain::forest::forest_density_cell`]），烘焙期按格求值即可——
+/// 不需要整图场，故增量 patch（改了 3 格不必重算整图）与行带并行
+/// （各行带独立算同一格）两条烘焙契约都成立。
+///
+/// 噪声实例在此**构造一次、整图复用**（`Perlin::new` 要洗一次置换表）。
+struct ForestFloor {
+    /// 聚集噪声实例（种子见 [`wv_terrain::forest::DENSITY_SEED`]）。
+    noise: wv_terrain::generate::Perlin,
+    /// 林下深绿（主题色板槽位 `PaletteColors::forest_floor`）。
+    color: Color,
+    /// 混色强度上限（主题装饰配方 `DecorRecipe::forest_base_strength`）。
+    strength: f32,
+    /// 起染阈值（密度场值，主题装饰配方 `DecorRecipe::forest_base_min_density`）。
+    min_density: f32,
+}
+
+impl ForestFloor {
+    /// 该格的林底混量（0..=1）。
+    ///
+    /// - 密度低于 [`Self::min_density`] → 0（不成片的稀树草原不染林底）；
+    /// - 否则 `强度 × 密度`：密度本身已含林线衰减与林间空地，
+    ///   故「密林深、林间浅」自动成立（设计文档 §九-1 / §九-2）。
+    fn mix_amount(&self, biome: u8, height_m: i16, x: u32, y: u32) -> f32 {
+        if self.strength <= 0.0 {
+            return 0.0;
+        }
+        let d = wv_terrain::forest::forest_density_cell(
+            &self.noise,
+            biome,
+            height_m,
+            x as usize,
+            y as usize,
+        );
+        if d < self.min_density {
+            return 0.0;
+        }
+        (self.strength * d).clamp(0.0, 1.0)
+    }
+}
+
+/// 把基色向林下深绿混（§九-1）。
+///
+/// **为什么在 CPU 侧混而不是地形 Shader**：本仓库的着色管线是
+/// 「CPU 烘焙 RGBA → 按 chunk 上传」（`ColorMaterial`），全仓零 WGSL。
+/// 在烘焙链里混色 → chunk / mip / LOD / 增量 patch 全部自动继承；
+/// 另起一套 WGSL 则要把同一套表现（颗粒 / 揉边 / 淡化 / 浮雕）复刻一遍。
+fn mix_forest_floor(color: Color, floor: Color, k: f32) -> Color {
+    if k <= 0.0 {
+        return color;
+    }
+    let (Color::Srgba(c), Color::Srgba(f)) = (color, floor) else {
+        return color;
+    };
+    Color::srgb(
+        c.red + (f.red - c.red) * k,
+        c.green + (f.green - c.green) * k,
+        c.blue + (f.blue - c.blue) * k,
+    )
+}
+
+/// 该格的林底混量（`None` = 不染：水格 / 缺格）。
+fn forest_floor_mix(f: &ForestFloor, data: &TerrainData, cx: u32, cy: u32) -> Option<f32> {
+    let cell = data
+        .cells
+        .get((cy as usize) * data.width as usize + cx as usize)?;
+    // 水格不染：密度场按**群系**给值，水面群系本就是 0；但「林地上的水」
+    // （作者刷的水域仍带森林群系）必须排除，否则水下会染出一片深绿。
+    if wv_terrain::edit::is_water_cell(to_cell(cell)) {
+        return None;
+    }
+    let k = f.mix_amount(cell.biome, cell.height, cx, cy);
+    (k > 0.0).then_some(k)
+}
+
 /// 一格的**基色**（ADR-0044 D1）：shader 色 + 水深渐变 + 雪双调——
 /// 即旧「内部格直铺」在颗粒 / 淡化 / 浮雕**之前**的那一步。抽成纯函数是
 /// 为了让 [`CellRenderer::blended_base`]（5×5 模糊）与内部格直铺共用
@@ -331,6 +412,7 @@ fn base_color_of(
     mode: ViewMode,
     shore: Option<&[u16]>,
     sea: &SeaRecipe,
+    forest: Option<&ForestFloor>,
 ) -> Color {
     let cell = &data.cells[(cy as usize) * data.width as usize + cx as usize];
     let mut color = shade_for_mode(mode)(data, kind, pal);
@@ -359,6 +441,15 @@ fn base_color_of(
                     );
                 }
             }
+        }
+    }
+    // 森林底色蒙版（§九-1）：成片林向林下深绿混，混量随密度
+    // （密林深、林间浅）。放在**基色**这一步——模糊（bleed）的输入 =
+    // 直铺的输出，两条路径经同一函数取色永不漂移；林缘因此随水彩晕开
+    // 一起柔化，而不是一格一格硬切。
+    if let Some(f) = forest {
+        if let Some(k) = forest_floor_mix(f, data, cx, cy) {
+            color = mix_forest_floor(color, f.color, k);
         }
     }
     color
@@ -410,6 +501,7 @@ fn blended_base(
     mode: ViewMode,
     shore: Option<&[u16]>,
     sea: &SeaRecipe,
+    forest: Option<&ForestFloor>,
 ) -> Color {
     let w = data.width;
     let h = data.height;
@@ -428,7 +520,8 @@ fn blended_base(
     for y in y0..=y1 {
         for x in x0..=x1 {
             let kind = display_slot(&data.cells[(y * w + x) as usize]);
-            let Color::Srgba(c) = base_color_of(data, kind, x, y, pal, treatment, mode, shore, sea)
+            let Color::Srgba(c) =
+                base_color_of(data, kind, x, y, pal, treatment, mode, shore, sea, forest)
             else {
                 continue;
             };
@@ -594,6 +687,9 @@ struct CellRenderer<'a> {
     /// / `patch_terrain_image`）**整场算一次**后共享给各带 renderer
     /// （行带并行契约：场与带数无关，任意切分逐字节一致）。
     shore: Option<&'a [u16]>,
+    /// 森林底色蒙版参数（§九-1）。`None` = 本模式 / 本主题不参与
+    /// （瓦片图集与语义视图不吃林底；主题强度为 0 也不参与）。
+    forest_floor: Option<ForestFloor>,
 }
 
 impl<'a> CellRenderer<'a> {
@@ -643,6 +739,22 @@ impl<'a> CellRenderer<'a> {
         } else {
             None
         };
+        // 森林底色蒙版（§九-1）：只在**平涂语法**两模式生效——
+        // VectorFlat / Schematic 的格色是纯色平涂，混林底才有意义；
+        // 瓦片图集模式（RealTerrain / Event / Coastline / Topographic /
+        // GoogleMap）的格色另有来源（瓦片 / 语义三色 / 语义四色），
+        // 叠林底只会污染它们各自的契约。
+        let forest_floor = match mode {
+            ViewMode::VectorFlat | ViewMode::Schematic if pack.decor.forest_base_strength > 0.0 => {
+                Some(ForestFloor {
+                    noise: wv_terrain::generate::Perlin::new(wv_terrain::forest::DENSITY_SEED),
+                    color: pack.palette.forest_floor,
+                    strength: pack.decor.forest_base_strength,
+                    min_density: pack.decor.forest_base_min_density,
+                })
+            }
+            _ => None,
+        };
         Self {
             data,
             w,
@@ -687,6 +799,7 @@ impl<'a> CellRenderer<'a> {
             topographic,
             shore,
             sea: pack.sea,
+            forest_floor,
             water_detail_enabled: !matches!(
                 mode,
                 ViewMode::GoogleMap | ViewMode::Topographic | ViewMode::Coastline | ViewMode::Event
@@ -843,6 +956,20 @@ impl<'a> CellRenderer<'a> {
         out
     }
 
+    /// 森林底色混色（§九-1）：把格基色向林下深绿混（未启用时原样返回）。
+    ///
+    /// **只在非晕开路径调用**：晕开路径的林底混色在 [`base_color_of`] 内
+    /// 完成（模糊的输入 = 直铺的输出，两条路径永不漂移）。
+    fn apply_forest_floor(&self, color: Color, cx: u32, cy: u32) -> Color {
+        let Some(f) = self.forest_floor.as_ref() else {
+            return color;
+        };
+        let Some(k) = forest_floor_mix(f, self.data, cx, cy) else {
+            return color;
+        };
+        mix_forest_floor(color, f.color, k)
+    }
+
     /// 高度明度系数（仅 `RealTerrain` 非 1）。
     fn height_mul(&self, height: i16) -> f32 {
         if self.mode != ViewMode::RealTerrain {
@@ -972,9 +1099,13 @@ impl<'a> CellRenderer<'a> {
                 self.mode,
                 self.shore,
                 &self.sea,
+                self.forest_floor.as_ref(),
             )
         } else {
-            (self.shader)(self.data, kind, self.palette)
+            // 非晕开路径：格色未经 5×5 模糊，林底在此**逐格**混入
+            // （混量口径与晕开路径同源：都取自该格自身的密度）。
+            let base = (self.shader)(self.data, kind, self.palette);
+            self.apply_forest_floor(base, cx, cy)
         };
         let Color::Srgba(c) = c else {
             return;
@@ -1261,9 +1392,12 @@ impl<'a> CellRenderer<'a> {
                     self.mode,
                     self.shore,
                     &self.sea,
+                    self.forest_floor.as_ref(),
                 )
             } else {
-                (self.shader)(self.data, kind, self.palette)
+                // 非晕开路径：林底逐格混入（与采样路径同口径）。
+                let base = (self.shader)(self.data, kind, self.palette);
+                self.apply_forest_floor(base, cx, gy)
             };
             // 水域按高度渐变（手绘地图 #1）：kind 0/1 的内部格从单色水变
             // height 调度的水彩带；轮廓图模式不进这里。
@@ -2875,5 +3009,172 @@ mod tests {
         );
         // 与普通水色（kind=0/1 蓝 > 绿）区分：ice 三个通道都近 1.0，
         // 蓝/绿差异极小（即"白"）；水色则绿/红明显小于蓝。
+    }
+
+    // -----------------------------------------------------------------------
+    // 森林底色蒙版（设计文档 §九-1，2026-10-22）
+    // -----------------------------------------------------------------------
+
+    /// 林底夹具：3×3 单色格（`biome` + `height` 决定整幅）。
+    fn forest_fixture(biome: u8, height: i16) -> TerrainData {
+        TerrainData {
+            width: 3,
+            height: 3,
+            cells: vec![
+                wv_core::terrain::TerrainCellData {
+                    height,
+                    surface: if height < 0 { 0 } else { 1 },
+                    biome,
+                };
+                9
+            ],
+        }
+    }
+
+    /// 林底配方夹具：**只留林底一项**，其余装饰全关——
+    /// 关水彩晕开（否则 5×5 模糊把邻域混进来，测的就不是本格的混量）、
+    /// 关陆格颗粒（否则本格色被 ±4.5% 抖动，混量无法逐位断言）。
+    fn forest_pack(strength: f32, min_density: f32) -> crate::theme::theme_pack::ThemePack {
+        crate::theme::theme_pack::ThemePack {
+            treatment: crate::theme::theme_pack::TreatmentFlags {
+                watercolor_bleed: false,
+                land_grain: false,
+                ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+            },
+            decor: crate::theme::decor::DecorRecipe {
+                forest_base_strength: strength,
+                forest_base_min_density: min_density,
+                ..crate::theme::decor::WATERCOLOR
+            },
+            ..*crate::theme::theme_pack::builtin::for_palette(Default::default())
+        }
+    }
+
+    /// 林底混色后的期望色（格色 → 林下深绿，混量 = 强度 × 密度）。
+    fn forest_expected(
+        pack: &crate::theme::theme_pack::ThemePack,
+        biome: u8,
+        height: i16,
+    ) -> Color {
+        let noise = wv_terrain::generate::Perlin::new(wv_terrain::forest::DENSITY_SEED);
+        let d = wv_terrain::forest::forest_density_cell(&noise, biome, height, 1, 1);
+        let k = (pack.decor.forest_base_strength * d).clamp(0.0, 1.0);
+        let Color::Srgba(base) =
+            pack.palette
+                .core_terrain(wv_terrain::biome::display_kind(&wv_terrain::TerrainCell {
+                    height,
+                    surface: if height < 0 { 0 } else { 1 },
+                    biome,
+                }))
+        else {
+            panic!("色板槽位应为 Srgba")
+        };
+        let Color::Srgba(floor) = pack.palette.forest_floor else {
+            panic!("林底色应为 Srgba")
+        };
+        Color::srgb(
+            base.red + (floor.red - base.red) * k,
+            base.green + (floor.green - base.green) * k,
+            base.blue + (floor.blue - base.blue) * k,
+        )
+    }
+
+    /// 林底混色：成片林的格色按「强度 × 密度」压向林下深绿。
+    #[test]
+    fn forest_floor_tint_mixes_toward_floor_color() {
+        let data = forest_fixture(wv_terrain::biome::BIOME_FOREST, 100);
+        let pack = forest_pack(0.55, 0.40);
+        let img = image_from_terrain(&data, ViewMode::VectorFlat, None, false, &pack, 0.0);
+        // 3×3 格、res = 8 → 图像 24×24；中心格 (1,1) 覆盖像素 [8,16)。
+        let want = forest_expected(&pack, wv_terrain::biome::BIOME_FOREST, 100);
+        let Color::Srgba(want) = want else {
+            panic!("应为 Srgba")
+        };
+        assert!(
+            pixel_near(&img, 12, 12, want),
+            "林格应混向林下深绿：期望 {want:?}，实得 {:?}",
+            px(&img, 12, 12)
+        );
+    }
+
+    /// 阈值以下的密度**不染**林底：草原格（密度 ≤ 0.22 < 0.40）保持本色。
+    #[test]
+    fn forest_floor_tint_skips_cells_below_min_density() {
+        let data = forest_fixture(wv_terrain::biome::BIOME_GRASSLAND, 100);
+        let pack = forest_pack(0.55, 0.40);
+        let img = image_from_terrain(&data, ViewMode::VectorFlat, None, false, &pack, 0.0);
+        let Color::Srgba(grass) = pack.palette.core_terrain(3) else {
+            panic!("应为 Srgba")
+        };
+        assert!(
+            pixel_near(&img, 12, 12, grass),
+            "草原格不应染林底：期望 {grass:?}，实得 {:?}",
+            px(&img, 12, 12)
+        );
+    }
+
+    /// 水格不染林底：森林群系的水域（作者刷的水仍带森林群系）不得染绿。
+    #[test]
+    fn forest_floor_tint_skips_water_cells() {
+        let data = forest_fixture(wv_terrain::biome::BIOME_FOREST, -200);
+        let pack = forest_pack(0.55, 0.40);
+        let img = image_from_terrain(&data, ViewMode::VectorFlat, None, false, &pack, 0.0);
+        let off = forest_pack(0.0, 0.40);
+        let img_off = image_from_terrain(&data, ViewMode::VectorFlat, None, false, &off, 0.0);
+        assert_eq!(
+            px(&img, 12, 12),
+            px(&img_off, 12, 12),
+            "水下林格应与强度 0 的渲染逐位一致，实得 {:?} vs {:?}",
+            px(&img, 12, 12),
+            px(&img_off, 12, 12)
+        );
+    }
+
+    /// 强度为 0 = 林底关闭：渲染与关闭前逐位一致（零回归）。
+    #[test]
+    fn forest_floor_tint_is_disabled_by_zero_strength() {
+        let data = forest_fixture(wv_terrain::biome::BIOME_FOREST, 100);
+        let pack = forest_pack(0.0, 0.40);
+        let img = image_from_terrain(&data, ViewMode::VectorFlat, None, false, &pack, 0.0);
+        let Color::Srgba(forest) = pack.palette.core_terrain(4) else {
+            panic!("应为 Srgba")
+        };
+        assert!(
+            pixel_near(&img, 12, 12, forest),
+            "强度 0 时应保持林色原样：期望 {forest:?}，实得 {:?}",
+            px(&img, 12, 12)
+        );
+    }
+
+    /// 密度分级生效：热带雨林（密度 0.95）比普通林（0.85）更深——
+    /// 「密林深、林间浅」是 §九-1 的核心诉求。
+    #[test]
+    fn forest_floor_tint_makes_denser_biome_darker() {
+        let pack = forest_pack(0.55, 0.40);
+        let rain = image_from_terrain(
+            &forest_fixture(wv_terrain::biome::BIOME_TROPICAL_RAINFOREST, 100),
+            ViewMode::VectorFlat,
+            None,
+            false,
+            &pack,
+            0.0,
+        );
+        let forest = image_from_terrain(
+            &forest_fixture(wv_terrain::biome::BIOME_FOREST, 100),
+            ViewMode::VectorFlat,
+            None,
+            false,
+            &pack,
+            0.0,
+        );
+        let a = px(&rain, 12, 12);
+        let b = px(&forest, 12, 12);
+        let lum = |c: [u8; 3]| (c[0] as f32 + c[1] as f32 + c[2] as f32) / 3.0;
+        assert!(
+            lum(a) < lum(b),
+            "雨林应比普通林更深：雨林 {a:?}（亮度 {}）vs 林 {b:?}（亮度 {}）",
+            lum(a),
+            lum(b)
+        );
     }
 }
