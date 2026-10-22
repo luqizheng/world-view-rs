@@ -205,6 +205,12 @@ pub fn sync_forest_canopy(
     let half = view.window_size * view.scale * 0.5 + Vec2::splat(VIEWPORT_MARGIN_PX * view.scale);
     let rect_min = view.camera_center - half;
     let rect_max = view.camera_center + half;
+    // **整图可见门控**：一屏基本看完整张图时不贴树（绝对缩放值做不到——
+    // 同一 scale 在大陆图与小岛图上看到的范围完全不同，实测踩过）。
+    if grid.whole_map_visible(rect_max - rect_min) {
+        pool.clear(&mut commands);
+        return;
+    }
 
     let origin = grid.raster_origin;
     let cell = grid.cell_size;
@@ -744,6 +750,20 @@ mod tests {
         assert!(
             app.resource::<ForestCanopyPool>().entity.is_some(),
             "Region 档应有单株"
+        );
+    }
+
+    /// **整图可见门控**：一屏能看完整张图时，树是「贴纸」——不画。
+    ///
+    /// 夹具把图幅缩到 800：Edit 档视口（640×400 wu）已 ≥ 图幅 60% ⇒ 整图可见。
+    #[test]
+    fn trees_hidden_when_the_whole_map_is_visible() {
+        let (mut app, mut schedule) = app_with(BIOME_FOREST, true);
+        app.resource_mut::<GridConfig>().map_size = Vec2::splat(800.0);
+        schedule.run(&mut app);
+        assert!(
+            app.resource::<ForestCanopyPool>().entity.is_none(),
+            "整图可见时不该贴树"
         );
     }
 

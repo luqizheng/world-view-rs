@@ -263,6 +263,12 @@ pub fn sync_forest_mass(
     let half = view.window_size * view.scale * 0.5 + Vec2::splat(VIEWPORT_MARGIN_PX * view.scale);
     let rect_min = view.camera_center - half;
     let rect_max = view.camera_center + half;
+    // **整图可见门控**（同 forest_canopy，ADR-0052 追记四）。
+    if grid.whole_map_visible(rect_max - rect_min) {
+        pool.fill.clear(&mut commands);
+        pool.patch.clear(&mut commands);
+        return;
+    }
 
     let origin = grid.raster_origin;
     let cell = grid.cell_size;
@@ -589,6 +595,18 @@ mod tests {
             app.resource::<ForestMassPool>().patch.entity.is_some(),
             "Region 档应有树簇"
         );
+    }
+
+    /// **整图可见门控**：一屏能看完整张图时，树簇是「贴纸」——不画
+    /// （夹具把图幅缩到 800，Edit 档视口已 ≥ 图幅 60%）。
+    #[test]
+    fn clusters_hidden_when_the_whole_map_is_visible() {
+        let (mut app, mut schedule) = mass_app(BIOME_DESERT);
+        app.resource_mut::<GridConfig>().map_size = Vec2::splat(800.0);
+        schedule.run(&mut app);
+        let pool = app.resource::<ForestMassPool>();
+        assert!(pool.patch.entity.is_none(), "整图可见时不该贴树簇");
+        assert!(pool.fill.entity.is_none(), "整图可见时也不该铺填充");
     }
 
     /// 默认配方（树簇堆叠成片、不铺底纹）→ 只有树簇层，没有填充层。

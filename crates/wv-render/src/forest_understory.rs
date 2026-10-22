@@ -113,6 +113,11 @@ pub fn sync_forest_understory(
     let half = view.window_size * view.scale * 0.5 + Vec2::splat(VIEWPORT_MARGIN_PX * view.scale);
     let rect_min = view.camera_center - half;
     let rect_max = view.camera_center + half;
+    // **整图可见门控**（同 forest_canopy，ADR-0052 追记四）。
+    if grid.whole_map_visible(rect_max - rect_min) {
+        pool.layer.clear(&mut commands);
+        return;
+    }
 
     let origin = grid.raster_origin;
     let cell = grid.cell_size;
@@ -361,6 +366,16 @@ mod tests {
         let (mut app, mut schedule) = app_with(0.5, false);
         schedule.run(&mut app);
         assert_eq!(quad_count(&app), 0, "无规格时不该画");
+    }
+
+    /// **整图可见门控**：一屏能看完整张图时，灌丛是「贴纸」——不画
+    /// （夹具把图幅缩到 800，Edit 档视口已 ≥ 图幅 60%）。
+    #[test]
+    fn understory_hidden_when_the_whole_map_is_visible() {
+        let (mut app, mut schedule) = app_with(0.5, true);
+        app.resource_mut::<GridConfig>().map_size = Vec2::splat(800.0);
+        schedule.run(&mut app);
+        assert_eq!(quad_count(&app), 0, "整图可见时不该铺灌丛");
     }
 
     /// 二帧稳定：不新增资产（原地改写纪律）。

@@ -1067,7 +1067,51 @@ pub struct GridConfig {
     pub map_size: Vec2,
 }
 
+/// 一屏看完整张图的判定线：视口跨度 ≥ 图幅的 60% 即视为「整图可见」。
+///
+/// **为什么是 60%**：更大 = 整张图（连边缘海）都在屏上，读者看的是
+/// 「一块大陆的轮廓」；更小 = 视口只圈住了图的一部分，读者看的是
+/// 「图上的一块地方」。树木贴图属后者。
+pub const WHOLE_MAP_VISIBLE_RATIO: f32 = 0.6;
+
+#[cfg(test)]
+mod whole_map_tests {
+    use super::*;
+
+    #[test]
+    fn whole_map_visible_uses_sixty_percent_of_extent() {
+        let grid = GridConfig {
+            cell_size: 4.0,
+            map_size: Vec2::new(1000.0, 800.0),
+            ..Default::default()
+        };
+        assert!(
+            !grid.whole_map_visible(Vec2::new(590.0, 400.0)),
+            "宽向 59% 还不算整图可见"
+        );
+        assert!(
+            grid.whole_map_visible(Vec2::new(610.0, 100.0)),
+            "宽向 61% 即整图可见"
+        );
+        assert!(
+            grid.whole_map_visible(Vec2::new(100.0, 490.0)),
+            "高向 61% 即整图可见"
+        );
+    }
+}
+
 impl GridConfig {
+    /// 视口（视图空间跨度）是否已能看完整张图。
+    ///
+    /// **给谁用**：森林符号 / 树簇 / 林下植被三层共用的档位门——
+    /// 整图可见时不贴树木贴图（那尺度由烘焙的林底色调承担，
+    /// ADR-0052 追记二/四）。绝对缩放值（`view.scale`）做不到这件事：
+    /// 同一个 scale 在「大陆图」与「小岛图」上看到的范围完全不同。
+    pub fn whole_map_visible(&self, span: Vec2) -> bool {
+        span.x >= self.map_size.x * WHOLE_MAP_VISIBLE_RATIO
+            || span.y >= self.map_size.y * WHOLE_MAP_VISIBLE_RATIO
+    }
+
     /// 本图局部坐标 → 视图空间。
     ///
     /// **本图局部内容（地点 / 街道 / 街道名 / 外框）一律走这里**——绕过去手写
