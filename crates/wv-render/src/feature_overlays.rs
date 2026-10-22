@@ -123,6 +123,29 @@ const EMBEDDED_TEXTURES: &[(&str, &[u8])] = &[
         "overlays/forest/forest_patch_gen.png",
         include_bytes!("../assets/overlays/forest/forest_patch_gen.png"),
     ),
+    // ── 2026-10-22 委托设计素材（`树木/` 套图，5 行 × 8 列）─────────────
+    // 行1 阔叶 8 + 行2 针叶 8 拼成单株图集；行3 密林树木 8 + 行4 森林树簇 8
+    // 拼成树簇图集；行5 灌木草丛 8 备用。暮色版由日间乘冷暗 tint 派生。
+    (
+        "overlays/forest/tree_atlas16.png",
+        include_bytes!("../assets/overlays/forest/tree_atlas16.png"),
+    ),
+    (
+        "overlays/forest/tree_atlas16_dusk.png",
+        include_bytes!("../assets/overlays/forest/tree_atlas16_dusk.png"),
+    ),
+    (
+        "overlays/forest/forest_cluster16.png",
+        include_bytes!("../assets/overlays/forest/forest_cluster16.png"),
+    ),
+    (
+        "overlays/forest/forest_cluster16_dusk.png",
+        include_bytes!("../assets/overlays/forest/forest_cluster16_dusk.png"),
+    ),
+    (
+        "overlays/forest/bush_atlas8.png",
+        include_bytes!("../assets/overlays/forest/bush_atlas8.png"),
+    ),
 ];
 
 /// 事实覆盖层的实体集合（每帧 despawn + spawn，不跨帧复用）。

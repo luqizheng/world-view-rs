@@ -63,7 +63,9 @@ const MAX_CANDIDATES: i64 = 40_000;
 /// 底边在 85% / 95% / 93%）。若把图集格底边直接压在落点上，树的树干底
 /// 会浮在落点上方约 15%——**树会「浮」在地面上**。故把图集格底边压到
 /// 落点下方 15%，让三个变体的树干底都落在落点附近（略埋入林底比浮空好）。
-const TREE_BASE_SINK: f32 = 0.15;
+/// 现在这套是**委托设计素材**（192×260 单株格），构图本身就是「底边贴地」，
+/// 着墨底边离格底 2–6%，故下沉量收到 3%。
+const TREE_BASE_SINK: f32 = 0.03;
 
 /// 一棵候选树：位置 / 边长 / 图集变体 / 顶点 tint。
 #[derive(Debug, Clone, Copy)]
@@ -345,8 +347,9 @@ pub fn sync_forest_canopy(
     let mut colors: Vec<[f32; 4]> = Vec::with_capacity(trees.len() * 4);
     let mut indices: Vec<u32> = Vec::with_capacity(trees.len() * 6);
     let cell_uv = 1.0 / variants as f32;
+    let aspect = spec.cell_aspect;
     for t in &trees {
-        let q = tree_quad_bounds(t.x, t.y, t.size);
+        let q = tree_quad_bounds(t.x, t.y, t.size, aspect);
         let u0 = t.variant as f32 * cell_uv;
         let u1 = u0 + cell_uv;
         let base = positions.len() as u32;
@@ -408,17 +411,20 @@ pub fn sync_forest_canopy(
 
 /// 树图集四边 → 世界坐标（左下 / 右下 / 右上 / 左上）。
 ///
-/// **底边下沉 `TREE_BASE_SINK`**：图集格里树干的实际底边在格高 ~85% 处，
-/// 若把格底边压在落点上，树会浮空 15%（见 [`TREE_BASE_SINK`]）。
-fn tree_quad_bounds(x: f32, y: f32, size: f32) -> [(f32, f32); 4] {
-    let half = size * 0.5;
+/// **底边下沉 `TREE_BASE_SINK`**：素材格里树干底边离格底 2–6%，
+/// 下沉 3% 让树根压在地面落点上（见 [`TREE_BASE_SINK`]）。
+///
+/// **宽度按格比**（`aspect` = 格宽 ÷ 格高）：委托设计的单株格是 192×260，
+/// 用正方形 quad 会把树横向拉扁——`size` 记的是**高度**。
+fn tree_quad_bounds(x: f32, y: f32, size: f32, aspect: f32) -> [(f32, f32); 4] {
+    let hw = size * 0.5 * aspect.max(0.05);
     let y_bottom = y - size * TREE_BASE_SINK;
     let y_top = y_bottom + size;
     [
-        (x - half, y_bottom),
-        (x + half, y_bottom),
-        (x + half, y_top),
-        (x - half, y_top),
+        (x - hw, y_bottom),
+        (x + hw, y_bottom),
+        (x + hw, y_top),
+        (x - hw, y_top),
     ]
 }
 
@@ -627,14 +633,14 @@ mod tests {
     #[test]
     fn tree_quad_sinks_base_so_trunk_lands_on_anchor() {
         let size = 10.0;
-        let q = tree_quad_bounds(3.0, 20.0, size);
+        let q = tree_quad_bounds(3.0, 20.0, size, 1.0);
         let bottom = q[0].1;
         let top = q[2].1;
         assert!((top - bottom - size).abs() < 1e-5, "格高应等于符号边长");
         assert!((q[0].1 - q[1].1).abs() < 1e-5, "底边两点应等高");
-        // 图集里树干底边在格高 ~85% 处（v = 0.85，v=0 在格顶）→
-        // 世界 y = 格顶 - 0.85 × 边长。
-        let trunk_base = top - 0.85 * size;
+        // 委托设计素材的树干底边在格高 ~97% 处（v=0 在格顶）→
+        // 世界 y = 格顶 - 0.97 × 边长 = 锚点（下沉量 3%）。
+        let trunk_base = top - 0.97 * size;
         assert!(
             (trunk_base - 20.0).abs() < 1e-4,
             "树干底边应落在锚点 20.0 附近，got {trunk_base}"

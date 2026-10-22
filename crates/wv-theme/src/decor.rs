@@ -94,6 +94,11 @@ pub struct ForestSymbolSpec {
     pub texture: &'static str,
     /// 图集变体数（横向格数）。
     pub variants: u32,
+    /// 图集单格**宽高比**（宽 ÷ 高）。
+    ///
+    /// **为什么需要**：委托设计的素材格不是正方形（单株 192×260），
+    /// 用正方形 quad 会把树拉扁。`size_px` 记的是**高度**，宽度 = 高度 × 本值。
+    pub cell_aspect: f32,
     /// 符号不透明度（0..=1）。
     pub alpha: f32,
     /// Edit 档参数（最近）。
@@ -115,6 +120,7 @@ impl ForestSymbolSpec {
     pub const fn new(
         texture: &'static str,
         variants: u32,
+        cell_aspect: f32,
         alpha: f32,
         band_edit: ForestSymbolBand,
         band_region: ForestSymbolBand,
@@ -126,6 +132,7 @@ impl ForestSymbolSpec {
         Self {
             texture,
             variants,
+            cell_aspect,
             alpha,
             band_edit,
             band_region,
@@ -280,8 +287,12 @@ pub struct DecorRecipe {
 /// - 单株层（`ForestSymbolSpec`）：**细节**读法（近景，落在团块之上）。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ForestMassSpec {
-    /// 填充贴图键（可平铺的俯视森林底纹）。
-    pub fill_texture: &'static str,
+    /// 填充贴图键（可平铺的俯视森林底纹）；`None` = **不铺底纹**。
+    ///
+    /// **为什么可以是 None**：委托设计的用法（素材说明图右侧示例）是
+    /// 「单株 + 树簇堆叠」——林地靠**树簇重叠**成片，不铺连续底纹。
+    /// 底纹仍保留为可选手段（大块密林需要压暗时再加）。
+    pub fill_texture: Option<&'static str>,
     /// 填充采样步距（屏幕像素）：步距越小越细，代价按平方增长。
     pub fill_step_px: f32,
     /// 填充贴图一次重复的屏幕像素（世界锚定：`tile_wu = tile_px × view.scale`）。
@@ -293,8 +304,18 @@ pub struct ForestMassSpec {
     /// 填充 tint（乘法）。
     pub fill_tint: [u8; 3],
     /// 边缘团块贴图键；`None` = 只铺填充、不盖边缘团块。
+    ///
+    /// **横向图集**：`patch_variants` 格并排，逐块按哈希选格（同地形同位置
+    /// 恒选同一格——重开工程不跳变）。
     pub patch_texture: Option<&'static str>,
-    /// 边缘团块边长（屏幕像素）。
+    /// 边缘团块图集**变体数**（横向格数）。`1` = 单张图。
+    ///
+    /// **为什么要变体**：单张团块在密集林区会明显重复（同一团反复出现）。
+    pub patch_variants: u32,
+    /// 边缘团块单格**宽高比**（宽 ÷ 高）：这批手绘格是 192×225，非正方形，
+    /// 用正方形 quad 会把树冠压扁。
+    pub patch_aspect: f32,
+    /// 边缘团块**高度**（屏幕像素）。
     pub patch_px: f32,
     /// 边缘团块不透明度。
     pub patch_alpha: f32,
@@ -306,13 +327,15 @@ impl ForestMassSpec {
     /// 构造（便于常量表书写）。
     #[allow(clippy::too_many_arguments)]
     pub const fn new(
-        fill_texture: &'static str,
+        fill_texture: Option<&'static str>,
         fill_step_px: f32,
         fill_tile_px: f32,
         fill_min_density: f32,
         fill_alpha: f32,
         fill_tint: [u8; 3],
         patch_texture: Option<&'static str>,
+        patch_variants: u32,
+        patch_aspect: f32,
         patch_px: f32,
         patch_alpha: f32,
         patch_tint: [u8; 3],
@@ -325,6 +348,8 @@ impl ForestMassSpec {
             fill_alpha,
             fill_tint,
             patch_texture,
+            patch_variants,
+            patch_aspect,
             patch_px,
             patch_alpha,
             patch_tint,
@@ -372,8 +397,9 @@ pub const WATERCOLOR: DecorRecipe = DecorRecipe {
     // 森林形态（§七 Sprite 形态，2026-10-22）：手绘位图树（3 变体横向图集）。
     // 给了规格 → 渲染层改画位图树并停掉程序化林冠点（形态二选一）。
     forest_symbol: Some(ForestSymbolSpec::new(
-        "overlays/forest/tree_atlas_day_gen.png",
-        3,
+        "overlays/forest/tree_atlas16.png",
+        16,
+        192.0 / 260.0,
         0.95,
         ForestSymbolBand {
             spacing_px: 34.0,
@@ -397,20 +423,24 @@ pub const WATERCOLOR: DecorRecipe = DecorRecipe {
         [228, 236, 222],
         [196, 208, 190],
     )),
-    // 森林团块（§七 第二尺度）：可平铺的俯视森林底纹铺满林地 + 边界盖团块。
-    // 步距 22px 意味着远景整屏约 70×45 块填充（一次合批，代价与视口面积成正比）；
-    // 贴图 320px 一次重复 —— 与单株树（30–36px）拉开尺度，才读得出「一片林子」。
+    // 森林树簇（§七 第二尺度）：**不铺底纹**，靠行 3「密林树木」+ 行 4
+    // 「森林树簇」16 变体在密度边界上重叠成片——这是素材说明图右侧示例的用法。
+    //
+    // 底纹（`fill_*`）仍保留为可选手段，但本主题关掉：示例地图里森林是
+    // 「一簇簇树冠叠出来」的，铺一层连续底纹反而糊成色块。
     forest_mass: Some(ForestMassSpec::new(
-        "overlays/forest/forest_fill_gen.png",
+        None,
         24.0,
         380.0,
         0.52,
         0.72,
         [236, 244, 232],
-        Some("overlays/forest/forest_patch_gen.png"),
-        104.0,
-        0.86,
-        [232, 240, 226],
+        Some("overlays/forest/forest_cluster16.png"),
+        16,
+        192.0 / 225.0,
+        118.0,
+        0.95,
+        [236, 242, 230],
     )),
 };
 
@@ -425,10 +455,11 @@ pub const WATERCOLOR_DUSK: DecorRecipe = DecorRecipe {
     size_mul_nation: 1.4,
     // 暗纸上的林底要比日间更沉一档：否则「密林深、林间浅」的分层被纸色吃掉。
     forest_base_strength: 0.62,
-    // 暮色用暮色图集（同一套生成素材的暗调版本），步距比日间略宽。
+    // 暮色用暮色图集（同一套委托设计素材的暗调版本），步距比日间略宽。
     forest_symbol: Some(ForestSymbolSpec::new(
-        "overlays/forest/tree_atlas_dusk_gen.png",
-        3,
+        "overlays/forest/tree_atlas16_dusk.png",
+        16,
+        192.0 / 260.0,
         0.92,
         ForestSymbolBand {
             spacing_px: 36.0,
@@ -447,18 +478,20 @@ pub const WATERCOLOR_DUSK: DecorRecipe = DecorRecipe {
         [210, 218, 206],
         [176, 188, 174],
     )),
-    // 暮色团块：同一套贴图，tint 压沉一档（暗纸上再铺一层亮绿会发灰）。
+    // 暮色树簇：同一套图集（暗调版），tint 压沉一档；同样不铺底纹。
     forest_mass: Some(ForestMassSpec::new(
-        "overlays/forest/forest_fill_gen.png",
+        None,
         24.0,
         380.0,
         0.52,
         0.68,
         [206, 214, 202],
-        Some("overlays/forest/forest_patch_gen.png"),
-        104.0,
-        0.84,
-        [200, 210, 196],
+        Some("overlays/forest/forest_cluster16_dusk.png"),
+        16,
+        192.0 / 225.0,
+        118.0,
+        0.93,
+        [204, 212, 200],
     )),
     ..WATERCOLOR
 };
@@ -549,10 +582,10 @@ mod tests {
             .forest_symbol
             .expect("日间水彩应声明位图森林形态");
         assert_eq!(
-            spec.texture, "overlays/forest/tree_atlas_day_gen.png",
+            spec.texture, "overlays/forest/tree_atlas16.png",
             "日间应指向日间树图集（2026-10-22 起用俯视生成版）"
         );
-        assert_eq!(spec.variants, 3, "树图集变体数");
+        assert_eq!(spec.variants, 16, "树图集变体数（行1 阔叶 8 + 行2 针叶 8）");
         assert!(
             spec.alpha > 0.0 && spec.alpha <= 1.0,
             "不透明度应在 (0,1]，got {}",
@@ -579,7 +612,7 @@ mod tests {
             .forest_symbol
             .expect("暮色应声明位图森林形态");
         assert_eq!(
-            dusk.texture, "overlays/forest/tree_atlas_dusk_gen.png",
+            dusk.texture, "overlays/forest/tree_atlas16_dusk.png",
             "暮色应指向暮色树图集"
         );
         assert_eq!(dusk.variants, spec.variants, "两套图集变体数应一致");
@@ -609,14 +642,20 @@ mod tests {
     #[test]
     fn watercolor_recipe_declares_forest_mass() {
         let m = WATERCOLOR.forest_mass.expect("日间水彩应声明森林团块");
-        assert_eq!(
-            m.fill_texture, "overlays/forest/forest_fill_gen.png",
-            "填充应指向可平铺森林底纹"
-        );
+        assert_eq!(m.fill_texture, None, "填充应指向可平铺森林底纹");
         assert_eq!(
             m.patch_texture,
-            Some("overlays/forest/forest_patch_gen.png"),
-            "边缘应指向团块贴图"
+            Some("overlays/forest/forest_cluster16.png"),
+            "边缘应指向团块图集（委托设计的 8 变体）"
+        );
+        assert_eq!(
+            m.patch_variants, 16,
+            "树簇图集应是 16 变体（行3 密林 + 行4 树簇）"
+        );
+        assert!(
+            (m.patch_aspect - 192.0 / 225.0).abs() < 1e-6,
+            "团块格宽高比应按 192x225 素材，got {}",
+            m.patch_aspect
         );
         assert!(
             m.fill_tile_px > m.fill_step_px * 4.0,
@@ -645,8 +684,11 @@ mod tests {
     fn dusk_forest_mass_is_darker_but_same_textures() {
         let day = WATERCOLOR.forest_mass.expect("日间应有团块");
         let dusk = WATERCOLOR_DUSK.forest_mass.expect("暮色应有团块");
-        assert_eq!(day.fill_texture, dusk.fill_texture, "填充贴图应同一张");
-        assert_eq!(day.patch_texture, dusk.patch_texture, "边缘贴图应同一张");
+        assert_eq!(day.fill_texture, dusk.fill_texture, "填充贴图开关应一致");
+        assert_eq!(
+            day.patch_variants, dusk.patch_variants,
+            "两套树簇图集变体数应一致"
+        );
         let lum = |c: [u8; 3]| (c[0] as u32 + c[1] as u32 + c[2] as u32) / 3;
         assert!(
             lum(dusk.fill_tint) < lum(day.fill_tint),

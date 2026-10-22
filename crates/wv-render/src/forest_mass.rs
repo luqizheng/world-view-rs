@@ -340,7 +340,8 @@ pub fn sync_forest_mass(
                 && patch_pos.len() / 4 < MAX_PATCHES
                 && hash01(gx_lat, gy_lat, 0x95) < 0.42
             {
-                // 团块：逐块抖动位置 / 大小 / 旋转（否则边界是一排等距同款）。
+                // 团块：逐块抖动位置 / 大小 / 旋转 / **图集变体**
+                // （否则边界是一排等距同款，密集林区还会明显重复同一团）。
                 let jx = (hash01(gx_lat, gy_lat, 0x91) - 0.5) * step_wu;
                 let jy = (hash01(gx_lat, gy_lat, 0x92) - 0.5) * step_wu;
                 let size =
@@ -349,37 +350,48 @@ pub fn sync_forest_mass(
                 let (s, c) = angle.sin_cos();
                 let cxp = wx + jx;
                 let cyp = wy + jy;
-                let h = size * 0.5;
+                // 非方格：`patch_aspect` = 格宽 ÷ 格高（192/225），否则树冠被压扁。
+                let hh = size * 0.5;
+                let hw = hh * spec.patch_aspect.max(0.05);
+                let variants = spec.patch_variants.max(1);
+                let cell = 1.0 / variants as f32;
+                let variant = ((hash01(gx_lat, gy_lat, 0x96) * variants as f32) as u32) % variants;
+                let u0 = variant as f32 * cell;
+                let u1 = u0 + cell;
                 let base = patch_pos.len() as u32;
-                for (ox, oy) in [(-h, -h), (h, -h), (h, h), (-h, h)] {
+                for (ox, oy) in [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)] {
                     // 四角绕块心旋转：贴图跟着转（UV 不转，整张精灵一起转）。
                     patch_pos.push([cxp + ox * c - oy * s, cyp + ox * s + oy * c, 0.0]);
                 }
-                patch_uv.push([0.0, 1.0]);
-                patch_uv.push([1.0, 1.0]);
-                patch_uv.push([1.0, 0.0]);
-                patch_uv.push([0.0, 0.0]);
+                patch_uv.push([u0, 1.0]);
+                patch_uv.push([u1, 1.0]);
+                patch_uv.push([u1, 0.0]);
+                patch_uv.push([u0, 0.0]);
                 patch_idx.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
             }
         }
     }
 
-    // ---- 填充层 ----------------------------------------------------------
-    let fill_texture =
-        pool.fill
-            .ensure_texture(&mut images, &mut commands, spec.fill_texture, "填充");
-    // `ensure_texture` 已把句柄写回池；这里只关心「有没有」。
-    let _ = fill_texture;
-    pool.fill.sync_geometry(
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        fill_pos,
-        fill_uv,
-        fill_idx,
-        Color::WHITE.with_alpha(spec.fill_alpha),
-        FILL_Z,
-    );
+    // ---- 填充层（可选）---------------------------------------------------
+    // 委托设计的用法是「树簇堆叠成片」，不铺连续底纹；底纹仍留作可选手段。
+    match spec.fill_texture {
+        Some(fill_key) => {
+            let _ = pool
+                .fill
+                .ensure_texture(&mut images, &mut commands, fill_key, "填充");
+            pool.fill.sync_geometry(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                fill_pos,
+                fill_uv,
+                fill_idx,
+                Color::WHITE.with_alpha(spec.fill_alpha),
+                FILL_Z,
+            );
+        }
+        None => pool.fill.clear(&mut commands),
+    }
 
     // ---- 边缘团块层 ------------------------------------------------------
     match spec.patch_texture {
@@ -443,6 +455,30 @@ mod tests {
                 ..crate::theme::decor::WATERCOLOR
             },
             ..*crate::theme::theme_pack::builtin::for_palette(Default::default())
+        })
+    }
+
+    /// 主题夹具：**显式打开底纹填充**（默认配方不铺底纹，见 ADR-0052 追记）。
+    ///
+    /// 底纹与树簇是两段独立开关：默认只用树簇堆叠成片；底纹留给
+    /// 「大块密林还要再压暗一层」的场合，故它的测试要自己把开关打开。
+    fn theme_with_fill() -> &'static crate::theme::theme_pack::ThemePack {
+        static PACK: std::sync::OnceLock<crate::theme::theme_pack::ThemePack> =
+            std::sync::OnceLock::new();
+        PACK.get_or_init(|| {
+            let base = crate::theme::decor::WATERCOLOR
+                .forest_mass
+                .expect("默认配方应有团块规格");
+            crate::theme::theme_pack::ThemePack {
+                decor: crate::theme::decor::DecorRecipe {
+                    forest_mass: Some(crate::theme::decor::ForestMassSpec {
+                        fill_texture: Some("overlays/forest/forest_fill_gen.png"),
+                        ..base
+                    }),
+                    ..crate::theme::decor::WATERCOLOR
+                },
+                ..*crate::theme::theme_pack::builtin::for_palette(Default::default())
+            }
         })
     }
 
@@ -516,10 +552,32 @@ mod tests {
             / 4
     }
 
-    /// 主题给了团块 → 森林上铺出填充块；荒漠侧不铺。
+    /// 把主题换成「显式打开底纹」的夹具（默认配方不铺底纹）。
+    fn use_fill_theme(app: &mut World) {
+        app.resource_mut::<ViewState>().active_theme = theme_with_fill();
+    }
+
+    /// 默认配方（树簇堆叠成片、不铺底纹）→ 只有树簇层，没有填充层。
+    #[test]
+    fn mass_default_has_clusters_but_no_fill() {
+        let (mut app, mut schedule) = mass_app(BIOME_DESERT);
+        schedule.run(&mut app);
+        let pool = app.resource::<ForestMassPool>();
+        assert!(
+            pool.patch.mesh.is_some(),
+            "默认配方应靠树簇堆叠成片（树簇层必须在）"
+        );
+        assert!(
+            pool.fill.mesh.is_none(),
+            "默认配方不铺底纹（`fill_texture: None`）"
+        );
+    }
+
+    /// 主题显式给底纹 → 森林侧铺出填充块。
     #[test]
     fn mass_fill_covers_forest_only() {
         let (mut app, mut schedule) = mass_app(BIOME_DESERT);
+        use_fill_theme(&mut app);
         schedule.run(&mut app);
         let mesh = app
             .resource::<ForestMassPool>()
@@ -552,6 +610,7 @@ mod tests {
     #[test]
     fn mass_patches_only_sit_on_the_boundary() {
         let (mut app, mut schedule) = mass_app(BIOME_DESERT);
+        use_fill_theme(&mut app);
         schedule.run(&mut app);
         let pool = app.resource::<ForestMassPool>();
         let fill = pool.fill.mesh.clone().expect("填充 mesh");
@@ -581,6 +640,7 @@ mod tests {
     fn mass_fill_positions_stay_pinned_when_the_camera_pans() {
         use bevy::render::mesh::VertexAttributeValues;
         let (mut app, mut schedule) = mass_app(BIOME_DESERT);
+        use_fill_theme(&mut app);
         schedule.run(&mut app);
         let before: Vec<[f32; 3]> = {
             let mesh = app.resource::<ForestMassPool>().fill.mesh.clone().unwrap();
