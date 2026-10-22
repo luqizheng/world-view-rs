@@ -3194,6 +3194,111 @@ impl EditCommand for UpdateRegionCommand {
 
 use wv_core::distance::Place;
 
+/// 改地点属性（名称 / 呈现级别 / 锚点）。
+///
+/// 统一 Inspector 的「属性」页签用它写回地点字段
+/// （[2026-10-22 统一 Inspector 设计](../../superpowers/specs/2026-10-22-unified-inspector-panel-design.md)）。
+///
+/// ## 锚点是**条件可写**的
+///
+/// `new_x` / `new_y` 为 `None` 表示「不改」——**不是**「写成 None」。
+/// 之所以要这个区分：`Place.x/y/w/h` 对**有地界环**的地点是**派生量**
+/// （`Place::fit_anchor_to_ring` 从环重算质心与包围盒，
+/// `UpdatePlaceTerritoryCommand` 与 `UpdatePlaceLineCommand` 都会触发重算）。
+/// 让 Inspector 直接改它们会造出「两个真相」——改了 x/y，下次重生成边界
+/// 又被环拟合覆盖。故表单层负责按「有无地界环」决定传不传值；
+/// 本命令只忠实执行「传了就写，不传就不动」。
+///
+/// ## 不含的字段
+///
+/// - `w` / `h`：范围是包围盒的推论，与锚点同源，由环拟合一并决定。
+/// - `biome`：群系的真值是「标记包络」（`PlaceBiomeMarkerCommand` 会改地形格），
+///   自由改会与地形格脱钩——它是那个命令唯一的写入口。
+///
+/// ## 回滚
+///
+/// `apply` 缓存旧 `Place` 全字段，`revert` 原样写回（与
+/// `UpdateRegionCommand` 同款：快照整实体，保证 apply 改了哪些字段、
+/// revert 就退哪些，不漏）。
+#[derive(Debug)]
+pub struct UpdatePlaceCommand {
+    /// 目标地点 ID。
+    pub id: wv_core::Id,
+    /// 新名称。
+    pub new_name: String,
+    /// 新呈现级别（`None` = 不改）。
+    pub new_rank: Option<u8>,
+    /// 新锚点 X（`None` = 不改）。
+    pub new_x: Option<f32>,
+    /// 新锚点 Y（`None` = 不改）。
+    pub new_y: Option<f32>,
+    before: std::sync::Mutex<Option<Place>>,
+}
+
+impl UpdatePlaceCommand {
+    pub fn new(
+        id: wv_core::Id,
+        new_name: String,
+        new_rank: Option<u8>,
+        new_x: Option<f32>,
+        new_y: Option<f32>,
+    ) -> Self {
+        Self {
+            id,
+            new_name,
+            new_rank,
+            new_x,
+            new_y,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for UpdatePlaceCommand {
+    fn label(&self) -> String {
+        format!("改地点「{}」", self.id)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let p = world
+            .distances
+            .places
+            .iter_mut()
+            .find(|p| p.id == self.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Place {}", self.id)))?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = Some(p.clone());
+        p.name = self.new_name.clone();
+        if let Some(rank) = self.new_rank {
+            p.rank = Some(rank);
+        }
+        if let Some(x) = self.new_x {
+            p.x = Some(x);
+        }
+        if let Some(y) = self.new_y {
+            p.y = Some(y);
+        }
+        Ok(vec!["distances/places".into()])
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let prev = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("UpdatePlace 尚未 apply".into()))?;
+        let p = world
+            .distances
+            .places
+            .iter_mut()
+            .find(|p| p.id == self.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Place {}", self.id)))?;
+        *p = prev;
+        Ok(())
+    }
+}
+
 /// 事实地点创建命令的脏路径：`Place` 本体与地界几何分属两个落盘目录。
 ///
 /// `distances/places` 是 §4.5「每实体一文件」的地点表（全量重写 + 删除传播），
@@ -5624,6 +5729,92 @@ mod tests {
         assert!(dirty.iter().all(|p| p.starts_with("regions")));
         assert!(!dirty.iter().any(|p| p.starts_with("maps/")));
         assert!(!dirty.iter().any(|p| p.starts_with("geometry/")));
+    }
+
+    // ====== 地点属性命令（统一 Inspector · 2026-10-22）======================
+
+    /// 地点夹具：锚点已就位，便于验证「锚点条件可写」。
+    fn sample_place(id: &str, name: &str) -> wv_core::distance::Place {
+        wv_core::distance::Place {
+            line: None,
+            id: Id::new_unchecked(id),
+            name: name.into(),
+            feature: None,
+            biome: Some(wv_terrain::biome::BIOME_HILLS),
+            envelope: None,
+            map: Some(Id::new_unchecked(TEST_MAP)),
+            x: Some(10.0),
+            y: Some(20.0),
+            w: Some(4.0),
+            h: Some(6.0),
+            rank: Some(1),
+        }
+    }
+
+    #[test]
+    fn update_place_changes_name_rank_anchor_then_reverts() {
+        let mut w = World::default();
+        w.distances.places.push(sample_place("p1", "旧名"));
+
+        let cmd = UpdatePlaceCommand::new(
+            Id::new_unchecked("p1"),
+            "新名".into(),
+            Some(3),
+            Some(99.0),
+            Some(88.0),
+        );
+        cmd.apply(&mut w).unwrap();
+        assert_eq!(w.distances.places[0].name, "新名");
+        assert_eq!(w.distances.places[0].rank, Some(3));
+        assert_eq!(w.distances.places[0].x, Some(99.0));
+        assert_eq!(w.distances.places[0].y, Some(88.0));
+
+        cmd.revert(&mut w).unwrap();
+        assert_eq!(w.distances.places[0].name, "旧名");
+        assert_eq!(w.distances.places[0].rank, Some(1));
+        assert_eq!(
+            w.distances.places[0].x,
+            Some(10.0),
+            "revert 应恢复原始锚点 X"
+        );
+        assert_eq!(w.distances.places[0].y, Some(20.0));
+    }
+
+    #[test]
+    fn update_place_keeps_anchor_when_xy_none() {
+        let mut w = World::default();
+        w.distances.places.push(sample_place("p1", "旧名"));
+
+        // new_x / new_y 为 None = 「不改」——**不是**「写成 None」。
+        let cmd =
+            UpdatePlaceCommand::new(Id::new_unchecked("p1"), "新名".into(), Some(2), None, None);
+        cmd.apply(&mut w).unwrap();
+        assert_eq!(
+            w.distances.places[0].x,
+            Some(10.0),
+            "new_x = None 时锚点 X 应保持原值，不得被清空"
+        );
+        assert_eq!(w.distances.places[0].y, Some(20.0));
+        assert_eq!(w.distances.places[0].name, "新名");
+        assert_eq!(w.distances.places[0].rank, Some(2));
+    }
+
+    #[test]
+    fn update_place_on_missing_id_fails() {
+        let mut w = World::default();
+        let cmd = UpdatePlaceCommand::new(Id::new_unchecked("ghost"), "X".into(), None, None, None);
+        assert!(cmd.apply(&mut w).is_err());
+    }
+
+    #[test]
+    fn update_place_dirty_path_is_places_prefix() {
+        let mut w = World::default();
+        w.distances.places.push(sample_place("p1", "旧名"));
+        let dirty =
+            UpdatePlaceCommand::new(Id::new_unchecked("p1"), "新名".into(), None, None, None)
+                .apply(&mut w)
+                .unwrap();
+        assert_eq!(dirty, vec!["distances/places".to_string()]);
     }
 
     // ====== 城市子图命令（ADR-0022 D2 / D5）========================
