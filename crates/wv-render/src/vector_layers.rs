@@ -593,33 +593,39 @@ pub fn sync_vector_layers(
         // 世界道路（ADR-0047 D4）：按当前视野档位取降序前缀切片——Nation 档
         // 只画城际干线（rank ≥ 3），Region 加区域级，Edit 全量。缩放不重算
         // 段列（缓存门 road_key 不含 scale），跨档只换 mesh（分档指纹）。
+        // 2026-10-22 内容矩阵：接 MODE_TABLE(Roads)——Topographic 下不画。
         let road_tier = lod_tier(view.scale);
         let road_segments = frame.road_slice_at(road_tier);
         let road_fingerprint = frame.road_fingerprint_at(road_tier);
-        sync_road_strokes(
-            &mut commands,
-            &mut meshes,
-            road_segments,
-            road_fingerprint,
-            view.scale,
-            casing.clone(),
-            GOOGLE_ROAD_CASING_PX,
-            ROAD_CASING_Z + road_z,
-            road_materials_changed,
-            &mut layer.road_casings,
-        );
-        sync_road_strokes(
-            &mut commands,
-            &mut meshes,
-            road_segments,
-            road_fingerprint,
-            view.scale,
-            fill.clone(),
-            GOOGLE_ROAD_FILL_PX,
-            ROAD_Z + road_z,
-            road_materials_changed,
-            &mut layer.roads,
-        );
+        if recipe.enabled(PassId::Roads) {
+            sync_road_strokes(
+                &mut commands,
+                &mut meshes,
+                road_segments,
+                road_fingerprint,
+                view.scale,
+                casing.clone(),
+                GOOGLE_ROAD_CASING_PX,
+                ROAD_CASING_Z + road_z,
+                road_materials_changed,
+                &mut layer.road_casings,
+            );
+            sync_road_strokes(
+                &mut commands,
+                &mut meshes,
+                road_segments,
+                road_fingerprint,
+                view.scale,
+                fill.clone(),
+                GOOGLE_ROAD_FILL_PX,
+                ROAD_Z + road_z,
+                road_materials_changed,
+                &mut layer.roads,
+            );
+        } else {
+            layer.road_casings.despawn(&mut commands);
+            layer.roads.despawn(&mut commands);
+        }
         // 橡皮筋预览：画线中的「上一落点 → 光标」（编辑器反馈，与 roads_visible
         // 无关——预览属于编辑会话，不属于图层可见性）。两端都是**视图空间**坐标
         // （光标来自 `view.cursor_world`，落点由 `streets` 存同一空间），
@@ -643,23 +649,32 @@ pub fn sync_vector_layers(
             road_materials_changed,
             &mut layer.street_preview,
         );
-        sync_street_layers(
-            &mut commands,
-            &mut meshes,
-            &grid,
-            &streets,
-            view.scale,
-            major_casing,
-            major_fill,
-            minor_casing,
-            minor_fill,
-            road_z,
-            street_materials_changed,
-            &mut layer,
-        );
+        // 2026-10-22 内容矩阵：接 MODE_TABLE(Streets)——Topographic 下不画。
+        if recipe.enabled(PassId::Streets) {
+            sync_street_layers(
+                &mut commands,
+                &mut meshes,
+                &grid,
+                &streets,
+                view.scale,
+                major_casing,
+                major_fill,
+                minor_casing,
+                minor_fill,
+                road_z,
+                street_materials_changed,
+                &mut layer,
+            );
+        } else {
+            layer.street_major.despawn(&mut commands);
+            layer.street_minor.despawn(&mut commands);
+            layer.street_major_casing.despawn(&mut commands);
+            layer.street_minor_casing.despawn(&mut commands);
+        }
     }
 
-    if !layers.place.visible {
+    // 2026-10-22 内容矩阵：接 MODE_TABLE(Poi)——Topographic 下不画。
+    if !layers.place.visible || !recipe.enabled(PassId::Poi) {
         layer.poi_ring_plain.despawn(&mut commands);
         layer.poi_ring_city.despawn(&mut commands);
         layer.poi_dot_plain.despawn(&mut commands);
@@ -1726,7 +1741,7 @@ mod tests {
         world.init_resource::<crate::streets::StreetLayerCache>();
         world.init_resource::<crate::streets::StreetEditorState>();
         world.init_resource::<crate::layer_frame::LayerFrame>();
-        world.init_resource::<crate::recipe::RenderRecipe>();
+        world.insert_resource(schematic_recipe());
 
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);
@@ -1744,6 +1759,159 @@ mod tests {
         assert_eq!(
             next_material_count, material_count,
             "第二帧 Material 资产应稳定：first={material_count} second={next_material_count}"
+        );
+    }
+
+    /// 门控（2026-10-22 内容矩阵 T4）：Topographic 下 Roads/Streets/Poi 三 pass
+    /// 全 false ⇒ 街网/道路/POI **不产任何 mesh**（含既有池被清）。
+    #[test]
+    fn topographic_recipe_builds_no_road_street_or_poi_meshes() {
+        use crate::recipe::resolve_render_recipe;
+        use crate::state::ViewMode;
+
+        let mut world = World::default();
+        world.insert_resource(Assets::<Mesh>::default());
+        world.insert_resource(Assets::<ColorMaterial>::default());
+        world.insert_resource(Assets::<Image>::default());
+        let mut view = ViewState::default();
+        view.mode = ViewMode::Topographic;
+        world.insert_resource(view);
+        world.insert_resource(GridConfig::default());
+        world.insert_resource(projection_frame_with_roads(
+            vec![(3, Vec2::ZERO, Vec2::X * 100.0)],
+            vec![PlaceDot {
+                pos: Vec2::new(20.0, 20.0),
+                is_city: true,
+                rank: 3,
+                name_len: 3,
+            }],
+        ));
+        world.insert_resource(crate::layer_frame::LayerFrame::default());
+        // 真实 recipe：按 Topographic 行解析（非全关 init_resource——那测不出
+        // 「接了线」还是「恰好没画」）。
+        let view = world.resource::<ViewState>().clone();
+        let layers = world.resource::<crate::layer_frame::LayerFrame>().clone();
+        let recipe = resolve_render_recipe(
+            &view,
+            &layers,
+            &crate::state::WorldProjection::default(),
+            &crate::state::DrillState::default(),
+            &crate::terrain_view::terrain_texture::TerrainTexture {
+                handle: bevy::asset::Handle::default(),
+                size: 4,
+                height: 4,
+                res: 1,
+                dirty: None,
+                chunks_dirty: None,
+                last_mode: None,
+                last_soften: false,
+                last_theme_id: "",
+                last_map: None,
+            },
+            None,
+        );
+        world.insert_resource(recipe);
+        // 街道缓存**有数据**——门控必须让它在 Topographic 下画不出来。
+        let mut cache = crate::streets::StreetLayerCache::default();
+        cache.sources = vec![(
+            "test".to_string(),
+            wv_core::StreetLayer {
+                segments: vec![wv_core::StreetSegment::straight(
+                    wv_core::source::street::RoadClass::Residential,
+                    0.0,
+                    0.0,
+                    50.0,
+                    50.0,
+                )],
+            },
+        )];
+        world.insert_resource(cache);
+        world.init_resource::<VectorLayerEntities>();
+        world.init_resource::<crate::streets::StreetEditorState>();
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(sync_vector_layers);
+        schedule.run(&mut world);
+
+        let mesh_count = world.resource::<Assets<Mesh>>().iter().count();
+        assert_eq!(
+            mesh_count, 0,
+            "Topographic 下道路/街网/POI 都不得产 mesh（内容层全隐藏）"
+        );
+    }
+
+    /// 对照组（防「全关假绿」）：同一夹具切 Schematic（三 pass 全 true）
+    /// ⇒ mesh 必须产出来。证明上一条的 0 是门控起效，不是夹具坏了。
+    #[test]
+    fn schematic_recipe_still_builds_road_street_and_poi_meshes() {
+        use crate::recipe::resolve_render_recipe;
+        use crate::state::ViewMode;
+
+        let mut world = World::default();
+        world.insert_resource(Assets::<Mesh>::default());
+        world.insert_resource(Assets::<ColorMaterial>::default());
+        world.insert_resource(Assets::<Image>::default());
+        let mut view = ViewState::default();
+        view.mode = ViewMode::Schematic;
+        world.insert_resource(view);
+        world.insert_resource(GridConfig::default());
+        world.insert_resource(projection_frame_with_roads(
+            vec![(3, Vec2::ZERO, Vec2::X * 100.0)],
+            vec![PlaceDot {
+                pos: Vec2::new(20.0, 20.0),
+                is_city: true,
+                rank: 3,
+                name_len: 3,
+            }],
+        ));
+        world.insert_resource(crate::layer_frame::LayerFrame::default());
+        let view = world.resource::<ViewState>().clone();
+        let layers = world.resource::<crate::layer_frame::LayerFrame>().clone();
+        let recipe = resolve_render_recipe(
+            &view,
+            &layers,
+            &crate::state::WorldProjection::default(),
+            &crate::state::DrillState::default(),
+            &crate::terrain_view::terrain_texture::TerrainTexture {
+                handle: bevy::asset::Handle::default(),
+                size: 4,
+                height: 4,
+                res: 1,
+                dirty: None,
+                chunks_dirty: None,
+                last_mode: None,
+                last_soften: false,
+                last_theme_id: "",
+                last_map: None,
+            },
+            None,
+        );
+        world.insert_resource(recipe);
+        let mut cache = crate::streets::StreetLayerCache::default();
+        cache.sources = vec![(
+            "test".to_string(),
+            wv_core::StreetLayer {
+                segments: vec![wv_core::StreetSegment::straight(
+                    wv_core::source::street::RoadClass::Residential,
+                    0.0,
+                    0.0,
+                    50.0,
+                    50.0,
+                )],
+            },
+        )];
+        world.insert_resource(cache);
+        world.init_resource::<VectorLayerEntities>();
+        world.init_resource::<crate::streets::StreetEditorState>();
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(sync_vector_layers);
+        schedule.run(&mut world);
+
+        let mesh_count = world.resource::<Assets<Mesh>>().iter().count();
+        assert!(
+            mesh_count > 0,
+            "Schematic 下道路/街网/POI 必须照画（对照组）"
         );
     }
 
@@ -1785,7 +1953,7 @@ mod tests {
         });
         world.init_resource::<crate::streets::StreetEditorState>();
         world.init_resource::<crate::layer_frame::LayerFrame>();
-        world.init_resource::<crate::recipe::RenderRecipe>();
+        world.insert_resource(schematic_recipe());
 
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);
@@ -1826,6 +1994,30 @@ mod tests {
     }
 
     /// 合批世界（A2 测试基建）：路网段列 + 全默认资源，跑一次 sync 前的最小装配。
+    /// 测试夹具专用：Schematic 行的 recipe（Roads/Streets/Poi 全开）——
+    /// 合批/档位/原点换算类测试的意图是「画法」，不是门控。
+    fn schematic_recipe() -> crate::recipe::RenderRecipe {
+        crate::recipe::resolve_render_recipe(
+            &ViewState::default(),
+            &crate::layer_frame::LayerFrame::default(),
+            &crate::state::WorldProjection::default(),
+            &crate::state::DrillState::default(),
+            &crate::terrain_view::terrain_texture::TerrainTexture {
+                handle: bevy::asset::Handle::default(),
+                size: 4,
+                height: 4,
+                res: 1,
+                dirty: None,
+                chunks_dirty: None,
+                last_mode: None,
+                last_soften: false,
+                last_theme_id: "",
+                last_map: None,
+            },
+            None,
+        )
+    }
+
     fn world_with_roads(segments: Vec<(Vec2, Vec2)>) -> World {
         let mut world = World::default();
         world.insert_resource(Assets::<Mesh>::default());
@@ -1841,7 +2033,10 @@ mod tests {
         world.init_resource::<crate::streets::StreetLayerCache>();
         world.init_resource::<crate::streets::StreetEditorState>();
         world.init_resource::<crate::layer_frame::LayerFrame>();
-        world.init_resource::<crate::recipe::RenderRecipe>();
+        // 2026-10-22 内容矩阵后 sync_vector_layers 消费 recipe——夹具按
+        // Schematic 行解析（Roads/Streets/Poi 全 true），保住「合批 / 档位」
+        // 类测试的意图；门控行为由本模块新加的两条专测覆盖。
+        world.insert_resource(schematic_recipe());
         world
     }
 
@@ -1919,7 +2114,7 @@ mod tests {
         world.init_resource::<crate::streets::StreetLayerCache>();
         world.init_resource::<crate::streets::StreetEditorState>();
         world.init_resource::<crate::layer_frame::LayerFrame>();
-        world.init_resource::<crate::recipe::RenderRecipe>();
+        world.insert_resource(schematic_recipe());
 
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);
