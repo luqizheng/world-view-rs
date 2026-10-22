@@ -153,7 +153,9 @@ pub fn place_form(
     notice: &mut crate::ui_shell::ShellNotice,
     time: &Time,
     playback: &crate::state::PlaybackState,
+    current_loc: &crate::i18n::CurrentLocale,
 ) {
+    use crate::i18n::{t_key, I18nKey};
     let id = place.id.clone();
     let anchor_editable = place_anchor_editable(place, has_territory);
 
@@ -174,7 +176,10 @@ pub fn place_form(
     // ── 呈现级别 ─────────────────────────────────────────────────────
     let mut rank_buf = place.rank.unwrap_or(1);
     ui.horizontal(|ui| {
-        ui.label("呈现级别：");
+        ui.label(format!(
+            "{}：",
+            t_key(current_loc, I18nKey::InspectorPlaceRank)
+        ));
         egui::ComboBox::from_id_salt("place_rank")
             .selected_text(format!("{rank_buf}"))
             .show_ui(ui, |ui| {
@@ -242,7 +247,7 @@ pub fn place_form(
     });
     if !anchor_editable {
         ui.label(
-            egui::RichText::new("锚点与范围由地界/折线派生，不可直接改")
+            egui::RichText::new(t_key(current_loc, I18nKey::InspectorAnchorDerived))
                 .small()
                 .color(shell.t3()),
         );
@@ -253,7 +258,10 @@ pub fn place_form(
         ui.label("群系：");
         value_box(ui, shell, &biome_name(place.biome), None, false);
     });
-    if ui.button("重生成标记").clicked() {
+    if ui
+        .button(t_key(current_loc, I18nKey::InspectorPlaceRegenMarker))
+        .clicked()
+    {
         match crate::edit::feature_place_actions::regenerate_marker_now(
             projection,
             edit,

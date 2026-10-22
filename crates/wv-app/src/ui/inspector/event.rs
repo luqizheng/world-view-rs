@@ -23,6 +23,7 @@ use bevy_egui::egui;
 
 use crate::edit::editing::EditHistory;
 use crate::edit::inspector_actions::{update_event_now, EventFieldPatch};
+use crate::i18n::{t_key, I18nKey};
 use crate::state::{ViewState, WorldProjection};
 use crate::theme::ui_tokens::space;
 use crate::ui::shell::UiShell;
@@ -40,6 +41,7 @@ pub fn event_form(
     projection: &mut WorldProjection,
     edit: &mut EditHistory,
     view: &ViewState,
+    current_loc: &crate::i18n::CurrentLocale,
 ) {
     // ── 名称 ────────────────────────────────────────────────────────
     let mut name_buf = event.name.clone();
@@ -56,7 +58,10 @@ pub fn event_form(
     let mut from_buf = event.span.from.to_string();
     let mut to_buf = event.span.to.map(|t| t.to_string()).unwrap_or_default();
     ui.horizontal(|ui| {
-        ui.label("时间跨度：");
+        ui.label(format!(
+            "{}：",
+            t_key(current_loc, I18nKey::InspectorEventSpan)
+        ));
         ui.add(egui::TextEdit::singleline(&mut from_buf).desired_width(90.0));
         ui.label("→");
         ui.add(egui::TextEdit::singleline(&mut to_buf).desired_width(90.0));
@@ -108,9 +113,13 @@ pub fn event_form(
     // ── 参与者 ──────────────────────────────────────────────────────
     ui.add_space(space::XS);
     ui.label(
-        egui::RichText::new(format!("参与者（{}）", event.participants.len()))
-            .small()
-            .color(shell.t2()),
+        egui::RichText::new(format!(
+            "{}（{}）",
+            t_key(current_loc, I18nKey::InspectorEventParticipants),
+            event.participants.len()
+        ))
+        .small()
+        .color(shell.t2()),
     );
     for p in &event.participants {
         ui.horizontal(|ui| {
@@ -136,7 +145,10 @@ pub fn event_form(
     // ── 叙述 / 结果 ─────────────────────────────────────────────────
     let mut narrative_buf = event.narrative.clone().unwrap_or_default();
     ui.add_space(space::XS);
-    ui.label("叙述（过程）：");
+    ui.label(format!(
+        "{}：",
+        t_key(current_loc, I18nKey::InspectorEventNarrative)
+    ));
     if ui
         .add(
             egui::TextEdit::multiline(&mut narrative_buf)
@@ -155,7 +167,10 @@ pub fn event_form(
     }
 
     let mut outcome_buf = event.outcome.clone().unwrap_or_default();
-    ui.label("结果：");
+    ui.label(format!(
+        "{}：",
+        t_key(current_loc, I18nKey::InspectorEventOutcome)
+    ));
     if ui
         .add(
             egui::TextEdit::multiline(&mut outcome_buf)

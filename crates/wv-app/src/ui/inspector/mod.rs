@@ -212,7 +212,14 @@ pub fn panel_inspector(
             // ── 页签条 ──────────────────────────────────────────────
             // 三页签共用**一个** egui 窗口（`float_window` 的 id 由
             // `Panel::Inspector` 决定），故切页签 = 换 body，不是开新窗口。
-            let labels = ["属性", "势力层", "事态"];
+            let labels = [
+                crate::i18n::t(current_loc.0, crate::i18n::I18nKey::InspectorTabProperties),
+                crate::i18n::t(
+                    current_loc.0,
+                    crate::i18n::I18nKey::InspectorTabFactionLayers,
+                ),
+                crate::i18n::t(current_loc.0, crate::i18n::I18nKey::InspectorTabSituations),
+            ];
             if let Some(idx) = crate::ui::widgets::tabs(
                 ui,
                 &shell,
@@ -281,8 +288,9 @@ fn render_properties(
     tex: &mut wv_render::terrain_view::TerrainTexture,
     notice: &mut crate::ui_shell::ShellNotice,
     time: &Time,
-    current_loc: crate::i18n::Locale,
+    loc: crate::i18n::Locale,
 ) {
+    use crate::i18n::{t_key, I18nKey};
     let form = resolve_form(selected, edit_cell.tool_active);
     match form {
         FormKind::None => {
@@ -292,19 +300,14 @@ fn render_properties(
             situation_cards(ui, shell, projection);
         }
         FormKind::UnsupportedSegment => {
-            ui.label("街道段暂无可编辑属性");
+            ui.label(t_key(
+                &CurrentLocale(loc),
+                I18nKey::InspectorSelectionMissing,
+            ));
         }
         FormKind::Cell => {
             cell::cell_form(
-                ui,
-                shell,
-                projection,
-                edit_cell,
-                edit,
-                selection,
-                tex,
-                current_loc,
-                cell_mode,
+                ui, shell, projection, edit_cell, edit, selection, tex, loc, cell_mode,
             );
         }
         FormKind::Place => {
@@ -314,7 +317,10 @@ fn render_properties(
                 return;
             };
             if !selection_alive(&projection.world, sel) {
-                render_empty(ui, shell);
+                ui.label(t_key(
+                    &CurrentLocale(loc),
+                    I18nKey::InspectorSelectionMissing,
+                ));
                 return;
             }
             render_selection_header(ui, shell, sel);
@@ -345,6 +351,7 @@ fn render_properties(
                 notice,
                 time,
                 playback,
+                &CurrentLocale(loc),
             );
         }
         FormKind::Region => {
@@ -383,7 +390,7 @@ fn render_properties(
                 view,
                 projection,
                 edit,
-                &CurrentLocale(current_loc),
+                &CurrentLocale(loc),
                 &overlay_keys,
                 grid.cell_size,
                 raster_to_map,
@@ -440,7 +447,15 @@ fn render_properties(
                 render_empty(ui, shell);
                 return;
             };
-            event::event_form(ui, shell, &event, projection, edit, view);
+            event::event_form(
+                ui,
+                shell,
+                &event,
+                projection,
+                edit,
+                view,
+                &CurrentLocale(loc),
+            );
         }
     }
 }

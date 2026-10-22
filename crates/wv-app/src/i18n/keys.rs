@@ -620,6 +620,37 @@ pub enum I18nKey {
     /// 「（无几何）」占位
     FactionPanelNoGeometry,
 
+    // ── 检视器面板（2026-10-22 统一 Inspector 追加）──────────────────
+    /// 页签：属性
+    InspectorTabProperties,
+    /// 页签：势力层
+    InspectorTabFactionLayers,
+    /// 页签：事态
+    InspectorTabSituations,
+    /// 选中实体已被删除（表单守卫提示）
+    InspectorSelectionMissing,
+    /// Place 锚点只读注记（由地界/折线派生）
+    InspectorAnchorDerived,
+    /// Place 表单：呈现级别
+    InspectorPlaceRank,
+    /// Place 表单：重生成标记按钮
+    InspectorPlaceRegenMarker,
+    /// Faction 表单：在势力图定位
+    InspectorFactionFocus,
+    /// Faction 表单：清除定位
+    InspectorFactionClearFocus,
+    /// Event 表单：时间跨度
+    InspectorEventSpan,
+    /// Event 表单：参与者
+    InspectorEventParticipants,
+    /// Event 表单：叙述（过程）
+    InspectorEventNarrative,
+    /// Event 表单：结果
+    InspectorEventOutcome,
+    /// 通用：删除（红字按钮复用）
+    InspectorCommonDelete,
+    /// 通用：移除
+    InspectorCommonRemove,
     // ── 检视器面板 ───────────────────────────────────────────────────
     /// 未选中对象空态标题
     InspectorEmptyTitle,
@@ -1131,7 +1162,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 441] = [
+    pub const ALL: [I18nKey; 456] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1406,7 +1437,22 @@ impl I18nKey {
         I18nKey::FactionPanelDeleteEntireBtn,
         I18nKey::FactionPanelPointCountSuffix,
         I18nKey::FactionPanelNoGeometry,
-        // 检视器（3）
+        // 检视器（3 + 统一 Inspector 追加 16）
+        I18nKey::InspectorTabProperties,
+        I18nKey::InspectorTabFactionLayers,
+        I18nKey::InspectorTabSituations,
+        I18nKey::InspectorSelectionMissing,
+        I18nKey::InspectorAnchorDerived,
+        I18nKey::InspectorPlaceRank,
+        I18nKey::InspectorPlaceRegenMarker,
+        I18nKey::InspectorFactionFocus,
+        I18nKey::InspectorFactionClearFocus,
+        I18nKey::InspectorEventSpan,
+        I18nKey::InspectorEventParticipants,
+        I18nKey::InspectorEventNarrative,
+        I18nKey::InspectorEventOutcome,
+        I18nKey::InspectorCommonDelete,
+        I18nKey::InspectorCommonRemove,
         I18nKey::InspectorEmptyTitle,
         I18nKey::InspectorEmptyHint,
         I18nKey::InspectorEmptyAction,
