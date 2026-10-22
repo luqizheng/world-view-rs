@@ -371,7 +371,8 @@ pub fn sync_missing_overlay_markers(
     layers: Res<LayerFrame>,
     mut assets: ResMut<MissingMarkerAssets>,
 ) {
-    let enabled = recipe.enabled(crate::recipe::PassId::TerrainDecor) && layers.terrain.visible;
+    // 2026-10-22 内容矩阵：区域层从 TerrainDecor 拆到独立 pass（ADR-0051）。
+    let enabled = recipe.enabled(crate::recipe::PassId::RegionLayers) && layers.terrain.visible;
     if !enabled || index.missing_shapes.is_empty() {
         for e in assets.entities.drain(..) {
             commands.entity(e).despawn();

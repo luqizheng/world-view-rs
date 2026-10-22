@@ -218,7 +218,9 @@ pub fn sync_region_outlines(
     input: Res<crate::region_outline::CandidateRegionInput>,
     mut pool: ResMut<RegionOutlinePool>,
 ) {
-    let enabled = recipe.enabled(PassId::TerrainDecor) && layers.terrain.visible;
+    // 2026-10-22 内容矩阵：区域层从 TerrainDecor 拆到独立 pass——Schematic
+    // 下装饰 ✓ 而区域 ✗，共享一格做不到（ADR-0051）。
+    let enabled = recipe.enabled(PassId::RegionLayers) && layers.terrain.visible;
     let Some(map_id) = drill.current().cloned() else {
         pool.despawn_all(&mut commands);
         return;

@@ -104,6 +104,14 @@ Update（MapRenderPlugin chain，plugins.rs）
 
 `resolve_render_recipe` 每帧 PreUpdate 求值一次，产出 20 条 `PassId` 通道的 enabled 真值：
 
+> **2026-10-22 追记（ADR-0051）**：通道数已增至 **25**（历次追加：Rivers / CellSelection /
+> FeatureOverlay / TerrainDecor / **RegionLayers** 等）。其中 **RegionLayers**（命名区域层：
+> 轮廓/底色/标签三件，region_outline / region_overlay / 区域标签池消费）自 TerrainDecor
+> 拆出——装饰是地貌演绎、区域是作者内容，Schematic 下「装饰 ✓ 而区域 ✗」必须两格独立；
+> Topographic 亦关（CellMap 的自然区显示走 `ViewState.nature_overlay` 旁路，不占本格）。
+> 另 SeaLabels 在 Topographic 行翻 true（海名属地貌呈现）、EventDots 在 Schematic 行翻
+> false（事件有时间性，编辑态隐藏）。
+
 1. **`MODE_TABLE` 查表**：7 个 `ViewMode`（VectorFlat / RealTerrain / Schematic / GoogleMap / Faction / Event / Coastline）× 20 通道的硬编码真值表——模式自带的观感集中于此（如 Isoline 仅 VectorFlat；GoogleMap/Coastline 关 Atmosphere/Veil/Grain/Buildings/Faction）。新增模式加一行，漏加被表测试抓住。
 2. **LayerFrame 级联叠加**：声明轴的可见性在模式之上再关一票——
    `terrain` 不可见 → Terrain/Isoline/GridLines/MapFrame/Atmosphere 全关；
