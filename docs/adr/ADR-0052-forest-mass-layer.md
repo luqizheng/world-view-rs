@@ -181,3 +181,35 @@ ADR-0031 D5 的程序化三角化表达不了；而「加一种形态 = 改主�
 
 **待裁更新**：无新增；原「LOD 切换」项**部分闭合**（已按档位门控，但
 「远景要不要画极简符号」仍可再议）。
+
+## 追记三（2026-10-22，晚三）：林下植被层（§七 第三尺度）
+
+**处境**：单株与树簇落地后，近景（Edit 档）的林地**地面是空的**——树与树之间
+只有平涂草色。委托素材行 5「灌木草丛」8 变体正是补这一层的。
+
+**决策（新增一层，不改前两层）**：
+
+1. **新层 `forest_understory`**（`wv_render::forest_understory`），
+   `DecorRecipe.forest_understory: Option<ForestUnderstorySpec>`；
+2. **只在 Edit 档出现**（`view.scale < LOD_REGION_SCALE`）——它是**最小尺度**
+   的一层，Region 档一屏看几座山，几像素的灌木只会变噪点；
+3. **摆放**：世界锚定采样格（平移不滑动）+ 只要**森林群系**且密度 ≥
+   `min_density`；保留率 `keep_prob` 为基准，**林缘 ×`edge_boost`（1.9）**
+   ——林心地面上有树冠遮荫，灌丛本来就稀；
+4. **Z = 0.0776**：树簇（0.0775）之上、单株树（0.078）之下——灌木挡团块底边
+   才有厚度，但永远压不住树；
+5. 复用团块层的 `LayerPool`（实体 / mesh / 材质 / 贴图 / 指纹缓存），
+   不重复实现一套资产纪律。
+
+**代价**：Edit 档多一两个 mesh（千级 quad，一次合批）；`bush_atlas8_dusk.png`
+派生入库（+0.2 MB）。
+
+**验证**：`understory_grows_in_forest_at_edit_band` / `understory_is_edit_band_only`
+（Region / Nation 都不画）/ `understory_is_inert_without_the_spec` /
+`understory_does_not_accumulate_assets_across_frames` /
+`understory_layout_is_deterministic`，加主题契约测试
+`watercolor_recipe_declares_understory`。
+
+**待裁更新**：委托素材（5 行 × 8 列）**至此全部接完**——单株 16 / 树簇 16 /
+灌木草丛 8。剩「树种按气候带分流」（行1 温带、行2 寒带）与「统一左上光源的
+投影」两项，都是打磨级。
