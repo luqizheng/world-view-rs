@@ -804,6 +804,32 @@ pub struct SelectionState {
 /// 交 `apply_pending_commands` 分发）——**全仓无人写入**，那条链是死代码，
 /// 已连同 [`EditCellPending`] 一并删除。活的写入路径是 Inspector 的 Cell
 /// 表单**直提** `EditCellCommand` / `BatchEditCellsCommand`。
+/// 群系分界线工具的会话态（2026-10-22 内容矩阵 §2.7 / ADR-0051）。
+///
+/// 线是**会话工具**，不落盘——真相仍是 cell.biome。工具激活时常驻（可反复
+/// 拖），切走工具即清。坐标 = **栅格局部 wu**（与 `swept_changes` 同空间）。
+#[derive(Resource, Debug, Default, Clone, PartialEq)]
+pub struct BiomeBoundaryState {
+    /// 工具是否激活（与 EditCellState.tool_active 同款）。
+    pub tool_active: bool,
+    /// 当前分界线；`None` = 未创建（在地图上拖出新线）。
+    pub line: Option<crate::biome_boundary::BoundaryLine>,
+    /// 拖动中：按下的起点（世界坐标）。`None` = 未在拖。
+    pub drag_from: Option<bevy::math::Vec2>,
+    /// 拖动中预览的当前线（松手用它算 swept_changes）。
+    pub drag_line: Option<crate::biome_boundary::BoundaryLine>,
+}
+
+impl BiomeBoundaryState {
+    /// 清空（切图 / 切工具）。
+    pub fn clear(&mut self) {
+        self.tool_active = false;
+        self.line = None;
+        self.drag_from = None;
+        self.drag_line = None;
+    }
+}
+
 #[derive(Resource, Debug, Default, Clone, PartialEq)]
 pub struct EditCellState {
     /// EditCell 工具是否激活（与 [`BrushState::enabled`] 同款会话布尔）。

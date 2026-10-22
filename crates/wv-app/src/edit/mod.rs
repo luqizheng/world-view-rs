@@ -25,6 +25,8 @@
 //! - `jump_to_diagnostic`（校验面板跳转）—— 来自 `validation_actions`
 
 #[cfg(feature = "app")]
+pub mod biome_boundary;
+#[cfg(feature = "app")]
 pub mod diagnostics_bridge;
 #[cfg(feature = "app")]
 pub mod editing;

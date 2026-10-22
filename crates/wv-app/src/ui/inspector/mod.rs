@@ -126,6 +126,8 @@ pub enum FormKind {
     Event,
     /// 地形格（单格或批量）。
     Cell,
+    /// 群系分界线（2026-10-22 内容矩阵 §2.7）。
+    Boundary,
     /// 街道段——**无稳定 id，点不到**（`wv-render/src/label_pick.rs:17`），
     /// 故没有表单；真到了这一支须显式提示而非静默空白。
     UnsupportedSegment,
@@ -135,7 +137,14 @@ pub enum FormKind {
 ///
 /// **Cell 优先于实体选中态**——`EditCell` 工具激活时，作者的心智是
 /// 「我在改格子」，不是「我在看一个地点」（设计稿 §11 Q4）。
-pub fn resolve_form(selection: Option<&SelectedEntity>, cell_tool_active: bool) -> FormKind {
+pub fn resolve_form(
+    selection: Option<&SelectedEntity>,
+    cell_tool_active: bool,
+    boundary_tool_active: bool,
+) -> FormKind {
+    if boundary_tool_active {
+        return FormKind::Boundary;
+    }
     if cell_tool_active {
         return FormKind::Cell;
     }
@@ -193,6 +202,7 @@ pub fn panel_inspector(
         ResMut<wv_render::faction_overlays::FactionDisplay>,
         ResMut<crate::state::NatureRegionUiState>,
     ),
+    (mut boundary,): (ResMut<wv_render::state::BiomeBoundaryState>,),
     // Cell 表单的另两个会话态：多边形选区（批量模式用）+ 单格/批量模式切换。
     (mut selection, mut cell_mode): (
         ResMut<wv_render::state::SelectionState>,
@@ -261,6 +271,7 @@ pub fn panel_inspector(
                         &playback,
                         &grid,
                         &mut edit_cell,
+                        &mut boundary,
                         &mut display,
                         &mut nature,
                         &mut selection,
@@ -291,6 +302,17 @@ pub fn panel_inspector(
     );
 }
 
+/// 群系下拉（0–20 冻结表编号）。
+fn biome_dropdown(ui: &mut egui::Ui, id: &str, value: &mut u8) {
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(format!("{value}"))
+        .show_ui(ui, |ui| {
+            for r in 0u8..=20 {
+                ui.selectable_value(value, r, r.to_string());
+            }
+        });
+}
+
 /// 「属性」页签：按选中对象分派。
 ///
 /// 各类型的真表单在 M2 逐个落地（`place_form` / `region_form` / …）。
@@ -308,6 +330,7 @@ fn render_properties(
     playback: &crate::state::PlaybackState,
     grid: &wv_render::state::GridConfig,
     edit_cell: &mut wv_render::state::EditCellState,
+    boundary: &mut wv_render::state::BiomeBoundaryState,
     display: &mut wv_render::faction_overlays::FactionDisplay,
     nature: &mut crate::state::NatureRegionUiState,
     selection: &mut wv_render::state::SelectionState,
@@ -319,7 +342,7 @@ fn render_properties(
     loc: crate::i18n::Locale,
 ) {
     use crate::i18n::{t_key, I18nKey};
-    let form = resolve_form(selected, edit_cell.tool_active);
+    let form = resolve_form(selected, edit_cell.tool_active, boundary.tool_active);
     match form {
         FormKind::None => {
             // 空态：空态卡 + 四条计数行 + 事态卡（现状不变）。
@@ -332,6 +355,32 @@ fn render_properties(
                 &CurrentLocale(loc),
                 I18nKey::InspectorSelectionMissing,
             ));
+        }
+        FormKind::Boundary => {
+            // 两侧群系下拉（探测错时兜底）。
+            let Some(map) = projection.world.maps.first().map(|m| m.id.clone()) else {
+                return;
+            };
+            let Some(terrain) = projection.world.terrain_of(&map) else {
+                return;
+            };
+            let _ = terrain;
+            if let Some(line) = boundary.line.as_mut() {
+                ui.label("分界线两侧群系");
+                ui.horizontal(|ui| {
+                    ui.label("A（左）：");
+                    biome_dropdown(ui, "boundary_side_a", &mut line.side_a);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("B（右）：");
+                    biome_dropdown(ui, "boundary_side_b", &mut line.side_b);
+                });
+                ui.label(
+                    egui::RichText::new("拖线身平移、拖端点旋转；松手即改写扫过格（可撤销）")
+                        .small()
+                        .color(shell.t3()),
+                );
+            }
         }
         FormKind::Cell => {
             // 候选命名上下文优先于 Cell 表单（作者点中候选 = 正在命名）。
@@ -710,31 +759,31 @@ mod tests {
     fn resolve_form_prefers_cell_tool_over_entity_selection() {
         // 工具激活时，即使选中了 Place，也应出 Cell 表单——工具即模式。
         let s = sel(EntityKind::Place, "p1");
-        assert_eq!(resolve_form(Some(&s), true), FormKind::Cell);
+        assert_eq!(resolve_form(Some(&s), true, false), FormKind::Cell);
     }
 
     #[test]
     fn resolve_form_returns_cell_when_tool_active_without_selection() {
-        assert_eq!(resolve_form(None, true), FormKind::Cell);
+        assert_eq!(resolve_form(None, true, false), FormKind::Cell);
     }
 
     #[test]
     fn resolve_form_dispatches_by_kind() {
-        assert_eq!(resolve_form(None, false), FormKind::None);
+        assert_eq!(resolve_form(None, false, false), FormKind::None);
         assert_eq!(
-            resolve_form(Some(&sel(EntityKind::Place, "p1")), false),
+            resolve_form(Some(&sel(EntityKind::Place, "p1")), false, false),
             FormKind::Place
         );
         assert_eq!(
-            resolve_form(Some(&sel(EntityKind::Region, "r1")), false),
+            resolve_form(Some(&sel(EntityKind::Region, "r1")), false, false),
             FormKind::Region
         );
         assert_eq!(
-            resolve_form(Some(&sel(EntityKind::Faction, "f1")), false),
+            resolve_form(Some(&sel(EntityKind::Faction, "f1")), false, false),
             FormKind::Faction
         );
         assert_eq!(
-            resolve_form(Some(&sel(EntityKind::Event, "e1")), false),
+            resolve_form(Some(&sel(EntityKind::Event, "e1")), false, false),
             FormKind::Event
         );
     }
@@ -743,7 +792,7 @@ mod tests {
     fn resolve_form_marks_street_segment_unsupported() {
         // 街道段无稳定 id，点不到——但若真到了这一支，须显式提示而非静默空白。
         assert_eq!(
-            resolve_form(Some(&sel(EntityKind::StreetSegment, "s1")), false),
+            resolve_form(Some(&sel(EntityKind::StreetSegment, "s1")), false, false),
             FormKind::UnsupportedSegment
         );
     }

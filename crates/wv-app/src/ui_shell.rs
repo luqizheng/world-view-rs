@@ -1272,6 +1272,7 @@ fn apply_pending_commands(
     mut selection: ResMut<crate::state::SelectionState>,
     // 单格编辑工具会话态（[ADR-0040]）：跟 selection 同款粒度。
     mut edit_cell: ResMut<crate::state::EditCellState>,
+    mut boundary: ResMut<wv_render::state::BiomeBoundaryState>,
     current_loc: Res<CurrentLocale>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     time: Res<Time>,
@@ -1442,6 +1443,7 @@ fn apply_pending_commands(
                 MapToolId::MeasureEraser => measure.mode == MeasureMode::Eraser,
                 MapToolId::Continent => false,
                 MapToolId::EditCell => edit_cell.selected.is_some(),
+                MapToolId::BiomeBoundary => boundary.line.is_some(),
             };
 
             if matches!(tool, MapToolId::Continent) {
@@ -1466,6 +1468,8 @@ fn apply_pending_commands(
                 }
                 // 关掉 EditCell 时清空状态(避免「切走工具后旧选择留着」)。
                 edit_cell.clear();
+                // 切走分界线工具：线是会话工具，一并清（ADR-0051）。
+                boundary.clear();
 
                 // ② 再按需打开（已启用 → 保持全关，即切换关闭）。
                 if !already_on {
@@ -1503,6 +1507,11 @@ fn apply_pending_commands(
                             // 标记 EditCell 工具激活;点击事件自己写到 `edit_cell.selected`
                             // (见 editing::commit_edit_cell_on_click)。
                             edit_cell.tool_active = true;
+                        }
+                        // 分界线工具激活：线要等用户在地图上拖出（见
+                        // edit::biome_boundary_input）。
+                        MapToolId::BiomeBoundary => {
+                            boundary.tool_active = true;
                         }
                     }
                 }
@@ -2025,6 +2034,7 @@ mod tests {
         // 2026-10-19 单格编辑工具（[ADR-0040]）:分发器需要 EditCellState 才能
         // 运行 `apply_pending_commands` 的 SelectMapTool(EditCell) 分支。
         world.init_resource::<crate::state::EditCellState>();
+        world.init_resource::<wv_render::state::BiomeBoundaryState>();
         world.init_resource::<crate::ui::ContinentDialog>();
         // ADR-0018：UI 文案语言；默认 `Locale::Zh`（与 GUI 启动默认值一致）。
         world.init_resource::<crate::i18n::CurrentLocale>();
@@ -2277,6 +2287,7 @@ mod tests {
         // 2026-10-19 单格编辑工具（[ADR-0040]）:分发器需要 EditCellState 才能
         // 运行 `apply_pending_commands` 的 SelectMapTool(EditCell) 分支。
         world.init_resource::<crate::state::EditCellState>();
+        world.init_resource::<wv_render::state::BiomeBoundaryState>();
         world.init_resource::<crate::ui::ContinentDialog>();
         // ADR-0018：UI 文案语言；默认 `Locale::Zh`（与 GUI 启动默认值一致）。
         world.init_resource::<crate::i18n::CurrentLocale>();

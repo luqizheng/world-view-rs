@@ -619,6 +619,7 @@ pub fn draw_map_gizmos(
     projection: Res<crate::state::WorldProjection>,
     grid_cfg: Res<GridConfig>,
     mut candidate_cache: ResMut<crate::region_overlay::CandidateOverlayCache>,
+    boundary: Res<crate::state::BiomeBoundaryState>,
 ) {
     let _ = &*tex; // suppress unused warning
 
@@ -648,6 +649,59 @@ pub fn draw_map_gizmos(
         for outline in &candidate_cache.outlines {
             for (a, b) in outline {
                 gizmos.line_2d(*a, *b, gold);
+            }
+        }
+    }
+
+    // ── 群系分界线预览（2026-10-22 内容矩阵 §2.7 · T12）────────────────
+    // 工具激活：线（金色实线 + 两端点圆）+ 拖动中高亮「将被改写」的格。
+    // 高亮与提交共用 `swept_changes`——预览说什么、松手改什么。
+    if boundary.tool_active {
+        let local = |p: bevy::math::Vec2| p + grid_cfg.raster_origin;
+        if let Some(line) = boundary.drag_line.or(boundary.line) {
+            let a = local(bevy::math::Vec2::new(line.a.0, line.a.1));
+            let b = local(bevy::math::Vec2::new(line.b.0, line.b.1));
+            let side_a_color = crate::terrain_view::biome_raw::pick(line.side_a, 1);
+            let side_b_color = crate::terrain_view::biome_raw::pick(line.side_b, 1);
+            let ca =
+                bevy::color::Color::srgba(side_a_color[0], side_a_color[1], side_a_color[2], 0.9);
+            let cb =
+                bevy::color::Color::srgba(side_b_color[0], side_b_color[1], side_b_color[2], 0.9);
+            // 线段本体：中点分两半，各染侧色（左半 side_a / 右半 side_b）。
+            let mid = (a + b) * 0.5;
+            gizmos.line_2d(a, mid, ca);
+            gizmos.line_2d(mid, b, cb);
+            gizmos.circle_2d(
+                bevy::math::Isometry2d::from_translation(a),
+                grid_cfg.cell_size * 0.4,
+                ca,
+            );
+            gizmos.circle_2d(
+                bevy::math::Isometry2d::from_translation(b),
+                grid_cfg.cell_size * 0.4,
+                cb,
+            );
+
+            // 拖动中：高亮将被改写的格（世界系矩形）。
+            if let (Some(old_line), true) = (boundary.line, boundary.drag_line.is_some()) {
+                if let Some(terrain) = projection
+                    .world
+                    .terrain_of(&projection.world.maps.first().map(|m| m.id.clone()).unwrap())
+                {
+                    let changes = crate::biome_boundary::swept_changes(&old_line, &line, terrain);
+                    let warn = bevy::color::Color::srgba(0.95, 0.75, 0.2, 0.4);
+                    for (gx, gy, _, _) in changes {
+                        let center = bevy::math::Vec2::new(
+                            grid_cfg.raster_origin.x + (gx as f32 + 0.5) * grid_cfg.cell_size,
+                            grid_cfg.raster_origin.y + (gy as f32 + 0.5) * grid_cfg.cell_size,
+                        );
+                        gizmos.rect_2d(
+                            bevy::math::Isometry2d::from_translation(center),
+                            bevy::math::Vec2::splat(grid_cfg.cell_size),
+                            warn,
+                        );
+                    }
+                }
             }
         }
     }

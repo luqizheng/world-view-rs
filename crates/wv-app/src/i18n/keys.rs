@@ -832,6 +832,8 @@ pub enum I18nKey {
     CmdToggleImmersive,
     /// 「单格编辑」工具（[ADR-0040]，快捷键 C；CellMap 工作区核心工具）
     CmdToolEditCell,
+    /// 群系分界线工具（命令面板）
+    CmdToolBiomeBoundary,
     /// 「Cell 编辑器」面板标题（独立面板，2026-10-20）
     PanelCellEditor,
     /// 空态标题（未选中格）
@@ -1168,7 +1170,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 457] = [
+    pub const ALL: [I18nKey; 458] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1550,6 +1552,7 @@ impl I18nKey {
         I18nKey::CmdSave,
         I18nKey::CmdUndo,
         I18nKey::CmdRedo,
+        I18nKey::CmdToolBiomeBoundary,
         I18nKey::CmdTogglePanelMapTree,
         I18nKey::CmdTogglePanelLayers,
         I18nKey::CmdTogglePanelBrush,
