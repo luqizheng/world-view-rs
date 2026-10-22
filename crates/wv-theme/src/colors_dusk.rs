@@ -111,6 +111,12 @@ pub const DUSK_DEEP_OCEAN_BLUE: Color = hex(0x061882);
 /// 「薄水覆沙」读作灰青高光，不能像日间那样亮到发白（会像月光反光）。
 pub const DUSK_WATER_SHORE: Color = hex(0x6C8090);
 
+/// 森林底色（林下深绿）——暮色版（2026-10-22 §九-1 与日间版同日同步）。
+///
+/// 暮色林色 `DUSK_CORE_TERRAIN[4] = #414D38` 的压深一档：暗纸上林下要
+/// 更沉，否则「林间空地」的明暗分层会被纸色吃掉。
+pub const DUSK_FOREST_FLOOR: Color = hex(0x2A3324); // ≈ (42, 51, 36) 暗纸林下
+
 /// 描线三档：暗纸上全档浅墨 推导·待复核。
 pub const DUSK_LINE_ON_LIGHT: Color = hex(0xC9BBA8);
 pub const DUSK_LINE_ON_MID: Color = hex(0xB5A68F);

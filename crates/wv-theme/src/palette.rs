@@ -150,6 +150,10 @@ pub struct PaletteColors {
     /// 与 `deep_ocean_blue` 对偶：那个管最深的一格，这个管贴岸的一圈。
     /// 见 `colors::WATER_SHORE` 注释。
     pub water_shore: Color,
+    /// 森林底色（林下深绿，2026-10-22 §九-1）：森林区底色向它混色，
+    /// 混量由密度场 × `DecorRecipe::forest_base_strength` 给定。
+    /// 见 `colors::FOREST_FLOOR` 注释。
+    pub forest_floor: Color,
 }
 
 impl PaletteColors {
@@ -225,6 +229,7 @@ impl PaletteColors {
         line_on_dark: colors::LINE_ON_DARK,
         deep_ocean_blue: colors::DEEP_OCEAN_BLUE,
         water_shore: colors::WATER_SHORE,
+        forest_floor: colors::FOREST_FLOOR,
     };
 
     /// 暮色旧纸：值源 = [`colors_dusk`]（同槽位镜像）。暮色地形基色未换，
@@ -267,6 +272,7 @@ impl PaletteColors {
         line_on_dark: colors_dusk::DUSK_LINE_ON_DARK,
         deep_ocean_blue: colors_dusk::DUSK_DEEP_OCEAN_BLUE,
         water_shore: colors_dusk::DUSK_WATER_SHORE,
+        forest_floor: colors_dusk::DUSK_FOREST_FLOOR,
     };
 }
 
@@ -296,6 +302,7 @@ mod tests {
         assert_ne!(day.building_top, dusk.building_top, "建筑顶面应不同");
         assert_ne!(day.road_stroke, dusk.road_stroke, "城市连线应不同");
         assert_ne!(day.water_shore, dusk.water_shore, "近岸浅滩色应不同");
+        assert_ne!(day.forest_floor, dusk.forest_floor, "森林底色应不同");
     }
 
     /// 用户定稿色值锚点：防手滑改值（改动应连带更新 ART_STYLE_SPEC §1.4.4）。

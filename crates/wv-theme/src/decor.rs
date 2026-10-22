@@ -62,6 +62,81 @@ impl VariantInk {
     }
 }
 
+/// 一档 LOD 的位图树参数（屏幕像素）。
+///
+/// **为什么按档给参数**：树的「多大 / 多密」在远景与近景的合理值差一个量级
+/// （远景一棵树要占更大画面、少很多棵），而档位阈值属渲染机制（`decor_band`），
+/// 但**每档的具体数值属美术参数**——故数值住主题、档位选择住渲染层。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ForestSymbolBand {
+    /// 采样步距（屏幕像素）：相邻两棵候选树的名义间距。
+    pub spacing_px: f32,
+    /// 符号边长（屏幕像素）：单棵树在画面上的高度。
+    pub size_px: f32,
+}
+
+/// 地形森林的**位图符号**规格（设计文档 §七 Sprite 形态，2026-10-22）。
+///
+/// ## 形态二选一
+///
+/// 主题给了本规格 → 地形驱动的森林画**手绘树**（位图精灵）；
+/// 没给（`None`）→ 走**程序化符号**（ADR-0031 D5 的默认形态：林冠三角点）。
+/// 二者不叠加——同时画会得到「树上长树点」的脏画面。
+///
+/// ## 分工（沿用 ADR-0031 追记一）
+///
+/// - **位置** = 地形事实：森林群系 + 密度场（`wv_terrain::forest`）；
+/// - **疏密** = 主题参数：`DecorRecipe::forest_density_gain` × 密度场；
+/// - **形态** = 本规格（贴图 / 变体 / 大小 / 步距 / 分级 tint）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ForestSymbolSpec {
+    /// 贴图键（主题资产根下的相对路径；**横向图集**，变体自左向右）。
+    pub texture: &'static str,
+    /// 图集变体数（横向格数）。
+    pub variants: u32,
+    /// 符号不透明度（0..=1）。
+    pub alpha: f32,
+    /// Edit 档参数（最近）。
+    pub band_edit: ForestSymbolBand,
+    /// Region 档参数。
+    pub band_region: ForestSymbolBand,
+    /// Nation 档参数（最远）。
+    pub band_nation: ForestSymbolBand,
+    /// 疏林 tint（乘法）：林冠略提亮。
+    pub tint_sparse: [u8; 3],
+    /// 常规林 tint（乘法）：原色。
+    pub tint_normal: [u8; 3],
+    /// 密林 tint（乘法）：林冠压深（与林底蒙版同向，密林整体更沉）。
+    pub tint_dense: [u8; 3],
+}
+
+impl ForestSymbolSpec {
+    /// 构造（便于常量表书写）。
+    pub const fn new(
+        texture: &'static str,
+        variants: u32,
+        alpha: f32,
+        band_edit: ForestSymbolBand,
+        band_region: ForestSymbolBand,
+        band_nation: ForestSymbolBand,
+        tint_sparse: [u8; 3],
+        tint_normal: [u8; 3],
+        tint_dense: [u8; 3],
+    ) -> Self {
+        Self {
+            texture,
+            variants,
+            alpha,
+            band_edit,
+            band_region,
+            band_nation,
+            tint_sparse,
+            tint_normal,
+            tint_dense,
+        }
+    }
+}
+
 /// 地形装饰的画法配方。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DecorRecipe {
@@ -152,6 +227,32 @@ pub struct DecorRecipe {
     /// 归属理由：ADR-0048 追记二「数值配方住主题层，执行器留在渲染层」——
     /// 疏密是美术参数，主题该管「多密」，正如它管「长什么样、多大」。
     pub forest_density_gain: f32,
+
+    // ── 森林底色蒙版（§九-1）───────────────────────────────────────
+    /// 林底混色强度（0..=1）：森林区底色向 `PaletteColors::forest_floor`
+    /// 混色的**最大**比例（实际混量 = 本值 × 密度场值）。
+    ///
+    /// `0.0` = 不画林底（默认关闭，接线零回归）；`0.5` = 密林核心半压向林下深绿。
+    /// 与 [`Self::forest_density_gain`] 的分工：那管**树有多少**，本项管
+    /// **地面多暗**——两者都吃密度场，但一个是符号保留率，一个是底色混量。
+    pub forest_base_strength: f32,
+    /// 林底起染阈值（密度场值）：密度低于本值的格**不染**林底。
+    ///
+    /// **为什么要有阈值**：密度场给草原 / 稀树草原也给了低密度（0.12～0.22，
+    /// 见 `wv_terrain::forest`），若无阈值，整片草原都会被染成林底。
+    /// 取 `0.40` 与 `classify_forest` 的「常规林」下界对齐（成片林才有林底），
+    /// 但**独立可调**——不同主题可以给稀树也铺一层薄林底。
+    pub forest_base_min_density: f32,
+
+    // ── 森林形态（位图 vs 程序化，§七）─────────────────────────────
+    /// 地形森林的**位图符号**规格；`None` = 走程序化符号（ADR-0031 D5）。
+    ///
+    /// **形态二选一，不叠加**：给了规格 → 渲染层画位图树并**停掉**程序化林冠点
+    /// （否则「树上长树点」）；没给 → 保持程序化形态（零回归）。
+    ///
+    /// 贴图键走渲染层的内嵌资产表（`include_bytes!`），故键与
+    /// `FeatureRule::symbol_texture` 同一套命名空间。
+    pub forest_symbol: Option<ForestSymbolSpec>,
 }
 
 /// 水彩装饰配方（日间）——与 2026-10-21 之前的渲染层硬编码**逐位一致**
@@ -187,6 +288,38 @@ pub const WATERCOLOR: DecorRecipe = DecorRecipe {
     wave_density_span_cells: 6,
     // 森林密度照密度场原样（1.0 = 不额外调制）。
     forest_density_gain: 1.0,
+    // 林底蒙版（§九-1）：默认开启，密林核心压到半程林下深绿。
+    forest_base_strength: 0.55,
+    // 起染阈值对齐 classify_forest 的「常规林」下界（成片林才有林底）。
+    forest_base_min_density: 0.40,
+    // 森林形态（§七 Sprite 形态，2026-10-22）：手绘位图树（3 变体横向图集）。
+    // 给了规格 → 渲染层改画位图树并停掉程序化林冠点（形态二选一）。
+    forest_symbol: Some(ForestSymbolSpec::new(
+        "overlays/forest/tree_atlas_day.png",
+        3,
+        0.95,
+        ForestSymbolBand {
+            spacing_px: 34.0,
+            size_px: 30.0,
+        },
+        ForestSymbolBand {
+            spacing_px: 56.0,
+            size_px: 32.0,
+        },
+        ForestSymbolBand {
+            // 远档（世界级视距）：2026-10-22 实机验收后从 120/46 收紧到 72/36。
+            // **为什么**：森林只占图幅约 7%，120px 步距下整屏候选仅 ~100 个，
+            // 落到林地上只剩个位数——世界级视距「整张图只长两棵树」，读不出
+            // 森林。72px 步距把候选提到 ~300 个，林地得十余棵，成片感回来；
+            // 尺寸同时从 46 收到 36（远档符号不该比近档大出一半）。
+            spacing_px: 72.0,
+            size_px: 36.0,
+        },
+        // 分级 tint：疏林提亮、常规原色、密林压深（乘法）。
+        [242, 248, 238],
+        [228, 236, 222],
+        [196, 208, 190],
+    )),
 };
 
 /// 暮色装饰配方——暗纸上的符号要更沉、更疏。
@@ -198,6 +331,30 @@ pub const WATERCOLOR_DUSK: DecorRecipe = DecorRecipe {
     size_mul_edit: 0.9,
     size_mul_region: 0.75,
     size_mul_nation: 1.4,
+    // 暗纸上的林底要比日间更沉一档：否则「密林深、林间浅」的分层被纸色吃掉。
+    forest_base_strength: 0.62,
+    // 暮色用暮色图集（同一套位图树的暗调版本），步距比日间略宽。
+    forest_symbol: Some(ForestSymbolSpec::new(
+        "overlays/forest/tree_atlas_dusk.png",
+        3,
+        0.92,
+        ForestSymbolBand {
+            spacing_px: 36.0,
+            size_px: 30.0,
+        },
+        ForestSymbolBand {
+            spacing_px: 60.0,
+            size_px: 32.0,
+        },
+        ForestSymbolBand {
+            spacing_px: 78.0,
+            size_px: 36.0,
+        },
+        // 暮色更沉：三级 tint 一律压深一档。
+        [226, 232, 222],
+        [210, 218, 206],
+        [176, 188, 174],
+    )),
     ..WATERCOLOR
 };
 
@@ -277,5 +434,68 @@ mod tests {
             WATERCOLOR_DUSK.spacing_px_nation
         );
         assert_ne!(WATERCOLOR.size_mul_nation, WATERCOLOR_DUSK.size_mul_nation);
+    }
+
+    /// 位图森林形态（§七 Sprite 形态，2026-10-22）：日间声明位图树、
+    /// 暮色换暮色图集；档位步距与尺寸的远 / 近关系必须成立。
+    #[test]
+    fn watercolor_recipe_declares_bitmap_forest_form() {
+        let spec = WATERCOLOR
+            .forest_symbol
+            .expect("日间水彩应声明位图森林形态");
+        assert_eq!(
+            spec.texture, "overlays/forest/tree_atlas_day.png",
+            "日间应指向日间树图集"
+        );
+        assert_eq!(spec.variants, 3, "树图集变体数");
+        assert!(
+            spec.alpha > 0.0 && spec.alpha <= 1.0,
+            "不透明度应在 (0,1]，got {}",
+            spec.alpha
+        );
+        // 远档更疏（每屏树更少）、近档更密。
+        assert!(
+            spec.band_nation.spacing_px > spec.band_region.spacing_px
+                && spec.band_region.spacing_px > spec.band_edit.spacing_px,
+            "步距应 Nation > Region > Edit，got {} / {} / {}",
+            spec.band_nation.spacing_px,
+            spec.band_region.spacing_px,
+            spec.band_edit.spacing_px
+        );
+        // 远档树更大（抵消粗步距的稀疏感）。
+        assert!(
+            spec.band_nation.size_px > spec.band_edit.size_px,
+            "远档树应更大，got {} vs {}",
+            spec.band_nation.size_px,
+            spec.band_edit.size_px
+        );
+        // 暮色：同一形态、换图集。
+        let dusk = WATERCOLOR_DUSK
+            .forest_symbol
+            .expect("暮色应声明位图森林形态");
+        assert_eq!(
+            dusk.texture, "overlays/forest/tree_atlas_dusk.png",
+            "暮色应指向暮色树图集"
+        );
+        assert_eq!(dusk.variants, spec.variants, "两套图集变体数应一致");
+    }
+
+    /// 分级 tint 必须单调：疏林提亮 → 密林压深（密林整体更沉）。
+    #[test]
+    fn forest_symbol_tints_darken_with_density() {
+        let spec = WATERCOLOR.forest_symbol.expect("日间应声明位图森林形态");
+        let lum = |c: [u8; 3]| (c[0] as u32 + c[1] as u32 + c[2] as u32) / 3;
+        assert!(
+            lum(spec.tint_sparse) > lum(spec.tint_normal),
+            "疏林应比常规林亮：{:?} vs {:?}",
+            spec.tint_sparse,
+            spec.tint_normal
+        );
+        assert!(
+            lum(spec.tint_normal) > lum(spec.tint_dense),
+            "常规林应比密林亮：{:?} vs {:?}",
+            spec.tint_normal,
+            spec.tint_dense
+        );
     }
 }

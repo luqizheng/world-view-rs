@@ -262,6 +262,16 @@ pub const DEEP_OCEAN_BLUE: Color = hex(0x0C32C8); // ≈ (12, 50, 200) 明确深
 /// （`TreatmentFlags::shore_shallow` 开时）。
 pub const WATER_SHORE: Color = hex(0xA9D3D5); // ≈ (169, 211, 213) 淡青滩色
 
+/// 森林底色（林下深绿，2026-10-22 §九-1 森林底色蒙版）。
+///
+/// **它不是「森林是什么颜色」**：那是 `core.forest`（`#3F7A46`，林区的
+/// 标识色）。本槽位是**林下那一层**——密林核心压到近乎墨绿、林间空地
+/// 留亮，森林因此有了内部结构，而不是一块死绿。
+///
+/// 消费点：`cells::base_color_of`（按密度场混色，混合量由
+/// `DecorRecipe::forest_base_strength` 给定）。
+pub const FOREST_FLOOR: Color = hex(0x2E5535); // ≈ (46, 85, 53) 林下深绿
+
 /// 底图淡化混合（所有视图模式共用的唯一实现；禁止散落重写）。
 pub fn soften_color(base: Color) -> Color {
     let (Color::Srgba(b), Color::Srgba(t)) = (base, SOFTEN_TOWARD) else {

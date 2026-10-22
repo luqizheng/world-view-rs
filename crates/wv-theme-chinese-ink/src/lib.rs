@@ -96,6 +96,8 @@ const INK_PALETTE: PaletteColors = PaletteColors {
     deep_ocean_blue: wv_theme::colors::hex(0x4A6B78),
     // 近岸浅滩：淡青（与水墨海色同族）。
     water_shore: wv_theme::colors::hex(0xB4C7C0),
+    // 森林底色：墨绿压深一档（与水墨林色 `0x6E7F63` 同族）。
+    forest_floor: wv_theme::colors::hex(0x4C5A4A),
 };
 
 pub static PACK: ThemePack = ThemePack {
@@ -130,6 +132,12 @@ pub static PACK: ThemePack = ThemePack {
         marsh_ink: DecorInk::new([0x35, 0x44, 0x39], 0.55),
         desert_ink: DecorInk::new([0x6B, 0x5E, 0x46], 0.45),
         wave_ink: DecorInk::new([0xD8, 0xDC, 0xD6], 0.35),
+        // 林底蒙版（§九-1）：水墨只铺**一层薄林底**——留白是水墨的语法，
+        // 满强度的深绿会把纸面压死。混色量取日间的约一半。
+        forest_base_strength: 0.28,
+        // 森林形态（§七）：水墨**不用位图树**——手绘树的写实轮廓与水墨的
+        // 皴笔语法不合；水墨的林仍是程序化墨点（ADR-0031 D5 的默认形态）。
+        forest_symbol: None,
         ..wv_theme::decor::WATERCOLOR
     },
     sea: SeaRecipe {
