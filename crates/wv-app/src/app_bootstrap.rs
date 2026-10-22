@@ -34,6 +34,7 @@ use wv_render::camera;
 use wv_render::faction_overlays;
 use wv_render::feature_overlays;
 use wv_render::forest_canopy;
+use wv_render::forest_density;
 use wv_render::layer_frame;
 use wv_render::map_frame;
 use wv_render::place_line;
@@ -214,10 +215,9 @@ pub fn run(config: AppConfig) {
     // 离岸距离场缓存（ADR-0048 追记四）：OceanWaves 的离岸带判定用，
     // 按 terrain hash 键控（地形没变就复用）。
     .init_resource::<terrain_decor::ShoreFieldCache>()
-    // 森林密度场缓存（方案 1）：森林符号的疏密由地形事实（群系 + 林线 +
-    // 聚集噪声）给出，主题再乘 `forest_density_gain` 调制；按 terrain hash
-    // 键控（地形没变就复用）。
-    .init_resource::<terrain_decor::ForestDensityCache>()
+    // 森林密度场缓存（方案 1 / §九-3）：森林符号疏密与位图树冠落点共用同一份
+    // **块级惰性**密度场（`forest_density`）——只算视口扫到的块，不整场预算。
+    .init_resource::<forest_density::ForestDensityCache>()
     // 地形森林的位图树冠层（§七 Sprite 形态，2026-10-22）：主题声明位图
     // 森林形态时，本层按密度场撒手绘树；实体 / mesh / 材质 / 贴图句柄都
     // 缓存在池里（跨帧复用，避免每帧重解码 PNG）。

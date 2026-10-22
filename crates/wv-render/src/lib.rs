@@ -54,6 +54,8 @@ pub mod feature_overlays;
 #[cfg(feature = "app")]
 pub mod forest_canopy;
 #[cfg(feature = "app")]
+pub mod forest_density;
+#[cfg(feature = "app")]
 pub mod label_collision;
 #[cfg(feature = "app")]
 pub mod label_halo;

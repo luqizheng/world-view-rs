@@ -677,35 +677,20 @@ fn ensure_material(
         .clone()
 }
 
-/// 森林密度场的缓存（方案 1）——`sync_terrain_decor` 用它调制森林符号的保留率。
+/// 森林密度场的缓存已迁至 [`crate::forest_density`]（Chunk 级惰性计算，
+/// 设计文档 §九-3）。本模块只再用它的逐格入口，不再持整场。
 ///
-/// **为什么缓存**：森林密度是**全局量**（一片林的疏密取决于整张图的聚集噪声），
-/// 不能像逐格属性那样采样即得；每帧重算 1024² × 2 层 Perlin 噪声是纯浪费
-/// ——地形没变时场不会变。**键 = `terrain_data_hash`**（与离岸场缓存同源）：
-/// hash 不变直接复用，变了整场重算。
-///
-/// **与离岸场缓存同构、不同源**：离岸场用 BFS 距离，森林场用
-/// [`wv_terrain::forest::generate_forest_density_from_biome`]（群系 + 林线 +
-/// 聚集噪声）。两者生命周期相同（地形变则重算），故各自独立缓存。
-#[derive(Resource, Default)]
-pub struct ForestDensityCache {
-    hash: u64,
-    field: std::sync::Arc<Vec<f32>>,
-    w: u32,
-    h: u32,
-}
+/// **为什么迁走**：整场缓存（1024²×4 B = 4 MB，4096² 就是 64 MB）在大地图上
+/// 既费内存又费首帧时间，而装饰只采样视口内的格——块级惰性计算把两者都压到
+/// 「看得见的部分」，且与树冠层共用同一份数据。
+pub use crate::forest_density::ForestDensityCache;
 
-/// 森林密度场的固定种子。
-///
-/// **单一来源**：`wv_terrain::forest::DENSITY_SEED`（数据层持有）。
-/// 密度场是**视觉派生量**（森林疏密），不是世界事实，故用常量种子而非世界
-/// 种子：同一张地形在任何机器、任何次重开都得到同一片林。
-/// 接入世界种子的收敛点：把数据层那个常量换成 `projection.world` 的种子派生值。
-///
-/// 本模块只引用、不另立——森林底色蒙版（`cells.rs` 的 `ForestFloor`）与
-/// 装饰符号疏密共用同一片林，两处种子若不同步，地上会出现「底色一片林、
-/// 树长在别处」的错位。
-const FOREST_DENSITY_SEED: u64 = wv_terrain::forest::DENSITY_SEED;
+// 森林密度场的种子：**单一来源** = `wv_terrain::forest::DENSITY_SEED`（数据层）。
+// 密度场是**视觉派生量**（森林疏密），不是世界事实，故用常量种子而非世界种子：
+// 同一张地形在任何机器、任何次重开都得到同一片林。接入世界种子的收敛点——
+// 把数据层那个常量换成 `projection.world` 的种子派生值。
+// 森林底色蒙版（`cells.rs` 的 `ForestFloor`）、符号疏密、树冠落点共用同一片林；
+// 三处种子若不同步，地上会出现「底色一片林、树长在别处」的错位。
 
 /// 森林桶的保留率 = 密度场 × 主题增益（裁剪到 `0..=1`）。
 ///
@@ -713,43 +698,6 @@ const FOREST_DENSITY_SEED: u64 = wv_terrain::forest::DENSITY_SEED;
 /// 断言——密度场由 `wv_terrain::forest` 测，主题增益在这里测。
 pub(crate) fn forest_keep_prob(density: f32, gain: f32) -> f32 {
     (density * gain).clamp(0.0, 1.0)
-}
-
-impl ForestDensityCache {
-    /// 取当前地形的森林密度场（hash 不匹配则重算）。
-    ///
-    /// `pub(crate)`：`forest_canopy`（§七 位图树冠层）复用同一片密度场——
-    /// 底色与树必须落在同一片林上（两处各算一片会「底色一片林、树长别处」）。
-    pub(crate) fn get_or_compute(
-        &mut self,
-        data: &wv_core::terrain::TerrainData,
-    ) -> std::sync::Arc<Vec<f32>> {
-        let hash = crate::terrain_view::isoline_overlay::terrain_data_hash(data);
-        let (w, h) = (data.width.max(1), data.height.max(1));
-        if self.hash != hash || self.w != w || self.h != h {
-            let n = (w as usize) * (h as usize);
-            let mut biomes = vec![0u8; n];
-            let mut heights = vec![0i16; n];
-            for (i, c) in data.cells.iter().take(n).enumerate() {
-                biomes[i] = c.biome;
-                heights[i] = c.height;
-            }
-            let field = wv_terrain::forest::generate_forest_density_from_biome(
-                w as usize,
-                h as usize,
-                &biomes,
-                &heights,
-                FOREST_DENSITY_SEED,
-            );
-            *self = Self {
-                hash,
-                field: std::sync::Arc::new(field),
-                w,
-                h,
-            };
-        }
-        self.field.clone()
-    }
 }
 
 /// 离岸距离场的缓存（ADR-0048 追记四）——`sync_terrain_decor` 按视口采样
@@ -846,8 +794,9 @@ pub fn sync_terrain_decor(
 
     // 森林密度场（方案 1）：「哪里有林 / 多密」由地形事实（群系 + 林线 +
     // 聚集噪声）给出，主题再用 `forest_density_gain` 调制疏密。
-    let forest_density = forest_cache.get_or_compute(data);
-
+    // §九-3 之后改为**逐格惰性取值**（块级缓存，只算视口扫到的块）——
+    // 不再整场预算，大地图因此不必常驻 16M 个 f32。帧首同步一次即可。
+    forest_cache.sync(data);
     let material = ensure_material(&mut pools, &mut materials);
 
     // 视口矩形（视图空间）+ 外扩余量。
@@ -991,7 +940,7 @@ pub fn sync_terrain_decor(
                 // 密度场已经含群系基础密度、林线衰减与聚集噪声，故此处
                 // 不再是「有森林群系就画满」——林间空地自然出现。
                 DecorKind::Forest => {
-                    let d = forest_density[gy as usize * data.width as usize + cx as usize];
+                    let d = forest_cache.density_at(data, cx as u32, gy as u32);
                     forest_keep_prob(d, recipe.forest_density_gain)
                 }
                 DecorKind::Mountain | DecorKind::Snow | DecorKind::Marsh => 1.0,
@@ -1612,6 +1561,9 @@ mod tests {
     }
 
     /// 森林密度场：森林群系得正密度，荒漠得零（方案 1 的数据源断言）。
+    ///
+    /// §九-3 之后密度场改为**逐格惰性取值**（`forest_density`），断言随之
+    /// 从「整场数组」改为「逐格取值」——语义不变（数据源仍是地形事实）。
     #[test]
     fn forest_density_cache_marks_forest_and_rejects_desert() {
         use wv_core::terrain::{TerrainCellData, TerrainData};
@@ -1645,12 +1597,13 @@ mod tests {
             cells,
         };
         let mut cache = ForestDensityCache::default();
-        let field = cache.get_or_compute(&data);
-        assert_eq!(field.len(), 4, "密度场长度应为 4");
-        assert!(field[0] > 0.0, "森林格应有正密度，got {}", field[0]);
-        assert_eq!(field[1], 0.0, "荒漠格应无密度，got {}", field[1]);
-        assert_eq!(field[2], 0.0, "荒漠格应无密度，got {}", field[2]);
-        assert_eq!(field[3], 0.0, "荒漠格应无密度，got {}", field[3]);
+        cache.sync(&data);
+        let forest = cache.density_at(&data, 0, 0);
+        assert!(forest > 0.0, "森林格应有正密度，got {forest}");
+        for (x, y) in [(1u32, 0u32), (0, 1), (1, 1)] {
+            let d = cache.density_at(&data, x, y);
+            assert_eq!(d, 0.0, "荒漠格 ({x},{y}) 应无密度，got {d}");
+        }
     }
 
     /// 主题增益：0 = 不画森林符号，1 = 照密度场，2 = 提到满格。

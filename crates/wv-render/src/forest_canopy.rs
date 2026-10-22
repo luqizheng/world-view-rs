@@ -31,12 +31,11 @@ use bevy::render::mesh::Mesh;
 use bevy::render::mesh::{Indices, MeshVertexAttribute};
 use bevy::render::render_resource::{PrimitiveTopology, VertexFormat};
 
+use crate::forest_density::ForestDensityCache;
 use crate::layer_frame::LayerFrame;
 use crate::recipe::{PassId, RenderRecipe};
 use crate::state::{GridConfig, ViewState, WorldProjection};
-use crate::terrain_decor::{
-    decor_band, forest_keep_prob, hash01, points_fingerprint, DecorBand, ForestDensityCache,
-};
+use crate::terrain_decor::{decor_band, forest_keep_prob, hash01, points_fingerprint, DecorBand};
 use crate::terrain_view::terrain_resolve::active_terrain;
 use crate::theme::decor::ForestSymbolSpec;
 use wv_terrain::biome::is_forest_family;
@@ -51,6 +50,12 @@ const CANOPY_Z: f32 = 0.078;
 const VIEWPORT_MARGIN_PX: f32 = 32.0;
 /// 单帧树数上限（兜底；步距本身已把数量压到屏幕量级）。
 const MAX_TREES: usize = 4000;
+/// 单帧候选格数上限（兜底）。
+///
+/// **为什么要有**：采样量 = 视口 ÷ 步距，正常情况下与缩放无关（两者都乘
+/// `view.scale`）；但主题若给出极小步距、或视口被外部放大，候选数会按平方
+/// 增长。宁可这一帧不画，也不要在渲染线程里跑百万次哈希。
+const MAX_CANDIDATES: i64 = 40_000;
 /// 树根锚点的下沉量（相对符号边长）。
 ///
 /// **为什么树根要下沉 15%**：树图集每格 128×128，树冠图的实际着墨范围
@@ -176,7 +181,8 @@ pub fn sync_forest_canopy(
     }
 
     // 森林密度场（地形事实：群系 + 林线 + 聚集噪声）。
-    let density = density_cache.get_or_compute(data);
+    // §九-3：帧首同步一次（地形变了才清块），帧内逐格惰性取值。
+    density_cache.sync(data);
     let gain = view.active_theme.decor.forest_density_gain;
 
     let (spacing_px, size_px) = band_params(&spec, band);
@@ -196,21 +202,36 @@ pub fn sync_forest_canopy(
     let cell = grid.cell_size;
     let variants = spec.variants.max(1);
 
+    // 采样格**世界锚定**（§九-3 的「Chunk 级稳定生成」）：格点落在
+    // `世界坐标 = 格号 × 步距`上，抖动由**格号**哈希给出。这样平移相机时
+    // 同一棵树的世界位置不变（只会在视口边缘进出），不会整片重洗——
+    // 视口锚定的写法会让「拖一下地图，树全换位置」。
+    let gx0 = (rect_min.x / spacing_wu).floor() as i64;
+    let gy0 = (rect_min.y / spacing_wu).floor() as i64;
+    let gx1 = (rect_max.x / spacing_wu).ceil() as i64;
+    let gy1 = (rect_max.y / spacing_wu).ceil() as i64;
+    // 兜底：极端缩放（视口 ≫ 步距）下候选量会爆炸，宁可这一帧不画也不卡死。
+    let candidate_count = (gx1 - gx0 + 1).saturating_mul(gy1 - gy0 + 1);
+    if candidate_count > MAX_CANDIDATES {
+        pool.clear(&mut commands);
+        return;
+    }
+
     let mut trees: Vec<Tree> = Vec::new();
-    let mut wy = rect_min.y;
-    let mut row = 0i64;
-    while wy <= rect_max.y && trees.len() < MAX_TREES {
-        let mut wx = rect_min.x;
-        let mut col = 0i64;
-        while wx <= rect_max.x && trees.len() < MAX_TREES {
+    for gy_lattice in gy0..=gy1 {
+        if trees.len() >= MAX_TREES {
+            break;
+        }
+        for gx_lattice in gx0..=gx1 {
+            if trees.len() >= MAX_TREES {
+                break;
+            }
             // 落点抖动（±0.35 步距）：规则网格会读成「棋盘」——
             // 同一理由见 `terrain_decor` 的站点抖动（ADR-0042 追记 D13）。
-            let jx = (hash01(col, row, 0x51) - 0.5) * spacing_wu * 0.7;
-            let jy = (hash01(col, row, 0x52) - 0.5) * spacing_wu * 0.7;
-            let px = wx + jx;
-            let py = wy + jy;
-            wx += spacing_wu;
-            col += 1;
+            let jx = (hash01(gx_lattice, gy_lattice, 0x51) - 0.5) * spacing_wu * 0.7;
+            let jy = (hash01(gx_lattice, gy_lattice, 0x52) - 0.5) * spacing_wu * 0.7;
+            let px = gx_lattice as f32 * spacing_wu + jx;
+            let py = gy_lattice as f32 * spacing_wu + jy;
 
             // 抖动后的落点 → 栅格格（归属按**落点**所在格，不按网格点）。
             let gx = ((px - origin.x) / cell).floor();
@@ -231,7 +252,7 @@ pub fn sync_forest_canopy(
             if !is_forest_family(cell_data.biome) {
                 continue;
             }
-            let d = density[idx];
+            let d = density_cache.density_at(data, cx, cy);
             // 密度分类：`< 0.18` 不算林（不成片）。
             let Some(class) = classify_forest(d) else {
                 continue;
@@ -263,8 +284,6 @@ pub fn sync_forest_canopy(
                 ],
             });
         }
-        wy += spacing_wu;
-        row += 1;
     }
 
     // 画家算法：按 y 升序排（屏幕下方者后画 → 盖在靠上者之前），
@@ -620,5 +639,87 @@ mod tests {
             (trunk_base - 20.0).abs() < 1e-4,
             "树干底边应落在锚点 20.0 附近，got {trunk_base}"
         );
+    }
+
+    /// 树根世界锚点（底边中点，已补偿下沉量）——平移比较用。
+    fn tree_anchors(app: &World) -> Vec<(f32, f32)> {
+        use bevy::render::mesh::VertexAttributeValues;
+        let Some(mesh) = app.resource::<ForestCanopyPool>().mesh.clone() else {
+            return Vec::new();
+        };
+        let Some(mesh) = app.resource::<Assets<Mesh>>().get(&mesh) else {
+            return Vec::new();
+        };
+        let Some(VertexAttributeValues::Float32x3(v)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            return Vec::new();
+        };
+        v.chunks(4)
+            .map(|q| {
+                let x = (q[0][0] + q[1][0]) * 0.5;
+                let size = q[2][1] - q[0][1];
+                // 反解锚点：底边 = 锚点 - 边长 × 下沉量。
+                let y = q[0][1] + size * TREE_BASE_SINK;
+                (x, y)
+            })
+            .collect()
+    }
+
+    /// **采样格世界锚定**（§九-3 的「Chunk 级稳定生成」）：平移相机后，
+    /// 仍在视口里的树必须落在**同一个世界坐标**上（不是「拖一下地图树全换位」）。
+    ///
+    /// 反证：视口锚定的写法里抖动取 `(col, row)`（从视口左上角数起），
+    /// 平移会把整张采样格错位，所有树同时改变位置——本测试因此会失败。
+    #[test]
+    fn tree_positions_stay_pinned_when_the_camera_pans() {
+        let (mut app, mut schedule) = app_with(BIOME_FOREST, true);
+        schedule.run(&mut app);
+        let before = tree_anchors(&app);
+        assert!(!before.is_empty(), "夹具应至少画出一棵树");
+
+        // 取「两个视口交集」再内缩一截，落在这里的树必须在平移后原样存在。
+        let (center, half) = {
+            let view = app.resource::<ViewState>();
+            (view.camera_center, view.window_size * view.scale * 0.5)
+        };
+        let margin = Vec2::splat(80.0);
+        let pan = Vec2::new(37.0, 23.0);
+        let safe_min = center - half + margin;
+        let safe_max = center + half - pan - margin;
+
+        app.resource_mut::<ViewState>().camera_center = center + pan;
+        schedule.run(&mut app);
+        let after = tree_anchors(&app);
+
+        let pinned: Vec<_> = before
+            .iter()
+            .filter(|(x, y)| {
+                *x >= safe_min.x && *x <= safe_max.x && *y >= safe_min.y && *y <= safe_max.y
+            })
+            .collect();
+        assert!(
+            !pinned.is_empty(),
+            "交集区内应至少有一棵树可供比较（before={} 棵）",
+            before.len()
+        );
+        for p in pinned {
+            assert!(
+                after.contains(p),
+                "平移后这棵树应先世界坐标不变：{p:?}（after={} 棵）",
+                after.len()
+            );
+        }
+    }
+
+    /// 密度场按块惰性计算（§九-3）：一帧只算**扫到的块**，不整场预算 32² 块。
+    #[test]
+    fn canopy_only_forces_the_chunks_it_samples() {
+        let (mut app, mut schedule) = app_with(BIOME_FOREST, true);
+        schedule.run(&mut app);
+        let computed = app.resource::<ForestDensityCache>().computed_chunks();
+        // 32² 地图在 scale 0.5 下视口约 640×400 wu、格 4 wu ⇒ 160×100 格，
+        // 128 格一块 ⇒ 至多 4 块；整图预算是 1 块（32 格 < 128）。
+        assert!(computed <= 4, "只该算视口扫到的块，got {computed} 块");
+        assert!(computed >= 1, "至少要算一块");
     }
 }
