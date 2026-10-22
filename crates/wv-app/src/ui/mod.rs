@@ -27,7 +27,7 @@ pub mod faction_divide_dialog;
 pub mod faction_panel;
 pub mod feature_place_dialog;
 pub mod hover_tooltip;
-pub mod inspector_panel;
+pub mod inspector;
 pub mod intent_menu;
 pub mod layers_panel;
 pub mod list_panels_panel;
@@ -55,7 +55,7 @@ pub use continent_dialog::{continent_dialog, continent_dialog_system, ContinentD
 pub use faction_divide_dialog::{faction_divide_dialog, FactionDivisionDialog};
 pub use faction_panel::panel_faction;
 pub use feature_place_dialog::{feature_place_dialog, FeaturePlaceDialog};
-pub use inspector_panel::panel_inspector;
+pub use inspector::panel_inspector;
 pub use intent_menu::intent_menu;
 pub use layers_panel::{panel_layers, panel_map_tree};
 pub use list_panels_panel::{panel_character, panel_event};
