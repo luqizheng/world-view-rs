@@ -70,6 +70,14 @@ pub fn biome_boundary_input(
     let Some(map) = drill.current().cloned() else {
         return;
     };
+    // 切图检测（final review I4）：线坐标是旧图的栅格局部 wu，带到新图会
+    // 按新图地形提交出错误改写——图一变即清线（工具保持激活）。
+    if boundary.map_id.as_ref() != Some(&map) {
+        boundary.map_id = Some(map.clone());
+        boundary.line = None;
+        boundary.drag_from = None;
+        boundary.drag_line = None;
+    }
     let Some(cursor) = view.cursor_world else {
         return;
     };
@@ -152,9 +160,19 @@ pub fn biome_boundary_input(
             return; // Creating 已在按下时记录为 None——松手 = 放线，不改格子
         };
         let from_local: (f32, f32) = (from - grid.raster_origin).into();
-        let da = dist_to_segment(from_local, new_line.a, new_line.a);
-        let db = dist_to_segment(from_local, new_line.b, new_line.b);
-        let d_body = dist_to_segment(from_local, new_line.a, new_line.b);
+        // 模式判定必须对**按下时的基线**（boundary.line），不是拖动后的线——
+        // 平移距离一超过 ~1 格，对拖后线量「按下点」会误判成 Creating，
+        // 扫过改写被整体跳过（final review C2）。
+        let base = boundary.line;
+        let (da, db, d_body) = base
+            .map(|b| {
+                (
+                    dist_to_segment(from_local, b.a, b.a),
+                    dist_to_segment(from_local, b.b, b.b),
+                    dist_to_segment(from_local, b.a, b.b),
+                )
+            })
+            .unwrap_or((f32::MAX, f32::MAX, f32::MAX));
         let mode = if da <= 0.6 * cs && da <= db {
             DragMode::EndpointA
         } else if db <= 0.6 * cs {
@@ -182,7 +200,7 @@ pub fn biome_boundary_input(
                 let Some(terrain) = projection.world.terrain_of(&map) else {
                     return;
                 };
-                let changes = swept_changes(&old, &new_line, terrain);
+                let changes = swept_changes(&old, &new_line, terrain, grid.cell_size);
                 if changes.is_empty() {
                     boundary.line = Some(new_line);
                     return;

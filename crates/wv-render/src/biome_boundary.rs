@@ -47,12 +47,15 @@ pub fn swept_changes(
     old: &BoundaryLine,
     new: &BoundaryLine,
     terrain: &wv_core::terrain::TerrainData,
+    cell_size: f32,
 ) -> Vec<(i32, i32, TerrainCellData, TerrainCellData)> {
+    // 线段端点是**栅格局部 wu**——栅格化必须用运行时真实格尺寸（默认 8 wu/格）。
+    // 曾硬编码 1.0：扫过带被放大 cell_size 倍并错位（final review C1）。
     let quad = [old.a, old.b, new.b, new.a];
     let cells = rasterize_polygon_cells(
         &quad,
-        (0.0, 0.0).into(),
-        &dummy_grid(terrain),
+        bevy::math::Vec2::ZERO,
+        &dummy_grid(terrain, cell_size),
         terrain.width,
         terrain.height,
     );
@@ -64,8 +67,8 @@ pub fn swept_changes(
         let idx = (gy as usize) * terrain.width as usize + gx as usize;
         let before = terrain.cells[idx];
         // 原本在哪侧（按**旧**线）→ 退让侧群系；新线同侧 = 该侧没被动过。
-        let old_left = side_sign(old.a, old.b, cell_center(gx, gy)) > 0.0;
-        let new_left = side_sign(new.a, new.b, cell_center(gx, gy)) > 0.0;
+        let old_left = side_sign(old.a, old.b, cell_center(gx, gy, cell_size)) > 0.0;
+        let new_left = side_sign(new.a, new.b, cell_center(gx, gy, cell_size)) > 0.0;
         if old_left == new_left {
             continue; // 格子没有换侧——分界没扫过它
         }
@@ -85,14 +88,14 @@ pub fn swept_changes(
     out
 }
 
-fn cell_center(gx: i32, gy: i32) -> (f32, f32) {
-    (gx as f32 + 0.5, gy as f32 + 0.5)
+fn cell_center(gx: i32, gy: i32, cell_size: f32) -> (f32, f32) {
+    ((gx as f32 + 0.5) * cell_size, (gy as f32 + 0.5) * cell_size)
 }
 
 /// 栅格化所需的 GridConfig 骨架（只用到 cell_size 与原点 = 0）。
-fn dummy_grid(terrain: &wv_core::terrain::TerrainData) -> crate::state::GridConfig {
+fn dummy_grid(terrain: &wv_core::terrain::TerrainData, cell_size: f32) -> crate::state::GridConfig {
     crate::state::GridConfig {
-        cell_size: 1.0,
+        cell_size,
         raster_origin: bevy::math::Vec2::ZERO,
         map_origin: bevy::math::Vec2::ZERO,
         map_size: bevy::math::Vec2::new(terrain.width as f32, terrain.height as f32),
@@ -145,7 +148,7 @@ mod tests {
         let terrain = fixture(&[(2, 0, 3), (3, 0, 3), (3, 1, 14)]);
         let old = line(1, 3, 2.0);
         let new = line(1, 3, 3.0);
-        let changes = swept_changes(&old, &new, &terrain);
+        let changes = swept_changes(&old, &new, &terrain, 1.0);
         let touched: Vec<(i32, i32)> = changes.iter().map(|(gx, gy, ..)| (*gx, *gy)).collect();
         assert!(touched.contains(&(2, 0)), "扫过格 (2,0) 草原→森林");
         for (gx, gy, before, after) in &changes {
@@ -166,7 +169,7 @@ mod tests {
         let terrain = fixture(&[(2, 0, 1)]);
         let old = line(1, 3, 3.0);
         let new = line(1, 3, 2.0);
-        let changes = swept_changes(&old, &new, &terrain);
+        let changes = swept_changes(&old, &new, &terrain, 1.0);
         assert!(
             changes
                 .iter()
@@ -179,8 +182,36 @@ mod tests {
     fn swept_changes_empty_when_line_returns_to_start() {
         let terrain = fixture(&[]);
         let l = line(1, 3, 2.0);
-        let changes = swept_changes(&l, &l, &terrain);
+        let changes = swept_changes(&l, &l, &terrain, 1.0);
         assert!(changes.is_empty(), "线拖回原位 = 零改写");
+    }
+
+    /// 端点是**栅格局部 wu**——cell_size=8（运行时默认）时 wu 框架必须正确：
+    /// x∈[16,24] wu = 格 2..3。曾硬编码 cs=1 导致扫过带放大错位（review C1）。
+    #[test]
+    fn swept_changes_rasterizes_in_world_units_with_runtime_cell_size() {
+        let terrain = fixture(&[(2, 0, 3), (3, 0, 3), (3, 1, 14)]);
+        let old = BoundaryLine {
+            a: (16.0, 0.0),
+            b: (16.0, 32.0),
+            side_a: 1,
+            side_b: 3,
+        };
+        let new = BoundaryLine {
+            a: (24.0, 0.0),
+            b: (24.0, 32.0),
+            side_a: 1,
+            side_b: 3,
+        };
+        let changes = swept_changes(&old, &new, &terrain, 8.0);
+        let touched: Vec<(i32, i32)> = changes.iter().map(|(gx, gy, ..)| (*gx, *gy)).collect();
+        eprintln!("cs=8 touched: {touched:?}");
+        assert!(touched.contains(&(2, 0)), "wu 16..24 = 格 2：草原→森林");
+        assert!(!touched.contains(&(3, 1)), "水格（第三方）不动");
+        for (_, _, before, after) in &changes {
+            assert_eq!(before.biome, 3);
+            assert_eq!(after.biome, 1);
+        }
     }
 
     #[test]
@@ -190,7 +221,7 @@ mod tests {
         let terrain = fixture(&[(2, 2, 3)]);
         let old = line(1, 3, 2.0);
         let new = line(1, 3, 3.0);
-        let changes = swept_changes(&old, &new, &terrain);
+        let changes = swept_changes(&old, &new, &terrain, 1.0);
         assert!(
             changes
                 .iter()

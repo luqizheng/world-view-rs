@@ -688,7 +688,12 @@ pub fn draw_map_gizmos(
                     .world
                     .terrain_of(&projection.world.maps.first().map(|m| m.id.clone()).unwrap())
                 {
-                    let changes = crate::biome_boundary::swept_changes(&old_line, &line, terrain);
+                    let changes = crate::biome_boundary::swept_changes(
+                        &old_line,
+                        &line,
+                        terrain,
+                        grid_cfg.cell_size,
+                    );
                     let warn = bevy::color::Color::srgba(0.95, 0.75, 0.2, 0.4);
                     for (gx, gy, _, _) in changes {
                         let center = bevy::math::Vec2::new(

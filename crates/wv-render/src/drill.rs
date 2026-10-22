@@ -685,7 +685,13 @@ pub fn draw_drill_markers(
     palette: Res<DrillMarkerPalette>,
     grid: Res<GridConfig>,
     view: Res<ViewState>,
+    recipe: Res<crate::recipe::RenderRecipe>,
 ) {
+    // 2026-10-22 内容矩阵：接 MODE_TABLE(DrillMarkers)——Topographic 下
+    // 不画钻入子图入口（表既有裁定；此前只门了 drill_pick，绘制侧漏接）。
+    if !recipe.enabled(crate::recipe::PassId::DrillMarkers) {
+        return;
+    }
     let accent = palette.accent;
     let visited = palette.visited;
 
@@ -1432,6 +1438,13 @@ pub fn update_region_labels(
                     if region.map != current.id {
                         continue;
                     }
+                    // 2026-10-22 内容矩阵（I2）：CellMap 下仅 Nature 类标签放行
+                    // ——整层门用 Nature 探针会让 Area 标签漏成可点。
+                    if matches!(view.mode, crate::state::ViewMode::Topographic)
+                        && !matches!(region.kind, wv_core::model::region::RegionKind::Nature)
+                    {
+                        continue;
+                    }
                     // 无名区域**不显示在地图上**（ADR-0045 D7）：`name` 为空串
                     // = 作者还没起名。自动分区候选根本不落盘（命名即物化），
                     // 无名的物化区域同样不显示。
@@ -1841,10 +1854,12 @@ mod tests {
         drill.ensure_root(&projection.world);
         assert!(drill.current().is_some(), "夹具前提：当前图已定");
 
-        let mut view = crate::state::ViewState::default();
-        view.mode = ViewMode::Topographic;
-        view.scale = 1.0;
-        view.window_size = bevy::math::Vec2::new(800.0, 600.0);
+        let view = crate::state::ViewState {
+            mode: ViewMode::Topographic,
+            scale: 1.0,
+            window_size: bevy::math::Vec2::new(800.0, 600.0),
+            ..Default::default()
+        };
         let layers = crate::layer_frame::LayerFrame::default();
         let playback = crate::state::PlaybackState::default();
         let grid = GridConfig::default();

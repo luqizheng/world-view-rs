@@ -812,6 +812,8 @@ pub struct SelectionState {
 pub struct BiomeBoundaryState {
     /// 工具是否激活（与 EditCellState.tool_active 同款）。
     pub tool_active: bool,
+    /// 线所属的图（切图检测：不一致即清线）。
+    pub map_id: Option<wv_core::Id>,
     /// 当前分界线；`None` = 未创建（在地图上拖出新线）。
     pub line: Option<crate::biome_boundary::BoundaryLine>,
     /// 拖动中：按下的起点（世界坐标）。`None` = 未在拖。
@@ -821,9 +823,16 @@ pub struct BiomeBoundaryState {
 }
 
 impl BiomeBoundaryState {
-    /// 清空（切图 / 切工具）。
+    /// 清空（切工具）。
     pub fn clear(&mut self) {
         self.tool_active = false;
+        self.map_id = None;
+        self.clear_line();
+    }
+
+    /// 只清线（**切图**用：工具仍激活，但线是旧图的栅格局部坐标——
+    /// 带到新图会按新图地形提交出错误改写，final review I4）。
+    pub fn clear_line(&mut self) {
         self.line = None;
         self.drag_from = None;
         self.drag_line = None;

@@ -1773,24 +1773,13 @@ mod tests {
         world.insert_resource(Assets::<Mesh>::default());
         world.insert_resource(Assets::<ColorMaterial>::default());
         world.insert_resource(Assets::<Image>::default());
-        let mut view = ViewState::default();
-        view.mode = ViewMode::Topographic;
-        world.insert_resource(view);
-        world.insert_resource(GridConfig::default());
-        world.insert_resource(projection_frame_with_roads(
-            vec![(3, Vec2::ZERO, Vec2::X * 100.0)],
-            vec![PlaceDot {
-                pos: Vec2::new(20.0, 20.0),
-                is_city: true,
-                rank: 3,
-                name_len: 3,
-            }],
-        ));
-        world.insert_resource(crate::layer_frame::LayerFrame::default());
+        let view = ViewState {
+            mode: ViewMode::Topographic,
+            ..Default::default()
+        };
+        let layers = crate::layer_frame::LayerFrame::default();
         // 真实 recipe：按 Topographic 行解析（非全关 init_resource——那测不出
-        // 「接了线」还是「恰好没画」）。
-        let view = world.resource::<ViewState>().clone();
-        let layers = world.resource::<crate::layer_frame::LayerFrame>().clone();
+        // 「接了线」还是「恰好没画」）。view 已在上面对象化，直接借用。
         let recipe = resolve_render_recipe(
             &view,
             &layers,
@@ -1810,22 +1799,35 @@ mod tests {
             },
             None,
         );
+        world.insert_resource(view);
+        world.insert_resource(layers);
         world.insert_resource(recipe);
+        world.insert_resource(GridConfig::default());
+        world.insert_resource(projection_frame_with_roads(
+            vec![(3, Vec2::ZERO, Vec2::X * 100.0)],
+            vec![PlaceDot {
+                pos: Vec2::new(20.0, 20.0),
+                is_city: true,
+                rank: 3,
+                name_len: 3,
+            }],
+        ));
         // 街道缓存**有数据**——门控必须让它在 Topographic 下画不出来。
-        let mut cache = crate::streets::StreetLayerCache::default();
-        cache.sources = vec![(
-            "test".to_string(),
-            wv_core::StreetLayer {
-                segments: vec![wv_core::StreetSegment::straight(
-                    wv_core::source::street::RoadClass::Residential,
-                    0.0,
-                    0.0,
-                    50.0,
-                    50.0,
-                )],
-            },
-        )];
-        world.insert_resource(cache);
+        world.insert_resource(crate::streets::StreetLayerCache {
+            sources: vec![(
+                "test".to_string(),
+                wv_core::StreetLayer {
+                    segments: vec![wv_core::StreetSegment::straight(
+                        wv_core::source::street::RoadClass::Residential,
+                        0.0,
+                        0.0,
+                        50.0,
+                        50.0,
+                    )],
+                },
+            )],
+            ..Default::default()
+        });
         world.init_resource::<VectorLayerEntities>();
         world.init_resource::<crate::streets::StreetEditorState>();
 
@@ -1851,22 +1853,11 @@ mod tests {
         world.insert_resource(Assets::<Mesh>::default());
         world.insert_resource(Assets::<ColorMaterial>::default());
         world.insert_resource(Assets::<Image>::default());
-        let mut view = ViewState::default();
-        view.mode = ViewMode::Schematic;
-        world.insert_resource(view);
-        world.insert_resource(GridConfig::default());
-        world.insert_resource(projection_frame_with_roads(
-            vec![(3, Vec2::ZERO, Vec2::X * 100.0)],
-            vec![PlaceDot {
-                pos: Vec2::new(20.0, 20.0),
-                is_city: true,
-                rank: 3,
-                name_len: 3,
-            }],
-        ));
-        world.insert_resource(crate::layer_frame::LayerFrame::default());
-        let view = world.resource::<ViewState>().clone();
-        let layers = world.resource::<crate::layer_frame::LayerFrame>().clone();
+        let view = ViewState {
+            mode: ViewMode::Schematic,
+            ..Default::default()
+        };
+        let layers = crate::layer_frame::LayerFrame::default();
         let recipe = resolve_render_recipe(
             &view,
             &layers,
@@ -1886,20 +1877,34 @@ mod tests {
             },
             None,
         );
+        world.insert_resource(view);
+        world.insert_resource(layers);
         world.insert_resource(recipe);
-        let mut cache = crate::streets::StreetLayerCache::default();
-        cache.sources = vec![(
-            "test".to_string(),
-            wv_core::StreetLayer {
-                segments: vec![wv_core::StreetSegment::straight(
-                    wv_core::source::street::RoadClass::Residential,
-                    0.0,
-                    0.0,
-                    50.0,
-                    50.0,
-                )],
-            },
-        )];
+        world.insert_resource(GridConfig::default());
+        world.insert_resource(projection_frame_with_roads(
+            vec![(3, Vec2::ZERO, Vec2::X * 100.0)],
+            vec![PlaceDot {
+                pos: Vec2::new(20.0, 20.0),
+                is_city: true,
+                rank: 3,
+                name_len: 3,
+            }],
+        ));
+        let cache = crate::streets::StreetLayerCache {
+            map_id: None,
+            sources: vec![(
+                "test".to_string(),
+                wv_core::StreetLayer {
+                    segments: vec![wv_core::StreetSegment::straight(
+                        wv_core::source::street::RoadClass::Residential,
+                        0.0,
+                        0.0,
+                        50.0,
+                        50.0,
+                    )],
+                },
+            )],
+        };
         world.insert_resource(cache);
         world.init_resource::<VectorLayerEntities>();
         world.init_resource::<crate::streets::StreetEditorState>();
