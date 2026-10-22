@@ -208,8 +208,10 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
     // 色块地形（plan v0.1 D3 C 类）——同上。
     (ViewMode::Schematic, [
         true, false, true, true, true, true, true, true, true, true,
-        false, true, true, true, true, true, true, true, true, true,
-        true,
+        false, true, true, true, true, true, true, false, true, true,
+        //                            ^ EventDots=false（2026-10-22 内容矩阵：
+        //                            事件有时间性，编辑态 Schematic 隐藏——ADR-0051）
+        true, // FeatureOverlay
         true, // TerrainDecor
         true, // Rivers
         true, // CellSelection
@@ -484,6 +486,30 @@ mod tests {
     }
 
     /// 模式表覆盖所有 7 个 ViewMode（防新增 mode 时忘加表项）。
+    /// 事件内容层（点 + 标签）在编辑态隐藏（用户裁定：事件有时间性）——
+    /// Schematic 翻 false；Browse（VectorFlat）保持 true。
+    #[test]
+    fn event_dots_hidden_in_schematic_but_visible_in_vector_flat() {
+        let schematic = MODE_TABLE
+            .iter()
+            .find(|(m, _)| *m == ViewMode::Schematic)
+            .unwrap()
+            .1;
+        let vector_flat = MODE_TABLE
+            .iter()
+            .find(|(m, _)| *m == ViewMode::VectorFlat)
+            .unwrap()
+            .1;
+        assert!(
+            !schematic[PassId::EventDots as usize],
+            "Edit（Schematic）下事件内容层应隐藏"
+        );
+        assert!(
+            vector_flat[PassId::EventDots as usize],
+            "Browse（VectorFlat）下事件内容层照常显示"
+        );
+    }
+
     #[test]
     fn mode_table_covers_all_modes() {
         assert_eq!(MODE_TABLE.len(), ViewMode::ALL.len());
