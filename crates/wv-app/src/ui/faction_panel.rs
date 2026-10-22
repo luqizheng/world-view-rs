@@ -46,6 +46,7 @@ pub fn panel_faction(
     mut edit: ResMut<editing::EditHistory>,
     mut display: ResMut<FactionDisplay>,
     current_loc: Res<CurrentLocale>,
+    mut inspector: ResMut<crate::ui::inspector::InspectorState>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -188,6 +189,7 @@ pub fn panel_faction(
                         );
                         if resp.clicked() {
                             projection.selection = Some(faction_selection(&f.id));
+                            inspector.tab = crate::ui::inspector::InspectorTab::Properties;
                         }
                         ui.add_space(space::XS);
                     }

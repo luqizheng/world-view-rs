@@ -180,6 +180,9 @@ pub fn run(config: AppConfig) {
     // Inspector 的当前页签（2026-10-22 统一 Inspector）：面板系统 ResMut 它,
     // 漏 init 即启动期 panic(同 EditCellState 的教训)。
     .init_resource::<crate::ui::inspector::InspectorState>()
+    // Inspector 表单的暂存输入缓冲（egui TextEdit 调用方持有文本，
+    // 漏 init 即启动期 panic——同 EditCellState 的教训）。
+    .init_resource::<crate::ui::inspector::event::InspectorDrafts>()
     .init_resource::<ui::ContinentDialog>()
     .init_resource::<ui::city_intent::CityIntentDialog>()
     // 森林意图的命名对话框（选择工具 M4）：环 + 钉住图 id 自持在对话框里。

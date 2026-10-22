@@ -33,6 +33,7 @@ pub fn layers_tab(
     projection: &mut WorldProjection,
     edit: &mut editing::EditHistory,
     display: &mut FactionDisplay,
+    inspector: &mut super::InspectorState,
 ) {
     let layers = wv_core::resolved_faction_layers(&projection.world);
     let mut factions: Vec<wv_core::Faction> = projection.world.factions.clone();
@@ -162,6 +163,8 @@ pub fn layers_tab(
                 );
                 if resp.clicked() {
                     projection.selection = Some(faction_selection(&f.id));
+                    // 切回「属性」页签（同 region/faction 列表）。
+                    inspector.tab = super::InspectorTab::Properties;
                 }
                 ui.add_space(space::XS);
             }

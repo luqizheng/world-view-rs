@@ -186,6 +186,8 @@ pub fn panel_inspector(
         ResMut<wv_render::state::SelectionState>,
         ResMut<cell::CellPanelMode>,
     ),
+    // 表单暂存输入缓冲（egui TextEdit 是调用方持有文本）。
+    mut drafts: ResMut<event::InspectorDrafts>,
     (shell_cfg, layouts, current_loc): (Res<UiShellConfig>, Res<LayoutFile>, Res<CurrentLocale>),
     (mut tex, mut notice, time): (
         ResMut<wv_render::terrain_view::TerrainTexture>,
@@ -248,6 +250,7 @@ pub fn panel_inspector(
                         &mut display,
                         &mut selection,
                         &mut cell_mode,
+                        &mut drafts,
                         &mut tex,
                         &mut notice,
                         &time,
@@ -255,7 +258,15 @@ pub fn panel_inspector(
                     );
                 }
                 InspectorTab::FactionLayers => {
-                    layers::layers_tab(ui, &shell, &view, &mut projection, &mut edit, &mut display);
+                    layers::layers_tab(
+                        ui,
+                        &shell,
+                        &view,
+                        &mut projection,
+                        &mut edit,
+                        &mut display,
+                        &mut inspector,
+                    );
                 }
                 InspectorTab::Situations => {
                     situations::situations_tab(ui, &shell, &projection);
@@ -285,6 +296,7 @@ fn render_properties(
     display: &mut wv_render::faction_overlays::FactionDisplay,
     selection: &mut wv_render::state::SelectionState,
     cell_mode: &mut cell::CellPanelMode,
+    drafts: &mut event::InspectorDrafts,
     tex: &mut wv_render::terrain_view::TerrainTexture,
     notice: &mut crate::ui_shell::ShellNotice,
     time: &Time,
@@ -424,6 +436,7 @@ fn render_properties(
             let map_id = wv_core::Id::new_unchecked(view.current_map.clone());
             faction::faction_form(
                 ui, shell, &faction, &layers, view, playback, &map_id, projection, edit, display,
+                drafts,
             );
         }
         FormKind::Event => {
@@ -455,6 +468,7 @@ fn render_properties(
                 edit,
                 view,
                 &CurrentLocale(loc),
+                drafts,
             );
         }
     }

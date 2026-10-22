@@ -32,6 +32,45 @@ use crate::ui::widgets::value_box;
 use wv_core::model::event::{Event, EventLocation};
 use wv_core::{Id, TimeSpan};
 
+/// Inspector 表单的**暂存输入缓冲**。
+///
+/// egui 的 TextEdit 是**调用方持有文本**——每帧 `String::new()` 的话，
+/// 打的字下一帧就没了，按钮的「非空才提交」守卫永远过不去（final review
+/// I3；旧势力面板的「添加归属」输入同病，本资源把它一并治了）。
+/// 暂存值跨帧存这里；提交成功后清空。
+#[derive(Resource, Debug, Default, Clone)]
+pub struct InspectorDrafts {
+    /// Event 表单：「添加参与者」输入框。
+    pub event_participant: String,
+    /// Faction 表单：「添加归属」目标 Id。
+    pub membership_target: String,
+    /// Faction 表单：「添加归属」关系类型。
+    pub membership_kind: String,
+    /// Faction 表单：「添加归属」起 day。
+    pub membership_from: String,
+    /// Faction 表单：「添加归属」止 day。
+    pub membership_to: String,
+    /// Faction 表单：「新建疆界」起 day。
+    pub geometry_from: String,
+    /// Faction 表单：「新建疆界」止 day。
+    pub geometry_to: String,
+}
+
+/// 解析「起 day」输入；解析失败（含空串）返回 `fallback`（= 不改）。
+fn parse_day_or(text: &str, fallback: i64) -> i64 {
+    text.trim().parse::<i64>().unwrap_or(fallback)
+}
+
+/// 解析「止 day」输入：**空串 = 开放区间（None）**；非空但解析失败 = 保持
+/// `fallback`（= 不改）。解析失败绝不能被当成 None——打「2w」这样一瞬间的
+/// 中间态会把事件的结束时间悄悄抹掉（final review I2）。
+fn parse_day_open_or(text: &str, fallback: Option<i64>) -> Option<i64> {
+    match text.trim() {
+        "" => None,
+        t => t.parse::<i64>().ok().or(fallback),
+    }
+}
+
 /// 事件属性表单。
 #[allow(clippy::too_many_arguments)]
 pub fn event_form(
@@ -42,6 +81,7 @@ pub fn event_form(
     edit: &mut EditHistory,
     view: &ViewState,
     current_loc: &crate::i18n::CurrentLocale,
+    drafts: &mut InspectorDrafts,
 ) {
     // ── 名称 ────────────────────────────────────────────────────────
     let mut name_buf = event.name.clone();
@@ -67,12 +107,11 @@ pub fn event_form(
         ui.add(egui::TextEdit::singleline(&mut to_buf).desired_width(90.0));
         ui.label("（留空 = 至今）");
     });
-    let new_from = from_buf.trim().parse::<i64>().unwrap_or(event.span.from);
-    let new_to = if to_buf.trim().is_empty() {
-        None
-    } else {
-        to_buf.trim().parse::<i64>().ok()
-    };
+    // 解析失败 = 「还没打完」= **不改**；只有空串才表示「开放到永远」。
+    // 若把 parse 失败当 None，打「2w」这样一瞬间的中间态就会把事件的
+    // 结束时间悄悄抹掉（final review I2）。
+    let new_from = parse_day_or(&from_buf, event.span.from);
+    let new_to = parse_day_open_or(&to_buf, event.span.to);
     if new_from != event.span.from || new_to != event.span.to {
         let mut patch = EventFieldPatch::from_event(event);
         patch.span = TimeSpan {
@@ -131,14 +170,16 @@ pub fn event_form(
             }
         });
     }
-    let mut add_buf = String::new();
     ui.horizontal(|ui| {
         ui.label("＋");
-        ui.add(egui::TextEdit::singleline(&mut add_buf).desired_width(140.0));
-        if ui.button("添加参与者").clicked() && !add_buf.trim().is_empty() {
+        ui.add(egui::TextEdit::singleline(&mut drafts.event_participant).desired_width(140.0));
+        if ui.button("添加参与者").clicked() && !drafts.event_participant.trim().is_empty() {
             let mut patch = EventFieldPatch::from_event(event);
-            patch.participants.push(Id::new_unchecked(add_buf.trim()));
+            patch
+                .participants
+                .push(Id::new_unchecked(drafts.event_participant.trim()));
             update_event_now(projection, edit, view, patch);
+            drafts.event_participant.clear();
         }
     });
 
@@ -204,4 +245,34 @@ pub fn event_form(
         ui.label("ID：");
         value_box(ui, shell, event.id.as_str(), None, false);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_day_open_or_treats_empty_as_open_end() {
+        assert_eq!(parse_day_open_or("", Some(200)), None);
+        assert_eq!(parse_day_open_or("  ", Some(200)), None);
+    }
+
+    #[test]
+    fn parse_day_open_or_keeps_fallback_on_parse_failure() {
+        // 「2w」是打字过程中的中间态——绝不能把结束时间抹成开放区间。
+        assert_eq!(parse_day_open_or("2w", Some(200)), Some(200));
+        assert_eq!(parse_day_open_or("abc", None), None);
+    }
+
+    #[test]
+    fn parse_day_open_or_parses_valid_number() {
+        assert_eq!(parse_day_open_or("300", Some(200)), Some(300));
+    }
+
+    #[test]
+    fn parse_day_or_falls_back_on_garbage() {
+        assert_eq!(parse_day_or("12x", 100), 100);
+        assert_eq!(parse_day_or("42", 100), 42);
+        assert_eq!(parse_day_or("", 100), 100);
+    }
 }

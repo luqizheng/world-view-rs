@@ -315,15 +315,7 @@ fn render_fields(
 
     // ── 即改即提交（每格 1 command，[ADR-0040] §决策 8）──
     if next != before {
-        push_cell_edit(
-            edit,
-            &mut projection.world,
-            edit_cell,
-            (gx, gy),
-            before,
-            next,
-            tex,
-        );
+        push_cell_edit(edit, projection, edit_cell, (gx, gy), before, next, tex);
     }
 }
 
@@ -760,15 +752,20 @@ fn mark_dirty_cells(
 }
 
 /// 单格提交（stale 快照校验 + History 落盘；每格 1 command）。
+///
+/// 收 `&mut WorldProjection` 而非裸 `&mut World`：提交成功后要把
+/// `projection.dirty` 置 true——顶栏的保存指示读它；漏了就是
+/// 「改了格、指示仍显示已保存、关工程即丢」（final review I1）。
 fn push_cell_edit(
     edit: &mut crate::edit::editing::EditHistory,
-    world: &mut wv_core::World,
+    projection: &mut WorldProjection,
     edit_cell: &EditCellState,
     (gx, gy): (i32, i32),
     before: wv_core::terrain::TerrainCellData,
     after: wv_core::terrain::TerrainCellData,
     tex: &mut wv_render::terrain_view::TerrainTexture,
 ) {
+    let world = &mut projection.world;
     let Some(map) = edit_cell.last_map_id.clone() else {
         return;
     };
@@ -792,6 +789,7 @@ fn push_cell_edit(
     match edit.history.commit(world, tx) {
         Ok(dirty) => {
             edit.record_dirty(dirty);
+            projection.dirty = true;
             // 标脏：改了格，地形纹理要重绘。旧代码直提时**漏了这一步**
             // ——命令进了撤销栈，但地图可能不刷新（见模块文档）。
             tex.mark_dirty([
@@ -946,9 +944,10 @@ mod tests {
             biome: 1,
         };
 
+        assert!(!projection.dirty, "前置：初始未脏");
         push_cell_edit(
             &mut edit,
-            &mut projection.world,
+            &mut projection,
             &edit_cell,
             (1, 2),
             before,
@@ -960,6 +959,10 @@ mod tests {
             tex.dirty,
             Some([1, 2, 2, 3]),
             "改了格 (1,2) 必须标脏矩形 [1,2,2,3]——否则地图不重绘"
+        );
+        assert!(
+            projection.dirty,
+            "改了格必须置 projection.dirty——否则顶栏保存指示仍显示已保存，关工程即丢"
         );
     }
 

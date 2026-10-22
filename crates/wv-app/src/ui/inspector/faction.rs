@@ -43,6 +43,7 @@ pub fn faction_form(
     projection: &mut WorldProjection,
     edit: &mut editing::EditHistory,
     display: &mut FactionDisplay,
+    drafts: &mut super::event::InspectorDrafts,
 ) {
     let id = faction.id.clone();
     {
@@ -164,31 +165,39 @@ pub fn faction_form(
             });
         }
         // 新增归属：target / kind / from / to。
+        // 输入缓冲持久化（egui TextEdit 是调用方持有文本——每帧 new 的
+        // 缓冲打不进字，final review I3）。
         ui.push_id(("membership_add", faction.id.as_str()), |ui| {
-            let mut target_buf = String::new();
-            let mut kind_buf = String::new();
-            let mut from_buf = playback.current_day.to_string();
-            let mut to_buf = String::new();
+            if drafts.membership_from.is_empty() {
+                drafts.membership_from = playback.current_day.to_string();
+            }
             ui.horizontal(|ui| {
                 ui.label("目标：");
-                ui.add(egui::TextEdit::singleline(&mut target_buf).desired_width(110.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut drafts.membership_target).desired_width(110.0),
+                );
                 ui.label("类型：");
-                ui.add(egui::TextEdit::singleline(&mut kind_buf).desired_width(80.0));
+                ui.add(egui::TextEdit::singleline(&mut drafts.membership_kind).desired_width(80.0));
                 ui.label("起 day：");
-                ui.add(egui::TextEdit::singleline(&mut from_buf).desired_width(60.0));
+                ui.add(egui::TextEdit::singleline(&mut drafts.membership_from).desired_width(60.0));
                 ui.label("止：");
-                ui.add(egui::TextEdit::singleline(&mut to_buf).desired_width(60.0));
-                if ui.button("+ 添加归属").clicked() && !target_buf.trim().is_empty() {
-                    let from: i64 = from_buf.trim().parse().unwrap_or(playback.current_day);
-                    let to: Option<i64> = if to_buf.trim().is_empty() {
+                ui.add(egui::TextEdit::singleline(&mut drafts.membership_to).desired_width(60.0));
+                if ui.button("+ 添加归属").clicked() && !drafts.membership_target.trim().is_empty()
+                {
+                    let from: i64 = drafts
+                        .membership_from
+                        .trim()
+                        .parse()
+                        .unwrap_or(playback.current_day);
+                    let to: Option<i64> = if drafts.membership_to.trim().is_empty() {
                         None
                     } else {
-                        to_buf.trim().parse().ok()
+                        drafts.membership_to.trim().parse().ok()
                     };
-                    let kind = if kind_buf.trim().is_empty() {
+                    let kind = if drafts.membership_kind.trim().is_empty() {
                         None
                     } else {
-                        Some(kind_buf.trim().to_string())
+                        Some(drafts.membership_kind.trim().to_string())
                     };
                     faction_panel_actions::add_membership_now(
                         projection,
@@ -196,11 +205,14 @@ pub fn faction_form(
                         view,
                         id.clone(),
                         Membership {
-                            target: Id::new_unchecked(target_buf.trim()),
+                            target: Id::new_unchecked(drafts.membership_target.trim()),
                             kind,
                             span: TimeSpan { from, to },
                         },
                     );
+                    // 提交成功清空目标（保留 day 输入，连续添加同区间更顺手）。
+                    drafts.membership_target.clear();
+                    drafts.membership_kind.clear();
                 }
             });
         });
@@ -260,20 +272,25 @@ pub fn faction_form(
                 });
             }
         }
-        // 新增几何。
+        // 新增几何。（day 输入同样走持久缓冲——同 I3。）
         ui.horizontal(|ui| {
-            let mut from_buf = playback.current_day.to_string();
-            let mut to_buf = String::new();
+            if drafts.geometry_from.is_empty() {
+                drafts.geometry_from = playback.current_day.to_string();
+            }
             ui.label("起 day：");
-            ui.text_edit_singleline(&mut from_buf);
+            ui.text_edit_singleline(&mut drafts.geometry_from);
             ui.label("止（留空=至今）：");
-            ui.text_edit_singleline(&mut to_buf);
+            ui.text_edit_singleline(&mut drafts.geometry_to);
             if ui.button("+ 新建疆界").clicked() {
-                let from: i64 = from_buf.trim().parse().unwrap_or(playback.current_day);
-                let to: Option<i64> = if to_buf.trim().is_empty() {
+                let from: i64 = drafts
+                    .geometry_from
+                    .trim()
+                    .parse()
+                    .unwrap_or(playback.current_day);
+                let to: Option<i64> = if drafts.geometry_to.trim().is_empty() {
                     None
                 } else {
-                    to_buf.trim().parse().ok()
+                    drafts.geometry_to.trim().parse().ok()
                 };
                 faction_panel_actions::upsert_geometry_now(
                     projection,
