@@ -24,7 +24,8 @@ pub use command::{
     AddPlaceEdgeCommand, AddRegionCommand, AddStreetSegmentCommand, ClearMeasurementsCommand,
     DeleteBuildingCommand, DeleteStreetSegmentCommand, EditCommand, EditError, EditResult,
     GenerateContinentCommand, MoveCityCommand, RemoveMeasurementCommand, RemoveRegionCommand,
-    SetCityOutlineCommand, SetMapOrientationCommand, UpdatePlaceCommand, UpdateRegionCommand,
+    SetCityOutlineCommand, SetMapOrientationCommand, UpdateEventCommand, UpdatePlaceCommand,
+    UpdateRegionCommand,
 };
 pub use history::{History, Transaction};
 pub use nature_region::{

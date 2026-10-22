@@ -3190,6 +3190,143 @@ impl EditCommand for UpdateRegionCommand {
     }
 }
 
+// ── 事件属性命令（统一 Inspector · 2026-10-22）───────────────────────────────
+
+use wv_core::model::event::EventLocation;
+
+/// 事件属性的**逐字段**快照。
+///
+/// 只含本命令会改的六个字段——**不含** `effects` / `narrations`。
+/// 理由：这两个字段不在本命令的编辑面内，但可能有别的路径改它们
+/// （将来的事件效果编辑器等）。若 revert 写回整实体快照，会把那些
+/// 改动一并误退——「撤销一次改名，把作者加的效果也抹了」是实打实的
+/// 数据丢失。故快照必须**窄**到本命令自己的改动面。
+#[derive(Debug, Clone)]
+struct EventFields {
+    name: String,
+    span: wv_core::time::TimeSpan,
+    location: Option<EventLocation>,
+    participants: Vec<wv_core::Id>,
+    narrative: Option<String>,
+    outcome: Option<String>,
+}
+
+/// 改事件属性（名称 / 时间跨度 / 地点 / 参与者 / 叙述 / 结果）。
+///
+/// 统一 Inspector 的「属性」页签用它写回事件字段
+/// （[2026-10-22 统一 Inspector 设计](../../superpowers/specs/2026-10-22-unified-inspector-panel-design.md)）。
+///
+/// ## 不含的字段
+///
+/// `effects` / `narrations` 本轮**不提供编辑入口**（spec §11 Q1），
+/// 故不进快照——`revert` 不会碰它们（见 [`EventFields`] 的理由）。
+///
+/// ## 时间语义
+///
+/// `span` 是事件自身的时间区间，改它是「改事件的发生时间」——
+/// 事件本来就是**带区间的实体**，不是「当前值」字段，故不违反 P7。
+/// 但**不允许**在事件里加 `current_day` 之类的当前值字段。
+///
+/// ## 回滚
+///
+/// `apply` 缓存 `EventFields`（窄快照），`revert` 只把这六个字段写回，
+/// 逐字段对称——apply 改了哪些，revert 就退哪些，不多不少。
+#[derive(Debug)]
+pub struct UpdateEventCommand {
+    /// 目标事件 ID。
+    pub id: wv_core::Id,
+    /// 新名称。
+    pub new_name: String,
+    /// 新时间跨度。
+    pub new_span: wv_core::time::TimeSpan,
+    /// 新发生地点。
+    pub new_location: Option<EventLocation>,
+    /// 新参与者名单。
+    pub new_participants: Vec<wv_core::Id>,
+    /// 新过程描述。
+    pub new_narrative: Option<String>,
+    /// 新结果描述。
+    pub new_outcome: Option<String>,
+    before: std::sync::Mutex<Option<EventFields>>,
+}
+
+impl UpdateEventCommand {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: wv_core::Id,
+        new_name: String,
+        new_span: wv_core::time::TimeSpan,
+        new_location: Option<EventLocation>,
+        new_participants: Vec<wv_core::Id>,
+        new_narrative: Option<String>,
+        new_outcome: Option<String>,
+    ) -> Self {
+        Self {
+            id,
+            new_name,
+            new_span,
+            new_location,
+            new_participants,
+            new_narrative,
+            new_outcome,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for UpdateEventCommand {
+    fn label(&self) -> String {
+        format!("改事件「{}」", self.id)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let e = world
+            .events
+            .iter_mut()
+            .find(|e| e.id == self.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Event {}", self.id)))?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = Some(EventFields {
+            name: e.name.clone(),
+            span: e.span,
+            location: e.location.clone(),
+            participants: e.participants.clone(),
+            narrative: e.narrative.clone(),
+            outcome: e.outcome.clone(),
+        });
+        e.name = self.new_name.clone();
+        e.span = self.new_span;
+        e.location = self.new_location.clone();
+        e.participants = self.new_participants.clone();
+        e.narrative = self.new_narrative.clone();
+        e.outcome = self.new_outcome.clone();
+        Ok(vec!["timeline/events".into()])
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let prev = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("UpdateEvent 尚未 apply".into()))?;
+        let e = world
+            .events
+            .iter_mut()
+            .find(|e| e.id == self.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Event {}", self.id)))?;
+        // 逐字段写回——**不**整实体替换：effects / narrations 不在快照里，
+        // 整实体替换会把它们一并退掉（见 EventFields 文档）。
+        e.name = prev.name;
+        e.span = prev.span;
+        e.location = prev.location;
+        e.participants = prev.participants;
+        e.narrative = prev.narrative;
+        e.outcome = prev.outcome;
+        Ok(())
+    }
+}
+
 // ── 事实地点与地界命令（theme overlay） ─────────────────────────────────────
 
 use wv_core::distance::Place;
@@ -5815,6 +5952,127 @@ mod tests {
                 .apply(&mut w)
                 .unwrap();
         assert_eq!(dirty, vec!["distances/places".to_string()]);
+    }
+
+    // ====== 事件属性命令（统一 Inspector · 2026-10-22）======================
+
+    /// 事件夹具：带时间跨度 + 一个参与者。
+    fn sample_event(id: &str, name: &str) -> wv_core::model::event::Event {
+        wv_core::model::event::Event {
+            id: Id::new_unchecked(id),
+            name: name.into(),
+            span: TimeSpan {
+                from: 100,
+                to: Some(200),
+            },
+            location: None,
+            participants: vec![Id::new_unchecked("char_a")],
+            narrative: Some("旧叙述".into()),
+            outcome: None,
+            effects: Vec::new(),
+            narrations: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn update_event_changes_fields_then_reverts() {
+        let mut w = World::default();
+        w.events.push(sample_event("e1", "旧名"));
+
+        let cmd = UpdateEventCommand::new(
+            Id::new_unchecked("e1"),
+            "新名".into(),
+            TimeSpan {
+                from: 300,
+                to: None,
+            },
+            None,
+            vec![Id::new_unchecked("char_b")],
+            Some("新叙述".into()),
+            Some("新结果".into()),
+        );
+        cmd.apply(&mut w).unwrap();
+        assert_eq!(w.events[0].name, "新名");
+        assert_eq!(w.events[0].span.from, 300);
+        assert_eq!(w.events[0].span.to, None);
+        assert_eq!(w.events[0].participants, vec![Id::new_unchecked("char_b")]);
+        assert_eq!(w.events[0].narrative.as_deref(), Some("新叙述"));
+        assert_eq!(w.events[0].outcome.as_deref(), Some("新结果"));
+
+        cmd.revert(&mut w).unwrap();
+        assert_eq!(w.events[0].name, "旧名");
+        assert_eq!(w.events[0].span.from, 100);
+        assert_eq!(w.events[0].span.to, Some(200));
+        assert_eq!(w.events[0].participants, vec![Id::new_unchecked("char_a")]);
+        assert_eq!(w.events[0].narrative.as_deref(), Some("旧叙述"));
+        assert_eq!(w.events[0].outcome, None);
+    }
+
+    #[test]
+    fn update_event_revert_preserves_untouched_effects() {
+        let mut w = World::default();
+        w.events.push(sample_event("e1", "旧名"));
+        // effects 不在本命令的编辑面内——revert **不得**把它一并退掉。
+        w.events[0]
+            .effects
+            .push(wv_core::model::event::Effect::Custom {
+                note: "作者手写的效果".into(),
+            });
+
+        let cmd = UpdateEventCommand::new(
+            Id::new_unchecked("e1"),
+            "新名".into(),
+            TimeSpan {
+                from: 100,
+                to: Some(200),
+            },
+            None,
+            Vec::new(),
+            None,
+            None,
+        );
+        cmd.apply(&mut w).unwrap();
+        cmd.revert(&mut w).unwrap();
+
+        assert_eq!(w.events[0].name, "旧名", "本命令改的字段应回退");
+        assert_eq!(
+            w.events[0].effects.len(),
+            1,
+            "revert 只写回本命令触及的字段——effects 不在其列，应保持不变"
+        );
+    }
+
+    #[test]
+    fn update_event_on_missing_id_fails() {
+        let mut w = World::default();
+        let cmd = UpdateEventCommand::new(
+            Id::new_unchecked("ghost"),
+            "X".into(),
+            TimeSpan { from: 0, to: None },
+            None,
+            Vec::new(),
+            None,
+            None,
+        );
+        assert!(cmd.apply(&mut w).is_err());
+    }
+
+    #[test]
+    fn update_event_dirty_path_is_events_prefix() {
+        let mut w = World::default();
+        w.events.push(sample_event("e1", "旧名"));
+        let dirty = UpdateEventCommand::new(
+            Id::new_unchecked("e1"),
+            "新名".into(),
+            TimeSpan { from: 0, to: None },
+            None,
+            Vec::new(),
+            None,
+            None,
+        )
+        .apply(&mut w)
+        .unwrap();
+        assert_eq!(dirty, vec!["timeline/events".to_string()]);
     }
 
     // ====== 城市子图命令（ADR-0022 D2 / D5）========================
