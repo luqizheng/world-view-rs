@@ -226,7 +226,7 @@ pub struct PlaceIndex {
 
 impl PlaceIndex {
     /// 对整个世界的距离图建索引。单遍扫描，先 `by_id` 后分桶。
-    fn build(world: &wv_core::World) -> Self {
+    pub(crate) fn build(world: &wv_core::World) -> Self {
         let places = &world.distances.places;
         let mut index = Self {
             by_id: HashMap::with_capacity(places.len()),

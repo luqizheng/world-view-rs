@@ -168,6 +168,7 @@ const STREET_LABEL_Z: f32 = 0.35;
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_street_labels(
     mut commands: Commands,
+    recipe: Res<crate::recipe::RenderRecipe>,
     cache: Res<StreetLayerCache>,
     projection: Res<WorldProjection>,
     drill: Res<DrillState>,
@@ -203,7 +204,10 @@ pub fn update_street_labels(
     let mut wanted: Vec<(Vec2, String)> = Vec::new();
     // ADR-0017 §2.9 Q3：街名走 Label 渲染组 + Road 图层（合取）。
     // 去掉 LodTier::Edit 限制——Q3 拍板"全接管"，所有级别都显示街名。
-    if layers.road.visible && layers.label.visible {
+    if layers.road.visible
+        && layers.label.visible
+        && recipe.enabled(crate::recipe::PassId::StreetLabels)
+    {
         // ADR-0015 时间过滤：图级窗口（当前图）∧ 段级窗口（每段自带）。
         let t = playback.current_day;
         let map_span = drill

@@ -769,6 +769,7 @@ pub struct SeaLabel;
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_place_labels(
     mut commands: Commands,
+    recipe: Res<crate::recipe::RenderRecipe>,
     projection: Res<WorldProjection>,
     place_index: Res<crate::world_projection::PlaceIndex>,
     drill: Res<DrillState>,
@@ -811,7 +812,13 @@ pub fn update_place_labels(
     let tier = lod_tier(view.scale);
     let t = playback.current_day;
     let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
-    if layers.place.visible && layers.label.visible {
+    // 2026-10-22 三模式内容矩阵：MODE_TABLE 门（Topographic ⇒ PlaceLabels
+    // = false ⇒ wanted 置空 → 既有隐藏尾部把池全部隐藏；`hits.clear()` 在
+    // 门外照常跑——链首清场不得跳过）。
+    if layers.place.visible
+        && layers.label.visible
+        && recipe.enabled(crate::recipe::PassId::PlaceLabels)
+    {
         if let Some(current) = drill.current_node(&projection.world) {
             let map_span = current.time_span.as_ref();
             // 走锚定桶 + 视口裁剪 + 级别硬门（ADR-0030 D6）：碰撞过滤是 O(n²)
@@ -982,6 +989,7 @@ pub fn update_place_labels(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_faction_labels(
     mut commands: Commands,
+    recipe: Res<crate::recipe::RenderRecipe>,
     projection: Res<WorldProjection>,
     drill: Res<DrillState>,
     grid: Res<GridConfig>,
@@ -1015,7 +1023,7 @@ pub fn update_faction_labels(
     let t = playback.current_day;
     let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
     // Label 层可见性（ADR-0017 Q1）
-    if layers.label.visible {
+    if layers.label.visible && recipe.enabled(crate::recipe::PassId::Faction) {
         if let Some(current) = drill.current_node(&projection.world) {
             let map_span = current.time_span.as_ref();
             if wv_core::label_visible_at(map_span, None, t) {
@@ -1186,6 +1194,7 @@ pub fn update_faction_labels(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_event_labels(
     mut commands: Commands,
+    recipe: Res<crate::recipe::RenderRecipe>,
     projection: Res<WorldProjection>,
     drill: Res<DrillState>,
     grid: Res<GridConfig>,
@@ -1219,7 +1228,7 @@ pub fn update_event_labels(
     let t = playback.current_day;
     let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
     // Label 层可见性（ADR-0017 Q1）
-    if layers.label.visible {
+    if layers.label.visible && recipe.enabled(crate::recipe::PassId::EventDots) {
         if let Some(current) = drill.current_node(&projection.world) {
             let map_span = current.time_span.as_ref();
             // Event 有 span 字段（ADR-0017 §2.3：entity_span = event.span）
@@ -1367,6 +1376,7 @@ pub fn update_event_labels(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_region_labels(
     mut commands: Commands,
+    recipe: Res<crate::recipe::RenderRecipe>,
     projection: Res<WorldProjection>,
     drill: Res<DrillState>,
     grid: Res<GridConfig>,
@@ -1400,7 +1410,7 @@ pub fn update_region_labels(
     let t = playback.current_day;
     let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
     // Label 层可见性（ADR-0017 Q1）
-    if layers.label.visible {
+    if layers.label.visible && recipe.enabled(crate::recipe::PassId::TerrainDecor) {
         if let Some(current) = drill.current_node(&projection.world) {
             let map_span = current.time_span.as_ref();
             if wv_core::label_visible_at(map_span, None, t) {
@@ -1562,6 +1572,7 @@ pub fn update_region_labels(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_sea_labels(
     mut commands: Commands,
+    recipe: Res<crate::recipe::RenderRecipe>,
     projection: Res<WorldProjection>,
     drill: Res<DrillState>,
     grid: Res<GridConfig>,
@@ -1594,7 +1605,7 @@ pub fn update_sea_labels(
     let t = playback.current_day;
     let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
     // Label 渲染组可见性（与 faction / region / event 同一开关）
-    if layers.label.visible {
+    if layers.label.visible && recipe.enabled(crate::recipe::PassId::SeaLabels) {
         if let Some(current) = drill.current_node(&projection.world) {
             let map_span = current.time_span.as_ref();
             if wv_core::label_visible_at(map_span, None, t) {
@@ -1779,6 +1790,121 @@ mod tests {
 
     /// 标签门槛与 POI 点标同一把尺（ADR-0030 D6）：旧两档工程（无 rank）经
     /// `effective_rank` 折算后，Nation 档只留城市（w/h）标签的行为不回归。
+    /// 门控（2026-10-22 三模式内容矩阵 Review Focus #1/#2）：Topographic 下
+    /// recipe.enabled(PlaceLabels)=false ⇒ **池实体全部 Hidden 且命中表清空**。
+    /// 门控必须走「wanted 置空 → 既有隐藏尾部」——若只跳过注册，旧标签会
+    /// 冻结在屏上；`hits.clear()` 归链首照常跑（否则别家追加的命中成 stale）。
+    #[test]
+    fn place_labels_pool_hidden_and_hits_cleared_under_topographic() {
+        use crate::label_pick::LabelHits;
+        use crate::recipe::{resolve_render_recipe, PassId};
+        use crate::state::ViewMode;
+
+        let map_id = wv_core::Id::new_unchecked("m1");
+        // 世界：根图 + 一个锚定地点（w/h 齐备 → effective_rank 3，Nation 档可见）。
+        let mut world = World::default();
+        world.maps.push(node("m1", MapLevel::World, None, &[]));
+        world.distances.places.push(wv_core::distance::Place {
+            line: None,
+            id: wv_core::Id::new_unchecked("p1"),
+            name: "地名".into(),
+            feature: None,
+            biome: None,
+            envelope: None,
+            map: Some(map_id.clone()),
+            x: Some(10.0),
+            y: Some(10.0),
+            w: Some(12.0),
+            h: Some(8.0),
+            rank: None,
+        });
+        let projection = crate::state::WorldProjection {
+            world,
+            ..Default::default()
+        };
+
+        let mut drill = DrillState::default();
+        drill.ensure_root(&projection.world);
+        assert!(drill.current().is_some(), "夹具前提：当前图已定");
+
+        let mut view = crate::state::ViewState::default();
+        view.mode = ViewMode::Topographic;
+        view.scale = 1.0;
+        view.window_size = bevy::math::Vec2::new(800.0, 600.0);
+        let layers = crate::layer_frame::LayerFrame::default();
+        let playback = crate::state::PlaybackState::default();
+        let grid = GridConfig::default();
+        let tex = crate::terrain_view::terrain_texture::TerrainTexture {
+            handle: bevy::asset::Handle::default(),
+            size: 4,
+            height: 4,
+            res: 1,
+            dirty: None,
+            chunks_dirty: None,
+            last_mode: None,
+            last_soften: false,
+            last_theme_id: "",
+            last_map: None,
+        };
+        let recipe = resolve_render_recipe(&view, &layers, &projection, &drill, &tex, None);
+        assert!(
+            !recipe.enabled(PassId::PlaceLabels),
+            "夹具前提：Topographic 行 PlaceLabels=false"
+        );
+
+        let mut bevy_world = bevy::prelude::World::default();
+        let place_index = crate::world_projection::PlaceIndex::build(&projection.world);
+        bevy_world.insert_resource(projection);
+        bevy_world.insert_resource(place_index);
+        bevy_world.insert_resource(drill);
+        bevy_world.insert_resource(view);
+        bevy_world.insert_resource(layers);
+        bevy_world.insert_resource(playback);
+        bevy_world.insert_resource(grid);
+        bevy_world.insert_resource(recipe);
+        bevy_world.insert_resource(crate::theme::fonts::LoadedFonts::default());
+        // 预置一条命中（清场语义的验证点）。
+        let mut hits = LabelHits::default();
+        hits.items.push(crate::label_pick::LabelHit {
+            center: bevy::math::Vec2::ZERO,
+            half: bevy::math::Vec2::splat(5.0),
+            target: wv_core::SelectedEntity::new(
+                wv_core::EntityKind::Place,
+                wv_core::Id::new_unchecked("p1"),
+            ),
+        });
+        bevy_world.insert_resource(hits);
+        // 池实体 ×2（可见态）。
+        for _ in 0..2 {
+            bevy_world.spawn((
+                PlaceLabel,
+                Text2d::new("旧标签"),
+                TextFont::default(),
+                TextColor(bevy::color::Color::WHITE),
+                bevy::transform::components::Transform::default(),
+                bevy::prelude::Visibility::Visible,
+            ));
+        }
+
+        let mut schedule = bevy::ecs::schedule::Schedule::default();
+        schedule.add_systems(update_place_labels);
+        schedule.run(&mut bevy_world);
+
+        let hits = bevy_world.resource::<LabelHits>();
+        assert!(
+            hits.items.is_empty(),
+            "Topographic 下命中表必须清空（链首清场照常）"
+        );
+        let mut q = bevy_world.query::<(&PlaceLabel, &bevy::prelude::Visibility)>();
+        let vis: Vec<_> = q.iter(&bevy_world).map(|(_, v)| *v).collect();
+        assert_eq!(vis.len(), 2, "夹具前提：池实体 2 个");
+        assert!(
+            vis.iter()
+                .all(|v| matches!(v, bevy::prelude::Visibility::Hidden)),
+            "Topographic 下池实体必须全部 Hidden（走隐藏尾部，不得冻结在屏上）"
+        );
+    }
+
     #[test]
     fn label_gate_folds_legacy_places_identically_to_pois() {
         let place = |w: Option<f32>, h: Option<f32>, rank: Option<u8>| wv_core::distance::Place {

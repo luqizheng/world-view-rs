@@ -274,7 +274,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         false, // Faction
         false, // PlaceLabels
         false, // StreetLabels
-        false, // SeaLabels
+        true,  // SeaLabels（2026-10-22 内容矩阵：海名属地貌呈现，CellMap 保留——ADR-0051）
         false, // Measurement（不要测量叠加）
         false, // BrushCursor（分析视图不要笔刷光标）
         false, // Tracks
