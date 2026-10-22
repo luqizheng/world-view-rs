@@ -798,3 +798,84 @@ mod tests {
         assert!(idx.entries.is_empty(), "别的图的区域不参与本图解析");
     }
 }
+
+// ── 全图未命名候选高亮（2026-10-22 内容矩阵 §2.6-3 · T11）──────────────
+
+/// 未命名候选的**缓存**：重算代价 O(格数)（`partition_by_biome` 全图 BFS），
+/// 不能每帧跑——按 (图, 世界是否变过) 缓存；`WorldProjection.is_changed()`
+/// 在任一命令/选择写入时翻真（点击级重算，~10ms 一次，仅 CellMap+开关开时）。
+#[derive(Resource, Debug, Default)]
+pub struct CandidateOverlayCache {
+    /// 缓存键 = (图 id, 枚举时是否记录过 dirty)。map 变 / 世界变 ⇒ 重算。
+    pub key: Option<wv_core::Id>,
+    /// 每个候选的外环折线（**视图空间**，供 gizmos 直绘）。
+    pub outlines: Vec<Vec<(bevy::math::Vec2, bevy::math::Vec2)>>,
+}
+
+/// 全图枚举未命名候选（region_overlay 系统尾部调用）。
+///
+/// 排除：已被命名 Nature 区覆盖的候选（代表点 = 外环首点，`point_in_geometry`
+/// 测命中）；NONE 群系（无生态语义的格子不构成「自然区」）。
+pub(crate) fn enumerate_candidates(
+    world: &wv_core::World,
+    map: &wv_core::Id,
+    grid: &GridConfig,
+    raster_to_map: bevy::math::Vec2,
+) -> Vec<Vec<(bevy::math::Vec2, bevy::math::Vec2)>> {
+    use wv_core::base::geometry::point_in_geometry;
+    let Some(data) = world.terrain_of(map) else {
+        return Vec::new();
+    };
+    let cells: Vec<wv_terrain::TerrainCell> = data
+        .cells
+        .iter()
+        .map(|c| wv_terrain::TerrainCell {
+            height: c.height,
+            surface: c.surface,
+            biome: c.biome,
+        })
+        .collect();
+    let Some(g) = wv_terrain::TerrainGrid::from_cells(data.width, data.height, cells) else {
+        return Vec::new();
+    };
+    let named: Vec<wv_core::map::GeometryData> = world
+        .regions
+        .iter()
+        .filter(|r| r.map == *map && matches!(r.kind, wv_core::model::region::RegionKind::Nature))
+        .filter(|r| !r.polygon.is_empty())
+        .map(|r| wv_core::map::GeometryData::Polygon(r.polygon.clone()))
+        .collect::<Vec<wv_core::map::GeometryData>>();
+
+    let mut out = Vec::new();
+    for region in wv_terrain::region::partition_by_biome(&g) {
+        if region.biome == wv_terrain::BIOME_NONE || region.outer.len() < 3 {
+            continue;
+        }
+        // 代表点 = 外环首点（格坐标 → 图内局部 wu）。
+        let (fx, fy) = region.outer[0];
+        let px = fx * grid.cell_size + raster_to_map.x;
+        let py = fy * grid.cell_size + raster_to_map.y;
+        if named.iter().any(|geo| point_in_geometry(geo, px, py)) {
+            continue;
+        }
+        // 外环折线（视图空间）+ 简易虚线（隔段保留）。
+        let ring: Vec<bevy::math::Vec2> = region
+            .outer
+            .iter()
+            .map(|&(x, y)| {
+                grid.map_to_view(bevy::math::Vec2::new(
+                    x * grid.cell_size + raster_to_map.x,
+                    y * grid.cell_size + raster_to_map.y,
+                ))
+            })
+            .collect();
+        let mut dashed: Vec<(bevy::math::Vec2, bevy::math::Vec2)> = Vec::new();
+        for pair in ring.windows(2).step_by(2) {
+            dashed.push((pair[0], pair[1]));
+        }
+        if !dashed.is_empty() {
+            out.push(dashed);
+        }
+    }
+    out
+}

@@ -309,6 +309,9 @@ pub fn run(config: AppConfig) {
                 editing::commit_stroke_on_release,
                 // 单格编辑（[ADR-0040]）：点击 → cell_pick → EditCellState.selected
                 editing::commit_edit_cell_on_click,
+                // 候选点选（2026-10-22 内容矩阵）：在 cell 点选之后跑——
+                // 读 selected 判定是否落进未命名候选。
+                crate::edit::nature_region_actions::pick_candidate_on_click,
                 // 批量选区（2026-10-20）：多边形闭合 → 栅格化贴合方格
                 editing::sync_region_cells.after(camera::track_cursor_world),
                 streets::commit_street_click,

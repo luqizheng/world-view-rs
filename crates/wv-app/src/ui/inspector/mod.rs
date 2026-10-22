@@ -54,6 +54,7 @@ pub mod cell;
 pub mod event;
 pub mod faction;
 pub mod layers;
+pub mod nature_candidate;
 pub mod place;
 pub mod region;
 pub mod situations;
@@ -187,9 +188,10 @@ pub fn panel_inspector(
         Res<crate::state::PlaybackState>,
         Res<wv_render::state::GridConfig>,
     ),
-    (mut edit_cell, mut display): (
+    (mut edit_cell, mut display, mut nature): (
         ResMut<wv_render::state::EditCellState>,
         ResMut<wv_render::faction_overlays::FactionDisplay>,
+        ResMut<crate::state::NatureRegionUiState>,
     ),
     // Cell 表单的另两个会话态：多边形选区（批量模式用）+ 单格/批量模式切换。
     (mut selection, mut cell_mode): (
@@ -260,6 +262,7 @@ pub fn panel_inspector(
                         &grid,
                         &mut edit_cell,
                         &mut display,
+                        &mut nature,
                         &mut selection,
                         &mut cell_mode,
                         &mut drafts,
@@ -306,6 +309,7 @@ fn render_properties(
     grid: &wv_render::state::GridConfig,
     edit_cell: &mut wv_render::state::EditCellState,
     display: &mut wv_render::faction_overlays::FactionDisplay,
+    nature: &mut crate::state::NatureRegionUiState,
     selection: &mut wv_render::state::SelectionState,
     cell_mode: &mut cell::CellPanelMode,
     drafts: &mut event::InspectorDrafts,
@@ -330,6 +334,13 @@ fn render_properties(
             ));
         }
         FormKind::Cell => {
+            // 候选命名上下文优先于 Cell 表单（作者点中候选 = 正在命名）。
+            if let Some(cell) = nature.pending_candidate {
+                nature_candidate::candidate_naming_form(
+                    ui, shell, cell, projection, edit, view, grid, notice, time, nature,
+                );
+                return;
+            }
             cell::cell_form(
                 ui, shell, projection, edit_cell, edit, selection, tex, loc, cell_mode,
             );

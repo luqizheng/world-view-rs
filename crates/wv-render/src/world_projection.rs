@@ -616,8 +616,41 @@ pub fn draw_map_gizmos(
     frame: Res<ProjectionFrame>,
     layers: Res<LayerFrame>,
     recipe: Res<crate::recipe::RenderRecipe>,
+    projection: Res<crate::state::WorldProjection>,
+    grid_cfg: Res<GridConfig>,
+    mut candidate_cache: ResMut<crate::region_overlay::CandidateOverlayCache>,
 ) {
     let _ = &*tex; // suppress unused warning
+
+    // ── CellMap 未命名候选高亮（2026-10-22 内容矩阵 §2.6-3 · T11）──────
+    // 仅 Topographic ∧ nature_overlay；缓存键 = 当前图 + 世界变更检测
+    // （WorldProjection.is_changed 在任一命令/选择写入时翻真 → 点击级重算）。
+    if matches!(view.mode, crate::state::ViewMode::Topographic) && view.nature_overlay {
+        let map_changed =
+            candidate_cache.key.as_ref() != projection.world.maps.first().map(|m| &m.id);
+        if map_changed || projection.is_changed() {
+            let raster_to_map = grid_cfg.map_origin - grid_cfg.raster_origin;
+            let map = projection
+                .world
+                .maps
+                .first()
+                .map(|m| m.id.clone())
+                .unwrap_or_else(|| wv_core::Id::new_unchecked("root"));
+            candidate_cache.key = Some(map);
+            candidate_cache.outlines = crate::region_overlay::enumerate_candidates(
+                &projection.world,
+                candidate_cache.key.as_ref().unwrap(),
+                &grid_cfg,
+                raster_to_map,
+            );
+        }
+        let gold = bevy::color::Color::srgba(0.85, 0.68, 0.15, 0.55);
+        for outline in &candidate_cache.outlines {
+            for (a, b) in outline {
+                gizmos.line_2d(*a, *b, gold);
+            }
+        }
+    }
     if false {
         if !view.terrain_visible {
             return;

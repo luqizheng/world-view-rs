@@ -88,6 +88,10 @@ pub struct ProjectDiagnostics {
 pub struct NatureRegionUiState {
     /// 物化时用的名字（作者输入；物化成功后由面板清空）。
     pub name: String,
+    /// CellMap 候选命名上下文（2026-10-22 内容矩阵 §2.6-4）：点击候选格 →
+    /// 记下该格（栅格坐标）；Inspector「属性」页签据此出候选命名表单。
+    /// `None` = 无候选上下文。丢弃/物化成功后清空。
+    pub pending_candidate: Option<(i32, i32)>,
 }
 
 /// 可浮动的面板枚举（基线 §1.11 的 8 个面板 + 小地图）。
