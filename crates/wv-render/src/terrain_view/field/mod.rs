@@ -33,6 +33,7 @@ pub mod coast_sdf;
 pub mod material;
 pub mod pack;
 pub mod paper;
+pub mod symbol_atlas;
 
 pub use coast_sdf::{distance_field, distance_to_coast, FAR};
 pub use material::{
@@ -44,4 +45,9 @@ pub use paper::{
     build_paper_material, build_veil_material, composite_weights, vignette_alpha_at,
     PaperOverlayMaterial, PaperOverlayPlugin, PaperParams, PAPER_Z, TERRAIN_Z, VEIL_Z,
     VIGNETTE_ALPHA,
+};
+pub use symbol_atlas::{
+    anchor_offset, hash01, placeholder_atlas, shadow_color, shadow_offset, slot_index, variant_for,
+    SizeClass, SymbolFamily, SymbolVariant, ATLAS_SIZE, CELL_PX, CONTENT_PX, GRID_DIM,
+    SHADOW_ALPHA,
 };

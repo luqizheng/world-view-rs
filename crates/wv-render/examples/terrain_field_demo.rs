@@ -36,6 +36,7 @@ use bevy::{
     mesh::Mesh2d,
     prelude::*,
     render::view::screenshot::{save_to_disk, Screenshot},
+    sprite::Anchor,
     sprite_render::MeshMaterial2d,
     window::PrimaryWindow,
 };
@@ -43,9 +44,11 @@ use bevy::{
 use wv_core::terrain::{TerrainCellData, TerrainData};
 use wv_render::terrain_view::atmosphere::veil_alpha;
 use wv_render::terrain_view::field::{
-    build_material, build_paper_material, build_veil_material, default_params, set_coast_encoding,
-    CoastEncoding, FieldPack, PaperOverlayMaterial, PaperOverlayPlugin, PaperParams,
-    TerrainFieldMaterial, TerrainFieldMaterialPlugin, ViewBranch, PAPER_Z, VEIL_Z, VIGNETTE_ALPHA,
+    anchor_offset, build_material, build_paper_material, build_veil_material, default_params,
+    hash01, placeholder_atlas, set_coast_encoding, shadow_color, shadow_offset, slot_index,
+    variant_for, CoastEncoding, FieldPack, PaperOverlayMaterial, PaperOverlayPlugin, PaperParams,
+    SymbolFamily, TerrainFieldMaterial, TerrainFieldMaterialPlugin, ViewBranch, CELL_PX, GRID_DIM,
+    PAPER_Z, VEIL_Z, VIGNETTE_ALPHA,
 };
 
 /// 地形网格边长（格）。512 = 262144 格，与 P0 锁 T5 的计时口径一致。
@@ -103,10 +106,25 @@ fn main() {
                 key_input,
                 sync_material,
                 sync_paper,
+                sync_symbols,
                 acceptance_capture,
             ),
         )
         .run();
+}
+
+/// 一枚地物符号（或它的阴影）——记录**与缩放无关**的基准量，
+/// 让 [`sync_symbols`] 能按当前缩放重算世界尺寸。
+#[derive(Component)]
+struct SymbolPiece {
+    /// 所属族——决定缩放分档下的显隐阈值。
+    family: SymbolFamily,
+    /// T37 的显示尺寸 × T40 的尺寸抖动（**屏幕像素**）。
+    size_px: f32,
+    /// 锚点落点（世界坐标，= 格心偏下 1/8 格）。
+    cell_pos: Vec2,
+    /// 是否是阴影副本（只有阴影需要额外位移）。
+    shadow: bool,
 }
 
 /// demo 的相机/缩放状态。
@@ -229,6 +247,40 @@ fn find_coast_world(terrain: &TerrainData) -> Vec2 {
     Vec2::new(cx + 0.5 - g * 0.5, g * 0.5 - cy - 0.5)
 }
 
+/// 按海拔与确定性哈希决定该格放什么符号（`None` = 不放）。
+///
+/// 概率是**演示口径**，不是世界设定：真实项目里「哪里有城」由世界数据决定，
+/// 不是渲染层掷骰子。这里用哈希是为了让截图稳定（T40：不用随机数）。
+fn family_for(height: i16, cx: i64, cy: i64) -> Option<SymbolFamily> {
+    if height < 0 {
+        return None; // 符号只落在陆上
+    }
+    let r = hash01(cx, cy, 0xA5C11);
+    if height > 3000 {
+        return (r < 0.50).then_some(SymbolFamily::Mountain);
+    }
+    if height > 1900 {
+        return (r < 0.30).then_some(SymbolFamily::Mountain);
+    }
+    if height > 900 {
+        // 丘陵带：地标与零星聚落
+        return if r < 0.08 {
+            Some(SymbolFamily::Landmark)
+        } else if r < 0.14 {
+            Some(SymbolFamily::Settlement)
+        } else {
+            None
+        };
+    }
+    if r < 0.22 {
+        return Some(SymbolFamily::Tree);
+    }
+    if r < 0.28 {
+        return Some(SymbolFamily::Settlement);
+    }
+    None
+}
+
 /// **受控合成地形**：一条 45° 直岸线。
 ///
 /// 存在的唯一理由是**可测量**。真实 fbm 岸线是曲线，放大后「哪一段是阶梯、
@@ -337,6 +389,7 @@ fn setup(
     mut materials: ResMut<Assets<TerrainFieldMaterial>>,
     mut color_mats: ResMut<Assets<ColorMaterial>>,
     mut paper_mats: ResMut<Assets<PaperOverlayMaterial>>,
+    mut atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
     // `FIELD_SYNTH=1` 换受控合成地形（45° 直岸线），用于可测量的 A/B。
     let terrain = if std::env::var("FIELD_SYNTH").is_ok() {
@@ -403,6 +456,101 @@ fn setup(
         .id();
 
     commands.spawn(Camera2d);
+
+    // ── P3 地物符号（T36–T43）────────────────────────────────────────────
+    //
+    // 位置写在**世界坐标**（1 世界单位 = 1 格），尺寸按当前缩放折算成
+    // `size_px / px_per_cell`——符号的屏幕尺寸因此恒为 T37 的 32/64/96 px，
+    // 与墨线的屏幕像素口径一致。
+    //
+    // 曾经的写法是「父节点 1/px_per_cell 反向缩放 + 子节点写在像素空间」，
+    // 那样 SCALE 会连带把像素空间坐标也缩放，符号铺到海面和图外去了。
+    let atlas_img = images.add(placeholder_atlas());
+    let layout = atlas_layouts.add(TextureAtlasLayout::from_grid(
+        UVec2::splat(CELL_PX),
+        GRID_DIM,
+        GRID_DIM,
+        None,
+        None,
+    ));
+    let g = GRID as f32;
+    // 稀疏落点：每 STEP 格取一个候选，再按海拔/概率筛。
+    const STEP: u32 = 8;
+    let mut placed = 0usize;
+    for cy in (0..GRID).step_by(STEP as usize) {
+        for cx in (0..GRID).step_by(STEP as usize) {
+            let cell = terrain.cells[(cy * GRID + cx) as usize];
+            let Some(family) = family_for(cell.height, cx as i64, cy as i64) else {
+                continue;
+            };
+            let var = variant_for(family, cx as i64, cy as i64);
+            let slot = slot_index(family, var.index);
+            let size_px = family.size_class().display_px() * var.size_mul;
+            let world = size_px / INIT_PX_PER_CELL;
+
+            // 格心 + 锚点下移（T38）。传 1.0 拿到「每格 1 px」时的格单位
+            // 偏移，即 **1/8 格**——这是与缩放无关的常量，所以位置固定、
+            // 只有 `custom_size` 随缩放变。锚点的定义仍只在
+            // `symbol_atlas::anchor_offset` 一处，此处不复制数值。
+            let anchor_dy = anchor_offset(1.0).y;
+            let pos = Vec2::new(
+                cx as f32 + 0.5 - g * 0.5,
+                g * 0.5 - cy as f32 - 0.5 + anchor_dy,
+            );
+
+            // 阴影（T39）：同一剪影右移下移、α0.18，压在符号之下。
+            let so = shadow_offset(size_px) / INIT_PX_PER_CELL;
+            commands.spawn((
+                Sprite {
+                    image: atlas_img.clone(),
+                    texture_atlas: Some(TextureAtlas {
+                        layout: layout.clone(),
+                        index: slot,
+                    }),
+                    color: shadow_color(),
+                    flip_x: var.flip,
+                    custom_size: Some(Vec2::splat(world)),
+                    ..default()
+                },
+                Anchor::BOTTOM_CENTER,
+                Transform::from_xyz(pos.x + so.x, pos.y + so.y, 0.9),
+                SymbolPiece {
+                    family,
+                    size_px,
+                    cell_pos: pos,
+                    shadow: true,
+                },
+            ));
+            commands.spawn((
+                Sprite {
+                    image: atlas_img.clone(),
+                    texture_atlas: Some(TextureAtlas {
+                        layout: layout.clone(),
+                        index: slot,
+                    }),
+                    flip_x: var.flip,
+                    custom_size: Some(Vec2::splat(world)),
+                    ..default()
+                },
+                Anchor::BOTTOM_CENTER,
+                Transform::from_xyz(pos.x, pos.y, 1.0),
+                SymbolPiece {
+                    family,
+                    size_px,
+                    cell_pos: pos,
+                    shadow: false,
+                },
+            ));
+            placed += 1;
+        }
+    }
+    info!(
+        "地物符号：{} 个（占位图集 {}²，单元 {}px，内容 {}px）",
+        placed,
+        wv_render::terrain_view::field::ATLAS_SIZE,
+        CELL_PX,
+        wv_render::terrain_view::field::CONTENT_PX
+    );
 
     // ── P4 纸面两层（T48 层序：地形 → 雾 → 纸面）─────────────────────────
     // 尺寸先给 1×1，由 `sync_paper` 每帧按视口缩放——缩放/平移都只动 Transform，
@@ -563,6 +711,59 @@ fn sync_material(
                 viewport_height: view_h,
             };
         }
+    }
+}
+
+// ── 地物符号同步（P3）───────────────────────────────────────────────────────
+
+/// 缩放时把符号的世界尺寸与阴影位移重算一遍。
+///
+/// 位置**不动**（世界坐标固定 = 钉在地图上），变的只有 `custom_size`
+/// 与阴影偏移——这正是「屏幕像素口径」的落法：世界尺寸 = px / 每格像素数。
+///
+/// 只在 `px_per_cell` 变化时执行（`Res::is_changed`）：1700 个 Sprite
+/// 每帧全遍历是浪费。
+fn sync_symbols(
+    state: Res<DemoState>,
+    mut pieces: Query<(&SymbolPiece, &mut Sprite, &mut Transform, &mut Visibility)>,
+) {
+    if !state.is_changed() {
+        return;
+    }
+    let ppc = state.px_per_cell.max(1e-3);
+    for (piece, mut sprite, mut tf, mut vis) in pieces.iter_mut() {
+        sprite.custom_size = Some(Vec2::splat(piece.size_px / ppc));
+        let off = if piece.shadow {
+            shadow_offset(piece.size_px) / ppc
+        } else {
+            Vec2::ZERO
+        };
+        tf.translation.x = piece.cell_pos.x + off.x;
+        tf.translation.y = piece.cell_pos.y + off.y;
+
+        // 缩放分档：远观时小符号退场。
+        //
+        // 理由与 T33（远观只留色域）同源——屏幕上一格不到 1 px 时，树/聚落的
+        // 图标会互相压叠成一层噪点，既读不出内容又盖住地形色。分档阈值是
+        // 演示口径（非 P0 锁值）：山是地图骨架恒显示，地标次之，
+        // 聚落再次，树最后退场。
+        // 全局门控：`px_per_cell < 1`（T33 的远观档）时**全部符号退场**。
+        //
+        // 这条是必需的，不是口味：T37 规定符号尺寸以**屏幕像素**恒定
+        // （32/64/96 px），缩小时符号不会变小。远观档整幅图才 400 px 宽，
+        // 一个 96 px 的山就盖住四分之一个岛——符号会从「信息」变成「遮挡」。
+        // 与 T33「远观只留色域」同源：那个档位读的是形状与颜色，不是地点。
+        let min_px = match piece.family {
+            SymbolFamily::Mountain => 1.0,
+            SymbolFamily::Landmark => 1.0,
+            SymbolFamily::Settlement => 1.5,
+            SymbolFamily::Tree => 2.5,
+        };
+        *vis = if ppc >= min_px {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
     }
 }
 
