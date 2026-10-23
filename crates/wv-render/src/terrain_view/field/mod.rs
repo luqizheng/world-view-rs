@@ -32,6 +32,7 @@
 pub mod coast_sdf;
 pub mod material;
 pub mod pack;
+pub mod paper;
 
 pub use coast_sdf::{distance_field, distance_to_coast, FAR};
 pub use material::{
@@ -39,3 +40,8 @@ pub use material::{
     TerrainFieldMaterial, TerrainFieldMaterialPlugin, ViewBranch, WARP_AMP_MAX, WARP_AMP_MIN,
 };
 pub use pack::{CoastEncoding, FieldPack, COAST_MAX_CELLS, H_MAX, H_MIN};
+pub use paper::{
+    build_paper_material, build_veil_material, composite_weights, vignette_alpha_at,
+    PaperOverlayMaterial, PaperOverlayPlugin, PaperParams, PAPER_Z, TERRAIN_Z, VEIL_Z,
+    VIGNETTE_ALPHA,
+};

@@ -41,9 +41,11 @@ use bevy::{
 };
 
 use wv_core::terrain::{TerrainCellData, TerrainData};
+use wv_render::terrain_view::atmosphere::veil_alpha;
 use wv_render::terrain_view::field::{
-    build_material, default_params, set_coast_encoding, CoastEncoding, FieldPack,
-    TerrainFieldMaterial, TerrainFieldMaterialPlugin, ViewBranch,
+    build_material, build_paper_material, build_veil_material, default_params, set_coast_encoding,
+    CoastEncoding, FieldPack, PaperOverlayMaterial, PaperOverlayPlugin, PaperParams,
+    TerrainFieldMaterial, TerrainFieldMaterialPlugin, ViewBranch, PAPER_Z, VEIL_Z, VIGNETTE_ALPHA,
 };
 
 /// 地形网格边长（格）。512 = 262144 格，与 P0 锁 T5 的计时口径一致。
@@ -88,13 +90,21 @@ fn main() {
                 }),
         )
         .add_plugins(TerrainFieldMaterialPlugin)
+        // P4：纸面与后处理（T45 纤维 / T46 暗角 / T47 雾），独立于地形材质。
+        .add_plugins(PaperOverlayPlugin)
         // T44：纸底铺底——「地形没画到的地方也是纸不是黑」。
         // 用 `Color::NONE`（透明）会让远观档地图外的空白显示成黑框。
         .insert_resource(ClearColor(Color::srgb(0.94, 0.91, 0.84)))
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (zoom_input, key_input, sync_material, acceptance_capture),
+            (
+                zoom_input,
+                key_input,
+                sync_material,
+                sync_paper,
+                acceptance_capture,
+            ),
         )
         .run();
 }
@@ -110,6 +120,12 @@ struct DemoState {
     zoom_dir: f32,
     material: Handle<TerrainFieldMaterial>,
     quad: Entity,
+    /// 雾霭层实体与材质（T47，纯色 + 缩放联动 alpha）。
+    veil_quad: Entity,
+    veil_mat: Handle<ColorMaterial>,
+    /// 纸面层实体与材质（T45 纤维 + T46 暗角）。
+    paper_quad: Entity,
+    paper_mat: Handle<PaperOverlayMaterial>,
     /// 预先找出的海岸格（世界坐标）——验收截图的对准点。
     coast_world: Vec2,
 }
@@ -319,6 +335,8 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<TerrainFieldMaterial>>,
+    mut color_mats: ResMut<Assets<ColorMaterial>>,
+    mut paper_mats: ResMut<Assets<PaperOverlayMaterial>>,
 ) {
     // `FIELD_SYNTH=1` 换受控合成地形（45° 直岸线），用于可测量的 A/B。
     let terrain = if std::env::var("FIELD_SYNTH").is_ok() {
@@ -386,6 +404,46 @@ fn setup(
 
     commands.spawn(Camera2d);
 
+    // ── P4 纸面两层（T48 层序：地形 → 雾 → 纸面）─────────────────────────
+    // 尺寸先给 1×1，由 `sync_paper` 每帧按视口缩放——缩放/平移都只动 Transform，
+    // 不重建 mesh 资产。
+    // `FIELD_NO_PAPER=1` 关掉两层纸面——用于隔离「纸面层本身」的观感影响。
+    let paper_on = std::env::var("FIELD_NO_PAPER").is_err();
+    let one = meshes.add(Rectangle::new(1.0, 1.0));
+    let veil_mat = build_veil_material(&mut color_mats, 0.0);
+    let veil_quad = commands
+        .spawn((
+            Mesh2d(one.clone()),
+            MeshMaterial2d(veil_mat.clone()),
+            Transform::from_xyz(0.0, 0.0, VEIL_Z),
+            if paper_on {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
+        ))
+        .id();
+    let paper_mat = build_paper_material(
+        &mut paper_mats,
+        PaperParams::new(
+            Vec2::new(1600.0, 900.0),
+            Vec2::new(1600.0, 900.0),
+            VIGNETTE_ALPHA,
+        ),
+    );
+    let paper_quad = commands
+        .spawn((
+            Mesh2d(one),
+            MeshMaterial2d(paper_mat.clone()),
+            Transform::from_xyz(0.0, 0.0, PAPER_Z),
+            if paper_on {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
+        ))
+        .id();
+
     // 验收截图模式：`FIELD_ACCEPT=1` 时按固定缩放序列逐档出图并退出。
     // 让 P1 的四条验收（岸线连续 / 墨线恒定 / 分支无关 / 远观不闪）可复跑，
     // 不依赖人肉滚轮。
@@ -402,6 +460,10 @@ fn setup(
         zoom_dir: 1.0,
         material,
         quad,
+        veil_quad,
+        veil_mat,
+        paper_quad,
+        paper_mat,
         coast_world,
     });
 }
@@ -501,6 +563,62 @@ fn sync_material(
                 viewport_height: view_h,
             };
         }
+    }
+}
+
+// ── 纸面两层同步（P4）───────────────────────────────────────────────────────
+
+/// 让雾 / 纸面两层覆盖整个视口，并把缩放相关的量写进材质。
+///
+/// **拉动式**（AGENTS §3.4）：状态变化 → 重算 → 更新渲染资源，不做反向耦合。
+/// 两层都靠 `Transform` 缩放（mesh 恒为 1×1 单位），所以缩放时**不重建 mesh
+/// 资产**，只改变换。
+///
+/// 雾的 alpha 复用 `terrain_view::atmosphere::veil_alpha`：它的入参
+/// `scale` 是**世界单位/屏幕像素**（`ViewState.scale` 的语义），
+/// 而本 demo 的 `px_per_cell` 是**屏幕像素/格**且一格 = 1 世界单位，
+/// 故 `scale = 1 / px_per_cell`——两套口径在这里对接，不能直接传 `px_per_cell`
+/// （那会让雾的方向整个反过来：越放大越糊）。
+fn sync_paper(
+    state: Res<DemoState>,
+    mut quads: Query<&mut Transform, Without<Camera2d>>,
+    cams: Query<&Transform, With<Camera2d>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut color_mats: ResMut<Assets<ColorMaterial>>,
+    mut paper_mats: ResMut<Assets<PaperOverlayMaterial>>,
+) {
+    let (win_w, win_h) = windows
+        .single()
+        .map(|w| (w.width(), w.height()))
+        .unwrap_or((1600.0, 900.0));
+    let px_per_cell = state.px_per_cell.max(1e-3);
+    let view_world = Vec2::new(win_w, win_h) / px_per_cell;
+    // 2% 余量：浮点误差下视口边缘不至于露出一条纸缝。
+    let scale = view_world * 1.02;
+    let cam = cams
+        .iter()
+        .next()
+        .map_or(Vec2::ZERO, |t| t.translation.truncate());
+
+    for (entity, z) in [(state.veil_quad, VEIL_Z), (state.paper_quad, PAPER_Z)] {
+        if let Ok(mut tf) = quads.get_mut(entity) {
+            tf.translation = Vec3::new(cam.x, cam.y, z);
+            tf.scale = Vec3::new(scale.x, scale.y, 1.0);
+        }
+    }
+
+    // T47：雾随缩放连续变化（远景向纸面退散）。
+    if let Some(mut mat) = color_mats.get_mut(&state.veil_mat) {
+        mat.color = mat.color.with_alpha(veil_alpha(1.0 / px_per_cell));
+    }
+    // T45：纤维频率锚**屏幕空间**——视口像素变了就得重传，否则窗口拉伸时
+    // 纤维会被拉成条纹。
+    if let Some(mut mat) = paper_mats.get_mut(&state.paper_mat) {
+        mat.params = PaperParams::new(
+            Vec2::new(win_w, win_h),
+            Vec2::new(win_w, win_h),
+            VIGNETTE_ALPHA,
+        );
     }
 }
 
