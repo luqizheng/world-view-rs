@@ -622,6 +622,9 @@ pub fn draw_map_gizmos(
     mut candidate_cache: ResMut<crate::region_overlay::CandidateOverlayCache>,
     boundary: Res<crate::state::BiomeBoundaryState>,
     region_adjust: Res<crate::state::RegionAdjustState>,
+    // 候选上下文（格 + 编辑中多边形）：app 侧 NatureRegionUiState 的镜像
+    //（渲染层不依赖 wv-app 类型）。
+    candidate_ctx: Res<crate::state::RegionCandidateContext>,
 ) {
     let _ = &*tex; // suppress unused warning
 
@@ -753,6 +756,78 @@ pub fn draw_map_gizmos(
                     // 红十字（横竖两线，臂长触及圈）。
                     gizmos.line_2d(p - Vec2::X * handle_px, p + Vec2::X * handle_px, hot_red);
                     gizmos.line_2d(p - Vec2::Y * handle_px, p + Vec2::Y * handle_px, hot_red);
+                }
+            }
+        }
+    }
+
+    // ── 候选态的锚点（2026-10-22 验收：候选不是 Region 实体，selection
+    // 里没有它——但作者点选候选后同样要能拉锚点调形状，物化时用编辑后的
+    // 多边形）。候选多边形：编辑中优先，否则按格派生。
+    if matches!(view.mode, crate::state::ViewMode::Topographic) {
+        if let (Some(cell), Some(map)) = (candidate_ctx.cell, drill.current().cloned()) {
+            let candidate_polygon = candidate_ctx.polygon.clone();
+            if projection.selection.is_none() {
+                if let Some(terrain) = projection.world.terrain_of(&map) {
+                    let raster_to_map = grid_cfg.map_origin - grid_cfg.raster_origin;
+                    let poly = candidate_polygon.clone().unwrap_or_else(|| {
+                        // 按格派生（与物化同源）：biome 连通区外环 × 格尺寸。
+                        let cells: Vec<wv_terrain::TerrainCell> = terrain
+                            .cells
+                            .iter()
+                            .map(|c| wv_terrain::TerrainCell {
+                                height: c.height,
+                                surface: c.surface,
+                                biome: c.biome,
+                            })
+                            .collect();
+                        wv_terrain::TerrainGrid::from_cells(terrain.width, terrain.height, cells)
+                            .and_then(|g| {
+                                wv_terrain::region::biome_region_at(&g, cell.0, cell.1 as i64)
+                            })
+                            .map(|r| {
+                                r.outer
+                                    .iter()
+                                    .flat_map(|&(x, y)| {
+                                        [
+                                            x * grid_cfg.cell_size + raster_to_map.x,
+                                            y * grid_cfg.cell_size + raster_to_map.y,
+                                        ]
+                                    })
+                                    .collect::<Vec<f32>>()
+                            })
+                            .unwrap_or_default()
+                    });
+                    if poly.len() >= 6 {
+                        let poly_pairs: Vec<(f32, f32)> =
+                            poly.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+                        let spacing = crate::biome_boundary::anchor_spacing(
+                            view.scale,
+                            grid_cfg.cell_size,
+                            24.0,
+                        );
+                        let anchors = crate::biome_boundary::decimate_poly(&poly_pairs, spacing);
+                        let handle_px = (view.scale * 6.0).max(grid_cfg.cell_size * 0.2);
+                        let hot_red = bevy::color::Color::srgba(1.0, 0.15, 0.12, 1.0);
+                        for a in &anchors {
+                            let p = grid_cfg.map_origin + Vec2::new(a.0, a.1);
+                            gizmos.rect_2d(
+                                bevy::math::Isometry2d::from_translation(p),
+                                Vec2::splat(handle_px * 2.0),
+                                hot_red,
+                            );
+                            gizmos.line_2d(
+                                p - Vec2::X * handle_px,
+                                p + Vec2::X * handle_px,
+                                hot_red,
+                            );
+                            gizmos.line_2d(
+                                p - Vec2::Y * handle_px,
+                                p + Vec2::Y * handle_px,
+                                hot_red,
+                            );
+                        }
+                    }
                 }
             }
         }

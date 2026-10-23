@@ -51,6 +51,7 @@ pub fn region_adjust_input(
     mut projection: ResMut<WorldProjection>,
     mut edit: ResMut<EditHistory>,
     mut st: ResMut<wv_render::state::RegionAdjustState>,
+    mut nature: ResMut<crate::state::NatureRegionUiState>,
 ) {
     use crate::state::ViewMode;
     if !matches!(view.mode, ViewMode::Topographic) || playback.playing || ui.wants_pointer {
@@ -67,6 +68,47 @@ pub fn region_adjust_input(
     if st.region != sel_region {
         st.clear();
         st.region = sel_region;
+    }
+    // 候选态（2026-10-22 验收）：selection 里没有候选（它不是 Region 实体），
+    // 但作者点选候选后要能拉锚点——走独立分支，拖的是候选多边形。
+    if st.region.is_none() {
+        let Some(cell) = nature.pending_candidate else {
+            return;
+        };
+        let Some(cursor) = view.cursor_world else {
+            return;
+        };
+        let local: (f32, f32) = (cursor - grid.map_origin).into();
+        // 候选多边形：编辑中优先，否则按格派生。
+        let poly = nature
+            .candidate_polygon
+            .clone()
+            .unwrap_or_else(|| derive_candidate_polygon(&projection, &map, cell, &grid));
+        if poly.len() < 6 {
+            return;
+        }
+        let mut preview = st.preview_polygon.clone();
+        let mut drag_vertex = st.drag_vertex;
+        let mut press_world = st.press_world;
+        drag_anchors(
+            &buttons,
+            &view,
+            &grid,
+            local,
+            cursor,
+            &poly,
+            &mut preview,
+            &mut drag_vertex,
+            &mut press_world,
+            |edited| {
+                // 候选态：改候选多边形（物化时用）。
+                nature.candidate_polygon = Some(edited);
+            },
+        );
+        st.preview_polygon = preview;
+        st.drag_vertex = drag_vertex;
+        st.press_world = press_world;
+        return;
     }
     let Some(region_id) = st.region.clone() else {
         return;
@@ -150,5 +192,107 @@ pub fn region_adjust_input(
             region_name,
             preview,
         );
+    }
+}
+
+/// 候选格的 biome 连通区 → 图内局部 wu 多边形（与物化同源）。
+fn derive_candidate_polygon(
+    projection: &WorldProjection,
+    map: &wv_core::Id,
+    cell: (i32, i32),
+    grid: &GridConfig,
+) -> Vec<f32> {
+    let Some(terrain) = projection.world.terrain_of(map) else {
+        return Vec::new();
+    };
+    let cells: Vec<wv_terrain::TerrainCell> = terrain
+        .cells
+        .iter()
+        .map(|c| wv_terrain::TerrainCell {
+            height: c.height,
+            surface: c.surface,
+            biome: c.biome,
+        })
+        .collect();
+    let Some(g) = wv_terrain::TerrainGrid::from_cells(terrain.width, terrain.height, cells) else {
+        return Vec::new();
+    };
+    let Some(region) = wv_terrain::region::biome_region_at(&g, cell.0, cell.1 as i64) else {
+        return Vec::new();
+    };
+    let corner = (
+        grid.map_origin.x - grid.raster_origin.x,
+        grid.map_origin.y - grid.raster_origin.y,
+    );
+    region
+        .outer
+        .iter()
+        .flat_map(|&(x, y)| [x * grid.cell_size + corner.0, y * grid.cell_size + corner.1])
+        .collect()
+}
+
+/// 锚点拖动的共享实现（候选态与区域态同款：按下命中 → 拖动吸附 → 松手回调）。
+#[allow(clippy::too_many_arguments)]
+fn drag_anchors(
+    buttons: &ButtonInput<MouseButton>,
+    view: &ViewState,
+    grid: &GridConfig,
+    local: (f32, f32),
+    cursor: Vec2,
+    poly: &[f32],
+    preview: &mut Option<Vec<f32>>,
+    drag_vertex: &mut Option<usize>,
+    press_world: &mut Option<Vec2>,
+    mut on_release: impl FnMut(Vec<f32>),
+) {
+    let poly_pairs: Vec<(f32, f32)> = poly.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+    let spacing = wv_render::biome_boundary::anchor_spacing(view.scale, grid.cell_size, 24.0);
+    let anchors = wv_render::biome_boundary::decimate_poly(&poly_pairs, spacing);
+    let near = spacing * 0.35;
+
+    if buttons.just_pressed(MouseButton::Left) {
+        let mut best: Option<(usize, f32)> = None;
+        for (i, a) in anchors.iter().enumerate() {
+            let d = dist_to_segment(local, *a, *a);
+            if d <= near && best.map(|(_, bd)| d < bd).unwrap_or(true) {
+                best = Some((i, d));
+            }
+        }
+        if let Some((vi, _)) = best {
+            *preview = Some(anchors.iter().flat_map(|p| [p.0, p.1]).collect());
+            *drag_vertex = Some(vi);
+            *press_world = Some(cursor);
+        }
+        return;
+    }
+    if buttons.pressed(MouseButton::Left) {
+        let Some(vi) = *drag_vertex else {
+            return;
+        };
+        let Some(mut p) = preview.clone() else {
+            return;
+        };
+        if vi * 2 + 1 >= p.len() {
+            return;
+        }
+        let corner0 = (
+            grid.map_origin.x - grid.raster_origin.x,
+            grid.map_origin.y - grid.raster_origin.y,
+        );
+        let snapped = snap_to_corner(local, grid.cell_size, corner0);
+        p[vi * 2] = snapped.0;
+        p[vi * 2 + 1] = snapped.1;
+        *preview = Some(p);
+        return;
+    }
+    if buttons.just_released(MouseButton::Left) {
+        let Some(p) = preview.take() else {
+            return;
+        };
+        *drag_vertex = None;
+        *press_world = None;
+        if p.len() >= 6 {
+            on_release(p);
+        }
     }
 }

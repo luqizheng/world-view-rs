@@ -808,6 +808,16 @@ pub struct SelectionState {
 ///
 /// 线是**会话工具**，不落盘——真相仍是 cell.biome。工具激活时常驻（可反复
 /// 拖），切走工具即清。坐标 = **栅格局部 wu**（与 `swept_changes` 同空间）。
+/// 候选上下文镜像（2026-10-22 验收）：app 侧 `NatureRegionUiState` 的候选
+/// 格与编辑中多边形同步到渲染层（渲染不依赖 wv-app 类型）。
+#[derive(Resource, Debug, Default, Clone, PartialEq)]
+pub struct RegionCandidateContext {
+    /// 候选格（栅格坐标）；`None` = 无候选上下文。
+    pub cell: Option<(i32, i32)>,
+    /// 作者拖过的候选多边形（图内局部 wu）；`None` = 按格派生。
+    pub polygon: Option<Vec<f32>>,
+}
+
 /// 区域边界拖拽调整的会话态（2026-10-22 验收 · CellMap 专业编辑）。
 #[derive(Resource, Debug, Default, Clone, PartialEq)]
 pub struct RegionAdjustState {

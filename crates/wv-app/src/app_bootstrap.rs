@@ -194,6 +194,8 @@ pub fn run(config: AppConfig) {
     .init_resource::<wv_render::state::BiomeBoundaryState>()
     // 区域边界拖拽调整会话态（2026-10-22 验收）：同款漏 init 即 panic。
     .init_resource::<wv_render::state::RegionAdjustState>()
+    // 候选上下文镜像（渲染层用；漏 init 即 panic）。
+    .init_resource::<wv_render::state::RegionCandidateContext>()
     // Cell 编辑器的「单格 / 批量」工作模式（[ADR-0040] 补 B）——面板系统
     // ResMut 它,漏 init 即启动期 panic(同 EditCellState 的教训)。
     .init_resource::<crate::ui::inspector::cell::CellPanelMode>()
@@ -530,6 +532,11 @@ pub fn run(config: AppConfig) {
             ui::status_bar,
         )
             .chain(),
+    );
+    // 候选上下文镜像（2026-10-22 验收）：主链已顶满 20 元组，单独注册。
+    app.add_systems(
+        Update,
+        crate::edit::nature_region_actions::sync_candidate_context,
     );
     // 「新建地理事实」命名对话框（选择工具 M4「森林」意图打开；居中模态窗）。
     // 主链已顶满 20 元组上限，单独注册并排在状态栏之后。
