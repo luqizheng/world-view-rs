@@ -43,3 +43,48 @@
 | 群系色板进 ThemePack | 用户明裁定「颜色固定不受 theme 影响」；数据视图要跨主题稳定。 |
 | 前锋线语义（拖过全染成目标群系） | 用户选 B 分界线：两侧各绑一群系、只互相转换——水/山不被误染。 |
 | 分界线落盘为区域几何 | 真相仍是 cell.biome（P3/P7）；线是会话工具，区域轮廓继续由连通性派生。 |
+
+## 6. 追记（2026-10-23 实机验收追加裁定）
+
+实机验收 CellMap 两处残留修饰，用户裁定去除：
+
+1. **Topographic 翻 `Isoline=false`**（推翻 ADR-0039 决策 7「等值线分析视图
+   默认开」）：海岸等值线在数据视图里呈现为「海面上的黑线」，属修饰线，
+   与「反映方格状态」冲突。分析参照语义回归 VectorFlat（全仓唯一开档）。
+   连带清理：`isoline_overlay` 的 cellmap 固定色/关晕补丁整体退役（被翻表
+   取代，零 theme 诉求由「不画」达成）。
+2. **地物符号退役城堡/小镇插画，统一 map-pin**：`LandmarkKind::Citadel/Town`
+   的手绘水彩 PNG 贴图路径（`ensure_landmark_png_loaded` + Sprite 池）与
+   程序化插画构建器（`push_citadel`/`push_town`）整体删除，改为单一
+   `push_map_pin`（圆头 + 尖尾 + 白芯，Lucide `map-pin` 实心化，深墨 +
+   白芯常量色）；门控从 `layers.place.visible` 补接
+   `MODE_TABLE(FeatureOverlay)`——Topographic 下地物符号不再绘制
+   （此前 FeatureOverlay=false 已声明但未消费，CellMap 里城堡照画的缺口）。
+   等级语义由标签层承担，符号层不区分 Citadel/Town。
+
+代价：`wv-render/assets/symbols/` 资产与 PNG 解码路径删除（include_bytes
+二进制不再入库）；ADR-0042 的「参考图城堡插画」口径由 map-pin 取代。
+
+### 追记修正（同日第二轮）：等值线不删死，改会话开关
+
+§6-1 的「Topographic 翻 `Isoline=false`」被同日用户追加裁定修正为**会话开关**：
+MODE_TABLE 两行（VectorFlat / Topographic）恢复 `true`（模式轴开档不动），
+新增 `ViewState.isolines`（**默认关**）在等值线系统单控会话轴——与 GridLines
+同款「mode 表不关，会话开关单控」口径。开关 UI 在 map controls 网格线隔壁
+（Lucide `waves` 瓷砖，仅两开档模式显示）。VectorFlat 默认观感随之少一层
+等值线——属本条裁定的直接推论（等值线默认是修饰线，要时再开）。
+
+### 追记修正（同日第三轮）：pin 只用于 CellMap + mesh 尺寸 bug
+
+§6-2「两类符号统一 map-pin」被实机验收推翻，修正为**模式分流**：
+
+1. **map-pin 只用于 CellMap**：Topographic 下地物符号画 pin（数据视图的
+   地点标记，独立于 FeatureOverlay 门——该行此格仍为 false，主题地界覆盖
+   层照旧不进 CellMap）；其余 FeatureOverlay 开档模式恢复城堡/小镇插画
+   （`push_citadel` / `push_town` 从历史找回）。place 图层关则都不画。
+2. **mesh 尺寸 bug**：符号绘制把「画布基准 26px」乘进了缩放系数
+   （`s = 26 × view_scale`），而局部坐标单位本就是屏幕像素 → 符号放大
+   26 倍，Browse 出现盖住半个大陆的巨型墨团（白圈 = pin 白芯）。修正为
+   `s = tier(1.0/1.25/1.5) × view_scale`。旧 PNG Sprite 路径无此 bug
+   （`custom_size` 只用 side_wu），mesh 兜底路径生产环境从未走过，故
+   PNG 退役后才暴露。`BASE_H_PX` 常量随之退役。

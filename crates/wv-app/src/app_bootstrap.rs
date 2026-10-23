@@ -192,6 +192,10 @@ pub fn run(config: AppConfig) {
     // 群系分界线工具会话态（2026-10-22 内容矩阵 / ADR-0051）：输入系统与
     // 预览系统都 ResMut 它——漏 init 即启动期 panic（同 EditCellState 教训）。
     .init_resource::<wv_render::state::BiomeBoundaryState>()
+    // 区域边界拖拽调整会话态（2026-10-22 验收）：同款漏 init 即 panic。
+    .init_resource::<wv_render::state::RegionAdjustState>()
+    // 候选上下文镜像（渲染层用；漏 init 即 panic）。
+    .init_resource::<wv_render::state::RegionCandidateContext>()
     // Cell 编辑器的「单格 / 批量」工作模式（[ADR-0040] 补 B）——面板系统
     // ResMut 它,漏 init 即启动期 panic(同 EditCellState 的教训)。
     .init_resource::<crate::ui::inspector::cell::CellPanelMode>()
@@ -321,6 +325,10 @@ pub fn run(config: AppConfig) {
                 crate::edit::nature_region_actions::pick_candidate_on_click,
                 // 群系分界线：创建/拖动/提交（在 cell 点选之后，互斥工具态）。
                 crate::edit::biome_boundary::biome_boundary_input,
+                // 候选过期的编辑信号（在提交路径之后跑，读 History 形状）。
+                crate::edit::nature_region_actions::sync_candidate_invalidation,
+                // 区域边界拖拽（在 cell 点选之后；同为输入系统）。
+                crate::edit::region_adjust::region_adjust_input,
                 // 批量选区（2026-10-20）：多边形闭合 → 栅格化贴合方格
                 editing::sync_region_cells.after(camera::track_cursor_world),
                 streets::commit_street_click,
@@ -360,8 +368,6 @@ pub fn run(config: AppConfig) {
             nature_region_actions::sync_candidate_input,
             // 街道图层缓存：当前图变化时重读（ADR-0010），先于 sync_vector_layers。
             streets::reload_street_cache,
-            // 地物符号 PNG 发起加载（一次）。
-            wv_render::vector_layers::ensure_landmark_png_loaded,
             // 矢量叠加层（道路 + POI）：在 compute_projection 之后跑。
             vector_layers::sync_vector_layers,
             // 街道名标注：消费同一份 StreetLayerCache，在街道画完之后对齐标签。
@@ -524,6 +530,15 @@ pub fn run(config: AppConfig) {
             ui::status_bar,
         )
             .chain(),
+    );
+    // 候选上下文镜像（2026-10-22 验收）：主链已顶满 20 元组，单独注册。
+    app.add_systems(
+        Update,
+        (
+            crate::edit::nature_region_actions::sync_candidate_context,
+            // 群系图例（CellMap 左下角）：读 biome_raw 色板与名，自动跟随。
+            ui::biome_legend,
+        ),
     );
     // 「新建地理事实」命名对话框（选择工具 M4「森林」意图打开；居中模态窗）。
     // 主链已顶满 20 元组上限，单独注册并排在状态栏之后。

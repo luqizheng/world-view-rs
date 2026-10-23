@@ -92,6 +92,10 @@ pub struct NatureRegionUiState {
     /// 记下该格（栅格坐标）；Inspector「属性」页签据此出候选命名表单。
     /// `None` = 无候选上下文。丢弃/物化成功后清空。
     pub pending_candidate: Option<(i32, i32)>,
+    /// 候选的**编辑中多边形**（图内局部 wu，扁平坐标）。`None` = 未拖动，
+    /// 物化时按格重新派生；`Some` = 作者拖过锚点，物化直接用此形状
+    /// （2026-10-22 验收：候选态也要能拉锚点调整形状）。
+    pub candidate_polygon: Option<Vec<f32>>,
 }
 
 /// 可浮动的面板枚举（基线 §1.11 的 8 个面板 + 小地图）。

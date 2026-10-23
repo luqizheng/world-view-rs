@@ -230,6 +230,12 @@ pub struct ViewState {
     /// 地图工具条（`map_controls` 瓷砖），它本来就是「看图方式」而非「笔刷参数」，
     /// 与 `labels_visible` 等同族。
     pub grid_lines: bool,
+    /// 等值线开关（2026-10-23 验收裁定）：会话态、**默认关**——等值线在
+    /// 数据视图里呈现为「海面黑线修饰」，用户裁定默认不画、要时打开。
+    /// 与 [`Self::grid_lines`] 同款口径：MODE_TABLE 只管模式轴（VectorFlat /
+    /// Topographic 开档），本旗标管会话轴；开关 UI 在 map controls
+    /// 网格线隔壁（Lucide `waves`）。
+    pub isolines: bool,
     /// CellMap 自然区开关（2026-10-22 内容矩阵 §2.6）：开启时 Topographic 下
     /// 显示 `kind == Nature` 的区域层 + 全图未命名候选高亮。会话态，不落盘。
     /// 仅 Topographic 有意义——其他模式的区域层不受本开关影响。
@@ -307,6 +313,7 @@ impl Default for ViewState {
             buildings_visible: true,
             factions_visible: true,
             grid_lines: false,
+            isolines: false,
             nature_overlay: false,
             pan_tool: false,
             cursor_world: None,
@@ -808,6 +815,43 @@ pub struct SelectionState {
 ///
 /// 线是**会话工具**，不落盘——真相仍是 cell.biome。工具激活时常驻（可反复
 /// 拖），切走工具即清。坐标 = **栅格局部 wu**（与 `swept_changes` 同空间）。
+/// 候选上下文镜像（2026-10-22 验收）：app 侧 `NatureRegionUiState` 的候选
+/// 格与编辑中多边形同步到渲染层（渲染不依赖 wv-app 类型）。
+#[derive(Resource, Debug, Default, Clone, PartialEq)]
+pub struct RegionCandidateContext {
+    /// 候选格（栅格坐标）；`None` = 无候选上下文。
+    pub cell: Option<(i32, i32)>,
+    /// 作者拖过的候选多边形（图内局部 wu）；`None` = 按格派生。
+    pub polygon: Option<Vec<f32>>,
+}
+
+/// 区域边界拖拽调整的会话态（2026-10-22 验收 · CellMap 专业编辑）。
+#[derive(Resource, Debug, Default, Clone, PartialEq)]
+pub struct RegionAdjustState {
+    /// 正在调整的区域；`None` = 当前无调整会话。
+    pub region: Option<wv_core::Id>,
+    /// 手柄多边形：物化多边形**抽稀**到 ≥2 格间距的角点——物化顶点在每个
+    /// 阶梯角都有，密集顶点的手柄会连成一片不可辨，且拖单个顶点形变微乎其微。
+    pub handle_poly: Vec<f32>,
+    /// 调整中的多边形预览（图内局部 wu，扁平坐标）。
+    pub preview_polygon: Option<Vec<f32>>,
+    /// 正在拖动的顶点下标。
+    pub drag_vertex: Option<usize>,
+    /// 按下点（世界坐标）。
+    pub press_world: Option<bevy::math::Vec2>,
+}
+
+impl RegionAdjustState {
+    /// 切图 / 切选清空。
+    pub fn clear(&mut self) {
+        self.region = None;
+        self.handle_poly = Vec::new();
+        self.preview_polygon = None;
+        self.drag_vertex = None;
+        self.press_world = None;
+    }
+}
+
 #[derive(Resource, Debug, Default, Clone, PartialEq)]
 pub struct BiomeBoundaryState {
     /// 工具是否激活（与 EditCellState.tool_active 同款）。

@@ -47,9 +47,16 @@ pub fn candidate_naming_form(
         &wv_core::Id::new_unchecked(&view.current_map),
         cell,
     ) {
+        let names = &wv_render::terrain_view::biome_raw::BIOME_NAMES_ZH;
         ui.horizontal(|ui| {
             ui.label("群系：");
-            value_box(ui, shell, &biome.to_string(), None, false);
+            value_box(
+                ui,
+                shell,
+                names.get(biome as usize).copied().unwrap_or("?"),
+                None,
+                false,
+            );
         });
         ui.horizontal(|ui| {
             ui.label("格数：");
@@ -57,6 +64,12 @@ pub fn candidate_naming_form(
         });
     }
 
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new("可拖动地图上的红色锚点调整范围（吸附格点），再命名落盘")
+            .small()
+            .color(shell.t3()),
+    );
     ui.add_space(6.0);
     ui.label("名称：");
     ui.text_edit_singleline(&mut nature.name);
@@ -68,7 +81,9 @@ pub fn candidate_naming_form(
                 grid.map_origin.x - grid.raster_origin.x,
                 grid.map_origin.y - grid.raster_origin.y,
             );
-            match nature_region_actions::materialize_nature_region_now(
+            // 作者拖过锚点 ⇒ 用编辑后的多边形（物化时保留形状）。
+            let edited = nature.candidate_polygon.clone();
+            match nature_region_actions::materialize_with_polygon(
                 projection,
                 edit,
                 view,
@@ -76,6 +91,7 @@ pub fn candidate_naming_form(
                 cell,
                 grid.cell_size,
                 offset,
+                edited,
             ) {
                 Ok(id) => {
                     notice.info(
@@ -84,6 +100,7 @@ pub fn candidate_naming_form(
                     );
                     nature.name.clear();
                     nature.pending_candidate = None;
+                    nature.candidate_polygon = None;
                 }
                 Err(msg) => notice.error(msg, (time.elapsed_secs() * 60.0) as u64),
             }

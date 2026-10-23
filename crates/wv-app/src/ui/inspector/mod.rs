@@ -302,13 +302,14 @@ pub fn panel_inspector(
     );
 }
 
-/// 群系下拉（0–20 冻结表编号）。
+/// 群系下拉（0–20 冻结表编号，显示中文名；数据源与 CellMap 色板同源）。
 fn biome_dropdown(ui: &mut egui::Ui, id: &str, value: &mut u8) {
+    let names = &wv_render::terrain_view::biome_raw::BIOME_NAMES_ZH;
     egui::ComboBox::from_id_salt(id)
-        .selected_text(format!("{value}"))
+        .selected_text(names[*value as usize])
         .show_ui(ui, |ui| {
-            for r in 0u8..=20 {
-                ui.selectable_value(value, r, r.to_string());
+            for (r, name) in names.iter().enumerate() {
+                ui.selectable_value(value, r as u8, *name);
             }
         });
 }

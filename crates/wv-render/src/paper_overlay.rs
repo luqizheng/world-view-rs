@@ -178,6 +178,7 @@ pub struct PaperOverlay {
 pub struct PaperOverlayParams<'w, 's> {
     commands: Commands<'w, 's>,
     grid: Res<'w, crate::state::GridConfig>,
+    view: Res<'w, crate::state::ViewState>,
     state: ResMut<'w, PaperOverlay>,
     images: ResMut<'w, Assets<Image>>,
     meshes: ResMut<'w, Assets<Mesh>>,
@@ -189,6 +190,18 @@ pub struct PaperOverlayParams<'w, 's> {
 /// `GridConfig` 值指纹（幅面宽高取整）没变 → 零工作；变了（换图 / 钻取）
 /// → 旧实体下线、按新幅面重建。贴图只生成一次，跨图复用。
 pub fn sync_paper_overlay(mut p: PaperOverlayParams) {
+    // 2026-10-22 验收（用户裁定：CellMap 零 theme 影响）：纸纹是主题的
+    // 艺术修饰（斑驳 + 晕影），Topographic 下整体下线。
+    if matches!(p.view.mode, crate::state::ViewMode::Topographic) {
+        if let Some(e) = p.state.mottle.take() {
+            p.commands.entity(e).despawn();
+        }
+        if let Some(e) = p.state.vignette.take() {
+            p.commands.entity(e).despawn();
+        }
+        p.state.key = None;
+        return;
+    }
     if !p.grid.is_changed() && p.state.key.is_some() {
         return;
     }

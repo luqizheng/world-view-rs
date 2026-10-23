@@ -69,7 +69,7 @@ use serde::{Deserialize, Serialize};
 use crate::edit::editing::EditHistory;
 use crate::i18n::{t, CurrentLocale, I18nKey, Locale};
 use crate::state::{
-    DrillState, GridConfig, MeasureMode, MeasureState, Panel, PanelState, ViewState,
+    DrillState, GridConfig, MeasureMode, MeasureState, Panel, PanelState, ViewMode, ViewState,
     WorldProjection,
 };
 use crate::theme::ui_theme::{margin_xy, UiShellConfig};
@@ -83,7 +83,7 @@ use super::widgets::{
     ICON_ELLIPSE, ICON_MOVE_HORIZONTAL, ICON_MOVE_VERTICAL, ICON_RULER_DIMENSION_LINE,
     ICON_SQUARES_UNITE, ICON_VECTOR_POLYGON, ICON_VECTOR_SQUARE,
 };
-use super::{ICON_ERASER, ICON_GRID, ICON_HAND, ICON_REDO, ICON_TREES, ICON_UNDO};
+use super::{ICON_ERASER, ICON_GRID, ICON_HAND, ICON_REDO, ICON_TREES, ICON_UNDO, ICON_WAVES};
 
 /// 贴边距离（原型 `right: 18px`）。
 const EDGE_OFFSET: f32 = 18.0;
@@ -494,18 +494,38 @@ pub fn map_controls(
                             view.grid_lines = !view.grid_lines;
                         }
 
+                        // ── 槽 10.5：等值线（2026-10-23 验收裁定）────────
+                        // 会话开关（`view.isolines`，默认关）：等值线默认是
+                        // 「海面黑线修饰」，要时再开。仅在 pass 有产出的两
+                        // 模式显示（VectorFlat 分析参照 / Topographic 数据视图）。
+                        if matches!(view.mode, ViewMode::VectorFlat | ViewMode::Topographic)
+                            && icon_tile(
+                                ui,
+                                &shell,
+                                metrics,
+                                ICON_WAVES,
+                                view.isolines,
+                                "显示等值线",
+                            )
+                            .clicked()
+                        {
+                            view.isolines = !view.isolines;
+                        }
+
                         // ── 槽 11：自然区（2026-10-22 内容矩阵 §2.6）──────
                         // CellMap 里显示 Nature 类区域 + 未命名候选高亮；
-                        // 仅 Topographic 有意义（其他模式区域层本就画）。
-                        if icon_tile(
-                            ui,
-                            &shell,
-                            metrics,
-                            ICON_TREES,
-                            view.nature_overlay,
-                            "显示自然区与候选（CellMap）",
-                        )
-                        .clicked()
+                        // 仅 CellMap（Topographic 工作区）显示本按钮——
+                        // 其他模式区域层不受开关控制（用户裁定：只在 cell map）。
+                        if matches!(view.mode, ViewMode::Topographic)
+                            && icon_tile(
+                                ui,
+                                &shell,
+                                metrics,
+                                ICON_TREES,
+                                view.nature_overlay,
+                                "显示自然区与候选（CellMap）",
+                            )
+                            .clicked()
                         {
                             view.nature_overlay = !view.nature_overlay;
                         }

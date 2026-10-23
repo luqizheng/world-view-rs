@@ -1677,13 +1677,16 @@ pub fn update_sea_labels(
     let cjk = fonts.label_handle();
     // 字色：古舆图走 `label_water`（青蓝色族 #3F5B6A · DUSK #5A7A88）；Google
     // 走 `GOOGLE_LABEL_FILL` 深灰（与地名同族，v0.1 不做 water 主题区分）。
+    // 2026-10-22 验收：CellMap 固定白字 + 深色晕（数据视图，不随主题）。
     let label_color = match view.mode {
+        crate::state::ViewMode::Topographic => bevy::color::Color::WHITE,
         crate::state::ViewMode::GoogleMap => crate::theme::colors_google::GOOGLE_LABEL_FILL,
         _ => view.active_theme.palette.label_water,
     }
     .with_alpha(layers.label.opacity);
-    // 晕边色：海面上托出文字，走纸面色（古舆图）/ 白（Google）。
+    // 晕边色：海面上托出文字，走纸面色（古舆图）/ 白（Google）/ 深灰（CellMap）。
     let halo_color = match view.mode {
+        crate::state::ViewMode::Topographic => bevy::color::Color::srgba(0.10, 0.14, 0.18, 1.0),
         crate::state::ViewMode::GoogleMap => bevy::color::Color::WHITE,
         _ => view.active_theme.palette.halo_fill,
     }

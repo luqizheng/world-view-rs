@@ -262,10 +262,21 @@ pub fn sync_region_outlines(
         world_thickness,
         z: REGION_OUTLINE_Z,
     };
-    if pool.outline_material.is_none() {
-        pool.outline_material = Some(materials.add(ColorMaterial::from_color(Color::srgba(
-            0.21, 0.35, 0.48, 0.85,
-        ))));
+    // 2026-10-22 验收：CellMap（Topographic + nature overlay）下轮廓=白色
+    // （数据视图不随主题）；其他模式沿用深蓝。材质按模式重建。
+    let outline_color = if matches!(view.mode, crate::state::ViewMode::Topographic) {
+        Color::srgba(1.0, 1.0, 1.0, 0.9)
+    } else {
+        Color::srgba(0.21, 0.35, 0.48, 0.85)
+    };
+    let color_changed = pool
+        .outline_material
+        .as_ref()
+        .and_then(|m| materials.get(m))
+        .map(|mm| mm.color != outline_color)
+        .unwrap_or(true);
+    if pool.outline_material.is_none() || color_changed {
+        pool.outline_material = Some(materials.add(ColorMaterial::from_color(outline_color)));
     }
     let outline_mat = pool.outline_material.clone().expect("刚建");
     match pool.outline.take() {
