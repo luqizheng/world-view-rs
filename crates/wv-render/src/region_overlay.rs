@@ -813,10 +813,6 @@ pub struct CandidateOverlayCache {
     pub key: Option<wv_core::Id>,
     /// 每个候选的外环折线（**视图空间**，供 gizmos 直绘）。
     pub outlines: Vec<Vec<(bevy::math::Vec2, bevy::math::Vec2)>>,
-    /// 每个候选的格集合（栅格坐标，供视口内的半透明填充）。
-    pub fill_cells: Vec<Vec<(i32, i32)>>,
-    /// 每个候选的视图空间包围盒（(min, max)）。
-    pub bboxes: Vec<(bevy::math::Vec2, bevy::math::Vec2)>,
     /// 上次重算的编辑信号快照：脏标记 + (undo 长, redo 长, undo 顶 seq, redo 顶 seq)。
     /// 任一变化 ⇒ 候选过期。不用 `WorldProjection::is_changed`——selection 写入
     /// 也会置真，会把 O(格数) 的重算打成每帧（实机 1 FPS 回归根因）。
@@ -836,8 +832,6 @@ pub struct CandidateOverlayCache {
 #[derive(Default)]
 pub(crate) struct CandidateOutlines {
     pub outlines: Vec<Vec<(bevy::math::Vec2, bevy::math::Vec2)>>,
-    pub fill_cells: Vec<Vec<(i32, i32)>>,
-    pub bboxes: Vec<(bevy::math::Vec2, bevy::math::Vec2)>,
 }
 
 pub(crate) fn enumerate_candidates(
@@ -904,28 +898,12 @@ pub(crate) fn enumerate_candidates(
             })
             .collect();
         let mut solid: Vec<(bevy::math::Vec2, bevy::math::Vec2)> = Vec::new();
-        let mut bbox_min = bevy::math::Vec2::splat(f32::MAX);
-        let mut bbox_max = bevy::math::Vec2::splat(f32::MIN);
-        for p in &ring {
-            bbox_min = bbox_min.min(*p);
-            bbox_max = bbox_max.max(*p);
-        }
         // 白色实线直接落在方格边——数据视图无修饰（用户验收裁定）。
         for pair in ring.windows(2) {
             solid.push((pair[0], pair[1]));
         }
-        // 格填充集：外环栅格化（供视口内半透明填充；缩放足够大才画）。
-        let fill = crate::cell_selection::rasterize_polygon_cells(
-            &region.outer,
-            raster_to_map,
-            grid,
-            data.width,
-            data.height,
-        );
         if !solid.is_empty() {
             out.outlines.push(solid);
-            out.fill_cells.push(fill);
-            out.bboxes.push((bbox_min, bbox_max));
         }
     }
     out

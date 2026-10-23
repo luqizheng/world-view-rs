@@ -626,6 +626,7 @@ pub fn draw_map_gizmos(
     //（渲染层不依赖 wv-app 类型）。
     candidate_ctx: Res<crate::state::RegionCandidateContext>,
 ) {
+    let __t = std::time::Instant::now();
     let _ = &*tex; // suppress unused warning
 
     // ── CellMap 未命名候选高亮（2026-10-22 内容矩阵 §2.6-3 · T11）──────
@@ -651,8 +652,6 @@ pub fn draw_map_gizmos(
                 );
                 candidate_cache.key = Some(map);
                 candidate_cache.outlines = result.outlines;
-                candidate_cache.fill_cells = result.fill_cells;
-                candidate_cache.bboxes = result.bboxes;
                 candidate_cache.drawn_epoch = candidate_cache.last_epoch;
                 candidate_cache.last_compute = Some(t0);
             }
@@ -661,10 +660,7 @@ pub fn draw_map_gizmos(
         // 用户裁定（2026-10-22 验收）：候选高亮 = **白色虚线**，不用金色——
         // 沙色地形上金色与地貌色混淆；白色虚线在任意群系色上都可辨。
         let white = bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.9);
-        for (i, outline) in candidate_cache.outlines.iter().enumerate() {
-            let (bmin, bmax) = &candidate_cache.bboxes[i];
-            // 屏上尺寸（px）≥ 40 才画半透明填充（缩放够大填充才有意义）。
-            let _ = (bmin, bmax);
+        for outline in candidate_cache.outlines.iter() {
             for (a, b) in outline {
                 gizmos.line_2d(*a, *b, white);
             }
