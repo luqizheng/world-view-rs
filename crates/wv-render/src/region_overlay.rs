@@ -806,25 +806,46 @@ mod tests {
 /// 在任一命令/选择写入时翻真（点击级重算，~10ms 一次，仅 CellMap+开关开时）。
 #[derive(Resource, Debug, Default)]
 pub struct CandidateOverlayCache {
-    /// 缓存键 = (图 id, 枚举时是否记录过 dirty)。map 变 / 世界变 ⇒ 重算。
+    /// 缓存键 = 当前图 id。图变 ⇒ 重算。
     pub key: Option<wv_core::Id>,
     /// 每个候选的外环折线（**视图空间**，供 gizmos 直绘）。
     pub outlines: Vec<Vec<(bevy::math::Vec2, bevy::math::Vec2)>>,
+    /// 每个候选的格集合（栅格坐标，供视口内的半透明填充）。
+    pub fill_cells: Vec<Vec<(i32, i32)>>,
+    /// 每个候选的视图空间包围盒（(min, max)）。
+    pub bboxes: Vec<(bevy::math::Vec2, bevy::math::Vec2)>,
+    /// 上次重算的编辑信号快照：脏标记 + (undo 长, redo 长, undo 顶 seq, redo 顶 seq)。
+    /// 任一变化 ⇒ 候选过期。不用 `WorldProjection::is_changed`——selection 写入
+    /// 也会置真，会把 O(格数) 的重算打成每帧（实机 1 FPS 回归根因）。
+    pub last_signal: Option<(bool, usize, usize, Option<u64>, Option<u64>)>,
+    /// 上次重算时刻（限频：重算 ≥1s 一次，避免连续编辑每帧 93ms）。
+    pub last_compute: Option<std::time::Instant>,
+    /// 编辑信号 epoch（app 层从 EditHistory 形状派生写入；变化 ⇒ 候选过期）。
+    pub last_epoch: u64,
+    /// 已绘制候选对应的 epoch。
+    pub drawn_epoch: u64,
 }
 
 /// 全图枚举未命名候选（region_overlay 系统尾部调用）。
 ///
 /// 排除：已被命名 Nature 区覆盖的候选（代表点 = 外环首点，`point_in_geometry`
 /// 测命中）；NONE 群系（无生态语义的格子不构成「自然区」）。
+#[derive(Default)]
+pub(crate) struct CandidateOutlines {
+    pub outlines: Vec<Vec<(bevy::math::Vec2, bevy::math::Vec2)>>,
+    pub fill_cells: Vec<Vec<(i32, i32)>>,
+    pub bboxes: Vec<(bevy::math::Vec2, bevy::math::Vec2)>,
+}
+
 pub(crate) fn enumerate_candidates(
     world: &wv_core::World,
     map: &wv_core::Id,
     grid: &GridConfig,
     raster_to_map: bevy::math::Vec2,
-) -> Vec<Vec<(bevy::math::Vec2, bevy::math::Vec2)>> {
+) -> CandidateOutlines {
     use wv_core::base::geometry::point_in_geometry;
     let Some(data) = world.terrain_of(map) else {
-        return Vec::new();
+        return CandidateOutlines::default();
     };
     let cells: Vec<wv_terrain::TerrainCell> = data
         .cells
@@ -836,7 +857,7 @@ pub(crate) fn enumerate_candidates(
         })
         .collect();
     let Some(g) = wv_terrain::TerrainGrid::from_cells(data.width, data.height, cells) else {
-        return Vec::new();
+        return CandidateOutlines::default();
     };
     let named: Vec<wv_core::map::GeometryData> = world
         .regions
@@ -846,11 +867,21 @@ pub(crate) fn enumerate_candidates(
         .map(|r| wv_core::map::GeometryData::Polygon(r.polygon.clone()))
         .collect::<Vec<wv_core::map::GeometryData>>();
 
-    let mut out = Vec::new();
-    for region in wv_terrain::region::partition_by_biome(&g) {
-        if region.biome == wv_terrain::BIOME_NONE || region.outer.len() < 3 {
-            continue;
-        }
+    // 预算（性能验收：Zoom 1 FPS 回归）：噪声产生的碎块（<16 格）不构成
+    // 「自然区」（对齐 marker 的 ≥16 惯例），且候选总量封顶——
+    // 全图分区在噪声群系下可能有上千碎块，无预算会拖垮帧率。
+    const MIN_CANDIDATE_CELLS: usize = 16;
+    const MAX_CANDIDATES: usize = 300;
+    let mut candidates: Vec<_> = wv_terrain::region::partition_by_biome(&g)
+        .into_iter()
+        .filter(|r| r.cells >= MIN_CANDIDATE_CELLS)
+        .filter(|r| r.biome != wv_terrain::BIOME_NONE && r.outer.len() >= 3)
+        .collect();
+    candidates.sort_by(|a, b| b.cells.cmp(&a.cells));
+    candidates.truncate(MAX_CANDIDATES);
+
+    let mut out = CandidateOutlines::default();
+    for region in candidates {
         // 代表点 = 外环首点（格坐标 → 图内局部 wu）。
         let (fx, fy) = region.outer[0];
         let px = fx * grid.cell_size + raster_to_map.x;
@@ -870,11 +901,27 @@ pub(crate) fn enumerate_candidates(
             })
             .collect();
         let mut dashed: Vec<(bevy::math::Vec2, bevy::math::Vec2)> = Vec::new();
+        let mut bbox_min = bevy::math::Vec2::splat(f32::MAX);
+        let mut bbox_max = bevy::math::Vec2::splat(f32::MIN);
+        for p in &ring {
+            bbox_min = bbox_min.min(*p);
+            bbox_max = bbox_max.max(*p);
+        }
         for pair in ring.windows(2).step_by(2) {
             dashed.push((pair[0], pair[1]));
         }
+        // 格填充集：外环栅格化（供视口内半透明填充；缩放足够大才画）。
+        let fill = crate::cell_selection::rasterize_polygon_cells(
+            &region.outer,
+            raster_to_map,
+            grid,
+            data.width,
+            data.height,
+        );
         if !dashed.is_empty() {
-            out.push(dashed);
+            out.outlines.push(dashed);
+            out.fill_cells.push(fill);
+            out.bboxes.push((bbox_min, bbox_max));
         }
     }
     out

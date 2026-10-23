@@ -330,6 +330,36 @@ pub fn pick_candidate_on_click(
     nature.pending_candidate = candidate_at(&projection, map, (gx, gy)).map(|_| (gx, gy));
 }
 
+
+
+/// 候选过期的编辑信号（2026-10-22 内容矩阵）：把 `EditHistory` 的形状
+/// （undo/redo 栈长 + 顶 seq + 脏标记）折成一个 epoch 写进候选缓存——
+/// **渲染层不得依赖 wv-edit/wv-app 类型**（分层红线），故信号由本系统
+/// app 侧派生后写入 wv-render 的缓存资源。任一提交/撤销/重做都会翻转。
+pub fn sync_candidate_invalidation(
+    edit: Res<crate::edit::editing::EditHistory>,
+    projection: Res<crate::state::WorldProjection>,
+    mut cache: ResMut<wv_render::region_overlay::CandidateOverlayCache>,
+) {
+    let h = &edit.history;
+    let epoch = {
+        // FNV-1a 简易混合（形状元组 → u64）；避免引额外依赖。
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for v in [
+            projection.dirty as u64,
+            h.len() as u64,
+            h.can_redo() as u64,
+            h.undo_top_seq().unwrap_or(u64::MAX),
+            h.redo_top_seq().unwrap_or(u64::MAX),
+        ] {
+            hash ^= v;
+            hash = hash.wrapping_mul(0x1000_0000_01b3);
+        }
+        hash
+    };
+    cache.last_epoch = epoch;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

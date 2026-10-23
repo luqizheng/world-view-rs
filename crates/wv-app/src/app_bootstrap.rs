@@ -321,6 +321,8 @@ pub fn run(config: AppConfig) {
                 crate::edit::nature_region_actions::pick_candidate_on_click,
                 // 群系分界线：创建/拖动/提交（在 cell 点选之后，互斥工具态）。
                 crate::edit::biome_boundary::biome_boundary_input,
+                // 候选过期的编辑信号（在提交路径之后跑，读 History 形状）。
+                crate::edit::nature_region_actions::sync_candidate_invalidation,
                 // 批量选区（2026-10-20）：多边形闭合 → 栅格化贴合方格
                 editing::sync_region_cells.after(camera::track_cursor_world),
                 streets::commit_street_click,

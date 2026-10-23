@@ -617,39 +617,109 @@ pub fn draw_map_gizmos(
     layers: Res<LayerFrame>,
     recipe: Res<crate::recipe::RenderRecipe>,
     projection: Res<crate::state::WorldProjection>,
+    drill: Res<crate::state::DrillState>,
     grid_cfg: Res<GridConfig>,
     mut candidate_cache: ResMut<crate::region_overlay::CandidateOverlayCache>,
     boundary: Res<crate::state::BiomeBoundaryState>,
 ) {
+    let perf_dbg = std::env::var("WV_PROFILE_FRAME").is_ok();
     let _ = &*tex; // suppress unused warning
 
+    let perf_dbg = std::env::var("WV_PROFILE_FRAME").is_ok();
+    let dbg_t0 = perf_dbg.then(std::time::Instant::now);
     // ── CellMap 未命名候选高亮（2026-10-22 内容矩阵 §2.6-3 · T11）──────
-    // 仅 Topographic ∧ nature_overlay；缓存键 = 当前图 + 世界变更检测
-    // （WorldProjection.is_changed 在任一命令/选择写入时翻真 → 点击级重算）。
+    // 仅 Topographic ∧ nature_overlay；重算触发 = 编辑信号**边沿**（脏标记 /
+    // undo/redo 栈形 / 换图）且限频 ≥1s——不用 `WorldProjection::is_changed`
+    // （selection 写入也置真，O(格数) 的重算会被打成每帧 = 实机 1 FPS 根因）。
     if matches!(view.mode, crate::state::ViewMode::Topographic) && view.nature_overlay {
-        let map_changed =
-            candidate_cache.key.as_ref() != projection.world.maps.first().map(|m| &m.id);
-        if map_changed || projection.is_changed() {
-            let raster_to_map = grid_cfg.map_origin - grid_cfg.raster_origin;
-            let map = projection
-                .world
-                .maps
-                .first()
-                .map(|m| m.id.clone())
-                .unwrap_or_else(|| wv_core::Id::new_unchecked("root"));
-            candidate_cache.key = Some(map);
-            candidate_cache.outlines = crate::region_overlay::enumerate_candidates(
-                &projection.world,
-                candidate_cache.key.as_ref().unwrap(),
-                &grid_cfg,
-                raster_to_map,
-            );
+        let current = drill.current().cloned();
+        let stale = candidate_cache.last_epoch != candidate_cache.drawn_epoch;
+        let throttled = candidate_cache
+            .last_compute
+            .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(1));
+        let map_changed = candidate_cache.key.as_ref() != current.as_ref();
+        if (stale && !throttled) || map_changed {
+            if let Some(map) = current {
+                let raster_to_map = grid_cfg.map_origin - grid_cfg.raster_origin;
+                let t0 = std::time::Instant::now();
+                let result = crate::region_overlay::enumerate_candidates(
+                    &projection.world,
+                    &map,
+                    &grid_cfg,
+                    raster_to_map,
+                );
+                if perf_dbg {
+                    eprintln!(
+                        "[perf] candidate recompute: outlines={} fill_cells={} elapsed={:?}",
+                        result.outlines.len(),
+                        result.fill_cells.len(),
+                        t0.elapsed()
+                    );
+                }
+                candidate_cache.key = Some(map);
+                candidate_cache.outlines = result.outlines;
+                candidate_cache.fill_cells = result.fill_cells;
+                candidate_cache.bboxes = result.bboxes;
+                candidate_cache.drawn_epoch = candidate_cache.last_epoch;
+                candidate_cache.last_compute = Some(t0);
+            }
         }
-        let gold = bevy::color::Color::srgba(0.85, 0.68, 0.15, 0.55);
-        for outline in &candidate_cache.outlines {
+
+        let gold = bevy::color::Color::srgba(1.0, 0.84, 0.29, 0.95);
+        let gold_fill = bevy::color::Color::srgba(1.0, 0.84, 0.29, 0.14);
+        let cs = grid_cfg.cell_size;
+        let mut dbg_lines = 0usize;
+        let mut dbg_fills = 0usize;
+        // 视口（世界坐标）：中心 ± 半幅。
+        let half = view.window_size * view.scale * 0.5 + Vec2::splat(view.scale * 48.0);
+        let (vcx, vcy) = (view.camera_center.x, view.camera_center.y);
+        for (i, outline) in candidate_cache.outlines.iter().enumerate() {
+            let (bmin, bmax) = &candidate_cache.bboxes[i];
+            // 屏上尺寸（px）≥ 40 才画半透明填充（缩放够大填充才有意义）。
+            let screen_w = (bmax.x - bmin.x) / view.scale;
+            let screen_h = (bmax.y - bmin.y) / view.scale;
+            let draw_fill = screen_w.max(screen_h) >= 40.0;
             for (a, b) in outline {
                 gizmos.line_2d(*a, *b, gold);
+                dbg_lines += 1;
             }
+            if !draw_fill {
+                continue;
+            }
+            for &(gx, gy) in &candidate_cache.fill_cells[i] {
+                let center = Vec2::new(
+                    grid_cfg.raster_origin.x + (gx as f32 + 0.5) * cs,
+                    grid_cfg.raster_origin.y + (gy as f32 + 0.5) * cs,
+                );
+                // 视口裁剪（格中心）。
+                if (center.x - vcx).abs() > half.x || (center.y - vcy).abs() > half.y {
+                    continue;
+                }
+                gizmos.rect_2d(
+                    bevy::math::Isometry2d::from_translation(center),
+                    Vec2::splat(cs),
+                    gold_fill,
+                );
+                dbg_fills += 1;
+            }
+        }
+        if let Some(t0) = dbg_t0 {
+            // 每秒一次：候选线段/填充数 + 本系统耗时（临时性能验收探针）
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static FRAME: AtomicUsize = AtomicUsize::new(0);
+            let f = FRAME.fetch_add(1, Ordering::Relaxed);
+            if f % 60 == 0 {
+                eprintln!(
+                    "[perf] draw_map_gizmos: candidate_lines={dbg_lines} fills={dbg_fills} elapsed={:?}",
+                    t0.elapsed()
+                );
+            }
+        }
+    } else if let Some(t0) = dbg_t0 {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static FRAME2: AtomicUsize = AtomicUsize::new(0);
+        if FRAME2.fetch_add(1, Ordering::Relaxed) % 60 == 0 {
+            eprintln!("[perf] draw_map_gizmos (overlay off) elapsed={:?}", t0.elapsed());
         }
     }
 
