@@ -46,9 +46,9 @@ use wv_render::terrain_view::atmosphere::veil_alpha;
 use wv_render::terrain_view::field::{
     anchor_offset, build_material, build_paper_material, build_veil_material, default_params,
     hash01, placeholder_atlas, set_coast_encoding, shadow_color, shadow_offset, slot_index,
-    variant_for, CoastEncoding, FieldPack, PaperOverlayMaterial, PaperOverlayPlugin, PaperParams,
-    SymbolFamily, TerrainFieldMaterial, TerrainFieldMaterialPlugin, ViewBranch, CELL_PX, GRID_DIM,
-    PAPER_Z, VEIL_Z, VIGNETTE_ALPHA,
+    symbol_exit_alpha, variant_for, CoastEncoding, FieldPack, PaperOverlayMaterial,
+    PaperOverlayPlugin, PaperParams, SymbolFamily, TerrainFieldMaterial,
+    TerrainFieldMaterialPlugin, ViewBranch, CELL_PX, GRID_DIM, PAPER_Z, VEIL_Z, VIGNETTE_ALPHA,
 };
 
 /// 地形网格边长（格）。512 = 262144 格，与 P0 锁 T5 的计时口径一致。
@@ -879,17 +879,30 @@ fn sync_symbols(
         // （32/64/96 px），缩小时符号不会变小。远观档整幅图才 400 px 宽，
         // 一个 96 px 的山就盖住四分之一个岛——符号会从「信息」变成「遮挡」。
         // 与 T33「远观只留色域」同源：那个档位读的是形状与颜色，不是地点。
+        //
+        // T37b（追记八锁值）：退场不再是硬切——`0.8 ≤ ppc < 1.0` 区间
+        // 线性 alpha 淡出，消除成批消失的跳感。族阈值已过的直接 Hidden
+        // （Visibility 语义），还差阈值但在淡出带内的乘 alpha。
         let min_px = match piece.family {
             SymbolFamily::Mountain => 1.0,
             SymbolFamily::Landmark => 1.0,
             SymbolFamily::Settlement => 1.5,
             SymbolFamily::Tree => 2.5,
         };
-        *vis = if ppc >= min_px {
-            Visibility::Inherited
+        if ppc < min_px {
+            *vis = Visibility::Hidden;
+            continue;
+        }
+        let alpha = symbol_exit_alpha(ppc);
+        if alpha >= 1.0 {
+            *vis = Visibility::Inherited;
+            sprite.color = Color::WHITE;
+        } else if alpha <= 0.0 {
+            *vis = Visibility::Hidden;
         } else {
-            Visibility::Hidden
-        };
+            *vis = Visibility::Inherited;
+            sprite.color = Color::WHITE.with_alpha(alpha);
+        }
     }
 }
 

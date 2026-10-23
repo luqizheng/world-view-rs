@@ -259,6 +259,46 @@ pub fn shadow_color() -> Color {
     Color::srgba(0.0, 0.0, 0.0, SHADOW_ALPHA)
 }
 
+// ── T37b：缩放门控（追记八锁值）─────────────────────────────────────────
+
+/// T37b-2：全局退场阈值——`px_per_cell` 低于此值时全部符号退场。
+///
+/// 依据：T33 的远观档从 1 px/格 起判，符号与地形色域在同一档位交接。
+pub const SYMBOL_EXIT_PX_PER_CELL: f32 = 1.0;
+
+/// T37b-3：淡出带下缘——`0.8 ≤ px_per_cell < 1.0` 线性淡出。
+///
+/// 带宽 0.2 是「退场阈值 × 20%」：足够覆盖两帧以上的连续缩放（消除
+/// 成批消失的跳感），又不至于让符号在半透明状态滞留过久（半透明图标
+/// 压在同类图标上会出现深度串色）。
+pub const SYMBOL_FADE_START_PX_PER_CELL: f32 = 0.8;
+
+/// T37b：符号缩放门控 alpha（追记八锁值）。
+///
+/// 返回 `[0, 1]`，语义是「该缩放下符号的不透明度系数」：
+///
+/// | `px_per_cell` | 返回 | 语义 |
+/// |---|---|---|
+/// | `< 0.8` | `0.0` | 远观：全退场（T33 色域档） |
+/// | `0.8 … 1.0` | 线性 `0 → 1` | 淡出带：消除成批消失的跳感 |
+/// | `≥ 1.0` | `1.0` | 正常显示 |
+///
+/// 分档退场（山 1.0 / 地标 1.0 / 聚落 1.5 / 树 2.5）是**调用方**的口径——
+/// 本函数只给全局系数，调用方把它与「族阈值是否已过」相乘。
+#[must_use]
+pub fn symbol_exit_alpha(px_per_cell: f32) -> f32 {
+    let ppc = px_per_cell.max(0.0);
+    if ppc >= SYMBOL_EXIT_PX_PER_CELL {
+        return 1.0;
+    }
+    if ppc <= SYMBOL_FADE_START_PX_PER_CELL {
+        return 0.0;
+    }
+    // 线性淡出：α = (ppc − 0.8) / (1.0 − 0.8)
+    (ppc - SYMBOL_FADE_START_PX_PER_CELL)
+        / (SYMBOL_EXIT_PX_PER_CELL - SYMBOL_FADE_START_PX_PER_CELL)
+}
+
 // ── 占位图集 ────────────────────────────────────────────────────────────
 
 /// 一张可写的 8 位 RGBA 画布（仅本模块内部使用）。
@@ -522,6 +562,46 @@ pub fn placeholder_atlas() -> Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// T37b-1/2/3（追记八）：门控 alpha 的三段行为。
+    #[test]
+    fn symbol_exit_alpha_follows_lock_spec() {
+        // 远观全退场
+        assert_eq!(symbol_exit_alpha(0.4), 0.0);
+        assert_eq!(symbol_exit_alpha(0.0), 0.0);
+        assert_eq!(symbol_exit_alpha(SYMBOL_FADE_START_PX_PER_CELL), 0.0);
+        // 淡出带：线性 0 → 1
+        assert!((symbol_exit_alpha(0.9) - 0.5).abs() < 1e-6);
+        assert!((symbol_exit_alpha(0.85) - 0.25).abs() < 1e-6);
+        assert!((symbol_exit_alpha(0.95) - 0.75).abs() < 1e-6);
+        // 正常显示
+        assert_eq!(symbol_exit_alpha(1.0), 1.0);
+        assert_eq!(symbol_exit_alpha(6.0), 1.0);
+    }
+
+    /// T37b-3：淡出带端点必须**恰好**钉在锁值上（0.8 出 0，1.0 出 1），
+    /// 且带内单调不减——否则缩放时会出现「消失又浮现」的闪烁。
+    #[test]
+    fn symbol_exit_alpha_is_monotonic_with_exact_endpoints() {
+        let mut prev = -1.0_f32;
+        for k in 0..=100 {
+            let ppc = 0.7 + k as f32 * 0.006; // 0.7 → 1.3
+            let a = symbol_exit_alpha(ppc);
+            assert!(a >= prev - 1e-6, "ppc={ppc} 处 alpha 回退：{a} < {prev}");
+            prev = a;
+        }
+        assert_eq!(symbol_exit_alpha(0.8), 0.0);
+        assert_eq!(symbol_exit_alpha(1.0), 1.0);
+    }
+
+    /// 负值 / NaN 防御：门控在异常输入下必须退场而不是 panic 或出 1。
+    #[test]
+    fn symbol_exit_alpha_handles_degenerate_input() {
+        assert_eq!(symbol_exit_alpha(-0.5), 0.0);
+        assert_eq!(symbol_exit_alpha(f32::NEG_INFINITY), 0.0);
+        // NaN 走 max(0.0) 后是 0.0 → 落进 ppc <= 0.8 分支
+        assert_eq!(symbol_exit_alpha(f32::NAN), 0.0);
+    }
 
     /// T41 / Q2：清单合计必须是 21，且各族数量是 4/5/7/5。
     #[test]
