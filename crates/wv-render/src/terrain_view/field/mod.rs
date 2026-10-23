@@ -15,6 +15,7 @@
 //!
 //! | 子模块 | 层 | 职责 | 依赖 |
 //! |---|---|---|---|
+//! | [`bicubic`] | 数据 | Catmull-Rom 核的宿主镜像 + 解析导数（P5） | 纯 Rust |
 //! | [`coast_sdf`] | 数据 | 海岸距离场（Felzenszwalb EDT） | 纯 Rust |
 //! | [`pack`] | 数据 | 三张数据纹理打包（height/coast/attr） | 纯 Rust |
 //! | [`material`] | 执行 | `TerrainFieldMaterial` + WGSL 逐像素求值 | Bevy |
@@ -29,12 +30,14 @@
 //! 本目录落地 T1–T6（数据面）与 T7–T18 + T23/T24/T27（P1 求值面）；
 //! T19–T22 域扭曲 / T28–T30 水彩 / T31–T34 缩放自适应属 **P2**，参数位已预留。
 
+pub mod bicubic;
 pub mod coast_sdf;
 pub mod material;
 pub mod pack;
 pub mod paper;
 pub mod symbol_atlas;
 
+pub use bicubic::{bicubic_grad, bicubic_value, cubic_weights, cubic_weights_deriv};
 pub use coast_sdf::{distance_field, distance_to_coast, FAR};
 pub use material::{
     build_material, default_params, set_coast_encoding, warp_amp, FieldPalette, FieldParams,

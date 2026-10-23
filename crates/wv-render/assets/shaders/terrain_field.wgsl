@@ -98,24 +98,21 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // T32/T33：`1 = 纯面积平均（远观）`，`0 = 纯双三次（近观）`。
     let lod_t = 1.0 - smoothstep(1.0, 3.0, px_per_cell);
 
-    // ── 亚格高度：Catmull-Rom 双三次 16 tap（T13）────────────────────────
-    let h = mix(sample_height_bicubic(pos), box_avg_height(pos, footprint), lod_t);
+    // ── 亚格高度 + 明暗梯度：一次 4×4 采样出三者（P5，T13/T14–T17）──────
+    // `hg.x` 是高度（与旧双三次逐位同值），`hg.yz` 是解析偏导（米/格）。
+    let hg = sample_height_bicubic_grad(pos);
+    let h = mix(hg.x, box_avg_height(pos, footprint), lod_t);
 
-    // ── 明暗：中心差分梯度 × 光源（T14–T17）────────────────────────────
-    let e = p.shape.w;
-    let dx = (sample_height_bicubic(pos + vec2<f32>(e, 0.0))
-            - sample_height_bicubic(pos - vec2<f32>(e, 0.0))) / (2.0 * e);
-    let dy = (sample_height_bicubic(pos + vec2<f32>(0.0, e))
-            - sample_height_bicubic(pos - vec2<f32>(0.0, e))) / (2.0 * e);
-
-    // 归一化高度 → 世界斜率（米/格），乘 T15 高程夸张。
-    let zx = dx * H_RANGE_M * p.shape.z;
-    let zy = dy * H_RANGE_M * p.shape.z;
+    // ── 明暗：解析梯度 × 光源（T14–T17）──────────────────────────────────
+    // 旧写法为中心差分 `(h(p+e) − h(p−e)) / 2e`，为 dx 与 dy 各重取两次
+    // 双三次 = 64 tap；解析偏导与 `h` 共享同一次16 tap，省去全部重采样。
+    let zx = hg.y * H_RANGE_M * p.shape.z;
+    let zy = hg.z * H_RANGE_M * p.shape.z;
     let n = normalize(vec3<f32>(-zx, -zy, 1.0));
     let lambert = clamp(dot(n, normalize(p.light_dir.xyz)), 0.0, 1.0);
 
     // T17：明暗乘子钳制 —— 陡崖不压黑也不过曝。
-    // 远观把明暗向 1.0 收敛：梯度必须靠双三次算（差分要连续性），但那个
+    // 远观把明暗向 1.0 收敛：梯度必须靠双三次算（插值要连续性），但那个
     // 空间频率在小于 1 px/格 时已超出屏幕能表现的范围，留着只会闪成噪点。
     // 这与 T33「远观只留色域」一致——山体仍靠三阶色阶读出层次。
     let relief = mix(mix(p.relief.x, p.relief.y, lambert), 1.0, lod_t);
@@ -351,7 +348,37 @@ fn cubic_weights(t: f32) -> vec4<f32> {
     );
 }
 
-/// Catmull-Rom 双三次（T13）。
+/// Catmull-Rom 权重对 `t` 的**解析导数**（P5）。
+///
+/// 对上面四条逐项求导（dt3 = 3t², dt2 = 2t）：
+///   w0' = -1.5t² + 2t − 0.5
+///   w1' =  4.5t² − 5t
+///   w2' = −4.5t² + 4t + 0.5
+///   w3' =  1.5t² − t
+///
+/// 四项和恒为 0（权重和 = 1 是常数 → 导数为 0），这是解析解的自检项。
+fn cubic_weights_deriv(t: f32) -> vec4<f32> {
+    let t2 = t * t;
+    return vec4<f32>(
+        -1.5 * t2 + 2.0 * t - 0.5,
+         4.5 * t2 - 5.0 * t,
+        -4.5 * t2 + 4.0 * t + 0.5,
+         1.5 * t2 - t,
+    );
+}
+
+/// 按下标取 `vec4` 分量。`vec4` 的动态下标在部分驱动上退化，
+/// 统一走展开分支——与权重取分量同一套写法。
+fn pick4(v: vec4<f32>, i: i32) -> f32 {
+    if (i == 0) { return v.x; }
+    if (i == 1) { return v.y; }
+    if (i == 2) { return v.z; }
+    return v.w;
+}
+
+/// Catmull-Rom 双三次（T13）的值与**解析偏导**，一次 4×4 采样同时给出（P5）。
+///
+/// 返回 `vec3(h, dh/dx, dh/dy)`，导数单位是「归一化高度 / 格」。
 ///
 /// ## 坐标约定（**唯一权威，改前先读**）
 ///
@@ -364,36 +391,63 @@ fn cubic_weights(t: f32) -> vec4<f32> {
 /// 校验：`pos = i + 0.5` → `tc = i` → `f = 0` → 只有 `w1 = 1` → 取
 /// `floor(tc) + 0 = i` → 得到第 i 格自己的纹素。**无偏移**。
 ///
+/// `tc = pos − 0.5` 是**平移**，对 x、y 的导数因子都是 1，故
+/// `d/dpos = d/dtc`，无需链式系数。
+///
 /// ⚠️ 此前写成 `base = floor(tc) − 1` 且下标取 `base + (i − 1)`，等于把四点
 /// 窗口整体左移一格：`f = 0` 时取到的是 `i − 1` 号纹素，**整条高度场偏一个
 /// 格**。再叠加调用方传的 `gw − 0.5`，height 实际落在 `gw − 1.5`、coast 落在
 /// `gw − 0.5`、attr 落在 `gw`——三套不同配准。fbm 地形平滑，肉眼难判，
 /// 属静默缺陷；现统一为全部在 `gw` 采样。
-fn sample_height_bicubic(pos: vec2<f32>) -> f32 {
-    // texel 下标空间：格心 (i+0.5) 对应整数 i
+///
+/// ## 为什么能一次采样出三个量
+///
+/// 值与两个偏导共享同一个 4×4 窗口与同一次 `height_texel` 取样：
+///   h    = Σᵢⱼ texel(i,j) · wxᵢ(f.x) · wyⱼ(f.y)
+///   ∂h/∂x = Σᵢⱼ texel(i,j) · wx′ᵢ(f.x) · wyⱼ(f.y)
+///   ∂h/∂y = Σᵢⱼ texel(i,j) · wxᵢ(f.x) · wy′ⱼ(f.y)
+/// 旧写法为 h 取 16 tap、再为 dh/dx 中心差分取 2×16、再为 dh/dy 取 2×16，
+/// 共 **80 tap**；现在一次 **16 tap** 同时给出三者。
+///
+/// ## 与旧中心差分的差异（**不是等价替换**）
+///
+/// 旧式 `(h(p+e) − h(p−e)) / 2e` 是**数值近似**，误差 O(e²)，且在 `f`
+/// 靠近 0 或 1（格边界）时精度最差：`fract()` 的不连续让 e 附近的
+/// 两点可能落在不同四点窗口，差分实际跨了窗口边界。解析导数没有这个坑——
+/// 它在窗口内处处成立，这正是 T13 买 C1 连续性时想要的东西。
+///
+/// 代价：梯度不再受 `GRAD_STEP`（T14）控制。T14 的作用是让差分步长
+/// 可调以滤高频噪声；解析导数对 16 tap 窗口内的全频段一视同仁。
+/// 远观档的噪声抑制仍由 T33 的 `lod_t → 1` 把 relief 收敛到 1.0 承担，
+/// 故 T14 的意图未被绕过，`grad_step` 槽位保留但不再参与梯度计算。
+fn sample_height_bicubic_grad(pos: vec2<f32>) -> vec3<f32> {
     let tc = pos - vec2<f32>(0.5);
     let f = fract(tc);
     let base = floor(tc);
     let wx = cubic_weights(f.x);
     let wy = cubic_weights(f.y);
+    let dxw = cubic_weights_deriv(f.x);
+    let dyw = cubic_weights_deriv(f.y);
 
-    var acc = 0.0;
+    var h = 0.0;
+    var gx = 0.0;
+    var gy = 0.0;
     for (var j = 0; j < 4; j = j + 1) {
         let offy = f32(j) - 1.0;
-        var wyj = 0.0;
-        if (j == 0) { wyj = wy.x; } else if (j == 1) { wyj = wy.y; }
-        else if (j == 2) { wyj = wy.z; } else { wyj = wy.w; }
-        var row = 0.0;
+        let wyj = pick4(wy, j);
+        let dywj = pick4(dyw, j);
         for (var i = 0; i < 4; i = i + 1) {
-            var wxi = 0.0;
-            if (i == 0) { wxi = wx.x; } else if (i == 1) { wxi = wx.y; }
-            else if (i == 2) { wxi = wx.z; } else { wxi = wx.w; }
-            row = row + height_texel(base + vec2<f32>(f32(i) - 1.0, offy)) * (wxi * wyj);
+            let wxi = pick4(wx, i);
+            let dxwi = pick4(dxw, i);
+            let t = height_texel(base + vec2<f32>(f32(i) - 1.0, offy));
+            h = h + t * (wxi * wyj);
+            gx = gx + t * (dxwi * wyj);
+            gy = gy + t * (wxi * dywj);
         }
-        acc = acc + row;
     }
-    // Catmull-Rom 四项权重和恒为 1（负权重由正权重补偿），无需再归一化。
-    return acc;
+    // Catmull-Rom 四项权重和恒为 1（负权重由正权重补偿），值通道无需归一化；
+    // 导数通道的权重和恒为 0（常数 1 的导数），无需去偏。
+    return vec3<f32>(h, gx, gy);
 }
 
 /// 按**纹素下标**取单点高度（`height_texel(i)` = 第 i 格）。钳在图内，
