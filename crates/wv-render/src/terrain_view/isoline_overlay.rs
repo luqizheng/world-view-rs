@@ -256,7 +256,15 @@ pub fn sync_isoline_overlay(
         overlay.despawn(&mut commands);
         return;
     };
-    let treatment = view.active_theme.treatment;
+    // 2026-10-22 验收（用户裁定：CellMap 是数据视图，无修饰）：Topographic
+    // 下关掉水彩外晕（那条棕色外扩描边是主题墨色画的艺术晕染，与「反映
+    // 方格状态」冲突）。其他模式照旧走主题 treatment。
+    let cellmap = matches!(view.mode, crate::state::ViewMode::Topographic);
+    let mut treatment = view.active_theme.treatment;
+    if cellmap {
+        treatment.coast_halo = false;
+        treatment.ink_sublinear = false;
+    }
     let nation = view.scale >= crate::state::LOD_NATION_SCALE;
     let key = IsolineKey {
         map: tex.last_map.clone(),
