@@ -31,8 +31,13 @@
 //! - **近观**：山体明暗可辨、不过曝、不出规则格纹折痕（T13 双三次的判据）。
 
 use bevy::{
-    asset::AssetPlugin, camera::ScalingMode, mesh::Mesh2d, prelude::*,
+    asset::AssetPlugin,
+    camera::ScalingMode,
+    mesh::Mesh2d,
+    prelude::*,
+    render::view::screenshot::{save_to_disk, Screenshot},
     sprite_render::MeshMaterial2d,
+    window::PrimaryWindow,
 };
 
 use wv_core::terrain::{TerrainCellData, TerrainData};
@@ -46,6 +51,19 @@ const GRID: u32 = 512;
 
 /// 初始每格屏幕像素（落在 T32 过渡档 1.0~3.0 之间，便于观察墨线淡出）。
 const INIT_PX_PER_CELL: f32 = 6.0;
+
+/// 缩放上下限（每格屏幕像素）。下限压到 0.4 是为了能看**远观档**
+/// （P0 锁 T33：`cell_px < 1.0` 属远观，墨线全关只留色域）。
+const ZOOM_MIN: f32 = 0.4;
+const ZOOM_MAX: f32 = 48.0;
+
+/// **一格占多少世界单位（固定）**。
+///
+/// 缩放**不能**改 quad 的世界尺寸——若 quad 与相机视野同比例缩放，
+/// 二者相消，画面纹丝不动（实测踩过：8 档验收图长得一模一样）。
+/// 正确模型：quad 恒定 `GRID × WORLD_PER_CELL` 世界单位，
+/// 缩放只改相机视野高度＝`窗口像素 / px_per_cell`。
+const WORLD_PER_CELL: f32 = 1.0;
 
 fn main() {
     App::new()
@@ -70,9 +88,14 @@ fn main() {
                 }),
         )
         .add_plugins(TerrainFieldMaterialPlugin)
-        .insert_resource(ClearColor(Color::NONE))
+        // T44：纸底铺底——「地形没画到的地方也是纸不是黑」。
+        // 用 `Color::NONE`（透明）会让远观档地图外的空白显示成黑框。
+        .insert_resource(ClearColor(Color::srgb(0.94, 0.91, 0.84)))
         .add_systems(Startup, setup)
-        .add_systems(Update, (zoom_input, key_input, sync_material))
+        .add_systems(
+            Update,
+            (zoom_input, key_input, sync_material, acceptance_capture),
+        )
         .run();
 }
 
@@ -87,6 +110,8 @@ struct DemoState {
     zoom_dir: f32,
     material: Handle<TerrainFieldMaterial>,
     quad: Entity,
+    /// 预先找出的海岸格（世界坐标）——验收截图的对准点。
+    coast_world: Vec2,
 }
 
 /// 确定性哈希（整数 → `[0,1)`）。**不用随机数**——守护项 8 / SPEC §3.8.6：
@@ -145,6 +170,47 @@ fn fbm(x: f32, y: f32, seed: u32, octaves: u32) -> f32 {
     } else {
         0.0
     }
+}
+
+/// 找一格「陆地且四邻有水」的格，取最靠近图幅中心的一个。
+///
+/// 验收截图要对准海岸看（岸线连续性 / 三段色带 / 线宽恒定），
+/// 对着地图中心只能拍到内陆。
+///
+/// 返回**世界坐标**：格 (cx, cy)（y 自上而下）→ 世界
+/// `(cx + 0.5 − GRID/2, GRID/2 − cy − 0.5)`，与 quad 的 1 单位/格对齐。
+fn find_coast_world(terrain: &TerrainData) -> Vec2 {
+    let w = terrain.width as usize;
+    let h = terrain.height as usize;
+    let is_land = |x: usize, y: usize| terrain.cells[y * w + x].surface != 0;
+    let center = Vec2::new(terrain.width as f32 * 0.5, terrain.height as f32 * 0.5);
+    let mut best: Option<(f32, usize, usize)> = None;
+
+    for y in 1..h.saturating_sub(1) {
+        for x in 1..w.saturating_sub(1) {
+            if !is_land(x, y) {
+                continue;
+            }
+            let coast = !is_land(x - 1, y)
+                || !is_land(x + 1, y)
+                || !is_land(x, y - 1)
+                || !is_land(x, y + 1);
+            if !coast {
+                continue;
+            }
+            let d = (Vec2::new(x as f32, y as f32) - center).length_squared();
+            if best.is_none_or(|(bd, _, _)| d < bd) {
+                best = Some((d, x, y));
+            }
+        }
+    }
+
+    let (cx, cy) = best
+        .map(|(_, x, y)| (x as f32, y as f32))
+        // 找不到海岸（全水或全陆）就退回图幅中心。
+        .unwrap_or((terrain.width as f32 * 0.5, terrain.height as f32 * 0.5));
+    let g = GRID as f32 * WORLD_PER_CELL;
+    Vec2::new(cx + 0.5 - g * 0.5, g * 0.5 - cy - 0.5)
 }
 
 /// 程序化生成一份**确定性**的测试地形（大陆 + 山脉 + 内海）。
@@ -230,6 +296,11 @@ fn setup(
 
     // 打印打包统计——P0 锁 T4 的显存口径（1024² 图 8 MB；512² 图 = 2 MB）。
     let pack = FieldPack::from_terrain(&terrain);
+    let coast_world = find_coast_world(&terrain);
+    info!(
+        "海岸对准点（世界坐标）: ({:.1}, {:.1})",
+        coast_world.x, coast_world.y
+    );
     let bytes = pack.height_tex.len() + pack.coast_tex.len() + pack.attr_tex.len();
     info!(
         "field pack: {}×{} 格，三纹理合计 {} KB（{:.2} MB）",
@@ -257,7 +328,7 @@ fn setup(
     //
     // mesh 建成 1×1 单位，世界尺寸靠 `Transform::scale` 给——
     // 这样缩放时无需每帧改 mesh 资产。
-    let extent = GRID as f32 * INIT_PX_PER_CELL;
+    let extent = GRID as f32 * WORLD_PER_CELL;
     let mesh = meshes.add(Rectangle::new(1.0, 1.0));
     let quad = commands
         .spawn((
@@ -269,6 +340,14 @@ fn setup(
 
     commands.spawn(Camera2d);
 
+    // 验收截图模式：`FIELD_ACCEPT=1` 时按固定缩放序列逐档出图并退出。
+    // 让 P1 的四条验收（岸线连续 / 墨线恒定 / 分支无关 / 远观不闪）可复跑，
+    // 不依赖人肉滚轮。
+    if std::env::var("FIELD_ACCEPT").is_ok() {
+        commands.insert_resource(AcceptCapture::new());
+        info!("FIELD_ACCEPT 已启用：将按预设缩放序列截图到 ./snapshots-demo/accept/");
+    }
+
     commands.insert_resource(DemoState {
         px_per_cell: INIT_PX_PER_CELL,
         branch: ViewBranch::Themed,
@@ -277,6 +356,7 @@ fn setup(
         zoom_dir: 1.0,
         material,
         quad,
+        coast_world,
     });
 }
 
@@ -287,7 +367,7 @@ fn zoom_input(
 ) {
     for ev in wheel.read() {
         let factor = if ev.y > 0.0 { 1.12 } else { 1.0 / 1.12 };
-        state.px_per_cell = (state.px_per_cell * factor).clamp(2.0, 40.0);
+        state.px_per_cell = (state.px_per_cell * factor).clamp(ZOOM_MIN, ZOOM_MAX);
     }
 }
 
@@ -308,8 +388,8 @@ fn key_input(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, mut state: ResMut
     if state.auto_zoom {
         // 缓慢往复缩放，穿过 1.0/3.0 两个档位阈值（P0 锁 T34 的连续性判据）
         state.px_per_cell *= 1.0 + state.zoom_dir * time.delta_secs() * 0.35;
-        state.px_per_cell = state.px_per_cell.clamp(2.0, 40.0);
-        if state.px_per_cell <= 2.01 || state.px_per_cell >= 39.99 {
+        state.px_per_cell = state.px_per_cell.clamp(ZOOM_MIN, ZOOM_MAX);
+        if state.px_per_cell <= ZOOM_MIN + 0.01 || state.px_per_cell >= ZOOM_MAX - 0.01 {
             state.zoom_dir = -state.zoom_dir;
         }
     }
@@ -326,6 +406,7 @@ fn sync_material(
     mut materials: ResMut<Assets<TerrainFieldMaterial>>,
     mut transforms: Query<&mut Transform>,
     mut projections: Query<&mut Projection, With<Camera2d>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     // `get_mut` 返回 `Option<&mut T>`；经 `let Some(mat) = ...` 模式绑定后
     // 拿到的是 `&mut TerrainFieldMaterial`，写 `mat.params.*` 需要 mat 可变。
@@ -342,27 +423,223 @@ fn sync_material(
     mat.params.relief[0] = if state.hillshade_on { 0.86 } else { 1.0 };
     mat.params.relief[1] = if state.hillshade_on { 1.14 } else { 1.0 };
 
-    // quad 世界尺寸随缩放变化：每格 px_per_cell 屏幕像素。
-    // mesh 是 1×1 单位，故缩放系数即世界尺寸。
-    let extent = GRID as f32 * state.px_per_cell;
+    // quad 世界尺寸**恒定**（1 世界单位/格）——缩放只动相机，不动 quad。
+    //
+    // ⚠️ 这里踩过一个大坑：曾经让 quad 世界尺寸随 `px_per_cell` 变、
+    // 同时把相机视野也设成 quad 尺寸，二者同比例相消 → **画面完全不缩放**，
+    // 8 档验收图长得一模一样。正确模型是「quad 固定、只改相机视野」。
+    let extent = GRID as f32 * WORLD_PER_CELL;
     if let Ok(mut tf) = transforms.get_mut(state.quad) {
         tf.scale = Vec3::splat(extent);
     }
 
-    // 相机视野必须与 quad 同步缩放，否则放大后只看到中央一小块。
-    // 显式正交投影（`Projection` 是独立组件，`Camera2d` 经 `#[require]` 自动挂）：
-    // 视野高度 = quad 高度（世界单位），这样「每格占多少屏幕像素」才等于
-    // `px_per_cell`，与 shader 的线宽折算口径一致。
+    // 相机视野高度（世界单位）= 窗口像素高 / 每格屏幕像素。
+    // 这样「一格」严格占 `px_per_cell` 个屏幕像素，与 WGSL 里
+    // `COAST_LINE_PX / px_per_cell` 的线宽折算口径一致（T11 屏幕像素口径）。
+    let win_h = windows
+        .single()
+        .map(|w| w.height())
+        .unwrap_or(900.0)
+        .max(1.0);
+    let view_h = win_h / state.px_per_cell.max(1e-3);
     // Bevy 0.19 的 `Projection` 是**枚举**（`Projection::Orthographic(..)`），
     // `scaling_mode` / `scale` 在内层的 `OrthographicProjection` 上。
     for mut proj in projections.iter_mut() {
-        // Bevy 0.19 的 `ScalingMode::FixedVertical` 显式给视野**高度**
-        // （宽度按窗口宽高比自动推）。取 `extent × 1.02` 作 2% 边距，
-        // 避免 quad 边缘露纸底。
         if let Projection::Orthographic(o) = &mut *proj {
             o.scaling_mode = ScalingMode::FixedVertical {
-                viewport_height: extent * 1.02,
+                viewport_height: view_h,
             };
         }
+    }
+}
+
+// ── 验收截图模式（FIELD_ACCEPT=1）─────────────────────────────────────────────
+
+/// 一档验收截图：标签 + 每格屏幕像素 + 取色分支。
+///
+/// 档位对应 P0 锁 T31–T34 的三档判据（近观 ≥3 / 过渡 1–3 / 远观 <1），
+/// 外加一档极限近观看岸线连续性（T11 验收：放大 4× 无阶梯）。
+/// 相机瞄准点——验收要看的东西不一样：岸线连续性要对着**海岸**看，
+/// 远观噪点要对着**全图**看。
+#[derive(Clone, Copy, PartialEq)]
+enum Aim {
+    /// 对准预先找出的海岸格（近观 / 过渡档）。
+    Coast,
+    /// 对准图幅中心（远观档、CellMap 档）。
+    Center,
+}
+
+struct AcceptShot {
+    label: &'static str,
+    px_per_cell: f32,
+    branch: ViewBranch,
+    aim: Aim,
+}
+
+const ACCEPT_SHOTS: &[AcceptShot] = &[
+    // 近观极限：每格 32 px。**已知限制**：水陆的**符号**来自 attr 的
+    // `surface` 通道（per-texel / Nearest），故海陆交界在格边界处必然有
+    // 一格宽的台阶——这是 ADR-0053 T5「不用带符号 SDF」的直接后果。
+    // 三段色带（滩/浅/深）由距离场连续驱动、是平滑的；待 P2 域扭曲
+    // （T19–T22）把格网对齐打散后，这条台阶才会变成手绘式抖动。
+    AcceptShot {
+        label: "01-extreme-32px-cell-step-known",
+        px_per_cell: 32.0,
+        branch: ViewBranch::Themed,
+        aim: Aim::Coast,
+    },
+    // 规格参考档：诊断基线是 4 px/格，「放大 4×」= 16 px/格。
+    AcceptShot {
+        label: "02-close-16px",
+        px_per_cell: 16.0,
+        branch: ViewBranch::Themed,
+        aim: Aim::Coast,
+    },
+    // 近观档（T31：cell_px ≥ 3）。
+    AcceptShot {
+        label: "03-near-8px",
+        px_per_cell: 8.0,
+        branch: ViewBranch::Themed,
+        aim: Aim::Coast,
+    },
+    // 过渡档上边界（T32：1 ≤ cell_px < 3）。
+    AcceptShot {
+        label: "04-mid-3px",
+        px_per_cell: 3.0,
+        branch: ViewBranch::Themed,
+        aim: Aim::Coast,
+    },
+    // 过渡档下边界。
+    AcceptShot {
+        label: "05-mid-1p5px",
+        px_per_cell: 1.5,
+        branch: ViewBranch::Themed,
+        aim: Aim::Coast,
+    },
+    // 远观档（T33：cell_px < 1）——墨线应淡出，只留色域，无彩色噪点。
+    AcceptShot {
+        label: "06-far-0p8px",
+        px_per_cell: 0.8,
+        branch: ViewBranch::Themed,
+        aim: Aim::Center,
+    },
+    // 极远观。
+    AcceptShot {
+        label: "07-far-0p4px",
+        px_per_cell: 0.4,
+        branch: ViewBranch::Themed,
+        aim: Aim::Center,
+    },
+    // CellMap 分支：颜色须**与主题无关**（ADR-0051 §5）。
+    AcceptShot {
+        label: "08-cellmap-8px",
+        px_per_cell: 8.0,
+        branch: ViewBranch::BiomeRaw,
+        aim: Aim::Center,
+    },
+    AcceptShot {
+        label: "09-cellmap-0p8px",
+        px_per_cell: 0.8,
+        branch: ViewBranch::BiomeRaw,
+        aim: Aim::Center,
+    },
+];
+
+/// 验收截图驱动器状态。
+#[derive(Resource)]
+struct AcceptCapture {
+    idx: usize,
+    /// 0 = 刚切档、等渲染稳定；≥1 计数到 `SETTLE_FRAMES` 后截图。
+    frames: u32,
+    /// 截图后等落盘的帧数。
+    after_shot: u32,
+    /// 启动预热帧：等首帧的纹理上传 / 材质管线编译完成。
+    /// 不足会让**第一张**截出全黑（实测踩过）。
+    warmup: u32,
+    done: bool,
+}
+
+impl AcceptCapture {
+    fn new() -> Self {
+        Self {
+            idx: 0,
+            frames: 0,
+            after_shot: 0,
+            warmup: WARMUP_FRAMES,
+            done: false,
+        }
+    }
+}
+
+/// 每档先等渲染稳定若干帧（纹理上传、材质重编都是异步的），
+/// 再发截图请求，再等落盘——太快会拍到上一档的画面。
+/// 启动预热：纹理上传 + 材质管线编译都在前若干帧内完成，
+/// 没等够会拍出全黑的第一张。
+const WARMUP_FRAMES: u32 = 90;
+const SETTLE_FRAMES: u32 = 40;
+const AFTER_SHOT_FRAMES: u32 = 20;
+
+fn acceptance_capture(
+    mut commands: Commands,
+    mut cap: Option<ResMut<AcceptCapture>>,
+    mut state: ResMut<DemoState>,
+    mut cams: Query<&mut Transform, With<Camera2d>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let Some(cap) = cap.as_mut() else {
+        return;
+    };
+    if cap.done {
+        return;
+    }
+    if cap.warmup > 0 {
+        cap.warmup -= 1;
+        return;
+    }
+
+    // 应用当前档位
+    let shot = &ACCEPT_SHOTS[cap.idx];
+    state.px_per_cell = shot.px_per_cell;
+    state.branch = shot.branch;
+    state.auto_zoom = false;
+
+    // 瞄准：近观/过渡档对着海岸看（岸线连续性与线宽恒定才有意义），
+    // 远观与 CellMap 档对着全图中心。
+    let aim = match shot.aim {
+        Aim::Coast => state.coast_world,
+        Aim::Center => Vec2::ZERO,
+    };
+    for mut tf in cams.iter_mut() {
+        tf.translation.x = aim.x;
+        tf.translation.y = aim.y;
+    }
+
+    if cap.after_shot > 0 {
+        cap.after_shot -= 1;
+        if cap.after_shot == 0 {
+            cap.idx += 1;
+            cap.frames = 0;
+            if cap.idx >= ACCEPT_SHOTS.len() {
+                cap.done = true;
+                info!("验收截图完成（{} 档）", ACCEPT_SHOTS.len());
+                exit.write(AppExit::Success);
+            }
+        }
+        return;
+    }
+
+    cap.frames += 1;
+    if cap.frames == SETTLE_FRAMES {
+        let path = format!("snapshots-demo/accept/{}.png", shot.label);
+        if let Some(dir) = std::path::Path::new(&path).parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        info!("capture: {} → {}", shot.label, path);
+        commands
+            .spawn(Screenshot::primary_window())
+            // `save_to_disk` 的闭包持有路径（`impl AsRef<Path>` 须为拥有所有权的），
+            // 传 `&String` 活不过本帧作用域。
+            .observe(save_to_disk(path.clone()));
+        cap.after_shot = AFTER_SHOT_FRAMES;
     }
 }

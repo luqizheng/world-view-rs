@@ -60,8 +60,14 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         return p.paper;
     }
 
-    // 格坐标（texel 空间）。uv 来自 mesh 的 0..1；数据 y 自上而下，故翻转。
-    let uv = vec2<f32>(in.uv.x, 1.0 - in.uv.y);
+    // 格坐标（texel 空间）。
+    //
+    // ⚠️ **u 与 v 都要翻**：Bevy 的 `Rectangle` mesh 顶点序为
+    // `[1,0] [0,0] [0,1] [1,1]`——**u 轴是反的**（世界左边 u=1、右边 u=0），
+    // v 轴顶部为 1。数据纹理是「左上原点、x 向右、y 向下」，
+    // 故 `u = 1 − in.uv.x`、`v = 1 − in.uv.y`。
+    // 只翻 v 会让整幅图**左右镜像**（实测踩过：相机对准的海岸画到了镜像位置）。
+    let uv = vec2<f32>(1.0 - in.uv.x, 1.0 - in.uv.y);
     let center = uv * grid - vec2<f32>(0.5); // 采样点落在格心
 
     // ── 亚格高度：Catmull-Rom 双三次 16 tap（T13）────────────────────────
@@ -91,6 +97,18 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let is_land = attr.r > 0.5;         // attr.r = 湿判定结果（pack.rs 口径）
     let biome_id = u32(round(attr.g * 255.0));
 
+    // ── 有符号距离（SUB-CELL 关键）──────────────────────────────────────
+    //
+    // `coast_tex` 存的是「到最近**异类格**的距离」，相邻异类格的格心距离为 1。
+    // 直接按 `is_land` 二值切换 → 水陆边界**逐格硬切**，放大即见阶梯
+    // （违反 SPEC §3.8.2「边界不得逐格改色表达」）。
+    //
+    // 改成有符号距离：格心处 `sd = ±0.5`，于是**相邻两格的格心之间线性插值
+    // 恰好穿过 0**——0 的位置就是两格的交界线。这样水陆过渡是连续函数，
+    // 任意放大倍数下岸线都是平滑曲线。
+    let sd = select(-(d - 0.5), d - 0.5, is_land); // 正 = 陆，负 = 水
+    let land_t = smoothstep(-0.5, 0.5, sd);
+
     var base: vec3<f32>;
     if (p.shape.y < 0.5) {
         // CellMap / Topographic：群系固定色块，**不随主题**（ADR-0051 §5）。
@@ -98,50 +116,56 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     } else {
         base = themed_land(is_land, h);
     }
+    // 明暗只作用于陆面。水面用深度量程表达 —— 海面跟着地形一起明暗是
+    // 现行烘焙路径最刺眼的 bug 之一。
+    let land_col = base * relief;
 
-    var rgb = base;
-    if (is_land) {
-        // 明暗只作用于陆面。水面用深度量程表达 —— 海面跟着地形一起明暗是
-        // 现行烘焙路径最刺眼的 bug 之一。
-        rgb = base * relief;
-    } else {
-        // ── 海岸三段色带（SPEC §3.8.4：滩 0–1 / 浅 1–3 / 深 3–9 格）──────
-        // 由**距离场**连续驱动，不得逐格改色表达（SPEC §3.8.2）。
-        let t_shore = smoothstep(0.0, p.shore_edges.x, d);
-        let t_shallow = smoothstep(p.shore_edges.x, p.shore_edges.y, d);
-        let t_deep = smoothstep(p.shore_edges.y, p.shore_edges.z, d);
+    // ── 海岸三段色带（SPEC §3.8.4：滩 0–1 / 浅 1–3 / 深 3–9 格）──────────
+    // 用「入水深度」`wd = max(-sd, 0)` 驱动，全程连续量。
+    let wd = max(-sd, 0.0);
+    let t_shore = smoothstep(0.0, p.shore_edges.x, wd);
+    let t_shallow = smoothstep(p.shore_edges.x, p.shore_edges.y, wd);
+    let t_deep = smoothstep(p.shore_edges.y, p.shore_edges.z, wd);
 
-        // 滩（近岸）→ 浅水 → 深水，三段连续过渡。
-        let shore_c = p.theme[0].rgb;
-        let shallow_c = mix(p.theme[0].rgb, p.theme[1].rgb, 0.55);
-        let deep_c = p.theme[0].rgb * 0.82;
-        let water = mix(mix(shore_c, shallow_c, t_shallow), deep_c, t_deep);
-        // 近岸白滩（t_shore 最高处向纸色偏一点，给水线一个视觉落点）
-        rgb = mix(mix(water, p.paper.rgb, 0.18 * t_shore * (1.0 - t_shallow)), water, t_shallow);
-    }
+    let shallow_c = mix(p.theme[0].rgb, p.theme[1].rgb, 0.55);
+    let deep_c = p.theme[0].rgb * 0.82;
+    var water_col = mix(mix(p.theme[0].rgb, shallow_c, t_shallow), deep_c, t_deep);
+    // 近岸白滩（t_shore 最高处向纸色偏一点，给水线一个视觉落点）
+    water_col = mix(water_col, p.paper.rgb, 0.18 * t_shore * (1.0 - t_shallow));
+
+    // 亚格混合：一格宽的软过渡替代逐格硬切。
+    var rgb = mix(water_col, land_col, land_t);
 
     // ── 墨线（屏幕像素口径 + fwidth 抗锯齿）───────────────────────────────
     // 禁裸 smoothstep：边缘宽会随缩放变化（近观粗、远观糊）。
     // 用屏幕空间导数把距离折算成像素，线宽才恒定。
     let px_per_cell = max(p.shape.x, 1e-5);
 
-    // 岸线：d 的等值线 d≈0.5 处即水陆中线（两侧最近异类格距离都是 1，
-    // 中点 0.5）。dd=0 即岸线本身。
-    let dd = abs(d - 0.5);
+    // 岸线：`sd = 0` 即岸线本身（相邻两格格心之间的交界）。
+    let dd = abs(sd);
     let coast_grad = max(fwidth(dd), 1e-6);
     let coast_half = COAST_LINE_PX / px_per_cell;               // 格单位半宽
     let coast_ink = 1.0 - smoothstep(coast_half - coast_grad, coast_half + coast_grad, dd);
     rgb = mix(rgb, p.ink.rgb, clamp(coast_ink, 0.0, 1.0) * COAST_INK_ALPHA);
 
     // biome 边界（T27：4 邻 + 中心比较，ID 只比较不插值）。
-    // 已知限制：斜边线宽最多 1.4× —— 0.8px 低 α 线视觉是「晕开」非「画歪」
-    // （Q3 已裁定 P4 复评，精确化需 biome SDF）。
-    // 仅主题分支画：CellMap 是数据视图，色块间不加墨线。
+    //
+    // **已知限制（Q3 裁定 A：不做 biome SDF，P4 复评）**：
+    // 4 邻比较只能给出「整格」级的判定，天然渲成**一格宽**的带。
+    // 一格在屏幕上的宽度是 `px_per_cell`，故：
+    // - 远观（px_per_cell < 1）：一格 ≈ 1px，带子接近 T24 的 0.8px 目标值 ✓
+    // - 近观（px_per_cell 大）：带子会涨到几十 px，读起来是「色块」而非「线」
+    //
+    // 因此按 T24 的精神（边界是暗示不是划线）做**淡出**：
+    // 当一格已明显宽于目标线宽若干倍时把线收掉——那时作者看的是 biome 色块本身，
+    // 一条 1 格宽的假线只会误导。精确的亚格边界需要 biome SDF，属 P4。
     if (p.shape.y >= 0.5 && is_land) {
-        let diff = biome_boundary(uv, grid, biome_id);
-        let lw = BIOME_LINE_PX / px_per_cell;
-        let ink = 1.0 - smoothstep(0.0, lw, diff);
-        rgb = mix(rgb, p.ink.rgb, clamp(ink, 0.0, 1.0) * BIOME_INK_ALPHA);
+        let band_px = px_per_cell; // 4 邻检测的天然带子宽度（1 格 = px_per_cell px）
+        let fade = 1.0 - smoothstep(BIOME_LINE_PX * 3.0, BIOME_LINE_PX * 8.0, band_px);
+        if (fade > 0.01) {
+            let is_edge = biome_boundary(uv, grid, biome_id);
+            rgb = mix(rgb, p.ink.rgb, is_edge * BIOME_INK_ALPHA * fade);
+        }
     }
 
     return vec4<f32>(rgb, 1.0);
@@ -213,8 +237,8 @@ fn sample_coast(uv_cell: vec2<f32>) -> f32 {
     return r * 32.0; // pack 编码 d/32 → 还原为格单位
 }
 
-/// biome 边界强度（T27）：中心与 4 邻比较。
-/// 返回 0 = 紧邻异类格（在线上），1 = 四邻同类（无线）。
+/// biome 边界检测（T27）：中心与 4 邻比较，ID 只比较不插值。
+/// 返回 1 = 四邻中有异类（本格落在边界上），0 = 四邻同类。
 fn biome_boundary(uv: vec2<f32>, grid: vec2<f32>, center_id: u32) -> f32 {
     let t = 1.0 / grid;
     var is_edge = 0.0;
@@ -226,8 +250,8 @@ fn biome_boundary(uv: vec2<f32>, grid: vec2<f32>, center_id: u32) -> f32 {
     if (u32(round(s3.g * 255.0)) != center_id) { is_edge = 1.0; }
     let s4 = textureSampleLevel(attr_tex, attr_smp, uv - vec2<f32>(0.0, t.y), 0.0);
     if (u32(round(s4.g * 255.0)) != center_id) { is_edge = 1.0; }
-    // 线上返回 0（最靠近边界），无线返回 1
-    return 1.0 - is_edge;
+    // 1 = 本格贴边界，0 = 内部格
+    return is_edge;
 }
 
 /// 主题分支陆面底色（Topographic 四阶）。
@@ -240,6 +264,15 @@ fn themed_land(is_land: bool, h: f32) -> vec3<f32> {
     return p.theme[1].rgb;
 }
 
+/// sRGB 分量 → 线性。手写的色板常量都是**人眼/取色器口径的 sRGB**
+/// （如 `0.32, 0.55, 0.32` 对应 `#52 8C 52`），而片元输出住线性空间，
+/// 直接用会整体偏亮发灰（同 `FieldPalette` 里踩过的色彩空间坑）。
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    let lo = c / 12.92;
+    let hi = pow((c + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
+    return select(hi, lo, c <= vec3<f32>(0.04045));
+}
+
 /// CellMap 分支：群系固定色块的 P1 占位色板。
 ///
 /// **不是**完整的 BIOME_RAW_COLORS[21]——那需要 21 个 vec4 进 uniform，
@@ -248,19 +281,19 @@ fn themed_land(is_land: bool, h: f32) -> vec3<f32> {
 fn biome_raw_approx(biome_id: u32) -> vec3<f32> {
     let id = f32(biome_id);
     if (id <= 0.0) {
-        return vec3<f32>(0.72, 0.70, 0.64); // NONE 占位
+        return srgb_to_linear(vec3<f32>(0.72, 0.70, 0.64)); // NONE 占位
     }
     if (id >= 14.0 && id <= 16.0) {
-        return vec3<f32>(0.18, 0.38, 0.58); // 水域族：海洋/湖泊/河流
+        return srgb_to_linear(vec3<f32>(0.18, 0.38, 0.58)); // 水域族：海洋/湖泊/河流
     }
     if (id == 9.0 || id == 19.0) {
-        return vec3<f32>(0.88, 0.90, 0.92); // 雪原/盐碱地
+        return srgb_to_linear(vec3<f32>(0.88, 0.90, 0.92)); // 雪原/盐碱地
     }
     if (id == 4.0 || id == 13.0 || id == 8.0) {
-        return vec3<f32>(0.55, 0.50, 0.43); // 戈壁/山地/苔原
+        return srgb_to_linear(vec3<f32>(0.55, 0.50, 0.43)); // 戈壁/山地/苔原
     }
     if (id == 5.0 || id == 18.0 || id == 2.0) {
-        return vec3<f32>(0.85, 0.74, 0.44); // 沙漠/稀树草原/平原
+        return srgb_to_linear(vec3<f32>(0.85, 0.74, 0.44)); // 沙漠/稀树草原/平原
     }
-    return vec3<f32>(0.32, 0.55, 0.32); // 其余归绿族
+    return srgb_to_linear(vec3<f32>(0.32, 0.55, 0.32)); // 其余归绿族
 }
