@@ -359,15 +359,10 @@ struct StrokeBatch {
 #[derive(Default)]
 struct LandmarkPool {
     batch: Option<StrokeBatch>,
-    /// Sprite 路径的实体池（PNG 加载成功后启用；长度 = 当前可见符号数）。
-    sprites: Vec<Entity>,
 }
 
 impl LandmarkPool {
     fn despawn(&mut self, commands: &mut Commands) {
-        for e in self.sprites.drain(..) {
-            commands.entity(e).despawn();
-        }
         if let Some(batch) = self.batch.take() {
             commands.entity(batch.entity).despawn();
             commands.queue(move |world: &mut World| {
@@ -418,9 +413,6 @@ pub struct VectorLayerEntities {
     landmarks: [LandmarkPool; 2],
     /// 地物符号材质（白色，顶点色承载全部颜色；惰性建一次防资产累积）。
     landmark_material: Option<Handle<ColorMaterial>>,
-    /// 地物符号 PNG（`symbols/*.png`，豆包生成手绘水彩）。`None` = 尚未发起加载。
-    /// 某类 PNG 加载完成后该类走 Sprite 路径，mesh 版自动退位（兜底保留）。
-    landmark_png: Option<[Handle<Image>; 2]>,
     /// POI 外环合批（非城市材质，ADR-0030 D4）。
     poi_ring_plain: PoiBatchPool,
     /// POI 外环合批（城市材质）。
@@ -448,7 +440,6 @@ pub fn sync_vector_layers(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    images: Res<Assets<Image>>,
     view: Res<ViewState>,
     grid: Res<GridConfig>,
     frame: Res<ProjectionFrame>,
@@ -700,24 +691,19 @@ pub fn sync_vector_layers(
             &mut layer,
         );
 
-        // 地物符号（rank ≥ 2 程序化插画）。
-        // Gate：与 POI 同一图层（place）控制，recipe 路径放 MODE_TABLE 后续接。
-        if layers.place.visible {
+        // 地物符号（rank ≥ 2 map-pin）。2026-10-23 接 MODE_TABLE
+        // (FeatureOverlay)：Topographic 数据视图不画（此前只挂 place 图层
+        // 可见性，CellMap 里城堡照画的缺口由此补上——用户裁定）。
+        if recipe.enabled(PassId::FeatureOverlay) {
             let white = layer
                 .landmark_material
                 .get_or_insert_with(|| materials.add(ColorMaterial::from_color(Color::WHITE)))
                 .clone();
-            let VectorLayerEntities {
-                landmarks,
-                landmark_png,
-                ..
-            } = &mut *layer;
+            let VectorLayerEntities { landmarks, .. } = &mut *layer;
             sync_landmarks(
                 &mut commands,
                 &mut meshes,
-                &images,
                 landmarks,
-                landmark_png,
                 &frame.landmark_dots,
                 view.scale,
                 crate::landmark_symbols::LANDMARK_Z + layers.place.z_offset,
@@ -1223,103 +1209,20 @@ fn sync_poi_batch(
 fn sync_landmarks(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    images: &Assets<Image>,
     landmark: &mut [LandmarkPool; 2],
-    png: &Option<[Handle<Image>; 2]>,
     frame_landmarks: &[crate::world_projection::LandmarkDot],
     view_scale: f32,
     z: f32,
     material: Handle<ColorMaterial>,
 ) {
-    use crate::landmark_symbols::BASE_H_PX;
-    use crate::state::lod_tier;
     use crate::world_projection::LANDMARK_KINDS;
-    // 尺寸口径（ADR-0042 修正）：**屏幕像素恒定**，按 LOD 档微调——旧公式
-    // `BASE_H_PX * 0.04 * scale` 折算屏幕恒 1.04px，城堡图标从未真正显示过
-    //（实机截图确认）。参考图全球档城堡 ~30px；档位越近稍大（贴近
-    // Google Maps marker 的恒定手感）。
-    let side_px = match lod_tier(view_scale) {
-        crate::state::LodTier::Nation => BASE_H_PX,
-        crate::state::LodTier::Region => BASE_H_PX * 1.25,
-        crate::state::LodTier::Edit => BASE_H_PX * 1.5,
-    };
-    // 符号画布边长（世界单位）= 屏幕像素 × 每像素世界单位。
-    let side_wu = side_px * view_scale;
-
-    // PNG 句柄由 `ensure_landmark_png_loaded` 发起；`None`（测试夹具 / ensure
-    // 未注册）→ 走顶点色 mesh 兜底路径。
-    let Some(handles) = png.as_ref() else {
-        for (i, kind) in LANDMARK_KINDS.iter().copied().enumerate() {
-            sync_landmark_mesh_batches(
-                commands,
-                meshes,
-                &mut landmark[i],
-                frame_landmarks,
-                kind,
-                view_scale,
-                z,
-                material.clone(),
-            );
-        }
-        return;
-    };
-
+    // 2026-10-23：PNG 贴图路径退役（用户裁定「地表不要贴城堡 town 的图」），
+    // 两类符号统一走 map-pin 顶点色 mesh（`landmark_symbols::push_map_pin`）。
     for (i, kind) in LANDMARK_KINDS.iter().copied().enumerate() {
-        let pool = &mut landmark[i];
-        let want: Vec<Vec2> = frame_landmarks
-            .iter()
-            .filter(|d| d.kind == kind)
-            .map(|d| d.pos)
-            .collect();
-
-        // PNG 已加载 → Sprite 路径（每符号一个实体，同纹理由渲染后端合批）。
-        if images.contains(&handles[i]) {
-            // mesh 兜底实体下线。
-            if let Some(batch) = pool.batch.take() {
-                commands.entity(batch.entity).despawn();
-                commands.queue(move |world: &mut World| {
-                    world.resource_mut::<Assets<Mesh>>().remove(&batch.mesh);
-                });
-            }
-            // 长度对齐：少的 spawn，多的 despawn。
-            while pool.sprites.len() > want.len() {
-                if let Some(e) = pool.sprites.pop() {
-                    commands.entity(e).despawn();
-                }
-            }
-            for (j, pos) in want.iter().enumerate() {
-                if j < pool.sprites.len() {
-                    commands.entity(pool.sprites[j]).insert((
-                        Sprite {
-                            image: handles[i].clone(),
-                            custom_size: Some(Vec2::splat(side_wu)),
-                            ..default()
-                        },
-                        bevy::sprite::Anchor::BOTTOM_CENTER,
-                        Transform::from_xyz(pos.x, pos.y, z),
-                    ));
-                } else {
-                    let e = commands
-                        .spawn((
-                            Sprite {
-                                image: handles[i].clone(),
-                                custom_size: Some(Vec2::splat(side_wu)),
-                                ..default()
-                            },
-                            bevy::sprite::Anchor::BOTTOM_CENTER,
-                            Transform::from_xyz(pos.x, pos.y, z),
-                        ))
-                        .id();
-                    pool.sprites.push(e);
-                }
-            }
-            continue;
-        }
-
         sync_landmark_mesh_batches(
             commands,
             meshes,
-            pool,
+            &mut landmark[i],
             frame_landmarks,
             kind,
             view_scale,
@@ -1329,7 +1232,7 @@ fn sync_landmarks(
     }
 }
 
-/// 单类符号的顶点色 mesh 兜底合批（从 sync_landmarks 拆出；PNG 未就绪时走此路）。
+/// 单类符号的顶点色 mesh 合批（从 sync_landmarks 拆出的唯一绘制路径）。
 #[allow(clippy::too_many_arguments)]
 fn sync_landmark_mesh_batches(
     commands: &mut Commands,
@@ -1343,10 +1246,10 @@ fn sync_landmark_mesh_batches(
 ) {
     use crate::landmark_symbols::{build_landmark_mesh, LandmarkBatch, BASE_H_PX};
     use crate::state::lod_tier;
-    for e in pool.sprites.drain(..) {
-        commands.entity(e).despawn();
-    }
-    // 尺寸口径与 Sprite 路径一致（ADR-0042）：屏幕像素恒定按档位微调。
+    // 尺寸口径（ADR-0042 修正）：**屏幕像素恒定**，按 LOD 档微调——旧公式
+    // `BASE_H_PX * 0.04 * scale` 折算屏幕恒 1.04px，城堡图标从未真正显示过
+    //（实机截图确认）。参考图全球档城堡 ~30px；档位越近稍大（贴近
+    // Google Maps marker 的恒定手感）。
     let side_px = match lod_tier(view_scale) {
         crate::state::LodTier::Nation => BASE_H_PX,
         crate::state::LodTier::Region => BASE_H_PX * 1.25,
@@ -1356,10 +1259,7 @@ fn sync_landmark_mesh_batches(
     for d in frame_landmarks {
         if d.kind == kind {
             let s = side_px * view_scale;
-            match d.kind {
-                crate::world_projection::LandmarkKind::Citadel => batch.push_citadel(d.pos, s),
-                crate::world_projection::LandmarkKind::Town => batch.push_town(d.pos, s),
-            }
+            batch.push_map_pin(d.pos, s);
         }
     }
     let fingerprint = points_fingerprint_dots(frame_landmarks, kind);
@@ -1406,41 +1306,6 @@ fn sync_landmark_mesh_batches(
             }
             pool.batch = Some(existing);
         }
-    }
-}
-
-/// 地物符号 PNG（豆包手绘水彩，256² 透底）。编译期嵌入——与 ADR-0019 打包
-/// 字体同款纪律：Bevy 0.19 的 asset root 在 exe 旁 `target/debug/assets/`，
-/// 文件加载对「从任意目录启动」不可靠（P1 单机可运行优先），且测试夹具
-/// 无法构造 AssetServer。句柄由 [`ensure_landmark_png_loaded`] 首帧解码插入。
-pub const CITADEL_PNG: &[u8] = include_bytes!("../assets/symbols/citadel.png");
-pub const TOWN_PNG: &[u8] = include_bytes!("../assets/symbols/town.png");
-
-/// 解码嵌入 PNG → `Assets<Image>`（一次），句柄存入 `landmark_png`。
-///
-/// 与 [`sync_vector_layers`] 拆开：裸测试 World 不注册本 system →
-/// `landmark_png` 保持 `None` → 符号走 mesh 兜底，向量层测试无需图像资源。
-pub fn ensure_landmark_png_loaded(
-    mut images: ResMut<Assets<Image>>,
-    mut layer: ResMut<VectorLayerEntities>,
-) {
-    if layer.landmark_png.is_some() {
-        return;
-    }
-    let decode = |bytes: &[u8]| {
-        Image::from_buffer(
-            bytes,
-            bevy::image::ImageType::Extension("png"),
-            bevy::image::CompressedImageFormats::NONE,
-            true,
-            bevy::image::ImageSampler::Default,
-            bevy::asset::RenderAssetUsages::RENDER_WORLD
-                | bevy::asset::RenderAssetUsages::MAIN_WORLD,
-        )
-        .ok()
-    };
-    if let (Some(a), Some(t)) = (decode(CITADEL_PNG), decode(TOWN_PNG)) {
-        layer.landmark_png = Some([images.add(a), images.add(t)]);
     }
 }
 
@@ -1813,7 +1678,7 @@ mod tests {
         world.insert_resource(layers);
         world.insert_resource(recipe);
         world.insert_resource(GridConfig::default());
-        world.insert_resource(projection_frame_with_roads(
+        let mut frame = projection_frame_with_roads(
             vec![(3, Vec2::ZERO, Vec2::X * 100.0)],
             vec![PlaceDot {
                 pos: Vec2::new(20.0, 20.0),
@@ -1821,7 +1686,16 @@ mod tests {
                 rank: 3,
                 name_len: 3,
             }],
-        ));
+        );
+        // 地物符号（map-pin）也在内容矩阵的隐藏名单里：给了数据，
+        // FeatureOverlay 门控必须让它同样画不出来（2026-10-23）。
+        frame
+            .landmark_dots
+            .push(crate::world_projection::LandmarkDot {
+                pos: Vec2::new(30.0, 30.0),
+                kind: crate::world_projection::LandmarkKind::Citadel,
+            });
+        world.insert_resource(frame);
         // 街道缓存**有数据**——门控必须让它在 Topographic 下画不出来。
         world.insert_resource(crate::streets::StreetLayerCache {
             sources: vec![(

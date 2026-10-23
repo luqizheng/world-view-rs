@@ -43,3 +43,24 @@
 | 群系色板进 ThemePack | 用户明裁定「颜色固定不受 theme 影响」；数据视图要跨主题稳定。 |
 | 前锋线语义（拖过全染成目标群系） | 用户选 B 分界线：两侧各绑一群系、只互相转换——水/山不被误染。 |
 | 分界线落盘为区域几何 | 真相仍是 cell.biome（P3/P7）；线是会话工具，区域轮廓继续由连通性派生。 |
+
+## 6. 追记（2026-10-23 实机验收追加裁定）
+
+实机验收 CellMap 两处残留修饰，用户裁定去除：
+
+1. **Topographic 翻 `Isoline=false`**（推翻 ADR-0039 决策 7「等值线分析视图
+   默认开」）：海岸等值线在数据视图里呈现为「海面上的黑线」，属修饰线，
+   与「反映方格状态」冲突。分析参照语义回归 VectorFlat（全仓唯一开档）。
+   连带清理：`isoline_overlay` 的 cellmap 固定色/关晕补丁整体退役（被翻表
+   取代，零 theme 诉求由「不画」达成）。
+2. **地物符号退役城堡/小镇插画，统一 map-pin**：`LandmarkKind::Citadel/Town`
+   的手绘水彩 PNG 贴图路径（`ensure_landmark_png_loaded` + Sprite 池）与
+   程序化插画构建器（`push_citadel`/`push_town`）整体删除，改为单一
+   `push_map_pin`（圆头 + 尖尾 + 白芯，Lucide `map-pin` 实心化，深墨 +
+   白芯常量色）；门控从 `layers.place.visible` 补接
+   `MODE_TABLE(FeatureOverlay)`——Topographic 下地物符号不再绘制
+   （此前 FeatureOverlay=false 已声明但未消费，CellMap 里城堡照画的缺口）。
+   等级语义由标签层承担，符号层不区分 Citadel/Town。
+
+代价：`wv-render/assets/symbols/` 资产与 PNG 解码路径删除（include_bytes
+二进制不再入库）；ADR-0042 的「参考图城堡插画」口径由 map-pin 取代。

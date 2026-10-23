@@ -173,8 +173,6 @@ pub struct IsolineOverlay {
     data_hash: Option<u64>,
     /// 最近一次上墨色的调色板：palette 变化而几何不变时只需重上色，不重算。
     ink_palette: Option<MapPalette>,
-    /// 是否 CellMap（数据视图：线条固定色，不随主题）。
-    cellmap: bool,
     /// 提取缓存（Task 3）：与实体生命周期无关——`despawn()` **不**清它，
     /// 只在 `inputs` 失配时重建。缩放只消费它重跑 DP。
     chains: Option<CachedChains>,
@@ -258,15 +256,7 @@ pub fn sync_isoline_overlay(
         overlay.despawn(&mut commands);
         return;
     };
-    // 2026-10-22 验收（用户裁定：CellMap 是数据视图，无修饰）：Topographic
-    // 下关掉水彩外晕（那条棕色外扩描边是主题墨色画的艺术晕染，与「反映
-    // 方格状态」冲突）。其他模式照旧走主题 treatment。
-    let cellmap = matches!(view.mode, crate::state::ViewMode::Topographic);
-    let mut treatment = view.active_theme.treatment;
-    if cellmap {
-        treatment.coast_halo = false;
-        treatment.ink_sublinear = false;
-    }
+    let treatment = view.active_theme.treatment;
     let nation = view.scale >= crate::state::LOD_NATION_SCALE;
     let key = IsolineKey {
         map: tex.last_map.clone(),
@@ -415,10 +405,9 @@ pub fn sync_isoline_overlay(
     let material = overlay
         .material
         .get_or_insert_with(|| {
-            materials.add(ColorMaterial::from_color(cellmap_ink(
-                &view.active_theme.palette,
-                matches!(view.mode, crate::state::ViewMode::Topographic),
-            )))
+            materials.add(ColorMaterial::from_color(
+                view.active_theme.palette.isoline_ink,
+            ))
         })
         .clone();
     // 材质跨重建复用（get_or_insert）：重算后也要按当前绑定刷新 alpha。
@@ -496,7 +485,6 @@ pub fn sync_isoline_overlay(
     overlay.key = Some(key);
     overlay.data_hash = Some(terrain_data_hash(data));
     overlay.ink_palette = Some(view.map_palette);
-    overlay.cellmap = cellmap;
 }
 
 /// 按 palette 与图层 opacity 重写全部等值线材质颜色（主线 / 两圈水彩晕 / 河中线）。
@@ -513,7 +501,7 @@ fn apply_material_colors(
     pal: &crate::theme::palette::PaletteColors,
     opacity: f32,
 ) {
-    let ink = cellmap_ink(pal, overlay.cellmap);
+    let ink = pal.isoline_ink;
     if let Some(handle) = &overlay.material {
         if let Some(mut mat) = materials.get_mut(handle) {
             mat.color = ink.with_alpha(ISOLINE_BASE_ALPHA * opacity);
@@ -643,16 +631,6 @@ pub(crate) fn build_stroke_mesh(
     );
     mesh.insert_indices(Indices::U32(indices));
     Some(mesh)
-}
-
-/// 等值线墨色：CellMap（数据视图）用**固定深灰**——不随主题（用户裁定：
-/// CellMap 零 theme 影响）；其余模式沿用主题墨色。
-fn cellmap_ink(pal: &crate::theme::palette::PaletteColors, cellmap: bool) -> bevy::color::Color {
-    if cellmap {
-        bevy::color::Color::srgba(0.10, 0.10, 0.10, 1.0)
-    } else {
-        pal.isoline_ink
-    }
 }
 
 #[cfg(test)]

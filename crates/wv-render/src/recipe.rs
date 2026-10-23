@@ -266,10 +266,12 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         false, // RegionLayers（= 各行 TerrainDecor 同值；Schematic/Topographic 例外见上）
     ]),
     // Topographic 分析视图（[ADR-0039]）：水/陆 + height 3 阶着色，关其它装饰族。
-    // 仅 Terrain + Isoline + Rivers 留——
+    // 仅 Terrain + Rivers 留——
     //   • Terrain 是核心显示（用独立 `TopographicPalette`，不走 ThemePack core）
-    //   • Isoline 是分析视图默认（决策 7 子开关默认开）
     //   • Rivers 是水系边界（与水/陆判定直接相关）
+    // Isoline 2026-10-23 关（ADR-0051）：海岸等值线是「黑线修饰」，与「反映
+    // 方格状态」的数据视图定位冲突，用户裁定去除（推翻 ADR-0039 决策 7 的
+    // 「Topographic 等值线默认开」；分析参照语义回归 VectorFlat）。
     // DrillMarkers / BrushCursor / Measurement / FeatureOverlay / Decor 全关——
     // 分析视图不要任何交互叠加或美术装饰（决策 2）。
     //
@@ -277,7 +279,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
     // 由 `sync_terrain_chunks` 的 match 分支实现。
     (ViewMode::Topographic, [
         true,  // Terrain（核心，水/陆 + 3 阶 height，topographic 分支）
-        true,  // Isoline（分析视图默认开）
+        false, // Isoline（2026-10-23 用户裁定：海面等值线黑线去除——ADR-0051）
         false, // GridLines（分析视图不要编辑格）
         false, // MapFrame
         false, // Veil
@@ -634,16 +636,17 @@ mod tests {
         assert!(!r.enabled(PassId::Faction));
     }
 
-    /// Isoline 在 VectorFlat 与 Topographic 默认开（迁移前 `isoline_overlay`
-    /// 的原 gate 行为——`mode != VectorFlat → despawn`）；**Topographic
-    /// ([ADR-0039]) 也开** —— 等高线对分析视图是核心信息。
-    /// 其余 6 模式一律关，防"顺手填 true"改变行为（本测试因第一次填错表而加）。
+    /// Isoline 仅 VectorFlat 开（迁移前 `isoline_overlay` 的原 gate 行为——
+    /// `mode != VectorFlat → despawn`）。Topographic 曾按 [ADR-0039] 决策 7
+    /// 开（分析参照），2026-10-23 用户裁定关——等值线在数据视图里呈现为
+    /// 「海面黑线修饰」，与方格直呈冲突（ADR-0051）。
+    /// 其余 7 模式一律关，防"顺手填 true"改变行为（本测试因第一次填错表而加）。
     #[test]
-    fn isoline_draws_in_vector_flat_and_topographic_only() {
+    fn isoline_draws_in_vector_flat_only() {
         let (mut view, layers, world, drill, tex) = fixture();
         for m in ViewMode::ALL {
             view.mode = m;
-            let want = matches!(m, ViewMode::VectorFlat | ViewMode::Topographic);
+            let want = m == ViewMode::VectorFlat;
             let r = resolve_render_recipe(&view, &layers, &world, &drill, &tex, None);
             assert_eq!(
                 r.enabled(PassId::Isoline),
