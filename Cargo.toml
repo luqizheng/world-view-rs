@@ -87,11 +87,68 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync"]
 async-trait = "0.1"
 serde_json = "1"
 
-# [启动性能] debug 构建下对热点包开优化：地形纹理合成（wv-app）与图集 PNG
-# 解码（image）在无优化 debug 下合计阻塞主线程 >5s，触发 Windows「未响应」
-# （启动白屏）。只影响这两个包的编译产物，增量编译代价可接受。
-[profile.dev.package.wv-app]
+# ── 构建档位（2026-10-23，迭代档缺陷修复 B 项）─────────────────────────────
+#
+# ## 为什么动这里
+# 用户报「cell-map 里 zoom in/out 只有个位数 FPS」。此前只有两条包级例外，
+# **没有** `[profile.dev]`——也就是说 bevy / wgpu / egui 与 wv-render /
+# wv-world-cell-map / wv-terrain **全部跑在 opt-level 0**。实测（探针见
+# `crates/wv-world-cell-map/src/terrain_view/perf_probe.rs`，数字表见
+# `docs/PERF_GRID_AND_PROFILE_v0.1.md`）：
+#
+# | 热点 | debug（opt 0） | release | 倍数 |
+# |---|---|---|---|
+# | grid_chains + build_stroke_mesh（1024²） | 0.74ms | 0.15ms | 4.9× |
+# | assemble_strokes（DP 全链，1024²） | 15.56ms | 3.92ms | 4.0× |
+# | terrain_pixels（1024² 整图合成） | 581.24ms | 16.64ms | 34.9× |
+#
+# 一帧 16.7ms 的预算下，DP 一项就能吃掉 15.6ms；整图合成 581ms 则是「换模式 /
+# 换主题」时的整秒卡顿来源。故按「谁热谁优化」分三档，而不是一刀切：
+#
+# ## 三档分工
+# - `[profile.dev]` = 1：**本工作区成员**的默认档。成员代码主要是搭线、状态机、
+#   UI 贴合，opt-level 1 拿到大部分收益而增量编译代价最小（实测整工程首次
+#   编译 1m40s → 见施工报告；增量 ~10–20s）。
+# - `[profile.dev.package."*"]` = 2：**第三方依赖**（bevy / wgpu / egui / image…）。
+#   通配只覆盖依赖，不覆盖工作区成员（Cargo 的 `*` 语义），所以两条互不冲突。
+#   依赖很少改动，一次编译长期受益，给到 2 是「启动/首帧」性价比最高的一档。
+# - 三个**像素 / 几何 / DP 热点 crate** = 3：`wv-world-cell-map`（整图合成 +
+#   网格 + 等值线几何）、`wv-terrain`（marching squares / DP 纯算法）、
+#   `wv-render`（桥接层里逐帧消费的那些循环）。给到 3 而非 2 的理由：这三个
+#   crate 的代码几乎全是紧循环（逐 cell / 逐段 / 逐像素），opt 3 的向量化
+#   收益显著，且它们体量小，编辑后重编 5–15s，作者等得起。
+#
+# ## 为什么删掉 `image = 2`
+# `[profile.dev.package."*"]` 已经把 `image` 定到 2——留着就是「同一事实两个
+# 载体」（改通配忘了改单条 → 两条互相打架时以单条为准，排查时先怀疑错地方）。
+#
+# ## 为什么保留 `wv-app = 2`
+# 它**不**被通配覆盖（工作区成员），而 `[profile.dev]` 只给到 1。启动期卡顿
+# 的原始诊断（2026-10 前：地形纹理合成 + 图集 PNG 解码合计 >5s，Windows
+# 「未响应」白屏）里，PNG 解码现在归 `image`（通配 2）、纹理合成已迁去
+# `wv-world-cell-map`（3），但 wv-app 仍是**启动链的主干**（装配 / 加载 /
+# 首帧 UI），保留 2 是廉价的保险。若日后实测启动不再敏感，可降回 1。
+# ## 为什么 dev 档位把 debuginfo 降到 `line-tables-only`（2026-10-23 追加）
+# opt-level 提上去以后，`target/debug` 从 ~40G 涨到 **77G**，本机 D: 盘被撑满，
+# 构建直接死于 `rustc-LLVM ERROR: IO failure on output stream: no space on device`。
+# `line-tables-only` 保留「文件:行号」级回溯（panic / RUST_BACKTRACE 仍可读），
+# 砍掉变量级 DWARF——那是体积与链接时间的大头，而作者调编辑器基本不用 debugger
+# 看 bevy 内部变量。要逐变量调试某个依赖时，临时给那**一个**包开 `debug = 2`。
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
 opt-level = 2
 
-[profile.dev.package.image]
+[profile.dev.package.wv-world-cell-map]
+opt-level = 3
+
+[profile.dev.package.wv-terrain]
+opt-level = 3
+
+[profile.dev.package.wv-render]
+opt-level = 3
+
+[profile.dev.package.wv-app]
 opt-level = 2

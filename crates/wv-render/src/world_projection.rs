@@ -613,6 +613,703 @@ pub fn advance_playback(time: Res<Time>, mut playback: ResMut<PlaybackState>) {
     }
 }
 
+/// 选中区域装饰（阶梯描边 + 顶点手柄 + 候选锚点）的**派生缓存**。
+///
+/// ## 为什么要有（2026-10-23 · 用户实测「鼠标移动 120→40 FPS」）
+///
+/// `draw_selected_region` 旧实现**每帧**重做三件全量的事：
+/// `region.polygon.clone()`（分配）→ `rasterize_polygon_cells`（按 bbox 扫全格）
+/// → `HashSet` + 四邻边扫描。选中态和区域多边形都不变时这三件事**结果一模一样**。
+/// 现在按 `(区域 id, 多边形指纹, 网格, 幅面)` 缓存，键不变就只画缓存结果。
+///
+/// 候选锚点块（`selection` 为空时）同理：旧实现在没有编辑中多边形时**每帧**
+/// 把 1024² 地形整份搬进 `TerrainGrid` 再跑 `biome_region_at`。现在按
+/// `(候选格, 多边形指纹)` 缓存派生结果。
+#[derive(Resource, Default)]
+pub struct RegionDecorCache {
+    key: Option<DecorKey>,
+    /// 视空间阶梯边（白色实线）——合批 Mesh2d 直接消费（`region_decor`）。
+    edges: Vec<(Vec2, Vec2)>,
+    /// 阶梯边**内容指纹**（只在 `edges` 重算时更新）。
+    ///
+    /// 为什么不每帧现算：选中一个大区域时边数可上万，逐帧 `4 × E` 次
+    /// `to_bits` 会把「改成合批 mesh」省下的钱又花回去。它只随 `DecorKey`
+    /// 变，故与 `edges` 一起写；绘制侧（`region_decor`）拿它当重建判据。
+    edges_fp: u64,
+    /// 派生用的多边形（图内局部 wu，`chunks_exact(2)` → 顶点对）。
+    pairs: Vec<(f32, f32)>,
+    /// 候选多边形（`RegionCandidateContext.polygon` 缺失时按格派生）。
+    cand_key: Option<CandidateKey>,
+    cand_pairs: Vec<(f32, f32)>,
+    /// 选中区域的**手柄锚点**缓存（世界坐标）与它的键。
+    ///
+    /// 2026-10-23 QA AC22：`decimate_poly` 原来每帧跑一次（阶梯顶点数千点 ⇒
+    /// O(顶点数) 比较 + 一次 `Vec<Vec2>` 分配）。抽稀结果只依赖
+    /// `(多边形, spacing, map_origin)`——`spacing` 又只依赖 `view.scale` 与
+    /// `cell_size`，所以这三样进键即可（不能只按多边形指纹，缩放会让 spacing 变）。
+    anchors_key: Option<AnchorKey>,
+    anchors: Vec<Vec2>,
+    /// 未物化候选的锚点缓存（同上）。
+    cand_anchors_key: Option<AnchorKey>,
+    cand_anchors: Vec<Vec2>,
+    /// **计数器**（QA 断言口径）：`rasterize_polygon_cells` 调用次数（累计）。
+    pub rasterizes: u64,
+    /// **计数器**：候选多边形按格派生的次数（累计）。
+    pub candidate_derivations: u64,
+    /// **计数器**：`decimate_poly`（锚点抽稀）调用次数（累计）。
+    pub anchor_decimates: u64,
+    /// **计数器**：本帧画出的顶点手柄数（每帧开头归零）。
+    pub handles_drawn: u64,
+    /// **计数器**：本帧画出的阶梯描边线段数（每帧开头归零）。
+    pub outline_segments_drawn: u64,
+}
+
+/// 选中区域装饰的缓存键（任何一项变 ⇒ 重算一次）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DecorKey {
+    id: String,
+    /// 多边形（含拖动中的预览多边形）的位模式指纹。
+    poly: u64,
+    grid_bits: [u64; 7],
+    /// 栅格幅面（`rasterize_polygon_cells` 的边界）。
+    raster: (u32, u32),
+}
+
+/// 候选锚点的缓存键。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CandidateKey {
+    cell: (i32, i32),
+    /// 编辑中多边形的指纹（`None` 编码成一个不可能与真实指纹相撞的常量）。
+    poly: Option<u64>,
+    grid_bits: [u64; 7],
+    raster: (u32, u32),
+}
+
+/// **手柄锚点**的缓存键：抽稀结果只依赖这四样。
+///
+/// `src` = 多边形来源指纹（选中取 `DecorKey::poly`，候选取 `CandidateKey::poly`）；
+/// **`scale_bucket` = 缩放的 1/2 octave 档号**（`region_outline::scale_bucket`，与轮廓
+/// 线宽共用同一把尺子）——**不是**连续 `scale`/`spacing`：手势惯性、zoom-to-bounds
+/// 补间每帧只动 1–2%，塞连续值等于没缓存（QA AC22b 抓的就是这个）；
+/// `cell_size` = 抽稀间距的第二个输入；`origin` = 图内局部 wu → 世界坐标的平移量。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AnchorKey {
+    src: u64,
+    /// `round(log2(scale) × 2)`：档宽 ×1.414，档内锚点密度差 ±19%（与线宽同一条论证）。
+    scale_bucket: i16,
+    cell_size: u64,
+    origin: [u64; 2],
+}
+
+impl AnchorKey {
+    fn new(src: u64, scale_bucket: i16, cell_size: f32, origin: Vec2) -> Self {
+        Self {
+            src,
+            scale_bucket,
+            cell_size: u64::from(cell_size.to_bits()),
+            origin: [u64::from(origin.x.to_bits()), u64::from(origin.y.to_bits())],
+        }
+    }
+}
+
+/// `GridConfig` 的身份位模式。
+fn grid_bits(grid: &GridConfig) -> [u64; 7] {
+    [
+        u64::from(grid.cell_size.to_bits()),
+        u64::from(grid.raster_origin.x.to_bits()),
+        u64::from(grid.raster_origin.y.to_bits()),
+        u64::from(grid.map_origin.x.to_bits()),
+        u64::from(grid.map_origin.y.to_bits()),
+        u64::from(grid.map_size.x.to_bits()),
+        u64::from(grid.map_size.y.to_bits()),
+    ]
+}
+
+/// 多边形顶点（扁平 `[x, y, …]`，图内局部 wu）的位模式指纹。
+fn polygon_bits_fingerprint(poly: &[f32]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for v in poly.iter().map(|f| f.to_bits()) {
+        h ^= u64::from(v);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// 选中区域的**顶点手柄**是否该画。
+///
+/// 2026-10-23 用户裁定（缺陷 3）：关掉「群系视图」（`ViewState.nature_overlay`）
+/// 后，顶点手柄（2026-10-24 起为**实心白色小方块**，此前是红十字 + 外圈）
+/// 与候选高亮**一起隐藏**；**选中态本身保留**
+/// （`projection.selection` 不动 → Inspector 仍显示选中的 Region，不写世界、
+/// 不清数据）。所以这是一个**纯渲染可见性**判定，放在渲染层。
+///
+/// 阶梯描边与手柄同源同语义（都是「数据视图里的选中装饰」），一并受此门控。
+pub fn region_handles_visible(mode: crate::state::ViewMode, nature_overlay: bool) -> bool {
+    matches!(mode, crate::state::ViewMode::Topographic) && nature_overlay
+}
+
+/// 派生选中区域的装饰几何（阶梯描边 + 顶点），写进 [`RegionDecorCache`]。
+///
+/// 返回是否有可画的内容。**键不变 ⇒ 一次都不重算**（`rasterizes` 不增）：
+/// 2026-10-23 用户实测「鼠标在地图上移动 120→40 FPS」，旧实现每帧都做
+/// `polygon.clone()` + `rasterize_polygon_cells` + `HashSet` + 四邻边扫描。
+///
+/// 与绘制分离的唯一理由：**可测**——不需要 `Gizmos` 就能断言缓存命中。
+fn selected_region_decor(
+    projection: &WorldProjection,
+    region_adjust: &crate::state::RegionAdjustState,
+    grid_cfg: &GridConfig,
+    terrain: &wv_core::terrain::TerrainData,
+    map: &wv_core::Id,
+    decor: &mut RegionDecorCache,
+) -> bool {
+    let Some(sel) = projection.selection.as_ref() else {
+        return false;
+    };
+    if sel.kind != wv_core::EntityKind::Region {
+        return false;
+    }
+    let Some(region) = projection
+        .world
+        .regions
+        .iter()
+        .find(|r| r.id == sel.id && r.map == *map)
+        .filter(|r| r.polygon.len() >= 6)
+    else {
+        return false;
+    };
+    // 拖动中显示预览多边形；未拖动显示落盘轮廓（借用，不 clone）。
+    let poly: &[f32] = region_adjust
+        .preview_polygon
+        .as_deref()
+        .unwrap_or(region.polygon.as_slice());
+    let key = DecorKey {
+        id: sel.id.as_str().to_string(),
+        poly: polygon_bits_fingerprint(poly),
+        grid_bits: grid_bits(grid_cfg),
+        raster: (terrain.width, terrain.height),
+    };
+    if decor.key.as_ref() != Some(&key) {
+        let raster_to_map = grid_cfg.map_origin - grid_cfg.raster_origin;
+        let poly_pairs: Vec<(f32, f32)> = poly.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+        let cells = crate::cell_selection::rasterize_polygon_cells(
+            &poly_pairs,
+            raster_to_map,
+            grid_cfg,
+            terrain.width,
+            terrain.height,
+        );
+        decor.rasterizes += 1;
+        // ── 方格描边：mask 内格与不在 mask 的 4 邻之间的边（白色实线贴格边）──
+        let mask: std::collections::HashSet<(i32, i32)> = cells.iter().copied().collect();
+        let cs = grid_cfg.cell_size;
+        let mut edges: Vec<(Vec2, Vec2)> = Vec::new();
+        for &(gx, gy) in &cells {
+            let x0 = grid_cfg.raster_origin.x + gx as f32 * cs;
+            let y0 = grid_cfg.raster_origin.y + gy as f32 * cs;
+            let x1 = x0 + cs;
+            let y1 = y0 + cs;
+            let c = (gx, gy);
+            if !mask.contains(&(c.0, c.1 - 1)) {
+                edges.push((Vec2::new(x0, y0), Vec2::new(x1, y0)));
+            }
+            if !mask.contains(&(c.0, c.1 + 1)) {
+                edges.push((Vec2::new(x0, y1), Vec2::new(x1, y1)));
+            }
+            if !mask.contains(&(c.0 - 1, c.1)) {
+                edges.push((Vec2::new(x0, y0), Vec2::new(x0, y1)));
+            }
+            if !mask.contains(&(c.0 + 1, c.1)) {
+                edges.push((Vec2::new(x1, y0), Vec2::new(x1, y1)));
+            }
+        }
+        decor.edges_fp = segments_fp(&edges);
+        decor.edges = edges;
+        decor.pairs = poly_pairs;
+        decor.key = Some(key);
+    }
+    !decor.edges.is_empty() || !decor.pairs.is_empty()
+}
+
+/// 线段列的内容指纹（FNV-1a，与道路 / 小河预览同款口径）。
+fn segments_fp(segments: &[(Vec2, Vec2)]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for (a, b) in segments {
+        for v in [a.x, a.y, b.x, b.y] {
+            h ^= u64::from(v.to_bits());
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    h
+}
+
+/// 手柄方块**半边**长（屏幕 px）。
+///
+/// 用户裁定（2026-10-24）：锚点改成「实心白色的小方块」。7px 见方在 24px 的
+/// 锚点间距下互不粘连，又比 1px 的格线明显——再大就压住它本来要指的那条格边。
+const HANDLE_HALF_PX: f32 = 3.5;
+
+/// 一帧的区域手柄**计划**（纯函数产出，`draw_map_gizmos` 只消费）。
+///
+/// 为什么要这一层（2026-10-23 · 质量第 3 轮）：`draw_map_gizmos` 有 `Gizmos` 参数，
+/// 无头测试跑不起来 ⇒「关群系视图后手柄没了」只能靠人工看。把判定 + 派生抽成
+/// 纯函数后，测试可以直接断言 `plan.anchors.is_empty()`。
+///
+/// 另外：三处 gate（选中手柄 / 阶梯描边 / 候选锚点）在这里**收口成一处**（N8）。
+#[derive(Debug, Default)]
+pub struct RegionHandlePlan<'a> {
+    /// 选中区域的阶梯描边（视空间线段；借缓存，不 clone）。
+    pub stepped_edges: &'a [(Vec2, Vec2)],
+    /// 选中区域的顶点手柄（**世界坐标**，已按 zoom 抽稀；借缓存，不 clone）。
+    pub anchors: &'a [Vec2],
+    /// 未物化候选的顶点手柄（世界坐标；借缓存）。
+    pub candidate_anchors: &'a [Vec2],
+    /// 阶梯边的**内容指纹**（借缓存的 [`RegionDecorCache::edges_fp`]）。
+    ///
+    /// 绘制侧（`region_decor::sync_region_decor`）拿它当合批 mesh 的重建判据——
+    /// 键不变 ⇒ 不重建、不重新装配 mesh，稳态每帧只付一次 draw call。
+    /// 无阶梯边（未选中 / 关群系视图）时为 `0`。
+    pub edges_fp: u64,
+    /// 手柄方块**半边长**（世界单位 = 屏幕 3.5px 折算 ⇒ 方块 7px 见方，按缩放档中心求值）。
+    ///
+    /// 用档中心而不是 `view.scale` 原值：smooth zoom 每帧微动（`×1.02` 一档），
+    /// 不然方块 mesh 会跟着每帧重建一次（与轮廓线宽同一条 1/2 octave 口径）。
+    pub handle_px: f32,
+}
+
+impl RegionHandlePlan<'_> {
+    /// 本帧要画的手柄总数（选中 + 候选）。
+    pub fn handle_count(&self) -> usize {
+        self.anchors.len() + self.candidate_anchors.len()
+    }
+}
+
+/// 产出本帧的区域手柄计划。
+///
+/// `nature_overlay == false` ⇒ 三个几何字段全空（**选中态保持不变**，本函数
+/// 只读 `projection.selection`）。缓存由调用方持有（`RegionDecorCache`，
+/// `Resource` + `Default`）：同一份缓存连续调用、输入不变时 `rasterizes` 不增。
+#[allow(clippy::too_many_arguments)]
+pub fn plan_region_handles<'a>(
+    projection: &WorldProjection,
+    drill: &crate::state::DrillState,
+    view: &ViewState,
+    grid_cfg: &GridConfig,
+    region_adjust: &crate::state::RegionAdjustState,
+    candidate_ctx: &crate::state::RegionCandidateContext,
+    decor: &'a mut RegionDecorCache,
+) -> RegionHandlePlan<'a> {
+    let mut plan = RegionHandlePlan::default();
+    // ← 唯一一处 gate：关群系视图 ⇒ 手柄 / 阶梯描边 / 候选锚点一起隐藏。
+    if !region_handles_visible(view.mode, view.nature_overlay) {
+        return plan;
+    }
+    let Some(map) = drill.current().cloned() else {
+        return plan;
+    };
+    let Some(terrain) = projection.world.terrain_of(&map) else {
+        return plan;
+    };
+    // 不适用时清掉上一帧的锚点（否则选中被取消 / 光标离开候选之后，旧手柄会继续被画）。
+    if !(projection.selection.is_none() && candidate_ctx.cell.is_some()) {
+        decor.cand_anchors.clear();
+        decor.cand_anchors_key = None;
+    }
+    // 抽稀间距按 **1/2 octave 档中心**的 scale 求值：smooth zoom 每帧微动
+    // （`×1.02` 这一档）不能把锚点缓存打穿（QA AC22 / REQ-8：同档 Δ==0、跨档恰好 1 次）。
+    // 与轮廓线宽共用同一个档函数（同一事实只留一份载体）。
+    let scale_bucket = crate::region_outline::scale_bucket(view.scale);
+    let bucket_scale = crate::region_outline::scale_of_bucket(scale_bucket);
+    let spacing = crate::biome_boundary::anchor_spacing(bucket_scale, grid_cfg.cell_size, 24.0);
+    // 手柄方块尺寸同样按档中心求值（见 `handle_px` 的文档：不然方块 mesh 每帧重建）。
+    plan.handle_px = (bucket_scale * HANDLE_HALF_PX).max(grid_cfg.cell_size * 0.2);
+    // ① 候选（未物化）手柄：`selection` 为空时才画（有选中以选中为准）。
+    //    按 `(候选格, 多边形指纹, 网格, 幅面)` 缓存——否则每帧搬一遍整张地形。
+    if projection.selection.is_none() {
+        if let Some(cell) = candidate_ctx.cell {
+            let cand_key = CandidateKey {
+                cell,
+                poly: candidate_ctx
+                    .polygon
+                    .as_deref()
+                    .map(polygon_bits_fingerprint),
+                grid_bits: grid_bits(grid_cfg),
+                raster: (terrain.width, terrain.height),
+            };
+            if decor.cand_key.as_ref() != Some(&cand_key) {
+                let pairs: Vec<(f32, f32)> = match candidate_ctx.polygon.as_deref() {
+                    Some(p) => p.chunks_exact(2).map(|c| (c[0], c[1])).collect(),
+                    None => {
+                        decor.candidate_derivations += 1;
+                        let raster_to_map = grid_cfg.map_origin - grid_cfg.raster_origin;
+                        // 按格派生（与物化同源）：biome 连通区外环 × 格尺寸。
+                        let cells: Vec<wv_terrain::TerrainCell> = terrain
+                            .cells
+                            .iter()
+                            .map(|c| wv_terrain::TerrainCell {
+                                height: c.height,
+                                surface: c.surface,
+                                biome: c.biome,
+                            })
+                            .collect();
+                        wv_terrain::TerrainGrid::from_cells(terrain.width, terrain.height, cells)
+                            .and_then(|g| {
+                                wv_terrain::region::biome_region_at(&g, cell.0, cell.1 as i64)
+                            })
+                            .map(|r| {
+                                r.outer
+                                    .iter()
+                                    .flat_map(|&(x, y)| {
+                                        [
+                                            x * grid_cfg.cell_size + raster_to_map.x,
+                                            y * grid_cfg.cell_size + raster_to_map.y,
+                                        ]
+                                    })
+                                    .collect::<Vec<f32>>()
+                            })
+                            .unwrap_or_default()
+                            .chunks_exact(2)
+                            .map(|c| (c[0], c[1]))
+                            .collect()
+                    }
+                };
+                decor.cand_pairs = pairs;
+                decor.cand_key = Some(cand_key);
+            }
+            if decor.cand_pairs.len() >= 3 {
+                let akey = AnchorKey::new(
+                    decor
+                        .cand_key
+                        .as_ref()
+                        .map(|k| k.poly.unwrap_or(0))
+                        .unwrap_or(0),
+                    scale_bucket,
+                    grid_cfg.cell_size,
+                    grid_cfg.map_origin,
+                );
+                if decor.cand_anchors_key != Some(akey) {
+                    decor.cand_anchors_key = Some(akey);
+                    decor.anchor_decimates += 1;
+                    decor.cand_anchors =
+                        crate::biome_boundary::decimate_poly(&decor.cand_pairs, spacing)
+                            .into_iter()
+                            .map(|(x, y)| grid_cfg.map_origin + Vec2::new(x, y))
+                            .collect();
+                }
+            } else {
+                decor.cand_anchors.clear();
+                decor.cand_anchors_key = None;
+            }
+        }
+    }
+    // ② 选中区域：派生（带缓存）+ 锚点抽稀（**也带缓存**，AC22）。
+    if selected_region_decor(projection, region_adjust, grid_cfg, terrain, &map, decor) {
+        let akey = AnchorKey::new(
+            decor.key.as_ref().map(|k| k.poly).unwrap_or(0),
+            scale_bucket,
+            grid_cfg.cell_size,
+            grid_cfg.map_origin,
+        );
+        if decor.anchors_key != Some(akey) {
+            decor.anchors_key = Some(akey);
+            decor.anchor_decimates += 1;
+            decor.anchors = crate::biome_boundary::decimate_poly(&decor.pairs, spacing)
+                .into_iter()
+                .map(|(x, y)| grid_cfg.map_origin + Vec2::new(x, y))
+                .collect();
+        }
+        // 最后才借出（之后本函数不再改 `decor`）。
+        plan.stepped_edges = &decor.edges;
+        plan.edges_fp = decor.edges_fp;
+        plan.anchors = &decor.anchors;
+    } else {
+        decor.anchors.clear();
+        decor.anchors_key = None;
+    }
+    plan.candidate_anchors = &decor.cand_anchors;
+    plan
+}
+
+#[cfg(test)]
+mod region_handles_tests {
+    use super::region_handles_visible;
+    use crate::state::ViewMode;
+
+    /// 断言 2 的门控部分：关掉群系视图 ⇒ 手柄不画（选中态本身不动，见下一条）。
+    #[test]
+    fn handles_hidden_when_nature_overlay_is_off() {
+        assert!(
+            !region_handles_visible(ViewMode::Topographic, false),
+            "关群系视图后顶点手柄必须隐藏（缺陷 3）"
+        );
+    }
+
+    #[test]
+    fn handles_visible_in_cellmap_with_overlay_on() {
+        assert!(region_handles_visible(ViewMode::Topographic, true));
+    }
+
+    #[test]
+    fn handles_never_visible_outside_cellmap() {
+        for mode in [ViewMode::VectorFlat, ViewMode::Faction, ViewMode::Schematic] {
+            assert!(
+                !region_handles_visible(mode, true),
+                "{mode:?} 不是数据编辑器，不该出手柄"
+            );
+        }
+    }
+
+    /// 门控只看 `nature_overlay`，**不读也不写** `selection`——这条测试钉住
+    /// 「选中态保留」的口径：判定函数是纯函数，改开关不会清 selection。
+    #[test]
+    fn gate_is_pure_and_does_not_touch_selection() {
+        // 同一入参反复求值结果恒定（无内部状态）。
+        for _ in 0..3 {
+            assert!(!region_handles_visible(ViewMode::Topographic, false));
+            assert!(region_handles_visible(ViewMode::Topographic, true));
+        }
+    }
+
+    /// 断言 1 的「选中区域栅格化 == 0」：选中态 / 多边形 / 网格都不变时，
+    /// 60 次派生只允许 `rasterize_polygon_cells` **一次**（首帧）。
+    #[test]
+    fn selected_region_decor_is_derived_once_then_cached() {
+        use super::{selected_region_decor, RegionDecorCache};
+        use crate::state::{GridConfig, RegionAdjustState, WorldProjection};
+        use bevy::math::Vec2;
+        use wv_core::map::{Extent, MapLevel, MapNode};
+        use wv_core::model::region::{Region, RegionKind};
+
+        let map_id = wv_core::Id::new_unchecked("map_world");
+        let region_id = wv_core::Id::new_unchecked("nr_a");
+        let mut projection = WorldProjection::default();
+        projection.world.maps.push(MapNode {
+            id: map_id.clone(),
+            name: "世界".into(),
+            level: MapLevel::World,
+            parent: None,
+            children: Vec::new(),
+            layers: Vec::new(),
+            icons: Vec::new(),
+            extent: Some(Extent::sized(256.0, 256.0)),
+            raster: None,
+            geographic_source: None,
+            time_span: None,
+            unit_per_km: None,
+            orientation: 0.0,
+            base: None,
+            outline_polygon: None,
+        });
+        projection.world.regions.push(Region {
+            id: region_id.clone(),
+            name: "甲".into(),
+            map: map_id.clone(),
+            polygon: vec![8.0, 8.0, 40.0, 8.0, 40.0, 40.0, 8.0, 40.0],
+            holes: Vec::new(),
+            kind: RegionKind::Nature,
+            parent: None,
+            overlay: None,
+        });
+        projection.selection = Some(wv_core::SelectedEntity::new(
+            wv_core::EntityKind::Region,
+            region_id,
+        ));
+
+        let grid = GridConfig {
+            cell_size: 4.0,
+            raster_origin: Vec2::ZERO,
+            map_origin: Vec2::ZERO,
+            map_size: Vec2::splat(256.0),
+        };
+        let terrain = wv_core::terrain::TerrainData {
+            width: 64,
+            height: 64,
+            cells: vec![
+                wv_core::terrain::TerrainCellData {
+                    height: 100,
+                    surface: 1,
+                    biome: 3,
+                };
+                64 * 64
+            ],
+        };
+        let adjust = RegionAdjustState::default();
+        let mut decor = RegionDecorCache::default();
+
+        assert!(
+            selected_region_decor(&projection, &adjust, &grid, &terrain, &map_id, &mut decor),
+            "首帧应派生成功"
+        );
+        assert_eq!(decor.rasterizes, 1, "首帧应栅格化一次");
+        assert!(!decor.edges.is_empty(), "方形区域应出阶梯边");
+        let edges0 = decor.edges.len();
+        let pairs0 = decor.pairs.len();
+
+        // 「鼠标在地图上移动 60 帧」= 每帧都重跑派生、输入完全不变。
+        for _ in 0..60 {
+            assert!(selected_region_decor(
+                &projection,
+                &adjust,
+                &grid,
+                &terrain,
+                &map_id,
+                &mut decor
+            ));
+        }
+        assert_eq!(decor.rasterizes, 1, "键不变时不该再栅格化");
+        assert_eq!(decor.edges.len(), edges0, "阶梯边不该变");
+        assert_eq!(decor.pairs.len(), pairs0, "多边形不该变");
+
+        // 阳性对照：换选中区域 ⇒ 必须重算一次（证明上一行的 1 不是假绿）。
+        projection.world.regions.push(Region {
+            id: wv_core::Id::new_unchecked("nr_b"),
+            name: "乙".into(),
+            map: map_id.clone(),
+            polygon: vec![64.0, 64.0, 96.0, 64.0, 96.0, 96.0, 64.0, 96.0],
+            holes: Vec::new(),
+            kind: RegionKind::Nature,
+            parent: None,
+            overlay: None,
+        });
+        projection.selection = Some(wv_core::SelectedEntity::new(
+            wv_core::EntityKind::Region,
+            wv_core::Id::new_unchecked("nr_b"),
+        ));
+        assert!(selected_region_decor(
+            &projection,
+            &adjust,
+            &grid,
+            &terrain,
+            &map_id,
+            &mut decor
+        ));
+        assert_eq!(decor.rasterizes, 2, "换选中区域应重算一次");
+    }
+
+    /// 断言 2 的**计划面**（2026-10-23 质量第 3 轮要求的可断言接口）：
+    /// `plan_region_handles` 在关群系视图时必须吐**空**，开时必须有元素。
+    ///
+    /// 两种取值都断言——否则「恒空」也能过。这条是「关掉开关后红十字还留着」
+    /// 在无头环境里能钉到的最硬一层（`draw_map_gizmos` 有 `Gizmos`，跑不起来）。
+    #[test]
+    fn plan_is_empty_when_overlay_off_and_populated_when_on() {
+        use super::{plan_region_handles, RegionDecorCache};
+        use crate::state::{
+            DrillState, GridConfig, RegionAdjustState, RegionCandidateContext, ViewMode, ViewState,
+            WorldProjection,
+        };
+        use bevy::prelude::Vec2;
+        use wv_core::map::{Extent, MapLevel, MapNode};
+        use wv_core::model::region::{Region, RegionKind};
+
+        let map_id = wv_core::Id::new_unchecked("map_world");
+        let mut projection = WorldProjection::default();
+        projection.world.maps.push(MapNode {
+            id: map_id.clone(),
+            name: "世界".into(),
+            level: MapLevel::World,
+            parent: None,
+            children: Vec::new(),
+            layers: Vec::new(),
+            icons: Vec::new(),
+            extent: Some(Extent::sized(256.0, 256.0)),
+            raster: None,
+            geographic_source: None,
+            time_span: None,
+            unit_per_km: None,
+            orientation: 0.0,
+            base: None,
+            outline_polygon: None,
+        });
+        projection.world.regions.push(Region {
+            id: wv_core::Id::new_unchecked("nr_a"),
+            name: "甲".into(),
+            map: map_id.clone(),
+            polygon: vec![8.0, 8.0, 40.0, 8.0, 40.0, 40.0, 8.0, 40.0],
+            holes: Vec::new(),
+            kind: RegionKind::Nature,
+            parent: None,
+            overlay: None,
+        });
+        projection.world.set_terrain(
+            map_id.clone(),
+            wv_core::terrain::TerrainData {
+                width: 64,
+                height: 64,
+                cells: vec![
+                    wv_core::terrain::TerrainCellData {
+                        height: 100,
+                        surface: 1,
+                        biome: 3,
+                    };
+                    64 * 64
+                ],
+            },
+        );
+        projection.selection = Some(wv_core::SelectedEntity::new(
+            wv_core::EntityKind::Region,
+            wv_core::Id::new_unchecked("nr_a"),
+        ));
+        let mut drill = DrillState::default();
+        drill.settle_on(map_id.clone());
+        let grid = GridConfig {
+            cell_size: 4.0,
+            raster_origin: Vec2::ZERO,
+            map_origin: Vec2::ZERO,
+            map_size: Vec2::splat(256.0),
+        };
+        let adjust = RegionAdjustState::default();
+        let cand = RegionCandidateContext::default();
+        let mut decor = RegionDecorCache::default();
+
+        // 开：有锚点、有阶梯边。
+        let view_on = ViewState {
+            mode: ViewMode::Topographic,
+            nature_overlay: true,
+            scale: 1.0,
+            ..Default::default()
+        };
+        let plan = plan_region_handles(
+            &projection,
+            &drill,
+            &view_on,
+            &grid,
+            &adjust,
+            &cand,
+            &mut decor,
+        );
+        assert!(plan.handle_count() > 0, "开群系视图 + 选中 ⇒ 必须有手柄");
+        assert!(!plan.stepped_edges.is_empty(), "选中区域应出阶梯描边");
+
+        // 关：三个几何字段全空，但选中态在 projection 里**原样保留**。
+        let view_off = ViewState {
+            mode: ViewMode::Topographic,
+            nature_overlay: false,
+            scale: 1.0,
+            ..Default::default()
+        };
+        let plan = plan_region_handles(
+            &projection,
+            &drill,
+            &view_off,
+            &grid,
+            &adjust,
+            &cand,
+            &mut decor,
+        );
+        assert_eq!(
+            plan.handle_count(),
+            0,
+            "关群系视图 ⇒ 手柄必须为空（缺陷 3）"
+        );
+        assert!(plan.stepped_edges.is_empty(), "阶梯描边同门控");
+        assert!(
+            projection.selection.is_some(),
+            "门控是纯渲染判定，不得清选中态"
+        );
+    }
+}
+
 /// 绘制视口网格与唯一的地形四边形（S3）。用 `Gizmos` 画（原型轻量方案）。
 ///
 /// 事件高亮读 [`LayerFrame`]（ADR-0013）：visible 门 + opacity 乘进 alpha。
@@ -632,12 +1329,7 @@ pub fn draw_map_gizmos(
     grid_cfg: Res<GridConfig>,
     mut candidate_cache: ResMut<crate::region_overlay::CandidateOverlayCache>,
     boundary: Res<crate::state::BiomeBoundaryState>,
-    region_adjust: Res<crate::state::RegionAdjustState>,
-    // 候选上下文（格 + 编辑中多边形）：app 侧 NatureRegionUiState 的镜像
-    //（渲染层不依赖 wv-app 类型）。
-    candidate_ctx: Res<crate::state::RegionCandidateContext>,
 ) {
-    let __t = std::time::Instant::now();
     let _ = &*tex; // suppress unused warning
 
     // ── CellMap 未命名候选高亮（2026-10-22 内容矩阵 §2.6-3 · T11）──────
@@ -678,206 +1370,18 @@ pub fn draw_map_gizmos(
         }
     }
 
-    // ── 选中区域的方格描边 + 顶点手柄（2026-10-22 验收 · 用户裁定）──────
-    // CellMap 专业数据编辑器：选中 Region ⇒ 沿格边的阶梯描边（白色实线）
-    // + 顶点手柄（方格锚点，拖动吸附格点）。与 nature_overlay 无关。
-    if let Some(sel) = projection.selection.as_ref() {
-        if sel.kind == wv_core::EntityKind::Region
-            && matches!(view.mode, crate::state::ViewMode::Topographic)
-        {
-            if let (Some(map), Some(terrain)) = (
-                drill.current().cloned(),
-                drill.current().and_then(|m| projection.world.terrain_of(m)),
-            ) {
-                draw_selected_region(
-                    &mut gizmos,
-                    &projection,
-                    &drill,
-                    &view,
-                    &grid_cfg,
-                    &region_adjust,
-                    terrain,
-                    &map,
-                );
-            }
-        }
-    }
-
-    /// 选中区域的方格描边 + 顶点手柄（2026-10-22 验收 · 用户裁定）。
-    ///
-    /// CellMap 专业数据编辑器：
-    /// - 选中 Region ⇒ 沿格边的阶梯描边（白色实线，直接贴格边、无平滑修饰）
-    /// - 顶点锚点（高亮红：十字准星 + 外圈；LOD——锚点数量由 zoom 决定，
-    ///   间距 = 24px 屏幕长的世界距离，zoom out 稀疏粗调 / zoom in 密集细调）
-    ///   与 nature_overlay 无关——选中即可见。
-    #[allow(clippy::too_many_arguments)]
-    fn draw_selected_region(
-        gizmos: &mut Gizmos,
-        projection: &WorldProjection,
-        drill: &crate::state::DrillState,
-        view: &ViewState,
-        grid_cfg: &GridConfig,
-        region_adjust: &crate::state::RegionAdjustState,
-        terrain: &wv_core::terrain::TerrainData,
-        map: &wv_core::Id,
-    ) {
-        // 只处理：选中 Region 实体 ∧ 当前图一致 ∧ Topographic。
-        let Some(sel) = projection.selection.as_ref() else {
-            return;
-        };
-        if sel.kind != wv_core::EntityKind::Region
-            || !matches!(view.mode, crate::state::ViewMode::Topographic)
-            || drill.current().as_ref() != Some(&map)
-        {
-            return;
-        }
-        let Some(region) = projection
-            .world
-            .regions
-            .iter()
-            .find(|r| r.id == sel.id && r.map == *map)
-            .filter(|r| r.polygon.len() >= 6)
-        else {
-            return;
-        };
-        let raster_to_map = grid_cfg.map_origin - grid_cfg.raster_origin;
-        // 拖动中显示预览多边形；未拖动显示落盘轮廓。
-        let poly = region_adjust
-            .preview_polygon
-            .clone()
-            .unwrap_or_else(|| region.polygon.clone());
-        let poly_pairs: Vec<(f32, f32)> = poly.chunks_exact(2).map(|c| (c[0], c[1])).collect();
-        let cells = crate::cell_selection::rasterize_polygon_cells(
-            &poly_pairs,
-            raster_to_map,
-            grid_cfg,
-            terrain.width,
-            terrain.height,
-        );
-
-        // ── 方格描边：mask 内格与不在 mask 的 4 邻之间的边（白色实线贴格边）──
-        let mask: std::collections::HashSet<(i32, i32)> = cells.iter().copied().collect();
-        let cs = grid_cfg.cell_size;
-        let mut edges: Vec<(Vec2, Vec2)> = Vec::new();
-        for &(gx, gy) in &cells {
-            let x0 = grid_cfg.raster_origin.x + gx as f32 * cs;
-            let y0 = grid_cfg.raster_origin.y + gy as f32 * cs;
-            let x1 = x0 + cs;
-            let y1 = y0 + cs;
-            let c = (gx, gy);
-            if !mask.contains(&(c.0, c.1 - 1)) {
-                edges.push((Vec2::new(x0, y0), Vec2::new(x1, y0)));
-            }
-            if !mask.contains(&(c.0, c.1 + 1)) {
-                edges.push((Vec2::new(x0, y1), Vec2::new(x1, y1)));
-            }
-            if !mask.contains(&(c.0 - 1, c.1)) {
-                edges.push((Vec2::new(x0, y0), Vec2::new(x0, y1)));
-            }
-            if !mask.contains(&(c.0 + 1, c.1)) {
-                edges.push((Vec2::new(x1, y0), Vec2::new(x1, y1)));
-            }
-        }
-        let white = bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.95);
-        for (a, b) in &edges {
-            gizmos.line_2d(*a, *b, white);
-        }
-
-        // ── 顶点锚点（LOD，用户裁定：锚点数量由 zoom 决定）——物化多边形每个
-        // 阶梯角都有顶点，全画会重叠成一片白线（验收反馈：只见白线不见锚点）。
-        let spacing = crate::biome_boundary::anchor_spacing(view.scale, cs, 24.0);
-        let anchors = crate::biome_boundary::decimate_poly(&poly_pairs, spacing);
-        // 手柄视觉（用户裁定：十字准星 + 外圈 + 高亮红）：亮红圈 + 亮红十字，
-        // 尺寸按屏幕像素折算（×view.scale），任意缩放下恒定可辨。
-        let handle_px = (view.scale * 6.0).max(cs * 0.2);
-        let hot_red = bevy::color::Color::srgba(1.0, 0.15, 0.12, 1.0);
-        for a in &anchors {
-            // 多边形是**图内局部 wu**：世界位 = map_origin + 局部
-            //（此前误用 raster_origin——子图上手柄会偏移）。
-            let p = grid_cfg.map_origin + Vec2::new(a.0, a.1);
-            // 红圈（方框）。
-            gizmos.rect_2d(
-                bevy::math::Isometry2d::from_translation(p),
-                Vec2::splat(handle_px * 2.0),
-                hot_red,
-            );
-            // 红十字（横竖两线，臂长触及圈）。
-            gizmos.line_2d(p - Vec2::X * handle_px, p + Vec2::X * handle_px, hot_red);
-            gizmos.line_2d(p - Vec2::Y * handle_px, p + Vec2::Y * handle_px, hot_red);
-        }
-    }
-
-    // ── 候选态的锚点（2026-10-22 验收：候选不是 Region 实体，selection
-    // 里没有它——但作者点选候选后同样要能拉锚点调形状，物化时用编辑后的
-    // 多边形）。候选多边形：编辑中优先，否则按格派生。
-    if matches!(view.mode, crate::state::ViewMode::Topographic) {
-        if let (Some(cell), Some(map)) = (candidate_ctx.cell, drill.current().cloned()) {
-            let candidate_polygon = candidate_ctx.polygon.clone();
-            if projection.selection.is_none() {
-                if let Some(terrain) = projection.world.terrain_of(&map) {
-                    let raster_to_map = grid_cfg.map_origin - grid_cfg.raster_origin;
-                    let poly = candidate_polygon.clone().unwrap_or_else(|| {
-                        // 按格派生（与物化同源）：biome 连通区外环 × 格尺寸。
-                        let cells: Vec<wv_terrain::TerrainCell> = terrain
-                            .cells
-                            .iter()
-                            .map(|c| wv_terrain::TerrainCell {
-                                height: c.height,
-                                surface: c.surface,
-                                biome: c.biome,
-                            })
-                            .collect();
-                        wv_terrain::TerrainGrid::from_cells(terrain.width, terrain.height, cells)
-                            .and_then(|g| {
-                                wv_terrain::region::biome_region_at(&g, cell.0, cell.1 as i64)
-                            })
-                            .map(|r| {
-                                r.outer
-                                    .iter()
-                                    .flat_map(|&(x, y)| {
-                                        [
-                                            x * grid_cfg.cell_size + raster_to_map.x,
-                                            y * grid_cfg.cell_size + raster_to_map.y,
-                                        ]
-                                    })
-                                    .collect::<Vec<f32>>()
-                            })
-                            .unwrap_or_default()
-                    });
-                    if poly.len() >= 6 {
-                        let poly_pairs: Vec<(f32, f32)> =
-                            poly.chunks_exact(2).map(|c| (c[0], c[1])).collect();
-                        let spacing = crate::biome_boundary::anchor_spacing(
-                            view.scale,
-                            grid_cfg.cell_size,
-                            24.0,
-                        );
-                        let anchors = crate::biome_boundary::decimate_poly(&poly_pairs, spacing);
-                        let handle_px = (view.scale * 6.0).max(grid_cfg.cell_size * 0.2);
-                        let hot_red = bevy::color::Color::srgba(1.0, 0.15, 0.12, 1.0);
-                        for a in &anchors {
-                            let p = grid_cfg.map_origin + Vec2::new(a.0, a.1);
-                            gizmos.rect_2d(
-                                bevy::math::Isometry2d::from_translation(p),
-                                Vec2::splat(handle_px * 2.0),
-                                hot_red,
-                            );
-                            gizmos.line_2d(
-                                p - Vec2::X * handle_px,
-                                p + Vec2::X * handle_px,
-                                hot_red,
-                            );
-                            gizmos.line_2d(
-                                p - Vec2::Y * handle_px,
-                                p + Vec2::Y * handle_px,
-                                hot_red,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // ── 选中区域 + 未物化候选的装饰：**已迁出 Gizmos**（2026-10-24）──────
+    // 用户实测：开「显示自然区与候选」后点选一个大自然区，锚点一出现 FPS 掉到
+    // 20 多。根因是这里**逐条** `gizmos.line_2d` 画阶梯边——大区域的格边数上万，
+    // Gizmos 是即时线元（每条一次装配 + 一个实例），每帧重建一遍就吃掉了帧预算。
+    //
+    // 现在由 `crate::region_decor::sync_region_decor` 用**合批 Mesh2d** 画：
+    // 键（内容指纹 + 线宽/方块尺寸档）不变 ⇒ 不重建，稳态每帧只付一个 draw call。
+    // 顺带满足用户裁定「锚点改为实心白色小方块」——Gizmos 画不出填充面。
+    //
+    // 判定与派生仍全在 `plan_region_handles`（纯函数 + 缓存）里，调用点是
+    // `sync_region_decor`；`handles_drawn` / `outline_segments_drawn` 两个
+    // 计数器也随绘制一起搬过去（同一事实只留一处载体）。
 
     // ── 群系分界线预览（2026-10-22 内容矩阵 §2.7 · T12）────────────────
     // 工具激活：线（金色实线 + 两端点圆）+ 拖动中高亮「将被改写」的格。
