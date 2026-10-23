@@ -735,32 +735,24 @@ pub fn draw_map_gizmos(
                 let spacing =
                     crate::biome_boundary::anchor_spacing(view.scale, grid_cfg.cell_size, 24.0);
                 let anchors = crate::biome_boundary::decimate_poly(&poly_pairs, spacing);
-                // 手柄视觉：白色十字准星 + 深色圈；尺寸按屏幕像素折算
-                //（×view.scale），任意缩放下恒定可辨。
-                let handle_px = (view.scale * 5.0).max(grid_cfg.cell_size * 0.15);
-                let handle_white = bevy::color::Color::srgba(1.0, 1.0, 1.0, 1.0);
-                let handle_dark = bevy::color::Color::srgba(0.08, 0.08, 0.08, 0.85);
+                // 手柄视觉（用户裁定：十字准星 + 外圈 + 高亮红）：亮红圈 +
+                // 亮红十字，尺寸按屏幕像素折算（×view.scale），任意缩放下
+                // 恒定可辨。
+                let handle_px = (view.scale * 6.0).max(grid_cfg.cell_size * 0.2);
+                let hot_red = bevy::color::Color::srgba(1.0, 0.15, 0.12, 1.0);
                 for a in &anchors {
                     // 多边形是**图内局部 wu**：世界位 = map_origin + 局部
                     //（此前误用 raster_origin——子图上手柄会偏移）。
                     let p = grid_cfg.map_origin + Vec2::new(a.0, a.1);
-                    // 深色圈（方框）。
+                    // 红圈（方框）。
                     gizmos.rect_2d(
                         bevy::math::Isometry2d::from_translation(p),
                         Vec2::splat(handle_px * 2.0),
-                        handle_dark,
+                        hot_red,
                     );
-                    // 白色十字（横竖两线）。
-                    gizmos.line_2d(
-                        p - Vec2::X * handle_px,
-                        p + Vec2::X * handle_px,
-                        handle_white,
-                    );
-                    gizmos.line_2d(
-                        p - Vec2::Y * handle_px,
-                        p + Vec2::Y * handle_px,
-                        handle_white,
-                    );
+                    // 红十字（横竖两线，臂长触及圈）。
+                    gizmos.line_2d(p - Vec2::X * handle_px, p + Vec2::X * handle_px, hot_red);
+                    gizmos.line_2d(p - Vec2::Y * handle_px, p + Vec2::Y * handle_px, hot_red);
                 }
             }
         }
