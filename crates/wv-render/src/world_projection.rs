@@ -726,17 +726,24 @@ pub fn draw_map_gizmos(
                 for (a, b) in &edges {
                     gizmos.line_2d(*a, *b, white);
                 }
-                // 顶点手柄：白色十字准星 + 深色圈（拖动中 = 预览多边形顶点）。
-                // rect_2d 是**空心周长**（无填充）——之前的「白芯方点」实际是
-                // 两个叠在一起的细框，缩放后不可辨（用户验收反馈）。
-                // 手柄尺寸按屏幕像素折算（×view.scale），任意缩放下恒定可辨。
+                // 顶点手柄（LOD 锚点，用户裁定：锚点数量由 zoom 决定）——
+                // 物化多边形每个阶梯角都有顶点，全画会重叠成一片白线（用户
+                // 验收反馈：只见白线不见锚点）。抽稀间距 = 24px 的世界长度：
+                // zoom out 锚点稀疏（粗调）、zoom in 锚点变密（细调）。
+                let poly_pairs: Vec<(f32, f32)> =
+                    poly.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+                let spacing =
+                    crate::biome_boundary::anchor_spacing(view.scale, grid_cfg.cell_size, 24.0);
+                let anchors = crate::biome_boundary::decimate_poly(&poly_pairs, spacing);
+                // 手柄视觉：白色十字准星 + 深色圈；尺寸按屏幕像素折算
+                //（×view.scale），任意缩放下恒定可辨。
                 let handle_px = (view.scale * 5.0).max(grid_cfg.cell_size * 0.15);
                 let handle_white = bevy::color::Color::srgba(1.0, 1.0, 1.0, 1.0);
                 let handle_dark = bevy::color::Color::srgba(0.08, 0.08, 0.08, 0.85);
-                for chunk in poly.chunks_exact(2) {
+                for a in &anchors {
                     // 多边形是**图内局部 wu**：世界位 = map_origin + 局部
                     //（此前误用 raster_origin——子图上手柄会偏移）。
-                    let p = grid_cfg.map_origin + Vec2::new(chunk[0], chunk[1]);
+                    let p = grid_cfg.map_origin + Vec2::new(a.0, a.1);
                     // 深色圈（方框）。
                     gizmos.rect_2d(
                         bevy::math::Isometry2d::from_translation(p),
