@@ -190,8 +190,11 @@ impl Panel {
     /// 用「预留带」而不是「让时间轴绕开面板」：通栏是规格语义，绕开就不是通栏了。
     pub fn default_pos(self) -> [f32; 2] {
         match self {
-            Panel::MapTree => [12.0, 56.0],
-            Panel::Layers => [12.0, 398.0],
+            // 2026-10-23 用户裁定：图层管理（接真实图层声明，Figma `3:20892`）
+            // 顶到左上角，地图树（静态占位）让位到中列顶部。图层面板 268 宽
+            // （56+480=536 底）与 Brush 顶 578 仍留 42 间隙，左列不重叠。
+            Panel::Layers => [12.0, 56.0],
+            Panel::MapTree => [332.0, 56.0],
             Panel::Brush => [12.0, 578.0],
             Panel::Minimap => [332.0, 56.0],
             Panel::Faction => [332.0, 368.0],
@@ -216,7 +219,9 @@ impl Panel {
         match self {
             // v0.3-B：宽度对齐 web（.w-tree/.w-layers 204 / .w-brush 274）。
             Panel::MapTree => [204.0, 330.0],
-            Panel::Layers => [204.0, 168.0],
+            // Figma `3:20892` 面板宽 268；高 480 = 头 30 + 动作行/列表/滑条
+            // （≈313）+ 会话开关段（≈120）+ 边距，列表超 6 行内部滚动。
+            Panel::Layers => [268.0, 480.0],
             Panel::Brush => [274.0, 220.0],
             Panel::Minimap => [216.0, 300.0],
             // 通栏：1280 − 12×2 = 1256；高 164 对齐 web `.timeline`（50 顶排 + 轨道）。

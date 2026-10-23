@@ -341,6 +341,34 @@ pub enum I18nKey {
     PanelMapTree,
     /// 「图层管理」面板标题
     PanelLayers,
+    /// 图层面板动作行小标题（Figma `DRAW ORDER · TOP TO BOTTOM`）
+    PanelLayersDrawOrder,
+    /// 图层面板不透明度行标签
+    PanelLayersOpacity,
+    /// 图层面板会话开关段小节标题
+    PanelLayersSession,
+    /// 图层面板空态标题（本图未声明图层）
+    PanelLayersEmptyTitle,
+    /// 图层面板空态提示（去 index.yaml 的 layers: 段声明）
+    PanelLayersEmptyHint,
+    /// 图层类型默认名：地形
+    PanelLayerTerrain,
+    /// 图层类型默认名：边界
+    PanelLayerBorder,
+    /// 图层类型默认名：势力影响
+    PanelLayerInfluence,
+    /// 图层类型默认名：道路
+    PanelLayerRoad,
+    /// 图层类型默认名：建筑
+    PanelLayerBuilding,
+    /// 图层类型默认名：事件点
+    PanelLayerEventPoint,
+    /// 图层类型默认名：地点
+    PanelLayerPlace,
+    /// 图层类型默认名：标签
+    PanelLayerLabel,
+    /// 图层类型默认名：自定义
+    PanelLayerCustom,
     /// 「地形设计器」面板标题
     PanelBrush,
     /// 「属性检查器」面板标题
@@ -1170,7 +1198,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 458] = [
+    pub const ALL: [I18nKey; 472] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1333,9 +1361,23 @@ impl I18nKey {
         I18nKey::ViewModeFaction,
         I18nKey::ViewModeEvent,
         I18nKey::ViewModeCoastline,
-        // 图层面板（13）
+        // 图层面板（13 + 14：Figma `3:20892` 接线 2026-10-23）
         I18nKey::PanelMapTree,
         I18nKey::PanelLayers,
+        I18nKey::PanelLayersDrawOrder,
+        I18nKey::PanelLayersOpacity,
+        I18nKey::PanelLayersSession,
+        I18nKey::PanelLayersEmptyTitle,
+        I18nKey::PanelLayersEmptyHint,
+        I18nKey::PanelLayerTerrain,
+        I18nKey::PanelLayerBorder,
+        I18nKey::PanelLayerInfluence,
+        I18nKey::PanelLayerRoad,
+        I18nKey::PanelLayerBuilding,
+        I18nKey::PanelLayerEventPoint,
+        I18nKey::PanelLayerPlace,
+        I18nKey::PanelLayerLabel,
+        I18nKey::PanelLayerCustom,
         I18nKey::PanelBrush,
         I18nKey::PanelInspector,
         I18nKey::PanelTimeline,

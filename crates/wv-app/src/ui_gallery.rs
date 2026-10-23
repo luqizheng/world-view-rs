@@ -528,9 +528,13 @@ fn draw_gallery(mut contexts: EguiContexts, cfg: Res<UiShellConfig>, mut st: Loc
             ];
             let mut panel = LayerPanelState {
                 actions_label: "DRAW ORDER · TOP TO BOTTOM",
+                // gallery 展示完整设计稿形态（含新建钮）；接真实数据的
+                // panel_layers 置 false。
+                show_add: true,
                 entries,
                 selected: st.layer_selected,
                 opacity: st.layer_opacity,
+                opacity_label: "Opacity",
             };
             if let Some(action) = layer_panel(ui, &shell, &mut panel) {
                 match action {

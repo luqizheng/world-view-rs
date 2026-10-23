@@ -85,12 +85,20 @@ pub enum LayerPanelAction {
 pub struct LayerPanelState<'a> {
     /// 动作行左端小标题（设计稿 `DRAW ORDER · TOP TO BOTTOM`）。
     pub actions_label: &'a str,
+    /// 是否画右端「新建组 / 新建图层」两枚图标钮。
+    ///
+    /// 数据侧暂无图层组、Custom 层也无渲染消费者（spec §8），接真实
+    /// `MapNode.layers` 的调用方置 `false` 只留小标题；gallery 样张置
+    /// `true` 展示完整设计稿形态。
+    pub show_add: bool,
     /// 行数据。
     pub entries: Vec<LayerEntry<'a>>,
     /// 当前选中行索引（越界时不画选中态）。
     pub selected: usize,
     /// 不透明度 0..=1。
     pub opacity: f32,
+    /// 不透明度行左端标签（调用方负责 i18n；设计稿 `Opacity` 41 px）。
+    pub opacity_label: &'a str,
 }
 
 /// 图层面板体：动作行 + 列表 + 分隔线 + 不透明度行。
@@ -105,7 +113,7 @@ pub fn layer_panel(
     // 否则设计稿逐项的高度会整体走样。
     ui.spacing_mut().item_spacing.y = 0.0;
     let mut action = None;
-    if let Some(a) = layer_actions(ui, shell, state.actions_label) {
+    if let Some(a) = layer_actions(ui, shell, state.actions_label, state.show_add) {
         action = Some(a);
     }
     ui.add_space(BLOCK_GAP);
@@ -118,14 +126,20 @@ pub fn layer_panel(
     super::primitives::divider(ui, shell);
     ui.add_space(BLOCK_GAP);
 
-    opacity_row(ui, shell, &mut state.opacity);
+    opacity_row(ui, shell, state.opacity_label, &mut state.opacity);
     action
 }
 
 /// 动作行：左端 10 px 小标题 + 右端 `folder-plus` / `plus` 两枚 12 px 图标钮。
 ///
 /// 设计稿 `Layer actions`（`3:20899`）：高 20、图标间距 10、右缘贴内容边。
-pub fn layer_actions(ui: &mut egui::Ui, shell: &UiShell, label: &str) -> Option<LayerPanelAction> {
+/// `show_add = false` 时只画小标题（见 [`LayerPanelState::show_add`]）。
+pub fn layer_actions(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    label: &str,
+    show_add: bool,
+) -> Option<LayerPanelAction> {
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), ACTIONS_H),
         egui::Sense::hover(),
@@ -137,6 +151,9 @@ pub fn layer_actions(ui: &mut egui::Ui, shell: &UiShell, label: &str) -> Option<
         proportional(font_size::MICRO - 1.0), // Figma 10 px
         shell.t3(),
     );
+    if !show_add {
+        return None;
+    }
 
     // 从右往左：plus，再 folder-plus（Figma Actions gap 10）。
     let plus_rect = egui::Rect::from_min_size(
@@ -351,14 +368,20 @@ pub fn layer_list_row(
 /// 不透明度行（Figma `Layer opacity` `3:20942`）：`Opacity 41px | 轨道 | 100%`。
 ///
 /// 轨道 4 px（radius 2），已完成段 accent，圆钮 10 px（`t1` 填充 + 2 px accent
-/// 描边，`3:20945`）。命中区是整行高，便于拖动。
-pub fn opacity_row(ui: &mut egui::Ui, shell: &UiShell, value: &mut f32) -> egui::Response {
+/// 描边，`3:20945`）。命中区是整行高，便于拖动。标签由调用方给（i18n 归
+/// 调用方），标签宽按实测文本取（设计稿 41 px 是 `Opacity` 的实测宽，中文
+/// 「不透明度」更宽，按 Figma 定宽会截字）。
+pub fn opacity_row(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    label: &str,
+    value: &mut f32,
+) -> egui::Response {
     let (rect, mut resp) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), OPACITY_H),
         egui::Sense::click_and_drag(),
     );
 
-    let label = "Opacity";
     let label_galley =
         ui.painter()
             .layout_no_wrap(label.to_owned(), proportional(font_size::MICRO), shell.t2());
@@ -367,7 +390,7 @@ pub fn opacity_row(ui: &mut egui::Ui, shell: &UiShell, value: &mut f32) -> egui:
         ui.painter()
             .layout_no_wrap(value_text, proportional(font_size::MICRO - 1.0), shell.t2());
 
-    let label_w = 41.0_f32; // Figma Label 41 px
+    let label_w = label_galley.size().x; // Figma Label 41 px（EN 实测）
     let value_w = value_galley.size().x.max(24.0);
     let track_x0 = rect.min.x + label_w + ROW_GAP;
     let track_x1 = rect.max.x - value_w - ROW_GAP;
@@ -519,9 +542,11 @@ mod tests {
         let entries = entries();
         let mut state = LayerPanelState {
             actions_label: "DRAW ORDER · TOP TO BOTTOM",
+            show_add: true,
             entries,
             selected: 1,
             opacity: 1.0,
+            opacity_label: "Opacity",
         };
         let _ = layer_panel(&mut ui, &sh, &mut state);
         // Figma Panel content 内高 259 = 20 + 12 + 178 + 12 + 1 + 12 + 24。
@@ -533,11 +558,33 @@ mod tests {
     }
 
     #[test]
+    fn layer_panel_without_add_buttons_keeps_body_height() {
+        let sh = shell();
+        let (_ctx, mut ui) = make_ui("layer_panel_no_add", 244.0, 600.0);
+        let entries = entries();
+        let mut state = LayerPanelState {
+            actions_label: "DRAW ORDER · TOP TO BOTTOM",
+            show_add: false,
+            entries,
+            selected: 0,
+            opacity: 1.0,
+            opacity_label: "Opacity",
+        };
+        let action = layer_panel(&mut ui, &sh, &mut state);
+        assert!(action.is_none(), "无指针事件不应有动作");
+        assert!(
+            (ui.min_rect().height() - 259.0).abs() < 1e-3,
+            "隐藏新建钮不改变面板体高（图标是 paint_at 叠加），got {}",
+            ui.min_rect().height()
+        );
+    }
+
+    #[test]
     fn opacity_row_height_and_range_are_figma_spec() {
         let sh = shell();
         let (_ctx, mut ui) = make_ui("opacity_row_h", 244.0, 100.0);
         let mut v = 1.0_f32;
-        let _ = opacity_row(&mut ui, &sh, &mut v);
+        let _ = opacity_row(&mut ui, &sh, "Opacity", &mut v);
         assert!(
             (ui.min_rect().height() - OPACITY_H).abs() < 1e-3,
             "不透明度行应 = {OPACITY_H}，got {}",
