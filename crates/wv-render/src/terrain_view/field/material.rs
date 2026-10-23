@@ -152,18 +152,26 @@ impl Default for FieldPalette {
     ///
     /// 与 `topographic::pick` 同色族，**保证 P1 与现行 CPU 路径观感一致**——
     /// 不一致就是回归。
+    ///
+    /// ⚠️ **色彩空间**：`TopographicPalette` 给的是 **sRGB** 分量
+    /// （`Srgb3`，注释里写作 `#3A7DB5` 这类十六进制）。材质 uniform 住在
+    /// **线性**空间，直接塞进 `LinearRgba::rgb` 会被当成线性值，
+    /// 输出到 sRGB 帧缓冲时再亮一次——整幅图明显偏白偏淡（实测踩过）。
+    /// 必须走 `Color::srgb(..)` 做显式转换。
     fn default() -> Self {
         let t = wv_theme::topographic::TopographicPalette::default();
-        let rgb = |c: wv_theme::topographic::Srgb3| LinearRgba::rgb(c[0], c[1], c[2]);
+        // sRGB → 线性：`Color::srgb` 构造 sRGB 色，转 `LinearRgba` 时做 gamma 解码。
+        let srgb =
+            |c: wv_theme::topographic::Srgb3| LinearRgba::from(Color::srgb(c[0], c[1], c[2]));
         Self {
-            water: rgb(t.water),
-            land_low: rgb(t.land_low),
-            land_mid: rgb(t.land_mid),
-            land_high: rgb(t.land_high),
-            // 墨色取全 0 的深墨：SPEC §1.5 描线 −45% 明度是**相对**基色而言，
-            // shader 侧按此比例压暗，这里给的是「无彩色墨」基底。
-            ink: LinearRgba::rgb(0.16, 0.14, 0.13),
-            paper: LinearRgba::rgb(0.94, 0.91, 0.84),
+            water: srgb(t.water),
+            land_low: srgb(t.land_low),
+            land_mid: srgb(t.land_mid),
+            land_high: srgb(t.land_high),
+            // 墨色与纸色也按 sRGB 书写（人眼/取色器给的都是 sRGB 值），
+            // 同一路径转线性——避免两种口径混用。
+            ink: LinearRgba::from(Color::srgb(0.16, 0.14, 0.13)),
+            paper: LinearRgba::from(Color::srgb(0.94, 0.91, 0.84)),
         }
     }
 }
@@ -197,33 +205,48 @@ pub struct TerrainFieldMaterial {
 
 /// 与 WGSL `FieldParams` 逐字段对应的 uniform 块。
 ///
-/// **布局对齐**：WGSL 的 uniform 地址空间按 std140 规则——`vec3<f32>` /
-/// `vec4<f32>` 后跟标量时标量会被补到 16 字节。故 Rust 侧一律用
-/// `[f32; 4]` 打包标量组，与 WGSL 的 `vec4<f32>` 一一对齐，
-/// 避免隐式 padding 造成的**静默错位**（错位不报错，只是颜色全错）。
+/// ## 布局对齐（踩过硬的坑，务必按此写）
+///
+/// **每组标量必须用 `Vec4`，不能用 `[f32; 4]`。**
+///
+/// encase 把 Rust 的 `[f32; 4]` 当作 **`array<f32, 4>`**（元素 stride = 4），
+/// 而不是 `vec4<f32>`（stride = 16）。WGSL 的 uniform 地址空间要求数组元素
+/// stride 是 16 的倍数，于是运行期直接 panic：
+/// `array stride must be a multiple of 16 (current stride: 4)`
+/// （见 `encase-0.12.1/src/types/array.rs` 的 `UNIFORM_COMPAT_ASSERT`）。
+///
+/// 这个错误**编译期完全看不出来**——`cargo check` 过、clippy 过、单测过，
+/// 只有真跑起来、`prepare_assets` 上传 uniform 时才炸。故本结构体的每个
+/// 字段一律 `Vec4`，与 WGSL 的 `vec4<f32>` 严格一一对应。
 #[derive(Debug, Clone, Copy, Default, ShaderType)]
 pub struct FieldParams {
     /// xy = 格宽 / 格高；zw 预留。
-    pub grid: [f32; 4],
+    pub grid: Vec4,
     /// x = `px_per_cell`（墨线折算基准）、y = 取色分支（0 = BiomeRaw /
     /// 1 = Themed）、z = T15 `z_exag`、w = T14 `grad_step`。
-    pub shape: [f32; 4],
+    pub shape: Vec4,
     /// 预留（P2 域扭曲开关）。
-    pub pad0: [f32; 4],
+    pub pad0: Vec4,
     /// T16 光源方向 xyz；w 预留。
-    pub light_dir: [f32; 4],
+    pub light_dir: Vec4,
     /// 预留（P2 水彩开关）。
-    pub pad1: [f32; 4],
+    pub pad1: Vec4,
     /// 海岸三段累计边界（格）：x = 滩 / y = 浅 / z = 深；w = `wash_amt`（P2）。
-    pub shore_edges: [f32; 4],
+    pub shore_edges: Vec4,
     /// xy = T17 明暗钳制；z = `lod_blend`（P2）；w 预留。
-    pub relief: [f32; 4],
+    pub relief: Vec4,
     /// 主题四阶色：water / land_low / land_mid / land_high。
-    pub theme: [[f32; 4]; 4],
+    ///
+    /// **必须是 `Vec4` 而不是 `[[f32; 4]; 4]`**：encase 对嵌套数组
+    /// `[[f32; 4]; N]` 推不出内层是 `vec4`，会按 `f32` 的 stride=4 布局，
+    /// 而 WGSL 的 `array<vec4<f32>, N>` 要求 stride=16——
+    /// 运行时 panic「array stride must be a multiple of 16 (current stride: 4)」。
+    /// 这个错误**编译期完全看不出来**，只有真正跑起来上传 uniform 才炸。
+    pub theme: [Vec4; 4],
     /// 墨色。
-    pub ink: [f32; 4],
+    pub ink: Vec4,
     /// 纸底色（T44）。
-    pub paper: [f32; 4],
+    pub paper: Vec4,
 }
 
 impl Material2d for TerrainFieldMaterial {
@@ -308,10 +331,12 @@ pub fn default_params(
     branch: ViewBranch,
     pal: FieldPalette,
 ) -> FieldParams {
-    let rgba4 = |c: LinearRgba| [c.red, c.green, c.blue, c.alpha];
+    let rgba4 = |c: LinearRgba| Vec4::new(c.red, c.green, c.blue, c.alpha);
     FieldParams {
-        grid: [grid[0], grid[1], 0.0, 0.0],
-        shape: [
+        // 全部 `Vec4`——`[f32; 4]` 会被 encase 当 `array<f32, 4>`，
+        // 运行期 panic「array stride must be a multiple of 16」。
+        grid: Vec4::new(grid[0], grid[1], 0.0, 0.0),
+        shape: Vec4::new(
             px_per_cell,
             match branch {
                 ViewBranch::BiomeRaw => 0.0,
@@ -319,12 +344,12 @@ pub fn default_params(
             },
             Z_EXAG,
             GRAD_STEP,
-        ],
-        pad0: [0.0; 4],
-        light_dir: [LIGHT_DIR[0], LIGHT_DIR[1], LIGHT_DIR[2], 0.0],
-        pad1: [0.0; 4],
-        shore_edges: [SHORE_EDGE, SHALLOW_EDGE, DEEP_EDGE, 0.0], // w = wash_amt（P2）
-        relief: [RELIEF_LO, RELIEF_HI, 0.0, 0.0],                // z = lod_blend（P2）
+        ),
+        pad0: Vec4::ZERO,
+        light_dir: Vec4::new(LIGHT_DIR[0], LIGHT_DIR[1], LIGHT_DIR[2], 0.0),
+        pad1: Vec4::ZERO,
+        shore_edges: Vec4::new(SHORE_EDGE, SHALLOW_EDGE, DEEP_EDGE, 0.0), // w = wash_amt（P2）
+        relief: Vec4::new(RELIEF_LO, RELIEF_HI, 0.0, 0.0),                // z = lod_blend（P2）
         theme: [
             rgba4(pal.water),
             rgba4(pal.land_low),

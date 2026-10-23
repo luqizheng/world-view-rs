@@ -9,7 +9,7 @@
 //! |---|---|---|---|---|
 //! | `height_tex` | `R16Unorm` | Linear | 归一化高度 | T1 |
 //! | `coast_tex` | `R16Unorm` | Linear | 到最近异类格的欧氏距离 / 32 格 | T3 |
-//! | `attr_tex` | `Rgba8Unorm` | Nearest | R=水陆、G=biome、B/A 预留 | T2 |
+//! | `attr_tex` | `Rgba8Unorm` | Nearest | R=水陆（**255 陆 / 0 水**）、G=biome、B/A 预留 | T2 |
 //!
 //! ## 为什么不转成 Bevy `Image`
 //!
@@ -180,7 +180,10 @@ impl FieldPack {
             // 线性插值会插出不存在的 biome ID——自研地形最常见的翻车点），
             // B/A 预留为 0。
             let wet = is_wet(&cell);
-            attr_tex.push(u8::from(!wet)); // R：1 = 陆
+            // R：**255 = 陆 / 0 = 水**（不是 1——Rgba8Unorm 采样后
+            // 归一化成 `1/255 ≈ 0.0039`，shader 里 `r > 0.5` 会恒为假，
+            // 于是整张图被当成水渲染。实测踩过这个「1 不等于 1.0」的坑）。
+            attr_tex.push(if wet { 0 } else { 255 });
             attr_tex.push(cell.biome); // G：裸 biome
             attr_tex.push(0); // B：湿度预留
             attr_tex.push(0); // A：覆盖物键预留
@@ -377,8 +380,8 @@ mod tests {
     fn attr_red_channel_is_one_for_land() {
         let data = terrain(2, 1, &[(0, 0), (1, 0)]);
         let pack = FieldPack::from_terrain(&data);
-        assert_eq!(attr_ch(&pack, 0, 0, 0), 1);
-        assert_eq!(attr_ch(&pack, 1, 0, 0), 1);
+        assert_eq!(attr_ch(&pack, 0, 0, 0), 255, "陆地 → R=255");
+        assert_eq!(attr_ch(&pack, 1, 0, 0), 255, "陆地 → R=255");
     }
 
     // ── 6. attr 的 G 通道存裸 biome 字节 ──────────────────────────────────
