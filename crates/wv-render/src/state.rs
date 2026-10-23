@@ -813,6 +813,9 @@ pub struct SelectionState {
 pub struct RegionAdjustState {
     /// 正在调整的区域；`None` = 当前无调整会话。
     pub region: Option<wv_core::Id>,
+    /// 手柄多边形：物化多边形**抽稀**到 ≥2 格间距的角点——物化顶点在每个
+    /// 阶梯角都有，密集顶点的手柄会连成一片不可辨，且拖单个顶点形变微乎其微。
+    pub handle_poly: Vec<f32>,
     /// 调整中的多边形预览（图内局部 wu，扁平坐标）。
     pub preview_polygon: Option<Vec<f32>>,
     /// 正在拖动的顶点下标。
@@ -825,6 +828,7 @@ impl RegionAdjustState {
     /// 切图 / 切选清空。
     pub fn clear(&mut self) {
         self.region = None;
+        self.handle_poly = Vec::new();
         self.preview_polygon = None;
         self.drag_vertex = None;
         self.press_world = None;

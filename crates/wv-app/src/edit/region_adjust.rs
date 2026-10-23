@@ -3,16 +3,16 @@
 //! ## 交互（用户裁定）
 //!
 //! - 选中区域（点标签 / 区域面板行）⇒ CellMap 里出**方格描边**（沿格边的
-//!   阶梯描边，非平滑多边形）+ 多边形**顶点手柄**。
-//! - 拖动手柄 = 调整区域；**方格为锚点**——顶点吸附到格点（栅格角点），
-//!   拖动按整格步进。
-//! - 松手 = 1 条 `UpdateRegionCommand`（可撤销）。拖动中的预览不落盘。
+//!   阶梯描边）+ 边界**锚点手柄**。
+//! - **锚点数量随缩放自适应**（用户裁定）：抽稀间距 = `view.scale × 24px`
+//!   的世界长度——zoom out 锚点少（粗调）、zoom in 锚点多（细调）。
+//! - 拖锚点 = 调整区域；**方格为锚点**——锚点吸附到格点，按整格步进。
+//! - 松手 = 1 条 `UpdateRegionCommand`（可撤销）。
 //!
 //! ## 坐标系
 //!
-//! 区域多边形 = **图内局部 wu**；手柄吸附的格点（栅格角点）在图内局部 wu
-//! 上位于 `k·cs + (map_origin − raster_origin)`——两套原点的差必须参与吸附
-//! （ADR-0045 追记三同款换算）。
+//! 区域多边形 = **图内局部 wu**；格点在图内局部 wu 上位于
+//! `k·cs + (map_origin − raster_origin)`——两套原点的差必须参与吸附。
 
 use bevy::input::mouse::MouseButton;
 use bevy::prelude::*;
@@ -21,30 +21,7 @@ use crate::edit::editing::EditHistory;
 use crate::state::{GridConfig, PlaybackState, ViewState, WorldProjection};
 
 use wv_core::Id;
-
-/// 区域调整的会话态（CellMap · 选中区域后出现）。
-#[derive(Resource, Debug, Default, Clone, PartialEq)]
-pub struct RegionAdjustState {
-    /// 正在调整的区域；`None` = 当前无调整会话。
-    pub region: Option<Id>,
-    /// 调整中的多边形预览（图内局部 wu，扁平坐标）。
-    /// `None` = 未在拖动（展示已落盘轮廓）。
-    pub preview_polygon: Option<Vec<f32>>,
-    /// 正在拖动的顶点下标（偶数= x，奇数= y）。
-    pub drag_vertex: Option<usize>,
-    /// 按下点（世界坐标），用于命中判定。
-    pub press_world: Option<Vec2>,
-}
-
-impl RegionAdjustState {
-    /// 切图 / 切模式清空。
-    pub fn clear(&mut self) {
-        self.region = None;
-        self.preview_polygon = None;
-        self.drag_vertex = None;
-        self.press_world = None;
-    }
-}
+use wv_render::state::RegionAdjustState;
 
 /// 点到线段的距离（wu）。
 fn dist_to_segment(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
@@ -65,10 +42,12 @@ fn snap_to_corner(local: (f32, f32), cs: f32, corner0: (f32, f32)) -> (f32, f32)
     (corner0.0 + kx * cs, corner0.1 + ky * cs)
 }
 
+/// 当前缩放下的锚点间距（wu）= 24px 的世界长度，下限 2 格。
+fn anchor_spacing(view: &ViewState, cs: f32) -> f32 {
+    (view.scale * 24.0).max(cs * 2.0)
+}
+
 /// 区域边界拖拽输入系统。
-///
-/// 激活条件：Topographic ∧ 选中了有轮廓的区域。PointerOverUi 门与
-/// `commit_edit_cell_on_click` 同口径（面板交互不吃拖拽）。
 #[allow(clippy::too_many_arguments)]
 pub fn region_adjust_input(
     buttons: Res<ButtonInput<MouseButton>>,
@@ -85,7 +64,6 @@ pub fn region_adjust_input(
     if !matches!(view.mode, ViewMode::Topographic) || playback.playing || ui.wants_pointer {
         return;
     }
-    // 当前图：选区多边形是图内局部 wu——只对本图生效。
     let Some(map) = drill.current().cloned() else {
         return;
     };
@@ -104,8 +82,7 @@ pub fn region_adjust_input(
     let Some(cursor) = view.cursor_world else {
         return;
     };
-    // 世界 → 图内局部（map-local）wu。
-    let local = (cursor - grid.map_origin).into();
+    let local: (f32, f32) = (cursor - grid.map_origin).into();
 
     let Some(region) = projection.world.regions.iter().find(|r| r.id == region_id) else {
         st.clear();
@@ -114,34 +91,34 @@ pub fn region_adjust_input(
     if region.map != map || region.polygon.len() < 6 {
         return;
     }
-    let region_name = region.name.clone();
     let stored_polygon = region.polygon.clone();
+    let region_name = region.name.clone();
 
-    // 拖动中的预览多边形（拖动时优先；未拖动用落盘轮廓）。
-    let active_poly = st
-        .preview_polygon
-        .clone()
-        .unwrap_or_else(|| stored_polygon.clone());
-
-    // ── 按下：命中顶点手柄（0.6 格内就近） ──
+    // ── 按下：冻结当前缩放的锚点集，命中就近锚点 ──
     if buttons.just_pressed(MouseButton::Left) {
-        let near = 0.6 * grid.cell_size;
+        let spacing = wv_render::biome_boundary::anchor_spacing(view.scale, grid.cell_size, 24.0);
+        let poly_pairs: Vec<(f32, f32)> = stored_polygon
+            .chunks_exact(2)
+            .map(|c| (c[0], c[1]))
+            .collect();
+        let anchors = wv_render::biome_boundary::decimate_poly(&poly_pairs, spacing);
+        let near = spacing * 0.35;
         let mut best: Option<(usize, f32)> = None;
-        for (i, chunk) in active_poly.chunks_exact(2).enumerate() {
-            let d = dist_to_segment(local, (chunk[0], chunk[1]), (chunk[0], chunk[1]));
+        for (i, a) in anchors.iter().enumerate() {
+            let d = dist_to_segment(local, *a, *a);
             if d <= near && best.map(|(_, bd)| d < bd).unwrap_or(true) {
                 best = Some((i, d));
             }
         }
-        if let Some((vi, _)) = best {
-            st.drag_vertex = Some(vi);
+        if best.is_some() {
+            st.preview_polygon = Some(anchors.iter().flat_map(|p| [p.0, p.1]).collect());
+            st.drag_vertex = best.map(|(i, _)| i);
             st.press_world = Some(cursor);
-            st.preview_polygon = Some(active_poly);
         }
         return;
     }
 
-    // ── 拖动中：顶点吸附格点 ──
+    // ── 拖动中：锚点吸附格点 ──
     if buttons.pressed(MouseButton::Left) {
         let Some(vi) = st.drag_vertex else {
             return;
@@ -170,8 +147,7 @@ pub fn region_adjust_input(
         };
         st.drag_vertex = None;
         st.press_world = None;
-        // 顶点数不变（拖拽不改形状复杂度），且与落盘轮廓不同才提交。
-        if preview == stored_polygon {
+        if preview == stored_polygon || preview.len() < 6 {
             return;
         }
         crate::edit::region_panel_actions::update_region_now(
@@ -179,7 +155,7 @@ pub fn region_adjust_input(
             &mut edit,
             &view,
             region_id,
-            region_name.clone(),
+            region_name,
             preview,
         );
     }
