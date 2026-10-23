@@ -958,6 +958,8 @@ pub enum I18nKey {
     CmdSelectBrushToolErase,
     /// 「显示参照网格」（地图工具条瓷砖同源）
     CmdToggleGrid,
+    /// 「显示地形场渲染（GPU）」（ADR-0053 D1 回退开关，Phase 1 接线）
+    CmdToggleFieldRender,
     /// 「钻回世界地图」
     CmdDrillToRoot,
     /// 「钻回上一级」
@@ -1176,7 +1178,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 461] = [
+    pub const ALL: [I18nKey; 462] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1596,6 +1598,7 @@ impl I18nKey {
         I18nKey::CmdSelectBrushToolRiver,
         I18nKey::CmdSelectBrushToolErase,
         I18nKey::CmdToggleGrid,
+        I18nKey::CmdToggleFieldRender,
         I18nKey::CmdDrillToRoot,
         I18nKey::CmdDrillUp,
         // CLI（38）

@@ -40,6 +40,17 @@ pub struct TerrainTexture {
     /// 但由 [`crate::terrain_chunks::sync_terrain_chunks`] 消费清零。
     /// 拆分原因：system 链上 flush 先于 chunks 跑，`dirty` 到 chunks 时已是 `None`。
     pub chunks_dirty: Option<[u32; 4]>,
+    /// **场渲染（ADR-0053）专用的脏矩形副本**（逻辑格，半开）。
+    ///
+    /// 与 `chunks_dirty` 同一个理由拆出来：场渲染的 `sync_terrain_field` 排在
+    /// `sync_terrain_chunks` **之后**（它要读「帧末还活着的 chunk 实体数」），
+    /// 那时 `chunks_dirty` 已被消费成 `None`。若让场渲染去抢那个旗标，就会
+    /// 把 chunk 路径的增量刷新饿死（两条底图通路必须各自拿到完整信号）。
+    ///
+    /// 消费方：[`Self::take_field_dirty`]（由 `sync_terrain_field` 调用）。
+    /// `None` 的语义是「这一帧没有可信的脏区」——场渲染此时**必须**走全量
+    /// 重打（例如载图 / 撤销全表），不许猜一个矩形去补丁。
+    pub field_dirty: Option<[u32; 4]>,
     /// 当前纹理内容所用的视图模式。
     ///
     /// **仅供「模式是否真的变了」的比较**（基线 §2.11：不要每帧重建整图）。
@@ -65,12 +76,23 @@ impl TerrainTexture {
         let full = [0, 0, self.size, self.height];
         self.dirty = Some(full);
         self.chunks_dirty = Some(full);
+        // 全图脏 = 「没有可信的局部矩形」，场渲染据此走全量重打。
+        self.field_dirty = Some(full);
     }
 
     /// 标记一个矩形为脏，与已有脏区取并集（增量重传）。单位：逻辑格。
     pub fn mark_dirty(&mut self, rect: [u32; 4]) {
         self.dirty = rect_union(self.dirty, rect);
         self.chunks_dirty = rect_union(self.chunks_dirty, rect);
+        self.field_dirty = rect_union(self.field_dirty, rect);
+    }
+
+    /// 取走场渲染的脏矩形（**消费语义**：取走后置 `None`）。
+    ///
+    /// 场渲染用它决定「能不能只补一块」。必须消费而不是读：留着上一笔的
+    /// 矩形会让下一笔漏补——脏区是**增量信号**，重复消费/漏消费都错。
+    pub fn take_field_dirty(&mut self) -> Option<[u32; 4]> {
+        self.field_dirty.take()
     }
 }
 

@@ -820,4 +820,41 @@ T37b 的门控只在 `px_per_cell < 1` 才全退，**1.0–3.0 这段是盲区**
 
 ---
 
+## 十六、追记十二：主 App 接线（Phase 1）（2026-10-24）
+
+> 按 AGENTS §6.3「追写不改机制」追加。§一–§十五正文一字未改（本节是唯一新增）。
+
+**状态**：已接线、默认关、可运行时切换；**无实机截图证据**（本机无窗口/GPU 呈现）。
+
+- **开关**：`ViewState::field_render`（默认 `false`，会话态不落盘），命令面板
+  「视图」组「显示地形场渲染（GPU）」。ADR-0053 §3.4 的「一行回退保险」到位：
+  关 = 完整回到 CPU 整图烘焙 + 分块路径。
+- **桥接**：`wv-render::cellmap_bridge::sync_terrain_field`（排在
+  `sync_terrain_chunks` **之后**：计数器要报帧末块数），`sync_terrain_chunks`
+  开头一条早退（`field_render` 开着 → 整层 despawn + return，回退路径本身零改动）。
+- **键**：`(来源图, terrain_hash, 分支, palette_id)`——**不含任何连续量**，
+  缩放只进 uniform（重蹈网格 `scale_bits` / 锚点 `spacing` 覆辙的防线）。
+- **分支**：`ViewMode::Topographic → BiomeRaw`（ADR-0051 §5），其余 `Themed`。
+- **UV 方向（追记九 的高危点）**：主 App 的「数据行 0 = 世界**南**」（ADR-0034 D2 +
+  `cell_pick`），demo 的「行 0 = 世界**北**」。shader 的 `pos = in.uv × grid` 直接
+  吃 UV，故主 App 的 quad **必须 V 翻转**（与 chunk 路径的 `uv_transform` 同源）；
+  照抄 demo 的默认 UV 会得到整幅**上下镜像**，而程序化地形近似对称看不出——
+  与追记九那次 180° 同类。落地方式：显式顶点 UV（自定义 `Material2d` 没有
+  `uv_transform` uniform），见 `field_quad_mesh()` 的注释与判据链。
+- **重打判据**：「没有 quad ∨ 内容指纹变了 ∨ **有编辑信号**（`WorldProjection` /
+  `TerrainTexture` 变更戳）」。第三条是刻意的冗余：编辑信号只说明世界被动过，
+  指纹可能恰好相同（同值写入 / 选区）；漏打是「画了不显示」且无报错，多打是
+  一次毫秒级卡顿——两个方向代价不对称。换主题色板 / 切模式不碰 `WorldProjection`
+  ⇒ 纯换色走快路径、不重打。
+- **1024² 重打实测**：见回传（`FieldPack::from_terrain` + `build_material`，
+  本机 `[profile.dev]` 的 `wv-world-cell-map` 已是 opt-level 3，与 release 同档）。
+  口径说明：不含 GPU 上传（无头环境量不到），只含 CPU 打包 + 建资产。
+- **已知边界（本阶段不做）**：小地图仍消费 CPU 烘焙纹理（`rebuild_texture_on_mode_change`
+  继续跑）；T35 海面仍用 `TopographicPalette` 四色；T25/T26 折线未接（走
+  `build_material` 的空距离纹理）；`LayerFrame.terrain.opacity` 未接（材质无 alpha）。
+- **留待真人目检**：180° / 镜像朝向、近观是否还糊、远观噪点、显存实际占用——
+  本轮只有几何口径的论证，没有一张实机截图。
+
+---
+
 （完）

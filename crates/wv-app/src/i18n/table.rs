@@ -511,6 +511,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CmdSelectBrushToolRiver => "笔刷：河流",
         I18nKey::CmdSelectBrushToolErase => "笔刷：橡皮",
         I18nKey::CmdToggleGrid => "显示参照网格",
+        I18nKey::CmdToggleFieldRender => "显示地形场渲染（GPU）",
         I18nKey::CmdDrillToRoot => "钻回世界地图",
         I18nKey::CmdDrillUp => "钻回上一级",
 
@@ -1124,6 +1125,7 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CmdSelectBrushToolRiver => "Brush: River",
         I18nKey::CmdSelectBrushToolErase => "Brush: Eraser",
         I18nKey::CmdToggleGrid => "Toggle reference grid",
+        I18nKey::CmdToggleFieldRender => "Toggle GPU terrain field",
         I18nKey::CmdDrillToRoot => "Drill back to world map",
         I18nKey::CmdDrillUp => "Drill back one level",
 

@@ -118,6 +118,11 @@ pub enum CommandId {
     SelectBrushTool(u8),
     /// 显示 / 隐藏参照网格（`ViewState.grid_lines`，地图工具条瓷砖同源）。
     ToggleGrid,
+    /// 切换**地形场渲染**（`ViewState.field_render`，ADR-0053 D1 的回退开关）。
+    ///
+    /// 一条命令两条路径：开 = GPU 逐像素求值（分辨率无上限），关 = 现行 CPU
+    /// 整图烘焙 + 分块。运行时可翻、当帧生效（不是重建 App 的启动项）。
+    ToggleFieldRender,
     /// 显隐某个面板。
     TogglePanel(Panel),
     /// 重置所有面板位置。
@@ -360,6 +365,14 @@ impl CommandRegistry {
             CommandId::ToggleGrid,
             CommandGroup::View,
             I18nKey::CmdToggleGrid,
+            None,
+        );
+        // ADR-0053 D1 回退开关（Phase 1 接线 2026-10-24）：紧挨参照网格——
+        // 两者都是「底图怎么画」的会话级开关，语义同一族。
+        push(
+            CommandId::ToggleFieldRender,
+            CommandGroup::View,
+            I18nKey::CmdToggleFieldRender,
             None,
         );
         push(

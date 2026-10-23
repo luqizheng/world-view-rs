@@ -503,8 +503,6 @@ pub fn sync_vector_layers(
     editor: Res<crate::streets::StreetEditorState>,
     mut layer: ResMut<VectorLayerEntities>,
 ) {
-    let __t = std::time::Instant::now();
-    let __t = std::time::Instant::now();
     let road_materials_changed = ensure_road_materials(
         &mut materials,
         view.mode,
@@ -1894,6 +1892,7 @@ mod tests {
                 res: 1,
                 dirty: None,
                 chunks_dirty: None,
+                field_dirty: None,
                 last_mode: None,
                 last_soften: false,
                 last_theme_id: "",
@@ -1981,6 +1980,7 @@ mod tests {
                 res: 1,
                 dirty: None,
                 chunks_dirty: None,
+                field_dirty: None,
                 last_mode: None,
                 last_soften: false,
                 last_theme_id: "",
@@ -2125,6 +2125,7 @@ mod tests {
                 res: 1,
                 dirty: None,
                 chunks_dirty: None,
+                field_dirty: None,
                 last_mode: None,
                 last_soften: false,
                 last_theme_id: "",

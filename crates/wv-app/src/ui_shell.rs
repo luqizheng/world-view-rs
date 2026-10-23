@@ -1419,6 +1419,11 @@ fn apply_pending_commands(
             }
         }
         CommandId::ToggleGrid => view.grid_lines = !view.grid_lines,
+        // 地形场渲染（ADR-0053 D1，Phase 1 接线）：只翻旗标，接线全在
+        // `wv_render::cellmap_bridge::sync_terrain_field`——命令层不认识材质。
+        // 当帧生效：场系统排在 Update 主链的 chunk 层之前，同一帧就完成
+        // 「建 quad / 拆 quad + 块 spawn / despawn」的交接。
+        CommandId::ToggleFieldRender => view.field_render = !view.field_render,
         // 地图工具条单选工具（2026-10-19）：**互斥的唯一实现**。
         // 工具条瓷砖与 V/H/B/E/L/M/P 快捷键都排到这里，先关掉所有工具再开目标，
         // 保证「左键」永远只有一个消费者（相机平移 / 选区 / 笔刷 / 测量 / 街道）。
@@ -2086,6 +2091,7 @@ mod tests {
             res: 1,
             dirty: None,
             chunks_dirty: None,
+            field_dirty: None,
             last_mode: None,
             last_soften: false,
             last_theme_id: wv_render::theme::theme_pack::builtin::DEFAULT.id,
@@ -2266,7 +2272,8 @@ mod tests {
     #[test]
     fn clear_measurements_command_empties_the_current_map_overlay() {
         use bevy::ecs::system::RunSystemOnce;
-        let mut world = dispatcher_world(Some("D:/some/project"), false, CommandId::ClearMeasurements);
+        let mut world =
+            dispatcher_world(Some("D:/some/project"), false, CommandId::ClearMeasurements);
         let map = wv_core::Id::new_unchecked("map_root");
         // 预置「一张图 + 两条测量」，并把 drill 的当前图指向它。
         world.resource_scope::<WorldProjection, _>(|w, mut projection| {
@@ -2287,7 +2294,8 @@ mod tests {
                     )
                     .expect("预置测量");
             }
-            w.resource_mut::<DrillState>().ensure_root(&projection.world);
+            w.resource_mut::<DrillState>()
+                .ensure_root(&projection.world);
             let cur = w
                 .resource::<DrillState>()
                 .current_node(&projection.world)
@@ -2394,6 +2402,7 @@ mod tests {
             res: 1,
             dirty: None,
             chunks_dirty: None,
+            field_dirty: None,
             last_mode: None,
             last_soften: false,
             last_theme_id: wv_render::theme::theme_pack::builtin::DEFAULT.id,

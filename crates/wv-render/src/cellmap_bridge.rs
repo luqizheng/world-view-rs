@@ -43,6 +43,15 @@ use crate::layer_frame::LayerFrame;
 use crate::recipe::{PassId, RenderRecipe};
 use crate::state::{BrushState, DrillState, ViewState, WorldProjection};
 
+// ── ADR-0053：GPU 场渲染（`sync_terrain_field`，Phase 1 接线 2026-10-24）──
+//
+// **逐条列出而不是 glob**：`field` 与 `terrain_chunks` 各自导出一个 `TERRAIN_Z`
+// （`field::paper::TERRAIN_Z` = 纸面层 Z，与本层无关），glob 会把名字撞在一起。
+use wv_world_cell_map::terrain_view::field::{
+    build_material, default_params, patch_material_images, set_coast_encoding, warp_amp, CellRect,
+    FieldPack, FieldPalette, TerrainFieldMaterial, ViewBranch,
+};
+
 /// `ViewMode → ShadeMode` 唯一映射点。
 pub fn shade_mode_of(mode: crate::state::ViewMode) -> ShadeMode {
     match mode {
@@ -448,7 +457,7 @@ pub fn sync_isoline_overlay(
             treatment.river_centerline,
             treatment.ink_sublinear,
         ],
-        tol_q: tol_quantum(view.scale),
+        tol_bucket: dp_tol_bucket(view.scale),
         nation,
     };
     let structural_same = overlay.key.as_ref() == Some(&key);
@@ -487,7 +496,9 @@ pub fn sync_isoline_overlay(
     let w = data.width;
     let h = data.height;
     let cell = |x: u32, y: u32| &data.cells[(y * w + x) as usize];
-    let tol = dp_tol_continuous(view.scale);
+    // 容差取**档中心**（不用连续式）：否则键说「同档」而容差随 scale 漂移，
+    // 几何变了却不重建（2026-10-23 D 项修复的配套约束）。
+    let tol = dp_tol_for_bucket(key.tol_bucket);
     // 装饰旗标（ADR-0023 D4）：从当前主题包派生。内置两包都是 HAND_DRAWN（全
     // `true`）——所有 gate 分支在 `true` 时走与历史恒开**逐位相同**的路径。
     let treatment = conv_treatment(&view.active_theme.treatment);
@@ -509,7 +520,7 @@ pub fn sync_isoline_overlay(
     let kind_half = thin_half.max(grid.cell_size * KIND_STROKE_CELL);
 
     // ---- 提取 + 装配 + Chaikin 缓存（Task 3）----
-    // 这些与缩放无关；只有 DP 容差 / Nation 档消费它们。缓存输入不含 tol_q：
+    // 这些与缩放无关；只有 DP 容差 / Nation 档消费它们。缓存输入不含 tol_bucket：
     // 缩放只在缓存上重跑 DP（毫秒级），笔刷改地形 / 切图 / 改 treatment 才重建链。
     let data_hash = terrain_data_hash(data);
     let chain_inputs = ChainCacheInputs {
@@ -924,6 +935,25 @@ pub fn sync_terrain_chunks(
     mut chunk_entities: ResMut<TerrainChunkEntities>,
     mut q_chunks: Query<(&mut TerrainChunk, &Mesh2d)>,
 ) {
+    // ── ADR-0053 回退开关（2026-10-24 Phase 1 接线）────────────────────────
+    // 场渲染开着 = 底图由 `sync_terrain_field` 的 GPU quad 负责。两条路径并存，
+    // 但**同时只能有一条上屏**：整图烘焙纹理与场 quad 叠在一起就是双重底图。
+    // 故这里整层退场（回退路径本身一行不动，见下方全部逻辑）。
+    //
+    // `chunks_dirty` 照旧在这里消费清零（语义不变）：`sync_terrain_field` 排在
+    // **本系统之后**，它用的编辑信号是变更戳而不是这个旗标，故不需要抢。
+    // 关回场时块按最新像素 spawn（与下方 `!visible` 分支同口径）。
+    if view.field_render {
+        let entities: Vec<Entity> = chunk_entities.by_coord.drain().map(|(_, e)| e).collect();
+        for entity in entities {
+            despawn_chunk(&mut commands, entity, &q_chunks);
+        }
+        if tex.chunks_dirty.is_some() {
+            tex.chunks_dirty = None;
+        }
+        return;
+    }
+
     // 关闭图层（YAML 声明 ∨ 会话开关，ADR-0013）→ 全部 despawn；
     // 丢掉待消费脏矩形（重开时 spawn 会拷最新像素）。
     if !layers.terrain.visible {
@@ -1180,7 +1210,535 @@ pub fn sync_terrain_chunks(
     }
 }
 
+// ══════ ADR-0053 :: sync_terrain_field（GPU 逐像素底图，Phase 1 接线）══════
+//
+// 管线本体（数据打包 / 材质 / WGSL 逐像素求值）在
+// `wv-world-cell-map::terrain_view::field`，且已过截图验收；本段只做**主 App
+// 接线**——ADR-0053 §7 的 Phase 1「只接线、不加特性」。
+//
+// 唯一的接线示范是 `wv-world-cell-map/examples/terrain_field_demo.rs`；
+// 本段与它的差别只有三处，都是「主 App 的数据约定与 demo 不同」造成的：
+//
+// | 项 | demo | 主 App（本段） |
+// |---|---|---|
+// | 地形数据 | 现造的合成 / fbm 512² | `active_terrain` 的真实栅格 |
+// | 格 → 世界 | 1 世界单位/格，quad 居中在原点 | `grid.cell_size` × `grid.raster_origin` |
+// | UV 方向 | 默认 quad（行 0 = 世界 **上**） | **V 翻转**（行 0 = 世界 **下**，见 [`field_quad_mesh`]） |
+//
+// ## 已知边界（本阶段刻意不做，别顺手补）
+// - **小地图仍消费 CPU 烘焙纹理**：`rebuild_texture_on_mode_change` 的合成
+//   照常跑（异步、不挡帧）。低分辨率 minimap 的场路径是后续项。
+// - **T35 海面未接 SeaRecipe 全套**：P1 用 `TopographicPalette` 四色（照搬现状）。
+// - **T25/T26 折线（河 / 路）未接**：走 `build_material`（空折线纹理，解码后
+//   距离饱和 → shader 不画线）。接 `build_material_with_lines` 属下一轮。
+// - **图层 opacity 未接**：`TerrainFieldMaterial` 没有 alpha 通道，Phase 1 只跟
+//   `LayerFrame.terrain.visible` 与 `z_offset`。
+
+/// 场渲染的缓存键——**绝不许含任何连续量**。
+///
+/// ## 为什么键里不能有 scale / `px_per_cell`
+///
+/// 本项目已经在同一口坑里栽过**两次**：网格的 `GridKey.scale_bits`、锚点的连续
+/// `spacing`。smooth zoom 每帧 ×1.02，键每帧都变 = 每帧重建整层（实测 2050 条
+/// 网格链 + 全量网格上传）。
+///
+/// 缩放对场只影响 uniform（`shape.x` = `px_per_cell`、`pad0.x` = 域扭曲幅度），
+/// **一次 ping-pong 都不该发生**。故键里只有「离散的结构量 + 内容指纹」。
+#[derive(Clone, PartialEq, Eq)]
+pub struct FieldKey {
+    /// 栅格来源图（`active_terrain` 给出的图，沿 `parent` 向上继承）。
+    pub map: Option<wv_core::Id>,
+    /// 地形内容指纹（[`terrain_data_hash`]，与等值线 / 装饰缓存同源）。
+    /// 只有**编辑提交**（或换图）才会变。
+    pub terrain_hash: u64,
+    /// 取色分支：`Topographic → BiomeRaw`（ADR-0051 §5），其余 → `Themed`。
+    pub branch: ViewBranch,
+    /// 主题色板 id。换主题只换 uniform，**不必重打数据纹理**。
+    pub palette_id: &'static str,
+}
+
+/// 场渲染的资产与缓存键（单 quad，最多一份材质）。
+///
+/// 资产句柄集中在此，是为了「关掉 → 全部 `Assets::remove`」能一处收口
+/// ——开关连续 20 轮不许有资产累积（验收口径 2）。
+#[derive(Resource, Default)]
+pub struct TerrainFieldRender {
+    /// 场 quad 实体（`None` = 未建 / 已回收）。
+    pub quad: Option<Entity>,
+    /// quad 的 mesh 句柄（单位方片，跨缩放恒定，建一次终身复用）。
+    pub mesh: Option<Handle<Mesh>>,
+    /// 当前材质句柄（重建时整份替换，旧的走 `remove`）。
+    pub material: Option<Handle<TerrainFieldMaterial>>,
+    /// 上次构建用的键（`None` = 尚未构建）。
+    pub key: Option<FieldKey>,
+    /// 上次写进 uniform 的 `px_per_cell`——用来判断「要不要重传 uniform」。
+    /// **只做比较、不进 [`FieldKey`]**。
+    last_ppc: Option<f32>,
+    /// 上一份**打包结果**（三张数据纹理的字节缓冲）——增量补丁的唯一数据源。
+    ///
+    /// ## 为什么渲染层要留这 12 MB
+    ///
+    /// 留的是「上次上传给 GPU 的那份字节」，用途只有一个：给一次局部编辑
+    /// （brush / 单格 / 群系分界线）**补几百个 texel**，而不是把整张图按
+    /// `FieldPack::from_terrain` 重打一遍（1024² 实测 48.4 ms，其中 ~40 ms 是
+    /// 海岸 EDT）。没有它，增量补丁无从比对「补哪些格」。
+    ///
+    /// 它**不是**世界状态：权威仍是磁盘 YAML，`wv-app` 的 `World` 是工作副本，
+    /// 这里只是 GPU 上那张纹理的 CPU 影子副本（关掉场渲染即随
+    /// [`teardown_field`] 一起释放）。
+    ///
+    /// 换图 / 幅面变化 / 编码变化时**必须整份替换**（见 `sync_terrain_field`
+    /// 的「可增量」判据）——拿上一张图的字节去补这一张，是错位的静默画错。
+    pack: Option<wv_world_cell_map::terrain_view::field::FieldPack>,
+}
+
+/// 场渲染的计数器（QA 断言口径：跨机器同值、只增不减）。
+///
+/// 三个字段对应验收 1–3：
+/// - `field_repacks`：数据纹理重打次数。稳态 60 帧必须 **Δ == 0**；笔刷提交
+///   一次必须**恰好 +1**（指纹 + 编辑信号共同判定，纯换色不重打）。
+/// - `field_quads`：场 quad 实体数（开 1 / 关 0）。
+/// - `field_render_on_chunk_entities`：**帧末**仍活着的 chunk 实体数
+///   （场开着时必须是 0——两条路径不许同时上屏）。本系统排在
+///   `sync_terrain_chunks` 之后，故读到的是本帧 spawn / despawn 之后的真值。
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct FieldRenderStats {
+    /// 数据纹理**全量重打**次数（累计）。
+    pub field_repacks: u64,
+    /// 数据纹理**增量补丁**次数（累计）。
+    ///
+    /// 与 `field_repacks` 是**互斥**的两条路径：一次编辑要么重打要么补丁，
+    /// 不会同时 +1（补丁失败会退回重打，那时只有 `field_repacks` 动）。
+    /// 验收口径：一笔 brush 必须 **`field_patches` +1 且 `field_repacks` 不变**；
+    /// 换图 / 载档 / `mark_all_dirty` 必须 `field_repacks` +1。
+    pub field_patches: u64,
+    /// 场 quad 实体数（0 或 1）。
+    pub field_quads: usize,
+    /// 场开着时残留的 chunk 实体数（应为 0）。
+    pub field_render_on_chunk_entities: usize,
+    /// 最近一次重打的**墙钟毫秒**（`Instant` 实测，含打包 + 纹理建资产）。
+    pub last_repack_ms: f32,
+    /// 最近一次补丁的**墙钟毫秒**（含窗口 EDT + 三张纹理的行段拷贝）。
+    pub last_patch_ms: f32,
+    /// 最近一次重打上传的字节数（三张数据纹理 + 折线通道）。
+    pub last_repack_bytes: usize,
+}
+
+/// 场 quad 的 mesh：**单位方片 + 显式 V 翻转的 UV**。
+///
+/// ## 为什么不能照抄 demo 的默认 UV（本项目的高危点）
+///
+/// 坑不在「谁对谁错」，在**两套数据约定不同**：
+///
+/// | | 数据行 0 在哪 | 依据 |
+/// |---|---|---|
+/// | demo | 世界 **+y**（北 / 上） | demo 自己按 `g/2 − cy` 换算格→世界 |
+/// | 主 App | 世界 **y=0**（南 / 下） | ADR-0034 D2「DEM 行 0 = 最南行」；`cell_pick` / `TerrainGrid::sample_world` 的 `gy = (y − origin)/cell_size` |
+///
+/// 而 shader 的约定是 `pos = in.uv × grid`，`pos.y` **就是数据行号**（见
+/// `terrain_field.wgsl` 顶部「实测探针」表：`world.y ↑ ⇒ in.uv.y ↓`）。
+/// 于是：
+///
+/// - demo 的做法（默认 quad）→ 行 0 落在世界**上**，对主 App 是**整幅上下镜像**；
+/// - chunk 路径（回退路径）用 `ColorMaterial.uv_transform` 做 V 翻转，把行 0
+///   落到世界**下**——`sync_terrain_chunks` 里那段「V 翻转」注释就是这件事。
+///
+/// 自定义 `Material2d` **没有** `uv_transform` 这个 uniform（那是 `ColorMaterial`
+/// 的字段），故翻转只能落在**顶点属性**上。`in.uv.y` 随世界 y 增大而增大 ⇒ 行 0
+/// 落在世界下，与 chunk 路径、笔刷落点、等值线描边同源。
+///
+/// 180° 旋转（而不是镜像）是这条路线历史上真实发生过的缺陷（SPEC 追记九：
+/// `uv0 = (1−u, 1−v)` 造成整幅旋转 180°，因程序化地形近似对称，P1–P4 全部
+/// 截图验收都漏过）——故这里把 UV 写成**显式顶点属性**，不靠「默认值 + 猜」。
+fn field_quad_mesh() -> Mesh {
+    let mut mesh = Mesh::new(
+        bevy::mesh::PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
+    );
+    // 顶点顺序与 Bevy `Rectangle` 一致（左下 → 右下 → 右上 → 左上，双三角）：
+    // 世界 y 向上为正，故 `y = −0.5` 是世界**下**边。
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        vec![
+            [-0.5, -0.5, 0.0],
+            [0.5, -0.5, 0.0],
+            [0.5, 0.5, 0.0],
+            [-0.5, 0.5, 0.0],
+        ],
+    );
+    // uv.y = 0 在世界**下**边 ⇒ 数据行 0 落在世界下（见上方长注释）。
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_UV_0,
+        vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+    );
+    mesh.insert_indices(bevy::mesh::Indices::U32(vec![0, 1, 2, 0, 2, 3]));
+    mesh
+}
+
+/// 回收场 quad 的 mesh 资产（调用前实体必须已 despawn）。
+fn reclaim_field_mesh(commands: &mut Commands, mesh: Handle<Mesh>) {
+    commands.queue(move |world: &mut World| {
+        if let Some(mut assets) = world.get_resource_mut::<Assets<Mesh>>() {
+            assets.remove(&mesh);
+        }
+    });
+}
+
+/// 回收场材质**及其四张数据纹理**。
+///
+/// 材质句柄只是入口：真正的显存是 `height/coast/attr/line_dash` 四张图
+/// （1024² 图 = 8 MB）。只 remove 材质会让纹理永远留在 `Assets<Image>` 里
+/// ——开关 20 轮 = 160 MB。故先把句柄抄出来，再在同一个命令里一并 remove。
+fn reclaim_field_material(
+    commands: &mut Commands,
+    material: Handle<TerrainFieldMaterial>,
+    materials: &Assets<TerrainFieldMaterial>,
+) {
+    let mut textures: [Option<Handle<Image>>; 4] = [const { None }; 4];
+    if let Some(mat) = materials.get(&material) {
+        textures = [
+            Some(mat.height.clone()),
+            Some(mat.coast.clone()),
+            Some(mat.attr.clone()),
+            Some(mat.line_dash.clone()),
+        ];
+    }
+    commands.queue(move |world: &mut World| {
+        if let Some(mut assets) = world.get_resource_mut::<Assets<TerrainFieldMaterial>>() {
+            assets.remove(&material);
+        }
+        if let Some(mut images) = world.get_resource_mut::<Assets<Image>>() {
+            for texture in textures.into_iter().flatten() {
+                images.remove(&texture);
+            }
+        }
+    });
+}
+
+/// 场路径退场：quad despawn + mesh / 材质 / 数据纹理全部回收 + 清键。
+///
+/// 三条退场理由共用这一段（用户关开关 / 图层被隐藏 / 世界还没有任何栅格地形），
+/// 保证「退场」在任何路径下都是**同一件事**（否则资产会从某一条路漏出去）。
+fn teardown_field(
+    commands: &mut Commands,
+    field: &mut TerrainFieldRender,
+    materials: &Assets<TerrainFieldMaterial>,
+    stats: &mut FieldRenderStats,
+) {
+    if let Some(entity) = field.quad.take() {
+        commands.entity(entity).despawn();
+    }
+    if let Some(mesh) = field.mesh.take() {
+        reclaim_field_mesh(commands, mesh);
+    }
+    if let Some(material) = field.material.take() {
+        reclaim_field_material(commands, material, materials);
+    }
+    field.key = None;
+    field.last_ppc = None;
+    // 12 MB 的 CPU 影子副本随场一起释放：关掉场还攥着上一张图的字节，
+    // 既白占内存，也会让「下次开场的第一次补丁」用上过期数据。
+    field.pack = None;
+    stats.field_quads = 0;
+}
+
+/// 主 App 的场渲染同步（ADR-0053 D1，Phase 1 接线 2026-10-24）。
+///
+/// ## 职责
+/// 把「当前活动地形 + 视图状态」翻译成一张场 quad：数据变了重打纹理，视图变了
+/// 只改 uniform。**不自己做任何画法决策**——颜色公式全在 WGSL 与 `FieldParams`。
+///
+/// ## 关键流程
+/// 1. gate：`view.field_render && layers.terrain.visible`，不满足 → [`teardown_field`]；
+/// 2. 取 `active_terrain`（沿 `parent` 向上继承，与 chunk 路径同源）；
+/// 3. 算 [`FieldKey`]：结构量直接读，内容指纹**只在可能有变化的帧**算
+///    （`chunks_dirty` 待消费 / 结构变了 / 首次）——与 `sync_isoline_overlay`
+///    同款纪律，稳态零成本；
+/// 4. 键的内容部分变了 → 重打 [`FieldPack`] + 换材质（`Instant` 计量毫秒）；
+///    只有分支 / 色板变了 → 只重写 uniform；
+/// 5. quad 的变换每帧校正（`raster_origin` / `cell_size` 随图变）。
+///
+/// ## 对外接口
+/// - 资源 [`TerrainFieldRender`]（资产与键）、[`FieldRenderStats`]（计数器）；
+/// - 读取 `Res<TerrainChunkEntities>`：只在计数器里反映「场开着时还有多少块」。
+///
+/// ## 为什么排在 `sync_terrain_chunks` **之后**
+///
+/// 1. **计数器口径**：`field_render_on_chunk_entities` 必须等于**帧末**活着的
+///    chunk 数（QA 把它与 `TerrainChunk` 组件数逐帧比对，两个口径不许互相否定）。
+///    块的 despawn / spawn 都由 chunk 系统在**本帧**完成，故本系统读到的
+///    `TerrainChunkEntities` 才是帧末真值。排在前面读到的是上一帧的残留。
+/// 2. **不抢信号**：编辑信号取自**变更戳**（`WorldProjection` / `TerrainTexture`
+///    的 `is_changed`），不依赖 `tex.chunks_dirty` 的消费顺序——那个旗标由
+///    chunk 系统照旧消费清零，本系统**一行都不碰**。
+/// 3. **独占性不靠顺序**：场开着时 chunk 系统自己早退（回退开关在它函数开头），
+///    故「两条路径同帧只活一条」与谁先谁后无关。
+#[allow(clippy::too_many_arguments)]
+pub fn sync_terrain_field(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<TerrainFieldMaterial>>,
+    mut tex: ResMut<TerrainTexture>,
+    grid: Res<GridConfig>,
+    view: Res<ViewState>,
+    layers: Res<LayerFrame>,
+    projection: Res<WorldProjection>,
+    drill: Res<DrillState>,
+    chunk_entities: Res<TerrainChunkEntities>,
+    mut field: ResMut<TerrainFieldRender>,
+    mut stats: ResMut<FieldRenderStats>,
+    mut q_quads: Query<&mut Transform>,
+) {
+    // 帧末块数：本系统排在 `sync_terrain_chunks` 之后，块的 spawn / despawn
+    // 都已在**本帧**完成（`by_coord` 是立即写，实体是延迟命令但同一帧落地），
+    // 故这里读到的就是「这一帧结束时还活着几块」。
+    stats.field_render_on_chunk_entities = chunk_entities.len();
+
+    if !(view.field_render && layers.terrain.visible) {
+        teardown_field(&mut commands, &mut field, &materials, &mut stats);
+        return;
+    }
+
+    // 世界还没有任何带栅格的地形（启动早期 / 空世界）：无数据可求值，退场。
+    let Some((source, data)) = active_terrain(&projection.world, drill.current()) else {
+        teardown_field(&mut commands, &mut field, &materials, &mut stats);
+        return;
+    };
+
+    // ── 分支：CellMap 看原始群系色（ADR-0051 §5），其余看主题色板 ──
+    let branch = if view.mode == crate::state::ViewMode::Topographic {
+        ViewBranch::BiomeRaw
+    } else {
+        ViewBranch::Themed
+    };
+    let map = Some(source.id.clone());
+    let palette_id: &'static str = view.active_theme.id;
+
+    let cached_hash = field.key.as_ref().map(|k| k.terrain_hash);
+    let structure_changed = match &field.key {
+        Some(k) => k.map != map || k.branch != branch || k.palette_id != palette_id,
+        None => true,
+    };
+    // 「可能有编辑」的变更戳：世界被改（笔刷 / 撤销 / 换图 / 载入）或纹理被写过
+    // （`flush_terrain_texture` 的 patch、整图重建）。
+    // **不用 `tex.chunks_dirty`**：本系统排在 chunk 之后，那旗标已被消费。
+    let edit_signal = projection.is_changed() || tex.is_changed();
+    // 内容指纹 1M 格 ≈3 ms：只在「可能会有变化」的帧算（与 `sync_isoline_overlay`
+    // 同款纪律），稳态零成本。
+    let needs_hash = structure_changed || edit_signal || cached_hash.is_none();
+    let terrain_hash = if needs_hash {
+        // **必须用 `pack_content_hash`（裸 height/surface/biome），不能用
+        // `terrain_data_hash`**：后者折叠的是 `display_kind` 显示槽位，而 attr
+        // 纹理 G 通道存的是裸 biome 字节——两者不同源，会漏打（详见该函数文档）。
+        wv_world_cell_map::terrain_view::field::pack_content_hash(data)
+    } else {
+        cached_hash.unwrap_or_default()
+    };
+
+    // ── 世界幅面：与 chunk 路径同一口径（`raster_origin` + 格数 × `cell_size`）──
+    let cell_size = grid.cell_size.max(1e-6);
+    let cols = data.width.max(1) as f32;
+    let rows = data.height.max(1) as f32;
+    let extent = Vec2::new(cols, rows) * cell_size;
+    let center = grid.raster_origin + extent * 0.5;
+    let z = TERRAIN_Z + layers.terrain.z_offset;
+    // 屏幕像素 / 格：`ViewState.scale` 的语义是「世界单位 / 屏幕像素」，
+    // 故 ppc = 格的世界尺寸 / scale（demo 里一格 = 1 世界单位，同一个式子）。
+    let px_per_cell = (cell_size / view.scale.max(1e-6)).max(1e-4);
+
+    let content_changed =
+        cached_hash != Some(terrain_hash) || field.key.as_ref().is_some_and(|k| k.map != map);
+
+    // 重打判据：**只看内容指纹**（没有 quad / 材质缺失 / 指纹不等）。
+    //
+    // ## 为什么 `edit_signal` 不能进这个判据（2026-10-24 修，N1）
+    // 曾经的判据是 `... || edit_signal`，理由是「多打一次只花 ~10ms，漏打是
+    // 画了不显示」——代价不对称的直觉。但它有两个实测后果：
+    // 1. **一次编辑打两遍**：`edit_signal` 含 `tex.is_changed()`，而 chunk 系统
+    //    排在本系统之后、会擦 `chunks_dirty`，那次写把 changed tick 推到下一帧
+    //    ⇒ N+1 再命中一次（QA 实测 `left: 3, right: 2`）；
+    // 2. **选区变更也重打**：`projection.is_changed()` 在「选中某个 region /
+    //    place」时同样置真 ⇒ 点一下地图就付一次全量重打（48ms @1024²）。这正是
+    //    `world_projection.rs` 里记过的「selection 写入置真 = 实机 1 FPS 根因」
+    //    的同款陷阱。
+    //
+    // 正解是**比内容，不比通知**：指纹相同 ⇒ 打包结果逐字节相同 ⇒ 重打只是把
+    // 同一份数据再上传一遍，没有任何视觉收益。`edit_signal` 现在唯一的职责是
+    // 上面的 `needs_hash`——省掉「没变时也算一遍 hash」的开销，不许自己成为
+    // 触发条件。（同类教训第三次：网格键 `scale_bits` → 锚点键连续 `spacing`
+    // → 这里的 change tick。）
+    if field.quad.is_none() || field.material.is_none() || content_changed {
+        let started = std::time::Instant::now();
+        // ── ① 先试增量补丁：局部编辑只碰脏矩形，不重打整张图 ──
+        //
+        // 可增量的三个条件（缺一就走下面的全量重打）：
+        // 1. **同一张图**：`field.key.map` 与本次 `map` 相同——拿上一张图的
+        //    字节补这一张，幅面碰巧相同就会静默画错；
+        // 2. **有可信脏区**：`tex.field_dirty` 由 `mark_dirty` / `mark_all_dirty`
+        //    写入。`None` 意味着「本帧没有局部信号」（载档 / 撤销全表 / 首次），
+        //    不许猜一个矩形；
+        // 3. **脏区不太大**：超过全场 1/4 时窗口 EDT 已接近全场规模，重建材质
+        //    反而更省，也少一条「半新半旧」的路径。
+        //
+        // `bypass_change_detection`：消费脏区**不是**「纹理内容变了」，若照常
+        // 标记 changed，下一帧 `edit_signal` 会假真一次、白算一遍内容指纹
+        // （N1 那次「一次编辑打两遍」就是同款误信号）。
+        let mut patched = false;
+        if content_changed && field.material.is_some() {
+            let same_map = field.key.as_ref().is_some_and(|k| k.map == map);
+            let rect = tex
+                .bypass_change_detection()
+                .take_field_dirty()
+                .map(CellRect::from_bounds);
+            let full_area = u64::from(data.width.max(1)) * u64::from(data.height.max(1));
+            if let (true, Some(rect)) = (same_map, rect) {
+                if !rect.is_empty() && rect.area() * 4 <= full_area {
+                    let handle = field.material.clone().expect("刚判过 is_some");
+                    if let Some(pack) = field.pack.as_mut() {
+                        if pack.patch_region(data, rect) {
+                            if let Some(material) = materials.get(&handle) {
+                                patched = patch_material_images(&mut images, material, pack, rect);
+                            }
+                        }
+                    }
+                    if patched {
+                        let ms = started.elapsed().as_secs_f32() * 1000.0;
+                        stats.field_patches += 1;
+                        stats.last_patch_ms = ms;
+                        // `last_repack_bytes` 不动：它记的是「最近一次**全量**重打的
+                        // 字节数」，混进补丁字节会让这条诊断读数自相矛盾。
+                        info!(
+                            "地形场：增量补丁 {}×{} 格 @({}, {})（{:.2} ms）",
+                            rect.width(),
+                            rect.height(),
+                            rect.x0,
+                            rect.y0,
+                            ms
+                        );
+                    }
+                }
+            }
+        }
+
+        if !patched {
+            // ── ② 全量重打：三张数据纹理全量重建（1024² = 12 MB）──
+            let pack = FieldPack::from_terrain(data);
+            let mut params = default_params(
+                [pack.width as f32, pack.height as f32],
+                px_per_cell,
+                branch,
+                FieldPalette::default(),
+            );
+            // pack 与 shader 的解码开关必须同源（唯一耦合点，见 `set_coast_encoding`）。
+            set_coast_encoding(&mut params, pack.encoding);
+            let material = materials.add(build_material(&mut images, &pack, params));
+
+            if let Some(entity) = field.quad {
+                // 实体留着，只换材质——mesh 是单位方片，跨图跨缩放恒定。
+                commands
+                    .entity(entity)
+                    .insert(MeshMaterial2d(material.clone()));
+            } else {
+                let mesh = match field.mesh.clone() {
+                    Some(mesh) => mesh,
+                    None => {
+                        let mesh = meshes.add(field_quad_mesh());
+                        field.mesh = Some(mesh.clone());
+                        mesh
+                    }
+                };
+                let entity = commands
+                    .spawn((
+                        Mesh2d(mesh),
+                        MeshMaterial2d(material.clone()),
+                        Transform::from_translation(center.extend(z))
+                            .with_scale(extent.extend(1.0)),
+                    ))
+                    .id();
+                field.quad = Some(entity);
+            }
+            if let Some(previous) = field.material.replace(material) {
+                reclaim_field_material(&mut commands, previous, &materials);
+            }
+            // 留一份 CPU 影子副本给后续的增量补丁（见 `TerrainFieldRender::pack`）。
+            field.pack = Some(pack);
+            // uniform 已随新材质写入，记下当前 ppc 免得下面再传一次。
+            field.last_ppc = Some(px_per_cell);
+
+            stats.field_repacks += 1;
+            stats.last_repack_ms = started.elapsed().as_secs_f32() * 1000.0;
+            let pack = field.pack.as_ref().expect("刚写入");
+            stats.last_repack_bytes =
+                pack.height_tex.len() + pack.coast_tex.len() + pack.attr_tex.len();
+            info!(
+                "地形场：重打 {}×{} 格（{:.2} MB，{:.2} ms）ppc={:.2} 分支={:?}",
+                pack.width,
+                pack.height,
+                stats.last_repack_bytes as f32 / (1024.0 * 1024.0),
+                stats.last_repack_ms,
+                px_per_cell,
+                branch
+            );
+        }
+    }
+
+    // ── 变换每帧校正：换图 / 换格距都会改 `raster_origin` 与幅面 ──
+    if let Some(entity) = field.quad {
+        if let Ok(mut transform) = q_quads.get_mut(entity) {
+            let translation = center.extend(z);
+            if transform.translation != translation || transform.scale.truncate() != extent {
+                transform.translation = translation;
+                transform.scale = extent.extend(1.0);
+            }
+        }
+    }
+
+    // ── uniform：缩放是**连续量**，只在这里落地（不进键）──
+    let ppc_changed = field
+        .last_ppc
+        .is_none_or(|last| (last - px_per_cell).abs() > 1e-6);
+    if (ppc_changed || structure_changed) && field.material.is_some() {
+        let handle = field.material.clone().expect("刚判过 is_some");
+        if let Some(mut material) = materials.get_mut(&handle) {
+            // shape: x = px_per_cell / y = 分支 / z = z_exag / w = grad_step（后两者
+            // 由 `default_params` 填锁值 T15/T14，缩放不动它们）。
+            material.params.shape[0] = px_per_cell;
+            material.params.shape[1] = match branch {
+                ViewBranch::BiomeRaw => 0.0,
+                ViewBranch::Themed => 1.0,
+            };
+            // T19 域扭曲幅度（P1 预留槽 `pad0.x`）：随缩放重算。
+            material.params.pad0[0] = warp_amp(px_per_cell);
+            // 主题色板（T35）：P1 用 `TopographicPalette` 四色的默认转录——
+            // 与 CPU 回退路径同色族，不同色就是回归（`FieldPalette::default` 的
+            // 文档写着逐值抄录日期与出处）。
+            let palette = FieldPalette::default();
+            let rgba = |c: LinearRgba| Vec4::new(c.red, c.green, c.blue, c.alpha);
+            material.params.theme = [
+                rgba(palette.water),
+                rgba(palette.land_low),
+                rgba(palette.land_mid),
+                rgba(palette.land_high),
+            ];
+            material.params.ink = rgba(palette.ink);
+            material.params.river_ink = rgba(palette.river_ink);
+            material.params.paper = rgba(palette.paper);
+            field.last_ppc = Some(px_per_cell);
+        }
+    }
+
+    field.key = Some(FieldKey {
+        map,
+        terrain_hash,
+        branch,
+        palette_id,
+    });
+    stats.field_quads = usize::from(field.quad.is_some());
+}
+
 // ══════ from src/region_overlay.rs :: sync_region_overlay_index ══════
+
 /// 求值区域覆盖物索引（每帧检查变更，变了才重算）。
 ///
 /// **重算条件**：世界变更 / 钻取换图 / 栅格换图 / 主题切换。
@@ -1307,29 +1865,39 @@ pub fn sync_missing_overlay_markers(
 }
 
 // ══════ from crates/wv-world-cell-map/src/terrain_view/grid_lines.rs :: sync_grid_lines ══════
-/// 同步逐格网格叠加层。
+/// 同步逐格网格叠加层（2026-10-23 重写：shader 双档网格 + 缩放零重建）。
 ///
-/// 网格是**编辑参照**，跟随 Terrain 图层的可见与透明度（ADR-0013）：
-/// 作者把地形藏了，格线还浮着只会误导「这里可以画」。
-#[allow(clippy::too_many_arguments)]
+/// ## 与原实现的三处差别（都是用户报的缺陷）
+/// 1. **不再整层退场**：旧版 `grid_line_fade(cell_size / scale) <= 0` 即 despawn，
+///    而世界级 fit（`scale 5.12`、`cell_size 4.0` → 格距 0.78px）恒为 0 →
+///    「开了开关看不到」。现在格线由 fragment shader 按密度双档绘制，
+///    CPU 侧只管「开关 + 图层 + 配方」三个 gate。
+/// 2. **缩放不重建**：旧 `GridKey` 含 `scale_bits`，滚轮每档都整层重建
+///    （2050 条链 + 全量网格上传）。新键只有 `size/height/cell_size/origin/
+///    palette`，缩放**不碰 CPU**。重建计数见 `GridLinesOverlay::rebuilds`。
+/// 3. **recipe 收口**：旧系统完全不读 `RenderRecipe`，表里 `Topographic` 行写
+///    `false` 却照样画——表在骗人。现在 gate 读 `PassId::GridLines`，
+///    且 Topographic 行已改为 `true`（CellMap 工作台要用网格定位，用户指令）。
+///
+/// 网格跟随 Terrain 图层的可见与透明度（ADR-0013）：作者把地形藏了，格线
+/// 还浮着只会误导「这里可以画」。
 pub fn sync_grid_lines(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut materials: ResMut<Assets<GridLinesMaterial>>,
     view: Res<ViewState>,
     grid: Res<GridConfig>,
     tex: Res<TerrainTexture>,
     layers: Res<LayerFrame>,
+    recipe: Res<RenderRecipe>,
     mut overlay: ResMut<GridLinesOverlay>,
 ) {
-    if !layers.terrain.visible || !grid_lines_visible(&view) {
-        overlay.despawn(&mut commands);
-        return;
-    }
-    // 远观淡出：格距缩到 2px 以下整层退场。fade 是 cell_size/scale 的纯函数，
-    // 两者都在重算键里——fade 一变必然伴随键变，不存在「键相同而 fade 变了」。
-    let fade = grid_line_fade(grid.cell_size / view.scale);
-    if fade <= 0.0 {
+    if !layers.terrain.visible
+        || !grid_lines_visible(&view)
+        || !recipe.enabled(PassId::GridLines)
+        || tex.size == 0
+        || tex.height == 0
+    {
         overlay.despawn(&mut commands);
         return;
     }
@@ -1342,61 +1910,62 @@ pub fn sync_grid_lines(
             grid.raster_origin.y.to_bits() as u64,
         ),
         palette: view.active_theme.id,
-        scale_bits: view.scale.to_bits() as u64,
     };
-    let grid_ink = conv_palette(&view.active_theme.palette).grid_line;
+    let width = tex.size as f32 * grid.cell_size;
+    let height = tex.height as f32 * grid.cell_size;
+    let ink = conv_palette(&view.active_theme.palette).grid_line;
+    // 墨色进 uniform 必须是**线性**值（sRGB 值直塞会被再亮一次，
+    // `field/material.rs` 的既有血书），算一次复用。
+    let ink_linear = ink.to_linear();
+    let base_alpha = GRID_LINE_BASE_ALPHA * layers.terrain.opacity.clamp(0.0, 1.0);
+    let z = GRID_Z + layers.terrain.z_offset;
+    // 幅面中心（矩形 mesh 以中心为锚点；shader 用世界坐标反推格坐标，
+    // 所以变换与 uniform 的 `geo.zw` 必须同为真实栅格原点）。
+    let center = Vec3::new(
+        grid.raster_origin.x + width * 0.5,
+        grid.raster_origin.y + height * 0.5,
+        z,
+    );
+
     if overlay.key.as_ref() == Some(&key) && overlay.entity.is_some() {
-        // 结构没变也可能只是图层绑定变了（作者改 opacity/z）：就地补丁。
+        // 快路径：结构性输入没变。**缩放在这里跑完就返回**——键里没有 scale，
+        // 一次 PartialEq 之后什么都不做（uniform 也不必改：线宽/格距由
+        // shader 的 fwidth 从世界坐标导数推出，与 scale 无关）。
+        overlay.refresh_ink(&mut materials, ink_linear, base_alpha);
         if layers.is_changed() {
-            if let Some(handle) = &overlay.material {
-                if let Some(mut mat) = materials.get_mut(handle) {
-                    mat.color =
-                        grid_ink.with_alpha(GRID_LINE_BASE_ALPHA * layers.terrain.opacity * fade);
-                }
-            }
             if let Some(entity) = overlay.entity {
-                commands.entity(entity).insert(Transform::from_xyz(
-                    0.0,
-                    0.0,
-                    GRID_Z + layers.terrain.z_offset,
-                ));
+                commands
+                    .entity(entity)
+                    .insert(Transform::from_translation(center));
             }
         }
         return;
     }
-    if tex.size == 0 {
-        overlay.despawn(&mut commands);
-        return;
-    }
-    // 线宽屏幕常量（乘 scale），不设世界下限——网格是编辑参照，远观淡去无妨。
-    let half_w = GRID_LINE_PX * 0.5 * view.scale;
-    let chains = grid_chains(tex.size, tex.height, half_w);
-    let Some(mesh) = build_stroke_mesh(&chains, grid.raster_origin, grid.cell_size) else {
-        // 仅 `cell_size` 退化为 0 时可达：不插空网格（bevy #24874 误报
-        // Use-after-free），退场即可——链装配是 O(size²) 便宜操作，下帧重算无妨。
-        overlay.despawn(&mut commands);
-        return;
-    };
-    let handle = meshes.add(mesh);
-    let material = overlay
-        .material
-        .get_or_insert_with(|| materials.add(ColorMaterial::from_color(grid_ink)))
-        .clone();
-    // 材质跨重建复用（get_or_insert）：重算后也要按当前绑定刷新 alpha。
-    if let Some(mut mat) = materials.get_mut(&material) {
-        mat.color = grid_ink.with_alpha(GRID_LINE_BASE_ALPHA * layers.terrain.opacity * fade);
-    }
 
+    // 结构性重建：幅面 / 格径 / 原点 / 主题变了才到这里（1024² 实测
+    // debug 0.74ms / release 0.07ms，而缩放**不再**触发它）。
+    let mesh = meshes.add(Rectangle::new(width, height));
+    let material = materials.add(GridLinesMaterial {
+        params: grid_params(grid.cell_size, grid.raster_origin, ink_linear, base_alpha),
+    });
     overlay.despawn(&mut commands);
     let entity = commands
         .spawn((
-            Mesh2d(handle.clone()),
-            MeshMaterial2d(material),
-            Transform::from_xyz(0.0, 0.0, GRID_Z + layers.terrain.z_offset),
+            Mesh2d(mesh.clone()),
+            MeshMaterial2d(material.clone()),
+            Transform::from_translation(center),
         ))
         .id();
     overlay.entity = Some(entity);
-    overlay.mesh = Some(handle);
+    overlay.mesh = Some(mesh);
+    overlay.material = Some(material);
+    overlay.ink_applied = Some([
+        ink_linear.red,
+        ink_linear.green,
+        ink_linear.blue,
+        base_alpha,
+    ]);
+    overlay.rebuilds += 1;
     overlay.key = Some(key);
 }
 
@@ -1736,6 +2305,7 @@ mod bridge_tests {
             res: 1,
             dirty: None,
             chunks_dirty: None,
+            field_dirty: None,
             last_mode: None,
             last_soften: false,
             last_theme_id: "fixture",
@@ -1764,6 +2334,7 @@ mod bridge_tests {
             res: 1,
             dirty: None,
             chunks_dirty: None,
+            field_dirty: None,
             last_mode: None,
             last_soften: false,
             last_theme_id: "fixture",
@@ -1835,6 +2406,7 @@ mod bridge_tests {
             res: 1,
             dirty: None,
             chunks_dirty: None,
+            field_dirty: None,
             last_mode: None,
             last_soften: false,
             last_theme_id: "fixture",
@@ -2027,14 +2599,232 @@ mod bridge_tests {
         }
 
         /// 远观淡出锚点：≥4px 全显、≤2px 消失、中点线性一半、端点外钳制。
+        ///
+        /// 2026-10-23：本函数语义收窄为「**细档**淡出系数」——`=0` 不再意味着
+        /// 整层退场（粗档接手）。整层语义的断言见 `grid_alpha_stays_positive_at_fit`。
         #[test]
         fn grid_line_fade_is_linear_between_two_and_four_pixel_cells() {
             assert_eq!(grid_line_fade(8.0), 1.0, "宽格全显");
-            assert_eq!(grid_line_fade(GRID_FADE_START_PX), 1.0, "起点全显");
+            assert_eq!(grid_line_fade(GRID_FINE_FULL_PX), 1.0, "起点全显");
             let mid = grid_line_fade(3.0);
             assert!((mid - 0.5).abs() < 1e-6, "中点应线性一半：got {mid}");
-            assert_eq!(grid_line_fade(GRID_FADE_END_PX), 0.0, "终点消失");
+            assert_eq!(grid_line_fade(GRID_FINE_MIN_PX), 0.0, "终点消失");
             assert_eq!(grid_line_fade(1.0), 0.0, "更密仍钳在 0");
+        }
+
+        /// ── 网格系统的断言装置 ────────────────────────────────────────────
+        ///
+        /// 造一个只装 `sync_grid_lines` 的最小 `World`：资源注入按系统的实际
+        /// 参数表列全（少一个就是 panic，不是「静默不画」）。`scale` 由调用方给，
+        /// 因为本轮的整个论点是「**scale 不该影响任何东西**」。
+        fn grid_world(scale: f32, grid_lines: bool, terrain_visible: bool) -> World {
+            let mut world = World::new();
+            world.insert_resource(Assets::<Mesh>::default());
+            world.insert_resource(Assets::<GridLinesMaterial>::default());
+            world.insert_resource(ViewState {
+                grid_lines,
+                scale,
+                ..ViewState::default()
+            });
+            world.insert_resource(GridConfig {
+                cell_size: 4.0,
+                raster_origin: Vec2::new(100.0, 200.0),
+                map_origin: Vec2::ZERO,
+                map_size: Vec2::splat(4096.0),
+            });
+            world.insert_resource(TerrainTexture {
+                handle: Handle::default(),
+                size: 1024,
+                height: 1024,
+                res: 4,
+                dirty: None,
+                chunks_dirty: None,
+                field_dirty: None,
+                last_mode: None,
+                last_soften: false,
+                last_theme_id: "daylight",
+                last_map: None,
+            });
+            let mut layers = LayerFrame::default();
+            layers.terrain.visible = terrain_visible;
+            world.insert_resource(layers);
+            let mut recipe = RenderRecipe::default();
+            recipe.passes[PassId::GridLines as usize].enabled = true;
+            world.insert_resource(recipe);
+            world.init_resource::<GridLinesOverlay>();
+            world
+        }
+
+        fn run_grid(world: &mut World) {
+            let mut schedule = Schedule::default();
+            schedule.add_systems(sync_grid_lines);
+            schedule.run(world);
+        }
+
+        fn grid_entity_count(world: &mut World) -> usize {
+            let mut q = world.query::<&Mesh2d>();
+            q.iter(world).count()
+        }
+
+        /// 验收断言 1：世界级 fit（`scale 5.12`、`cell_size 4.0` → 格距 0.78px）
+        /// 时网格**实际可见**——不只是「没 despawn」。
+        ///
+        /// 三重证据：① 实体存在；② 屏上 alpha > 0（纯函数复算）；③ 粗档倍率
+        /// 把定位格顶到 ≥4px（0.78125 × 8 = 6.25px），即「看见的确实是一张网格
+        /// 而不是一条线」。
+        #[test]
+        fn grid_alpha_stays_positive_at_fit() {
+            let cell_px = grid_cell_px(4.0, 5.12);
+            assert!((cell_px - 0.78125).abs() < 1e-9, "手算 4.0/5.12");
+            let alpha = grid_line_alpha_with_opacity(cell_px, 1.0);
+            assert!(alpha > 0.0, "fit 下 alpha 必须 > 0，实得 {alpha}");
+            assert_eq!(grid_coarse_stride(cell_px), 8, "0.78px 需 8 倍才到 4px");
+            let locator = grid_coarse_px(cell_px);
+            assert!(locator >= GRID_COARSE_MIN_PX, "定位格 {locator}px 应 ≥ 4px");
+
+            let mut world = grid_world(5.12, true, true);
+            run_grid(&mut world);
+            assert_eq!(grid_entity_count(&mut world), 1, "fit 下应有 1 个网格实体");
+            let overlay = world.resource::<GridLinesOverlay>();
+            assert_eq!(overlay.rebuilds, 1, "首帧建一次");
+            // 材质里真的烧进了 > 0 的 alpha（不只是 CPU 函数算得好看）
+            let mat_handle = overlay.material.clone().expect("材质应存在");
+            let materials = world.resource::<Assets<GridLinesMaterial>>();
+            let mat = materials.get(&mat_handle).expect("材质资产在库里");
+            assert!(
+                mat.params.ink.w > 0.0,
+                "uniform 基色 alpha 必须 > 0，实得 {}",
+                mat.params.ink.w
+            );
+            assert_eq!(
+                Vec2::new(mat.params.geo.z, mat.params.geo.w),
+                Vec2::new(100.0, 200.0),
+                "栅格原点进 uniform（shader 用它反推格坐标）"
+            );
+        }
+
+        /// 验收断言 2：连续 12 档缩放（×1.12 单调推 12 次）触发的 mesh 重建
+        /// 次数 **= 0**（需求上限 ≤2）。
+        ///
+        /// 判据是公开计数字段 `GridLinesOverlay::rebuilds`，不看墙钟。
+        #[test]
+        fn twelve_zoom_notches_trigger_zero_rebuilds() {
+            let mut world = grid_world(1.0, true, true);
+            run_grid(&mut world);
+            assert_eq!(world.resource::<GridLinesOverlay>().rebuilds, 1, "首帧一次");
+            let handle_before = world
+                .resource::<GridLinesOverlay>()
+                .mesh
+                .clone()
+                .expect("mesh 应存在");
+            for i in 0..12 {
+                world.resource_mut::<ViewState>().scale *= 1.12;
+                run_grid(&mut world);
+                assert_eq!(grid_entity_count(&mut world), 1, "第 {i} 档仍应有 1 个实体");
+            }
+            let overlay = world.resource::<GridLinesOverlay>();
+            assert_eq!(
+                overlay.rebuilds, 1,
+                "12 档缩放**不得**重建 mesh（旧实现每档一次 = 13 次）"
+            );
+            assert_eq!(
+                overlay.mesh.as_ref(),
+                Some(&handle_before),
+                "mesh handle 应逐帧不变"
+            );
+            assert_eq!(
+                world.resource::<Assets<Mesh>>().len(),
+                1,
+                "mesh 资产数应恒为 1（无泄漏、无堆积）"
+            );
+        }
+
+        /// 验收断言 3（负向）：开关关 / 图层隐藏 / recipe 关 → 实体数 0，
+        /// 且 mesh 与 material **都**被回收（旧实现只删 mesh，material 每轮泄漏）。
+        #[test]
+        fn grid_despawns_and_reclaims_both_assets() {
+            for (grid_lines, terrain_visible, recipe_on) in [
+                (false, true, true),
+                (true, false, true),
+                (true, true, false),
+            ] {
+                let mut world = grid_world(1.0, grid_lines, terrain_visible);
+                if !recipe_on {
+                    let mut recipe = world.resource_mut::<RenderRecipe>();
+                    recipe.passes[PassId::GridLines as usize].enabled = false;
+                }
+                run_grid(&mut world);
+                assert_eq!(
+                    grid_entity_count(&mut world),
+                    0,
+                    "负向用例（grid={grid_lines}, terrain={terrain_visible}, recipe={recipe_on}）不得残留实体"
+                );
+                assert_eq!(world.resource::<Assets<Mesh>>().len(), 0, "mesh 资产应回收");
+                assert_eq!(
+                    world.resource::<Assets<GridLinesMaterial>>().len(),
+                    0,
+                    "material 资产应回收"
+                );
+            }
+            // 再验证「建过之后关掉」也回收干净
+            let mut world = grid_world(1.0, true, true);
+            run_grid(&mut world);
+            assert_eq!(grid_entity_count(&mut world), 1);
+            world.resource_mut::<ViewState>().grid_lines = false;
+            run_grid(&mut world);
+            assert_eq!(grid_entity_count(&mut world), 0, "关开关 → 实体 0");
+            assert_eq!(world.resource::<Assets<Mesh>>().len(), 0, "mesh 回收");
+            assert_eq!(
+                world.resource::<Assets<GridLinesMaterial>>().len(),
+                0,
+                "material 回收"
+            );
+        }
+
+        /// 表驱动一致性：`RenderRecipe` 说 GridLines 开 ⇔ 系统真画（2026-10-23
+        /// 的收口——旧系统**完全不读** recipe，表在骗人）。
+        ///
+        /// 对全部 8 个 `ViewMode` 跑一遍 `resolve_render_recipe`：表说开就必须
+        /// 出实体、说关就必须 0 实体。「说一套做一套」在这里立刻红。
+        #[test]
+        fn recipe_table_says_on_iff_grid_actually_draws() {
+            use crate::state::ViewMode;
+            let modes = [
+                ViewMode::VectorFlat,
+                ViewMode::RealTerrain,
+                ViewMode::Schematic,
+                ViewMode::GoogleMap,
+                ViewMode::Faction,
+                ViewMode::Event,
+                ViewMode::Coastline,
+                ViewMode::Topographic,
+            ];
+            for mode in modes {
+                let mut world = grid_world(1.0, true, true);
+                world.resource_mut::<ViewState>().mode = mode;
+                // `ViewState` / `TerrainTexture` 不实现 Clone（大资源），
+                // 故 recipe 求值在借用作用域内完成后再落库。
+                let recipe = {
+                    let projection = WorldProjection::default();
+                    let drill = DrillState::default();
+                    crate::recipe::resolve_render_recipe(
+                        world.resource::<ViewState>(),
+                        world.resource::<LayerFrame>(),
+                        &projection,
+                        &drill,
+                        world.resource::<TerrainTexture>(),
+                        None,
+                    )
+                };
+                let table_on = recipe.enabled(PassId::GridLines);
+                world.insert_resource(recipe);
+                run_grid(&mut world);
+                let drawn = grid_entity_count(&mut world) > 0;
+                assert_eq!(
+                    table_on, drawn,
+                    "{mode:?}：表说 {table_on}，实际画 {drawn} —— 表与行为必须一致"
+                );
+            }
         }
 
         /// 2×2 幅面 → 3 竖 + 3 横 = 6 条链，每条 2 点 1 段：24 顶点 36 索引。

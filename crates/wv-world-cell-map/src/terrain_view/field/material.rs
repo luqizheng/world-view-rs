@@ -60,15 +60,16 @@
 // - `ShaderRef` 在 `bevy::shader`。
 // - 图像类型名就是 `bevy::image::Image`（**没有** `BevyImage` 这个别名）。
 use bevy::{
+    asset::uuid_handle,
     image::{Image, ImageSampler, ImageSamplerDescriptor},
     prelude::*,
     render::render_resource::{AsBindGroup, Extent3d, ShaderType, TextureDimension, TextureFormat},
-    shader::ShaderRef,
+    shader::{Shader, ShaderRef},
     sprite_render::{Material2d, Material2dPlugin},
 };
 
 use super::line_sdf::LineDashPack;
-use super::pack::{CoastEncoding, FieldPack};
+use super::pack::{CellRect, CoastEncoding, FieldPack};
 
 // ── P0 规格锁常量（T7–T18 / T23 / T24 / T27）────────────────────────────────
 
@@ -298,9 +299,24 @@ pub struct FieldParams {
     pub paper: Vec4,
 }
 
+/// 场 shader 的**静态句柄**（编译期内联，不经 AssetServer）。
+///
+/// ## 为什么不用 `ShaderRef::Path`（2026-10-24 实测踩坑）
+/// 原实现返回 `"shaders/terrain_field.wgsl".into()`，那是**相对 asset 根**解析的：
+/// - 在 `terrain_field_demo` 里 asset 根 = `crates/wv-world-cell-map/assets` ⇒ 能解析；
+/// - 在主 App 里 asset 根 = `crates/wv-app/assets` ⇒ 报
+///   `ERROR bevy_asset::server: Path not found: .../crates/wv-app/assets/shaders/terrain_field.wgsl`，
+///   材质拿不到 shader ⇒ **地形整片不画**（且不 panic，只有一条 error 日志）。
+///
+/// 这与 `grid_lines.rs::GRID_LINES_SHADER` 是同一个教训、同一套接法：
+/// 常驻渲染层的 shader 必须编译期内联，不能依赖「运行目录恰好有个 assets 文件夹」。
+/// **UUID 一旦发布不得修改**（它是句柄身份）。
+pub const TERRAIN_FIELD_SHADER: Handle<Shader> =
+    uuid_handle!("6a1f4c02-7d15-4b93-9e42-c0b8a37f51dd");
+
 impl Material2d for TerrainFieldMaterial {
     fn fragment_shader() -> ShaderRef {
-        "shaders/terrain_field.wgsl".into()
+        ShaderRef::Handle(TERRAIN_FIELD_SHADER)
     }
 }
 
@@ -371,6 +387,88 @@ pub fn build_material_with_lines(
         coast,
         attr,
         line_dash,
+    }
+}
+
+/// **增量补丁**：把 `pack` 里 `rect` 覆盖的 texel 写进材质已有的三张数据纹理。
+///
+/// 返回 `false` = 不能增量（句柄没了 / 幅面不符 / 缓冲长度不符），调用方
+/// **必须**改走 [`build_material`] 全量重建。返回 `true` 时 `rect` 之外
+/// 的像素一个字节都没动。
+///
+/// ## 为什么必须在材质上原地改，而不是「重建材质再换」
+///
+/// 一笔 brush 走重建路径的代价是：三张 `Image` 全量分配 + 材质全量重建 +
+/// 旧材质 `Assets::remove`（实测 1024² 共 48.4 ms）。而**真正会变的只有
+/// brush 盖住的那几百个 texel**——剩下的 99.97% 是与上次逐字节相同的数据。
+/// 原地补丁只付一次 `Assets::get_mut`（Bevy 会整张重传，见下「已知代价」）。
+///
+/// ## 三张必须同进同退
+///
+/// 先对三张**全部**做前置校验，通过了才动手写：半途失败会留下「高度是新的、
+/// 海岸是旧的」这种错位画面，比不做补丁更难查。
+///
+/// ## 已知代价（不属于本函数的职责）
+///
+/// `Assets::<Image>::get_mut` 会把资产标脏，Bevy 的 `RenderAssetPlugin` 因此
+/// **整张**重新抽取上传（Bevy 没有「局部纹理更新」的公开路径）。故本函数
+/// 省掉的是 CPU 端的 EDT + 打包（48 ms 里的大头），不是 GPU 上传。
+/// 要连上传一起省，得自研 `RenderAsset` 走 `write_texture` 子矩形——属下一轮。
+pub fn patch_material_images(
+    images: &mut Assets<Image>,
+    material: &TerrainFieldMaterial,
+    pack: &FieldPack,
+    rect: CellRect,
+) -> bool {
+    // (句柄, 每 texel 字节数, 源缓冲)
+    let targets = [
+        (&material.height, 2usize, &pack.height_tex),
+        (&material.coast, 2, &pack.coast_tex),
+        (&material.attr, 4, &pack.attr_tex),
+    ];
+
+    // ── 前置校验：三张全过才写 ──
+    for (handle, _, src) in targets {
+        let Some(image) = images.get(handle.id()) else {
+            return false;
+        };
+        if image.width() != pack.width || image.height() != pack.height {
+            return false;
+        }
+        // `RenderAssetUsages::default()` 含 `MAIN_WORLD`，`data` 必然存在；
+        // 长度不符说明这张 `Image` 不是本 pack 建的，宁可全量重来。
+        if image.data.as_ref().is_none_or(|d| d.len() != src.len()) {
+            return false;
+        }
+    }
+
+    let r = rect.intersect(pack.width, pack.height);
+    if r.is_empty() {
+        return true;
+    }
+
+    for (handle, bpp, src) in targets {
+        let Some(mut image) = images.get_mut(handle.id()) else {
+            return false;
+        };
+        let Some(dst) = image.data.as_mut() else {
+            return false;
+        };
+        copy_rect_rows(dst, src, pack.width, bpp, r);
+    }
+    true
+}
+
+/// 把 `src` 中 `rect` 覆盖的字节按行搬到 `dst`（同一幅面、同一 `bpp`）。
+///
+/// 每行是一次 `copy_from_slice`：`R16` / `Rgba8` 都是紧密打包的行主序，
+/// 行内矩形是连续段，行间跨 `tex_w × bpp` 的 stride。
+fn copy_rect_rows(dst: &mut [u8], src: &[u8], tex_w: u32, bpp: usize, r: CellRect) {
+    let stride = tex_w as usize * bpp;
+    let run = r.width() as usize * bpp;
+    for y in r.y0..r.y1 {
+        let at = y as usize * stride + r.x0 as usize * bpp;
+        dst[at..at + run].copy_from_slice(&src[at..at + run]);
     }
 }
 
@@ -455,6 +553,14 @@ pub struct TerrainFieldMaterialPlugin;
 
 impl Plugin for TerrainFieldMaterialPlugin {
     fn build(&self, app: &mut App) {
+        // shader 走**编译期内联**（理由见 [`TERRAIN_FIELD_SHADER`]）。
+        // 相对路径 = 相对本文件（`src/terrain_view/field/material.rs`）→ 三级上跳到 crate 根。
+        bevy::asset::load_internal_asset!(
+            app,
+            TERRAIN_FIELD_SHADER,
+            "../../../assets/shaders/terrain_field.wgsl",
+            Shader::from_wgsl
+        );
         app.add_plugins(Material2dPlugin::<TerrainFieldMaterial>::default());
     }
 }

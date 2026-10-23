@@ -111,6 +111,12 @@ pub fn run(config: AppConfig) {
     // 材质属 `wv-world-cell-map`（bevy 非 optional），shader 由 `load_internal_asset!`
     // 编译期内联；装配点留在组合根（wv-app），桥接系统只建 mesh / 挂实体。
     .add_plugins(wv_render::terrain_view::grid_lines::GridLinesMaterialPlugin)
+    // 地形场材质（ADR-0053 D1，Phase 1 接线 2026-10-24）：GPU 逐像素底图。
+    // 与网格材质同款分工——材质 / WGSL 属 `wv-world-cell-map`，桥接系统在
+    // `wv-render::cellmap_bridge`，**装配点留在组合根**（AGENTS §2.1）。
+    // ⚠️ 注册不可省：`sync_terrain_field` 取 `ResMut<Assets<TerrainFieldMaterial>>`，
+    // 没有 `Material2dPlugin` 时资源不存在，系统初始化即 panic。
+    .add_plugins(wv_world_cell_map::terrain_view::field::TerrainFieldMaterialPlugin)
     // 状态栏 FPS 读数（Figma #3:21001 右段）：DefaultPlugins 只提供
     // DiagnosticsStore 容器，帧时间/帧率诊断要本插件显式注册。
     .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
@@ -274,6 +280,9 @@ pub fn run(config: AppConfig) {
     .init_resource::<brush_cursor::BrushCursorEntities>()
     .init_resource::<map_frame::MapFrameEntities>()
     .init_resource::<terrain_chunks::TerrainChunkEntities>()
+    // 地形场渲染（ADR-0053 D1，Phase 1 接线 2026-10-24）：quad 资产缓存 + 计数器。
+    .init_resource::<wv_render::cellmap_bridge::TerrainFieldRender>()
+    .init_resource::<wv_render::cellmap_bridge::FieldRenderStats>()
     // 等值线矢量叠加层（ADR-0012 / plan v0.1 M2）：同属实体集合资源。
     .init_resource::<terrain_view::IsolineOverlay>()
     // 逐格编辑网格（plan v0.1 D4）：同上。
@@ -408,7 +417,16 @@ pub fn run(config: AppConfig) {
             // 编辑态逐格网格（plan v0.1 D4）：与等值线同管线族，先于 chunk 层。
             wv_render::perf_timed!("sync_grid_lines", terrain_view::sync_grid_lines),
             // 地形分块 + mip + 视口拣选（优化项 3a/3b/3c）。
+            // `view.field_render` 开启时整层早退——见函数开头的回退开关。
             wv_render::perf_timed!("sync_terrain_chunks", cellmap_bridge::sync_terrain_chunks),
+            // 地形场渲染（ADR-0053 D1，Phase 1 接线）：**必须排在 chunk 层之后**。
+            // 两个理由：① `field_render_on_chunk_entities` 要报**帧末**的块数，
+            // 而块的 spawn / despawn 由 chunk 系统在本帧完成（排在前面只能读到
+            // 上一帧的残留，与组件口径对不上）；② 编辑信号取自变更戳
+            // （`WorldProjection` / `TerrainTexture` 的 `is_changed`），不抢
+            // `tex.chunks_dirty`——那个旗标照旧归 chunk 层消费。
+            // 独占性不依赖顺序：场开着时 chunk 层自己早退。
+            wv_render::perf_timed!("sync_terrain_field", cellmap_bridge::sync_terrain_field),
             // 派生诊断刷新：在 flush 之后、UI 之前；面板本帧即可读新值。
             wv_render::perf_timed!(
                 "refresh_project_diagnostics",

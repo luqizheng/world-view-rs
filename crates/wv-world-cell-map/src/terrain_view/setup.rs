@@ -38,6 +38,7 @@ pub fn new_terrain_texture(
         res,
         dirty: None,
         chunks_dirty: None,
+        field_dirty: None,
         last_mode: Some(mode),
         last_soften: soften,
         last_theme_id: theme_id,

@@ -205,6 +205,19 @@ pub struct ViewState {
     /// 所有视图模式生效——Google 地图式「底图永远比要素淡一档」。
     /// 默认开：这正是本轮要修的「路线看不见」问题的默认答案。
     pub terrain_soften: bool,
+    /// **地形场渲染**开关（ADR-0053 D1 / R5 回退保险，Phase 1 接线 2026-10-24）。
+    ///
+    /// - `true` = 底图走 **GPU 逐像素求值**：三张数据纹理（8 MB，分辨率无上限）
+    ///   + `TerrainFieldMaterial` 的 WGSL 逐像素求值，`sync_terrain_chunks` 整层退场；
+    /// - `false` = 现行 **CPU 整图烘焙 + 分块 + 每帧视口拣选**（ADR-0053 §3.4 的
+    ///   一行回退路径）。
+    ///
+    /// **本字段是「底图载体」的选择，不是可见性**：图层隐藏（`LayerFrame.terrain`）
+    /// 时两条路径都退场——见 `cellmap_bridge::sync_terrain_field` 的 gate。
+    ///
+    /// 会话态、**不落盘**，默认 `false`：两条路径并行共存，用户看过实机效果后再
+    /// 决定是否翻默认。运行时可翻（命令面板「显示地形场渲染（GPU）」），改完当帧生效。
+    pub field_render: bool,
     /// 事件点图层是否可见。
     pub events_visible: bool,
     /// 轨迹图层是否可见。
@@ -305,6 +318,7 @@ impl Default for ViewState {
             camera_center: Vec2::ZERO,
             terrain_visible: true,
             terrain_soften: true,
+            field_render: false,
             events_visible: true,
             tracks_visible: true,
             roads_visible: true,
