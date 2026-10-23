@@ -102,14 +102,42 @@ pub const LIGHT_DIR: [f32; 3] = [
     std::f32::consts::FRAC_1_SQRT_2,
 ];
 
-/// P2 预留：域扭曲幅度上限（T19：`amp = clamp(2.0×scale, 0.05, 0.45)`）。
-///
-/// P1 **不接线**——保留常量是为了让 P2 的数值有单一权威源，
-/// 不必回到规格锁表里抄第二遍。
-#[allow(dead_code)]
+/// T19：域扭曲幅度下限（格）。近观编辑态——「点到哪就是哪」。
 pub const WARP_AMP_MIN: f32 = 0.05;
-#[allow(dead_code)]
+/// T19：域扭曲幅度上限（格）。远观——明显的手绘起伏。
 pub const WARP_AMP_MAX: f32 = 0.45;
+
+/// T19 的幅度拟合常数：`amp = clamp(K / px_per_cell, 0.05, 0.45)`。
+///
+/// 标定依据是 T19 **注记里的两个端点**（不是它的字面公式，见下）：
+/// - 远观 `px_per_cell ≈ 0.5`（1 px 约 2 格）→ `amp = 0.45`，故 `K = 0.225`；
+/// - 近观编辑 `px_per_cell ≈ 4`（诊断基线的「近观 4 px/格」）→ `amp ≈ 0.056`，
+///   取到下限 0.05，与注记「≈0.1 屏幕px，点到哪就是哪」一致。
+///
+/// ## ⚠️ 规格锁 T19 的字面公式与其注记**互相矛盾**
+///
+/// 锁表写 `amp = clamp(2.0 × scale, 0.05, 0.45)`，注记说「近观编辑
+/// `scale ≈ 0.25` 取 0.05 格」。但把 `scale` 理解为「每屏幕像素多少格」
+/// （= `1 / px_per_cell`，也是与「scale 大 = 远观」唯一自洽的读法）：
+///
+/// | px_per_cell | scale | `2.0 × scale` | 公式结果 | 注记要求 |
+/// |---|---|---|---|---|
+/// | 0.5（远观） | 2.0 | 4.0 | 0.45 ✓ | 0.45 |
+/// | 4（近观） | **0.25** | **0.5** | **0.45 ✗** | **0.05** |
+///
+/// 即：按字面公式，近观编辑会拿到**最大**抖动，与「保证点选精度」的
+/// 设计意图完全相反。故此处按**注记的两个端点**拟合，并在
+/// `P0_SPEC_LOCK` 待补追记中登记该矛盾（不静默改锁定值）。
+///
+/// 若将来裁定回到字面公式，只需改本函数体，shader 与 uniform 布局不变。
+pub const WARP_K: f32 = 0.225;
+
+/// T19 幅度曲线：远观大、近观小，钳在 `[0.05, 0.45]` 格。
+///
+/// 输入是「每格多少屏幕像素」（越大越近）。
+pub fn warp_amp(px_per_cell: f32) -> f32 {
+    (WARP_K / px_per_cell.max(1e-3)).clamp(WARP_AMP_MIN, WARP_AMP_MAX)
+}
 
 // 注：完整的群系固定色板是 **21 槽**（冻结群系表编号，ADR-0051 §5
 // `BIOME_RAW_COLORS[21]`）。P1 **不**把它搬进 uniform——21 个 vec4 = 336 字节，
@@ -345,7 +373,8 @@ pub fn default_params(
             Z_EXAG,
             GRAD_STEP,
         ),
-        pad0: Vec4::ZERO,
+        // T19 域扭曲幅度写进 pad0.x（P1 预留的槽位，P2 接线不改绑定布局）。
+        pad0: Vec4::new(warp_amp(px_per_cell), 0.0, 0.0, 0.0),
         light_dir: Vec4::new(LIGHT_DIR[0], LIGHT_DIR[1], LIGHT_DIR[2], 0.0),
         pad1: Vec4::ZERO,
         shore_edges: Vec4::new(SHORE_EDGE, SHALLOW_EDGE, DEEP_EDGE, 0.0), // w = wash_amt（P2）
@@ -367,5 +396,64 @@ pub struct TerrainFieldMaterialPlugin;
 impl Plugin for TerrainFieldMaterialPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(Material2dPlugin::<TerrainFieldMaterial>::default());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// T19 幅度曲线的两个端点必须与注记一致（见 [`WARP_K`] 的矛盾说明）。
+    #[test]
+    fn warp_amp_hits_both_documented_endpoints() {
+        // 远观：1 px ≈ 2 格 → 上限 0.45
+        assert!((warp_amp(0.5) - 0.45).abs() < 1e-4, "远观应取上限");
+        // 近观编辑：诊断基线 4 px/格 → 下限 0.05
+        assert!(
+            warp_amp(4.0) < 0.06,
+            "近观应贴近下限（≈0.056），实际 {}",
+            warp_amp(4.0)
+        );
+        assert!(warp_amp(4.0) >= WARP_AMP_MIN);
+        // 极端近观不得更大（单调不增）
+        assert!(warp_amp(16.0) <= warp_amp(4.0) + 1e-6);
+    }
+
+    /// 幅度全区间恒在钳制范围内，且远离奇点不 panic。
+    #[test]
+    fn warp_amp_stays_within_lock_range() {
+        for cpx in [0.01f32, 0.1, 0.5, 1.0, 3.0, 8.0, 32.0, 1000.0] {
+            let a = warp_amp(cpx);
+            assert!(
+                (WARP_AMP_MIN..=WARP_AMP_MAX).contains(&a),
+                "px_per_cell={cpx} → amp={a} 越界"
+            );
+            assert!(a.is_finite());
+        }
+        // 0 不得产生 inf/NaN
+        assert!(warp_amp(0.0).is_finite());
+    }
+
+    /// 默认参数把 uniform 填满，且不含 NaN（NaN 会让整个 uniform 静默失效）。
+    #[test]
+    fn default_params_are_finite() {
+        let p = default_params([512.0, 512.0], 6.0, ViewBranch::Themed, Default::default());
+        let all = [
+            p.grid,
+            p.shape,
+            p.pad0,
+            p.light_dir,
+            p.pad1,
+            p.shore_edges,
+            p.relief,
+            p.ink,
+            p.paper,
+        ];
+        for v in all {
+            assert!(v.is_finite(), "uniform 出现非有限值: {v:?}");
+        }
+        for v in p.theme {
+            assert!(v.is_finite());
+        }
     }
 }

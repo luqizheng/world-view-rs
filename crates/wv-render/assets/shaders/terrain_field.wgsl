@@ -49,6 +49,13 @@ const COAST_INK_ALPHA: f32 = 0.55;
 const BIOME_INK_ALPHA: f32 = 0.38;
 /// 高度量程（米）= H_MAX(6000) − H_MIN(-4000)，与 pack.rs 同源。
 const H_RANGE_M: f32 = 10000.0;
+
+/// T28：水彩幅度（±7% 明度）。< 0.05 看不出，> 0.12 破坏「色块可辨」。
+const WASH_AMT: f32 = 0.07;
+/// T29：水彩噪声频率锚（格空间）。波长约 2.2 格——是**水彩晕染**不是噪声纹理。
+const WASH_FREQ: f32 = 0.45;
+/// T30：沙漠/雪原等大地色系的减免系数。
+const WASH_SPECIAL_K: f32 = 0.5;
 /// Topographic 三阶切点（与 topographic::pick 的 p_low / p_high 同口径）。
 const CUT_LOW: f32 = 0.33;
 const CUT_HIGH: f32 = 0.66;
@@ -67,8 +74,15 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // v 轴顶部为 1。数据纹理是「左上原点、x 向右、y 向下」，
     // 故 `u = 1 − in.uv.x`、`v = 1 − in.uv.y`。
     // 只翻 v 会让整幅图**左右镜像**（实测踩过：相机对准的海岸画到了镜像位置）。
-    let uv = vec2<f32>(1.0 - in.uv.x, 1.0 - in.uv.y);
-    let center = uv * grid - vec2<f32>(0.5); // 采样点落在格心
+    let uv0 = vec2<f32>(1.0 - in.uv.x, 1.0 - in.uv.y);
+
+    // T19–T22 域扭曲：在**格坐标**里扰动采样位置（不是屏幕坐标——否则
+    // 缩放时岸线会「游动」，作者会以为数据变了）。幅度由 Rust 侧按
+    // `px_per_cell` 算好写进 `p.pad0.x`（远观大 / 近观收敛）。
+    let g = uv0 * grid;
+    let gw = g + warp_offset(g);
+    let uv = gw / grid;                       // 扭曲后的 uv（供三张纹理采样）
+    let center = gw - vec2<f32>(0.5);         // texel 中心空间（供双三次）
 
     // ── 亚格高度：Catmull-Rom 双三次 16 tap（T13）────────────────────────
     let h = sample_height_bicubic(center);
@@ -136,17 +150,39 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // 亚格混合：一格宽的软过渡替代逐格硬切。
     var rgb = mix(water_col, land_col, land_t);
 
+    // ── 水彩颗粒（T28–T30）──────────────────────────────────────────────
+    // 只调**明度**，不动色相——SPEC §1.6 禁令的边界：是水彩晕染，
+    // 不是往画面上铺噪声纹理。
+    // 水面**不叠**（T30）：海的呼吸感走 SeaRecipe 的连续量，叠两层会脏。
+    if (land_t > 0.5 && p.shore_edges.w > 0.0) {
+        // 频率锚在格空间（随内容走，不随屏幕走——否则缩放时颗粒会「沸腾」）。
+        let wash_n = fbm3(g, 733.0, WASH_FREQ);
+        // 特殊面减免：沙漠(5)/雪原(9)/盐碱(19) 是大地色系，呼吸位小一些。
+        var k = 1.0;
+        if (biome_id == 5u || biome_id == 9u || biome_id == 19u) {
+            k = WASH_SPECIAL_K;
+        }
+        let wash = (wash_n - 0.5) * 2.0 * WASH_AMT * k;
+        rgb = rgb * (1.0 + wash);
+    }
+
     // ── 墨线（屏幕像素口径 + fwidth 抗锯齿）───────────────────────────────
     // 禁裸 smoothstep：边缘宽会随缩放变化（近观粗、远观糊）。
     // 用屏幕空间导数把距离折算成像素，线宽才恒定。
     let px_per_cell = max(p.shape.x, 1e-5);
+
+    // T31–T34 缩放自适应：墨线强度随每格像素数收敛。
+    // - 近观（≥3 px/格）：全开
+    // - 过渡（1~3）：线性淡出（避免小尺幅时墨线糊成一片灰）
+    // - 远观（<1）：全关，只留色域（否则彩色噪点会闪）
+    let ink_gate = smoothstep(1.0, 3.0, px_per_cell);
 
     // 岸线：`sd = 0` 即岸线本身（相邻两格格心之间的交界）。
     let dd = abs(sd);
     let coast_grad = max(fwidth(dd), 1e-6);
     let coast_half = COAST_LINE_PX / px_per_cell;               // 格单位半宽
     let coast_ink = 1.0 - smoothstep(coast_half - coast_grad, coast_half + coast_grad, dd);
-    rgb = mix(rgb, p.ink.rgb, clamp(coast_ink, 0.0, 1.0) * COAST_INK_ALPHA);
+    rgb = mix(rgb, p.ink.rgb, clamp(coast_ink, 0.0, 1.0) * COAST_INK_ALPHA * ink_gate);
 
     // biome 边界（T27：4 邻 + 中心比较，ID 只比较不插值）。
     //
@@ -162,13 +198,74 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if (p.shape.y >= 0.5 && is_land) {
         let band_px = px_per_cell; // 4 邻检测的天然带子宽度（1 格 = px_per_cell px）
         let fade = 1.0 - smoothstep(BIOME_LINE_PX * 3.0, BIOME_LINE_PX * 8.0, band_px);
-        if (fade > 0.01) {
+        // 再乘缩放门控：T33 要求**远观墨线全关只留色域**——否则 1 px/格
+        // 以下时 biome 界会变成彩色噪点并随缩放闪烁。
+        let total = fade * ink_gate;
+        if (total > 0.01) {
             let is_edge = biome_boundary(uv, grid, biome_id);
-            rgb = mix(rgb, p.ink.rgb, is_edge * BIOME_INK_ALPHA * fade);
+            rgb = mix(rgb, p.ink.rgb, is_edge * BIOME_INK_ALPHA * total);
         }
     }
 
     return vec4<f32>(rgb, 1.0);
+}
+
+// ── 程序化噪声（T20/T29 共用）────────────────────────────────────────────
+//
+// 不用纹理噪声：噪声纹理要额外资产与采样，而这里只需 3 octave 的低频
+// 抖动，纯算术更省也更确定（同输入必得同输出，守护项 8）。
+
+/// 二维哈希 → [0,1)。确定、无随机数（SPEC §3.8.6）。
+fn hash21(p: vec2<f32>, seed: f32) -> f32 {
+    var q = fract(p * vec2<f32>(127.1, 311.7) + vec2<f32>(seed, seed * 1.37));
+    q = q + vec2<f32>(dot(q, q + 45.32));
+    return fract(q.x * q.y * 95.4307);
+}
+
+/// 值噪声：整数格点哈希 + smooth 双线性。
+fn vnoise(p: vec2<f32>, seed: f32) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = hash21(i, seed);
+    let b = hash21(i + vec2<f32>(1.0, 0.0), seed);
+    let c = hash21(i + vec2<f32>(0.0, 1.0), seed);
+    let d = hash21(i + vec2<f32>(1.0, 1.0), seed);
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+/// 3 octave fBm。频率按 `freq` 起、每层 ×2；振幅 0.5 起、每层 ×0.5。
+///
+/// T20 指定域扭曲用「1/6、1/3、2/3 格」三档 → 起始频率 `1/6`。
+fn fbm3(p: vec2<f32>, seed: f32, freq0: f32) -> f32 {
+    var sum = 0.0;
+    var norm = 0.0;
+    var amp = 0.5;
+    var freq = freq0;
+    for (var i = 0; i < 3; i = i + 1) {
+        sum = sum + vnoise(p * freq, seed + f32(i) * 19.0) * amp;
+        norm = norm + amp;
+        amp = amp * 0.5;
+        freq = freq * 2.0;
+    }
+    return sum / max(norm, 1e-6);
+}
+
+/// 域扭曲偏移（T19–T22）。P2 的核心：把格网对齐打散成手绘抖动。
+///
+/// - **T21 采样坐标系用「格坐标」**而不是屏幕坐标：屏幕坐标会让海岸在
+///   缩放时「游动」，作者会以为数据变了。
+/// - **T22 两通道种子 +17 / +41** 去相关，否则 x/y 会同步偏移、
+///   抖动出斜向拖影。
+fn warp_offset(g: vec2<f32>) -> vec2<f32> {
+    let amp = p.pad0.x; // T19 幅度，Rust 侧按 px_per_cell 算好（见 material::warp_amp）
+    if (amp <= 0.0) {
+        return vec2<f32>(0.0, 0.0);
+    }
+    let nx = fbm3(g, 17.0, 1.0 / 6.0);
+    let ny = fbm3(g, 41.0, 1.0 / 6.0);
+    // 中心化到 [-1,1] 再乘幅度（格单位）
+    return (vec2<f32>(nx, ny) * 2.0 - vec2<f32>(1.0)) * amp;
 }
 
 // ── Catmull-Rom 双三次（16 tap，T13）──────────────────────────────────────
@@ -259,9 +356,14 @@ fn themed_land(is_land: bool, h: f32) -> vec3<f32> {
     if (!is_land) {
         return p.theme[0].rgb;
     }
-    if (h > CUT_HIGH) { return p.theme[3].rgb; }
-    if (h > CUT_LOW) { return p.theme[2].rgb; }
-    return p.theme[1].rgb;
+    // 用**窄平滑**代替硬阈值：硬切在远观（1 px/格以下）会在两个色阶之间
+    // 产生高频锯齿，读起来是彩色噪点且随缩放闪烁（T33 要避免的正是这个）。
+    // 过渡带 ±0.02 归一化高度 ≈ 小几百米，视觉上仍是「三阶色阶」。
+    const TIER_SOFT: f32 = 0.02;
+    let hi_t = smoothstep(CUT_HIGH - TIER_SOFT, CUT_HIGH + TIER_SOFT, h);
+    let lo_t = smoothstep(CUT_LOW - TIER_SOFT, CUT_LOW + TIER_SOFT, h);
+    let low_mid = mix(p.theme[1].rgb, p.theme[2].rgb, lo_t);
+    return mix(low_mid, p.theme[3].rgb, hi_t);
 }
 
 /// sRGB 分量 → 线性。手写的色板常量都是**人眼/取色器口径的 sRGB**

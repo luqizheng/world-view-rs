@@ -35,7 +35,7 @@ pub mod pack;
 
 pub use coast_sdf::{distance_field, distance_to_coast, FAR};
 pub use material::{
-    build_material, default_params, FieldPalette, FieldParams, TerrainFieldMaterial,
-    TerrainFieldMaterialPlugin, ViewBranch,
+    build_material, default_params, warp_amp, FieldPalette, FieldParams, TerrainFieldMaterial,
+    TerrainFieldMaterialPlugin, ViewBranch, WARP_AMP_MAX, WARP_AMP_MIN,
 };
 pub use pack::{FieldPack, COAST_MAX_CELLS, H_MAX, H_MIN};
