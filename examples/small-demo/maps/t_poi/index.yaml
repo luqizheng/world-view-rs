@@ -1,0 +1,71 @@
+id: t_poi
+name: POI 与图标
+level: region
+parent: map_index
+children: []
+icons:
+- id: icon_diamond
+  anchor:
+  - 0.12207031
+  - 0.12207031
+  shape: diamond
+  size: 14.0
+- id: icon_circle
+  anchor:
+  - 0.36621094
+  - 0.12207031
+  shape: circle
+  size: 14.0
+- id: icon_cross
+  anchor:
+  - 0.61035156
+  - 0.12207031
+  shape: cross
+  size: 14.0
+- id: icon_square
+  anchor:
+  - 0.8544922
+  - 0.12207031
+  shape: square
+  size: 14.0
+- id: icon_star
+  anchor:
+  - 0.48828125
+  - 0.9277344
+  shape: star
+  size: 14.0
+layers:
+- id: l_t_poi_terrain
+  name: 地形
+  kind: terrain
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+  source: maps/t_poi/terrain.bin
+- id: l_t_poi_place
+  name: 地点
+  kind: place
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+- id: l_t_poi_labels
+  name: 标注
+  kind: label
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+  source: maps/t_poi/labels.yaml
+extent:
+  width: 4096.0
+  height: 4096.0
+raster:
+  path: maps/t_poi/terrain.bin
+  encoding: i16
+  width: 256
+  height: 256
+  chunk: 256
+  format_version: 2
+  checksum: 508c8e02

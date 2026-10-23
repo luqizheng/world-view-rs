@@ -1,0 +1,7 @@
+id: rd_e_diag
+a: rd_cross
+b: rd_tee
+distance_km: 180.0
+terrain: forest
+bidirectional: true
+rank: 3

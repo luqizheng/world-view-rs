@@ -1,0 +1,16 @@
+calendar:
+  kind: simple
+  prefix: 样张
+  start_year: 1
+  days_per_year: 360
+  days_per_month: 30
+timeline_range:
+  from: 1
+  to: 101
+anchors:
+- id: anchor_baseline
+  name: 基线
+  day: 1
+- id: anchor_later
+  name: 后续
+  day: 60

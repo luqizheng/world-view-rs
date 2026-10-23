@@ -1,0 +1,13 @@
+map: t_combo
+owner: cb_faction_river
+from: 1
+to: 101
+geometry:
+- 1400.0
+- 1200.0
+- 3000.0
+- 1200.0
+- 3000.0
+- 2500.0
+- 1400.0
+- 2500.0

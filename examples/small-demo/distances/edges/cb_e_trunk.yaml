@@ -1,0 +1,7 @@
+id: cb_e_trunk
+a: cb_port
+b: cb_junction
+distance_km: 210.0
+terrain: plain
+bidirectional: true
+rank: 3

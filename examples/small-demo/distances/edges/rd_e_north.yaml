@@ -1,0 +1,7 @@
+id: rd_e_north
+a: rd_cross
+b: rd_north_town
+distance_km: 180.0
+terrain: plain
+bidirectional: true
+rank: 2

@@ -1,0 +1,26 @@
+id: t_river
+name: 水系与出海口
+level: region
+parent: map_index
+children: []
+icons: []
+layers:
+- id: l_t_river_terrain
+  name: 地形
+  kind: terrain
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+  source: maps/t_river/terrain.bin
+extent:
+  width: 4096.0
+  height: 4096.0
+raster:
+  path: maps/t_river/terrain.bin
+  encoding: i16
+  width: 256
+  height: 256
+  chunk: 256
+  format_version: 2
+  checksum: f5215e41

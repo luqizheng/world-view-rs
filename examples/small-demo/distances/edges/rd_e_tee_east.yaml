@@ -1,0 +1,7 @@
+id: rd_e_tee_east
+a: rd_tee
+b: rd_east_city
+distance_km: 120.0
+terrain: forest
+bidirectional: true
+rank: 2

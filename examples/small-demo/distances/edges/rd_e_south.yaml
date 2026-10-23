@@ -1,0 +1,7 @@
+id: rd_e_south
+a: rd_cross
+b: rd_south_town
+distance_km: 190.0
+terrain: plain
+bidirectional: true
+rank: 2
