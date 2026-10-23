@@ -70,7 +70,7 @@ use crate::edit::editing::EditHistory;
 use crate::i18n::{t, CurrentLocale, I18nKey, Locale};
 use crate::state::{
     DrillState, GridConfig, MeasureMode, MeasureState, Panel, PanelState, ViewState,
-    WorldProjection,
+    ViewMode, WorldProjection,
 };
 use crate::theme::ui_theme::{margin_xy, UiShellConfig};
 use crate::ui_command_palette::{CommandId, CommandPalette, MapToolId};
@@ -496,18 +496,21 @@ pub fn map_controls(
 
                         // ── 槽 11：自然区（2026-10-22 内容矩阵 §2.6）──────
                         // CellMap 里显示 Nature 类区域 + 未命名候选高亮；
-                        // 仅 Topographic 有意义（其他模式区域层本就画）。
-                        if icon_tile(
-                            ui,
-                            &shell,
-                            metrics,
-                            ICON_TREES,
-                            view.nature_overlay,
-                            "显示自然区与候选（CellMap）",
-                        )
-                        .clicked()
-                        {
-                            view.nature_overlay = !view.nature_overlay;
+                        // 仅 CellMap（Topographic 工作区）显示本按钮——
+                        // 其他模式区域层不受开关控制（用户裁定：只在 cell map）。
+                        if matches!(view.mode, ViewMode::Topographic) {
+                            if icon_tile(
+                                ui,
+                                &shell,
+                                metrics,
+                                ICON_TREES,
+                                view.nature_overlay,
+                                "显示自然区与候选（CellMap）",
+                            )
+                            .clicked()
+                            {
+                                view.nature_overlay = !view.nature_overlay;
+                            }
                         }
                     };
 
