@@ -330,8 +330,6 @@ pub fn pick_candidate_on_click(
     nature.pending_candidate = candidate_at(&projection, map, (gx, gy)).map(|_| (gx, gy));
 }
 
-
-
 /// 候选过期的编辑信号（2026-10-22 内容矩阵）：把 `EditHistory` 的形状
 /// （undo/redo 栈长 + 顶 seq + 脏标记）折成一个 epoch 写进候选缓存——
 /// **渲染层不得依赖 wv-edit/wv-app 类型**（分层红线），故信号由本系统

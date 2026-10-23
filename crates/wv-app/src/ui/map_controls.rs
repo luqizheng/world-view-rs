@@ -69,8 +69,8 @@ use serde::{Deserialize, Serialize};
 use crate::edit::editing::EditHistory;
 use crate::i18n::{t, CurrentLocale, I18nKey, Locale};
 use crate::state::{
-    DrillState, GridConfig, MeasureMode, MeasureState, Panel, PanelState, ViewState,
-    ViewMode, WorldProjection,
+    DrillState, GridConfig, MeasureMode, MeasureState, Panel, PanelState, ViewMode, ViewState,
+    WorldProjection,
 };
 use crate::theme::ui_theme::{margin_xy, UiShellConfig};
 use crate::ui_command_palette::{CommandId, CommandPalette, MapToolId};

@@ -665,8 +665,9 @@ pub fn draw_map_gizmos(
             }
         }
 
-        let gold = bevy::color::Color::srgba(1.0, 0.84, 0.29, 0.95);
-        let gold_fill = bevy::color::Color::srgba(1.0, 0.84, 0.29, 0.14);
+        // 用户裁定（2026-10-22 验收）：候选高亮 = **白色虚线**，不用金色——
+        // 沙色地形上金色与地貌色混淆；白色虚线在任意群系色上都可辨。
+        let white = bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.9);
         let cs = grid_cfg.cell_size;
         let mut dbg_lines = 0usize;
         let mut dbg_fills = 0usize;
@@ -678,29 +679,10 @@ pub fn draw_map_gizmos(
             // 屏上尺寸（px）≥ 40 才画半透明填充（缩放够大填充才有意义）。
             let screen_w = (bmax.x - bmin.x) / view.scale;
             let screen_h = (bmax.y - bmin.y) / view.scale;
-            let draw_fill = screen_w.max(screen_h) >= 40.0;
+            let _ = (bmin, bmax);
             for (a, b) in outline {
-                gizmos.line_2d(*a, *b, gold);
+                gizmos.line_2d(*a, *b, white);
                 dbg_lines += 1;
-            }
-            if !draw_fill {
-                continue;
-            }
-            for &(gx, gy) in &candidate_cache.fill_cells[i] {
-                let center = Vec2::new(
-                    grid_cfg.raster_origin.x + (gx as f32 + 0.5) * cs,
-                    grid_cfg.raster_origin.y + (gy as f32 + 0.5) * cs,
-                );
-                // 视口裁剪（格中心）。
-                if (center.x - vcx).abs() > half.x || (center.y - vcy).abs() > half.y {
-                    continue;
-                }
-                gizmos.rect_2d(
-                    bevy::math::Isometry2d::from_translation(center),
-                    Vec2::splat(cs),
-                    gold_fill,
-                );
-                dbg_fills += 1;
             }
         }
         if let Some(t0) = dbg_t0 {
@@ -719,7 +701,10 @@ pub fn draw_map_gizmos(
         use std::sync::atomic::{AtomicUsize, Ordering};
         static FRAME2: AtomicUsize = AtomicUsize::new(0);
         if FRAME2.fetch_add(1, Ordering::Relaxed) % 60 == 0 {
-            eprintln!("[perf] draw_map_gizmos (overlay off) elapsed={:?}", t0.elapsed());
+            eprintln!(
+                "[perf] draw_map_gizmos (overlay off) elapsed={:?}",
+                t0.elapsed()
+            );
         }
     }
 
