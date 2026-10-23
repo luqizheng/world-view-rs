@@ -536,7 +536,11 @@ pub fn run(config: AppConfig) {
     // 候选上下文镜像（2026-10-22 验收）：主链已顶满 20 元组，单独注册。
     app.add_systems(
         Update,
-        crate::edit::nature_region_actions::sync_candidate_context,
+        (
+            crate::edit::nature_region_actions::sync_candidate_context,
+            // 群系图例（CellMap 左下角）：读 biome_raw 色板与名，自动跟随。
+            ui::biome_legend,
+        ),
     );
     // 「新建地理事实」命名对话框（选择工具 M4「森林」意图打开；居中模态窗）。
     // 主链已顶满 20 元组上限，单独注册并排在状态栏之后。
