@@ -87,6 +87,12 @@ pub enum CommandId {
     Undo,
     /// 重做。
     Redo,
+    /// 清除当前图的**全部**测量（2026-10-23 用户需求：工具条测量组右侧的
+    /// 清除钮 / 命令面板双入口）。
+    ///
+    /// 与「测量橡皮」「Del」的区别：后两者删**一条**，本条清**一图**。
+    /// 走 `ClearMeasurementsCommand`，一次撤销可整体还原。
+    ClearMeasurements,
     /// 切换明暗主题。
     ToggleTheme,
     /// 切换密度档。
@@ -416,6 +422,14 @@ impl CommandRegistry {
             CommandGroup::Edit,
             I18nKey::CmdRedo,
             Some("Ctrl+Shift+Z"),
+        );
+        // 清除全部测量（2026-10-23）：工具条测量组右侧的清除钮同源；
+        // 「Del 删一条」是渲染层的输入，不进命令面板（它不是无指针可执行的动作）。
+        push(
+            CommandId::ClearMeasurements,
+            CommandGroup::Edit,
+            I18nKey::CmdClearMeasurements,
+            None,
         );
 
         // 面板

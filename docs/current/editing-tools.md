@@ -33,6 +33,12 @@
 - **数据层零迁移**（YAML / `MeasurementKind` / `World` 全不动）
 - **溯源**：[ADR-0043](/adr/adr-0043-map-dock-split-buttons)（2026-10-20，`ADR-0043-map-dock-split-buttons.md`，两轮实机反馈迭代）
 
+> **追记（2026-10-23）· 测量清理双入口**
+> 1. **工具条第 12 项**：测量组右侧新增「清除全部测量」图标钮（槽位编号记 6.5，不重排 ADR-0043 的 0–10 号）；一键清空**当前图**全部测量，走 `ClearMeasurementsCommand` → 一次 `Ctrl+Z` 整体还原；当前图无测量时按钮禁用。命令面板同源条目「清除全部测量」。
+> 2. **`Del` 删一条**：渲染层 `delete_measurement_under_cursor` 取光标容差内**最近**的一条测量（与测量橡皮共用 `nearest_measurement` 命中几何），经 `EditIntents` → `RemoveMeasurementCommand` 提交，逐步可撤销。不需要先切测量工具；输入框聚焦（`wants_keyboard`）时让位给文字编辑。
+>
+> 语义分工：**按钮 / 命令面板 = 清一图**，**`Del` / 测量橡皮 = 删一条**。数据层零迁移。
+
 ## 4. CellInspector 单格编辑器 ✅
 
 **现行口径**：`ToolKind::CellInspector` 工具——单格拾取 + 改 cell **三通道**（surface / height / biome）。独立 commit、独立 review；**不触碰** Topographic viewmode（[ADR-0039](/adr/adr-0039-topographic-viewmode)）也**不触碰** 2.5D vertex Z（[ADR-0041](/adr/adr-0041-topographic-2-5d-vertex-z)）。

@@ -421,6 +421,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::MapControlsMeasureGroupHint => "测量：量算距离或面积（右下角小三角换模式）",
         I18nKey::MapControlsMeasureDistance => "线段距离",
         I18nKey::MapControlsMeasureArea => "面积",
+        I18nKey::MapControlsClearMeasurements => "清除全部测量（Del 删除光标下的一条）",
 
         // ── ui_shell 通知 ──
         I18nKey::NoticeSavedToPrefix => "已保存到 ",
@@ -446,6 +447,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::NoticeForceRedrawn => "已强制重画地形",
         I18nKey::NoticeResetTerrainNoMap => "当前没有地图，无法重置地形",
         I18nKey::NoticeRegenNoMap => "当前没有地图，无法重生成世界",
+        I18nKey::NoticeClearMeasureNoMap => "当前没有地图，无法清除测量",
 
         // ── ui_time 日期 ──
         I18nKey::TimeNoCalZhPrefix => "第 ",
@@ -474,6 +476,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CmdSave => "保存工程",
         I18nKey::CmdUndo => "撤销",
         I18nKey::CmdRedo => "重做",
+        I18nKey::CmdClearMeasurements => "清除全部测量",
         I18nKey::CmdTogglePanelMapTree => "显隐世界树面板",
         I18nKey::CmdTogglePanelLayers => "显隐图层面板",
         I18nKey::CmdTogglePanelBrush => "显隐地形笔刷面板",
@@ -1029,6 +1032,9 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::MapControlsMeasureGroupHint => "Measure: measure a distance or an area (chevron switches mode)",
         I18nKey::MapControlsMeasureDistance => "Distance",
         I18nKey::MapControlsMeasureArea => "Area",
+        I18nKey::MapControlsClearMeasurements => {
+            "Clear all measurements (Del removes the one under the cursor)"
+        }
 
         // ── ui_shell toasts ──
         I18nKey::NoticeSavedToPrefix => "Saved to ",
@@ -1054,6 +1060,7 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::NoticeForceRedrawn => "Forced terrain redraw",
         I18nKey::NoticeResetTerrainNoMap => "No current map — cannot reset terrain",
         I18nKey::NoticeRegenNoMap => "No current map — cannot regenerate the world",
+        I18nKey::NoticeClearMeasureNoMap => "No current map — cannot clear measurements",
 
         // ── ui_time dates ──
         I18nKey::TimeNoCalZhPrefix => "",
@@ -1082,6 +1089,7 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CmdSave => "Save project",
         I18nKey::CmdUndo => "Undo",
         I18nKey::CmdRedo => "Redo",
+        I18nKey::CmdClearMeasurements => "Clear all measurements",
         I18nKey::CmdTogglePanelMapTree => "Toggle map-tree panel",
         I18nKey::CmdTogglePanelLayers => "Toggle layers panel",
         I18nKey::CmdTogglePanelBrush => "Toggle terrain-brush panel",
