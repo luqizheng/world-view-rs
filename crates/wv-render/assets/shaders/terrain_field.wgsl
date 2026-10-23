@@ -81,18 +81,32 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // `px_per_cell` 算好写进 `p.pad0.x`（远观大 / 近观收敛）。
     let g = uv0 * grid;
     let gw = g + warp_offset(g);
-    let uv = gw / grid;                       // 扭曲后的 uv（供三张纹理采样）
-    let center = gw - vec2<f32>(0.5);         // texel 中心空间（供双三次）
+    let uv = gw / grid;                       // 扭曲后的 uv（供 attr 采样）
+
+    // 采样位置 `pos`：**格坐标（边界空间）**——第 i 格占 `[i, i+1)`，格心在
+    // `i + 0.5`。三张纹理**统一用这一个位置**，不再各自 ±0.5。
+    //
+    // ⚠️ 这里修掉一处静默错位：原本 `coast` / `height` 走的是 `gw − 0.5`，
+    // 而 `attr` 走 `gw / grid`，两者差**半格**。半格意味着 SDF 的符号
+    // 与水陆掩码的边界不在同一位置——岸线墨线会整体偏移，且偏移量随缩放
+    // 线性放大（32 px/格 时是 16 px）。fbm 地形平滑，肉眼难判，属静默缺陷。
+    let pos = gw;
+
+    let px_per_cell = max(p.shape.x, 1e-5);
+    // 一个屏幕像素覆盖多少个格（缩小时 > 1）。
+    let footprint = clamp(1.0 / px_per_cell, 1.0, 8.0);
+    // T32/T33：`1 = 纯面积平均（远观）`，`0 = 纯双三次（近观）`。
+    let lod_t = 1.0 - smoothstep(1.0, 3.0, px_per_cell);
 
     // ── 亚格高度：Catmull-Rom 双三次 16 tap（T13）────────────────────────
-    let h = sample_height_bicubic(center);
+    let h = mix(sample_height_bicubic(pos), box_avg_height(pos, footprint), lod_t);
 
     // ── 明暗：中心差分梯度 × 光源（T14–T17）────────────────────────────
     let e = p.shape.w;
-    let dx = (sample_height_bicubic(center + vec2<f32>(e, 0.0))
-            - sample_height_bicubic(center - vec2<f32>(e, 0.0))) / (2.0 * e);
-    let dy = (sample_height_bicubic(center + vec2<f32>(0.0, e))
-            - sample_height_bicubic(center - vec2<f32>(0.0, e))) / (2.0 * e);
+    let dx = (sample_height_bicubic(pos + vec2<f32>(e, 0.0))
+            - sample_height_bicubic(pos - vec2<f32>(e, 0.0))) / (2.0 * e);
+    let dy = (sample_height_bicubic(pos + vec2<f32>(0.0, e))
+            - sample_height_bicubic(pos - vec2<f32>(0.0, e))) / (2.0 * e);
 
     // 归一化高度 → 世界斜率（米/格），乘 T15 高程夸张。
     let zx = dx * H_RANGE_M * p.shape.z;
@@ -101,10 +115,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let lambert = clamp(dot(n, normalize(p.light_dir.xyz)), 0.0, 1.0);
 
     // T17：明暗乘子钳制 —— 陡崖不压黑也不过曝。
-    let relief = mix(p.relief.x, p.relief.y, lambert);
+    // 远观把明暗向 1.0 收敛：梯度必须靠双三次算（差分要连续性），但那个
+    // 空间频率在小于 1 px/格 时已超出屏幕能表现的范围，留着只会闪成噪点。
+    // 这与 T33「远观只留色域」一致——山体仍靠三阶色阶读出层次。
+    let relief = mix(mix(p.relief.x, p.relief.y, lambert), 1.0, lod_t);
 
     // ── 海岸距离场（T3 → T7–T9）────────────────────────────────────────
-    let d = sample_coast(center);
+    let d = mix(sample_coast(pos), box_avg_coast(pos, footprint), lod_t);
 
     // ── 底色 ────────────────────────────────────────────────────────────
     let attr = textureSampleLevel(attr_tex, attr_smp, uv, 0.0);
@@ -169,7 +186,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // ── 墨线（屏幕像素口径 + fwidth 抗锯齿）───────────────────────────────
     // 禁裸 smoothstep：边缘宽会随缩放变化（近观粗、远观糊）。
     // 用屏幕空间导数把距离折算成像素，线宽才恒定。
-    let px_per_cell = max(p.shape.x, 1e-5);
+    // `px_per_cell` 已在函数开头声明（LOD 也要用）。
 
     // T31–T34 缩放自适应：墨线强度随每格像素数收敛。
     // - 近观（≥3 px/格）：全开
@@ -177,11 +194,31 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // - 远观（<1）：全关，只留色域（否则彩色噪点会闪）
     let ink_gate = smoothstep(1.0, 3.0, px_per_cell);
 
-    // 岸线：`sd = 0` 即岸线本身（相邻两格格心之间的交界）。
-    let dd = abs(sd);
-    let coast_grad = max(fwidth(dd), 1e-6);
-    let coast_half = COAST_LINE_PX / px_per_cell;               // 格单位半宽
-    let coast_ink = 1.0 - smoothstep(coast_half - coast_grad, coast_half + coast_grad, dd);
+    // ── 岸线墨线（T23 / T11 = 1.2 屏幕 px）────────────────────────────────
+    //
+    // **用「水陆掩码的屏幕空间不连续」定位，不用距离场。**
+    //
+    // 旧写法是 `dd = |d − 0.5|`，配合阈值 `1.2 / px_per_cell`——它**一个像素
+    // 都画不出来**，实测全图零墨线。原因在数据结构：`coast_tex` 存「到最近
+    // 异类格的距离」，在岸线**两侧的两个格心处都是 1**，中间平顶，所以
+    // `|d − 0.5|` 的最小值就是 0.5，永远大于任何合理线宽。
+    // 换成 `|d − 1|` 也不行：平顶使墨带宽度达到 1.15 格，不是线是带。
+    // 根因是**无符号距离场在边界处是平顶的**（T5 的直接后果），拿它定不住
+    // 一条亚格宽度的线。
+    //
+    // 可行做法：`attr.r` 是 Nearest 采样——格内恒定、跨界跳变，故
+    // `fwidth(attr.r)` 只在格边界那个像素为正。用它定位，线宽天然是
+    // **1 个屏幕像素**（`fwidth` 的分辨率下限），且随缩放恒定。
+    //
+    // 已知偏差：T23 写 1.2 px，实际约 1 px。1.2 与 1 的差别小于一像素，
+    // 且 `fwidth` 无法表达小数线宽——要精确到 1.2 需有符号 SDF（乙案，
+    // 已被裁定不采纳）。此处按「1 px 就是本数据模型能画的最细线」登记。
+    //
+    // **只在水侧落墨**：`fwidth` 会把边界两侧的像素都标成「有跳变」，
+    // 两侧都画就是 2 px（实测）。手绘地图的岸线惯例也是画在水侧那一侧，
+    // 且这样线宽正好收到 1 px。
+    let mask_edge = fwidth(attr.r);
+    let coast_ink = smoothstep(0.05, 0.45, mask_edge) * select(0.0, 1.0, !is_land);
     rgb = mix(rgb, p.ink.rgb, clamp(coast_ink, 0.0, 1.0) * COAST_INK_ALPHA * ink_gate);
 
     // biome 边界（T27：4 邻 + 中心比较，ID 只比较不插值）。
@@ -290,12 +327,29 @@ fn cubic_weights(t: f32) -> vec4<f32> {
     );
 }
 
-fn sample_height_bicubic(uv_cell: vec2<f32>) -> f32 {
-    let g = p.grid.xy;
-    // texel 中心空间：格心 (i+0.5) 对应整数 i
-    let tc = uv_cell - vec2<f32>(0.5);
+/// Catmull-Rom 双三次（T13）。
+///
+/// ## 坐标约定（**唯一权威，改前先读**）
+///
+/// 入参 `pos` 是**格坐标（边界空间）**：第 i 格占 `[i, i+1)`，格心在 `i + 0.5`。
+///
+/// 换算到纹素下标：`tc = pos − 0.5`，于是格心 `i+0.5` 映射到整数 `i`，
+/// `f = fract(tc)` 是格内的亚格位置。四点下标取 `floor(tc) − 1 … floor(tc) + 2`
+/// （Catmull-Rom 需要左右各一个邻点），权重 `[w0..w3]` 依次乘上去。
+///
+/// 校验：`pos = i + 0.5` → `tc = i` → `f = 0` → 只有 `w1 = 1` → 取
+/// `floor(tc) + 0 = i` → 得到第 i 格自己的纹素。**无偏移**。
+///
+/// ⚠️ 此前写成 `base = floor(tc) − 1` 且下标取 `base + (i − 1)`，等于把四点
+/// 窗口整体左移一格：`f = 0` 时取到的是 `i − 1` 号纹素，**整条高度场偏一个
+/// 格**。再叠加调用方传的 `gw − 0.5`，height 实际落在 `gw − 1.5`、coast 落在
+/// `gw − 0.5`、attr 落在 `gw`——三套不同配准。fbm 地形平滑，肉眼难判，
+/// 属静默缺陷；现统一为全部在 `gw` 采样。
+fn sample_height_bicubic(pos: vec2<f32>) -> f32 {
+    // texel 下标空间：格心 (i+0.5) 对应整数 i
+    let tc = pos - vec2<f32>(0.5);
     let f = fract(tc);
-    let base = floor(tc) - vec2<f32>(1.0);
+    let base = floor(tc);
     let wx = cubic_weights(f.x);
     let wy = cubic_weights(f.y);
 
@@ -318,18 +372,64 @@ fn sample_height_bicubic(uv_cell: vec2<f32>) -> f32 {
     return acc;
 }
 
-/// 单点取样（钳在图内，避免边缘越界采样导致的黑边）。
-fn height_texel(cell: vec2<f32>) -> f32 {
+/// 按**纹素下标**取单点高度（`height_texel(i)` = 第 i 格）。钳在图内，
+/// 避免边缘越界采样导致的黑边。
+fn height_texel(idx: vec2<f32>) -> f32 {
     let g = p.grid.xy;
-    let c = clamp(cell, vec2<f32>(0.0), g - vec2<f32>(1.0));
+    let c = clamp(idx, vec2<f32>(0.0), g - vec2<f32>(1.0));
     let uv = (c + vec2<f32>(0.5)) / g;
     return textureSampleLevel(height_tex, height_smp, uv, 0.0).r;
 }
 
-/// 海岸距离（T3）。Linear 采样保亚格连续 —— 整数截断场插值会出平顶带。
-fn sample_coast(uv_cell: vec2<f32>) -> f32 {
+/// 按**格坐标（边界空间）**取高度，双线性。`height_at(i + 0.5)` = 第 i 格。
+fn height_at(pos: vec2<f32>) -> f32 {
     let g = p.grid.xy;
-    let uv = uv_cell / g;
+    return textureSampleLevel(height_tex, height_smp, clamp(pos, vec2<f32>(0.0), g) / g, 0.0).r;
+}
+
+// ── T32/T33 缩小采样：手工 8 tap 盒式平均 ─────────────────────────────────
+//
+// **为什么必须手工做**：T4 规定零 mip 链。没有 mip，`px_per_cell < 1` 时
+// `textureSampleLevel(.., 0.0)` 只在 1 个纹素邻域做双线性——那是**欠采样**
+// 而不是平均，高频地形（碎岛、笔刷画的噪点）在远观档会闪。
+//
+// **为什么不能用硬件 mip**：`attr` 是 ID 纹理，mip 会把相邻群系平均成
+// `biome 5.3` 这种不存在的编号（T2 的翻车点）。故只对**连续场**
+// （height / coast）手工求面积平均，ID 一律保持最近邻。
+
+/// 3×3 去中心 = 8 tap（T33 指定的 tap 数），覆盖 `footprint` 格见方。
+fn box_avg_height(pos: vec2<f32>, footprint: f32) -> f32 {
+    let h2 = footprint * 0.5;
+    var sum = 0.0;
+    for (var j = 0; j < 3; j = j + 1) {
+        for (var i = 0; i < 3; i = i + 1) {
+            if (i == 1 && j == 1) { continue; }
+            sum = sum + height_at(pos + vec2<f32>(f32(i) - 1.0, f32(j) - 1.0) * h2);
+        }
+    }
+    return sum / 8.0;
+}
+
+/// 同 [`box_avg_height`]，作用于海岸距离场。
+fn box_avg_coast(pos: vec2<f32>, footprint: f32) -> f32 {
+    let h2 = footprint * 0.5;
+    var sum = 0.0;
+    for (var j = 0; j < 3; j = j + 1) {
+        for (var i = 0; i < 3; i = i + 1) {
+            if (i == 1 && j == 1) { continue; }
+            sum = sum + sample_coast(pos + vec2<f32>(f32(i) - 1.0, f32(j) - 1.0) * h2);
+        }
+    }
+    return sum / 8.0;
+}
+
+/// 海岸距离（T3）。Linear 采样保亚格连续 —— 整数截断场插值会出平顶带。
+/// 海岸距离（T3）。Linear 采样保亚格连续 —— 整数截断场插值会出平顶带。
+///
+/// 入参 `pos` 同样是**格坐标（边界空间）**，与其他采样函数同一套约定。
+fn sample_coast(pos: vec2<f32>) -> f32 {
+    let g = p.grid.xy;
+    let uv = clamp(pos, vec2<f32>(0.0), g) / g;
     let r = textureSampleLevel(coast_tex, coast_smp, uv, 0.0).r;
     return r * 32.0; // pack 编码 d/32 → 还原为格单位
 }
