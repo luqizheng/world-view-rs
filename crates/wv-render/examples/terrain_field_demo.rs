@@ -42,8 +42,8 @@ use bevy::{
 
 use wv_core::terrain::{TerrainCellData, TerrainData};
 use wv_render::terrain_view::field::{
-    build_material, default_params, FieldPack, TerrainFieldMaterial, TerrainFieldMaterialPlugin,
-    ViewBranch,
+    build_material, default_params, set_coast_encoding, CoastEncoding, FieldPack,
+    TerrainFieldMaterial, TerrainFieldMaterialPlugin, ViewBranch,
 };
 
 /// 地形网格边长（格）。512 = 262144 格，与 P0 锁 T5 的计时口径一致。
@@ -213,6 +213,34 @@ fn find_coast_world(terrain: &TerrainData) -> Vec2 {
     Vec2::new(cx + 0.5 - g * 0.5, g * 0.5 - cy - 0.5)
 }
 
+/// **受控合成地形**：一条 45° 直岸线。
+///
+/// 存在的唯一理由是**可测量**。真实 fbm 岸线是曲线，放大后「哪一段是阶梯、
+/// 哪一段是数据本来就直」分不清；45° 直线则一目了然：无符号编码必然渲成
+/// 正交阶梯，有符号编码必然是斜线。
+///
+/// 判据：沿 y 逐行取水陆边界 x，斜率应恒为 1、且每行都变。
+fn make_terrain_synth(n: u32) -> TerrainData {
+    let mut cells = Vec::with_capacity((n * n) as usize);
+    for y in 0..n {
+        for x in 0..n {
+            // x + y < n 的斜带 ⇒ 45° 岸线（左下为陆、右上为水）
+            let is_land = (x + y) < n;
+            let height = if is_land { 240i16 } else { -1500i16 };
+            cells.push(TerrainCellData {
+                height,
+                surface: u8::from(is_land),
+                biome: if is_land { 2 } else { 15 },
+            });
+        }
+    }
+    TerrainData {
+        width: n,
+        height: n,
+        cells,
+    }
+}
+
 /// 程序化生成一份**确定性**的测试地形（大陆 + 山脉 + 内海）。
 ///
 /// 布局意图（让 demo 能同时看到四种画法）：
@@ -292,10 +320,26 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<TerrainFieldMaterial>>,
 ) {
-    let terrain = make_terrain(GRID);
+    // `FIELD_SYNTH=1` 换受控合成地形（45° 直岸线），用于可测量的 A/B。
+    let terrain = if std::env::var("FIELD_SYNTH").is_ok() {
+        info!("地形：受控合成（45° 直岸线）");
+        make_terrain_synth(GRID)
+    } else {
+        make_terrain(GRID)
+    };
+
+    // 海岸编码：`FIELD_SIGNED=1` 切到有符号距离（T3/T5 的实验分支），
+    // 默认保持 T3 原值的无符号编码。用于 A/B 对比「台阶是否可消」。
+    let encoding = if std::env::var("FIELD_SIGNED").is_ok() {
+        info!("海岸编码：Signed（有符号距离，实验分支）");
+        CoastEncoding::Signed
+    } else {
+        info!("海岸编码：Unsigned（T3 原值）");
+        CoastEncoding::Unsigned
+    };
 
     // 打印打包统计——P0 锁 T4 的显存口径（1024² 图 8 MB；512² 图 = 2 MB）。
-    let pack = FieldPack::from_terrain(&terrain);
+    let pack = FieldPack::from_terrain_with(&terrain, encoding);
     let coast_world = find_coast_world(&terrain);
     info!(
         "海岸对准点（世界坐标）: ({:.1}, {:.1})",
@@ -311,12 +355,14 @@ fn setup(
     );
 
     // 一格 = INIT_PX_PER_CELL 世界单位；相机视野按网格铺满。
-    let params = default_params(
+    let mut params = default_params(
         [GRID as f32, GRID as f32],
         INIT_PX_PER_CELL,
         ViewBranch::Themed,
         Default::default(),
     );
+    // pack 与 shader 的编码开关必须同时设，否则距离场整体错一格（不报错）。
+    set_coast_encoding(&mut params, encoding);
     let material = materials.add(build_material(&mut images, &pack, params));
 
     // 一格 = INIT_PX_PER_CELL 世界单位；quad 覆盖全图，UV 铺满 0..1。
@@ -635,7 +681,17 @@ fn acceptance_capture(
 
     cap.frames += 1;
     if cap.frames == SETTLE_FRAMES {
-        let path = format!("snapshots-demo/accept/{}.png", shot.label);
+        // 按编码分桶，A/B 两套图互不覆盖。
+        let sub = match (
+            std::env::var("FIELD_SIGNED").is_ok(),
+            std::env::var("FIELD_SYNTH").is_ok(),
+        ) {
+            (false, false) => "accept",
+            (true, false) => "accept-signed",
+            (false, true) => "accept-synth",
+            (true, true) => "accept-synth-signed",
+        };
+        let path = format!("snapshots-demo/{}/{}.png", sub, shot.label);
         if let Some(dir) = std::path::Path::new(&path).parent() {
             let _ = std::fs::create_dir_all(dir);
         }

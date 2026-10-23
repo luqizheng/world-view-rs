@@ -81,6 +81,31 @@ fn encode_unorm16(v: f32) -> u16 {
     (v.clamp(0.0, 1.0) * UNORM16_MAX).round() as u16
 }
 
+/// 海岸距离纹理的编码方式。
+///
+/// 两种编码**占用同样的存储**（都是一张 `R16Unorm`），差别只在语义：
+///
+/// | | 0 的含义 | 岸线在哪里 | 交界的连续性 |
+/// |---|---|---|---|
+/// | `Unsigned`（现行，T3 原值） | 岸上（距离 0） | 两侧格心**都是 1**，中间平顶 | 符号来自 `attr.r`（Nearest）→ **逐格硬切** |
+/// | `Signed`（实验） | 岸线本身 | 两侧格心分别是 `+1` / `−1` | 插值穿过 0 → **亚格连续** |
+///
+/// `Signed` 不是「更好的编码」这种口味问题，它解决两个可测的缺陷：
+/// 1. 水陆交界在放大后是 1 格宽的正交台阶（`Unsigned` 的符号是 per-texel）；
+/// 2. 岸线墨线**无法用距离场定位**——平顶使 `|d − 0.5|` 的最小值是 0.5，
+///    永远大于线宽阈值（实测零像素）。
+///
+/// 代价：偏离已锁定的 T3/T5（T5 明写「不用带符号 SDF」）。故默认仍是
+/// `Unsigned`，`Signed` 需显式选择。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CoastEncoding {
+    /// T3 原值：存无符号距离 `d / 32`。
+    #[default]
+    Unsigned,
+    /// 实验：存有符号距离 `(sd + 32) / 64`，`sd > 0` = 陆。
+    Signed,
+}
+
 /// 三张数据纹理打包好的原始像素缓冲（**未**转成 Bevy `Image`）。
 ///
 /// 三张纹理的分辨率一致：宽 = `TerrainData::width`，高 = `TerrainData::height`。
@@ -90,11 +115,13 @@ pub struct FieldPack {
     pub width: u32,
     /// 纹理高（= 地形格高）。
     pub height: u32,
+    /// 海岸纹理用的编码——shader 侧必须按同一约定解码。
+    pub encoding: CoastEncoding,
     /// T1：height 场，`R16Unorm` 字节序（小端 `u16`），线性采样。
     /// 归一化 `h_norm = (h − H_MIN) / (H_MAX − H_MIN)`。
     pub height_tex: Vec<u8>,
     /// T3：coast_dist 场，`R16Unorm` 字节序（小端 `u16`），线性采样。
-    /// 编码 `d / COAST_MAX_CELLS`，饱和在 `1.0`。
+    /// 编码随 [`Self::encoding`]：`d / 32` 或 `(sd + 32) / 64`。
     pub coast_tex: Vec<u8>,
     /// T2：attr 通道，`Rgba8Unorm`。
     /// R = 水陆（1 陆 / 0 水，**湿判定**口径）、G = biome（裸字节）、
@@ -115,6 +142,11 @@ impl FieldPack {
     ///
     /// 验收口径：T1 / T2 / T3（见模块文档）。
     pub fn from_terrain(data: &TerrainData) -> Self {
+        Self::from_terrain_with(data, CoastEncoding::default())
+    }
+
+    /// 同 [`Self::from_terrain`]，可指定海岸编码（见 [`CoastEncoding`]）。
+    pub fn from_terrain_with(data: &TerrainData, encoding: CoastEncoding) -> Self {
         let w = data.width as usize;
         let h = data.height as usize;
 
@@ -123,6 +155,7 @@ impl FieldPack {
             return Self {
                 width: data.width,
                 height: data.height,
+                encoding,
                 height_tex: Vec::new(),
                 coast_tex: Vec::new(),
                 attr_tex: Vec::new(),
@@ -171,8 +204,23 @@ impl FieldPack {
             height_tex.extend_from_slice(&encode_unorm16(h_norm).to_le_bytes());
 
             // T3：距离 → 归一化（d / 32）→ 钳位 → 四舍五入。
+            //
+            // 两种编码（见 [`CoastEncoding`]）：
+            // - **Unsigned（现行，T3 原值）**：存「到最近异类格的距离」，0 = 岸上。
+            // - **Signed（实验）**：存**有符号**距离，0 = 岸线本身，正 = 陆、负 = 水。
             let d = coast_d.get(i).copied().unwrap_or(coast_sdf::FAR);
-            let coast_norm = d / COAST_MAX_CELLS;
+            let coast_norm = match encoding {
+                CoastEncoding::Unsigned => d / COAST_MAX_CELLS,
+                CoastEncoding::Signed => {
+                    // `d ≥ 1`（岸线两侧的格心到对面都是 1），故有符号距离在
+                    // 岸线两侧分别是 `+1` / `−1`——**双线性插值穿过 0 的位置
+                    // 正是两格之间的交界**，这就是亚格连续性的来源。
+                    // 需先把 [−32, 32] 映射到 [0, 1]：`(sd + 32) / 64`。
+                    let sd = if is_wet(&cell) { -d } else { d };
+                    (sd.clamp(-COAST_MAX_CELLS, COAST_MAX_CELLS) + COAST_MAX_CELLS)
+                        / (2.0 * COAST_MAX_CELLS)
+                }
+            };
             coast_tex.extend_from_slice(&encode_unorm16(coast_norm).to_le_bytes());
 
             // T2：R = 水陆（湿判定口径：surface 为水 **或** 海拔 < 0），
@@ -192,6 +240,7 @@ impl FieldPack {
         Self {
             width: data.width,
             height: data.height,
+            encoding,
             height_tex,
             coast_tex,
             attr_tex,
@@ -492,5 +541,98 @@ mod tests {
         assert!(pack.height_tex.is_empty());
         assert!(pack.coast_tex.is_empty());
         assert!(pack.attr_tex.is_empty());
+    }
+
+    // ── 有符号海岸编码（CoastEncoding::Signed）────────────────────────────
+
+    /// 有符号编码在岸线两侧必须是 `+1` / `−1`——这是「双线性插值穿过 0」
+    /// 的前提。若写成 `±(d−0.5)`，两侧会变成 `±0.5`，插值零点落在格边上，
+    /// 又退回逐格硬切。
+    #[test]
+    fn signed_encoding_puts_opposite_signs_on_both_sides() {
+        // 2 格一行：0 = 陆，1 = 水。两格到对面都是 1。
+        let data = row_data(&[true, false]);
+        let pack = FieldPack::from_terrain_with(&data, CoastEncoding::Signed);
+        let land = decode_coast(&pack, 0) as f64 / 65535.0;
+        let water = decode_coast(&pack, 1) as f64 / 65535.0;
+
+        // 解码：(raw − 0.5) × 64
+        let sd_land = (land - 0.5) * 64.0;
+        let sd_water = (water - 0.5) * 64.0;
+        assert!(
+            (sd_land - 1.0).abs() < 1e-3,
+            "陆地侧应为 +1 格，实得 {sd_land}"
+        );
+        assert!(
+            (sd_water + 1.0).abs() < 1e-3,
+            "水域侧应为 −1 格，实得 {sd_water}"
+        );
+
+        // 关键性质：两格之间线性插值必然穿过 0（符号相反即可保证）。
+        assert!(sd_land > 0.0 && sd_water < 0.0);
+    }
+
+    /// 有符号编码下，全水地图解码后应饱和在 `−32`（而不是 0）。
+    #[test]
+    fn signed_encoding_saturates_homogeneous_water() {
+        let data = row_data(&[false, false, false]);
+        let pack = FieldPack::from_terrain_with(&data, CoastEncoding::Signed);
+        for i in 0..3 {
+            let raw = decode_coast(&pack, i) as f64 / 65535.0;
+            let sd = (raw - 0.5) * 64.0;
+            assert!((sd + 32.0).abs() < 1e-2, "全水应饱和到 −32，实得 {sd}");
+        }
+    }
+
+    /// 两种编码的存储开销完全一致（都是 `w×h×2` 字节）——signed 不是
+    /// 「更贵的编码」，这是它可以被考虑的前提。
+    #[test]
+    fn both_encodings_use_identical_bytes() {
+        let data = row_data(&[true, false, true, false]);
+        let u = FieldPack::from_terrain_with(&data, CoastEncoding::Unsigned);
+        let s = FieldPack::from_terrain_with(&data, CoastEncoding::Signed);
+        assert_eq!(u.coast_tex.len(), s.coast_tex.len());
+        assert_eq!(
+            u.coast_tex.len(),
+            data.width as usize * data.height as usize * 2
+        );
+        assert_eq!(u.encoding, CoastEncoding::Unsigned);
+        assert_eq!(s.encoding, CoastEncoding::Signed);
+    }
+
+    /// `from_terrain` 必须等价于 `from_terrain_with(.., Unsigned)`——
+    /// 默认路径不能因为加了变体而悄悄改变。
+    #[test]
+    fn from_terrain_defaults_to_unsigned() {
+        let data = row_data(&[true, false]);
+        let a = FieldPack::from_terrain(&data);
+        let b = FieldPack::from_terrain_with(&data, CoastEncoding::Unsigned);
+        assert_eq!(a.encoding, CoastEncoding::Unsigned);
+        assert_eq!(a.coast_tex, b.coast_tex);
+    }
+
+    // ── 测试辅助 ─────────────────────────────────────────────────────────
+
+    /// 造一行地形（`land[i]` 为真 = 陆）。高度随水陆给固定值。
+    fn row_data(land: &[bool]) -> TerrainData {
+        let cells = land
+            .iter()
+            .map(|&l| TerrainCellData {
+                height: if l { 200 } else { -800 },
+                surface: u8::from(l),
+                biome: if l { 2 } else { 15 },
+            })
+            .collect();
+        TerrainData {
+            width: land.len() as u32,
+            height: 1,
+            cells,
+        }
+    }
+
+    /// 取第 `i` 格的海岸纹理 u16 原始值。
+    fn decode_coast(pack: &FieldPack, i: usize) -> u16 {
+        let k = i * 2;
+        u16::from_le_bytes([pack.coast_tex[k], pack.coast_tex[k + 1]])
     }
 }

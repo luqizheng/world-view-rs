@@ -67,7 +67,7 @@ use bevy::{
     sprite_render::{Material2d, Material2dPlugin},
 };
 
-use super::pack::FieldPack;
+use super::pack::{CoastEncoding, FieldPack};
 
 // ── P0 规格锁常量（T7–T18 / T23 / T24 / T27）────────────────────────────────
 
@@ -258,6 +258,11 @@ pub struct FieldParams {
     /// T16 光源方向 xyz；w 预留。
     pub light_dir: Vec4,
     /// 预留（P2 水彩开关）。
+    /// 预留槽。
+    /// - `.x` — 未用
+    /// - `.y` — **海岸纹理编码开关**：`0` = 无符号距离（T3 原值），
+    ///   `1` = 有符号距离（[`CoastEncoding::Signed`]）。shader 必须与
+    ///   `pack` 用同一约定解码，否则距离整体偏移一格。
     pub pad1: Vec4,
     /// 海岸三段累计边界（格）：x = 滩 / y = 浅 / z = 深；w = `wash_amt`（P2）。
     pub shore_edges: Vec4,
@@ -388,6 +393,17 @@ pub fn default_params(
         ink: rgba4(pal.ink),
         paper: rgba4(pal.paper),
     }
+}
+
+/// 按 [`CoastEncoding`] 设置 uniform 的解码开关。
+///
+/// 这是 `pack` 与 `shader` 之间的**唯一耦合点**：两者必须同时切换，
+/// 否则距离场整体偏移一格（症状是海陆交界与色带都错开半格，但不报错）。
+pub fn set_coast_encoding(params: &mut FieldParams, encoding: CoastEncoding) {
+    params.pad1[1] = match encoding {
+        CoastEncoding::Unsigned => 0.0,
+        CoastEncoding::Signed => 1.0,
+    };
 }
 
 /// 插件注册（材质是资源类型，必须显式注册才有资产管线）。

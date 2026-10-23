@@ -120,8 +120,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // 这与 T33「远观只留色域」一致——山体仍靠三阶色阶读出层次。
     let relief = mix(mix(p.relief.x, p.relief.y, lambert), 1.0, lod_t);
 
-    // ── 海岸距离场（T3 → T7–T9）────────────────────────────────────────
-    let d = mix(sample_coast(pos), box_avg_coast(pos, footprint), lod_t);
+    // ── 海岸距离场（T3）──────────────────────────────────────────────────
+    // 取**原始归一化值**，解码留给下面按编码模式做（`p.pad1.y`）。
+    let coast_raw = mix(sample_coast_raw(pos), box_avg_coast(pos, footprint), lod_t);
 
     // ── 底色 ────────────────────────────────────────────────────────────
     let attr = textureSampleLevel(attr_tex, attr_smp, uv, 0.0);
@@ -130,14 +131,25 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // ── 有符号距离（SUB-CELL 关键）──────────────────────────────────────
     //
-    // `coast_tex` 存的是「到最近**异类格**的距离」，相邻异类格的格心距离为 1。
-    // 直接按 `is_land` 二值切换 → 水陆边界**逐格硬切**，放大即见阶梯
-    // （违反 SPEC §3.8.2「边界不得逐格改色表达」）。
+    // 两种编码模式（`p.pad1.y`，须与 `pack::CoastEncoding` 一致）：
     //
-    // 改成有符号距离：格心处 `sd = ±0.5`，于是**相邻两格的格心之间线性插值
-    // 恰好穿过 0**——0 的位置就是两格的交界线。这样水陆过渡是连续函数，
-    // 任意放大倍数下岸线都是平滑曲线。
-    let sd = select(-(d - 0.5), d - 0.5, is_land); // 正 = 陆，负 = 水
+    // **Unsigned（默认，T3 原值）**：纹理存「到最近异类格的距离」，0 = 岸上。
+    // 符号只能取自 `attr.r`（Nearest），于是 `sd` 在格边界处**从 +0.5 跳到
+    // −0.5**——`land_t` 一帧内完成 0→1，即**逐格硬切**，放大见台阶。
+    //
+    // **Signed（实验）**：纹理存有符号距离，岸线两侧格心分别是 `+1` / `−1`，
+    // 双线性插值穿过 0 的位置正好是交界 → `sd` 是**连续函数**，`land_t` 在
+    // 一个格内平滑过渡。这是唯一能让水陆交界在亚格尺度连续的办法（不改数据
+    // 分辨率的前提下）。
+    var sd: f32; // 正 = 陆，负 = 水，单位 = 格
+    var d: f32;  // 到最近异类格的**无符号**距离（色带用它，两模式都成立）
+    if (p.pad1.y > 0.5) {
+        sd = (coast_raw - 0.5) * 64.0; // pack 编码 (sd + 32) / 64
+        d = abs(sd);
+    } else {
+        d = coast_raw * 32.0; // pack 编码 d / 32
+        sd = select(-(d - 0.5), d - 0.5, is_land);
+    }
     let land_t = smoothstep(-0.5, 0.5, sd);
 
     var base: vec3<f32>;
@@ -217,8 +229,20 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // **只在水侧落墨**：`fwidth` 会把边界两侧的像素都标成「有跳变」，
     // 两侧都画就是 2 px（实测）。手绘地图的岸线惯例也是画在水侧那一侧，
     // 且这样线宽正好收到 1 px。
-    let mask_edge = fwidth(attr.r);
-    let coast_ink = smoothstep(0.05, 0.45, mask_edge) * select(0.0, 1.0, !is_land);
+    var coast_ink: f32;
+    if (p.pad1.y > 0.5) {
+        // **Signed**：距离场在岸线处穿过 0（不再平顶），可以直接用它定线宽。
+        // 线宽以屏幕像素给：`half_w`（格）= 半个线宽 / 每格像素数。
+        let dd = abs(sd);
+        let half_w = 0.5 * COAST_LINE_PX / px_per_cell;
+        let aa = max(fwidth(dd), 1e-6);
+        coast_ink = 1.0 - smoothstep(half_w - aa, half_w + aa, dd);
+    } else {
+        // **Unsigned**：距离场平顶，定不住亚格线宽，只能靠掩码的屏幕空间
+        // 跳变定位（详见上方 `mask_edge` 的说明）。
+        let mask_edge = fwidth(attr.r);
+        coast_ink = smoothstep(0.05, 0.45, mask_edge) * select(0.0, 1.0, !is_land);
+    }
     rgb = mix(rgb, p.ink.rgb, clamp(coast_ink, 0.0, 1.0) * COAST_INK_ALPHA * ink_gate);
 
     // biome 边界（T27：4 邻 + 中心比较，ID 只比较不插值）。
@@ -417,21 +441,25 @@ fn box_avg_coast(pos: vec2<f32>, footprint: f32) -> f32 {
     for (var j = 0; j < 3; j = j + 1) {
         for (var i = 0; i < 3; i = i + 1) {
             if (i == 1 && j == 1) { continue; }
-            sum = sum + sample_coast(pos + vec2<f32>(f32(i) - 1.0, f32(j) - 1.0) * h2);
+            sum = sum + sample_coast_raw(pos + vec2<f32>(f32(i) - 1.0, f32(j) - 1.0) * h2);
         }
     }
     return sum / 8.0;
 }
 
 /// 海岸距离（T3）。Linear 采样保亚格连续 —— 整数截断场插值会出平顶带。
-/// 海岸距离（T3）。Linear 采样保亚格连续 —— 整数截断场插值会出平顶带。
+/// 海岸距离纹理的**原始归一化值**（0..1）。解码由调用方按编码模式做。
 ///
-/// 入参 `pos` 同样是**格坐标（边界空间）**，与其他采样函数同一套约定。
-fn sample_coast(pos: vec2<f32>) -> f32 {
+/// 之所以返回原始值而不直接返回格数：两种编码（`d/32` 与 `(sd+32)/64`）
+/// 共用同一张纹理，解码方式必须跟 `pack::CoastEncoding` 一起切换。
+/// 在这里解码就等于把模式判断藏进采样函数，容易出现「pack 换了、shader 没换」
+/// 的静默错位。
+///
+/// 入参 `pos` 是**格坐标（边界空间）**，与其他采样函数同一套约定。
+fn sample_coast_raw(pos: vec2<f32>) -> f32 {
     let g = p.grid.xy;
     let uv = clamp(pos, vec2<f32>(0.0), g) / g;
-    let r = textureSampleLevel(coast_tex, coast_smp, uv, 0.0).r;
-    return r * 32.0; // pack 编码 d/32 → 还原为格单位
+    return textureSampleLevel(coast_tex, coast_smp, uv, 0.0).r;
 }
 
 /// biome 边界检测（T27）：中心与 4 邻比较，ID 只比较不插值。
