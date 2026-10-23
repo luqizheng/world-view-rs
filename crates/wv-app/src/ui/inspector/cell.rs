@@ -55,12 +55,25 @@ pub enum CellPanelMode {
     /// 批量（多边形选区）。
     Batch,
 }
+
+/// 「圈完自动落批量」的边沿检测（2026-10-24）。
+///
+/// 多边形选区**从无到有**的那一帧把 [`CellPanelMode`] 切到 `Batch`——
+/// CellMap 工作区的意图菜单已撤出，批量区是圈选确认后的唯一应用入口，
+/// 作者不该再手点一次「批量」才看到读数。只做**边沿触发**：作者随后手动
+/// 切回单格不会被每帧强按回去；下次重新圈选（region 从空变非空）才再触发。
+#[derive(Debug, Default, bevy::prelude::Resource)]
+pub struct BatchModeAutoLand {
+    /// 上一帧是否有多边形选区。
+    pub had_region: bool,
+}
 use wv_ui::widgets::segmented_control::segmented;
 
 /// Cell 表单（Inspector「属性」页签 · 地形格分支）。
 ///
-/// **何时出现**：`EditCell` 工具激活时（设计稿 §11 Q4——工具即模式）。
-/// 工具未激活但仍有选中格时，本分支不显示（那属于工具态的产物）。
+/// **何时出现**：`EditCell` 工具激活时（设计稿 §11 Q4——工具即模式）；
+/// 2026-10-24 起CellMap 工作区里圈选确认后（V 工具激活）也直出——
+/// 见 `mod.rs` 的 `cell_form_active` 谓词。
 ///
 /// **单格 / 批量两态**：有多边形选区时可批量改 N 格；两态互斥，杜绝
 /// 「以为在改整片、实际只改了一格」的歧义（[ADR-0040] 补 B）。

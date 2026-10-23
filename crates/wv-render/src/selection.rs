@@ -36,6 +36,10 @@ pub const DOUBLE_CLICK_SECS: f64 = 0.4;
 /// [`handle_click`]。原 12 wu 世界定长在深缩放下小于像素抖动（M1 终审 minor，
 /// M2 清偿）。
 pub const DOUBLE_CLICK_PX: f32 = 12.0;
+/// 右键点击的最大位移（屏幕像素）——松手时按住期间移动不超过它才算
+/// 「点击」，超过即右键拖拽平移（平移按键口径：右键 / 中键始终保留给
+/// 平移，2026-10-14 裁定；撤锚不得吃掉平移，2026-10-24）。
+pub const RIGHT_CLICK_MAX_PX: f32 = 6.0;
 
 /// 椭圆选环的分段数（ADR-0043）。
 ///
@@ -271,6 +275,40 @@ pub fn handle_click(
     }
 }
 
+/// 右键点击 = 撤回画中上一锚点（2026-10-24 多边形手感改造）。
+///
+/// 平移占着右键**按住拖拽**（2026-10-14 平移按键裁定），所以「点击」与
+/// 「拖拽」必须分开结算：按下时系统把光标世界坐标记进
+/// [`SelectionState::right_press`]，松手时交给本函数——按住期间位移
+/// ≤ `max_move`（世界单位）判为点击，弹出最后一枚锚点；超过即拖拽平移，
+/// 什么都不动。闭合态 / 非多边形 / 空草稿一律不吃。
+///
+/// 手势记录无论结算结果如何都清掉（`take`）——半途手势不留到下一次。
+/// 返回是否真弹了锚点（测试锚；系统不消费返回值）。
+pub fn right_click_pop_anchor(
+    sel: &mut SelectionState,
+    cursor: Option<Vec2>,
+    max_move: f32,
+) -> bool {
+    let Some(press) = sel.right_press.take() else {
+        return false;
+    };
+    let Some(cursor) = cursor else {
+        return false;
+    };
+    if (cursor - press).length() > max_move {
+        return false;
+    }
+    if !sel.shape.is_polygon() || sel.is_closed() || sel.draft.is_empty() {
+        return false;
+    }
+    sel.draft.pop();
+    // 撤锚后 0.4s 内在同点重按左键不得被判成「双击收笔」——那会把整份
+    // 草稿丢掉（`try_close` 的 <3 点失败语义），一次手滑毁一次圈选。
+    sel.last_click = None;
+    true
+}
+
 /// 距离平方（比较用，免开方）。
 fn dist2(a: (f32, f32), b: (f32, f32)) -> f32 {
     let dx = a.0 - b.0;
@@ -355,6 +393,17 @@ pub fn commit_selection_click(
     if keys.just_pressed(KeyCode::Enter) {
         sel.try_close();
         sel.last_click = None;
+        return;
+    }
+    // 右键：按下记录位置，松手结算「点击 = 撤锚 vs 拖拽 = 平移」。
+    // 平移本身照常在 `camera_pan` 里跑（按住即平移），两边读同一份
+    // `ButtonInput` 互不相犯；结算规则见 [`right_click_pop_anchor`]。
+    if buttons.just_pressed(MouseButton::Right) {
+        sel.right_press = view.cursor_world;
+        return;
+    }
+    if buttons.just_released(MouseButton::Right) {
+        right_click_pop_anchor(&mut sel, view.cursor_world, RIGHT_CLICK_MAX_PX * view.scale);
         return;
     }
     if !buttons.just_pressed(MouseButton::Left) {
@@ -701,6 +750,84 @@ mod tests {
         handle_click(&mut s, (10.0, 10.0), 10.0, 0.5, 1.0, 12.0);
         handle_click(&mut s, (10.0, 10.0), 10.2, 0.5, 1.0, 12.0);
         assert!(s.is_closed(), "双击应收笔闭合");
+    }
+
+    // ── 右键撤锚（2026-10-24 多边形手感改造） ───────────────────────────
+
+    /// 右键点击（按住期间几乎没动）= 撤回上一锚点。
+    #[test]
+    fn right_click_without_movement_pops_last_anchor() {
+        let mut s = SelectionState::default();
+        s.add_point((0.0, 0.0));
+        s.add_point((10.0, 0.0));
+        s.add_point((20.0, 5.0));
+        // 按下记位（系统职责），松手时几乎原位（亚像素抖动）：判为点击。
+        s.right_press = Some(Vec2::new(20.0, 5.0));
+        assert!(right_click_pop_anchor(
+            &mut s,
+            Some(Vec2::new(20.6, 4.8)),
+            6.0
+        ));
+        assert_eq!(s.draft.len(), 2, "末锚应被弹出，实得 {}", s.draft.len());
+        assert_eq!(s.draft.last(), Some(&(10.0, 0.0)), "弹出的是最后一枚");
+        assert_eq!(s.right_press, None, "手势记录必须清掉");
+    }
+
+    /// 右键按住拖远 = 平移，不撤锚（平移按键裁定不被撤锚吃掉）。
+    #[test]
+    fn right_drag_beyond_tolerance_keeps_the_draft() {
+        let mut s = SelectionState::default();
+        s.add_point((0.0, 0.0));
+        s.add_point((10.0, 0.0));
+        s.right_press = Some(Vec2::new(10.0, 0.0));
+        assert!(!right_click_pop_anchor(
+            &mut s,
+            Some(Vec2::new(110.0, 0.0)),
+            6.0
+        ));
+        assert_eq!(s.draft.len(), 2, "拖拽平移不得吃锚点");
+        assert_eq!(s.right_press, None, "手势记录同样要清");
+    }
+
+    /// 闭合态 / 空草稿 / 框选形状：右键点击一律不吃。
+    #[test]
+    fn right_click_ignores_closed_empty_and_non_polygon_states() {
+        let mut closed = closed_square();
+        closed.right_press = Some(Vec2::ZERO);
+        assert!(!right_click_pop_anchor(&mut closed, Some(Vec2::ZERO), 6.0));
+        assert!(closed.is_closed(), "闭合选区不受右键影响");
+
+        let mut empty = SelectionState::default();
+        empty.right_press = Some(Vec2::ZERO);
+        assert!(!right_click_pop_anchor(&mut empty, Some(Vec2::ZERO), 6.0));
+
+        let mut rect = SelectionState {
+            shape: SelectionShape::Rect,
+            ..Default::default()
+        };
+        rect.rebuild_closed(Vec2::ZERO, Vec2::splat(10.0));
+        rect.right_press = Some(Vec2::ZERO);
+        assert!(
+            !right_click_pop_anchor(&mut rect, Some(Vec2::ZERO), 6.0),
+            "框选形状没有逐锚点语义"
+        );
+    }
+
+    /// 撤锚后 `last_click` 复位——0.4s 内同点左键不得被判成双击收笔
+    /// 把整份草稿丢掉（`try_close` 的 <3 点失败语义）。
+    #[test]
+    fn popping_anchor_resets_the_double_click_window() {
+        let mut s = SelectionState::default();
+        s.add_point((0.0, 0.0));
+        s.add_point((10.0, 0.0));
+        s.last_click = Some(((10.0, 0.0), 99.0));
+        s.right_press = Some(Vec2::new(10.0, 0.0));
+        assert!(right_click_pop_anchor(
+            &mut s,
+            Some(Vec2::new(10.0, 0.0)),
+            6.0
+        ));
+        assert_eq!(s.last_click, None, "撤锚必须复位双击判定");
     }
 
     /// 单击锚点 = 选中；紧接着的双击 = 删除该锚点（4 环删 1 剩 3，保持闭合）。

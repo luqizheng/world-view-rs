@@ -790,6 +790,10 @@ pub struct SelectionState {
     pub selected_anchor: Option<usize>,
     /// 上一次左键落点与时刻（双击判定，`crate::selection::handle_click` 用）。
     pub last_click: Option<((f32, f32), f64)>,
+    /// 右键按下时的光标世界坐标（2026-10-24 右键撤锚）：松手时位移小于
+    /// 阈值才算「右键点击 = 撤回上一锚点」，否则是右键拖拽平移
+    /// （平移按键口径：右键 / 中键始终保留给平移）。`None` = 无进行中手势。
+    pub right_press: Option<Vec2>,
     /// 草稿 / 选区绑定的图 ID——[`Self::on_map_change`] 变图即清（spec D9：切图 = 取消选择）。
     pub last_map_id: Option<wv_core::Id>,
 }
@@ -925,6 +929,7 @@ impl SelectionState {
         self.selected_anchor = None;
         self.last_click = None;
         self.drag = None;
+        self.right_press = None;
     }
 
     /// 整体平移闭合选环（ADR-0043 框选的 Move 手势）。
