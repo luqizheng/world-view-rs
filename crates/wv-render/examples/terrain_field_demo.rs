@@ -70,13 +70,40 @@ const ZOOM_MAX: f32 = 48.0;
 /// 缩放只改相机视野高度＝`窗口像素 / px_per_cell`。
 const WORLD_PER_CELL: f32 = 1.0;
 
+/// 窗口分辨率：默认 `1600×900`（T50 的验收口径）。
+///
+/// `FIELD_RES=WxH` 可覆盖——用于按「像素数斜率」分离着色器成本与引擎固定
+/// 开销：把面积放大 4 倍，若增量也放大 ~4 倍，那部分就是逐像素成本。
+fn win_size() -> (u32, u32) {
+    std::env::var("FIELD_RES")
+        .ok()
+        .and_then(|v| {
+            let (w, h) = v.split_once('x')?;
+            Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
+        })
+        .unwrap_or((1600, 900))
+}
+
 fn main() {
+    // `FIELD_BENCH=1`：关垂直同步、跑固定帧数并输出帧时间统计后退出（T49/T50）。
+    let bench = std::env::var("FIELD_BENCH").is_ok();
+
     App::new()
         .add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "地形场 demo · ADR-0053 P1（GPU 逐像素）".into(),
+                        // 验收与计时都按 1600×900 固定，否则「每帧多少像素」
+                        // 随窗口变化，帧时间不可比（T50 的验收口径就是这个分辨率）。
+                        resolution: win_size().into(),
+                        // `FIELD_BENCH=1` 关垂直同步：锁 60Hz 只能测到 16.67ms 的
+                        // 上限，测不出亚毫秒差异。
+                        present_mode: if bench {
+                            bevy::window::PresentMode::AutoNoVsync
+                        } else {
+                            bevy::window::PresentMode::AutoVsync
+                        },
                         ..default()
                     }),
                     ..default()
@@ -108,8 +135,10 @@ fn main() {
                 sync_paper,
                 sync_symbols,
                 acceptance_capture,
+                bench_tick,
             ),
         )
+        .insert_resource(BenchMode::new(bench))
         .run();
 }
 
@@ -452,6 +481,13 @@ fn setup(
             Mesh2d(mesh),
             MeshMaterial2d(material.clone()),
             Transform::from_scale(Vec3::splat(extent)),
+            // `FIELD_NO_TERRAIN=1` 隐藏地形 quad——用于把「地形着色器」的耗时
+            // 从引擎固定开销里剥出来（T49/T50 的成本拆解）。
+            if std::env::var("FIELD_NO_TERRAIN").is_ok() {
+                Visibility::Hidden
+            } else {
+                Visibility::Inherited
+            },
         ))
         .id();
 
@@ -474,10 +510,15 @@ fn setup(
         None,
     ));
     let g = GRID as f32;
+    // `FIELD_NO_SYMBOLS=1` 跳过符号生成——用于帧时间的成本拆解（T49/T50）。
+    let symbols_on = std::env::var("FIELD_NO_SYMBOLS").is_err();
     // 稀疏落点：每 STEP 格取一个候选，再按海拔/概率筛。
     const STEP: u32 = 8;
     let mut placed = 0usize;
     for cy in (0..GRID).step_by(STEP as usize) {
+        if !symbols_on {
+            break;
+        }
         for cx in (0..GRID).step_by(STEP as usize) {
             let cell = terrain.cells[(cy * GRID + cx) as usize];
             let Some(family) = family_for(cell.height, cx as i64, cy as i64) else {
@@ -712,6 +753,91 @@ fn sync_material(
             };
         }
     }
+}
+
+// ── 帧时间实测（T49 / T50）─────────────────────────────────────────────────
+
+/// 帧时间实测的驱动状态。
+///
+/// ## 为什么测「稳态帧率」而不是 GPU 时间戳
+///
+/// Bevy 0.19 没有内建的 GPU 时间戳诊断插件（`RenderDiagnosticsPlugin` 在
+/// 这一版已不存在）。要做真正的 GPU 侧计时需要自己建 timestamp query 与
+/// 异步回读，成本远高于本次要回答的问题。
+///
+/// 折中做法：**关垂直同步**（`AutoNoVsync`）跑固定帧数，统计 CPU 帧间隔。
+/// 在全屏片元着色器这种 GPU-bound 场景下，交换链的 in-flight 限制会把 GPU
+/// 时间反馈回帧间隔，所以稳态帧率能反映渲染吞吐。
+///
+/// **局限（写清楚免得被当成 GPU 纯耗时）**：这个数值含 CPU 侧的 ECS 与
+/// 提交开销，是「整帧吞吐」的上界估计，不是 shader 的独占耗时。要拆 shader
+/// 的占比用 A/B（关纸面 / 关符号）看差值。
+#[derive(Resource)]
+struct BenchMode {
+    warmup: u32,
+    target: u32,
+    samples: Vec<f32>,
+    enabled: bool,
+}
+
+impl BenchMode {
+    /// 预热帧：首帧要编译管线、上传纹理，计入会严重拉高均值。
+    const WARMUP: u32 = 90;
+    /// 采样帧数：300 帧 ≈ 5 秒（60fps 时），足够稳定到 p95。
+    const TARGET: u32 = 300;
+
+    fn new(enabled: bool) -> Self {
+        Self {
+            warmup: Self::WARMUP,
+            target: Self::TARGET,
+            samples: Vec::new(),
+            enabled,
+        }
+    }
+}
+
+fn bench_tick(
+    time: Res<Time>,
+    state: Res<DemoState>,
+    bench: Option<ResMut<BenchMode>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let Some(mut bench) = bench else { return };
+    if !bench.enabled || bench.samples.len() >= bench.target as usize {
+        return;
+    }
+    if bench.warmup > 0 {
+        bench.warmup -= 1;
+        return;
+    }
+    bench.samples.push(time.delta_secs() * 1000.0);
+    if bench.samples.len() < bench.target as usize {
+        return;
+    }
+
+    let mut v = bench.samples.clone();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = v.len();
+    let pct = |p: f32| v[(((n as f32 - 1.0) * p) as usize).min(n - 1)];
+    let avg: f32 = v.iter().sum::<f32>() / n as f32;
+
+    // 单位毫秒。单行输出，便于 grep。
+    println!(
+        "BENCH cfg[ppc={:.1} 地形={} 纸面={} 符号={} 编码={:?}] n={} avg={:.3} p50={:.3} p95={:.3} min={:.3} max={:.3} fps={:.1}",
+        state.px_per_cell,
+        if std::env::var("FIELD_NO_TERRAIN").is_ok() { "关" } else { "开" },
+        if std::env::var("FIELD_NO_PAPER").is_ok() { "关" } else { "开" },
+        if std::env::var("FIELD_NO_SYMBOLS").is_ok() { "关" } else { "开" },
+        if std::env::var("FIELD_SIGNED").is_ok() { "signed" } else { "unsigned" },
+        n,
+        avg,
+        pct(0.50),
+        pct(0.95),
+        v[0],
+        v[n - 1],
+        1000.0 / avg.max(1e-6)
+    );
+    exit.write(AppExit::Success);
 }
 
 // ── 地物符号同步（P3）───────────────────────────────────────────────────────
