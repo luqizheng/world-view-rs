@@ -42,6 +42,12 @@ pub fn distance_to_coast(data: &TerrainData) -> Vec<f32> {
 /// 全图同质时的饱和距离（格）——`coast_dist` 编码上限 32 格的近似值。
 pub const FAR: f32 = 1.0e6;
 
+/// `FAR` 的平方（`1e12`）——[`edt_2d`] 内部全程用「距离平方」语义，
+/// 故「无种子」在该域里的表示是这个值而非 `FAR`。
+///
+/// f32 能精确表示 1e12（尾数 24 位内），故这不是精度妥协。
+const FAR_SQ: f64 = 1.0e12;
+
 /// 双通道距离场：`is_land` 谓词 → 每格到最近**异类**格的欧氏距离。
 ///
 /// 独立于 `TerrainData` 的纯函数签名——单测可用手摆小网格对表，
@@ -53,7 +59,8 @@ pub fn distance_field(w: usize, h: usize, is_land: impl Fn(usize, usize) -> bool
     if n == 0 {
         return Vec::new();
     }
-    let mut land_dist = vec![FAR; n];
+    // 种子 = 0（距离平方域），非种子 = FAR_SQ（见 `edt_2d` 的域约定）。
+    let mut land_dist = vec![FAR_SQ as f32; n];
     for y in 0..h {
         for x in 0..w {
             if is_land(x, y) {
@@ -61,11 +68,14 @@ pub fn distance_field(w: usize, h: usize, is_land: impl Fn(usize, usize) -> bool
             }
         }
     }
-    let mut d1 = land_dist.clone();
-    edt_2d(&mut d1, w, h);
+    // 就地变换——⚠️ 不可写成 `let mut d1 = land_dist.clone(); edt_2d(&mut d1, ..)`
+    // 再继续用 `land_dist`：那样读到的是**未经 EDT 的种子掩码**，
+    // 非种子格仍是 FAR（= 1e6），表现为「水格距离全是 FAR」。
+    // 这个 bug 的隐蔽之处在于 `edt_2d` 本身完全正确，只是结果没被接上。
+    edt_2d(&mut land_dist, w, h);
 
     // 通道二：水格为种子（取反谓词）。
-    let mut water_dist = vec![FAR; n];
+    let mut water_dist = vec![FAR_SQ as f32; n];
     for y in 0..h {
         for x in 0..w {
             if !is_land(x, y) {
@@ -164,20 +174,30 @@ fn exact_distance(data: &TerrainData, x: usize, y: usize) -> f32 {
 /// （对每列独立跑 1D EDT），行变换把「列距离平方 + 行距离平方」的最小
 /// 包络算出。
 fn edt_2d(d: &mut [f32], w: usize, h: usize) {
-    // 列方向：对每列的「距离平方」跑 1D EDT（输入是 0/INF 二值）。
-    // 直接用距离而非距离平方，1D edt 里开方一次即可（精度 f32 足够，
-    // 0.03 格的误差在 1.2px 线宽下不可见）。
-    let mut col = vec![0.0f32; h.max(w)];
-    for x in 0..w {
-        for y in 0..h {
-            col[y] = d[y * w + x];
-        }
-        edt_1d(&mut col[..h]);
-        for y in 0..h {
-            d[y * w + x] = col[y];
+    // **全流程统一「距离平方」语义**，只在最后一步开方。
+    //
+    // 入口：`d[i]` = 到最近种子的距离平方（种子 0，其余 ≥ FAR²）。
+    // 出口：`d[i]` = 精确欧氏距离。
+    //
+    // 这个统一是正确性的关键。若让一维变换「入口平方、出口开方」，则两趟
+    // 组合时必须手工在每趟前后做平方/开方转换——漏一处就静默算错（平方被
+    // 吃掉或做两次）。实测踩过：第二趟喂「距离平方」却被入口再平方一次
+    // 变四次方，`√((5−2)² + 1)` 算成 `√10` 而非 `√2`。
+    //
+    // `h == 1` 时列变换是恒等（每列 1 格，无行内传播），跳过即省一趟。
+    if h > 1 {
+        let mut col = vec![0.0f32; h];
+        for x in 0..w {
+            for y in 0..h {
+                col[y] = d[y * w + x];
+            }
+            edt_1d(&mut col[..h]);
+            for y in 0..h {
+                d[y * w + x] = col[y];
+            }
         }
     }
-    // 行方向：对每行，f(x) = col_dist(x)² + (x - xi)² 的下包络。
+    // 行变换：距离平方 in → 距离平方 out（完成 `dx² + dy²` 的组合）。
     let mut row = vec![0.0f32; w];
     for y in 0..h {
         for x in 0..w {
@@ -188,54 +208,72 @@ fn edt_2d(d: &mut [f32], w: usize, h: usize) {
             d[y * w + x] = row[x];
         }
     }
+    // 出口开方：`√(distance²)` = 距离。FAR² = 1e12 开方回 1e6 = FAR，
+    // 恰好饱和，无需额外钳制。
+    for v in d.iter_mut() {
+        *v = v.sqrt();
+    }
 }
 
 /// 一维精确距离变换（Felzenszwalb 下包络法），原地。
 ///
-/// `f[i]` 是点 i 到最近种子的**初始距离**（种子 0，其余大值）；
-/// 变换后 `f[i]` = min over seeds j of sqrt((i-j)² + f[j]²)。
-/// 这正是二维 EDT 的行/列组合步骤（把「已算出的垂直距离」当作
-/// 抛物线的高度）。
+/// **全程「距离平方」语义**（这是与 `edt_2d` 组合正确的前提）：
+/// - 入口：`f[i]` = 点 i 到最近种子的**距离平方**（种子 0，其余大值）。
+/// - 出口：`f[i]` = min over seeds j of `(i−j)² + f[j]`（仍是距离平方）。
+///
+/// 二维 EDT 靠这个语义把两趟直接串联：行变换把「列变换算出的垂直距离平方」
+/// 当作抛物线高度，与横向偏移平方相加——开方推迟到 `edt_2d` 的最后一步。
+/// 若在这里开方，两趟之间就得手工平方回去，漏一处即静默算错。
 fn edt_1d(f: &mut [f32]) {
     let n = f.len();
     if n == 0 || n == 1 {
         return;
     }
-    // v：下包络抛物线的根位置；z：包络区间边界；d：抛物线高度（已开方的
-    // 垂直距离的平方，组合后再开方）。
+    // **快速路径：整维无种子**（所有元素都 ≥ FAR）。
+    //
+    // 二维 EDT 的行变换必然遇到这种情况：某行正上方/正下方一个种子都没有
+    // （大片内陆或大片深海的行）。答案是「这一维全是 FAR」。
+    // 整维无种子：入口是距离平方，FAR² = 1e12 即「无种子」的表示。
+    if f.iter().all(|&x| (x as f64) >= FAR_SQ) {
+        f.fill(FAR_SQ as f32);
+        return;
+    }
+
+    // v：下包络抛物线的根位置；z：包络区间边界（交点横坐标）；
+    // d：抛物线顶点的**距离平方**。
     //
     // `z` / `d` 一律 `f64`：下包络的交点公式含 `d[q] + q²` 的减法，
     // f32 在大坐标下会灾难性抵消（种子索引上千即失效）。`f` 保持 f32——
     // 它是最终距离输出，精度需求低一个量级。
-    let inf = f64::INFINITY;
+    //
+    // **关键：用大有限值而非 `INFINITY` 表示「无种子」**（`FAR` 的平方 =
+    // 1e12，f64 装得下）。若用 `INFINITY`：
+    // - 下包络的交点公式 `(d[q]+q² − d[v[k]]−v[k]²) / 2(q−v[k])` 会得到
+    //   `NaN` 或 `±inf`，污染整个包络；
+    // - 更致命的是 `v[0] = 0` 无条件把下标 0 当首个包络顶点——当 `d[0]`
+    //   是无穷高时 `s` 恒为 `-inf`，而 `z[0] = -inf`，于是 `s <= z[0]`
+    //   恒真 → `k` 反复回退到 0 并重算出同一个 `-inf` → **死循环**。
+    // 用有限大值后，`s` 恒有限，算法的前���（首个包络顶点高度有限）自动成立。
     let mut v = vec![0usize; n];
     let mut z = vec![0.0f64; n + 1];
     let mut d = vec![0.0f64; n];
     for (i, di) in d.iter_mut().enumerate() {
-        // 抛物线高度 = 垂直距离的平方。FAR 视为 +inf（f64 平方会溢出
-        // f32 的 1e6²=1e12 → f64 无碍，但 inf 更符合算法原设）。
-        let fi = f[i] as f64;
-        *di = if fi >= FAR as f64 {
-            f64::INFINITY
-        } else {
-            fi * fi
-        };
+        // 抛物线顶点高度 = 输入的距离平方（**不再平方**——本函数全程平方域）。
+        *di = f[i] as f64;
     }
+    let inf = f64::INFINITY;
     let mut k = 0usize;
     v[0] = 0;
     z[0] = -inf;
     z[1] = inf;
     for q in 1..n {
-        if d[q] == f64::INFINITY {
-            continue; // 无穷高度不产生新包络段
-        }
         // 分母 `2(q − v[k])` 恒 > 0（`v[k] < q`：v 只装已扫过的下标），
-        // 故 `s` 有限；`z[0] = −inf` 使 `s <= z[k]` 在 k=0 处必为假，
-        // 循环不会下溢。`saturating_sub` 只是防御——算法不依赖它。
+        // 故 `s` 有限；`z[0] = -inf` 使 `s <= z[k]` 在 k=0 处必为假，
+        // 循环不会下溢。
         let mut s = ((d[q] + q as f64 * q as f64) - (d[v[k]] + v[k] as f64 * v[k] as f64))
             / (2.0 * q as f64 - 2.0 * v[k] as f64);
         while s <= z[k] {
-            k = k.saturating_sub(1);
+            k -= 1;
             s = ((d[q] + q as f64 * q as f64) - (d[v[k]] + v[k] as f64 * v[k] as f64))
                 / (2.0 * q as f64 - 2.0 * v[k] as f64);
         }
@@ -251,11 +289,8 @@ fn edt_1d(f: &mut [f32]) {
             k += 1;
         }
         let dist2 = (qf - v[k] as f64).powi(2) + d[v[k]];
-        *fq = if dist2.is_infinite() {
-            FAR
-        } else {
-            dist2.sqrt() as f32
-        };
+        // 出口保持**距离平方**（不开方——开方统一在 edt_2d 的最后一步）。
+        *fq = dist2 as f32;
     }
 }
 
