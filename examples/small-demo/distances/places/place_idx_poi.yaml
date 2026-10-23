@@ -1,0 +1,8 @@
+id: place_idx_poi
+name: POI 与图标
+map: map_index
+x: 2900.0
+y: 2900.0
+w: 240.0
+h: 150.0
+rank: 3

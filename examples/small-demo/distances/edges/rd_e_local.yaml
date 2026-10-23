@@ -1,0 +1,7 @@
+id: rd_e_local
+a: rd_south_town
+b: rd_village
+distance_km: 220.0
+terrain: plain
+bidirectional: true
+rank: 1

@@ -1,0 +1,55 @@
+id: t_combo
+name: 综合小样张
+level: region
+parent: map_index
+children: []
+icons: []
+layers:
+- id: l_t_combo_terrain
+  name: 地形
+  kind: terrain
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+  source: maps/t_combo/terrain.bin
+- id: l_t_combo_road
+  name: 道路
+  kind: road
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+- id: l_t_combo_place
+  name: 地点
+  kind: place
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+- id: l_t_combo_influence
+  name: 疆域
+  kind: influence
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+- id: l_t_combo_labels
+  name: 标注
+  kind: label
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+  source: maps/t_combo/labels.yaml
+extent:
+  width: 4096.0
+  height: 4096.0
+raster:
+  path: maps/t_combo/terrain.bin
+  encoding: i16
+  width: 256
+  height: 256
+  chunk: 256
+  format_version: 2
+  checksum: c04e8404

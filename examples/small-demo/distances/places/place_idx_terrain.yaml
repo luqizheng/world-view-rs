@@ -1,0 +1,8 @@
+id: place_idx_terrain
+name: 地貌五带
+map: map_index
+x: 900.0
+y: 1100.0
+w: 240.0
+h: 150.0
+rank: 3

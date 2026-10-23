@@ -1,0 +1,7 @@
+id: rd_e_trunk_e
+a: rd_cross
+b: rd_east_city
+distance_km: 320.0
+terrain: forest
+bidirectional: true
+rank: 3
