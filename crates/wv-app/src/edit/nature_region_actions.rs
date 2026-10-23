@@ -642,7 +642,11 @@ mod tests {
                     height: 100,
                     surface: 1,
                     // 64 格见方的棋盘 → 连通区边界密集，flood fill 真的在干活。
-                    biome: if (x / 64 + y / 64) % 2 == 0 { 3 } else { 5 },
+                    biome: if (x / 64 + y / 64).is_multiple_of(2) {
+                        3
+                    } else {
+                        5
+                    },
                 }
             })
             .collect();

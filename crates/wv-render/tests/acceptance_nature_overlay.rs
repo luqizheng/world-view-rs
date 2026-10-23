@@ -671,7 +671,7 @@ fn req_steady_plans_do_not_rasterize_again() {
     let d1 = cache.anchor_decimates;
 
     for _ in 0..FRAMES {
-        drop(f.plan(&mut cache));
+        let _ = f.plan(&mut cache);
     }
     assert_eq!(
         cache.rasterizes,
@@ -698,24 +698,24 @@ fn req_steady_plans_do_not_rasterize_again() {
 fn req_anchor_decimation_cache_is_bucketed_by_scale() {
     let mut f = PlanFixture::new(true, true, None);
     let mut cache = RegionDecorCache::default();
-    drop(f.plan(&mut cache));
+    let _ = f.plan(&mut cache);
     let d0 = cache.anchor_decimates;
     assert_eq!(d0, 1, "首帧应恰好抽稀 1 次（自证计数器可信）");
 
     for _ in 0..FRAMES {
-        drop(f.plan(&mut cache));
+        let _ = f.plan(&mut cache);
     }
     assert_eq!(cache.anchor_decimates, d0, "稳态 {FRAMES} 帧不得再抽稀");
 
     f.view.scale *= 1.02;
-    drop(f.plan(&mut cache));
+    let _ = f.plan(&mut cache);
     assert_eq!(
         cache.anchor_decimates, d0,
         "scale ×1.02 属同一档却重算了 —— 键里塞了原始 scale，smooth zoom 下等于没缓存"
     );
 
     f.view.scale *= 4.0;
-    drop(f.plan(&mut cache));
+    let _ = f.plan(&mut cache);
     assert_eq!(
         cache.anchor_decimates,
         d0 + 1,
@@ -783,7 +783,7 @@ fn req_candidate_derivation_is_cached_and_gated() {
     );
     let d1 = cache.candidate_derivations;
     for _ in 0..FRAMES {
-        drop(f.plan(&mut cache));
+        let _ = f.plan(&mut cache);
     }
     assert_eq!(
         cache.candidate_derivations,

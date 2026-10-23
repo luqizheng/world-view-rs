@@ -479,9 +479,8 @@ fn req_field_render_defaults_to_off() {
         !iface::field_render(&app),
         "harness 置 false 后应读到 false"
     );
-    assert_eq!(
-        ViewState::default().field_render,
-        false,
+    assert!(
+        !ViewState::default().field_render,
         "同一事实的第二条陈述必须一致"
     );
 }

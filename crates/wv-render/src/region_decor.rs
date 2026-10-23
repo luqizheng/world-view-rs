@@ -150,7 +150,10 @@ pub fn sync_region_decor(
                 Some(k) if k == key => BatchUpdate::Keep,
                 _ => BatchUpdate::Rebuild(
                     key,
-                    crate::vector_layers::build_stroke_batch_mesh(plan.stepped_edges, thickness),
+                    Box::new(crate::vector_layers::build_stroke_batch_mesh(
+                        plan.stepped_edges,
+                        thickness,
+                    )),
                 ),
             };
         }
@@ -165,10 +168,10 @@ pub fn sync_region_decor(
                 Some(k) if k == key => BatchUpdate::Keep,
                 _ => BatchUpdate::Rebuild(
                     key,
-                    build_anchor_quad_mesh(
+                    Box::new(build_anchor_quad_mesh(
                         plan.anchors.iter().chain(plan.candidate_anchors.iter()),
                         half,
-                    ),
+                    )),
                 ),
             };
         }
@@ -226,7 +229,11 @@ enum BatchUpdate {
     /// 键没变：本帧什么都不做（稳态路径，必须零开销）。
     Keep,
     /// 键变了或首次：换 mesh（有实体就原地换，没有就 spawn）。
-    Rebuild(DecorKey, Mesh),
+    ///
+    /// `Box<Mesh>`：`Mesh` 有几百字节（顶点 / 索引 Vec + 属性表），直接内联会让
+    /// 这个枚举整体 240 字节，而 `Keep` / `Clear` 是每帧都会构造的常态。
+    /// 装箱的代价只在**键变那一帧**付一次（重建本来就伴随一次分配）。
+    Rebuild(DecorKey, Box<Mesh>),
     /// 本帧没有这类内容：回收实体与资产。
     Clear,
 }
@@ -253,7 +260,7 @@ fn apply_batch(
             *rebuilds += 1;
             match slot.take() {
                 None => {
-                    let handle = meshes.add(mesh);
+                    let handle = meshes.add(*mesh);
                     let entity = commands
                         .spawn((
                             Mesh2d(handle.clone()),
@@ -269,7 +276,7 @@ fn apply_batch(
                 }
                 Some(mut batch) => {
                     if let Some(mut old) = meshes.get_mut(&batch.mesh) {
-                        *old = mesh;
+                        *old = *mesh;
                     }
                     batch.key = key;
                     *slot = Some(batch);
@@ -321,8 +328,8 @@ fn build_anchor_quad_mesh<'a>(centers: impl Iterator<Item = &'a Vec2>, half: f32
     mesh
 }
 
-/// 手柄方块半边的屏幕像素只有一份载体（`world_projection::HANDLE_HALF_PX`）——
-/// 本模块只消费 `plan.handle_px`（世界单位），不再重复定义「6px / 7px」这类数字。
+// 手柄方块半边的屏幕像素只有一份载体（`world_projection::HANDLE_HALF_PX`）——
+// 本模块只消费 `plan.handle_px`（世界单位），不再重复定义「6px / 7px」这类数字。
 
 #[cfg(test)]
 mod tests {
@@ -458,7 +465,7 @@ mod tests {
         let mut app = app(true, true);
         app.update();
         let (e0, a0) = counts(&app);
-        for f in 0..60 {
+        for _ in 0..60 {
             app.update();
         }
         assert_eq!(
