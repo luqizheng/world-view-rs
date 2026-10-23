@@ -99,6 +99,10 @@ const POI_OUTER_Z: f32 = 0.21;
 const POI_INNER_Z: f32 = 0.22;
 
 /// 合批 stroke mesh 的重建判据（A2）：内容指纹 + 世界线宽 + Z，任一变化才换 mesh。
+///
+/// `world_thickness` 是「几何赖以烘成的世界尺寸参数」：道路 = 线宽，
+/// 地物符号 = 缩放因子 `s`（2026-10-24 教训：符号 key 漏掉 `s`，缩放后
+/// mesh 不重建，pin 保持旧世界尺寸随相机放大成巨型墨团）。
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct StrokeBatchKey {
     fingerprint: u64,
@@ -1297,6 +1301,17 @@ fn sync_landmarks(
     }
 }
 
+/// 地物符号的 LOD 尺寸微调：档位越近稍大（Nation 1.0 / Region 1.25 /
+/// Edit 1.5），贴近 Google Maps marker 的恒定手感。独立成函数供回归测试
+/// 推导「世界高 ∝ tier × scale」的精确期望值。
+fn landmark_size_tier(view_scale: f32) -> f32 {
+    match lod_tier(view_scale) {
+        crate::state::LodTier::Nation => 1.0,
+        crate::state::LodTier::Region => 1.25,
+        crate::state::LodTier::Edit => 1.5,
+    }
+}
+
 /// 单类符号的顶点色 mesh 合批（从 sync_landmarks 拆出的唯一绘制路径）。
 #[allow(clippy::too_many_arguments)]
 fn sync_landmark_mesh_batches(
@@ -1311,17 +1326,11 @@ fn sync_landmark_mesh_batches(
     material: Handle<ColorMaterial>,
 ) {
     use crate::landmark_symbols::{build_landmark_mesh, LandmarkBatch};
-    use crate::state::lod_tier;
     // 尺寸口径：**屏幕像素恒定**，按 LOD 档微调（档位越近稍大，贴近
     // Google Maps marker 的恒定手感）。符号局部坐标单位就是屏幕像素，
     // 缩放系数只乘 `view_scale`——2026-10-23 实测教训：曾在本地坐标外
     // 再乘一档画布基准（26），符号被放大 26 倍成盖住半个大陆的墨团。
-    let tier = match lod_tier(view_scale) {
-        crate::state::LodTier::Nation => 1.0,
-        crate::state::LodTier::Region => 1.25,
-        crate::state::LodTier::Edit => 1.5,
-    };
-    let s = tier * view_scale;
+    let s = landmark_size_tier(view_scale) * view_scale;
     let mut batch = LandmarkBatch::new();
     for d in frame_landmarks {
         if d.kind == kind {
@@ -1338,7 +1347,11 @@ fn sync_landmark_mesh_batches(
     let fingerprint = points_fingerprint_dots(frame_landmarks, kind);
     let key = StrokeBatchKey {
         fingerprint,
-        world_thickness: 1.0,
+        // 符号几何 = f(位置, kind, s)：`s` 必须进 key，否则缩放后位置指纹
+        // 不变、mesh 不重建，符号保持旧世界尺寸随相机缩放（2026-10-24
+        // CellMap 实测：455% 下 pin 放大 ~4.5 倍）。与 POI 的 `radius`
+        // 进 `PoiBatchKey` 同一条纪律。
+        world_thickness: s,
         z,
     };
     match pool.batch.take() {
@@ -2360,5 +2373,66 @@ mod tests {
             .mesh
             .clone();
         assert_ne!(after_big, baked, "10% 线宽漂移必须换 mesh");
+    }
+
+    /// 带地物符号的夹具：复用道路夹具的资源装配，只把 `landmark_dots`
+    /// 填上（道路留空——本组测试只关心符号 mesh）。
+    fn world_with_landmarks(dots: Vec<crate::world_projection::LandmarkDot>) -> World {
+        let mut world = world_with_roads(Vec::new());
+        let mut frame = world
+            .remove_resource::<ProjectionFrame>()
+            .expect("道路夹具必已插入投影帧");
+        frame.landmark_dots = dots;
+        world.insert_resource(frame);
+        world
+    }
+
+    /// Citadel 桶（`landmarks[0]`）当前 mesh 的世界高度（顶点 y 的最大值）。
+    fn landmark_mesh_top_y(world: &World) -> f32 {
+        let handle = world.resource::<VectorLayerEntities>().landmarks[0]
+            .batch
+            .as_ref()
+            .expect("符号合批应已生成")
+            .mesh
+            .clone();
+        let mesh = world
+            .resource::<Assets<Mesh>>()
+            .get(&handle)
+            .expect("mesh 资产应存在");
+        batch_positions(mesh)
+            .iter()
+            .fold(f32::MIN, |m, p| m.max(p.y))
+    }
+
+    /// 缩放必须换符号 mesh（屏幕恒定口径的落地）：符号几何烘在世界单位
+    /// `s = tier × view_scale`，位置不变而缩放变化时 key 必须变——否则
+    /// mesh 沿用旧世界尺寸随相机缩放（2026-10-24 CellMap 实测：455% 下
+    /// pin 放大 ~4.5 倍成巨型墨团）。
+    #[test]
+    fn landmark_batch_rebuilds_mesh_when_zoom_changes_symbol_scale() {
+        // 锚点贴 y=0：符号向上生长（y+），顶点最大 y = 局部高 × s，不含锚点偏移。
+        let mut world = world_with_landmarks(vec![crate::world_projection::LandmarkDot {
+            pos: Vec2::ZERO,
+            kind: crate::world_projection::LandmarkKind::Citadel,
+        }]);
+        let mut schedule = Schedule::default();
+        schedule.add_systems(sync_vector_layers);
+        schedule.run(&mut world);
+        let baked_height = landmark_mesh_top_y(&world);
+
+        // 455% ⇒ scale ≈ 0.22（百分比 = 1 / scale × 100）。
+        world.resource_mut::<ViewState>().scale = 0.22;
+        schedule.run(&mut world);
+        let zoomed_height = landmark_mesh_top_y(&world);
+
+        // 屏幕恒定 ⇒ 世界高度严格 ∝ tier × scale：Region(1.0) → Edit(0.22)。
+        let expected_ratio = (landmark_size_tier(0.22) * 0.22) / (landmark_size_tier(1.0) * 1.0);
+        let actual_ratio = zoomed_height / baked_height;
+        assert!(
+            (actual_ratio - expected_ratio).abs() < 1e-4,
+            "缩放后符号 mesh 必须按 tier×scale 重烘：期望比例 {expected_ratio:.4}，\
+             实得 {actual_ratio:.4}（首帧高 {baked_height:.2} → 缩放后高 {zoomed_height:.2}；\
+             比例≈1 说明 mesh 未重建，即本 bug 的症状）"
+        );
     }
 }
