@@ -18,6 +18,7 @@
 
 #![cfg(feature = "app")]
 
+use bevy::ecs::change_detection::DetectChanges;
 use bevy::prelude::{Local, Res, ResMut};
 
 use crate::edit::editing::EditHistory;
@@ -300,6 +301,33 @@ fn current_unix_ms() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0)
+}
+
+/// CellMap 候选点选（2026-10-22 内容矩阵 §2.6-4）：EditCell 点选的格落在
+/// **未命名候选**内且 Nature 开关开启 → 记为候选命名上下文（Inspector 出
+/// 命名表单）；落在候选外 → 清上下文。只读判定 + 写会话态，不经命令。
+pub fn pick_candidate_on_click(
+    edit_cell: Res<crate::state::EditCellState>,
+    view: Res<crate::state::ViewState>,
+    playback: Res<crate::state::PlaybackState>,
+    projection: Res<crate::state::WorldProjection>,
+    drill: Res<wv_render::state::DrillState>,
+    mut nature: ResMut<crate::state::NatureRegionUiState>,
+) {
+    use crate::state::ViewMode;
+    if !view.nature_overlay || !matches!(view.mode, ViewMode::Topographic) {
+        return;
+    }
+    if !edit_cell.is_changed() || playback.playing {
+        return;
+    }
+    let Some((gx, gy)) = edit_cell.selected else {
+        return;
+    };
+    let Some(map) = drill.current() else {
+        return;
+    };
+    nature.pending_candidate = candidate_at(&projection, map, (gx, gy)).map(|_| (gx, gy));
 }
 
 #[cfg(test)]

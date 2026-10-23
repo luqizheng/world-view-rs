@@ -88,6 +88,10 @@ pub struct ProjectDiagnostics {
 pub struct NatureRegionUiState {
     /// 物化时用的名字（作者输入；物化成功后由面板清空）。
     pub name: String,
+    /// CellMap 候选命名上下文（2026-10-22 内容矩阵 §2.6-4）：点击候选格 →
+    /// 记下该格（栅格坐标）；Inspector「属性」页签据此出候选命名表单。
+    /// `None` = 无候选上下文。丢弃/物化成功后清空。
+    pub pending_candidate: Option<(i32, i32)>,
 }
 
 /// 可浮动的面板枚举（基线 §1.11 的 8 个面板 + 小地图）。
@@ -126,19 +130,26 @@ pub enum Panel {
 
 impl Panel {
     /// 全部面板（菜单按此顺序列出）。
-    pub const ALL: [Panel; 12] = [
+    ///
+    /// **2026-10-22 统一 Inspector**：`CellEditor` / `Faction` / `Situation`
+    /// 三个面板已从中移除——CellEditor 的内容迁进了 Inspector 的「属性」页签；
+    /// Faction 与 Situation 分别成为 Inspector 的「势力层」「事态」页签。
+    /// 独立浮窗均不再渲染（`app_bootstrap` 不再注册对应系统）。本表驱动
+    /// **用户可见的列表面**（命令面板 / 设置对话框 / 布局落盘），
+    /// 故一个不渲染的面板留在本表里 = 菜单里出现「点了没反应」的死项。
+    ///
+    /// 枚举变体本身**暂留**——存量工程的 `ui-layout.yaml` 里有对应键，
+    /// 删枚举会让旧文件的该项变成孤儿。
+    pub const ALL: [Panel; 9] = [
         Panel::MapTree,
         Panel::Layers,
         Panel::Brush,
         Panel::Timeline,
         Panel::Event,
-        Panel::Situation,
         Panel::Character,
-        Panel::Faction,
         Panel::Region,
         Panel::Inspector,
         Panel::Validation,
-        Panel::CellEditor,
     ];
 
     /// 菜单 / 标题显示名（ADR-0018：locale-dependent 文案查表）。
@@ -211,11 +222,14 @@ impl Panel {
             Panel::Character => [280.0, 260.0],
             Panel::Faction => [280.0, 300.0],
             Panel::Region => [280.0, 200.0],
-            Panel::Inspector => [264.0, 240.0],
-            // Cell 编辑器：与 Inspector 同宽；高度 = 头部 + 4 字段 + 提示一行。
-            // 高 210 = 右列空隙（Inspector 底 296 → Character 顶 520 不重叠；
-            // 布局互斥测试 §9.3-1）。egui Window hug 内容会自动撑高——
-            // 群系 7 组 radio 全展开约 460px，CellMap 工作区下其余面板默认关，无遮挡。
+            // 2026-10-22 统一 Inspector：属性表单要放「标签 + 控件」两列，
+            // 264px 太窄。Figma `42:2` 的 Inspector 是 292px，web 原型
+            // `.w-inspector` 也是 292px——取 300 留边距。
+            // 高 420 = 右列空隙（Inspector 底 56+420=476 < Character 顶 520）。
+            Panel::Inspector => [300.0, 420.0],
+            // Cell 编辑器：内容已迁入统一 Inspector 的「属性」页签
+            // （2026-10-22 设计），**不再单独渲染**。枚举项与默认位暂留，
+            // 兼容存量 `ui-layout.yaml` 的 `cell_editor` 键；退役见 M4。
             Panel::CellEditor => [288.0, 210.0],
             // v0.3：Validation 改成 240 高（默认隐藏，validation 触发时才出现）
             Panel::Validation => [300.0, 60.0],

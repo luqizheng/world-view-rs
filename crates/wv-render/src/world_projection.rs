@@ -226,7 +226,7 @@ pub struct PlaceIndex {
 
 impl PlaceIndex {
     /// 对整个世界的距离图建索引。单遍扫描，先 `by_id` 后分桶。
-    fn build(world: &wv_core::World) -> Self {
+    pub(crate) fn build(world: &wv_core::World) -> Self {
         let places = &world.distances.places;
         let mut index = Self {
             by_id: HashMap::with_capacity(places.len()),
@@ -418,6 +418,7 @@ pub fn compute_projection(
     let t = playback.current_day;
 
     // ---- 事件高亮：用 TimelineQuery::at 求「t 时刻正在发生的事件」----
+    // （frame 是数据投影，不做模式门——EventDots 的门在绘制侧 draw_map_gizmos。）
     if layers.event_point.visible {
         let spans: Vec<(TimeSpan, usize)> = world
             .events
@@ -614,8 +615,101 @@ pub fn draw_map_gizmos(
     view: Res<ViewState>,
     frame: Res<ProjectionFrame>,
     layers: Res<LayerFrame>,
+    recipe: Res<crate::recipe::RenderRecipe>,
+    projection: Res<crate::state::WorldProjection>,
+    grid_cfg: Res<GridConfig>,
+    mut candidate_cache: ResMut<crate::region_overlay::CandidateOverlayCache>,
+    boundary: Res<crate::state::BiomeBoundaryState>,
 ) {
     let _ = &*tex; // suppress unused warning
+
+    // ── CellMap 未命名候选高亮（2026-10-22 内容矩阵 §2.6-3 · T11）──────
+    // 仅 Topographic ∧ nature_overlay；缓存键 = 当前图 + 世界变更检测
+    // （WorldProjection.is_changed 在任一命令/选择写入时翻真 → 点击级重算）。
+    if matches!(view.mode, crate::state::ViewMode::Topographic) && view.nature_overlay {
+        let map_changed =
+            candidate_cache.key.as_ref() != projection.world.maps.first().map(|m| &m.id);
+        if map_changed || projection.is_changed() {
+            let raster_to_map = grid_cfg.map_origin - grid_cfg.raster_origin;
+            let map = projection
+                .world
+                .maps
+                .first()
+                .map(|m| m.id.clone())
+                .unwrap_or_else(|| wv_core::Id::new_unchecked("root"));
+            candidate_cache.key = Some(map);
+            candidate_cache.outlines = crate::region_overlay::enumerate_candidates(
+                &projection.world,
+                candidate_cache.key.as_ref().unwrap(),
+                &grid_cfg,
+                raster_to_map,
+            );
+        }
+        let gold = bevy::color::Color::srgba(0.85, 0.68, 0.15, 0.55);
+        for outline in &candidate_cache.outlines {
+            for (a, b) in outline {
+                gizmos.line_2d(*a, *b, gold);
+            }
+        }
+    }
+
+    // ── 群系分界线预览（2026-10-22 内容矩阵 §2.7 · T12）────────────────
+    // 工具激活：线（金色实线 + 两端点圆）+ 拖动中高亮「将被改写」的格。
+    // 高亮与提交共用 `swept_changes`——预览说什么、松手改什么。
+    if boundary.tool_active {
+        let local = |p: bevy::math::Vec2| p + grid_cfg.raster_origin;
+        if let Some(line) = boundary.drag_line.or(boundary.line) {
+            let a = local(bevy::math::Vec2::new(line.a.0, line.a.1));
+            let b = local(bevy::math::Vec2::new(line.b.0, line.b.1));
+            let side_a_color = crate::terrain_view::biome_raw::pick(line.side_a, 1);
+            let side_b_color = crate::terrain_view::biome_raw::pick(line.side_b, 1);
+            let ca =
+                bevy::color::Color::srgba(side_a_color[0], side_a_color[1], side_a_color[2], 0.9);
+            let cb =
+                bevy::color::Color::srgba(side_b_color[0], side_b_color[1], side_b_color[2], 0.9);
+            // 线段本体：中点分两半，各染侧色（左半 side_a / 右半 side_b）。
+            let mid = (a + b) * 0.5;
+            gizmos.line_2d(a, mid, ca);
+            gizmos.line_2d(mid, b, cb);
+            gizmos.circle_2d(
+                bevy::math::Isometry2d::from_translation(a),
+                grid_cfg.cell_size * 0.4,
+                ca,
+            );
+            gizmos.circle_2d(
+                bevy::math::Isometry2d::from_translation(b),
+                grid_cfg.cell_size * 0.4,
+                cb,
+            );
+
+            // 拖动中：高亮将被改写的格（世界系矩形）。
+            if let (Some(old_line), true) = (boundary.line, boundary.drag_line.is_some()) {
+                if let Some(terrain) = projection
+                    .world
+                    .terrain_of(&projection.world.maps.first().map(|m| m.id.clone()).unwrap())
+                {
+                    let changes = crate::biome_boundary::swept_changes(
+                        &old_line,
+                        &line,
+                        terrain,
+                        grid_cfg.cell_size,
+                    );
+                    let warn = bevy::color::Color::srgba(0.95, 0.75, 0.2, 0.4);
+                    for (gx, gy, _, _) in changes {
+                        let center = bevy::math::Vec2::new(
+                            grid_cfg.raster_origin.x + (gx as f32 + 0.5) * grid_cfg.cell_size,
+                            grid_cfg.raster_origin.y + (gy as f32 + 0.5) * grid_cfg.cell_size,
+                        );
+                        gizmos.rect_2d(
+                            bevy::math::Isometry2d::from_translation(center),
+                            bevy::math::Vec2::splat(grid_cfg.cell_size),
+                            warn,
+                        );
+                    }
+                }
+            }
+        }
+    }
     if false {
         if !view.terrain_visible {
             return;
@@ -682,7 +776,9 @@ pub fn draw_map_gizmos(
 
     // 事件高点亮：常驻底环 + 内芯（特效 §4.2：状态永不抑制）。
     // 图层门 + 透明度走 LayerFrame（ADR-0013）；Gizmos 无逐实体 Z，z 偏移不适用。
-    if layers.event_point.visible {
+    // 2026-10-22 内容矩阵：接 MODE_TABLE(EventDots)——Topographic/Schematic
+    // 下不画（事件有时间性，编辑态隐藏；用户裁定）。
+    if layers.event_point.visible && recipe.enabled(crate::recipe::PassId::EventDots) {
         let alpha = layers.event_point.opacity;
         for (_id, pos) in &frame.active_events {
             gizmos.circle_2d(

@@ -1272,6 +1272,7 @@ fn apply_pending_commands(
     mut selection: ResMut<crate::state::SelectionState>,
     // 单格编辑工具会话态（[ADR-0040]）：跟 selection 同款粒度。
     mut edit_cell: ResMut<crate::state::EditCellState>,
+    mut boundary: ResMut<wv_render::state::BiomeBoundaryState>,
     current_loc: Res<CurrentLocale>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     time: Res<Time>,
@@ -1442,6 +1443,7 @@ fn apply_pending_commands(
                 MapToolId::MeasureEraser => measure.mode == MeasureMode::Eraser,
                 MapToolId::Continent => false,
                 MapToolId::EditCell => edit_cell.selected.is_some(),
+                MapToolId::BiomeBoundary => boundary.line.is_some(),
             };
 
             if matches!(tool, MapToolId::Continent) {
@@ -1466,6 +1468,8 @@ fn apply_pending_commands(
                 }
                 // 关掉 EditCell 时清空状态(避免「切走工具后旧选择留着」)。
                 edit_cell.clear();
+                // 切走分界线工具：线是会话工具，一并清（ADR-0051）。
+                boundary.clear();
 
                 // ② 再按需打开（已启用 → 保持全关，即切换关闭）。
                 if !already_on {
@@ -1504,6 +1508,11 @@ fn apply_pending_commands(
                             // (见 editing::commit_edit_cell_on_click)。
                             edit_cell.tool_active = true;
                         }
+                        // 分界线工具激活：线要等用户在地图上拖出（见
+                        // edit::biome_boundary_input）。
+                        MapToolId::BiomeBoundary => {
+                            boundary.tool_active = true;
+                        }
                     }
                 }
             }
@@ -1514,77 +1523,6 @@ fn apply_pending_commands(
             // 顺手启用选择工具，作者圈完选区回面板确认（spec D1/D5；
             // 与测量的互斥由 map_controls 的瓷砖在启用路径上处理）。
             selection.enabled = true;
-        }
-        // 单格编辑：消费 Inspector 写下的 `EditCellState.pending`，
-        // 通过 wv-edit 的 History 落盘（snapshot-diff-revert 四步模式，
-        // 每格 1 command 直接进撤销栈，[ADR-0040] §决策 8）。
-        //
-        // [wv_edit::EditCellCommand::new] 之前要先把 `pending.before` 取
-        // 出后**重新读** world 中当前 cell 值 — 避免 Inspector 读到的
-        // before 与 `EditCellCommand.apply` 校验时的 before 不一致
-        // （中途可能笔刷重绘了一把 cell）。
-        CommandId::CommitEditCell => {
-            let Some(pending) = edit_cell.pending.take() else {
-                // 没 pending 直接忽略：UI race / 重复点提交按钮。
-                return;
-            };
-            // 校验：当前 world 的 cell 真值必须 = pending.before，否则作废。
-            // 与 EditCellCommand.apply 的前置校验同口径。
-            let current_matches = projection
-                .world
-                .terrain_of(&pending.map)
-                .and_then(|t| {
-                    let w = t.width as i32;
-                    let h = t.height as i32;
-                    if pending.gx < 0 || pending.gy < 0 || pending.gx >= w || pending.gy >= h {
-                        return None;
-                    }
-                    t.cells
-                        .get((pending.gy as usize) * (w as usize) + (pending.gx as usize))
-                })
-                .map(|c| *c == pending.before)
-                .unwrap_or(false);
-            if !current_matches {
-                notice.error(
-                    format!(
-                        "提交被拒：cell ({}, {}) 当前值已不是你 Inspector 上看到的值;\
-                         取消改动以避免叠加冲突",
-                        pending.gx, pending.gy
-                    ),
-                    (time.elapsed_secs() * 60.0) as u64,
-                );
-                return;
-            }
-            let cmd = wv_edit::command::EditCellCommand::new(
-                pending.map.clone(),
-                pending.gx,
-                pending.gy,
-                pending.before,
-                pending.after,
-            );
-            let mut tx = wv_edit::history::Transaction::new();
-            tx.push(Box::new(cmd));
-            match edit.history.commit(&mut projection.world, tx) {
-                Ok(dirty) => {
-                    edit.record_dirty(dirty);
-                    projection.dirty = true;
-                    // 脏矩形 = 单格（增量 patch）
-                    let gx = pending.gx as u32;
-                    let gy = pending.gy as u32;
-                    tex.mark_dirty([gx, gy, gx + 1, gy + 1]);
-                    diagnostics.needs_diagnose = true;
-                    notice.info(
-                        format!("已改 cell ({}, {})", pending.gx, pending.gy),
-                        (time.elapsed_secs() * 60.0) as u64,
-                    );
-                }
-                Err(e) => {
-                    notice.error(
-                        format!("改 cell 失败：{e}"),
-                        (time.elapsed_secs() * 60.0) as u64,
-                    );
-                }
-            }
         }
         // 撤销 / 重做走 `editing` 的公开入口（同一份逻辑，不复制）。
         CommandId::Undo | CommandId::Redo => {
@@ -2096,6 +2034,7 @@ mod tests {
         // 2026-10-19 单格编辑工具（[ADR-0040]）:分发器需要 EditCellState 才能
         // 运行 `apply_pending_commands` 的 SelectMapTool(EditCell) 分支。
         world.init_resource::<crate::state::EditCellState>();
+        world.init_resource::<wv_render::state::BiomeBoundaryState>();
         world.init_resource::<crate::ui::ContinentDialog>();
         // ADR-0018：UI 文案语言；默认 `Locale::Zh`（与 GUI 启动默认值一致）。
         world.init_resource::<crate::i18n::CurrentLocale>();
@@ -2348,6 +2287,7 @@ mod tests {
         // 2026-10-19 单格编辑工具（[ADR-0040]）:分发器需要 EditCellState 才能
         // 运行 `apply_pending_commands` 的 SelectMapTool(EditCell) 分支。
         world.init_resource::<crate::state::EditCellState>();
+        world.init_resource::<wv_render::state::BiomeBoundaryState>();
         world.init_resource::<crate::ui::ContinentDialog>();
         // ADR-0018：UI 文案语言；默认 `Locale::Zh`（与 GUI 启动默认值一致）。
         world.init_resource::<crate::i18n::CurrentLocale>();

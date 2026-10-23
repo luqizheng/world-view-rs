@@ -1,10 +1,14 @@
 //! 势力层（P-7；ADR-0027 多势力层）。
 //!
-//! ## 职责
-//! - `panel_faction` —— 按势力层分组：层头（名称 / z / 配色 / 可见 / 删除）+
-//!   「当前填色层」选择器 + 层内势力卡。
-//! - `faction_card` —— 名称 / 颜色 / 层 / 等级提示 / 驻地 / 归属边 / 几何列表 /
-//!   focus。
+//! ## 职责（**已退役的浮窗**）
+//!
+//! **2026-10-22 统一 Inspector**：本面板整体退役——
+//! - 势力的**属性编辑** → Inspector「属性」页签（[`crate::ui::inspector::faction::faction_form`]）；
+//! - 层管理 + 势力列表 → Inspector「势力层」页签（[`crate::ui::inspector::layers::layers_tab`]）。
+//!
+//! `panel_faction` 不再注册（`app_bootstrap`），浮窗不再渲染。文件暂留，
+//! 因为 `layer_controls` / `faction_selection` / `faction_is_selected` 三个
+//! 公开函数被 Inspector 的新模块引用；待 M5 视觉收尾后一并归位。
 //!
 //! ## 边界（不做什么）
 //! - **不**直接改世界 —— 改动经 [`crate::edit::faction_panel_actions`] 提交
@@ -23,11 +27,11 @@ use crate::state::{Panel, PanelState, PlaybackState, ViewState, WorldProjection}
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::space;
 use crate::ui_layout::LayoutFile;
-use wv_core::{FactionColorMode, FactionLayer, Id, Membership, TimeSpan};
+use wv_core::{FactionColorMode, FactionLayer, Id};
 use wv_render::faction_overlays::FactionDisplay;
 
 use super::shell::UiShell;
-use super::widgets::{empty_state, float_window};
+use super::widgets::{empty_state, float_window, list_item};
 
 /// 势力层（P-7）。
 #[allow(clippy::too_many_arguments)]
@@ -37,11 +41,12 @@ pub fn panel_faction(
     layouts: Res<LayoutFile>,
     mut panels: ResMut<PanelState>,
     view: Res<ViewState>,
-    playback: Res<PlaybackState>,
+    _playback: Res<PlaybackState>,
     mut projection: ResMut<WorldProjection>,
     mut edit: ResMut<editing::EditHistory>,
     mut display: ResMut<FactionDisplay>,
     current_loc: Res<CurrentLocale>,
+    mut inspector: ResMut<crate::ui::inspector::InspectorState>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -142,7 +147,6 @@ pub fn panel_faction(
                 return;
             }
 
-            let map_id = Id::new_unchecked(view.current_map.clone());
             for layer in &layers {
                 let layer_id = layer.id.clone();
                 let in_layer: Vec<wv_core::Faction> = factions
@@ -170,19 +174,23 @@ pub fn panel_faction(
                                 .color(shell.t2()),
                         );
                     }
+                    // 列表项：点击 = 选中（驱动 Inspector 的「属性」页签）。
+                    // 2026-10-22 统一 Inspector：势力的属性编辑已迁入
+                    // Inspector，本面板只当选择器 + 层管理。
                     for f in &in_layer {
-                        faction_card(
+                        let is_selected = faction_is_selected(projection.selection.as_ref(), &f.id);
+                        let resp = list_item(
                             ui,
                             &shell,
-                            f,
-                            &layers,
-                            &view,
-                            &playback,
-                            &map_id,
-                            &mut projection,
-                            &mut edit,
-                            &mut display,
+                            shell.danger(),
+                            &f.name,
+                            f.id.as_str(),
+                            is_selected,
                         );
+                        if resp.clicked() {
+                            projection.selection = Some(faction_selection(&f.id));
+                            inspector.tab = crate::ui::inspector::InspectorTab::Properties;
+                        }
                         ui.add_space(space::XS);
                     }
                 });
@@ -195,8 +203,21 @@ pub fn panel_faction(
     );
 }
 
+/// 构造「选中这个势力」的会话态引用。
+///
+/// 选谁是**会话态**（`WorldProjection.selection`）——不落盘、不经
+/// `EditCommand`、不进撤销栈（ADR-0017 §2.7）。
+pub fn faction_selection(id: &Id) -> wv_core::SelectedEntity {
+    wv_core::SelectedEntity::new(wv_core::EntityKind::Faction, id.clone())
+}
+
+/// 当前选中的是否就是这一个势力（用于列表行高亮）。
+pub fn faction_is_selected(selection: Option<&wv_core::SelectedEntity>, id: &Id) -> bool {
+    selection.is_some_and(|s| s.kind == wv_core::EntityKind::Faction && &s.id == id)
+}
+
 /// 层头：名称 / z / 配色策略 / 可见性 / 删除。返回 true 表示本帧点了删除。
-fn layer_controls(
+pub fn layer_controls(
     ui: &mut egui::Ui,
     shell: &UiShell,
     layer: &FactionLayer,
@@ -265,283 +286,29 @@ fn layer_controls(
     false
 }
 
-/// 一张势力卡：名称/色/层/等级/驻地 + 归属边 + 几何列表 + focus。
-#[allow(clippy::too_many_arguments)]
-fn faction_card(
-    ui: &mut egui::Ui,
-    shell: &UiShell,
-    faction: &wv_core::Faction,
-    layers: &[FactionLayer],
-    view: &ViewState,
-    playback: &PlaybackState,
-    map_id: &Id,
-    projection: &mut WorldProjection,
-    edit: &mut editing::EditHistory,
-    display: &mut FactionDisplay,
-) {
-    let id = faction.id.clone();
-    egui::CollapsingHeader::new(format!("◆ {} ({})", faction.name, faction.id))
-        .id_salt(format!("faction_{}", faction.id))
-        .default_open(true)
-        .show(ui, |ui| {
-            // 名称 / 颜色（用本地副本 commit，避免可变借用互相打架）。
-            let mut name_buf = faction.name.clone();
-            let mut color_buf = faction.color.as_str().to_string();
-            let mut changed = false;
-            ui.horizontal(|ui| {
-                ui.label("名称：");
-                if ui.text_edit_singleline(&mut name_buf).changed() {
-                    changed = true;
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("颜色：");
-                if ui.text_edit_singleline(&mut color_buf).changed() {
-                    changed = true;
-                }
-            });
-            if changed {
-                let color = wv_core::color::Color(color_buf.clone());
-                faction_panel_actions::update_faction_now(
-                    projection,
-                    edit,
-                    view,
-                    id.clone(),
-                    name_buf,
-                    color,
-                );
-            }
+#[cfg(test)]
+mod tests {
+    use super::{faction_is_selected, faction_selection};
+    use wv_core::Id;
 
-            // 所属层（None = 默认层）。
-            let mut selected_layer = faction.layer.clone();
-            let before_layer = selected_layer.clone();
-            ui.horizontal_wrapped(|ui| {
-                ui.label("层：");
-                ui.selectable_value(&mut selected_layer, None, "默认");
-                for l in layers {
-                    ui.selectable_value(&mut selected_layer, Some(l.id.clone()), l.name.as_str());
-                }
-            });
-            if selected_layer != before_layer {
-                faction_panel_actions::set_faction_layer_now(
-                    projection,
-                    edit,
-                    view,
-                    id.clone(),
-                    selected_layer,
-                );
-            }
+    #[test]
+    fn faction_selection_targets_the_faction_kind_and_id() {
+        let sel = faction_selection(&Id::new_unchecked("f1"));
+        assert_eq!(sel.kind, wv_core::EntityKind::Faction);
+        assert_eq!(sel.id.as_str(), "f1");
+    }
 
-            // 等级提示（自由字符串）与驻地。
-            let mut rank_buf = faction.rank.clone().unwrap_or_default();
-            let rank_changed = ui
-                .horizontal(|ui| {
-                    ui.label("等级：");
-                    ui.text_edit_singleline(&mut rank_buf).changed()
-                })
-                .inner;
-            if rank_changed {
-                let rank = if rank_buf.trim().is_empty() {
-                    None
-                } else {
-                    Some(rank_buf.trim().to_string())
-                };
-                faction_panel_actions::set_faction_rank_now(
-                    projection,
-                    edit,
-                    view,
-                    id.clone(),
-                    rank,
-                );
-            }
-            let mut seat_buf = faction
-                .seat
-                .as_ref()
-                .map(|s| s.to_string())
-                .unwrap_or_default();
-            let seat_changed = ui
-                .horizontal(|ui| {
-                    ui.label("驻地：");
-                    ui.text_edit_singleline(&mut seat_buf).changed()
-                })
-                .inner;
-            if seat_changed {
-                let seat = if seat_buf.trim().is_empty() {
-                    None
-                } else {
-                    Some(Id::new_unchecked(seat_buf.trim()))
-                };
-                faction_panel_actions::set_faction_seat_now(
-                    projection,
-                    edit,
-                    view,
-                    id.clone(),
-                    seat,
-                );
-            }
+    #[test]
+    fn faction_is_selected_true_only_for_same_faction() {
+        let sel = faction_selection(&Id::new_unchecked("f1"));
+        assert!(faction_is_selected(Some(&sel), &Id::new_unchecked("f1")));
+        assert!(!faction_is_selected(Some(&sel), &Id::new_unchecked("f2")));
+    }
 
-            // 归属边（ADR-0027：有向、多对多、带时间）。
-            ui.add_space(space::XS);
-            ui.label(
-                egui::RichText::new(format!("归属（{}）", faction.memberships.len()))
-                    .small()
-                    .color(shell.t2()),
-            );
-            for m in &faction.memberships {
-                ui.horizontal(|ui| {
-                    let to = m
-                        .span
-                        .to
-                        .map(|t| t.to_string())
-                        .unwrap_or_else(|| "至今".into());
-                    ui.label(format!(
-                        "→ {} · {} · [{}, {})",
-                        m.target,
-                        m.kind.as_deref().unwrap_or("（未命名）"),
-                        m.span.from,
-                        to
-                    ));
-                    if ui.small_button("删除归属").clicked() {
-                        faction_panel_actions::remove_membership_now(
-                            projection,
-                            edit,
-                            view,
-                            id.clone(),
-                            m.target.clone(),
-                            m.span.from,
-                        );
-                    }
-                });
-            }
-            // 新增归属：target / kind / from / to。
-            ui.push_id(("membership_add", faction.id.as_str()), |ui| {
-                let mut target_buf = String::new();
-                let mut kind_buf = String::new();
-                let mut from_buf = playback.current_day.to_string();
-                let mut to_buf = String::new();
-                ui.horizontal(|ui| {
-                    ui.label("目标：");
-                    ui.add(egui::TextEdit::singleline(&mut target_buf).desired_width(110.0));
-                    ui.label("类型：");
-                    ui.add(egui::TextEdit::singleline(&mut kind_buf).desired_width(80.0));
-                    ui.label("起 day：");
-                    ui.add(egui::TextEdit::singleline(&mut from_buf).desired_width(60.0));
-                    ui.label("止：");
-                    ui.add(egui::TextEdit::singleline(&mut to_buf).desired_width(60.0));
-                    if ui.button("+ 添加归属").clicked() && !target_buf.trim().is_empty() {
-                        let from: i64 = from_buf.trim().parse().unwrap_or(playback.current_day);
-                        let to: Option<i64> = if to_buf.trim().is_empty() {
-                            None
-                        } else {
-                            to_buf.trim().parse().ok()
-                        };
-                        let kind = if kind_buf.trim().is_empty() {
-                            None
-                        } else {
-                            Some(kind_buf.trim().to_string())
-                        };
-                        faction_panel_actions::add_membership_now(
-                            projection,
-                            edit,
-                            view,
-                            id.clone(),
-                            Membership {
-                                target: Id::new_unchecked(target_buf.trim()),
-                                kind,
-                                span: TimeSpan { from, to },
-                            },
-                        );
-                    }
-                });
-            });
-
-            // focus（势力图高亮自身 + 直接下级）。
-            ui.horizontal(|ui| {
-                if ui.button("在势力图定位").clicked() {
-                    display.focus = Some(id.clone());
-                }
-                if display.focus.as_ref() == Some(&id) && ui.button("清除定位").clicked() {
-                    display.focus = None;
-                }
-            });
-
-            ui.add_space(space::XS);
-            ui.label(
-                egui::RichText::new(format!("当前地图几何：{}", view.current_map))
-                    .small()
-                    .color(shell.t2()),
-            );
-            // 几何列表：仅展示当前地图下的。
-            let geos: Vec<wv_core::map::GeometrySpan> = projection
-                .world
-                .faction_geometry
-                .iter()
-                .filter(|g| g.map == *map_id && g.owner == id)
-                .cloned()
-                .collect();
-            if geos.is_empty() {
-                ui.label(
-                    egui::RichText::new("（无几何）")
-                        .italics()
-                        .small()
-                        .color(shell.t2()),
-                );
-            } else {
-                for g in &geos {
-                    let from = g.span.from;
-                    let relation = g.relation.as_deref().unwrap_or("control");
-                    ui.horizontal(|ui| {
-                        ui.label(format!(
-                            "[{}, {}) · {} · {} 顶点",
-                            from,
-                            g.span.to.unwrap_or(from + 1),
-                            relation,
-                            g.geometry.point_count()
-                        ));
-                        if ui.small_button("删除").clicked() {
-                            faction_panel_actions::remove_geometry_now(
-                                projection,
-                                edit,
-                                view,
-                                id.clone(),
-                                from,
-                            );
-                        }
-                    });
-                }
-            }
-            // 新增几何。
-            ui.horizontal(|ui| {
-                let mut from_buf = playback.current_day.to_string();
-                let mut to_buf = String::new();
-                ui.label("起 day：");
-                ui.text_edit_singleline(&mut from_buf);
-                ui.label("止（留空=至今）：");
-                ui.text_edit_singleline(&mut to_buf);
-                if ui.button("+ 新建疆界").clicked() {
-                    let from: i64 = from_buf.trim().parse().unwrap_or(playback.current_day);
-                    let to: Option<i64> = if to_buf.trim().is_empty() {
-                        None
-                    } else {
-                        to_buf.trim().parse().ok()
-                    };
-                    faction_panel_actions::upsert_geometry_now(
-                        projection,
-                        edit,
-                        view,
-                        id.clone(),
-                        from,
-                        to,
-                    );
-                }
-            });
-
-            ui.add_space(space::XS);
-            if ui
-                .button(egui::RichText::new("删除整个势力").color(egui::Color32::RED))
-                .clicked()
-            {
-                faction_panel_actions::remove_faction_now(projection, edit, view, id.clone());
-            }
-        });
+    #[test]
+    fn faction_is_selected_false_for_other_kind_or_none() {
+        let sel = wv_core::SelectedEntity::new(wv_core::EntityKind::Place, Id::new_unchecked("f1"));
+        assert!(!faction_is_selected(Some(&sel), &Id::new_unchecked("f1")));
+        assert!(!faction_is_selected(None, &Id::new_unchecked("f1")));
+    }
 }

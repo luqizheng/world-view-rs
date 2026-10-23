@@ -1,8 +1,12 @@
 //! 区域面板（ADR-0017 §2.2）。
 //!
 //! ## 职责
-//! - `panel_region` —— 区域列表（按 ID 升序）；每张卡走 `region_card`。
-//! - `region_card` —— 名称编辑 + 当前地图轮廓顶点数 + 删除。
+//! - `panel_region` —— 区域列表（按 ID 升序）+「+ 新建区域」按钮。
+//!
+//! **2026-10-22 统一 Inspector**：区域的**属性编辑**（改名 / 轮廓信息 /
+//! 类别互转 / 覆盖物键 / 重生成边界 / 删除）已迁入 Inspector 的「属性」页签
+//! （[`crate::ui::inspector::region::region_form`］）。本面板现在只当
+//! **选择器**用——列出「有哪些区域」+ 新建入口。
 //!
 //! ## 边界（不做什么）
 //! - **不**直接改世界 —— 改动经 [`crate::edit::region_panel_actions`] 提交 `EditCommand`。
@@ -30,7 +34,7 @@ use crate::ui::feature_place_dialog::marker_biome_name;
 use crate::ui_shell::ShellNotice;
 
 use super::shell::UiShell;
-use super::widgets::{empty_state, float_window};
+use super::widgets::{empty_state, float_window, list_item};
 
 /// 区域面板。
 #[allow(clippy::too_many_arguments)]
@@ -45,6 +49,7 @@ pub fn panel_region(
     playback: Res<PlaybackState>,
     mut tex: ResMut<wv_render::terrain_view::TerrainTexture>,
     mut notice: ResMut<ShellNotice>,
+    mut inspector: ResMut<crate::ui::inspector::InspectorState>,
     time: Res<Time>,
     current_loc: Res<CurrentLocale>,
     grid: Res<wv_render::state::GridConfig>,
@@ -113,31 +118,32 @@ pub fn panel_region(
                 return;
             }
 
-            // 主题支持的覆盖物键（词表由主题拥有，ADR-0045 D10）。
-            let theme = &view.active_theme;
-            let overlay_keys: Vec<&'static str> = theme.region_overlays.keys().collect();
             // 两套原点的差（区域多边形 = 图内局部 wu；格子属于栅格所在的图）。
+            // 「自然区域」物化时用得上（把候选格转成图内局部坐标的多边形）。
             let raster_to_map = (
                 grid.map_origin.x - grid.raster_origin.x,
                 grid.map_origin.y - grid.raster_origin.y,
             );
 
+            // 列表项：点击 = 选中（驱动 Inspector 的「属性」页签显示该区域）。
+            // 2026-10-22 统一 Inspector：编辑全在 Inspector 里，这里只当选择器。
             for r in &regions {
-                region_card(
+                ui.add_space(space::XS);
+                let is_selected = region_is_selected(projection.selection.as_ref(), &r.id);
+                let resp = list_item(
                     ui,
                     &shell,
-                    r,
-                    &view,
-                    &mut projection,
-                    &mut edit,
-                    &current_loc,
-                    &overlay_keys,
-                    grid.cell_size,
-                    raster_to_map,
-                    &mut notice,
-                    time.elapsed_secs() as u64,
+                    shell.gold(),
+                    &r.name,
+                    r.id.as_str(),
+                    is_selected,
                 );
-                ui.add_space(space::XS);
+                if resp.clicked() {
+                    projection.selection = Some(region_selection(&r.id));
+                    // 点行 = 选中 → Inspector 切回「属性」页签（承诺的
+                    // 「点行即看到属性」，不用再手动切页签）。
+                    inspector.tab = crate::ui::inspector::InspectorTab::Properties;
+                }
             }
 
             // 自然区域（ADR-0045 D4）：**命名即物化**——自动分区候选不落盘，
@@ -291,185 +297,24 @@ pub(crate) fn markers_on_map<'w>(
     markers
 }
 
-/// 一张区域卡：名称编辑 + 顶点数 + 删除。
-#[allow(clippy::too_many_arguments)]
-fn region_card(
-    ui: &mut egui::Ui,
-    shell: &UiShell,
-    region: &wv_core::Region,
-    view: &ViewState,
-    projection: &mut WorldProjection,
-    edit: &mut editing::EditHistory,
-    current_loc: &CurrentLocale,
-    overlay_keys: &[&'static str],
-    cell_size: f32,
-    raster_to_map: (f32, f32),
-    notice: &mut ShellNotice,
-    frame: u64,
-) {
-    let id = region.id.clone();
-    let vertex_count = region.polygon.len() / 2;
-    egui::CollapsingHeader::new(format!(
-        "⬡ {} ({}) — {}{}",
-        region.name,
-        region.id,
-        vertex_count,
-        t_key(current_loc, I18nKey::FactionPanelPointCountSuffix)
-    ))
-    .default_open(true)
-    .show(ui, |ui| {
-        // 名称编辑。
-        let mut name_buf = region.name.clone();
-        ui.horizontal(|ui| {
-            ui.label(t_key(current_loc, I18nKey::RegionPanelNameLabel));
-            if ui.text_edit_singleline(&mut name_buf).changed() {
-                region_panel_actions::update_region_now(
-                    projection,
-                    edit,
-                    view,
-                    id.clone(),
-                    name_buf,
-                    region.polygon.clone(),
-                );
-            }
-        });
+/// 构造「选中这个区域」的会话态引用。
+///
+/// 选谁是**会话态**（`WorldProjection.selection`）——不落盘、不经
+/// `EditCommand`、不进撤销栈（ADR-0017 §2.7）：撤销「改区域名」不该
+/// 连带撤销「选了哪个区域」。
+pub fn region_selection(id: &wv_core::Id) -> wv_core::SelectedEntity {
+    wv_core::SelectedEntity::new(wv_core::EntityKind::Region, id.clone())
+}
 
-        // 轮廓信息。
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(format!(
-                    "{}{}{}",
-                    t_key(current_loc, I18nKey::RegionPanelOutlinePrefix),
-                    vertex_count,
-                    t_key(current_loc, I18nKey::RegionPanelOutlineSuffix)
-                ))
-                .small()
-                .color(shell.t2()),
-            );
-            if region.polygon.is_empty() {
-                ui.label(
-                    egui::RichText::new(t_key(current_loc, I18nKey::RegionPanelOutlinePlaceholder))
-                        .italics()
-                        .small()
-                        .color(shell.t2()),
-                );
-            }
-        });
-
-        // 类别互转（ADR-0045 D3）：普通区域 ↔ 自然区。
-        // 「普通区域」不承载覆盖物（`declared_overlay()` 对 area 一律 None）——
-        // 作者想加覆盖物声明，得先转成自然区。
-        if ui
-            .button(if region.is_nature() {
-                "转为普通区域"
-            } else {
-                "转为自然区（可加覆盖物）"
-            })
-            .clicked()
-        {
-            let kind = if region.is_nature() {
-                wv_core::model::region::RegionKind::Area
-            } else {
-                wv_core::model::region::RegionKind::Nature
-            };
-            let _ = nature_region_actions::set_region_kind_now(
-                projection,
-                edit,
-                view,
-                id.clone(),
-                kind,
-            );
-        }
-
-        // 自然区专属（ADR-0045 D2 / D6）：类别 + 覆盖物键 + 重生成边界。
-        if region.is_nature() {
-            ui.add_space(space::XS);
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "自然区 · 覆盖物：{}",
-                        region.declared_overlay().unwrap_or("（无声明）")
-                    ))
-                    .small()
-                    .color(shell.t2()),
-                );
-            });
-            // 覆盖物键下拉：词表由主题拥有（ADR-0045 D10）；未登记的键照样能写
-            // （开放词表）——但地图上会画成**缺失覆盖物标记**（白底红斜线）。
-            let current_key = region.declared_overlay().unwrap_or("").to_string();
-            egui::ComboBox::from_id_salt(("region_overlay", id.as_str()))
-                .selected_text(if current_key.is_empty() {
-                    "（无声明）".to_string()
-                } else {
-                    current_key.clone()
-                })
-                .show_ui(ui, |ui| {
-                    if ui
-                        .selectable_label(current_key.is_empty(), "（无声明）")
-                        .clicked()
-                    {
-                        let _ = nature_region_actions::set_region_overlay_now(
-                            projection,
-                            edit,
-                            view,
-                            id.clone(),
-                            None,
-                        );
-                    }
-                    for key in overlay_keys {
-                        if ui.selectable_label(current_key == *key, *key).clicked() {
-                            let _ = nature_region_actions::set_region_overlay_now(
-                                projection,
-                                edit,
-                                view,
-                                id.clone(),
-                                Some((*key).to_string()),
-                            );
-                        }
-                    }
-                });
-            // 键在当前主题无规则 → 提示（地图上以缺失标记标出）。
-            if let Some(key) = region.declared_overlay() {
-                if !overlay_keys.contains(&key) {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "键「{key}」在当前主题无规则——地图上以白底红斜线标出。"
-                        ))
-                        .small()
-                        .color(egui::Color32::from_rgb(214, 69, 69)),
-                    );
-                }
-            }
-            if ui.button("重生成边界（按当前地形）").clicked() {
-                if let Err(msg) = nature_region_actions::regenerate_nature_region_now(
-                    projection,
-                    edit,
-                    view,
-                    id.clone(),
-                    cell_size,
-                    raster_to_map,
-                ) {
-                    notice.error(msg, frame);
-                }
-            }
-        }
-
-        ui.add_space(space::XS);
-        if ui
-            .button(
-                egui::RichText::new(t_key(current_loc, I18nKey::RegionPanelDeleteBtn))
-                    .color(egui::Color32::RED),
-            )
-            .clicked()
-        {
-            region_panel_actions::remove_region_now(projection, edit, view, id.clone());
-        }
-    });
+/// 当前选中的是否就是这一个区域（用于列表行高亮）。
+pub fn region_is_selected(selection: Option<&wv_core::SelectedEntity>, id: &wv_core::Id) -> bool {
+    selection.is_some_and(|s| s.kind == wv_core::EntityKind::Region && &s.id == id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::markers_on_map;
+    use super::{region_is_selected, region_selection};
     use wv_core::distance::Place;
     use wv_core::Id;
 
@@ -491,6 +336,27 @@ mod tests {
     }
 
     /// 只列「本图 + biome 非空」的标记，按 id 升序；普通地点与他图标记不列。
+    #[test]
+    fn region_selection_targets_the_region_kind_and_id() {
+        let sel = region_selection(&Id::new_unchecked("r1"));
+        assert_eq!(sel.kind, wv_core::EntityKind::Region);
+        assert_eq!(sel.id.as_str(), "r1");
+    }
+
+    #[test]
+    fn region_is_selected_true_only_for_same_region() {
+        let sel = region_selection(&Id::new_unchecked("r1"));
+        assert!(region_is_selected(Some(&sel), &Id::new_unchecked("r1")));
+        assert!(!region_is_selected(Some(&sel), &Id::new_unchecked("r2")));
+    }
+
+    #[test]
+    fn region_is_selected_false_for_other_kind_or_none() {
+        let sel = wv_core::SelectedEntity::new(wv_core::EntityKind::Place, Id::new_unchecked("r1"));
+        assert!(!region_is_selected(Some(&sel), &Id::new_unchecked("r1")));
+        assert!(!region_is_selected(None, &Id::new_unchecked("r1")));
+    }
+
     #[test]
     fn markers_on_map_lists_only_biome_places_of_current_map() {
         let mut world = wv_core::World::default();

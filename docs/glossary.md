@@ -1,4 +1,4 @@
-> [!IMPORTANT] 术语表 · 快照 2026-10-22
+> [!IMPORTANT] 术语表 · 快照 2026-10-23
 > 投影自仓库 `GLOSSARY.md`（§6.1 术语即时登记纪律）。权威在仓库原文。
 
 ---
@@ -386,7 +386,7 @@
 | **填色器** | Filler | 生成器的形态：壳子（轮廓 / 河流 / 海山环境）从父图现成拿，生成只负责往壳子里按配比填分区。**不是「从零生成」**；地下城不进填色器范围（房间连通性是拓扑问题，按配比随机填出的是互不连通的噪声块） | 编辑 |
 | **存在时间段** | Existence Span | 场景图整图的**可选**存在时段（`MapNode.time_span` 字段已有，缺写入口）：时间轴拨到哪年显示活着的那张图；同址先后城市 = 多张图各带各的时段；时段结束无后继 → 校验面板 Hint 级提示（不拦保存，V1）。分区本身不带时间 | 时间 |
 
-## CellMap 地形编辑工作台（2026-10-22 · ADR-0050 提议态）
+## CellMap 地形编辑工作台（2026-10-22 · ADR-0052 提议态）
 
 > 来源：`docs/adr/ADR-0052-cellmap-terrain-workbench.md`（提议态，未落地）。
 > 本节术语随 ADR 提议同步登记（AGENTS §6.1）；ADR 转「已接受」后机制才生效。
@@ -401,7 +401,7 @@
 | **悬停准星** | hover crosshair | 悬停格高亮的辅助图元：以光标格心为中心、屏幕恒定长度（`max(格宽 × 3, 24 px)`）的两条 1 px 线，与 1 px 细框同用**双色描边**（白内线 + 深墨外晕）——Topographic 底图水面（暗）/陆地（亮）明度跨度大，单色细线无法同时在两种底色上达到 WCAG 2.2 UI 组件 3:1，双色是地图准星的行业成熟解。存在的理由：高缩放下 1 格只有数像素，1 px 细框本身看不见，准星把「瞄准点」放大到可辨。与「选中高亮」（金 2 px 粗框 + 半透底 + 脉动 = committed）视觉分工明确。首次出现：ADR-0050 D2 | 渲染 / UI |
 | **同值泛洪选择** | same-value flood select | 不画多边形、点一格即选中整片**连通同类格**的选择通道（`wv_terrain::edit::flood_region`，4 / 8 连通可选，判据默认「群系相等」，可选「地表」/「海拔容差 ±N m」）。**入口是独立工具瓷砖 `MapToolId::FloodSelect`（dock 第 13 槽），不是面板按钮**——面板管判据参数、瓷砖管手势，杜绝「点完按钮地图点击行为变了但界面无工具态提示」的隐式模式。**只返回格集合、不写世界**——写入仍走 `BatchEditCellsCommand`。与「框选」（几何手势，选形状）互补：框选选的是形状内的格，泛洪选的是同类的连通片。首次出现：ADR-0050 D6 | 编辑 |
 | **邻域平滑** | neighbourhood smoothing | 对选区做格网均值 / 中值迭代（`wv_terrain::edit::smooth_cells`，参数：遍数 + 强度），用于消除手绘锯齿。**返回新值不写世界**；边界格不参与计算（避免选区边缘被外部值拖低）。与 `divide.rs::smooth_ring`（对**多边形顶点**做 Chaikin + DP 简化）**不是一回事**：那条平滑的是矢量轮廓，这条平滑的是高度场。首次出现：ADR-0050 D6 | 地理 / 编辑 |
-| **群系可见底图** | biome-visible base map | CellMap 工作区的底图着色方案（ADR-0050 D10）：每格**纯色**、色相 = 群系（复用 `CORE_TERRAIN` 10 色，biome→槽位映射与 brush swatch 同款，`NONE` 中性兜底）、明度 = 海拔 3 阶（复用 ADR-0039 百分位阈值缓存，调制 ±12% 封顶）——色相与明度双通道同时可视，一格仍一色，不引入晕开/装饰后处理。**水格照旧水色**，biome 不参与水格显示。由 `ViewState.show_biome` 旗标开关（默认 false）：分析视图保持 ADR-0039「只读 height + surface」原语义，**只在 CellMap 语境打开**——是对 ADR-0039 决策 4 的边界扩展，不是推翻。首次出现：ADR-0050 D10 | 渲染 / 编辑 |
+| **群系可见底图** | biome-visible base map | CellMap 工作区的底图着色方案（ADR-0052 D10）：每格**纯色**、色相 = 群系（复用 `CORE_TERRAIN` 10 色，biome→槽位映射与 brush swatch 同款，`NONE` 中性兜底）、明度 = 海拔 3 阶（复用 ADR-0039 百分位阈值缓存，调制 ±12% 封顶）——色相与明度双通道同时可视，一格仍一色，不引入晕开/装饰后处理。**水格照旧水色**，biome 不参与水格显示。由 `ViewState.show_biome` 旗标开关（默认 false）：分析视图保持 ADR-0039「只读 height + surface」原语义，**只在 CellMap 语境打开**——是对 ADR-0039 决策 4 的边界扩展，不是推翻。首次出现：ADR-0050 D10 | 渲染 / 编辑 |
 
 ## 地图渲染实施方案（2026-10-22 · 方案文档落盘）
 
@@ -429,3 +429,25 @@
 | **锚点纪律** | anchor discipline | 色值改动的三问：SPEC 追记了吗 / ADR 修正关系标了吗 / 测试锚了吗——用户定稿色必须挂锚点测试（`daylight_user_pinned_hexes_are_stable` 模式）。首次出现：风格守护清单 #7 | 美术 / 测试 |
 | **图集变体表** | atlas variant table | 位图通道的图集数据结构扩展：`TileAtlas.tiles` 从 `[Option<[u32;2]>; 10]` 扩为 `[[Option<[u32;2]>; 4]; 10]`（10 地形 × 4 变体 = 40 块，规格 §3.2.1）。首次出现：方案 §3.2.1 | 渲染 / 数据 |
 | **变体坐标哈希** | coordinate hash variant selection | 位图通道的变体选择机制：`v = hash01(cx, cy, seed) % 4`——满足「引擎按坐标哈希选变体，pack 不控制概率」（§3.2.1）与确定性契约（同格任意路径同变体）。首次出现：方案 §3.2.1 | 渲染 / 数据 |
+
+
+## 群系色块底图（Biome Raw View）
+
+- **英文名**：Biome Raw View / Fixed Biome Colors
+- **定义**：CellMap（Topographic）的地形画法——每格颜色直接编码其 `biome`（`BIOME_RAW_COLORS[21]` 固定色板，不随 ThemePack / TreatmentFlags），biome=NONE 按 surface 回退。数据视图语义：编辑器看原始数据，主题色只属于「看世界」的 Browse。
+- **首次出现**：2026-10-22 三模式内容矩阵设计（ADR-0051 §5）
+- **所属维度**：呈现（渲染）
+
+## 内容层门控（Content Layer Gating）
+
+- **英文名**：Content Layer Gating / MODE_TABLE wiring
+- **定义**：内容系统（POI/路网/标签/势力/事件点/钻入标记/区域层）按 `RenderRecipe::enabled(PassId)` 决定是否渲染与注册命中——模式观感集中在 ADR-0021 的 MODE_TABLE，不散布 `view.mode` if。标签门必须走「wanted 置空 → 池隐藏尾部」（池是持久实体），`hits.clear()` 归链首照常。
+- **首次出现**：2026-10-22 三模式内容矩阵设计（ADR-0051 §2.1）
+- **所属维度**：呈现（渲染）
+
+## 群系分界线（Biome Boundary Line）
+
+- **英文名**：Biome Boundary Line / `ToolKind::BiomeBoundary`
+- **定义**：CellMap 的群系编辑工具——一条可拖动的线段，两侧各绑一个群系；拖动推移分界，扫过格中「退让侧」群系改为「推进侧」（第三种群系不动）。线是会话工具不落盘；一次拖动 = 1 条 `BatchEditCellsCommand`；落盘真相仍是 cell.biome（P3/P7），区域轮廓继续由连通性派生。
+- **首次出现**：2026-10-22 三模式内容矩阵设计（ADR-0051 §2.7）
+- **所属维度**：编辑（地形）

@@ -203,6 +203,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn retired_panels_absent_from_all() {
+        // 2026-10-22 统一 Inspector：三个面板的内容已迁入 Inspector
+        // （CellEditor→属性页签、Faction→势力层页签、Situation→事态页签），
+        // 独立浮窗不再渲染。它们**不得**回到 `Panel::ALL`——
+        // 本表驱动用户可见的列表面（命令面板 / 设置对话框 / 布局落盘），
+        // 留在表里 = 菜单出现「点了没反应」的死项。
+        for p in [Panel::CellEditor, Panel::Faction, Panel::Situation] {
+            assert!(
+                !Panel::ALL.contains(&p),
+                "{p:?} 已停渲染，不得回到 Panel::ALL（否则菜单出现死项）"
+            );
+        }
+    }
+
+    #[test]
+    fn stale_cell_editor_layout_key_is_ignored() {
+        // 存量工程的 `ui-layout.yaml` 里有 `cell_editor` 键（枚举变体暂留）。
+        // 加载它不得炸——BTreeMap 是按字符串键取的，未知键静默忽略。
+        let yaml =
+            "panels:\n  cell_editor:\n    x: 1.0\n    y: 2.0\n    width: 3.0\n    height: 4.0\n";
+        let f: LayoutFile = serde_yaml::from_str(yaml).expect("退役面板的残留键应被静默忽略");
+        assert!(f.panels.contains_key("cell_editor"), "键应被读入但不被使用");
+        assert_eq!(f.get(Panel::Inspector), default_layout(Panel::Inspector));
+    }
+
+    #[test]
+    fn inspector_default_size_widens_to_300() {
+        // 2026-10-22 统一 Inspector：属性表单比旧的「只显示 kind·id + 计数行」
+        // 宽——264px 放不下「标签 + 控件」两列。Figma `42:2` 的 Inspector 是
+        // 292px，web 原型 `.w-inspector` 也是 292px；取 300 留出边距。
+        let l = default_layout(Panel::Inspector);
+        assert_eq!(
+            (l.width, l.height),
+            (300.0, 420.0),
+            "Inspector 默认尺寸应为 300×420（Figma 42:2 的 292px 留边距）"
+        );
+    }
+
+    #[test]
     fn missing_layout_file_yields_defaults_without_panic() {
         let f = LayoutFile::load(Path::new("definitely-not-here/ui-layout.yaml"));
         assert!(f.panels.is_empty());
@@ -224,7 +263,16 @@ mod tests {
     #[test]
     fn default_panel_rects_never_overlap() {
         // §9.3 验证项 1：默认位置两两不重叠（含折叠态）。
-        let panels = Panel::ALL;
+        //
+        // 三个退役面板除外：CellEditor / Faction / Situation 的内容已迁入
+        // 统一 Inspector（2026-10-22 设计），**不再单独渲染**——一个不显示
+        // 的面板不该参与「默认位置互不重叠」的验收。枚举变体与默认位暂留，
+        // 兼容存量 `ui-layout.yaml` 里的对应键。
+        let panels: Vec<Panel> = Panel::ALL
+            .iter()
+            .copied()
+            .filter(|p| !matches!(p, Panel::CellEditor | Panel::Faction | Panel::Situation))
+            .collect();
         for (i, a) in panels.iter().enumerate() {
             let la = default_layout(*a);
             for b in panels.iter().skip(i + 1) {
