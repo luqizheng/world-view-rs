@@ -880,7 +880,7 @@ pub(crate) fn enumerate_candidates(
         .filter(|r| r.cells >= MIN_CANDIDATE_CELLS)
         .filter(|r| r.biome != wv_terrain::BIOME_NONE && r.outer.len() >= 3)
         .collect();
-    candidates.sort_by(|a, b| b.cells.cmp(&a.cells));
+    candidates.sort_by_key(|r| std::cmp::Reverse(r.cells));
     candidates.truncate(MAX_CANDIDATES);
 
     let mut out = CandidateOutlines::default();

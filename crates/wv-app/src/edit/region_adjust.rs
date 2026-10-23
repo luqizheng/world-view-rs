@@ -21,7 +21,6 @@ use crate::edit::editing::EditHistory;
 use crate::state::{GridConfig, PlaybackState, ViewState, WorldProjection};
 
 use wv_core::Id;
-use wv_render::cell_selection::rasterize_polygon_cells;
 
 /// 区域调整的会话态（CellMap · 选中区域后出现）。
 #[derive(Resource, Debug, Default, Clone, PartialEq)]
@@ -117,7 +116,6 @@ pub fn region_adjust_input(
     }
     let region_name = region.name.clone();
     let stored_polygon = region.polygon.clone();
-    drop(region);
 
     // 拖动中的预览多边形（拖动时优先；未拖动用落盘轮廓）。
     let active_poly = st

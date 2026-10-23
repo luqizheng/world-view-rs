@@ -623,7 +623,6 @@ pub fn draw_map_gizmos(
     boundary: Res<crate::state::BiomeBoundaryState>,
     region_adjust: Res<crate::state::RegionAdjustState>,
 ) {
-    let perf_dbg = std::env::var("WV_PROFILE_FRAME").is_ok();
     let _ = &*tex; // suppress unused warning
 
     // ── CellMap 未命名候选高亮（2026-10-22 内容矩阵 §2.6-3 · T11）──────
@@ -727,23 +726,33 @@ pub fn draw_map_gizmos(
                 for (a, b) in &edges {
                     gizmos.line_2d(*a, *b, white);
                 }
-                // 顶点手柄：白芯黑圈方点（拖动中 = 预览多边形顶点）。
-                let handle_fill = bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.95);
-                let handle_ring = bevy::color::Color::srgba(0.1, 0.1, 0.1, 0.9);
+                // 顶点手柄：白色十字准星 + 深色圈（拖动中 = 预览多边形顶点）。
+                // rect_2d 是**空心周长**（无填充）——之前的「白芯方点」实际是
+                // 两个叠在一起的细框，缩放后不可辨（用户验收反馈）。
+                // 手柄尺寸按屏幕像素折算（×view.scale），任意缩放下恒定可辨。
+                let handle_px = (view.scale * 5.0).max(grid_cfg.cell_size * 0.15);
+                let handle_white = bevy::color::Color::srgba(1.0, 1.0, 1.0, 1.0);
+                let handle_dark = bevy::color::Color::srgba(0.08, 0.08, 0.08, 0.85);
                 for chunk in poly.chunks_exact(2) {
-                    let p = Vec2::new(
-                        grid_cfg.raster_origin.x + chunk[0],
-                        grid_cfg.raster_origin.y + chunk[1],
-                    );
+                    // 多边形是**图内局部 wu**：世界位 = map_origin + 局部
+                    //（此前误用 raster_origin——子图上手柄会偏移）。
+                    let p = grid_cfg.map_origin + Vec2::new(chunk[0], chunk[1]);
+                    // 深色圈（方框）。
                     gizmos.rect_2d(
                         bevy::math::Isometry2d::from_translation(p),
-                        Vec2::splat(grid_cfg.cell_size * 0.5),
-                        handle_fill,
+                        Vec2::splat(handle_px * 2.0),
+                        handle_dark,
                     );
-                    gizmos.rect_2d(
-                        bevy::math::Isometry2d::from_translation(p),
-                        Vec2::splat(grid_cfg.cell_size * 0.7),
-                        handle_ring,
+                    // 白色十字（横竖两线）。
+                    gizmos.line_2d(
+                        p - Vec2::X * handle_px,
+                        p + Vec2::X * handle_px,
+                        handle_white,
+                    );
+                    gizmos.line_2d(
+                        p - Vec2::Y * handle_px,
+                        p + Vec2::Y * handle_px,
+                        handle_white,
                     );
                 }
             }

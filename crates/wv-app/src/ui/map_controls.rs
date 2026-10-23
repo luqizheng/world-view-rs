@@ -498,8 +498,8 @@ pub fn map_controls(
                         // CellMap 里显示 Nature 类区域 + 未命名候选高亮；
                         // 仅 CellMap（Topographic 工作区）显示本按钮——
                         // 其他模式区域层不受开关控制（用户裁定：只在 cell map）。
-                        if matches!(view.mode, ViewMode::Topographic) {
-                            if icon_tile(
+                        if matches!(view.mode, ViewMode::Topographic)
+                            && icon_tile(
                                 ui,
                                 &shell,
                                 metrics,
@@ -508,9 +508,8 @@ pub fn map_controls(
                                 "显示自然区与候选（CellMap）",
                             )
                             .clicked()
-                            {
-                                view.nature_overlay = !view.nature_overlay;
-                            }
+                        {
+                            view.nature_overlay = !view.nature_overlay;
                         }
                     };
 
