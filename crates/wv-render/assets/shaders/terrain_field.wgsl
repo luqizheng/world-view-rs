@@ -314,6 +314,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // 距离场仍 < 阈值，会在海面上描出一条墨线尾巴。用「当前位置是水」
     // 拦掉——河的视觉终点交给海岸三段色带衔接。
     //
+    // ## 追记十一：河流已改**几何**路径，此处只剩道路
+    //
+    // 距离场只能表达「面到点的距离」，其分辨率是 1 texel/格。T25 的河宽
+    // 1.8 **屏幕像素** 在 16 px/格 时只有 0.11 格宽——低于采样密度，双线性
+    // 重建的最低值受「屏幕采样点与 texel 中心最大偏移」（约 0.35 格）限制，
+    // 永远够不到门槛，河线退化成虚线。这不是调参能救的（详见 stroke.rs）。
+    //
+    // 故河流改由 `stroke.rs` 展开成三角网（`sync_rivers` 按缩放重建），
+    // 本分支的 R 通道**留空**（bake 时不再填河），仅保留道路 G/B。
+    //
     // **远观门控随 ink_gate**：< 1 px/格 时线宽折算后不足半像素，画出来
     // 是闪烁噪点，与 T33「远观只留色域」同源。
     if (ink_gate > 0.01) {
@@ -326,17 +336,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         // 于是全图都是 dd=8（不画线）、线心也是 dd=8，河流一条都出不来。
         // 这个 bug 不报错、不崩、单测也测不到（单测测的是 Rust 侧编码，
         // 而错在 shader 侧解码）——只能靠实机截图发现。
-        let dd = dash.r * DASH_MAX_CELLS;
-
-        // 河流（T25 = 1.8 px）：比 biome 界（0.8）重一档是规格的硬要求。
-        let river_half = 0.5 * RIVER_LINE_PX / px_per_cell;        let aa = max(fwidth(dd), 1e-6);
-        // 入水拦截：水面不画河线（距离场在入海口后仍有值）。
-        // 用 land_t（亚格连续的水陆混合比）做软拦截——硬 if 会在河入海
-        // 的那个格上产生 1px 阶梯。
-        let river_water_gate = land_t;
-        let river_ink = (1.0 - smoothstep(river_half - aa, river_half + aa, dd))
-            * river_water_gate;
-        rgb = mix(rgb, p.river_ink.rgb, river_ink * RIVER_INK_ALPHA * ink_gate);
+        let dd_g = dash.g * DASH_MAX_CELLS;
+        let dd_b = dash.b * DASH_MAX_CELLS;
+        let aa = max(fwidth(dd_g), 1e-6);
 
         // 道路（T26 = 2.4 / 1.2 px）：主干压过次级（先画次级再画主干，
         // 交叠处主干色胜出）；道路只应出现在陆上——水里的「路」是数据
@@ -344,8 +346,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let road_water_gate = land_t;
         let minor_half = 0.5 * ROAD_MINOR_PX / px_per_cell;
         let major_half = 0.5 * ROAD_MAJOR_PX / px_per_cell;
-        let dd_g = dash.g * DASH_MAX_CELLS;
-        let dd_b = dash.b * DASH_MAX_CELLS;
         let minor_ink = (1.0 - smoothstep(minor_half - aa, minor_half + aa, dd_b))
             * road_water_gate;
         rgb = mix(rgb, p.ink.rgb, minor_ink * ROAD_INK_ALPHA * ink_gate);

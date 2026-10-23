@@ -19,6 +19,7 @@
 //! | [`coast_sdf`] | 数据 | 海岸距离场（Felzenszwalb EDT） | 纯 Rust |
 //! | [`line_sdf`] | 数据 | 折线距离场（T25 河流 / T26 道路，追记九） | wv-core / wv-terrain |
 //! | [`pack`] | 数据 | 三张数据纹理打包（height/coast/attr） | 纯 Rust |
+//! | [`stroke`] | 数据 | 折线加宽成三角网（T25 河流的几何路径，追记十一） | 纯 Rust |
 //! | [`material`] | 执行 | `TerrainFieldMaterial` + WGSL 逐像素求值 | Bevy |
 //!
 //! **数据层不引入 Bevy**：`coast_sdf` 与 `pack` 都是纯函数，能在
@@ -37,6 +38,7 @@ pub mod line_sdf;
 pub mod material;
 pub mod pack;
 pub mod paper;
+pub mod stroke;
 pub mod symbol_atlas;
 
 pub use bicubic::{bicubic_grad, bicubic_value, cubic_weights, cubic_weights_deriv};
@@ -47,7 +49,7 @@ pub use line_sdf::{
 pub use material::{
     build_material, build_material_with_lines, default_params, set_coast_encoding, warp_amp,
     FieldPalette, FieldParams, TerrainFieldMaterial, TerrainFieldMaterialPlugin, ViewBranch,
-    WARP_AMP_MAX, WARP_AMP_MIN,
+    RIVER_LINE_PX, ROAD_MAJOR_PX, ROAD_MINOR_PX, WARP_AMP_MAX, WARP_AMP_MIN,
 };
 pub use pack::{CoastEncoding, FieldPack, COAST_MAX_CELLS, H_MAX, H_MIN};
 pub use paper::{
@@ -55,6 +57,7 @@ pub use paper::{
     PaperOverlayMaterial, PaperOverlayPlugin, PaperParams, PAPER_Z, TERRAIN_Z, VEIL_Z,
     VIGNETTE_ALPHA,
 };
+pub use stroke::{expand_strokes, smooth_polyline, StrokeMesh, StrokePath};
 pub use symbol_atlas::{
     anchor_offset, hash01, placeholder_atlas, shadow_color, shadow_offset, slot_index,
     symbol_density_keep, symbol_exit_alpha, variant_for, SizeClass, SymbolFamily, SymbolVariant,

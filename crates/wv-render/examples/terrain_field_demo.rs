@@ -45,12 +45,12 @@ use wv_core::terrain::{TerrainCellData, TerrainData};
 use wv_render::terrain_view::atmosphere::veil_alpha;
 use wv_render::terrain_view::field::{
     anchor_offset, bake_line_dash, build_material_with_lines, build_paper_material,
-    build_veil_material, default_params, hash01, placeholder_atlas, rivers_from_terrain,
-    set_coast_encoding, shadow_color, shadow_offset, slot_index, symbol_density_keep,
-    symbol_exit_alpha, variant_for, CoastEncoding, FieldPack, LinePoly, PaperOverlayMaterial,
-    PaperOverlayPlugin, PaperParams, SymbolFamily, TerrainFieldMaterial,
-    TerrainFieldMaterialPlugin, ViewBranch, CELL_PX, GRID_DIM, PAPER_Z, SALT_DENSITY, VEIL_Z,
-    VIGNETTE_ALPHA,
+    build_veil_material, default_params, expand_strokes, hash01, placeholder_atlas,
+    rivers_from_terrain, set_coast_encoding, shadow_color, shadow_offset, slot_index,
+    smooth_polyline, symbol_density_keep, symbol_exit_alpha, variant_for, CoastEncoding, FieldPack,
+    FieldPalette, LinePoly, PaperOverlayMaterial, PaperOverlayPlugin, PaperParams, StrokePath,
+    SymbolFamily, TerrainFieldMaterial, TerrainFieldMaterialPlugin, ViewBranch, CELL_PX, GRID_DIM,
+    PAPER_Z, RIVER_LINE_PX, SALT_DENSITY, VEIL_Z, VIGNETTE_ALPHA,
 };
 
 /// 地形网格边长（格）。512 = 262144 格，与 P0 锁 T5 的计时口径一致。
@@ -134,6 +134,7 @@ fn main() {
                 zoom_input,
                 key_input,
                 sync_material,
+                sync_rivers,
                 sync_paper,
                 sync_symbols,
                 acceptance_capture,
@@ -182,6 +183,14 @@ struct DemoState {
     coast_world: Vec2,
     /// 最长河流的中点（世界坐标）——T25 验收截图的对准点。
     river_world: Vec2,
+    /// T25 河流折线的**世界坐标**副本（几何路径用，追记十一）。
+    river_paths: Vec<StrokePath>,
+    /// 河流三角网实体（`None` = 当前无河）。
+    river_entity: Option<Entity>,
+    /// 河流 mesh 资产句柄（缩放时原地替换）。
+    river_mesh: Handle<Mesh>,
+    /// 上次构网用的 `px_per_cell`——只在缩放变化时重建。
+    river_built_at: f32,
 }
 
 /// 确定性哈希（整数 → `[0,1)`）。**不用随机数**——守护项 8 / SPEC §3.8.6：
@@ -283,6 +292,14 @@ fn find_coast_world(terrain: &TerrainData) -> Vec2 {
     Vec2::new(cx + 0.5 - g * 0.5, g * 0.5 - cy - 0.5)
 }
 
+/// 格心坐标（`[x, y]`，含 +0.5）→ 世界坐标。
+///
+/// **唯一换算入口**：`find_river_world` 与河流三角网共用，避免两处各写一遍
+/// 再漂移（追记九踩过「多补半格」的坑）。
+fn grid_to_world(p: [f32; 2], grid: f32) -> Vec2 {
+    Vec2::new(p[0] - grid * 0.5, grid * 0.5 - p[1])
+}
+
 /// 最长河流的中点 → 世界坐标（T25 验收截图的对准点）。
 ///
 /// 取最长的那条：短细流只有十几格，在 8 px/格 下不足以看出「线状连续性」。
@@ -296,12 +313,10 @@ fn find_river_world(lines: &[LinePoly], grid: f32) -> Vec2 {
         return Vec2::ZERO;
     };
     // ⚠️ `mid` 已是**格心坐标**（`generate_rivers` 返回 `(cx + 0.5)/w`，
-    // 乘回图宽后即 `cx + 0.5`），故这里**不能再补 0.5**。
+    // 乘回图宽后即 `cx + 0.5`），故**不能再补 0.5**。
     // 曾照抄 `find_coast_world` 的「格索引 → 世界」公式多加了半格，
-    // 相机因此偏离河心 0.5 格：屏幕任何像素都落在离河 ≥0.36 格处，
-    // 而 1.8 px 线的半宽阈值只有 0.11 格（8 px/格）→ **一条河都画不出来**，
-    // 且画面看起来完全正常（只是「没有河」），属静默缺陷。
-    Vec2::new(mid[0] - grid * 0.5, grid * 0.5 - mid[1])
+    // 相机因此偏离河心 0.5 格，表现为「河里一条线都画不出来」（静默缺陷）。
+    grid_to_world(*mid, grid)
 }
 
 /// 按海拔与确定性哈希决定该格放什么符号（`None` = 不放）。
@@ -513,6 +528,25 @@ fn setup(
         river_polys.len()
     );
     let line_polys: Vec<LinePoly> = river_polys;
+    // T25 几何路径（追记十一）：折线转**世界坐标**，供三角网展开用。
+    // 距离场那条路在高倍下画不出 1.8px 发丝线（追记九的已知限制），
+    // 故河流改走几何——尺寸按 `LINE_PX / ppc` 折算，任何缩放都精确。
+    let extent_w = GRID as f32 * WORLD_PER_CELL;
+    let river_paths: Vec<StrokePath> = line_polys
+        .iter()
+        .map(|l| StrokePath {
+            // 先 Chaikin 平滑（两轮）再转世界坐标：8 邻域走线的 45°/90°
+            // 硬拐角在 1.8px 精确线宽下非常刺眼，平滑后才是手绘的蜿蜒感。
+            pts: smooth_polyline(&l.pts, 2)
+                .iter()
+                .map(|p| {
+                    let w = grid_to_world(*p, extent_w);
+                    [w.x, w.y]
+                })
+                .collect(),
+            closed: false,
+        })
+        .collect();
     let dash_pack = bake_line_dash(GRID, GRID, &line_polys);
     info!(
         "T25/T26 折线距离场：{}×{}（Rgba8Unorm，{} KB）",
@@ -580,6 +614,24 @@ fn setup(
             } else {
                 Visibility::Inherited
             },
+        ))
+        .id();
+
+    // T25 河流几何层：Z 在纸面/雾之下、符号之上（0.5）。
+    // mesh 先给空资产，由 `sync_rivers` 按当前缩放填。
+    let river_mesh = meshes.add(Mesh::new(
+        bevy::mesh::PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
+    ));
+    // 河墨色取自 `FieldPalette::river_ink`——与 shader 距离场路径同一权威源，
+    // 换主题时河流不会与主题脱节（几何路径只换载体，不另立色号）。
+    let river_ink = FieldPalette::default().river_ink;
+    let river_mat = color_mats.add(ColorMaterial::from_color(Color::from(river_ink)));
+    let river_entity = commands
+        .spawn((
+            Mesh2d(river_mesh.clone()),
+            MeshMaterial2d(river_mat),
+            Transform::from_xyz(0.0, 0.0, 0.5),
         ))
         .id();
 
@@ -751,6 +803,10 @@ fn setup(
         paper_mat,
         coast_world,
         river_world,
+        river_paths,
+        river_entity: Some(river_entity),
+        river_mesh,
+        river_built_at: f32::NAN, // NaN ⇒ 首帧必重建
     });
 }
 
@@ -1015,6 +1071,58 @@ fn sync_symbols(
             sprite.color = Color::WHITE.with_alpha(alpha);
         }
     }
+}
+
+// ── T25 河流几何层同步（追记十一）───────────────────────────────────────────
+
+/// 河流层随缩放重算半宽并替换 mesh。
+///
+/// **为什么要重建**：T25 的河宽是 1.8 **屏幕像素**，折算成世界单位是
+/// `1.8 / 2 / px_per_cell`——缩放一变，几何就必须变。这与距离场那条路
+/// （一次烘焙、shader 里按 ppc 折算）的本质区别：几何把折算结果烘进顶点，
+/// 所以必须重建；换来的是**任意缩放下线宽精确**（距离场受 1 texel/格 限制，
+/// 高倍退化成虚线）。
+///
+/// 只在 `px_per_cell` 变化时重建（`river_built_at` 记录上次值）——缩放是
+/// 用户输入驱动的离散事件，不是每帧。
+fn sync_rivers(
+    state: Res<DemoState>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut vis: Query<&mut Visibility>,
+) {
+    let ppc = state.px_per_cell;
+    if (ppc - state.river_built_at).abs() < 1e-6 {
+        return;
+    }
+    let Some(entity) = state.river_entity else {
+        return;
+    };
+
+    let half_w = 0.5 * RIVER_LINE_PX / ppc;
+    let paths = if std::env::var("FIELD_NO_RIVERS").is_ok() {
+        &[][..]
+    } else {
+        &state.river_paths[..]
+    };
+    let stroke = expand_strokes(paths, half_w);
+    if stroke.is_empty() {
+        if let Ok(mut v) = vis.get_mut(entity) {
+            *v = Visibility::Hidden;
+        }
+        return;
+    }
+    if let Ok(mut v) = vis.get_mut(entity) {
+        *v = Visibility::Inherited;
+    }
+
+    let mut mesh = Mesh::new(
+        bevy::mesh::PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, stroke.positions);
+    mesh.insert_indices(bevy::mesh::Indices::U32(stroke.indices));
+    // 必须在**原句柄**上替换：实体持有的是 handle，换新 handle 不会自动改。
+    let _ = meshes.insert(&state.river_mesh, mesh);
 }
 
 // ── 纸面两层同步（P4）───────────────────────────────────────────────────────
