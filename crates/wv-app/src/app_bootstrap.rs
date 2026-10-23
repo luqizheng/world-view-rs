@@ -198,6 +198,10 @@ pub fn run(config: AppConfig) {
     // Inspector 的当前页签（2026-10-22 统一 Inspector）：面板系统 ResMut 它,
     // 漏 init 即启动期 panic(同 EditCellState 的教训)。
     .init_resource::<crate::ui::inspector::InspectorState>()
+    // CellMap 未命名候选缓存（2026-10-22 内容矩阵 T11）：渲染主链在本 crate
+    // 直装（不走 MapRenderPlugin），draw_map_gizmos ResMut 它——漏 init 即
+    // 启动期 panic（实机已踩：plugins.rs 里的 init 在 GUI 路径不运行）。
+    .init_resource::<wv_render::region_overlay::CandidateOverlayCache>()
     // Inspector 表单的暂存输入缓冲（egui TextEdit 调用方持有文本，
     // 漏 init 即启动期 panic——同 EditCellState 的教训）。
     .init_resource::<crate::ui::inspector::event::InspectorDrafts>()
