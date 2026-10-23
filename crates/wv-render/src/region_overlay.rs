@@ -903,15 +903,16 @@ pub(crate) fn enumerate_candidates(
                 ))
             })
             .collect();
-        let mut dashed: Vec<(bevy::math::Vec2, bevy::math::Vec2)> = Vec::new();
+        let mut solid: Vec<(bevy::math::Vec2, bevy::math::Vec2)> = Vec::new();
         let mut bbox_min = bevy::math::Vec2::splat(f32::MAX);
         let mut bbox_max = bevy::math::Vec2::splat(f32::MIN);
         for p in &ring {
             bbox_min = bbox_min.min(*p);
             bbox_max = bbox_max.max(*p);
         }
-        for pair in ring.windows(2).step_by(2) {
-            dashed.push((pair[0], pair[1]));
+        // 白色实线直接落在方格边——数据视图无修饰（用户验收裁定）。
+        for pair in ring.windows(2) {
+            solid.push((pair[0], pair[1]));
         }
         // 格填充集：外环栅格化（供视口内半透明填充；缩放足够大才画）。
         let fill = crate::cell_selection::rasterize_polygon_cells(
@@ -921,8 +922,8 @@ pub(crate) fn enumerate_candidates(
             data.width,
             data.height,
         );
-        if !dashed.is_empty() {
-            out.outlines.push(dashed);
+        if !solid.is_empty() {
+            out.outlines.push(solid);
             out.fill_cells.push(fill);
             out.bboxes.push((bbox_min, bbox_max));
         }

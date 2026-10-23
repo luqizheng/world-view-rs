@@ -20,9 +20,6 @@ use bevy::prelude::*;
 use crate::edit::editing::EditHistory;
 use crate::state::{GridConfig, PlaybackState, ViewState, WorldProjection};
 
-use wv_core::Id;
-use wv_render::state::RegionAdjustState;
-
 /// 点到线段的距离（wu）。
 fn dist_to_segment(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
@@ -40,11 +37,6 @@ fn snap_to_corner(local: (f32, f32), cs: f32, corner0: (f32, f32)) -> (f32, f32)
     let kx = ((local.0 - corner0.0) / cs).round();
     let ky = ((local.1 - corner0.1) / cs).round();
     (corner0.0 + kx * cs, corner0.1 + ky * cs)
-}
-
-/// 当前缩放下的锚点间距（wu）= 24px 的世界长度，下限 2 格。
-fn anchor_spacing(view: &ViewState, cs: f32) -> f32 {
-    (view.scale * 24.0).max(cs * 2.0)
 }
 
 /// 区域边界拖拽输入系统。

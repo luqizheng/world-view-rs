@@ -102,6 +102,30 @@ fn dummy_grid(terrain: &wv_core::terrain::TerrainData, cell_size: f32) -> crate:
     }
 }
 
+/// 多边形抽稀：保留距上一个保留点 ≥`min_spacing`（wu）的顶点。
+///
+/// 区域边界锚点的 LOD 抽稀（用户裁定：锚点数量随 zoom 自适应）——间距取
+/// `view.scale × 屏幕像素数` 的世界长度，zoom out 稀疏 / zoom in 密集。
+pub fn decimate_poly(poly: &[(f32, f32)], min_spacing: f32) -> Vec<(f32, f32)> {
+    let mut out: Vec<(f32, f32)> = Vec::new();
+    let mut last: Option<(f32, f32)> = None;
+    for &p in poly {
+        let far = last
+            .map(|l| ((p.0 - l.0).powi(2) + (p.1 - l.1).powi(2)).sqrt() >= min_spacing)
+            .unwrap_or(true);
+        if far {
+            out.push(p);
+            last = Some(p);
+        }
+    }
+    out
+}
+
+/// 当前缩放下的锚点间距（wu）= `px` 屏幕像素的世界长度，下限 2 格。
+pub fn anchor_spacing(view_scale: f32, cs: f32, px: f32) -> f32 {
+    (view_scale * px).max(cs * 2.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,28 +253,4 @@ mod tests {
             "右侧格（草原=side_b）是退让侧"
         );
     }
-}
-
-/// 多边形抽稀：保留距上一个保留点 ≥`min_spacing`（wu）的顶点。
-///
-/// 区域边界锚点的 LOD 抽稀（用户裁定：锚点数量随 zoom 自适应）——间距取
-/// `view.scale × 屏幕像素数` 的世界长度，zoom out 稀疏 / zoom in 密集。
-pub fn decimate_poly(poly: &[(f32, f32)], min_spacing: f32) -> Vec<(f32, f32)> {
-    let mut out: Vec<(f32, f32)> = Vec::new();
-    let mut last: Option<(f32, f32)> = None;
-    for &p in poly {
-        let far = last
-            .map(|l| ((p.0 - l.0).powi(2) + (p.1 - l.1).powi(2)).sqrt() >= min_spacing)
-            .unwrap_or(true);
-        if far {
-            out.push(p);
-            last = Some(p);
-        }
-    }
-    out
-}
-
-/// 当前缩放下的锚点间距（wu）= `px` 屏幕像素的世界长度，下限 2 格。
-pub fn anchor_spacing(view_scale: f32, cs: f32, px: f32) -> f32 {
-    (view_scale * px).max(cs * 2.0)
 }
