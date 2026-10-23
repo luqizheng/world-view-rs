@@ -20,18 +20,11 @@ panels:
     height: 312.0
     collapsed: false
     visible: false
-  faction:
-    x: 332.0
-    y: 368.0
-    width: 280.0
-    height: 300.0
-    collapsed: false
-    visible: false
   inspector:
     x: 992.0
     y: 56.0
-    width: 264.0
-    height: 240.0
+    width: 300.0
+    height: 420.0
     collapsed: false
     visible: false
   layers:
@@ -48,16 +41,9 @@ panels:
     height: 200.0
     collapsed: false
     visible: false
-  situation:
-    x: 652.0
-    y: 380.0
-    width: 300.0
-    height: 308.0
-    collapsed: false
-    visible: false
   timeline:
-    x: 4.0
-    y: 506.40625
+    x: 12.0
+    y: 636.0
     width: 1256.0
     height: 164.0
     collapsed: false
@@ -80,3 +66,9 @@ theme: dark
 density: cozy
 map_theme: daylight
 language: zh
+map_dock: vertical
+map_snap: true
+map_dock_pos: null
+map_zoom_strip_pos:
+- 142.40001
+- -689.5999

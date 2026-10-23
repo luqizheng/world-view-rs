@@ -7010,6 +7010,7 @@ dependencies = [
  "wv-theme",
  "wv-theme-chinese-ink",
  "wv-ui",
+ "wv-world-cell-map",
 ]
 
 [[package]]
@@ -7064,6 +7065,7 @@ dependencies = [
  "wv-core",
  "wv-terrain",
  "wv-theme",
+ "wv-world-cell-map",
 ]
 
 [[package]]
@@ -7092,6 +7094,17 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "egui_extras",
+]
+
+[[package]]
+name = "wv-world-cell-map"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "serde",
+ "serde_yaml",
+ "wv-core",
+ "wv-terrain",
 ]
 
 [[package]]

@@ -596,10 +596,10 @@ mod tests {
         let mut images = Assets::<Image>::default();
         let image = wv_render::terrain_view::image_from_terrain(
             &old_terrain,
-            wv_render::state::ViewMode::VectorFlat,
+            wv_world_cell_map::shade::ShadeMode::VectorFlat,
             None,
             false,
-            &wv_render::theme::theme_pack::builtin::DEFAULT,
+            &wv_world_cell_map::palette::CellPack::fixture(),
             0.0,
         );
         let tex = wv_render::terrain_view::new_terrain_texture(
@@ -607,7 +607,7 @@ mod tests {
             image,
             &old_terrain,
             Some(root.clone()),
-            wv_render::state::ViewMode::VectorFlat,
+            wv_world_cell_map::shade::ShadeMode::VectorFlat,
             false,
             wv_render::theme::theme_pack::builtin::DEFAULT.id,
         );

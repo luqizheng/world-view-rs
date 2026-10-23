@@ -1,0 +1,7 @@
+id: cb_e_hamlet
+a: cb_mill
+b: cb_hamlet
+distance_km: 90.0
+terrain: forest
+bidirectional: true
+rank: 1

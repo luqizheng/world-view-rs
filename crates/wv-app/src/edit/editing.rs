@@ -27,8 +27,8 @@ use crate::state::{
 };
 use crate::ui::cell_pick;
 use wv_edit::command::{
-    EditCommand, GenerateContinentCommand, IntentTerrainCommand, PaintTerrainCommand,
-    RegenWorldTerrainCommand, ResetTerrainToBaseCommand,
+    ClearMeasurementsCommand, EditCommand, GenerateContinentCommand, IntentTerrainCommand,
+    PaintTerrainCommand, RegenWorldTerrainCommand, ResetTerrainToBaseCommand,
 };
 use wv_edit::history::Transaction;
 use wv_edit::History;
@@ -350,10 +350,10 @@ pub fn flush_terrain_texture(
     if is_full {
         let image = image_from_terrain(
             data,
-            view.mode,
+            wv_render::cellmap_bridge::shade_mode_of(view.mode),
             atlas.as_deref(),
             view.terrain_soften,
-            view.active_theme,
+            &wv_render::cellmap_bridge::conv_pack(view.active_theme),
             0.0,
         );
         if let Some(mut img) = images.get_mut(&tex.handle) {
@@ -368,12 +368,12 @@ pub fn flush_terrain_texture(
         wv_render::terrain_view::patch_terrain_image(
             &mut img,
             data,
-            view.mode,
+            wv_render::cellmap_bridge::shade_mode_of(view.mode),
             atlas.as_deref(),
             rect,
             res,
             view.terrain_soften,
-            view.active_theme,
+            &wv_render::cellmap_bridge::conv_pack(view.active_theme),
         );
     }
     tex.dirty = None;
@@ -504,6 +504,47 @@ pub fn apply_regen_world(
             Ok("已重生成世界地形".into())
         }
         Err(e) => Err(format!("重生成失败：{e}")),
+    }
+}
+
+/// 一键清除当前图的全部测量（2026-10-23 用户需求）。
+///
+/// 走 `ClearMeasurementsCommand`：整份 overlay 换空 + 单槽缓存旧 overlay，
+/// **一次撤销整体还原**（不用 N 条 Remove 拼事务，撤销栈也不会被刷屏）。
+///
+/// 空图早退：`world.measurements[map]` 本来就空时**不提交**命令——
+/// 空命令进撤销栈等于让作者按一次 Ctrl+Z 什么都没变（与
+/// [`ClearMeasurementsCommand::apply`] 的「空→空不记脏」同口径）。
+///
+/// 播放中只读（基线 V37）：拒绝并说明原因，不静默无反应。
+/// 无工程闸门由 [`crate::ui_shell`] 提前挡（本函数只处理「有图但没测量」）。
+pub fn apply_clear_measurements(
+    map_id: &wv_core::Id,
+    edit: &mut EditHistory,
+    projection: &mut WorldProjection,
+    playback: &PlaybackState,
+) -> Result<String, String> {
+    if playback.playing {
+        return Err("播放中为只读：先暂停再清除测量".into());
+    }
+    let count = projection
+        .world
+        .measurement_of(map_id)
+        .map(|o| o.measurements.len())
+        .unwrap_or(0);
+    if count == 0 {
+        return Ok("当前图没有测量".into());
+    }
+
+    let mut tx = Transaction::new();
+    tx.push(Box::new(ClearMeasurementsCommand::new(map_id.clone())));
+    match edit.history.commit(&mut projection.world, tx) {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
+            projection.dirty = true;
+            Ok(format!("已清除 {count} 条测量"))
+        }
+        Err(e) => Err(format!("清除测量失败：{e}")),
     }
 }
 
@@ -1168,6 +1209,7 @@ mod tests {
             res: 1,
             dirty: None,
             chunks_dirty: None,
+            field_dirty: None,
             last_mode: None,
             last_soften: false,
             last_theme_id: wv_render::theme::theme_pack::builtin::DEFAULT.id,

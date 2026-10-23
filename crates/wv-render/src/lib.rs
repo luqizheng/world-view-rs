@@ -37,13 +37,17 @@
 //! - `draw_vector_layers` —— 来自 `vector_layers`
 
 #[cfg(feature = "app")]
-pub mod biome_boundary;
 pub mod brush_cursor;
 #[cfg(feature = "app")]
 pub mod buildings;
 #[cfg(feature = "app")]
 pub mod camera;
-pub mod cell_selection;
+#[cfg(feature = "app")]
+pub mod cellmap_bridge;
+
+// ── CellMap 渲染域已迁 wv-world-cell-map（ADR-0054）；旧模块路径经 re-export 兼容 ──
+#[cfg(feature = "app")]
+pub use wv_world_cell_map::{biome_boundary, cell_selection, region_overlay, terrain_chunks};
 #[cfg(feature = "app")]
 pub mod drill;
 #[cfg(feature = "app")]
@@ -69,14 +73,17 @@ pub mod measurement;
 #[cfg(feature = "app")]
 pub mod paper_overlay;
 #[cfg(feature = "app")]
+pub mod perf;
+#[cfg(feature = "app")]
 pub mod place_line;
 pub mod plugins;
 #[cfg(feature = "app")]
 pub mod recipe;
 #[cfg(feature = "app")]
+pub mod region_decor;
+#[cfg(feature = "app")]
 pub mod region_outline;
 #[cfg(feature = "app")]
-pub mod region_overlay;
 #[cfg(feature = "app")]
 pub mod selection;
 #[cfg(feature = "app")]
@@ -84,7 +91,6 @@ pub mod state;
 #[cfg(feature = "app")]
 pub mod streets;
 #[cfg(feature = "app")]
-pub mod terrain_chunks;
 pub mod terrain_decor;
 #[cfg(feature = "app")]
 pub mod terrain_view;

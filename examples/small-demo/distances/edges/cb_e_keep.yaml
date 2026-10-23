@@ -1,0 +1,7 @@
+id: cb_e_keep
+a: cb_junction
+b: cb_keep
+distance_km: 260.0
+terrain: forest
+bidirectional: true
+rank: 3

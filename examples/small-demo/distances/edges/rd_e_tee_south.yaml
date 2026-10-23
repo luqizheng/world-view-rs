@@ -1,0 +1,7 @@
+id: rd_e_tee_south
+a: rd_tee
+b: rd_village
+distance_km: 160.0
+terrain: forest
+bidirectional: true
+rank: 1

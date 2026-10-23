@@ -1,0 +1,7 @@
+id: cb_e_mill
+a: cb_junction
+b: cb_mill
+distance_km: 120.0
+terrain: plain
+bidirectional: true
+rank: 2

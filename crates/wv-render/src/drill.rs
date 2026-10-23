@@ -848,7 +848,7 @@ pub fn update_place_labels(
                 {
                     continue;
                 }
-                if let (Some(x), Some(y)) = (p.x, p.y) {
+                if let Some((x, y)) = p.effective_anchor() {
                     // 地点坐标是本图局部 → 视图空间（`map_to_view`，非栅格原点）。
                     let pos = grid.map_to_view(Vec2::new(x, y));
                     if (pos.x - cx).abs() > half.x || (pos.y - cy).abs() > half.y {
@@ -1423,7 +1423,7 @@ pub fn update_region_labels(
     let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
     // Label 层可见性（ADR-0017 Q1）
     if layers.label.visible
-        && crate::region_overlay::region_layer_visible(
+        && crate::cellmap_bridge::region_layer_visible(
             view.mode,
             view.nature_overlay,
             wv_core::model::region::RegionKind::Nature,
@@ -1873,6 +1873,7 @@ mod tests {
             res: 1,
             dirty: None,
             chunks_dirty: None,
+            field_dirty: None,
             last_mode: None,
             last_soften: false,
             last_theme_id: "",

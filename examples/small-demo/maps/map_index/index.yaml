@@ -1,0 +1,74 @@
+id: map_index
+name: 小样张索引
+level: world
+children:
+- t_terrain
+- t_road
+- t_river
+- t_poi
+- t_combo
+icons:
+- id: icon_t_terrain
+  anchor:
+  - 0.21972656
+  - 0.2685547
+  shape: diamond
+  drill_into: t_terrain
+- id: icon_t_road
+  anchor:
+  - 0.7080078
+  - 0.2685547
+  shape: circle
+  drill_into: t_road
+- id: icon_t_river
+  anchor:
+  - 0.21972656
+  - 0.7080078
+  shape: square
+  drill_into: t_river
+- id: icon_t_poi
+  anchor:
+  - 0.7080078
+  - 0.7080078
+  shape: star
+  drill_into: t_poi
+- id: icon_t_combo
+  anchor:
+  - 0.47607422
+  - 0.48828125
+  shape: diamond
+  drill_into: t_combo
+- id: icon_decoy_no_place
+  anchor:
+  - 0.36621094
+  - 0.87890625
+  shape: cross
+  size: 10.0
+layers:
+- id: l_map_index_terrain
+  name: 地形
+  kind: terrain
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+  source: maps/map_index/terrain.bin
+- id: l_map_index_labels
+  name: 标注
+  kind: label
+  visible: true
+  locked: false
+  opacity: 1.0
+  z: 0
+  source: maps/map_index/labels.yaml
+extent:
+  width: 4096.0
+  height: 4096.0
+raster:
+  path: maps/map_index/terrain.bin
+  encoding: i16
+  width: 256
+  height: 256
+  chunk: 256
+  format_version: 2
+  checksum: 93cb8cd6

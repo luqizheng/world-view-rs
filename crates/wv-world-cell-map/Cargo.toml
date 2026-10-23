@@ -1,0 +1,29 @@
+[package]
+name = "wv-world-cell-map"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "世界级地形工作台：CellMap 渲染与编辑域（固定色、零 theme 依赖）"
+
+[dependencies]
+wv-core = { workspace = true }
+wv-terrain = { workspace = true }
+# tile_atlas 的图集配置（AtlasConfig）从随图 YAML 读——与 wv-io 同一纯数据
+# 依赖，不引入任何渲染/网络库（wv-render 原同款注释，ADR-0020 §2.1 允许表）。
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+# bevy 非 optional（ADR-0054 D3）：标准 `cargo test --workspace` 天然编译并
+# 测试本 crate 全部单测——「独立被 AI 优化」迭代时门禁全在默认路径上。
+bevy = { workspace = true }
+
+# P1 demo（ADR-0053）：GPU 逐像素地形场的独立验收程序——「独立被 AI 优化」
+# 的现成靶子（ADR-0054 §7）。bevy 在本 crate 非 optional，无需 required-features。
+[[example]]
+name = "terrain_field_demo"
+path = "examples/terrain_field_demo.rs"
+
+# R1 spike：Bevy 0.19 `Material2d` + WGSL import 路径核验（全仓首个自定义材质先例）。
+[[example]]
+name = "r1_spike"
+path = "examples/r1_spike.rs"

@@ -12,6 +12,7 @@
 use std::path::PathBuf;
 
 use wv_io::terrain_bin::decode_terrain;
+use wv_render::cellmap_bridge::{conv_pack, shade_mode_of};
 use wv_render::state::ViewMode;
 use wv_render::terrain_view::image_from_terrain;
 
@@ -39,10 +40,12 @@ fn main() {
     for mode in ViewMode::ALL {
         let img = image_from_terrain(
             &data,
-            mode,
+            shade_mode_of(mode),
             None,
             true,
-            wv_render::theme::theme_pack::builtin::for_palette(Default::default()),
+            &conv_pack(wv_render::theme::theme_pack::builtin::for_palette(
+                Default::default(),
+            )),
             0.0,
         );
         // atlas=None 时多数模式 res=1（每格 1 像素）；GoogleMap / VectorFlat

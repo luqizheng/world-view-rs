@@ -16,6 +16,7 @@
 use std::path::PathBuf;
 
 use wv_io::terrain_bin::decode_terrain;
+use wv_render::cellmap_bridge::shade_mode_of;
 use wv_render::state::ViewMode;
 use wv_render::terrain_view::image_from_terrain;
 use wv_render::theme::palette::{colors, MapPalette};
@@ -45,7 +46,7 @@ fn main() {
     print_depth_stats(&data);
 
     let pal = colors(MapPalette::Daylight);
-    let pack = builtin::for_palette(MapPalette::Daylight);
+    let pack = wv_render::cellmap_bridge::conv_pack(builtin::for_palette(MapPalette::Daylight));
     let shallow = pal.core_terrain(1);
     let deep = pal.core_terrain(0);
     println!("\n色板锚点: water_shallow {shallow:?}  water_deep {deep:?}");
@@ -53,7 +54,14 @@ fn main() {
     for soften in [true, false] {
         // 烘焙耗时（配方调参的性能锚点：水纹 / 墨线是逐像素工作）。
         let t0 = std::time::Instant::now();
-        let img = image_from_terrain(&data, ViewMode::VectorFlat, None, soften, pack, 0.0);
+        let img = image_from_terrain(
+            &data,
+            shade_mode_of(ViewMode::VectorFlat),
+            None,
+            soften,
+            &pack,
+            0.0,
+        );
         let bake_ms = t0.elapsed().as_secs_f64() * 1000.0;
         println!("  [bake] {:.0} ms", bake_ms);
         let (w, h) = (img.width() as usize, img.height() as usize);

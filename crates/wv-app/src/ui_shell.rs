@@ -1021,10 +1021,10 @@ fn adopt_world_snapshot(
     );
     let image = wv_render::terrain_view::image_from_terrain(
         &data,
-        view.mode,
+        wv_render::cellmap_bridge::shade_mode_of(view.mode),
         atlas,
         view.terrain_soften,
-        wv_render::theme::theme_pack::builtin::for_palette(view.map_palette),
+        &wv_render::cellmap_bridge::conv_pack(view.active_theme),
         0.0,
     );
     wv_render::terrain_view::replace_terrain_texture(
@@ -1033,7 +1033,7 @@ fn adopt_world_snapshot(
         image,
         &data,
         map,
-        view.mode,
+        wv_render::cellmap_bridge::shade_mode_of(view.mode),
         view.terrain_soften,
         view.active_theme.id,
     );
@@ -1419,6 +1419,11 @@ fn apply_pending_commands(
             }
         }
         CommandId::ToggleGrid => view.grid_lines = !view.grid_lines,
+        // 地形场渲染（ADR-0053 D1，Phase 1 接线）：只翻旗标，接线全在
+        // `wv_render::cellmap_bridge::sync_terrain_field`——命令层不认识材质。
+        // 当帧生效：场系统排在 Update 主链的 chunk 层之前，同一帧就完成
+        // 「建 quad / 拆 quad + 块 spawn / despawn」的交接。
+        CommandId::ToggleFieldRender => view.field_render = !view.field_render,
         // 地图工具条单选工具（2026-10-19）：**互斥的唯一实现**。
         // 工具条瓷砖与 V/H/B/E/L/M/P 快捷键都排到这里，先关掉所有工具再开目标，
         // 保证「左键」永远只有一个消费者（相机平移 / 选区 / 笔刷 / 测量 / 街道）。
@@ -1542,6 +1547,26 @@ fn apply_pending_commands(
                     }
                     notice.info(msg, frame);
                 }
+                Err(msg) => notice.error(msg, frame),
+            }
+        }
+        // 清除当前图的全部测量（2026-10-23 用户需求）：工具条测量组右侧的
+        // 清除钮与命令面板同源。一次事务可整体撤销。
+        CommandId::ClearMeasurements => {
+            let Some(map_id) = drill.current().cloned() else {
+                notice.error(
+                    crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::NoticeClearMeasureNoMap),
+                    frame,
+                );
+                return;
+            };
+            match crate::edit::editing::apply_clear_measurements(
+                &map_id,
+                &mut edit,
+                &mut projection,
+                &playback,
+            ) {
+                Ok(msg) => notice.info(msg, frame),
                 Err(msg) => notice.error(msg, frame),
             }
         }
@@ -2066,6 +2091,7 @@ mod tests {
             res: 1,
             dirty: None,
             chunks_dirty: None,
+            field_dirty: None,
             last_mode: None,
             last_soften: false,
             last_theme_id: wv_render::theme::theme_pack::builtin::DEFAULT.id,
@@ -2240,6 +2266,67 @@ mod tests {
         );
     }
 
+    /// 「清除全部测量」（2026-10-23 用户需求）：工具条的清除钮 / 命令面板
+    /// 都排 `CommandId::ClearMeasurements`，分发器必须真的把当前图的 overlay
+    /// 清空并给出回执——否则按钮点了没反应（与 `toggle_grid` 同级的接线回归）。
+    #[test]
+    fn clear_measurements_command_empties_the_current_map_overlay() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world =
+            dispatcher_world(Some("D:/some/project"), false, CommandId::ClearMeasurements);
+        let map = wv_core::Id::new_unchecked("map_root");
+        // 预置「一张图 + 两条测量」，并把 drill 的当前图指向它。
+        world.resource_scope::<WorldProjection, _>(|w, mut projection| {
+            projection.world.maps.push(wv_core::map::MapNode {
+                id: map.clone(),
+                name: "root".into(),
+                ..Default::default()
+            });
+            let overlay = projection.world.measurement_of_mut(&map);
+            for (i, x) in [0.0_f32, 10.0].into_iter().enumerate() {
+                overlay
+                    .add(
+                        wv_core::Measurement::polyline(vec![
+                            wv_core::Point::new(x, 0.0),
+                            wv_core::Point::new(x, 5.0),
+                        ])
+                        .with_id(wv_core::Id::new_unchecked(format!("measure_{i}"))),
+                    )
+                    .expect("预置测量");
+            }
+            w.resource_mut::<DrillState>()
+                .ensure_root(&projection.world);
+            let cur = w
+                .resource::<DrillState>()
+                .current_node(&projection.world)
+                .map(|n| n.id.clone());
+            assert_eq!(cur, Some(map.clone()), "drill 应停在预置图");
+        });
+
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+
+        let projection = world.resource::<WorldProjection>();
+        let left = projection
+            .world
+            .measurement_of(&map)
+            .map(|o| o.measurements.len())
+            .unwrap_or(0);
+        assert_eq!(left, 0, "ClearMeasurements 应清空当前图全部测量");
+        let notice = world.resource::<ShellNotice>();
+        assert!(
+            !notice.is_error
+                && notice
+                    .text
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("已清除 2 条测量"),
+            "应给出清除条数回执，实得 {:?}",
+            notice.text
+        );
+    }
+
     #[test]
     fn project_menu_pending_command_reaches_the_dispatcher() {
         // 回归 1：工程菜单的点击 / 回车写的是 `ProjectMenuState::pending`，而唯一
@@ -2315,6 +2402,7 @@ mod tests {
             res: 1,
             dirty: None,
             chunks_dirty: None,
+            field_dirty: None,
             last_mode: None,
             last_soften: false,
             last_theme_id: wv_render::theme::theme_pack::builtin::DEFAULT.id,

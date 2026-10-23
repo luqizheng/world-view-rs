@@ -1,0 +1,8 @@
+id: place_idx_road
+name: 路网与分支
+map: map_index
+x: 2900.0
+y: 1100.0
+w: 240.0
+h: 150.0
+rank: 3

@@ -1,0 +1,7 @@
+id: rd_e_trunk_w
+a: rd_west_city
+b: rd_cross
+distance_km: 240.0
+terrain: plain
+bidirectional: true
+rank: 3

@@ -1,0 +1,10 @@
+id: veh_horse
+name: 驿马
+instant: false
+speed_kmh: 10.0
+daily_hours: 8.0
+terrain_modifiers:
+  plain: 1.2
+  forest: 0.6
+requires_endpoints: false
+requirements: []

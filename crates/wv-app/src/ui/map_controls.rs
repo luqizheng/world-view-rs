@@ -9,11 +9,11 @@
 //!   —— 本模块私有的自绘控件，严格按 Figma 规格（40×38 工具瓷砖、32×32
 //!   图标钮、1×24 分隔条）。
 //!
-//! ## 布局（ADR-0043 · 11 槽）
+//! ## 布局（ADR-0043 · 11 槽 + 1；2026-10-23 起 12 项）
 //!
 //! ```text
-//! ⇅    ✋    ┊    ◆◢    ◻    ┊    📏◢    ┊    ↷   ↶   ▦
-//! grip pan  sep 选择组 橡皮  sep  测量组  sep  redo undo grid
+//! ⇅    ✋    ┊    ◆◢    ◻    ┊    📏◢   🗑    ┊    ↷   ↶   ▦
+//! grip pan  sep 选择组 橡皮  sep  测量组 清除  sep  redo undo grid
 //! ```
 //!
 //! 「选择组」与「测量组」是两枚**分裂按钮**（[`wv_ui::widgets::split_button`]）：
@@ -27,6 +27,7 @@
 //! | 3 | 选择组：多边形（默认）/ 矩形 / 椭圆 | `V` |
 //! | 4 | 地形橡皮刷（擦回本图底图） | `E` |
 //! | 6 | 测量组：线段距离（默认）/ 面积 | `L` / `M` |
+//! | 6.5 | 清除全部测量（当前图；可一次撤销） | — |
 //! | 8/9 | 重做 / 撤销 | `Ctrl+Shift+Z` / `Ctrl+Z` |
 //! | 10 | 网格开关（开启高亮） | `G` |
 //!
@@ -81,7 +82,7 @@ use super::shell::UiShell;
 use super::widgets::icon_image;
 use super::widgets::{
     ICON_ELLIPSE, ICON_MOVE_HORIZONTAL, ICON_MOVE_VERTICAL, ICON_RULER_DIMENSION_LINE,
-    ICON_SQUARES_UNITE, ICON_VECTOR_POLYGON, ICON_VECTOR_SQUARE,
+    ICON_SQUARES_UNITE, ICON_TRASH, ICON_VECTOR_POLYGON, ICON_VECTOR_SQUARE,
 };
 use super::{ICON_ERASER, ICON_GRID, ICON_HAND, ICON_REDO, ICON_TREES, ICON_UNDO, ICON_WAVES};
 
@@ -322,6 +323,11 @@ pub fn map_controls(
     let pan_active = view.pan_tool;
     let eraser_active = brush.enabled && brush.tool == BrushTool::Eraser;
     let measure_active = measure.mode.is_active();
+    // 清除按钮的可用态：当前图真有测量才点得动（空图按下去只会弹「没有测量」）。
+    let has_measurements = drill
+        .current()
+        .and_then(|id| projection.world.measurement_of(id))
+        .is_some_and(|o| !o.measurements.is_empty());
     let grid_active = view.grid_lines;
     let can_undo = edit.history.can_undo();
     let can_redo = edit.history.can_redo();
@@ -449,6 +455,26 @@ pub fn map_controls(
                             measure_active,
                             &mut params.palette,
                         );
+
+                        // ── 槽 6.5：清除全部测量（2026-10-23 用户需求）────
+                        // 与测量组相邻：紧贴「测量」右侧，一眼归到测量这一族。
+                        // 语义 = 一键清空当前图的全部测量（可一次撤销）；删**一条**
+                        // 仍走测量橡皮 / `Del`（渲染层输入，不经本工具条）。
+                        // 编号取 6.5（不重排后续槽位）：沿用 ADR-0043 的 0–10 号
+                        // 与 isolines「10.5」同款做法，历史注释不必整段改号。
+                        if icon_button(
+                            ui,
+                            &shell,
+                            metrics,
+                            ICON_TRASH,
+                            false,
+                            has_measurements,
+                            t(loc, I18nKey::MapControlsClearMeasurements),
+                        )
+                        .clicked()
+                        {
+                            params.palette.pending = Some(CommandId::ClearMeasurements);
+                        }
 
                         separator(ui, &shell, metrics, vertical);
 
@@ -1042,25 +1068,28 @@ mod map_control_tests {
         );
     }
 
-    /// 横向内容宽度：**11 个等宽槽**（5 瓷砖 + 3 图标钮 + 3 分隔，槽位统一
-    /// 后全部 = `tile.x`）+ 10 间距 + 左右内边距。必须在 1280 窗口内留出两侧
+    /// 横向内容宽度：**12 个等宽槽**（5 瓷砖 + 4 图标钮 + 3 分隔，槽位统一
+    /// 后全部 = `tile.x`）+ 11 间距 + 左右内边距。必须在 1280 窗口内留出两侧
     /// 空白——否则贴底居中的工具条会被窗口裁掉。**元素数与 `slots` 闭包的
     /// 排布一一对应**，改布局必须同步改这条。
+    ///
+    /// 2026-10-23：「清除全部测量」图标钮插在测量组右侧（槽 6.5），
+    /// 图标钮 3 → 4、槽位 11 → 12。
     #[test]
     fn horizontal_dock_fits_a_1280_window() {
         let m = DockMetrics::for_orientation(false);
-        let content = 11.0 * m.tile.x + 10.0 * m.gap;
+        let content = 12.0 * m.tile.x + 11.0 * m.gap;
         let framed = content + 2.0 * m.pad_x;
         assert!(framed < 1280.0, "横向工具条 {framed}px 超出 1280 窗口宽度");
     }
 
     /// 纵向紧凑形态必须在时间轴之上收口：800 高窗口 − 顶栏 38 − 时间轴
-    /// 约 152 − 边距，可用高度约 648；11 个等高槽纵排必须留出余量。
+    /// 约 152 − 边距，可用高度约 648；12 个等高槽纵排必须留出余量。
     /// **元素数与 `slots` 闭包一一对应**，改布局必须同步改这条。
     #[test]
     fn vertical_dock_fits_above_the_timeline() {
         let m = DockMetrics::for_orientation(true);
-        let height = 11.0 * m.tile.y + 10.0 * m.gap + 2.0 * m.pad_y;
+        let height = 12.0 * m.tile.y + 11.0 * m.gap + 2.0 * m.pad_y;
         let available = 800.0 - 152.0;
         assert!(
             DOCK_TOP_CLEARANCE + height < available,

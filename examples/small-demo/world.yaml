@@ -1,0 +1,7 @@
+name: 小样张（内容轴 × 模式矩阵）
+version: '0.1'
+schema_version: 2
+root_map: map_index
+timeline_range:
+  from: 1
+  to: 101

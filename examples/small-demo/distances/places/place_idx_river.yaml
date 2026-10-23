@@ -1,0 +1,8 @@
+id: place_idx_river
+name: 水系与出海口
+map: map_index
+x: 900.0
+y: 2900.0
+w: 240.0
+h: 150.0
+rank: 3
