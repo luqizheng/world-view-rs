@@ -674,86 +674,125 @@ pub fn draw_map_gizmos(
         if sel.kind == wv_core::EntityKind::Region
             && matches!(view.mode, crate::state::ViewMode::Topographic)
         {
-            if let Some(map) = drill.current().cloned() {
-                let region = projection.world.regions.iter().find(|r| r.id == sel.id);
-                let Some(region) = region.filter(|r| r.map == map && r.polygon.len() >= 6) else {
-                    return;
-                };
-                let Some(terrain) = projection.world.terrain_of(&map) else {
-                    return;
-                };
-                let raster_to_map = grid_cfg.map_origin - grid_cfg.raster_origin;
-                let adjust = region_adjust;
-                let poly = adjust
-                    .preview_polygon
-                    .clone()
-                    .unwrap_or_else(|| region.polygon.clone());
-                let poly_pairs: Vec<(f32, f32)> =
-                    poly.chunks_exact(2).map(|c| (c[0], c[1])).collect();
-                let cells = crate::cell_selection::rasterize_polygon_cells(
-                    &poly_pairs,
-                    raster_to_map,
+            if let (Some(map), Some(terrain)) = (
+                drill.current().cloned(),
+                drill.current().and_then(|m| projection.world.terrain_of(m)),
+            ) {
+                draw_selected_region(
+                    &mut gizmos,
+                    &projection,
+                    &drill,
+                    &view,
                     &grid_cfg,
-                    terrain.width,
-                    terrain.height,
+                    &region_adjust,
+                    terrain,
+                    &map,
                 );
-                // 方格描边：mask 内格与不在 mask 的 4 邻之间的边。
-                use std::collections::HashSet;
-                let mask: HashSet<(i32, i32)> = cells.iter().copied().collect();
-                let cs = grid_cfg.cell_size;
-                let mut edges: Vec<(Vec2, Vec2)> = Vec::new();
-                for &(gx, gy) in &cells {
-                    let x0 = grid_cfg.raster_origin.x + gx as f32 * cs;
-                    let y0 = grid_cfg.raster_origin.y + gy as f32 * cs;
-                    let x1 = x0 + cs;
-                    let y1 = y0 + cs;
-                    let c = (gx, gy);
-                    if !mask.contains(&(c.0, c.1 - 1)) {
-                        edges.push((Vec2::new(x0, y0), Vec2::new(x1, y0)));
-                    }
-                    if !mask.contains(&(c.0, c.1 + 1)) {
-                        edges.push((Vec2::new(x0, y1), Vec2::new(x1, y1)));
-                    }
-                    if !mask.contains(&(c.0 - 1, c.1)) {
-                        edges.push((Vec2::new(x0, y0), Vec2::new(x0, y1)));
-                    }
-                    if !mask.contains(&(c.0 + 1, c.1)) {
-                        edges.push((Vec2::new(x1, y0), Vec2::new(x1, y1)));
-                    }
-                }
-                let white = bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.95);
-                for (a, b) in &edges {
-                    gizmos.line_2d(*a, *b, white);
-                }
-                // 顶点手柄（LOD 锚点，用户裁定：锚点数量由 zoom 决定）——
-                // 物化多边形每个阶梯角都有顶点，全画会重叠成一片白线（用户
-                // 验收反馈：只见白线不见锚点）。抽稀间距 = 24px 的世界长度：
-                // zoom out 锚点稀疏（粗调）、zoom in 锚点变密（细调）。
-                let poly_pairs: Vec<(f32, f32)> =
-                    poly.chunks_exact(2).map(|c| (c[0], c[1])).collect();
-                let spacing =
-                    crate::biome_boundary::anchor_spacing(view.scale, grid_cfg.cell_size, 24.0);
-                let anchors = crate::biome_boundary::decimate_poly(&poly_pairs, spacing);
-                // 手柄视觉（用户裁定：十字准星 + 外圈 + 高亮红）：亮红圈 +
-                // 亮红十字，尺寸按屏幕像素折算（×view.scale），任意缩放下
-                // 恒定可辨。
-                let handle_px = (view.scale * 6.0).max(grid_cfg.cell_size * 0.2);
-                let hot_red = bevy::color::Color::srgba(1.0, 0.15, 0.12, 1.0);
-                for a in &anchors {
-                    // 多边形是**图内局部 wu**：世界位 = map_origin + 局部
-                    //（此前误用 raster_origin——子图上手柄会偏移）。
-                    let p = grid_cfg.map_origin + Vec2::new(a.0, a.1);
-                    // 红圈（方框）。
-                    gizmos.rect_2d(
-                        bevy::math::Isometry2d::from_translation(p),
-                        Vec2::splat(handle_px * 2.0),
-                        hot_red,
-                    );
-                    // 红十字（横竖两线，臂长触及圈）。
-                    gizmos.line_2d(p - Vec2::X * handle_px, p + Vec2::X * handle_px, hot_red);
-                    gizmos.line_2d(p - Vec2::Y * handle_px, p + Vec2::Y * handle_px, hot_red);
-                }
             }
+        }
+    }
+
+    /// 选中区域的方格描边 + 顶点手柄（2026-10-22 验收 · 用户裁定）。
+    ///
+    /// CellMap 专业数据编辑器：
+    /// - 选中 Region ⇒ 沿格边的阶梯描边（白色实线，直接贴格边、无平滑修饰）
+    /// - 顶点锚点（高亮红：十字准星 + 外圈；LOD——锚点数量由 zoom 决定，
+    ///   间距 = 24px 屏幕长的世界距离，zoom out 稀疏粗调 / zoom in 密集细调）
+    ///   与 nature_overlay 无关——选中即可见。
+    #[allow(clippy::too_many_arguments)]
+    fn draw_selected_region(
+        gizmos: &mut Gizmos,
+        projection: &WorldProjection,
+        drill: &crate::state::DrillState,
+        view: &ViewState,
+        grid_cfg: &GridConfig,
+        region_adjust: &crate::state::RegionAdjustState,
+        terrain: &wv_core::terrain::TerrainData,
+        map: &wv_core::Id,
+    ) {
+        // 只处理：选中 Region 实体 ∧ 当前图一致 ∧ Topographic。
+        let Some(sel) = projection.selection.as_ref() else {
+            return;
+        };
+        if sel.kind != wv_core::EntityKind::Region
+            || !matches!(view.mode, crate::state::ViewMode::Topographic)
+            || drill.current().as_ref() != Some(&map)
+        {
+            return;
+        }
+        let Some(region) = projection
+            .world
+            .regions
+            .iter()
+            .find(|r| r.id == sel.id && r.map == *map)
+            .filter(|r| r.polygon.len() >= 6)
+        else {
+            return;
+        };
+        let raster_to_map = grid_cfg.map_origin - grid_cfg.raster_origin;
+        // 拖动中显示预览多边形；未拖动显示落盘轮廓。
+        let poly = region_adjust
+            .preview_polygon
+            .clone()
+            .unwrap_or_else(|| region.polygon.clone());
+        let poly_pairs: Vec<(f32, f32)> = poly.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+        let cells = crate::cell_selection::rasterize_polygon_cells(
+            &poly_pairs,
+            raster_to_map,
+            grid_cfg,
+            terrain.width,
+            terrain.height,
+        );
+
+        // ── 方格描边：mask 内格与不在 mask 的 4 邻之间的边（白色实线贴格边）──
+        let mask: std::collections::HashSet<(i32, i32)> = cells.iter().copied().collect();
+        let cs = grid_cfg.cell_size;
+        let mut edges: Vec<(Vec2, Vec2)> = Vec::new();
+        for &(gx, gy) in &cells {
+            let x0 = grid_cfg.raster_origin.x + gx as f32 * cs;
+            let y0 = grid_cfg.raster_origin.y + gy as f32 * cs;
+            let x1 = x0 + cs;
+            let y1 = y0 + cs;
+            let c = (gx, gy);
+            if !mask.contains(&(c.0, c.1 - 1)) {
+                edges.push((Vec2::new(x0, y0), Vec2::new(x1, y0)));
+            }
+            if !mask.contains(&(c.0, c.1 + 1)) {
+                edges.push((Vec2::new(x0, y1), Vec2::new(x1, y1)));
+            }
+            if !mask.contains(&(c.0 - 1, c.1)) {
+                edges.push((Vec2::new(x0, y0), Vec2::new(x0, y1)));
+            }
+            if !mask.contains(&(c.0 + 1, c.1)) {
+                edges.push((Vec2::new(x1, y0), Vec2::new(x1, y1)));
+            }
+        }
+        let white = bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.95);
+        for (a, b) in &edges {
+            gizmos.line_2d(*a, *b, white);
+        }
+
+        // ── 顶点锚点（LOD，用户裁定：锚点数量由 zoom 决定）——物化多边形每个
+        // 阶梯角都有顶点，全画会重叠成一片白线（验收反馈：只见白线不见锚点）。
+        let spacing = crate::biome_boundary::anchor_spacing(view.scale, cs, 24.0);
+        let anchors = crate::biome_boundary::decimate_poly(&poly_pairs, spacing);
+        // 手柄视觉（用户裁定：十字准星 + 外圈 + 高亮红）：亮红圈 + 亮红十字，
+        // 尺寸按屏幕像素折算（×view.scale），任意缩放下恒定可辨。
+        let handle_px = (view.scale * 6.0).max(cs * 0.2);
+        let hot_red = bevy::color::Color::srgba(1.0, 0.15, 0.12, 1.0);
+        for a in &anchors {
+            // 多边形是**图内局部 wu**：世界位 = map_origin + 局部
+            //（此前误用 raster_origin——子图上手柄会偏移）。
+            let p = grid_cfg.map_origin + Vec2::new(a.0, a.1);
+            // 红圈（方框）。
+            gizmos.rect_2d(
+                bevy::math::Isometry2d::from_translation(p),
+                Vec2::splat(handle_px * 2.0),
+                hot_red,
+            );
+            // 红十字（横竖两线，臂长触及圈）。
+            gizmos.line_2d(p - Vec2::X * handle_px, p + Vec2::X * handle_px, hot_red);
+            gizmos.line_2d(p - Vec2::Y * handle_px, p + Vec2::Y * handle_px, hot_red);
         }
     }
 
