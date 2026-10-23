@@ -230,6 +230,12 @@ pub struct ViewState {
     /// 地图工具条（`map_controls` 瓷砖），它本来就是「看图方式」而非「笔刷参数」，
     /// 与 `labels_visible` 等同族。
     pub grid_lines: bool,
+    /// 等值线开关（2026-10-23 验收裁定）：会话态、**默认关**——等值线在
+    /// 数据视图里呈现为「海面黑线修饰」，用户裁定默认不画、要时打开。
+    /// 与 [`Self::grid_lines`] 同款口径：MODE_TABLE 只管模式轴（VectorFlat /
+    /// Topographic 开档），本旗标管会话轴；开关 UI 在 map controls
+    /// 网格线隔壁（Lucide `waves`）。
+    pub isolines: bool,
     /// CellMap 自然区开关（2026-10-22 内容矩阵 §2.6）：开启时 Topographic 下
     /// 显示 `kind == Nature` 的区域层 + 全图未命名候选高亮。会话态，不落盘。
     /// 仅 Topographic 有意义——其他模式的区域层不受本开关影响。
@@ -307,6 +313,7 @@ impl Default for ViewState {
             buildings_visible: true,
             factions_visible: true,
             grid_lines: false,
+            isolines: false,
             nature_overlay: false,
             pan_tool: false,
             cursor_world: None,

@@ -64,3 +64,12 @@
 
 代价：`wv-render/assets/symbols/` 资产与 PNG 解码路径删除（include_bytes
 二进制不再入库）；ADR-0042 的「参考图城堡插画」口径由 map-pin 取代。
+
+### 追记修正（同日第二轮）：等值线不删死，改会话开关
+
+§6-1 的「Topographic 翻 `Isoline=false`」被同日用户追加裁定修正为**会话开关**：
+MODE_TABLE 两行（VectorFlat / Topographic）恢复 `true`（模式轴开档不动），
+新增 `ViewState.isolines`（**默认关**）在等值线系统单控会话轴——与 GridLines
+同款「mode 表不关，会话开关单控」口径。开关 UI 在 map controls 网格线隔壁
+（Lucide `waves` 瓷砖，仅两开档模式显示）。VectorFlat 默认观感随之少一层
+等值线——属本条裁定的直接推论（等值线默认是修饰线，要时再开）。

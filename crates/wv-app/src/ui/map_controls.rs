@@ -83,7 +83,7 @@ use super::widgets::{
     ICON_ELLIPSE, ICON_MOVE_HORIZONTAL, ICON_MOVE_VERTICAL, ICON_RULER_DIMENSION_LINE,
     ICON_SQUARES_UNITE, ICON_VECTOR_POLYGON, ICON_VECTOR_SQUARE,
 };
-use super::{ICON_ERASER, ICON_GRID, ICON_HAND, ICON_REDO, ICON_TREES, ICON_UNDO};
+use super::{ICON_ERASER, ICON_GRID, ICON_HAND, ICON_REDO, ICON_TREES, ICON_UNDO, ICON_WAVES};
 
 /// 贴边距离（原型 `right: 18px`）。
 const EDGE_OFFSET: f32 = 18.0;
@@ -492,6 +492,24 @@ pub fn map_controls(
                         .clicked()
                         {
                             view.grid_lines = !view.grid_lines;
+                        }
+
+                        // ── 槽 10.5：等值线（2026-10-23 验收裁定）────────
+                        // 会话开关（`view.isolines`，默认关）：等值线默认是
+                        // 「海面黑线修饰」，要时再开。仅在 pass 有产出的两
+                        // 模式显示（VectorFlat 分析参照 / Topographic 数据视图）。
+                        if matches!(view.mode, ViewMode::VectorFlat | ViewMode::Topographic)
+                            && icon_tile(
+                                ui,
+                                &shell,
+                                metrics,
+                                ICON_WAVES,
+                                view.isolines,
+                                "显示等值线",
+                            )
+                            .clicked()
+                        {
+                            view.isolines = !view.isolines;
                         }
 
                         // ── 槽 11：自然区（2026-10-22 内容矩阵 §2.6）──────

@@ -133,6 +133,7 @@ pub use widgets::{
     ICON_TREES,
     ICON_UNDO,
     ICON_VOLCANO,
+    ICON_WAVES,
     ICON_ZOOM_IN,
     ICON_ZOOM_OUT,
 };
