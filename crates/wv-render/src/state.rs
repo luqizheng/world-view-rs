@@ -808,6 +808,29 @@ pub struct SelectionState {
 ///
 /// 线是**会话工具**，不落盘——真相仍是 cell.biome。工具激活时常驻（可反复
 /// 拖），切走工具即清。坐标 = **栅格局部 wu**（与 `swept_changes` 同空间）。
+/// 区域边界拖拽调整的会话态（2026-10-22 验收 · CellMap 专业编辑）。
+#[derive(Resource, Debug, Default, Clone, PartialEq)]
+pub struct RegionAdjustState {
+    /// 正在调整的区域；`None` = 当前无调整会话。
+    pub region: Option<wv_core::Id>,
+    /// 调整中的多边形预览（图内局部 wu，扁平坐标）。
+    pub preview_polygon: Option<Vec<f32>>,
+    /// 正在拖动的顶点下标。
+    pub drag_vertex: Option<usize>,
+    /// 按下点（世界坐标）。
+    pub press_world: Option<bevy::math::Vec2>,
+}
+
+impl RegionAdjustState {
+    /// 切图 / 切选清空。
+    pub fn clear(&mut self) {
+        self.region = None;
+        self.preview_polygon = None;
+        self.drag_vertex = None;
+        self.press_world = None;
+    }
+}
+
 #[derive(Resource, Debug, Default, Clone, PartialEq)]
 pub struct BiomeBoundaryState {
     /// 工具是否激活（与 EditCellState.tool_active 同款）。

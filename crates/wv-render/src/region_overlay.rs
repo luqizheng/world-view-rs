@@ -804,6 +804,9 @@ mod tests {
 /// 未命名候选的**缓存**：重算代价 O(格数)（`partition_by_biome` 全图 BFS），
 /// 不能每帧跑——按 (图, 世界是否变过) 缓存；`WorldProjection.is_changed()`
 /// 在任一命令/选择写入时翻真（点击级重算，~10ms 一次，仅 CellMap+开关开时）。
+/// 编辑信号快照：脏标记 + undo/redo 栈长与顶 seq（ADR-0051）。
+pub type EditSignal = (bool, usize, usize, Option<u64>, Option<u64>);
+
 #[derive(Resource, Debug, Default)]
 pub struct CandidateOverlayCache {
     /// 缓存键 = 当前图 id。图变 ⇒ 重算。
@@ -817,7 +820,7 @@ pub struct CandidateOverlayCache {
     /// 上次重算的编辑信号快照：脏标记 + (undo 长, redo 长, undo 顶 seq, redo 顶 seq)。
     /// 任一变化 ⇒ 候选过期。不用 `WorldProjection::is_changed`——selection 写入
     /// 也会置真，会把 O(格数) 的重算打成每帧（实机 1 FPS 回归根因）。
-    pub last_signal: Option<(bool, usize, usize, Option<u64>, Option<u64>)>,
+    pub last_signal: Option<EditSignal>,
     /// 上次重算时刻（限频：重算 ≥1s 一次，避免连续编辑每帧 93ms）。
     pub last_compute: Option<std::time::Instant>,
     /// 编辑信号 epoch（app 层从 EditHistory 形状派生写入；变化 ⇒ 候选过期）。

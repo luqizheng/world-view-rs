@@ -192,6 +192,8 @@ pub fn run(config: AppConfig) {
     // 群系分界线工具会话态（2026-10-22 内容矩阵 / ADR-0051）：输入系统与
     // 预览系统都 ResMut 它——漏 init 即启动期 panic（同 EditCellState 教训）。
     .init_resource::<wv_render::state::BiomeBoundaryState>()
+    // 区域边界拖拽调整会话态（2026-10-22 验收）：同款漏 init 即 panic。
+    .init_resource::<wv_render::state::RegionAdjustState>()
     // Cell 编辑器的「单格 / 批量」工作模式（[ADR-0040] 补 B）——面板系统
     // ResMut 它,漏 init 即启动期 panic(同 EditCellState 的教训)。
     .init_resource::<crate::ui::inspector::cell::CellPanelMode>()
@@ -323,6 +325,8 @@ pub fn run(config: AppConfig) {
                 crate::edit::biome_boundary::biome_boundary_input,
                 // 候选过期的编辑信号（在提交路径之后跑，读 History 形状）。
                 crate::edit::nature_region_actions::sync_candidate_invalidation,
+                // 区域边界拖拽（在 cell 点选之后；同为输入系统）。
+                crate::edit::region_adjust::region_adjust_input,
                 // 批量选区（2026-10-20）：多边形闭合 → 栅格化贴合方格
                 editing::sync_region_cells.after(camera::track_cursor_world),
                 streets::commit_street_click,

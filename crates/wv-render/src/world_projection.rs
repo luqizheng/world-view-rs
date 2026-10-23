@@ -621,12 +621,11 @@ pub fn draw_map_gizmos(
     grid_cfg: Res<GridConfig>,
     mut candidate_cache: ResMut<crate::region_overlay::CandidateOverlayCache>,
     boundary: Res<crate::state::BiomeBoundaryState>,
+    region_adjust: Res<crate::state::RegionAdjustState>,
 ) {
     let perf_dbg = std::env::var("WV_PROFILE_FRAME").is_ok();
     let _ = &*tex; // suppress unused warning
 
-    let perf_dbg = std::env::var("WV_PROFILE_FRAME").is_ok();
-    let dbg_t0 = perf_dbg.then(std::time::Instant::now);
     // ── CellMap 未命名候选高亮（2026-10-22 内容矩阵 §2.6-3 · T11）──────
     // 仅 Topographic ∧ nature_overlay；重算触发 = 编辑信号**边沿**（脏标记 /
     // undo/redo 栈形 / 换图）且限频 ≥1s——不用 `WorldProjection::is_changed`
@@ -648,14 +647,6 @@ pub fn draw_map_gizmos(
                     &grid_cfg,
                     raster_to_map,
                 );
-                if perf_dbg {
-                    eprintln!(
-                        "[perf] candidate recompute: outlines={} fill_cells={} elapsed={:?}",
-                        result.outlines.len(),
-                        result.fill_cells.len(),
-                        t0.elapsed()
-                    );
-                }
                 candidate_cache.key = Some(map);
                 candidate_cache.outlines = result.outlines;
                 candidate_cache.fill_cells = result.fill_cells;
@@ -668,43 +659,94 @@ pub fn draw_map_gizmos(
         // 用户裁定（2026-10-22 验收）：候选高亮 = **白色虚线**，不用金色——
         // 沙色地形上金色与地貌色混淆；白色虚线在任意群系色上都可辨。
         let white = bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.9);
-        let cs = grid_cfg.cell_size;
-        let mut dbg_lines = 0usize;
-        let mut dbg_fills = 0usize;
-        // 视口（世界坐标）：中心 ± 半幅。
-        let half = view.window_size * view.scale * 0.5 + Vec2::splat(view.scale * 48.0);
-        let (vcx, vcy) = (view.camera_center.x, view.camera_center.y);
         for (i, outline) in candidate_cache.outlines.iter().enumerate() {
             let (bmin, bmax) = &candidate_cache.bboxes[i];
             // 屏上尺寸（px）≥ 40 才画半透明填充（缩放够大填充才有意义）。
-            let screen_w = (bmax.x - bmin.x) / view.scale;
-            let screen_h = (bmax.y - bmin.y) / view.scale;
             let _ = (bmin, bmax);
             for (a, b) in outline {
                 gizmos.line_2d(*a, *b, white);
-                dbg_lines += 1;
             }
         }
-        if let Some(t0) = dbg_t0 {
-            // 每秒一次：候选线段/填充数 + 本系统耗时（临时性能验收探针）
-            use std::sync::atomic::{AtomicUsize, Ordering};
-            static FRAME: AtomicUsize = AtomicUsize::new(0);
-            let f = FRAME.fetch_add(1, Ordering::Relaxed);
-            if f % 60 == 0 {
-                eprintln!(
-                    "[perf] draw_map_gizmos: candidate_lines={dbg_lines} fills={dbg_fills} elapsed={:?}",
-                    t0.elapsed()
+    }
+
+    // ── 选中区域的方格描边 + 顶点手柄（2026-10-22 验收 · 用户裁定）──────
+    // CellMap 专业数据编辑器：选中 Region ⇒ 沿格边的阶梯描边（白色实线）
+    // + 顶点手柄（方格锚点，拖动吸附格点）。与 nature_overlay 无关。
+    if let Some(sel) = projection.selection.as_ref() {
+        if sel.kind == wv_core::EntityKind::Region
+            && matches!(view.mode, crate::state::ViewMode::Topographic)
+        {
+            if let Some(map) = drill.current().cloned() {
+                let region = projection.world.regions.iter().find(|r| r.id == sel.id);
+                let Some(region) = region.filter(|r| r.map == map && r.polygon.len() >= 6) else {
+                    return;
+                };
+                let Some(terrain) = projection.world.terrain_of(&map) else {
+                    return;
+                };
+                let raster_to_map = grid_cfg.map_origin - grid_cfg.raster_origin;
+                let adjust = region_adjust;
+                let poly = adjust
+                    .preview_polygon
+                    .clone()
+                    .unwrap_or_else(|| region.polygon.clone());
+                let poly_pairs: Vec<(f32, f32)> =
+                    poly.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+                let cells = crate::cell_selection::rasterize_polygon_cells(
+                    &poly_pairs,
+                    raster_to_map,
+                    &grid_cfg,
+                    terrain.width,
+                    terrain.height,
                 );
+                // 方格描边：mask 内格与不在 mask 的 4 邻之间的边。
+                use std::collections::HashSet;
+                let mask: HashSet<(i32, i32)> = cells.iter().copied().collect();
+                let cs = grid_cfg.cell_size;
+                let mut edges: Vec<(Vec2, Vec2)> = Vec::new();
+                for &(gx, gy) in &cells {
+                    let x0 = grid_cfg.raster_origin.x + gx as f32 * cs;
+                    let y0 = grid_cfg.raster_origin.y + gy as f32 * cs;
+                    let x1 = x0 + cs;
+                    let y1 = y0 + cs;
+                    let c = (gx, gy);
+                    if !mask.contains(&(c.0, c.1 - 1)) {
+                        edges.push((Vec2::new(x0, y0), Vec2::new(x1, y0)));
+                    }
+                    if !mask.contains(&(c.0, c.1 + 1)) {
+                        edges.push((Vec2::new(x0, y1), Vec2::new(x1, y1)));
+                    }
+                    if !mask.contains(&(c.0 - 1, c.1)) {
+                        edges.push((Vec2::new(x0, y0), Vec2::new(x0, y1)));
+                    }
+                    if !mask.contains(&(c.0 + 1, c.1)) {
+                        edges.push((Vec2::new(x1, y0), Vec2::new(x1, y1)));
+                    }
+                }
+                let white = bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.95);
+                for (a, b) in &edges {
+                    gizmos.line_2d(*a, *b, white);
+                }
+                // 顶点手柄：白芯黑圈方点（拖动中 = 预览多边形顶点）。
+                let handle_fill = bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.95);
+                let handle_ring = bevy::color::Color::srgba(0.1, 0.1, 0.1, 0.9);
+                for chunk in poly.chunks_exact(2) {
+                    let p = Vec2::new(
+                        grid_cfg.raster_origin.x + chunk[0],
+                        grid_cfg.raster_origin.y + chunk[1],
+                    );
+                    gizmos.rect_2d(
+                        bevy::math::Isometry2d::from_translation(p),
+                        Vec2::splat(grid_cfg.cell_size * 0.5),
+                        handle_fill,
+                    );
+                    gizmos.rect_2d(
+                        bevy::math::Isometry2d::from_translation(p),
+                        Vec2::splat(grid_cfg.cell_size * 0.7),
+                        handle_ring,
+                    );
+                }
             }
-        }
-    } else if let Some(t0) = dbg_t0 {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static FRAME2: AtomicUsize = AtomicUsize::new(0);
-        if FRAME2.fetch_add(1, Ordering::Relaxed) % 60 == 0 {
-            eprintln!(
-                "[perf] draw_map_gizmos (overlay off) elapsed={:?}",
-                t0.elapsed()
-            );
         }
     }
 
