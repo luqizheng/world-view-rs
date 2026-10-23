@@ -234,7 +234,11 @@ impl PlaceIndex {
         };
         for (i, p) in places.iter().enumerate() {
             index.by_id.insert(p.id.clone(), i as u32);
-            if let (Some(map), Some(_), Some(_)) = (p.map.as_ref(), p.x, p.y) {
+            // 锚点走 [`Place::effective_anchor`]（ADR-0046 D2 定的**唯一入口**）：
+            // 线状地点（作者手绘河）通常只写 `line`，`x/y` 缺省时锚点取折线弧长中点。
+            // 旧实现只认 `p.x/p.y`，这类地点**整条漏出本图桶**，于是下游的作者河
+            // 分支（同走本桶）一根也画不出来——「YAML 省 x/y 河就消失」的成因。
+            if let (Some(map), Some(_)) = (p.map.as_ref(), p.effective_anchor()) {
                 index
                     .anchored_by_map
                     .entry(map.clone())
@@ -471,7 +475,9 @@ pub fn compute_projection(
                 if p.map.as_ref() != Some(&current.id) {
                     return None;
                 }
-                Some(grid.map_to_view(Vec2::new(p.x?, p.y?)))
+                // 锚点唯一入口（同上，ADR-0046 D2）。
+                let (x, y) = p.effective_anchor()?;
+                Some(grid.map_to_view(Vec2::new(x, y)))
             };
             if layers.road.visible && road_stale {
                 // 带级别收集（ADR-0047 D4）：`effective_rank`（显式 rank 或
@@ -514,18 +520,23 @@ pub fn compute_projection(
                         }
                         // 地物符号：rank ≥ 2 走程序化插画（rank 1 路网交点仍按点标）。
                         // rank 3 永远画国家级，rank 2 全档都画（参考图期望：全球档可见城市符号）。
+                        // 线状地点（作者河）不是聚落，不画城市符号——与 `place_dot_for`
+                        // 同一条排除口径，避免「河上长出一座城」。
                         let p = &world.distances.places[*i as usize];
-                        if let (Some(_), Some(_)) = (p.x, p.y) {
-                            let rank = p.effective_rank();
-                            if rank >= 2 {
-                                let pos = grid.map_to_view(Vec2::new(p.x.unwrap(), p.y.unwrap()));
-                                if (pos.x - cx).abs() <= half.x && (pos.y - cy).abs() <= half.y {
-                                    let kind = if rank >= 3 {
-                                        LandmarkKind::Citadel
-                                    } else {
-                                        LandmarkKind::Town
-                                    };
-                                    frame.landmark_dots.push(LandmarkDot { pos, kind });
+                        if p.line.is_none() {
+                            if let Some((x, y)) = p.effective_anchor() {
+                                let rank = p.effective_rank();
+                                if rank >= 2 {
+                                    let pos = grid.map_to_view(Vec2::new(x, y));
+                                    if (pos.x - cx).abs() <= half.x && (pos.y - cy).abs() <= half.y
+                                    {
+                                        let kind = if rank >= 3 {
+                                            LandmarkKind::Citadel
+                                        } else {
+                                            LandmarkKind::Town
+                                        };
+                                        frame.landmark_dots.push(LandmarkDot { pos, kind });
+                                    }
                                 }
                             }
                         }
@@ -1128,6 +1139,12 @@ fn draw_dashed_circle(gizmos: &mut Gizmos, center: Vec2, radius: f32, color: Col
 /// 迁移窗口内（ADR-0032 代价节）保留 `feature` 双条件：未经加载器的手工世界若
 /// 携带旧字段（含词汇表外垃圾值）仍不冒点；下版本删字段后收敛为单条件。
 fn place_dot_for(p: &wv_core::distance::Place, grid: &GridConfig) -> Option<PlaceDot> {
+    if p.line.is_some() {
+        // 线状地点（ADR-0046 D1）**不是点标**：它的表现是 `place_line` 的折线描边。
+        // 旧实现只看 feature / biome，于是作者河会在折线中点白长一个 POI 圆点
+        // （小样张夹具此前只能靠 `rank: 0` 把这个点压到 Edit 档来规避）。
+        return None;
+    }
     if p.feature.is_some() || p.biome.is_some() {
         // 标记（ADR-0029/0032）：覆盖层/标签负责表现，不再生成城市点。
         return None;
@@ -1197,6 +1214,71 @@ mod tests {
             grid.map_to_view(Vec2::new(1.0, 2.0)),
             "pos 应经地图局部 → 视图空间换算"
         );
+    }
+
+    // ---- 线状地点（ADR-0046 作者手绘河）的两条守约（G1 / G2，2026-10-23）----
+
+    /// G2：线状地点**不是点标**——即便它带齐 `x/y`，也不得在折线中点长一个圆点。
+    #[test]
+    fn linear_place_produces_no_poi_dot() {
+        let mut p = place(None);
+        p.line = Some(vec![1.0, 2.0, 9.0, 2.0]);
+        assert_eq!(
+            place_dot_for(&p, &GridConfig::default()),
+            None,
+            "线状地点由 place_line 画折线，POI 圆点是重复表现"
+        );
+    }
+
+    /// G1：只写 `line`、不写 `x/y` 的线状地点，也必须进本图锚定桶。
+    /// 作者河分支从同一个桶取数据——漏桶 = 整条河一根不画。
+    #[test]
+    fn line_place_without_xy_enters_the_map_bucket() {
+        let mut world = wv_core::World::default();
+        let map = Id::new_unchecked("map_a");
+        world.distances.places.push(Place {
+            line: Some(vec![0.0, 0.0, 10.0, 0.0]),
+            id: Id::new_unchecked("rv_test"),
+            name: "测试河".into(),
+            map: Some(map.clone()),
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+            feature: None,
+            biome: None,
+            envelope: None,
+            rank: None,
+        });
+        let index = PlaceIndex::build(&world);
+        assert_eq!(
+            index.anchored_by_map.get(&map).map(Vec::len),
+            Some(1),
+            "锚点应由 effective_anchor 从折线中点派生，地点必须入桶"
+        );
+    }
+
+    /// 既无锚点又无折线的地点仍不入桶：桶是按图裁剪的入口，不能放垃圾。
+    #[test]
+    fn place_without_anchor_and_line_stays_out_of_the_bucket() {
+        let mut world = wv_core::World::default();
+        let map = Id::new_unchecked("map_a");
+        world.distances.places.push(Place {
+            line: None,
+            id: Id::new_unchecked("p_orphan"),
+            name: "无锚点".into(),
+            map: Some(map.clone()),
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+            feature: None,
+            biome: None,
+            envelope: None,
+            rank: None,
+        });
+        let index = PlaceIndex::build(&world);
+        assert_eq!(index.anchored_by_map.get(&map).map(Vec::len), None);
     }
 
     // ---- compute_projection 道路层 / POI（A1 索引化后的行为锚点）----

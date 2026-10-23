@@ -118,9 +118,17 @@ struct StrokeBatchKey {
 /// （`view.scale` 是世界单位/像素，乘而不是除——历史 bug 见 git blame）。
 pub(crate) fn build_stroke_batch_mesh(segments: &[(Vec2, Vec2)], world_thickness: f32) -> Mesh {
     let n = segments.len();
-    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n * 4);
-    let mut indices: Vec<u32> = Vec::with_capacity(n * 6);
     let half = world_thickness * 0.5;
+
+    // ---- 接头（2026-10-23 修 G3b）：逐段四边形 + butt 端会在交汇处留楔形缺口 ----
+    // 两段在一处相接时，外角必然缺一块（角度越尖缺得越大），且线宽是**屏幕常量**，
+    // 缺口在任何缩放级别都一样明显。补法：按端点度数统计，度数 ≥2 的位置补一块
+    // 半径 = 半线宽的小圆盘（内接 6 边形）。内角的重叠本来无害，外角的缺口被填掉。
+    // 成本：只在 mesh 重建时做一次（内容/线宽/Z 变化才重建，见 `sync_road_strokes`
+    // 的 `StrokeBatchKey`），稳态零开销；顶点增量 = 接头数 × 7。
+    let joins = stroke_join_centers(segments, half);
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n * 4 + joins.len() * 7);
+    let mut indices: Vec<u32> = Vec::with_capacity(n * 6 + joins.len() * 6 * 3);
     for (a, b) in segments {
         let delta = *b - *a;
         let length = delta.length().max(f32::EPSILON);
@@ -134,6 +142,23 @@ pub(crate) fn build_stroke_batch_mesh(segments: &[(Vec2, Vec2)], world_thickness
         }
         indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     }
+    for center in &joins {
+        let base = positions.len() as u32;
+        positions.push([center.x, center.y, 0.0]);
+        for i in 0..STROKE_JOIN_SEGMENTS {
+            let ang = i as f32 / STROKE_JOIN_SEGMENTS as f32 * std::f32::consts::TAU;
+            positions.push([
+                center.x + half * ang.cos(),
+                center.y + half * ang.sin(),
+                0.0,
+            ]);
+        }
+        for i in 0..STROKE_JOIN_SEGMENTS as u32 {
+            let a = base + 1 + i;
+            let b = base + 1 + (i + 1) % STROKE_JOIN_SEGMENTS as u32;
+            indices.extend([base, a, b]);
+        }
+    }
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
@@ -141,6 +166,35 @@ pub(crate) fn build_stroke_batch_mesh(segments: &[(Vec2, Vec2)], world_thickness
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_indices(Indices::U32(indices));
     mesh
+}
+
+/// 接头圆盘的内接边数。半径 ≤3px 时 6 边的圆度损失不可见（POI 圆周取 12 段，
+/// 那是因为点标半径可到 10px；接头比点标小一档，取一半）。
+const STROKE_JOIN_SEGMENTS: usize = 6;
+
+/// 找出**有 ≥2 段共用**的端点，返回需要补圆盘的中心点。
+///
+/// 重合判定用**位型相等**（`f32::to_bits` 当 key），不做 epsilon 合并：
+/// - 同一条折线的相邻段由 `windows(2)` 产出，共享的那个顶点是**同一个 f32 克隆**；
+/// - 路网边共享的地点坐标来自同一次 `map_to_view` 计算——位型必然相等；
+/// - 反过来，两条「几乎但不真的相接」的路若被 epsilon 粘住，会凭空多出一块
+///   圆盘（假接头），比缺口更难看。
+fn stroke_join_centers(segments: &[(Vec2, Vec2)], half: f32) -> Vec<Vec2> {
+    if segments.len() < 2 || half <= 0.0 {
+        return Vec::new();
+    }
+    use std::collections::HashMap;
+    let key = |p: Vec2| (p.x.to_bits(), p.y.to_bits());
+    let mut degree: HashMap<(u32, u32), u32> = HashMap::with_capacity(segments.len() * 2);
+    for (a, b) in segments {
+        *degree.entry(key(*a)).or_insert(0) += 1;
+        *degree.entry(key(*b)).or_insert(0) += 1;
+    }
+    degree
+        .into_iter()
+        .filter(|(_, d)| *d >= 2)
+        .map(|((x, y), _)| Vec2::new(f32::from_bits(x), f32::from_bits(y)))
+        .collect()
 }
 
 /// 屏幕密度预算（ADR-0030 D3）：本帧点标上限。视口只是第一道门，「看到的
@@ -1457,6 +1511,152 @@ mod tests {
         }
     }
 
+    // ---- 接头（G3b，2026-10-23）：交汇处补圆盘，填掉 butt 端的外角缺口 ----
+
+    fn batch_positions(mesh: &Mesh) -> Vec<Vec2> {
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("合批 mesh 必有 Float32x3 POSITION");
+        };
+        positions.iter().map(|p| Vec2::new(p[0], p[1])).collect()
+    }
+
+    /// 两段共用端点 → 该端点补一块圆盘（1 中心 + 6 边），外角缺口由此填平。
+    /// 断言之眼：顶点数 = 2 段 × 4 + 7，且圆心精确落在共用端点上。
+    #[test]
+    fn shared_endpoint_gets_a_join_disc() {
+        let corner = Vec2::new(10.0, 0.0);
+        let segs = [
+            (Vec2::new(0.0, 0.0), corner),
+            (corner, Vec2::new(10.0, 10.0)),
+        ];
+        let mesh = build_stroke_batch_mesh(&segs, 2.0);
+        let pos = batch_positions(&mesh);
+        assert_eq!(
+            pos.len(),
+            2 * 4 + 1 + STROKE_JOIN_SEGMENTS,
+            "共用端点应补一块 {STROKE_JOIN_SEGMENTS} 边形圆盘"
+        );
+        assert!(
+            pos.iter().any(|p| (*p - corner).length() < 1e-5),
+            "圆盘中心必须是共用端点 {corner:?}"
+        );
+        // 半径 = 半线宽：只看圆盘自己的顶点（前 8 个是两段的四边形角点，
+        // 它们的端帽角到 corner 的距离也正好是半线宽，不能混进来数）。
+        let disc = &pos[2 * 4..];
+        assert_eq!(disc.len(), 1 + STROKE_JOIN_SEGMENTS, "圆盘 = 圆心 + 环");
+        assert!((disc[0] - corner).length() < 1e-5, "disc[0] 是圆心");
+        let ring = disc[1..]
+            .iter()
+            .filter(|p| ((**p - corner).length() - 1.0).abs() < 1e-5)
+            .count();
+        assert_eq!(ring, STROKE_JOIN_SEGMENTS, "环半径应等于半线宽 1.0");
+    }
+
+    /// 互不相接的两段**不得**长接头：否则每个端点都白多一块圆盘。
+    #[test]
+    fn disjoint_segments_get_no_join_disc() {
+        let segs = [
+            (Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0)),
+            (Vec2::new(20.0, 0.0), Vec2::new(30.0, 0.0)),
+        ];
+        let mesh = build_stroke_batch_mesh(&segs, 2.0);
+        assert_eq!(batch_positions(&mesh).len(), 2 * 4, "无共用端点 → 无圆盘");
+    }
+
+    /// 折线（3 点 2 段）只有一个拐点 → 只补一块圆盘；顺带钉死「不按点数平方补」。
+    #[test]
+    fn polyline_corner_gets_exactly_one_join_disc() {
+        let p = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(10.0, 0.0),
+            Vec2::new(20.0, 5.0),
+        ];
+        let segs = [(p[0], p[1]), (p[1], p[2])];
+        let mesh = build_stroke_batch_mesh(&segs, 4.0);
+        assert_eq!(
+            batch_positions(&mesh).len(),
+            2 * 4 + 1 + STROKE_JOIN_SEGMENTS,
+            "唯一拐点只补一块圆盘"
+        );
+    }
+
+    /// **行为断言**（不只是数顶点）：直角拐点的**外角**必须在网格覆盖范围内。
+    ///
+    /// 几何事实：厚 2 的两段在 (10,0) 直角相接，水平段的 butt 端止于 x=10，
+    /// 竖直段止于 y=0 —— 右下外角 `(10.6, -0.6)` 落在两段四边形之外（旧实现的缺口）。
+    /// 补圆盘（半径 1）后该点距圆心 0.849 < 1，必须被覆盖。
+    #[test]
+    fn join_disc_covers_the_outer_notch_at_a_right_angle() {
+        let corner = Vec2::new(10.0, 0.0);
+        let segs = [
+            (Vec2::new(0.0, 0.0), corner),
+            (corner, Vec2::new(10.0, 10.0)),
+        ];
+        let mesh = build_stroke_batch_mesh(&segs, 2.0);
+        assert!(
+            mesh_covers(&mesh, Vec2::new(10.6, -0.6)),
+            "直角外角的楔形缺口必须被接头圆盘填掉"
+        );
+        // 对照：圆盘半径外的点不该被覆盖（防止「整块糊上去」式修法）。
+        assert!(
+            !mesh_covers(&mesh, Vec2::new(11.6, -1.6)),
+            "半径之外不应有几何——否则是过度填充"
+        );
+    }
+
+    /// 点在网格（三角形并集）内判定：逐三角形重心坐标同号。
+    fn mesh_covers(mesh: &Mesh, p: Vec2) -> bool {
+        let pos = batch_positions(mesh);
+        let Some(Indices::U32(idx)) = mesh.indices() else {
+            panic!("合批 mesh 必有 U32 索引");
+        };
+        idx.chunks(3).any(|t| {
+            let (a, b, c) = (pos[t[0] as usize], pos[t[1] as usize], pos[t[2] as usize]);
+            let s = |u: Vec2, v: Vec2| (v.x - u.x) * (p.y - u.y) - (v.y - u.y) * (p.x - u.x);
+            let (d1, d2, d3) = (s(a, b), s(b, c), s(c, a));
+            let has_neg = d1 < -1e-6 || d2 < -1e-6 || d3 < -1e-6;
+            let has_pos = d1 > 1e-6 || d2 > 1e-6 || d3 > 1e-6;
+            !(has_neg && has_pos)
+        })
+    }
+
+    /// 接头是 **O(n) 增量、只在重建时发生**：guangdong 规模（17.4 万段网格路网，
+    /// 共享端点极密）补完接头后，顶点数严格等于 `4n + 7×接头数`，构建仍在亚秒级。
+    /// 稳态每帧不重建（`StrokeBatchKey` 用指纹/线宽/Z 判变），所以这条预算守的是
+    /// 「重建一次的代价」，不是帧时间。
+    #[test]
+    fn join_fill_stays_linear_at_guangdong_scale() {
+        let mut segs: Vec<(Vec2, Vec2)> = Vec::with_capacity(295 * 295 * 2);
+        for i in 0..295u32 {
+            for j in 0..295u32 {
+                let a = Vec2::new(i as f32 * 8.0, j as f32 * 8.0);
+                segs.push((a, a + Vec2::new(8.0, 0.0)));
+                segs.push((a, a + Vec2::new(0.0, 8.0)));
+            }
+        }
+        let joins = stroke_join_centers(&segs, 1.0).len();
+        assert!(
+            joins * 2 >= segs.len(),
+            "网格路网应有大量共享端点，实得 {joins} / {} 段",
+            segs.len()
+        );
+        let t0 = std::time::Instant::now();
+        let mesh = build_stroke_batch_mesh(&segs, 2.0);
+        let dt = t0.elapsed();
+        assert_eq!(
+            batch_positions(&mesh).len(),
+            segs.len() * 4 + joins * (1 + STROKE_JOIN_SEGMENTS),
+            "顶点数必须严格 = 4n + 7×接头数（无隐性重复）"
+        );
+        // 预算 1s：debug 构建实测百毫秒级；守的是「不退化到秒级」。
+        assert!(
+            dt.as_secs_f32() < 1.0,
+            "17.4 万段补接头应在亚秒级，实得 {dt:?}"
+        );
+    }
+
     /// 线宽公式：`world_thickness = stroke_px * view.scale`，屏幕宽度恒定
     /// （`world_thickness / view.scale == stroke_px`），不随缩放变化。
     #[test]
@@ -1487,7 +1687,7 @@ mod tests {
 
     /// N 段 = 4N 顶点 / 6N 索引：合批不是丢段。
     #[test]
-    fn batch_mesh_carries_one_quad_per_segment() {
+    fn batch_mesh_carries_one_quad_per_segment_and_one_disc_per_join() {
         let segs = [
             (Vec2::ZERO, Vec2::X * 10.0),
             (Vec2::X * 10.0, Vec2::new(15.0, 3.0)),
@@ -1499,16 +1699,24 @@ mod tests {
         else {
             panic!("合批 mesh 必有 Float32x3 POSITION");
         };
+        // G3b 之后：每段一个四边形（4 顶点 / 6 索引），每处交汇（度数 ≥2 的端点）
+        // 再加一块圆盘（1 + 6 顶点 / 18 索引）。这条折线有 2 处交汇。
+        let joins = 2;
         assert_eq!(
             positions.len(),
-            segs.len() * 4,
-            "{} 段 = 12 顶点",
-            segs.len()
+            segs.len() * 4 + joins * (1 + STROKE_JOIN_SEGMENTS),
+            "{} 段 = 12 顶点 + {joins} 处接头 × {}",
+            segs.len(),
+            1 + STROKE_JOIN_SEGMENTS
         );
         match mesh.indices() {
-            Some(Indices::U32(idx)) => {
-                assert_eq!(idx.len(), segs.len() * 6, "{} 段 = 18 索引", segs.len())
-            }
+            Some(Indices::U32(idx)) => assert_eq!(
+                idx.len(),
+                segs.len() * 6 + joins * STROKE_JOIN_SEGMENTS * 3,
+                "{} 段 = 18 索引 + {joins} 处接头 × {}",
+                segs.len(),
+                STROKE_JOIN_SEGMENTS * 3
+            ),
             other => panic!("应为 U32 索引，实得 {other:?}"),
         }
     }

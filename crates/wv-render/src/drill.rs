@@ -848,7 +848,7 @@ pub fn update_place_labels(
                 {
                     continue;
                 }
-                if let (Some(x), Some(y)) = (p.x, p.y) {
+                if let Some((x, y)) = p.effective_anchor() {
                     // 地点坐标是本图局部 → 视图空间（`map_to_view`，非栅格原点）。
                     let pos = grid.map_to_view(Vec2::new(x, y));
                     if (pos.x - cx).abs() > half.x || (pos.y - cy).abs() > half.y {
