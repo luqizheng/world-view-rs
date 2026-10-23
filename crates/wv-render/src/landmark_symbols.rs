@@ -1,16 +1,20 @@
 //! 地物符号（Landmark symbols）——世界地图上的地点标记。
 //!
-//! ## 职责
-//! rank ≥ 2 的地点以**经典 map-pin**（圆头 + 尖尾 + 白芯，Lucide `map-pin`
-//! 的实心化）呈现。2026-10-23 用户裁定城堡/小镇插画符号退役（"地表不要贴
-//! 城堡 town 的图"），统一为几何 pin。
+//! ## 职责（2026-10-23 三轮裁定）
+//! 按**模式分流**：
+//! - **CellMap（Topographic）**：`push_map_pin`——经典 map-pin（圆头 + 尖尾 +
+//!   白芯，Lucide `map-pin` 实心化），数据视图的地点标记；**只用于此模式**；
+//! - **其余模式（Browse 等）**：`push_citadel` / `push_town`——城堡/小镇
+//!   程序化插画，照旧。
 //!
 //! ## 渲染口径
 //! - **顶点色 mesh 单批**：Bevy `Mesh2d` 支持 `ATTRIBUTE_COLOR`，配白色
 //!   `ColorMaterial` 即顶点色渲染——全部符号合一个 mesh + 一个实体，
 //!   与地形装饰（ADR-0031 D4）同款「原地改写」纪律。
 //! - 符号尺寸 = 屏幕像素 × `view.scale`（缩放时整组换 mesh，与 decor 的
-//!   `size_q` 同口径）。
+//!   `size_q` 同口径）。**局部坐标单位就是屏幕像素**（符号高约 22–24），
+//!   缩放系数只传 `view_scale`——多乘一档画布基准会把符号放大 26 倍
+//!   （2026-10-23 实测教训：Browse 出现盖住半个大陆的巨型墨团）。
 //!
 //! ## 边界（不做什么）
 //! - **不动 POI 圆点路径**：rank < 2 的普通地点（路网交点、村庄）仍是
@@ -28,8 +32,6 @@ use bevy::render::mesh::{Indices, Mesh, MeshVertexAttribute, VertexFormat};
 /// 符号 Z：POI 内芯（0.22）之上、标注（0.4）之下——地物是「世界的景物」，
 /// 压过点标；标签永远最后（在符号之上可读）。
 pub const LANDMARK_Z: f32 = 0.24;
-/// 符号基准高度（屏幕像素；pin 实际顶高 22.5，留 1.5 呼吸）。
-pub const BASE_H_PX: f32 = 26.0;
 
 /// 一个符号种类的绘制参数。`push_*` 系列函数向共享顶点缓冲追加三角形。
 pub struct LandmarkBatch {
@@ -62,6 +64,14 @@ impl LandmarkBatch {
         self.indices.extend([base, base + 1, base + 2]);
     }
 
+    /// 追加一个轴对齐矩形（左下 + 尺寸，局部坐标）。
+    #[allow(clippy::too_many_arguments)]
+    fn quad(&mut self, x: f32, y: f32, w: f32, h: f32, rgba: [f32; 4], o: Vec2, s: f32) {
+        let (x0, y0, x1, y1) = (x, y, x + w, y + h);
+        self.tri([x0, y0], [x1, y0], [x1, y1], rgba, o, s);
+        self.tri([x0, y0], [x1, y1], [x0, y1], rgba, o, s);
+    }
+
     /// 实心圆（扇形三角逼近，`seg` 段）。
     #[allow(clippy::too_many_arguments)]
     fn circle(&mut self, cx: f32, cy: f32, r: f32, seg: usize, rgba: [f32; 4], o: Vec2, s: f32) {
@@ -92,6 +102,54 @@ impl LandmarkBatch {
         // 头圆 r=7.5 圆心 (0,15) → 总高 22.5；白芯 r=3。
         self.circle(0.0, 15.0, 7.5, 24, body, o, s);
         self.circle(0.0, 15.0, 3.0, 16, hole, o, s);
+    }
+
+    /// Citadel（rank 3）：石墙 + 双塔 + 红旗 + 底部投影。
+    ///
+    /// 局部坐标：原点 = 锚点（Place 的 x/y），符号向上生长（y+），
+    /// 投影向右下（ART_STYLE_SPEC §1.5：左上光、右下投影 0.5× 高）。
+    pub fn push_citadel(&mut self, o: Vec2, s: f32) {
+        let stone = [0.72, 0.68, 0.62, 1.0]; // 墙体石灰
+        let stone_dark = [0.55, 0.51, 0.46, 1.0]; // 背光面
+        let roof = [0.62, 0.28, 0.22, 1.0]; // 塔顶赭红
+        let flag = [0.80, 0.20, 0.16, 1.0]; // 旗红
+        let shadow = [0.25, 0.22, 0.18, 0.30]; // 投影（半透明）
+
+        // 底部投影：右下偏移的扁矩形（宽 14 高 4）。
+        self.quad(1.0, -2.0, 14.0, 3.5, shadow, o, s);
+        // 主体城墙：宽 13 高 8，底边落在 y=0。
+        self.quad(-6.5, 0.0, 13.0, 8.0, stone, o, s);
+        // 城墙垛口（三个小方齿，墙顶）。
+        for cx in [-6.5, -1.5, 3.5] {
+            self.quad(cx, 8.0, 3.0, 2.0, stone, o, s);
+        }
+        // 左塔（高 14）+ 背光右壁 + 锥顶。
+        self.quad(-8.0, 0.0, 4.5, 14.0, stone, o, s);
+        self.quad(2.2, 0.0, 2.3, 14.0, stone_dark, o, s); // 右塔身合并在 x 2.2..4.5
+        self.tri([-8.2, 14.0], [-3.3, 14.0], [-5.75, 19.0], roof, o, s);
+        // 右塔（高 12）+ 锥顶。
+        self.quad(3.5, 0.0, 4.5, 12.0, stone, o, s);
+        self.tri([3.3, 12.0], [8.2, 12.0], [5.75, 17.0], roof, o, s);
+        // 旗杆 + 三角旗（左塔顶）。
+        self.quad(-6.0, 19.0, 0.8, 5.0, stone_dark, o, s);
+        self.tri([-5.2, 24.0], [-0.6, 23.0], [-5.2, 21.5], flag, o, s);
+    }
+
+    /// Town（rank 2）：两间错落小屋 + 投影。
+    pub fn push_town(&mut self, o: Vec2, s: f32) {
+        let wall = [0.85, 0.78, 0.66, 1.0]; // 暖墙
+        let wall_dark = [0.68, 0.60, 0.50, 1.0]; // 背光墙
+        let roof = [0.58, 0.33, 0.20, 1.0]; // 深褐顶
+        let shadow = [0.25, 0.22, 0.18, 0.30];
+
+        // 投影。
+        self.quad(0.5, -1.5, 10.0, 2.8, shadow, o, s);
+        // 主屋（左，大）：墙 + 人字顶。
+        self.quad(-6.0, 0.0, 7.5, 5.5, wall, o, s);
+        self.tri([-6.8, 5.5], [1.5, 5.5], [-2.65, 9.5], roof, o, s);
+        // 副屋（右，小、后错）：墙 + 顶。
+        self.quad(1.8, 0.0, 5.0, 4.0, wall_dark, o, s);
+        self.tri([1.2, 4.0], [7.4, 4.0], [4.3, 7.2], roof, o, s);
     }
 }
 
@@ -133,16 +191,24 @@ pub fn build_landmark_mesh(b: LandmarkBatch) -> Option<Mesh> {
 mod tests {
     use super::*;
 
-    /// map-pin 产出非空几何，且顶点色通道与位置等长、索引不越界。
+    /// 三种符号都产出非空几何，且顶点色通道与位置等长、索引不越界。
     #[test]
     fn landmark_batches_produce_colored_geometry() {
-        let mut a = LandmarkBatch::new();
-        a.push_map_pin(Vec2::ZERO, 1.0);
-        assert!(!a.is_empty());
-        assert_eq!(a.verts.len(), a.colors.len());
-        assert!(a.indices.len().is_multiple_of(3), "索引必须是三角形倍数");
-        // 索引不越界。
-        assert!(a.indices.iter().all(|&i| (i as usize) < a.verts.len()));
+        let mut pin = LandmarkBatch::new();
+        pin.push_map_pin(Vec2::ZERO, 1.0);
+        let mut cit = LandmarkBatch::new();
+        cit.push_citadel(Vec2::ZERO, 1.0);
+        let mut town = LandmarkBatch::new();
+        town.push_town(Vec2::ZERO, 1.0);
+        for (name, b) in [("pin", pin), ("citadel", cit), ("town", town)] {
+            assert!(!b.is_empty(), "{name} 应有几何");
+            assert_eq!(b.verts.len(), b.colors.len(), "{name} 顶点色应与位置等长");
+            assert!(
+                b.indices.len().is_multiple_of(3),
+                "{name} 索引必须是三角形倍数"
+            );
+            assert!(b.indices.iter().all(|&i| (i as usize) < b.verts.len()));
+        }
     }
 
     /// 空 batch 不产 mesh（空 mesh 禁律）。

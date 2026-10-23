@@ -73,3 +73,18 @@ MODE_TABLE 两行（VectorFlat / Topographic）恢复 `true`（模式轴开档�
 同款「mode 表不关，会话开关单控」口径。开关 UI 在 map controls 网格线隔壁
 （Lucide `waves` 瓷砖，仅两开档模式显示）。VectorFlat 默认观感随之少一层
 等值线——属本条裁定的直接推论（等值线默认是修饰线，要时再开）。
+
+### 追记修正（同日第三轮）：pin 只用于 CellMap + mesh 尺寸 bug
+
+§6-2「两类符号统一 map-pin」被实机验收推翻，修正为**模式分流**：
+
+1. **map-pin 只用于 CellMap**：Topographic 下地物符号画 pin（数据视图的
+   地点标记，独立于 FeatureOverlay 门——该行此格仍为 false，主题地界覆盖
+   层照旧不进 CellMap）；其余 FeatureOverlay 开档模式恢复城堡/小镇插画
+   （`push_citadel` / `push_town` 从历史找回）。place 图层关则都不画。
+2. **mesh 尺寸 bug**：符号绘制把「画布基准 26px」乘进了缩放系数
+   （`s = 26 × view_scale`），而局部坐标单位本就是屏幕像素 → 符号放大
+   26 倍，Browse 出现盖住半个大陆的巨型墨团（白圈 = pin 白芯）。修正为
+   `s = tier(1.0/1.25/1.5) × view_scale`。旧 PNG Sprite 路径无此 bug
+   （`custom_size` 只用 side_wu），mesh 兜底路径生产环境从未走过，故
+   PNG 退役后才暴露。`BASE_H_PX` 常量随之退役。
