@@ -47,9 +47,16 @@ pub fn candidate_naming_form(
         &wv_core::Id::new_unchecked(&view.current_map),
         cell,
     ) {
+        let names = &wv_render::terrain_view::biome_raw::BIOME_NAMES_ZH;
         ui.horizontal(|ui| {
             ui.label("群系：");
-            value_box(ui, shell, &biome.to_string(), None, false);
+            value_box(
+                ui,
+                shell,
+                names.get(biome as usize).copied().unwrap_or("?"),
+                None,
+                false,
+            );
         });
         ui.horizontal(|ui| {
             ui.label("格数：");
