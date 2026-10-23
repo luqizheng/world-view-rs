@@ -532,7 +532,15 @@ pub fn sync_vector_layers(
         // 过统一门槛——Nation 档只画横贯级主河，Region 档加区域河，Edit 全见。
         if recipe.enabled(PassId::Rivers) && layers.terrain.visible {
             let mat = layer.river_material.get_or_insert_with(|| {
-                materials.add(ColorMaterial::from_color(Color::srgb(0.29, 0.53, 0.68)))
+                // 2026-10-22 验收：CellMap 用固定深青（数据视图，不随主题）；
+                // 其他模式沿用原水色。
+                materials.add(ColorMaterial::from_color(
+                    if matches!(view.mode, crate::state::ViewMode::Topographic) {
+                        Color::srgb(0.12, 0.32, 0.45)
+                    } else {
+                        Color::srgb(0.29, 0.53, 0.68)
+                    },
+                ))
             });
             let river_tier = lod_tier(view.scale);
             let mut river_segments: Vec<(Vec2, Vec2)> = Vec::new();
