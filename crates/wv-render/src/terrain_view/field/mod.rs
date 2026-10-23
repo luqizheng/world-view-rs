@@ -17,6 +17,7 @@
 //! |---|---|---|---|
 //! | [`bicubic`] | 数据 | Catmull-Rom 核的宿主镜像 + 解析导数（P5） | 纯 Rust |
 //! | [`coast_sdf`] | 数据 | 海岸距离场（Felzenszwalb EDT） | 纯 Rust |
+//! | [`line_sdf`] | 数据 | 折线距离场（T25 河流 / T26 道路，追记九） | wv-core / wv-terrain |
 //! | [`pack`] | 数据 | 三张数据纹理打包（height/coast/attr） | 纯 Rust |
 //! | [`material`] | 执行 | `TerrainFieldMaterial` + WGSL 逐像素求值 | Bevy |
 //!
@@ -32,6 +33,7 @@
 
 pub mod bicubic;
 pub mod coast_sdf;
+pub mod line_sdf;
 pub mod material;
 pub mod pack;
 pub mod paper;
@@ -39,9 +41,13 @@ pub mod symbol_atlas;
 
 pub use bicubic::{bicubic_grad, bicubic_value, cubic_weights, cubic_weights_deriv};
 pub use coast_sdf::{distance_field, distance_to_coast, FAR};
+pub use line_sdf::{
+    bake_line_dash, rivers_from_terrain, LineClass, LineDashPack, LinePoly, DASH_MAX_CELLS,
+};
 pub use material::{
-    build_material, default_params, set_coast_encoding, warp_amp, FieldPalette, FieldParams,
-    TerrainFieldMaterial, TerrainFieldMaterialPlugin, ViewBranch, WARP_AMP_MAX, WARP_AMP_MIN,
+    build_material, build_material_with_lines, default_params, set_coast_encoding, warp_amp,
+    FieldPalette, FieldParams, TerrainFieldMaterial, TerrainFieldMaterialPlugin, ViewBranch,
+    WARP_AMP_MAX, WARP_AMP_MIN,
 };
 pub use pack::{CoastEncoding, FieldPack, COAST_MAX_CELLS, H_MAX, H_MIN};
 pub use paper::{

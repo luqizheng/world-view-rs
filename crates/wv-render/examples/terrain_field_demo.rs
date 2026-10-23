@@ -44,11 +44,12 @@ use bevy::{
 use wv_core::terrain::{TerrainCellData, TerrainData};
 use wv_render::terrain_view::atmosphere::veil_alpha;
 use wv_render::terrain_view::field::{
-    anchor_offset, build_material, build_paper_material, build_veil_material, default_params,
-    hash01, placeholder_atlas, set_coast_encoding, shadow_color, shadow_offset, slot_index,
-    symbol_exit_alpha, variant_for, CoastEncoding, FieldPack, PaperOverlayMaterial,
-    PaperOverlayPlugin, PaperParams, SymbolFamily, TerrainFieldMaterial,
-    TerrainFieldMaterialPlugin, ViewBranch, CELL_PX, GRID_DIM, PAPER_Z, VEIL_Z, VIGNETTE_ALPHA,
+    anchor_offset, bake_line_dash, build_material_with_lines, build_paper_material,
+    build_veil_material, default_params, hash01, placeholder_atlas, rivers_from_terrain,
+    set_coast_encoding, shadow_color, shadow_offset, slot_index, symbol_exit_alpha, variant_for,
+    CoastEncoding, FieldPack, LinePoly, PaperOverlayMaterial, PaperOverlayPlugin, PaperParams,
+    SymbolFamily, TerrainFieldMaterial, TerrainFieldMaterialPlugin, ViewBranch, CELL_PX, GRID_DIM,
+    PAPER_Z, VEIL_Z, VIGNETTE_ALPHA,
 };
 
 /// 地形网格边长（格）。512 = 262144 格，与 P0 锁 T5 的计时口径一致。
@@ -175,6 +176,8 @@ struct DemoState {
     paper_mat: Handle<PaperOverlayMaterial>,
     /// 预先找出的海岸格（世界坐标）——验收截图的对准点。
     coast_world: Vec2,
+    /// 最长河流的中点（世界坐标）——T25 验收截图的对准点。
+    river_world: Vec2,
 }
 
 /// 确定性哈希（整数 → `[0,1)`）。**不用随机数**——守护项 8 / SPEC §3.8.6：
@@ -274,6 +277,27 @@ fn find_coast_world(terrain: &TerrainData) -> Vec2 {
         .unwrap_or((terrain.width as f32 * 0.5, terrain.height as f32 * 0.5));
     let g = GRID as f32 * WORLD_PER_CELL;
     Vec2::new(cx + 0.5 - g * 0.5, g * 0.5 - cy - 0.5)
+}
+
+/// 最长河流的中点 → 世界坐标（T25 验收截图的对准点）。
+///
+/// 取最长的那条：短细流只有十几格，在 8 px/格 下不足以看出「线状连续性」。
+/// 无河时退回原点（此时截图拍到的就是图幅中心，不会 panic）。
+fn find_river_world(lines: &[LinePoly], grid: f32) -> Vec2 {
+    let longest = lines.iter().max_by(|a, b| a.pts.len().cmp(&b.pts.len()));
+    let Some(line) = longest else {
+        return Vec2::ZERO;
+    };
+    let Some(mid) = line.pts.get(line.pts.len() / 2) else {
+        return Vec2::ZERO;
+    };
+    // ⚠️ `mid` 已是**格心坐标**（`generate_rivers` 返回 `(cx + 0.5)/w`，
+    // 乘回图宽后即 `cx + 0.5`），故这里**不能再补 0.5**。
+    // 曾照抄 `find_coast_world` 的「格索引 → 世界」公式多加了半格，
+    // 相机因此偏离河心 0.5 格：屏幕任何像素都落在离河 ≥0.36 格处，
+    // 而 1.8 px 线的半宽阈值只有 0.11 格（8 px/格）→ **一条河都画不出来**，
+    // 且画面看起来完全正常（只是「没有河」），属静默缺陷。
+    Vec2::new(mid[0] - grid * 0.5, grid * 0.5 - mid[1])
 }
 
 /// 按海拔与确定性哈希决定该格放什么符号（`None` = 不放）。
@@ -463,7 +487,71 @@ fn setup(
     );
     // pack 与 shader 的编码开关必须同时设，否则距离场整体错一格（不报错）。
     set_coast_encoding(&mut params, encoding);
-    let material = materials.add(build_material(&mut images, &pack, params));
+
+    // ── T25：河流折线 → 距离场（追记九）────────────────────────────────
+    // 复用 `wv_terrain::climate::generate_rivers`（唯一入口，确定性走线）。
+    // rivers_seed 独立于地形种子（与 new_project_dialog 同构）。
+    // T26 道路：demo 无 StreetLayer 数据，主干/次级两通道留空——
+    // 空通道解码后饱和（距离 8 格），shader 侧自然不画。
+    let rivers_seed = 0x51AB_5EED_9E37_79B9u64;
+    // 对准点**始终**按河流算（与 `FIELD_NO_RIVERS` 解耦）——否则关河时
+    // 相机退回图幅中心，A/B 截图拍的是两块不同地方，对照无意义。
+    let river_focus = rivers_from_terrain(&terrain, rivers_seed, 12);
+    let river_world = find_river_world(&river_focus, GRID as f32 * WORLD_PER_CELL);
+    // `FIELD_NO_RIVERS=1`：跳过河流烘焙——用于 A/B 确认画面上哪些笔画是河。
+    let river_polys = if std::env::var("FIELD_NO_RIVERS").is_ok() {
+        Vec::new()
+    } else {
+        river_focus
+    };
+    info!(
+        "T25 河流折线：{} 条（rivers_seed={rivers_seed:#x}）",
+        river_polys.len()
+    );
+    let line_polys: Vec<LinePoly> = river_polys;
+    let dash_pack = bake_line_dash(GRID, GRID, &line_polys);
+    info!(
+        "T25/T26 折线距离场：{}×{}（Rgba8Unorm，{} KB）",
+        dash_pack.width,
+        dash_pack.height,
+        dash_pack.tex.len() / 1024
+    );
+    // 烘焙自检：统计各通道「距线 < 1 格」的 texel 数。为 0 说明折线没进
+    // 距离场（坐标/通道接错），全图级别说明编码方向反了。
+    let near = |ch: usize| dash_pack.tex.chunks_exact(4).filter(|p| p[ch] < 32).count();
+    info!(
+        "  近线 texel 数（<1 格）：河 {} / 主干 {} / 次级 {}",
+        near(0),
+        near(1),
+        near(2)
+    );
+    // 河流包围盒——对照验收截图的视野范围，判断「没河」是渲染问题还是视野问题。
+    if let Some((mn, mx)) =
+        line_polys
+            .iter()
+            .flat_map(|l| l.pts.iter())
+            .fold(None::<([f32; 2], [f32; 2])>, |acc, p| {
+                Some(match acc {
+                    None => (*p, *p),
+                    Some((mn, mx)) => (
+                        [mn[0].min(p[0]), mn[1].min(p[1])],
+                        [mx[0].max(p[0]), mx[1].max(p[1])],
+                    ),
+                })
+            })
+    {
+        info!(
+            "  河流包围盒（格）：x {:.0}..{:.0}, y {:.0}..{:.0}",
+            mn[0], mx[0], mn[1], mx[1]
+        );
+    }
+
+    let material = materials.add(build_material_with_lines(
+        &mut images,
+        &pack,
+        Some(&dash_pack),
+        params,
+    ));
 
     // 一格 = INIT_PX_PER_CELL 世界单位；quad 覆盖全图，UV 铺满 0..1。
     //
@@ -654,6 +742,7 @@ fn setup(
         paper_quad,
         paper_mat,
         coast_world,
+        river_world,
     });
 }
 
@@ -974,6 +1063,8 @@ fn sync_paper(
 enum Aim {
     /// 对准预先找出的海岸格（近观 / 过渡档）。
     Coast,
+    /// 对准最长河流的中点（T25 河线验收）。
+    River,
     /// 对准图幅中心（远观档、CellMap 档）。
     Center,
 }
@@ -1052,6 +1143,21 @@ const ACCEPT_SHOTS: &[AcceptShot] = &[
         branch: ViewBranch::BiomeRaw,
         aim: Aim::Center,
     },
+    // T25 河流验收（追记九）：对准最长河流的中点。
+    // 8 px/格 看**线宽 1.8 px 的连续性**与墨色（青蓝墨，与水色同族）；
+    // 16 px/格 看**入海口不描线**（河线应在岸线处停住，不拖到海面）。
+    AcceptShot {
+        label: "10-river-8px",
+        px_per_cell: 8.0,
+        branch: ViewBranch::Themed,
+        aim: Aim::River,
+    },
+    AcceptShot {
+        label: "11-river-16px",
+        px_per_cell: 16.0,
+        branch: ViewBranch::Themed,
+        aim: Aim::River,
+    },
 ];
 
 /// 验收截图驱动器状态。
@@ -1116,6 +1222,7 @@ fn acceptance_capture(
     // 远观与 CellMap 档对着全图中心。
     let aim = match shot.aim {
         Aim::Coast => state.coast_world,
+        Aim::River => state.river_world,
         Aim::Center => Vec2::ZERO,
     };
     for mut tf in cams.iter_mut() {

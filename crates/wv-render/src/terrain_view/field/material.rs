@@ -67,6 +67,7 @@ use bevy::{
     sprite_render::{Material2d, Material2dPlugin},
 };
 
+use super::line_sdf::LineDashPack;
 use super::pack::{CoastEncoding, FieldPack};
 
 // ── P0 规格锁常量（T7–T18 / T23 / T24 / T27）────────────────────────────────
@@ -82,6 +83,17 @@ pub const DEEP_EDGE: f32 = 9.0;
 pub const COAST_LINE_PX: f32 = 1.2;
 /// T24：biome 边界线宽（屏幕像素）。比海岸浅一档——地貌交界是「暗示」不是「划线」。
 pub const BIOME_LINE_PX: f32 = 0.8;
+
+/// T25：河流墨线宽（屏幕像素，SPEC §3.8.1 口径）。线状要素比边界重。
+pub const RIVER_LINE_PX: f32 = 1.8;
+/// T26：道路主干墨线宽（屏幕像素）。路网是远观构图骨架。
+pub const ROAD_MAJOR_PX: f32 = 2.4;
+/// T26：道路次级墨线宽（屏幕像素）。
+pub const ROAD_MINOR_PX: f32 = 1.2;
+/// 河流墨线不透明度（水色偏深的青蓝墨——河在纸面地图上是「蓝墨」不是黑墨）。
+pub const RIVER_INK_ALPHA: f32 = 0.62;
+/// 道路墨线不透明度（比 biome 界重、比海岸轻）。
+pub const ROAD_INK_ALPHA: f32 = 0.5;
 
 /// T14：高度梯度中心差分步长（格）。
 pub const GRAD_STEP: f32 = 0.5;
@@ -171,6 +183,9 @@ pub struct FieldPalette {
     pub land_high: LinearRgba,
     /// 岸线 / biome 界墨色。墨是纸上的固定媒介色，**不随主题色板**。
     pub ink: LinearRgba,
+    /// 河流墨色（T25）——青蓝墨，河在纸面地图上是「蓝墨」不是黑墨。
+    /// 与主题水色同族但更深一档（落在纸上的河线要压得住底色）。
+    pub river_ink: LinearRgba,
     /// 纸底色（地形没画到的地方也是纸不是黑，T44）。
     pub paper: LinearRgba,
 }
@@ -199,6 +214,13 @@ impl Default for FieldPalette {
             // 墨色与纸色也按 sRGB 书写（人眼/取色器给的都是 sRGB 值），
             // 同一路径转线性——避免两种口径混用。
             ink: LinearRgba::from(Color::srgb(0.16, 0.14, 0.13)),
+            // T25 河墨：取主题水色加深 35%（sRGB 空间乘法≈感知线性），
+            // 与水色同族——河是「水的线状呈现」，异色会像笔刷描上去的。
+            river_ink: LinearRgba::from(Color::srgb(
+                t.water[0] * 0.65,
+                t.water[1] * 0.65,
+                t.water[2] * 0.72,
+            )),
             paper: LinearRgba::from(Color::srgb(0.94, 0.91, 0.84)),
         }
     }
@@ -208,8 +230,8 @@ impl Default for FieldPalette {
 ///
 /// 绑定布局（WGSL 侧同步）：
 /// - `binding 0` = uniform（参数）
-/// - `binding 1/3/5` = 三张数据纹理
-/// - `binding 2/4/6` = 对应 sampler
+/// - `binding 1/3/5/7` = 四张数据纹理（height / coast / attr / line_dash）
+/// - `binding 2/4/6/8` = 对应 sampler
 #[derive(AsBindGroup, Debug, Clone, Asset, TypePath)]
 pub struct TerrainFieldMaterial {
     /// uniform 参数块。**公开**是刻意的：缩放档位、墨线强度、明暗钳制等
@@ -229,6 +251,12 @@ pub struct TerrainFieldMaterial {
     #[texture(5)]
     #[sampler(6)]
     pub attr: Handle<Image>,
+    /// T25/T26（追记九）：折线距离场，`Rgba8Unorm` + `Linear`。
+    /// R = 河流 / G = 道路主干 / B = 道路次级，编码 `d / 8`（无线处 = 1）。
+    /// **`Linear`**：距离是连续量，与 coast 同理（Nearest 会出平顶带）。
+    #[texture(7)]
+    #[sampler(8)]
+    pub line_dash: Handle<Image>,
 }
 
 /// 与 WGSL `FieldParams` 逐字段对应的 uniform 块。
@@ -278,6 +306,8 @@ pub struct FieldParams {
     pub theme: [Vec4; 4],
     /// 墨色。
     pub ink: Vec4,
+    /// 河流墨色（T25）。
+    pub river_ink: Vec4,
     /// 纸底色（T44）。
     pub paper: Vec4,
 }
@@ -288,17 +318,31 @@ impl Material2d for TerrainFieldMaterial {
     }
 }
 
-/// 装配材质（把 [`FieldPack`] 的字节缓冲变成三张 GPU 纹理）。
+/// 装配材质（把 [`FieldPack`] 的字节缓冲变成四张 GPU 纹理）。
 ///
 /// 采样器按 P0 锁死：
 /// - height / coast → `Linear`（T1/T3；shader 要在亚格处插值）
 /// - attr → **Nearest**（T2；biome 是 ID，插值即语义错误）
+/// - line_dash → `Linear`（追记九；距离是连续量，同 coast 理由）
 ///
 /// 全部走 `Images` 手动注入（不经 `AssetServer`）——纹理来自 `FieldPack`
 /// 的内存缓冲，不是磁盘资产；这也是 wv-render「禁文件 IO」红线的必然结果。
 pub fn build_material(
     images: &mut Assets<Image>,
     pack: &FieldPack,
+    params: FieldParams,
+) -> TerrainFieldMaterial {
+    build_material_with_lines(images, pack, None, params)
+}
+
+/// 同 [`build_material`]，可附加折线距离纹理（T25/T26）。
+///
+/// `lines` 为 `None` 时绑定一张全 1 纹理（解码后距离饱和，shader 侧
+/// 自然不画任何线）——保证 binding 布局恒定，调用方无需两套材质。
+pub fn build_material_with_lines(
+    images: &mut Assets<Image>,
+    pack: &FieldPack,
+    lines: Option<&LineDashPack>,
     params: FieldParams,
 ) -> TerrainFieldMaterial {
     let height = images.add(data_texture(
@@ -323,11 +367,24 @@ pub fn build_material(
         // T2 红线：Nearest。biome 是 ID，Linear 会插出不存在的编号。
         ImageSamplerDescriptor::nearest(),
     ));
+    // T25/T26：折线距离场。空纹理解码后 d = 8 格，任何线宽阈值都画不出来。
+    let dash = match lines {
+        Some(l) => l.clone(),
+        None => LineDashPack::empty(pack.width, pack.height),
+    };
+    let line_dash = images.add(data_texture(
+        dash.width,
+        dash.height,
+        &dash.tex,
+        TextureFormat::Rgba8Unorm,
+        ImageSamplerDescriptor::linear(),
+    ));
     TerrainFieldMaterial {
         params,
         height,
         coast,
         attr,
+        line_dash,
     }
 }
 
@@ -391,6 +448,7 @@ pub fn default_params(
             rgba4(pal.land_high),
         ],
         ink: rgba4(pal.ink),
+        river_ink: rgba4(pal.river_ink),
         paper: rgba4(pal.paper),
     }
 }

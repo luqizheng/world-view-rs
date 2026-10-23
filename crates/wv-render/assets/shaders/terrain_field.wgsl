@@ -21,6 +21,8 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(4) var coast_smp: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(5) var attr_tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(6) var attr_smp: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(7) var dash_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(8) var dash_smp: sampler;
 
 // vec3 在 std140 下补到 16 字节；这里用 vec4 分组避免隐式 padding 错位。
 struct FieldParams {
@@ -34,6 +36,7 @@ struct FieldParams {
     // 主题四阶色：[0]=water [1]=land_low [2]=land_mid [3]=land_high
     theme: array<vec4<f32>, 4>,
     ink: vec4<f32>,
+    river_ink: vec4<f32>,   // T25 河墨（追记九）
     paper: vec4<f32>,
 };
 
@@ -43,6 +46,17 @@ struct FieldParams {
 const COAST_LINE_PX: f32 = 1.2;
 /// T24：biome 边界线宽（屏幕像素）。地貌交界是「暗示」不是「划线」。
 const BIOME_LINE_PX: f32 = 0.8;
+/// T25：河流墨线宽（屏幕像素）。线状要素比边界重（追记九）。
+const RIVER_LINE_PX: f32 = 1.8;
+/// T26：道路主干 / 次级墨线宽（屏幕像素）。
+const ROAD_MAJOR_PX: f32 = 2.4;
+const ROAD_MINOR_PX: f32 = 1.2;
+/// 折线距离编码上限（格）——与 line_sdf.rs 的 DASH_MAX_CELLS 同源，改动必须双边。
+const DASH_MAX_CELLS: f32 = 8.0;
+/// 河流墨线不透明度。
+const RIVER_INK_ALPHA: f32 = 0.62;
+/// 道路墨线不透明度。
+const ROAD_INK_ALPHA: f32 = 0.5;
 /// 岸线墨线不透明度（SPEC §1.5「描线 −45% 明度」的落地强度）。
 const COAST_INK_ALPHA: f32 = 0.55;
 /// biome 界墨线不透明度（比岸线浅一档）。
@@ -69,12 +83,29 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // 格坐标（texel 空间）。
     //
-    // ⚠️ **u 与 v 都要翻**：Bevy 的 `Rectangle` mesh 顶点序为
-    // `[1,0] [0,0] [0,1] [1,1]`——**u 轴是反的**（世界左边 u=1、右边 u=0），
-    // v 轴顶部为 1。数据纹理是「左上原点、x 向右、y 向下」，
-    // 故 `u = 1 − in.uv.x`、`v = 1 − in.uv.y`。
-    // 只翻 v 会让整幅图**左右镜像**（实测踩过：相机对准的海岸画到了镜像位置）。
-    let uv0 = vec2<f32>(1.0 - in.uv.x, 1.0 - in.uv.y);
+    // ## UV 约定（**改前先读，这里错了两次**）
+    //
+    // 约定来源不是文档，是**实测探针**（T25 接线时输出 `in.uv` 反推）：
+    //
+    // | 世界位置 | 实测 `in.uv` |
+    // |---|---|
+    // | `world.x` 增大 | `in.uv.x` **增大** |
+    // | `world.y` 增大 | `in.uv.y` **减小** |
+    //
+    // 数据纹理是「左上原点、x 向右、y 向下」，行 0 = 北。世界 +y = 北。
+    // 于是 `uv_tex = in.uv` **恰好就是正确映射**：
+    // `in.uv.y` 随世界 y 增大而减小，正好对上「行号 = 256 − world.y」。
+    //
+    // ⚠️ 历史坑一：曾写 `uv0 = in.uv` 时发现画面左右镜像，于是改成
+    // `(1 − u, 1 − v)` 并写进注释「u 与 v 都要翻」。**那是错的**——
+    // 同时翻 u 与 v 等于**整体旋转 180°**，不是修镜像。程序化地形左右上下
+    // 都近似对称，所以这半个像素的对称错觉骗过了所有截图验收。
+    //
+    // ⚠️ 历史坑二：180° 旋转的代价在 T25 河流上暴露——河流折线按**格坐标**
+    // 烘进纹理，相机按**世界坐标**对准河心，两者隔着那 180° 永远对不上，
+    // 表现为「河里一条线都画不出来」而画面看不出任何异常（静默缺陷）。
+    // 定位手段：探针输出 `in.uv` 与纹理 R 通道，逐位对表。
+    let uv0 = vec2<f32>(in.uv.x, in.uv.y);
 
     // T19–T22 域扭曲：在**格坐标**里扰动采样位置（不是屏幕坐标——否则
     // 缩放时岸线会「游动」，作者会以为数据变了）。幅度由 Rust 侧按
@@ -263,6 +294,64 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let is_edge = biome_boundary(uv, grid, biome_id);
             rgb = mix(rgb, p.ink.rgb, is_edge * BIOME_INK_ALPHA * total);
         }
+    }
+
+    // ── 河流 / 道路墨线（T25 / T26，追记九）────────────────────────────────
+    //
+    // 数据面（line_sdf.rs）把折线烘成三通道距离场：R = 河 / G = 道路主干 /
+    // B = 次级，编码 `d / 8`（无线处 = 1）。这里解码出「到线中心的格距离」，
+    // 按**屏幕像素口径**画墨线——与岸线（T23）/ biome 界（T24）同一语法：
+    //
+    //   half_w（格）= 线宽px / 2 / px_per_cell
+    //   线内 = dd < half_w，fwidth 抗锯齿。
+    //
+    // **与岸线 Signed 模式的关键差异**：折线距离场没有「平顶」问题——
+    // texel 到线段的距离在河心处是连续的 V 形谷，`|dd| < half_w` 可以
+    // 定出亚格宽度的线，这正是选「点到线段精确距离」而不是复用 EDT
+    // 的理由（EDT 种子只能落在格心上，河心平顶 0.5 格宽）。
+    //
+    // **入水段不画**：河折线的终点是入海口（height < 0 处），海上那段
+    // 距离场仍 < 阈值，会在海面上描出一条墨线尾巴。用「当前位置是水」
+    // 拦掉——河的视觉终点交给海岸三段色带衔接。
+    //
+    // **远观门控随 ink_gate**：< 1 px/格 时线宽折算后不足半像素，画出来
+    // 是闪烁噪点，与 T33「远观只留色域」同源。
+    if (ink_gate > 0.01) {
+        let dash = textureSampleLevel(dash_tex, dash_smp, uv, 0.0);
+        // 解码：`line_sdf.rs` 编码 `enc = clamp(d / 8, 0, 1)`，
+        // 即 **byte 值与距离同向**：线心 0、距线 ≥8 格处 255（全 1 空纹理）。
+        // 故 `dd = enc × 8`。
+        //
+        // ⚠️ 曾写成 `abs((enc − 1.0) × 8)`——把「远处 = 1」当成「近处 = 1」，
+        // 于是全图都是 dd=8（不画线）、线心也是 dd=8，河流一条都出不来。
+        // 这个 bug 不报错、不崩、单测也测不到（单测测的是 Rust 侧编码，
+        // 而错在 shader 侧解码）——只能靠实机截图发现。
+        let dd = dash.r * DASH_MAX_CELLS;
+
+        // 河流（T25 = 1.8 px）：比 biome 界（0.8）重一档是规格的硬要求。
+        let river_half = 0.5 * RIVER_LINE_PX / px_per_cell;        let aa = max(fwidth(dd), 1e-6);
+        // 入水拦截：水面不画河线（距离场在入海口后仍有值）。
+        // 用 land_t（亚格连续的水陆混合比）做软拦截——硬 if 会在河入海
+        // 的那个格上产生 1px 阶梯。
+        let river_water_gate = land_t;
+        let river_ink = (1.0 - smoothstep(river_half - aa, river_half + aa, dd))
+            * river_water_gate;
+        rgb = mix(rgb, p.river_ink.rgb, river_ink * RIVER_INK_ALPHA * ink_gate);
+
+        // 道路（T26 = 2.4 / 1.2 px）：主干压过次级（先画次级再画主干，
+        // 交叠处主干色胜出）；道路只应出现在陆上——水里的「路」是数据
+        // 噪声，直接被 land_t 拦掉。
+        let road_water_gate = land_t;
+        let minor_half = 0.5 * ROAD_MINOR_PX / px_per_cell;
+        let major_half = 0.5 * ROAD_MAJOR_PX / px_per_cell;
+        let dd_g = dash.g * DASH_MAX_CELLS;
+        let dd_b = dash.b * DASH_MAX_CELLS;
+        let minor_ink = (1.0 - smoothstep(minor_half - aa, minor_half + aa, dd_b))
+            * road_water_gate;
+        rgb = mix(rgb, p.ink.rgb, minor_ink * ROAD_INK_ALPHA * ink_gate);
+        let major_ink = (1.0 - smoothstep(major_half - aa, major_half + aa, dd_g))
+            * road_water_gate;
+        rgb = mix(rgb, p.ink.rgb, major_ink * ROAD_INK_ALPHA * ink_gate);
     }
 
     return vec4<f32>(rgb, 1.0);
