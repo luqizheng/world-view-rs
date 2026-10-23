@@ -617,38 +617,253 @@ pub fn draw_map_gizmos(
     layers: Res<LayerFrame>,
     recipe: Res<crate::recipe::RenderRecipe>,
     projection: Res<crate::state::WorldProjection>,
+    drill: Res<crate::state::DrillState>,
     grid_cfg: Res<GridConfig>,
     mut candidate_cache: ResMut<crate::region_overlay::CandidateOverlayCache>,
     boundary: Res<crate::state::BiomeBoundaryState>,
+    region_adjust: Res<crate::state::RegionAdjustState>,
+    // 候选上下文（格 + 编辑中多边形）：app 侧 NatureRegionUiState 的镜像
+    //（渲染层不依赖 wv-app 类型）。
+    candidate_ctx: Res<crate::state::RegionCandidateContext>,
 ) {
+    let __t = std::time::Instant::now();
     let _ = &*tex; // suppress unused warning
 
     // ── CellMap 未命名候选高亮（2026-10-22 内容矩阵 §2.6-3 · T11）──────
-    // 仅 Topographic ∧ nature_overlay；缓存键 = 当前图 + 世界变更检测
-    // （WorldProjection.is_changed 在任一命令/选择写入时翻真 → 点击级重算）。
+    // 仅 Topographic ∧ nature_overlay；重算触发 = 编辑信号**边沿**（脏标记 /
+    // undo/redo 栈形 / 换图）且限频 ≥1s——不用 `WorldProjection::is_changed`
+    // （selection 写入也置真，O(格数) 的重算会被打成每帧 = 实机 1 FPS 根因）。
     if matches!(view.mode, crate::state::ViewMode::Topographic) && view.nature_overlay {
-        let map_changed =
-            candidate_cache.key.as_ref() != projection.world.maps.first().map(|m| &m.id);
-        if map_changed || projection.is_changed() {
-            let raster_to_map = grid_cfg.map_origin - grid_cfg.raster_origin;
-            let map = projection
-                .world
-                .maps
-                .first()
-                .map(|m| m.id.clone())
-                .unwrap_or_else(|| wv_core::Id::new_unchecked("root"));
-            candidate_cache.key = Some(map);
-            candidate_cache.outlines = crate::region_overlay::enumerate_candidates(
-                &projection.world,
-                candidate_cache.key.as_ref().unwrap(),
-                &grid_cfg,
-                raster_to_map,
-            );
+        let current = drill.current().cloned();
+        let stale = candidate_cache.last_epoch != candidate_cache.drawn_epoch;
+        let throttled = candidate_cache
+            .last_compute
+            .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(1));
+        let map_changed = candidate_cache.key.as_ref() != current.as_ref();
+        if (stale && !throttled) || map_changed {
+            if let Some(map) = current {
+                let raster_to_map = grid_cfg.map_origin - grid_cfg.raster_origin;
+                let t0 = std::time::Instant::now();
+                let result = crate::region_overlay::enumerate_candidates(
+                    &projection.world,
+                    &map,
+                    &grid_cfg,
+                    raster_to_map,
+                );
+                candidate_cache.key = Some(map);
+                candidate_cache.outlines = result.outlines;
+                candidate_cache.drawn_epoch = candidate_cache.last_epoch;
+                candidate_cache.last_compute = Some(t0);
+            }
         }
-        let gold = bevy::color::Color::srgba(0.85, 0.68, 0.15, 0.55);
-        for outline in &candidate_cache.outlines {
+
+        // 用户裁定（2026-10-22 验收）：候选高亮 = **白色虚线**，不用金色——
+        // 沙色地形上金色与地貌色混淆；白色虚线在任意群系色上都可辨。
+        let white = bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.9);
+        for outline in candidate_cache.outlines.iter() {
             for (a, b) in outline {
-                gizmos.line_2d(*a, *b, gold);
+                gizmos.line_2d(*a, *b, white);
+            }
+        }
+    }
+
+    // ── 选中区域的方格描边 + 顶点手柄（2026-10-22 验收 · 用户裁定）──────
+    // CellMap 专业数据编辑器：选中 Region ⇒ 沿格边的阶梯描边（白色实线）
+    // + 顶点手柄（方格锚点，拖动吸附格点）。与 nature_overlay 无关。
+    if let Some(sel) = projection.selection.as_ref() {
+        if sel.kind == wv_core::EntityKind::Region
+            && matches!(view.mode, crate::state::ViewMode::Topographic)
+        {
+            if let (Some(map), Some(terrain)) = (
+                drill.current().cloned(),
+                drill.current().and_then(|m| projection.world.terrain_of(m)),
+            ) {
+                draw_selected_region(
+                    &mut gizmos,
+                    &projection,
+                    &drill,
+                    &view,
+                    &grid_cfg,
+                    &region_adjust,
+                    terrain,
+                    &map,
+                );
+            }
+        }
+    }
+
+    /// 选中区域的方格描边 + 顶点手柄（2026-10-22 验收 · 用户裁定）。
+    ///
+    /// CellMap 专业数据编辑器：
+    /// - 选中 Region ⇒ 沿格边的阶梯描边（白色实线，直接贴格边、无平滑修饰）
+    /// - 顶点锚点（高亮红：十字准星 + 外圈；LOD——锚点数量由 zoom 决定，
+    ///   间距 = 24px 屏幕长的世界距离，zoom out 稀疏粗调 / zoom in 密集细调）
+    ///   与 nature_overlay 无关——选中即可见。
+    #[allow(clippy::too_many_arguments)]
+    fn draw_selected_region(
+        gizmos: &mut Gizmos,
+        projection: &WorldProjection,
+        drill: &crate::state::DrillState,
+        view: &ViewState,
+        grid_cfg: &GridConfig,
+        region_adjust: &crate::state::RegionAdjustState,
+        terrain: &wv_core::terrain::TerrainData,
+        map: &wv_core::Id,
+    ) {
+        // 只处理：选中 Region 实体 ∧ 当前图一致 ∧ Topographic。
+        let Some(sel) = projection.selection.as_ref() else {
+            return;
+        };
+        if sel.kind != wv_core::EntityKind::Region
+            || !matches!(view.mode, crate::state::ViewMode::Topographic)
+            || drill.current().as_ref() != Some(&map)
+        {
+            return;
+        }
+        let Some(region) = projection
+            .world
+            .regions
+            .iter()
+            .find(|r| r.id == sel.id && r.map == *map)
+            .filter(|r| r.polygon.len() >= 6)
+        else {
+            return;
+        };
+        let raster_to_map = grid_cfg.map_origin - grid_cfg.raster_origin;
+        // 拖动中显示预览多边形；未拖动显示落盘轮廓。
+        let poly = region_adjust
+            .preview_polygon
+            .clone()
+            .unwrap_or_else(|| region.polygon.clone());
+        let poly_pairs: Vec<(f32, f32)> = poly.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+        let cells = crate::cell_selection::rasterize_polygon_cells(
+            &poly_pairs,
+            raster_to_map,
+            grid_cfg,
+            terrain.width,
+            terrain.height,
+        );
+
+        // ── 方格描边：mask 内格与不在 mask 的 4 邻之间的边（白色实线贴格边）──
+        let mask: std::collections::HashSet<(i32, i32)> = cells.iter().copied().collect();
+        let cs = grid_cfg.cell_size;
+        let mut edges: Vec<(Vec2, Vec2)> = Vec::new();
+        for &(gx, gy) in &cells {
+            let x0 = grid_cfg.raster_origin.x + gx as f32 * cs;
+            let y0 = grid_cfg.raster_origin.y + gy as f32 * cs;
+            let x1 = x0 + cs;
+            let y1 = y0 + cs;
+            let c = (gx, gy);
+            if !mask.contains(&(c.0, c.1 - 1)) {
+                edges.push((Vec2::new(x0, y0), Vec2::new(x1, y0)));
+            }
+            if !mask.contains(&(c.0, c.1 + 1)) {
+                edges.push((Vec2::new(x0, y1), Vec2::new(x1, y1)));
+            }
+            if !mask.contains(&(c.0 - 1, c.1)) {
+                edges.push((Vec2::new(x0, y0), Vec2::new(x0, y1)));
+            }
+            if !mask.contains(&(c.0 + 1, c.1)) {
+                edges.push((Vec2::new(x1, y0), Vec2::new(x1, y1)));
+            }
+        }
+        let white = bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.95);
+        for (a, b) in &edges {
+            gizmos.line_2d(*a, *b, white);
+        }
+
+        // ── 顶点锚点（LOD，用户裁定：锚点数量由 zoom 决定）——物化多边形每个
+        // 阶梯角都有顶点，全画会重叠成一片白线（验收反馈：只见白线不见锚点）。
+        let spacing = crate::biome_boundary::anchor_spacing(view.scale, cs, 24.0);
+        let anchors = crate::biome_boundary::decimate_poly(&poly_pairs, spacing);
+        // 手柄视觉（用户裁定：十字准星 + 外圈 + 高亮红）：亮红圈 + 亮红十字，
+        // 尺寸按屏幕像素折算（×view.scale），任意缩放下恒定可辨。
+        let handle_px = (view.scale * 6.0).max(cs * 0.2);
+        let hot_red = bevy::color::Color::srgba(1.0, 0.15, 0.12, 1.0);
+        for a in &anchors {
+            // 多边形是**图内局部 wu**：世界位 = map_origin + 局部
+            //（此前误用 raster_origin——子图上手柄会偏移）。
+            let p = grid_cfg.map_origin + Vec2::new(a.0, a.1);
+            // 红圈（方框）。
+            gizmos.rect_2d(
+                bevy::math::Isometry2d::from_translation(p),
+                Vec2::splat(handle_px * 2.0),
+                hot_red,
+            );
+            // 红十字（横竖两线，臂长触及圈）。
+            gizmos.line_2d(p - Vec2::X * handle_px, p + Vec2::X * handle_px, hot_red);
+            gizmos.line_2d(p - Vec2::Y * handle_px, p + Vec2::Y * handle_px, hot_red);
+        }
+    }
+
+    // ── 候选态的锚点（2026-10-22 验收：候选不是 Region 实体，selection
+    // 里没有它——但作者点选候选后同样要能拉锚点调形状，物化时用编辑后的
+    // 多边形）。候选多边形：编辑中优先，否则按格派生。
+    if matches!(view.mode, crate::state::ViewMode::Topographic) {
+        if let (Some(cell), Some(map)) = (candidate_ctx.cell, drill.current().cloned()) {
+            let candidate_polygon = candidate_ctx.polygon.clone();
+            if projection.selection.is_none() {
+                if let Some(terrain) = projection.world.terrain_of(&map) {
+                    let raster_to_map = grid_cfg.map_origin - grid_cfg.raster_origin;
+                    let poly = candidate_polygon.clone().unwrap_or_else(|| {
+                        // 按格派生（与物化同源）：biome 连通区外环 × 格尺寸。
+                        let cells: Vec<wv_terrain::TerrainCell> = terrain
+                            .cells
+                            .iter()
+                            .map(|c| wv_terrain::TerrainCell {
+                                height: c.height,
+                                surface: c.surface,
+                                biome: c.biome,
+                            })
+                            .collect();
+                        wv_terrain::TerrainGrid::from_cells(terrain.width, terrain.height, cells)
+                            .and_then(|g| {
+                                wv_terrain::region::biome_region_at(&g, cell.0, cell.1 as i64)
+                            })
+                            .map(|r| {
+                                r.outer
+                                    .iter()
+                                    .flat_map(|&(x, y)| {
+                                        [
+                                            x * grid_cfg.cell_size + raster_to_map.x,
+                                            y * grid_cfg.cell_size + raster_to_map.y,
+                                        ]
+                                    })
+                                    .collect::<Vec<f32>>()
+                            })
+                            .unwrap_or_default()
+                    });
+                    if poly.len() >= 6 {
+                        let poly_pairs: Vec<(f32, f32)> =
+                            poly.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+                        let spacing = crate::biome_boundary::anchor_spacing(
+                            view.scale,
+                            grid_cfg.cell_size,
+                            24.0,
+                        );
+                        let anchors = crate::biome_boundary::decimate_poly(&poly_pairs, spacing);
+                        let handle_px = (view.scale * 6.0).max(grid_cfg.cell_size * 0.2);
+                        let hot_red = bevy::color::Color::srgba(1.0, 0.15, 0.12, 1.0);
+                        for a in &anchors {
+                            let p = grid_cfg.map_origin + Vec2::new(a.0, a.1);
+                            gizmos.rect_2d(
+                                bevy::math::Isometry2d::from_translation(p),
+                                Vec2::splat(handle_px * 2.0),
+                                hot_red,
+                            );
+                            gizmos.line_2d(
+                                p - Vec2::X * handle_px,
+                                p + Vec2::X * handle_px,
+                                hot_red,
+                            );
+                            gizmos.line_2d(
+                                p - Vec2::Y * handle_px,
+                                p + Vec2::Y * handle_px,
+                                hot_red,
+                            );
+                        }
+                    }
+                }
             }
         }
     }

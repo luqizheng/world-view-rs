@@ -167,7 +167,7 @@ impl Default for RenderRecipe {
 ///
 /// 行 = 模式，列序 = [`PassId::ALL`] 声明序。**每格以迁移前散点判定的实际行为
 /// 为准**（等价迁移，不借机改语义）：
-/// - Isoline 仅 VectorFlat（`isoline_overlay.rs` 原 gate：`mode != VectorFlat → despawn`）；
+/// - Isoline 仅 VectorFlat + Topographic（会话轴另由 `view.isolines` 单控）；
 /// - Buildings / Atmosphere / Veil / Grain 排除 GoogleMap | Coastline；
 /// - Faction 仅 Faction 模式；
 /// - FeatureOverlay 除 Coastline 外全开（主题地界覆盖层，轮廓图只留轮廓）。
@@ -268,7 +268,9 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
     // Topographic 分析视图（[ADR-0039]）：水/陆 + height 3 阶着色，关其它装饰族。
     // 仅 Terrain + Isoline + Rivers 留——
     //   • Terrain 是核心显示（用独立 `TopographicPalette`，不走 ThemePack core）
-    //   • Isoline 是分析视图默认（决策 7 子开关默认开）
+    //   • Isoline 是模式轴开档——**会话轴由 `view.isolines` 单控**（GridLines
+    //     同款「mode 表不关，会话开关单控」），2026-10-23 起默认关（ADR-0051
+    //     追记：等值线默认是修饰线，用户裁定要时再开）
     //   • Rivers 是水系边界（与水/陆判定直接相关）
     // DrillMarkers / BrushCursor / Measurement / FeatureOverlay / Decor 全关——
     // 分析视图不要任何交互叠加或美术装饰（决策 2）。
@@ -277,7 +279,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
     // 由 `sync_terrain_chunks` 的 match 分支实现。
     (ViewMode::Topographic, [
         true,  // Terrain（核心，水/陆 + 3 阶 height，topographic 分支）
-        true,  // Isoline（分析视图默认开）
+        true,  // Isoline（模式轴开档；会话轴 view.isolines 默认关——ADR-0051）
         false, // GridLines（分析视图不要编辑格）
         false, // MapFrame
         false, // Veil
@@ -634,9 +636,10 @@ mod tests {
         assert!(!r.enabled(PassId::Faction));
     }
 
-    /// Isoline 在 VectorFlat 与 Topographic 默认开（迁移前 `isoline_overlay`
-    /// 的原 gate 行为——`mode != VectorFlat → despawn`）；**Topographic
-    /// ([ADR-0039]) 也开** —— 等高线对分析视图是核心信息。
+    /// Isoline 在 VectorFlat 与 Topographic 开（模式轴——迁移前
+    /// `isoline_overlay` 的原 gate 行为加 ADR-0039 分析视图开档）。**会话轴
+    /// 不在本表**：`view.isolines` 旗标在等值线系统里单控（GridLines 同款），
+    /// 2026-10-23 起默认关（ADR-0051 追记）。
     /// 其余 6 模式一律关，防"顺手填 true"改变行为（本测试因第一次填错表而加）。
     #[test]
     fn isoline_draws_in_vector_flat_and_topographic_only() {

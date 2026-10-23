@@ -359,15 +359,10 @@ struct StrokeBatch {
 #[derive(Default)]
 struct LandmarkPool {
     batch: Option<StrokeBatch>,
-    /// Sprite 路径的实体池（PNG 加载成功后启用；长度 = 当前可见符号数）。
-    sprites: Vec<Entity>,
 }
 
 impl LandmarkPool {
     fn despawn(&mut self, commands: &mut Commands) {
-        for e in self.sprites.drain(..) {
-            commands.entity(e).despawn();
-        }
         if let Some(batch) = self.batch.take() {
             commands.entity(batch.entity).despawn();
             commands.queue(move |world: &mut World| {
@@ -418,9 +413,6 @@ pub struct VectorLayerEntities {
     landmarks: [LandmarkPool; 2],
     /// 地物符号材质（白色，顶点色承载全部颜色；惰性建一次防资产累积）。
     landmark_material: Option<Handle<ColorMaterial>>,
-    /// 地物符号 PNG（`symbols/*.png`，豆包生成手绘水彩）。`None` = 尚未发起加载。
-    /// 某类 PNG 加载完成后该类走 Sprite 路径，mesh 版自动退位（兜底保留）。
-    landmark_png: Option<[Handle<Image>; 2]>,
     /// POI 外环合批（非城市材质，ADR-0030 D4）。
     poi_ring_plain: PoiBatchPool,
     /// POI 外环合批（城市材质）。
@@ -448,7 +440,6 @@ pub fn sync_vector_layers(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    images: Res<Assets<Image>>,
     view: Res<ViewState>,
     grid: Res<GridConfig>,
     frame: Res<ProjectionFrame>,
@@ -458,6 +449,8 @@ pub fn sync_vector_layers(
     editor: Res<crate::streets::StreetEditorState>,
     mut layer: ResMut<VectorLayerEntities>,
 ) {
+    let __t = std::time::Instant::now();
+    let __t = std::time::Instant::now();
     let road_materials_changed = ensure_road_materials(
         &mut materials,
         view.mode,
@@ -532,7 +525,15 @@ pub fn sync_vector_layers(
         // 过统一门槛——Nation 档只画横贯级主河，Region 档加区域河，Edit 全见。
         if recipe.enabled(PassId::Rivers) && layers.terrain.visible {
             let mat = layer.river_material.get_or_insert_with(|| {
-                materials.add(ColorMaterial::from_color(Color::srgb(0.29, 0.53, 0.68)))
+                // 2026-10-22 验收：CellMap 用固定深青（数据视图，不随主题）；
+                // 其他模式沿用原水色。
+                materials.add(ColorMaterial::from_color(
+                    if matches!(view.mode, crate::state::ViewMode::Topographic) {
+                        Color::srgb(0.12, 0.32, 0.45)
+                    } else {
+                        Color::srgb(0.29, 0.53, 0.68)
+                    },
+                ))
             });
             let river_tier = lod_tier(view.scale);
             let mut river_segments: Vec<(Vec2, Vec2)> = Vec::new();
@@ -689,36 +690,40 @@ pub fn sync_vector_layers(
             place_z,
             &mut layer,
         );
+    }
 
-        // 地物符号（rank ≥ 2 程序化插画）。
-        // Gate：与 POI 同一图层（place）控制，recipe 路径放 MODE_TABLE 后续接。
-        if layers.place.visible {
-            let white = layer
-                .landmark_material
-                .get_or_insert_with(|| materials.add(ColorMaterial::from_color(Color::WHITE)))
-                .clone();
-            let VectorLayerEntities {
-                landmarks,
-                landmark_png,
-                ..
-            } = &mut *layer;
-            sync_landmarks(
-                &mut commands,
-                &mut meshes,
-                &images,
-                landmarks,
-                landmark_png,
-                &frame.landmark_dots,
-                view.scale,
-                crate::landmark_symbols::LANDMARK_Z + layers.place.z_offset,
-                white,
-            );
-        } else {
-            for p in &mut layer.landmarks {
-                p.despawn(&mut commands);
-            }
-            layer.landmark_material = None;
+    // 地物符号（rank ≥ 2）。2026-10-23 二轮裁定：map-pin **只用于 CellMap**
+    // （数据视图的地点标记，独立于 FeatureOverlay——Topographic 行该格是
+    // false，主题地界覆盖层不进 CellMap，pin 是唯一例外）；其余
+    // FeatureOverlay 开档模式照旧画城堡/小镇插画。place 图层关时都不画。
+    // 注意**不得**嵌进上面的 POI 门：Topographic 下 Poi=false，嵌进去 pin
+    // 永远画不出（首启实测 mesh_count=0 的根因）。
+    let landmarks_want = if view.mode == crate::state::ViewMode::Topographic {
+        layers.place.visible
+    } else {
+        layers.place.visible && recipe.enabled(PassId::FeatureOverlay)
+    };
+    if landmarks_want {
+        let white = layer
+            .landmark_material
+            .get_or_insert_with(|| materials.add(ColorMaterial::from_color(Color::WHITE)))
+            .clone();
+        let VectorLayerEntities { landmarks, .. } = &mut *layer;
+        sync_landmarks(
+            &mut commands,
+            &mut meshes,
+            landmarks,
+            &frame.landmark_dots,
+            view.mode == crate::state::ViewMode::Topographic,
+            view.scale,
+            crate::landmark_symbols::LANDMARK_Z + layers.place.z_offset,
+            white,
+        );
+    } else {
+        for p in &mut layer.landmarks {
+            p.despawn(&mut commands);
         }
+        layer.landmark_material = None;
     }
 }
 
@@ -1213,105 +1218,24 @@ fn sync_poi_batch(
 fn sync_landmarks(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    images: &Assets<Image>,
     landmark: &mut [LandmarkPool; 2],
-    png: &Option<[Handle<Image>; 2]>,
     frame_landmarks: &[crate::world_projection::LandmarkDot],
+    pin: bool,
     view_scale: f32,
     z: f32,
     material: Handle<ColorMaterial>,
 ) {
-    use crate::landmark_symbols::BASE_H_PX;
-    use crate::state::lod_tier;
     use crate::world_projection::LANDMARK_KINDS;
-    // 尺寸口径（ADR-0042 修正）：**屏幕像素恒定**，按 LOD 档微调——旧公式
-    // `BASE_H_PX * 0.04 * scale` 折算屏幕恒 1.04px，城堡图标从未真正显示过
-    //（实机截图确认）。参考图全球档城堡 ~30px；档位越近稍大（贴近
-    // Google Maps marker 的恒定手感）。
-    let side_px = match lod_tier(view_scale) {
-        crate::state::LodTier::Nation => BASE_H_PX,
-        crate::state::LodTier::Region => BASE_H_PX * 1.25,
-        crate::state::LodTier::Edit => BASE_H_PX * 1.5,
-    };
-    // 符号画布边长（世界单位）= 屏幕像素 × 每像素世界单位。
-    let side_wu = side_px * view_scale;
-
-    // PNG 句柄由 `ensure_landmark_png_loaded` 发起；`None`（测试夹具 / ensure
-    // 未注册）→ 走顶点色 mesh 兜底路径。
-    let Some(handles) = png.as_ref() else {
-        for (i, kind) in LANDMARK_KINDS.iter().copied().enumerate() {
-            sync_landmark_mesh_batches(
-                commands,
-                meshes,
-                &mut landmark[i],
-                frame_landmarks,
-                kind,
-                view_scale,
-                z,
-                material.clone(),
-            );
-        }
-        return;
-    };
-
+    // 形状分流（2026-10-23 二轮裁定）：CellMap 用 map-pin；其余模式画
+    // 城堡/小镇插画。PNG 贴图路径已退役，全部走顶点色 mesh。
     for (i, kind) in LANDMARK_KINDS.iter().copied().enumerate() {
-        let pool = &mut landmark[i];
-        let want: Vec<Vec2> = frame_landmarks
-            .iter()
-            .filter(|d| d.kind == kind)
-            .map(|d| d.pos)
-            .collect();
-
-        // PNG 已加载 → Sprite 路径（每符号一个实体，同纹理由渲染后端合批）。
-        if images.contains(&handles[i]) {
-            // mesh 兜底实体下线。
-            if let Some(batch) = pool.batch.take() {
-                commands.entity(batch.entity).despawn();
-                commands.queue(move |world: &mut World| {
-                    world.resource_mut::<Assets<Mesh>>().remove(&batch.mesh);
-                });
-            }
-            // 长度对齐：少的 spawn，多的 despawn。
-            while pool.sprites.len() > want.len() {
-                if let Some(e) = pool.sprites.pop() {
-                    commands.entity(e).despawn();
-                }
-            }
-            for (j, pos) in want.iter().enumerate() {
-                if j < pool.sprites.len() {
-                    commands.entity(pool.sprites[j]).insert((
-                        Sprite {
-                            image: handles[i].clone(),
-                            custom_size: Some(Vec2::splat(side_wu)),
-                            ..default()
-                        },
-                        bevy::sprite::Anchor::BOTTOM_CENTER,
-                        Transform::from_xyz(pos.x, pos.y, z),
-                    ));
-                } else {
-                    let e = commands
-                        .spawn((
-                            Sprite {
-                                image: handles[i].clone(),
-                                custom_size: Some(Vec2::splat(side_wu)),
-                                ..default()
-                            },
-                            bevy::sprite::Anchor::BOTTOM_CENTER,
-                            Transform::from_xyz(pos.x, pos.y, z),
-                        ))
-                        .id();
-                    pool.sprites.push(e);
-                }
-            }
-            continue;
-        }
-
         sync_landmark_mesh_batches(
             commands,
             meshes,
-            pool,
+            &mut landmark[i],
             frame_landmarks,
             kind,
+            pin,
             view_scale,
             z,
             material.clone(),
@@ -1319,7 +1243,7 @@ fn sync_landmarks(
     }
 }
 
-/// 单类符号的顶点色 mesh 兜底合批（从 sync_landmarks 拆出；PNG 未就绪时走此路）。
+/// 单类符号的顶点色 mesh 合批（从 sync_landmarks 拆出的唯一绘制路径）。
 #[allow(clippy::too_many_arguments)]
 fn sync_landmark_mesh_batches(
     commands: &mut Commands,
@@ -1327,28 +1251,33 @@ fn sync_landmark_mesh_batches(
     pool: &mut LandmarkPool,
     frame_landmarks: &[crate::world_projection::LandmarkDot],
     kind: crate::world_projection::LandmarkKind,
+    pin: bool,
     view_scale: f32,
     z: f32,
     material: Handle<ColorMaterial>,
 ) {
-    use crate::landmark_symbols::{build_landmark_mesh, LandmarkBatch, BASE_H_PX};
+    use crate::landmark_symbols::{build_landmark_mesh, LandmarkBatch};
     use crate::state::lod_tier;
-    for e in pool.sprites.drain(..) {
-        commands.entity(e).despawn();
-    }
-    // 尺寸口径与 Sprite 路径一致（ADR-0042）：屏幕像素恒定按档位微调。
-    let side_px = match lod_tier(view_scale) {
-        crate::state::LodTier::Nation => BASE_H_PX,
-        crate::state::LodTier::Region => BASE_H_PX * 1.25,
-        crate::state::LodTier::Edit => BASE_H_PX * 1.5,
+    // 尺寸口径：**屏幕像素恒定**，按 LOD 档微调（档位越近稍大，贴近
+    // Google Maps marker 的恒定手感）。符号局部坐标单位就是屏幕像素，
+    // 缩放系数只乘 `view_scale`——2026-10-23 实测教训：曾在本地坐标外
+    // 再乘一档画布基准（26），符号被放大 26 倍成盖住半个大陆的墨团。
+    let tier = match lod_tier(view_scale) {
+        crate::state::LodTier::Nation => 1.0,
+        crate::state::LodTier::Region => 1.25,
+        crate::state::LodTier::Edit => 1.5,
     };
+    let s = tier * view_scale;
     let mut batch = LandmarkBatch::new();
     for d in frame_landmarks {
         if d.kind == kind {
-            let s = side_px * view_scale;
-            match d.kind {
-                crate::world_projection::LandmarkKind::Citadel => batch.push_citadel(d.pos, s),
-                crate::world_projection::LandmarkKind::Town => batch.push_town(d.pos, s),
+            if pin {
+                batch.push_map_pin(d.pos, s);
+            } else {
+                match kind {
+                    crate::world_projection::LandmarkKind::Citadel => batch.push_citadel(d.pos, s),
+                    crate::world_projection::LandmarkKind::Town => batch.push_town(d.pos, s),
+                }
             }
         }
     }
@@ -1396,41 +1325,6 @@ fn sync_landmark_mesh_batches(
             }
             pool.batch = Some(existing);
         }
-    }
-}
-
-/// 地物符号 PNG（豆包手绘水彩，256² 透底）。编译期嵌入——与 ADR-0019 打包
-/// 字体同款纪律：Bevy 0.19 的 asset root 在 exe 旁 `target/debug/assets/`，
-/// 文件加载对「从任意目录启动」不可靠（P1 单机可运行优先），且测试夹具
-/// 无法构造 AssetServer。句柄由 [`ensure_landmark_png_loaded`] 首帧解码插入。
-pub const CITADEL_PNG: &[u8] = include_bytes!("../assets/symbols/citadel.png");
-pub const TOWN_PNG: &[u8] = include_bytes!("../assets/symbols/town.png");
-
-/// 解码嵌入 PNG → `Assets<Image>`（一次），句柄存入 `landmark_png`。
-///
-/// 与 [`sync_vector_layers`] 拆开：裸测试 World 不注册本 system →
-/// `landmark_png` 保持 `None` → 符号走 mesh 兜底，向量层测试无需图像资源。
-pub fn ensure_landmark_png_loaded(
-    mut images: ResMut<Assets<Image>>,
-    mut layer: ResMut<VectorLayerEntities>,
-) {
-    if layer.landmark_png.is_some() {
-        return;
-    }
-    let decode = |bytes: &[u8]| {
-        Image::from_buffer(
-            bytes,
-            bevy::image::ImageType::Extension("png"),
-            bevy::image::CompressedImageFormats::NONE,
-            true,
-            bevy::image::ImageSampler::Default,
-            bevy::asset::RenderAssetUsages::RENDER_WORLD
-                | bevy::asset::RenderAssetUsages::MAIN_WORLD,
-        )
-        .ok()
-    };
-    if let (Some(a), Some(t)) = (decode(CITADEL_PNG), decode(TOWN_PNG)) {
-        layer.landmark_png = Some([images.add(a), images.add(t)]);
     }
 }
 
@@ -1803,7 +1697,7 @@ mod tests {
         world.insert_resource(layers);
         world.insert_resource(recipe);
         world.insert_resource(GridConfig::default());
-        world.insert_resource(projection_frame_with_roads(
+        let mut frame = projection_frame_with_roads(
             vec![(3, Vec2::ZERO, Vec2::X * 100.0)],
             vec![PlaceDot {
                 pos: Vec2::new(20.0, 20.0),
@@ -1811,7 +1705,16 @@ mod tests {
                 rank: 3,
                 name_len: 3,
             }],
-        ));
+        );
+        // 地物符号给了数据：CellMap 里以 **map-pin** 形式在场（2026-10-23
+        // 二轮裁定：pin 只用于 CellMap），道路/街网/POI 仍不得产 mesh。
+        frame
+            .landmark_dots
+            .push(crate::world_projection::LandmarkDot {
+                pos: Vec2::new(30.0, 30.0),
+                kind: crate::world_projection::LandmarkKind::Citadel,
+            });
+        world.insert_resource(frame);
         // 街道缓存**有数据**——门控必须让它在 Topographic 下画不出来。
         world.insert_resource(crate::streets::StreetLayerCache {
             sources: vec![(
@@ -1837,8 +1740,8 @@ mod tests {
 
         let mesh_count = world.resource::<Assets<Mesh>>().iter().count();
         assert_eq!(
-            mesh_count, 0,
-            "Topographic 下道路/街网/POI 都不得产 mesh（内容层全隐藏）"
+            mesh_count, 1,
+            "Topographic 下道路/街网/POI 不得产 mesh；地物符号只留 1 个 map-pin 合批"
         );
     }
 

@@ -246,9 +246,11 @@ pub fn sync_isoline_overlay(
     recipe: Res<crate::recipe::RenderRecipe>,
     mut overlay: ResMut<IsolineOverlay>,
 ) {
-    // 只在 VectorFlat 浏览态存在（recipe 表：Isoline 仅 VectorFlat = true）；
+    // 模式轴：recipe 表（VectorFlat / Topographic 开档）；会话轴：`view.isolines`
+    // 旗标（map controls 瓷砖，GridLines 同款，2026-10-23 默认关——ADR-0051 追记）。
     // 关图层（YAML ∨ 会话，ADR-0013）/ 换模式即退场（键随之清零，重进重算）。
-    if !layers.terrain.visible || !recipe.enabled(crate::recipe::PassId::Isoline) {
+    if !layers.terrain.visible || !recipe.enabled(crate::recipe::PassId::Isoline) || !view.isolines
+    {
         overlay.despawn(&mut commands);
         return;
     }
@@ -404,7 +406,11 @@ pub fn sync_isoline_overlay(
     let pal = &view.active_theme.palette;
     let material = overlay
         .material
-        .get_or_insert_with(|| materials.add(ColorMaterial::from_color(pal.isoline_ink)))
+        .get_or_insert_with(|| {
+            materials.add(ColorMaterial::from_color(
+                view.active_theme.palette.isoline_ink,
+            ))
+        })
         .clone();
     // 材质跨重建复用（get_or_insert）：重算后也要按当前绑定刷新 alpha。
     apply_material_colors(&mut materials, &overlay, pal, layers.terrain.opacity);
@@ -497,9 +503,10 @@ fn apply_material_colors(
     pal: &crate::theme::palette::PaletteColors,
     opacity: f32,
 ) {
+    let ink = pal.isoline_ink;
     if let Some(handle) = &overlay.material {
         if let Some(mut mat) = materials.get_mut(handle) {
-            mat.color = pal.isoline_ink.with_alpha(ISOLINE_BASE_ALPHA * opacity);
+            mat.color = ink.with_alpha(ISOLINE_BASE_ALPHA * opacity);
         }
     }
     for (slot, alpha) in [
@@ -508,7 +515,7 @@ fn apply_material_colors(
     ] {
         if let Some((_, _, handle)) = slot {
             if let Some(mut mat) = materials.get_mut(handle) {
-                mat.color = pal.isoline_ink.with_alpha(alpha * opacity);
+                mat.color = ink.with_alpha(alpha * opacity);
             }
         }
     }

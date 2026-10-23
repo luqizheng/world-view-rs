@@ -71,6 +71,22 @@ pub fn materialize_nature_region_now(
     cell_size: f32,
     offset: (f32, f32),
 ) -> Result<Id, String> {
+    materialize_with_polygon(world, edit, view, name, cell, cell_size, offset, None)
+}
+
+/// 同 [`materialize_nature_region_now`]，但可带**作者编辑过的多边形**
+/// （候选态拖锚点后物化用；`None` = 按格重新派生）。
+#[allow(clippy::too_many_arguments)]
+pub fn materialize_with_polygon(
+    world: &mut WorldProjection,
+    edit: &mut EditHistory,
+    view: &ViewState,
+    name: String,
+    cell: (i32, i32),
+    cell_size: f32,
+    offset: (f32, f32),
+    edited_polygon: Option<Vec<f32>>,
+) -> Result<Id, String> {
     if cell_size <= 0.0 || !cell_size.is_finite() {
         return Err("格尺寸必须为正".into());
     }
@@ -95,11 +111,14 @@ pub fn materialize_nature_region_now(
 
     // 格坐标 → 图内局部 wu（**加回**两套原点的差：区域多边形是图内局部 wu，
     // 而格子属于栅格所在的图——子图上两者不是同一坐标系）。
-    let polygon = region
-        .outer
-        .iter()
-        .flat_map(|&(x, y)| [x * cell_size + offset.0, y * cell_size + offset.1])
-        .collect();
+    // 作者拖过锚点 ⇒ 用编辑后的多边形（候选态调整形状）；否则按格派生。
+    let polygon: Vec<f32> = edited_polygon.unwrap_or_else(|| {
+        region
+            .outer
+            .iter()
+            .flat_map(|&(x, y)| [x * cell_size + offset.0, y * cell_size + offset.1])
+            .collect()
+    });
     let holes: Vec<Vec<f32>> = region
         .holes
         .iter()
@@ -328,6 +347,49 @@ pub fn pick_candidate_on_click(
         return;
     };
     nature.pending_candidate = candidate_at(&projection, map, (gx, gy)).map(|_| (gx, gy));
+}
+
+/// 候选过期的编辑信号（2026-10-22 内容矩阵）：把 `EditHistory` 的形状
+/// （undo/redo 栈长 + 顶 seq + 脏标记）折成一个 epoch 写进候选缓存——
+/// **渲染层不得依赖 wv-edit/wv-app 类型**（分层红线），故信号由本系统
+/// app 侧派生后写入 wv-render 的缓存资源。任一提交/撤销/重做都会翻转。
+pub fn sync_candidate_invalidation(
+    edit: Res<crate::edit::editing::EditHistory>,
+    projection: Res<crate::state::WorldProjection>,
+    mut cache: ResMut<wv_render::region_overlay::CandidateOverlayCache>,
+) {
+    let h = &edit.history;
+    let epoch = {
+        // FNV-1a 简易混合（形状元组 → u64）；避免引额外依赖。
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for v in [
+            projection.dirty as u64,
+            h.len() as u64,
+            h.can_redo() as u64,
+            h.undo_top_seq().unwrap_or(u64::MAX),
+            h.redo_top_seq().unwrap_or(u64::MAX),
+        ] {
+            hash ^= v;
+            hash = hash.wrapping_mul(0x1000_0000_01b3);
+        }
+        hash
+    };
+    cache.last_epoch = epoch;
+}
+
+/// 候选上下文同步（2026-10-22 验收）：把 app 侧 `NatureRegionUiState` 的候选格
+/// 与编辑中多边形镜像到渲染层（渲染不依赖 wv-app 类型）。
+pub fn sync_candidate_context(
+    nature: Res<crate::state::NatureRegionUiState>,
+    mut ctx: ResMut<wv_render::state::RegionCandidateContext>,
+) {
+    if !nature.is_changed() {
+        return;
+    }
+    *ctx = wv_render::state::RegionCandidateContext {
+        cell: nature.pending_candidate,
+        polygon: nature.candidate_polygon.clone(),
+    };
 }
 
 #[cfg(test)]

@@ -1,23 +1,25 @@
-//! 地物符号（Landmark symbols）——世界地图上的城市/城镇插画符号。
+//! 地物符号（Landmark symbols）——世界地图上的地点标记。
 //!
-//! ## 职责
-//! 世界地图档把 rank ≥ 2 的地点从「圆点 + 外环」升级为**程序化多边形符号**：
-//! - `Citadel`（rank 3 国家级）：石墙 + 双塔 + 红旗 + 底部投影；
-//! - `Town`（rank 2 市镇级）：两间错落小屋 + 投影。
+//! ## 职责（2026-10-23 三轮裁定）
+//! 按**模式分流**：
+//! - **CellMap（Topographic）**：`push_map_pin`——经典 map-pin（圆头 + 尖尾 +
+//!   白芯，Lucide `map-pin` 实心化），数据视图的地点标记；**只用于此模式**；
+//! - **其余模式（Browse 等）**：`push_citadel` / `push_town`——城堡/小镇
+//!   程序化插画，照旧。
 //!
 //! ## 渲染口径
 //! - **顶点色 mesh 单批**：Bevy `Mesh2d` 支持 `ATTRIBUTE_COLOR`，配白色
 //!   `ColorMaterial` 即顶点色渲染——全部符号合一个 mesh + 一个实体，
 //!   与地形装饰（ADR-0031 D4）同款「原地改写」纪律。
 //! - 符号尺寸 = 屏幕像素 × `view.scale`（缩放时整组换 mesh，与 decor 的
-//!   `size_q` 同口径）。
-//! - 绘制函数（`push_citadel` / `push_town`）**独立于渲染系统**——未来换成
-//!   sprite 资产（ART_STYLE_SPEC §3.4 的 11 类符号）时逐符号替换，接线不动。
+//!   `size_q` 同口径）。**局部坐标单位就是屏幕像素**（符号高约 22–24），
+//!   缩放系数只传 `view_scale`——多乘一档画布基准会把符号放大 26 倍
+//!   （2026-10-23 实测教训：Browse 出现盖住半个大陆的巨型墨团）。
 //!
 //! ## 边界（不做什么）
 //! - **不动 POI 圆点路径**：rank < 2 的普通地点（路网交点、村庄）仍是
 //!   圆点 + 外环（`sync_poi`）——编辑态需要精确点选，圆点是工具语义。
-//! - **不做主题化**：v1 常量色（同 decor 的 ink 常量先例），主题演绎规则
+//! - **不做主题化**：常量色（同 decor 的 ink 常量先例），主题演绎规则
 //!   随 README §12-30（ThemePack M3）后继。
 //! - **不做选中态**：选中高亮走既有 POI/Inspector 路径，符号层只管「画」。
 
@@ -30,8 +32,6 @@ use bevy::render::mesh::{Indices, Mesh, MeshVertexAttribute, VertexFormat};
 /// 符号 Z：POI 内芯（0.22）之上、标注（0.4）之下——地物是「世界的景物」，
 /// 压过点标；标签永远最后（在符号之上可读）。
 pub const LANDMARK_Z: f32 = 0.24;
-/// 符号基准高度（屏幕像素，Citadel 全高；Town 约 0.7×）。
-pub const BASE_H_PX: f32 = 26.0;
 
 /// 一个符号种类的绘制参数。`push_*` 系列函数向共享顶点缓冲追加三角形。
 pub struct LandmarkBatch {
@@ -70,6 +70,38 @@ impl LandmarkBatch {
         let (x0, y0, x1, y1) = (x, y, x + w, y + h);
         self.tri([x0, y0], [x1, y0], [x1, y1], rgba, o, s);
         self.tri([x0, y0], [x1, y1], [x0, y1], rgba, o, s);
+    }
+
+    /// 实心圆（扇形三角逼近，`seg` 段）。
+    #[allow(clippy::too_many_arguments)]
+    fn circle(&mut self, cx: f32, cy: f32, r: f32, seg: usize, rgba: [f32; 4], o: Vec2, s: f32) {
+        let tau = std::f32::consts::TAU;
+        for i in 0..seg {
+            let a0 = i as f32 * tau / seg as f32;
+            let a1 = (i + 1) as f32 * tau / seg as f32;
+            self.tri(
+                [cx, cy],
+                [cx + r * a0.cos(), cy + r * a0.sin()],
+                [cx + r * a1.cos(), cy + r * a1.sin()],
+                rgba,
+                o,
+                s,
+            );
+        }
+    }
+
+    /// 经典 map-pin（Lucide `map-pin` 的实心化）：圆头 + 尖尾 + 白芯。
+    ///
+    /// 局部坐标：原点 = 锚点（Place 的 x/y）= pin 底尖，符号向上生长（y+）。
+    /// 两种 `LandmarkKind` 共用同一形状——等级语义由标签层承担，符号层不画。
+    pub fn push_map_pin(&mut self, o: Vec2, s: f32) {
+        let body = [0.16, 0.18, 0.22, 1.0]; // 深墨针体
+        let hole = [1.0, 1.0, 1.0, 1.0]; // 白芯（map-pin 内圆）
+                                         // 尾：圆底两侧收到底尖（上边 y=11 藏进头圆内，衔接无接缝）。
+        self.tri([-5.6, 11.0], [5.6, 11.0], [0.0, 0.0], body, o, s);
+        // 头圆 r=7.5 圆心 (0,15) → 总高 22.5；白芯 r=3。
+        self.circle(0.0, 15.0, 7.5, 24, body, o, s);
+        self.circle(0.0, 15.0, 3.0, 16, hole, o, s);
     }
 
     /// Citadel（rank 3）：石墙 + 双塔 + 红旗 + 底部投影。
@@ -159,22 +191,24 @@ pub fn build_landmark_mesh(b: LandmarkBatch) -> Option<Mesh> {
 mod tests {
     use super::*;
 
-    /// Citadel / Town 都产出非空几何，且顶点色通道与位置等长。
+    /// 三种符号都产出非空几何，且顶点色通道与位置等长、索引不越界。
     #[test]
     fn landmark_batches_produce_colored_geometry() {
-        let mut a = LandmarkBatch::new();
-        a.push_citadel(Vec2::ZERO, 1.0);
-        assert!(!a.is_empty());
-        assert_eq!(a.verts.len(), a.colors.len());
-        assert!(a.indices.len().is_multiple_of(3), "索引必须是三角形倍数");
-        // 索引不越界。
-        assert!(a.indices.iter().all(|&i| (i as usize) < a.verts.len()));
-
-        let mut b = LandmarkBatch::new();
-        b.push_town(Vec2::ZERO, 1.0);
-        assert!(!b.is_empty());
-        assert_eq!(b.verts.len(), b.colors.len());
-        assert!(b.indices.iter().all(|&i| (i as usize) < b.verts.len()));
+        let mut pin = LandmarkBatch::new();
+        pin.push_map_pin(Vec2::ZERO, 1.0);
+        let mut cit = LandmarkBatch::new();
+        cit.push_citadel(Vec2::ZERO, 1.0);
+        let mut town = LandmarkBatch::new();
+        town.push_town(Vec2::ZERO, 1.0);
+        for (name, b) in [("pin", pin), ("citadel", cit), ("town", town)] {
+            assert!(!b.is_empty(), "{name} 应有几何");
+            assert_eq!(b.verts.len(), b.colors.len(), "{name} 顶点色应与位置等长");
+            assert!(
+                b.indices.len().is_multiple_of(3),
+                "{name} 索引必须是三角形倍数"
+            );
+            assert!(b.indices.iter().all(|&i| (i as usize) < b.verts.len()));
+        }
     }
 
     /// 空 batch 不产 mesh（空 mesh 禁律）。
@@ -183,17 +217,26 @@ mod tests {
         assert!(build_landmark_mesh(LandmarkBatch::new()).is_none());
     }
 
-    /// 符号向上生长：全部顶点 y >= -3（投影允许微沉），主体在 0 以上。
+    /// 符号向上生长：pin 底尖贴锚点，头圆在锚点上方。
     #[test]
     fn symbols_grow_upward_from_anchor() {
         let mut b = LandmarkBatch::new();
-        b.push_citadel(Vec2::ZERO, 1.0);
-        let n_cit = b.verts.len();
-        b.push_town(Vec2::new(100.0, 50.0), 1.0);
-        let cit_top = b.verts[..n_cit]
-            .iter()
-            .map(|v| v[1])
-            .fold(f32::MIN, f32::max);
-        assert!(cit_top > 18.0, "城堡塔尖应在锚点上方，得 {cit_top}");
+        b.push_map_pin(Vec2::ZERO, 1.0);
+        let top = b.verts.iter().map(|v| v[1]).fold(f32::MIN, f32::max);
+        let bottom = b.verts.iter().map(|v| v[1]).fold(f32::MAX, f32::min);
+        assert!(top > 18.0, "pin 头顶应在锚点上方，得 {top}");
+        assert!(bottom >= -0.5, "pin 底尖应贴锚点（y≈0），得 {bottom}");
+    }
+
+    /// 缩放生效：s=2 时几何整体放大（顶点坐标随之翻倍）。
+    #[test]
+    fn pin_scales_with_symbol_scale() {
+        let mut b = LandmarkBatch::new();
+        b.push_map_pin(Vec2::new(100.0, 50.0), 2.0);
+        let top = b.verts.iter().map(|v| v[1]).fold(f32::MIN, f32::max);
+        assert!(
+            (top - (50.0 + 22.5 * 2.0)).abs() < 0.1,
+            "头顶应到锚点+45，得 {top}"
+        );
     }
 }
