@@ -446,3 +446,10 @@
 - **定义**：CellMap 的群系编辑工具——一条可拖动的线段，两侧各绑一个群系；拖动推移分界，扫过格中「退让侧」群系改为「推进侧」（第三种群系不动）。线是会话工具不落盘；一次拖动 = 1 条 `BatchEditCellsCommand`；落盘真相仍是 cell.biome（P3/P7），区域轮廓继续由连通性派生。
 - **首次出现**：2026-10-22 三模式内容矩阵设计（ADR-0051 §2.7）
 - **所属维度**：编辑（地形）
+
+## 地图工作台 crate 族（Map Workbench Crate Family）
+
+- **英文名**：Map Workbench Crate Family（`wv-world-cell-map` / `wv-city-map` / `wv-building-map`）
+- **定义**：按地图层级划分的编辑工作台 crate 族——每层一个（世界级 = 栅格笔刷地形编辑、城市级 = 矢量绘制、建筑级 = 平面布局），编辑形态各异故各自独立 crate；统一口径：固定色（零 theme 依赖）、bevy 非 optional、禁反向依赖 wv-render。浏览 / 呈现居中留在 wv-render，工作台只管本层编辑；族成员立项各自开 ADR，第二块出现前不建共享基座。
+- **首次出现**：2026-10-23 wv-world-cell-map 抽取评审（ADR-0054 提议态）
+- **所属维度**：架构（分层）/ 编辑

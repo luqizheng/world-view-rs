@@ -11,13 +11,11 @@
 //! - **不直接读盘**——`World.terrain_of(map)` 由 `wv-core` 提供。
 //! - **不画到屏幕**。
 
-#![cfg(feature = "app")]
-
 use bevy::prelude::*;
 
 use wv_core::terrain::TerrainData;
 
-use crate::state::ViewMode;
+use crate::shade::ShadeMode;
 
 use super::terrain_texture::TerrainTexture;
 
@@ -53,7 +51,7 @@ pub fn replace_terrain_texture(
     image: Image,
     data: &TerrainData,
     map: Option<wv_core::Id>,
-    mode: ViewMode,
+    mode: ShadeMode,
     soften: bool,
     theme_id: &'static str,
 ) {
@@ -179,7 +177,7 @@ pub fn force_rebuild(tex: &mut TerrainTexture) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::ViewMode;
+    use crate::shade::ShadeMode;
 
     /// 复位三个「已知」字段 → `rebuild_texture_on_mode_change` 必走全图重建路径。
     #[test]
@@ -191,9 +189,9 @@ mod tests {
             res: 4,
             dirty: None,
             chunks_dirty: None,
-            last_mode: Some(ViewMode::VectorFlat),
+            last_mode: Some(ShadeMode::VectorFlat),
             last_soften: true,
-            last_theme_id: crate::theme::theme_pack::builtin::DEFAULT.id,
+            last_theme_id: "fixture",
             last_map: Some(wv_core::Id::new_unchecked("map_x")),
         };
         force_rebuild(&mut tex);

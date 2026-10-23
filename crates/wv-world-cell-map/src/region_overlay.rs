@@ -22,133 +22,45 @@
 //! - **不写世界**：纯渲染投影（P7，AGENTS §3）。
 //! - **不依赖作者 z 偏移**：缺失标记属底图族（Z 0.078），随 `terrain` 层显隐。
 
-#![cfg(feature = "app")]
-
 use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
+use crate::state::GridConfig;
 use wv_core::model::region::Region;
 use wv_core::Id;
-use wv_theme::overlays::RegionOverlayRule;
-use wv_theme::theme_pack::ThemePack;
 
-use crate::faction_overlays::earcut_with_holes;
-use crate::layer_frame::LayerFrame;
-use crate::recipe::RenderRecipe;
-use crate::state::{DrillState, GridConfig, ViewState, WorldProjection};
-
-/// 区域层在本帧是否可见（2026-10-22 内容矩阵 §2.6 的唯一判定入口）。
-///
-/// - **CellMap（Topographic）**：只看 `nature_overlay` 开关，且**仅 Nature 类**
-///   放行（Area 区属内容，CellMap 永远藏）；recipe 格（false）被旁路。
-/// - **其他模式**：走 recipe（RegionLayers 行）∧ 图层。
-///   Schematic 行=false ⇒ 编辑态区域消失（用户裁定：区域有时间性）。
-pub(crate) fn region_layer_visible(
-    mode: crate::state::ViewMode,
-    nature_overlay: bool,
-    kind: wv_core::model::region::RegionKind,
-    recipe_enabled: bool,
-    layer_visible: bool,
-) -> bool {
-    use crate::state::ViewMode;
-    use wv_core::model::region::RegionKind;
-    if !layer_visible {
-        return false;
-    }
-    if matches!(mode, ViewMode::Topographic) {
-        return nature_overlay && matches!(kind, RegionKind::Nature);
-    }
-    recipe_enabled
+/// 覆盖物规则镜像（wv-theme `overlays::RegionOverlayRule`，字段 1:1；
+/// ADR-0054 D4：规则也是数据，CellMap 域自持平面拷贝）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RegionOverlayRule {
+    pub variant: &'static str,
+    pub color: [u8; 3],
+    pub alpha: Option<f32>,
+    pub size_scale: f32,
+    pub spacing_scale: f32,
 }
 
-#[cfg(test)]
-mod visibility_tests {
-    use super::*;
-    use crate::state::ViewMode;
-    use wv_core::model::region::RegionKind;
+/// 规则表镜像（`Vec` 持有；键保持 `&'static str`——它们是主题定义里的字面量）。
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RegionOverlaySet {
+    pub rules: Vec<(&'static str, RegionOverlayRule)>,
+}
 
-    #[test]
-    fn region_layer_in_cellmap_shows_nature_only_when_overlay_on() {
-        let kinds = [RegionKind::Nature, RegionKind::Area];
-        // 开关开：Nature ✓、Area ✗
-        assert!(region_layer_visible(
-            ViewMode::Topographic,
-            true,
-            kinds[0],
-            false,
-            true
-        ));
-        assert!(!region_layer_visible(
-            ViewMode::Topographic,
-            true,
-            kinds[1],
-            false,
-            true
-        ));
-        // 开关关：全隐（recipe 格本就 false）
-        assert!(!region_layer_visible(
-            ViewMode::Topographic,
-            false,
-            kinds[0],
-            false,
-            true
-        ));
-    }
-
-    #[test]
-    fn region_layer_outside_cellmap_follows_recipe() {
-        let nature = RegionKind::Nature;
-        assert!(region_layer_visible(
-            ViewMode::VectorFlat,
-            false,
-            nature,
-            true,
-            true
-        ));
-        assert!(!region_layer_visible(
-            ViewMode::VectorFlat,
-            false,
-            nature,
-            false,
-            true
-        ));
-        // Schematic：recipe 格=false ⇒ 无论开关都藏（开关只在 CellMap 有意义）
-        assert!(!region_layer_visible(
-            ViewMode::Schematic,
-            true,
-            nature,
-            false,
-            true
-        ));
-    }
-
-    #[test]
-    fn region_layer_respects_layer_visibility_everywhere() {
-        assert!(!region_layer_visible(
-            ViewMode::VectorFlat,
-            false,
-            RegionKind::Nature,
-            true,
-            false
-        ));
-        assert!(!region_layer_visible(
-            ViewMode::Topographic,
-            true,
-            RegionKind::Nature,
-            false,
-            false
-        ));
+impl RegionOverlaySet {
+    /// 当前主题没有某键时返回 `None`——渲染侧画缺失覆盖物标记，
+    /// 不静默回退（wv-theme 源型同语义，ADR-0045 追记一）。
+    pub fn rule_for(&self, key: &str) -> Option<&RegionOverlayRule> {
+        self.rules.iter().find(|(k, _)| *k == key).map(|(_, r)| r)
     }
 }
-use crate::theme::palette::MapPalette;
 
 /// 缺失覆盖物标记的 Z：地形装饰（0.075）之上、道路（0.09）之下——属底图族，
 /// 不压过 POI 与标注（ADR-0045 追记一）。
 pub const MISSING_MARKER_Z: f32 = 0.078;
 
 /// 斜纹的世界周期（wu）：贴图按世界空间 UV 平铺，条纹粗细随缩放变化。
-const HATCH_PERIOD_WU: f32 = 24.0;
+pub const HATCH_PERIOD_WU: f32 = 24.0;
 
 /// 缺失标记的固定诊断红（**不随主题色板**——古舆图等主题的土红系会与斜线
 /// 混成"装饰"，问题就隐形了；ADR-0045 追记一）。
@@ -197,7 +109,7 @@ pub struct RegionOverlayIndex {
     /// 缓存键：当前图 id（换图即重算）。
     pub map_id: Option<String>,
     /// 缓存键：主题（换主题即重算——**键存在性**变了，缺失标记随之增减）。
-    pub theme_palette: MapPalette,
+    pub theme_palette: &'static str,
 }
 
 impl RegionOverlayIndex {
@@ -232,7 +144,7 @@ pub fn build_index(
     cell_size: f32,
     grid_w: u32,
     grid_h: u32,
-    theme: &ThemePack,
+    overlay_rules: &RegionOverlaySet,
     raster_to_map: Vec2,
 ) -> RegionOverlayIndex {
     let mut index = RegionOverlayIndex::default();
@@ -257,7 +169,7 @@ pub fn build_index(
         let Some(key) = region.declared_overlay() else {
             continue;
         };
-        let rule = theme.region_overlays.rule_for(key).copied();
+        let rule = overlay_rules.rule_for(key).copied();
         let mask = region_mask(region, cell_size, grid_w, grid_h, raster_to_map);
         if mask.is_empty() {
             continue;
@@ -392,53 +304,9 @@ fn mask_to_shape(
 // 渲染系统
 // ---------------------------------------------------------------------------
 
-/// 求值区域覆盖物索引（每帧检查变更，变了才重算）。
-///
-/// **重算条件**：世界变更 / 钻取换图 / 栅格换图 / 主题切换。
-/// 纯相机运动**零工作**（同路网缓存纪律）。
-pub fn sync_region_overlay_index(
-    projection: Res<WorldProjection>,
-    drill: Res<DrillState>,
-    grid: Res<GridConfig>,
-    view: Res<ViewState>,
-    mut index: ResMut<RegionOverlayIndex>,
-) {
-    let map_id = drill.current().cloned();
-    let theme = view.active_theme;
-    let (Some(map_id), Some((w, h))) = (map_id, terrain_dims(&projection.world, &drill)) else {
-        index.entries.clear();
-        index.cell_owner.clear();
-        index.missing_cells.clear();
-        index.missing_shapes.clear();
-        return;
-    };
-    let stale = projection.is_changed()
-        || drill.is_changed()
-        || grid.is_changed()
-        || view.map_palette != index.theme_palette
-        || index.map_id.as_deref() != Some(map_id.as_str());
-    if !stale {
-        return;
-    }
-    // 两套原点的差：区域多边形是**图内局部 wu**，地形格属于**栅格所在的图**
-    // （子图上不是同一张图）——换算必须带这个偏移。
-    let raster_to_map = grid.map_origin - grid.raster_origin;
-    *index = build_index(
-        &projection.world.regions,
-        &map_id,
-        grid.cell_size,
-        w,
-        h,
-        theme,
-        raster_to_map,
-    );
-    index.map_id = Some(map_id.as_str().to_string());
-    index.theme_palette = view.map_palette;
-}
-
 /// 活动地形栅格的尺寸（当前图的栅格；无则回退根图）。
-fn terrain_dims(world: &wv_core::World, drill: &DrillState) -> Option<(u32, u32)> {
-    let map_id = drill.current()?;
+pub fn terrain_dims(world: &wv_core::World, current: Option<&wv_core::Id>) -> Option<(u32, u32)> {
+    let map_id = current?;
     crate::terrain_view::terrain_resolve::active_terrain(world, Some(map_id))
         .map(|(_, data)| (data.width, data.height))
 }
@@ -456,87 +324,8 @@ pub struct MissingMarkerAssets {
     pub fingerprint: u64,
 }
 
-/// 缺失覆盖物标记系统：白底红斜线**接管**该区域。
-///
-/// - **三档 LOD 全画**（不可被降档隐藏：装饰在 Nation 档本就不画，缺失标记
-///   若跟着降档，作者切到全局视图反而在最需要发现时看不到）；
-/// - **固定诊断色**（不随主题色板）；
-/// - 绘制在装饰（0.075）之上、道路（0.09）之下；
-/// - 底层装饰符号在该区域**跳过**（白底接管，见 `RegionOverlayIndex::is_missing_cell`）。
-#[allow(clippy::too_many_arguments)]
-pub fn sync_missing_overlay_markers(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    mut images: ResMut<Assets<Image>>,
-    index: Res<RegionOverlayIndex>,
-    grid: Res<GridConfig>,
-    view: Res<ViewState>,
-    recipe: Res<RenderRecipe>,
-    layers: Res<LayerFrame>,
-    mut assets: ResMut<MissingMarkerAssets>,
-) {
-    // 2026-10-22 内容矩阵：区域层从 TerrainDecor 拆到独立 pass（ADR-0051）。
-    // CellMap（Topographic）：nature_overlay 放行 Nature 类（判定入口唯一）。
-    let enabled = crate::region_overlay::region_layer_visible(
-        view.mode,
-        view.nature_overlay,
-        wv_core::model::region::RegionKind::Nature,
-        recipe.enabled(crate::recipe::PassId::RegionLayers),
-        layers.terrain.visible,
-    );
-    if !enabled || index.missing_shapes.is_empty() {
-        for e in assets.entities.drain(..) {
-            commands.entity(e).despawn();
-        }
-        assets.fingerprint = 0;
-        return;
-    }
-    // 指纹：形状内容不变则不重建（相机平移零工作）。
-    let fp = shapes_fingerprint(&index.missing_shapes);
-    if fp == assets.fingerprint && !assets.entities.is_empty() {
-        return;
-    }
-    for e in assets.entities.drain(..) {
-        commands.entity(e).despawn();
-    }
-    assets.fingerprint = fp;
-
-    // 斜纹贴图 + 材质（一次）。
-    if assets.texture.is_none() {
-        assets.texture = Some(hatch_texture(&mut images));
-    }
-    let texture = assets.texture.clone().expect("刚建");
-    if assets.material.is_none() {
-        // Bevy 0.19：ColorMaterial 无 `from_texture`，直接构造（贴图 + 全白染色）。
-        let mat = ColorMaterial {
-            color: Color::WHITE,
-            alpha_mode: bevy::sprite_render::AlphaMode2d::Blend,
-            uv_transform: bevy::math::Affine2::default(),
-            texture: Some(texture.clone()),
-        };
-        assets.material = Some(materials.add(mat));
-    }
-    let material = assets.material.clone().expect("刚建");
-
-    let map_origin = Vec3::new(grid.map_origin.x, grid.map_origin.y, 0.0);
-    for shape in &index.missing_shapes {
-        if shape.outer.len() < 6 {
-            continue;
-        }
-        let hole_refs: Vec<&[f32]> = shape.holes.iter().map(|h| h.as_slice()).collect();
-        let mesh = build_hatch_mesh(&shape.outer, &hole_refs, HATCH_PERIOD_WU);
-        let entity = commands.spawn((
-            Mesh2d(meshes.add(mesh)),
-            MeshMaterial2d(material.clone()),
-            Transform::from_translation(map_origin + Vec3::Z * MISSING_MARKER_Z),
-        ));
-        assets.entities.push(entity.id());
-    }
-}
-
 /// 形状指纹（内容变没变）。
-fn shapes_fingerprint(shapes: &[MissingShape]) -> u64 {
+pub fn shapes_fingerprint(shapes: &[MissingShape]) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for s in shapes {
         for v in s.outer.iter().map(|f| f.to_bits()) {
@@ -554,7 +343,7 @@ fn shapes_fingerprint(shapes: &[MissingShape]) -> u64 {
 }
 
 /// 白底红斜线贴图（**repeat 采样**——否则边缘拉伸成糊条）。
-fn hatch_texture(images: &mut Assets<Image>) -> Handle<Image> {
+pub fn hatch_texture(images: &mut Assets<Image>) -> Handle<Image> {
     const SIZE: u32 = 32;
     const STRIPE: u32 = 4; // 4 像素一条 → 32px 贴图内 4 个斜纹周期
     let mut data = vec![0u8; (SIZE * SIZE * 4) as usize];
@@ -596,7 +385,7 @@ fn hatch_texture(images: &mut Assets<Image>) -> Handle<Image> {
 
 /// 斜纹 mesh：**世界空间 UV**（静态 mesh，不逐帧重建——ADR-0030 的
 /// "每帧重建 mesh = 资产泄漏"教训）。
-fn build_hatch_mesh(outer: &[f32], holes: &[&[f32]], period: f32) -> Mesh {
+pub fn build_hatch_mesh(outer: &[f32], holes: &[&[f32]], period: f32) -> Mesh {
     let tris = earcut_with_holes(outer, holes);
     let positions: Vec<[f32; 3]> = tris.iter().map(|p| [p[0], p[1], 0.0]).collect();
     let uvs: Vec<[f32; 2]> = tris
@@ -617,7 +406,7 @@ fn build_hatch_mesh(outer: &[f32], holes: &[&[f32]], period: f32) -> Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::theme_pack::builtin;
+    use super::{RegionOverlayRule, RegionOverlaySet};
     use wv_core::model::region::RegionKind;
 
     fn nature(id: &str, name: &str, polygon: Vec<f32>, overlay: Option<&str>) -> Region {
@@ -638,14 +427,41 @@ mod tests {
     }
 
     /// 单元尺寸 = 1 wu → wu 坐标即格坐标（简化断言）。
-    fn build(regions: &[Region], theme: &ThemePack) -> RegionOverlayIndex {
-        build_with_offset(regions, theme, Vec2::ZERO)
+    fn test_rules() -> RegionOverlaySet {
+        RegionOverlaySet {
+            rules: vec![
+                (
+                    "conifer",
+                    RegionOverlayRule {
+                        variant: "conifer",
+                        color: [90, 120, 60],
+                        alpha: None,
+                        size_scale: 1.0,
+                        spacing_scale: 1.0,
+                    },
+                ),
+                (
+                    "broadleaf",
+                    RegionOverlayRule {
+                        variant: "broadleaf",
+                        color: [60, 140, 70],
+                        alpha: None,
+                        size_scale: 1.0,
+                        spacing_scale: 1.0,
+                    },
+                ),
+            ],
+        }
+    }
+
+    fn build(regions: &[Region], _rules: &RegionOverlaySet) -> RegionOverlayIndex {
+        build_with_offset(regions, _rules, Vec2::ZERO)
     }
 
     /// 带两套原点偏移的构造（子图场景）。
     fn build_with_offset(
         regions: &[Region],
-        theme: &ThemePack,
+        rules: &RegionOverlaySet,
         raster_to_map: Vec2,
     ) -> RegionOverlayIndex {
         build_index(
@@ -654,7 +470,7 @@ mod tests {
             1.0,
             4,
             4,
-            theme,
+            rules,
             raster_to_map,
         )
     }
@@ -662,7 +478,7 @@ mod tests {
     #[test]
     fn index_is_empty_when_no_region_declares_overlay() {
         let regions = vec![nature("nr_a", "甲", square(0.0, 0.0, 2.0, 2.0), None)];
-        let idx = build(&regions, &builtin::DEFAULT);
+        let idx = build(&regions, &test_rules());
         assert!(idx.entries.is_empty(), "无声明 → 无条目");
         assert!(idx.cell_owner.is_empty());
         assert!(idx.missing_cells.is_empty());
@@ -677,7 +493,7 @@ mod tests {
             Some("conifer"),
         );
         r.kind = RegionKind::Area;
-        let idx = build(&[r], &builtin::DEFAULT);
+        let idx = build(&[r], &test_rules());
         assert!(idx.entries.is_empty(), "普通区域不承载覆盖物");
     }
 
@@ -689,7 +505,7 @@ mod tests {
             square(0.0, 0.0, 2.0, 2.0),
             Some("conifer"),
         )];
-        let idx = build(&regions, &builtin::DEFAULT);
+        let idx = build(&regions, &test_rules());
         assert_eq!(idx.entries.len(), 1);
         assert!(idx.entries[0].rule.is_some(), "内置主题有 conifer 规则");
         // (0,0) 在区域内 → 有规则；(3,3) 在区域外 → 无。
@@ -706,7 +522,7 @@ mod tests {
             square(0.0, 0.0, 2.0, 2.0),
             Some("no_such_overlay"),
         )];
-        let idx = build(&regions, &builtin::DEFAULT);
+        let idx = build(&regions, &test_rules());
         assert_eq!(idx.entries.len(), 1);
         assert!(idx.entries[0].rule.is_none(), "主题无此键 → 规则缺省");
         assert!(idx.is_missing_cell(0), "区内格应被缺失标记接管");
@@ -726,7 +542,7 @@ mod tests {
         );
         child.parent = Some(Id::new_unchecked("nr_p"));
         parent.parent = None;
-        let idx = build(&[parent, child], &builtin::DEFAULT);
+        let idx = build(&[parent, child], &test_rules());
         // 子区（更深）优先：区内格的规则来自 child。
         let child_entry = idx
             .entries
@@ -755,7 +571,7 @@ mod tests {
         let mut child = nature("nr_c", "子区", square(0.0, 0.0, 2.0, 2.0), Some("conifer"));
         child.parent = Some(Id::new_unchecked("nr_p"));
         parent.parent = None;
-        let idx = build(&[parent, child], &builtin::DEFAULT);
+        let idx = build(&[parent, child], &test_rules());
         assert!(!idx.is_missing_cell(0), "子区格可解析 → 不该被缺失标记接管");
         assert!(idx.is_missing_cell(3 * 4 + 3), "父区独有格 → 应被接管");
         assert_eq!(idx.missing_shapes.len(), 1);
@@ -780,13 +596,13 @@ mod tests {
             Some("conifer"),
         )];
         // 无偏移：多边形在栅格外 → 不覆盖任何格。
-        let idx = build_with_offset(&regions, &builtin::DEFAULT, Vec2::ZERO);
+        let idx = build_with_offset(&regions, &test_rules(), Vec2::ZERO);
         assert!(
             idx.cell_owner.is_empty(),
             "无偏移时多边形落在 4×4 栅格外，不应覆盖任何格"
         );
         // 偏移 (10,10)：换算后落在格 (0..2)×(0..2) → 覆盖 (0,0)。
-        let idx = build_with_offset(&regions, &builtin::DEFAULT, Vec2::new(10.0, 10.0));
+        let idx = build_with_offset(&regions, &test_rules(), Vec2::new(10.0, 10.0));
         assert!(idx.rule_at(0).is_some(), "带偏移时 (0,0) 格应被区域覆盖");
     }
 
@@ -794,7 +610,7 @@ mod tests {
     fn region_of_another_map_is_ignored() {
         let mut r = nature("nr_a", "别图", square(0.0, 0.0, 2.0, 2.0), Some("conifer"));
         r.map = Id::new_unchecked("map_other");
-        let idx = build(&[r], &builtin::DEFAULT);
+        let idx = build(&[r], &test_rules());
         assert!(idx.entries.is_empty(), "别的图的区域不参与本图解析");
     }
 }
@@ -830,11 +646,11 @@ pub struct CandidateOverlayCache {
 /// 排除：已被命名 Nature 区覆盖的候选（代表点 = 外环首点，`point_in_geometry`
 /// 测命中）；NONE 群系（无生态语义的格子不构成「自然区」）。
 #[derive(Default)]
-pub(crate) struct CandidateOutlines {
+pub struct CandidateOutlines {
     pub outlines: Vec<Vec<(bevy::math::Vec2, bevy::math::Vec2)>>,
 }
 
-pub(crate) fn enumerate_candidates(
+pub fn enumerate_candidates(
     world: &wv_core::World,
     map: &wv_core::Id,
     grid: &GridConfig,
@@ -907,4 +723,149 @@ pub(crate) fn enumerate_candidates(
         }
     }
     out
+}
+
+// ── 带洞三角化（自 wv-render faction_overlays 复制；ADR-0054 D2 禁依赖 wv-render）──
+
+/// 带洞三角化：洞环按 max-x 桥接进外环（桥上顶点各复制一次形成零宽走廊），
+/// 合成单一环后经典耳剪。输出三角形 soup（顶点重复，渲染等价）。
+///
+/// 确定性：无随机、无浮点排序不稳定项（max-x 平局按环序）。
+pub fn earcut_with_holes(outer: &[f32], holes: &[&[f32]]) -> Vec<[f32; 2]> {
+    let mut ring = flat_to_ring(outer);
+    if ring.len() < 3 {
+        return Vec::new();
+    }
+    if ring_signed_area(&ring) < 0.0 {
+        ring.reverse();
+    }
+    let mut holes: Vec<Vec<[f32; 2]>> = holes
+        .iter()
+        .map(|h| {
+            let mut v = flat_to_ring(h);
+            // 洞环统一顺时针（面积符号与外环相反）。
+            if ring_signed_area(&v) > 0.0 {
+                v.reverse();
+            }
+            v
+        })
+        .collect();
+    // max-x 大的洞先桥（earcut 惯例：桥不穿过未处理洞的概率更高）。
+    holes.sort_by(|a, b| {
+        let am = a.iter().fold(f32::MIN, |m, p| m.max(p[0]));
+        let bm = b.iter().fold(f32::MIN, |m, p| m.max(p[0]));
+        bm.partial_cmp(&am).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    for hole in &holes {
+        if hole.is_empty() {
+            continue;
+        }
+        // 可见性测试必须用**当前**（已桥接过的）环：第二、第三个洞的桥不能
+        // 穿过先前洞的零宽走廊（终审 M2）。
+        let flat_ring: Vec<f32> = ring.iter().flat_map(|p| [p[0], p[1]]).collect();
+        // 洞的 max-x 顶点。
+        let (hi, _) = hole
+            .iter()
+            .enumerate()
+            .fold((0usize, f32::MIN), |(bi, bx), (i, p)| {
+                if p[0] > bx {
+                    (i, p[0])
+                } else {
+                    (bi, bx)
+                }
+            });
+        let h = hole[hi];
+        // 可见桥点：外环顶点里离洞点最近、且连线中点在（当前）环内部者。
+        let mut best: Option<(usize, f32)> = None;
+        for (k, o) in ring.iter().enumerate() {
+            let mid = [(o[0] + h[0]) / 2.0, (o[1] + h[1]) / 2.0];
+            if !wv_core::geometry::point_in_ring(&flat_ring, mid[0], mid[1]) {
+                continue;
+            }
+            let d2 = (o[0] - h[0]) * (o[0] - h[0]) + (o[1] - h[1]) * (o[1] - h[1]);
+            if best.map(|(_, bd)| d2 < bd).unwrap_or(true) {
+                best = Some((k, d2));
+            }
+        }
+        let Some(k) = best.map(|(k, _)| k) else {
+            continue; // 无可见桥点（退化）——跳过该洞（V1：不 panic，宁可多填一块）
+        };
+        // 拼接：外环 0..=k + 洞 hi..end + 洞 0..=hi + 外环 k（桥走两遍）。
+        let mut next: Vec<[f32; 2]> = Vec::with_capacity(ring.len() + hole.len() + 2);
+        next.extend_from_slice(&ring[..=k]);
+        next.extend_from_slice(&hole[hi..]);
+        next.extend_from_slice(&hole[..=hi]);
+        next.push(ring[k]);
+        next.extend_from_slice(&ring[k + 1..]);
+        ring = next;
+    }
+    // 经典耳剪。
+    let mut tris: Vec<[f32; 2]> = Vec::new();
+    let mut idx: Vec<usize> = (0..ring.len()).collect();
+    let mut guard = 0usize;
+    while idx.len() >= 3 && guard < idx.len() * idx.len() + 64 {
+        guard += 1;
+        let mut clipped = false;
+        let n = idx.len();
+        for i in 0..n {
+            let (ia, ib, ic) = (idx[i], idx[(i + 1) % n], idx[(i + 2) % n]);
+            let (a, b, c) = (ring[ia], ring[ib], ring[ic]);
+            // 凸性（严格；零面积耳跳过——桥的退化点在这里自然消解）。
+            let cross = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+            if cross <= 1e-9 {
+                continue;
+            }
+            let contains_other = idx.iter().enumerate().any(|(pos, &j)| {
+                let is_ear_vertex = pos == i || pos == (i + 1) % n || pos == (i + 2) % n;
+                !is_ear_vertex && point_in_triangle(ring[j], a, b, c)
+            });
+            if contains_other {
+                continue;
+            }
+            tris.push(a);
+            tris.push(b);
+            tris.push(c);
+            idx.remove((i + 1) % n);
+            clipped = true;
+            break;
+        }
+        if !clipped {
+            // 数值兜底：以 idx[0] 为轴的**真扇形**收尾（不 panic，V1 精神）。
+            // 逐窗口连发是条带不是扇形，会产出重叠三角形。
+            let pivot = ring[idx[0]];
+            for w in idx.windows(2).skip(1) {
+                tris.push(pivot);
+                tris.push(ring[w[0]]);
+                tris.push(ring[w[1]]);
+            }
+            break;
+        }
+    }
+    tris
+}
+
+/// 点是否在三角形**严格内部**（不含边界）。耳剪的 contains 测试必须用
+/// 严格版：桥接产生的重复点落在候选耳顶点/边上时不算「环内其他点」，
+/// 否则所有耳被毙、三角化退化成兜底扇形。
+fn point_in_triangle(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> bool {
+    let d1 = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+    let d2 = (c[0] - b[0]) * (p[1] - b[1]) - (c[1] - b[1]) * (p[0] - b[0]);
+    let d3 = (a[0] - c[0]) * (p[1] - c[1]) - (a[1] - c[1]) * (p[0] - c[0]);
+    (d1 > 0.0 && d2 > 0.0 && d3 > 0.0) || (d1 < 0.0 && d2 < 0.0 && d3 < 0.0)
+}
+
+fn flat_to_ring(flat: &[f32]) -> Vec<[f32; 2]> {
+    flat.chunks_exact(2).map(|c| [c[0], c[1]]).collect()
+}
+
+/// 环的有符号面积（shoelace）；正 = 逆时针。
+fn ring_signed_area(ring: &[[f32; 2]]) -> f32 {
+    let n = ring.len();
+    let mut a = 0.0f32;
+    for i in 0..n {
+        let p = ring[i];
+        let q = ring[(i + 1) % n];
+        a += p[0] * q[1] - q[0] * p[1];
+    }
+    a / 2.0
 }

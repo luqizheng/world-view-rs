@@ -11,49 +11,11 @@
 //! ## 主要导出
 //! - [`setup_terrain_texture`] / [`placeholder_terrain`]
 
-#![cfg(feature = "app")]
-
 use bevy::prelude::*;
 
-use crate::state::{DrillState, ViewState, WorldProjection};
-
-use super::cells::image_from_terrain;
-use super::terrain_resolve::active_terrain_or_placeholder;
 use super::terrain_texture::TerrainTexture;
 
 use wv_core::terrain::TerrainData;
-
-/// 启动时由工程的地形数据建纹理。若无地形，建一张占位（避免空句柄）。
-///
-/// Phase 2 起底图**属于某张图**：这里取「当前图向上的第一张自带栅格」，
-/// 并把来源图 id 记进 [`TerrainTexture::last_map`]。
-pub fn setup_terrain_texture(
-    mut commands: Commands,
-    mut images: ResMut<Assets<Image>>,
-    mut projection: ResMut<WorldProjection>,
-    drill: Res<DrillState>,
-    view: Res<ViewState>,
-) {
-    let atlas = super::tile_atlas::ensure_atlas(&mut commands);
-    let (map, data) = active_terrain_or_placeholder(&mut projection.world, drill.current(), 64);
-    let image = image_from_terrain(
-        &data,
-        view.mode,
-        atlas.as_ref(),
-        view.terrain_soften,
-        view.active_theme,
-        0.0,
-    );
-    commands.insert_resource(new_terrain_texture(
-        &mut images,
-        image,
-        &data,
-        map,
-        view.mode,
-        view.terrain_soften,
-        view.active_theme.id,
-    ));
-}
 
 /// 创建新的地形纹理资源。分辨率元数据从实际 Image 反推，避免第二套推断逻辑。
 ///
@@ -64,7 +26,7 @@ pub fn new_terrain_texture(
     image: Image,
     data: &TerrainData,
     map: Option<wv_core::Id>,
-    mode: crate::state::ViewMode,
+    mode: crate::shade::ShadeMode,
     soften: bool,
     theme_id: &'static str,
 ) -> TerrainTexture {

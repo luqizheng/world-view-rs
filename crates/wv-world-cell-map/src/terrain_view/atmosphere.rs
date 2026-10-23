@@ -18,16 +18,9 @@
 //! - **不遮关键要素**——雾 Z 低于道路（0.09+），POI / 标注 / 势力全部在雾上。
 //! - **例外**：GoogleMap（自有完整观感）与 Coastline（黑底分析视图）不铺氛围。
 
-#![cfg(feature = "app")]
-
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-
-use crate::layer_frame::LayerFrame;
-use crate::state::{BrushState, GridConfig, ViewState};
-
-use super::terrain_texture::TerrainTexture;
 
 /// 雾霭层 Z：等值线（0.04）与换级淡出精灵（0.05）之上、道路（0.09+）之下
 /// ——雾只属于底图，道路 / POI / 标注从雾上穿出保持清晰。
@@ -125,7 +118,7 @@ pub fn paper_grain_image(seed: u64) -> Image {
 /// `uv_scale = 幅面 / GRAIN_TILE_WORLD`：世界坐标 ÷ 平铺边长，噪点因此钉在
 /// 世界坐标上——平移地图时纤维跟着走、缩放时纤维跟纸一起放大（真实纸张行为）。
 /// 原点走 `Transform`（mesh 保持局部系以便幅面变化时仍可复用逻辑）。
-pub(crate) fn extent_quad_mesh(size: Vec2, uv_scale: Vec2) -> Mesh {
+pub fn extent_quad_mesh(size: Vec2, uv_scale: Vec2) -> Mesh {
     let (w, h) = (size.x, size.y);
     let mut mesh = Mesh::new(
         bevy::render::mesh::PrimitiveTopology::TriangleList,
@@ -154,18 +147,18 @@ pub(crate) fn extent_quad_mesh(size: Vec2, uv_scale: Vec2) -> Mesh {
 /// scale 微变都重建（grain mesh 创建有 GPU 开销）；近看纸浆细节变化
 ///（手绘地图 #6，2026-10-15）的视觉差一档即可辨。
 #[derive(Debug, Clone, PartialEq)]
-struct AtmosphereKey {
-    origin: (u32, u32),
-    extent: (u32, u32, u32),
-    scale_bucket: u32,
+pub struct AtmosphereKey {
+    pub origin: (u32, u32),
+    pub extent: (u32, u32, u32),
+    pub scale_bucket: u32,
     /// 装饰旗标快照（ADR-0023 D4）：`(paper_fog, paper_grain)`。进 key 是为了
     /// 切主题导致旗标翻转时整体 despawn 重建（与幅面变化同口径），避免留下
     /// 「旧主题的雾还挂着」的幽灵实体。
-    treatment: (bool, bool),
+    pub treatment: (bool, bool),
 }
 
 /// 把 `view.scale` 量化到 1/8 octaves（`bucket = (log2(scale) × 8).round() as i32`）。
-fn scale_bucket(scale: f32) -> u32 {
+pub fn scale_bucket(scale: f32) -> u32 {
     if scale <= 0.0 {
         return 0;
     }
@@ -175,15 +168,15 @@ fn scale_bucket(scale: f32) -> u32 {
 /// 氛围层实体缓存。
 #[derive(Resource, Default)]
 pub struct AtmosphereLayer {
-    veil: Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)>,
-    grain: Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)>,
+    pub veil: Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)>,
+    pub grain: Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)>,
     /// 噪点贴图跨幅面复用（幅面变了不用重生成像素）。
-    grain_texture: Option<Handle<Image>>,
-    key: Option<AtmosphereKey>,
+    pub grain_texture: Option<Handle<Image>>,
+    pub key: Option<AtmosphereKey>,
 }
 
 impl AtmosphereLayer {
-    fn despawn(&mut self, commands: &mut Commands) {
+    pub fn despawn(&mut self, commands: &mut Commands) {
         for slot in [&mut self.veil, &mut self.grain] {
             if let Some((entity, mesh, _)) = slot.take() {
                 commands.entity(entity).despawn();
@@ -193,102 +186,6 @@ impl AtmosphereLayer {
             }
         }
         self.key = None;
-    }
-}
-
-/// 同步氛围层。独立注册（主链已顶满 20 参元组上限），排在 `sync_map_frame` 之后。
-///
-/// 幅面 = **栅格幅面**（`raster_origin` + `size × cell_size`）——雾与噪点是
-/// 「这张纸」的属性，与底图完全重合。
-#[allow(clippy::too_many_arguments)]
-pub fn sync_atmosphere(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    mut images: ResMut<Assets<Image>>,
-    view: Res<ViewState>,
-    grid: Res<GridConfig>,
-    tex: Res<TerrainTexture>,
-    layers: Res<LayerFrame>,
-    brush: Res<BrushState>,
-    recipe: Res<crate::recipe::RenderRecipe>,
-    mut atm: ResMut<AtmosphereLayer>,
-) {
-    // GoogleMap / Coastline 由 recipe 关 atmosphere pass；这里只关 texture
-    // 维度。LayerFrame.gate 与 view.mode 排除都在 recipe 里集中。
-    if !layers.terrain.visible
-        || !recipe.enabled(crate::recipe::PassId::Atmosphere)
-        || tex.size == 0
-    {
-        atm.despawn(&mut commands);
-        return;
-    }
-    // 装饰旗标（ADR-0023 D4）：从当前主题包派生；内置两包都是 HAND_DRAWN。
-    let treatment = view.active_theme.treatment;
-    let key = AtmosphereKey {
-        origin: (
-            grid.raster_origin.x.to_bits(),
-            grid.raster_origin.y.to_bits(),
-        ),
-        extent: (tex.size, tex.height, grid.cell_size.to_bits()),
-        scale_bucket: scale_bucket(view.scale),
-        treatment: (treatment.paper_fog, treatment.paper_grain),
-    };
-    if atm.key.as_ref() != Some(&key) {
-        atm.despawn(&mut commands);
-        let size = Vec2::new(tex.size as f32, tex.height as f32) * grid.cell_size;
-        // 手绘地图 #6：grain uv 随 `view.scale` 微调——近看 grain 翻倍密、远看
-        // 减半；连续变化用 `scale_bucket` 量化到 1/8 octaves 档避免逐帧重建。
-        let grain_tile = (GRAIN_TILE_WORLD / view.scale.max(0.05)).max(1.0);
-        let uv = Vec2::splat(size.x / grain_tile);
-        // —— 雾霭（初色 NONE，末尾逐帧更新段马上会写入当前值）——
-        // 装饰旗标 gate：`paper_fog = false` 的主题不铺雾（`atm.veil` 留 None，
-        // 下方逐帧 alpha 更新段与 despawn 都对 None 天然短路）。
-        if treatment.paper_fog {
-            let veil_mesh = meshes.add(extent_quad_mesh(size, Vec2::ZERO));
-            let veil_mat = materials.add(ColorMaterial::from_color(Color::NONE));
-            let veil = commands
-                .spawn((
-                    Mesh2d(veil_mesh.clone()),
-                    MeshMaterial2d(veil_mat.clone()),
-                    Transform::from_xyz(grid.raster_origin.x, grid.raster_origin.y, VEIL_Z),
-                ))
-                .id();
-            atm.veil = Some((veil, veil_mesh, veil_mat));
-        }
-        // —— 纸张噪点 ——
-        // 装饰旗标 gate：`paper_grain = false` 的主题不铺纸纹。
-        if treatment.paper_grain {
-            let grain_tex = atm
-                .grain_texture
-                .get_or_insert_with(|| images.add(paper_grain_image(0x5EED_5EED)))
-                .clone();
-            let grain_mesh = meshes.add(extent_quad_mesh(size, uv));
-            let grain_mat = materials.add(ColorMaterial {
-                texture: Some(grain_tex),
-                color: Color::WHITE.with_alpha(GRAIN_ALPHA),
-                ..Default::default()
-            });
-            let grain = commands
-                .spawn((
-                    Mesh2d(grain_mesh.clone()),
-                    MeshMaterial2d(grain_mat.clone()),
-                    Transform::from_xyz(grid.raster_origin.x, grid.raster_origin.y, GRAIN_Z),
-                ))
-                .id();
-            atm.grain = Some((grain, grain_mesh, grain_mat));
-        }
-        atm.key = Some(key);
-    }
-    // 雾霭 alpha 逐帧连续更新（缩放的空气感 + 编辑态免雾）；颜色随主题纸面
-    //（ADR-0016）。免雾只动 alpha 不拆实体：笔刷一关，下一帧雾即回来。
-    let pal = &view.active_theme.palette;
-    if let Some((_, _, mat)) = &atm.veil {
-        if let Some(mut m) = materials.get_mut(mat) {
-            m.color = pal
-                .soften_toward
-                .with_alpha(veil_alpha_for(view.scale, brush.enabled));
-        }
     }
 }
 

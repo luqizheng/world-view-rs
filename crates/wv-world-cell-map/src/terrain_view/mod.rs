@@ -15,14 +15,11 @@
 //! 所有 `pub` 符号在下方 `pub use` 重新导出，外部对
 //! `crate::terrain_view::TerrainTexture` / `TileAtlas` / `image_from_terrain` 等的引用零改动。
 
-#![cfg(feature = "app")]
-
 pub mod atmosphere;
 pub mod biome_raw;
 pub mod cells;
 pub mod field;
 pub mod grid_lines;
-pub mod grid_sync;
 pub mod isoline_overlay;
 pub mod rebuild;
 pub mod setup;
@@ -32,14 +29,12 @@ pub mod tile_atlas;
 
 // ── 路径兼容 re-export（保持 `crate::terrain_view::X` 不变） ─────────────────
 pub use cells::{image_from_terrain, patch_terrain_image, terrain_pixels};
-pub use grid_lines::{grid_lines_visible, sync_grid_lines, GridLinesOverlay};
-pub use grid_sync::sync_grid_config;
-pub use isoline_overlay::{sync_isoline_overlay, IsolineOverlay};
+pub use grid_lines::GridLinesOverlay;
+pub use isoline_overlay::IsolineOverlay;
 pub use rebuild::{
-    land_pending_terrain_synth, rebuild_texture_on_mode_change, tick_basemap_fadeout,
-    BasemapFadeOut, LEVEL_FADE_SECS,
+    tick_basemap_fadeout, BasemapFadeOut, PendingTerrainSynth, SynthCtx, LEVEL_FADE_SECS,
 };
-pub use setup::{new_terrain_texture, placeholder_terrain, setup_terrain_texture};
+pub use setup::{new_terrain_texture, placeholder_terrain};
 pub use terrain_resolve::{
     active_terrain, active_terrain_or_placeholder, force_rebuild, replace_terrain_texture,
     texture_terrain,
@@ -50,12 +45,12 @@ pub use tile_atlas::{ensure_atlas, load_tile_atlas, TileAtlas};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{DrillState, GridConfig, ViewMode, ViewState, WorldProjection};
-    use crate::theme::{colors, colors_google};
+    use crate::palette::{self, CellPack, SeaRecipe, TreatmentFlags};
+    use crate::shade::ShadeMode;
     use bevy::prelude::*;
     use wv_core::terrain::TerrainData;
     // 私有 helper 通过子模块路径导入
-    use super::rebuild::{advance_fade, spawn_basemap_fadeout, FADEOUT_Z};
+    use super::rebuild::advance_fade;
     use super::terrain_texture::terrain_res_for;
     use super::tile_atlas::{blit_block_tinted, sample_tile_block, tile_res_for, TileTint};
 
@@ -129,8 +124,8 @@ mod tests {
             res,
             TileTint::Identity,
             false,
-            crate::theme::palette::colors(Default::default()).soften_toward,
-            crate::theme::palette::colors(Default::default()).soften_keep,
+            CellPack::fixture().palette.soften_toward,
+            CellPack::fixture().palette.soften_keep,
             &mut dst,
             res,
             0,
@@ -153,8 +148,8 @@ mod tests {
             res,
             TileTint::Fade,
             false,
-            crate::theme::palette::colors(Default::default()).soften_toward,
-            crate::theme::palette::colors(Default::default()).soften_keep,
+            CellPack::fixture().palette.soften_toward,
+            CellPack::fixture().palette.soften_keep,
             &mut dst,
             res,
             0,
@@ -213,10 +208,10 @@ mod tests {
         };
         let img = image_from_terrain(
             &data,
-            ViewMode::Schematic,
+            ShadeMode::Schematic,
             Some(&atlas),
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         let mut mixed = 0usize;
@@ -243,18 +238,18 @@ mod tests {
         let data = placeholder_terrain(16, 16);
         let a = image_from_terrain(
             &data,
-            ViewMode::Schematic,
+            ShadeMode::Schematic,
             Some(&atlas),
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         let b = image_from_terrain(
             &data,
-            ViewMode::Schematic,
+            ShadeMode::Schematic,
             Some(&atlas),
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         assert_eq!(a.data, b.data);
@@ -286,29 +281,29 @@ mod tests {
         let data = placeholder_terrain(4, 4);
         let img = image_from_terrain(
             &data,
-            ViewMode::Schematic,
+            ShadeMode::Schematic,
             Some(&atlas),
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         assert_eq!(img.width(), 4 * 64); // 4 格 → res 上限 64
         let img_flat = image_from_terrain(
             &data,
-            ViewMode::Schematic,
+            ShadeMode::Schematic,
             None,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         assert_eq!(img_flat.width(), 4);
         // 事件图不铺瓦片：有图集也按纯色 1px/格。
         let img_event = image_from_terrain(
             &data,
-            ViewMode::Event,
+            ShadeMode::Event,
             Some(&atlas),
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         assert_eq!(img_event.width(), 4);
@@ -326,10 +321,10 @@ mod tests {
         // res=1（无图集），像素维度 = 4×4 = 16 像素。
         let mut img = image_from_terrain(
             &data,
-            ViewMode::Schematic,
+            ShadeMode::Schematic,
             None,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         // 用 0 标记所有像素。
@@ -342,25 +337,25 @@ mod tests {
         // 关全部「位置相关」的水面细节：浅滩带 + 离岸墨线都会让 patch 的
         // 脏区按距离场支撑半径膨胀（棚格测试要的是「只动矩形内」的机械语义）。
         // 纸纹颗粒不在此列——它是坐标的纯函数，不影响脏区。
-        let pack = &crate::theme::theme_pack::ThemePack {
-            treatment: crate::theme::theme_pack::TreatmentFlags {
+        let pack = &CellPack {
+            treatment: TreatmentFlags {
                 shore_shallow: false,
-                ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+                ..TreatmentFlags::HAND_DRAWN
             },
-            sea: crate::theme::sea::SeaRecipe {
+            sea: SeaRecipe {
                 shore_band_cells: 0.0,
                 shore_peak: 0.0,
-                ripples: &[],
+                ripples: vec![],
                 ripple_warp_cells: 0.0,
-                ..crate::theme::sea::WATERCOLOR
+                ..crate::palette::watercolor()
             },
-            ..*crate::theme::theme_pack::builtin::for_palette(Default::default())
+            ..CellPack::fixture()
         };
         // patch 矩形 (1,1)-(3,3) = 2×2 = 4 像素。
         patch_terrain_image(
             &mut img,
             &data,
-            ViewMode::Schematic,
+            ShadeMode::Schematic,
             None,
             [1, 1, 3, 3],
             1,
@@ -387,10 +382,10 @@ mod tests {
         let data = placeholder_terrain(4, 4);
         let mut img = image_from_terrain(
             &data,
-            ViewMode::Schematic,
+            ShadeMode::Schematic,
             None,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         // 把整图刷成 0xFF 哨兵值。
@@ -402,25 +397,25 @@ mod tests {
         // 关全部「位置相关」的水面细节：浅滩带 + 离岸墨线都会让 patch 的
         // 脏区按距离场支撑半径膨胀（棚格测试要的是「只动矩形内」的机械语义）。
         // 纸纹颗粒不在此列——它是坐标的纯函数，不影响脏区。
-        let pack = &crate::theme::theme_pack::ThemePack {
-            treatment: crate::theme::theme_pack::TreatmentFlags {
+        let pack = &CellPack {
+            treatment: TreatmentFlags {
                 shore_shallow: false,
-                ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+                ..TreatmentFlags::HAND_DRAWN
             },
-            sea: crate::theme::sea::SeaRecipe {
+            sea: SeaRecipe {
                 shore_band_cells: 0.0,
                 shore_peak: 0.0,
-                ripples: &[],
+                ripples: vec![],
                 ripple_warp_cells: 0.0,
-                ..crate::theme::sea::WATERCOLOR
+                ..crate::palette::watercolor()
             },
-            ..*crate::theme::theme_pack::builtin::for_palette(Default::default())
+            ..CellPack::fixture()
         };
         // patch 矩形 (1,1)-(2,2) = 1 像素。
         patch_terrain_image(
             &mut img,
             &data,
-            ViewMode::Schematic,
+            ShadeMode::Schematic,
             None,
             [1, 1, 2, 2],
             1,
@@ -462,19 +457,19 @@ mod tests {
         let data = placeholder_terrain(16, 16);
         let img = image_from_terrain(
             &data,
-            ViewMode::Coastline,
+            ShadeMode::Coastline,
             None,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
-        let Color::Srgba(water) = colors::COAST_WATER else {
+        let Color::Srgba(water) = palette::COAST_WATER else {
             unreachable!()
         };
-        let Color::Srgba(land) = colors::COAST_LAND else {
+        let Color::Srgba(land) = palette::COAST_LAND else {
             unreachable!()
         };
-        let Color::Srgba(line) = colors::COAST_LINE else {
+        let Color::Srgba(line) = palette::COAST_LINE else {
             unreachable!()
         };
         let (mut n_water, mut n_land, mut n_line) = (0usize, 0usize, 0usize);
@@ -510,18 +505,18 @@ mod tests {
         let data = placeholder_terrain(8, 8);
         let a = image_from_terrain(
             &data,
-            ViewMode::Coastline,
+            ShadeMode::Coastline,
             None,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         let b = image_from_terrain(
             &data,
-            ViewMode::Coastline,
+            ShadeMode::Coastline,
             None,
             true,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         assert_eq!(a.data, b.data, "轮廓图应忽略 soften 开关");
@@ -534,15 +529,15 @@ mod tests {
         let data = placeholder_terrain(64, 64);
         let expected = image_from_terrain(
             &data,
-            ViewMode::GoogleMap,
+            ShadeMode::GoogleMap,
             None,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         )
         .width()
             / data.width;
-        let actual = terrain_res_for(&data, ViewMode::GoogleMap, None);
+        let actual = terrain_res_for(&data, ShadeMode::GoogleMap, None);
         assert_eq!(
             actual, expected,
             "Google 64² 应为 {expected}px/格，实得 {actual}px/格"
@@ -559,10 +554,10 @@ mod tests {
         }
         let mut image = image_from_terrain(
             &data,
-            ViewMode::GoogleMap,
+            ShadeMode::GoogleMap,
             None,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         let res = image.width() / data.width;
@@ -571,12 +566,12 @@ mod tests {
         patch_terrain_image(
             &mut image,
             &data,
-            ViewMode::GoogleMap,
+            ShadeMode::GoogleMap,
             None,
             [1, 1, 2, 2],
             res,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
         );
         assert!(image.width() > data.width, "patch 不应缩小纹理分辨率");
     }
@@ -586,10 +581,10 @@ mod tests {
         let data = placeholder_terrain(8, 8);
         let img = image_from_terrain(
             &data,
-            ViewMode::GoogleMap,
+            ShadeMode::GoogleMap,
             None,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         assert!(
@@ -606,18 +601,18 @@ mod tests {
         let data = placeholder_terrain(8, 8);
         let a = image_from_terrain(
             &data,
-            ViewMode::GoogleMap,
+            ShadeMode::GoogleMap,
             None,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         let b = image_from_terrain(
             &data,
-            ViewMode::GoogleMap,
+            ShadeMode::GoogleMap,
             None,
             true,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         assert_eq!(a.data, b.data, "Google 模式应忽略 soften 开关");
@@ -635,13 +630,13 @@ mod tests {
         }
         let img = image_from_terrain(
             &data,
-            ViewMode::GoogleMap,
+            ShadeMode::GoogleMap,
             None,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
-        let Color::Srgba(land) = colors_google::GOOGLE_CORE_TERRAIN[2] else {
+        let Color::Srgba(land) = palette::GOOGLE_CORE_TERRAIN[2] else {
             unreachable!("GOOGLE_CORE_TERRAIN[2] 应为 Srgba")
         };
         // 抽查内部格与边界位置的像素：全部应等于 Google 近白陆色。
@@ -678,10 +673,10 @@ mod tests {
         data.cells[18].biome = 1; // 森林
         let img = image_from_terrain(
             &data,
-            ViewMode::GoogleMap,
+            ShadeMode::GoogleMap,
             None,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         let res = img.width() / data.width;
@@ -706,21 +701,21 @@ mod tests {
         let data = placeholder_terrain(4, 4);
         let raw = image_from_terrain(
             &data,
-            ViewMode::Schematic,
+            ShadeMode::Schematic,
             None,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         let soft = image_from_terrain(
             &data,
-            ViewMode::Schematic,
+            ShadeMode::Schematic,
             None,
             true,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
-        let Color::Srgba(t) = colors::SOFTEN_TOWARD else {
+        let Color::Srgba(t) = CellPack::fixture().palette.soften_toward else {
             unreachable!("SOFTEN_TOWARD 应为 Srgba")
         };
         let mut changed = 0usize;
@@ -759,29 +754,29 @@ mod tests {
         let data = placeholder_terrain(8, 8);
         let full = image_from_terrain(
             &data,
-            ViewMode::Coastline,
+            ShadeMode::Coastline,
             None,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         let mut patched = image_from_terrain(
             &data,
-            ViewMode::Coastline,
+            ShadeMode::Coastline,
             None,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         patch_terrain_image(
             &mut patched,
             &data,
-            ViewMode::Coastline,
+            ShadeMode::Coastline,
             None,
             [2, 2, 6, 6],
             1,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
         );
         assert_eq!(full.data, patched.data, "轮廓图 patch 与全图应逐字节一致");
     }
@@ -875,206 +870,6 @@ mod tests {
         assert!(active_terrain(&world, Some(&city)).is_none());
     }
 
-    /// 兜底占位落在**根图**上，并真的写进世界（笔刷/撤销才有落脚图）。
-    #[test]
-    fn placeholder_terrain_lands_on_the_root_map_when_nothing_has_a_raster() {
-        let mut world = two_level_world();
-        let city = wv_core::Id::new_unchecked("map_city");
-        let (map, data) = active_terrain_or_placeholder(&mut world, Some(&city), 32);
-        assert_eq!(map.map(|m| m.as_str().to_owned()), Some("map_world".into()));
-        assert_eq!(data.width, 32, "占位地形按调用方给的格数生成");
-        assert!(
-            world
-                .terrain_of(&wv_core::Id::new_unchecked("map_world"))
-                .is_some(),
-            "占位地形应写进根图，而不是只存在于纹理里"
-        );
-    }
-
-    /// **启动早期的回归**：`DrillState` 还没 `ensure_root`（`current` 为 `None`）时，
-    /// 不能把「当前图未知」当成「世界上没有地形」而用占位覆盖真实地形。
-    #[test]
-    fn unknown_current_map_does_not_overwrite_existing_terrain() {
-        let mut world = two_level_world();
-        let root = wv_core::Id::new_unchecked("map_world");
-        world.set_terrain(root.clone(), small_terrain(3));
-        let (map, data) = active_terrain_or_placeholder(&mut world, None, 32);
-        assert_eq!(map.map(|m| m.as_str().to_owned()), Some("map_world".into()));
-        assert_eq!(data.cells[0].biome, 3, "应取回已有真实地形，而不是占位");
-        assert_eq!(
-            world.terrain_of(&root).map(|t| t.width),
-            Some(4),
-            "世界里的地形不能被占位覆盖"
-        );
-    }
-
-    /// 增量 patch / 撤销 diff 必须跟着**纹理手里的那张图**走：纹理显示世界图时，
-    /// 即使当前图是城市，也返回世界图的地形。
-    #[test]
-    fn texture_terrain_follows_the_map_the_texture_holds() {
-        let mut world = two_level_world();
-        world.set_terrain(wv_core::Id::new_unchecked("map_world"), small_terrain(3));
-        world.set_terrain(wv_core::Id::new_unchecked("map_city"), small_terrain(5));
-        let city = wv_core::Id::new_unchecked("map_city");
-        let mut tex = TerrainTexture {
-            handle: Handle::default(),
-            size: 4,
-            height: 4,
-            res: 1,
-            dirty: None,
-            chunks_dirty: None,
-            last_mode: None,
-            last_soften: false,
-            last_theme_id: crate::theme::theme_pack::builtin::DEFAULT.id,
-            last_map: Some(wv_core::Id::new_unchecked("map_world")),
-        };
-        let data = texture_terrain(&tex, &world, Some(&city)).expect("应取世界图地形");
-        assert_eq!(
-            data.cells[0].biome, 3,
-            "纹理装了世界图，就不能拿城市格去 patch"
-        );
-        // 纹理换到城市后，同一调用应跟着换成城市的数据。
-        tex.last_map = Some(city.clone());
-        let data = texture_terrain(&tex, &world, Some(&city)).expect("应取城市地形");
-        assert_eq!(data.cells[0].biome, 5);
-    }
-
-    /// `last_map` 无效或缺失时退回「当前图向上的第一张」，不留空白。
-    #[test]
-    fn texture_terrain_falls_back_to_the_current_map_when_last_map_is_unknown() {
-        let mut world = two_level_world();
-        world.set_terrain(wv_core::Id::new_unchecked("map_world"), small_terrain(3));
-        let city = wv_core::Id::new_unchecked("map_city");
-        let tex = TerrainTexture {
-            handle: Handle::default(),
-            size: 4,
-            height: 4,
-            res: 1,
-            dirty: None,
-            chunks_dirty: None,
-            last_mode: None,
-            last_soften: false,
-            last_theme_id: crate::theme::theme_pack::builtin::DEFAULT.id,
-            last_map: None,
-        };
-        let data = texture_terrain(&tex, &world, Some(&city)).expect("应退回继承口径");
-        assert_eq!(data.cells[0].biome, 3);
-    }
-
-    /// 纹理创建时记住来源图——`rebuild_texture_on_mode_change` 靠它判断「换图了」。
-    #[test]
-    fn terrain_texture_records_which_map_it_holds() {
-        let data = small_terrain(3);
-        let image = image_from_terrain(
-            &data,
-            ViewMode::GoogleMap,
-            None,
-            false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
-            0.0,
-        );
-        let mut images = Assets::<Image>::default();
-        let held = wv_core::Id::new_unchecked("map_city");
-        let tex = new_terrain_texture(
-            &mut images,
-            image,
-            &data,
-            Some(held.clone()),
-            ViewMode::GoogleMap,
-            false,
-            Default::default(),
-        );
-        assert_eq!(tex.last_map.as_ref(), Some(&held));
-    }
-
-    /// 回归（用户报告：钻入武昌城「看不到武昌」）：城市**继承**父图底图时，钻入
-    /// 一次都不会让纹理变化，`GridConfig` 必须靠 `drill.is_changed()` 认出来，
-    /// 并把 `map_origin` 从世界原点切到城市图帧原点。
-    ///
-    /// 断言分两帧：第一帧在世界（图帧原点 == 栅格原点 == 0），第二帧钻入城市
-    /// （**不动纹理**）——此时栅格原点仍是世界图的 (0,0)，而图帧原点必须变成
-    /// 城市由父图图标派生的落点 (1536,1536)。
-    #[test]
-    fn grid_map_origin_follows_the_drilled_map_when_the_raster_is_inherited() {
-        let mut core = two_level_world();
-        // 助手把两张图都造 `City` 级；`ensure_root` 要认根图，标回 `World`。
-        core.maps[0].level = wv_core::map::MapLevel::World;
-        // 只有世界图有地形：城市继承它 → 纹理两帧都不变。
-        core.set_terrain(wv_core::Id::new_unchecked("map_world"), small_terrain(3));
-        {
-            let root = &mut core.maps[0];
-            root.children.push(wv_core::Id::new_unchecked("map_city"));
-            root.icons.push(wv_core::map::IconSpec {
-                id: wv_core::Id::new_unchecked("icon_city"),
-                anchor: Some([0.5, 0.5]),
-                shape: Default::default(),
-                size: None,
-                color: None,
-                drill_into: Some(wv_core::Id::new_unchecked("map_city")),
-            });
-        }
-        let city = wv_core::Id::new_unchecked("map_city");
-
-        let mut drill = DrillState::default();
-        drill.ensure_root(&core);
-        assert_eq!(
-            drill.current().map(|i| i.as_str().to_owned()),
-            Some("map_world".to_owned()),
-            "起始应落在根图"
-        );
-
-        let mut app = World::default();
-        app.insert_resource(TerrainTexture {
-            handle: Handle::default(),
-            size: 4,
-            height: 4,
-            res: 1,
-            dirty: None,
-            chunks_dirty: None,
-            last_mode: None,
-            last_soften: false,
-            last_theme_id: crate::theme::theme_pack::builtin::DEFAULT.id,
-            // 纹理装的是世界图底图；钻入城市后**不会**重建（继承同一个来源）。
-            last_map: Some(wv_core::Id::new_unchecked("map_world")),
-        });
-        app.insert_resource(WorldProjection {
-            world: core.clone(),
-            ..Default::default()
-        });
-        app.insert_resource(drill);
-        app.insert_resource(GridConfig::default());
-
-        let mut schedule = Schedule::default();
-        schedule.add_systems(sync_grid_config);
-        schedule.run(&mut app);
-        assert_eq!(
-            app.resource::<GridConfig>().map_origin,
-            Vec2::ZERO,
-            "世界图上图帧原点与栅格原点重合于 (0,0)"
-        );
-
-        // 第二帧：只换当前图（钻入城市），纹理一个字都不动。
-        {
-            let mut d = app.resource_mut::<DrillState>();
-            assert!(d.enter(&core, &city), "城市应是根图的直接子图");
-        }
-        schedule.run(&mut app);
-
-        let grid = app.resource::<GridConfig>();
-        assert_eq!(grid.raster_origin, Vec2::ZERO, "继承的底图仍是世界图原点");
-        assert_eq!(
-            grid.map_origin,
-            Vec2::new(1536.0, 1536.0),
-            "城市图帧原点应由父图图标派生：2048 − 512 = 1536；实得 {}",
-            grid.map_origin
-        );
-        assert_eq!(
-            grid.map_size,
-            Vec2::splat(1024.0),
-            "幅面应取当前图（城市）的 extent，而不是世界图的 4096"
-        );
-    }
-
     // -----------------------------------------------------------------------
     // 换级淡化（ADR-0009 §2⑦ / README §12-25）
     // -----------------------------------------------------------------------
@@ -1097,135 +892,5 @@ mod tests {
         assert_eq!(advance_fade(1.0, LEVEL_FADE_SECS), None);
         // 零时长推进不动（不会变负）。
         assert_eq!(advance_fade(1.0, 0.0), Some(1.0));
-    }
-
-    /// 淡出精灵必须**克隆**旧像素（复用句柄会被原地覆写）并盖住旧栅格幅面。
-    #[test]
-    fn fadeout_spawn_clones_pixels_and_covers_the_old_raster() {
-        let data = small_terrain(3);
-        let mut images = Assets::<Image>::default();
-        let image = image_from_terrain(
-            &data,
-            ViewMode::GoogleMap,
-            None,
-            false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
-            0.0,
-        );
-        let tex = new_terrain_texture(
-            &mut images,
-            image,
-            &data,
-            None,
-            ViewMode::GoogleMap,
-            false,
-            Default::default(),
-        );
-        let grid = GridConfig {
-            cell_size: 2.0,
-            raster_origin: Vec2::new(100.0, 200.0),
-            ..GridConfig::default()
-        };
-
-        let mut world = World::new();
-        let mut queue = bevy::ecs::world::CommandQueue::default();
-        {
-            let mut commands = Commands::new(&mut queue, &world);
-            spawn_basemap_fadeout(&mut commands, &mut images, &tex, &grid);
-        }
-        queue.apply(&mut world);
-
-        let mut q = world.query::<(&BasemapFadeOut, &Sprite, &Transform)>();
-        let (fade, sprite, tf) = q.single(&world).expect("应生成一个淡出精灵");
-        assert_eq!(fade.alpha, 1.0, "初始不透明");
-        assert_eq!(
-            sprite.custom_size,
-            Some(Vec2::splat(8.0)),
-            "幅面 = 4 格 × cell_size 2.0"
-        );
-        assert_eq!(
-            tf.translation.truncate(),
-            Vec2::new(104.0, 204.0),
-            "中心 = 栅格原点 + 半幅"
-        );
-        assert_eq!(tf.translation.z, FADEOUT_Z);
-        // 克隆：句柄不同、内容一致，且旧句柄的像素未被动过。
-        assert_ne!(sprite.image, tex.handle, "淡出必须用克隆出的新句柄");
-        let old = images.get(&tex.handle).expect("旧资产还在");
-        let new = images.get(&sprite.image).expect("克隆资产已入库");
-        assert_eq!(old.data, new.data, "克隆像素应与旧底图逐字节一致");
-    }
-
-    /// 换图（换级）生成淡出精灵；换模式（换眼镜）不生成——淡化只属于 12-25。
-    #[test]
-    fn map_change_spawns_fadeout_but_mode_change_does_not() {
-        let mut core = two_level_world();
-        // `ensure_root` 只认 `level == World`（fixture 默认 City）：把根图升回来。
-        core.maps[0].level = wv_core::map::MapLevel::World;
-        let world_id = wv_core::Id::new_unchecked("map_world");
-        let city_id = wv_core::Id::new_unchecked("map_city");
-        core.set_terrain(world_id.clone(), small_terrain(3));
-        core.set_terrain(city_id.clone(), small_terrain(5));
-
-        let mut drill = DrillState::default();
-        drill.ensure_root(&core);
-        let (node, data) = active_terrain(&core, drill.current()).expect("世界图有地形");
-        assert_eq!(node.id, world_id);
-        let mut images = Assets::<Image>::default();
-        let image = image_from_terrain(
-            data,
-            ViewMode::GoogleMap,
-            None,
-            false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
-            0.0,
-        );
-        let tex = new_terrain_texture(
-            &mut images,
-            image,
-            data,
-            Some(world_id),
-            ViewMode::GoogleMap,
-            false,
-            Default::default(),
-        );
-
-        let mut world = World::new();
-        world.insert_resource(ViewState::default());
-        world.insert_resource(WorldProjection {
-            world: core.clone(),
-            ..Default::default()
-        });
-        world.insert_resource(drill);
-        world.insert_resource(GridConfig::default());
-        world.insert_resource(tex);
-        world.insert_resource(images);
-        world.init_resource::<crate::terrain_view::rebuild::PendingTerrainSynth>();
-
-        let count_fades = |world: &mut World| -> usize {
-            let mut q = world.query::<&BasemapFadeOut>();
-            q.iter(world).count()
-        };
-        let mut schedule = Schedule::default();
-        schedule.add_systems(rebuild_texture_on_mode_change);
-
-        // 换图：钻入自带地形的城市 → 应生成恰好一个淡出精灵。
-        // fixture 没接 children（`enter` 只认直接子图），这里补上引用。
-        core.maps[0].children.push(city_id.clone());
-        {
-            let mut d = world.resource_mut::<DrillState>();
-            assert!(d.enter(&core, &city_id), "城市应是根图的直接子图");
-        }
-        schedule.run(&mut world);
-        assert_eq!(count_fades(&mut world), 1, "换图应生成一个淡出精灵");
-
-        // 换模式：即时重建是既有行为，不再叠加淡出。
-        world.resource_mut::<ViewState>().mode = ViewMode::Schematic;
-        schedule.run(&mut world);
-        assert_eq!(
-            count_fades(&mut world),
-            1,
-            "换模式（换眼镜）不应生成第二个淡出精灵"
-        );
     }
 }

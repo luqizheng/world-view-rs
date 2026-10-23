@@ -36,8 +36,6 @@ use crate::map_frame;
 use crate::measurement;
 use crate::paper_overlay;
 use crate::streets;
-use crate::terrain_chunks;
-use crate::terrain_view;
 use crate::vector_layers;
 use crate::world_projection;
 
@@ -57,9 +55,9 @@ impl Plugin for MapRenderPlugin {
                 // 图层帧（ADR-0013）：先于一切消费它的渲染系统求值
                 layer_frame::resolve_layer_frame,
                 // 等值线矢量叠加（ADR-0012 / plan v0.1 M2）
-                terrain_view::sync_isoline_overlay,
+                crate::cellmap_bridge::sync_isoline_overlay,
                 // 地形分块 + mip + 视口拣选（优化项 3a/3b/3c）
-                terrain_chunks::sync_terrain_chunks,
+                crate::cellmap_bridge::sync_terrain_chunks,
                 // 纸纹叠加（ADR-0042）：斑驳 + 晕影，图幅变化时重建
                 paper_overlay::sync_paper_overlay,
                 // 街道图层缓存：当前图变化时重读（ADR-0010）
@@ -101,8 +99,8 @@ impl Plugin for EditorOverlayPlugin {
         app.init_resource::<cell_selection::CellSelectionEntities>()
             .init_resource::<cell_selection::CellRegionEntities>()
             .add_systems(Update, brush_cursor::sync_brush_cursor)
-            .add_systems(Update, cell_selection::sync_cell_selection)
-            .add_systems(Update, cell_selection::sync_cell_region)
+            .add_systems(Update, crate::cellmap_bridge::sync_cell_selection)
+            .add_systems(Update, crate::cellmap_bridge::sync_cell_region)
             .add_systems(
                 Update,
                 (
@@ -140,7 +138,7 @@ impl Plugin for MapShellPlugin {
         // 纸面氛围层（ADR-0016 M2：雾霭 + 纸张噪点）
         app.add_systems(
             Update,
-            terrain_view::atmosphere::sync_atmosphere.after(map_frame::sync_map_frame),
+            crate::cellmap_bridge::sync_atmosphere.after(map_frame::sync_map_frame),
         );
     }
 }

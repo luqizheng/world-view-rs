@@ -1021,10 +1021,10 @@ fn adopt_world_snapshot(
     );
     let image = wv_render::terrain_view::image_from_terrain(
         &data,
-        view.mode,
+        wv_render::cellmap_bridge::shade_mode_of(view.mode),
         atlas,
         view.terrain_soften,
-        wv_render::theme::theme_pack::builtin::for_palette(view.map_palette),
+        &wv_render::cellmap_bridge::conv_pack(view.active_theme),
         0.0,
     );
     wv_render::terrain_view::replace_terrain_texture(
@@ -1033,7 +1033,7 @@ fn adopt_world_snapshot(
         image,
         &data,
         map,
-        view.mode,
+        wv_render::cellmap_bridge::shade_mode_of(view.mode),
         view.terrain_soften,
         view.active_theme.id,
     );

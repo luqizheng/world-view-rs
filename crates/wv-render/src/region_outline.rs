@@ -221,7 +221,7 @@ pub fn sync_region_outlines(
     // 2026-10-22 内容矩阵：区域层从 TerrainDecor 拆到独立 pass——Schematic
     // 下装饰 ✓ 而区域 ✗，共享一格做不到（ADR-0051）。
     // CellMap（Topographic）：nature_overlay 放行 Nature 类（判定入口唯一）。
-    let enabled = crate::region_overlay::region_layer_visible(
+    let enabled = crate::cellmap_bridge::region_layer_visible(
         view.mode,
         view.nature_overlay,
         wv_core::model::region::RegionKind::Nature,

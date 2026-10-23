@@ -10,19 +10,17 @@
 //!
 //! ## 边界（不做什么）
 //! - **JRPG 图集已弃用（2026-11 用户裁定）** —— `ensure_atlas` 恒 `None`，渲染侧
-//!   回退纯色平涂（[`crate::theme::colors::core_terrain`]）；`load_tile_atlas` 保留供未来
+//!   回退纯色平涂（[`crate::palette::core_terrain`]）；`load_tile_atlas` 保留供未来
 //!   接入其他图集包。
 //!
 //! ## 主要导出
 //! - [`TileAtlas`] / [`load_tile_atlas`] / [`ensure_atlas`]
 
-#![cfg(feature = "app")]
-
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageSampler};
 use bevy::prelude::*;
 
-use crate::state::ViewMode;
+use crate::shade::ShadeMode;
 
 /// 瓦片图集：已解码的 RGBA 像素 + 网格规格 + `TerrainKind → 格位` 映射。
 ///
@@ -152,23 +150,23 @@ pub enum TileTint {
     Fade,
 }
 
-pub(crate) fn tile_tint_for_mode(mode: ViewMode) -> TileTint {
+pub fn tile_tint_for_mode(mode: ShadeMode) -> TileTint {
     match mode {
-        ViewMode::Schematic => TileTint::Identity,
-        ViewMode::RealTerrain => TileTint::Height(1.0), // 系数逐格覆写
-        ViewMode::Faction => TileTint::Fade,
+        ShadeMode::Schematic => TileTint::Identity,
+        ShadeMode::RealTerrain => TileTint::Height(1.0), // 系数逐格覆写
+        ShadeMode::Faction => TileTint::Fade,
         // 事件图是极简灰白底图（基线 §1.10 模式 D），不铺瓦片。
         // 轮廓图（模式 E）同样不铺瓦片——只有水陆三色与海岸线。
-        ViewMode::Event => TileTint::Identity,
-        ViewMode::Coastline => TileTint::Identity,
-        // Google Default Map（ViewMode::GoogleMap）与色块地形同为平铺色块，Identity 保留原色。
-        ViewMode::GoogleMap => TileTint::Identity,
+        ShadeMode::Event => TileTint::Identity,
+        ShadeMode::Coastline => TileTint::Identity,
+        // Google Default Map（ShadeMode::GoogleMap）与色块地形同为平铺色块，Identity 保留原色。
+        ShadeMode::GoogleMap => TileTint::Identity,
         // TODO(plan v0.1 D3-A): 等值线矢量平涂管线未落地前，瓦片按原色直铺
         // （平涂家族，与 shade_for_mode 的 shade_flat 回退同一口径）。
-        ViewMode::VectorFlat => TileTint::Identity,
+        ShadeMode::VectorFlat => TileTint::Identity,
         // Topographic 分析视图（[ADR-0039]）—— 不经瓦片管线（`CellRenderer::new`
         // 已经 `atlas = None`）；`TileTint::Identity` 是兜底，本路径不会被调用。
-        ViewMode::Topographic => TileTint::Identity,
+        ShadeMode::Topographic => TileTint::Identity,
     }
 }
 

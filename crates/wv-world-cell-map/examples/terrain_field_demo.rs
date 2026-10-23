@@ -42,8 +42,8 @@ use bevy::{
 };
 
 use wv_core::terrain::{TerrainCellData, TerrainData};
-use wv_render::terrain_view::atmosphere::veil_alpha;
-use wv_render::terrain_view::field::{
+use wv_world_cell_map::terrain_view::atmosphere::veil_alpha;
+use wv_world_cell_map::terrain_view::field::{
     anchor_offset, bake_line_dash, build_material_with_lines, build_paper_material,
     build_veil_material, default_params, expand_strokes, hash01, placeholder_atlas,
     rivers_from_terrain, set_coast_encoding, shadow_color, shadow_offset, slot_index,
@@ -736,9 +736,9 @@ fn setup(
     info!(
         "地物符号：{} 个（占位图集 {}²，单元 {}px，内容 {}px）",
         placed,
-        wv_render::terrain_view::field::ATLAS_SIZE,
+        wv_world_cell_map::terrain_view::field::ATLAS_SIZE,
         CELL_PX,
-        wv_render::terrain_view::field::CONTENT_PX
+        wv_world_cell_map::terrain_view::field::CONTENT_PX
     );
 
     // ── P4 纸面两层（T48 层序：地形 → 雾 → 纸面）─────────────────────────
@@ -871,7 +871,7 @@ fn sync_material(
     };
     // T19 域扭曲幅度：随缩放重算（远观 0.45 格手绘起伏 / 近观 0.05 格保点选精度）。
     // 写进 `pad0.x`——P1 就预留好的槽位，接线不改绑定布局。
-    mat.params.pad0[0] = wv_render::terrain_view::field::warp_amp(state.px_per_cell);
+    mat.params.pad0[0] = wv_world_cell_map::terrain_view::field::warp_amp(state.px_per_cell);
     // T28 水彩幅度：pw 槽 `shore_edges.w`（P1 预留位）。
     mat.params.shore_edges[3] = 1.0;
     // relief: xy = 明暗钳制。H 键把它压成 1.0 = 关掉 hillshade（对比观察用）

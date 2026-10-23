@@ -24,8 +24,6 @@
 //! 美术资产（21 张符号的设计稿）不在代码范围内——这里用**占位图集**把管线
 //! 跑通，出图后按 T41 验收「12 个符号缩到 32px 涂黑仍可辨」再换真图。
 
-#![cfg(feature = "app")]
-
 use bevy::asset::RenderAssetUsages;
 use bevy::image::Image;
 use bevy::prelude::*;

@@ -31,6 +31,7 @@ use crate::AppConfig;
 use wv_render::brush_cursor;
 use wv_render::buildings;
 use wv_render::camera;
+use wv_render::cellmap_bridge;
 use wv_render::faction_overlays;
 use wv_render::feature_overlays;
 use wv_render::layer_frame;
@@ -361,7 +362,7 @@ pub fn run(config: AppConfig) {
             // 编辑态逐格网格（plan v0.1 D4）：与等值线同管线族，先于 chunk 层。
             terrain_view::sync_grid_lines,
             // 地形分块 + mip + 视口拣选（优化项 3a/3b/3c）。
-            terrain_chunks::sync_terrain_chunks,
+            cellmap_bridge::sync_terrain_chunks,
             // 派生诊断刷新：在 flush 之后、UI 之前；面板本帧即可读新值。
             editing::refresh_project_diagnostics,
             // 候选区预览输入（ADR-0045 追记四）：光标格 → biome 连通区环。
@@ -401,14 +402,14 @@ pub fn run(config: AppConfig) {
     // region 的声明换覆盖物变体 / 颜色），缺失标记紧随其后。
     .add_systems(
         Update,
-        region_overlay::sync_region_overlay_index
+        cellmap_bridge::sync_region_overlay_index
             .after(terrain_view::sync_grid_config)
             .before(terrain_decor::sync_terrain_decor),
     )
     .add_systems(
         Update,
-        region_overlay::sync_missing_overlay_markers
-            .after(region_overlay::sync_region_overlay_index),
+        cellmap_bridge::sync_missing_overlay_markers
+            .after(cellmap_bridge::sync_region_overlay_index),
     )
     // 主链已顶满 Bevy 系统元组的 20 参上限（all_tuples，bevy_ecs
     // function_system.rs），笔刷光标单独注册、显式排在光标取世界坐标之后。
@@ -433,7 +434,7 @@ pub fn run(config: AppConfig) {
     // `sync_map_frame` 之后（同帧即可，只要不先于地形 chunk 出现）。
     .add_systems(
         Update,
-        terrain_view::atmosphere::sync_atmosphere.after(map_frame::sync_map_frame),
+        cellmap_bridge::sync_atmosphere.after(map_frame::sync_map_frame),
     )
     // 2.5D 建筑挤出（ADR-0016 §6）：独立注册，消费主链产出的 LayerFrame。
     .add_systems(
@@ -700,10 +701,10 @@ fn setup_terrain_texture_after_world(
         terrain_view::active_terrain_or_placeholder(&mut projection.world, drill.current(), 512);
     let image = terrain_view::image_from_terrain(
         &data,
-        view.mode,
+        cellmap_bridge::shade_mode_of(view.mode),
         atlas.as_ref(),
         view.terrain_soften,
-        view.active_theme,
+        &cellmap_bridge::conv_pack(view.active_theme),
         0.0,
     );
     commands.insert_resource(terrain_view::new_terrain_texture(
@@ -711,7 +712,7 @@ fn setup_terrain_texture_after_world(
         image,
         &data,
         map,
-        view.mode,
+        cellmap_bridge::shade_mode_of(view.mode),
         view.terrain_soften,
         view.active_theme.id,
     ));

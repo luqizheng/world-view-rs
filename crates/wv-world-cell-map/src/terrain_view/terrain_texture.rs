@@ -1,4 +1,4 @@
-﻿//! `TerrainTexture` 资源 + 脏块追踪 + 分辨率推算。
+//! `TerrainTexture` 资源 + 脏块追踪 + 分辨率推算。
 //!
 //! ## 职责
 //! - `TerrainTexture` —— Bevy 资源（句柄 + 脏标记 + 上次承载图 id + 模式/淡化镜像）。
@@ -12,11 +12,9 @@
 //! ## 主要导出
 //! - [`TerrainTexture`]
 
-#![cfg(feature = "app")]
-
 use bevy::prelude::*;
 
-use crate::state::ViewMode;
+use crate::shade::ShadeMode;
 use wv_core::terrain::TerrainData;
 
 /// 地形纹理句柄 + 脏块追踪。
@@ -47,7 +45,7 @@ pub struct TerrainTexture {
     /// **仅供「模式是否真的变了」的比较**（基线 §2.11：不要每帧重建整图）。
     /// 用 `Option` 是为了区分「尚未构建过」：`None` 表示纹理还从未按任一模式
     /// 生成过——此时即使数据稍后才可用，也应重建一次。
-    pub last_mode: Option<ViewMode>,
+    pub last_mode: Option<ShadeMode>,
     /// 当前纹理内容是否带底图淡化（与 `view.terrain_soften` 比较用）。
     pub last_soften: bool,
     /// 当前纹理内容所用的地图主题（ADR-0016，与 `view.map_palette` 比较用）——
@@ -94,13 +92,13 @@ fn rect_union(cur: Option<[u32; 4]>, rect: [u32; 4]) -> Option<[u32; 4]> {
 /// 这是 `CellRenderer`、启动纹理资源与 chunk 拷贝的唯一分辨率口径。若在各处
 /// 重新推断，`TerrainTexture.res` 会与实际 `Image` 尺寸脱节，主视口 / minimap /
 /// 增量 patch 随之错位。
-pub(crate) fn terrain_res_for(
+pub fn terrain_res_for(
     data: &TerrainData,
-    mode: ViewMode,
+    mode: ShadeMode,
     atlas: Option<&super::tile_atlas::TileAtlas>,
 ) -> u32 {
     let cells = data.width.max(data.height).max(1);
-    if mode == ViewMode::GoogleMap || mode == ViewMode::VectorFlat {
+    if mode == ShadeMode::GoogleMap || mode == ShadeMode::VectorFlat {
         // VectorFlat 与 GoogleMap 同口径：填充的水陆边由双线性高度采样决定
         // （isoline_overlay 的等值线描边也插值自同一高度场），亚像素分辨率让
         // 填充边与描边在像素级吻合——1px/格会把边退化成锯齿阶梯。

@@ -53,6 +53,7 @@ wv-app  →  wv-edit  ───┐
                                 wv-overture（与 wv-core 平行，CLI 数据导入辅助）
                                 wv-ui（与 wv-render 平行，egui 控件 + 界面令牌叶子，ADR-0026）
                                 wv-theme（与 wv-render 平行，色板 + 主题包契约叶子，ADR-0043）
+                                wv-world-cell-map（wv-render 下游叶子：世界级地形工作台，wv-render 单向依赖之，ADR-0054）
 ```
 
 > `wv-edit` 与 `wv-render` 是 **双子 crate**——前者写、后者读，**互不依赖**，由 `wv-app` 同时装配。
@@ -64,10 +65,21 @@ wv-app  →  wv-edit  ───┐
 | `wv-core` | `serde`, `thiserror` | ❌ Bevy / egui / 任何渲染库<br>❌ 任何文件系统访问（`std::fs`）<br>❌ 任何网络库 |
 | `wv-io` | `wv-core`, `serde`, `serde_yaml` | ❌ Bevy / 渲染库<br>❌ 反向依赖 `wv-edit` / `wv-render` / `wv-app` |
 | `wv-edit` | `wv-core`, `wv-terrain` | ❌ 直接读写文件（那是 `wv-io` 的职责）<br>❌ 渲染库<br>❌ 反向依赖 `wv-render` |
-| `wv-render` | `wv-core`, `wv-terrain`, `bevy`, `bevy_egui`, `egui_extras`（均 `optional = true`） | ❌ 直接读写文件<br>❌ 反向依赖 `wv-edit` / `wv-app`<br>❌ 直接持有 `wv-edit::EditHistory`（intent→dispatcher 翻译必走 wv-app）<br>❌ 直接构造 `wv_edit::EditCommand`（同上）|
+| `wv-render` | `wv-core`, `wv-terrain`, `bevy`, `bevy_egui`, `egui_extras`, `wv-theme`, `wv-world-cell-map`（均 `optional = true`，随 `app` feature） | ❌ 直接读写文件<br>❌ 反向依赖 `wv-edit` / `wv-app`<br>❌ 直接持有 `wv-edit::EditHistory`（intent→dispatcher 翻译必走 wv-app）<br>❌ 直接构造 `wv_edit::EditCommand`（同上）|
 | `wv-ui` | `bevy`, `bevy_egui`, `egui_extras`（均**非 optional**，ADR-0026） | ❌ `wv-core` / `wv-terrain` / `wv-io` / `wv-edit` / `wv-render` / `wv-app` 任何依赖<br>❌ 文件系统 / 网络 / i18n / 世界色板 |
 | `wv-theme` | `bevy`（**非 optional**，ADR-0043 D1）、`wv-terrain`（纯数据叶子，取 `BiomeFamily`） | ❌ `wv-core` / `wv-io` / `wv-edit` / `wv-render` / `wv-app` 任何依赖<br>❌ `bevy_egui`（egui 是界面关注点，桥接在 wv-app 侧）<br>❌ 文件系统 / 网络 |
+| `wv-world-cell-map` | `wv-core`, `wv-terrain`, `bevy`（均**非 optional**，ADR-0054 D3） | ❌ `wv-theme`（固定色 crate 级禁令）/ `wv-io` / `wv-edit` / `wv-render` / `wv-app` 任何依赖<br>❌ 文件系统 / 网络<br>❌ 世界数据写入（编辑必经 wv-app 的 `EditCommand` 链） |
 | `wv-app` | `wv-edit`, `wv-render`, `wv-io`, `wv-core`, `wv-terrain`, `wv-overture`, `wv-ui` | ❌ 作为世界的**权威存储**（source of truth 是磁盘 YAML）<br>❌ 绕过 `wv-edit` 直接改世界（必须走 `EditCommand` / `History`）<br>❌ 在 `System`（包括 wv-render 注册的）中 `ResMut<wv-edit::EditHistory>` 或 `ResMut<wv-app state>` 的世界数据<br>❌ 持有「当前值」形态的世界状态（应经 `TimelineQuery` 求值） |
+
+> **`wv-world-cell-map` 补记**（2026-10-23，ADR-0054）：世界级地形工作台
+> （`terrain_view/` 含 GPU field 管线 / `terrain_chunks` / `cell_selection` /
+> `region_overlay` / `biome_boundary` / `EditCellState` / `GridConfig`）从
+> `wv-render` 整建制独立成叶子 crate。**固定色 crate 级禁令**：不依赖任何
+> theme crate，色值走平面数据（`CellPalette`），默认源 = 随迁的冻结群系表；
+> `ThemePack → CellPalette` 换算与 `ViewMode → ShadeMode` 映射在 wv-render 侧。
+> wv-render 单向依赖它（主题浏览态消费同一条 GPU 场管线）；旧路径经
+> wv-render re-export 兼容。族后续成员（wv-city-map / wv-building-map）立项各开 ADR。
+> bevy 非 optional，标准门禁天然覆盖——为「独立被 AI 优化」服务。
 
 > **`wv-theme` 补记**（2026-10-20，ADR-0043）：主题层（色板 / 装饰旗标 /
 > 覆盖物规则 / 主题包契约）从 `wv-render` 整建制独立成平行叶子 crate
@@ -110,6 +122,9 @@ cargo tree -p wv-render | grep -E 'wv-edit|wv-app'
 
 # 确认 wv-ui 不依赖任何兄弟 / 根 crate（应输出空；ADR-0026）
 cargo tree -p wv-ui | grep -E 'wv-core|wv-terrain|wv-io|wv-edit|wv-render|wv-app'
+
+# 确认 wv-world-cell-map 不依赖 theme / 兄弟 crate（应输出空；ADR-0054）
+cargo tree -p wv-world-cell-map | grep -E 'wv-theme|wv-io|wv-edit|wv-render|wv-app'
 
 # 确认无循环依赖
 cargo tree --workspace --duplicates

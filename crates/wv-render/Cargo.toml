@@ -13,7 +13,7 @@ description = "World View 渲染层：Bevy 地图渲染、渲染配色与视图�
 default = []
 # `wv-theme` 随 app 一起打开：它非 optional 依赖 bevy（ADR-0043 D1/D2），
 # 而本 crate 的红线是「不带 feature 时零 Bevy 依赖树」（ADR-0020）。
-app = ["dep:bevy", "dep:bevy_egui", "dep:wv-theme"]
+app = ["dep:bevy", "dep:bevy_egui", "dep:wv-theme", "dep:wv-world-cell-map"]
 
 [dependencies]
 wv-core = { workspace = true }
@@ -28,27 +28,12 @@ bevy = { workspace = true, optional = true }
 bevy_egui = { workspace = true, optional = true }
 # 主题层（色板 / 装饰旗标 / 覆盖物规则 / 主题包契约）——ADR-0043 D2。
 wv-theme = { workspace = true, optional = true }
+# 世界级地形工作台（CellMap 渲染与编辑域，固定色零 theme）——ADR-0054 D2：
+# wv-render 单向依赖它；ThemePack→CellPack 换算与 ViewMode→ShadeMode 映射在本侧。
+wv-world-cell-map = { workspace = true, optional = true }
 
 [dev-dependencies]
-# examples（ADR-0051 P1 demo / R1 spike）需要 Bevy；dev-dependency 不进
-# 默认依赖树，`cargo test --workspace`（不带 feature）依旧零 Bevy 编译。
+# examples（ADR-0051 P1 demo / R1 spike）2026-10-23 随 CellMap 域迁往
+# wv-world-cell-map（ADR-0054）；本 crate 暂无 example。
 bevy = { workspace = true }
 wv-terrain = { workspace = true }
-
-# P1 demo（ADR-0051）：field 管线在 `app` feature 门下（依赖 bevy + wv-theme），
-# example 必须声明 required-features 才能编译——不为 demo 打破默认零 Bevy 树。
-# P1 demo（ADR-0053）：独立可运行程序，演示 GPU 逐像素地形场。
-# 必须在 material.rs + terrain_field.wgsl 就位后才启用——声明指向不存在的
-# 文件会让本 crate 全部 target 编译失败（连 lib 单测都跑不了）。
-[[example]]
-name = "terrain_field_demo"
-path = "examples/terrain_field_demo.rs"
-required-features = ["app"]
-
-# R1 spike：核验 Bevy 0.19 的 `Material2d` + WGSL import 路径（全仓首个自定义
-# 材质先例）。已实测通过——`AsBindGroup` 三类绑定 + `#import bevy_sprite::`
-# 的 `mesh2d_vertex_output::VertexOutput` 入口均成立。
-[[example]]
-name = "r1_spike"
-path = "examples/r1_spike.rs"
-required-features = ["app"]

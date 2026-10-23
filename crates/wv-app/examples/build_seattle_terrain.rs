@@ -20,6 +20,7 @@ use std::path::Path;
 
 use wv_core::terrain::{TerrainCellData, TerrainData};
 use wv_io::terrain_bin::write_terrain;
+use wv_render::cellmap_bridge::{conv_pack, shade_mode_of};
 use wv_render::state::ViewMode;
 use wv_render::terrain_view::image_from_terrain;
 
@@ -101,10 +102,12 @@ fn main() {
     // 渲染谷歌风 PNG。
     let img = image_from_terrain(
         &data,
-        ViewMode::GoogleMap,
+        shade_mode_of(ViewMode::GoogleMap),
         None,
         true,
-        wv_render::theme::theme_pack::builtin::for_palette(Default::default()),
+        &conv_pack(wv_render::theme::theme_pack::builtin::for_palette(
+            Default::default(),
+        )),
         0.0,
     );
     let out = root.join("target/map_preview/seattle_google.png");
@@ -120,10 +123,12 @@ fn main() {
     // 也渲染真实地形模式，供对照。
     let img_rt = image_from_terrain(
         &data,
-        ViewMode::RealTerrain,
+        shade_mode_of(ViewMode::RealTerrain),
         None,
         true,
-        wv_render::theme::theme_pack::builtin::for_palette(Default::default()),
+        &conv_pack(wv_render::theme::theme_pack::builtin::for_palette(
+            Default::default(),
+        )),
         0.0,
     );
     let out_rt = root.join("target/map_preview/seattle_real.png");

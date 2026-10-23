@@ -2,7 +2,7 @@
 //!
 //! ## 职责
 //! - `CellRenderer` —— 单元渲染器（全图合成与增量 patch **必须共用**）。
-//! - `shade_*` —— 视图模式 → 着色函数（`shade_real` / `shade_google` / `shade_flat` / `shade_faded` / `shade_event` / `shade_coast`），随主题色板（`PaletteColors`，ADR-0016）取值。
+//! - `shade_*` —— 视图模式 → 着色函数（`shade_real` / `shade_google` / `shade_flat` / `shade_faded` / `shade_event` / `shade_coast`），随主题色板（`CellPalette`，ADR-0016）取值。
 //! - `hash01` / `vnoise` / `wobble_px` —— 边界扰动噪声（确定性，跨平台一致）。
 //! - `image_from_terrain` —— 由 `TerrainData` 构造 Bevy `Image`（全图合成）。
 //! - `patch_terrain_image` —— 脏块增量 patch（笔触提交用）。
@@ -14,20 +14,14 @@
 //! ## 主要导出
 //! - [`image_from_terrain`] / [`patch_terrain_image`]
 
-#![cfg(feature = "app")]
-
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
+use crate::palette::{self, CellPack, CellPalette, SeaRecipe, TreatmentFlags};
 use wv_core::terrain::{TerrainCellData, TerrainData};
 use wv_terrain::biome::display_kind;
-use wv_theme::sea::SeaRecipe;
-use wv_theme::theme_pack::ThemePack;
 
-use crate::state::ViewMode;
-use crate::theme::colors;
-use crate::theme::colors_google;
-use crate::theme::palette::PaletteColors;
+use crate::shade::ShadeMode;
 
 use super::terrain_texture::terrain_res_for;
 use super::tile_atlas::{
@@ -67,7 +61,7 @@ fn slot_is_water(kind: u8) -> bool {
 /// 避免 wv-render 反向依赖 wv-terrain 内部 cell 类型。
 ///
 /// [ADR-0039]: ../docs/adr/ADR-0039-topographic-viewmode.md
-pub(crate) fn topographic_thresholds_for(
+pub fn topographic_thresholds_for(
     cells: &[wv_core::terrain::TerrainCellData],
     p_low: f32,
     p_high: f32,
@@ -90,40 +84,40 @@ pub(crate) fn topographic_thresholds_for(
 /// 把一个着色函数应用到一格，返回 sRGB 线性分量。
 ///
 /// 第三参 = 当前主题色板（ADR-0016）：主题相关色一律经它取，禁止直引常量。
-type Shader = fn(&TerrainData, u8, &PaletteColors) -> Color;
+type Shader = fn(&TerrainData, u8, &CellPalette) -> Color;
 
 /// 依据当前视图模式选择纯色着色函数（基线 §1.10 四态；图集缺项/无图集时也走这里）。
-fn shade_for_mode(mode: ViewMode) -> Shader {
+fn shade_for_mode(mode: ShadeMode) -> Shader {
     match mode {
         // 真实地形：按高度调制明度，制造立体感（法线光照的廉价近似）。
-        ViewMode::RealTerrain => shade_real,
+        ShadeMode::RealTerrain => shade_real,
         // 色块地形：纯色平涂。
-        ViewMode::Schematic => shade_flat,
+        ShadeMode::Schematic => shade_flat,
         // 势力图：原型阶段底色淡化地形（势力几何属 S12，本轮不画）。
-        ViewMode::Faction => shade_faded,
+        ShadeMode::Faction => shade_faded,
         // 事件图：极简灰白底图。
-        ViewMode::Event => shade_event,
+        ShadeMode::Event => shade_event,
         // 轮廓图：水陆二分深色 + 海岸线（海岸线在边界格逐像素画，见
         // `write_coast_boundary_cell`；这里只管内部格的水/陆平涂）。
-        ViewMode::Coastline => shade_coast,
+        ShadeMode::Coastline => shade_coast,
         // Google Default Map：近白陆地 + 淡水 + 绿地（色板见 palette_google）。
-        ViewMode::GoogleMap => shade_google,
+        ShadeMode::GoogleMap => shade_google,
         // 等值线矢量平涂（ADR-0012 / plan v0.1 M2）：内部格走本 shader 的
         // 类型色平涂；边界格的水陆由 `sample_vector_flat` 的双线性高度采样
         // 决定——填充边与 `isoline_overlay` 的等值线描边同源吻合。
-        ViewMode::VectorFlat => shade_flat,
+        ShadeMode::VectorFlat => shade_flat,
         // Topographic 分析视图（[ADR-0039]）—— PR-1 **占位**：
         // 仅返主题纸面色（`palette.soften_toward`），正确的 cell-by-cell 水/陆
         // + height 3 阶着色 PR-1b 落地（独立 worktree；详见 `shade_topographic`
         // 的 doc-comment 与 ADR-0039 §6 落点列表的 "1 cell" 行）。
         //
         // **为什么不现在做**：本 shader 类型签名不持 cell 坐标——
-        // `fn(&TerrainData, u8, &PaletteColors) -> Color`——无法在着色路径里
+        // `fn(&TerrainData, u8, &CellPalette) -> Color`——无法在着色路径里
         // 查 `data.cells[gy * w + cx]` 拿到 cell.height + cell.surface；
         // cell-by-cell 着色需 `write_cell_split` 早返回分支，依赖
         // `CellRenderer` 持有百分位阈值（PR-1b 在 `state.rs::topographic_thresholds`
         // 上加 ResMut 写回，仍是 fixable）。
-        ViewMode::Topographic => shade_topographic,
+        ShadeMode::Topographic => shade_topographic,
     }
 }
 
@@ -138,34 +132,34 @@ fn shade_for_mode(mode: ViewMode) -> Shader {
 /// 接通了，但视觉细节等 PR-1b」。
 ///
 /// [ADR-0039]: ../docs/adr/ADR-0039-topographic-viewmode.md
-fn shade_topographic(_data: &TerrainData, _kind: u8, pal: &PaletteColors) -> Color {
+fn shade_topographic(_data: &TerrainData, _kind: u8, pal: &CellPalette) -> Color {
     pal.soften_toward
 }
 
-fn shade_google(_data: &TerrainData, kind: u8, _pal: &PaletteColors) -> Color {
+fn shade_google(_data: &TerrainData, kind: u8, _pal: &CellPalette) -> Color {
     // Google Default Map 做普通地图折叠（2026-10-13 用户裁定）：
     // 不渲染地形高低分带。Google 普通地图的陆地是单一近白平涂；若把
     // Perlin 高度分带（沙/草/丘/山/雪）逐档着色，整图会退化成近色马赛克。
     // 折叠规则：水两档保留层次、森林作公园绿斑、沼泽保留湿绿，
     // 其余陆上类一律折叠为陆地基色（`GOOGLE_CORE_TERRAIN[2]` 近白陆色）。
     match kind {
-        0 | 1 | 4 | 8 => colors_google::google_core_terrain(kind),
-        _ => colors_google::GOOGLE_CORE_TERRAIN[2],
+        0 | 1 | 4 | 8 => palette::google_core_terrain(kind),
+        _ => palette::GOOGLE_CORE_TERRAIN[2],
     }
 }
 
-fn shade_flat(_data: &TerrainData, kind: u8, pal: &PaletteColors) -> Color {
+fn shade_flat(_data: &TerrainData, kind: u8, pal: &CellPalette) -> Color {
     pal.core_terrain(kind)
 }
 
-fn shade_real(data: &TerrainData, kind: u8, pal: &PaletteColors) -> Color {
+fn shade_real(data: &TerrainData, kind: u8, pal: &CellPalette) -> Color {
     // 用 kind 对应的基色，叠加高度明度调制。
     // 这里 data 已无单格高度上下文，故高度调制在 write_terrain_pixels 里做。
     let _ = data;
     pal.core_terrain(kind)
 }
 
-fn shade_faded(_data: &TerrainData, kind: u8, pal: &PaletteColors) -> Color {
+fn shade_faded(_data: &TerrainData, kind: u8, pal: &CellPalette) -> Color {
     // 淡化：向**该主题的纸面色**混 55%，保留地形骨架（特效 §2.1 alpha≈0.35
     // 的近似）。ADR-0016 前混固定灰 0.7；古舆图 / 暮色下向纸面混合更自洽，
     // 也让势力图底色随主题走（暮色势力图不再是刺眼的亮灰底）。
@@ -184,16 +178,16 @@ fn shade_faded(_data: &TerrainData, kind: u8, pal: &PaletteColors) -> Color {
     )
 }
 
-fn shade_event(_data: &TerrainData, _kind: u8, pal: &PaletteColors) -> Color {
+fn shade_event(_data: &TerrainData, _kind: u8, pal: &CellPalette) -> Color {
     pal.event_backdrop
 }
 
-fn shade_coast(_data: &TerrainData, kind: u8, _pal: &PaletteColors) -> Color {
+fn shade_coast(_data: &TerrainData, kind: u8, _pal: &CellPalette) -> Color {
     // 轮廓图三色是模式语义色，不随主题切换（ADR-0016 §2）。
     if slot_is_water(kind) {
-        colors::COAST_WATER
+        palette::COAST_WATER
     } else {
-        colors::COAST_LAND
+        palette::COAST_LAND
     }
 }
 
@@ -242,13 +236,13 @@ fn relief_mul(data: &TerrainData, cx: u32, cy: u32) -> f32 {
 ///
 /// 海岸/轮廓模式不进这里（`shade_coast` 单独出口）。
 ///
-/// **最深深水位（`t = 1.0`，约 `height ≤ -3500 m`）直接返回 [`PaletteColors::deep_ocean_blue`]**：
+/// **最深深水位（`t = 1.0`，约 `height ≤ -3500 m`）直接返回 [`CellPalette::deep_ocean_blue`]**：
 /// 不再走主题里的「深海」色 + 冷偏移。原因：旧路径过 `soften (35% keep)` +
 /// 远缩放 `veil` 后会退成中性灰（约 `(210, 213, 212)`），肉眼辨不出「海」
 ///（2026-10-16 用户反馈）。新版用一个语义「深海」色，无论缩放 / 主题
 /// 怎么叠都明确深蓝。`MapBase::Ocean.cell()` 的 `height = -3500` 命中
 /// 这一分支——所以选了「海洋」的用户立刻看到深蓝。
-fn water_shade_at(height: i16, pal: &PaletteColors, sea: &SeaRecipe) -> Color {
+fn water_shade_at(height: i16, pal: &CellPalette, sea: &SeaRecipe) -> Color {
     let t = sea.depth_t(height);
     // 2026-10-16：最深深水位（海沟、大洋中央）走明确深蓝色，不再 lerp。
     if t >= 1.0 {
@@ -326,25 +320,25 @@ fn base_color_of(
     kind: u8,
     cx: u32,
     cy: u32,
-    pal: &PaletteColors,
-    treatment: &crate::theme::theme_pack::TreatmentFlags,
-    mode: ViewMode,
+    pal: &CellPalette,
+    treatment: &TreatmentFlags,
+    mode: ShadeMode,
     shore: Option<&[u16]>,
     sea: &SeaRecipe,
 ) -> Color {
     let cell = &data.cells[(cy as usize) * data.width as usize + cx as usize];
     let mut color = shade_for_mode(mode)(data, kind, pal);
-    if treatment.water_gradient && slot_is_water(kind) && mode != ViewMode::Coastline {
+    if treatment.water_gradient && slot_is_water(kind) && mode != ShadeMode::Coastline {
         color = water_shade_at(cell.height, pal, sea);
     }
-    if treatment.snow_shade && kind == 7 && mode != ViewMode::Coastline {
+    if treatment.snow_shade && kind == 7 && mode != ShadeMode::Coastline {
         color = snow_shade_at(cell.height, pal);
     }
     // 近岸浅滩带（2026-10-21 S2）：离岸近的水格向主题 `water_shore` 偏移。
     // 放在**基色**这一步——模糊（bleed）的输入 = 直铺的输出，两条路径
     // 经同一函数取色永不漂移；颗粒 / 淡化 / 浮雕照旧在其后叠加。
     if let (true, Some(field)) = (treatment.shore_shallow, shore) {
-        if slot_is_water(kind) && mode != ViewMode::Coastline {
+        if slot_is_water(kind) && mode != ShadeMode::Coastline {
             let idx = (cy as usize) * data.width as usize + cx as usize;
             if let Some(d) = field.get(idx) {
                 let k = sea.shore_band_strength(*d);
@@ -370,12 +364,12 @@ fn base_color_of(
 ///（同 Topographic 阈值「每次合成重算」的取舍，[ADR-0039] §4.1.1）。
 fn shore_field_for(
     data: &TerrainData,
-    mode: ViewMode,
-    treatment: &crate::theme::theme_pack::TreatmentFlags,
+    mode: ShadeMode,
+    treatment: &TreatmentFlags,
     sea: &SeaRecipe,
 ) -> Option<Vec<u16>> {
     let wants_field = treatment.shore_shallow || !sea.ripples.is_empty();
-    if !wants_field || !matches!(mode, ViewMode::VectorFlat | ViewMode::Schematic) {
+    if !wants_field || !matches!(mode, ShadeMode::VectorFlat | ShadeMode::Schematic) {
         return None;
     }
     let (w, h) = (data.width.max(1), data.height.max(1));
@@ -405,9 +399,9 @@ fn blended_base(
     data: &TerrainData,
     cx: u32,
     cy: u32,
-    pal: &PaletteColors,
-    treatment: &crate::theme::theme_pack::TreatmentFlags,
-    mode: ViewMode,
+    pal: &CellPalette,
+    treatment: &TreatmentFlags,
+    mode: ShadeMode,
     shore: Option<&[u16]>,
     sea: &SeaRecipe,
 ) -> Color {
@@ -484,15 +478,15 @@ fn value_noise(x: f32, y: f32, seed: u64) -> f32 {
 ///
 /// 端口 civ-atlas 的 `SNOW_SHADOW` 思路——雪格按海拔叠冷蓝灰，越高越冷。
 fn snow_shadow_t(height: i16) -> f32 {
-    let over = (height as f32 - colors::SNOW_SHADOW_MIN_HEIGHT as f32).max(0.0);
-    let t = over / 1000.0 * colors::SNOW_SHADOW_PER_KM;
+    let over = (height as f32 - palette::SNOW_SHADOW_MIN_HEIGHT as f32).max(0.0);
+    let t = over / 1000.0 * palette::SNOW_SHADOW_PER_KM;
     t.clamp(0.0, 1.0)
 }
 
 /// 雪格按高度叠冷蓝灰阴影（手绘地图 #3）。
 /// 高度低于 `SNOW_SHADOW_MIN_HEIGHT` → 走 `snow_highlight`（比 core_terrain[7] 略亮的近白），
 /// 高于阈值则按 `snow_shadow_t` 在 highlight ↔ shadow 之间 lerp。
-fn snow_shade_at(height: i16, pal: &PaletteColors) -> Color {
+fn snow_shade_at(height: i16, pal: &CellPalette) -> Color {
     let t = snow_shadow_t(height);
     let (Color::Srgba(h), Color::Srgba(s)) = (pal.snow_highlight, pal.snow_shadow) else {
         return pal.snow_highlight;
@@ -551,9 +545,9 @@ struct CellRenderer<'a> {
     data: &'a TerrainData,
     w: u32,
     h: u32,
-    mode: ViewMode,
+    mode: ShadeMode,
     /// 当前主题色板（ADR-0016）：着色与淡化的取值来源。
-    palette: &'a PaletteColors,
+    palette: &'a CellPalette,
     /// 海的画法配方（ADR-0048）：深度量程 / 浅滩带 / 纸纹 / 墨线波纹。
     sea: SeaRecipe,
     /// 水面细节（纸纹 / 墨线）开关：与 `grain` 同口径——Google 普通地图要
@@ -579,9 +573,9 @@ struct CellRenderer<'a> {
     /// VectorFlat / Schematic——水彩是平涂语法；Google（干净）、RealTerrain
     ///（高度写真）、Coastline / Event / Topographic（自有三色/管线）都不掺。
     bleed: bool,
-    /// 装饰旗标（ADR-0023 D4：`ThemePack.treatment`）。HandDrawn 全 `true` 时
+    /// 装饰旗标（ADR-0023 D4：`CellPack.treatment`）。HandDrawn 全 `true` 时
     /// 所有 gate 与历史恒开行为逐位一致。
-    treatment: crate::theme::theme_pack::TreatmentFlags,
+    treatment: TreatmentFlags,
     /// `kind → res² 瓦片块`（按需填充；`None` = 尚未尝试）。
     blocks: [Option<Vec<u8>>; 10],
     /// `kind` 是否已尝试过建块（避免无映射 kind 被反复查）。
@@ -599,10 +593,10 @@ struct CellRenderer<'a> {
 impl<'a> CellRenderer<'a> {
     fn new(
         data: &'a TerrainData,
-        mode: ViewMode,
+        mode: ShadeMode,
         atlas: Option<&'a TileAtlas>,
         soften: bool,
-        pack: &'a ThemePack,
+        pack: &'a CellPack,
         shore: Option<&'a [u16]>,
     ) -> Self {
         let palette = &pack.palette;
@@ -613,7 +607,7 @@ impl<'a> CellRenderer<'a> {
         // 走独立着色管线，不依赖瓦片图集。
         let atlas = if matches!(
             mode,
-            ViewMode::Event | ViewMode::Coastline | ViewMode::Topographic
+            ShadeMode::Event | ShadeMode::Coastline | ShadeMode::Topographic
         ) {
             None
         } else {
@@ -623,7 +617,7 @@ impl<'a> CellRenderer<'a> {
         // Topographic 落到 res=1（每格 1 像素）——分析视图要锐利的方格边界，
         // 不做亚像素插值。
         let res = terrain_res_for(data, mode, atlas);
-        let (hmin, hmax) = if mode == ViewMode::RealTerrain {
+        let (hmin, hmax) = if mode == ShadeMode::RealTerrain {
             data.cells.iter().fold((i16::MAX, i16::MIN), |(lo, hi), c| {
                 (lo.min(c.height), hi.max(c.height))
             })
@@ -634,11 +628,11 @@ impl<'a> CellRenderer<'a> {
         // mode 下现算一次（O(N log N)，1024² ≈ 数 ms，摊进整图合成的量级）。
         // biome 通道不参与（X 路线）；`ViewState::topographic_thresholds` 的
         // 缓存是后续优化口（PR-1b v1 接受每次合成重算，[ADR-0039] §4.1.1）。
-        let topographic = if mode == ViewMode::Topographic {
+        let topographic = if mode == ShadeMode::Topographic {
             Some(topographic_thresholds_for(
                 &data.cells,
-                crate::theme::topographic::TOPOGRAPHIC_P_LOW,
-                crate::theme::topographic::TOPOGRAPHIC_P_HIGH,
+                crate::palette::TOPOGRAPHIC_P_LOW,
+                crate::palette::TOPOGRAPHIC_P_HIGH,
             ))
         } else {
             None
@@ -663,7 +657,7 @@ impl<'a> CellRenderer<'a> {
             soften: soften
                 && !matches!(
                     mode,
-                    ViewMode::Coastline | ViewMode::GoogleMap | ViewMode::Topographic
+                    ShadeMode::Coastline | ShadeMode::GoogleMap | ShadeMode::Topographic
                 ),
             // 等值线模式（VectorFlat）也关闭揉边：它的自然蜿蜒由
             // `isoline_overlay` 的等值线描边承担，逐像素噪声会和几何曲线打架。
@@ -672,24 +666,27 @@ impl<'a> CellRenderer<'a> {
             wobble: treatment.boundary_wobble
                 && !matches!(
                     mode,
-                    ViewMode::GoogleMap | ViewMode::VectorFlat | ViewMode::Topographic
+                    ShadeMode::GoogleMap | ShadeMode::VectorFlat | ShadeMode::Topographic
                 ),
             // 颗粒（ADR-0042 手绘 Nation）与水彩晕开（ADR-0044）都是**美术
             // 装饰**——Topographic 是分析视图，四色是语义色（水/低/中/高），
             // 装饰会洗掉 3 阶对比。故 Topographic 与 GoogleMap 一样不进。
             grain: treatment.land_grain
-                && !matches!(mode, ViewMode::GoogleMap | ViewMode::Topographic),
+                && !matches!(mode, ShadeMode::GoogleMap | ShadeMode::Topographic),
             bleed: treatment.watercolor_bleed
-                && matches!(mode, ViewMode::VectorFlat | ViewMode::Schematic),
+                && matches!(mode, ShadeMode::VectorFlat | ShadeMode::Schematic),
             treatment,
             blocks: std::array::from_fn(|_| None),
             tried: [false; 10],
             topographic,
             shore,
-            sea: pack.sea,
+            sea: pack.sea.clone(),
             water_detail_enabled: !matches!(
                 mode,
-                ViewMode::GoogleMap | ViewMode::Topographic | ViewMode::Coastline | ViewMode::Event
+                ShadeMode::GoogleMap
+                    | ShadeMode::Topographic
+                    | ShadeMode::Coastline
+                    | ShadeMode::Event
             ),
         }
     }
@@ -750,7 +747,7 @@ impl<'a> CellRenderer<'a> {
                     d += w * 2.0 * sea.ripple_warp_cells;
                 }
                 let mut ink_a = 0.0f32;
-                for rp in sea.ripples {
+                for rp in &sea.ripples {
                     let sigma = rp.sigma_cells.max(1e-3);
                     let u = (d - rp.dist_cells) / sigma;
                     ink_a = ink_a.max((-u * u).exp() * rp.alpha);
@@ -775,7 +772,7 @@ impl<'a> CellRenderer<'a> {
                     d += w * 2.0 * sea.foam_warp_cells;
                 }
                 let mut foam_a = 0.0f32;
-                for fp in sea.foam {
+                for fp in &sea.foam {
                     let sigma = fp.sigma_cells.max(1e-3);
                     let u = (d - fp.dist_cells) / sigma;
                     foam_a = foam_a.max((-u * u).exp() * fp.alpha);
@@ -845,7 +842,7 @@ impl<'a> CellRenderer<'a> {
 
     /// 高度明度系数（仅 `RealTerrain` 非 1）。
     fn height_mul(&self, height: i16) -> f32 {
-        if self.mode != ViewMode::RealTerrain {
+        if self.mode != ShadeMode::RealTerrain {
             return 1.0;
         }
         let t = (height as f32 - self.hmin) / self.hrange;
@@ -863,9 +860,9 @@ impl<'a> CellRenderer<'a> {
     fn is_boundary(&self, cx: u32, cy: u32) -> bool {
         let kind0 = display_slot(&self.data.cells[(cy * self.w + cx) as usize]);
         let differs = |a: u8, b: u8| {
-            if self.mode == ViewMode::Coastline {
+            if self.mode == ShadeMode::Coastline {
                 slot_is_water(a) != slot_is_water(b)
-            } else if self.mode == ViewMode::GoogleMap {
+            } else if self.mode == ShadeMode::GoogleMap {
                 // Google 模式下同色的陆上类不构成边界（沙/草/丘/山/雪已折叠为
                 // 同一陆色）——省掉无意义的逐像素超采样。
                 shade_google(self.data, a, self.palette) != shade_google(self.data, b, self.palette)
@@ -876,7 +873,7 @@ impl<'a> CellRenderer<'a> {
         let mut hmin = i16::MAX;
         let mut hmax = i16::MIN;
         // 中心格也参与高度极值（跨零判定含自身）。
-        if self.mode == ViewMode::VectorFlat {
+        if self.mode == ShadeMode::VectorFlat {
             let h0 = self.data.cells[(cy * self.w + cx) as usize].height;
             hmin = hmin.min(h0);
             hmax = hmax.max(h0);
@@ -891,7 +888,7 @@ impl<'a> CellRenderer<'a> {
                     continue;
                 }
                 let cell = &self.data.cells[(ny as u32 * self.w + nx as u32) as usize];
-                if self.mode == ViewMode::VectorFlat {
+                if self.mode == ShadeMode::VectorFlat {
                     hmin = hmin.min(cell.height);
                     hmax = hmax.max(cell.height);
                 }
@@ -901,7 +898,7 @@ impl<'a> CellRenderer<'a> {
             }
         }
         // 高度跨海平面（Q1：海平面 = 0，负值水下）。
-        self.mode == ViewMode::VectorFlat && hmin < 0 && hmax >= 0
+        self.mode == ShadeMode::VectorFlat && hmin < 0 && hmax >= 0
     }
 
     /// 在连续纹理像素坐标取一次颜色样本（写入 `out`，RGB，0..255）。
@@ -910,7 +907,7 @@ impl<'a> CellRenderer<'a> {
     fn sample_into(&self, fx: f32, fy: f32, out: &mut [f32; 3]) {
         let resf = self.res as f32;
         // 等值线模式：水陆由双线性高度采样决定（与等值线描边同源，D2）。
-        if self.mode == ViewMode::VectorFlat {
+        if self.mode == ShadeMode::VectorFlat {
             self.sample_vector_flat(fx / resf, fy / resf, out);
         } else {
             let gx = ((fx / resf).floor() as i32).clamp(0, self.w as i32 - 1) as u32;
@@ -1086,9 +1083,9 @@ impl<'a> CellRenderer<'a> {
             let Color::Srgba(s) = c else { return [0.0; 3] };
             [s.red * 255.0, s.green * 255.0, s.blue * 255.0]
         };
-        let water = to_rgb(colors::COAST_WATER);
-        let land = to_rgb(colors::COAST_LAND);
-        let line = to_rgb(colors::COAST_LINE);
+        let water = to_rgb(palette::COAST_WATER);
+        let land = to_rgb(palette::COAST_LAND);
+        let line = to_rgb(palette::COAST_LINE);
         let res = self.res;
         for ty in 0..res {
             for tx in 0..res {
@@ -1140,7 +1137,7 @@ impl<'a> CellRenderer<'a> {
         out_row: u32,
     ) {
         // 轮廓图：海岸线有专用路径（水陆占比判定），不走颜色混合。
-        if self.mode == ViewMode::Coastline {
+        if self.mode == ShadeMode::Coastline {
             self.write_coast_boundary_cell(pixels, stride, cx, gy, out_row);
             return;
         }
@@ -1208,7 +1205,7 @@ impl<'a> CellRenderer<'a> {
         // 无边界/揉边/淡化/浮雕——分析视图四色是语义色，任何后处理都是污染。
         if let Some((_p_low, _p_high)) = self.topographic {
             // 2026-10-22 三模式内容矩阵（spec §2.5）：CellMap = 群系固定色块
-            // ——颜色编码 biome，固定色板不随 ThemePack/TreatmentFlags；
+            // ——颜色编码 biome，固定色板不随 CellPack/TreatmentFlags；
             // 高度不参与（海拔参照交给等高线叠加）。修正 ADR-0039 的
             // 「等高分析底图」画法（ADR-0051）。
             let rgba = crate::terrain_view::biome_raw::pick(cell.biome, cell.surface);
@@ -1223,7 +1220,7 @@ impl<'a> CellRenderer<'a> {
             // 内部格：与旧行为一致——整块直铺（快路径）。
             let kind = display_slot(cell);
             if self.block_for(kind).is_some() {
-                let tint = if self.mode == ViewMode::RealTerrain {
+                let tint = if self.mode == ShadeMode::RealTerrain {
                     TileTint::Height(self.height_mul(cell.height))
                 } else {
                     tile_tint_for_mode(self.mode)
@@ -1269,7 +1266,7 @@ impl<'a> CellRenderer<'a> {
             if !self.bleed
                 && self.treatment.water_gradient
                 && slot_is_water(kind)
-                && self.mode != ViewMode::Coastline
+                && self.mode != ShadeMode::Coastline
             {
                 color = water_shade_at(cell.height, self.palette, &self.sea);
             }
@@ -1279,7 +1276,7 @@ impl<'a> CellRenderer<'a> {
             if !self.bleed
                 && self.treatment.snow_shade
                 && kind == 7
-                && self.mode != ViewMode::Coastline
+                && self.mode != ShadeMode::Coastline
             {
                 color = snow_shade_at(cell.height, self.palette);
             }
@@ -1302,7 +1299,7 @@ impl<'a> CellRenderer<'a> {
             if self.soften {
                 color = self.palette.soften_color(color);
             }
-            if self.mode == ViewMode::RealTerrain {
+            if self.mode == ShadeMode::RealTerrain {
                 let mul = self.height_mul(cell.height);
                 let Color::Srgba(c) = color else { return };
                 color = Color::srgb(
@@ -1313,7 +1310,8 @@ impl<'a> CellRenderer<'a> {
             }
             // 坡度浮雕：全局 / 区域档靠明暗读出山脉体积（ADR-0036）。
             // 只在陆格生效——水域已有深度渐变，再叠坡度会脏。
-            if matches!(self.mode, ViewMode::VectorFlat | ViewMode::RealTerrain) && cell.height >= 0
+            if matches!(self.mode, ShadeMode::VectorFlat | ShadeMode::RealTerrain)
+                && cell.height >= 0
             {
                 let mul = relief_mul(self.data, cx, gy);
                 let Color::Srgba(c) = color else { return };
@@ -1369,10 +1367,10 @@ impl<'a> CellRenderer<'a> {
 /// 1024² 图整图合成实测 317ms → 多核下接近带宽封顶。
 pub fn terrain_pixels(
     data: &TerrainData,
-    mode: ViewMode,
+    mode: ShadeMode,
     atlas: Option<&TileAtlas>,
     soften: bool,
-    pack: &ThemePack,
+    pack: &CellPack,
 ) -> (Vec<u8>, u32) {
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -1385,10 +1383,10 @@ pub fn terrain_pixels(
 /// `bands` 只是调度参数：任意带数下输出必须逐字节一致。
 fn terrain_pixels_banded(
     data: &TerrainData,
-    mode: ViewMode,
+    mode: ShadeMode,
     atlas: Option<&TileAtlas>,
     soften: bool,
-    pack: &ThemePack,
+    pack: &CellPack,
     bands: usize,
 ) -> (Vec<u8>, u32) {
     // 近岸浅滩场（S2）整场算一次，共享给全部带 renderer——它与带数无关，
@@ -1455,15 +1453,15 @@ fn a_tile(atlas: Option<&TileAtlas>, kind: u8) -> Option<[u32; 2]> {
 /// 退化路径——既有 mode 表的 Terrain pass 不会受影响。
 pub fn image_from_terrain(
     data: &TerrainData,
-    mode: ViewMode,
+    mode: ShadeMode,
     atlas: Option<&TileAtlas>,
     soften: bool,
-    pack: &ThemePack,
+    pack: &CellPack,
     compression: f32,
 ) -> Image {
     let (mut pixels, res) = terrain_pixels(data, mode, atlas, soften, pack);
     let (w, h) = (data.width.max(1), data.height.max(1));
-    if mode == ViewMode::Topographic && compression > 0.0 {
+    if mode == ShadeMode::Topographic && compression > 0.0 {
         oblique_skew_pixels(&mut pixels, w * res, h * res, compression);
     }
     Image::new(
@@ -1495,7 +1493,7 @@ pub fn image_from_terrain(
 ///
 /// **本函数不接受 compression > 1.0**——超出 (与 ART_STYLE_SPEC §1.1 的
 /// `vertical 0.5×` 上限一致)。调用方负责 clamp。
-pub(crate) fn oblique_skew_pixels(pixels: &mut [u8], w: u32, h: u32, compression: f32) {
+pub fn oblique_skew_pixels(pixels: &mut [u8], w: u32, h: u32, compression: f32) {
     assert!(
         (0.0..=1.0).contains(&compression),
         "oblique_skew_pixels: compression {compression} 越界 [0,1]"
@@ -1593,12 +1591,12 @@ pub(crate) fn oblique_skew_pixels(pixels: &mut [u8], w: u32, h: u32, compression
 pub fn patch_terrain_image(
     image: &mut Image,
     data: &TerrainData,
-    mode: ViewMode,
+    mode: ShadeMode,
     atlas: Option<&TileAtlas>,
     dirty_cell_rect: [u32; 4],
     res: u32,
     soften: bool,
-    pack: &ThemePack,
+    pack: &CellPack,
 ) {
     let (w, h) = (data.width.max(1), data.height.max(1));
     let stride = w * res; // 像素 stride
@@ -1808,10 +1806,10 @@ mod tests {
     fn topographic_pixels(data: &wv_core::terrain::TerrainData) -> Vec<u8> {
         let (pixels, res) = terrain_pixels(
             data,
-            ViewMode::Topographic,
+            ShadeMode::Topographic,
             None,
             true, // soften=true 但 Topographic 下应被忽略(new 里已禁)
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
         );
         assert_eq!(res, 1, "Topographic 分析视图 = 每格 1 像素(锐利方格)");
         pixels
@@ -1880,17 +1878,17 @@ mod tests {
         let data = topographic_fixture();
         let (on, _) = terrain_pixels(
             &data,
-            ViewMode::Topographic,
+            ShadeMode::Topographic,
             None,
             true,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
         );
         let (off, _) = terrain_pixels(
             &data,
-            ViewMode::Topographic,
+            ShadeMode::Topographic,
             None,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
         );
         assert_eq!(on, off, "soften=true 与 false 输出必须逐位一致");
     }
@@ -1974,17 +1972,17 @@ mod tests {
             cells,
         };
         // 开：默认包（shore_shallow: true）。
-        let pack = crate::theme::theme_pack::builtin::for_palette(Default::default());
-        let on = image_from_terrain(&data, ViewMode::VectorFlat, None, false, pack, 0.0);
-        // 关：同包改旗标（ThemePack 全字段 Copy，结构体更新语法即可）。
-        let off_pack = &crate::theme::theme_pack::ThemePack {
-            treatment: crate::theme::theme_pack::TreatmentFlags {
+        let pack = &CellPack::fixture();
+        let on = image_from_terrain(&data, ShadeMode::VectorFlat, None, false, pack, 0.0);
+        // 关：同包改旗标（CellPack 全字段 Copy，结构体更新语法即可）。
+        let off_pack = &CellPack {
+            treatment: TreatmentFlags {
                 shore_shallow: false,
-                ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+                ..TreatmentFlags::HAND_DRAWN
             },
-            ..*crate::theme::theme_pack::builtin::for_palette(Default::default())
+            ..CellPack::fixture()
         };
-        let off = image_from_terrain(&data, ViewMode::VectorFlat, None, false, off_pack, 0.0);
+        let off = image_from_terrain(&data, ShadeMode::VectorFlat, None, false, off_pack, 0.0);
 
         // res = clamp(4096/10, 4, 8) = 8：col i 占像素 [8i, 8i+8)，采样格心 x = 8i+4。
         let (near_on, near_off) = (px(&on, 12, 4), px(&off, 12, 4)); // col 1（d=1，带内）
@@ -2036,14 +2034,14 @@ mod tests {
         };
         let data1 = make(false);
         let data2 = make(true);
-        let pack = crate::theme::theme_pack::builtin::for_palette(Default::default());
+        let pack = &CellPack::fixture();
 
         // 旧图全图烘焙 → 以小脏区（只盖新岛那一格）patch 成新图。
-        let mut patched = image_from_terrain(&data1, ViewMode::VectorFlat, None, false, pack, 0.0);
+        let mut patched = image_from_terrain(&data1, ShadeMode::VectorFlat, None, false, pack, 0.0);
         patch_terrain_image(
             &mut patched,
             &data2,
-            ViewMode::VectorFlat,
+            ShadeMode::VectorFlat,
             None,
             [2, 1, 3, 2],
             8,
@@ -2051,7 +2049,7 @@ mod tests {
             pack,
         );
         // 新图全图重算。
-        let full = image_from_terrain(&data2, ViewMode::VectorFlat, None, false, pack, 0.0);
+        let full = image_from_terrain(&data2, ShadeMode::VectorFlat, None, false, pack, 0.0);
         assert_eq!(
             patched.data.as_deref(),
             full.data.as_deref(),
@@ -2089,11 +2087,9 @@ mod tests {
             height: h,
             cells,
         };
-        let pack = crate::theme::theme_pack::builtin::for_palette(
-            crate::theme::palette::MapPalette::Daylight,
-        );
-        let (p1, res1) = terrain_pixels_banded(&data, ViewMode::Coastline, None, false, pack, 1);
-        let (p4, res4) = terrain_pixels_banded(&data, ViewMode::Coastline, None, false, pack, 4);
+        let pack = &CellPack::fixture();
+        let (p1, res1) = terrain_pixels_banded(&data, ShadeMode::Coastline, None, false, pack, 1);
+        let (p4, res4) = terrain_pixels_banded(&data, ShadeMode::Coastline, None, false, pack, 4);
         assert_eq!(res1, res4, "带数不得影响 res 推导");
         assert_eq!(p1.len(), p4.len(), "输出长度应一致");
         assert_eq!(p1, p4, "带数不同 → 像素逐字节一致");
@@ -2111,13 +2107,13 @@ mod tests {
     fn snow_shadow_t_threshold_and_clamp() {
         assert_eq!(snow_shadow_t(0), 0.0, "低海拔无阴影");
         assert_eq!(
-            snow_shadow_t(crate::theme::colors::SNOW_SHADOW_MIN_HEIGHT),
+            snow_shadow_t(crate::palette::SNOW_SHADOW_MIN_HEIGHT),
             0.0,
             "恰阈值处无阴影"
         );
-        let t = snow_shadow_t(crate::theme::colors::SNOW_SHADOW_MIN_HEIGHT + 1000);
+        let t = snow_shadow_t(crate::palette::SNOW_SHADOW_MIN_HEIGHT + 1000);
         assert!(
-            (t - crate::theme::colors::SNOW_SHADOW_PER_KM).abs() < 1e-6,
+            (t - crate::palette::SNOW_SHADOW_PER_KM).abs() < 1e-6,
             "+1 km 应为 per_km，实得 {t}"
         );
         assert_eq!(snow_shadow_t(i16::MAX), 1.0, "高海拔应封顶 1.0");
@@ -2126,7 +2122,7 @@ mod tests {
     /// 雪格 highlight：低海拔雪 = 近白雪（与 core_terrain[7] 提亮一档同族但更亮）。
     #[test]
     fn snow_shade_at_low_elevation_is_highlight() {
-        let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
+        let pal = &CellPack::fixture().palette;
         let Color::Srgba(h) = snow_shade_at(1000, pal) else {
             panic!()
         };
@@ -2144,7 +2140,7 @@ mod tests {
     /// 雪格 shadow：高海拔雪 = 冷蓝灰（蓝 > 红），与 highlight 冷暖对调。
     #[test]
     fn snow_shade_at_high_elevation_is_cool_gray() {
-        let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
+        let pal = &CellPack::fixture().palette;
         let Color::Srgba(s) = snow_shade_at(6000, pal) else {
             panic!()
         };
@@ -2184,23 +2180,23 @@ mod tests {
         // 墨线、近岸泡沫——本测试钉的是「填充边随高度」的**平涂**语义，
         // 装饰不该稀释它（同 d43f618 关 bleed 的口径）。纸纹颗粒不在此列
         // （它是坐标的纯函数，不影响边缘判定）。
-        let pack = &crate::theme::theme_pack::ThemePack {
-            treatment: crate::theme::theme_pack::TreatmentFlags {
+        let pack = &CellPack {
+            treatment: TreatmentFlags {
                 watercolor_bleed: false,
                 shore_shallow: false,
-                ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+                ..TreatmentFlags::HAND_DRAWN
             },
-            sea: crate::theme::sea::SeaRecipe {
+            sea: SeaRecipe {
                 shore_band_cells: 0.0,
                 shore_peak: 0.0,
-                ripples: &[],
-                foam: &[],
-                ..crate::theme::sea::WATERCOLOR
+                ripples: vec![],
+                foam: vec![],
+                ..crate::palette::watercolor()
             },
-            ..*crate::theme::theme_pack::builtin::for_palette(Default::default())
+            ..CellPack::fixture()
         };
-        let img = image_from_terrain(&data, ViewMode::VectorFlat, None, false, pack, 0.0);
-        let Color::Srgba(grass) = colors::core_terrain(3) else {
+        let img = image_from_terrain(&data, ShadeMode::VectorFlat, None, false, pack, 0.0);
+        let Color::Srgba(grass) = palette::core_terrain(3) else {
             unreachable!()
         };
         // 陆格颗粒（ADR-0042 D6）作用于左半格（最近格 (0,0)，biome 3）：
@@ -2208,7 +2204,7 @@ mod tests {
         let g0 = land_grain(3, 0, 0);
         let grass = bevy::color::Color::srgb(grass.red * g0, grass.green * g0, grass.blue * g0);
         // 沉入海下的陆格按湿判定显示（surface 陆 + 海拔 -50 → 浅水槽位）。
-        let Color::Srgba(shallow) = colors::core_terrain(1) else {
+        let Color::Srgba(shallow) = palette::core_terrain(1) else {
             unreachable!()
         };
         // 2 格 ≤1024 → res = clamp(4096/2, 4, 8) = 8：图像 16×8。
@@ -2237,16 +2233,16 @@ mod tests {
         };
         let img = image_from_terrain(
             &data,
-            ViewMode::VectorFlat,
+            ShadeMode::VectorFlat,
             None,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         // 深水渐变（手绘地图 #1）启用后：深水中心像素 = water_shade_at(−3500)，
         // 不再是 core_terrain(0) 原色。统一从 water_shade_at 取色源，避免硬编码颜色。
-        let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
-        let Color::Srgba(deep) = water_shade_at(-3500, pal, &crate::theme::sea::WATERCOLOR) else {
+        let pal = &CellPack::fixture().palette;
+        let Color::Srgba(deep) = water_shade_at(-3500, pal, &crate::palette::watercolor()) else {
             unreachable!()
         };
         assert!(pixel_near(&img, 4, 4, deep));
@@ -2260,8 +2256,8 @@ mod tests {
             height: 512,
             cells: vec![wv_core::terrain::TerrainCellData::default(); 512 * 512],
         };
-        let vector = terrain_res_for(&data, ViewMode::VectorFlat, None);
-        let google = terrain_res_for(&data, ViewMode::GoogleMap, None);
+        let vector = terrain_res_for(&data, ShadeMode::VectorFlat, None);
+        let google = terrain_res_for(&data, ShadeMode::GoogleMap, None);
         assert_eq!(vector, google, "VectorFlat 应与 GoogleMap 同口径");
         assert!(vector > 1, "512² 图应取 {vector}px/格（亚像素）");
     }
@@ -2292,13 +2288,11 @@ mod tests {
         };
         let img = image_from_terrain(
             &data,
-            ViewMode::VectorFlat,
+            ShadeMode::VectorFlat,
             None,
             // 默认 soften=true 也要清晰蓝——这是用户最直观的视觉预期。
             true,
-            crate::theme::theme_pack::builtin::for_palette(
-                crate::theme::palette::MapPalette::Daylight,
-            ),
+            &CellPack::fixture(),
             0.0,
         );
         let px = img.data.as_ref().expect("image 必有像素");
@@ -2329,12 +2323,10 @@ mod tests {
         };
         let img = image_from_terrain(
             &data,
-            ViewMode::VectorFlat,
+            ShadeMode::VectorFlat,
             None,
             true,
-            crate::theme::theme_pack::builtin::for_palette(
-                crate::theme::palette::MapPalette::Daylight,
-            ),
+            &CellPack::fixture(),
             0.0,
         );
         let px = img.data.as_ref().expect("image 必有像素");
@@ -2370,12 +2362,10 @@ mod tests {
         };
         let img = image_from_terrain(
             &data,
-            ViewMode::Schematic,
+            ShadeMode::Schematic,
             None,
             true,
-            crate::theme::theme_pack::builtin::for_palette(
-                crate::theme::palette::MapPalette::Daylight,
-            ),
+            &CellPack::fixture(),
             0.0,
         );
         let px = img.data.as_ref().expect("image 必有像素");
@@ -2419,12 +2409,10 @@ mod tests {
             height: 4,
             cells: vec![wv_core::map::MapBase::Land.cell(); 16],
         };
-        let pack = crate::theme::theme_pack::builtin::for_palette(
-            crate::theme::palette::MapPalette::Daylight,
-        );
+        let pack = &CellPack::fixture();
         let ocean_img =
-            image_from_terrain(&ocean_data, ViewMode::VectorFlat, None, true, pack, 0.0);
-        let land_img = image_from_terrain(&land_data, ViewMode::VectorFlat, None, true, pack, 0.0);
+            image_from_terrain(&ocean_data, ShadeMode::VectorFlat, None, true, pack, 0.0);
+        let land_img = image_from_terrain(&land_data, ShadeMode::VectorFlat, None, true, pack, 0.0);
 
         // 2. 取中心像素（在 image_from_terrain 之后，这一步相当于「无雾」底色）。
         fn center_pixel(img: &Image) -> (i32, i32, i32) {
@@ -2516,26 +2504,26 @@ mod tests {
         let mut images = Assets::<Image>::default();
         let image = image_from_terrain(
             &data,
-            ViewMode::VectorFlat,
+            ShadeMode::VectorFlat,
             None,
             false,
             // 关 shore_shallow（S2）：本测试钉「中心格 = 纯水深色」，浅滩带
             // 是按离岸距离的装饰混色，会把断言色稀释（同 mod.rs 哨兵测试口径）。
-            &crate::theme::theme_pack::ThemePack {
-                treatment: crate::theme::theme_pack::TreatmentFlags {
+            &CellPack {
+                treatment: TreatmentFlags {
                     shore_shallow: false,
-                    ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+                    ..TreatmentFlags::HAND_DRAWN
                 },
                 // 关位置相关的水面效果（浅滩带 / 墨线 / 泡沫）：本测试钉
                 // 「中心格 = 纯水深色」，装饰混色会稀释断言色。
-                sea: crate::theme::sea::SeaRecipe {
+                sea: SeaRecipe {
                     shore_band_cells: 0.0,
                     shore_peak: 0.0,
-                    ripples: &[],
-                    foam: &[],
-                    ..crate::theme::sea::WATERCOLOR
+                    ripples: vec![],
+                    foam: vec![],
+                    ..crate::palette::watercolor()
                 },
-                ..*crate::theme::theme_pack::builtin::for_palette(Default::default())
+                ..CellPack::fixture()
             },
             0.0,
         );
@@ -2544,7 +2532,7 @@ mod tests {
             image,
             &data,
             map.clone(),
-            ViewMode::VectorFlat,
+            ShadeMode::VectorFlat,
             false,
             Default::default(),
         );
@@ -2581,24 +2569,24 @@ mod tests {
         // 理由见首烘处——水深语义测试不掺浅滩装饰）。
         let new_image = image_from_terrain(
             after,
-            ViewMode::VectorFlat,
+            ShadeMode::VectorFlat,
             None,
             false,
-            &crate::theme::theme_pack::ThemePack {
-                treatment: crate::theme::theme_pack::TreatmentFlags {
+            &CellPack {
+                treatment: TreatmentFlags {
                     shore_shallow: false,
-                    ..crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN
+                    ..TreatmentFlags::HAND_DRAWN
                 },
                 // 关位置相关的水面效果（浅滩带 / 墨线 / 泡沫）：本测试钉
                 // 「中心格 = 纯水深色」，装饰混色会稀释断言色。
-                sea: crate::theme::sea::SeaRecipe {
+                sea: SeaRecipe {
                     shore_band_cells: 0.0,
                     shore_peak: 0.0,
-                    ripples: &[],
-                    foam: &[],
-                    ..crate::theme::sea::WATERCOLOR
+                    ripples: vec![],
+                    foam: vec![],
+                    ..crate::palette::watercolor()
                 },
-                ..*crate::theme::theme_pack::builtin::for_palette(Default::default())
+                ..CellPack::fixture()
             },
             0.0,
         );
@@ -2615,8 +2603,8 @@ mod tests {
         let data_ref = img_after.data.as_ref().unwrap();
         // 海色渐变（手绘地图 #1）后：中心格实际渲染色 = water_shade_at(−40)，
         // 不再等于 core_terrain(0) 原色。从 water_shade_at 取色源，避免硬编码。
-        let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
-        let Color::Srgba(deep) = water_shade_at(-40, pal, &crate::theme::sea::WATERCOLOR) else {
+        let pal = &CellPack::fixture().palette;
+        let Color::Srgba(deep) = water_shade_at(-40, pal, &crate::palette::watercolor()) else {
             unreachable!()
         };
         let r = data_ref[o] as f32 / 255.0;
@@ -2669,10 +2657,10 @@ mod tests {
         let mut images = Assets::<Image>::default();
         let image = image_from_terrain(
             &data,
-            ViewMode::VectorFlat,
+            ShadeMode::VectorFlat,
             None,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         let mut tex = crate::terrain_view::new_terrain_texture(
@@ -2680,7 +2668,7 @@ mod tests {
             image,
             &data,
             map.clone(),
-            ViewMode::VectorFlat,
+            ShadeMode::VectorFlat,
             false,
             Default::default(),
         );
@@ -2688,10 +2676,10 @@ mod tests {
         // 二次写入（NewMap / LoadProject 的真实路径）。
         let image2 = image_from_terrain(
             &data,
-            ViewMode::VectorFlat,
+            ShadeMode::VectorFlat,
             None,
             false,
-            crate::theme::theme_pack::builtin::for_palette(Default::default()),
+            &CellPack::fixture(),
             0.0,
         );
         crate::terrain_view::replace_terrain_texture(
@@ -2700,7 +2688,7 @@ mod tests {
             image2,
             &data,
             map.clone(),
-            ViewMode::VectorFlat,
+            ShadeMode::VectorFlat,
             false,
             Default::default(),
         );
@@ -2726,45 +2714,41 @@ mod tests {
     /// 深度系数端点 + 钳制：海平面 0、深海 −3500 → 1；越界 → 钳。
     #[test]
     fn water_depth_t_endpoints_and_clamps() {
-        assert_eq!(
-            crate::theme::sea::WATERCOLOR.depth_t(0),
-            0.0,
-            "海平面应为 0"
-        );
+        assert_eq!(crate::palette::watercolor().depth_t(0), 0.0, "海平面应为 0");
         assert!(
-            (crate::theme::sea::WATERCOLOR.depth_t(-3500) - 1.0).abs() < 1e-6,
+            (crate::palette::watercolor().depth_t(-3500) - 1.0).abs() < 1e-6,
             "−3500 m 应为 1.0（满深）"
         );
         assert_eq!(
-            crate::theme::sea::WATERCOLOR.depth_t(-5000),
+            crate::palette::watercolor().depth_t(-5000),
             1.0,
             "更深应钳到 1.0"
         );
         assert_eq!(
-            crate::theme::sea::WATERCOLOR.depth_t(5000),
+            crate::palette::watercolor().depth_t(5000),
             0.0,
             "陆上高度应钳到 0.0"
         );
         // 平方曲线中点：sqrt(1/2) = 0.70711 → 深度 −1750 m。
-        let mid = crate::theme::sea::WATERCOLOR.depth_t(-1750);
+        let mid = crate::palette::watercolor().depth_t(-1750);
         assert!(
             (mid - 0.5_f32.sqrt()).abs() < 1e-6,
             "−1750 m 应为 sqrt(0.5)，实得 {mid}"
         );
         // 平方曲线半程点：sqrt(1/4) = 0.5 → 深度 −875 m（浅水段被展开）。
-        let half = crate::theme::sea::WATERCOLOR.depth_t(-875);
+        let half = crate::palette::watercolor().depth_t(-875);
         assert!((half - 0.5).abs() < 1e-6, "−875 m 应为 0.5，实得 {half}");
     }
 
     /// 渐变色：海平面 = water_shallow，−3500 = water_deep。中间深度居中。
     #[test]
     fn water_shade_at_lerps_between_shallow_and_deep() {
-        let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
+        let pal = &CellPack::fixture().palette;
         let shallow = pal.core_terrain(1);
         let (Color::Srgba(s), Color::Srgba(_)) = (shallow, Color::srgb(0.0, 0.0, 0.0)) else {
             panic!("应为 Srgba")
         };
-        let at_zero = water_shade_at(0, pal, &crate::theme::sea::WATERCOLOR);
+        let at_zero = water_shade_at(0, pal, &crate::palette::watercolor());
         let Color::Srgba(z) = at_zero else { panic!() };
         assert!(
             (z.red - s.red).abs() < 1e-4 && (z.green - s.green).abs() < 1e-4,
@@ -2773,7 +2757,7 @@ mod tests {
         // 2026-10-16：最深深水位（t=1.0）不再 lerp 到 water_deep，直接返回
         // `pal.deep_ocean_blue`——一个明确的深蓝色，不再受主题 CORE_TERRAIN[0]
         // 影响（2026-10-16 用户裁定）。
-        let at_max = water_shade_at(-3500, pal, &crate::theme::sea::WATERCOLOR);
+        let at_max = water_shade_at(-3500, pal, &crate::palette::watercolor());
         let deep_target = pal.deep_ocean_blue;
         let Color::Srgba(m) = at_max else { panic!() };
         let Color::Srgba(d) = deep_target else {
@@ -2794,9 +2778,9 @@ mod tests {
     /// 蓝色通道应 ≥ 中段（t=0.7）的 lerp 结果。
     #[test]
     fn water_shade_at_deep_band_gets_cooler_tint() {
-        let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
-        let at_70pct = water_shade_at(-1715, pal, &crate::theme::sea::WATERCOLOR); // sqrt(1715/3500) = t = 0.7
-        let at_100pct = water_shade_at(-3500, pal, &crate::theme::sea::WATERCOLOR); // t = 1.0
+        let pal = &CellPack::fixture().palette;
+        let at_70pct = water_shade_at(-1715, pal, &crate::palette::watercolor()); // sqrt(1715/3500) = t = 0.7
+        let at_100pct = water_shade_at(-3500, pal, &crate::palette::watercolor()); // t = 1.0
         let (Color::Srgba(a), Color::Srgba(b)) = (at_70pct, at_100pct) else {
             panic!()
         };
@@ -2821,7 +2805,7 @@ mod tests {
     /// 纬度阈值：高纬度 y < h × ICE_LATITUDE_T。
     #[test]
     fn ice_latitude_threshold_is_correctly_anchored() {
-        use crate::theme::colors::ICE_LATITUDE_T;
+        use crate::palette::ICE_LATITUDE_T;
         const {
             assert!(
                 ICE_LATITUDE_T > 0.0 && ICE_LATITUDE_T < 1.0,
@@ -2834,7 +2818,7 @@ mod tests {
     /// 深度上限：仅浅于 -200 m 的水域叠冰。
     #[test]
     fn ice_max_depth_threshold_is_anchor() {
-        use crate::theme::colors::ICE_MAX_DEPTH_M;
+        use crate::palette::ICE_MAX_DEPTH_M;
         const { assert!(ICE_MAX_DEPTH_M == 200, "深度上限锚点应为 200 m") }
     }
 
@@ -2842,7 +2826,7 @@ mod tests {
     /// 极浅白略偏绿/冷调），与雪 highlight 区分。
     #[test]
     fn ice_paper_is_pale_white() {
-        let pal = crate::theme::palette::colors(crate::theme::palette::MapPalette::Daylight);
+        let pal = &CellPack::fixture().palette;
         let Color::Srgba(p) = pal.ice_paper else {
             panic!()
         };

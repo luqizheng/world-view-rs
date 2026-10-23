@@ -350,10 +350,10 @@ pub fn flush_terrain_texture(
     if is_full {
         let image = image_from_terrain(
             data,
-            view.mode,
+            wv_render::cellmap_bridge::shade_mode_of(view.mode),
             atlas.as_deref(),
             view.terrain_soften,
-            view.active_theme,
+            &wv_render::cellmap_bridge::conv_pack(view.active_theme),
             0.0,
         );
         if let Some(mut img) = images.get_mut(&tex.handle) {
@@ -368,12 +368,12 @@ pub fn flush_terrain_texture(
         wv_render::terrain_view::patch_terrain_image(
             &mut img,
             data,
-            view.mode,
+            wv_render::cellmap_bridge::shade_mode_of(view.mode),
             atlas.as_deref(),
             rect,
             res,
             view.terrain_soften,
-            view.active_theme,
+            &wv_render::cellmap_bridge::conv_pack(view.active_theme),
         );
     }
     tex.dirty = None;

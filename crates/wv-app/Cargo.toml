@@ -26,6 +26,7 @@ wv-terrain = { workspace = true }
 wv-io = { workspace = true }
 wv-edit = { workspace = true }
 wv-render = { workspace = true }
+wv-world-cell-map = { workspace = true }
 # 主题层（ADR-0043 D2）：UI 侧直接重导出主题数据，不再经 wv-render 中转。
 wv-theme = { workspace = true }
 # 外部主题包（ADR-0023 M2）：编辑器**运行时**依赖——主题切换链路接通后，

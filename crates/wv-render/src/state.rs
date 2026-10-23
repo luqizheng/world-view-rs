@@ -883,52 +883,6 @@ impl BiomeBoundaryState {
     }
 }
 
-#[derive(Resource, Debug, Default, Clone, PartialEq)]
-pub struct EditCellState {
-    /// EditCell 工具是否激活（与 [`BrushState::enabled`] 同款会话布尔）。
-    /// 由命令分发器在 `SelectMapTool(EditCell)` 翻 true / 切走其它工具翻 false。
-    pub tool_active: bool,
-    /// 当前鼠标压住的格 (gx, gy)；`None` 表示鼠标不在地图内。
-    pub hover: Option<(i32, i32)>,
-    /// 点击落定的格 (gx, gy)。ESC 清空 / 切图也清空。
-    pub selected: Option<(i32, i32)>,
-    /// 多边形选区贴合的方格集合（2026-10-20 批量编辑）：V 工具闭合多边形后
-    /// 由 `sync_region_cells` 栅格化写入（cell 中心点落在多边形内即选中）。
-    /// 空 = 无区域选区。高亮渲染与批量应用（BatchEditCellsCommand）都消费它。
-    pub region_cells: Vec<(i32, i32)>,
-    /// 上次栅格化时**多边形**的指纹（2026-10-20 性能修）。
-    ///
-    /// `sync_region_cells` 每帧都会跑；多边形没变时**不必重算**格集合
-    /// （栅格化是 O(bbox 格数 × 边数)，大选区每帧重算会明显吃帧）。
-    /// 指纹变了（或为 0 = 从未算过）才重算。
-    pub region_fingerprint: u64,
-    /// 绑定的图 ID；变图即清空选中格(与 [`SelectionState::last_map_id`]
-    /// 一致语义,统一通过 [`EditCellState::on_map_change`] 处理)。
-    pub last_map_id: Option<wv_core::Id>,
-}
-
-impl EditCellState {
-    /// 清空 tool_active + hover + selected + region_cells；
-    /// **不会**清 `last_map_id`（那是别处碰）。
-    pub fn clear(&mut self) {
-        self.tool_active = false;
-        self.hover = None;
-        self.selected = None;
-        self.region_cells.clear();
-        self.region_fingerprint = 0;
-    }
-
-    /// 切换图时调用——如果新图 ≠ 上次记录的图,清空所有格相关字段
-    /// （与 [`SelectionState`] 的 `on_map_change` 同口径）。
-    pub fn on_map_change(&mut self, new_map: &wv_core::Id) {
-        if self.last_map_id.as_ref() != Some(new_map) {
-            self.hover = None;
-            self.selected = None;
-        }
-        self.last_map_id = Some(new_map.clone());
-    }
-}
-
 impl SelectionState {
     /// 画中（草稿非空）。
     pub fn is_drawing(&self) -> bool {
@@ -1101,57 +1055,6 @@ impl BrushState {
     /// 跟它走（不重置 tool）。该函数是面板与命令面板共用的轻量同步。
     pub fn on_tool_changed(&mut self) {
         self.tool_group = self.tool.group();
-    }
-}
-
-/// 网格几何参数（世界单位与格的换算，基线 §2.15 变换链的输入）。
-///
-/// ## 两套原点——先问「这份坐标属于哪个帧」，再挑字段
-///
-/// 视图空间**就是**根图坐标系（相机、[`crate::state::ViewState::cursor_world`]、
-/// `drill_target` 全在根帧，见 [`crate::drill`]）。坐标要落到视图空间时，
-/// 按数据来源选字段，不要顺手拿一个：
-///
-/// | 字段 | 含义 | 谁该用 |
-/// |---|---|---|
-/// | [`Self::raster_origin`] | 当前显示的**栅格纹理**的原点（栅格空间 `(0,0)` 的视图位置） | **地形**：笔刷拾取、chunk 摆位、小地图——它们换算的是**纹理格** |
-/// | [`Self::map_origin`] | **当前图**的图帧原点（本图局部 `(0,0)` 的视图位置） | **本图局部内容**：地点、街道与街道名、地图外框 |
-///
-/// 两者只在「当前图自带底图」时相等。子图**继承**父图底图时（ADR-0009 底图继承），
-/// 栅格仍是父图那一张、`raster_origin` 停在父图原点，而 `map_origin` 随当前图走：
-/// 1024² 的城市图用 `raster_origin` 换算自己的街道，整层会被画到 `(0..1024)`
-/// ——世界图左上角、视野外，也就是「钻进城看不到武昌」的根因。
-#[derive(Resource)]
-pub struct GridConfig {
-    /// 每格世界边长。
-    pub cell_size: f32,
-    /// 栅格空间原点的视图位置（上表：**地形**专用）。
-    pub raster_origin: Vec2,
-    /// 当前图图帧原点的视图位置（上表：**本图局部内容**专用）。
-    pub map_origin: Vec2,
-    /// 当前图幅面（`extent` 的宽 × 高，世界单位）：地图外框与 1/4 参考网格用。
-    /// 16:9 缺省后不再是正方形——`x` / `y` 分开。
-    pub map_size: Vec2,
-}
-
-impl GridConfig {
-    /// 本图局部坐标 → 视图空间。
-    ///
-    /// **本图局部内容（地点 / 街道 / 街道名 / 外框）一律走这里**——绕过去手写
-    /// `map_origin + local` 就等于把上面那张表丢在一边，而这条路已经错过一次。
-    pub fn map_to_view(&self, local: Vec2) -> Vec2 {
-        self.map_origin + local
-    }
-}
-
-impl Default for GridConfig {
-    fn default() -> Self {
-        Self {
-            cell_size: 8.0,
-            raster_origin: Vec2::ZERO,
-            map_origin: Vec2::ZERO,
-            map_size: Vec2::splat(4096.0),
-        }
     }
 }
 
@@ -2026,3 +1929,8 @@ mod tests {
         assert!(!s.is_drawing(), "退到无图也应清空");
     }
 }
+
+// ── CellMap 会话态已迁 wv-world-cell-map（ADR-0054 D1）──
+// 旧路径 `wv_render::state::{EditCellState, GridConfig}` 经 re-export 零改动。
+#[cfg(feature = "app")]
+pub use wv_world_cell_map::state::{EditCellState, GridConfig};

@@ -1423,7 +1423,7 @@ pub fn update_region_labels(
     let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
     // Label 层可见性（ADR-0017 Q1）
     if layers.label.visible
-        && crate::region_overlay::region_layer_visible(
+        && crate::cellmap_bridge::region_layer_visible(
             view.mode,
             view.nature_overlay,
             wv_core::model::region::RegionKind::Nature,

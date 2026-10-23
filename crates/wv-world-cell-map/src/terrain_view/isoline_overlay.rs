@@ -14,22 +14,15 @@
 //! - **不改变平涂底图**——色块仍由纹理管线负责，本层只画边界线
 //!   （ADR-0012 §2①「多边形平涂」的 mesh 化填充留待 M2 后半）。
 
-#![cfg(feature = "app")]
-
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::mesh::Indices;
 use bevy::render::mesh::MeshVertexAttribute;
 use bevy::render::render_resource::{PrimitiveTopology, VertexFormat};
 
-use wv_terrain::isoline::{assemble_chains, chaikin, height_segments, kind_segments, simplify_dp};
+use wv_terrain::isoline::simplify_dp;
 
-use crate::layer_frame::LayerFrame;
-use crate::state::{DrillState, GridConfig, ViewState, WorldProjection};
-use crate::theme::palette::MapPalette;
-
-use super::terrain_resolve::texture_terrain;
-use super::terrain_texture::TerrainTexture;
+use crate::palette::{CellPalette, TreatmentFlags};
 
 /// 等值线本色的 alpha（作者未给 Terrain 图层设 opacity 时的值）。
 /// 墨色本体走 `PaletteColors.isoline_ink`（ADR-0016：日间褐墨 / 暮色浅墨）。
@@ -37,10 +30,10 @@ const ISOLINE_BASE_ALPHA: f32 = 1.0;
 
 /// 叠加层 Z：底图块（`TERRAIN_Z = 0.0`）之上、换级淡化精灵（0.05）与道路
 /// （`ROAD_Z = 0.1`）之下——等值线属于底图的一部分。
-const ISOLINE_Z: f32 = 0.04;
+pub const ISOLINE_Z: f32 = 0.04;
 
 /// 描边屏幕宽度（px）：世界宽度 = `px × view.scale`（ADR-0008 §8 的「乘」口径）。
-const STROKE_PX: f32 = 1.25;
+pub const STROKE_PX: f32 = 1.25;
 
 /// 描边亚线性缩放指数（手绘地图 #10）：世界半宽 ∝ scale^`GLYPH_SHRINK_EXP`。
 ///
@@ -53,27 +46,27 @@ const GLYPH_SHRINK_EXP: f32 = 0.78;
 ///
 /// `base_px` = 屏幕像素基准宽（scale=1 时的屏幕宽），`floor` = 世界下限
 /// （极远防消隐）。同公式供测试手算锚定。
-fn stroke_half_world(base_px: f32, scale: f32, floor: f32) -> f32 {
+pub fn stroke_half_world(base_px: f32, scale: f32, floor: f32) -> f32 {
     (base_px * 0.5 * scale.powf(GLYPH_SHRINK_EXP)).max(floor)
 }
 
 /// 类型边界描边的格径半宽（× cell_size）：盖住「阶梯 → Chaikin 平滑」的
 /// 偏差 + 填充的像素量化，让类型边界读作一条画上去的墨线。
-const KIND_STROKE_CELL: f32 = 0.25;
+pub const KIND_STROKE_CELL: f32 = 0.25;
 
 /// 海岸线水彩外晕（手绘地图 #4，2026-10-15）：
 /// 内晕 = 主线 `thin_half × HALO_1_MULT`、外晕 = `thin_half × HALO_2_MULT`。
 /// 两层渐变 alpha（[`HALO_1_ALPHA`] / [`HALO_2_ALPHA`]）模拟水彩晕染。
 const HALO_1_MULT: f32 = 2.6;
 const HALO_2_MULT: f32 = 5.0;
-const HALO_1_ALPHA: f32 = 0.35;
-const HALO_2_ALPHA: f32 = 0.18;
+pub const HALO_1_ALPHA: f32 = 0.35;
+pub const HALO_2_ALPHA: f32 = 0.18;
 
 /// 河水中线（手绘地图 #8，2026-10-15）：
 /// - `RIVER_MULT` = 主线 `thin_half × 0.5`（比主线细一半）。
 /// - `RIVER_ALPHA` = 0.5（半透，不抢主线）。
 const RIVER_MULT: f32 = 0.5;
-const RIVER_ALPHA: f32 = 0.5;
+pub const RIVER_ALPHA: f32 = 0.5;
 
 /// 重算触发键：只含**结构性**输入——任一变化才重算派生几何。
 ///
@@ -85,20 +78,20 @@ const RIVER_ALPHA: f32 = 0.5;
 /// 把 palette 放进键会让纯换色白付一整条 marching squares + Chaikin + DP
 /// 管线（1024² 图实测 ~75ms）。墨色变化走 `ink_palette` 快路径重上色。
 #[derive(Debug, Clone, PartialEq)]
-struct IsolineKey {
-    map: Option<wv_core::Id>,
-    size: u32,
+pub struct IsolineKey {
+    pub map: Option<wv_core::Id>,
+    pub size: u32,
     /// 逻辑格行数（非方形地图下 != `size`）。
-    height: u32,
-    res: u32,
-    soften: bool,
+    pub height: u32,
+    pub res: u32,
+    pub soften: bool,
     /// 几何相关装饰位 `[coast_halo, river_centerline, ink_sublinear]`
     /// （`ThemePack.treatment` 的子集）。
-    treatment: [bool; 3],
+    pub treatment: [bool; 3],
     /// 量化后的 DP 容差档（1/64 格）：缩放跨过量化步长才重算。
-    tol_q: u8,
+    pub tol_q: u8,
     /// Nation 档（`view.scale >= LOD_NATION_SCALE`）：只画海岸线、不画类型边界。
-    nation: bool,
+    pub nation: bool,
 }
 
 /// 地形内容指纹（仅进程内缓存比较用，不落盘、不跨进程）：FNV-1a 扫
@@ -108,7 +101,7 @@ struct IsolineKey {
 /// 为什么不用 `DefaultHasher`：逐 cell 走 `Hash` trait 每字段一次虚分派，
 /// 1024² 图实测量级会到几十 ms，抵消快路径收益；手写 FNV 按字段折叠，
 /// 1M 格 ~3ms，只发生在「结构同键但有脏区待消费」的帧。
-pub(crate) fn terrain_data_hash(data: &wv_core::terrain::TerrainData) -> u64 {
+pub fn terrain_data_hash(data: &wv_core::terrain::TerrainData) -> u64 {
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
     let mut h = FNV_OFFSET;
@@ -132,54 +125,54 @@ pub(crate) fn terrain_data_hash(data: &wv_core::terrain::TerrainData) -> u64 {
 }
 
 /// 一条平滑后的等值线链（点列 + 闭合位）——链缓存的存储单位。
-type IsolineChain = (Vec<wv_terrain::isoline::Pt>, bool);
+pub type IsolineChain = (Vec<wv_terrain::isoline::Pt>, bool);
 
 /// 链缓存失效输入：地形内容 / 来源图 / treatment 几何位 / Nation 档。
 ///
 /// **不含 `tol_q`**——DP 容差只作用于缓存链；缩放跨档只重跑 DP + 建网格，
 /// 不重跑 marching squares / 装配 / Chaikin。
 #[derive(Debug, Clone, PartialEq)]
-struct ChainCacheInputs {
-    map: Option<wv_core::Id>,
-    data_hash: u64,
-    treatment: [bool; 3],
-    nation: bool,
+pub struct ChainCacheInputs {
+    pub map: Option<wv_core::Id>,
+    pub data_hash: u64,
+    pub treatment: [bool; 3],
+    pub nation: bool,
 }
 
 /// 提取缓存：Chaikin 之后、DP 之前的链。
-struct CachedChains {
-    inputs: ChainCacheInputs,
-    coast_smoothed: Vec<IsolineChain>,
-    kinds_smoothed: Vec<IsolineChain>,
+pub struct CachedChains {
+    pub inputs: ChainCacheInputs,
+    pub coast_smoothed: Vec<IsolineChain>,
+    pub kinds_smoothed: Vec<IsolineChain>,
 }
 
 /// 资源：等值线叠加实体 + 上次构建的键。
 #[derive(Resource, Default)]
 pub struct IsolineOverlay {
-    entity: Option<Entity>,
-    mesh: Option<Handle<Mesh>>,
-    material: Option<Handle<ColorMaterial>>,
+    pub entity: Option<Entity>,
+    pub mesh: Option<Handle<Mesh>>,
+    pub material: Option<Handle<ColorMaterial>>,
     /// 海岸线水彩外晕（手绘地图 #4，2026-10-15）：2 个额外描边层（2.6× / 5.0×
     /// `thin_half`），仅在海岸存在时插入；alpha 渐变模拟水彩晕。类型边界不
     /// 走晕（kind 切换不是水彩晕的语义）。
-    halo_outer: Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)>,
-    halo_outer_outer: Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)>,
+    pub halo_outer: Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)>,
+    pub halo_outer_outer: Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)>,
     /// 河水中线（手绘地图 #8，2026-10-15）：海岸链上方一道窄青蓝线（`label_water`
     /// 颜色）——civ-atlas 风格的"水边反光"。宽度 0.5× main，alpha 0.5。仅海岸。
-    coast_river: Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)>,
-    key: Option<IsolineKey>,
+    pub coast_river: Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)>,
+    pub key: Option<IsolineKey>,
     /// 最近一次构建时的地形内容指纹（[`terrain_data_hash`]）：辨认「脏区待消费
     /// 但地形内容没变」（纯换色）用，见 `sync_isoline_overlay` 的快路径。
-    data_hash: Option<u64>,
+    pub data_hash: Option<u64>,
     /// 最近一次上墨色的调色板：palette 变化而几何不变时只需重上色，不重算。
-    ink_palette: Option<MapPalette>,
+    pub ink_palette: Option<&'static str>,
     /// 提取缓存（Task 3）：与实体生命周期无关——`despawn()` **不**清它，
     /// 只在 `inputs` 失配时重建。缩放只消费它重跑 DP。
-    chains: Option<CachedChains>,
+    pub chains: Option<CachedChains>,
 }
 
 impl IsolineOverlay {
-    fn despawn(&mut self, commands: &mut Commands) {
+    pub fn despawn(&mut self, commands: &mut Commands) {
         if let (Some(entity), Some(mesh)) = (self.entity.take(), self.mesh.take()) {
             commands.entity(entity).despawn();
             commands.queue(move |world: &mut World| {
@@ -208,7 +201,7 @@ impl IsolineOverlay {
     /// （新建地图的常态）没有海岸线 / 类型边界，叠加层**合法地无实体**；
     /// 不把这个稳态记进键，守卫 `entity.is_some()` 会撞空、每帧全图
     /// marching-squares 重算。
-    fn empty_settled(&self) -> bool {
+    pub fn empty_settled(&self) -> bool {
         self.entity.is_none() && self.mesh.is_none() && self.key.is_some()
     }
 }
@@ -219,274 +212,14 @@ impl IsolineOverlay {
 /// `0.5 × scale` 钳到 `[0.125, 0.5]`：锚点 0.25→0.125、0.5→0.25、≥1.0→0.5。
 /// 这同时关掉了 2026-10-15 侧记的「三档方向反装」——连续函数在锚点上即
 /// 方向修正（spec CONTINUOUS_LOD_PLAN_v0.1 §3.2）。
-fn dp_tol_continuous(scale: f32) -> f32 {
+pub fn dp_tol_continuous(scale: f32) -> f32 {
     (0.5 * scale).clamp(0.125, 0.5)
 }
 
 /// 容差量化到 1/64 格，作为结构键的一部分：缩放连续变化时只有跨过
 /// 1/64 步长才触发重算（否则逐帧重跑 DP + 建网格）。
-fn tol_quantum(scale: f32) -> u8 {
+pub fn tol_quantum(scale: f32) -> u8 {
     (dp_tol_continuous(scale) * 64.0) as u8
-}
-
-/// 同步等值线叠加层。排在 [`super::terrain_chunks::sync_terrain_chunks`]
-/// **之前**：借它还没消费的 `tex.chunks_dirty` 感知「地形内容变了」
-/// （笔刷提交 / 整图重建都会置位），结构键本身不吸收这个瞬态位。
-#[allow(clippy::too_many_arguments)]
-pub fn sync_isoline_overlay(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    view: Res<ViewState>,
-    projection: Res<WorldProjection>,
-    drill: Res<DrillState>,
-    grid: Res<GridConfig>,
-    tex: Res<TerrainTexture>,
-    layers: Res<LayerFrame>,
-    recipe: Res<crate::recipe::RenderRecipe>,
-    mut overlay: ResMut<IsolineOverlay>,
-) {
-    // 模式轴：recipe 表（VectorFlat / Topographic 开档）；会话轴：`view.isolines`
-    // 旗标（map controls 瓷砖，GridLines 同款，2026-10-23 默认关——ADR-0051 追记）。
-    // 关图层（YAML ∨ 会话，ADR-0013）/ 换模式即退场（键随之清零，重进重算）。
-    if !layers.terrain.visible || !recipe.enabled(crate::recipe::PassId::Isoline) || !view.isolines
-    {
-        overlay.despawn(&mut commands);
-        return;
-    }
-    let Some(data) = texture_terrain(&tex, &projection.world, drill.current()) else {
-        overlay.despawn(&mut commands);
-        return;
-    };
-    let treatment = view.active_theme.treatment;
-    let nation = view.scale >= crate::state::LOD_NATION_SCALE;
-    let key = IsolineKey {
-        map: tex.last_map.clone(),
-        size: tex.size,
-        height: tex.height,
-        res: tex.res,
-        soften: tex.last_soften,
-        treatment: [
-            treatment.coast_halo,
-            treatment.river_centerline,
-            treatment.ink_sublinear,
-        ],
-        tol_q: tol_quantum(view.scale),
-        nation,
-    };
-    let structural_same = overlay.key.as_ref() == Some(&key);
-    let dirty_pending = tex.chunks_dirty.is_some();
-    // 「几何不必重算」判定：结构同键，且（无脏区 ∨ 脏区来自纯换色——地形内容
-    // 指纹未变）。palette 切换的整图重建会置全图 `chunks_dirty`，但 cells 逐格
-    // 未动：指纹比对（~3ms）换掉整条派生管线（1024² 实测 ~75ms）。
-    let geometry_unchanged = structural_same
-        && (overlay.entity.is_some() || overlay.empty_settled())
-        && (!dirty_pending || overlay.data_hash == Some(terrain_data_hash(data)));
-    if geometry_unchanged {
-        // 结构没变也可能只是图层绑定变了（作者改 opacity/z）：就地补丁，
-        // 不重算派生几何。palette 变了同样只重上色（`ink_palette` 快路径）。
-        if layers.is_changed() || overlay.ink_palette != Some(view.map_palette) {
-            apply_material_colors(
-                &mut materials,
-                &overlay,
-                &view.active_theme.palette,
-                layers.terrain.opacity,
-            );
-            overlay.ink_palette = Some(view.map_palette);
-        }
-        if layers.is_changed() {
-            if let Some(entity) = overlay.entity {
-                commands.entity(entity).insert(Transform::from_xyz(
-                    0.0,
-                    0.0,
-                    ISOLINE_Z + layers.terrain.z_offset,
-                ));
-            }
-        }
-        return;
-    }
-
-    // 派生管线（plan §2.4：提取 → 装配 → Chaikin → DP）。
-    let w = data.width;
-    let h = data.height;
-    let cell = |x: u32, y: u32| &data.cells[(y * w + x) as usize];
-    let tol = dp_tol_continuous(view.scale);
-    // 装饰旗标（ADR-0023 D4）：从当前主题包派生。内置两包都是 HAND_DRAWN（全
-    // `true`）——所有 gate 分支在 `true` 时走与历史恒开**逐位相同**的路径。
-    let treatment = view.active_theme.treatment;
-    // 描边世界半宽（手绘地图 #10，2026-10-15）：**亚线性**缩放——
-    // 世界半宽 = px × scale^0.78 而非 px × scale（ADR-0008 §8 乘口径的
-    // 修正式）。civ-atlas GLYPH_SHRINK=0.22 同款思路：放大 4 倍时墨线的
-    // *世界*尺寸只长 ~3 倍 → *屏幕*观感随放大反而变纤细（k^-0.22），地图
-    // 细节浮现而墨线不霸道；缩小时屏幕上线变粗，远观仍可辨。
-    // 世界下限保留：极远时防消隐。
-    // 装饰旗标 gate：`ink_sublinear = false` 的主题回退 ADR-0008 §8 的严格
-    // 乘口径（屏幕恒定宽）。
-    let thin_half = if treatment.ink_sublinear {
-        stroke_half_world(STROKE_PX, view.scale, grid.cell_size * 0.03)
-    } else {
-        (STROKE_PX * 0.5 * view.scale).max(grid.cell_size * 0.03)
-    };
-    // 类型边界加宽：格缘阶梯被 Chaikin 磨角后，平滑曲线偏离原阶梯至多约
-    // 0.3 格——细线盖不住露出的「错色台阶」，按格径给足半宽才压得平。
-    let kind_half = thin_half.max(grid.cell_size * KIND_STROKE_CELL);
-
-    // ---- 提取 + 装配 + Chaikin 缓存（Task 3）----
-    // 这些与缩放无关；只有 DP 容差 / Nation 档消费它们。缓存输入不含 tol_q：
-    // 缩放只在缓存上重跑 DP（毫秒级），笔刷改地形 / 切图 / 改 treatment 才重建链。
-    let data_hash = terrain_data_hash(data);
-    let chain_inputs = ChainCacheInputs {
-        map: key.map.clone(),
-        data_hash,
-        treatment: key.treatment,
-        nation,
-    };
-    let rebuild_chains = overlay.chains.as_ref().map(|c| &c.inputs) != Some(&chain_inputs);
-    if rebuild_chains {
-        let coast_segs = height_segments(w, h, |x, y| cell(x, y).height as f32, 0.0);
-        // Nation 档只画海岸线（与 POI / 建筑同口径，spec §2.2c）：
-        // 类型边界在远观读不出差异，却让描边总长翻数倍。
-        let kinds_segs = (!nation).then(|| {
-            kind_segments(w, h, |x, y| {
-                wv_terrain::biome::display_kind(&wv_terrain::TerrainCell {
-                    height: cell(x, y).height,
-                    surface: cell(x, y).surface,
-                    biome: cell(x, y).biome,
-                })
-            })
-        });
-        let coast_smoothed: Vec<IsolineChain> = assemble_chains(&coast_segs)
-            .into_iter()
-            .map(|c| (chaikin(&c.pts, c.closed, 2), c.closed))
-            .collect();
-        let kinds_smoothed: Vec<IsolineChain> = kinds_segs
-            .as_deref()
-            .map(|segs| {
-                assemble_chains(segs)
-                    .into_iter()
-                    // 类型场边界是格缘阶梯：先小容差预抽稀去共线中点，再 Chaikin，
-                    // 否则平滑后的点数翻两倍全是楼梯碎点。
-                    .map(|c| {
-                        let pts = simplify_dp(&c.pts, c.closed, 0.30);
-                        (chaikin(&pts, c.closed, 2), c.closed)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        overlay.chains = Some(CachedChains {
-            inputs: chain_inputs,
-            coast_smoothed,
-            kinds_smoothed,
-        });
-    }
-    // 缩放热路径：只跑 DP + 半宽。
-    let (strokes, coast_halo_inner, coast_halo_outer, coast_river) = {
-        let chains = overlay.chains.as_ref().expect("上面刚建立");
-        assemble_strokes(
-            &chains.coast_smoothed,
-            &chains.kinds_smoothed,
-            tol,
-            thin_half,
-            kind_half,
-            treatment,
-        )
-    };
-
-    let Some(mesh) = build_stroke_mesh(&strokes, grid.raster_origin, grid.cell_size) else {
-        // 空几何（无等值线）也是稳态：0 顶点 mesh 会踩 bevy #24874
-        // （MeshAllocator 误报 Use-after-free），退场不插；键记为「空已定」，
-        // 下一帧走 `empty_settled` 快路，不重算。
-        overlay.despawn(&mut commands);
-        overlay.key = Some(key);
-        overlay.data_hash = Some(data_hash);
-        overlay.ink_palette = Some(view.map_palette);
-        return;
-    };
-    let handle = meshes.add(mesh);
-    let pal = &view.active_theme.palette;
-    let material = overlay
-        .material
-        .get_or_insert_with(|| {
-            materials.add(ColorMaterial::from_color(
-                view.active_theme.palette.isoline_ink,
-            ))
-        })
-        .clone();
-    // 材质跨重建复用（get_or_insert）：重算后也要按当前绑定刷新 alpha。
-    apply_material_colors(&mut materials, &overlay, pal, layers.terrain.opacity);
-
-    overlay.despawn(&mut commands);
-    let entity = commands
-        .spawn((
-            Mesh2d(handle.clone()),
-            MeshMaterial2d(material),
-            Transform::from_xyz(0.0, 0.0, ISOLINE_Z + layers.terrain.z_offset),
-        ))
-        .id();
-    overlay.entity = Some(entity);
-    overlay.mesh = Some(handle);
-
-    // 水彩外晕（手绘地图 #4）：仅当海岸链非空时生成。晕在主线下层（z 更小），
-    // 避免遮住主线。alpha 渐变（`HALO_*_ALPHA`）实现水彩晕染感。
-    if !coast_halo_inner.is_empty() {
-        if let Some(mesh) = build_stroke_mesh(&coast_halo_inner, grid.raster_origin, grid.cell_size)
-        {
-            let h = meshes.add(mesh);
-            let mat = materials.add(ColorMaterial::from_color(
-                pal.isoline_ink
-                    .with_alpha(HALO_1_ALPHA * layers.terrain.opacity),
-            ));
-            let e = commands
-                .spawn((
-                    Mesh2d(h.clone()),
-                    MeshMaterial2d(mat.clone()),
-                    Transform::from_xyz(0.0, 0.0, ISOLINE_Z - 0.002 + layers.terrain.z_offset),
-                ))
-                .id();
-            overlay.halo_outer = Some((e, h, mat));
-        }
-    }
-    if !coast_halo_outer.is_empty() {
-        if let Some(mesh) = build_stroke_mesh(&coast_halo_outer, grid.raster_origin, grid.cell_size)
-        {
-            let h = meshes.add(mesh);
-            let mat = materials.add(ColorMaterial::from_color(
-                pal.isoline_ink
-                    .with_alpha(HALO_2_ALPHA * layers.terrain.opacity),
-            ));
-            let e = commands
-                .spawn((
-                    Mesh2d(h.clone()),
-                    MeshMaterial2d(mat.clone()),
-                    Transform::from_xyz(0.0, 0.0, ISOLINE_Z - 0.004 + layers.terrain.z_offset),
-                ))
-                .id();
-            overlay.halo_outer_outer = Some((e, h, mat));
-        }
-    }
-    // 河水中线（手绘地图 #8）：在主线上方，z+0.001，宽度 0.5× main，
-    // `label_water` 颜色 + 0.5 alpha——"水边反光"观感（civ-atlas 风格）。
-    if !coast_river.is_empty() {
-        if let Some(mesh) = build_stroke_mesh(&coast_river, grid.raster_origin, grid.cell_size) {
-            let h = meshes.add(mesh);
-            let mat = materials.add(ColorMaterial::from_color(
-                pal.label_water
-                    .with_alpha(RIVER_ALPHA * layers.terrain.opacity),
-            ));
-            let e = commands
-                .spawn((
-                    Mesh2d(h.clone()),
-                    MeshMaterial2d(mat.clone()),
-                    Transform::from_xyz(0.0, 0.0, ISOLINE_Z + 0.001 + layers.terrain.z_offset),
-                ))
-                .id();
-            overlay.coast_river = Some((e, h, mat));
-        }
-    }
-
-    overlay.key = Some(key);
-    overlay.data_hash = Some(terrain_data_hash(data));
-    overlay.ink_palette = Some(view.map_palette);
 }
 
 /// 按 palette 与图层 opacity 重写全部等值线材质颜色（主线 / 两圈水彩晕 / 河中线）。
@@ -497,10 +230,10 @@ pub fn sync_isoline_overlay(
 /// 2026-10-17 从 `apply_material_alpha` 扩展：晕与河中线的 alpha 原先只在
 /// spawn 时烘焙，改图层 opacity 不生效（既有不一致）；统一走本函数后四类
 /// 材质都响应 opacity 与 palette。
-fn apply_material_colors(
+pub fn apply_material_colors(
     materials: &mut Assets<ColorMaterial>,
     overlay: &IsolineOverlay,
-    pal: &crate::theme::palette::PaletteColors,
+    pal: &CellPalette,
     opacity: f32,
 ) {
     let ink = pal.isoline_ink;
@@ -535,13 +268,13 @@ type IsolineStroke = (Vec<wv_terrain::isoline::Pt>, bool, f32);
 /// 两段水彩晕分开返回（计划 Interfaces 写的是单路 `coast_halo`，但既有渲染
 /// 是 2.6× / 5.0× 两层 alpha 渐变，合并会改变观感——见 ledger Ruling）。
 #[allow(clippy::too_many_arguments)]
-fn assemble_strokes(
+pub fn assemble_strokes(
     coast: &[IsolineChain],
     kinds: &[IsolineChain],
     tol: f32,
     thin_half: f32,
     kind_half: f32,
-    treatment: crate::theme::theme_pack::TreatmentFlags,
+    treatment: TreatmentFlags,
 ) -> (
     Vec<IsolineStroke>,
     Vec<IsolineStroke>,
@@ -585,7 +318,7 @@ fn assemble_strokes(
 /// 链）。调用方必须以退场响应 `None`——绝不能把 0 顶点 mesh 插进 `Assets`：
 /// MeshAllocator 对空 mesh 跳过分配、拷贝阶段却无条件读取，bevy #24874 会
 /// 误报 `Use-after-free`。
-pub(crate) fn build_stroke_mesh(
+pub fn build_stroke_mesh(
     chains: &[(Vec<wv_terrain::isoline::Pt>, bool, f32)],
     origin: Vec2,
     cell_size: f32,
@@ -638,7 +371,7 @@ pub(crate) fn build_stroke_mesh(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wv_terrain::isoline::Pt;
+    use wv_terrain::isoline::{assemble_chains, chaikin, height_segments, kind_segments, Pt};
 
     fn p(x: f32, y: f32) -> Pt {
         Pt { x, y }
@@ -701,14 +434,8 @@ mod tests {
     #[test]
     fn assemble_strokes_from_cached_chains_yields_main_halo_and_river() {
         let coast = vec![(vec![p(0.5, 0.5), p(8.5, 0.5)], false)];
-        let (strokes, halo_inner, halo_outer, river) = assemble_strokes(
-            &coast,
-            &[],
-            0.125,
-            0.5,
-            1.0,
-            crate::theme::theme_pack::TreatmentFlags::HAND_DRAWN,
-        );
+        let (strokes, halo_inner, halo_outer, river) =
+            assemble_strokes(&coast, &[], 0.125, 0.5, 1.0, TreatmentFlags::HAND_DRAWN);
         assert_eq!(strokes.len(), 1, "一条海岸链 = 一条主线");
         assert_eq!(halo_inner.len(), 1, "coast_halo 全开 → 内晕每链一");
         assert_eq!(halo_outer.len(), 1, "coast_halo 全开 → 外晕每链一");
@@ -861,10 +588,11 @@ mod tests {
     /// 变了才判不等。
     #[test]
     fn isoline_key_ignores_palette_but_respects_treatment_bits() {
-        let day = crate::theme::theme_pack::builtin::for_palette(MapPalette::Daylight).treatment;
-        let dusk = crate::theme::theme_pack::builtin::for_palette(MapPalette::Dusk).treatment;
-        // 零回归硬前提（theme_pack 同款断言）：两包几何位相同，键必须相等。
-        let key_of = |t: crate::theme::theme_pack::TreatmentFlags| IsolineKey {
+        // 镜像域内的同语义断言：几何位（HAND_DRAWN 全开）一致时键必须相等
+        // （wv-theme 侧「两内置包几何位相同」的断言留在 wv-theme 测试）。
+        let day = TreatmentFlags::HAND_DRAWN;
+        let dusk = TreatmentFlags::HAND_DRAWN;
+        let key_of = |t: TreatmentFlags| IsolineKey {
             map: Some(wv_core::Id::new("m").expect("合法 id")),
             size: 512,
             height: 512,

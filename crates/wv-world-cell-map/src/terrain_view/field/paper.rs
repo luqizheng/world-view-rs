@@ -25,8 +25,6 @@
 //! 雾是**逐帧连续量**（随缩放变化），纸面是**静态量**。分开之后缩放时只改
 //! 一个 `ColorMaterial` 的 alpha，不必重传纸面的 uniform。
 
-#![cfg(feature = "app")]
-
 use bevy::{
     prelude::*,
     render::render_resource::{AsBindGroup, ShaderType},

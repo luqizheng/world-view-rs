@@ -191,47 +191,33 @@ pub struct FieldPalette {
 }
 
 impl Default for FieldPalette {
-    /// 默认取 `wv-theme` 的 `topographic::TopographicPalette` 四色 + 墨色。
+    /// 冻结的**地形场四色 + 墨色**（ADR-0054 D4：固定色是本 crate 的默认
+    /// 数据源）。值 = wv-theme `topographic::TopographicPalette::default()`
+    /// 逐值抄录（2026-10-23），与 `biome_raw` 的 Topographic 取色同色族——
+    /// P1 与 CPU 回退路径观感一致，不一致就是回归。
     ///
-    /// 与 `topographic::pick` 同色族，**保证 P1 与现行 CPU 路径观感一致**——
-    /// 不一致就是回归。
-    ///
-    /// ⚠️ **色彩空间**：`TopographicPalette` 给的是 **sRGB** 分量
-    /// （`Srgb3`，注释里写作 `#3A7DB5` 这类十六进制）。材质 uniform 住在
-    /// **线性**空间，直接塞进 `LinearRgba::rgb` 会被当成线性值，
-    /// 输出到 sRGB 帧缓冲时再亮一次——整幅图明显偏白偏淡（实测踩过）。
-    /// 必须走 `Color::srgb(..)` 做显式转换。
+    /// ⚠️ **色彩空间**：下面全部按 **sRGB** 书写（取色器口径），经
+    /// `Color::srgb(..)` 显式转线性——uniform 住在线性空间，直塞会被
+    /// 当线性值输出后再亮一次（整幅偏白，实测踩过）。
     fn default() -> Self {
-        let t = wv_theme::topographic::TopographicPalette::default();
-        // sRGB → 线性：`Color::srgb` 构造 sRGB 色，转 `LinearRgba` 时做 gamma 解码。
-        let srgb =
-            |c: wv_theme::topographic::Srgb3| LinearRgba::from(Color::srgb(c[0], c[1], c[2]));
+        // 冻结表（sRGB，Draft 提议值 2026-10-19）：水 #3A7DB5 /
+        // 低地 #F0E5C9（沙调暖底）/ 中地 #C9B58A（土褐过渡）/ 高地 #8A7A66（岩褐）。
+        let srgb = |r: f32, g: f32, b: f32| LinearRgba::from(Color::srgb(r, g, b));
         Self {
-            water: srgb(t.water),
-            land_low: srgb(t.land_low),
-            land_mid: srgb(t.land_mid),
-            land_high: srgb(t.land_high),
-            // 墨色与纸色也按 sRGB 书写（人眼/取色器给的都是 sRGB 值），
-            // 同一路径转线性——避免两种口径混用。
-            ink: LinearRgba::from(Color::srgb(0.16, 0.14, 0.13)),
-            // T25 河墨：取主题水色加深 35%（sRGB 空间乘法≈感知线性），
+            water: srgb(0.227, 0.490, 0.710),
+            land_low: srgb(0.941, 0.898, 0.788),
+            land_mid: srgb(0.788, 0.710, 0.541),
+            land_high: srgb(0.541, 0.478, 0.400),
+            // 墨色与纸色也按 sRGB 书写（人眼/取色器给的都是 sRGB 值）。
+            ink: srgb(0.16, 0.14, 0.13),
+            // T25 河墨：取水色加深 35%（sRGB 空间乘法≈感知线性），
             // 与水色同族——河是「水的线状呈现」，异色会像笔刷描上去的。
-            river_ink: LinearRgba::from(Color::srgb(
-                t.water[0] * 0.65,
-                t.water[1] * 0.65,
-                t.water[2] * 0.72,
-            )),
-            paper: LinearRgba::from(Color::srgb(0.94, 0.91, 0.84)),
+            river_ink: srgb(0.227 * 0.65, 0.490 * 0.65, 0.710 * 0.72),
+            paper: srgb(0.94, 0.91, 0.84),
         }
     }
 }
 
-/// 地形场材质：数据纹理 + uniform 参数，唯一 CPU→GPU 通道。
-///
-/// 绑定布局（WGSL 侧同步）：
-/// - `binding 0` = uniform（参数）
-/// - `binding 1/3/5/7` = 四张数据纹理（height / coast / attr / line_dash）
-/// - `binding 2/4/6/8` = 对应 sampler
 #[derive(AsBindGroup, Debug, Clone, Asset, TypePath)]
 pub struct TerrainFieldMaterial {
     /// uniform 参数块。**公开**是刻意的：缩放档位、墨线强度、明暗钳制等
