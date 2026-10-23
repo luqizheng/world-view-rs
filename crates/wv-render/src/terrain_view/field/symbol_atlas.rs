@@ -265,7 +265,6 @@ pub fn shadow_color() -> Color {
 ///
 /// 依据：T33 的远观档从 1 px/格 起判，符号与地形色域在同一档位交接。
 pub const SYMBOL_EXIT_PX_PER_CELL: f32 = 1.0;
-
 /// T37b-3：淡出带下缘——`0.8 ≤ px_per_cell < 1.0` 线性淡出。
 ///
 /// 带宽 0.2 是「退场阈值 × 20%」：足够覆盖两帧以上的连续缩放（消除
@@ -298,6 +297,47 @@ pub fn symbol_exit_alpha(px_per_cell: f32) -> f32 {
     (ppc - SYMBOL_FADE_START_PX_PER_CELL)
         / (SYMBOL_EXIT_PX_PER_CELL - SYMBOL_FADE_START_PX_PER_CELL)
 }
+
+// ── T37c：屏幕密度抽稀（追记十）─────────────────────────────────────────
+
+/// 符号密度基线（px/格）：此缩放以上不再抽稀，全部符号照常显示。
+///
+/// 取 8：这是「一格约一个符号画布」的档位（T37 的 1× 档 32 px ↔ 4 格，
+/// 8 px/格 时一格 8 px、符号 32 px 覆盖 4 格——已是可接受的上限密度）。
+pub const SYMBOL_DENSITY_REF_PX: f32 = 8.0;
+
+/// T37c：按缩放算「符号保留比例」，让**屏幕空间**的符号密度保持恒定。
+///
+/// ## 为什么需要这个（追记十的实测问题）
+///
+/// T37 规定符号尺寸以**屏幕像素**恒定（32/64/96）。于是：
+/// - 符号个数 ∝ 可见格数 ∝ `(屏幕尺寸 / px_per_cell)²` ∝ `1/px_per_cell²`
+/// - 每个符号的屏幕面积恒定 `S²`
+/// - 所以**屏幕覆盖率 ∝ `1/px_per_cell²`** —— 一缩就爆炸
+///
+/// 实测症状：512 格图在 2.5 px/格（大陆刚好铺满一屏）时，466 个符号把
+/// 大陆盖得只剩零星地形；T37b 的门控只在 `<1 px/格` 才全退，这段是盲区。
+///
+/// ## 修法：保留比例 ∝ `px_per_cell²`
+///
+/// `keep = clamp((ppc / REF)², 0, 1)` —— 格数变少多少，就抽掉多少符号，
+/// 屏幕上单位面积的符号数因此恒定。`ppc ≥ REF` 时 `keep = 1`（不抽稀）。
+///
+/// ## 为什么用哈希阈值而不是「每 N 个取一个」
+///
+/// 调用方拿 `hash01(cx, cy, salt)` 与本函数返回值比较。因为阈值随缩放
+/// **单调**变化，保留集是**嵌套**的：放大时符号逐个回来、缩小时逐个退场，
+/// **不会重排**（同一个格不会「这个缩放有、下个缩放换成别的格」），
+/// 视觉上不闪。按索引取模则会在缩放时整片重排。
+#[must_use]
+pub fn symbol_density_keep(px_per_cell: f32) -> f32 {
+    let ratio = px_per_cell.max(0.0) / SYMBOL_DENSITY_REF_PX;
+    (ratio * ratio).clamp(0.0, 1.0)
+}
+
+/// T37c 的哈希盐——与变体 / 翻转 / 尺寸抖动的盐互不相同，
+/// 否则「被抽掉的符号」会与「某个变体」相关，出现整族消失。
+pub const SALT_DENSITY: u64 = 0xD3A5_17E0;
 
 // ── 占位图集 ────────────────────────────────────────────────────────────
 
@@ -601,6 +641,52 @@ mod tests {
         assert_eq!(symbol_exit_alpha(f32::NEG_INFINITY), 0.0);
         // NaN 走 max(0.0) 后是 0.0 → 落进 ppc <= 0.8 分支
         assert_eq!(symbol_exit_alpha(f32::NAN), 0.0);
+    }
+
+    /// T37c：密度保留比例的三个端点 + 单调性。
+    #[test]
+    fn symbol_density_keep_follows_inverse_square() {
+        // 基线以上不抽稀
+        assert_eq!(symbol_density_keep(SYMBOL_DENSITY_REF_PX), 1.0);
+        assert_eq!(symbol_density_keep(32.0), 1.0);
+        // 半缩放 → 1/4
+        assert!((symbol_density_keep(4.0) - 0.25).abs() < 1e-6);
+        // 大陆全景档（实测出问题的 2.5 px/格）→ 约 1/10
+        assert!((symbol_density_keep(2.5) - 0.0977).abs() < 1e-3);
+        // 退化输入
+        assert_eq!(symbol_density_keep(0.0), 0.0);
+        assert_eq!(symbol_density_keep(-1.0), 0.0);
+        assert_eq!(symbol_density_keep(f32::NAN), 0.0);
+    }
+
+    /// T37c：保留集必须**嵌套**——放大时只增不减、缩小时只减不增。
+    ///
+    /// 调用方的判据是 `hash01(cx,cy,SALT_DENSITY) < keep(ppc)`；
+    /// keep 单调不减于 ppc，故「小 ppc 保留的符号 ⊂ 大 ppc 保留的符号」。
+    /// 这条成立才不会出现「缩放时整片符号重排」的闪烁。
+    #[test]
+    fn density_threshold_is_nested_across_zoom() {
+        let cells: Vec<(i64, i64)> = (0..40)
+            .flat_map(|y| (0..40).map(move |x| (x * 8, y * 8)))
+            .collect();
+        let zoom_levels = [1.0_f32, 2.0, 2.5, 4.0, 6.0, 8.0, 16.0];
+        let mut prev_kept = std::collections::HashSet::new();
+        let mut prev_keep = -1.0;
+        for &ppc in &zoom_levels {
+            let keep = symbol_density_keep(ppc);
+            assert!(keep >= prev_keep - 1e-6, "keep 必须随 ppc 单调不减");
+            let kept: std::collections::HashSet<_> = cells
+                .iter()
+                .filter(|(cx, cy)| hash01(*cx, *cy, SALT_DENSITY) < keep)
+                .collect();
+            for c in &prev_kept {
+                assert!(kept.contains(c), "ppc={ppc} 时丢了上一档保留的符号");
+            }
+            prev_kept = kept;
+            prev_keep = keep;
+        }
+        // 基线档必须全保留
+        assert_eq!(prev_kept.len(), cells.len());
     }
 
     /// T41 / Q2：清单合计必须是 21，且各族数量是 4/5/7/5。

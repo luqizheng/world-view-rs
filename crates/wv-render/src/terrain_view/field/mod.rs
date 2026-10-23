@@ -57,6 +57,7 @@ pub use paper::{
 };
 pub use symbol_atlas::{
     anchor_offset, hash01, placeholder_atlas, shadow_color, shadow_offset, slot_index,
-    symbol_exit_alpha, variant_for, SizeClass, SymbolFamily, SymbolVariant, ATLAS_SIZE, CELL_PX,
-    CONTENT_PX, GRID_DIM, SHADOW_ALPHA, SYMBOL_EXIT_PX_PER_CELL, SYMBOL_FADE_START_PX_PER_CELL,
+    symbol_density_keep, symbol_exit_alpha, variant_for, SizeClass, SymbolFamily, SymbolVariant,
+    ATLAS_SIZE, CELL_PX, CONTENT_PX, GRID_DIM, SALT_DENSITY, SHADOW_ALPHA, SYMBOL_DENSITY_REF_PX,
+    SYMBOL_EXIT_PX_PER_CELL, SYMBOL_FADE_START_PX_PER_CELL,
 };

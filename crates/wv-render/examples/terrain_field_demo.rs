@@ -46,10 +46,11 @@ use wv_render::terrain_view::atmosphere::veil_alpha;
 use wv_render::terrain_view::field::{
     anchor_offset, bake_line_dash, build_material_with_lines, build_paper_material,
     build_veil_material, default_params, hash01, placeholder_atlas, rivers_from_terrain,
-    set_coast_encoding, shadow_color, shadow_offset, slot_index, symbol_exit_alpha, variant_for,
-    CoastEncoding, FieldPack, LinePoly, PaperOverlayMaterial, PaperOverlayPlugin, PaperParams,
-    SymbolFamily, TerrainFieldMaterial, TerrainFieldMaterialPlugin, ViewBranch, CELL_PX, GRID_DIM,
-    PAPER_Z, VEIL_Z, VIGNETTE_ALPHA,
+    set_coast_encoding, shadow_color, shadow_offset, slot_index, symbol_density_keep,
+    symbol_exit_alpha, variant_for, CoastEncoding, FieldPack, LinePoly, PaperOverlayMaterial,
+    PaperOverlayPlugin, PaperParams, SymbolFamily, TerrainFieldMaterial,
+    TerrainFieldMaterialPlugin, ViewBranch, CELL_PX, GRID_DIM, PAPER_Z, SALT_DENSITY, VEIL_Z,
+    VIGNETTE_ALPHA,
 };
 
 /// 地形网格边长（格）。512 = 262144 格，与 P0 锁 T5 的计时口径一致。
@@ -155,6 +156,9 @@ struct SymbolPiece {
     cell_pos: Vec2,
     /// 是否是阴影副本（只有阴影需要额外位移）。
     shadow: bool,
+    /// 格坐标——T37c 密度抽稀的哈希键（同格的主符号与阴影必须同判）。
+    cx: i64,
+    cy: i64,
 }
 
 /// demo 的相机/缩放状态。
@@ -648,6 +652,8 @@ fn setup(
                     size_px,
                     cell_pos: pos,
                     shadow: true,
+                    cx: cx as i64,
+                    cy: cy as i64,
                 },
             ));
             commands.spawn((
@@ -668,6 +674,8 @@ fn setup(
                     size_px,
                     cell_pos: pos,
                     shadow: false,
+                    cx: cx as i64,
+                    cy: cy as i64,
                 },
             ));
             placed += 1;
@@ -982,6 +990,20 @@ fn sync_symbols(
             *vis = Visibility::Hidden;
             continue;
         }
+        // T37c：屏幕密度抽稀（追记十）。
+        //
+        // 符号尺寸按屏幕像素恒定（T37）⇒ 符号数 ∝ 1/ppc²、每个符号屏幕面积
+        // 恒定 ⇒ **屏幕覆盖率 ∝ 1/ppc²**。缩到「整块大陆刚好铺满一屏」
+        // （2.5 px/格）时 466 个符号把地形盖得只剩零星——这是实测症状。
+        //
+        // 判据是哈希阈值比较：`hash01(cx,cy,SALT_DENSITY) < keep(ppc)`。
+        // 阈值随 ppc 单调 ⇒ 保留集嵌套 ⇒ 缩放时符号逐个增减、不重排、不闪。
+        // 主符号与阴影同格同判（同一个 cx/cy），不会出现「有影无身」。
+        let keep = symbol_density_keep(ppc);
+        if hash01(piece.cx, piece.cy, SALT_DENSITY) >= keep {
+            *vis = Visibility::Hidden;
+            continue;
+        }
         let alpha = symbol_exit_alpha(ppc);
         if alpha >= 1.0 {
             *vis = Visibility::Inherited;
@@ -1157,6 +1179,20 @@ const ACCEPT_SHOTS: &[AcceptShot] = &[
         px_per_cell: 16.0,
         branch: ViewBranch::Themed,
         aim: Aim::River,
+    },
+    // 「整块大陆」档（符号密度问题的复现档）：512 格 × 2.5 px ≈ 1280 px，
+    // 大陆刚好铺满一屏。此档符号仍按屏幕像素恒定（32/64/96）→ 覆盖率高。
+    AcceptShot {
+        label: "12-overview-2p5px",
+        px_per_cell: 2.5,
+        branch: ViewBranch::Themed,
+        aim: Aim::Center,
+    },
+    AcceptShot {
+        label: "13-overview-1p5px",
+        px_per_cell: 1.5,
+        branch: ViewBranch::Themed,
+        aim: Aim::Center,
     },
 ];
 
