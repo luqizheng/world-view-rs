@@ -107,6 +107,10 @@ impl Plugin for EditorOverlayPlugin {
                     measurement::reload_measurement_cache,
                     measurement::commit_measurement_click
                         .after(measurement::reload_measurement_cache),
+                    // `Del` 删光标下的测量（2026-10-23）：与清空按钮互补——
+                    // 后者清一图（应用层命令），本系统删一条（渲染层意图）。
+                    measurement::delete_measurement_under_cursor
+                        .after(measurement::reload_measurement_cache),
                 ),
             )
             .init_resource::<crate::state::SelectionState>()

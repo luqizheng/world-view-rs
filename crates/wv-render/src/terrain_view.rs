@@ -21,5 +21,5 @@ pub use crate::cellmap_bridge::{
     land_pending_terrain_synth, rebuild_texture_on_mode_change, setup_terrain_texture,
     shade_mode_of, sync_atmosphere, sync_cell_region, sync_cell_selection, sync_grid_config,
     sync_grid_lines, sync_isoline_overlay, sync_missing_overlay_markers, sync_region_overlay_index,
-    sync_terrain_chunks,
+    sync_terrain_chunks, sync_terrain_field, FieldKey, FieldRenderStats, TerrainFieldRender,
 };

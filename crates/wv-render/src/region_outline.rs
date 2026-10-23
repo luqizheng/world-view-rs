@@ -80,6 +80,54 @@ pub struct RegionOutlinePool {
     preview_material: Option<Handle<ColorMaterial>>,
     /// 底色覆盖材质缓存（色 → 句柄）：同一色的区域共用一个材质。
     fill_materials: Vec<([u8; 3], Handle<ColorMaterial>)>,
+    /// 轮廓线段**源**缓存：区域集合 + 多边形 + 网格换算没变 ⇒ 不重算 `segs`。
+    ///
+    /// 2026-10-23：旧实现每帧把全部区域多边形展开成 `Vec<(Vec2, Vec2)>`
+    /// （`push_loop` 里每个环还先分配一个 `Vec<Vec2>`）并重算指纹——
+    /// 区域数 200 时这是「开群系视图 26 FPS」的主要来源之一。
+    source: Option<OutlineSource>,
+    /// 候选预览的输入环（上一帧那份）：相等就完全跳过 `segs` 装配。
+    preview_ring: Option<Vec<Vec2>>,
+    /// 候选预览的线段缓存（`preview_ring` 的展开结果）。
+    preview_segs: Vec<(Vec2, Vec2)>,
+    /// 候选预览的线段指纹。
+    preview_fp: u64,
+    /// **计数器**（QA 断言口径，跨机器同值）：`segs` 重算次数。
+    pub seg_recomputes: u64,
+    /// **计数器**：`build_stroke_batch_mesh` 调用次数（轮廓 + 候选预览合计）。
+    pub stroke_rebuilds: u64,
+    /// **计数器**：其中**候选预览**的 mesh 构建次数（与轮廓分开——预览本来就该
+    /// 随光标变，「预览重建」不能算成「轮廓重建」）。
+    pub preview_stroke_builds: u64,
+    /// **计数器**：`OutlineKey` 变化导致的轮廓 mesh 真实重建次数。
+    pub outline_rebuilds: u64,
+    /// **计数器**：候选预览分支重算 `segs` 的次数。
+    pub preview_recomputes: u64,
+    /// **计数器**：`region_fill_mesh`（底色覆盖三角化）调用次数。
+    pub fill_rasterizes: u64,
+}
+
+/// 轮廓线段的源缓存（身份 + 展开结果 + 内容指纹）。
+struct OutlineSource {
+    key: SegSourceKey,
+    segs: Vec<(Vec2, Vec2)>,
+    fingerprint: u64,
+}
+
+/// `segs` 的重算判据：**只含「线段内容」的输入**。
+///
+/// 刻意**不含 `view.scale`**：线宽由 [`thickness_bucket`] 量化后进 `OutlineKey`，
+/// 缩放不再污染几何缓存（这是 2026-10-23 的第二条病根）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SegSourceKey {
+    /// 格尺寸 / 两套原点 / 幅面的位模式（`GridConfig` 变了，视空间坐标就变了）。
+    grid_bits: [u64; 7],
+    /// 是否走 CellMap 的 Nature-only 过滤（集合口径变了，线也就变了）。
+    in_cellmap: bool,
+    /// 过滤后的区域数（与 `geom` 一起做「快筛 + 全量」两层）。
+    region_count: usize,
+    /// 全部区域多边形的 FNV（裸 `f32::to_bits`，无分配）。
+    geom: u64,
 }
 
 /// 一个合批线框。
@@ -89,12 +137,34 @@ struct OutlineBatch {
     key: OutlineKey,
 }
 
-/// 线框的重建判据（内容指纹 + 世界线宽 + Z）。
+/// 线框的重建判据（内容指纹 + **线宽档** + Z）。
+///
+/// 2026-10-23：`world_thickness: f32 = 1.6 × view.scale` 是逐档重建的直接原因
+/// （缩放每一档都换键）。改成 1/2 octave 的**档号**后，同一个档内连续几档缩放
+/// 共用一份几何；屏上宽度落在 `1.6 × [0.84, 1.19] px`（档宽 ×1.414，取档中心），
+/// 对一条 1.6px 的边界线是读不出来的差别。
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct OutlineKey {
     fingerprint: u64,
-    world_thickness: f32,
+    thickness_bucket: i16,
     z: f32,
+}
+
+/// 缩放 → 1/2 octave 档号（与 `isoline_overlay::dp_tol_bucket` 同口径）。
+///
+/// 两处消费：① 轮廓线宽（`OUTLINE_STROKE_PX × 档中心 scale`）；
+/// ② `world_projection` 的手柄抽稀间距（QA AC22：smooth zoom 每帧微动不能打穿缓存）。
+///
+/// `round(log2(scale) × 2)`：档宽 ×1.414。为什么是 1/2 octave 而不是 1 octave：
+/// 1 octave（×2）在 1.6px 线宽上会让屏上宽度在 0.8–1.6px 之间跳（肉眼可见
+/// 粗细跳变）；1/2 octave 的 ±19% 读不出来，而重建次数只翻倍。
+pub(crate) fn scale_bucket(scale: f32) -> i16 {
+    (scale.max(1e-6).log2() * 2.0).round() as i16
+}
+
+/// 档号 → 档中心缩放（几何按它烘焙线宽）。
+pub(crate) fn scale_of_bucket(bucket: i16) -> f32 {
+    (f32::from(bucket) / 2.0).exp2()
 }
 
 /// 一个底色覆盖块。
@@ -107,18 +177,61 @@ struct FillBatch {
 }
 
 impl RegionOutlinePool {
-    /// 清空所有实体（图层关闭 / 换图时用）。
+    /// 清空所有实体**并回收资产**（图层关闭 / 换图时用）。
+    ///
+    /// 2026-10-23（QA AC19/AC20 复签）：旧实现只 `despawn` 实体，mesh 句柄一丢，
+    /// 资产就成无人引用的死条目常驻到进程结束——「开 → 关」每轮泄漏一份全量合批
+    /// mesh（200 区时不小），材质同理。现在实体与资产一起回收，写法照
+    /// `grid_lines.rs::GridLinesOverlay::despawn`（上一轮修过的同款泄漏）。
+    ///
+    /// 为什么用 `commands.queue` 而不是 `ResMut<Assets<..>>`：本函数被
+    /// `sync_region_outlines` 调用，那里已经有 `Commands`；多要两个 `Assets<>`
+    /// 参数会把签名顶到 Bevy 的参数上限，且这里的回收**不需要**与实体 despawn
+    /// 同一 tick 生效（句柄已 drop，晚一帧回收也不影响画面）。
     fn despawn_all(&mut self, commands: &mut Commands) {
         if let Some(b) = self.outline.take() {
             commands.entity(b.entity).despawn();
+            reclaim_mesh(commands, b.mesh);
         }
         if let Some(b) = self.preview.take() {
             commands.entity(b.entity).despawn();
+            reclaim_mesh(commands, b.mesh);
         }
         for f in self.fills.drain(..) {
             commands.entity(f.entity).despawn();
+            reclaim_mesh(commands, f.mesh);
         }
+        // 材质缓存同样回收（否则「开关 N 次」= N 份死材质）。重建代价是一次 `add`。
+        if let Some(m) = self.outline_material.take() {
+            reclaim_material(commands, m);
+        }
+        if let Some(m) = self.preview_material.take() {
+            reclaim_material(commands, m);
+        }
+        for (_, m) in self.fill_materials.drain(..) {
+            reclaim_material(commands, m);
+        }
+        // 线段的**源**缓存故意保留：它是「重新打开时不必重算几何」的依据，
+        // 与资产无关（REQ-4 只要求资产不累积）。
     }
+}
+
+/// 回收一个 mesh 资产（调用前其实体必须已 despawn）。
+fn reclaim_mesh(commands: &mut Commands, mesh: Handle<Mesh>) {
+    commands.queue(move |world: &mut World| {
+        if let Some(mut assets) = world.get_resource_mut::<Assets<Mesh>>() {
+            assets.remove(&mesh);
+        }
+    });
+}
+
+/// 回收一个 `ColorMaterial` 资产。
+fn reclaim_material(commands: &mut Commands, material: Handle<ColorMaterial>) {
+    commands.queue(move |world: &mut World| {
+        if let Some(mut assets) = world.get_resource_mut::<Assets<ColorMaterial>>() {
+            assets.remove(&material);
+        }
+    });
 }
 
 /// 区域多边形 → **视空间**线段（外环闭合 + 每个洞环闭合）。
@@ -251,20 +364,46 @@ pub fn sync_region_outlines(
     }
 
     // ---- 轮廓线框（所有区域合批）----
-    let mut segs: Vec<(Vec2, Vec2)> = Vec::new();
-    for r in &regions {
-        segs.extend(region_segments(r, &grid));
+    // ① 源缓存：区域集合 + 多边形 + 网格换算不变 ⇒ `segs` 与指纹都不重算。
+    //    每帧仍要做一次「裸位模式」的 geom 指纹（无分配、无坐标变换），
+    //    量级是 O(总边数) 的整数 xor/mul（200 区域 × 40 点 ≈ 8k 次 ≈ 10µs 级）。
+    let in_cellmap = matches!(view.mode, crate::state::ViewMode::Topographic);
+    let source_key = SegSourceKey {
+        grid_bits: grid_bits(&grid),
+        in_cellmap,
+        region_count: regions.len(),
+        geom: polygon_set_fingerprint(&regions),
+    };
+    let cached = pool.source.as_ref().is_some_and(|s| s.key == source_key);
+    if !cached {
+        let mut segs: Vec<(Vec2, Vec2)> = Vec::new();
+        for r in &regions {
+            segs.extend(region_segments(r, &grid));
+        }
+        let fingerprint = segments_fingerprint(&segs);
+        pool.source = Some(OutlineSource {
+            key: source_key,
+            segs,
+            fingerprint,
+        });
+        pool.seg_recomputes += 1;
     }
-    let fp = segments_fingerprint(&segs);
-    let world_thickness = OUTLINE_STROKE_PX * view.scale;
+    // 取出来用（`pool.outline` 下面还要改，借 `pool.source` 会冲突）。
+    let source = pool.source.take();
+    let (fp, segs_ref) = source
+        .as_ref()
+        .map(|s| (s.fingerprint, s.segs.as_slice()))
+        .unwrap_or((0, &[][..]));
+    let bucket = scale_bucket(view.scale);
+    let world_thickness = OUTLINE_STROKE_PX * scale_of_bucket(bucket);
     let key = OutlineKey {
         fingerprint: fp,
-        world_thickness,
+        thickness_bucket: bucket,
         z: REGION_OUTLINE_Z,
     };
     // 2026-10-22 验收：CellMap（Topographic + nature overlay）下轮廓=白色
     // （数据视图不随主题）；其他模式沿用深蓝。材质按模式重建。
-    let outline_color = if matches!(view.mode, crate::state::ViewMode::Topographic) {
+    let outline_color = if in_cellmap {
         Color::srgba(1.0, 1.0, 1.0, 0.9)
     } else {
         Color::srgba(0.21, 0.35, 0.48, 0.85)
@@ -281,8 +420,9 @@ pub fn sync_region_outlines(
     let outline_mat = pool.outline_material.clone().expect("刚建");
     match pool.outline.take() {
         None => {
-            if !segs.is_empty() {
-                let mesh = meshes.add(build_stroke_batch_mesh(&segs, world_thickness));
+            if !segs_ref.is_empty() {
+                let mesh = meshes.add(build_stroke_batch_mesh(segs_ref, world_thickness));
+                pool.stroke_rebuilds += 1;
                 let entity = commands
                     .spawn((
                         Mesh2d(mesh.clone()),
@@ -295,7 +435,9 @@ pub fn sync_region_outlines(
         }
         Some(mut b) => {
             if b.key != key {
-                let fresh = build_stroke_batch_mesh(&segs, world_thickness);
+                let fresh = build_stroke_batch_mesh(segs_ref, world_thickness);
+                pool.stroke_rebuilds += 1;
+                pool.outline_rebuilds += 1;
                 if let Some(mut old) = meshes.get_mut(&b.mesh) {
                     *old = fresh;
                 }
@@ -304,6 +446,7 @@ pub fn sync_region_outlines(
             pool.outline = Some(b);
         }
     }
+    pool.source = source;
 
     // ---- 底色覆盖（每个有规则色的区域一块）----
     let wanted: Vec<(&Region, [u8; 3])> = regions
@@ -327,6 +470,8 @@ pub fn sync_region_outlines(
         }
     }
     pool.fills = keep;
+    // 计数先攒在局部：循环里 `pool.fills.iter_mut()` 已独占借用 `pool`。
+    let mut fill_calls = 0u64;
     for (r, color) in &wanted {
         let fp = region_fill_fingerprint(r, color);
         if let Some(existing) = pool
@@ -335,6 +480,7 @@ pub fn sync_region_outlines(
             .find(|f| f.region_id == r.id && f.color == *color)
         {
             if existing.fingerprint != fp {
+                fill_calls += 1;
                 if let Some(mesh) = region_fill_mesh(r, &grid) {
                     if let Some(mut old) = meshes.get_mut(&existing.mesh) {
                         *old = mesh;
@@ -344,6 +490,7 @@ pub fn sync_region_outlines(
             }
             continue;
         }
+        fill_calls += 1;
         let Some(mesh) = region_fill_mesh(r, &grid) else {
             continue;
         };
@@ -364,17 +511,58 @@ pub fn sync_region_outlines(
             region_id: r.id.clone(),
         });
     }
+    pool.fill_rasterizes += fill_calls;
 
     // ---- 候选区预览（物化前光标所在的连通区）----
     sync_candidate_preview(
         commands,
         meshes,
         materials,
-        grid,
         view,
         input.ring.as_deref(),
         &mut pool,
     );
+}
+
+/// `GridConfig` 的身份位模式（视空间坐标的全部输入）。
+fn grid_bits(grid: &GridConfig) -> [u64; 7] {
+    [
+        u64::from(grid.cell_size.to_bits()),
+        u64::from(grid.raster_origin.x.to_bits()),
+        u64::from(grid.raster_origin.y.to_bits()),
+        u64::from(grid.map_origin.x.to_bits()),
+        u64::from(grid.map_origin.y.to_bits()),
+        u64::from(grid.map_size.x.to_bits()),
+        u64::from(grid.map_size.y.to_bits()),
+    ]
+}
+
+/// 区域多边形集合的内容指纹（外环 + 洞环的裸 `f32::to_bits`，**不分配**）。
+///
+/// 与 [`segments_fingerprint`] 的区别：这里读的是**图内局部 wu 原始顶点**，
+/// 不做 `map_to_view`、不建 `Vec`。所以它能当「要不要重算 `segs`」的判据，
+/// 代价比展开低一个数量级（无分配、无浮点乘加）。
+fn polygon_set_fingerprint(regions: &[&Region]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for r in regions {
+        h ^= r.polygon.len() as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        for v in r.polygon.iter().map(|f| f.to_bits()) {
+            h ^= u64::from(v);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h ^= r.holes.len() as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        for hole in &r.holes {
+            h ^= hole.len() as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            for v in hole.iter().map(|f| f.to_bits()) {
+                h ^= u64::from(v);
+                h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+    }
+    h
 }
 
 /// 候选区预览：光标所在 biome 连通区的**金色高亮轮廓**。
@@ -382,11 +570,13 @@ pub fn sync_region_outlines(
 /// 物化前先看到「要圈的是哪块地」（ADR-0045 D4 的可视化面）。轮廓由调用方
 /// 传入（渲染层不做连通区计算——那是 `wv_terrain::region::biome_region_at`
 /// 的事，app 层按光标格查一次）。
+///
+/// 2026-10-23：环内容不变（同一候选区内移动光标）⇒ `segs` / 指纹 / mesh
+/// **全部不重算**；只有环真的换了才付装配钱。
 fn sync_candidate_preview(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    grid: Res<GridConfig>,
     view: Res<ViewState>,
     preview_ring: Option<&[Vec2]>,
     pool: &mut RegionOutlinePool,
@@ -394,22 +584,30 @@ fn sync_candidate_preview(
     let Some(ring) = preview_ring else {
         if let Some(b) = pool.preview.take() {
             commands.entity(b.entity).despawn();
+            reclaim_mesh(&mut commands, b.mesh);
         }
+        pool.preview_ring = None;
         return;
     };
-    let mut segs: Vec<(Vec2, Vec2)> = Vec::new();
-    for i in 0..ring.len() {
-        let a = ring[i];
-        let b = ring[(i + 1) % ring.len()];
-        if a != b {
-            segs.push((a, b));
+    if pool.preview_ring.as_deref() != Some(ring) {
+        pool.preview_recomputes += 1;
+        pool.preview_segs.clear();
+        for i in 0..ring.len() {
+            let a = ring[i];
+            let b = ring[(i + 1) % ring.len()];
+            if a != b {
+                pool.preview_segs.push((a, b));
+            }
         }
+        pool.preview_fp = segments_fingerprint(&pool.preview_segs);
+        pool.preview_ring = Some(ring.to_vec());
     }
-    let fp = segments_fingerprint(&segs);
-    let thickness = CANDIDATE_STROKE_PX * view.scale;
+    let fp = pool.preview_fp;
+    let bucket = scale_bucket(view.scale);
+    let thickness = CANDIDATE_STROKE_PX * scale_of_bucket(bucket);
     let key = OutlineKey {
         fingerprint: fp,
-        world_thickness: thickness,
+        thickness_bucket: bucket,
         z: CANDIDATE_Z,
     };
     if pool.preview_material.is_none() {
@@ -420,19 +618,25 @@ fn sync_candidate_preview(
     let mat = pool.preview_material.clone().expect("刚建");
     match pool.preview.take() {
         None => {
-            let mesh = meshes.add(build_stroke_batch_mesh(&segs, thickness));
-            let entity = commands
-                .spawn((
-                    Mesh2d(mesh.clone()),
-                    MeshMaterial2d(mat),
-                    Transform::from_xyz(0.0, 0.0, CANDIDATE_Z),
-                ))
-                .id();
-            pool.preview = Some(OutlineBatch { entity, mesh, key });
+            if !pool.preview_segs.is_empty() {
+                let mesh = meshes.add(build_stroke_batch_mesh(&pool.preview_segs, thickness));
+                pool.stroke_rebuilds += 1;
+                pool.preview_stroke_builds += 1;
+                let entity = commands
+                    .spawn((
+                        Mesh2d(mesh.clone()),
+                        MeshMaterial2d(mat),
+                        Transform::from_xyz(0.0, 0.0, CANDIDATE_Z),
+                    ))
+                    .id();
+                pool.preview = Some(OutlineBatch { entity, mesh, key });
+            }
         }
         Some(mut b) => {
             if b.key != key {
-                let fresh = build_stroke_batch_mesh(&segs, thickness);
+                let fresh = build_stroke_batch_mesh(&pool.preview_segs, thickness);
+                pool.stroke_rebuilds += 1;
+                pool.preview_stroke_builds += 1;
                 if let Some(mut old) = meshes.get_mut(&b.mesh) {
                     *old = fresh;
                 }
@@ -441,7 +645,6 @@ fn sync_candidate_preview(
             pool.preview = Some(b);
         }
     }
-    let _ = grid;
 }
 
 /// 候选区预览线宽（屏幕像素）——比已物化的轮廓粗一点、更醒目。
@@ -621,5 +824,192 @@ mod tests {
             area += ((b.0 - a.0) * (c.1 - a.1) - (c.0 - a.0) * (b.1 - a.1)) / 2.0;
         }
         area.abs()
+    }
+}
+
+/// 稳态零重算（2026-10-23 · 用户症状「群系视图 26 FPS」）。
+///
+/// 口径：**只数计数器，不测墙钟**——`seg_recomputes` / `stroke_rebuilds` 跨机器同值。
+#[cfg(test)]
+mod steady_state_tests {
+    use super::*;
+    use crate::layer_frame::LayerBinding;
+    use crate::state::{DrillState, ViewMode};
+    use wv_core::map::{Extent, MapLevel, MapNode};
+    use wv_core::model::region::RegionKind;
+
+    fn map_id() -> Id {
+        Id::new_unchecked("map_world")
+    }
+
+    fn world_with_regions(n: usize) -> WorldProjection {
+        let mut w = WorldProjection::default();
+        w.world.maps.push(MapNode {
+            id: map_id(),
+            name: "世界".into(),
+            level: MapLevel::World,
+            parent: None,
+            children: Vec::new(),
+            layers: Vec::new(),
+            icons: Vec::new(),
+            extent: Some(Extent::sized(4096.0, 4096.0)),
+            raster: None,
+            geographic_source: None,
+            time_span: None,
+            unit_per_km: None,
+            orientation: 0.0,
+            base: None,
+            outline_polygon: None,
+        });
+        for i in 0..n {
+            let x = (i % 16) as f32 * 200.0;
+            let y = (i / 16) as f32 * 200.0;
+            w.world.regions.push(Region {
+                id: Id::new_unchecked(format!("nr_{i}")),
+                name: format!("区{i}"),
+                map: map_id(),
+                // 8 顶点方形（外环 8 段）。
+                polygon: vec![x, y, x + 100.0, y, x + 100.0, y + 100.0, x, y + 100.0],
+                holes: Vec::new(),
+                kind: RegionKind::Nature,
+                parent: None,
+                overlay: None,
+            });
+        }
+        w
+    }
+
+    fn drill() -> DrillState {
+        let mut d = DrillState::default();
+        d.settle_on(map_id());
+        d
+    }
+
+    fn app(n: usize, nature_overlay: bool, scale: f32) -> App {
+        let mut app = App::new();
+        app.insert_resource(Assets::<Mesh>::default())
+            .insert_resource(Assets::<ColorMaterial>::default())
+            .insert_resource(world_with_regions(n))
+            .insert_resource(drill())
+            .insert_resource(GridConfig {
+                cell_size: 4.0,
+                raster_origin: Vec2::ZERO,
+                map_origin: Vec2::ZERO,
+                map_size: Vec2::splat(4096.0),
+            })
+            .insert_resource(ViewState {
+                mode: ViewMode::Topographic,
+                nature_overlay,
+                scale,
+                current_map: "map_world".into(),
+                ..Default::default()
+            })
+            .insert_resource(LayerFrame {
+                terrain: LayerBinding {
+                    visible: true,
+                    opacity: 1.0,
+                    z_offset: 0.0,
+                },
+                ..Default::default()
+            })
+            .init_resource::<RenderRecipe>()
+            .init_resource::<RegionOverlayIndex>()
+            .init_resource::<CandidateRegionInput>()
+            .init_resource::<RegionOutlinePool>()
+            .add_systems(Update, sync_region_outlines);
+        app
+    }
+
+    fn counts(app: &App) -> (u64, u64) {
+        let p = app.world().resource::<RegionOutlinePool>();
+        (p.seg_recomputes, p.stroke_rebuilds)
+    }
+
+    /// 断言 1（轮廓侧）：鼠标在地图上移动 60 帧（选择 / 多边形 / 网格都不变）
+    /// ⇒ `segs` 重算 == 0、`build_stroke_batch_mesh` == 0。
+    #[test]
+    fn mouse_move_over_map_recomputes_nothing() {
+        let mut app = app(10, true, 1.0);
+        app.update(); // 首帧建一次
+        let (seg0, stroke0) = counts(&app);
+        assert_eq!(seg0, 1, "首帧应建一次线段集合（实得 {seg0}）");
+        assert!(stroke0 >= 1, "首帧应建一次 mesh");
+        for i in 0..60 {
+            app.world_mut().resource_mut::<ViewState>().cursor_world =
+                Some(Vec2::new(i as f32 * 3.0, 17.0));
+            app.update();
+        }
+        let (seg, stroke) = counts(&app);
+        assert_eq!(seg, seg0, "鼠标移动不该重算 segs（多了 {}）", seg - seg0);
+        assert_eq!(stroke, stroke0, "鼠标移动不该重建 stroke mesh");
+    }
+
+    /// 断言 3：区域数 10 与 200 两档，稳态每帧 `segs` 重算 == 0。
+    #[test]
+    fn steady_state_recomputes_zero_at_ten_and_two_hundred_regions() {
+        for n in [10usize, 200] {
+            let mut app = app(n, true, 1.0);
+            app.update();
+            let (seg0, _) = counts(&app);
+            assert_eq!(seg0, 1, "{n} 区域：首帧应只建一次");
+            for _ in 0..30 {
+                app.update();
+            }
+            let (seg, _) = counts(&app);
+            assert_eq!(seg, 1, "{n} 区域：稳态 30 帧不该再重算（实得 {seg}）");
+        }
+    }
+
+    /// 缩放（同档内）：1/2 octave 档内连续几档不该重建几何。
+    #[test]
+    fn zoom_inside_one_thickness_bucket_does_not_rebuild() {
+        let mut app = app(10, true, 1.0);
+        app.update();
+        let (seg0, stroke0) = counts(&app);
+        for scale in [1.02, 1.08, 1.15] {
+            app.world_mut().resource_mut::<ViewState>().scale = scale;
+            app.update();
+        }
+        let (seg, stroke) = counts(&app);
+        assert_eq!(seg, seg0, "同档缩放不该重算 segs");
+        assert_eq!(stroke, stroke0, "同档缩放不该重建 mesh");
+    }
+
+    /// **阳性对照**：跨档缩放必须重建一次——证明上面的「0」不是恒 0 的假绿。
+    #[test]
+    fn crossing_a_thickness_bucket_rebuilds_once() {
+        let mut app = app(10, true, 1.0);
+        app.update();
+        let (_, stroke0) = counts(&app);
+        app.world_mut().resource_mut::<ViewState>().scale = 2.0; // 档 0 → 档 2
+        app.update();
+        let (seg, stroke) = counts(&app);
+        assert_eq!(seg, 1, "线宽档变化不该重算 segs（几何与线宽解耦）");
+        assert_eq!(stroke, stroke0 + 1, "线宽档变化应重建 mesh 一次");
+    }
+
+    /// 1/2 octave 档号（写死期望值，不引用实现常量）。
+    #[test]
+    fn scale_bucket_is_half_octave() {
+        assert_eq!(scale_bucket(1.0), 0);
+        assert_eq!(scale_bucket(1.18), 0, "1.18 < 2^0.25 仍在档 0");
+        assert_eq!(scale_bucket(1.42), 1, "1.42 ≈ 2^0.5 → 档 1");
+        assert_eq!(scale_bucket(2.0), 2);
+        assert_eq!(scale_bucket(0.5), -2);
+        // 相邻档的几何线宽比 = ×1.414（±19% 的屏上宽度误差）。
+        let ratio = scale_of_bucket(1) / scale_of_bucket(0);
+        assert!(
+            (ratio - std::f32::consts::SQRT_2).abs() < 1e-5,
+            "实得 {ratio}"
+        );
+    }
+
+    /// 关掉群系视图（关图层）时，轮廓与预览实体都要走 despawn 分支。
+    #[test]
+    fn overlay_off_despawns_everything() {
+        let mut app = app(10, false, 1.0);
+        app.update();
+        let mut q = app.world_mut().query::<&Mesh2d>();
+        assert_eq!(q.iter(app.world()).count(), 0, "关群系视图后不该有轮廓实体");
     }
 }

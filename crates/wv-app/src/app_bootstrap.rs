@@ -107,6 +107,16 @@ pub fn run(config: AppConfig) {
             .disable::<bevy::audio::AudioPlugin>(),
     )
     .add_plugins(EguiPlugin::default())
+    // 逐格网格材质（2026-10-23）：单 quad + WGSL 双档网格，缩放零重建。
+    // 材质属 `wv-world-cell-map`（bevy 非 optional），shader 由 `load_internal_asset!`
+    // 编译期内联；装配点留在组合根（wv-app），桥接系统只建 mesh / 挂实体。
+    .add_plugins(wv_render::terrain_view::grid_lines::GridLinesMaterialPlugin)
+    // 地形场材质（ADR-0053 D1，Phase 1 接线 2026-10-24）：GPU 逐像素底图。
+    // 与网格材质同款分工——材质 / WGSL 属 `wv-world-cell-map`，桥接系统在
+    // `wv-render::cellmap_bridge`，**装配点留在组合根**（AGENTS §2.1）。
+    // ⚠️ 注册不可省：`sync_terrain_field` 取 `ResMut<Assets<TerrainFieldMaterial>>`，
+    // 没有 `Material2dPlugin` 时资源不存在，系统初始化即 panic。
+    .add_plugins(wv_world_cell_map::terrain_view::field::TerrainFieldMaterialPlugin)
     // 状态栏 FPS 读数（Figma #3:21001 右段）：DefaultPlugins 只提供
     // DiagnosticsStore 容器，帧时间/帧率诊断要本插件显式注册。
     .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
@@ -259,12 +269,23 @@ pub fn run(config: AppConfig) {
     // 区域轮廓 / 底色覆盖的运行时资源（ADR-0045 追记四）。
     .init_resource::<region_outline::RegionOutlinePool>()
     .init_resource::<region_outline::CandidateRegionInput>()
+    // 选中区域装饰（阶梯描边 + 顶点手柄）的派生缓存（2026-10-23）：
+    // `region_decor::sync_region_decor` ResMut 它——漏 init 即启动期 panic。
+    .init_resource::<wv_render::world_projection::RegionDecorCache>()
+    // 装饰的合批 mesh 池（2026-10-24）：阶梯描边与实心白方块锚点各一块 mesh。
+    // 选中大区域时旧实现逐条 `gizmos.line_2d`（上万条/帧）⇒ FPS 掉到 20 多。
+    .init_resource::<wv_render::region_decor::RegionDecorPool>()
+    // per-system 帧耗时探针（`WV_PERF=1` 开启；默认只做两次布尔判断）。
+    .init_resource::<wv_render::perf::PerfRecorder>()
     // 作者小河的会话态与预览资源（ADR-0046）。
     .init_resource::<place_line::PlaceLineEditorState>()
     .init_resource::<place_line::PlaceLinePreviewPool>()
     .init_resource::<brush_cursor::BrushCursorEntities>()
     .init_resource::<map_frame::MapFrameEntities>()
     .init_resource::<terrain_chunks::TerrainChunkEntities>()
+    // 地形场渲染（ADR-0053 D1，Phase 1 接线 2026-10-24）：quad 资产缓存 + 计数器。
+    .init_resource::<wv_render::cellmap_bridge::TerrainFieldRender>()
+    .init_resource::<wv_render::cellmap_bridge::FieldRenderStats>()
     // 等值线矢量叠加层（ADR-0012 / plan v0.1 M2）：同属实体集合资源。
     .init_resource::<terrain_view::IsolineOverlay>()
     // 逐格编辑网格（plan v0.1 D4）：同上。
@@ -313,80 +334,138 @@ pub fn run(config: AppConfig) {
                 // 输入 → 视图状态
                 // 朝向先行：把 MapNode.orientation 写进相机旋转，同帧的缩放锚点、
                 // 平移与拾取换算读 Transform.rotation 时拿到的就是新值（帧内自洽）。
-                camera::apply_map_orientation,
-                camera::camera_zoom,
-                camera::camera_pan,
-                camera::camera_pan_keys,
-                camera::brush_radius_scroll,
-                camera::track_cursor_world,
-                camera::collect_brush_stroke,
+                //
+                // 每个系统都套 `perf_timed!`（`WV_PERF=1` 才计时，默认两次布尔
+                // 判断即返回）：2026-10-23「鼠标移动 120→40 FPS」要把 17ms 落到
+                // 具体 system 名上。整段摘除 = 把宏换回裸 system。
+                wv_render::perf_timed!("apply_map_orientation", camera::apply_map_orientation),
+                wv_render::perf_timed!("camera_zoom", camera::camera_zoom),
+                wv_render::perf_timed!("camera_pan", camera::camera_pan),
+                wv_render::perf_timed!("camera_pan_keys", camera::camera_pan_keys),
+                wv_render::perf_timed!("brush_radius_scroll", camera::brush_radius_scroll),
+                wv_render::perf_timed!("track_cursor_world", camera::track_cursor_world),
+                wv_render::perf_timed!("collect_brush_stroke", camera::collect_brush_stroke),
                 // 编辑（笔触 → 命令 → History）
-                editing::commit_stroke_on_release,
+                wv_render::perf_timed!(
+                    "commit_stroke_on_release",
+                    editing::commit_stroke_on_release
+                ),
                 // 单格编辑（[ADR-0040]）：点击 → cell_pick → EditCellState.selected
-                editing::commit_edit_cell_on_click,
+                wv_render::perf_timed!(
+                    "commit_edit_cell_on_click",
+                    editing::commit_edit_cell_on_click
+                ),
                 // 候选点选（2026-10-22 内容矩阵）：在 cell 点选之后跑——
                 // 读 selected 判定是否落进未命名候选。
-                crate::edit::nature_region_actions::pick_candidate_on_click,
+                wv_render::perf_timed!(
+                    "pick_candidate_on_click",
+                    crate::edit::nature_region_actions::pick_candidate_on_click
+                ),
                 // 群系分界线：创建/拖动/提交（在 cell 点选之后，互斥工具态）。
-                crate::edit::biome_boundary::biome_boundary_input,
+                wv_render::perf_timed!(
+                    "biome_boundary_input",
+                    crate::edit::biome_boundary::biome_boundary_input
+                ),
                 // 候选过期的编辑信号（在提交路径之后跑，读 History 形状）。
-                crate::edit::nature_region_actions::sync_candidate_invalidation,
+                wv_render::perf_timed!(
+                    "sync_candidate_invalidation",
+                    crate::edit::nature_region_actions::sync_candidate_invalidation
+                ),
                 // 区域边界拖拽（在 cell 点选之后；同为输入系统）。
-                crate::edit::region_adjust::region_adjust_input,
+                wv_render::perf_timed!(
+                    "region_adjust_input",
+                    crate::edit::region_adjust::region_adjust_input
+                ),
+                // 自然区选择手势（2026-10-24 用户裁定）拆到主链**之后**单独注册：
+                // 左键点在自然区内 ⇒ 选中；右键**单击**（位移 <4px）⇒ 取消选中。
+                // 这两条必须排在 ①`drill_pick`（空白单击会清选中）与
+                // ②`region_adjust_input`（拽锚点优先）之后，否则会被覆盖或抢走。
+                // 见下方「自然区选择」。
                 // 批量选区（2026-10-20）：多边形闭合 → 栅格化贴合方格
-                editing::sync_region_cells.after(camera::track_cursor_world),
-                streets::commit_street_click,
+                wv_render::perf_timed!("sync_region_cells", editing::sync_region_cells)
+                    .after(camera::track_cursor_world),
+                wv_render::perf_timed!("commit_street_click", streets::commit_street_click),
                 // 撤销 / 重做不再在这里单独监听 Ctrl+Z：快捷键统一由
                 // `ui_shell::hotkeys` 收（那里已经处理了「输入框聚焦时失效」），
                 // 两处都听会导致一次按键应用两次。
-                editing::flush_terrain_texture,
+                wv_render::perf_timed!("flush_terrain_texture", editing::flush_terrain_texture),
                 // 播放推进（时间 → 当前时刻）
-                world_projection::advance_playback,
+                wv_render::perf_timed!("advance_playback", world_projection::advance_playback),
                 // 纹理先于网格几何：`grid.cell_size` 取自纹理的来源图与格数。
-                terrain_view::rebuild_texture_on_mode_change,
+                wv_render::perf_timed!(
+                    "rebuild_texture_on_mode_change",
+                    terrain_view::rebuild_texture_on_mode_change
+                ),
                 // 后台合成落地（M3）：必须在重建触发之后、网格几何之前——
                 // 它写 tex.size，`sync_grid_config` 同帧要读到。
-                terrain_view::land_pending_terrain_synth,
+                wv_render::perf_timed!(
+                    "land_pending_terrain_synth",
+                    terrain_view::land_pending_terrain_synth
+                ),
                 // 网格几何（`raster_origin` / `map_origin` 两套原点）必须先于所有
                 // 消费它的系统：投影里的地点、街道、街道名、地图外框都按 `GridConfig`
                 // 换算，顺序反了就会拿上一帧的原点画一帧——钻取那一帧最明显。
-                terrain_view::sync_grid_config,
+                wv_render::perf_timed!("sync_grid_config", terrain_view::sync_grid_config),
             )
                 .chain(),
             // 换级淡化：旧底图淡出精灵逐帧降透明、归零回收（ADR-0009 §2⑦）。
-            terrain_view::tick_basemap_fadeout,
+            wv_render::perf_timed!("tick_basemap_fadeout", terrain_view::tick_basemap_fadeout),
             // 图层帧（ADR-0013）：先于一切消费它的渲染系统求值。
-            layer_frame::resolve_layer_frame,
+            wv_render::perf_timed!("resolve_layer_frame", layer_frame::resolve_layer_frame),
             // 投影（时间 → 渲染资源）
-            world_projection::compute_projection,
+            wv_render::perf_timed!("compute_projection", world_projection::compute_projection),
             // 等值线矢量叠加（ADR-0012 / plan v0.1 M2）：先于 chunk 层读
             // `tex.chunks_dirty`（chunk 系统会消费清零），触发重算。
-            terrain_view::sync_isoline_overlay,
+            wv_render::perf_timed!("sync_isoline_overlay", terrain_view::sync_isoline_overlay),
             // 编辑态逐格网格（plan v0.1 D4）：与等值线同管线族，先于 chunk 层。
-            terrain_view::sync_grid_lines,
+            wv_render::perf_timed!("sync_grid_lines", terrain_view::sync_grid_lines),
             // 地形分块 + mip + 视口拣选（优化项 3a/3b/3c）。
-            cellmap_bridge::sync_terrain_chunks,
+            // `view.field_render` 开启时整层早退——见函数开头的回退开关。
+            wv_render::perf_timed!("sync_terrain_chunks", cellmap_bridge::sync_terrain_chunks),
+            // 地形场渲染（ADR-0053 D1，Phase 1 接线）：**必须排在 chunk 层之后**。
+            // 两个理由：① `field_render_on_chunk_entities` 要报**帧末**的块数，
+            // 而块的 spawn / despawn 由 chunk 系统在本帧完成（排在前面只能读到
+            // 上一帧的残留，与组件口径对不上）；② 编辑信号取自变更戳
+            // （`WorldProjection` / `TerrainTexture` 的 `is_changed`），不抢
+            // `tex.chunks_dirty`——那个旗标照旧归 chunk 层消费。
+            // 独占性不依赖顺序：场开着时 chunk 层自己早退。
+            wv_render::perf_timed!("sync_terrain_field", cellmap_bridge::sync_terrain_field),
             // 派生诊断刷新：在 flush 之后、UI 之前；面板本帧即可读新值。
-            editing::refresh_project_diagnostics,
+            wv_render::perf_timed!(
+                "refresh_project_diagnostics",
+                editing::refresh_project_diagnostics
+            ),
             // 候选区预览输入（ADR-0045 追记四）：光标格 → biome 连通区环。
-            nature_region_actions::sync_candidate_input,
+            wv_render::perf_timed!(
+                "sync_candidate_input",
+                nature_region_actions::sync_candidate_input
+            ),
             // 街道图层缓存：当前图变化时重读（ADR-0010），先于 sync_vector_layers。
-            streets::reload_street_cache,
+            wv_render::perf_timed!("reload_street_cache", streets::reload_street_cache),
             // 矢量叠加层（道路 + POI）：在 compute_projection 之后跑。
-            vector_layers::sync_vector_layers,
+            wv_render::perf_timed!("sync_vector_layers", vector_layers::sync_vector_layers),
             // 街道名标注：消费同一份 StreetLayerCache，在街道画完之后对齐标签。
-            streets::update_street_labels,
+            wv_render::perf_timed!("update_street_labels", streets::update_street_labels),
             // 势力多边形叠加层（S12 v0.1）：在矢量层之后、地图外框之前。
-            faction_overlays::sync_faction_overlays,
+            wv_render::perf_timed!(
+                "sync_faction_overlays",
+                faction_overlays::sync_faction_overlays
+            ),
             // 事实地界覆盖层（theme overlay）：地盘随 (图, 日, 缩放) 求值，
             // 排在势力层之后、地图外框之前（z 由各层常量决定，与顺序无关）。
-            feature_overlays::sync_feature_overlays,
-            terrain_decor::sync_terrain_decor,
+            wv_render::perf_timed!(
+                "sync_feature_overlays",
+                feature_overlays::sync_feature_overlays
+            ),
+            wv_render::perf_timed!("sync_terrain_decor", terrain_decor::sync_terrain_decor),
             // 地图外框 + 1/4 幅面参考网格（外框需地形尺寸）。
-            map_frame::sync_map_frame,
+            wv_render::perf_timed!("sync_map_frame", map_frame::sync_map_frame),
         )
             .chain(),
     )
+    // per-system 计时汇总（`WV_PERF=1` 才有输出）：`Last` 里跑，本帧所有
+    // Update 系统都已收工——单帧超 4ms 立刻打印，每 5s 打 top5 + 最差帧。
+    .add_systems(Last, wv_render::perf::report_frame)
     // 主链已顶满 Bevy 系统元组上限：新三件单独成链，显式排序——
     // 候选输入在主链（diagnostics 之后天然有序），轮廓/预览消费它。
     .add_systems(
@@ -394,10 +473,18 @@ pub fn run(config: AppConfig) {
         (
             // 区域轮廓 + 底色覆盖 + 候选区预览（ADR-0045 追记四）：区域的
             // 地理边界此前只有标签没有轮廓——作者看不出圈了哪块地。
-            region_outline::sync_region_outlines.after(map_frame::sync_map_frame),
+            wv_render::perf_timed!("sync_region_outlines", region_outline::sync_region_outlines)
+                .after(map_frame::sync_map_frame),
             // 作者小河的落笔 + 预览（ADR-0046）：左键加点 / 右键收线。
-            place_line::commit_place_line_click,
-            place_line::sync_place_line_preview.after(place_line::commit_place_line_click),
+            wv_render::perf_timed!(
+                "commit_place_line_click",
+                place_line::commit_place_line_click
+            ),
+            wv_render::perf_timed!(
+                "sync_place_line_preview",
+                place_line::sync_place_line_preview
+            )
+            .after(place_line::commit_place_line_click),
         )
             .chain(),
     )
@@ -418,7 +505,8 @@ pub fn run(config: AppConfig) {
     // function_system.rs），笔刷光标单独注册、显式排在光标取世界坐标之后。
     .add_systems(
         Update,
-        brush_cursor::sync_brush_cursor.after(camera::track_cursor_world),
+        wv_render::perf_timed!("sync_brush_cursor", brush_cursor::sync_brush_cursor)
+            .after(camera::track_cursor_world),
     )
     // 编辑意图翻译（ADR-0020 §2.5）：渲染 commit_* 产意图 → 翻译器提交 wv-edit
     // → 渲染 apply_*_receipts 回填本地。必须晚于两个 commit 系统（同帧闭环）。
@@ -438,6 +526,28 @@ pub fn run(config: AppConfig) {
     .add_systems(
         Update,
         cellmap_bridge::sync_atmosphere.after(map_frame::sync_map_frame),
+    )
+    // 自然区选择手势（2026-10-24 用户裁定）：左键点在自然区内 ⇒ 选中该区域；
+    // 右键**单击**（松手位移 <4px）⇒ 取消选中。
+    //
+    // 单独注册而不是塞进主链：这两条要挂在 `drill_pick`（空白单击清选中）与
+    // `region_adjust_input`（拽锚点优先）**之后**——主链是一整条 `.chain()`，
+    // 混进 `.after()` 会让整条链的调度约束求不出来（实测编译失败）。
+    .add_systems(
+        Update,
+        (
+            wv_render::perf_timed!(
+                "select_nature_region_on_click",
+                crate::edit::region_select::select_nature_region_on_click
+            )
+            .after(wv_render::drill::drill_pick)
+            .after(crate::edit::region_adjust::region_adjust_input),
+            // 右键取消选中：只读按键 + 光标，不依赖任何输入系统的先后。
+            wv_render::perf_timed!(
+                "cancel_selection_on_right_click",
+                crate::edit::region_select::cancel_selection_on_right_click
+            ),
+        ),
     )
     // 2.5D 建筑挤出（ADR-0016 §6）：独立注册，消费主链产出的 LayerFrame。
     .add_systems(
@@ -473,9 +583,17 @@ pub fn run(config: AppConfig) {
     .add_systems(
         Update,
         (
+            // 选中区域装饰（阶梯描边 + 实心白方块锚点）：**合批 mesh**，
+            // 2026-10-24 从 `draw_map_gizmos` 迁出——逐条 gizmo 在大区域上是
+            // 上万条/帧（用户症状：点选自然区后 FPS 掉到 20 多）。
+            // 排在地图绘制之前：它只写 mesh 资产与实体，不依赖本帧 gizmos。
+            wv_render::perf_timed!(
+                "sync_region_decor",
+                wv_render::region_decor::sync_region_decor
+            ),
             // 地图绘制必须在所有浮动面板**之前**执行，
             // 保证地图是最底层、面板浮在其上（基线 §1.11 R1）。
-            world_projection::draw_map_gizmos,
+            wv_render::perf_timed!("draw_map_gizmos", world_projection::draw_map_gizmos),
             world_projection::draw_brush_cursor,
             // 测量顶置渲染——与 gizmos 一起画。
             wv_render::measurement::render_measurements,

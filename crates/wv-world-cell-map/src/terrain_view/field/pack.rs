@@ -81,6 +81,46 @@ fn encode_unorm16(v: f32) -> u16 {
     (v.clamp(0.0, 1.0) * UNORM16_MAX).round() as u16
 }
 
+/// 单格 → T1 高度 texel。**全量与增量共用**，否则两条路径的字节会漂。
+fn encode_height(cell: &TerrainCellData) -> u16 {
+    let h_norm = (cell.height as f32 - H_MIN) / (H_MAX - H_MIN);
+    encode_unorm16(h_norm)
+}
+
+/// 单格 → T3 海岸 texel（编码随 [`CoastEncoding`]）。
+///
+/// `d` 是**无符号**的「到最近异类格距离」，符号由 `cell` 自身类别给出
+/// ——与全量重打同一口径（spec 锁 T5：不用带符号 SDF 作为场本身）。
+fn encode_coast(d: f32, cell: &TerrainCellData, encoding: CoastEncoding) -> u16 {
+    let norm = match encoding {
+        CoastEncoding::Unsigned => d / COAST_MAX_CELLS,
+        CoastEncoding::Signed => {
+            // `d ≥ 1`（岸线两侧的格心到对面都是 1），故有符号距离在岸线两侧
+            // 分别是 `+1` / `−1`——**双线性插值穿过 0 的位置正是两格之间的
+            // 交界**，这就是亚格连续性的来源。需先把 [−32, 32] 映射到 [0, 1]。
+            let sd = if is_wet(cell) { -d } else { d };
+            (sd.clamp(-COAST_MAX_CELLS, COAST_MAX_CELLS) + COAST_MAX_CELLS)
+                / (2.0 * COAST_MAX_CELLS)
+        }
+    };
+    encode_unorm16(norm)
+}
+
+/// 单格 → T2 属性 texel（`R,G,B,A`）。
+///
+/// R = 水陆（湿判定口径：surface 为水 **或** 海拔 < 0）；
+/// G = 裸 biome 字节（biome 是 ID，shader 侧必须 Nearest 采样，
+/// 线性插值会插出不存在的 biome ID——自研地形最常见的翻车点）；
+/// B/A 预留为 0。
+///
+/// R 用 **255 = 陆 / 0 = 水**，不是 1——`Rgba8Unorm` 采样后归一化成
+/// `1/255 ≈ 0.0039`，shader 里 `r > 0.5` 会恒为假、整张图被当成水渲染。
+/// 实测踩过这个「1 不等于 1.0」的坑。
+fn encode_attr(cell: &TerrainCellData) -> [u8; 4] {
+    let wet = is_wet(cell);
+    [if wet { 0 } else { 255 }, cell.biome, 0, 0]
+}
+
 /// 海岸距离纹理的编码方式。
 ///
 /// 两种编码**占用同样的存储**（都是一张 `R16Unorm`），差别只在语义：
@@ -104,6 +144,97 @@ pub enum CoastEncoding {
     Unsigned,
     /// 实验：存有符号距离 `(sd + 32) / 64`，`sd > 0` = 陆。
     Signed,
+}
+
+/// 逻辑格坐标的**半开**矩形 `[x0, x1) × [y0, y1)`——增量补丁的作用域。
+///
+/// ## 为什么作用域是矩形
+///
+/// 三张纹理都是连续缓冲（`R16` / `Rgba8`），矩形能**按行**做连续写；逐格列表
+/// 会退化成随机访问，且让 coast 的「窗口 EDT」没有明确输入。
+///
+/// 矩形合并只会**多算**，不会算错——多算的格同样从**当前**数据重算，结果与
+/// 全量重打逐字节相同（见 [`FieldPack::patch_region`] 的一致性证明）。故上游
+/// 给出「略大」的矩形是安全的，给出「略小」的矩形才会留下陈旧字节。
+///
+/// ## 半开约定
+///
+/// `TerrainTexture::mark_dirty` 的上游生产者一律按 `gx + 1` 给上界
+/// （`stroke_bbox_in_cells` / `cells_diff_rect` / inspector 单格 / 群系分界线），
+/// 本类型沿用该约定，不做「闭区间 + 1」的猜测。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CellRect {
+    /// 左边界（含）。
+    pub x0: u32,
+    /// 上边界（含）——行 0 = `TerrainData.cells` 的第 0 行。
+    pub y0: u32,
+    /// 右边界（**不含**）。
+    pub x1: u32,
+    /// 下边界（**不含**）。
+    pub y1: u32,
+}
+
+impl CellRect {
+    /// 直接构造（不做规范化，越界交给 [`Self::intersect`]）。
+    pub fn new(x0: u32, y0: u32, x1: u32, y1: u32) -> Self {
+        Self { x0, y0, x1, y1 }
+    }
+
+    /// 从 `TerrainTexture::mark_dirty` 的 `[x0, y0, x1, y1]` 格式构造。
+    pub fn from_bounds(bounds: [u32; 4]) -> Self {
+        Self::new(bounds[0], bounds[1], bounds[2], bounds[3])
+    }
+
+    /// 空矩形（含反向输入 `x1 < x0`）。
+    pub fn is_empty(&self) -> bool {
+        self.x1 <= self.x0 || self.y1 <= self.y0
+    }
+
+    /// 列数（空矩形为 0；反向输入不会下溢）。
+    pub fn width(&self) -> u32 {
+        self.x1.saturating_sub(self.x0)
+    }
+
+    /// 行数（空矩形为 0；反向输入不会下溢）。
+    pub fn height(&self) -> u32 {
+        self.y1.saturating_sub(self.y0)
+    }
+
+    /// 格数（空矩形为 0；反向输入不会下溢）。
+    pub fn area(&self) -> u64 {
+        if self.is_empty() {
+            0
+        } else {
+            u64::from(self.x1 - self.x0) * u64::from(self.y1 - self.y0)
+        }
+    }
+
+    /// 与 `w × h` 幅面求交（越界部分丢弃）。
+    pub fn intersect(&self, w: u32, h: u32) -> Self {
+        let r = Self::new(
+            self.x0.min(w),
+            self.y0.min(h),
+            self.x1.min(w),
+            self.y1.min(h),
+        );
+        if r.is_empty() {
+            // 归一成 (0,0,0,0)：让 `is_empty` 之外的调用方也拿到无歧义的空盒。
+            Self::new(0, 0, 0, 0)
+        } else {
+            r
+        }
+    }
+
+    /// 各向外扩 `pad` 格后再与幅面求交（**EDT 窗口**用，见 [`FieldPack::patch_region`]）。
+    pub fn expand(&self, pad: u32, w: u32, h: u32) -> Self {
+        Self::new(
+            self.x0.saturating_sub(pad),
+            self.y0.saturating_sub(pad),
+            self.x1.saturating_add(pad),
+            self.y1.saturating_add(pad),
+        )
+        .intersect(w, h)
+    }
 }
 
 /// 三张数据纹理打包好的原始像素缓冲（**未**转成 Bevy `Image`）。
@@ -200,41 +331,18 @@ impl FieldPack {
             let cell = cell_at(i);
 
             // T1：高度归一化 + 钳位 + 四舍五入。
-            let h_norm = (cell.height as f32 - H_MIN) / (H_MAX - H_MIN);
-            height_tex.extend_from_slice(&encode_unorm16(h_norm).to_le_bytes());
+            height_tex.extend_from_slice(&encode_height(&cell).to_le_bytes());
 
-            // T3：距离 → 归一化（d / 32）→ 钳位 → 四舍五入。
+            // T3：距离 → 归一化（`d / 32` 或带符号映射）→ 钳位 → 四舍五入。
             //
             // 两种编码（见 [`CoastEncoding`]）：
             // - **Unsigned（现行，T3 原值）**：存「到最近异类格的距离」，0 = 岸上。
             // - **Signed（实验）**：存**有符号**距离，0 = 岸线本身，正 = 陆、负 = 水。
             let d = coast_d.get(i).copied().unwrap_or(coast_sdf::FAR);
-            let coast_norm = match encoding {
-                CoastEncoding::Unsigned => d / COAST_MAX_CELLS,
-                CoastEncoding::Signed => {
-                    // `d ≥ 1`（岸线两侧的格心到对面都是 1），故有符号距离在
-                    // 岸线两侧分别是 `+1` / `−1`——**双线性插值穿过 0 的位置
-                    // 正是两格之间的交界**，这就是亚格连续性的来源。
-                    // 需先把 [−32, 32] 映射到 [0, 1]：`(sd + 32) / 64`。
-                    let sd = if is_wet(&cell) { -d } else { d };
-                    (sd.clamp(-COAST_MAX_CELLS, COAST_MAX_CELLS) + COAST_MAX_CELLS)
-                        / (2.0 * COAST_MAX_CELLS)
-                }
-            };
-            coast_tex.extend_from_slice(&encode_unorm16(coast_norm).to_le_bytes());
+            coast_tex.extend_from_slice(&encode_coast(d, &cell, encoding).to_le_bytes());
 
-            // T2：R = 水陆（湿判定口径：surface 为水 **或** 海拔 < 0），
-            // G = 裸 biome 字节（biome 是 ID，shader 侧必须 Nearest 采样，
-            // 线性插值会插出不存在的 biome ID——自研地形最常见的翻车点），
-            // B/A 预留为 0。
-            let wet = is_wet(&cell);
-            // R：**255 = 陆 / 0 = 水**（不是 1——Rgba8Unorm 采样后
-            // 归一化成 `1/255 ≈ 0.0039`，shader 里 `r > 0.5` 会恒为假，
-            // 于是整张图被当成水渲染。实测踩过这个「1 不等于 1.0」的坑）。
-            attr_tex.push(if wet { 0 } else { 255 });
-            attr_tex.push(cell.biome); // G：裸 biome
-            attr_tex.push(0); // B：湿度预留
-            attr_tex.push(0); // A：覆盖物键预留
+            // T2：R = 水陆（湿判定口径），G = 裸 biome 字节，B/A 预留为 0。
+            attr_tex.extend_from_slice(&encode_attr(&cell));
         }
 
         Self {
@@ -261,6 +369,145 @@ impl FieldPack {
     pub fn attr_bytes(&self) -> &[u8] {
         &self.attr_tex
     }
+
+    /// **增量补丁**：按 `data` 重算本次编辑影响到的 texel，结果与
+    /// [`Self::from_terrain_with`] 全量重打**逐字节一致**（整张缓冲，不只是脏区）。
+    ///
+    /// 返回 `false` = 本 pack 不能用于增量（幅面不符 / 缓冲长度不符），
+    /// 调用方**必须**改走全量重打。
+    ///
+    /// ## 三张纹理的传播半径不一样（本函数唯一的难点）
+    ///
+    /// | 纹理 | 回写范围 | 理由 |
+    /// |---|---|---|
+    /// | `height` | `rect` | 每 texel 只由自己的 `height` 决定 |
+    /// | `attr` | `rect` | 每 texel 只由自己的 `surface` / `biome` 决定 |
+    /// | `coast` | **`rect ⊕ 32`** | EDT 把「岸线搬家」传播出去，但编码在 32 格饱和 |
+    ///
+    /// 只回写 `rect` 是**错的**（第一版这么写，被单测抓住）：改一格地表，
+    /// 周围 32 格内的海岸距离全变；只补 rect 会让岸线色带（T7–T9）与岸线墨线
+    /// （T11）在编辑点附近残留旧值，直到下一次全量重打。
+    ///
+    /// ## 为什么回写半径 32、求值窗口半径 64
+    ///
+    /// **回写 32 格足够**：某格的编码字节会变 ⇒ 它的新旧最近异类格至少有一个
+    /// 落在 `rect` 内（否则这次编辑没碰它的种子集），且只有 `d < 32` 才可能改变
+    /// 字节（`d ≥ 32` 两种情形都饱和到 `0xFFFF`）⇒ 该格必在 `rect ⊕ 32` 内。
+    /// 故 `rect ⊕ 32` 之外**没有任何 texel 会变**，跳过它们不影响与全量的等价。
+    ///
+    /// **窗口 64 格是回写精确性的前提**：回写区内某格的候选种子在它 32 格内，
+    /// 而该格又在 `rect ⊕ 32` 内 ⇒ 种子必在 `rect ⊕ 64` 内。窗口取 64 才保证
+    /// 「窗口 EDT = 全图 EDT」，不会在窗口边缘出现「种子被裁掉导致距离偏大」
+    /// 的假值（这正是「窗口半径 = 回写半径」那个版本翻车的地方）。
+    ///
+    /// 代价：窗口格数 ≈ `(w + 128) × (h + 128)`。一笔 brush（半径 5 格、脏区
+    /// ~12²）约 140×138 ≈ 19k 格，**亚毫秒**；全量重打是 1024² ≈ 1M 格
+    /// （实测 48.4 ms，其中 ~40 ms 是 EDT）。
+    pub fn patch_region(&mut self, data: &TerrainData, rect: CellRect) -> bool {
+        let (w, h) = (self.width, self.height);
+        if w != data.width || h != data.height {
+            return false;
+        }
+        let n = (w as usize) * (h as usize);
+        if data.cells.len() != n
+            || self.height_tex.len() != n * 2
+            || self.coast_tex.len() != n * 2
+            || self.attr_tex.len() != n * 4
+        {
+            return false;
+        }
+        let r = rect.intersect(w, h);
+        // 空矩形：无事可做，但这是「合法且已完成」而不是「不能增量」。
+        if r.is_empty() {
+            return true;
+        }
+
+        // ── height / attr：严格局部，按行连续写 ──
+        //
+        // 每行是一段连续字节，`copy_from_slice` 一次搬 `(x1−x0) × bpp`；
+        // 逐格 `extend` 在这里既慢又容易写错步长。
+        let cols = (r.x1 - r.x0) as usize;
+        for y in r.y0..r.y1 {
+            let row0 = (y as usize) * (w as usize);
+            let mut h_row = Vec::with_capacity(cols * 2);
+            let mut a_row = Vec::with_capacity(cols * 4);
+            for x in r.x0..r.x1 {
+                let cell = data.cells[row0 + x as usize];
+                h_row.extend_from_slice(&encode_height(&cell).to_le_bytes());
+                a_row.extend_from_slice(&encode_attr(&cell));
+            }
+            let h_at = (row0 + r.x0 as usize) * 2;
+            self.height_tex[h_at..h_at + cols * 2].copy_from_slice(&h_row);
+            let a_at = (row0 + r.x0 as usize) * 4;
+            self.attr_tex[a_at..a_at + cols * 4].copy_from_slice(&a_row);
+        }
+
+        // ── coast：窗口 EDT（回写 `rect ⊕ 32`，窗口 `rect ⊕ 64`，见 doc 的证明）──
+        let sat = COAST_MAX_CELLS as u32;
+        let out = r.expand(sat, w, h); // 回写区 = 一切会变的 texel 的超集
+        let win = r.expand(sat * 2, w, h); // 求值窗口 = 保证回写区精确
+        let (ww, wh) = (win.x1 - win.x0, win.y1 - win.y0);
+        let mut cells = Vec::with_capacity((ww as usize) * (wh as usize));
+        for y in win.y0..win.y1 {
+            let row0 = (y as usize) * (w as usize);
+            cells.extend_from_slice(&data.cells[row0 + win.x0 as usize..row0 + win.x1 as usize]);
+        }
+        let window_data = TerrainData {
+            width: ww,
+            height: wh,
+            cells,
+        };
+        let coast_d = coast_sdf::distance_to_coast(&window_data);
+        let encoding = self.encoding;
+        let out_cols = (out.x1 - out.x0) as usize;
+        for y in out.y0..out.y1 {
+            let mut c_row = Vec::with_capacity(out_cols * 2);
+            for x in out.x0..out.x1 {
+                let wi = ((y - win.y0) as usize) * (ww as usize) + (x - win.x0) as usize;
+                let cell = data.cells[(y as usize) * (w as usize) + x as usize];
+                c_row.extend_from_slice(&encode_coast(coast_d[wi], &cell, encoding).to_le_bytes());
+            }
+            let row0 = (y as usize) * (w as usize);
+            let at = (row0 + out.x0 as usize) * 2;
+            self.coast_tex[at..at + out_cols * 2].copy_from_slice(&c_row);
+        }
+
+        true
+    }
+}
+
+/// 数据纹理的**内容指纹**（FNV-1a，进程内比较用，不落盘）。
+///
+/// ## 为什么不能复用 `isoline_overlay::terrain_data_hash`
+/// 那个指纹折叠的是 `biome::display_kind(...)`（三通道 → 0..9 的**显示槽位**），
+/// 因为等值线只关心「视觉上是不是同一类」。但 [`FieldPack`] 的 `attr` 纹理
+/// **G 通道存的是裸 `biome` 字节**（shader 侧 Nearest 采样，见
+/// [`FieldPack::from_terrain_with`] 的 T2 注释）——两个不同的 biome 完全可能
+/// 落在同一个 display_kind 里。若拿显示槽位指纹当「数据纹理要不要重打」的判据，
+/// 就会出现**指纹相同但打包结果不同**：地形改了，画面不更新，且没有任何报错。
+///
+/// 所以这里按**打包真正消费的字段**逐个折叠：`height` / `surface` / `biome`
+/// 原值 + 幅面。判据与产物同源，这是唯一可靠的做法。
+///
+/// `surface` 参与折叠的理由：`is_wet` 用 `surface == 水 ∨ height < 0`，改
+/// `surface` 会改变 R 通道与海岸距离场，即使 `height` 与 `biome` 都没动。
+pub fn pack_content_hash(data: &TerrainData) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut h = FNV_OFFSET;
+    for c in &data.cells {
+        h ^= (c.height as u16) as u64;
+        h = h.wrapping_mul(FNV_PRIME);
+        h ^= c.surface as u64;
+        h = h.wrapping_mul(FNV_PRIME);
+        h ^= c.biome as u64;
+        h = h.wrapping_mul(FNV_PRIME);
+    }
+    // 幅面折进尾部：同序列不同形状不共享指纹。
+    h ^= data.width as u64;
+    h = h.wrapping_mul(FNV_PRIME);
+    h ^= (data.height as u64) << 32;
+    h.wrapping_mul(FNV_PRIME)
 }
 
 /// 湿判定（**全仓唯一入口**的等价封装）：`surface == SURFACE_WATER`
@@ -634,5 +881,296 @@ mod tests {
     fn decode_coast(pack: &FieldPack, i: usize) -> u16 {
         let k = i * 2;
         u16::from_le_bytes([pack.coast_tex[k], pack.coast_tex[k + 1]])
+    }
+
+    /// 内容指纹必须与**打包真正消费的字段**同源（`height` / `surface` / `biome` 原值）。
+    ///
+    /// 这条测试的存在理由不是「函数能跑」，而是钉住一个**已经踩过的坑**：
+    /// `isoline_overlay::terrain_data_hash` 折叠的是 `display_kind`（显示槽位），
+    /// 而 attr 纹理 G 通道存裸 biome——若拿显示槽位指纹当「要不要重打」的判据，
+    /// 就会出现「地形改了、画面不更新、且没有任何报错」。
+    #[test]
+    fn pack_content_hash_tracks_the_channels_the_pack_actually_consumes() {
+        let base = TerrainData {
+            width: 2,
+            height: 1,
+            cells: vec![
+                TerrainCellData {
+                    height: 100,
+                    surface: 1,
+                    biome: 3,
+                },
+                TerrainCellData {
+                    height: -5,
+                    surface: 0,
+                    biome: 1,
+                },
+            ],
+        };
+        let same = TerrainData {
+            cells: base.cells.clone(),
+            ..base.clone()
+        };
+        assert_eq!(
+            pack_content_hash(&base),
+            pack_content_hash(&same),
+            "同内容必须同指纹（否则每次稳态都重打）"
+        );
+
+        let mut biome_only = base.clone();
+        biome_only.cells[0].biome = 4; // 只改裸 biome 字节
+        assert_ne!(
+            pack_content_hash(&base),
+            pack_content_hash(&biome_only),
+            "biome 改 → 指纹必须变（attr 纹理 G 通道会变）"
+        );
+
+        let mut surface_only = base.clone();
+        surface_only.cells[0].surface = 0; // 只改 surface（wet 判定与海岸场都会变）
+        assert_ne!(
+            pack_content_hash(&base),
+            pack_content_hash(&surface_only),
+            "surface 改 → 指纹必须变（R 通道与海岸距离场会变）"
+        );
+
+        let mut height_only = base.clone();
+        height_only.cells[1].height = -6;
+        assert_ne!(
+            pack_content_hash(&base),
+            pack_content_hash(&height_only),
+            "height 改 → 指纹必须变（height/coast 两张纹理都会变）"
+        );
+
+        // 幅面折进指纹：同序列不同形状不得共享。
+        let reshaped = TerrainData {
+            width: 1,
+            height: 2,
+            cells: base.cells.clone(),
+        };
+        assert_ne!(
+            pack_content_hash(&base),
+            pack_content_hash(&reshaped),
+            "幅面改 → 指纹必须变"
+        );
+    }
+
+    // ══════════ 增量补丁（T6）：一致性 = 与全量重打逐字节相同 ══════════
+
+    /// 造一张**带海岸线**的地形：中心一块实心岛 + 一条斜向的陆脊。
+    ///
+    /// 必须同时存在「大片同质区」（距离 > 32、编码饱和）与「密集岸线」
+    /// （距离 1–3 格），否则窗口 EDT 的两种失效模式各测不到一半。
+    fn island(w: u32, h: u32) -> TerrainData {
+        let mut cells = vec![
+            TerrainCellData {
+                height: -100,
+                surface: SURFACE_WATER,
+                biome: 0,
+            };
+            (w * h) as usize
+        ];
+        for y in 0..h {
+            for x in 0..w {
+                let inner = x >= w / 4 && x < w * 3 / 4 && y >= h / 4 && y < h * 3 / 4;
+                let ridge = (x as i64 - y as i64).rem_euclid(11) < 2 && x > 2 && y > 2;
+                if inner || ridge {
+                    let i = (y * w + x) as usize;
+                    cells[i].surface = SURFACE_LAND;
+                    cells[i].height = 100 + (x % 7) as i16;
+                    cells[i].biome = (x % 5) as u8;
+                }
+            }
+        }
+        TerrainData {
+            width: w,
+            height: h,
+            cells,
+        }
+    }
+
+    /// 补丁 vs 全量：三张缓冲**整张**逐字节比对。
+    ///
+    /// 这是 `patch_region` 唯一的验收口径，也是它比「只比脏区」强得多的地方：
+    /// 整张相等意味着「补丁路径与全量路径视觉上不可区分」。任何窗口开小了
+    /// 的实现（第一版把回写半径取成 0）都会被海岸距离场当场抓住。
+    fn assert_patch_matches_full(encoding: CoastEncoding, w: u32, h: u32, rect: CellRect) {
+        // 越界矩形先裁一次：改动点必须落在**会真的被補丁覆盖**的地方。
+        let r = rect.intersect(w, h);
+        for seed in 0..6u32 {
+            let base = island(w, h);
+            let before = FieldPack::from_terrain_with(&base, encoding);
+
+            let mut after = base.clone();
+            // 在矩形内改一格：高度 / 地表 / 群系三件都动，覆盖三张纹理各自的
+            // 输入（`surface` 改 = 岸线搬家，是 coast 的最强扰动）。
+            if !r.is_empty() {
+                let cx = r.x0 + (seed * 3) % r.width();
+                let cy = r.y0 + (seed * 5) % r.height();
+                let i = (cy * w + cx) as usize;
+                after.cells[i].height = if seed % 2 == 0 { 2500 } else { -3000 };
+                after.cells[i].surface = if after.cells[i].surface == SURFACE_WATER {
+                    SURFACE_LAND
+                } else {
+                    SURFACE_WATER
+                };
+                after.cells[i].biome = (seed + 3) as u8;
+            }
+
+            let full = FieldPack::from_terrain_with(&after, encoding);
+            let mut patched = before.clone();
+            assert!(
+                patched.patch_region(&after, rect),
+                "{encoding:?} 矩形 {rect:?} 应可增量"
+            );
+
+            let ctx = format!("{encoding:?} {w}×{h} rect={rect:?} seed={seed}");
+            assert_eq!(patched.height_tex, full.height_tex, "height 不一致：{ctx}");
+            assert_eq!(patched.attr_tex, full.attr_tex, "attr 不一致：{ctx}");
+            assert_eq!(patched.coast_tex, full.coast_tex, "coast 不一致：{ctx}");
+        }
+    }
+
+    #[test]
+    fn patch_region_matches_full_repack_on_interior_rect() {
+        assert_patch_matches_full(
+            CoastEncoding::Unsigned,
+            64,
+            48,
+            CellRect::new(20, 14, 26, 19),
+        );
+        assert_patch_matches_full(CoastEncoding::Signed, 64, 48, CellRect::new(20, 14, 26, 19));
+    }
+
+    #[test]
+    fn patch_region_matches_full_repack_when_rect_touches_borders() {
+        for rect in [
+            CellRect::new(0, 0, 5, 4),     // 左上角（窗口被幅面裁掉一半）
+            CellRect::new(58, 0, 64, 6),   // 右上角
+            CellRect::new(0, 40, 7, 48),   // 左下角
+            CellRect::new(50, 36, 64, 48), // 右下角
+            CellRect::new(0, 20, 64, 24),  // 横贯整幅的一行带
+            CellRect::new(30, 0, 34, 48),  // 纵贯整幅的一列带
+        ] {
+            assert_patch_matches_full(CoastEncoding::Unsigned, 64, 48, rect);
+        }
+    }
+
+    #[test]
+    fn patch_region_matches_full_repack_for_the_whole_map() {
+        // 窗口 = 幅面 ⇒ 退化成全量 EDT，任何编码都必须一致。
+        assert_patch_matches_full(CoastEncoding::Unsigned, 40, 30, CellRect::new(0, 0, 40, 30));
+        assert_patch_matches_full(CoastEncoding::Signed, 40, 30, CellRect::new(0, 0, 40, 30));
+    }
+
+    #[test]
+    fn patch_region_clamps_out_of_bounds_rects() {
+        // 越界矩形：裁到幅面后依然逐字节正确（不能 panic、不能少写）。
+        assert_patch_matches_full(
+            CoastEncoding::Unsigned,
+            32,
+            24,
+            CellRect::new(28, 20, 999, 999),
+        );
+    }
+
+    #[test]
+    fn patch_region_on_empty_rect_touches_nothing() {
+        let base = island(32, 24);
+        let pack = FieldPack::from_terrain(&base);
+        let snapshot = (
+            pack.height_tex.clone(),
+            pack.coast_tex.clone(),
+            pack.attr_tex.clone(),
+        );
+
+        let mut patched = pack.clone();
+        assert!(
+            patched.patch_region(&base, CellRect::new(5, 5, 5, 9)),
+            "空矩形是合法输入，返回 true"
+        );
+        assert_eq!(
+            (
+                patched.height_tex.clone(),
+                patched.coast_tex.clone(),
+                patched.attr_tex.clone()
+            ),
+            snapshot
+        );
+    }
+
+    #[test]
+    fn patch_region_refuses_mismatched_dimensions() {
+        let base = island(32, 24);
+        let mut pack = FieldPack::from_terrain(&base);
+        let other = island(16, 12);
+        assert!(
+            !pack.patch_region(&other, CellRect::new(0, 0, 4, 4)),
+            "幅面不符必须拒绝，调用方改走全量重打"
+        );
+    }
+
+    #[test]
+    fn patch_region_refuses_ragged_cells() {
+        // 畸形输入（cells 长度与幅面不符）：全量路径会补齐，增量路径**不能**
+        // 猜——直接拒绝，由调用方走全量。
+        let base = island(16, 12);
+        let mut pack = FieldPack::from_terrain(&base);
+        let mut ragged = base.clone();
+        ragged.cells.truncate(10);
+        assert!(!pack.patch_region(&ragged, CellRect::new(0, 0, 4, 4)));
+    }
+
+    #[test]
+    fn patch_region_is_far_cheaper_than_full_repack() {
+        // 计数器口径（不用墙钟）：增量只付「回写区 + 求值窗口」这两块格数。
+        // 用格数这个**确定性**量对比，跨机器同值。
+        let (w, h) = (1024u32, 1024u32);
+        let data = island(w, h);
+        // 一笔半径 5 格的 brush 的典型脏区。
+        let rect = CellRect::new(500, 500, 512, 510);
+        let sat = COAST_MAX_CELLS as u32;
+        let out = rect.expand(sat, w, h);
+        let win = rect.expand(sat * 2, w, h);
+        assert_eq!(out.area(), (12 + 64) as u64 * (10 + 64) as u64);
+        assert_eq!(win.area(), (12 + 128) as u64 * (10 + 128) as u64);
+        let full = u64::from(w) * u64::from(h);
+        assert!(
+            win.area() * 50 < full,
+            "一笔 brush 的求值窗口必须远小于全场（{}/{} = {:.2}%）",
+            win.area(),
+            full,
+            win.area() as f64 / full as f64 * 100.0
+        );
+        // 一致性仍然成立（这条不是成本断言，是正确性断言）。
+        let mut patched = FieldPack::from_terrain(&data);
+        let mut after = data.clone();
+        after.cells[505 * 1024 + 506].height = 900;
+        assert!(patched.patch_region(&after, rect));
+        assert_eq!(
+            patched.coast_tex,
+            FieldPack::from_terrain(&after).coast_tex,
+            "1024² 大图上补丁仍须与全量重打逐字节一致"
+        );
+    }
+
+    #[test]
+    fn cell_rect_intersect_and_expand_are_half_open() {
+        let r = CellRect::new(4, 6, 10, 12);
+        assert_eq!(r.area(), 6 * 6);
+        assert!(!r.is_empty());
+        assert_eq!(r.intersect(8, 8), CellRect::new(4, 6, 8, 8));
+        assert!(r.intersect(4, 4).is_empty(), "完全在外 → 空");
+        // 反向输入不算「负面积」。
+        assert_eq!(CellRect::new(9, 9, 3, 3).area(), 0);
+        assert!(CellRect::new(9, 9, 3, 3).is_empty());
+        // 外扩后裁到幅面。
+        assert_eq!(
+            CellRect::new(1, 1, 3, 3).expand(2, 10, 10),
+            CellRect::new(0, 0, 5, 5)
+        );
+        assert_eq!(
+            CellRect::new(1, 1, 3, 3).expand(2, 4, 4),
+            CellRect::new(0, 0, 4, 4)
+        );
     }
 }

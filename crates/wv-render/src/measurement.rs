@@ -5,6 +5,7 @@
 //! - `MeasurementCache` — 当前图的测量文档缓存（仿 `StreetLayerCache`）。
 //! - `reload_measurement_cache` — 当前图 / `WorldProjection` 变更时同步缓存。
 //! - `commit_measurement_click` — 把鼠标点击派发到对应模式（折线 / 矩形 / 橡皮）。
+//! - `delete_measurement_under_cursor` — `Del` 删光标下的那一条（2026-10-23）。
 //! - `render_measurements` — 顶置渲染所有可见 measurement + 草稿预览 + 长度 / 面积文字。
 //!
 //! ## 边界（不做什么）
@@ -473,17 +474,35 @@ fn cursor_to_local(
     Some((cursor_world - origin, node.id.clone()))
 }
 
-/// 命中检测：点到折线 / 矩形外框的最小距离是否在容差内。
-fn hit_test(m: &Measurement, point: Vec2, tolerance: f32) -> bool {
+/// 点到测量图形的最短距离（世界单位）；图形退化到无有效段时返回 `∞`
+/// （= 任何有限容差都不命中）。
+///
+/// 这是**唯一的命中几何**：测量橡皮（点选）与 `Del`（光标下删除）共用它，
+/// 命中判定与「最近一条」排序因此不会各写一套、日后漂移。
+fn measurement_distance(m: &Measurement, point: Vec2) -> f32 {
     match m.kind {
-        MeasurementKind::Polyline => m.points.windows(2).any(|w| {
-            let a = Vec2::new(w[0].x, w[0].y);
-            let b = Vec2::new(w[1].x, w[1].y);
-            point_segment_distance(point, a, b) <= tolerance
-        }),
+        MeasurementKind::Polyline => {
+            if m.points.is_empty() {
+                return f32::INFINITY;
+            }
+            if m.points.len() == 1 {
+                let a = Vec2::new(m.points[0].x, m.points[0].y);
+                return (point - a).length();
+            }
+            m.points
+                .windows(2)
+                .map(|w| {
+                    point_segment_distance(
+                        point,
+                        Vec2::new(w[0].x, w[0].y),
+                        Vec2::new(w[1].x, w[1].y),
+                    )
+                })
+                .fold(f32::INFINITY, f32::min)
+        }
         MeasurementKind::Rectangle => {
             if m.points.len() != 2 {
-                return false;
+                return f32::INFINITY;
             }
             let a = Vec2::new(m.points[0].x, m.points[0].y);
             let b = Vec2::new(m.points[1].x, m.points[1].y);
@@ -493,17 +512,34 @@ fn hit_test(m: &Measurement, point: Vec2, tolerance: f32) -> bool {
                 Vec2::new(a.x.max(b.x), a.y.max(b.y)),
                 Vec2::new(a.x.min(b.x), a.y.max(b.y)),
             ];
-            // 四条边：bottom / right / top / left（闭合）。
-            for i in 0..4 {
-                let p0 = corners[i];
-                let p1 = corners[(i + 1) % 4];
-                if point_segment_distance(point, p0, p1) <= tolerance {
-                    return true;
-                }
-            }
-            false
+            // 四条边闭合（bottom / right / top / left）。
+            (0..4)
+                .map(|i| point_segment_distance(point, corners[i], corners[(i + 1) % 4]))
+                .fold(f32::INFINITY, f32::min)
         }
     }
+}
+
+/// 容差内**最近**的一条测量（`Del` 与橡皮共用）。
+///
+/// 按距离取最近而不是「先命中先赢」：两条测量交叉处，光标更靠近哪条就删哪条
+/// ——否则删除结果取决于 YAML 里的声明顺序，作者无法预期。
+fn nearest_measurement(
+    world: &wv_core::World,
+    map_id: &wv_core::Id,
+    point: Vec2,
+    tolerance: f32,
+) -> Option<wv_core::Id> {
+    let overlay = world.measurement_of(map_id)?;
+    overlay
+        .measurements
+        .iter()
+        .filter_map(|m| {
+            let d = measurement_distance(m, point);
+            (d <= tolerance).then_some((d, m.id.clone()))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, id)| id)
 }
 
 /// 点到线段距离（闭区间）。
@@ -656,40 +692,67 @@ pub fn commit_measurement_click(
             acks.0.push((seq, MeasureAck::RectClear));
         }
         MeasureMode::Eraser => {
-            // 找容差内最近的一条 measurement → 删。
-            let mut best: Option<(usize, f32)> = None;
-            for (i, m) in projection
-                .world
-                .measurement_of(&map_id)
-                .map(|o| o.measurements.as_slice())
-                .unwrap_or(&[])
-                .iter()
-                .enumerate()
+            // 找容差内最近的一条 measurement → 删（与 `Del` 共用
+            // `nearest_measurement`，两处删除口径一致）。
+            if let Some(id) =
+                nearest_measurement(&projection.world, &map_id, local, ERASER_TOLERANCE_WU)
             {
-                let d = if hit_test(m, local, ERASER_TOLERANCE_WU) {
-                    0.0
-                } else {
-                    f32::INFINITY
-                };
-                if d.is_finite() && best.is_none_or(|(_, bd)| d < bd) {
-                    best = Some((i, d));
-                }
-            }
-            if let Some((idx, _)) = best {
-                // 取该 ID（O(n) 但 measurement 规模小）。
-                let id = projection
-                    .world
-                    .measurement_of(&map_id)
-                    .unwrap()
-                    .measurements[idx]
-                    .id
-                    .clone();
                 intents.push_measurement(crate::editing_bridge::MeasurementIntent {
                     map_id,
                     op: crate::editing_bridge::MeasurementOp::Remove(id),
                 });
             }
         }
+    }
+}
+
+/// `Del`：删除**光标下**的那条测量（2026-10-23 用户需求）。
+///
+/// 与 [`commit_measurement_click`] 的橡皮分支共用同一条命中几何
+/// （[`nearest_measurement`]），差别只在触发方式与守卫：
+/// - 不需要先切到测量工具（`MeasureMode::Off` 时也生效）——「看到一条测量，
+///   想删掉它」不应先被要求进某个模式；
+/// - 多守一条 `wants_keyboard`：`Del` 也是打字键，作者在输入框里改名时
+///   绝不能顺手删掉图上的测量。
+///
+/// 容差随缩放走（屏幕上约 6 px），并以 [`ERASER_TOLERANCE_WU`] 为下限——
+/// 缩得很小时仍有一格的手感，放大时不会出现「离得老远也算命中」。
+///
+/// 删除经 [`EditIntents`] 交给应用层提交，**不**直改 `World`（§3.3），
+/// 因此 `Ctrl+Z` 可逐步撤销。
+#[allow(clippy::too_many_arguments)]
+pub fn delete_measurement_under_cursor(
+    keys: Res<ButtonInput<KeyCode>>,
+    view: Res<ViewState>,
+    playback: Res<PlaybackState>,
+    ui: Res<crate::camera::PointerOverUi>,
+    grid: Res<GridConfig>,
+    drill: Res<DrillState>,
+    projection: Res<WorldProjection>,
+    mut intents: ResMut<EditIntents>,
+) {
+    if !keys.just_pressed(KeyCode::Delete) {
+        return;
+    }
+    if ui.wants_pointer || ui.wants_keyboard || playback.playing || view.scale < 0.15 {
+        return;
+    }
+    if projection.project_dir.is_none() {
+        return;
+    }
+    let Some(cursor_world) = view.cursor_world else {
+        return;
+    };
+    let Some((local, map_id)) = cursor_to_local(cursor_world, &drill, &projection, &grid) else {
+        return;
+    };
+    const PICK_PX: f32 = 6.0;
+    let tolerance = ERASER_TOLERANCE_WU.max(PICK_PX * view.scale);
+    if let Some(id) = nearest_measurement(&projection.world, &map_id, local, tolerance) {
+        intents.push_measurement(crate::editing_bridge::MeasurementIntent {
+            map_id,
+            op: crate::editing_bridge::MeasurementOp::Remove(id),
+        });
     }
 }
 
@@ -857,9 +920,9 @@ mod tests {
             wv_core::Point::new(10.0, 5.0),
         ]);
         // 垂直偏移 4（容差 5）
-        assert!(hit_test(&m, Vec2::new(5.0, 4.0), 5.0));
+        assert!(measurement_distance(&m, Vec2::new(5.0, 4.0)) <= 5.0);
         // 偏移 6（容差 5） → 不命中
-        assert!(!hit_test(&m, Vec2::new(5.0, 6.0), 5.0));
+        assert!(measurement_distance(&m, Vec2::new(5.0, 6.0)) > 5.0);
     }
 
     #[test]
@@ -869,10 +932,158 @@ mod tests {
             wv_core::Point::new(10.0, 5.0),
         );
         // 边框上：命中。
-        assert!(hit_test(&m, Vec2::new(0.0, 2.0), 0.5));
-        assert!(hit_test(&m, Vec2::new(10.0, 2.0), 0.5));
+        assert!(measurement_distance(&m, Vec2::new(0.0, 2.0)) <= 0.5);
+        assert!(measurement_distance(&m, Vec2::new(10.0, 2.0)) <= 0.5);
         // 内部：与边框距离 = 2.5 > 容差 0.5 → 不命中。
-        assert!(!hit_test(&m, Vec2::new(5.0, 2.5), 0.5));
+        assert!(measurement_distance(&m, Vec2::new(5.0, 2.5)) > 0.5);
+    }
+
+    /// [`measurement_distance`] 是命中几何的唯一实现：折线取所有段的最近距离，
+    /// 矩形只算四条边（量的是「框」不是「面」）；退化图形返回 `∞`。
+    #[test]
+    fn measurement_distance_covers_polyline_and_rectangle() {
+        let poly = wv_core::Measurement::polyline(vec![
+            wv_core::Point::new(0.0, 0.0),
+            wv_core::Point::new(10.0, 0.0),
+        ]);
+        assert!((measurement_distance(&poly, Vec2::new(5.0, 3.0)) - 3.0).abs() < 1e-4);
+
+        let rect = wv_core::Measurement::rectangle(
+            wv_core::Point::new(0.0, 0.0),
+            wv_core::Point::new(10.0, 5.0),
+        );
+        assert!((measurement_distance(&rect, Vec2::new(5.0, 2.5)) - 2.5).abs() < 1e-4);
+
+        let degenerate = wv_core::Measurement::polyline(vec![]);
+        assert!(
+            measurement_distance(&degenerate, Vec2::ZERO).is_infinite(),
+            "空折线应与任何点都无命中"
+        );
+    }
+
+    /// `Del` 与橡皮共用的选择逻辑：交叉处删**更近**的那条，而不是先声明的
+    /// 那条——否则删除结果取决于 YAML 里的顺序，作者无法预期。
+    #[test]
+    fn nearest_measurement_prefers_the_closer_line_at_a_crossing() {
+        let map = wv_core::Id::new_unchecked("m");
+        let mut world = wv_core::World::default();
+        {
+            let ov = world.measurement_of_mut(&map);
+            ov.add(
+                wv_core::Measurement::polyline(vec![
+                    wv_core::Point::new(0.0, 0.0),
+                    wv_core::Point::new(100.0, 0.0),
+                ])
+                .with_id(wv_core::Id::new_unchecked("horiz")),
+            )
+            .unwrap();
+            ov.add(
+                wv_core::Measurement::polyline(vec![
+                    wv_core::Point::new(50.0, -100.0),
+                    wv_core::Point::new(50.0, 100.0),
+                ])
+                .with_id(wv_core::Id::new_unchecked("vert")),
+            )
+            .unwrap();
+        }
+        // 略偏上（x=50, y=4）：竖线距离 0、横线 4 → 竖线。
+        let pick = nearest_measurement(&world, &map, Vec2::new(50.0, 4.0), 8.0);
+        assert_eq!(pick.as_ref().map(|i| i.as_str()), Some("vert"));
+        // 略偏右（x=56, y=0）：横线 0、竖线 6 → 横线。
+        let pick = nearest_measurement(&world, &map, Vec2::new(56.0, 0.0), 8.0);
+        assert_eq!(pick.as_ref().map(|i| i.as_str()), Some("horiz"));
+        // 两条都在容差外（(200,40) 离横线端点 ≈108、离竖线 150）→ 无命中
+        // （不能「附近有就删」）。
+        assert!(nearest_measurement(&world, &map, Vec2::new(200.0, 40.0), 8.0).is_none());
+    }
+
+    /// 系统级（2026-10-23）：`Del` 命中即产出一条 `Remove` 意图；
+    /// 输入框聚焦（`wants_keyboard`）时一条都不产——否则作者改名字时
+    /// 顺手就把图上的测量删了。无工程 / 播放中同样静默。
+    #[test]
+    fn delete_key_pushes_a_remove_intent_only_when_not_typing() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let map = wv_core::Id::new_unchecked("map_root");
+        let mut world = wv_core::World::default();
+        world.maps.push(wv_core::map::MapNode {
+            id: map.clone(),
+            name: "root".into(),
+            ..Default::default()
+        });
+        world
+            .measurement_of_mut(&map)
+            .add(
+                wv_core::Measurement::polyline(vec![
+                    wv_core::Point::new(0.0, 0.0),
+                    wv_core::Point::new(100.0, 0.0),
+                ])
+                .with_id(wv_core::Id::new_unchecked("measure_0")),
+            )
+            .unwrap();
+
+        let grid = GridConfig::default();
+        // 本图原点 → 世界坐标（坐标链与 `cursor_to_local` 同源，测试不自造换算）。
+        let origin = {
+            let node = world.maps.iter().find(|m| m.id == map).unwrap();
+            crate::drill::map_origin(&world, node, &grid)
+        };
+
+        let mut app_world = bevy::prelude::World::default();
+        let mut drill = DrillState::default();
+        drill.ensure_root(&world);
+        app_world.insert_resource(WorldProjection {
+            world,
+            project_dir: Some("/test/project".into()),
+            ..WorldProjection::default()
+        });
+        app_world.insert_resource(drill);
+        app_world.insert_resource(ButtonInput::<KeyCode>::default());
+        app_world.insert_resource(ViewState {
+            scale: 1.0,
+            // 光标落在折线 (0,0)-(100,0) 上（偏离 2 wu，容差内）。
+            cursor_world: Some(origin + Vec2::new(50.0, 2.0)),
+            ..ViewState::default()
+        });
+        app_world.insert_resource(PlaybackState::default());
+        app_world.insert_resource(crate::camera::PointerOverUi::default());
+        app_world.insert_resource(grid);
+        app_world.insert_resource(EditIntents::default());
+
+        // ① 正常：Del → 一条 Remove，指向命中那条。
+        app_world
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Delete);
+        app_world
+            .run_system_once(delete_measurement_under_cursor)
+            .expect("系统运行失败");
+        let drained = app_world.resource_mut::<EditIntents>().drain_measurements();
+        assert_eq!(drained.len(), 1, "Del 命中应产出 1 条测量意图");
+        match &drained[0].1.op {
+            crate::editing_bridge::MeasurementOp::Remove(id) => {
+                assert_eq!(id.as_str(), "measure_0", "应删除光标下那条")
+            }
+            other => panic!("Del 应产出 Remove，实得 {other:?}"),
+        }
+
+        // ② 输入框聚焦：`wants_keyboard` → 不产意图（Del 归文字编辑）。
+        let mut keys = app_world.resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(KeyCode::Delete);
+        keys.clear();
+        keys.press(KeyCode::Delete);
+        app_world
+            .resource_mut::<crate::camera::PointerOverUi>()
+            .wants_keyboard = true;
+        app_world
+            .run_system_once(delete_measurement_under_cursor)
+            .expect("系统运行失败");
+        assert!(
+            app_world
+                .resource_mut::<EditIntents>()
+                .drain_measurements()
+                .is_empty(),
+            "输入框聚焦时 Del 不得删除测量"
+        );
     }
 
     #[test]

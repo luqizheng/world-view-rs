@@ -26,11 +26,21 @@
 //! 一个 `ColorMaterial` 的 alpha，不必重传纸面的 uniform。
 
 use bevy::{
+    asset::uuid_handle,
     prelude::*,
     render::render_resource::{AsBindGroup, ShaderType},
-    shader::ShaderRef,
+    shader::{Shader, ShaderRef},
     sprite_render::{AlphaMode2d, ColorMaterial, Material2d, Material2dPlugin},
 };
+
+/// 纸面叠加 shader 的静态句柄（编译期内联）。
+///
+/// 与 [`super::material::TERRAIN_FIELD_SHADER`] 同一个理由：`ShaderRef::Path`
+/// 相对 **asset 根**解析，主 App 的 asset 根（`crates/wv-app/assets`）里没有这个
+/// 文件 ⇒ 启动即 `Path not found`，材质拿不到 shader 就静默不画。
+/// **UUID 一旦发布不得修改。**
+pub const PAPER_OVERLAY_SHADER: Handle<Shader> =
+    uuid_handle!("d3e59a71-2c48-4f60-b7a9-8e15c4d92b03");
 
 // ── Z 序（T48）：常量即断言 ──────────────────────────────────────────────
 
@@ -170,7 +180,7 @@ pub struct PaperOverlayMaterial {
 
 impl Material2d for PaperOverlayMaterial {
     fn fragment_shader() -> ShaderRef {
-        "shaders/paper_overlay.wgsl".into()
+        ShaderRef::Handle(PAPER_OVERLAY_SHADER)
     }
     /// 纸面是叠加层：必须走透明管线，且不能写深度。
     fn alpha_mode(&self) -> AlphaMode2d {
@@ -183,6 +193,12 @@ pub struct PaperOverlayPlugin;
 
 impl Plugin for PaperOverlayPlugin {
     fn build(&self, app: &mut App) {
+        bevy::asset::load_internal_asset!(
+            app,
+            PAPER_OVERLAY_SHADER,
+            "../../../assets/shaders/paper_overlay.wgsl",
+            Shader::from_wgsl
+        );
         app.add_plugins(Material2dPlugin::<PaperOverlayMaterial>::default());
     }
 }

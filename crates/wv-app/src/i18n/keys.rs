@@ -742,6 +742,8 @@ pub enum I18nKey {
     MapControlsMeasureDistance,
     /// 测量组·面积
     MapControlsMeasureArea,
+    /// 「清除全部测量」钮 tooltip（2026-10-23）
+    MapControlsClearMeasurements,
 
     // ── W3：ui_shell 通知 toast 文本 ────────────────────────────────
     /// 「已保存到 」前缀（后接 dir）
@@ -790,6 +792,8 @@ pub enum I18nKey {
     NoticeResetTerrainNoMap,
     /// 「当前没有地图，无法重生成世界」整段（ADR-0037）
     NoticeRegenNoMap,
+    /// 「当前没有地图，无法清除测量」整段（2026-10-23）
+    NoticeClearMeasureNoMap,
 
     // ── W3：ui_time 日期格式（中文 zh / 英文 en 不同） ────────────────
     /// 时间无日历 zh prefix：「第 」
@@ -884,6 +888,8 @@ pub enum I18nKey {
     CmdUndo,
     /// 「重做」
     CmdRedo,
+    /// 「清除全部测量」（2026-10-23）
+    CmdClearMeasurements,
     /// 「显隐世界树面板」
     CmdTogglePanelMapTree,
     /// 「显隐图层面板」
@@ -952,6 +958,8 @@ pub enum I18nKey {
     CmdSelectBrushToolErase,
     /// 「显示参照网格」（地图工具条瓷砖同源）
     CmdToggleGrid,
+    /// 「显示地形场渲染（GPU）」（ADR-0053 D1 回退开关，Phase 1 接线）
+    CmdToggleFieldRender,
     /// 「钻回世界地图」
     CmdDrillToRoot,
     /// 「钻回上一级」
@@ -1170,7 +1178,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 458] = [
+    pub const ALL: [I18nKey; 462] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1504,6 +1512,7 @@ impl I18nKey {
         I18nKey::MapControlsMeasureGroupHint,
         I18nKey::MapControlsMeasureDistance,
         I18nKey::MapControlsMeasureArea,
+        I18nKey::MapControlsClearMeasurements,
         // ui_shell 通知（16）
         I18nKey::NoticeSavedToPrefix,
         I18nKey::NoticeSavedScopePrefix,
@@ -1528,6 +1537,7 @@ impl I18nKey {
         I18nKey::NoticeForceRedrawn,
         I18nKey::NoticeResetTerrainNoMap,
         I18nKey::NoticeRegenNoMap,
+        I18nKey::NoticeClearMeasureNoMap,
         // ui_time（4）
         I18nKey::TimeNoCalZhPrefix,
         I18nKey::TimeNoCalZhSuffix,
@@ -1552,6 +1562,7 @@ impl I18nKey {
         I18nKey::CmdSave,
         I18nKey::CmdUndo,
         I18nKey::CmdRedo,
+        I18nKey::CmdClearMeasurements,
         I18nKey::CmdToolBiomeBoundary,
         I18nKey::CmdTogglePanelMapTree,
         I18nKey::CmdTogglePanelLayers,
@@ -1587,6 +1598,7 @@ impl I18nKey {
         I18nKey::CmdSelectBrushToolRiver,
         I18nKey::CmdSelectBrushToolErase,
         I18nKey::CmdToggleGrid,
+        I18nKey::CmdToggleFieldRender,
         I18nKey::CmdDrillToRoot,
         I18nKey::CmdDrillUp,
         // CLI（38）

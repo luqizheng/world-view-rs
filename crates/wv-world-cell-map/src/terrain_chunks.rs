@@ -91,10 +91,27 @@ pub struct TerrainChunk {
 ///
 /// 用 `HashMap<(cx, cy), Entity>` 而不是 `Vec`——拣选是按"块的逻辑坐标"
 /// 查"是否已存在"，O(1) 哈希查找远比线性扫描合适。
+///
+/// ## 计数器（2026-10-23 · QA 断言口径，跨机器同值）
+///
+/// 本轮把 `sync_terrain_chunks` 的「每帧克隆整图源像素（lod-demo 4096²×4B ≈ 67MB）」
+/// 拆成「相 A 只读拷贝 + 相 B 写资产」，并给 spawn 加了每帧预算。下列计数器就是
+/// 那两条的判据：
 #[derive(Resource, Default)]
 pub struct TerrainChunkEntities {
     /// 块坐标 → 实体。`coord` 是 `[cx, cy]`。
     pub by_coord: std::collections::HashMap<[u32; 2], Entity>,
+    /// **整图克隆次数**——本轮目标：恒为 0（改前每帧一次 ≈ 67MB）。
+    pub src_clones: u64,
+    /// 从源图里**拷出的字节数**（只算 spawn 的整块 + patch 的脏矩形交集，
+    /// 不含 mip 重降采样）。用来抓「偷偷又拷了整图」。
+    pub bytes_copied: u64,
+    /// 新 spawn 的块数（累计）。
+    pub chunk_spawns: u64,
+    /// 因每帧预算被推迟到下一帧的块数（累计）。
+    pub spawn_deferred: u64,
+    /// dirty 补丁次数（累计，按块计）。
+    pub dirty_patches: u64,
 }
 
 impl TerrainChunkEntities {
@@ -323,6 +340,10 @@ pub fn build_mip_chain(pixels: Vec<u8>, w: u32, h: u32, linear_filter: bool) -> 
 ///
 /// 只拷交集区域的像素行（开销 ∝ 笔刷面积）；mip1/mip2 从 patch 后的 mip0
 /// 全量重降采样——块 ≤ 256² 像素，这笔开销可忽略。
+///
+/// **2026-10-23**：本函数保留为「一步到位」的参考实现（等价性测试的旧路径），
+/// 生产路径已改成两相 [`copy_patch_pixels`]（只读）+ [`apply_chunk_patch`]（写），
+/// 以便在不克隆整图的前提下写 `Assets<Image>`。
 #[allow(clippy::too_many_arguments)]
 pub fn patch_chunk_mips(
     images: &mut Assets<Image>,
@@ -387,6 +408,116 @@ pub fn patch_chunk_mips(
     // `AssetMut` 的借用活到析构（不像 `&mut` 那样随最后一次使用结束），
     // 必须显式 drop，才能在同一帧里对本资产表再次 `get_mut`。
     drop(mip0);
+    for level in 1..MIP_LEVELS {
+        let (dp, dw, dh) = downsample_box(&px, w, h);
+        let Some(handle) = chunk.mip_handles.get(level as usize) else {
+            break;
+        };
+        let Some(mut img) = images.get_mut(handle) else {
+            break;
+        };
+        img.data = Some(dp.clone());
+        px = dp;
+        w = dw;
+        h = dh;
+    }
+}
+
+/// 一个块的**补丁像素包**（相 A 的产物）：数据 + 它在块 mip0 内的像素矩形。
+///
+/// 为什么单独成型：生产路径要在「不可变借用整图源像素」的同一段里把所有块的
+/// 补丁都拷出来，再放开借用去写 `Assets<Image>`（否则只能克隆整图绕开借用冲突，
+/// 那正是每帧 67MB 的来源）。
+#[derive(Debug, Clone)]
+pub struct ChunkPatch {
+    pub data: Vec<u8>,
+    /// 补丁像素宽高。
+    pub w: u32,
+    pub h: u32,
+    /// 补丁左上角在**块 mip0 像素坐标**里的位置。
+    pub x0: u32,
+    pub y0: u32,
+}
+
+/// 相 A：从源图拷出「本块 ∩ dirty」那一小块像素（**只读**，不动资产）。
+///
+/// 与 [`patch_chunk_mips`] 的区别：不碰 `Assets<Image>`，因此可以在借用
+/// 整图源像素的时候一次性为所有块备料；返回 `None` 表示交集为空。
+pub fn copy_patch_pixels(
+    src: &[u8],
+    src_width: u32,
+    res: u32,
+    cells: [u32; 4],
+    dirty: [u32; 4],
+) -> Option<ChunkPatch> {
+    let [gx0, gy0, gx1, gy1] = cells;
+    let ix0 = dirty[0].max(gx0);
+    let iy0 = dirty[1].max(gy0);
+    let ix1 = dirty[2].min(gx1);
+    let iy1 = dirty[3].min(gy1);
+    if ix0 >= ix1 || iy0 >= iy1 {
+        return None;
+    }
+    let (pw, ph) = ((ix1 - ix0) * res, (iy1 - iy0) * res);
+    let src_stride = (src_width * res) as usize * 4;
+    let mut data = vec![0u8; (pw * ph * 4) as usize];
+    let row_len = pw as usize * 4;
+    for row in 0..ph as usize {
+        let src_y = (iy0 * res) as usize + row;
+        let s = src_y * src_stride + (ix0 * res) as usize * 4;
+        let d = row * row_len;
+        data[d..d + row_len].copy_from_slice(&src[s..s + row_len]);
+    }
+    Some(ChunkPatch {
+        data,
+        w: pw,
+        h: ph,
+        x0: (ix0 - gx0) * res,
+        y0: (iy0 - gy0) * res,
+    })
+}
+
+/// 相 B：把补丁写进本块 mip0，并从 patch 后的 mip0 逐级重建 mip1/mip2。
+///
+/// 与 [`patch_chunk_mips`] 的结果**逐字节等价**（见 `patch_paths_agree_byte_for_byte`）：
+/// 只是把「拷像素」与「写资产」拆成两段，好让调用方在中间放开整图借用来 `add` 新块。
+pub fn apply_chunk_patch(images: &mut Assets<Image>, chunk: &TerrainChunk, patch: &ChunkPatch) {
+    let Some(mip0_handle) = chunk.mip_handles.first() else {
+        return;
+    };
+    let Some((chunk_w_px, chunk_h_px)) = images.get(mip0_handle).map(|m| {
+        (
+            m.texture_descriptor.size.width,
+            m.texture_descriptor.size.height,
+        )
+    }) else {
+        return;
+    };
+    let (mut px, mut w, mut h) = {
+        let Some(mut mip0) = images.get_mut(mip0_handle) else {
+            return;
+        };
+        let Some(buf) = mip0.data.as_mut() else {
+            return;
+        };
+        let row_len = patch.w as usize * 4;
+        let dst_stride = chunk_w_px as usize * 4;
+        for row in 0..patch.h as usize {
+            let d = (patch.y0 as usize + row) * dst_stride + patch.x0 as usize * 4;
+            let s = row * row_len;
+            if d + row_len > buf.len() || s + row_len > patch.data.len() {
+                break;
+            }
+            buf[d..d + row_len].copy_from_slice(&patch.data[s..s + row_len]);
+        }
+        (
+            mip0.data.clone().unwrap_or_default(),
+            chunk_w_px,
+            chunk_h_px,
+        )
+    };
+    // 与 `patch_chunk_mips` 同款：`AssetMut` 的借用活到析构，必须显式结束，
+    // 才能在同一帧里对本资产表再次 `get_mut`（上面的块表达式已结束借用）。
     for level in 1..MIP_LEVELS {
         let (dp, dw, dh) = downsample_box(&px, w, h);
         let Some(handle) = chunk.mip_handles.get(level as usize) else {

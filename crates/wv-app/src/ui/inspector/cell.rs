@@ -928,6 +928,7 @@ mod tests {
             res: 1,
             dirty: None,
             chunks_dirty: None,
+            field_dirty: None,
             last_mode: None,
             last_soften: false,
             last_theme_id: "",

@@ -73,10 +73,14 @@ pub mod measurement;
 #[cfg(feature = "app")]
 pub mod paper_overlay;
 #[cfg(feature = "app")]
+pub mod perf;
+#[cfg(feature = "app")]
 pub mod place_line;
 pub mod plugins;
 #[cfg(feature = "app")]
 pub mod recipe;
+#[cfg(feature = "app")]
+pub mod region_decor;
 #[cfg(feature = "app")]
 pub mod region_outline;
 #[cfg(feature = "app")]

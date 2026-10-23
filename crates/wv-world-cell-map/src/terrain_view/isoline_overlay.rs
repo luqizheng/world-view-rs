@@ -88,8 +88,9 @@ pub struct IsolineKey {
     /// 几何相关装饰位 `[coast_halo, river_centerline, ink_sublinear]`
     /// （`ThemePack.treatment` 的子集）。
     pub treatment: [bool; 3],
-    /// 量化后的 DP 容差档（1/64 格）：缩放跨过量化步长才重算。
-    pub tol_q: u8,
+    /// DP 容差档（1/2 octave 对数桶，2026-10-23 起替代旧的 1/64 量化）。
+    /// 缩放跨过档界才重算 DP；档内几何逐位不变。
+    pub tol_bucket: i32,
     /// Nation 档（`view.scale >= LOD_NATION_SCALE`）：只画海岸线、不画类型边界。
     pub nation: bool,
 }
@@ -129,7 +130,7 @@ pub type IsolineChain = (Vec<wv_terrain::isoline::Pt>, bool);
 
 /// 链缓存失效输入：地形内容 / 来源图 / treatment 几何位 / Nation 档。
 ///
-/// **不含 `tol_q`**——DP 容差只作用于缓存链；缩放跨档只重跑 DP + 建网格，
+/// **不含 `tol_bucket`**——DP 容差只作用于缓存链；缩放跨档只重跑 DP + 建网格，
 /// 不重跑 marching squares / 装配 / Chaikin。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChainCacheInputs {
@@ -216,10 +217,39 @@ pub fn dp_tol_continuous(scale: f32) -> f32 {
     (0.5 * scale).clamp(0.125, 0.5)
 }
 
-/// 容差量化到 1/64 格，作为结构键的一部分：缩放连续变化时只有跨过
-/// 1/64 步长才触发重算（否则逐帧重跑 DP + 建网格）。
-pub fn tol_quantum(scale: f32) -> u8 {
-    (dp_tol_continuous(scale) * 64.0) as u8
+/// 容差档的对数步长（每 octave 几档）。2 档/octave = 相邻档相差 ×1.414。
+///
+/// 取值理由：DP 容差直接决定「抽稀多少点」，档间跳变若到 ×2（1 档/octave）
+/// 近观会看到线条细节成片增减（视觉上是「线忽然变直」）；×1.414 一档的
+/// 几何差在半像素量级，读不出来，而重算次数只有 1 档/octave 的 2 倍——
+/// 12 档缩放实测 4 次重算（见下），仍有 3 倍余量。
+const DP_TOL_STEPS_PER_OCTAVE: f32 = 2.0;
+
+/// DP 容差的**对数档**：`round(log2(tol) × 2)`，即 1/2 octave 桶。
+///
+/// ## 2026-10-23 改动（迭代档缺陷修复 D：等值线不再每档重算）
+///
+/// 旧实现 `(dp_tol_continuous(scale) × 64.0) as u8`（1/64 格量化）有两个问题：
+/// 1. **一档必跨**：近观带 `scale < 1.0` 时 `tol = 0.5 × scale`，滚轮一档
+///    ×0.88 → 量化值必减 2~4 → 每档都重跑 DP + 建 mesh（1024² 实测 15.6ms/debug，
+///    见 `docs/PERF_GRID_AND_PROFILE_v0.1.md`）。
+/// 2. **`as u8` 会绕回**：`scale > 8.0` 时 `tol × 64 = 32 × scale > 255`，
+///    `as u8` 按 256 取模 → 档值反而变小（`scale 12 → 128`），键非单调，
+///    同一次缩放可能来回重算。
+///
+/// 现在容差本身按对数档量化（[`dp_tol_for_bucket`]），档内 DP 输出**逐位不变**：
+/// 整条缩放范围只剩 5 个档（tol = 0.125 / 0.1768 / 0.25 / 0.3536 / 0.5）。
+pub fn dp_tol_bucket(scale: f32) -> i32 {
+    let tol = dp_tol_continuous(scale).max(1e-6);
+    (tol.log2() * DP_TOL_STEPS_PER_OCTAVE).round() as i32
+}
+
+/// 档中心容差：`2^(bucket / 2)`——与 [`dp_tol_bucket`] 互逆（差一次取整）。
+///
+/// **几何只用本函数**（不用 `dp_tol_continuous(scale)`）：否则键说「同档」而
+/// 容差随 scale 连续漂移，几何变了却不重建（或反过来白重建）。
+pub fn dp_tol_for_bucket(bucket: i32) -> f32 {
+    (bucket as f32 / DP_TOL_STEPS_PER_OCTAVE).exp2()
 }
 
 /// 按 palette 与图层 opacity 重写全部等值线材质颜色（主线 / 两圈水彩晕 / 河中线）。
@@ -402,7 +432,7 @@ mod tests {
     fn isoline_key_distinguishes_nation_tier() {
         let base = IsolineKey {
             nation: false,
-            tol_q: 32,
+            tol_bucket: -2,
             map: Some(wv_core::Id::new("m").expect("合法 id")),
             size: 512,
             height: 512,
@@ -415,18 +445,80 @@ mod tests {
         assert_ne!(base, far, "Nation 档几何不同（类型边界不画），key 必须不等");
     }
 
-    /// 量化档位有限：缩放跨越 1/64 容差步长才变档；两端钳位区同档。
+    /// 容差档：整条缩放范围只有 5 个档（tol 钳在 `[0.125, 0.5]` → log2 ∈ [-3, -1]）。
     #[test]
-    fn tol_quantum_changes_only_at_sixty_fourth_steps() {
-        assert_eq!(tol_quantum(0.25), 8, "0.125×64");
-        assert_eq!(tol_quantum(0.1), 8, "钳位区同档");
-        assert_eq!(tol_quantum(1.0), 32, "0.5×64");
-        assert_eq!(tol_quantum(4.0), 32, "钳位区同档");
+    fn tol_buckets_are_clamped_to_five_values() {
+        assert_eq!(dp_tol_bucket(4.0), -2, "远观钳位 0.5 → log2×2 = -2");
+        assert_eq!(dp_tol_bucket(1.0), -2, "1.0 恰钳位边界");
+        assert_eq!(dp_tol_bucket(0.25), -6, "0.125 → log2×2 = -6");
+        assert_eq!(dp_tol_bucket(0.1), -6, "深近观仍钳在 -6");
+        // 大 scale 不再绕回（旧 `as u8` 在 scale > 8 时按 256 取模）
+        assert_eq!(dp_tol_bucket(12.0), -2, "scale 12 仍是最粗档");
+        assert_eq!(dp_tol_bucket(1000.0), -2);
+    }
+
+    /// 档中心容差与档值互逆，且每档恰是上一档的 ×1.414。
+    #[test]
+    fn tol_bucket_centers_step_half_an_octave() {
+        for b in -6..=-2 {
+            let cur = dp_tol_for_bucket(b);
+            let next = dp_tol_for_bucket(b + 1);
+            assert!(
+                (next / cur - std::f32::consts::SQRT_2).abs() < 1e-5,
+                "档 {b}→{}：{cur} → {next} 应为 ×√2",
+                b + 1
+            );
+            assert!(
+                (0.125 - 1e-6..=0.5 + 1e-6).contains(&cur),
+                "档 {b} 越界：{cur}"
+            );
+        }
+    }
+
+    /// 12 档连续缩放的**重算次数**对比（改动 D 的验收数）：
+    ///
+    /// 起点 `scale = 1.0`（格距 4px 的编辑档），每档 ×0.88（滚轮一格）：
+    ///
+    /// | 步 | scale | tol = 0.5×scale | 旧 1/64 量化 | 新 1/2 octave 档 |
+    /// |---|---|---|---|---|
+    /// | 0 | 1.000 | 0.500 | 32 | -2 |
+    /// | 1 | 0.880 | 0.440 | 28 | -2 |
+    /// | 2 | 0.774 | 0.387 | 24 | -3 |
+    /// | 3 | 0.682 | 0.341 | 21 | -3 |
+    /// | 4 | 0.600 | 0.300 | 19 | -3 |
+    /// | 5 | 0.528 | 0.264 | 16 | -4 |
+    /// | 6 | 0.464 | 0.232 | 14 | -4 |
+    /// | 7 | 0.409 | 0.204 | 13 | -5 |
+    /// | 8 | 0.360 | 0.180 | 11 | -5 |
+    /// | 9 | 0.316 | 0.158 | 10 | -5 |
+    /// | 10 | 0.279 | 0.139 | 8 | -6 |
+    /// | 11 | 0.245 | 0.125 | 8 | -6 |
+    /// | 12 | 0.216 | 0.125 | 8 | -6 |
+    ///
+    /// 旧：10 次重算（每档都跨）。新：4 次（第 2/5/7/10 步各一次）。
+    #[test]
+    fn twelve_zoom_steps_trigger_at_most_four_recomputes() {
+        let mut scale = 1.0_f32;
+        let mut bucket = dp_tol_bucket(scale);
+        let mut changes = 0;
+        let mut trace = vec![bucket];
+        for _ in 0..12 {
+            scale *= 0.88;
+            let b = dp_tol_bucket(scale);
+            if b != bucket {
+                changes += 1;
+                bucket = b;
+            }
+            trace.push(b);
+        }
         assert!(
-            tol_quantum(0.3) < tol_quantum(0.7),
-            "中间值应分档：{} vs {}",
-            tol_quantum(0.3),
-            tol_quantum(0.7)
+            changes <= 4,
+            "12 档缩放只允许 ≤4 次 DP 重算，实测 {changes}（档序 {trace:?}）"
+        );
+        assert_eq!(changes, 4, "手算应为 4 次（第 2/5/7/10 步）");
+        assert_eq!(
+            trace,
+            vec![-2, -2, -3, -3, -3, -4, -4, -5, -5, -5, -6, -6, -6]
         );
     }
 
@@ -506,7 +598,7 @@ mod tests {
             height: 512,
             res: 4,
             soften: false,
-            tol_q: 8,
+            tol_bucket: -2,
             nation: false,
         };
         let same = base.clone();
@@ -514,7 +606,7 @@ mod tests {
         let variants = [
             // 容差档变 → key 必须不等（缩放跨量化步长要重算）。
             IsolineKey {
-                tol_q: base.tol_q + 1,
+                tol_bucket: base.tol_bucket + 1,
                 ..base.clone()
             },
             IsolineKey {
@@ -525,7 +617,7 @@ mod tests {
                 soften: false,
                 treatment: base.treatment,
                 nation: false,
-                tol_q: 8,
+                tol_bucket: -2,
             },
             IsolineKey {
                 map: base.map.clone(),
@@ -535,7 +627,7 @@ mod tests {
                 soften: false,
                 treatment: base.treatment,
                 nation: false,
-                tol_q: 8,
+                tol_bucket: -2,
             },
             IsolineKey {
                 map: base.map.clone(),
@@ -545,7 +637,7 @@ mod tests {
                 soften: false,
                 treatment: base.treatment,
                 nation: false,
-                tol_q: 8,
+                tol_bucket: -2,
             },
             IsolineKey {
                 map: base.map.clone(),
@@ -555,7 +647,7 @@ mod tests {
                 soften: true,
                 treatment: base.treatment,
                 nation: false,
-                tol_q: 8,
+                tol_bucket: -2,
             },
             IsolineKey {
                 map: base.map.clone(),
@@ -565,7 +657,7 @@ mod tests {
                 soften: false,
                 treatment: base.treatment,
                 nation: false,
-                tol_q: 9,
+                tol_bucket: -3,
             },
             IsolineKey {
                 map: base.map.clone(),
@@ -575,7 +667,7 @@ mod tests {
                 soften: false,
                 treatment: [false, true, true],
                 nation: false,
-                tol_q: 8,
+                tol_bucket: -2,
             },
         ];
         for v in variants {
@@ -600,7 +692,7 @@ mod tests {
             soften: false,
             treatment: [t.coast_halo, t.river_centerline, t.ink_sublinear],
             nation: false,
-            tol_q: 8,
+            tol_bucket: -2,
         };
         assert_eq!(
             key_of(day),

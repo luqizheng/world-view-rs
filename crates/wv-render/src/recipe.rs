@@ -280,7 +280,12 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
     (ViewMode::Topographic, [
         true,  // Terrain（核心，水/陆 + 3 阶 height，topographic 分支）
         true,  // Isoline（模式轴开档；会话轴 view.isolines 默认关——ADR-0051）
-        false, // GridLines（分析视图不要编辑格）
+        // GridLines **2026-10-23 由 false 改 true**（用户指令 + 一致性收口）：
+        // CellMap 工作台（= Topographic）就是逐格编辑网格的用武之地，作者要
+        // 「开着网格定位格子」；而本行原写 false、`sync_grid_lines` 又从不读
+        // recipe → 表与行为不一致（表在骗人）。现在系统读
+        // `PassId::GridLines`，表必须说真话：CellMap 里网格照会话开关走。
+        true,  // GridLines
         false, // MapFrame
         false, // Veil
         false, // Grain
@@ -493,6 +498,7 @@ mod tests {
             res: 1,
             dirty: None,
             chunks_dirty: None,
+            field_dirty: None,
             last_mode: None,
             last_soften: false,
             last_theme_id: crate::theme::theme_pack::builtin::DEFAULT.id,
