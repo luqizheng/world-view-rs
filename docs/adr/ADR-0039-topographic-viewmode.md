@@ -1,6 +1,8 @@
 # ADR-0039：新增 `ViewMode::Topographic`——地形分析视图(水/陆二分 + height 3 阶着色)
 
 **状态**：已接受（Accepted）
+
+> **2026-10-22 追记**：Topographic 的地形画法被 [ADR-0051](ADR-0051-mode-content-matrix.md) 修正——由「等高分析底图」（3 阶高度语义色）改为「群系固定色块原始数据视图」，等高线降为可关参照层。正文按只增不改保留。
 **日期**：2026-10-19
 **决策者**：用户（对话拍板"A + B 组合 + go"，本 ADR 仅锁 A 部分——B 部分由 ADR-0041 锁）
 **关联**：[ADR-0021](ADR-0021-render-recipe-and-treatment.md)（渲染配方真值表契约，新增 mode 必须加表项）、[ADR-0023](ADR-0023-theme-pack-injection-contract.md)（ThemePack 边界）、[ADR-0031](ADR-0031-terrain-decor.md)（terrain decor 旗标族）、[ART_STYLE_SPEC §1.4.5](ART_STYLE_SPEC_v0.1.md)（JRPG 色板）、[MAP_LAYER_RENDERING_SPEC §0/2.3](MAP_LAYER_RENDERING_SPEC_v0.1.md)（四轴 + 20 通道契约）

@@ -1,6 +1,8 @@
 # ADR-0021：表达配方（RenderRecipe）与装饰族（Treatment）——渲染判定的收口与手绘表现的预设化
 
 **状态**：已接受（Accepted，2026-10-17）
+
+> **2026-10-22 追记**：MODE_TABLE 两格语义被 [ADR-0051](ADR-0051-mode-content-matrix.md) 翻转（SeaLabels-Topographic → true；EventDots-Schematic → false），并追加 `PassId::RegionLayers`（COUNT 24→25）。正文按只增不改保留。
 **日期**：2026-10-16
 **决策者**：用户（2026-10-17 拍板）
 **修订追记（2026-10-16，随接受一并入正文）**：本 ADR 的 **D2（Treatment 独立轴）已被 [ADR-0023](ADR-0023-theme-pack-injection-contract.md) D4（已接受）修订**——`TreatmentFlags` 归入 `ThemePack` 字段（`wv-render/src/theme/theme_pack.rs`），**不再**经 `view.treatment` 独立持有、**不再**做独立轴切换；本 ADR D2 的「特性归轴表」（§2 D2 §4）与「HandDrawn 默认零回归」前提继续有效，两档预设由主题 crate 承载。**D1（Recipe）按原文执行**：`recipe.rs` 骨架 + MODE_TABLE 真值表 + 4 散点迁移已落地（commits `237c584` / `3556d7b` / `3a7ebec`），"该不该画"类 mode 散点已全部收口；其余 ViewMode match 经核对属选色逻辑（归 ThemePack 方向，不进 Recipe）。

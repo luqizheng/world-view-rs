@@ -189,9 +189,22 @@ pub fn run(config: AppConfig) {
     // apply_pending_commands 都 ResMut 它——漏 init 即启动期 panic
     // （2026-10-20 实机验收抓到：测试 fixture 手动 init 掩盖了装配遗漏）。
     .init_resource::<wv_render::state::EditCellState>()
+    // 群系分界线工具会话态（2026-10-22 内容矩阵 / ADR-0051）：输入系统与
+    // 预览系统都 ResMut 它——漏 init 即启动期 panic（同 EditCellState 教训）。
+    .init_resource::<wv_render::state::BiomeBoundaryState>()
     // Cell 编辑器的「单格 / 批量」工作模式（[ADR-0040] 补 B）——面板系统
     // ResMut 它,漏 init 即启动期 panic(同 EditCellState 的教训)。
-    .init_resource::<crate::ui::cell_editor_panel::CellPanelMode>()
+    .init_resource::<crate::ui::inspector::cell::CellPanelMode>()
+    // Inspector 的当前页签（2026-10-22 统一 Inspector）：面板系统 ResMut 它,
+    // 漏 init 即启动期 panic(同 EditCellState 的教训)。
+    .init_resource::<crate::ui::inspector::InspectorState>()
+    // CellMap 未命名候选缓存（2026-10-22 内容矩阵 T11）：渲染主链在本 crate
+    // 直装（不走 MapRenderPlugin），draw_map_gizmos ResMut 它——漏 init 即
+    // 启动期 panic（实机已踩：plugins.rs 里的 init 在 GUI 路径不运行）。
+    .init_resource::<wv_render::region_overlay::CandidateOverlayCache>()
+    // Inspector 表单的暂存输入缓冲（egui TextEdit 调用方持有文本，
+    // 漏 init 即启动期 panic——同 EditCellState 的教训）。
+    .init_resource::<crate::ui::inspector::event::InspectorDrafts>()
     .init_resource::<ui::ContinentDialog>()
     .init_resource::<ui::city_intent::CityIntentDialog>()
     // 森林意图的命名对话框（选择工具 M4）：环 + 钉住图 id 自持在对话框里。
@@ -303,6 +316,11 @@ pub fn run(config: AppConfig) {
                 editing::commit_stroke_on_release,
                 // 单格编辑（[ADR-0040]）：点击 → cell_pick → EditCellState.selected
                 editing::commit_edit_cell_on_click,
+                // 候选点选（2026-10-22 内容矩阵）：在 cell 点选之后跑——
+                // 读 selected 判定是否落进未命名候选。
+                crate::edit::nature_region_actions::pick_candidate_on_click,
+                // 群系分界线：创建/拖动/提交（在 cell 点选之后，互斥工具态）。
+                crate::edit::biome_boundary::biome_boundary_input,
                 // 批量选区（2026-10-20）：多边形闭合 → 栅格化贴合方格
                 editing::sync_region_cells.after(camera::track_cursor_world),
                 streets::commit_street_click,
@@ -478,14 +496,16 @@ pub fn run(config: AppConfig) {
             // ui::panel_minimap, // TODO: 恢复小地图后取消注释
             ui::panel_timeline,
             ui::panel_event,
-            ui::panel_situation,
             ui::panel_character,
-            ui::panel_faction,
+            // 2026-10-22 统一 Inspector：panel_situation / panel_faction /
+            // panel_cell_editor 均已退役——内容分别成为 Inspector 的
+            // 「事态」「势力层」「属性（Cell）」页签。
             ui::panel_region,
             // v0.3：Inspector 整体右移后绘在最后（右上角，离顶栏最近），
             // 避免被左列 / 中列面板遮挡。
             ui::panel_inspector,
-            ui::panel_cell_editor,
+            // 2026-10-22 统一 Inspector：Cell 编辑器的**内容**已迁入 Inspector
+            // 的「属性」页签，独立浮窗不再注册（枚举项暂留，退役见 M4）。
             ui::panel_validation,
             // 「新建地图」对话框（CommandId::NewMap 打开；居中模态窗）。
             ui::new_map_dialog,

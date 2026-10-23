@@ -157,14 +157,6 @@ pub enum CommandId {
     /// **唯一入口**：工具条瓷砖与 V/H/B/E/L/M/P 快捷键都排这一条,由分发器
     /// 统一做互斥（开一个工具 = 关掉其它工具），避免两套逻辑漂移。
     SelectMapTool(MapToolId),
-    /// 单格编辑工具的提交命令（[ADR-0040]）。Inspector 字段改完写
-    /// `EditCellState.pending`,本命令唤醒 `apply_pending_commands`
-    /// 消费 pending → `EditCellCommand::apply`。
-    ///
-    /// 与 `MapToolId::EditCell`（激活工具）正交——一个是模式切,一个是 IPC。
-    /// 故挂 `CommandId` 上,而不是 `MapToolId`（后者仅承载互相斥的
-    /// 工具槽）。
-    CommitEditCell,
 }
 
 /// 地图工具条的工具标识（[`CommandId::SelectMapTool`] 的载荷）。
@@ -199,6 +191,10 @@ pub enum MapToolId {
     /// 故**不入 `BrushTool` 枚举,与现有工具平级进 `MapToolId`**。
     /// 由 `ui::cell_pick` 做命中测试,由 `inspector_panel` 渲染字段编辑 UI。
     EditCell,
+    /// 群系分界线（2026-10-22 内容矩阵 §2.7 / ADR-0051）：可拖线段两侧各绑
+    /// 一个群系，拖动推移分界——扫过格「退让侧→推进侧」互转（第三方不动）。
+    /// 仅 Topographic 可用；线是会话工具不落盘。
+    BiomeBoundary,
 }
 
 /// 一条命令：注册表的条目。
@@ -394,6 +390,14 @@ impl CommandRegistry {
             CommandGroup::Edit,
             I18nKey::CmdToolEditCell,
             Some("C"),
+        );
+        // 群系分界线（2026-10-22 内容矩阵 / ADR-0051）：与 EditCell 同款——
+        // dock 瓷砖被系统参数上限卡住，命令面板是现行入口。
+        push(
+            CommandId::SelectMapTool(MapToolId::BiomeBoundary),
+            CommandGroup::Edit,
+            I18nKey::CmdToolBiomeBoundary,
+            None,
         );
         push(
             CommandId::Save,

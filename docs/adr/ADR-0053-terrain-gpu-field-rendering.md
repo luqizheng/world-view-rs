@@ -1,7 +1,8 @@
-# ADR-0051：地形底图管线改 GPU 逐像素求值（T0 裁定：甲案）
+# ADR-0053：地形底图管线改 GPU 逐像素求值（T0 裁定：甲案）
 
 > 状态：**已接受（Accepted，2026-10-22 22:36，用户确认 P0 规格锁「按照你的」——Q1/Q2/Q3 均按 A）**。P0 数值总表已锁定为施工图（`docs/TERRAIN_FIELD_P0_SPEC_LOCK_v1.0.md`），SPEC §3.8 增补已写入（原文零改动）。下一步：P1 施工（数据纹理 + 最小 shader）。
 > 来源：`docs/TERRAIN_VISUAL_OVERHAUL_PLAN_v1.0.md`（银橙AI 拟制，2026-10-22）——本 ADR 是该方案的 ADR 化，冲突声明与差异见 §5。
+> **编号**：原为 0051，2026-10-23 因与 [ADR-0051-mode-content-matrix](ADR-0051-mode-content-matrix.md) 撞号改取 **0053**（用户裁定甲方案，既有分支编号不动）。
 
 ---
 
@@ -49,7 +50,11 @@
 
 ## 4.x 追记（2026-10-22 · T0 裁定落 ADR 时同步登记）
 
-- **编号修正**：overhaul 方案头部「落 ADR-0050」已过时——0050 被 CellMap 工作台占用，本 ADR 取 **0051**。
+- **编号修正**（2026-10-23）：本 ADR 原起草为 0051，与 `feat/mode-content-matrix` 分支的
+  [ADR-0051-mode-content-matrix](ADR-0051-mode-content-matrix.md) 撞号。
+  按用户裁定「你推荐」（甲方案）——既有分支编号不动，本 ADR 改取 **0053**，
+  配套的 CellMap 工作台 ADR 由 0050 改取 **0052**。原「0050 被 CellMap 工作台占用」
+  的旧说明一并作废（0050 现为统一 Inspector 面板）。
 - **D3 双轨修正**：与甄塑之「程序化装饰是超集」结论和解——图集 Sprite 为位图 pack 能力（P3），程序化 `_default` 保留。
 - **M1 茁壮性**：实施方案 M1 的装饰投影子 mesh / highlight_bars / 河宽核实三项与 GPU 路线兼容（装饰层独立于底图管线），不受 T0 影响。
 
@@ -60,7 +65,8 @@
 | `RENDER_IMPLEMENTATION_PLAN_v0.1.md` 柯章 §3.1 | **让位**：主管线描述以本 ADR 为准；其余（图层合成 / 双口径描线 / 契约 14 条 / 美术章 / 守护清单 / M2/M-A/M-B）不受影响 |
 | ADR-0042 / 0048 已定值 | **不推翻**：数值原样搬 uniform（R5） |
 | ADR-0043 / 0023 / 0049（ThemePack 体系） | **不动**：D5/D7 重申保留 |
-| ADR-0050（CellMap 工作台） | 无冲突：工作台底图与本 ADR 共享 cells.rs 管线；0050 转「已接受」后其 D10 群系可见底图在 GPU 路线下由 shader 着色分支实现（接口不变） |
+| ADR-0052（CellMap 工作台） | 无冲突：工作台底图与本 ADR 共享 cells.rs 管线；0052 转「已接受」后其 D10 群系可见底图在 GPU 路线下由 shader 着色分支实现（接口不变） |
+| ADR-0051（三模式内容矩阵） | **交互但不推翻**：该 ADR 5 定了 CellMap（Topographic）地形画法 = 群系固定色块 `BIOME_RAW_COLORS[21]`（不随 ThemePack），本 ADR 的 GPU 着色分支须在 Topographic 模式下产出**同一张色块**（数据视图语义：编辑器看原始数据）；Browse/Edit 模式仍走主题色板。着色分支按 ViewMode 分叉，机制层（ADR-0051）与呈现层（本 ADR）解耦 |
 | SPEC §3.8 增补 | P0 规格锁交付物之一，按 §6.3 只增不改 |
 | 2026-11「JRPG 图集弃用」裁定 | 不推翻：D3 双轨修正与 T1 一致——图集为可选 pack 能力，程序化默认 |
 

@@ -84,6 +84,9 @@ impl Plugin for MapRenderPlugin {
         )
         // 地点缓存索引（A1）：compute_projection 的端点解析 / POI 收集查表用。
         .init_resource::<world_projection::PlaceIndex>()
+        // CellMap 未命名候选高亮的缓存（2026-10-22 内容矩阵 T11）：
+        // draw_map_gizmos ResMut 它——漏 init 即启动期 panic（同 EditCellState 教训）。
+        .init_resource::<crate::region_overlay::CandidateOverlayCache>()
         // 纸纹叠层运行时状态（贴图句柄 + 当前台实体，ADR-0042）。
         .init_resource::<paper_overlay::PaperOverlay>();
     }

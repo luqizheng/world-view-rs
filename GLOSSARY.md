@@ -380,3 +380,69 @@
 | **分区** | District | 场景图上一块均质区域（城市 = 贫民 / 富人 / 住宅 / 商业 / 工业；地下城 = 房间 / 走廊 / 大殿）。**不新建数据结构**——走每图一张 `TerrainGrid` 的 kind 通道；kind 编号须 > 1（水域判定 `kind <= 1` 是唯一入口，跨水陆会改写高度） | 地理 |
 | **填色器** | Filler | 生成器的形态：壳子（轮廓 / 河流 / 海山环境）从父图现成拿，生成只负责往壳子里按配比填分区。**不是「从零生成」**；地下城不进填色器范围（房间连通性是拓扑问题，按配比随机填出的是互不连通的噪声块） | 编辑 |
 | **存在时间段** | Existence Span | 场景图整图的**可选**存在时段（`MapNode.time_span` 字段已有，缺写入口）：时间轴拨到哪年显示活着的那张图；同址先后城市 = 多张图各带各的时段；时段结束无后继 → 校验面板 Hint 级提示（不拦保存，V1）。分区本身不带时间 | 时间 |
+
+## CellMap 地形编辑工作台（2026-10-22 · ADR-0052 提议态）
+
+> 来源：`docs/adr/ADR-0052-cellmap-terrain-workbench.md`（提议态，未落地）。
+> 本节术语随 ADR 提议同步登记（AGENTS §6.1）；ADR 转「已接受」后机制才生效。
+
+| 术语 | 英文 / 拼音 | 定义 | 所属维度 |
+|---|---|---|---|
+| **CellMap 工作区** | CellMap workspace | 顶栏第三段（`Browse` / `Edit` / `CellMap`）进入的**地形编辑专属工作区**：底图复用 `ViewMode::Topographic` 并置 `show_biome` 旗标（见「群系可见底图」），面板快照后只留 `Panel::CellEditor`，工具切 `MapToolId::EditCell`。**是 UI 编排，不是新 ViewMode**。定位单一：**只编辑地形**（势力 / 事件 / 标签 / 时间轴不进本工作区）。首次出现：`top_bar.rs:182-197`（2026-10-20）、ADR-0050 §1.1 | UI / 编辑 |
+| **单格填涂** | cell stroke | CellMap 下的连续绘制手势：左键按下 → 拖动 → 松手，把「落笔值」写入路径上每一格。**一次手势 = 1 条 `BatchEditCellsCommand` = 1 个撤销单位**（与笔刷「一次笔触一个撤销格」同款，但**硬边、半径恒 1 格、无 falloff**）。路径用 Bresenham 补间防快速拖动漏格。**拖拽期不写世界**——只累积待落格集合并画色块预览，松手才构造命令。与「单格点选」是两条互斥路径（点 = 选一格，拖 = 刷一片）。首次出现：ADR-0050 D3 | 编辑 |
+| **落笔值** | cell paint value | CellMap 连续绘制时写入的**三通道目标值**（`CellPaintValue`）。语义分工：`surface` / `biome` **绝对**（覆盖），`height` **相对**（delta，`0` = 不动海拔）。高度取相对的理由与 2026-10-20 批量区裁定同源——**绝对设值会抹平「这一片本来多高」**。与单格面板的「海拔」（绝对值，键入即设定）是**两个分区控件**，不得无标签并排。与 `BrushState`（软边成片涂抹的落笔参数）**并存不共用**。首次出现：ADR-0050 D4 | 编辑 |
+| **拖拽 scrub** | drag scrub | 数值输入控件的调整手势：按下后**位移 > 4 px** 才进入 scrub（≤ 4 px 松开 = 进文本编辑且旧值全选——阈值判定是控件规格，不是实现细节）；正文区水平拖动改值，`SCRUB_PX = 4` 像素 = 1 个 `step`，`Shift` ×10 / `Ctrl` ×0.1（精修）/ `Alt` ×100；scrub 中光标上方浮动值气泡即时反馈，`Esc` 回滚。替代「只能点 ↑↓ 步进」（后者在 ±32767 全域下实际不可用）。落在 `wv-ui::widgets::controls::numeric_input_bounded`，**签名与钳制行为不变**。首次出现：ADR-0050 D1 | UI |
+| **待落色块** | pending stroke cells | 连续绘制**拖拽期间**的预览：待写入格集合以**红橙**半透明块显示（`STROKE_PENDING`，alpha 0.26、无脉动），松手后被真实地形替换。**必须与选区填充（金 `ACCENT_SELECT`）异色相**——「框选一片再涂」时金与金叠加将分不清笔触与选区；分工口径：**金 = 已提交语义**（selected / region），**红橙 = 未提交语义**（stroke pending）。**不是地形像素级实时预览**（那需要逐帧重烘焙 `TerrainTexture`，列为 v2）——它只回答「我这笔盖住了哪些格」，不回答「地形长成什么样」。首次出现：ADR-0050 D3 / §4.1-3 | 渲染 / 编辑 |
+| **悬停准星** | hover crosshair | 悬停格高亮的辅助图元：以光标格心为中心、屏幕恒定长度（`max(格宽 × 3, 24 px)`）的两条 1 px 线，与 1 px 细框同用**双色描边**（白内线 + 深墨外晕）——Topographic 底图水面（暗）/陆地（亮）明度跨度大，单色细线无法同时在两种底色上达到 WCAG 2.2 UI 组件 3:1，双色是地图准星的行业成熟解。存在的理由：高缩放下 1 格只有数像素，1 px 细框本身看不见，准星把「瞄准点」放大到可辨。与「选中高亮」（金 2 px 粗框 + 半透底 + 脉动 = committed）视觉分工明确。首次出现：ADR-0050 D2 | 渲染 / UI |
+| **同值泛洪选择** | same-value flood select | 不画多边形、点一格即选中整片**连通同类格**的选择通道（`wv_terrain::edit::flood_region`，4 / 8 连通可选，判据默认「群系相等」，可选「地表」/「海拔容差 ±N m」）。**入口是独立工具瓷砖 `MapToolId::FloodSelect`（dock 第 13 槽），不是面板按钮**——面板管判据参数、瓷砖管手势，杜绝「点完按钮地图点击行为变了但界面无工具态提示」的隐式模式。**只返回格集合、不写世界**——写入仍走 `BatchEditCellsCommand`。与「框选」（几何手势，选形状）互补：框选选的是形状内的格，泛洪选的是同类的连通片。首次出现：ADR-0050 D6 | 编辑 |
+| **邻域平滑** | neighbourhood smoothing | 对选区做格网均值 / 中值迭代（`wv_terrain::edit::smooth_cells`，参数：遍数 + 强度），用于消除手绘锯齿。**返回新值不写世界**；边界格不参与计算（避免选区边缘被外部值拖低）。与 `divide.rs::smooth_ring`（对**多边形顶点**做 Chaikin + DP 简化）**不是一回事**：那条平滑的是矢量轮廓，这条平滑的是高度场。首次出现：ADR-0050 D6 | 地理 / 编辑 |
+| **群系可见底图** | biome-visible base map | CellMap 工作区的底图着色方案（ADR-0052 D10）：每格**纯色**、色相 = 群系（复用 `CORE_TERRAIN` 10 色，biome→槽位映射与 brush swatch 同款，`NONE` 中性兜底）、明度 = 海拔 3 阶（复用 ADR-0039 百分位阈值缓存，调制 ±12% 封顶）——色相与明度双通道同时可视，一格仍一色，不引入晕开/装饰后处理。**水格照旧水色**，biome 不参与水格显示。由 `ViewState.show_biome` 旗标开关（默认 false）：分析视图保持 ADR-0039「只读 height + surface」原语义，**只在 CellMap 语境打开**——是对 ADR-0039 决策 4 的边界扩展，不是推翻。首次出现：ADR-0050 D10 | 渲染 / 编辑 |
+
+## 地图渲染实施方案（2026-10-22 · 方案文档落盘）
+
+> 来源：`docs/RENDER_IMPLEMENTATION_PLAN_v0.1.md`（2026-10-22 落盘）。技术架构章（柯桥良）+ 美术规格章（甄塑之）汇编；全部待裁项用户已裁定「按建议」基线记录。
+> 本节术语随方案落盘同步登记（AGENTS §6.1）。
+
+| 术语 | 英文 / 拼音 | 定义 | 所属维度 |
+|---|---|---|---|
+| **双通道** | dual channel | 地形底图的两种实现通路：**程序化通道**（CPU 烘焙 + 矢量等值线 + 程序化符号 + 程序化纸纹，零外部资产，`atlas = None`）为现行默认；**位图通道**（terrain_atlas 图集 + transition_mask，pack 声明式）为条件投资项（T1 建议双轨保留）。同一 `ThemePack` 接口消费两种 pack（§六 B11 已成立）。首次出现：2026-10-22 渲染实施方案 §3.2 | 渲染 / 架构 |
+| **斜投影俯瞰** | oblique projection | 规格书 §1.1 的视角语言（垂直 0.5× 压缩 + 右下挤出）。落地路线：复用 ADR-0041 已验证的 texture-bake shear（`oblique_skew_pixels`）推广为 `TreatmentFlags` 级开关，JRPG 系 pack 开、Google/Skyline 系关——投影法与描线一样属「皮」（T3 建议基线）。首次出现：规格书 §1.1 / 方案 §3.1.1 | 渲染 |
+| **占位图集** | placeholder atlas | 重启位图通路时的图集产出策略：先用程序化渲染导出 40 块占位图（`TILE_<terrain>_v<N>.png` 命名），外包手绘按占位剪影逐块替换——程序化版本身可玩，手绘版增量替换。首次出现：2026-10-22 渲染实施方案资产缺口表 | 美术 / 资产 |
+| **基准图** | baseline images | 风格验收的回归基线：每主题 × 三档 LOD × 日/暮的标准机位截图，存 `snapshots/theme-eval/<期号>/`，评审对比后再合入；M-A 交付物含固化的标准清单与拍摄口径（机位 / 缩放 / 主题矩阵）。「无基准则好不好看无对错」（守护项 12）。首次出现：2026-10-22 渲染实施方案 M-A | 美术 / 验收 |
+| **基准图回归** | baseline regression | 每期收尾按基准图清单重拍全套入 `snapshots/theme-eval/<期号>/`，评审对比后再合入；同工程重开逐字节一致（守护项 8 确定性）。首次出现：风格守护清单 #12 | 美术 / 验收 |
+| **整包交付** | whole-pack delivery | 主题配方的交付纪律：每主题 = 色板 + treatment + sea + decor + overlays 整套，配「与基准主题 ≥2 项可见差异」的截图证据——只换一两个值会得到「脏了的日间」而非新主题。首次出现：风格守护清单 #10 | 美术 |
+| **纸纹克制上限** | texture restraint ceiling | 纸纹与颗粒的克制度量：斑驳 α ≤0.13 / 晕影 ≤0.16 / 颗粒 ±5%，超限会盖住笔迹（ADR-0042 D11 定上限的原因）；上调须实机评审。首次出现：风格守护清单 #1 | 美术 / 渲染 |
+| **山是符号不是颜色** | mountains as symbols not colors | 风格守护判据：山地/雪的填充色保持水彩过渡角色，地貌身份只能由装饰符号承担——任何「往填充色上加效果」的提案都要先问「这是符号还是色带」（「白色巨墙缎带」教训，ADR-0042 处境①）。首次出现：风格守护清单 #3 | 美术 |
+| **place_kind 词表** | place_kind vocabulary | props 符号与地点类型的映射表（11 类：城/镇/村/关口/港口/桥/渡口/矿/神社寺/战场遗迹/驿站）。词表归属待裁 D④（ThemePack `props[].place_kind` vs domain 层）；映射与降级（缺符号降级圆点）住 ThemePack。首次出现：规格书 §六 A6 / 方案待裁 D④ | 美术 / 数据 |
+| **装配层注入** | assembly-layer injection | ui_link 三色的穿透通道：三常量落 `wv-theme::colors::UI_LINK_*`，wv-app 启动时写进 wv-ui 的 UiTokens（setter API，不引 crate 依赖）——wv-ui 零兄弟依赖红线不破、方向单向 pack→app→ui（T5 建议方案）。首次出现：方案 §3.3 #8 | 架构 / UI |
+| **风格守护清单** | style guardian list | 实现过程「跑偏丢味」的核对清单（12 条）：纸纹克制 / 叠加洗白 / 山是符号 / 布点自然感 / 密度上限 / Google 模式干净例外 / 色值锚点纪律 / 硬美学约束 / 整包交付 / LOD 连续 / 基准图回归 / 确定性重开一致。每期验收必核对。首次出现：美术规格落地章节 §五 | 美术 / 验收 |
+| **口径翻译** | spec-language translation | 规格 → 渲染特性映射时的文档动作：SPEC 中以「位图格语言」书写的条款（1/16 格宽、tile/4 河宽等）翻译为「程序化矢量语言」的验收口径（屏幕像素常量系）——翻译须 SPEC 追记声明，不能默认等价。首次出现：美术规格落地章节 §一.A | 美术 / 文档 |
+| **主题配方** | theme recipe | 数值画法参数的家：DecorRecipe / SeaRecipe / 后续 Recipe 族，住 wv-theme；渲染层只留执行器——「数值住 wv-theme、执行住 wv-render」。评审 grep 渲染层不得新增美术常量（守护项 9）。首次出现：守护清单 #9 / ADR-0048 | 渲染 / 美术 |
+| **装饰投影子 mesh** | decor shadow sub-mesh | M1 项：terrain_decor 八桶各增投影子 mesh——山/树团按 `EXTRUDE_DIR` 右下偏移 `0.5×符号高`，色 = 符号墨色 α0.35 暗化版（禁纯黑，取墨色明度 −20%），桶内合批不变（每类 2 mesh：影+符号）。首次出现：方案 §3.2.2 | 渲染 |
+| **图层准入三件套** | layer admission triple | 新增图层的准入纪律：（a）Z 槽位常量 + 编译期序断言；（b）`LayerKind` 绑定或会话轴声明（recipe.rs PassId）；（c）pack 归属（视觉参数从 `view.active_theme` 取，禁直引常量）。首次出现：方案 §3.1.3 | 架构 |
+| **行带并行** | row-band parallelism | CellRenderer 全图合成与增量 patch 的并行机制：任意带数逐字节一致，1024² ≈ 317ms（异步线程池，主线程零阻塞）。首次出现：现状盘点（cells.rs） | 渲染 / 性能 |
+| **锚点纪律** | anchor discipline | 色值改动的三问：SPEC 追记了吗 / ADR 修正关系标了吗 / 测试锚了吗——用户定稿色必须挂锚点测试（`daylight_user_pinned_hexes_are_stable` 模式）。首次出现：风格守护清单 #7 | 美术 / 测试 |
+| **图集变体表** | atlas variant table | 位图通道的图集数据结构扩展：`TileAtlas.tiles` 从 `[Option<[u32;2]>; 10]` 扩为 `[[Option<[u32;2]>; 4]; 10]`（10 地形 × 4 变体 = 40 块，规格 §3.2.1）。首次出现：方案 §3.2.1 | 渲染 / 数据 |
+| **变体坐标哈希** | coordinate hash variant selection | 位图通道的变体选择机制：`v = hash01(cx, cy, seed) % 4`——满足「引擎按坐标哈希选变体，pack 不控制概率」（§3.2.1）与确定性契约（同格任意路径同变体）。首次出现：方案 §3.2.1 | 渲染 / 数据 |
+
+
+## 群系色块底图（Biome Raw View）
+
+- **英文名**：Biome Raw View / Fixed Biome Colors
+- **定义**：CellMap（Topographic）的地形画法——每格颜色直接编码其 `biome`（`BIOME_RAW_COLORS[21]` 固定色板，不随 ThemePack / TreatmentFlags），biome=NONE 按 surface 回退。数据视图语义：编辑器看原始数据，主题色只属于「看世界」的 Browse。
+- **首次出现**：2026-10-22 三模式内容矩阵设计（ADR-0051 §5）
+- **所属维度**：呈现（渲染）
+
+## 内容层门控（Content Layer Gating）
+
+- **英文名**：Content Layer Gating / MODE_TABLE wiring
+- **定义**：内容系统（POI/路网/标签/势力/事件点/钻入标记/区域层）按 `RenderRecipe::enabled(PassId)` 决定是否渲染与注册命中——模式观感集中在 ADR-0021 的 MODE_TABLE，不散布 `view.mode` if。标签门必须走「wanted 置空 → 池隐藏尾部」（池是持久实体），`hits.clear()` 归链首照常。
+- **首次出现**：2026-10-22 三模式内容矩阵设计（ADR-0051 §2.1）
+- **所属维度**：呈现（渲染）
+
+## 群系分界线（Biome Boundary Line）
+
+- **英文名**：Biome Boundary Line / `ToolKind::BiomeBoundary`
+- **定义**：CellMap 的群系编辑工具——一条可拖动的线段，两侧各绑一个群系；拖动推移分界，扫过格中「退让侧」群系改为「推进侧」（第三种群系不动）。线是会话工具不落盘；一次拖动 = 1 条 `BatchEditCellsCommand`；落盘真相仍是 cell.biome（P3/P7），区域轮廓继续由连通性派生。
+- **首次出现**：2026-10-22 三模式内容矩阵设计（ADR-0051 §2.7）
+- **所属维度**：编辑（地形）

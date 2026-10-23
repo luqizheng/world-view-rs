@@ -37,6 +37,110 @@ use crate::faction_overlays::earcut_with_holes;
 use crate::layer_frame::LayerFrame;
 use crate::recipe::RenderRecipe;
 use crate::state::{DrillState, GridConfig, ViewState, WorldProjection};
+
+/// 区域层在本帧是否可见（2026-10-22 内容矩阵 §2.6 的唯一判定入口）。
+///
+/// - **CellMap（Topographic）**：只看 `nature_overlay` 开关，且**仅 Nature 类**
+///   放行（Area 区属内容，CellMap 永远藏）；recipe 格（false）被旁路。
+/// - **其他模式**：走 recipe（RegionLayers 行）∧ 图层。
+///   Schematic 行=false ⇒ 编辑态区域消失（用户裁定：区域有时间性）。
+pub(crate) fn region_layer_visible(
+    mode: crate::state::ViewMode,
+    nature_overlay: bool,
+    kind: wv_core::model::region::RegionKind,
+    recipe_enabled: bool,
+    layer_visible: bool,
+) -> bool {
+    use crate::state::ViewMode;
+    use wv_core::model::region::RegionKind;
+    if !layer_visible {
+        return false;
+    }
+    if matches!(mode, ViewMode::Topographic) {
+        return nature_overlay && matches!(kind, RegionKind::Nature);
+    }
+    recipe_enabled
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+    use crate::state::ViewMode;
+    use wv_core::model::region::RegionKind;
+
+    #[test]
+    fn region_layer_in_cellmap_shows_nature_only_when_overlay_on() {
+        let kinds = [RegionKind::Nature, RegionKind::Area];
+        // 开关开：Nature ✓、Area ✗
+        assert!(region_layer_visible(
+            ViewMode::Topographic,
+            true,
+            kinds[0],
+            false,
+            true
+        ));
+        assert!(!region_layer_visible(
+            ViewMode::Topographic,
+            true,
+            kinds[1],
+            false,
+            true
+        ));
+        // 开关关：全隐（recipe 格本就 false）
+        assert!(!region_layer_visible(
+            ViewMode::Topographic,
+            false,
+            kinds[0],
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn region_layer_outside_cellmap_follows_recipe() {
+        let nature = RegionKind::Nature;
+        assert!(region_layer_visible(
+            ViewMode::VectorFlat,
+            false,
+            nature,
+            true,
+            true
+        ));
+        assert!(!region_layer_visible(
+            ViewMode::VectorFlat,
+            false,
+            nature,
+            false,
+            true
+        ));
+        // Schematic：recipe 格=false ⇒ 无论开关都藏（开关只在 CellMap 有意义）
+        assert!(!region_layer_visible(
+            ViewMode::Schematic,
+            true,
+            nature,
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn region_layer_respects_layer_visibility_everywhere() {
+        assert!(!region_layer_visible(
+            ViewMode::VectorFlat,
+            false,
+            RegionKind::Nature,
+            true,
+            false
+        ));
+        assert!(!region_layer_visible(
+            ViewMode::Topographic,
+            true,
+            RegionKind::Nature,
+            false,
+            false
+        ));
+    }
+}
 use crate::theme::palette::MapPalette;
 
 /// 缺失覆盖物标记的 Z：地形装饰（0.075）之上、道路（0.09）之下——属底图族，
@@ -367,11 +471,20 @@ pub fn sync_missing_overlay_markers(
     mut images: ResMut<Assets<Image>>,
     index: Res<RegionOverlayIndex>,
     grid: Res<GridConfig>,
+    view: Res<ViewState>,
     recipe: Res<RenderRecipe>,
     layers: Res<LayerFrame>,
     mut assets: ResMut<MissingMarkerAssets>,
 ) {
-    let enabled = recipe.enabled(crate::recipe::PassId::TerrainDecor) && layers.terrain.visible;
+    // 2026-10-22 内容矩阵：区域层从 TerrainDecor 拆到独立 pass（ADR-0051）。
+    // CellMap（Topographic）：nature_overlay 放行 Nature 类（判定入口唯一）。
+    let enabled = crate::region_overlay::region_layer_visible(
+        view.mode,
+        view.nature_overlay,
+        wv_core::model::region::RegionKind::Nature,
+        recipe.enabled(crate::recipe::PassId::RegionLayers),
+        layers.terrain.visible,
+    );
     if !enabled || index.missing_shapes.is_empty() {
         for e in assets.entities.drain(..) {
             commands.entity(e).despawn();
@@ -684,4 +797,85 @@ mod tests {
         let idx = build(&[r], &builtin::DEFAULT);
         assert!(idx.entries.is_empty(), "别的图的区域不参与本图解析");
     }
+}
+
+// ── 全图未命名候选高亮（2026-10-22 内容矩阵 §2.6-3 · T11）──────────────
+
+/// 未命名候选的**缓存**：重算代价 O(格数)（`partition_by_biome` 全图 BFS），
+/// 不能每帧跑——按 (图, 世界是否变过) 缓存；`WorldProjection.is_changed()`
+/// 在任一命令/选择写入时翻真（点击级重算，~10ms 一次，仅 CellMap+开关开时）。
+#[derive(Resource, Debug, Default)]
+pub struct CandidateOverlayCache {
+    /// 缓存键 = (图 id, 枚举时是否记录过 dirty)。map 变 / 世界变 ⇒ 重算。
+    pub key: Option<wv_core::Id>,
+    /// 每个候选的外环折线（**视图空间**，供 gizmos 直绘）。
+    pub outlines: Vec<Vec<(bevy::math::Vec2, bevy::math::Vec2)>>,
+}
+
+/// 全图枚举未命名候选（region_overlay 系统尾部调用）。
+///
+/// 排除：已被命名 Nature 区覆盖的候选（代表点 = 外环首点，`point_in_geometry`
+/// 测命中）；NONE 群系（无生态语义的格子不构成「自然区」）。
+pub(crate) fn enumerate_candidates(
+    world: &wv_core::World,
+    map: &wv_core::Id,
+    grid: &GridConfig,
+    raster_to_map: bevy::math::Vec2,
+) -> Vec<Vec<(bevy::math::Vec2, bevy::math::Vec2)>> {
+    use wv_core::base::geometry::point_in_geometry;
+    let Some(data) = world.terrain_of(map) else {
+        return Vec::new();
+    };
+    let cells: Vec<wv_terrain::TerrainCell> = data
+        .cells
+        .iter()
+        .map(|c| wv_terrain::TerrainCell {
+            height: c.height,
+            surface: c.surface,
+            biome: c.biome,
+        })
+        .collect();
+    let Some(g) = wv_terrain::TerrainGrid::from_cells(data.width, data.height, cells) else {
+        return Vec::new();
+    };
+    let named: Vec<wv_core::map::GeometryData> = world
+        .regions
+        .iter()
+        .filter(|r| r.map == *map && matches!(r.kind, wv_core::model::region::RegionKind::Nature))
+        .filter(|r| !r.polygon.is_empty())
+        .map(|r| wv_core::map::GeometryData::Polygon(r.polygon.clone()))
+        .collect::<Vec<wv_core::map::GeometryData>>();
+
+    let mut out = Vec::new();
+    for region in wv_terrain::region::partition_by_biome(&g) {
+        if region.biome == wv_terrain::BIOME_NONE || region.outer.len() < 3 {
+            continue;
+        }
+        // 代表点 = 外环首点（格坐标 → 图内局部 wu）。
+        let (fx, fy) = region.outer[0];
+        let px = fx * grid.cell_size + raster_to_map.x;
+        let py = fy * grid.cell_size + raster_to_map.y;
+        if named.iter().any(|geo| point_in_geometry(geo, px, py)) {
+            continue;
+        }
+        // 外环折线（视图空间）+ 简易虚线（隔段保留）。
+        let ring: Vec<bevy::math::Vec2> = region
+            .outer
+            .iter()
+            .map(|&(x, y)| {
+                grid.map_to_view(bevy::math::Vec2::new(
+                    x * grid.cell_size + raster_to_map.x,
+                    y * grid.cell_size + raster_to_map.y,
+                ))
+            })
+            .collect();
+        let mut dashed: Vec<(bevy::math::Vec2, bevy::math::Vec2)> = Vec::new();
+        for pair in ring.windows(2).step_by(2) {
+            dashed.push((pair[0], pair[1]));
+        }
+        if !dashed.is_empty() {
+            out.push(dashed);
+        }
+    }
+    out
 }

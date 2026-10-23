@@ -1,6 +1,6 @@
 # ADR-0040：`ToolKind::CellInspector` 工具——单格拾取 + 三通道编辑
 
-**状态**：已接受（Accepted）
+**状态**：已接受（Accepted）。**2026-10-22 追记：决策 6（Inspector Panel 加 Cell 折叠区）被 [ADR-0050](ADR-0050-unified-inspector-panel.md) 修正**——实现一度做成独立浮窗 `Panel::CellEditor`，ADR-0050 把 Cell 表单改回 Inspector 属性页签并退役该浮窗。正文按只增不改保留原文。
 **日期**：2026-10-19
 **决策者**：用户（对话回复「好」——即 ADR §7 Q1-Q6 全默认通过）
 **关联**：[ADR-0039](ADR-0039-topographic-viewmode.md)（Topographic viewmode，本 ADR 与之平行）、[ADR-0025](ADR-0025-selection-first-tooling.md)（「选区优先」工具哲学）、[ADR-0032](ADR-0032-place-vocab-unify.md)（BiomeFamily 族键）、[ADR-0029](ADR-0029-biome-marker.md)（biome 识别 marker，[biome_marker.rs](../../crates/wv-terrain/src/marker.rs)）、[ADR-0033](ADR-0033-selection-retained-after-intent.md)（意图后保留选区精神）、[MAP_LAYER_RENDERING_SPEC §0](MAP_LAYER_RENDERING_SPEC_v0.1.md)（四轴契约）、[ART_STYLE_SPEC §1.4](ART_STYLE_SPEC_v0.1.md)（色觉安全「色不是唯一载体」）
