@@ -210,6 +210,7 @@ pub async fn dispatch_write(
                 biome: None,
                 envelope: None,
                 rank: None,
+                line: None,
             };
             let cmd: Box<dyn wv_edit::EditCommand> = Box::new(wv_edit::AddPlaceCommand::new(place));
             let dirty = bridge.apply(cmd).await.map_err(|e| {
