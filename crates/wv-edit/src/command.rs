@@ -2772,6 +2772,145 @@ impl EditCommand for SetMapOrientationCommand {
     }
 }
 
+/// 改图层声明属性（可见 / 锁定 / 不透明度）——图层面板写回。
+///
+/// 《MAP_LAYER_RENDERING_SPEC》§8 缺口 #4 的收口：作者此前只能手编
+/// `maps/<id>/index.yaml` 的 `layers:` 段，本命令让面板的眼睛 / 锁 /
+/// 不透明度滑条落进编辑命令链（可撤销、驱动脏路径）。`z` 槽位偏移与
+/// `source` 引用不在本命令范围。
+///
+/// 三个字段都是 `Option`：`None` = 不动。`apply` 把旧值三元组缓存进
+/// `before`，`revert` 原样写回（运行期撤销走命令栈，跨会话历史由 YAML
+/// 真源承载——图层显隐是**作者声明**而非「随时间演化的量」，不适用
+/// §4.1 的区间化，P6 的非破坏语义由命令栈的 revert 保证）。
+///
+/// ## 脏路径
+///
+/// `maps/{map_id}/index.yaml`——layers 声明内联在图索引里，与
+/// [`SetMapOrientationCommand`] 同一落点。
+///
+/// ## 失败语义
+///
+/// - 地图或图层不存在：`TargetMissing`（面板帧数据与命令构造同源，
+///   正常不会触发；触发说明世界在帧间被换掉）。
+#[derive(Debug)]
+pub struct UpdateLayerCommand {
+    /// 目标地图 ID。
+    pub map: wv_core::Id,
+    /// 目标图层 ID（`MapNode.layers[].id`）。
+    pub layer: wv_core::Id,
+    /// 新可见性；`None` = 不动。
+    pub visible: Option<bool>,
+    /// 新锁定态；`None` = 不动。
+    pub locked: Option<bool>,
+    /// 新不透明度（apply 时 clamp 到 0..=1）；`None` = 不动。
+    pub opacity: Option<f32>,
+    /// `apply` 时缓存的旧值三元组 `(visible, locked, opacity)`。
+    before: std::sync::Mutex<Option<(bool, bool, f32)>>,
+}
+
+impl UpdateLayerCommand {
+    /// 只改可见性（图层面板的眼睛）。
+    pub fn visibility(map: wv_core::Id, layer: wv_core::Id, visible: bool) -> Self {
+        Self {
+            map,
+            layer,
+            visible: Some(visible),
+            locked: None,
+            opacity: None,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// 只改锁定态（图层面板的锁）。
+    pub fn locked(map: wv_core::Id, layer: wv_core::Id, locked: bool) -> Self {
+        Self {
+            map,
+            layer,
+            visible: None,
+            locked: Some(locked),
+            opacity: None,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// 只改不透明度（图层面板滑条，拖完一次性提交，不按帧碎提交）。
+    pub fn opacity(map: wv_core::Id, layer: wv_core::Id, opacity: f32) -> Self {
+        Self {
+            map,
+            layer,
+            visible: None,
+            locked: None,
+            opacity: Some(opacity),
+            before: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// 定位目标图层的可变引用（地图 → 图层两级查找不到都报 `TargetMissing`）。
+    fn layer_mut<'w>(&self, world: &'w mut World) -> EditResult<&'w mut wv_core::map::Layer> {
+        let node = world
+            .maps
+            .iter_mut()
+            .find(|m| m.id == self.map)
+            .ok_or_else(|| EditError::TargetMissing(format!("地图 {}", self.map)))?;
+        node.layers
+            .iter_mut()
+            .find(|l| l.id == self.layer)
+            .ok_or_else(|| {
+                EditError::TargetMissing(format!("图层 {}（地图 {}）", self.layer, self.map))
+            })
+    }
+}
+
+impl EditCommand for UpdateLayerCommand {
+    fn label(&self) -> String {
+        if let Some(v) = self.visible {
+            format!("图层「{}」{}", self.layer, if v { "显示" } else { "隐藏" })
+        } else if let Some(l) = self.locked {
+            format!("图层「{}」{}", self.layer, if l { "锁定" } else { "解锁" })
+        } else {
+            format!(
+                "图层「{}」不透明度 {:.0}%",
+                self.layer,
+                self.opacity.unwrap_or(1.0) * 100.0
+            )
+        }
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let layer = self.layer_mut(world)?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))? =
+            Some((layer.visible, layer.locked, layer.opacity));
+        if let Some(v) = self.visible {
+            layer.visible = v;
+        }
+        if let Some(l) = self.locked {
+            layer.locked = l;
+        }
+        if let Some(o) = self.opacity {
+            layer.opacity = o.clamp(0.0, 1.0);
+        }
+        Ok(vec![format!("maps/{}/index.yaml", self.map)])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let prev = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
+            .take()
+            .ok_or_else(|| EditError::Precondition("UpdateLayer 尚未 apply".into()))?;
+        let layer = self.layer_mut(world)?;
+        layer.visible = prev.0;
+        layer.locked = prev.1;
+        layer.opacity = prev.2;
+        Ok(())
+    }
+}
+
 /// 重置当前地形到底图（2026-10-16 用户需求）。
 ///
 /// 把整张图的 `TerrainData.cells` 替换为 [`wv_core::map::MapBase::cell()`]
@@ -4086,6 +4225,107 @@ mod tests {
         let mut world = World::default();
         world.set_terrain(test_map(), data);
         world
+    }
+
+    // ── UpdateLayerCommand（图层面板写回）────────────────────────────
+
+    fn world_with_layers() -> World {
+        use wv_core::map::{Layer, LayerKind, MapNode};
+        let mut world = World::default();
+        world.maps.push(MapNode {
+            id: test_map(),
+            layers: vec![Layer {
+                id: Id::new_unchecked("layer_roads"),
+                name: "官道".into(),
+                kind: LayerKind::Road,
+                visible: true,
+                locked: false,
+                opacity: 0.65,
+                z: 4,
+                source: None,
+            }],
+            ..MapNode::default()
+        });
+        world
+    }
+
+    fn roads_layer(world: &World) -> &wv_core::map::Layer {
+        &world.maps[0].layers[0]
+    }
+
+    #[test]
+    fn update_layer_visibility_round_trips_and_reports_index_dirty() {
+        let mut world = world_with_layers();
+        let cmd =
+            UpdateLayerCommand::visibility(test_map(), Id::new_unchecked("layer_roads"), false);
+
+        let dirty = cmd.apply(&mut world).expect("apply");
+        assert_eq!(
+            dirty,
+            vec![format!("maps/{TEST_MAP}/index.yaml")],
+            "layers 声明内联在图索引，脏路径必须是 index.yaml"
+        );
+        assert!(!roads_layer(&world).visible, "眼睛关闭应写进声明层");
+        assert!(
+            (roads_layer(&world).opacity - 0.65).abs() < 1e-6,
+            "未提交字段不动，got {}",
+            roads_layer(&world).opacity
+        );
+
+        cmd.revert(&mut world).expect("revert");
+        assert!(roads_layer(&world).visible, "revert 应还原可见性");
+        assert!(
+            (roads_layer(&world).opacity - 0.65).abs() < 1e-6,
+            "revert 不应牵连其它字段，got {}",
+            roads_layer(&world).opacity
+        );
+    }
+
+    #[test]
+    fn update_layer_opacity_clamps_to_unit_range() {
+        let mut world = world_with_layers();
+        let cmd = UpdateLayerCommand::opacity(test_map(), Id::new_unchecked("layer_roads"), 1.7);
+        cmd.apply(&mut world).expect("apply");
+        assert!(
+            (roads_layer(&world).opacity - 1.0).abs() < 1e-6,
+            "越界不透明度应 clamp 到 1.0，got {}",
+            roads_layer(&world).opacity
+        );
+    }
+
+    #[test]
+    fn update_layer_missing_targets_report_errors() {
+        let mut world = world_with_layers();
+
+        let wrong_layer =
+            UpdateLayerCommand::visibility(test_map(), Id::new_unchecked("layer_nope"), false);
+        assert!(
+            matches!(
+                wrong_layer.apply(&mut world),
+                Err(EditError::TargetMissing(_))
+            ),
+            "图层不存在应报 TargetMissing"
+        );
+
+        let wrong_map = UpdateLayerCommand::locked(
+            Id::new_unchecked("map_nope"),
+            Id::new_unchecked("layer_roads"),
+            true,
+        );
+        assert!(
+            matches!(
+                wrong_map.apply(&mut world),
+                Err(EditError::TargetMissing(_))
+            ),
+            "地图不存在应报 TargetMissing"
+        );
+
+        // 未 apply 先 revert → Precondition（before 还是空）。
+        let fresh = UpdateLayerCommand::locked(test_map(), Id::new_unchecked("layer_roads"), true);
+        assert!(
+            matches!(fresh.revert(&mut world), Err(EditError::Precondition(_))),
+            "未 apply 的命令不可 revert"
+        );
     }
 
     #[test]

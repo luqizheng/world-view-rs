@@ -219,6 +219,17 @@ Update（MapRenderPlugin chain，plugins.rs）
 | 7 | 标签碰撞 v0.1 精度上限（AABB 贪心，README §12-36） | ADR-0017 |
 | 8 | 街名标注随 `Road` 图层隐藏是 ADR-0013 的**行为变化**（旧版街名不受任何开关控制） | ADR-0013 §4 负① |
 
+### 8.1 追记（2026-10-23）：缺口 #4 收口——图层面板写回落地
+
+`panel_layers` 按 Figma `3:20892`（Layers，268×324）重做并接真实 `MapNode.layers`，缺口 #4 关闭。要点：
+
+- **写回通道**：眼睛 / 锁 / 选中层不透明度经 `wv_edit::UpdateLayerCommand`（visible / locked / opacity 三字段任选）提交，脏路径 `maps/<id>/index.yaml`，可撤销。命令把三层合为一类而非三条，因面板动作天然逐字段、revert 共用同一份旧值缓存。**为什么眼睛写声明层而非会话开关**：`LayerFrame::resolve` 每 kind 只认**首个**声明层（§2.2），两个同 kind 声明层的逐层开关只能落到 `Layer.visible`，会话开关（kind 级全局布尔）表达不了。
+- **会话开关段保留**：v0.3 的 8 个 `ViewState::*_visible` toggle 原样留在面板尾部（小节标题「会话显隐 · 不落盘」）——会话轴与声明轴是合取关系，二者并存不冗余；`terrain_soften` / `tracks` 等 kind 无声明位，只能走会话轴。
+- **新建图层 / 组按钮不画**（`LayerPanelState.show_add = false`）：数据侧无图层组概念，`Custom` 层无渲染消费者（本表 #1）——按钮画了就是死键。
+- **计数口径**：行右端计数只给能直接数出的 kind——place（本图 Place 数）、road（端点落本图的边数）、label（本图 region + sea 数）、building（`World.buildings[图层ID]` 条数）、influence（本图有几何的去重势力数）、terrain（有栅格记 1）；event_point（无地图归属）/ border / custom（#1）不占位。
+- **locked 仍无消费者**：命令可写、面板可切，但编辑工具链尚未按 locked 拦截笔刷——行为留待后续（不新开缺口编号，归入本条追记）。
+- **面板默认位迁至左上角**（[12,56]×[268,480]，2026-10-23 用户裁定）：图层管理成为左列主面板；地图树（静态占位）让位到中列顶部 [332,56]，Minimap 恢复时需重排（其位暂被地图树占）。左列 56+480=536 底与 Brush 顶 578 仍留 42 间隙，§3.3 默认位互不重叠约束保持；存量工程 `ui-layout.yaml` 落盘值不受影响。
+
 ---
 
 ## 9. 文档地图

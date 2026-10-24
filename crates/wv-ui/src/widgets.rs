@@ -66,7 +66,7 @@ pub use controls::{
 pub use floater::{FloatWindow, HeadIcon};
 pub use layer_panel::{
     layer_actions, layer_list, layer_list_row, layer_panel, opacity_row, LayerEntry,
-    LayerPanelAction, LayerPanelState,
+    LayerPanelAction, LayerPanelState, LAYER_BLOCK_GAP, LAYER_ROW_HEIGHT, LAYER_ROW_SPACING,
 };
 pub use primitives::{
     badge,
