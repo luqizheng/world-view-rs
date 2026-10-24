@@ -41,6 +41,26 @@ impl EditCellState {
         self.region_fingerprint = 0;
     }
 
+    /// **只关工具，不清选区**（[ADR-0052] §9.1 S0-1 修复口径）。
+    ///
+    /// 切走 EditCell 工具时**只**翻 `tool_active = false`——`selected`
+    /// （单格选）与 `region_cells`（区域选）**保留**，这样：
+    ///
+    /// - 「框选一片 → 切 EditCell」后金选区仍在画面上（ADR-0052 §5 M1
+    ///   验收 ④）；
+    /// - 再切回 EditCell 时选区还在，不用重新框。
+    ///
+    /// 只有**切图**（`on_map_change`）与 **Esc 全量清理**才走 `clear()`。
+    ///
+    /// 口径与 §9.1 D3-D 一致：「切工具丢弃整笔 + 切图全量 clear」。
+    pub fn close_tool(&mut self) {
+        self.tool_active = false;
+        // hover 是**瞬时**态（光标动就变），关工具后光标多半还在地图上，
+        // 留着会画出「工具已关但还有 hover 高亮」的鬼影——清掉。
+        // `selected` / `region_cells` 是**已提交**的选择态，保留。
+        self.hover = None;
+    }
+
     /// 切换图时调用——如果新图 ≠ 上次记录的图,清空所有格相关字段
     /// （与 wv-render `SelectionState::on_map_change` 同口径）。
     pub fn on_map_change(&mut self, new_map: &wv_core::Id) {
@@ -50,6 +70,44 @@ impl EditCellState {
         }
         self.last_map_id = Some(new_map.clone());
     }
+}
+
+/// **泛洪选择工具**的会话态（[ADR-0052] D6 / D6-A）。
+///
+/// 与 [`EditCellState`] 同级——两者是**互斥工具**（同一时刻只有一个 active）。
+#[derive(Resource, Debug, Default, Clone, PartialEq)]
+pub struct FloodSelectState {
+    /// 泛洪工具是否激活。
+    pub tool_active: bool,
+    /// **判据**：按地表 / 按群系 / 按海拔容差。
+    ///
+    /// 默认按**群系**——CellMap 的主要用途是「选出一片同群系的地」，
+    /// 按地表（水/陆）粒度太粗，按海拔容差需要额外输入。
+    pub criterion: FloodCriterion,
+}
+
+impl FloodSelectState {
+    /// 关工具（切走时调用）——只翻 `tool_active`，不清选区
+    /// （选区在 `EditCellState.region_cells`，跨工具保留）。
+    pub fn close_tool(&mut self) {
+        self.tool_active = false;
+    }
+}
+
+/// **泛洪判据**（D6）：什么算「同值」。
+///
+/// 与 `wv_terrain::cellops::FloodCriterion` 同款语义——此处独立定义是为了
+/// 让 `wv-world-cell-map` 不依赖 `wv-terrain`（[ADR-0054] D2/D4 的 crate
+/// 分层纪律：地形域的 crate 只依赖 core）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FloodCriterion {
+    /// 按**地表**判同（水 / 陆）。
+    Surface,
+    /// 按**群系**判同（默认）。
+    #[default]
+    Biome,
+    /// 按**海拔容差**判同（`|h − h₀| ≤ tol`）。
+    HeightTolerance(i16),
 }
 
 /// 地形栅格的视图标定（自 wv-render 迁入；`grid_sync` 桥接系统在 wv-render
@@ -90,5 +148,77 @@ impl GridConfig {
     /// `map_origin + local` 就等于把两套原点的对照表丢在一边。
     pub fn map_to_view(&self, local: Vec2) -> Vec2 {
         self.map_origin + local
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **S0-1（[ADR-0052] §9.1）· `close_tool` 不清选区**。
+    ///
+    /// 「框选一片 → 切 EditCell」不丢选区：切走工具只翻 `tool_active`，
+    /// `selected` / `region_cells` 必须保留。
+    #[test]
+    fn close_tool_keeps_selected_and_region_cells() {
+        let mut s = EditCellState {
+            tool_active: true,
+            hover: Some((3, 4)),
+            selected: Some((10, 20)),
+            region_cells: vec![(1, 1), (2, 2), (3, 3)],
+            region_fingerprint: 0xdead_beef,
+            last_map_id: None,
+        };
+        s.close_tool();
+        assert!(!s.tool_active, "工具应关闭");
+        assert_eq!(s.selected, Some((10, 20)), "单格选必须保留");
+        assert_eq!(s.region_cells.len(), 3, "区域选必须保留");
+        assert_eq!(s.region_fingerprint, 0xdead_beef, "指纹保留（避免重算）");
+        assert_eq!(s.hover, None, "hover 是瞬时态，关工具即清");
+    }
+
+    /// **S0-1 · `clear` 仍然全清**（切图 / Esc 走这条）。
+    #[test]
+    fn clear_wipes_everything_but_last_map_id() {
+        let mut s = EditCellState {
+            tool_active: true,
+            hover: Some((1, 1)),
+            selected: Some((2, 2)),
+            region_cells: vec![(3, 3)],
+            region_fingerprint: 42,
+            last_map_id: Some(wv_core::Id::new_unchecked("map_a")),
+        };
+        s.clear();
+        assert!(!s.tool_active);
+        assert_eq!(s.hover, None);
+        assert_eq!(s.selected, None);
+        assert!(s.region_cells.is_empty());
+        assert_eq!(s.region_fingerprint, 0);
+        assert!(s.last_map_id.is_some(), "last_map_id 不由 clear 碰");
+    }
+
+    /// **切图清选区**（`on_map_change`）：换图 → selected / hover 清空；
+    /// 同图 → 不动（避免每帧误清）。
+    #[test]
+    fn on_map_change_clears_only_when_map_actually_changes() {
+        let mut s = EditCellState {
+            tool_active: true,
+            hover: Some((1, 1)),
+            selected: Some((2, 2)),
+            region_cells: vec![],
+            region_fingerprint: 0,
+            last_map_id: None,
+        };
+        let map_a = wv_core::Id::new_unchecked("map_a");
+        s.on_map_change(&map_a);
+        assert_eq!(s.selected, None, "首次记录即视为换图 → 清空");
+        // 再设一次选中，同图再来 → 不清
+        s.selected = Some((5, 5));
+        s.on_map_change(&map_a);
+        assert_eq!(s.selected, Some((5, 5)), "同图不应清选区");
+        // 换图 → 清
+        let map_b = wv_core::Id::new_unchecked("map_b");
+        s.on_map_change(&map_b);
+        assert_eq!(s.selected, None, "换图应清选区");
     }
 }

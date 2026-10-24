@@ -27,6 +27,10 @@
 #[cfg(feature = "app")]
 pub mod biome_boundary;
 #[cfg(feature = "app")]
+pub mod cell_stroke;
+#[cfg(feature = "app")]
+pub mod derived_op;
+#[cfg(feature = "app")]
 pub mod diagnostics_bridge;
 #[cfg(feature = "app")]
 pub mod editing;
@@ -34,6 +38,8 @@ pub mod editing;
 pub mod faction_panel_actions;
 #[cfg(feature = "app")]
 pub mod feature_place_actions;
+#[cfg(feature = "app")]
+pub mod flood_select;
 #[cfg(feature = "app")]
 pub mod inspector_actions;
 #[cfg(feature = "app")]

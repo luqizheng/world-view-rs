@@ -81,8 +81,9 @@ use wv_ui::widgets::{split_button, SplitButtonMetrics, SplitMenuItem};
 use super::shell::UiShell;
 use super::widgets::icon_image;
 use super::widgets::{
-    ICON_ELLIPSE, ICON_MOVE_HORIZONTAL, ICON_MOVE_VERTICAL, ICON_RULER_DIMENSION_LINE,
-    ICON_SQUARES_UNITE, ICON_TRASH, ICON_VECTOR_POLYGON, ICON_VECTOR_SQUARE,
+    ICON_ELLIPSE, ICON_MOVE_HORIZONTAL, ICON_MOVE_VERTICAL, ICON_PAINT_BUCKET,
+    ICON_RULER_DIMENSION_LINE, ICON_SQUARES_UNITE, ICON_SQUARE_MOUSE_POINTER, ICON_TRASH,
+    ICON_VECTOR_POLYGON, ICON_VECTOR_SQUARE,
 };
 use super::{ICON_ERASER, ICON_GRID, ICON_HAND, ICON_REDO, ICON_TREES, ICON_UNDO, ICON_WAVES};
 
@@ -296,6 +297,17 @@ pub fn map_controls(
     mut params: DockParams,
     edit: Res<EditHistory>,
     panels: Res<PanelState>,
+    // CellMap 工具活动态（[ADR-0052] D7-1 EditCell 第 12 槽 / D6 FloodSelect
+    // 第 13 槽）——两块瓷砖都按 `tool_active` 画选中态。
+    // 时间轴播放态（§9.4 Gate-1）：播放中 CellMap 编辑类瓷砖灰化。
+    //
+    // **折成一层元组**：Bevy 单系统参数上限 16，本函数原有 15 个，三个
+    // `Res` 分开写会到 18（编译报「not a system set」）。元组算 1 个参数。
+    (edit_cell, flood_select, playback): (
+        Res<wv_render::state::EditCellState>,
+        Res<crate::state::FloodSelectState>,
+        Res<crate::state::PlaybackState>,
+    ),
 ) {
     // 无工程闸门（图片规格 §首页不可见）：与 `welcome_screen` 共用同一信号。
     // 2026-10-22（B 档）：改读 `AppScreen`——「首页不可见」的口径由屏状态
@@ -331,6 +343,15 @@ pub fn map_controls(
     let grid_active = view.grid_lines;
     let can_undo = edit.history.can_undo();
     let can_redo = edit.history.can_redo();
+    // EditCell 活动态（[ADR-0052] D7-1）：判据 = `tool_active`，
+    // **不是** `selected.is_some()`——后者把「点过一格」误当成「工具开着」。
+    let edit_cell_active = edit_cell.tool_active;
+    // 泛洪活动态（[ADR-0052] D6）：判据 = `tool_active`。
+    let flood_select_active = flood_select.tool_active;
+    // **Gate-1**（[ADR-0052] §9.4）：时间轴播放中，CellMap 写入口工具灰化。
+    // 禁工具而非禁面板——播放中看读数条是合法只读操作。
+    let cell_tools_enabled = !playback.playing;
+    let locked_hint = t(loc, I18nKey::MapControlsPlaybackLocked);
 
     let vertical = params.dock.orientation == MapDockOrientation::Vertical;
     let metrics = DockMetrics::for_orientation(vertical);
@@ -401,6 +422,8 @@ pub fn map_controls(
                         }
 
                         // ── 槽 1：抓手 ────────────────────────────────────
+                        // 抓手是**导航**工具，不是写入口——Gate-1 不灰化它
+                        // （播放中仍可拖动看图，属只读操作）。
                         tool_tile(
                             ui,
                             &shell,
@@ -408,6 +431,7 @@ pub fn map_controls(
                             ICON_HAND,
                             t(loc, I18nKey::MapControlsPanHint),
                             pan_active,
+                            true,
                             &mut params.palette,
                             MapToolId::Pan,
                         );
@@ -427,20 +451,24 @@ pub fn map_controls(
                         );
 
                         // ── 槽 4：地形橡皮刷 ─────────────────────────────
+                        // Gate-1：播放中灰化（写入口）。
                         tool_tile(
                             ui,
                             &shell,
                             metrics,
                             ICON_ERASER,
-                            t(loc, I18nKey::MapControlsEraserHint),
+                            if cell_tools_enabled {
+                                t(loc, I18nKey::MapControlsEraserHint)
+                            } else {
+                                locked_hint
+                            },
                             eraser_active,
+                            cell_tools_enabled,
                             &mut params.palette,
                             MapToolId::BrushErase,
                         );
-                        // EditCell 工具的 dock 瓷砖:[ADR-0040] §决策 UI 后做(独立 commit)。
-                        // map_controls 当前 16 个系统参数已满,本 PR-2 仅做后端 plumbing
-                        // (EditCellCommand + EditCellState + cell_pick + dispatch) ——
-                        // 工具调用走命令面板 (MapToolId::EditCell 注册在 ui_command_palette.rs)。
+                        // EditCell 工具的 dock 瓷砖见下方「槽 12」
+                        // （[ADR-0052] D7-1 已补齐入口）。
 
                         separator(ui, &shell, metrics, vertical);
 
@@ -555,6 +583,52 @@ pub fn map_controls(
                         {
                             view.nature_overlay = !view.nature_overlay;
                         }
+
+                        // ── 分隔条：通用地图工具 ↔ CellMap 编辑工具 ──
+                        // [ADR-0052] §4.3（UX 审视）：槽 0–11 是「通用地图工具」
+                        // （导航 / 选择 / 测量 / 视图 / 历史），槽 12+ 是
+                        // 「CellMap 专属编辑工具」——语义层级不同，必须视觉隔断。
+                        separator(ui, &shell, metrics, vertical);
+
+                        // ── 槽 12：EditCell（单格编辑）────────────────
+                        // [ADR-0052] D7-1。此前 EditCell 只有后端 plumbing
+                        //（命令 + 状态 + 点选），**工具条没有可见入口**——
+                        // 用户无法从 UI 打开单格编辑工作台。
+                        // 二次点击 = 关闭（互斥由 `apply_pending_commands` 统一做）。
+                        tool_tile(
+                            ui,
+                            &shell,
+                            metrics,
+                            ICON_SQUARE_MOUSE_POINTER,
+                            if cell_tools_enabled {
+                                t(loc, I18nKey::MapControlsEditCellHint)
+                            } else {
+                                locked_hint
+                            },
+                            edit_cell_active,
+                            cell_tools_enabled,
+                            &mut params.palette,
+                            MapToolId::EditCell,
+                        );
+
+                        // ── 槽 13：FloodSelect（泛洪选择）────────────
+                        // [ADR-0052] D6：点一下 = 按判据自动圈出同值连通区。
+                        // 与槽 12 同属「CellMap 编辑」组，不另加分隔条。
+                        tool_tile(
+                            ui,
+                            &shell,
+                            metrics,
+                            ICON_PAINT_BUCKET,
+                            if cell_tools_enabled {
+                                t(loc, I18nKey::MapControlsFloodSelectHint)
+                            } else {
+                                locked_hint
+                            },
+                            flood_select_active,
+                            cell_tools_enabled,
+                            &mut params.palette,
+                            MapToolId::FloodSelect,
+                        );
                     };
 
                     // **不用**交叉轴 `Align::Center`（2026-10-20 教训）：大框的
@@ -804,11 +878,22 @@ fn tool_tile(
     icon: egui::ImageSource<'static>,
     hint: &str,
     active: bool,
+    enabled: bool,
     palette: &mut CommandPalette,
     tool: MapToolId,
 ) {
-    let (rect, resp) = ui.allocate_exact_size(metrics.tile, egui::Sense::click());
-    let hovered = resp.hovered();
+    // `enabled = false`（[ADR-0052] §9.4 Gate-1/Gate-2）：灰化不可点。
+    // `Sense::hover` 而非 `click`——不是「点了不响应」，而是**根本不成命中区**，
+    // 连误触的机会都不给。
+    let (rect, resp) = ui.allocate_exact_size(
+        metrics.tile,
+        if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
+    );
+    let hovered = enabled && resp.hovered();
     let fill = if active {
         shell.gold_soft()
     } else if hovered {
@@ -824,7 +909,9 @@ fn tool_tile(
     ui.painter()
         .rect(rect, TILE_RADIUS, fill, stroke, egui::StrokeKind::Inside);
 
-    let tint = if active {
+    let tint = if !enabled {
+        shell.text_disabled()
+    } else if active {
         shell.gold()
     } else if hovered {
         shell.t1()
@@ -836,8 +923,13 @@ fn tool_tile(
         egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(metrics.tile_icon)),
     );
 
-    if resp.clicked() {
+    if enabled && resp.clicked() {
         palette.pending = Some(CommandId::SelectMapTool(tool));
+    }
+    if !enabled {
+        // 禁用态不给手型光标——避免「看起来能点」的误判（与 `icon_button` 同口径）。
+        resp.on_hover_text(hint);
+        return;
     }
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(hint);

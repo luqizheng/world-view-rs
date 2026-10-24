@@ -44,10 +44,42 @@ pub fn segmented(
     labels: &[&str],
     active_index: usize,
     font_px: f32,
-    mut on_pick: impl FnMut(usize),
+    on_pick: impl FnMut(usize),
 ) {
+    segmented_with_disabled(
+        ui,
+        shell,
+        id,
+        seg_w_each,
+        labels,
+        active_index,
+        font_px,
+        &[],
+        on_pick,
+    );
+}
+/// 段控件（**可按段禁用**版）。
+///
+/// `disabled[i] == true` 的段：文字走 `text_disabled`、不响应 hover / 点击
+/// ——用于「某一段当前不可进」的场景（[ADR-0052] §9.4 Gate-2：无地图时顶栏
+/// 的 `CellMap` 段灰化不可点，但 `Browse` / `Edit` 照常）。
+///
+/// `disabled` 短于 `labels` 时缺省视为全可用。
+#[allow(clippy::too_many_arguments)]
+pub fn segmented_with_disabled(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    id: &str,
+    seg_w_each: f32,
+    labels: &[&str],
+    active_index: usize,
+    font_px: f32,
+    disabled: &[bool],
+    mut on_pick: impl FnMut(usize),
+) -> egui::Response {
     let total_w = seg_w_each * labels.len() as f32;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(total_w, shell.hit), egui::Sense::hover());
+    let (rect, whole_resp) =
+        ui.allocate_exact_size(egui::vec2(total_w, shell.hit), egui::Sense::hover());
     let painter = ui.painter();
     painter.rect_filled(rect, 6.0, shell.input_bg());
     painter.rect_stroke(
@@ -63,6 +95,19 @@ pub fn segmented(
             egui::pos2(inner.min.x + each * i as f32, inner.min.y),
             egui::pos2(inner.min.x + each * (i as f32 + 1.0), inner.max.y),
         );
+        let is_disabled = disabled.get(i).copied().unwrap_or(false);
+        if is_disabled {
+            // 禁用段：不注册点击命中（`Sense::hover` 只够出 tooltip），
+            // 文字走禁用色——视觉与行为一致，不会「看着能点但没反应」。
+            painter.text(
+                r.center(),
+                egui::Align2::CENTER_CENTER,
+                *label,
+                proportional(font_px),
+                shell.text_disabled(),
+            );
+            continue;
+        }
         let resp = ui.interact(r, egui::Id::new((id, i)), egui::Sense::click());
         if i == active_index {
             painter.rect_filled(r, 4.0, shell.accent_soft());
@@ -89,6 +134,7 @@ pub fn segmented(
             on_pick(i);
         }
     }
+    whole_resp
 }
 
 #[cfg(test)]
@@ -200,5 +246,121 @@ mod tests {
             picks.contains(&1),
             "第 1 段被点击应触发 on_pick(1)，got {picks:?}"
         );
+    }
+
+    /// **禁用段不响应点击**（[ADR-0052] §9.4 Gate-2：无地图时 CellMap 段灰化）。
+    ///
+    /// 与上一条同款装配，唯一区别是 `disabled` 把被点段标禁用——
+    /// 命中区根本不注册，`on_pick` 一次都不该被调用。
+    #[test]
+    fn segmented_disabled_segment_ignores_clicks() {
+        let sh = shell();
+        let seg_w = 60.0;
+        let labels = ["A", "B", "C"];
+        let pos = egui::pos2(seg_w * 1.5, sh.hit * 0.5);
+        let mut picks: Vec<usize> = Vec::new();
+        let ctx = egui::Context::default();
+        for frame in 0..3 {
+            let events = match frame {
+                0 => vec![egui::Event::PointerMoved(pos)],
+                1 => vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                }],
+                _ => vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                }],
+            };
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 200.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ctx| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::default())
+                    .show(ctx, |ui| {
+                        segmented_with_disabled(
+                            ui,
+                            &sh,
+                            "seg_disabled",
+                            seg_w,
+                            &labels,
+                            0,
+                            12.0,
+                            // 第 1 段（被点的那个）禁用。
+                            &[false, true, false],
+                            |i| picks.push(i),
+                        );
+                    });
+            });
+            output.textures_delta.clear();
+        }
+        assert!(picks.is_empty(), "禁用段不该触发 on_pick，got {picks:?}");
+    }
+
+    /// 禁用第 2 段时，第 1 段仍然可点（禁用不外溢到邻段）。
+    #[test]
+    fn segmented_disabling_one_segment_leaves_neighbours_clickable() {
+        let sh = shell();
+        let seg_w = 60.0;
+        let labels = ["A", "B", "C"];
+        // 第 2 段（x ≈ [120.67, 179.33]）中心。
+        let pos = egui::pos2(seg_w * 2.5, sh.hit * 0.5);
+        let mut picks: Vec<usize> = Vec::new();
+        let ctx = egui::Context::default();
+        for frame in 0..3 {
+            let events = match frame {
+                0 => vec![egui::Event::PointerMoved(pos)],
+                1 => vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                }],
+                _ => vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                }],
+            };
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 200.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ctx| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::default())
+                    .show(ctx, |ui| {
+                        segmented_with_disabled(
+                            ui,
+                            &sh,
+                            "seg_partial",
+                            seg_w,
+                            &labels,
+                            0,
+                            12.0,
+                            // 只禁第 1 段（索引 1），点的是索引 2。
+                            &[false, true, false],
+                            |i| picks.push(i),
+                        );
+                    });
+            });
+            output.textures_delta.clear();
+        }
+        assert!(picks.contains(&2), "未禁用的第 2 段应可点，got {picks:?}");
     }
 }

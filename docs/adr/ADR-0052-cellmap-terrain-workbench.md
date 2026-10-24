@@ -1,6 +1,9 @@
 # ADR-0052：CellMap 地形编辑工作台——从「单格属性表单」到「可连续绘制的地形编辑器」
 
-**状态**：提议（Proposed，2026-10-22 按用户默认档 B 起草，待用户复述「同意 ADR-0052，按此实施」转已接受）
+**状态**：已接受（Accepted，2026-10-24 转状态）
+**转状态依据**（§8）：用户 2026-10-24 对话回复「接收 go」——「接收」为项目约定的显式确认话术
+（与「全收 + 并入」「全部接收」同档），语义等价于 §8 要求的「同意 ADR-0052，按此实施」。
+**落地情况**（同日）：M1 / M2 / M3 全部实施完毕并通过三道闸门，详见 §10 施工记录。
 **编号修正**（2026-10-23）：本 ADR 原起草为 0050，与 `feat/mode-content-matrix` 分支的
 [ADR-0050-unified-inspector-panel](ADR-0050-unified-inspector-panel.md)、
 [ADR-0051-mode-content-matrix](ADR-0051-mode-content-matrix.md) 撞号。
@@ -605,3 +608,72 @@ CellMap 顶栏段灰化不可点；Tooltip「请先打开一张地图」。MapTr
 
 **修订记录标注**：本节 2026-10-24 追写，D1–D10 既有条款文字零改动。
 转「已接受」的条件（§8）不变——用户复述「同意 ADR-0052，按此实施」即转状态。
+
+---
+
+## 10. 施工记录 · 2026-10-24（M1 / M2 / M3 全部实施）
+
+**触发**：用户 2026-10-24 对话回复「接收 go」——按 §8 转「已接受」，同时批准继续实施。
+本节按 §6.3 追写纪律记录**施工事实**，不改 D1–D10 与 §9 的任何条款文字。
+
+### 10.1 分期完成度
+
+| 分期 | 内容 | 状态 |
+|---|---|---|
+| M1 | D1/D1-A/D1-B scrub 手势态机；D2 hover 双色描边 + 准星；S0-1 切工具保选区；D7-1 EditCell 瓷砖 | ✅ |
+| M2 | D3/D3-A~E 连续绘制与丢弃时序；D4 落笔值区；D6 泛洪 + 判据面板；D8 读数条；D8-A 白闪；D8-B 底栏进度 | ✅ |
+| M3 | §9.7 Gate-1 播放门控 + Gate-2 无图空态；§5 `quantize_heights` / `smooth_cells` 接 UI | ✅ |
+
+### 10.2 施工中发现并修复的既有缺陷（非本 ADR 引入）
+
+1. **`EditorOverlayPlugin` 从未在 wv-app 装配**（影响面最广）
+   `wv-render` 的该插件注册了 `sync_cell_selection` / `sync_cell_region` /
+   `sync_cell_hover` / `sync_cell_stroke` + `CellPaintSession` /
+   `Cell*Entities` 等资源，但 wv-app 生产路径按 ADR-0020 **直装渲染主链**、
+   从未 `add_plugins` 它。后果：**ADR-0040 的单格金色 outline 自 2026-10-20
+   起一直没在线上出现**；D2 hover 准星与 D3 待落色块同样画不出来；且
+   `paint_edit_cell_on_drag` 的 `ResMut<CellPaintSession>` 会在首帧 panic。
+   已在 `app_bootstrap` 补 7 个 `init_resource` + 按 §9.5 绘制序装配 5 个系统。
+   **教训**：`#[cfg(feature = "app")]` 模块不在 `cargo check -p wv-app`
+   （不带 `--features app`）的编译范围内——M2 提交曾因此带着 13 个 error 通过自检。
+2. **M2 遗留坏测试 2 条**：`paint_value_reports_no_change_when_identical` 断言与
+   `changes()` 语义相反（`height_delta = 0` 时海拔不变）；`cell_paint.rs` 的
+   ASCII 流程图代码块缺 `text` 标记被 rustdoc 当 doctest 编译。
+3. **Bevy 元组 / 参数上限撞顶**：主链内层元组达 23 项（`all_tuples` 上限 20 →
+   再拆一层子链）；`map_controls` 与 `paint_edit_cell_on_drag` 各达 17 参数
+   （上限 16 → 各折一层元组）。
+
+### 10.3 与 ADR 条款的实现对照（供复核）
+
+| 条款 | 落点 | 测试锚 |
+|---|---|---|
+| D1 / D1-A / D1-B | `wv-ui/src/widgets/controls.rs`：`numeric_intent` / `numeric_scrub_value` / `numeric_commit_text` | 5 条纯函数测试 |
+| D2 | `cell_selection::CellHoverEntities` + `cellmap_bridge::sync_cell_hover`；写入侧 `editing::track_edit_cell_hover` | 渲染侧无单测（需 GPU） |
+| D3 / D3-A~E | `wv-app/src/edit/cell_stroke.rs` + `wv-world-cell-map/src/cell_paint.rs` | D3-A(2) / D3-B(2) / D3-C(2) / D3-D(2) / D3-E(2) |
+| D4 | `cell_paint::CellPaintValue` + `cell_paint_panel::render_paint_value_section` | `apply` 饱和 / `changes` 语义 |
+| D5 | `CellPaintValue` 独立于 `BrushState`（无半径 / falloff 字段） | 编译期即约束 |
+| D6 | `wv-terrain/src/cellops.rs`（三纯函数）+ `edit/flood_select.rs` + `edit/derived_op.rs` | 14 条 cellops 测试 + 5 条派生运算门控 |
+| D7-1 / S0-1 / S0-2 | `ui_shell` 的 `MapToolId::EditCell => edit_cell.tool_active` + `close_tool()` | `close_tool_keeps_selected_and_region_cells` |
+| D8 / D8-A / D8-B | `render_readout_bar` / `cell_flash` / `status_bar` 瞬态槽 | D8-A(3) |
+| D10 | 已由 `biome_raw.rs` 落地（21 群系固定色 + 图例 + 高度调制） | 既有测试 |
+| Gate-1 / Gate-2 | `tool_tile(enabled)` / `segmented_with_disabled` / `derived_op_gate` | 4 条门控测试 |
+
+### 10.4 闸门结果
+
+```bash
+cargo test --workspace                              # 41 个测试目标，0 failed
+cargo test -p wv-app --features app --lib           # 292 passed / 0 failed / 1 ignored
+cargo clippy --workspace --all-targets -- -D warnings  # 0
+cargo app-clippy                                    # 0
+cargo fmt --all -- --check                          # 干净
+```
+
+### 10.5 未实施项（明确留白，非遗漏）
+
+- **§9.4 Gate-2 的空态画面文案**（「🗺️ 请先选择一张地图 / …」）：本轮只做了
+  顶栏段灰化 + tooltip；居中空态卡未单独绘制——MapTree 在选择地图时始终可用，
+  画布在无图时本就不显示地形，再加一层空态卡会与欢迎页职责重叠。
+  **待用户裁定**是否需要补。
+- **§5 M3 的「CellMap 专属顶栏读数条评估」**：ADR 原文即「v1 留在面板内，
+  避免动顶栏布局」——评估结论 = **维持现状**（读数条留在 Inspector 面板顶部）。
+- **§6 Q4**（方向键 nudge 与相机键冲突）：仍为待裁，未动。
