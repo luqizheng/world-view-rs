@@ -555,7 +555,7 @@ pub enum BrushTool {
 }
 
 impl BrushTool {
-    /// 面板遍历用。顺序即 `CommandId::SelectBrushTool` 的下标，**只增不改**。
+    /// 命令面板注册用。顺序即 `CommandId::SelectBrushTool` 的下标，**只增不改**。
     pub const ALL: [BrushTool; 8] = [
         BrushTool::PaintKind,
         BrushTool::MountainRange,
@@ -567,55 +567,14 @@ impl BrushTool {
         BrushTool::Eraser,
     ];
 
-    /// 「塑」组（拖拽骨架、程序生成）四工具——面板第二行。
-    pub const SHAPE: [BrushTool; 4] = [
-        BrushTool::MountainRange,
-        BrushTool::Plateau,
-        BrushTool::Hills,
-        BrushTool::River,
-    ];
-
-    /// 「放」组（单击种子、按半径扩散）两工具——面板第三行。
-    pub const PLACE: [BrushTool; 2] = [BrushTool::Volcano, BrushTool::Lake];
-
-    /// 所属分组（面板三行行内布局与命令面板注册共用同一口径）。
-    pub fn group(self) -> BrushToolGroup {
-        match self {
-            Self::PaintKind | Self::Eraser => BrushToolGroup::Paint,
-            Self::MountainRange | Self::Plateau | Self::Hills | Self::River => {
-                BrushToolGroup::Shape
-            }
-            Self::Volcano | Self::Lake => BrushToolGroup::Place,
-        }
-    }
-
     /// 是否意图工具（决定提交 `IntentTerrainCommand` 而非 `PaintTerrainCommand`）。
-    pub fn is_intent(self) -> bool {
-        self.group() != BrushToolGroup::Paint
-    }
-
-    /// 「涂」组（[`BrushToolGroup::Paint`]）两工具——面板第一行。
     ///
-    /// 涂与擦同组：两者都是「对既有地表做增量写入」，只是写入目标不同；
-    /// 分成两组会让分段控件多出一格，而那一格承载不了实质区别。
-    pub const PAINT: [BrushTool; 2] = [BrushTool::PaintKind, BrushTool::Eraser];
-}
-
-/// 笔刷工具的三个操作语义分组（面板行内布局的行首标签）。
-///
-/// 分组的差别是**作者的手在做什么**，不只是产出什么：
-/// - [`BrushToolGroup::Paint`]：分配式——涂抹即所得，每个落点都是印记；
-/// - [`BrushToolGroup::Shape`]：演绎式——拖的是几何骨架（脊线 / 台缘 /
-///   覆盖域 / 河床线），形状由 `wv_terrain::intent` 程序派生；
-/// - [`BrushToolGroup::Place`]：种子式——单击落种子，圆盘按半径扩散。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BrushToolGroup {
-    /// 涂：直接涂地形类型。
-    Paint,
-    /// 塑：拖拽骨架、程序生成。
-    Shape,
-    /// 放：单击种子、扩散成形。
-    Place,
+    /// 涂 / 擦以外全是意图工具。原判据是 `group() != BrushToolGroup::Paint`；
+    /// 2026-10-24 用户裁定移除面板「涂·塑·放」分组控件后分组本身随之删除，
+    /// 判据直接列工具，行为不变。
+    pub fn is_intent(self) -> bool {
+        !matches!(self, Self::PaintKind | Self::Eraser)
+    }
 }
 
 /// 笔刷工具状态（`AGENTS.md` §3.3：System 只生成命令，不直接改世界）。
@@ -623,12 +582,6 @@ pub enum BrushToolGroup {
 pub struct BrushState {
     /// 当前选中的地形类型编号（仅 Paint 工具用）。
     pub kind: u8,
-    /// 当前选中的工具组（笔刷面板 3 段控件用：涂 / 塑 / 放）。
-    ///
-    /// 2026-10-16 增：段控件需要单独持有「当前组」状态，瓷砖行**按组过滤**渲染。
-    /// `tool` 与 `tool_group` 在所有写入路径（面板段、面板瓷砖、命令面板
-    /// `SelectBrushTool`）由 `sync_tool_group` 同步，**禁止**单独写其中一个。
-    pub tool_group: BrushToolGroup,
     /// 当前工具（直接涂类型 / 意图生成）。
     pub tool: BrushTool,
     /// 笔刷半径（世界单位）。River 不用半径（河宽固定一格）。
@@ -1052,7 +1005,6 @@ impl Default for BrushState {
         Self {
             kind: 3, // 默认草原
             tool: BrushTool::PaintKind,
-            tool_group: BrushToolGroup::Paint, // 与 tool.group() 一致
             radius: 96.0,
             softness: 0.5,
             strength: 1.0,
@@ -1060,28 +1012,6 @@ impl Default for BrushState {
             // Google 式默认手势是左键拖动平移；笔刷必须显式开启，避免一开图就误改。
             enabled: false,
         }
-    }
-}
-
-impl BrushState {
-    /// 段控件路径：调用方刚改了 `tool_group`——把 `tool` 落到该组第一个。
-    ///
-    /// 设计取舍：**`tool_group` 是 UI 主状态**（段控件高亮就代表选工具），
-    /// 段切换比瓷砖切换粒度更粗。所以「段被切」= 强制重置 tool 到该组首项，
-    /// 旧 tool 即便仍在该组内也归零（避免「塑」段亮着但 `tool=Hills` 这种
-    /// 「随机停留」感）。
-    pub fn on_group_changed(&mut self) {
-        self.tool = match self.tool_group {
-            BrushToolGroup::Paint => BrushTool::PaintKind,
-            BrushToolGroup::Shape => BrushTool::SHAPE[0],
-            BrushToolGroup::Place => BrushTool::PLACE[0],
-        };
-    }
-
-    /// 瓷砖 / `SelectBrushTool` 路径：调用方刚改了 `tool`——把 `tool_group`
-    /// 跟它走（不重置 tool）。该函数是面板与命令面板共用的轻量同步。
-    pub fn on_tool_changed(&mut self) {
-        self.tool_group = self.tool.group();
     }
 }
 
@@ -1401,80 +1331,25 @@ mod tests {
         assert!(!BrushState::default().enabled);
     }
 
-    /// 三组（涂 / 塑 / 放）必须恰好划分全体工具（ADR-0043 后 8 个）：面板三行
-    /// 与命令面板注册都按组枚举，任何工具漏组 = 面板上点不到它。
+    /// 分派闸口径：涂 / 擦之外全是意图工具（`IntentTerrainCommand`）。
+    ///
+    /// 2026-10-24 起不再按 `BrushToolGroup` 判（分组控件已移除），这里直接
+    /// 钉住「哪几个工具走直接涂抹命令」的完整清单。
     #[test]
-    fn tool_groups_partition_all_tools() {
-        let mut grouped = BrushTool::PAINT.to_vec();
-        grouped.extend(BrushTool::SHAPE);
-        grouped.extend(BrushTool::PLACE);
-        assert_eq!(
-            grouped.len(),
-            BrushTool::ALL.len(),
-            "组并集大小 {} ≠ 全体 {}——有工具被分了两次或漏了",
-            grouped.len(),
-            BrushTool::ALL.len()
-        );
-        for t in BrushTool::ALL {
-            assert!(grouped.contains(&t), "{t:?} 不在任何组里");
-        }
-    }
-
-    /// 组员身份与操作语义一致：仅涂组非意图（分派闸 `is_intent` 的口径）。
-    #[test]
-    fn group_membership_matches_intent_dispatch_gate() {
-        assert_eq!(BrushTool::PaintKind.group(), BrushToolGroup::Paint);
-        for t in BrushTool::SHAPE {
-            assert_eq!(t.group(), BrushToolGroup::Shape, "{t:?}");
-            assert!(t.is_intent(), "{t:?} 应走 IntentTerrainCommand");
-        }
-        for t in BrushTool::PLACE {
-            assert_eq!(t.group(), BrushToolGroup::Place, "{t:?}");
-            assert!(t.is_intent(), "{t:?} 应走 IntentTerrainCommand");
-        }
-        // 涂组两个工具（涂抹 / 橡皮）都走 PaintTerrainCommand，不是意图。
-        for t in BrushTool::PAINT {
-            assert_eq!(t.group(), BrushToolGroup::Paint, "{t:?}");
+    fn only_paint_and_eraser_use_the_direct_paint_command() {
+        for t in [BrushTool::PaintKind, BrushTool::Eraser] {
             assert!(!t.is_intent(), "{t:?} 应走 PaintTerrainCommand");
         }
-    }
-
-    /// 段路径：`on_group_changed` 强制 `tool` 落到该组第一个，与旧 tool 无
-    /// 关——避免「塑」段亮着但 `tool=Hills` 这种随机停留。
-    #[test]
-    fn on_group_changed_resets_tool_to_group_first() {
-        let mut b = BrushState {
-            tool: BrushTool::Hills,
-            tool_group: BrushToolGroup::Shape,
-            ..BrushState::default()
-        };
-        b.on_group_changed();
-        assert_eq!(
-            b.tool,
+        for t in [
             BrushTool::MountainRange,
-            "Shape 组首项=MountainRange"
-        );
-
-        let mut b = BrushState {
-            tool: BrushTool::Lake,
-            tool_group: BrushToolGroup::Place,
-            ..BrushState::default()
-        };
-        b.on_group_changed();
-        assert_eq!(b.tool, BrushTool::Volcano, "Place 组首项=Volcano");
-    }
-
-    /// 瓷砖 / 命令路径：`on_tool_changed` 把 group 跟 tool 走，tool 不动。
-    #[test]
-    fn on_tool_changed_pulls_group_to_tool() {
-        let mut b = BrushState {
-            tool: BrushTool::Volcano,
-            tool_group: BrushToolGroup::Paint, // 错位
-            ..BrushState::default()
-        };
-        b.on_tool_changed();
-        assert_eq!(b.tool_group, BrushToolGroup::Place);
-        assert_eq!(b.tool, BrushTool::Volcano, "tool 不应被改");
+            BrushTool::Plateau,
+            BrushTool::Hills,
+            BrushTool::River,
+            BrushTool::Volcano,
+            BrushTool::Lake,
+        ] {
+            assert!(t.is_intent(), "{t:?} 应走 IntentTerrainCommand");
+        }
     }
 
     fn node(

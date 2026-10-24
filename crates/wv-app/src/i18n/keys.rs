@@ -253,13 +253,7 @@ pub enum I18nKey {
     BrushHintRadiusShortcut,
     /// 分段控件上的「笔刷」短标（点按切换笔刷总开/关）
     BrushModeShort,
-    /// 工具行首组标签「涂」（分配式涂抹，2026-10-16 三行行内布局）
-    BrushGroupPaint,
-    /// 「塑」（拖拽骨架、程序生成）
-    BrushGroupShape,
-    /// 「放」（单击种子、扩散成形）
-    BrushGroupPlace,
-    /// 工具名「涂抹」（瓷砖 tooltip + 命令面板共用）
+    /// 工具名「涂抹」（面板当前工具行 + 命令面板共用）
     BrushToolNamePaint,
     /// 「山脉」
     BrushToolNameRange,
@@ -1230,7 +1224,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 487] = [
+    pub const ALL: [I18nKey; 484] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1356,12 +1350,10 @@ impl I18nKey {
         I18nKey::BrushFinishLineBtn,
         I18nKey::BrushUndoLastSegmentBtn,
         I18nKey::BrushHintRadiusShortcut,
-        // 笔刷面板 2026-10-16 改版（23）：模式短标 + 组标签 3 + 工具名 7 +
-        // 提示 7 + 滑条标签 4 + 材料段标 1（画路头 / 半径 / 软度 / 强度）
+        // 笔刷面板 2026-10-16 改版（20；2026-10-24 移除「涂 / 塑 / 放」三段
+        // 控件后 23 → 20）：模式短标 + 工具名 7 + 提示 7 + 滑条标签 4 +
+        // 材料段标 1（画路头 / 半径 / 软度 / 强度）
         I18nKey::BrushModeShort,
-        I18nKey::BrushGroupPaint,
-        I18nKey::BrushGroupShape,
-        I18nKey::BrushGroupPlace,
         I18nKey::BrushToolNamePaint,
         I18nKey::BrushToolNameRange,
         I18nKey::BrushToolNamePlateau,

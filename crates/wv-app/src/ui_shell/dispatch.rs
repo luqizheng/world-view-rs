@@ -372,11 +372,10 @@ pub(crate) fn apply_pending_commands(
         }
         CommandId::SelectBrushTool(i) => {
             // 越界索引静默忽略（与 SetViewMode 同口径）；选中即激活笔刷——
-            // 「选工具 = 准备画」，与面板段控件 / 瓷砖同一语义。同步
-            // `tool_group` 让段控件高亮跟随。
+            // 「选工具 = 准备画」。工具分组控件与图标行已移除（2026-10-24），
+            // 这里只改 `tool` 并开笔刷。
             if let Some(t) = crate::state::BrushTool::ALL.get(i as usize) {
                 brush.tool = *t;
-                brush.on_tool_changed();
                 brush.enabled = true;
             }
         }
@@ -461,11 +460,9 @@ pub(crate) fn apply_pending_commands(
                         }
                         MapToolId::Pan => view.pan_tool = true,
                         MapToolId::Brush => brush.enabled = true,
-                        // 橡皮与涂抹共用 `BrushState`，只差 `tool` 指到哪把；
-                        // `on_tool_changed` 同步 tool_group（面板段控件双真相防漂）。
+                        // 橡皮与涂抹共用 `BrushState`，只差 `tool` 指到哪把。
                         MapToolId::BrushErase => {
                             brush.tool = crate::state::BrushTool::Eraser;
-                            brush.on_tool_changed();
                             brush.enabled = true;
                         }
                         MapToolId::MeasureLine => {
