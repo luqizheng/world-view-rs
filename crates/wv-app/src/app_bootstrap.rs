@@ -355,6 +355,10 @@ pub fn run(config: AppConfig) {
                     "commit_edit_cell_on_click",
                     editing::commit_edit_cell_on_click
                 ),
+                // hover 准星（[ADR-0052] D2 写入侧）：每帧追踪光标压住的格。
+                // 必须排在 `track_cursor_world` 之后（要读 cursor_world）。
+                wv_render::perf_timed!("track_edit_cell_hover", editing::track_edit_cell_hover)
+                    .after(wv_render::camera::track_cursor_world),
                 // 候选点选（2026-10-22 内容矩阵）：在 cell 点选之后跑——
                 // 读 selected 判定是否落进未命名候选。
                 wv_render::perf_timed!(

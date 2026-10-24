@@ -886,6 +886,56 @@ pub fn commit_edit_cell_on_click(
     }
 }
 
+/// **每帧**追踪 hover 格（[ADR-0052] D2 写入侧）。
+///
+/// `commit_edit_cell_on_click` 只在**按下**那一刻写 `selected`；hover 是
+/// **持续**态——光标在格上移动就得跟着变，故需一个每帧跑的系统。
+///
+/// 写入 [`EditCellState::hover`]，供渲染侧 `sync_cell_hover` 画双色描边
+/// + 准星（D2）。
+///
+/// gate 与点选同口径：
+/// - `tool_active` 为 false → 不写（工具没开就别画准星）；
+/// - 指针压在 egui 面板上 → 不写（面板交互不是选格）；
+/// - 时间轴播放中 → 不写（投影态不写世界）；
+/// - 光标不在图上 / 无图 / 无地形 → 写 `None`（清掉旧准星）。
+pub fn track_edit_cell_hover(
+    view: Res<ViewState>,
+    grid: Res<GridConfig>,
+    drill: Res<DrillState>,
+    projection: Res<WorldProjection>,
+    ui: Res<wv_render::camera::PointerOverUi>,
+    playback: Res<PlaybackState>,
+    mut edit_cell: ResMut<EditCellState>,
+) {
+    if !edit_cell.tool_active {
+        if edit_cell.hover.is_some() {
+            edit_cell.hover = None;
+        }
+        return;
+    }
+    if ui.wants_pointer || playback.playing {
+        if edit_cell.hover.is_some() {
+            edit_cell.hover = None;
+        }
+        return;
+    }
+    let Some(cursor) = view.cursor_world else {
+        edit_cell.hover = None;
+        return;
+    };
+    let Some(target_map) = drill.current() else {
+        edit_cell.hover = None;
+        return;
+    };
+    let Some(terrain) = projection.world.terrain_of(target_map) else {
+        edit_cell.hover = None;
+        return;
+    };
+    edit_cell.hover = cell_pick::pick_at((cursor.x, cursor.y), &grid, terrain)
+        .map(|pick| (pick.gx, pick.gy));
+}
+
 /// 多边形顶点指纹（FNV-1a）——「多边形变没变」的判据。
 ///
 /// 0 表示「无有效指纹」（空多边形）。

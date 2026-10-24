@@ -82,7 +82,8 @@ use super::shell::UiShell;
 use super::widgets::icon_image;
 use super::widgets::{
     ICON_ELLIPSE, ICON_MOVE_HORIZONTAL, ICON_MOVE_VERTICAL, ICON_RULER_DIMENSION_LINE,
-    ICON_SQUARES_UNITE, ICON_TRASH, ICON_VECTOR_POLYGON, ICON_VECTOR_SQUARE,
+    ICON_SQUARE_MOUSE_POINTER, ICON_SQUARES_UNITE, ICON_TRASH, ICON_VECTOR_POLYGON,
+    ICON_VECTOR_SQUARE,
 };
 use super::{ICON_ERASER, ICON_GRID, ICON_HAND, ICON_REDO, ICON_TREES, ICON_UNDO, ICON_WAVES};
 
@@ -296,6 +297,11 @@ pub fn map_controls(
     mut params: DockParams,
     edit: Res<EditHistory>,
     panels: Res<PanelState>,
+    // EditCell 工具的活动态（[ADR-0052] D7-1 瓷砖需要读 `tool_active`）。
+    // SystemParam 上限 16 个，DockParams 打包了 3 个，这里是第 17 个——
+    // Bevy 的 SystemParam 上限是 16，**函数参数**另计，故此处的
+    // `Res<EditCellState>` 走普通函数参数（不进 `DockParams`）。
+    edit_cell: Res<wv_render::state::EditCellState>,
 ) {
     // 无工程闸门（图片规格 §首页不可见）：与 `welcome_screen` 共用同一信号。
     // 2026-10-22（B 档）：改读 `AppScreen`——「首页不可见」的口径由屏状态
@@ -331,6 +337,9 @@ pub fn map_controls(
     let grid_active = view.grid_lines;
     let can_undo = edit.history.can_undo();
     let can_redo = edit.history.can_redo();
+    // EditCell 活动态（[ADR-0052] D7-1）：判据 = `tool_active`，
+    // **不是** `selected.is_some()`——后者把「点过一格」误当成「工具开着」。
+    let edit_cell_active = edit_cell.tool_active;
 
     let vertical = params.dock.orientation == MapDockOrientation::Vertical;
     let metrics = DockMetrics::for_orientation(vertical);
@@ -437,10 +446,8 @@ pub fn map_controls(
                             &mut params.palette,
                             MapToolId::BrushErase,
                         );
-                        // EditCell 工具的 dock 瓷砖:[ADR-0040] §决策 UI 后做(独立 commit)。
-                        // map_controls 当前 16 个系统参数已满,本 PR-2 仅做后端 plumbing
-                        // (EditCellCommand + EditCellState + cell_pick + dispatch) ——
-                        // 工具调用走命令面板 (MapToolId::EditCell 注册在 ui_command_palette.rs)。
+                        // EditCell 工具的 dock 瓷砖见下方「槽 12」
+                        // （[ADR-0052] D7-1 已补齐入口）。
 
                         separator(ui, &shell, metrics, vertical);
 
@@ -555,6 +562,28 @@ pub fn map_controls(
                         {
                             view.nature_overlay = !view.nature_overlay;
                         }
+
+                        // ── 分隔条：通用地图工具 ↔ CellMap 编辑工具 ──
+                        // [ADR-0052] §4.3（UX 审视）：槽 0–11 是「通用地图工具」
+                        // （导航 / 选择 / 测量 / 视图 / 历史），槽 12+ 是
+                        // 「CellMap 专属编辑工具」——语义层级不同，必须视觉隔断。
+                        separator(ui, &shell, metrics, vertical);
+
+                        // ── 槽 12：EditCell（单格编辑）────────────────
+                        // [ADR-0052] D7-1。此前 EditCell 只有后端 plumbing
+                        //（命令 + 状态 + 点选），**工具条没有可见入口**——
+                        // 用户无法从 UI 打开单格编辑工作台。
+                        // 二次点击 = 关闭（互斥由 `apply_pending_commands` 统一做）。
+                        tool_tile(
+                            ui,
+                            &shell,
+                            metrics,
+                            ICON_SQUARE_MOUSE_POINTER,
+                            t(loc, I18nKey::MapControlsEditCellHint),
+                            edit_cell_active,
+                            &mut params.palette,
+                            MapToolId::EditCell,
+                        );
                     };
 
                     // **不用**交叉轴 `Align::Center`（2026-10-20 教训）：大框的

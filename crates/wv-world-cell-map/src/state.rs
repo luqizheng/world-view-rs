@@ -41,6 +41,26 @@ impl EditCellState {
         self.region_fingerprint = 0;
     }
 
+    /// **只关工具，不清选区**（[ADR-0052] §9.1 S0-1 修复口径）。
+    ///
+    /// 切走 EditCell 工具时**只**翻 `tool_active = false`——`selected`
+    /// （单格选）与 `region_cells`（区域选）**保留**，这样：
+    ///
+    /// - 「框选一片 → 切 EditCell」后金选区仍在画面上（ADR-0052 §5 M1
+    ///   验收 ④）；
+    /// - 再切回 EditCell 时选区还在，不用重新框。
+    ///
+    /// 只有**切图**（`on_map_change`）与 **Esc 全量清理**才走 `clear()`。
+    ///
+    /// 口径与 §9.1 D3-D 一致：「切工具丢弃整笔 + 切图全量 clear」。
+    pub fn close_tool(&mut self) {
+        self.tool_active = false;
+        // hover 是**瞬时**态（光标动就变），关工具后光标多半还在地图上，
+        // 留着会画出「工具已关但还有 hover 高亮」的鬼影——清掉。
+        // `selected` / `region_cells` 是**已提交**的选择态，保留。
+        self.hover = None;
+    }
+
     /// 切换图时调用——如果新图 ≠ 上次记录的图,清空所有格相关字段
     /// （与 wv-render `SelectionState::on_map_change` 同口径）。
     pub fn on_map_change(&mut self, new_map: &wv_core::Id) {

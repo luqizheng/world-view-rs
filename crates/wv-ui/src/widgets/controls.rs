@@ -373,11 +373,11 @@ fn numeric_input_bounded_inner(
     let gesture_id = ui.id().with("numeric_gesture");
     let error_id = ui.id().with("numeric_error");
     let mut gesture = ui
-        .memory_mut(|m| m.data.get_temp_mut_or_default::<NumericGesture>(gesture_id))
-        .clone();
+        .memory(|m| m.data.get_temp::<NumericGesture>(gesture_id))
+        .unwrap_or_default();
     let mut error = ui
-        .memory_mut(|m| m.data.get_temp_mut_or_default::<NumericError>(error_id))
-        .clone();
+        .memory(|m| m.data.get_temp::<NumericError>(error_id))
+        .unwrap_or_default();
     let now = ui.ctx().time();
 
     // ── 编辑态（D1）：egui 原生 TextEdit 覆盖在自绘框上 ──

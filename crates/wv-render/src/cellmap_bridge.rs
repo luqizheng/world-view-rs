@@ -2090,6 +2090,190 @@ pub fn sync_cell_selection(
     }
 }
 
+// ══════ from crates/wv-world-cell-map/src/cell_selection.rs :: sync_cell_hover ══════
+/// 每帧同步 **hover 准星**（[ADR-0052] D2 / §9.5 四态视觉分工）。
+///
+/// gate = `edit_cell.tool_active ∧ edit_cell.hover.is_some()`；
+/// 不满足时全 despawn（无残留）。
+///
+/// **双色描边**（D2）：每条边两层——外层深墨 `LINE_ON_DARK`（2px）、
+/// 内层纯白（1px）。深墨在下、白线在上，构成「白内线 + 深墨外晕」的
+/// 地图准星观感：在水面（浅蓝）与陆地（绿/褐）两种底色上都能读出来
+/// （[ADR-0052] §5 M1 验收 ③）。
+///
+/// **不脉动**（D2）：hover 是瞬时态，脉动会与 selected 的金色脉动混淆。
+/// 脉动是 selected 独占的信号。
+///
+/// **Z 高于 selected**（`HOVER_Z = 0.95 > SELECTION_Z = 0.9`）：
+/// hover 是「此刻光标在哪」的瞬时反馈，必须画在最上层
+/// （[ADR-0052] §9.5 绘制序 region → stroke → selected → hover）。
+#[allow(clippy::too_many_arguments)] // Bevy 系统参数即依赖声明，宽签名是框架惯例
+pub fn sync_cell_hover(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    edit_cell: Res<EditCellState>,
+    grid: Res<GridConfig>,
+    view: Res<ViewState>,
+    mut entities: ResMut<CellHoverEntities>,
+) {
+    let Some((gx, gy)) = edit_cell.hover.filter(|_| edit_cell.tool_active) else {
+        entities.despawn_all(&mut commands);
+        entities.release_assets(&mut meshes);
+        return;
+    };
+    let (center, size) = cell_world_rect(&grid, gx, gy);
+    // 世界厚度 = 屏幕恒定像素 × view.scale（与选中 outline 同策略 A）。
+    let outer_t = HOVER_OUTER_PX * view.scale;
+    let inner_t = HOVER_INNER_PX * view.scale;
+    // 准星长度 = 格的 1/3（居中十字），不与边缘描边打架。
+    let cross_len = size.x * 0.34;
+
+    // ── mesh：只在尺寸变化时重建（其余帧复用句柄）──
+    if entities.last_size != size || entities.outer_h_mesh.is_none() {
+        entities.release_assets(&mut meshes);
+        // 外晕比内线更宽——墨晕在格沿两侧铺开，白线正好落在格沿上。
+        entities.outer_h_mesh = Some(meshes.add(Rectangle::new(size.x, outer_t)));
+        entities.outer_v_mesh = Some(meshes.add(Rectangle::new(outer_t, size.y)));
+        entities.inner_h_mesh = Some(meshes.add(Rectangle::new(size.x, inner_t)));
+        entities.inner_v_mesh = Some(meshes.add(Rectangle::new(inner_t, size.y)));
+        // 准星 2 条（横 / 竖）+ 白芯 2 条（比芯短一档，露出墨头）。
+        entities.cross_h_mesh = Some(meshes.add(Rectangle::new(cross_len, outer_t)));
+        entities.cross_v_mesh = Some(meshes.add(Rectangle::new(outer_t, cross_len)));
+        let core_len = cross_len * 0.5;
+        entities.core_h_mesh = Some(meshes.add(Rectangle::new(core_len, inner_t)));
+        entities.core_v_mesh = Some(meshes.add(Rectangle::new(inner_t, core_len)));
+    }
+    entities.last_size = size;
+
+    // ── 材质：只建一次 ──
+    if entities.outer_material.is_none() {
+        entities.outer_material = Some(materials.add(ColorMaterial::from_color(
+            crate::theme::colors::LINE_ON_DARK,
+        )));
+    }
+    if entities.inner_material.is_none() {
+        entities.inner_material = Some(materials.add(ColorMaterial::from_color(
+            bevy::color::Color::WHITE,
+        )));
+    }
+    let outer_mat = entities.outer_material.clone().expect("材质已建");
+    let inner_mat = entities.inner_material.clone().expect("材质已建");
+
+    let half = size * 0.5;
+    let ot2 = outer_t * 0.5;
+    let it2 = inner_t * 0.5;
+
+    // ── 外晕 4 条边：下 (0) / 上 (1) / 左 (2) / 右 (3) ──
+    // 外晕中心比格边界再外移半个墨晕厚度（`ot2`），墨线铺在格沿两侧。
+    let outer_offsets: [Vec2; 4] = [
+        Vec2::new(0.0, -half.y - ot2),
+        Vec2::new(0.0, half.y + ot2),
+        Vec2::new(-half.x - ot2, 0.0),
+        Vec2::new(half.x + ot2, 0.0),
+    ];
+    let outer_meshes = [
+        entities.outer_h_mesh.clone(),
+        entities.outer_h_mesh.clone(),
+        entities.outer_v_mesh.clone(),
+        entities.outer_v_mesh.clone(),
+    ];
+    for (i, offset) in outer_offsets.into_iter().enumerate() {
+        let Some(mesh) = outer_meshes[i].clone() else {
+            continue;
+        };
+        let tf = Transform::from_translation((center + offset).extend(HOVER_Z));
+        match entities.outer_edges[i] {
+            Some(e) => {
+                commands
+                    .entity(e)
+                    .insert((tf, Mesh2d(mesh), MeshMaterial2d(outer_mat.clone())));
+            }
+            None => {
+                entities.outer_edges[i] =
+                    Some(commands.spawn((tf, Mesh2d(mesh), MeshMaterial2d(outer_mat.clone()))).id());
+            }
+        }
+    }
+
+    // ── 内线 4 条边：白线压格沿（比外晕更靠内半个墨晕厚度）──
+    let inner_offsets: [Vec2; 4] = [
+        Vec2::new(0.0, -half.y),
+        Vec2::new(0.0, half.y),
+        Vec2::new(-half.x, 0.0),
+        Vec2::new(half.x, 0.0),
+    ];
+    let inner_meshes = [
+        entities.inner_h_mesh.clone(),
+        entities.inner_h_mesh.clone(),
+        entities.inner_v_mesh.clone(),
+        entities.inner_v_mesh.clone(),
+    ];
+    for (i, offset) in inner_offsets.into_iter().enumerate() {
+        let Some(mesh) = inner_meshes[i].clone() else {
+            continue;
+        };
+        let tf = Transform::from_translation((center + offset).extend(HOVER_Z + 0.001));
+        match entities.inner_edges[i] {
+            Some(e) => {
+                commands
+                    .entity(e)
+                    .insert((tf, Mesh2d(mesh), MeshMaterial2d(inner_mat.clone())));
+            }
+            None => {
+                entities.inner_edges[i] =
+                    Some(commands.spawn((tf, Mesh2d(mesh), MeshMaterial2d(inner_mat.clone()))).id());
+            }
+        }
+    }
+
+    // ── 准星：格中心十字（外晕层 + 白芯层）──
+    // 外晕横 / 竖：格中心。
+    for (slot, mesh) in [
+        (&mut entities.cross_outer[0], entities.cross_h_mesh.clone()),
+        (&mut entities.cross_outer[1], entities.cross_v_mesh.clone()),
+    ] {
+        let Some(mesh) = mesh else { continue };
+        let tf = Transform::from_translation(center.extend(HOVER_Z));
+        match slot {
+            Some(e) => {
+                commands
+                    .entity(e)
+                    .insert((tf, Mesh2d(mesh), MeshMaterial2d(outer_mat.clone())));
+            }
+            None => {
+                *slot = Some(
+                    commands
+                        .spawn((tf, Mesh2d(mesh), MeshMaterial2d(outer_mat.clone())))
+                        .id(),
+                );
+            }
+        }
+    }
+    // 白芯（比墨晕短一档，露不出头）。
+    for (slot, mesh) in [
+        (&mut entities.cross_inner[0], entities.core_h_mesh.clone()),
+        (&mut entities.cross_inner[1], entities.core_v_mesh.clone()),
+    ] {
+        let Some(mesh) = mesh else { continue };
+        let tf = Transform::from_translation(center.extend(HOVER_Z + 0.002));
+        match slot {
+            Some(e) => {
+                commands
+                    .entity(e)
+                    .insert((tf, Mesh2d(mesh), MeshMaterial2d(inner_mat.clone())));
+            }
+            None => {
+                *slot = Some(
+                    commands
+                        .spawn((tf, Mesh2d(mesh), MeshMaterial2d(inner_mat.clone())))
+                        .id(),
+                );
+            }
+        }
+    }
+}
+
 // ══════ from crates/wv-world-cell-map/src/region_overlay.rs :: region_layer_visible ══════
 /// 区域层在本帧是否可见（2026-10-22 内容矩阵 §2.6 的唯一判定入口）。
 ///

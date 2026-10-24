@@ -422,6 +422,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::MapControlsMeasureDistance => "线段距离",
         I18nKey::MapControlsMeasureArea => "面积",
         I18nKey::MapControlsClearMeasurements => "清除全部测量（Del 删除光标下的一条）",
+        I18nKey::MapControlsEditCellHint => "单格编辑：点选一格改高度 / 地表 / 群系；按住拖动可连续涂画",
 
         // ── ui_shell 通知 ──
         I18nKey::NoticeSavedToPrefix => "已保存到 ",
@@ -1035,6 +1036,9 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::MapControlsMeasureArea => "Area",
         I18nKey::MapControlsClearMeasurements => {
             "Clear all measurements (Del removes the one under the cursor)"
+        }
+        I18nKey::MapControlsEditCellHint => {
+            "Single-cell edit: click a cell to change height / surface / biome; hold and drag to paint"
         }
 
         // ── ui_shell toasts ──

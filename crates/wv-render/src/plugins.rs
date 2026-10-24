@@ -98,9 +98,17 @@ impl Plugin for EditorOverlayPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<cell_selection::CellSelectionEntities>()
             .init_resource::<cell_selection::CellRegionEntities>()
+            // hover 准星（[ADR-0052] D2）：双色描边 + 中心十字。
+            .init_resource::<cell_selection::CellHoverEntities>()
             .add_systems(Update, brush_cursor::sync_brush_cursor)
             .add_systems(Update, crate::cellmap_bridge::sync_cell_selection)
             .add_systems(Update, crate::cellmap_bridge::sync_cell_region)
+            // hover 准星画在 selected **之上**（Z 序：D2 要求 hover 是最上层
+            // 的瞬时反馈）。
+            .add_systems(
+                Update,
+                crate::cellmap_bridge::sync_cell_hover.after(crate::cellmap_bridge::sync_cell_selection),
+            )
             .add_systems(
                 Update,
                 (

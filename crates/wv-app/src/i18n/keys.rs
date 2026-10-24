@@ -744,6 +744,8 @@ pub enum I18nKey {
     MapControlsMeasureArea,
     /// 「清除全部测量」钮 tooltip（2026-10-23）
     MapControlsClearMeasurements,
+    /// 单格编辑（EditCell）瓷砖 tooltip（[ADR-0052] D7-1）
+    MapControlsEditCellHint,
 
     // ── W3：ui_shell 通知 toast 文本 ────────────────────────────────
     /// 「已保存到 」前缀（后接 dir）
@@ -1513,6 +1515,7 @@ impl I18nKey {
         I18nKey::MapControlsMeasureDistance,
         I18nKey::MapControlsMeasureArea,
         I18nKey::MapControlsClearMeasurements,
+        I18nKey::MapControlsEditCellHint,
         // ui_shell 通知（16）
         I18nKey::NoticeSavedToPrefix,
         I18nKey::NoticeSavedScopePrefix,

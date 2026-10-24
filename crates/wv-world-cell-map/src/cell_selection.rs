@@ -9,7 +9,8 @@
 //! ## 边界（不做什么）
 //! - **不吃输入**——selected 由 `wv-app::edit::commit_edit_cell_on_click` 写入；
 //!   本模块只画（与 [`crate::brush_cursor`] 同款分工）。
-//! - **不画 hover**——hover 是即时状态，画出来只会闪烁；只画 committed 的格。
+//! - **不画 hover**——hover 由本模块的 [`CellHoverEntities`] 单独承载
+//!   （[ADR-0052] §9.5 四态视觉分工：hover 与 selected 是两套实体）。
 //!
 //! ## 几何
 //! 格 `(gx, gy)` 的世界矩形 = `raster_origin + (gx·cs, gy·cs)` 起、
@@ -31,6 +32,103 @@ pub const SELECTION_Z: f32 = 0.9;
 pub const THICKNESS_PX: f32 = 2.0;
 /// 半透底色 alpha（[ADR-0040] §决策 4 默认值）。
 pub const FILL_ALPHA: f32 = 0.2;
+
+// ---------------------------------------------------------------------------
+// hover 高亮（[ADR-0052] D2 / §9.5 四态视觉分工）
+// ---------------------------------------------------------------------------
+
+/// hover 内线屏幕像素厚度（白色内线）。
+pub const HOVER_INNER_PX: f32 = 1.0;
+/// hover 外晕屏幕像素厚度（深墨外晕；比内线宽，在两种底色上都兜得住）。
+pub const HOVER_OUTER_PX: f32 = 2.0;
+/// hover Z 偏移：比选中（`SELECTION_Z = 0.9`）**更高**——hover 是
+/// 「此刻光标在哪」的瞬时反馈，必须画在最上层（[ADR-0052] §9.5 绘制序：
+/// region → stroke → selected → hover）。
+pub const HOVER_Z: f32 = 0.95;
+
+/// hover 高亮的实体集合。
+///
+/// **双色描边**：每条边画两层——外层深墨（`LINE_ON_DARK`）宽 2px，
+/// 内层白（`Color::WHITE`）宽 1px。深墨在下、白线在上，形成
+/// 「白内线 + 深墨外晕」的地图准星观感：无论格底是水面还是陆地，
+/// 至少有一层与底色拉开对比（[ADR-0052] §5 M1 验收 ③）。
+///
+/// **准星**：格中心画十字（横 + 竖两条细线），同样双色。
+#[derive(Resource, Default)]
+pub struct CellHoverEntities {
+    /// 4 条边的**外晕**（深墨，宽 2px）。
+    pub outer_edges: [Option<Entity>; 4],
+    /// 4 条边的**内线**（白，宽 1px）。
+    pub inner_edges: [Option<Entity>; 4],
+    /// 准星**外晕**（深墨）横 / 竖。
+    pub cross_outer: [Option<Entity>; 2],
+    /// 准星**白芯**横 / 竖。
+    pub cross_inner: [Option<Entity>; 2],
+    /// 外晕 mesh 句柄（横 / 竖）。
+    pub outer_h_mesh: Option<Handle<Mesh>>,
+    pub outer_v_mesh: Option<Handle<Mesh>>,
+    /// 内线 mesh 句柄（横 / 竖）。
+    pub inner_h_mesh: Option<Handle<Mesh>>,
+    pub inner_v_mesh: Option<Handle<Mesh>>,
+    /// 准星外晕 mesh 句柄（横 / 竖）。
+    pub cross_h_mesh: Option<Handle<Mesh>>,
+    pub cross_v_mesh: Option<Handle<Mesh>>,
+    /// 准星白芯 mesh 句柄（横 / 竖）。
+    pub core_h_mesh: Option<Handle<Mesh>>,
+    pub core_v_mesh: Option<Handle<Mesh>>,
+    /// 深墨外晕材质句柄（外晕 + 准星底共用）。
+    pub outer_material: Option<Handle<ColorMaterial>>,
+    /// 白内线材质句柄（内线 + 准星芯共用）。
+    pub inner_material: Option<Handle<ColorMaterial>>,
+    /// 上次构建时的格尺寸（世界单位）——变了才重建 mesh。
+    pub last_size: Vec2,
+}
+
+impl CellHoverEntities {
+    /// 全部 despawn + 清空实体句柄（gate 不满足时调用）。
+    pub fn despawn_all(&mut self, commands: &mut Commands) {
+        for slot in &mut self.cross_outer {
+            if let Some(e) = slot.take() {
+                commands.entity(e).despawn();
+            }
+        }
+        for slot in &mut self.cross_inner {
+            if let Some(e) = slot.take() {
+                commands.entity(e).despawn();
+            }
+        }
+        for slot in &mut self.outer_edges {
+            if let Some(e) = slot.take() {
+                commands.entity(e).despawn();
+            }
+        }
+        for slot in &mut self.inner_edges {
+            if let Some(e) = slot.take() {
+                commands.entity(e).despawn();
+            }
+        }
+    }
+
+    /// 释放已缓存的 mesh 资产（实体消失后调用，避免 `Assets` 堆积）。
+    pub fn release_assets(&mut self, meshes: &mut Assets<Mesh>) {
+        for h in [
+            self.outer_h_mesh.take(),
+            self.outer_v_mesh.take(),
+            self.inner_h_mesh.take(),
+            self.inner_v_mesh.take(),
+            self.cross_h_mesh.take(),
+            self.cross_v_mesh.take(),
+            self.core_h_mesh.take(),
+            self.core_v_mesh.take(),
+        ] {
+            if let Some(h) = h {
+                meshes.remove(&h);
+            }
+        }
+        self.last_size = Vec2::ZERO;
+    }
+}
+
 
 /// 选中格的 mesh 实体集合（复用：稳态 5 实体 = 填充 + 4 边）。
 ///

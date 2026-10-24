@@ -1447,7 +1447,10 @@ fn apply_pending_commands(
                 MapToolId::MeasureRect => measure.mode == MeasureMode::Rect,
                 MapToolId::MeasureEraser => measure.mode == MeasureMode::Eraser,
                 MapToolId::Continent => false,
-                MapToolId::EditCell => edit_cell.selected.is_some(),
+                // EditCell 的「已开」判据 = `tool_active`，**不是** `selected.is_some()`
+                // （[ADR-0052] §9.1 S0-1）。旧口径把「点过一格」当成「工具开着」，
+                // 于是二次点击瓷砖无法关闭工具、且切走时把选区一起清了。
+                MapToolId::EditCell => edit_cell.tool_active,
                 MapToolId::BiomeBoundary => boundary.line.is_some(),
             };
 
@@ -1471,8 +1474,11 @@ fn apply_pending_commands(
                 if had_measure {
                     measure.clear_draft();
                 }
-                // 关掉 EditCell 时清空状态(避免「切走工具后旧选择留着」)。
-                edit_cell.clear();
+                // 关掉 EditCell 时**只关工具，不清选区**（[ADR-0052] §9.1 S0-1）：
+                // `selected` / `region_cells` 是已提交的选择态，切工具后仍保留，
+                // 「框选一片 → 切 EditCell」不丢选区（§5 M1 验收 ④）。
+                // 只有切图（`on_map_change`）与 Esc 全量清理才走 `clear()`。
+                edit_cell.close_tool();
                 // 切走分界线工具：线是会话工具，一并清（ADR-0051）。
                 boundary.clear();
 
