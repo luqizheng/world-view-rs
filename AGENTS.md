@@ -421,6 +421,8 @@ assert!((j.total_days - 224.0).abs() < 1e-3, "got {}", j.total_days);
 ## 13. 与人协作的约定
 
 - **先分支，再 worktree，后写码。**（2026-10-20 用户裁定）任何涉及代码改动的任务，动工顺序固定为：① 创建分支 `git branch <feat|wip>/<主题>`；② 在该分支上落 worktree：`git worktree add .worktrees/<分支名> <分支名>`——**worktree 目录名 = 分支名**，统一收在仓库根 `.worktrees/` 下（仓库既有约定，已入 `.gitignore`）；③ 之后才在 worktree 内编写代码，主 checkout 不直接改码。worktree 须使用**独立构建目录**（勿跨 worktree 共享 `CARGO_TARGET_DIR`），避免并行会话互相污染出 stale rlib（2026-10-18 实测教训）。
+
+  > **2026-10-25 追记（用户裁定，修正上条末句）**：「worktree 须使用独立构建目录」修正为——**构建目录以全局共享 `CARGO_TARGET_DIR=d:\compil_world_view_cache\target` 为准**，worktree 内构建**不再**覆盖该变量，配合 `.cargo/config.toml` 的 sccache rustc 包装器共享编译产物。理由：每个 worktree 独立 target 意味着每次全量重编，成本远超 stale rlib 风险；sccache 已提供跨目录的编译缓存层。若并行会话 stale rlib 问题复现，再回退本条。
 - **不越权提交。** 涉及文档落盘、架构决议的动作，先列出方案，等明确确认后再执行。
 - **结论先行。** 回复先给结论，再给依据；用表格承载对比，按严重度排序。
 - **多方案并列。** 存在多种合理路径时，给出 A/B 选项与各自代价，而非单方面推荐。
