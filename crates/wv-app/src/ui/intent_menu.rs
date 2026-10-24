@@ -12,6 +12,9 @@
 //! - **不画选区几何**——那是 `wv_render::selection::draw_selection`。
 //! - **不隐藏工具**——无意图的图级显示占位文案而非隐藏（spec §12：选择优先
 //!   模型要全图级一致）。
+//! - **不出现在 CellMap 工作区**（2026-10-24 用户裁定）——cell 级的应用条件
+//!   （海拔增减 / 设水陆 / 设群系）在 Inspector 的 Cell 批量区，见
+//!   [`cell_workspace_active`]。
 
 #![cfg(feature = "app")]
 
@@ -80,6 +83,19 @@ fn menu_visible(selection: &wv_render::state::SelectionState) -> bool {
     selection.enabled && selection.is_closed()
 }
 
+/// CellMap 工作区判定：底座档为 `ViewMode::Topographic`（顶栏第三段的
+/// 进入 / 退出都落在这个模式，见 `top_bar::browse_edit_segment`）。
+///
+/// 工作区内**不出意图菜单**（2026-10-24 用户裁定）：作者圈多边形是在选
+/// 「一片格子」，应用条件——海拔增减 / 设水陆 / 设群系——全在 Inspector
+/// 的 Cell 批量区；再弹八意图条等于给同一份选区两套「接下来做什么」，
+/// 每圈一次都要手动关一次。图级意图（大陆 / 城市 / 标记 / 划分势力 /
+/// 地形四意图）在 Browse / Edit 档照常可得。经命令面板切到 Topographic
+/// 的边角情形同样适用：等高底图档就是 cell 级编辑语境。
+fn cell_workspace_active(mode: wv_render::state::ViewMode) -> bool {
+    mode == wv_render::state::ViewMode::Topographic
+}
+
 /// 选区意图菜单：底部居中浮动条。`selection.is_closed()` 才画；
 /// 无意图图级显示占位文案（spec §12：不隐藏工具，要全图级一致）。
 ///
@@ -101,12 +117,18 @@ pub fn intent_menu(
     playback: Res<crate::state::PlaybackState>,
     time: Res<bevy::prelude::Time>,
     screen: Res<crate::app_screen::AppScreen>,
+    view: Res<wv_render::state::ViewState>,
 ) {
     // 无工程闸门 / 启动加载中 / 播放中（V37）/ 工具未启用或未闭合：同源早返。
     if playback.playing {
         return;
     }
     if !screen.editor_visible() || !menu_visible(&selection) {
+        return;
+    }
+    // CellMap 工作区：应用条件在 Inspector 批量区（2026-10-24 裁定，
+    // 见 `cell_workspace_active`）。
+    if cell_workspace_active(view.mode) {
         return;
     }
     let loc = current_loc.0;
@@ -334,7 +356,7 @@ pub fn intent_menu(
 
 #[cfg(test)]
 mod tests {
-    use super::{intent_count_for, menu_visible, terrain_intents_available};
+    use super::{cell_workspace_active, intent_count_for, menu_visible, terrain_intents_available};
     use wv_core::map::MapLevel;
 
     #[test]
@@ -418,5 +440,30 @@ mod tests {
             ..Default::default()
         };
         assert!(!menu_visible(&drawing), "画中未闭合不弹菜单");
+    }
+
+    /// CellMap 工作区（Topographic 档）不出意图菜单：应用条件在 Inspector
+    /// 的 Cell 批量区（2026-10-24 用户裁定）；Browse / Edit 档照常出。
+    #[test]
+    fn intent_menu_suppressed_in_cell_workspace() {
+        use wv_render::state::{SelectionState, ViewMode};
+        let closed = SelectionState {
+            enabled: true,
+            closed: Some(vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)]),
+            ..Default::default()
+        };
+        assert!(menu_visible(&closed), "前置：选区闭合本应可见");
+        assert!(
+            cell_workspace_active(ViewMode::Topographic),
+            "等高底图档 = CellMap 工作区 → 菜单不出"
+        );
+        assert!(
+            !cell_workspace_active(ViewMode::VectorFlat),
+            "Browse 档照常出菜单（大陆 / 城市等图级意图的入口）"
+        );
+        assert!(
+            !cell_workspace_active(ViewMode::Schematic),
+            "Edit 档照常出菜单"
+        );
     }
 }
