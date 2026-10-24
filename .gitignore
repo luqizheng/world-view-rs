@@ -42,6 +42,9 @@ docs/.vite-docs.bak-*/
 # Figma 截图与工作区副产物（只供人工/截图验收，不入仓）
 .figma-ref/
 
+# AI 生图落点（dsh-image-gen 脚本产出的参考图，只供人工看，不入仓）
+dsh-image-gen/
+
 # work-view-test：保留 convert.py（数据转换脚本），忽略其产物与下载源
 examples/work-view-test/data/ne/convert.py
 examples/work-view-test/data/coastlines.geojson
