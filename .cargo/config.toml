@@ -4,9 +4,14 @@
 # 对 wv-app 触发 ICE（rustc_metadata::rmeta::encoder::encode_metadata
 # 在写 incremental 目录时 panic，OS error 5 拒绝访问）。
 # 非增量编译实测正常。待 rustc 版本升级后可重新评估移除本配置。
+#
+# 2026-10-24 追记：疑似根因 = Windows Defender 实时扫描锁 incremental 目录
+# （OS error 5 拒绝访问符合文件被占用的表现）。已将 D:\kudi-projects 加入
+# Defender 排除项后复测通过（见同日施工记录），恢复默认增量编译。
+# 若 ICE 复发，恢复手段：在 [build] 段加回 `incremental = false`。
 
 [build]
-incremental = false
+# incremental = false  # 2026-10-24 复测通过后停用，原因见上
 
 # 渲染层检查别名（AGENTS §7.1，2026-10-13 用户裁定）：
 # `#[cfg(feature = "app")]` 的渲染/UI 模块**不在** §7.1 的三条闸门命令的
