@@ -135,17 +135,17 @@ pub enum FormKind {
 
 /// 分派：当前该渲染哪一型表单。
 ///
-/// **Cell 优先于实体选中态**——`EditCell` 工具激活时，作者的心智是
+/// **Cell 优先于实体选中态**——Cell 表单区激活时，作者的心智是
 /// 「我在改格子」，不是「我在看一个地点」（设计稿 §11 Q4）。
 pub fn resolve_form(
     selection: Option<&SelectedEntity>,
-    cell_tool_active: bool,
+    cell_form_active: bool,
     boundary_tool_active: bool,
 ) -> FormKind {
     if boundary_tool_active {
         return FormKind::Boundary;
     }
-    if cell_tool_active {
+    if cell_form_active {
         return FormKind::Cell;
     }
     let Some(sel) = selection else {
@@ -203,10 +203,12 @@ pub fn panel_inspector(
         ResMut<crate::state::NatureRegionUiState>,
     ),
     (mut boundary,): (ResMut<wv_render::state::BiomeBoundaryState>,),
-    // Cell 表单的另两个会话态：多边形选区（批量模式用）+ 单格/批量模式切换。
-    (mut selection, mut cell_mode): (
+    // Cell 表单的另两个会话态：多边形选区（批量模式用）+ 单格/批量模式切换
+    // + 「圈完自动落批量」的边沿检测（见 cell::BatchModeAutoLand）。
+    (mut selection, mut cell_mode, mut batch_land): (
         ResMut<wv_render::state::SelectionState>,
         ResMut<cell::CellPanelMode>,
+        ResMut<cell::BatchModeAutoLand>,
     ),
     // 表单暂存输入缓冲（egui TextEdit 是调用方持有文本）。
     mut drafts: ResMut<event::InspectorDrafts>,
@@ -225,6 +227,14 @@ pub fn panel_inspector(
     let selected = selection_clone.as_ref();
     // CellMap 工作区是否激活（在 float_window 借用 panels 之前快照）。
     let workspace_active = panels.cell_workspace_backup.is_some();
+    // 圈完自动落「批量」（cell_form 头注的承诺，2026-10-24 兑现）：多边形
+    // 选区从无到有的那一帧把表单切到批量——作者刚圈完，意图明确；此后
+    // 手动切回单格不再被打扰（边沿触发，不是每帧强按）。
+    let has_region = !edit_cell.region_cells.is_empty();
+    if has_region && !batch_land.had_region {
+        *cell_mode = cell::CellPanelMode::Batch;
+    }
+    batch_land.had_region = has_region;
 
     float_window(
         ctx,
@@ -343,7 +353,15 @@ fn render_properties(
     loc: crate::i18n::Locale,
 ) {
     use crate::i18n::{t_key, I18nKey};
-    let form = resolve_form(selected, edit_cell.tool_active, boundary.tool_active);
+    // Cell 表单的可达面（2026-10-24）：EditCell 工具激活之外，CellMap
+    // 工作区（Topographic 档）里**圈选确认后也直出**——圈选必然切到 V 工具
+    // （工具互斥），意图菜单又已在工作区撤出（`intent_menu::
+    // cell_workspace_active`），Inspector 批量区是唯一应用入口；若仍按
+    // 工具门，作者圈完面对的是一张空 Inspector。
+    let cell_form_active = edit_cell.tool_active
+        || (view.mode == wv_render::state::ViewMode::Topographic
+            && !edit_cell.region_cells.is_empty());
+    let form = resolve_form(selected, cell_form_active, boundary.tool_active);
     match form {
         FormKind::None => {
             // 空态：空态卡 + 四条计数行 + 事态卡（现状不变）。

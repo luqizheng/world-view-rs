@@ -210,6 +210,9 @@ pub fn run(config: AppConfig) {
     // Cell 编辑器的「单格 / 批量」工作模式（[ADR-0040] 补 B）——面板系统
     // ResMut 它,漏 init 即启动期 panic(同 EditCellState 的教训)。
     .init_resource::<crate::ui::inspector::cell::CellPanelMode>()
+    // 「圈完自动落批量」的边沿检测（2026-10-24）——同属面板系统 ResMut
+    // 的会话态,漏 init 即启动期 panic(同上)。
+    .init_resource::<crate::ui::inspector::cell::BatchModeAutoLand>()
     // Inspector 的当前页签（2026-10-22 统一 Inspector）：面板系统 ResMut 它,
     // 漏 init 即启动期 panic(同 EditCellState 的教训)。
     .init_resource::<crate::ui::inspector::InspectorState>()
