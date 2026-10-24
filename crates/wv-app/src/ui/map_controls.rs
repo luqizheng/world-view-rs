@@ -30,6 +30,8 @@
 //! | 6.5 | 清除全部测量（当前图；可一次撤销） | — |
 //! | 8/9 | 重做 / 撤销 | `Ctrl+Shift+Z` / `Ctrl+Z` |
 //! | 10 | 网格开关（开启高亮） | `G` |
+//! | 10.5 | 等值线开关（VectorFlat / CellMap） | — |
+//! | 10.75 | 海拔分层设色强度滑条（仅 CellMap，ADR-0055） | — |
 //!
 //! ## 与 v0.6 的差异（ADR-0043 裁定）
 //!
@@ -564,6 +566,19 @@ pub fn map_controls(
                             .clicked()
                         {
                             view.isolines = !view.isolines;
+                        }
+
+                        // ── 槽 10.75：海拔分层设色强度（ADR-0055）────────────
+                        // 仅 CellMap：数据视图用颜色读海拔。0 = 纯群系色块，
+                        // 1 = 8 阶海拔色带完全替代群系色。会话态、不落盘。
+                        // 尺寸走既有瓷砖槽位，避免把工具条撑宽。
+                        if matches!(view.mode, ViewMode::Topographic) {
+                            ui.add_sized(
+                                egui::vec2(metrics.tile.x * 3.0, metrics.tile.y),
+                                egui::Slider::new(&mut view.hypsometric_tint, 0.0..=1.0)
+                                    .show_value(false),
+                            )
+                            .on_hover_text("海拔分层设色强度（0 = 只看群系色，1 = 只看海拔）");
                         }
 
                         // ── 槽 11：自然区（2026-10-22 内容矩阵 §2.6）──────

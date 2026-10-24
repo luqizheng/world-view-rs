@@ -62,6 +62,9 @@ pub struct TerrainTexture {
     /// 当前纹理内容所用的地图主题（ADR-0016，与 `view.map_palette` 比较用）——
     /// 切主题 = 换一套色板烘焙整图，必须重建。
     pub last_theme_id: &'static str,
+    /// 当前纹理内容所用的分层设色强度（ADR-0055，与 `view.hypsometric_tint`
+    /// 比较用）——强度变了必须重烘整图（CPU 路径没有 uniform 可改）。
+    pub last_hypsometric: f32,
     /// 当前纹理画的是**哪张图**的底图（`None` = 不属于任何图的占位纹理）。
     ///
     /// 与 `last_mode` 同职责：**只用于「要不要重建」的比较**。Phase 2 起

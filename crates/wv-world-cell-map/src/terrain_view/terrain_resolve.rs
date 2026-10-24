@@ -54,6 +54,8 @@ pub fn replace_terrain_texture(
     mode: ShadeMode,
     soften: bool,
     theme_id: &'static str,
+    // 本次合成用的分层设色强度（ADR-0055）。
+    hypsometric: f32,
 ) {
     let res = image.width() / data.width.max(1);
     let handle = if images.get_mut(&tex.handle).is_some() {
@@ -75,6 +77,7 @@ pub fn replace_terrain_texture(
         last_mode: Some(mode),
         last_soften: soften,
         last_theme_id: theme_id,
+        last_hypsometric: hypsometric,
         last_map: map,
     };
 }
@@ -194,6 +197,7 @@ mod tests {
             last_mode: Some(ShadeMode::VectorFlat),
             last_soften: true,
             last_theme_id: "fixture",
+            last_hypsometric: 0.0,
             last_map: Some(wv_core::Id::new_unchecked("map_x")),
         };
         force_rebuild(&mut tex);

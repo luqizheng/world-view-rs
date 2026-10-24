@@ -47,10 +47,10 @@ pub use line_sdf::{
     bake_line_dash, rivers_from_terrain, LineClass, LineDashPack, LinePoly, DASH_MAX_CELLS,
 };
 pub use material::{
-    build_material, build_material_with_lines, default_params, patch_material_images,
-    set_coast_encoding, warp_amp, FieldPalette, FieldParams, TerrainFieldMaterial,
-    TerrainFieldMaterialPlugin, ViewBranch, RIVER_LINE_PX, ROAD_MAJOR_PX, ROAD_MINOR_PX,
-    WARP_AMP_MAX, WARP_AMP_MIN,
+    apply_hypsometric, build_material, build_material_with_lines, default_params,
+    patch_material_images, set_coast_encoding, warp_amp, FieldPalette, FieldParams,
+    TerrainFieldMaterial, TerrainFieldMaterialPlugin, ViewBranch, RIVER_LINE_PX, ROAD_MAJOR_PX,
+    ROAD_MINOR_PX, WARP_AMP_MAX, WARP_AMP_MIN,
 };
 pub use pack::{
     pack_content_hash, CellRect, CoastEncoding, FieldPack, COAST_MAX_CELLS, H_MAX, H_MIN,

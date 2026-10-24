@@ -610,6 +610,7 @@ mod tests {
             wv_world_cell_map::shade::ShadeMode::VectorFlat,
             false,
             wv_render::theme::theme_pack::builtin::DEFAULT.id,
+            0.0,
         );
         let mut bevy_world = bevy::prelude::World::new();
         bevy_world.insert_resource(images);

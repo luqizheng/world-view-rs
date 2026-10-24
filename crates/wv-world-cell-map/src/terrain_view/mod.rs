@@ -20,6 +20,7 @@ pub mod biome_raw;
 pub mod cells;
 pub mod field;
 pub mod grid_lines;
+pub mod hypsometric;
 pub mod isoline_overlay;
 /// 渲染热点探针（2026-10-23）：只在测试构建里存在，`--ignored --nocapture` 手动跑。
 #[cfg(test)]

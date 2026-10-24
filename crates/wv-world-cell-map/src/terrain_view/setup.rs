@@ -29,6 +29,9 @@ pub fn new_terrain_texture(
     mode: crate::shade::ShadeMode,
     soften: bool,
     theme_id: &'static str,
+    // 本次合成用的分层设色强度（ADR-0055）；写进
+    // `TerrainTexture::last_hypsometric` 供「强度变了要重建」的比较。
+    hypsometric: f32,
 ) -> TerrainTexture {
     let res = image.width() / data.width.max(1);
     TerrainTexture {
@@ -42,6 +45,7 @@ pub fn new_terrain_texture(
         last_mode: Some(mode),
         last_soften: soften,
         last_theme_id: theme_id,
+        last_hypsometric: hypsometric,
         last_map: map,
     }
 }

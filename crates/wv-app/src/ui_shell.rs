@@ -1024,7 +1024,7 @@ fn adopt_world_snapshot(
         wv_render::cellmap_bridge::shade_mode_of(view.mode),
         atlas,
         view.terrain_soften,
-        &wv_render::cellmap_bridge::conv_pack(view.active_theme),
+        &wv_render::cellmap_bridge::conv_pack_with(view.active_theme, view.hypsometric_tint),
         0.0,
     );
     wv_render::terrain_view::replace_terrain_texture(
@@ -1036,6 +1036,7 @@ fn adopt_world_snapshot(
         wv_render::cellmap_bridge::shade_mode_of(view.mode),
         view.terrain_soften,
         view.active_theme.id,
+        view.hypsometric_tint,
     );
     // 整图内容已整体替换：chunk 层全量重贴。
     tex.mark_all_dirty();
@@ -2129,6 +2130,7 @@ mod tests {
             last_mode: None,
             last_soften: false,
             last_theme_id: wv_render::theme::theme_pack::builtin::DEFAULT.id,
+            last_hypsometric: 0.0,
             last_map: None,
         });
         world.insert_resource(Time::<()>::default());
@@ -2446,6 +2448,7 @@ mod tests {
             last_mode: None,
             last_soften: false,
             last_theme_id: wv_render::theme::theme_pack::builtin::DEFAULT.id,
+            last_hypsometric: 0.0,
             last_map: None,
         });
         world.insert_resource(Time::<()>::default());

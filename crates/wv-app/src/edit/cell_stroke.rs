@@ -2,7 +2,7 @@
 //!
 //! ## 生命周期
 //!
-//! ```
+//! ```text
 //! press ──▶ 起笔（记快照）──▶ 拖动（累积格 + 待落色块）──▶ release ──▶ 提交
 //!                │                                                    │
 //!                └─ Esc / 右键 / 切工具 ──▶ 丢弃整笔 ────────────────┘
@@ -85,7 +85,10 @@ pub struct StrokeDiscardPrompt {
 #[allow(clippy::too_many_arguments)]
 pub fn paint_edit_cell_on_drag(
     buttons: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<egui::Key>>,
+    // ⚠️ 必须是 Bevy 的 `KeyCode`：`ButtonInput` 只由 `InputPlugin` 为
+    // `KeyCode` 注册资源；早前写成 `ButtonInput<egui::Key>` 会因
+    // 「Resource does not exist」在启动首帧 panic（GUI 烟测抓到的既有缺陷）。
+    keys: Res<ButtonInput<KeyCode>>,
     playback: Res<PlaybackState>,
     view: Res<ViewState>,
     grid: Res<GridConfig>,
@@ -138,7 +141,7 @@ pub fn paint_edit_cell_on_drag(
     }
 
     // ── Esc 丢弃（D3-C）──
-    if keys.just_pressed(egui::Key::Escape) && session.stroke.active {
+    if keys.just_pressed(KeyCode::Escape) && session.stroke.active {
         let n = session.stroke.len();
         if discard_needs_confirmation(n) {
             prompt.pending = Some(n);

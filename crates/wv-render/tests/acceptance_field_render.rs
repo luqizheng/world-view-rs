@@ -203,6 +203,7 @@ fn chunk_app(terrain_visible: bool, scale: f32) -> App {
         last_mode: None,
         last_soften: false,
         last_theme_id: "acceptance",
+        last_hypsometric: 0.0,
         last_map: None,
     });
 

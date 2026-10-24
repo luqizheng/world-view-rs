@@ -249,6 +249,13 @@ pub struct ViewState {
     /// Topographic 开档），本旗标管会话轴；开关 UI 在 map controls
     /// 网格线隔壁（Lucide `waves`）。
     pub isolines: bool,
+    /// 海拔分层设色强度（ADR-0055）：`0` = 纯群系色块，`1` = 8 阶海拔色带
+    /// 完全替代群系色；中间值 = 双读（群系可辨、海拔可读）。
+    ///
+    /// 会话态、**不落盘**，默认 `0.35`（用户裁定「A 叠层」的默认观感）。
+    /// 只影响 CellMap（Topographic）的**陆格**：其他模式的分支不读它，
+    /// 水面走海岸色带。CPU 烘焙路径改它要重烘整图；GPU 场路径只改 uniform。
+    pub hypsometric_tint: f32,
     /// CellMap 自然区开关（2026-10-22 内容矩阵 §2.6）：开启时 Topographic 下
     /// 显示 `kind == Nature` 的区域层 + 全图未命名候选高亮。会话态，不落盘。
     /// 仅 Topographic 有意义——其他模式的区域层不受本开关影响。
@@ -328,6 +335,7 @@ impl Default for ViewState {
             factions_visible: true,
             grid_lines: false,
             isolines: false,
+            hypsometric_tint: 0.35,
             nature_overlay: false,
             pan_tool: false,
             cursor_world: None,
