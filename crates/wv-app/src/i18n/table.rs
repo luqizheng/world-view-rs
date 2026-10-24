@@ -423,6 +423,12 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::MapControlsMeasureArea => "面积",
         I18nKey::MapControlsClearMeasurements => "清除全部测量（Del 删除光标下的一条）",
         I18nKey::MapControlsEditCellHint => "单格编辑：点选一格改高度 / 地表 / 群系；按住拖动可连续涂画",
+        I18nKey::MapControlsFloodSelectHint => "泛洪选择：点一下，自动选中与该格同类的连通区域",
+        I18nKey::CellFloodBySurface => "按地表",
+        I18nKey::CellFloodByBiome => "按群系",
+        I18nKey::CellFloodByHeight => "按海拔",
+        I18nKey::StatusBarStrokeProgress => "笔触进行中 · 已落",
+        I18nKey::StatusBarStrokeCells => " 格",
 
         // ── ui_shell 通知 ──
         I18nKey::NoticeSavedToPrefix => "已保存到 ",
@@ -1040,6 +1046,14 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::MapControlsEditCellHint => {
             "Single-cell edit: click a cell to change height / surface / biome; hold and drag to paint"
         }
+        I18nKey::MapControlsFloodSelectHint => {
+            "Flood select: click once to select the connected area of the same kind"
+        }
+        I18nKey::CellFloodBySurface => "By surface",
+        I18nKey::CellFloodByBiome => "By biome",
+        I18nKey::CellFloodByHeight => "By height",
+        I18nKey::StatusBarStrokeProgress => "Stroking ·",
+        I18nKey::StatusBarStrokeCells => " cells",
 
         // ── ui_shell toasts ──
         I18nKey::NoticeSavedToPrefix => "Saved to ",

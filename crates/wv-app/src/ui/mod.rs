@@ -128,6 +128,7 @@ pub use widgets::{
     ICON_ROUTE,
     ICON_RULER,
     ICON_SEARCH,
+    ICON_PAINT_BUCKET,
     ICON_SQUARE,
     ICON_SQUARE_MOUSE_POINTER,
     ICON_SUN,

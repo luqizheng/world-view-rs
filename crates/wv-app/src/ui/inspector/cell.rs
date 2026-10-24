@@ -89,6 +89,7 @@ pub fn cell_form(
     loc: crate::i18n::Locale,
     mode: &mut CellPanelMode,
     session: &mut wv_world_cell_map::cell_paint::CellPaintSession,
+    flood: &mut wv_world_cell_map::state::FloodSelectState,
 ) {
     // ── 读数条（D8）：面板顶部固定双段 ──
     // 左段永远读 hover、右段永远读 selected；任一段无数据显 `—`，
@@ -109,6 +110,13 @@ pub fn cell_form(
             Some((c.height, c.surface, c.biome))
         };
         super::cell_paint_panel::render_readout_bar(ui, shell, edit_cell, read_cell);
+    }
+
+    // ── 泛洪判据区（D6）：仅 FloodSelect 工具激活时显示 ──
+    // 判据是**工具参数**（改变泛洪行为），不是落笔值——故独立成段。
+    if flood.tool_active {
+        super::cell_paint_panel::render_flood_criterion_section(ui, shell, flood, loc);
+        divider(ui, shell);
     }
 
     // ── 落笔值区（D4）：拖绘工作流的「颜料盒」──

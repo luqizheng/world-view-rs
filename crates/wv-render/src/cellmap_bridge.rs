@@ -26,6 +26,7 @@ use wv_world_cell_map::state::{EditCellState, GridConfig};
 use wv_world_cell_map::terrain_view::rebuild::{PendingTerrainSynth, SynthCtx};
 // 桥接系统消费的引擎件（含 crate 内部件）——原文件级 use 随函数迁居此处（ADR-0054 D5）。
 use wv_terrain::isoline::{assemble_chains, chaikin, height_segments, kind_segments, simplify_dp};
+use wv_world_cell_map::cell_flash::*;
 use wv_world_cell_map::cell_selection::*;
 use wv_world_cell_map::region_overlay::*;
 use wv_world_cell_map::terrain_chunks::*;
@@ -2231,7 +2232,7 @@ pub fn sync_cell_hover(
 
     let half = size * 0.5;
     let ot2 = outer_t * 0.5;
-    let it2 = inner_t * 0.5;
+    // `inner_t` 不需要偏移量：内线直接压在格沿上（外晕才向外让半个厚度）。
 
     // ── 外晕 4 条边：下 (0) / 上 (1) / 左 (2) / 右 (3) ──
     // 外晕中心比格边界再外移半个墨晕厚度（`ot2`），墨线铺在格沿两侧。
@@ -2298,16 +2299,23 @@ pub fn sync_cell_hover(
 
     // ── 准星：格中心十字（外晕层 + 白芯层）──
     // 外晕横 / 竖：格中心。
-    for (slot, mesh) in [
-        (&mut entities.cross_outer[0], entities.cross_h_mesh.clone()),
-        (&mut entities.cross_outer[1], entities.cross_v_mesh.clone()),
-    ] {
+    //
+    // 先把 mesh 句柄克隆出来再可变借用 slot——数组元素与整体克隆写在
+    // 同一条 `for` 的初始化式里会同时可变 + 不可变借用 `entities`
+    // （编译期 E0499/E0502）。逐个处理（而非一次遍历两个 slot）是为
+    // 避开「同时可变借用 `entities` 两次」。
+    let cross_outer_meshes = [
+        entities.cross_h_mesh.clone(),
+        entities.cross_v_mesh.clone(),
+    ];
+    for (idx, mesh) in cross_outer_meshes.into_iter().enumerate() {
         let Some(mesh) = mesh else { continue };
         let tf = Transform::from_translation(center.extend(HOVER_Z));
+        let slot = &mut entities.cross_outer[idx];
         match slot {
             Some(e) => {
                 commands
-                    .entity(e)
+                    .entity(*e)
                     .insert((tf, Mesh2d(mesh), MeshMaterial2d(outer_mat.clone())));
             }
             None => {
@@ -2320,16 +2328,18 @@ pub fn sync_cell_hover(
         }
     }
     // 白芯（比墨晕短一档，露不出头）。
-    for (slot, mesh) in [
-        (&mut entities.cross_inner[0], entities.core_h_mesh.clone()),
-        (&mut entities.cross_inner[1], entities.core_v_mesh.clone()),
-    ] {
+    let cross_inner_meshes = [
+        entities.core_h_mesh.clone(),
+        entities.core_v_mesh.clone(),
+    ];
+    for (idx, mesh) in cross_inner_meshes.into_iter().enumerate() {
         let Some(mesh) = mesh else { continue };
         let tf = Transform::from_translation(center.extend(HOVER_Z + 0.002));
+        let slot = &mut entities.cross_inner[idx];
         match slot {
             Some(e) => {
                 commands
-                    .entity(e)
+                    .entity(*e)
                     .insert((tf, Mesh2d(mesh), MeshMaterial2d(inner_mat.clone())));
             }
             None => {
@@ -2341,6 +2351,91 @@ pub fn sync_cell_hover(
             }
         }
     }
+}
+
+// ══════ from crates/wv-world-cell-map/src/cell_flash.rs :: sync_cell_flash ══════
+/// 每帧同步 **撤销白闪 / 拒收红闪**（[ADR-0052] D8-A / D3-E）。
+///
+/// gate = `CellFlashState.is_active(now)`；到期即全 despawn（无残留）。
+///
+/// ## 颜色分工
+///
+/// - `Undo` → `UNDO_FLASH`（纯白，`0xFFFFFF`）；
+/// - `Reject` → `UI_UNREACHABLE`（红，`0xB5453A`）——与
+///   `UI_UNREACHABLE` 同源：语义都是「这一处不可用 / 没生效」。
+///
+/// ## Z 最顶层
+///
+/// `FLASH_Z = 1.0` **高于 hover（`HOVER_Z = 0.95`）**——闪是「刚刚发生」
+/// 的强信号，必须压过所有常驻视觉（[ADR-0052] §9.9「白闪 z 最顶层
+/// 250ms 短促」）。
+///
+/// ## mesh 只在格集合变化时重建
+///
+/// 闪期间格集合不变（撤销已定局），故 mesh 复用；**alpha 每帧改**
+/// （材质句柄内的颜色随时间衰减）。
+pub fn sync_cell_flash(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    flash: Res<CellFlashState>,
+    grid: Res<GridConfig>,
+    time: Res<Time>,
+    mut entities: ResMut<CellFlashEntities>,
+) {
+    let now = time.elapsed_secs();
+    if !flash.is_active(now) {
+        entities.despawn_all(&mut commands);
+        entities.release_assets(&mut meshes);
+        return;
+    }
+    let fingerprint = cells_fingerprint(&flash.cells);
+    if fingerprint != entities.last_fingerprint || entities.fill_mesh.is_none() {
+        entities.release_assets(&mut meshes);
+        let Some((mesh, origin)) = build_flash_mesh(&flash.cells, &grid) else {
+            entities.despawn_all(&mut commands);
+            return;
+        };
+        entities.fill_mesh = Some(meshes.add(mesh));
+        entities.last_fingerprint = fingerprint;
+        entities.despawn_all(&mut commands);
+        // 材质：颜色固定（按 kind），alpha 每帧改。
+        let base = match flash.kind {
+            CellFlashKind::Undo => crate::theme::colors::UNDO_FLASH,
+            CellFlashKind::Reject => crate::theme::colors::UI_UNREACHABLE,
+        };
+        if entities.fill_material.is_none() {
+            entities.fill_material = Some(materials.add(ColorMaterial::from_color(
+                base.with_alpha(flash.alpha(now)),
+            )));
+        }
+        let mesh = entities.fill_mesh.clone().expect("刚建");
+        let mat = entities.fill_material.clone().expect("刚建");
+        entities.fill = Some(
+            commands
+                .spawn((
+                    Transform::from_translation(origin.extend(FLASH_Z)),
+                    Mesh2d(mesh),
+                    MeshMaterial2d(mat),
+                ))
+                .id(),
+        );
+        return;
+    }
+    // 格集合未变 → 只改 alpha（材质句柄内的颜色）。
+    let Some(e) = entities.fill else {
+        return;
+    };
+    let Some(mat) = entities.fill_material.clone() else {
+        return;
+    };
+    let base = match flash.kind {
+        CellFlashKind::Undo => crate::theme::colors::UNDO_FLASH,
+        CellFlashKind::Reject => crate::theme::colors::UI_UNREACHABLE,
+    };
+    if let Some(mut m) = materials.get_mut(&mat) {
+        m.color = base.with_alpha(flash.alpha(now));
+    }    commands.entity(e).insert(MeshMaterial2d(mat));
 }
 
 // ══════ from crates/wv-world-cell-map/src/region_overlay.rs :: region_layer_visible ══════

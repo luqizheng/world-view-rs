@@ -719,6 +719,9 @@ pub const ICON_SQUARE: egui::ImageSource<'static> =
 /// 单格编辑工具 —— Lucide `square-mouse-pointer`（地图工具条 [ADR-0052] D7-1）。
 pub const ICON_SQUARE_MOUSE_POINTER: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/square-mouse-pointer.svg");
+/// 泛洪选择工具 —— Lucide `paint-bucket`（地图工具条 [ADR-0052] D6 · 第 13 槽）。
+pub const ICON_PAINT_BUCKET: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/paint-bucket.svg");
 pub const ICON_ERASER: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/eraser.svg");
 pub const ICON_ZOOM_IN: egui::ImageSource<'static> =

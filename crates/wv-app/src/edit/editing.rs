@@ -408,6 +408,33 @@ fn terrain_diff_bbox(
     any.then_some([x0, y0, x1, y1])
 }
 
+/// 逐格比较撤销/重做前后的地形 cells，返回**变化格集合**（[ADR-0052] D8-A 白闪用）。
+///
+/// 与 [`terrain_diff_bbox`] 同源遍历——同一份 diff 出两个结果（包围盒给纹理
+/// 标脏，格集合给白闪定位），避免二次扫描 512² 地形。
+///
+/// **有上限**：超过 [`MAX_FLASH_CELLS`] 的格不再收集——整图撤销的白闪退化为
+/// 「包围盒边框环」（渲染层按格数自动降级），应用层无需知道细节。
+fn terrain_diff_cells(
+    before: &[wv_core::terrain::TerrainCellData],
+    after: &[wv_core::terrain::TerrainCellData],
+    w: u32,
+) -> Vec<(i32, i32)> {
+    let mut out = Vec::new();
+    for (i, (b, a)) in before.iter().zip(after.iter()).enumerate() {
+        if b == a {
+            continue;
+        }
+        if out.len() >= wv_world_cell_map::cell_flash::MAX_FLASH_CELLS {
+            break;
+        }
+        let cx = (i as u32) % w;
+        let cy = (i as u32) / w;
+        out.push((cx as i32, cy as i32));
+    }
+    out
+}
+
 /// 重置当前图的地形到底图（2026-10-16 用户需求）。
 ///
 /// 走和「撤销/重做」同一套纹理脏追踪（前后 cells diff → 矩形标脏；
@@ -728,6 +755,24 @@ pub fn apply_history_command(
     tex: &mut TerrainTexture,
     playback: &PlaybackState,
 ) -> Result<String, String> {
+    apply_history_command_detailed(redo, edit, projection, tex, playback).map(|o| o.message)
+}
+
+/// 撤销 / 重做的**详细结果**（[ADR-0052] D8-A 白闪需要受影响格集合）。
+///
+/// 与 [`apply_history_command`] 同一份逻辑，唯一区别是额外返回
+/// **地形变化格集合**——撤销/重做后要对这几格做 250ms 白闪（D8-A：
+/// 「撤销时画面差异肉眼不可辨，用户按 Ctrl+Z 后不知发生了什么」）。
+///
+/// 拆成两个函数而非改原函数签名：原函数有 8 处调用点（含 8 条测试），
+/// 加参数会把「与白闪无关的调用方」也拖进来。
+pub fn apply_history_command_detailed(
+    redo: bool,
+    edit: &mut EditHistory,
+    projection: &mut WorldProjection,
+    tex: &mut TerrainTexture,
+    playback: &PlaybackState,
+) -> Result<HistoryOutcome, String> {
     if playback.playing {
         return Err("播放中为只读：先暂停再撤销".into());
     }
@@ -751,6 +796,7 @@ pub fn apply_history_command(
             projection.dirty = true;
             let after = wv_render::terrain_view::texture_terrain(tex, &projection.world, None)
                 .map(|t| (t.width.max(1), t.cells.clone()));
+            let mut changed_cells = Vec::new();
             match (before, after) {
                 (Some(b), Some((w, a))) if b.len() == a.len() => {
                     // 有变化区域 → 增量重传该矩形；无地形变化（撤销的可能是
@@ -758,23 +804,38 @@ pub fn apply_history_command(
                     if let Some(rect) = terrain_diff_bbox(&b, &a, w) {
                         tex.mark_dirty(rect);
                     }
+                    // 同一份 diff 出变化格集合 → D8-A 白闪定位。
+                    changed_cells = terrain_diff_cells(&b, &a, w);
                 }
                 // 地形存在性或尺寸变了 → 全量重建。
                 _ => tex.mark_all_dirty(),
             }
-            Ok(if redo {
-                "已重做".into()
-            } else {
-                "已撤销".into()
+            Ok(HistoryOutcome {
+                message: if redo { "已重做".into() } else { "已撤销".into() },
+                changed_cells,
             })
         }
-        Ok((false, _)) => Ok(if redo {
-            "没有可重做的操作".into()
-        } else {
-            "没有可撤销的操作".into()
+        Ok((false, _)) => Ok(HistoryOutcome {
+            message: if redo {
+                "没有可重做的操作".into()
+            } else {
+                "没有可撤销的操作".into()
+            },
+            changed_cells: Vec::new(),
         }),
         Err(e) => Err(format!("撤销/重做失败: {e}")),
     }
+}
+
+/// 撤销 / 重做的详细结果（[ADR-0052] D8-A）。
+#[derive(Debug, Default)]
+pub struct HistoryOutcome {
+    /// 给用户看的结果说明（「已撤销」/「已重做」/「没有可撤销的操作」）。
+    pub message: String,
+    /// **地形变化格集合**——撤销/重做后白闪这几格。
+    ///
+    /// 空 = 没有地形变化（撤销的是非地形命令，或撤销前后地形一致）→ 不闪。
+    pub changed_cells: Vec<(i32, i32)>,
 }
 
 /// 阶段六收尾：刷新 `ProjectDiagnostics`。
@@ -1650,5 +1711,85 @@ mod tests {
 
         let ec = world.resource::<EditCellState>();
         assert_eq!(ec.selected, None, "tool 没激活 = 不动 selected");
+    }
+
+    // -----------------------------------------------------------------------
+    // D8-A · 撤销白闪（[ADR-0052] §9.3 / §9.8）
+    // -----------------------------------------------------------------------
+
+    /// 撤销一笔地形编辑 → `changed_cells` 指出变化格（D8-A 白闪的定位依据）。
+    #[test]
+    fn undo_reports_changed_cells_for_white_flash() {
+        let (mut projection, mut edit, mut tex, map) = continent_test_world(8);
+        let mut before = projection.world.terrain_of(&map).cloned().unwrap();
+        // 改一格高度 → 提交为一条可撤销的命令。
+        before.cells[0].height += 100;
+        projection.world.set_terrain(map.clone(), before.clone());
+        let mut tx = wv_edit::history::Transaction::new();
+        tx.push(Box::new(
+            wv_edit::command::BatchEditCellsCommand::new(
+                map.clone(),
+                vec![wv_edit::command::CellChange {
+                    gx: 0,
+                    gy: 0,
+                    before: before.cells[0],
+                    after: {
+                        let mut c = before.cells[0];
+                        c.height += 100;
+                        c
+                    },
+                }],
+            ),
+        ));
+        edit.history.commit(&mut projection.world, tx).expect("应提交");
+
+        let outcome = apply_history_command_detailed(
+            false,
+            &mut edit,
+            &mut projection,
+            &mut tex,
+            &PlaybackState::default(),
+        )
+        .expect("撤销应成功");
+        assert_eq!(outcome.message, "已撤销");
+        assert!(
+            !outcome.changed_cells.is_empty(),
+            "撤销地形编辑应报出变化格（D8-A 白闪据此定位）"
+        );
+        assert!(
+            outcome.changed_cells.contains(&(0, 0)),
+            "变化格应包含被改的那格，实际 {:?}",
+            outcome.changed_cells
+        );
+    }
+
+    /// 没有可撤销的操作 → 不报变化格（不闪）。
+    #[test]
+    fn undo_without_history_reports_no_changed_cells() {
+        let (mut projection, mut edit, mut tex, _map) = continent_test_world(8);
+        let outcome = apply_history_command_detailed(
+            false,
+            &mut edit,
+            &mut projection,
+            &mut tex,
+            &PlaybackState::default(),
+        )
+        .expect("无可撤销也应返回 Ok（不是错误）");
+        assert_eq!(outcome.message, "没有可撤销的操作");
+        assert!(
+            outcome.changed_cells.is_empty(),
+            "没撤销任何东西就不该闪"
+        );
+    }
+
+    /// 闪视觉态：撤销后触发 → 250ms 内活跃、之后自动熄灭（D8-A）。
+    #[test]
+    fn undo_flash_is_active_for_250ms_after_undo() {
+        use wv_world_cell_map::cell_flash::{CellFlashKind, CellFlashState};
+        let mut flash = CellFlashState::default();
+        flash.trigger(CellFlashKind::Undo, vec![(2, 3)], 10.0);
+        assert!(flash.is_active(10.0), "触发即活跃");
+        assert!(flash.is_active(10.249), "249ms 仍活跃");
+        assert!(!flash.is_active(10.25), "250ms 到期");
     }
 }

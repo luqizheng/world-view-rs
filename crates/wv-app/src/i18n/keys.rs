@@ -746,6 +746,18 @@ pub enum I18nKey {
     MapControlsClearMeasurements,
     /// 单格编辑（EditCell）瓷砖 tooltip（[ADR-0052] D7-1）
     MapControlsEditCellHint,
+    /// 泛洪选择（FloodSelect）瓷砖 tooltip（[ADR-0052] D6）
+    MapControlsFloodSelectHint,
+    /// 泛洪判据·按地表（[ADR-0052] D6）
+    CellFloodBySurface,
+    /// 泛洪判据·按群系（[ADR-0052] D6）
+    CellFloodByBiome,
+    /// 泛洪判据·按海拔容差（[ADR-0052] D6）
+    CellFloodByHeight,
+    /// 底栏笔触进度·前缀「笔触进行中」（[ADR-0052] D8-B）
+    StatusBarStrokeProgress,
+    /// 底栏笔触进度·格数后缀「已落 N 格」（[ADR-0052] D8-B）
+    StatusBarStrokeCells,
 
     // ── W3：ui_shell 通知 toast 文本 ────────────────────────────────
     /// 「已保存到 」前缀（后接 dir）
@@ -1180,7 +1192,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 462] = [
+    pub const ALL: [I18nKey; 469] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1516,6 +1528,12 @@ impl I18nKey {
         I18nKey::MapControlsMeasureArea,
         I18nKey::MapControlsClearMeasurements,
         I18nKey::MapControlsEditCellHint,
+        I18nKey::MapControlsFloodSelectHint,
+        I18nKey::CellFloodBySurface,
+        I18nKey::CellFloodByBiome,
+        I18nKey::CellFloodByHeight,
+        I18nKey::StatusBarStrokeProgress,
+        I18nKey::StatusBarStrokeCells,
         // ui_shell 通知（16）
         I18nKey::NoticeSavedToPrefix,
         I18nKey::NoticeSavedScopePrefix,

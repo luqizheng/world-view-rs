@@ -705,6 +705,8 @@ pub fn status_bar(
     validation_count: Res<ValidationCount>,
     drill: Res<DrillState>,
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
+    paint: Res<wv_world_cell_map::cell_paint::CellPaintSession>,
+    current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -728,6 +730,8 @@ pub fn status_bar(
             ui.horizontal(|ui| {
                 // ── 左：Project status（组内 gap 16）──
                 project_status_segment(ui, &shell, &projection);
+                // ── 中左：笔触进度瞬态槽（[ADR-0052] D8-B，仅 stroke 期间出现）──
+                stroke_progress_segment(ui, &shell, &paint, current_loc.0);
                 // ── 右：Scene statistics（组内 gap 16，右对齐）──
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     scene_statistics_segment(
@@ -755,6 +759,52 @@ pub fn status_bar(
                 pointer_coordinates_segment(ui, &shell, &view, &projection, &drill);
             });
         });
+}
+
+/// 中左段「笔触进度」瞬态槽（[ADR-0052] D8-B）。
+///
+/// **只在 stroke 期间出现**，松手 / Esc 后自动消失。内容：
+/// `STROKE_PENDING` 色点 + 「笔触进行中 · 已落 N 格」。
+///
+/// ## 与 D8 读数条为何分开
+///
+/// D8 读数条（右侧检查器）是**持久信息**——hover / selected 格的读数，
+/// 不随笔触起落而变。笔触格数是**瞬态操作反馈**——手指按住才有的计数，
+/// 松手即无。两者混在一处会让读数条在拖绘时闪烁，故 D8-B 独立占底栏槽位
+/// （ADR-0052 §9.3 D8-B 原文：「底栏是瞬态操作反馈，不与 D8 固定双段冲突」）。
+///
+/// ## 为何用金色点而非 `STROKE_PENDING` 红橙
+///
+/// 底栏是 chrome（跟随主题明暗），`STROKE_PENDING` 是**世界层**语义色
+/// （画布上的待落色块），固定不随主题变。把世界色搬到底栏会在亮色主题下
+/// 失去对比度校准。故此处用 shell 金色（`ui.gold` = 「活动中的工具」语义，
+/// 与顶栏 ACTIVE 徽标同源）表示「进行中」，红橙留在画布上表示「这些格待落」。
+fn stroke_progress_segment(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    paint: &wv_world_cell_map::cell_paint::CellPaintSession,
+    locale: crate::i18n::Locale,
+) {
+    if !paint.is_stroking() {
+        return;
+    }
+    let n = paint.stroke_len();
+    ui.add_space(space::LG);
+    vsep(ui, color32(shell.palette.border_subtle));
+    ui.add_space(space::LG);
+    // 金点 = 「进行中」（同 `ui.gold` 的 ACTIVE 语义）。
+    status_dot(ui, shell.gold());
+    ui.add_space(space::SM);
+    ui.label(
+        egui::RichText::new(format!(
+            "{} {}{}",
+            crate::i18n::t(locale, I18nKey::StatusBarStrokeProgress),
+            n,
+            crate::i18n::t(locale, I18nKey::StatusBarStrokeCells)
+        ))
+        .size(STATUS_FONT)
+        .color(shell.gold()),
+    );
 }
 
 /// 左段「Project status」：产品名 / 版本 / 分隔线 / 工程目录名（gap 16 均匀）。

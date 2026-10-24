@@ -18,6 +18,7 @@
 use bevy_egui::egui;
 
 use crate::i18n::{t, I18nKey};
+use crate::theme::ui_theme::proportional;
 use crate::theme::ui_tokens::font_size;
 use crate::ui::shell::UiShell;
 use crate::ui::widgets::divider;
@@ -41,7 +42,7 @@ pub fn render_readout_bar(
     let hover_text = match edit_cell.hover {
         Some((gx, gy)) => match read_cell(gx, gy) {
             Some((h, s, b)) => format!(
-                "{}  ·  {} m  ·  {}  ·  {}",
+                "{}  ·  {}  ·  {} m  ·  {}  ·  {}",
                 gx,
                 gy,
                 h,
@@ -55,7 +56,7 @@ pub fn render_readout_bar(
     let selected_text = match edit_cell.selected {
         Some((gx, gy)) => match read_cell(gx, gy) {
             Some((h, s, b)) => format!(
-                "{}  ·  {} m  ·  {}  ·  {}",
+                "{}  ·  {}  ·  {} m  ·  {}  ·  {}",
                 gx,
                 gy,
                 h,
@@ -81,11 +82,12 @@ pub fn render_readout_bar(
                 .color(shell.t1()),
         );
         // 竖分隔线（1×16）。
-        ui.add(
-            egui::Separator::default()
-                .orientation(egui::Orientation::Vertical)
-                .spacing(6.0),
-        );
+        //
+        // egui 0.36 的 `Separator` 只有水平方向（无 `orientation` 方法），
+        // 故自绘：分配 1×16 的矩形后用 `painter` 填色。
+        let (sep, _) = ui.allocate_exact_size(egui::vec2(1.0, 16.0), egui::Sense::hover());
+        ui.painter()
+            .rect_filled(sep, 0.0, shell.border_subtle());
         ui.label(
             egui::RichText::new("选中")
                 .size(font_size::MICRO)
@@ -204,6 +206,91 @@ pub fn render_paint_value_section(
     ui.add_space(4.0);
 }
 
+/// **泛洪判据**（D6）。
+///
+/// 判据属于「工具参数」而非「落笔值」——它改变的是**泛洪行为**（手势），
+/// 不是笔触写进格子的值。故独立成段，仅 FloodSelect 工具激活时显示。
+pub fn render_flood_criterion_section(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    flood: &mut wv_world_cell_map::state::FloodSelectState,
+    loc: crate::i18n::Locale,
+) {
+    use wv_world_cell_map::state::FloodCriterion;
+
+    ui.label(
+        egui::RichText::new("泛洪判据")
+            .size(font_size::SMALL)
+            .color(shell.t2()),
+    );
+    ui.label(
+        egui::RichText::new("「同类」怎么算")
+            .size(font_size::MICRO)
+            .color(shell.t3()),
+    );
+    ui.add_space(4.0);
+
+    // 三档判据：按地表 / 按群系 / 按海拔容差。
+    let current = match flood.criterion {
+        FloodCriterion::Surface => 0,
+        FloodCriterion::Biome => 1,
+        FloodCriterion::HeightTolerance(_) => 2,
+    };
+    crate::ui::widgets::segmented_control::segmented(
+        ui,
+        shell,
+        "cell_flood_criterion",
+        60.0,
+        &[
+            t(loc, I18nKey::CellFloodBySurface),
+            t(loc, I18nKey::CellFloodByBiome),
+            t(loc, I18nKey::CellFloodByHeight),
+        ],
+        current,
+        font_size::MICRO,
+        |i| {
+            flood.criterion = match i {
+                0 => FloodCriterion::Surface,
+                1 => FloodCriterion::Biome,
+                _ => {
+                    // 切到「按海拔容差」时，保留旧容差（默认 10 m）。
+                    let tol = match flood.criterion {
+                        FloodCriterion::HeightTolerance(t) => t,
+                        _ => 10,
+                    };
+                    FloodCriterion::HeightTolerance(tol)
+                }
+            };
+        },
+    );
+    // 容差输入：仅「按海拔容差」选中时出现（沿用 D1 的 scrub 数值框）。
+    if let FloodCriterion::HeightTolerance(tol) = flood.criterion {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("容差 ±")
+                    .size(font_size::MICRO)
+                    .color(shell.t3()),
+            );
+            let mut tol_f = tol as f32;
+            ui.push_id("cell_flood_tolerance", |ui| {
+                ui.allocate_ui(egui::vec2(120.0, 26.0), |ui| {
+                    wv_ui::widgets::controls::numeric_input_bounded(
+                        ui,
+                        shell,
+                        &mut tol_f,
+                        "m",
+                        5.0,
+                        0.0,
+                        32767.0,
+                    );
+                });
+            });
+            flood.criterion = FloodCriterion::HeightTolerance(tol_f.clamp(0.0, 32767.0) as i16);
+        });
+    }
+    ui.add_space(4.0);
+}
+
 /// **群系 swatch 网格**（落笔群系选择器）。
 ///
 /// 5 列 × N 行，每格 = 一个色块 + 群系名。色源 = `BIOME_RAW_COLORS`
@@ -249,7 +336,7 @@ fn render_biome_swatch(ui: &mut egui::Ui, shell: &UiShell, current: &mut u8) {
                     egui::pos2(swatch.max.x + 3.0, swatch.center().y),
                     egui::Align2::LEFT_CENTER,
                     short,
-                    crate::theme::ui_tokens::proportional(font_size::MICRO),
+                    proportional(font_size::MICRO),
                     if selected { shell.t1() } else { shell.t3() },
                 );
                 if resp.clicked() {

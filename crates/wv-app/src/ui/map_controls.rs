@@ -81,9 +81,9 @@ use wv_ui::widgets::{split_button, SplitButtonMetrics, SplitMenuItem};
 use super::shell::UiShell;
 use super::widgets::icon_image;
 use super::widgets::{
-    ICON_ELLIPSE, ICON_MOVE_HORIZONTAL, ICON_MOVE_VERTICAL, ICON_RULER_DIMENSION_LINE,
-    ICON_SQUARE_MOUSE_POINTER, ICON_SQUARES_UNITE, ICON_TRASH, ICON_VECTOR_POLYGON,
-    ICON_VECTOR_SQUARE,
+    ICON_ELLIPSE, ICON_MOVE_HORIZONTAL, ICON_MOVE_VERTICAL, ICON_PAINT_BUCKET,
+    ICON_RULER_DIMENSION_LINE, ICON_SQUARE_MOUSE_POINTER, ICON_SQUARES_UNITE, ICON_TRASH,
+    ICON_VECTOR_POLYGON, ICON_VECTOR_SQUARE,
 };
 use super::{ICON_ERASER, ICON_GRID, ICON_HAND, ICON_REDO, ICON_TREES, ICON_UNDO, ICON_WAVES};
 
@@ -297,11 +297,15 @@ pub fn map_controls(
     mut params: DockParams,
     edit: Res<EditHistory>,
     panels: Res<PanelState>,
-    // EditCell 工具的活动态（[ADR-0052] D7-1 瓷砖需要读 `tool_active`）。
-    // SystemParam 上限 16 个，DockParams 打包了 3 个，这里是第 17 个——
-    // Bevy 的 SystemParam 上限是 16，**函数参数**另计，故此处的
-    // `Res<EditCellState>` 走普通函数参数（不进 `DockParams`）。
-    edit_cell: Res<wv_render::state::EditCellState>,
+    // CellMap 工具活动态（[ADR-0052] D7-1 EditCell 第 12 槽 / D6 FloodSelect
+    // 第 13 槽）——两块瓷砖都按 `tool_active` 画选中态。
+    //
+    // **折成一层元组**：Bevy 单系统参数上限 16，本函数原有 15 个，两个
+    // `Res` 分开写会到 17（编译报「not a system set」）。元组算 1 个参数。
+    (edit_cell, flood_select): (
+        Res<wv_render::state::EditCellState>,
+        Res<crate::state::FloodSelectState>,
+    ),
 ) {
     // 无工程闸门（图片规格 §首页不可见）：与 `welcome_screen` 共用同一信号。
     // 2026-10-22（B 档）：改读 `AppScreen`——「首页不可见」的口径由屏状态
@@ -340,6 +344,8 @@ pub fn map_controls(
     // EditCell 活动态（[ADR-0052] D7-1）：判据 = `tool_active`，
     // **不是** `selected.is_some()`——后者把「点过一格」误当成「工具开着」。
     let edit_cell_active = edit_cell.tool_active;
+    // 泛洪活动态（[ADR-0052] D6）：判据 = `tool_active`。
+    let flood_select_active = flood_select.tool_active;
 
     let vertical = params.dock.orientation == MapDockOrientation::Vertical;
     let metrics = DockMetrics::for_orientation(vertical);
@@ -583,6 +589,20 @@ pub fn map_controls(
                             edit_cell_active,
                             &mut params.palette,
                             MapToolId::EditCell,
+                        );
+
+                        // ── 槽 13：FloodSelect（泛洪选择）────────────
+                        // [ADR-0052] D6：点一下 = 按判据自动圈出同值连通区。
+                        // 与槽 12 同属「CellMap 编辑」组，不另加分隔条。
+                        tool_tile(
+                            ui,
+                            &shell,
+                            metrics,
+                            ICON_PAINT_BUCKET,
+                            t(loc, I18nKey::MapControlsFloodSelectHint),
+                            flood_select_active,
+                            &mut params.palette,
+                            MapToolId::FloodSelect,
                         );
                     };
 

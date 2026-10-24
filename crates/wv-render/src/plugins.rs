@@ -105,10 +105,15 @@ impl Plugin for EditorOverlayPlugin {
             // 落笔会话态（[ADR-0052] D4）：`wv-app` 写、`wv-render` 读
             // （待落色块要读笔触格）。
             .init_resource::<wv_world_cell_map::cell_paint::CellPaintSession>()
+            // 撤销白闪 / 拒收红闪（[ADR-0052] D8-A / D3-E）。
+            .init_resource::<wv_world_cell_map::cell_flash::CellFlashState>()
+            .init_resource::<wv_world_cell_map::cell_flash::CellFlashEntities>()
             .add_systems(Update, brush_cursor::sync_brush_cursor)
             .add_systems(Update, crate::cellmap_bridge::sync_cell_selection)
             .add_systems(Update, crate::cellmap_bridge::sync_cell_region)
             .add_systems(Update, crate::cellmap_bridge::sync_cell_stroke)
+            // 闪视觉（撤销白闪 / 拒收红闪）画在最顶层。
+            .add_systems(Update, crate::cellmap_bridge::sync_cell_flash)
             // hover 准星画在 selected **之上**（Z 序：D2 要求 hover 是最上层
             // 的瞬时反馈）。
             .add_systems(

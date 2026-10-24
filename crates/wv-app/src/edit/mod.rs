@@ -37,6 +37,8 @@ pub mod faction_panel_actions;
 #[cfg(feature = "app")]
 pub mod feature_place_actions;
 #[cfg(feature = "app")]
+pub mod flood_select;
+#[cfg(feature = "app")]
 pub mod inspector_actions;
 #[cfg(feature = "app")]
 pub mod intent_translator;

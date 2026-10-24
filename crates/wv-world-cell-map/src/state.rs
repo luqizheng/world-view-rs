@@ -72,6 +72,44 @@ impl EditCellState {
     }
 }
 
+/// **泛洪选择工具**的会话态（[ADR-0052] D6 / D6-A）。
+///
+/// 与 [`EditCellState`] 同级——两者是**互斥工具**（同一时刻只有一个 active）。
+#[derive(Resource, Debug, Default, Clone, PartialEq)]
+pub struct FloodSelectState {
+    /// 泛洪工具是否激活。
+    pub tool_active: bool,
+    /// **判据**：按地表 / 按群系 / 按海拔容差。
+    ///
+    /// 默认按**群系**——CellMap 的主要用途是「选出一片同群系的地」，
+    /// 按地表（水/陆）粒度太粗，按海拔容差需要额外输入。
+    pub criterion: FloodCriterion,
+}
+
+impl FloodSelectState {
+    /// 关工具（切走时调用）——只翻 `tool_active`，不清选区
+    /// （选区在 `EditCellState.region_cells`，跨工具保留）。
+    pub fn close_tool(&mut self) {
+        self.tool_active = false;
+    }
+}
+
+/// **泛洪判据**（D6）：什么算「同值」。
+///
+/// 与 `wv_terrain::cellops::FloodCriterion` 同款语义——此处独立定义是为了
+/// 让 `wv-world-cell-map` 不依赖 `wv-terrain`（[ADR-0054] D2/D4 的 crate
+/// 分层纪律：地形域的 crate 只依赖 core）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FloodCriterion {
+    /// 按**地表**判同（水 / 陆）。
+    Surface,
+    /// 按**群系**判同（默认）。
+    #[default]
+    Biome,
+    /// 按**海拔容差**判同（`|h − h₀| ≤ tol`）。
+    HeightTolerance(i16),
+}
+
 /// 地形栅格的视图标定（自 wv-render 迁入；`grid_sync` 桥接系统在 wv-render
 /// 侧每帧从呈现态投影写入）。
 ///

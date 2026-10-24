@@ -179,9 +179,28 @@ pub fn run(config: AppConfig) {
     .init_resource::<camera::ActiveStroke>()
     .init_resource::<camera::PointerOverUi>()
     .init_resource::<editing::EditHistory>()
+    // 泛洪选择工具会话态（[ADR-0052] D6）：判据 + 激活态。
+    .init_resource::<crate::state::FloodSelectState>()
     // 单格连续绘制的丢弃确认弹窗态（[ADR-0052] D3-C）。
-    // 笔触格集合 + 落笔值在 `wv_world_cell_map::cell_paint::CellPaintSession`
-    // （由 wv-render 的 EditorOverlayPlugin 注册，渲染层要读它画待落色块）。
+    // 笔触格集合 + 落笔值在 `wv_world_cell_map::cell_paint::CellPaintSession`。
+    //
+    // **为什么在此显式 init（2026-10-24 修复）**：`wv-render` 的
+    // `EditorOverlayPlugin` 注册了这份资源与 cellmap 渲染系统，但**本 crate
+    // 从未装配该插件**（渲染主链按 ADR-0020 直装，见本文件顶部注释）。
+    // 后果：`paint_edit_cell_on_drag` 的 `ResMut<CellPaintSession>` 在
+    // 首帧 panic；M1 的 hover 准星 / M2 的待落笔触色块也永远不画。
+    // 与 `EditCellState` / `BiomeBoundaryState` 同款教训（见各自注释）。
+    .init_resource::<wv_world_cell_map::cell_paint::CellPaintSession>()
+    // 撤销白闪 / 拒收红闪会话态（[ADR-0052] D8-A / D3-E）：应用层触发，
+    // 渲染层 `sync_cell_flash` 读它画闪。
+    .init_resource::<wv_world_cell_map::cell_flash::CellFlashState>()
+    // cellmap 渲染实体池（选中 / 区域 / hover 准星 / 待落笔触 / 闪视觉）：
+    // 渲染系统 `ResMut` 它们——漏 init 即启动期 panic。
+    .init_resource::<wv_render::cell_selection::CellSelectionEntities>()
+    .init_resource::<wv_render::cell_selection::CellRegionEntities>()
+    .init_resource::<wv_render::cell_selection::CellHoverEntities>()
+    .init_resource::<wv_render::cell_selection::CellStrokeEntities>()
+    .init_resource::<wv_world_cell_map::cell_flash::CellFlashEntities>()
     // 编辑意图桥（ADR-0020 §2.5）：渲染层产意图、本 crate 翻译提交、回执回填。
     .init_resource::<wv_render::editing_bridge::EditIntents>()
     .init_resource::<wv_render::editing_bridge::EditReceipts>()
@@ -333,94 +352,111 @@ pub fn run(config: AppConfig) {
         Update,
         (
             // 主链已顶满 20 参上限，拆一层嵌套元组（内层先 chain 成一个整体）。
+            //
+            // 2026-10-24 再拆一层：M1/M2 加入 `track_edit_cell_hover`、
+            // `paint_edit_cell_on_drag`、`flood_select_on_click` 后内层达 23 个
+            // 系统，超出 `all_tuples` 的 20 上限（报「chain 的 trait bounds
+            // 不满足」）。按「输入/编辑」与「纹理/几何」两个语义段拆成
+            // 两个各自 chain 的子链，外层再 chain 保证跨段顺序不变。
             (
-                // 输入 → 视图状态
-                // 朝向先行：把 MapNode.orientation 写进相机旋转，同帧的缩放锚点、
-                // 平移与拾取换算读 Transform.rotation 时拿到的就是新值（帧内自洽）。
-                //
-                // 每个系统都套 `perf_timed!`（`WV_PERF=1` 才计时，默认两次布尔
-                // 判断即返回）：2026-10-23「鼠标移动 120→40 FPS」要把 17ms 落到
-                // 具体 system 名上。整段摘除 = 把宏换回裸 system。
-                wv_render::perf_timed!("apply_map_orientation", camera::apply_map_orientation),
-                wv_render::perf_timed!("camera_zoom", camera::camera_zoom),
-                wv_render::perf_timed!("camera_pan", camera::camera_pan),
-                wv_render::perf_timed!("camera_pan_keys", camera::camera_pan_keys),
-                wv_render::perf_timed!("brush_radius_scroll", camera::brush_radius_scroll),
-                wv_render::perf_timed!("track_cursor_world", camera::track_cursor_world),
-                wv_render::perf_timed!("collect_brush_stroke", camera::collect_brush_stroke),
-                // 编辑（笔触 → 命令 → History）
-                wv_render::perf_timed!(
-                    "commit_stroke_on_release",
-                    editing::commit_stroke_on_release
-                ),
-                // 单格编辑（[ADR-0040]）：点击 → cell_pick → EditCellState.selected
-                wv_render::perf_timed!(
-                    "commit_edit_cell_on_click",
-                    editing::commit_edit_cell_on_click
-                ),
-                // hover 准星（[ADR-0052] D2 写入侧）：每帧追踪光标压住的格。
-                // 必须排在 `track_cursor_world` 之后（要读 cursor_world）。
-                wv_render::perf_timed!("track_edit_cell_hover", editing::track_edit_cell_hover)
+                (
+                    // 输入 → 视图状态
+                    // 朝向先行：把 MapNode.orientation 写进相机旋转，同帧的缩放锚点、
+                    // 平移与拾取换算读 Transform.rotation 时拿到的就是新值（帧内自洽）。
+                    //
+                    // 每个系统都套 `perf_timed!`（`WV_PERF=1` 才计时，默认两次布尔
+                    // 判断即返回）：2026-10-23「鼠标移动 120→40 FPS」要把 17ms 落到
+                    // 具体 system 名上。整段摘除 = 把宏换回裸 system。
+                    wv_render::perf_timed!("apply_map_orientation", camera::apply_map_orientation),
+                    wv_render::perf_timed!("camera_zoom", camera::camera_zoom),
+                    wv_render::perf_timed!("camera_pan", camera::camera_pan),
+                    wv_render::perf_timed!("camera_pan_keys", camera::camera_pan_keys),
+                    wv_render::perf_timed!("brush_radius_scroll", camera::brush_radius_scroll),
+                    wv_render::perf_timed!("track_cursor_world", camera::track_cursor_world),
+                    wv_render::perf_timed!("collect_brush_stroke", camera::collect_brush_stroke),
+                    // 编辑（笔触 → 命令 → History）
+                    wv_render::perf_timed!(
+                        "commit_stroke_on_release",
+                        editing::commit_stroke_on_release
+                    ),
+                    // 单格编辑（[ADR-0040]）：点击 → cell_pick → EditCellState.selected
+                    wv_render::perf_timed!(
+                        "commit_edit_cell_on_click",
+                        editing::commit_edit_cell_on_click
+                    ),
+                    // hover 准星（[ADR-0052] D2 写入侧）：每帧追踪光标压住的格。
+                    // 必须排在 `track_cursor_world` 之后（要读 cursor_world）。
+                    wv_render::perf_timed!("track_edit_cell_hover", editing::track_edit_cell_hover)
+                        .after(wv_render::camera::track_cursor_world),
+                    // 单格连续绘制（[ADR-0052] D3）：拖动累积格 + 松手提交。
+                    // 排在 `track_cursor_world` 之后（要读 cursor_world）、
+                    // `commit_edit_cell_on_click` 之后（点选与拖绘同属 EditCell）。
+                    wv_render::perf_timed!(
+                        "paint_edit_cell_on_drag",
+                        crate::edit::cell_stroke::paint_edit_cell_on_drag
+                    )
                     .after(wv_render::camera::track_cursor_world),
-                // 单格连续绘制（[ADR-0052] D3）：拖动累积格 + 松手提交。
-                // 排在 `track_cursor_world` 之后（要读 cursor_world）、
-                // `commit_edit_cell_on_click` 之后（点选与拖绘同属 EditCell）。
-                wv_render::perf_timed!(
-                    "paint_edit_cell_on_drag",
-                    crate::edit::cell_stroke::paint_edit_cell_on_drag
+                    // 泛洪选择（[ADR-0052] D6-A）：点一下即泛洪，结果替换 region_cells。
+                    wv_render::perf_timed!(
+                        "flood_select_on_click",
+                        crate::edit::flood_select::flood_select_on_click
+                    ),
                 )
-                .after(wv_render::camera::track_cursor_world),
-                // 候选点选（2026-10-22 内容矩阵）：在 cell 点选之后跑——
-                // 读 selected 判定是否落进未命名候选。
-                wv_render::perf_timed!(
-                    "pick_candidate_on_click",
-                    crate::edit::nature_region_actions::pick_candidate_on_click
-                ),
-                // 群系分界线：创建/拖动/提交（在 cell 点选之后，互斥工具态）。
-                wv_render::perf_timed!(
-                    "biome_boundary_input",
-                    crate::edit::biome_boundary::biome_boundary_input
-                ),
-                // 候选过期的编辑信号（在提交路径之后跑，读 History 形状）。
-                wv_render::perf_timed!(
-                    "sync_candidate_invalidation",
-                    crate::edit::nature_region_actions::sync_candidate_invalidation
-                ),
-                // 区域边界拖拽（在 cell 点选之后；同为输入系统）。
-                wv_render::perf_timed!(
-                    "region_adjust_input",
-                    crate::edit::region_adjust::region_adjust_input
-                ),
-                // 自然区选择手势（2026-10-24 用户裁定）拆到主链**之后**单独注册：
-                // 左键点在自然区内 ⇒ 选中；右键**单击**（位移 <4px）⇒ 取消选中。
-                // 这两条必须排在 ①`drill_pick`（空白单击会清选中）与
-                // ②`region_adjust_input`（拽锚点优先）之后，否则会被覆盖或抢走。
-                // 见下方「自然区选择」。
-                // 批量选区（2026-10-20）：多边形闭合 → 栅格化贴合方格
-                wv_render::perf_timed!("sync_region_cells", editing::sync_region_cells)
-                    .after(camera::track_cursor_world),
-                wv_render::perf_timed!("commit_street_click", streets::commit_street_click),
-                // 撤销 / 重做不再在这里单独监听 Ctrl+Z：快捷键统一由
-                // `ui_shell::hotkeys` 收（那里已经处理了「输入框聚焦时失效」），
-                // 两处都听会导致一次按键应用两次。
-                wv_render::perf_timed!("flush_terrain_texture", editing::flush_terrain_texture),
-                // 播放推进（时间 → 当前时刻）
-                wv_render::perf_timed!("advance_playback", world_projection::advance_playback),
-                // 纹理先于网格几何：`grid.cell_size` 取自纹理的来源图与格数。
-                wv_render::perf_timed!(
-                    "rebuild_texture_on_mode_change",
-                    terrain_view::rebuild_texture_on_mode_change
-                ),
-                // 后台合成落地（M3）：必须在重建触发之后、网格几何之前——
-                // 它写 tex.size，`sync_grid_config` 同帧要读到。
-                wv_render::perf_timed!(
-                    "land_pending_terrain_synth",
-                    terrain_view::land_pending_terrain_synth
-                ),
-                // 网格几何（`raster_origin` / `map_origin` 两套原点）必须先于所有
-                // 消费它的系统：投影里的地点、街道、街道名、地图外框都按 `GridConfig`
-                // 换算，顺序反了就会拿上一帧的原点画一帧——钻取那一帧最明显。
-                wv_render::perf_timed!("sync_grid_config", terrain_view::sync_grid_config),
+                    .chain(),
+                (
+                    // 候选点选（2026-10-22 内容矩阵）：在 cell 点选之后跑——
+                    // 读 selected 判定是否落进未命名候选。
+                    wv_render::perf_timed!(
+                        "pick_candidate_on_click",
+                        crate::edit::nature_region_actions::pick_candidate_on_click
+                    ),
+                    // 群系分界线：创建/拖动/提交（在 cell 点选之后，互斥工具态）。
+                    wv_render::perf_timed!(
+                        "biome_boundary_input",
+                        crate::edit::biome_boundary::biome_boundary_input
+                    ),
+                    // 候选过期的编辑信号（在提交路径之后跑，读 History 形状）。
+                    wv_render::perf_timed!(
+                        "sync_candidate_invalidation",
+                        crate::edit::nature_region_actions::sync_candidate_invalidation
+                    ),
+                    // 区域边界拖拽（在 cell 点选之后；同为输入系统）。
+                    wv_render::perf_timed!(
+                        "region_adjust_input",
+                        crate::edit::region_adjust::region_adjust_input
+                    ),
+                    // 自然区选择手势（2026-10-24 用户裁定）拆到主链**之后**单独注册：
+                    // 左键点在自然区内 ⇒ 选中；右键**单击**（位移 <4px）⇒ 取消选中。
+                    // 这两条必须排在 ①`drill_pick`（空白单击会清选中）与
+                    // ②`region_adjust_input`（拽锚点优先）之后，否则会被覆盖或抢走。
+                    // 见下方「自然区选择」。
+                    // 批量选区（2026-10-20）：多边形闭合 → 栅格化贴合方格
+                    wv_render::perf_timed!("sync_region_cells", editing::sync_region_cells)
+                        .after(camera::track_cursor_world),
+                    wv_render::perf_timed!("commit_street_click", streets::commit_street_click),
+                    // 撤销 / 重做不再在这里单独监听 Ctrl+Z：快捷键统一由
+                    // `ui_shell::hotkeys` 收（那里已经处理了「输入框聚焦时失效」），
+                    // 两处都听会导致一次按键应用两次。
+                    wv_render::perf_timed!("flush_terrain_texture", editing::flush_terrain_texture),
+                    // 播放推进（时间 → 当前时刻）
+                    wv_render::perf_timed!("advance_playback", world_projection::advance_playback),
+                    // 纹理先于网格几何：`grid.cell_size` 取自纹理的来源图与格数。
+                    wv_render::perf_timed!(
+                        "rebuild_texture_on_mode_change",
+                        terrain_view::rebuild_texture_on_mode_change
+                    ),
+                    // 后台合成落地（M3）：必须在重建触发之后、网格几何之前——
+                    // 它写 tex.size，`sync_grid_config` 同帧要读到。
+                    wv_render::perf_timed!(
+                        "land_pending_terrain_synth",
+                        terrain_view::land_pending_terrain_synth
+                    ),
+                    // 网格几何（`raster_origin` / `map_origin` 两套原点）必须先于所有
+                    // 消费它的系统：投影里的地点、街道、街道名、地图外框都按 `GridConfig`
+                    // 换算，顺序反了就会拿上一帧的原点画一帧——钻取那一帧最明显。
+                    wv_render::perf_timed!("sync_grid_config", terrain_view::sync_grid_config),
+                )
+                    .chain(),
             )
                 .chain(),
             // 换级淡化：旧底图淡出精灵逐帧降透明、归零回收（ADR-0009 §2⑦）。
@@ -522,6 +558,28 @@ pub fn run(config: AppConfig) {
         Update,
         wv_render::perf_timed!("sync_brush_cursor", brush_cursor::sync_brush_cursor)
             .after(camera::track_cursor_world),
+    )
+    // CellMap 编辑域渲染系统（[ADR-0040] 选中高亮 / [ADR-0052] D2 hover
+    // 准星 · D3 待落笔触 · D8-A 白闪）。
+    //
+    // **为什么在这里单独装配（2026-10-24 修复）**：`wv-render` 的
+    // `EditorOverlayPlugin` 注册了这批系统，但本 crate 从未装配该插件
+    // （渲染主链按 ADR-0020 直装）。后果是 ADR-0040 的单格金色 outline
+    // 从未在线上出现，M1 的 hover 准星与 M2 的待落笔触色块同样画不出来。
+    // 按 AGENTS §2.1「装配点留在组合根」，这里显式注册。
+    //
+    // 顺序：区域 → 笔触 → 选中 → hover → 闪视觉，与 ADR-0052 §9.5 的
+    // 绘制序（region → stroke → selected → hover）一致；闪视觉最后
+    // （z 最高，250ms 短促）。
+    .add_systems(
+        Update,
+        (
+            cellmap_bridge::sync_cell_region,
+            cellmap_bridge::sync_cell_stroke,
+            cellmap_bridge::sync_cell_selection,
+            cellmap_bridge::sync_cell_hover.after(cellmap_bridge::sync_cell_selection),
+            cellmap_bridge::sync_cell_flash,
+        ),
     )
     // 编辑意图翻译（ADR-0020 §2.5）：渲染 commit_* 产意图 → 翻译器提交 wv-edit
     // → 渲染 apply_*_receipts 回填本地。必须晚于两个 commit 系统（同帧闭环）。

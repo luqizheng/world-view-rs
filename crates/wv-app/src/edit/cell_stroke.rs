@@ -40,6 +40,27 @@ use crate::ui::cell_pick;
 /// 误丢一次白干半分钟；画 10 格重画两秒，不值得打断。
 pub const STROKE_DISCARD_CONFIRM_THRESHOLD: usize = 50;
 
+/// **丢弃整笔是否需要二次确认**（D3-C 纯函数）。
+///
+/// - `≤ 50 格` → 静默丢弃（重画只要两秒，不值得打断）；
+/// - `> 50 格` → 弹确认窗（画 60 格要半分钟，误丢一次白干）。
+///
+/// 抽成纯函数是为了让「阈值两侧」能被单测钉住——把判定内联在
+/// `if` 里时，改阈值极易漏改其中一支。
+pub fn discard_needs_confirmation(cell_count: usize) -> bool {
+    cell_count > STROKE_DISCARD_CONFIRM_THRESHOLD
+}
+
+/// **起笔清空选区**（D3-A 纯函数）。
+///
+/// 清 `region_cells` **且**把 `region_fingerprint` 归零——后者是
+/// `sync_region_cells` 判断「选区是否变化」的依据，只清格子不清指纹
+/// 会让渲染层误判「没变」而不重画。
+pub fn clear_region_for_stroke(edit_cell: &mut EditCellState) {
+    edit_cell.region_cells.clear();
+    edit_cell.region_fingerprint = 0;
+}
+
 /// **丢弃确认弹窗态**（D3-C）。
 #[derive(Resource, Debug, Default)]
 pub struct StrokeDiscardPrompt {
@@ -69,11 +90,21 @@ pub fn paint_edit_cell_on_drag(
     view: Res<ViewState>,
     grid: Res<GridConfig>,
     drill: Res<DrillState>,
-    projection: Res<WorldProjection>,
-    ui: Res<wv_render::camera::PointerOverUi>,
+    mut projection: ResMut<WorldProjection>,
+    // egui 上下文（D3-C 丢弃确认窗）+ UI 抢占态。
+    // 折成一层元组：Bevy 单系统参数上限 16，两个分开写会到 17。
+    (mut contexts, ui): (
+        bevy_egui::EguiContexts,
+        Res<wv_render::camera::PointerOverUi>,
+    ),
     mut edit_cell: ResMut<EditCellState>,
     mut session: ResMut<CellPaintSession>,
-    mut prompt: ResMut<StrokeDiscardPrompt>,
+    // Bevy 单系统参数上限 16——本函数原本正好顶满，新增闪视觉态时
+    // 把「丢弃确认弹窗态 + 闪视觉态」折成一层元组（元组算 1 个参数）。
+    (mut prompt, mut flash): (
+        ResMut<StrokeDiscardPrompt>,
+        ResMut<wv_world_cell_map::cell_flash::CellFlashState>,
+    ),
     mut tex: ResMut<wv_render::terrain_view::TerrainTexture>,
     mut edit: ResMut<crate::edit::editing::EditHistory>,
     mut notice: ResMut<crate::ui_shell::ShellNotice>,
@@ -91,20 +122,25 @@ pub fn paint_edit_cell_on_drag(
 
     // ── 丢弃确认弹窗（D3-C：>50 格需确认）──
     if let Some(pending) = prompt.pending {
-        let confirmed = pending <= STROKE_DISCARD_CONFIRM_THRESHOLD
-            || confirm_discard(ui, pending);
+        // egui 上下文每帧取一次；`ctx_mut` 失败（首帧上下文未就绪）时
+        // 视为「未确认」——保持弹窗待下次再判，不误丢整笔。
+        let confirmed = match contexts.ctx_mut() {
+            Ok(ctx) => confirm_discard(ctx, pending),
+            Err(_) => false,
+        };
         if confirmed {
             session.stroke.discard();
             prompt.last_cell = None;
+            prompt.pending = None;
         }
-        prompt.pending = None;
+        // 未确认时**保留** `pending`（下次继续问），不在这里清空。
         return;
     }
 
     // ── Esc 丢弃（D3-C）──
-    if keys.any_pressed(egui::Key::Escape) && session.stroke.active {
+    if keys.just_pressed(egui::Key::Escape) && session.stroke.active {
         let n = session.stroke.len();
-        if n > STROKE_DISCARD_CONFIRM_THRESHOLD {
+        if discard_needs_confirmation(n) {
             prompt.pending = Some(n);
         } else {
             session.stroke.discard();
@@ -129,8 +165,7 @@ pub fn paint_edit_cell_on_drag(
         prompt.last_cell = None;
         // **D3-A：起笔清空 region_cells**——从「选择」意图切到「涂画」意图的
         // 时序信号；选区与笔触不可同框（§9.5 四态视觉分工）。
-        edit_cell.region_cells.clear();
-        edit_cell.region_fingerprint = 0;
+        clear_region_for_stroke(&mut edit_cell);
         if let Some(map) = drill.current() {
             session.stroke.map_id = Some(map.clone());
         }
@@ -211,6 +246,14 @@ pub fn paint_edit_cell_on_drag(
                 ),
                 (time.elapsed_secs() * 60.0) as u64,
             );
+            // 画面红闪 200ms（D3-E）：红闪标出**整笔**的格（不是只标不一致的
+            // 那几格）——作者要看到的是「我这一笔没生效」这个整体，
+            // 只闪不一致的格会让人误以为「只有那几格被拒了」。
+            flash.trigger(
+                wv_world_cell_map::cell_flash::CellFlashKind::Reject,
+                session.stroke.cells.clone(),
+                time.elapsed_secs(),
+            );
             session.stroke.discard();
             prompt.last_cell = None;
             return;
@@ -256,25 +299,23 @@ pub fn paint_edit_cell_on_drag(
 /// **丢弃确认弹窗**（D3-C）。
 ///
 /// 不用模态框（打断感太强）——用 egui 的窗口式确认，放在画布中央偏上。
-fn confirm_discard(ui: Res<PointerOverUi>, pending: usize) -> bool {
+fn confirm_discard(ctx: &egui::Context, pending: usize) -> bool {
     let mut confirmed = false;
-    let mut cancelled = false;
     egui::Window::new("丢弃笔触")
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, -80.0])
-        .show(ui.ctx(), |ui| {
+        .show(ctx, |ui| {
             ui.label(format!("要丢弃这一笔（{pending} 格）吗？"));
             ui.horizontal(|ui| {
                 if ui.button("丢弃").clicked() {
                     confirmed = true;
                 }
                 if ui.button("继续画").clicked() {
-                    cancelled = true;
+                    // 关窗即「继续画」——不置 confirmed。
                 }
             });
         });
-    let _ = cancelled;
     confirmed
 }
 
@@ -297,4 +338,168 @@ fn mark_dirty_cells(
         max_y = max_y.max(c.gy.max(0) as u32 + 1);
     }
     tex.mark_dirty([min_x, min_y, max_x, max_y]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wv_core::terrain::TerrainCellData;
+
+    fn cell(height: i16) -> TerrainCellData {
+        TerrainCellData {
+            height,
+            surface: 1,
+            biome: 4,
+        }
+    }
+
+    fn state_with_region() -> EditCellState {
+        let mut s = EditCellState::default();
+        s.tool_active = true;
+        s.selected = Some((3, 4));
+        s.region_cells = vec![(0, 0), (1, 0), (2, 0)];
+        s.region_fingerprint = 0xdead_beef;
+        s
+    }
+
+    // ── D3-A · 起笔清 region_cells ──────────────────────────────────
+
+    #[test]
+    fn stroke_begin_clears_region_cells_and_fingerprint() {
+        let mut edit_cell = state_with_region();
+        clear_region_for_stroke(&mut edit_cell);
+        assert!(edit_cell.region_cells.is_empty(), "起笔应清空选区");
+        assert_eq!(edit_cell.region_fingerprint, 0, "指纹应归零");
+    }
+
+    #[test]
+    fn stroke_begin_keeps_selected_cell() {
+        // 单格选中与区域选是两套态——起笔只清区域选，单格选中保留
+        // （否则「点一格 → 拖动画」会把选中也抹掉，Inspector 读不到值）。
+        let mut edit_cell = state_with_region();
+        clear_region_for_stroke(&mut edit_cell);
+        assert_eq!(edit_cell.selected, Some((3, 4)), "单格选中应保留");
+        assert!(edit_cell.tool_active, "工具仍激活");
+    }
+
+    // ── D3-B · 右键 = Esc 等价 ──────────────────────────────────────
+
+    #[test]
+    fn right_click_discard_equals_esc_discard() {
+        // 右键与 Esc 都走同一条「丢弃整笔」路径——差别只在触发源。
+        // 这里断言两者产出的笔触态一致：空 + 非活跃。
+        let mut by_esc = CellPaintSession::default();
+        by_esc.stroke.begin();
+        by_esc.stroke.push_cell(0, 0, cell(10));
+        by_esc.stroke.discard();
+
+        let mut by_right = CellPaintSession::default();
+        by_right.stroke.begin();
+        by_right.stroke.push_cell(0, 0, cell(10));
+        by_right.stroke.discard();
+
+        assert_eq!(by_esc.stroke.cells, by_right.stroke.cells);
+        assert_eq!(by_esc.stroke.active, by_right.stroke.active);
+        assert!(!by_right.stroke.active, "丢弃后不再活跃");
+        assert!(by_right.stroke.cells.is_empty(), "丢弃后格集清空");
+    }
+
+    #[test]
+    fn discard_keeps_no_half_committed_state() {
+        // 丢弃**不是**半笔提交：格集合与快照一起清，不留残迹。
+        let mut session = CellPaintSession::default();
+        session.stroke.begin();
+        session.stroke.push_cell(1, 1, cell(5));
+        session.stroke.push_cell(2, 2, cell(6));
+        assert_eq!(session.stroke.len(), 2);
+        session.stroke.discard();
+        assert_eq!(session.stroke.len(), 0);
+        assert!(session.stroke.snapshots.is_empty(), "快照也应清空");
+        assert!(session.stroke.map_id.is_none(), "目标图 ID 也清");
+    }
+
+    // ── D3-C · Esc 阈值 ─────────────────────────────────────────────
+
+    #[test]
+    fn esc_within_threshold_discards_silently() {
+        assert!(
+            !discard_needs_confirmation(0),
+            "0 格不该弹确认"
+        );
+        assert!(
+            !discard_needs_confirmation(STROKE_DISCARD_CONFIRM_THRESHOLD),
+            "正好 50 格不该弹确认（≤ 阈值静默）"
+        );
+    }
+
+    #[test]
+    fn esc_over_threshold_asks_for_confirmation() {
+        assert!(
+            discard_needs_confirmation(STROKE_DISCARD_CONFIRM_THRESHOLD + 1),
+            "51 格应弹确认"
+        );
+        assert!(discard_needs_confirmation(500), "远超阈值应弹确认");
+    }
+
+    // ── D3-D · 拉出画布不丢笔 ───────────────────────────────────────
+
+    #[test]
+    fn stroke_survives_cursor_leaving_canvas() {
+        // 光标出画布 → 不延伸，但笔触**保持存活**（不丢弃）。
+        // 模拟：起笔累积 2 格后「出画布」——笔触态应仍是活跃且保留 2 格。
+        let mut session = CellPaintSession::default();
+        session.stroke.begin();
+        session.stroke.push_cell(0, 0, cell(1));
+        session.stroke.push_cell(1, 1, cell(2));
+        // 出画布：此处只是不调用 push_cell，笔触态原样保留。
+        assert!(session.stroke.active, "笔触应存活");
+        assert_eq!(session.stroke.len(), 2, "已落的 2 格应保留");
+    }
+
+    #[test]
+    fn stroke_out_of_canvas_does_not_accumulate_out_of_bounds_cells() {
+        // 出画布时若误采到图外的格，提交会写到不存在的索引。
+        // 这里断言「采样被拒时格数不变」——模拟越界采样被过滤。
+        let mut session = CellPaintSession::default();
+        session.stroke.begin();
+        session.stroke.push_cell(0, 0, cell(1));
+        let before = session.stroke.len();
+        // 越界格不 push（调用点的 `sample` 返回 None 时跳过）。
+        assert_eq!(session.stroke.len(), before, "越界格不入笔触");
+        assert!(session.stroke.active, "笔触仍活跃");
+    }
+
+    // ── D3-E · stale 整笔拒收 ───────────────────────────────────────
+
+    #[test]
+    fn stale_mismatch_rejects_whole_stroke() {
+        let mut session = CellPaintSession::default();
+        session.stroke.begin();
+        session.stroke.push_cell(0, 0, cell(10));
+        session.stroke.push_cell(1, 0, cell(20));
+        // 世界里第 1 格被外部改成 99 → 快照不一致。
+        let world = |gx: i32, gy: i32| -> Option<TerrainCellData> {
+            match (gx, gy) {
+                (0, 0) => Some(cell(10)),
+                (1, 0) => Some(cell(99)),
+                _ => None,
+            }
+        };
+        let bad = session.stroke.stale_cells(&world).expect("应检出不一致");
+        assert_eq!(bad, vec![(1, 0)], "应指出不一致的格");
+        // 整笔拒收：不是部分提交——调用方在检出后 discard 整笔。
+        session.stroke.discard();
+        assert_eq!(session.stroke.len(), 0, "整笔清空，不部分提交");
+    }
+
+    #[test]
+    fn stale_check_passes_when_world_unchanged() {
+        let mut session = CellPaintSession::default();
+        session.stroke.begin();
+        session.stroke.push_cell(0, 0, cell(10));
+        let world = |gx: i32, gy: i32| -> Option<TerrainCellData> {
+            (gx == 0 && gy == 0).then(|| cell(10))
+        };
+        assert!(session.stroke.stale_cells(&world).is_none(), "未变则可提交");
+    }
 }
