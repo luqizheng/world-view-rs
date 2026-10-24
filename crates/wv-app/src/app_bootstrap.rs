@@ -194,6 +194,10 @@ pub fn run(config: AppConfig) {
     // 首帧 panic；M1 的 hover 准星 / M2 的待落笔触色块也永远不画。
     // 与 `EditCellState` / `BiomeBoundaryState` 同款教训（见各自注释）。
     .init_resource::<wv_world_cell_map::cell_paint::CellPaintSession>()
+    // 连续绘制的丢弃确认弹窗态（D3-C）：`paint_edit_cell_on_drag` 以
+    // `ResMut<StrokeDiscardPrompt>` 读写。与上一行同一次装配遗漏（2026-10-24
+    // GUI 烟测抓到：首帧 panic「Resource does not exist」）。
+    .init_resource::<crate::edit::cell_stroke::StrokeDiscardPrompt>()
     // 撤销白闪 / 拒收红闪会话态（[ADR-0052] D8-A / D3-E）：应用层触发，
     // 渲染层 `sync_cell_flash` 读它画闪。
     .init_resource::<wv_world_cell_map::cell_flash::CellFlashState>()
