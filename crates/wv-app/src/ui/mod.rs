@@ -140,5 +140,6 @@ pub use widgets::{
     ICON_ZOOM_OUT,
 };
 
-// `terrain_grid` 仅被 panel_brush 调用，从 widgets 重新导出。
+// `terrain_grid` 原仅被 panel_brush 调用；2026-10-25 笔刷段移除后暂无调用方，
+// 控件本体保留在 widgets（地形材料网格若回归可直接取用）。
 pub use widgets::terrain_grid;
