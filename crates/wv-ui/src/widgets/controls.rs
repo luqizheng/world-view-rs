@@ -215,6 +215,9 @@ pub fn search_input(
 
 /// 数值输入：等宽值 + 单位（t3）+ 右侧 24×28 步进器（上下三角）。
 /// 步进器点击即 ±`step`；返回值区域的 `Response`。
+///
+/// **id 派生依赖 `&mut f32` 的栈地址**（见 [`numeric_input_bounded`] 的告警）
+/// ——同一帧里多个调用可能撞车。新代码请用 [`numeric_input_salted`]。
 pub fn numeric_input(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -228,6 +231,12 @@ pub fn numeric_input(
 /// [`numeric_input`] 的**带边界变体**（目录 UI/NumericInput/Dark/Default）：
 /// stepper 与任何写入都会被钳到 `[min, max]`——Cell 编辑器海拔（i16 米）
 /// 等有真实值域的字段用这个，调用方不再需要事后 clamp。
+///
+/// **id 派发的坑（2026-10-24 真机修复「点击后不停抖动」）**：本控件用
+/// `value as *mut f32 as usize`（**栈地址**）当 id 盐——Cell 编辑器的
+/// `height_f` / `delta` 都是**每帧新建的局部变量**，编译器复用同一栈槽时
+/// 两个输入框拿到**同一 id**：点进文本编辑态后两个 TextEdit 互抢焦点，
+/// 表现为「点击之后不停抖动」。新代码一律用 [`numeric_input_salted`]。
 pub fn numeric_input_bounded(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -237,17 +246,27 @@ pub fn numeric_input_bounded(
     min: f32,
     max: f32,
 ) -> egui::Response {
-    // **id 唯一性（根治）**：本控件内部用 `ui.id()` 派生的 id 登记 stepper
-    // 三个交互区（up / down / body）。同一 Ui scope 里放**两个**数值输入时，
-    // 两者的 `ui.id()` 相同 → egui 报「First use of widget ID …」并让控件
-    // 状态互串（2026-10-20 实机：批量区「绝对值 + 增减」两个输入告警）。
-    //
-    // 修法：按「被编辑值的地址」派生一个盐，把整个控件放进 push_id 作用域
-    // ——同一 scope 的不同输入框地址不同 → id 天然不同；同一输入框跨帧
-    // 地址稳定 → id 稳定（步进器状态不丢）。
-    let salt = value as *mut f32 as usize;
+    numeric_input_salted(ui, shell, "legacy_ptr", value, unit, step, min, max)
+}
+
+/// [`numeric_input_bounded`] 的**显式盐变体**（2026-10-24）：
+///
+/// `id_salt` 由**调用方**给一个跨帧稳定的语义名（如 `"cell_height"`、
+/// `"paint_delta"`）——不再依赖栈地址，同一面板里多个数值输入互不干扰。
+/// 这是 Cell 编辑器等「每帧重建局部值」场景的唯一正确用法。
+#[allow(clippy::too_many_arguments)] // 控件参数即布局声明，与 bounded 变体同宽
+pub fn numeric_input_salted(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    id_salt: &str,
+    value: &mut f32,
+    unit: &str,
+    step: f32,
+    min: f32,
+    max: f32,
+) -> egui::Response {
     let mut resp: Option<egui::Response> = None;
-    ui.push_id(salt, |ui| {
+    ui.push_id(id_salt, |ui| {
         resp = Some(numeric_input_bounded_inner(
             ui, shell, value, unit, step, min, max,
         ));

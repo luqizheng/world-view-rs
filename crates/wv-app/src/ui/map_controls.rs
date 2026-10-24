@@ -83,7 +83,7 @@ use wv_ui::widgets::{split_button, SplitButtonMetrics, SplitMenuItem};
 use super::shell::UiShell;
 use super::widgets::icon_image;
 use super::widgets::{
-    ICON_ELLIPSE, ICON_MOVE_HORIZONTAL, ICON_MOVE_VERTICAL, ICON_PAINT_BUCKET,
+    ICON_ELLIPSE, ICON_MOUSE_POINTER, ICON_MOVE_HORIZONTAL, ICON_MOVE_VERTICAL, ICON_PAINT_BUCKET,
     ICON_RULER_DIMENSION_LINE, ICON_SQUARES_UNITE, ICON_SQUARE_MOUSE_POINTER, ICON_TRASH,
     ICON_VECTOR_POLYGON, ICON_VECTOR_SQUARE,
 };
@@ -347,7 +347,12 @@ pub fn map_controls(
     let can_redo = edit.history.can_redo();
     // EditCell 活动态（[ADR-0052] D7-1）：判据 = `tool_active`，
     // **不是** `selected.is_some()`——后者把「点过一格」误当成「工具开着」。
-    let edit_cell_active = edit_cell.tool_active;
+    //
+    // 2026-10-24 加单选模式后，`tool_active` 一分为二：两个工具共用它，
+    // 由 `allow_drag` 区分形态。故两枚瓷砖的 active 判据都要带上形态，
+    // 否则单选模式下 EditCell 瓷砖也会亮。
+    let edit_cell_active = edit_cell.tool_active && edit_cell.allow_drag;
+    let cell_select_active = edit_cell.tool_active && !edit_cell.allow_drag;
     // 泛洪活动态（[ADR-0052] D6）：判据 = `tool_active`。
     let flood_select_active = flood_select.tool_active;
     // **Gate-1**（[ADR-0052] §9.4）：时间轴播放中，CellMap 写入口工具灰化。
@@ -423,7 +428,28 @@ pub fn map_controls(
                             params.dock.pos = None;
                         }
 
-                        // ── 槽 1：抓手 ────────────────────────────────────
+                        // ── 槽 1：单选模式（2026-10-24 用户需求，排在抓手之前）──
+                        // 「点一下选中一格看属性」，拖动不落笔——与 EditCell 共用
+                        // `EditCellState`，只靠 `allow_drag` 区分形态。
+                        // 放在抓手前面：它是**导航级**的轻量动作（和抓手一样
+                        // 不改数据），比后面的编辑工具更常用。
+                        tool_tile(
+                            ui,
+                            &shell,
+                            metrics,
+                            ICON_MOUSE_POINTER,
+                            if cell_tools_enabled {
+                                t(loc, I18nKey::MapControlsCellSelectHint)
+                            } else {
+                                locked_hint
+                            },
+                            cell_select_active,
+                            cell_tools_enabled,
+                            &mut params.palette,
+                            MapToolId::CellSelect,
+                        );
+
+                        // ── 槽 2：抓手 ────────────────────────────────────
                         // 抓手是**导航**工具，不是写入口——Gate-1 不灰化它
                         // （播放中仍可拖动看图，属只读操作）。
                         tool_tile(

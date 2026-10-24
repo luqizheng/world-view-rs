@@ -85,9 +85,11 @@ pub struct StrokeDiscardPrompt {
 #[allow(clippy::too_many_arguments)]
 pub fn paint_edit_cell_on_drag(
     buttons: Res<ButtonInput<MouseButton>>,
-    // ⚠️ 必须是 Bevy 的 `KeyCode`：`ButtonInput` 只由 `InputPlugin` 为
-    // `KeyCode` 注册资源；早前写成 `ButtonInput<egui::Key>` 会因
-    // 「Resource does not exist」在启动首帧 panic（GUI 烟测抓到的既有缺陷）。
+    // Esc：**必须用 Bevy 的 `KeyCode`**，不是 `egui::Key`。
+    // `ButtonInput<egui::Key>` 没有维护者——Bevy 只给 `KeyCode` / `MouseButton`
+    // 默认注册并逐帧填充，egui 那套键位是另一条输入链。M2 初版写成
+    // `ButtonInput<egui::Key>`，单测用 `run_system_once` 手动 insert 掩盖了
+    // 装配缺失，真机启动即 panic（Resource does not exist）。
     keys: Res<ButtonInput<KeyCode>>,
     playback: Res<PlaybackState>,
     view: Res<ViewState>,
@@ -114,8 +116,18 @@ pub fn paint_edit_cell_on_drag(
     time: Res<Time>,
     screen: Res<crate::app_screen::AppScreen>,
 ) {
-    // 加载中 / 播放中 / 无工具 → 不参与。
-    if screen.shows_loading_overlay() || playback.playing || !edit_cell.tool_active {
+    // 加载中 / 播放中 / 无工具 / **单选模式** → 不参与。
+    //
+    // 单选模式（`allow_drag = false`，2026-10-24）走同一条早退：它在语义上
+    // 就是「这个系统不该管我」——点选由 `commit_edit_cell_on_click` 负责，
+    // hover 由 `track_edit_cell_hover` 负责，本系统只管拖绘累积。
+    // 走早退而不是在函数内部逐段判断，顺带保证「从拖绘切到单选时残笔被丢弃」
+    // （`session.stroke.discard()` 就在这个分支里）。
+    if screen.shows_loading_overlay()
+        || playback.playing
+        || !edit_cell.tool_active
+        || !edit_cell.allow_drag
+    {
         if session.stroke.active {
             session.stroke.discard();
             prompt.last_cell = None;

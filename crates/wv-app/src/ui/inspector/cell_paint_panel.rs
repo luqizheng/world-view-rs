@@ -187,12 +187,19 @@ pub fn render_paint_value_section(
                 .color(shell.t3()),
         );
         let mut delta = session.paint.height_delta as f32;
-        ui.push_id("cell_paint_delta", |ui| {
-            ui.allocate_ui(egui::vec2(120.0, 26.0), |ui| {
-                wv_ui::widgets::controls::numeric_input_bounded(
-                    ui, shell, &mut delta, "m", 10.0, -32767.0, 32767.0,
-                );
-            });
+        // salted id（2026-10-24 抖动修复）：栈地址盐会让两个每帧局部
+        // 复用同一栈槽的输入框拿到同一 id，TextEdit 互抢焦点。
+        ui.allocate_ui(egui::vec2(120.0, 26.0), |ui| {
+            wv_ui::widgets::controls::numeric_input_salted(
+                ui,
+                shell,
+                "cell_paint_delta",
+                &mut delta,
+                "m",
+                10.0,
+                -32767.0,
+                32767.0,
+            );
         });
         session.paint.height_delta = delta.clamp(-32767.0, 32767.0) as i16;
     });
@@ -265,12 +272,18 @@ pub fn render_flood_criterion_section(
                     .color(shell.t3()),
             );
             let mut tol_f = tol as f32;
-            ui.push_id("cell_flood_tolerance", |ui| {
-                ui.allocate_ui(egui::vec2(120.0, 26.0), |ui| {
-                    wv_ui::widgets::controls::numeric_input_bounded(
-                        ui, shell, &mut tol_f, "m", 5.0, 0.0, 32767.0,
-                    );
-                });
+            // salted id（同上）。
+            ui.allocate_ui(egui::vec2(120.0, 26.0), |ui| {
+                wv_ui::widgets::controls::numeric_input_salted(
+                    ui,
+                    shell,
+                    "cell_flood_tolerance",
+                    &mut tol_f,
+                    "m",
+                    5.0,
+                    0.0,
+                    32767.0,
+                );
             });
             flood.criterion = FloodCriterion::HeightTolerance(tol_f.clamp(0.0, 32767.0) as i16);
         });
@@ -418,18 +431,18 @@ pub fn render_derived_section(
                 .color(shell.t3()),
         );
         let mut strength_pct = request.smooth_strength * 100.0;
-        ui.push_id("derived_smooth_strength", |ui| {
-            ui.allocate_ui(egui::vec2(110.0, 26.0), |ui| {
-                wv_ui::widgets::controls::numeric_input_bounded(
-                    ui,
-                    shell,
-                    &mut strength_pct,
-                    "%",
-                    5.0,
-                    0.0,
-                    100.0,
-                );
-            });
+        // salted id（同上）。
+        ui.allocate_ui(egui::vec2(110.0, 26.0), |ui| {
+            wv_ui::widgets::controls::numeric_input_salted(
+                ui,
+                shell,
+                "derived_smooth_strength",
+                &mut strength_pct,
+                "%",
+                5.0,
+                0.0,
+                100.0,
+            );
         });
         request.smooth_strength = (strength_pct / 100.0).clamp(0.0, 1.0);
     });
@@ -450,12 +463,18 @@ pub fn render_derived_section(
                 .color(shell.t3()),
         );
         let mut step = request.quantize_step_m as f32;
-        ui.push_id("derived_quantize_step", |ui| {
-            ui.allocate_ui(egui::vec2(110.0, 26.0), |ui| {
-                wv_ui::widgets::controls::numeric_input_bounded(
-                    ui, shell, &mut step, "m", 5.0, 1.0, 32767.0,
-                );
-            });
+        // salted id（同上）。
+        ui.allocate_ui(egui::vec2(110.0, 26.0), |ui| {
+            wv_ui::widgets::controls::numeric_input_salted(
+                ui,
+                shell,
+                "derived_quantize_step",
+                &mut step,
+                "m",
+                5.0,
+                1.0,
+                32767.0,
+            );
         });
         request.quantize_step_m = step.clamp(1.0, 32767.0) as i16;
     });

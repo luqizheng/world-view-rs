@@ -7,11 +7,28 @@
 use bevy::prelude::*;
 
 /// EditCell 工具的会话态（ADR-0040 决策 5；ADR-0052 扩展）。
-#[derive(Resource, Debug, Default, Clone, PartialEq)]
+///
+/// **不 derive `Default`**：`allow_drag` 需要默认 `true`（EditCell 完整模式
+/// 可拖绘），而 `bool::default()` 是 `false`。手写见下方 `impl Default`。
+#[derive(Resource, Debug, Clone, PartialEq)]
 pub struct EditCellState {
     /// EditCell 工具是否激活（与 wv-render `BrushState::enabled` 同款会话布尔）。
     /// 由命令分发器在 `SelectMapTool(EditCell)` 翻 true / 切走其它工具翻 false。
     pub tool_active: bool,
+    /// **是否允许拖绘**（2026-10-24 用户需求：单选模式）。
+    ///
+    /// 同一个 `tool_active` 承载两种工作形态：
+    /// - `true`（默认）= **单格编辑**（`MapToolId::EditCell`）：点选 + 拖绘连续涂格；
+    /// - `false` = **单选模式**（`MapToolId::CellSelect`）：只点选一格，拖动不落笔。
+    ///
+    /// 为什么用一个布尔而不是两个独立工具状态：hover 准星、点选落定、金色 outline、
+    /// Inspector 表单这四件事**两模式完全一致**，拆成两套状态会让每条 gate 都要
+    /// `a.active || b.active`，重复且易漏。差异只有「拖动是否累积笔触」一处，
+    /// 故收在 `paint_edit_cell_on_drag` 的单点判据里。
+    ///
+    /// 工具条据此画互斥的活动态：EditCell 瓷砖 = `tool_active && allow_drag`，
+    /// CellSelect 瓷砖 = `tool_active && !allow_drag`。
+    pub allow_drag: bool,
     /// 当前鼠标压住的格 (gx, gy)；`None` 表示鼠标不在地图内。
     pub hover: Option<(i32, i32)>,
     /// 点击落定的格 (gx, gy)。ESC 清空 / 切图也清空。
@@ -30,11 +47,33 @@ pub struct EditCellState {
     pub last_map_id: Option<wv_core::Id>,
 }
 
+impl Default for EditCellState {
+    /// 默认 = EditCell 完整模式（工具未激活，但**允许拖绘**）。
+    ///
+    /// `allow_drag = true` 是关键：`MapToolId::EditCell` 的语义是「点选 + 拖绘」，
+    /// 而 `MapToolId::CellSelect` 才把它翻成 `false`。若这里给 `false`，
+    /// 用户按 `C` 进 EditCell 后会「只选不画」——与工具名不符。
+    fn default() -> Self {
+        Self {
+            tool_active: false,
+            allow_drag: true,
+            hover: None,
+            selected: None,
+            region_cells: Vec::new(),
+            region_fingerprint: 0,
+            last_map_id: None,
+        }
+    }
+}
+
 impl EditCellState {
     /// 清空 tool_active + hover + selected + region_cells；
     /// **不会**清 `last_map_id`（那是别处碰）。
     pub fn clear(&mut self) {
         self.tool_active = false;
+        // 清空工具态时一并复位拖绘开关——否则下次进 EditCell 前若忘了设，
+        // 会以「单选」形态出现（工具名与行为不符）。
+        self.allow_drag = true;
         self.hover = None;
         self.selected = None;
         self.region_cells.clear();
@@ -163,6 +202,7 @@ mod tests {
     fn close_tool_keeps_selected_and_region_cells() {
         let mut s = EditCellState {
             tool_active: true,
+            allow_drag: true,
             hover: Some((3, 4)),
             selected: Some((10, 20)),
             region_cells: vec![(1, 1), (2, 2), (3, 3)],
@@ -182,6 +222,7 @@ mod tests {
     fn clear_wipes_everything_but_last_map_id() {
         let mut s = EditCellState {
             tool_active: true,
+            allow_drag: true,
             hover: Some((1, 1)),
             selected: Some((2, 2)),
             region_cells: vec![(3, 3)],
@@ -203,6 +244,7 @@ mod tests {
     fn on_map_change_clears_only_when_map_actually_changes() {
         let mut s = EditCellState {
             tool_active: true,
+            allow_drag: true,
             hover: Some((1, 1)),
             selected: Some((2, 2)),
             region_cells: vec![],
@@ -220,5 +262,49 @@ mod tests {
         let map_b = wv_core::Id::new_unchecked("map_b");
         s.on_map_change(&map_b);
         assert_eq!(s.selected, None, "换图应清选区");
+    }
+
+    // ── 单选模式（2026-10-24 用户需求）─────────────────────────────
+
+    /// **默认形态 = EditCell（可拖绘）**。
+    ///
+    /// `allow_drag` 必须是 `true` 而不是 `bool::default()` 的 `false`——
+    /// 这条测试就是给那个手写 `Default` 兜底的：哪天有人把 `impl Default`
+    /// 换回 `derive`，EditCell 会静默退化成「只选不画」。
+    #[test]
+    fn default_state_allows_dragging() {
+        let s = EditCellState::default();
+        assert!(!s.tool_active, "默认工具未激活");
+        assert!(s.allow_drag, "默认形态 = EditCell，必须允许拖绘");
+    }
+
+    /// `clear()` 把形态一并复位——否则下次激活 EditCell 会以「单选」出现。
+    #[test]
+    fn clear_resets_drag_mode_to_edit_cell() {
+        let mut s = EditCellState {
+            tool_active: true,
+            allow_drag: false, // 单选模式
+            selected: Some((3, 4)),
+            ..Default::default()
+        };
+        s.clear();
+        assert!(!s.tool_active, "clear 应关工具");
+        assert!(s.allow_drag, "clear 应把形态复位成 EditCell（可拖绘）");
+    }
+
+    /// `close_tool()`（S0-1 口径）**不动** `allow_drag`——切走再切回应当
+    /// 回到同一个形态，而不是被悄悄改成 EditCell。
+    #[test]
+    fn close_tool_keeps_drag_mode() {
+        let mut s = EditCellState {
+            tool_active: true,
+            allow_drag: false,
+            selected: Some((3, 4)),
+            ..Default::default()
+        };
+        s.close_tool();
+        assert!(!s.tool_active, "close_tool 只关工具");
+        assert!(!s.allow_drag, "close_tool 不该改形态");
+        assert_eq!(s.selected, Some((3, 4)), "close_tool 不清选区");
     }
 }

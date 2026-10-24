@@ -2059,7 +2059,13 @@ pub fn sync_cell_selection(
     let thickness = THICKNESS_PX * view.scale;
 
     // ── mesh：只在尺寸变化时重建（其余帧复用句柄，避免每帧 GPU 重传）──
-    if entities.last_size != size {
+    //
+    // 条件必须带 `fill_mesh.is_none()`（2026-10-24 真机 panic 修复）：
+    // 「尺寸没变」不等于「句柄还在」——`release_assets`（gate 失败路径）会
+    // 清句柄。只判 `last_size` 会在「同尺寸格、中间隔了一帧 gate 失败」时
+    // 跳过重建，随后 `.expect("尺寸已定,mesh 已建")` 直接 panic。
+    // `sync_cell_hover` 一直是双条件写法，此处对齐。
+    if entities.last_size != size || entities.fill_mesh.is_none() {
         entities.release_assets(&mut meshes);
         entities.fill_mesh = Some(meshes.add(Rectangle::new(size.x, size.y)));
         let half = size * 0.5;

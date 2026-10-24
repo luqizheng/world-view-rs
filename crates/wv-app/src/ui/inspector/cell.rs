@@ -40,7 +40,7 @@ use crate::ui::widgets::{
     ICON_LOCK_KEYHOLE,
 };
 use wv_render::state::EditCellState;
-use wv_ui::widgets::controls::{numeric_input_bounded, radio};
+use wv_ui::widgets::controls::{numeric_input_salted, radio};
 
 /// Cell 编辑器的两个工作模式（[ADR-0040] 补 B）。
 ///
@@ -323,19 +323,22 @@ fn render_fields(
                 .size(font_size::SMALL)
                 .color(shell.t2()),
         );
-        // push_id:与批量区的两个数值输入区分 id(egui 同 scope 同 id 冲突告警)。
-        ui.push_id("cell_height", |ui| {
-            ui.allocate_ui(egui::vec2(168.0, 28.0), |ui| {
-                numeric_input_bounded(
-                    ui,
-                    shell,
-                    &mut height_f,
-                    "m",
-                    1.0,
-                    i16::MIN as f32,
-                    i16::MAX as f32,
-                );
-            });
+        // salted id（2026-10-24 修复「点击后不停抖动」）：旧实现在控件内部
+        // 用**栈地址**当盐——`height_f` 是每帧新建的局部，与批量区的 `delta`
+        // 复用同一栈槽时两框同 id，TextEdit 互抢焦点表现为不停抖动。
+        // salted 变体由调用方给语义名，跨帧稳定且互不冲突；外层 push_id
+        // 已多余（控件内部已 push），一并移除。
+        ui.allocate_ui(egui::vec2(168.0, 28.0), |ui| {
+            numeric_input_salted(
+                ui,
+                shell,
+                "cell_height",
+                &mut height_f,
+                "m",
+                1.0,
+                i16::MIN as f32,
+                i16::MAX as f32,
+            );
         });
     });
     next.height = height_f.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
@@ -626,12 +629,18 @@ fn render_batch_section(
                 .color(shell.t2()),
         );
         let mut delta = 0.0f32;
-        // push_id:数值输入与单格海拔输入必须不同 id（egui 同 scope 同 id 会
-        // 弹「First use of widget ID」告警并让控件状态互串）。
-        ui.push_id("batch_height_delta", |ui| {
-            ui.allocate_ui(egui::vec2(120.0, 28.0), |ui| {
-                numeric_input_bounded(ui, shell, &mut delta, "m", 10.0, -32767.0, 32767.0);
-            });
+        // salted id（同上，2026-10-24 抖动修复）。
+        ui.allocate_ui(egui::vec2(120.0, 28.0), |ui| {
+            numeric_input_salted(
+                ui,
+                shell,
+                "batch_height_delta",
+                &mut delta,
+                "m",
+                10.0,
+                -32767.0,
+                32767.0,
+            );
         });
         if crate::ui::widgets::button(
             ui,
