@@ -152,3 +152,12 @@ opt-level = 3
 
 [profile.dev.package.wv-app]
 opt-level = 2
+
+# zstd-sys（唯一 C 依赖）单独关闭 debug（2026-10-24 临时绕行）：
+# 本机 MSVC c1.dll 处于异常状态——cc 传 `/Z7`（C 调试信息嵌入）时 cl.exe
+# 以 D8050「无法将命令行放入调试记录中」静默失败（真实报错走 stdout，
+# 被 cargo 吞掉，只余 exit 2）。单发/并发/换 cl 副本/换环境均复现；
+# vcpkg 同款报错的官方答复 = VS Installer 修复安装。修复后可删除本段。
+# 代价仅为 zstd C 代码内部无调试符号（无人在意）。
+[profile.dev.package.zstd-sys]
+debug = false
