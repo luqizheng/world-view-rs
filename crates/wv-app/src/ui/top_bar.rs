@@ -260,7 +260,7 @@ fn browse_edit_segment(
                         palette.pending = Some(CommandId::SelectMapTool(MapToolId::EditCell));
                         view.mode = ViewMode::Schematic;
                     } else {
-                        // 进入：快照面板 → 只开 Inspector → 排 EditCell 工具。
+                        // 进入：快照面板 → 只开笔刷窗 → 排 EditCell 工具。
                         let backup = Panel::ALL
                             .iter()
                             .map(|p| (*p, panels.is_visible(*p)))
@@ -269,10 +269,12 @@ fn browse_edit_segment(
                         for p in Panel::ALL {
                             panels.set_visible(p, false);
                         }
-                        // 2026-10-22 统一 Inspector：Cell 编辑已并入 Inspector 的
-                        // 「属性」页签（EditCell 工具激活时自动出 Cell 表单），
-                        // 故工作区开的是 Inspector 而不是已停渲染的 CellEditor。
-                        panels.set_visible(Panel::Inspector, true);
+                        // 2026-10-24 用户裁定：CellMap 的编辑控件（读数条 /
+                        // 落笔值 / 泛洪判据 / 派生运算 / 单格与批量表单）
+                        // 迁入**笔刷浮动窗**——地形编辑的「笔刷语义」聚在
+                        // 一起，Inspector 回归通用属性检查。故工作区开的
+                        // 是 Brush 而不是 Inspector。
+                        panels.set_visible(Panel::Brush, true);
                         palette.pending = Some(CommandId::SelectMapTool(MapToolId::EditCell));
                         view.mode = ViewMode::Topographic;
                     }

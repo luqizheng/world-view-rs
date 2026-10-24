@@ -677,3 +677,64 @@ cargo fmt --all -- --check                          # 干净
 - **§5 M3 的「CellMap 专属顶栏读数条评估」**：ADR 原文即「v1 留在面板内，
   避免动顶栏布局」——评估结论 = **维持现状**（读数条留在 Inspector 面板顶部）。
 - **§6 Q4**（方向键 nudge 与相机键冲突）：仍为待裁，未动。
+
+---
+
+## 11. 追写 · 2026-10-24 单选模式（用户新增需求）
+
+**触发**：用户 2026-10-24 对话：「cell map，map control 增加单选模式。点击以下
+选择一个 cell，排列 hand 抓手之前」。本节按 §6.3 追写，**不改** D1–D10 与 §9/§10
+任何既有文字。
+
+### 11.1 新决策 D11 · 单选模式与单格编辑共享一条工具态
+
+工具条第 1 槽（**抓手之前**）新增「单选」瓷砖（图标 `mouse-pointer-2`，快捷键 `S`）。
+
+**关键设计：不为它新开一套状态。** `EditCellState` 加一个 `allow_drag: bool`，
+把「单格编辑」拆成两种形态：
+
+| 形态 | `tool_active` | `allow_drag` | 行为 |
+|---|---|---|---|
+| `MapToolId::EditCell` | true | **true**（默认） | 点选 + 拖绘连续涂格（D3） |
+| `MapToolId::CellSelect` | true | false | 只点选，拖动不落笔 |
+
+**理由**：hover 准星（D2）、点选落定、金色 outline（ADR-0040）、Inspector
+表单这四件事两模式**完全一致**。拆成两个独立资源会让每条 gate 退化成
+`a.active || b.active`——重复、易漏，且新增判定点时必须记得改两处。
+差异只有「拖动是否累积笔触」一条，收在 `paint_edit_cell_on_drag` 的单一早退
+判据里。
+
+**副产物**：从拖绘切到单选时，残笔走同一分支的 `session.stroke.discard()`，
+不会留下半笔。
+
+### 11.2 必须带形态的三处判据（实现要点）
+
+1. **`already_on`**（`apply_pending_commands`）：
+   `EditCell => tool_active && allow_drag` / `CellSelect => tool_active && !allow_drag`。
+   漏了形态会出现「单选状态下点 EditCell 瓷砖 → 被误判已开 → 关掉工具」，
+   而非切换形态。
+2. **两枚瓷砖的 active**：同样带形态，否则单选模式下 EditCell 瓷砖也亮。
+3. **`EditCellState::default()`**：`allow_drag` 必须 `true`。去掉
+   `derive(Default)` 手写 impl——`bool::default()` 是 `false`，照搬会让
+   `C` 快捷键进 EditCell 后「只选不画」，工具名与行为不符。
+   `clear()` 一并复位（否则下次激活可能以单选形态出现）；
+   `close_tool()` **不动**它（S0-1 口径：切走再切回应回到同一形态）。
+
+### 11.3 与既有条款的关系
+
+- **不推翻任何既有决策**：D3（连续绘制）仍属 EditCell 形态；D2 hover 准星、
+  D7-1 瓷砖、ADR-0040 单格编辑语义对两形态同样成立。
+- **扩展 ADR-0043 工具条布局**：第 1 槽由抓手改为单选，抓手顺延至第 2 槽。
+  槽位总数 +1（14 → 15 个可点项），仍低于 Bevy 系统参数上限触发的
+  折层方案（ADR-0043 已折叠过一次）。
+- **§6 Q4（方向键 nudge）仍未裁**，不受本节影响。
+
+### 11.4 测试锚（+5）
+
+| 测试 | 守的是什么 |
+|---|---|
+| `default_state_allows_dragging` | 手写 `Default`（防止被改回 derive 导致静默退化） |
+| `clear_resets_drag_mode_to_edit_cell` | `clear()` 复位形态 |
+| `close_tool_keeps_drag_mode` | `close_tool()` 不改形态（S0-1 口径） |
+| `cell_select_and_edit_cell_share_tool_active_but_differ_in_allow_drag` | 分发器三态：开单选 / 切 EditCell / 对当前形态再点关闭 |
+| `switching_from_cell_select_to_edit_cell_keeps_selection` | 切形态不丢 `selected` / `region_cells` |

@@ -172,6 +172,19 @@ impl CellSelectionEntities {
     }
 
     /// 释放已缓存的 mesh 资产（实体消失后调用，避免 `Assets` 堆积）。
+    ///
+    /// **必须一并复位 `last_size`**（2026-10-24 真机崩溃修复）：
+    /// `sync_cell_selection` 用 `last_size != size` 判断「要不要重建 mesh」。
+    /// 只 release 不复位的话，下次选中**同尺寸**的格会跳过重建 → `fill_mesh`
+    /// 仍是 `None` → 调用点的 `.expect("尺寸已定,mesh 已建")` 直接 panic。
+    ///
+    /// 触发序列（真实用户路径，一次就中）：
+    /// 点第 1 格（建 mesh，last_size = size）→ 点第 2 格时中间经过一帧
+    /// gate 失败（`PointerOverUi` / `recipe` 关 / `cursor_world` 为 None）
+    /// → release（mesh 没了，last_size 还在）→ 第 3 次点击 → panic。
+    ///
+    /// `CellHoverEntities::release_assets` 一直是这么写的；本结构漏了这一步，
+    /// 与「`EditorOverlayPlugin` 从未装配」同源——代码从未真机跑过。
     pub fn release_assets(&mut self, meshes: &mut Assets<Mesh>) {
         if let Some(h) = self.fill_mesh.take() {
             meshes.remove(&h);
@@ -181,6 +194,7 @@ impl CellSelectionEntities {
                 meshes.remove(&h);
             }
         }
+        self.last_size = Vec2::ZERO;
     }
 }
 
@@ -561,5 +575,46 @@ mod tests {
         assert_eq!(count, 36);
         assert_eq!(origin, Vec2::new(20.0, 20.0));
         assert_eq!(bbox, Vec2::new(30.0, 30.0));
+    }
+
+    // ── release_assets 必复位 last_size（2026-10-24 真机 panic 回归）──────
+
+    /// **`release_assets` 不复位 `last_size` 会让「同尺寸重选」直接 panic。**
+    ///
+    /// 复现序列（用户点三下就崩的真实路径）：
+    /// 1. 选中格 A → 渲染侧建 mesh，`last_size = size`；
+    /// 2. 中间一帧 gate 失败（`PointerOverUi` / `recipe` 关）→ release；
+    /// 3. 再选中**同尺寸**的格 B → `last_size == size` → 跳过重建 →
+    ///    `fill_mesh` 仍是 `None` → 调用点 `.expect()` panic。
+    ///
+    /// 本测试守住第 2 步的复位动作：release 之后 `last_size` 必须回到
+    /// `Vec2::ZERO`，这样第 3 步必然触发重建。`CellHoverEntities` 一直是
+    /// 这么写的，`CellSelectionEntities` 曾漏掉。
+    #[test]
+    fn release_assets_resets_last_size() {
+        let mut e = CellSelectionEntities {
+            last_size: Vec2::splat(8.0),
+            ..Default::default()
+        };
+        let mut meshes = Assets::<Mesh>::default();
+        e.release_assets(&mut meshes);
+        assert_eq!(
+            e.last_size,
+            Vec2::ZERO,
+            "release_assets 必须复位 last_size，否则同尺寸重选会跳过重建"
+        );
+        assert!(e.fill_mesh.is_none(), "句柄应已释放");
+    }
+
+    /// 对照：`CellHoverEntities` 同款不变式（防止将来被「优化」掉）。
+    #[test]
+    fn hover_release_assets_also_resets_last_size() {
+        let mut e = CellHoverEntities {
+            last_size: Vec2::splat(8.0),
+            ..Default::default()
+        };
+        let mut meshes = Assets::<Mesh>::default();
+        e.release_assets(&mut meshes);
+        assert_eq!(e.last_size, Vec2::ZERO);
     }
 }

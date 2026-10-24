@@ -362,6 +362,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::InspectorTabFactionLayers => "势力层",
         I18nKey::InspectorTabSituations => "事态",
         I18nKey::InspectorSelectionMissing => "选中的对象已不存在（可能已被删除或撤销）",
+        I18nKey::InspectorCellMovedToBrush => "地形格编辑已移至笔刷面板（读数 / 落笔值 / 派生运算）",
         I18nKey::InspectorAnchorDerived => "锚点与范围由地界/折线派生，不可直接改",
         I18nKey::InspectorPlaceRank => "呈现级别",
         I18nKey::InspectorPlaceRegenMarker => "重生成标记",
@@ -985,6 +986,9 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::InspectorTabFactionLayers => "Faction layers",
         I18nKey::InspectorTabSituations => "Situations",
         I18nKey::InspectorSelectionMissing => "The selected object no longer exists (deleted or undone)",
+        I18nKey::InspectorCellMovedToBrush => {
+            "Cell editing moved to the Brush panel (readout / paint values / derived ops)"
+        }
         I18nKey::InspectorAnchorDerived => "Anchor and extent are derived from the territory/polyline and cannot be edited",
         I18nKey::InspectorPlaceRank => "Rank",
         I18nKey::InspectorPlaceRegenMarker => "Regenerate marker",

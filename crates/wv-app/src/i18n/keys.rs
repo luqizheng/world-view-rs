@@ -633,6 +633,8 @@ pub enum I18nKey {
     InspectorTabSituations,
     /// 选中实体已被删除（表单守卫提示）
     InspectorSelectionMissing,
+    /// Cell 编辑已迁笔刷窗的指路文案（2026-10-24）
+    InspectorCellMovedToBrush,
     /// Place 锚点只读注记（由地界/折线派生）
     InspectorAnchorDerived,
     /// Place 表单：呈现级别
@@ -1200,7 +1202,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 472] = [
+    pub const ALL: [I18nKey; 473] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1480,6 +1482,7 @@ impl I18nKey {
         I18nKey::InspectorTabFactionLayers,
         I18nKey::InspectorTabSituations,
         I18nKey::InspectorSelectionMissing,
+        I18nKey::InspectorCellMovedToBrush,
         I18nKey::InspectorAnchorDerived,
         I18nKey::InspectorPlaceRank,
         I18nKey::InspectorPlaceRegenMarker,

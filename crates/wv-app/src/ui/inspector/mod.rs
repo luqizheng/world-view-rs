@@ -354,13 +354,14 @@ fn render_properties(
     boundary: &mut wv_render::state::BiomeBoundaryState,
     display: &mut wv_render::faction_overlays::FactionDisplay,
     nature: &mut crate::state::NatureRegionUiState,
-    selection: &mut wv_render::state::SelectionState,
-    cell_mode: &mut cell::CellPanelMode,
-    // 落笔会话态（[ADR-0052] D4）+ 泛洪判据（D6）：Cell 表单要读写它们。
-    paint_session: &mut wv_world_cell_map::cell_paint::CellPaintSession,
-    flood_select: &mut crate::state::FloodSelectState,
-    // 派生运算请求（[ADR-0052] D6 · M3）：面板排意图，系统执行。
-    derived: &mut crate::edit::derived_op::DerivedOpRequest,
+    // 以下五个参数自 Cell 表单迁入笔刷窗（2026-10-24）后本函数不再消费，
+    // 但 `panel_inspector` 仍要解 ResMut 再传——签名保留（改调用侧两处
+    // 地方的成本 vs 留着的成本，留下的总成本低），下划线化消 unused。
+    _selection: &mut wv_render::state::SelectionState,
+    _cell_mode: &mut cell::CellPanelMode,
+    _paint_session: &mut wv_world_cell_map::cell_paint::CellPaintSession,
+    _flood_select: &mut crate::state::FloodSelectState,
+    _derived: &mut crate::edit::derived_op::DerivedOpRequest,
     drafts: &mut event::InspectorDrafts,
     tex: &mut wv_render::terrain_view::TerrainTexture,
     notice: &mut crate::ui_shell::ShellNotice,
@@ -417,27 +418,25 @@ fn render_properties(
             }
         }
         FormKind::Cell => {
-            // 候选命名上下文优先于 Cell 表单（作者点中候选 = 正在命名）。
+            // 候选命名上下文优先（作者点中候选 = 正在命名）——这仍属 Inspector
+            // 的职责，2026-10-24 迁移时保留。
             if let Some(cell) = nature.pending_candidate {
                 nature_candidate::candidate_naming_form(
                     ui, shell, cell, projection, edit, view, grid, notice, time, nature,
                 );
                 return;
             }
-            cell::cell_form(
-                ui,
-                shell,
-                projection,
-                edit_cell,
-                edit,
-                selection,
-                tex,
-                loc,
-                cell_mode,
-                paint_session,
-                flood_select,
-                derived,
-                playback.playing,
+            // Cell 编辑表单已迁入笔刷浮动窗（2026-10-24 用户裁定）：
+            // 读数条 / 落笔值 / 泛洪判据 / 派生运算 / 单格与批量表单见
+            // `brush_panel` 的 CellMap 编辑段。这里给一句指路，避免作者
+            // 在 Inspector 里找「怎么改格子」。
+            ui.label(
+                egui::RichText::new(t_key(
+                    &CurrentLocale(loc),
+                    I18nKey::InspectorCellMovedToBrush,
+                ))
+                .small()
+                .color(shell.t3()),
             );
         }
         FormKind::Place => {
