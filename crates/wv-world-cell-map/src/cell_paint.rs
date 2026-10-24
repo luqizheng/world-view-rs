@@ -61,7 +61,10 @@ impl CellPaintValue {
     ///
     /// **海拔增量带钳制**：`i16` 加法溢出在 debug 模式会 panic，用
     /// `saturating_add` 兜住（`32767 + 100` → `32767`）。
-    pub fn apply(&self, before: wv_core::terrain::TerrainCellData) -> wv_core::terrain::TerrainCellData {
+    pub fn apply(
+        &self,
+        before: wv_core::terrain::TerrainCellData,
+    ) -> wv_core::terrain::TerrainCellData {
         wv_core::terrain::TerrainCellData {
             height: before.height.saturating_add(self.height_delta),
             surface: self.surface,
@@ -80,9 +83,10 @@ impl CellPaintValue {
 
 /// **笔触态**（D3）——拖动期间累积的格集合。
 ///
-/// 生命周期：
+/// 生命周期（`text` 标记：这是 ASCII 流程图，不是可编译的 Rust 代码——
+/// 不加标记时 rustdoc 会把它当 doctest 编译，报「unknown start of token ─」）：
 ///
-/// ```
+/// ```text
 /// press ──▶ 起笔（记快照）──▶ 拖动（累积格 + 待落色块）──▶ release ──▶ 提交
 ///                │                                                    │
 ///                └─ Esc / 右键 / 切工具 ──▶ 丢弃整笔 ────────────────┘
@@ -317,7 +321,18 @@ mod tests {
         };
         assert!(!paint.changes(cell(100, 1, 4)), "完全相同 → 无变化");
         assert!(paint.changes(cell(100, 0, 4)), "地表不同 → 有变化");
-        assert!(paint.changes(cell(99, 1, 4)), "海拔不同 → 有变化");
+        // 海拔是**相对增量**：`height_delta = 0` 时无论原海拔多少都不改，
+        // 故不是「海拔不同就有变化」——只有增量非 0 才动海拔。
+        assert!(
+            !paint.changes(cell(99, 1, 4)),
+            "增量为 0 → 原海拔多高都不变，不算变化"
+        );
+        let raise = CellPaintValue {
+            surface: 1,
+            biome: 4,
+            height_delta: 20,
+        };
+        assert!(raise.changes(cell(99, 1, 4)), "增量非 0 → 海拔会变");
     }
 
     // ── D3 · 笔触累积与去重 ──────────────────────────────────────────

@@ -33,7 +33,9 @@ fn flood_match(criterion: FloodCriterion, cell: TerrainCell, seed: TerrainCell) 
     match criterion {
         FloodCriterion::Surface => cell.surface == seed.surface,
         FloodCriterion::Biome => cell.biome == seed.biome,
-        FloodCriterion::HeightTolerance(tol) => (cell.height as i32 - seed.height as i32).abs() <= tol as i32,
+        FloodCriterion::HeightTolerance(tol) => {
+            (cell.height as i32 - seed.height as i32).abs() <= tol as i32
+        }
     }
 }
 
@@ -46,7 +48,12 @@ fn flood_match(criterion: FloodCriterion, cell: TerrainCell, seed: TerrainCell) 
 /// （[ADR-0052] D6-A：泛洪结果入 `region_cells`，用户确认后才应用）。
 ///
 /// **越界安全**：起点不在网格内 → 返回空集（不 panic）。
-pub fn flood_region(grid: &TerrainGrid, sx: i32, sy: i32, criterion: FloodCriterion) -> Vec<(i32, i32)> {
+pub fn flood_region(
+    grid: &TerrainGrid,
+    sx: i32,
+    sy: i32,
+    criterion: FloodCriterion,
+) -> Vec<(i32, i32)> {
     let Some(seed) = grid.get(sx, sy) else {
         return Vec::new();
     };
@@ -247,7 +254,10 @@ mod flood_tests {
             },
         );
         let cells = flood_region(&g, 0, 0, FloodCriterion::Biome);
-        assert!(cells.iter().all(|(x, y)| (x + y) % 2 == 0), "只应命中森林格");
+        assert!(
+            cells.iter().all(|(x, y)| (x + y) % 2 == 0),
+            "只应命中森林格"
+        );
         assert!(!cells.is_empty());
     }
 
@@ -311,10 +321,7 @@ mod flood_tests {
             },
         );
         let cells = flood_region(&g, 0, 0, FloodCriterion::Biome);
-        assert!(
-            !cells.contains(&(2, 2)),
-            "对角格不应被八向泛洪吸入"
-        );
+        assert!(!cells.contains(&(2, 2)), "对角格不应被八向泛洪吸入");
         assert_eq!(cells.len(), 8);
     }
 }

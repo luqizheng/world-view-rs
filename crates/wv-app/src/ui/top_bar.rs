@@ -697,6 +697,10 @@ const STATUS_GAP_CENTER: f32 = 24.0;
 /// hex）：`#11171C@.96`→`bg_app@.96`、`#A3B1BA`→`text_2`、`#778994`→`text_3`、
 /// `#D6B77B`→`gold`、`#8FB397`→`badge_ok`、`#303B43`→`border_subtle`——
 /// 亮色主题因此自动获得同语义配色，而非设计稿的暗色单套。
+///
+/// 参数 9 个（含 [ADR-0052] D8-B 的笔触进度态）：Bevy 系统的宽签名是框架
+/// 惯例，clippy 的 7 参数默认阈值不适用于 `Res`/`ResMut` 声明式依赖。
+#[allow(clippy::too_many_arguments)]
 pub fn status_bar(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,

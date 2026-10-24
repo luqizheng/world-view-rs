@@ -490,15 +490,17 @@ fn numeric_input_bounded_inner(
             .inner_margin(margin_xy(INPUT_PAD_X, 0.0));
         let mut out = None;
         frame.show(ui, |ui| {
-            out = Some(ui.add(
-                egui::TextEdit::singleline(text)
-                    .id_source("numeric_text")
-                    .desired_width(f32::INFINITY)
-                    .background_color(egui::Color32::TRANSPARENT)
-                    .margin(egui::Margin::ZERO)
-                    .frame(egui::Frame::NONE)
-                    .text_color(shell.t1()),
-            ));
+            out = Some(
+                ui.add(
+                    egui::TextEdit::singleline(text)
+                        .id_source("numeric_text")
+                        .desired_width(f32::INFINITY)
+                        .background_color(egui::Color32::TRANSPARENT)
+                        .margin(egui::Margin::ZERO)
+                        .frame(egui::Frame::NONE)
+                        .text_color(shell.t1()),
+                ),
+            );
         });
         let resp = out.expect("Frame::show 必然执行一次");
 
@@ -1717,13 +1719,25 @@ mod tests {
     #[test]
     fn numeric_scrub_accumulates_every_4px() {
         // 8px = 2 step → +2 步（step = 10 m）
-        assert_eq!(numeric_scrub_value(100.0, 8.0, 10.0, 1.0, -1000.0, 1000.0), 120.0);
+        assert_eq!(
+            numeric_scrub_value(100.0, 8.0, 10.0, 1.0, -1000.0, 1000.0),
+            120.0
+        );
         // 11px = 2 step（trunc(11/4) = 2）→ 仍是 +20
-        assert_eq!(numeric_scrub_value(100.0, 11.0, 10.0, 1.0, -1000.0, 1000.0), 120.0);
+        assert_eq!(
+            numeric_scrub_value(100.0, 11.0, 10.0, 1.0, -1000.0, 1000.0),
+            120.0
+        );
         // 12px = 3 step → +30
-        assert_eq!(numeric_scrub_value(100.0, 12.0, 10.0, 1.0, -1000.0, 1000.0), 130.0);
+        assert_eq!(
+            numeric_scrub_value(100.0, 12.0, 10.0, 1.0, -1000.0, 1000.0),
+            130.0
+        );
         // 0px = 0 step → 原值
-        assert_eq!(numeric_scrub_value(100.0, 0.0, 10.0, 1.0, -1000.0, 1000.0), 100.0);
+        assert_eq!(
+            numeric_scrub_value(100.0, 0.0, 10.0, 1.0, -1000.0, 1000.0),
+            100.0
+        );
     }
 
     /// **D1 · scrub 方向**：向下拖（负位移）必须**减小**值——
@@ -1731,11 +1745,20 @@ mod tests {
     #[test]
     fn numeric_scrub_direction_is_signed() {
         // 向上 12px = +3 step
-        assert_eq!(numeric_scrub_value(100.0, 12.0, 10.0, 1.0, -1000.0, 1000.0), 130.0);
+        assert_eq!(
+            numeric_scrub_value(100.0, 12.0, 10.0, 1.0, -1000.0, 1000.0),
+            130.0
+        );
         // 向下 12px = −3 step
-        assert_eq!(numeric_scrub_value(100.0, -12.0, 10.0, 1.0, -1000.0, 1000.0), 70.0);
+        assert_eq!(
+            numeric_scrub_value(100.0, -12.0, 10.0, 1.0, -1000.0, 1000.0),
+            70.0
+        );
         // 负方向用 trunc 保对称：−11px = −2 步（不是 floor 的 −3）
-        assert_eq!(numeric_scrub_value(100.0, -11.0, 10.0, 1.0, -1000.0, 1000.0), 80.0);
+        assert_eq!(
+            numeric_scrub_value(100.0, -11.0, 10.0, 1.0, -1000.0, 1000.0),
+            80.0
+        );
     }
 
     /// **D1 · 修饰键档位**：Shift ×10 / Ctrl ×0.1 / Alt ×100。
@@ -1795,16 +1818,22 @@ mod tests {
         let mut error = NumericError::default();
         // 合法 → 写入
         let mut v = 0.0;
-        assert!(numeric_commit_text("1200", 0.0, &mut v, -1000.0, 8848.0, 0.0, &mut error));
+        assert!(numeric_commit_text(
+            "1200", 0.0, &mut v, -1000.0, 8848.0, 0.0, &mut error
+        ));
         assert_eq!(v, 1200.0);
         assert!(error.message.is_empty(), "成功后应清错误提示");
         // 越上界 → 钳制到 max
         let mut v = 0.0;
-        assert!(numeric_commit_text("99999", 0.0, &mut v, -1000.0, 8848.0, 0.0, &mut error));
+        assert!(numeric_commit_text(
+            "99999", 0.0, &mut v, -1000.0, 8848.0, 0.0, &mut error
+        ));
         assert_eq!(v, 8848.0);
         // 越下界 → 钳制到 min
         let mut v = 0.0;
-        assert!(numeric_commit_text("-99999", 0.0, &mut v, -1000.0, 8848.0, 0.0, &mut error));
+        assert!(numeric_commit_text(
+            "-99999", 0.0, &mut v, -1000.0, 8848.0, 0.0, &mut error
+        ));
         assert_eq!(v, -1000.0);
     }
 
@@ -1827,9 +1856,15 @@ mod tests {
     #[test]
     fn numeric_scrub_value_clamps_to_bounds() {
         // 上界：press 100 + 100 step × 10 = 1100 → 钳到 150
-        assert_eq!(numeric_scrub_value(100.0, 400.0, 10.0, 1.0, 0.0, 150.0), 150.0);
+        assert_eq!(
+            numeric_scrub_value(100.0, 400.0, 10.0, 1.0, 0.0, 150.0),
+            150.0
+        );
         // 下界：press 100 − 100 step × 10 = -900 → 钳到 95
-        assert_eq!(numeric_scrub_value(100.0, -400.0, 10.0, 1.0, 95.0, 1000.0), 95.0);
+        assert_eq!(
+            numeric_scrub_value(100.0, -400.0, 10.0, 1.0, 95.0, 1000.0),
+            95.0
+        );
     }
 
     #[test]

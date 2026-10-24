@@ -239,10 +239,12 @@ pub fn paint_edit_cell_on_drag(
         // **D3-E：stale 复核**——任一格与快照不符 → 整笔拒收。
         if let Some(bad) = session.stroke.stale_cells(&current) {
             notice.error(
-                &format!(
+                format!(
                     "整笔已拒收：{} 格快照不一致（{}）",
                     bad.len(),
-                    bad.first().map(|(x, y)| format!("({x},{y})")).unwrap_or_default()
+                    bad.first()
+                        .map(|(x, y)| format!("({x},{y})"))
+                        .unwrap_or_default()
                 ),
                 (time.elapsed_secs() * 60.0) as u64,
             );
@@ -354,12 +356,13 @@ mod tests {
     }
 
     fn state_with_region() -> EditCellState {
-        let mut s = EditCellState::default();
-        s.tool_active = true;
-        s.selected = Some((3, 4));
-        s.region_cells = vec![(0, 0), (1, 0), (2, 0)];
-        s.region_fingerprint = 0xdead_beef;
-        s
+        EditCellState {
+            tool_active: true,
+            selected: Some((3, 4)),
+            region_cells: vec![(0, 0), (1, 0), (2, 0)],
+            region_fingerprint: 0xdead_beef,
+            ..Default::default()
+        }
     }
 
     // ── D3-A · 起笔清 region_cells ──────────────────────────────────
@@ -422,10 +425,7 @@ mod tests {
 
     #[test]
     fn esc_within_threshold_discards_silently() {
-        assert!(
-            !discard_needs_confirmation(0),
-            "0 格不该弹确认"
-        );
+        assert!(!discard_needs_confirmation(0), "0 格不该弹确认");
         assert!(
             !discard_needs_confirmation(STROKE_DISCARD_CONFIRM_THRESHOLD),
             "正好 50 格不该弹确认（≤ 阈值静默）"

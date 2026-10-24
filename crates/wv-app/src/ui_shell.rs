@@ -1567,7 +1567,9 @@ fn apply_pending_commands(
                 Ok(outcome) => {
                     // 撤销/重做后世界可能改——诊断需要重算。
                     // `Ok(false)`（无可撤销/重做）时不动，避免无谓重算。
-                    if outcome.message != "没有可撤销的操作" && outcome.message != "没有可重做的操作" {
+                    if outcome.message != "没有可撤销的操作"
+                        && outcome.message != "没有可重做的操作"
+                    {
                         diagnostics.needs_diagnose = true;
                     }
                     if !outcome.changed_cells.is_empty() {
@@ -2130,6 +2132,12 @@ mod tests {
             last_map: None,
         });
         world.insert_resource(Time::<()>::default());
+        // CellMap 工具会话态（[ADR-0052] D6/D8-A）：`apply_pending_commands`
+        // 的 `SelectMapTool(FloodSelect)` 与撤销/重做白闪分支都要读写它们。
+        // 生产端在 `app_bootstrap` 注册；测试 fixture 必须同款补齐，否则
+        // `SystemParamValidationError { Resource does not exist }`。
+        world.init_resource::<crate::state::FloodSelectState>();
+        world.init_resource::<wv_world_cell_map::cell_flash::CellFlashState>();
         world.resource_mut::<CommandPalette>().pending = Some(pending);
         world
     }
@@ -2441,6 +2449,10 @@ mod tests {
             last_map: None,
         });
         world.insert_resource(Time::<()>::default());
+        // CellMap 工具会话态（[ADR-0052] D6/D8-A）：与 `dispatcher_world`
+        // 同款补齐——`apply_pending_commands` 现在读写这两个资源。
+        world.init_resource::<crate::state::FloodSelectState>();
+        world.init_resource::<wv_world_cell_map::cell_flash::CellFlashState>();
         world.resource_mut::<ProjectMenuState>().pending = Some(CommandId::CloseProject);
 
         world

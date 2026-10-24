@@ -811,7 +811,11 @@ pub fn apply_history_command_detailed(
                 _ => tex.mark_all_dirty(),
             }
             Ok(HistoryOutcome {
-                message: if redo { "已重做".into() } else { "已撤销".into() },
+                message: if redo {
+                    "已重做".into()
+                } else {
+                    "已撤销".into()
+                },
                 changed_cells,
             })
         }
@@ -993,8 +997,8 @@ pub fn track_edit_cell_hover(
         edit_cell.hover = None;
         return;
     };
-    edit_cell.hover = cell_pick::pick_at((cursor.x, cursor.y), &grid, terrain)
-        .map(|pick| (pick.gx, pick.gy));
+    edit_cell.hover =
+        cell_pick::pick_at((cursor.x, cursor.y), &grid, terrain).map(|pick| (pick.gx, pick.gy));
 }
 
 /// 多边形顶点指纹（FNV-1a）——「多边形变没变」的判据。
@@ -1726,22 +1730,22 @@ mod tests {
         before.cells[0].height += 100;
         projection.world.set_terrain(map.clone(), before.clone());
         let mut tx = wv_edit::history::Transaction::new();
-        tx.push(Box::new(
-            wv_edit::command::BatchEditCellsCommand::new(
-                map.clone(),
-                vec![wv_edit::command::CellChange {
-                    gx: 0,
-                    gy: 0,
-                    before: before.cells[0],
-                    after: {
-                        let mut c = before.cells[0];
-                        c.height += 100;
-                        c
-                    },
-                }],
-            ),
-        ));
-        edit.history.commit(&mut projection.world, tx).expect("应提交");
+        tx.push(Box::new(wv_edit::command::BatchEditCellsCommand::new(
+            map.clone(),
+            vec![wv_edit::command::CellChange {
+                gx: 0,
+                gy: 0,
+                before: before.cells[0],
+                after: {
+                    let mut c = before.cells[0];
+                    c.height += 100;
+                    c
+                },
+            }],
+        )));
+        edit.history
+            .commit(&mut projection.world, tx)
+            .expect("应提交");
 
         let outcome = apply_history_command_detailed(
             false,
@@ -1776,10 +1780,7 @@ mod tests {
         )
         .expect("无可撤销也应返回 Ok（不是错误）");
         assert_eq!(outcome.message, "没有可撤销的操作");
-        assert!(
-            outcome.changed_cells.is_empty(),
-            "没撤销任何东西就不该闪"
-        );
+        assert!(outcome.changed_cells.is_empty(), "没撤销任何东西就不该闪");
     }
 
     /// 闪视觉态：撤销后触发 → 250ms 内活跃、之后自动熄灭（D8-A）。

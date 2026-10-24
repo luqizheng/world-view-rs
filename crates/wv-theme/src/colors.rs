@@ -219,7 +219,6 @@ pub const STROKE_PENDING: Color = hex(0xD9634E);
 /// 选中」的常驻脉动混淆）。
 pub const UNDO_FLASH: Color = hex(0xFFFFFF);
 
-
 /// 视图模式 D（事件图）的极简底图色：= 纸面色（中性、不抢事件高亮）。
 pub const EVENT_VIEW_BACKDROP: Color = hex(0xF2EAD8);
 

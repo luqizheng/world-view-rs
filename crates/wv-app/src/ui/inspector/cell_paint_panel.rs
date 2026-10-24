@@ -86,8 +86,7 @@ pub fn render_readout_bar(
         // egui 0.36 的 `Separator` 只有水平方向（无 `orientation` 方法），
         // 故自绘：分配 1×16 的矩形后用 `painter` 填色。
         let (sep, _) = ui.allocate_exact_size(egui::vec2(1.0, 16.0), egui::Sense::hover());
-        ui.painter()
-            .rect_filled(sep, 0.0, shell.border_subtle());
+        ui.painter().rect_filled(sep, 0.0, shell.border_subtle());
         ui.label(
             egui::RichText::new("选中")
                 .size(font_size::MICRO)
@@ -191,13 +190,7 @@ pub fn render_paint_value_section(
         ui.push_id("cell_paint_delta", |ui| {
             ui.allocate_ui(egui::vec2(120.0, 26.0), |ui| {
                 wv_ui::widgets::controls::numeric_input_bounded(
-                    ui,
-                    shell,
-                    &mut delta,
-                    "m",
-                    10.0,
-                    -32767.0,
-                    32767.0,
+                    ui, shell, &mut delta, "m", 10.0, -32767.0, 32767.0,
                 );
             });
         });
@@ -275,13 +268,7 @@ pub fn render_flood_criterion_section(
             ui.push_id("cell_flood_tolerance", |ui| {
                 ui.allocate_ui(egui::vec2(120.0, 26.0), |ui| {
                     wv_ui::widgets::controls::numeric_input_bounded(
-                        ui,
-                        shell,
-                        &mut tol_f,
-                        "m",
-                        5.0,
-                        0.0,
-                        32767.0,
+                        ui, shell, &mut tol_f, "m", 5.0, 0.0, 32767.0,
                     );
                 });
             });
@@ -344,7 +331,7 @@ fn render_biome_swatch(ui: &mut egui::Ui, shell: &UiShell, current: &mut u8) {
                 }
                 resp.on_hover_text(name);
                 // 5 列一行 → 每 5 个换行（用 `end_row` 手动断）。
-                if (biome as usize + 1) % 5 == 0 {
+                if (biome as usize + 1).is_multiple_of(5) {
                     ui.end_row();
                 }
             }

@@ -420,7 +420,16 @@ fn render_properties(
                 return;
             }
             cell::cell_form(
-                ui, shell, projection, edit_cell, edit, selection, tex, loc, cell_mode, paint_session,
+                ui,
+                shell,
+                projection,
+                edit_cell,
+                edit,
+                selection,
+                tex,
+                loc,
+                cell_mode,
+                paint_session,
                 flood_select,
             );
         }

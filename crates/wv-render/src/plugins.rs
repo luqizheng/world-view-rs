@@ -118,7 +118,8 @@ impl Plugin for EditorOverlayPlugin {
             // 的瞬时反馈）。
             .add_systems(
                 Update,
-                crate::cellmap_bridge::sync_cell_hover.after(crate::cellmap_bridge::sync_cell_selection),
+                crate::cellmap_bridge::sync_cell_hover
+                    .after(crate::cellmap_bridge::sync_cell_selection),
             )
             .add_systems(
                 Update,

@@ -120,15 +120,15 @@ impl CellHoverEntities {
             self.cross_v_mesh.take(),
             self.core_h_mesh.take(),
             self.core_v_mesh.take(),
-        ] {
-            if let Some(h) = h {
-                meshes.remove(&h);
-            }
+        ]
+        .into_iter()
+        .flatten()
+        {
+            meshes.remove(&h);
         }
         self.last_size = Vec2::ZERO;
     }
 }
-
 
 /// 选中格的 mesh 实体集合（复用：稳态 5 实体 = 填充 + 4 边）。
 ///
@@ -248,7 +248,6 @@ pub fn build_stroke_fill_mesh(
 ) -> Option<(Mesh, Vec2, Vec2)> {
     build_region_fill_mesh(cells, grid)
 }
-
 
 /// 射线法点在多边形内（纯函数；顶点/边上的点按「内」处理不了——v1 接受
 /// 半格误差，贴合语义是「cell 中心落入即选中」，不是精确几何剖分）。

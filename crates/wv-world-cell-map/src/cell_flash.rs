@@ -126,10 +126,7 @@ impl CellFlashState {
 ///
 /// 返回 `(mesh, origin)`——顶点是相对 `origin` 的局部偏移（与
 /// `build_region_fill_mesh` 同款坐标链）。
-pub fn build_flash_mesh(
-    cells: &[(i32, i32)],
-    grid: &GridConfig,
-) -> Option<(Mesh, Vec2)> {
+pub fn build_flash_mesh(cells: &[(i32, i32)], grid: &GridConfig) -> Option<(Mesh, Vec2)> {
     if cells.is_empty() {
         return None;
     }
@@ -223,8 +220,6 @@ impl CellFlashEntities {
         self.last_fingerprint = 0;
     }
 }
-
-/// 格集合指纹（变了才重建 mesh）——复用 [`crate::cell_selection::cells_fingerprint`]。
 
 #[cfg(test)]
 mod tests {

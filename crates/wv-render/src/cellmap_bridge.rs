@@ -2157,7 +2157,9 @@ pub fn sync_cell_stroke(
     };
     let mesh = entities.fill_mesh.clone().expect("已建");
     let mat = entities.fill_material.clone().expect("已建");
-    commands.entity(e).insert((Mesh2d(mesh), MeshMaterial2d(mat)));
+    commands
+        .entity(e)
+        .insert((Mesh2d(mesh), MeshMaterial2d(mat)));
 }
 
 // ══════ from crates/wv-world-cell-map/src/cell_selection.rs :: sync_cell_hover ══════
@@ -2223,9 +2225,8 @@ pub fn sync_cell_hover(
         )));
     }
     if entities.inner_material.is_none() {
-        entities.inner_material = Some(materials.add(ColorMaterial::from_color(
-            bevy::color::Color::WHITE,
-        )));
+        entities.inner_material =
+            Some(materials.add(ColorMaterial::from_color(bevy::color::Color::WHITE)));
     }
     let outer_mat = entities.outer_material.clone().expect("材质已建");
     let inner_mat = entities.inner_material.clone().expect("材质已建");
@@ -2260,8 +2261,11 @@ pub fn sync_cell_hover(
                     .insert((tf, Mesh2d(mesh), MeshMaterial2d(outer_mat.clone())));
             }
             None => {
-                entities.outer_edges[i] =
-                    Some(commands.spawn((tf, Mesh2d(mesh), MeshMaterial2d(outer_mat.clone()))).id());
+                entities.outer_edges[i] = Some(
+                    commands
+                        .spawn((tf, Mesh2d(mesh), MeshMaterial2d(outer_mat.clone())))
+                        .id(),
+                );
             }
         }
     }
@@ -2291,8 +2295,11 @@ pub fn sync_cell_hover(
                     .insert((tf, Mesh2d(mesh), MeshMaterial2d(inner_mat.clone())));
             }
             None => {
-                entities.inner_edges[i] =
-                    Some(commands.spawn((tf, Mesh2d(mesh), MeshMaterial2d(inner_mat.clone()))).id());
+                entities.inner_edges[i] = Some(
+                    commands
+                        .spawn((tf, Mesh2d(mesh), MeshMaterial2d(inner_mat.clone())))
+                        .id(),
+                );
             }
         }
     }
@@ -2304,10 +2311,7 @@ pub fn sync_cell_hover(
     // 同一条 `for` 的初始化式里会同时可变 + 不可变借用 `entities`
     // （编译期 E0499/E0502）。逐个处理（而非一次遍历两个 slot）是为
     // 避开「同时可变借用 `entities` 两次」。
-    let cross_outer_meshes = [
-        entities.cross_h_mesh.clone(),
-        entities.cross_v_mesh.clone(),
-    ];
+    let cross_outer_meshes = [entities.cross_h_mesh.clone(), entities.cross_v_mesh.clone()];
     for (idx, mesh) in cross_outer_meshes.into_iter().enumerate() {
         let Some(mesh) = mesh else { continue };
         let tf = Transform::from_translation(center.extend(HOVER_Z));
@@ -2328,10 +2332,7 @@ pub fn sync_cell_hover(
         }
     }
     // 白芯（比墨晕短一档，露不出头）。
-    let cross_inner_meshes = [
-        entities.core_h_mesh.clone(),
-        entities.core_v_mesh.clone(),
-    ];
+    let cross_inner_meshes = [entities.core_h_mesh.clone(), entities.core_v_mesh.clone()];
     for (idx, mesh) in cross_inner_meshes.into_iter().enumerate() {
         let Some(mesh) = mesh else { continue };
         let tf = Transform::from_translation(center.extend(HOVER_Z + 0.002));
@@ -2405,9 +2406,8 @@ pub fn sync_cell_flash(
             CellFlashKind::Reject => crate::theme::colors::UI_UNREACHABLE,
         };
         if entities.fill_material.is_none() {
-            entities.fill_material = Some(materials.add(ColorMaterial::from_color(
-                base.with_alpha(flash.alpha(now)),
-            )));
+            entities.fill_material =
+                Some(materials.add(ColorMaterial::from_color(base.with_alpha(flash.alpha(now)))));
         }
         let mesh = entities.fill_mesh.clone().expect("刚建");
         let mat = entities.fill_material.clone().expect("刚建");
@@ -2435,7 +2435,8 @@ pub fn sync_cell_flash(
     };
     if let Some(mut m) = materials.get_mut(&mat) {
         m.color = base.with_alpha(flash.alpha(now));
-    }    commands.entity(e).insert(MeshMaterial2d(mat));
+    }
+    commands.entity(e).insert(MeshMaterial2d(mat));
 }
 
 // ══════ from crates/wv-world-cell-map/src/region_overlay.rs :: region_layer_visible ══════
