@@ -423,6 +423,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::MapControlsMeasureArea => "面积",
         I18nKey::MapControlsClearMeasurements => "清除全部测量（Del 删除光标下的一条）",
         I18nKey::MapControlsEditCellHint => "单格编辑：点选一格改高度 / 地表 / 群系；按住拖动可连续涂画",
+        I18nKey::MapControlsCellSelectHint => "单选模式：点一下选中一格查看属性；拖动不会落笔",
         I18nKey::MapControlsFloodSelectHint => "泛洪选择：点一下，自动选中与该格同类的连通区域",
         I18nKey::CellFloodBySurface => "按地表",
         I18nKey::CellFloodByBiome => "按群系",
@@ -480,6 +481,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CmdZoomOut => "缩小地图",
         I18nKey::CmdToggleImmersive => "沉浸模式（只留地图与时间轴）",
         I18nKey::CmdToolEditCell => "单格编辑（点选一格改水陆/海拔/群系）",
+        I18nKey::CmdToolCellSelect => "单选模式（点选一格查看，不落笔）",
         I18nKey::CmdToolBiomeBoundary => "群系分界线（拖动推移边界，改写扫过格群系）",
         I18nKey::CmdOpenCommandPalette => "打开命令面板",
         I18nKey::CmdSave => "保存工程",
@@ -1048,6 +1050,9 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::MapControlsEditCellHint => {
             "Single-cell edit: click a cell to change height / surface / biome; hold and drag to paint"
         }
+        I18nKey::MapControlsCellSelectHint => {
+            "Single select: click a cell to inspect it; dragging will not paint"
+        }
         I18nKey::MapControlsFloodSelectHint => {
             "Flood select: click once to select the connected area of the same kind"
         }
@@ -1107,6 +1112,7 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CmdZoomOut => "Zoom out",
         I18nKey::CmdToggleImmersive => "Immersive mode (map + timeline only)",
         I18nKey::CmdToolEditCell => "Edit cell (pick one cell: water/land, height, biome)",
+        I18nKey::CmdToolCellSelect => "Single select (pick one cell to inspect, no painting)",
         I18nKey::CmdToolBiomeBoundary => "Biome boundary (drag to move; converts swept cells)",
         I18nKey::CmdOpenCommandPalette => "Open command palette",
         I18nKey::CmdSave => "Save project",

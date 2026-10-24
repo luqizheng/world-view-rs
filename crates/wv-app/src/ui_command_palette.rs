@@ -202,6 +202,18 @@ pub enum MapToolId {
     /// 故**不入 `BrushTool` 枚举,与现有工具平级进 `MapToolId`**。
     /// 由 `ui::cell_pick` 做命中测试,由 `inspector_panel` 渲染字段编辑 UI。
     EditCell,
+    /// **单选模式**（2026-10-24 用户需求）：点一下选中**一格**，拖动不落笔。
+    ///
+    /// 与 [`Self::EditCell`] 的区别只有一条：**拖动是否累积笔触**。
+    /// 点选落定、hover 准星、金色 outline、Inspector 表单两模式**完全一致**
+    /// （共用 `EditCellState.tool_active` + `.selected`，只由
+    /// `EditCellState.allow_drag` 区分形态）。
+    ///
+    /// 为什么要单独一枚工具而不是「EditCell 也能不拖」：
+    /// 单格编辑器的**高频动作是「看这一格是什么」**，不是「改」。给一个
+    /// 不会误落笔的入口，用户敢在地图上随手点；而拖绘模式下手抖就是一次
+    /// 撤销单位。工具条把两者并排放，切换成本一次点击。
+    CellSelect,
     /// 群系分界线（2026-10-22 内容矩阵 §2.7 / ADR-0051）：可拖线段两侧各绑
     /// 一个群系，拖动推移分界——扫过格「退让侧→推进侧」互转（第三方不动）。
     /// 仅 Topographic 可用；线是会话工具不落盘。
@@ -418,6 +430,15 @@ impl CommandRegistry {
             CommandGroup::Edit,
             I18nKey::CmdToolEditCell,
             Some("C"),
+        );
+        // 单选模式（2026-10-24 用户需求）：点选一格、拖动不落笔。
+        // 与 EditCell 共用 `EditCellState`，只由 `allow_drag` 区分形态。
+        // 快捷键 `S` = Select（`V` 已属框选组，不复用）。
+        push(
+            CommandId::SelectMapTool(MapToolId::CellSelect),
+            CommandGroup::Edit,
+            I18nKey::CmdToolCellSelect,
+            Some("S"),
         );
         // 群系分界线（2026-10-22 内容矩阵 / ADR-0051）：与 EditCell 同款——
         // dock 瓷砖被系统参数上限卡住，命令面板是现行入口。

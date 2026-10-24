@@ -116,8 +116,18 @@ pub fn paint_edit_cell_on_drag(
     time: Res<Time>,
     screen: Res<crate::app_screen::AppScreen>,
 ) {
-    // 加载中 / 播放中 / 无工具 → 不参与。
-    if screen.shows_loading_overlay() || playback.playing || !edit_cell.tool_active {
+    // 加载中 / 播放中 / 无工具 / **单选模式** → 不参与。
+    //
+    // 单选模式（`allow_drag = false`，2026-10-24）走同一条早退：它在语义上
+    // 就是「这个系统不该管我」——点选由 `commit_edit_cell_on_click` 负责，
+    // hover 由 `track_edit_cell_hover` 负责，本系统只管拖绘累积。
+    // 走早退而不是在函数内部逐段判断，顺带保证「从拖绘切到单选时残笔被丢弃」
+    // （`session.stroke.discard()` 就在这个分支里）。
+    if screen.shows_loading_overlay()
+        || playback.playing
+        || !edit_cell.tool_active
+        || !edit_cell.allow_drag
+    {
         if session.stroke.active {
             session.stroke.discard();
             prompt.last_cell = None;

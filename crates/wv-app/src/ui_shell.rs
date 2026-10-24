@@ -317,6 +317,8 @@ fn hotkeys(
             // 单格编辑（[ADR-0040]）：C = Cell。与 Ctrl+C 复制不冲突
             // （本表只在无修饰键时生效，见上方 `!cmd && !shift` gate）。
             (bevy_egui::egui::Key::C, MapToolId::EditCell),
+            // 单选模式（2026-10-24）：S = Select。`V` 已属框选组，不复用。
+            (bevy_egui::egui::Key::S, MapToolId::CellSelect),
         ]
         .into_iter()
         .find(|(key, _)| input.key_pressed(*key));
@@ -1458,7 +1460,12 @@ fn apply_pending_commands(
                 // EditCell 的「已开」判据 = `tool_active`，**不是** `selected.is_some()`
                 // （[ADR-0052] §9.1 S0-1）。旧口径把「点过一格」当成「工具开着」，
                 // 于是二次点击瓷砖无法关闭工具、且切走时把选区一起清了。
-                MapToolId::EditCell => edit_cell.tool_active,
+                // EditCell / CellSelect 共用 `tool_active`，靠 `allow_drag` 区分形态
+                // （2026-10-24）。「已开」判据必须**带上形态**，否则：
+                // - 单选模式下点 EditCell 瓷砖会被误判成「已开」→ 关掉而不是切形态；
+                // - 两点之间的「先全关再开」逻辑会把刚设好的形态又重置。
+                MapToolId::EditCell => edit_cell.tool_active && edit_cell.allow_drag,
+                MapToolId::CellSelect => edit_cell.tool_active && !edit_cell.allow_drag,
                 MapToolId::BiomeBoundary => boundary.line.is_some(),
                 MapToolId::FloodSelect => flood_select.tool_active,
             };
@@ -1529,6 +1536,15 @@ fn apply_pending_commands(
                             // 标记 EditCell 工具激活;点击事件自己写到 `edit_cell.selected`
                             // (见 editing::commit_edit_cell_on_click)。
                             edit_cell.tool_active = true;
+                            // 完整形态：拖动累积笔触（D3）。
+                            edit_cell.allow_drag = true;
+                        }
+                        // 单选模式（2026-10-24）：同一个 `tool_active`，只是关掉拖绘。
+                        // `selected` / `hover` / 渲染 / Inspector 两模式共用，
+                        // 故这里**不需要**任何额外状态。
+                        MapToolId::CellSelect => {
+                            edit_cell.tool_active = true;
+                            edit_cell.allow_drag = false;
                         }
                         // 分界线工具激活：线要等用户在地图上拖出（见
                         // edit::biome_boundary_input）。
@@ -2567,5 +2583,84 @@ mod tests {
                 .any(|m| &m.id == id);
             assert!(exists, "drill.current() 指向的图应真实存在：{id:?}");
         }
+    }
+
+    // ── 单选模式（2026-10-24 用户需求）─────────────────────────────
+
+    /// **单选模式与单格编辑共用 `tool_active`，只由 `allow_drag` 区分形态。**
+    ///
+    /// 这条测的是分发器的三件事：
+    /// 1. `CellSelect` 开起来 = `tool_active && !allow_drag`；
+    /// 2. 切到 `EditCell` = 同一 `tool_active` 但 `allow_drag` 翻回 true
+    ///    （否则「点了单选再点单格编辑」会两个瓷砖都不亮）；
+    /// 3. 对**当前形态**再点一次 = 关闭（不是切换）。
+    #[test]
+    fn cell_select_and_edit_cell_share_tool_active_but_differ_in_allow_drag() {
+        use crate::ui_command_palette::MapToolId;
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world =
+            dispatcher_world(None, false, CommandId::SelectMapTool(MapToolId::CellSelect));
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+        {
+            let c = world.resource::<wv_render::state::EditCellState>();
+            assert!(c.tool_active, "单选模式应激活工具");
+            assert!(!c.allow_drag, "单选模式必须关掉拖绘");
+        }
+
+        // 切到 EditCell：同一 tool_active，形态翻回「可拖绘」。
+        world.resource_mut::<CommandPalette>().pending =
+            Some(CommandId::SelectMapTool(MapToolId::EditCell));
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+        {
+            let c = world.resource::<wv_render::state::EditCellState>();
+            assert!(c.tool_active, "切到 EditCell 后工具仍激活");
+            assert!(c.allow_drag, "EditCell 形态必须允许拖绘");
+        }
+
+        // 对当前形态再点一次 → 关闭。
+        world.resource_mut::<CommandPalette>().pending =
+            Some(CommandId::SelectMapTool(MapToolId::EditCell));
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+        assert!(
+            !world
+                .resource::<wv_render::state::EditCellState>()
+                .tool_active,
+            "再次点击当前形态应关闭工具"
+        );
+    }
+
+    /// 从单选模式切到 EditCell 时，**选区不丢**（S0-1 口径对两种形态一致）。
+    #[test]
+    fn switching_from_cell_select_to_edit_cell_keeps_selection() {
+        use crate::ui_command_palette::MapToolId;
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world =
+            dispatcher_world(None, false, CommandId::SelectMapTool(MapToolId::CellSelect));
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+        {
+            let mut c = world.resource_mut::<wv_render::state::EditCellState>();
+            c.selected = Some((7, 9));
+            c.region_cells = vec![(0, 0), (1, 0)];
+        }
+
+        world.resource_mut::<CommandPalette>().pending =
+            Some(CommandId::SelectMapTool(MapToolId::EditCell));
+        world
+            .run_system_once(apply_pending_commands)
+            .expect("系统运行失败");
+
+        let c = world.resource::<wv_render::state::EditCellState>();
+        assert_eq!(c.selected, Some((7, 9)), "切形态不得清掉单格选中");
+        assert_eq!(c.region_cells.len(), 2, "切形态不得清掉区域选区");
     }
 }
