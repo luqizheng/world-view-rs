@@ -1,11 +1,12 @@
 //! 地形笔刷 + 街道编辑器面板（P-3 / ADR-0010 编辑器 UI）。
 //!
 //! ## 职责
-//! - `panel_brush` —— 笔刷开关 / 三行行内工具分组（涂·塑·放）/ 地形材料 /
-//!   半径 / 软度 / 强度 / 街道模式 / 撤销段。
-//! - 工具区（2026-10-16 改版）：三个操作语义组**全部常驻**（不折叠、不 tab）——
-//!   跨组切换是高频动作（涂几片 → 丢一座山 → 补条河），1 击直达比省高度值钱；
-//!   活动工具高亮永远在视野里，左键会做什么一目了然。
+//! - `panel_brush` —— 笔刷开关 / 地形材料 / 半径 / 软度 / 强度 / 街道模式 / 撤销段。
+//! - 工具区（2026-10-24 用户裁定）：原「涂·塑·放」三段控件与组内图标行**整体
+//!   移除**——工具切换只走命令面板 / 快捷键（`CommandId::SelectBrushTool`），
+//!   面板只显示当前工具的名称与交互提示。原结论（2026-10-16「三组常驻、1 击
+//!   直达」）由此条修正，理由：分组控件与图标行把面板上半截占满，而工具切换
+//!   的实际频次低于材质 / 半径调参。
 //!
 //! ## 边界（不做什么）
 //! - **不**直接改世界 —— 撤销段生成 `DeleteStreetSegmentCommand` 交给 [`crate::edit::editing::EditHistory`]。
@@ -22,10 +23,9 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::edit::editing;
-use crate::i18n::{t, t_key, CurrentLocale, I18nKey, Locale};
+use crate::i18n::{t, t_key, CurrentLocale, I18nKey};
 use crate::state::{
-    BrushState, BrushTool, BrushToolGroup, DrillState, Panel, PanelState, PlaybackState,
-    WorldProjection,
+    BrushState, BrushTool, DrillState, Panel, PanelState, PlaybackState, WorldProjection,
 };
 use crate::theme::ui_theme::{proportional, UiShellConfig};
 use crate::theme::ui_tokens::{font_size, radius, space};
@@ -37,14 +37,7 @@ use wv_render::terrain_view::TerrainTexture;
 
 use super::shell::{terrain_name_at, UiShell};
 use super::timeline::undo_last_street_segment;
-use super::widgets::{
-    float_window, segmented_control::segmented, slider_row_brush, terrain_grid, ToolButton,
-    ToolIcon,
-};
-use super::{
-    ICON_BRUSH, ICON_ERASER, ICON_HILLS, ICON_LAKE, ICON_MOUNTAIN_RANGE, ICON_PLATEAU, ICON_RIVER,
-    ICON_VOLCANO,
-};
+use super::widgets::{float_window, slider_row_brush, terrain_grid};
 
 /// 地形笔刷 + 街道编辑器面板（P-3 / ADR-0010 编辑器 UI）。
 ///
@@ -135,18 +128,11 @@ pub fn panel_brush(
             });
             ui.add_space(space::SM);
 
-            // ── 工具区：3 段控件（涂 / 塑 / 放）+ 段下瓷砖行 ──
-            // 段控件在「段/工具/组」三态中担当「组」维度的 1 选 1，与顶栏
-            // Browse/Edit / 主题段同源；下方瓷砖行只显示当前组内的工具
-            // （1–4 块），状态机由 `sync_tool_group` 同步。
-            tool_segmented(ui, &shell, &mut brush, current_loc.0);
-            tool_row_for_group(ui, &shell, &mut brush, current_loc.0);
-            ui.add_space(space::SM);
-            ui.separator();
-            ui.add_space(space::XS);
-
+            // 工具选择（原「涂 / 塑 / 放」三段控件 + 组内图标行）已于
+            // 2026-10-24 用户裁定移除：改工具只在命令面板 / 快捷键里
+            // （`CommandId::SelectBrushTool`），面板只负责显示当前工具。
             if brush.tool.is_intent() {
-                // ── 意图工具：强度 + 半径（河不用半径）+ 交互提示 ──
+                // ── 意图工具：强度 + 半径（河不用半径）+ 当前工具与提示 ──
                 slider_row_brush(
                     ui,
                     &shell,
@@ -168,10 +154,15 @@ pub fn panel_brush(
                     );
                 }
                 ui.add_space(space::XS);
+                // 图标行没了，工具名是「当前手里是哪把工具」的唯一可见来源。
                 ui.label(
-                    egui::RichText::new(t(loc, tool_hint_key(brush.tool)))
-                        .size(shell.scale.small)
-                        .color(shell.t3()),
+                    egui::RichText::new(format!(
+                        "{} · {}",
+                        t(loc, tool_name_key(brush.tool)),
+                        t(loc, tool_hint_key(brush.tool)),
+                    ))
+                    .size(shell.scale.small)
+                    .color(shell.t3()),
                 );
             } else if brush.tool == BrushTool::Eraser {
                 // ── 地形橡皮刷（ADR-0043）：只留半径 + 软度 ──
@@ -467,81 +458,10 @@ pub fn panel_brush(
     );
 }
 
-/// 3 段控件：涂 / 塑 / 放。
-///
-/// 选段 = 写 `tool_group` + `sync_tool_group()`（让 tool 落到该组第一个
-/// 工具，避免段/瓷砖分裂）+ 激活笔刷——「选工具 = 准备画」语义沿用提交 2。
-fn tool_segmented(ui: &mut egui::Ui, shell: &UiShell, brush: &mut BrushState, loc: Locale) {
-    let labels = [
-        t(loc, I18nKey::BrushGroupPaint),
-        t(loc, I18nKey::BrushGroupShape),
-        t(loc, I18nKey::BrushGroupPlace),
-    ];
-    let groups = [
-        BrushToolGroup::Paint,
-        BrushToolGroup::Shape,
-        BrushToolGroup::Place,
-    ];
-    let active = groups
-        .iter()
-        .position(|g| *g == brush.tool_group)
-        .unwrap_or(0);
-    segmented(
-        ui,
-        shell,
-        "wv_brush_tool_group",
-        60.0,
-        &labels,
-        active,
-        font_size::SMALL,
-        |i| {
-            brush.tool_group = groups[i];
-            brush.on_group_changed();
-            brush.enabled = true;
-        },
-    );
-}
-
-/// 段下瓷砖行：只渲染 `brush.tool_group` 该组的 1–4 个工具。
-///
-/// 点瓷砖 = 写 `tool` + `sync_tool_group()` 反向同步 + 激活笔刷。
-/// 1 击选工具，跨组 = 先段 1 击再瓷砖 1 击。
-fn tool_row_for_group(ui: &mut egui::Ui, shell: &UiShell, brush: &mut BrushState, loc: Locale) {
-    let tools: &[(egui::ImageSource<'static>, BrushTool)] = match brush.tool_group {
-        BrushToolGroup::Paint => &[
-            (ICON_BRUSH, BrushTool::PaintKind),
-            (ICON_ERASER, BrushTool::Eraser),
-        ],
-        BrushToolGroup::Shape => &[
-            (ICON_MOUNTAIN_RANGE, BrushTool::MountainRange),
-            (ICON_PLATEAU, BrushTool::Plateau),
-            (ICON_HILLS, BrushTool::Hills),
-            (ICON_RIVER, BrushTool::River),
-        ],
-        BrushToolGroup::Place => &[
-            (ICON_VOLCANO, BrushTool::Volcano),
-            (ICON_LAKE, BrushTool::Lake),
-        ],
-    };
-    ui.horizontal(|ui| {
-        for (icon, tool) in tools.iter() {
-            let tip = format!(
-                "{}\n{}",
-                t(loc, tool_name_key(*tool)),
-                t(loc, tool_hint_key(*tool)),
-            );
-            ToolButton::icon(ToolIcon::Svg(icon.clone()), &tip)
-                .active(brush.tool == *tool)
-                .show(ui, shell, || {
-                    brush.tool = *tool;
-                    brush.on_tool_changed();
-                    brush.enabled = true;
-                });
-        }
-    });
-}
-
 /// 工具 → 名称 Key（i18n 表是唯一文案源；`BrushTool::label()` 已退役）。
+///
+/// 图标行移除后仍需要它：面板顶部用「工具名 · 交互提示」告诉作者手里是哪把
+/// 工具（`CommandId::SelectBrushTool` 换工具时面板也会跟着变名）。
 fn tool_name_key(tool: BrushTool) -> I18nKey {
     match tool {
         BrushTool::PaintKind => I18nKey::BrushToolNamePaint,
@@ -555,7 +475,8 @@ fn tool_name_key(tool: BrushTool) -> I18nKey {
     }
 }
 
-/// 工具 → 交互提示 Key（瓷砖 tooltip 第二行 / 面板底部提示行共用）。
+/// 工具 → 交互提示 Key（面板「工具名 · 提示」行用；原瓷砖 tooltip 第二行已随
+/// 图标行移除）。
 fn tool_hint_key(tool: BrushTool) -> I18nKey {
     match tool {
         BrushTool::PaintKind => I18nKey::BrushHintPaint,
@@ -573,7 +494,7 @@ fn tool_hint_key(tool: BrushTool) -> I18nKey {
 mod tests {
     use super::{tool_hint_key, tool_name_key};
     use crate::i18n::{t, Locale};
-    use crate::state::{BrushState, BrushTool, BrushToolGroup};
+    use crate::state::{BrushState, BrushTool};
 
     /// `BrushState::default()` 字段：笔刷默认关（Google 式手势——左键拖动
     /// 平移），默认工具 = 涂抹、默认材质 = 草原。
@@ -583,16 +504,11 @@ mod tests {
         assert!(!b.enabled, "笔刷默认关");
         assert_eq!(b.kind, 3, "默认 kind=草原");
         assert_eq!(b.tool, BrushTool::PaintKind, "默认工具=Paint");
-        assert_eq!(
-            b.tool_group,
-            BrushToolGroup::Paint,
-            "默认组=Paint（与 tool.group() 一致）"
-        );
         assert!((b.strength - 1.0).abs() < 1e-6, "默认强度 1.0");
     }
 
-    /// 7 个工具的名称 / 提示 Key 全覆盖：中英双语都非空——瓷砖纯图标，
-    /// tooltip 是这些名字的唯一入口，漏译 = 悬停出一个空泡。
+    /// 8 个工具的名称 / 提示 Key 全覆盖：中英双语都非空。图标行移除后，
+    /// 面板只靠「工具名 · 交互提示」这一行说明手里是哪把工具，漏译 = 空泡。
     #[test]
     fn every_tool_resolves_name_and_hint_in_both_locales() {
         for tool in BrushTool::ALL {
@@ -603,14 +519,5 @@ mod tests {
                 assert!(!t(loc, hint_key).is_empty(), "{tool:?} {loc:?} 提示缺失");
             }
         }
-    }
-
-    /// 分组口径与分派闸一致（三组划分全体的完整证明在 `state.rs` 测试，
-    /// 这里钉的是面板行与组的对应关系不被手滑改乱）。
-    #[test]
-    fn panel_group_rows_match_brush_tool_groups() {
-        assert_eq!(BrushTool::PaintKind.group(), BrushToolGroup::Paint);
-        assert_eq!(BrushTool::SHAPE.len(), 4);
-        assert_eq!(BrushTool::PLACE.len(), 2);
     }
 }
