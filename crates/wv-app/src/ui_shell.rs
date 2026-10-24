@@ -1274,6 +1274,14 @@ fn apply_pending_commands(
     // 单格编辑工具会话态（[ADR-0040]）：跟 selection 同款粒度。
     mut edit_cell: ResMut<crate::state::EditCellState>,
     mut boundary: ResMut<wv_render::state::BiomeBoundaryState>,
+    // 泛洪选择工具会话态（[ADR-0052] D6）：与 EditCell 同款粒度的互斥工具。
+    // 撤销白闪会话态（[ADR-0052] D8-A）：撤销/重做后对受影响格做 250ms
+    // 白色脉冲——两者同属 CellMap 编辑域视觉，折成一层元组（元组算 1 个参数，
+    // 单系统上限 16）。
+    (mut flood_select, mut flash): (
+        ResMut<crate::state::FloodSelectState>,
+        ResMut<wv_world_cell_map::cell_flash::CellFlashState>,
+    ),
     current_loc: Res<CurrentLocale>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     time: Res<Time>,
@@ -1448,8 +1456,12 @@ fn apply_pending_commands(
                 MapToolId::MeasureRect => measure.mode == MeasureMode::Rect,
                 MapToolId::MeasureEraser => measure.mode == MeasureMode::Eraser,
                 MapToolId::Continent => false,
-                MapToolId::EditCell => edit_cell.selected.is_some(),
+                // EditCell 的「已开」判据 = `tool_active`，**不是** `selected.is_some()`
+                // （[ADR-0052] §9.1 S0-1）。旧口径把「点过一格」当成「工具开着」，
+                // 于是二次点击瓷砖无法关闭工具、且切走时把选区一起清了。
+                MapToolId::EditCell => edit_cell.tool_active,
                 MapToolId::BiomeBoundary => boundary.line.is_some(),
+                MapToolId::FloodSelect => flood_select.tool_active,
             };
 
             if matches!(tool, MapToolId::Continent) {
@@ -1472,8 +1484,13 @@ fn apply_pending_commands(
                 if had_measure {
                     measure.clear_draft();
                 }
-                // 关掉 EditCell 时清空状态(避免「切走工具后旧选择留着」)。
-                edit_cell.clear();
+                // 关掉 EditCell 时**只关工具，不清选区**（[ADR-0052] §9.1 S0-1）：
+                // `selected` / `region_cells` 是已提交的选择态，切工具后仍保留，
+                // 「框选一片 → 切 EditCell」不丢选区（§5 M1 验收 ④）。
+                // 只有切图（`on_map_change`）与 Esc 全量清理才走 `clear()`。
+                edit_cell.close_tool();
+                // 关掉泛洪工具：同样只关工具，不清选区（D6-A）。
+                flood_select.close_tool();
                 // 切走分界线工具：线是会话工具，一并清（ADR-0051）。
                 boundary.clear();
 
@@ -1519,6 +1536,12 @@ fn apply_pending_commands(
                         MapToolId::BiomeBoundary => {
                             boundary.tool_active = true;
                         }
+                        // 泛洪选择激活：点一下即泛洪，结果入 `region_cells`
+                        // （见 `edit::flood_select`）。判据在 CellMap 面板的
+                        // segmented 里改（[ADR-0052] D6）。
+                        MapToolId::FloodSelect => {
+                            flood_select.tool_active = true;
+                        }
                     }
                 }
             }
@@ -1533,20 +1556,31 @@ fn apply_pending_commands(
         // 撤销 / 重做走 `editing` 的公开入口（同一份逻辑，不复制）。
         CommandId::Undo | CommandId::Redo => {
             let redo = matches!(id, CommandId::Redo);
-            match crate::edit::editing::apply_history_command(
+            // **D8-A 白闪**：撤销/重做后对受影响格做 250ms 白色脉冲——
+            // 撤销时画面差异肉眼不可辨，需要一个「这几格刚刚变了」的定位信号。
+            match crate::edit::editing::apply_history_command_detailed(
                 redo,
                 &mut edit,
                 &mut projection,
                 &mut tex,
                 &playback,
             ) {
-                Ok(msg) => {
+                Ok(outcome) => {
                     // 撤销/重做后世界可能改——诊断需要重算。
                     // `Ok(false)`（无可撤销/重做）时不动，避免无谓重算。
-                    if msg != "没有可撤销的操作" && msg != "没有可重做的操作" {
+                    if outcome.message != "没有可撤销的操作"
+                        && outcome.message != "没有可重做的操作"
+                    {
                         diagnostics.needs_diagnose = true;
                     }
-                    notice.info(msg, frame);
+                    if !outcome.changed_cells.is_empty() {
+                        flash.trigger(
+                            wv_world_cell_map::cell_flash::CellFlashKind::Undo,
+                            outcome.changed_cells,
+                            time.elapsed_secs(),
+                        );
+                    }
+                    notice.info(outcome.message, frame);
                 }
                 Err(msg) => notice.error(msg, frame),
             }
@@ -2100,6 +2134,12 @@ mod tests {
             last_map: None,
         });
         world.insert_resource(Time::<()>::default());
+        // CellMap 工具会话态（[ADR-0052] D6/D8-A）：`apply_pending_commands`
+        // 的 `SelectMapTool(FloodSelect)` 与撤销/重做白闪分支都要读写它们。
+        // 生产端在 `app_bootstrap` 注册；测试 fixture 必须同款补齐，否则
+        // `SystemParamValidationError { Resource does not exist }`。
+        world.init_resource::<crate::state::FloodSelectState>();
+        world.init_resource::<wv_world_cell_map::cell_flash::CellFlashState>();
         world.resource_mut::<CommandPalette>().pending = Some(pending);
         world
     }
@@ -2412,6 +2452,10 @@ mod tests {
             last_map: None,
         });
         world.insert_resource(Time::<()>::default());
+        // CellMap 工具会话态（[ADR-0052] D6/D8-A）：与 `dispatcher_world`
+        // 同款补齐——`apply_pending_commands` 现在读写这两个资源。
+        world.init_resource::<crate::state::FloodSelectState>();
+        world.init_resource::<wv_world_cell_map::cell_flash::CellFlashState>();
         world.resource_mut::<ProjectMenuState>().pending = Some(CommandId::CloseProject);
 
         world

@@ -24,6 +24,11 @@ pub use wv_render::state::{
     WorldProjection, LOD_NATION_SCALE, LOD_REGION_SCALE,
 };
 
+/// 泛洪选择工具会话态（[ADR-0052] D6）。
+///
+/// 经 `wv_render::state` 的 re-export 链暴露（与 `EditCellState` 同款路径）。
+pub use wv_world_cell_map::state::{FloodCriterion, FloodSelectState};
+
 // 2026-10-18（ADR-0033）：`ContinentGenerationStash` / `ContinentGenerationState`
 // 已删除。意图生效不再消费选区，撤销/重做无需把意图圈「还回来」——
 // 选区自始至终留在 `SelectionState`。

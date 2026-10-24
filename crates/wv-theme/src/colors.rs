@@ -204,6 +204,21 @@ pub const ACCENT_CURSOR: Color = hex(0xE8623C);
 pub const ACCENT_EVENT: Color = hex(0xC08BD8); // 事件标记（紫）
 pub const ACCENT_NOTE: Color = hex(0x9AA5B1); // 「故事」便签（灰蓝）
 
+/// **待落笔触色**（红橙）——[ADR-0052] §9.6 新增令牌。
+///
+/// CellMap 连续绘制（拖绘）期间，「已采样但尚未写入世界」的格子用本色
+/// 半透填充（alpha 0.26，不脉动）标出。与 `ACCENT_SELECT`（金）的色相角
+/// 差 ≥ 30°，确保「待落笔触」与「已提交选中」在同框时可辨（ADR-0052 §9.5
+/// 四态视觉分工总表：region → stroke → selected → hover 的绘制序）。
+pub const STROKE_PENDING: Color = hex(0xD9634E);
+
+/// **撤销/重做瞬时闪标色**（纯白）——[ADR-0052] §9.6 新增令牌。
+///
+/// Undo / Redo 之后对受影响格做 250ms 白色脉冲：这是**纯视觉标记**，
+/// 不承载任何状态语义（不复用 `ACCENT_SELECT` 的金，避免与「已提交
+/// 选中」的常驻脉动混淆）。
+pub const UNDO_FLASH: Color = hex(0xFFFFFF);
+
 /// 视图模式 D（事件图）的极简底图色：= 纸面色（中性、不抢事件高亮）。
 pub const EVENT_VIEW_BACKDROP: Color = hex(0xF2EAD8);
 

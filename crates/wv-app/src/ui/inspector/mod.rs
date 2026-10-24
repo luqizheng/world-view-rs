@@ -51,6 +51,7 @@ use super::widgets::{empty_state, float_window, BadgeKind, ICON_CHEVRON_RIGHT};
 use wv_core::{EntityKind, SelectedEntity};
 
 pub mod cell;
+pub mod cell_paint_panel;
 pub mod event;
 pub mod faction;
 pub mod layers;
@@ -210,6 +211,12 @@ pub fn panel_inspector(
         ResMut<cell::CellPanelMode>,
         ResMut<cell::BatchModeAutoLand>,
     ),
+    // 落笔会话态（[ADR-0052] D4）：落笔值 + 笔触格集合。
+    mut paint_session: ResMut<wv_world_cell_map::cell_paint::CellPaintSession>,
+    // 泛洪选择工具会话态（[ADR-0052] D6）：判据 segmented。
+    mut flood_select: ResMut<crate::state::FloodSelectState>,
+    // 派生运算请求（[ADR-0052] D6 · M3）：平滑 / 量化的参数与意图。
+    mut derived: ResMut<crate::edit::derived_op::DerivedOpRequest>,
     // 表单暂存输入缓冲（egui TextEdit 是调用方持有文本）。
     mut drafts: ResMut<event::InspectorDrafts>,
     (shell_cfg, layouts, current_loc): (Res<UiShellConfig>, Res<LayoutFile>, Res<CurrentLocale>),
@@ -286,6 +293,9 @@ pub fn panel_inspector(
                         &mut nature,
                         &mut selection,
                         &mut cell_mode,
+                        &mut paint_session,
+                        &mut flood_select,
+                        &mut derived,
                         &mut drafts,
                         &mut tex,
                         &mut notice,
@@ -346,6 +356,11 @@ fn render_properties(
     nature: &mut crate::state::NatureRegionUiState,
     selection: &mut wv_render::state::SelectionState,
     cell_mode: &mut cell::CellPanelMode,
+    // 落笔会话态（[ADR-0052] D4）+ 泛洪判据（D6）：Cell 表单要读写它们。
+    paint_session: &mut wv_world_cell_map::cell_paint::CellPaintSession,
+    flood_select: &mut crate::state::FloodSelectState,
+    // 派生运算请求（[ADR-0052] D6 · M3）：面板排意图，系统执行。
+    derived: &mut crate::edit::derived_op::DerivedOpRequest,
     drafts: &mut event::InspectorDrafts,
     tex: &mut wv_render::terrain_view::TerrainTexture,
     notice: &mut crate::ui_shell::ShellNotice,
@@ -410,7 +425,19 @@ fn render_properties(
                 return;
             }
             cell::cell_form(
-                ui, shell, projection, edit_cell, edit, selection, tex, loc, cell_mode,
+                ui,
+                shell,
+                projection,
+                edit_cell,
+                edit,
+                selection,
+                tex,
+                loc,
+                cell_mode,
+                paint_session,
+                flood_select,
+                derived,
+                playback.playing,
             );
         }
         FormKind::Place => {

@@ -26,6 +26,7 @@ use wv_world_cell_map::state::{EditCellState, GridConfig};
 use wv_world_cell_map::terrain_view::rebuild::{PendingTerrainSynth, SynthCtx};
 // 桥接系统消费的引擎件（含 crate 内部件）——原文件级 use 随函数迁居此处（ADR-0054 D5）。
 use wv_terrain::isoline::{assemble_chains, chaikin, height_segments, kind_segments, simplify_dp};
+use wv_world_cell_map::cell_flash::*;
 use wv_world_cell_map::cell_selection::*;
 use wv_world_cell_map::region_overlay::*;
 use wv_world_cell_map::terrain_chunks::*;
@@ -2140,6 +2141,354 @@ pub fn sync_cell_selection(
             }
         }
     }
+}
+
+// ══════ from crates/wv-world-cell-map/src/cell_selection.rs :: sync_cell_stroke ══════
+/// 每帧同步 **待落笔触色块**（[ADR-0052] D3 / §9.5 四态视觉分工）。
+///
+/// gate = 笔触活跃 ∧ 笔触格非空；不满足时全 despawn。
+///
+/// 视觉：红橙 `STROKE_PENDING` 半透填充（alpha 0.26，**不脉动**）——
+/// 表示「已采样但尚未写入世界」的格。
+///
+/// Z 低于选中（`STROKE_Z = 0.85 < SELECTION_Z = 0.9`）：笔触是**未提交**
+/// 暂态，选中才是已提交态（§9.5 绘制序 region → stroke → selected → hover）。
+///
+/// **mesh 只在格集合变化时重建**——笔触可能几百格，每帧重建会吃帧
+/// （与 `sync_cell_region` 同款策略）。
+#[allow(clippy::too_many_arguments)] // Bevy 系统参数即依赖声明，宽签名是框架惯例
+pub fn sync_cell_stroke(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    session: Res<wv_world_cell_map::cell_paint::CellPaintSession>,
+    grid: Res<GridConfig>,
+    mut entities: ResMut<CellStrokeEntities>,
+) {
+    let cells = &session.stroke.cells;
+    if !session.stroke.active || cells.is_empty() {
+        entities.despawn_all(&mut commands);
+        entities.release_assets(&mut meshes);
+        return;
+    }
+    let fingerprint = cells_fingerprint(cells);
+    if fingerprint != entities.last_fingerprint || entities.fill_mesh.is_none() {
+        entities.release_assets(&mut meshes);
+        let Some((mesh, origin, bbox)) = build_stroke_fill_mesh(cells, &grid) else {
+            entities.despawn_all(&mut commands);
+            return;
+        };
+        entities.fill_mesh = Some(meshes.add(mesh));
+        entities.last_fingerprint = fingerprint;
+        // 重建 mesh → 实体也要重建（mesh 换了）。
+        entities.despawn_all(&mut commands);
+        if entities.fill_material.is_none() {
+            entities.fill_material = Some(materials.add(ColorMaterial::from_color(
+                crate::theme::colors::STROKE_PENDING.with_alpha(STROKE_FILL_ALPHA),
+            )));
+        }
+        let mesh = entities.fill_mesh.clone().expect("刚建");
+        let mat = entities.fill_material.clone().expect("刚建");
+        entities.fill = Some(
+            commands
+                .spawn((
+                    Transform::from_translation(origin.extend(STROKE_Z)),
+                    Mesh2d(mesh),
+                    MeshMaterial2d(mat),
+                    // bbox 不进 Transform（mesh 顶点已是绝对世界坐标的相对偏移，
+                    // 与 `sync_cell_region` 同款：mesh 原点 + 顶点偏移 = 世界位置）。
+                ))
+                .id(),
+        );
+        let _ = bbox;
+        return;
+    }
+    // 格集合未变 → 材质与实体保持不变（避免每帧重建）。
+    let Some(e) = entities.fill else {
+        return;
+    };
+    let mesh = entities.fill_mesh.clone().expect("已建");
+    let mat = entities.fill_material.clone().expect("已建");
+    commands
+        .entity(e)
+        .insert((Mesh2d(mesh), MeshMaterial2d(mat)));
+}
+
+// ══════ from crates/wv-world-cell-map/src/cell_selection.rs :: sync_cell_hover ══════
+/// 每帧同步 **hover 准星**（[ADR-0052] D2 / §9.5 四态视觉分工）。
+///
+/// gate = `edit_cell.tool_active ∧ edit_cell.hover.is_some()`；
+/// 不满足时全 despawn（无残留）。
+///
+/// **双色描边**（D2）：每条边两层——外层深墨 `LINE_ON_DARK`（2px）、
+/// 内层纯白（1px）。深墨在下、白线在上，构成「白内线 + 深墨外晕」的
+/// 地图准星观感：在水面（浅蓝）与陆地（绿/褐）两种底色上都能读出来
+/// （[ADR-0052] §5 M1 验收 ③）。
+///
+/// **不脉动**（D2）：hover 是瞬时态，脉动会与 selected 的金色脉动混淆。
+/// 脉动是 selected 独占的信号。
+///
+/// **Z 高于 selected**（`HOVER_Z = 0.95 > SELECTION_Z = 0.9`）：
+/// hover 是「此刻光标在哪」的瞬时反馈，必须画在最上层
+/// （[ADR-0052] §9.5 绘制序 region → stroke → selected → hover）。
+#[allow(clippy::too_many_arguments)] // Bevy 系统参数即依赖声明，宽签名是框架惯例
+pub fn sync_cell_hover(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    edit_cell: Res<EditCellState>,
+    grid: Res<GridConfig>,
+    view: Res<ViewState>,
+    mut entities: ResMut<CellHoverEntities>,
+) {
+    let Some((gx, gy)) = edit_cell.hover.filter(|_| edit_cell.tool_active) else {
+        entities.despawn_all(&mut commands);
+        entities.release_assets(&mut meshes);
+        return;
+    };
+    let (center, size) = cell_world_rect(&grid, gx, gy);
+    // 世界厚度 = 屏幕恒定像素 × view.scale（与选中 outline 同策略 A）。
+    let outer_t = HOVER_OUTER_PX * view.scale;
+    let inner_t = HOVER_INNER_PX * view.scale;
+    // 准星长度 = 格的 1/3（居中十字），不与边缘描边打架。
+    let cross_len = size.x * 0.34;
+
+    // ── mesh：只在尺寸变化时重建（其余帧复用句柄）──
+    if entities.last_size != size || entities.outer_h_mesh.is_none() {
+        entities.release_assets(&mut meshes);
+        // 外晕比内线更宽——墨晕在格沿两侧铺开，白线正好落在格沿上。
+        entities.outer_h_mesh = Some(meshes.add(Rectangle::new(size.x, outer_t)));
+        entities.outer_v_mesh = Some(meshes.add(Rectangle::new(outer_t, size.y)));
+        entities.inner_h_mesh = Some(meshes.add(Rectangle::new(size.x, inner_t)));
+        entities.inner_v_mesh = Some(meshes.add(Rectangle::new(inner_t, size.y)));
+        // 准星 2 条（横 / 竖）+ 白芯 2 条（比芯短一档，露出墨头）。
+        entities.cross_h_mesh = Some(meshes.add(Rectangle::new(cross_len, outer_t)));
+        entities.cross_v_mesh = Some(meshes.add(Rectangle::new(outer_t, cross_len)));
+        let core_len = cross_len * 0.5;
+        entities.core_h_mesh = Some(meshes.add(Rectangle::new(core_len, inner_t)));
+        entities.core_v_mesh = Some(meshes.add(Rectangle::new(inner_t, core_len)));
+    }
+    entities.last_size = size;
+
+    // ── 材质：只建一次 ──
+    if entities.outer_material.is_none() {
+        entities.outer_material = Some(materials.add(ColorMaterial::from_color(
+            crate::theme::colors::LINE_ON_DARK,
+        )));
+    }
+    if entities.inner_material.is_none() {
+        entities.inner_material =
+            Some(materials.add(ColorMaterial::from_color(bevy::color::Color::WHITE)));
+    }
+    let outer_mat = entities.outer_material.clone().expect("材质已建");
+    let inner_mat = entities.inner_material.clone().expect("材质已建");
+
+    let half = size * 0.5;
+    let ot2 = outer_t * 0.5;
+    // `inner_t` 不需要偏移量：内线直接压在格沿上（外晕才向外让半个厚度）。
+
+    // ── 外晕 4 条边：下 (0) / 上 (1) / 左 (2) / 右 (3) ──
+    // 外晕中心比格边界再外移半个墨晕厚度（`ot2`），墨线铺在格沿两侧。
+    let outer_offsets: [Vec2; 4] = [
+        Vec2::new(0.0, -half.y - ot2),
+        Vec2::new(0.0, half.y + ot2),
+        Vec2::new(-half.x - ot2, 0.0),
+        Vec2::new(half.x + ot2, 0.0),
+    ];
+    let outer_meshes = [
+        entities.outer_h_mesh.clone(),
+        entities.outer_h_mesh.clone(),
+        entities.outer_v_mesh.clone(),
+        entities.outer_v_mesh.clone(),
+    ];
+    for (i, offset) in outer_offsets.into_iter().enumerate() {
+        let Some(mesh) = outer_meshes[i].clone() else {
+            continue;
+        };
+        let tf = Transform::from_translation((center + offset).extend(HOVER_Z));
+        match entities.outer_edges[i] {
+            Some(e) => {
+                commands
+                    .entity(e)
+                    .insert((tf, Mesh2d(mesh), MeshMaterial2d(outer_mat.clone())));
+            }
+            None => {
+                entities.outer_edges[i] = Some(
+                    commands
+                        .spawn((tf, Mesh2d(mesh), MeshMaterial2d(outer_mat.clone())))
+                        .id(),
+                );
+            }
+        }
+    }
+
+    // ── 内线 4 条边：白线压格沿（比外晕更靠内半个墨晕厚度）──
+    let inner_offsets: [Vec2; 4] = [
+        Vec2::new(0.0, -half.y),
+        Vec2::new(0.0, half.y),
+        Vec2::new(-half.x, 0.0),
+        Vec2::new(half.x, 0.0),
+    ];
+    let inner_meshes = [
+        entities.inner_h_mesh.clone(),
+        entities.inner_h_mesh.clone(),
+        entities.inner_v_mesh.clone(),
+        entities.inner_v_mesh.clone(),
+    ];
+    for (i, offset) in inner_offsets.into_iter().enumerate() {
+        let Some(mesh) = inner_meshes[i].clone() else {
+            continue;
+        };
+        let tf = Transform::from_translation((center + offset).extend(HOVER_Z + 0.001));
+        match entities.inner_edges[i] {
+            Some(e) => {
+                commands
+                    .entity(e)
+                    .insert((tf, Mesh2d(mesh), MeshMaterial2d(inner_mat.clone())));
+            }
+            None => {
+                entities.inner_edges[i] = Some(
+                    commands
+                        .spawn((tf, Mesh2d(mesh), MeshMaterial2d(inner_mat.clone())))
+                        .id(),
+                );
+            }
+        }
+    }
+
+    // ── 准星：格中心十字（外晕层 + 白芯层）──
+    // 外晕横 / 竖：格中心。
+    //
+    // 先把 mesh 句柄克隆出来再可变借用 slot——数组元素与整体克隆写在
+    // 同一条 `for` 的初始化式里会同时可变 + 不可变借用 `entities`
+    // （编译期 E0499/E0502）。逐个处理（而非一次遍历两个 slot）是为
+    // 避开「同时可变借用 `entities` 两次」。
+    let cross_outer_meshes = [entities.cross_h_mesh.clone(), entities.cross_v_mesh.clone()];
+    for (idx, mesh) in cross_outer_meshes.into_iter().enumerate() {
+        let Some(mesh) = mesh else { continue };
+        let tf = Transform::from_translation(center.extend(HOVER_Z));
+        let slot = &mut entities.cross_outer[idx];
+        match slot {
+            Some(e) => {
+                commands
+                    .entity(*e)
+                    .insert((tf, Mesh2d(mesh), MeshMaterial2d(outer_mat.clone())));
+            }
+            None => {
+                *slot = Some(
+                    commands
+                        .spawn((tf, Mesh2d(mesh), MeshMaterial2d(outer_mat.clone())))
+                        .id(),
+                );
+            }
+        }
+    }
+    // 白芯（比墨晕短一档，露不出头）。
+    let cross_inner_meshes = [entities.core_h_mesh.clone(), entities.core_v_mesh.clone()];
+    for (idx, mesh) in cross_inner_meshes.into_iter().enumerate() {
+        let Some(mesh) = mesh else { continue };
+        let tf = Transform::from_translation(center.extend(HOVER_Z + 0.002));
+        let slot = &mut entities.cross_inner[idx];
+        match slot {
+            Some(e) => {
+                commands
+                    .entity(*e)
+                    .insert((tf, Mesh2d(mesh), MeshMaterial2d(inner_mat.clone())));
+            }
+            None => {
+                *slot = Some(
+                    commands
+                        .spawn((tf, Mesh2d(mesh), MeshMaterial2d(inner_mat.clone())))
+                        .id(),
+                );
+            }
+        }
+    }
+}
+
+// ══════ from crates/wv-world-cell-map/src/cell_flash.rs :: sync_cell_flash ══════
+/// 每帧同步 **撤销白闪 / 拒收红闪**（[ADR-0052] D8-A / D3-E）。
+///
+/// gate = `CellFlashState.is_active(now)`；到期即全 despawn（无残留）。
+///
+/// ## 颜色分工
+///
+/// - `Undo` → `UNDO_FLASH`（纯白，`0xFFFFFF`）；
+/// - `Reject` → `UI_UNREACHABLE`（红，`0xB5453A`）——与
+///   `UI_UNREACHABLE` 同源：语义都是「这一处不可用 / 没生效」。
+///
+/// ## Z 最顶层
+///
+/// `FLASH_Z = 1.0` **高于 hover（`HOVER_Z = 0.95`）**——闪是「刚刚发生」
+/// 的强信号，必须压过所有常驻视觉（[ADR-0052] §9.9「白闪 z 最顶层
+/// 250ms 短促」）。
+///
+/// ## mesh 只在格集合变化时重建
+///
+/// 闪期间格集合不变（撤销已定局），故 mesh 复用；**alpha 每帧改**
+/// （材质句柄内的颜色随时间衰减）。
+pub fn sync_cell_flash(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    flash: Res<CellFlashState>,
+    grid: Res<GridConfig>,
+    time: Res<Time>,
+    mut entities: ResMut<CellFlashEntities>,
+) {
+    let now = time.elapsed_secs();
+    if !flash.is_active(now) {
+        entities.despawn_all(&mut commands);
+        entities.release_assets(&mut meshes);
+        return;
+    }
+    let fingerprint = cells_fingerprint(&flash.cells);
+    if fingerprint != entities.last_fingerprint || entities.fill_mesh.is_none() {
+        entities.release_assets(&mut meshes);
+        let Some((mesh, origin)) = build_flash_mesh(&flash.cells, &grid) else {
+            entities.despawn_all(&mut commands);
+            return;
+        };
+        entities.fill_mesh = Some(meshes.add(mesh));
+        entities.last_fingerprint = fingerprint;
+        entities.despawn_all(&mut commands);
+        // 材质：颜色固定（按 kind），alpha 每帧改。
+        let base = match flash.kind {
+            CellFlashKind::Undo => crate::theme::colors::UNDO_FLASH,
+            CellFlashKind::Reject => crate::theme::colors::UI_UNREACHABLE,
+        };
+        if entities.fill_material.is_none() {
+            entities.fill_material =
+                Some(materials.add(ColorMaterial::from_color(base.with_alpha(flash.alpha(now)))));
+        }
+        let mesh = entities.fill_mesh.clone().expect("刚建");
+        let mat = entities.fill_material.clone().expect("刚建");
+        entities.fill = Some(
+            commands
+                .spawn((
+                    Transform::from_translation(origin.extend(FLASH_Z)),
+                    Mesh2d(mesh),
+                    MeshMaterial2d(mat),
+                ))
+                .id(),
+        );
+        return;
+    }
+    // 格集合未变 → 只改 alpha（材质句柄内的颜色）。
+    let Some(e) = entities.fill else {
+        return;
+    };
+    let Some(mat) = entities.fill_material.clone() else {
+        return;
+    };
+    let base = match flash.kind {
+        CellFlashKind::Undo => crate::theme::colors::UNDO_FLASH,
+        CellFlashKind::Reject => crate::theme::colors::UI_UNREACHABLE,
+    };
+    if let Some(mut m) = materials.get_mut(&mat) {
+        m.color = base.with_alpha(flash.alpha(now));
+    }
+    commands.entity(e).insert(MeshMaterial2d(mat));
 }
 
 // ══════ from crates/wv-world-cell-map/src/region_overlay.rs :: region_layer_visible ══════
