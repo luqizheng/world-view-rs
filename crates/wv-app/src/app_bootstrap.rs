@@ -179,6 +179,9 @@ pub fn run(config: AppConfig) {
     .init_resource::<camera::ActiveStroke>()
     .init_resource::<camera::PointerOverUi>()
     .init_resource::<editing::EditHistory>()
+    // 单格连续绘制的丢弃确认弹窗态（[ADR-0052] D3-C）。
+    // 笔触格集合 + 落笔值在 `wv_world_cell_map::cell_paint::CellPaintSession`
+    // （由 wv-render 的 EditorOverlayPlugin 注册，渲染层要读它画待落色块）。
     // 编辑意图桥（ADR-0020 §2.5）：渲染层产意图、本 crate 翻译提交、回执回填。
     .init_resource::<wv_render::editing_bridge::EditIntents>()
     .init_resource::<wv_render::editing_bridge::EditReceipts>()
@@ -359,6 +362,14 @@ pub fn run(config: AppConfig) {
                 // 必须排在 `track_cursor_world` 之后（要读 cursor_world）。
                 wv_render::perf_timed!("track_edit_cell_hover", editing::track_edit_cell_hover)
                     .after(wv_render::camera::track_cursor_world),
+                // 单格连续绘制（[ADR-0052] D3）：拖动累积格 + 松手提交。
+                // 排在 `track_cursor_world` 之后（要读 cursor_world）、
+                // `commit_edit_cell_on_click` 之后（点选与拖绘同属 EditCell）。
+                wv_render::perf_timed!(
+                    "paint_edit_cell_on_drag",
+                    crate::edit::cell_stroke::paint_edit_cell_on_drag
+                )
+                .after(wv_render::camera::track_cursor_world),
                 // 候选点选（2026-10-22 内容矩阵）：在 cell 点选之后跑——
                 // 读 selected 判定是否落进未命名候选。
                 wv_render::perf_timed!(

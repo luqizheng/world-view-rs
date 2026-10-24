@@ -2090,6 +2090,75 @@ pub fn sync_cell_selection(
     }
 }
 
+// ══════ from crates/wv-world-cell-map/src/cell_selection.rs :: sync_cell_stroke ══════
+/// 每帧同步 **待落笔触色块**（[ADR-0052] D3 / §9.5 四态视觉分工）。
+///
+/// gate = 笔触活跃 ∧ 笔触格非空；不满足时全 despawn。
+///
+/// 视觉：红橙 `STROKE_PENDING` 半透填充（alpha 0.26，**不脉动**）——
+/// 表示「已采样但尚未写入世界」的格。
+///
+/// Z 低于选中（`STROKE_Z = 0.85 < SELECTION_Z = 0.9`）：笔触是**未提交**
+/// 暂态，选中才是已提交态（§9.5 绘制序 region → stroke → selected → hover）。
+///
+/// **mesh 只在格集合变化时重建**——笔触可能几百格，每帧重建会吃帧
+/// （与 `sync_cell_region` 同款策略）。
+#[allow(clippy::too_many_arguments)] // Bevy 系统参数即依赖声明，宽签名是框架惯例
+pub fn sync_cell_stroke(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    session: Res<wv_world_cell_map::cell_paint::CellPaintSession>,
+    grid: Res<GridConfig>,
+    mut entities: ResMut<CellStrokeEntities>,
+) {
+    let cells = &session.stroke.cells;
+    if !session.stroke.active || cells.is_empty() {
+        entities.despawn_all(&mut commands);
+        entities.release_assets(&mut meshes);
+        return;
+    }
+    let fingerprint = cells_fingerprint(cells);
+    if fingerprint != entities.last_fingerprint || entities.fill_mesh.is_none() {
+        entities.release_assets(&mut meshes);
+        let Some((mesh, origin, bbox)) = build_stroke_fill_mesh(cells, &grid) else {
+            entities.despawn_all(&mut commands);
+            return;
+        };
+        entities.fill_mesh = Some(meshes.add(mesh));
+        entities.last_fingerprint = fingerprint;
+        // 重建 mesh → 实体也要重建（mesh 换了）。
+        entities.despawn_all(&mut commands);
+        if entities.fill_material.is_none() {
+            entities.fill_material = Some(materials.add(ColorMaterial::from_color(
+                crate::theme::colors::STROKE_PENDING.with_alpha(STROKE_FILL_ALPHA),
+            )));
+        }
+        let mesh = entities.fill_mesh.clone().expect("刚建");
+        let mat = entities.fill_material.clone().expect("刚建");
+        entities.fill = Some(
+            commands
+                .spawn((
+                    Transform::from_translation(origin.extend(STROKE_Z)),
+                    Mesh2d(mesh),
+                    MeshMaterial2d(mat),
+                    // bbox 不进 Transform（mesh 顶点已是绝对世界坐标的相对偏移，
+                    // 与 `sync_cell_region` 同款：mesh 原点 + 顶点偏移 = 世界位置）。
+                ))
+                .id(),
+        );
+        let _ = bbox;
+        return;
+    }
+    // 格集合未变 → 材质与实体保持不变（避免每帧重建）。
+    let Some(e) = entities.fill else {
+        return;
+    };
+    let mesh = entities.fill_mesh.clone().expect("已建");
+    let mat = entities.fill_material.clone().expect("已建");
+    commands.entity(e).insert((Mesh2d(mesh), MeshMaterial2d(mat)));
+}
+
 // ══════ from crates/wv-world-cell-map/src/cell_selection.rs :: sync_cell_hover ══════
 /// 每帧同步 **hover 准星**（[ADR-0052] D2 / §9.5 四态视觉分工）。
 ///

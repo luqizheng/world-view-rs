@@ -29,6 +29,7 @@
 //!   + 网格线 / 等值线 / 大气 / 图集 / 群系固定色。
 //! - [`terrain_chunks`]——分块 + mip 链 + 视口拣选。
 //! - [`cell_selection`]——选区栅格化与高亮。
+//! - [`cell_paint`]——单格连续绘制（落笔值 / 笔触态 / Bresenham 补间）。
 //! - [`region_overlay`]——自然区覆盖（固定诊断色）。
 //! - [`biome_boundary`]——群系分界线工具的几何内核。
 //!
@@ -36,6 +37,7 @@
 //! [ADR-0054]: ../docs/adr/ADR-0054-world-cell-map-crate.md
 
 pub mod biome_boundary;
+pub mod cell_paint;
 pub mod cell_selection;
 pub mod palette;
 pub mod region_overlay;

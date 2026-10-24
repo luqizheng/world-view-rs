@@ -88,7 +88,34 @@ pub fn cell_form(
     tex: &mut wv_render::terrain_view::TerrainTexture,
     loc: crate::i18n::Locale,
     mode: &mut CellPanelMode,
+    session: &mut wv_world_cell_map::cell_paint::CellPaintSession,
 ) {
+    // ── 读数条（D8）：面板顶部固定双段 ──
+    // 左段永远读 hover、右段永远读 selected；任一段无数据显 `—`，
+    // **绝不回退错位**（把 selected 的值填到 hover 段会误导作者改错格）。
+    {
+        let world = &projection.world;
+        let map = edit_cell.last_map_id.clone();
+        let read_cell = |gx: i32, gy: i32| -> Option<(i16, u8, u8)> {
+            let map = map.as_ref()?;
+            let terrain = world.terrain_of(map)?;
+            let w = terrain.width as i32;
+            let h = terrain.height as i32;
+            if gx < 0 || gy < 0 || gx >= w || gy >= h {
+                return None;
+            }
+            let idx = (gy as usize) * (w as usize) + (gx as usize);
+            let c = terrain.cells.get(idx)?;
+            Some((c.height, c.surface, c.biome))
+        };
+        super::cell_paint_panel::render_readout_bar(ui, shell, edit_cell, read_cell);
+    }
+
+    // ── 落笔值区（D4）：拖绘工作流的「颜料盒」──
+    // 紧贴读数条之下——拖绘前必须能看见落笔值（§5 M2 验收 ④）。
+    super::cell_paint_panel::render_paint_value_section(ui, shell, session, loc);
+    divider(ui, shell);
+
     // ── 模式切换：单格 / 批量 ──
     // 有多边形选区时自动落在「批量」（用户刚圈完，意图明确）；
     // 用户可手动切回「单格」——两态互斥。

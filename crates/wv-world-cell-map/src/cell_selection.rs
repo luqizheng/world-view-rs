@@ -195,8 +195,60 @@ pub fn cell_world_rect(grid: &GridConfig, gx: i32, gy: i32) -> (Vec2, Vec2) {
 }
 
 // ---------------------------------------------------------------------------
-// 多边形 → 方格贴合（2026-10-20 批量编辑）
+// 待落笔触色块（[ADR-0052] D3 / §9.5 四态视觉分工）
 // ---------------------------------------------------------------------------
+
+/// 待落笔触填充 alpha（§9.5：0.26，不脉动）。
+pub const STROKE_FILL_ALPHA: f32 = 0.26;
+/// 待落笔触 Z 偏移：低于 selected（`SELECTION_Z = 0.9`）——
+/// 笔触是**未提交**的暂态，选中才是已提交态（§9.5 绘制序：
+/// region → stroke → selected → hover）。
+pub const STROKE_Z: f32 = 0.85;
+
+/// **待落笔触**的实体集合（连续绘制期间的「已采样未写入」格）。
+///
+/// 与单格选中的高亮（[`CellSelectionEntities`]）是**两套实体**——
+/// 笔触可能覆盖几百格（合并成一个 mesh），单格选中只有 1 格（5 个实体）。
+#[derive(Resource, Default)]
+pub struct CellStrokeEntities {
+    /// 合并后的填充 mesh 实体（所有待落格合成一个 quad 网格）。
+    pub fill: Option<Entity>,
+    /// 填充 mesh 句柄（格集合变化才重建）。
+    pub fill_mesh: Option<Handle<Mesh>>,
+    /// 填充材质句柄（红橙 `STROKE_PENDING` + alpha 0.26）。
+    pub fill_material: Option<Handle<ColorMaterial>>,
+    /// 上次构建时的格集合指纹——变了才重建 mesh。
+    pub last_fingerprint: u64,
+}
+
+impl CellStrokeEntities {
+    /// 全部 despawn（笔触结束 / 工具关闭时调用）。
+    pub fn despawn_all(&mut self, commands: &mut Commands) {
+        if let Some(e) = self.fill.take() {
+            commands.entity(e).despawn();
+        }
+    }
+
+    /// 释放已缓存的 mesh 资产（`Assets` 不会随实体 despawn 回收）。
+    pub fn release_assets(&mut self, meshes: &mut Assets<Mesh>) {
+        if let Some(h) = self.fill_mesh.take() {
+            meshes.remove(&h);
+        }
+        self.last_fingerprint = 0;
+    }
+}
+
+/// 由格集合构建**合并四边形 mesh**（单个 Mesh，N 格 = 4N 顶点）。
+///
+/// 与 [`build_region_fill_mesh`] 同款结构（复用同一套顶点拼装逻辑），
+/// 差别只在用途：region 画金底（已提交选区），stroke 画红橙底（待落笔触）。
+pub fn build_stroke_fill_mesh(
+    cells: &[(i32, i32)],
+    grid: &GridConfig,
+) -> Option<(Mesh, Vec2, Vec2)> {
+    build_region_fill_mesh(cells, grid)
+}
+
 
 /// 射线法点在多边形内（纯函数；顶点/边上的点按「内」处理不了——v1 接受
 /// 半格误差，贴合语义是「cell 中心落入即选中」，不是精确几何剖分）。

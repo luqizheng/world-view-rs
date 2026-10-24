@@ -100,9 +100,15 @@ impl Plugin for EditorOverlayPlugin {
             .init_resource::<cell_selection::CellRegionEntities>()
             // hover 准星（[ADR-0052] D2）：双色描边 + 中心十字。
             .init_resource::<cell_selection::CellHoverEntities>()
+            // 待落笔触色块（[ADR-0052] D3）：红橙半透填充。
+            .init_resource::<cell_selection::CellStrokeEntities>()
+            // 落笔会话态（[ADR-0052] D4）：`wv-app` 写、`wv-render` 读
+            // （待落色块要读笔触格）。
+            .init_resource::<wv_world_cell_map::cell_paint::CellPaintSession>()
             .add_systems(Update, brush_cursor::sync_brush_cursor)
             .add_systems(Update, crate::cellmap_bridge::sync_cell_selection)
             .add_systems(Update, crate::cellmap_bridge::sync_cell_region)
+            .add_systems(Update, crate::cellmap_bridge::sync_cell_stroke)
             // hover 准星画在 selected **之上**（Z 序：D2 要求 hover 是最上层
             // 的瞬时反馈）。
             .add_systems(
