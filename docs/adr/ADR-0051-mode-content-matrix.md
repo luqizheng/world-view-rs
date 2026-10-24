@@ -1,6 +1,12 @@
 # ADR-0051：三模式内容矩阵——Browse/Edit/CellMap 各看什么
 
 **状态**：已接受（Accepted）
+
+> **2026-10-24 追记**：§5「群系固定色块底图 · 高度不参与颜色」被
+> [ADR-0055](ADR-0055-cellmap-hypsometric-tint.md) 修正——群系色仍是底，
+> 再叠一层**海拔分层设色**（8 阶、逐图百分位、强度 `0..1` 连续可调）。
+> 「CellMap 颜色不随主题」这条**不变**（色带是固定 crate 常量）。
+> 正文按只增不改保留。
 **日期**：2026-10-22
 **决策者**：用户（对话拍板三分法 + 三格补充 + 群系色块 + Nature 开关 + 分界线）
 **关联**：**修正 [ADR-0021](ADR-0021-render-recipe-and-treatment.md) 两格表语义与 [ADR-0039](ADR-0039-topographic-viewmode.md) 的 Topographic 视觉语义**（正文均不改，头部标注）；[ADR-0017](ADR-0017-label-layer.md)、[ADR-0030](ADR-0030-poi-rank-and-density-budget.md)、[ADR-0045](ADR-0045-nature-region-model.md)、[ADR-0050](ADR-0050-unified-inspector-panel.md)（同分支前置）、[设计稿](../superpowers/specs/2026-10-22-mode-content-matrix-design.md) v1.4

@@ -932,6 +932,7 @@ mod tests {
             last_mode: None,
             last_soften: false,
             last_theme_id: "",
+            last_hypsometric: 0.0,
             last_map: None,
         }
     }

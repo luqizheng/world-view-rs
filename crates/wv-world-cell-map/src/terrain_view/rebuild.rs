@@ -56,6 +56,9 @@ pub struct SynthCtx {
 impl PartialEq for SynthCtx {
     /// **只比 `theme_id` 与内容指纹**——`pack` 由 `theme_id` 唯一决定，
     /// 且 `ThemePack` 不实现 `PartialEq`（含 f32 字段）。
+    ///
+    /// **例外：分层设色强度**（ADR-0055）不是主题字段（会话态骑在 pack 上），
+    /// 必须单独比——否则拖动强度滑条时在途任务会被误判成「同一份任务」。
     fn eq(&self, other: &Self) -> bool {
         self.mode == other.mode
             && self.soften == other.soften
@@ -63,6 +66,7 @@ impl PartialEq for SynthCtx {
             && self.map == other.map
             && self.data_hash == other.data_hash
             && self.topographic_thresholds == other.topographic_thresholds
+            && (self.pack.hypsometric - other.pack.hypsometric).abs() <= 1e-6
     }
 }
 

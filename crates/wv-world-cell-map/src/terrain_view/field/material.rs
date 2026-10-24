@@ -297,6 +297,20 @@ pub struct FieldParams {
     pub river_ink: Vec4,
     /// 纸底色（T44）。
     pub paper: Vec4,
+    /// 分层设色（ADR-0055）：8 阶海拔色带的 **7 条内边界 + 强度**。
+    ///
+    /// - 组 0 的 `.xyzw`、组 1 的 `.xyz` = 内边界（升序，**归一化**到
+    ///   `R16Unorm` 高度纹理的域：`(h − H_MIN) / H_RANGE`，与 `pack` 同口径）；
+    /// - 组 1 的 `.w` = 叠加强度 `0..1`（`0` = 纯群系色，`1` = 色带完全替代）。
+    ///
+    /// 只作用于 **CellMap / Topographic 分支的陆格**；Themed 分支与水面不读。
+    pub elev_cuts: [Vec4; 2],
+    /// 8 阶固定色带（**线性**空间，与 `theme` 同口径）。
+    ///
+    /// sRGB 真源 = [`crate::terrain_view::hypsometric::RAMP_SRGB`]（固定色，
+    /// 不进 ThemePack——ADR-0051 §5 / ADR-0054 D2）。搬进 uniform 而不是烧进
+    /// WGSL，是为了让 CPU 烘焙路径与 GPU 场路径共用**唯一一份**色表。
+    pub elev_ramp: [Vec4; 8],
 }
 
 /// 场 shader 的**静态句柄**（编译期内联，不经 AssetServer）。
@@ -534,7 +548,50 @@ pub fn default_params(
         ink: rgba4(pal.ink),
         river_ink: rgba4(pal.river_ink),
         paper: rgba4(pal.paper),
+        // 分层设色默认关（强度 0）；内边界先按等分占位，真实值由
+        // `apply_hypsometric` 在整图重打时按逐图百分位写入（ADR-0055）。
+        elev_cuts: equal_cuts_uniform(),
+        elev_ramp: ramp_uniform(),
     }
+}
+
+/// 等分内边界占位（1/8 .. 7/8），只在「尚未写入真值」时存在。
+fn equal_cuts_uniform() -> [Vec4; 2] {
+    let c = |i: usize| (i + 1) as f32 / 8.0;
+    [
+        Vec4::new(c(0), c(1), c(2), c(3)),
+        Vec4::new(c(4), c(5), c(6), 0.0),
+    ]
+}
+
+/// 把 [`crate::terrain_view::hypsometric::RAMP_SRGB`] 转成 uniform 用的线性色。
+fn ramp_uniform() -> [Vec4; 8] {
+    std::array::from_fn(|i| {
+        let c = crate::terrain_view::hypsometric::RAMP_SRGB[i];
+        let lin = LinearRgba::from(Color::srgb(
+            c[0] as f32 / 255.0,
+            c[1] as f32 / 255.0,
+            c[2] as f32 / 255.0,
+        ));
+        Vec4::new(lin.red, lin.green, lin.blue, 1.0)
+    })
+}
+
+/// 写入分层设色的真值（ADR-0055）。
+///
+/// `cuts_norm` = [`crate::terrain_view::hypsometric::normalized_cuts`] 的产物
+/// （7 条，升序，`R16Unorm` 域）；`strength` 会被钳到 `[0, 1]`——
+/// 越界强度在 shader 里会让 `mix` 外插，出现不属于任何一阶的颜色。
+pub fn apply_hypsometric(params: &mut FieldParams, cuts_norm: &[f32; 7], strength: f32) {
+    params.elev_cuts = [
+        Vec4::new(cuts_norm[0], cuts_norm[1], cuts_norm[2], cuts_norm[3]),
+        Vec4::new(
+            cuts_norm[4],
+            cuts_norm[5],
+            cuts_norm[6],
+            strength.clamp(0.0, 1.0),
+        ),
+    ];
 }
 
 /// 按 [`CoastEncoding`] 设置 uniform 的解码开关。
@@ -620,6 +677,12 @@ mod tests {
         }
         for v in p.theme {
             assert!(v.is_finite());
+        }
+        for v in p.elev_cuts {
+            assert!(v.is_finite(), "分层设色内边界出现非有限值: {v:?}");
+        }
+        for v in p.elev_ramp {
+            assert!(v.is_finite(), "分层设色色带出现非有限值: {v:?}");
         }
     }
 }

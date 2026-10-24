@@ -580,9 +580,12 @@ struct CellRenderer<'a> {
     blocks: [Option<Vec<u8>>; 10],
     /// `kind` 是否已尝试过建块（避免无映射 kind 被反复查）。
     tried: [bool; 10],
-    /// Topographic mode 专用：(p33, p66) 两个 height 阈值（米）。
-    /// 非 Topographic mode 为 `None`（[ADR-0039] 决策 4/5）。
-    topographic: Option<(i16, i16)>,
+    /// Topographic mode 专用：7 条海拔内边界（米，逐图百分位；ADR-0055）。
+    /// 非 Topographic mode 为 `None`（着色路径零开销）。
+    topographic: Option<super::hypsometric::Cuts>,
+    /// 分层设色强度（`CellPack.hypsometric` 的镜像；ADR-0055）：0 = 纯群系色，
+    /// 1 = 海拔色带完全替代群系色。
+    hypsometric: f32,
     /// 近岸浅滩带用的离岸距离场（S2；行优先，长度 = w×h）。`None` =
     /// 旗标关 / 模式不参与——着色路径零开销。由驱动方（`terrain_pixels`
     /// / `patch_terrain_image`）**整场算一次**后共享给各带 renderer
@@ -624,16 +627,12 @@ impl<'a> CellRenderer<'a> {
         } else {
             (0, 0)
         };
-        // Topographic 的 3 阶高度阈值（[ADR-0039] 决策 4/5）：仅在 Topographic
-        // mode 下现算一次（O(N log N)，1024² ≈ 数 ms，摊进整图合成的量级）。
-        // biome 通道不参与（X 路线）；`ViewState::topographic_thresholds` 的
-        // 缓存是后续优化口（PR-1b v1 接受每次合成重算，[ADR-0039] §4.1.1）。
+        // Topographic 的 8 阶海拔内边界（ADR-0056）：**绝对地形学阶梯**
+        // （200/500/1000/1500/2500/4000/6000 m），窄域图（跨度 < 300 m）
+        // 兜底为自身区间等分。O(N) 只求 min/max，不排序——每次合成 / 补丁
+        // 都廉价重算（阈值常量稳定，笔刷不会让别处颜色跟着漂）。
         let topographic = if mode == ShadeMode::Topographic {
-            Some(topographic_thresholds_for(
-                &data.cells,
-                crate::palette::TOPOGRAPHIC_P_LOW,
-                crate::palette::TOPOGRAPHIC_P_HIGH,
-            ))
+            Some(super::hypsometric::cuts_for_cells(&data.cells))
         } else {
             None
         };
@@ -679,6 +678,7 @@ impl<'a> CellRenderer<'a> {
             blocks: std::array::from_fn(|_| None),
             tried: [false; 10],
             topographic,
+            hypsometric: pack.hypsometric.clamp(0.0, 1.0),
             shore,
             sea: pack.sea.clone(),
             water_detail_enabled: !matches!(
@@ -1199,16 +1199,21 @@ impl<'a> CellRenderer<'a> {
         let Some(cell) = self.data.cells.get(idx) else {
             return;
         };
-        // Topographic 早返回（[ADR-0039] 决策 4 的 per-cell 着色）：
-        // 只读 height + surface（X 路线，biome 不参与），经 `topographic::pick`
-        // 按水/陆 + 3 阶高度取色。res 恒 1（new 里已定），一像素直铺；
-        // 无边界/揉边/淡化/浮雕——分析视图四色是语义色，任何后处理都是污染。
-        if let Some((_p_low, _p_high)) = self.topographic {
+        // Topographic 早返回（ADR-0051 §5 的 per-cell 着色 + ADR-0055 叠色）：
+        // 群系固定色块为底，陆格再按 8 阶海拔百分位向固定色带混合。
+        // res 恒 1（new 里已定），一像素直铺；无边界/揉边/淡化/浮雕——
+        // 数据视图要的是逐格可读，任何后处理都是污染。
+        if let Some(cuts) = self.topographic.as_ref() {
             // 2026-10-22 三模式内容矩阵（spec §2.5）：CellMap = 群系固定色块
-            // ——颜色编码 biome，固定色板不随 CellPack/TreatmentFlags；
-            // 高度不参与（海拔参照交给等高线叠加）。修正 ADR-0039 的
-            // 「等高分析底图」画法（ADR-0051）。
-            let rgba = crate::terrain_view::biome_raw::pick(cell.biome, cell.surface);
+            // ——颜色编码 biome，固定色板不随 CellPack/TreatmentFlags（ADR-0051）。
+            // 2026-10-24（ADR-0055）：再叠一层**海拔分层设色**——群系色仍是底，
+            // 海拔按 8 阶百分位向固定色带混合，强度由会话开关控制。
+            // 水格不叠：海拔色带只对陆面有意义，水面仍由群系水色表达。
+            let mut rgba = crate::terrain_view::biome_raw::pick(cell.biome, cell.surface);
+            if self.hypsometric > 0.0 && !super::hypsometric::is_water_cell(cell) {
+                let band = super::hypsometric::band_of(cell.height, cuts);
+                rgba = super::hypsometric::tint_rgba(rgba, band, self.hypsometric);
+            }
             let o = ((out_row * stride + cx) as usize) * 4;
             pixels[o] = (rgba[0] * 255.0) as u8;
             pixels[o + 1] = (rgba[1] * 255.0) as u8;
@@ -2535,6 +2540,7 @@ mod tests {
             ShadeMode::VectorFlat,
             false,
             Default::default(),
+            0.0,
         );
         let handle = tex.handle.clone();
 
@@ -2671,6 +2677,7 @@ mod tests {
             ShadeMode::VectorFlat,
             false,
             Default::default(),
+            0.0,
         );
         let expected_handle = tex.handle.clone();
         // 二次写入（NewMap / LoadProject 的真实路径）。
@@ -2691,6 +2698,7 @@ mod tests {
             ShadeMode::VectorFlat,
             false,
             Default::default(),
+            0.0,
         );
         assert_eq!(
             tex.handle, expected_handle,

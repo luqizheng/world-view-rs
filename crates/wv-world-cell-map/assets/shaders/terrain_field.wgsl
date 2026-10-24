@@ -38,6 +38,10 @@ struct FieldParams {
     ink: vec4<f32>,
     river_ink: vec4<f32>,   // T25 河墨（追记九）
     paper: vec4<f32>,
+    // 分层设色（ADR-0055）：7 条归一化内边界 + 强度（第二组 .w）
+    elev_cuts: array<vec4<f32>, 2>,
+    // 8 阶固定色带（低 → 高，线性空间；sRGB 真源在 Rust 侧 hypsometric）
+    elev_ramp: array<vec4<f32>, 8>,
 };
 
 // ── 常量（与 material.rs 同源）───────────────────────────────────────────
@@ -184,6 +188,14 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if (p.shape.y < 0.5) {
         // CellMap / Topographic：群系固定色块，**不随主题**（ADR-0051 §5）。
         base = biome_raw_approx(biome_id);
+        // 分层设色（ADR-0055）：群系色仍是底，陆格再按海拔 8 阶向固定色带
+        // 混合。色带读「高」、下方 hillshade 读「坡」，两者正交互补。
+        // 水格不叠（海拔色带只对陆面有意义）。
+        let strength = p.elev_cuts[1].w;
+        if (is_land && strength > 0.0) {
+            let ramp = elev_ramp_color(elev_band(h));
+            base = mix(base, ramp, clamp(strength, 0.0, 1.0));
+        }
     } else {
         base = themed_land(is_land, h);
     }
@@ -644,6 +656,32 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     let lo = c / 12.92;
     let hi = pow((c + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
     return select(hi, lo, c <= vec3<f32>(0.04045));
+}
+
+// ── 分层设色（ADR-0055）─────────────────────────────────────────────────
+
+/// 高度落在第几阶（0..8）。
+///
+/// 7 条内边界挤在两组 `vec4` 里（`.xyzw` / `.xyz`）。**按分量逐个比较而不是
+/// 动态索引 `vec4`**：边界升序，故「大于等于几条」就等于阶号，写法最稳，
+/// 也避开 WGSL 动态取向量分量的可读性坑。
+fn elev_band(h: f32) -> u32 {
+    let a = p.elev_cuts[0];
+    let c = p.elev_cuts[1];
+    var b = 0u;
+    if (h >= a.x) { b = b + 1u; }
+    if (h >= a.y) { b = b + 1u; }
+    if (h >= a.z) { b = b + 1u; }
+    if (h >= a.w) { b = b + 1u; }
+    if (h >= c.x) { b = b + 1u; }
+    if (h >= c.y) { b = b + 1u; }
+    if (h >= c.z) { b = b + 1u; }
+    return min(b, 7u);
+}
+
+/// 第 `band` 阶的色带色（线性空间，已是 uniform 口径）。
+fn elev_ramp_color(band: u32) -> vec3<f32> {
+    return p.elev_ramp[min(band, 7u)].rgb;
 }
 
 /// CellMap 分支：群系固定色块的 P1 占位色板。

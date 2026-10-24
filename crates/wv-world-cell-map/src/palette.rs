@@ -400,6 +400,13 @@ pub struct CellPack {
     pub treatment: TreatmentFlags,
     /// 海面配方。
     pub sea: SeaRecipe,
+    /// **分层设色强度**（0 = 关，1 = 海拔色带完全替代群系色；ADR-0055）。
+    ///
+    /// 这是**会话态**骑在色包上的唯一非主题字段：合成入口（`terrain_pixels` /
+    /// `patch_terrain_image`）已经把本包当参数一路传下去，加水字段比给每个
+    /// 函数再加一个参数的改动面小得多。`conv_pack` 出 0（中性基准），
+    /// 真实值由 `conv_pack_with` 从 `ViewState.hypsometric_tint` 带入。
+    pub hypsometric: f32,
 }
 
 impl CellPack {
@@ -450,6 +457,8 @@ impl CellPack {
             },
             treatment: TreatmentFlags::HAND_DRAWN,
             sea: watercolor(),
+            // 中性基准：既有测试的逐位对照都以「分层设色关」为准（ADR-0055）。
+            hypsometric: 0.0,
         }
     }
 }

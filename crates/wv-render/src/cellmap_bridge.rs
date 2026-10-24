@@ -48,9 +48,10 @@ use crate::state::{BrushState, DrillState, ViewState, WorldProjection};
 // **逐条列出而不是 glob**：`field` 与 `terrain_chunks` 各自导出一个 `TERRAIN_Z`
 // （`field::paper::TERRAIN_Z` = 纸面层 Z，与本层无关），glob 会把名字撞在一起。
 use wv_world_cell_map::terrain_view::field::{
-    build_material, default_params, patch_material_images, set_coast_encoding, warp_amp, CellRect,
-    FieldPack, FieldPalette, TerrainFieldMaterial, ViewBranch,
+    apply_hypsometric, build_material, default_params, patch_material_images, set_coast_encoding,
+    warp_amp, CellRect, FieldPack, FieldPalette, TerrainFieldMaterial, ViewBranch, H_MAX, H_MIN,
 };
+use wv_world_cell_map::terrain_view::hypsometric;
 
 /// `ViewMode → ShadeMode` 唯一映射点。
 pub fn shade_mode_of(mode: crate::state::ViewMode) -> ShadeMode {
@@ -190,11 +191,21 @@ pub fn conv_region_set(
 }
 
 /// 整包换算（`ThemePack` 三字段 → `CellPack`）。
+///
+/// **分层设色强度出 0**（中性基准）。需要按会话开关着色时用
+/// [`conv_pack_with`]——两函数分开是为了让测试 / 示例的逐位对照基准恒定。
 pub fn conv_pack(pack: &wv_theme::theme_pack::ThemePack) -> CellPack {
+    conv_pack_with(pack, 0.0)
+}
+
+/// 同 [`conv_pack`]，并带上**分层设色强度**（ADR-0055；`ViewState.hypsometric_tint`
+/// 的落地入口）。强度是唯一的非主题字段，理由见 `CellPack::hypsometric` 的文档。
+pub fn conv_pack_with(pack: &wv_theme::theme_pack::ThemePack, hypsometric: f32) -> CellPack {
     CellPack {
         palette: conv_palette(&pack.palette),
         treatment: conv_treatment(&pack.treatment),
         sea: conv_sea(&pack.sea),
+        hypsometric: hypsometric.clamp(0.0, 1.0),
     }
 }
 
@@ -217,7 +228,7 @@ pub fn setup_terrain_texture(
         shade_mode_of(view.mode),
         atlas.as_ref(),
         view.terrain_soften,
-        &conv_pack(view.active_theme),
+        &conv_pack_with(view.active_theme, view.hypsometric_tint),
         0.0,
     );
     commands.insert_resource(new_terrain_texture(
@@ -228,6 +239,7 @@ pub fn setup_terrain_texture(
         shade_mode_of(view.mode),
         view.terrain_soften,
         view.active_theme.id,
+        view.hypsometric_tint,
     ));
 }
 
@@ -277,6 +289,8 @@ pub fn rebuild_texture_on_mode_change(
         && tex.last_mode == Some(shade_mode_of(view.mode))
         && tex.last_soften == view.terrain_soften
         && tex.last_theme_id == view.active_theme.id
+        // ADR-0055：分层设色强度变了必须重烘（CPU 路径没有 uniform 可改）。
+        && (tex.last_hypsometric - view.hypsometric_tint).abs() <= 1e-6
     {
         return;
     }
@@ -288,7 +302,7 @@ pub fn rebuild_texture_on_mode_change(
         mode: shade_mode_of(view.mode),
         soften: view.terrain_soften,
         theme_id: view.active_theme.id,
-        pack: conv_pack(view.active_theme),
+        pack: conv_pack_with(view.active_theme, view.hypsometric_tint),
         map: Some(node.id.clone()),
         data_hash: terrain_data_hash(data),
         topographic_thresholds: (0, 0), // PR-1 占位；PR-1b 由 `topographic_thresholds_for` 填真值。
@@ -390,6 +404,7 @@ pub fn land_pending_terrain_synth(
         result.ctx.mode,
         result.ctx.soften,
         result.ctx.theme_id,
+        result.ctx.pack.hypsometric,
     );
     // 整图内容已整体替换：chunk 层需要全量重贴。
     tex.chunks_dirty = Some([0, 0, tex.size, tex.height]);
@@ -1274,6 +1289,14 @@ pub struct TerrainFieldRender {
     /// 上次写进 uniform 的 `px_per_cell`——用来判断「要不要重传 uniform」。
     /// **只做比较、不进 [`FieldKey`]**。
     last_ppc: Option<f32>,
+    /// 上次写进 uniform 的分层设色强度（ADR-0055）。同 `last_ppc`：只做比较，
+    /// **不进键**——拖滑条只改 uniform，不重打 12 MB 数据纹理。
+    last_hypsometric: Option<f32>,
+    /// 上次算出的分层设色内边界（归一化，7 条；ADR-0055 / ADR-0056）。
+    ///
+    /// 绝大数图是**绝对阶梯常量**，但窄域图（陆地跨度 < 300 m）会兜底为自己
+    /// 区间的等分，故与 `field.pack` 同寿命：重打时刷新，补丁 / 换缩放时原样复用。
+    cuts: Option<[f32; 7]>,
     /// 上一份**打包结果**（三张数据纹理的字节缓冲）——增量补丁的唯一数据源。
     ///
     /// ## 为什么渲染层要留这 12 MB
@@ -1436,6 +1459,8 @@ fn teardown_field(
     }
     field.key = None;
     field.last_ppc = None;
+    field.last_hypsometric = None;
+    field.cuts = None;
     // 12 MB 的 CPU 影子副本随场一起释放：关掉场还攥着上一张图的字节，
     // 既白占内存，也会让「下次开场的第一次补丁」用上过期数据。
     field.pack = None;
@@ -1632,6 +1657,20 @@ pub fn sync_terrain_field(
             );
             // pack 与 shader 的解码开关必须同源（唯一耦合点，见 `set_coast_encoding`）。
             set_coast_encoding(&mut params, pack.encoding);
+            // 分层设色（ADR-0056）：内边界 = **绝对地形学阶梯**；窄域图（跨度
+            // < 300 m）兜底为自身区间等分。与 CPU 烘焙路径同一函数——同一张图
+            // 两条路径必须得出同一组阶。归一化口径与 height 纹理同源
+            // （`H_MIN` / `H_MAX`），否则阶会整体偏移。
+            //
+            // **只在 CellMap 分支付这笔钱**：Themed 分支的 shader 根本不读
+            // `elev_*`；且本函数只求 min/max（O(N)，不排序），成本可忽略。
+            let cuts_norm = if branch == ViewBranch::BiomeRaw {
+                let cuts_m = hypsometric::cuts_for_cells(&data.cells);
+                hypsometric::normalized_cuts(&cuts_m, H_MIN, H_MAX - H_MIN)
+            } else {
+                [0.0; 7]
+            };
+            apply_hypsometric(&mut params, &cuts_norm, view.hypsometric_tint);
             let material = materials.add(build_material(&mut images, &pack, params));
 
             if let Some(entity) = field.quad {
@@ -1665,6 +1704,8 @@ pub fn sync_terrain_field(
             field.pack = Some(pack);
             // uniform 已随新材质写入，记下当前 ppc 免得下面再传一次。
             field.last_ppc = Some(px_per_cell);
+            field.last_hypsometric = Some(view.hypsometric_tint);
+            field.cuts = Some(cuts_norm);
 
             stats.field_repacks += 1;
             stats.last_repack_ms = started.elapsed().as_secs_f32() * 1000.0;
@@ -1698,7 +1739,12 @@ pub fn sync_terrain_field(
     let ppc_changed = field
         .last_ppc
         .is_none_or(|last| (last - px_per_cell).abs() > 1e-6);
-    if (ppc_changed || structure_changed) && field.material.is_some() {
+    // 分层设色强度（ADR-0055）：拖滑条只改 uniform——数据纹理逐字节不变，
+    // 重打是纯浪费（12 MB 上传）。
+    let hyps_changed = field
+        .last_hypsometric
+        .is_none_or(|last| (last - view.hypsometric_tint).abs() > 1e-6);
+    if (ppc_changed || structure_changed || hyps_changed) && field.material.is_some() {
         let handle = field.material.clone().expect("刚判过 is_some");
         if let Some(mut material) = materials.get_mut(&handle) {
             // shape: x = px_per_cell / y = 分支 / z = z_exag / w = grad_step（后两者
@@ -1724,6 +1770,12 @@ pub fn sync_terrain_field(
             material.params.ink = rgba(palette.ink);
             material.params.river_ink = rgba(palette.river_ink);
             material.params.paper = rgba(palette.paper);
+            // 分层设色（ADR-0055）：内边界复用重打时的缓存（百分位与缩放无关），
+            // 强度随滑条逐帧变——两项都只落在 uniform 上。
+            if let Some(cuts) = field.cuts {
+                apply_hypsometric(&mut material.params, &cuts, view.hypsometric_tint);
+            }
+            field.last_hypsometric = Some(view.hypsometric_tint);
             field.last_ppc = Some(px_per_cell);
         }
     }
@@ -2309,6 +2361,7 @@ mod bridge_tests {
             last_mode: None,
             last_soften: false,
             last_theme_id: "fixture",
+            last_hypsometric: 0.0,
             last_map: Some(wv_core::Id::new_unchecked("map_world")),
         };
         let data = texture_terrain(&tex, &world, Some(&city)).expect("应取世界图地形");
@@ -2338,6 +2391,7 @@ mod bridge_tests {
             last_mode: None,
             last_soften: false,
             last_theme_id: "fixture",
+            last_hypsometric: 0.0,
             last_map: None,
         };
         let data = texture_terrain(&tex, &world, Some(&city)).expect("应退回继承口径");
@@ -2365,6 +2419,7 @@ mod bridge_tests {
             ShadeMode::GoogleMap,
             false,
             Default::default(),
+            0.0,
         );
         assert_eq!(tex.last_map.as_ref(), Some(&held));
     }
@@ -2471,6 +2526,7 @@ mod bridge_tests {
             ShadeMode::GoogleMap,
             false,
             Default::default(),
+            0.0,
         );
         let grid = GridConfig {
             cell_size: 2.0,
@@ -2538,6 +2594,7 @@ mod bridge_tests {
             ShadeMode::GoogleMap,
             false,
             Default::default(),
+            0.0,
         );
 
         let mut world = World::new();
@@ -2643,6 +2700,7 @@ mod bridge_tests {
                 last_mode: None,
                 last_soften: false,
                 last_theme_id: "daylight",
+                last_hypsometric: 0.0,
                 last_map: None,
             });
             let mut layers = LayerFrame::default();
