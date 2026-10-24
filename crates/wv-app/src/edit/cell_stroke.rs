@@ -85,7 +85,12 @@ pub struct StrokeDiscardPrompt {
 #[allow(clippy::too_many_arguments)]
 pub fn paint_edit_cell_on_drag(
     buttons: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<egui::Key>>,
+    // Esc：**必须用 Bevy 的 `KeyCode`**，不是 `egui::Key`。
+    // `ButtonInput<egui::Key>` 没有维护者——Bevy 只给 `KeyCode` / `MouseButton`
+    // 默认注册并逐帧填充，egui 那套键位是另一条输入链。M2 初版写成
+    // `ButtonInput<egui::Key>`，单测用 `run_system_once` 手动 insert 掩盖了
+    // 装配缺失，真机启动即 panic（Resource does not exist）。
+    keys: Res<ButtonInput<KeyCode>>,
     playback: Res<PlaybackState>,
     view: Res<ViewState>,
     grid: Res<GridConfig>,
@@ -138,7 +143,7 @@ pub fn paint_edit_cell_on_drag(
     }
 
     // ── Esc 丢弃（D3-C）──
-    if keys.just_pressed(egui::Key::Escape) && session.stroke.active {
+    if keys.just_pressed(KeyCode::Escape) && session.stroke.active {
         let n = session.stroke.len();
         if discard_needs_confirmation(n) {
             prompt.pending = Some(n);

@@ -197,6 +197,10 @@ pub fn run(config: AppConfig) {
     // 撤销白闪 / 拒收红闪会话态（[ADR-0052] D8-A / D3-E）：应用层触发，
     // 渲染层 `sync_cell_flash` 读它画闪。
     .init_resource::<wv_world_cell_map::cell_flash::CellFlashState>()
+    // 丢弃确认弹窗态（[ADR-0052] D3-C）：`paint_edit_cell_on_drag` 的
+    // `ResMut<StrokeDiscardPrompt>`——漏 init 即启动期 panic（真机实测抓到，
+    // 单测用 run_system_once 手动 insert 掩盖了装配缺失）。
+    .init_resource::<crate::edit::cell_stroke::StrokeDiscardPrompt>()
     // cellmap 渲染实体池（选中 / 区域 / hover 准星 / 待落笔触 / 闪视觉）：
     // 渲染系统 `ResMut` 它们——漏 init 即启动期 panic。
     .init_resource::<wv_render::cell_selection::CellSelectionEntities>()
@@ -582,6 +586,13 @@ pub fn run(config: AppConfig) {
     // 顺序：区域 → 笔触 → 选中 → hover → 闪视觉，与 ADR-0052 §9.5 的
     // 绘制序（region → stroke → selected → hover）一致；闪视觉最后
     // （z 最高，250ms 短促）。
+    //
+    // **必须 `.after(sync_grid_config)`**（2026-10-24 真机调试）：
+    // 这批系统全靠 `GridConfig::raster_origin` / `cell_size` 把格坐标换算成
+    // 世界坐标。`sync_grid_config` 在主链里每帧刷新它（`raster_origin` 取决于
+    // 当前图的图帧原点），未排序时 cellmap 系统可能先跑、读到**默认值**
+    // （origin = (0,0)、cell_size = 8）→ 描边画到离视野几千世界单位的地方，
+    // 屏幕上看不到任何东西。真机症状：读数条 hover 有值、地图上无准星。
     .add_systems(
         Update,
         (
@@ -590,7 +601,9 @@ pub fn run(config: AppConfig) {
             cellmap_bridge::sync_cell_selection,
             cellmap_bridge::sync_cell_hover.after(cellmap_bridge::sync_cell_selection),
             cellmap_bridge::sync_cell_flash,
-        ),
+        )
+            .after(terrain_view::sync_grid_config)
+            .after(camera::track_cursor_world),
     )
     // 编辑意图翻译（ADR-0020 §2.5）：渲染 commit_* 产意图 → 翻译器提交 wv-edit
     // → 渲染 apply_*_receipts 回填本地。必须晚于两个 commit 系统（同帧闭环）。
