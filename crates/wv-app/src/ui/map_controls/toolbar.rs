@@ -321,14 +321,22 @@ pub fn map_controls(
                         // ── 槽 10.75：海拔分层设色强度（ADR-0055）────────────
                         // 仅 CellMap：数据视图用颜色读海拔。0 = 纯群系色块，
                         // 1 = 8 阶海拔色带完全替代群系色。会话态、不落盘。
-                        // 尺寸走既有瓷砖槽位，避免把工具条撑宽。
+                        // 槽位尺寸见 [`DockMetrics::tint_slider_slot`]：竖排就地
+                        // 转竖（1 列 × 2 槽），否则横条的 3 槽宽会把纵向工具条
+                        // 整条撑宽（2026-10-24 用户反馈）。
                         if matches!(view.mode, ViewMode::Topographic) {
-                            ui.add_sized(
-                                egui::vec2(metrics.tile.x * 3.0, metrics.tile.y),
-                                egui::Slider::new(&mut view.hypsometric_tint, 0.0..=1.0)
-                                    .show_value(false),
-                            )
-                            .on_hover_text("海拔分层设色强度（0 = 只看群系色，1 = 只看海拔）");
+                            let slot = metrics.tint_slider_slot(vertical);
+                            // Slider 的长度取 `spacing().slider_width`（默认
+                            // 100），与 `add_sized` 的 max_size 不同源；竖排不
+                            // 同步改它，滑条会按 100px 长把框再撑高。
+                            if vertical {
+                                ui.spacing_mut().slider_width = slot.y;
+                            }
+                            let slider = egui::Slider::new(&mut view.hypsometric_tint, 0.0..=1.0)
+                                .show_value(false);
+                            let slider = if vertical { slider.vertical() } else { slider };
+                            ui.add_sized(slot, slider)
+                                .on_hover_text("海拔分层设色强度（0 = 只看群系色，1 = 只看海拔）");
                         }
 
                         // ── 槽 11：自然区（2026-10-22 内容矩阵 §2.6）──────

@@ -166,6 +166,21 @@ impl DockMetrics {
         }
     }
 
+    /// 槽 10.75（ADR-0055 海拔分层设色滑条）的槽位尺寸。
+    ///
+    /// **竖排必须就地转竖**（2026-10-24 用户反馈：纵向工具条过宽）：纵向
+    /// 工具条的宽度由**最宽子项**决定，滑条原先按横排写死 `tile.x * 3`，
+    /// 纵排里照样占 3 个瓷砖宽，把整条从 34px 撑到约 116px、右侧空出一大
+    /// 片底。竖排改用 1 列宽 × 2 槽高的竖滑条；横排维持 3 槽横条（横排下
+    /// 它只影响长度，不影响框高）。
+    fn tint_slider_slot(&self, vertical: bool) -> egui::Vec2 {
+        if vertical {
+            egui::vec2(self.tile.x, self.tile.y * 2.0)
+        } else {
+            egui::vec2(self.tile.x * 3.0, self.tile.y)
+        }
+    }
+
     /// 投影成 [`SplitButtonMetrics`]——几何只在尺寸表里定义一次。
     ///
     /// 小三角方位随朝向（2026-10-20 用户裁定，两轮迭代终版）：横排 =

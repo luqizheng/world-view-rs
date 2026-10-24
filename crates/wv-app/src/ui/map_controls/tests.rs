@@ -69,6 +69,27 @@ fn vertical_dock_fits_above_the_timeline() {
     );
 }
 
+/// 纵向工具条的宽度由**最宽槽位**决定：海拔分层设色滑条在竖排里必须收进
+/// 一个瓷砖列。横条的 3 槽宽会把整条从 34px 撑到约 116px，右侧留一片空底
+/// （2026-10-24 用户反馈）。
+#[test]
+fn vertical_tint_slider_stays_within_one_tile_column() {
+    let vertical = DockMetrics::for_orientation(true);
+    let slot = vertical.tint_slider_slot(true);
+    assert!(
+        slot.x <= vertical.tile.x,
+        "竖排滑条槽宽 {} 超过瓷砖宽 {}，会把工具条撑宽",
+        slot.x,
+        vertical.tile.x
+    );
+    assert_eq!(slot.y, vertical.tile.y * 2.0, "竖排滑条占 2 个槽高");
+
+    let horizontal = DockMetrics::for_orientation(false);
+    let slot = horizontal.tint_slider_slot(false);
+    assert_eq!(slot.y, horizontal.tile.y, "横排滑条不应改变工具条高度");
+    assert!(slot.x > horizontal.tile.x, "横排滑条维持 3 槽长条");
+}
+
 /// 分裂按钮的几何必须从 `DockMetrics` 单点投影——两处各写一遍尺寸表，
 /// 早晚漂移成「弹层锚点歪了」这类难查的视觉 bug。
 #[test]
