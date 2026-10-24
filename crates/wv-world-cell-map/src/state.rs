@@ -112,3 +112,75 @@ impl GridConfig {
         self.map_origin + local
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **S0-1（[ADR-0052] §9.1）· `close_tool` 不清选区**。
+    ///
+    /// 「框选一片 → 切 EditCell」不丢选区：切走工具只翻 `tool_active`，
+    /// `selected` / `region_cells` 必须保留。
+    #[test]
+    fn close_tool_keeps_selected_and_region_cells() {
+        let mut s = EditCellState {
+            tool_active: true,
+            hover: Some((3, 4)),
+            selected: Some((10, 20)),
+            region_cells: vec![(1, 1), (2, 2), (3, 3)],
+            region_fingerprint: 0xdead_beef,
+            last_map_id: None,
+        };
+        s.close_tool();
+        assert!(!s.tool_active, "工具应关闭");
+        assert_eq!(s.selected, Some((10, 20)), "单格选必须保留");
+        assert_eq!(s.region_cells.len(), 3, "区域选必须保留");
+        assert_eq!(s.region_fingerprint, 0xdead_beef, "指纹保留（避免重算）");
+        assert_eq!(s.hover, None, "hover 是瞬时态，关工具即清");
+    }
+
+    /// **S0-1 · `clear` 仍然全清**（切图 / Esc 走这条）。
+    #[test]
+    fn clear_wipes_everything_but_last_map_id() {
+        let mut s = EditCellState {
+            tool_active: true,
+            hover: Some((1, 1)),
+            selected: Some((2, 2)),
+            region_cells: vec![(3, 3)],
+            region_fingerprint: 42,
+            last_map_id: Some(wv_core::Id::new_unchecked("map_a")),
+        };
+        s.clear();
+        assert!(!s.tool_active);
+        assert_eq!(s.hover, None);
+        assert_eq!(s.selected, None);
+        assert!(s.region_cells.is_empty());
+        assert_eq!(s.region_fingerprint, 0);
+        assert!(s.last_map_id.is_some(), "last_map_id 不由 clear 碰");
+    }
+
+    /// **切图清选区**（`on_map_change`）：换图 → selected / hover 清空；
+    /// 同图 → 不动（避免每帧误清）。
+    #[test]
+    fn on_map_change_clears_only_when_map_actually_changes() {
+        let mut s = EditCellState {
+            tool_active: true,
+            hover: Some((1, 1)),
+            selected: Some((2, 2)),
+            region_cells: vec![],
+            region_fingerprint: 0,
+            last_map_id: None,
+        };
+        let map_a = wv_core::Id::new_unchecked("map_a");
+        s.on_map_change(&map_a);
+        assert_eq!(s.selected, None, "首次记录即视为换图 → 清空");
+        // 再设一次选中，同图再来 → 不清
+        s.selected = Some((5, 5));
+        s.on_map_change(&map_a);
+        assert_eq!(s.selected, Some((5, 5)), "同图不应清选区");
+        // 换图 → 清
+        let map_b = wv_core::Id::new_unchecked("map_b");
+        s.on_map_change(&map_b);
+        assert_eq!(s.selected, None, "换图应清选区");
+    }
+}

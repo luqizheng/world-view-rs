@@ -359,6 +359,98 @@ struct NumericError {
     flash_until: f64,
 }
 
+/// **位移 → 意图判定**（D1 + D1-A 的核心，纯函数）。
+///
+/// | 位移 | 意图 | 后果 |
+/// |---|---|---|
+/// | `≤ 4px` | [`NumericIntent::Tap`] | 松手 → 进文本编辑态 |
+/// | `(4, 8]px` | [`NumericIntent::Armed`] | 松手 → **静默回滚**（吞手抖） |
+/// | `> 8px` | [`NumericIntent::Stepping`] | 每 4px 写一个 step |
+///
+/// 抽成纯函数是为了让**阈值判定可被测试锚定**——这是 ADR 明写的
+/// 「判定顺序是控件规格的一部分，不是实现细节」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NumericIntent {
+    /// 位移未越 4px：点按。
+    Tap,
+    /// 位移落在 (4, 8]：宽限期，值尚未改动。
+    Armed,
+    /// 位移越过 8px：进入 scrub 写值。
+    Stepping,
+}
+
+/// 位移 → 意图（纯函数）。
+fn numeric_intent(total_px: f32) -> NumericIntent {
+    if total_px > NUMERIC_SCRUB_ARM_PX {
+        NumericIntent::Stepping
+    } else if total_px > NUMERIC_TAP_PX {
+        NumericIntent::Armed
+    } else {
+        NumericIntent::Tap
+    }
+}
+
+/// **scrub 值计算**（纯函数）。
+///
+/// `steps = trunc(signed_px / 4)`；写值 = `press_value + steps × step × mult`，
+/// 最后钳到 `[min, max]`。
+///
+/// **方向语义**：`signed_px` 是**有符号的垂直位移**（向上拖为正 = 增值），
+/// 与 Figma / Blender 的数值框惯例一致。ADR-0052 D1 只钉了「4px 一个 step」
+/// 的粒度，未钉方向——本实现取业界惯例（向上增、向下减）。
+///
+/// `trunc` 而非 `floor`：负方向下 `floor` 会把 -11px 算成 -3 步（多走一步），
+/// `trunc` 保对称（±11px 都是 ±2 步）。
+fn numeric_scrub_value(
+    press_value: f32,
+    signed_px: f32,
+    step: f32,
+    mult: f32,
+    min: f32,
+    max: f32,
+) -> f32 {
+    let steps = (signed_px / NUMERIC_PX_PER_STEP).trunc();
+    (press_value + steps * step * mult).clamp(min, max)
+}
+
+/// **文本提交**（D1 / D1-B，纯函数）。
+///
+/// 合法 → 写入并钳制；非法（空 / 非数字 / NaN / inf）→ 回滚 `orig`
+/// **且不写 0**（D1-B 硬约束）。
+///
+/// 返回 `true` = 提交成功（错误态应清），`false` = 非法已回滚。
+fn numeric_commit_text(
+    text: &str,
+    orig: f32,
+    value: &mut f32,
+    min: f32,
+    max: f32,
+    now: f64,
+    error: &mut NumericError,
+) -> bool {
+    let parsed = text.trim().parse::<f32>().ok().filter(|v| v.is_finite());
+    match parsed {
+        Some(v) => {
+            let clamped = v.clamp(min, max);
+            *value = clamped;
+            if (clamped - v).abs() > f32::EPSILON {
+                error.message = format!("已钳制到 {clamped:.0}");
+            } else {
+                error.message.clear();
+            }
+            error.flash_until = 0.0;
+            true
+        }
+        None => {
+            // 非法：回滚原值，**不写 0**（D1-B）。
+            *value = orig;
+            error.message = "非法输入，已恢复原值".to_string();
+            error.flash_until = now + 0.2;
+            false
+        }
+    }
+}
+
 /// [`numeric_input_bounded`] 的实际实现（调用方已保证 id 作用域隔离）。
 fn numeric_input_bounded_inner(
     ui: &mut egui::Ui,
@@ -572,19 +664,26 @@ fn numeric_input_bounded_inner(
             }
         }
         // 位移判定 → 状态迁移
+        //
+        // **阈值判定用欧氏距离**（任意方向拖动都触发 scrub），
+        // **写值方向用有符号垂直位移**（向上增、向下减）。
         if let (Some(press_pos), Some(pos)) = (gesture.press_pos(), pointer_pos) {
             let total = (press_pos - pos).length();
             let press_value = gesture.press_value().unwrap_or(*value);
-            if total > NUMERIC_SCRUB_ARM_PX {
-                gesture = NumericGesture::ScrubStepping {
-                    press_pos,
-                    press_value,
-                };
-            } else if total > NUMERIC_TAP_PX {
-                gesture = NumericGesture::ScrubArmed {
-                    press_pos,
-                    press_value,
-                };
+            match numeric_intent(total) {
+                NumericIntent::Stepping => {
+                    gesture = NumericGesture::ScrubStepping {
+                        press_pos,
+                        press_value,
+                    }
+                }
+                NumericIntent::Armed => {
+                    gesture = NumericGesture::ScrubArmed {
+                        press_pos,
+                        press_value,
+                    }
+                }
+                NumericIntent::Tap => {}
             }
         }
         // SCRUB 写值（D1：每 4px 一个 step；修饰键实时换档）
@@ -594,10 +693,10 @@ fn numeric_input_bounded_inner(
         } = &gesture
         {
             if let Some(pos) = pointer_pos {
-                let total = (*press_pos - pos).length();
+                // 有符号垂直位移：向上拖（pos.y 变小）→ 正 → 增值。
+                let signed_px = press_pos.y - pos.y;
                 let mult = ui.input(|i| numeric_scrub_multiplier(i.modifiers));
-                let steps = (total / NUMERIC_PX_PER_STEP).floor();
-                *value = (press_value + steps * step * mult).clamp(min, max);
+                *value = numeric_scrub_value(*press_value, signed_px, step, mult, min, max);
             }
         }
     } else if gesture != NumericGesture::Idle {
@@ -610,7 +709,7 @@ fn numeric_input_bounded_inner(
                 let total = pointer_pos
                     .map(|pos| (*press_pos - pos).length())
                     .unwrap_or(0.0);
-                if total <= NUMERIC_TAP_PX {
+                if numeric_intent(total) == NumericIntent::Tap {
                     // 点按 → 进文本编辑态（D1：进入时全选既有值，键入即覆盖）
                     gesture = NumericGesture::TextEditing {
                         orig_value: *press_value,
@@ -619,6 +718,10 @@ fn numeric_input_bounded_inner(
                     };
                     error.message.clear();
                     error.flash_until = 0.0;
+                } else if numeric_intent(total) == NumericIntent::Armed {
+                    // 宽限期（4–8px）→ 静默回滚（D1-A）：不改值、不进编辑态
+                    *value = *press_value;
+                    gesture = NumericGesture::Idle;
                 }
             }
             NumericGesture::ScrubArmed { press_value, .. } => {
@@ -661,39 +764,6 @@ fn numeric_input_bounded_inner(
     ui.memory_mut(|m| m.data.insert_temp(gesture_id, gesture));
     ui.memory_mut(|m| m.data.insert_temp(error_id, error));
     ui.interact(rect, ui.id().with("numeric_body"), egui::Sense::hover())
-}
-
-/// 提交文本值（D1 + D1-B）。
-///
-/// - 合法：写值并钳制到 `[min, max]`；发生钳制时提示「已钳制到 X」。
-/// - 非法（空 / 非数字 / NaN）：**回滚原值，绝不写 0**（D1 明写），并红闪 200ms。
-fn numeric_commit_text(
-    text: &str,
-    orig_value: f32,
-    value: &mut f32,
-    min: f32,
-    max: f32,
-    now: f64,
-    error: &mut NumericError,
-) {
-    let parsed = text.trim().parse::<f32>().ok().filter(|v| v.is_finite());
-    match parsed {
-        Some(v) => {
-            let clamped = v.clamp(min, max);
-            *value = clamped;
-            if (clamped - v).abs() > f32::EPSILON {
-                error.message = format!("已钳制到 {clamped:.0}");
-            } else {
-                error.message.clear();
-            }
-            error.flash_until = 0.0;
-        }
-        None => {
-            *value = orig_value;
-            error.message = "非法输入，已恢复原值".to_string();
-            error.flash_until = now + 0.2;
-        }
-    }
 }
 
 // ── TextArea（目录 UI/TextArea：3 行）─────────────────────────────────
@@ -1608,6 +1678,158 @@ mod tests {
     /// 本模块控件默认落在 320×400 的 headless 画布内。
     fn make_ui(name: &str) -> (egui::Context, egui::Ui) {
         crate::widgets::test_support::make_ui(name, 320.0, 400.0)
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // 数值输入手势状态机（[ADR-0052] D1 / D1-A / D1-B · §9.8 测试门槛）
+    // ────────────────────────────────────────────────────────────────────
+
+    /// **D1-A · 4px 阈值**：位移 ≤ 4px = 点按（松手进文本编辑态）。
+    #[test]
+    fn numeric_intent_below_4px_is_tap() {
+        assert_eq!(numeric_intent(0.0), NumericIntent::Tap);
+        assert_eq!(numeric_intent(2.5), NumericIntent::Tap);
+        // 边界：恰好 4px 仍算点按（阈值是「≤ 4px」）。
+        assert_eq!(numeric_intent(4.0), NumericIntent::Tap);
+    }
+
+    /// **D1-A · 宽限期**：位移落在 (4, 8] = Armed——值尚未改动，
+    /// 松手时静默回滚（吞掉「快而短的手抖」）。
+    #[test]
+    fn numeric_intent_between_4_and_8px_is_armed() {
+        assert_eq!(numeric_intent(4.5), NumericIntent::Armed);
+        assert_eq!(numeric_intent(6.0), NumericIntent::Armed);
+        // 边界：恰好 8px 仍在宽限区内（阈值是「> 8px 才进 stepping」）。
+        assert_eq!(numeric_intent(8.0), NumericIntent::Armed);
+    }
+
+    /// **D1-A · 进 stepping**：位移 > 8px 才进 scrub 写值。
+    #[test]
+    fn numeric_intent_above_8px_is_stepping() {
+        assert_eq!(numeric_intent(8.5), NumericIntent::Stepping);
+        assert_eq!(numeric_intent(20.0), NumericIntent::Stepping);
+    }
+
+    /// **D1 · scrub 累加**：每 4px 一个 step；不足 4px 的余数不写值
+    /// （`trunc` 而非 `round`——免得轻微过冲就多走一步）。
+    ///
+    /// 位移是**有符号垂直位移**（向上为正 = 增值）。
+    #[test]
+    fn numeric_scrub_accumulates_every_4px() {
+        // 8px = 2 step → +2 步（step = 10 m）
+        assert_eq!(numeric_scrub_value(100.0, 8.0, 10.0, 1.0, -1000.0, 1000.0), 120.0);
+        // 11px = 2 step（trunc(11/4) = 2）→ 仍是 +20
+        assert_eq!(numeric_scrub_value(100.0, 11.0, 10.0, 1.0, -1000.0, 1000.0), 120.0);
+        // 12px = 3 step → +30
+        assert_eq!(numeric_scrub_value(100.0, 12.0, 10.0, 1.0, -1000.0, 1000.0), 130.0);
+        // 0px = 0 step → 原值
+        assert_eq!(numeric_scrub_value(100.0, 0.0, 10.0, 1.0, -1000.0, 1000.0), 100.0);
+    }
+
+    /// **D1 · scrub 方向**：向下拖（负位移）必须**减小**值——
+    /// 这是 scrub 的基本语义（往回拖要能减）。
+    #[test]
+    fn numeric_scrub_direction_is_signed() {
+        // 向上 12px = +3 step
+        assert_eq!(numeric_scrub_value(100.0, 12.0, 10.0, 1.0, -1000.0, 1000.0), 130.0);
+        // 向下 12px = −3 step
+        assert_eq!(numeric_scrub_value(100.0, -12.0, 10.0, 1.0, -1000.0, 1000.0), 70.0);
+        // 负方向用 trunc 保对称：−11px = −2 步（不是 floor 的 −3）
+        assert_eq!(numeric_scrub_value(100.0, -11.0, 10.0, 1.0, -1000.0, 1000.0), 80.0);
+    }
+
+    /// **D1 · 修饰键档位**：Shift ×10 / Ctrl ×0.1 / Alt ×100。
+    /// Ctrl 与 Alt 同按时以 Alt 为准（二者语义相反，混档拿不到预期粒度）。
+    #[test]
+    fn numeric_scrub_multiplier_uses_extreme_modifier() {
+        let none = egui::Modifiers::default();
+        assert_eq!(numeric_scrub_multiplier(none), 1.0);
+        assert_eq!(
+            numeric_scrub_multiplier(egui::Modifiers {
+                shift: true,
+                ..Default::default()
+            }),
+            10.0
+        );
+        assert_eq!(
+            numeric_scrub_multiplier(egui::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            }),
+            0.1
+        );
+        assert_eq!(
+            numeric_scrub_multiplier(egui::Modifiers {
+                alt: true,
+                ..Default::default()
+            }),
+            100.0
+        );
+        // Ctrl + Alt 同按 → Alt 优先。
+        assert_eq!(
+            numeric_scrub_multiplier(egui::Modifiers {
+                ctrl: true,
+                alt: true,
+                ..Default::default()
+            }),
+            100.0
+        );
+    }
+
+    /// **D1-B · 非法回滚不写 0**：空串 / 非数字 / NaN / inf 一律回滚原值。
+    #[test]
+    fn numeric_commit_rolls_back_invalid_text_without_writing_zero() {
+        let mut error = NumericError::default();
+        for bad in ["", "  ", "abc", "NaN", "inf", "-inf"] {
+            let mut v = 1200.0;
+            let ok = numeric_commit_text(bad, 1200.0, &mut v, -1000.0, 8848.0, 0.0, &mut error);
+            assert!(!ok, "「{bad}」应判非法");
+            assert_eq!(v, 1200.0, "「{bad}」应回滚原值（不得写 0）");
+            assert!(!error.message.is_empty(), "非法应有提示文案");
+        }
+    }
+
+    /// **D1-B · 合法提交 + 越界钳制**。
+    #[test]
+    fn numeric_commit_writes_valid_and_clamps_out_of_range() {
+        let mut error = NumericError::default();
+        // 合法 → 写入
+        let mut v = 0.0;
+        assert!(numeric_commit_text("1200", 0.0, &mut v, -1000.0, 8848.0, 0.0, &mut error));
+        assert_eq!(v, 1200.0);
+        assert!(error.message.is_empty(), "成功后应清错误提示");
+        // 越上界 → 钳制到 max
+        let mut v = 0.0;
+        assert!(numeric_commit_text("99999", 0.0, &mut v, -1000.0, 8848.0, 0.0, &mut error));
+        assert_eq!(v, 8848.0);
+        // 越下界 → 钳制到 min
+        let mut v = 0.0;
+        assert!(numeric_commit_text("-99999", 0.0, &mut v, -1000.0, 8848.0, 0.0, &mut error));
+        assert_eq!(v, -1000.0);
+    }
+
+    /// **D1-B · 红闪窗口**：非法提交后红闪 200ms；成功提交后清空。
+    #[test]
+    fn numeric_error_flash_window_is_200ms() {
+        let mut error = NumericError::default();
+        let mut v = 42.0;
+        numeric_commit_text("xx", 42.0, &mut v, -100.0, 100.0, 10.0, &mut error);
+        assert_eq!(error.flash_until, 10.2, "红闪窗口 = 提交时刻 + 0.2s");
+        // 下一次成功提交 → 清错误态
+        numeric_commit_text("50", 42.0, &mut v, -100.0, 100.0, 11.0, &mut error);
+        assert_eq!(error.flash_until, 0.0);
+        assert!(error.message.is_empty());
+    }
+
+    /// **D1 · scrub 值钳制**：写值不越界（`min`/`max` 是唯一出口）。
+    ///
+    /// 正向 scrub 只会增值 → 撞上界；负向（位移在相反方向，值下降）→ 撞下界。
+    #[test]
+    fn numeric_scrub_value_clamps_to_bounds() {
+        // 上界：press 100 + 100 step × 10 = 1100 → 钳到 150
+        assert_eq!(numeric_scrub_value(100.0, 400.0, 10.0, 1.0, 0.0, 150.0), 150.0);
+        // 下界：press 100 − 100 step × 10 = -900 → 钳到 95
+        assert_eq!(numeric_scrub_value(100.0, -400.0, 10.0, 1.0, 95.0, 1000.0), 95.0);
     }
 
     #[test]
