@@ -84,7 +84,6 @@ pub mod region_decor;
 #[cfg(feature = "app")]
 pub mod region_outline;
 #[cfg(feature = "app")]
-#[cfg(feature = "app")]
 pub mod selection;
 #[cfg(feature = "app")]
 pub mod state;
