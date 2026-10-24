@@ -429,6 +429,8 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CellFloodByHeight => "按海拔",
         I18nKey::StatusBarStrokeProgress => "笔触进行中 · 已落",
         I18nKey::StatusBarStrokeCells => " 格",
+        I18nKey::MapControlsPlaybackLocked => "时间轴播放中，暂停后可编辑",
+        I18nKey::MapControlsNeedMap => "请先打开一张地图",
 
         // ── ui_shell 通知 ──
         I18nKey::NoticeSavedToPrefix => "已保存到 ",
@@ -1054,6 +1056,8 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CellFloodByHeight => "By height",
         I18nKey::StatusBarStrokeProgress => "Stroking ·",
         I18nKey::StatusBarStrokeCells => " cells",
+        I18nKey::MapControlsPlaybackLocked => "Timeline is playing — pause to edit",
+        I18nKey::MapControlsNeedMap => "Open a map first",
 
         // ── ui_shell toasts ──
         I18nKey::NoticeSavedToPrefix => "Saved to ",

@@ -51,7 +51,6 @@ use super::widgets::{
     ICON_LANGUAGES, ICON_MOON, ICON_REFRESH, ICON_SETTINGS, ICON_SUN,
 };
 use crate::theme::ui_tokens::{font_size, radius, space};
-use crate::ui::widgets::segmented_control::segmented;
 use crate::ui_command_palette::CommandId;
 
 /// 顶栏：身份 / 主控（居中独立 Area）/ 读数。**唯一例外**的 `TopBottomPanel`。
@@ -67,6 +66,8 @@ pub fn top_bar(
     mut panels: ResMut<crate::state::PanelState>,
     mut settings: ResMut<SettingsDialog>,
     mut current_loc: ResMut<CurrentLocale>,
+    // Gate-2（[ADR-0052] §9.4）：无当前地图时顶栏 CellMap 段灰化。
+    drill: Res<DrillState>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -129,7 +130,15 @@ pub fn top_bar(
         .order(egui::Order::Middle)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                browse_edit_segment(ui, &shell, &mut view, &mut panels, &mut palette);
+                browse_edit_segment(
+                    ui,
+                    &shell,
+                    &mut view,
+                    &mut panels,
+                    &mut palette,
+                    current_loc.0,
+                    drill.current().is_some(),
+                );
             });
         });
 }
@@ -197,12 +206,15 @@ fn identity_segment(
 ///
 /// 数据层 `view.mode` 仍按原枚举流转；命令面板 label 来自 `ViewMode::label()`
 /// （中文），不受影响（v0.3 用户拍板：仅顶栏用英文，段名硬编码英文字符串）。
+#[allow(clippy::too_many_arguments)]
 fn browse_edit_segment(
     ui: &mut egui::Ui,
     shell: &UiShell,
     view: &mut ViewState,
     panels: &mut crate::state::PanelState,
     palette: &mut crate::ui_command_palette::CommandPalette,
+    loc: crate::i18n::Locale,
+    can_enter_cellmap: bool,
 ) {
     use crate::state::Panel;
     use crate::ui_command_palette::{CommandId, MapToolId};
@@ -219,7 +231,12 @@ fn browse_edit_segment(
         .iter()
         .position(|m| *m == view.mode)
         .unwrap_or(usize::MAX);
-    segmented(
+    // **Gate-2**（[ADR-0052] §9.4）：没有当前地图时 `CellMap` 段灰化不可点——
+    // 进去了也没有格可编辑。`Browse` / `Edit` 不受影响（它们是看图档，
+    // 且 MapTree 仍要能选图）。
+    let seg_disabled = [false, false, !can_enter_cellmap];
+
+    let seg_resp = crate::ui::widgets::segmented_control::segmented_with_disabled(
         ui,
         shell,
         "wv_browse_edit",
@@ -227,6 +244,7 @@ fn browse_edit_segment(
         &labels,
         active,
         font_size::SMALL,
+        &seg_disabled,
         |i| {
             match i {
                 // ── CellMap：进/出工作区 ──
@@ -273,6 +291,11 @@ fn browse_edit_segment(
             }
         },
     );
+    // Gate-2 的 tooltip：禁用段只画不注册命中，故提示挂在整段的分配矩形上
+    // （只要光标落在段控件范围内就提示「请先打开一张地图」）。
+    if !can_enter_cellmap {
+        seg_resp.on_hover_text(crate::i18n::t(loc, I18nKey::MapControlsNeedMap));
+    }
 }
 
 /// 顶栏右区（Figma `3:20980`「Workspace preferences」）。

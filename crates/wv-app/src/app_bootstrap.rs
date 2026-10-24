@@ -181,6 +181,9 @@ pub fn run(config: AppConfig) {
     .init_resource::<editing::EditHistory>()
     // 泛洪选择工具会话态（[ADR-0052] D6）：判据 + 激活态。
     .init_resource::<crate::state::FloodSelectState>()
+    // 派生运算请求（[ADR-0052] D6 · M3）：平滑 / 量化的参数与意图。
+    // 面板写、`edit::derived_op::apply_derived_op` 消费。
+    .init_resource::<crate::edit::derived_op::DerivedOpRequest>()
     // 单格连续绘制的丢弃确认弹窗态（[ADR-0052] D3-C）。
     // 笔触格集合 + 落笔值在 `wv_world_cell_map::cell_paint::CellPaintSession`。
     //
@@ -400,6 +403,14 @@ pub fn run(config: AppConfig) {
                     wv_render::perf_timed!(
                         "flood_select_on_click",
                         crate::edit::flood_select::flood_select_on_click
+                    ),
+                    // 派生运算（[ADR-0052] D6 · M3）：平滑 / 量化 → 1 条批命令。
+                    // 排在面板绘制之后的下一帧消费请求（面板在 EguiPrimaryContextPass，
+                    // 早于它的 Update 系统只会看到上一帧排的请求——一帧延迟与工具
+                    // 切换同量级，用户不可感）。
+                    wv_render::perf_timed!(
+                        "apply_derived_op",
+                        crate::edit::derived_op::apply_derived_op
                     ),
                 )
                     .chain(),

@@ -354,3 +354,110 @@ fn surface_name(surface: u8) -> &'static str {
         "陆"
     }
 }
+
+/// **派生运算区**（[ADR-0052] D6 · §5 M3）。
+///
+/// 两个按钮 + 各自参数，作用范围 = `region_cells`（选中片）。
+///
+/// | 运算 | 参数 | 纯函数 |
+/// |---|---|---|
+/// | 平滑 | 强度 `0..=1` | `wv_terrain::cellops::smooth_cells` |
+/// | 量化 | 步长（米） | `wv_terrain::cellops::quantize_heights` |
+///
+/// ## 为什么作用范围必须是选区
+///
+/// 对「全图」做平滑/量化会把作者没碰过的地方也改掉——这是**越权修改**。
+/// 故 `region_cells` 为空时按钮禁用（不是静默无效）。
+///
+/// ## 播放中的门控（§9.4 Gate-1）
+///
+/// 按钮**保持可见但禁用**——ADR 明确「派生运算保持可见（只读态）」：
+/// 播放中看参数是合法的，按下才该被挡。
+pub fn render_derived_section(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    request: &mut crate::edit::derived_op::DerivedOpRequest,
+    region_count: usize,
+    playback_playing: bool,
+) {
+    use crate::edit::derived_op::DerivedOp;
+
+    ui.label(
+        egui::RichText::new("派生运算")
+            .size(font_size::SMALL)
+            .color(shell.t2()),
+    );
+    let scope = if region_count == 0 {
+        "先在图上圈选一片区域".to_string()
+    } else {
+        format!("作用于选中的 {region_count} 格")
+    };
+    ui.label(
+        egui::RichText::new(scope)
+            .size(font_size::MICRO)
+            .color(shell.t3()),
+    );
+    ui.add_space(4.0);
+
+    // 可点条件：与系统内门控**同源**（`derived_op_gate`）——两处各写一遍
+    // 「能不能跑」的判据迟早漂移。
+    let can_run = crate::edit::derived_op::derived_op_gate(playback_playing, region_count).is_ok();
+
+    // ── 平滑 ──
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(can_run, egui::Button::new("平滑"))
+            .on_hover_text("把选中片的海拔按邻域均值柔化（不动边界外的格）")
+            .clicked()
+        {
+            request.request(DerivedOp::Smooth);
+        }
+        ui.label(
+            egui::RichText::new("强度")
+                .size(font_size::MICRO)
+                .color(shell.t3()),
+        );
+        let mut strength_pct = request.smooth_strength * 100.0;
+        ui.push_id("derived_smooth_strength", |ui| {
+            ui.allocate_ui(egui::vec2(110.0, 26.0), |ui| {
+                wv_ui::widgets::controls::numeric_input_bounded(
+                    ui,
+                    shell,
+                    &mut strength_pct,
+                    "%",
+                    5.0,
+                    0.0,
+                    100.0,
+                );
+            });
+        });
+        request.smooth_strength = (strength_pct / 100.0).clamp(0.0, 1.0);
+    });
+    ui.add_space(4.0);
+
+    // ── 量化 ──
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(can_run, egui::Button::new("量化"))
+            .on_hover_text("把选中片的海拔吸附到 N 米阶梯（做等高线地形）")
+            .clicked()
+        {
+            request.request(DerivedOp::Quantize);
+        }
+        ui.label(
+            egui::RichText::new("步长")
+                .size(font_size::MICRO)
+                .color(shell.t3()),
+        );
+        let mut step = request.quantize_step_m as f32;
+        ui.push_id("derived_quantize_step", |ui| {
+            ui.allocate_ui(egui::vec2(110.0, 26.0), |ui| {
+                wv_ui::widgets::controls::numeric_input_bounded(
+                    ui, shell, &mut step, "m", 5.0, 1.0, 32767.0,
+                );
+            });
+        });
+        request.quantize_step_m = step.clamp(1.0, 32767.0) as i16;
+    });
+    ui.add_space(4.0);
+}

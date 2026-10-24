@@ -90,6 +90,8 @@ pub fn cell_form(
     mode: &mut CellPanelMode,
     session: &mut wv_world_cell_map::cell_paint::CellPaintSession,
     flood: &mut wv_world_cell_map::state::FloodSelectState,
+    derived: &mut crate::edit::derived_op::DerivedOpRequest,
+    playback_playing: bool,
 ) {
     // ── 读数条（D8）：面板顶部固定双段 ──
     // 左段永远读 hover、右段永远读 selected；任一段无数据显 `—`，
@@ -122,6 +124,17 @@ pub fn cell_form(
     // ── 落笔值区（D4）：拖绘工作流的「颜料盒」──
     // 紧贴读数条之下——拖绘前必须能看见落笔值（§5 M2 验收 ④）。
     super::cell_paint_panel::render_paint_value_section(ui, shell, session, loc);
+    divider(ui, shell);
+
+    // ── 派生运算区（D6 · M3）：平滑 / 量化，作用范围 = 选中的 region_cells ──
+    // 播放中按钮保持可见但禁用（§9.4 Gate-1：只挡写入，不挡只读查看）。
+    super::cell_paint_panel::render_derived_section(
+        ui,
+        shell,
+        derived,
+        edit_cell.region_cells.len(),
+        playback_playing,
+    );
     divider(ui, shell);
 
     // ── 模式切换：单格 / 批量 ──

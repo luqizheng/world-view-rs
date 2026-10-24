@@ -299,12 +299,14 @@ pub fn map_controls(
     panels: Res<PanelState>,
     // CellMap 工具活动态（[ADR-0052] D7-1 EditCell 第 12 槽 / D6 FloodSelect
     // 第 13 槽）——两块瓷砖都按 `tool_active` 画选中态。
+    // 时间轴播放态（§9.4 Gate-1）：播放中 CellMap 编辑类瓷砖灰化。
     //
-    // **折成一层元组**：Bevy 单系统参数上限 16，本函数原有 15 个，两个
-    // `Res` 分开写会到 17（编译报「not a system set」）。元组算 1 个参数。
-    (edit_cell, flood_select): (
+    // **折成一层元组**：Bevy 单系统参数上限 16，本函数原有 15 个，三个
+    // `Res` 分开写会到 18（编译报「not a system set」）。元组算 1 个参数。
+    (edit_cell, flood_select, playback): (
         Res<wv_render::state::EditCellState>,
         Res<crate::state::FloodSelectState>,
+        Res<crate::state::PlaybackState>,
     ),
 ) {
     // 无工程闸门（图片规格 §首页不可见）：与 `welcome_screen` 共用同一信号。
@@ -346,6 +348,10 @@ pub fn map_controls(
     let edit_cell_active = edit_cell.tool_active;
     // 泛洪活动态（[ADR-0052] D6）：判据 = `tool_active`。
     let flood_select_active = flood_select.tool_active;
+    // **Gate-1**（[ADR-0052] §9.4）：时间轴播放中，CellMap 写入口工具灰化。
+    // 禁工具而非禁面板——播放中看读数条是合法只读操作。
+    let cell_tools_enabled = !playback.playing;
+    let locked_hint = t(loc, I18nKey::MapControlsPlaybackLocked);
 
     let vertical = params.dock.orientation == MapDockOrientation::Vertical;
     let metrics = DockMetrics::for_orientation(vertical);
@@ -416,6 +422,8 @@ pub fn map_controls(
                         }
 
                         // ── 槽 1：抓手 ────────────────────────────────────
+                        // 抓手是**导航**工具，不是写入口——Gate-1 不灰化它
+                        // （播放中仍可拖动看图，属只读操作）。
                         tool_tile(
                             ui,
                             &shell,
@@ -423,6 +431,7 @@ pub fn map_controls(
                             ICON_HAND,
                             t(loc, I18nKey::MapControlsPanHint),
                             pan_active,
+                            true,
                             &mut params.palette,
                             MapToolId::Pan,
                         );
@@ -442,13 +451,19 @@ pub fn map_controls(
                         );
 
                         // ── 槽 4：地形橡皮刷 ─────────────────────────────
+                        // Gate-1：播放中灰化（写入口）。
                         tool_tile(
                             ui,
                             &shell,
                             metrics,
                             ICON_ERASER,
-                            t(loc, I18nKey::MapControlsEraserHint),
+                            if cell_tools_enabled {
+                                t(loc, I18nKey::MapControlsEraserHint)
+                            } else {
+                                locked_hint
+                            },
                             eraser_active,
+                            cell_tools_enabled,
                             &mut params.palette,
                             MapToolId::BrushErase,
                         );
@@ -585,8 +600,13 @@ pub fn map_controls(
                             &shell,
                             metrics,
                             ICON_SQUARE_MOUSE_POINTER,
-                            t(loc, I18nKey::MapControlsEditCellHint),
+                            if cell_tools_enabled {
+                                t(loc, I18nKey::MapControlsEditCellHint)
+                            } else {
+                                locked_hint
+                            },
                             edit_cell_active,
+                            cell_tools_enabled,
                             &mut params.palette,
                             MapToolId::EditCell,
                         );
@@ -599,8 +619,13 @@ pub fn map_controls(
                             &shell,
                             metrics,
                             ICON_PAINT_BUCKET,
-                            t(loc, I18nKey::MapControlsFloodSelectHint),
+                            if cell_tools_enabled {
+                                t(loc, I18nKey::MapControlsFloodSelectHint)
+                            } else {
+                                locked_hint
+                            },
                             flood_select_active,
+                            cell_tools_enabled,
                             &mut params.palette,
                             MapToolId::FloodSelect,
                         );
@@ -853,11 +878,22 @@ fn tool_tile(
     icon: egui::ImageSource<'static>,
     hint: &str,
     active: bool,
+    enabled: bool,
     palette: &mut CommandPalette,
     tool: MapToolId,
 ) {
-    let (rect, resp) = ui.allocate_exact_size(metrics.tile, egui::Sense::click());
-    let hovered = resp.hovered();
+    // `enabled = false`（[ADR-0052] §9.4 Gate-1/Gate-2）：灰化不可点。
+    // `Sense::hover` 而非 `click`——不是「点了不响应」，而是**根本不成命中区**，
+    // 连误触的机会都不给。
+    let (rect, resp) = ui.allocate_exact_size(
+        metrics.tile,
+        if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
+    );
+    let hovered = enabled && resp.hovered();
     let fill = if active {
         shell.gold_soft()
     } else if hovered {
@@ -873,7 +909,9 @@ fn tool_tile(
     ui.painter()
         .rect(rect, TILE_RADIUS, fill, stroke, egui::StrokeKind::Inside);
 
-    let tint = if active {
+    let tint = if !enabled {
+        shell.text_disabled()
+    } else if active {
         shell.gold()
     } else if hovered {
         shell.t1()
@@ -885,8 +923,13 @@ fn tool_tile(
         egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(metrics.tile_icon)),
     );
 
-    if resp.clicked() {
+    if enabled && resp.clicked() {
         palette.pending = Some(CommandId::SelectMapTool(tool));
+    }
+    if !enabled {
+        // 禁用态不给手型光标——避免「看起来能点」的误判（与 `icon_button` 同口径）。
+        resp.on_hover_text(hint);
+        return;
     }
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(hint);

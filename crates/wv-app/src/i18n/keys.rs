@@ -758,6 +758,10 @@ pub enum I18nKey {
     StatusBarStrokeProgress,
     /// 底栏笔触进度·格数后缀「已落 N 格」（[ADR-0052] D8-B）
     StatusBarStrokeCells,
+    /// 播放中工具灰化的 tooltip（[ADR-0052] §9.4 Gate-1）
+    MapControlsPlaybackLocked,
+    /// 无地图时空态提示（[ADR-0052] §9.4 Gate-2）
+    MapControlsNeedMap,
 
     // ── W3：ui_shell 通知 toast 文本 ────────────────────────────────
     /// 「已保存到 」前缀（后接 dir）
@@ -1192,7 +1196,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 469] = [
+    pub const ALL: [I18nKey; 471] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1534,6 +1538,8 @@ impl I18nKey {
         I18nKey::CellFloodByHeight,
         I18nKey::StatusBarStrokeProgress,
         I18nKey::StatusBarStrokeCells,
+        I18nKey::MapControlsPlaybackLocked,
+        I18nKey::MapControlsNeedMap,
         // ui_shell 通知（16）
         I18nKey::NoticeSavedToPrefix,
         I18nKey::NoticeSavedScopePrefix,
