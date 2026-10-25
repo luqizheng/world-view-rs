@@ -127,7 +127,7 @@ pub enum Panel {
     Situation,
     /// P-8 校验面板。
     Validation,
-    /// 小地图（用户 1.2 要求，含图层开关）。
+    /// 小地图（Figma `3:20823`，2026-10-25 恢复：overview + 视口框 + Fit region）。
     Minimap,
     /// 人物登记（用户 1.4 要求）。
     Character,
@@ -149,9 +149,10 @@ impl Panel {
     ///
     /// 枚举变体本身**暂留**——存量工程的 `ui-layout.yaml` 里有对应键，
     /// 删枚举会让旧文件的该项变成孤儿。
-    pub const ALL: [Panel; 9] = [
+    pub const ALL: [Panel; 10] = [
         Panel::MapTree,
         Panel::Layers,
+        Panel::Minimap,
         Panel::Brush,
         Panel::Timeline,
         Panel::Event,
@@ -201,7 +202,9 @@ impl Panel {
             Panel::Layers => [12.0, 56.0],
             Panel::MapTree => [332.0, 56.0],
             Panel::Brush => [12.0, 578.0],
-            Panel::Minimap => [332.0, 56.0],
+            // 2026-10-25 恢复小地图（Figma `3:20823`）：中列 MapTree（56+330=386
+            // 底）与 Region（680 顶）之间的空档，288 宽 → 右缘 620 < Event 左 652。
+            Panel::Minimap => [332.0, 396.0],
             Panel::Faction => [332.0, 368.0],
             Panel::Region => [332.0, 680.0],
             Panel::Event => [652.0, 56.0],
@@ -228,7 +231,10 @@ impl Panel {
             // （≈313）+ 会话开关段（≈120）+ 边距，列表超 6 行内部滚动。
             Panel::Layers => [268.0, 480.0],
             Panel::Brush => [274.0, 220.0],
-            Panel::Minimap => [216.0, 300.0],
+            // Figma `3:20823`：宽 288（overview 264 + 左右 12 边距）；
+            // 高 = 头 30 + 边距 12 + overview（16:9 图 264 宽 ≈ 148）+
+            // 间隙 + footer ≈ 244，图更高时窗口内部自适应、拖角可再调。
+            Panel::Minimap => [288.0, 244.0],
             // 通栏：1280 − 12×2 = 1256；高 164 对齐 web `.timeline`（50 顶排 + 轨道）。
             Panel::Timeline => [1256.0, 164.0],
             Panel::Event => [300.0, 312.0],
@@ -306,7 +312,7 @@ impl Panel {
 
     /// 首次启动的默认可见性（地图为主，D1：默认开的面板尽量少）。
     pub fn default_visible(self) -> bool {
-        matches!(self, Panel::Brush | Panel::Timeline)
+        matches!(self, Panel::Brush | Panel::Timeline | Panel::Minimap)
     }
 }
 
@@ -340,7 +346,8 @@ impl Default for PanelState {
             visible.insert(p, false);
         }
         visible.insert(Panel::Brush, true);
-        // visible.insert(Panel::Minimap, true); // TODO: 恢复小地图后取消注释
+        // 2026-10-25 恢复小地图（Figma `3:20823`）：默认开。
+        visible.insert(Panel::Minimap, true);
         visible.insert(Panel::Timeline, true);
         Self {
             visible,

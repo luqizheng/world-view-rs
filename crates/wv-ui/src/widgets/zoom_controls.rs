@@ -49,6 +49,19 @@ pub struct ZoomControlsState {
     /// 小地图场景里有时希望只保留 − / ＋ / 适配 三块（更紧凑），由 caller 关闭。
     /// 默认开。
     pub show_scale_text: bool,
+    /// 是否画左端的**拖动把手**（grip）。内联到别的行里（如小地图 footer
+    /// 的图名旁，2026-10-25 用户裁定）时关掉——那里没有独立定位语义。
+    /// 默认开。
+    pub show_grip: bool,
+    /// 是否画右端的「分隔条 + 适配」段。footer 已有自己的适配按钮
+    /// （Figma `3:20823` Fit region）时关掉，避免一屏两颗同义钮。
+    /// 默认开。
+    pub show_fit: bool,
+    /// 是否画外框（float_fill 底 + border_strong 描边 + 6 圆角 + 内边距）。
+    /// 内联到 footer 行里时关掉——外圈把行高撑到 32，与两侧文字/按钮
+    /// 错位，视觉上也多一层壳（2026-10-25 用户裁定「不要外圈」）。
+    /// 默认开。
+    pub show_frame: bool,
 }
 
 impl Default for ZoomControlsState {
@@ -56,14 +69,17 @@ impl Default for ZoomControlsState {
         Self {
             pos: None,
             show_scale_text: true,
+            show_grip: true,
+            show_fit: true,
+            show_frame: true,
         }
     }
 }
 
 /// 缩放控件条（Figma `3:21882`）。
 ///
-/// 绘制一条 32 高的横条：grip + − + 百分比（可选） + ＋ + 分隔 + 适配。
-/// 整条由 `grip_drag` 累计到 `state.pos`，松手后 caller 落盘。
+/// 绘制一条 32 高的横条：grip（可选） + − + 百分比（可选） + ＋ +
+/// 分隔 + 适配（可选）。整条由 `grip_drag` 累计到 `state.pos`，松手后 caller 落盘。
 ///
 /// **参数：**
 /// - `scale` —— 当前 `ViewState.scale`；用于显示百分比与判定「到位」。
@@ -92,56 +108,65 @@ pub fn zoom_controls(
     // 高度 32 = 行高 16 + 上下内边距 8×2。**不能**用 `set_min_height(32)`
     // 撑高父容器——横向子行会贴在容器顶部，图标与文字全部偏上（2026-10-19
     // 实测截图）。用上下内边距让 `ui.horizontal` 的 Align::Center 真正生效。
-    let bg = shell.float_fill();
-    let stroke_color = shell.border_strong();
-    let frame = egui::Frame::NONE
-        .fill(bg)
-        .stroke(egui::Stroke::new(1.0, stroke_color))
-        .corner_radius(egui::CornerRadius::from(6.0))
-        .inner_margin(egui::Margin {
-            left: 12,
-            right: 12,
-            top: 8,
-            bottom: 8,
-        });
+    //
+    // 内联形态（`show_frame = false`）整层壳都不要：`Frame::NONE` 天然
+    // 零底零框零边距，调用点保持单份——行高回落到内容高，footer 行里
+    // 与两侧文字/按钮同中线。
+    let frame = if state.show_frame {
+        egui::Frame::NONE
+            .fill(shell.float_fill())
+            .stroke(egui::Stroke::new(1.0, shell.border_strong()))
+            .corner_radius(egui::CornerRadius::from(6.0))
+            .inner_margin(egui::Margin {
+                left: 12,
+                right: 12,
+                top: 8,
+                bottom: 8,
+            })
+    } else {
+        egui::Frame::NONE
+    };
     frame.show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(12.0, 0.0);
 
             // ── Grip（把柄） ───────────────────────────────────────────
-            let (grip_rect, grip_resp) =
-                ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::drag());
-            if grip_resp.hovered() || grip_resp.dragged() {
-                ui.painter().rect_filled(grip_rect, 2.0, shell.hover_bg());
-            }
-            // 6 个小点（3×2）模拟 Figma grip-vertical 的纹理。
-            let dot_r = 1.0;
-            let dot_gap = 2.0;
-            for col in 0..2 {
-                for row in 0..3 {
-                    let c = egui::pos2(
-                        grip_rect.left() + 2.0 + col as f32 * (dot_r * 2.0 + dot_gap),
-                        grip_rect.top() + 2.0 + row as f32 * (dot_r * 2.0 + dot_gap),
-                    );
-                    ui.painter().circle_filled(c, dot_r, shell.t3());
+            // 内联形态（`show_grip = false`）没有独立定位语义，整段跳过。
+            if state.show_grip {
+                let (grip_rect, grip_resp) =
+                    ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::drag());
+                if grip_resp.hovered() || grip_resp.dragged() {
+                    ui.painter().rect_filled(grip_rect, 2.0, shell.hover_bg());
                 }
+                // 6 个小点（3×2）模拟 Figma grip-vertical 的纹理。
+                let dot_r = 1.0;
+                let dot_gap = 2.0;
+                for col in 0..2 {
+                    for row in 0..3 {
+                        let c = egui::pos2(
+                            grip_rect.left() + 2.0 + col as f32 * (dot_r * 2.0 + dot_gap),
+                            grip_rect.top() + 2.0 + row as f32 * (dot_r * 2.0 + dot_gap),
+                        );
+                        ui.painter().circle_filled(c, dot_r, shell.t3());
+                    }
+                }
+                // 在消耗 `grip_resp` 之前先读两个状态量；`on_hover_*` 会 move。
+                let dragged = grip_resp.dragged();
+                if dragged {
+                    let delta = grip_resp.drag_delta();
+                    let p = state.pos.get_or_insert([0.0, 0.0]);
+                    p[0] += delta.x;
+                    p[1] += delta.y;
+                }
+                let cursor = if dragged {
+                    egui::CursorIcon::Grabbing
+                } else {
+                    egui::CursorIcon::Grab
+                };
+                grip_resp
+                    .on_hover_cursor(cursor)
+                    .on_hover_text("拖动移动 / − ／ ＋ 缩放 / 适配全图");
             }
-            // 在消耗 `grip_resp` 之前先读两个状态量；`on_hover_*` 会 move。
-            let dragged = grip_resp.dragged();
-            if dragged {
-                let delta = grip_resp.drag_delta();
-                let p = state.pos.get_or_insert([0.0, 0.0]);
-                p[0] += delta.x;
-                p[1] += delta.y;
-            }
-            let cursor = if dragged {
-                egui::CursorIcon::Grabbing
-            } else {
-                egui::CursorIcon::Grab
-            };
-            grip_resp
-                .on_hover_cursor(cursor)
-                .on_hover_text("拖动移动 / − ／ ＋ 缩放 / 适配全图");
 
             // ── −（缩小） ─────────────────────────────────────────────
             if zoom_button(ui, shell, ZOOM_OUT_SVG, can_zoom_out, "缩小").clicked() {
@@ -178,22 +203,27 @@ pub fn zoom_controls(
                 on_zoom_in();
             }
 
-            // ── 分隔条 ────────────────────────────────────────────────
-            let sep_h = 16.0;
-            let (sep_rect, _) =
-                ui.allocate_exact_size(egui::vec2(1.0, sep_h), egui::Sense::hover());
-            let stroke = egui::Stroke::new(1.0, shell.border_subtle());
-            ui.painter().line_segment(
-                [
-                    egui::pos2(sep_rect.left_center().x, sep_rect.top()),
-                    egui::pos2(sep_rect.left_center().x, sep_rect.bottom()),
-                ],
-                stroke,
-            );
+            // ── 分隔条 + 适配 ─────────────────────────────────────────
+            // 内联形态（`show_fit = false`）整段跳过：footer 已有自己的
+            // 适配按钮，一屏两颗同义钮是噪音。
+            if state.show_fit {
+                // ── 分隔条 ────────────────────────────────────────────
+                let sep_h = 16.0;
+                let (sep_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(1.0, sep_h), egui::Sense::hover());
+                let stroke = egui::Stroke::new(1.0, shell.border_subtle());
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(sep_rect.left_center().x, sep_rect.top()),
+                        egui::pos2(sep_rect.left_center().x, sep_rect.bottom()),
+                    ],
+                    stroke,
+                );
 
-            // ── 适配（maximize = 四角括号） ──────────────────────────
-            if zoom_button(ui, shell, FIT_SVG, true, "缩放到全图 (F)").clicked() {
-                on_fit();
+                // ── 适配（maximize = 四角括号） ──────────────────────
+                if zoom_button(ui, shell, FIT_SVG, true, "缩放到全图 (F)").clicked() {
+                    on_fit();
+                }
             }
         });
     });
