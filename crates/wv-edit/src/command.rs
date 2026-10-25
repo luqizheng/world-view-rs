@@ -6113,6 +6113,7 @@ mod tests {
     /// 地点夹具：锚点已就位，便于验证「锚点条件可写」。
     fn sample_place(id: &str, name: &str) -> wv_core::distance::Place {
         wv_core::distance::Place {
+            kind: None,
             line: None,
             id: Id::new_unchecked(id),
             name: name.into(),
@@ -6721,6 +6722,7 @@ mod tests {
     /// 标记地点 fixture（ADR-0032：fixture 也只写 biome，不写旧 feature 词汇）。
     fn span_fixture_place(id: &str) -> wv_core::distance::Place {
         wv_core::distance::Place {
+            kind: None,
             line: None,
             id: Id::new_unchecked(id),
             name: format!("地点{id}"),
@@ -6756,6 +6758,7 @@ mod tests {
 
     fn marker_place(id: &str, name: &str, biome: u8) -> wv_core::distance::Place {
         wv_core::distance::Place {
+            kind: None,
             line: None,
             id: wv_core::Id::new_unchecked(id),
             name: name.into(),

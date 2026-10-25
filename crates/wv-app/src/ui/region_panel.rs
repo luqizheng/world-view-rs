@@ -320,6 +320,7 @@ mod tests {
 
     fn place(id: &str, biome: Option<u8>, map: Option<&str>) -> Place {
         Place {
+            kind: None,
             line: None,
             id: Id::new_unchecked(id),
             name: id.to_string(),

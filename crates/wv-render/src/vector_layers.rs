@@ -34,10 +34,13 @@ use crate::layer_frame::LayerFrame;
 use crate::recipe::{PassId, RenderRecipe};
 use crate::state::{lod_tier, GridConfig, ViewState};
 use crate::theme::colors_google::{
-    GOOGLE_PLACE_DOT, GOOGLE_POI_RING, GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL, GOOGLE_ROAD_GRADES,
+    GOOGLE_PLACE_DOT, GOOGLE_POI_EDUCATION, GOOGLE_POI_FOOD, GOOGLE_POI_GOVERNMENT,
+    GOOGLE_POI_LODGING, GOOGLE_POI_MEDICAL, GOOGLE_POI_RING, GOOGLE_POI_SCENIC, GOOGLE_POI_SHOP,
+    GOOGLE_POI_TRANSIT, GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL, GOOGLE_ROAD_GRADES,
 };
 use crate::theme::palette::{self, MapPalette, PaletteColors};
 use crate::world_projection::{segments_fingerprint, PlaceDot, ProjectionFrame};
+use wv_core::distance::PoiKind;
 
 /// Google 式道路外缘宽度（屏幕像素）——**非分级主题**（古舆图等）的兜底值。
 /// Google 模式按 [`GOOGLE_ROAD_GRADES`] 三档取宽，不再用这两个常量。
@@ -301,14 +304,37 @@ pub(crate) fn thickness_drifted(next: f32, baked: f32) -> bool {
     (next - baked).abs() > 0.04 * baked.max(f32::EPSILON)
 }
 
-/// POI 门槛 + 密度上限选择（ADR-0030 D2/D3）。
+/// POI 屏幕网格边长（屏幕像素）。96px ≈ 一个街区尺度：1600×900 视口约
+/// 17×10 格，每格 1~2 个点，正好是检索类地图的观感。
+const POI_GRID_PX: f32 = 96.0;
+
+/// 每格保留点数：Edit 档 2（作者要看细节），更远的档 1（只留地标）。
+const fn poi_cell_quota(tier: crate::state::LodTier) -> usize {
+    use crate::state::LodTier;
+    match tier {
+        LodTier::Edit => 2,
+        _ => 1,
+    }
+}
+
+/// POI 门槛 + 密度选择（ADR-0030 D2/D3；ADR-0064 D2 加屏幕网格配额）。
 ///
-/// 输入 = `compute_projection` 已视口裁剪的本帧点标；输出 = 过级别硬门
-/// [`crate::state::poi_visible_at_rank`] 后按优先级降序截断到
-/// [`POI_MAX_DOTS`] 的幸存者。优先级序：`rank` > `is_city` > 名字长度
-/// （更长者信息量更大，与标签碰撞优先级同一惯例）。排序稳定，同优先级
-/// 保持原序（确定性好测试）。
-fn select_pois(dots: &[PlaceDot], tier: crate::state::LodTier) -> Vec<&PlaceDot> {
+/// 两步：
+/// 1. **级别硬门** [`crate::state::poi_visible_at_rank`]；
+/// 2. **屏幕网格配额**：按视图坐标落进 `POI_GRID_PX` 的格，格内按优先级
+///    只留 [`poi_cell_quota`] 个，最后整体截到 [`POI_MAX_DOTS`]。
+///
+/// **为什么不能只做全局截断**（旧行为）：全局排序后截 400，密集城区的高 rank
+/// 点会把名额全吃掉，稀疏区域反而空着；观感是「城里糊成一片、乡下什么都没有」。
+/// 检索类地图的密度控制本来就是**空间均匀**的——每屏网格留几个，而不是全局
+/// 留几百个。
+///
+/// 优先级序：`rank` > `is_city` > 名字长度（更长者信息量更大，与标签碰撞
+/// 优先级同一惯例）。排序稳定，同优先级保持原序（确定性好测试）。
+///
+/// `view_scale` 是「世界单位 / 屏幕像素」：乘出格的世界边长，保证配额按
+/// **屏幕**均匀而不是按世界坐标均匀（放大时格子随视口变小，点才不会挤在一起）。
+fn select_pois(dots: &[PlaceDot], tier: crate::state::LodTier, view_scale: f32) -> Vec<&PlaceDot> {
     let mut visible: Vec<&PlaceDot> = dots
         .iter()
         .filter(|d| crate::state::poi_visible_at_rank(d.rank, tier))
@@ -319,8 +345,27 @@ fn select_pois(dots: &[PlaceDot], tier: crate::state::LodTier) -> Vec<&PlaceDot>
             .then_with(|| b.is_city.cmp(&a.is_city))
             .then_with(|| b.name_len.cmp(&a.name_len))
     });
-    visible.truncate(POI_MAX_DOTS);
-    visible
+    let cell = (POI_GRID_PX * view_scale).max(f32::EPSILON);
+    let quota = poi_cell_quota(tier);
+    let mut per_cell: std::collections::HashMap<(i32, i32), usize> =
+        std::collections::HashMap::new();
+    let mut out: Vec<&PlaceDot> = Vec::with_capacity(visible.len().min(POI_MAX_DOTS));
+    for d in visible {
+        let key = (
+            (d.pos.x / cell).floor() as i32,
+            (d.pos.y / cell).floor() as i32,
+        );
+        let used = per_cell.entry(key).or_insert(0);
+        if *used >= quota {
+            continue;
+        }
+        *used += 1;
+        out.push(d);
+        if out.len() >= POI_MAX_DOTS {
+            break;
+        }
+    }
+    out
 }
 
 /// 点集内容指纹（ADR-0030 D4）：合批 mesh 的「集合变没变」判据。
@@ -425,6 +470,25 @@ struct PoiMaterialSet {
     city_dot: Handle<ColorMaterial>,
 }
 
+/// 专业制图的分类 POI 池（ADR-0064）：每类一组（外环 + 内芯）合批与材质。
+///
+/// 索引 = [`PoiKind::index`]。外环统一白（在绿地/水边上保持可辨），内芯承载
+/// 类别色——与样张「彩色圆 + 白边」一致。
+#[derive(Default)]
+struct PoiKindBucket {
+    ring: PoiBatchPool,
+    dot: PoiBatchPool,
+    ring_mat: Option<Handle<ColorMaterial>>,
+    dot_mat: Option<Handle<ColorMaterial>>,
+}
+
+impl PoiKindBucket {
+    fn despawn(&mut self, commands: &mut Commands) {
+        self.ring.despawn(commands);
+        self.dot.despawn(commands);
+    }
+}
+
 /// 按模式 + 主题缓存的街道材质（ADR-0014：主干 / 次干在古舆图里是两种色）。
 struct StreetMaterialSet {
     mode: crate::state::ViewMode,
@@ -523,6 +587,9 @@ pub struct VectorLayerEntities {
     poi_dot_plain: PoiBatchPool,
     /// POI 内芯合批（城市材质）。
     poi_dot_city: PoiBatchPool,
+    /// 分类 POI 池（ADR-0064）：**仅 GoogleMap 建**，索引 = `PoiKind::index()`；
+    /// 其余模式为空。两档池（上四条）在专业制图下退场。
+    poi_kind_pools: Vec<PoiKindBucket>,
     road_materials: Vec<RoadMaterialSet>,
     road_material_mode: Option<crate::state::ViewMode>,
     poi_materials: Vec<PoiMaterialSet>,
@@ -803,6 +870,9 @@ pub fn sync_vector_layers(
         layer.poi_ring_city.despawn(&mut commands);
         layer.poi_dot_plain.despawn(&mut commands);
         layer.poi_dot_city.despawn(&mut commands);
+        for b in &mut layer.poi_kind_pools {
+            b.despawn(&mut commands);
+        }
     } else {
         sync_poi(
             &mut commands,
@@ -874,6 +944,26 @@ fn poi_base_colors(mode: crate::state::ViewMode, pal: &PaletteColors) -> (Color,
     }
 }
 
+/// 专业制图的 POI 类别色（ADR-0064）。未分类 / 聚落用默认红点。
+///
+/// 两处「借用」是有意的：山峰用景点绿（地标 = 可游览）、港口并入交通蓝
+/// （同为「到达点」语义）。新增类别必须在这里给出落点——`PoiKind::COUNT`
+/// 变了而这里漏写会编译失败（match 覆盖全部变体）。
+fn poi_kind_color(kind: PoiKind) -> Color {
+    use PoiKind::*;
+    match kind {
+        Food => GOOGLE_POI_FOOD,
+        Lodging => GOOGLE_POI_LODGING,
+        Medical => GOOGLE_POI_MEDICAL,
+        Scenic | Peak => GOOGLE_POI_SCENIC,
+        Station | Port => GOOGLE_POI_TRANSIT,
+        Government => GOOGLE_POI_GOVERNMENT,
+        Education => GOOGLE_POI_EDUCATION,
+        Shop => GOOGLE_POI_SHOP,
+        Settlement | Other => GOOGLE_PLACE_DOT,
+    }
+}
+
 /// 街道两级的基础色（[(主干 casing, 主干 fill), (次干 casing, 次干 fill)]）。
 ///
 /// 古舆图分级双色（ADR-0016）：主干官道棕粗、次干浅卡其细；casing 同为纸面色。
@@ -928,6 +1018,20 @@ fn apply_poi_material_alpha(
         }
         if let Some(mut mat) = materials.get_mut(&set.city_dot) {
             mat.color = dot.with_alpha(dot.alpha() * opacity);
+        }
+    }
+    // 分类池（仅 GoogleMap 存在）：白环 + 类别色内芯，同吃图层 opacity。
+    for (i, b) in layer.poi_kind_pools.iter().enumerate() {
+        if let Some(handle) = &b.ring_mat {
+            if let Some(mut mat) = materials.get_mut(handle) {
+                mat.color = GOOGLE_POI_RING.with_alpha(GOOGLE_POI_RING.alpha() * opacity);
+            }
+        }
+        if let Some(handle) = &b.dot_mat {
+            let dot = poi_kind_color(PoiKind::ALL[i]);
+            if let Some(mut mat) = materials.get_mut(handle) {
+                mat.color = dot.with_alpha(dot.alpha() * opacity);
+            }
         }
     }
 }
@@ -991,6 +1095,20 @@ fn ensure_poi_materials(
             city_ring: materials.add(with_opacity(ring)),
             city_dot: materials.add(with_opacity(dot)),
         });
+    }
+    // 分类池（ADR-0064）：12 组（白环 + 类别色内芯）。**建一次、常驻**——
+    // 材质与池结构跟模式无关，切走只退场批次（`sync_poi` 的非专业分支），
+    // 避免每次进出专业制图都新建 24 个材质。
+    if layer.poi_kind_pools.is_empty() {
+        let op = |c: Color| c.with_alpha(c.alpha() * place_opacity);
+        layer.poi_kind_pools = (0..PoiKind::COUNT)
+            .map(|i| PoiKindBucket {
+                ring: PoiBatchPool::default(),
+                dot: PoiBatchPool::default(),
+                ring_mat: Some(materials.add(op(GOOGLE_POI_RING))),
+                dot_mat: Some(materials.add(op(poi_kind_color(PoiKind::ALL[i])))),
+            })
+            .collect();
     }
     layer.poi_material_mode = Some(mode);
     true
@@ -1214,7 +1332,7 @@ fn sync_poi(
     layer: &mut VectorLayerEntities,
 ) {
     let tier = crate::state::lod_tier(view_scale);
-    let selected = select_pois(dots, tier);
+    let selected = select_pois(dots, tier, view_scale);
     let radius_outer = (grid.cell_size * 0.45).max(POI_MIN_SCREEN_PX * view_scale * 0.5);
     let radius_inner = radius_outer * 0.52;
     let ring_thickness = (1.5 * view_scale).max(f32::EPSILON);
@@ -1250,6 +1368,62 @@ fn sync_poi(
     let city_fp = dots_fingerprint(&city);
     let z_outer = POI_OUTER_Z + z_offset;
     let z_inner = POI_INNER_Z + z_offset;
+
+    // ── 专业制图：按 POI 类别分桶（ADR-0064）──
+    //
+    // 检索地图的「分类符号」= 每类一个颜色。合批 mesh 一个材质只能一种色，
+    // 所以类别必须分池。非 Google 模式仍走下面的城市 / 普通两档（艺术主题
+    // 刻意不把类别符号化）。
+    if mode == crate::state::ViewMode::GoogleMap {
+        // 模式切换的残留清理：两档池可能还挂着上一个模式的 mesh。
+        layer.poi_ring_plain.despawn(commands);
+        layer.poi_ring_city.despawn(commands);
+        layer.poi_dot_plain.despawn(commands);
+        layer.poi_dot_city.despawn(commands);
+        let mut buckets: Vec<Vec<Vec2>> = vec![Vec::new(); PoiKind::COUNT];
+        for d in &selected {
+            if let Some(b) = buckets.get_mut(d.kind.index()) {
+                b.push(d.pos);
+            }
+        }
+        for (i, pos) in buckets.iter().enumerate() {
+            let Some(b) = layer.poi_kind_pools.get_mut(i) else {
+                continue;
+            };
+            let (Some(ring_mat), Some(dot_mat)) = (b.ring_mat.clone(), b.dot_mat.clone()) else {
+                continue;
+            };
+            let fp = dots_fingerprint(pos);
+            sync_poi_batch(
+                commands,
+                meshes,
+                pos,
+                fp,
+                (ring_inner, radius_outer),
+                z_outer,
+                ring_mat,
+                &mut b.ring,
+                build_poi_ring_batch_mesh,
+            );
+            sync_poi_batch(
+                commands,
+                meshes,
+                pos,
+                fp,
+                (radius_inner, radius_inner),
+                z_inner,
+                dot_mat,
+                &mut b.dot,
+                |dots, r, _| build_poi_dot_batch_mesh(dots, r),
+            );
+        }
+        return;
+    }
+
+    // 非专业制图：分类池退场（材质保留，切回来不用重建）。
+    for b in &mut layer.poi_kind_pools {
+        b.despawn(commands);
+    }
 
     sync_poi_batch(
         commands,
@@ -1916,37 +2090,136 @@ mod tests {
         }
     }
 
-    /// 呈现门槛端到端（ADR-0030 D2/D3）：Nation 档只放行 rank 3，密度上限
-    /// 截断后保的是高优先级（rank > is_city > 名字长）。
+    /// 呈现门槛端到端（ADR-0030 D2/D3）：Nation 档只放行 rank 3；全局上限
+    /// 仍按优先级（rank > is_city > 名字长）截断。
+    ///
+    /// 位置分散到不同屏幕格（x 相隔 200 > 96），避免 ADR-0064 的网格配额
+    /// 干扰本测试要钉的两件事。
     #[test]
     fn select_pois_gates_by_rank_then_caps_by_priority() {
         use crate::state::LodTier;
-        let dot = |rank: u8, is_city: bool, name_len: u32| PlaceDot {
-            pos: Vec2::ZERO,
+        let dot = |pos: Vec2, rank: u8, is_city: bool, name_len: u32| PlaceDot {
+            pos,
             is_city,
             rank,
             name_len,
+            kind: wv_core::distance::PoiKind::Other,
         };
         let dots = vec![
-            dot(1, false, 4),  // 普通点：Nation 档出局
-            dot(3, false, 6),  // 国家级
-            dot(2, false, 99), // 市镇级
-            dot(3, true, 2),   // 城市级材质的国家级
+            dot(Vec2::new(0.0, 0.0), 1, false, 4), // 普通点：Nation 档出局
+            dot(Vec2::new(200.0, 0.0), 3, false, 6), // 国家级
+            dot(Vec2::new(400.0, 0.0), 2, false, 99), // 市镇级
+            dot(Vec2::new(600.0, 0.0), 3, true, 2), // 城市级材质的国家级
         ];
-        let nation: Vec<&PlaceDot> = select_pois(&dots, LodTier::Nation);
+        let nation: Vec<&PlaceDot> = select_pois(&dots, LodTier::Nation, 1.0);
         assert_eq!(nation.len(), 2, "Nation 档只放行 rank 3，实得 {nation:?}");
         assert!(nation.iter().all(|d| d.rank == 3));
         // 上限截断：rank 优先保 3，其次 is_city，再次名字长。
+        // 450 个点各占一格（x 步进 120 > 96），配额不参与，只测全局上限。
         let many: Vec<PlaceDot> = (0..(POI_MAX_DOTS + 50))
-            .map(|i| dot(2, false, i as u32))
+            .map(|i| dot(Vec2::new(i as f32 * 120.0, 0.0), 2, false, i as u32))
             .collect();
-        let capped = select_pois(&many, LodTier::Edit);
+        let capped = select_pois(&many, LodTier::Edit, 1.0);
         assert_eq!(capped.len(), POI_MAX_DOTS, "超预算必须截断到上限");
         let min_kept = capped.iter().map(|d| d.name_len).min();
         assert_eq!(
             min_kept,
             Some(50),
             "450 个候选截到 400，保的是名字最长的 400 个（最短 50）"
+        );
+    }
+
+    /// 分类色必须互不相同（否则「分类符号」等于没分），未分类落默认红点。
+    #[test]
+    fn poi_kind_colors_are_distinct_for_classified_categories() {
+        use PoiKind::*;
+        let classified = [
+            Food, Lodging, Medical, Scenic, Station, Government, Education, Shop,
+        ];
+        let mut seen: Vec<Color> = Vec::new();
+        for k in classified {
+            let c = poi_kind_color(k);
+            assert!(!seen.contains(&c), "{k:?} 与已用类别色重复");
+            seen.push(c);
+        }
+        assert_eq!(
+            poi_kind_color(Other),
+            GOOGLE_PLACE_DOT,
+            "未分类回退默认红点"
+        );
+        assert_eq!(
+            poi_kind_color(Settlement),
+            GOOGLE_PLACE_DOT,
+            "聚落沿用红点（城市与未分类同色，靠字号/级别区分）"
+        );
+        assert_eq!(poi_kind_color(Peak), poi_kind_color(Scenic), "山峰借景点绿");
+        assert_eq!(
+            poi_kind_color(Port),
+            poi_kind_color(Station),
+            "港口并入交通蓝"
+        );
+    }
+
+    /// 屏幕网格配额（ADR-0064 D2）：同一格内只留配额数，且保留的是高优先级；
+    /// 稀疏区域的点不受密集区影响。
+    ///
+    /// 这是「像检索地图」的核心：没有它，全局排序截断会让城区吃掉所有名额。
+    #[test]
+    fn dense_cluster_keeps_quota_per_screen_cell_and_spares_sparse_areas() {
+        use crate::state::LodTier;
+        let dot = |pos: Vec2, rank: u8, name_len: u32| PlaceDot {
+            pos,
+            is_city: false,
+            rank,
+            name_len,
+            kind: wv_core::distance::PoiKind::Other,
+        };
+        // 同一个 96px 格内 10 个点（rank 从 1 到 3 混排）+ 远处 1 个点。
+        let mut dots: Vec<PlaceDot> = (0..10)
+            .map(|i| {
+                dot(
+                    Vec2::new(i as f32 * 2.0, 0.0),
+                    if i == 9 { 3 } else { 1 },
+                    i,
+                )
+            })
+            .collect();
+        dots.push(dot(Vec2::new(500.0, 0.0), 2, 7));
+
+        let nation = select_pois(&dots, LodTier::Nation, 1.0);
+        assert_eq!(
+            nation.len(),
+            1,
+            "Nation 档只剩 rank 3 那一个，got {nation:?}"
+        );
+
+        let region = select_pois(&dots, LodTier::Region, 1.0);
+        assert_eq!(
+            region.len(),
+            2,
+            "Region 档：密集格留 1 个 + 远处 1 个（稀疏区不被挤掉），got {region:?}"
+        );
+        assert!(
+            region.iter().any(|d| d.pos.x == 500.0),
+            "远处稀疏点必须保留"
+        );
+
+        let edit = select_pois(&dots, LodTier::Edit, 1.0);
+        assert_eq!(
+            edit.len(),
+            3,
+            "Edit 档：密集格留 2 个 + 远处 1 个，got {edit:?}"
+        );
+        // 密集格保留的是 rank 最高 / 名字最长的两个（rank 3 与 name_len 9）。
+        let kept_in_cluster: Vec<u32> = edit
+            .iter()
+            .filter(|d| d.pos.x < 100.0)
+            .map(|d| d.name_len)
+            .collect();
+        assert_eq!(
+            kept_in_cluster,
+            vec![9, 8],
+            "格内按优先级保留：{kept_in_cluster:?}"
         );
     }
 
@@ -2028,6 +2301,7 @@ mod tests {
         world.insert_resource(projection_frame_with_roads(
             vec![(3, Vec2::ZERO, Vec2::X * 100.0)],
             vec![PlaceDot {
+                kind: wv_core::distance::PoiKind::Other,
                 pos: Vec2::new(20.0, 20.0),
                 is_city: true,
                 rank: 3,
@@ -2105,6 +2379,7 @@ mod tests {
         let mut frame = projection_frame_with_roads(
             vec![(3, Vec2::ZERO, Vec2::X * 100.0)],
             vec![PlaceDot {
+                kind: wv_core::distance::PoiKind::Other,
                 pos: Vec2::new(20.0, 20.0),
                 is_city: true,
                 rank: 3,
@@ -2194,6 +2469,7 @@ mod tests {
         world.insert_resource(projection_frame_with_roads(
             vec![(3, Vec2::ZERO, Vec2::X * 100.0)],
             vec![PlaceDot {
+                kind: wv_core::distance::PoiKind::Other,
                 pos: Vec2::new(20.0, 20.0),
                 is_city: true,
                 rank: 3,

@@ -161,6 +161,7 @@ mod tests {
         h: Option<f32>,
     ) -> Place {
         Place {
+            kind: None,
             line: None,
             id: Id::new_unchecked(id_s),
             name: id_s.into(),

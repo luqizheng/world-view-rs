@@ -664,6 +664,7 @@ mod tests {
     #[test]
     fn forest_family_biomes_resolve_to_their_family() {
         let mut p = wv_core::distance::Place {
+            kind: None,
             line: None,
             id: wv_core::Id::new_unchecked("p"),
             name: "p".into(),
@@ -705,6 +706,7 @@ mod tests {
     #[test]
     fn ruleless_family_still_produces_a_fallback_overlay() {
         let p = wv_core::distance::Place {
+            kind: None,
             line: None,
             id: wv_core::Id::new_unchecked("p_desert"),
             name: "沙漠".into(),

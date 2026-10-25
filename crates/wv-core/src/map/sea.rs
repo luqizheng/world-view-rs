@@ -60,6 +60,7 @@ mod tests {
     fn sea_coexists_with_place_in_world() {
         let mut world = crate::World::default();
         let place = crate::map::distance::Place {
+            kind: None,
             line: None,
             id: Id::new_unchecked("p1"),
             name: "落云城".into(),

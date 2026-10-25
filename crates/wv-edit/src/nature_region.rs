@@ -811,6 +811,7 @@ mod tests {
 
     fn place(id: &str) -> Place {
         Place {
+            kind: None,
             id: Id::new_unchecked(id),
             name: "小溪".into(),
             feature: None,

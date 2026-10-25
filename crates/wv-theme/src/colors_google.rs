@@ -149,6 +149,32 @@ pub const GOOGLE_COAST_LINE_COLOR: Color = hex(0x9AA0A6);
 /// 手绘语汇，普通地图只要一条低对比灰线，不抢道路与注记。
 pub const GOOGLE_BORDER: Color = hex(0xC4C4C4);
 
+// ── POI 分类色（ADR-0064）──
+//
+// 色相取检索类地图的通用语汇：餐饮橙、住宿紫、医疗红、景点绿、交通蓝、
+// 行政青、教育靛、商业品红。未分类 / 聚落沿用 `GOOGLE_PLACE_DOT`（Google 红）
+// ——红点是「搜索结果」的默认外观，也是最不容易与绿地/水面混淆的一档。
+//
+// 为什么不放在 `wv-world-cell-map`：那是数据视图的固定色（ADR-0054 禁令），
+// 而 POI 分类色属于地图呈现的主题色，归 here。
+
+/// 餐饮。
+pub const GOOGLE_POI_FOOD: Color = hex(0xF57C00);
+/// 住宿。
+pub const GOOGLE_POI_LODGING: Color = hex(0x7B1FA2);
+/// 医疗。
+pub const GOOGLE_POI_MEDICAL: Color = hex(0xD93025);
+/// 景点 / 公园 / 古迹。
+pub const GOOGLE_POI_SCENIC: Color = hex(0x1E8E3E);
+/// 交通站点（车站 / 码头 / 渡口）。
+pub const GOOGLE_POI_TRANSIT: Color = hex(0x1A73E8);
+/// 行政 / 政府。
+pub const GOOGLE_POI_GOVERNMENT: Color = hex(0x00796B);
+/// 教育 / 科研。
+pub const GOOGLE_POI_EDUCATION: Color = hex(0x3949AB);
+/// 商业 / 购物。
+pub const GOOGLE_POI_SHOP: Color = hex(0xC2185B);
+
 /// 兼容旧调用的淡化目标色；Google 模式实际会忽略淡化开关，避免洗掉水色。
 pub const GOOGLE_SOFTEN_TOWARD: Color = hex(0xF8F9FA);
 

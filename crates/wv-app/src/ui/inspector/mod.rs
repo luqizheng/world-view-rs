@@ -835,6 +835,7 @@ mod tests {
     fn selection_alive_true_for_existing_entities() {
         let mut w = wv_core::World::default();
         w.distances.places.push(wv_core::distance::Place {
+            kind: None,
             line: None,
             id: Id::new_unchecked("p1"),
             name: "P".into(),

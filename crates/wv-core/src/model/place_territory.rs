@@ -112,6 +112,7 @@ mod tests {
 
     fn place(id: &str) -> Place {
         Place {
+            kind: None,
             line: None,
             id: vid(id),
             name: id.to_string(),

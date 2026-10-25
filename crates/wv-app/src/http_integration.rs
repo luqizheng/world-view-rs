@@ -187,6 +187,7 @@ mod tests {
         });
 
         let place = wv_core::distance::Place {
+            kind: None,
             id: Id::new_unchecked("qingyun"),
             name: "青云城".into(),
             map: Some(Id::new_unchecked("world_main")),

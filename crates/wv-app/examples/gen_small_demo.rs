@@ -460,6 +460,7 @@ fn build_world(meta: WorldMeta) -> World {
     for (i, (pid, pname)) in idx_places.iter().enumerate() {
         let (x, y) = idx_pos[i];
         world.distances.places.push(Place {
+            kind: None,
             line: None,
             id: Id::new(*pid).unwrap(),
             name: (*pname).into(),
@@ -625,6 +626,7 @@ fn build_road_map(world: &mut World) {
     // 节点：两个路口（rank 0——GLOSSARY 明写「路网交点」，当前无任何示例覆盖）、
     // 两座城（rank 3，带范围）、两座镇（rank 2）、一个村（rank 1）。
     let p = |id: &str, name: &str, x: f32, y: f32, rank: u8, city: bool| Place {
+        kind: None,
         line: None,
         id: Id::new(id).unwrap(),
         name: name.into(),
@@ -763,6 +765,7 @@ fn build_river_map(world: &mut World) {
         let flat: Vec<f32> = pts.iter().flat_map(|(x, y)| [*x, *y]).collect();
         let (mx, my) = midpoint(pts);
         Place {
+            kind: None,
             line: Some(flat),
             id: Id::new(id).unwrap(),
             name: name.into(),
@@ -837,6 +840,7 @@ fn build_poi_map(world: &mut World) {
     for (rank, y, tag) in rows {
         for (i, x) in [900.0_f32, 2000.0, 3100.0].iter().enumerate() {
             world.distances.places.push(Place {
+                kind: None,
                 line: None,
                 id: Id::new(format!("poi_r{rank}_{i}")).unwrap(),
                 name: format!("{tag}·{}", i + 1),
@@ -894,6 +898,7 @@ fn build_combo_map(world: &mut World) {
     );
 
     let p = |id: &str, name: &str, x: f32, y: f32, rank: u8, city: bool| Place {
+        kind: None,
         line: None,
         id: Id::new(id).unwrap(),
         name: name.into(),
@@ -936,6 +941,7 @@ fn build_combo_map(world: &mut World) {
         let flat: Vec<f32> = pts.iter().flat_map(|(x, y)| [*x, *y]).collect();
         let (mx, my) = midpoint(pts);
         Place {
+            kind: None,
             line: Some(flat),
             id: Id::new(id).unwrap(),
             name: name.into(),

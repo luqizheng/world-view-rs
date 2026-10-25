@@ -202,6 +202,9 @@ pub struct PlaceDot {
     /// 名字字符数（密度上限的第三优先级：更长者信息量更大，与标签碰撞
     /// 优先级同一惯例）。
     pub name_len: u32,
+    /// POI 符号类别（ADR-0064）。专业制图按它分色；其余模式仍用统一的
+    /// 城市 / 普通两档材质（艺术主题不分把类别符号化）。
+    pub kind: wv_core::distance::PoiKind,
 }
 
 /// 地点缓存索引（A1，2026-10-18）：端点解析与 POI 收集的 O(1) 查表。
@@ -1659,6 +1662,20 @@ fn place_dot_for(p: &wv_core::distance::Place, grid: &GridConfig) -> Option<Plac
         is_city: p.w.is_some() && p.h.is_some(),
         rank: p.effective_rank(),
         name_len: p.name.chars().count() as u32,
+        kind: poi_kind_for(p),
+    })
+}
+
+/// 有效 POI 类别（ADR-0064）：显式 `kind` 优先；否则聚落折为 `Settlement`。
+///
+/// 不从 `biome` 折算：带 `biome` 的地点在本函数上游就被排除了（覆盖物负责
+/// 表现），此处的输入只会是普通点名点或城市。
+fn poi_kind_for(p: &wv_core::distance::Place) -> wv_core::distance::PoiKind {
+    use wv_core::distance::PoiKind;
+    p.kind.unwrap_or(if p.w.is_some() && p.h.is_some() {
+        PoiKind::Settlement
+    } else {
+        PoiKind::Other
     })
 }
 
@@ -1671,6 +1688,7 @@ mod tests {
 
     fn place(feature: Option<u8>) -> Place {
         Place {
+            kind: None,
             line: None,
             id: Id::new_unchecked("place_test"),
             name: "测试地点".into(),
@@ -1741,6 +1759,7 @@ mod tests {
         let mut world = wv_core::World::default();
         let map = Id::new_unchecked("map_a");
         world.distances.places.push(Place {
+            kind: None,
             line: Some(vec![0.0, 0.0, 10.0, 0.0]),
             id: Id::new_unchecked("rv_test"),
             name: "测试河".into(),
@@ -1768,6 +1787,7 @@ mod tests {
         let mut world = wv_core::World::default();
         let map = Id::new_unchecked("map_a");
         world.distances.places.push(Place {
+            kind: None,
             line: None,
             id: Id::new_unchecked("p_orphan"),
             name: "无锚点".into(),
@@ -1811,6 +1831,7 @@ mod tests {
 
     fn anchored_place(id: &str, map: &str, x: f32, y: f32) -> Place {
         Place {
+            kind: None,
             line: None,
             id: Id::new_unchecked(id),
             name: id.to_owned(),
@@ -1829,6 +1850,7 @@ mod tests {
     fn graph_node(id: &str) -> Place {
         // guangdong 的路口形态：纯距离图节点，不锚定地图、无坐标。
         Place {
+            kind: None,
             line: None,
             id: Id::new_unchecked(id),
             name: "路口".into(),

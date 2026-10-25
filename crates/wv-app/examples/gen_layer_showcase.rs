@@ -289,6 +289,7 @@ fn build_world(meta: WorldMeta) -> World {
 
     // ---- 距离图：4 城（is_city）+ 4 点标 ---------------------------------
     let city = |id: &str, name: &str, x: f32, y: f32| Place {
+        kind: None,
         line: None,
         id: Id::new(id).unwrap(),
         name: name.into(),
@@ -303,6 +304,7 @@ fn build_world(meta: WorldMeta) -> World {
         rank: None,
     };
     let dot = |id: &str, name: &str, x: f32, y: f32| Place {
+        kind: None,
         line: None,
         id: Id::new(id).unwrap(),
         name: name.into(),
@@ -704,6 +706,7 @@ fn build_world(meta: WorldMeta) -> World {
 /// 挂子图的点标（无范围）。
 fn dot_inner(id: &str, name: &str, x: f32, y: f32, map: &Id) -> Place {
     Place {
+        kind: None,
         line: None,
         id: Id::new(id).unwrap(),
         name: name.into(),

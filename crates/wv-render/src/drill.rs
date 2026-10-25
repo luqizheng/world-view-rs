@@ -1835,6 +1835,7 @@ mod tests {
         let mut world = World::default();
         world.maps.push(node("m1", MapLevel::World, None, &[]));
         world.distances.places.push(wv_core::distance::Place {
+            kind: None,
             line: None,
             id: wv_core::Id::new_unchecked("p1"),
             name: "地名".into(),
@@ -1942,6 +1943,7 @@ mod tests {
     #[test]
     fn label_gate_folds_legacy_places_identically_to_pois() {
         let place = |w: Option<f32>, h: Option<f32>, rank: Option<u8>| wv_core::distance::Place {
+            kind: None,
             line: None,
             id: wv_core::Id::new_unchecked("p"),
             name: "地名".into(),

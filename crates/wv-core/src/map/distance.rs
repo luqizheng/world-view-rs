@@ -112,6 +112,104 @@ fn default_true() -> bool {
     true
 }
 
+/// 地点在地图上的**符号类别**（ADR-0064）。
+///
+/// 与 [`Place::biome`] 正交：`biome` 说「这块地是什么地形」（森林 / 山地 /
+/// 水域），`kind` 说「这个点在地图上代表什么」（餐饮 / 医疗 / 车站）。
+/// 专业地图的 POI 图标按后者分色——`biome` 表达不了「同是平原上的饭店和医院」。
+///
+/// **封闭枚举而非自由字符串**：图标集是有限集，自由串只会带来拼错与静默
+/// 回退；新增类别必须同时给出图标/配色，这正是封闭枚举要逼出的决策。
+///
+/// 缺省（旧 YAML 无此字段）由渲染层折算：有 `w/h` 的聚落 → `Settlement`，
+/// 其余 → `Other`（回退既有红点白环）——零迁移。
+///
+/// **注意**：带 `biome` 的地点不生成 POI 点标（它们是覆盖物 / 标签的表现对象，
+/// 见 `wv-render::world_projection::place_dot_for`），所以山峰 / 港口这类
+/// 「biome 型地物」要出现在 POI 层，必须显式写 `kind`——这是 ADR-0060 的遗留
+/// （山峰 → POI 符号尚未接通），不是本枚举的职责。
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PoiKind {
+    /// 未分类（缺省）：通用点标。
+    #[default]
+    Other,
+    /// 聚落：城市 / 村镇。
+    Settlement,
+    /// 山峰（地标，ADR-0060）。
+    Peak,
+    /// 港口 / 码头 / 渡口。
+    Port,
+    /// 交通站点：火车站 / 客运站 / 驿站。
+    Station,
+    /// 景点 / 公园 / 古迹。
+    Scenic,
+    /// 餐饮。
+    Food,
+    /// 住宿。
+    Lodging,
+    /// 医疗。
+    Medical,
+    /// 教育 / 科研。
+    Education,
+    /// 行政 / 政府机构。
+    Government,
+    /// 商业 / 购物。
+    Shop,
+}
+
+impl PoiKind {
+    /// 全部类别（声明序）。渲染层的材质 / 批次表按 [`Self::index`] 索引，
+    /// 新增类别只需在这里追加 + 给配色。
+    pub const ALL: [Self; 12] = [
+        Self::Other,
+        Self::Settlement,
+        Self::Peak,
+        Self::Port,
+        Self::Station,
+        Self::Scenic,
+        Self::Food,
+        Self::Lodging,
+        Self::Medical,
+        Self::Education,
+        Self::Government,
+        Self::Shop,
+    ];
+
+    /// 类别总数（= [`Self::ALL`] 长度，编译期一致）。
+    pub const COUNT: usize = Self::ALL.len();
+
+    /// 声明序下标（0..[`Self::COUNT`]）。渲染层用它索引平面数组。
+    pub const fn index(self) -> usize {
+        // 单元枚举的判别值 = 声明序（与 ALL 由测试钉死一致）。
+        self as usize
+    }
+
+    /// 稳定字符串键（主题配色表 / 图标表用它做键，`serde` 同一拼写）。
+    ///
+    /// 为什么不用 `serde` 的序列化结果：渲染层不该为了取一个键而走一遍
+    /// 序列化（且会产生分配）。这里手写常量，与 `#[serde(rename_all)]`
+    /// 由测试钉死一致。
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Other => "other",
+            Self::Settlement => "settlement",
+            Self::Peak => "peak",
+            Self::Port => "port",
+            Self::Station => "station",
+            Self::Scenic => "scenic",
+            Self::Food => "food",
+            Self::Lodging => "lodging",
+            Self::Medical => "medical",
+            Self::Education => "education",
+            Self::Government => "government",
+            Self::Shop => "shop",
+        }
+    }
+}
+
 /// 地点节点。对应 `distances/places.yaml`。
 ///
 /// ## 双重身份（2026-01 修订）
@@ -181,6 +279,13 @@ pub struct Place {
     /// 先例，见 `Place::anchor_from_line`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<Vec<f32>>,
+    /// 地图符号类别（ADR-0064）。`None` = 未分类，渲染回退红点白环；
+    /// `Some(kind)` 由专业制图按类别配色。
+    ///
+    /// `skip_serializing_if` 保证旧工程保存后**不多出一行 `kind: null`**——
+    /// YAML 是作者手读的，空字段是噪音。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<PoiKind>,
 }
 
 impl Place {
@@ -567,6 +672,7 @@ mod tests {
         DistanceGraph {
             places: vec![
                 Place {
+                    kind: None,
                     line: None,
                     id: vid("city_qingyun"),
                     name: "青云城".into(),
@@ -581,6 +687,7 @@ mod tests {
                     rank: None,
                 },
                 Place {
+                    kind: None,
                     line: None,
                     id: vid("village_heishui"),
                     name: "黑水村".into(),
@@ -595,6 +702,7 @@ mod tests {
                     rank: None,
                 },
                 Place {
+                    kind: None,
                     line: None,
                     id: vid("pass_luoxia"),
                     name: "落霞关".into(),
@@ -719,9 +827,68 @@ mod tests {
 
     // ---- 几何：Place 的范围判定（2026-01 修订）----
 
+    /// `PoiKind::key()` 必须与 serde 的 YAML 拼写逐字一致。
+    ///
+    /// 两条路径会同时出现在仓库里：YAML 读写走 serde，主题配色/图标表走
+    /// `key()`。拼写漂移会让「作者写 medical、渲染查 MedicalColor」静默失配。
+    #[test]
+    fn poi_kind_key_matches_serde_spelling() {
+        let all = [
+            PoiKind::Other,
+            PoiKind::Settlement,
+            PoiKind::Peak,
+            PoiKind::Port,
+            PoiKind::Station,
+            PoiKind::Scenic,
+            PoiKind::Food,
+            PoiKind::Lodging,
+            PoiKind::Medical,
+            PoiKind::Education,
+            PoiKind::Government,
+            PoiKind::Shop,
+        ];
+        for k in all {
+            let yaml = serde_yaml::to_string(&k).expect("PoiKind 应可序列化");
+            assert_eq!(yaml.trim(), k.key(), "{k:?} 的 serde 拼写与 key() 不一致");
+        }
+        assert_eq!(PoiKind::default(), PoiKind::Other, "缺省应为未分类");
+        assert_eq!(PoiKind::COUNT, 12);
+        for (i, k) in PoiKind::ALL.iter().enumerate() {
+            assert_eq!(k.index(), i, "{k:?} 的 index 应等于声明序");
+        }
+    }
+
+    /// 旧工程（无 `kind` 字段）读写都不该被塞进 `kind: null`。
+    ///
+    /// YAML 是作者手读的格式，多一个空字段就是噪音；同时反向读入必须成功
+    /// （`serde(default)`），否则一次保存就会让旧工程读不回来。
+    #[test]
+    fn place_without_kind_round_trips_without_emitting_the_field() {
+        let p = point_place();
+        let yaml = serde_yaml::to_string(&p).expect("应可序列化");
+        assert!(!yaml.contains("kind"), "缺省 kind 不应落盘：\n{yaml}");
+        let back: Place = serde_yaml::from_str(&yaml).expect("应可反序列化");
+        assert_eq!(back, p);
+    }
+
+    /// 显式分类按 snake_case 落盘并可读回（作者手写 / 渲染配色同一拼写）。
+    #[test]
+    fn place_kind_round_trips_as_snake_case() {
+        let mut p = point_place();
+        p.kind = Some(PoiKind::Medical);
+        let yaml = serde_yaml::to_string(&p).expect("应可序列化");
+        assert!(
+            yaml.contains("kind: medical"),
+            "分类应为 snake_case：\n{yaml}"
+        );
+        let back: Place = serde_yaml::from_str(&yaml).expect("应可反序列化");
+        assert_eq!(back.kind, Some(PoiKind::Medical));
+    }
+
     /// 矩形地点：中心 (100, 200)，宽 40、高 20 → x ∈ [80, 120]，y ∈ [190, 210]。
     fn rect_place() -> Place {
         Place {
+            kind: None,
             line: None,
             id: vid("city_rect"),
             name: "rect city".into(),
@@ -739,6 +906,7 @@ mod tests {
 
     fn point_place() -> Place {
         Place {
+            kind: None,
             line: None,
             id: vid("pass_point"),
             name: "point pass".into(),
@@ -756,6 +924,7 @@ mod tests {
 
     fn unanchored_place() -> Place {
         Place {
+            kind: None,
             line: None,
             id: vid("place_nomap"),
             name: "unanchored".into(),
@@ -958,6 +1127,7 @@ mod tests {
     fn half_given_extent_falls_back_to_point_judgement() {
         // w 有、h 无 → 不构成矩形，退化为点判定（校验层另行报「必须成对」）。
         let p = Place {
+            kind: None,
             w: Some(40.0),
             h: None,
             ..rect_place()
@@ -973,6 +1143,7 @@ mod tests {
 
     fn feature_place(feature: Option<u8>) -> Place {
         Place {
+            kind: None,
             line: None,
             id: Id::new_unchecked("place_dark_forest"),
             name: "黑森林".into(),

@@ -20,6 +20,7 @@ use wv_core::{Id, TimeSpan, World};
 
 fn sample_place(biome: Option<u8>) -> Place {
     Place {
+        kind: None,
         line: None,
         id: Id::new_unchecked("place_linan"),
         name: "临安".into(),

@@ -199,6 +199,7 @@ pub async fn dispatch_write(
                 ));
             }
             let place = wv_core::distance::Place {
+                kind: None,
                 id,
                 name: input.name.clone(),
                 map,

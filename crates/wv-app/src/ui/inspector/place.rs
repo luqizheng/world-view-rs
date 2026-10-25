@@ -335,6 +335,7 @@ mod tests {
 
     fn place_with_line(line: Option<Vec<f32>>) -> Place {
         Place {
+            kind: None,
             line,
             id: Id::new_unchecked("p1"),
             name: "P".into(),
