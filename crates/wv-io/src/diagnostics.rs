@@ -949,7 +949,7 @@ mod tests {
     // 阶段六 v0.2：事件间位移可行性提示单元测试
     // -----------------------------------------------------------------------
 
-    use wv_core::distance::{DistanceGraph, Place, PlaceEdge, ScheduledJourney, Vehicle};
+    use wv_core::distance::{DistanceGraph, Place, PlaceEdge, Vehicle};
     use wv_core::event::{Event, EventLocation};
     use wv_core::time::TimeSpan;
     use wv_core::Id;
@@ -1289,10 +1289,6 @@ mod tests {
         );
         assert_eq!(count2, 0, "挪日期后预算充足，提示应消失");
     }
-
-    /// _use ScheduledJourney：避免未使用导入 lint。
-    #[allow(dead_code)]
-    fn _ensure_journey_in_scope(_: &ScheduledJourney) {}
 
     /// 阶段六 v0.1：xinhai-1911 工程的距离图应正确加载三层（places/edges/vehicles），
     /// 且武汉→成都走「长江＋陆路」可解（A* 返非空）。

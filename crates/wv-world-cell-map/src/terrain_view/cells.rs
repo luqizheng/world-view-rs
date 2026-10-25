@@ -20,6 +20,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use crate::palette::{self, CellPack, CellPalette, SeaRecipe, TreatmentFlags};
 use wv_core::terrain::{TerrainCellData, TerrainData};
 use wv_terrain::biome::display_kind;
+use wv_terrain::hash::cell_hash01 as hash01;
 
 use crate::shade::ShadeMode;
 
@@ -288,16 +289,8 @@ fn water_shade_at(height: i16, pal: &CellPalette, sea: &SeaRecipe) -> Color {
 // 方案 A：边界扰动 + 超采样（抗锯齿地形边界）
 // ---------------------------------------------------------------------------
 
-/// 整数格点确定性 hash → `[0,1)`。无依赖、跨平台一致（测试与运行共用）。
-fn hash01(xi: i64, yi: i64, seed: u64) -> f32 {
-    let mut h = (xi as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        ^ (yi as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
-        ^ seed;
-    h ^= h >> 33;
-    h = h.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
-    h ^= h >> 33;
-    (h & 0xFFFF_FFFF) as f32 / u32::MAX as f32
-}
+// 整数格点确定性 hash → `[0,1)`：实现移入 `wv_terrain::hash::cell_hash01`
+// （顶部 `use ... as hash01`），消除与渲染层 `paper_overlay` 的逐字重复。
 
 // ---------------------------------------------------------------------------
 // 陆格颗粒（ADR-0042 手绘 Nation 表现层）

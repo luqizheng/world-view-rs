@@ -22,6 +22,8 @@ use bevy::mesh::{Indices, Mesh, MeshVertexAttribute, PrimitiveTopology, VertexFo
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
+use wv_terrain::hash::cell_hash01 as hash01;
+
 /// 纸纹斑驳层 Z（装饰 0.075 之上、河流 0.082 之下）。
 pub const PAPER_MOTTLE_Z: f32 = 0.080;
 /// 四角晕影层 Z（叠在斑驳上）。
@@ -39,17 +41,8 @@ const MOTTLE_ALPHA_MAX: f32 = 0.13;
 /// 晕影最大 alpha（四角）。
 const VIGNETTE_ALPHA_MAX: f32 = 0.16;
 
-/// 整数格点确定性 hash → `[0,1)`（与 `terrain_view::cells::hash01` 同族；
-/// 独立副本避免跨模块私有依赖）。
-fn hash01(x: i64, y: i64, seed: u64) -> f32 {
-    let mut h = (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        ^ (y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
-        ^ seed;
-    h ^= h >> 33;
-    h = h.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
-    h ^= h >> 33;
-    (h & 0xFFFF_FFFF) as f32 / u32::MAX as f32
-}
+// 整数格点确定性 hash → `[0,1)`：实现移入 `wv_terrain::hash::cell_hash01`
+// （顶部 `use ... as hash01`），与 `cells.rs` 共用同一份，不再各自持有副本。
 
 /// **可平铺** value noise（格点环绕取模）：输出 [0,1]。
 ///
