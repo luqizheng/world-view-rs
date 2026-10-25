@@ -1,6 +1,6 @@
 # 水墨主题包校准方案（chinese_ink · 宋元文人山水）
 
-- 状态：**已批准并落地**（2026-10-25 用户「通过，落地」；参数已落入 `crates/wv-theme-chinese-ink/src/lib.rs`，门禁与 §11 截图验收见工作日志）
+- 状态：**已批准并落地**（2026-10-25 用户「通过，落地」；参数已落入 `crates/wv-theme-chinese-ink/src/lib.rs`，门禁与 §11 截图验收见工作日志）＋**§14 校准修订 1 已落地**（12 槽换值 + 2 条锚点同步；D1 白弧 / D2 海面墨 / D5 冷偏蓝带待首轮截图后定）
 - 作者：林绘澄（美术指导）
 - 范围：`wv-theme-chinese-ink` 主题包**数据定稿白名单**——色板 36 槽、TreatmentFlags、SeaRecipe、DecorRecipe、FeatureOverlaySet 8 族、RegionOverlaySet 4 键、贴图策略、可读性校验、验收标准
 - 硬红线（ADR-0043）：本方案**全部差异声明在主题包数据里，零改 `wv-render` / `wv-theme` / `wv-world-cell-map` 渲染运行时源码**。凡需改渲染层或扩契约字段的诉求，一律进 §12 待裁项，不混入定稿

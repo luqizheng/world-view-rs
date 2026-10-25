@@ -30,30 +30,36 @@ use wv_theme::registry::ThemePackRegistry;
 use wv_theme::sea::{RippleSpec, SeaRecipe};
 use wv_theme::theme_pack::{ThemePack, TreatmentFlags};
 
-/// 水墨地形色板 core 10 槽（**定稿保留** · 2026-10-25，方案 §3.1）。
+/// 水墨地形色板 core 10 槽（**校准修订 1 定稿** · 2026-10-25，方案 §14.1 / §14.2）。
 ///
-/// **依据**：civ-atlas `fantasy.ts` 的水墨海色三档（`SEA = #8fabb0` /
-/// `SEA_SHELF = #a8c2bd` / `SEA_DEEP = #6f8f99`）与宣纸底（`#E8E0CE`），
-/// 陆色按「淡墨 + 留白」的原则给出低饱和初值。
+/// **依据**：宋元文人山水「留白为语法」——海不画色（远＝留白、近＝见笔），
+/// 陆色去色相入淡墨灰阶（**去彩不去温**：陆暖、海冷，彩度全部 ≤6%）。
 ///
-/// **裁定**：初值即水墨基调，方案 §3.1 全保留；三个测试锚点
-/// （`core[0]` / `core[1]` / `soften_toward`）依赖这组值，改动前先同步测试。
+/// **与初值的两处根本差异**（修订 1 推翻 §3.1 的 civ-atlas 水彩海三档）：
+/// - **极性反转**：远海（`core[0]`）反而最浅、近岸（`core[1]`）最深——
+///   文人画要的是距离不是深度（旧值「深海最黑」是油画逻辑）；
+/// - **去彩**：草 / 森林 / 丘陵 / 山地 / 沼泽 / 道路的绿赭色相全部归淡墨，
+///   槽间 LΔ≈0.072 维持可辨（草 0.549 > 森林 0.474 > 丘陵 0.404 > 山地 0.332，
+///   明度阶梯表见方案 §14.4）。
+///
+/// 三个测试锚点（`core[0]` / `core[1]` / `soften_toward`）依赖这组值，
+/// 改动前先同步测试。
 const INK_CORE_TERRAIN: [wv_theme::Color; 10] = [
-    wv_theme::colors::hex(0x6F8F99), // 0 深水（墨青）
-    wv_theme::colors::hex(0x8FABB0), // 1 浅水（淡青灰）
-    wv_theme::colors::hex(0xD8CDB4), // 2 沙 / 宣纸赭
-    wv_theme::colors::hex(0x9AA88C), // 3 草（淡墨绿）
-    wv_theme::colors::hex(0x6E7F63), // 4 森林（墨绿）
-    wv_theme::colors::hex(0xB5A88C), // 5 丘陵（淡赭）
-    wv_theme::colors::hex(0x8A857A), // 6 山地（墨灰）
-    wv_theme::colors::hex(0xEDE9DF), // 7 雪（纸白）
-    wv_theme::colors::hex(0x8A9484), // 8 沼泽（灰绿）
-    wv_theme::colors::hex(0xB09A78), // 9 道路（淡赭）
+    wv_theme::colors::hex(0xD6DBDE), // 0 深水（近纸极淡墨 L.702——远的留白）
+    wv_theme::colors::hex(0xCDD1D4), // 1 浅水（近岸最深一档 L.633）
+    wv_theme::colors::hex(0xE0DAD0), // 2 沙（暖灰近乎留白 L.705）
+    wv_theme::colors::hex(0xC3C4C0), // 3 草（L.549）
+    wv_theme::colors::hex(0xB5B8B5), // 4 森林（L.474，林身份由苔点承担）
+    wv_theme::colors::hex(0xADAAA7), // 5 丘陵（L.404）
+    wv_theme::colors::hex(0x9B9C9D), // 6 山地（L.332）
+    wv_theme::colors::hex(0xEDE9DF), // 7 雪（纸白唯一「出纸」高光 L.816）
+    wv_theme::colors::hex(0x888D89), // 8 沼泽（最深陆槽 L.261）
+    wv_theme::colors::hex(0xD2CECA), // 9 道路（淡墨 L.621）
 ];
 
-/// 水墨色板（`PaletteColors` 全 36 槽 · **美术定稿** · 2026-10-25，方案 §3）。
+/// 水墨色板（`PaletteColors` 全 36 槽 · **美术定稿** · 2026-10-25，方案 §3 / §14）。
 ///
-/// 地形 core 10 槽 + soften 双参数 + isoline / deep_ocean / water_shore 沿用初值；
+/// 地形 core 10 槽（§14 校准修订 1 重裁）+ soften 双参数 + isoline 沿用初值；
 /// 其余 31 项从日间值全面换入「焦浓重淡清」墨阶体系——**线要素一律去彩**
 /// （棕褐 = 古舆图暖调，水墨必须中性墨 / 青墨），**底衬一律归纸色**
 /// （宣纸底 `#E8E0CE`）。宣纸上文本要素 CR≥4.7、图形要素 CR≥3.0
@@ -107,10 +113,10 @@ const INK_PALETTE: PaletteColors = PaletteColors {
     line_on_light: wv_theme::colors::hex(0x3A3731),
     line_on_mid: wv_theme::colors::hex(0x2E2B26),
     line_on_dark: wv_theme::colors::hex(0x26241F),
-    // 深海：墨青（t=1.0 直达端点，与 core[0] 同族）。
-    deep_ocean_blue: wv_theme::colors::hex(0x4A6B78),
-    // 近岸浅滩：淡青（浅滩带关闭时仅作浅水端备份，值无害）。
-    water_shore: wv_theme::colors::hex(0xB4C7C0),
+    // 深海：近纸极淡墨（t=1.0 直达端点，CR/纸 1.01——「远洋＝没有画」）。
+    deep_ocean_blue: wv_theme::colors::hex(0xDCE0E3),
+    // 近岸浅滩备份：本修订的「最深一档」（浅滩带双关；只保证一旦开启仍属淡墨族）。
+    water_shore: wv_theme::colors::hex(0xC5C8CB),
 };
 
 /// 水墨手绘旗标组（**美术定稿** · 2026-10-25，方案 §4）。
@@ -445,13 +451,13 @@ mod tests {
         // 直接与 hex 构造的对拍值比较（`wv_theme::colors::hex` 是同一来源）。
         assert_eq!(
             PACK.palette.core[0],
-            wv_theme::colors::hex(0x6F8F99),
-            "深水 = 墨青"
+            wv_theme::colors::hex(0xD6DBDE),
+            "深水 = 近纸极淡墨（§14 极性反转：远＝留白）"
         );
         assert_eq!(
             PACK.palette.core[1],
-            wv_theme::colors::hex(0x8FABB0),
-            "浅水 = 淡青灰"
+            wv_theme::colors::hex(0xCDD1D4),
+            "浅水 = 近岸最深一档（§14 极性反转）"
         );
         assert_eq!(
             PACK.palette.soften_toward,
