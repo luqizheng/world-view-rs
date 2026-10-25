@@ -1310,6 +1310,34 @@ fn landmark_size_tier(view_scale: f32) -> f32 {
     }
 }
 
+/// 地物符号合批的复用 key（纯函数，测试锚定）。
+///
+/// 几何 = f(位置, kind, 形态, s)，故 key 必须吃全四样：
+/// - `s` 进 `world_thickness`——否则缩放后位置指纹不变、mesh 不重建，
+///   符号保持旧世界尺寸随相机缩放（2026-10-24 CellMap 实测：455% 下
+///   pin 放大 ~4.5 倍）。与 POI 的 `radius` 进 `PoiBatchKey` 同一条纪律。
+/// - **形态（pin）必须混进指纹**——切 Browse ↔ Topographic 翻转 pin，
+///   位置与 `s` 都不变时旧 key 仍命中池子，mesh 维持旧形态：实机表现
+///   即「进 CellMap 还是城堡，缩放一下才变 pin」（2026-10-25 验收发现）。
+///   混入用黄金比例奇常数：pin=false 不变，pin=true 加一个充分离散的
+///   非零 delta，避免只翻指纹低 1 位的意外相撞。
+fn landmark_batch_key(
+    frame_landmarks: &[crate::world_projection::LandmarkDot],
+    kind: crate::world_projection::LandmarkKind,
+    pin: bool,
+    s: f32,
+    z: f32,
+) -> StrokeBatchKey {
+    const PIN_TAG: u64 = 0x9E37_79B9_7F4A_7C15;
+    let fingerprint =
+        points_fingerprint_dots(frame_landmarks, kind) ^ if pin { PIN_TAG } else { 0 };
+    StrokeBatchKey {
+        fingerprint,
+        world_thickness: s,
+        z,
+    }
+}
+
 /// 单类符号的顶点色 mesh 合批（从 sync_landmarks 拆出的唯一绘制路径）。
 #[allow(clippy::too_many_arguments)]
 fn sync_landmark_mesh_batches(
@@ -1342,16 +1370,7 @@ fn sync_landmark_mesh_batches(
             }
         }
     }
-    let fingerprint = points_fingerprint_dots(frame_landmarks, kind);
-    let key = StrokeBatchKey {
-        fingerprint,
-        // 符号几何 = f(位置, kind, s)：`s` 必须进 key，否则缩放后位置指纹
-        // 不变、mesh 不重建，符号保持旧世界尺寸随相机缩放（2026-10-24
-        // CellMap 实测：455% 下 pin 放大 ~4.5 倍）。与 POI 的 `radius`
-        // 进 `PoiBatchKey` 同一条纪律。
-        world_thickness: s,
-        z,
-    };
+    let key = landmark_batch_key(frame_landmarks, kind, pin, s, z);
     match pool.batch.take() {
         None => {
             let Some(mesh) = build_landmark_mesh(batch) else {
@@ -1436,6 +1455,57 @@ fn spawn_poi_batch(
 
 #[cfg(test)]
 mod tests {
+    /// **形态翻转必须换 key**（2026-10-25 实机验收发现）：Browse ↔
+    /// Topographic 切换翻转 pin，位置指纹与尺寸 `s` 都不变时 key 也要
+    /// 不同——否则池子复用旧形态 mesh，实机表现即「进 CellMap 还是
+    /// 城堡，缩放一下才变 pin」。
+    #[test]
+    fn landmark_batch_key_changes_when_pin_flips() {
+        use crate::world_projection::{LandmarkDot, LandmarkKind};
+        let dots = vec![
+            LandmarkDot {
+                pos: Vec2::new(10.0, 20.0),
+                kind: LandmarkKind::Citadel,
+            },
+            LandmarkDot {
+                pos: Vec2::new(30.0, 40.0),
+                kind: LandmarkKind::Town,
+            },
+        ];
+        let plain = landmark_batch_key(&dots, LandmarkKind::Citadel, false, 1.0, 5.0);
+        let pin = landmark_batch_key(&dots, LandmarkKind::Citadel, true, 1.0, 5.0);
+        assert_ne!(
+            plain.fingerprint, pin.fingerprint,
+            "形态翻转必须改变指纹，否则切视图模式复用旧符号 mesh"
+        );
+        // 位置 / 尺寸 / z 的既有纪律不回归：任一变化都换 key。
+        let mut moved = dots.clone();
+        moved[0].pos = Vec2::new(11.0, 20.0);
+        assert_ne!(
+            plain.fingerprint,
+            landmark_batch_key(&moved, LandmarkKind::Citadel, false, 1.0, 5.0).fingerprint
+        );
+        assert_ne!(
+            plain.world_thickness,
+            landmark_batch_key(&dots, LandmarkKind::Citadel, false, 2.0, 5.0).world_thickness
+        );
+    }
+
+    /// 空符号集（该 kind 无点）时 pin 两态的指纹仍可区分（pin=true 的
+    /// 空集不该命中 pin=false 的空集 mesh——虽然都是空几何不落 mesh，
+    /// key 语义上必须分开）。
+    #[test]
+    fn landmark_batch_key_pin_tag_survives_empty_set() {
+        use crate::world_projection::{LandmarkDot, LandmarkKind};
+        let dots = vec![LandmarkDot {
+            pos: Vec2::new(1.0, 1.0),
+            kind: LandmarkKind::Town,
+        }];
+        let a = landmark_batch_key(&dots, LandmarkKind::Citadel, false, 1.0, 0.0);
+        let b = landmark_batch_key(&dots, LandmarkKind::Citadel, true, 1.0, 0.0);
+        assert_ne!(a.fingerprint, b.fingerprint);
+    }
+
     use super::*;
     use bevy::render::mesh::VertexAttributeValues;
 
