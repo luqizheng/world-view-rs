@@ -143,6 +143,12 @@ pub const GOOGLE_COAST_LAND: Color = hex(0xF8F9FA);
 /// Google 式浅色轮廓图海岸线。
 pub const GOOGLE_COAST_LINE_COLOR: Color = hex(0x9AA0A6);
 
+/// 专业制图的行政 / 势力边界线（样张图例「边界 · 虚线 #C4C4C4」）。
+///
+/// 与 `BORDER_INK`（势力图模式的深褐墨线）分开：势力图要「墨线夹两色」的
+/// 手绘语汇，普通地图只要一条低对比灰线，不抢道路与注记。
+pub const GOOGLE_BORDER: Color = hex(0xC4C4C4);
+
 /// 兼容旧调用的淡化目标色；Google 模式实际会忽略淡化开关，避免洗掉水色。
 pub const GOOGLE_SOFTEN_TOWARD: Color = hex(0xF8F9FA);
 

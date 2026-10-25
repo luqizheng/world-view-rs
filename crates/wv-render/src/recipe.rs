@@ -233,7 +233,12 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
     // 常开（不受 `view.isolines` 会话开关支配）。
     (ViewMode::GoogleMap, [
         true, true, true, true, false, true, true, true, true, false,
-        false, true, true, true, true, true, true, true, true, false,
+        // Faction 2026-10-25 由 false 改 true：专业制图要画「国境线」。
+        // pass 开只是让 `sync_faction_overlays` 跑起来；**填色仍不发生**——
+        // 该 mode 下 `cartographic_style` 只给 border（无 fill）、只取当前层
+        // 实控、单线灰虚线（见 `faction_overlays`）。
+        true,
+        true, true, true, true, true, true, true, true, false,
         true,
         false, // TerrainDecor
         true, // Rivers：Google 也画河（自有观感但水系照常）
@@ -672,16 +677,21 @@ mod tests {
         }
     }
 
-    /// Google 模式 = 自带观感：Atmosphere / Faction / Buildings 关。
+    /// Google 模式 = 自带观感：Atmosphere / Veil / Buildings 关；
+    /// **Faction 开**（只画国境线，不填色——填色由 `cartographic_style` 关掉，
+    /// 见 `faction_overlays` 的同名单测）。2026-10-25 由「Faction 关」改此语义。
     #[test]
-    fn google_mode_disables_atmosphere_faction_buildings() {
+    fn google_mode_disables_atmosphere_veil_buildings_and_keeps_faction() {
         let (mut view, layers, world, drill, tex) = fixture();
         view.mode = ViewMode::GoogleMap;
         let r = resolve_render_recipe(&view, &layers, &world, &drill, &tex, None);
         assert!(!r.enabled(PassId::Atmosphere));
         assert!(!r.enabled(PassId::Veil));
-        assert!(!r.enabled(PassId::Faction));
         assert!(!r.enabled(PassId::Buildings));
+        assert!(
+            r.enabled(PassId::Faction),
+            "专业制图要画国境线（pass 开；填色由样式关）"
+        );
     }
 
     /// LayerFrame gates 覆盖：terrain 关 = Terrain/Isoline/MapFrame/Atmosphere 跟随关。
