@@ -728,10 +728,40 @@ pub fn draw_drill_markers(
 #[derive(Component)]
 pub struct PlaceLabel;
 
-/// 地名文字的屏幕像素基准（v0.2 §B.2 的 12px 标记同量级，不抢标记视觉）。
+/// 地名文字的**最小一级**屏幕字号（微点 / rank 0）。
+///
+/// ADR-0065：12px 是可读下限（`ART_STYLE_SPEC` §4.2 硬约束 3），更高级别的
+/// 地名往上分档，见 [`place_label_px`]。
 const LABEL_PX: f32 = 12.0;
 /// 地名标注层：高于势力面（0.3）与 POI（0.22），低于笔刷光标（0.9）。
 const LABEL_Z: f32 = 0.4;
+
+/// 地点标签的屏幕字号分档（ADR-0065）：级别越高字越大，标签之间才「分得开」。
+///
+/// | rank | 含义 | 字号 |
+/// |---|---|---|
+/// | 3 | 国家级 | 16px |
+/// | 2 | 区域 / 市镇 | 14px |
+/// | 1 | 局部 | 13px |
+/// | 0 | 网络节点 / 微点 | 12px |
+///
+/// 级别来源与显隐门槛同源（`Place::effective_rank` / ADR-0047），所以字号的
+/// 可见性语义与「哪一级别在该档可见」不会各说各话。
+fn place_label_px(rank: u8) -> f32 {
+    match rank {
+        3.. => 16.0,
+        2 => 14.0,
+        1 => 13.0,
+        _ => LABEL_PX,
+    }
+}
+
+/// 势力 / 区域 / 海名的屏幕字号。
+///
+/// 旧口径是「地名 ×1.4（16.8px）」；ADR-0065 把地名最高档提到 16px 后，
+/// ×1.4 只剩 0.8px 差、层级被压平，故改为固定 20px——仍明显高于国家级
+/// 地名（16px），「国/大区 > 城市 > POI」的字号阶梯才成立。
+const REGION_LABEL_PX: f32 = 20.0;
 
 /// 势力标签标记组件（ADR-0017 §2.2）。
 ///
@@ -843,7 +873,8 @@ pub fn update_place_labels(
             let anchored = index.map(|v| v.as_slice()).unwrap_or(&[]);
             for i in anchored {
                 let p = &projection.world.distances.places[*i as usize];
-                if !crate::state::poi_visible_at_rank(p.effective_rank(), tier)
+                let rank = p.effective_rank();
+                if !crate::state::poi_visible_at_rank(rank, tier)
                     || !wv_core::label_visible_at(map_span, None, t)
                 {
                     continue;
@@ -854,12 +885,13 @@ pub fn update_place_labels(
                     if (pos.x - cx).abs() > half.x || (pos.y - cy).abs() > half.y {
                         continue;
                     }
-                    // v0.1 优先级：文本长度（长标签优先保留，短标签更容易被遮挡）。
-                    let priority = p.name.len() as u32;
+                    // ADR-0065：级别同时决定字号与碰撞优先级——国家级先活下来、
+                    // 字也更大；微点最小，不会把大城市名挤掉。
                     candidates.push(crate::label_collision::LabelCandidate {
                         pos,
                         name: p.name.clone(),
-                        priority,
+                        font_size_px: place_label_px(rank),
+                        priority: crate::label_collision::priority_for(rank, &p.name),
                         // ADR-0017 §2.7：地点标签可拾取——点击选中该地点。
                         target: Some(wv_core::SelectedEntity::new(
                             wv_core::EntityKind::Place,
@@ -871,30 +903,31 @@ pub fn update_place_labels(
         }
     }
     // ADR-0017 §2.6：AABB 碰撞过滤（max_labels = 200 默认）。
-    let font_size = LABEL_PX * view.scale.max(0.05);
+    // ADR-0065：每条候选自带屏幕字号，过滤按各自字号算盒宽高。
+    let unit_scale = view.scale.max(0.05);
     let max_labels = 200;
-    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, font_size);
+    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, unit_scale);
     filtered.truncate(max_labels);
 
-    // 文字尺寸按屏幕像素恒定（与 draw_drill_markers 的 screen_scale 口径一致）。
-    // Text2d 默认以文字中心为 transform 原点；上移约一个字高，避免压住 POI。
-    // 「上」是屏幕上：经相机旋转映回世界方向。
-    let label_offset = font_size * 0.9;
+    // 文字尺寸按屏幕像素恒定（与 draw_drill_markers 的 screen_scale 口径一致），
+    // 但分档字号各自不同（ADR-0065）：上移量按各自字号算，大字不压 POI。
+    // Text2d 默认以文字中心为 transform 原点；「上」是屏幕上：经相机旋转映回世界方向。
     let label_z = LABEL_Z + layers.place.z_offset;
     let cam_rot = camera
         .single()
         .map(|t| t.rotation)
         .unwrap_or(Quat::IDENTITY);
-    let up_world = crate::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
     let label_rot = cam_rot.inverse();
     for c in &mut filtered {
-        c.pos += up_world;
+        let font_size = c.font_size_px * unit_scale;
+        c.pos += crate::camera::screen_vec_to_world(Vec2::Y * font_size * 0.9, cam_rot);
     }
     // ADR-0017 §2.7：把本帧实际可见（碰撞幸存）的标签注册进命中表。
     // 地名系统在三个标签系统中第一个跑，负责清场；后两个只追加。
     hits.clear();
     for c in &filtered {
         if let Some(target) = &c.target {
+            let font_size = c.font_size_px * unit_scale;
             let half = Vec2::new(
                 crate::label_collision::estimate_label_width(&c.name, font_size) * 0.5,
                 crate::label_collision::estimate_label_height(font_size) * 0.5,
@@ -913,7 +946,8 @@ pub fn update_place_labels(
     // Place 图层（ADR-0013）。晕边已落地（下方 halo_color + sync_halo，
     // ADR-0016 M2 的 8 向纸色副本）——旧注释「后续再补白 halo」已过时。
     // 手绘地图 #2：place 走 `label_place` 槽位（与 `label_fill` 同色，避免回归），
-    // 字号保持 LABEL_PX 不动。区域 / 势力 大字走 `label_region` + ×1.4 倍字号。
+    // 字号按级别分档（ADR-0065：16 / 14 / 13 / 12px）。区域 / 势力 大字走
+    // `label_region` + `REGION_LABEL_PX`（20px）。
     let label_color = match view.mode {
         crate::state::ViewMode::GoogleMap => crate::theme::colors_google::GOOGLE_LABEL_FILL,
         // 古舆图 / 暮色：place 用 `label_place`（= `label_fill` 同色，避免回归）。
@@ -926,12 +960,14 @@ pub fn update_place_labels(
         _ => view.active_theme.palette.halo_fill,
     }
     .with_alpha(layers.place.opacity);
-    let halo_offset = crate::label_halo::HALO_PX * view.scale.max(0.05);
 
     let mut iter = q.iter_mut();
     for c in &wanted {
         let pos = c.pos;
         let name = &c.name;
+        // 该标签自己的字号（屏幕像素 → 世界单位）与成比例的晕边偏移。
+        let font_size = c.font_size_px * unit_scale;
+        let halo_offset = crate::label_halo::halo_offset_world(c.font_size_px, unit_scale);
         if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
             tf.translation = pos.extend(label_z);
             tf.rotation = label_rot;
@@ -1072,11 +1108,12 @@ pub fn update_faction_labels(
                             }
                             center = Vec2::new((center.x + far.0) / 2.0, (center.y + far.1) / 2.0);
                         }
-                        // v0.1 优先级：文本长度（与地名同一口径）。
+                        // 级别权重（与地名同一合成口径）；势力名天然是最高档。
                         candidates.push(crate::label_collision::LabelCandidate {
                             pos: grid.map_to_view(center),
                             name: faction.name.clone(),
-                            priority: faction.name.len() as u32,
+                            font_size_px: REGION_LABEL_PX,
+                            priority: crate::label_collision::priority_for(3, &faction.name),
                             // ADR-0017 §2.7：势力标签可拾取——点击选中该势力。
                             target: Some(wv_core::SelectedEntity::new(
                                 wv_core::EntityKind::Faction,
@@ -1090,23 +1127,24 @@ pub fn update_faction_labels(
     }
 
     // ADR-0017 §2.6：AABB 碰撞过滤（势力标签通常个位数，200 上限不会触顶）。
-    let font_size = LABEL_PX * view.scale.max(0.05);
-    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, font_size);
+    // ADR-0065：每条候选自带字号，过滤按各自字号算盒宽高。
+    let unit_scale = view.scale.max(0.05);
+    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, unit_scale);
     filtered.truncate(200);
-    let label_offset = font_size * 0.9;
     let label_z = LABEL_Z + layers.label.z_offset;
     let cam_rot = camera
         .single()
         .map(|t| t.rotation)
         .unwrap_or(Quat::IDENTITY);
-    let up_world = crate::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
     let label_rot = cam_rot.inverse();
     for c in &mut filtered {
-        c.pos += up_world;
+        let font_size = c.font_size_px * unit_scale;
+        c.pos += crate::camera::screen_vec_to_world(Vec2::Y * font_size * 0.9, cam_rot);
     }
     // ADR-0017 §2.7：注册本帧可见的标签命中盒（追加，地名系统已清场）。
     for c in &filtered {
         if let Some(target) = &c.target {
+            let font_size = c.font_size_px * unit_scale;
             let half = Vec2::new(
                 crate::label_collision::estimate_label_width(&c.name, font_size) * 0.5,
                 crate::label_collision::estimate_label_height(font_size) * 0.5,
@@ -1122,8 +1160,7 @@ pub fn update_faction_labels(
     let cjk = fonts.label_handle();
     // ADR-0017 Q1：势力标签色随 Label 渲染组透明度；色值走 Google 文字深灰
     // （与地名标签同一族，v0.1 不做 per-PlaceKind 主题映射——ADR-0016 §6.1 Q5）。
-    // 手绘地图 #2：势力 / 区域用 `label_region`（最深墨）+ 字号 ×1.4（国/大区字重更重）。
-    let region_font_size = font_size * 1.4;
+    // 手绘地图 #2：势力 / 区域用 `label_region`（最深墨）+ 20px 字号（高于城市 16px）。
     let label_color = match view.mode {
         crate::state::ViewMode::GoogleMap => {
             crate::theme::colors_google::GOOGLE_CONTROL_TEXT.with_alpha(layers.label.opacity)
@@ -1135,12 +1172,15 @@ pub fn update_faction_labels(
             .with_alpha(layers.label.opacity),
     };
     let halo_color = crate::theme::colors_google::GOOGLE_COAST_LAND;
-    let halo_offset = crate::label_halo::HALO_PX * view.scale.max(0.05);
 
     let mut iter = q.iter_mut();
     for c in &wanted {
         let pos = c.pos;
         let name = &c.name;
+        // 该标签自己的字号与成比例的晕边偏移——池复用分支与新建分支同源，
+        // 不再出现「首帧大字、之后变回小字」的回归（ADR-0065 顺手修复）。
+        let font_size = c.font_size_px * unit_scale;
+        let halo_offset = crate::label_halo::halo_offset_world(c.font_size_px, unit_scale);
         if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
             tf.translation = pos.extend(label_z);
             tf.rotation = label_rot;
@@ -1167,7 +1207,7 @@ pub fn update_faction_labels(
                 FactionLabel,
                 Text2d::new(name.as_str()),
                 TextFont {
-                    font_size: region_font_size.into(),
+                    font_size: font_size.into(),
                     font: cjk.clone().unwrap_or_default().into(),
                     ..Default::default()
                 },
@@ -1180,7 +1220,7 @@ pub fn update_faction_labels(
                 Visibility::Visible,
             ));
             let (text_owned, font_ref, fs, hc) =
-                (name.to_string(), cjk.as_ref(), region_font_size, halo_color);
+                (name.to_string(), cjk.as_ref(), font_size, halo_color);
             cmd.with_children(move |c| {
                 for _ in 0..crate::label_halo::HALO_DIRS.len() {
                     c.spawn(crate::label_halo::halo_bundle(
@@ -1263,11 +1303,12 @@ pub fn update_event_labels(
                         }
                         let x = loc.x.unwrap_or(place.x.unwrap_or(0.0));
                         let y = loc.y.unwrap_or(place.y.unwrap_or(0.0));
-                        // v0.1 优先级：文本长度（与地名/势力同一口径）。
+                        // 级别权重（与地名同一合成口径）；事件按「局部」档。
                         candidates.push(crate::label_collision::LabelCandidate {
                             pos: grid.map_to_view(Vec2::new(x, y)),
                             name: event.name.clone(),
-                            priority: event.name.len() as u32,
+                            font_size_px: LABEL_PX,
+                            priority: crate::label_collision::priority_for(1, &event.name),
                             // ADR-0017 §2.7：事件标签可拾取——点击选中该事件。
                             target: Some(wv_core::SelectedEntity::new(
                                 wv_core::EntityKind::Event,
@@ -1281,23 +1322,24 @@ pub fn update_event_labels(
     }
 
     // ADR-0017 §2.6：AABB 碰撞过滤（事件标签通常个位数）。
-    let font_size = LABEL_PX * view.scale.max(0.05);
-    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, font_size);
+    // ADR-0065：每条候选自带字号，过滤按各自字号算盒宽高。
+    let unit_scale = view.scale.max(0.05);
+    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, unit_scale);
     filtered.truncate(200);
-    let label_offset = font_size * 0.9;
     let label_z = LABEL_Z + layers.label.z_offset;
     let cam_rot = camera
         .single()
         .map(|t| t.rotation)
         .unwrap_or(Quat::IDENTITY);
-    let up_world = crate::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
     let label_rot = cam_rot.inverse();
     for c in &mut filtered {
-        c.pos += up_world;
+        let font_size = c.font_size_px * unit_scale;
+        c.pos += crate::camera::screen_vec_to_world(Vec2::Y * font_size * 0.9, cam_rot);
     }
     // ADR-0017 §2.7：注册本帧可见的标签命中盒（追加，地名系统已清场）。
     for c in &filtered {
         if let Some(target) = &c.target {
+            let font_size = c.font_size_px * unit_scale;
             let half = Vec2::new(
                 crate::label_collision::estimate_label_width(&c.name, font_size) * 0.5,
                 crate::label_collision::estimate_label_height(font_size) * 0.5,
@@ -1315,12 +1357,13 @@ pub fn update_event_labels(
     let label_color =
         crate::theme::colors_google::GOOGLE_CONTROL_TEXT.with_alpha(layers.label.opacity);
     let halo_color = crate::theme::colors_google::GOOGLE_COAST_LAND;
-    let halo_offset = crate::label_halo::HALO_PX * view.scale.max(0.05);
 
     let mut iter = q.iter_mut();
     for c in &wanted {
         let pos = c.pos;
         let name = &c.name;
+        let font_size = c.font_size_px * unit_scale;
+        let halo_offset = crate::label_halo::halo_offset_world(c.font_size_px, unit_scale);
         if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
             tf.translation = pos.extend(label_z);
             tf.rotation = label_rot;
@@ -1344,7 +1387,9 @@ pub fn update_event_labels(
             }
         } else {
             let mut cmd = commands.spawn((
-                FactionLabel,
+                // ADR-0065 顺手修复：原先错挂 `FactionLabel`，事件标签会被势力
+                // 系统的池回收/复用，与「看不见的标签也不可点」自相矛盾。
+                EventLabel,
                 Text2d::new(name.as_str()),
                 TextFont {
                     font_size: font_size.into(),
@@ -1456,11 +1501,12 @@ pub fn update_region_labels(
                     let Some(centroid) = region.centroid() else {
                         continue;
                     };
-                    // v0.1 优先级：文本长度（与其他标签同一口径）。
+                    // 级别权重（与地名同一合成口径）；区域名天然是最高档。
                     candidates.push(crate::label_collision::LabelCandidate {
                         pos: grid.map_to_view(Vec2::new(centroid.x, centroid.y)),
                         name: region.name.clone(),
-                        priority: region.name.len() as u32,
+                        font_size_px: REGION_LABEL_PX,
+                        priority: crate::label_collision::priority_for(3, &region.name),
                         // ADR-0017 §2.7：区域标签可拾取——点击选中该区域。
                         target: Some(wv_core::SelectedEntity::new(
                             wv_core::EntityKind::Region,
@@ -1473,23 +1519,24 @@ pub fn update_region_labels(
     }
 
     // ADR-0017 §2.6：AABB 碰撞过滤（区域通常个位数）。
-    let font_size = LABEL_PX * view.scale.max(0.05);
-    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, font_size);
+    // ADR-0065：每条候选自带字号，过滤按各自字号算盒宽高。
+    let unit_scale = view.scale.max(0.05);
+    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, unit_scale);
     filtered.truncate(200);
-    let label_offset = font_size * 0.9;
     let label_z = LABEL_Z + layers.label.z_offset;
     let cam_rot = camera
         .single()
         .map(|t| t.rotation)
         .unwrap_or(Quat::IDENTITY);
-    let up_world = crate::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
     let label_rot = cam_rot.inverse();
     for c in &mut filtered {
-        c.pos += up_world;
+        let font_size = c.font_size_px * unit_scale;
+        c.pos += crate::camera::screen_vec_to_world(Vec2::Y * font_size * 0.9, cam_rot);
     }
     // ADR-0017 §2.7：注册本帧可见的区域标签命中盒（追加，地名系统已清场）。
     for c in &filtered {
         if let Some(target) = &c.target {
+            let font_size = c.font_size_px * unit_scale;
             let half = Vec2::new(
                 crate::label_collision::estimate_label_width(&c.name, font_size) * 0.5,
                 crate::label_collision::estimate_label_height(font_size) * 0.5,
@@ -1505,8 +1552,7 @@ pub fn update_region_labels(
 
     let cjk = fonts.label_handle();
     // 区域标签色同势力/事件标签（Label 渲染组透明度 + Google 文字深灰）。
-    // 手绘地图 #2：region 走 `label_region`（最深墨）+ 字号 ×1.4。
-    let region_font_size = font_size * 1.4;
+    // 手绘地图 #2：region 走 `label_region`（最深墨）+ 20px 字号。
     let label_color = match view.mode {
         crate::state::ViewMode::GoogleMap => {
             crate::theme::colors_google::GOOGLE_CONTROL_TEXT.with_alpha(layers.label.opacity)
@@ -1518,12 +1564,14 @@ pub fn update_region_labels(
             .with_alpha(layers.label.opacity),
     };
     let halo_color = crate::theme::colors_google::GOOGLE_COAST_LAND;
-    let halo_offset = crate::label_halo::HALO_PX * view.scale.max(0.05);
 
     let mut iter = q.iter_mut();
     for c in &wanted {
         let pos = c.pos;
         let name = &c.name;
+        // 池复用分支与新建分支同一字号（ADR-0065 修「首帧大字」回归）。
+        let font_size = c.font_size_px * unit_scale;
+        let halo_offset = crate::label_halo::halo_offset_world(c.font_size_px, unit_scale);
         if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
             tf.translation = pos.extend(label_z);
             tf.rotation = label_rot;
@@ -1550,7 +1598,7 @@ pub fn update_region_labels(
                 RegionLabel,
                 Text2d::new(name.as_str()),
                 TextFont {
-                    font_size: region_font_size.into(),
+                    font_size: font_size.into(),
                     font: cjk.clone().unwrap_or_default().into(),
                     ..Default::default()
                 },
@@ -1563,7 +1611,7 @@ pub fn update_region_labels(
                 Visibility::Visible,
             ));
             let (text_owned, font_ref, fs, hc) =
-                (name.to_string(), cjk.as_ref(), region_font_size, halo_color);
+                (name.to_string(), cjk.as_ref(), font_size, halo_color);
             cmd.with_children(move |c| {
                 for _ in 0..crate::label_halo::HALO_DIRS.len() {
                     c.spawn(crate::label_halo::halo_bundle(
@@ -1640,13 +1688,14 @@ pub fn update_sea_labels(
                     if sea.map != current.id {
                         continue;
                     }
-                    // v0.1 优先级：文本长度（与其他标签同一口径）；`target = None`
-                    // 标记「不参与拾取」语义——`update_region_labels` / `_faction_labels`
-                    // 都填 `Some(...)`，与本系统行为不同。
+                    // 级别权重（与地名同一合成口径）；海名是最高档。
+                    // `target = None` 标记「不参与拾取」语义——`update_region_labels` /
+                    // `_faction_labels` 都填 `Some(...)`，与本系统行为不同。
                     candidates.push(crate::label_collision::LabelCandidate {
                         pos: grid.map_to_view(Vec2::new(sea.x, sea.y)),
                         name: sea.name.clone(),
-                        priority: sea.name.len() as u32,
+                        font_size_px: REGION_LABEL_PX,
+                        priority: crate::label_collision::priority_for(3, &sea.name),
                         target: None,
                     });
                 }
@@ -1654,23 +1703,22 @@ pub fn update_sea_labels(
         }
     }
 
-    // 字重梯度 ×1.4（与 RegionLabel / FactionLabel 同档，水域文字更深）。
+    // 字号与 RegionLabel / FactionLabel 同档（20px），水域文字更深。
     // 海名数量通常个位数，`filter_collisions` 实质是 no-op——保留调用仅为
     // 模式统一，未来海名数量上去后无须切管线。
-    let font_size = LABEL_PX * view.scale.max(0.05);
-    let sea_font_size = font_size * 1.4;
-    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, sea_font_size);
+    // ADR-0065：每条候选自带字号，过滤按各自字号算盒宽高。
+    let unit_scale = view.scale.max(0.05);
+    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, unit_scale);
     filtered.truncate(200);
-    let label_offset = sea_font_size * 0.9;
     let label_z = LABEL_Z + layers.label.z_offset;
     let cam_rot = camera
         .single()
         .map(|t| t.rotation)
         .unwrap_or(Quat::IDENTITY);
-    let up_world = crate::camera::screen_vec_to_world(Vec2::Y * label_offset, cam_rot);
     let label_rot = cam_rot.inverse();
     for c in &mut filtered {
-        c.pos += up_world;
+        let font_size = c.font_size_px * unit_scale;
+        c.pos += crate::camera::screen_vec_to_world(Vec2::Y * font_size * 0.9, cam_rot);
     }
     let wanted = filtered;
 
@@ -1691,17 +1739,18 @@ pub fn update_sea_labels(
         _ => view.active_theme.palette.halo_fill,
     }
     .with_alpha(layers.label.opacity);
-    let halo_offset = crate::label_halo::HALO_PX * view.scale.max(0.05);
 
     let mut iter = q.iter_mut();
     for c in &wanted {
         let pos = c.pos;
         let name = &c.name;
+        let font_size = c.font_size_px * unit_scale;
+        let halo_offset = crate::label_halo::halo_offset_world(c.font_size_px, unit_scale);
         if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
             tf.translation = pos.extend(label_z);
             tf.rotation = label_rot;
             *text = Text2d::new(name.as_str());
-            style.font_size = sea_font_size.into();
+            style.font_size = font_size.into();
             if let Some(f) = &cjk {
                 style.font = f.clone().into();
             }
@@ -1712,7 +1761,7 @@ pub fn update_sea_labels(
                     children,
                     &mut halo_q,
                     name.as_str(),
-                    sea_font_size,
+                    font_size,
                     cjk.as_ref(),
                     halo_color,
                     halo_offset,
@@ -1723,7 +1772,7 @@ pub fn update_sea_labels(
                 SeaLabel,
                 Text2d::new(name.as_str()),
                 TextFont {
-                    font_size: sea_font_size.into(),
+                    font_size: font_size.into(),
                     font: cjk.clone().unwrap_or_default().into(),
                     ..Default::default()
                 },
@@ -1736,7 +1785,7 @@ pub fn update_sea_labels(
                 Visibility::Visible,
             ));
             let (text_owned, font_ref, fs, hc) =
-                (name.to_string(), cjk.as_ref(), sea_font_size, halo_color);
+                (name.to_string(), cjk.as_ref(), font_size, halo_color);
             cmd.with_children(move |c| {
                 for _ in 0..crate::label_halo::HALO_DIRS.len() {
                     c.spawn(crate::label_halo::halo_bundle(
@@ -1969,6 +2018,21 @@ mod tests {
         assert!(gate(&place(None, None, Some(3)), LodTier::Nation));
         assert!(!gate(&place(None, None, Some(0)), LodTier::Region));
         assert!(gate(&place(None, None, Some(0)), LodTier::Edit));
+    }
+
+    /// ADR-0065 D2：字号随呈现级别单调递增，最小一级不跌破 12px 可读下限。
+    #[test]
+    fn place_label_size_ladder_is_monotonic_by_rank() {
+        let ladder: Vec<f32> = (0..=3).map(place_label_px).collect();
+        assert_eq!(ladder, vec![12.0, 13.0, 14.0, 16.0], "字号阶梯：{ladder:?}");
+        for w in ladder.windows(2) {
+            assert!(w[1] > w[0], "级别越高字应越大：{ladder:?}");
+        }
+        assert!(
+            ladder[0] >= 12.0,
+            "最小一级 {0}px 违反中文 ≥12px 可读下限",
+            ladder[0]
+        );
     }
 
     fn node(id: &str, level: MapLevel, parent: Option<&str>, children: &[&str]) -> MapNode {

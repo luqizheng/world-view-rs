@@ -27,12 +27,17 @@
 //! 呈现——打包前用系统雅黑（同样缺这三个字形）也是同一表现。真修复走 SVG
 //! 图标（Figma 原型即 Lucide 图标，工程已有 `assets/ui/tool_icons/` 基建）。
 //!
-//! ## 地图标签书法体（2026-10-20 用户拍板，ADR-0042 D4）
+//! ## 画布标签字体（ADR-0065，2026-10-25 用户裁定）
 //!
-//! **霞鹜文楷**（LXGW WenKai，OFL-1.1）注册为**命名族** `wv_map_label`：
-//! 只给画布上的地名 / 街道名 / 测量标注（Bevy `Text2d`，`LoadedFonts::label_handle`）
-//! 用——**UI 面板仍是 Inter + Noto**（楷体做界面正文可读性差）。canvas 标签
-//! 是参考图手绘风的最后一块：书法体地名 + 程序化插画 + 纸纹。
+//! 画布地名 / POI / 街道名 / 测量标注（Bevy `Text2d`，`LoadedFonts::label_handle`）
+//! **默认用 Noto Sans SC**：12–16px 的屏幕字号下，无衬线体的笔画宽度足够，
+//! 配合纸色晕圈仍能读清；UI 面板同样是 Inter + Noto，两处字体表现一致。
+//!
+//! **霞鹜文楷仍装配**（`LoadedFonts::calligraphy_handle`），但不再是默认：
+//! ADR-0042 D4 曾把它定为画布标签字体，实机结果是 12px 下笔画只有 1px、
+//! 被 8 向晕圈吃掉，地图上看不清 POI 名。文楷保留为**主题可选**的书法体
+//! （注册进 egui 命名族 `wv_map_label`，族序 [Noto, 文楷]），不删资产——
+//! 未来水墨 / 古舆图若要书法地名，按主题显式取 `calligraphy_handle` 即可。
 //!
 //! ## 边界（不做什么）
 //! - **不画文字**——本模块只创资源 / 抢 `FontFamily` 注册位；绘制由 egui 调用。
@@ -55,10 +60,10 @@ const BUNDLED_LATIN: &[u8] = include_bytes!("../../assets/fonts/Inter-Regular.tt
 /// 同一份字节同时注册进 egui 与 Bevy `Assets<Font>`。
 const BUNDLED_CJK: &[u8] = include_bytes!("../../assets/fonts/NotoSansSC-Regular.ttf");
 
-/// 画布标签书法体：霞鹜文楷 Regular——地名 / 街道名 / 测量标注的字体身份。
+/// 画布标签书法体：霞鹜文楷 Regular——**可选**主题字体（ADR-0065 后非默认）。
 ///
 /// 来源 / 许可：`assets/fonts/README.md`（GitHub Releases v1.530，OFL-1.1）。
-const BUNDLED_LABEL: &[u8] = include_bytes!("../../assets/fonts/LXGWWenKai-Regular.ttf");
+const BUNDLED_CALLIGRAPHY: &[u8] = include_bytes!("../../assets/fonts/LXGWWenKai-Regular.ttf");
 
 /// 等宽字体候选（`font.mono`，数字必须等宽，§4.2 硬约束 1）。
 ///
@@ -95,15 +100,29 @@ pub struct LoadedFonts {
     /// `drill.rs` / `streets.rs` / `measurement.rs`）用它；`None` 时只能回落
     /// Bevy 内置字体（中文会是方块，egui 侧不受影响）。
     pub cjk_font: Option<Handle<Font>>,
-    /// 霞鹜文楷的 **Bevy 侧**资产句柄（ADR-0042 D4）——画布标签的书法体。
-    /// `None` = 尚未装配；消费方走 [`Self::label_handle`] 自动回落 `cjk_font`。
-    pub label_font: Option<Handle<Font>>,
+    /// 霞鹜文楷的 **Bevy 侧**资产句柄（ADR-0042 D4 的书法体，ADR-0065 后为
+    /// **可选**而非默认）。书法体小字号可读性差，画布标签默认走 `cjk_font`；
+    /// 主题若明确要手绘书法地名，显式取 [`Self::calligraphy_handle`]。
+    pub calligraphy_font: Option<Handle<Font>>,
 }
 
 impl LoadedFonts {
-    /// 画布标签字体句柄：文楷优先，未装配时回落 Noto（同样全覆盖中文）。
+    /// 画布标签字体句柄（默认）：**Noto Sans SC**，未装配时返回 `None`。
+    ///
+    /// ADR-0065：12–16px 下无衬线体比书法体清晰得多；书法体走
+    /// [`Self::calligraphy_handle`]，是主题可选项。
     pub fn label_handle(&self) -> Option<Handle<Font>> {
-        self.label_font.clone().or_else(|| self.cjk_font.clone())
+        self.cjk_font.clone()
+    }
+
+    /// 画布标签的**书法体**句柄（霞鹜文楷）；未装配时回落默认标签字体。
+    ///
+    /// 仅供主题显式选用——默认标签路径（`drill` / `streets` / `measurement`）
+    /// **不**调用本方法。
+    pub fn calligraphy_handle(&self) -> Option<Handle<Font>> {
+        self.calligraphy_font
+            .clone()
+            .or_else(|| self.label_handle())
     }
 }
 
@@ -153,20 +172,20 @@ pub fn setup_egui_fonts(
         Arc::new(egui::FontData::from_static(BUNDLED_CJK)),
     );
 
-    // ---- 画布标签书法体：霞鹜文楷（ADR-0042 D4）----
-    // Bevy 侧：Text2d 消费 `label_handle`；egui 侧：注册**命名族**
-    // `wv_map_label`（[文楷, Noto 回退]），未来 egui 侧标签（label_halo 族）
-    // 可按族取用。**不**进 Proportional——UI 面板保持 Inter + Noto。
+    // ---- 画布标签书法体：霞鹜文楷（可选，ADR-0042 D4 / ADR-0065）----
+    // Bevy 侧：默认标签走 Noto（上面装配的 `cjk_font`），文楷只经
+    // `calligraphy_handle` 供主题显式选用。egui 侧仍注册**命名族**
+    // `wv_map_label`，但**族序改成 [Noto, 文楷]**——与默认标签字体一致。
+    // **不**进 Proportional——UI 面板保持 Inter + Noto。
     let label_key = "wv_label".to_owned();
-    let label_font = font_assets.add(Font::from_bytes(BUNDLED_LABEL.to_vec()));
-    loaded.label_font = Some(label_font);
+    loaded.calligraphy_font = Some(font_assets.add(Font::from_bytes(BUNDLED_CALLIGRAPHY.to_vec())));
     fonts.font_data.insert(
         label_key.clone(),
-        Arc::new(egui::FontData::from_static(BUNDLED_LABEL)),
+        Arc::new(egui::FontData::from_static(BUNDLED_CALLIGRAPHY)),
     );
     fonts.families.insert(
         egui::FontFamily::Name("wv_map_label".into()),
-        vec![label_key, cjk_key.clone()],
+        vec![cjk_key.clone(), label_key],
     );
 
     // ---- 等宽字体（系统探测）----

@@ -144,8 +144,12 @@ pub fn named_midpoints(
     out
 }
 
-/// 街道名文字的屏幕像素基准——比地名（12px）小一号，不抢位。
-const STREET_LABEL_PX: f32 = 9.0;
+/// 街道名文字的屏幕像素字号。
+///
+/// ADR-0065：旧值 9px 违反 `ART_STYLE_SPEC` §4.2 硬约束 3「中文字号 ≥ 12px」——
+/// 12px 以下的中文在 1x 屏不可读，街名只能靠猜。与最小一级地名同档 12px；
+/// 主次靠字色 / 层级（压在 POI 之下）区分，不靠压小字号。
+const STREET_LABEL_PX: f32 = 12.0;
 /// 标注层：压在街道线（0.115）之上、地名（0.4）之下。
 const STREET_LABEL_Z: f32 = 0.35;
 
@@ -221,7 +225,24 @@ pub fn update_street_labels(
     }
     // 无变化帧也照常对齐：位置/字号随视图每帧都可能变，池对齐本身极轻。
 
-    let font_size = STREET_LABEL_PX * view.scale.max(0.05);
+    // ADR-0065：街名纳入 AABB 碰撞过滤。旧实现直接把全部街名铺出去——编辑级
+    // 视野一屏几十条街时字叠字，放大后反而「几乎无法分辨」。街名不参与拾取
+    // （`target = None`），但不影响它们互相让位。
+    let unit_scale = view.scale.max(0.05);
+    let mut candidates: Vec<crate::label_collision::LabelCandidate> = wanted
+        .drain(..)
+        .map(|(pos, name)| crate::label_collision::LabelCandidate {
+            font_size_px: STREET_LABEL_PX,
+            priority: crate::label_collision::priority_for(1, &name),
+            pos,
+            name,
+            target: None,
+        })
+        .collect();
+    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, unit_scale);
+    filtered.truncate(200);
+
+    let font_size = STREET_LABEL_PX * unit_scale;
     // ADR-0017 §2.9 Q3：街名走 Label 渲染组的 z 和 opacity。
     let label_z = STREET_LABEL_Z + layers.label.z_offset;
     let label_rot = camera
@@ -241,11 +262,12 @@ pub fn update_street_labels(
         _ => view.active_theme.palette.halo_fill,
     }
     .with_alpha(layers.label.opacity);
-    let halo_offset = crate::label_halo::HALO_PX * view.scale.max(0.05);
+    let halo_offset = crate::label_halo::halo_offset_world(STREET_LABEL_PX, unit_scale);
 
     let mut iter = q.iter_mut();
-    for (pos, name) in &wanted {
-        let name: &str = name.as_str();
+    for c in &filtered {
+        let pos = c.pos;
+        let name: &str = c.name.as_str();
         if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
             tf.translation = pos.extend(label_z);
             tf.rotation = label_rot;

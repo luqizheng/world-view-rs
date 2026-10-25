@@ -421,3 +421,23 @@ docs/adr/ADR-0042-hand-drawn-nation-style.md  手绘 Nation · 追记三 = ADR-0
 docs/adr/ADR-0043-theme-crate-extraction.md    主题层抽 crate
 docs/adr/ADR-0047-uniform-presentation-rank.md 统一呈现级别
 ```
+
+---
+
+## 八、追记一（2026-10-25）：§2.3 缺陷清单的落地状态
+
+本文 §2.3 列的 14 条标签缺陷中，下列条目已由 **ADR-0065**（画布标签可读性）
+修复；其余未列出的条目仍按原文待裁：
+
+| # | 原缺陷 | 处置 |
+|---|---|---|
+| 1 | 事件标签 spawn 错挂 `FactionLabel` | ✅ 改挂 `EventLabel` |
+| 2 | 字号两分支不一致（首帧大字、之后变小字） | ✅ 两分支同取候选的 `font_size_px` |
+| 3 | 碰撞优先级与注释相反 | ✅ `priority_for(rank, name)`：先级别、后**字符**长度，长名优先 |
+| 4 | `PlaceKind` 权重从未实现 | ✅ 用统一呈现级别（ADR-0047）代替；不再需要单独权重表 |
+| 6 | 字符数口径不一（字节 vs 字符） | ✅ 统一 `chars().count()` |
+| 8 | 街名 9px 低于 12px 硬约束 | ✅ 街名 12px，且新增碰撞过滤 |
+| 9 | 无字重 | ◐ 由**字号分档**承担层级（16/14/13/12px）；真字重仍待字体文件 |
+
+**默认字体已换**：§2.1 的「画布标签唯一字体 = 霞鹜文楷」不再成立——默认改
+Noto Sans SC，文楷保留为 `LoadedFonts::calligraphy_handle()` 可选。
