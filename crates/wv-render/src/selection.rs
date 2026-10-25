@@ -797,8 +797,10 @@ mod tests {
         assert!(!right_click_pop_anchor(&mut closed, Some(Vec2::ZERO), 6.0));
         assert!(closed.is_closed(), "闭合选区不受右键影响");
 
-        let mut empty = SelectionState::default();
-        empty.right_press = Some(Vec2::ZERO);
+        let mut empty = SelectionState {
+            right_press: Some(Vec2::ZERO),
+            ..Default::default()
+        };
         assert!(!right_click_pop_anchor(&mut empty, Some(Vec2::ZERO), 6.0));
 
         let mut rect = SelectionState {

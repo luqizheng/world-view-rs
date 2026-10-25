@@ -25,6 +25,7 @@
 //! | 模块 | 何时打开 |
 //! |---|---|
 //! | [`generate`] | 写噪声 / lerp / 新的填充策略时。 |
+//! | [`hash`] | 写确定性格点哈希（摆位 / 抖动 / 纸纹）时。 |
 //! | [`edit`] | 写新笔刷（含 [`TerrainGrid`] 字段访问器）时。 |
 //! | [`intent`] | 写「意图笔刷」——按意图生成山脉 / 高原 / 火山 / 湖 / 河时。 |
 //! | [`isoline`] | 等值线提取 / 折线平滑抽稀（渲染派生，plan v0.1 M2）时。 |
@@ -45,6 +46,7 @@ pub mod divide;
 pub mod edit;
 pub mod forest;
 pub mod generate;
+pub mod hash;
 pub mod intent;
 pub mod isoline;
 pub mod marker;
