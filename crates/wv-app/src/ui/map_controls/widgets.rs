@@ -385,14 +385,3 @@ pub(super) fn grip_handle(
     }
     .on_hover_text(hint)
 }
-
-/// 写入缩放并同步相机，避免 ViewState 与 Camera 变成两个真相。
-pub(super) fn set_map_scale(
-    view: &mut ViewState,
-    cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
-    scale: f32,
-    zoom: wv_render::zoom_level::LevelZoom,
-) {
-    view.scale = zoom.clamp(scale);
-    wv_render::camera::apply_view_to_camera(view.camera_center, view.scale, cameras);
-}

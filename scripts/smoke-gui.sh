@@ -21,13 +21,17 @@ cd "$(dirname "$0")/.."
 
 DURATION="${SMOKE_SECS:-5}"
 
+# 2026-10-25 追记（AGENTS §13 裁定）：构建目录以全局共享 `CARGO_TARGET_DIR`
+# 为准，二进制不再落在 `./target`——脚本跟随该变量，缺省仍回退 `./target`。
+TARGET_DIR="${CARGO_TARGET_DIR:-./target}"
+
 echo "[smoke] cargo build -p wv-app --features app --bin wv"
 if ! cargo build -q -p wv-app --features app --bin wv; then
     echo "[smoke] FAIL: 构建失败"
     exit 1
 fi
 
-BIN="./target/debug/wv.exe"
+BIN="$TARGET_DIR/debug/wv.exe"
 if [ ! -f "$BIN" ]; then
     echo "[smoke] FAIL: 二进制未找到 $BIN"
     exit 1

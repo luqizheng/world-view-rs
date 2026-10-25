@@ -303,6 +303,7 @@
 | **面板内容内边距** | content padding | 浮窗头行之下的内容四边留白（Figma `Panel content` 12 px）：头行满宽贴窗体、体内容不贴边。与头行自身的 `paddingLeft/Right` 是两个量，勿混用。首次出现：2026-10-18 浮动窗体对图修正 | UI |
 | **图层面板控件** | LayerPanel | 按 Figma `3:20892` 逐项对位的图层面板体：动作行（DRAW ORDER + 新建组 / 新建层）+ 28 px 图层行列表 + 分隔线 + 不透明度行。纯控件，不读世界数据，交互以 `LayerPanelAction` 返回。首次出现：2026-10-18 浮动窗体对图修正 | UI |
 | **图层行** | LayerRow | 图层面板中的一行：眼睛（12）+ 类型图标（12）+ 名称（11 px）+ 计数（10 px）+ 锁（12），行高 28 / 圆角 4 / 左右内边距 8；选中 = `accent_soft` 底 + accent 字。首次出现：2026-10-18 | UI |
+| **取色器** | ColorPicker | `wv-ui` 的颜色选取控件（`crates/wv-ui/src/widgets/color_picker.rs`）：色块触发器 + `egui::Popup` 浮层，内含 SV 方块 / 色相条 / alpha 条（可开关）/ hex 输入（与色板双向同步，非法输入宽容不阻止）。颜色值进出用 `egui::Rgba`（非预乘，规避 `Color32` 预乘在低 alpha 下的往返量化）；SV 方块为纯 CPU 顶点色网格（`Mesh::colored_vertex`），无 shader。规格见 `docs/UI_COLOR_PICKER_SPEC_v0.1.md`。首次出现：2026-10-25 | UI |
 
 ## 地图工具条重构（2026-10-20 · ADR-0043）
 

@@ -332,6 +332,70 @@ const NUMERIC_TAP_PX: f32 = 4.0;
 const NUMERIC_SCRUB_ARM_PX: f32 = 8.0;
 /// 每个 step 的像素（D1）。scrub 中每 4 px 走一个 step。
 const NUMERIC_PX_PER_STEP: f32 = 4.0;
+/// 右侧 stepper 区宽度（含分隔线）：常态与编辑态共用，编辑态的 TextEdit
+/// 不得侵入此区（否则聚焦时箭头被文本框盖住——2026-10-25 修复的 bug）。
+const NUMERIC_STEPPER_W: f32 = 24.0;
+
+/// 画 stepper（分隔线 + 上下箭头）并注册点击。
+///
+/// **常态与编辑态共用**（2026-10-25 修复）：原实现编辑态分支提前 return，
+/// 跳过 stepper 绘制 → 聚焦时右侧箭头消失。抽出共用后，编辑态下箭头
+/// 全程可见、可点（点击 = 提交文本 + 步进写值 + 退出编辑态）。
+///
+/// 返回 `Some(+1.0)` = 上箭头被点，`Some(-1.0)` = 下箭头被点，`None` = 无点击。
+fn paint_numeric_stepper(ui: &mut egui::Ui, shell: &UiShell, rect: egui::Rect) -> Option<f32> {
+    let stepper = egui::Rect::from_min_max(
+        egui::pos2(rect.max.x - NUMERIC_STEPPER_W, rect.min.y),
+        rect.max,
+    );
+    let p = ui.painter();
+    p.line_segment(
+        [
+            egui::pos2(stepper.min.x, stepper.min.y),
+            egui::pos2(stepper.min.x, stepper.max.y),
+        ],
+        egui::Stroke::new(1.0, shell.border_subtle()),
+    );
+    let cx = stepper.center().x;
+    let up_cy = stepper.center().y - 5.0;
+    let dn_cy = stepper.center().y + 5.0;
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(cx - 3.0, up_cy + 2.0),
+            egui::pos2(cx + 3.0, up_cy + 2.0),
+            egui::pos2(cx, up_cy - 2.0),
+        ],
+        shell.t3(),
+        egui::Stroke::NONE,
+    ));
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(cx - 3.0, dn_cy - 2.0),
+            egui::pos2(cx + 3.0, dn_cy - 2.0),
+            egui::pos2(cx, dn_cy + 2.0),
+        ],
+        shell.t3(),
+        egui::Stroke::NONE,
+    ));
+    let _ = p;
+    let up = ui.interact(
+        egui::Rect::from_min_max(stepper.min, egui::pos2(stepper.max.x, stepper.center().y)),
+        ui.id().with("numeric_up"),
+        egui::Sense::click(),
+    );
+    let down = ui.interact(
+        egui::Rect::from_min_max(egui::pos2(stepper.min.x, stepper.center().y), stepper.max),
+        ui.id().with("numeric_down"),
+        egui::Sense::click(),
+    );
+    if up.clicked() {
+        Some(1.0)
+    } else if down.clicked() {
+        Some(-1.0)
+    } else {
+        None
+    }
+}
 
 /// 数值输入的会话手势态（D1 + D1-A）。
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -536,6 +600,13 @@ fn numeric_input_bounded_inner(
     let now = ui.ctx().time();
 
     // ── 编辑态（D1）：egui 原生 TextEdit 覆盖在自绘框上 ──
+    //
+    // **几何与常态共用同一行**（整宽 × CONTROL_H，右侧 24px 留给 stepper）：
+    // 编辑态若另起一行，聚焦瞬间行高 / 行宽跳变会把周围内容顶下去；且
+    // TextEdit 若铺满整行，箭头既没地方画、也没地方响应点击（2026-10-25
+    // 修复：聚焦时右侧上下箭头消失——原实现编辑态分支提前 return，跳过了
+    // 常态分支的 stepper 绘制）。现改为：先整行分配 + 画框 + 画 stepper，
+    // 再把 TextEdit 限制在 stepper 左侧的 body 区，箭头全程可见、可点。
     if let NumericGesture::TextEditing {
         orig_value,
         text,
@@ -546,26 +617,38 @@ fn numeric_input_bounded_inner(
         let just_entered = *select_pending;
         let orig = *orig_value;
 
-        let frame = egui::Frame::default()
-            .fill(shell.input_bg())
-            .stroke(egui::Stroke::new(2.0, shell.focus()))
-            .corner_radius(radius::FIELD)
-            .inner_margin(margin_xy(INPUT_PAD_X, 0.0));
-        let mut out = None;
-        frame.show(ui, |ui| {
-            out = Some(
-                ui.add(
-                    egui::TextEdit::singleline(text)
-                        .id_source("numeric_text")
-                        .desired_width(f32::INFINITY)
-                        .background_color(egui::Color32::TRANSPARENT)
-                        .margin(egui::Margin::ZERO)
-                        .frame(egui::Frame::NONE)
-                        .text_color(shell.t1()),
-                ),
-            );
-        });
-        let resp = out.expect("Frame::show 必然执行一次");
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), CONTROL_H),
+            egui::Sense::hover(),
+        );
+        // 焦点态框：底色不变，描边换 2px focus（与原编辑态视觉规格一致）。
+        let p = ui.painter();
+        p.rect_filled(rect, radius::FIELD, shell.input_bg());
+        p.rect_stroke(
+            rect,
+            radius::FIELD,
+            egui::Stroke::new(2.0, shell.focus()),
+            egui::StrokeKind::Inside,
+        );
+        let _ = p;
+
+        let resp = ui.put(
+            egui::Rect::from_min_max(
+                rect.min,
+                egui::pos2(rect.max.x - NUMERIC_STEPPER_W, rect.max.y),
+            ),
+            egui::TextEdit::singleline(text)
+                .id_source("numeric_text")
+                .desired_width(f32::INFINITY)
+                .background_color(egui::Color32::TRANSPARENT)
+                .margin(egui::Margin::same(0))
+                .frame(egui::Frame::NONE)
+                .text_color(shell.t1()),
+        );
+
+        // 编辑态下 stepper 照常画 + 照常响应点击（点箭头 = 立即按步进提交）。
+        // 箭头点击同时终止编辑态——「箭头改值」与「文本提交」是同一条写值路径。
+        let stepper_click = paint_numeric_stepper(ui, shell, rect);
 
         // 进入编辑态的第一帧：请求焦点 + 全选既有值（D1「键入即覆盖」）
         if just_entered {
@@ -611,6 +694,16 @@ fn numeric_input_bounded_inner(
         } else if key_esc {
             // Esc 回滚到进入编辑态前的值（不提交）
             *value = orig;
+            gesture = NumericGesture::Idle;
+            ui.memory_mut(|m| m.surrender_focus(text_id));
+        } else if let Some(dir) = stepper_click {
+            // 箭头点击：先提交当前文本（非法则回滚），再按步进写值并退出
+            // 编辑态——两条写值路径汇到同一出口，不会出现「箭头加了值、
+            // 文本里的非法串又把它回滚」的互相打架。
+            numeric_commit_text(text, orig, value, min, max, now, &mut error);
+            *value = (*value + dir * step).clamp(min, max);
+            error.message.clear();
+            error.flash_until = 0.0;
             gesture = NumericGesture::Idle;
             ui.memory_mut(|m| m.surrender_focus(text_id));
         } else if resp.lost_focus() && !just_entered {
@@ -665,53 +758,9 @@ fn numeric_input_bounded_inner(
         proportional(font_size::MICRO),
         shell.t3(),
     );
-    let stepper = egui::Rect::from_min_max(egui::pos2(rect.max.x - 24.0, rect.min.y), rect.max);
-    p.line_segment(
-        [
-            egui::pos2(stepper.min.x, stepper.min.y),
-            egui::pos2(stepper.min.x, stepper.max.y),
-        ],
-        egui::Stroke::new(1.0, shell.border_subtle()),
-    );
-    let cx = stepper.center().x;
-    let up_cy = stepper.center().y - 5.0;
-    let dn_cy = stepper.center().y + 5.0;
-    p.add(egui::Shape::convex_polygon(
-        vec![
-            egui::pos2(cx - 3.0, up_cy + 2.0),
-            egui::pos2(cx + 3.0, up_cy + 2.0),
-            egui::pos2(cx, up_cy - 2.0),
-        ],
-        shell.t3(),
-        egui::Stroke::NONE,
-    ));
-    p.add(egui::Shape::convex_polygon(
-        vec![
-            egui::pos2(cx - 3.0, dn_cy - 2.0),
-            egui::pos2(cx + 3.0, dn_cy - 2.0),
-            egui::pos2(cx, dn_cy + 2.0),
-        ],
-        shell.t3(),
-        egui::Stroke::NONE,
-    ));
-    let _ = p;
-    let up = ui.interact(
-        egui::Rect::from_min_max(stepper.min, egui::pos2(stepper.max.x, stepper.center().y)),
-        ui.id().with("numeric_up"),
-        egui::Sense::click(),
-    );
-    let down = ui.interact(
-        egui::Rect::from_min_max(egui::pos2(stepper.min.x, stepper.center().y), stepper.max),
-        ui.id().with("numeric_down"),
-        egui::Sense::click(),
-    );
-    if up.clicked() {
-        *value = (*value + step).clamp(min, max);
-        error.message.clear();
-        error.flash_until = 0.0;
-    }
-    if down.clicked() {
-        *value = (*value - step).clamp(min, max);
+    let stepper_click = paint_numeric_stepper(ui, shell, rect);
+    if let Some(dir) = stepper_click {
+        *value = (*value + dir * step).clamp(min, max);
         error.message.clear();
         error.flash_until = 0.0;
     }
@@ -2081,7 +2130,6 @@ mod tests {
         let _ = dropdown_box(&mut ui, &sh, "Government");
     }
 
-    // ────────────────────────────────────────────────────────────────────
     // NumericEditReport（2026-10-25 P0-1 方案 A：手势完成帧才落盘）
     // ────────────────────────────────────────────────────────────────────
 
@@ -2244,5 +2292,125 @@ mod tests {
             caller.commits
         );
         assert_eq!(caller.world, caller.commits[0], "面板值与提交值一致");
+    }
+
+    // 编辑态 stepper 可见性（2026-10-25 修复回归）
+    // ────────────────────────────────────────────────────────────────────
+
+    /// 把 `numeric_input` 驱动进文本编辑态：对 body 中心一次完整点按
+    /// （移动 → 按下 → 抬起，位移 0 = Tap）。
+    fn drive_numeric_into_text_editing(
+        ctx: &egui::Context,
+        sh: &UiShell,
+        value: &mut f32,
+        width: f32,
+    ) {
+        // 行从 (0,0) 起铺满给定宽度；body 中心点落在 stepper 左侧。
+        let pos = egui::pos2(width * 0.3, CONTROL_H * 0.5);
+        for frame in 0..3 {
+            let events = match frame {
+                0 => vec![egui::Event::PointerMoved(pos)],
+                1 => vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                }],
+                _ => vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                }],
+            };
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 200.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ctx| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::default())
+                    .show(ctx, |ui| {
+                        let _ = numeric_input(ui, sh, value, "m", 1.0);
+                    });
+            });
+            // headless 无 GPU surface：丢弃未应用的纹理增量（既有测试同款）。
+            output.textures_delta.clear();
+        }
+    }
+
+    /// **修复回归**：进入文本编辑态后，右侧 stepper 的分隔线仍被画出
+    /// （= 箭头区没有消失）。
+    ///
+    /// 断言方式（独立于实现的绘制路径）：收集编辑态整帧的 `FullOutput.shapes`，
+    /// 要求**同时**存在：
+    /// 1. 一条 x ≈ `width - NUMERIC_STEPPER_W` 的竖直线段（stepper 分隔线）；
+    /// 2. 两个实心三角（上下箭头，`Shape::Path` / polygon）位于 stepper 区内。
+    ///
+    /// 修复前的表现：编辑态分支提前 return，不画分隔线与箭头 → 断言 1 失败。
+    #[test]
+    fn numeric_editing_state_keeps_stepper_visible() {
+        let sh = shell();
+        let width = 200.0;
+        let mut v: f32 = 100.0;
+        let ctx = egui::Context::default();
+        drive_numeric_into_text_editing(&ctx, &sh, &mut v, width);
+
+        // 第 4 帧（已在编辑态）：收集整帧绘制图元。
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width, 200.0),
+            )),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ctx| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::default())
+                .show(ctx, |ui| {
+                    let _ = numeric_input(ui, &sh, &mut v, "m", 1.0);
+                });
+        });
+        output.textures_delta.clear();
+
+        // 1) stepper 分隔线：x 落在 [divider_x - 0.5, divider_x + 0.5] 的竖直线段。
+        let divider_x = width - NUMERIC_STEPPER_W;
+        let mut divider_found = false;
+        // 2) stepper 区内的实心三角（箭头）：顶点全部落在右 24px 区内。
+        let stepper_zone =
+            egui::Rect::from_min_max(egui::pos2(divider_x, 0.0), egui::pos2(width, CONTROL_H));
+        let mut arrow_count = 0usize;
+        for clipped in &output.shapes {
+            match &clipped.shape {
+                egui::Shape::LineSegment { points, .. } => {
+                    let [a, b] = points;
+                    let vertical = (a.x - b.x).abs() < 0.5;
+                    let at_divider = (a.x - divider_x).abs() < 0.5 && (b.x - divider_x).abs() < 0.5;
+                    if vertical && at_divider {
+                        divider_found = true;
+                    }
+                }
+                egui::Shape::Path(path)
+                    if path.points.len() == 3
+                        && path.points.iter().all(|pt| stepper_zone.contains(*pt)) =>
+                {
+                    // 三角箭头是 convex_polygon → Path 图元，3 个顶点全在 stepper 区。
+                    arrow_count += 1;
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            divider_found,
+            "编辑态下 stepper 分隔线应可见（x ≈ {divider_x}），修复前此线缺失"
+        );
+        assert_eq!(
+            arrow_count, 2,
+            "编辑态下上/下箭头（两个实心三角）都应在 stepper 区内"
+        );
     }
 }

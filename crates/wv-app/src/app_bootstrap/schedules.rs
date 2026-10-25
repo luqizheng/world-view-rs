@@ -426,7 +426,8 @@ pub(super) fn register(app: &mut App) {
             ui::panel_map_tree,
             ui::panel_layers,
             ui::panel_brush,
-            // ui::panel_minimap, // TODO: 恢复小地图后取消注释
+            // 2026-10-25 恢复（Figma `3:20823`）：overview + 视口框 + Fit region。
+            ui::panel_minimap,
             ui::panel_timeline,
             ui::panel_event,
             ui::panel_character,

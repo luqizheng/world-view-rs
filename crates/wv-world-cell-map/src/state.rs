@@ -426,7 +426,10 @@ mod tests {
         s.close_tool();
         assert!(!s.tool_active, "工具应关闭");
         assert_eq!(s.hover, None, "hover 是瞬时态，关工具即清");
-        assert_eq!(s.pending_height, None, "海拔暂存是单格表单会话态，关工具即清");
+        assert_eq!(
+            s.pending_height, None,
+            "海拔暂存是单格表单会话态，关工具即清"
+        );
     }
 
     // ── CellSelection 位图运算（A1）─────────────────────────────────

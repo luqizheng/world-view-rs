@@ -15,10 +15,7 @@ pub fn map_controls(
     selection: Res<SelectionState>,
     brush: Res<BrushState>,
     drill: Res<DrillState>,
-    grid: Res<GridConfig>,
-    tex: Res<wv_render::terrain_view::TerrainTexture>,
     projection: Res<WorldProjection>,
-    mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     screen: Res<crate::app_screen::AppScreen>,
     mut params: DockParams,
     edit: Res<EditHistory>,
@@ -48,14 +45,6 @@ pub fn map_controls(
         return;
     };
     let loc = params.locale.0;
-
-    // 当前级的缩放区间与「全图」尺寸。
-    let screen = ctx.content_rect().size();
-    let window_size = Vec2::new(screen.x, screen.y);
-    let raster_size = Vec2::new(tex.size as f32, tex.height as f32) * grid.cell_size;
-    let level_map_size =
-        wv_render::zoom_level::map_size_of(&projection.world, drill.current(), raster_size);
-    let zoom = wv_render::zoom_level::LevelZoom::for_map(level_map_size, window_size);
 
     // 工具活动态（全部从资源读；工具切换本身走命令分发）。
     let select_active = selection.enabled;
@@ -415,79 +404,4 @@ pub fn map_controls(
                     }
                 });
         });
-
-    // ── 缩放控件条（独立 Area，grip 可拖） ──────────────────────────
-    //
-    // 与 dock 是兄弟关系：dock 是「工具集合」，zoom_strip 是「相机操作」。
-    // 二者共享 [`MapDockState`]（同一份持久化），但位置偏移独立记
-    // `zoom_strip_pos` —— dock 横向 / 纵向切换时，strip 默认贴到对侧。
-    //
-    // Figma `3:21882` 的 strip 只能横排（设计上 32 高一行），dock 任何朝向
-    // 下 strip 都是横排。默认位置：纵向 dock → 贴左缘**底**（让开顶栏
-    // 顶区域，避开左下方的笔刷/小地图面板）；横向 dock → 贴顶栏下沿
-    // **右**（让开顶栏的"主世界/日夜"标题，让开 dock 占的底部位置）。
-    let (zoom_anchor, zoom_default) = if vertical {
-        (
-            egui::Align2::LEFT_BOTTOM,
-            egui::vec2(EDGE_OFFSET, -EDGE_OFFSET),
-        )
-    } else {
-        // 贴顶栏**下沿**（DOCK_TOP_CLEARANCE = 顶栏 38 + 8）；只偏移 18 会
-        // 落在 38px 顶栏内部，压住 Rebuild / settings 按钮（2026-10-19 实测）。
-        (
-            egui::Align2::RIGHT_TOP,
-            egui::vec2(-EDGE_OFFSET, DOCK_TOP_CLEARANCE),
-        )
-    };
-    let zoom_offset = params
-        .dock
-        .zoom_strip_pos
-        .map(|p| egui::vec2(p.x, p.y))
-        .unwrap_or(zoom_default);
-    let mut zoom_state = crate::ui::widgets::ZoomControlsState {
-        pos: params.dock.zoom_strip_pos.map(|p| [p.x, p.y]),
-        show_scale_text: true,
-    };
-    let can_zoom_in = !zoom.at_inner_limit(view.scale);
-    let can_zoom_out = !zoom.at_outer_limit(view.scale);
-    // 三个回调都需要 `&mut view` + `&mut cameras`；闭包同时持三份会撞借用。
-    // 折中：闭包内只产生**意图**（写三个互斥 bool），闭包外统一执行。
-    // 同时存目标的 `target_scale`，让 `set_map_scale` 在外边单写。
-    let mut zoom_in_clicked = false;
-    let mut zoom_out_clicked = false;
-    let mut zoom_fit_clicked = false;
-    egui::Area::new(egui::Id::new("wv_zoom_controls_v01"))
-        .anchor(zoom_anchor, zoom_offset)
-        .order(egui::Order::Foreground)
-        .show(ctx, |ui| {
-            let current_scale = view.scale;
-            crate::ui::widgets::zoom_controls(
-                ui,
-                &shell,
-                &mut zoom_state,
-                current_scale,
-                can_zoom_in,
-                can_zoom_out,
-                || zoom_in_clicked = true,
-                || zoom_out_clicked = true,
-                || zoom_fit_clicked = true,
-            );
-        });
-    if zoom_in_clicked {
-        let target = view.scale / 1.6;
-        set_map_scale(&mut view, &mut cameras, target, zoom);
-    } else if zoom_out_clicked {
-        let target = view.scale * 1.6;
-        set_map_scale(&mut view, &mut cameras, target, zoom);
-    } else if zoom_fit_clicked {
-        let frame_origin = drill
-            .current()
-            .and_then(|id| wv_core::resolve_frame_in(&projection.world.maps, id))
-            .map(|f| Vec2::new(f.world_origin.x, f.world_origin.y))
-            .unwrap_or(grid.map_origin);
-        view.camera_center = frame_origin + level_map_size * 0.5;
-        set_map_scale(&mut view, &mut cameras, zoom.fit, zoom);
-    }
-    // strip 的拖动位置回灌到 dock（落盘由 caller 负责）。
-    params.dock.zoom_strip_pos = zoom_state.pos.map(|[x, y]| MapDockPos { x, y });
 }
