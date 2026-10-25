@@ -171,9 +171,13 @@ pub fn panel_timeline(
     // 沉浸模式：整体淡化但**仍可交互**（D3：状态永不抑制）。
     let alpha = if panels.immersive { 0.55 } else { 1.0 };
     let layout = crate::ui_layout::current_layout(&layouts, &panels, Panel::Timeline);
+    let win_id = egui::Id::new(("wv_panel", Panel::Timeline));
 
-    egui::Window::new("")
-        .id(egui::Id::new(("wv_panel", Panel::Timeline)))
+    // 越界回拉（2026-10-25）：时间轴是直连 `egui::Window` 的游离浮窗
+    // （不走 `float_window`），上一会话拖到贴视口底会盖住常驻状态栏——
+    // 见 `snap_into_central` 文档。越界帧强制回位。
+    let mut win = egui::Window::new("")
+        .id(win_id)
         .default_pos(egui::pos2(layout.x, layout.y))
         .default_size(egui::vec2(layout.width, layout.height))
         .resizable(true)
@@ -187,20 +191,23 @@ pub fn panel_timeline(
                 // 间隔由各段自管（下方 `item_spacing = 0`）。
                 .inner_margin(crate::theme::ui_theme::margin_all(0.0))
                 .corner_radius(radius::PANEL),
-        )
-        .show(ctx, |ui| {
-            ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-            timeline_top_row(
-                ui,
-                &shell,
-                &mut playback,
-                &mut layer,
-                &projection,
-                loc,
-                &mut open_event,
-            );
-            timeline_track(ui, &shell, &mut playback, &projection, *layer, loc);
-        });
+        );
+    if let Some(p) = crate::ui::top_bar::snap_into_central(ctx, win_id) {
+        win = win.current_pos(p);
+    }
+    win.show(ctx, |ui| {
+        ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+        timeline_top_row(
+            ui,
+            &shell,
+            &mut playback,
+            &mut layer,
+            &projection,
+            loc,
+            &mut open_event,
+        );
+        timeline_track(ui, &shell, &mut playback, &projection, *layer, loc);
+    });
 
     if *open_event {
         panels.set_visible(Panel::Event, true);

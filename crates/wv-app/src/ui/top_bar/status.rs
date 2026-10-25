@@ -24,12 +24,15 @@ pub(super) const STATUS_GAP_CENTER: f32 = 24.0;
 ///
 /// ## 常驻底部（2026-10-25 用户裁定，与顶栏同权）
 ///
-/// 原画在 Background 层，被时间轴等浮窗（Middle 层）整条盖住——用户
-/// 「要下拉才看得到」。现整条迁 `Order::Foreground`（见
-/// [`root_ui_foreground`]），永远贴窗底、任何浮窗压不住；浮窗另被
-/// [`central_area`](super::central_area) 钳在状态栏之上，不会钻到底下。
-/// 中段坐标因此从锚定 Area 改为面板内绝对居中绘制——Foreground 层里
-/// 再开 Area 相互叠序不定，读数可能被本栏自己的底板盖住。
+/// 曾被时间轴等浮窗（拖到下方时）整条盖住——用户「要下拉才看得到」。
+/// 收口手段是**几何钳制**而非抬层：所有浮窗统一
+/// `constrain_to(central_area)`（视口挖去顶栏 38 / 状态栏 28），拖不进
+/// 这 28px、也拖不出视口；按大窗口保存的 `ui-layout.yaml` 坐标在小窗口
+/// 下被逐帧钳回。本栏仍画在 Background 层——曾试验把根 Ui 提到
+/// Foreground，结果根 Ui 的全视口 widget 在 egui hit_test 层过滤里把
+/// Background / Middle 层命中整体排除，全界面输入失灵（见
+/// [`root_ui`] 文档），已回退。中段坐标为面板内绝对居中绘制
+/// （`paint_pointer_coordinates`）。
 ///
 /// ## 与设计稿的刻意偏差（令牌纪律，非漏做）
 ///
@@ -58,7 +61,7 @@ pub fn status_bar(
     };
     // Figma #3:21001 designedHeight 28px（旧版 22px）。
     let h = STATUS_BAR_H;
-    let mut root = root_ui_foreground(ctx);
+    let mut root = root_ui(ctx);
     egui::Panel::bottom("wv_status_bar")
         .exact_size(h)
         .frame(

@@ -59,6 +59,10 @@ pub fn top_bar(
         .show(&mut root, |ui| {
             // 拖拽区**最先注册**（垫底）：后画的窗控/菜单/标签压在其上，
             // 点控件不会误触拖窗；空白条背吃到拖拽与双击（无边框窗 2026-10-25）。
+            // ⚠️ 教训（探针实测）：本栏必须留在 Background 层——一旦有更高
+            // Order 的**全视口** widget（如曾把状态栏根 Ui 提到 Foreground），
+            // egui hit_test 的层过滤会在该 widget 处提前 break，把 Background /
+            // Middle 层的命中整体排除，全界面输入失灵（拖拽区 contains=false）。
             let drag = ui.interact(
                 ui.max_rect(),
                 egui::Id::new("wv_top_bar_drag"),

@@ -73,6 +73,7 @@ pub struct FloatWindow<'a> {
     alpha: f32,
     order: egui::Order,
     constrain: Option<egui::Rect>,
+    current_pos: Option<egui::Pos2>,
 }
 
 /// 面板内容内边距（Figma `3:20892` Panel content `padding: 12`）。
@@ -107,6 +108,7 @@ impl<'a> FloatWindow<'a> {
             alpha: 0.96,
             order: egui::Order::Middle,
             constrain: None,
+            current_pos: None,
         }
     }
 
@@ -168,6 +170,17 @@ impl<'a> FloatWindow<'a> {
         self
     }
 
+    /// 本帧强制位置（越界回拉用，正常帧传 None）。
+    ///
+    /// ⚠️ egui 0.36 的 `constrain_to` **不钳制位置**——只钳尺寸 / 锚点 /
+    /// move 命中区（`area.rs` 通读无 position clamp），存下的位置照样可以
+    /// 压进 chrome。调用方每帧读 `area_rect` 对活动范围做越界检测，越界才
+    /// 传本值（egui 用它覆写本帧位置，正常帧不传则不干扰用户拖拽）。
+    pub fn current_pos(mut self, pos: egui::Pos2) -> Self {
+        self.current_pos = Some(pos);
+        self
+    }
+
     /// 装配并落地。`body` 在折叠态不执行。
     pub fn show<F: FnOnce(&mut egui::Ui)>(self, ctx: &egui::Context, shell: &UiShell, body: F) {
         let head_id = self.id.with("head");
@@ -199,6 +212,9 @@ impl<'a> FloatWindow<'a> {
         }
         if let Some(r) = self.constrain {
             win = win.constrain_to(r);
+        }
+        if let Some(p) = self.current_pos {
+            win = win.current_pos(p);
         }
 
         let icon = self.icon;

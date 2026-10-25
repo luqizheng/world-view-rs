@@ -91,32 +91,20 @@ pub struct ValidationCount {
 }
 
 /// 构造一个「视口根 `Ui`」。
+///
+/// ⚠️ **必须留在 Background 层**（探针实测 2026-10-25）：状态栏曾为「不被
+/// 浮窗盖住」把根 Ui 提到 Foreground——但根 Ui 自身会注册一个全视口
+/// widget，egui `hit_test` 的层过滤（`hit_test.rs` 的 included_layers
+/// break 循环）在覆盖搜索圆的更高层 widget 处提前收口，Background /
+/// Middle 层的命中被整体排除——**全界面输入失灵**（顶栏拖拽区
+/// `contains=false`、按钮点不动）。防遮挡由 [`central_area`] 的浮窗
+/// 钳制保证，不需要抬层。
 pub(crate) fn root_ui(ctx: &egui::Context) -> egui::Ui {
     egui::Ui::new(
         ctx.clone(),
         "wv_root".into(),
         egui::UiBuilder::new()
             .layer_id(egui::LayerId::background())
-            .max_rect(ctx.viewport_rect()),
-    )
-}
-
-/// 视口根 `Ui` 的 Foreground 版（状态栏专用）。
-///
-/// 状态栏曾与顶栏同画在 Background 层，被时间轴等浮窗（Middle 层）整条
-/// 盖住——用户「要下拉才看得到」（2026-10-25）。迁到 Foreground 后它在
-/// egui 绘制序 `Background < Middle < Foreground < Tooltip` 里常驻最上，
-/// 表现与顶栏一致：永远贴在窗体底部，任何浮窗压不住（浮窗另由
-/// [`central_area`] 钳制，根本进不了这 28px）。
-pub(crate) fn root_ui_foreground(ctx: &egui::Context) -> egui::Ui {
-    egui::Ui::new(
-        ctx.clone(),
-        "wv_root_fg".into(),
-        egui::UiBuilder::new()
-            .layer_id(egui::LayerId::new(
-                egui::Order::Foreground,
-                egui::Id::new("wv_chrome_foreground"),
-            ))
             .max_rect(ctx.viewport_rect()),
     )
 }
@@ -137,4 +125,33 @@ pub(crate) fn central_area_of(vp: egui::Rect) -> egui::Rect {
         egui::pos2(vp.min.x, vp.min.y + TOP_BAR_H),
         egui::pos2(vp.max.x, vp.max.y - STATUS_BAR_H),
     )
+}
+
+/// 越界回拉（2026-10-25）：`id` 对应浮窗上一帧的位置若越出
+/// [`central_area`]，返回修正后的左上角（喂给 `egui::Window::current_pos`
+/// 强制落位）；在界内返回 None（不干预用户拖拽）。
+///
+/// ⚠️ 为什么必须自己做：egui 0.36 的 `constrain_to` **不钳制位置**——只钳
+/// 尺寸 / 锚点 / move 命中区（`area.rs` 通读无 position clamp），上一会话
+/// 拖进 chrome 的 `ui-layout.yaml` 坐标会原样复现（实测：时间轴拖到贴视口
+/// 底、盖住状态栏）。拖进 chrome 的那一帧松手即回弹。所有**游离浮窗**
+/// 都要走这把钳子——`float_window`（`ui::widgets::local`）与直连
+/// `egui::Window` 的 timeline；居中模态窗（各 dialog）不适用。
+pub(crate) fn snap_into_central(ctx: &egui::Context, id: egui::Id) -> Option<egui::Pos2> {
+    let central = central_area(ctx);
+    ctx.memory(|m| m.area_rect(id)).and_then(|r| {
+        if central.contains_rect(r) {
+            return None;
+        }
+        Some(egui::pos2(
+            r.left().clamp(
+                central.left(),
+                (central.right() - r.width()).max(central.left()),
+            ),
+            r.top().clamp(
+                central.top(),
+                (central.bottom() - r.height()).max(central.top()),
+            ),
+        ))
+    })
 }
