@@ -30,7 +30,7 @@ use crate::state::{ViewState, WorldProjection};
 use crate::ui::shell::UiShell;
 use crate::ui::widgets::{numeric_input_bounded, value_box};
 
-use wv_core::distance::Place;
+use wv_core::distance::{Place, PoiKind};
 use wv_core::Id;
 
 /// 该地点是否**有地界环**（`world.place_geometry` 里有它的 span）。
@@ -139,8 +139,51 @@ pub fn update_place_now(
     }
 }
 
-/// 只读值框的**固定宽槽位**（220px）。
+/// 提交地点类别变更（ADR-0064）。
 ///
+/// 走 `wv-edit` 的 `SetPlaceKindCommand`（AGENTS §3.3：System 不直接改世界）。
+/// `kind = None` = 清空（YAML 不再写 `kind` 行），与 `Other` 的界面语义一致。
+pub fn set_place_kind_now(
+    world: &mut WorldProjection,
+    edit: &mut EditHistory,
+    id: Id,
+    kind: Option<PoiKind>,
+) {
+    let mut tx = wv_edit::history::Transaction::new();
+    tx.push(Box::new(wv_edit::command::SetPlaceKindCommand::new(
+        id, kind,
+    )));
+    match edit.history.commit(&mut world.world, tx) {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
+            world.dirty = true;
+        }
+        Err(e) => {
+            bevy::log::warn!("地点类别编辑失败: {e}");
+        }
+    }
+}
+
+/// 类别 → 表单文案键。穷尽 match：新增 `PoiKind` 变体会在编译期逼出文案。
+fn poi_kind_label_key(kind: PoiKind) -> crate::i18n::I18nKey {
+    use crate::i18n::I18nKey as K;
+    match kind {
+        PoiKind::Other => K::PoiKindOther,
+        PoiKind::Settlement => K::PoiKindSettlement,
+        PoiKind::Peak => K::PoiKindPeak,
+        PoiKind::Port => K::PoiKindPort,
+        PoiKind::Station => K::PoiKindStation,
+        PoiKind::Scenic => K::PoiKindScenic,
+        PoiKind::Food => K::PoiKindFood,
+        PoiKind::Lodging => K::PoiKindLodging,
+        PoiKind::Medical => K::PoiKindMedical,
+        PoiKind::Education => K::PoiKindEducation,
+        PoiKind::Government => K::PoiKindGovernment,
+        PoiKind::Shop => K::PoiKindShop,
+    }
+}
+
+/// 只读值框的**固定宽槽位**（220px）。///
 /// `value_box` 吃 `available_width()`——在 egui Window 的无界测量 pass 里
 /// 那是屏幕级宽，会把窗口撑到全屏且缩不回来（Resize 只扩不缩，
 /// 2026-10-22 实机 bug）。一切 Inspector 表单里的 `value_box` /
@@ -218,6 +261,40 @@ pub fn place_form(
             edit,
             view,
             PlaceFieldPatch::rank_only(id.clone(), place.name.clone(), rank_buf),
+        );
+    }
+
+    // ── POI 类别（ADR-0064）──────────────────────────────────────────
+    // 选「未分类」= 清空（命令传 None），YAML 不落 `kind` 行。
+    // 与级别下拉同款：选完立即提交一条可撤销命令，没有确定按钮。
+    let mut kind_buf = place.kind.unwrap_or(PoiKind::Other);
+    ui.horizontal(|ui| {
+        ui.label(format!(
+            "{}：",
+            t_key(current_loc, I18nKey::InspectorPlaceKind)
+        ));
+        egui::ComboBox::from_id_salt("place_kind")
+            .selected_text(t_key(current_loc, poi_kind_label_key(kind_buf)))
+            .show_ui(ui, |ui| {
+                for k in PoiKind::ALL {
+                    ui.selectable_value(
+                        &mut kind_buf,
+                        k,
+                        t_key(current_loc, poi_kind_label_key(k)),
+                    );
+                }
+            });
+    });
+    if kind_buf != place.kind.unwrap_or(PoiKind::Other) {
+        set_place_kind_now(
+            projection,
+            edit,
+            id.clone(),
+            if kind_buf == PoiKind::Other {
+                None
+            } else {
+                Some(kind_buf)
+            },
         );
     }
 
@@ -335,6 +412,7 @@ mod tests {
 
     fn place_with_line(line: Option<Vec<f32>>) -> Place {
         Place {
+            kind: None,
             line,
             id: Id::new_unchecked("p1"),
             name: "P".into(),

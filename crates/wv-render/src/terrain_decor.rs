@@ -49,10 +49,23 @@ const BUCKET_Z_STEP: f32 = 0.0004;
 const MAX_SITES_PER_KIND: usize = 2200;
 /// 视口外扩余量（屏幕像素）：拖动相机时边缘符号不闪断。
 const VIEWPORT_MARGIN_PX: f32 = 32.0;
-/// `SymbolStyle::Tile` 的一次性告警标记（ADR-0058 D3）：贴图装载通道待 v2，
-/// warn 每进程只发一次——`site_primitives` 是逐站点调用的，每站点刷屏会把
-/// 日志埋了。
-static TILE_STYLE_WARNED: std::sync::Once = std::sync::Once::new();
+/// `SymbolStyle::Tile` 的一次性告警标记（ADR-0059 D3 / 追记一）：贴图装载通道
+/// 待 v2，warn 每进程**每类符号**只发一次——`site_primitives` 是逐站点调用的，
+/// 每站点刷屏会把日志埋了。
+///
+/// **按类别各持一个 `Once`**（不共用）：共用会让后出现的类别被前一类的告警
+/// 吞掉，调试「谁真的用了 Tile」时看不到真实使用者。
+static TILE_STYLE_WARNED_MOUNTAIN: std::sync::Once = std::sync::Once::new();
+static TILE_STYLE_WARNED_FOREST: std::sync::Once = std::sync::Once::new();
+
+/// `Tile` 键在 v1 的统一兜底：一次性 warn 后由调用方走 `Default` 逻辑。
+fn warn_tile_style_once(flag: &std::sync::Once, kind: &str, key: &str) {
+    flag.call_once(|| {
+        warn!(
+            "SymbolStyle::Tile({key:?})：{kind}贴图装载通道待 v2（ADR-0023 M3），回退内置默认符号"
+        );
+    });
+}
 
 /// 装饰类别（八类）。下标即渲染桶序号。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,18 +212,16 @@ fn hash01(x: i64, y: i64, seed: u64) -> f32 {
     (h >> 11) as f32 / (1u64 << 53) as f32
 }
 
-/// 一个站点的一次性输入（重构自原 8 参 `site_primitives`）：把位置参数收进
-/// 具名字段，消除 `too_many_arguments`，并让各符号族各成一法、可单独演进。
+/// 一个采样点的装饰符号集合：`(|dx|, |dy|, r|半宽, 半高|, 桶)` 三角形列表。
 ///
-/// 字段语义：
-/// - `kind`：该格**该画哪一族**的符号（域事实 → 画法）。
-/// - `band`：缩放档，决定尺寸倍率 `size_mul`。
-/// - `(cx, cy)`：格坐标——**同时也是哈希种子的一部分**，换格即换抖动。
-/// - `height_m`：该格海拔（米），雪帽线 / 露岩线由此判定。
-/// - `fy`：归一化 y（0 = 北），森林气候带切点由此判定。
-/// - `variant`：region 覆盖物**强制**的变体（作者声明优先于气候派生）。
-/// - `recipe`：主题配方（墨色 / 阈值 / 步距 / 尺寸倍率）。
-struct SiteCtx<'a> {
+/// 坐标是**相对格中心的屏幕像素**（调用方乘 `view.scale` 转世界单位）。
+/// 输出 `(dx, dy, half_w, half_h)` 四元组——都是轴对齐缩放后的三角形顶点
+/// 由 [`build_bucket_mesh`] 统一三角化；这里只产出**符号图元参数**。
+///
+/// v1 用「相对偏移 + 半径」的圆 / 半圆 / 三角参数化，避免在每个采样点手写
+/// 顶点循环：三角化集中在 mesh 构建一处（改形状只动一处）。
+#[allow(clippy::too_many_arguments)] // 符号参数（kind/位置/高度/气候带/变体）+ 主题配方
+pub fn site_primitives(
     kind: DecorKind,
     band: DecorBand,
     cx: i64,
@@ -218,52 +229,17 @@ struct SiteCtx<'a> {
     height_m: i16,
     fy: f32,
     variant: Option<DecorVariant>,
-    recipe: &'a DecorRecipe,
-}
-
-impl SiteCtx<'_> {
-    /// 产出该站点的全部符号图元：`(|dx|, |dy|, r|半宽, 半高|, 桶)` 列表。
-    ///
-    /// 坐标是**相对格中心的屏幕像素**（调用方乘 `view.scale` 转世界单位）。
-    /// 输出四元组由 [`build_bucket_mesh`] 统一三角化——这里只产出**符号图元
-    /// 参数**（v1 用「相对偏移 + 半径」的圆 / 半圆 / 三角参数化，避免每个采样点
-    /// 手写顶点循环：改形状只动这里一处）。
-    ///
-    /// 分派：乱石滩涂（Boulder）是**与族无关**的专用形状，先行特判；其余按
-    /// `kind` 分派到各符号族方法。
-    fn primitives(self) -> Vec<SitePrim> {
-        let mut out = Vec::new();
-        let m = self.band.size_mul(self.recipe);
-        if self.variant == Some(DecorVariant::Boulder) {
-            self.boulder(&mut out, m);
-            return out;
-        }
-        // 三个独立哈希盐：落点抖动 / 形状变体 / 尺寸变体。
-        let r = [
-            hash01(self.cx, self.cy, 1),
-            hash01(self.cx, self.cy, 2),
-            hash01(self.cx, self.cy, 3),
-        ];
-        match self.kind {
-            DecorKind::Forest => self.forest(&mut out, m, r),
-            DecorKind::Plains => self.plains(&mut out, m, r),
-            DecorKind::Hills => self.hills(&mut out, m, r),
-            DecorKind::Mountain => self.mountain(&mut out, m, r),
-            DecorKind::Snow => self.snow(&mut out, m, r),
-            DecorKind::Desert => self.desert(&mut out, m, r),
-            DecorKind::OceanWaves => self.ocean_waves(&mut out, m, r),
-            DecorKind::Marsh => self.marsh(&mut out, m, r),
-        }
-        out
-    }
-
-    /// 乱石滩涂：与族无关的专用形状（region 覆盖物键 `boulder_field`）。
-    fn boulder(&self, out: &mut Vec<SitePrim>, m: f32) {
+    recipe: &DecorRecipe,
+) -> Vec<SitePrim> {
+    let mut out = Vec::new();
+    let m = band.size_mul(recipe);
+    // 乱石滩涂：与族无关的专用形状（region 覆盖物键 `boulder_field`）。
+    if variant == Some(DecorVariant::Boulder) {
         for k in 0..4u64 {
-            let jx = (hash01(self.cx, self.cy, 30 + k) - 0.5) * 9.0;
-            let jy = (hash01(self.cx, self.cy, 40 + k) - 0.5) * 8.0;
+            let jx = (hash01(cx, cy, 30 + k) - 0.5) * 9.0;
+            let jy = (hash01(cx, cy, 40 + k) - 0.5) * 8.0;
             out.push(SitePrim::colored(
-                self.kind,
+                kind,
                 jx * m,
                 jy * m,
                 1.7 * m,
@@ -272,244 +248,248 @@ impl SiteCtx<'_> {
                 [0.54, 0.52, 0.46, 0.85],
             ));
         }
+        return out;
     }
-
-    /// 森林：气候变体（ADR-0039 D3）沿 y 轴三档；region 覆盖物可强制变体。
-    ///
-    /// 颜色 = 顶点色（桶材质为白）；形状区分针叶排 / 阔叶团 / 绿洲稀树。
-    /// 变体色由主题配方给定（ADR-0048 追记二）。
-    fn forest(&self, out: &mut Vec<SitePrim>, m: f32, r: [f32; 3]) {
-        let (r1, r2) = (r[0], r[1]);
-        let boreal = self.recipe.conifer_ink.to_rgba();
-        let temperate = self.recipe.temperate_ink.to_rgba();
-        let oasis = self.recipe.oasis_ink.to_rgba();
-        // **region 覆盖物可强制变体**（ADR-0045 D2/D9）：作者声明「这片用
-        // 针叶画」→ 变体由声明决定，**优先于** y 轴气候带派生。
-        let variant = match self.variant {
-            Some(v @ (DecorVariant::Conifer | DecorVariant::Broadleaf | DecorVariant::Sparse)) => v,
-            _ => {
-                if self.fy < self.recipe.climate_cuts[0] {
-                    DecorVariant::Conifer
-                } else if self.fy < self.recipe.climate_cuts[1] {
-                    DecorVariant::Broadleaf
-                } else {
-                    DecorVariant::Sparse
+    let r1 = hash01(cx, cy, 1);
+    let r2 = hash01(cx, cy, 2);
+    let r3 = hash01(cx, cy, 3);
+    match kind {
+        DecorKind::Forest => {
+            // 画法分派（ADR-0059 追记一）：「画不画 / 换画法」由主题裁定——
+            // None：群系格不铺林团，林身份交给地形色（core[4]）+ 具名地物的
+            //   覆盖物树图集（`FeatureRule::symbol_texture`），本站点不产图元；
+            // Tile：贴图装载通道待 v2（ADR-0023 M3），一次性 warn 后走 Default
+            //   保底——森林的变体维度（寒带 / 温带 / 干旱）在贴图方案下由
+            //   「图集等分 + `(种子, 站点序号) % variants`」承载，故单键契约
+            //   无需扩容（见 `DecorRecipe::forest_style` 文档）；
+            // Default：内置三变体程序化形状（下方逻辑不变）。
+            match recipe.forest_style {
+                SymbolStyle::None => return out,
+                SymbolStyle::Tile(key) => {
+                    warn_tile_style_once(&TILE_STYLE_WARNED_FOREST, "森林", key);
                 }
+                SymbolStyle::Default => {}
             }
-        };
-        if variant == DecorVariant::Conifer {
-            // 针叶：3 棵细三角（宽窄高挑），成排。
-            for s in 0..3u64 {
-                let jx = (hash01(self.cx, self.cy, 10 + s) - 0.5) * 9.0;
-                let jy = (hash01(self.cx, self.cy, 20 + s) - 0.5) * 8.0;
+            // 气候变体（ADR-0039 D3）：沿 y 轴（0=北）三档。
+            // 颜色 = 顶点色（桶材质为白）；形状区分针叶排 / 阔叶团 / 绿洲稀树。
+            // 变体色由主题配方给定（ADR-0048 追记二）。
+            let boreal = recipe.conifer_ink.to_rgba();
+            let temperate = recipe.temperate_ink.to_rgba();
+            let oasis = recipe.oasis_ink.to_rgba();
+            // **region 覆盖物可强制变体**（ADR-0045 D2/D9）：作者声明「这片用
+            // 针叶画」→ 变体由声明决定，**优先于** y 轴气候带派生。
+            let variant = match variant {
+                Some(
+                    v @ (DecorVariant::Conifer | DecorVariant::Broadleaf | DecorVariant::Sparse),
+                ) => v,
+                _ => {
+                    if fy < recipe.climate_cuts[0] {
+                        DecorVariant::Conifer
+                    } else if fy < recipe.climate_cuts[1] {
+                        DecorVariant::Broadleaf
+                    } else {
+                        DecorVariant::Sparse
+                    }
+                }
+            };
+            if variant == DecorVariant::Conifer {
+                // 针叶：3 棵细三角（宽窄高挑），成排。
+                for s in 0..3u64 {
+                    let jx = (hash01(cx, cy, 10 + s) - 0.5) * 9.0;
+                    let jy = (hash01(cx, cy, 20 + s) - 0.5) * 8.0;
+                    out.push(SitePrim::colored(
+                        kind,
+                        jx * m,
+                        jy * m,
+                        1.7 * m,
+                        3.4 * m,
+                        PrimShape::Triangle,
+                        boreal,
+                    ));
+                }
+            } else if variant == DecorVariant::Broadleaf {
+                // 阔叶：3 颗小圆（径 2.6px），确定性散布在 ±5px 内。
+                for s in 0..3u64 {
+                    let jx = (hash01(cx, cy, 10 + s) - 0.5) * 10.0;
+                    let jy = (hash01(cx, cy, 20 + s) - 0.5) * 8.0;
+                    out.push(SitePrim::colored(
+                        kind,
+                        jx * m,
+                        jy * m,
+                        2.6 * m,
+                        2.6 * m,
+                        PrimShape::Circle,
+                        temperate,
+                    ));
+                }
+            } else {
+                // 绿洲稀树：1 颗暖绿小团（密度减半由 keep_prob 处理）。
                 out.push(SitePrim::colored(
-                    self.kind,
-                    jx * m,
-                    jy * m,
-                    1.7 * m,
-                    3.4 * m,
-                    PrimShape::Triangle,
-                    boreal,
-                ));
-            }
-        } else if variant == DecorVariant::Broadleaf {
-            // 阔叶：3 颗小圆（径 2.6px），确定性散布在 ±5px 内。
-            for s in 0..3u64 {
-                let jx = (hash01(self.cx, self.cy, 10 + s) - 0.5) * 10.0;
-                let jy = (hash01(self.cx, self.cy, 20 + s) - 0.5) * 8.0;
-                out.push(SitePrim::colored(
-                    self.kind,
-                    jx * m,
-                    jy * m,
-                    2.6 * m,
-                    2.6 * m,
+                    kind,
+                    (r1 - 0.5) * 6.0 * m,
+                    (r2 - 0.5) * 6.0 * m,
+                    1.8 * m,
+                    1.8 * m,
                     PrimShape::Circle,
-                    temperate,
+                    oasis,
                 ));
             }
-        } else {
-            // 绿洲稀树：1 颗暖绿小团（密度减半由 keep_prob 处理）。
-            out.push(SitePrim::colored(
-                self.kind,
+        }
+        DecorKind::Plains => {
+            // 草点：单颗 1.2px 微圆，稀疏感靠步距。
+            out.push(SitePrim::circle(
+                kind,
                 (r1 - 0.5) * 6.0 * m,
                 (r2 - 0.5) * 6.0 * m,
-                1.8 * m,
-                1.8 * m,
-                PrimShape::Circle,
-                oasis,
+                1.2 * m,
             ));
         }
-    }
-
-    /// 平原：草点（单颗 1.2px 微圆，稀疏感靠步距）。
-    fn plains(&self, out: &mut Vec<SitePrim>, m: f32, r: [f32; 3]) {
-        let (r1, r2) = (r[0], r[1]);
-        out.push(SitePrim::circle(
-            self.kind,
-            (r1 - 0.5) * 6.0 * m,
-            (r2 - 0.5) * 6.0 * m,
-            1.2 * m,
-        ));
-    }
-
-    /// 丘陵：半圆丘（宽 9px 高 5px，底边贴格中心下方）。
-    fn hills(&self, out: &mut Vec<SitePrim>, m: f32, r: [f32; 3]) {
-        let r1 = r[0];
-        out.push(SitePrim::half_disc(
-            self.kind,
-            (r1 - 0.5) * 4.0 * m,
-            1.0 * m,
-            4.5 * m,
-            5.0 * m,
-        ));
-    }
-
-    /// 山：三角山 + 背光面 + 簇生次峰 + 雪帽 + 露岩（见下方逐段注释）。
-    fn mountain(&self, out: &mut Vec<SitePrim>, m: f32, r: [f32; 3]) {
-        let (r1, r2, r3) = (r[0], r[1], r[2]);
-        // 画法分派（ADR-0059 D3）：「画不画 / 换画法」由主题裁定——
-        // None：山体表达收敛到等值线 / 皴法 / 海配方 / 地形色，
-        //   本站点不产任何图元（水墨包的画法，方案 §7 留白裁定的彻底化）；
-        // Tile：贴图装载通道待 v2（ADR-0023 M3），一次性 warn 后
-        //   走 Default 保底（「缺资产不崩」）；
-        // Default：内置默认程序化形状（下方逻辑不变）。
-        match self.recipe.mountain_style {
-            SymbolStyle::None => return,
-            SymbolStyle::Tile(key) => {
-                TILE_STYLE_WARNED.call_once(|| {
-                    warn!(
-                        "SymbolStyle::Tile({key:?})：山体贴图装载通道待 v2（ADR-0023 M3），回退内置默认山符号"
-                    );
-                });
+        DecorKind::Hills => {
+            // 半圆丘：宽 9px 高 5px 的半圆（底边贴格中心下方）。
+            out.push(SitePrim::half_disc(
+                kind,
+                (r1 - 0.5) * 4.0 * m,
+                1.0 * m,
+                4.5 * m,
+                5.0 * m,
+            ));
+        }
+        DecorKind::Mountain => {
+            // 画法分派（ADR-0059 D3）：「画不画 / 换画法」由主题裁定——
+            // None：山体表达收敛到等值线 / 皴法 / 海配方 / 地形色，
+            //   本站点不产任何图元（水墨包的画法，方案 §7 留白裁定的彻底化）；
+            // Tile：贴图装载通道待 v2（ADR-0023 M3），一次性 warn 后
+            //   走 Default 保底（「缺资产不崩」）；
+            // Default：内置默认程序化形状（下方逻辑不变）。
+            match recipe.mountain_style {
+                SymbolStyle::None => return out,
+                SymbolStyle::Tile(key) => {
+                    warn_tile_style_once(&TILE_STYLE_WARNED_MOUNTAIN, "山体", key);
+                }
+                SymbolStyle::Default => {}
             }
-            SymbolStyle::Default => {}
-        }
-        // 三角山（ADR-0042 手绘化）：主三角右侧叠一道深色背光面——
-        // 参考图的山是「受光面 + 背光面」两面体，单色三角只是剪影。
-        // 宽 13px 高 11px；海拔 ≥ 1800m 顶部叠雪帽（小三角，雪桶）。
-        //
-        // D13 变体化：同一种三角山在全图重复会像「栅栏」。按格哈希给
-        // 每座山 ±35% 尺寸 + 两成概率簇生第二峰——山链有大小起伏，
-        // 且不再是一个模子刻出来的。
-        let size_k = 0.68 + 0.64 * r3;
-        let dx = (r1 - 0.5) * 5.0 * m;
-        let w = 6.5 * m * size_k;
-        let h = 11.0 * m * size_k;
-        out.push(SitePrim::triangle(self.kind, dx, 2.0 * m, w, h));
-        out.push(SitePrim::colored(
-            self.kind,
-            dx + w * 0.37,
-            2.0 * m,
-            w * 0.65,
-            h * 0.76,
-            PrimShape::Triangle,
-            self.recipe.mountain_shade_ink.to_rgba(), // 背光面（压暗右侧）
-        ));
-        // 簇生次峰：约 30% 的山旁再起一座小的（低 35%、偏移随机）。
-        if r2 > 0.70 {
-            let ox = (r2 - 0.5) * 14.0 * m;
-            out.push(SitePrim::triangle(
-                self.kind,
-                dx + ox,
-                2.0 * m,
-                w * 0.55,
-                h * 0.62,
-            ));
-        }
-        if self.height_m >= self.recipe.snow_cap_h {
-            out.push(SitePrim::triangle(
-                DecorKind::Snow,
-                0.0,
-                4.5 * m * size_k,
-                2.6 * m * size_k,
-                3.5 * m * size_k,
-            ));
-        }
-        // 极高山露岩（ADR-0039 D4）：>=3400m 雪帽内缘叠露岩三角
-        // （进 Snow 桶第二层图元，顶点色区分）。色走主题 rock_ink
-        // （ADR-0059 D6：此前硬编码 #C9B98A，绕过主题——水墨包的
-        // 岩墨灰自此生效）。
-        if self.height_m >= self.recipe.rock_h {
+            // 三角山（ADR-0042 手绘化）：主三角右侧叠一道深色背光面——
+            // 参考图的山是「受光面 + 背光面」两面体，单色三角只是剪影。
+            // 宽 13px 高 11px；海拔 ≥ 1800m 顶部叠雪帽（小三角，雪桶）。
+            //
+            // D13 变体化：同一种三角山在全图重复会像「栅栏」。按格哈希给
+            // 每座山 ±35% 尺寸 + 两成概率簇生第二峰——山链有大小起伏，
+            // 且不再是一个模子刻出来的。
+            let size_k = 0.68 + 0.64 * r3;
+            let dx = (r1 - 0.5) * 5.0 * m;
+            let w = 6.5 * m * size_k;
+            let h = 11.0 * m * size_k;
+            out.push(SitePrim::triangle(kind, dx, 2.0 * m, w, h));
             out.push(SitePrim::colored(
-                DecorKind::Snow,
-                0.0,
-                3.2 * m * size_k,
-                1.5 * m * size_k,
-                2.2 * m * size_k,
+                kind,
+                dx + w * 0.37,
+                2.0 * m,
+                w * 0.65,
+                h * 0.76,
                 PrimShape::Triangle,
-                self.recipe.rock_ink.to_rgba(),
+                recipe.mountain_shade_ink.to_rgba(), // 背光面（压暗右侧）
+            ));
+            // 簇生次峰：约 30% 的山旁再起一座小的（低 35%、偏移随机）。
+            if r2 > 0.70 {
+                let ox = (r2 - 0.5) * 14.0 * m;
+                out.push(SitePrim::triangle(
+                    kind,
+                    dx + ox,
+                    2.0 * m,
+                    w * 0.55,
+                    h * 0.62,
+                ));
+            }
+            if height_m >= recipe.snow_cap_h {
+                out.push(SitePrim::triangle(
+                    DecorKind::Snow,
+                    0.0,
+                    4.5 * m * size_k,
+                    2.6 * m * size_k,
+                    3.5 * m * size_k,
+                ));
+            }
+            // 极高山露岩（ADR-0039 D4）：>=3400m 雪帽内缘叠露岩三角
+            // （进 Snow 桶第二层图元，顶点色区分）。色走主题 rock_ink
+            // （ADR-0059 D6：此前硬编码 #C9B98A，绕过主题——水墨包的
+            // 岩墨灰自此生效）。
+            if height_m >= recipe.rock_h {
+                out.push(SitePrim::colored(
+                    DecorKind::Snow,
+                    0.0,
+                    3.2 * m * size_k,
+                    1.5 * m * size_k,
+                    2.2 * m * size_k,
+                    PrimShape::Triangle,
+                    recipe.rock_ink.to_rgba(),
+                ));
+            }
+        }
+        DecorKind::Snow => {
+            // 雪原白丘：宽 10px 高 4px 的扁半圆。
+            out.push(SitePrim::half_disc(
+                kind,
+                (r1 - 0.5) * 5.0 * m,
+                1.0 * m,
+                5.0 * m,
+                4.0 * m,
             ));
         }
+        DecorKind::Desert => {
+            // 沙丘：两道扁半圆脊错位叠出风向（宽 9/7px、高 3.2/2.6px）。
+            out.push(SitePrim::half_disc(
+                kind,
+                (r1 - 0.5) * 3.0 * m,
+                1.0 * m,
+                4.5 * m,
+                3.2 * m,
+            ));
+            out.push(SitePrim::half_disc(
+                kind,
+                (r2 - 0.5) * 3.0 * m + 2.6 * m,
+                -1.2 * m,
+                3.5 * m,
+                2.6 * m,
+            ));
+            let _ = r3;
+        }
+        DecorKind::OceanWaves => {
+            // 浅海白波（ADR-0039 D2，ADR-0042 提密提亮）：1 条细弧。
+            // 旧值 2.4×1.4 @ alpha 0.5 在 Nation 档几乎不可见（实机截图
+            // 确认）；放大到 3.4×2.0 @ alpha 0.62 后远处读得出「海在动」。
+            // 密度衰减由调用方 keep_prob 处理（深度越深越稀）。
+            let _ = (r2, r3);
+            out.push(SitePrim::colored(
+                kind,
+                (r1 - 0.5) * 6.0 * m,
+                (r2 - 0.5) * 4.0 * m,
+                3.4 * m,
+                2.0 * m,
+                PrimShape::Arc,
+                [0.99, 0.99, 1.0, 0.62], // 白波
+            ));
+        }
+        DecorKind::Marsh => {
+            // 芦苇：2 根细三角（高 6px）+ 底部水线意象由半圆替代。
+            let ox = (r1 - 0.5) * 6.0 * m;
+            out.push(SitePrim::triangle(
+                kind,
+                ox - 2.0 * m,
+                0.0,
+                0.6 * m,
+                6.0 * m,
+            ));
+            out.push(SitePrim::triangle(
+                kind,
+                ox + 2.0 * m,
+                0.0,
+                0.6 * m,
+                5.0 * m,
+            ));
+            let _ = (r2, r3);
+        }
     }
-
-    /// 雪原：白丘（宽 10px 高 4px 的扁半圆）。
-    fn snow(&self, out: &mut Vec<SitePrim>, m: f32, r: [f32; 3]) {
-        let r1 = r[0];
-        out.push(SitePrim::half_disc(
-            self.kind,
-            (r1 - 0.5) * 5.0 * m,
-            1.0 * m,
-            5.0 * m,
-            4.0 * m,
-        ));
-    }
-
-    /// 沙漠：两道扁半圆脊错位叠出风向（宽 9/7px、高 3.2/2.6px）。
-    fn desert(&self, out: &mut Vec<SitePrim>, m: f32, r: [f32; 3]) {
-        let (r1, r2) = (r[0], r[1]);
-        out.push(SitePrim::half_disc(
-            self.kind,
-            (r1 - 0.5) * 3.0 * m,
-            1.0 * m,
-            4.5 * m,
-            3.2 * m,
-        ));
-        out.push(SitePrim::half_disc(
-            self.kind,
-            (r2 - 0.5) * 3.0 * m + 2.6 * m,
-            -1.2 * m,
-            3.5 * m,
-            2.6 * m,
-        ));
-    }
-
-    /// 浅海白波（ADR-0039 D2，ADR-0042 提密提亮）：1 条细弧。
-    ///
-    /// 旧值 2.4×1.4 @ alpha 0.5 在 Nation 档几乎不可见（实机截图确认）；
-    /// 放大到 3.4×2.0 @ alpha 0.62 后远处读得出「海在动」。密度衰减由
-    /// 调用方 `keep_prob` 处理（深度越深越稀）。
-    fn ocean_waves(&self, out: &mut Vec<SitePrim>, m: f32, r: [f32; 3]) {
-        let (r1, r2) = (r[0], r[1]);
-        out.push(SitePrim::colored(
-            self.kind,
-            (r1 - 0.5) * 6.0 * m,
-            (r2 - 0.5) * 4.0 * m,
-            3.4 * m,
-            2.0 * m,
-            PrimShape::Arc,
-            [0.99, 0.99, 1.0, 0.62], // 白波
-        ));
-    }
-
-    /// 沼泽：芦苇（2 根细三角，高 6px）。
-    fn marsh(&self, out: &mut Vec<SitePrim>, m: f32, r: [f32; 3]) {
-        let r1 = r[0];
-        let ox = (r1 - 0.5) * 6.0 * m;
-        out.push(SitePrim::triangle(
-            self.kind,
-            ox - 2.0 * m,
-            0.0,
-            0.6 * m,
-            6.0 * m,
-        ));
-        out.push(SitePrim::triangle(
-            self.kind,
-            ox + 2.0 * m,
-            0.0,
-            0.6 * m,
-            5.0 * m,
-        ));
-    }
+    out
 }
 
 /// 一个符号图元：形状 + 相对格中心的屏幕像素偏移 / 半径（调用方统一换算）。
@@ -1090,17 +1070,7 @@ pub fn sync_terrain_decor(
                 ink_rgb[2] as f32 / 255.0,
                 ink_a,
             ];
-            let ctx = SiteCtx {
-                kind,
-                band,
-                cx,
-                cy: gy,
-                height_m: ph,
-                fy,
-                variant,
-                recipe,
-            };
-            for mut prim in ctx.primitives() {
+            for mut prim in site_primitives(kind, band, cx, gy, ph, fy, variant, recipe) {
                 if prim.color == [0.0, 0.0, 0.0, 0.0] {
                     prim.color = ink;
                 }
@@ -1302,36 +1272,9 @@ mod tests {
         assert!(DecorBand::Region.size_mul(&recipe()) < DecorBand::Edit.size_mul(&recipe()));
     }
 
-    /// 测试便捷构造：把 8 个位置参数收成一个入口，最小化调用点噪声。
-    /// 生产路径走 [`SiteCtx`] 结构体字面量（无 `too_many_arguments`）；
-    /// 此处保留位置参数仅为测试可读性，属**测试专用的可辩护例外**。
-    #[allow(clippy::too_many_arguments)]
-    fn prims_at(
-        kind: DecorKind,
-        band: DecorBand,
-        cx: i64,
-        cy: i64,
-        height_m: i16,
-        fy: f32,
-        variant: Option<DecorVariant>,
-        recipe: &DecorRecipe,
-    ) -> Vec<SitePrim> {
-        SiteCtx {
-            kind,
-            band,
-            cx,
-            cy,
-            height_m,
-            fy,
-            variant,
-            recipe,
-        }
-        .primitives()
-    }
-
     #[test]
     fn site_primitives_are_deterministic() {
-        let a = prims_at(
+        let a = site_primitives(
             DecorKind::Forest,
             DecorBand::Edit,
             100,
@@ -1341,7 +1284,7 @@ mod tests {
             None,
             &recipe(),
         );
-        let b = prims_at(
+        let b = site_primitives(
             DecorKind::Forest,
             DecorBand::Edit,
             100,
@@ -1352,7 +1295,7 @@ mod tests {
             &recipe(),
         );
         assert_eq!(a, b, "同输入必须同符号（确定性）");
-        let c = prims_at(
+        let c = site_primitives(
             DecorKind::Forest,
             DecorBand::Edit,
             101,
@@ -1367,7 +1310,7 @@ mod tests {
 
     #[test]
     fn mountains_above_snow_line_get_a_snow_cap_prim() {
-        let high = prims_at(
+        let high = site_primitives(
             DecorKind::Mountain,
             DecorBand::Edit,
             5,
@@ -1381,7 +1324,7 @@ mod tests {
             high.iter().any(|p| p.bucket == DecorKind::Snow),
             "2200m 山应有雪帽图元"
         );
-        let low = prims_at(
+        let low = site_primitives(
             DecorKind::Mountain,
             DecorBand::Edit,
             5,
@@ -1400,7 +1343,7 @@ mod tests {
     #[test]
     fn ocean_waves_spawn_in_shallow_band_only() {
         // ADR-0039 D2：-10m（浅海）有波浪图元；陆地/深海没有。
-        let shallow = prims_at(
+        let shallow = site_primitives(
             DecorKind::OceanWaves,
             DecorBand::Edit,
             10,
@@ -1426,7 +1369,7 @@ mod tests {
     #[test]
     fn forest_climate_variants_differ_by_fy() {
         // ADR-0039 D3：针叶（北）= 细三角；阔叶（中）= 圆团；绿洲（南）= 孤团。
-        let boreal = prims_at(
+        let boreal = site_primitives(
             DecorKind::Forest,
             DecorBand::Edit,
             10,
@@ -1436,7 +1379,7 @@ mod tests {
             None,
             &recipe(),
         );
-        let temperate = prims_at(
+        let temperate = site_primitives(
             DecorKind::Forest,
             DecorBand::Edit,
             10,
@@ -1446,7 +1389,7 @@ mod tests {
             None,
             &recipe(),
         );
-        let oasis = prims_at(
+        let oasis = site_primitives(
             DecorKind::Forest,
             DecorBand::Edit,
             10,
@@ -1478,7 +1421,7 @@ mod tests {
     #[test]
     fn alpine_peaks_get_rock_accent() {
         // ADR-0039 D4：>=3400m 雪帽 + 帽缘露岩（Snow 桶第二图元，黄褐）。
-        let peak = prims_at(
+        let peak = site_primitives(
             DecorKind::Mountain,
             DecorBand::Edit,
             5,
@@ -1493,7 +1436,7 @@ mod tests {
             .filter(|p| p.bucket == DecorKind::Snow && p.color[0] > 0.7 && p.color[2] < 0.7)
             .collect();
         assert_eq!(rocks.len(), 1, "3500m 峰应有 1 块露岩，得 {}", rocks.len());
-        let low = prims_at(
+        let low = site_primitives(
             DecorKind::Mountain,
             DecorBand::Edit,
             5,
@@ -1510,14 +1453,14 @@ mod tests {
         );
     }
 
-    /// ADR-0058 D3：`mountain_style: None` 时山站点不产任何图元——
+    /// ADR-0059 D3：`mountain_style: None` 时山站点不产任何图元——
     /// 水墨包的画法：山体表达收敛到等值线重墨 + 海岸顿笔，「不画」是
     /// 正常画法而非异常态（连雪帽 / 露岩一并让位）。
     #[test]
     fn mountain_style_none_yields_no_mountain_primitives() {
         let mut r = recipe();
         r.mountain_style = SymbolStyle::None;
-        let prims = prims_at(
+        let prims = site_primitives(
             DecorKind::Mountain,
             DecorBand::Edit,
             5,
@@ -1534,13 +1477,13 @@ mod tests {
         );
     }
 
-    /// ADR-0058 D3：`Tile` 画法 v1 一次性 warn 后回退 `Default`——
+    /// ADR-0059 D3：`Tile` 画法 v1 一次性 warn 后回退 `Default`——
     /// 装载通道待 v2（ADR-0023 M3），分派本身不 panic 且保底画默认山符号。
     #[test]
     fn mountain_style_tile_falls_back_to_default_without_panic() {
         let mut r = recipe();
         r.mountain_style = SymbolStyle::Tile("terrain/mountain_tile.png");
-        let prims = prims_at(
+        let prims = site_primitives(
             DecorKind::Mountain,
             DecorBand::Edit,
             5,

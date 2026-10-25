@@ -65,8 +65,59 @@ pub const GOOGLE_ROAD_CASING: Color = hex(0xDADCE0);
 /// 道路主体（fill）：白色。
 pub const GOOGLE_ROAD_FILL: Color = hex(0xFFFFFF);
 
-/// 高速公路 / 主干道强调色。当前 Edge 尚无道路等级，先作为专题图预留令牌。
+/// 高速公路 / 主干道强调色。
+///
+/// **2026-10-25 起已接线**：本令牌此前是「当前 Edge 尚无道路等级，先作为专题图
+/// 预留令牌」的空转常量；`PlaceEdge::effective_rank` 提供 1/2/3 三档之后，
+/// 改由 [`GOOGLE_ROAD_GRADES`] 承担分级配色，本常量保留为最高档的参照值。
 pub const GOOGLE_HIGHWAY_STROKE: Color = hex(0xF9C25C);
+
+/// 一档道路的分级样式（填充色 / 路缘色 / 两个宽度，单位屏幕像素）。
+///
+/// **为什么需要分级**：Google / 百度普通地图的层次感几乎全部来自「粗细 + 色阶」。
+/// 单一白路 + 灰缘会让整个路网糊成一片同质的网——2026-10-25 的样张对比里，
+/// 关掉分级后地图立刻失去可读的主次。
+#[derive(Debug, Clone, Copy)]
+pub struct RoadGradeStyle {
+    /// 道路主体色。
+    pub fill: Color,
+    /// 路缘色（比 fill 宽出的那一圈）。
+    pub casing: Color,
+    /// 主体宽度（屏幕像素）。
+    pub fill_px: f32,
+    /// 路缘宽度（屏幕像素，必须 > `fill_px`）。
+    pub casing_px: f32,
+}
+
+/// 三档道路样式，索引 0 = 最高等级。
+///
+/// **与 LOD 三档同构**（ADR-0047 D4 的 `road_rank_cuts`）：`rank ≥ 3` 城际干线
+/// （Nation 档起可见）/ `rank = 2` 区域干道（Region 档起）/ `rank = 1` 地方道路
+/// （仅 Edit 档）。排序后同档连续，故渲染侧只需三段前缀切片，零额外存储。
+pub const GOOGLE_ROAD_GRADES: [RoadGradeStyle; 3] = [
+    // 城际干线：橙黄填充 + 深一档橙缘（「沈海高速」的观感，最粗）
+    RoadGradeStyle {
+        fill: hex(0xF9C25C),
+        casing: hex(0xE3A54B),
+        fill_px: 5.0,
+        casing_px: 7.2,
+    },
+    // 区域干道：饱和黄填充 + 浅灰缘（百度城市区最常见的「主干黄」，2026-10-25
+    // 依第二张参考图（珠海 / 澳门）校准：初版 #FBDB92 过淡，密集路网里读不出主次）
+    RoadGradeStyle {
+        fill: hex(0xFBD366),
+        casing: hex(0xDADCE0),
+        fill_px: 3.6,
+        casing_px: 5.4,
+    },
+    // 地方道路：白填充 + 灰缘（分级前所有道路的样子）
+    RoadGradeStyle {
+        fill: hex(0xFFFFFF),
+        casing: hex(0xDADCE0),
+        fill_px: 2.4,
+        casing_px: 4.0,
+    },
+];
 
 /// 选中 / 链接等交互强调色：Google Blue。
 pub const GOOGLE_ACCENT_HIGHLIGHT: Color = hex(0x1A73E8);
@@ -91,6 +142,38 @@ pub const GOOGLE_COAST_WATER: Color = hex(0xAADAFF);
 pub const GOOGLE_COAST_LAND: Color = hex(0xF8F9FA);
 /// Google 式浅色轮廓图海岸线。
 pub const GOOGLE_COAST_LINE_COLOR: Color = hex(0x9AA0A6);
+
+/// 专业制图的行政 / 势力边界线（样张图例「边界 · 虚线 #C4C4C4」）。
+///
+/// 与 `BORDER_INK`（势力图模式的深褐墨线）分开：势力图要「墨线夹两色」的
+/// 手绘语汇，普通地图只要一条低对比灰线，不抢道路与注记。
+pub const GOOGLE_BORDER: Color = hex(0xC4C4C4);
+
+// ── POI 分类色（ADR-0064）──
+//
+// 色相取检索类地图的通用语汇：餐饮橙、住宿紫、医疗红、景点绿、交通蓝、
+// 行政青、教育靛、商业品红。未分类 / 聚落沿用 `GOOGLE_PLACE_DOT`（Google 红）
+// ——红点是「搜索结果」的默认外观，也是最不容易与绿地/水面混淆的一档。
+//
+// 为什么不放在 `wv-world-cell-map`：那是数据视图的固定色（ADR-0054 禁令），
+// 而 POI 分类色属于地图呈现的主题色，归 here。
+
+/// 餐饮。
+pub const GOOGLE_POI_FOOD: Color = hex(0xF57C00);
+/// 住宿。
+pub const GOOGLE_POI_LODGING: Color = hex(0x7B1FA2);
+/// 医疗。
+pub const GOOGLE_POI_MEDICAL: Color = hex(0xD93025);
+/// 景点 / 公园 / 古迹。
+pub const GOOGLE_POI_SCENIC: Color = hex(0x1E8E3E);
+/// 交通站点（车站 / 码头 / 渡口）。
+pub const GOOGLE_POI_TRANSIT: Color = hex(0x1A73E8);
+/// 行政 / 政府。
+pub const GOOGLE_POI_GOVERNMENT: Color = hex(0x00796B);
+/// 教育 / 科研。
+pub const GOOGLE_POI_EDUCATION: Color = hex(0x3949AB);
+/// 商业 / 购物。
+pub const GOOGLE_POI_SHOP: Color = hex(0xC2185B);
 
 /// 兼容旧调用的淡化目标色；Google 模式实际会忽略淡化开关，避免洗掉水色。
 pub const GOOGLE_SOFTEN_TOWARD: Color = hex(0xF8F9FA);

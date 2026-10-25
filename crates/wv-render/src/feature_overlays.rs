@@ -95,6 +95,14 @@ const EMBEDDED_TEXTURES: &[(&str, &[u8])] = &[
         include_bytes!("../assets/overlays/forest/tree_atlas_dusk.png"),
     ),
     (
+        // 手绘水彩树冠（2026-10-25 接入）：源图 `assets/水彩主题/树冠.png`，
+        // 经 `assets/process_symbols.py` 去底裁切成 96px，再由
+        // `assets/build_forest_atlas.py` 拼成 3 变体图集（当前三格同图，
+        // 美术给出针叶 / 阔叶 / 团块三形态后换格即可，契约零改动）。
+        "overlays/forest/tree_atlas_canopy.png",
+        include_bytes!("../assets/overlays/forest/tree_atlas_canopy.png"),
+    ),
+    (
         "overlays/forest/forest_fill.png",
         include_bytes!("../assets/overlays/forest/forest_fill.png"),
     ),
@@ -194,6 +202,24 @@ fn decode_texture(bytes: &[u8]) -> Option<Image> {
 /// 求值在 `wv-core`，本系统不做任何 `day > …` 比较（AGENTS §3）。
 ///
 /// **坐标口径**：地界顶点与近带采样点都是**本图局部坐标**，mesh 顶点保持局部，
+/// 近带覆盖物符号的 alpha。
+///
+/// **GoogleMap（专业制图）恒为 0**（2026-10-25）：该模式的绿地由**群系色块**
+/// 表达（`GOOGLE_CORE_TERRAIN[4] = #C9E7C7`），再叠一层手绘树图集是两套语义
+/// 打架——百度 / Google 的普通地图里，森林就是一块实色多边形，没有满地树图标。
+/// 主理人 2026-10-25 的裁定「色块表示就可以，不关心贴图」即此意。
+///
+/// 地界晕（halo）**保留**：它是「具名地物的辖域」这一**事实**的呈现，与画法
+/// 无关；专业地图同样需要「这片是莲花山森林公园」的边界暗示。
+///
+/// 其余模式：近带满强度、远带退场（原有口径）。
+fn feature_symbol_alpha(mode: crate::state::ViewMode, blend: f32, opacity: f32) -> f32 {
+    if mode == crate::state::ViewMode::GoogleMap {
+        return 0.0;
+    }
+    (1.0 - blend) * opacity
+}
+
 /// 由 `Transform` 平移到 `grid.map_origin`（等价于逐点 `GridConfig::map_to_view`）。
 /// 近带采样换到**栅格**格时用 `map_origin - raster_origin` 作偏移——子图继承
 /// 父图底图时两套原点不同（见 `GridConfig` 的两套原点表）。
@@ -225,7 +251,7 @@ pub fn sync_feature_overlays(
     // 远带晕：近带保留 40% 浓度，随 scale 增长到 100%。
     let halo_band = HALO_NEAR_FLOOR + (1.0 - HALO_NEAR_FLOOR) * blend;
     // 近带符号：近带满强度，远带退场。
-    let symbol_alpha = (1.0 - blend) * layers.place.opacity;
+    let symbol_alpha = feature_symbol_alpha(view.mode, blend, layers.place.opacity);
     let opacity = layers.place.opacity;
     // ADR-0013 槽位偏移：晕与符号同属 Place 渲染组，作者 `z` 平移整组
     // （与 `faction_overlays` 的 `FACTION_Z + layers.influence.z_offset` 同款）。
@@ -638,6 +664,7 @@ mod tests {
     #[test]
     fn forest_family_biomes_resolve_to_their_family() {
         let mut p = wv_core::distance::Place {
+            kind: None,
             line: None,
             id: wv_core::Id::new_unchecked("p"),
             name: "p".into(),
@@ -679,6 +706,7 @@ mod tests {
     #[test]
     fn ruleless_family_still_produces_a_fallback_overlay() {
         let p = wv_core::distance::Place {
+            kind: None,
             line: None,
             id: wv_core::Id::new_unchecked("p_desert"),
             name: "沙漠".into(),
@@ -934,5 +962,42 @@ mod tests {
         let image = decode_texture(bytes).expect("内嵌 PNG 应可解码");
         assert_eq!(image.width(), 384, "横向 3 格 × 128");
         assert_eq!(image.height(), 128, "单格 128");
+    }
+
+    /// 手绘水彩树冠图集（2026-10-25 接入）：288×96 = 3 格 × 96。
+    ///
+    /// **为什么钉住尺寸**：`build_symbol_mesh_uv_seeded` 按
+    /// `SYMBOL_ATLAS_VARIANTS = 3` 横向等分 UV，**不看图片实际宽高**——
+    /// 若换图时格子数或宽高比变了（如误拼 4 格、或非正方形格），UV 会切到
+    /// 相邻格子的内容，树上出现半棵树且无任何报错。此断言是唯一守点。
+    #[test]
+    fn embedded_canopy_atlas_decodes_to_three_square_cells() {
+        let bytes =
+            embedded_texture("overlays/forest/tree_atlas_canopy.png").expect("手绘树冠图集应内嵌");
+        let image = decode_texture(bytes).expect("内嵌 PNG 应可解码");
+        assert_eq!(image.width(), 288, "横向 3 格 × 96");
+        assert_eq!(image.height(), 96, "单格 96 正方形");
+    }
+
+    /// GoogleMap（专业制图）不画覆盖物符号：绿地由群系色块表达。
+    ///
+    /// 防回归：有人「统一」成 `(1.0 - blend) * opacity` 后，水彩树图集会在
+    /// 普通地图上重新出现——那正是 2026-10-25 用户裁定要消除的混合观感。
+    #[test]
+    fn google_mode_draws_no_feature_symbols() {
+        use crate::state::ViewMode;
+        assert_eq!(
+            feature_symbol_alpha(ViewMode::GoogleMap, 0.0, 1.0),
+            0.0,
+            "普通地图近带也不画符号"
+        );
+        assert_eq!(
+            feature_symbol_alpha(ViewMode::GoogleMap, 0.0, 0.6),
+            0.0,
+            "图层不透明度也不该把符号拉回来"
+        );
+        // 其余模式维持原口径：近带满强度、远带退场。
+        assert!((feature_symbol_alpha(ViewMode::VectorFlat, 0.0, 1.0) - 1.0).abs() < 1e-6);
+        assert!(feature_symbol_alpha(ViewMode::VectorFlat, 1.0, 1.0).abs() < 1e-6);
     }
 }

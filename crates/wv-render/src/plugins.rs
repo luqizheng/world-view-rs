@@ -56,6 +56,9 @@ impl Plugin for MapRenderPlugin {
                 layer_frame::resolve_layer_frame,
                 // 等值线矢量叠加（ADR-0012 / plan v0.1 M2）
                 crate::cellmap_bridge::sync_isoline_overlay,
+                // 群系矢量面（ADR-0062，专业制图专属）：压在纹理块之上、
+                // 海岸线之下——把绿地从「格子块」换成平滑多边形。
+                crate::biome_fill::sync_biome_fills,
                 // 地形分块 + mip + 视口拣选（优化项 3a/3b/3c）
                 crate::cellmap_bridge::sync_terrain_chunks,
                 // 纸纹叠加（ADR-0042）：斑驳 + 晕影，图幅变化时重建
@@ -84,7 +87,9 @@ impl Plugin for MapRenderPlugin {
         // draw_map_gizmos ResMut 它——漏 init 即启动期 panic（同 EditCellState 教训）。
         .init_resource::<crate::region_overlay::CandidateOverlayCache>()
         // 纸纹叠层运行时状态（贴图句柄 + 当前台实体，ADR-0042）。
-        .init_resource::<paper_overlay::PaperOverlay>();
+        .init_resource::<paper_overlay::PaperOverlay>()
+        // 群系矢量面状态（ADR-0062）：漏 init 即启动期 panic（同 EditCellState 教训）。
+        .init_resource::<crate::biome_fill::BiomeFills>();
     }
 }
 

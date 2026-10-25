@@ -1031,6 +1031,7 @@ fn build_world(
         // City Place（带 map + x/y + w/h 锚定）
         let place_id = format!("place_{id}");
         let place = wv_core::distance::Place {
+            kind: None,
             line: None,
             id: wv_core::Id::new_unchecked(&place_id),
             name: name.clone(),
@@ -1052,6 +1053,7 @@ fn build_world(
     for (id, name, lon, lat) in intersection_places {
         let (x, y) = project_lat_lon_to_xy(*lat, *lon, &bbox, &extent_root);
         places.push(wv_core::distance::Place {
+            kind: None,
             line: None,
             id: wv_core::Id::new_unchecked(id),
             name: name.clone(),

@@ -2,7 +2,8 @@
 
 > 界面字体（ADR-0019）：**拉丁 Inter、中文 Noto Sans SC**，`theme/fonts.rs`
 > 以 `include_bytes!` 编译期嵌入，经 `LoadedFonts` 注册进 egui 与 Bevy。
-> 本目录只放 **正文字重（Regular）**——注册位当前只消费这两个文件。
+> 本目录只放 **正文字重（Regular）**——三个文件都注册：Inter 与 Noto 为界面 / 画布
+> 标签默认字体，文楷为可选书法体（ADR-0065）。
 
 ## 文件
 
@@ -10,7 +11,12 @@
 |---|---|---|---|---|
 | `Inter-Regular.ttf` | Inter Regular | 4.001 | SIL OFL-1.1 | 拉丁（比例族 `Proportional` 首位） |
 | `NotoSansSC-Regular.ttf` | Noto Sans SC Regular | 2.004 | SIL OFL-1.1 | 中文（比例族回退）+ Bevy `Text2d` 地名标注 |
-| `LXGWWenKai-Regular.ttf` | 霞鹜文楷（LXGW WenKai）Regular | 1.530 | SIL OFL-1.1 | **画布标签书法体**（ADR-0042 D4）：地名 / 街道名 / 测量标注（`LoadedFonts::label_handle`）；egui 命名族 `wv_map_label`。UI 面板**不用**它 |
+| `LXGWWenKai-Regular.ttf` | 霞鹜文楷（LXGW WenKai）Regular | 1.530 | SIL OFL-1.1 | **可选**书法体（ADR-0042 D4，**默认已被 ADR-0065 改为 Noto**）：仅 `LoadedFonts::calligraphy_handle` 显式选用；egui 命名族 `wv_map_label` 回退位。UI 面板**不用**它 |
+
+> **2026-10-25 追记（ADR-0065）**：画布标签（地名 / POI / 街道名 / 测量）
+> **默认字体改 Noto Sans SC**——霞鹜文楷在 12px 下笔画只有 1px、被纸色晕圈吃掉，
+> 地图上读不清。文楷资产**保留**，主题若要书法地名可显式取
+> `LoadedFonts::calligraphy_handle()`；默认路径不再消费它。
 
 霞鹜文楷同为 **SIL Open Font License 1.1**（许可全文见
 [`lxgw/LxgwWenKai`](https://github.com/lxgw/LxgwWenKai/blob/main/OFL.txt)；

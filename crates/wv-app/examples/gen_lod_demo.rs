@@ -14,7 +14,7 @@
 //! 的标准保存链路落盘（每实体一文件 §4.5、terrain.bin 经 `write_terrain_if_any`
 //! 写出并回写 RasterRef）——生成物天然与加载器 schema 一致（round-trip 同源）。
 
-use wv_core::distance::{Place, PlaceEdge, Vehicle};
+use wv_core::distance::{Place, PlaceEdge, PoiKind, Vehicle};
 use wv_core::event::{Event, EventLocation};
 use wv_core::id::Id;
 use wv_core::map::{Extent, Layer, LayerKind, MapLevel, MapNode};
@@ -154,6 +154,7 @@ fn build_world(meta: WorldMeta) -> World {
     // ---- 距离图：4 城（is_city）+ 6 点标（!is_city）--------------------
     // 城市有 w/h；点标只有锚点坐标（AGENTS §「双重身份」：None = 点 icon）。
     let city = |id: &str, name: &str, x: f32, y: f32| Place {
+        kind: Some(PoiKind::Settlement),
         line: None,
         id: Id::new(id).unwrap(),
         name: name.into(),
@@ -168,6 +169,7 @@ fn build_world(meta: WorldMeta) -> World {
         rank: None,
     };
     let dot = |id: &str, name: &str, x: f32, y: f32| Place {
+        kind: None,
         line: None,
         id: Id::new(id).unwrap(),
         name: name.into(),

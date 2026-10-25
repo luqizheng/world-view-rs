@@ -39,6 +39,7 @@ fn map_node() -> MapNode {
 
 fn forest_place() -> Place {
     Place {
+        kind: None,
         line: None,
         id: id("place_forest"),
         name: "黑森林".into(),

@@ -95,7 +95,14 @@ impl LandmarkBatch {
     /// 局部坐标：原点 = 锚点（Place 的 x/y）= pin 底尖，符号向上生长（y+）。
     /// 两种 `LandmarkKind` 共用同一形状——等级语义由标签层承担，符号层不画。
     pub fn push_map_pin(&mut self, o: Vec2, s: f32) {
-        let body = [0.16, 0.18, 0.22, 1.0]; // 深墨针体
+        self.push_map_pin_tinted(o, s, [0.16, 0.18, 0.22, 1.0]);
+    }
+
+    /// 同 [`Self::push_map_pin`]，但针体颜色由调用方给（白芯不变）。
+    ///
+    /// 专业制图的分类 POI 用它：**同一 pin 形状**、按类别换针体色（ADR-0064
+    /// 追记：先统一形状，后续再补各类图标）。
+    pub fn push_map_pin_tinted(&mut self, o: Vec2, s: f32, body: [f32; 4]) {
         let hole = [1.0, 1.0, 1.0, 1.0]; // 白芯（map-pin 内圆）
                                          // 尾：圆底两侧收到底尖（上边 y=11 藏进头圆内，衔接无接缝）。
         self.tri([-5.6, 11.0], [5.6, 11.0], [0.0, 0.0], body, o, s);
@@ -215,6 +222,35 @@ mod tests {
     #[test]
     fn empty_batch_builds_no_mesh() {
         assert!(build_landmark_mesh(LandmarkBatch::new()).is_none());
+    }
+
+    /// 分类 pin：针体色由调用方给、白芯不变；形状与默认 pin 逐顶点一致。
+    #[test]
+    fn tinted_pin_keeps_shape_and_swaps_body_color_only() {
+        let mut tinted = LandmarkBatch::new();
+        tinted.push_map_pin_tinted(Vec2::ZERO, 1.0, [1.0, 0.0, 0.0, 1.0]);
+        let mut plain = LandmarkBatch::new();
+        plain.push_map_pin(Vec2::ZERO, 1.0);
+
+        assert_eq!(
+            tinted.verts, plain.verts,
+            "只换色不换形，位置序列必须逐点相同"
+        );
+        assert_ne!(tinted.colors, plain.colors, "针体色应不同");
+        assert!(
+            tinted
+                .colors
+                .iter()
+                .any(|c| (c[0] - 1.0).abs() < 1e-6 && c[1] < 1e-6 && c[2] < 1e-6),
+            "针体应为给定红色"
+        );
+        assert!(
+            tinted
+                .colors
+                .iter()
+                .any(|c| c[0] == 1.0 && c[1] == 1.0 && c[2] == 1.0),
+            "白芯必须保留（否则 pin 在深色底图上失去可辨性）"
+        );
     }
 
     /// 符号向上生长：pin 底尖贴锚点，头圆在锚点上方。

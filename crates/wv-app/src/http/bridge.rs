@@ -519,6 +519,7 @@ mod tests {
     fn list_places_filter_applies_mini_dsl() {
         let mut w = World::default();
         w.distances.places.push(wv_core::distance::Place {
+            kind: None,
             id: Id::new_unchecked("qingyun"),
             name: "青云城".into(),
             map: None,
@@ -532,6 +533,7 @@ mod tests {
             rank: None,
         });
         w.distances.places.push(wv_core::distance::Place {
+            kind: None,
             id: Id::new_unchecked("wuhan"),
             name: "武汉".into(),
             map: None,
@@ -569,6 +571,7 @@ mod tests {
         let mut w = World::default();
         for i in 0..150 {
             w.distances.places.push(wv_core::distance::Place {
+                kind: None,
                 id: Id::new_unchecked(format!("p_{i:03}")),
                 name: format!("Place {i}"),
                 map: None,
@@ -605,6 +608,7 @@ mod tests {
         let mut w = World::default();
         for i in 0..150 {
             w.distances.places.push(wv_core::distance::Place {
+                kind: None,
                 id: Id::new_unchecked(format!("p_{i:03}")),
                 name: format!("Place {i}"),
                 map: None,
@@ -662,6 +666,7 @@ mod tests {
         let mut history = History::default();
 
         let place = wv_core::distance::Place {
+            kind: None,
             id: Id::new_unchecked("qingyun"),
             name: "青云城".into(),
             map: None,
@@ -697,6 +702,7 @@ mod tests {
 
         // 先 apply 一条 AddPlaceCommand
         let place = wv_core::distance::Place {
+            kind: None,
             id: Id::new_unchecked("qingyun"),
             name: "青云城".into(),
             map: None,

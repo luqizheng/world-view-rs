@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>专业地图样式 · 样张</title>
+<style>
+  :root{
+    --paper:#F1F3F4; --card:#FFFFFF; --line:#DADCE0; --ink:#202124; --ink2:#5F6368;
+    --blue:#1A73E8;
+  }
+  *{box-sizing:border-box}
+  body{margin:0; background:var(--paper); color:var(--ink);
+       font-family:"PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif}
+  header{padding:22px 28px 12px; background:#fff; border-bottom:1px solid var(--line)}
+  h1{margin:0 0 6px; font-size:19px; font-weight:600; letter-spacing:.01em}
+  .sub{margin:0; font-size:12.5px; color:var(--ink2); line-height:1.75}
+  .sub code{font-family:ui-monospace,Consolas,monospace; font-size:11.5px; background:#F1F3F4; padding:1px 5px; border-radius:3px}
+  .bar{display:flex; gap:20px; align-items:center; padding:10px 28px; background:#fff; border-bottom:1px solid var(--line); font-size:13px; color:var(--ink2)}
+  .bar label{display:flex; align-items:center; gap:7px; cursor:pointer}
+  .bar input{accent-color:var(--blue)}
+  main{padding:20px 28px 8px; max-width:1500px; margin:0 auto}
+  .frame{background:#fff; border:1px solid var(--line); border-radius:6px; overflow:hidden; box-shadow:0 1px 3px rgba(60,64,67,.08)}
+  canvas{display:block; width:100%; height:auto}
+  footer{padding:14px 28px 30px; max-width:1500px; margin:0 auto}
+  .legend{display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:8px 26px; font-size:12.5px; color:var(--ink2); line-height:1.7}
+  .legend b{color:var(--ink); font-weight:600}
+  .sw{display:inline-block; width:14px; height:14px; border-radius:3px; border:1px solid rgba(0,0,0,.08); margin-right:7px; vertical-align:-2px}
+  .note{margin-top:14px; padding:11px 15px; border-left:3px solid var(--blue); background:#E8F0FE; font-size:12.5px; line-height:1.8; color:#174EA6}
+</style>
+</head>
+<body>
+<header>
+  <h1>专业地图样式 · 样张</h1>
+  <p class="sub">
+    依据 <code>wv-theme/src/colors_google.rs</code> 的既有色值绘制（近白陆地 <code>#F8F9FA</code> / 淡水 <code>#AADAFF</code> / 绿地 <code>#C9E7C7</code> / 路缘 <code>#DADCE0</code> / 文字 <code>#3C4043</code>）。
+    参照「百度地图普通地图」的信息层级：底图极简、道路分级、水系与绿地色块、POI 分类、注记白描边。
+  </p>
+</header>
+
+<div class="bar">
+  <label><input type="checkbox" id="graded" checked> 道路分级着色</label>
+  <label><input type="checkbox" id="smooth" checked> 绿地边缘平滑</label>
+  <label><input type="checkbox" id="labels" checked> 注记（白描边）</label>
+  <label><input type="checkbox" id="poi" checked> POI 分类符号</label>
+</div>
+
+<main>
+  <div class="frame"><canvas id="map"></canvas></div>
+</main>
+
+<footer>
+  <div class="legend">
+    <div><b>水</b> <span class="sw" style="background:#AADAFF"></span>面 <span class="sw" style="background:#7FBEEA"></span>线</div>
+    <div><b>绿地</b> <span class="sw" style="background:#C9E7C7"></span>公园 / 林地</div>
+    <div><b>湿地</b> <span class="sw" style="background:#BBDCC9"></span>沼泽</div>
+    <div><b>高速</b> <span class="sw" style="background:#F9C25C"></span>高等级</div>
+    <div><b>主干</b> <span class="sw" style="background:#FFE09B"></span>次高</div>
+    <div><b>次干 / 支路</b> <span class="sw" style="background:#FFFFFF"></span>白 + 灰缘</div>
+    <div><b>边界</b> <span class="sw" style="background:#C4C4C4"></span>虚线</div>
+    <div><b>文字</b> <span class="sw" style="background:#3C4043"></span>深灰 + 白描边</div>
+  </div>
+  <div class="note">
+    这张图只用了项目已有色值与「色块 + 线条 + 几何 POI」，没有加载任何贴图。道路分级与绿地平滑是当前引擎<b>尚缺</b>的两项
+    （<code>GOOGLE_HIGHWAY_STROKE</code> 至今是注释里写明的「预留令牌」）；取消勾选即可看到它们的实际贡献。
+  </div>
+</footer>
+
+<script>
+const W = 960, H = 640, DPR = 2;
+const cv = document.getElementById("map");
+cv.width = W * DPR; cv.height = H * DPR;
+const ctx = cv.getContext("2d");
+
+const C = {
+  land: "#F4F5F6", water: "#AADAFF", river: "#7FBEEA",
+  green: "#C9E7C7", greenEdge: "#B4DCB2",
+  marsh: "#BBDCC9",
+  casing: "#DADCE0", road: "#FFFFFF",
+  high: "#F5A93C", primary: "#FBD366",
+  border: "#C4C4C4",
+  ink: "#3C4043", ink2: "#5F6368",
+  poiBlue: "#1A73E8", poiGreen: "#188038", poiRed: "#EA4335",
+};
+
+/* ---------- 场景数据（手工编排，模仿城郊路网） ---------- */
+const forestPoly = [
+  [330,118],[382,104],[422,126],[470,96],[522,110],[566,132],[602,152],[620,196],
+  [598,230],[630,266],[588,292],[540,304],[498,282],[462,310],[416,296],[384,266],
+  [348,262],[330,226],[316,190],[336,158]
+];
+const marshPoly = [[706,404],[772,392],[812,422],[800,470],[742,486],[700,458]];
+const river = [[-20,300],[90,312],[150,342],[214,368],[286,362],[352,386],[420,420],
+               [500,452],[560,500],[640,520],[720,556],[820,560],[980,600]];
+
+const roads = [
+  // 高速（斜穿）
+  { cls:"high", w:7, pts:[[-20,150],[120,168],[250,206],[380,252],[520,286],[660,300],[800,318],[980,330]] },
+  // 主干道
+  { cls:"primary", w:4.5, pts:[[150,-20],[168,120],[196,250],[210,380],[228,520],[240,660]] },
+  { cls:"primary", w:4.5, pts:[[-20,430],[120,424],[260,436],[400,468],[540,486],[700,470],[980,476]] },
+  { cls:"primary", w:4, pts:[[430,-20],[438,120],[452,240],[470,300]] },
+  // 次干 / 支路
+  { cls:"minor", w:3, pts:[[60,-20],[72,140],[88,300],[96,460],[110,660]] },
+  { cls:"minor", w:3, pts:[[300,-20],[318,100],[326,200]] },
+  { cls:"minor", w:3, pts:[[560,300],[600,380],[640,470],[660,660]] },
+  { cls:"minor", w:3, pts:[[820,330],[840,420],[860,520],[880,660]] },
+  { cls:"minor", w:2.5, pts:[[230,540],[340,548],[460,556],[560,548]] },
+  { cls:"minor", w:2.5, pts:[[640,180],[720,186],[800,180],[900,190]] },
+];
+
+const borders = [
+  [[40,560],[200,548],[380,556],[560,540],[760,552],[960,566]],
+  [[300,60],[420,44],[560,52],[680,44],[820,56]],
+];
+
+const towns = [
+  { x:196, y:250, name:"铁铺镇", big:false },
+  { x:88,  y:300, name:"官塘镇", big:false },
+  { x:470, y:300, name:"莲花池", big:false },
+  { x:660, y:300, name:"塘西村", big:false },
+];
+
+const pois = [
+  { x:196, y:186, name:"铁铺车站", kind:"station" },
+  { x:540, y:486, name:"莲花镇客运站", kind:"station" },
+  { x:228, y:520, name:"隆都客运站", kind:"station" },
+  { x:452, y:214, name:"莲花山", kind:"scenic" },
+  { x:560, y:400, name:"莲花乡村旅游区", kind:"scenic" },
+];
+
+/* ---------- 绘制 ---------- */
+function roundStroke(pts, color, width, alpha){
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.globalAlpha = alpha === undefined ? 1 : alpha;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+function smoothPoly(pts, on){
+  if (!on) return pts;
+  // Chaikin 一次细分：每个角切掉 22%，保留地块棱角。
+  // （旧的「中点平均」会把不规则地块抹成椭圆，那不是地图而是色斑。）
+  const out = [];
+  for (let i = 0; i < pts.length; i++){
+    const p = pts[i], q = pts[(i + 1) % pts.length];
+    out.push([p[0] * 0.78 + q[0] * 0.22, p[1] * 0.78 + q[1] * 0.22]);
+    out.push([p[0] * 0.22 + q[0] * 0.78, p[1] * 0.22 + q[1] * 0.78]);
+  }
+  return out;
+}
+
+function fillPoly(pts, color, edge){
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+  if (edge){ ctx.strokeStyle = edge; ctx.lineWidth = 1; ctx.stroke(); }
+}
+
+function label(text, x, y, opts){
+  const o = opts || {};
+  const size = o.size || 12.5;
+  ctx.font = `${o.weight || 400} ${size}px "PingFang SC","Microsoft YaHei",sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  if (document.getElementById("labels").checked){
+    ctx.lineWidth = 3.2;
+    ctx.strokeStyle = "#FFFFFF";
+    ctx.lineJoin = "round";
+    ctx.strokeText(text, x, y);
+  }
+  ctx.fillStyle = o.color || C.ink;
+  ctx.fillText(text, x, y);
+}
+
+function poiIcon(p){
+  const s = 15;
+  if (p.kind === "station"){
+    ctx.fillStyle = C.poiBlue;
+    ctx.beginPath();
+    ctx.roundRect(p.x - s/2, p.y - s/2, s, s, 3);
+    ctx.fill();
+    // 车厢符号
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(p.x - 4.5, p.y - 4, 9, 6.5);
+    ctx.fillStyle = C.poiBlue;
+    ctx.fillRect(p.x - 3.4, p.y - 3, 6.8, 3.2);
+    ctx.fillStyle = "#FFFFFF";
+    ctx.beginPath(); ctx.arc(p.x - 2.4, p.y + 3.2, 1.1, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(p.x + 2.4, p.y + 3.2, 1.1, 0, 7); ctx.fill();
+  } else {
+    ctx.fillStyle = C.poiGreen;
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y - s/2);
+    ctx.lineTo(p.x + s/2, p.y);
+    ctx.lineTo(p.x, p.y + s/2);
+    ctx.lineTo(p.x - s/2, p.y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#FFFFFF";
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y - 4.2);
+    ctx.lineTo(p.x + 3.6, p.y + 2.2);
+    ctx.lineTo(p.x - 3.6, p.y + 2.2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillRect(p.x - 0.8, p.y + 2.2, 1.6, 2);
+  }
+}
+
+function draw(){
+  const graded = document.getElementById("graded").checked;
+  const smooth = document.getElementById("smooth").checked;
+  const showPoi = document.getElementById("poi").checked;
+
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  // 底：陆地
+  ctx.fillStyle = C.land;
+  ctx.fillRect(0, 0, W, H);
+
+  // 湿地
+  fillPoly(smooth ? smoothPoly(marshPoly, true) : marshPoly, C.marsh, null);
+
+  // 绿地（公园 / 林地）——色块即表达，无符号
+  fillPoly(smooth ? smoothPoly(forestPoly, true) : forestPoly, C.green, C.greenEdge);
+
+  // 水系：面（宽线模拟河面）+ 线（河道中线）
+  roundStroke(river, C.water, 9);
+  roundStroke(river, C.river, 1.6, 0.7);
+
+  // 行政边界（虚线）
+  ctx.setLineDash([6, 5]);
+  borders.forEach(b => roundStroke(b, C.border, 1.2, 0.9));
+  ctx.setLineDash([]);
+
+  // 道路：先画 casing，再画 fill（分级）
+  const paint = (r, color, w) => {
+    roundStroke(r.pts, C.casing, w + (r.cls === "minor" ? 1.6 : 2.2));
+    roundStroke(r.pts, color, w);
+  };
+  // 支路先画，主干后画（模拟「重要者在上」）
+  roads.filter(r => r.cls === "minor").forEach(r => paint(r, "#FFFFFF", r.w));
+  roads.filter(r => r.cls === "primary").forEach(r => paint(r, graded ? C.primary : C.road, r.w));
+  roads.filter(r => r.cls === "high").forEach(r => {
+    paint(r, graded ? C.high : C.road, r.w);
+    if (graded){
+      // 高速内侧亮线（百度式高亮）
+      roundStroke(r.pts, "#FFC46B", r.w * 0.26, 0.85);
+    }
+  });
+
+  // 聚落点
+  towns.forEach(t => {
+    ctx.fillStyle = "#9AA0A6";
+    ctx.beginPath(); ctx.arc(t.x, t.y, 2.6, 0, 7); ctx.fill();
+  });
+
+  // 路名（沿路文字，专业地图的必要信息）
+  label("沈海高速", 520, 268, { size: 10.5, color: "#8A6A1F" });
+  label("潮汕环线", 300, 424, { size: 10.5, color: "#8A6A1F" });
+
+  // POI 符号
+  if (showPoi) pois.forEach(poiIcon);
+
+  // 注记（重要者字号大、次要先画）
+  towns.forEach(t => label(t.name, t.x, t.y + 14, { size: 11.5, color: C.ink2 }));
+  pois.forEach(p => label(p.name, p.x + (p.kind === "station" ? 0 : 0), p.y + 16,
+                            { size: 11.5, color: p.kind === "scenic" ? "#137333" : C.ink2 }));
+
+  // 图名（左上，模拟地图标题卡）
+  ctx.fillStyle = "rgba(255,255,255,.94)";
+  ctx.strokeStyle = C.casing;
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(20, 18, 176, 30, 4); ctx.fill(); ctx.stroke();
+  label("莲花山片区", 108, 33, { size: 13.5, weight: 600, color: C.ink });
+
+  // 比例尺（右下）
+  const sx = W - 118, sy = H - 26;
+  ctx.strokeStyle = C.ink2; ctx.lineWidth = 1.4;
+  ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx + 80, sy); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(sx, sy - 4); ctx.lineTo(sx, sy + 4); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(sx + 80, sy - 4); ctx.lineTo(sx + 80, sy + 4); ctx.stroke();
+  label("2 km", sx + 40, sy - 11, { size: 10.5, color: C.ink2 });
+}
+
+["graded", "smooth", "labels", "poi"].forEach(id => {
+  document.getElementById(id).onchange = draw;
+});
+draw();
+</script>
+</body>
+</html>

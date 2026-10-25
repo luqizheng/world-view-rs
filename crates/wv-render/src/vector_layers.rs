@@ -34,15 +34,57 @@ use crate::layer_frame::LayerFrame;
 use crate::recipe::{PassId, RenderRecipe};
 use crate::state::{lod_tier, GridConfig, ViewState};
 use crate::theme::colors_google::{
-    GOOGLE_PLACE_DOT, GOOGLE_POI_RING, GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL,
+    GOOGLE_PLACE_DOT, GOOGLE_POI_EDUCATION, GOOGLE_POI_FOOD, GOOGLE_POI_GOVERNMENT,
+    GOOGLE_POI_LODGING, GOOGLE_POI_MEDICAL, GOOGLE_POI_RING, GOOGLE_POI_SCENIC, GOOGLE_POI_SHOP,
+    GOOGLE_POI_TRANSIT, GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL, GOOGLE_ROAD_GRADES,
 };
 use crate::theme::palette::{self, MapPalette, PaletteColors};
 use crate::world_projection::{segments_fingerprint, PlaceDot, ProjectionFrame};
+use wv_core::distance::PoiKind;
 
-/// Google 式道路外缘宽度（屏幕像素）。
+/// Google 式道路外缘宽度（屏幕像素）——**非分级主题**（古舆图等）的兜底值。
+/// Google 模式按 [`GOOGLE_ROAD_GRADES`] 三档取宽，不再用这两个常量。
 const GOOGLE_ROAD_CASING_PX: f32 = 6.0;
-/// Google 式道路主体宽度（屏幕像素）。
+/// Google 式道路主体宽度（屏幕像素）——同上，仅兜底用。
 const GOOGLE_ROAD_FILL_PX: f32 = 3.5;
+
+/// 道路分级档数：与 `PlaceEdge::effective_rank` 的 1/2/3 三档一一对应。
+///
+/// 索引 0 = 最高等级（`rank ≥ 3`，Nation 档起可见），2 = 最低（仅 Edit 档）。
+/// 段列已按 rank 降序排列，故三档在切片内是**连续区间**——渲染侧只需三个
+/// 前缀切点，零额外存储（ADR-0047 D4 的 `road_rank_cuts` 正好就是这三个点）。
+const ROAD_GRADES: usize = 3;
+
+/// 第 `grade` 档的 (casing, fill) 屏幕像素宽度。
+fn road_grade_px(mode: crate::state::ViewMode, grade: usize) -> (f32, f32) {
+    match mode {
+        crate::state::ViewMode::GoogleMap => {
+            let g = GOOGLE_ROAD_GRADES[grade.min(ROAD_GRADES - 1)];
+            (g.casing_px, g.fill_px)
+        }
+        _ => (GOOGLE_ROAD_CASING_PX, GOOGLE_ROAD_FILL_PX),
+    }
+}
+
+/// 当前档位视野内，三档道路在段切片中的 `[start, end)` 区间。
+///
+/// `cuts` 是 [`ProjectionFrame::road_rank_cuts`]（下标序 Edit/Region/Nation，
+/// 值是各档的可见前缀长度）。因为段列按 rank 降序，`rank ≥ 3` 一定落在
+/// `[0, cuts[2])`、`rank = 2` 落在 `[cuts[2], cuts[1])`、`rank = 1` 落在
+/// `[cuts[1], cuts[0])`。Nation 档前缀只有 `cuts[2]`，故后两档天然为空。
+fn road_grade_spans(
+    tier: crate::state::LodTier,
+    cuts: [usize; 3],
+) -> [(usize, usize); ROAD_GRADES] {
+    let len = match tier {
+        crate::state::LodTier::Edit => cuts[0],
+        crate::state::LodTier::Region => cuts[1],
+        crate::state::LodTier::Nation => cuts[2],
+    };
+    let hi = cuts[2].min(len);
+    let mid = cuts[1].min(len);
+    [(0, hi), (hi, mid), (mid, len)]
+}
 /// POI 点标在屏幕上的最小可见直径（像素）。
 const POI_MIN_SCREEN_PX: f32 = 5.0;
 
@@ -262,14 +304,37 @@ pub(crate) fn thickness_drifted(next: f32, baked: f32) -> bool {
     (next - baked).abs() > 0.04 * baked.max(f32::EPSILON)
 }
 
-/// POI 门槛 + 密度上限选择（ADR-0030 D2/D3）。
+/// POI 屏幕网格边长（屏幕像素）。96px ≈ 一个街区尺度：1600×900 视口约
+/// 17×10 格，每格 1~2 个点，正好是检索类地图的观感。
+const POI_GRID_PX: f32 = 96.0;
+
+/// 每格保留点数：Edit 档 2（作者要看细节），更远的档 1（只留地标）。
+const fn poi_cell_quota(tier: crate::state::LodTier) -> usize {
+    use crate::state::LodTier;
+    match tier {
+        LodTier::Edit => 2,
+        _ => 1,
+    }
+}
+
+/// POI 门槛 + 密度选择（ADR-0030 D2/D3；ADR-0064 D2 加屏幕网格配额）。
 ///
-/// 输入 = `compute_projection` 已视口裁剪的本帧点标；输出 = 过级别硬门
-/// [`crate::state::poi_visible_at_rank`] 后按优先级降序截断到
-/// [`POI_MAX_DOTS`] 的幸存者。优先级序：`rank` > `is_city` > 名字长度
-/// （更长者信息量更大，与标签碰撞优先级同一惯例）。排序稳定，同优先级
-/// 保持原序（确定性好测试）。
-fn select_pois(dots: &[PlaceDot], tier: crate::state::LodTier) -> Vec<&PlaceDot> {
+/// 两步：
+/// 1. **级别硬门** [`crate::state::poi_visible_at_rank`]；
+/// 2. **屏幕网格配额**：按视图坐标落进 `POI_GRID_PX` 的格，格内按优先级
+///    只留 [`poi_cell_quota`] 个，最后整体截到 [`POI_MAX_DOTS`]。
+///
+/// **为什么不能只做全局截断**（旧行为）：全局排序后截 400，密集城区的高 rank
+/// 点会把名额全吃掉，稀疏区域反而空着；观感是「城里糊成一片、乡下什么都没有」。
+/// 检索类地图的密度控制本来就是**空间均匀**的——每屏网格留几个，而不是全局
+/// 留几百个。
+///
+/// 优先级序：`rank` > `is_city` > 名字长度（更长者信息量更大，与标签碰撞
+/// 优先级同一惯例）。排序稳定，同优先级保持原序（确定性好测试）。
+///
+/// `view_scale` 是「世界单位 / 屏幕像素」：乘出格的世界边长，保证配额按
+/// **屏幕**均匀而不是按世界坐标均匀（放大时格子随视口变小，点才不会挤在一起）。
+fn select_pois(dots: &[PlaceDot], tier: crate::state::LodTier, view_scale: f32) -> Vec<&PlaceDot> {
     let mut visible: Vec<&PlaceDot> = dots
         .iter()
         .filter(|d| crate::state::poi_visible_at_rank(d.rank, tier))
@@ -280,8 +345,27 @@ fn select_pois(dots: &[PlaceDot], tier: crate::state::LodTier) -> Vec<&PlaceDot>
             .then_with(|| b.is_city.cmp(&a.is_city))
             .then_with(|| b.name_len.cmp(&a.name_len))
     });
-    visible.truncate(POI_MAX_DOTS);
-    visible
+    let cell = (POI_GRID_PX * view_scale).max(f32::EPSILON);
+    let quota = poi_cell_quota(tier);
+    let mut per_cell: std::collections::HashMap<(i32, i32), usize> =
+        std::collections::HashMap::new();
+    let mut out: Vec<&PlaceDot> = Vec::with_capacity(visible.len().min(POI_MAX_DOTS));
+    for d in visible {
+        let key = (
+            (d.pos.x / cell).floor() as i32,
+            (d.pos.y / cell).floor() as i32,
+        );
+        let used = per_cell.entry(key).or_insert(0);
+        if *used >= quota {
+            continue;
+        }
+        *used += 1;
+        out.push(d);
+        if out.len() >= POI_MAX_DOTS {
+            break;
+        }
+    }
+    out
 }
 
 /// 点集内容指纹（ADR-0030 D4）：合批 mesh 的「集合变没变」判据。
@@ -368,8 +452,10 @@ fn finish_batch_mesh(positions: Vec<[f32; 3]>, indices: Vec<u32>) -> Mesh {
 struct RoadMaterialSet {
     mode: crate::state::ViewMode,
     palette: MapPalette,
-    casing: Handle<ColorMaterial>,
-    fill: Handle<ColorMaterial>,
+    /// 三档路缘材质（索引 0 = 最高等级，见 [`ROAD_GRADES`]）。
+    casing: [Handle<ColorMaterial>; ROAD_GRADES],
+    /// 三档道路主体材质。
+    fill: [Handle<ColorMaterial>; ROAD_GRADES],
 }
 
 /// 按模式缓存的 POI 材质。
@@ -382,6 +468,22 @@ struct PoiMaterialSet {
     /// 城市 POI：恒全显（Nation 档保留是既有语义）。
     city_ring: Handle<ColorMaterial>,
     city_dot: Handle<ColorMaterial>,
+}
+
+/// 专业制图的分类 POI 池（ADR-0064）：每类一个 map-pin 合批。
+///
+/// 形状统一（Lucide map-pin 实心化），类别只换**针体色**——这是主理人
+/// 2026-10-25 的裁定：先统一形状，后续再补各类图标。颜色烘焙在顶点色里，
+/// 材质统一白色，故一个池一个 mesh。
+#[derive(Default)]
+struct PoiKindBucket {
+    pin: LandmarkPool,
+}
+
+impl PoiKindBucket {
+    fn despawn(&mut self, commands: &mut Commands) {
+        self.pin.despawn(commands);
+    }
 }
 
 /// 按模式 + 主题缓存的街道材质（ADR-0014：主干 / 次干在古舆图里是两种色）。
@@ -445,8 +547,11 @@ impl RoadLayerPool {
 /// 矢量层实体与可复用资产规格缓存。
 #[derive(Resource, Default)]
 pub struct VectorLayerEntities {
-    road_casings: RoadLayerPool,
-    roads: RoadLayerPool,
+    /// 三档道路的 casing 合批池（索引 0 = 最高等级）：分级后每档线宽不同，
+    /// 必须各自成 mesh——同一个 mesh 只能有一个世界厚度。
+    road_casings: [RoadLayerPool; ROAD_GRADES],
+    /// 三档道路的 fill 合批池。
+    roads: [RoadLayerPool; ROAD_GRADES],
     /// 街道矢量层（ADR-0010）：主干档（rank ≤ 2），画得粗、压在行程连线上。
     street_major: RoadLayerPool,
     /// 街道矢量层：次干/支路档，画得细。
@@ -479,6 +584,11 @@ pub struct VectorLayerEntities {
     poi_dot_plain: PoiBatchPool,
     /// POI 内芯合批（城市材质）。
     poi_dot_city: PoiBatchPool,
+    /// 分类 POI 池（ADR-0064）：**仅 GoogleMap 使用**，索引 = `PoiKind::index()`。
+    /// 两档池（上四条）在专业制图下退场。
+    poi_kind_pools: Vec<PoiKindBucket>,
+    /// 分类 POI 的统一材质（白色；类别色烘焙在顶点色里）。惰性建一次。
+    poi_pin_material: Option<Handle<ColorMaterial>>,
     road_materials: Vec<RoadMaterialSet>,
     road_material_mode: Option<crate::state::ViewMode>,
     poi_materials: Vec<PoiMaterialSet>,
@@ -540,8 +650,12 @@ pub fn sync_vector_layers(
     let place_z = layers.place.z_offset;
 
     if !layers.road.visible {
-        layer.road_casings.despawn(&mut commands);
-        layer.roads.despawn(&mut commands);
+        for pool in &mut layer.road_casings {
+            pool.despawn(&mut commands);
+        }
+        for pool in &mut layer.roads {
+            pool.despawn(&mut commands);
+        }
         layer.rivers.despawn(&mut commands);
         layer.river_material = None;
         layer.author_rivers.despawn(&mut commands);
@@ -555,7 +669,7 @@ pub fn sync_vector_layers(
         layer.street_minor_casing.despawn(&mut commands);
         layer.street_preview.despawn(&mut commands);
     } else {
-        let (casing, fill) = layer
+        let (casings, fills) = layer
             .road_materials
             .iter()
             .find(|m| m.mode == view.mode)
@@ -655,33 +769,52 @@ pub fn sync_vector_layers(
         let road_segments = frame.road_slice_at(road_tier);
         let road_fingerprint = frame.road_fingerprint_at(road_tier);
         if recipe.enabled(PassId::Roads) {
-            sync_road_strokes(
-                &mut commands,
-                &mut meshes,
-                road_segments,
-                road_fingerprint,
-                view.scale,
-                casing.clone(),
-                GOOGLE_ROAD_CASING_PX,
-                ROAD_CASING_Z + road_z,
-                road_materials_changed,
-                &mut layer.road_casings,
-            );
-            sync_road_strokes(
-                &mut commands,
-                &mut meshes,
-                road_segments,
-                road_fingerprint,
-                view.scale,
-                fill.clone(),
-                GOOGLE_ROAD_FILL_PX,
-                ROAD_Z + road_z,
-                road_materials_changed,
-                &mut layer.roads,
-            );
+            // 道路分级（2026-10-25）：段列按 rank 降序，三档是连续前缀区间
+            // （`rank ≥ 3` / `= 2` / `= 1`）。每档线宽不同 → 必须各自成 mesh。
+            // 低档视野天然只含高档（Nation 只有 `[0, cuts[2])`），所以
+            // 「放大才看得见小路」由切片本身保证，不需要额外的可见性判据。
+            let spans = road_grade_spans(road_tier, frame.road_rank_cuts);
+            for (grade, (start, end)) in spans.iter().enumerate() {
+                let segs = &road_segments[*start..*end];
+                // 分档指纹 = 全量指纹 ⊕ 区间端点：段列内容或分区任一变化都重建。
+                // 只用全量指纹会在「只改 rank」时漏判（坐标集合没变、分区变了）。
+                let fp = road_fingerprint
+                    ^ (*start as u64).rotate_left(17)
+                    ^ (*end as u64).rotate_left(41);
+                let z_jitter = grade as f32 * 0.0006;
+                let (casing_px, fill_px) = road_grade_px(view.mode, grade);
+                sync_road_strokes(
+                    &mut commands,
+                    &mut meshes,
+                    segs,
+                    fp,
+                    view.scale,
+                    casings[grade].clone(),
+                    casing_px,
+                    ROAD_CASING_Z + road_z + z_jitter,
+                    road_materials_changed,
+                    &mut layer.road_casings[grade],
+                );
+                sync_road_strokes(
+                    &mut commands,
+                    &mut meshes,
+                    segs,
+                    fp,
+                    view.scale,
+                    fills[grade].clone(),
+                    fill_px,
+                    ROAD_Z + road_z + z_jitter,
+                    road_materials_changed,
+                    &mut layer.roads[grade],
+                );
+            }
         } else {
-            layer.road_casings.despawn(&mut commands);
-            layer.roads.despawn(&mut commands);
+            for pool in &mut layer.road_casings {
+                pool.despawn(&mut commands);
+            }
+            for pool in &mut layer.roads {
+                pool.despawn(&mut commands);
+            }
         }
         // 橡皮筋预览：画线中的「上一落点 → 光标」（编辑器反馈，与 roads_visible
         // 无关——预览属于编辑会话，不属于图层可见性）。两端都是**视图空间**坐标
@@ -700,7 +833,7 @@ pub fn sync_vector_layers(
             &preview,
             preview_fp,
             view.scale,
-            fill.clone(),
+            fills[ROAD_GRADES - 1].clone(),
             STREET_PREVIEW_PX,
             STREET_PREVIEW_Z + road_z,
             road_materials_changed,
@@ -736,6 +869,9 @@ pub fn sync_vector_layers(
         layer.poi_ring_city.despawn(&mut commands);
         layer.poi_dot_plain.despawn(&mut commands);
         layer.poi_dot_city.despawn(&mut commands);
+        for b in &mut layer.poi_kind_pools {
+            b.despawn(&mut commands);
+        }
     } else {
         sync_poi(
             &mut commands,
@@ -783,15 +919,19 @@ pub fn sync_vector_layers(
     }
 }
 
-/// 道路组两种模式的基础色（casing, fill）。alpha 是「本色 alpha」，
-/// 图层 opacity 在其上相乘。
+/// 道路三档的基础色 `(casing, fill)`（索引 0 = 最高等级）。
 ///
-/// 非 Google 模式走地图主题色板（ADR-0016）：casing = 纸面色（把路从同族
-/// 地形色上「托」出来），fill = 官道棕。
-fn road_base_colors(mode: crate::state::ViewMode, pal: &PaletteColors) -> (Color, Color) {
+/// Google 模式取 [`GOOGLE_ROAD_GRADES`]：橙黄干线 / 浅黄干道 / 白支路——这张
+/// 「粗细 + 色阶」是普通地图可读性的主要来源（2026-10-25 之前全档同色，
+/// 路网糊成一片）。非 Google 主题保持单色：古舆图的路不分级是刻意的美术选择，
+/// 三档填同一个色即退回原观感。
+fn road_grade_colors(
+    mode: crate::state::ViewMode,
+    pal: &PaletteColors,
+) -> [(Color, Color); ROAD_GRADES] {
     match mode {
-        crate::state::ViewMode::GoogleMap => (GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL),
-        _ => (pal.road_casing.with_alpha(0.28), pal.road_stroke),
+        crate::state::ViewMode::GoogleMap => GOOGLE_ROAD_GRADES.map(|g| (g.casing, g.fill)),
+        _ => [(pal.road_casing.with_alpha(0.28), pal.road_stroke); ROAD_GRADES],
     }
 }
 
@@ -800,6 +940,26 @@ fn poi_base_colors(mode: crate::state::ViewMode, pal: &PaletteColors) -> (Color,
     match mode {
         crate::state::ViewMode::GoogleMap => (GOOGLE_POI_RING, GOOGLE_PLACE_DOT),
         _ => (pal.poi_ring, pal.poi_dot),
+    }
+}
+
+/// 专业制图的 POI 类别色（ADR-0064）。未分类 / 聚落用默认红点。
+///
+/// 两处「借用」是有意的：山峰用景点绿（地标 = 可游览）、港口并入交通蓝
+/// （同为「到达点」语义）。新增类别必须在这里给出落点——`PoiKind::COUNT`
+/// 变了而这里漏写会编译失败（match 覆盖全部变体）。
+fn poi_kind_color(kind: PoiKind) -> Color {
+    use PoiKind::*;
+    match kind {
+        Food => GOOGLE_POI_FOOD,
+        Lodging => GOOGLE_POI_LODGING,
+        Medical => GOOGLE_POI_MEDICAL,
+        Scenic | Peak => GOOGLE_POI_SCENIC,
+        Station | Port => GOOGLE_POI_TRANSIT,
+        Government => GOOGLE_POI_GOVERNMENT,
+        Education => GOOGLE_POI_EDUCATION,
+        Shop => GOOGLE_POI_SHOP,
+        Settlement | Other => GOOGLE_PLACE_DOT,
     }
 }
 
@@ -823,12 +983,14 @@ fn apply_road_material_alpha(
     opacity: f32,
 ) {
     for set in &layer.road_materials {
-        let (casing, fill) = road_base_colors(set.mode, palette::colors(set.palette));
-        if let Some(mut mat) = materials.get_mut(&set.casing) {
-            mat.color = casing.with_alpha(casing.alpha() * opacity);
-        }
-        if let Some(mut mat) = materials.get_mut(&set.fill) {
-            mat.color = fill.with_alpha(fill.alpha() * opacity);
+        let grades = road_grade_colors(set.mode, palette::colors(set.palette));
+        for (i, (casing, fill)) in grades.iter().enumerate() {
+            if let Some(mut mat) = materials.get_mut(&set.casing[i]) {
+                mat.color = casing.with_alpha(casing.alpha() * opacity);
+            }
+            if let Some(mut mat) = materials.get_mut(&set.fill[i]) {
+                mat.color = fill.with_alpha(fill.alpha() * opacity);
+            }
         }
     }
 }
@@ -857,6 +1019,12 @@ fn apply_poi_material_alpha(
             mat.color = dot.with_alpha(dot.alpha() * opacity);
         }
     }
+    // 分类池（GoogleMap）：统一白材质，类别色在顶点色里，同吃图层 opacity。
+    if let Some(handle) = &layer.poi_pin_material {
+        if let Some(mut mat) = materials.get_mut(handle) {
+            mat.color = Color::WHITE.with_alpha(opacity);
+        }
+    }
 }
 
 fn ensure_road_materials(
@@ -874,13 +1042,19 @@ fn ensure_road_materials(
         .iter()
         .any(|set| set.mode == mode && set.palette == map_palette)
     {
-        let (casing, fill) = road_base_colors(mode, palette::colors(map_palette));
+        let grades = road_grade_colors(mode, palette::colors(map_palette));
         let with_opacity = |c: Color| c.with_alpha(c.alpha() * road_opacity);
+        // 逐档建材质：casing 与 fill 各 ROAD_GRADES 个（2026-10-25 道路分级）。
+        // `Handle` 不是 Copy，不能用 `[Handle::default(); N]` 铺开。
+        let casing: [Handle<ColorMaterial>; ROAD_GRADES] =
+            std::array::from_fn(|i| materials.add(with_opacity(grades[i].0)));
+        let fill: [Handle<ColorMaterial>; ROAD_GRADES] =
+            std::array::from_fn(|i| materials.add(with_opacity(grades[i].1)));
         layer.road_materials.push(RoadMaterialSet {
             mode,
             palette: map_palette,
-            casing: materials.add(with_opacity(casing)),
-            fill: materials.add(with_opacity(fill)),
+            casing,
+            fill,
         });
     }
     layer.road_material_mode = Some(mode);
@@ -912,6 +1086,19 @@ fn ensure_poi_materials(
             city_ring: materials.add(with_opacity(ring)),
             city_dot: materials.add(with_opacity(dot)),
         });
+    }
+    // 分类池（ADR-0064）：12 组 map-pin 合批 + 一个白色材质（顶点色承载类别色）。
+    // **建一次、常驻**——切走只退场批次（`sync_poi` 的非专业分支），避免每次
+    // 进出专业制图都新建资产。
+    if layer.poi_kind_pools.is_empty() {
+        layer.poi_kind_pools = (0..PoiKind::COUNT)
+            .map(|_| PoiKindBucket::default())
+            .collect();
+    }
+    if layer.poi_pin_material.is_none() {
+        layer.poi_pin_material = Some(materials.add(ColorMaterial::from_color(
+            Color::WHITE.with_alpha(place_opacity),
+        )));
     }
     layer.poi_material_mode = Some(mode);
     true
@@ -1135,7 +1322,7 @@ fn sync_poi(
     layer: &mut VectorLayerEntities,
 ) {
     let tier = crate::state::lod_tier(view_scale);
-    let selected = select_pois(dots, tier);
+    let selected = select_pois(dots, tier, view_scale);
     let radius_outer = (grid.cell_size * 0.45).max(POI_MIN_SCREEN_PX * view_scale * 0.5);
     let radius_inner = radius_outer * 0.52;
     let ring_thickness = (1.5 * view_scale).max(f32::EPSILON);
@@ -1171,6 +1358,52 @@ fn sync_poi(
     let city_fp = dots_fingerprint(&city);
     let z_outer = POI_OUTER_Z + z_offset;
     let z_inner = POI_INNER_Z + z_offset;
+
+    // ── 专业制图：按 POI 类别分桶（ADR-0064）──
+    //
+    // 检索地图的「分类符号」= 每类一个颜色。合批 mesh 一个材质只能一种色，
+    // 所以类别必须分池。非 Google 模式仍走下面的城市 / 普通两档（艺术主题
+    // 刻意不把类别符号化）。
+    if mode == crate::state::ViewMode::GoogleMap {
+        // 模式切换的残留清理：两档池可能还挂着上一个模式的 mesh。
+        layer.poi_ring_plain.despawn(commands);
+        layer.poi_ring_city.despawn(commands);
+        layer.poi_dot_plain.despawn(commands);
+        layer.poi_dot_city.despawn(commands);
+        let Some(pin_mat) = layer.poi_pin_material.clone() else {
+            return;
+        };
+        // 尺寸口径与地物符号同源：局部坐标 = 屏幕像素，只乘 `view_scale`
+        // （符号总高 22.5px + LOD 档微调）。
+        let s = landmark_size_tier(view_scale) * view_scale;
+        let mut buckets: Vec<Vec<Vec2>> = vec![Vec::new(); PoiKind::COUNT];
+        for d in &selected {
+            if let Some(b) = buckets.get_mut(d.kind.index()) {
+                b.push(d.pos);
+            }
+        }
+        for (i, pos) in buckets.iter().enumerate() {
+            let Some(b) = layer.poi_kind_pools.get_mut(i) else {
+                continue;
+            };
+            sync_poi_pin_batch(
+                commands,
+                meshes,
+                pos,
+                s,
+                z_outer,
+                poi_kind_color(PoiKind::ALL[i]),
+                pin_mat.clone(),
+                &mut b.pin,
+            );
+        }
+        return;
+    }
+
+    // 非专业制图：分类池退场（材质保留，切回来不用重建）。
+    for b in &mut layer.poi_kind_pools {
+        b.despawn(commands);
+    }
 
     sync_poi_batch(
         commands,
@@ -1260,6 +1493,86 @@ fn sync_poi_batch(
                 commands
                     .entity(batch.entity)
                     .insert((Mesh2d(next), Transform::from_xyz(0.0, 0.0, key.z)));
+                commands.queue(move |world: &mut World| {
+                    world.resource_mut::<Assets<Mesh>>().remove(&old);
+                });
+                batch.key = key;
+            }
+            pool.batch = Some(batch);
+        }
+    }
+}
+
+/// 一类 POI 的 map-pin 合批（顶点色承载类别色，材质统一白色）。
+///
+/// 与地物符号同一套「单 mesh 单实体 + 原地换网格」纪律。key 吃
+/// （位置指纹、尺寸、Z）——尺寸不进 key 会让缩放后 pin 保持旧世界尺寸
+/// （`landmark_batch_key` 的同一条教训）。
+#[allow(clippy::too_many_arguments)]
+fn sync_poi_pin_batch(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    dots: &[Vec2],
+    s: f32,
+    z: f32,
+    color: Color,
+    material: Handle<ColorMaterial>,
+    pool: &mut LandmarkPool,
+) {
+    use crate::landmark_symbols::{build_landmark_mesh, LandmarkBatch};
+    let key = StrokeBatchKey {
+        fingerprint: dots_fingerprint(dots),
+        world_thickness: s,
+        z,
+    };
+    let build = || {
+        let c = color.to_srgba();
+        let body = [c.red, c.green, c.blue, c.alpha];
+        let mut batch = LandmarkBatch::new();
+        for p in dots {
+            batch.push_map_pin_tinted(*p, s, body);
+        }
+        build_landmark_mesh(batch)
+    };
+    match pool.batch.take() {
+        None => {
+            if dots.is_empty() {
+                return;
+            }
+            let Some(mesh) = build() else {
+                return;
+            };
+            let mesh_handle = meshes.add(mesh);
+            let entity = commands
+                .spawn((
+                    Mesh2d(mesh_handle.clone()),
+                    MeshMaterial2d(material),
+                    Transform::from_xyz(0.0, 0.0, z),
+                ))
+                .id();
+            pool.batch = Some(StrokeBatch {
+                entity,
+                mesh: mesh_handle,
+                key,
+            });
+        }
+        Some(mut batch) => {
+            if dots.is_empty() {
+                commands.entity(batch.entity).despawn();
+                commands.queue(move |world: &mut World| {
+                    world.resource_mut::<Assets<Mesh>>().remove(&batch.mesh);
+                });
+                return;
+            }
+            if batch.key != key {
+                let Some(mesh) = build() else {
+                    return;
+                };
+                let next = meshes.add(mesh);
+                let old = std::mem::replace(&mut batch.mesh, next.clone());
+                commands
+                    .entity(batch.entity)
+                    .insert((Mesh2d(next), Transform::from_xyz(0.0, 0.0, z)));
                 commands.queue(move |world: &mut World| {
                     world.resource_mut::<Assets<Mesh>>().remove(&old);
                 });
@@ -1510,18 +1823,53 @@ mod tests {
     use bevy::render::mesh::VertexAttributeValues;
 
     /// Google 式道路必须有灰 casing + 白 fill 双层，粗细差即路缘。
+    ///
+    /// 2026-10-25 道路分级后改为**逐档**校验：三档都必须 casing > fill，
+    /// 且档位越高线越粗（否则「放大才看得见小路」的层次会倒过来）。
     #[test]
-    fn google_road_casing_is_thicker_than_fill() {
-        let casing = stroke_world_thickness(GOOGLE_ROAD_CASING_PX, 1.0);
-        let fill = stroke_world_thickness(GOOGLE_ROAD_FILL_PX, 1.0);
-        assert!(
-            casing > fill,
-            "casing 应厚于 fill：casing={} fill={}，期望 {}px > {}px",
-            casing,
-            fill,
-            GOOGLE_ROAD_CASING_PX,
-            GOOGLE_ROAD_FILL_PX
-        );
+    fn google_road_casing_is_thicker_than_fill_for_every_grade() {
+        for grade in 0..ROAD_GRADES {
+            let (casing_px, fill_px) = road_grade_px(crate::state::ViewMode::GoogleMap, grade);
+            let casing = stroke_world_thickness(casing_px, 1.0);
+            let fill = stroke_world_thickness(fill_px, 1.0);
+            assert!(
+                casing > fill,
+                "第 {grade} 档 casing 应厚于 fill：{casing_px}px 应 > {fill_px}px"
+            );
+            if grade + 1 < ROAD_GRADES {
+                let (_, next_fill) = road_grade_px(crate::state::ViewMode::GoogleMap, grade + 1);
+                assert!(
+                    fill_px > next_fill,
+                    "档位越高线越粗：第 {grade} 档 {fill_px}px 应 > 第 {} 档 {next_fill}px",
+                    grade + 1
+                );
+            }
+        }
+    }
+
+    /// 三档颜色必须互不相同——全同色等于没分级（这正是改造前的状态）。
+    #[test]
+    fn google_road_grades_have_distinct_fills() {
+        let pal = palette::colors(MapPalette::default());
+        let grades = road_grade_colors(crate::state::ViewMode::GoogleMap, pal);
+        let a = grades[0].1.to_srgba();
+        let b = grades[1].1.to_srgba();
+        let c = grades[2].1.to_srgba();
+        assert_ne!(a, b, "干线 / 干道填充色不能相同");
+        assert_ne!(b, c, "干道 / 支路填充色不能相同");
+    }
+
+    /// 三档切片：`rank ≥ 3` / `= 2` / `= 1` 在排序后的段列里是连续前缀区间。
+    #[test]
+    fn road_grade_spans_split_prefix_by_rank() {
+        // 段列按 rank 降序：3,3,2,1,1 → cuts = [5(Edit 全量), 3(≥2), 2(≥3)]
+        let cuts = [5usize, 3, 2];
+        let edit = road_grade_spans(crate::state::LodTier::Edit, cuts);
+        assert_eq!(edit, [(0, 2), (2, 3), (3, 5)], "Edit 三档都要有");
+        let region = road_grade_spans(crate::state::LodTier::Region, cuts);
+        assert_eq!(region, [(0, 2), (2, 3), (3, 3)], "Region 不含 rank=1");
+        let nation = road_grade_spans(crate::state::LodTier::Nation, cuts);
+        assert_eq!(nation, [(0, 2), (2, 2), (2, 2)], "Nation 只有干线");
     }
 
     /// 街道与道路同口径：每档都必须有 casing，粗细差即路缘；且 Z 序要保证 casing
@@ -1802,37 +2150,136 @@ mod tests {
         }
     }
 
-    /// 呈现门槛端到端（ADR-0030 D2/D3）：Nation 档只放行 rank 3，密度上限
-    /// 截断后保的是高优先级（rank > is_city > 名字长）。
+    /// 呈现门槛端到端（ADR-0030 D2/D3）：Nation 档只放行 rank 3；全局上限
+    /// 仍按优先级（rank > is_city > 名字长）截断。
+    ///
+    /// 位置分散到不同屏幕格（x 相隔 200 > 96），避免 ADR-0064 的网格配额
+    /// 干扰本测试要钉的两件事。
     #[test]
     fn select_pois_gates_by_rank_then_caps_by_priority() {
         use crate::state::LodTier;
-        let dot = |rank: u8, is_city: bool, name_len: u32| PlaceDot {
-            pos: Vec2::ZERO,
+        let dot = |pos: Vec2, rank: u8, is_city: bool, name_len: u32| PlaceDot {
+            pos,
             is_city,
             rank,
             name_len,
+            kind: wv_core::distance::PoiKind::Other,
         };
         let dots = vec![
-            dot(1, false, 4),  // 普通点：Nation 档出局
-            dot(3, false, 6),  // 国家级
-            dot(2, false, 99), // 市镇级
-            dot(3, true, 2),   // 城市级材质的国家级
+            dot(Vec2::new(0.0, 0.0), 1, false, 4), // 普通点：Nation 档出局
+            dot(Vec2::new(200.0, 0.0), 3, false, 6), // 国家级
+            dot(Vec2::new(400.0, 0.0), 2, false, 99), // 市镇级
+            dot(Vec2::new(600.0, 0.0), 3, true, 2), // 城市级材质的国家级
         ];
-        let nation: Vec<&PlaceDot> = select_pois(&dots, LodTier::Nation);
+        let nation: Vec<&PlaceDot> = select_pois(&dots, LodTier::Nation, 1.0);
         assert_eq!(nation.len(), 2, "Nation 档只放行 rank 3，实得 {nation:?}");
         assert!(nation.iter().all(|d| d.rank == 3));
         // 上限截断：rank 优先保 3，其次 is_city，再次名字长。
+        // 450 个点各占一格（x 步进 120 > 96），配额不参与，只测全局上限。
         let many: Vec<PlaceDot> = (0..(POI_MAX_DOTS + 50))
-            .map(|i| dot(2, false, i as u32))
+            .map(|i| dot(Vec2::new(i as f32 * 120.0, 0.0), 2, false, i as u32))
             .collect();
-        let capped = select_pois(&many, LodTier::Edit);
+        let capped = select_pois(&many, LodTier::Edit, 1.0);
         assert_eq!(capped.len(), POI_MAX_DOTS, "超预算必须截断到上限");
         let min_kept = capped.iter().map(|d| d.name_len).min();
         assert_eq!(
             min_kept,
             Some(50),
             "450 个候选截到 400，保的是名字最长的 400 个（最短 50）"
+        );
+    }
+
+    /// 分类色必须互不相同（否则「分类符号」等于没分），未分类落默认红点。
+    #[test]
+    fn poi_kind_colors_are_distinct_for_classified_categories() {
+        use PoiKind::*;
+        let classified = [
+            Food, Lodging, Medical, Scenic, Station, Government, Education, Shop,
+        ];
+        let mut seen: Vec<Color> = Vec::new();
+        for k in classified {
+            let c = poi_kind_color(k);
+            assert!(!seen.contains(&c), "{k:?} 与已用类别色重复");
+            seen.push(c);
+        }
+        assert_eq!(
+            poi_kind_color(Other),
+            GOOGLE_PLACE_DOT,
+            "未分类回退默认红点"
+        );
+        assert_eq!(
+            poi_kind_color(Settlement),
+            GOOGLE_PLACE_DOT,
+            "聚落沿用红点（城市与未分类同色，靠字号/级别区分）"
+        );
+        assert_eq!(poi_kind_color(Peak), poi_kind_color(Scenic), "山峰借景点绿");
+        assert_eq!(
+            poi_kind_color(Port),
+            poi_kind_color(Station),
+            "港口并入交通蓝"
+        );
+    }
+
+    /// 屏幕网格配额（ADR-0064 D2）：同一格内只留配额数，且保留的是高优先级；
+    /// 稀疏区域的点不受密集区影响。
+    ///
+    /// 这是「像检索地图」的核心：没有它，全局排序截断会让城区吃掉所有名额。
+    #[test]
+    fn dense_cluster_keeps_quota_per_screen_cell_and_spares_sparse_areas() {
+        use crate::state::LodTier;
+        let dot = |pos: Vec2, rank: u8, name_len: u32| PlaceDot {
+            pos,
+            is_city: false,
+            rank,
+            name_len,
+            kind: wv_core::distance::PoiKind::Other,
+        };
+        // 同一个 96px 格内 10 个点（rank 从 1 到 3 混排）+ 远处 1 个点。
+        let mut dots: Vec<PlaceDot> = (0..10)
+            .map(|i| {
+                dot(
+                    Vec2::new(i as f32 * 2.0, 0.0),
+                    if i == 9 { 3 } else { 1 },
+                    i,
+                )
+            })
+            .collect();
+        dots.push(dot(Vec2::new(500.0, 0.0), 2, 7));
+
+        let nation = select_pois(&dots, LodTier::Nation, 1.0);
+        assert_eq!(
+            nation.len(),
+            1,
+            "Nation 档只剩 rank 3 那一个，got {nation:?}"
+        );
+
+        let region = select_pois(&dots, LodTier::Region, 1.0);
+        assert_eq!(
+            region.len(),
+            2,
+            "Region 档：密集格留 1 个 + 远处 1 个（稀疏区不被挤掉），got {region:?}"
+        );
+        assert!(
+            region.iter().any(|d| d.pos.x == 500.0),
+            "远处稀疏点必须保留"
+        );
+
+        let edit = select_pois(&dots, LodTier::Edit, 1.0);
+        assert_eq!(
+            edit.len(),
+            3,
+            "Edit 档：密集格留 2 个 + 远处 1 个，got {edit:?}"
+        );
+        // 密集格保留的是 rank 最高 / 名字最长的两个（rank 3 与 name_len 9）。
+        let kept_in_cluster: Vec<u32> = edit
+            .iter()
+            .filter(|d| d.pos.x < 100.0)
+            .map(|d| d.name_len)
+            .collect();
+        assert_eq!(
+            kept_in_cluster,
+            vec![9, 8],
+            "格内按优先级保留：{kept_in_cluster:?}"
         );
     }
 
@@ -1914,6 +2361,7 @@ mod tests {
         world.insert_resource(projection_frame_with_roads(
             vec![(3, Vec2::ZERO, Vec2::X * 100.0)],
             vec![PlaceDot {
+                kind: wv_core::distance::PoiKind::Other,
                 pos: Vec2::new(20.0, 20.0),
                 is_city: true,
                 rank: 3,
@@ -1991,6 +2439,7 @@ mod tests {
         let mut frame = projection_frame_with_roads(
             vec![(3, Vec2::ZERO, Vec2::X * 100.0)],
             vec![PlaceDot {
+                kind: wv_core::distance::PoiKind::Other,
                 pos: Vec2::new(20.0, 20.0),
                 is_city: true,
                 rank: 3,
@@ -2080,6 +2529,7 @@ mod tests {
         world.insert_resource(projection_frame_with_roads(
             vec![(3, Vec2::ZERO, Vec2::X * 100.0)],
             vec![PlaceDot {
+                kind: wv_core::distance::PoiKind::Other,
                 pos: Vec2::new(20.0, 20.0),
                 is_city: true,
                 rank: 3,
@@ -2284,19 +2734,22 @@ mod tests {
     /// Nation 档 fill 合批只含 rank ≥ 3 前缀——顶点数必须比 Edit 档少。
     #[test]
     fn nation_tier_draws_only_high_rank_road_prefix() {
+        // 2026-10-25 道路分级后「可见段集」不再等于单一 mesh：三档各一个合批，
+        // 故比较的是**三档顶点总和**（分级前是一个 mesh 装全部）。
         let fill_vertices = |world: &World| -> usize {
             let layer = world.resource::<VectorLayerEntities>();
-            let handle = &layer
+            let assets = world.resource::<Assets<Mesh>>();
+            layer
                 .roads
-                .batch
-                .as_ref()
-                .expect("路网非空，应有 fill 合批")
-                .mesh;
-            world
-                .resource::<Assets<Mesh>>()
-                .get(handle)
-                .expect("fill mesh 在册")
-                .count_vertices()
+                .iter()
+                .filter_map(|pool| pool.batch.as_ref())
+                .map(|batch| {
+                    assets
+                        .get(&batch.mesh)
+                        .expect("fill mesh 在册")
+                        .count_vertices()
+                })
+                .sum()
         };
 
         let mut world = World::default();
@@ -2344,9 +2797,7 @@ mod tests {
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);
         schedule.run(&mut world);
-        let old_handle = world
-            .resource::<VectorLayerEntities>()
-            .roads
+        let old_handle = world.resource::<VectorLayerEntities>().roads[0]
             .batch
             .as_ref()
             .expect("首帧应有 fill 合批")
@@ -2359,8 +2810,7 @@ mod tests {
         schedule.run(&mut world);
 
         let layer = world.resource::<VectorLayerEntities>();
-        let new_handle = &layer
-            .roads
+        let new_handle = &layer.roads[0]
             .batch
             .as_ref()
             .expect("次帧仍应有 fill 合批")
@@ -2380,9 +2830,7 @@ mod tests {
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);
         schedule.run(&mut world);
-        let old_handle = world
-            .resource::<VectorLayerEntities>()
-            .roads
+        let old_handle = world.resource::<VectorLayerEntities>().roads[0]
             .batch
             .as_ref()
             .expect("首帧应有 fill 合批")
@@ -2393,8 +2841,7 @@ mod tests {
         schedule.run(&mut world);
 
         let layer = world.resource::<VectorLayerEntities>();
-        let new_handle = &layer
-            .roads
+        let new_handle = &layer.roads[0]
             .batch
             .as_ref()
             .expect("缩放后仍应有 fill 合批")
@@ -2415,9 +2862,7 @@ mod tests {
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);
         schedule.run(&mut world);
-        let baked = world
-            .resource::<VectorLayerEntities>()
-            .roads
+        let baked = world.resource::<VectorLayerEntities>().roads[0]
             .batch
             .as_ref()
             .expect("首帧应有 fill 合批")
@@ -2426,9 +2871,7 @@ mod tests {
 
         world.resource_mut::<ViewState>().scale = 1.02;
         schedule.run(&mut world);
-        let after_small = world
-            .resource::<VectorLayerEntities>()
-            .roads
+        let after_small = world.resource::<VectorLayerEntities>().roads[0]
             .batch
             .as_ref()
             .expect("2% 缩放后仍应有 fill 合批")
@@ -2438,9 +2881,7 @@ mod tests {
 
         world.resource_mut::<ViewState>().scale = 1.10;
         schedule.run(&mut world);
-        let after_big = world
-            .resource::<VectorLayerEntities>()
-            .roads
+        let after_big = world.resource::<VectorLayerEntities>().roads[0]
             .batch
             .as_ref()
             .expect("10% 缩放后仍应有 fill 合批")

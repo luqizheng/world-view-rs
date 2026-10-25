@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>手绘水彩符号 · 地图合成预览</title>
+<style>
+  :root{
+    --paper:#F3EFE3; --card:#FBF8EF; --line:#DCD3BC; --ink:#2E2A24; --ink-2:#6B6357; --accent:#8C5B3F;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",SimSun,serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  header{padding:26px 30px 14px; border-bottom:1px solid var(--line)}
+  h1{margin:0 0 6px; font-size:21px; font-weight:600; letter-spacing:.02em}
+  .sub{margin:0; font-size:13px; color:var(--ink-2); line-height:1.7}
+  .sub code{font-family:ui-monospace,Consolas,monospace; font-size:12px; background:#EDE7D6; padding:1px 5px; border-radius:3px}
+  .bar{display:flex; flex-wrap:wrap; gap:18px; align-items:center; padding:14px 30px; border-bottom:1px solid var(--line); background:#F7F3E7}
+  .ctl{display:flex; align-items:center; gap:8px; font-size:13px; color:var(--ink-2)}
+  .ctl input[type=range]{width:110px; accent-color:var(--accent)}
+  .ctl output{font-variant-numeric:tabular-nums; color:var(--ink); min-width:34px; text-align:right}
+  button{
+    font-family:inherit; font-size:13px; padding:6px 14px; border-radius:5px; cursor:pointer;
+    border:1px solid var(--line); background:var(--card); color:var(--ink);
+  }
+  button:hover{border-color:var(--accent); color:var(--accent)}
+  .seg{display:inline-flex; border:1px solid var(--line); border-radius:5px; overflow:hidden}
+  .seg button{border:0; border-radius:0; background:var(--card); font-size:12.5px; padding:6px 12px}
+  .seg button + button{border-left:1px solid var(--line)}
+  .seg button.on{background:var(--accent); color:#FBF8EF}
+  .seg button.on:hover{color:#FBF8EF}
+  main{display:grid; grid-template-columns:1fr 1fr; gap:22px; padding:22px 30px 8px; max-width:1500px; margin:0 auto}
+  .pane{background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 12px 10px; box-shadow:0 1px 2px rgba(60,50,30,.05)}
+  .pane h2{margin:0 0 2px; font-size:14px; font-weight:600; display:flex; align-items:center; gap:8px}
+  .pill{font-size:11px; font-weight:400; color:#5B7A4E; background:#E6EEDC; border-radius:20px; padding:2px 9px}
+  .pill.proc{color:#7A6A52; background:#EFE7D4}
+  .pane p.note{margin:0 0 10px; font-size:11.5px; color:var(--ink-2); line-height:1.6; min-height:34px}
+  canvas{display:block; width:100%; height:auto; border-radius:4px; background:#DDE6E6}
+  footer{padding:6px 30px 30px; max-width:1500px; margin:0 auto}
+  .legend{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px 26px; font-size:12.5px; color:var(--ink-2); line-height:1.65}
+  .legend b{color:var(--ink); font-weight:600}
+  .legend .k{display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:6px; vertical-align:1px}
+  .warn{margin-top:14px; padding:10px 14px; border-left:3px solid var(--accent); background:#F6EEE2; font-size:12.5px; line-height:1.75; color:#5C4A38}
+</style>
+</head>
+<body>
+<header>
+  <h1>手绘水彩符号 · 地图合成预览</h1>
+  <p class="sub">
+    左栏用 <code>crates/wv-render/assets/symbols/</code> 的七类手绘贴图，右栏用 ADR-0031 D5 的<b>程序化三角化</b>符号。
+    同一地形、同一采样种子、同一屏幕尺寸（树冠 28px / 山 13×22px / 缩放倍率 1.0 = 真实渲染尺寸）。
+  </p>
+</header>
+
+<div class="bar">
+  <div class="seg">
+    <button data-hill="field" class="on">山地：符号点阵（现状）</button>
+    <button data-hill="relief">山地：色阶 + 晕渲 + 地标峰</button>
+  </div>
+  <button id="reseed">重新生成地形</button>
+  <label class="ctl">尺寸倍率 <input id="size" type="range" min="1" max="2.2" step="0.1" value="1"><output id="sizeOut">1.0×</output></label>
+  <label class="ctl">森林密度增益 <input id="gain" type="range" min="0.4" max="1.5" step="0.02" value="1"><output id="gainOut">1.00</output></label>
+  <label class="ctl">贴图不透明度 <input id="alpha" type="range" min="0.45" max="1" step="0.01" value="1"><output id="alphaOut">1.00</output></label>
+  <span class="ctl" style="margin-left:auto">地形：fBm 高度场 · 群系按分位数切分（约 32% 水域）</span>
+</div>
+
+<main>
+  <section class="pane">
+    <h2>手绘贴图 <span class="pill">七类资产</span></h2>
+    <p class="note">树冠 28px（覆盖物层）、聚落 34 / 27px、罗盘 64px。山地符号随上方模式切换：点阵为现状，方案版只留 3 座地标峰。</p>
+    <canvas id="tex"></canvas>
+  </section>
+  <section class="pane">
+    <h2>程序化符号 <span class="pill proc">ADR-0031 D5</span></h2>
+    <p class="note">森林 3×Φ2.6px 圆 / 针叶三角、山 = 三角 + 背光面 + 次峰 + 雪帽、聚落仅 Φ2.5px 圆点。无帆船 / 罗盘。</p>    <canvas id="proc"></canvas>
+  </section>
+</main>
+
+<footer>
+  <div class="legend">
+    <div><b>地形底</b>（两栏共用，逐像素着色 + 纸纹）</div>
+    <div><span class="k" style="background:#9DBEC9"></span>深水 <span class="k" style="background:#C3DBDE"></span>浅水</div>
+    <div><span class="k" style="background:#E6DCC2"></span>沙 <span class="k" style="background:#C6CDA4"></span>草</div>
+    <div><span class="k" style="background:#ADBC97"></span>森林 <span class="k" style="background:#C6B994"></span>丘陵</div>
+    <div><span class="k" style="background:#B3A793"></span>山地 <span class="k" style="background:#F2F0E8"></span>雪</div>
+  </div>
+  <div class="warn">
+    <b>山地表达的两条路</b>：现状（符号点阵）把「这一带海拔 1500 m 以上」画成几十个孤立山尖——
+    密度由采样步距决定、与山体尺度无关，读起来像栅栏，且山脉的连续脊线无从表达。
+    方案版让 <b>色阶读「高」、晕渲读「坡」、等高线读「形」</b>，符号只留给 3 座有名的高峰（地标而非遍布）。
+    <br>贴图侧的结论不变：1.0× 真实尺寸（山 13×22px）笔触已糊，2.2× 才拉开差距。
+  </div>
+</footer>
+
+<script>
+const SRC = {
+  tree: "__TREE__",
+  peak: "__PEAK__",
+  snowpeak: "__SNOWPEAK__",
+  castle: "__CASTLE__",
+  town: "__TOWN__",
+  ship: "__SHIP__",
+  compass: "__COMPASS__",
+};
+
+const W = 600, H = 720, DPR = 2;
+
+/* ---------------- 确定性随机 ---------------- */
+function rnd(seed, x, y, salt){
+  let h = Math.imul(x | 0, 0x9E3779B1) ^ Math.imul(y | 0, 0x85EBCA77)
+        ^ Math.imul(seed | 0, 0xC2B2AE3D) ^ Math.imul(salt | 0, 0x27D4EB2F);
+  h ^= h >>> 15; h = Math.imul(h, 0x2545F491);
+  h ^= h >>> 13;
+  return (h >>> 0) / 4294967296;
+}
+function hash01(x, y, seed){
+  let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul(seed | 0, 1442695040);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+const sm = t => t * t * (3 - 2 * t);
+function vnoise(x, y, seed){
+  const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+  const a = hash01(xi, yi, seed), b = hash01(xi + 1, yi, seed),
+        c = hash01(xi, yi + 1, seed), d = hash01(xi + 1, yi + 1, seed);
+  const u = sm(xf), v = sm(yf);
+  return a * (1 - u) * (1 - v) + b * u * (1 - v) + c * (1 - u) * v + d * u * v;
+}
+function fbm(x, y, seed, oct){
+  let s = 0, amp = 0.5, f = 1, norm = 0;
+  for (let i = 0; i < oct; i++){ s += amp * vnoise(x * f, y * f, seed + i * 131); norm += amp; amp *= 0.5; f *= 2; }
+  return s / norm;
+}
+
+/* ---------------- 高度场 ---------------- */
+const GW = 300, GH = 360;
+let height = new Float32Array(GW * GH);
+let cuts = {};
+
+function buildField(seed){
+  const raw = new Float32Array(GW * GH);
+  for (let gy = 0; gy < GH; gy++){
+    for (let gx = 0; gx < GW; gx++){
+      const u = gx / GW, v = gy / GH;
+      const dx = u - 0.5, dy = (v - 0.5) * 1.05;
+      const r = Math.sqrt(dx * dx + dy * dy);
+      const coast = 1 - Math.min(1, Math.pow(r * 1.42, 1.35));     // 边缘压成海
+      const base = fbm(u * 3.1, v * 3.1, seed, 5);
+      const ridge = Math.pow(fbm(u * 5.4 + 9.1, v * 5.4 + 3.7, seed + 900, 4), 1.7);
+      const inland = Math.min(1, Math.max(0, coast * 1.25));
+      raw[gy * GW + gx] = base * 0.42 + ridge * 0.58 * inland + coast * 0.30;
+    }
+  }
+  const sorted = Array.from(raw).sort((a, b) => a - b);
+  const q = p => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
+  cuts = { water: q(0.32), sand: q(0.365), forest: q(0.545), hills: q(0.685), mount: q(0.80), snow: q(0.985) };
+  const lo = sorted[0], hi = sorted[sorted.length - 1];
+  for (let i = 0; i < raw.length; i++) height[i] = (raw[i] - lo) / (hi - lo);
+}
+function sampleH(u, v){
+  const gx = Math.min(GW - 1.001, Math.max(0, u * GW)), gy = Math.min(GH - 1.001, Math.max(0, v * GH));
+  const x0 = Math.floor(gx), y0 = Math.floor(gy), fx = gx - x0, fy = gy - y0;
+  const a = height[y0 * GW + x0], b = height[y0 * GW + x0 + 1],
+        c = height[(y0 + 1) * GW + x0], d = height[(y0 + 1) * GW + x0 + 1];
+  return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;
+}
+function norm(h){ return (h - cuts.water) / (1 - cuts.water); }   // 0 = 海平面
+
+/* ---------------- 底色 ---------------- */
+const C = {
+  deep: [148, 183, 195], shallow: [193, 218, 221],
+  sand: [228, 218, 190], grass: [197, 205, 163],
+  forest: [160, 179, 137], hills: [198, 185, 148],
+  mount: [178, 166, 146], snow: [224, 228, 226],
+  ink: [92, 88, 80],
+};
+function mix(a, b, t){ return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
+
+// 山体晕渲：按高度场梯度做 NW 光照（模拟 hillshade，表达「坡」而非「高」）
+function reliefShade(u, v){
+  const e = 1.4 / GW;
+  const hx = (sampleH(u + e, v) - sampleH(u - e, v)) * 70;
+  const hy = (sampleH(u, v + e) - sampleH(u, v - e)) * 70;
+  const nx = -hx, ny = -hy, nz = 1;
+  const len = Math.hypot(nx, ny, nz);
+  const Lx = -0.55, Ly = -0.62, Lz = 0.56;            // 西北方向的主光
+  const dot = (nx * Lx + ny * Ly + nz * Lz) / len;
+  return 0.90 + Math.max(0, dot) * 0.22;              // 0.90 ~ 1.12：只要「坡」的暗示，不要 3D 感
+}
+
+function paintBase(seed, mode){
+  const relief = mode === "relief";
+  const cw = W * DPR, ch = H * DPR;
+  const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
+  const ctx = cv.getContext('2d');
+  const img = ctx.createImageData(cw, ch);
+  const d = img.data;
+  for (let py = 0; py < ch; py++){
+    for (let px = 0; px < cw; px++){
+      const u = px / cw, v = py / ch;
+      const h = sampleH(u, v);
+      let col;
+      if (h < cuts.water){
+        const t = Math.min(1, (h / cuts.water));
+        col = mix(C.deep, C.shallow, 0.25 + t * 0.75);
+        // 浅海暗纹：近岸略深，模拟水彩积色
+        col = mix(col, [130, 165, 178], Math.max(0, (t - 0.72)) * 0.5);
+      } else if (h < cuts.sand)      col = mix(C.sand, C.shallow, (cuts.sand - h) / (cuts.sand - cuts.water) * 0.5);
+      else if (h < cuts.forest)      col = mix(C.sand, C.grass, Math.min(1, (h - cuts.sand) / (cuts.forest - cuts.sand) * 1.6));
+      else if (h < cuts.hills)       col = mix(C.grass, C.forest, (h - cuts.forest) / (cuts.hills - cuts.forest));
+      else if (h < cuts.mount)       col = mix(C.forest, C.hills, (h - cuts.hills) / (cuts.mount - cuts.hills));
+      else if (h < cuts.snow){
+        if (relief){
+          // 方案版：山地按海拔分 4 阶（浅褐 → 中褐），读「高」
+          const t = (h - cuts.mount) / (cuts.snow - cuts.mount);
+          const step = Math.min(3, Math.floor(t * 4)) / 3;
+          col = mix([203, 190, 166], [158, 146, 126], step);
+        } else {
+          col = C.mount;   // 现状：单槽山地色（读不出起伏）
+        }
+      }
+      else {
+        // 雪线用噪声扰动 + 固定过渡带：避免「刀切白斑」，雪随山脊碎开
+        const hs = h + (vnoise(u * 30, v * 30, seed + 31) - 0.5) * 0.024;
+        const t = Math.min(1, Math.max(0, (hs - cuts.snow) / 0.030));
+        col = mix(relief ? [198, 191, 180] : C.mount, C.snow, t * t * (3 - 2 * t));
+      }
+
+      // 等高线（方案版：每 1/22 高度一根，只在高地）
+      if (relief && h > cuts.hills * 0.98){
+        const iso = (h * 22) % 1;
+        if (iso < 0.10) col = mix(col, C.ink, 0.30 * (1 - iso / 0.10));
+      }
+      // 晕渲（方案版：只作用于陆地，水域保持平静）
+      if (relief && h > cuts.water){
+        const s = reliefShade(u, v);
+        col = [col[0] * s, col[1] * s, col[2] * s];
+      }
+
+      // 海岸墨线（水陆交界）
+      const edge = Math.abs(h - cuts.water);
+      if (edge < 0.004) col = mix(col, C.ink, 0.30 * (1 - edge / 0.004));
+      // 群系交界淡线（草/林、林/丘 提一点结构感）
+      if (!relief) for (const k of ["sand", "forest", "hills", "mount"]){
+        const e = Math.abs(h - cuts[k]);
+        if (e < 0.0016) col = mix(col, C.ink, 0.10 * (1 - e / 0.0016));
+      }
+      // 纸纹
+      const grain = (hash01(px, py, seed + 77) - 0.5) * 7;
+      const i = (py * cw + px) * 4;
+      d[i] = Math.max(0, Math.min(255, col[0] + grain));
+      d[i + 1] = Math.max(0, Math.min(255, col[1] + grain));
+      d[i + 2] = Math.max(0, Math.min(255, col[2] + grain));
+      d[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return cv;
+}
+
+/* ---------------- 森林密度 ---------------- */
+function forestKeep(h, u, v, seed, gain){
+  if (h < cuts.forest || h >= cuts.hills) return 0;
+  const t = (h - cuts.forest) / (cuts.hills - cuts.forest);      // 0 边缘 → 1 中心
+  const core = Math.sin(Math.PI * Math.min(1, Math.max(0, t)));
+  const clump = fbm(u * 8.5, v * 8.5, seed + 4242, 4);
+  return Math.min(1, (0.30 + 1.15 * core * (0.45 + clump * 0.9))) * gain;
+}
+
+/* ---------------- 符号绘制 ---------------- */
+const IMG = {};
+let ready = 0;
+const KEYS = Object.keys(SRC);
+
+function loadImages(cb){
+  KEYS.forEach(k => {
+    const im = new Image();
+    im.onload = () => { IMG[k] = im; if (++ready === KEYS.length) cb(); };
+    im.onerror = () => { if (++ready === KEYS.length) cb(); };
+    im.src = SRC[k];
+  });
+}
+// 以「底部中心」为锚点绘制（符号站在采样点上，与地形装饰的 dy 偏移同构）
+function blob(ctx, key, x, y, w, h, alpha){
+  const im = IMG[key]; if (!im) return;
+  ctx.globalAlpha = (alpha === undefined ? 1 : alpha) * texAlpha;
+  ctx.drawImage(im, x - w / 2, y - h, w, h);
+  ctx.globalAlpha = 1;
+}
+
+function drawTexLayer(ctx, seed, sizeMul, gain, mode){
+  const relief = mode === "relief";
+  const step = 26 * sizeMul;
+  const s = sizeMul;
+  for (let gy = step / 2; gy < H + step; gy += step){
+    for (let gx = step / 2; gx < W + step; gx += step){
+      const jx = gx + (rnd(seed, gx, gy, 1) - 0.5) * step * 0.55;
+      const jy = gy + (rnd(seed, gx, gy, 2) - 0.5) * step * 0.55;
+      const u = jx / W, v = jy / H;
+      if (u < 0 || u > 1 || v < 0 || v > 1) continue;
+      const h = sampleH(u, v);
+      const r1 = rnd(seed, gx, gy, 3), r2 = rnd(seed, gx, gy, 4), r3 = rnd(seed, gx, gy, 5);
+
+      // 森林
+      if (h >= cuts.forest && h < cuts.hills){
+        if (r1 < forestKeep(h, u, v, seed, gain)){
+          const w = 34 * s * (0.86 + r3 * 0.3);
+          blob(ctx, "tree", jx, jy + 10 * s, w, w * 0.92, 0.94);
+        }
+        continue;
+      }
+      // 丘陵：不画（真实渲染只有半圆丘，贴图无害——留给地形色）
+      if (h >= cuts.mount && h < cuts.snow){
+        if (relief) continue;   // 方案版：山地交给色阶 + 晕渲 + 等高线
+        const k = 0.68 + 0.64 * r3;
+        const w = 15 * s * k, hh = 22 * s * k;
+        blob(ctx, "peak", jx, jy + 6 * s, w, hh, 0.96);
+        if (r2 > 0.70){
+          const ox = (r2 - 0.5) * 16 * s;
+          blob(ctx, "peak", jx + ox, jy + 6 * s, w * 0.55, hh * 0.62, 0.9);
+        }
+        continue;
+      }
+      if (h >= cuts.snow){
+        if (relief) continue;   // 方案版：雪线由色带读，不铺符号
+        const k = 0.72 + 0.5 * r3;
+        blob(ctx, "snowpeak", jx, jy + 6 * s, 16 * s * k, 23 * s * k, 0.97);
+      }
+    }
+  }
+
+  // 地标峰（方案版）：山地不再铺点阵，只保留少数「有名的高峰」作为地标——
+  // 符号表达的是「这里有一座值得标注的山」，不是「这一带海拔 1500m 以上」。
+  if (relief){
+    const summits = [[0.34, 0.36, "苍岭"], [0.52, 0.44, "雪顶"], [0.44, 0.52, "断云峰"]];
+    summits.forEach((sp, i) => {
+      let [u, v, name] = sp, best = -1, bu = u, bv = v;
+      for (let k = 0; k < 40; k++){
+        const uu = u + (rnd(seed, i, k, 31) - 0.5) * 0.10;
+        const vv = v + (rnd(seed, i, k, 32) - 0.5) * 0.10;
+        const hh = sampleH(uu, vv);
+        if (hh > best){ best = hh; bu = uu; bv = vv; }
+      }
+      if (best < cuts.mount) return;
+      const snow = best >= cuts.snow;
+      const w = 64 * s;
+      blob(ctx, snow ? "snowpeak" : "peak", bu * W, bv * H + w * 0.52, w, w * 1.02, 0.98);
+      ctx.fillStyle = "#3A342C";
+      ctx.font = `${Math.round(13 * Math.min(1.4, s))}px "Songti SC",SimSun,serif`;
+      ctx.textAlign = "center";
+      ctx.fillText(name, bu * W, bv * H + w * 0.72);
+    });
+  }
+
+  // 聚落：在草地上找落点
+  const sites = [[0.31, 0.44], [0.46, 0.56], [0.62, 0.40], [0.38, 0.63], [0.56, 0.68], [0.25, 0.52]];
+  sites.forEach((p, i) => {
+    let [u, v] = p;
+    for (let k = 0; k < 26; k++){
+      const h = sampleH(u, v);
+      if (h >= cuts.sand && h < cuts.mount) break;
+      u += (rnd(seed, i, k, 9) - 0.5) * 0.02;
+      v += (rnd(seed, i, k, 10) - 0.5) * 0.02;
+    }
+    const x = u * W, y = v * H;
+    const isCity = i % 3 === 0;
+    const w = (isCity ? 34 : 27) * s;
+    blob(ctx, isCity ? "castle" : "town", x, y + 2 * s, w, w, 0.97);
+    if (isCity){
+      ctx.fillStyle = "#33302A";
+      ctx.font = `${Math.round(11 * Math.min(1.5, s))}px "Songti SC",SimSun,serif`;
+      ctx.textAlign = "center";
+      ctx.fillText("王城", x, y + 19 * s);
+    }
+  });
+
+  // 帆船：浅海
+  [[0.16, 0.30], [0.82, 0.62], [0.24, 0.78]].forEach((p, i) => {
+    const u = p[0] + (rnd(seed, i, 3, 21) - 0.5) * 0.04;
+    const v = p[1] + (rnd(seed, i, 4, 22) - 0.5) * 0.04;
+    if (sampleH(u, v) > cuts.water * 0.92) return;   // 只在海里
+    const w = 26 * s;
+    blob(ctx, "ship", u * W, v * H + w * 0.5, w, w, 0.95);
+  });
+
+  // 罗盘（UI 层，右下）
+  const cw = 64;
+  blob(ctx, "compass", W - cw / 2 - 16, H - 12, cw, cw, 0.88);
+}
+
+function drawProcLayer(ctx, seed, sizeMul, gain, mode){
+  const relief = mode === "relief";
+  const step = 26 * sizeMul, s = sizeMul;
+  const tri = (x, y, hw, hh, col) => {
+    ctx.beginPath(); ctx.moveTo(x, y - hh); ctx.lineTo(x - hw, y + hh * 0.55);
+    ctx.lineTo(x + hw, y + hh * 0.55); ctx.closePath(); ctx.fillStyle = col; ctx.fill();
+  };
+  const disc = (x, y, r, col) => { ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832); ctx.fillStyle = col; ctx.fill(); };
+
+  for (let gy = step / 2; gy < H + step; gy += step){
+    for (let gx = step / 2; gx < W + step; gx += step){
+      const jx = gx + (rnd(seed, gx, gy, 1) - 0.5) * step * 0.55;
+      const jy = gy + (rnd(seed, gx, gy, 2) - 0.5) * step * 0.55;
+      const u = jx / W, v = jy / H;
+      if (u < 0 || u > 1 || v < 0 || v > 1) continue;
+      const h = sampleH(u, v);
+      const r1 = rnd(seed, gx, gy, 3), r2 = rnd(seed, gx, gy, 4), r3 = rnd(seed, gx, gy, 5);
+
+      if (h >= cuts.forest && h < cuts.hills){
+        if (r1 < forestKeep(h, u, v, seed, gain)){
+          // 气候带变体：北（上）针叶三角，南（下）阔叶圆
+          const conifer = v < 0.5;
+          for (let k = 0; k < 3; k++){
+            const dx = (rnd(seed, gx, gy, 10 + k) - 0.5) * 9 * s;
+            const dy = (rnd(seed, gx, gy, 20 + k) - 0.5) * 8 * s;
+            if (conifer) tri(jx + dx, jy + dy, 1.7 * s, 3.4 * s, "rgba(46,92,49,.86)");
+            else disc(jx + dx, jy + dy, 2.6 * s, "rgba(43,87,49,.86)");
+          }
+        }
+        continue;
+      }
+      if (h >= cuts.mount && h < cuts.snow){
+        if (relief) continue;
+        const k = 0.68 + 0.64 * r3, w = 6.5 * s * k, hh = 11 * s * k;
+        tri(jx, jy + 4 * s, w, hh, "rgba(76,68,58,.82)");
+        tri(jx + w * 0.37, jy + 4 * s, w * 0.65, hh * 0.76, "rgba(71,64,58,.82)");
+        if (r2 > 0.70) tri(jx + (r2 - 0.5) * 14 * s, jy + 4 * s, w * 0.55, hh * 0.62, "rgba(76,68,58,.82)");
+        continue;
+      }
+      if (h >= cuts.snow){
+        if (relief) continue;
+        const k = 0.72 + 0.5 * r3;
+        ctx.beginPath();
+        ctx.ellipse(jx, jy + 4 * s, 5 * s * k, 2.6 * s * k, 0, Math.PI, 0);
+        ctx.fillStyle = "rgba(253,254,255,.92)"; ctx.fill();
+      }
+    }
+  }
+  // 聚落：仅纯色圆点（现有能力上限）
+  const sites = [[0.31, 0.44], [0.46, 0.56], [0.62, 0.40], [0.38, 0.63], [0.56, 0.68], [0.25, 0.52]];
+  sites.forEach((p, i) => {
+    let [u, v] = p;
+    for (let k = 0; k < 26; k++){
+      const h = sampleH(u, v);
+      if (h >= cuts.sand && h < cuts.mount) break;
+      u += (rnd(seed, i, k, 9) - 0.5) * 0.02;
+      v += (rnd(seed, i, k, 10) - 0.5) * 0.02;
+    }
+    disc(u * W, v * H, 2.5 * s, "rgba(138,106,76,.9)");
+  });
+}
+
+/* ---------------- 主流程 ---------------- */
+let seed = 20261025;
+let texAlpha = 1;
+let hillMode = "field";          // field = 符号点阵（现状） / relief = 色阶+晕渲+地标峰
+const cTex = document.getElementById("tex"), cProc = document.getElementById("proc");
+const baseCache = {};
+
+[["tex", cTex], ["proc", cProc]].forEach(([, cv]) => { cv.width = W * DPR; cv.height = H * DPR; });
+
+function render(){
+  const sizeMul = parseFloat(document.getElementById("size").value);
+  const gain = parseFloat(document.getElementById("gain").value);
+  texAlpha = parseFloat(document.getElementById("alpha").value);
+  document.getElementById("sizeOut").textContent = sizeMul.toFixed(1) + "×";
+  document.getElementById("gainOut").textContent = gain.toFixed(2);
+  document.getElementById("alphaOut").textContent = texAlpha.toFixed(2);
+
+  if (!baseCache[hillMode]) baseCache[hillMode] = paintBase(seed, hillMode);
+  const baseCanvas = baseCache[hillMode];
+
+  [cTex, cProc].forEach(cv => {
+    const ctx = cv.getContext("2d");
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    ctx.drawImage(baseCanvas, 0, 0);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  });
+
+  drawTexLayer(cTex.getContext("2d"), seed, sizeMul, gain, hillMode);
+  drawProcLayer(cProc.getContext("2d"), seed, sizeMul, gain, hillMode);
+}
+
+document.querySelectorAll("[data-hill]").forEach(btn => {
+  btn.onclick = () => {
+    hillMode = btn.dataset.hill;
+    document.querySelectorAll("[data-hill]").forEach(b => b.classList.toggle("on", b === btn));
+    render();
+  };
+});
+
+document.getElementById("reseed").onclick = () => {
+  seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+  baseCache.field = baseCache.relief = null;
+  render();
+};
+
+document.getElementById("reseed").onclick = () => {
+  seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+  baseCanvas = null;
+  render();
+};
+document.getElementById("size").oninput = render;
+document.getElementById("gain").oninput = render;
+document.getElementById("alpha").oninput = render;
+
+// 初始状态可由 URL 参数覆盖（?hill=relief&size=2&gain=1.2&alpha=0.8），方便对照截图。
+// **必须在 buildField 之后调用**：paintBase 依赖 cuts 与 height，否则整幅渲染成黑底。
+function applyUrlParams(){
+  const q = new URLSearchParams(location.search);
+  const hill = q.get("hill");
+  if (hill === "relief" || hill === "field"){
+    const btn = document.querySelector(`[data-hill="${hill}"]`);
+    if (btn) btn.click();
+  }
+  for (const id of ["size", "gain", "alpha"]){
+    const v = q.get(id);
+    if (v !== null){
+      const el = document.getElementById(id);
+      el.value = String(Math.min(parseFloat(el.max), Math.max(parseFloat(el.min), parseFloat(v))));
+    }
+  }
+}
+
+buildField(seed);
+applyUrlParams();
+loadImages(() => { render(); });
+setTimeout(() => { if (!baseCache.field && !baseCache.relief) render(); }, 300);
+</script>
+</body>
+</html>

@@ -53,12 +53,17 @@ pub(crate) fn hotkeys(
     if cmd && shift && input.key_pressed(bevy_egui::egui::Key::I) {
         panels.immersive = !panels.immersive;
     }
-    // 数字 1–3：切换浏览视图模式（BROWSING 现行三项：矢量地形 / 色块地形 /
-    // 势力图，见 `ViewMode::BROWSING`；其余模式不占数字键）。
+    // 数字 1–4：切换浏览视图模式（顺序 = `ViewMode::BROWSING`：矢量地形 /
+    // 色块地形 / 势力图 / 普通地图；其余模式不占数字键）。
+    //
+    // **为什么数组必须与 `BROWSING` 同长**：索引直接喂 `SetViewMode`，少一项
+    // 就等于该模式没有快捷键（2026-10-25 实测：`BROWSING` 加了普通地图，
+    // 这里漏加 `Num4`，ADR-0061 的「快捷键 4 可切」验收不成立）。
     for (i, key) in [
         bevy_egui::egui::Key::Num1,
         bevy_egui::egui::Key::Num2,
         bevy_egui::egui::Key::Num3,
+        bevy_egui::egui::Key::Num4,
     ]
     .iter()
     .enumerate()

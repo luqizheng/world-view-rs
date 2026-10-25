@@ -17,6 +17,7 @@
 //! |---|---|---|---|
 //! | [`bicubic`] | 数据 | Catmull-Rom 核的宿主镜像 + 解析导数（P5） | 纯 Rust |
 //! | [`coast_sdf`] | 数据 | 海岸距离场（Felzenszwalb EDT） | 纯 Rust |
+//! | [`mask_sdf`] | 数据 | 掩码 → 符号距离场（群系矢量面的输入场） | 纯 Rust |
 //! | [`line_sdf`] | 数据 | 折线距离场（T25 河流 / T26 道路，追记九） | wv-core / wv-terrain |
 //! | [`pack`] | 数据 | 三张数据纹理打包（height/coast/attr） | 纯 Rust |
 //! | [`stroke`] | 数据 | 折线加宽成三角网（T25 河流的几何路径，追记十一） | 纯 Rust |
@@ -35,6 +36,7 @@
 pub mod bicubic;
 pub mod coast_sdf;
 pub mod line_sdf;
+pub mod mask_sdf;
 pub mod material;
 pub mod pack;
 pub mod paper;
@@ -46,6 +48,7 @@ pub use coast_sdf::{distance_field, distance_to_coast, FAR};
 pub use line_sdf::{
     bake_line_dash, rivers_from_terrain, LineClass, LineDashPack, LinePoly, DASH_MAX_CELLS,
 };
+pub use mask_sdf::signed_mask_distance;
 pub use material::{
     apply_hypsometric, build_material, build_material_with_lines, default_params,
     patch_material_images, set_coast_encoding, warp_amp, FieldPalette, FieldParams,

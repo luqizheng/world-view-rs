@@ -24,8 +24,20 @@ use core::f32::consts::FRAC_1_SQRT_2;
 #[derive(Component)]
 pub struct LabelHalo;
 
-/// 晕边偏移（屏幕像素基准；每帧乘 `view.scale` 转世界单位）。
+/// 晕边偏移（屏幕像素基准；12px 字号下的参考值）。
 pub const HALO_PX: f32 = 1.1;
+/// 晕边偏移相对字号的比值（`HALO_PX / 12px`，12px = 最小一级地名字号）。
+///
+/// ADR-0065 后地名按级别分档（12–16px），晕圈必须随字号成比例——固定 1.1px
+/// 在 16px 大字上显得过细、在 12px 上又偏粗。
+pub const HALO_RATIO: f32 = HALO_PX / 12.0;
+
+/// 由标签的**屏幕字号**换算晕边偏移的**世界单位**值。
+///
+/// `unit_scale` = 世界单位 / 屏幕像素（`ViewState::scale` 的生效值）。
+pub fn halo_offset_world(font_size_px: f32, unit_scale: f32) -> f32 {
+    HALO_RATIO * font_size_px * unit_scale
+}
 /// 晕边相对父标注的 Z 后撤（同 Z 绘制序不定，后撤保证晕在下、字在上）。
 pub const HALO_LOCAL_Z: f32 = -0.005;
 /// 8 向偏移（4 正交 + 4 对角，对角为 1/√2 归一化字面量——`normalize` 非 const）。
@@ -116,5 +128,19 @@ mod tests {
             .filter(|d| d.x.abs() < 1e-6 || d.y.abs() < 1e-6)
             .count();
         assert_eq!(axis, 4, "应有 4 个正交方向");
+    }
+
+    /// ADR-0065 D3：晕边偏移随字号成比例——12px 回到 1.1 屏幕像素的参考值，
+    /// 16px 的晕圈不被同一固定值压细。
+    #[test]
+    fn halo_offset_scales_with_font_size() {
+        let unit_scale = 2.0; // 世界单位 / 像素
+        let at_12 = halo_offset_world(12.0, unit_scale);
+        let at_16 = halo_offset_world(16.0, unit_scale);
+        assert!(
+            (at_12 - HALO_PX * unit_scale).abs() < 1e-6,
+            "12px 应回到 HALO_PX 参考值，got {at_12}"
+        );
+        assert!(at_16 > at_12, "16px 的晕边应更大：{at_16} vs {at_12}");
     }
 }

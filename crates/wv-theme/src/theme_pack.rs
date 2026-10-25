@@ -320,7 +320,11 @@ pub mod builtin {
                 symbol_size_px: 28.0,
                 symbol_spacing_wu: 40.0,
                 // Task 9（D12）：日间走 3 变体树图集 + 森林盖层晕图章。
-                symbol_texture: Some("overlays/forest/tree_atlas_day.png"),
+                //
+                // 2026-10-25：日间图集换**手绘水彩树冠**（原 `tree_atlas_day.png`
+                // 保留，A/B 对比只需把这一行改回）。暮色包仍走 `tree_atlas_dusk.png`
+                // —— 手绘暮色版待美术，切换前日夜观感会不一致（已知，故意留）。
+                symbol_texture: Some("overlays/forest/tree_atlas_canopy.png"),
                 halo_texture: Some("overlays/forest/forest_fill.png"),
             }),
             // 其余族 v1 无内置演绎（ADR-0032 D2：字段一次定型，规则内容待美术）。
@@ -606,8 +610,8 @@ mod tests {
         );
         assert_eq!(
             rule.symbol_texture,
-            Some("overlays/forest/tree_atlas_day.png"),
-            "日间符号走 3 变体树图集"
+            Some("overlays/forest/tree_atlas_canopy.png"),
+            "日间符号走 3 变体手绘水彩树冠图集（2026-10-25 接入）"
         );
         assert_eq!(
             rule.halo_texture,

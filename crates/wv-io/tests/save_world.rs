@@ -892,6 +892,7 @@ fn place_edges_round_trip_per_file_format() {
     let mut world = proj.load_world().expect("load");
     // 装 2 个 place、2 个 vehicle、2 条 edge。
     world.distances.places.push(Place {
+        kind: None,
         line: None,
         id: Id::new_unchecked("p_a"),
         name: "A".into(),
@@ -906,6 +907,7 @@ fn place_edges_round_trip_per_file_format() {
         rank: None,
     });
     world.distances.places.push(Place {
+        kind: None,
         line: None,
         id: Id::new_unchecked("p_b"),
         name: "B".into(),

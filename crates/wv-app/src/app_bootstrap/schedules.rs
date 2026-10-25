@@ -34,8 +34,17 @@ pub(super) fn register(app: &mut App) {
         // 字体装配不在这里：bevy_egui 0.42 的主上下文要等 PreUpdate 的
         // InitContexts 才创建，Startup 时 ctx_mut() 必然 Err（曾导致 egui
         // 全程豆腐块）。见 fonts.rs 文档与下方 PreUpdate 注册。
-        (setup_camera, setup_terrain_texture_after_world).chain(),
+        //
+        // `apply_env_view_mode` 必须在烘焙之前：`WV_MODE` 一旦给定，首帧纹理
+        // 就该用目标模式的着色器（否则会先闪一帧水彩）。
+        (
+            crate::debug_probe::apply_env_view_mode,
+            setup_camera,
+            setup_terrain_texture_after_world,
+        )
+            .chain(),
     );
+    // 实机验收：`WV_MODE` 启动即切模式（截图探针已有全局版，见 widget_preview）。
     // 主题包同步（ADR-0023 M2）：`ViewState.theme_pack_id` → `ViewState.active_theme`。
     // **必须先于所有消费点**——挂在 PreUpdate 最前；渲染消费点在 Update（PreUpdate
     // 一定先于 Update），唯一同在 PreUpdate 的消费者（`poll_open_project_dialog`）

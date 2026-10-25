@@ -90,6 +90,8 @@ pub mod app_bootstrap;
 #[cfg(feature = "app")]
 pub mod app_screen;
 #[cfg(feature = "app")]
+pub mod debug_probe;
+#[cfg(feature = "app")]
 pub mod edit;
 #[cfg(feature = "app")]
 pub mod i18n;

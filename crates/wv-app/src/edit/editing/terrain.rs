@@ -40,7 +40,11 @@ pub fn flush_terrain_texture(
             wv_render::cellmap_bridge::shade_mode_of(view.mode),
             atlas.as_deref(),
             view.terrain_soften,
-            &wv_render::cellmap_bridge::conv_pack_with(view.active_theme, view.hypsometric_tint),
+            &wv_render::cellmap_bridge::conv_pack_with(
+                view.active_theme,
+                view.hypsometric_tint,
+                view.mode,
+            ),
             0.0,
         );
         if let Some(mut img) = images.get_mut(&tex.handle) {
@@ -60,7 +64,11 @@ pub fn flush_terrain_texture(
             rect,
             res,
             view.terrain_soften,
-            &wv_render::cellmap_bridge::conv_pack_with(view.active_theme, view.hypsometric_tint),
+            &wv_render::cellmap_bridge::conv_pack_with(
+                view.active_theme,
+                view.hypsometric_tint,
+                view.mode,
+            ),
         );
     }
     tex.dirty = None;

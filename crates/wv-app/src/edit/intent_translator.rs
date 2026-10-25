@@ -67,6 +67,7 @@ pub fn translate_edit_intents(
     for (seq, PlaceLineIntent { map_id, name, line }) in intents.drain_place_lines() {
         let place_id = wv_core::Id::new_unchecked(format!("place_river_{}", now_millis()));
         let place = Place {
+            kind: None,
             id: place_id.clone(),
             name: if name.is_empty() {
                 "小河".to_string()

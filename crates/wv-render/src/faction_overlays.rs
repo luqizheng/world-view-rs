@@ -51,6 +51,13 @@ const CLAIM_FILL_MUL: f32 = 0.40;
 const LAYER_Z_STEP: f32 = 0.002;
 /// 边界 casing 的墨色（深褐，不用纯黑）。
 const BORDER_INK: [u8; 3] = [0x2B, 0x27, 0x22];
+/// 专业制图的边界线宽（屏幕像素）——固定细线，不随势力 rank 变粗。
+const CARTO_BORDER_PX: f32 = 1.2;
+/// 专业制图边界线的 Z：压在河（0.082/0.084）之上、道路（0.09）之下。
+///
+/// 不能沿用势力图的 `FACTION_Z = 0.3`——那是「填色 + 墨线」的槽位，会盖住
+/// POI（0.21）；普通地图里一条行政界必须让路给道路与注记。
+const CARTO_BORDER_Z: f32 = 0.086;
 /// 虚线：每段屏幕像素长。
 const DASH_PX: f32 = 6.0;
 /// 虚线：间隙屏幕像素。
@@ -105,6 +112,25 @@ struct TerritoryStyle {
     dashed: bool,
 }
 
+/// 专业制图（`ViewMode::GoogleMap`）下的边界样式：**只画线，不填色**。
+///
+/// 三条判据，都是为了「一眼看懂」而不是「看懂谁的领土」：
+/// - **只取当前层的实控边界**：其他层 / 声称层不画——普通地图不表达司法争议，
+///   多层边界叠在一起会变成灰网；
+/// - **不填色**：势力色是「政治地图」的语汇，专业底图不按势力染色；
+/// - **虚线**：照样张图例（边界 · 虚线 #C4C4C4）。本模式既然不画声称，
+///   虚线在这里不会与「claim」语义冲突（Faction 模式仍维持实线 / 虚线二分）。
+fn cartographic_style(is_active: bool, is_claim: bool) -> Option<TerritoryStyle> {
+    if !is_active || is_claim {
+        return None;
+    }
+    Some(TerritoryStyle {
+        fill_alpha: None,
+        border_alpha: Some(1.0),
+        dashed: true,
+    })
+}
+
 /// 势力图层主 system。
 #[allow(clippy::too_many_arguments)]
 pub fn sync_faction_overlays(
@@ -146,6 +172,18 @@ pub fn sync_faction_overlays(
 
     layer.despawn_all(&mut commands);
 
+    // 专业制图（ADR-0061 追记一 / ADR-0063）：边界层退化为「国境线」——
+    // 只画当前层实控边界的一条灰虚线，不填色、不画声称与其他层。
+    let cartographic = view.mode == crate::state::ViewMode::GoogleMap;
+    let carto_grey = {
+        let c = wv_theme::colors_google::GOOGLE_BORDER.to_srgba();
+        [
+            (c.red * 255.0).round() as u8,
+            (c.green * 255.0).round() as u8,
+            (c.blue * 255.0).round() as u8,
+        ]
+    };
+
     let opacity = layers.influence.opacity;
     for t in faction_territories_at(world, &map_id, day) {
         if t.vertices.len() < 6 {
@@ -161,20 +199,31 @@ pub fn sync_faction_overlays(
         let is_active = active.as_ref() == Some(&t.layer);
         let is_claim = t.relation == Some("claim");
         let in_focus = focus_set.as_ref().map(|s| s.contains(&t.faction.id));
-        let Some(style) = territory_style(
-            is_active,
-            display.show_other_borders,
-            is_claim,
-            display.show_claims,
-            in_focus,
-        ) else {
+        let style = if cartographic {
+            cartographic_style(is_active, is_claim)
+        } else {
+            territory_style(
+                is_active,
+                display.show_other_borders,
+                is_claim,
+                display.show_claims,
+                in_focus,
+            )
+        };
+        let Some(style) = style else {
             continue;
         };
 
         // 同 z 的层按解析顺序（z, id）加一个微小偏移，避免边界同深度 z-fight。
         let layer_order = resolved.iter().position(|l| l.id == t.layer).unwrap_or(0);
-        let z = layer_z(layer_def.z, layers.influence.z_offset) + layer_order as f32 * 0.0001;
-        let color = if layer_def.color_mode == FactionColorMode::Inherit {
+        let z = if cartographic {
+            CARTO_BORDER_Z
+        } else {
+            layer_z(layer_def.z, layers.influence.z_offset) + layer_order as f32 * 0.0001
+        };
+        let color = if cartographic {
+            carto_grey
+        } else if layer_def.color_mode == FactionColorMode::Inherit {
             let p = view.active_theme.palette.soften_toward.to_srgba();
             let paper = [
                 (p.red * 255.0).round() as u8,
@@ -213,7 +262,13 @@ pub fn sync_faction_overlays(
         }
 
         if let Some(border_alpha) = style.border_alpha {
-            let px = border_px_for(t.faction.rank.as_deref(), !t.faction.memberships.is_empty());
+            // 专业制图用固定细线（1.2px 屏幕）：一条国家界不该按势力 rank 变粗，
+            // 也不该有手绘 casing——那会让底图显得比道路还重。
+            let px = if cartographic {
+                CARTO_BORDER_PX
+            } else {
+                border_px_for(t.faction.rank.as_deref(), !t.faction.memberships.is_empty())
+            };
             // 外环 + 每个洞环都要描边（国中国的「洞沿」就是内国边界）。
             for ring in territory_rings(t.vertices, &t.holes) {
                 draw_border_ring(
@@ -229,6 +284,7 @@ pub fn sync_faction_overlays(
                     opacity,
                     color,
                     z,
+                    cartographic,
                 );
             }
         }
@@ -237,6 +293,9 @@ pub fn sync_faction_overlays(
 
 /// 单条边界环的描边（casing + inner 两层线）。从 `sync_faction_overlays` 提出，
 /// 供外环与洞环共用。
+///
+/// `single_line = true`（专业制图）时**只画 inner 一层**：普通地图的行政边界
+/// 是一条低对比灰线，双层 casing 会让它压过道路与注记。
 #[allow(clippy::too_many_arguments)]
 fn draw_border_ring(
     ring: &[f32],
@@ -251,6 +310,7 @@ fn draw_border_ring(
     opacity: f32,
     color: [u8; 3],
     z: f32,
+    single_line: bool,
 ) {
     {
         let edges = polygon_edges(ring);
@@ -270,28 +330,30 @@ fn draw_border_ring(
             return;
         }
         // casing：深墨外圈；inner：势力色内线。相邻两国共用边界时自然形成
-        // 「墨线夹两色」（各自画自己一侧）。
-        let casing = meshes.add(build_stroke_batch_mesh(
-            &segments,
-            stroke_world_thickness(px + 2.0, view.scale),
-        ));
-        let casing_mat = materials.add(ColorMaterial {
-            color: Color::srgba(
-                BORDER_INK[0] as f32 / 255.0,
-                BORDER_INK[1] as f32 / 255.0,
-                BORDER_INK[2] as f32 / 255.0,
-                (border_alpha * 0.85 * opacity).clamp(0.0, 1.0),
-            ),
-            ..default()
-        });
-        let casing_entity = commands
-            .spawn((
-                Mesh2d(casing),
-                MeshMaterial2d(casing_mat),
-                Transform::from_translation(Vec3::new(0.0, 0.0, z + 0.001)),
-            ))
-            .id();
-        layer.borders.push(casing_entity);
+        // 「墨线夹两色」（各自画自己一侧）。专业制图只要单线，跳过 casing。
+        if !single_line {
+            let casing = meshes.add(build_stroke_batch_mesh(
+                &segments,
+                stroke_world_thickness(px + 2.0, view.scale),
+            ));
+            let casing_mat = materials.add(ColorMaterial {
+                color: Color::srgba(
+                    BORDER_INK[0] as f32 / 255.0,
+                    BORDER_INK[1] as f32 / 255.0,
+                    BORDER_INK[2] as f32 / 255.0,
+                    (border_alpha * 0.85 * opacity).clamp(0.0, 1.0),
+                ),
+                ..default()
+            });
+            let casing_entity = commands
+                .spawn((
+                    Mesh2d(casing),
+                    MeshMaterial2d(casing_mat),
+                    Transform::from_translation(Vec3::new(0.0, 0.0, z + 0.001)),
+                ))
+                .id();
+            layer.borders.push(casing_entity);
+        }
 
         let inner = meshes.add(build_stroke_batch_mesh(
             &segments,
@@ -961,6 +1023,20 @@ mod tests {
         assert!((layer_z(0, 0.0) - FACTION_Z).abs() < 1e-6);
         assert!((layer_z(3, 0.0) - (FACTION_Z + 3.0 * LAYER_Z_STEP)).abs() < 1e-6);
         assert!((layer_z(99, 0.0) - (FACTION_Z + 4.0 * LAYER_Z_STEP)).abs() < 1e-6);
+    }
+
+    /// 专业制图的边界样式：只取当前层实控，**不填色**、虚线。
+    ///
+    /// 三条断言对应三条设计判据：不填势力色（普通地图不按政治染色）、
+    /// 其他层不画（多层边界叠成灰网）、声称层不画（普通地图不表达争议）。
+    #[test]
+    fn cartographic_style_is_border_only_for_active_control() {
+        let s = cartographic_style(true, false).expect("当前层实控应画边界");
+        assert_eq!(s.fill_alpha, None, "专业制图不填势力色");
+        assert_eq!(s.border_alpha, Some(1.0), "边界满强度");
+        assert!(s.dashed, "样张图例：边界为虚线");
+        assert!(cartographic_style(false, false).is_none(), "其他层不画");
+        assert!(cartographic_style(true, true).is_none(), "声称层不画");
     }
 
     /// 集成：`faction_territories_at` 的同 (map, day) 输入 → 输出。
