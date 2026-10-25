@@ -19,7 +19,7 @@
 //!   属于哪一族」的**词表**，与 `wv_terrain::biome` 同源，属事实层；主题该管
 //!   「长什么样」，不该管「是什么」。
 //! - **符号的几何形状**（三角 / 圆 / 半圆 / 弧的构造）：那是渲染实现，不是
-//!   美术参数。**ADR-0058 补丁**：「画不画 / 换画法」的**选择**归主题
+//!   美术参数。**ADR-0059 补丁**：「画不画 / 换画法」的**选择**归主题
 //!   （[`SymbolStyle`]：Default / None / Tile），构造本身仍留渲染层——
 //!   theme 是内容，渲染是机制。
 //! - **视口裁剪 / 桶合批 / 确定性哈希**：渲染机制。
@@ -64,7 +64,7 @@ impl VariantInk {
     }
 }
 
-/// 装饰符号的画法（ADR-0058）：渲染层内置默认为保底，theme 可改写。
+/// 装饰符号的画法（ADR-0059）：渲染层内置默认为保底，theme 可改写。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum SymbolStyle {
     /// 内置默认程序化形状（现状：山三角/林团/半圆丘……）。向后兼容的保底。
@@ -92,7 +92,7 @@ pub struct DecorRecipe {
     /// 脊点吸附阈值：格高 < 此值时才在步距块内扫峰找山。
     pub ridge_snap_min_h: i16,
 
-    // ── 符号画法（ADR-0058）──────────────────────────────────────
+    // ── 符号画法（ADR-0059）──────────────────────────────────────
     /// 山符号的画法：渲染层内置默认为保底，theme 可改写。
     ///
     /// **分工**：「画不画 / 换画法」由主题裁定，「几何怎么构造」留在渲染层
@@ -100,6 +100,18 @@ pub struct DecorRecipe {
     /// 渲染是机制（本 crate 总纲）。v1 只有山：它是唯一被实机截图证实的
     /// 画法冲突；其余七类按证据追加（style-per-kind 模式即为此预留）。
     pub mountain_style: SymbolStyle,
+    /// 森林符号的画法（ADR-0059 追记一，2026-10-25）：`Default` = 内置三变体
+    /// 程序化形状（针叶三角排 / 阔叶圆团 / 稀树圆点），`None` = 群系格不铺林团
+    /// （林身份交给地形色 + 地点覆盖物层），`Tile` = 预留贴图（v1 warn 回退）。
+    ///
+    /// **与山的分工差异**：森林的「变体」维度（寒带 / 温带 / 干旱）在贴图方案下
+    /// 由**图集等分 + `(种子, 站点序号) % variants` 取模**承载——与覆盖物层
+    /// `SYMBOL_ATLAS_VARIANTS = 3` 同构，故 `Tile(&'static str)` 单键足够表达，
+    /// 无需在枚举里另写变体数（2026-10-25 主理人裁定）。
+    ///
+    /// **注意双通道**：具名森林地物的树图集走 `FeatureRule::symbol_texture`
+    /// （ADR-0045），本字段只管**群系格**上的程序化林团——两者互不替代。
+    pub forest_style: SymbolStyle,
 
     // ── 气候带（归一化 y，0 = 北）─────────────────────────────────
     /// 气候带切点：`< cut[0]` = 寒带（针叶）、`[cut[0], cut[1])` = 温带
@@ -186,8 +198,10 @@ pub const WATERCOLOR: DecorRecipe = DecorRecipe {
     snow_cap_h: 1800,
     rock_h: 3400,
     ridge_snap_min_h: 1500,
-    // 山符号画法：内置默认三角（ADR-0058 D4）——观感零变化的保底。
+    // 山符号画法：内置默认三角（ADR-0059 D4）——观感零变化的保底。
     mountain_style: SymbolStyle::Default,
+    // 森林符号画法：内置三变体程序化形状（ADR-0059 追记一）——同上，保底默认。
+    forest_style: SymbolStyle::Default,
     climate_cuts: [0.30, 0.72],
     conifer_ink: VariantInk::new(0.18, 0.36, 0.21, 0.85),
     temperate_ink: VariantInk::new(0.17, 0.34, 0.19, 0.85),
@@ -218,8 +232,10 @@ pub const WATERCOLOR: DecorRecipe = DecorRecipe {
 /// 暮色装饰配方——暗纸上的符号要更沉、更疏。
 pub const WATERCOLOR_DUSK: DecorRecipe = DecorRecipe {
     // 高度阈值与气候带同源（地形事实），只改颜色与密度感。
-    // 山符号画法同内置默认（ADR-0058 D4）——与日间一致，显式钉住。
+    // 山符号画法同内置默认（ADR-0059 D4）——与日间一致，显式钉住。
     mountain_style: SymbolStyle::Default,
+    // 森林符号画法同内置默认（ADR-0059 追记一）——显式钉住，防继承漂移。
+    forest_style: SymbolStyle::Default,
     spacing_px_edit: 30.0,
     spacing_px_region: 52.0,
     spacing_px_nation: 78.0,
@@ -307,12 +323,22 @@ mod tests {
         assert_ne!(WATERCOLOR.size_mul_nation, WATERCOLOR_DUSK.size_mul_nation);
     }
 
-    /// 两套内置配方的山符号画法都是 `Default`（ADR-0058 D4）——内置默认
+    /// 两套内置配方的山符号画法都是 `Default`（ADR-0059 D4）——内置默认
     /// 三角是保底，观感零变化；「不画」的选择权归主题（水墨包的 `None`
     /// 锚点在 wv-theme-chinese-ink）。
     #[test]
     fn builtin_recipes_keep_default_mountain_style() {
         assert_eq!(WATERCOLOR.mountain_style, SymbolStyle::Default);
         assert_eq!(WATERCOLOR_DUSK.mountain_style, SymbolStyle::Default);
+    }
+
+    /// 两套内置配方的森林符号画法都是 `Default`（ADR-0059 追记一）——
+    /// 程序化三变体林团是保底，内置主题观感零变化。「不画 / 换贴图」的
+    /// 选择权归主题（水墨包显式 `Default` 的锚点在 wv-theme-chinese-ink：
+    /// 苔点与林团是水墨正解，疏密由 `forest_density_gain` 调制）。
+    #[test]
+    fn builtin_recipes_keep_default_forest_style() {
+        assert_eq!(WATERCOLOR.forest_style, SymbolStyle::Default);
+        assert_eq!(WATERCOLOR_DUSK.forest_style, SymbolStyle::Default);
     }
 }

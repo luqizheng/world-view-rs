@@ -873,6 +873,9 @@ pub enum I18nKey {
     CmdSwitchSchematicView,
     /// 「切换到势力图」（ADR-0027 D6）
     CmdSwitchFactionView,
+    /// 「切换到普通地图」（2026-10-25：`ViewMode::GoogleMap` 此前无任何 UI 入口，
+    /// 枚举存在、色板齐备却切不过去——专业制图范式的唯一入口就是它）
+    CmdSwitchGoogleMapView,
     /// 「全览地图（视野归位）」
     CmdFitMap,
     /// 「放大地图」
@@ -1275,7 +1278,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 507] = [
+    pub const ALL: [I18nKey; 508] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1674,6 +1677,7 @@ impl I18nKey {
         I18nKey::CmdSwitchVectorFlatView,
         I18nKey::CmdSwitchSchematicView,
         I18nKey::CmdSwitchFactionView,
+        I18nKey::CmdSwitchGoogleMapView,
         I18nKey::CmdFitMap,
         I18nKey::CmdZoomIn,
         I18nKey::CmdZoomOut,

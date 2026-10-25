@@ -1,4 +1,4 @@
-# ADR-0058: 装饰符号画法主题化契约（SymbolStyle）
+# ADR-0059: 装饰符号画法主题化契约（SymbolStyle）
 
 - 状态：**已批准**（2026-10-25 用户批准落地并合入 main；§6 五步全部实施完毕，
   门禁见提交说明。§14 色板定稿值的落地另开 commit）
@@ -41,7 +41,7 @@ theme，改写它们，毕竟 theme，水彩和水墨可能是完全不同的画
 **D1 · 新增 `SymbolStyle` 枚举（wv-theme 契约层，纯数据）**
 
 ```rust
-/// 装饰符号的画法（ADR-0058）：渲染层内置默认为保底，theme 可改写。
+/// 装饰符号的画法（ADR-0059）：渲染层内置默认为保底，theme 可改写。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum SymbolStyle {
     /// 内置默认程序化形状（现状：山三角/林团/半圆丘……）。向后兼容的保底。
@@ -141,7 +141,7 @@ biome 笔刷触发两条路径，作者手涂的山地也不画符号（biome �
 | 1 | `crates/wv-theme/src/decor.rs` | 新增 `SymbolStyle`；`DecorRecipe` 增 `mountain_style` 字段；`WATERCOLOR`(:159) / `WATERCOLOR_DUSK`(:193) 设 `Default`；随文件 re-export 惯例导出 | `cargo test -p wv-theme` |
 | 2 | `crates/wv-render/src/terrain_decor.rs` | Mountain 几何臂(:325)按 style 分派（None→空 / Tile→一次性 warn+Default / Default→现逻辑）；:377 露岩硬编码 → `recipe.rock_ink.to_rgba()` | `cargo test -p wv-render` |
 | 3 | `crates/wv-theme-chinese-ink/src/lib.rs` | decor 块显式 `mountain_style: SymbolStyle::None`；补锚点测试（钉住 None + 露岩走 rock_ink 的传播路径） | `cargo test -p wv-theme-chinese-ink` |
-| 4 | `docs/adr/ADR-0058-*.md` | 本 ADR 状态 草案 → 已批准（用户确认后由主理人改） | — |
+| 4 | `docs/adr/ADR-0059-*.md` | 本 ADR 状态 草案 → 已批准（用户确认后由主理人改） | — |
 | 5 | 全工作区 | fmt + clippy + 相关 crate 测试；Mountain 既有单测（:1265 雪帽 / :1375 露岩 / :1203 recipe 助手）过一遍，形状不变应全绿 | `cargo test --workspace` |
 
 实施由 engineering-lead 执行；主理人汇编前复核：零改 wv-theme 既有公开 API
@@ -170,3 +170,56 @@ biome 笔刷触发两条路径，作者手涂的山地也不画符号（biome �
   注入）挂 ADR-0023 M3 / 水墨待裁 ③；bamboo 等水墨专属区域变体维持待裁 ④
   （双包同步碰 ADR-0043 红线的问题不变）；其余七类符号的 style 字段按证据
   追加（本 ADR 的 style-per-kind 模式即为此预留）。
+
+## 追记一（2026-10-25 · 森林 style 字段 + 变体承载约定）
+
+**问题**：主理人提问「森林等等贴图怎么做，还是不知道应该怎么做」。核对源码后，
+真实处境是**森林有两套互不相通的画法**，而 ADR-0059 只给山开了口子：
+
+| 层 | 契约 | 画法 | 覆盖范围 | theme 能改 |
+|---|---|---|---|---|
+| A 地形装饰 | `DecorRecipe` + `terrain_decor::site_primitives` | 程序化三变体（针叶三角排 / 阔叶圆团 / 稀树圆点） | **全图群系格**（`forest` / `jungle` / 热带雨林，按密度场铺） | 墨色 / 气候切点 / 密度增益 / 步距 / 尺寸——**不能改形** |
+| B 地点覆盖物 | `FeatureRule::symbol_texture`（ADR-0045） | 真贴图 `tree_atlas_day.png`（3 变体图集）+ `forest_fill.png` 晕 | **仅具名森林地物** | 全部（贴图键 / 尺寸 / 间距 / 晕） |
+
+结论：**贴图通道（B）已经存在**，缺的是群系格层（A）的「画法三态」入口。
+
+**决策**：
+
+1. **`DecorRecipe` 增 `forest_style: SymbolStyle`**（与 `mountain_style` 同构三态），
+   `WATERCOLOR` / `WATERCOLOR_DUSK` 显式 `Default`（观感零变化）；`terrain_decor`
+   的 `DecorKind::Forest` 几何臂首部分派（`None` → 该站点不产图元 / `Tile` →
+   一次性 warn 后走 `Default`）。
+2. **变体承载用「图集等分 + 取模」，不扩枚举**（2026-10-25 主理人裁定）：森林的
+   寒带 / 温带 / 干旱三变体在贴图方案下由「图集横向等分 + `(地点种子, 站点序号)
+   % variants`」选定，与覆盖物层既有 `SYMBOL_ATLAS_VARIANTS = 3` 同构——故
+   `Tile(&'static str)` 单键足够，`SymbolStyle` 形状不变（否决 `Tile { atlas,
+   variants }`：让契约显式化换来的是与 B 层不一致的第二套变体约定）。
+3. **水墨包显式 `Default`**（与山的 `None` 相反，有意为之）：三变体林团在宣纸上
+   不是「具象异物」，正是「苔点」画法本体（校准方案 §7 森林族苔点演绎），疏密已由
+   `forest_density_gain 0.72` 调制；关掉会让群系格只剩纯色、林身份不成立。锚点
+   测试 `pack_forest_style_stays_default` 钉住这一点，防「顺手统一成 None」。
+4. **Tile 告警标记按类别各持一个 `Once`**：原实现是一个全局 `TILE_STYLE_WARNED`，
+   森林接入后会被山的告警吞掉——调试「谁真的用了 Tile」时看不到真实使用者。
+   改为 `warn_tile_style_once(&ONCE, 类别名, key)` + 每类一个 static。
+
+**被否决**：
+
+- **森林设 `None`（与山同理）**：山可以收敛到等值线，森林没有等价的替代层——
+  群系格的林团一旦不画，地图上大片森林只剩色块（B 层只认具名地物）。
+- **`Tile { atlas, variants }`**：见决策 2。
+- **八类一次全加 style**：仍无证据支持其余六类（平原 / 丘陵 / 沼泽 / 沙漠 / 雪原 /
+  浅海）需要换画法，按「模式预留、按证据追加」继续。
+
+**遗留（阻塞真贴图的机制问题，须另立 ADR）**：
+
+1. **资产登记通道**：`EMBEDDED_TEXTURES` 是 `wv-render` 私有常量，走
+   `include_bytes!` 编译期嵌入（`feature_overlays.rs:88`）——**外部主题 crate
+   无法自带贴图**（其资产在编译 `wv-render` 时不可见）。要支持「主题自带贴图」，
+   须把它改为可注册表（`wv-app` 装配期登记内置 + 外部包资产），这会突破
+   「零运行期 IO」现有口径，属架构级决策，即待裁 ③ 的实质内容。
+2. **`Tile` 的渲染路径**：`terrain_decor` 需建贴图 mesh 路径（batch UV + 贴图句柄
+   缓存，参照 `feature_overlays::build_symbol_mesh_uv_seeded` 与
+   `LiveSymbolLayer::texture` 的跨帧句柄缓存）。契约已就位，届时**零契约变更**接通。
+
+**门禁**：`cargo test -p wv-theme`（63 测）/ `-p wv-theme-chinese-ink`（12 测）/
+`-p wv-render`（terrain_decor 全绿）；`cargo fmt --check` 通过。

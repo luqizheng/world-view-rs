@@ -86,3 +86,42 @@ Nation 档放行 rank ≥ 3、Region 档 ≥ 2、Edit 档全见——阈值只�
 - ADR-0037 D5（河流派生）/ ADR-0046（作者河双供给——本 ADR D5 的级别语义覆盖两路供给）
 - ADR-0009 / ADR-0012（LodTier 三档体系）
 - README §12-48（登记缺口，道路半边由本 ADR 关闭；海洋半边另案）
+
+## 追记一（2026-10-25 · 道路分级着色落地：rank 三档 → 三档画法）
+
+**背景**：主理人裁定改走「专业制图」范式（参照百度地图普通地图）。本 ADR 已把
+`PlaceEdge::effective_rank` 统一为 1/2/3 三档并用于 LOD 前缀切片，但**三档画法
+完全相同**——`vector_layers` 里全路网共用一对 `(casing, fill)` 与一组固定线宽，
+结果在近白底图上糊成一片同质的网，主次不可读。`GOOGLE_HIGHWAY_STROKE` 自
+2026-10-13 起就是注释里写明的「预留令牌」，一直未接线。
+
+**决策**：
+
+1. **配色契约落 `wv-theme::colors_google`**：新增 `RoadGradeStyle
+   { fill, casing, fill_px, casing_px }` 与 `GOOGLE_ROAD_GRADES: [RoadGradeStyle; 3]`
+   （索引 0 = 最高档）。色序：橙黄干线 / 饱和黄干道 / 白支路。宽度 7.2:5.0、
+   5.4:3.6、4.0:2.4（casing 恒宽于 fill，路缘才看得见）。
+2. **渲染侧按 `road_rank_cuts` 切三段前缀**：段列已按 rank 降序，故
+   `rank ≥ 3 → [0, cuts[2])`、`rank = 2 → [cuts[2], cuts[1])`、
+   `rank = 1 → [cuts[1], cuts[0])`（`road_grade_spans`）。**零额外存储**——
+   三个切点本来就在帧里。副产品：Nation 档前缀只到 `cuts[2]`，所以
+   「放大才看得见小路」由切片天然保证，不需要可见性判据。
+3. **每档独立合批与材质**：`VectorLayerEntities` 的 `road_casings` / `roads`
+   由单池改为 `[RoadLayerPool; 3]`；`RoadMaterialSet` 的 casing/fill 改为
+   `[Handle; 3]`。理由：一个 stroke mesh 只有一个世界厚度，三档线宽不同必须
+   分 mesh。分档指纹 = 全量指纹 ⊕ 区间端点（只用全量指纹会在「只改 rank、
+   坐标集合不变」时漏判分区变化）。
+4. **非 Google 主题不分级**：`road_grade_colors` 对古舆图等返回三档同色
+   （原观感零变化）。分级是「专业制图」的语义，不是所有主题的义务。
+
+**代价**：道路 mesh 从 2 个（casing+fill）变 6 个；材质从 2 个变 6 个/模式。
+低档视野下多数档为空，空池不产 mesh，实际增幅只在 Edit 档。
+
+**验收**：`wv-render` 363 测全绿，新增三锚点——逐档 casing>fill 且档位越高线越粗
+（`google_road_casing_is_thicker_than_fill_for_every_grade`）、三档填充色互不相同
+（`google_road_grades_have_distinct_fills`）、三段前缀切分正确
+（`road_grade_spans_split_prefix_by_rank`）；`nation_tier_draws_only_high_rank_road_prefix`
+改为比较三档顶点总和（分级后单一 mesh 的语义不再成立）。
+
+**校准记录**：区域干道初版 `#FBDB92` 在密集路网里过淡；依第二张参考图
+（珠海 / 澳门城市区）改为 `#FBD366`。

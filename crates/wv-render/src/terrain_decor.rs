@@ -49,10 +49,23 @@ const BUCKET_Z_STEP: f32 = 0.0004;
 const MAX_SITES_PER_KIND: usize = 2200;
 /// 视口外扩余量（屏幕像素）：拖动相机时边缘符号不闪断。
 const VIEWPORT_MARGIN_PX: f32 = 32.0;
-/// `SymbolStyle::Tile` 的一次性告警标记（ADR-0058 D3）：贴图装载通道待 v2，
-/// warn 每进程只发一次——`site_primitives` 是逐站点调用的，每站点刷屏会把
-/// 日志埋了。
-static TILE_STYLE_WARNED: std::sync::Once = std::sync::Once::new();
+/// `SymbolStyle::Tile` 的一次性告警标记（ADR-0059 D3 / 追记一）：贴图装载通道
+/// 待 v2，warn 每进程**每类符号**只发一次——`site_primitives` 是逐站点调用的，
+/// 每站点刷屏会把日志埋了。
+///
+/// **按类别各持一个 `Once`**（不共用）：共用会让后出现的类别被前一类的告警
+/// 吞掉，调试「谁真的用了 Tile」时看不到真实使用者。
+static TILE_STYLE_WARNED_MOUNTAIN: std::sync::Once = std::sync::Once::new();
+static TILE_STYLE_WARNED_FOREST: std::sync::Once = std::sync::Once::new();
+
+/// `Tile` 键在 v1 的统一兜底：一次性 warn 后由调用方走 `Default` 逻辑。
+fn warn_tile_style_once(flag: &std::sync::Once, kind: &str, key: &str) {
+    flag.call_once(|| {
+        warn!(
+            "SymbolStyle::Tile({key:?})：{kind}贴图装载通道待 v2（ADR-0023 M3），回退内置默认符号"
+        );
+    });
+}
 
 /// 装饰类别（八类）。下标即渲染桶序号。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -242,6 +255,21 @@ pub fn site_primitives(
     let r3 = hash01(cx, cy, 3);
     match kind {
         DecorKind::Forest => {
+            // 画法分派（ADR-0059 追记一）：「画不画 / 换画法」由主题裁定——
+            // None：群系格不铺林团，林身份交给地形色（core[4]）+ 具名地物的
+            //   覆盖物树图集（`FeatureRule::symbol_texture`），本站点不产图元；
+            // Tile：贴图装载通道待 v2（ADR-0023 M3），一次性 warn 后走 Default
+            //   保底——森林的变体维度（寒带 / 温带 / 干旱）在贴图方案下由
+            //   「图集等分 + `(种子, 站点序号) % variants`」承载，故单键契约
+            //   无需扩容（见 `DecorRecipe::forest_style` 文档）；
+            // Default：内置三变体程序化形状（下方逻辑不变）。
+            match recipe.forest_style {
+                SymbolStyle::None => return out,
+                SymbolStyle::Tile(key) => {
+                    warn_tile_style_once(&TILE_STYLE_WARNED_FOREST, "森林", key);
+                }
+                SymbolStyle::Default => {}
+            }
             // 气候变体（ADR-0039 D3）：沿 y 轴（0=北）三档。
             // 颜色 = 顶点色（桶材质为白）；形状区分针叶排 / 阔叶团 / 绿洲稀树。
             // 变体色由主题配方给定（ADR-0048 追记二）。
@@ -327,7 +355,7 @@ pub fn site_primitives(
             ));
         }
         DecorKind::Mountain => {
-            // 画法分派（ADR-0058 D3）：「画不画 / 换画法」由主题裁定——
+            // 画法分派（ADR-0059 D3）：「画不画 / 换画法」由主题裁定——
             // None：山体表达收敛到等值线 / 皴法 / 海配方 / 地形色，
             //   本站点不产任何图元（水墨包的画法，方案 §7 留白裁定的彻底化）；
             // Tile：贴图装载通道待 v2（ADR-0023 M3），一次性 warn 后
@@ -336,11 +364,7 @@ pub fn site_primitives(
             match recipe.mountain_style {
                 SymbolStyle::None => return out,
                 SymbolStyle::Tile(key) => {
-                    TILE_STYLE_WARNED.call_once(|| {
-                        warn!(
-                            "SymbolStyle::Tile({key:?})：山体贴图装载通道待 v2（ADR-0023 M3），回退内置默认山符号"
-                        );
-                    });
+                    warn_tile_style_once(&TILE_STYLE_WARNED_MOUNTAIN, "山体", key);
                 }
                 SymbolStyle::Default => {}
             }
@@ -387,7 +411,7 @@ pub fn site_primitives(
             }
             // 极高山露岩（ADR-0039 D4）：>=3400m 雪帽内缘叠露岩三角
             // （进 Snow 桶第二层图元，顶点色区分）。色走主题 rock_ink
-            // （ADR-0058 D6：此前硬编码 #C9B98A，绕过主题——水墨包的
+            // （ADR-0059 D6：此前硬编码 #C9B98A，绕过主题——水墨包的
             // 岩墨灰自此生效）。
             if height_m >= recipe.rock_h {
                 out.push(SitePrim::colored(
@@ -1429,7 +1453,7 @@ mod tests {
         );
     }
 
-    /// ADR-0058 D3：`mountain_style: None` 时山站点不产任何图元——
+    /// ADR-0059 D3：`mountain_style: None` 时山站点不产任何图元——
     /// 水墨包的画法：山体表达收敛到等值线重墨 + 海岸顿笔，「不画」是
     /// 正常画法而非异常态（连雪帽 / 露岩一并让位）。
     #[test]
@@ -1453,7 +1477,7 @@ mod tests {
         );
     }
 
-    /// ADR-0058 D3：`Tile` 画法 v1 一次性 warn 后回退 `Default`——
+    /// ADR-0059 D3：`Tile` 画法 v1 一次性 warn 后回退 `Default`——
     /// 装载通道待 v2（ADR-0023 M3），分派本身不 panic 且保底画默认山符号。
     #[test]
     fn mountain_style_tile_falls_back_to_default_without_panic() {

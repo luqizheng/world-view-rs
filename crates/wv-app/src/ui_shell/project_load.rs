@@ -362,7 +362,11 @@ pub(crate) fn adopt_world_snapshot(
         wv_render::cellmap_bridge::shade_mode_of(view.mode),
         atlas,
         view.terrain_soften,
-        &wv_render::cellmap_bridge::conv_pack_with(view.active_theme, view.hypsometric_tint),
+        &wv_render::cellmap_bridge::conv_pack_with(
+            view.active_theme,
+            view.hypsometric_tint,
+            view.mode,
+        ),
         0.0,
     );
     wv_render::terrain_view::replace_terrain_texture(

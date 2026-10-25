@@ -34,15 +34,54 @@ use crate::layer_frame::LayerFrame;
 use crate::recipe::{PassId, RenderRecipe};
 use crate::state::{lod_tier, GridConfig, ViewState};
 use crate::theme::colors_google::{
-    GOOGLE_PLACE_DOT, GOOGLE_POI_RING, GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL,
+    GOOGLE_PLACE_DOT, GOOGLE_POI_RING, GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL, GOOGLE_ROAD_GRADES,
 };
 use crate::theme::palette::{self, MapPalette, PaletteColors};
 use crate::world_projection::{segments_fingerprint, PlaceDot, ProjectionFrame};
 
-/// Google 式道路外缘宽度（屏幕像素）。
+/// Google 式道路外缘宽度（屏幕像素）——**非分级主题**（古舆图等）的兜底值。
+/// Google 模式按 [`GOOGLE_ROAD_GRADES`] 三档取宽，不再用这两个常量。
 const GOOGLE_ROAD_CASING_PX: f32 = 6.0;
-/// Google 式道路主体宽度（屏幕像素）。
+/// Google 式道路主体宽度（屏幕像素）——同上，仅兜底用。
 const GOOGLE_ROAD_FILL_PX: f32 = 3.5;
+
+/// 道路分级档数：与 `PlaceEdge::effective_rank` 的 1/2/3 三档一一对应。
+///
+/// 索引 0 = 最高等级（`rank ≥ 3`，Nation 档起可见），2 = 最低（仅 Edit 档）。
+/// 段列已按 rank 降序排列，故三档在切片内是**连续区间**——渲染侧只需三个
+/// 前缀切点，零额外存储（ADR-0047 D4 的 `road_rank_cuts` 正好就是这三个点）。
+const ROAD_GRADES: usize = 3;
+
+/// 第 `grade` 档的 (casing, fill) 屏幕像素宽度。
+fn road_grade_px(mode: crate::state::ViewMode, grade: usize) -> (f32, f32) {
+    match mode {
+        crate::state::ViewMode::GoogleMap => {
+            let g = GOOGLE_ROAD_GRADES[grade.min(ROAD_GRADES - 1)];
+            (g.casing_px, g.fill_px)
+        }
+        _ => (GOOGLE_ROAD_CASING_PX, GOOGLE_ROAD_FILL_PX),
+    }
+}
+
+/// 当前档位视野内，三档道路在段切片中的 `[start, end)` 区间。
+///
+/// `cuts` 是 [`ProjectionFrame::road_rank_cuts`]（下标序 Edit/Region/Nation，
+/// 值是各档的可见前缀长度）。因为段列按 rank 降序，`rank ≥ 3` 一定落在
+/// `[0, cuts[2])`、`rank = 2` 落在 `[cuts[2], cuts[1])`、`rank = 1` 落在
+/// `[cuts[1], cuts[0])`。Nation 档前缀只有 `cuts[2]`，故后两档天然为空。
+fn road_grade_spans(
+    tier: crate::state::LodTier,
+    cuts: [usize; 3],
+) -> [(usize, usize); ROAD_GRADES] {
+    let len = match tier {
+        crate::state::LodTier::Edit => cuts[0],
+        crate::state::LodTier::Region => cuts[1],
+        crate::state::LodTier::Nation => cuts[2],
+    };
+    let hi = cuts[2].min(len);
+    let mid = cuts[1].min(len);
+    [(0, hi), (hi, mid), (mid, len)]
+}
 /// POI 点标在屏幕上的最小可见直径（像素）。
 const POI_MIN_SCREEN_PX: f32 = 5.0;
 
@@ -368,8 +407,10 @@ fn finish_batch_mesh(positions: Vec<[f32; 3]>, indices: Vec<u32>) -> Mesh {
 struct RoadMaterialSet {
     mode: crate::state::ViewMode,
     palette: MapPalette,
-    casing: Handle<ColorMaterial>,
-    fill: Handle<ColorMaterial>,
+    /// 三档路缘材质（索引 0 = 最高等级，见 [`ROAD_GRADES`]）。
+    casing: [Handle<ColorMaterial>; ROAD_GRADES],
+    /// 三档道路主体材质。
+    fill: [Handle<ColorMaterial>; ROAD_GRADES],
 }
 
 /// 按模式缓存的 POI 材质。
@@ -445,8 +486,11 @@ impl RoadLayerPool {
 /// 矢量层实体与可复用资产规格缓存。
 #[derive(Resource, Default)]
 pub struct VectorLayerEntities {
-    road_casings: RoadLayerPool,
-    roads: RoadLayerPool,
+    /// 三档道路的 casing 合批池（索引 0 = 最高等级）：分级后每档线宽不同，
+    /// 必须各自成 mesh——同一个 mesh 只能有一个世界厚度。
+    road_casings: [RoadLayerPool; ROAD_GRADES],
+    /// 三档道路的 fill 合批池。
+    roads: [RoadLayerPool; ROAD_GRADES],
     /// 街道矢量层（ADR-0010）：主干档（rank ≤ 2），画得粗、压在行程连线上。
     street_major: RoadLayerPool,
     /// 街道矢量层：次干/支路档，画得细。
@@ -540,8 +584,12 @@ pub fn sync_vector_layers(
     let place_z = layers.place.z_offset;
 
     if !layers.road.visible {
-        layer.road_casings.despawn(&mut commands);
-        layer.roads.despawn(&mut commands);
+        for pool in &mut layer.road_casings {
+            pool.despawn(&mut commands);
+        }
+        for pool in &mut layer.roads {
+            pool.despawn(&mut commands);
+        }
         layer.rivers.despawn(&mut commands);
         layer.river_material = None;
         layer.author_rivers.despawn(&mut commands);
@@ -555,7 +603,7 @@ pub fn sync_vector_layers(
         layer.street_minor_casing.despawn(&mut commands);
         layer.street_preview.despawn(&mut commands);
     } else {
-        let (casing, fill) = layer
+        let (casings, fills) = layer
             .road_materials
             .iter()
             .find(|m| m.mode == view.mode)
@@ -655,33 +703,52 @@ pub fn sync_vector_layers(
         let road_segments = frame.road_slice_at(road_tier);
         let road_fingerprint = frame.road_fingerprint_at(road_tier);
         if recipe.enabled(PassId::Roads) {
-            sync_road_strokes(
-                &mut commands,
-                &mut meshes,
-                road_segments,
-                road_fingerprint,
-                view.scale,
-                casing.clone(),
-                GOOGLE_ROAD_CASING_PX,
-                ROAD_CASING_Z + road_z,
-                road_materials_changed,
-                &mut layer.road_casings,
-            );
-            sync_road_strokes(
-                &mut commands,
-                &mut meshes,
-                road_segments,
-                road_fingerprint,
-                view.scale,
-                fill.clone(),
-                GOOGLE_ROAD_FILL_PX,
-                ROAD_Z + road_z,
-                road_materials_changed,
-                &mut layer.roads,
-            );
+            // 道路分级（2026-10-25）：段列按 rank 降序，三档是连续前缀区间
+            // （`rank ≥ 3` / `= 2` / `= 1`）。每档线宽不同 → 必须各自成 mesh。
+            // 低档视野天然只含高档（Nation 只有 `[0, cuts[2])`），所以
+            // 「放大才看得见小路」由切片本身保证，不需要额外的可见性判据。
+            let spans = road_grade_spans(road_tier, frame.road_rank_cuts);
+            for (grade, (start, end)) in spans.iter().enumerate() {
+                let segs = &road_segments[*start..*end];
+                // 分档指纹 = 全量指纹 ⊕ 区间端点：段列内容或分区任一变化都重建。
+                // 只用全量指纹会在「只改 rank」时漏判（坐标集合没变、分区变了）。
+                let fp = road_fingerprint
+                    ^ (*start as u64).rotate_left(17)
+                    ^ (*end as u64).rotate_left(41);
+                let z_jitter = grade as f32 * 0.0006;
+                let (casing_px, fill_px) = road_grade_px(view.mode, grade);
+                sync_road_strokes(
+                    &mut commands,
+                    &mut meshes,
+                    segs,
+                    fp,
+                    view.scale,
+                    casings[grade].clone(),
+                    casing_px,
+                    ROAD_CASING_Z + road_z + z_jitter,
+                    road_materials_changed,
+                    &mut layer.road_casings[grade],
+                );
+                sync_road_strokes(
+                    &mut commands,
+                    &mut meshes,
+                    segs,
+                    fp,
+                    view.scale,
+                    fills[grade].clone(),
+                    fill_px,
+                    ROAD_Z + road_z + z_jitter,
+                    road_materials_changed,
+                    &mut layer.roads[grade],
+                );
+            }
         } else {
-            layer.road_casings.despawn(&mut commands);
-            layer.roads.despawn(&mut commands);
+            for pool in &mut layer.road_casings {
+                pool.despawn(&mut commands);
+            }
+            for pool in &mut layer.roads {
+                pool.despawn(&mut commands);
+            }
         }
         // 橡皮筋预览：画线中的「上一落点 → 光标」（编辑器反馈，与 roads_visible
         // 无关——预览属于编辑会话，不属于图层可见性）。两端都是**视图空间**坐标
@@ -700,7 +767,7 @@ pub fn sync_vector_layers(
             &preview,
             preview_fp,
             view.scale,
-            fill.clone(),
+            fills[ROAD_GRADES - 1].clone(),
             STREET_PREVIEW_PX,
             STREET_PREVIEW_Z + road_z,
             road_materials_changed,
@@ -783,15 +850,19 @@ pub fn sync_vector_layers(
     }
 }
 
-/// 道路组两种模式的基础色（casing, fill）。alpha 是「本色 alpha」，
-/// 图层 opacity 在其上相乘。
+/// 道路三档的基础色 `(casing, fill)`（索引 0 = 最高等级）。
 ///
-/// 非 Google 模式走地图主题色板（ADR-0016）：casing = 纸面色（把路从同族
-/// 地形色上「托」出来），fill = 官道棕。
-fn road_base_colors(mode: crate::state::ViewMode, pal: &PaletteColors) -> (Color, Color) {
+/// Google 模式取 [`GOOGLE_ROAD_GRADES`]：橙黄干线 / 浅黄干道 / 白支路——这张
+/// 「粗细 + 色阶」是普通地图可读性的主要来源（2026-10-25 之前全档同色，
+/// 路网糊成一片）。非 Google 主题保持单色：古舆图的路不分级是刻意的美术选择，
+/// 三档填同一个色即退回原观感。
+fn road_grade_colors(
+    mode: crate::state::ViewMode,
+    pal: &PaletteColors,
+) -> [(Color, Color); ROAD_GRADES] {
     match mode {
-        crate::state::ViewMode::GoogleMap => (GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL),
-        _ => (pal.road_casing.with_alpha(0.28), pal.road_stroke),
+        crate::state::ViewMode::GoogleMap => GOOGLE_ROAD_GRADES.map(|g| (g.casing, g.fill)),
+        _ => [(pal.road_casing.with_alpha(0.28), pal.road_stroke); ROAD_GRADES],
     }
 }
 
@@ -823,12 +894,14 @@ fn apply_road_material_alpha(
     opacity: f32,
 ) {
     for set in &layer.road_materials {
-        let (casing, fill) = road_base_colors(set.mode, palette::colors(set.palette));
-        if let Some(mut mat) = materials.get_mut(&set.casing) {
-            mat.color = casing.with_alpha(casing.alpha() * opacity);
-        }
-        if let Some(mut mat) = materials.get_mut(&set.fill) {
-            mat.color = fill.with_alpha(fill.alpha() * opacity);
+        let grades = road_grade_colors(set.mode, palette::colors(set.palette));
+        for (i, (casing, fill)) in grades.iter().enumerate() {
+            if let Some(mut mat) = materials.get_mut(&set.casing[i]) {
+                mat.color = casing.with_alpha(casing.alpha() * opacity);
+            }
+            if let Some(mut mat) = materials.get_mut(&set.fill[i]) {
+                mat.color = fill.with_alpha(fill.alpha() * opacity);
+            }
         }
     }
 }
@@ -874,13 +947,19 @@ fn ensure_road_materials(
         .iter()
         .any(|set| set.mode == mode && set.palette == map_palette)
     {
-        let (casing, fill) = road_base_colors(mode, palette::colors(map_palette));
+        let grades = road_grade_colors(mode, palette::colors(map_palette));
         let with_opacity = |c: Color| c.with_alpha(c.alpha() * road_opacity);
+        // 逐档建材质：casing 与 fill 各 ROAD_GRADES 个（2026-10-25 道路分级）。
+        // `Handle` 不是 Copy，不能用 `[Handle::default(); N]` 铺开。
+        let casing: [Handle<ColorMaterial>; ROAD_GRADES] =
+            std::array::from_fn(|i| materials.add(with_opacity(grades[i].0)));
+        let fill: [Handle<ColorMaterial>; ROAD_GRADES] =
+            std::array::from_fn(|i| materials.add(with_opacity(grades[i].1)));
         layer.road_materials.push(RoadMaterialSet {
             mode,
             palette: map_palette,
-            casing: materials.add(with_opacity(casing)),
-            fill: materials.add(with_opacity(fill)),
+            casing,
+            fill,
         });
     }
     layer.road_material_mode = Some(mode);
@@ -1510,18 +1589,53 @@ mod tests {
     use bevy::render::mesh::VertexAttributeValues;
 
     /// Google 式道路必须有灰 casing + 白 fill 双层，粗细差即路缘。
+    ///
+    /// 2026-10-25 道路分级后改为**逐档**校验：三档都必须 casing > fill，
+    /// 且档位越高线越粗（否则「放大才看得见小路」的层次会倒过来）。
     #[test]
-    fn google_road_casing_is_thicker_than_fill() {
-        let casing = stroke_world_thickness(GOOGLE_ROAD_CASING_PX, 1.0);
-        let fill = stroke_world_thickness(GOOGLE_ROAD_FILL_PX, 1.0);
-        assert!(
-            casing > fill,
-            "casing 应厚于 fill：casing={} fill={}，期望 {}px > {}px",
-            casing,
-            fill,
-            GOOGLE_ROAD_CASING_PX,
-            GOOGLE_ROAD_FILL_PX
-        );
+    fn google_road_casing_is_thicker_than_fill_for_every_grade() {
+        for grade in 0..ROAD_GRADES {
+            let (casing_px, fill_px) = road_grade_px(crate::state::ViewMode::GoogleMap, grade);
+            let casing = stroke_world_thickness(casing_px, 1.0);
+            let fill = stroke_world_thickness(fill_px, 1.0);
+            assert!(
+                casing > fill,
+                "第 {grade} 档 casing 应厚于 fill：{casing_px}px 应 > {fill_px}px"
+            );
+            if grade + 1 < ROAD_GRADES {
+                let (_, next_fill) = road_grade_px(crate::state::ViewMode::GoogleMap, grade + 1);
+                assert!(
+                    fill_px > next_fill,
+                    "档位越高线越粗：第 {grade} 档 {fill_px}px 应 > 第 {} 档 {next_fill}px",
+                    grade + 1
+                );
+            }
+        }
+    }
+
+    /// 三档颜色必须互不相同——全同色等于没分级（这正是改造前的状态）。
+    #[test]
+    fn google_road_grades_have_distinct_fills() {
+        let pal = palette::colors(MapPalette::default());
+        let grades = road_grade_colors(crate::state::ViewMode::GoogleMap, &pal);
+        let a = grades[0].1.to_srgba();
+        let b = grades[1].1.to_srgba();
+        let c = grades[2].1.to_srgba();
+        assert_ne!(a, b, "干线 / 干道填充色不能相同");
+        assert_ne!(b, c, "干道 / 支路填充色不能相同");
+    }
+
+    /// 三档切片：`rank ≥ 3` / `= 2` / `= 1` 在排序后的段列里是连续前缀区间。
+    #[test]
+    fn road_grade_spans_split_prefix_by_rank() {
+        // 段列按 rank 降序：3,3,2,1,1 → cuts = [5(Edit 全量), 3(≥2), 2(≥3)]
+        let cuts = [5usize, 3, 2];
+        let edit = road_grade_spans(crate::state::LodTier::Edit, cuts);
+        assert_eq!(edit, [(0, 2), (2, 3), (3, 5)], "Edit 三档都要有");
+        let region = road_grade_spans(crate::state::LodTier::Region, cuts);
+        assert_eq!(region, [(0, 2), (2, 3), (3, 3)], "Region 不含 rank=1");
+        let nation = road_grade_spans(crate::state::LodTier::Nation, cuts);
+        assert_eq!(nation, [(0, 2), (2, 2), (2, 2)], "Nation 只有干线");
     }
 
     /// 街道与道路同口径：每档都必须有 casing，粗细差即路缘；且 Z 序要保证 casing
@@ -2284,19 +2398,22 @@ mod tests {
     /// Nation 档 fill 合批只含 rank ≥ 3 前缀——顶点数必须比 Edit 档少。
     #[test]
     fn nation_tier_draws_only_high_rank_road_prefix() {
+        // 2026-10-25 道路分级后「可见段集」不再等于单一 mesh：三档各一个合批，
+        // 故比较的是**三档顶点总和**（分级前是一个 mesh 装全部）。
         let fill_vertices = |world: &World| -> usize {
             let layer = world.resource::<VectorLayerEntities>();
-            let handle = &layer
+            let assets = world.resource::<Assets<Mesh>>();
+            layer
                 .roads
-                .batch
-                .as_ref()
-                .expect("路网非空，应有 fill 合批")
-                .mesh;
-            world
-                .resource::<Assets<Mesh>>()
-                .get(handle)
-                .expect("fill mesh 在册")
-                .count_vertices()
+                .iter()
+                .filter_map(|pool| pool.batch.as_ref())
+                .map(|batch| {
+                    assets
+                        .get(&batch.mesh)
+                        .expect("fill mesh 在册")
+                        .count_vertices()
+                })
+                .sum()
         };
 
         let mut world = World::default();
@@ -2344,9 +2461,7 @@ mod tests {
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);
         schedule.run(&mut world);
-        let old_handle = world
-            .resource::<VectorLayerEntities>()
-            .roads
+        let old_handle = world.resource::<VectorLayerEntities>().roads[0]
             .batch
             .as_ref()
             .expect("首帧应有 fill 合批")
@@ -2359,8 +2474,7 @@ mod tests {
         schedule.run(&mut world);
 
         let layer = world.resource::<VectorLayerEntities>();
-        let new_handle = &layer
-            .roads
+        let new_handle = &layer.roads[0]
             .batch
             .as_ref()
             .expect("次帧仍应有 fill 合批")
@@ -2380,9 +2494,7 @@ mod tests {
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);
         schedule.run(&mut world);
-        let old_handle = world
-            .resource::<VectorLayerEntities>()
-            .roads
+        let old_handle = world.resource::<VectorLayerEntities>().roads[0]
             .batch
             .as_ref()
             .expect("首帧应有 fill 合批")
@@ -2393,8 +2505,7 @@ mod tests {
         schedule.run(&mut world);
 
         let layer = world.resource::<VectorLayerEntities>();
-        let new_handle = &layer
-            .roads
+        let new_handle = &layer.roads[0]
             .batch
             .as_ref()
             .expect("缩放后仍应有 fill 合批")
@@ -2415,9 +2526,7 @@ mod tests {
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);
         schedule.run(&mut world);
-        let baked = world
-            .resource::<VectorLayerEntities>()
-            .roads
+        let baked = world.resource::<VectorLayerEntities>().roads[0]
             .batch
             .as_ref()
             .expect("首帧应有 fill 合批")
@@ -2426,9 +2535,7 @@ mod tests {
 
         world.resource_mut::<ViewState>().scale = 1.02;
         schedule.run(&mut world);
-        let after_small = world
-            .resource::<VectorLayerEntities>()
-            .roads
+        let after_small = world.resource::<VectorLayerEntities>().roads[0]
             .batch
             .as_ref()
             .expect("2% 缩放后仍应有 fill 合批")
@@ -2438,9 +2545,7 @@ mod tests {
 
         world.resource_mut::<ViewState>().scale = 1.10;
         schedule.run(&mut world);
-        let after_big = world
-            .resource::<VectorLayerEntities>()
-            .roads
+        let after_big = world.resource::<VectorLayerEntities>().roads[0]
             .batch
             .as_ref()
             .expect("10% 缩放后仍应有 fill 合批")

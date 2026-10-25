@@ -157,12 +157,22 @@ impl ViewMode {
     ///   （等值线描边 + 类型平涂，水陆边由高度场决定，ADR-0012）；
     /// - [`ViewMode::Schematic`]：**色块地形**——一格一色，直接呈现每格的地形类型；
     /// - [`ViewMode::Faction`]：**势力图**——分层填色 + 边界 + 声称/实控
-    ///   （ADR-0027 D6，2026-10-18 对「只开放两种」的单点例外）。
+    ///   （ADR-0027 D6，2026-10-18 对「只开放两种」的单点例外）；
+    /// - [`ViewMode::GoogleMap`]：**普通地图**——近白陆地 + 淡水 + 公园绿 +
+    ///   白路灰缘的专业制图样式（2026-10-25 加入：主理人裁定走「专业制图」
+    ///   范式后，它是该范式唯一入口，此前枚举与色板齐备却没有任何 UI 可达）。
     ///
     /// 顶栏分段控件、数字快捷键与命令面板都只列这份；其余模式保留在
     /// [`Self::ALL`] 与枚举里（数据层纹理管线仍支持，随时可重新开放）。
-    pub const BROWSING: [ViewMode; 3] =
-        [ViewMode::VectorFlat, ViewMode::Schematic, ViewMode::Faction];
+    ///
+    /// **顺序即快捷键**：`1/2/3/4` 按此数组下标绑定，新增模式只能**追加**，
+    /// 插到中间会让存量用户的肌肉记忆全错位。
+    pub const BROWSING: [ViewMode; 4] = [
+        ViewMode::VectorFlat,
+        ViewMode::Schematic,
+        ViewMode::Faction,
+        ViewMode::GoogleMap,
+    ];
 
     // 顶栏显示名（`label(loc)`）留在 wv-app：i18n 文案查表是外壳关注点
     // （AGENTS §2 依赖方向），应用层以扩展 trait `ViewModeLabelExt` 提供
@@ -1300,11 +1310,18 @@ mod tests {
     }
 
     /// 2026-10-18（ADR-0027 D6）：浏览态开放第三项「势力图」。
+    /// 2026-10-25：追加第四项「普通地图」（`GoogleMap`）——专业制图范式的入口；
+    /// **必须追加在末尾**，前三项的 `1/2/3` 快捷键语义不能动。
     #[test]
-    fn browsing_list_offers_vector_flat_schematic_and_faction() {
+    fn browsing_list_offers_vector_flat_schematic_faction_and_google() {
         assert_eq!(
             ViewMode::BROWSING,
-            [ViewMode::VectorFlat, ViewMode::Schematic, ViewMode::Faction]
+            [
+                ViewMode::VectorFlat,
+                ViewMode::Schematic,
+                ViewMode::Faction,
+                ViewMode::GoogleMap
+            ]
         );
         assert!(ViewMode::BROWSING.contains(&ViewMode::default()));
     }

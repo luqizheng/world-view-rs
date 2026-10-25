@@ -54,7 +54,7 @@ pub(super) fn setup_terrain_texture_after_world(
         cellmap_bridge::shade_mode_of(view.mode),
         atlas.as_ref(),
         view.terrain_soften,
-        &cellmap_bridge::conv_pack_with(view.active_theme, view.hypsometric_tint),
+        &cellmap_bridge::conv_pack_with(view.active_theme, view.hypsometric_tint, view.mode),
         0.0,
     );
     commands.insert_resource(terrain_view::new_terrain_texture(

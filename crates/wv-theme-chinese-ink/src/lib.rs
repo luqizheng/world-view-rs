@@ -173,10 +173,16 @@ pub static PACK: ThemePack = ThemePack {
         size_mul_edit: 0.8,
         size_mul_region: 0.65,
         size_mul_nation: 1.2,
-        // 山符号不画（ADR-0058 D5）：宣纸底上那一排排具象黑三角与方案 §7 的
+        // 山符号不画（ADR-0059 D5）：宣纸底上那一排排具象黑三角与方案 §7 的
         // highland 留白裁定自相矛盾——山体表达收敛到等值线重墨 + 海岸顿笔
         // 积墨 + 海配方皴线 + 地形色阶，「不画」是水墨画法的正常态而非异常。
         mountain_style: SymbolStyle::None,
+        // 森林符号**保持 Default**（ADR-0059 追记一，2026-10-25 裁定）：
+        // 与山相反——三变体林团在宣纸上不是「具象异物」，正是「苔点」画法
+        // 本体（方案 §7 森林族苔点演绎）；疏密已由 `forest_density_gain 0.72`
+        // 调制到「远看融成淡墨、近看是点皴」的浓度。关掉它会让群系格只剩
+        // 纯色，林身份反而不成立。
+        forest_style: SymbolStyle::Default,
         // 变体墨色（顶点色）：压冷压深一档，与纸面拉开。
         conifer_ink: DecorVariantInk::new(0.14, 0.22, 0.17, 0.78),
         temperate_ink: DecorVariantInk::new(0.17, 0.22, 0.16, 0.75),
@@ -432,7 +438,7 @@ mod tests {
         );
     }
 
-    /// 山符号画法锚点（ADR-0058 D5）：水墨包显式 `None`——山体表达收敛到
+    /// 山符号画法锚点（ADR-0059 D5）：水墨包显式 `None`——山体表达收敛到
     /// 等值线重墨 + 海岸顿笔积墨，「不画」是水墨画法的正常态。
     ///
     /// 防回归：有人删掉该字段回退 `Default`（内置水彩三角）——宣纸上那列
@@ -442,7 +448,21 @@ mod tests {
         assert_eq!(
             PACK.decor.mountain_style,
             wv_theme::decor::SymbolStyle::None,
-            "水墨山符号应不画（ADR-0058 D5）"
+            "水墨山符号应不画（ADR-0059 D5）"
+        );
+    }
+
+    /// 森林符号**必须保持 `Default`**（ADR-0059 追记一）——与山相反的有意选择：
+    /// 林团即苔点，是水墨画法本体；疏密由 `forest_density_gain` 承担。
+    ///
+    /// 防回归：有人「顺手统一」成 `None`（以为与山同理）——群系格会只剩纯色，
+    /// 林身份随之消失。
+    #[test]
+    fn pack_forest_style_stays_default() {
+        assert_eq!(
+            PACK.decor.forest_style,
+            wv_theme::decor::SymbolStyle::Default,
+            "水墨森林符号应保留林团（苔点本体，ADR-0059 追记一）"
         );
     }
 

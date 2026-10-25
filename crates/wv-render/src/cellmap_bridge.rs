@@ -71,6 +71,29 @@ pub fn shade_mode_of(mode: crate::state::ViewMode) -> ShadeMode {
 }
 
 /// 色板换算（字段 1:1）。
+/// 地形底图色板：`GoogleMap` 模式下把 `core` 换成 `GOOGLE_CORE_TERRAIN`。
+///
+/// **为什么必须在这里换**：`colors_google::GOOGLE_CORE_TERRAIN` 自 2026-10-13
+/// 定义以来**没有任何消费点**（`colors_google.rs` 注释提到的 `shade_google`
+/// 从未存在过）——`ViewMode::GoogleMap` 的地形一直画的是**主题色板**（日间
+/// 水彩褐阶），所以切过去也不像普通地图。本函数是那份色板的第一个、也是最
+/// 唯一的消费入口。
+///
+/// 只换 `core` 与 `soften_toward`（近白纸面）：标注 / 道路 / POI 色在
+/// `vector_layers` 已按模式分支取 `GOOGLE_LABEL_*` / `GOOGLE_ROAD_*`，不必
+/// 在这里重复。
+pub fn conv_palette_terrain(
+    p: &wv_theme::palette::PaletteColors,
+    mode: crate::state::ViewMode,
+) -> CellPalette {
+    let mut c = conv_palette(p);
+    if mode == crate::state::ViewMode::GoogleMap {
+        c.core = wv_theme::colors_google::GOOGLE_CORE_TERRAIN;
+        c.soften_toward = wv_theme::colors_google::GOOGLE_SOFTEN_TOWARD;
+    }
+    c
+}
+
 pub fn conv_palette(p: &wv_theme::palette::PaletteColors) -> CellPalette {
     CellPalette {
         core: p.core,
@@ -198,15 +221,28 @@ pub fn conv_region_set(
 /// **分层设色强度出 0**（中性基准）。需要按会话开关着色时用
 /// [`conv_pack_with`]——两函数分开是为了让测试 / 示例的逐位对照基准恒定。
 pub fn conv_pack(pack: &wv_theme::theme_pack::ThemePack) -> CellPack {
-    conv_pack_with(pack, 0.0)
+    // 基准换算与模式无关：用 `VectorFlat`（= 主题色板原样），保持测试 / 示例的
+    // 逐位对照恒定。Google 色只在真正渲染时经 `conv_pack_with(.., mode)` 生效。
+    conv_pack_with(pack, 0.0, crate::state::ViewMode::VectorFlat)
 }
 
 /// 同 [`conv_pack`]，并带上**分层设色强度**（ADR-0055；`ViewState.hypsometric_tint`
 /// 的落地入口）。强度是唯一的非主题字段，理由见 `CellPack::hypsometric` 的文档。
-pub fn conv_pack_with(pack: &wv_theme::theme_pack::ThemePack, hypsometric: f32) -> CellPack {
+pub fn conv_pack_with(
+    pack: &wv_theme::theme_pack::ThemePack,
+    hypsometric: f32,
+    mode: crate::state::ViewMode,
+) -> CellPack {
     CellPack {
-        palette: conv_palette(&pack.palette),
-        treatment: conv_treatment(&pack.treatment),
+        // GoogleMap 的地形色由 `conv_palette_terrain` 换成 GOOGLE_CORE_TERRAIN。
+        palette: conv_palette_terrain(&pack.palette, mode),
+        // 专业制图 = 干净平涂：海岸晕 / 水彩渐变 / 纸纹都是「手绘」语汇，
+        // 与「普通地图」的一眼看懂相冲突。EMPTY 而非主题旗标。
+        treatment: if mode == crate::state::ViewMode::GoogleMap {
+            conv_treatment(&wv_theme::theme_pack::TreatmentFlags::EMPTY)
+        } else {
+            conv_treatment(&pack.treatment)
+        },
         sea: conv_sea(&pack.sea),
         hypsometric: hypsometric.clamp(0.0, 1.0),
     }
@@ -231,7 +267,7 @@ pub fn setup_terrain_texture(
         shade_mode_of(view.mode),
         atlas.as_ref(),
         view.terrain_soften,
-        &conv_pack_with(view.active_theme, view.hypsometric_tint),
+        &conv_pack_with(view.active_theme, view.hypsometric_tint, view.mode),
         0.0,
     );
     commands.insert_resource(new_terrain_texture(
@@ -305,7 +341,7 @@ pub fn rebuild_texture_on_mode_change(
         mode: shade_mode_of(view.mode),
         soften: view.terrain_soften,
         theme_id: view.active_theme.id,
-        pack: conv_pack_with(view.active_theme, view.hypsometric_tint),
+        pack: conv_pack_with(view.active_theme, view.hypsometric_tint, view.mode),
         map: Some(node.id.clone()),
         data_hash: terrain_data_hash(data),
         topographic_thresholds: (0, 0), // PR-1 占位；PR-1b 由 `topographic_thresholds_for` 填真值。
@@ -2923,6 +2959,38 @@ mod bridge_tests {
         fn grid_lines_visible_follows_the_view_flag() {
             assert!(!grid_lines_visible(&view(false)), "默认关");
             assert!(grid_lines_visible(&view(true)), "旗标开 → 显");
+        }
+
+        /// GoogleMap 的地形 10 槽必须换成 `GOOGLE_CORE_TERRAIN`（2026-10-25）。
+        ///
+        /// **防回归**：这份色板自 2026-10-13 定义以来零消费点（`colors_google.rs`
+        /// 注释提到的 `shade_google` 从未存在）。`conv_palette_terrain` 是它的
+        /// 第一个入口；若有人把 `conv_pack_with` 里的调用改回 `conv_palette`，
+        /// 普通地图会静默退回水彩褐阶——没有报错、只有「切过去也不像地图」。
+        #[test]
+        fn google_mode_terrain_core_is_the_google_palette() {
+            let pack = &wv_theme::theme_pack::builtin::DEFAULT;
+            let google = conv_pack_with(pack, 0.0, crate::state::ViewMode::GoogleMap);
+            let themed = conv_pack_with(pack, 0.0, crate::state::ViewMode::VectorFlat);
+            assert_eq!(
+                google.palette.core,
+                wv_theme::colors_google::GOOGLE_CORE_TERRAIN,
+                "普通地图的地形基色应是 Google 色板（近白陆地 / 淡水 / 公园绿）"
+            );
+            assert_ne!(
+                google.palette.core, themed.palette.core,
+                "普通地图与主题色板必须不同，否则这条接线等于没接"
+            );
+            // 处理旗标同理：海岸晕 / 纸纹是手绘语汇，普通地图要干净平涂。
+            assert_eq!(
+                google.treatment,
+                conv_treatment(&wv_theme::theme_pack::TreatmentFlags::EMPTY),
+                "普通地图的处理旗标应为 EMPTY（无水彩晕染 / 纸纹）"
+            );
+            assert_ne!(
+                google.treatment, themed.treatment,
+                "主题（JRPG 水彩）自带 hand-drawn 旗标，两者必须不同"
+            );
         }
 
         /// 远观淡出锚点：≥4px 全显、≤2px 消失、中点线性一半、端点外钳制。
