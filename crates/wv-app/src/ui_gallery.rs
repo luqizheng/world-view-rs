@@ -39,11 +39,11 @@ use wv_ui::widgets::{
     inline_alert, keycap, layer_panel, layer_row, list_item, loading, menu_item, numeric_input,
     option_menu, progress, radio, search_input, segmented_control::segmented, slider_row,
     slider_row_brush, slider_row_disabled, tabs, text_area, toolbar_tool, tree_row, value_box,
-    value_unit, AlertKind, BadgeKind, ButtonContent, ButtonStyle, CheckState, DialogWindow,
-    FieldInput, FieldSelect, FloatWindow, HeadIcon, LayerEntry, LayerPanelAction, LayerPanelState,
-    MenuState, PropertyRow, Switch, ICON_BRUSH, ICON_CHECK, ICON_GRID, ICON_IMAGE, ICON_LANDMARK,
-    ICON_LAYERS, ICON_MAP_PIN, ICON_MAXIMIZE, ICON_MOUNTAIN, ICON_MOUSE_POINTER, ICON_PLAY,
-    ICON_PLUS, ICON_ROUTE, ICON_RULER, ICON_TRASH, ICON_TYPE, ICON_WAVES,
+    value_unit, AlertKind, BadgeKind, ButtonContent, ButtonStyle, CheckState, ColorPicker,
+    DialogWindow, FieldInput, FieldSelect, FloatWindow, HeadIcon, LayerEntry, LayerPanelAction,
+    LayerPanelState, MenuState, PropertyRow, Switch, ICON_BRUSH, ICON_CHECK, ICON_GRID, ICON_IMAGE,
+    ICON_LANDMARK, ICON_LAYERS, ICON_MAP_PIN, ICON_MAXIMIZE, ICON_MOUNTAIN, ICON_MOUSE_POINTER,
+    ICON_PLAY, ICON_PLUS, ICON_ROUTE, ICON_RULER, ICON_TRASH, ICON_TYPE, ICON_WAVES,
     ICON_ZOOM_IN as ICON_TOOL_ZOOM_IN, ICON_ZOOM_OUT as ICON_TOOL_ZOOM_OUT,
 };
 
@@ -82,6 +82,9 @@ struct GalleryState {
     layer_opacity: f32,
     layer_visible: [bool; 6],
     layer_locked: [bool; 6],
+    /// 取色器样张（04 分区）：带 alpha / 不带 alpha 各一枚（纯展示）。
+    pick_color: egui::Rgba,
+    pick_opaque: egui::Rgba,
 }
 
 impl Default for GalleryState {
@@ -110,6 +113,9 @@ impl Default for GalleryState {
             layer_opacity: 1.0,
             layer_visible: [true, true, true, true, true, false],
             layer_locked: [false, false, false, false, true, false],
+            // 取色器样张初值：势力色系的一红一蓝（展示 hex 回写）。
+            pick_color: egui::Rgba::from_srgba_unmultiplied(0xC0, 0x39, 0x2B, 0xE6),
+            pick_opaque: egui::Rgba::from_srgba_unmultiplied(0x39, 0x7E, 0xB4, 255),
         }
     }
 }
@@ -338,7 +344,7 @@ fn draw_gallery(mut contexts: EguiContexts, cfg: Res<UiShellConfig>, mut st: Loc
 
                     // ── 右列 04–06 ─────────────────────────────────────
                     let ui = &mut cols[1];
-                    section(ui, &shell, "04 / 数值与颜色 Values", "Slider 三变体 / ValueUnit / Progress");
+                    section(ui, &shell, "04 / 数值与颜色 Values", "Slider 三变体 / ValueUnit / Progress / ColorPicker");
                     slider_row(ui, &shell, "Opacity", &mut st.linear, 0.0..=1.0, |n| format!("{:.0}%", n * 100.0), false);
                     slider_row_brush(ui, &shell, "Radius", &mut st.log, 16.0..=600.0, |n| format!("{n:.0} px"), true);
                     slider_row_disabled(ui, &shell, "Softness", &mut st.brush, 0.0..=1.0, |n| format!("{:.0}%", n * 100.0), false);
@@ -348,6 +354,25 @@ fn draw_gallery(mut contexts: EguiContexts, cfg: Res<UiShellConfig>, mut st: Loc
                     ui.add_space(space::SM);
                     progress(ui, &shell, "Exporting terrain", 0.64);
                     progress(ui, &shell, "Terrain exported", 1.0);
+                    ui.add_space(space::SM);
+                    // ColorPicker：带 alpha / 不带 alpha 两枚触发器（浮层点开可验）。
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("ColorPicker")
+                                .size(font_size::SMALL)
+                                .color(shell.t2()),
+                        );
+                        let _ = ColorPicker::new("gallery_pick_alpha", &mut st.pick_color)
+                            .show(ui, &shell);
+                        let _ = ColorPicker::new("gallery_pick_opaque", &mut st.pick_opaque)
+                            .with_alpha(false)
+                            .show(ui, &shell);
+                        ui.label(
+                            egui::RichText::new(wv_ui::widgets::rgba_to_hex(st.pick_color))
+                                .size(font_size::MICRO)
+                                .color(shell.t3()),
+                        );
+                    });
                     ui.add_space(space::LG);
 
                     section(ui, &shell, "05 / 覆盖与反馈 Overlays", "TreeRow / LayerRow / MenuItem / Breadcrumb / ListItem / StatusPill / Keycap / InlineAlert / EmptyState / Loading");
