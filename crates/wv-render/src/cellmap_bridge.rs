@@ -233,19 +233,53 @@ pub fn conv_pack_with(
     hypsometric: f32,
     mode: crate::state::ViewMode,
 ) -> CellPack {
+    let cartographic = mode == crate::state::ViewMode::GoogleMap;
     CellPack {
         // GoogleMap 的地形色由 `conv_palette_terrain` 换成 GOOGLE_CORE_TERRAIN。
         palette: conv_palette_terrain(&pack.palette, mode),
         // 专业制图 = 干净平涂：海岸晕 / 水彩渐变 / 纸纹都是「手绘」语汇，
         // 与「普通地图」的一眼看懂相冲突。EMPTY 而非主题旗标。
-        treatment: if mode == crate::state::ViewMode::GoogleMap {
+        treatment: if cartographic {
             conv_treatment(&wv_theme::theme_pack::TreatmentFlags::EMPTY)
         } else {
             conv_treatment(&pack.treatment)
         },
-        sea: conv_sea(&pack.sea),
-        hypsometric: hypsometric.clamp(0.0, 1.0),
+        // 海配方与 treatment 是**两套独立开关**：旗标管「晕 / 纸纹」，海配方管
+        // 「水面上的笔触」（水纹颗粒 / 离岸波纹 / 碎浪 / 近岸排线 / 浅滩积墨）。
+        // 只清 treatment 而透传海配方，专业制图的水面仍会带回水彩笔触——故两处
+        // 必须一起中性化。深度渐变（`depth_scale_m` / `depth_exponent`）保留：
+        // 真实海图同样按深浅分色，它是数据而非画法。
+        sea: if cartographic {
+            conv_sea_flat(&pack.sea)
+        } else {
+            conv_sea(&pack.sea)
+        },
+        // 分层设色是「地形分析」的表达（ADR-0055）：普通地图不按海拔分带
+        // （Google 底图陆地单色），作者调过滑条也不该把专业制图染成梯队。
+        hypsometric: if cartographic {
+            0.0
+        } else {
+            hypsometric.clamp(0.0, 1.0)
+        },
     }
+}
+
+/// 海配方的「专业制图」中性化：清空一切手绘笔触，只留深度渐变。
+///
+/// 与 [`conv_sea`] 分开而不是加 mode 参数：换算（主题 → 渲染）与风格截断
+/// （渲不渲染笔触）是两件事，前者对所有模式同构，后者只在专业制图发生。
+fn conv_sea_flat(s: &wv_theme::sea::SeaRecipe) -> SeaRecipe {
+    let mut out = conv_sea(s);
+    out.shore_band_cells = 0.0;
+    out.shore_peak = 0.0;
+    out.water_grain = 0.0;
+    out.ripple_warp_cells = 0.0;
+    out.ripples.clear();
+    out.foam.clear();
+    out.shore_hatch = None;
+    out.shore_edge_strength = 0.0;
+    out.shore_edge_width_cells = 0.0;
+    out
 }
 
 // ══════ from src/terrain_view/setup.rs :: setup_terrain_texture ══════
@@ -486,10 +520,16 @@ pub fn sync_isoline_overlay(
     recipe: Res<crate::recipe::RenderRecipe>,
     mut overlay: ResMut<IsolineOverlay>,
 ) {
-    // 模式轴：recipe 表（VectorFlat / Topographic 开档）；会话轴：`view.isolines`
-    // 旗标（map controls 瓷砖，GridLines 同款，2026-10-23 默认关——ADR-0051 追记）。
+    // 专业制图（GoogleMap）：海岸线是**底图要素**而不是「修饰线」——恒开，
+    // 不受 `view.isolines` 会话开关支配（ADR-0061 追记；样张图例的水岸线）。
+    let cartographic = view.mode == crate::state::ViewMode::GoogleMap;
+    // 模式轴：recipe 表（VectorFlat / Topographic / GoogleMap 开档）；
+    // 会话轴：`view.isolines` 旗标（map controls 瓷砖，GridLines 同款，
+    // 2026-10-23 默认关——ADR-0051 追记）。普通地图例外，理由见上。
     // 关图层（YAML ∨ 会话，ADR-0013）/ 换模式即退场（键随之清零，重进重算）。
-    if !layers.terrain.visible || !recipe.enabled(crate::recipe::PassId::Isoline) || !view.isolines
+    if !layers.terrain.visible
+        || !recipe.enabled(crate::recipe::PassId::Isoline)
+        || !(view.isolines || cartographic)
     {
         overlay.despawn(&mut commands);
         return;
@@ -498,8 +538,18 @@ pub fn sync_isoline_overlay(
         overlay.despawn(&mut commands);
         return;
     };
-    let treatment = conv_treatment(&view.active_theme.treatment);
+    // 处理旗标必须与 `conv_pack_with` **同源**：专业制图强制 EMPTY（海岸晕 /
+    // 河中线 / 亚线性描边都是手绘语汇）。此前这里直读主题旗标——一旦给
+    // GoogleMap 开 Isoline，水彩海岸晕会立刻回来。
+    let treatment = if cartographic {
+        conv_treatment(&wv_theme::theme_pack::TreatmentFlags::EMPTY)
+    } else {
+        conv_treatment(&view.active_theme.treatment)
+    };
     let nation = view.scale >= crate::state::LOD_NATION_SCALE;
+    // 海岸线 only：远观（Nation 档）与专业制图都不画类型边界场——后者的
+    // 群系边界由**矢量面填充**（`biome_fill`）承担，再叠一层阶梯线是双线。
+    let coast_only = nation || cartographic;
     let key = IsolineKey {
         map: tex.last_map.clone(),
         size: tex.size,
@@ -512,7 +562,10 @@ pub fn sync_isoline_overlay(
             treatment.ink_sublinear,
         ],
         tol_bucket: dp_tol_bucket(view.scale),
-        nation,
+        // 键里记 `coast_only` 而不是 `nation`：两者产出同一套几何（只有海岸链），
+        // 且专业制图切换必须让键失配——否则从 VectorFlat 切到 GoogleMap 会命中
+        // 上一模式的类型边界链（双线 / 残留）。
+        nation: coast_only,
     };
     let structural_same = overlay.key.as_ref() == Some(&key);
     let dirty_pending = tex.chunks_dirty.is_some();
@@ -526,12 +579,11 @@ pub fn sync_isoline_overlay(
         // 结构没变也可能只是图层绑定变了（作者改 opacity/z）：就地补丁，
         // 不重算派生几何。palette 变了同样只重上色（`ink_palette` 快路径）。
         if layers.is_changed() || overlay.ink_palette != Some(view.active_theme.id) {
-            apply_material_colors(
-                &mut materials,
-                &overlay,
-                &conv_palette(&view.active_theme.palette),
-                layers.terrain.opacity,
-            );
+            let mut pal = conv_palette(&view.active_theme.palette);
+            if cartographic {
+                pal.isoline_ink = wv_theme::colors_google::GOOGLE_COAST_LINE_COLOR;
+            }
+            apply_material_colors(&mut materials, &overlay, &pal, layers.terrain.opacity);
             overlay.ink_palette = Some(view.active_theme.id);
         }
         if layers.is_changed() {
@@ -586,9 +638,9 @@ pub fn sync_isoline_overlay(
     let rebuild_chains = overlay.chains.as_ref().map(|c| &c.inputs) != Some(&chain_inputs);
     if rebuild_chains {
         let coast_segs = height_segments(w, h, |x, y| cell(x, y).height as f32, 0.0);
-        // Nation 档只画海岸线（与 POI / 建筑同口径，spec §2.2c）：
+        // 只画海岸线：远观（Nation 档）与专业制图（群系边界走矢量面填充）。
         // 类型边界在远观读不出差异，却让描边总长翻数倍。
-        let kinds_segs = (!nation).then(|| {
+        let kinds_segs = (!coast_only).then(|| {
             kind_segments(w, h, |x, y| {
                 wv_terrain::biome::display_kind(&wv_terrain::TerrainCell {
                     height: cell(x, y).height,
@@ -645,17 +697,16 @@ pub fn sync_isoline_overlay(
         return;
     };
     let handle = meshes.add(mesh);
-    let pal = &conv_palette(&view.active_theme.palette);
+    let mut pal = conv_palette(&view.active_theme.palette);
+    if cartographic {
+        pal.isoline_ink = wv_theme::colors_google::GOOGLE_COAST_LINE_COLOR;
+    }
     let material = overlay
         .material
-        .get_or_insert_with(|| {
-            materials.add(ColorMaterial::from_color(
-                conv_palette(&view.active_theme.palette).isoline_ink,
-            ))
-        })
+        .get_or_insert_with(|| materials.add(ColorMaterial::from_color(pal.isoline_ink)))
         .clone();
     // 材质跨重建复用（get_or_insert）：重算后也要按当前绑定刷新 alpha。
-    apply_material_colors(&mut materials, &overlay, pal, layers.terrain.opacity);
+    apply_material_colors(&mut materials, &overlay, &pal, layers.terrain.opacity);
 
     overlay.despawn(&mut commands);
     let entity = commands
@@ -2963,10 +3014,12 @@ mod bridge_tests {
 
         /// GoogleMap 的地形 10 槽必须换成 `GOOGLE_CORE_TERRAIN`（2026-10-25）。
         ///
-        /// **防回归**：这份色板自 2026-10-13 定义以来零消费点（`colors_google.rs`
-        /// 注释提到的 `shade_google` 从未存在）。`conv_palette_terrain` 是它的
-        /// 第一个入口；若有人把 `conv_pack_with` 里的调用改回 `conv_palette`，
-        /// 普通地图会静默退回水彩褐阶——没有报错、只有「切过去也不像地图」。
+        /// **防回归**：主题侧这份色板自 2026-10-13 定义以来零消费点；渲染侧
+        /// （`wv-world-cell-map`）另有一份同名抄录表，`shade_google` 一度读的
+        /// 是后者——于是本测试曾经**只验证结构体字段**、对像素无影响（假绿）。
+        /// 2026-10-25 修正：`shade_google` 改读 `CellPalette.core`，本函数才
+        /// 真正成为「普通地图的地形色」的唯一入口。像素级锚点在
+        /// `wv-world-cell-map::cells::tests::google_shade_reads_palette_core…`。
         #[test]
         fn google_mode_terrain_core_is_the_google_palette() {
             let pack = &wv_theme::theme_pack::builtin::DEFAULT;
@@ -2991,6 +3044,39 @@ mod bridge_tests {
                 google.treatment, themed.treatment,
                 "主题（JRPG 水彩）自带 hand-drawn 旗标，两者必须不同"
             );
+        }
+
+        /// 专业制图的两处「主题泄漏」必须同时收口（2026-10-25）。
+        ///
+        /// **海配方**与 **treatment 是两套独立开关**：旗标管晕 / 纸纹，海配方
+        /// 管水面笔触（水纹颗粒 / 波纹 / 碎浪 / 排线 / 浅滩积墨）。只清前者、
+        /// 透传后者，专业地图的水面上仍会带回水彩笔触。**分层设色**同理：
+        /// 它是地形分析的表达，普通地图陆地单色，滑条非零也不许染色。
+        #[test]
+        fn google_mode_flattens_sea_recipe_and_hypsometric() {
+            let pack = &wv_theme::theme_pack::builtin::DEFAULT;
+            let google = conv_pack_with(pack, 0.8, crate::state::ViewMode::GoogleMap);
+            assert!(google.sea.ripples.is_empty(), "普通地图不画离岸墨线波纹");
+            assert!(google.sea.foam.is_empty(), "普通地图不画近岸碎浪");
+            assert!(google.sea.shore_hatch.is_none(), "普通地图不画近岸排线");
+            assert_eq!(google.sea.water_grain, 0.0, "普通地图水面无纸纹颗粒");
+            assert_eq!(
+                google.sea.shore_edge_strength, 0.0,
+                "普通地图无浅滩外缘积墨"
+            );
+            assert_eq!(
+                google.hypsometric, 0.0,
+                "分层设色是地形分析表达，普通地图强制归零"
+            );
+            // 深度渐变是数据不是画法：保留。
+            assert!(google.sea.depth_scale_m > 0.0, "水深量程应保留");
+            // 反向锚点：艺术主题模式原样保留手绘海配方与分层设色。
+            let themed = conv_pack_with(pack, 0.8, crate::state::ViewMode::VectorFlat);
+            assert!(
+                !themed.sea.ripples.is_empty(),
+                "艺术主题必须保留手绘海配方（本修正不得误伤）"
+            );
+            assert_eq!(themed.hypsometric, 0.8, "艺术主题照常吃分层设色强度");
         }
 
         /// 远观淡出锚点：≥4px 全显、≤2px 消失、中点线性一半、端点外钳制。

@@ -58,6 +58,19 @@ mod tests {
     use super::terrain_texture::terrain_res_for;
     use super::tile_atlas::{blit_block_tinted, sample_tile_block, tile_res_for, TileTint};
 
+    /// 生产口径的 Google 包：core 换成 Google 十色（`conv_palette_terrain` 的
+    /// 同一动作），其余字段沿用固定夹具。`shade_google` 读 `core`，故测试
+    /// 必须喂这份包才能断言 Google 底图颜色。
+    fn google_pack() -> CellPack {
+        CellPack {
+            palette: crate::palette::CellPalette {
+                core: palette::GOOGLE_CORE_TERRAIN,
+                ..CellPack::fixture().palette
+            },
+            ..CellPack::fixture()
+        }
+    }
+
     fn solid_atlas(cell_w: u32, cell_h: u32, rgb: [u8; 3]) -> TileAtlas {
         // 1×1 格的迷你图集，整格同一颜色。
         let n = (cell_w * cell_h) as usize;
@@ -624,6 +637,12 @@ mod tests {
 
     /// Google「普通地图」折叠：陆上高度分带（沙/草/丘/山/雪/路）必须
     /// 折叠成同一陆色——否则 Perlin 分带会渲染成近色马赛克。
+    ///
+    /// **色板口径**：`shade_google` 读 `CellPalette.core`（2026-10-25 修正），
+    /// 生产路径由 `conv_palette_terrain` 在 GoogleMap 下换成
+    /// `GOOGLE_CORE_TERRAIN`。故本测试也按生产口径喂包——若喂 `fixture()`
+    /// （水彩 core），断言的就不再是 Google 底图，而是「水彩十色按 Google
+    /// 折叠规则上色」，语义是错的。
     #[test]
     fn google_mode_collapses_elevation_bands_into_one_land_color() {
         let mut data = placeholder_terrain(8, 8);
@@ -637,7 +656,7 @@ mod tests {
             ShadeMode::GoogleMap,
             None,
             false,
-            &CellPack::fixture(),
+            &google_pack(),
             0.0,
         );
         let Color::Srgba(land) = palette::GOOGLE_CORE_TERRAIN[2] else {

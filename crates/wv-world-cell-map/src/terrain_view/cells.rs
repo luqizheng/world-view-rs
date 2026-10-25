@@ -136,15 +136,22 @@ fn shade_topographic(_data: &TerrainData, _kind: u8, pal: &CellPalette) -> Color
     pal.soften_toward
 }
 
-fn shade_google(_data: &TerrainData, kind: u8, _pal: &CellPalette) -> Color {
+fn shade_google(_data: &TerrainData, kind: u8, pal: &CellPalette) -> Color {
     // Google Default Map 做普通地图折叠（2026-10-13 用户裁定）：
     // 不渲染地形高低分带。Google 普通地图的陆地是单一近白平涂；若把
     // Perlin 高度分带（沙/草/丘/山/雪）逐档着色，整图会退化成近色马赛克。
     // 折叠规则：水两档保留层次、森林作公园绿斑、沼泽保留湿绿，
-    // 其余陆上类一律折叠为陆地基色（`GOOGLE_CORE_TERRAIN[2]` 近白陆色）。
+    // 其余陆上类一律折叠为陆地基色（`core[2]` 近白陆色）。
+    //
+    // **色值读 `pal.core`，不读 [`palette::GOOGLE_CORE_TERRAIN`]**（2026-10-25
+    // 修正）：`conv_palette_terrain` 在 GoogleMap 模式下已把 `core` 换成 Google
+    // 十色；若这里继续读 crate 本地常量，那份主题覆盖对像素就是**无效接线**
+    // ——两处同名表，改一处不生效。本地表保留为 CellMap 工作台等「无主题
+    // 环境」的默认数据源（crate 级固定色禁令，ADR-0054 D4）。
+    let land = pal.core[2];
     match kind {
-        0 | 1 | 4 | 8 => palette::google_core_terrain(kind),
-        _ => palette::GOOGLE_CORE_TERRAIN[2],
+        0 | 1 | 4 | 8 => pal.core.get(kind as usize).copied().unwrap_or(land),
+        _ => land,
     }
 }
 
@@ -2265,6 +2272,33 @@ mod tests {
         let google = terrain_res_for(&data, ShadeMode::GoogleMap, None);
         assert_eq!(vector, google, "VectorFlat 应与 GoogleMap 同口径");
         assert!(vector > 1, "512² 图应取 {vector}px/格（亚像素）");
+    }
+
+    /// 普通地图的十槽色**必须读传入的 palette**（2026-10-25 修正）。
+    ///
+    /// 历史坑：`shade_google` 曾忽略 `_pal`、直读 crate 本地
+    /// `palette::GOOGLE_CORE_TERRAIN`；而主题侧另有一份同名表。于是
+    /// `conv_palette_terrain` 的覆盖对像素完全无效——两处同名表，改一处不出效果。
+    /// 本测试用哨兵色钉住「跟着 palette 走」，防止回退。
+    #[test]
+    fn google_shade_reads_palette_core_not_the_local_copy() {
+        let data = relief_fixture(|_, _| 0);
+        let mut pal = CellPack::fixture().palette;
+        pal.core[2] = Color::srgb(0.10, 0.20, 0.30);
+        pal.core[4] = Color::srgb(0.0, 1.0, 0.0);
+        pal.core[8] = Color::srgb(0.0, 0.0, 1.0);
+        assert_eq!(shade_google(&data, 4, &pal), pal.core[4], "森林 → 公园绿槽");
+        assert_eq!(shade_google(&data, 8, &pal), pal.core[8], "沼泽 → 湿绿槽");
+        assert_eq!(
+            shade_google(&data, 3, &pal),
+            pal.core[2],
+            "草原折叠为陆地基色"
+        );
+        assert_eq!(
+            shade_google(&data, 6, &pal),
+            pal.core[2],
+            "山地折叠为陆地基色"
+        );
     }
 
     // ---------------------------------------------------------------------------

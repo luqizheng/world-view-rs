@@ -164,7 +164,8 @@ impl Default for RenderRecipe {
 ///
 /// 行 = 模式，列序 = [`PassId::ALL`] 声明序。**每格以迁移前散点判定的实际行为
 /// 为准**（等价迁移，不借机改语义）：
-/// - Isoline 仅 VectorFlat + Topographic（会话轴另由 `view.isolines` 单控）；
+/// - Isoline 仅 VectorFlat + Topographic + GoogleMap（会话轴另由 `view.isolines`
+///   单控；GoogleMap 的海岸线例外——见该行注释）；
 /// - Buildings / Atmosphere / Veil / Grain 排除 GoogleMap | Coastline；
 /// - Faction 仅 Faction 模式；
 /// - FeatureOverlay 除 Coastline 外全开（主题地界覆盖层，轮廓图只留轮廓）。
@@ -222,9 +223,16 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true, // CellSelection
         false, // RegionLayers（装饰 ✓ 而区域 ✗——拆 pass 的全部意义，ADR-0051）
     ]),
-    // Google 模式 —— 自带完整观感：等值线 / 氛围族 / 建筑不画。
+    // GoogleMap（专业制图）—— 自带完整观感：氛围族 / 建筑 / 地形装饰不画。
+    //
+    // **Isoline = true（2026-10-25）**：普通地图的水岸必须有一道线（样张图例
+    // 「水 · 面 #AADAFF / 线 7FBEEA」）。此前该格为 false，专业制图的水陆边界
+    // 只剩烘焙纹理的亚像素色差，没有可读的岸线。`sync_isoline_overlay` 在
+    // GoogleMap 下只取**海岸链**（类型边界由群系面填充承担）、强制 EMPTY
+    // treatment、线色走 `GOOGLE_COAST_LINE_COLOR`，并把该模式的海岸视为
+    // 常开（不受 `view.isolines` 会话开关支配）。
     (ViewMode::GoogleMap, [
-        true, false, true, true, false, true, true, true, true, false,
+        true, true, true, true, false, true, true, true, true, false,
         false, true, true, true, true, true, true, true, true, false,
         true,
         false, // TerrainDecor
@@ -640,17 +648,21 @@ mod tests {
         assert!(!r.enabled(PassId::Faction));
     }
 
-    /// Isoline 在 VectorFlat 与 Topographic 开（模式轴——迁移前
-    /// `isoline_overlay` 的原 gate 行为加 ADR-0039 分析视图开档）。**会话轴
-    /// 不在本表**：`view.isolines` 旗标在等值线系统里单控（GridLines 同款），
-    /// 2026-10-23 起默认关（ADR-0051 追记）。
-    /// 其余 6 模式一律关，防"顺手填 true"改变行为（本测试因第一次填错表而加）。
+    /// Isoline 在 VectorFlat / Topographic / GoogleMap 开（模式轴——迁移前
+    /// `isoline_overlay` 的原 gate 行为加 ADR-0039 分析视图开档；GoogleMap 是
+    /// ADR-0061 追记：专业制图的水岸必须有一道线）。**会话轴不在本表**：
+    /// `view.isolines` 旗标在等值线系统里单控（GridLines 同款），2026-10-23
+    /// 起默认关（ADR-0051 追记）——GoogleMap 例外，海岸线恒开。
+    /// 其余 5 模式一律关，防"顺手填 true"改变行为（本测试因第一次填错表而加）。
     #[test]
-    fn isoline_draws_in_vector_flat_and_topographic_only() {
+    fn isoline_draws_in_vector_flat_topographic_and_cartographic() {
         let (mut view, layers, world, drill, tex) = fixture();
         for m in ViewMode::ALL {
             view.mode = m;
-            let want = matches!(m, ViewMode::VectorFlat | ViewMode::Topographic);
+            let want = matches!(
+                m,
+                ViewMode::VectorFlat | ViewMode::Topographic | ViewMode::GoogleMap
+            );
             let r = resolve_render_recipe(&view, &layers, &world, &drill, &tex, None);
             assert_eq!(
                 r.enabled(PassId::Isoline),

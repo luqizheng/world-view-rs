@@ -1617,7 +1617,7 @@ mod tests {
     #[test]
     fn google_road_grades_have_distinct_fills() {
         let pal = palette::colors(MapPalette::default());
-        let grades = road_grade_colors(crate::state::ViewMode::GoogleMap, &pal);
+        let grades = road_grade_colors(crate::state::ViewMode::GoogleMap, pal);
         let a = grades[0].1.to_srgba();
         let b = grades[1].1.to_srgba();
         let c = grades[2].1.to_srgba();
