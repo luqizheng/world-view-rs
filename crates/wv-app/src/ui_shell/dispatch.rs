@@ -10,7 +10,6 @@ use crate::project_loader::PendingProjectLoad;
 use crate::state::{
     DrillState, PanelState, PlaybackState, RecentProjects, ViewState, WorldProjection,
 };
-use crate::theme::palette::MapPalette;
 use crate::theme::ui_theme::UiShellConfig;
 use crate::ui_command_palette::{CommandId, CommandPalette};
 use wv_render::terrain_view::{TerrainTexture, TileAtlas};
@@ -217,10 +216,9 @@ pub(crate) fn apply_pending_commands(
         ResMut<crate::ui::ContinentDialog>,
     ),
     // 换世界接管（adopt_world_snapshot）所需：瓦片图集可缺席（纯色平涂回退）。
-    (atlas, mut images, theme_registry): (
+    (atlas, mut images): (
         Option<Res<wv_render::terrain_view::TileAtlas>>,
         ResMut<Assets<Image>>,
-        Res<wv_render::theme::switch::ThemeRegistry>,
     ),
     // 选择工具会话态：命令面板「生成大陆…」顺手启用选择工具。
     mut selection: ResMut<crate::state::SelectionState>,
@@ -320,24 +318,6 @@ pub(crate) fn apply_pending_commands(
         CommandId::NewMap => new_map_dialog.open_for(&projection.world),
         CommandId::ToggleTheme => cfg.theme = cfg.theme.toggled(),
         CommandId::ToggleDensity => cfg.density = cfg.density.toggled(),
-        CommandId::ToggleMapPalette => {
-            // 循环切换**所有注册的主题包**（ADR-0023 M2）：内置日间 / 暮色 /
-            // 外部包（如水墨）。`view.theme_pack_id` 是权威；`view.map_palette`
-            // 同步成内置包的快捷选择（顶栏日夜按钮仍走它）。
-            let ids: Vec<&'static str> = theme_registry.0.iter().map(|(id, _)| *id).collect();
-            if !ids.is_empty() {
-                let cur = view
-                    .theme_pack_id
-                    .as_deref()
-                    .unwrap_or_else(|| view.map_palette.key());
-                let idx = ids.iter().position(|id| *id == cur).unwrap_or(0);
-                let next = ids[(idx + 1) % ids.len()];
-                view.theme_pack_id = Some(next.to_string());
-                if let Some(pal) = MapPalette::from_key(next) {
-                    view.map_palette = pal;
-                }
-            }
-        }
         CommandId::ToggleImmersive => panels.immersive = !panels.immersive,
         CommandId::TogglePanel(p) => panels.toggle(p),
         CommandId::ResetPanelLayout => panels.reset_requested = true,

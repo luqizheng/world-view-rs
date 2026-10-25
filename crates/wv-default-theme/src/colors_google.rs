@@ -122,11 +122,63 @@ pub const GOOGLE_ROAD_GRADES: [RoadGradeStyle; 3] = [
 /// 选中 / 链接等交互强调色：Google Blue。
 pub const GOOGLE_ACCENT_HIGHLIGHT: Color = hex(0x1A73E8);
 
+/// 地点 / 区域 / 势力 / 事件四类实体的**点标色**（hover 提示与图例按它分色）。
+///
+/// 四色必须**互不相同**——它们是浮窗里区分实体种类的唯一线索（同色 = 用户
+/// 分不清在看什么）。色相沿用旧色板的语义分派（地点暖 / 区域冷蓝 / 势力暖红 /
+/// 事件紫），但明度调到专业制图的浅色底上仍可辨。
+pub const GOOGLE_DOT_PLACE: Color = hex(0xEA4335);
+pub const GOOGLE_DOT_REGION: Color = hex(0x1A73E8);
+pub const GOOGLE_DOT_FACTION: Color = hex(0xE8710A);
+pub const GOOGLE_DOT_EVENT: Color = hex(0x9334E6);
+
+/// 四类实体的**文字色**（与对应点标同色相、更深一档）。
+pub const GOOGLE_TEXT_PLACE: Color = hex(0xC5221F);
+pub const GOOGLE_TEXT_REGION: Color = hex(0x1967D2);
+pub const GOOGLE_TEXT_FACTION: Color = hex(0xB06000);
+pub const GOOGLE_TEXT_EVENT: Color = hex(0x7627BB);
+
 /// 文字光晕：白底描边色。Text2d 暂未做描边时仍保留为唯一视觉目标。
 pub const GOOGLE_LABEL_STROKE: Color = hex(0xFFFFFF);
 
 /// 文字填色：Google UI 的深灰，而不是纯黑，避免标签压过地图。
 pub const GOOGLE_LABEL_FILL: Color = hex(0x3C4043);
+/// 区域 / 大区名文字色：比普通地名更深一档（Google 的层级梯度）。
+pub const GOOGLE_LABEL_REGION: Color = hex(0x202124);
+/// 海名文字色：蓝灰（Google 海名带蓝相）。
+pub const GOOGLE_LABEL_WATER: Color = hex(0x4A6B8A);
+/// 底图淡化目标色：近白纸面（专业制图不做「向纸面洗」的旧语汇）。
+pub const GOOGLE_PAPER: Color = hex(0xF8F9FA);
+/// 底图淡化保留比例：专业制图几乎不洗（0.96 = 极轻），保留要素可读性。
+pub const GOOGLE_SOFTEN_KEEP: f32 = 0.96;
+/// 等值线 / 类型边界墨色：中性灰（专业制图不画「墨线」，只留结构边）。
+pub const GOOGLE_ISOLINE_INK: Color = hex(0x9AA0A6);
+/// 编辑网格线色：极浅灰（编辑态才可见）。
+pub const GOOGLE_GRID_LINE: Color = hex(0xDADCE0);
+/// 建筑顶面：浅灰（Google 建筑块）。
+pub const GOOGLE_BUILDING_TOP: Color = hex(0xE8EAED);
+/// 建筑侧面 / 投影：略深一档。
+pub const GOOGLE_BUILDING_SIDE: Color = hex(0xDADCE0);
+/// 雪高光色：纯白。
+pub const GOOGLE_SNOW_HIGHLIGHT: Color = hex(0xFFFFFF);
+/// 雪冷阴影色：冷灰。
+pub const GOOGLE_SNOW_SHADOW: Color = hex(0xDADCE0);
+/// 海冰纸面：极浅蓝。
+pub const GOOGLE_ICE_PAPER: Color = hex(0xE8F0FE);
+/// 冰缘墨线：蓝灰。
+pub const GOOGLE_ICE_INK: Color = hex(0x9AA0A6);
+/// 海冰背光排线色：更浅一档。
+pub const GOOGLE_ICE_SHADOW: Color = hex(0xD2E3FC);
+/// 描线三档（浅 / 中 / 深）：Google 的中性灰阶。
+pub const GOOGLE_LINE_ON_LIGHT: Color = hex(0xDADCE0);
+pub const GOOGLE_LINE_ON_MID: Color = hex(0x9AA0A6);
+pub const GOOGLE_LINE_ON_DARK: Color = hex(0x5F6368);
+/// 事件图极简底图：近白。
+pub const GOOGLE_EVENT_BACKDROP: Color = hex(0xF8F9FA);
+/// 最深水位：比浅水压一档。
+pub const GOOGLE_DEEP_OCEAN_BLUE: Color = hex(0x9FC7EF);
+/// 近岸浅滩色：浅水。
+pub const GOOGLE_WATER_SHORE: Color = hex(0xAADAFF);
 /// 地图控件底色：白卡片。它是地图体验的一部分，不跟随暗色软件壳。
 pub const GOOGLE_CONTROL_BG: Color = hex(0xFFFFFF);
 /// 地图控件边框。

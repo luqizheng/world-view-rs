@@ -71,13 +71,6 @@ fn dispatcher_world(project_dir: Option<&str>, dirty: bool, pending: CommandId) 
     AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
     let mut world = World::new();
     world.init_resource::<CommandPalette>();
-    // 主题包注册表（ADR-0023 M2）：命令分发器要遍历它做主题包循环切换。
-    world.insert_resource(wv_render::theme::switch::ThemeRegistry(
-        wv_theme::registry::MergedThemeRegistry::merge(&[
-            &wv_theme::registry::BuiltinRegistry,
-            &wv_theme_chinese_ink::ChineseInkRegistry,
-        ]),
-    ));
     world.init_resource::<crate::ui::ProjectMenuState>();
     world.init_resource::<PanelState>();
     world.init_resource::<UiShellConfig>();
@@ -375,13 +368,6 @@ fn project_menu_pending_command_reaches_the_dispatcher() {
 
     let mut world = World::new();
     world.init_resource::<CommandPalette>();
-    // 主题包注册表（ADR-0023 M2）：命令分发器要遍历它做主题包循环切换。
-    world.insert_resource(wv_render::theme::switch::ThemeRegistry(
-        wv_theme::registry::MergedThemeRegistry::merge(&[
-            &wv_theme::registry::BuiltinRegistry,
-            &wv_theme_chinese_ink::ChineseInkRegistry,
-        ]),
-    ));
     world.init_resource::<ProjectMenuState>();
     world.init_resource::<PanelState>();
     world.init_resource::<UiShellConfig>();

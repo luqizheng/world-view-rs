@@ -98,7 +98,6 @@ pub enum CommandId {
     /// 切换密度档。
     ToggleDensity,
     /// 切换地图主题（注册表循环：JRPG 水彩 ⇄ 中国水墨）。
-    ToggleMapPalette,
     /// 播放 / 暂停。
     TogglePlay,
     /// 沉浸模式。
@@ -535,12 +534,6 @@ impl CommandRegistry {
             CommandId::ToggleDensity,
             CommandGroup::Interface,
             I18nKey::CmdToggleDensity,
-            None,
-        );
-        push(
-            CommandId::ToggleMapPalette,
-            CommandGroup::View,
-            I18nKey::CmdToggleMapPalette,
             None,
         );
         // 2026-10-14 用户需求：怀疑数据已改、画面没跟随时手动重画底图。

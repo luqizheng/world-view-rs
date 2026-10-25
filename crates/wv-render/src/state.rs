@@ -192,13 +192,7 @@ pub struct ViewState {
     /// （技法轴）正交。切换会触发底图纹理重建（`TerrainTexture.last_palette`）
     /// 与矢量层材质刷新（缓存键含本字段）。
     pub map_palette: crate::theme::palette::MapPalette,
-    /// 主题包 id（ADR-0023 D1/D3）—— M1 阶段权威源仍是 `map_palette`；
-    /// M2 把权威迁到本字段、保留 `map_palette` 作为兼容 fallback。
-    ///
-    /// 持久化键沿用 `ui-layout.yaml::map_theme` 字符串（D3 零迁移）；内置主题
-    /// id 与 `MapPalette` key 同名（`daylight` / `dusk`），存量 YAML 不动。
-    pub theme_pack_id: Option<String>,
-    /// **当前生效的主题包**（ADR-0023 M2：权威源 = `theme_pack_id`）。
+    /// **当前生效的风格包**（ADR-0066：单风格，恒为唯一默认包）。
     ///
     /// 为什么挂在 `ViewState` 上而不是独立的 `ActiveThemePack` Resource：
     /// Bevy 的 system 参数上限是 16，`wv-app` 的几个重载 system 已经贴着上限
@@ -206,7 +200,8 @@ pub struct ViewState {
     /// 就超限。`ViewState` 是所有消费点**本来就持有**的载体，挂这里零参数成本。
     ///
     /// 值由 `wv_render::theme::switch::sync_active_theme_pack` 写入（PreUpdate
-    /// 最前，**先于**所有消费点）。
+    /// 最前，**先于**所有消费点）。多主题机制退役后它恒等于
+    /// `wv_default_theme::theme_pack::builtin::DEFAULT`。
     pub active_theme: &'static crate::theme::theme_pack::ThemePack,
     /// 相机缩放（渲染层钳制范围）。
     pub scale: f32,
@@ -335,7 +330,6 @@ impl Default for ViewState {
             mode: ViewMode::default(),
             scale: 1.0,
             map_palette: Default::default(),
-            theme_pack_id: None,
             active_theme: &crate::theme::theme_pack::builtin::DEFAULT,
             camera_center: Vec2::ZERO,
             terrain_visible: true,

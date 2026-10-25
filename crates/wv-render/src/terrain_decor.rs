@@ -43,7 +43,7 @@ use wv_terrain::biome::{
 const DECOR_Z: f32 = 0.075;
 /// 桶间 Z 微差（六桶按序号错开，防同深度闪烁）。
 const BUCKET_Z_STEP: f32 = 0.0004;
-// 采样步距 / 尺寸系数已迁入主题配方（`wv_theme::decor::DecorRecipe`，
+// 采样步距 / 尺寸系数已迁入主题配方（`wv_default_theme::decor::DecorRecipe`，
 // ADR-0048 追记二）——渲染层不再持有美术常量。
 /// 单类单帧符号组数上限（步距本身已把数量压到屏幕量级，此为兜底）。
 const MAX_SITES_PER_KIND: usize = 2200;
@@ -1611,9 +1611,12 @@ mod tests {
         schedule.run(&mut app);
         let meshes = app.resource::<Assets<Mesh>>();
         let first = meshes.iter().count();
+        // **ADR-0066**：专业制图风格不画林团（`DecorRecipe::PROFESSIONAL` 的
+        // `forest_style = None`）——绿地由群系色块表达，满地树图标是手绘语汇。
+        // 故全林地形**不产任何 mesh**，这是新契约而非回归。
         assert_eq!(
-            first, 1,
-            "Edit 档 64² 全林应生成 1 个森林桶 mesh，got {first}"
+            first, 0,
+            "专业制图不画林团（forest_style = None），全林应产 0 个 mesh，got {first}"
         );
 
         // 二帧：无变化 → 零新增资产（原地改写纪律）。
@@ -1621,14 +1624,11 @@ mod tests {
         let second = app.resource::<Assets<Mesh>>().iter().count();
         assert_eq!(second, first, "第二帧不应新增 mesh");
 
-        // Nation 档：仍在画（粗步距大地貌团），原地改写而不是新增资产。
+        // Nation 档：同样不画（风格恒定，与档位无关）。
         app.resource_mut::<ViewState>().scale = 5.0;
         schedule.run(&mut app);
         let nation = app.resource::<Assets<Mesh>>().iter().count();
-        assert_eq!(
-            nation, 1,
-            "Nation 档应保留森林地貌团（ADR-0036），got {nation}"
-        );
+        assert_eq!(nation, 0, "Nation 档同样不画林团，got {nation}");
 
         // 关掉 TerrainDecor pass：整组下线。
         let mut recipe = app.resource_mut::<RenderRecipe>();

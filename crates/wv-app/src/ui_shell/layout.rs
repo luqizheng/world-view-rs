@@ -53,12 +53,10 @@ pub(crate) fn load_layout_on_project_open(
     if let Some(theme) = file.theme.as_deref().and_then(UiTheme::from_key) {
         shell_cfg.theme = theme;
     }
-    // 地图主题（ADR-0023 M2）：`map_theme` 存**主题包 id**。
-    // 存量工程存的是 `MapPalette::key()`（"daylight" / "dusk"）——由
-    // `switch::resolve_pack` 的兼容回退解析（内置包 id 与之不同名），零迁移。
+    // 地图主题（ADR-0066）：单风格时代**只有一种**风格，存量 `map_theme` 值
+    // （"daylight" / "dusk" / 外部包 id）一律映射回默认档——零迁移，且旧工程
+    // 打开后观感统一到专业制图。
     if let Some(t) = file.map_theme.as_deref() {
-        view.theme_pack_id = Some(t.to_string());
-        // 兼容：存量键映射回 `map_palette`（内置包的快捷选择器）。
         if let Some(pal) = MapPalette::from_key(t) {
             view.map_palette = pal;
         }
@@ -112,12 +110,8 @@ pub(crate) fn persist_layout_on_change(
     let mut file = (*layout).clone();
     file.theme = Some(cfg.theme.key().into());
     file.density = Some(cfg.density.key().into());
-    // 主题包 id 优先；未设时回落到内置包的 key（存量格式，零迁移）。
-    file.map_theme = Some(
-        view.theme_pack_id
-            .clone()
-            .unwrap_or_else(|| view.map_palette.key().to_string()),
-    );
+    // 风格恒为默认档，持久化键写它的 key（存量格式，零迁移）。
+    file.map_theme = Some(view.map_palette.key().to_string());
     file.language = Some(current_loc.0.as_str().to_string());
     file.map_dock = Some(dock.orientation.key().to_string());
     file.map_snap = Some(dock.snapping);

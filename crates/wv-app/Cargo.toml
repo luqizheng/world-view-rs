@@ -27,12 +27,8 @@ wv-io = { workspace = true }
 wv-edit = { workspace = true }
 wv-render = { workspace = true }
 wv-world-cell-map = { workspace = true }
-# 主题层（ADR-0043 D2）：UI 侧直接重导出主题数据，不再经 wv-render 中转。
-wv-theme = { workspace = true }
-# 外部主题包（ADR-0023 M2）：编辑器**运行时**依赖——主题切换链路接通后，
-# 用户能在界面里选到水墨包（`wv-theme-chinese-ink` 只依赖 `wv-theme`，
-# 不依赖 wv-render——ADR-0043 的注入契约）。
-wv-theme-chinese-ink = { workspace = true }
+# 默认地图风格层（ADR-0066）：UI 侧直接重导出风格数据，不再经 wv-render 中转。
+wv-default-theme = { workspace = true }
 # ADR-0026：界面控件层（egui 控件 + 界面令牌），**非 optional**——控件层
 # 本体就是 egui，标准 `cargo test --workspace` 必须编译它（消灭 §7.1 盲区）。
 # 不受 `app` feature 门控；`app` 门此后只管 panel / dialog 层。

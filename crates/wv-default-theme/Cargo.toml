@@ -1,0 +1,17 @@
+[package]
+name = "wv-default-theme"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "World View 默认地图风格：专业制图色板 + 风格契约（色板 / 处理旗标 / 海与装饰配方 / 覆盖物规则）"
+
+# 与 wv-theme 相同：bevy 系依赖**非 optional**——`PaletteColors` 的 36 槽就是
+# `bevy::color::Color`，本 crate 的本体是 Bevy 类型；设门只会把「标准门禁不
+# 编译」的旧病带进新 crate。
+#
+# `wv-terrain` 是纯数据叶子（零 Bevy / 零网络），用于取群系族枚举
+# `BiomeFamily`（ADR-0032 D2 规则键）——契约面要自包含。
+[dependencies]
+bevy = { workspace = true }
+wv-terrain = { workspace = true }

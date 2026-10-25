@@ -25,12 +25,10 @@
 
 use bevy::prelude::*;
 
-use super::decor::{
-    DecorRecipe, WATERCOLOR as DECOR_WATERCOLOR, WATERCOLOR_DUSK as DECOR_WATERCOLOR_DUSK,
-};
+use super::decor::{DecorRecipe, PROFESSIONAL as DECOR_PROFESSIONAL};
 use super::overlays::{FeatureOverlaySet, FeatureRule, RegionOverlayRule, RegionOverlaySet};
 use super::palette::{MapPalette, PaletteColors};
-use super::sea::{SeaRecipe, WATERCOLOR, WATERCOLOR_DUSK};
+use super::sea::{SeaRecipe, PROFESSIONAL};
 
 /// 主题包：色板 + 装饰 + 贴图 + 覆盖物规则的原子组合（ADR-0023 D1）。
 ///
@@ -291,126 +289,45 @@ impl ActiveThemePack {
 pub mod builtin {
     use super::*;
 
-    /// 渲染系统找不到 `theme_pack_id` 时的兜底（M1 = `MapPalette::Daylight` 对应包）。
+    /// **默认风格包 = 专业制图**（ADR-0066）。
     ///
-    /// 展示名（2026-10-25 用户裁定）：本 crate 的观感定位 = **JRPG 水彩**
-    /// （ADR-0035 的 JRPG 色板方案），不再叫「日间古舆图」。
+    /// 主理人 2026-10-25 裁定「软件不需要做 theme 的贴图功能」后，多主题机制
+    /// 整体退役，本包是**唯一**风格：
+    /// - `palette` = [`PaletteColors::DEFAULT`]（近白陆地 + 公园绿 + 分级道路 +
+    ///   分类 POI 的中性灰阶）；
+    /// - `treatment` = [`TreatmentFlags::EMPTY`]（无海岸晕 / 纸纹 / 水彩渐变——
+    ///   手绘语汇整体退场）；
+    /// - `sea` = [`PROFESSIONAL`]（无波纹 / 碎浪 / 排线，只留水深渐变）；
+    /// - `decor` = [`PROFESSIONAL`]（无山符号 / 无树冠贴图）；
+    /// - `overlays` = 森林规则**只留地界晕**（专业制图的绿地是色块，不是树图集）。
+    ///
+    /// 展示名（2026-10-25 用户裁定）：本 crate 的观感定位 = **专业制图**。
     pub static DEFAULT: ThemePack = ThemePack {
-        id: "antique_default",
-        display_name: "JRPG 水彩",
-        display_name_en: "JRPG Watercolor",
-        palette: PaletteColors::DAYLIGHT,
-        treatment: TreatmentFlags::HAND_DRAWN,
+        id: "default",
+        display_name: "专业制图",
+        display_name_en: "Professional Map",
+        palette: PaletteColors::DEFAULT,
+        treatment: TreatmentFlags::EMPTY,
         atlas: None,
-        sea: WATERCOLOR,
-        decor: DECOR_WATERCOLOR,
-        // 设计与取值依据：`docs/superpowers/specs/2026-10-17-theme-overlay-geo-fact-design.md`
-        // §6.4（D10：两内置包各一套，差异做在晕色 / 浓度 / 符号密度）。
-        // 日间：偏灰橄榄绿晕 + 深墨绿树冠。
+        sea: PROFESSIONAL,
+        decor: DECOR_PROFESSIONAL,
+        // 森林族（ADR-0032 D2 规则键 = 族）：**只留地界晕**。
         //
-        // `symbol_size_px` 是**屏幕像素**（spec §6.6：树冠符号 24–40 px）；
-        // `symbol_size_px * view.scale`（world-units-per-pixel）换成世界边长。
-        // `symbol_spacing_wu` 是**世界单位**采样间距——放大符号后同步放宽，
-        // 否则近带树冠会重叠成一片糊。
+        // 树冠符号是「手绘语汇」——专业制图的绿地是一块实色多边形（ADR-0061 D4），
+        // 再叠一层满地树图标是**两套语义打架**。晕是「这片是具名地物的辖域」这一
+        // **事实**的呈现，与画法无关，故保留。
         overlays: FeatureOverlaySet {
             forest: Some(FeatureRule {
-                halo_color: [0x5F, 0x7A, 0x4A],
-                halo_alpha: 0.30,
-                symbol_color: [0x3F, 0x5A, 0x35],
-                symbol_size_px: 28.0,
+                halo_color: [0x9A, 0xA0, 0xA6],
+                halo_alpha: 0.35,
+                symbol_color: [0xC9, 0xE7, 0xC7],
+                symbol_size_px: 0.0,
                 symbol_spacing_wu: 40.0,
-                // Task 9（D12）：日间走 3 变体树图集 + 森林盖层晕图章。
-                //
-                // 2026-10-25：日间图集换**手绘水彩树冠**（原 `tree_atlas_day.png`
-                // 保留，A/B 对比只需把这一行改回）。暮色包仍走 `tree_atlas_dusk.png`
-                // —— 手绘暮色版待美术，切换前日夜观感会不一致（已知，故意留）。
-                symbol_texture: Some("overlays/forest/tree_atlas_canopy.png"),
-                halo_texture: Some("overlays/forest/forest_fill.png"),
-            }),
-            // 其余族 v1 无内置演绎（ADR-0032 D2：字段一次定型，规则内容待美术）。
-            grassland: None,
-            desert: None,
-            wetland: None,
-            cold: None,
-            highland: None,
-            water: None,
-            road: None,
-        },
-        // 区域覆盖物键（ADR-0045 D10）：日间古舆图的四档变体。
-        // 变体色与 `terrain_decor` 现有气候带变体同源（针叶深绿 / 阔叶墨绿 /
-        // 稀树暖绿），乱石滩涂是新增的灰褐档。
-        region_overlays: RegionOverlaySet::new(&[
-            (
-                "conifer",
-                RegionOverlayRule {
-                    variant: "conifer",
-                    color: [0x2E, 0x5C, 0x36],
-                    alpha: None,
-                    size_scale: 1.0,
-                    spacing_scale: 1.0,
-                },
-            ),
-            (
-                "broadleaf",
-                RegionOverlayRule {
-                    variant: "broadleaf",
-                    color: [0x2B, 0x57, 0x31],
-                    alpha: None,
-                    size_scale: 1.0,
-                    spacing_scale: 1.0,
-                },
-            ),
-            (
-                "sparse",
-                RegionOverlayRule {
-                    variant: "sparse",
-                    color: [0x4A, 0x6B, 0x35],
-                    alpha: None,
-                    size_scale: 1.0,
-                    spacing_scale: 1.0,
-                },
-            ),
-            (
-                "boulder_field",
-                RegionOverlayRule {
-                    variant: "boulder",
-                    color: [0x8A, 0x84, 0x74],
-                    alpha: Some(0.80),
-                    size_scale: 1.0,
-                    spacing_scale: 1.2,
-                },
-            ),
-        ]),
-    };
-
-    /// 暮色旧纸包（与 `PaletteColors::DUSK` 同源；M1 提供作内置第二档，M2 再接持久化）。
-    ///
-    /// 未注册进 [`ALL`]——循环切换不可达，展示名保持历史名。
-    pub static DUSK: ThemePack = ThemePack {
-        id: "antique_dusk",
-        display_name: "暮色旧纸",
-        display_name_en: "Dusk Old Paper",
-        palette: PaletteColors::DUSK,
-        treatment: TreatmentFlags::HAND_DRAWN,
-        atlas: None,
-        sea: WATERCOLOR_DUSK,
-        decor: DECOR_WATERCOLOR_DUSK,
-        // 暮色：压暗的橄榄绿晕 + 更深的树冠，晕更淡（0.20）、符号略小
-        //（24 px，仍落在 spec §6.6 的 24–40 px）、采样比日间更密（32wu）
-        // ——与 DEFAULT 在 halo_color / halo_alpha / symbol_size / spacing
-        // 四项上都可见不同（D10 要求 ≥ 2 项）。
-        overlays: FeatureOverlaySet {
-            forest: Some(FeatureRule {
-                halo_color: [0x3E, 0x4A, 0x34],
-                halo_alpha: 0.20,
-                symbol_color: [0x28, 0x32, 0x24],
-                symbol_size_px: 24.0,
-                symbol_spacing_wu: 32.0,
-                // Task 9：暮色符号走浅墨图集；晕保持纯色（贴图校准留待后续）。
-                symbol_texture: Some("overlays/forest/tree_atlas_dusk.png"),
+                // 无贴图：专业制图不画树图集（资产依赖一并退役）。
+                symbol_texture: None,
                 halo_texture: None,
             }),
-            // 其余族 v1 无内置演绎（ADR-0032 D2）。
+            // 其余族 v1 无内置演绎（ADR-0032 D2：字段一次定型）。
             grassland: None,
             desert: None,
             wetland: None,
@@ -419,15 +336,16 @@ pub mod builtin {
             water: None,
             road: None,
         },
-        // 区域覆盖物键（ADR-0045 D10）：暮色版压暗一档，与 DEFAULT 可见不同。
+        // 区域覆盖物键（ADR-0045 D10）：专业制图用**中性灰阶**的变体色，
+        // 不再用水彩的针叶 / 阔叶墨绿。
         region_overlays: RegionOverlaySet::new(&[
             (
                 "conifer",
                 RegionOverlayRule {
                     variant: "conifer",
-                    color: [0x25, 0x46, 0x2C],
+                    color: [0xC8, 0xD8, 0xC8],
                     alpha: None,
-                    size_scale: 0.9,
+                    size_scale: 1.0,
                     spacing_scale: 1.0,
                 },
             ),
@@ -435,9 +353,9 @@ pub mod builtin {
                 "broadleaf",
                 RegionOverlayRule {
                     variant: "broadleaf",
-                    color: [0x23, 0x43, 0x28],
+                    color: [0xD2, 0xE2, 0xD2],
                     alpha: None,
-                    size_scale: 0.9,
+                    size_scale: 1.0,
                     spacing_scale: 1.0,
                 },
             ),
@@ -445,9 +363,9 @@ pub mod builtin {
                 "sparse",
                 RegionOverlayRule {
                     variant: "sparse",
-                    color: [0x3B, 0x55, 0x2A],
+                    color: [0xDE, 0xEA, 0xDE],
                     alpha: None,
-                    size_scale: 0.9,
+                    size_scale: 1.0,
                     spacing_scale: 1.0,
                 },
             ),
@@ -455,28 +373,21 @@ pub mod builtin {
                 "boulder_field",
                 RegionOverlayRule {
                     variant: "boulder",
-                    color: [0x6E, 0x69, 0x5C],
+                    color: [0xD8, 0xD8, 0xD6],
                     alpha: Some(0.78),
-                    size_scale: 0.9,
+                    size_scale: 1.0,
                     spacing_scale: 1.2,
                 },
             ),
         ]),
     };
 
-    /// 内置包列表（M1 = `[DEFAULT]`；M2 改 `[DEFAULT, DUSK]` 后 `view.theme_pack_id` 即可持久化切换）。
-    ///
-    /// **当前显式只暴露 `DEFAULT`**——DUSK 暂不开放为独立持久化键（M2 验收时
-    /// 同步把 `MapPalette::Dusk -> antique_dusk` 的迁移做掉，详见 ADR-0023 §6.2 M2）。
-    pub static ALL: &[(&str, &ThemePack)] = &[("antique_default", &DEFAULT)];
+    /// 内置包列表（**单元素**——ADR-0066 退役多主题机制后只剩默认包）。
+    pub static ALL: &[(&str, &ThemePack)] = &[("default", &DEFAULT)];
 
-    /// 从 `MapPalette` 派生 `ThemePack`（M1 兼容层——存量 `view.map_palette` 仍为权威源，
-    /// 直到 M2 把 `theme_pack_id` 提升为权威）。
-    pub fn for_palette(p: MapPalette) -> &'static ThemePack {
-        match p {
-            MapPalette::Daylight => &DEFAULT,
-            MapPalette::Dusk => &DUSK,
-        }
+    /// 按配色轴取包（**恒返回默认包**——单风格，ADR-0066）。
+    pub fn for_palette(_p: MapPalette) -> &'static ThemePack {
+        &DEFAULT
     }
 }
 
@@ -484,42 +395,55 @@ pub mod builtin {
 mod tests {
     use super::*;
 
-    /// M1 零回归硬保证：内置默认包与 `PaletteColors::DAYLIGHT` **逐位一致**。
-    /// 防手滑把 `DEFAULT.palette` 改成 DUSK 或注入"清理"逻辑。
+    /// 默认包的色板必与 [`PaletteColors::DEFAULT`] **逐位一致**（ADR-0066）。
+    ///
+    /// 防手滑把 `DEFAULT.palette` 改成别的实例——单风格时代它就是唯一真相源。
     #[test]
-    fn default_pack_palette_is_daylight() {
+    fn default_pack_palette_is_the_default_palette() {
         assert_eq!(
             builtin::DEFAULT.palette.core,
-            PaletteColors::DAYLIGHT.core,
-            "DEFAULT.core 必与 DAYLIGHT.core 逐位一致"
+            PaletteColors::DEFAULT.core,
+            "DEFAULT.core 必与 PaletteColors::DEFAULT.core 逐位一致"
         );
         assert_eq!(
             builtin::DEFAULT.palette.soften_toward,
-            PaletteColors::DAYLIGHT.soften_toward,
-            "DEFAULT.soften_toward 必与 DAYLIGHT 逐位一致"
+            PaletteColors::DEFAULT.soften_toward,
+            "DEFAULT.soften_toward 必与 PaletteColors::DEFAULT 逐位一致"
         );
         assert_eq!(
             builtin::DEFAULT.palette.label_fill,
-            PaletteColors::DAYLIGHT.label_fill,
-            "DEFAULT.label_fill 必与 DAYLIGHT 逐位一致"
+            PaletteColors::DEFAULT.label_fill,
+            "DEFAULT.label_fill 必与 PaletteColors::DEFAULT 逐位一致"
         );
     }
 
-    /// 内置默认包 id 稳定（持久化键 / 状态栏告警依赖）。
+    /// 默认包 id 稳定（持久化键 / 状态栏告警依赖）。
     #[test]
     fn default_pack_id_is_stable() {
-        assert_eq!(builtin::DEFAULT.id, "antique_default");
+        assert_eq!(builtin::DEFAULT.id, "default");
     }
 
-    /// `for_palette` 派生口径：Daylight -> DEFAULT, Dusk -> DUSK（M1 兼容层）。M2 把
-    /// `view.map_palette` 退役时此函数一并退役。
+    /// 单风格：`for_palette` 对任意配色轴都返回默认包（ADR-0066）。
     #[test]
-    fn for_palette_routes_to_matching_builtin() {
+    fn for_palette_always_routes_to_the_single_builtin() {
+        for p in MapPalette::ALL {
+            assert_eq!(
+                builtin::for_palette(p).id,
+                "default",
+                "{p:?} 应路由到唯一默认包"
+            );
+        }
+    }
+
+    /// 默认包的处理旗标**必须全空**（ADR-0061 D3 / ADR-0066）：手绘语汇
+    /// （海岸晕 / 纸纹 / 水彩渐变 / 晕开 / 颗粒）整体退场。
+    #[test]
+    fn default_pack_treatment_is_empty() {
         assert_eq!(
-            builtin::for_palette(MapPalette::Daylight).id,
-            "antique_default"
+            builtin::DEFAULT.treatment,
+            TreatmentFlags::EMPTY,
+            "默认风格不带任何手绘处理旗标"
         );
-        assert_eq!(builtin::for_palette(MapPalette::Dusk).id, "antique_dusk");
     }
 
     /// `ThemePack` 全部字段 `Copy`（D2 §2 性能前提）。
@@ -534,7 +458,7 @@ mod tests {
     #[test]
     fn active_theme_pack_default_routes_to_builtin() {
         let a = ActiveThemePack::default();
-        assert_eq!(a.0.id, "antique_default");
+        assert_eq!(a.0.id, "default");
     }
 
     /// `TreatmentFlags::default()` = `HAND_DRAWN`（安全缺省：忘写 treatment 的新
@@ -575,112 +499,31 @@ mod tests {
         assert!(h.shore_shallow && !e.shore_shallow);
     }
 
-    /// 内置两包都装载 `HAND_DRAWN`（零回归硬前提：渲染 gate 读到的旗标全 `true`
-    /// = 与历史恒开行为逐位一致）。
+    /// 默认包的森林族规则：**只留地界晕，不画树图集**（ADR-0061 D4 / ADR-0066）。
+    ///
+    /// 晕是「这片是具名地物的辖域」这一**事实**的呈现，与画法无关——普通地图
+    /// 同样需要它来表达「这里是莲花山森林公园」。树冠图集是手绘语汇。
     #[test]
-    fn builtin_packs_carry_hand_drawn_treatment() {
-        assert_eq!(builtin::DEFAULT.treatment, TreatmentFlags::HAND_DRAWN);
-        assert_eq!(builtin::DUSK.treatment, TreatmentFlags::HAND_DRAWN);
-    }
-
-    /// 默认包必须给森林族配置覆盖规则（D10：内置两包各一套），且值锁定为设计稿
-    /// 指定的日间古舆图参数——防手滑改成 DUSK 值或漏配 `overlays`。
-    #[test]
-    fn default_pack_has_forest_rule() {
+    fn default_pack_forest_rule_keeps_halo_and_drops_tree_atlas() {
         let rule = builtin::DEFAULT
             .overlays
             .rule_for(wv_terrain::biome::BiomeFamily::Forest)
             .expect("默认包必须给森林族配置规则");
-        assert_eq!(rule.halo_color, [0x5F, 0x7A, 0x4A], "日间晕色");
+        assert_eq!(rule.halo_color, [0x9A, 0xA0, 0xA6], "中性灰晕色");
         assert!(
-            (rule.halo_alpha - 0.30).abs() < 1e-6,
-            "日间晕浓度 alpha=0.30，got {}",
+            (rule.halo_alpha - 0.35).abs() < 1e-6,
+            "晕浓度 alpha=0.35，got {}",
             rule.halo_alpha
         );
-        assert_eq!(rule.symbol_color, [0x3F, 0x5A, 0x35], "日间符号色");
+        assert_eq!(
+            rule.symbol_texture, None,
+            "专业制图不画树图集（贴图整体退役）"
+        );
+        assert_eq!(rule.halo_texture, None, "晕保持纯色（无贴图）");
         assert!(
-            (rule.symbol_size_px - 28.0).abs() < 1e-6,
-            "日间符号尺寸 28px（spec §6.6：24–40px），got {}",
+            (rule.symbol_size_px - 0.0).abs() < 1e-6,
+            "符号尺寸 0 = 不画，got {}",
             rule.symbol_size_px
-        );
-        assert!(
-            (rule.symbol_spacing_wu - 40.0).abs() < 1e-6,
-            "日间采样间距 40wu，got {}",
-            rule.symbol_spacing_wu
-        );
-        assert_eq!(
-            rule.symbol_texture,
-            Some("overlays/forest/tree_atlas_canopy.png"),
-            "日间符号走 3 变体手绘水彩树冠图集（2026-10-25 接入）"
-        );
-        assert_eq!(
-            rule.halo_texture,
-            Some("overlays/forest/forest_fill.png"),
-            "日间晕走森林盖层图章"
-        );
-    }
-
-    /// 暮色包：符号用浅墨图集，晕**不**接贴图（保持纯色暮色晕，Task 9 裁定）。
-    #[test]
-    fn dusk_pack_uses_dusk_atlas_and_flat_halo() {
-        let rule = builtin::DUSK
-            .overlays
-            .rule_for(wv_terrain::biome::BiomeFamily::Forest)
-            .expect("暮色包必须给森林族配置规则");
-        assert_eq!(
-            rule.symbol_texture,
-            Some("overlays/forest/tree_atlas_dusk.png"),
-            "暮色符号走浅墨图集"
-        );
-        assert!(
-            rule.halo_texture.is_none(),
-            "暮色晕保持纯色（halo_texture = None）"
-        );
-    }
-
-    /// D10 验收口径：DUSK 与 DEFAULT 至少 2 项可见差异（晕色 / 晕浓度 / 符号
-    /// 尺寸 / 采样间距）。
-    #[test]
-    fn dusk_differs_from_default_in_at_least_two_visual_fields() {
-        let day = builtin::DEFAULT
-            .overlays
-            .rule_for(wv_terrain::biome::BiomeFamily::Forest)
-            .expect("默认包必须有森林族规则");
-        let dusk = builtin::DUSK
-            .overlays
-            .rule_for(wv_terrain::biome::BiomeFamily::Forest)
-            .expect("暮色包必须有森林族规则");
-        let diffs = [
-            day.halo_color != dusk.halo_color,
-            (day.halo_alpha - dusk.halo_alpha).abs() > 1e-6,
-            (day.symbol_size_px - dusk.symbol_size_px).abs() > 1e-6,
-            (day.symbol_spacing_wu - dusk.symbol_spacing_wu).abs() > 1e-6,
-        ]
-        .into_iter()
-        .filter(|different| *different)
-        .count();
-        assert!(
-            diffs >= 2,
-            "D10 要求至少 2 项可见差异，实际 {diffs} 项；\
-             halo_color {:?} vs {:?}, alpha {} vs {}, size {} vs {}, spacing {} vs {}",
-            day.halo_color,
-            dusk.halo_color,
-            day.halo_alpha,
-            dusk.halo_alpha,
-            day.symbol_size_px,
-            dusk.symbol_size_px,
-            day.symbol_spacing_wu,
-            dusk.symbol_spacing_wu
-        );
-        assert!(
-            (dusk.symbol_size_px - 24.0).abs() < 1e-6,
-            "暮色符号尺寸 24px（spec §6.6 下限），got {}",
-            dusk.symbol_size_px
-        );
-        assert!(
-            (dusk.symbol_spacing_wu - 32.0).abs() < 1e-6,
-            "暮色采样间距 32wu（比日间 40wu 更密），got {}",
-            dusk.symbol_spacing_wu
         );
     }
 
@@ -694,13 +537,6 @@ mod tests {
                 .rule_for(wv_terrain::biome::BiomeFamily::Highland)
                 .is_none(),
             "高地族未演绎，默认包应回 None"
-        );
-        assert!(
-            builtin::DUSK
-                .overlays
-                .rule_for(wv_terrain::biome::BiomeFamily::Highland)
-                .is_none(),
-            "高地族未演绎，暮色包应回 None"
         );
     }
 }

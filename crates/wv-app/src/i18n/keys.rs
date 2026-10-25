@@ -72,7 +72,6 @@ pub enum I18nKey {
     TopBarThemeLight,
     /// 顶栏地图主题控件 tooltip——点击切换地图主题（主题名本身是主题
     /// crate 的 `display_name` 常量，不走 i18n，2026-10-25 用户裁定）。
-    TopBarSwitchMapTheme,
     /// 顶栏最右设置入口 tooltip
     TopBarSettingsTooltip,
 
@@ -1007,7 +1006,6 @@ pub enum I18nKey {
     /// 「切换紧凑 / 标准密度」
     CmdToggleDensity,
     /// 「切换地图主题（JRPG 水彩 / 中国水墨）」
-    CmdToggleMapPalette,
     /// 「强制重画地形（怀疑没跟上时点一下）」
     CmdForceRebuildTexture,
     /// 「重置当前图地形到底图」（2026-10-16）
@@ -1304,7 +1302,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 521] = [
+    pub const ALL: [I18nKey; 520] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1745,7 +1743,6 @@ impl I18nKey {
         I18nKey::CmdJumpToEnd,
         I18nKey::CmdToggleTheme,
         I18nKey::CmdToggleDensity,
-        I18nKey::CmdToggleMapPalette,
         I18nKey::CmdForceRebuildTexture,
         I18nKey::CmdResetTerrainToBase,
         I18nKey::CmdRegenWorld,

@@ -59,7 +59,7 @@ use super::settings_dialog::SettingsDialog;
 use super::shell::UiShell;
 use super::widgets::{
     badge, icon_image, BadgeKind, ICON_CHEVRON_DOWN, ICON_CHEVRON_RIGHT, ICON_FOLDER_OPEN,
-    ICON_LANGUAGES, ICON_MAP, ICON_MOON, ICON_REFRESH, ICON_SETTINGS, ICON_SUN,
+    ICON_LANGUAGES, ICON_MOON, ICON_REFRESH, ICON_SETTINGS, ICON_SUN,
 };
 use crate::theme::ui_tokens::{font_size, radius, space};
 use crate::ui_command_palette::CommandId;

@@ -174,18 +174,8 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     .init_resource::<wv_render::measurement::MeasurementCache>()
     // 整图后台合成任务槽（CONTINUOUS_LOD M3）：落地校验在主线程读取。
     .init_resource::<wv_render::terrain_view::rebuild::PendingTerrainSynth>()
-    // 主题包（ADR-0023 M1）：当前 `map_palette` 仍为权威源，本 Resource 仅作
-    // 入口就位、不被任何渲染系统消费；M2 切消费点时再写回 `view.theme_pack_id`。
+    // 风格包（ADR-0023 M1 / ADR-0066）：单风格时代恒为唯一默认包。
     .init_resource::<wv_render::theme::theme_pack::ActiveThemePack>()
-    // 主题包注册表（ADR-0023 M2）：内置包 + 外部主题 crate（`wv-theme-chinese-ink`）。
-    // **显式声明接入哪些包**——游戏 app 写自己的 merge 列表即可看到完整装配
-    // （ADR-0023 D2 §3：不用隐式默认）。
-    .insert_resource(wv_render::theme::switch::ThemeRegistry(
-        wv_theme::registry::MergedThemeRegistry::merge(&[
-            &wv_theme::registry::BuiltinRegistry,
-            &wv_theme_chinese_ink::ChineseInkRegistry,
-        ]),
-    ))
     // 渲染配方（ADR-0021 D1）：每帧 PreUpdate 末尾单点求值，渲染 gate 改读
     // `recipe.enabled(PassId::X)` 替代散落的 `matches!(view.mode, ...)`。
     .init_resource::<wv_render::recipe::RenderRecipe>()

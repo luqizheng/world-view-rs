@@ -2,8 +2,7 @@
 //!
 //! **目的**（ADR-0023 M2 验收点）：证明一个游戏 app 可以**只装想要的部分**——
 //! `MapRenderPlugin` + `MapShellPlugin`（游戏可用）而**不装** `EditorOverlayPlugin`（编辑器专属）。
-//! 同时演示主题包注入：`wv-theme-chinese-ink` 注册表合并到 `MergedThemeRegistry`，
-//! 启动时 `lookup("chinese_ink")` 命中，验证"加新风格 = 加新 crate、零改 wv-render"。
+//! 同时演示风格层接入：默认风格包来自 `wv-default-theme`（ADR-0066 单一风格）。
 //!
 //! ## 运行方式
 //!
@@ -20,7 +19,7 @@
 //! | `EditorOverlayPlugin` | ✅ | ❌ 不装 |
 //! | 顶栏 / 浮动面板 / 命令面板 | ✅ | ❌ 不装 |
 //! | MCP / HTTP 服务 | ✅（`http` feature） | ❌ 不装 |
-//! | 主题包 | builtin only | builtin + `chinese_ink` |
+//! | 风格包 | 默认风格 | 默认风格 |
 //!
 //! ## 边界
 //! - **不**打开窗口（不调 `app.run()`——纯装配演示）；
@@ -30,30 +29,21 @@
 //! ## 期望输出
 //!
 //! ```text
-//! [game_consumer] MergedThemeRegistry: 2 packs (builtin_default + chinese_ink)
+//! [game_consumer] default style pack: 专业制图
 //! [game_consumer] MapRenderPlugin + MapShellPlugin installed (no EditorOverlayPlugin)
 //! ```
 
 use bevy::prelude::*;
+use wv_default_theme::theme_pack::builtin;
 use wv_render::plugins::{EditorOverlayPlugin, MapRenderPlugin, MapShellPlugin};
-use wv_render::theme::registry::{BuiltinRegistry, MergedThemeRegistry};
-use wv_theme_chinese_ink::ChineseInkRegistry;
 
 fn main() {
-    // 1. 主题包合并：builtin + chinese_ink
-    let merged = MergedThemeRegistry::merge(&[&BuiltinRegistry, &ChineseInkRegistry]);
-    let builtin_default = merged
-        .lookup("antique_default")
-        .expect("builtin default must exist");
-    let chinese_ink = merged
-        .lookup("chinese_ink")
-        .expect("chinese_ink must exist (registered via wv-theme-chinese-ink)");
+    // 1. 风格包：单一默认包（ADR-0066 退役多主题机制后的唯一入口）。
+    let default_pack = &builtin::DEFAULT;
 
     println!(
-        "[game_consumer] MergedThemeRegistry: {} packs (builtin: {} + ink: {})",
-        merged.len(),
-        builtin_default.display_name,
-        chinese_ink.display_name,
+        "[game_consumer] default style pack: {} (id={})",
+        default_pack.display_name, default_pack.id,
     );
 
     // 2. Bevy App 装配：只装 MapRenderPlugin + MapShellPlugin，**不装** EditorOverlayPlugin

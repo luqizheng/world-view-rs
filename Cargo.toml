@@ -10,8 +10,7 @@ members = [
     "crates/wv-render",
     "crates/wv-world-cell-map",
     "crates/wv-ui",
-    "crates/wv-theme",
-    "crates/wv-theme-chinese-ink",
+    "crates/wv-default-theme",
 ]
 
 [workspace.package]
@@ -37,8 +36,8 @@ wv-edit = { path = "crates/wv-edit" }
 wv-render = { path = "crates/wv-render" }
 wv-world-cell-map = { path = "crates/wv-world-cell-map" }
 wv-ui = { path = "crates/wv-ui" }
-wv-theme = { path = "crates/wv-theme" }
-wv-theme-chinese-ink = { path = "crates/wv-theme-chinese-ink" }
+# 默认地图风格层（ADR-0066）：专业制图色板 + 风格契约。
+wv-default-theme = { path = "crates/wv-default-theme" }
 wv-app = { path = "crates/wv-app" }
 
 # IO 层二进制分块（基线 §2.18：已批准，仅 wv-io 使用）。

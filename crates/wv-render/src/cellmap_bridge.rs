@@ -83,18 +83,18 @@ pub fn shade_mode_of(mode: crate::state::ViewMode) -> ShadeMode {
 /// `vector_layers` 已按模式分支取 `GOOGLE_LABEL_*` / `GOOGLE_ROAD_*`，不必
 /// 在这里重复。
 pub fn conv_palette_terrain(
-    p: &wv_theme::palette::PaletteColors,
+    p: &wv_default_theme::palette::PaletteColors,
     mode: crate::state::ViewMode,
 ) -> CellPalette {
     let mut c = conv_palette(p);
     if mode == crate::state::ViewMode::GoogleMap {
-        c.core = wv_theme::colors_google::GOOGLE_CORE_TERRAIN;
-        c.soften_toward = wv_theme::colors_google::GOOGLE_SOFTEN_TOWARD;
+        c.core = wv_default_theme::colors_google::GOOGLE_CORE_TERRAIN;
+        c.soften_toward = wv_default_theme::colors_google::GOOGLE_SOFTEN_TOWARD;
     }
     c
 }
 
-pub fn conv_palette(p: &wv_theme::palette::PaletteColors) -> CellPalette {
+pub fn conv_palette(p: &wv_default_theme::palette::PaletteColors) -> CellPalette {
     CellPalette {
         core: p.core,
         soften_keep: p.soften_keep,
@@ -137,7 +137,7 @@ pub fn conv_palette(p: &wv_theme::palette::PaletteColors) -> CellPalette {
 }
 
 /// 旗标换算（字段 1:1）。
-pub fn conv_treatment(t: &wv_theme::theme_pack::TreatmentFlags) -> TreatmentFlags {
+pub fn conv_treatment(t: &wv_default_theme::theme_pack::TreatmentFlags) -> TreatmentFlags {
     TreatmentFlags {
         coast_halo: t.coast_halo,
         water_gradient: t.water_gradient,
@@ -155,8 +155,8 @@ pub fn conv_treatment(t: &wv_theme::theme_pack::TreatmentFlags) -> TreatmentFlag
 }
 
 /// 海配方换算（波纹 / 碎浪转 owned `Vec`；镜像字段 1:1）。
-pub fn conv_sea(s: &wv_theme::sea::SeaRecipe) -> SeaRecipe {
-    let conv = |specs: &'static [wv_theme::sea::RippleSpec]| {
+pub fn conv_sea(s: &wv_default_theme::sea::SeaRecipe) -> SeaRecipe {
+    let conv = |specs: &'static [wv_default_theme::sea::RippleSpec]| {
         specs
             .iter()
             .map(|r| RippleSpec {
@@ -193,7 +193,7 @@ pub fn conv_sea(s: &wv_theme::sea::SeaRecipe) -> SeaRecipe {
 
 /// 区域覆盖物规则集换算（键 `&'static str` 保主题字面量；规则 1:1）。
 pub fn conv_region_set(
-    set: &wv_theme::overlays::RegionOverlaySet,
+    set: &wv_default_theme::overlays::RegionOverlaySet,
 ) -> wv_world_cell_map::region_overlay::RegionOverlaySet {
     use wv_world_cell_map::region_overlay::{RegionOverlayRule, RegionOverlaySet};
     RegionOverlaySet {
@@ -220,7 +220,7 @@ pub fn conv_region_set(
 ///
 /// **分层设色强度出 0**（中性基准）。需要按会话开关着色时用
 /// [`conv_pack_with`]——两函数分开是为了让测试 / 示例的逐位对照基准恒定。
-pub fn conv_pack(pack: &wv_theme::theme_pack::ThemePack) -> CellPack {
+pub fn conv_pack(pack: &wv_default_theme::theme_pack::ThemePack) -> CellPack {
     // 基准换算与模式无关：用 `VectorFlat`（= 主题色板原样），保持测试 / 示例的
     // 逐位对照恒定。Google 色只在真正渲染时经 `conv_pack_with(.., mode)` 生效。
     conv_pack_with(pack, 0.0, crate::state::ViewMode::VectorFlat)
@@ -229,7 +229,7 @@ pub fn conv_pack(pack: &wv_theme::theme_pack::ThemePack) -> CellPack {
 /// 同 [`conv_pack`]，并带上**分层设色强度**（ADR-0055；`ViewState.hypsometric_tint`
 /// 的落地入口）。强度是唯一的非主题字段，理由见 `CellPack::hypsometric` 的文档。
 pub fn conv_pack_with(
-    pack: &wv_theme::theme_pack::ThemePack,
+    pack: &wv_default_theme::theme_pack::ThemePack,
     hypsometric: f32,
     mode: crate::state::ViewMode,
 ) -> CellPack {
@@ -240,7 +240,7 @@ pub fn conv_pack_with(
         // 专业制图 = 干净平涂：海岸晕 / 水彩渐变 / 纸纹都是「手绘」语汇，
         // 与「普通地图」的一眼看懂相冲突。EMPTY 而非主题旗标。
         treatment: if cartographic {
-            conv_treatment(&wv_theme::theme_pack::TreatmentFlags::EMPTY)
+            conv_treatment(&wv_default_theme::theme_pack::TreatmentFlags::EMPTY)
         } else {
             conv_treatment(&pack.treatment)
         },
@@ -268,7 +268,7 @@ pub fn conv_pack_with(
 ///
 /// 与 [`conv_sea`] 分开而不是加 mode 参数：换算（主题 → 渲染）与风格截断
 /// （渲不渲染笔触）是两件事，前者对所有模式同构，后者只在专业制图发生。
-fn conv_sea_flat(s: &wv_theme::sea::SeaRecipe) -> SeaRecipe {
+fn conv_sea_flat(s: &wv_default_theme::sea::SeaRecipe) -> SeaRecipe {
     let mut out = conv_sea(s);
     out.shore_band_cells = 0.0;
     out.shore_peak = 0.0;
@@ -542,7 +542,7 @@ pub fn sync_isoline_overlay(
     // 河中线 / 亚线性描边都是手绘语汇）。此前这里直读主题旗标——一旦给
     // GoogleMap 开 Isoline，水彩海岸晕会立刻回来。
     let treatment = if cartographic {
-        conv_treatment(&wv_theme::theme_pack::TreatmentFlags::EMPTY)
+        conv_treatment(&wv_default_theme::theme_pack::TreatmentFlags::EMPTY)
     } else {
         conv_treatment(&view.active_theme.treatment)
     };
@@ -581,7 +581,7 @@ pub fn sync_isoline_overlay(
         if layers.is_changed() || overlay.ink_palette != Some(view.active_theme.id) {
             let mut pal = conv_palette(&view.active_theme.palette);
             if cartographic {
-                pal.isoline_ink = wv_theme::colors_google::GOOGLE_COAST_LINE_COLOR;
+                pal.isoline_ink = wv_default_theme::colors_google::GOOGLE_COAST_LINE_COLOR;
             }
             apply_material_colors(&mut materials, &overlay, &pal, layers.terrain.opacity);
             overlay.ink_palette = Some(view.active_theme.id);
@@ -699,7 +699,7 @@ pub fn sync_isoline_overlay(
     let handle = meshes.add(mesh);
     let mut pal = conv_palette(&view.active_theme.palette);
     if cartographic {
-        pal.isoline_ink = wv_theme::colors_google::GOOGLE_COAST_LINE_COLOR;
+        pal.isoline_ink = wv_default_theme::colors_google::GOOGLE_COAST_LINE_COLOR;
     }
     let material = overlay
         .material
@@ -3012,7 +3012,7 @@ mod bridge_tests {
             assert!(grid_lines_visible(&view(true)), "旗标开 → 显");
         }
 
-        /// GoogleMap 的地形 10 槽必须换成 `GOOGLE_CORE_TERRAIN`（2026-10-25）。
+        /// 地形 10 槽必是 `GOOGLE_CORE_TERRAIN`（专业制图色板）。
         ///
         /// **防回归**：主题侧这份色板自 2026-10-13 定义以来零消费点；渲染侧
         /// （`wv-world-cell-map`）另有一份同名抄录表，`shade_google` 一度读的
@@ -3020,29 +3020,33 @@ mod bridge_tests {
         /// 2026-10-25 修正：`shade_google` 改读 `CellPalette.core`，本函数才
         /// 真正成为「普通地图的地形色」的唯一入口。像素级锚点在
         /// `wv-world-cell-map::cells::tests::google_shade_reads_palette_core…`。
+        ///
+        /// **ADR-0066 更新**：单风格后「普通地图」与「默认风格」是**同一个**
+        /// ——不再存在「主题色板 ≠ 专业色板」的对照，故那条 `assert_ne` 撤掉，
+        /// 改为断言**两个模式取到同一份**（单风格的直接后果）。
         #[test]
         fn google_mode_terrain_core_is_the_google_palette() {
-            let pack = &wv_theme::theme_pack::builtin::DEFAULT;
+            let pack = &wv_default_theme::theme_pack::builtin::DEFAULT;
             let google = conv_pack_with(pack, 0.0, crate::state::ViewMode::GoogleMap);
             let themed = conv_pack_with(pack, 0.0, crate::state::ViewMode::VectorFlat);
             assert_eq!(
                 google.palette.core,
-                wv_theme::colors_google::GOOGLE_CORE_TERRAIN,
+                wv_default_theme::colors_google::GOOGLE_CORE_TERRAIN,
                 "普通地图的地形基色应是 Google 色板（近白陆地 / 淡水 / 公园绿）"
             );
-            assert_ne!(
+            assert_eq!(
                 google.palette.core, themed.palette.core,
-                "普通地图与主题色板必须不同，否则这条接线等于没接"
+                "单风格（ADR-0066）：两个模式取到同一份风格色板"
             );
-            // 处理旗标同理：海岸晕 / 纸纹是手绘语汇，普通地图要干净平涂。
+            // 处理旗标：海岸晕 / 纸纹是手绘语汇，普通地图要干净平涂。
             assert_eq!(
                 google.treatment,
-                conv_treatment(&wv_theme::theme_pack::TreatmentFlags::EMPTY),
+                conv_treatment(&wv_default_theme::theme_pack::TreatmentFlags::EMPTY),
                 "普通地图的处理旗标应为 EMPTY（无水彩晕染 / 纸纹）"
             );
-            assert_ne!(
+            assert_eq!(
                 google.treatment, themed.treatment,
-                "主题（JRPG 水彩）自带 hand-drawn 旗标，两者必须不同"
+                "单风格：处理旗标也是同一份（EMPTY）"
             );
         }
 
@@ -3054,7 +3058,7 @@ mod bridge_tests {
         /// 它是地形分析的表达，普通地图陆地单色，滑条非零也不许染色。
         #[test]
         fn google_mode_flattens_sea_recipe_and_hypsometric() {
-            let pack = &wv_theme::theme_pack::builtin::DEFAULT;
+            let pack = &wv_default_theme::theme_pack::builtin::DEFAULT;
             let google = conv_pack_with(pack, 0.8, crate::state::ViewMode::GoogleMap);
             assert!(google.sea.ripples.is_empty(), "普通地图不画离岸墨线波纹");
             assert!(google.sea.foam.is_empty(), "普通地图不画近岸碎浪");
@@ -3070,13 +3074,15 @@ mod bridge_tests {
             );
             // 深度渐变是数据不是画法：保留。
             assert!(google.sea.depth_scale_m > 0.0, "水深量程应保留");
-            // 反向锚点：艺术主题模式原样保留手绘海配方与分层设色。
+            // **ADR-0066**：单风格后不存在「艺术主题模式」——手绘海配方整体退役，
+            // 两个模式取到同一份（专业制图）配方。分层设色仍按模式分派
+            // （它是地形分析的表达，不是风格）。
             let themed = conv_pack_with(pack, 0.8, crate::state::ViewMode::VectorFlat);
             assert!(
-                !themed.sea.ripples.is_empty(),
-                "艺术主题必须保留手绘海配方（本修正不得误伤）"
+                themed.sea.ripples.is_empty(),
+                "单风格：手绘海配方已整体退役，两模式取同一份"
             );
-            assert_eq!(themed.hypsometric, 0.8, "艺术主题照常吃分层设色强度");
+            assert_eq!(themed.hypsometric, 0.8, "非专业模式照常吃分层设色强度");
         }
 
         /// 远观淡出锚点：≥4px 全显、≤2px 消失、中点线性一半、端点外钳制。

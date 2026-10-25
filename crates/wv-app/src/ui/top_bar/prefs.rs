@@ -200,52 +200,6 @@ pub(super) fn theme_control(
     }
 }
 
-/// 地图主题控件的（图标, 当前主题名, 切换提示）——名字是主题 crate 里的
-/// 常量（2026-10-25 用户裁定：`ThemePack.display_name(_en)`，不走 i18n）。
-///
-/// 取 [`ViewState::active_theme`]（PreUpdate 的 `sync_active_theme_pack` 已把
-/// `theme_pack_id` 解析成 `&'static ThemePack`），按当前语言选中/英常量。
-pub(super) fn map_theme_parts(
-    view: &ViewState,
-    loc: crate::i18n::Locale,
-) -> (egui::ImageSource<'static>, &'static str, I18nKey) {
-    (
-        ICON_MAP,
-        view.active_theme
-            .display_name_for(loc == crate::i18n::Locale::En),
-        I18nKey::TopBarSwitchMapTheme,
-    )
-}
-
-/// 地图主题控件：点击切换地图配色（JRPG 水彩 / 中国水墨）。
-///
-/// 只排队命令，不直接碰渲染资源——`ToggleMapPalette` 由
-/// [`crate::ui_shell::apply_pending_commands`] 统一执行。
-#[allow(clippy::too_many_arguments)]
-pub(super) fn map_theme_control(
-    ui: &mut egui::Ui,
-    shell: &UiShell,
-    rect: egui::Rect,
-    icon: egui::ImageSource<'static>,
-    label: &str,
-    hint: I18nKey,
-    palette: &mut crate::ui_command_palette::CommandPalette,
-    current_loc: &CurrentLocale,
-) {
-    let resp = preference_control(
-        ui,
-        shell,
-        rect,
-        icon,
-        label,
-        PrefTrailing::Shortcut("Ctrl+M"),
-    )
-    .on_hover_text(crate::i18n::t(current_loc.0, hint));
-    if resp.clicked() {
-        palette.pending = Some(CommandId::ToggleMapPalette);
-    }
-}
-
 /// Rebuild 控件（2026-10-19 用户裁定：位置移到语言之后、样式与日夜控件同款）。
 ///
 /// 只排队命令，不直接碰渲染资源——`ForceRebuildTexture` 由

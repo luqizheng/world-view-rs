@@ -7002,13 +7002,12 @@ dependencies = [
  "tokio",
  "tower",
  "wv-core",
+ "wv-default-theme",
  "wv-edit",
  "wv-io",
  "wv-overture",
  "wv-render",
  "wv-terrain",
- "wv-theme",
- "wv-theme-chinese-ink",
  "wv-ui",
  "wv-world-cell-map",
 ]
@@ -7020,6 +7019,14 @@ dependencies = [
  "serde",
  "serde_yaml",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "wv-default-theme"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "wv-terrain",
 ]
 
 [[package]]
@@ -7063,29 +7070,14 @@ dependencies = [
  "serde",
  "serde_yaml",
  "wv-core",
+ "wv-default-theme",
  "wv-terrain",
- "wv-theme",
  "wv-world-cell-map",
 ]
 
 [[package]]
 name = "wv-terrain"
 version = "0.1.0"
-
-[[package]]
-name = "wv-theme"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "wv-terrain",
-]
-
-[[package]]
-name = "wv-theme-chinese-ink"
-version = "0.1.0"
-dependencies = [
- "wv-theme",
-]
 
 [[package]]
 name = "wv-ui"

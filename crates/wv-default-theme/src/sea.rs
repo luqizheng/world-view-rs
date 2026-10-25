@@ -170,120 +170,38 @@ impl SeaRecipe {
     }
 }
 
-/// 水彩配方（日间）——2026-10-21 起为默认主题 [`crate::theme_pack::builtin::DEFAULT`]。
+/// **专业制图海配方**（ADR-0066）——只留水深渐变，其余手绘笔触全退场。
 ///
-/// 参数依据：civ-atlas `src/render/fantasy.ts` 的 `RIPPLE_D = [4, 9, 15]`、
-/// `RIPPLE_A = [0.42, 0.30, 0.18]`、`RIPPLE_SIG = 0.55`、`HATCH_D = 9`、
-/// `HATCH_A = 0.16`，以及 `grain = 1 + 0.035*(fiber-0.5)`。
+/// 百度 / Google 普通地图的水面是**平色 + 极浅的水深差**，没有离岸墨线波纹、
+/// 没有碎浪、没有近岸排线、没有纸面颗粒——那些是「水彩感」的来源，在普通
+/// 地图里是噪声。
 ///
-/// 与旧硬编码的关系：`depth_scale_m = 3500` + `depth_exponent = 0.5` +
-/// `shore_band_cells = 6` 完全保留 S0 已验收的深度观感（抽配方那一步
-/// **逐字节不变**，以烘焙 PNG 的 SHA256 对拍验证）。
-///
-/// 配方调优（2026-10-21 P1，视觉评审后）：浅滩峰值 0.85 → **0.55**（原值
-/// 太像「发光」而不是水色；水彩的边缘是积墨不是提亮），并补上评审指出的
-/// 两处缺项——**水面纸纹**（`water_grain`，海也要吃纸纤维，否则与有颗粒的
-/// 陆地成两种画法）与**离岸墨线**（`ripples`，手绘海图水彩感的主要来源，
-/// 不是色阶渐变）。
-pub const WATERCOLOR: SeaRecipe = SeaRecipe {
+/// 保留的只有深度量程（`depth_scale_m` / `depth_exponent`）：水深差是**数据**
+/// 不是画法，且是浅滩区可读性的来源。
+pub const PROFESSIONAL: SeaRecipe = SeaRecipe {
     depth_scale_m: 3500.0,
     depth_exponent: 0.5,
-    // 浅滩带 6 → 4 格（2026-10-21 P1）：实机评审「发光感太强、太宽」——
-    // 4 格 ≈ 6 屏幕像素（26% 缩放下），是「薄水覆沙」而非「一滩光」。
-    shore_band_cells: 4.0,
-    shore_peak: 0.55,
-    water_grain: 0.035,
-    ripple_warp_cells: 1.2,
-    // 三圈（离岸 4 / 9 / 15 格）：墨量递减、线宽略增——近岸密、远海疏。
-    ripples: &[
-        RippleSpec {
-            dist_cells: 4.0,
-            sigma_cells: 0.55,
-            alpha: 0.42,
-        },
-        RippleSpec {
-            dist_cells: 9.0,
-            sigma_cells: 0.55,
-            alpha: 0.30,
-        },
-        RippleSpec {
-            dist_cells: 15.0,
-            sigma_cells: 0.60,
-            alpha: 0.18,
-        },
-    ],
+    // 无浅滩带（专业制图的水深差由深度渐变本身承担）。
+    shore_band_cells: 0.0,
+    shore_peak: 0.0,
+    // 无水面纸纹颗粒。
+    water_grain: 0.0,
+    ripple_warp_cells: 0.0,
+    // 无离岸墨线波纹。
+    ripples: &[],
     ink: [0x5A, 0x4E, 0x42],
-    // 近岸碎浪：两道贴岸白带（离岸 1 / 2.6 格），破碎度 0.55、边缘参差 1.0 格。
-    foam: &[
-        RippleSpec {
-            dist_cells: 1.0,
-            sigma_cells: 0.45,
-            alpha: 0.60,
-        },
-        RippleSpec {
-            dist_cells: 2.6,
-            sigma_cells: 0.50,
-            alpha: 0.26,
-        },
-    ],
+    // 无近岸碎浪。
+    foam: &[],
     foam_ink: [0xF2, 0xF6, 0xF2],
-    foam_break: 0.78,
-    foam_warp_cells: 1.4,
-    foam_break_freq: 1.15,
-    // 近岸排线（civ-atlas HATCH 语义）：离岸 9 格内、每 7 纹理像素一道横线，
-    // 墨量 0.16（照搬参考值）。
-    shore_hatch: Some(HatchSpec {
-        dist_cells: 4.5,
-        row_spacing_px: 16,
-        alpha: 0.16,
-    }),
-    // 浅滩带外缘的积墨环：宽度 1.2 格、强度 0.30 —— 让浅滩从「发光渐变」
-    // 变成「有边缘的水彩色块」（水彩颜料在湿边堆积）。
-    shore_edge_strength: 0.30,
-    shore_edge_width_cells: 1.2,
+    foam_break: 0.0,
+    foam_warp_cells: 0.0,
+    // 无近岸排线。
+    shore_hatch: None,
+    // 无浅滩外缘积墨。
+    shore_edge_strength: 0.0,
+    shore_edge_width_cells: 0.0,
     shore_edge_ink: None,
-};
-
-/// 水彩配方（暮色）——暗纸上的浅滩与墨线都要更含蓄。
-pub const WATERCOLOR_DUSK: SeaRecipe = SeaRecipe {
-    depth_scale_m: 3500.0,
-    depth_exponent: 0.5,
-    shore_band_cells: 5.0,
-    shore_peak: 0.40,
-    water_grain: 0.030,
-    ripple_warp_cells: 1.4,
-    ripples: &[
-        RippleSpec {
-            dist_cells: 5.0,
-            sigma_cells: 0.60,
-            alpha: 0.26,
-        },
-        RippleSpec {
-            dist_cells: 11.0,
-            sigma_cells: 0.65,
-            alpha: 0.14,
-        },
-    ],
-    ink: [0xAC, 0x9E, 0x88],
-    // 暮色：泡沫更弱更暗（暗纸上白浪刺眼），且只留贴岸一道。
-    foam: &[RippleSpec {
-        dist_cells: 1.1,
-        sigma_cells: 0.60,
-        alpha: 0.30,
-    }],
-    foam_ink: [0xC8, 0xD0, 0xC8],
-    foam_break: 0.45,
-    foam_warp_cells: 1.1,
-    foam_break_freq: 0.8,
-    // 暮色：排线更疏更淡（暗纸上重墨会脏）。
-    shore_hatch: Some(HatchSpec {
-        dist_cells: 3.5,
-        row_spacing_px: 20,
-        alpha: 0.10,
-    }),
-    shore_edge_strength: 0.20,
-    shore_edge_width_cells: 1.0,
-    shore_edge_ink: None,
+    foam_break_freq: 0.0,
 };
 
 #[cfg(test)]
@@ -293,7 +211,7 @@ mod tests {
     /// 深度曲线与旧硬编码逐位一致（S0/S2 已验收观感的等价性锚点）。
     #[test]
     fn depth_t_matches_the_former_hardcoded_curve() {
-        let r = WATERCOLOR;
+        let r = PROFESSIONAL;
         assert_eq!(r.depth_t(0), 0.0, "海平面应为 0");
         assert_eq!(r.depth_t(5000), 0.0, "陆上高度应钳到 0");
         assert!((r.depth_t(-3500) - 1.0).abs() < 1e-6, "-3500 应为 1");
@@ -311,7 +229,7 @@ mod tests {
     fn depth_exponent_reshapes_the_curve() {
         let lin = SeaRecipe {
             depth_exponent: 1.0,
-            ..WATERCOLOR
+            ..PROFESSIONAL
         };
         assert!(
             (lin.depth_t(-875) - 0.25).abs() < 1e-6,
@@ -319,7 +237,7 @@ mod tests {
         );
         let sq = SeaRecipe {
             depth_exponent: 2.0,
-            ..WATERCOLOR
+            ..PROFESSIONAL
         };
         assert!(
             (sq.depth_t(-875) - 0.0625).abs() < 1e-6,
@@ -330,7 +248,7 @@ mod tests {
     /// 浅滩带：水线最浓、带缘归零、带外恒 0。
     #[test]
     fn shore_band_ramps_to_zero_at_the_band_edge() {
-        let r = WATERCOLOR;
+        let r = PROFESSIONAL;
         assert!(
             (r.shore_band_strength(0) - r.shore_peak).abs() < 1e-6,
             "水线应等于配方峰值 {}，实得 {}",
@@ -352,12 +270,12 @@ mod tests {
     fn zero_band_or_peak_disables_the_tint() {
         let no_band = SeaRecipe {
             shore_band_cells: 0.0,
-            ..WATERCOLOR
+            ..PROFESSIONAL
         };
         assert_eq!(no_band.shore_band_strength(0), 0.0);
         let no_peak = SeaRecipe {
             shore_peak: 0.0,
-            ..WATERCOLOR
+            ..PROFESSIONAL
         };
         assert_eq!(no_peak.shore_band_strength(0), 0.0);
     }
@@ -365,24 +283,16 @@ mod tests {
     /// 场半径随配方扩张：波纹最远圈要能被场覆盖（否则远端截断成硬边）。
     #[test]
     fn field_radius_covers_ripples_and_band() {
-        let no_ripples = SeaRecipe {
-            ripples: &[],
-            ripple_warp_cells: 0.0,
-            ..WATERCOLOR
-        };
-        assert_eq!(no_ripples.field_radius(), 12, "无波纹时应保底 12 格");
-        assert!(
-            WATERCOLOR.field_radius() >= 17,
-            "水彩配方最远波纹 15 格应被覆盖，实得 {}",
-            WATERCOLOR.field_radius()
-        );
+        // 专业制图配方无波纹 → 场半径取保底 12 格。
+        assert_eq!(PROFESSIONAL.field_radius(), 12, "无波纹时应保底 12 格");
+        // 给了波纹就按最远圈 + 3σ 扩张。
         let with_ripples = SeaRecipe {
             ripples: &[RippleSpec {
                 dist_cells: 15.0,
                 sigma_cells: 0.55,
                 alpha: 0.18,
             }],
-            ..WATERCOLOR
+            ..PROFESSIONAL
         };
         assert!(
             with_ripples.field_radius() >= 17,
@@ -391,14 +301,27 @@ mod tests {
         );
     }
 
-    /// 两套配方的浅滩表现有可见差异（防「改了日间忘配暮色」）。
+    /// 专业制图配方**不画任何水面笔触**（ADR-0066）：无波纹 / 碎浪 / 排线 /
+    /// 纸纹 / 浅滩带 / 积墨。
     #[test]
-    fn dusk_recipe_differs_visibly_from_daylight() {
-        assert_ne!(
-            WATERCOLOR.shore_band_cells,
-            WATERCOLOR_DUSK.shore_band_cells
-        );
-        assert_ne!(WATERCOLOR.shore_peak, WATERCOLOR_DUSK.shore_peak);
-        assert_ne!(WATERCOLOR.ink, WATERCOLOR_DUSK.ink, "墨色应不同");
+    fn professional_recipe_draws_no_water_brushwork() {
+        let r = PROFESSIONAL;
+        assert!(r.ripples.is_empty(), "无离岸墨线波纹");
+        assert!(r.foam.is_empty(), "无近岸碎浪");
+        assert!(r.shore_hatch.is_none(), "无近岸排线");
+        assert_eq!(r.water_grain, 0.0, "无水面纸纹颗粒");
+        assert_eq!(r.shore_edge_strength, 0.0, "无浅滩外缘积墨");
+        assert_eq!(r.shore_band_cells, 0.0, "无浅滩带");
+        assert_eq!(r.shore_peak, 0.0, "无浅滩峰值");
+    }
+
+    /// 专业制图配方**保留水深渐变**（深度是数据，不是画法）。
+    #[test]
+    fn professional_recipe_keeps_depth_gradient() {
+        let r = PROFESSIONAL;
+        assert!(r.depth_scale_m > 0.0, "深度量程应保留");
+        assert_eq!(r.depth_t(0), 0.0, "海平面应为 0");
+        assert!((r.depth_t(-3500) - 1.0).abs() < 1e-6, "-3500 应为 1");
+        assert!((r.depth_t(-875) - 0.5).abs() < 1e-6, "-875 应为 0.5");
     }
 }

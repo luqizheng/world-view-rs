@@ -15,8 +15,8 @@ use wv_core::geometry::point_in_ring;
 use wv_core::terrain::{TerrainCellData, TerrainData};
 
 // 数据契约重导出（ADR-0043 D4）：`crate::theme::overlays::{FeatureRule, …}`
-// 路径不变，外部主题 crate 则从 `wv_theme::overlays` 取。
-pub use wv_theme::overlays::{BiomeFamily, FeatureOverlaySet, FeatureRule};
+// 路径不变，外部主题 crate 则从 `wv_default_theme::overlays` 取。
+pub use wv_default_theme::overlays::{BiomeFamily, FeatureOverlaySet, FeatureRule};
 
 /// 抖动幅度占采样间距的比例（`±0.35 × spacing_wu`）。
 ///

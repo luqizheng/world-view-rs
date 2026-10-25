@@ -30,8 +30,8 @@
 #![cfg(feature = "app")]
 
 use wv_core::World;
+use wv_default_theme::theme_pack::ThemePack;
 use wv_io::diagnostics::{self, derive_hints, Diagnostics};
-use wv_theme::theme_pack::ThemePack;
 
 /// 对内存里的 `World` 派生一份 `Diagnostics`：错误 + 提示 + 去重。
 ///

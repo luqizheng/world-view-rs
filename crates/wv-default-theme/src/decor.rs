@@ -229,20 +229,47 @@ pub const WATERCOLOR: DecorRecipe = DecorRecipe {
     forest_density_gain: 1.0,
 };
 
-/// 暮色装饰配方——暗纸上的符号要更沉、更疏。
-pub const WATERCOLOR_DUSK: DecorRecipe = DecorRecipe {
-    // 高度阈值与气候带同源（地形事实），只改颜色与密度感。
-    // 山符号画法同内置默认（ADR-0059 D4）——与日间一致，显式钉住。
-    mountain_style: SymbolStyle::Default,
-    // 森林符号画法同内置默认（ADR-0059 追记一）——显式钉住，防继承漂移。
-    forest_style: SymbolStyle::Default,
-    spacing_px_edit: 30.0,
-    spacing_px_region: 52.0,
-    spacing_px_nation: 78.0,
-    size_mul_edit: 0.9,
-    size_mul_region: 0.75,
-    size_mul_nation: 1.4,
-    ..WATERCOLOR
+/// **专业制图装饰配方**（ADR-0066）——不画山符号、不画林团。
+///
+/// 专业制图的起伏由**地形色带 + 晕渲 + 等高线**表达（ADR-0060 的目标态），
+/// 山符号 / 树图集都是「手绘语汇」——在普通地图里画满山三角是噪声。
+///
+/// 阈值与气候带仍取地形事实（同 `WATERCOLOR`），只是**画法全关**：渲染层读到
+/// `SymbolStyle::None` 就不画该符号。
+pub const PROFESSIONAL: DecorRecipe = DecorRecipe {
+    mountain_min_h: 1500,
+    hill_min_h: 550,
+    snow_cap_h: 1800,
+    rock_h: 3400,
+    ridge_snap_min_h: 1500,
+    // 山符号与林团**都不画**——表达交给地形色带 / 晕渲（ADR-0060 D1）。
+    mountain_style: SymbolStyle::None,
+    forest_style: SymbolStyle::None,
+    climate_cuts: [0.30, 0.72],
+    // 墨色留中性灰阶（万一有符号被其它路径触发，也不会是突兀的墨绿）。
+    conifer_ink: VariantInk::new(0.62, 0.65, 0.62, 0.85),
+    temperate_ink: VariantInk::new(0.60, 0.66, 0.60, 0.85),
+    oasis_ink: VariantInk::new(0.70, 0.70, 0.62, 0.80),
+    rock_ink: VariantInk::new(0.788, 0.725, 0.541, 1.0),
+    mountain_shade_ink: VariantInk::new(0.55, 0.57, 0.58, 0.85),
+    forest_ink: DecorInk::new([0x9A, 0xA0, 0xA6], 0.85),
+    plains_ink: DecorInk::new([0xDA, 0xDC, 0xE0], 0.55),
+    hills_ink: DecorInk::new([0xC4, 0xC7, 0xC9], 0.60),
+    mountain_ink: DecorInk::new([0x9A, 0xA0, 0xA6], 0.65),
+    snow_ink: DecorInk::new([0xFD, 0xFE, 0xFF], 0.90),
+    marsh_ink: DecorInk::new([0xBB, 0xDC, 0xC9], 0.65),
+    desert_ink: DecorInk::new([0xE8, 0xE6, 0xE0], 0.55),
+    wave_ink: DecorInk::new([0xFD, 0xFE, 0xFF], 0.50),
+    spacing_px_edit: 26.0,
+    spacing_px_region: 46.0,
+    spacing_px_nation: 72.0,
+    size_mul_edit: 1.0,
+    size_mul_region: 0.8,
+    size_mul_nation: 1.6,
+    wave_band_min_cells: 3,
+    wave_band_max_cells: 9,
+    wave_density_span_cells: 6,
+    forest_density_gain: 1.0,
 };
 
 #[cfg(test)]
@@ -313,32 +340,20 @@ mod tests {
         assert!(r.climate_cuts[1] < 1.0);
     }
 
-    /// 两套配方在可见维度上确有差异（防「改了日间忘配暮色」）。
+    /// 专业制图配方**不画任何符号**（ADR-0061 D4 / ADR-0066）：山与林团的
+    /// 表达交给地形色带 / 晕渲 / 群系面填充。
     #[test]
-    fn dusk_recipe_differs_visibly_from_daylight() {
-        assert_ne!(
-            WATERCOLOR.spacing_px_nation,
-            WATERCOLOR_DUSK.spacing_px_nation
-        );
-        assert_ne!(WATERCOLOR.size_mul_nation, WATERCOLOR_DUSK.size_mul_nation);
+    fn professional_recipe_draws_no_symbols() {
+        assert_eq!(PROFESSIONAL.mountain_style, SymbolStyle::None);
+        assert_eq!(PROFESSIONAL.forest_style, SymbolStyle::None);
     }
 
-    /// 两套内置配方的山符号画法都是 `Default`（ADR-0059 D4）——内置默认
-    /// 三角是保底，观感零变化；「不画」的选择权归主题（水墨包的 `None`
-    /// 锚点在 wv-theme-chinese-ink）。
+    /// 专业制图配方的**阈值**仍取地形事实（与水彩同源）——「不画」是画法决定，
+    /// 不是把地形事实改掉。
     #[test]
-    fn builtin_recipes_keep_default_mountain_style() {
-        assert_eq!(WATERCOLOR.mountain_style, SymbolStyle::Default);
-        assert_eq!(WATERCOLOR_DUSK.mountain_style, SymbolStyle::Default);
-    }
-
-    /// 两套内置配方的森林符号画法都是 `Default`（ADR-0059 追记一）——
-    /// 程序化三变体林团是保底，内置主题观感零变化。「不画 / 换贴图」的
-    /// 选择权归主题（水墨包显式 `Default` 的锚点在 wv-theme-chinese-ink：
-    /// 苔点与林团是水墨正解，疏密由 `forest_density_gain` 调制）。
-    #[test]
-    fn builtin_recipes_keep_default_forest_style() {
-        assert_eq!(WATERCOLOR.forest_style, SymbolStyle::Default);
-        assert_eq!(WATERCOLOR_DUSK.forest_style, SymbolStyle::Default);
+    fn professional_recipe_keeps_terrain_fact_thresholds() {
+        assert_eq!(PROFESSIONAL.mountain_min_h, WATERCOLOR.mountain_min_h);
+        assert_eq!(PROFESSIONAL.hill_min_h, WATERCOLOR.hill_min_h);
+        assert_eq!(PROFESSIONAL.climate_cuts, WATERCOLOR.climate_cuts);
     }
 }

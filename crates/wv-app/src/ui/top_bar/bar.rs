@@ -90,7 +90,6 @@ pub fn top_bar(
                     &mut shell_cfg,
                     &mut settings,
                     &mut palette,
-                    &view,
                     ui.max_rect().right() - CONTROLS_W,
                 );
                 // ── 最右上角：窗控三键（最小化/最大化/关闭，关闭键贴右缘）──
@@ -320,7 +319,6 @@ fn readout_segment(
     shell_cfg: &mut UiShellConfig,
     settings: &mut SettingsDialog,
     palette: &mut crate::ui_command_palette::CommandPalette,
-    view: &ViewState,
     right_edge: f32,
 ) {
     /// 右区相邻控件间距（Figma Workspace preferences `gap: 8px`）。
@@ -377,26 +375,6 @@ fn readout_segment(
         label,
         hint_key,
         shell_cfg,
-        current_loc,
-    );
-    right -= GAP;
-
-    // ── 地图主题控件（主题名 = 主题 crate 的 display_name 常量，2026-10-25 裁定）──
-    let (icon, label, hint) = map_theme_parts(view, current_loc.0);
-    let map_theme_w = preference_width(ui, label, PrefTrailing::Shortcut("Ctrl+M"));
-    right -= map_theme_w;
-    let map_theme_rect = egui::Rect::from_min_max(
-        egui::pos2(right, cy - PREF_HEIGHT * 0.5),
-        egui::pos2(right + map_theme_w, cy + PREF_HEIGHT * 0.5),
-    );
-    map_theme_control(
-        ui,
-        shell,
-        map_theme_rect,
-        icon,
-        label,
-        hint,
-        palette,
         current_loc,
     );
     right -= GAP;

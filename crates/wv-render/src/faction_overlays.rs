@@ -176,7 +176,7 @@ pub fn sync_faction_overlays(
     // 只画当前层实控边界的一条灰虚线，不填色、不画声称与其他层。
     let cartographic = view.mode == crate::state::ViewMode::GoogleMap;
     let carto_grey = {
-        let c = wv_theme::colors_google::GOOGLE_BORDER.to_srgba();
+        let c = wv_default_theme::colors_google::GOOGLE_BORDER.to_srgba();
         [
             (c.red * 255.0).round() as u8,
             (c.green * 255.0).round() as u8,
