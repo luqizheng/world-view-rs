@@ -132,6 +132,17 @@ cargo tree --workspace --duplicates
 
 > **2026-10-16 增列**（ADR-0020 提议态）：新 5 条断言对应"render 抽 crate 后的依赖红线"。一旦发现 `wv-render` 引用 `wv-edit` 或 `wv-app`、或 `wv-core/wv-terrain/wv-edit` 沾染 bevy/网络，**立即拒收 PR**——这是分层纪律与 §3.3「不直接改世界」的客观兜底，不必依赖 review 者的记忆。
 
+> **2026-10-25 增列**（环境约束，**非**架构红线）：在受限执行环境（CI 沙箱 /
+> 受管终端 / agent 派生进程）下，cargo 拉起的**测试子进程无权写 `%TEMP%`**
+> （`std::env::temp_dir()`），写盘类单测会报 `PermissionDenied (os error 5)`
+> 假失败（wv-io 的 faction / terrain_bin / create_project / example_project /
+> label_layer 等集成测试共 50+ 条）。判据：同环境里 bash 自己 `mkdir` 同一路径
+> **能成功**，且**正常桌面环境直接 `cargo test` 全绿**——故这是环境约束而非
+> 代码缺陷。**对策**：跑测试用 `bash scripts/cargo-test.sh`（内部把
+> `TEMP`/`TMP` 指向工作区 `.target/testtmp`）。
+> **不得**用 `#[ignore]` 掩盖——那会永久损失集成覆盖（YAML 迁移、脏路径、
+> 悬挂引用诊断等真实回归守点都在这批测试里）。
+
 ### 2.3 为什么这条最重要
 
 `wv-core` 必须能独立测试、独立跑 CLI、独立做校验器。`wv-render` 必须能独立测试、独立 headless 跑（未来 wv-render-cli）。**一旦 Bevy 渗进数据层、wv-render 反向依赖 wv-edit，这两件事全部失效**——这是本项目最容易犯、代价最大的错误。

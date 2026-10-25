@@ -32,7 +32,7 @@ use crate::layer_frame::LayerFrame;
 use crate::recipe::{PassId, RenderRecipe};
 use crate::state::{lod_tier, GridConfig, ViewState, WorldProjection};
 use crate::terrain_view::terrain_resolve::active_terrain;
-use crate::theme::decor::DecorRecipe;
+use crate::theme::decor::{DecorRecipe, SymbolStyle};
 use wv_terrain::biome::{
     BIOME_DESERT, BIOME_FOREST, BIOME_GOBI, BIOME_GRASSLAND, BIOME_HILLS, BIOME_JUNGLE,
     BIOME_MOUNTAINS, BIOME_OASIS, BIOME_PLAINS, BIOME_SAVANNA, BIOME_SNOWFIELD, BIOME_SWAMP,
@@ -49,6 +49,10 @@ const BUCKET_Z_STEP: f32 = 0.0004;
 const MAX_SITES_PER_KIND: usize = 2200;
 /// 视口外扩余量（屏幕像素）：拖动相机时边缘符号不闪断。
 const VIEWPORT_MARGIN_PX: f32 = 32.0;
+/// `SymbolStyle::Tile` 的一次性告警标记（ADR-0058 D3）：贴图装载通道待 v2，
+/// warn 每进程只发一次——`site_primitives` 是逐站点调用的，每站点刷屏会把
+/// 日志埋了。
+static TILE_STYLE_WARNED: std::sync::Once = std::sync::Once::new();
 
 /// 装饰类别（八类）。下标即渲染桶序号。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -323,6 +327,23 @@ pub fn site_primitives(
             ));
         }
         DecorKind::Mountain => {
+            // 画法分派（ADR-0058 D3）：「画不画 / 换画法」由主题裁定——
+            // None：山体表达收敛到等值线 / 皴法 / 海配方 / 地形色，
+            //   本站点不产任何图元（水墨包的画法，方案 §7 留白裁定的彻底化）；
+            // Tile：贴图装载通道待 v2（ADR-0023 M3），一次性 warn 后
+            //   走 Default 保底（「缺资产不崩」）；
+            // Default：内置默认程序化形状（下方逻辑不变）。
+            match recipe.mountain_style {
+                SymbolStyle::None => return out,
+                SymbolStyle::Tile(key) => {
+                    TILE_STYLE_WARNED.call_once(|| {
+                        warn!(
+                            "SymbolStyle::Tile({key:?})：山体贴图装载通道待 v2（ADR-0023 M3），回退内置默认山符号"
+                        );
+                    });
+                }
+                SymbolStyle::Default => {}
+            }
             // 三角山（ADR-0042 手绘化）：主三角右侧叠一道深色背光面——
             // 参考图的山是「受光面 + 背光面」两面体，单色三角只是剪影。
             // 宽 13px 高 11px；海拔 ≥ 1800m 顶部叠雪帽（小三角，雪桶）。
@@ -364,8 +385,10 @@ pub fn site_primitives(
                     3.5 * m * size_k,
                 ));
             }
-            // 极高山露岩（ADR-0039 D4）：>=3400m 雪帽内缘叠黄褐岩三角
-            // （进 Snow 桶第二层图元，顶点色区分）。
+            // 极高山露岩（ADR-0039 D4）：>=3400m 雪帽内缘叠露岩三角
+            // （进 Snow 桶第二层图元，顶点色区分）。色走主题 rock_ink
+            // （ADR-0058 D6：此前硬编码 #C9B98A，绕过主题——水墨包的
+            // 岩墨灰自此生效）。
             if height_m >= recipe.rock_h {
                 out.push(SitePrim::colored(
                     DecorKind::Snow,
@@ -374,7 +397,7 @@ pub fn site_primitives(
                     1.5 * m * size_k,
                     2.2 * m * size_k,
                     PrimShape::Triangle,
-                    [0.79, 0.73, 0.54, 0.95], // #C9B98A 露岩
+                    recipe.rock_ink.to_rgba(),
                 ));
             }
         }
@@ -1403,6 +1426,53 @@ mod tests {
             low.iter()
                 .all(|p| !(p.bucket == DecorKind::Snow && p.color[0] > 0.7 && p.color[2] < 0.7),),
             "2000m 山不应有露岩"
+        );
+    }
+
+    /// ADR-0058 D3：`mountain_style: None` 时山站点不产任何图元——
+    /// 水墨包的画法：山体表达收敛到等值线重墨 + 海岸顿笔，「不画」是
+    /// 正常画法而非异常态（连雪帽 / 露岩一并让位）。
+    #[test]
+    fn mountain_style_none_yields_no_mountain_primitives() {
+        let mut r = recipe();
+        r.mountain_style = SymbolStyle::None;
+        let prims = site_primitives(
+            DecorKind::Mountain,
+            DecorBand::Edit,
+            5,
+            5,
+            3500,
+            0.5,
+            None,
+            &r,
+        );
+        assert!(
+            prims.is_empty(),
+            "None 画法应不产任何图元（含雪帽/露岩），得 {} 个",
+            prims.len()
+        );
+    }
+
+    /// ADR-0058 D3：`Tile` 画法 v1 一次性 warn 后回退 `Default`——
+    /// 装载通道待 v2（ADR-0023 M3），分派本身不 panic 且保底画默认山符号。
+    #[test]
+    fn mountain_style_tile_falls_back_to_default_without_panic() {
+        let mut r = recipe();
+        r.mountain_style = SymbolStyle::Tile("terrain/mountain_tile.png");
+        let prims = site_primitives(
+            DecorKind::Mountain,
+            DecorBand::Edit,
+            5,
+            5,
+            2200,
+            0.5,
+            None,
+            &r,
+        );
+        assert!(!prims.is_empty(), "Tile 回退后应仍画默认山符号");
+        assert!(
+            prims.iter().any(|p| p.bucket == DecorKind::Snow),
+            "2200m 回退路径应仍叠雪帽（走 Default 逻辑）"
         );
     }
 
