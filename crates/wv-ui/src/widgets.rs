@@ -41,6 +41,7 @@
 //! `crate::ui::BadgeKind` / `crate::ui::FieldInput` / `crate::ui::ToolButton` 等的引用零改动。
 
 pub mod button;
+pub mod color_picker;
 pub mod controls;
 pub mod floater;
 pub mod layer_panel;
@@ -57,6 +58,7 @@ pub use button::{
     button, icon_button, toolbar_tool, ButtonContent, ButtonStyle, ToolButton, ToolButtonContent,
     ToolIcon,
 };
+pub use color_picker::{hex_to_rgba, rgba_to_hex, ColorPicker};
 pub use controls::{
     check_row, checkbox_state, dropdown_box, numeric_input, numeric_input_bounded, option_menu,
     progress, radio, search_input, slider, slider_row, slider_row_brush, slider_row_disabled, tabs,

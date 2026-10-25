@@ -59,25 +59,47 @@ pub fn faction_form(
         });
         ui.horizontal(|ui| {
             ui.label("颜色：");
-            // 取色器：egui 内置 color picker 弹窗（用户 2026-10-22 要求）。
-            // 与文本框双向——任一侧改动都走同一条提交路径；解析失败的
-            // 文本（如打到一半的 "#0"）不动色板，色板改动才回写文本。
-            if let Some(mut rgb) = wv_core::color::Color(color_buf.clone()).to_rgb() {
-                if egui::color_picker::color_edit_button_srgb(ui, &mut rgb).changed() {
-                    color_buf = format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
+            // 取色器（wv-ui ColorPicker，2026-10-25 替换 egui 内置）：
+            // 色板 + hex 双向同步都在浮层内完成；非法 hex 宽容处理
+            // （§7.5 V1）——输入框危险色提示，色板保持上一个合法值。
+            // 势力色是 #RRGGBB 不透明，alpha 条关掉。
+            if let Some(rgb) = wv_core::color::Color(color_buf.clone()).to_rgb() {
+                let mut rgba = egui::Rgba::from_srgba_unmultiplied(rgb[0], rgb[1], rgb[2], 255);
+                let resp = wv_ui::widgets::ColorPicker::new(
+                    ("faction_color", faction.id.as_str()),
+                    &mut rgba,
+                )
+                .with_alpha(false)
+                .show(ui, shell);
+                if resp.changed() {
+                    color_buf = wv_ui::widgets::rgba_to_hex(rgba);
+                    changed = true;
+                }
+            } else if let Some(rgba) = wv_ui::widgets::hex_to_rgba(&color_buf) {
+                // 文本是 8 位等可解析形式：同样走取色器（wv-core 的 to_rgb
+                // 只吃 6/8 位；这里兜住 8 位带 alpha 的情形，提交时仍取 RGB）。
+                let mut rgba = rgba;
+                let resp = wv_ui::widgets::ColorPicker::new(
+                    ("faction_color", faction.id.as_str()),
+                    &mut rgba,
+                )
+                .with_alpha(false)
+                .show(ui, shell);
+                if resp.changed() {
+                    color_buf = wv_ui::widgets::rgba_to_hex(rgba);
                     changed = true;
                 }
             } else {
-                // 当前文本解析不出颜色：给一块「无效色」占位（斜纹感用暗红），
-                // 点它不弹窗——先把文本修成合法 #RRGGBB。
+                // 当前文本解析不出颜色：画一块「无效色」占位（危险色系），
+                // 点它不弹取色器——先把文本修成合法 #RRGGBB。
                 let (rect, _) =
                     ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
                 ui.painter()
-                    .rect_filled(rect, 4.0, egui::Color32::from_rgb(90, 40, 40));
+                    .rect_filled(rect, 4.0, shell.danger().gamma_multiply(0.35));
                 ui.painter().rect_stroke(
                     rect,
                     4.0,
-                    egui::Stroke::new(1.0, shell.border_subtle()),
+                    egui::Stroke::new(1.0, shell.danger()),
                     egui::StrokeKind::Inside,
                 );
             }
