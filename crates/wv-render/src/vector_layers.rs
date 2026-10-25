@@ -470,22 +470,19 @@ struct PoiMaterialSet {
     city_dot: Handle<ColorMaterial>,
 }
 
-/// 专业制图的分类 POI 池（ADR-0064）：每类一组（外环 + 内芯）合批与材质。
+/// 专业制图的分类 POI 池（ADR-0064）：每类一个 map-pin 合批。
 ///
-/// 索引 = [`PoiKind::index`]。外环统一白（在绿地/水边上保持可辨），内芯承载
-/// 类别色——与样张「彩色圆 + 白边」一致。
+/// 形状统一（Lucide map-pin 实心化），类别只换**针体色**——这是主理人
+/// 2026-10-25 的裁定：先统一形状，后续再补各类图标。颜色烘焙在顶点色里，
+/// 材质统一白色，故一个池一个 mesh。
 #[derive(Default)]
 struct PoiKindBucket {
-    ring: PoiBatchPool,
-    dot: PoiBatchPool,
-    ring_mat: Option<Handle<ColorMaterial>>,
-    dot_mat: Option<Handle<ColorMaterial>>,
+    pin: LandmarkPool,
 }
 
 impl PoiKindBucket {
     fn despawn(&mut self, commands: &mut Commands) {
-        self.ring.despawn(commands);
-        self.dot.despawn(commands);
+        self.pin.despawn(commands);
     }
 }
 
@@ -587,9 +584,11 @@ pub struct VectorLayerEntities {
     poi_dot_plain: PoiBatchPool,
     /// POI 内芯合批（城市材质）。
     poi_dot_city: PoiBatchPool,
-    /// 分类 POI 池（ADR-0064）：**仅 GoogleMap 建**，索引 = `PoiKind::index()`；
-    /// 其余模式为空。两档池（上四条）在专业制图下退场。
+    /// 分类 POI 池（ADR-0064）：**仅 GoogleMap 使用**，索引 = `PoiKind::index()`。
+    /// 两档池（上四条）在专业制图下退场。
     poi_kind_pools: Vec<PoiKindBucket>,
+    /// 分类 POI 的统一材质（白色；类别色烘焙在顶点色里）。惰性建一次。
+    poi_pin_material: Option<Handle<ColorMaterial>>,
     road_materials: Vec<RoadMaterialSet>,
     road_material_mode: Option<crate::state::ViewMode>,
     poi_materials: Vec<PoiMaterialSet>,
@@ -1020,18 +1019,10 @@ fn apply_poi_material_alpha(
             mat.color = dot.with_alpha(dot.alpha() * opacity);
         }
     }
-    // 分类池（仅 GoogleMap 存在）：白环 + 类别色内芯，同吃图层 opacity。
-    for (i, b) in layer.poi_kind_pools.iter().enumerate() {
-        if let Some(handle) = &b.ring_mat {
-            if let Some(mut mat) = materials.get_mut(handle) {
-                mat.color = GOOGLE_POI_RING.with_alpha(GOOGLE_POI_RING.alpha() * opacity);
-            }
-        }
-        if let Some(handle) = &b.dot_mat {
-            let dot = poi_kind_color(PoiKind::ALL[i]);
-            if let Some(mut mat) = materials.get_mut(handle) {
-                mat.color = dot.with_alpha(dot.alpha() * opacity);
-            }
+    // 分类池（GoogleMap）：统一白材质，类别色在顶点色里，同吃图层 opacity。
+    if let Some(handle) = &layer.poi_pin_material {
+        if let Some(mut mat) = materials.get_mut(handle) {
+            mat.color = Color::WHITE.with_alpha(opacity);
         }
     }
 }
@@ -1096,19 +1087,18 @@ fn ensure_poi_materials(
             city_dot: materials.add(with_opacity(dot)),
         });
     }
-    // 分类池（ADR-0064）：12 组（白环 + 类别色内芯）。**建一次、常驻**——
-    // 材质与池结构跟模式无关，切走只退场批次（`sync_poi` 的非专业分支），
-    // 避免每次进出专业制图都新建 24 个材质。
+    // 分类池（ADR-0064）：12 组 map-pin 合批 + 一个白色材质（顶点色承载类别色）。
+    // **建一次、常驻**——切走只退场批次（`sync_poi` 的非专业分支），避免每次
+    // 进出专业制图都新建资产。
     if layer.poi_kind_pools.is_empty() {
-        let op = |c: Color| c.with_alpha(c.alpha() * place_opacity);
         layer.poi_kind_pools = (0..PoiKind::COUNT)
-            .map(|i| PoiKindBucket {
-                ring: PoiBatchPool::default(),
-                dot: PoiBatchPool::default(),
-                ring_mat: Some(materials.add(op(GOOGLE_POI_RING))),
-                dot_mat: Some(materials.add(op(poi_kind_color(PoiKind::ALL[i])))),
-            })
+            .map(|_| PoiKindBucket::default())
             .collect();
+    }
+    if layer.poi_pin_material.is_none() {
+        layer.poi_pin_material = Some(materials.add(ColorMaterial::from_color(
+            Color::WHITE.with_alpha(place_opacity),
+        )));
     }
     layer.poi_material_mode = Some(mode);
     true
@@ -1380,6 +1370,12 @@ fn sync_poi(
         layer.poi_ring_city.despawn(commands);
         layer.poi_dot_plain.despawn(commands);
         layer.poi_dot_city.despawn(commands);
+        let Some(pin_mat) = layer.poi_pin_material.clone() else {
+            return;
+        };
+        // 尺寸口径与地物符号同源：局部坐标 = 屏幕像素，只乘 `view_scale`
+        // （符号总高 22.5px + LOD 档微调）。
+        let s = landmark_size_tier(view_scale) * view_scale;
         let mut buckets: Vec<Vec<Vec2>> = vec![Vec::new(); PoiKind::COUNT];
         for d in &selected {
             if let Some(b) = buckets.get_mut(d.kind.index()) {
@@ -1390,31 +1386,15 @@ fn sync_poi(
             let Some(b) = layer.poi_kind_pools.get_mut(i) else {
                 continue;
             };
-            let (Some(ring_mat), Some(dot_mat)) = (b.ring_mat.clone(), b.dot_mat.clone()) else {
-                continue;
-            };
-            let fp = dots_fingerprint(pos);
-            sync_poi_batch(
+            sync_poi_pin_batch(
                 commands,
                 meshes,
                 pos,
-                fp,
-                (ring_inner, radius_outer),
+                s,
                 z_outer,
-                ring_mat,
-                &mut b.ring,
-                build_poi_ring_batch_mesh,
-            );
-            sync_poi_batch(
-                commands,
-                meshes,
-                pos,
-                fp,
-                (radius_inner, radius_inner),
-                z_inner,
-                dot_mat,
-                &mut b.dot,
-                |dots, r, _| build_poi_dot_batch_mesh(dots, r),
+                poi_kind_color(PoiKind::ALL[i]),
+                pin_mat.clone(),
+                &mut b.pin,
             );
         }
         return;
@@ -1513,6 +1493,86 @@ fn sync_poi_batch(
                 commands
                     .entity(batch.entity)
                     .insert((Mesh2d(next), Transform::from_xyz(0.0, 0.0, key.z)));
+                commands.queue(move |world: &mut World| {
+                    world.resource_mut::<Assets<Mesh>>().remove(&old);
+                });
+                batch.key = key;
+            }
+            pool.batch = Some(batch);
+        }
+    }
+}
+
+/// 一类 POI 的 map-pin 合批（顶点色承载类别色，材质统一白色）。
+///
+/// 与地物符号同一套「单 mesh 单实体 + 原地换网格」纪律。key 吃
+/// （位置指纹、尺寸、Z）——尺寸不进 key 会让缩放后 pin 保持旧世界尺寸
+/// （`landmark_batch_key` 的同一条教训）。
+#[allow(clippy::too_many_arguments)]
+fn sync_poi_pin_batch(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    dots: &[Vec2],
+    s: f32,
+    z: f32,
+    color: Color,
+    material: Handle<ColorMaterial>,
+    pool: &mut LandmarkPool,
+) {
+    use crate::landmark_symbols::{build_landmark_mesh, LandmarkBatch};
+    let key = StrokeBatchKey {
+        fingerprint: dots_fingerprint(dots),
+        world_thickness: s,
+        z,
+    };
+    let build = || {
+        let c = color.to_srgba();
+        let body = [c.red, c.green, c.blue, c.alpha];
+        let mut batch = LandmarkBatch::new();
+        for p in dots {
+            batch.push_map_pin_tinted(*p, s, body);
+        }
+        build_landmark_mesh(batch)
+    };
+    match pool.batch.take() {
+        None => {
+            if dots.is_empty() {
+                return;
+            }
+            let Some(mesh) = build() else {
+                return;
+            };
+            let mesh_handle = meshes.add(mesh);
+            let entity = commands
+                .spawn((
+                    Mesh2d(mesh_handle.clone()),
+                    MeshMaterial2d(material),
+                    Transform::from_xyz(0.0, 0.0, z),
+                ))
+                .id();
+            pool.batch = Some(StrokeBatch {
+                entity,
+                mesh: mesh_handle,
+                key,
+            });
+        }
+        Some(mut batch) => {
+            if dots.is_empty() {
+                commands.entity(batch.entity).despawn();
+                commands.queue(move |world: &mut World| {
+                    world.resource_mut::<Assets<Mesh>>().remove(&batch.mesh);
+                });
+                return;
+            }
+            if batch.key != key {
+                let Some(mesh) = build() else {
+                    return;
+                };
+                let next = meshes.add(mesh);
+                let old = std::mem::replace(&mut batch.mesh, next.clone());
+                commands
+                    .entity(batch.entity)
+                    .insert((Mesh2d(next), Transform::from_xyz(0.0, 0.0, z)));
                 commands.queue(move |world: &mut World| {
                     world.resource_mut::<Assets<Mesh>>().remove(&old);
                 });
