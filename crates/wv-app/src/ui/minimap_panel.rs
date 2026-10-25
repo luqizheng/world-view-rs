@@ -110,8 +110,7 @@ pub fn panel_minimap(
             // 忘了乘 overview 尺寸，框恒为 1×1 像素——2026-10-25 实机读数定案。）
             let frac = (Vec2::new(view.window_size.x, view.window_size.y) * view.scale / map_world)
                 .clamp(Vec2::splat(0.05), Vec2::ONE);
-            let vp =
-                viewport_pixel_rect(rect, to_norm(view.camera_center), frac);
+            let vp = viewport_pixel_rect(rect, to_norm(view.camera_center), frac);
             painter.rect_filled(vp, radius::BADGE, shell.focus().gamma_multiply(0.15));
             rect_stroke(
                 painter,
@@ -300,12 +299,9 @@ mod tests {
         // 回归（2026-10-25）：归一化占比曾被直接当像素尺寸，框恒为 1×1 px。
         // 262×240 的 overview、中心 (0.5,0.5)、占幅 (0.5,0.25)
         // → 131×60 的框，中心对齐。
-        let overview = egui::Rect::from_min_size(egui::pos2(345.0, 442.0), egui::vec2(262.0, 240.0));
-        let vp = viewport_pixel_rect(
-            overview,
-            Vec2::new(0.5, 0.5),
-            Vec2::new(0.5, 0.25),
-        );
+        let overview =
+            egui::Rect::from_min_size(egui::pos2(345.0, 442.0), egui::vec2(262.0, 240.0));
+        let vp = viewport_pixel_rect(overview, Vec2::new(0.5, 0.5), Vec2::new(0.5, 0.25));
         assert!((vp.width() - 131.0).abs() < 1e-3, "w={}", vp.width());
         assert!((vp.height() - 60.0).abs() < 1e-3, "h={}", vp.height());
         assert!((vp.center().x - 476.0).abs() < 1e-3, "cx={}", vp.center().x);
