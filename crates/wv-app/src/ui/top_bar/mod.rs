@@ -6,10 +6,11 @@
 //!   Edit 分段（独立 Area 锚视口顶部居中）**；右 = 保存态 / 分隔线 /
 //!   **日夜模式控件** / **语言控件** / **Rebuild** / **设置入口（`settings-2`）**。
 //!
-//! ## 右区对齐（2026-10-19 用户裁定）
-//! - Figma 的 `Cozy`（密度）与 `Dusk`（地图主题）两个 26px 控件**不建**：
-//!   密度与地图主题都走命令面板（`Ctrl+K`）。顶栏中区的地图主题分段也已于
-//!   同日移除——`Faction` 同理（命令面板「视图」组 + 快捷键 `3` 仍可切）。
+//! ## 右区对齐（2026-10-19 用户裁定 → 2026-10-25 增补地图主题）
+//! - Figma 的 `Cozy`（密度）控件**不建**：密度走命令面板（`Ctrl+K`）。
+//! - **地图主题控件**（JRPG 水彩 / 中国水墨）已加回顶栏右区，与日夜控件
+//!   并列——快捷键 `Ctrl+M`，命令面板仍可切。主题名是主题 crate 的
+//!   `display_name(_en)` 常量（2026-10-25 用户裁定），不走 i18n。
 //! - `settings-2` 是应用设置入口：浮动窗口显隐 + 重置位置（见
 //!   [`super::settings_dialog`]）；工程菜单因此只剩工程基本操作。
 //! - zoom / entities / ⌘K 不再占顶栏：对象计数在状态栏、缩放控件在地图工具条、
@@ -34,7 +35,7 @@
 //!
 //! ## 子模块（2026-10-24 由单文件 1147 行拆出）
 //! - [`bar`]：顶栏三区（身份 / 主控 / 读数）。
-//! - [`prefs`]：右区偏好控件（日夜 / 语言 / Rebuild / 设置）。
+//! - [`prefs`]：右区偏好控件（日夜 / 地图主题 / 语言 / Rebuild / 设置）。
 //! - [`status`]：状态栏与各读数段。
 //! - [`window_controls`]：无边框窗窗控三键（2026-10-25，去原生标题栏）。
 //! - `tests`：原 `mod tests` 整段平移。
@@ -58,7 +59,7 @@ use super::settings_dialog::SettingsDialog;
 use super::shell::UiShell;
 use super::widgets::{
     badge, icon_image, BadgeKind, ICON_CHEVRON_DOWN, ICON_CHEVRON_RIGHT, ICON_FOLDER_OPEN,
-    ICON_LANGUAGES, ICON_MOON, ICON_REFRESH, ICON_SETTINGS, ICON_SUN,
+    ICON_LANGUAGES, ICON_MAP, ICON_MOON, ICON_REFRESH, ICON_SETTINGS, ICON_SUN,
 };
 use crate::theme::ui_tokens::{font_size, radius, space};
 use crate::ui_command_palette::CommandId;

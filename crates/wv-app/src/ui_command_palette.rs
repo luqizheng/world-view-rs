@@ -97,7 +97,7 @@ pub enum CommandId {
     ToggleTheme,
     /// 切换密度档。
     ToggleDensity,
-    /// 切换地图主题（ADR-0016：日间古舆图 ⇄ 暮色旧纸）。
+    /// 切换地图主题（注册表循环：JRPG 水彩 ⇄ 中国水墨）。
     ToggleMapPalette,
     /// 播放 / 暂停。
     TogglePlay,

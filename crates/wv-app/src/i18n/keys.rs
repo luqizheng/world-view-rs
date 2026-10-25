@@ -70,6 +70,9 @@ pub enum I18nKey {
     TopBarThemeDark,
     /// 顶栏日夜控件标签——当前为日间（亮色）模式
     TopBarThemeLight,
+    /// 顶栏地图主题控件 tooltip——点击切换地图主题（主题名本身是主题
+    /// crate 的 `display_name` 常量，不走 i18n，2026-10-25 用户裁定）。
+    TopBarSwitchMapTheme,
     /// 顶栏最右设置入口 tooltip
     TopBarSettingsTooltip,
 
@@ -974,7 +977,7 @@ pub enum I18nKey {
     CmdToggleTheme,
     /// 「切换紧凑 / 标准密度」
     CmdToggleDensity,
-    /// 「切换地图主题（日间古舆图 / 暮色旧纸）」
+    /// 「切换地图主题（JRPG 水彩 / 中国水墨）」
     CmdToggleMapPalette,
     /// 「强制重画地形（怀疑没跟上时点一下）」
     CmdForceRebuildTexture,

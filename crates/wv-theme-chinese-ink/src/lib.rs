@@ -20,7 +20,8 @@
 //! - **不**做 `Box<dyn ThemePackRegistry>`：与 wv-render 同一红线（`&'static` 切片 + 单态化）；
 //! - **v1 不做贴图**（`atlas: None`，纯色路径锁定）；v2 水墨资产规格见方案 §9，
 //!   装载通道转待裁（方案 §12.3）；
-//! - **不**做 i18n：主题名走 i18n 是 M3 议题（M2 用 `display_name: &'static str` 单语）；
+//! - **不**做 i18n：主题名中英文常量直接住在 crate 里（`display_name` /
+//!   `display_name_en`，2026-10-25 用户裁定），不进 app 的 i18n 系统；
 //! - **不**改 `wv-render` 任何源码——验证「加风格零改核心」。
 
 use wv_theme::decor::{DecorInk, DecorRecipe, SymbolStyle, VariantInk as DecorVariantInk};
@@ -154,7 +155,10 @@ const INK_TREATMENT: TreatmentFlags = TreatmentFlags {
 
 pub static PACK: ThemePack = ThemePack {
     id: "chinese_ink",
-    display_name: "水墨",
+    // 展示名（2026-10-25 用户裁定）：本 crate 的观感定位 = **中国水墨**
+    //（宋元文人山水），中英文常量住在 crate 里、不走 i18n。
+    display_name: "中国水墨",
+    display_name_en: "Chinese Ink",
     palette: INK_PALETTE, // 水墨色板（美术定稿，方案 §3）
     treatment: INK_TREATMENT,
     atlas: None,
@@ -363,10 +367,13 @@ mod tests {
         assert_eq!(PACK.id, "chinese_ink");
     }
 
-    /// 展示名去掉「（占位）」——美术定稿后不再是占位包（方案 §13 步骤 6）。
+    /// 展示名定稿（2026-10-25 用户裁定）：中英文常量住在 crate 里。
     #[test]
     fn display_name_is_finalized() {
-        assert_eq!(PACK.display_name, "水墨");
+        assert_eq!(PACK.display_name, "中国水墨");
+        assert_eq!(PACK.display_name_en, "Chinese Ink");
+        assert_eq!(PACK.display_name_for(false), "中国水墨");
+        assert_eq!(PACK.display_name_for(true), "Chinese Ink");
     }
 
     /// 注册表暴露该 pack。

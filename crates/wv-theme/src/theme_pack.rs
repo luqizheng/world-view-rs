@@ -40,8 +40,12 @@ use super::sea::{SeaRecipe, WATERCOLOR, WATERCOLOR_DUSK};
 pub struct ThemePack {
     /// 稳定 id（持久化键 / `ThemeRegistry` 查找键）。约定 `^[a-z][a-z0-9_]*$`。
     pub id: &'static str,
-    /// 顶栏 / 命令面板展示名（可含中文；本项目 i18n 不纳入主题名，按 ADR-0016 顶栏纪律）。
+    /// 顶栏 / 命令面板展示名——中文（2026-10-25 用户裁定：主题名不走 i18n，
+    /// 中英文常量直接住在主题 crate 里）。
     pub display_name: &'static str,
+    /// 顶栏 / 命令面板展示名——英文（与 [`Self::display_name`] 同源同寿命，
+    /// 由 [`Self::display_name_for`] 按语言分发）。
+    pub display_name_en: &'static str,
     /// 配色 36 槽位（现有 `PaletteColors` 直引）。
     pub palette: PaletteColors,
     /// 装饰旗标（ADR-0021 D2 载荷，经 ADR-0023 D4 修订归入本结构）。
@@ -78,6 +82,19 @@ pub struct ThemePack {
     /// 拿另一个变体冒充作者声明），而是画**缺失覆盖物标记**（白底红斜线，
     /// ADR-0045 追记一）——本表同时充当「键存在性查询」的实现。
     pub region_overlays: RegionOverlaySet,
+}
+
+/// 按语言取展示名（2026-10-25 用户裁定：主题名中英文常量住在 crate 里、
+/// 不进 i18n 系统；wv-theme 自身不知道 app 的 Locale 枚举，用布尔分发）。
+impl ThemePack {
+    /// `english = false` 取中文名，`true` 取英文名。
+    pub fn display_name_for(&self, english: bool) -> &'static str {
+        if english {
+            self.display_name_en
+        } else {
+            self.display_name
+        }
+    }
 }
 
 /// 贴图规格（= 现有 `TileAtlas` 的薄包装，新增 `format_version` 与可选 `path` 元数据）。
@@ -275,9 +292,13 @@ pub mod builtin {
     use super::*;
 
     /// 渲染系统找不到 `theme_pack_id` 时的兜底（M1 = `MapPalette::Daylight` 对应包）。
+    ///
+    /// 展示名（2026-10-25 用户裁定）：本 crate 的观感定位 = **JRPG 水彩**
+    /// （ADR-0035 的 JRPG 色板方案），不再叫「日间古舆图」。
     pub static DEFAULT: ThemePack = ThemePack {
         id: "antique_default",
-        display_name: "日间古舆图",
+        display_name: "JRPG 水彩",
+        display_name_en: "JRPG Watercolor",
         palette: PaletteColors::DAYLIGHT,
         treatment: TreatmentFlags::HAND_DRAWN,
         atlas: None,
@@ -359,9 +380,12 @@ pub mod builtin {
     };
 
     /// 暮色旧纸包（与 `PaletteColors::DUSK` 同源；M1 提供作内置第二档，M2 再接持久化）。
+    ///
+    /// 未注册进 [`ALL`]——循环切换不可达，展示名保持历史名。
     pub static DUSK: ThemePack = ThemePack {
         id: "antique_dusk",
         display_name: "暮色旧纸",
+        display_name_en: "Dusk Old Paper",
         palette: PaletteColors::DUSK,
         treatment: TreatmentFlags::HAND_DRAWN,
         atlas: None,
