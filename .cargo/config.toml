@@ -11,6 +11,12 @@
 # 若 ICE 复发，恢复手段：在 [build] 段加回 `incremental = false`。
 
 [build]
+# sccache rustc 包装器（2026-10-25 用户裁定恢复——d5ef2b9 曾移除）：
+# worktree 独立 target 目录（AGENTS §13 回退方案）只免「产物串味」，
+# 编译本身仍要重来；sccache 按「编译器 + 输入哈希」跨 target 目录复用
+# 编译结果，独立目录的全量重编成本从分钟级降到秒级。走 PATH 解析，
+# 不写死绝对路径（d:/sccache 那版的问题）。
+rustc-wrapper = "sccache"
 # incremental = false  # 2026-10-24 复测通过后停用，原因见上
 
 # 渲染层检查别名（AGENTS §7.1，2026-10-13 用户裁定）：
