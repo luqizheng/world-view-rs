@@ -1,9 +1,13 @@
 //! 无边框窗的窗控按钮（2026-10-25 用户裁定去原生标题栏）。
 //!
 //! 原生标题栏是系统黑底，主题切亮色 / 水墨时极突兀。窗控三键
-//! （最小化 / 最大化 / 关闭）移入顶栏**最左上角**（用户指定方位）；
-//! 顶栏空白背的拖拽移窗 / 双击最大化在 [`super::bar::top_bar`] 里接
-//! （拖拽区先注册垫底，本模块的按钮压在其上，互不误触）。
+//! （最小化 / 最大化 / 关闭）移入顶栏**右上角**——首轮裁定最左上角，
+//! 同日二轮改裁右上（Windows 惯例位，关闭键贴右缘）；顶栏空白背的
+//! 拖拽移窗 / 双击最大化在 [`super::bar::top_bar`] 里接（拖拽区先注册
+//! 垫底，本模块的按钮压在其上，互不误触）。
+//!
+//! 几何与右区读数段（`bar::readout_segment`）同款「按右缘绝对反推」：
+//! 三键占 [`CONTROLS_W`]，读数段右缘让出同宽，两段永不相叠。
 //!
 //! 图标走 Lucide（AGENTS §8）：`minus` / `square` ↔ `copy`（还原态）/ `x`。
 //!
@@ -24,6 +28,8 @@ use crate::ui::widgets::{ICON_COPY, ICON_MINUS, ICON_SQUARE, ICON_X};
 
 /// 窗控按钮宽（高 = 顶栏内容全高，命中区饱满）。
 const BTN_W: f32 = 30.0;
+/// 窗控三键总宽——右区读数段按此让位（见模块文档几何段）。
+pub(super) const CONTROLS_W: f32 = BTN_W * 3.0;
 /// 窗控图标边长。
 const ICON: f32 = 13.0;
 
@@ -36,7 +42,7 @@ pub struct WindowChromeState {
     pub maximized: bool,
 }
 
-/// 顶栏最左的窗控三键：最小化 / 最大化（还原）/ 关闭。
+/// 顶栏最右的窗控三键：最小化 / 最大化（还原）/ 关闭（关闭键贴右缘）。
 ///
 /// 关闭键 hover 走 `badge_err` 红底 + 亮色图标——Windows 关闭键惯例的
 /// 令牌化表达（UI 禁写裸 hex，AGENTS §8）；其余两键 `hover_bg`。
@@ -48,8 +54,15 @@ pub(super) fn window_controls_segment(
     chrome: &mut WindowChromeState,
     exit: &mut MessageWriter<AppExit>,
 ) {
-    let h = ui.available_height().min(super::TOP_BAR_H);
-    if control_button(ui, shell, h, ICON_MINUS, false).clicked() {
+    let bar = ui.max_rect();
+    let rect_at = |x0: f32| {
+        egui::Rect::from_min_max(
+            egui::pos2(x0, bar.top()),
+            egui::pos2(x0 + BTN_W, bar.bottom()),
+        )
+    };
+    let right = bar.right();
+    if control_button(ui, shell, rect_at(right - CONTROLS_W), ICON_MINUS, false).clicked() {
         window.set_minimized(true);
     }
     // 图标随镜像态切换：square（最大化）↔ copy（还原）。
@@ -58,11 +71,11 @@ pub(super) fn window_controls_segment(
     } else {
         ICON_SQUARE
     };
-    if control_button(ui, shell, h, max_icon, false).clicked() {
+    if control_button(ui, shell, rect_at(right - BTN_W * 2.0), max_icon, false).clicked() {
         chrome.maximized = !chrome.maximized;
         window.set_maximized(chrome.maximized);
     }
-    if control_button(ui, shell, h, ICON_X, true).clicked() {
+    if control_button(ui, shell, rect_at(right - BTN_W), ICON_X, true).clicked() {
         // 关闭主窗口 = 退出应用（单窗口编辑器，无「其余窗口存活」语义）。
         exit.write(AppExit::Success);
     }
@@ -72,11 +85,11 @@ pub(super) fn window_controls_segment(
 fn control_button(
     ui: &mut egui::Ui,
     shell: &UiShell,
-    h: f32,
+    rect: egui::Rect,
     icon: egui::ImageSource<'static>,
     danger: bool,
 ) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(BTN_W, h), egui::Sense::click());
+    let resp = ui.allocate_rect(rect, egui::Sense::click());
     let hovered = ui.rect_contains_pointer(rect);
     if hovered {
         let fill = if danger {

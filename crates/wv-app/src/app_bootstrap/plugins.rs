@@ -25,10 +25,10 @@ pub(super) fn configure(app: &mut App) {
                     resolution: WindowResolution::new(1280, 800),
                     // 无边框窗（2026-10-25 用户裁定）：原生标题栏是系统黑底，
                     // 主题切亮色 / 水墨时顶部突兀一块。去装饰后窗控三键
-                    // （最小化/最大化/关闭）移入顶栏最左上角
-                    // （[`crate::ui::top_bar::window_controls`]），顶栏空白背
-                    // 拖拽移窗、双击切最大化；Windows 下 winit 对 undecorated
-                    // 窗仍保留边缘八向缩放。
+                    // （最小化/最大化/关闭）移入顶栏右上角
+                    // （[`crate::ui::top_bar::window_controls`]，首轮裁定左上、
+                    // 同日二轮改裁右上），顶栏空白背拖拽移窗、双击切最大化；
+                    // Windows 下 winit 对 undecorated 窗仍保留边缘八向缩放。
                     decorations: false,
                     // 隐藏起步（2026-10-17，修「启动数秒白屏」）：原生窗口一旦
                     // 创建即以系统白底示人，而 wgpu 初始化、字体 atlas、管线

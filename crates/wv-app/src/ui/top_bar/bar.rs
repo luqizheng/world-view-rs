@@ -2,7 +2,7 @@
 
 use super::prefs::*;
 use super::status::vsep_h_at;
-use super::window_controls::{window_controls_segment, WindowChromeState};
+use super::window_controls::{window_controls_segment, WindowChromeState, CONTROLS_W};
 use super::*;
 
 use bevy::window::PrimaryWindow;
@@ -65,8 +65,6 @@ pub fn top_bar(
                 egui::Sense::click_and_drag(),
             );
             ui.horizontal(|ui| {
-                // ── 最左上角：窗控三键（最小化/最大化/关闭，用户指定方位）──
-                window_controls_segment(ui, &shell, &mut window, &mut chrome, &mut exit);
                 // ── 左区：项目按钮 + 面包屑（web .top-left）──
                 identity_segment(
                     ui,
@@ -78,8 +76,8 @@ pub fn top_bar(
                     &current_loc,
                 );
                 // ── 右区：保存态 / 分隔线 / 日夜 / 语言 / Rebuild / 设置 ──
-                // 几何按右缘绝对反推（见 `readout_segment` 文档），
-                // 不再依赖 `right_to_left` 的游标推进。
+                // 几何按右缘绝对反推（见 `readout_segment` 文档）；右缘让出
+                // 窗控三键宽，两段同用绝对反推、永不相叠。
                 readout_segment(
                     ui,
                     &shell,
@@ -88,7 +86,11 @@ pub fn top_bar(
                     &mut shell_cfg,
                     &mut settings,
                     &mut palette,
+                    ui.max_rect().right() - CONTROLS_W,
                 );
+                // ── 最右上角：窗控三键（最小化/最大化/关闭，关闭键贴右缘）──
+                // 首轮裁定放最左上，2026-10-25 二轮改裁右上（Windows 惯例位）。
+                window_controls_segment(ui, &shell, &mut window, &mut chrome, &mut exit);
             });
             drag_resp = Some(drag);
         });
@@ -290,11 +292,14 @@ fn browse_edit_segment(
 ///
 /// 从左到右：保存态 → 分隔线 → 日夜 → 语言 → Rebuild → 设置。
 ///
-/// **几何全部按视口右缘反推、绝对定宽**，不依赖 `ui` 当前方向：
+/// **几何全部按 `right_edge` 反推、绝对定宽**，不依赖 `ui` 当前方向：
 /// 该段原先挂在 `right_to_left` 布局里，而 `egui::Ui::put`（放图标）会按子矩形
 /// **推进游标**——每个控件的尾随 icon 都把下一件的起点顶偏，结果两个 26px
 /// 控件互相叠了 27px（2026-10-19 实机量 rect 确认）。改成「先算宽度、从右往左
-/// 摆」，`put` 再推游标也不影响任何其它控件。
+/// 摆」，`put` 再推游标也不影响任何其它控件。`right_edge` 由调用方给
+/// （视口右缘减窗控三键宽 [`super::window_controls::CONTROLS_W`]，2026-10-25
+/// 窗控入顶栏右上后让位）。
+#[allow(clippy::too_many_arguments)]
 fn readout_segment(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -303,13 +308,14 @@ fn readout_segment(
     shell_cfg: &mut UiShellConfig,
     settings: &mut SettingsDialog,
     palette: &mut crate::ui_command_palette::CommandPalette,
+    right_edge: f32,
 ) {
     /// 右区相邻控件间距（Figma Workspace preferences `gap: 8px`）。
     const GAP: f32 = space::SM;
 
     let bar = ui.max_rect();
     let cy = bar.center().y;
-    let mut right = bar.right();
+    let mut right = right_edge;
 
     // ── 设置入口（最右）：28×28 命中区、14px Lucide `settings-2` ──
     right -= shell.hit;
