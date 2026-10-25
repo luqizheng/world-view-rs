@@ -773,27 +773,6 @@ pub struct SelectionState {
     pub last_map_id: Option<wv_core::Id>,
 }
 
-/// 单格编辑工具状态（[ADR-0040] §决策 5）。
-///
-/// 与 [`SelectionState`] 平级：**会话态,本地图使用**——
-/// `last_map_id` 变即清空（防「切换图后旧 hover 卡在画面上」）。
-///
-/// **三层状态**：
-/// - `hover` = 当前鼠标压在哪一格（即时刷新,Inspector 不必读）；
-/// - `selected` = 点选 committed 的那一格（Inspector 与 PassId::CellSelection
-///   必读,ESC 清空）；
-/// - `region_cells` = 多边形选区贴合的方格集合（批量编辑用）。
-///
-/// hover 与 selected 共存不冲突——hover 来自光标,selected 来自点击。
-///
-/// **2026-10-22 统一 Inspector**：原先还有第四层 `pending`（字段改完的草稿，
-/// 交 `apply_pending_commands` 分发）——**全仓无人写入**，那条链是死代码，
-/// 已连同 [`EditCellPending`] 一并删除。活的写入路径是 Inspector 的 Cell
-/// 表单**直提** `EditCellCommand` / `BatchEditCellsCommand`。
-/// 群系分界线工具的会话态（2026-10-22 内容矩阵 §2.7 / ADR-0051）。
-///
-/// 线是**会话工具**，不落盘——真相仍是 cell.biome。工具激活时常驻（可反复
-/// 拖），切走工具即清。坐标 = **栅格局部 wu**（与 `swept_changes` 同空间）。
 /// 候选上下文镜像（2026-10-22 验收）：app 侧 `NatureRegionUiState` 的候选
 /// 格与编辑中多边形同步到渲染层（渲染不依赖 wv-app 类型）。
 #[derive(Resource, Debug, Default, Clone, PartialEq)]
@@ -831,6 +810,10 @@ impl RegionAdjustState {
     }
 }
 
+/// 群系分界线工具的会话态（2026-10-22 内容矩阵 §2.7 / ADR-0051）。
+///
+/// 线是**会话工具**，不落盘——真相仍是 cell.biome。工具激活时常驻（可反复
+/// 拖），切走工具即清。坐标 = **栅格局部 wu**（与 `swept_changes` 同空间）。
 #[derive(Resource, Debug, Default, Clone, PartialEq)]
 pub struct BiomeBoundaryState {
     /// 工具是否激活（与 EditCellState.tool_active 同款）。
@@ -1833,6 +1816,7 @@ mod tests {
 }
 
 // ── CellMap 会话态已迁 wv-world-cell-map（ADR-0054 D1）──
-// 旧路径 `wv_render::state::{EditCellState, GridConfig}` 经 re-export 零改动。
+// 旧路径 `wv_render::state::{EditCellState, GridConfig}` 经 re-export 零改动；
+// ADR-0057 增列 `CellSelection`（统一选区位图）与 `PointSelectState`（点选工具）。
 #[cfg(feature = "app")]
-pub use wv_world_cell_map::state::{EditCellState, GridConfig};
+pub use wv_world_cell_map::state::{CellSelection, EditCellState, GridConfig, PointSelectState};

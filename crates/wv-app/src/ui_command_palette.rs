@@ -202,24 +202,22 @@ pub enum MapToolId {
     /// 故**不入 `BrushTool` 枚举,与现有工具平级进 `MapToolId`**。
     /// 由 `ui::cell_pick` 做命中测试,由 `inspector_panel` 渲染字段编辑 UI。
     EditCell,
-    /// **单选模式**（2026-10-24 用户需求）：点一下选中**一格**，拖动不落笔。
+    /// **点选工具**（ADR-0057 补记 6，原 `CellSelect` 改名）：点一下把该格
+    /// 写入统一选区 `CellSelection`——无修饰 = 替换、Shift = 并、Alt = 差。
     ///
-    /// 与 [`Self::EditCell`] 的区别只有一条：**拖动是否累积笔触**。
-    /// 点选落定、hover 准星、金色 outline、Inspector 表单两模式**完全一致**
-    /// （共用 `EditCellState.tool_active` + `.selected`，只由
-    /// `EditCellState.allow_drag` 区分形态）。
+    /// 与 [`Self::EditCell`] 是**两件工具两个状态**：PointSelect 只选不画，
+    /// 持有独立的 `PointSelectState`（不再与 EditCell 共用 `tool_active` /
+    /// `allow_drag`）；EditCell 只画不选（ADR-0057 D2「先名词后动词」）。
     ///
-    /// 为什么要单独一枚工具而不是「EditCell 也能不拖」：
-    /// 单格编辑器的**高频动作是「看这一格是什么」**，不是「改」。给一个
-    /// 不会误落笔的入口，用户敢在地图上随手点；而拖绘模式下手抖就是一次
-    /// 撤销单位。工具条把两者并排放，切换成本一次点击。
-    CellSelect,
+    /// 为什么保留这枚工具：CellMap 的高频动作是「看/选这几格」，给一个
+    /// 不会误落笔的入口，用户敢在地图上随手点。
+    PointSelect,
     /// 群系分界线（2026-10-22 内容矩阵 §2.7 / ADR-0051）：可拖线段两侧各绑
     /// 一个群系，拖动推移分界——扫过格「退让侧→推进侧」互转（第三方不动）。
     /// 仅 Topographic 可用；线是会话工具不落盘。
     BiomeBoundary,
     /// **泛洪选择**（[ADR-0052] D6 / D6-A）：点一下，把与该格「同值」的
-    /// 连通区选进 `region_cells`。
+    /// 连通区选进统一选区。
     ///
     /// 与 `Select(shape)` 的分工：`Select` 是**圈出作者指定的形状**；
     /// `FloodSelect` 是**按判据自动圈出同值连通区**（如「点一片森林，
@@ -431,13 +429,12 @@ impl CommandRegistry {
             I18nKey::CmdToolEditCell,
             Some("C"),
         );
-        // 单选模式（2026-10-24 用户需求）：点选一格、拖动不落笔。
-        // 与 EditCell 共用 `EditCellState`，只由 `allow_drag` 区分形态。
+        // 点选工具（ADR-0057 补记 6）：点选一格进统一选区，不落笔。
         // 快捷键 `S` = Select（`V` 已属框选组，不复用）。
         push(
-            CommandId::SelectMapTool(MapToolId::CellSelect),
+            CommandId::SelectMapTool(MapToolId::PointSelect),
             CommandGroup::Edit,
-            I18nKey::CmdToolCellSelect,
+            I18nKey::CmdToolPointSelect,
             Some("S"),
         );
         // 群系分界线（2026-10-22 内容矩阵 / ADR-0051）：与 EditCell 同款——

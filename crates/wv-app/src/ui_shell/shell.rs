@@ -146,8 +146,14 @@ pub(crate) fn hotkeys(
             // 单格编辑（[ADR-0040]）：C = Cell。与 Ctrl+C 复制不冲突
             // （本表只在无修饰键时生效，见上方 `!cmd && !shift` gate）。
             (bevy_egui::egui::Key::C, MapToolId::EditCell),
-            // 单选模式（2026-10-24）：S = Select。`V` 已属框选组，不复用。
-            (bevy_egui::egui::Key::S, MapToolId::CellSelect),
+            // 点选工具（ADR-0057 补记 6）：S = Select。`V` 已属框选组，不复用。
+            (bevy_egui::egui::Key::S, MapToolId::PointSelect),
+            // 矩形框选（ADR-0057 补记 6：点选让位后，框选要有直达键）：
+            // R = Rect；走与 V 相同的 Select 族，仅形状不同。
+            (
+                bevy_egui::egui::Key::R,
+                MapToolId::Select(SelectionShape::Rect),
+            ),
         ]
         .into_iter()
         .find(|(key, _)| input.key_pressed(*key));

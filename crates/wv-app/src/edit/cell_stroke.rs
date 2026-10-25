@@ -10,26 +10,29 @@
 //!
 //! ## 与既有笔刷（`commit_stroke_on_release`）的分工
 //!
-//! 笔刷走 `wv_terrain::Brush`（圆形软边、连续抬落），本模块走**硬边单格**
-//! （D5）——两者刻意分开：地形编辑要「这格是森林」的确切控制，软边会引入
-//! 「边界那格算不算」的歧义。两者共用 `BatchEditCellsCommand` 的提交接口
+//! 笔刷走 `wv_terrain::Brush`（圆形软边、连续抬落），本模块走**硬边圆盘**
+//! （D5 后半句）——两者刻意分开：地形编辑要「这格是森林」的确切控制，软边会
+//! 引入「边界那格算不算」的歧义。两者共用 `BatchEditCellsCommand` 的提交接口
 //! （N 格 = 1 个撤销单位）。
+//!
+//! 半径可调（ADR-0057 D9，`R ∈ 1..=8`，默认 1 = 原状单格）。
 //!
 //! ## 铁律
 //!
 //! - **落笔值**（[`CellPaintValue`]）是**会话态**——拖绘期间只累积格，
 //!   **不写世界**；松手才一次性提交（[ADR-0021] §3.3「System 不得直接
 //!   改世界」：一切写入经 `EditCommand → History`）。
-//! - **起笔清 region_cells**（D3-A）：从「选择」意图切到「涂画」意图的
-//!   时序信号；两者不可同框（§9.5 四态视觉分工）。
+//! - **选区蒙版**（D4）：统一选区非空时，落笔格 = 圆盘 footprint ∩ 选区
+//!   （[`stroke_footprint`]）；空 = 自由涂。**起笔不清选区**——ADR-0052
+//!   D3-A 已由 ADR-0057 补记 1 废止（起笔清空会让蒙版永远为空）。
 //! - **Esc 丢弃整笔**，>50 格需确认（D3-C）。
 //! - **右键 = Esc 等价**（D3-B）：丢弃整笔，不做半笔提交。
 
 use bevy::prelude::*;
 use bevy_egui::egui;
 
-use wv_render::state::{EditCellState, GridConfig};
-use wv_world_cell_map::cell_paint::{bresenham_cells, CellPaintSession};
+use wv_render::state::{CellSelection, EditCellState, GridConfig};
+use wv_world_cell_map::cell_paint::{bresenham_cells, disk_cells, CellPaintSession};
 
 use crate::state::{DrillState, PlaybackState, ViewState, WorldProjection};
 use crate::ui::cell_pick;
@@ -51,14 +54,20 @@ pub fn discard_needs_confirmation(cell_count: usize) -> bool {
     cell_count > STROKE_DISCARD_CONFIRM_THRESHOLD
 }
 
-/// **起笔清空选区**（D3-A 纯函数）。
+/// **单采样点的落笔格集**：圆盘 footprint ∩ 统一选区（ADR-0057 D4 / D9）。
 ///
-/// 清 `region_cells` **且**把 `region_fingerprint` 归零——后者是
-/// `sync_region_cells` 判断「选区是否变化」的依据，只清格子不清指纹
-/// 会让渲染层误判「没变」而不重画。
-pub fn clear_region_for_stroke(edit_cell: &mut EditCellState) {
-    edit_cell.region_cells.clear();
-    edit_cell.region_fingerprint = 0;
+/// - 选区**空** → 圆盘原样（自由涂，与 ADR-0052 原状一致）；
+/// - 选区**非空** → 只保留选中的格（「只在圈内涂」）。
+///
+/// 纯函数——A5 的测试锚（R=1 且选区空时与旧单格笔触逐格一致）。
+pub fn stroke_footprint(center: (i32, i32), radius: u8, sel: &CellSelection) -> Vec<(i32, i32)> {
+    let disk = disk_cells(center, radius);
+    if sel.is_empty() {
+        return disk;
+    }
+    disk.into_iter()
+        .filter(|&(gx, gy)| sel.contains(gx, gy))
+        .collect()
 }
 
 /// **丢弃确认弹窗态**（D3-C）。
@@ -74,10 +83,11 @@ pub struct StrokeDiscardPrompt {
 ///
 /// 每帧跑，做三件事：
 ///
-/// 1. **起笔**：`just_pressed` 且 `tool_active` → 清 `region_cells`（D3-A）
-///    + 记起笔快照；
-/// 2. **拖动**：`pressed` → `pick_at` 采样 + Bresenham 补间 → 累积到
-///    `stroke.cells`（**不写世界**）；
+/// 1. **起笔**：`just_pressed` 且 `tool_active` → 记起笔快照（**不动选区**，
+///    ADR-0057 补记 1）；
+/// 2. **拖动**：`pressed` → `pick_at` 采样 + Bresenham 补间 → 每采样点展开
+///    圆盘 footprint ∩ 选区（[`stroke_footprint`]）→ 累积到 `stroke.cells`
+///    （**不写世界**）；
 /// 3. **松手**：`just_released` → stale 复核（D3-E）→ 通过则提交
 ///    `BatchEditCellsCommand`（1 个撤销单位）。
 ///
@@ -96,13 +106,14 @@ pub fn paint_edit_cell_on_drag(
     grid: Res<GridConfig>,
     drill: Res<DrillState>,
     mut projection: ResMut<WorldProjection>,
-    // egui 上下文（D3-C 丢弃确认窗）+ UI 抢占态。
-    // 折成一层元组：Bevy 单系统参数上限 16，两个分开写会到 17。
-    (mut contexts, ui): (
+    // egui 上下文（D3-C 丢弃确认窗）+ UI 抢占态 + 统一选区（D4 蒙版）。
+    // 折成一层元组：Bevy 单系统参数上限 16，分开写会超。
+    (mut contexts, ui, cell_sel): (
         bevy_egui::EguiContexts,
         Res<wv_render::camera::PointerOverUi>,
+        Res<CellSelection>,
     ),
-    mut edit_cell: ResMut<EditCellState>,
+    edit_cell: Res<EditCellState>,
     mut session: ResMut<CellPaintSession>,
     // Bevy 单系统参数上限 16——本函数原本正好顶满，新增闪视觉态时
     // 把「丢弃确认弹窗态 + 闪视觉态」折成一层元组（元组算 1 个参数）。
@@ -116,18 +127,13 @@ pub fn paint_edit_cell_on_drag(
     time: Res<Time>,
     screen: Res<crate::app_screen::AppScreen>,
 ) {
-    // 加载中 / 播放中 / 无工具 / **单选模式** → 不参与。
+    // 加载中 / 播放中 / 工具未激活 → 不参与。
     //
-    // 单选模式（`allow_drag = false`，2026-10-24）走同一条早退：它在语义上
-    // 就是「这个系统不该管我」——点选由 `commit_edit_cell_on_click` 负责，
-    // hover 由 `track_edit_cell_hover` 负责，本系统只管拖绘累积。
-    // 走早退而不是在函数内部逐段判断，顺带保证「从拖绘切到单选时残笔被丢弃」
-    // （`session.stroke.discard()` 就在这个分支里）。
-    if screen.shows_loading_overlay()
-        || playback.playing
-        || !edit_cell.tool_active
-        || !edit_cell.allow_drag
-    {
+    // ADR-0057 D3：EditCell **只画不选**，点选由 `commit_point_select_on_click`
+    // 负责、hover 由 `track_edit_cell_hover` 负责；原「单选模式」早退的判据
+    // `allow_drag` 已随 `CellSelect` 退役。走早退顺带保证「从拖绘切走时残笔
+    // 被丢弃」（`session.stroke.discard()` 就在这个分支里）。
+    if screen.shows_loading_overlay() || playback.playing || !edit_cell.tool_active {
         if session.stroke.active {
             session.stroke.discard();
             prompt.last_cell = None;
@@ -171,16 +177,13 @@ pub fn paint_edit_cell_on_drag(
         return;
     }
 
-    // ── 起笔（D3-A：清 region_cells）──
+    // ── 起笔（D3：记快照；选区不动）──
     if buttons.just_pressed(MouseButton::Left) {
         if ui.wants_pointer {
             return;
         }
         session.stroke.begin();
         prompt.last_cell = None;
-        // **D3-A：起笔清空 region_cells**——从「选择」意图切到「涂画」意图的
-        // 时序信号；选区与笔触不可同框（§9.5 四态视觉分工）。
-        clear_region_for_stroke(&mut edit_cell);
         if let Some(map) = drill.current() {
             session.stroke.map_id = Some(map.clone());
         }
@@ -217,11 +220,15 @@ pub fn paint_edit_cell_on_drag(
                 .get((gy as usize) * (w as usize) + (gx as usize))
                 .copied()
         };
-        // 补间：上一采样点 → 本次采样点之间补齐中间的格（D3：不漏格）。
+        // 补间：上一采样点 → 本次采样点之间补齐中间的格（D3：不漏格），
+        // 每个采样点展开为半径圆盘（D9），再与选区取交（D4 蒙版）。
         let from = prompt.last_cell.unwrap_or(cur);
+        let radius = session.radius;
         for (gx, gy) in bresenham_cells(from, cur) {
-            if let Some(before) = sample(gx, gy) {
-                session.stroke.push_cell(gx, gy, before);
+            for (cx, cy) in stroke_footprint((gx, gy), radius, &cell_sel) {
+                if let Some(before) = sample(cx, cy) {
+                    session.stroke.push_cell(cx, cy, before);
+                }
             }
         }
         prompt.last_cell = Some(cur);
@@ -370,34 +377,62 @@ mod tests {
         }
     }
 
-    fn state_with_region() -> EditCellState {
-        EditCellState {
-            tool_active: true,
-            selected: Some((3, 4)),
-            region_cells: vec![(0, 0), (1, 0), (2, 0)],
-            region_fingerprint: 0xdead_beef,
-            ..Default::default()
-        }
+    /// 构造绑定到 8×8 图幅的选区。
+    fn selection_with(cells: &[(i32, i32)]) -> CellSelection {
+        let mut sel = CellSelection::default();
+        sel.bind_map(&wv_core::Id::new_unchecked("m1"), 8, 8);
+        sel.replace(cells.iter().copied());
+        sel
     }
 
-    // ── D3-A · 起笔清 region_cells ──────────────────────────────────
+    // ── A5 · 拖绘裁剪（D4 蒙版 ∩ D9 圆盘）──────────────────────────
 
+    /// 选区空 → 自由涂：圆盘原样落笔（R=1 时与 ADR-0052 单格笔触逐格一致）。
     #[test]
-    fn stroke_begin_clears_region_cells_and_fingerprint() {
-        let mut edit_cell = state_with_region();
-        clear_region_for_stroke(&mut edit_cell);
-        assert!(edit_cell.region_cells.is_empty(), "起笔应清空选区");
-        assert_eq!(edit_cell.region_fingerprint, 0, "指纹应归零");
+    fn footprint_with_empty_selection_paints_whole_disk() {
+        let sel = CellSelection::default();
+        assert_eq!(
+            stroke_footprint((2, 3), 1, &sel),
+            vec![(2, 3)],
+            "R=1 + 空选区 → 仅圆心一格（与旧单格笔触一致）"
+        );
+        assert_eq!(
+            stroke_footprint((0, 0), 2, &sel).len(),
+            9,
+            "R=2 + 空选区 → 完整 9 格圆盘"
+        );
     }
 
+    /// 选区非空 → 落笔格 = 圆盘 ∩ 选区（圈外的格不进笔）。
     #[test]
-    fn stroke_begin_keeps_selected_cell() {
-        // 单格选中与区域选是两套态——起笔只清区域选，单格选中保留
-        // （否则「点一格 → 拖动画」会把选中也抹掉，Inspector 读不到值）。
-        let mut edit_cell = state_with_region();
-        clear_region_for_stroke(&mut edit_cell);
-        assert_eq!(edit_cell.selected, Some((3, 4)), "单格选中应保留");
-        assert!(edit_cell.tool_active, "工具仍激活");
+    fn footprint_is_intersection_when_selection_non_empty() {
+        // 选区只含 (1,0) 与 (1,1)——圆心 (0,0) 的 R=2 圆盘里仅这两格在选区内。
+        let sel = selection_with(&[(1, 0), (1, 1)]);
+        let mut got = stroke_footprint((0, 0), 2, &sel);
+        got.sort();
+        assert_eq!(got, vec![(1, 0), (1, 1)], "只落选区内的格，实际 {got:?}");
+    }
+
+    /// 圆盘完全落在选区外 → 零落笔（不是「退化为自由涂」）。
+    #[test]
+    fn footprint_is_empty_when_disk_lies_outside_selection() {
+        let sel = selection_with(&[(7, 7)]);
+        assert!(
+            stroke_footprint((0, 0), 3, &sel).is_empty(),
+            "选区非空但圆盘不沾选区 → 无落笔"
+        );
+    }
+
+    /// 起笔**不清选区**（ADR-0057 补记 1 反转旧 D3-A）：begin 后蒙版判据不变。
+    #[test]
+    fn stroke_begin_does_not_touch_selection() {
+        let sel = selection_with(&[(1, 0), (1, 1)]);
+        let before = stroke_footprint((0, 0), 2, &sel);
+        let mut session = CellPaintSession::default();
+        session.stroke.begin();
+        let after = stroke_footprint((0, 0), 2, &sel);
+        assert_eq!(before, after, "起笔后蒙版口径必须原样保留");
+        assert!(!sel.is_empty(), "选区仍非空");
     }
 
     // ── D3-B · 右键 = Esc 等价 ──────────────────────────────────────

@@ -204,12 +204,11 @@ pub fn panel_inspector(
         ResMut<crate::state::NatureRegionUiState>,
     ),
     (mut boundary,): (ResMut<wv_render::state::BiomeBoundaryState>,),
-    // Cell 表单的另两个会话态：多边形选区（批量模式用）+ 单格/批量模式切换
-    // + 「圈完自动落批量」的边沿检测（见 cell::BatchModeAutoLand）。
-    (mut selection, mut cell_mode, mut batch_land): (
+    // Cell 表单的另两个会话态：多边形选区（V 套索/框选的环）+ 统一选区
+    // （ADR-0057：Cell 表单的编辑对象，判据读它）。
+    (mut selection, cell_sel): (
         ResMut<wv_render::state::SelectionState>,
-        ResMut<cell::CellPanelMode>,
-        ResMut<cell::BatchModeAutoLand>,
+        Res<wv_render::state::CellSelection>,
     ),
     // 落笔会话态（[ADR-0052] D4）：落笔值 + 笔触格集合。
     mut paint_session: ResMut<wv_world_cell_map::cell_paint::CellPaintSession>,
@@ -234,14 +233,6 @@ pub fn panel_inspector(
     let selected = selection_clone.as_ref();
     // CellMap 工作区是否激活（在 float_window 借用 panels 之前快照）。
     let workspace_active = panels.cell_workspace_backup.is_some();
-    // 圈完自动落「批量」（cell_form 头注的承诺，2026-10-24 兑现）：多边形
-    // 选区从无到有的那一帧把表单切到批量——作者刚圈完，意图明确；此后
-    // 手动切回单格不再被打扰（边沿触发，不是每帧强按）。
-    let has_region = !edit_cell.region_cells.is_empty();
-    if has_region && !batch_land.had_region {
-        *cell_mode = cell::CellPanelMode::Batch;
-    }
-    batch_land.had_region = has_region;
 
     float_window(
         ctx,
@@ -292,10 +283,10 @@ pub fn panel_inspector(
                         &mut display,
                         &mut nature,
                         &mut selection,
-                        &mut cell_mode,
                         &mut paint_session,
                         &mut flood_select,
                         &mut derived,
+                        &cell_sel,
                         &mut drafts,
                         &mut tex,
                         &mut notice,
@@ -354,14 +345,14 @@ fn render_properties(
     boundary: &mut wv_render::state::BiomeBoundaryState,
     display: &mut wv_render::faction_overlays::FactionDisplay,
     nature: &mut crate::state::NatureRegionUiState,
-    // 以下五个参数自 Cell 表单迁入笔刷窗（2026-10-24）后本函数不再消费，
+    // 以下参数自 Cell 表单迁入笔刷窗（2026-10-24）后本函数不再消费，
     // 但 `panel_inspector` 仍要解 ResMut 再传——签名保留（改调用侧两处
     // 地方的成本 vs 留着的成本，留下的总成本低），下划线化消 unused。
     _selection: &mut wv_render::state::SelectionState,
-    _cell_mode: &mut cell::CellPanelMode,
     _paint_session: &mut wv_world_cell_map::cell_paint::CellPaintSession,
     _flood_select: &mut crate::state::FloodSelectState,
     _derived: &mut crate::edit::derived_op::DerivedOpRequest,
+    cell_sel: &wv_render::state::CellSelection,
     drafts: &mut event::InspectorDrafts,
     tex: &mut wv_render::terrain_view::TerrainTexture,
     notice: &mut crate::ui_shell::ShellNotice,
@@ -369,14 +360,12 @@ fn render_properties(
     loc: crate::i18n::Locale,
 ) {
     use crate::i18n::{t_key, I18nKey};
-    // Cell 表单的可达面（2026-10-24）：EditCell 工具激活之外，CellMap
-    // 工作区（Topographic 档）里**圈选确认后也直出**——圈选必然切到 V 工具
-    // （工具互斥），意图菜单又已在工作区撤出（`intent_menu::
-    // cell_workspace_active`），Inspector 批量区是唯一应用入口；若仍按
-    // 工具门，作者圈完面对的是一张空 Inspector。
+    // Cell 表单的可达面（ADR-0057 D6 收口口径）：EditCell 工具激活之外，
+    // CellMap 工作区（Topographic 档）里**选区非空也直出**——圈选必然切到
+    // V 工具（工具互斥），意图菜单又已在工作区撤出（`intent_menu::
+    // cell_workspace_active`），Inspector 是圈选确认后的可达面之一。
     let cell_form_active = edit_cell.tool_active
-        || (view.mode == wv_render::state::ViewMode::Topographic
-            && !edit_cell.region_cells.is_empty());
+        || (view.mode == wv_render::state::ViewMode::Topographic && !cell_sel.is_empty());
     let form = resolve_form(selected, cell_form_active, boundary.tool_active);
     match form {
         FormKind::None => {

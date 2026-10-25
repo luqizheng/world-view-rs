@@ -54,12 +54,16 @@ mod terrain;
 #[cfg(test)]
 mod tests;
 
-pub use cell::{commit_edit_cell_on_click, track_edit_cell_hover};
+pub use cell::{
+    clear_cell_selection_on_escape, commit_point_select_on_click, track_edit_cell_hover,
+};
 pub use history::{
     apply_history_command, apply_history_command_detailed, refresh_project_diagnostics,
     HistoryOutcome,
 };
-pub use region::{commit_continent_generation, commit_region_intent, sync_region_cells};
+pub use region::{
+    commit_continent_generation, commit_region_intent, sync_region_cells, LassoLiveLink,
+};
 pub use stroke::commit_stroke_on_release;
 pub use terrain::{
     apply_clear_measurements, apply_regen_world, apply_reset_terrain_to_base, flush_terrain_texture,

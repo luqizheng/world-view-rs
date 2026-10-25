@@ -23,20 +23,24 @@ use crate::theme::ui_tokens::font_size;
 use crate::ui::shell::UiShell;
 use crate::ui::widgets::divider;
 
-use wv_render::state::EditCellState;
-use wv_world_cell_map::cell_paint::CellPaintSession;
+use wv_render::state::{CellSelection, EditCellState};
+use wv_world_cell_map::cell_paint::{CellPaintSession, MAX_STROKE_RADIUS};
 use wv_world_cell_map::terrain_view::biome_raw::{BIOME_NAMES_ZH, BIOME_RAW_COLORS};
 
 /// **读数条**（D8）。
 ///
-/// 固定双段（hover | selected），等宽字体，微号字。
+/// 固定双段（hover | 选区），等宽字体，微号字。
 ///
-/// **绝不回退**：hover 无数据显 `—`，**不**拿 selected 的值填上去——
+/// **绝不回退**：hover 无数据显 `—`，**不**拿选区的值填上去——
 /// 作者看到「光标在这格」与「选中的是那格」是两件事，混淆会误改地形。
+///
+/// ADR-0057 D1：右段读统一选区——**1 格**显该格读数（单格语义），
+/// **N 格**显「N 格」（批量语义），空选区显 `—`。
 pub fn render_readout_bar(
     ui: &mut egui::Ui,
     shell: &UiShell,
     edit_cell: &EditCellState,
+    sel: &CellSelection,
     read_cell: impl Fn(i32, i32) -> Option<(i16, u8, u8)>,
 ) {
     let hover_text = match edit_cell.hover {
@@ -53,7 +57,7 @@ pub fn render_readout_bar(
         },
         None => "—".to_string(),
     };
-    let selected_text = match edit_cell.selected {
+    let selected_text = match sel.only_cell() {
         Some((gx, gy)) => match read_cell(gx, gy) {
             Some((h, s, b)) => format!(
                 "{}  ·  {}  ·  {} m  ·  {}  ·  {}",
@@ -65,6 +69,7 @@ pub fn render_readout_bar(
             ),
             None => "—".to_string(),
         },
+        None if !sel.is_empty() => format!("{} 格", sel.len()),
         None => "—".to_string(),
     };
 
@@ -103,15 +108,16 @@ pub fn render_readout_bar(
     divider(ui, shell);
 }
 
-/// **落笔值区**（D4）。
+/// **落笔值区**（D4 + ADR-0057 D9）。
 ///
-/// 三个控件：
+/// 四个控件：
 ///
 /// | 控件 | 语义 | 类型 |
 /// |---|---|---|
 /// | 落笔地表 | **绝对**（水 / 陆） | segmented |
 /// | 落笔群系 | **绝对** | swatch 网格 |
 /// | 落笔增减 | **相对**（米，`0` = 不动） | 数值框（D1 scrub） |
+/// | 笔刷半径 | 圆盘半径（格，1–8） | 数值框（D9） |
 ///
 /// 群系用 **swatch 网格**而非 radio：拖绘时要能**快速切落笔群系**，
 /// swatch 直接显示色块（与底图同色 = 所见即所涂）。
@@ -202,6 +208,31 @@ pub fn render_paint_value_section(
             );
         });
         session.paint.height_delta = delta.clamp(-32767.0, 32767.0) as i16;
+    });
+    ui.add_space(4.0);
+
+    // ── 笔刷半径（ADR-0057 D9）──
+    // 圆盘 footprint 的半径：R=1 = 单格（原状），R=2 = 含对角 9 格。
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("笔刷半径")
+                .size(font_size::MICRO)
+                .color(shell.t3()),
+        );
+        let mut r = session.radius as f32;
+        ui.allocate_ui(egui::vec2(120.0, 26.0), |ui| {
+            wv_ui::widgets::controls::numeric_input_salted(
+                ui,
+                shell,
+                "cell_paint_radius",
+                &mut r,
+                "格",
+                1.0,
+                1.0,
+                MAX_STROKE_RADIUS as f32,
+            );
+        });
+        session.radius = r.round().clamp(1.0, MAX_STROKE_RADIUS as f32) as u8;
     });
     ui.add_space(4.0);
 }
@@ -370,7 +401,7 @@ fn surface_name(surface: u8) -> &'static str {
 
 /// **派生运算区**（[ADR-0052] D6 · §5 M3）。
 ///
-/// 两个按钮 + 各自参数，作用范围 = `region_cells`（选中片）。
+/// 两个按钮 + 各自参数，作用范围 = 统一选区（选中片）。
 ///
 /// | 运算 | 参数 | 纯函数 |
 /// |---|---|---|
@@ -380,7 +411,7 @@ fn surface_name(surface: u8) -> &'static str {
 /// ## 为什么作用范围必须是选区
 ///
 /// 对「全图」做平滑/量化会把作者没碰过的地方也改掉——这是**越权修改**。
-/// 故 `region_cells` 为空时按钮禁用（不是静默无效）。
+/// 故选区为空时按钮禁用（不是静默无效）。
 ///
 /// ## 播放中的门控（§9.4 Gate-1）
 ///

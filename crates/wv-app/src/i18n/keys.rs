@@ -770,8 +770,8 @@ pub enum I18nKey {
     MapControlsClearMeasurements,
     /// 单格编辑（EditCell）瓷砖 tooltip（[ADR-0052] D7-1）
     MapControlsEditCellHint,
-    /// 单选模式 tooltip（2026-10-24：点选一格、拖动不落笔）
-    MapControlsCellSelectHint,
+    /// 点选工具瓷砖 tooltip（ADR-0057 补记 6：点选进统一选区，不落笔）
+    MapControlsPointSelectHint,
     /// 泛洪选择（FloodSelect）瓷砖 tooltip（[ADR-0052] D6）
     MapControlsFloodSelectHint,
     /// 泛洪判据·按地表（[ADR-0052] D6）
@@ -880,8 +880,8 @@ pub enum I18nKey {
     CmdToggleImmersive,
     /// 「单格编辑」工具（[ADR-0040]，快捷键 C；CellMap 工作区核心工具）
     CmdToolEditCell,
-    /// 单选模式（S）
-    CmdToolCellSelect,
+    /// 点选工具（S；ADR-0057 补记 6，原单选模式改名）
+    CmdToolPointSelect,
     /// 群系分界线工具（命令面板）
     CmdToolBiomeBoundary,
     /// 「Cell 编辑器」面板标题（独立面板，2026-10-20）
@@ -1573,7 +1573,7 @@ impl I18nKey {
         I18nKey::MapControlsMeasureArea,
         I18nKey::MapControlsClearMeasurements,
         I18nKey::MapControlsEditCellHint,
-        I18nKey::MapControlsCellSelectHint,
+        I18nKey::MapControlsPointSelectHint,
         I18nKey::MapControlsFloodSelectHint,
         I18nKey::CellFloodBySurface,
         I18nKey::CellFloodByBiome,

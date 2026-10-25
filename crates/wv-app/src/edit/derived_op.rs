@@ -15,14 +15,14 @@
 //!
 //! - **不改世界**：变更集一律经 `BatchEditCellsCommand` 落盘
 //!   （[ADR-0021] §3.3「System 不得直接改世界」）——1 次派生运算 = 1 个撤销单位。
-//! - **作用范围 = `region_cells`**：没有选区就不运算（对「全图」做平滑会把
-//!   作者没碰过的地方也改掉，属越权）。
+//! - **作用范围 = 统一选区 `CellSelection`**（ADR-0057）：没有选区就不运算
+//!   （对「全图」做平滑会把作者没碰过的地方也改掉，属越权）。
 //! - **播放中只读**：与其它写入口同口径（§9.4 Gate-1）。面板按钮保持可见
 //!   但按下无效，见 `cell_paint_panel::render_derived_section`。
 
 use bevy::prelude::*;
 
-use wv_render::state::EditCellState;
+use wv_render::state::CellSelection;
 
 use crate::state::{DrillState, PlaybackState, WorldProjection};
 
@@ -87,14 +87,14 @@ pub fn derived_op_gate(playback_playing: bool, region_count: usize) -> Result<()
 
 /// **执行派生运算**（[ADR-0052] D6 · M3）。
 ///
-/// gate：有请求 ∧ 非播放中 ∧ 有当前图 ∧ `region_cells` 非空。
+/// gate：有请求 ∧ 非播放中 ∧ 有当前图 ∧ 统一选区非空。
 #[allow(clippy::too_many_arguments)] // Bevy 系统参数即依赖声明，宽签名是框架惯例
 pub fn apply_derived_op(
     mut request: ResMut<DerivedOpRequest>,
     playback: Res<PlaybackState>,
     drill: Res<DrillState>,
     mut projection: ResMut<WorldProjection>,
-    mut edit_cell: ResMut<EditCellState>,
+    sel: Res<CellSelection>,
     mut tex: ResMut<wv_render::terrain_view::TerrainTexture>,
     mut edit: ResMut<crate::edit::editing::EditHistory>,
     mut notice: ResMut<crate::ui_shell::ShellNotice>,
@@ -105,7 +105,7 @@ pub fn apply_derived_op(
     };
     let frame = (time.elapsed_secs() * 60.0) as u64;
     // 门控与面板按钮的 `can_run` 同源（`derived_op_gate`）。
-    if let Err(reason) = derived_op_gate(playback.playing, edit_cell.region_cells.len()) {
+    if let Err(reason) = derived_op_gate(playback.playing, sel.len() as usize) {
         notice.error(reason, frame);
         return;
     }
@@ -117,7 +117,7 @@ pub fn apply_derived_op(
         notice.error("当前图没有地形数据", frame);
         return;
     };
-    let cells = edit_cell.region_cells.clone();
+    let cells: Vec<(i32, i32)> = sel.iter_cells().collect();
     let terrain_grid = to_terrain_grid(terrain);
     let changes = match op {
         DerivedOp::Smooth => {
@@ -168,8 +168,6 @@ pub fn apply_derived_op(
         }
         Err(e) => notice.error(format!("派生运算提交失败：{e}"), frame),
     }
-    // 运算后选区保留（作者可继续对同一片做下一步）——清指纹让渲染层重算高亮。
-    edit_cell.region_fingerprint = 0;
 }
 
 /// 世界地形（`wv_core::TerrainData`）→ `wv_terrain::TerrainGrid`。

@@ -145,6 +145,10 @@ fn dispatcher_world(project_dir: Option<&str>, dirty: bool, pending: CommandId) 
     // `SystemParamValidationError { Resource does not exist }`。
     world.init_resource::<crate::state::FloodSelectState>();
     world.init_resource::<wv_world_cell_map::cell_flash::CellFlashState>();
+    // ADR-0057：点选工具会话态 + 统一选区位图——分发器互斥分支与
+    // 选区保留测试都要读写它们（漏 init 即 SystemParamValidationError）。
+    world.init_resource::<crate::state::PointSelectState>();
+    world.init_resource::<crate::state::CellSelection>();
     world.resource_mut::<CommandPalette>().pending = Some(pending);
     world
 }
@@ -436,9 +440,12 @@ fn project_menu_pending_command_reaches_the_dispatcher() {
     });
     world.insert_resource(Time::<()>::default());
     // CellMap 工具会话态（[ADR-0052] D6/D8-A）：与 `dispatcher_world`
-    // 同款补齐——`apply_pending_commands` 现在读写这两个资源。
+    // 同款补齐——`apply_pending_commands` 现在读写这些资源。
     world.init_resource::<crate::state::FloodSelectState>();
     world.init_resource::<wv_world_cell_map::cell_flash::CellFlashState>();
+    // ADR-0057：点选工具会话态 + 统一选区位图（分发器互斥分支要读写）。
+    world.init_resource::<crate::state::PointSelectState>();
+    world.init_resource::<crate::state::CellSelection>();
     world.resource_mut::<ProjectMenuState>().pending = Some(CommandId::CloseProject);
 
     world
@@ -555,43 +562,60 @@ fn adopt_world_syncs_view_current_map_to_drill_current() {
     }
 }
 
-// ── 单选模式（2026-10-24 用户需求）─────────────────────────────
+// ── 点选工具（ADR-0057 补记 6，原「单选模式」）─────────────────
 
-/// **单选模式与单格编辑共用 `tool_active`，只由 `allow_drag` 区分形态。**
+/// **PointSelect 与 EditCell 是两件工具、两个独立 Resource（ADR-0057 补记 6）。**
 ///
 /// 这条测的是分发器的三件事：
-/// 1. `CellSelect` 开起来 = `tool_active && !allow_drag`；
-/// 2. 切到 `EditCell` = 同一 `tool_active` 但 `allow_drag` 翻回 true
-///    （否则「点了单选再点单格编辑」会两个瓷砖都不亮）；
-/// 3. 对**当前形态**再点一次 = 关闭（不是切换）。
+/// 1. `PointSelect` 开起来 = `point_select.tool_active`，且 EditCell 保持关；
+/// 2. 切到 `EditCell` = 关掉 PointSelect、开 `edit_cell.tool_active`；
+/// 3. 对**当前工具**再点一次 = 关闭（不是切换）。
 #[test]
-fn cell_select_and_edit_cell_share_tool_active_but_differ_in_allow_drag() {
+fn point_select_and_edit_cell_are_independent_tools() {
     use crate::ui_command_palette::MapToolId;
     use bevy::ecs::system::RunSystemOnce;
 
-    let mut world = dispatcher_world(None, false, CommandId::SelectMapTool(MapToolId::CellSelect));
+    let mut world = dispatcher_world(
+        None,
+        false,
+        CommandId::SelectMapTool(MapToolId::PointSelect),
+    );
     world
         .run_system_once(apply_pending_commands)
         .expect("系统运行失败");
     {
-        let c = world.resource::<wv_render::state::EditCellState>();
-        assert!(c.tool_active, "单选模式应激活工具");
-        assert!(!c.allow_drag, "单选模式必须关掉拖绘");
+        let p = world.resource::<crate::state::PointSelectState>();
+        assert!(p.tool_active, "点选工具应激活");
+        assert!(
+            !world
+                .resource::<wv_render::state::EditCellState>()
+                .tool_active,
+            "点选开启时 EditCell 应保持关闭"
+        );
     }
 
-    // 切到 EditCell：同一 tool_active，形态翻回「可拖绘」。
+    // 切到 EditCell：互斥——PointSelect 关、EditCell 开。
     world.resource_mut::<CommandPalette>().pending =
         Some(CommandId::SelectMapTool(MapToolId::EditCell));
     world
         .run_system_once(apply_pending_commands)
         .expect("系统运行失败");
     {
-        let c = world.resource::<wv_render::state::EditCellState>();
-        assert!(c.tool_active, "切到 EditCell 后工具仍激活");
-        assert!(c.allow_drag, "EditCell 形态必须允许拖绘");
+        assert!(
+            world
+                .resource::<wv_render::state::EditCellState>()
+                .tool_active,
+            "切到 EditCell 后工具应激活"
+        );
+        assert!(
+            !world
+                .resource::<crate::state::PointSelectState>()
+                .tool_active,
+            "切到 EditCell 后点选应关闭（互斥）"
+        );
     }
 
-    // 对当前形态再点一次 → 关闭。
+    // 对当前工具再点一次 → 关闭。
     world.resource_mut::<CommandPalette>().pending =
         Some(CommandId::SelectMapTool(MapToolId::EditCell));
     world
@@ -601,24 +625,30 @@ fn cell_select_and_edit_cell_share_tool_active_but_differ_in_allow_drag() {
         !world
             .resource::<wv_render::state::EditCellState>()
             .tool_active,
-        "再次点击当前形态应关闭工具"
+        "再次点击当前工具应关闭"
     );
 }
 
-/// 从单选模式切到 EditCell 时，**选区不丢**（S0-1 口径对两种形态一致）。
+/// 从点选切到 EditCell 时，**统一选区不丢**（ADR-0057 D1：选区跨工具保留）。
 #[test]
-fn switching_from_cell_select_to_edit_cell_keeps_selection() {
+fn switching_from_point_select_to_edit_cell_keeps_selection() {
     use crate::ui_command_palette::MapToolId;
     use bevy::ecs::system::RunSystemOnce;
 
-    let mut world = dispatcher_world(None, false, CommandId::SelectMapTool(MapToolId::CellSelect));
+    let mut world = dispatcher_world(
+        None,
+        false,
+        CommandId::SelectMapTool(MapToolId::PointSelect),
+    );
     world
         .run_system_once(apply_pending_commands)
         .expect("系统运行失败");
     {
-        let mut c = world.resource_mut::<wv_render::state::EditCellState>();
-        c.selected = Some((7, 9));
-        c.region_cells = vec![(0, 0), (1, 0)];
+        let mut sel = world.resource_mut::<crate::state::CellSelection>();
+        let map = wv_core::Id::new_unchecked("map_a");
+        // 16×16 图幅：(7,9) 落在图内（8×8 会把它当越界静默丢弃）。
+        sel.bind_map(&map, 16, 16);
+        sel.replace([(7, 9), (0, 0), (1, 0)]);
     }
 
     world.resource_mut::<CommandPalette>().pending =
@@ -627,7 +657,7 @@ fn switching_from_cell_select_to_edit_cell_keeps_selection() {
         .run_system_once(apply_pending_commands)
         .expect("系统运行失败");
 
-    let c = world.resource::<wv_render::state::EditCellState>();
-    assert_eq!(c.selected, Some((7, 9)), "切形态不得清掉单格选中");
-    assert_eq!(c.region_cells.len(), 2, "切形态不得清掉区域选区");
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert_eq!(sel.len(), 3, "切工具不得清掉统一选区");
+    assert!(sel.contains(7, 9) && sel.contains(0, 0) && sel.contains(1, 0));
 }

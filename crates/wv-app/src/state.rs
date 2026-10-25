@@ -29,6 +29,10 @@ pub use wv_render::state::{
 /// 经 `wv_render::state` 的 re-export 链暴露（与 `EditCellState` 同款路径）。
 pub use wv_world_cell_map::state::{FloodCriterion, FloodSelectState};
 
+/// ADR-0057：CellMap 统一选区位图 + 点选工具会话态——与 `EditCellState`
+/// 同款经 `wv_render::state` re-export 链暴露，应用侧 `crate::state::X` 直用。
+pub use wv_render::state::{CellSelection, PointSelectState};
+
 // 2026-10-18（ADR-0033）：`ContinentGenerationStash` / `ContinentGenerationState`
 // 已删除。意图生效不再消费选区，撤销/重做无需把意图圈「还回来」——
 // 选区自始至终留在 `SelectionState`。

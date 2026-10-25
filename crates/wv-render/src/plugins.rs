@@ -96,7 +96,7 @@ pub struct EditorOverlayPlugin;
 
 impl Plugin for EditorOverlayPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<cell_selection::CellSelectionEntities>()
+        app.init_resource::<cell_selection::CellAntsEntities>()
             .init_resource::<cell_selection::CellRegionEntities>()
             // hover 准星（[ADR-0052] D2）：双色描边 + 中心十字。
             .init_resource::<cell_selection::CellHoverEntities>()
@@ -109,17 +109,16 @@ impl Plugin for EditorOverlayPlugin {
             .init_resource::<wv_world_cell_map::cell_flash::CellFlashState>()
             .init_resource::<wv_world_cell_map::cell_flash::CellFlashEntities>()
             .add_systems(Update, brush_cursor::sync_brush_cursor)
-            .add_systems(Update, crate::cellmap_bridge::sync_cell_selection)
             .add_systems(Update, crate::cellmap_bridge::sync_cell_region)
             .add_systems(Update, crate::cellmap_bridge::sync_cell_stroke)
             // 闪视觉（撤销白闪 / 拒收红闪）画在最顶层。
             .add_systems(Update, crate::cellmap_bridge::sync_cell_flash)
-            // hover 准星画在 selected **之上**（Z 序：D2 要求 hover 是最上层
-            // 的瞬时反馈）。
+            // hover 准星画在选区**之上**（Z 序：hover 是最上层的瞬时反馈，
+            // ADR-0052 D2）；ADR-0057 后 selected 已由 sync_cell_region 统一承担。
             .add_systems(
                 Update,
                 crate::cellmap_bridge::sync_cell_hover
-                    .after(crate::cellmap_bridge::sync_cell_selection),
+                    .after(crate::cellmap_bridge::sync_cell_region),
             )
             .add_systems(
                 Update,

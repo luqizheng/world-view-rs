@@ -513,11 +513,11 @@ fn commit_region_intent_rejects_during_playback() {
     );
 }
 
-/// 鼠标按下 + tool_active=true → cell_pick 命中 → 写入 selected。
-/// [ADR-0040] §决策 3 + §决策 5。
+/// 鼠标按下 + 点选工具激活 → cell_pick 命中 → 写入统一选区（无修饰 = 替换）。
+/// ADR-0057 补记 6 / D2。
 #[test]
-fn cell_edit_on_click_records_the_hit_under_the_cursor() {
-    use wv_render::state::EditCellState;
+fn point_select_on_click_writes_hit_into_unified_selection() {
+    use crate::state::{CellSelection, PointSelectState};
 
     let mut world = World::new();
     world.init_resource::<Assets<Image>>();
@@ -572,27 +572,122 @@ fn cell_edit_on_click_records_the_hit_under_the_cursor() {
     world.insert_resource(wv_render::camera::PointerOverUi::default());
     // 系统签名含 AppScreen gate（2026-10-22 异步加载：加载期不选格）。
     world.insert_resource(crate::app_screen::AppScreen::default());
+    world.init_resource::<super::region::LassoLiveLink>();
 
-    let edit_cell = EditCellState {
-        tool_active: true,
-        ..Default::default()
-    };
-    world.insert_resource(edit_cell);
+    world.insert_resource(PointSelectState { tool_active: true });
+    // 预置一格旧选区：无修饰点击应整体替换（不是并入）。
+    let mut sel = CellSelection::default();
+    sel.bind_map(&map, 8, 8);
+    sel.replace([(0, 0)]);
+    world.insert_resource(sel);
+    world.insert_resource(ButtonInput::<KeyCode>::default());
 
     let mut buttons = ButtonInput::<MouseButton>::default();
     buttons.press(MouseButton::Left);
     world.insert_resource(buttons);
 
     let mut schedule = Schedule::default();
-    schedule.add_systems(commit_edit_cell_on_click);
+    schedule.add_systems(commit_point_select_on_click);
     schedule.run(&mut world);
 
-    let ec = world.resource::<EditCellState>();
-    assert_eq!(
-        ec.selected,
-        Some((3, 4)),
-        "cursor_world=(35,45) + cell_size=10 + origin=0 → 命中 (gx=3, gy=4)"
+    let sel = world.resource::<CellSelection>();
+    assert!(
+        sel.contains(3, 4),
+        "cursor_world=(35,45) + cell_size=10 + origin=0 → 命中 (gx=3, gy=4) 应入选区"
     );
+    assert_eq!(sel.len(), 1, "无修饰点击 = 替换：旧选区 (0,0) 应被清掉");
+}
+
+/// 修饰键口径（ADR-0057 D2）：Shift 点击 = 并入既有选区；Alt 点击 = 从选区扣除。
+#[test]
+fn point_select_click_shift_unions_and_alt_subtracts() {
+    use crate::state::{CellSelection, PointSelectState};
+
+    let mut world = World::new();
+    world.init_resource::<Assets<Image>>();
+    let map = wv_core::Id::new_unchecked("world_main");
+    let mut projection = crate::state::WorldProjection::default();
+    projection.world.meta = Some(wv_core::WorldMeta {
+        name: "test".into(),
+        version: "0.1".into(),
+        schema_version: 2,
+        root_map: map.clone(),
+        timeline_range: wv_core::time::TimeSpan { from: 0, to: None },
+        template: None,
+    });
+    projection.world.maps.push(wv_core::map::MapNode {
+        id: map.clone(),
+        level: wv_core::map::MapLevel::World,
+        ..Default::default()
+    });
+    projection.world.set_terrain(
+        map.clone(),
+        wv_core::terrain::TerrainData {
+            width: 8,
+            height: 8,
+            cells: vec![wv_core::terrain::TerrainCellData::default(); 64],
+        },
+    );
+    world.insert_resource(projection);
+    let mut drill = crate::state::DrillState::default();
+    drill.drill_to(
+        &world.resource::<crate::state::WorldProjection>().world,
+        &map,
+    );
+    world.insert_resource(drill);
+    world.insert_resource(crate::state::GridConfig {
+        cell_size: 10.0,
+        raster_origin: Vec2::ZERO,
+        map_origin: Vec2::ZERO,
+        map_size: Vec2::new(80.0, 80.0),
+    });
+    world.insert_resource(crate::state::ViewState {
+        cursor_world: Some(Vec2::new(35.0, 45.0)),
+        ..Default::default()
+    });
+    world.insert_resource(crate::state::PlaybackState::default());
+    world.insert_resource(wv_render::camera::PointerOverUi::default());
+    world.insert_resource(crate::app_screen::AppScreen::default());
+    world.init_resource::<super::region::LassoLiveLink>();
+    world.insert_resource(PointSelectState { tool_active: true });
+    // 既有选区含命中格 (3,4) 与另一格 (0,0)。
+    let mut sel = CellSelection::default();
+    sel.bind_map(&map, 8, 8);
+    sel.replace([(0, 0), (3, 4)]);
+    world.insert_resource(sel);
+
+    // Shift 点击 (3,4)：并入（已在 → 无新增，但 (0,0) 必须保留）。
+    let mut keys = ButtonInput::<KeyCode>::default();
+    keys.press(KeyCode::ShiftLeft);
+    world.insert_resource(keys);
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    buttons.press(MouseButton::Left);
+    world.insert_resource(buttons);
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_point_select_on_click);
+    schedule.run(&mut world);
+    {
+        let sel = world.resource::<CellSelection>();
+        assert_eq!(sel.len(), 2, "Shift 并入已选格 = 集合不变");
+        assert!(sel.contains(0, 0) && sel.contains(3, 4));
+    }
+
+    // Alt 点击 (3,4)：从选区扣除。
+    let mut keys = ButtonInput::<KeyCode>::default();
+    keys.press(KeyCode::AltLeft);
+    world.insert_resource(keys);
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    buttons.press(MouseButton::Left);
+    world.insert_resource(buttons);
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_point_select_on_click);
+    schedule.run(&mut world);
+    {
+        let sel = world.resource::<CellSelection>();
+        assert!(!sel.contains(3, 4), "Alt 点击应把命中格扣出选区");
+        assert!(sel.contains(0, 0), "Alt 点击不动其余选区");
+        assert_eq!(sel.len(), 1);
+    }
 }
 
 /// 指纹：同一多边形 → 同指纹；改一个顶点 → 变。
@@ -613,10 +708,155 @@ fn polygon_fingerprint_is_stable_and_change_sensitive() {
     assert_eq!(polygon_fingerprint(&[(0.0, 0.0)]), 0, "少于 3 顶点 → 0");
 }
 
-/// 工具未激活时点击 = 不写 selected。与 `Brush.enabled` flag 同口径。
+// ── A4 · 套索 V / 框选 R 共用入口（`SelectionState.closed` → 统一选区）──
+
+/// 构造「闭合环 → 统一选区」的测试世界（8×8 图幅、格宽 10、原点 0）。
+///
+/// 环是**本图局部坐标**（与 `commit_selection_click` 落盘口径一致）；
+/// 本 fixture 图帧原点为 0，故局部 = 世界。
+fn lasso_world(base: &[(i32, i32)], modifiers: &[KeyCode], ring: Vec<(f32, f32)>) -> World {
+    use crate::state::SelectionState;
+
+    let map = wv_core::Id::new_unchecked("world_main");
+    let mut world = World::new();
+    let mut projection = crate::state::WorldProjection::default();
+    projection.world.meta = Some(wv_core::WorldMeta {
+        name: "test".into(),
+        version: "0.1".into(),
+        schema_version: 2,
+        root_map: map.clone(),
+        timeline_range: wv_core::time::TimeSpan { from: 0, to: None },
+        template: None,
+    });
+    projection.world.maps.push(wv_core::map::MapNode {
+        id: map.clone(),
+        level: wv_core::map::MapLevel::World,
+        ..Default::default()
+    });
+    projection.world.set_terrain(
+        map.clone(),
+        wv_core::terrain::TerrainData {
+            width: 8,
+            height: 8,
+            cells: vec![wv_core::terrain::TerrainCellData::default(); 64],
+        },
+    );
+    world.insert_resource(projection);
+    let mut drill = crate::state::DrillState::default();
+    drill.drill_to(
+        &world.resource::<crate::state::WorldProjection>().world,
+        &map,
+    );
+    world.insert_resource(drill);
+    world.insert_resource(crate::state::GridConfig {
+        cell_size: 10.0,
+        raster_origin: Vec2::ZERO,
+        map_origin: Vec2::ZERO,
+        map_size: Vec2::new(80.0, 80.0),
+    });
+    world.insert_resource(SelectionState {
+        enabled: true,
+        closed: Some(ring),
+        ..Default::default()
+    });
+    let mut keys = ButtonInput::<KeyCode>::default();
+    for k in modifiers {
+        keys.press(*k);
+    }
+    world.insert_resource(keys);
+    let mut sel = crate::state::CellSelection::default();
+    sel.bind_map(&map, 8, 8);
+    sel.replace(base.iter().copied());
+    world.insert_resource(sel);
+    world.init_resource::<super::region::LassoLiveLink>();
+    world
+}
+
+fn run_region_sync(world: &mut World) {
+    let mut schedule = Schedule::default();
+    schedule.add_systems(sync_region_cells);
+    schedule.run(world);
+}
+
+/// 无修饰闭合 = **替换**（旧选区不保留）。
 #[test]
-fn cell_edit_on_click_noop_when_tool_inactive() {
-    use wv_render::state::EditCellState;
+fn lasso_close_without_modifier_replaces_unified_selection() {
+    // 局部方环 (0,0)-(30,30)：格心 5/15/25 落入 → 3×3 = 9 格。
+    let ring = vec![(0.0, 0.0), (30.0, 0.0), (30.0, 30.0), (0.0, 30.0)];
+    let mut world = lasso_world(&[(7, 7)], &[], ring);
+    run_region_sync(&mut world);
+
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert_eq!(
+        sel.len(),
+        9,
+        "方环应栅格化出 3×3 = 9 格，实际 {}",
+        sel.len()
+    );
+    assert!(sel.contains(0, 0) && sel.contains(2, 2), "环内格入选");
+    assert!(!sel.contains(7, 7), "无修饰 = 替换：旧选区必须清掉");
+}
+
+/// Shift 闭合 = **并集**（旧选区保留），且拖锚调形时从**冻结基座**重算。
+#[test]
+fn lasso_close_with_shift_unions_and_recomputes_from_frozen_base() {
+    let ring = vec![(0.0, 0.0), (30.0, 0.0), (30.0, 30.0), (0.0, 30.0)];
+    let mut world = lasso_world(&[(7, 7)], &[KeyCode::ShiftLeft], ring);
+    run_region_sync(&mut world);
+    {
+        let sel = world.resource::<crate::state::CellSelection>();
+        assert_eq!(sel.len(), 10, "Shift = 并集：9 格 + 既有 (7,7)");
+        assert!(sel.contains(7, 7), "既有格必须保留");
+    }
+
+    // 拖锚调形：环缩小到 (0,0)-(10,10) → 仅 1 格。
+    // 若基座没有冻结（在本帧选区上并），这里会残留上一帧的 9 格。
+    world.resource_mut::<crate::state::SelectionState>().closed =
+        Some(vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]);
+    run_region_sync(&mut world);
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert_eq!(
+        sel.len(),
+        2,
+        "缩小后 = 基座 (7,7) + 新环内 1 格，实际 {}",
+        sel.len()
+    );
+    assert!(sel.contains(0, 0) && sel.contains(7, 7));
+    assert!(!sel.contains(2, 2), "上一帧的环内格必须被撤掉（基座冻结）");
+}
+
+/// Alt 闭合 = **差集**（从既有选区扣除环内格）。
+#[test]
+fn lasso_close_with_alt_subtracts_from_unified_selection() {
+    let ring = vec![(0.0, 0.0), (30.0, 0.0), (30.0, 30.0), (0.0, 30.0)];
+    let mut world = lasso_world(&[(0, 0), (7, 7)], &[KeyCode::AltLeft], ring);
+    run_region_sync(&mut world);
+
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert_eq!(sel.len(), 1, "Alt = 差集：只剩环外的 (7,7)");
+    assert!(sel.contains(7, 7), "环外格不受影响");
+    assert!(!sel.contains(0, 0), "环内格应被扣除");
+}
+
+/// 闭合消失（取消 / 切图 / 新手势）→ 结果**钉住不回滚**。
+#[test]
+fn lasso_link_disconnect_pins_result_without_rollback() {
+    let ring = vec![(0.0, 0.0), (30.0, 0.0), (30.0, 30.0), (0.0, 30.0)];
+    let mut world = lasso_world(&[], &[], ring);
+    run_region_sync(&mut world);
+    assert_eq!(world.resource::<crate::state::CellSelection>().len(), 9);
+
+    world.resource_mut::<crate::state::SelectionState>().closed = None;
+    run_region_sync(&mut world);
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert_eq!(sel.len(), 9, "闭合消失后结果钉住（不回滚到空）");
+    assert!(sel.contains(1, 1));
+}
+
+/// 点选工具未激活时点击 = 不写统一选区（ADR-0057 补记 6：PointSelect 独立开关）。
+#[test]
+fn point_select_on_click_noop_when_tool_inactive() {
+    use crate::state::{CellSelection, PointSelectState};
 
     let mut world = World::new();
     world.init_resource::<Assets<Image>>();
@@ -629,20 +869,23 @@ fn cell_edit_on_click_noop_when_tool_inactive() {
     };
     world.insert_resource(view);
     world.insert_resource(crate::state::PlaybackState::default());
-    world.insert_resource(EditCellState::default());
+    world.insert_resource(PointSelectState::default()); // tool_active = false
+    world.insert_resource(CellSelection::default());
     world.insert_resource(wv_render::camera::PointerOverUi::default());
     world.insert_resource(crate::app_screen::AppScreen::default());
+    world.init_resource::<super::region::LassoLiveLink>();
+    world.insert_resource(ButtonInput::<KeyCode>::default());
 
     let mut buttons = ButtonInput::<MouseButton>::default();
     buttons.press(MouseButton::Left);
     world.insert_resource(buttons);
 
     let mut schedule = Schedule::default();
-    schedule.add_systems(commit_edit_cell_on_click);
+    schedule.add_systems(commit_point_select_on_click);
     schedule.run(&mut world);
 
-    let ec = world.resource::<EditCellState>();
-    assert_eq!(ec.selected, None, "tool 没激活 = 不动 selected");
+    let sel = world.resource::<CellSelection>();
+    assert!(sel.is_empty(), "tool 没激活 = 不动统一选区");
 }
 
 // -----------------------------------------------------------------------

@@ -55,7 +55,7 @@ pub use continent_dialog::{continent_dialog, continent_dialog_system, ContinentD
 pub use faction_divide_dialog::{faction_divide_dialog, FactionDivisionDialog};
 pub use faction_panel::panel_faction;
 pub use feature_place_dialog::{feature_place_dialog, FeaturePlaceDialog};
-pub use inspector::cell::{cell_form, CellPanelMode};
+pub use inspector::cell::cell_form;
 pub use inspector::panel_inspector;
 pub use intent_menu::intent_menu;
 pub use layers_panel::{panel_layers, panel_map_tree};

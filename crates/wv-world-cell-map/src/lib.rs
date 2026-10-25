@@ -23,8 +23,9 @@
 //!
 //! ## 模块
 //! - [`palette`]——冻结色包与常量（固定色的唯一取值点）。
-//! - [`state`]——CellMap 会话态（`EditCellState` / `GridConfig`，自 wv-render
-//!   迁入；wv-render 侧 re-export 保旧路径）。
+//! - [`state`]——CellMap 会话态（`EditCellState` / **`CellSelection` 统一选区，
+//!   ADR-0057** / `GridConfig`，自 wv-render 迁入；wv-render 侧 re-export
+//!   保旧路径）。
 //! - [`terrain_view`]——地形纹理合成（CPU 烘焙回退）+ GPU 场管线（field/）
 //!   + 网格线 / 等值线 / 大气 / 图集 / 群系固定色。
 //! - [`terrain_chunks`]——分块 + mip 链 + 视口拣选。

@@ -9,11 +9,13 @@
 //! - [`bresenham_cells`] —— **补间**（D3）：两帧采样点之间补齐中间的格，
 //!   保证「快速拖动不漏格」。
 //!
-//! ## 硬边单格（D5）
+//! ## 硬边圆盘（D5 后半句 + ADR-0057 D9 修正）
 //!
-//! 笔刷形态 = **1 格、硬边、无 falloff、无半径滑块**——不复用
-//! `wv_terrain::Brush` 的圆形软边。理由：地形编辑要的是「这格是森林 / 那格
-//! 是沼泽」的确切控制，软边会引入「边界那格到底算不算」的歧义。
+//! 笔刷形态 = **硬边圆盘、无 falloff、半径可调**（R ∈ 1–8 格，见
+//! [`MAX_STROKE_RADIUS`]）——不复用 `wv_terrain::Brush` 的圆形软边。理由：
+//! 地形编辑要的是「这格是森林 / 那格是沼泽」的确切控制，软边会引入
+//! 「边界那格到底算不算」的歧义。R = 1 时退化为单格笔触（与 ADR-0052
+//! 原状逐格一致）。
 //!
 //! ## 快照拒收（D3-E）
 //!
@@ -79,6 +81,37 @@ impl CellPaintValue {
     pub fn changes(&self, before: wv_core::terrain::TerrainCellData) -> bool {
         self.apply(before) != before
     }
+}
+
+/// **拖绘笔半径上限**（ADR-0057 D9）：`R ∈ 1..=8` 格。
+///
+/// 上限 8 的取法：R = 8 → 圆盘 ≤ 197 格／单采样点，Bresenham 补间后单笔仍
+/// 在千格量级（1 条 `BatchEditCellsCommand` 的合理区间）；再大会让「一笔」
+/// 的含义从「描边」滑向「刷整片」，撤销粒度也失去意义。
+pub const MAX_STROKE_RADIUS: u8 = 8;
+
+/// **落笔圆盘**（ADR-0057 D9 / 补记 4）：以 `center` 为圆心、**格心距严格
+/// 小于 `radius`** 的格集合。
+///
+/// 严格小于（不是 ≤）是补记 4 钉死的口径：`R = 1` 只含圆心 1 格
+/// （退化为 ADR-0052 的单格笔触，行为零变化）；`R = 2` 含正交 + 对角共 9 格。
+/// `radius = 0` 按 1 兜底（防御，不改变正常路径）。
+///
+/// 纯函数——A5 的测试锚。返回序为 (dy, dx) 行主序，跨帧稳定。
+pub fn disk_cells(center: (i32, i32), radius: u8) -> Vec<(i32, i32)> {
+    let r = radius.max(1) as i32;
+    // 格心距 < R ⇔ dx² + dy² < R²（整数精确比较，无浮点误差）。
+    let limit = r * r;
+    let (cx, cy) = center;
+    let mut out = Vec::with_capacity((2 * r + 1) as usize * (2 * r + 1) as usize);
+    for dy in -r..=r {
+        for dx in -r..=r {
+            if dx * dx + dy * dy < limit {
+                out.push((cx + dx, cy + dy));
+            }
+        }
+    }
+    out
 }
 
 /// **笔触态**（D3）——拖动期间累积的格集合。
@@ -235,12 +268,26 @@ pub fn interpolate_stroke_cells(
 ///
 /// - `wv-app::edit::cell_stroke` 写笔触（起笔 / 累积 / 提交 / 丢弃）；
 /// - `wv-render::cellmap_bridge::sync_cell_stroke` 读笔触（画待落色块）。
-#[derive(Debug, Default, Resource)]
+#[derive(Debug, Resource)]
 pub struct CellPaintSession {
     /// **落笔值**（D4）：拖绘时写进每一格的值（会话态，不落世界）。
     pub paint: CellPaintValue,
     /// **笔触态**（D3）：格集合 + 快照。
     pub stroke: CellStrokeState,
+    /// **拖绘笔半径**（ADR-0057 D9）：`1..=MAX_STROKE_RADIUS` 格。
+    /// 会话参数（面板滑条写），不落世界——半径是笔杆属性，不是地形数据。
+    pub radius: u8,
+}
+
+impl Default for CellPaintSession {
+    fn default() -> Self {
+        Self {
+            paint: CellPaintValue::default(),
+            stroke: CellStrokeState::default(),
+            // 默认 1 格 = ADR-0052 原状，行为零变化（D9）。
+            radius: 1,
+        }
+    }
 }
 
 impl CellPaintSession {
@@ -369,6 +416,54 @@ mod tests {
         s.begin();
         assert!(s.is_empty(), "起笔应清空上一笔残留");
         assert!(s.active);
+    }
+
+    // ── D9 · 落笔圆盘（ADR-0057）────────────────────────────────────
+
+    /// `R = 1` 退化为单格（与 ADR-0052 单格笔触逐格一致）。
+    #[test]
+    fn disk_radius_one_is_single_cell() {
+        assert_eq!(disk_cells((5, 7), 1), vec![(5, 7)], "R=1 只含圆心");
+        assert_eq!(disk_cells((5, 7), 0), vec![(5, 7)], "R=0 按 1 兜底");
+    }
+
+    /// `R = 2` 严格小于 2 → 正交 + 对角共 9 格（补记 4 钉死的口径）。
+    #[test]
+    fn disk_radius_two_contains_diagonals() {
+        let cells = disk_cells((0, 0), 2);
+        assert_eq!(cells.len(), 9, "R=2 应含 3×3 全部 9 格，实际 {cells:?}");
+        assert!(cells.contains(&(1, 1)), "对角格在内");
+        assert!(cells.contains(&(-1, -1)), "对角格在内");
+    }
+
+    /// 严格小于：`R = 3` 不含格心距恰为 3 的格（(3,0) / (0,-3)）。
+    #[test]
+    fn disk_excludes_cells_at_exact_radius_distance() {
+        let cells = disk_cells((0, 0), 3);
+        assert!(!cells.contains(&(3, 0)), "距 3 不在严格小于口径内");
+        assert!(!cells.contains(&(0, -3)), "距 3 不在严格小于口径内");
+        assert!(cells.contains(&(2, 2)), "距 2.83 < 3 应入选");
+        assert_eq!(cells.len(), 25, "R=3 圆盘应为 25 格，实际 {cells:?}");
+    }
+
+    /// 圆心偏移：所有格整体平移，格数不变。
+    #[test]
+    fn disk_is_translated_with_center() {
+        let a = disk_cells((10, 20), 2);
+        let b = disk_cells((0, 0), 2);
+        let mut shifted: Vec<(i32, i32)> = b.iter().map(|(x, y)| (x + 10, y + 20)).collect();
+        let mut a_sorted = a.clone();
+        shifted.sort();
+        a_sorted.sort();
+        assert_eq!(a_sorted, shifted, "平移不改变圆盘形状");
+    }
+
+    /// 上限半径不越界（只做形状自洽检查，不引性能断言）。
+    #[test]
+    fn disk_max_radius_is_bounded() {
+        let cells = disk_cells((0, 0), MAX_STROKE_RADIUS);
+        assert!(cells.len() < 4 * MAX_STROKE_RADIUS as usize * MAX_STROKE_RADIUS as usize);
+        assert!(cells.contains(&(0, 0)));
     }
 
     // ── D3-E · stale 复核 ───────────────────────────────────────────

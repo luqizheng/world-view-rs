@@ -423,11 +423,14 @@ fn current_unix_ms() -> u128 {
         .unwrap_or(0)
 }
 
-/// CellMap 候选点选（2026-10-22 内容矩阵 §2.6-4）：EditCell 点选的格落在
+/// CellMap 候选点选（2026-10-22 内容矩阵 §2.6-4）：单选区（1 格）落在
 /// **未命名候选**内且 Nature 开关开启 → 记为候选命名上下文（Inspector 出
 /// 命名表单）；落在候选外 → 清上下文。只读判定 + 写会话态，不经命令。
+///
+/// ADR-0057 D1：单格选中不是独立字段，而是「选区恰好 1 格」；多格选区没有
+/// 「这一格」，不出候选表单。
 pub fn pick_candidate_on_click(
-    edit_cell: Res<crate::state::EditCellState>,
+    sel: Res<crate::state::CellSelection>,
     view: Res<crate::state::ViewState>,
     playback: Res<crate::state::PlaybackState>,
     projection: Res<crate::state::WorldProjection>,
@@ -438,10 +441,10 @@ pub fn pick_candidate_on_click(
     if !view.nature_overlay || !matches!(view.mode, ViewMode::Topographic) {
         return;
     }
-    if !edit_cell.is_changed() || playback.playing {
+    if !sel.is_changed() || playback.playing {
         return;
     }
-    let Some((gx, gy)) = edit_cell.selected else {
+    let Some((gx, gy)) = sel.only_cell() else {
         return;
     };
     let Some(map) = drill.current() else {

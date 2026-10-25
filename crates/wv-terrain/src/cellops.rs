@@ -45,7 +45,8 @@ fn flood_match(criterion: FloodCriterion, cell: TerrainCell, seed: TerrainCell) 
 /// 让「一片森林」沿着对角线爬上另一片不相邻的草地。
 ///
 /// **不写世界**：只返回格集合。写不写、写成什么，由上层决定
-/// （[ADR-0052] D6-A：泛洪结果入 `region_cells`，用户确认后才应用）。
+/// （[ADR-0052] D6-A + [ADR-0057]：泛洪结果入统一选区 `CellSelection`，
+/// 无需预览确认）。
 ///
 /// **越界安全**：起点不在网格内 → 返回空集（不 panic）。
 pub fn flood_region(

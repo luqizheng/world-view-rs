@@ -1,16 +1,20 @@
-//! 单格编辑工具的选中高亮（[ADR-0040] §决策 4 · `PassId::CellSelection`）。
+//! 统一选区（`CellSelection`，ADR-0057）的高亮视觉件。
 //!
 //! ## 职责
-//! - `EditCellState.selected = Some((gx, gy))` 时，在该格上画
-//!   **1 格 outline + 半透底色**（金色 `ACCENT_SELECT`，底色 alpha 0.2）。
-//! - `RenderRecipe.enabled(PassId::CellSelection)` 是总闸（[ADR-0021] 模式轴）；
-//!   会话轴由 `EditCellState.selected` 承载——两者合取，任一不满足即 despawn。
+//! - **面**：选中格的金色半透填充（脉动），合并 mesh（[`CellRegionEntities`]）。
+//! - **形**：选区外围边界的白色虚线**蚂蚁线**（[`CellAntsEntities`] +
+//!   [`build_ants_meshes`]，两相位 mesh 计时互换，ADR-0057 D8）。
+//! - **hover 准星**：[`CellHoverEntities`]（瞬时态，双色描边 + 十字）。
 //!
 //! ## 边界（不做什么）
-//! - **不吃输入**——selected 由 `wv-app::edit::commit_edit_cell_on_click` 写入；
-//!   本模块只画（与 [`crate::brush_cursor`] 同款分工）。
-//! - **不画 hover**——hover 由本模块的 [`CellHoverEntities`] 单独承载
-//!   （[ADR-0052] §9.5 四态视觉分工：hover 与 selected 是两套实体）。
+//! - **不吃输入**——选区由 wv-app 的选择工具（S/R/V/W）写入
+//!   `CellSelection`；本模块只画。
+//! - **不做世界写入**——纯渲染产物。
+//!
+//! ## 退役（ADR-0057）
+//! - `CellSelectionEntities`（单格金框 outline）——单格 = 1 格选区，由
+//!   蚂蚁线 + 填充统一覆盖；
+//! - `CellRegionEntities` 的外包矩形四边——由蚂蚁线取代（D8）。
 //!
 //! ## 几何
 //! 格 `(gx, gy)` 的世界矩形 = `raster_origin + (gx·cs, gy·cs)` 起、
@@ -18,20 +22,17 @@
 //! 保证「光标压的格」与「高亮的格」逐格一致）。
 //!
 //! ## 主要导出
-//! - `sync_cell_selection` — 每帧同步 5 个 mesh 实体（填充 + 4 条边）。
-//! - `cell_world_rect` — 格 → (中心, 尺寸) 纯函数（测试锚）。
+//! - `build_region_fill_mesh` / `build_ants_meshes` — mesh 构建纯函数（测试锚）。
+//! - `cell_world_rect` — 格 → (中心, 尺寸) 纯函数。
 
 use bevy::prelude::*;
 
-use crate::state::GridConfig;
+use crate::state::{dash_segments, BoundaryEdge, DashPhase, EdgeOrientation, GridConfig};
 
 /// Z 偏移：与笔刷光标同层（顶层会话带，[MAP_LAYER_RENDERING_SPEC §7]）。
+/// ADR-0057 后作为选区填充 / 蚂蚁线的 Z 序锚点（填充 ≈ 0.899，蚂蚁线
+/// [`ANTS_Z`] 在其上、hover [`HOVER_Z`] 最顶）。
 pub const SELECTION_Z: f32 = 0.9;
-/// outline 屏幕像素厚度（与 [`crate::brush_cursor::STROKE_PX`] 同档：2px
-/// 在 MSAA4 下不被采样稀释）。世界厚度 = `THICKNESS_PX × view.scale`。
-pub const THICKNESS_PX: f32 = 2.0;
-/// 半透底色 alpha（[ADR-0040] §决策 4 默认值）。
-pub const FILL_ALPHA: f32 = 0.2;
 
 // ---------------------------------------------------------------------------
 // hover 高亮（[ADR-0052] D2 / §9.5 四态视觉分工）
@@ -125,74 +126,6 @@ impl CellHoverEntities {
         .flatten()
         {
             meshes.remove(&h);
-        }
-        self.last_size = Vec2::ZERO;
-    }
-}
-
-/// 选中格的 mesh 实体集合（复用：稳态 5 实体 = 填充 + 4 边）。
-///
-/// **资产句柄一并缓存**（2026-10-20 实机卡顿修）：本模块初版每帧
-/// `meshes.add()` + `materials.add()` 新建资产再 `insert` 替换——旧句柄
-/// 永不回收，`Assets` 无限堆积 + 每帧 GPU 重传，选中一片就明显变卡。
-/// 现在 mesh/material **只建一次**，之后只改 Transform（位置）与材质
-/// alpha（脉动）。
-#[derive(Resource, Default)]
-pub struct CellSelectionEntities {
-    /// 半透填充块。
-    pub fill: Option<Entity>,
-    /// 四条边（下 / 上 / 左 / 右）。
-    pub edges: [Option<Entity>; 4],
-    /// 填充 mesh 句柄（复用）。
-    pub fill_mesh: Option<Handle<Mesh>>,
-    /// 填充材质句柄（复用；alpha 每帧改）。
-    pub fill_material: Option<Handle<ColorMaterial>>,
-    /// 四条边的 mesh 句柄（复用）。
-    pub edge_meshes: [Option<Handle<Mesh>>; 4],
-    /// 四条边的材质句柄（复用）。
-    pub edge_materials: [Option<Handle<ColorMaterial>>; 4],
-    /// 上次构建时的格尺寸（世界单位）——变了才重建 mesh。
-    pub last_size: Vec2,
-}
-
-impl CellSelectionEntities {
-    /// 全部 despawn + 清空（gate 不满足时调用）。
-    ///
-    /// **资产句柄保留**：下次重建时 `meshes.remove()` 旧的即可——句柄本身
-    /// 在 `Assets` 里，实体 despawn 不会连带回收，所以要显式 remove。
-    pub fn despawn_all(&mut self, commands: &mut Commands) {
-        if let Some(e) = self.fill.take() {
-            commands.entity(e).despawn();
-        }
-        for slot in &mut self.edges {
-            if let Some(e) = slot.take() {
-                commands.entity(e).despawn();
-            }
-        }
-    }
-
-    /// 释放已缓存的 mesh 资产（实体消失后调用，避免 `Assets` 堆积）。
-    ///
-    /// **必须一并复位 `last_size`**（2026-10-24 真机崩溃修复）：
-    /// `sync_cell_selection` 用 `last_size != size` 判断「要不要重建 mesh」。
-    /// 只 release 不复位的话，下次选中**同尺寸**的格会跳过重建 → `fill_mesh`
-    /// 仍是 `None` → 调用点的 `.expect("尺寸已定,mesh 已建")` 直接 panic。
-    ///
-    /// 触发序列（真实用户路径，一次就中）：
-    /// 点第 1 格（建 mesh，last_size = size）→ 点第 2 格时中间经过一帧
-    /// gate 失败（`PointerOverUi` / `recipe` 关 / `cursor_world` 为 None）
-    /// → release（mesh 没了，last_size 还在）→ 第 3 次点击 → panic。
-    ///
-    /// `CellHoverEntities::release_assets` 一直是这么写的；本结构漏了这一步，
-    /// 与「`EditorOverlayPlugin` 从未装配」同源——代码从未真机跑过。
-    pub fn release_assets(&mut self, meshes: &mut Assets<Mesh>) {
-        if let Some(h) = self.fill_mesh.take() {
-            meshes.remove(&h);
-        }
-        for slot in &mut self.edge_meshes {
-            if let Some(h) = slot.take() {
-                meshes.remove(&h);
-            }
         }
         self.last_size = Vec2::ZERO;
     }
@@ -349,7 +282,8 @@ pub fn rasterize_polygon_cells(
     cells
 }
 
-/// 区域选区的 batch 高亮实体（复用：稳态 1 填充 mesh + 4 条包边 mesh）。
+/// 统一选区的**面**高亮实体（ADR-0057 D8：稳态 1 填充 mesh；外包矩形四边
+/// 已退役，边界视觉 = 蚂蚁线 [`CellAntsEntities`]）。
 ///
 /// **资产句柄一并缓存**（2026-10-20 实机卡顿修）：本模块初版每帧
 /// `meshes.add()` + `materials.add()` 新建资产再 `insert` 替换——旧句柄
@@ -359,16 +293,10 @@ pub fn rasterize_polygon_cells(
 pub struct CellRegionEntities {
     /// 半透金色填充（所有选中格合成一个 mesh）。
     pub fill: Option<Entity>,
-    /// 外包矩形 4 条边（下/上/左/右，屏幕恒定 2px 世界厚度）。
-    pub edges: [Option<Entity>; 4],
     /// 填充 mesh 句柄（复用）。
     pub fill_mesh: Option<Handle<Mesh>>,
     /// 填充材质句柄（复用；alpha 每帧改）。
     pub fill_material: Option<Handle<ColorMaterial>>,
-    /// 四条边的 mesh 句柄（复用）。
-    pub edge_meshes: [Option<Handle<Mesh>>; 4],
-    /// 四条边的材质句柄（复用）。
-    pub edge_materials: [Option<Handle<ColorMaterial>>; 4],
     /// 上次构建时的格集合指纹——变了才重建 mesh。
     pub last_fingerprint: u64,
 }
@@ -378,22 +306,12 @@ impl CellRegionEntities {
         if let Some(e) = self.fill.take() {
             commands.entity(e).despawn();
         }
-        for slot in &mut self.edges {
-            if let Some(e) = slot.take() {
-                commands.entity(e).despawn();
-            }
-        }
     }
 
     /// 释放已缓存的 mesh 资产（`Assets` 不会随实体 despawn 回收）。
     pub fn release_assets(&mut self, meshes: &mut Assets<Mesh>) {
         if let Some(h) = self.fill_mesh.take() {
             meshes.remove(&h);
-        }
-        for slot in &mut self.edge_meshes {
-            if let Some(h) = slot.take() {
-                meshes.remove(&h);
-            }
         }
         self.last_fingerprint = 0;
     }
@@ -409,6 +327,189 @@ pub fn cells_fingerprint(cells: &[(i32, i32)]) -> u64 {
         }
     }
     h
+}
+
+// ---------------------------------------------------------------------------
+// 蚂蚁线（[ADR-0057] D8：统一选区的边界视觉，两相位互换）
+// ---------------------------------------------------------------------------
+
+/// 虚线节距（屏幕像素）——实段 + 空段各半个周期，段长 = 节距。
+pub const ANTS_PITCH_PX: f32 = 6.0;
+/// 蚂蚁线线宽（屏幕像素；世界厚度 = `ANTS_THICKNESS_PX × view.scale`——
+/// 屏幕像素恒定策略 A，与笔刷光标同口径）。
+pub const ANTS_THICKNESS_PX: f32 = 2.0;
+/// 相位翻转周期（秒）——用户裁定 ≈0.3 s 整组互换。
+pub const ANTS_FLIP_SECS: f32 = 0.3;
+/// 蚂蚁线 Z：在选区填充（`SELECTION_Z` = 0.9）之上、hover（0.95）之下。
+pub const ANTS_Z: f32 = 0.903;
+
+/// **蚂蚁线相位钟**：计时到点整组翻转（相位 A/B 互换可见性）。
+///
+/// 纯数据 + 纯函数，不碰 ECS——翻转动作（切 `Visibility`）由桥接系统执行。
+/// 「选区不变时每帧零重建」的另一半（重建键）在 [`CellAntsEntities`]。
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+pub struct AntsPhaseClock {
+    /// 距上次翻转累计的秒数。
+    elapsed: f32,
+    /// 当前可见的是否相位 A（true = A 实段可见 / B 隐藏）。
+    show_a: bool,
+}
+
+impl Default for AntsPhaseClock {
+    fn default() -> Self {
+        Self {
+            elapsed: 0.0,
+            show_a: true,
+        }
+    }
+}
+
+impl AntsPhaseClock {
+    /// 推进计时；到点翻转相位并返回 `true`（调用方据此切实体可见性）。
+    ///
+    /// 一次调用可能跨过多个周期（卡顿后 dt 很大）——按周期数取奇偶，
+    /// 保证长时间挂起后相位仍确定，不错乱。
+    pub fn tick(&mut self, dt: f32) -> bool {
+        self.elapsed += dt.max(0.0);
+        if self.elapsed < ANTS_FLIP_SECS {
+            return false;
+        }
+        let periods = (self.elapsed / ANTS_FLIP_SECS).floor() as u64;
+        self.elapsed -= periods as f32 * ANTS_FLIP_SECS;
+        if periods % 2 == 1 {
+            self.show_a = !self.show_a;
+        }
+        true
+    }
+
+    /// 当前应可见的相位。
+    pub fn visible_phase(&self) -> DashPhase {
+        if self.show_a {
+            DashPhase::A
+        } else {
+            DashPhase::B
+        }
+    }
+}
+
+/// 蚂蚁线的实体集合（两套 mesh 相位 + 共用白材质）。
+///
+/// **重建键 = (选区指纹, 缩放档)**：选区内容变（指纹）或相机越过缩放档
+/// （屏幕恒定节距/线宽按档心烘焙）才重建；其余帧零成本，只有
+/// [`AntsPhaseClock`] 翻转可见性。
+#[derive(Resource, Default)]
+pub struct CellAntsEntities {
+    /// 相位 A mesh 实体。
+    pub phase_a: Option<Entity>,
+    /// 相位 B mesh 实体。
+    pub phase_b: Option<Entity>,
+    /// 相位 A mesh 句柄。
+    pub mesh_a: Option<Handle<Mesh>>,
+    /// 相位 B mesh 句柄。
+    pub mesh_b: Option<Handle<Mesh>>,
+    /// 白色材质句柄（两相位共用；蚂蚁线 = 白虚线，ADR-0057 D8）。
+    pub material: Option<Handle<ColorMaterial>>,
+    /// 上次重建的键（选区指纹, 缩放档）。
+    pub last_key: Option<(u64, i16)>,
+    /// 相位钟。
+    pub clock: AntsPhaseClock,
+}
+
+impl CellAntsEntities {
+    /// 全部 despawn（gate 不满足时调用）。
+    pub fn despawn_all(&mut self, commands: &mut Commands) {
+        for slot in [&mut self.phase_a, &mut self.phase_b] {
+            if let Some(e) = slot.take() {
+                commands.entity(e).despawn();
+            }
+        }
+    }
+
+    /// 释放已缓存的 mesh 资产，并**复位重建键**（否则「同键重来」会跳过
+    /// 重建而句柄已空——2026-10-24 `CellSelectionEntities::release_assets`
+    /// 同款教训）。
+    pub fn release_assets(&mut self, meshes: &mut Assets<Mesh>) {
+        for h in [self.mesh_a.take(), self.mesh_b.take()]
+            .into_iter()
+            .flatten()
+        {
+            meshes.remove(&h);
+        }
+        self.last_key = None;
+    }
+}
+
+/// 由边界边集合构建**两相位蚂蚁线 mesh**（相位 A 实段一 mesh、相位 B 一 mesh）。
+///
+/// - 输入边为格坐标（[`crate::state::CellSelection::boundary_edges`] 产出）；
+///   顶点直接烘成**世界坐标**（`raster_origin + 格坐标·cs`），实体 Transform
+///   只抬 Z。
+/// - 每条边独立按 `pitch_world` 切段（[`dash_segments`]），段索引奇偶分相位——
+///   A/B 互补由构造保证，无需全局相位对齐。
+/// - `thickness_world` 为线宽（沿边的法向两侧各半）。
+///
+/// 空边集 / 非正节距 / 非正线宽 → `None`（调用方整条视觉链退场）。
+pub fn build_ants_meshes(
+    edges: &[BoundaryEdge],
+    grid: &GridConfig,
+    pitch_world: f32,
+    thickness_world: f32,
+) -> Option<(Mesh, Mesh)> {
+    if edges.is_empty() || pitch_world <= 0.0 || thickness_world <= 0.0 {
+        return None;
+    }
+    let cs = grid.cell_size;
+    if cs <= 0.0 {
+        return None;
+    }
+    let o = grid.raster_origin;
+    let half_t = thickness_world * 0.5;
+    let mut pos_a: Vec<[f32; 3]> = Vec::new();
+    let mut idx_a: Vec<u32> = Vec::new();
+    let mut pos_b: Vec<[f32; 3]> = Vec::new();
+    let mut idx_b: Vec<u32> = Vec::new();
+    for e in edges {
+        // 边起点（世界）与走向单位向量；格边世界长度恒 = cs。
+        let (start, dir) = match e.orientation {
+            EdgeOrientation::Horizontal => {
+                (o + Vec2::new(e.gx as f32 * cs, e.gy as f32 * cs), Vec2::X)
+            }
+            EdgeOrientation::Vertical => {
+                (o + Vec2::new(e.gx as f32 * cs, e.gy as f32 * cs), Vec2::Y)
+            }
+        };
+        // 法向（左法线）× 半线宽——实段 quad 沿边两侧各让半宽。
+        let normal = Vec2::new(-dir.y, dir.x) * half_t;
+        for (seg_i, (s0, s1)) in dash_segments(cs, pitch_world).into_iter().enumerate() {
+            let (positions, indices) = if DashPhase::A.is_solid(seg_i) {
+                (&mut pos_a, &mut idx_a)
+            } else {
+                (&mut pos_b, &mut idx_b)
+            };
+            let p0 = start + dir * s0;
+            let p1 = start + dir * s1;
+            let base = positions.len() as u32;
+            positions.push([p0.x + normal.x, p0.y + normal.y, 0.0]);
+            positions.push([p1.x + normal.x, p1.y + normal.y, 0.0]);
+            positions.push([p1.x - normal.x, p1.y - normal.y, 0.0]);
+            positions.push([p0.x - normal.x, p0.y - normal.y, 0.0]);
+            indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+    }
+    if pos_a.is_empty() && pos_b.is_empty() {
+        return None;
+    }
+    let build = |positions: Vec<[f32; 3]>, indices: Vec<u32>| {
+        let mut mesh = Mesh::new(
+            bevy::render::render_resource::PrimitiveTopology::TriangleList,
+            bevy::asset::RenderAssetUsages::RENDER_WORLD
+                | bevy::asset::RenderAssetUsages::MAIN_WORLD,
+        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+        mesh.insert_indices(bevy::render::mesh::Indices::U32(indices));
+        mesh
+    };
+    Some((build(pos_a, idx_a), build(pos_b, idx_b)))
 }
 
 /// 由格集合构建**合并四边形 mesh**（单个 Mesh，N 格 = 4N 顶点）。
@@ -577,36 +678,9 @@ mod tests {
         assert_eq!(bbox, Vec2::new(30.0, 30.0));
     }
 
-    // ── release_assets 必复位 last_size（2026-10-24 真机 panic 回归）──────
+    // ── release_assets 必复位重建键（2026-10-24 真机 panic 回归同款教训）──────
 
-    /// **`release_assets` 不复位 `last_size` 会让「同尺寸重选」直接 panic。**
-    ///
-    /// 复现序列（用户点三下就崩的真实路径）：
-    /// 1. 选中格 A → 渲染侧建 mesh，`last_size = size`；
-    /// 2. 中间一帧 gate 失败（`PointerOverUi` / `recipe` 关）→ release；
-    /// 3. 再选中**同尺寸**的格 B → `last_size == size` → 跳过重建 →
-    ///    `fill_mesh` 仍是 `None` → 调用点 `.expect()` panic。
-    ///
-    /// 本测试守住第 2 步的复位动作：release 之后 `last_size` 必须回到
-    /// `Vec2::ZERO`，这样第 3 步必然触发重建。`CellHoverEntities` 一直是
-    /// 这么写的，`CellSelectionEntities` 曾漏掉。
-    #[test]
-    fn release_assets_resets_last_size() {
-        let mut e = CellSelectionEntities {
-            last_size: Vec2::splat(8.0),
-            ..Default::default()
-        };
-        let mut meshes = Assets::<Mesh>::default();
-        e.release_assets(&mut meshes);
-        assert_eq!(
-            e.last_size,
-            Vec2::ZERO,
-            "release_assets 必须复位 last_size，否则同尺寸重选会跳过重建"
-        );
-        assert!(e.fill_mesh.is_none(), "句柄应已释放");
-    }
-
-    /// 对照：`CellHoverEntities` 同款不变式（防止将来被「优化」掉）。
+    /// 对照：`CellHoverEntities` 的不变式（防止将来被「优化」掉）。
     #[test]
     fn hover_release_assets_also_resets_last_size() {
         let mut e = CellHoverEntities {
@@ -616,5 +690,118 @@ mod tests {
         let mut meshes = Assets::<Mesh>::default();
         e.release_assets(&mut meshes);
         assert_eq!(e.last_size, Vec2::ZERO);
+    }
+
+    /// **`CellAntsEntities::release_assets` 必须复位 `last_key`**——
+    /// 否则「同选区同缩放档重来」会跳过重建而 mesh 句柄已空（2026-10-24
+    /// `CellSelectionEntities` 同款 panic 的教训迁移）。
+    #[test]
+    fn ants_release_assets_resets_rebuild_key() {
+        let mut e = CellAntsEntities {
+            last_key: Some((42, 3)),
+            ..Default::default()
+        };
+        let mut meshes = Assets::<Mesh>::default();
+        e.release_assets(&mut meshes);
+        assert_eq!(e.last_key, None, "release 必须复位重建键");
+        assert!(e.mesh_a.is_none() && e.mesh_b.is_none(), "句柄应已释放");
+    }
+
+    // ── 蚂蚁线 mesh 构建（ADR-0057 D8 / A3）──────────────────────────
+
+    /// 单格 4 条边 → 两相位 mesh 都非空；**A 实段 + B 实段 = 全部段**
+    /// （quad 数互补），且两 mesh 顶点不相等（几何上确实分家了）。
+    #[test]
+    fn ants_meshes_split_segments_complementarily() {
+        let g = grid(10.0, 0.0, 0.0);
+        let edges = [
+            BoundaryEdge {
+                orientation: EdgeOrientation::Horizontal,
+                gx: 0,
+                gy: 0,
+            },
+            BoundaryEdge {
+                orientation: EdgeOrientation::Horizontal,
+                gx: 0,
+                gy: 1,
+            },
+            BoundaryEdge {
+                orientation: EdgeOrientation::Vertical,
+                gx: 0,
+                gy: 0,
+            },
+            BoundaryEdge {
+                orientation: EdgeOrientation::Vertical,
+                gx: 1,
+                gy: 0,
+            },
+        ];
+        // pitch 2.5：cs=10 → 4 段/边（偶奇偶奇），A 2 段、B 2 段 × 4 边。
+        let (ma, mb) = build_ants_meshes(&edges, &g, 2.5, 0.4).expect("非空");
+        let qa = ma.count_vertices() / 4;
+        let qb = mb.count_vertices() / 4;
+        assert_eq!(qa, 8, "A 应得 8 个实段 quad，got {qa}");
+        assert_eq!(qb, 8, "B 应得 8 个实段 quad，got {qb}");
+        assert_eq!(qa + qb, 16, "A+B = 全部段（4 边 × 4 段）");
+    }
+
+    /// 段长不收在节距上时，末段截短——几何仍覆盖整条边（周长守恒抽样：
+    /// A/B 实段长度之和 = 边长 × 边数）。
+    #[test]
+    fn ants_segments_cover_full_edge_length() {
+        let g = grid(10.0, 0.0, 0.0);
+        let edges = [BoundaryEdge {
+            orientation: EdgeOrientation::Horizontal,
+            gx: 0,
+            gy: 0,
+        }];
+        // pitch 3：10/3 → 4 段，[0,3) [3,6) [6,9) [9,10)。
+        let (ma, mb) = build_ants_meshes(&edges, &g, 3.0, 0.4).expect("非空");
+        let len_of = |m: &Mesh| -> f32 {
+            let pos = match m.attribute(Mesh::ATTRIBUTE_POSITION).unwrap() {
+                bevy::render::mesh::VertexAttributeValues::Float32x3(v) => v,
+                other => panic!("unexpected vertex format: {other:?}"),
+            };
+            // 每个 quad 的第 0、1 顶点沿边方向——x 差即段长。
+            pos.chunks_exact(4).map(|q| q[1][0] - q[0][0]).sum()
+        };
+        let total = len_of(&ma) + len_of(&mb);
+        assert!(
+            (total - 10.0).abs() < 1e-4,
+            "实段总长应 = 边长 10，got {total}"
+        );
+    }
+
+    /// 退化输入（空边 / 非正节距 / 非正线宽 / cs=0）→ None，不 panic。
+    #[test]
+    fn ants_meshes_reject_degenerate_input() {
+        let g = grid(10.0, 0.0, 0.0);
+        let edges = [BoundaryEdge {
+            orientation: EdgeOrientation::Horizontal,
+            gx: 0,
+            gy: 0,
+        }];
+        assert!(build_ants_meshes(&[], &g, 2.5, 0.4).is_none());
+        assert!(build_ants_meshes(&edges, &g, 0.0, 0.4).is_none());
+        assert!(build_ants_meshes(&edges, &g, 2.5, 0.0).is_none());
+        let g0 = grid(0.0, 0.0, 0.0);
+        assert!(build_ants_meshes(&edges, &g0, 2.5, 0.4).is_none());
+    }
+
+    /// **A3 · 相位钟**：到点整组翻转；跨多周期按奇偶落定；负 dt 防御。
+    #[test]
+    fn ants_clock_flips_on_period_and_handles_long_frames() {
+        let mut c = AntsPhaseClock::default();
+        assert_eq!(c.visible_phase(), DashPhase::A, "初始相位 A");
+        assert!(!c.tick(ANTS_FLIP_SECS - 0.01), "未到点不翻");
+        assert!(c.tick(0.02), "到点翻转");
+        assert_eq!(c.visible_phase(), DashPhase::B);
+        // 一次跨 3 个周期（卡顿）：3 是奇数 → 再翻一次回 A。
+        assert!(c.tick(ANTS_FLIP_SECS * 3.0));
+        assert_eq!(c.visible_phase(), DashPhase::A, "奇数周期 → 净翻一次");
+        // 跨 2 个周期：偶数 → 相位不变（但仍算到点，调用方重挂可见性）。
+        assert!(c.tick(ANTS_FLIP_SECS * 2.0));
+        assert_eq!(c.visible_phase(), DashPhase::A, "偶数周期 → 相位不变");
+        assert!(!c.tick(-1.0), "负 dt 不得翻转");
     }
 }

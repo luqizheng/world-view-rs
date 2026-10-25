@@ -2,6 +2,7 @@
 
 use super::terrain::terrain_diff_bbox;
 use super::*;
+use wv_render::state::CellSelection;
 
 /// 一键应用区域地形意图（选择工具 spec §4 D10：无弹窗、一意图一事务）。
 ///
@@ -186,57 +187,109 @@ pub(super) fn polygon_fingerprint(poly: &[(f32, f32)]) -> u64 {
     h
 }
 
-/// 多边形选区 → 方格集合同步（2026-10-20 批量编辑）。
+/// 套索活链接（ADR-0057 补记 5 B 方案）：套索**闭合那刻**快照基座选区与
+/// 修饰键 op，拖锚调形期间每帧 `CellSelection` = 基座 ∪/− 当前多边形格集。
 ///
-/// `SelectionState.closed`（V 工具闭合的多边形，世界坐标）变化时重栅格化
-/// （cell 中心落入即选中，[`wv_render::cell_selection::rasterize_polygon_cells`]），
-/// 写入 `EditCellState.region_cells`——区域高亮渲染与批量应用（面板）都读它。
-/// 闭合取消 / 切图 → 清空。
+/// 断开时机：任何新选择动作（点选 / 泛洪，各自调用 [`Self::deactivate`]）、
+/// 闭合消失（取消 / 切图 / 新手势把 `SelectionState.closed` 置回 `None`）。
+/// 断开**不回滚**——最后一帧的结果钉在 `CellSelection` 里。
+#[derive(Resource, Default)]
+pub struct LassoLiveLink {
+    /// 闭合快照基座（无修饰 = 空集 = 纯替换语义）。**整个拖锚期间冻结**——
+    /// 每帧重写都从这个固定快照出发，否则差集口径下「拖过再拖走」无法恢复。
+    base: Vec<(i32, i32)>,
+    /// 闭合时的修饰键：Alt = 差集，其余（含无修饰、Shift）= 并集
+    /// （无修饰时 base 为空，并集即替换）。
+    subtract: bool,
+    /// 活链接是否挂着（闭合后 true；断开后 false）。
+    active: bool,
+    /// 闭合时绑定的图（`SelectionState.on_map_change` 会清 closed，此处仅兜底）。
+    map: Option<wv_core::Id>,
+    /// 上次已栅格化的多边形指纹（拖锚没变就跳过 O(bbox×边数) 重算）。
+    last_fingerprint: u64,
+}
+
+impl LassoLiveLink {
+    /// 断开活链接（新选择动作 / 取消 / 切工具）——结果已钉在选区里。
+    pub fn deactivate(&mut self) {
+        self.active = false;
+        self.last_fingerprint = 0;
+    }
+}
+
+/// 多边形选区 → 统一选区同步（ADR-0057 活链接 B：基座快照 + 拖锚实时调形）。
+///
+/// `SelectionState.closed`（V 工具闭合的多边形，图内局部坐标）闭合沿快照
+/// 基座（Shift/Alt = 当前选区，无修饰 = 空）与 op；之后每帧把
+/// `CellSelection` 重写为「基座 ∪/− 当前多边形格集」（格心落入即选中，
+/// [`wv_render::cell_selection::rasterize_polygon_cells`]）。闭合消失 =
+/// 断开活链接，结果钉住不回滚。
 pub fn sync_region_cells(
     selection: Res<crate::state::SelectionState>,
     grid: Res<GridConfig>,
     drill: Res<DrillState>,
     projection: Res<WorldProjection>,
-    mut edit_cell: ResMut<EditCellState>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut sel: ResMut<CellSelection>,
+    mut link: ResMut<LassoLiveLink>,
 ) {
     use wv_render::cell_selection::rasterize_polygon_cells;
     let Some(poly) = selection.closed.as_ref() else {
-        if !edit_cell.region_cells.is_empty() {
-            edit_cell.region_cells.clear();
-        }
+        // 闭合消失 = 断开活链接；结果已逐帧钉在 CellSelection 里，不回滚。
+        link.deactivate();
         return;
     };
-    // 来源图地形（无地形 = 无可贴合方格，清空）。
+    // 来源图地形（无地形 = 无可贴合方格，不动选区）。
     let Some(target_map) = drill.current() else {
-        edit_cell.region_cells.clear();
         return;
     };
     let Some(terrain) = projection.world.terrain_of(target_map) else {
-        edit_cell.region_cells.clear();
         return;
     };
-    // 变化检测：多边形点数 + 首点 + 栅格口径没变就跳过（避免每帧 O(N) 重算）。
-    // 粗指纹够用——锚点拖动必然改首点或点数以外的坐标，此处选择每次
-    // closed 存在就重算：8×8~512² 栅格 bbox 扫描 <1ms，拖锚帧率可承受。
-    // 选区锚点存的是**本图局部坐标**（selection::commit_selection_click:
+    // 惰性定容（同图同尺寸 = 不动；切图由 bind_map 清空）。
+    sel.bind_map(target_map, terrain.width, terrain.height);
+    // 切图兜底：活链接绑的是另一张图 → 断开（`SelectionState.on_map_change`
+    // 正常会先把 closed 清掉而走上面分支，这里是双保险）。
+    if link.active && link.map.as_ref() != Some(target_map) {
+        link.deactivate();
+    }
+
+    // 闭合沿（非激活 → 激活）：快照基座 + 修饰键 op。
+    if !link.active {
+        let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+        let alt = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
+        link.base = if shift || alt {
+            sel.iter_cells().collect()
+        } else {
+            Vec::new() // 无修饰 = 替换（基座为空）
+        };
+        link.subtract = alt;
+        link.map = Some(target_map.clone());
+        link.active = true;
+        link.last_fingerprint = 0;
+    }
+
+    // 多边形指纹：没变就跳过重栅格化（大选区每帧 O(bbox×边数) 重算会明显吃帧）。
+    let fingerprint = polygon_fingerprint(poly);
+    if fingerprint != 0 && fingerprint == link.last_fingerprint {
+        return;
+    }
+    // 选区锚点存的是**本图局部坐标**（`selection::commit_selection_click`：
     // `local = cursor_world − map_origin`）——栅格化必须补上同一个
     // `map_origin` 才落在同一套坐标系（2026-10-20 实机：三角形只圈住
     // 一个小岛，却选出 21974 格——差的正是这个原点偏移）。
-    // 多边形指纹：没变就跳过重栅格化（2026-10-20 性能修——大选区每帧
-    // O(bbox×边数) 重算会明显吃帧）。
-    let fingerprint = polygon_fingerprint(poly);
-    if fingerprint != 0
-        && fingerprint == edit_cell.region_fingerprint
-        && !edit_cell.region_cells.is_empty()
-    {
-        return;
-    }
     let origin = match drill.current_node(&projection.world) {
         Some(node) => wv_render::drill::map_origin(&projection.world, node, &grid),
         None => grid.raster_origin,
     };
-    edit_cell.region_cells =
-        rasterize_polygon_cells(poly, origin, &grid, terrain.width, terrain.height);
-    edit_cell.region_fingerprint = fingerprint;
-    edit_cell.last_map_id = Some(target_map.clone());
+    let cells = rasterize_polygon_cells(poly, origin, &grid, terrain.width, terrain.height);
+    // 每帧口径：选区 = 基座 ∪/− 当前多边形格集（基座冻结，见结构体文档）。
+    if link.subtract {
+        let minus: std::collections::BTreeSet<(i32, i32)> = cells.iter().copied().collect();
+        sel.replace(link.base.iter().copied().filter(|c| !minus.contains(c)));
+    } else {
+        sel.replace(link.base.iter().copied());
+        sel.union(cells);
+    }
+    link.last_fingerprint = fingerprint;
 }

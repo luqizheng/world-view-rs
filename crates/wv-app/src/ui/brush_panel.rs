@@ -68,11 +68,11 @@ pub fn panel_brush(
     ),
     (mut notice, time, current_loc): (ResMut<ShellNotice>, Res<Time>, Res<CurrentLocale>),
     // ── CellMap 编辑段（2026-10-24 自 Inspector 迁入）──
-    (mut edit_cell, mut selection, mut cell_mode, mut batch_land): (
+    // 第三个是统一选区（ADR-0057：Cell 表单的唯一编辑对象，可写——批量区
+    // 「取消」按钮 = 清空选区）。
+    (mut edit_cell, mut cell_sel): (
         ResMut<wv_render::state::EditCellState>,
-        ResMut<wv_render::state::SelectionState>,
-        ResMut<crate::ui::inspector::cell::CellPanelMode>,
-        ResMut<crate::ui::inspector::cell::BatchModeAutoLand>,
+        ResMut<wv_render::state::CellSelection>,
     ),
     mut paint_session: ResMut<wv_world_cell_map::cell_paint::CellPaintSession>,
     mut flood_select: ResMut<crate::state::FloodSelectState>,
@@ -419,24 +419,16 @@ pub fn panel_brush(
             // CellMap 的读数条 / 落笔值 / 泛洪判据 / 派生运算 / 单格与批量
             // 表单全部挪到这里；Inspector 回归通用属性检查。
             //
-            // **显示判据**（与旧 Inspector 的 `cell_form_active` 同口径）：
-            // EditCell / CellSelect 工具激活，或 Topographic 档下圈了选区
-            // （圈选必切 V 工具，批量应用入口必须仍然可见）。
+            // **显示判据**（ADR-0057 D6 收口口径）：EditCell 工具激活，或
+            // Topographic 档下**选区非空**（圈选必切 V 工具，批量应用入口
+            // 必须仍然可见）。
             // 非编辑态（普通笔刷模式）整段不渲染——笔刷窗保持原貌。
             let cell_seg_active = edit_cell.tool_active
-                || (view.mode == wv_render::state::ViewMode::Topographic
-                    && !edit_cell.region_cells.is_empty());
+                || (view.mode == wv_render::state::ViewMode::Topographic && !cell_sel.is_empty());
             if cell_seg_active {
                 ui.add_space(space::SM);
                 ui.separator();
                 ui.add_space(space::XS);
-
-                // 圈完自动落「批量」（边沿触发，随迁自 Inspector）。
-                let has_region = !edit_cell.region_cells.is_empty();
-                if has_region && !batch_land.had_region {
-                    *cell_mode = crate::ui::inspector::cell::CellPanelMode::Batch;
-                }
-                batch_land.had_region = has_region;
 
                 crate::ui::inspector::cell::cell_form(
                     ui,
@@ -444,14 +436,14 @@ pub fn panel_brush(
                     &mut projection,
                     &mut edit_cell,
                     &mut edit,
-                    &mut selection,
                     &mut tex,
                     current_loc.0,
-                    &mut cell_mode,
                     &mut paint_session,
                     &mut flood_select,
                     &mut derived,
                     playback.playing,
+                    &mut cell_sel,
+                    drill.current(),
                 );
             }
         },

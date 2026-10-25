@@ -23,14 +23,15 @@ pub fn map_controls(
     mut params: DockParams,
     edit: Res<EditHistory>,
     panels: Res<PanelState>,
-    // CellMap 工具活动态（[ADR-0052] D7-1 EditCell 第 12 槽 / D6 FloodSelect
-    // 第 13 槽）——两块瓷砖都按 `tool_active` 画选中态。
-    // 时间轴播放态（§9.4 Gate-1）：播放中 CellMap 编辑类瓷砖灰化。
+    // CellMap 工具活动态（ADR-0057 补记 6：EditCell 第 12 槽 / PointSelect
+    // 槽 1 / FloodSelect 第 13 槽）——瓷砖按各自 Resource 的 `tool_active`
+    // 画选中态。时间轴播放态（§9.4 Gate-1）：播放中 CellMap 编辑类瓷砖灰化。
     //
-    // **折成一层元组**：Bevy 单系统参数上限 16，本函数原有 15 个，三个
-    // `Res` 分开写会到 18（编译报「not a system set」）。元组算 1 个参数。
-    (edit_cell, flood_select, playback): (
+    // **折成一层元组**：Bevy 单系统参数上限 16，本函数原有 15 个，四个
+    // `Res` 分开写会到 19（编译报「not a system set」）。元组算 1 个参数。
+    (edit_cell, point_select, flood_select, playback): (
         Res<wv_render::state::EditCellState>,
+        Res<crate::state::PointSelectState>,
         Res<crate::state::FloodSelectState>,
         Res<crate::state::PlaybackState>,
     ),
@@ -69,14 +70,10 @@ pub fn map_controls(
     let grid_active = view.grid_lines;
     let can_undo = edit.history.can_undo();
     let can_redo = edit.history.can_redo();
-    // EditCell 活动态（[ADR-0052] D7-1）：判据 = `tool_active`，
-    // **不是** `selected.is_some()`——后者把「点过一格」误当成「工具开着」。
-    //
-    // 2026-10-24 加单选模式后，`tool_active` 一分为二：两个工具共用它，
-    // 由 `allow_drag` 区分形态。故两枚瓷砖的 active 判据都要带上形态，
-    // 否则单选模式下 EditCell 瓷砖也会亮。
-    let edit_cell_active = edit_cell.tool_active && edit_cell.allow_drag;
-    let cell_select_active = edit_cell.tool_active && !edit_cell.allow_drag;
+    // EditCell / PointSelect 活动态（ADR-0057 补记 6）：两件工具两个独立
+    // Resource，判据各读各的 `tool_active`——不再共用 `allow_drag` 形态位。
+    let edit_cell_active = edit_cell.tool_active;
+    let point_select_active = point_select.tool_active;
     // 泛洪活动态（[ADR-0052] D6）：判据 = `tool_active`。
     let flood_select_active = flood_select.tool_active;
     // **Gate-1**（[ADR-0052] §9.4）：时间轴播放中，CellMap 写入口工具灰化。
@@ -152,9 +149,8 @@ pub fn map_controls(
                             params.dock.pos = None;
                         }
 
-                        // ── 槽 1：单选模式（2026-10-24 用户需求，排在抓手之前）──
-                        // 「点一下选中一格看属性」，拖动不落笔——与 EditCell 共用
-                        // `EditCellState`，只靠 `allow_drag` 区分形态。
+                        // ── 槽 1：点选工具（ADR-0057 补记 6，排在抓手之前）──
+                        // 「点一格进选区看属性」，不落笔——独立 `PointSelectState`。
                         // 放在抓手前面：它是**导航级**的轻量动作（和抓手一样
                         // 不改数据），比后面的编辑工具更常用。
                         tool_tile(
@@ -163,14 +159,14 @@ pub fn map_controls(
                             metrics,
                             ICON_MOUSE_POINTER,
                             if cell_tools_enabled {
-                                t(loc, I18nKey::MapControlsCellSelectHint)
+                                t(loc, I18nKey::MapControlsPointSelectHint)
                             } else {
                                 locked_hint
                             },
-                            cell_select_active,
+                            point_select_active,
                             cell_tools_enabled,
                             &mut params.palette,
-                            MapToolId::CellSelect,
+                            MapToolId::PointSelect,
                         );
 
                         // ── 槽 2：抓手 ────────────────────────────────────

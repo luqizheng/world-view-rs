@@ -59,14 +59,11 @@ pub enum PassId {
     /// 河流折线（ADR-0037 D5）：模板世界由 terrain+rivers_seed 派生的水系。
     /// 与 TerrainDecor 同口径（VectorFlat/RealTerrain/Schematic/Faction 开）。
     Rivers,
-    /// 单格编辑工具的「选中高亮」(ADR-0040 §决策 4)：1 格 outline + 半透底色。
+    /// CellMap 统一选区高亮（ADR-0057）：选区面（金色半透脉动）+ 蚂蚁线。
     ///
     /// **会话轴 pass** —— 与 `tracks_visible` 同款处理：不进 `LayerFrame`
-    /// 级联,由 `ToolKind::EditCell` + `EditCellState.selected` 联合控制
-    /// (后者是 hover / selected 双态,见 [ADR-0040] §决策 5)。
-    /// 默认 disabled,Mode 表 8 行**全部关** —— 仅当 `selected.is_some()`
-    /// 时由 `resolve_render_recipe` 单独开启;
-    /// hover 不画(免闪烁),仅 selected 1 格画 outline。
+    /// 级联，由 `CellSelection.is_empty()` 控制（`sync_cell_region` gate）。
+    /// Mode 表 8 行全开——不阻挡任何视图模式；空选区时渲染层自行关闭。
     CellSelection,
     /// 命名区域层（2026-10-22 内容矩阵）：区域轮廓/底色/标签三件。
     /// 从 TerrainDecor 拆出——Schematic 下「装饰 ✓ 而区域 ✗」必须两格独立

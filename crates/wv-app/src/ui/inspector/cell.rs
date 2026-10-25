@@ -17,13 +17,16 @@
 //! 纹理不知道要重绘，地图可能不刷新。dispatcher 那条路径反而是标了脏的。
 //! 本模块统一为「提交成功 → 标脏 → 地图重绘」。
 //!
-//! ## 单格 / 批量两态
+//! ## 选区即编辑对象（ADR-0057 D1 / D6）
 //!
-//! 有多边形选区时可批量改 N 格。**两态互斥**——杜绝「以为在改整片、
-//! 实际只改了一格」的歧义（[ADR-0040] 补 B）。
+//! ADR-0040 补 B 的「单格 / 批量两态互斥」已被 ADR-0057 **废止**：单格不再
+//! 是独立模式，只是**恰好 1 格的选区**。表单按统一选区 `CellSelection` 的
+//! 格数分派——0 格 → 空态；1 格 → 单格表单（绝对设值）；N 格 → 批量表单
+//! （相对增减）。`CellPanelMode` / `BatchModeAutoLand` 随之退役。
 //!
 //! 关联：[ADR-0040](../../../../docs/adr/ADR-0040-cell-inspector-tool.md)（决策 6
-//! 被本设计修正——Cell 表单并入统一 Inspector）。
+//! 被本设计修正——Cell 表单并入统一 Inspector；补 B 被 ADR-0057 废止）、
+//! [ADR-0057](../../../../docs/adr/ADR-0057-cellmap-unified-selection.md)。
 
 #![cfg(feature = "app")]
 
@@ -31,7 +34,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 
 use crate::i18n::{t, I18nKey};
-use crate::state::{SelectionState, WorldProjection};
+use crate::state::WorldProjection;
 use crate::theme::ui_tokens::font_size;
 
 use crate::ui::shell::UiShell;
@@ -39,34 +42,9 @@ use crate::ui::widgets::{
     divider, empty_state, icon_image, value_box, ButtonContent, ButtonStyle, ICON_FOCUS,
     ICON_LOCK_KEYHOLE,
 };
-use wv_render::state::EditCellState;
+use wv_render::state::{CellSelection, EditCellState};
 use wv_ui::widgets::controls::{numeric_input_salted, radio};
 
-/// Cell 编辑器的两个工作模式（[ADR-0040] 补 B）。
-///
-/// **两态互斥**——杜绝「以为在改整片、实际只改了一格」的歧义：
-/// - `Single` —— 编辑当前点选的 1 格（`EditCellState.selected`）；
-/// - `Batch`  —— 编辑多边形贴合的 N 格（`EditCellState.region_cells`）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, bevy::prelude::Resource)]
-pub enum CellPanelMode {
-    /// 单格（默认）。
-    #[default]
-    Single,
-    /// 批量（多边形选区）。
-    Batch,
-}
-
-/// 「圈完自动落批量」的边沿检测（2026-10-24）。
-///
-/// 多边形选区**从无到有**的那一帧把 [`CellPanelMode`] 切到 `Batch`——
-/// CellMap 工作区的意图菜单已撤出，批量区是圈选确认后的唯一应用入口，
-/// 作者不该再手点一次「批量」才看到读数。只做**边沿触发**：作者随后手动
-/// 切回单格不会被每帧强按回去；下次重新圈选（region 从空变非空）才再触发。
-#[derive(Debug, Default, bevy::prelude::Resource)]
-pub struct BatchModeAutoLand {
-    /// 上一帧是否有多边形选区。
-    pub had_region: bool,
-}
 use wv_ui::widgets::segmented_control::segmented;
 
 /// Cell 表单（Inspector「属性」页签 · 地形格分支）。
@@ -75,8 +53,8 @@ use wv_ui::widgets::segmented_control::segmented;
 /// 2026-10-24 起CellMap 工作区里圈选确认后（V 工具激活）也直出——
 /// 见 `mod.rs` 的 `cell_form_active` 谓词。
 ///
-/// **单格 / 批量两态**：有多边形选区时可批量改 N 格；两态互斥，杜绝
-/// 「以为在改整片、实际只改了一格」的歧义（[ADR-0040] 补 B）。
+/// **分派**（ADR-0057 D6）：按统一选区格数——0 → 空态；1 → 单格表单；
+/// N → 批量表单。不再有模式切换控件。
 #[allow(clippy::too_many_arguments)]
 pub fn cell_form(
     ui: &mut egui::Ui,
@@ -84,24 +62,22 @@ pub fn cell_form(
     projection: &mut WorldProjection,
     edit_cell: &mut EditCellState,
     edit: &mut crate::edit::editing::EditHistory,
-    selection: &mut SelectionState,
     tex: &mut wv_render::terrain_view::TerrainTexture,
     loc: crate::i18n::Locale,
-    mode: &mut CellPanelMode,
     session: &mut wv_world_cell_map::cell_paint::CellPaintSession,
     flood: &mut wv_world_cell_map::state::FloodSelectState,
     derived: &mut crate::edit::derived_op::DerivedOpRequest,
     playback_playing: bool,
+    sel: &mut CellSelection,
+    map: Option<&wv_core::Id>,
 ) {
     // ── 读数条（D8）：面板顶部固定双段 ──
-    // 左段永远读 hover、右段永远读 selected；任一段无数据显 `—`，
-    // **绝不回退错位**（把 selected 的值填到 hover 段会误导作者改错格）。
+    // 左段永远读 hover、右段永远读选区；任一段无数据显 `—`，
+    // **绝不回退错位**（把选区的值填到 hover 段会误导作者改错格）。
     {
         let world = &projection.world;
-        let map = edit_cell.last_map_id.clone();
         let read_cell = |gx: i32, gy: i32| -> Option<(i16, u8, u8)> {
-            let map = map.as_ref()?;
-            let terrain = world.terrain_of(map)?;
+            let terrain = world.terrain_of(map?)?;
             let w = terrain.width as i32;
             let h = terrain.height as i32;
             if gx < 0 || gy < 0 || gx >= w || gy >= h {
@@ -111,7 +87,7 @@ pub fn cell_form(
             let c = terrain.cells.get(idx)?;
             Some((c.height, c.surface, c.biome))
         };
-        super::cell_paint_panel::render_readout_bar(ui, shell, edit_cell, read_cell);
+        super::cell_paint_panel::render_readout_bar(ui, shell, edit_cell, sel, read_cell);
     }
 
     // ── 泛洪判据区（D6）：仅 FloodSelect 工具激活时显示 ──
@@ -126,104 +102,50 @@ pub fn cell_form(
     super::cell_paint_panel::render_paint_value_section(ui, shell, session, loc);
     divider(ui, shell);
 
-    // ── 派生运算区（D6 · M3）：平滑 / 量化，作用范围 = 选中的 region_cells ──
+    // ── 派生运算区（D6 · M3）：平滑 / 量化，作用范围 = 统一选区 ──
     // 播放中按钮保持可见但禁用（§9.4 Gate-1：只挡写入，不挡只读查看）。
     super::cell_paint_panel::render_derived_section(
         ui,
         shell,
         derived,
-        edit_cell.region_cells.len(),
+        sel.len() as usize,
         playback_playing,
     );
     divider(ui, shell);
 
-    // ── 模式切换：单格 / 批量 ──
-    // 有多边形选区时自动落在「批量」（用户刚圈完，意图明确）；
-    // 用户可手动切回「单格」——两态互斥。
-    let has_region = !edit_cell.region_cells.is_empty();
-    let eff_mode = match *mode {
-        CellPanelMode::Single => CellPanelMode::Single,
-        CellPanelMode::Batch => {
-            if has_region {
-                CellPanelMode::Batch
-            } else {
-                CellPanelMode::Single
-            }
-        }
-    };
-    let mode_labels = [
-        t(loc, I18nKey::CellEditorModeSingle),
-        t(loc, I18nKey::CellEditorModeBatch),
-    ];
-    segmented(
-        ui,
-        shell,
-        "cell_editor_mode",
-        64.0,
-        &mode_labels,
-        match eff_mode {
-            CellPanelMode::Single => 0,
-            CellPanelMode::Batch => 1,
-        },
-        font_size::SMALL,
-        |i| {
-            *mode = if i == 0 {
-                CellPanelMode::Single
-            } else {
-                CellPanelMode::Batch
+    // ── 按选区格数分派（ADR-0057 D6：无模式切换控件）──
+    match sel.only_cell() {
+        Some((gx, gy)) => {
+            let Some(before) = read_cell(projection, map, gx, gy) else {
+                return;
             };
-        },
-    );
-    ui.add_space(6.0);
-
-    match eff_mode {
-        CellPanelMode::Batch => {
-            render_batch_section(ui, shell, projection, edit_cell, edit, selection, tex, loc);
+            render_identity(ui, shell, gx, gy);
+            divider(ui, shell);
+            render_fields(ui, shell, projection, map, edit, (gx, gy), before, tex, loc);
+            divider(ui, shell);
+            // 尾注（Figma "Selection scope"）：focus 图标 + 提示。
+            ui.horizontal(|ui| {
+                ui.add(icon_image(ICON_FOCUS, shell.t3(), 12.0));
+                ui.label(
+                    egui::RichText::new(t(loc, I18nKey::CellEditorScopeHint))
+                        .size(font_size::MICRO)
+                        .color(shell.t3()),
+                );
+            });
         }
-        CellPanelMode::Single => {}
-    }
-
-    // ── 单格：选中态 / 空态 ──
-    if eff_mode == CellPanelMode::Single {
-        match edit_cell.selected {
-            Some((gx, gy)) => {
-                let Some(before) = read_cell(projection, edit_cell, gx, gy) else {
-                    return;
-                };
-                render_identity(ui, shell, gx, gy);
-                divider(ui, shell);
-                render_fields(
-                    ui,
-                    shell,
-                    projection,
-                    edit_cell,
-                    edit,
-                    (gx, gy),
-                    before,
-                    tex,
-                    loc,
-                );
-                divider(ui, shell);
-                // 尾注（Figma "Selection scope"）：focus 图标 + 提示。
-                ui.horizontal(|ui| {
-                    ui.add(icon_image(ICON_FOCUS, shell.t3(), 12.0));
-                    ui.label(
-                        egui::RichText::new(t(loc, I18nKey::CellEditorScopeHint))
-                            .size(font_size::MICRO)
-                            .color(shell.t3()),
-                    );
-                });
-            }
-            None => {
-                empty_state(
-                    ui,
-                    shell,
-                    "▣",
-                    t(loc, I18nKey::CellEditorEmptyTitle),
-                    t(loc, I18nKey::CellEditorEmptyHint),
-                    "",
-                );
-            }
+        None if sel.is_empty() => {
+            empty_state(
+                ui,
+                shell,
+                "▣",
+                t(loc, I18nKey::CellEditorEmptyTitle),
+                t(loc, I18nKey::CellEditorEmptyHint),
+                "",
+            );
+        }
+        None => {
+            // N 格批量：读数 + 整体改（相对增减 / 水陆 / 群系）。
+            render_batch_section(ui, shell, projection, edit, tex, loc, sel, map);
         }
     }
 }
@@ -250,7 +172,7 @@ fn render_fields(
     ui: &mut egui::Ui,
     shell: &UiShell,
     projection: &mut WorldProjection,
-    edit_cell: &EditCellState,
+    map: Option<&wv_core::Id>,
     edit: &mut crate::edit::editing::EditHistory,
     (gx, gy): (i32, i32),
     before: wv_core::terrain::TerrainCellData,
@@ -379,7 +301,7 @@ fn render_fields(
 
     // ── 即改即提交（每格 1 command，[ADR-0040] §决策 8）──
     if next != before {
-        push_cell_edit(edit, projection, edit_cell, (gx, gy), before, next, tex);
+        push_cell_edit(edit, projection, map, (gx, gy), before, next, tex);
     }
 }
 
@@ -466,7 +388,7 @@ struct RegionStats {
 fn region_stats(
     projection: &WorldProjection,
     map: &wv_core::id::Id,
-    cells: &[(i32, i32)],
+    sel: &CellSelection,
 ) -> Option<RegionStats> {
     let terrain = projection.world.terrain_of(map)?;
     let w = terrain.width as i32;
@@ -476,11 +398,11 @@ fn region_stats(
     let mut max_h = i32::MIN;
     let mut min_h = i32::MAX;
     let mut hist: std::collections::BTreeMap<u8, usize> = std::collections::BTreeMap::new();
-    for (gx, gy) in cells {
-        if *gx < 0 || *gy < 0 || *gx >= w || *gy >= h {
+    for (gx, gy) in sel.iter_cells() {
+        if gx < 0 || gy < 0 || gx >= w || gy >= h {
             continue;
         }
-        let idx = (*gy as usize) * (w as usize) + (*gx as usize);
+        let idx = (gy as usize) * (w as usize) + (gx as usize);
         let Some(cell) = terrain.cells.get(idx) else {
             continue;
         };
@@ -516,13 +438,12 @@ fn render_batch_section(
     ui: &mut egui::Ui,
     shell: &UiShell,
     projection: &mut WorldProjection,
-    edit_cell: &EditCellState,
     edit: &mut crate::edit::editing::EditHistory,
-    selection: &mut SelectionState,
     tex: &mut wv_render::terrain_view::TerrainTexture,
     loc: crate::i18n::Locale,
+    sel: &mut CellSelection,
+    map: Option<&wv_core::Id>,
 ) {
-    let n = edit_cell.region_cells.len();
     // ── 头：取消按钮（格数在读数区显示，用 stats.count 真实值）──
     ui.horizontal(|ui| {
         if crate::ui::widgets::button(
@@ -535,16 +456,17 @@ fn render_batch_section(
         )
         .clicked()
         {
-            selection.cancel();
+            // 取消 = 清空统一选区（ADR-0057 D5：选区是会话态，不进撤销栈）。
+            sel.clear();
         }
     });
     ui.add_space(6.0);
 
-    let Some(map) = edit_cell.last_map_id.clone() else {
+    let Some(map) = map else {
         return;
     };
     // 无选区 → 批量态空态（提示先用 V 圈选）。
-    if n == 0 {
+    if sel.is_empty() {
         empty_state(
             ui,
             shell,
@@ -557,7 +479,7 @@ fn render_batch_section(
     }
 
     // ── 读数区（补 A）──
-    let Some(stats) = region_stats(projection, &map, &edit_cell.region_cells) else {
+    let Some(stats) = region_stats(projection, map, sel) else {
         return;
     };
     // 头部计数改用 stats.count（越界格跳过的真实格数，与读数一致）。
@@ -653,7 +575,7 @@ fn render_batch_section(
         .clicked()
         {
             let d = delta as i32;
-            apply_batch(projection, edit, &map, edit_cell, tex, |c| {
+            apply_batch(projection, edit, map, sel, tex, |c| {
                 wv_core::terrain::TerrainCellData {
                     height: (c.height as i32 + d).clamp(i16::MIN as i32, i16::MAX as i32) as i16,
                     ..c
@@ -680,7 +602,7 @@ fn render_batch_section(
         )
         .clicked()
         {
-            apply_batch(projection, edit, &map, edit_cell, tex, |c| {
+            apply_batch(projection, edit, map, sel, tex, |c| {
                 wv_core::terrain::TerrainCellData {
                     surface: wv_terrain::SURFACE_WATER,
                     ..c
@@ -697,7 +619,7 @@ fn render_batch_section(
         )
         .clicked()
         {
-            apply_batch(projection, edit, &map, edit_cell, tex, |c| {
+            apply_batch(projection, edit, map, sel, tex, |c| {
                 wv_core::terrain::TerrainCellData {
                     surface: wv_terrain::SURFACE_LAND,
                     ..c
@@ -737,7 +659,7 @@ fn render_batch_section(
             for (num, name) in group.iter() {
                 if radio(ui, shell, uniform_biome == Some(*num), name).clicked() {
                     let biome = *num;
-                    apply_batch(projection, edit, &map, edit_cell, tex, |c| {
+                    apply_batch(projection, edit, map, sel, tex, |c| {
                         wv_core::terrain::TerrainCellData { biome, ..c }
                     });
                 }
@@ -753,7 +675,7 @@ fn apply_batch(
     projection: &mut WorldProjection,
     edit: &mut crate::edit::editing::EditHistory,
     map: &wv_core::id::Id,
-    edit_cell: &EditCellState,
+    sel: &CellSelection,
     tex: &mut wv_render::terrain_view::TerrainTexture,
     transform: impl Fn(wv_core::terrain::TerrainCellData) -> wv_core::terrain::TerrainCellData,
 ) {
@@ -764,17 +686,17 @@ fn apply_batch(
     let w = terrain.width as i32;
     let h = terrain.height as i32;
     let mut changes = Vec::new();
-    for (gx, gy) in &edit_cell.region_cells {
-        if *gx < 0 || *gy < 0 || *gx >= w || *gy >= h {
+    for (gx, gy) in sel.iter_cells() {
+        if gx < 0 || gy < 0 || gx >= w || gy >= h {
             continue;
         }
-        let idx = (*gy as usize) * (w as usize) + (*gx as usize);
+        let idx = (gy as usize) * (w as usize) + (gx as usize);
         let before = terrain.cells[idx];
         let after = transform(before);
         if after != before {
             changes.push(CellChange {
-                gx: *gx,
-                gy: *gy,
+                gx,
+                gy,
                 before,
                 after,
             });
@@ -829,14 +751,14 @@ fn mark_dirty_cells(
 fn push_cell_edit(
     edit: &mut crate::edit::editing::EditHistory,
     projection: &mut WorldProjection,
-    edit_cell: &EditCellState,
+    map: Option<&wv_core::Id>,
     (gx, gy): (i32, i32),
     before: wv_core::terrain::TerrainCellData,
     after: wv_core::terrain::TerrainCellData,
     tex: &mut wv_render::terrain_view::TerrainTexture,
 ) {
     let world = &mut projection.world;
-    let Some(map) = edit_cell.last_map_id.clone() else {
+    let Some(map) = map.cloned() else {
         return;
     };
     let current = world.terrain_of(&map).and_then(|t| {
@@ -873,16 +795,14 @@ fn push_cell_edit(
     }
 }
 
-/// 读选中格当前值（`EditCellState.last_map_id` 定图）。
+/// 读格当前值（`map` = 当前图；`None` 无从读）。
 fn read_cell(
     projection: &WorldProjection,
-    edit_cell: &EditCellState,
+    map: Option<&wv_core::Id>,
     gx: i32,
     gy: i32,
 ) -> Option<wv_core::terrain::TerrainCellData> {
-    let terrain = projection
-        .world
-        .terrain_of(edit_cell.last_map_id.as_ref()?)?;
+    let terrain = projection.world.terrain_of(map?)?;
     let w = terrain.width as i32;
     let h = terrain.height as i32;
     if gx < 0 || gy < 0 || gx >= w || gy >= h {
@@ -940,6 +860,14 @@ mod tests {
         (projection, map)
     }
 
+    /// 构造绑定到给定图的选区（测试用；4×4 图幅）。
+    fn selection_of(map: &wv_core::Id, cells: &[(i32, i32)]) -> CellSelection {
+        let mut sel = CellSelection::default();
+        sel.bind_map(map, 4, 4);
+        sel.replace(cells.iter().copied());
+        sel
+    }
+
     /// 批量读数：N 格 / 平均海拔 / 最高最低 / 群系分布（次数降序）。
     #[test]
     fn region_stats_summarizes_selection() {
@@ -949,8 +877,8 @@ mod tests {
             (2, 0, 300, 3), // 草原
             (3, 0, 400, 3), // 草原
         ]);
-        let cells = vec![(0, 0), (1, 0), (2, 0), (3, 0)];
-        let s = region_stats(&projection, &map, &cells).expect("stats");
+        let sel = selection_of(&map, &[(0, 0), (1, 0), (2, 0), (3, 0)]);
+        let s = region_stats(&projection, &map, &sel).expect("stats");
         assert_eq!(s.count, 4);
         assert_eq!(s.avg_height, 250, "(100+200+300+400)/4");
         assert_eq!(s.min_height, 100);
@@ -959,12 +887,14 @@ mod tests {
         assert_eq!(s.biome_hist, vec![(1, 2), (3, 2)]);
     }
 
-    /// 越界格被跳过，不影响统计。
+    /// 越界格被跳过，不影响统计（位图本身拒绝越界写入，此处验证统计口径）。
     #[test]
     fn region_stats_skips_out_of_bounds_cells() {
         let (projection, map) = terrain_of(&[(0, 0, 50, 1)]);
-        let cells = vec![(0, 0), (99, 99)];
-        let s = region_stats(&projection, &map, &cells).expect("stats");
+        // `replace` 对越界格静默忽略——选区里只会有 (0,0)。
+        let sel = selection_of(&map, &[(0, 0), (99, 99)]);
+        assert_eq!(sel.len(), 1, "越界格不入位图");
+        let s = region_stats(&projection, &map, &sel).expect("stats");
         assert_eq!(s.count, 1, "越界格应被跳过");
         assert_eq!(s.avg_height, 50);
     }
@@ -973,7 +903,7 @@ mod tests {
     #[test]
     fn region_stats_returns_none_for_empty_selection() {
         let (projection, map) = terrain_of(&[]);
-        assert!(region_stats(&projection, &map, &[]).is_none());
+        assert!(region_stats(&projection, &map, &CellSelection::default()).is_none());
     }
 
     /// 构造一张干净的 4×4 地形纹理（测试用）。
@@ -1000,10 +930,6 @@ mod tests {
     fn single_cell_edit_marks_terrain_texture_dirty() {
         let (mut projection, map) = terrain_of(&[(1, 2, 100, 1)]);
         let mut edit = crate::edit::editing::EditHistory::default();
-        let edit_cell = EditCellState {
-            last_map_id: Some(map.clone()),
-            ..Default::default()
-        };
         let mut tex = blank_texture();
         let before = wv_core::terrain::TerrainCellData {
             height: 100,
@@ -1020,7 +946,7 @@ mod tests {
         push_cell_edit(
             &mut edit,
             &mut projection,
-            &edit_cell,
+            Some(&map),
             (1, 2),
             before,
             after,
@@ -1043,24 +969,15 @@ mod tests {
     fn batch_cell_edit_marks_terrain_texture_dirty() {
         let (mut projection, map) = terrain_of(&[(0, 0, 10, 1), (2, 1, 20, 1)]);
         let mut edit = crate::edit::editing::EditHistory::default();
-        let edit_cell = EditCellState {
-            last_map_id: Some(map.clone()),
-            region_cells: vec![(0, 0), (2, 1)],
-            ..Default::default()
-        };
+        let sel = selection_of(&map, &[(0, 0), (2, 1)]);
         let mut tex = blank_texture();
 
-        apply_batch(
-            &mut projection,
-            &mut edit,
-            &map,
-            &edit_cell,
-            &mut tex,
-            |c| wv_core::terrain::TerrainCellData {
+        apply_batch(&mut projection, &mut edit, &map, &sel, &mut tex, |c| {
+            wv_core::terrain::TerrainCellData {
                 height: c.height + 5,
                 ..c
-            },
-        );
+            }
+        });
 
         assert_eq!(
             tex.dirty,
@@ -1078,7 +995,8 @@ mod tests {
             (2, 0, 0, 3),
         ]);
         let cells = vec![(0, 0), (1, 0), (2, 0)];
-        let s = region_stats(&projection, &map, &cells).expect("stats");
+        let sel = selection_of(&map, &cells);
+        let s = region_stats(&projection, &map, &sel).expect("stats");
         assert_eq!(s.biome_hist, vec![(3, 2), (1, 1)], "次数多的在前");
     }
 }

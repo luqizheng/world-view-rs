@@ -22,7 +22,9 @@ use wv_world_cell_map::palette::{
     CellPack, CellPalette, HatchSpec, RippleSpec, SeaRecipe, TreatmentFlags,
 };
 use wv_world_cell_map::shade::ShadeMode;
-use wv_world_cell_map::state::{EditCellState, GridConfig};
+use wv_world_cell_map::state::{
+    CellSelection, DashPhase, EditCellState, GridConfig, PointSelectState,
+};
 use wv_world_cell_map::terrain_view::rebuild::{PendingTerrainSynth, SynthCtx};
 // 桥接系统消费的引擎件（含 crate 内部件）——原文件级 use 随函数迁居此处（ADR-0054 D5）。
 use wv_terrain::isoline::{assemble_chains, chaikin, height_segments, kind_segments, simplify_dp};
@@ -791,136 +793,163 @@ pub fn sync_atmosphere(
 }
 
 // ══════ from src/cell_selection.rs :: sync_cell_region ══════
-/// 区域选区高亮（明显视觉 = 金色半透填充 + **alpha 脉动**）。
+/// **统一选区高亮**（ADR-0057 D8）：面 = 金色半透填充（脉动）；形 = 外围边界
+/// **白色虚线蚂蚁线**（两相位 mesh，≈0.3 s 计时整组互换）。
 ///
-/// gate = `recipe.enabled(CellSelection) ∧ !edit_cell.region_cells.is_empty()`；
-/// 与单格高亮（`sync_cell_selection`）并存——区域优先视觉（单格 outline
-/// 画在 Z+0.001，区域填充在其下）。
-#[allow(clippy::too_many_arguments)]
+/// 承载三件事：
+/// 1. **`CellSelection` 的图绑定**——每帧以当前图幂等 `bind_map`（切图清空 +
+///    惰性定容收敛在这一个入口，ADR-0057 D1 / A7）；
+/// 2. **填充**——选区指纹变才重建合并 mesh，材质只改 alpha（脉动）；
+/// 3. **蚂蚁线**——重建键 = (选区指纹, 缩放档)；命中重建两套相位 mesh，
+///    其余帧零重建，相位钟到点只切 `Visibility`。
+///
+/// gate = `recipe.enabled(CellSelection) ∧ !sel.is_empty()`；不满足时面与
+/// 蚂蚁线一起 despawn（无残留）。
+///
+/// ADR-0057 退役：单格 outline（旧 `sync_cell_selection`）与外包矩形四边——
+/// 单格 = 1 格选区，由蚂蚁线统一覆盖。
 pub fn sync_cell_region(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     recipe: Res<crate::recipe::RenderRecipe>,
-    edit_cell: Res<EditCellState>,
+    mut sel: ResMut<CellSelection>,
+    drill: Res<DrillState>,
+    tex: Res<TerrainTexture>,
     grid: Res<GridConfig>,
+    view: Res<ViewState>,
     time: Res<Time>,
-    mut entities: ResMut<CellRegionEntities>,
+    mut region: ResMut<CellRegionEntities>,
+    mut ants: ResMut<CellAntsEntities>,
 ) {
-    let cells = edit_cell.region_cells.as_slice();
-    let active = recipe.enabled(PassId::CellSelection) && !cells.is_empty();
+    // 1. 绑定：图变 / 图幅变 → 清空重定容；同图同尺寸 → 零成本返回。
+    if let Some(map_id) = drill.current() {
+        sel.bind_map(map_id, tex.size, tex.height);
+    }
+    let active = recipe.enabled(PassId::CellSelection) && !sel.is_empty();
     if !active {
-        entities.despawn_all(&mut commands);
-        entities.release_assets(&mut meshes);
+        region.despawn_all(&mut commands);
+        region.release_assets(&mut meshes);
+        ants.despawn_all(&mut commands);
+        ants.release_assets(&mut meshes);
         return;
     }
     // 脉动：0.22 + 0.12·sin(3.5t) → alpha ∈ [0.10, 0.34]，肉眼可辨的呼吸感。
     let alpha = 0.22 + 0.12 * (time.elapsed_secs() * 3.5).sin();
     let accent = crate::theme::colors::ACCENT_SELECT;
+    let fingerprint = sel.fingerprint();
 
-    // ── 填充 mesh：只在格集合变化时重建 ──
-    let fingerprint = cells_fingerprint(cells);
-    if fingerprint != entities.last_fingerprint {
-        entities.release_assets(&mut meshes);
-        let Some((mesh, origin, bbox)) = build_region_fill_mesh(cells, &grid) else {
-            entities.despawn_all(&mut commands);
-            return;
-        };
-        entities.fill_mesh = Some(meshes.add(mesh));
-        // 外包 4 边（世界厚度固定 2 单位）。
-        let thickness = 2.0;
-        let t2 = thickness * 0.5;
-        let half = bbox * 0.5;
-        let edge_defs: [(Vec2, Vec2); 4] = [
-            (Vec2::new(0.0, -half.y + t2), Vec2::new(bbox.x, thickness)),
-            (Vec2::new(0.0, half.y - t2), Vec2::new(bbox.x, thickness)),
-            (Vec2::new(-half.x + t2, 0.0), Vec2::new(thickness, bbox.y)),
-            (Vec2::new(half.x - t2, 0.0), Vec2::new(thickness, bbox.y)),
-        ];
-        for (i, (_, edge_size)) in edge_defs.into_iter().enumerate() {
-            entities.edge_meshes[i] = Some(meshes.add(Rectangle::new(edge_size.x, edge_size.y)));
-        }
-        entities.last_fingerprint = fingerprint;
-        // 位置随 origin 变（格集合变了 → 包围盒原点可能变）。
-        let center = origin + bbox * 0.5;
-        if let Some(e) = entities.fill {
-            commands
-                .entity(e)
-                .insert(Transform::from_translation(origin.extend(0.899)));
-        }
-        for (i, (offset, _)) in edge_defs.into_iter().enumerate() {
-            if let Some(e) = entities.edges[i] {
-                commands.entity(e).insert(Transform::from_translation(
-                    (center + offset).extend(0.8995),
-                ));
-            }
-        }
-    }
-
-    // ── 材质：只建一次，之后每帧只改 alpha ──
-    if entities.fill_material.is_none() {
-        entities.fill_material =
+    // ── 面：填充材质只建一次，之后每帧只改 alpha ──
+    if region.fill_material.is_none() {
+        region.fill_material =
             Some(materials.add(ColorMaterial::from_color(accent.with_alpha(alpha))));
-    } else if let Some(h) = entities.fill_material.clone() {
+    } else if let Some(h) = region.fill_material.clone() {
         if let Some(mut m) = materials.get_mut(&h) {
             m.color = accent.with_alpha(alpha);
         }
     }
-    for slot in &mut entities.edge_materials {
-        if slot.is_none() {
-            *slot = Some(materials.add(ColorMaterial::from_color(accent.with_alpha(alpha))));
-        } else if let Some(h) = slot.clone() {
-            if let Some(mut m) = materials.get_mut(&h) {
-                m.color = accent.with_alpha((alpha * 2.5).min(1.0));
+    let fill_mat = region.fill_material.clone().expect("材质已建");
+
+    // ── 面：填充 mesh 只在格集合变化（或实体缺位）时重建 ──
+    if fingerprint != region.last_fingerprint || region.fill_mesh.is_none() || region.fill.is_none()
+    {
+        region.release_assets(&mut meshes);
+        let cells: Vec<(i32, i32)> = sel.iter_cells().collect();
+        let Some((mesh, origin, _bbox)) = build_region_fill_mesh(&cells, &grid) else {
+            region.despawn_all(&mut commands);
+            return;
+        };
+        let mesh_h = meshes.add(mesh);
+        region.fill_mesh = Some(mesh_h.clone());
+        region.last_fingerprint = fingerprint;
+        let tf = Transform::from_translation(origin.extend(0.899));
+        match region.fill {
+            Some(e) => {
+                commands
+                    .entity(e)
+                    .insert((tf, Mesh2d(mesh_h), MeshMaterial2d(fill_mat)));
+            }
+            None => {
+                region.fill = Some(
+                    commands
+                        .spawn((tf, Mesh2d(mesh_h), MeshMaterial2d(fill_mat)))
+                        .id(),
+                );
             }
         }
     }
 
-    // ── 实体：建一次，之后只挂句柄（句柄不变 → insert 无 GPU 重传）──
-    let fill_mesh = entities.fill_mesh.clone().expect("集合非空,mesh 已建");
-    let fill_mat = entities.fill_material.clone().expect("材质已建");
-    match entities.fill {
-        Some(e) => {
-            commands
-                .entity(e)
-                .insert((Mesh2d(fill_mesh), MeshMaterial2d(fill_mat)));
-        }
-        None => {
-            entities.fill = Some(
-                commands
-                    .spawn((
-                        Transform::from_translation(Vec3::ZERO),
-                        Mesh2d(fill_mesh),
-                        MeshMaterial2d(fill_mat),
-                    ))
-                    .id(),
-            );
+    // ── 形：蚂蚁线（重建键 = (选区指纹, 缩放档)）──
+    let bucket = crate::region_outline::scale_bucket(view.scale);
+    let key = (fingerprint, bucket);
+    if ants.last_key != Some(key) || ants.mesh_a.is_none() || ants.mesh_b.is_none() {
+        let s = crate::region_outline::scale_of_bucket(bucket);
+        let edges = sel.boundary_edges();
+        if let Some((ma, mb)) =
+            build_ants_meshes(&edges, &grid, ANTS_PITCH_PX * s, ANTS_THICKNESS_PX * s)
+        {
+            ants.release_assets(&mut meshes);
+            // 白材质两相位共用，只建一次。
+            if ants.material.is_none() {
+                ants.material = Some(materials.add(ColorMaterial::from_color(Color::WHITE)));
+            }
+            let mat = ants.material.clone().expect("材质已建");
+            let (ha, hb) = (meshes.add(ma), meshes.add(mb));
+            ants.mesh_a = Some(ha.clone());
+            ants.mesh_b = Some(hb.clone());
+            ants.last_key = Some(key);
+            let show_a = ants.clock.visible_phase() == DashPhase::A;
+            let (vis_a, vis_b) = if show_a {
+                (Visibility::Visible, Visibility::Hidden)
+            } else {
+                (Visibility::Hidden, Visibility::Visible)
+            };
+            // 先解构出 disjoint 字段借用——同一 `ants` 的 phase_a / phase_b
+            // 不能在同一条 for 初始化式里各取 `&mut`（E0499）。
+            let CellAntsEntities {
+                phase_a, phase_b, ..
+            } = &mut *ants;
+            for (slot, mesh_h, vis) in [(phase_a, ha, vis_a), (phase_b, hb, vis_b)] {
+                match *slot {
+                    Some(e) => {
+                        commands.entity(e).insert((
+                            Mesh2d(mesh_h),
+                            MeshMaterial2d(mat.clone()),
+                            vis,
+                        ));
+                    }
+                    None => {
+                        *slot = Some(
+                            commands
+                                .spawn((
+                                    Transform::from_xyz(0.0, 0.0, ANTS_Z),
+                                    Mesh2d(mesh_h),
+                                    MeshMaterial2d(mat.clone()),
+                                    vis,
+                                ))
+                                .id(),
+                        );
+                    }
+                }
+            }
         }
     }
-    for i in 0..4 {
-        let Some(mesh) = entities.edge_meshes[i].clone() else {
-            continue;
-        };
-        let Some(mat) = entities.edge_materials[i].clone() else {
-            continue;
-        };
-        match entities.edges[i] {
-            Some(e) => {
-                commands
-                    .entity(e)
-                    .insert((Mesh2d(mesh), MeshMaterial2d(mat)));
-            }
-            None => {
-                entities.edges[i] = Some(
-                    commands
-                        .spawn((
-                            Transform::from_translation(Vec3::ZERO),
-                            Mesh2d(mesh),
-                            MeshMaterial2d(mat),
-                        ))
-                        .id(),
-                );
-            }
+    // 相位钟：到点整组翻转可见性（零重建）。
+    if ants.clock.tick(time.delta_secs()) {
+        let show_a = ants.clock.visible_phase() == DashPhase::A;
+        if let Some(e) = ants.phase_a {
+            commands.entity(e).insert(if show_a {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            });
+        }
+        if let Some(e) = ants.phase_b {
+            commands.entity(e).insert(if show_a {
+                Visibility::Hidden
+            } else {
+                Visibility::Visible
+            });
         }
     }
 }
@@ -2029,126 +2058,6 @@ pub fn grid_lines_visible(view: &ViewState) -> bool {
     view.grid_lines
 }
 
-// ══════ from crates/wv-world-cell-map/src/cell_selection.rs :: sync_cell_selection ══════
-/// 每帧同步选中高亮的 5 个实体。
-///
-/// gate = `recipe.enabled(CellSelection) ∧ edit_cell.selected.is_some()`；
-/// 不满足时全 despawn（与笔刷光标的「切走即清」同口径，无残留）。
-#[allow(clippy::too_many_arguments)] // Bevy 系统参数即依赖声明，宽签名是框架惯例
-pub fn sync_cell_selection(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    recipe: Res<crate::recipe::RenderRecipe>,
-    edit_cell: Res<EditCellState>,
-    grid: Res<GridConfig>,
-    view: Res<ViewState>,
-    mut entities: ResMut<CellSelectionEntities>,
-) {
-    let Some((gx, gy)) = edit_cell
-        .selected
-        .filter(|_| recipe.enabled(PassId::CellSelection))
-    else {
-        entities.despawn_all(&mut commands);
-        entities.release_assets(&mut meshes);
-        return;
-    };
-    let (center, size) = cell_world_rect(&grid, gx, gy);
-    let accent = crate::theme::colors::ACCENT_SELECT;
-    // 世界厚度 = 屏幕恒定 2px（策略 A，与笔刷光标一致）。
-    let thickness = THICKNESS_PX * view.scale;
-
-    // ── mesh：只在尺寸变化时重建（其余帧复用句柄，避免每帧 GPU 重传）──
-    //
-    // 条件必须带 `fill_mesh.is_none()`（2026-10-24 真机 panic 修复）：
-    // 「尺寸没变」不等于「句柄还在」——`release_assets`（gate 失败路径）会
-    // 清句柄。只判 `last_size` 会在「同尺寸格、中间隔了一帧 gate 失败」时
-    // 跳过重建，随后 `.expect("尺寸已定,mesh 已建")` 直接 panic。
-    // `sync_cell_hover` 一直是双条件写法，此处对齐。
-    if entities.last_size != size || entities.fill_mesh.is_none() {
-        entities.release_assets(&mut meshes);
-        entities.fill_mesh = Some(meshes.add(Rectangle::new(size.x, size.y)));
-        let half = size * 0.5;
-        let t2 = thickness * 0.5;
-        let edge_defs: [(Vec2, Vec2); 4] = [
-            (Vec2::new(0.0, -half.y + t2), Vec2::new(size.x, thickness)),
-            (Vec2::new(0.0, half.y - t2), Vec2::new(size.x, thickness)),
-            (Vec2::new(-half.x + t2, 0.0), Vec2::new(thickness, size.y)),
-            (Vec2::new(half.x - t2, 0.0), Vec2::new(thickness, size.y)),
-        ];
-        for (i, (_, edge_size)) in edge_defs.into_iter().enumerate() {
-            entities.edge_meshes[i] = Some(meshes.add(Rectangle::new(edge_size.x, edge_size.y)));
-        }
-        entities.last_size = size;
-    }
-
-    let half = size * 0.5;
-    let t2 = thickness * 0.5;
-    let edge_defs: [(Vec2, Vec2); 4] = [
-        (Vec2::new(0.0, -half.y + t2), Vec2::new(size.x, thickness)),
-        (Vec2::new(0.0, half.y - t2), Vec2::new(size.x, thickness)),
-        (Vec2::new(-half.x + t2, 0.0), Vec2::new(thickness, size.y)),
-        (Vec2::new(half.x - t2, 0.0), Vec2::new(thickness, size.y)),
-    ];
-
-    // ── 材质：只建一次 ──
-    if entities.fill_material.is_none() {
-        entities.fill_material =
-            Some(materials.add(ColorMaterial::from_color(accent.with_alpha(FILL_ALPHA))));
-    }
-    for slot in &mut entities.edge_materials {
-        if slot.is_none() {
-            *slot = Some(materials.add(ColorMaterial::from_color(accent)));
-        }
-    }
-
-    // ── 实体：建一次，之后只挂句柄 + 更新 Transform ──
-    let fill_mesh = entities.fill_mesh.clone().expect("尺寸已定,mesh 已建");
-    let fill_mat = entities.fill_material.clone().expect("材质已建");
-    match entities.fill {
-        Some(e) => {
-            commands.entity(e).insert((
-                Transform::from_translation(center.extend(SELECTION_Z)),
-                Mesh2d(fill_mesh),
-                MeshMaterial2d(fill_mat),
-            ));
-        }
-        None => {
-            entities.fill = Some(
-                commands
-                    .spawn((
-                        Transform::from_translation(center.extend(SELECTION_Z)),
-                        Mesh2d(fill_mesh),
-                        MeshMaterial2d(fill_mat),
-                    ))
-                    .id(),
-            );
-        }
-    }
-
-    // ── 四条边：下 (0) / 上 (1) / 左 (2) / 右 (3) ──
-    for (i, (offset, _)) in edge_defs.into_iter().enumerate() {
-        let Some(mesh) = entities.edge_meshes[i].clone() else {
-            continue;
-        };
-        let Some(mat) = entities.edge_materials[i].clone() else {
-            continue;
-        };
-        let tf = Transform::from_translation((center + offset).extend(SELECTION_Z + 0.001));
-        match entities.edges[i] {
-            Some(e) => {
-                commands
-                    .entity(e)
-                    .insert((tf, Mesh2d(mesh), MeshMaterial2d(mat)));
-            }
-            None => {
-                entities.edges[i] =
-                    Some(commands.spawn((tf, Mesh2d(mesh), MeshMaterial2d(mat))).id());
-            }
-        }
-    }
-}
-
 // ══════ from crates/wv-world-cell-map/src/cell_selection.rs :: sync_cell_stroke ══════
 /// 每帧同步 **待落笔触色块**（[ADR-0052] D3 / §9.5 四态视觉分工）。
 ///
@@ -2223,7 +2132,8 @@ pub fn sync_cell_stroke(
 // ══════ from crates/wv-world-cell-map/src/cell_selection.rs :: sync_cell_hover ══════
 /// 每帧同步 **hover 准星**（[ADR-0052] D2 / §9.5 四态视觉分工）。
 ///
-/// gate = `edit_cell.tool_active ∧ edit_cell.hover.is_some()`；
+/// gate = `(edit_cell.tool_active ∨ point_select.tool_active) ∧ edit_cell.hover.is_some()`
+/// （ADR-0057：点选工具与单格编辑共用 hover 准星）；
 /// 不满足时全 despawn（无残留）。
 ///
 /// **双色描边**（D2）：每条边两层——外层深墨 `LINE_ON_DARK`（2px）、
@@ -2234,7 +2144,7 @@ pub fn sync_cell_stroke(
 /// **不脉动**（D2）：hover 是瞬时态，脉动会与 selected 的金色脉动混淆。
 /// 脉动是 selected 独占的信号。
 ///
-/// **Z 高于 selected**（`HOVER_Z = 0.95 > SELECTION_Z = 0.9`）：
+/// **Z 高于选区**（`HOVER_Z = 0.95 > SELECTION_Z = 0.9`）：
 /// hover 是「此刻光标在哪」的瞬时反馈，必须画在最上层
 /// （[ADR-0052] §9.5 绘制序 region → stroke → selected → hover）。
 #[allow(clippy::too_many_arguments)] // Bevy 系统参数即依赖声明，宽签名是框架惯例
@@ -2243,11 +2153,15 @@ pub fn sync_cell_hover(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     edit_cell: Res<EditCellState>,
+    point_select: Res<PointSelectState>,
     grid: Res<GridConfig>,
     view: Res<ViewState>,
     mut entities: ResMut<CellHoverEntities>,
 ) {
-    let Some((gx, gy)) = edit_cell.hover.filter(|_| edit_cell.tool_active) else {
+    let Some((gx, gy)) = edit_cell
+        .hover
+        .filter(|_| edit_cell.tool_active || point_select.tool_active)
+    else {
         entities.despawn_all(&mut commands);
         entities.release_assets(&mut meshes);
         return;
@@ -2820,6 +2734,7 @@ mod bridge_tests {
             last_mode: None,
             last_soften: false,
             last_theme_id: "fixture",
+            last_hypsometric: 0.0,
             // 纹理装的是世界图底图；钻入城市后**不会**重建（继承同一个来源）。
             last_map: Some(wv_core::Id::new_unchecked("map_world")),
         });
@@ -3149,6 +3064,107 @@ mod bridge_tests {
                 world.resource::<Assets<Mesh>>().len(),
                 1,
                 "mesh 资产数应恒为 1（无泄漏、无堆积）"
+            );
+        }
+
+        // ── ADR-0057 A3：选区不变 → 面 / 蚂蚁线两套 mesh 都不重建 ─────────
+
+        /// 只装 `sync_cell_region` 的最小世界（面 + 两相位蚂蚁线）。
+        fn cell_region_world(cells: &[(i32, i32)]) -> World {
+            let mut world = World::new();
+            world.insert_resource(Assets::<Mesh>::default());
+            world.insert_resource(Assets::<ColorMaterial>::default());
+            let mut recipe = RenderRecipe::default();
+            recipe.passes[PassId::CellSelection as usize].enabled = true;
+            world.insert_resource(recipe);
+            // 图绑定：drill 为空 → 系统不重绑，故这里预先绑好 8×8 图幅。
+            let map = wv_core::Id::new_unchecked("world_main");
+            let mut sel = CellSelection::default();
+            sel.bind_map(&map, 8, 8);
+            sel.replace(cells.iter().copied());
+            world.insert_resource(sel);
+            world.insert_resource(DrillState::default());
+            world.insert_resource(TerrainTexture {
+                handle: Handle::default(),
+                size: 8,
+                height: 8,
+                res: 1,
+                dirty: None,
+                chunks_dirty: None,
+                field_dirty: None,
+                last_mode: None,
+                last_soften: false,
+                last_theme_id: "daylight",
+                last_hypsometric: 0.0,
+                last_map: None,
+            });
+            world.insert_resource(GridConfig {
+                cell_size: 10.0,
+                raster_origin: Vec2::ZERO,
+                map_origin: Vec2::ZERO,
+                map_size: Vec2::splat(80.0),
+            });
+            world.insert_resource(ViewState::default());
+            world.insert_resource(Time::<()>::default());
+            world.init_resource::<CellRegionEntities>();
+            world.init_resource::<CellAntsEntities>();
+            world
+        }
+
+        fn run_cell_region(world: &mut World) {
+            let mut schedule = Schedule::default();
+            schedule.add_systems(sync_cell_region);
+            schedule.run(world);
+        }
+
+        /// **A3**：选区不变（同指纹、同缩放档）→ 面与蚂蚁线的 mesh 句柄逐帧不变；
+        /// 选区一变则两套都重建（新句柄）。
+        #[test]
+        fn unchanged_selection_does_not_rebuild_cell_region_meshes() {
+            let mut world = cell_region_world(&[(0, 0), (1, 0)]);
+            run_cell_region(&mut world);
+            let fill_before = world
+                .resource::<CellRegionEntities>()
+                .fill_mesh
+                .clone()
+                .expect("填充 mesh 应已建");
+            let ants_before = world
+                .resource::<CellAntsEntities>()
+                .mesh_a
+                .clone()
+                .expect("蚂蚁线 mesh 应已建");
+            let assets_after_first = world.resource::<Assets<Mesh>>().len();
+
+            // 同选区、同缩放档再跑一帧：不得重建（句柄与资产数都不变）。
+            run_cell_region(&mut world);
+            assert_eq!(
+                world.resource::<CellRegionEntities>().fill_mesh,
+                Some(fill_before.clone()),
+                "选区不变 → 填充 mesh 不得重建"
+            );
+            assert_eq!(
+                world.resource::<CellAntsEntities>().mesh_a,
+                Some(ants_before.clone()),
+                "选区不变 → 蚂蚁线 mesh 不得重建"
+            );
+            assert_eq!(
+                world.resource::<Assets<Mesh>>().len(),
+                assets_after_first,
+                "选区不变不得新增 mesh 资产（句柄复用）"
+            );
+
+            // 选区 +1 格 → 指纹变 → 两套都重建（句柄必须换新）。
+            world.resource_mut::<CellSelection>().union([(2, 0)]);
+            run_cell_region(&mut world);
+            assert_ne!(
+                world.resource::<CellRegionEntities>().fill_mesh,
+                Some(fill_before),
+                "选区变化必须重建填充 mesh"
+            );
+            assert_ne!(
+                world.resource::<CellAntsEntities>().mesh_a,
+                Some(ants_before),
+                "选区变化必须重建蚂蚁线 mesh"
             );
         }
 

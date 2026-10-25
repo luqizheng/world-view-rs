@@ -19,7 +19,7 @@ pub use wv_world_cell_map::terrain_view::{
 pub use crate::cellmap_bridge::{
     conv_pack, conv_palette, conv_sea, conv_treatment, grid_lines_visible,
     land_pending_terrain_synth, rebuild_texture_on_mode_change, setup_terrain_texture,
-    shade_mode_of, sync_atmosphere, sync_cell_region, sync_cell_selection, sync_grid_config,
-    sync_grid_lines, sync_isoline_overlay, sync_missing_overlay_markers, sync_region_overlay_index,
+    shade_mode_of, sync_atmosphere, sync_cell_region, sync_grid_config, sync_grid_lines,
+    sync_isoline_overlay, sync_missing_overlay_markers, sync_region_overlay_index,
     sync_terrain_chunks, sync_terrain_field, FieldKey, FieldRenderStats, TerrainFieldRender,
 };

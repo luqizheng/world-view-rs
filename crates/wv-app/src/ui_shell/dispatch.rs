@@ -229,11 +229,12 @@ pub(crate) fn apply_pending_commands(
     mut boundary: ResMut<wv_render::state::BiomeBoundaryState>,
     // 泛洪选择工具会话态（[ADR-0052] D6）：与 EditCell 同款粒度的互斥工具。
     // 撤销白闪会话态（[ADR-0052] D8-A）：撤销/重做后对受影响格做 250ms
-    // 白色脉冲——两者同属 CellMap 编辑域视觉，折成一层元组（元组算 1 个参数，
-    // 单系统上限 16）。
-    (mut flood_select, mut flash): (
+    // 白色脉冲；点选工具会话态（ADR-0057 补记 6）——三者同属 CellMap
+    // 会话域，折成一层元组（元组算 1 个参数，单系统上限 16）。
+    (mut flood_select, mut flash, mut point_select): (
         ResMut<crate::state::FloodSelectState>,
         ResMut<wv_world_cell_map::cell_flash::CellFlashState>,
+        ResMut<crate::state::PointSelectState>,
     ),
     current_loc: Res<CurrentLocale>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
@@ -408,15 +409,11 @@ pub(crate) fn apply_pending_commands(
                 MapToolId::MeasureRect => measure.mode == MeasureMode::Rect,
                 MapToolId::MeasureEraser => measure.mode == MeasureMode::Eraser,
                 MapToolId::Continent => false,
-                // EditCell 的「已开」判据 = `tool_active`，**不是** `selected.is_some()`
-                // （[ADR-0052] §9.1 S0-1）。旧口径把「点过一格」当成「工具开着」，
-                // 于是二次点击瓷砖无法关闭工具、且切走时把选区一起清了。
-                // EditCell / CellSelect 共用 `tool_active`，靠 `allow_drag` 区分形态
-                // （2026-10-24）。「已开」判据必须**带上形态**，否则：
-                // - 单选模式下点 EditCell 瓷砖会被误判成「已开」→ 关掉而不是切形态；
-                // - 两点之间的「先全关再开」逻辑会把刚设好的形态又重置。
-                MapToolId::EditCell => edit_cell.tool_active && edit_cell.allow_drag,
-                MapToolId::CellSelect => edit_cell.tool_active && !edit_cell.allow_drag,
+                // EditCell 的「已开」判据 = `tool_active`（[ADR-0052] §9.1 S0-1）。
+                // ADR-0057 补记 6：PointSelect 与 EditCell 拆成两件工具两个状态，
+                // 不再共用 `tool_active` / `allow_drag`——判据各读各的 Resource。
+                MapToolId::EditCell => edit_cell.tool_active,
+                MapToolId::PointSelect => point_select.tool_active,
                 MapToolId::BiomeBoundary => boundary.line.is_some(),
                 MapToolId::FloodSelect => flood_select.tool_active,
             };
@@ -441,11 +438,13 @@ pub(crate) fn apply_pending_commands(
                 if had_measure {
                     measure.clear_draft();
                 }
-                // 关掉 EditCell 时**只关工具，不清选区**（[ADR-0052] §9.1 S0-1）：
-                // `selected` / `region_cells` 是已提交的选择态，切工具后仍保留，
+                // 关掉 EditCell 时**只关工具，不清选区**（[ADR-0052] §9.1 S0-1 +
+                // ADR-0057 D1）：`CellSelection` 是已提交的选区态，切工具后仍保留，
                 // 「框选一片 → 切 EditCell」不丢选区（§5 M1 验收 ④）。
-                // 只有切图（`on_map_change`）与 Esc 全量清理才走 `clear()`。
+                // 切图清空由 `sync_cell_region` 的 `bind_map` 承担；Esc 走清空入口。
                 edit_cell.close_tool();
+                // 点选工具同款：只关工具，不动选区（ADR-0057 补记 6）。
+                point_select.close_tool();
                 // 关掉泛洪工具：同样只关工具，不清选区（D6-A）。
                 flood_select.close_tool();
                 // 切走分界线工具：线是会话工具，一并清（ADR-0051）。
@@ -478,29 +477,24 @@ pub(crate) fn apply_pending_commands(
                             measure.mode = MeasureMode::Eraser;
                         }
                         MapToolId::Continent => unreachable!("Continent 已在上方分支处理"),
-                        // EditCell 工具激活:`selected` 仍为 None,要等用户点击一格
-                        // 才出 Inspector 字段 + PassId::CellSelection 高亮。
-                        // (这里**不**自动开 selection.enabled——那是 Circle Select 工具)
+                        // EditCell 工具激活：ADR-0057 后**只画不选**——点击/拖动
+                        // 累积笔触（见 edit::cell_stroke），选区写入全归
+                        // PointSelect / 框选 / 套索 / 泛洪四个落笔点。
                         MapToolId::EditCell => {
-                            // 标记 EditCell 工具激活;点击事件自己写到 `edit_cell.selected`
-                            // (见 editing::commit_edit_cell_on_click)。
                             edit_cell.tool_active = true;
-                            // 完整形态：拖动累积笔触（D3）。
-                            edit_cell.allow_drag = true;
                         }
-                        // 单选模式（2026-10-24）：同一个 `tool_active`，只是关掉拖绘。
-                        // `selected` / `hover` / 渲染 / Inspector 两模式共用，
-                        // 故这里**不需要**任何额外状态。
-                        MapToolId::CellSelect => {
-                            edit_cell.tool_active = true;
-                            edit_cell.allow_drag = false;
+                        // 点选工具（ADR-0057 补记 6）：独立 `PointSelectState`。
+                        // 落笔写 `CellSelection`（见 editing::commit_edit_cell_on_click
+                        // 的点选分支），hover 准星与 EditCell 共用。
+                        MapToolId::PointSelect => {
+                            point_select.tool_active = true;
                         }
                         // 分界线工具激活：线要等用户在地图上拖出（见
                         // edit::biome_boundary_input）。
                         MapToolId::BiomeBoundary => {
                             boundary.tool_active = true;
                         }
-                        // 泛洪选择激活：点一下即泛洪，结果入 `region_cells`
+                        // 泛洪选择激活：点一下即泛洪，结果入统一选区
                         // （见 `edit::flood_select`）。判据在 CellMap 面板的
                         // segmented 里改（[ADR-0052] D6）。
                         MapToolId::FloodSelect => {

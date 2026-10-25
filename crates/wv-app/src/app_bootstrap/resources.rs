@@ -114,10 +114,10 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     // `ResMut<StrokeDiscardPrompt>`——漏 init 即启动期 panic（真机实测抓到，
     // 单测用 run_system_once 手动 insert 掩盖了装配缺失）。
     .init_resource::<crate::edit::cell_stroke::StrokeDiscardPrompt>()
-    // cellmap 渲染实体池（选中 / 区域 / hover 准星 / 待落笔触 / 闪视觉）：
+    // cellmap 渲染实体池（区域填充 / 蚂蚁线 / hover 准星 / 待落笔触 / 闪视觉）：
     // 渲染系统 `ResMut` 它们——漏 init 即启动期 panic。
-    .init_resource::<wv_render::cell_selection::CellSelectionEntities>()
     .init_resource::<wv_render::cell_selection::CellRegionEntities>()
+    .init_resource::<wv_render::cell_selection::CellAntsEntities>()
     .init_resource::<wv_render::cell_selection::CellHoverEntities>()
     .init_resource::<wv_render::cell_selection::CellStrokeEntities>()
     .init_resource::<wv_world_cell_map::cell_flash::CellFlashEntities>()
@@ -142,6 +142,13 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     // apply_pending_commands 都 ResMut 它——漏 init 即启动期 panic
     // （2026-10-20 实机验收抓到：测试 fixture 手动 init 掩盖了装配遗漏）。
     .init_resource::<wv_render::state::EditCellState>()
+    // CellMap 统一选区位图（ADR-0057）：`sync_cell_region` 每帧 `ResMut` 绑定
+    // 当前图；wv-app 各落笔点 `ResMut` 改写。漏 init 即启动期 panic（同上）。
+    .init_resource::<wv_render::state::CellSelection>()
+    // 点选工具会话态（ADR-0057 补记 6）：与 EditCell 平级的独立 Resource。
+    .init_resource::<wv_render::state::PointSelectState>()
+    // 套索活链接（ADR-0057 补记 5）：sync_region_cells ResMut 它。
+    .init_resource::<crate::edit::editing::LassoLiveLink>()
     // 群系分界线工具会话态（2026-10-22 内容矩阵 / ADR-0051）：输入系统与
     // 预览系统都 ResMut 它——漏 init 即启动期 panic（同 EditCellState 教训）。
     .init_resource::<wv_render::state::BiomeBoundaryState>()
@@ -149,12 +156,6 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     .init_resource::<wv_render::state::RegionAdjustState>()
     // 候选上下文镜像（渲染层用；漏 init 即 panic）。
     .init_resource::<wv_render::state::RegionCandidateContext>()
-    // Cell 编辑器的「单格 / 批量」工作模式（[ADR-0040] 补 B）——面板系统
-    // ResMut 它,漏 init 即启动期 panic(同 EditCellState 的教训)。
-    .init_resource::<crate::ui::inspector::cell::CellPanelMode>()
-    // 「圈完自动落批量」的边沿检测（2026-10-24）——同属面板系统 ResMut
-    // 的会话态,漏 init 即启动期 panic(同上)。
-    .init_resource::<crate::ui::inspector::cell::BatchModeAutoLand>()
     // Inspector 的当前页签（2026-10-22 统一 Inspector）：面板系统 ResMut 它,
     // 漏 init 即启动期 panic(同 EditCellState 的教训)。
     .init_resource::<crate::ui::inspector::InspectorState>()

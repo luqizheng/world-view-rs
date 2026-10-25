@@ -85,24 +85,25 @@ pub(super) fn register(app: &mut App) {
                         "commit_stroke_on_release",
                         editing::commit_stroke_on_release
                     ),
-                    // 单格编辑（[ADR-0040]）：点击 → cell_pick → EditCellState.selected
+                    // 点选工具（ADR-0057 补记 6）：点击 → cell_pick → CellSelection
+                    // （无修饰 = 替换 / Shift = 并 / Alt = 差）。EditCell 只画不选。
                     wv_render::perf_timed!(
-                        "commit_edit_cell_on_click",
-                        editing::commit_edit_cell_on_click
+                        "commit_point_select_on_click",
+                        editing::commit_point_select_on_click
                     ),
-                    // hover 准星（[ADR-0052] D2 写入侧）：每帧追踪光标压住的格。
+                    // hover 准星（[ADR-0052] D2 写入侧；ADR-0057：EditCell ∨
+                    // PointSelect 共用）：每帧追踪光标压住的格。
                     // 必须排在 `track_cursor_world` 之后（要读 cursor_world）。
                     wv_render::perf_timed!("track_edit_cell_hover", editing::track_edit_cell_hover)
                         .after(wv_render::camera::track_cursor_world),
                     // 单格连续绘制（[ADR-0052] D3）：拖动累积格 + 松手提交。
-                    // 排在 `track_cursor_world` 之后（要读 cursor_world）、
-                    // `commit_edit_cell_on_click` 之后（点选与拖绘同属 EditCell）。
+                    // 排在 `track_cursor_world` 之后（要读 cursor_world）。
                     wv_render::perf_timed!(
                         "paint_edit_cell_on_drag",
                         crate::edit::cell_stroke::paint_edit_cell_on_drag
                     )
                     .after(wv_render::camera::track_cursor_world),
-                    // 泛洪选择（[ADR-0052] D6-A）：点一下即泛洪，结果替换 region_cells。
+                    // 泛洪选择（[ADR-0052] D6-A）：点一下即泛洪，结果写统一选区。
                     wv_render::perf_timed!(
                         "flood_select_on_click",
                         crate::edit::flood_select::flood_select_on_click
@@ -283,8 +284,9 @@ pub(super) fn register(app: &mut App) {
     // 按 AGENTS §2.1「装配点留在组合根」，这里显式注册。
     //
     // 顺序：区域 → 笔触 → 选中 → hover → 闪视觉，与 ADR-0052 §9.5 的
-    // 绘制序（region → stroke → selected → hover）一致；闪视觉最后
-    // （z 最高，250ms 短促）。
+    // 绘制序（region → stroke → hover）一致；闪视觉最后
+    // （z 最高，250ms 短促）。ADR-0057：旧 sync_cell_selection（单格 outline）
+    // 退役，选区统一由 sync_cell_region 承担。
     //
     // **必须 `.after(sync_grid_config)`**（2026-10-24 真机调试）：
     // 这批系统全靠 `GridConfig::raster_origin` / `cell_size` 把格坐标换算成
@@ -297,8 +299,7 @@ pub(super) fn register(app: &mut App) {
         (
             cellmap_bridge::sync_cell_region,
             cellmap_bridge::sync_cell_stroke,
-            cellmap_bridge::sync_cell_selection,
-            cellmap_bridge::sync_cell_hover.after(cellmap_bridge::sync_cell_selection),
+            cellmap_bridge::sync_cell_hover.after(cellmap_bridge::sync_cell_region),
             cellmap_bridge::sync_cell_flash,
         )
             .after(terrain_view::sync_grid_config)
@@ -365,6 +366,14 @@ pub(super) fn register(app: &mut App) {
         Update,
         (
             wv_render::selection::sync_selection_map_change,
+            // Esc 清空统一选区（ADR-0057 补记 3）：**必须排在手势处理之前**——
+            // 拖绘 / 套索进行中时它跳过（Esc 归手势），空闲帧才清选区。
+            // 排在其后会看到「手势已被本帧清掉」而顺手清选区（一键两效）。
+            editing::clear_cell_selection_on_escape
+                .after(wv_render::selection::sync_selection_map_change)
+                .before(wv_render::selection::commit_selection_click)
+                .before(wv_render::selection::commit_selection_shape_drag)
+                .before(crate::edit::cell_stroke::paint_edit_cell_on_drag),
             wv_render::selection::commit_selection_click
                 .after(wv_render::selection::sync_selection_map_change),
             wv_render::selection::drag_selected_anchor
