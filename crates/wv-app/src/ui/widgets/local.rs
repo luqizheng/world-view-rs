@@ -32,6 +32,14 @@ use wv_ui::widgets::{rect_stroke, BadgeKind, FloatWindow};
 /// 启动加载）在 `Order::Foreground`—— egui 绘制序
 /// `Background < Middle < Foreground < Tooltip`，故弹窗压面板、悬浮提示仍在最上。
 /// 新增浮层时按此表对号入座，不要把弹窗放回 Middle。
+///
+/// ## 活动范围（2026-10-25 无边框窗配套）
+///
+/// 全部浮窗统一 `constrain_to(central_area)`：视口挖去顶栏 38 与状态栏
+/// 28——拖不进两端 chrome（状态栏因此永不被盖，也不必抬层：曾试验把
+/// 状态栏根 Ui 提 Foreground，全视口 widget 会闷死 hit_test 的低层命中，
+/// 见 `top_bar::root_ui` 文档）、也拖不出视口；按大窗口保存的
+/// `ui-layout.yaml` 坐标在小窗口下被逐帧钳回可见区。
 #[allow(clippy::too_many_arguments)]
 pub fn float_window(
     ctx: &egui::Context,
@@ -53,14 +61,21 @@ pub fn float_window(
     // 沉浸模式：整体淡化但**仍可交互**（D3：状态永不抑制）。
     let alpha = if panels.immersive { 0.10 } else { 0.96 };
 
-    FloatWindow::new(id, panel.title(loc))
+    // 越界回拉（2026-10-25）：egui 的 `constrain_to` 不钳位置（只钳尺寸 /
+    // 锚点 / move 命中区），上一会话拖进 chrome 的 `ui-layout.yaml` 坐标
+    // 会原样复现。见 [`crate::ui::top_bar::snap_into_central`] 文档。
+    let mut fw = FloatWindow::new(id, panel.title(loc))
         .icon(panel.icon())
         .tag(tag)
         .default_pos(egui::pos2(layout.x, layout.y))
         .default_size(egui::vec2(layout.width, layout.height))
         .default_open(!layout.collapsed)
         .alpha(alpha)
-        .show(ctx, shell, body);
+        .constrain_to(crate::ui::top_bar::central_area(ctx));
+    if let Some(p) = crate::ui::top_bar::snap_into_central(ctx, id) {
+        fw = fw.current_pos(p);
+    }
+    fw.show(ctx, shell, body);
 }
 
 /// 地形色块瓷砖网格（2026-10-16 改版：5 列 × 2 行纯色块，26 px 方块）。

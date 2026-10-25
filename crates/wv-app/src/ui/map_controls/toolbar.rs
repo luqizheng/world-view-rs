@@ -88,6 +88,9 @@ pub fn map_controls(
         } else {
             EDGE_OFFSET
         };
+        // 状态栏常驻（2026-10-25）：横向贴底的基础抬升让出底部 28px chrome，
+        // 时间轴在场时其抬升已含状态栏高度，`max` 只兜「时间轴不在场」分支。
+        let bottom_lift = bottom_lift.max(EDGE_OFFSET + crate::ui::top_bar::STATUS_BAR_H);
         (egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -bottom_lift))
     };
     // 用户拖动 grip 后的位置偏移：仍是「相对锚点的屏幕偏移」，但不再

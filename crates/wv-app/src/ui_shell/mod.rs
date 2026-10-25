@@ -89,6 +89,8 @@ pub fn register(app: &mut App) {
         .init_resource::<DrillState>()
         .init_resource::<RecentProjects>()
         .init_resource::<LayoutFile>()
+        // 无边框窗（2026-10-25）：最大化态镜像（bevy 0.19 无 is_maximized 查询）。
+        .init_resource::<crate::ui::top_bar::WindowChromeState>()
         // 地图工具条朝向 + 吸附（2026-10-19）：由 `ui-layout.yaml` 的
         // `map_dock` / `map_snap` 读写；`map_controls` 与分发器共享同一份状态。
         .init_resource::<crate::ui::map_controls::MapDockState>()

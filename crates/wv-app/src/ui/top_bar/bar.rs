@@ -2,9 +2,12 @@
 
 use super::prefs::*;
 use super::status::vsep_h_at;
+use super::window_controls::{window_controls_segment, WindowChromeState, CONTROLS_W};
 use super::*;
 
-/// 顶栏：身份 / 主控（居中独立 Area）/ 读数。**唯一例外**的 `TopBottomPanel`。
+use bevy::window::PrimaryWindow;
+
+/// 顶栏：窗控（最左）/ 身份 / 主控（居中独立 Area）/ 读数。
 #[allow(clippy::too_many_arguments)]
 pub fn top_bar(
     mut contexts: EguiContexts,
@@ -19,15 +22,25 @@ pub fn top_bar(
     mut current_loc: ResMut<CurrentLocale>,
     // Gate-2（[ADR-0052] §9.4）：无当前地图时顶栏 CellMap 段灰化。
     drill: Res<DrillState>,
+    // 无边框窗（2026-10-25）：窗控三键 / 拖拽 / 双击最大化要写主窗口，
+    // 关闭键写 `AppExit` 消息（bevy 0.19 事件体系改名 Message；单窗口
+    // 应用，关主窗 = 退出）。
+    mut primary: Query<&mut Window, With<PrimaryWindow>>,
+    mut exit: MessageWriter<AppExit>,
+    mut chrome: ResMut<WindowChromeState>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
+    let Ok(mut window) = primary.single_mut() else {
+        return;
+    };
     // web `.topbar` 精确高度 38px。
-    let h = 38.0;
+    let h = TOP_BAR_H;
     let recents = recents_res.visible(&projection);
     let mut root = root_ui(ctx);
+    let mut drag_resp: Option<egui::Response> = None;
     egui::Panel::top("wv_top_bar")
         .exact_size(h)
         .frame(
@@ -44,6 +57,17 @@ pub fn top_bar(
                 .inner_margin(crate::theme::ui_theme::margin_xy(space::SM, 0.0)),
         )
         .show(&mut root, |ui| {
+            // 拖拽区**最先注册**（垫底）：后画的窗控/菜单/标签压在其上，
+            // 点控件不会误触拖窗；空白条背吃到拖拽与双击（无边框窗 2026-10-25）。
+            // ⚠️ 教训（探针实测）：本栏必须留在 Background 层——一旦有更高
+            // Order 的**全视口** widget（如曾把状态栏根 Ui 提到 Foreground），
+            // egui hit_test 的层过滤会在该 widget 处提前 break，把 Background /
+            // Middle 层的命中整体排除，全界面输入失灵（拖拽区 contains=false）。
+            let drag = ui.interact(
+                ui.max_rect(),
+                egui::Id::new("wv_top_bar_drag"),
+                egui::Sense::click_and_drag(),
+            );
             ui.horizontal(|ui| {
                 // ── 左区：项目按钮 + 面包屑（web .top-left）──
                 identity_segment(
@@ -56,8 +80,8 @@ pub fn top_bar(
                     &current_loc,
                 );
                 // ── 右区：保存态 / 分隔线 / 日夜 / 语言 / Rebuild / 设置 ──
-                // 几何按右缘绝对反推（见 `readout_segment` 文档），
-                // 不再依赖 `right_to_left` 的游标推进。
+                // 几何按右缘绝对反推（见 `readout_segment` 文档）；右缘让出
+                // 窗控三键宽，两段同用绝对反推、永不相叠。
                 readout_segment(
                     ui,
                     &shell,
@@ -66,8 +90,13 @@ pub fn top_bar(
                     &mut shell_cfg,
                     &mut settings,
                     &mut palette,
+                    ui.max_rect().right() - CONTROLS_W,
                 );
+                // ── 最右上角：窗控三键（最小化/最大化/关闭，关闭键贴右缘）──
+                // 首轮裁定放最左上，2026-10-25 二轮改裁右上（Windows 惯例位）。
+                window_controls_segment(ui, &shell, &mut window, &mut chrome, &mut exit);
             });
+            drag_resp = Some(drag);
         });
 
     // ── 中区：web grid 的 `auto` 列——独立 Area 锚视口顶部居中 ──
@@ -92,6 +121,18 @@ pub fn top_bar(
                 );
             });
         });
+
+    // ── 无边框窗（2026-10-25）：顶栏空白背按住拖动移窗、双击切最大化 ──
+    //（Windows 惯例；中区 Browse/Edit 分段与各控件压在拖拽区之上，不受影响。）
+    if let Some(drag) = drag_resp {
+        if drag.drag_started() {
+            window.start_drag_move();
+        }
+        if drag.double_clicked() {
+            chrome.maximized = !chrome.maximized;
+            window.set_maximized(chrome.maximized);
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -255,11 +296,14 @@ fn browse_edit_segment(
 ///
 /// 从左到右：保存态 → 分隔线 → 日夜 → 语言 → Rebuild → 设置。
 ///
-/// **几何全部按视口右缘反推、绝对定宽**，不依赖 `ui` 当前方向：
+/// **几何全部按 `right_edge` 反推、绝对定宽**，不依赖 `ui` 当前方向：
 /// 该段原先挂在 `right_to_left` 布局里，而 `egui::Ui::put`（放图标）会按子矩形
 /// **推进游标**——每个控件的尾随 icon 都把下一件的起点顶偏，结果两个 26px
 /// 控件互相叠了 27px（2026-10-19 实机量 rect 确认）。改成「先算宽度、从右往左
-/// 摆」，`put` 再推游标也不影响任何其它控件。
+/// 摆」，`put` 再推游标也不影响任何其它控件。`right_edge` 由调用方给
+/// （视口右缘减窗控三键宽 [`super::window_controls::CONTROLS_W`]，2026-10-25
+/// 窗控入顶栏右上后让位）。
+#[allow(clippy::too_many_arguments)]
 fn readout_segment(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -268,13 +312,14 @@ fn readout_segment(
     shell_cfg: &mut UiShellConfig,
     settings: &mut SettingsDialog,
     palette: &mut crate::ui_command_palette::CommandPalette,
+    right_edge: f32,
 ) {
     /// 右区相邻控件间距（Figma Workspace preferences `gap: 8px`）。
     const GAP: f32 = space::SM;
 
     let bar = ui.max_rect();
     let cy = bar.center().y;
-    let mut right = bar.right();
+    let mut right = right_edge;
 
     // ── 设置入口（最右）：28×28 命中区、14px Lucide `settings-2` ──
     right -= shell.hit;

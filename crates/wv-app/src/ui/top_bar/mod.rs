@@ -36,6 +36,7 @@
 //! - [`bar`]：顶栏三区（身份 / 主控 / 读数）。
 //! - [`prefs`]：右区偏好控件（日夜 / 语言 / Rebuild / 设置）。
 //! - [`status`]：状态栏与各读数段。
+//! - [`window_controls`]：无边框窗窗控三键（2026-10-25，去原生标题栏）。
 //! - `tests`：原 `mod tests` 整段平移。
 //!
 //! ## 主要导出
@@ -67,9 +68,16 @@ mod prefs;
 mod status;
 #[cfg(test)]
 mod tests;
+mod window_controls;
 
 pub use bar::top_bar;
 pub use status::status_bar;
+pub(crate) use window_controls::WindowChromeState;
+
+/// 顶栏高度（web `.topbar` 38px）。
+pub(crate) const TOP_BAR_H: f32 = 38.0;
+/// 状态栏高度（Figma #3:21001 designedHeight 28px）。
+pub(crate) const STATUS_BAR_H: f32 = 28.0;
 
 /// 验证警告数（v0.3：状态条右侧徽标需要）。
 ///
@@ -83,6 +91,14 @@ pub struct ValidationCount {
 }
 
 /// 构造一个「视口根 `Ui`」。
+///
+/// ⚠️ **必须留在 Background 层**（探针实测 2026-10-25）：状态栏曾为「不被
+/// 浮窗盖住」把根 Ui 提到 Foreground——但根 Ui 自身会注册一个全视口
+/// widget，egui `hit_test` 的层过滤（`hit_test.rs` 的 included_layers
+/// break 循环）在覆盖搜索圆的更高层 widget 处提前收口，Background /
+/// Middle 层的命中被整体排除——**全界面输入失灵**（顶栏拖拽区
+/// `contains=false`、按钮点不动）。防遮挡由 [`central_area`] 的浮窗
+/// 钳制保证，不需要抬层。
 pub(crate) fn root_ui(ctx: &egui::Context) -> egui::Ui {
     egui::Ui::new(
         ctx.clone(),
@@ -91,4 +107,51 @@ pub(crate) fn root_ui(ctx: &egui::Context) -> egui::Ui {
             .layer_id(egui::LayerId::background())
             .max_rect(ctx.viewport_rect()),
     )
+}
+
+/// 浮动面板的活动范围：视口挖去顶栏与状态栏（无边框窗 2026-10-25）。
+///
+/// 由 [`crate::ui::widgets::float_window`] 统一喂给
+/// `FloatWindow::constrain_to`——浮窗拖不进两端 chrome、也拖不出视口；
+/// 按大窗口保存的 `ui-layout.yaml` 坐标（如 timeline 默认 y=880）在小窗
+/// 口下会被逐帧钳回可见区，不再出现「面板丢在视口外」。
+pub(crate) fn central_area(ctx: &egui::Context) -> egui::Rect {
+    central_area_of(ctx.viewport_rect())
+}
+
+/// [`central_area`] 的纯几何核（供单测）：`vp` 挖去顶栏高与状态栏高。
+pub(crate) fn central_area_of(vp: egui::Rect) -> egui::Rect {
+    egui::Rect::from_min_max(
+        egui::pos2(vp.min.x, vp.min.y + TOP_BAR_H),
+        egui::pos2(vp.max.x, vp.max.y - STATUS_BAR_H),
+    )
+}
+
+/// 越界回拉（2026-10-25）：`id` 对应浮窗上一帧的位置若越出
+/// [`central_area`]，返回修正后的左上角（喂给 `egui::Window::current_pos`
+/// 强制落位）；在界内返回 None（不干预用户拖拽）。
+///
+/// ⚠️ 为什么必须自己做：egui 0.36 的 `constrain_to` **不钳制位置**——只钳
+/// 尺寸 / 锚点 / move 命中区（`area.rs` 通读无 position clamp），上一会话
+/// 拖进 chrome 的 `ui-layout.yaml` 坐标会原样复现（实测：时间轴拖到贴视口
+/// 底、盖住状态栏）。拖进 chrome 的那一帧松手即回弹。所有**游离浮窗**
+/// 都要走这把钳子——`float_window`（`ui::widgets::local`）与直连
+/// `egui::Window` 的 timeline；居中模态窗（各 dialog）不适用。
+pub(crate) fn snap_into_central(ctx: &egui::Context, id: egui::Id) -> Option<egui::Pos2> {
+    let central = central_area(ctx);
+    ctx.memory(|m| m.area_rect(id)).and_then(|r| {
+        if central.contains_rect(r) {
+            return None;
+        }
+        Some(egui::pos2(
+            r.left().clamp(
+                central.left(),
+                (central.right() - r.width()).max(central.left()),
+            ),
+            r.top().clamp(
+                central.top(),
+                (central.bottom() - r.height()).max(central.top()),
+            ),
+        ))
+    })
 }

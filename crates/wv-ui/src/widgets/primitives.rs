@@ -716,6 +716,15 @@ pub const ICON_RULER: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/ruler.svg");
 pub const ICON_SQUARE: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/square.svg");
+/// 窗口最小化 —— Lucide `minus`（无边框窗顶栏窗控，2026-10-25）。
+pub const ICON_MINUS: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/minus.svg");
+/// 窗口最大化还原 —— Lucide `copy`（无边框窗顶栏窗控的 restore 形态）。
+pub const ICON_COPY: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/copy.svg");
+/// 窗口关闭 —— Lucide `x`（无边框窗顶栏窗控）。
+pub const ICON_X: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/x.svg");
 /// 单格编辑工具 —— Lucide `square-mouse-pointer`（地图工具条 [ADR-0052] D7-1）。
 pub const ICON_SQUARE_MOUSE_POINTER: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/square-mouse-pointer.svg");

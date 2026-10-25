@@ -96,15 +96,6 @@ pub fn panel_minimap(
                     (p.y - rect.top()) / rect.height(),
                 )
             };
-            // `_pos_of`：视口框改走 `viewport_pixel_rect` 后暂无调用方；
-            // 归一化→像素的逆变换留着（下批 minimap 迭代大概率要用）。
-            // 2026-10-25 合并 main 时门禁 -D warnings 拦下，加 `_` 保留。
-            let _pos_of = |n: Vec2| {
-                egui::pos2(
-                    rect.left() + n.x * rect.width(),
-                    rect.top() + n.y * rect.height(),
-                )
-            };
 
             // 视口矩形（「镜头在哪」）：中心 = 相机中心的归一化位置；
             // 占幅 = 可见世界宽 ÷ 图宽（归一化占比 × overview 实际宽高 =
