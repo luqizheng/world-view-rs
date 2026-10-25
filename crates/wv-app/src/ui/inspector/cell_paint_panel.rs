@@ -4,8 +4,8 @@
 //!
 //! D4 与 D8 是 CellMap 工作区的**第一屏内容**——拖绘工作流的核心：
 //!
-//! - **读数条**（D8）：面板顶部固定双段，**左段永远读 hover**、
-//!   **右段永远读 selected**，任一段无数据显 `—`，**绝不回退错位**。
+//! - **读数条**（D8）：面板顶部固定双行，**上行永远读 hover**、
+//!   **下行永远读 selected**，任一行无数据显 `—`，**绝不回退错位**。
 //! - **落笔值区**（D4）：拖绘时写进每一格的值。**地表 / 群系是绝对值，
 //!   海拔是相对增量**——与单格段的「此格海拔」**分区标注**，不得无标签并排。
 //!
@@ -29,12 +29,13 @@ use wv_world_cell_map::terrain_view::biome_raw::{BIOME_NAMES_ZH, BIOME_RAW_COLOR
 
 /// **读数条**（D8）。
 ///
-/// 固定双段（hover | 选区），等宽字体，微号字。
+/// 固定双行（上 hover / 下 选区），等宽字体，微号字。
+/// 2026-10-25 用户裁定：原双段挤一行，窄面板里互相挤压，拆为两行。
 ///
 /// **绝不回退**：hover 无数据显 `—`，**不**拿选区的值填上去——
 /// 作者看到「光标在这格」与「选中的是那格」是两件事，混淆会误改地形。
 ///
-/// ADR-0057 D1：右段读统一选区——**1 格**显该格读数（单格语义），
+/// ADR-0057 D1：下行读统一选区——**1 格**显该格读数（单格语义），
 /// **N 格**显「N 格」（批量语义），空选区显 `—`。
 pub fn render_readout_bar(
     ui: &mut egui::Ui,
@@ -76,6 +77,7 @@ pub fn render_readout_bar(
         None => "—".to_string(),
     };
 
+    // 上行：光标（hover）。
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         ui.label(
@@ -89,12 +91,11 @@ pub fn render_readout_bar(
                 .size(font_size::MICRO)
                 .color(shell.t1()),
         );
-        // 竖分隔线（1×16）。
-        //
-        // egui 0.36 的 `Separator` 只有水平方向（无 `orientation` 方法），
-        // 故自绘：分配 1×16 的矩形后用 `painter` 填色。
-        let (sep, _) = ui.allocate_exact_size(egui::vec2(1.0, 16.0), egui::Sense::hover());
-        ui.painter().rect_filled(sep, 0.0, shell.border_subtle());
+    });
+    ui.add_space(2.0);
+    // 下行：选中（统一选区，ADR-0057 D1）。
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
         ui.label(
             egui::RichText::new(t(loc, I18nKey::CellPaintReadoutSelected))
                 .size(font_size::MICRO)

@@ -421,8 +421,8 @@ pub(super) fn register(app: &mut App) {
             ui::top_bar,
             // Google 式贴边导航控件先画，浮动面板仍可在需要时覆盖它。
             ui::map_controls,
-            // 面包屑浮在地图上、压在面板之下（v0.2 §B.3）。
-            ui::breadcrumb,
+            // （2026-10-25 用户裁定：地图区左上角的面包屑浮层删除——顶栏
+            // 身份区已有同内容面包屑，浮层重复且挡地图。）
             ui::panel_map_tree,
             ui::panel_layers,
             ui::panel_brush,
@@ -460,13 +460,11 @@ pub(super) fn register(app: &mut App) {
             .chain(),
     );
     // 候选上下文镜像（2026-10-22 验收）：主链已顶满 20 元组，单独注册。
+    // （2026-10-25 用户裁定：群系图例浮层删除——地形设计器面板已含群系
+    // swatch，图例信息重复。）
     app.add_systems(
         Update,
-        (
-            crate::edit::nature_region_actions::sync_candidate_context,
-            // 群系图例（CellMap 左下角）：读 biome_raw 色板与名，自动跟随。
-            ui::biome_legend,
-        ),
+        (crate::edit::nature_region_actions::sync_candidate_context,),
     );
     // 「新建地理事实」命名对话框（选择工具 M4「森林」意图打开；居中模态窗）。
     // 主链已顶满 20 元组上限，单独注册并排在状态栏之后。

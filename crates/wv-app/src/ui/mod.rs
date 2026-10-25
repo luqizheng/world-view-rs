@@ -17,7 +17,6 @@
 
 #![cfg(feature = "app")]
 
-pub mod biome_legend;
 pub mod brush_panel;
 pub mod cell_pick;
 pub mod city_intent;
@@ -48,7 +47,6 @@ pub mod widget_preview;
 pub mod widgets;
 
 // ── 路径兼容 re-export（保持 `crate::ui::X` 不变） ───────────────────────
-pub use biome_legend::biome_legend;
 pub use brush_panel::panel_brush;
 pub use command_palette_window::command_palette;
 pub use continent_dialog::{continent_dialog, continent_dialog_system, ContinentDialog};
@@ -66,7 +64,7 @@ pub use new_map_dialog::{new_map_dialog, NewMapDialog};
 pub use new_project_dialog::{
     new_project_apply_create, new_project_dialog, NewProjectDialog, NewProjectIntent,
 };
-pub use project_menu::{breadcrumb, ProjectMenuState};
+pub use project_menu::ProjectMenuState;
 pub use region_panel::panel_region;
 pub use settings_dialog::{settings_dialog, SettingsDialog};
 pub use shell::{terrain_name_at, terrain_swatch, UiShell};

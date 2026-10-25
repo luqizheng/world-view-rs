@@ -1,10 +1,9 @@
-//! 项目管理菜单（v0.2 §A）+ 面包屑（v0.2 §B.3）。
+//! 项目管理菜单（v0.2 §A）。
 //!
 //! ## 职责
 //! - `ProjectMenuState` —— 跨帧高亮项（egui `Popup::Memory` 只存开关，不存选中行）。
 //! - `project_menu_inner` —— 工程名下拉菜单；开合走 egui，命令通过 `pending` 排队。
 //! - `menu_section` / `menu_row` —— 分组小标题与菜单行的渲染 helper。
-//! - `breadcrumb` —— `世界 › 遵义城 › 府衙`，浮在地图区左上角。
 //!
 //! ## 边界（不做什么）
 //! - **不**分发命令 —— `state.pending` 交给 [`crate::ui_shell::apply_pending_commands`]。
@@ -13,15 +12,18 @@
 //! ## 主要导出
 //! - `ProjectMenuState` —— Bevy 资源。
 //! - `project_menu_inner` —— 由 [`super::top_bar::top_bar`] 调用（`pub(crate)` 内部桥）。
-//! - `breadcrumb` —— Bevy 系统。
+//!
+//! > **追记（2026-10-25 用户裁定）**：原挂在本模块的 `breadcrumb` 浮层
+//! > （v0.2 §B.3，地图区左上角「世界 › …」）已删除——顶栏身份区已有同内容
+//! > 面包屑，浮层重复且挡地图。点击跳级能力仍由地图树面板承担。
 
 #![cfg(feature = "app")]
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::egui;
 
-use crate::state::{DrillState, PanelState, RecentProject, WorldProjection};
-use crate::theme::ui_theme::{mono, proportional, UiShellConfig};
+use crate::state::{RecentProject, WorldProjection};
+use crate::theme::ui_theme::{mono, proportional};
 use crate::theme::ui_tokens::{font_size, radius, space};
 
 use super::shell::UiShell;
@@ -319,125 +321,4 @@ fn menu_row(
         );
     }
     resp
-}
-
-// ---------------------------------------------------------------------------
-// 面包屑（v0.2 §B.3）
-// ---------------------------------------------------------------------------
-
-/// 面包屑：`世界 › 遵义城 › 府衙`。
-///
-/// 浮在地图区左上角（避顶栏与时间轴），**不推挤地图坐标系**（D1）。层级状态是
-/// [`DrillState`] 的 id 链，名字现查 `world.maps`——那才是唯一真源。
-///
-/// 当前级 700 字重 / 14px / `text.1` 且**不可点**；上级 400 字重 / 13px /
-/// 新增令牌 `crumb.text_3`；分隔符 `›`(U+203A)。沉浸模式降 60% 透明度但**保留可见**
-/// （§B.3：沉浸只隐面板与演示控制，导航痕迹必须留着，否则用户不知道自己身在何处）。
-///
-/// **偏离记录**：v0.2 把 LOD 标签（`四渡赤水 · 正在发生`）画在地图上，但那需要
-/// Bevy `Text2d` 的字体资产，而本工程不打包字体（§2.3 用系统字体栈，且只有 egui 侧
-/// 接了 `fonts.rs`）。故 LOD 文案并入面包屑行尾——信息不丢，代价是位置不同。
-///
-/// > **追记（2026-10-16，ADR-0019）**：字体已改为打包（Inter + Noto Sans SC），
-/// > 上述前提「不打包字体」不再成立——Bevy `Text2d` 现在有确定的字体资产
-/// > （`LoadedFonts::cjk_font`）。当时把 LOD 并入面包屑的实现**暂保持不变**
-/// > （改动它是独立任务），此记录仅说明原偏离理由已过期。
-pub fn breadcrumb(
-    mut contexts: EguiContexts,
-    shell_cfg: Res<UiShellConfig>,
-    projection: Res<WorldProjection>,
-    mut drill: ResMut<DrillState>,
-    panels: Res<PanelState>,
-    current_loc: Res<crate::i18n::CurrentLocale>,
-) {
-    let shell = UiShell::new(&shell_cfg);
-    let Ok(ctx) = contexts.ctx_mut() else {
-        return;
-    };
-    if drill.current().is_none() {
-        return;
-    }
-    let alpha = if panels.immersive { 0.4 } else { 1.0 };
-    let top = shell_cfg.density.top_bar_height() + space::MD;
-
-    // 先把要画的内容收集出来（借 `world` 的不可变借用不能跨进闭包）。
-    let mut segments: Vec<(String, bool)> = Vec::new();
-    let trail = drill.trail().to_vec();
-    for (i, id) in trail.iter().enumerate() {
-        let name = drill
-            .node(&projection.world, id)
-            .map(|n| n.name.clone())
-            .unwrap_or_else(|| id.as_str().to_owned());
-        segments.push((name, i + 1 == trail.len()));
-    }
-    let lod = drill
-        .current_node(&projection.world)
-        .map(|n| {
-            format!(
-                "{} · {}",
-                n.name,
-                crate::state::map_level_label(n.level, current_loc.0)
-            )
-        })
-        .unwrap_or_default();
-
-    let mut jump: Option<usize> = None;
-    egui::Area::new(egui::Id::new("wv_breadcrumb"))
-        .fixed_pos(egui::pos2(space::MD, top))
-        .order(egui::Order::Middle)
-        .interactable(true)
-        .show(ctx, |ui| {
-            egui::Frame::NONE
-                .fill(shell.float_fill().gamma_multiply(alpha))
-                .stroke(egui::Stroke::new(1.0_f32, shell.border_subtle()))
-                .inner_margin(crate::theme::ui_theme::margin_xy(space::SM, space::XS))
-                .corner_radius(radius::CONTROL)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        for (i, (name, is_current)) in segments.iter().enumerate() {
-                            if i > 0 {
-                                ui.label(
-                                    egui::RichText::new("›")
-                                        .size(shell.scale.small)
-                                        .color(shell.t3().gamma_multiply(alpha)),
-                                );
-                            }
-                            if *is_current {
-                                // 当前级：不可点（§B.3）。
-                                ui.label(
-                                    egui::RichText::new(name)
-                                        .size(font_size::INPUT)
-                                        .strong()
-                                        .color(shell.t1().gamma_multiply(alpha)),
-                                );
-                            } else {
-                                let resp = ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(name)
-                                            .size(shell.scale.base)
-                                            .color(shell.crumb_text_3().gamma_multiply(alpha)),
-                                    )
-                                    .sense(egui::Sense::click()),
-                                );
-                                if resp.hovered() {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                                }
-                                if resp.clicked() {
-                                    jump = Some(i);
-                                }
-                            }
-                        }
-                        ui.add_space(space::SM);
-                        ui.label(
-                            egui::RichText::new(&lod)
-                                .size(shell.scale.micro)
-                                .color(shell.t3().gamma_multiply(alpha)),
-                        );
-                    });
-                });
-        });
-
-    if let Some(i) = jump {
-        drill.jump_to(i);
-    }
 }
