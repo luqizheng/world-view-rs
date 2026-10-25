@@ -72,6 +72,7 @@ pub struct FloatWindow<'a> {
     resizable: bool,
     alpha: f32,
     order: egui::Order,
+    constrain: Option<egui::Rect>,
 }
 
 /// 面板内容内边距（Figma `3:20892` Panel content `padding: 12`）。
@@ -105,6 +106,7 @@ impl<'a> FloatWindow<'a> {
             resizable: true,
             alpha: 0.96,
             order: egui::Order::Middle,
+            constrain: None,
         }
     }
 
@@ -156,6 +158,16 @@ impl<'a> FloatWindow<'a> {
         self
     }
 
+    /// 拖动 / 缩放的活动范围钳制（缺省 None = egui 默认整视口）。
+    ///
+    /// 无边框窗（2026-10-25）后应用自带常驻顶栏与状态栏：调用方把浮窗
+    /// 钳进「中央工作区」，既拖不进两端 chrome、也拖不出视口——按大窗口
+    /// 保存的 `ui-layout.yaml` 坐标在小窗口下会被逐帧钳回可见区。
+    pub fn constrain_to(mut self, constrain_rect: egui::Rect) -> Self {
+        self.constrain = Some(constrain_rect);
+        self
+    }
+
     /// 装配并落地。`body` 在折叠态不执行。
     pub fn show<F: FnOnce(&mut egui::Ui)>(self, ctx: &egui::Context, shell: &UiShell, body: F) {
         let head_id = self.id.with("head");
@@ -184,6 +196,9 @@ impl<'a> FloatWindow<'a> {
         }
         if let Some(s) = self.default_size {
             win = win.default_size(s);
+        }
+        if let Some(r) = self.constrain {
+            win = win.constrain_to(r);
         }
 
         let icon = self.icon;
@@ -456,6 +471,7 @@ mod tests {
         assert_eq!(fw.order, egui::Order::Middle, "浮层缺省 Middle 层序");
         assert!(fw.default_pos.is_none(), "位置缺省交给 egui 级联");
         assert!(fw.default_size.is_none(), "尺寸缺省交给 egui 级联");
+        assert!(fw.constrain.is_none(), "活动范围缺省交给 egui 整视口");
     }
 
     #[test]
@@ -467,7 +483,11 @@ mod tests {
             .default_open(false)
             .resizable(false)
             .alpha(0.10)
-            .order(egui::Order::Foreground);
+            .order(egui::Order::Foreground)
+            .constrain_to(egui::Rect::from_min_size(
+                egui::pos2(10.0, 20.0),
+                egui::vec2(200.0, 100.0),
+            ));
         assert!(matches!(fw.icon, HeadIcon::Svg(_)));
         assert_eq!(fw.default_pos, Some(egui::pos2(10.0, 20.0)));
         assert_eq!(fw.default_size, Some(egui::vec2(288.0, 328.0)));
@@ -475,6 +495,13 @@ mod tests {
         assert!(!fw.resizable);
         assert!((fw.alpha - 0.10).abs() < 1e-3, "got {}", fw.alpha);
         assert_eq!(fw.order, egui::Order::Foreground);
+        assert_eq!(
+            fw.constrain,
+            Some(egui::Rect::from_min_size(
+                egui::pos2(10.0, 20.0),
+                egui::vec2(200.0, 100.0)
+            ))
+        );
     }
 
     #[test]

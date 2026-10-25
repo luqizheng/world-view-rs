@@ -36,6 +36,7 @@
 //! - [`bar`]：顶栏三区（身份 / 主控 / 读数）。
 //! - [`prefs`]：右区偏好控件（日夜 / 语言 / Rebuild / 设置）。
 //! - [`status`]：状态栏与各读数段。
+//! - [`window_controls`]：无边框窗窗控三键（2026-10-25，去原生标题栏）。
 //! - `tests`：原 `mod tests` 整段平移。
 //!
 //! ## 主要导出
@@ -67,9 +68,16 @@ mod prefs;
 mod status;
 #[cfg(test)]
 mod tests;
+mod window_controls;
 
 pub use bar::top_bar;
 pub use status::status_bar;
+pub(crate) use window_controls::WindowChromeState;
+
+/// 顶栏高度（web `.topbar` 38px）。
+pub(crate) const TOP_BAR_H: f32 = 38.0;
+/// 状态栏高度（Figma #3:21001 designedHeight 28px）。
+pub(crate) const STATUS_BAR_H: f32 = 28.0;
 
 /// 验证警告数（v0.3：状态条右侧徽标需要）。
 ///
@@ -90,5 +98,43 @@ pub(crate) fn root_ui(ctx: &egui::Context) -> egui::Ui {
         egui::UiBuilder::new()
             .layer_id(egui::LayerId::background())
             .max_rect(ctx.viewport_rect()),
+    )
+}
+
+/// 视口根 `Ui` 的 Foreground 版（状态栏专用）。
+///
+/// 状态栏曾与顶栏同画在 Background 层，被时间轴等浮窗（Middle 层）整条
+/// 盖住——用户「要下拉才看得到」（2026-10-25）。迁到 Foreground 后它在
+/// egui 绘制序 `Background < Middle < Foreground < Tooltip` 里常驻最上，
+/// 表现与顶栏一致：永远贴在窗体底部，任何浮窗压不住（浮窗另由
+/// [`central_area`] 钳制，根本进不了这 28px）。
+pub(crate) fn root_ui_foreground(ctx: &egui::Context) -> egui::Ui {
+    egui::Ui::new(
+        ctx.clone(),
+        "wv_root_fg".into(),
+        egui::UiBuilder::new()
+            .layer_id(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("wv_chrome_foreground"),
+            ))
+            .max_rect(ctx.viewport_rect()),
+    )
+}
+
+/// 浮动面板的活动范围：视口挖去顶栏与状态栏（无边框窗 2026-10-25）。
+///
+/// 由 [`crate::ui::widgets::float_window`] 统一喂给
+/// `FloatWindow::constrain_to`——浮窗拖不进两端 chrome、也拖不出视口；
+/// 按大窗口保存的 `ui-layout.yaml` 坐标（如 timeline 默认 y=880）在小窗
+/// 口下会被逐帧钳回可见区，不再出现「面板丢在视口外」。
+pub(crate) fn central_area(ctx: &egui::Context) -> egui::Rect {
+    central_area_of(ctx.viewport_rect())
+}
+
+/// [`central_area`] 的纯几何核（供单测）：`vp` 挖去顶栏高与状态栏高。
+pub(crate) fn central_area_of(vp: egui::Rect) -> egui::Rect {
+    egui::Rect::from_min_max(
+        egui::pos2(vp.min.x, vp.min.y + TOP_BAR_H),
+        egui::pos2(vp.max.x, vp.max.y - STATUS_BAR_H),
     )
 }

@@ -8,14 +8,12 @@ use super::*;
 /// 状态栏是「仪表读数」，比令牌阶梯 MICRO(11) 再小半档——顶栏主题分段
 /// （`theme_segment`）已有 10px 直写先例。
 pub(super) const STATUS_FONT: f32 = 10.0;
-/// 状态栏行高（Figma lineHeight 16px）：中区锚定 Area 的垂直居中偏移用。
-pub(super) const STATUS_ROW_H: f32 = 16.0;
 /// 中段（Pointer coordinates）组内间距（Figma gap 24px）。
 pub(super) const STATUS_GAP_CENTER: f32 = 24.0;
 
 /// 状态栏（2026-10-16 按 Figma `Untitled` #3:21001「Status bar」重做，28px）。
 ///
-/// 三段式（设计稿 `space-between`；中区真居中用锚定 Area，顶栏中区同款先例）：
+/// 三段式（设计稿 `space-between`）：
 /// - 左「Project status」：`WORLD–VIEW` + 版本 + 分隔线 + 📁 工程目录名；
 /// - 中「Pointer coordinates」：光标世界坐标 `X / Y`；当前图声明了
 ///   `geographic_source` 且光标落在图幅内时，追加经纬度 + `EPSG:4326`
@@ -23,6 +21,15 @@ pub(super) const STATUS_GAP_CENTER: f32 = 24.0;
 ///   UV → 经纬度走 [`wv_core::LatLonBbox::uv_to_lat_lon`]，本文件零手搓换算）；
 /// - 右「Scene statistics」：对象计数 + 金色 `N selected` + 「N warnings」
 ///   徽标（沿用旧版，>0 才出现）+ 分隔线 + 绿点 + FPS。
+///
+/// ## 常驻底部（2026-10-25 用户裁定，与顶栏同权）
+///
+/// 原画在 Background 层，被时间轴等浮窗（Middle 层）整条盖住——用户
+/// 「要下拉才看得到」。现整条迁 `Order::Foreground`（见
+/// [`root_ui_foreground`]），永远贴窗底、任何浮窗压不住；浮窗另被
+/// [`central_area`](super::central_area) 钳在状态栏之上，不会钻到底下。
+/// 中段坐标因此从锚定 Area 改为面板内绝对居中绘制——Foreground 层里
+/// 再开 Area 相互叠序不定，读数可能被本栏自己的底板盖住。
 ///
 /// ## 与设计稿的刻意偏差（令牌纪律，非漏做）
 ///
@@ -50,8 +57,8 @@ pub fn status_bar(
         return;
     };
     // Figma #3:21001 designedHeight 28px（旧版 22px）。
-    let h = 28.0;
-    let mut root = root_ui(ctx);
+    let h = STATUS_BAR_H;
+    let mut root = root_ui_foreground(ctx);
     egui::Panel::bottom("wv_status_bar")
         .exact_size(h)
         .frame(
@@ -69,6 +76,8 @@ pub fn status_bar(
                 project_status_segment(ui, &shell, &projection);
                 // ── 中左：笔触进度瞬态槽（[ADR-0052] D8-B，仅 stroke 期间出现）──
                 stroke_progress_segment(ui, &shell, &paint, current_loc.0);
+                // ── 中：Pointer coordinates（面板内绝对居中，见 fn 文档）──
+                paint_pointer_coordinates(ui, &shell, &view, &projection, &drill);
                 // ── 右：Scene statistics（组内 gap 16，右对齐）──
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     scene_statistics_segment(
@@ -79,21 +88,6 @@ pub fn status_bar(
                         &diagnostics,
                     );
                 });
-            });
-        });
-
-    // ── 中区：Pointer coordinates——锚定 Area 视口底部居中 ──
-    //（TopBottomPanel 做不了「剩余宽度居中」；内容行高 16，(28-16)/2 = 6px 偏移。）
-    egui::Area::new(egui::Id::new("wv_status_bar_center"))
-        .anchor(
-            egui::Align2::CENTER_BOTTOM,
-            egui::vec2(0.0, (h - STATUS_ROW_H) * 0.5),
-        )
-        .order(egui::Order::Middle)
-        .show(ctx, |ui| {
-            // Area 默认纵向布局，横排同样要包 horizontal（顶栏中区同款）。
-            ui.horizontal(|ui| {
-                pointer_coordinates_segment(ui, &shell, &view, &projection, &drill);
             });
         });
 }
@@ -184,8 +178,12 @@ pub(super) fn project_status_segment(
 
 /// 中段「Pointer coordinates」：X/Y 世界坐标 +（真实地理图）经纬度 + EPSG。
 ///
-/// 光标不在窗口内（`cursor_world = None`）整段不画。
-pub(super) fn pointer_coordinates_segment(
+/// **面板内绝对居中**（2026-10-25）：按各读数 galley 总宽反推起点、
+/// painter 直接绘制——顶栏读数段「绝对反推」的同款先例。原先用锚定
+/// `CENTER_BOTTOM` 的独立 Area，但状态栏迁 Foreground 层后同层多 Area
+/// 叠序不定，读数可能被本栏底板盖住。光标不在窗口内（`cursor_world =
+/// None`）整段不画。
+fn paint_pointer_coordinates(
     ui: &mut egui::Ui,
     shell: &UiShell,
     view: &ViewState,
@@ -195,37 +193,43 @@ pub(super) fn pointer_coordinates_segment(
     let Some(cursor) = view.cursor_world else {
         return;
     };
-    ui.label(
-        egui::RichText::new(format!("X  {}", format_fixed2(cursor.x as f64)))
-            .size(STATUS_FONT)
-            .color(shell.t2())
-            .font(mono(STATUS_FONT)),
-    );
-    ui.add_space(STATUS_GAP_CENTER);
-    ui.label(
-        egui::RichText::new(format!("Y  {}", format_fixed2(cursor.y as f64)))
-            .size(STATUS_FONT)
-            .color(shell.t2())
-            .font(mono(STATUS_FONT)),
-    );
-
-    // 经纬度：当前图声明了 geographic_source 且光标在图幅内才显示——
-    // 虚构地图（绝大多数）没有地理参照，硬造经纬度是骗人。
-    if let Some((lat, lon)) = cursor_lat_lon(cursor, projection, drill) {
-        ui.add_space(STATUS_GAP_CENTER);
-        ui.label(
-            egui::RichText::new(format!("{}  {}", format_lat(lat), format_lon(lon)))
-                .size(STATUS_FONT)
-                .color(shell.t3())
-                .font(mono(STATUS_FONT)),
+    let t2 = color32(shell.palette.text_2);
+    let t3 = color32(shell.palette.text_3);
+    let items = vec![
+        (format!("X  {}", format_fixed2(cursor.x as f64)), t2),
+        (format!("Y  {}", format_fixed2(cursor.y as f64)), t2),
+    ];
+    // 经纬度两枚与 X/Y 同款组距 24 追加在尾部（原 Area 版布局不变）。
+    let items = match cursor_lat_lon(cursor, projection, drill) {
+        Some((lat, lon)) => {
+            let mut v = items;
+            v.push((format!("{}  {}", format_lat(lat), format_lon(lon)), t3));
+            v.push(("EPSG:4326".to_owned(), t3));
+            v
+        }
+        None => items,
+    };
+    let font = mono(STATUS_FONT);
+    let galleys: Vec<_> = items
+        .into_iter()
+        .map(|(text, color)| {
+            ui.painter()
+                .layout(text, font.clone(), color, f32::INFINITY)
+        })
+        .collect();
+    let total = galleys.iter().map(|g| g.size().x).sum::<f32>()
+        + STATUS_GAP_CENTER * galleys.len().saturating_sub(1) as f32;
+    let bounds = ui.max_rect();
+    let mut x = bounds.center().x - total * 0.5;
+    for galley in &galleys {
+        let size = galley.size();
+        // galley 自带 layout 时的颜色；fallback 色给中性值（不会用到）。
+        ui.painter().galley(
+            egui::pos2(x, bounds.center().y - size.y * 0.5),
+            galley.clone(),
+            t2,
         );
-        ui.add_space(STATUS_GAP_CENTER);
-        ui.label(
-            egui::RichText::new("EPSG:4326")
-                .size(STATUS_FONT)
-                .color(shell.t3())
-                .font(mono(STATUS_FONT)),
-        );
+        x += size.x + STATUS_GAP_CENTER;
     }
 }
 

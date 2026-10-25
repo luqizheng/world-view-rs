@@ -27,11 +27,18 @@ use wv_ui::widgets::{rect_stroke, BadgeKind, FloatWindow};
 /// ## 层序约定（2026-10-14 用户要求「弹窗/浮动都在最顶层」后固化）
 ///
 /// 本外壳**不设** `order`——即 egui 缺省 `Middle`：面板互斥点击由 egui 的
-/// 「点谁谁置顶」管理，且永远压在 egui Background 面板（顶栏/状态栏）与
-/// Bevy 地图之上。模态弹窗（新建地图 / 新建工程 / 命令面板 / 欢迎页 /
-/// 启动加载）在 `Order::Foreground`—— egui 绘制序
-/// `Background < Middle < Foreground < Tooltip`，故弹窗压面板、悬浮提示仍在最上。
+/// 「点谁谁置顶」管理，且永远压在 egui Background 面板（顶栏）与 Bevy 地图
+/// 之上。模态弹窗（新建地图 / 新建工程 / 命令面板 / 欢迎页 / 启动加载）在
+/// `Order::Foreground`——egui 绘制序 `Background < Middle < Foreground <
+/// Tooltip`，故弹窗压面板、悬浮提示仍在最上。**例外**：状态栏 2026-10-25
+/// 起常驻 Foreground 层（用户裁定），浮窗压不到它——见下方活动范围钳制。
 /// 新增浮层时按此表对号入座，不要把弹窗放回 Middle。
+///
+/// ## 活动范围（2026-10-25 无边框窗配套）
+///
+/// 全部浮窗统一 `constrain_to(central_area)`：视口挖去顶栏 38 与状态栏
+/// 28——拖不进两端 chrome、也拖不出视口；按大窗口保存的
+/// `ui-layout.yaml` 坐标在小窗口下被逐帧钳回可见区。
 #[allow(clippy::too_many_arguments)]
 pub fn float_window(
     ctx: &egui::Context,
@@ -60,6 +67,7 @@ pub fn float_window(
         .default_size(egui::vec2(layout.width, layout.height))
         .default_open(!layout.collapsed)
         .alpha(alpha)
+        .constrain_to(crate::ui::top_bar::central_area(ctx))
         .show(ctx, shell, body);
 }
 

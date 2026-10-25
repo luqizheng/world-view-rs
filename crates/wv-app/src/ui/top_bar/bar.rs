@@ -2,9 +2,12 @@
 
 use super::prefs::*;
 use super::status::vsep_h_at;
+use super::window_controls::{window_controls_segment, WindowChromeState};
 use super::*;
 
-/// 顶栏：身份 / 主控（居中独立 Area）/ 读数。**唯一例外**的 `TopBottomPanel`。
+use bevy::window::PrimaryWindow;
+
+/// 顶栏：窗控（最左）/ 身份 / 主控（居中独立 Area）/ 读数。
 #[allow(clippy::too_many_arguments)]
 pub fn top_bar(
     mut contexts: EguiContexts,
@@ -19,15 +22,25 @@ pub fn top_bar(
     mut current_loc: ResMut<CurrentLocale>,
     // Gate-2（[ADR-0052] §9.4）：无当前地图时顶栏 CellMap 段灰化。
     drill: Res<DrillState>,
+    // 无边框窗（2026-10-25）：窗控三键 / 拖拽 / 双击最大化要写主窗口，
+    // 关闭键写 `AppExit` 消息（bevy 0.19 事件体系改名 Message；单窗口
+    // 应用，关主窗 = 退出）。
+    mut primary: Query<&mut Window, With<PrimaryWindow>>,
+    mut exit: MessageWriter<AppExit>,
+    mut chrome: ResMut<WindowChromeState>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
+    let Ok(mut window) = primary.single_mut() else {
+        return;
+    };
     // web `.topbar` 精确高度 38px。
-    let h = 38.0;
+    let h = TOP_BAR_H;
     let recents = recents_res.visible(&projection);
     let mut root = root_ui(ctx);
+    let mut drag_resp: Option<egui::Response> = None;
     egui::Panel::top("wv_top_bar")
         .exact_size(h)
         .frame(
@@ -44,7 +57,16 @@ pub fn top_bar(
                 .inner_margin(crate::theme::ui_theme::margin_xy(space::SM, 0.0)),
         )
         .show(&mut root, |ui| {
+            // 拖拽区**最先注册**（垫底）：后画的窗控/菜单/标签压在其上，
+            // 点控件不会误触拖窗；空白条背吃到拖拽与双击（无边框窗 2026-10-25）。
+            let drag = ui.interact(
+                ui.max_rect(),
+                egui::Id::new("wv_top_bar_drag"),
+                egui::Sense::click_and_drag(),
+            );
             ui.horizontal(|ui| {
+                // ── 最左上角：窗控三键（最小化/最大化/关闭，用户指定方位）──
+                window_controls_segment(ui, &shell, &mut window, &mut chrome, &mut exit);
                 // ── 左区：项目按钮 + 面包屑（web .top-left）──
                 identity_segment(
                     ui,
@@ -68,6 +90,7 @@ pub fn top_bar(
                     &mut palette,
                 );
             });
+            drag_resp = Some(drag);
         });
 
     // ── 中区：web grid 的 `auto` 列——独立 Area 锚视口顶部居中 ──
@@ -92,6 +115,18 @@ pub fn top_bar(
                 );
             });
         });
+
+    // ── 无边框窗（2026-10-25）：顶栏空白背按住拖动移窗、双击切最大化 ──
+    //（Windows 惯例；中区 Browse/Edit 分段与各控件压在拖拽区之上，不受影响。）
+    if let Some(drag) = drag_resp {
+        if drag.drag_started() {
+            window.start_drag_move();
+        }
+        if drag.double_clicked() {
+            chrome.maximized = !chrome.maximized;
+            window.set_maximized(chrome.maximized);
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

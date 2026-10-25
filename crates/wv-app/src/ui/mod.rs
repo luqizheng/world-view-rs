@@ -99,6 +99,7 @@ pub use widgets::{
     ICON_CHEVRON_DOWN,
     ICON_CHEVRON_RIGHT,
     ICON_COMMAND,
+    ICON_COPY,
     ICON_ERASER,
     ICON_FOLDER_OPEN,
     ICON_GLOBE,
@@ -112,6 +113,7 @@ pub use widgets::{
     ICON_MAP,
     ICON_MAP_PIN,
     ICON_MAXIMIZE,
+    ICON_MINUS,
     ICON_MOON,
     ICON_MOUNTAIN_RANGE,
     ICON_MOUSE_POINTER,
@@ -136,6 +138,7 @@ pub use widgets::{
     ICON_UNDO,
     ICON_VOLCANO,
     ICON_WAVES,
+    ICON_X,
     ICON_ZOOM_IN,
     ICON_ZOOM_OUT,
 };

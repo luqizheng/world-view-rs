@@ -96,12 +96,6 @@ pub fn panel_minimap(
                     (p.y - rect.top()) / rect.height(),
                 )
             };
-            let pos_of = |n: Vec2| {
-                egui::pos2(
-                    rect.left() + n.x * rect.width(),
-                    rect.top() + n.y * rect.height(),
-                )
-            };
 
             // 视口矩形（「镜头在哪」）：中心 = 相机中心的归一化位置；
             // 占幅 = 可见世界宽 ÷ 图宽（归一化占比 × overview 实际宽高 =
