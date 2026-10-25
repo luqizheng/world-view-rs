@@ -661,6 +661,9 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CellDerivedQuantizeHint => "把选中片的海拔吸附到 N 米阶梯（做等高线地形）",
         I18nKey::CellDerivedStrength => "强度",
         I18nKey::CellDerivedStep => "步长",
+        I18nKey::CellScopePaint => "落笔 · 下一笔",
+        I18nKey::CellScopeSelectedCount => "选中 {n} 格",
+        I18nKey::CellScopeBatchHint => "整体调整选中的所有格",
     }
 }
 
@@ -1332,5 +1335,8 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         }
         I18nKey::CellDerivedStrength => "Strength",
         I18nKey::CellDerivedStep => "Step",
+        I18nKey::CellScopePaint => "Paint · next stroke",
+        I18nKey::CellScopeSelectedCount => "{n} cells selected",
+        I18nKey::CellScopeBatchHint => "Adjusts every selected cell",
     }
 }

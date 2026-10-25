@@ -35,6 +35,15 @@
 //! Enter 落盘」：暂存值挂 `EditCellState::pending_height`（带坐标标签，
 //! 换格 / 换图即失效），手势完成帧与地表 / 群系改动汇入**同一条**命令
 //! （1 手势 = 1 撤销单位）。radio / segmented 是离散点击，维持「点击即提交」。
+//!
+//! ## 统一属性表单（ADR-0058，2026-10-25）——上文「分派」的呈现层重构
+//!
+//! 面板骨架改为四段：读数条（常驻）→ 泛洪判据（FloodSelect 激活）→
+//! **属性段**（全浮窗唯一一份地表 / 群系 / 海拔控件）→ 派生运算（仅选区
+//! 非空）。作用域由**激活工具**决定（D2，无模式控件）：`Brush(PaintKind)` /
+//! `EditCell`（只画不选）激活 = 落笔作用域；其余按选区分派 0 / 1 / N。
+//! 单格「位置」只读区退役（D6，坐标入作用域头）；群系 radio 退役
+//! （D5，与落笔共用 swatch）；海拔提交时机三档不变（D4）。
 
 #![cfg(feature = "app")]
 
@@ -46,23 +55,21 @@ use crate::state::WorldProjection;
 use crate::theme::ui_tokens::font_size;
 
 use crate::ui::shell::UiShell;
-use crate::ui::widgets::{
-    divider, empty_state, icon_image, value_box, ButtonContent, ButtonStyle, ICON_FOCUS,
-    ICON_LOCK_KEYHOLE,
-};
+use crate::ui::widgets::{divider, empty_state, ButtonContent, ButtonStyle};
 use wv_render::state::{CellSelection, EditCellState};
-use wv_ui::widgets::controls::{numeric_input_salted, numeric_input_salted_report, radio};
+use wv_ui::widgets::controls::{numeric_input_salted, numeric_input_salted_report};
 
 use wv_ui::widgets::segmented_control::segmented;
 
-/// Cell 表单（Inspector「属性」页签 · 地形格分支）。
+/// Cell 表单（Inspector「属性」页签 · 地形格分支 → ADR-0058 统一属性表单）。
 ///
 /// **何时出现**：`EditCell` 工具激活时（设计稿 §11 Q4——工具即模式）；
 /// 2026-10-24 起CellMap 工作区里圈选确认后（V 工具激活）也直出——
 /// 见 `mod.rs` 的 `cell_form_active` 谓词。
 ///
-/// **分派**（ADR-0057 D6）：按统一选区格数——0 → 空态；1 → 单格表单；
-/// N → 批量表单。不再有模式切换控件。
+/// **作用域**（ADR-0058 D2）：`paint_scope` = 落笔工具激活（`Brush(PaintKind)`
+/// / `EditCell`，只画不选）→ 落笔表单；否则按统一选区格数分派——
+/// 0 → 空态；1 → 单格表单（绝对设值）；N → 批量表单（相对增减）。
 #[allow(clippy::too_many_arguments)]
 pub fn cell_form(
     ui: &mut egui::Ui,
@@ -78,6 +85,7 @@ pub fn cell_form(
     playback_playing: bool,
     sel: &mut CellSelection,
     map: Option<&wv_core::Id>,
+    paint_scope: bool,
 ) {
     // ── 读数条（D8）：面板顶部固定双段 ──
     // 左段永远读 hover、右段永远读选区；任一段无数据显 `—`，
@@ -105,88 +113,95 @@ pub fn cell_form(
         divider(ui, shell);
     }
 
-    // ── 落笔值区（D4）：拖绘工作流的「颜料盒」──
-    // 紧贴读数条之下——拖绘前必须能看见落笔值（§5 M2 验收 ④）。
-    super::cell_paint_panel::render_paint_value_section(ui, shell, session, loc);
-    divider(ui, shell);
-
-    // ── 派生运算区（D6 · M3）：平滑 / 量化，作用范围 = 统一选区 ──
-    // 播放中按钮保持可见但禁用（§9.4 Gate-1：只挡写入，不挡只读查看）。
-    super::cell_paint_panel::render_derived_section(
-        ui,
-        shell,
-        loc,
-        derived,
-        sel.len() as usize,
-        playback_playing,
-    );
-    divider(ui, shell);
-
-    // ── 按选区格数分派（ADR-0057 D6：无模式切换控件）──
-    match sel.only_cell() {
-        Some((gx, gy)) => {
-            let Some(before) = read_cell(projection, map, gx, gy) else {
-                return;
-            };
-            render_identity(ui, shell, loc, gx, gy);
-            divider(ui, shell);
-            render_fields(
-                ui,
-                shell,
-                projection,
-                map,
-                edit,
-                edit_cell,
-                (gx, gy),
-                before,
-                tex,
-                loc,
-            );
-            divider(ui, shell);
-            // 尾注（Figma "Selection scope"）：focus 图标 + 提示。
-            ui.horizontal(|ui| {
-                ui.add(icon_image(ICON_FOCUS, shell.t3(), 12.0));
-                ui.label(
-                    egui::RichText::new(t(loc, I18nKey::CellEditorScopeHint))
-                        .size(font_size::MICRO)
-                        .color(shell.t3()),
+    // ── 属性段（ADR-0058 D1/D3）：全浮窗唯一一份地表 / 群系 / 海拔控件，
+    //    作用域头标明当前写入目标 ──
+    if paint_scope {
+        render_scope_header(
+            ui,
+            shell,
+            t(loc, I18nKey::CellScopePaint).to_string(),
+            t(loc, I18nKey::CellPaintSectionHint),
+        );
+        super::cell_paint_panel::render_paint_fields(ui, shell, session, loc);
+    } else {
+        match sel.only_cell() {
+            Some((gx, gy)) => {
+                let Some(before) = read_cell(projection, map, gx, gy) else {
+                    return;
+                };
+                render_scope_header(
+                    ui,
+                    shell,
+                    format!("Cell · {gx}, {gy}"),
+                    t(loc, I18nKey::CellEditorSubtitle),
                 );
-            });
+                render_fields(
+                    ui,
+                    shell,
+                    projection,
+                    map,
+                    edit,
+                    edit_cell,
+                    (gx, gy),
+                    before,
+                    tex,
+                    loc,
+                );
+            }
+            None if sel.is_empty() => {
+                empty_state(
+                    ui,
+                    shell,
+                    "▣",
+                    t(loc, I18nKey::CellEditorEmptyTitle),
+                    t(loc, I18nKey::CellEditorEmptyHint),
+                    "",
+                );
+            }
+            None => {
+                render_scope_header(
+                    ui,
+                    shell,
+                    t(loc, I18nKey::CellScopeSelectedCount).replace("{n}", &sel.len().to_string()),
+                    t(loc, I18nKey::CellScopeBatchHint),
+                );
+                // N 格批量：读数 + 整体改（相对增减 / 水陆 / 群系）。
+                render_batch_section(ui, shell, projection, edit, tex, loc, sel, map);
+            }
         }
-        None if sel.is_empty() => {
-            empty_state(
-                ui,
-                shell,
-                "▣",
-                t(loc, I18nKey::CellEditorEmptyTitle),
-                t(loc, I18nKey::CellEditorEmptyHint),
-                "",
-            );
-        }
-        None => {
-            // N 格批量：读数 + 整体改（相对增减 / 水陆 / 群系）。
-            render_batch_section(ui, shell, projection, edit, tex, loc, sel, map);
-        }
+    }
+
+    // ── 派生运算区（ADR-0058 D7）：平滑 / 量化，作用范围 = 统一选区 ──
+    // 仅选区非空时显示（空选区只有禁用按钮 = 噪音）；播放中保持可见但
+    // 禁用（§9.4 Gate-1：只挡写入，不挡只读查看）。
+    if !sel.is_empty() {
+        divider(ui, shell);
+        super::cell_paint_panel::render_derived_section(
+            ui,
+            shell,
+            loc,
+            derived,
+            sel.len() as usize,
+            playback_playing,
+        );
     }
 }
 
-/// identity 两行（Figma "Object identity"）：主标 `Cell · X, Y` + 金副标。
-fn render_identity(ui: &mut egui::Ui, shell: &UiShell, loc: crate::i18n::Locale, gx: i32, gy: i32) {
+/// 作用域头（ADR-0058 D3）：一行标题（SMALL）+ 一行微号说明，
+/// 标明属性段当前写入目标。
+fn render_scope_header(ui: &mut egui::Ui, shell: &UiShell, title: String, hint: &str) {
     ui.add_space(2.0);
+    ui.label(egui::RichText::new(title).size(13.0).color(shell.t1()));
     ui.label(
-        egui::RichText::new(format!("Cell · {gx}, {gy}"))
-            .size(13.0)
-            .color(shell.t1()),
-    );
-    ui.label(
-        egui::RichText::new(t(loc, I18nKey::CellEditorSubtitle))
+        egui::RichText::new(hint)
             .size(font_size::MICRO)
             .color(shell.accent()),
     );
     ui.add_space(4.0);
 }
 
-/// 设计稿单格四段（位置 / 地表 / 海拔 / 群系）。
+/// 设计稿单格四段（位置 / 地表 / 海拔 / 群系）——ADR-0058 D6 后为三段
+/// （位置退役，坐标在作用域头）。
 #[allow(clippy::too_many_arguments)]
 fn render_fields(
     ui: &mut egui::Ui,
@@ -202,28 +217,6 @@ fn render_fields(
 ) {
     let mut next = before;
     ui.add_space(6.0);
-
-    // ── 位置（只读）：heading + 🔒 只读坐标；X / Y 两列 ──
-    section_heading(ui, shell, loc, t(loc, I18nKey::CellInspectorPosition), true);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 12.0;
-        for (label, v) in [("X", gx), ("Y", gy)] {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                ui.label(
-                    egui::RichText::new(label)
-                        .monospace()
-                        .size(11.0)
-                        .color(shell.t3()),
-                );
-                // value_box 吃 available_width:不限定宽会把 Y 列挤出面板。
-                ui.allocate_ui(egui::vec2(96.0, 28.0), |ui| {
-                    value_box(ui, shell, &v.to_string(), None, false);
-                });
-            });
-        }
-    });
-    ui.add_space(8.0);
 
     // ── 地表：heading + 分段（水 / 陆地）──
     ui.horizontal(|ui| {
@@ -321,7 +314,8 @@ fn render_fields(
     divider(ui, shell);
     ui.add_space(6.0);
 
-    // ── 群系：heading（互斥单选）+ 设计稿 7 组 radio ──
+    // ── 群系：heading（互斥单选）+ swatch（ADR-0058 D5：与落笔同款唯一
+    //    控件；点选 = 改 next.biome，汇入本帧末尾的合并提交）──
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(t(loc, I18nKey::CellInspectorBiome))
@@ -335,17 +329,7 @@ fn render_fields(
         );
     });
     ui.add_space(4.0);
-    for group in biome_groups() {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            for (num, name) in group.iter() {
-                if radio(ui, shell, next.biome == *num, name).clicked() {
-                    next.biome = *num;
-                }
-            }
-        });
-        ui.add_space(4.0);
-    }
+    super::cell_paint_panel::render_biome_swatch(ui, shell, next.biome, |b| next.biome = b);
 
     // ── 即改即提交（每格 1 command，[ADR-0040] §决策 8）──
     // 海拔的手势完成帧提交（P0-1 方案 A）也汇入同一条命令：地表 / 群系
@@ -356,76 +340,6 @@ fn render_fields(
     if next != before {
         push_cell_edit(edit, projection, map, (gx, gy), before, next, tex);
     }
-}
-
-/// 段落 heading 行：左标题 + 右侧可选「🔒 只读」徽标（Figma Position heading）。
-fn section_heading(
-    ui: &mut egui::Ui,
-    shell: &UiShell,
-    loc: crate::i18n::Locale,
-    title: &str,
-    readonly_badge: bool,
-) {
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(title)
-                .size(font_size::SMALL)
-                .color(shell.t2()),
-        );
-        if readonly_badge {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let text = t(loc, I18nKey::CellEditorReadonly);
-                ui.label(
-                    egui::RichText::new(text)
-                        .size(font_size::MICRO)
-                        .color(shell.t3()),
-                );
-                // RTL 布局里第一个 add 的在最右 → label 先、icon 后 = 锁在文字左。
-                // 禁止 ui.cursor() 手算 + ui.put:空 RTL 的 cursor.left 是未定义
-                // (-inf/NaN),egui 0.36 断言 frame_rect is NaN 直接崩
-                // (2026-10-20 实机「CellMap 一点击即退出」根因)。
-                ui.add(crate::ui::widgets::icon_image(
-                    ICON_LOCK_KEYHOLE,
-                    shell.t3(),
-                    10.0,
-                ));
-            });
-        }
-    });
-}
-
-/// 设计稿的群系 7 组（顺序、分组与 Figma `99-356` "Biome options" 一致）。
-/// 每项 = (冻结编号, 显示名)；编号全部引用 `wv_terrain` 冻结常量，防手滑。
-fn biome_groups() -> &'static [&'static [(u8, &'static str)]] {
-    use wv_terrain::*;
-    &[
-        &[
-            (BIOME_FOREST, "森林"),
-            (BIOME_JUNGLE, "丛林"),
-            (BIOME_TROPICAL_RAINFOREST, "热带雨林"),
-        ],
-        &[
-            (BIOME_GOBI, "戈壁"),
-            (BIOME_DESERT, "沙漠"),
-            (BIOME_SALT_FLAT, "盐碱地"),
-            (BIOME_OASIS, "绿洲"),
-        ],
-        &[
-            (BIOME_SWAMP, "沼泽"),
-            (BIOME_WETLAND, "湿地"),
-            (BIOME_TUNDRA, "苔原"),
-            (BIOME_SNOWFIELD, "雪原"),
-        ],
-        &[
-            (BIOME_HILLS, "丘陵"),
-            (BIOME_SAVANNA, "稀树草原"),
-            (BIOME_PLAINS, "平原"),
-            (BIOME_GRASSLAND, "草原"),
-        ],
-        &[(BIOME_OCEAN, "海洋"), (BIOME_LAKE, "湖泊")],
-        &[(BIOME_ROAD, "道路"), (BIOME_RIVER, "河流")],
-        &[(BIOME_NONE, "无群系")],
-    ]
 }
 
 /// 批量区读数：N 格 / 平均海拔 / 群系分布（[ADR-0040] 补 A）。
@@ -576,7 +490,7 @@ fn render_batch_section(
             .biome_hist
             .iter()
             .take(3)
-            .map(|(b, c)| format!("{} ×{}", biome_label(*b), c))
+            .map(|(b, c)| format!("{} ×{}", super::cell_paint_panel::biome_name(*b), c))
             .collect();
         if stats.biome_hist.len() > 3 {
             parts.push(format!("+{}", stats.biome_hist.len() - 3));
@@ -704,28 +618,25 @@ fn render_batch_section(
         );
     });
     ui.add_space(4.0);
-    // **选区群系统一时亮对应 radio**（用户 2026-10-20 实机反馈：
-    // 「统一改为草原,草原的 radio 并没有 checked」）。
+    // **选区群系统一时亮对应 swatch**（用户 2026-10-20 实机反馈：
+    // 「统一改为草原,草原的 radio 并没有 checked」——radio 已退役为
+    // swatch，ADR-0058 D5，选中态口径沿用）。
     // 混合选区（全不亮）→ 点谁整片设为谁；统一后 → 该项自动亮起。
     let uniform_biome = if stats.biome_hist.len() == 1 {
         Some(stats.biome_hist[0].0)
     } else {
         None
     };
-    for group in biome_groups() {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            for (num, name) in group.iter() {
-                if radio(ui, shell, uniform_biome == Some(*num), name).clicked() {
-                    let biome = *num;
-                    apply_batch(projection, edit, map, sel, tex, |c| {
-                        wv_core::terrain::TerrainCellData { biome, ..c }
-                    });
-                }
-            }
-        });
-        ui.add_space(4.0);
-    }
+    super::cell_paint_panel::render_biome_swatch(
+        ui,
+        shell,
+        uniform_biome.unwrap_or(u8::MAX),
+        |b| {
+            apply_batch(projection, edit, map, sel, tex, |c| {
+                wv_core::terrain::TerrainCellData { biome: b, ..c }
+            });
+        },
+    );
 }
 
 /// 批量应用：从 world 读每格当前值 → 构造 changes → 1 条
@@ -886,18 +797,6 @@ fn height_commit_decision(report_changed: bool, staged: Option<i16>, scrubbed: i
     } else {
         staged
     }
-}
-
-/// 群系编号 → 显示名（读数用；未登记编号回落 `#N`）。
-fn biome_label(num: u8) -> String {
-    for group in biome_groups() {
-        for (n, name) in group.iter() {
-            if *n == num {
-                return (*name).to_string();
-            }
-        }
-    }
-    format!("#{num}")
 }
 
 #[cfg(test)]

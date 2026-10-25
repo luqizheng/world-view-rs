@@ -1262,11 +1262,17 @@ pub enum I18nKey {
     CellDerivedStrength,
     /// 「步长」
     CellDerivedStep,
+    /// 作用域头「落笔 · 下一笔」（ADR-0058 D2）
+    CellScopePaint,
+    /// 作用域头「选中 {n} 格」
+    CellScopeSelectedCount,
+    /// 批量作用域说明「整体调整选中的所有格」
+    CellScopeBatchHint,
 }
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 504] = [
+    pub const ALL: [I18nKey; 507] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1809,5 +1815,8 @@ impl I18nKey {
         I18nKey::CellDerivedQuantizeHint,
         I18nKey::CellDerivedStrength,
         I18nKey::CellDerivedStep,
+        I18nKey::CellScopePaint,
+        I18nKey::CellScopeSelectedCount,
+        I18nKey::CellScopeBatchHint,
     ];
 }

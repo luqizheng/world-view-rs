@@ -119,17 +119,18 @@ pub fn panel_brush(
                 }
             }
 
-            // ══ CellMap 编辑段（2026-10-24 自 Inspector「属性」页签迁入）══
+            // ══ CellMap 编辑段（2026-10-24 自 Inspector「属性」页签迁入；
+            // ADR-0058 统一属性表单）══
             //
-            // 用户裁定：「笔刷放到单独的浮动窗体中，采用既有笔刷窗」——
-            // CellMap 的读数条 / 落笔值 / 泛洪判据 / 派生运算 / 单格与批量
-            // 表单全部挪到这里；Inspector 回归通用属性检查。
-            //
-            // **显示判据**（ADR-0057 D6 收口口径）：EditCell 工具激活，或
-            // Topographic 档下**选区非空**（圈选必切 V 工具，批量应用入口
-            // 必须仍然可见）。
-            // 非编辑态（普通笔刷模式）整段不渲染——笔刷窗保持原貌。
-            let cell_seg_active = edit_cell.tool_active
+            // **显示判据**（ADR-0058 D2 扩展自 ADR-0057 D6）：落笔工具激活
+            // （Brush(PaintKind) / EditCell——只画不选），或 FloodSelect 激活，
+            // 或 Topographic 档下**选区非空**。三态覆盖属性段的全部作用域。
+            let paint_tool_active =
+                brush.enabled && brush.tool == crate::state::BrushTool::PaintKind;
+            let paint_scope = paint_tool_active || edit_cell.tool_active;
+            let cell_seg_active = paint_tool_active
+                || edit_cell.tool_active
+                || flood_select.tool_active
                 || (view.mode == wv_render::state::ViewMode::Topographic && !cell_sel.is_empty());
             if cell_seg_active {
                 ui.add_space(space::SM);
@@ -150,6 +151,7 @@ pub fn panel_brush(
                     playback.playing,
                     &mut cell_sel,
                     drill.current(),
+                    paint_scope,
                 );
             }
         },

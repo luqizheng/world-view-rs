@@ -111,7 +111,8 @@ pub fn render_readout_bar(
     divider(ui, shell);
 }
 
-/// **落笔值区**（D4 + ADR-0057 D9）。
+/// **落笔表单字段**（[ADR-0052] D4 + ADR-0057 D9；ADR-0058 D2/D3 起为
+/// 属性段「落笔」作用域的表单形态，段标题由作用域头提供）。
 ///
 /// 四个控件：
 ///
@@ -121,27 +122,12 @@ pub fn render_readout_bar(
 /// | 落笔群系 | **绝对** | swatch 网格 |
 /// | 落笔增减 | **相对**（米，`0` = 不动） | 数值框（D1 scrub） |
 /// | 笔刷半径 | 圆盘半径（格，1–8） | 数值框（D9） |
-///
-/// 群系用 **swatch 网格**而非 radio：拖绘时要能**快速切落笔群系**，
-/// swatch 直接显示色块（与底图同色 = 所见即所涂）。
-pub fn render_paint_value_section(
+pub fn render_paint_fields(
     ui: &mut egui::Ui,
     shell: &UiShell,
     session: &mut CellPaintSession,
     loc: crate::i18n::Locale,
 ) {
-    ui.label(
-        egui::RichText::new(t(loc, I18nKey::CellPaintSectionTitle))
-            .size(font_size::SMALL)
-            .color(shell.t2()),
-    );
-    ui.label(
-        egui::RichText::new(t(loc, I18nKey::CellPaintSectionHint))
-            .size(font_size::MICRO)
-            .color(shell.t3()),
-    );
-    ui.add_space(4.0);
-
     // ── 落笔地表（绝对）──
     ui.horizontal(|ui| {
         ui.label(
@@ -182,7 +168,8 @@ pub fn render_paint_value_section(
                 .size(font_size::MICRO)
                 .color(shell.t3()),
         );
-        render_biome_swatch(ui, shell, &mut session.paint.biome);
+        let biome = session.paint.biome;
+        render_biome_swatch(ui, shell, biome, |b| session.paint.biome = b);
     });
     ui.add_space(4.0);
 
@@ -325,68 +312,108 @@ pub fn render_flood_criterion_section(
     ui.add_space(4.0);
 }
 
-/// **群系 swatch 网格**（落笔群系选择器）。
+/// **群系 7 组排列序**（ADR-0058 D5）：swatch 网格的展示顺序，全部引用
+/// `wv_terrain` 冻结编号。这是全面板群系的**唯一**排列定义——落笔 / 单格 /
+/// 批量三处共用。注意含**山地**（旧单格 radio 漏了它，本次补上）。
+pub const BIOME_GROUP_ORDER: &[&[u8]] = &[
+    &[
+        wv_terrain::BIOME_FOREST,
+        wv_terrain::BIOME_JUNGLE,
+        wv_terrain::BIOME_TROPICAL_RAINFOREST,
+    ],
+    &[
+        wv_terrain::BIOME_HILLS,
+        wv_terrain::BIOME_MOUNTAINS,
+        wv_terrain::BIOME_SAVANNA,
+        wv_terrain::BIOME_PLAINS,
+        wv_terrain::BIOME_GRASSLAND,
+    ],
+    &[
+        wv_terrain::BIOME_GOBI,
+        wv_terrain::BIOME_DESERT,
+        wv_terrain::BIOME_SALT_FLAT,
+        wv_terrain::BIOME_OASIS,
+    ],
+    &[
+        wv_terrain::BIOME_SWAMP,
+        wv_terrain::BIOME_WETLAND,
+        wv_terrain::BIOME_TUNDRA,
+        wv_terrain::BIOME_SNOWFIELD,
+    ],
+    &[wv_terrain::BIOME_OCEAN, wv_terrain::BIOME_LAKE],
+    &[wv_terrain::BIOME_ROAD, wv_terrain::BIOME_RIVER],
+    &[wv_terrain::BIOME_NONE],
+];
+
+/// **群系 swatch 网格**（ADR-0058 D5：全面板**唯一**的群系选择控件，
+/// 落笔 / 单格 / 批量三处共用；回调式——选中态由调用方传入，点选经
+/// `on_pick` 回给调用方按各自作用域的提交语义落盘）。
 ///
-/// 5 列 × N 行，每格 = 一个色块 + 群系名。色源 = `BIOME_RAW_COLORS`
-/// （与 CellMap 底图**同一张表**——所见即所涂）。
+/// 5 列 × N 行，每格 = 色块 + 名（截断 3 字，hover 全名）。色源 =
+/// `BIOME_RAW_COLORS`、名源 = `BIOME_NAMES_ZH`、序源 =
+/// [`BIOME_GROUP_ORDER`]——所见即所涂，且与底图同表。
 ///
 /// 选中态：`gold` 描边 + `gold_soft` 底（与工具瓷砖 active 态同款视觉语言）。
-fn render_biome_swatch(ui: &mut egui::Ui, shell: &UiShell, current: &mut u8) {
-    egui::Grid::new("cell_paint_biome_swatch")
+pub fn render_biome_swatch(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    selected: u8,
+    mut on_pick: impl FnMut(u8),
+) {
+    egui::Grid::new("cell_biome_swatch")
         .num_columns(5)
         .spacing(egui::vec2(4.0, 4.0))
         .show(ui, |ui| {
-            for biome in 0u8..21 {
-                let selected = *current == biome;
-                let color = egui::Color32::from_rgb(
-                    BIOME_RAW_COLORS[biome as usize][0],
-                    BIOME_RAW_COLORS[biome as usize][1],
-                    BIOME_RAW_COLORS[biome as usize][2],
-                );
-                let (rect, resp) =
-                    ui.allocate_exact_size(egui::vec2(42.0, 26.0), egui::Sense::click());
-                let fill = if selected {
-                    shell.gold_soft()
-                } else {
-                    egui::Color32::TRANSPARENT
-                };
-                let stroke = if selected {
-                    egui::Stroke::new(1.0, shell.gold())
-                } else {
-                    egui::Stroke::NONE
-                };
-                ui.painter()
-                    .rect(rect, 4.0, fill, stroke, egui::StrokeKind::Inside);
-                // 色块（缩进一点，避免压描边）。
-                let swatch = egui::Rect::from_min_size(
-                    rect.min + egui::vec2(4.0, 4.0),
-                    egui::vec2(12.0, 12.0),
-                );
-                ui.painter().rect_filled(swatch, 3.0, color);
-                // 群系名（微号，截断到 4 字避免挤爆）。
-                let name = biome_name(biome);
-                let short: String = name.chars().take(3).collect();
-                ui.painter().text(
-                    egui::pos2(swatch.max.x + 3.0, swatch.center().y),
-                    egui::Align2::LEFT_CENTER,
-                    short,
-                    proportional(font_size::MICRO),
-                    if selected { shell.t1() } else { shell.t3() },
-                );
-                if resp.clicked() {
-                    *current = biome;
+            for group in BIOME_GROUP_ORDER {
+                for &biome in group.iter() {
+                    let is_selected = selected == biome;
+                    let color = egui::Color32::from_rgb(
+                        BIOME_RAW_COLORS[biome as usize][0],
+                        BIOME_RAW_COLORS[biome as usize][1],
+                        BIOME_RAW_COLORS[biome as usize][2],
+                    );
+                    let (rect, resp) =
+                        ui.allocate_exact_size(egui::vec2(42.0, 26.0), egui::Sense::click());
+                    let fill = if is_selected {
+                        shell.gold_soft()
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+                    let stroke = if is_selected {
+                        egui::Stroke::new(1.0, shell.gold())
+                    } else {
+                        egui::Stroke::NONE
+                    };
+                    ui.painter()
+                        .rect(rect, 4.0, fill, stroke, egui::StrokeKind::Inside);
+                    // 色块（缩进一点，避免压描边）。
+                    let swatch = egui::Rect::from_min_size(
+                        rect.min + egui::vec2(4.0, 4.0),
+                        egui::vec2(12.0, 12.0),
+                    );
+                    ui.painter().rect_filled(swatch, 3.0, color);
+                    // 群系名（微号，截断到 3 字避免挤爆）。
+                    let name = biome_name(biome);
+                    let short: String = name.chars().take(3).collect();
+                    ui.painter().text(
+                        egui::pos2(swatch.max.x + 3.0, swatch.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        short,
+                        proportional(font_size::MICRO),
+                        if is_selected { shell.t1() } else { shell.t3() },
+                    );
+                    if resp.clicked() {
+                        on_pick(biome);
+                    }
+                    resp.on_hover_text(name);
                 }
-                resp.on_hover_text(name);
-                // 5 列一行 → 每 5 个换行（用 `end_row` 手动断）。
-                if (biome as usize + 1).is_multiple_of(5) {
-                    ui.end_row();
-                }
+                ui.end_row();
             }
         });
 }
 
 /// 群系编号 → 中文名（越界回落 `#N`）。
-fn biome_name(biome: u8) -> String {
+pub(crate) fn biome_name(biome: u8) -> String {
     BIOME_NAMES_ZH
         .get(biome as usize)
         .map(|s| s.to_string())
@@ -520,4 +547,42 @@ pub fn render_derived_section(
         request.quantize_step_m = step.clamp(1.0, 32767.0) as i16;
     });
     ui.add_space(4.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **ADR-0058 验收 A5**：群系 7 组序覆盖全部 21 个冻结编号，不重不漏。
+    /// （旧单格 radio 的 7 组漏了「山地」，本测试防回归。）
+    #[test]
+    fn biome_group_order_covers_all_frozen_biomes_exactly_once() {
+        let mut seen = [false; 21];
+        for group in BIOME_GROUP_ORDER {
+            assert!(!group.is_empty(), "空组无意义");
+            for &b in group.iter() {
+                assert!((b as usize) < 21, "编号 {b} 越界（冻结表共 21 项）");
+                assert!(!seen[b as usize], "编号 {b} 重复入组");
+                seen[b as usize] = true;
+            }
+        }
+        let missing: Vec<usize> = seen
+            .iter()
+            .enumerate()
+            .filter(|(_, &s)| !s)
+            .map(|(i, _)| i)
+            .collect();
+        assert!(missing.is_empty(), "有冻结编号未入 7 组序：{missing:?}");
+    }
+
+    /// 名称与色表同长（swatch 按 BIOME_GROUP_ORDER 下标双读，错位即越界）。
+    #[test]
+    fn biome_name_and_color_tables_share_length() {
+        assert_eq!(BIOME_NAMES_ZH.len(), BIOME_RAW_COLORS.len());
+        for group in BIOME_GROUP_ORDER {
+            for &b in group.iter() {
+                assert!(biome_name(b) != format!("#{b}"), "编号 {b} 缺中文名");
+            }
+        }
+    }
 }
