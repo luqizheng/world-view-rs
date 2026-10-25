@@ -664,6 +664,32 @@ pub enum I18nKey {
     InspectorAnchorDerived,
     /// Place 表单：呈现级别
     InspectorPlaceRank,
+    /// Place 表单：POI 类别（ADR-0064）
+    InspectorPlaceKind,
+    /// POI 类别：未分类
+    PoiKindOther,
+    /// POI 类别：聚落
+    PoiKindSettlement,
+    /// POI 类别：山峰
+    PoiKindPeak,
+    /// POI 类别：港口
+    PoiKindPort,
+    /// POI 类别：车站
+    PoiKindStation,
+    /// POI 类别：景点
+    PoiKindScenic,
+    /// POI 类别：餐饮
+    PoiKindFood,
+    /// POI 类别：住宿
+    PoiKindLodging,
+    /// POI 类别：医疗
+    PoiKindMedical,
+    /// POI 类别：教育
+    PoiKindEducation,
+    /// POI 类别：行政
+    PoiKindGovernment,
+    /// POI 类别：商业
+    PoiKindShop,
     /// Place 表单：重生成标记按钮
     InspectorPlaceRegenMarker,
     /// Faction 表单：在势力图定位
@@ -1278,7 +1304,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 508] = [
+    pub const ALL: [I18nKey; 521] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1573,6 +1599,19 @@ impl I18nKey {
         I18nKey::InspectorCellMovedToBrush,
         I18nKey::InspectorAnchorDerived,
         I18nKey::InspectorPlaceRank,
+        I18nKey::InspectorPlaceKind,
+        I18nKey::PoiKindOther,
+        I18nKey::PoiKindSettlement,
+        I18nKey::PoiKindPeak,
+        I18nKey::PoiKindPort,
+        I18nKey::PoiKindStation,
+        I18nKey::PoiKindScenic,
+        I18nKey::PoiKindFood,
+        I18nKey::PoiKindLodging,
+        I18nKey::PoiKindMedical,
+        I18nKey::PoiKindEducation,
+        I18nKey::PoiKindGovernment,
+        I18nKey::PoiKindShop,
         I18nKey::InspectorPlaceRegenMarker,
         I18nKey::InspectorFactionFocus,
         I18nKey::InspectorFactionClearFocus,

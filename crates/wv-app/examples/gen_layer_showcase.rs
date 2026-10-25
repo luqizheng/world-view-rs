@@ -24,7 +24,7 @@
 //! 生成物与加载器 schema 天然一致（round-trip 同源）。标签层配置不在
 //! `World` 上（只存配置不存文本，ADR-0017 §2.1），另走 `write_labels`。
 
-use wv_core::distance::{Place, PlaceEdge, Vehicle};
+use wv_core::distance::{Place, PlaceEdge, PoiKind, Vehicle};
 use wv_core::event::{Event, EventLocation};
 use wv_core::id::Id;
 use wv_core::map::{
@@ -289,7 +289,7 @@ fn build_world(meta: WorldMeta) -> World {
 
     // ---- 距离图：4 城（is_city）+ 4 点标 ---------------------------------
     let city = |id: &str, name: &str, x: f32, y: f32| Place {
-        kind: None,
+        kind: Some(PoiKind::Settlement),
         line: None,
         id: Id::new(id).unwrap(),
         name: name.into(),

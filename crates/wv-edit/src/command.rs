@@ -3575,6 +3575,69 @@ impl EditCommand for UpdatePlaceCommand {
     }
 }
 
+/// 设置单个地点的 POI 类别（ADR-0064）。
+///
+/// **为什么单独一条命令而不并进 [`UpdatePlaceCommand`]**：后者是「整实体补丁」，
+/// 构造点分布在面板 / HTTP skill / 测试里，加字段要全量改；而「选一个类别」
+/// 是独立的作者意图，撤销粒度也应当是**一次选择**而不是一次表单提交。
+///
+/// `kind = None` 表示**清空**：渲染回退默认红点，YAML 不再写 `kind` 行
+/// （`skip_serializing_if`）。
+#[derive(Debug)]
+pub struct SetPlaceKindCommand {
+    /// 目标地点 ID。
+    pub id: wv_core::Id,
+    /// 新类别；`None` = 清空。
+    pub kind: Option<wv_core::distance::PoiKind>,
+    before: std::sync::Mutex<Option<Place>>,
+}
+
+impl SetPlaceKindCommand {
+    pub fn new(id: wv_core::Id, kind: Option<wv_core::distance::PoiKind>) -> Self {
+        Self {
+            id,
+            kind,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for SetPlaceKindCommand {
+    fn label(&self) -> String {
+        format!("改地点类别「{}」", self.id)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let p = world
+            .distances
+            .places
+            .iter_mut()
+            .find(|p| p.id == self.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Place {}", self.id)))?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))? = Some(p.clone());
+        p.kind = self.kind;
+        Ok(vec!["distances/places".into()])
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let prev = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("SetPlaceKind 尚未 apply".into()))?;
+        let p = world
+            .distances
+            .places
+            .iter_mut()
+            .find(|p| p.id == self.id)
+            .ok_or_else(|| EditError::TargetMissing(format!("Place {}", self.id)))?;
+        *p = prev;
+        Ok(())
+    }
+}
+
 /// 事实地点创建命令的脏路径：`Place` 本体与地界几何分属两个落盘目录。
 ///
 /// `distances/places` 是 §4.5「每实体一文件」的地点表（全量重写 + 删除传播），
@@ -6193,6 +6256,52 @@ mod tests {
                 .apply(&mut w)
                 .unwrap();
         assert_eq!(dirty, vec!["distances/places".to_string()]);
+    }
+
+    #[test]
+    fn set_place_kind_writes_and_reverts_the_category() {
+        use wv_core::distance::PoiKind;
+        let mut w = World::default();
+        w.distances.places.push(sample_place("p1", "医院"));
+        let cmd = SetPlaceKindCommand::new(Id::new_unchecked("p1"), Some(PoiKind::Medical));
+
+        let dirty = cmd.apply(&mut w).unwrap();
+        assert_eq!(
+            w.distances.places[0].kind,
+            Some(PoiKind::Medical),
+            "apply 应写入类别"
+        );
+        assert_eq!(dirty, vec!["distances/places".to_string()]);
+
+        cmd.revert(&mut w).unwrap();
+        assert_eq!(
+            w.distances.places[0].kind, None,
+            "revert 应恢复原类别（此处为缺省 None）"
+        );
+    }
+
+    /// `kind = None` 是「清空」而不是「不改」——与 `UpdatePlaceCommand` 的
+    /// `Option` 语义不同，这条测试钉住区别。
+    #[test]
+    fn set_place_kind_none_clears_the_category() {
+        use wv_core::distance::PoiKind;
+        let mut w = World::default();
+        let mut p = sample_place("p1", "医院");
+        p.kind = Some(PoiKind::Medical);
+        w.distances.places.push(p);
+
+        SetPlaceKindCommand::new(Id::new_unchecked("p1"), None)
+            .apply(&mut w)
+            .unwrap();
+        assert_eq!(w.distances.places[0].kind, None, "None 应清空类别");
+    }
+
+    #[test]
+    fn set_place_kind_on_missing_id_fails() {
+        use wv_core::distance::PoiKind;
+        let mut w = World::default();
+        let cmd = SetPlaceKindCommand::new(Id::new_unchecked("ghost"), Some(PoiKind::Food));
+        assert!(cmd.apply(&mut w).is_err());
     }
 
     // ====== 事件属性命令（统一 Inspector · 2026-10-22）======================

@@ -32,7 +32,7 @@
 //! terrain.bin 由 `write_terrain_if_any` 写出并回写 RasterRef）——
 //! 生成物与加载器 schema 天然一致（round-trip 同源）。
 
-use wv_core::distance::{Place, PlaceEdge, Vehicle};
+use wv_core::distance::{Place, PlaceEdge, PoiKind, Vehicle};
 use wv_core::id::Id;
 use wv_core::map::{
     Extent, GeometryData, GeometrySpan, IconShape, IconSpec, Layer, LayerKind, MapLevel, MapNode,
@@ -460,7 +460,7 @@ fn build_world(meta: WorldMeta) -> World {
     for (i, (pid, pname)) in idx_places.iter().enumerate() {
         let (x, y) = idx_pos[i];
         world.distances.places.push(Place {
-            kind: None,
+            kind: Some(PoiKind::Settlement),
             line: None,
             id: Id::new(*pid).unwrap(),
             name: (*pname).into(),
@@ -626,7 +626,7 @@ fn build_road_map(world: &mut World) {
     // 节点：两个路口（rank 0——GLOSSARY 明写「路网交点」，当前无任何示例覆盖）、
     // 两座城（rank 3，带范围）、两座镇（rank 2）、一个村（rank 1）。
     let p = |id: &str, name: &str, x: f32, y: f32, rank: u8, city: bool| Place {
-        kind: None,
+        kind: city.then_some(PoiKind::Settlement),
         line: None,
         id: Id::new(id).unwrap(),
         name: name.into(),
@@ -898,7 +898,7 @@ fn build_combo_map(world: &mut World) {
     );
 
     let p = |id: &str, name: &str, x: f32, y: f32, rank: u8, city: bool| Place {
-        kind: None,
+        kind: city.then_some(PoiKind::Settlement),
         line: None,
         id: Id::new(id).unwrap(),
         name: name.into(),
