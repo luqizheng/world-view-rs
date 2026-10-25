@@ -1220,11 +1220,53 @@ pub enum I18nKey {
     ScaleHintLand,
     /// 「横穿约 步行{a}天 · 骑马{b}天 · 帆船{c}天」
     ScaleHintCrossing,
+
+    // ── CellMap 落笔面板（2026-10-25 P0-3 i18n 补齐） ────────────────────
+    /// 读数条段标「光标」
+    CellPaintReadoutCursor,
+    /// 读数条段标「选中」
+    CellPaintReadoutSelected,
+    /// 读数条选区段「{n} 格」
+    CellPaintReadoutCellCount,
+    /// 落笔值区标题「落笔值」
+    CellPaintSectionTitle,
+    /// 落笔值区副题「拖绘时写进每一格的值」
+    CellPaintSectionHint,
+    /// 「海拔增减（相对）」
+    CellPaintHeightDelta,
+    /// 「笔刷半径」
+    CellPaintBrushRadius,
+    /// 半径单位「格」
+    CellPaintRadiusUnit,
+    /// 泛洪判据区标题「泛洪判据」
+    CellFloodSectionTitle,
+    /// 泛洪判据区副题「「同类」怎么算」
+    CellFloodSectionHint,
+    /// 「容差 ±」
+    CellFloodTolerance,
+    /// 派生运算区标题「派生运算」
+    CellDerivedSectionTitle,
+    /// 空选区提示「先在图上圈选一片区域」
+    CellDerivedScopeNone,
+    /// 「作用于选中的 {n} 格」
+    CellDerivedScopeCount,
+    /// 按钮「平滑」
+    CellDerivedSmooth,
+    /// 平滑 hover「把选中片的海拔按邻域均值柔化（不动边界外的格）」
+    CellDerivedSmoothHint,
+    /// 按钮「量化」
+    CellDerivedQuantize,
+    /// 量化 hover「把选中片的海拔吸附到 N 米阶梯（做等高线地形）」
+    CellDerivedQuantizeHint,
+    /// 「强度」
+    CellDerivedStrength,
+    /// 「步长」
+    CellDerivedStep,
 }
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 484] = [
+    pub const ALL: [I18nKey; 504] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1746,5 +1788,26 @@ impl I18nKey {
         I18nKey::ScaleHintExtent,
         I18nKey::ScaleHintLand,
         I18nKey::ScaleHintCrossing,
+        // CellMap 落笔面板（20）
+        I18nKey::CellPaintReadoutCursor,
+        I18nKey::CellPaintReadoutSelected,
+        I18nKey::CellPaintReadoutCellCount,
+        I18nKey::CellPaintSectionTitle,
+        I18nKey::CellPaintSectionHint,
+        I18nKey::CellPaintHeightDelta,
+        I18nKey::CellPaintBrushRadius,
+        I18nKey::CellPaintRadiusUnit,
+        I18nKey::CellFloodSectionTitle,
+        I18nKey::CellFloodSectionHint,
+        I18nKey::CellFloodTolerance,
+        I18nKey::CellDerivedSectionTitle,
+        I18nKey::CellDerivedScopeNone,
+        I18nKey::CellDerivedScopeCount,
+        I18nKey::CellDerivedSmooth,
+        I18nKey::CellDerivedSmoothHint,
+        I18nKey::CellDerivedQuantize,
+        I18nKey::CellDerivedQuantizeHint,
+        I18nKey::CellDerivedStrength,
+        I18nKey::CellDerivedStep,
     ];
 }

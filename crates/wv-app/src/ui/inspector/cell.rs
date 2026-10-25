@@ -27,6 +27,14 @@
 //! 关联：[ADR-0040](../../../../docs/adr/ADR-0040-cell-inspector-tool.md)（决策 6
 //! 被本设计修正——Cell 表单并入统一 Inspector；补 B 被 ADR-0057 废止）、
 //! [ADR-0057](../../../../docs/adr/ADR-0057-cellmap-unified-selection.md)。
+//!
+//! ## 海拔提交时机 = 手势完成帧（2026-10-25 P0-1 方案 A，修正上文「即改即提交」对海拔的适用）
+//!
+//! scrub 数值框拖动中**每 4px 写一次值**（wv-ui D1），若照搬「即改即提交」
+//! 会把 1 个拖拽手势拆成一串撤销命令。单格海拔现走「拖动暂存 → 松手 /
+//! Enter 落盘」：暂存值挂 `EditCellState::pending_height`（带坐标标签，
+//! 换格 / 换图即失效），手势完成帧与地表 / 群系改动汇入**同一条**命令
+//! （1 手势 = 1 撤销单位）。radio / segmented 是离散点击，维持「点击即提交」。
 
 #![cfg(feature = "app")]
 
@@ -43,7 +51,7 @@ use crate::ui::widgets::{
     ICON_LOCK_KEYHOLE,
 };
 use wv_render::state::{CellSelection, EditCellState};
-use wv_ui::widgets::controls::{numeric_input_salted, radio};
+use wv_ui::widgets::controls::{numeric_input_salted, numeric_input_salted_report, radio};
 
 use wv_ui::widgets::segmented_control::segmented;
 
@@ -87,7 +95,7 @@ pub fn cell_form(
             let c = terrain.cells.get(idx)?;
             Some((c.height, c.surface, c.biome))
         };
-        super::cell_paint_panel::render_readout_bar(ui, shell, edit_cell, sel, read_cell);
+        super::cell_paint_panel::render_readout_bar(ui, shell, loc, edit_cell, sel, read_cell);
     }
 
     // ── 泛洪判据区（D6）：仅 FloodSelect 工具激活时显示 ──
@@ -107,6 +115,7 @@ pub fn cell_form(
     super::cell_paint_panel::render_derived_section(
         ui,
         shell,
+        loc,
         derived,
         sel.len() as usize,
         playback_playing,
@@ -119,9 +128,20 @@ pub fn cell_form(
             let Some(before) = read_cell(projection, map, gx, gy) else {
                 return;
             };
-            render_identity(ui, shell, gx, gy);
+            render_identity(ui, shell, loc, gx, gy);
             divider(ui, shell);
-            render_fields(ui, shell, projection, map, edit, (gx, gy), before, tex, loc);
+            render_fields(
+                ui,
+                shell,
+                projection,
+                map,
+                edit,
+                edit_cell,
+                (gx, gy),
+                before,
+                tex,
+                loc,
+            );
             divider(ui, shell);
             // 尾注（Figma "Selection scope"）：focus 图标 + 提示。
             ui.horizontal(|ui| {
@@ -151,7 +171,7 @@ pub fn cell_form(
 }
 
 /// identity 两行（Figma "Object identity"）：主标 `Cell · X, Y` + 金副标。
-fn render_identity(ui: &mut egui::Ui, shell: &UiShell, gx: i32, gy: i32) {
+fn render_identity(ui: &mut egui::Ui, shell: &UiShell, loc: crate::i18n::Locale, gx: i32, gy: i32) {
     ui.add_space(2.0);
     ui.label(
         egui::RichText::new(format!("Cell · {gx}, {gy}"))
@@ -159,7 +179,7 @@ fn render_identity(ui: &mut egui::Ui, shell: &UiShell, gx: i32, gy: i32) {
             .color(shell.t1()),
     );
     ui.label(
-        egui::RichText::new(t(crate::i18n::Locale::Zh, I18nKey::CellEditorSubtitle))
+        egui::RichText::new(t(loc, I18nKey::CellEditorSubtitle))
             .size(font_size::MICRO)
             .color(shell.accent()),
     );
@@ -174,6 +194,7 @@ fn render_fields(
     projection: &mut WorldProjection,
     map: Option<&wv_core::Id>,
     edit: &mut crate::edit::editing::EditHistory,
+    edit_cell: &mut EditCellState,
     (gx, gy): (i32, i32),
     before: wv_core::terrain::TerrainCellData,
     tex: &mut wv_render::terrain_view::TerrainTexture,
@@ -183,7 +204,7 @@ fn render_fields(
     ui.add_space(6.0);
 
     // ── 位置（只读）：heading + 🔒 只读坐标；X / Y 两列 ──
-    section_heading(ui, shell, t(loc, I18nKey::CellInspectorPosition), true);
+    section_heading(ui, shell, loc, t(loc, I18nKey::CellInspectorPosition), true);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 12.0;
         for (label, v) in [("X", gx), ("Y", gy)] {
@@ -238,7 +259,23 @@ fn render_fields(
     ui.add_space(8.0);
 
     // ── 海拔：heading + stepper 数值（i16 米全域钳制）+ 范围提示 ──
-    let mut height_f = before.height as f32;
+    //
+    // **提交时机 = 手势完成帧**（2026-10-25 P0-1 方案 A）：scrub 拖动中
+    // 每 4px 写一次值，若逐帧落盘会把 1 个拖拽手势拆成一串撤销命令。
+    // 拖动中值进 `edit_cell.pending_height` 暂存（面板照常显示），松手 /
+    // Enter 的那一帧才落盘成 1 条 `EditCellCommand`。radio / segmented
+    // 是离散点击，仍「点击即提交」。
+    let staged_height = match edit_cell.pending_height {
+        // 手势中途换格 / 换图：暂存值作废（坐标标签失效判定）。
+        Some((px, py, _)) if (px, py) != (gx, gy) => {
+            edit_cell.pending_height = None;
+            None
+        }
+        Some((_, _, h)) => Some(h),
+        None => None,
+    };
+    let mut height_f = staged_height.unwrap_or(before.height) as f32;
+    let mut report = None;
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(t(loc, I18nKey::CellInspectorHeight))
@@ -251,7 +288,7 @@ fn render_fields(
         // salted 变体由调用方给语义名，跨帧稳定且互不冲突；外层 push_id
         // 已多余（控件内部已 push），一并移除。
         ui.allocate_ui(egui::vec2(168.0, 28.0), |ui| {
-            numeric_input_salted(
+            report = Some(numeric_input_salted_report(
                 ui,
                 shell,
                 "cell_height",
@@ -260,10 +297,21 @@ fn render_fields(
                 1.0,
                 i16::MIN as f32,
                 i16::MAX as f32,
-            );
+            ));
         });
     });
-    next.height = height_f.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+    let (_, report) = report.expect("horizontal 闭包必然执行一次");
+    let scrubbed = height_f.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+    // 本帧是否要把海拔落盘：`None` = 值仍在手势中或未变。
+    let mut height_commit: Option<i16> = None;
+    if report.gesture_active {
+        // 拖动中 / 编辑中：只暂存，不落盘（`next.height` 保持 before——
+        // 暂存值不进合并提交，否则又是逐帧刷命令）。
+        edit_cell.pending_height = Some((gx, gy, scrubbed));
+    } else {
+        height_commit = height_commit_decision(report.changed, staged_height, scrubbed);
+        edit_cell.pending_height = None;
+    }
     ui.label(
         egui::RichText::new(t(loc, I18nKey::CellEditorHeightRange))
             .size(font_size::MICRO)
@@ -300,13 +348,24 @@ fn render_fields(
     }
 
     // ── 即改即提交（每格 1 command，[ADR-0040] §决策 8）──
+    // 海拔的手势完成帧提交（P0-1 方案 A）也汇入同一条命令：地表 / 群系
+    // 点击与海拔松手恰在同帧时仍是 1 个撤销单位。
+    if let Some(h) = height_commit {
+        next.height = h;
+    }
     if next != before {
         push_cell_edit(edit, projection, map, (gx, gy), before, next, tex);
     }
 }
 
 /// 段落 heading 行：左标题 + 右侧可选「🔒 只读」徽标（Figma Position heading）。
-fn section_heading(ui: &mut egui::Ui, shell: &UiShell, title: &str, readonly_badge: bool) {
+fn section_heading(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    loc: crate::i18n::Locale,
+    title: &str,
+    readonly_badge: bool,
+) {
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(title)
@@ -315,7 +374,7 @@ fn section_heading(ui: &mut egui::Ui, shell: &UiShell, title: &str, readonly_bad
         );
         if readonly_badge {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let text = t(crate::i18n::Locale::Zh, I18nKey::CellEditorReadonly);
+                let text = t(loc, I18nKey::CellEditorReadonly);
                 ui.label(
                     egui::RichText::new(text)
                         .size(font_size::MICRO)
@@ -814,6 +873,21 @@ fn read_cell(
         .copied()
 }
 
+/// **海拔提交判定**（P0-1 方案 A 的核心决策，纯函数以便测试锚定）：
+///
+/// | 手势态 | 控件本帧写入 | 结论 |
+/// |---|---|---|
+/// | 进行中 | 任意 | 不提交（拖动 / 编辑中只暂存） |
+/// | 已结束 | 有 | 提交控件写入的最终值（文本提交 / 失焦提交） |
+/// | 已结束 | 无 | 提交暂存值（scrub 松手帧：1 手势 = 1 command） |
+fn height_commit_decision(report_changed: bool, staged: Option<i16>, scrubbed: i16) -> Option<i16> {
+    if report_changed {
+        Some(scrubbed)
+    } else {
+        staged
+    }
+}
+
 /// 群系编号 → 显示名（读数用；未登记编号回落 `#N`）。
 fn biome_label(num: u8) -> String {
     for group in biome_groups() {
@@ -829,6 +903,26 @@ fn biome_label(num: u8) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **P0-1 方案 A · 提交判定矩阵**：拖动中不提交；控件写入帧提交新值；
+    /// 松手帧提交暂存值；无手势无写入不提交。
+    #[test]
+    fn height_commit_decision_matrix() {
+        // 拖动中（active）：控件可能已在写值，但一律不落盘。
+        assert_eq!(
+            height_commit_decision(true, Some(120), 130),
+            Some(130),
+            "changed 优先——但调用方保证 active 分支不进本函数，此行防回归"
+        );
+        // 注意：active 的判定在调用方（gesture_active 走暂存分支），
+        // 本函数只在「手势已结束」时被调用。
+        // 松手帧：控件无写入 → 提交暂存值。
+        assert_eq!(height_commit_decision(false, Some(120), 120), Some(120));
+        // 松手帧但暂存被清（换格失效）→ 不提交。
+        assert_eq!(height_commit_decision(false, None, 120), None);
+        // 文本提交 / 失焦提交帧：控件写入新值 → 提交新值。
+        assert_eq!(height_commit_decision(true, Some(100), 150), Some(150));
+    }
 
     /// 构造 4×4 地形：给定 (gx, gy) → (height, biome)。
     fn terrain_of(cells: &[(i32, i32, i16, u8)]) -> (WorldProjection, wv_core::id::Id) {

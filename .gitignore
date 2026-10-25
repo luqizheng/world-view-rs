@@ -65,3 +65,6 @@ wvclick.py
 
 # 验收期临时 python 脚本
 patch_*.py
+
+# worktree 本地构建目录（共享 target 的 stale rlib 回退方案，AGENTS §13）
+/.target/

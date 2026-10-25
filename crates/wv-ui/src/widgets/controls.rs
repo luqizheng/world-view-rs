@@ -249,6 +249,50 @@ pub fn numeric_input_bounded(
     numeric_input_salted(ui, shell, "legacy_ptr", value, unit, step, min, max)
 }
 
+/// [`numeric_input_salted_report`] 的返回值：把「值动了」与「手势结束」
+/// 分开交给调用方。
+///
+/// ## 为什么需要它（2026-10-25 P0-1 方案 A）
+///
+/// scrub 在拖动中**每 4px 写一次值**（D1），而「即改即提交」的表单
+/// （如单格海拔）若把每次写值都落成一条 `EditCommand`，拖一下海拔会
+/// 刷出一串撤销单元。调用方需要知道**手势是否仍在进行**——进行中把值
+/// 当「暂存显示」，手势结束的那一帧才落盘成 1 条命令。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NumericEditReport {
+    /// 本帧控件把 `value` 改写成了新值（scrub 步进 / 文本提交 / stepper 点击）。
+    pub changed: bool,
+    /// 手势仍在进行中（scrub 拖动 / 文本编辑）——为 `true` 时写入的值
+    /// 只是暂存；回到 `false` 的那一帧即为「手势完成帧」，调用方应在
+    /// 该帧落盘最终值。
+    pub gesture_active: bool,
+}
+
+/// [`numeric_input_bounded`] 的**显式盐 + 编辑报告变体**：
+///
+/// 与 [`numeric_input_salted`] 同一实现，额外返回 [`NumericEditReport`]，
+/// 供「手势完成帧才落盘」的表单使用。只需要值的调用方继续用
+/// [`numeric_input_salted`]。
+#[allow(clippy::too_many_arguments)]
+pub fn numeric_input_salted_report(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    id_salt: &str,
+    value: &mut f32,
+    unit: &str,
+    step: f32,
+    min: f32,
+    max: f32,
+) -> (egui::Response, NumericEditReport) {
+    let mut out: Option<(egui::Response, NumericEditReport)> = None;
+    ui.push_id(id_salt, |ui| {
+        out = Some(numeric_input_bounded_inner(
+            ui, shell, value, unit, step, min, max,
+        ));
+    });
+    out.expect("push_id 闭包必然执行一次")
+}
+
 /// [`numeric_input_bounded`] 的**显式盐变体**（2026-10-24）：
 ///
 /// `id_salt` 由**调用方**给一个跨帧稳定的语义名（如 `"cell_height"`、
@@ -265,13 +309,7 @@ pub fn numeric_input_salted(
     min: f32,
     max: f32,
 ) -> egui::Response {
-    let mut resp: Option<egui::Response> = None;
-    ui.push_id(id_salt, |ui| {
-        resp = Some(numeric_input_bounded_inner(
-            ui, shell, value, unit, step, min, max,
-        ));
-    });
-    resp.expect("push_id 闭包必然执行一次")
+    numeric_input_salted_report(ui, shell, id_salt, value, unit, step, min, max).0
 }
 
 // ── 数值输入手势状态机（D1 / D1-A / D1-B · ADR-0052 §9.2）──────────────
@@ -471,6 +509,9 @@ fn numeric_commit_text(
 }
 
 /// [`numeric_input_bounded`] 的实际实现（调用方已保证 id 作用域隔离）。
+///
+/// 返回 `(Response, NumericEditReport)`：报告区分「本帧写值」与
+/// 「手势进行中」，供手势完成帧落盘的表单使用（见 [`NumericEditReport`]）。
 fn numeric_input_bounded_inner(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -479,7 +520,10 @@ fn numeric_input_bounded_inner(
     step: f32,
     min: f32,
     max: f32,
-) -> egui::Response {
+) -> (egui::Response, NumericEditReport) {
+    // 报告基准：本帧结束时的值与入口值对比（scrub 步进 / 文本提交 /
+    // stepper 点击都表现为「值变了」）。
+    let value_at_entry = *value;
     // ── 手势态 / 错误态跨帧存活（D1 / D1-B）──
     let gesture_id = ui.id().with("numeric_gesture");
     let error_id = ui.id().with("numeric_error");
@@ -575,9 +619,16 @@ fn numeric_input_bounded_inner(
             gesture = NumericGesture::Idle;
         }
 
+        let gesture_active = matches!(gesture, NumericGesture::TextEditing { .. });
         ui.memory_mut(|m| m.data.insert_temp(gesture_id, gesture));
         ui.memory_mut(|m| m.data.insert_temp(error_id, error));
-        return resp;
+        return (
+            resp,
+            NumericEditReport {
+                changed: *value != value_at_entry,
+                gesture_active,
+            },
+        );
     }
 
     // ── 常态：自绘框 + stepper + body 手势（D1）──
@@ -782,9 +833,16 @@ fn numeric_input_bounded_inner(
         }
     }
 
+    let gesture_active = gesture != NumericGesture::Idle;
     ui.memory_mut(|m| m.data.insert_temp(gesture_id, gesture));
     ui.memory_mut(|m| m.data.insert_temp(error_id, error));
-    ui.interact(rect, ui.id().with("numeric_body"), egui::Sense::hover())
+    (
+        ui.interact(rect, ui.id().with("numeric_body"), egui::Sense::hover()),
+        NumericEditReport {
+            changed: *value != value_at_entry,
+            gesture_active,
+        },
+    )
 }
 
 // ── TextArea（目录 UI/TextArea：3 行）─────────────────────────────────
@@ -2021,5 +2079,170 @@ mod tests {
         progress(&mut ui, &sh, "Exporting terrain", 0.64);
         value_unit(&mut ui, &sh, "842", "m · Elevation");
         let _ = dropdown_box(&mut ui, &sh, "Government");
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // NumericEditReport（2026-10-25 P0-1 方案 A：手势完成帧才落盘）
+    // ────────────────────────────────────────────────────────────────────
+
+    /// 方案 A 调用方逻辑的最小镜像：拖动中暂存、手势结束帧提交一次。
+    struct StagingCaller {
+        world: f32,
+        pending: Option<f32>,
+        commits: Vec<f32>,
+    }
+    impl StagingCaller {
+        fn frame(&mut self, ui: &mut egui::Ui, sh: &UiShell, salt: &str) {
+            let mut vf = self.pending.unwrap_or(self.world);
+            let (_, report) =
+                numeric_input_salted_report(ui, sh, salt, &mut vf, "m", 10.0, -1000.0, 1000.0);
+            if report.gesture_active {
+                self.pending = Some(vf);
+            } else if report.changed {
+                self.world = vf;
+                self.pending = None;
+                self.commits.push(vf);
+            } else if let Some(p) = self.pending.take() {
+                self.world = p;
+                self.commits.push(p);
+            }
+        }
+    }
+
+    /// **scrub 全链路**：按下 → 拖 16px（+4 step × 10 = +40）→ 松手，
+    /// 调用方应恰好收到 **1 次**提交（撤销栈 1 手势 1 command），终值 140。
+    #[test]
+    fn scrub_reports_active_gesture_then_commits_once_on_release() {
+        let sh = shell();
+        let ctx = egui::Context::default();
+        // 控件是本 ui 第一个部件：rect 从 (0,0) 起，取 body 中心。
+        let pos = egui::pos2(40.0, CONTROL_H * 0.5);
+        let up = egui::pos2(40.0, CONTROL_H * 0.5 - 16.0);
+        let mut caller = StagingCaller {
+            world: 100.0,
+            pending: None,
+            commits: Vec::new(),
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(pos)], // hover
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            }], // 按下
+            vec![egui::Event::PointerMoved(up)],  // 拖 16px → 写值（暂存）
+            vec![egui::Event::PointerButton {
+                pos: up,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            }], // 松手 → 手势完成帧
+        ] {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320.0, 200.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ctx| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::default())
+                    .show(ctx, |ui| caller.frame(ui, &sh, "scrub_report"));
+            });
+            output.textures_delta.clear();
+        }
+        assert_eq!(
+            caller.commits,
+            vec![140.0],
+            "1 手势 = 1 提交，got {:?}",
+            caller.commits
+        );
+        assert_eq!(caller.world, 140.0);
+        assert!(caller.pending.is_none(), "松手后不得残留暂存值");
+    }
+
+    /// **文本编辑全链路**：点按进编辑态 → Enter 提交。验证两点：
+    /// 编辑中 `gesture_active` 为真且**不落盘**；Enter 帧恰好 **1 次**提交。
+    ///
+    /// 注：headless 下 `Event::Text` 不路由进 TextEdit 缓冲（焦点时序的
+    /// headless 伪象，生产 GUI 无此问题），故「键入新值 → 提交新值」的
+    /// `changed` 直提路径由下一条 stepper 测试覆盖。
+    #[test]
+    fn text_edit_commits_on_enter_frame_only() {
+        let sh = shell();
+        let ctx = egui::Context::default();
+        let pos = egui::pos2(40.0, CONTROL_H * 0.5);
+        let mut caller = StagingCaller {
+            world: 100.0,
+            pending: None,
+            commits: Vec::new(),
+        };
+        let mut entered_editing = false;
+        let mut committed_before_enter = false;
+        for (frame, events) in [
+            (0usize, vec![egui::Event::PointerMoved(pos)]),
+            (
+                1,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                }],
+            ),
+            (
+                2,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                }],
+            ), // 点按 → 进编辑态
+            (3, vec![]), // 空帧：焦点在下一帧才对 Text 事件路由生效（headless 时序）
+            (4, vec![egui::Event::Text("150".into())]), // 键入（编辑中）
+            (
+                5,
+                vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::default(),
+                    physical_key: None,
+                }],
+            ),
+        ] {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320.0, 200.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ctx| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::default())
+                    .show(ctx, |ui| caller.frame(ui, &sh, "text_report"));
+            });
+            output.textures_delta.clear();
+            match frame {
+                2 => entered_editing = caller.pending.is_some(),
+                4 => committed_before_enter = !caller.commits.is_empty(),
+                _ => {}
+            }
+        }
+        assert!(entered_editing, "点按松手后应进入文本编辑态（暂存值就位）");
+        assert!(!committed_before_enter, "编辑中不得落盘");
+        assert_eq!(
+            caller.commits.len(),
+            1,
+            "Enter 帧恰好 1 次提交，got {:?}",
+            caller.commits
+        );
+        assert_eq!(caller.world, caller.commits[0], "面板值与提交值一致");
     }
 }

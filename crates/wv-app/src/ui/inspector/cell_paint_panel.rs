@@ -39,6 +39,7 @@ use wv_world_cell_map::terrain_view::biome_raw::{BIOME_NAMES_ZH, BIOME_RAW_COLOR
 pub fn render_readout_bar(
     ui: &mut egui::Ui,
     shell: &UiShell,
+    loc: crate::i18n::Locale,
     edit_cell: &EditCellState,
     sel: &CellSelection,
     read_cell: impl Fn(i32, i32) -> Option<(i16, u8, u8)>,
@@ -51,7 +52,7 @@ pub fn render_readout_bar(
                 gy,
                 h,
                 biome_name(b),
-                surface_name(s)
+                surface_name(loc, s)
             ),
             None => "—".to_string(),
         },
@@ -65,18 +66,20 @@ pub fn render_readout_bar(
                 gy,
                 h,
                 biome_name(b),
-                surface_name(s)
+                surface_name(loc, s)
             ),
             None => "—".to_string(),
         },
-        None if !sel.is_empty() => format!("{} 格", sel.len()),
+        None if !sel.is_empty() => {
+            t(loc, I18nKey::CellPaintReadoutCellCount).replace("{n}", &sel.len().to_string())
+        }
         None => "—".to_string(),
     };
 
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         ui.label(
-            egui::RichText::new("光标")
+            egui::RichText::new(t(loc, I18nKey::CellPaintReadoutCursor))
                 .size(font_size::MICRO)
                 .color(shell.t3()),
         );
@@ -93,7 +96,7 @@ pub fn render_readout_bar(
         let (sep, _) = ui.allocate_exact_size(egui::vec2(1.0, 16.0), egui::Sense::hover());
         ui.painter().rect_filled(sep, 0.0, shell.border_subtle());
         ui.label(
-            egui::RichText::new("选中")
+            egui::RichText::new(t(loc, I18nKey::CellPaintReadoutSelected))
                 .size(font_size::MICRO)
                 .color(shell.t3()),
         );
@@ -128,12 +131,12 @@ pub fn render_paint_value_section(
     loc: crate::i18n::Locale,
 ) {
     ui.label(
-        egui::RichText::new("落笔值")
+        egui::RichText::new(t(loc, I18nKey::CellPaintSectionTitle))
             .size(font_size::SMALL)
             .color(shell.t2()),
     );
     ui.label(
-        egui::RichText::new("拖绘时写进每一格的值")
+        egui::RichText::new(t(loc, I18nKey::CellPaintSectionHint))
             .size(font_size::MICRO)
             .color(shell.t3()),
     );
@@ -142,7 +145,7 @@ pub fn render_paint_value_section(
     // ── 落笔地表（绝对）──
     ui.horizontal(|ui| {
         ui.label(
-            egui::RichText::new("地表")
+            egui::RichText::new(t(loc, I18nKey::CellInspectorSurface))
                 .size(font_size::MICRO)
                 .color(shell.t3()),
         );
@@ -175,7 +178,7 @@ pub fn render_paint_value_section(
     // ── 落笔群系（绝对）──
     ui.horizontal(|ui| {
         ui.label(
-            egui::RichText::new("群系")
+            egui::RichText::new(t(loc, I18nKey::CellInspectorBiome))
                 .size(font_size::MICRO)
                 .color(shell.t3()),
         );
@@ -188,7 +191,7 @@ pub fn render_paint_value_section(
     // 语义不同，不得无标签并排。
     ui.horizontal(|ui| {
         ui.label(
-            egui::RichText::new("海拔增减（相对）")
+            egui::RichText::new(t(loc, I18nKey::CellPaintHeightDelta))
                 .size(font_size::MICRO)
                 .color(shell.t3()),
         );
@@ -215,7 +218,7 @@ pub fn render_paint_value_section(
     // 圆盘 footprint 的半径：R=1 = 单格（原状），R=2 = 含对角 9 格。
     ui.horizontal(|ui| {
         ui.label(
-            egui::RichText::new("笔刷半径")
+            egui::RichText::new(t(loc, I18nKey::CellPaintBrushRadius))
                 .size(font_size::MICRO)
                 .color(shell.t3()),
         );
@@ -226,7 +229,7 @@ pub fn render_paint_value_section(
                 shell,
                 "cell_paint_radius",
                 &mut r,
-                "格",
+                t(loc, I18nKey::CellPaintRadiusUnit),
                 1.0,
                 1.0,
                 MAX_STROKE_RADIUS as f32,
@@ -250,12 +253,12 @@ pub fn render_flood_criterion_section(
     use wv_world_cell_map::state::FloodCriterion;
 
     ui.label(
-        egui::RichText::new("泛洪判据")
+        egui::RichText::new(t(loc, I18nKey::CellFloodSectionTitle))
             .size(font_size::SMALL)
             .color(shell.t2()),
     );
     ui.label(
-        egui::RichText::new("「同类」怎么算")
+        egui::RichText::new(t(loc, I18nKey::CellFloodSectionHint))
             .size(font_size::MICRO)
             .color(shell.t3()),
     );
@@ -298,7 +301,7 @@ pub fn render_flood_criterion_section(
     if let FloodCriterion::HeightTolerance(tol) = flood.criterion {
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new("容差 ±")
+                egui::RichText::new(t(loc, I18nKey::CellFloodTolerance))
                     .size(font_size::MICRO)
                     .color(shell.t3()),
             );
@@ -390,12 +393,12 @@ fn biome_name(biome: u8) -> String {
         .unwrap_or_else(|| format!("#{biome}"))
 }
 
-/// 地表编号 → 显示名。
-fn surface_name(surface: u8) -> &'static str {
+/// 地表编号 → 显示名（i18n：复用 CellEditorWater / CellEditorLand）。
+fn surface_name(loc: crate::i18n::Locale, surface: u8) -> &'static str {
     if surface == wv_terrain::SURFACE_WATER {
-        "水"
+        t(loc, I18nKey::CellEditorWater)
     } else {
-        "陆"
+        t(loc, I18nKey::CellEditorLand)
     }
 }
 
@@ -420,6 +423,7 @@ fn surface_name(surface: u8) -> &'static str {
 pub fn render_derived_section(
     ui: &mut egui::Ui,
     shell: &UiShell,
+    loc: crate::i18n::Locale,
     request: &mut crate::edit::derived_op::DerivedOpRequest,
     region_count: usize,
     playback_playing: bool,
@@ -427,14 +431,14 @@ pub fn render_derived_section(
     use crate::edit::derived_op::DerivedOp;
 
     ui.label(
-        egui::RichText::new("派生运算")
+        egui::RichText::new(t(loc, I18nKey::CellDerivedSectionTitle))
             .size(font_size::SMALL)
             .color(shell.t2()),
     );
     let scope = if region_count == 0 {
-        "先在图上圈选一片区域".to_string()
+        t(loc, I18nKey::CellDerivedScopeNone).to_string()
     } else {
-        format!("作用于选中的 {region_count} 格")
+        t(loc, I18nKey::CellDerivedScopeCount).replace("{n}", &region_count.to_string())
     };
     ui.label(
         egui::RichText::new(scope)
@@ -450,14 +454,17 @@ pub fn render_derived_section(
     // ── 平滑 ──
     ui.horizontal(|ui| {
         if ui
-            .add_enabled(can_run, egui::Button::new("平滑"))
-            .on_hover_text("把选中片的海拔按邻域均值柔化（不动边界外的格）")
+            .add_enabled(
+                can_run,
+                egui::Button::new(t(loc, I18nKey::CellDerivedSmooth)),
+            )
+            .on_hover_text(t(loc, I18nKey::CellDerivedSmoothHint))
             .clicked()
         {
             request.request(DerivedOp::Smooth);
         }
         ui.label(
-            egui::RichText::new("强度")
+            egui::RichText::new(t(loc, I18nKey::CellDerivedStrength))
                 .size(font_size::MICRO)
                 .color(shell.t3()),
         );
@@ -482,14 +489,17 @@ pub fn render_derived_section(
     // ── 量化 ──
     ui.horizontal(|ui| {
         if ui
-            .add_enabled(can_run, egui::Button::new("量化"))
-            .on_hover_text("把选中片的海拔吸附到 N 米阶梯（做等高线地形）")
+            .add_enabled(
+                can_run,
+                egui::Button::new(t(loc, I18nKey::CellDerivedQuantize)),
+            )
+            .on_hover_text(t(loc, I18nKey::CellDerivedQuantizeHint))
             .clicked()
         {
             request.request(DerivedOp::Quantize);
         }
         ui.label(
-            egui::RichText::new("步长")
+            egui::RichText::new(t(loc, I18nKey::CellDerivedStep))
                 .size(font_size::MICRO)
                 .color(shell.t3()),
         );

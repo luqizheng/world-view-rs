@@ -20,6 +20,11 @@ pub struct EditCellState {
     pub tool_active: bool,
     /// 当前鼠标压住的格 (gx, gy)；`None` 表示鼠标不在地图内。
     pub hover: Option<(i32, i32)>,
+    /// 单格表单海拔输入的**暂存值** `(gx, gy, height)`（2026-10-25 P0-1
+    /// 方案 A）：拖绘 scrub 每帧写值，若逐帧落盘会把 1 个拖拽手势拆成
+    /// 一串撤销命令——暂存区让面板在「手势完成帧」才提交 1 条
+    /// `EditCellCommand`。坐标标签用于手势中途换格 / 换图时的失效判定。
+    pub pending_height: Option<(i32, i32, i16)>,
 }
 
 impl EditCellState {
@@ -32,6 +37,9 @@ impl EditCellState {
     pub fn close_tool(&mut self) {
         self.tool_active = false;
         self.hover = None;
+        // 海拔暂存属于单格表单的会话态：表单随工具关闭而消失，残留的
+        // 暂存值会在下次打开时把旧值当「当前值」展示并误导提交。
+        self.pending_height = None;
     }
 }
 
@@ -413,10 +421,12 @@ mod tests {
         let mut s = EditCellState {
             tool_active: true,
             hover: Some((3, 4)),
+            pending_height: Some((3, 4, 100)),
         };
         s.close_tool();
         assert!(!s.tool_active, "工具应关闭");
         assert_eq!(s.hover, None, "hover 是瞬时态，关工具即清");
+        assert_eq!(s.pending_height, None, "海拔暂存是单格表单会话态，关工具即清");
     }
 
     // ── CellSelection 位图运算（A1）─────────────────────────────────

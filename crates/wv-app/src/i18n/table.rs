@@ -639,6 +639,28 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::ScaleHintExtent => "图幅 {w}×{h} km",
         I18nKey::ScaleHintLand => "陆地约 {w}×{h} km",
         I18nKey::ScaleHintCrossing => "横穿约 步行{a}天 · 骑马{b}天 · 帆船{c}天",
+
+        // ── CellMap 落笔面板（2026-10-25 P0-3 i18n 补齐） ──
+        I18nKey::CellPaintReadoutCursor => "光标",
+        I18nKey::CellPaintReadoutSelected => "选中",
+        I18nKey::CellPaintReadoutCellCount => "{n} 格",
+        I18nKey::CellPaintSectionTitle => "落笔值",
+        I18nKey::CellPaintSectionHint => "拖绘时写进每一格的值",
+        I18nKey::CellPaintHeightDelta => "海拔增减（相对）",
+        I18nKey::CellPaintBrushRadius => "笔刷半径",
+        I18nKey::CellPaintRadiusUnit => "格",
+        I18nKey::CellFloodSectionTitle => "泛洪判据",
+        I18nKey::CellFloodSectionHint => "「同类」怎么算",
+        I18nKey::CellFloodTolerance => "容差 ±",
+        I18nKey::CellDerivedSectionTitle => "派生运算",
+        I18nKey::CellDerivedScopeNone => "先在图上圈选一片区域",
+        I18nKey::CellDerivedScopeCount => "作用于选中的 {n} 格",
+        I18nKey::CellDerivedSmooth => "平滑",
+        I18nKey::CellDerivedSmoothHint => "把选中片的海拔按邻域均值柔化（不动边界外的格）",
+        I18nKey::CellDerivedQuantize => "量化",
+        I18nKey::CellDerivedQuantizeHint => "把选中片的海拔吸附到 N 米阶梯（做等高线地形）",
+        I18nKey::CellDerivedStrength => "强度",
+        I18nKey::CellDerivedStep => "步长",
     }
 }
 
@@ -1284,5 +1306,31 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::ScaleHintExtent => "Map {w}×{h} km",
         I18nKey::ScaleHintLand => "Land ≈ {w}×{h} km",
         I18nKey::ScaleHintCrossing => "Crossing ≈ walk {a}d · horse {b}d · sail {c}d",
+
+        // ── CellMap paint panel (2026-10-25 P0-3 i18n catch-up) ──
+        I18nKey::CellPaintReadoutCursor => "Cursor",
+        I18nKey::CellPaintReadoutSelected => "Selected",
+        I18nKey::CellPaintReadoutCellCount => "{n} cells",
+        I18nKey::CellPaintSectionTitle => "Paint values",
+        I18nKey::CellPaintSectionHint => "Written to every cell as you drag",
+        I18nKey::CellPaintHeightDelta => "Height Δ (relative)",
+        I18nKey::CellPaintBrushRadius => "Brush radius",
+        I18nKey::CellPaintRadiusUnit => "cells",
+        I18nKey::CellFloodSectionTitle => "Flood criteria",
+        I18nKey::CellFloodSectionHint => "What counts as \"same\"",
+        I18nKey::CellFloodTolerance => "Tolerance ±",
+        I18nKey::CellDerivedSectionTitle => "Derived ops",
+        I18nKey::CellDerivedScopeNone => "Select a region on the map first",
+        I18nKey::CellDerivedScopeCount => "Applies to {n} selected cells",
+        I18nKey::CellDerivedSmooth => "Smooth",
+        I18nKey::CellDerivedSmoothHint => {
+            "Soften selected heights toward the neighborhood mean (outside cells untouched)"
+        }
+        I18nKey::CellDerivedQuantize => "Quantize",
+        I18nKey::CellDerivedQuantizeHint => {
+            "Snap selected heights to an N-meter ladder (contour-style terrain)"
+        }
+        I18nKey::CellDerivedStrength => "Strength",
+        I18nKey::CellDerivedStep => "Step",
     }
 }
