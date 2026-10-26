@@ -346,7 +346,12 @@ impl FieldPack {
 
         // ADR-0072 T2：biome 距离场（d + argmin 异类 ID）。cap 取
         // `BIOME_FIELD_CAP`；`cell_at` 闭包天然消化畸形输入的 padding。
-        let biome_field = biome_sdf::with_cap(w, h, |x, y| cell_at(y * w + x).biome, biome_sdf::BIOME_FIELD_CAP);
+        let biome_field = biome_sdf::with_cap(
+            w,
+            h,
+            |x, y| cell_at(y * w + x).biome,
+            biome_sdf::BIOME_FIELD_CAP,
+        );
         let mut biome_tex = Vec::with_capacity(n * 4);
 
         for i in 0..n {
@@ -367,9 +372,22 @@ impl FieldPack {
             attr_tex.extend_from_slice(&encode_attr(&cell));
 
             // ADR-0072：R = d / cap，G = 本格 biome，B = 最近异类 ID，A = 0。
-            let bd = biome_field.d.get(i).copied().unwrap_or(biome_sdf::BIOME_FIELD_CAP);
-            let bnb = biome_field.nb.get(i).copied().unwrap_or(biome_sdf::NO_FOREIGN);
-            biome_tex.extend_from_slice(&encode_biome_field(bd, &cell, bnb, biome_sdf::BIOME_FIELD_CAP));
+            let bd = biome_field
+                .d
+                .get(i)
+                .copied()
+                .unwrap_or(biome_sdf::BIOME_FIELD_CAP);
+            let bnb = biome_field
+                .nb
+                .get(i)
+                .copied()
+                .unwrap_or(biome_sdf::NO_FOREIGN);
+            biome_tex.extend_from_slice(&encode_biome_field(
+                bd,
+                &cell,
+                bnb,
+                biome_sdf::BIOME_FIELD_CAP,
+            ));
         }
 
         Self {

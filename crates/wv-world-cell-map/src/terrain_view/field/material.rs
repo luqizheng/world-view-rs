@@ -545,6 +545,10 @@ fn data_texture(
 ///
 /// 让 demo 与未来笔刷路径有单一构造入口——避免「每处各填一半参数，
 /// 结果 P2 接线时发现某个旋钮没人接」。
+/// 群系填色强度的中性默认（ADR-0072 T3）——demo / 测试路径用；
+/// 主 App 的真源在 `ThemePack.biome_tint`。
+pub const BIOME_TINT_DEFAULT: f32 = 0.5;
+
 pub fn default_params(
     grid: [f32; 2],
     px_per_cell: f32,
@@ -566,7 +570,9 @@ pub fn default_params(
             GRAD_STEP,
         ),
         // T19 域扭曲幅度写进 pad0.x（P1 预留的槽位，P2 接线不改绑定布局）。
-        pad0: Vec4::new(warp_amp(px_per_cell), 0.0, 0.0, 0.0),
+        // pad0.z = 群系填色强度（ADR-0072 T3）：中性默认 0.5，主 App 由
+        // 桥接按 `ThemePack.biome_tint` 覆写。
+        pad0: Vec4::new(warp_amp(px_per_cell), 0.0, BIOME_TINT_DEFAULT, 0.0),
         light_dir: Vec4::new(LIGHT_DIR[0], LIGHT_DIR[1], LIGHT_DIR[2], 0.0),
         pad1: Vec4::ZERO,
         shore_edges: Vec4::new(SHORE_EDGE, SHALLOW_EDGE, DEEP_EDGE, 0.0), // w = wash_amt（P2）

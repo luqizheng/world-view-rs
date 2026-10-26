@@ -61,10 +61,9 @@ const BIOME_FIELD_CAP: f32 = 8.0;
 /// ADR-0072：群系边界的过渡带屏幕半宽（px）——与海岸
 /// `COAST_EDGE_HALF_PX` 同语法：远观一格宽 AA，近观 ~2px 锐利边。
 const BIOME_EDGE_HALF_PX: f32 = 1.0;
-/// ADR-0072（T4 v1）：Themed 分支的群系色覆盖强度。海拔三阶为底、
-/// 冻结群系表色按此强度覆盖——雪原回到白、森林回到绿，装饰符号重新
-/// 融入底色。TODO(T3)：强度与 tint 色收进 ThemePack 后此常量退役。
-const BIOME_TINT_STRENGTH: f32 = 0.5;
+/// ADR-0072（T3）：Themed 分支的群系色覆盖强度已收进 uniform
+/// `p.pad0.z`（真源 = `ThemePack.biome_tint`，桥接写入）。
+/// 冻结群系表色仍住在 `biome_raw_approx`（T3 色表主题化另议）。
 /// T25：河流墨线宽（屏幕像素）。线状要素比边界重（追记九）。
 const RIVER_LINE_PX: f32 = 1.8;
 /// T26：道路主干 / 次级墨线宽（屏幕像素）。
@@ -287,8 +286,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         // 覆盖——雪原回到白、森林回到绿，装饰符号重新融入底色
         // （ADR-0072 的直接动因）。水格保持主题水色。
         if (is_land) {
-            let own = mix(themed_land(true, h), biome_raw_approx(biome_id), BIOME_TINT_STRENGTH);
-            let nb_col = mix(themed_land(true, h), biome_raw_approx(nb_id), BIOME_TINT_STRENGTH);
+            let own = mix(themed_land(true, h), biome_raw_approx(biome_id), p.pad0.z);
+            let nb_col = mix(themed_land(true, h), biome_raw_approx(nb_id), p.pad0.z);
             base = mix(nb_col, own, biome_mix);
         } else {
             base = themed_land(false, h);
