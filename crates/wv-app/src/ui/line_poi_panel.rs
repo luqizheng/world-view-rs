@@ -36,7 +36,7 @@ use crate::edit::line_poi_tool::{
     cancel_pending, commit_pending_line, map_km_per_wu, width_m_to_wu, width_wu_to_m,
 };
 use crate::i18n::{t, CurrentLocale, I18nKey, Locale};
-use crate::state::{DrillState, LinePoiState, Panel, PanelState, WorldProjection};
+use crate::state::{DrillState, LinePoiState, Panel, PanelState, PlaybackState, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::ui_layout::LayoutFile;
 use crate::ui_shell::ShellNotice;
@@ -108,6 +108,14 @@ pub fn fill_fields_from_place(place: &Place, km_per_wu: Option<f32>) -> (String,
     )
 }
 
+/// 面板提交闸（纯函数，评审修复 R3）：播放中确认与写回**一律禁用**。
+///
+/// 「播放中只读」口径对 UI 提交路径同样生效——交互系统的播放锁只冻结
+/// 地图手势，面板按钮不设闸就会在播放中落盘（下切写 terrain.bin）。
+pub fn panel_can_commit(playing: bool) -> bool {
+    !playing
+}
+
 /// 浮窗一帧的产出（面板只表态，提交在窗外做——闭包借用干净）。
 enum PanelOutcome {
     /// 无事发生。
@@ -128,6 +136,7 @@ pub fn panel_line_poi(
     mut line_poi: ResMut<LinePoiState>,
     mut rank_draft: Local<(Option<wv_core::Id>, f32)>,
     drill: Res<DrillState>,
+    playback: Res<PlaybackState>,
     mut projection: ResMut<WorldProjection>,
     mut edit: ResMut<editing::EditHistory>,
     mut notice: ResMut<ShellNotice>,
@@ -156,6 +165,15 @@ pub fn panel_line_poi(
         None,
         loc,
         |ui| {
+            // R3：播放锁提示（两态共用一行，写回/确认在各自渲染里禁用）。
+            if playback.playing {
+                ui.label(
+                    egui::RichText::new(t(loc, I18nKey::MapControlsPlaybackLocked))
+                        .size(crate::theme::ui_tokens::font_size::MICRO)
+                        .color(shell.t3()),
+                );
+                ui.add_space(2.0);
+            }
             // 选中态优先：命中线 POI 的属性编辑。
             if let Some(id) = line_poi.selected.clone() {
                 let Some(place) = projection
@@ -184,6 +202,7 @@ pub fn panel_line_poi(
                     &place,
                     kind,
                     km,
+                    playback.playing,
                     &mut line_poi,
                     &mut rank_draft.1,
                     &mut projection,
@@ -193,7 +212,15 @@ pub fn panel_line_poi(
                 );
                 return;
             }
-            outcome = render_new(ui, &shell, loc, &mut line_poi, km, &mut palette);
+            outcome = render_new(
+                ui,
+                &shell,
+                loc,
+                &mut line_poi,
+                km,
+                playback.playing,
+                &mut palette,
+            );
         },
     );
 
@@ -241,6 +268,7 @@ fn render_selected(
     place: &Place,
     kind: LineKind,
     km_per_wu: Option<f32>,
+    playing: bool,
     line_poi: &mut LinePoiState,
     rank_draft: &mut f32,
     projection: &mut ResMut<WorldProjection>,
@@ -283,6 +311,7 @@ fn render_selected(
                 place,
                 kind,
                 km_per_wu,
+                playing,
                 line_poi,
                 *rank_draft,
                 projection,
@@ -326,6 +355,7 @@ fn render_selected(
                         place,
                         kind,
                         km_per_wu,
+                        playing,
                         line_poi,
                         *rank_draft,
                         projection,
@@ -354,6 +384,7 @@ fn render_selected(
                     place,
                     kind,
                     km_per_wu,
+                    playing,
                     line_poi,
                     *rank_draft,
                     projection,
@@ -379,6 +410,7 @@ fn try_writeback(
     place: &Place,
     kind: LineKind,
     km_per_wu: Option<f32>,
+    playing: bool,
     line_poi: &LinePoiState,
     rank_draft: f32,
     projection: &mut ResMut<WorldProjection>,
@@ -386,6 +418,10 @@ fn try_writeback(
     notice: &mut ShellNotice,
     frame: u64,
 ) {
+    // R3：播放锁——写回是数据提交，播放中一律拒（提示在面板头统一出）。
+    if !panel_can_commit(playing) {
+        return;
+    }
     let Some(cmd) = line_poi_writeback(
         place,
         kind,
@@ -424,6 +460,7 @@ fn render_new(
     loc: Locale,
     line_poi: &mut LinePoiState,
     km_per_wu: Option<f32>,
+    playing: bool,
     palette: &mut crate::ui_command_palette::CommandPalette,
 ) -> PanelOutcome {
     use crate::theme::ui_tokens::font_size;
@@ -533,7 +570,8 @@ fn render_new(
             let can_confirm = line_poi
                 .pending
                 .as_ref()
-                .is_some_and(|p| p.preview.len() >= 2);
+                .is_some_and(|p| p.preview.len() >= 2)
+                && panel_can_commit(playing); // R3：播放中不可确认（播放中只读）。
             ui.add_enabled_ui(can_confirm, |ui| {
                 if ui.button(t(loc, I18nKey::CommonConfirm)).clicked() {
                     outcome = PanelOutcome::ConfirmPending;
@@ -593,6 +631,15 @@ mod tests {
             line_kind: Some(LineKind::Road),
             line_width_m: None,
         }
+    }
+
+    // ── 评审修复 R3（fix round 1）──────────────────────────────────
+
+    /// 播放锁（R3）：播放中确认与写回一律禁用（播放中只读）。
+    #[test]
+    fn panel_commit_blocked_while_playing() {
+        assert!(panel_can_commit(false), "暂停时可提交");
+        assert!(!panel_can_commit(true), "播放中不得提交");
     }
 
     // ── 计划 Task 11 Step 1 · 测试 3 ────────────────────────────────

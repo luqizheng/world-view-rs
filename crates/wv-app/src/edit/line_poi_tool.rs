@@ -162,6 +162,56 @@ pub fn cancel_pending(pending: &mut Option<PendingLinePoi>) {
     *pending = None;
 }
 
+/// 会话失效（变图）时的清理口径（评审修复 R1）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionReset {
+    /// 重绑会话（拍回 Idle、图换成当前图）。
+    pub rebind: bool,
+    /// 弃 pending。
+    pub clear_pending: bool,
+    /// 弃 selected。
+    pub clear_selected: bool,
+}
+
+/// 变图即弃的**完整口径**（纯函数）：pending 与 selected **一并**弃。
+///
+/// 只清 pending 的旧口径漏了 selected——旧图的选中线画进新图视框成幽灵
+/// 高亮，且选中态面板会用**当前图**的比例尺换算旧图线宽写回
+/// `line_width_m`（数据级错误），故两者同口径同弃。
+pub fn reset_on_map_change(session: &PinSession, current: Option<&Id>) -> SessionReset {
+    let changed = session.map.as_ref() != current;
+    SessionReset {
+        rebind: changed,
+        clear_pending: changed,
+        clear_selected: changed,
+    }
+}
+
+/// 起钉（Begin）的状态迁移（纯函数，评审修复 R2）：pending 出壳 +
+/// selected 清 + **名称草稿清空** + 拍进 Following。
+///
+/// selected 不清则面板停在选中态（确认/取消按钮不出现）；name 不清则
+/// 新线静默继承命中线的名字（`fill_fields_from_place` 的污染）。
+/// 宽度**不在此清**——「上次用值」是连续画同类线的合理缺省，可辩护，
+/// 由调用方保持不动即可。
+pub fn begin_pin(
+    pending: &mut Option<PendingLinePoi>,
+    selected: &mut Option<Id>,
+    name: &mut String,
+    session: &mut PinSession,
+    start: Vec2,
+    start_cell: (i32, i32),
+) {
+    *pending = Some(PendingLinePoi {
+        start,
+        preview: Vec::new(),
+        end_cell: start_cell,
+    });
+    *selected = None;
+    name.clear();
+    session.phase = PinPhase::Following;
+}
+
 /// 预览 / 成线共用的确定性种子：起点格 + 图 ID 的 splitmix64 摘要。
 ///
 /// `plan_polyline` 的 seed 要求「同一次钉点重预览必须同路径」——起点在
@@ -583,15 +633,23 @@ pub fn line_poi_tool_input(
         session.phase = PinPhase::Idle;
     }
 
-    // 变图即弃（测量同款：钉点不能跨图）。
+    // 变图即弃（测量同款：钉点不能跨图）。R1：selected 与 pending 同口径
+    // 同弃——旧图选中残留 = 幽灵高亮 + 错比例尺写回（数据级错误）。
     let map = match drill.current().cloned() {
-        Some(m) if session.map.as_ref() == Some(&m) => m,
         Some(m) => {
-            *session = PinSession {
-                phase: PinPhase::Idle,
-                map: Some(m.clone()),
-            };
-            line_poi.pending = None;
+            let reset = reset_on_map_change(&session, Some(&m));
+            if reset.rebind {
+                *session = PinSession {
+                    phase: PinPhase::Idle,
+                    map: Some(m.clone()),
+                };
+            }
+            if reset.clear_pending {
+                line_poi.pending = None;
+            }
+            if reset.clear_selected {
+                line_poi.selected = None;
+            }
             m
         }
         None => return,
@@ -650,20 +708,22 @@ pub fn line_poi_tool_input(
     // - Following：光标跨格（或预览被模式切换作废）→ 按光标重算；
     // - Pinned：预览被模式切换作废 → 按**定格终点**重算一次（终点取格心，
     //   ≤ 半格的精度损失——精确钉点只在首次 PinEnd 时回填，不另设字段）。
+    // 网格 clone（大图 ≈ MB 级）只在 `need` 为真时发生——同格挪动帧零拷贝
+    // （评审 Minor 1：clone 在 need 判定外 = 白拷）。
     let mode = line_poi.mode;
     if let Some(pending) = &mut line_poi.pending {
-        if let Some(terrain) = terrain_grid_of(&projection.world, &map) {
-            let cell = grid.cell_size;
-            let cursor_cell = cell_of(local, cell);
-            let need = match session.phase {
-                PinPhase::Following => {
-                    pending.preview.is_empty()
-                        || pin_on_move(&session, pending.end_cell, cursor_cell) == Some(cursor_cell)
-                }
-                PinPhase::Pinned => pending.preview.is_empty(),
-                PinPhase::Idle => false,
-            };
-            if need {
+        let cell = grid.cell_size;
+        let cursor_cell = cell_of(local, cell);
+        let need = match session.phase {
+            PinPhase::Following => {
+                pending.preview.is_empty()
+                    || pin_on_move(&session, pending.end_cell, cursor_cell) == Some(cursor_cell)
+            }
+            PinPhase::Pinned => pending.preview.is_empty(),
+            PinPhase::Idle => false,
+        };
+        if need {
+            if let Some(terrain) = terrain_grid_of(&projection.world, &map) {
                 let end_pt = if session.phase == PinPhase::Following {
                     local
                 } else {
@@ -692,12 +752,23 @@ pub fn line_poi_tool_input(
     match pin_on_click(&session, local, hit) {
         PinClick::Begin { start } => {
             let cell = grid.cell_size;
-            line_poi.pending = Some(PendingLinePoi {
+            // R2：起钉同时弃选中 + 清名称草稿（不静默继承选中线的名字；
+            // 宽度不动 = 保留「上次用值」）。先解构再借字段——ResMut 的
+            // 不同字段不能在同一次调用里各借一个 &mut。
+            let LinePoiState {
+                ref mut pending,
+                ref mut selected,
+                ref mut name,
+                ..
+            } = *line_poi;
+            begin_pin(
+                pending,
+                selected,
+                name,
+                &mut session,
                 start,
-                preview: Vec::new(),
-                end_cell: cell_of(start, cell),
-            });
-            session.phase = PinPhase::Following;
+                cell_of(start, cell),
+            );
             // 立即规划一次（同格 = 单点占位，不出橡皮筋——起终点同格本就无路）。
             if let Some(terrain) = terrain_grid_of(&projection.world, &map) {
                 if let Some(pending) = &mut line_poi.pending {
@@ -1030,6 +1101,64 @@ mod tests {
         assert!(pending_opt.is_some(), "夹具应有在画的线");
         cancel_pending(&mut pending_opt);
         assert!(pending_opt.is_none(), "取消后 pending 必须清空");
+    }
+
+    // ── 评审修复 R1/R2（fix round 1）───────────────────────────────
+
+    /// 变图即弃 = pending 与 selected 一并弃（R1：旧口径只清 pending，
+    /// 旧图选中残留 → 幽灵高亮 + 错比例尺写回 line_width_m）。
+    #[test]
+    fn map_change_reset_clears_pending_and_selection() {
+        let a = Id::new_unchecked("map_a");
+        let b = Id::new_unchecked("map_b");
+        let bound = PinSession {
+            phase: PinPhase::Pinned,
+            map: Some(a.clone()),
+        };
+        let r = reset_on_map_change(&bound, Some(&a));
+        assert!(
+            !r.rebind && !r.clear_pending && !r.clear_selected,
+            "同图零动作，实际 {r:?}"
+        );
+        let r = reset_on_map_change(&bound, Some(&b));
+        assert!(
+            r.rebind && r.clear_pending && r.clear_selected,
+            "跨图三清，实际 {r:?}"
+        );
+        // 绑定丢失（drill 短暂返回 None 的会话）视为换图。
+        assert!(reset_on_map_change(&bound, None).clear_selected);
+        // 未绑过图的全新会话：要绑到当前图（否则钉点没有目标图）。
+        assert!(reset_on_map_change(&PinSession::default(), Some(&a)).rebind);
+    }
+
+    /// 起钉清态（R2）：selected 清、名称草稿清（不静默继承选中线名），
+    /// 拍进 Following；宽度**不在本函数职责内**（调用方保持不动 = 保留
+    /// 上次用值）。
+    #[test]
+    fn begin_pin_clears_selection_and_name_draft() {
+        let mut pending = None;
+        let mut selected = Some(Id::new_unchecked("river_1"));
+        let mut name = "青龙河".to_owned();
+        let mut session = PinSession {
+            phase: PinPhase::Idle,
+            map: Some(map_id()),
+        };
+        begin_pin(
+            &mut pending,
+            &mut selected,
+            &mut name,
+            &mut session,
+            Vec2::new(40.0, 40.0),
+            (5, 5),
+        );
+        assert!(selected.is_none(), "起钉必须弃选中（面板切回新建态）");
+        assert!(name.is_empty(), "名称草稿必须清空，实际 {name:?}");
+        assert_eq!(
+            pending.as_ref().map(|p| (p.start, p.end_cell)),
+            Some((Vec2::new(40.0, 40.0), (5, 5))),
+            "pending 出壳记起点与格"
+        );
+        assert_eq!(session.phase, PinPhase::Following);
     }
 
     // ── 状态机补充 ──────────────────────────────────────────────────
