@@ -244,6 +244,14 @@ pub fn continent_dialog_system(
         // 包络两源：工作台从统一选区提取环（多连通域各一环）；
         // Browse/Edit 用 V 工具闭合环（spec D5）。成功/失败都不消费选区
         // （ADR-0033：作者可继续调选区 / 加锚点再生成）。
+        //
+        // ⚠️ 口径不变量（2026-10-26 复核钉死，勿「修」）：环存 map-local、
+        // 配方吃 raster-local，但**这里不需要补帧原点**——`raster_origin`
+        // 在 `sync_grid_config` 里 = 纹理来源图帧原点，而纹理来源 =
+        // `active_terrain` 从当前图向上找的最近自有地形图；生成命令
+        // `apply` 对无自有地形的图直接报错（V1 只提示）。故凡能落笔，
+        // 来源图 == 当前图 ⇒ map-local == raster-local，修正量恒为 0。
+        // 继承父图底图的显示分歧下编辑命令落不了笔，不存在错位路径。
         let envelopes: Vec<Vec<(f32, f32)>> =
             if crate::ui::intent_menu::cell_workspace_active(view.mode) {
                 let cells: Vec<(i32, i32)> = cell_sel.iter_cells().collect();
