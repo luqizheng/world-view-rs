@@ -223,8 +223,11 @@ pub struct ViewState {
     /// **本字段是「底图载体」的选择，不是可见性**：图层隐藏（`LayerFrame.terrain`）
     /// 时两条路径都退场——见 `cellmap_bridge::sync_terrain_field` 的 gate。
     ///
-    /// 会话态、**不落盘**，默认 `false`：两条路径并行共存，用户看过实机效果后再
-    /// 决定是否翻默认。运行时可翻（命令面板「显示地形场渲染（GPU）」），改完当帧生效。
+    /// 会话态、**不落盘**，默认 `true`（2026-10-26 转正）：Phase 1 接线时按
+    /// 「用户看过实机效果后再决定」的既定流程挂起，当日用户实机验收
+    /// GPU 场画面（含解析 hillshade 的高低落差）后拍板转正——SPEC
+    /// 追记十四。`false` = CPU 烘焙回退路径，运行时可翻（命令面板
+    /// 「显示地形场渲染（GPU）」），改完当帧生效。
     pub field_render: bool,
     /// 事件点图层是否可见。
     pub events_visible: bool,
@@ -332,7 +335,7 @@ impl Default for ViewState {
             camera_center: Vec2::ZERO,
             terrain_visible: true,
             terrain_soften: true,
-            field_render: false,
+            field_render: true,
             events_visible: true,
             tracks_visible: true,
             roads_visible: true,

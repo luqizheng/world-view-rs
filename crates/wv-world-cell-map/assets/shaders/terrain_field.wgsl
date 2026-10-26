@@ -63,6 +63,21 @@ const RIVER_INK_ALPHA: f32 = 0.62;
 const ROAD_INK_ALPHA: f32 = 0.5;
 /// 岸线墨线不透明度（SPEC §1.5「描线 −45% 明度」的落地强度）。
 const COAST_INK_ALPHA: f32 = 0.55;
+/// 三段色带屏幕封顶（SPEC §3.8.4 追记一）：色带整体淡出的 px/格 区间。
+/// 色带宽度按世界格定义，屏幕宽 = 格数 × px_per_cell，近观线性变粗——
+/// 1 格 ≳ 6 px 时饱和浅水环已读作「粗海岸线」（2026-10-26 用户实测反馈），
+/// 24 px/格 全收。远观（< 6 px/格）不受影响。
+const COAST_BAND_CAP_MIN_PX: f32 = 6.0;
+const COAST_BAND_CAP_MAX_PX: f32 = 24.0;
+/// 水陆过渡带的屏幕半宽（px，追记一）。Signed 场的亚格过渡天然是
+/// 「一格宽」的世界量，深缩放会糊成几十 px 软边；钳到 ~2 px 全过渡，
+/// 近观保持 Google/百度式锐利 AA 边。
+const COAST_EDGE_HALF_PX: f32 = 1.0;
+/// 轮廓圆角半径（格，追记十五）：对 sd 场做 5 tap 盒式低通的采样偏移。
+/// 直段边界局部线性对称、零平移；凸/凹直角按 ~r 圆角化——格网真边界的
+/// 正交台阶在视觉上近似 Chaikin 圆角，向矢量观感靠拢。墨线（`abs(sd)`）、
+/// 填色过渡（`land_t`）与色带（`wd`）全部自动跟随圆角后的零等值线。
+const COAST_ROUND_CELLS: f32 = 0.6;
 /// biome 界墨线不透明度（比岸线浅一档）。
 const BIOME_INK_ALPHA: f32 = 0.38;
 /// 高度量程（米）= H_MAX(6000) − H_MIN(-4000)，与 pack.rs 同源。
@@ -177,12 +192,39 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var d: f32;  // 到最近异类格的**无符号**距离（色带用它，两模式都成立）
     if (p.pad1.y > 0.5) {
         sd = (coast_raw - 0.5) * 64.0; // pack 编码 (sd + 32) / 64
+        // ── 轮廓圆角（追记十五）─────────────────────────────────────────
+        // 对 sd 做 5 tap 盒式低通（中心 + 四正交方向各偏 r 格）。sd 是
+        // 连续函数，直段局部线性、平均后零点不动；直角拐点两侧符号相反的
+        // 邻居把零等值线「切」进角里——正交台阶圆角化。这正是 Signed 编码
+        // 独有的能力：Unsigned 场在边界是平顶，平均只会把平顶抹宽。
+        let rr = COAST_ROUND_CELLS;
+        let sd_c = sd;
+        let sd_n = (sample_coast_raw(pos + vec2<f32>(rr, 0.0)) - 0.5) * 64.0;
+        let sd_s = (sample_coast_raw(pos - vec2<f32>(rr, 0.0)) - 0.5) * 64.0;
+        let sd_e = (sample_coast_raw(pos + vec2<f32>(0.0, rr)) - 0.5) * 64.0;
+        let sd_w = (sample_coast_raw(pos - vec2<f32>(0.0, rr)) - 0.5) * 64.0;
+        // 四对角 tap：1 格宽的短直段两端角靠得近，只有正交 5 tap 切不干净；
+        // 9 tap 均匀盘各向更同性，斜向台阶的残留最少。
+        let rd = rr * 0.7071;
+        let sd_ne = (sample_coast_raw(pos + vec2<f32>(rd, rd)) - 0.5) * 64.0;
+        let sd_sw = (sample_coast_raw(pos - vec2<f32>(rd, rd)) - 0.5) * 64.0;
+        let sd_se = (sample_coast_raw(pos + vec2<f32>(rd, -rd)) - 0.5) * 64.0;
+        let sd_nw = (sample_coast_raw(pos + vec2<f32>(-rd, rd)) - 0.5) * 64.0;
+        let sd_round = (sd_c + sd_n + sd_s + sd_e + sd_w
+            + sd_ne + sd_sw + sd_se + sd_nw) * (1.0 / 9.0);
+        // 远观渐隐（lod_t→1）：tap 是 raw 场，远观主样本是 box 平均，
+        // 混入会带格频抖动；且远观台阶本就亚像素，圆角无意义。
+        sd = mix(sd_c, sd_round, 1.0 - lod_t);
         d = abs(sd);
     } else {
         d = coast_raw * 32.0; // pack 编码 d / 32
         sd = select(-(d - 0.5), d - 0.5, is_land);
     }
-    let land_t = smoothstep(-0.5, 0.5, sd);
+    // 过渡半宽的屏幕封顶（追记一）：远观保持一格宽 AA（half_t = 0.5），
+    // 近观钳到 ~2 px 全过渡。Unsigned 模式 sd 本是逐格阶跃，此钳制无感；
+    // Signed 模式下它把一格宽软边收成锐利 AA 边。
+    let half_t = min(0.5, COAST_EDGE_HALF_PX / px_per_cell);
+    let land_t = smoothstep(-half_t, half_t, sd);
 
     var base: vec3<f32>;
     if (p.shape.y < 0.5) {
@@ -213,8 +255,14 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let shallow_c = mix(p.theme[0].rgb, p.theme[1].rgb, 0.55);
     let deep_c = p.theme[0].rgb * 0.82;
     var water_col = mix(mix(p.theme[0].rgb, shallow_c, t_shallow), deep_c, t_deep);
+    // 色带屏幕封顶（追记一）：色带是**远观**制图暗示，不是线。近观把
+    // 三段偏差整体收敛回平色水，海岸呈现退化为 AA 边界 + 岸线墨线
+    // （两者已是屏幕口径）——与 Google/百度近观水面一致。
+    let band_gate = 1.0 - smoothstep(COAST_BAND_CAP_MIN_PX, COAST_BAND_CAP_MAX_PX, px_per_cell);
+    water_col = mix(p.theme[0].rgb, water_col, band_gate);
     // 近岸白滩（t_shore 最高处向纸色偏一点，给水线一个视觉落点）
-    water_col = mix(water_col, p.paper.rgb, 0.18 * t_shore * (1.0 - t_shallow));
+    // ——白滩缘同属色带装饰，随门控一起收。
+    water_col = mix(water_col, p.paper.rgb, 0.18 * t_shore * (1.0 - t_shallow) * band_gate);
 
     // 亚格混合：一格宽的软过渡替代逐格硬切。
     var rgb = mix(water_col, land_col, land_t);

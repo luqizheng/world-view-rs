@@ -52,7 +52,8 @@ use crate::state::{BrushState, DrillState, ViewState, WorldProjection};
 // （`field::paper::TERRAIN_Z` = 纸面层 Z，与本层无关），glob 会把名字撞在一起。
 use wv_world_cell_map::terrain_view::field::{
     apply_hypsometric, build_material, default_params, patch_material_images, set_coast_encoding,
-    warp_amp, CellRect, FieldPack, FieldPalette, TerrainFieldMaterial, ViewBranch, H_MAX, H_MIN,
+    warp_amp, CellRect, CoastEncoding, FieldPack, FieldPalette, TerrainFieldMaterial, ViewBranch,
+    H_MAX, H_MIN,
 };
 use wv_world_cell_map::terrain_view::hypsometric;
 
@@ -1766,7 +1767,13 @@ pub fn sync_terrain_field(
 
         if !patched {
             // ── ② 全量重打：三张数据纹理全量重建（1024² = 12 MB）──
-            let pack = FieldPack::from_terrain(data);
+            // 海岸编码显式取 **Signed**（SPEC §3.8.4 追记一）：Unsigned 的
+            // 符号取自 per-texel 掩码，水陆交界是逐格硬切——深缩放下是
+            // 一格宽的正交台阶。Signed 让 sd 经双线性插值在岸线处穿过 0，
+            // 配合 shader 的屏幕封顶过渡（`COAST_EDGE_HALF_PX`）得到
+            // 亚格连续的锐利 AA 边。增量补丁路径经 `patch_region` 沿用
+            // `self.encoding`，无需另改。
+            let pack = FieldPack::from_terrain_with(data, CoastEncoding::Signed);
             let mut params = default_params(
                 [pack.width as f32, pack.height as f32],
                 px_per_cell,

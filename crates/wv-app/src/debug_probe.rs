@@ -44,4 +44,11 @@ pub fn apply_env_view_mode(mut view: ResMut<ViewState>) {
     };
     view.mode = mode;
     info!("[wv] WV_MODE → {mode:?}");
+    // `WV_FIELD=1`：启动即开 GPU 场渲染（`ViewState::field_render`，默认 false 走
+    // chunk 烘焙路径）。与 WV_MODE 同族的验收探针——两条底图管线 A/B 对照、
+    // 场管线的截图验收都必须能从命令行钉死路径，缺省零开销。
+    if std::env::var_os("WV_FIELD").is_some() {
+        view.field_render = true;
+        info!("[wv] WV_FIELD → field_render = true（GPU 场管线）");
+    }
 }
