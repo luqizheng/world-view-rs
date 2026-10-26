@@ -187,6 +187,15 @@ impl StreetSegment {
     /// 折线中点（标签锚点）：按累计长度取半程处。与起终点距离各半，
     /// 多点折线也不会把标签钉在端点上。
     pub fn polyline_midpoint(&self) -> Option<Point> {
+        self.polyline_midpoint_with_dir().map(|(p, _)| p)
+    }
+
+    /// 折线中点**连同所在段的行进方向**（单位向量）。
+    ///
+    /// 中点与 [`Self::polyline_midpoint`] 同一口径（累计长度半程）；方向取
+    /// 半程落在的那一段折线的方向——沿街名标注（ADR-0073）要沿路旋转文字，
+    /// 需要知道锚点处路往哪边走。零长折线（退化）返回方向 `(1.0, 0.0)`。
+    pub fn polyline_midpoint_with_dir(&self) -> Option<(Point, (f32, f32))> {
         if self.points.is_empty() {
             return None;
         }
@@ -195,21 +204,25 @@ impl StreetSegment {
             total += (w[1].x - w[0].x).hypot(w[1].y - w[0].y);
         }
         if total <= 0.0 {
-            return self.points.first().copied();
+            return Some((self.points.first().copied()?, (1.0, 0.0)));
         }
         let mut walked = 0.0_f32;
         for w in self.points.windows(2) {
-            let leg = (w[1].x - w[0].x).hypot(w[1].y - w[0].y);
+            let dx = w[1].x - w[0].x;
+            let dy = w[1].y - w[0].y;
+            let leg = dx.hypot(dy);
             if walked + leg >= total * 0.5 {
                 let t = ((total * 0.5 - walked) / leg).clamp(0.0, 1.0);
-                return Some(Point::new(
-                    w[0].x + (w[1].x - w[0].x) * t,
-                    w[0].y + (w[1].y - w[0].y) * t,
-                ));
+                let dir = if leg <= 0.0 {
+                    (1.0, 0.0)
+                } else {
+                    (dx / leg, dy / leg)
+                };
+                return Some((Point::new(w[0].x + dx * t, w[0].y + dy * t), dir));
             }
             walked += leg;
         }
-        self.points.last().copied()
+        Some((self.points.last().copied()?, (1.0, 0.0)))
     }
 }
 
@@ -452,5 +465,47 @@ mod tests {
             m.x,
             m.y
         );
+    }
+
+    /// 中点方向 = 半程所在折线段的方向（沿街旋转标注的数据源，ADR-0073）。
+    #[test]
+    fn polyline_midpoint_with_dir_returns_direction_of_the_leg() {
+        // 直段：中点 (5, 0)，方向 +x。
+        let straight = StreetSegment {
+            class: RoadClass::Path,
+            points: vec![Point::new(0.0, 0.0), Point::new(10.0, 0.0)],
+            name: None,
+            time_span: None,
+        };
+        let (m, d) = straight
+            .polyline_midpoint_with_dir()
+            .expect("直段必有中点方向");
+        assert!(
+            (m.x - 5.0).abs() < 1e-4 && m.y.abs() < 1e-4,
+            "got ({}, {})",
+            m.x,
+            m.y
+        );
+        assert!((d.0 - 1.0).abs() < 1e-4 && d.1.abs() < 1e-4, "got {:?}", d);
+
+        // L 形：半程落在竖边上，方向应朝 +y 而非横边 +x。
+        let bend = StreetSegment {
+            class: RoadClass::Path,
+            points: vec![
+                Point::new(0.0, 0.0),
+                Point::new(0.0, 6.0),
+                Point::new(4.0, 6.0),
+            ],
+            name: None,
+            time_span: None,
+        };
+        let (m, d) = bend.polyline_midpoint_with_dir().expect("折线必有中点方向");
+        assert!(
+            m.x.abs() < 1e-4 && (m.y - 5.0).abs() < 1e-4,
+            "got ({}, {})",
+            m.x,
+            m.y
+        );
+        assert!(d.0.abs() < 1e-4 && (d.1 - 1.0).abs() < 1e-4, "got {:?}", d);
     }
 }

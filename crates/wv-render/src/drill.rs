@@ -80,6 +80,8 @@ pub fn register(app: &mut App) {
     app.init_resource::<DrillClick>()
         .init_resource::<DrillMarkerPalette>()
         .init_resource::<crate::label_pick::LabelHits>()
+        // 统一标签占位池（ADR-0073）：六类标签跨系统互相避让的记账本。
+        .init_resource::<crate::label_collision::LabelOccupancy>()
         // `drill_pick` 的让位守卫要读选择工具会话态（spec §3 命中优先级）——
         // 与 drill_pick 同生命周期注册，避免调用方漏 init。
         .init_resource::<crate::state::SelectionState>()
@@ -94,9 +96,13 @@ pub fn register(app: &mut App) {
                 drill_pick,
                 drill_transition,
                 draw_drill_markers,
+                // 占位池清场必须在一帧所有标签系统之前（ADR-0073）：预算按
+                // 当前 LOD 档重设；街名系统在 plugins.rs 以 `.after` 挂链尾。
+                crate::label_collision::reset_label_occupancy,
                 // 地名标注在标记之后对齐（读同一份钻取状态，画在标记上方）。
                 update_place_labels,
                 // 势力 / 事件 / 区域标签（ADR-0017 §2.2）——与地名标签独立，Label 渲染组。
+                // ADR-0073：链序即摆位优先序（占位池先到先得），地名最优先。
                 update_faction_labels,
                 update_event_labels,
                 update_region_labels,
@@ -104,7 +110,11 @@ pub fn register(app: &mut App) {
                 // ——Label 渲染组末尾；不参与拾取、不注册 LabelHit。
                 update_sea_labels,
             )
-                .chain(),
+                .chain()
+                // 占位池链集合（ADR-0073）：街名系统（plugins.rs）以
+                // `.after(DrillLabelChain)` 挂到本链之后，跨链落位次序
+                // 「地名 → … → 海名 → 街名」由此成立。
+                .in_set(crate::label_collision::DrillLabelChain),
             // 悬停气泡（手绘地图 #7）原在链尾，ADR-0020 起移回 wv-app
             // （它画 egui 浮窗、读 `UiShellConfig`——都是应用层的事）；
             // app_bootstrap 用 `.after(update_sea_labels)` 保持「链尾用最新包围盒」。
@@ -820,6 +830,8 @@ pub fn update_place_labels(
     layers: Res<LayerFrame>,
     playback: Res<PlaybackState>,
     mut hits: ResMut<crate::label_pick::LabelHits>,
+    // 统一占位池（ADR-0073）：与其他五类标签互相避让。
+    mut occupancy: ResMut<crate::label_collision::LabelOccupancy>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
@@ -853,6 +865,14 @@ pub fn update_place_labels(
     // 两者合取——任一关闭即标签消失。
     let tier = lod_tier(view.scale);
     let t = playback.current_day;
+    let unit_scale = view.scale.max(0.05);
+    // 屏幕对齐（2026-10-14 用户裁定）：候选偏移的「屏幕方位」经相机旋转映回
+    // 世界方向；文字实体取逆旋转保持水平。ADR-0073 起偏移在候选构建期生成。
+    let cam_rot = camera
+        .single()
+        .map(|t| t.rotation)
+        .unwrap_or(Quat::IDENTITY);
+    let label_rot = cam_rot.inverse();
     let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
     // 2026-10-22 三模式内容矩阵：MODE_TABLE 门（Topographic ⇒ PlaceLabels
     // = false ⇒ wanted 置空 → 既有隐藏尾部把池全部隐藏；`hits.clear()` 在
@@ -887,41 +907,33 @@ pub fn update_place_labels(
                     }
                     // ADR-0065：级别同时决定字号与碰撞优先级——国家级先活下来、
                     // 字也更大；微点最小，不会把大城市名挤掉。
-                    candidates.push(crate::label_collision::LabelCandidate {
+                    // ADR-0073：8 方位候选位（首选 = 旧「正上方」，放不下就挪，
+                    // 不再直接丢弃）。
+                    let font_px = place_label_px(rank);
+                    let mut cand = crate::label_collision::LabelCandidate::new(
+                        crate::label_collision::LabelPass::Place,
                         pos,
-                        name: p.name.clone(),
-                        font_size_px: place_label_px(rank),
-                        priority: crate::label_collision::priority_for(rank, &p.name),
+                        p.name.clone(),
+                        font_px,
+                        crate::label_collision::priority_for(rank, &p.name),
                         // ADR-0017 §2.7：地点标签可拾取——点击选中该地点。
-                        target: Some(wv_core::SelectedEntity::new(
+                        Some(wv_core::SelectedEntity::new(
                             wv_core::EntityKind::Place,
                             p.id.clone(),
                         )),
-                    });
+                    );
+                    cand.offsets = crate::label_collision::point_label_offsets(font_px, cam_rot);
+                    candidates.push(cand);
                 }
             }
         }
     }
-    // ADR-0017 §2.6：AABB 碰撞过滤（max_labels = 200 默认）。
-    // ADR-0065：每条候选自带屏幕字号，过滤按各自字号算盒宽高。
-    let unit_scale = view.scale.max(0.05);
-    let max_labels = 200;
-    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, unit_scale);
-    filtered.truncate(max_labels);
-
-    // 文字尺寸按屏幕像素恒定（与 draw_drill_markers 的 screen_scale 口径一致），
-    // 但分档字号各自不同（ADR-0065）：上移量按各自字号算，大字不压 POI。
-    // Text2d 默认以文字中心为 transform 原点；「上」是屏幕上：经相机旋转映回世界方向。
+    // ADR-0017 §2.6 → ADR-0073：统一占位池上的候选位摆位——跨系统互相
+    // 避让、放不下先挪位、密度按档位×通路预算。返回的 `pos` 已是最终
+    // 渲染位（锚点 + 选中偏移），不再有「统一上移」。
+    let filtered =
+        crate::label_collision::filter_collisions(&mut candidates, unit_scale, &mut occupancy);
     let label_z = LABEL_Z + layers.place.z_offset;
-    let cam_rot = camera
-        .single()
-        .map(|t| t.rotation)
-        .unwrap_or(Quat::IDENTITY);
-    let label_rot = cam_rot.inverse();
-    for c in &mut filtered {
-        let font_size = c.font_size_px * unit_scale;
-        c.pos += crate::camera::screen_vec_to_world(Vec2::Y * font_size * 0.9, cam_rot);
-    }
     // ADR-0017 §2.7：把本帧实际可见（碰撞幸存）的标签注册进命中表。
     // 地名系统在三个标签系统中第一个跑，负责清场；后两个只追加。
     hits.clear();
@@ -1029,6 +1041,20 @@ pub fn update_place_labels(
     }
 }
 
+/// 扁平环对（本图局部）→ 视图空间逐点平移（`map_to_view` 同一条口径）。
+///
+/// 面标签的「区域内约束」（ADR-0073）把势力外环 / 洞环、区域轮廓随候选
+/// 下发，环坐标必须与候选锚点同一空间（视图空间）才有可比性。
+fn ring_to_view(ring: &[f32], grid: &GridConfig) -> Vec<f32> {
+    let mut out = Vec::with_capacity(ring.len());
+    for pair in ring.chunks(2) {
+        let v = grid.map_to_view(Vec2::new(pair[0], pair[1]));
+        out.push(v.x);
+        out.push(v.y);
+    }
+    out
+}
+
 /// 更新当前层级的势力标签池（ADR-0017 §2.2 · EntityKind::Faction）。
 ///
 /// 数据来源：`World::factions_at(map, day)`——已按时间过滤（GeometrySpan.span）。
@@ -1045,6 +1071,8 @@ pub fn update_faction_labels(
     layers: Res<LayerFrame>,
     playback: Res<PlaybackState>,
     mut hits: ResMut<crate::label_pick::LabelHits>,
+    // 统一占位池（ADR-0073）：与其他五类标签互相避让。
+    mut occupancy: ResMut<crate::label_collision::LabelOccupancy>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
@@ -1069,6 +1097,13 @@ pub fn update_faction_labels(
     >,
 ) {
     let t = playback.current_day;
+    let unit_scale = view.scale.max(0.05);
+    // 屏幕对齐与占位池口径同地名系统（ADR-0073）。
+    let cam_rot = camera
+        .single()
+        .map(|t| t.rotation)
+        .unwrap_or(Quat::IDENTITY);
+    let label_rot = cam_rot.inverse();
     let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
     // Label 层可见性（ADR-0017 Q1）
     if layers.label.visible && recipe.enabled(crate::recipe::PassId::Faction) {
@@ -1108,39 +1143,45 @@ pub fn update_faction_labels(
                             }
                             center = Vec2::new((center.x + far.0) / 2.0, (center.y + far.1) / 2.0);
                         }
-                        // 级别权重（与地名同一合成口径）；势力名天然是最高档。
-                        candidates.push(crate::label_collision::LabelCandidate {
-                            pos: grid.map_to_view(center),
-                            name: faction.name.clone(),
-                            font_size_px: REGION_LABEL_PX,
-                            priority: crate::label_collision::priority_for(3, &faction.name),
+                        // ADR-0073：面标签必须待在自己区域内（文章「标签放在
+                        // 自己区域里」）——外环 + 洞环随候选下发（视图空间），
+                        // 候选位盒中心越界 / 落洞即否决。
+                        let mut rings = Vec::with_capacity(1 + territory.holes.len());
+                        rings.push(ring_to_view(coords, &grid));
+                        for h in &territory.holes {
+                            rings.push(ring_to_view(h, &grid));
+                        }
+                        let font_size = REGION_LABEL_PX * unit_scale;
+                        let mut cand = crate::label_collision::LabelCandidate::new(
+                            crate::label_collision::LabelPass::Faction,
+                            grid.map_to_view(center),
+                            faction.name.clone(),
+                            REGION_LABEL_PX,
+                            // 级别权重（与地名同一合成口径）；势力名天然是最高档。
+                            crate::label_collision::priority_for(3, &faction.name),
                             // ADR-0017 §2.7：势力标签可拾取——点击选中该势力。
-                            target: Some(wv_core::SelectedEntity::new(
+                            Some(wv_core::SelectedEntity::new(
                                 wv_core::EntityKind::Faction,
                                 faction.id.clone(),
                             )),
-                        });
+                        );
+                        cand.offsets = crate::label_collision::area_label_offsets(
+                            crate::label_collision::estimate_label_width(&faction.name, font_size),
+                            crate::label_collision::estimate_label_height(font_size),
+                        );
+                        cand.inside_rings = rings;
+                        candidates.push(cand);
                     }
                 }
             }
         }
     }
 
-    // ADR-0017 §2.6：AABB 碰撞过滤（势力标签通常个位数，200 上限不会触顶）。
-    // ADR-0065：每条候选自带字号，过滤按各自字号算盒宽高。
-    let unit_scale = view.scale.max(0.05);
-    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, unit_scale);
-    filtered.truncate(200);
+    // ADR-0017 §2.6 → ADR-0073：统一占位池候选位摆位（势力标签受区域内
+    // 约束），`pos` 已是最终渲染位。
+    let filtered =
+        crate::label_collision::filter_collisions(&mut candidates, unit_scale, &mut occupancy);
     let label_z = LABEL_Z + layers.label.z_offset;
-    let cam_rot = camera
-        .single()
-        .map(|t| t.rotation)
-        .unwrap_or(Quat::IDENTITY);
-    let label_rot = cam_rot.inverse();
-    for c in &mut filtered {
-        let font_size = c.font_size_px * unit_scale;
-        c.pos += crate::camera::screen_vec_to_world(Vec2::Y * font_size * 0.9, cam_rot);
-    }
     // ADR-0017 §2.7：注册本帧可见的标签命中盒（追加，地名系统已清场）。
     for c in &filtered {
         if let Some(target) = &c.target {
@@ -1254,6 +1295,8 @@ pub fn update_event_labels(
     layers: Res<LayerFrame>,
     playback: Res<PlaybackState>,
     mut hits: ResMut<crate::label_pick::LabelHits>,
+    // 统一占位池（ADR-0073）：与其他五类标签互相避让。
+    mut occupancy: ResMut<crate::label_collision::LabelOccupancy>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
@@ -1278,6 +1321,13 @@ pub fn update_event_labels(
     >,
 ) {
     let t = playback.current_day;
+    let unit_scale = view.scale.max(0.05);
+    // 屏幕对齐与占位池口径同地名系统（ADR-0073）。
+    let cam_rot = camera
+        .single()
+        .map(|t| t.rotation)
+        .unwrap_or(Quat::IDENTITY);
+    let label_rot = cam_rot.inverse();
     let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
     // Label 层可见性（ADR-0017 Q1）
     if layers.label.visible && recipe.enabled(crate::recipe::PassId::EventDots) {
@@ -1304,38 +1354,32 @@ pub fn update_event_labels(
                         let x = loc.x.unwrap_or(place.x.unwrap_or(0.0));
                         let y = loc.y.unwrap_or(place.y.unwrap_or(0.0));
                         // 级别权重（与地名同一合成口径）；事件按「局部」档。
-                        candidates.push(crate::label_collision::LabelCandidate {
-                            pos: grid.map_to_view(Vec2::new(x, y)),
-                            name: event.name.clone(),
-                            font_size_px: LABEL_PX,
-                            priority: crate::label_collision::priority_for(1, &event.name),
+                        // ADR-0073：8 方位候选位，放不下先挪位。
+                        let mut cand = crate::label_collision::LabelCandidate::new(
+                            crate::label_collision::LabelPass::Event,
+                            grid.map_to_view(Vec2::new(x, y)),
+                            event.name.clone(),
+                            LABEL_PX,
+                            crate::label_collision::priority_for(1, &event.name),
                             // ADR-0017 §2.7：事件标签可拾取——点击选中该事件。
-                            target: Some(wv_core::SelectedEntity::new(
+                            Some(wv_core::SelectedEntity::new(
                                 wv_core::EntityKind::Event,
                                 event.id.clone(),
                             )),
-                        });
+                        );
+                        cand.offsets =
+                            crate::label_collision::point_label_offsets(LABEL_PX, cam_rot);
+                        candidates.push(cand);
                     }
                 }
             }
         }
     }
 
-    // ADR-0017 §2.6：AABB 碰撞过滤（事件标签通常个位数）。
-    // ADR-0065：每条候选自带字号，过滤按各自字号算盒宽高。
-    let unit_scale = view.scale.max(0.05);
-    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, unit_scale);
-    filtered.truncate(200);
+    // ADR-0017 §2.6 → ADR-0073：统一占位池候选位摆位，`pos` 已是最终渲染位。
+    let filtered =
+        crate::label_collision::filter_collisions(&mut candidates, unit_scale, &mut occupancy);
     let label_z = LABEL_Z + layers.label.z_offset;
-    let cam_rot = camera
-        .single()
-        .map(|t| t.rotation)
-        .unwrap_or(Quat::IDENTITY);
-    let label_rot = cam_rot.inverse();
-    for c in &mut filtered {
-        let font_size = c.font_size_px * unit_scale;
-        c.pos += crate::camera::screen_vec_to_world(Vec2::Y * font_size * 0.9, cam_rot);
-    }
     // ADR-0017 §2.7：注册本帧可见的标签命中盒（追加，地名系统已清场）。
     for c in &filtered {
         if let Some(target) = &c.target {
@@ -1441,6 +1485,8 @@ pub fn update_region_labels(
     layers: Res<LayerFrame>,
     playback: Res<PlaybackState>,
     mut hits: ResMut<crate::label_pick::LabelHits>,
+    // 统一占位池（ADR-0073）：与其他五类标签互相避让。
+    mut occupancy: ResMut<crate::label_collision::LabelOccupancy>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
@@ -1465,6 +1511,13 @@ pub fn update_region_labels(
     >,
 ) {
     let t = playback.current_day;
+    let unit_scale = view.scale.max(0.05);
+    // 屏幕对齐与占位池口径同地名系统（ADR-0073）。
+    let cam_rot = camera
+        .single()
+        .map(|t| t.rotation)
+        .unwrap_or(Quat::IDENTITY);
+    let label_rot = cam_rot.inverse();
     let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
     // Label 层可见性（ADR-0017 Q1）
     if layers.label.visible
@@ -1501,38 +1554,40 @@ pub fn update_region_labels(
                     let Some(centroid) = region.centroid() else {
                         continue;
                     };
-                    // 级别权重（与地名同一合成口径）；区域名天然是最高档。
-                    candidates.push(crate::label_collision::LabelCandidate {
-                        pos: grid.map_to_view(Vec2::new(centroid.x, centroid.y)),
-                        name: region.name.clone(),
-                        font_size_px: REGION_LABEL_PX,
-                        priority: crate::label_collision::priority_for(3, &region.name),
+                    // ADR-0073：区域轮廓随候选下发（区域内约束）——区域名
+                    // 必须待在自己的轮廓里，装不下就不画（无名区域同口径）。
+                    let font_size = REGION_LABEL_PX * unit_scale;
+                    let mut cand = crate::label_collision::LabelCandidate::new(
+                        crate::label_collision::LabelPass::Region,
+                        grid.map_to_view(Vec2::new(centroid.x, centroid.y)),
+                        region.name.clone(),
+                        REGION_LABEL_PX,
+                        // 级别权重（与地名同一合成口径）；区域名天然是最高档。
+                        crate::label_collision::priority_for(3, &region.name),
                         // ADR-0017 §2.7：区域标签可拾取——点击选中该区域。
-                        target: Some(wv_core::SelectedEntity::new(
+                        Some(wv_core::SelectedEntity::new(
                             wv_core::EntityKind::Region,
                             region.id.clone(),
                         )),
-                    });
+                    );
+                    if region.polygon.len() >= 6 {
+                        cand.inside_rings = vec![ring_to_view(&region.polygon, &grid)];
+                        cand.offsets = crate::label_collision::area_label_offsets(
+                            crate::label_collision::estimate_label_width(&region.name, font_size),
+                            crate::label_collision::estimate_label_height(font_size),
+                        );
+                    }
+                    candidates.push(cand);
                 }
             }
         }
     }
 
-    // ADR-0017 §2.6：AABB 碰撞过滤（区域通常个位数）。
-    // ADR-0065：每条候选自带字号，过滤按各自字号算盒宽高。
-    let unit_scale = view.scale.max(0.05);
-    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, unit_scale);
-    filtered.truncate(200);
+    // ADR-0017 §2.6 → ADR-0073：统一占位池候选位摆位（区域标签受轮廓内
+    // 约束），`pos` 已是最终渲染位。
+    let filtered =
+        crate::label_collision::filter_collisions(&mut candidates, unit_scale, &mut occupancy);
     let label_z = LABEL_Z + layers.label.z_offset;
-    let cam_rot = camera
-        .single()
-        .map(|t| t.rotation)
-        .unwrap_or(Quat::IDENTITY);
-    let label_rot = cam_rot.inverse();
-    for c in &mut filtered {
-        let font_size = c.font_size_px * unit_scale;
-        c.pos += crate::camera::screen_vec_to_world(Vec2::Y * font_size * 0.9, cam_rot);
-    }
     // ADR-0017 §2.7：注册本帧可见的区域标签命中盒（追加，地名系统已清场）。
     for c in &filtered {
         if let Some(target) = &c.target {
@@ -1654,6 +1709,8 @@ pub fn update_sea_labels(
     view: Res<ViewState>,
     layers: Res<LayerFrame>,
     playback: Res<PlaybackState>,
+    // 统一占位池（ADR-0073）：与其他五类标签互相避让。
+    mut occupancy: ResMut<crate::label_collision::LabelOccupancy>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
@@ -1678,6 +1735,13 @@ pub fn update_sea_labels(
     >,
 ) {
     let t = playback.current_day;
+    let unit_scale = view.scale.max(0.05);
+    // 屏幕对齐与占位池口径同地名系统（ADR-0073）。
+    let cam_rot = camera
+        .single()
+        .map(|t| t.rotation)
+        .unwrap_or(Quat::IDENTITY);
+    let label_rot = cam_rot.inverse();
     let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
     // Label 渲染组可见性（与 faction / region / event 同一开关）
     if layers.label.visible && recipe.enabled(crate::recipe::PassId::SeaLabels) {
@@ -1691,35 +1755,28 @@ pub fn update_sea_labels(
                     // 级别权重（与地名同一合成口径）；海名是最高档。
                     // `target = None` 标记「不参与拾取」语义——`update_region_labels` /
                     // `_faction_labels` 都填 `Some(...)`，与本系统行为不同。
-                    candidates.push(crate::label_collision::LabelCandidate {
-                        pos: grid.map_to_view(Vec2::new(sea.x, sea.y)),
-                        name: sea.name.clone(),
-                        font_size_px: REGION_LABEL_PX,
-                        priority: crate::label_collision::priority_for(3, &sea.name),
-                        target: None,
-                    });
+                    // ADR-0073：锚点仍是作者写的 `sea.x/y`（数据主权），但被
+                    // 别的标签占了地就按 8 方位挪，不再硬叠或消失。
+                    let mut cand = crate::label_collision::LabelCandidate::new(
+                        crate::label_collision::LabelPass::Sea,
+                        grid.map_to_view(Vec2::new(sea.x, sea.y)),
+                        sea.name.clone(),
+                        REGION_LABEL_PX,
+                        crate::label_collision::priority_for(3, &sea.name),
+                        None,
+                    );
+                    cand.offsets =
+                        crate::label_collision::point_label_offsets(REGION_LABEL_PX, cam_rot);
+                    candidates.push(cand);
                 }
             }
         }
     }
 
-    // 字号与 RegionLabel / FactionLabel 同档（20px），水域文字更深。
-    // 海名数量通常个位数，`filter_collisions` 实质是 no-op——保留调用仅为
-    // 模式统一，未来海名数量上去后无须切管线。
-    // ADR-0065：每条候选自带字号，过滤按各自字号算盒宽高。
-    let unit_scale = view.scale.max(0.05);
-    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, unit_scale);
-    filtered.truncate(200);
+    // ADR-0073：统一占位池候选位摆位——海名不再与城市名 / 区域名硬叠。
+    let filtered =
+        crate::label_collision::filter_collisions(&mut candidates, unit_scale, &mut occupancy);
     let label_z = LABEL_Z + layers.label.z_offset;
-    let cam_rot = camera
-        .single()
-        .map(|t| t.rotation)
-        .unwrap_or(Quat::IDENTITY);
-    let label_rot = cam_rot.inverse();
-    for c in &mut filtered {
-        let font_size = c.font_size_px * unit_scale;
-        c.pos += crate::camera::screen_vec_to_world(Vec2::Y * font_size * 0.9, cam_rot);
-    }
     let wanted = filtered;
 
     let cjk = fonts.label_handle();
@@ -1947,6 +2004,9 @@ mod tests {
         bevy_world.insert_resource(grid);
         bevy_world.insert_resource(recipe);
         bevy_world.insert_resource(crate::theme::fonts::LoadedFonts::default());
+        // 统一占位池（ADR-0073）：ResMut 参数缺资源时系统整帧跳过，清场
+        // 语义就验不到了——必须预置。
+        bevy_world.insert_resource(crate::label_collision::LabelOccupancy::default());
         // 预置一条命中（清场语义的验证点）。
         let mut hits = LabelHits::default();
         hits.items.push(crate::label_pick::LabelHit {
