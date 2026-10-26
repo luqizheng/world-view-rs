@@ -39,7 +39,9 @@ use crate::theme::colors_google::{
     GOOGLE_POI_TRANSIT, GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL, GOOGLE_ROAD_GRADES,
 };
 use crate::theme::palette::{self, MapPalette, PaletteColors};
-use crate::world_projection::{segments_fingerprint, PlaceDot, ProjectionFrame};
+use crate::world_projection::{
+    river_taper_factors, segments_fingerprint, PlaceDot, ProjectionFrame,
+};
 use wv_core::distance::PoiKind;
 
 /// Google 式道路外缘宽度（屏幕像素）——**非分级主题**（古舆图等）的兜底值。
@@ -97,12 +99,9 @@ const ROAD_Z: f32 = 0.1;
 /// ——河是底图水系，从地形上长出来，但让路桥压在河上。
 const RIVER_Z: f32 = 0.082;
 /// 河流描线宽（屏幕像素）：比道路 fill（3.5px）细一档，参考图的细蜿蜒蓝线。
+/// 仅作**未声明 `line_width_m` 的河线**的缺省宽（ADR-0070 T8：声明了宽度
+/// 的河按 `width_wu` 世界宽描画，不再随屏幕缩放）。
 const RIVER_STROKE_PX: f32 = 2.2;
-/// 作者手绘河的线宽（屏幕像素）：比派生河细一档——小溪本来就该比大河细。
-const AUTHOR_RIVER_STROKE_PX: f32 = 1.6;
-/// 作者手绘河的 Z：派生河（0.082）之上、道路 casing（0.09）之下——
-/// 作者的声明压在派生资产之上（"我画的"优先显形），又不进道路带。
-const AUTHOR_RIVER_Z: f32 = 0.084;
 /// 街道主干档（rank ≤ 2）宽度（屏幕像素）。
 const STREET_MAJOR_PX: f32 = 4.5;
 /// 街道次干 / 支路档宽度（屏幕像素）。
@@ -240,6 +239,91 @@ fn stroke_join_centers(segments: &[(Vec2, Vec2)], half: f32) -> Vec<Vec2> {
         .into_iter()
         .filter(|(_, d)| *d >= 2)
         .map(|((x, y), _)| Vec2::new(f32::from_bits(x), f32::from_bits(y)))
+        .collect()
+}
+
+/// 带宽版合批 mesh：每段一个世界空间矩形，**厚度逐段独立**。
+///
+/// 为什么不并进 [`build_stroke_batch_mesh`]：那个签名里的 `world_thickness`
+/// 是整组一个标量（道路三档各自均匀），河是**逐段锥形宽**（ADR-0070 D4，
+/// 源头 30% → 河口 100%）——同一 mesh 内厚度各不相同。顶点布局 / 接头补盘
+/// / 索引模式逐行对齐均匀版，只有 `half` 从参数变成了逐段值。
+///
+/// `strokes` 元组第三位 = 该段的**世界厚度**（已含锥形系数）。
+pub(crate) fn build_stroke_batch_mesh_widths(strokes: &[(Vec2, Vec2, f32)]) -> Mesh {
+    let n = strokes.len();
+
+    // 接头补盘同款（G3b）：度数 ≥2 的共点补圆盘，半径取共点段中**最宽**的
+    // 半宽——锥形相邻段宽差有限，宁可盘略大不可留缺口（缺口是硬伤，大盘
+    // 被同色段盖住不可见）。
+    let joins = stroke_join_centers_widths(strokes);
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n * 4 + joins.len() * 7);
+    let mut indices: Vec<u32> = Vec::with_capacity(n * 6 + joins.len() * 6 * 3);
+    for (a, b, w) in strokes {
+        let half = w * 0.5;
+        let delta = *b - *a;
+        let length = delta.length().max(f32::EPSILON);
+        let dir = delta / length;
+        let side = Vec2::new(-dir.y, dir.x) * half;
+        let center = (*a + *b) * 0.5;
+        let ext = dir * (length * 0.5);
+        let base = positions.len() as u32;
+        for offset in [-ext - side, ext - side, ext + side, -ext + side] {
+            positions.push((center + offset).extend(0.0).to_array());
+        }
+        indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    for (center, half) in &joins {
+        let base = positions.len() as u32;
+        positions.push([center.x, center.y, 0.0]);
+        for i in 0..STROKE_JOIN_SEGMENTS {
+            let ang = i as f32 / STROKE_JOIN_SEGMENTS as f32 * std::f32::consts::TAU;
+            positions.push([
+                center.x + half * ang.cos(),
+                center.y + half * ang.sin(),
+                0.0,
+            ]);
+        }
+        for i in 0..STROKE_JOIN_SEGMENTS as u32 {
+            let a = base + 1 + i;
+            let b = base + 1 + (i + 1) % STROKE_JOIN_SEGMENTS as u32;
+            indices.extend([base, a, b]);
+        }
+    }
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
+}
+
+/// [`stroke_join_centers`] 的带宽版：返回共点位置与该点应补的**最大半宽**。
+///
+/// 位型相等判定（`f32::to_bits` 当 key）与均匀版同一条论证：同一条折线的
+/// 相邻段由 `windows(2)` 产出，共享顶点是同一个 f32 克隆；epsilon 粘合只会
+/// 制造假接头。
+fn stroke_join_centers_widths(strokes: &[(Vec2, Vec2, f32)]) -> Vec<(Vec2, f32)> {
+    if strokes.len() < 2 {
+        return Vec::new();
+    }
+    use std::collections::HashMap;
+    let key = |p: Vec2| (p.x.to_bits(), p.y.to_bits());
+    let mut degree: HashMap<(u32, u32), (u32, f32)> = HashMap::with_capacity(strokes.len() * 2);
+    for (a, b, w) in strokes {
+        let half = w * 0.5;
+        let da = degree.entry(key(*a)).or_insert((0, 0.0));
+        da.0 += 1;
+        da.1 = da.1.max(half);
+        let db = degree.entry(key(*b)).or_insert((0, 0.0));
+        db.0 += 1;
+        db.1 = db.1.max(half);
+    }
+    degree
+        .into_iter()
+        .filter(|(_, (d, _))| *d >= 2)
+        .map(|((x, y), (_, half))| (Vec2::new(f32::from_bits(x), f32::from_bits(y)), half))
         .collect()
 }
 
@@ -562,15 +646,11 @@ pub struct VectorLayerEntities {
     street_minor_casing: RoadLayerPool,
     /// 街道编辑器的橡皮筋预览（上一落点 → 光标）。
     street_preview: RoadLayerPool,
-    /// 河流折线合批（ADR-0037 D5）：模板世界派生水系，一段折线多个连续段。
+    /// 河流折线合批（ADR-0037 D5 建池；ADR-0070 T8 起单池单材质——
+    /// 唯一供给源 = 河线 Place，作者手绘与迁移落地的模板河同池）。
     rivers: RoadLayerPool,
     /// 河流材质（惰性建一次；固定水蓝，主题化随 README §12-30 后继）。
     river_material: Option<Handle<ColorMaterial>>,
-    /// **作者手绘**河合批（ADR-0046 D4 + F3 样式区分）：与派生河**分池分材质**
-    /// ——作者河更亮更细，实机可辨「这条是我画的」。
-    author_rivers: RoadLayerPool,
-    /// 作者河材质（惰性建一次；比派生河亮一档的青蓝）。
-    author_river_material: Option<Handle<ColorMaterial>>,
     /// 地物符号合批（每类一个 mesh + 一个实体，共 2 个）；与 decor 同款
     /// 「原地改写」纪律。顶点色已在 mesh 端烘好 → 配白色 ColorMaterial。
     landmarks: [LandmarkPool; 2],
@@ -658,8 +738,6 @@ pub fn sync_vector_layers(
         }
         layer.rivers.despawn(&mut commands);
         layer.river_material = None;
-        layer.author_rivers.despawn(&mut commands);
-        layer.author_river_material = None;
         for p in &mut layer.landmarks {
             p.despawn(&mut commands);
         }
@@ -688,11 +766,15 @@ pub fn sync_vector_layers(
                 )
             })
             .expect("ensure_street_materials 必须已初始化");
-        // 河流（ADR-0037 D5）：地形族水系，gate = MODE_TABLE(Rivers) ∧ terrain 图层。
-        // 与 road_stale 无关——river_polylines 的生命周期由 compute_projection 的
-        // river_key 缓存管；这里只做「可见才合批」。
-        // 级别门槛（ADR-0047 D5）：派生河与作者河都带 rank（长度占比折算），
-        // 过统一门槛——Nation 档只画横贯级主河，Region 档加区域河，Edit 全见。
+        // 河流（ADR-0037 D5 建制；ADR-0070 T8 单池化）：地形族水系，
+        // gate = MODE_TABLE(Rivers) ∧ terrain 图层。与 road_stale 无关——
+        // river_polylines 的生命周期由 compute_projection 的 river_key 缓存管；
+        // 这里只做「可见才合批」。
+        // 级别门槛（ADR-0047 D5）：河线带 rank（长度占比折算），过统一门槛
+        // ——Nation 档只画横贯级主河，Region 档加区域河，Edit 全见。
+        // 锥形宽（ADR-0070 D4）：逐段宽 = 基准宽 × lerp(0.3, 1.0, 弧长占比)
+        // （源头 30% → 河口 100%）；未声明 `line_width_m`（width_wu == 0，
+        // 存量夹具）退旧屏幕像素缺省宽。
         if recipe.enabled(PassId::Rivers) && layers.terrain.visible {
             let mat = layer.river_material.get_or_insert_with(|| {
                 // 2026-10-22 验收：CellMap 用固定深青（数据视图，不随主题）；
@@ -706,60 +788,34 @@ pub fn sync_vector_layers(
                 ))
             });
             let river_tier = lod_tier(view.scale);
-            let mut river_segments: Vec<(Vec2, Vec2)> = Vec::new();
+            let mut river_strokes: Vec<(Vec2, Vec2, f32)> = Vec::new();
             for line in &frame.river_polylines {
                 if !crate::state::rank_visible_at_tier(line.rank, river_tier) {
                     continue;
                 }
-                for pair in line.pts.windows(2) {
-                    river_segments.push((pair[0], pair[1]));
+                let base = if line.width_wu > 0.0 {
+                    line.width_wu
+                } else {
+                    stroke_world_thickness(RIVER_STROKE_PX, view.scale)
+                };
+                let factors = river_taper_factors(&line.pts);
+                for (pair, f) in line.pts.windows(2).zip(factors) {
+                    river_strokes.push((pair[0], pair[1], base * f));
                 }
             }
-            let fp = segments_fingerprint(&river_segments);
-            sync_road_strokes(
+            let fp = river_strokes_fingerprint(&river_strokes);
+            sync_river_strokes(
                 &mut commands,
                 &mut meshes,
-                &river_segments,
+                &river_strokes,
                 fp,
-                view.scale,
                 mat.clone(),
-                RIVER_STROKE_PX,
                 RIVER_Z,
                 false,
                 &mut layer.rivers,
             );
-            // 作者手绘河（ADR-0046 D4）：与派生水系**双供给**，且**分池分材质**：
-            // 更亮一档的青蓝 + 更细的线——实机可辨「这条是我画的」；派生河是
-            // 模板世界的确定性资产，两者视觉职责不同。同一呈现门槛（ADR-0047
-            // D5：双供给同一级别语义）。
-            let mut author_segments: Vec<(Vec2, Vec2)> = Vec::new();
-            for line in &frame.author_river_polylines {
-                if !crate::state::rank_visible_at_tier(line.rank, river_tier) {
-                    continue;
-                }
-                for pair in line.pts.windows(2) {
-                    author_segments.push((pair[0], pair[1]));
-                }
-            }
-            let author_mat = layer.author_river_material.get_or_insert_with(|| {
-                materials.add(ColorMaterial::from_color(Color::srgb(0.42, 0.70, 0.88)))
-            });
-            let author_fp = segments_fingerprint(&author_segments);
-            sync_road_strokes(
-                &mut commands,
-                &mut meshes,
-                &author_segments,
-                author_fp,
-                view.scale,
-                author_mat.clone(),
-                AUTHOR_RIVER_STROKE_PX,
-                AUTHOR_RIVER_Z,
-                false,
-                &mut layer.author_rivers,
-            );
         } else {
             layer.rivers.despawn(&mut commands);
-            layer.author_rivers.despawn(&mut commands);
         }
         // 世界道路（ADR-0047 D4）：按当前视野档位取降序前缀切片——Nation 档
         // 只画城际干线（rank ≥ 3），Region 加区域级，Edit 全量。缩放不重算
@@ -1312,6 +1368,99 @@ fn sync_road_strokes(
             pool.batch = Some(batch);
         }
     }
+}
+
+/// 河流专用：**带宽段列**的合批同步（ADR-0070 T8）。
+///
+/// 与 [`sync_road_strokes`] 同一套缓存纪律（内容指纹 / Z / 线宽漂移任一变
+/// 才换 mesh，材质变化只换绑——**不许**改成每帧无条件重建，AGENTS 历史：
+/// 每帧重建 mesh 是资产泄漏坑），差异只在两处：
+/// - mesh 构建走 [`build_stroke_batch_mesh_widths`]（逐段锥形厚）；
+/// - `StrokeBatchKey::world_thickness` 槽位存**最大段宽**：显式 `width_wu`
+///   段不随缩放变（指纹即覆盖），缺省宽段（px × scale）随缩放漂移，复用
+///   道路的 4% 量化门（[`thickness_drifted`]）——连续缩放下不逐帧重建。
+///
+/// 为什么不并成一个函数：道路是「整组一个标量线宽 × 多个池」，河是「一个
+/// 池内宽度各异」——mesh 构建器与漂移门的线宽来源都不同；缓存门语义逐
+/// 分支对齐即毕，强行参数化只会让两条路径经闭包绕着读。
+#[allow(clippy::too_many_arguments)]
+fn sync_river_strokes(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    strokes: &[(Vec2, Vec2, f32)],
+    fingerprint: u64,
+    material: Handle<ColorMaterial>,
+    z: f32,
+    material_changed: bool,
+    pool: &mut RoadLayerPool,
+) {
+    let max_width = strokes.iter().map(|s| s.2).fold(0.0f32, f32::max);
+    let key = StrokeBatchKey {
+        fingerprint,
+        world_thickness: max_width,
+        z,
+    };
+    match pool.batch.take() {
+        None => {
+            if strokes.is_empty() {
+                return;
+            }
+            let mesh = meshes.add(build_stroke_batch_mesh_widths(strokes));
+            let entity = commands
+                .spawn((
+                    Mesh2d(mesh.clone()),
+                    MeshMaterial2d(material),
+                    Transform::from_xyz(0.0, 0.0, key.z),
+                ))
+                .id();
+            pool.batch = Some(StrokeBatch { entity, mesh, key });
+        }
+        Some(mut batch) => {
+            if strokes.is_empty() {
+                commands.entity(batch.entity).despawn();
+                commands.queue(move |world: &mut World| {
+                    world.resource_mut::<Assets<Mesh>>().remove(&batch.mesh);
+                });
+                return;
+            }
+            let rebuilt = batch.key.fingerprint != key.fingerprint
+                || batch.key.z != key.z
+                || thickness_drifted(key.world_thickness, batch.key.world_thickness);
+            if rebuilt {
+                batch.key = key;
+                let next = meshes.add(build_stroke_batch_mesh_widths(strokes));
+                let old = std::mem::replace(&mut batch.mesh, next.clone());
+                commands
+                    .entity(batch.entity)
+                    .insert((Mesh2d(next), Transform::from_xyz(0.0, 0.0, key.z)));
+                commands.queue(move |world: &mut World| {
+                    world.resource_mut::<Assets<Mesh>>().remove(&old);
+                });
+            }
+            if material_changed {
+                commands
+                    .entity(batch.entity)
+                    .insert(MeshMaterial2d(material));
+            }
+            pool.batch = Some(batch);
+        }
+    }
+}
+
+/// 带宽段列的内容指纹（FNV-1a over 坐标 + 宽度位型）。
+///
+/// 与 [`segments_fingerprint`] 分开的原因：锥形宽让每段厚度各不相同，
+/// 指纹必须覆盖宽度位型，否则「只改宽不改坐标」（改 `line_width_m`）会
+/// 漏重建，河就停在旧宽度上。
+fn river_strokes_fingerprint(strokes: &[(Vec2, Vec2, f32)]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for (a, b, w) in strokes {
+        for v in [a.x, a.y, b.x, b.y, *w] {
+            hash ^= u64::from(v.to_bits());
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    hash
 }
 
 /// 同步红点白环 POI（ADR-0030 D4 合批版）。
