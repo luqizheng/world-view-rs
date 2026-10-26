@@ -13,8 +13,10 @@ use crate::i18n::{t, I18nKey, Locale};
 
 pub use wv_ui::shell::UiShell;
 
-/// 10 种地形的 i18n Key 表（与 `crate::i18n::table.rs` 的 zh/en 镜像同序）。
-const TERRAIN_KEYS: [I18nKey; 10] = [
+/// 9 种地形的 i18n Key 表（与 `crate::i18n::table.rs` 的 zh/en 镜像同序）。
+/// 「道路」（旧第 10 项）已退役（ADR-0070 D1）：路改由线段 POI 承载，
+/// 不再入笔刷色板；i18n 键本体保留（存量格编号 9 的显示名仍在表内）。
+const TERRAIN_KEYS: [I18nKey; 9] = [
     I18nKey::TerrainKindDeepWater,
     I18nKey::TerrainKindShallowWater,
     I18nKey::TerrainKindBeach,
@@ -24,7 +26,6 @@ const TERRAIN_KEYS: [I18nKey; 10] = [
     I18nKey::TerrainKindMountain,
     I18nKey::TerrainKindSnow,
     I18nKey::TerrainKindSwamp,
-    I18nKey::TerrainKindRoad,
 ];
 
 /// 按索引返回本地化后的地形名。索引越界时返回 `"?"`（防御性兜底，绝不在 UI 字符串里 panic）。
@@ -52,14 +53,18 @@ pub fn terrain_swatch(kind: u8) -> egui::Color32 {
 /// 不是数据通道；设计稿 `2026-10-18-world-from-zero-map-design.md` D12/D19
 /// 与计划 Task 6）。
 ///
-/// 水板写水面（无群系，层次由显示层按海拔渐变）；丘陵/山地/雪原按群系
-/// 落库（与「中央山」标记同语义，D9）——它们也可不写群系靠高度派生显示，
-/// 两路并存即 D16。
+/// 9 档（ADR-0070 D1 退役后 10 → 9）：水板写水面（无群系，层次由显示层按
+/// 海拔渐变）；丘陵/山地/雪原按群系落库（与「中央山」标记同语义，D9）——
+/// 它们也可不写群系靠高度派生显示，两路并存即 D16。
+///
+/// 「道路」档（旧 swatch 9）已退役：路改由线段 POI 承载（ADR-0070 D1），
+/// 分支删除后 swatch 9 落 `_ => WATER` 兜底——存量 `BIOME_ROAD` 格的读取
+/// 防御在 `wv_terrain`（常量与 `family_of` 不退役），作者入口不再产出。
 pub fn brush_target(swatch: u8) -> wv_terrain::edit::PaintTarget {
     use wv_terrain::edit::PaintTarget;
     use wv_terrain::{
         BIOME_DESERT, BIOME_FOREST, BIOME_GRASSLAND, BIOME_HILLS, BIOME_MOUNTAINS, BIOME_NONE,
-        BIOME_ROAD, BIOME_SNOWFIELD, BIOME_SWAMP, SURFACE_LAND, SURFACE_WATER,
+        BIOME_SNOWFIELD, BIOME_SWAMP, SURFACE_LAND, SURFACE_WATER,
     };
     const WATER: PaintTarget = PaintTarget {
         surface: SURFACE_WATER,
@@ -78,7 +83,6 @@ pub fn brush_target(swatch: u8) -> wv_terrain::edit::PaintTarget {
         6 => LAND(BIOME_MOUNTAINS), // 山地
         7 => LAND(BIOME_SNOWFIELD), // 雪原
         8 => LAND(BIOME_SWAMP),     // 沼泽
-        9 => LAND(BIOME_ROAD),      // 道路
         _ => WATER,                 // 越界色板兜底为水面（防御，绝不在 UI 路径 panic）
     }
 }
@@ -165,10 +169,11 @@ mod tests {
         assert_eq!(got.height, -3500, "取不到图时应兜底海洋");
     }
 
-    /// 10 个色板各能取到目标：水板给水面、其余给陆面（计划 Task 6 Review 焦点）。
+    /// 9 个色板各能取到目标：水板给水面、其余给陆面（计划 Task 6 Review 焦点；
+    /// ADR-0070 D1 退役后 10 → 9，「道路」档退场）。
     #[test]
-    fn brush_target_table_covers_all_ten_swatches() {
-        for swatch in 0..10u8 {
+    fn brush_target_table_covers_all_nine_swatches() {
+        for swatch in 0..9u8 {
             let target = brush_target(swatch);
             if swatch <= 1 {
                 assert_eq!(
@@ -194,10 +199,37 @@ mod tests {
         let _ = brush_target(200);
     }
 
-    /// 色板名与目标表一一对应（同序 10 项，防两表漂移）。
+    /// 河路退役（ADR-0070 D1）：笔刷色板不再含「道路」档——旧道路位
+    /// （swatch 9）落 `_ => WATER` 兜底，且现存 9 档没有任何一档能涂出
+    /// `BIOME_ROAD`（读取防御在 wv-terrain，作者入口退役）。
+    #[test]
+    fn brush_target_has_no_road_entry() {
+        let fallback = brush_target(9);
+        assert_eq!(
+            fallback.surface,
+            wv_terrain::SURFACE_WATER,
+            "swatch 9 应落 WATER 兜底，实得 surface={}",
+            fallback.surface
+        );
+        assert_eq!(
+            fallback.biome,
+            wv_terrain::BIOME_NONE,
+            "swatch 9 兜底不应带群系，实得 biome={}",
+            fallback.biome
+        );
+        for swatch in 0..9u8 {
+            assert_ne!(
+                brush_target(swatch).biome,
+                wv_terrain::BIOME_ROAD,
+                "色板 {swatch} 不应写出道路群系"
+            );
+        }
+    }
+
+    /// 色板名与目标表一一对应（同序 9 项，防两表漂移）。
     #[test]
     fn terrain_name_lookup_covers_every_swatch() {
-        for swatch in 0..10u8 {
+        for swatch in 0..9u8 {
             assert_ne!(
                 terrain_name_at(crate::i18n::Locale::Zh, swatch as usize),
                 "?",

@@ -78,19 +78,24 @@ pub fn float_window(
     fw.show(ctx, shell, body);
 }
 
-/// 地形色块瓷砖网格（2026-10-16 改版：5 列 × 2 行纯色块，26 px 方块）。
+/// 地形色块瓷砖网格（2026-10-16 改版：5 列 × 2 行纯色块，26 px 方块；
+/// ADR-0070 D1 退役后 10 → 9 块，末行 4 块）。
 ///
 /// 旧版 2 列 × 5 行「色块 + 名称」行高 22 px——名字占掉一半面板宽，
 /// 十种地形竖排近一掌高。改版后名称两处补偿：悬停 `on_hover_text`（逐块），
 /// 选中名由面板段标题常显（`TERRAIN MATERIAL · 草原`）。选中 = 1.5 px
 /// `focus` 金描边（截图验收过的既视感），hover = `hover_bg` 底。
+///
+/// 「道路」（旧第 10 块）已退役（ADR-0070 D1）：路改由线段 POI 承载，
+/// 不再入笔刷色板——保留控件与本表同收口，避免回归时色板与
+/// `brush_target`（9 档权威表）漂移出「点了道路涂出水」的错位。
 pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8, loc: Locale) {
     const SWATCH: f32 = 26.0;
     egui::Grid::new("terrain_swatches")
         .num_columns(5)
         .spacing([space::XS, space::XS])
         .show(ui, |ui| {
-            for k in 0u8..10 {
+            for k in 0u8..9 {
                 let name = terrain_name_at(loc, k as usize);
                 let is_sel = *selected == k;
                 let (rect, resp) =
@@ -115,7 +120,7 @@ pub fn terrain_grid(ui: &mut egui::Ui, shell: &UiShell, selected: &mut u8, loc: 
                     *selected = k;
                 }
                 resp.on_hover_text(name);
-                // 5 列换行：10 块 = 2 行。
+                // 5 列换行：9 块 = 5 + 4（末行 4 块）。
                 if (k + 1) % 5 == 0 {
                     ui.end_row();
                 }
