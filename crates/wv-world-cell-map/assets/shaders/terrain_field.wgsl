@@ -63,6 +63,16 @@ const RIVER_INK_ALPHA: f32 = 0.62;
 const ROAD_INK_ALPHA: f32 = 0.5;
 /// 岸线墨线不透明度（SPEC §1.5「描线 −45% 明度」的落地强度）。
 const COAST_INK_ALPHA: f32 = 0.55;
+/// 三段色带屏幕封顶（SPEC §3.8.4 追记一）：色带整体淡出的 px/格 区间。
+/// 色带宽度按世界格定义，屏幕宽 = 格数 × px_per_cell，近观线性变粗——
+/// 1 格 ≳ 6 px 时饱和浅水环已读作「粗海岸线」（2026-10-26 用户实测反馈），
+/// 24 px/格 全收。远观（< 6 px/格）不受影响。
+const COAST_BAND_CAP_MIN_PX: f32 = 6.0;
+const COAST_BAND_CAP_MAX_PX: f32 = 24.0;
+/// 水陆过渡带的屏幕半宽（px，追记一）。Signed 场的亚格过渡天然是
+/// 「一格宽」的世界量，深缩放会糊成几十 px 软边；钳到 ~2 px 全过渡，
+/// 近观保持 Google/百度式锐利 AA 边。
+const COAST_EDGE_HALF_PX: f32 = 1.0;
 /// biome 界墨线不透明度（比岸线浅一档）。
 const BIOME_INK_ALPHA: f32 = 0.38;
 /// 高度量程（米）= H_MAX(6000) − H_MIN(-4000)，与 pack.rs 同源。
@@ -182,7 +192,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         d = coast_raw * 32.0; // pack 编码 d / 32
         sd = select(-(d - 0.5), d - 0.5, is_land);
     }
-    let land_t = smoothstep(-0.5, 0.5, sd);
+    // 过渡半宽的屏幕封顶（追记一）：远观保持一格宽 AA（half_t = 0.5），
+    // 近观钳到 ~2 px 全过渡。Unsigned 模式 sd 本是逐格阶跃，此钳制无感；
+    // Signed 模式下它把一格宽软边收成锐利 AA 边。
+    let half_t = min(0.5, COAST_EDGE_HALF_PX / px_per_cell);
+    let land_t = smoothstep(-half_t, half_t, sd);
 
     var base: vec3<f32>;
     if (p.shape.y < 0.5) {
@@ -213,8 +227,14 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let shallow_c = mix(p.theme[0].rgb, p.theme[1].rgb, 0.55);
     let deep_c = p.theme[0].rgb * 0.82;
     var water_col = mix(mix(p.theme[0].rgb, shallow_c, t_shallow), deep_c, t_deep);
+    // 色带屏幕封顶（追记一）：色带是**远观**制图暗示，不是线。近观把
+    // 三段偏差整体收敛回平色水，海岸呈现退化为 AA 边界 + 岸线墨线
+    // （两者已是屏幕口径）——与 Google/百度近观水面一致。
+    let band_gate = 1.0 - smoothstep(COAST_BAND_CAP_MIN_PX, COAST_BAND_CAP_MAX_PX, px_per_cell);
+    water_col = mix(p.theme[0].rgb, water_col, band_gate);
     // 近岸白滩（t_shore 最高处向纸色偏一点，给水线一个视觉落点）
-    water_col = mix(water_col, p.paper.rgb, 0.18 * t_shore * (1.0 - t_shallow));
+    // ——白滩缘同属色带装饰，随门控一起收。
+    water_col = mix(water_col, p.paper.rgb, 0.18 * t_shore * (1.0 - t_shallow) * band_gate);
 
     // 亚格混合：一格宽的软过渡替代逐格硬切。
     var rgb = mix(water_col, land_col, land_t);
