@@ -1536,13 +1536,18 @@ fn reclaim_field_material(
     material: Handle<TerrainFieldMaterial>,
     materials: &Assets<TerrainFieldMaterial>,
 ) {
-    let mut textures: [Option<Handle<Image>>; 4] = [const { None }; 4];
+    let mut textures: [Option<Handle<Image>>; 6] = [const { None }; 6];
     if let Some(mat) = materials.get(&material) {
         textures = [
             Some(mat.height.clone()),
             Some(mat.coast.clone()),
             Some(mat.attr.clone()),
             Some(mat.line_dash.clone()),
+            // ADR-0072：biome 距离场（Linear）+ 同字节 Nearest 视图。
+            // 漏回收会被「关场后 Image 资产账目 == 纯 chunk 基线」的验收
+            // 测试当场抓住（15 ≠ 13）。
+            Some(mat.biome.clone()),
+            Some(mat.biome_ids.clone()),
         ];
     }
     commands.queue(move |world: &mut World| {

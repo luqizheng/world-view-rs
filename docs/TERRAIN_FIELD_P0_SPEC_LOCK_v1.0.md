@@ -956,4 +956,62 @@ CPU 烘焙纹理（追记十二的已知边界不变，两套底图并存）。
 **验收**：同机位（fit 起 16 档推近）前后对照——无圆角满屏直角台阶
 vs 9-tap 后仅剩孤立小凸起；远观画面与追记十三基线逐像素一致（渐隐护栏）。
 
+---
+
+## 二十、追记十六：biome 距离场接线——群系填色 + 亚格边界（ADR-0072 落地，2026-10-26）
+
+> 按 AGENTS §6.3「追写不改机制」追加。§一–§十九正文一字未改（本节是唯一新增）。
+
+**处境**：追记十四转正后两批实机反馈——① Themed 分支无群系面：雪原格画成
+土黄海拔色，装饰层（`snow_ink` 白弧 α0.90）全部凸出（「陆地上多了很多
+白点点」）；② 绿地色块逐格硬切台阶。即 ADR-0012 M2 后半悬置的「群系面 +
+平滑边界」缺口，由 ADR-0072 承接。
+
+### 1. 数据面（T40：biome 距离场）
+
+- 生成器 `biome_sdf.rs`（T1，`eba7871`）：`d` = 格心到最近异类群系格心
+  距离（格，`BIOME_FIELD_CAP = 8` 饱和）、`nb` = argmin 异类群系 ID
+  （`NO_FOREIGN = 255` 哨兵）。逐类多源 Dijkstra（8 邻定点权 256/362），
+  > cap 早退——代价 ∝ 边界带面积 × 类数。
+- pack 第 4 张纹理 `biome_tex`（`RGBA8Unorm`）：R = `min(d,8)/8`（**Linear**）、
+  G = 本格 biome、B = 最近异类 ID（**Nearest**——ID 插值即语义错误）。
+  同一份字节绑双采样器视图（`biome` / `biome_ids`）。
+- 增量补丁：回写 `rect ⊕ 8`、窗口 `rect ⊕ 16`（证明结构与 coast 同构：
+  编码 8 格饱和）；一致性测试 `assert_patch_matches_full` 扩到第 4 张。
+
+### 2. 呈现面（T41：群系填色 + 屏幕封顶）
+
+- 填色：`t = smoothstep(0.5, 0.5 + half_b, d)`、`half_b = min(0.5,
+  BIOME_EDGE_HALF_PX / px_per_cell)`（= ~2px 锐利边，海岸同语法）；
+  `base = mix(nb_col, own_col, t)`。d 先做 9-tap 低通（追记十五同款、
+  同半径 0.6）——群系等值线直角圆角化。
+- **Themed 分支**：海拔三阶为底，冻结群系表色按 `BIOME_TINT_STRENGTH = 0.5`
+  覆盖（雪原回白 / 森林回绿；TODO(T3) 收进 ThemePack）。**BiomeRaw 分支**：
+  own/nb 都走 `biome_raw_approx` + 共享 ADR-0055 色带。
+- **水系群系（冻结表 14/15/16）不做混合**：水陆边界归 `land_t` / 海岸
+  语法，两套过渡叠加会把滩涂二次染色。
+- **T27 退役**：4 邻墨线（一格宽假线 + 近观淡出门控）连同
+  `biome_boundary` / `BIOME_LINE_PX` / `BIOME_INK_ALPHA` 一并下线。
+
+### 3. 装饰层对齐（白点点的直接修复）
+
+`terrain_decor` 的 OceanWaves 水格判定从 `is_water_cell`（surface==0 ∨
+height<0）改为 **`surface == 0`**——与场管线权威边界（coast_sdf T3
+「authoring 真值，不由高度推断」）同源。此前海面以下的陆上洼地被判成水，
+海浪白弧落在场管线画成陆地的格子上。**known trade-off**：chunk 回退路径
+的烘焙若按湿判定上色，这类格子仍是水色而无白弧——回退路径为非默认，
+不在本轮对齐范围。
+
+### 4. 资源账目（验收测试抓到的）
+
+`reclaim_field_material` 的回收清单 4 → 6（biome / biome_ids）——
+「关场后 Image 资产 == 纯 chunk 基线」的验收测试当场抓住 15 ≠ 13。
+
+### 5. 验收
+
+- 陆地无海浪白弧（装饰-底图水陆判定同源）✓；
+- 群系色回归（绿地/沙漠分明，雪原回白）✓；
+- 群系边界亚格连续 + 圆角（半径 0.6 可调）✓；
+- 380 + 15 + 11 + 17 全过，clippy -D warnings / fmt 净。
+
 （完）
