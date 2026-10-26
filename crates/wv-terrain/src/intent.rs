@@ -82,9 +82,9 @@ const LAKE_DEPTH_M: f32 = 50.0;
 
 /// 河：河床比两岸最低格再低多少（米 × strength）。
 ///
-/// `pub(crate)`：走廊下切（[`crate::line_path::carve_corridor`]）复用同一常量
-/// ——河谷与道路走廊的下切深度必须同源，否则同一处地形在两条路径上会被
-/// 切出不同的深度。
+/// `pub(crate)`：走廊下切（[`crate::line_path::carve_corridor`]）的**河**分支
+/// 复用同一常量（与 [`RIVER_DROP_M`] 一起同 legacy 挖河同源）。道路走廊用
+/// 独立的 `ROAD_CUT_M`（削到岸高附近，不挖深沟——ADR-0070 评审裁定 I1）。
 pub(crate) const RIVER_CUT_M: f32 = 12.0;
 /// 河：沿链向下游每格至少再降多少（米）。
 ///

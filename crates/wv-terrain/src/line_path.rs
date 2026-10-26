@@ -85,6 +85,12 @@ const LAMBDA_DOWN: f32 = 0.1;
 /// 权重 0.2 / km（翻越 2 km 山脊 ≈ 0.4，与「多走几格」的代价同量级，
 /// 直连仍然胜出）。
 const CARVE_LAMBDA_UP: f32 = 0.2;
+/// 路：走廊削到**岸高附近**的下切深度（米 × strength）。
+///
+/// 与河的 [`crate::intent::RIVER_CUT_M`] **刻意不同**：路不挖 12 m 深沟，
+/// 只把走廊削低到岸高附近——依据 spec §5-9「压平走廊」与 ADR-0070 D3
+/// （评审裁定 I1：路是贴地铺路，不是切河谷）。
+const ROAD_CUT_M: f32 = 2.0;
 /// 绕行模式的蜿蜒噪声幅值（相对 `cell_size`）。
 ///
 /// 作用：让**两条相邻的河**不走出完全重合的折线（视觉上每条河各有自己的
@@ -299,24 +305,31 @@ fn height_at(grid: &TerrainGrid, x: i32, y: i32) -> f32 {
 /// `mark_water` 决定这条走廊的语义：
 ///
 /// - `true` = **河**：走廊格写 [`SURFACE_WATER`]、群系清 [`BIOME_NONE`]；
-/// - `false` = **路**：走廊格压低但**不写水面**（山间开通道），群系保留，
-///   且走廊内的**水格被改为陆地**（通道排干水面——路不会在水里跑）。
+///   下切深度与 legacy 挖河同源（[`crate::intent::RIVER_CUT_M`] /
+///   [`crate::intent::RIVER_DROP_M`]），并复刻 legacy 的「不低于 1 m」——
+///   走廊内负高度格（海面）下切后**抬回 ≥ 1 m**，宽河与一格宽涂格河的
+///   入海口行为一致（评审裁定 I5）；
+/// - `false` = **路**：走廊格削到**岸高附近**（[`ROAD_CUT_M`]，压平走廊、
+///   不挖 12 m 深沟——评审裁定 I1），**不写水面**，群系保留；其中
+///   `height < 0` 的格（海面）**整格跳过**——surface 与 height 都不动，
+///   路不在海上铺（评审裁定 I2）。
 ///
-/// `width_cells` 是走廊的**格宽参数**：轴心格 + 法线**两侧各**
-/// `width_cells - 1` 格（brief 口径「向法线两侧补 `width_cells - 1` 格」）。
-/// 故 `width_cells = 1` ⇒ 单格链（= 既有涂格河），`width_cells = 3` ⇒
-/// 中轴 + 两侧各 2 格 = 5 格宽。
+/// `width_cells` 是走廊的**总宽格数**（评审裁定 I4）：走廊 = 中轴 ± `half`
+/// 格，`half = (width_cells − 1) / 2`。下游把「宽度米 ÷ 格宽」换算成总宽
+/// 格数传入——若按「半径」语义解释，实际走廊会比作者要的宽约 2 倍。
+/// `width_cells = 1` ⇒ 单格链（= 既有涂格河），`width_cells = 3` ⇒
+/// 中轴 + 两侧各 1 格 = 3 格宽。
 ///
-/// 走廊内一律**只降不升**（与既有挖河的「只降不升」口径一致）——路不会
-/// 把旁边的坑填成 mound。
+/// 走廊内**只降不升**（路不把旁边的坑填成 mound）；唯一例外是河分支的
+/// 负高度格——它们要按 legacy 口径**抬**回 ≥ 1 m（见上）。
 ///
 /// ## 与既有涂格河的关系
 ///
 /// `width_cells == 1 && mark_water` 时**直接委托**既有的
 /// [`crate::intent::apply_river`]（一格宽的涂格河），保证与既有行为
 /// **逐位相同**（测试 `width_one_river_matches_legacy_apply_river` 钉死）；
-/// 更宽的走廊 / 道路走本函数的通用路径（下切深度常量与既有实现同源：
-/// [`crate::intent::RIVER_CUT_M`] / [`crate::intent::RIVER_DROP_M`]）。
+/// 更宽的河走本函数的通用路径（下切深度与 legacy 同源，见上），道路走
+/// [`ROAD_CUT_M`] 的独立口径。
 pub fn carve_corridor(
     grid: &mut TerrainGrid,
     pts: &[(f32, f32)],
@@ -368,18 +381,43 @@ pub fn carve_corridor(
                 }
             }
         }
-        // 河床高度：比两岸最低低 CUT·s、比上游低 DROP，且不低于 1 m。
+        // 河床 / 路床高度：
+        // - 河：比两岸最低低 RIVER_CUT_M·s、比上游低 DROP（沿链向下游降）；
+        // - 路：只削到岸高附近（ROAD_CUT_M·s，压平走廊不挖深沟——评审 I1），
+        //   没有「向下游降」的河语义。
         let mut e = height_at(grid, cx, cy);
         if low.is_finite() {
-            e = e.min(low - crate::intent::RIVER_CUT_M * s);
+            let cut = if mark_water {
+                crate::intent::RIVER_CUT_M
+            } else {
+                ROAD_CUT_M
+            };
+            e = e.min(low - cut * s);
         }
-        e = e.min(prev - crate::intent::RIVER_DROP_M).max(1.0);
+        if mark_water {
+            e = e.min(prev - crate::intent::RIVER_DROP_M);
+        }
+        // 不低于 1 m：河复刻 legacy `apply_river` 的 `.max(1.0)`——入海口处的
+        // 负高度格下切后抬回 1 m，宽河窄河行为一致（评审 I5）。
+        e = e.max(1.0);
         for &(bx, by) in cells_i {
             let Some(cell0) = grid.get(bx, by) else {
                 continue;
             };
-            // 只降不升：走廊格若本就低于目标高度（坑），保持原样。
-            let new_height = crate::intent::to_height(e.min(cell0.height as f32));
+            // 路遇负高度格（海面）：整格跳过，surface 与 height 都不动
+            // （评审 I2：路不在海上铺）。
+            if !mark_water && cell0.height < 0 {
+                continue;
+            }
+            // 河：与 legacy `apply_river` 同式 `to_height(e)`——负高度格被抬到
+            // ≥ 1 m 后不得被「只降不升」钳回海里（评审 I5）；对 height ≥ 0 的
+            // 格 e 本就 ≤ 原高，结果等价于只降不升。路：保留只降不升——路
+            // 不把坑填成丘。
+            let new_height = if mark_water {
+                crate::intent::to_height(e)
+            } else {
+                crate::intent::to_height(e.min(cell0.height as f32))
+            };
             let new_cell = TerrainCell {
                 height: new_height,
                 surface: if mark_water {
@@ -471,12 +509,16 @@ fn orient_chain(
     chain[s0..s1].to_vec()
 }
 
-/// 走廊加宽：链上每格 = 轴心格 + 法线两侧各 `width - 1` 格。
+/// 走廊加宽：**总宽语义**（评审裁定 I4）——`half = (width − 1) / 2`，链上
+/// 每格 = 轴心格 + 法线**两侧各** `half` 格；`width = 1` ⇒ 只中轴（与既有
+/// 涂格河一致）。下游把「宽度米 ÷ 格宽」换算成**总宽**格数传入，若按半径
+/// 语义解释，实际走廊会比作者要的宽约 2 倍。
 ///
 /// 法线取链的**前进方向**的垂直方向（8 邻域单位向量 → 整数偏移），故竖直
 /// 走廊的侧格在**左右**、水平走廊的侧格在**上下**。
 fn corridor_cells(chain: &[(i32, i32)], width: u32) -> Vec<Vec<(i32, i32)>> {
     let n = chain.len();
+    let half = (width.saturating_sub(1) / 2) as i32;
     (0..n)
         .map(|i| {
             let (cx, cy) = chain[i];
@@ -491,7 +533,7 @@ fn corridor_cells(chain: &[(i32, i32)], width: u32) -> Vec<Vec<(i32, i32)>> {
             // 前进方向的垂直方向（单位整数向量）。
             let (px, py) = (-ty, tx);
             let mut cells = vec![(cx, cy)];
-            for k in 1..width as i32 {
+            for k in 1..=half {
                 cells.push((cx + px * k, cy + py * k));
                 cells.push((cx - px * k, cy - py * k));
             }
@@ -650,6 +692,51 @@ mod tests {
         assert_eq!(a, b, "同 seed 应逐点一致");
     }
 
+    /// 确定性契约的另一面：**异 seed 应给出不同路径**（守点：蜿蜒噪声不得
+    /// 退化成摆设）。
+    ///
+    /// 夹具用「双缺口山脊」——两条候选通路步数相同，噪声是唯一裁决者；
+    /// 单缺口夹具下路径被几何钉死，异 seed 也逐点相同（噪声不可观测）。
+    /// 先例：`intent.rs::same_seed_replays_identically_and_different_seed_differs`。
+    #[test]
+    fn different_seed_yields_different_path() {
+        let g = twin_gap_ridge_grid();
+        let a = plan_polyline(&g, 1.0, START, END, LinePathMode::Route, 42);
+        let b = plan_polyline(&g, 1.0, START, END, LinePathMode::Route, 43);
+        assert!(
+            !a.is_empty() && !b.is_empty(),
+            "两条候选通路都在，不应返回空路径（len a={} b={}）",
+            a.len(),
+            b.len()
+        );
+        assert_ne!(a, b, "异 seed 应给出不同路径（等长候选时噪声应改变选择）");
+    }
+
+    /// 10×10 夹具：第 5 列**整列**是 2000 m 山脊，只在第 2、8 行各留一个缺口。
+    ///
+    /// 与 [`ridge_grid`] 的单缺口不同：走 `(5,2)` 或 `(5,8)` 两个缺口的通路
+    /// 步数**相同**（各 9 步）——存在等长候选通路时，蜿蜒噪声成为唯一的
+    /// 裁决者。单缺口夹具下路径被几何钉死，噪声不可观测（实测 seed 42/43
+    /// 路径逐点相同），异 seed 守点因此必须用本夹具。
+    fn twin_gap_ridge_grid() -> TerrainGrid {
+        let mut g = TerrainGrid::new(10, 10);
+        for y in 0..10 {
+            for x in 0..10 {
+                let is_ridge = x == 5 && y != 2 && y != 8;
+                g.set(
+                    x,
+                    y,
+                    TerrainCell {
+                        height: if is_ridge { 2000 } else { 50 },
+                        surface: SURFACE_LAND,
+                        biome: BIOME_NONE,
+                    },
+                );
+            }
+        }
+        g
+    }
+
     // ---- 走廊下切（carve_corridor）----
 
     /// 10×10 夹具：全平地 100 m，第 (5, 4) 格是 160 m 的**中段鼓包**。
@@ -742,18 +829,36 @@ mod tests {
         );
     }
 
-    /// 路：走廊格被压低，但**不写水面**（山间开通道）。
+    /// 路：走廊格被**削到岸高附近**（[`ROAD_CUT_M`]，压平走廊不挖深沟——
+    /// 评审裁定 I1），且**不写水面**（山间开通道）。
+    ///
+    /// 断言钉两个边界：① 走廊格高度 ≥ 岸高 − ROAD_CUT_M·s − 1（整米取整
+    /// 容差）——削到岸高附近；② 明显高于 12 m 沟（岸高 − `RIVER_CUT_M`）
+    /// ——排除复用河常量的回归。
     #[test]
     fn road_carve_flattens_without_water_surface() {
         let mut g = flat_grid();
         let pts = vertical_pts();
         let touched = carve_corridor(&mut g, &pts, 1.0, 1.0, 1, false);
         assert!(touched > 0, "路走廊应改动若干格，实得 {touched}");
+        let bank = 100i32; // 夹具岸高（走廊外平地）
         for y in 0..10 {
             let c = g.get(5, y).expect("走廊格在界内");
+            let near_bank_floor = bank as f32 - ROAD_CUT_M - 1.0;
             assert!(
-                c.height < 100,
-                "走廊格 (5, {y}) 应被压低，实得 {} m",
+                c.height as f32 >= near_bank_floor,
+                "走廊格 (5, {y}) 应削到岸高附近（≥ 岸高 − ROAD_CUT_M·s − 1 = {near_bank_floor}），实得 {} m",
+                c.height
+            );
+            let deep_cut_ceiling = bank - crate::intent::RIVER_CUT_M as i32;
+            assert!(
+                c.height as i32 > deep_cut_ceiling,
+                "走廊格 (5, {y}) 不得是 12 m 深沟（应 > 岸高 − RIVER_CUT_M = {deep_cut_ceiling}），实得 {} m",
+                c.height
+            );
+            assert!(
+                (c.height as i32) < bank,
+                "走廊格 (5, {y}) 应被削低（< 岸高 {bank}），实得 {} m",
                 c.height
             );
             assert_ne!(
@@ -770,11 +875,55 @@ mod tests {
         );
     }
 
+    /// 路遇负高度格（海面）：**整格跳过**——surface 与 height 都不动
+    /// （评审裁定 I2：路不在海上铺）。
+    #[test]
+    fn road_corridor_skips_water_cells() {
+        // 前 5 行 100 m 陆地，后 5 行 −40 m 海面。
+        let mut g = TerrainGrid::new(10, 10);
+        for y in 0..10 {
+            for x in 0..10 {
+                let is_sea = y >= 5;
+                g.set(
+                    x,
+                    y,
+                    TerrainCell {
+                        height: if is_sea { -40 } else { 100 },
+                        surface: if is_sea { SURFACE_WATER } else { SURFACE_LAND },
+                        biome: BIOME_NONE,
+                    },
+                );
+            }
+        }
+        let before: Vec<TerrainCell> = (0..10)
+            .map(|y| g.get(5, y).expect("走廊格在界内"))
+            .collect();
+        let pts = vertical_pts();
+        let touched = carve_corridor(&mut g, &pts, 1.0, 1.0, 1, false);
+        assert_eq!(touched, 5, "只有陆上 5 格该被改动，实得 {touched}");
+        for y in 0..5 {
+            let c = g.get(5, y).expect("走廊格在界内");
+            assert!(
+                c.height < 100,
+                "陆上走廊格 (5, {y}) 应被削低，实得 {} m",
+                c.height
+            );
+            assert_eq!(c.surface, SURFACE_LAND, "陆上走廊格 (5, {y}) 应是陆地");
+        }
+        for y in 5..10 {
+            let c = g.get(5, y).expect("走廊格在界内");
+            assert_eq!(
+                c, before[y as usize],
+                "海面格 (5, {y}) 应整格跳过（逐字段相等）"
+            );
+        }
+    }
+
     /// 加宽走廊（3 格）：中轴**左右各 1 格**都要被改到。
     ///
-    /// 宽度语义（brief 口径「向法线两侧补 `width_cells - 1` 格」）：
-    /// `width_cells = 3` ⇒ 中轴 + 两侧各 2 格 = **5 格宽**，故距中轴 3 格的
-    /// 格子仍在走廊之外。
+    /// 宽度语义（**总宽口径**，评审裁定 I4）：`width_cells` 是总宽格数，
+    /// `half = (width_cells − 1) / 2`，走廊 = 中轴 ± half 格。
+    /// `width_cells = 3` ⇒ 中轴 + 两侧各 1 格 = **3 格宽**。
     #[test]
     fn wide_corridor_touches_flanking_cells() {
         let mut g = flat_grid();
@@ -799,6 +948,73 @@ mod tests {
                 100,
                 "走廊宽度之外的格子 ({x}, 5) 不应被改动"
             );
+        }
+    }
+
+    /// 宽度是**总宽**格数而非半径（评审裁定 I4）：`width_cells = 3` ⇒ 走廊
+    /// 恰为 3 格宽（中轴 ± 1）。半径口径会把走廊切成 5 格宽——列 3、7 在
+    /// 总宽口径下必须原封不动（本测试钉住该边界）。
+    #[test]
+    fn corridor_width_three_spans_three_cells_in_total() {
+        let mut g = flat_grid();
+        let pts = vertical_pts();
+        let touched = carve_corridor(&mut g, &pts, 1.0, 1.0, 3, true);
+        assert!(touched > 0, "走廊应改动若干格，实得 {touched}");
+        for y in 0..10 {
+            // 中轴 ± 1（列 4、5、6）都在走廊内。
+            for x in [4, 5, 6] {
+                let c = g.get(x, y).expect("走廊格在界内");
+                assert!(
+                    c.height < 100,
+                    "走廊格 ({x}, {y}) 应被改动，实得 {} m",
+                    c.height
+                );
+                assert_eq!(c.surface, SURFACE_WATER, "走廊格 ({x}, {y}) 应写水面");
+            }
+            // 半径口径（旧语义）会切到列 3、7——总宽口径下不得波及。
+            for x in [3, 7] {
+                let c = g.get(x, y).expect("格外格在界内");
+                assert_eq!(
+                    c.height, 100,
+                    "总宽 3 的走廊不得波及格 ({x}, {y})，实得 {} m",
+                    c.height
+                );
+            }
+        }
+    }
+
+    /// 宽河（通用路径）走廊内的负高度格（海面）：下切后抬到 **≥ 1 m**，与
+    /// legacy `apply_river` 的 `.max(1.0)` 口径一致（评审裁定 I5：宽河窄河
+    /// 入海口行为一致）。
+    #[test]
+    fn wide_river_raises_negative_height_cells_like_legacy() {
+        // 全图 100 m 陆地，第 6 列是 −40 m 的海（紧贴中轴列 5）。
+        let mut g = TerrainGrid::new(10, 10);
+        for y in 0..10 {
+            for x in 0..10 {
+                let is_sea = x == 6;
+                g.set(
+                    x,
+                    y,
+                    TerrainCell {
+                        height: if is_sea { -40 } else { 100 },
+                        surface: if is_sea { SURFACE_WATER } else { SURFACE_LAND },
+                        biome: BIOME_NONE,
+                    },
+                );
+            }
+        }
+        let pts = vertical_pts();
+        let touched = carve_corridor(&mut g, &pts, 1.0, 1.0, 3, true);
+        assert!(touched > 0, "宽河应改动若干格，实得 {touched}");
+        for y in 0..10 {
+            let c = g.get(6, y).expect("海列格在界内");
+            assert!(
+                c.height >= 1,
+                "宽河走廊内的海面格 (6, {y}) 应抬到 ≥ 1 m（legacy 口径），实得 {} m",
+                c.height
+            );
+            assert_eq!(c.surface, SURFACE_WATER, "海面格 (6, {y}) 应仍是水面");
         }
     }
 
