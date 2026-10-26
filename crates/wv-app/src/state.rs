@@ -50,6 +50,37 @@ pub struct PendingLinePoi {
     pub end_cell: (i32, i32),
 }
 
+/// 端点拖拽拖的是哪一端（T12：改道 / 延伸的对称两侧）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DraggedEnd {
+    /// 首顶点（折线起点）。
+    First,
+    /// 末顶点（折线终点）。
+    Last,
+}
+
+/// 端点拖拽会话的**纯数据投影**（ADR-0070 D4 · 计划 Task 12）。
+///
+/// 与 [`PendingLinePoi`] 同款落在 state（会话态，**不落盘**）：拖拽只改
+/// `preview`，世界数据在松手提交时经命令链一次性落账。字段面里要记住
+/// 三件事——拖的是谁（`id`）、拖的哪端（`end`）、原线长什么样
+/// （`original`，分叉段计算与「拖回原位 = 无变化不提交」都靠它）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct EndpointDrag {
+    /// 被拖的线段 POI（= 当时的 `selected`）。
+    pub id: wv_core::id::Id,
+    /// 拖的是首端还是末端。
+    pub end: DraggedEnd,
+    /// 拖拽开始时的原始折线（图内局部 wu；只读基准，不随拖动变）。
+    pub original: Vec<Vec2>,
+    /// 拖动中的预览折线（图内局部 wu；末点 = 光标 / 吸附点）。
+    pub preview: Vec<Vec2>,
+    /// 预览重算的缓存键：目标点所在格（格变才重算，T11 同语义）。
+    pub target_cell: (i32, i32),
+    /// 汇流吸附目标：`(另一条河的 ID, 吸附点)`。`Some` = 预览高亮该线。
+    pub snap: Option<(wv_core::id::Id, Vec2)>,
+}
+
 /// 线段 POI 工具会话态（ADR-0070 D4）。
 ///
 /// T10 只立「工具激活 + 当前线的种类」让工具条与分发器可写；T11 在此扩展
@@ -79,6 +110,8 @@ pub struct LinePoiState {
     pub pending: Option<PendingLinePoi>,
     /// 选中的既有线段 POI（工具开着点中既有线；Esc / 点空白清除）。
     pub selected: Option<wv_core::id::Id>,
+    /// 进行中的端点拖拽（T12：改道 / 延伸 / 汇流吸附）。会话态，不落盘。
+    pub drag: Option<EndpointDrag>,
 }
 
 // 2026-10-18（ADR-0033）：`ContinentGenerationStash` / `ContinentGenerationState`

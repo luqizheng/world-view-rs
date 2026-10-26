@@ -30,11 +30,13 @@ use bevy::prelude::*;
 use wv_core::distance::{LineKind, Place};
 use wv_core::id::Id;
 use wv_core::map::road_derive::effective_line_kind;
-use wv_terrain::line_path::{plan_polyline, LinePathMode};
+use wv_edit::command::EditCommand;
+use wv_terrain::line_path::{carve_corridor, plan_polyline, LinePathMode};
 use wv_terrain::{TerrainCell, TerrainGrid};
 
 use crate::state::{
-    DrillState, GridConfig, LinePoiState, PendingLinePoi, PlaybackState, ViewState, WorldProjection,
+    DraggedEnd, DrillState, EndpointDrag, GridConfig, LinePoiState, PendingLinePoi, PlaybackState,
+    ViewState, WorldProjection,
 };
 
 /// 选中既有线的命中阈值（**屏幕像素**）。
@@ -162,7 +164,7 @@ pub fn cancel_pending(pending: &mut Option<PendingLinePoi>) {
     *pending = None;
 }
 
-/// 会话失效（变图）时的清理口径（评审修复 R1）。
+/// 会话失效（变图）时的清理口径（评审修复 R1；T12 扩展拖拽会话）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionReset {
     /// 重绑会话（拍回 Idle、图换成当前图）。
@@ -171,19 +173,22 @@ pub struct SessionReset {
     pub clear_pending: bool,
     /// 弃 selected。
     pub clear_selected: bool,
+    /// 弃端点拖拽会话（T12：旧图预览画进新图 = 幽灵线）。
+    pub clear_drag: bool,
 }
 
-/// 变图即弃的**完整口径**（纯函数）：pending 与 selected **一并**弃。
+/// 变图即弃的**完整口径**（纯函数）：pending、selected 与拖拽**一并**弃。
 ///
 /// 只清 pending 的旧口径漏了 selected——旧图的选中线画进新图视框成幽灵
 /// 高亮，且选中态面板会用**当前图**的比例尺换算旧图线宽写回
-/// `line_width_m`（数据级错误），故两者同口径同弃。
+/// `line_width_m`（数据级错误），故三者同口径同弃（T12 加拖拽会话）。
 pub fn reset_on_map_change(session: &PinSession, current: Option<&Id>) -> SessionReset {
     let changed = session.map.as_ref() != current;
     SessionReset {
         rebind: changed,
         clear_pending: changed,
         clear_selected: changed,
+        clear_drag: changed,
     }
 }
 
@@ -344,6 +349,17 @@ fn point_seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f32 {
     let t = ((p - a).dot(ab) / len2).clamp(0.0, 1.0);
     let foot = a + ab * t;
     p.distance(foot)
+}
+
+/// 扁平折线 → 顶点列表（`Place.line` 的 `[x0,y0,x1,y1,…]` 视图）。
+///
+/// 奇偶不齐的脏数据按「能凑几对凑几对」截断（命中 / 拖拽 / 描画三处同款
+/// 容错，单独提出来免得第四份拷贝）。
+pub fn line_pts(line: &[f32]) -> Vec<Vec2> {
+    line.chunks(2)
+        .filter(|c| c.len() == 2)
+        .map(|c| Vec2::new(c[0], c[1]))
+        .collect()
 }
 
 /// 线段 POI 命中：当前图锚定、且是线段 POI（`effective_line_kind` 判别，
@@ -583,6 +599,435 @@ pub fn commit_pending_line(
     }
 }
 
+// ============================================================================
+// 端点拖拽（ADR-0070 D4 · 计划 Task 12）：改道 / 延伸 / 汇流吸附
+// ============================================================================
+//
+// 与钉点同款的纯函数纪律：状态机与几何全部可单测，Bevy 系统
+// [`line_poi_tool_input`] 只做取参、gate 与回写。提交走**整线重发**
+// `UpdatePlaceLineCommand` + 新增段下切 [`CarveSegmentCommand`]，两条命令
+// 同一 `Transaction`——一次撤销整线与新增段下切全回；旧段下切不重算
+// （一次性原则：下切是创建时的一次性动作，改道只补新段的账）。
+
+/// 端点命中：首 / 末顶点在 `tol_wu` 内才起拖（中段顶点不算——拖中间点
+/// 是后续任务的口子）；两端都中取更近者。折线不足两点 → `None`。
+pub fn endpoint_hit(pts: &[Vec2], p: Vec2, tol_wu: f32) -> Option<DraggedEnd> {
+    let first = pts.first()?;
+    let last = pts.last()?;
+    let (df, dl) = (p.distance(*first), p.distance(*last));
+    match (df <= tol_wu, dl <= tol_wu) {
+        (true, true) if df <= dl => Some(DraggedEnd::First),
+        (true, _) => Some(DraggedEnd::First),
+        (_, true) => Some(DraggedEnd::Last),
+        _ => None,
+    }
+}
+
+/// 起拖（纯函数）：记录原线为只读基准，预览从原线出发。
+///
+/// `target_cell` 取起拖时光标格——首帧预览 = 原线（光标还没走出起手格
+/// 就不该有新路径）。
+pub fn begin_endpoint_drag(
+    id: Id,
+    end: DraggedEnd,
+    original: Vec<Vec2>,
+    cursor_cell: (i32, i32),
+) -> EndpointDrag {
+    EndpointDrag {
+        id,
+        end,
+        preview: original.clone(),
+        original,
+        target_cell: cursor_cell,
+        snap: None,
+    }
+}
+
+/// 拖拽预览重算（纯函数；返回**是否重算了**）。锚点 = 未动一侧的相邻
+/// 顶点，从锚点向目标（光标或吸附点）按当前模式重新规划尾巴。
+///
+/// 缓存键 [`EndpointDrag::target_cell`] 在**规划失败**时同样推进（T11
+/// `end_cell` 同语义：同格不重试，把「不可达」也钉进缓存防重算风暴）；
+/// 失败时保留上一次的好预览——端点停在原地，不给作者「线断进山里」
+/// 的错觉。
+pub fn ensure_drag_preview(
+    drag: &mut EndpointDrag,
+    target: Vec2,
+    grid: &TerrainGrid,
+    cell_size: f32,
+    mode: LinePathMode,
+    seed: u64,
+) -> bool {
+    let n = drag.original.len();
+    if n < 2 || cell_size <= 0.0 {
+        return false;
+    }
+    let target_cell = cell_of(target, cell_size);
+    // 缓存门在纯函数里（[`ensure_preview`] 同款）：同目标格零重算——
+    // 测试直接数本函数的重算次数，系统调用点不必自建计数器。
+    if drag.preview.len() >= 2 && drag.target_cell == target_cell {
+        return false;
+    }
+    let anchor = match drag.end {
+        DraggedEnd::Last => drag.original[n - 2],
+        DraggedEnd::First => drag.original[1],
+    };
+    let raw = plan_polyline(
+        grid,
+        cell_size,
+        (anchor.x, anchor.y),
+        (target.x, target.y),
+        mode,
+        seed,
+    );
+    drag.target_cell = target_cell;
+    if raw.is_empty() {
+        return false; // 不可达 / 与锚点同格：保留旧预览。
+    }
+    let mut pts: Vec<Vec2> = raw.iter().map(|&(x, y)| Vec2::new(x, y)).collect();
+    pts[0] = anchor; // 首尾替换为精确位置（plan_polyline 文档的调用方职责）。
+    let last = pts.len() - 1;
+    pts[last] = target;
+    // 拼整线：固定段原样保留，被拖的旧端点掐掉（预览首/尾 = 精确位置）。
+    drag.preview = match drag.end {
+        DraggedEnd::Last => {
+            let mut line = drag.original[..n - 1].to_vec();
+            line.extend(pts[1..].iter().copied());
+            line
+        }
+        DraggedEnd::First => {
+            let mut line: Vec<Vec2> = pts.iter().rev().copied().collect();
+            line.extend(drag.original[2..].iter().copied());
+            line
+        }
+    };
+    true
+}
+
+/// 汇流吸附（纯函数）：拖拽端点落进**另一条河**折线的 `tol_wu` 容差内
+/// → 返回 `(目标线 ID, 最近点)`；吸附 = 端点替换为最近点（v1 仅几何
+/// 重合，不建拓扑）。自己排除（不能吸给自己）；道路线不参与（v1 只做
+/// 河-河汇流；路网端点吸附由推导边按锚点容差自行处理，T9）。
+pub fn river_snap(
+    world: &wv_core::World,
+    map: &Id,
+    exclude: &Id,
+    p: Vec2,
+    tol_wu: f32,
+) -> Option<(Id, Vec2)> {
+    let mut best: Option<(f32, &Id, Vec2)> = None;
+    for place in &world.distances.places {
+        if &place.id == exclude || place.map.as_ref() != Some(map) {
+            continue;
+        }
+        if effective_line_kind(place) != Some(LineKind::River) {
+            continue; // 点状地点 / 道路线不吸附。
+        }
+        let Some(line) = &place.line else { continue };
+        let (d, foot) = closest_point_on_polyline(p, &line_pts(line));
+        if d <= tol_wu && best.is_none_or(|(bd, _, _)| d < bd) {
+            best = Some((d, &place.id, foot));
+        }
+    }
+    best.map(|(_, id, foot)| (id.clone(), foot))
+}
+
+/// 折线上距 `p` 最近的点（`(距离, 垂足)`）；折线不足 2 点 → 无穷远。
+fn closest_point_on_polyline(p: Vec2, pts: &[Vec2]) -> (f32, Vec2) {
+    let mut best = (f32::INFINITY, p);
+    for w in pts.windows(2) {
+        let (d, foot) = closest_point_on_seg(p, w[0], w[1]);
+        if d < best.0 {
+            best = (d, foot);
+        }
+    }
+    best
+}
+
+/// 线段上距 `p` 最近的点（经典垂足钳制）。
+fn closest_point_on_seg(p: Vec2, a: Vec2, b: Vec2) -> (f32, Vec2) {
+    let ab = b - a;
+    let len2 = ab.length_squared();
+    if len2 <= f32::EPSILON {
+        return (p.distance(a), a); // 退化线段 = 点距。
+    }
+    let t = ((p - a).dot(ab) / len2).clamp(0.0, 1.0);
+    let foot = a + ab * t;
+    (p.distance(foot), foot)
+}
+
+/// 拖拽提交计划（纯函数）：整线 + 「分叉点起的新增段」。
+///
+/// 新增段 = 新折线中**不再与原线重合**的部分（从未动的一端回找最后一致
+/// 的顶点为分叉点）。喂 `carve_corridor` 的只有这一段——旧段下切保留原样
+/// （一次性原则），与旧段共享的前缀也不重复下切。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DragCommitPlan {
+    /// 提交后的整线（图内局部 wu；`UpdatePlaceLineCommand` 的载荷）。
+    pub new_line: Vec<(f32, f32)>,
+    /// 分叉点起的新增段（`carve_corridor` 的中轴）。
+    pub new_segment: Vec<(f32, f32)>,
+}
+
+/// 从拖拽会话出提交计划；`None` = 不可提交（预览退化，或拖回原位无新增段
+/// ——无变化不发命令、不进撤销栈）。
+pub fn drag_commit_plan(drag: &EndpointDrag) -> Option<DragCommitPlan> {
+    if drag.preview.len() < 2 {
+        return None;
+    }
+    let new_line: Vec<(f32, f32)> = drag.preview.iter().map(|p| (p.x, p.y)).collect();
+    let from_start = drag.end == DraggedEnd::First;
+    let fork = fork_index(&drag.original, &drag.preview, from_start);
+    let new_segment: Vec<(f32, f32)> = if from_start {
+        drag.preview[..=fork].iter().map(|p| (p.x, p.y)).collect()
+    } else {
+        drag.preview[fork..].iter().map(|p| (p.x, p.y)).collect()
+    };
+    if new_segment.len() < 2 {
+        return None; // 拖回原位 / 预览没动：无可提交的新增段。
+    }
+    Some(DragCommitPlan {
+        new_line,
+        new_segment,
+    })
+}
+
+/// 分叉点下标：从未动的一端起，新旧折线最后一致的顶点在 `new` 中的下标。
+///
+/// 预览的构造保证固定端两端逐位一致（[`ensure_drag_preview`] 保留固定段），
+/// 故结果下标两侧都合法；坐标相等按 `1e-3` wu 容差判（Chaikin / f32 噪声）。
+fn fork_index(old: &[Vec2], new: &[Vec2], from_start: bool) -> usize {
+    const EPS2: f32 = 1e-3 * 1e-3;
+    let common = old.len().min(new.len());
+    let mut i = 0;
+    while i < common {
+        let (o, n) = if from_start {
+            (old[old.len() - 1 - i], new[new.len() - 1 - i])
+        } else {
+            (old[i], new[i])
+        };
+        if o.distance_squared(n) > EPS2 {
+            break;
+        }
+        i += 1;
+    }
+    if from_start {
+        new.len() - 1 - i
+    } else {
+        i.saturating_sub(1)
+    }
+}
+
+/// 端点拖拽「新增段下切」的应用层内部命令（ADR-0070 D4 · 计划 Task 12）。
+///
+/// ## 为什么在 wv-app 而不是 wv-edit
+///
+/// v1 的下切粒度是「整线重发 + 新增段差量」——差量来自交互会话（旧折线 vs
+/// 新折线的分叉，[`drag_commit_plan`]），wv-edit 的命令族没有这个概念。
+/// 仿 `road_sync::MigrateCarrier` 先例：应用层实现 `EditCommand`，仍走
+/// `Transaction → History` 唯一编辑链（AGENTS §3.3），不绕过命令栈。
+/// 快照 / diff / 回放与 `CreateLinePoiCommand` 的下切半区逐位同款。
+///
+/// ## 撤销语义
+///
+/// 本命令与 `UpdatePlaceLineCommand` 同一事务：撤销一次 = 整线回退 +
+/// 新增段下切逐格回放，世界与拖拽前逐位一致。
+#[derive(Debug)]
+pub struct CarveSegmentCommand {
+    map: Id,
+    spec: wv_edit::command::CarveSpec,
+    cell_size: f32,
+    /// apply 时缓存的受下切格旧值：`(gx, gy, before_cell)`。
+    before: std::sync::Mutex<Vec<(i32, i32, TerrainCell)>>,
+}
+
+impl CarveSegmentCommand {
+    /// 从 `(map, spec, cell_size)` 一步构造。
+    pub fn new(map: Id, spec: wv_edit::command::CarveSpec, cell_size: f32) -> Self {
+        Self {
+            map,
+            spec,
+            cell_size,
+            before: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+/// 把 `TerrainGrid` 写回世界（`terrain_grid_of` 的逆桥；wv-edit 命令内部
+/// `from_grid` 的应用侧镜像）。
+fn store_grid(world: &mut wv_core::World, map: &Id, grid: &TerrainGrid) {
+    let cells = grid
+        .cells()
+        .iter()
+        .map(|c| wv_core::terrain::TerrainCellData {
+            height: c.height,
+            surface: c.surface,
+            biome: c.biome,
+        })
+        .collect();
+    world.set_terrain(
+        map.clone(),
+        wv_core::terrain::TerrainData {
+            width: grid.width(),
+            height: grid.height(),
+            cells,
+        },
+    );
+}
+
+impl EditCommand for CarveSegmentCommand {
+    fn label(&self) -> String {
+        format!("改道下切新段（{}）", self.map)
+    }
+
+    fn apply(&self, world: &mut wv_core::World) -> wv_edit::command::EditResult<Vec<String>> {
+        let Some(mut grid) = terrain_grid_of(world, &self.map) else {
+            return Err(wv_edit::command::EditError::TerrainMismatch(format!(
+                "地图 `{}` 无地形网格",
+                self.map
+            )));
+        };
+        let snapshot: Vec<TerrainCell> = grid.cells().to_vec();
+        carve_corridor(
+            &mut grid,
+            &self.spec.pts,
+            self.spec.strength,
+            self.cell_size,
+            self.spec.width_cells,
+            self.spec.mark_water,
+        );
+        let mut before = self
+            .before
+            .lock()
+            .map_err(|_| wv_edit::command::EditError::Precondition("命令锁中毒".into()))?;
+        before.clear();
+        let width = grid.width() as usize;
+        for (idx, (old, new)) in snapshot.iter().zip(grid.cells().iter()).enumerate() {
+            if old != new {
+                let gx = (idx % width) as i32;
+                let gy = (idx / width) as i32;
+                before.push((gx, gy, *old));
+            }
+        }
+        drop(before);
+        store_grid(world, &self.map, &grid);
+        Ok(vec![format!("maps/{}/terrain.bin", self.map)])
+    }
+
+    fn revert(&self, world: &mut wv_core::World) -> wv_edit::command::EditResult<()> {
+        let before = self
+            .before
+            .lock()
+            .map_err(|_| wv_edit::command::EditError::Precondition("命令锁中毒".into()))?
+            .clone();
+        if before.is_empty() {
+            return Ok(()); // 未 apply 过 / 无格变动 → 原样。
+        }
+        let Some(mut grid) = terrain_grid_of(world, &self.map) else {
+            return Err(wv_edit::command::EditError::TerrainMismatch(format!(
+                "地图 `{}` 无地形网格",
+                self.map
+            )));
+        };
+        for (gx, gy, cell) in &before {
+            grid.set(*gx, *gy, *cell);
+        }
+        store_grid(world, &self.map, &grid);
+        Ok(())
+    }
+}
+
+/// 端点拖拽的松手提交（系统松手帧与测试共用；[`commit_pending_line`]
+/// 的拖拽对偶）。
+///
+/// 一条事务 = `UpdatePlaceLineCommand`（整线重发）+（下切模式且有地形时）
+/// [`CarveSegmentCommand`]（仅新增段）——**一次撤销整线 + 两段下切全回；
+/// 旧段下切保留原样**（一次性原则：创建时的下切是已发生的账，改道只补
+/// 新段的账）。绕行模式（Route）只重发整线，不碰地形。
+///
+/// 世界只经 `projection` 一个口子进（与 [`commit_pending_line`] 同款）；
+/// 提交后走 [`crate::edit::road_sync::sync_derived_road_edges`]（T9）。
+/// 返回是否成功（无变化 / 失败均 `false`，失败已发 notice）。
+pub fn commit_endpoint_drag(
+    drag: &EndpointDrag,
+    mode: LinePathMode,
+    map: &Id,
+    edit: &mut crate::edit::editing::EditHistory,
+    projection: &mut WorldProjection,
+    notice: &mut crate::ui_shell::ShellNotice,
+    frame: u64,
+) -> bool {
+    let Some(plan) = drag_commit_plan(drag) else {
+        return false; // 拖回原位 / 预览退化：不发命令、不进撤销栈。
+    };
+    let world = &projection.world;
+    let Some(place) = world
+        .distances
+        .places
+        .iter()
+        .find(|p| p.id == drag.id)
+        .cloned()
+    else {
+        notice.error("选中的线已不在表里（被撤销删除等）", frame);
+        return false;
+    };
+    // 拖了又拖回原位（折线逐点一致）：同「无真变化」，不发命令。
+    let new_flat: Vec<f32> = plan.new_line.iter().flat_map(|(x, y)| [*x, *y]).collect();
+    if place.line.as_deref() == Some(new_flat.as_slice()) {
+        return false;
+    }
+    let km = map_km_per_wu(world, map);
+    let cell_size = grid_cell_size(world, map);
+    let carve = match mode {
+        LinePathMode::Route => None,
+        LinePathMode::Carve => {
+            let Some(cell) = cell_size else {
+                notice.error(
+                    "这张图没有地形栅格，无法下切新段；可改用「绕行」模式拖拽",
+                    frame,
+                );
+                return false;
+            };
+            Some(wv_edit::command::CarveSpec {
+                pts: plan.new_segment,
+                strength: CARVE_STRENGTH,
+                width_cells: width_cells_of(
+                    width_m_to_wu(place.line_width_m.unwrap_or(0.0), km),
+                    cell,
+                ),
+                mark_water: effective_line_kind(&place) != Some(LineKind::Road),
+            })
+        }
+    };
+    let name = place.name.clone();
+    let mut tx = wv_edit::history::Transaction::new();
+    tx.push(Box::new(wv_edit::UpdatePlaceLineCommand::new(
+        drag.id.clone(),
+        Some(new_flat),
+    )));
+    if let Some(spec) = carve {
+        tx.push(Box::new(CarveSegmentCommand::new(
+            map.clone(),
+            spec,
+            cell_size.unwrap_or(0.0),
+        )));
+    }
+    match edit.history.commit(&mut projection.world, tx) {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
+            projection.dirty = true;
+            // T9：线即路网——折线变了，推导边要重建（不进脏路径）。
+            crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
+            notice.info(format!("已改道「{name}」"), frame);
+            true
+        }
+        Err(e) => {
+            notice.error(format!("改道失败：{e}"), frame);
+            false
+        }
+    }
+}
+
 /// 线段 POI 交互系统（`Update`；排在 `track_cursor_world` 之后）。
 ///
 /// Gate 链（任一命中即退，顺序有意）：
@@ -607,11 +1052,12 @@ pub fn line_poi_tool_input(
     mut edit: ResMut<crate::edit::editing::EditHistory>,
     mut notice: ResMut<crate::ui_shell::ShellNotice>,
 ) {
-    // ① 工具未激活 → 弃会话（切工具残留的钉点 / 选中一并清：面板随工具
-    //    收起，残留选中再无出口）。
+    // ① 工具未激活 → 弃会话（切工具残留的钉点 / 选中 / 拖拽一并清：面板随
+    //    工具收起，残留选中再无出口）。
     if !line_poi.tool_active {
         if line_poi.pending.take().is_some()
             || line_poi.selected.take().is_some()
+            || line_poi.drag.take().is_some()
             || *session != PinSession::default()
         {
             *session = PinSession::default();
@@ -623,8 +1069,11 @@ pub fn line_poi_tool_input(
         return;
     }
     // ③ 播放锁（T10 评审 minor ①）：播放中不消费输入、**不重算预览**——
-    //    已开的预览原样保留（pending 在态里，恢复暂停即继续）。
-    if playback.playing {
+    //    已开的预览原样保留（pending / 拖拽会话在态里，恢复暂停即继续）。
+    //    唯一放行的是拖拽的「松手」裁决（T12）：播放中松手 = 弃拖拽不提交
+    //    （与面板 `panel_can_commit` 同口径——提交必须闸，会话本身可留）。
+    let drag_release = buttons.just_released(MouseButton::Left) && line_poi.drag.is_some();
+    if playback.playing && !drag_release {
         return;
     }
     // 面板「确认」可能在本系统之外清了 pending（egui pass 晚于 Update）：
@@ -650,6 +1099,9 @@ pub fn line_poi_tool_input(
             if reset.clear_selected {
                 line_poi.selected = None;
             }
+            if reset.clear_drag {
+                line_poi.drag = None;
+            }
             m
         }
         None => return,
@@ -657,11 +1109,34 @@ pub fn line_poi_tool_input(
 
     let frame = (time.elapsed_secs() * 60.0) as u64;
 
-    // ── Esc：优先级 钉点 > 选中 ──
+    // ── 松手：拖拽提交（T12）。播放中松手在下面的 gate 已放行到这里，
+    //    但提交必须闸（与面板 `panel_can_commit` 同口径）：播放中弃拖拽。──
+    if drag_release {
+        if let Some(drag) = line_poi.drag.take() {
+            if !playback.playing {
+                commit_endpoint_drag(
+                    &drag,
+                    line_poi.mode,
+                    &map,
+                    &mut edit,
+                    &mut projection,
+                    &mut notice,
+                    frame,
+                );
+            }
+        }
+        return;
+    }
+
+    // ── Esc：优先级 拖拽 > 钉点 > 选中 ──
     // （必须用 Bevy 的 `KeyCode`——`ButtonInput<egui::Key>` 没有维护者，
     //   cell_stroke 的 M2 教训；`wants_keyboard` = 作者在输入框里打字，
     //   Esc 归 egui，不归地图手势。）
     if keys.just_pressed(KeyCode::Escape) && !ui.wants_keyboard {
+        if line_poi.drag.take().is_some() {
+            // 拖拽中 Esc = 弃拖拽：未提交，世界原样；选中保留（面板还在）。
+            return;
+        }
         if session.phase != PinPhase::Idle {
             cancel_pending(&mut line_poi.pending);
             session.phase = PinPhase::Idle;
@@ -738,9 +1213,64 @@ pub fn line_poi_tool_input(
         }
     }
 
+    // ── 拖拽预览重算（T12：汇流吸附 + 格级缓存，防每帧 A*）──
+    // 吸附检测是廉价几何（逐帧无妨）；重规划走 T11 同款格门——目标点
+    // （光标或吸附点）跨格才重算。拖拽中的预览跟随吸附点，松手提交即吸附点。
+    if let Some(drag) = &mut line_poi.drag {
+        let cell = grid.cell_size;
+        let tol = SELECT_TOLERANCE_PX * view.scale.max(0.25);
+        let snapped = river_snap(&projection.world, &map, &drag.id, local, tol);
+        let target = snapped.as_ref().map_or(local, |(_, p)| *p);
+        // 网格 clone（大图 ≈ MB 级）只在跨格时发生；同格内由
+        // `ensure_drag_preview` 的缓存门直接短路（零重算）。
+        let stale = drag.target_cell != cell_of(target, cell);
+        drag.snap = snapped;
+        if stale {
+            if let Some(terrain) = terrain_grid_of(&projection.world, &map) {
+                let n = drag.original.len();
+                let anchor = match drag.end {
+                    DraggedEnd::Last => drag.original[n.saturating_sub(2)],
+                    DraggedEnd::First => drag.original[1.min(n.saturating_sub(1))],
+                };
+                let seed = preview_seed(map.as_str(), cell_of(anchor, cell));
+                ensure_drag_preview(drag, target, &terrain, cell, mode, seed);
+            }
+        }
+    }
+
     // ── 左键点击 ──
     if !buttons.just_pressed(MouseButton::Left) || ui.wants_pointer {
         return;
+    }
+    // 拖拽进行中：点击不参与（拖拽由移动 + 松手驱动，T12）。
+    if line_poi.drag.is_some() {
+        return;
+    }
+    // 端点命中优先（Idle + 已选中）：起拖。拖中段顶点不是本任务的口子，
+    // 命中阈值与选中同源（屏幕 8 px × scale）。
+    if session.phase == PinPhase::Idle {
+        if let Some(id) = line_poi.selected.clone() {
+            let pts = projection
+                .world
+                .distances
+                .places
+                .iter()
+                .find(|p| p.id == id)
+                .and_then(|p| p.line.as_deref())
+                .map(line_pts);
+            let tol = SELECT_TOLERANCE_PX * view.scale.max(0.25);
+            if let Some(pts) = pts {
+                if let Some(end) = endpoint_hit(&pts, local, tol) {
+                    line_poi.drag = Some(begin_endpoint_drag(
+                        id,
+                        end,
+                        pts,
+                        cell_of(local, grid.cell_size),
+                    ));
+                    return;
+                }
+            }
+        }
     }
     // 命中检测只在 Idle 拍有意义（Following 的点击一律定终点）。
     let hit = if session.phase == PinPhase::Idle {
@@ -831,8 +1361,13 @@ pub fn draw_line_poi_preview(
     let to_view = |p: Vec2| grid.map_to_view(p);
     let dot_r = (SELECT_TOLERANCE_PX * 0.6 * view.scale).max(0.5);
 
-    // 选中线高亮：金白描边（给「面板正在编辑哪条」一个明确锚）。
-    if let Some(id) = &line_poi.selected {
+    // 选中线高亮：金白描边（给「面板正在编辑哪条」一个明确锚）。拖拽中的
+    // 那条让位给下方的拖拽预览——新旧两线叠影读不出「改成了什么」。
+    let dragging_selected = line_poi
+        .selected
+        .as_ref()
+        .is_some_and(|id| line_poi.drag.as_ref().is_some_and(|d| &d.id == id));
+    if let (Some(id), false) = (&line_poi.selected, dragging_selected) {
         if let Some(place) = projection
             .world
             .distances
@@ -841,22 +1376,75 @@ pub fn draw_line_poi_preview(
             .find(|p| &p.id == id)
         {
             if let Some(line) = &place.line {
-                let pts: Vec<Vec2> = line
-                    .chunks(2)
-                    .filter(|c| c.len() == 2)
-                    .map(|c| to_view(Vec2::new(c[0], c[1])))
-                    .collect();
+                let pts = line_pts(line);
                 for w in pts.windows(2) {
-                    gizmos.line_2d(w[0], w[1], Color::srgb(1.0, 0.85, 0.40));
+                    gizmos.line_2d(to_view(w[0]), to_view(w[1]), Color::srgb(1.0, 0.85, 0.40));
                 }
                 for p in &pts {
                     gizmos.circle_2d(
-                        Isometry2d::from_translation(*p),
+                        Isometry2d::from_translation(to_view(*p)),
                         dot_r,
                         Color::srgb(1.0, 0.85, 0.40),
                     );
                 }
             }
+        }
+    }
+
+    // 端点拖拽（T12）：新折线 + 汇流吸附目标高亮 + 拖动端点圆点。全部
+    // gizmo 即帧即弃（每帧重建 mesh 资产 = 泄漏，历史坑）。颜色按被拖线
+    // 的种类走（与工具当前种类可能不一致——选中后切了种类档）。
+    if let Some(drag) = &line_poi.drag {
+        let kind = projection
+            .world
+            .distances
+            .places
+            .iter()
+            .find(|p| p.id == drag.id)
+            .map(|p| effective_line_kind(p).unwrap_or(LineKind::River))
+            .unwrap_or(line_poi.kind);
+        let (drag_color, drag_dot) = match kind {
+            LineKind::River => (Color::srgb(0.30, 0.62, 0.86), Color::srgb(0.55, 0.80, 0.95)),
+            LineKind::Road => (Color::srgb(0.85, 0.65, 0.30), Color::srgb(0.95, 0.82, 0.55)),
+        };
+        // 吸附目标：亮青描边 + 吸附点圆环（「松手会吸到这」的明确预告）。
+        if let Some((sid, sp)) = &drag.snap {
+            let snap_color = Color::srgb(0.55, 0.95, 0.90);
+            if let Some(place) = projection
+                .world
+                .distances
+                .places
+                .iter()
+                .find(|p| &p.id == sid)
+            {
+                if let Some(line) = &place.line {
+                    for w in line_pts(line).windows(2) {
+                        gizmos.line_2d(to_view(w[0]), to_view(w[1]), snap_color);
+                    }
+                }
+            }
+            gizmos.circle_2d(
+                Isometry2d::from_translation(to_view(*sp)),
+                dot_r * 1.6,
+                snap_color,
+            );
+        }
+        // 拖拽中的新折线（旧线仍按选中高亮让位逻辑隐藏）。
+        if drag.preview.len() >= 2 {
+            for w in drag.preview.windows(2) {
+                gizmos.line_2d(to_view(w[0]), to_view(w[1]), drag_color);
+            }
+        }
+        // 拖动端点：实心大圆点（哪端在手上要一眼可辨）。
+        if let Some(tip) = match drag.end {
+            DraggedEnd::Last => drag.preview.last(),
+            DraggedEnd::First => drag.preview.first(),
+        } {
+            gizmos.circle_2d(
+                Isometry2d::from_translation(to_view(*tip)),
+                dot_r * 1.5,
+                drag_dot,
+            );
         }
     }
 
@@ -1406,5 +1994,419 @@ mod tests {
         assert!((cell - 8.0).abs() < 1e-4, "1024 / 128 = 8，实际 {cell}");
         // 无地形图 → None。
         assert!(grid_cell_size(&world, &Id::new_unchecked("nope")).is_none());
+    }
+
+    // ══ 计划 Task 12 · 端点拖拽（改道 / 延伸 / 汇流吸附）═══════════════
+
+    use crate::state::{DraggedEnd, EndpointDrag};
+    use crate::ui_shell::ShellNotice;
+
+    /// 32×32 平地（高 100、全陆）+ 图节点（extent 256×256 → 格 8 wu）的最小世界。
+    fn drag_world() -> wv_core::World {
+        let mut world = wv_core::World::default();
+        world.maps.push(wv_core::map::MapNode {
+            id: map_id(),
+            name: "甲".into(),
+            level: wv_core::map::MapLevel::Region,
+            parent: None,
+            children: vec![],
+            layers: vec![],
+            icons: vec![],
+            extent: Some(wv_core::map::Extent {
+                width: 256.0,
+                height: 256.0,
+                origin: None,
+            }),
+            raster: None,
+            geographic_source: None,
+            time_span: None,
+            unit_per_km: None,
+            orientation: 0.0,
+            base: None,
+            outline_polygon: None,
+        });
+        let cells = vec![
+            wv_core::terrain::TerrainCellData {
+                height: 100,
+                surface: 1,
+                biome: 0,
+            };
+            32 * 32
+        ];
+        world.set_terrain(
+            map_id(),
+            wv_core::terrain::TerrainData {
+                width: 32,
+                height: 32,
+                cells,
+            },
+        );
+        world
+    }
+
+    /// 取图上地形格的快捷方式（列主序断言用）。
+    fn cell_at(world: &wv_core::World, i: i32, j: i32) -> wv_core::terrain::TerrainCellData {
+        let data = world.terrain_of(&map_id()).expect("夹具有地形");
+        data.cells[(j as usize) * 32 + i as usize]
+    }
+
+    /// 写回图上地形格（夹具快照回放用）。
+    fn snapshot_corridor(
+        world: &wv_core::World,
+        corridor: &[(i32, i32)],
+    ) -> Vec<wv_core::terrain::TerrainCellData> {
+        corridor
+            .iter()
+            .map(|&(i, j)| cell_at(world, i, j))
+            .collect()
+    }
+
+    /// 端点命中：首/末顶点容差内才命中（中段不算），两端都中取更近者。
+    #[test]
+    fn endpoint_hit_picks_nearest_end_within_tolerance() {
+        let pts = vec![Vec2::new(0.0, 0.0), Vec2::new(100.0, 0.0)];
+        assert_eq!(
+            endpoint_hit(&pts, Vec2::new(3.0, 2.0), 8.0),
+            Some(DraggedEnd::First),
+            "起点 3.6 wu 内应命中首端"
+        );
+        assert_eq!(
+            endpoint_hit(&pts, Vec2::new(97.0, 1.0), 8.0),
+            Some(DraggedEnd::Last),
+            "终点 3.2 wu 内应命中末端"
+        );
+        assert_eq!(
+            endpoint_hit(&pts, Vec2::new(50.0, 0.0), 8.0),
+            None,
+            "中段顶点不是端点，不得起拖"
+        );
+        assert_eq!(
+            endpoint_hit(&pts, Vec2::new(11.0, 0.0), 8.0),
+            None,
+            "容差外不命中"
+        );
+    }
+
+    /// 拖拽预览只在新目标格变化时重算（T11 end_cell 缓存门同语义，防每帧 A*）。
+    #[test]
+    fn drag_preview_recomputes_only_on_target_cell_change() {
+        let grid = flat_grid();
+        let cell = 8.0_f32;
+        let original = vec![Vec2::new(40.0, 40.0), Vec2::new(40.0, 120.0)];
+        let mut drag = begin_endpoint_drag(
+            Id::new_unchecked("river_1"),
+            DraggedEnd::Last,
+            original,
+            (5, 15),
+        );
+        let mut recomputes = 0_u32;
+        let feed = |drag: &mut EndpointDrag, target: Vec2| {
+            ensure_drag_preview(drag, target, &grid, cell, LinePathMode::Carve, 7)
+        };
+        // 首次挪到新格：必然重算。
+        recomputes += feed(&mut drag, Vec2::new(200.0, 124.0)) as u32;
+        assert_eq!(recomputes, 1);
+        // 同格内挪动（格 (25,15)：wu ∈ [200,208)×[120,128)）：零重算。
+        recomputes += feed(&mut drag, Vec2::new(201.0, 121.0)) as u32;
+        recomputes += feed(&mut drag, Vec2::new(206.5, 127.2)) as u32;
+        assert_eq!(
+            recomputes, 1,
+            "同格内拖动不得重算，实际重算 {recomputes} 次"
+        );
+        // 跨格 → 恰好再重算一次。
+        recomputes += feed(&mut drag, Vec2::new(200.0, 140.0)) as u32;
+        assert_eq!(recomputes, 2, "跨格应恰好重算一次，实际 {recomputes}");
+    }
+
+    /// 提交计划：整线 = 固定段 + 新段；下切只喂「分叉点起的新增段」
+    /// （与旧段共享的前缀不得重复进 carve_corridor）。
+    #[test]
+    fn drag_commit_plan_feeds_only_the_forked_tail_to_carve() {
+        let original = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(80.0, 0.0),
+            Vec2::new(160.0, 0.0),
+        ];
+        // 拖末端到 (160, 80)：锚点 = (80,0)，预览 = 固定段 + 新路径。
+        let mut drag = begin_endpoint_drag(
+            Id::new_unchecked("river_1"),
+            DraggedEnd::Last,
+            original,
+            (20, 0),
+        );
+        let grid = flat_grid();
+        assert!(ensure_drag_preview(
+            &mut drag,
+            Vec2::new(160.0, 80.0),
+            &grid,
+            8.0,
+            LinePathMode::Carve,
+            7
+        ));
+        let plan = drag_commit_plan(&drag).expect("有新段应可出计划");
+        // 整线保留固定段（前两折点原样）。
+        assert_eq!(plan.new_line[0], (0.0, 0.0));
+        assert_eq!(plan.new_line[1], (80.0, 0.0));
+        // 新段从分叉点（锚点）起——不是从线头重来。
+        assert_eq!(
+            plan.new_segment[0],
+            (80.0, 0.0),
+            "新段必须从分叉点起，实际 {:?}",
+            plan.new_segment[0]
+        );
+        assert_eq!(
+            plan.new_segment.len() + 1,
+            plan.new_line.len(),
+            "新段 = 整线去掉分叉点之前的固定段"
+        );
+
+        // 拖回原位（预览 == 原线）：无新增段 → 不可提交（不发命令）。
+        let mut drag = begin_endpoint_drag(
+            Id::new_unchecked("river_1"),
+            DraggedEnd::Last,
+            vec![Vec2::new(0.0, 0.0), Vec2::new(80.0, 0.0)],
+            (10, 0),
+        );
+        drag.preview = vec![Vec2::new(0.0, 0.0), Vec2::new(80.0, 0.0)];
+        assert!(
+            drag_commit_plan(&drag).is_none(),
+            "拖回原位不得产出提交计划"
+        );
+    }
+
+    /// 汇流吸附（计划 Task 12）：拖端点至另一条河的折线容差内 → 端点落
+    /// 该线最近点（误差 < 1e-3）；容差外 / 自己 / 道路线都不吸附。
+    #[test]
+    fn endpoint_snaps_to_other_river_line() {
+        let mut world = wv_core::World::default();
+        let mk = |id: &str, line: Vec<f32>, road: bool| Place {
+            id: Id::new_unchecked(id),
+            name: id.to_owned(),
+            feature: None,
+            map: Some(map_id()),
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+            biome: None,
+            envelope: None,
+            rank: None,
+            line: Some(line),
+            kind: None,
+            line_kind: road.then_some(LineKind::Road),
+            line_width_m: None,
+        };
+        // 目标河：水平线 y=0；被拖的河：斜线（远离目标）。
+        world
+            .distances
+            .places
+            .push(mk("river_target", vec![0.0, 0.0, 100.0, 0.0], false));
+        world
+            .distances
+            .places
+            .push(mk("river_mover", vec![50.0, 50.0, 60.0, 60.0], false));
+
+        let mover = Id::new_unchecked("river_mover");
+        // (50, 5)：距目标线 5 ≤ 8 → 吸附到最近点 (50, 0)。
+        let (id, pt) = river_snap(&world, &map_id(), &mover, Vec2::new(50.0, 5.0), 8.0)
+            .expect("8 wu 内应吸附");
+        assert_eq!(id, Id::new_unchecked("river_target"));
+        assert!(
+            pt.distance(Vec2::new(50.0, 0.0)) < 1e-3,
+            "端点应落目标线最近点，实际 ({}, {})",
+            pt.x,
+            pt.y
+        );
+        // (50, 11)：距目标线 11 > 8 → 不吸附。
+        assert!(river_snap(&world, &map_id(), &mover, Vec2::new(50.0, 11.0), 8.0).is_none());
+        // 排除自己：把目标线换成 mover 自己的线附近 → 不吸附。
+        assert!(river_snap(&world, &map_id(), &mover, Vec2::new(55.0, 55.0), 8.0).is_none());
+        // 道路线不参与（v1 只做河-河汇流）。
+        world
+            .distances
+            .places
+            .push(mk("road_target", vec![0.0, 20.0, 100.0, 20.0], true));
+        assert!(
+            river_snap(&world, &map_id(), &mover, Vec2::new(50.0, 25.0), 8.0).is_none(),
+            "路线不是汇流吸附目标"
+        );
+    }
+
+    /// 变图即弃扩展（T12）：端点拖拽会话与 pending / selected 同口径同弃。
+    #[test]
+    fn map_change_reset_clears_drag_session() {
+        let a = Id::new_unchecked("map_a");
+        let b = Id::new_unchecked("map_b");
+        let bound = PinSession {
+            phase: PinPhase::Idle,
+            map: Some(a.clone()),
+        };
+        assert!(
+            !reset_on_map_change(&bound, Some(&a)).clear_drag,
+            "同图不得清拖拽"
+        );
+        assert!(
+            reset_on_map_change(&bound, Some(&b)).clear_drag,
+            "跨图必须清拖拽（旧图预览画进新图 = 幽灵线）"
+        );
+    }
+
+    /// 改道提交（计划 Task 12 点名）：旧走廊格逐位不变（一次性原则——旧段
+    /// 下切不重算），仅分叉点起的新增段下切；撤销一次 = 整线 + 新增段全回。
+    #[test]
+    fn rerouting_keeps_previous_carve() {
+        let cell = 8.0_f32;
+        let mut edit = crate::edit::editing::EditHistory::default();
+        let mut projection = WorldProjection {
+            world: drag_world(),
+            ..Default::default()
+        };
+
+        // 夹具：竖直三折点河 (40,40)→(40,120)→(40,200)，创建即下切
+        // （宽 1 格、写水面）——「创建于下切模式」的既有状态。
+        let line: Vec<Vec2> = vec![
+            Vec2::new(40.0, 40.0),
+            Vec2::new(40.0, 120.0),
+            Vec2::new(40.0, 200.0),
+        ];
+        let place = Place {
+            id: Id::new_unchecked("river_drag"),
+            name: "测试河".into(),
+            feature: None,
+            map: Some(map_id()),
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+            biome: None,
+            envelope: None,
+            rank: None,
+            line: Some(line.iter().flat_map(|p| [p.x, p.y]).collect()),
+            kind: None,
+            line_kind: None, // 河（缺省语义）
+            line_width_m: None,
+        };
+        let carve = wv_edit::command::CarveSpec {
+            pts: vec![(40.0, 40.0), (40.0, 120.0), (40.0, 200.0)],
+            strength: 1.0,
+            width_cells: 1,
+            mark_water: true,
+        };
+        let mut tx = wv_edit::history::Transaction::new();
+        tx.push(Box::new(wv_edit::command::CreateLinePoiCommand::new(
+            map_id(),
+            place,
+            Some(carve),
+            cell,
+        )));
+        edit.history
+            .commit(&mut projection.world, tx)
+            .expect("夹具创建应成功");
+
+        // 旧走廊快照（竖列 i=5，j=5..=25）。
+        let corridor: Vec<(i32, i32)> = (5..=25).map(|j| (5, j)).collect();
+        let before = snapshot_corridor(&projection.world, &corridor);
+
+        // 拖末端到 (200, 124)：锚点 = (40,120)，新段向东近直线（下切规划无噪声）。
+        let mut drag = begin_endpoint_drag(
+            Id::new_unchecked("river_drag"),
+            DraggedEnd::Last,
+            line.clone(),
+            (5, 25),
+        );
+        let grid = terrain_grid_of(&projection.world, &map_id()).expect("夹具有地形");
+        assert!(
+            ensure_drag_preview(
+                &mut drag,
+                Vec2::new(200.0, 124.0),
+                &grid,
+                cell,
+                LinePathMode::Carve,
+                7
+            ),
+            "平地应可规划新段"
+        );
+        let mut notice = ShellNotice::default();
+        assert!(
+            commit_endpoint_drag(
+                &drag,
+                LinePathMode::Carve,
+                &map_id(),
+                &mut edit,
+                &mut projection,
+                &mut notice,
+                1
+            ),
+            "改道提交应成功，notice = {:?}",
+            notice.text
+        );
+
+        // ① 旧走廊（除分叉口 ±1 格）逐位不变。
+        let after = snapshot_corridor(&projection.world, &corridor);
+        for (k, &(i, j)) in corridor.iter().enumerate() {
+            if (14..=16).contains(&j) {
+                continue; // 新旧走廊交叠的分叉口邻域，不参与断言。
+            }
+            assert_eq!(after[k], before[k], "旧走廊格 ({i},{j}) 不得被改道触碰");
+        }
+        // ② 新增段（东向走廊，行 j=15）已下切成水。
+        for i in [8_i32, 15, 22] {
+            let c = cell_at(&projection.world, i, 15);
+            assert_eq!(
+                c.surface,
+                wv_terrain::SURFACE_WATER,
+                "新段格 ({i},15) 应为水面"
+            );
+            assert!(
+                c.height < 100,
+                "新段格 ({i},15) 应被下切，实际高度 {}",
+                c.height
+            );
+        }
+        // ③ 整线已重发：固定段保留，末点 = 拖拽落点。
+        let p = projection
+            .world
+            .distances
+            .places
+            .iter()
+            .find(|p| p.id.as_str() == "river_drag")
+            .expect("改道不得删地点");
+        let new_line = p.line.as_ref().expect("改道后仍应有折线");
+        assert_eq!(
+            &new_line[0..4],
+            &[40.0, 40.0, 40.0, 120.0],
+            "固定段必须原样保留，实得 {:?}",
+            &new_line[0..4]
+        );
+        let (lx, ly) = (new_line[new_line.len() - 2], new_line[new_line.len() - 1]);
+        assert!(
+            (lx - 200.0).abs() < 1e-3 && (ly - 124.0).abs() < 1e-3,
+            "末点应 = 拖拽落点 (200,124)，实际 ({lx},{ly})"
+        );
+
+        // ④ 一次撤销：整线 + 新增段下切全回。
+        edit.history.undo(&mut projection.world).expect("应可撤销");
+        let p = projection
+            .world
+            .distances
+            .places
+            .iter()
+            .find(|p| p.id.as_str() == "river_drag")
+            .expect("撤销不得删地点");
+        assert_eq!(
+            p.line.as_ref().expect("撤销后仍应有折线"),
+            &line.iter().flat_map(|p| [p.x, p.y]).collect::<Vec<f32>>(),
+            "撤销后整线应回到原样"
+        );
+        let after_undo = snapshot_corridor(&projection.world, &corridor);
+        for (k, &(i, j)) in corridor.iter().enumerate() {
+            assert_eq!(after_undo[k], before[k], "撤销后旧走廊格 ({i},{j}) 应复原");
+        }
+        let c = cell_at(&projection.world, 15, 15);
+        assert_ne!(
+            c.surface,
+            wv_terrain::SURFACE_WATER,
+            "撤销后新段格应退出水面"
+        );
     }
 }
