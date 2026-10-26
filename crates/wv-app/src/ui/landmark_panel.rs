@@ -112,17 +112,24 @@ pub fn panel_landmark(
             });
             // 放置 toggle：开关语义在 dispatch（已开 = 再点关），按钮样式
             // 随激活态换——Accent 高亮 = 正在放置。
+            //
+            // 宽度必须 `.min()` 钳死：egui Window 的**无界测量 pass** 里
+            // `available_width()` 是屏幕级宽，直接当按钮 min_size 会把浮窗
+            // 撑到全屏且缩不回来（Resize 只扩不缩，place.rs:186 同款实机
+            // bug——2026-10-26「地标面板启动后无限拉大」的根因）。正常
+            // pass 里 available ≤ 上限，按钮仍跟随面板宽。
             let style = if landmark.placing {
                 ButtonStyle::Accent
             } else {
                 ButtonStyle::Raised
             };
+            let btn_w = ui.available_width().min(272.0);
             if button(
                 ui,
                 &shell,
                 ButtonContent::Text(t_key(&current_loc, I18nKey::LandmarkPlaceToggle)),
                 style,
-                Some(egui::vec2(ui.available_width(), 30.0)),
+                Some(egui::vec2(btn_w, 30.0)),
                 true,
             )
             .clicked()
@@ -193,8 +200,10 @@ pub fn panel_landmark(
                     ui.horizontal(|ui| {
                         // 行宽 = 可用宽 − 删除钮；list_item 吃 available_width，
                         // 必须 allocate_ui 圈定（否则按钮被挤出界）。
+                        // 同上：`.min()` 钳死无界测量 pass 的屏幕级宽（不然
+                        // allocate_ui 的请求尺寸本身就撑爆浮窗）。
                         let trash_w = 26.0;
-                        let list_w = ui.available_width() - trash_w - 4.0;
+                        let list_w = (ui.available_width() - trash_w - 4.0).clamp(120.0, 242.0);
                         let resp = ui
                             .allocate_ui(egui::vec2(list_w, 28.0), |ui| {
                                 list_item(ui, &shell, shell.accent(), &name, &meta, selected)
