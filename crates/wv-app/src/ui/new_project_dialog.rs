@@ -246,7 +246,22 @@ fn initial_world(name: &str, template: WorldTemplateKind, seed: u64) -> wv_core:
             cells: vec![MapBase::Ocean.cell(); (width * height) as usize],
         },
     };
+    // 生成器河实体（ADR-0070 D3 生成器统一 · 计划 Task 12）：种子河在
+    // **创建期即实体**（渲染期 seed 派生已删，T8）——与下面的城市初布点
+    // 同款「创建期即 Place」：工程首保存即落盘，之后河是作者的实体
+    // （可改名 / 拖端点 / 删除，V2）。无下切、宽度不设；Ocean 无模板
+    // 记录 → 无河（种子口径与 RegenWorld 同源，见 `edit::river_gen`）。
+    let river_places = match world.meta.as_ref().and_then(|m| m.template) {
+        Some(tpl) => crate::edit::river_gen::generator_river_places(
+            &id,
+            &terrain,
+            tpl.rivers_seed,
+            (extent_w, extent_h),
+        ),
+        None => Vec::new(),
+    };
     world.set_terrain(id.clone(), terrain);
+    world.distances.places.extend(river_places);
 
     // 城市初布点（ADR-0037 D6）：归一化落点 -> 图局部坐标（左上原点、y 向下，
     // 与 icon anchor 同一口径）。名字走「新城 N」占位，作者随便改（V2）。
@@ -695,8 +710,16 @@ mod tests {
         assert_eq!(t.seed, 42, "种子必须原样记录，重生成才可复现");
         assert_ne!(t.rivers_seed, t.seed, "河流种子必须独立");
         // 城市初布点（ADR-0037 D6）：模板世界自带占位城市，全部锚定首图。
-        assert!(!w.distances.places.is_empty(), "冷北模板必须自带城市");
-        for p in &w.distances.places {
+        // （T12 起生成器河也是 Place——它们的断言归
+        // `template_new_project_has_river_entities`，这里只看城市。）
+        let cities: Vec<_> = w
+            .distances
+            .places
+            .iter()
+            .filter(|p| p.id.as_str().starts_with("city_"))
+            .collect();
+        assert!(!cities.is_empty(), "冷北模板必须自带城市");
+        for p in &cities {
             assert_eq!(p.map.as_ref(), Some(&map.id), "城市必须锚定首图");
             assert!(p.x.is_some() && p.y.is_some(), "城市必须有坐标");
             assert!(p.effective_rank() >= 2, "模板城市 rank >= 2");
@@ -759,5 +782,98 @@ mod tests {
         assert!(d.open);
         assert_eq!(d.location, r"d:\demo\game", "位置应跨打开保留");
         assert!(d.error.is_none(), "错误必须清掉（旧失败不再成立）");
+    }
+
+    /// 生成器河实体（计划 Task 12 点名）：生成模板新建工程在世界创建期即落
+    /// 河线 POI（与城市初布点同款「创建期即实体」），数量与 `rivers_seed`
+    /// 口径一致、实体字段合规、同种子确定性可重放；Ocean 无模板 → 无河。
+    #[test]
+    fn template_new_project_has_river_entities() {
+        use crate::edit::river_gen::{GENERATOR_RIVER_PREFIX, MAX_GENERATOR_RIVERS};
+        use wv_terrain::climate::generate_rivers;
+
+        let seed = 7_u64;
+        let w = initial_world("冷北", WorldTemplateKind::ColdNorth, seed);
+        let map_id = Id::new_unchecked(FIRST_MAP_ID);
+        let rivers: Vec<&wv_core::map::distance::Place> = w
+            .distances
+            .places
+            .iter()
+            .filter(|p| p.id.as_str().starts_with(GENERATOR_RIVER_PREFIX))
+            .collect();
+        assert!(
+            !rivers.is_empty(),
+            "生成模板新建工程必须带生成器河实体，实得 {} 条（总 {} 条）",
+            rivers.len(),
+            w.distances.places.len()
+        );
+
+        // 数量与种子口径一致：= generate_rivers(首图地形, rivers_seed) 折线数。
+        let terrain = w.terrain_of(&map_id).expect("首图带地形");
+        let tpl = w
+            .meta
+            .as_ref()
+            .and_then(|m| m.template)
+            .expect("生成模板带 template 记录");
+        let heights: Vec<i16> = terrain.cells.iter().map(|c| c.height).collect();
+        let expected = generate_rivers(
+            terrain.width,
+            terrain.height,
+            &heights,
+            tpl.rivers_seed,
+            MAX_GENERATOR_RIVERS,
+        )
+        .len();
+        assert_eq!(rivers.len(), expected, "生成器河实体数应与种子折线数一致");
+
+        // 字段合规：锚定首图、河语义显式、宽度不设、折线在图幅内。
+        let extent = w
+            .maps
+            .iter()
+            .find(|m| m.id == map_id)
+            .and_then(|m| m.extent)
+            .expect("首图带幅面");
+        for p in &rivers {
+            assert_eq!(p.map.as_ref(), Some(&map_id), "必须锚定首图");
+            assert_eq!(
+                p.line_kind,
+                Some(wv_core::map::distance::LineKind::River),
+                "河语义显式"
+            );
+            assert_eq!(p.line_width_m, None, "宽度不设");
+            let l = p.line.as_ref().expect("有折线");
+            assert!(
+                l.chunks(2).all(|c| {
+                    c[0] >= 0.0 && c[0] <= extent.width && c[1] >= 0.0 && c[1] <= extent.height
+                }),
+                "折线必须换算到图幅内，实得 {l:?}"
+            );
+        }
+
+        // 确定性：同种子再建 → 同一批折线（重生成可复现的创建期镜像）。
+        let again = initial_world("冷北", WorldTemplateKind::ColdNorth, seed);
+        let lines_of = |world: &wv_core::World| {
+            let mut v: Vec<Vec<f32>> = world
+                .distances
+                .places
+                .iter()
+                .filter(|p| p.id.as_str().starts_with(GENERATOR_RIVER_PREFIX))
+                .filter_map(|p| p.line.clone())
+                .collect();
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            v
+        };
+        assert_eq!(lines_of(&w), lines_of(&again), "同种子应产同一批河");
+
+        // Ocean：无 template 记录 → 无生成器河。
+        let ocean = initial_world("海洋", WorldTemplateKind::Ocean, seed);
+        assert!(
+            !ocean
+                .distances
+                .places
+                .iter()
+                .any(|p| p.id.as_str().starts_with(GENERATOR_RIVER_PREFIX)),
+            "海洋模板不得产生成器河"
+        );
     }
 }

@@ -7,7 +7,9 @@
 //! 行为分支（自动探测 `<工程>/data/` 下产物）：
 //!
 //! 有 `coastlines.geojson` + `rivers.geojson` 时：读 GeoJSON（自带零依赖解析器），
-//! 栅格化 surface / 高度 / 群系，河流 → BIOME_RIVER。
+//! 栅格化 surface / 高度 / 群系。**河流不再涂格**（ADR-0070 D3 · 计划 Task 12：
+//! 河走实体——工程带 `template.rivers_seed`，加载期迁移把种子河转为河线
+//! POI；涂格河群系 16 已退役，`rivers.geojson` 只留作 NE 数据在场的触发器）。
 //!
 //! 没有时：退到 `wv_terrain::climate::generate_cold_north` 冷北程序生成（与
 //! `examples/jrpg-world` 同源，先让 demo 可开，NE 数据落盘后自动切真底座）。
@@ -121,15 +123,14 @@ fn build_grid(data_dir: &Path, peaks: f64) -> (TerrainData, &'static str) {
             return (program_north(), "program");
         }
     };
-    let rivers = geo::read(&rivers_path).ok();
+    // 河流不再栅格化（ADR-0070 D3：河走实体）——rivers.geojson 只在上面的
+    // NE 数据在场判定里点名；种子河由加载期迁移（template.rivers_seed →
+    // 河线 POI）落实体，涂格河群系 16 已退役。
     let seas = seas_path
         .exists()
         .then(|| geo::read(&seas_path))
         .and_then(|r| r.ok());
-    (
-        rasterize(&coast, rivers.as_deref(), seas.as_deref(), peaks),
-        "natural-earth",
-    )
+    (rasterize(&coast, seas.as_deref(), peaks), "natural-earth")
 }
 
 fn program_north() -> TerrainData {
@@ -153,9 +154,12 @@ fn program_north() -> TerrainData {
 /// 1. 全格初值水（surface=0, OCEAN）；
 /// 2. 海域多边形内 → 水；
 /// 3. 海岸国界多边形内 → 陆；
-/// 4. 陆格按「距最近海岸线」距离分高度带，群系按纬度带（0=北）；
-/// 5. 河流线刷 BIOME_RIVER + 河床 -2m。
-fn rasterize(coast: &[F], rivers: Option<&[F]>, seas: Option<&[F]>, peaks: f64) -> TerrainData {
+/// 4. 陆格按「距最近海岸线」距离分高度带，群系按纬度带（0=北）。
+///
+/// 河流**不**在此栅格化（ADR-0070 D3 · 计划 Task 12：河走实体——工程带
+/// `template.rivers_seed`，加载期迁移把种子河转为河线 POI；涂格河 16 与
+/// 河床 -2 m 的旧口径一并退役，河床下切改由线 POI 的下切命令承担）。
+fn rasterize(coast: &[F], seas: Option<&[F]>, peaks: f64) -> TerrainData {
     let to_x = |lon: f64| ((lon - LON.0) / (LON.1 - LON.0) * WIDTH as f64).floor() as i32;
     let to_y = |lat: f64| ((LAT.1 - lat) / (LAT.1 - LAT.0) * HEIGHT as f64).floor() as i32;
     let rings = |fs: &[F]| -> Vec<Vec<[i32; 2]>> {
@@ -174,24 +178,6 @@ fn rasterize(coast: &[F], rivers: Option<&[F]>, seas: Option<&[F]>, peaks: f64) 
                         }
                     }
                 }
-                _ => {}
-            }
-        }
-        out
-    };
-    let lines = |fs: &[F]| -> Vec<Vec<[i32; 2]>> {
-        let mut out = Vec::new();
-        for f in fs {
-            match &f.geom {
-                G::LineString(ls) => {
-                    out.push(ls.iter().map(|p| [to_x(p[0]), to_y(p[1])]).collect());
-                }
-                G::MultiLineString(mlls) => {
-                    for l in mlls {
-                        out.push(l.iter().map(|p| [to_x(p[0]), to_y(p[1])]).collect());
-                    }
-                }
-                _ => {}
             }
         }
         out
@@ -199,7 +185,6 @@ fn rasterize(coast: &[F], rivers: Option<&[F]>, seas: Option<&[F]>, peaks: f64) 
 
     let coast_rings = rings(coast);
     let sea_rings = rings(seas.unwrap_or(&[]));
-    let river_lines = lines(rivers.unwrap_or(&[]));
 
     let n = (WIDTH * HEIGHT) as usize;
     let mut surface = vec![0u8; n]; // 水
@@ -363,13 +348,6 @@ fn rasterize(coast: &[F], rivers: Option<&[F]>, seas: Option<&[F]>, peaks: f64) 
         }
     }
 
-    for line in &river_lines {
-        for seg in line.windows(2) {
-            geo::draw_line_i16(&mut height, -2, seg[0], seg[1], WIDTH as i32, HEIGHT as i32);
-            geo::draw_line_u8(&mut biome, 16, seg[0], seg[1], WIDTH as i32, HEIGHT as i32);
-        }
-    }
-
     let cells = (0..n)
         .map(|i| TerrainCellData {
             surface: surface[i],
@@ -491,6 +469,12 @@ fn write_index(map_dir: &Path, raster: &RasterRef) {
 }
 
 /// 只重写 world.yaml 的 `template:` 段（到文件尾），其余字段（内容层）原样保留。
+///
+/// `rivers_seed` 的消费点在**加载期迁移**（ADR-0070 D3 生成器统一）：迁移器
+/// （`wv-edit::MigrateLegacyLineDataCommand`）见「模板在场而无河线 POI」时，
+/// 用它跑 `generate_rivers` 把种子河转为河线 POI 实体——渲染期不再消费种子
+/// （T8 已删），生成期唯一定义点在 `wv-app::edit::river_gen`（RegenWorld /
+/// 新建工程走它；本 CLI 只落盘种子记录，不造实体——内容层归作者）。
 fn patch_template(root: &Path, kind: &str, seed: u64) -> Result<(), String> {
     let p = root.join("world.yaml");
     let text = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;

@@ -66,7 +66,8 @@ pub use region::{
 };
 pub use stroke::commit_stroke_on_release;
 pub use terrain::{
-    apply_clear_measurements, apply_regen_world, apply_reset_terrain_to_base, flush_terrain_texture,
+    apply_clear_measurements, apply_regen_world, apply_reset_terrain_to_base, commit_regen_world,
+    flush_terrain_texture,
 };
 
 /// 编辑历史（`wv-edit::History` 的应用层持有者）。

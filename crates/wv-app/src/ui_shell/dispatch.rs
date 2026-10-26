@@ -626,6 +626,24 @@ pub(crate) fn apply_pending_commands(
                 seed,
                 rivers_seed: seed ^ 0x9E37_79B9_7F4A_7C15,
             };
+            // 生成器河实体（ADR-0070 D3 生成器统一 · 计划 Task 12）：种子河
+            // 的「生成期唯一定义点」——新地形 + rivers_seed 折线 → 无下切的
+            // 河线 POI，与地形同一事务落账（渲染期 seed 派生已在 T8 删除）。
+            // 上一轮生成器河由 commit_regen_world 同事务下架（换血）。
+            let extent = projection
+                .world
+                .maps
+                .iter()
+                .find(|m| m.id == map_id)
+                .and_then(|m| m.extent.as_ref())
+                .map(|e| (e.width, e.height))
+                .unwrap_or((terrain.width as f32, terrain.height as f32));
+            let river_places = crate::edit::river_gen::generator_river_places(
+                &map_id,
+                &terrain,
+                template.rivers_seed,
+                extent,
+            );
             if let Some(dir) = projection.project_dir.clone() {
                 backup_terrain_before_regen(&dir, &map_id, &projection.world);
             }
@@ -633,6 +651,7 @@ pub(crate) fn apply_pending_commands(
                 &map_id,
                 terrain,
                 template,
+                river_places,
                 &mut edit,
                 &mut projection,
                 &mut tex,
