@@ -117,7 +117,10 @@ pub fn translate_edit_intents(
 }
 
 /// 毫秒时间戳（地点 id 后缀；id 由**应用层**生成——渲染层不造 id）。
-fn now_millis() -> u128 {
+///
+/// ADR-0071 起地标放置（`edit::editing::landmark`）共用——id 生成留在
+/// 应用层，`place_river_*` / `place_poi_*` 同源同款。
+pub(crate) fn now_millis() -> u128 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

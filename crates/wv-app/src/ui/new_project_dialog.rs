@@ -635,7 +635,13 @@ mod tests {
 
     /// 磁盘 round-trip：initial_world → create + 全量保存 → 重新打开，
     /// 世界形状原样读回（首图 / 栅格 / meta）。这是「新建工程即落盘」的主链路。
+    ///
+    /// 2026-10-26 用户裁定暂时忽略：受限执行环境（agent 派生进程）写盘被
+    /// 安全软件门控，`os error 5` 假失败（AGENTS §2.2 记录的环境约束），
+    /// 每轮门禁必红且无法在会话内根治。正常桌面终端可
+    /// `cargo test -p wv-app --features app -- --ignored` 复核。
     #[test]
+    #[ignore = "受限环境 temp 写盘 os error 5 假失败（AGENTS §2.2）；桌面终端 --ignored 可跑"]
     fn initial_world_round_trips_through_disk() {
         let dir = std::env::temp_dir().join(format!(
             "wv_new_project_test_{}",
@@ -707,6 +713,7 @@ mod tests {
 
     /// 冷北模板的 meta（含 seed）必须能过磁盘 round-trip。
     #[test]
+    #[ignore = "受限环境 temp 写盘 os error 5 假失败（AGENTS §2.2）；桌面终端 --ignored 可跑"]
     fn cold_north_template_round_trips_through_disk() {
         let dir = std::env::temp_dir().join(format!(
             "wv_cold_north_test_{}",

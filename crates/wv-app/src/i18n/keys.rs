@@ -954,6 +954,21 @@ pub enum I18nKey {
     CellEditorWater,
     /// 地表分段「陆」
     CellEditorLand,
+    // ── 地标面板（ADR-0071）──────────────────────────────────────
+    /// 「地标」面板标题
+    PanelLandmark,
+    /// 放置 toggle（激活后单击地图放置）
+    LandmarkPlaceToggle,
+    /// 放置中的提示行
+    LandmarkPlaceHint,
+    /// 列表空态标题
+    LandmarkEmpty,
+    /// 列表空态提示
+    LandmarkEmptyHint,
+    /// 新地标的默认名称
+    LandmarkDefaultName,
+    /// 「显隐地标面板」（命令面板）
+    CmdTogglePanelLandmark,
     /// 「打开命令面板」
     CmdOpenCommandPalette,
     /// 「保存工程」

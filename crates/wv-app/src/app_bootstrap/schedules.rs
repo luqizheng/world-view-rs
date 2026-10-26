@@ -100,6 +100,13 @@ pub(super) fn register(app: &mut App) {
                         "commit_point_select_on_click",
                         editing::commit_point_select_on_click
                     ),
+                    // 地标放置（ADR-0071）：Landmark 激活时单击地图创建点状
+                    // Place。与点选互斥由 dispatch 的 SelectMapTool 分支保证
+                    // （placing 开时 point_select 必关），故两者先后无耦合。
+                    wv_render::perf_timed!(
+                        "commit_landmark_click",
+                        editing::commit_landmark_click
+                    ),
                     // hover 准星（[ADR-0052] D2 写入侧；ADR-0057：EditCell ∨
                     // PointSelect 共用）：每帧追踪光标压住的格。
                     // 必须排在 `track_cursor_world` 之后（要读 cursor_world）。
@@ -444,6 +451,9 @@ pub(super) fn register(app: &mut App) {
             // panel_cell_editor 均已退役——内容分别成为 Inspector 的
             // 「事态」「势力层」「属性（Cell）」页签。
             ui::panel_region,
+            // 地标面板（ADR-0071）：放置 toggle + 当前图点状地点列表。
+            // 同链纪律：读 ResMut<PanelState>，必须 chain 在其余面板之间。
+            ui::panel_landmark,
             // v0.3：Inspector 整体右移后绘在最后（右上角，离顶栏最近），
             // 避免被左列 / 中列面板遮挡。
             ui::panel_inspector,

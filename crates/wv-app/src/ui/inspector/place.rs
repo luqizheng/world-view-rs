@@ -165,7 +165,9 @@ pub fn set_place_kind_now(
 }
 
 /// 类别 → 表单文案键。穷尽 match：新增 `PoiKind` 变体会在编译期逼出文案。
-fn poi_kind_label_key(kind: PoiKind) -> crate::i18n::I18nKey {
+///
+/// ADR-0071 起地标面板共用（类别下拉同源同款，两处不各写一份映射）。
+pub(crate) fn poi_kind_label_key(kind: PoiKind) -> crate::i18n::I18nKey {
     use crate::i18n::I18nKey as K;
     match kind {
         PoiKind::Other => K::PoiKindOther,

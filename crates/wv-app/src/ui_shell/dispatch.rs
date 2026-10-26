@@ -229,10 +229,12 @@ pub(crate) fn apply_pending_commands(
     // 撤销白闪会话态（[ADR-0052] D8-A）：撤销/重做后对受影响格做 250ms
     // 白色脉冲；点选工具会话态（ADR-0057 补记 6）——三者同属 CellMap
     // 会话域，折成一层元组（元组算 1 个参数，单系统上限 16）。
-    (mut flood_select, mut flash, mut point_select): (
+    // 地标放置会话态（ADR-0071）：应用侧自有工具态，与上述同粒度互斥。
+    (mut flood_select, mut flash, mut point_select, mut landmark): (
         ResMut<crate::state::FloodSelectState>,
         ResMut<wv_world_cell_map::cell_flash::CellFlashState>,
         ResMut<crate::state::PointSelectState>,
+        ResMut<crate::state::LandmarkToolState>,
     ),
     current_loc: Res<CurrentLocale>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
@@ -396,6 +398,7 @@ pub(crate) fn apply_pending_commands(
                 MapToolId::PointSelect => point_select.tool_active,
                 MapToolId::BiomeBoundary => boundary.line.is_some(),
                 MapToolId::FloodSelect => flood_select.tool_active,
+                MapToolId::Landmark => landmark.placing,
             };
 
             if matches!(tool, MapToolId::Continent) {
@@ -429,6 +432,8 @@ pub(crate) fn apply_pending_commands(
                 flood_select.close_tool();
                 // 切走分界线工具：线是会话工具，一并清（ADR-0051）。
                 boundary.clear();
+                // 切走地标放置：纯开关，无草稿可清（ADR-0071）。
+                landmark.placing = false;
 
                 // ② 再按需打开（已启用 → 保持全关，即切换关闭）。
                 if !already_on {
@@ -479,6 +484,12 @@ pub(crate) fn apply_pending_commands(
                         // segmented 里改（[ADR-0052] D6）。
                         MapToolId::FloodSelect => {
                             flood_select.tool_active = true;
+                        }
+                        // 地标放置激活：单击地图创建点状 Place（见
+                        // `edit::editing::commit_landmark_click`）。默认类别 /
+                        // 级别在地标面板改（ADR-0071）。
+                        MapToolId::Landmark => {
+                            landmark.placing = true;
                         }
                     }
                 }
