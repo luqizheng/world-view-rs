@@ -29,6 +29,7 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use wv_core::distance::{LineKind, Place};
+use wv_core::map::road_derive::effective_line_kind;
 use wv_terrain::line_path::LinePathMode;
 
 use crate::edit::editing;
@@ -255,8 +256,12 @@ pub fn panel_line_poi(
 }
 
 /// 选中地点的**有效种类**（ADR-0070 D2 判别：缺省 = 河）。
+///
+/// 终审 F2：判别收编到唯一入口 [`effective_line_kind`]（T5 约定——判别式
+/// 含 `line.is_some()`，本函数不再私养第二份 `line_kind` 直读）；无折线的
+/// 地点判别为 `None` → 兜底河（面板选中态只该出现线 POI，兜底不可达）。
 fn selected_kind(place: &Place) -> LineKind {
-    place.line_kind.unwrap_or(LineKind::River)
+    effective_line_kind(place).unwrap_or(LineKind::River)
 }
 
 /// 选中态：属性编辑（名称 + 河:宽度 / 路:级别），写回走 `UpdateLinePoiCommand`。
@@ -700,5 +705,37 @@ mod tests {
         assert_eq!(cmd.new_rank, Some(3));
         assert_eq!(cmd.new_name, None);
         assert_eq!(cmd.new_width_m, None, "道路不写宽度");
+    }
+
+    // ── 终审 F2（ADR-0070）─────────────────────────────────────────
+
+    /// 面板判别走**唯一入口**（终审 F2）：`selected_kind` 经
+    /// `effective_line_kind`——判别式含 `line.is_some()`（T5「唯一入口」
+    /// 约定），无折线的地点不得凭 `line_kind` 孤值被判成路。
+    #[test]
+    fn selected_kind_classifies_through_effective_line_kind_entry() {
+        // 常规两态与旧口径一致（既有行为零回归）。
+        assert_eq!(
+            selected_kind(&river_place("缺省河", None)),
+            LineKind::River,
+            "line_kind 缺省 = 河（ADR-0070 D2）"
+        );
+        assert_eq!(
+            selected_kind(&road_place("官道", None)),
+            LineKind::Road,
+            "显式 Road = 路"
+        );
+        // 单入口语义：`line = None` 时判别式不认 `line_kind` 孤值——
+        // 旧实现（直读 `line_kind.unwrap_or`）会判成路，正是本测钉死的缝。
+        let orphan = Place {
+            line: None,
+            line_kind: Some(LineKind::Road),
+            ..road_place("孤儿标记", None)
+        };
+        assert_eq!(
+            selected_kind(&orphan),
+            LineKind::River,
+            "无折线地点不经判别式（effective_line_kind = None → 兜底河）"
+        );
     }
 }
