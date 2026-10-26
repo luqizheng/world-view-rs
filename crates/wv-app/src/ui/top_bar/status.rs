@@ -77,6 +77,8 @@ pub fn status_bar(
             ui.horizontal(|ui| {
                 // ── 左：Project status（组内 gap 16）──
                 project_status_segment(ui, &shell, &projection);
+                // ── 左段尾：比例尺（QGIS 式状态栏段，无 km 换算时整段不画）──
+                scale_bar_segment(ui, &shell, &view, &projection, &drill);
                 // ── 中左：笔触进度瞬态槽（[ADR-0052] D8-B，仅 stroke 期间出现）──
                 stroke_progress_segment(ui, &shell, &paint, current_loc.0);
                 // ── 中：Pointer coordinates（面板内绝对居中，见 fn 文档）──
@@ -138,6 +140,61 @@ pub(super) fn stroke_progress_segment(
         ))
         .size(STATUS_FONT)
         .color(shell.gold()),
+    );
+}
+
+/// 左段尾「比例尺」段（QGIS 式）：条 + 端刻度 + 居中标签，随缩放联动。
+///
+/// ## 为什么驻状态栏而不画画布
+/// 第一版是「视口左下角画布浮层」（Google / OSM 式），实机截图验收发现
+/// 左下角被**时间轴浮窗**常驻占据（默认铺底栏整行），比例尺压在其上；
+/// 时间轴是 P7 的一等公民、默认常开，让用户挪窗迁就属于本末倒置。
+/// 状态栏是常驻 chrome（2026-10-25 用户裁定：与顶栏同权），X/Y、经纬度
+/// 读数本就住在这里，QGIS 的比例尺也在状态栏——故改驻于此，任何工作区、
+/// 任何浮窗布局下永不遮挡。换算与 1-2-5 取整逻辑见
+/// [`crate::ui::map_scale_bar`]（缺数据整段连同分隔线一起隐）。
+pub(super) fn scale_bar_segment(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    view: &ViewState,
+    projection: &WorldProjection,
+    drill: &DrillState,
+) {
+    let Some((_, label, bar_px)) =
+        crate::ui::map_scale_bar::scale_bar_readout(view, projection, drill)
+    else {
+        return;
+    };
+    ui.add_space(space::LG);
+    vsep(ui, color32(shell.palette.border_subtle));
+    ui.add_space(space::LG);
+    let ink = color32(shell.palette.text_2);
+    let font = mono(STATUS_FONT);
+    let galley = ui
+        .painter()
+        .layout(label.to_owned(), font, ink, f32::INFINITY);
+    // 条与标签取宽者作占位：条极短时标签不外溢状态栏。
+    let w = bar_px.max(galley.size().x);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 20.0), egui::Sense::hover());
+    let painter = ui.painter();
+    let line_y = rect.max.y - 3.0;
+    let x0 = rect.center().x - bar_px * 0.5;
+    let x1 = rect.center().x + bar_px * 0.5;
+    let stroke = egui::Stroke::new(1.0, ink);
+    painter.line_segment([egui::pos2(x0, line_y), egui::pos2(x1, line_y)], stroke);
+    // 两端 6px 端刻度（地图学惯例：标明条的两个端点才可量）。
+    painter.line_segment(
+        [egui::pos2(x0, line_y - 3.0), egui::pos2(x0, line_y + 3.0)],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(x1, line_y - 3.0), egui::pos2(x1, line_y + 3.0)],
+        stroke,
+    );
+    painter.galley(
+        egui::pos2(rect.center().x - galley.size().x * 0.5, rect.min.y),
+        galley,
+        ink,
     );
 }
 

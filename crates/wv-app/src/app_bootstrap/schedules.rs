@@ -478,12 +478,6 @@ pub(super) fn register(app: &mut App) {
         )
             .chain(),
     );
-    // 地图视口比例尺（左下角浮层）：与面板零耦合，主链已顶满 20 元组，
-    // 单独注册并排在状态栏之后（同为 Middle 层 Area，仅循「状态栏最后」惯例）。
-    app.add_systems(
-        bevy_egui::EguiPrimaryContextPass,
-        ui::map_scale_bar.after(ui::status_bar),
-    );
     // 候选上下文镜像（2026-10-22 验收）：主链已顶满 20 元组，单独注册。
     // （2026-10-25 用户裁定：群系图例浮层删除——地形设计器面板已含群系
     // swatch，图例信息重复。）
