@@ -1,5 +1,6 @@
 //! `map_controls` 的单测（原文件尾部 `mod tests` 整段平移）。
 
+use super::widgets::line_poi_tile_visible;
 use super::*;
 use bevy::prelude::Vec2;
 
@@ -38,28 +39,31 @@ fn dock_orientation_round_trips_through_key() {
     );
 }
 
-/// 横向内容宽度：**12 个等宽槽**（5 瓷砖 + 4 图标钮 + 3 分隔，槽位统一
-/// 后全部 = `tile.x`）+ 11 间距 + 左右内边距。必须在 1280 窗口内留出两侧
-/// 空白——否则贴底居中的工具条会被窗口裁掉。**元素数与 `slots` 闭包的
-/// 排布一一对应**，改布局必须同步改这条。
+/// 横向内容宽度：**13 个等宽槽**（5 瓷砖 + 4 图标钮 + 3 分隔 + 1 线段 POI
+/// 分裂按钮，槽位统一后全部 = `tile.x`）+ 12 间距 + 左右内边距。必须在
+/// 1280 窗口内留出两侧空白——否则贴底居中的工具条会被窗口裁掉。**元素数
+/// 与 `slots` 闭包的最坏排布一一对应**（线段 POI 仅 Edit 档渲染，此处按
+/// 显示时计），改布局必须同步改这条。
 ///
 /// 2026-10-23：「清除全部测量」图标钮插在测量组右侧（槽 6.5），
 /// 图标钮 3 → 4、槽位 11 → 12。
+/// 2026-10-26（ADR-0070 D4）：线段 POI 分裂按钮入列（槽 14），槽位 12 → 13。
 #[test]
 fn horizontal_dock_fits_a_1280_window() {
     let m = DockMetrics::for_orientation(false);
-    let content = 12.0 * m.tile.x + 11.0 * m.gap;
+    let content = 13.0 * m.tile.x + 12.0 * m.gap;
     let framed = content + 2.0 * m.pad_x;
     assert!(framed < 1280.0, "横向工具条 {framed}px 超出 1280 窗口宽度");
 }
 
 /// 纵向紧凑形态必须在时间轴之上收口：800 高窗口 − 顶栏 38 − 时间轴
-/// 约 152 − 边距，可用高度约 648；12 个等高槽纵排必须留出余量。
-/// **元素数与 `slots` 闭包一一对应**，改布局必须同步改这条。
+/// 约 152 − 边距，可用高度约 648；13 个等高槽纵排必须留出余量。
+/// **元素数与 `slots` 闭包的最坏排布一一对应**（线段 POI 仅 Edit 档渲染，
+/// 此处按显示时计），改布局必须同步改这条。
 #[test]
 fn vertical_dock_fits_above_the_timeline() {
     let m = DockMetrics::for_orientation(true);
-    let height = 12.0 * m.tile.y + 11.0 * m.gap + 2.0 * m.pad_y;
+    let height = 13.0 * m.tile.y + 12.0 * m.gap + 2.0 * m.pad_y;
     let available = 800.0 - 152.0;
     assert!(
         DOCK_TOP_CLEARANCE + height < available,
@@ -88,6 +92,44 @@ fn vertical_tint_slider_stays_within_one_tile_column() {
     let slot = horizontal.tint_slider_slot(false);
     assert_eq!(slot.y, horizontal.tile.y, "横排滑条不应改变工具条高度");
     assert!(slot.x > horizontal.tile.x, "横排滑条维持 3 槽长条");
+}
+
+/// 线段 POI 瓷砖只在 Edit 档渲染（ADR-0070 D4）：Nation / Region 档作者
+/// 看不到入口——「线」是放大到可编辑级别才画的东西。
+///
+/// 纯 egui 渲染不好直接断言，门控提成纯函数 [`line_poi_tile_visible`]
+/// 后按 ADR-0043 的状态断言手法测：三档直接戳 + `lod_tier(scale)` 求值
+/// 同源走一遍（阈值 1.0 / 3.0，见 `wv_render::state` 常量）。
+#[test]
+fn line_poi_tile_hidden_outside_edit_tier() {
+    use wv_render::state::{lod_tier, LodTier};
+
+    assert!(
+        line_poi_tile_visible(LodTier::Edit),
+        "Edit 档应显示线段 POI 入口"
+    );
+    assert!(
+        !line_poi_tile_visible(LodTier::Region),
+        "Region 档不得显示线段 POI 入口"
+    );
+    assert!(
+        !line_poi_tile_visible(LodTier::Nation),
+        "Nation 档不得显示线段 POI 入口"
+    );
+
+    // 与真实视野求值同源：scale 0.5（近）= Edit，1.0 = Region 下界，3.0 = Nation 下界。
+    assert!(
+        line_poi_tile_visible(lod_tier(0.5)),
+        "scale 0.5 应视为 Edit 档"
+    );
+    assert!(
+        !line_poi_tile_visible(lod_tier(1.0)),
+        "scale 1.0 应视为 Region 档（≥ LOD_REGION_SCALE）"
+    );
+    assert!(
+        !line_poi_tile_visible(lod_tier(3.0)),
+        "scale 3.0 应视为 Nation 档（≥ LOD_NATION_SCALE）"
+    );
 }
 
 /// 分裂按钮的几何必须从 `DockMetrics` 单点投影——两处各写一遍尺寸表，

@@ -227,12 +227,14 @@ pub(crate) fn apply_pending_commands(
     mut boundary: ResMut<wv_render::state::BiomeBoundaryState>,
     // 泛洪选择工具会话态（[ADR-0052] D6）：与 EditCell 同款粒度的互斥工具。
     // 撤销白闪会话态（[ADR-0052] D8-A）：撤销/重做后对受影响格做 250ms
-    // 白色脉冲；点选工具会话态（ADR-0057 补记 6）——三者同属 CellMap
-    // 会话域，折成一层元组（元组算 1 个参数，单系统上限 16）。
-    (mut flood_select, mut flash, mut point_select): (
+    // 白色脉冲；点选工具会话态（ADR-0057 补记 6）——同属 CellMap
+    // 会话域；线段 POI 会话态（ADR-0070 D4）非 CellMap 域但同为互斥工具
+    // 会话态，为单系统 16 参数上限折进同层元组。
+    (mut flood_select, mut flash, mut point_select, mut line_poi): (
         ResMut<crate::state::FloodSelectState>,
         ResMut<wv_world_cell_map::cell_flash::CellFlashState>,
         ResMut<crate::state::PointSelectState>,
+        ResMut<crate::state::LinePoiState>,
     ),
     current_loc: Res<CurrentLocale>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
@@ -396,6 +398,9 @@ pub(crate) fn apply_pending_commands(
                 MapToolId::PointSelect => point_select.tool_active,
                 MapToolId::BiomeBoundary => boundary.line.is_some(),
                 MapToolId::FloodSelect => flood_select.tool_active,
+                // 线段 POI（ADR-0070 D4）：「同款」= 工具开着 ∧ 同一类——
+                // 河开着点路 = 换类不关工具（与 Select(shape) 换形状同口径）。
+                MapToolId::LinePoi(kind) => line_poi.tool_active && line_poi.kind == kind,
             };
 
             if matches!(tool, MapToolId::Continent) {
@@ -429,6 +434,11 @@ pub(crate) fn apply_pending_commands(
                 flood_select.close_tool();
                 // 切走分界线工具：线是会话工具，一并清（ADR-0051）。
                 boundary.clear();
+                // 线段 POI 的面板**随工具走**（ADR-0070 D4）：无论「切走」还是
+                // 「同款再点关闭」，工具一关面板就收；若本命令是开 LinePoi，
+                // 下方「按需打开」段会再开它（设置承载在 T11 的面板里）。
+                line_poi.tool_active = false;
+                panels.set_visible(crate::state::Panel::LinePoi, false);
 
                 // ② 再按需打开（已启用 → 保持全关，即切换关闭）。
                 if !already_on {
@@ -479,6 +489,14 @@ pub(crate) fn apply_pending_commands(
                         // segmented 里改（[ADR-0052] D6）。
                         MapToolId::FloodSelect => {
                             flood_select.tool_active = true;
+                        }
+                        // 线段 POI 激活（ADR-0070 D4）：记下当前类（弹层换类
+                        // 走到这里 = 换参数），并打开「河流和道路」面板——
+                        // 面板内容（新建表单 / 选中属性）由 T11 渲染。
+                        MapToolId::LinePoi(kind) => {
+                            line_poi.kind = kind;
+                            line_poi.tool_active = true;
+                            panels.set_visible(crate::state::Panel::LinePoi, true);
                         }
                     }
                 }

@@ -142,6 +142,9 @@ fn dispatcher_world(project_dir: Option<&str>, dirty: bool, pending: CommandId) 
     // 选区保留测试都要读写它们（漏 init 即 SystemParamValidationError）。
     world.init_resource::<crate::state::PointSelectState>();
     world.init_resource::<crate::state::CellSelection>();
+    // 线段 POI 工具会话态（ADR-0070 D4）：分发器 SelectMapTool(LinePoi)
+    // 分支读写（漏 init 同上）。
+    world.init_resource::<crate::state::LinePoiState>();
     world.resource_mut::<CommandPalette>().pending = Some(pending);
     world
 }
@@ -432,6 +435,7 @@ fn project_menu_pending_command_reaches_the_dispatcher() {
     // ADR-0057：点选工具会话态 + 统一选区位图（分发器互斥分支要读写）。
     world.init_resource::<crate::state::PointSelectState>();
     world.init_resource::<crate::state::CellSelection>();
+    world.init_resource::<crate::state::LinePoiState>();
     world.resource_mut::<ProjectMenuState>().pending = Some(CommandId::CloseProject);
 
     world
@@ -612,6 +616,88 @@ fn point_select_and_edit_cell_are_independent_tools() {
             .resource::<wv_render::state::EditCellState>()
             .tool_active,
         "再次点击当前工具应关闭"
+    );
+}
+
+/// 线段 POI 分裂按钮的换类语义（ADR-0070 D4，与 `Select(shape)` 同口径）：
+/// 同类开着再点 = 关；异类开着再点 = 换类**不关工具**；面板随工具开关
+/// （开 = 开 `Panel::LinePoi`，关 = 关面板——设置承载在 T11 的面板里）。
+#[test]
+fn line_poi_split_menu_switches_kind() {
+    use crate::state::Panel;
+    use crate::ui_command_palette::MapToolId;
+    use bevy::ecs::system::RunSystemOnce;
+    use wv_core::distance::LineKind;
+
+    // 开「河」：tool_active + kind=River + 面板开。
+    let mut world = dispatcher_world(
+        None,
+        false,
+        CommandId::SelectMapTool(MapToolId::LinePoi(LineKind::River)),
+    );
+    world
+        .run_system_once(apply_pending_commands)
+        .expect("系统运行失败");
+    {
+        let lp = world.resource::<crate::state::LinePoiState>();
+        assert!(lp.tool_active, "选河应激活线段 POI 工具");
+        assert_eq!(lp.kind, LineKind::River, "默认类 = 河");
+    }
+    assert!(
+        world.resource::<PanelState>().is_visible(Panel::LinePoi),
+        "开工具应打开河流和道路面板"
+    );
+
+    // 弹层选「道路」：换类 = 换参数，工具保持开启（分发器 already_on 判据
+    // 是「同款才关」）。
+    world.resource_mut::<CommandPalette>().pending =
+        Some(CommandId::SelectMapTool(MapToolId::LinePoi(LineKind::Road)));
+    world
+        .run_system_once(apply_pending_commands)
+        .expect("系统运行失败");
+    {
+        let lp = world.resource::<crate::state::LinePoiState>();
+        assert!(lp.tool_active, "河→路换类不得关掉工具");
+        assert_eq!(lp.kind, LineKind::Road, "弹层选路应把 kind 切到 Road");
+    }
+    assert!(
+        world.resource::<PanelState>().is_visible(Panel::LinePoi),
+        "换类后面板应保持打开"
+    );
+
+    // 同款（路）再点：关闭工具，面板随关。
+    world.resource_mut::<CommandPalette>().pending =
+        Some(CommandId::SelectMapTool(MapToolId::LinePoi(LineKind::Road)));
+    world
+        .run_system_once(apply_pending_commands)
+        .expect("系统运行失败");
+    assert!(
+        !world.resource::<crate::state::LinePoiState>().tool_active,
+        "同类再点应关闭工具"
+    );
+    assert!(
+        !world.resource::<PanelState>().is_visible(Panel::LinePoi),
+        "关工具应关闭河流和道路面板"
+    );
+
+    // 互斥：再开河后切抓手，线段 POI 工具与面板一并收掉。
+    world.resource_mut::<CommandPalette>().pending = Some(CommandId::SelectMapTool(
+        MapToolId::LinePoi(LineKind::River),
+    ));
+    world
+        .run_system_once(apply_pending_commands)
+        .expect("系统运行失败");
+    world.resource_mut::<CommandPalette>().pending = Some(CommandId::SelectMapTool(MapToolId::Pan));
+    world
+        .run_system_once(apply_pending_commands)
+        .expect("系统运行失败");
+    assert!(
+        !world.resource::<crate::state::LinePoiState>().tool_active,
+        "切抓手应关掉线段 POI 工具（互斥）"
+    );
+    assert!(
+        !world.resource::<PanelState>().is_visible(Panel::LinePoi),
+        "切走工具应关闭河流和道路面板"
     );
 }
 

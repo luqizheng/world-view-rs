@@ -23,15 +23,11 @@ pub fn map_controls(
     // CellMap 工具活动态（ADR-0057 补记 6：EditCell 第 12 槽 / PointSelect
     // 槽 1 / FloodSelect 第 13 槽）——瓷砖按各自 Resource 的 `tool_active`
     // 画选中态。时间轴播放态（§9.4 Gate-1）：播放中 CellMap 编辑类瓷砖灰化。
+    // 线段 POI 会话态（ADR-0070 D4，槽 14）同折进来。
     //
-    // **折成一层元组**：Bevy 单系统参数上限 16，本函数原有 15 个，四个
-    // `Res` 分开写会到 19（编译报「not a system set」）。元组算 1 个参数。
-    (edit_cell, point_select, flood_select, playback): (
-        Res<wv_render::state::EditCellState>,
-        Res<crate::state::PointSelectState>,
-        Res<crate::state::FloodSelectState>,
-        Res<crate::state::PlaybackState>,
-    ),
+    // **折成一层元组**：Bevy 单系统参数上限 16，本函数原有 15 个，五个
+    // `Res` 分开写会到 20（编译报「not a system set」）。元组算 1 个参数。
+    (edit_cell, point_select, flood_select, playback, line_poi): ToolSessionStates,
 ) {
     // 无工程闸门（图片规格 §首页不可见）：与 `welcome_screen` 共用同一信号。
     // 2026-10-22（B 档）：改读 `AppScreen`——「首页不可见」的口径由屏状态
@@ -390,6 +386,24 @@ pub fn map_controls(
                             &mut params.palette,
                             MapToolId::FloodSelect,
                         );
+
+                        // ── 槽 14：线段 POI（河流 / 道路，ADR-0070 D4）──
+                        // **仅 Edit 档渲染**（`line_poi_tile_visible`）：线的
+                        // 作者工具只在放大到可编辑级别才有意义，Nation /
+                        // Region 档整枚瓷砖不渲染（而非灰化）。分裂按钮：
+                        // 主键 = 河，弹层换类；命令排队后由分发器统一互斥。
+                        if line_poi_tile_visible(wv_render::state::lod_tier(view.scale)) {
+                            line_poi_split(
+                                ui,
+                                &shell,
+                                metrics,
+                                vertical,
+                                loc,
+                                line_poi.kind,
+                                line_poi.tool_active,
+                                &mut params.palette,
+                            );
+                        }
                     };
 
                     // **不用**交叉轴 `Align::Center`（2026-10-20 教训）：大框的

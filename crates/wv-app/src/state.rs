@@ -33,6 +33,21 @@ pub use wv_world_cell_map::state::{FloodCriterion, FloodSelectState};
 /// 同款经 `wv_render::state` re-export 链暴露，应用侧 `crate::state::X` 直用。
 pub use wv_render::state::{CellSelection, PointSelectState};
 
+/// 线段 POI 工具会话态（ADR-0070 D4）——**最小壳**。
+///
+/// 本任务只立「工具激活 + 当前线的种类」两件事，让工具条分裂按钮与分发器
+/// 的开关/换类语义可写可测；面板表单的参数（mode / width / name / pending /
+/// selected）由 Task 11 在此扩展。互斥的裁决在 `ui_shell::apply_pending_commands`
+/// （与其它 `SelectMapTool` 同一条链），本结构不自带开关逻辑。
+#[derive(Resource, Debug, Default)]
+pub struct LinePoiState {
+    /// 工具是否激活。`true` 时地图点击/拖拽由线段 POI 的交互系统消费（T11）。
+    pub tool_active: bool,
+    /// 当前线的种类：河 / 路（工具条分裂按钮菜单切换；`Default` = 河，
+    /// 与 `LineKind` 的 serde 缺省口径一致）。
+    pub kind: wv_core::distance::LineKind,
+}
+
 // 2026-10-18（ADR-0033）：`ContinentGenerationStash` / `ContinentGenerationState`
 // 已删除。意图生效不再消费选区，撤销/重做无需把意图圈「还回来」——
 // 选区自始至终留在 `SelectionState`。
@@ -138,6 +153,9 @@ pub enum Panel {
     Event,
     /// Cell 编辑器（[ADR-0040]，2026-10-20 独立面板化）：单格水陆/海拔/群系编辑。
     CellEditor,
+    /// 河流和道路面板（ADR-0070 D4）：一浮窗两段设置，兼任线段 POI 的
+    /// 新建设置与选中属性编辑（T11 渲染内容）。随工具开关（分发器裁决）。
+    LinePoi,
 }
 
 impl Panel {
@@ -152,7 +170,7 @@ impl Panel {
     ///
     /// 枚举变体本身**暂留**——存量工程的 `ui-layout.yaml` 里有对应键，
     /// 删枚举会让旧文件的该项变成孤儿。
-    pub const ALL: [Panel; 10] = [
+    pub const ALL: [Panel; 11] = [
         Panel::MapTree,
         Panel::Layers,
         Panel::Minimap,
@@ -163,6 +181,7 @@ impl Panel {
         Panel::Region,
         Panel::Inspector,
         Panel::Validation,
+        Panel::LinePoi,
     ];
 
     /// 菜单 / 标题显示名（ADR-0018：locale-dependent 文案查表）。
@@ -182,6 +201,7 @@ impl Panel {
             Panel::Character => t(loc, I18nKey::PanelCharacter),
             Panel::Event => t(loc, I18nKey::PanelEvent),
             Panel::CellEditor => t(loc, I18nKey::PanelCellEditor),
+            Panel::LinePoi => t(loc, I18nKey::LinePoiPanelTitle),
         }
     }
 
@@ -220,6 +240,11 @@ impl Panel {
             // 310+198=508 ≤ Character 顶 520，右列三面板互不重叠。
             Panel::CellEditor => [992.0, 310.0],
             Panel::Character => [992.0, 520.0],
+            // 河流和道路（ADR-0070 D4）：中列 Situation（底 688）与底部通栏
+            // （顶 880）之间的空档。280×180 → y 696..876（顶 696 > 688、
+            // 底 876 < 880），x 652..932 与 Region（右缘 612）/ Character
+            // （左缘 992）互不相交。
+            Panel::LinePoi => [652.0, 696.0],
             // 底部通栏（§3.3 P-5）。
             Panel::Timeline => [12.0, 880.0],
         }
@@ -254,6 +279,9 @@ impl Panel {
             // （2026-10-22 设计），**不再单独渲染**。枚举项与默认位暂留，
             // 兼容存量 `ui-layout.yaml` 的 `cell_editor` 键；退役见 M4。
             Panel::CellEditor => [288.0, 210.0],
+            // 河流和道路：两段设置（河段：名字/宽度/模式；路段：名字/级别/模式）
+            // 各 ~150 高，取 280×180 与默认位配套（互不重叠验收见 ui_layout 测试）。
+            Panel::LinePoi => [280.0, 180.0],
             // v0.3：Validation 改成 240 高（默认隐藏，validation 触发时才出现）
             Panel::Validation => [300.0, 60.0],
         }
@@ -275,6 +303,7 @@ impl Panel {
             Panel::Character => "character",
             Panel::Event => "event",
             Panel::CellEditor => "cell_editor",
+            Panel::LinePoi => "line_poi",
         }
     }
 
@@ -286,7 +315,8 @@ impl Panel {
     pub fn icon(self) -> wv_ui::widgets::HeadIcon {
         use wv_ui::widgets::{
             HeadIcon, ICON_ALERT, ICON_BRUSH, ICON_CALENDAR, ICON_CLOCK, ICON_FLAG, ICON_GLOBE,
-            ICON_LANDMARK, ICON_LAYERS, ICON_LIST, ICON_MAP, ICON_MAP_PIN, ICON_SLIDERS, ICON_USER,
+            ICON_LANDMARK, ICON_LAYERS, ICON_LIST, ICON_MAP, ICON_MAP_PIN, ICON_ROUTE,
+            ICON_SLIDERS, ICON_USER,
         };
         HeadIcon::Svg(match self {
             Panel::MapTree => ICON_GLOBE,
@@ -302,6 +332,7 @@ impl Panel {
             Panel::Character => ICON_USER,
             Panel::Event => ICON_CALENDAR,
             Panel::CellEditor => ICON_MAP_PIN,
+            Panel::LinePoi => ICON_ROUTE,
         })
     }
 

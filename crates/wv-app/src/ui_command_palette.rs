@@ -224,6 +224,13 @@ pub enum MapToolId {
     ///
     /// 判据（按地表 / 按群系 / 按海拔容差）在 CellMap 面板做 segmented。
     FloodSelect,
+    /// **线段 POI**（ADR-0070 D4）：在地图上画河流 / 道路——一条线就是一个
+    /// 地点实体（`Place::line` + `line_kind`）。载荷 = 线的种类（河 / 路）。
+    ///
+    /// 与 `Select(shape)` 同款「一类工具多个笔尖」建模：河与路不是两件工具，
+    /// 是同一绘制工具的两个类，工具条分裂按钮换类时**不关工具**（分发器
+    /// already_on 判据 = `tool_active` ∧ 同类）。
+    LinePoi(wv_core::distance::LineKind),
 }
 
 /// 一条命令：注册表的条目。
@@ -444,6 +451,15 @@ impl CommandRegistry {
             I18nKey::CmdToolBiomeBoundary,
             None,
         );
+        // 线段 POI（ADR-0070 D4）：工具条分裂按钮（仅 Edit 档出现）与命令
+        // 面板同源。面板只登记河（默认类）一条——路是同一命令的另一个载荷，
+        // 入口在工具条弹层，不另立可搜索条目。
+        push(
+            CommandId::SelectMapTool(MapToolId::LinePoi(wv_core::distance::LineKind::River)),
+            CommandGroup::Edit,
+            I18nKey::LinePoiTool,
+            None,
+        );
         push(
             CommandId::Save,
             CommandGroup::Edit,
@@ -487,6 +503,10 @@ impl CommandRegistry {
                 Panel::Inspector => I18nKey::CmdTogglePanelInspector,
                 Panel::CellEditor => I18nKey::CmdTogglePanelCellEditor,
                 Panel::Validation => I18nKey::CmdTogglePanelValidation,
+                // 线段 POI 面板（ADR-0070 D4）：工具Owned——随工具开关，但
+                // 也允许作者从菜单/设置直接显隐，标签复用面板标题键（不再
+                // 另立 CmdTogglePanelLinePoi 键）。
+                Panel::LinePoi => I18nKey::LinePoiPanelTitle,
             };
             push(
                 CommandId::TogglePanel(p),
