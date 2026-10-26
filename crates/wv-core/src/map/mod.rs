@@ -578,6 +578,7 @@ impl GeometryData {
 
 pub mod coord;
 pub mod distance;
+pub mod road_derive;
 pub mod scale_hint;
 pub mod sea;
 pub mod unit;
