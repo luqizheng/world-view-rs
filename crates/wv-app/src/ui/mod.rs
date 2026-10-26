@@ -42,6 +42,7 @@ pub mod shell;
 pub mod situation_panel;
 pub mod timeline;
 pub mod top_bar;
+pub mod top_option_bar;
 pub mod validation_panel;
 pub mod welcome_screen;
 pub mod widget_preview;
@@ -73,6 +74,7 @@ pub use shell::{terrain_name_at, terrain_swatch, UiShell};
 pub use situation_panel::panel_situation;
 pub use timeline::{panel_timeline, undo_last_street_segment, TimelineLayer};
 pub use top_bar::{status_bar, top_bar, ValidationCount};
+pub use top_option_bar::top_option_bar;
 pub use validation_panel::panel_validation;
 pub use welcome_screen::welcome_screen;
 pub use widgets::{

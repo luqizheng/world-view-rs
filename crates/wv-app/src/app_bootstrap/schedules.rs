@@ -435,6 +435,9 @@ pub(super) fn register(app: &mut App) {
             // `ResMut<ViewState>`，Bevy 无法并行调度同时可变借用同一资源的系统
             // （否则运行期 panic：`could not access system parameter`）。
             ui::top_bar,
+            // topOptionBar 工具选项条（2026-10-27）：贴 topbar 正下方——egui
+            // top Panel 按注册序堆叠，必须在 `ui::top_bar` 之后画才落对位。
+            ui::top_option_bar,
             // Google 式贴边导航控件先画，浮动面板仍可在需要时覆盖它。
             ui::map_controls,
             // （2026-10-25 用户裁定：地图区左上角的面包屑浮层删除——顶栏
