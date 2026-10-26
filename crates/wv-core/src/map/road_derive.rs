@@ -52,6 +52,14 @@ pub fn effective_line_kind(place: &Place) -> Option<LineKind> {
 pub struct RoadDeriveReport {
     /// 本轮成功推导出的边（`derived = true`，`rank = None`）。
     pub edges: Vec<PlaceEdge>,
+    /// **产边溯源**（ADR-0070 D5 评审裁定）：与 [`Self::edges`] 逐位平行，
+    /// 记录每条推导边由哪条道路线 POI 推出：`(边 a, 边 b, 路 Place ID)`。
+    ///
+    /// **为什么放 Report 而不是 PlaceEdge 字段**：产边之路是推导过程的
+    /// 中间事实，落进 PlaceEdge 就会顺着 clone / 序列化路径到处流（污染
+    /// 数据模型）；Report 是一次性诊断产物，用完即弃。消费方：同端点对
+    /// 去重的并列裁定（见 [`derive_road_edges`]）与应用侧诊断展示。
+    pub sources: Vec<(Id, Id, Id)>,
     /// 因地图无比例尺（`km_per_wu` 为 `None`）被跳过的道路线条数。
     pub skipped_no_scale: usize,
     /// 因端点容差内无合法锚定 POI（或两端吸到同一地点）被跳过的道路线条数。
@@ -64,10 +72,13 @@ pub struct RoadDeriveReport {
 ///
 /// 1. 线两端各找**容差内最近的锚定非线 POI**（`effective_anchor` 距离
 ///    ≤ `tolerance_wu`；线段地点与未锚定地点不作端点）；
-/// 2. 两端都命中且所在图有比例尺 → 一条边；
+/// 2. 两端都命中且所在图有比例尺 → 一条候选边；
 /// 3. 同端点对（无向）已有**手写 road 边**（`derived == false`）→ 让位
 ///    不产边——推导边与手写边不得为同一对端点各存一份（单一真值）；
-/// 4. 两端吸到同一地点 = 自环，不产边（计入 `skipped_no_anchor`）。
+/// 4. 同端点对的**多条候选边**（平行路线吸到同一对镇子）确定性去重：
+///    `distance_km` 最长者赢，并列取「产边之路 Place ID」字典序小者
+///    （ADR-0070 D5 评审裁定；产边之路见 [`RoadDeriveReport::sources`]）；
+/// 5. 两端吸到同一地点 = 自环，不产边（计入 `skipped_no_anchor`）。
 ///
 /// `distance_km = 线长(wu) × km_per_wu`（[`MapNode::km_per_wu`] 的 x 分量，
 /// 虚构图各向同性；真图经 bbox 折算，长度取 x/y 均值的 x 侧是可接受近似）。
@@ -85,6 +96,10 @@ pub fn derive_road_edges(world: &World, tolerance_wu: f32) -> RoadDeriveReport {
         .filter(|e| !e.derived && e.terrain == "road")
         .map(|e| (&e.a, &e.b))
         .collect();
+
+    // 候选边 + 产边之路：同端点对去重的并列裁定要问「这条边是谁修的」，
+    // 溯源挂在 Report 侧（评审裁定：不污染 PlaceEdge），先随候选一起收集。
+    let mut candidates: Vec<(PlaceEdge, Id)> = Vec::new();
 
     for line_place in places {
         if effective_line_kind(line_place) != Some(LineKind::Road) {
@@ -125,17 +140,50 @@ pub fn derive_road_edges(world: &World, tolerance_wu: f32) -> RoadDeriveReport {
         if suppressed {
             continue;
         }
-        report.edges.push(PlaceEdge {
-            id: Id::new_unchecked(format!("road_{lo}_{hi}")),
-            a: Id::new_unchecked(lo.clone()),
-            b: Id::new_unchecked(hi),
-            distance_km: line_length_wu(line) * km_per_wu,
-            terrain: "road".into(),
-            bidirectional: true,
-            rank: None,
-            derived: true,
-        });
+        candidates.push((
+            PlaceEdge {
+                id: Id::new_unchecked(format!("road_{lo}_{hi}")),
+                a: Id::new_unchecked(lo.clone()),
+                b: Id::new_unchecked(hi),
+                distance_km: line_length_wu(line) * km_per_wu,
+                terrain: "road".into(),
+                bidirectional: true,
+                rank: None,
+                derived: true,
+            },
+            line_place.id.clone(),
+        ));
     }
+
+    // ── 同端点对（无向）去重（ADR-0070 D5 评审裁定）──
+    //
+    // 平行路线吸到同一对镇子时只留一条：`distance_km` 最长者赢；并列取
+    // 「产边之路 Place ID」字典序小者。确定性：候选序 = places 表序，
+    // 替换只在「严格更长」或「同长且路 ID 更小」时发生——结果与遍历起点
+    // 无关。O(n²) 扫描：推导边规模 = 路线数（编辑器规模 ≤ 数百），无须
+    // 哈希索引；端点对已按字典序摆正，`a、b` 同时相等即同对。
+    let mut picked: Vec<(PlaceEdge, Id)> = Vec::new();
+    for (edge, src) in candidates {
+        match picked
+            .iter_mut()
+            .find(|(e, _)| e.a == edge.a && e.b == edge.b)
+        {
+            Some((win, win_src)) => {
+                if edge.distance_km > win.distance_km
+                    || (edge.distance_km == win.distance_km && src < *win_src)
+                {
+                    *win = edge;
+                    *win_src = src;
+                }
+            }
+            None => picked.push((edge, src)),
+        }
+    }
+    report.edges = picked.iter().map(|(e, _)| e.clone()).collect();
+    report.sources = picked
+        .into_iter()
+        .map(|(e, s)| (e.a.clone(), e.b.clone(), s))
+        .collect();
     report
 }
 
@@ -690,6 +738,85 @@ mod tests {
             report.edges
         );
         assert_eq!(report.skipped_no_anchor, 1, "起点端无同图锚点，恰计一次");
+    }
+
+    /// 平行路线同端点对（ADR-0070 D5 评审裁定）：两条路吸到同一对镇子 →
+    /// 只剩一条推导边，且 `distance_km` 最长者赢。
+    ///
+    /// 手算夹具：短路直连 200 wu；长路绕行 100 + 30 + 100 = 230 wu
+    /// （末端 (200, 30) 距 village_beta 30 wu，仍在 32 wu 容差内）。
+    /// 8 wu/km 下长路 28.75 km、短路 25 km——若实现不去重或短边赢了，必炸。
+    #[test]
+    fn parallel_road_lines_dedupe_longest_wins() {
+        let w = world_with(
+            map_node(Some(8.0)),
+            vec![
+                road_line_place("road_short", vec![0.0, 0.0, 200.0, 0.0]),
+                road_line_place(
+                    "road_long",
+                    vec![0.0, 0.0, 100.0, 0.0, 100.0, 30.0, 200.0, 30.0],
+                ),
+                point_place("hamlet_alpha", 0.0, 0.0),
+                point_place("village_beta", 200.0, 0.0),
+            ],
+            vec![],
+        );
+        let report = derive_road_edges(&w, ROAD_SNAP_TOLERANCE_WU);
+        assert_eq!(
+            report.edges.len(),
+            1,
+            "同端点对只留一条推导边，实得 {:?}",
+            report.edges
+        );
+        assert!(
+            (report.edges[0].distance_km - 28.75).abs() < 1e-3,
+            "长路赢：230 wu ÷ 8 = 28.75 km（短路只有 25 km），实得 {}",
+            report.edges[0].distance_km
+        );
+        // sources 与 edges 逐位平行：胜者边由哪条路推出一目了然。
+        assert_eq!(
+            report.sources,
+            vec![(vid("hamlet_alpha"), vid("village_beta"), vid("road_long"))],
+            "产边溯源应指向长路，实得 {:?}",
+            report.sources
+        );
+    }
+
+    /// 去重的并列裁定：同端点对的候选边一样长时，取「产边之路 Place ID」
+    /// 字典序小者——两条等长平行路，`road_alpha` 压过 `road_zeta`。
+    /// 边本体（ID / 端点 / 公里）两案完全相同，唯一可观测差异在 sources。
+    #[test]
+    fn dedupe_tie_breaks_by_smaller_source_place_id() {
+        let w = world_with(
+            map_node(Some(8.0)),
+            vec![
+                // 表序故意让 road_zeta 在前：胜者由裁定规则选出，不由遍历序。
+                road_line_place("road_zeta", vec![0.0, 0.0, 200.0, 0.0]),
+                road_line_place("road_alpha", vec![0.0, 2.0, 200.0, 2.0]),
+                point_place("hamlet_alpha", 0.0, 0.0),
+                point_place("village_beta", 200.0, 0.0),
+            ],
+            vec![],
+        );
+        let report = derive_road_edges(&w, ROAD_SNAP_TOLERANCE_WU);
+        assert_eq!(
+            report.edges.len(),
+            1,
+            "同端点对只留一条推导边，实得 {:?}",
+            report.edges
+        );
+        assert_eq!(
+            report.sources.len(),
+            1,
+            "sources 与 edges 平行，实得 {:?}",
+            report.sources
+        );
+        assert_eq!(
+            report.sources[0].2.as_str(),
+            "road_alpha",
+            "并列时产边之路取字典序小者，实得 {:?}",
+            report.sources
+        );
     }
 
     /// 环形小路两端吸到**同一**地点 → 自环无意义，不产边。
