@@ -1190,6 +1190,10 @@ pub enum I18nKey {
     ContinentNoticeNoEnvelopes,
     /// 错误前缀「生成失败」
     ContinentNoticeGenerateFailed,
+    /// 按钮「生成大陆…」（CellMap 批量区 · 2026-10-26）
+    BatchContinentGenerate,
+    /// 错误「选区提不出有效轮廓」（CellMap 批量区生成 · 2026-10-26）
+    BatchContinentNoOutline,
 
     // ── 选区意图菜单（2026-10-17 选择工具 spec §4，M1 Task 6） ──────────
     /// 按钮「生成大陆…」
@@ -1314,7 +1318,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 518] = [
+    pub const ALL: [I18nKey; 520] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1840,6 +1844,8 @@ impl I18nKey {
         I18nKey::ContinentNoticeNoMap,
         I18nKey::ContinentNoticeNoEnvelopes,
         I18nKey::ContinentNoticeGenerateFailed,
+        I18nKey::BatchContinentGenerate,
+        I18nKey::BatchContinentNoOutline,
         I18nKey::NewMapAspect,
         I18nKey::Aspect16x9,
         I18nKey::Aspect4x3,

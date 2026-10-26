@@ -82,6 +82,7 @@ pub fn cell_form(
     session: &mut wv_world_cell_map::cell_paint::CellPaintSession,
     flood: &mut wv_world_cell_map::state::FloodSelectState,
     derived: &mut crate::edit::derived_op::DerivedOpRequest,
+    cont: &mut crate::ui::ContinentDialog,
     playback_playing: bool,
     sel: &mut CellSelection,
     map: Option<&wv_core::Id>,
@@ -165,8 +166,19 @@ pub fn cell_form(
                     t(loc, I18nKey::CellScopeSelectedCount).replace("{n}", &sel.len().to_string()),
                     t(loc, I18nKey::CellScopeBatchHint),
                 );
-                // N 格批量：读数 + 整体改（相对增减 / 水陆 / 群系）。
-                render_batch_section(ui, shell, projection, edit, tex, loc, sel, map);
+                // N 格批量：读数 + 整体改（相对增减 / 水陆 / 群系）+ 生成大陆。
+                render_batch_section(
+                    ui,
+                    shell,
+                    projection,
+                    edit,
+                    tex,
+                    loc,
+                    cont,
+                    sel,
+                    map,
+                    playback_playing,
+                );
             }
         }
     }
@@ -403,7 +415,11 @@ fn region_stats(
 ///
 /// **读数**（补 A）：N 格 / 平均海拔 / 最高最低 / 群系分布；
 /// **写入**：海拔整体设值、海拔增减（delta）、设水陆、设群系（7 组 radio，
-/// 与单格布局同款）。
+/// 与单格布局同款）；
+/// **生成**（2026-10-26）：「生成大陆」按钮——只开八参面板
+/// （[`crate::ui::ContinentDialog`]），确认时经 `continent_dialog_system`
+/// 从统一选区提取包络环走 `GenerateContinentCommand` 宏命令（1 撤销单位）。
+/// 2026-10-24 裁定「工作台不出意图菜单」后，这就是统一选区的生成式出口。
 ///
 /// 每次应用 = 1 条 `BatchEditCellsCommand`（N 格 1 个撤销单位）。
 #[allow(clippy::too_many_arguments)]
@@ -414,8 +430,10 @@ fn render_batch_section(
     edit: &mut crate::edit::editing::EditHistory,
     tex: &mut wv_render::terrain_view::TerrainTexture,
     loc: crate::i18n::Locale,
+    cont: &mut crate::ui::ContinentDialog,
     sel: &mut CellSelection,
     map: Option<&wv_core::Id>,
+    playback_playing: bool,
 ) {
     // ── 头：取消按钮（格数在读数区显示，用 stats.count 真实值）──
     ui.horizontal(|ui| {
@@ -637,6 +655,29 @@ fn render_batch_section(
             });
         },
     );
+
+    // ── 生成大陆（2026-10-26）──
+    // 只开八参面板；确认时经 continent_dialog_system 从统一选区格集提取
+    // 包络环（wv_terrain::outline），提交走 GenerateContinentCommand 宏命令
+    // （1 撤销单位，选区保留——ADR-0033）。播放中禁用（§9.4 Gate-1：只挡
+    // 写入；面板侧另有兜底提示）。
+    ui.add_space(8.0);
+    divider(ui, shell);
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        if crate::ui::widgets::button(
+            ui,
+            shell,
+            ButtonContent::Text(t(loc, I18nKey::BatchContinentGenerate)),
+            ButtonStyle::Accent,
+            None,
+            !playback_playing,
+        )
+        .clicked()
+        {
+            cont.open = true;
+        }
+    });
 }
 
 /// 批量应用：从 world 读每格当前值 → 构造 changes → 1 条

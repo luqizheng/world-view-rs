@@ -191,6 +191,16 @@ pub fn continent_dialog(
 ///
 /// 拆成系统而非塞进 `ui_shell` 的大分发器：面板要读写 10+ 个资源，
 /// 单系统参数上限（16）比分发器已经顶满的元组链安全得多。
+///
+/// ## 包络两源（2026-10-26）
+///
+/// - **CellMap 工作台**（`Topographic` 档，谓词与意图菜单同源
+///   `cell_workspace_active`）：包络 = 统一选区格集经
+///   `wv_terrain::outline::cell_set_outline` 提取的环（栅格局部 wu，
+///   与配方格遍历同口径）——入口在 Cell 批量区「生成大陆」按钮
+///   （2026-10-24 裁定「工作台不出意图菜单」，选区的生成式出口在批量区）。
+/// - **Browse / Edit 档**（原路径，spec D5）：包络 = V 工具闭合环
+///   （`SelectionState.closed`）。
 #[allow(clippy::too_many_arguments)]
 pub fn continent_dialog_system(
     mut ctxs: bevy_egui::EguiContexts,
@@ -203,6 +213,9 @@ pub fn continent_dialog_system(
     mut edit: bevy::prelude::ResMut<crate::edit::editing::EditHistory>,
     mut tex: bevy::prelude::ResMut<wv_render::terrain_view::TerrainTexture>,
     selection: bevy::prelude::Res<crate::state::SelectionState>,
+    cell_sel: bevy::prelude::Res<wv_render::state::CellSelection>,
+    view: bevy::prelude::Res<crate::state::ViewState>,
+    playback: bevy::prelude::Res<crate::state::PlaybackState>,
     mut notice: bevy::prelude::ResMut<crate::ui_shell::ShellNotice>,
     time: bevy::prelude::Res<bevy::prelude::Time>,
 ) {
@@ -223,15 +236,33 @@ pub fn continent_dialog_system(
             notice.error(t(loc, I18nKey::ContinentNoticeNoMap), frame);
             return;
         };
-        // 选区即意图包络（spec D5）：确认时克隆环提交；成功/失败都不消费
-        // 选区（ADR-0033：作者可继续加锚点调轮廓再生成）。
-        let Some(ring) = selection.closed.clone() else {
-            notice.error(t(loc, I18nKey::ContinentNoticeNoEnvelopes), frame);
+        if playback.playing {
+            // 面板开着时进入播放的边角兜底（入口按钮已按 Gate-1 禁用）。
+            notice.error("播放中为只读：先暂停再生成大陆", frame);
             return;
-        };
+        }
+        // 包络两源：工作台从统一选区提取环（多连通域各一环）；
+        // Browse/Edit 用 V 工具闭合环（spec D5）。成功/失败都不消费选区
+        // （ADR-0033：作者可继续调选区 / 加锚点再生成）。
+        let envelopes: Vec<Vec<(f32, f32)>> =
+            if crate::ui::intent_menu::cell_workspace_active(view.mode) {
+                let cells: Vec<(i32, i32)> = cell_sel.iter_cells().collect();
+                let env = wv_terrain::outline::cell_set_outline(&cells, cell_size);
+                if env.is_empty() {
+                    notice.error(t(loc, I18nKey::BatchContinentNoOutline), frame);
+                    return;
+                }
+                env
+            } else {
+                let Some(ring) = selection.closed.clone() else {
+                    notice.error(t(loc, I18nKey::ContinentNoticeNoEnvelopes), frame);
+                    return;
+                };
+                vec![ring]
+            };
         match crate::edit::editing::commit_continent_generation(
             map,
-            vec![ring],
+            envelopes,
             params,
             seed,
             cell_size,

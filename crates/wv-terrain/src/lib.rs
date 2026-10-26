@@ -28,6 +28,7 @@
 //! | [`hash`] | 写确定性格点哈希（摆位 / 抖动 / 纸纹）时。 |
 //! | [`edit`] | 写新笔刷（含 [`TerrainGrid`] 字段访问器）时。 |
 //! | [`intent`] | 写「意图笔刷」——按意图生成山脉 / 高原 / 火山 / 湖 / 河时。 |
+//! | [`outline`] | 写格集 → 包络环提取（CellMap 选区接大陆配方）时。 |
 //! | [`isoline`] | 等值线提取 / 折线平滑抽稀（渲染派生，plan v0.1 M2）时。 |
 //! | [`forest`] | 写森林覆盖物生成（适宜度 / 密度场 / 树木采样，codex_forest_design.md）时。 |
 //!
@@ -50,6 +51,7 @@ pub mod hash;
 pub mod intent;
 pub mod isoline;
 pub mod marker;
+pub mod outline;
 pub mod region;
 pub mod shore;
 
