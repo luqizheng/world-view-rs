@@ -210,10 +210,11 @@ pub(crate) fn apply_pending_commands(
     // 在对话框自身的系统里提交，见 `ui::new_map_dialog`）。
     // 「新建工程」对话框的开关同源（CommandId::NewProject / 欢迎页 → open）。
     // 两个 ResMut 折成一层元组：单系统参数上限 16，拆元组后每层元组算 1 个。
-    (mut new_map_dialog, mut new_project_dialog, mut continent_dialog): (
+    (mut new_map_dialog, mut new_project_dialog, mut continent_dialog, mut map_props_dialog): (
         ResMut<crate::ui::NewMapDialog>,
         ResMut<crate::ui::NewProjectDialog>,
         ResMut<crate::ui::ContinentDialog>,
+        ResMut<crate::ui::MapPropertiesDialog>,
     ),
     // 换世界接管（adopt_world_snapshot）所需：瓦片图集可缺席（纯色平涂回退）。
     (atlas, mut images): (
@@ -261,6 +262,7 @@ pub(crate) fn apply_pending_commands(
     if matches!(
         id,
         CommandId::NewMap
+            | CommandId::MapProperties
             | CommandId::Save
             | CommandId::SaveProjectAs
             | CommandId::ExportProject
@@ -318,6 +320,13 @@ pub(crate) fn apply_pending_commands(
         // 新建地图：只负责把对话框打开（默认值按世界现状预填）；创建动作
         // 在对话框自身的系统里经 `AddMapCommand` 提交（见 `ui::new_map_dialog`）。
         CommandId::NewMap => new_map_dialog.open_for(&projection.world),
+        // 地图属性：对**当前图**（钻取栈顶）出框；没有当前图（无工程）时
+        // 闸门已挡，这里只是防御。
+        CommandId::MapProperties => {
+            if let Some(node) = drill.current_node(&projection.world) {
+                map_props_dialog.open_for_node(node);
+            }
+        }
         CommandId::ToggleTheme => cfg.theme = cfg.theme.toggled(),
         CommandId::ToggleDensity => cfg.density = cfg.density.toggled(),
         CommandId::ToggleImmersive => panels.immersive = !panels.immersive,

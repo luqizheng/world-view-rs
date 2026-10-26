@@ -32,6 +32,7 @@ pub mod landmark_panel;
 pub mod layers_panel;
 pub mod list_panels_panel;
 pub mod map_controls;
+pub mod map_properties_dialog;
 pub mod map_scale_bar;
 pub mod minimap_panel;
 pub mod new_map_dialog;
@@ -62,6 +63,7 @@ pub use landmark_panel::panel_landmark;
 pub use layers_panel::{panel_layers, panel_map_tree};
 pub use list_panels_panel::{panel_character, panel_event};
 pub use map_controls::map_controls;
+pub use map_properties_dialog::{map_properties_dialog, MapPropertiesDialog};
 pub use minimap_panel::panel_minimap;
 pub use new_map_dialog::{new_map_dialog, NewMapDialog};
 pub use new_project_dialog::{

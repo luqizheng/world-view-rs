@@ -41,8 +41,9 @@ pub(super) const STATUS_GAP_CENTER: f32 = 24.0;
 /// `#D6B77B`→`gold`、`#8FB397`→`badge_ok`、`#303B43`→`border_subtle`——
 /// 亮色主题因此自动获得同语义配色，而非设计稿的暗色单套。
 ///
-/// 参数 9 个（含 [ADR-0052] D8-B 的笔触进度态）：Bevy 系统的宽签名是框架
-/// 惯例，clippy 的 7 参数默认阈值不适用于 `Res`/`ResMut` 声明式依赖。
+/// 参数 10 个（含 [ADR-0052] D8-B 的笔触进度态、比例尺段的格尺寸）：Bevy
+/// 系统的宽签名是框架惯例，clippy 的 7 参数默认阈值不适用于 `Res`/`ResMut`
+/// 声明式依赖。
 #[allow(clippy::too_many_arguments)]
 pub fn status_bar(
     mut contexts: EguiContexts,
@@ -54,6 +55,8 @@ pub fn status_bar(
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
     paint: Res<wv_world_cell_map::cell_paint::CellPaintSession>,
     current_loc: Res<CurrentLocale>,
+    // 比例尺段的「每格 ≈ 多少」读它（格尺寸 × km/wu = 数据分辨率）。
+    grid: Res<crate::state::GridConfig>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -78,7 +81,15 @@ pub fn status_bar(
                 // ── 左：Project status（组内 gap 16）──
                 project_status_segment(ui, &shell, &projection);
                 // ── 左段尾：比例尺（QGIS 式状态栏段，无 km 换算时整段不画）──
-                scale_bar_segment(ui, &shell, &view, &projection, &drill);
+                scale_bar_segment(
+                    ui,
+                    &shell,
+                    &view,
+                    &projection,
+                    &drill,
+                    grid.cell_size,
+                    current_loc.0,
+                );
                 // ── 中左：笔触进度瞬态槽（[ADR-0052] D8-B，仅 stroke 期间出现）──
                 stroke_progress_segment(ui, &shell, &paint, current_loc.0);
                 // ── 中：Pointer coordinates（面板内绝对居中，见 fn 文档）──
@@ -159,6 +170,8 @@ pub(super) fn scale_bar_segment(
     view: &ViewState,
     projection: &WorldProjection,
     drill: &DrillState,
+    cell_size_wu: f32,
+    locale: crate::i18n::Locale,
 ) {
     let Some((_, label, bar_px)) =
         crate::ui::map_scale_bar::scale_bar_readout(view, projection, drill)
@@ -175,7 +188,7 @@ pub(super) fn scale_bar_segment(
         .layout(label.to_owned(), font, ink, f32::INFINITY);
     // 条与标签取宽者作占位：条极短时标签不外溢状态栏。
     let w = bar_px.max(galley.size().x);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 20.0), egui::Sense::hover());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 20.0), egui::Sense::hover());
     let painter = ui.painter();
     let line_y = rect.max.y - 3.0;
     let x0 = rect.center().x - bar_px * 0.5;
@@ -196,6 +209,20 @@ pub(super) fn scale_bar_segment(
         galley,
         ink,
     );
+    // 悬浮说明（2026-10-27 用户反馈：分不清「5 km」说的是条长还是每格）：
+    // 第一行钉死条长语义——一整段 = 标注距离；第二行给数据分辨率（每格
+    // 真实尺寸）——那才是「海岸突出部几米还是 2 公里」的判定基准。
+    let mut tip = crate::i18n::t(locale, crate::i18n::I18nKey::ScaleBarTipBar).to_owned();
+    if let Some(cell) = crate::ui::map_scale_bar::cell_size_label(projection, drill, cell_size_wu) {
+        tip.push('\n');
+        tip.push_str(&format!(
+            "{} {}{}",
+            crate::i18n::t(locale, crate::i18n::I18nKey::ScaleBarTipCellPrefix),
+            cell,
+            crate::i18n::t(locale, crate::i18n::I18nKey::ScaleBarTipCellSuffix),
+        ));
+    }
+    resp.on_hover_text(tip);
 }
 
 /// 左段「Project status」：产品名 / 版本 / 分隔线 / 工程目录名（gap 16 均匀）。

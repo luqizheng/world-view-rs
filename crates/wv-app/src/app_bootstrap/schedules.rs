@@ -497,6 +497,12 @@ pub(super) fn register(app: &mut App) {
             ui::settings_dialog.after(ui::status_bar),
         ),
     );
+    // 「地图属性」对话框（CommandId::MapProperties 打开；居中模态窗）。
+    // 主链顶满，同上单独注册。
+    app.add_systems(
+        bevy_egui::EguiPrimaryContextPass,
+        ui::map_properties_dialog.after(ui::status_bar),
+    );
     // 选区意图菜单（底部居中浮动条；spec 2026-10-17 §4）。ego pass 主链已到
     // Bevy 元组上限（20），单独注册、排在 map_controls 之后即可（只读选区）。
     app.add_systems(

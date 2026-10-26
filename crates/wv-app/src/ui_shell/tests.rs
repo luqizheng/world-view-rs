@@ -94,6 +94,8 @@ fn dispatcher_world(project_dir: Option<&str>, dirty: bool, pending: CommandId) 
     world.init_resource::<crate::state::EditCellState>();
     world.init_resource::<wv_render::state::BiomeBoundaryState>();
     world.init_resource::<crate::ui::ContinentDialog>();
+    // 「地图属性」对话框（2026-10-27）：分发器签名新增依赖，fixture 同款补齐。
+    world.init_resource::<crate::ui::MapPropertiesDialog>();
     // ADR-0018：UI 文案语言；默认 `Locale::Zh`（与 GUI 启动默认值一致）。
     world.init_resource::<crate::i18n::CurrentLocale>();
     world.init_resource::<LayoutFile>();
@@ -393,6 +395,8 @@ fn project_menu_pending_command_reaches_the_dispatcher() {
     world.init_resource::<crate::state::EditCellState>();
     world.init_resource::<wv_render::state::BiomeBoundaryState>();
     world.init_resource::<crate::ui::ContinentDialog>();
+    // 「地图属性」对话框（2026-10-27）：分发器签名新增依赖，fixture 同款补齐。
+    world.init_resource::<crate::ui::MapPropertiesDialog>();
     // ADR-0018：UI 文案语言；默认 `Locale::Zh`（与 GUI 启动默认值一致）。
     world.init_resource::<crate::i18n::CurrentLocale>();
     world.init_resource::<LayoutFile>();

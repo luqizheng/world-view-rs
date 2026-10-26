@@ -91,6 +91,49 @@ fn format_distance(km: f64) -> String {
     }
 }
 
+/// 任意距离的柔性标签（格尺寸等**派生值**用，不限于 1-2-5 候选）：
+/// 公里恰为整数出整数、否则一位小数；米 ≥ 10 出整数、否则一位小数。
+///
+/// 为什么不用 [`format_distance`]：那个假定入参是候选序列值（恒整数），
+/// 格尺寸是 `cell_size × km_per_wu` 的任意正数（如 1.5 km / 7.5 m），
+/// 整数截断会把 1.5 km 标成「1 km」——比例尺条可以取整，分辨率不能撒谎。
+pub fn format_km_flexible(km: f64) -> String {
+    if !km.is_finite() || km <= 0.0 {
+        return "—".into();
+    }
+    if km >= 1.0 {
+        let rounded = km.round();
+        if (km - rounded).abs() < 0.05 {
+            format!("{} km", rounded as u64)
+        } else {
+            format!("{km:.1} km")
+        }
+    } else {
+        let m = km * 1000.0;
+        if m >= 9.5 {
+            format!("{} m", m.round() as u64)
+        } else {
+            format!("{m:.1} m")
+        }
+    }
+}
+
+/// 当前图「每格 ≈ 多少」的标签（格尺寸 × km/wu，数据分辨率的直读）。
+///
+/// 图未声明 km 换算时返回 `None`（与比例尺条同隐：没有尺度就谈不到分辨率）。
+pub fn cell_size_label(
+    projection: &WorldProjection,
+    drill: &DrillState,
+    cell_size_wu: f32,
+) -> Option<String> {
+    let node = drill.current_node(&projection.world)?;
+    let (km_per_wu_x, _) = node.km_per_wu()?;
+    if !cell_size_wu.is_finite() || cell_size_wu <= 0.0 {
+        return None;
+    }
+    Some(format_km_flexible(f64::from(cell_size_wu) * km_per_wu_x))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +189,17 @@ mod tests {
         assert_eq!(pick_scale_distance(0.0), None, "零换算应返回 None");
         assert_eq!(pick_scale_distance(-1.0), None, "负换算应返回 None");
         assert_eq!(pick_scale_distance(f64::NAN), None, "NaN 应返回 None");
+    }
+
+    #[test]
+    fn flexible_labels_keep_non_integer_distances_honest() {
+        // 派生值（格尺寸）不是候选序列：1.5 km 截断成「1 km」就是撒谎。
+        assert_eq!(format_km_flexible(4.0), "4 km");
+        assert_eq!(format_km_flexible(1.5), "1.5 km");
+        assert_eq!(format_km_flexible(0.04), "40 m");
+        assert_eq!(format_km_flexible(0.0075), "7.5 m");
+        assert_eq!(format_km_flexible(0.0), "—", "非正数不是距离");
+        assert_eq!(format_km_flexible(f64::NAN), "—", "NaN 不是距离");
     }
 
     #[test]

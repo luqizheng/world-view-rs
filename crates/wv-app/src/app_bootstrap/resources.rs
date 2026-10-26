@@ -76,6 +76,10 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     .init_resource::<GridConfig>()
     // 「新建地图」对话框状态（ui_shell 分发器与对话框系统共用）。
     .init_resource::<ui::NewMapDialog>()
+    // 「地图属性」对话框状态（ui_shell 分发器与对话框系统共用）。
+    // 2026-10-27 曾漏注册：全测试闸门绿（fixture 手动 init 掩盖）、首次
+    // `wv gui` 即 panic——smoke 闸门存在的理由，见 §7.1。
+    .init_resource::<ui::MapPropertiesDialog>()
     // 「新建工程」对话框状态（欢迎页 / 分发器 / 目录轮询三方共用；
     // 资源本体在 ui_shell::register 里也有 init，幂等，这里注册是就近可读）。
     .init_resource::<ui::NewProjectDialog>()

@@ -561,6 +561,8 @@ pub enum I18nKey {
     ProjectMenuCloseProject,
     /// 「项目设置」按钮
     ProjectMenuProjectSettings,
+    /// 「地图属性…」按钮（2026-10-27：查看 / 修改当前图名称与尺度声明）
+    ProjectMenuMapProperties,
     /// 「工程」分组
     ProjectMenuProjectSection,
 
@@ -1024,6 +1026,14 @@ pub enum I18nKey {
     CmdResetTerrainToBase,
     /// 「重新生成世界地形」（ADR-0037 D4）
     CmdRegenWorld,
+    /// 「地图属性…」（2026-10-27：命令面板 / 工程菜单同源）
+    CmdMapProperties,
+    /// 比例尺悬浮提示·条长语义（2026-10-27 用户反馈：不理解条长与数字的关系）
+    ScaleBarTipBar,
+    /// 比例尺悬浮提示·每格尺寸前缀（拼接 `format_km_flexible` 的结果）
+    ScaleBarTipCellPrefix,
+    /// 比例尺悬浮提示·每格尺寸后缀（分辨率语义）
+    ScaleBarTipCellSuffix,
     /// 「增大笔刷半径」
     CmdBrushRadiusUp,
     /// 「减小笔刷半径」
@@ -1318,7 +1328,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 520] = [
+    pub const ALL: [I18nKey; 525] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1562,6 +1572,7 @@ impl I18nKey {
         I18nKey::ProjectMenuExportProject,
         I18nKey::ProjectMenuCloseProject,
         I18nKey::ProjectMenuProjectSettings,
+        I18nKey::ProjectMenuMapProperties,
         I18nKey::ProjectMenuProjectSection,
         // 区间（4）
         I18nKey::SpanDayPrefix,
@@ -1760,6 +1771,11 @@ impl I18nKey {
         I18nKey::CmdForceRebuildTexture,
         I18nKey::CmdResetTerrainToBase,
         I18nKey::CmdRegenWorld,
+        I18nKey::CmdMapProperties,
+        // 比例尺悬浮提示（2026-10-27）
+        I18nKey::ScaleBarTipBar,
+        I18nKey::ScaleBarTipCellPrefix,
+        I18nKey::ScaleBarTipCellSuffix,
         I18nKey::CmdBrushRadiusUp,
         I18nKey::CmdBrushRadiusDown,
         // 笔刷工具 7 条 + 参照网格（2026-10-16）
