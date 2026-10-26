@@ -210,6 +210,35 @@ impl PoiKind {
     }
 }
 
+/// 线段 POI 的**类别**（ADR-0070 D2）。
+///
+/// 与 [`PoiKind`] **正交**：`kind` 说「这个**点**代表什么」（餐饮 / 医疗 /
+/// 车站），`line_kind` 说「这条**线**是什么」（河 / 路）。ADR-0070 明确否决了
+/// 「给 `PoiKind` 加 `River` / `Road` 变体」的方案——点分类与线判别混载会让
+/// 「这是个港口」和「这是一条河」互相污染（港口可以是线，河也可以是点标记）。
+///
+/// **封闭枚举而非自由字符串**：河与路是两种语义迥异的线（河随地形绕行、宽度
+/// 沿弧长锥形；路按 rank 折算描画），自由串只会带来拼错与静默回退。
+///
+/// 缺省（`None`，即 YAML 无 `line_kind` 键）= **河流**：ADR-0046 存量的手绘
+/// 折线全是作者的小溪 / 小河，旧工程零迁移——判别口径为
+/// 「`line.is_some()` ∧ `line_kind == Some(Road)` → 路；`line.is_some()` 其余 → 河」。
+///
+/// **注意**：本枚举只回答「是什么」，不回答「画多宽」（那是
+/// [`Place::line_width_m`]）、不回答「往哪走」（那是 [`Place::line`]）。
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum LineKind {
+    /// 河流：宽度沿弧长**锥形**插值（源头窄、河口宽），基准宽取
+    /// [`Place::line_width_m`]。
+    #[default]
+    River,
+    /// 道路：宽度按 `rank` 折算描画，**不**依赖 `line_width_m`。
+    Road,
+}
+
 /// 地点节点。对应 `distances/places.yaml`。
 ///
 /// ## 双重身份（2026-01 修订）
@@ -286,6 +315,29 @@ pub struct Place {
     /// YAML 是作者手读的，空字段是噪音。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<PoiKind>,
+    /// 线段 POI 的类别（ADR-0070 D2）。`None` = 河流（缺省语义）。
+    ///
+    /// 判别口径（后续所有任务共用）：**`line.is_some()` ∧
+    /// `line_kind == Some(Road)` → 道路；`line.is_some()` ∧ `line_kind` 为
+    /// `None` 或 `Some(River)` → 河流**；`line` 为 `None` → 不是线段 POI
+    /// （点状地点，`line_kind` 此时无意义）。
+    ///
+    /// 缺省 `None` 而不是 `Some(River)`：ADR-0046 存量的手绘折线全是作者的小溪 /
+    /// 小河，写入侧不落盘 = 旧工程零迁移（读入 `None` 即河流），且 YAML 是作者
+    /// 手读的格式，多一行 `line_kind: river` 就是噪音。
+    ///
+    /// 与 [`Self::kind`]（点分类）**正交**，不混载。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_kind: Option<LineKind>,
+    /// 线段的**基准宽度**（米）。
+    ///
+    /// 河流 = 河口基准宽（渲染沿弧长**锥形**插值：源头约基准的 30% → 河口 =
+    /// 基准，ADR-0070 D4）；道路 = **不落盘**（宽度按 `rank` 折算描画，写了
+    /// 也是噪音，故道路不填此字段）。
+    ///
+    /// 缺省 `None`：宽度由渲染层按类别 / `rank` 折算，零迁移。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_width_m: Option<f32>,
 }
 
 impl Place {
@@ -685,6 +737,8 @@ mod tests {
                     biome: None,
                     envelope: None,
                     rank: None,
+                    line_kind: None,
+                    line_width_m: None,
                 },
                 Place {
                     kind: None,
@@ -700,6 +754,8 @@ mod tests {
                     biome: None,
                     envelope: None,
                     rank: None,
+                    line_kind: None,
+                    line_width_m: None,
                 },
                 Place {
                     kind: None,
@@ -715,6 +771,8 @@ mod tests {
                     biome: None,
                     envelope: None,
                     rank: None,
+                    line_kind: None,
+                    line_width_m: None,
                 },
             ],
             edges: vec![
@@ -885,6 +943,110 @@ mod tests {
         assert_eq!(back.kind, Some(PoiKind::Medical));
     }
 
+    // ---- 线段 POI：LineKind 与 line_width_m（ADR-0070 D2）----
+
+    /// 线段类别按 snake_case 落盘并可读回（作者手写 / 渲染判别同一拼写）。
+    ///
+    /// 两个变体的拼写都逐字钉死：`river` / `road`——下游任务（迁移器、渲染层、
+    /// 推导边）都按这两个字面量读 YAML，拼写漂移会让「作者写 road、代码查
+    /// River」静默失配（旧工程里的河反而被当成路）。
+    #[test]
+    fn line_kind_round_trips_as_snake_case() {
+        assert_eq!(
+            serde_yaml::to_string(&LineKind::River)
+                .expect("应可序列化")
+                .trim(),
+            "river",
+            "LineKind::River 的 serde 拼写应为 river"
+        );
+        assert_eq!(
+            serde_yaml::to_string(&LineKind::Road)
+                .expect("应可序列化")
+                .trim(),
+            "road",
+            "LineKind::Road 的 serde 拼写应为 road"
+        );
+
+        let mut p = line_place();
+        p.line_kind = Some(LineKind::Road);
+        p.line_width_m = Some(12.5);
+        let yaml = serde_yaml::to_string(&p).expect("应可序列化");
+        assert!(
+            yaml.contains("line_kind: road"),
+            "线段类别应为 snake_case：\n{yaml}"
+        );
+        assert!(
+            yaml.contains("line_width_m: 12.5"),
+            "基准宽应落盘：\n{yaml}"
+        );
+        let back: Place = serde_yaml::from_str(&yaml).expect("应可反序列化");
+        assert_eq!(back.line_kind, Some(LineKind::Road));
+        assert_eq!(back.line_width_m, Some(12.5));
+        assert_eq!(back, p, "带线段字段的 Place YAML round-trip 应无损");
+    }
+
+    /// 旧工程（无 `line_kind` / `line_width_m`）读写都不该被塞进这两行。
+    ///
+    /// YAML 是作者手读的格式，多一个空字段就是噪音；同时反向读入必须成功
+    /// （`serde(default)`），否则一次保存就会让旧工程读不回来。
+    #[test]
+    fn place_without_line_fields_round_trips_without_emitting_them() {
+        let p = point_place();
+        let yaml = serde_yaml::to_string(&p).expect("应可序列化");
+        assert!(
+            !yaml.contains("line_kind"),
+            "缺省 line_kind 不应落盘：\n{yaml}"
+        );
+        assert!(
+            !yaml.contains("line_width_m"),
+            "缺省 line_width_m 不应落盘：\n{yaml}"
+        );
+        let back: Place = serde_yaml::from_str(&yaml).expect("应可反序列化");
+        assert_eq!(back, p);
+    }
+
+    /// 旧工程（ADR-0046 存量的手绘折线）无 `line_kind` 键：读入为 `None`，
+    /// 语义上等同河流（ADR-0070 D2「缺省 = River」零迁移）。
+    ///
+    /// 这条是**兼容契约**：旧折线全是作者手绘的小溪 / 小河，若缺省被当成道路，
+    /// 存量工程一夜之间所有河都变成路。
+    #[test]
+    fn legacy_line_place_defaults_to_river_semantics() {
+        let yaml = "id: river_legacy
+name: 旧河
+line:
+  - 0.0
+  - 0.0
+  - 10.0
+  - 10.0
+";
+        let p: Place = serde_yaml::from_str(yaml).expect("旧 YAML 必须照常加载");
+        assert_eq!(p.line_kind, None, "旧工程缺省为 None（语义 = 河流）");
+        assert_eq!(p.line_width_m, None, "旧工程缺省无基准宽");
+        assert_eq!(p.line.as_ref().map(|l| l.len()), Some(4), "旧折线仍在");
+    }
+
+    /// 线状地点夹具：两点折线（ADR-0046 的 `line` 约定 = 图内局部 wu 扁平点列）。
+    fn line_place() -> Place {
+        Place {
+            kind: None,
+            line: Some(vec![0.0, 0.0, 10.0, 10.0]),
+            line_kind: None,
+            line_width_m: None,
+            id: vid("river_line"),
+            name: "line river".into(),
+            map: Some(vid("map_world")),
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+            feature: None,
+            biome: None,
+            envelope: None,
+            rank: None,
+        }
+    }
+
     /// 矩形地点：中心 (100, 200)，宽 40、高 20 → x ∈ [80, 120]，y ∈ [190, 210]。
     fn rect_place() -> Place {
         Place {
@@ -901,6 +1063,8 @@ mod tests {
             biome: None,
             envelope: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 
@@ -919,6 +1083,8 @@ mod tests {
             biome: None,
             envelope: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 
@@ -937,6 +1103,8 @@ mod tests {
             biome: None,
             envelope: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 
@@ -1156,6 +1324,8 @@ mod tests {
             biome: None,
             envelope: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 

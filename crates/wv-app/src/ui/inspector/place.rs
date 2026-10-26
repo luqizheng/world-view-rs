@@ -425,6 +425,8 @@ mod tests {
             w: Some(3.0),
             h: Some(4.0),
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 

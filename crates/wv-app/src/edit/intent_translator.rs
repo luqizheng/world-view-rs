@@ -84,6 +84,8 @@ pub fn translate_edit_intents(
             envelope: None,
             rank: None,
             line: None,
+            line_kind: None,
+            line_width_m: None,
         };
         let mut tx = wv_edit::Transaction::new();
         tx.push(Box::new(AddPlaceCommand::new(place)));

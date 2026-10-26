@@ -905,6 +905,8 @@ fn place_edges_round_trip_per_file_format() {
         biome: None,
         envelope: None,
         rank: None,
+        line_kind: None,
+        line_width_m: None,
     });
     world.distances.places.push(Place {
         kind: None,
@@ -920,6 +922,8 @@ fn place_edges_round_trip_per_file_format() {
         biome: None,
         envelope: None,
         rank: None,
+        line_kind: None,
+        line_width_m: None,
     });
     world.distances.vehicles.push(Vehicle {
         id: Id::new_unchecked("v_walk"),

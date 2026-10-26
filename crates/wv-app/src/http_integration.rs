@@ -199,6 +199,8 @@ mod tests {
             biome: None,
             envelope: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();

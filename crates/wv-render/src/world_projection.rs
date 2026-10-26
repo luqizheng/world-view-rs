@@ -1701,6 +1701,8 @@ mod tests {
             w: Some(10.0),
             h: Some(10.0),
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 
@@ -1772,6 +1774,8 @@ mod tests {
             biome: None,
             envelope: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         });
         let index = PlaceIndex::build(&world);
         assert_eq!(
@@ -1800,6 +1804,8 @@ mod tests {
             biome: None,
             envelope: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         });
         let index = PlaceIndex::build(&world);
         assert_eq!(index.anchored_by_map.get(&map).map(Vec::len), None);
@@ -1844,6 +1850,8 @@ mod tests {
             w: Some(10.0),
             h: Some(10.0),
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 
@@ -1863,6 +1871,8 @@ mod tests {
             w: None,
             h: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 

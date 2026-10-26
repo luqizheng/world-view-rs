@@ -975,6 +975,8 @@ mod tests {
                     biome: None,
                     envelope: None,
                     rank: None,
+                    line_kind: None,
+                    line_width_m: None,
                 },
                 Place {
                     kind: None,
@@ -990,6 +992,8 @@ mod tests {
                     biome: None,
                     envelope: None,
                     rank: None,
+                    line_kind: None,
+                    line_width_m: None,
                 },
             ],
             edges: vec![PlaceEdge {
@@ -1168,6 +1172,8 @@ mod tests {
                 biome: Some(1),
                 envelope: None,
                 rank: None,
+                line_kind: None,
+                line_width_m: None,
             });
             w.place_geometry.push(GeometrySpan {
                 map,

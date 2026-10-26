@@ -125,6 +125,8 @@ mod tests {
             w: None,
             h: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 

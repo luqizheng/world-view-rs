@@ -2152,6 +2152,8 @@ mod tests {
             w: Some(4.0),
             h: Some(6.0),
             rank: Some(1),
+            line_kind: None,
+            line_width_m: None,
         }
     }
 
@@ -2807,6 +2809,8 @@ mod tests {
             w: None,
             h: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 
@@ -2843,6 +2847,8 @@ mod tests {
             w: None,
             h: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 

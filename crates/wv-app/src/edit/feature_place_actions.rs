@@ -67,6 +67,8 @@ pub fn place_biome_marker_now(
         w: None,
         h: None,
         rank: None,
+        line_kind: None,
+        line_width_m: None,
     };
     let before_cells = world.world.terrain_of(&map).map(|t| t.cells.clone());
     let cmd = wv_edit::command::PlaceBiomeMarkerCommand::new(

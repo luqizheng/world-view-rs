@@ -848,6 +848,8 @@ mod tests {
             w: None,
             h: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         });
         w.regions.push(wv_core::Region {
             id: Id::new_unchecked("r1"),

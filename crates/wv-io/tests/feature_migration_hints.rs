@@ -28,6 +28,8 @@ fn place_with(feature: Option<u8>, biome: Option<u8>) -> Place {
         w: None,
         h: None,
         rank: None,
+        line_kind: None,
+        line_width_m: None,
     }
 }
 

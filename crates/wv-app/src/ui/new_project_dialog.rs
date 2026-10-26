@@ -273,6 +273,8 @@ fn initial_world(name: &str, template: WorldTemplateKind, seed: u64) -> wv_core:
                 biome: None,
                 envelope: None,
                 rank: Some(rank),
+                line_kind: None,
+                line_width_m: None,
             });
         }
     }

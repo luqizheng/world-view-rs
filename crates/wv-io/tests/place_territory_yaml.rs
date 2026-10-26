@@ -33,6 +33,8 @@ fn sample_place(biome: Option<u8>) -> Place {
         w: Some(4.0),
         h: Some(2.0),
         rank: None,
+        line_kind: None,
+        line_width_m: None,
     }
 }
 

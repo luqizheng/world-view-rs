@@ -1897,6 +1897,8 @@ mod tests {
             w: Some(12.0),
             h: Some(8.0),
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         });
         let projection = crate::state::WorldProjection {
             world,
@@ -2005,6 +2007,8 @@ mod tests {
             w,
             h,
             rank,
+            line_kind: None,
+            line_width_m: None,
         };
         let gate = |p: &wv_core::distance::Place, tier: LodTier| {
             crate::state::poi_visible_at_rank(p.effective_rank(), tier)
