@@ -1015,3 +1015,37 @@ height<0）改为 **`surface == 0`**——与场管线权威边界（coast_sdf T
 - 380 + 15 + 11 + 17 全过，clippy -D warnings / fmt 净。
 
 （完）
+
+---
+
+## 二十一、追记十七：平滑语法按分支收权——CellMap 保持方格（2026-10-26）
+
+> 按 AGENTS §6.3「追写不改机制」追加。§一–§二十正文一字未改（本节是唯一新增）。
+
+**处境**：用户裁定（2026-10-26）——追记十三/十五/十六的平滑语法（轮廓圆角、
+色带屏幕封顶、群系边界混合）**只对 Map / Browse（Themed）有效**；
+**CellMap / Topographic（BiomeRaw）必须保持方格呈现**：方格边界 +
+海拔起伏（hillshade / 8 阶色带）+ 海洋深浅（三段色带全程可见），
+作者的操作对象就是格子。
+
+**审计发现的越界（均已修）**：① 追记十五的 sd 9-tap 圆角无分支差别，
+CellMap 海岸被圆角化；② 追记十六的 biome 9-tap + own/nb 混合同样波及
+BiomeRaw；③ 追记十三的色带屏幕封顶把 CellMap 深缩放的海洋深浅淡成了平色。
+
+**决策**：三处全部按 `p.shape.y >= 0.5`（Themed）门控——
+
+1. sd 圆角：Themed 生效（随 lod_t 远观渐隐照旧）；BiomeRaw 用原始 signed
+   场（边界形状 = 格网真边界的直角阶梯，仅保留 2px 屏幕封顶 AA）；
+2. 色带封顶：Themed 生效；BiomeRaw 全程保留滩/浅/深三段色带；
+3. 群系填色混合（9-tap + own/nb）：**Themed 专属**；BiomeRaw 恢复
+   own 色直出（群系色块即数据本身，边界 = 色块相邻，无需墨线无需混合）。
+
+**代价 / 已知边界**：同一 shader 两套呈现语法，分支语义以 `shape.y` 为唯一
+开关（与既有 BiomeRaw/Themed 分支同轴，无新增 uniform）；CellMap 的海岸
+仍有 1.2px 墨线与 2px AA（屏封顶，形状忠实）。
+
+**验收**：同机位 20 档推近双段对照——CellMap 方格直角 + 全程深浅 +
+山体阴影 ✓；Map 圆角海岸 + 细墨线 + 群系 tint ✓（截屏
+`.target/cellmap-v3.png` / `map-v3.png`）。310+7 全过，fmt 净。
+
+（完）

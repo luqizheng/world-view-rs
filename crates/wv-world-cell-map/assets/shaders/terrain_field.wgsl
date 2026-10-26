@@ -226,7 +226,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             + sd_ne + sd_sw + sd_se + sd_nw) * (1.0 / 9.0);
         // 远观渐隐（lod_t→1）：tap 是 raw 场，远观主样本是 box 平均，
         // 混入会带格频抖动；且远观台阶本就亚像素，圆角无意义。
-        sd = mix(sd_c, sd_round, 1.0 - lod_t);
+        // 追记十七：圆角**只属于 Themed**（Map/Browse 的「看世界」语法）。
+        // CellMap / Topographic（BiomeRaw）是方格数据视图——海岸保持格边
+        // 直角，作者的操作对象就是格子，轮廓必须忠实格网。
+        sd = mix(sd_c, sd_round, select(0.0, 1.0 - lod_t, p.shape.y >= 0.5));
         d = abs(sd);
     } else {
         d = coast_raw * 32.0; // pack 编码 d / 32
@@ -239,52 +242,42 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let land_t = smoothstep(-half_t, half_t, sd);
 
     var base: vec3<f32>;
-    // ── 群系填色（ADR-0072 T4）：own / nb 两套「应显示色」按距离场混合 ──
-    // d 从 R 通道解码（Linear → 亚格连续）；nb = 最近异类群系 ID（Nearest）。
-    // 过渡带屏幕封顶与海岸同语法；nb 为水系群系时跳过混合——水陆边界由
-    // `land_t` / 海岸语法负责，两套过渡叠加会把滩涂二次染成海色。
-    // 水系群系编号 = 冻结表 14/15/16（与 decor 层同源口径）。
-    // d 先做 9-tap 低通（追记十五同款）：距离场零等值线忠实于格网真边界，
-    // 直角在此圆角化，与海岸轮廓同一观感。
-    let bf_c = textureSampleLevel(biome_tex, biome_lin_smp, uv, 0.0).r;
-    let rb = COAST_ROUND_CELLS / grid;
-    let bf_n = textureSampleLevel(biome_tex, biome_lin_smp, uv + vec2<f32>(rb.x, 0.0), 0.0).r;
-    let bf_s = textureSampleLevel(biome_tex, biome_lin_smp, uv - vec2<f32>(rb.x, 0.0), 0.0).r;
-    let bf_e = textureSampleLevel(biome_tex, biome_lin_smp, uv + vec2<f32>(0.0, rb.y), 0.0).r;
-    let bf_w = textureSampleLevel(biome_tex, biome_lin_smp, uv - vec2<f32>(0.0, rb.y), 0.0).r;
-    let rd_b = rb * 0.7071;
-    let bf_ne = textureSampleLevel(biome_tex, biome_lin_smp, uv + vec2<f32>(rd_b.x, rd_b.y), 0.0).r;
-    let bf_sw = textureSampleLevel(biome_tex, biome_lin_smp, uv - vec2<f32>(rd_b.x, rd_b.y), 0.0).r;
-    let bf_se = textureSampleLevel(biome_tex, biome_lin_smp, uv + vec2<f32>(rd_b.x, -rd_b.y), 0.0).r;
-    let bf_nw = textureSampleLevel(biome_tex, biome_lin_smp, uv + vec2<f32>(-rd_b.x, rd_b.y), 0.0).r;
-    let biome_d = (bf_c + bf_n + bf_s + bf_e + bf_w + bf_ne + bf_sw + bf_se + bf_nw)
-        * (1.0 / 9.0)
-        * BIOME_FIELD_CAP;
-    let nb_id = u32(round(textureSampleLevel(biome_ids, biome_near_smp, uv, 0.0).b * 255.0));
-    let nb_is_water = nb_id >= 14u && nb_id <= 16u;
-    let half_b = min(0.5, BIOME_EDGE_HALF_PX / px_per_cell);
-    let biome_t = smoothstep(0.5, 0.5 + half_b, biome_d);
-    let biome_mix = select(1.0, biome_t, is_land && !nb_is_water);
-
     if (p.shape.y < 0.5) {
-        // CellMap / Topographic：群系固定色块，**不随主题**（ADR-0051 §5）。
-        // 分层设色（ADR-0055）：群系色仍是底，陆格再按海拔 8 阶向固定色带
-        // 混合。色带读「高」、下方 hillshade 读「坡」，两者正交互补。
-        // 水格不叠（海拔色带只对陆面有意义）。色带与群系无关，own / nb
-        // 两个变体可以共用同一条 ramp。
+        // CellMap / Topographic：**方格数据视图**（追记十七）——own 色直出，
+        // 无距离场混合、无轮廓圆角；方格边界 + 全程深浅色带是本分支契约。
+        // 分层设色（ADR-0055）照旧：群系色仍是底，陆格按海拔 8 阶向固定
+        // 色带混合；水格不叠（海拔色带只对陆面有意义）。
+        base = biome_raw_approx(biome_id);
         let strength = clamp(p.elev_cuts[1].w, 0.0, 1.0);
-        let ramp = elev_ramp_color(elev_band(h));
-        if (is_land) {
-            let own_col = mix(biome_raw_approx(biome_id), ramp, strength);
-            let nb_col = mix(biome_raw_approx(nb_id), ramp, strength);
-            base = mix(nb_col, own_col, biome_mix);
-        } else {
-            base = biome_raw_approx(biome_id);
+        if (is_land && strength > 0.0) {
+            let ramp = elev_ramp_color(elev_band(h));
+            base = mix(base, ramp, strength);
         }
     } else {
-        // Themed（GoogleMap 等）：海拔三阶为底，冻结群系表色按固定强度
-        // 覆盖——雪原回到白、森林回到绿，装饰符号重新融入底色
-        // （ADR-0072 的直接动因）。水格保持主题水色。
+        // ── 群系填色（ADR-0072 T4，**Themed 专属**）：own / nb 两套
+        // 「应显示色」按距离场亚格混合。d 先做 9-tap 低通（追记十五同款）
+        // 圆角化；过渡带屏幕封顶与海岸同语法。nb 为水系群系（冻结表
+        // 14/15/16）时跳过混合——水陆边界由 land_t / 海岸语法负责，两套
+        // 过渡叠加会把滩涂二次染成海色。
+        let bf_c = textureSampleLevel(biome_tex, biome_lin_smp, uv, 0.0).r;
+        let rb = COAST_ROUND_CELLS / grid;
+        let bf_n = textureSampleLevel(biome_tex, biome_lin_smp, uv + vec2<f32>(rb.x, 0.0), 0.0).r;
+        let bf_s = textureSampleLevel(biome_tex, biome_lin_smp, uv - vec2<f32>(rb.x, 0.0), 0.0).r;
+        let bf_e = textureSampleLevel(biome_tex, biome_lin_smp, uv + vec2<f32>(0.0, rb.y), 0.0).r;
+        let bf_w = textureSampleLevel(biome_tex, biome_lin_smp, uv - vec2<f32>(0.0, rb.y), 0.0).r;
+        let rd_b = rb * 0.7071;
+        let bf_ne = textureSampleLevel(biome_tex, biome_lin_smp, uv + vec2<f32>(rd_b.x, rd_b.y), 0.0).r;
+        let bf_sw = textureSampleLevel(biome_tex, biome_lin_smp, uv - vec2<f32>(rd_b.x, rd_b.y), 0.0).r;
+        let bf_se = textureSampleLevel(biome_tex, biome_lin_smp, uv + vec2<f32>(rd_b.x, -rd_b.y), 0.0).r;
+        let bf_nw = textureSampleLevel(biome_tex, biome_lin_smp, uv + vec2<f32>(-rd_b.x, rd_b.y), 0.0).r;
+        let biome_d = (bf_c + bf_n + bf_s + bf_e + bf_w + bf_ne + bf_sw + bf_se + bf_nw)
+            * (1.0 / 9.0)
+            * BIOME_FIELD_CAP;
+        let nb_id = u32(round(textureSampleLevel(biome_ids, biome_near_smp, uv, 0.0).b * 255.0));
+        let nb_is_water = nb_id >= 14u && nb_id <= 16u;
+        let half_b = min(0.5, BIOME_EDGE_HALF_PX / px_per_cell);
+        let biome_t = smoothstep(0.5, 0.5 + half_b, biome_d);
+        let biome_mix = select(1.0, biome_t, is_land && !nb_is_water);
         if (is_land) {
             let own = mix(themed_land(true, h), biome_raw_approx(biome_id), p.pad0.z);
             let nb_col = mix(themed_land(true, h), biome_raw_approx(nb_id), p.pad0.z);
@@ -310,7 +303,14 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // 色带屏幕封顶（追记一）：色带是**远观**制图暗示，不是线。近观把
     // 三段偏差整体收敛回平色水，海岸呈现退化为 AA 边界 + 岸线墨线
     // （两者已是屏幕口径）——与 Google/百度近观水面一致。
-    let band_gate = 1.0 - smoothstep(COAST_BAND_CAP_MIN_PX, COAST_BAND_CAP_MAX_PX, px_per_cell);
+    // 追记十七：深浅色带的屏幕封顶**只属于 Themed**（近观平色水是
+    // 「看世界」的语法）。CellMap / Topographic 全程保留三段色带——
+    // 「海洋深浅（颜色深浅变化）」是方格数据视图的契约之一。
+    let band_gate = select(
+        1.0,
+        1.0 - smoothstep(COAST_BAND_CAP_MIN_PX, COAST_BAND_CAP_MAX_PX, px_per_cell),
+        p.shape.y >= 0.5,
+    );
     water_col = mix(p.theme[0].rgb, water_col, band_gate);
     // 近岸白滩（t_shore 最高处向纸色偏一点，给水线一个视觉落点）
     // ——白滩缘同属色带装饰，随门控一起收。
