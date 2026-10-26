@@ -90,6 +90,29 @@ pub struct PlaceEdge {
     /// 改动它等于改旧工程的可视行为。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rank: Option<u8>,
+    /// **运行时**标记：这条边是「线即路网」推导出来的，不是作者手写的
+    /// （ADR-0070 D5）。
+    ///
+    /// 道路不再是手存的 `edges.yaml` 条目，而是道路线（[`Place::line`] 且
+    /// `line_kind == Some(LineKind::Road)`）两端吸附到地点后**推导**出的
+    /// 投影边。投影必须可辨认——否则推导边会与作者手写边在 `edges.yaml`
+    /// 里争夺同一份真值（同一对端点两份边），迁移器也无法算清「该删哪些
+    /// 手写边」。
+    ///
+    /// **永不落盘**（`serde(skip)`）：序列化不写、读入取默认 `false`。理由：
+    ///
+    /// 1. **AGENTS §4.2（距离只存参数）**：推导边的 `distance_km` 是
+    ///    「线长 ÷ 比例尺」的**计算结论**，落盘即固化结论（比例尺一改就过期）；
+    /// 2. **单一真值**：作者手写的边才是真值，推导边每次由线重算，
+    ///    保存 / 加载天然往返（`edges.yaml` 不多一行、不少一行）。
+    ///
+    /// 因此 `terrain = "road"` 依然是**手写边的合法值**（YAML 作者可写）——
+    /// 本字段只回答「谁算出来的」，不约束「能写什么」。
+    ///
+    /// `serde` 对 `skip` 字段自动取 `Default::default()`（即 `false`），故
+    /// **不手写 `Default` impl**（会与 derive 冲突，编译不过）。
+    #[serde(skip)]
+    pub derived: bool,
 }
 
 impl PlaceEdge {
@@ -783,6 +806,7 @@ mod tests {
                     distance_km: 300.0,
                     terrain: "road".into(),
                     bidirectional: true,
+                    derived: false,
                     rank: None,
                 },
                 PlaceEdge {
@@ -792,6 +816,7 @@ mod tests {
                     distance_km: 120.0,
                     terrain: "mountain".into(),
                     bidirectional: true,
+                    derived: false,
                     rank: None,
                 },
             ],
@@ -1184,6 +1209,7 @@ line:
             distance_km: km,
             terrain: "road".into(),
             bidirectional: true,
+            derived: false,
             rank: None,
         };
         assert_eq!(edge(100.0).effective_rank(), 3, "100 km 恰在干线门槛上");
@@ -1204,12 +1230,54 @@ line:
             distance_km: 500.0,
             terrain: "road".into(),
             bidirectional: true,
+            derived: false,
             rank: Some(1),
         };
         assert_eq!(e.effective_rank(), 1, "显式 rank 把长边降为局部道路");
         e.rank = Some(0);
         e.distance_km = 5.0;
         assert_eq!(e.effective_rank(), 0, "显式 0 = 仅编辑级可见");
+    }
+
+    /// 推导边的 `derived` 标记**永不落盘**（ADR-0070 D5）。
+    ///
+    /// 推导边 = 「线即路网」的运行时投影：道路线两端吸附到地点后临时算出
+    /// 一条边注入 `World.distances.edges`。它是**投影**不是真值——落盘就会
+    /// 与作者手写边争夺同一份 `edges.yaml`（同一对端点两份边），且把
+    /// 「距离」这一计算结论固化进数据（违反 AGENTS §4.2「距离只存参数」）。
+    ///
+    /// 因此 `derived` 用 `#[serde(skip)]`：序列化不写、读入取默认 `false`，
+    /// 手写边读回来仍是手写边。`terrain = "road"` 依然是作者手写边的**合法**
+    /// 值（YAML 作者可写）——`derived` 只标记「谁算出来的」，不约束能写什么。
+    #[test]
+    fn derived_edge_serializes_without_marker_and_loads_false() {
+        let e = PlaceEdge {
+            id: Id::new_unchecked("road_city_a_city_b"),
+            a: Id::new_unchecked("city_a"),
+            b: Id::new_unchecked("city_b"),
+            distance_km: 12.5,
+            terrain: "road".into(),
+            bidirectional: true,
+            rank: None,
+            derived: true,
+        };
+        let text = serde_yaml::to_string(&e).expect("序列化");
+        assert!(
+            !text.contains("derived"),
+            "推导边标记不得落盘（ADR-0070 D5），实得:\n{text}"
+        );
+        let back: PlaceEdge = serde_yaml::from_str(&text).expect("反序列化");
+        assert!(
+            !back.derived,
+            "读回后 derived 应为 false（serde skip 字段取默认值），实得: {}",
+            back.derived
+        );
+        // 手写边的其余字段原样往返；`terrain = "road"` 仍是合法手写值。
+        assert_eq!(back.terrain, "road", "terrain = \"road\" 仍是手写边合法值");
+        assert_eq!(back.distance_km, 12.5, "距离原样往返");
+        assert_eq!(back.id, e.id);
+        assert_eq!(back.a, e.a);
+        assert_eq!(back.b, e.b);
     }
 
     /// PlaceEdge.rank 的 YAML 惯例与 Place.rank 同款：None 不写键、Some 写键。
@@ -1222,6 +1290,7 @@ line:
             distance_km: 42.0,
             terrain: "road".into(),
             bidirectional: true,
+            derived: false,
             rank: Some(3),
         };
         let text = serde_yaml::to_string(&e).expect("序列化");

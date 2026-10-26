@@ -2669,6 +2669,7 @@ mod tests {
             distance_km: 12.5,
             terrain: "road".into(),
             bidirectional: true,
+            derived: false,
         }
     }
 

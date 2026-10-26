@@ -209,6 +209,7 @@ fn build_world(meta: WorldMeta) -> World {
         distance_km: km,
         terrain: terrain.into(),
         bidirectional: true,
+        derived: false,
     };
     world.distances.edges = vec![
         edge(

@@ -1096,6 +1096,7 @@ fn build_world(
             distance_km: s.distance_km,
             terrain: s.terrain.clone(),
             bidirectional: true,
+            derived: false,
         });
     }
 

@@ -944,6 +944,7 @@ fn place_edges_round_trip_per_file_format() {
             distance_km: 100.0,
             terrain: "plain".into(),
             bidirectional: true,
+            derived: false,
         },
         PlaceEdge {
             rank: None,
@@ -953,6 +954,7 @@ fn place_edges_round_trip_per_file_format() {
             distance_km: 105.0,
             terrain: "road".into(),
             bidirectional: true,
+            derived: false,
         },
     ];
     world.distances.edges = edges.clone();

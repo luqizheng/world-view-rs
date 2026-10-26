@@ -1885,6 +1885,7 @@ mod tests {
             distance_km: 1.0,
             terrain: "road".to_owned(),
             bidirectional: true,
+            derived: false,
         }
     }
 

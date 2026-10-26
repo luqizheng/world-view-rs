@@ -1004,6 +1004,7 @@ mod tests {
                 distance_km: 100.0,
                 terrain: "plain".into(),
                 bidirectional: true,
+                derived: false,
             }],
             vehicles: vec![Vehicle {
                 id: Id::new_unchecked("v_walk"),

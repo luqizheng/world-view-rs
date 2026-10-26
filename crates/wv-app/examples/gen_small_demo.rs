@@ -664,6 +664,7 @@ fn build_road_map(world: &mut World) {
         distance_km: km,
         terrain: terrain.into(),
         bidirectional: true,
+        derived: false,
     };
     world.distances.edges.extend(vec![
         e(
@@ -938,6 +939,7 @@ fn build_combo_map(world: &mut World) {
         distance_km: km,
         terrain: terrain.into(),
         bidirectional: true,
+        derived: false,
     };
     world.distances.edges.extend(vec![
         e("cb_e_trunk", "cb_port", "cb_junction", 210.0, "plain", 3),
