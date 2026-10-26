@@ -44,10 +44,11 @@
 //! 不感知 Undo/Redo**（撤销是 wv-edit 的事）。
 
 use std::cmp::Ordering;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashSet};
 
+use crate::edit::is_water_cell;
 use crate::hash::cell_hash01;
-use crate::TerrainGrid;
+use crate::{TerrainCell, TerrainGrid, BIOME_NONE, SURFACE_LAND, SURFACE_WATER};
 
 /// 路径规划模式（ADR-0070 D3）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -292,6 +293,213 @@ fn height_at(grid: &TerrainGrid, x: i32, y: i32) -> f32 {
     grid.get(x, y).map(|c| c.height as f32).unwrap_or(0.0)
 }
 
+/// 沿折线下切一条走廊（河谷 / 道路通道），返回**实际被改动的格数**
+/// （ADR-0070 D3）。
+///
+/// `mark_water` 决定这条走廊的语义：
+///
+/// - `true` = **河**：走廊格写 [`SURFACE_WATER`]、群系清 [`BIOME_NONE`]；
+/// - `false` = **路**：走廊格压低但**不写水面**（山间开通道），群系保留，
+///   且走廊内的**水格被改为陆地**（通道排干水面——路不会在水里跑）。
+///
+/// `width_cells` 是走廊的**格宽参数**：轴心格 + 法线**两侧各**
+/// `width_cells - 1` 格（brief 口径「向法线两侧补 `width_cells - 1` 格」）。
+/// 故 `width_cells = 1` ⇒ 单格链（= 既有涂格河），`width_cells = 3` ⇒
+/// 中轴 + 两侧各 2 格 = 5 格宽。
+///
+/// 走廊内一律**只降不升**（与既有挖河的「只降不升」口径一致）——路不会
+/// 把旁边的坑填成 mound。
+///
+/// ## 与既有涂格河的关系
+///
+/// `width_cells == 1 && mark_water` 时**直接委托**既有的
+/// [`crate::intent::apply_river`]（一格宽的涂格河），保证与既有行为
+/// **逐位相同**（测试 `width_one_river_matches_legacy_apply_river` 钉死）；
+/// 更宽的走廊 / 道路走本函数的通用路径（下切深度常量与既有实现同源：
+/// [`crate::intent::RIVER_CUT_M`] / [`crate::intent::RIVER_DROP_M`]）。
+pub fn carve_corridor(
+    grid: &mut TerrainGrid,
+    pts: &[(f32, f32)],
+    strength: f32,
+    cell_size: f32,
+    width_cells: u32,
+    mark_water: bool,
+) -> usize {
+    if pts.is_empty() || cell_size <= 0.0 {
+        return 0;
+    }
+    let width = width_cells.max(1);
+    if width == 1 && mark_water {
+        // 一格宽 + 写水面 = 既有「涂格河」语义：委托既有实现，行为逐位不变。
+        return crate::intent::apply_river(grid, pts, strength, cell_size);
+    }
+    let s = crate::intent::clamp_strength(strength);
+
+    let chain = dense_chain(grid, pts, cell_size);
+    if chain.len() < 2 {
+        return 0;
+    }
+    let chain = orient_chain(grid, chain, mark_water);
+    if chain.len() < 2 {
+        return 0;
+    }
+
+    let bands = corridor_cells(&chain, width);
+    let corridor: HashSet<(i32, i32)> = bands.iter().flatten().copied().collect();
+
+    let mut prev = f32::INFINITY;
+    let mut touched = 0usize;
+    for (i, cells_i) in bands.iter().enumerate() {
+        let (cx, cy) = chain[i];
+        // 两岸最低（走廊格之外的水格按海平面 0 计）。
+        let mut low = f32::INFINITY;
+        for &(bx, by) in cells_i {
+            for (nx, ny) in [(bx + 1, by), (bx - 1, by), (bx, by + 1), (bx, by - 1)] {
+                if corridor.contains(&(nx, ny)) {
+                    continue;
+                }
+                if let Some(c) = grid.get(nx, ny) {
+                    let v = if is_water_cell(c) {
+                        0.0
+                    } else {
+                        c.height as f32
+                    };
+                    low = low.min(v);
+                }
+            }
+        }
+        // 河床高度：比两岸最低低 CUT·s、比上游低 DROP，且不低于 1 m。
+        let mut e = height_at(grid, cx, cy);
+        if low.is_finite() {
+            e = e.min(low - crate::intent::RIVER_CUT_M * s);
+        }
+        e = e.min(prev - crate::intent::RIVER_DROP_M).max(1.0);
+        for &(bx, by) in cells_i {
+            let Some(cell0) = grid.get(bx, by) else {
+                continue;
+            };
+            // 只降不升：走廊格若本就低于目标高度（坑），保持原样。
+            let new_height = crate::intent::to_height(e.min(cell0.height as f32));
+            let new_cell = TerrainCell {
+                height: new_height,
+                surface: if mark_water {
+                    SURFACE_WATER
+                } else {
+                    SURFACE_LAND
+                },
+                biome: if mark_water { BIOME_NONE } else { cell0.biome },
+            };
+            if new_cell != cell0 {
+                grid.set(bx, by, new_cell);
+                touched += 1;
+            }
+        }
+        // 传未取整的坡降给下游，保证长走廊累计下切。
+        prev = e;
+    }
+    touched
+}
+
+/// 密采点 → 格链（相邻去重）。步长 < 格径，折线绝不跳格。
+///
+/// 与 [`crate::intent::apply_river`] 同款（`step = cell_size / 3`）——同一条
+/// 折线在「涂格河」与「走廊下切」两条路径上必须落在**同一串格**上，否则
+/// 同一处河谷会被切出两条错位的沟。
+fn dense_chain(grid: &TerrainGrid, pts: &[(f32, f32)], cell_size: f32) -> Vec<(i32, i32)> {
+    let step = (cell_size / 3.0).max(0.25);
+    let mut chain: Vec<(i32, i32)> = Vec::new();
+    for w in pts.windows(2) {
+        let (ax, ay) = w[0];
+        let (bx, by) = w[1];
+        let len = ((bx - ax) * (bx - ax) + (by - ay) * (by - ay)).sqrt();
+        let steps = (len / step).ceil().max(1.0) as u32;
+        for k in 0..=steps {
+            let t = k as f32 / steps as f32;
+            let x = ax + (bx - ax) * t;
+            let y = ay + (by - ay) * t;
+            let gx = (x / cell_size).floor() as i32;
+            let gy = (y / cell_size).floor() as i32;
+            if !grid.contains_xy(gx, gy) {
+                continue;
+            }
+            if chain.last() != Some(&(gx, gy)) {
+                chain.push((gx, gy));
+            }
+        }
+    }
+    chain
+}
+
+/// 定向：把链摆成「源头 → 下游」。
+///
+/// `stop_at_water` = 河的语义（源头端的水段截掉、走到水即到河口）；道路
+/// 没有水陆语义，只按「高的一端是源头」定向。
+fn orient_chain(
+    grid: &TerrainGrid,
+    chain: Vec<(i32, i32)>,
+    stop_at_water: bool,
+) -> Vec<(i32, i32)> {
+    let wet = |c: (i32, i32)| grid.get(c.0, c.1).map(is_water_cell).unwrap_or(true);
+    let head = chain[0];
+    let tail = *chain.last().expect("链非空");
+    let h_head = grid.get(head.0, head.1).map(|c| c.height).unwrap_or(0);
+    let h_tail = grid.get(tail.0, tail.1).map(|c| c.height).unwrap_or(0);
+    let head_wet = wet(head);
+    let tail_wet = wet(tail);
+    let reverse = if stop_at_water {
+        // 一头在水 → 另一头是源头；都在陆上 → 高的一头是源头。
+        (head_wet && !tail_wet) || (!head_wet && !tail_wet && h_head < h_tail)
+    } else {
+        h_head < h_tail
+    };
+    let mut chain = chain;
+    if reverse {
+        chain.reverse();
+    }
+    if !stop_at_water {
+        return chain;
+    }
+    // 截掉源头端的水段；走到水（河口）就停。
+    let mut s0 = 0;
+    while s0 < chain.len() && wet(chain[s0]) {
+        s0 += 1;
+    }
+    let mut s1 = s0;
+    while s1 < chain.len() && !wet(chain[s1]) {
+        s1 += 1;
+    }
+    chain[s0..s1].to_vec()
+}
+
+/// 走廊加宽：链上每格 = 轴心格 + 法线两侧各 `width - 1` 格。
+///
+/// 法线取链的**前进方向**的垂直方向（8 邻域单位向量 → 整数偏移），故竖直
+/// 走廊的侧格在**左右**、水平走廊的侧格在**上下**。
+fn corridor_cells(chain: &[(i32, i32)], width: u32) -> Vec<Vec<(i32, i32)>> {
+    let n = chain.len();
+    (0..n)
+        .map(|i| {
+            let (cx, cy) = chain[i];
+            let (tx, ty) = if i + 1 < n {
+                (chain[i + 1].0 - cx, chain[i + 1].1 - cy)
+            } else if i > 0 {
+                (cx - chain[i - 1].0, cy - chain[i - 1].1)
+            } else {
+                (1, 0)
+            };
+            let (tx, ty) = if tx == 0 && ty == 0 { (1, 0) } else { (tx, ty) };
+            // 前进方向的垂直方向（单位整数向量）。
+            let (px, py) = (-ty, tx);
+            let mut cells = vec![(cx, cy)];
+            for k in 1..width as i32 {
+                cells.push((cx + px * k, cy + py * k));
+                cells.push((cx - px * k, cy - py * k));
+            }
+            cells
+        })
+        .collect()
+}
+
 /// 启发式：到终点的欧氏距离（wu）。
 ///
 /// **可采纳**：任一步的真实代价 ≥ 该步的欧氏长度（代价 = 步长 × 因子，
@@ -440,5 +648,177 @@ mod tests {
         let a = plan_polyline(&g, 1.0, START, END, LinePathMode::Route, 42);
         let b = plan_polyline(&g, 1.0, START, END, LinePathMode::Route, 42);
         assert_eq!(a, b, "同 seed 应逐点一致");
+    }
+
+    // ---- 走廊下切（carve_corridor）----
+
+    /// 10×10 夹具：全平地 100 m，第 (5, 4) 格是 160 m 的**中段鼓包**。
+    fn bump_grid() -> TerrainGrid {
+        let mut g = TerrainGrid::new(10, 10);
+        for y in 0..10 {
+            for x in 0..10 {
+                let h = if (x, y) == (5, 4) { 160 } else { 100 };
+                g.set(
+                    x,
+                    y,
+                    TerrainCell {
+                        height: h,
+                        surface: SURFACE_LAND,
+                        biome: BIOME_NONE,
+                    },
+                );
+            }
+        }
+        g
+    }
+
+    /// 全平地 100 m（无鼓包）。
+    fn flat_grid() -> TerrainGrid {
+        let mut g = TerrainGrid::new(10, 10);
+        for y in 0..10 {
+            for x in 0..10 {
+                g.set(
+                    x,
+                    y,
+                    TerrainCell {
+                        height: 100,
+                        surface: SURFACE_LAND,
+                        biome: BIOME_NONE,
+                    },
+                );
+            }
+        }
+        g
+    }
+
+    /// 竖直河道折线（格中心，列 5、行 0..9）。
+    fn vertical_pts() -> Vec<(f32, f32)> {
+        (0..10).map(|y| (5.5, y as f32 + 0.5)).collect()
+    }
+
+    /// 河：沿链高度单调不增（向下游降）、末段不低于 1 m、中段鼓包被切开。
+    ///
+    /// 「单调不增」而非「逐格严格递减」：坡降是 `RIVER_DROP_M = 0.4` m/格，
+    /// 而高度按**整米**取整（`to_height`），逐格严格递减在数学上不可能成立
+    /// ——既有涂格河的测试（`intent.rs::river_chain_descends_and_cuts_below_banks`）
+    /// 用的也是「非增」口径。这里额外断言**首尾确有下降**（源头比河口高），
+    /// 以证明「河往低处流」这一语义确实成立。
+    #[test]
+    fn river_carve_descends_monotonically_to_mouth() {
+        let mut g = bump_grid();
+        let pts = vertical_pts();
+        let touched = carve_corridor(&mut g, &pts, 1.0, 1.0, 1, true);
+        assert!(touched > 0, "河应改动若干格，实得 {touched}");
+
+        let chain: Vec<(i32, i32, i16)> = (0..10)
+            .map(|y| (5, y, g.get(5, y).expect("链格在界内").height))
+            .collect();
+        for w in chain.windows(2) {
+            assert!(
+                w[1].2 <= w[0].2,
+                "高度应沿链非增：{:?} → {:?}",
+                (w[0].0, w[0].1, w[0].2),
+                (w[1].0, w[1].1, w[1].2)
+            );
+        }
+        let first = chain[0].2;
+        let last = chain[chain.len() - 1].2;
+        assert!(
+            last < first,
+            "河床应比源头低：源头 {first} m → 河口 {last} m"
+        );
+        assert!(last >= 1, "河床不低于 1 m，实得 {last}");
+
+        // 中段鼓包被切开：河床比两侧平地（100 m）低 ≥ 11 m。
+        let bump_h = g.get(5, 4).expect("鼓包格在界内").height;
+        assert!(
+            bump_h <= 100 - 11,
+            "中段鼓包应被切开（≤ 89 m），实得 {bump_h} m"
+        );
+        assert_eq!(
+            g.get(5, 4).expect("鼓包格在界内").surface,
+            SURFACE_WATER,
+            "河走廊应写水面"
+        );
+    }
+
+    /// 路：走廊格被压低，但**不写水面**（山间开通道）。
+    #[test]
+    fn road_carve_flattens_without_water_surface() {
+        let mut g = flat_grid();
+        let pts = vertical_pts();
+        let touched = carve_corridor(&mut g, &pts, 1.0, 1.0, 1, false);
+        assert!(touched > 0, "路走廊应改动若干格，实得 {touched}");
+        for y in 0..10 {
+            let c = g.get(5, y).expect("走廊格在界内");
+            assert!(
+                c.height < 100,
+                "走廊格 (5, {y}) 应被压低，实得 {} m",
+                c.height
+            );
+            assert_ne!(
+                c.surface, SURFACE_WATER,
+                "路走廊不得写水面（走廊格 (5, {y})）"
+            );
+            assert_eq!(c.surface, SURFACE_LAND, "路走廊应是陆地");
+        }
+        // 走廊之外一格不动。
+        assert_eq!(
+            g.get(4, 5).expect("走廊外格在界内").height,
+            100,
+            "走廊外的格子不应被改动"
+        );
+    }
+
+    /// 加宽走廊（3 格）：中轴**左右各 1 格**都要被改到。
+    ///
+    /// 宽度语义（brief 口径「向法线两侧补 `width_cells - 1` 格」）：
+    /// `width_cells = 3` ⇒ 中轴 + 两侧各 2 格 = **5 格宽**，故距中轴 3 格的
+    /// 格子仍在走廊之外。
+    #[test]
+    fn wide_corridor_touches_flanking_cells() {
+        let mut g = flat_grid();
+        let pts = vertical_pts();
+        let touched = carve_corridor(&mut g, &pts, 1.0, 1.0, 3, true);
+        assert!(touched > 0, "加宽走廊应改动若干格，实得 {touched}");
+        for y in 0..10 {
+            for x in [4, 6] {
+                let c = g.get(x, y).expect("侧格在界内");
+                assert!(
+                    c.height < 100,
+                    "加宽走廊应改到侧格 ({x}, {y})，实得 {} m",
+                    c.height
+                );
+                assert_eq!(c.surface, SURFACE_WATER, "侧格 ({x}, {y}) 应写水面");
+            }
+        }
+        // 走廊宽度之外（距中轴 3 格）不该被改到。
+        for x in [2, 8] {
+            assert_eq!(
+                g.get(x, 5).expect("格外格在界内").height,
+                100,
+                "走廊宽度之外的格子 ({x}, 5) 不应被改动"
+            );
+        }
+    }
+
+    /// 一格宽 + 写水面 = 既有涂格河：**逐格相同**（不回归）。
+    #[test]
+    fn width_one_river_matches_legacy_apply_river() {
+        let pts = vertical_pts();
+        let mut a = bump_grid();
+        let mut b = bump_grid();
+        let n1 = carve_corridor(&mut a, &pts, 1.0, 1.0, 1, true);
+        let n2 = crate::intent::apply_intent(
+            &mut b,
+            &crate::intent::Intent::River {
+                pts: pts.clone(),
+                strength: 1.0,
+            },
+            1,
+            1.0,
+        );
+        assert_eq!(n1, n2, "改动格数应与既有涂格河一致");
+        assert_eq!(a, b, "逐格结果应与既有涂格河完全一致");
     }
 }
