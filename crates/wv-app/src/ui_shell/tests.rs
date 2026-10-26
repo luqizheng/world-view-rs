@@ -635,6 +635,9 @@ fn line_poi_split_menu_switches_kind() {
         false,
         CommandId::SelectMapTool(MapToolId::LinePoi(LineKind::River)),
     );
+    // 档位前置（T10 评审 minor ② 兜底落地后）：线段 POI 仅 Edit 档可激活，
+    // 缺省 ViewState scale=1.0 是 Region 档——本测激活语义，先放大进 Edit 档。
+    world.resource_mut::<ViewState>().scale = 0.5;
     world
         .run_system_once(apply_pending_commands)
         .expect("系统运行失败");
@@ -698,6 +701,63 @@ fn line_poi_split_menu_switches_kind() {
     assert!(
         !world.resource::<PanelState>().is_visible(Panel::LinePoi),
         "切走工具应关闭河流和道路面板"
+    );
+}
+
+/// 命令面板 / 快捷键路径的档位兜底（T10 评审 minor ②）：非 Edit 档发
+/// `SelectMapTool(LinePoi)` **不得**激活工具——瓷砖门控（T10，仅 Edit 档
+/// 渲染）之外的命令链第二道闸。Edit 档放行、关工具不受档位限制。
+#[test]
+fn line_poi_command_rejected_outside_edit_tier() {
+    use crate::state::Panel;
+    use crate::ui_command_palette::MapToolId;
+    use bevy::ecs::system::RunSystemOnce;
+    use wv_core::distance::LineKind;
+
+    let cmd = || CommandId::SelectMapTool(MapToolId::LinePoi(LineKind::River));
+    let mut world = dispatcher_world(None, false, cmd());
+    // 缺省 scale=1.0 = Region 档：激活必须被拒（工具不开、面板不开）。
+    world
+        .run_system_once(apply_pending_commands)
+        .expect("系统运行失败");
+    assert!(
+        !world.resource::<crate::state::LinePoiState>().tool_active,
+        "Region 档（scale=1.0）不得激活线段 POI 工具"
+    );
+    assert!(
+        !world.resource::<PanelState>().is_visible(Panel::LinePoi),
+        "Region 档被拒时河流和道路面板不得打开"
+    );
+
+    // 放大到 Edit 档（scale < 1.0）：同一条命令即可激活。
+    world.resource_mut::<ViewState>().scale = 0.5;
+    world.resource_mut::<CommandPalette>().pending = Some(cmd());
+    world
+        .run_system_once(apply_pending_commands)
+        .expect("系统运行失败");
+    assert!(
+        world.resource::<crate::state::LinePoiState>().tool_active,
+        "Edit 档（scale=0.5）应激活线段 POI 工具"
+    );
+    assert!(
+        world.resource::<PanelState>().is_visible(Panel::LinePoi),
+        "Edit 档激活应打开河流和道路面板"
+    );
+
+    // 缩回 Region 档再发同款命令：关工具不受档位限制（already_on 走不到
+    // 激活分支）。
+    world.resource_mut::<ViewState>().scale = 1.0;
+    world.resource_mut::<CommandPalette>().pending = Some(cmd());
+    world
+        .run_system_once(apply_pending_commands)
+        .expect("系统运行失败");
+    assert!(
+        !world.resource::<crate::state::LinePoiState>().tool_active,
+        "非 Edit 档的关闭命令应照常生效"
+    );
+    assert!(
+        !world.resource::<PanelState>().is_visible(Panel::LinePoi),
+        "关工具后面板应收起"
     );
 }
 

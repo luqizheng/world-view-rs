@@ -68,7 +68,9 @@ pub fn settings_dialog(
             );
             ui.add_space(space::SM);
 
-            // 两列铺 12 个面板：单列会拉到 ~350px 高，对话框超出小屏。
+            // 两列铺 11 个面板（`Panel::ALL`，ADR-0070 后含河流和道路；计数
+            // 随 ALL 走，2026-10-22 统一 Inspector 后本注释一度停在 12）：
+            // 单列会拉到 ~350px 高，对话框超出小屏。
             // `check_row` 吃 `available_width`，放进 `columns` 才得到半宽命中区。
             ui.columns(2, |cols| {
                 for (i, panel) in Panel::ALL.iter().enumerate() {

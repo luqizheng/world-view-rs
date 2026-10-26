@@ -497,8 +497,17 @@ pub(crate) fn apply_pending_commands(
                         // 瓷砖灰化是第一道闸，这里是命令链上的兜底（命令
                         // 面板 / 快捷键不经瓷砖也能发 SelectMapTool）。锁住时
                         // 什么都不开（上方「先全关」已把别的工具收掉）。
+                        // 档位兜底（T10 评审 minor ②）：瓷砖仅在 Edit 档渲染
+                        // （`line_poi_tile_visible`，T10 已落），命令面板 /
+                        // 快捷键同样不经瓷砖——非 Edit 档在此拒绝激活。静默
+                        // 早退与同分支播放锁同口径（不引入一次性回执：非 Edit
+                        // 档下瓷砖本就不可见，入口状态与回执一致；关工具不受
+                        // 此限——`already_on` 走不到本分支，缩小地图也能收）。
                         MapToolId::LinePoi(kind) => {
-                            if !playback.playing {
+                            if !playback.playing
+                                && wv_render::state::lod_tier(view.scale)
+                                    == wv_render::state::LodTier::Edit
+                            {
                                 line_poi.kind = kind;
                                 line_poi.tool_active = true;
                                 panels.set_visible(crate::state::Panel::LinePoi, true);
