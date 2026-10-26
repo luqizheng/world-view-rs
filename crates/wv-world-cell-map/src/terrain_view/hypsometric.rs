@@ -172,6 +172,54 @@ pub fn tint_rgba(base: [f32; 4], band: usize, strength: f32) -> [f32; 4] {
     ]
 }
 
+// ── 专业制图的海拔色带（ADR-0067 D3）──
+
+/// **风格自带的**海拔色带（与本模块的固定 8 阶同结构，不同数据源）。
+///
+/// 本模块的 [`RAMP_SRGB`] 是 **crate 级固定色**（ADR-0054 D4：数据视图不随
+/// 主题变）；本结构是**风格层给的**色带——专业制图的色带要跟风格走
+/// （ADR-0060 §4：「配色跟主题，不复用 `hypsometric` 固定 8 阶」）。
+///
+/// 切点仍复用 [`cuts_for_cells`]（绝对阶梯 + 窄域兜底）：阈值是**地形事实**，
+/// 与配色无关，故两条路径同源。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ElevationBand {
+    /// 8 阶色带（sRGB 三元组，低 → 高）。
+    pub ramp: [[u8; 3]; BANDS],
+    /// 7 条内边界（米，升序）。
+    pub cuts: Cuts,
+    /// 混入强度（0..=1）。
+    pub strength: f32,
+}
+
+impl ElevationBand {
+    /// 某一阶的色（sRGB 0–1）。
+    fn ramp_rgb(&self, band: usize) -> [f32; 3] {
+        let rgb = self.ramp[band.min(BANDS - 1)];
+        [
+            rgb[0] as f32 / 255.0,
+            rgb[1] as f32 / 255.0,
+            rgb[2] as f32 / 255.0,
+        ]
+    }
+
+    /// 把色带色按 `strength` 叠到基色上（sRGB 空间混合，同 [`tint_rgba`] 口径）。
+    pub fn tint(&self, base: [f32; 4], height: i16) -> [f32; 4] {
+        let t = self.strength.clamp(0.0, 1.0);
+        if t == 0.0 {
+            return base;
+        }
+        let band = band_of(height, &self.cuts);
+        let ramp = self.ramp_rgb(band);
+        [
+            base[0] + (ramp[0] - base[0]) * t,
+            base[1] + (ramp[1] - base[1]) * t,
+            base[2] + (ramp[2] - base[2]) * t,
+            base[3],
+        ]
+    }
+}
+
 /// 把米制内边界换算成 `R16Unorm` 高度纹理的归一化域（GPU 侧 uniform 用）。
 ///
 /// `norm = (h − h_min) / h_range`，与 `field::pack::H_MIN` / `H_MAX` 同口径；

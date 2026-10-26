@@ -226,6 +226,7 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
 | [ADR-0063](ADR-0063-cartographic-borders.md) | 专业制图的边界线层——势力层退化为「国境线」（只当前层实控 / 不填色 / 单线灰虚线 / Z 0.086） | 已接受（2026-10-25，随同一分支落地；复用 `PassId::Faction`） |
 | [ADR-0064](ADR-0064-poi-kind-and-density.md) | POI 分类与屏幕网格密度——`Place.kind` 十二类 + 96px 网格配额 + 分类色（专业制图按类分桶） | 已接受（2026-10-25，随同一分支落地；`WV_MODE` 实机验收探针同批） |
 | [ADR-0066](ADR-0066-single-default-style-crate.md) | 单一默认风格层——`wv-default-theme` 取代多主题机制（删 `wv-theme` / `chinese-ink` / 注册表 / 主题切换 UI；默认风格 = 专业制图；`core` 风格色与 `kind_core` 逐格技术色分离） | 已接受（2026-10-25，随 `refactor/default-theme-crate` 落地） |
+| [ADR-0067](ADR-0067-cartographic-relief.md) | 专业制图的山地表达——晕渲接线（0.90~1.12 轻钳制）+ 风格层 8 阶海拔色带（近白→深岩褐）；等高线不列入普通地图 | 已接受（2026-10-26，随 `feat/cartography-relief` 落地；补 ADR-0066 关符号留下的空洞） |
 | [ADR-0065](ADR-0065-map-label-legibility.md) | 地图标签可读性——画布标签默认改 Noto Sans SC、地点按呈现级别分字号（16/14/13/12px）、晕圈随字号成比例、碰撞优先级改「级别 → 字符长度」、街名 12px 并入碰撞过滤 | 已接受（2026-10-25，用户裁定「要修复字体，zoom in 或者地图上几乎无法分别 POI 的字体」；**修正 ADR-0042 D4**，文楷保留为可选） |
 
 ---

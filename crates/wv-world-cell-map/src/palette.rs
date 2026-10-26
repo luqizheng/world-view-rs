@@ -162,6 +162,13 @@ pub struct CellPalette {
     pub deep_ocean_blue: Color,
     /// 近岸浅滩色（2026-10-21 S2）。
     pub water_shore: Color,
+    /// **海拔色带**（ADR-0067 D3）：8 阶，低 → 高；`None` = 不叠色带。
+    ///
+    /// 存 sRGB 三元组（不是 `Color`）——与风格侧同源；`Color` 内部是线性
+    /// 空间，混色要按 sRGB 口径做（见 `hypsometric::ElevationBand::tint`）。
+    pub elevation_ramp: Option<[[u8; 3]; 8]>,
+    /// 海拔色带的混入强度（0..=1）。
+    pub elevation_strength: f32,
 }
 
 impl CellPalette {
@@ -418,6 +425,9 @@ impl CellPack {
         CellPack {
             palette: CellPalette {
                 core: CORE_TERRAIN,
+                // 固定色夹具不带海拔色带（ADR-0054 D4：数据视图不随风格变）。
+                elevation_ramp: None,
+                elevation_strength: 0.0,
                 soften_keep: 0.92,
                 soften_toward: hex(0xF2EAD8),
                 poi_dot: hex(0xB88E6C),

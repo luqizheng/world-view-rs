@@ -212,12 +212,25 @@ const RELIEF_PER_METER: f32 = 0.0012;
 const RELIEF_MIN: f32 = 0.84;
 const RELIEF_MAX: f32 = 1.16;
 
+/// **专业制图**的浮雕钳制（ADR-0067 D2）——比艺术主题**更轻**。
+///
+/// 艺术主题的 0.84~1.16 是「让山有体积」的强浮雕；普通地图要的是「暗示坡」，
+/// 不是「立体渲染」——底图上一旦阴影过重，地图会从「专业制图」滑向「3D 地形图」。
+/// ADR-0060 §4 定的是 0.90~1.12（预览期校准值），此处照此实现。
+const RELIEF_MIN_CARTOGRAPHIC: f32 = 0.90;
+const RELIEF_MAX_CARTOGRAPHIC: f32 = 1.12;
+
 /// 坡度浮雕系数：邻格高差 → 明度乘子，光源固定在**左上 45°**
 /// （与 ART_STYLE_SPEC §1.5 的主光方向一致）。
 ///
 /// 纯函数、只读高度场：同一格在任何渲染路径（全图烘焙 / 笔刷 patch）
 /// 得到同一乘子，不需要额外的缓存或随机种子。
 fn relief_mul(data: &TerrainData, cx: u32, cy: u32) -> f32 {
+    relief_mul_clamped(data, cx, cy, RELIEF_MIN, RELIEF_MAX)
+}
+
+/// 同 [`relief_mul`]，但钳制区间由调用方给（专业制图用更轻的区间）。
+fn relief_mul_clamped(data: &TerrainData, cx: u32, cy: u32, lo: f32, hi: f32) -> f32 {
     let w = data.width as i64;
     let h = data.height as i64;
     if w < 2 || h < 2 {
@@ -233,7 +246,7 @@ fn relief_mul(data: &TerrainData, cx: u32, cy: u32) -> f32 {
     let dy = (at(x, y + 1) - at(x, y - 1)) * 0.5;
     // 数据行号向下增大；坡面朝左上（dx < 0 且 dy < 0）受光最亮。
     let lit = -(dx + dy);
-    (1.0 + lit * RELIEF_PER_METER).clamp(RELIEF_MIN, RELIEF_MAX)
+    (1.0 + lit * RELIEF_PER_METER).clamp(lo, hi)
 }
 
 /// 水域按高度的渐变色——lerp `water_shallow → water_deep`，并对深色带
@@ -583,6 +596,11 @@ struct CellRenderer<'a> {
     /// Topographic mode 专用：7 条海拔内边界（米，逐图百分位；ADR-0055）。
     /// 非 Topographic mode 为 `None`（着色路径零开销）。
     topographic: Option<super::hypsometric::Cuts>,
+    /// **专业制图的海拔色带**（ADR-0067 D3）：8 阶 + 混入强度 + 7 条内边界。
+    ///
+    /// `None` = 不叠色带（非 Google 模式 / 风格没给色带）。非 Google 模式的
+    /// 分层设色走 `hypsometric`（Topographic 数据视图），与本项**互斥**。
+    elevation: Option<super::hypsometric::ElevationBand>,
     /// 分层设色强度（`CellPack.hypsometric` 的镜像；ADR-0055）：0 = 纯群系色，
     /// 1 = 海拔色带完全替代群系色。
     hypsometric: f32,
@@ -636,6 +654,17 @@ impl<'a> CellRenderer<'a> {
         } else {
             None
         };
+        // 专业制图的海拔色带（ADR-0067 D3）：只在色板给了色带时生效。
+        // 切点复用 `hypsometric::cuts_for_cells`（绝对阶梯 + 窄域兜底）——
+        // 与 CellMap 的分层设色同一套阈值语义，但**配色与强度**来自风格层。
+        let elevation = match (mode, palette.elevation_ramp.as_ref()) {
+            (ShadeMode::GoogleMap, Some(ramp)) => Some(super::hypsometric::ElevationBand {
+                ramp: *ramp,
+                cuts: super::hypsometric::cuts_for_cells(&data.cells),
+                strength: palette.elevation_strength.clamp(0.0, 1.0),
+            }),
+            _ => None,
+        };
         Self {
             data,
             w,
@@ -678,6 +707,7 @@ impl<'a> CellRenderer<'a> {
             blocks: std::array::from_fn(|_| None),
             tried: [false; 10],
             topographic,
+            elevation,
             hypsometric: pack.hypsometric.clamp(0.0, 1.0),
             shore,
             sea: pack.sea.clone(),
@@ -689,6 +719,32 @@ impl<'a> CellRenderer<'a> {
                     | ShadeMode::Event
             ),
         }
+    }
+
+    /// 叠**专业制图的海拔色带**（ADR-0067 D3）。
+    ///
+    /// 色带读「高」，晕渲读「坡」——两者正交互补（ADR-0060 §2）。只对陆格
+    /// 生效：水面已有深度渐变，叠色带会脏。
+    ///
+    /// **为什么不在 `shade_google` 里做**：那个函数只有 `kind`，没有高度——
+    /// 色带按海拔分，必须拿格高。放在这里（唯一的「已着色 → 输出」闸口）保证
+    /// 两条路径（逐格直铺 / 亚格采样）同格同色。
+    fn apply_elevation_band(
+        &self,
+        cell: &wv_core::terrain::TerrainCellData,
+        color: Color,
+    ) -> Color {
+        let Some(band) = self.elevation.as_ref() else {
+            return color;
+        };
+        if super::hypsometric::is_water_cell(cell) {
+            return color;
+        }
+        let Color::Srgba(c) = color else {
+            return color;
+        };
+        let tinted = band.tint([c.red, c.green, c.blue, 1.0], cell.height);
+        Color::srgb(tinted[0], tinted[1], tinted[2])
     }
 
     /// `kind` 的预采样瓦片块（按需建，整图共享）。
@@ -1023,7 +1079,10 @@ impl<'a> CellRenderer<'a> {
             out[1] = block[o + 1] as f32 * mul * g;
             out[2] = block[o + 2] as f32 * mul * g;
         } else {
-            if let Color::Srgba(c) = (self.shader)(self.data, kind, self.palette) {
+            let base = (self.shader)(self.data, kind, self.palette);
+            // 海拔色带（ADR-0067）：专业制图专用，先叠色带再乘浮雕。
+            let base = self.apply_elevation_band(cell, base);
+            if let Color::Srgba(c) = base {
                 let g = if self.grain {
                     land_grain(kind, gx, gy)
                 } else {
@@ -1265,6 +1324,8 @@ impl<'a> CellRenderer<'a> {
             } else {
                 (self.shader)(self.data, kind, self.palette)
             };
+            // 海拔色带（ADR-0067）：与 `sample_kind` 同一闸口，两条路径同色。
+            color = self.apply_elevation_band(cell, color);
             // 水域按高度渐变（手绘地图 #1）：kind 0/1 的内部格从单色水变
             // height 调度的水彩带；轮廓图模式不进这里。
             // （bleed 开时模糊基色已含水深渐变——邻域各格都过了 water_shade_at。）
@@ -1315,10 +1376,28 @@ impl<'a> CellRenderer<'a> {
             }
             // 坡度浮雕：全局 / 区域档靠明暗读出山脉体积（ADR-0036）。
             // 只在陆格生效——水域已有深度渐变，再叠坡度会脏。
-            if matches!(self.mode, ShadeMode::VectorFlat | ShadeMode::RealTerrain)
-                && cell.height >= 0
+            //
+            // **GoogleMap（专业制图）自 2026-10-26 接入**（ADR-0067 D2）：山符号
+            // 已随 ADR-0066 整体退场（「山 = 符号，不是颜色」的旧口径被推翻），
+            // 若此处不补晕渲，山地会彻底失语——只剩一片近白底色。晕渲读「坡」，
+            // 是专业地图表达起伏的唯一手段（百度 / Google 的地形图也是这么做的）。
+            if matches!(
+                self.mode,
+                ShadeMode::VectorFlat | ShadeMode::RealTerrain | ShadeMode::GoogleMap
+            ) && cell.height >= 0
             {
-                let mul = relief_mul(self.data, cx, gy);
+                let mul = if self.mode == ShadeMode::GoogleMap {
+                    // 专业制图：更轻的钳制区间（0.90~1.12，ADR-0060 §4 校准值）。
+                    relief_mul_clamped(
+                        self.data,
+                        cx,
+                        gy,
+                        RELIEF_MIN_CARTOGRAPHIC,
+                        RELIEF_MAX_CARTOGRAPHIC,
+                    )
+                } else {
+                    relief_mul(self.data, cx, gy)
+                };
                 let Color::Srgba(c) = color else { return };
                 color = Color::srgb(
                     (c.red * mul).clamp(0.0, 1.0),
@@ -2292,6 +2371,110 @@ mod tests {
             pal.core[2],
             "山地折叠为陆地基色"
         );
+    }
+
+    /// 专业制图的**海拔色带**（ADR-0067 D3）：高处必须比低处暗（沉），
+    /// 且只在陆格生效。
+    ///
+    /// 三条断言各钉一件事：
+    /// - 高地 ≠ 低地（色带真的分出了阶）；
+    /// - 高地**更暗**（专业制图取「近白 → 深岩褐」的反方向，见色带注释）；
+    /// - 水格不受影响（水面已有深度渐变）。
+    #[test]
+    fn cartographic_elevation_band_darkens_high_ground_only() {
+        use super::super::hypsometric::ElevationBand;
+        let mut pal = CellPack::fixture().palette;
+        pal.elevation_ramp = Some([
+            [0xF8, 0xF9, 0xFA], // 0 近白
+            [0xE3, 0xE0, 0xD8],
+            [0xD4, 0xCF, 0xC4],
+            [0xC2, 0xBB, 0xAE],
+            [0xAB, 0xA2, 0x95],
+            [0x8E, 0x86, 0x7C],
+            [0x6B, 0x64, 0x5E],
+            [0x50, 0x4A, 0x45], // 7 深岩褐
+        ]);
+        pal.elevation_strength = 0.62;
+        let band = ElevationBand {
+            ramp: pal.elevation_ramp.expect("刚设的"),
+            cuts: super::super::hypsometric::cuts_for_cells(&[]),
+            strength: pal.elevation_strength,
+        };
+        // 绝对阶梯：200/500/1000/1500/2500/4000/6000 m。
+        let low = band.tint([1.0, 1.0, 1.0, 1.0], 50);
+        let high = band.tint([1.0, 1.0, 1.0, 1.0], 5000);
+        assert_ne!(low, high, "高处与低处必须不同");
+        let lum = |c: [f32; 4]| 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+        assert!(
+            lum(high) < lum(low),
+            "高处应更暗（近白 → 深岩褐），低={:.3} 高={:.3}",
+            lum(low),
+            lum(high)
+        );
+    }
+
+    /// **端到端**：专业制图模式下，高地像素必须比低地像素暗（ADR-0067 D3）。
+    ///
+    /// 这是「接线真的生效」的锚点——只测 `ElevationBand::tint` 纯函数不够：
+    /// 色带可能算对了却没接进烘焙管线（像 ADR-0061 追记一修的那个
+    /// 「`shade_google` 读错色表」一样的假绿）。本测试走完整烘焙。
+    #[test]
+    fn cartographic_high_ground_bakes_darker_than_low_ground() {
+        // 2×1：左格 50 m（低地），右格 3000 m（雪线以上）。
+        let data = TerrainData {
+            width: 2,
+            height: 1,
+            cells: vec![
+                wv_core::terrain::TerrainCellData {
+                    height: 50,
+                    surface: 1,
+                    biome: 3,
+                },
+                wv_core::terrain::TerrainCellData {
+                    height: 3000,
+                    surface: 1,
+                    biome: 3,
+                },
+            ],
+        };
+        let mut pack = CellPack::fixture();
+        pack.palette.core = [Color::srgb(1.0, 1.0, 1.0); 10];
+        pack.palette.elevation_ramp = Some([
+            [0xF8, 0xF9, 0xFA],
+            [0xE3, 0xE0, 0xD8],
+            [0xD4, 0xCF, 0xC4],
+            [0xC2, 0xBB, 0xAE],
+            [0xAB, 0xA2, 0x95],
+            [0x8E, 0x86, 0x7C],
+            [0x6B, 0x64, 0x5E],
+            [0x50, 0x4A, 0x45],
+        ]);
+        pack.palette.elevation_strength = 0.62;
+        let img = image_from_terrain(&data, ShadeMode::GoogleMap, None, false, &pack, 0.0);
+        let res = img.width() / data.width;
+        let px = |cell: usize| -> f32 {
+            let x = (cell % 2) as u32 * res + res / 2;
+            let y = res / 2;
+            let o = ((y * img.width() + x) * 4) as usize;
+            let d = img.data.as_ref().expect("地形图必须有像素");
+            0.299 * d[o] as f32 + 0.587 * d[o + 1] as f32 + 0.114 * d[o + 2] as f32
+        };
+        let low = px(0);
+        let high = px(1);
+        assert!(
+            high < low,
+            "3000m 高地应比 50m 低地暗：低={low:.1} 高={high:.1}"
+        );
+    }
+
+    /// 晕渲（ADR-0067 D2）：专业制图的浮雕区间比艺术主题**更轻**。
+    #[test]
+    fn cartographic_relief_is_clamped_lighter_than_artistic_one() {
+        // 常量比较用 `const {}` 块——clippy 会把裸 `assert!` 当「恒真断言」。
+        const {
+            assert!(RELIEF_MIN_CARTOGRAPHIC > RELIEF_MIN);
+            assert!(RELIEF_MAX_CARTOGRAPHIC < RELIEF_MAX);
+        }
     }
 
     // ---------------------------------------------------------------------------

@@ -133,6 +133,8 @@ pub fn conv_palette(p: &wv_default_theme::palette::PaletteColors) -> CellPalette
         line_on_dark: p.line_on_dark,
         deep_ocean_blue: p.deep_ocean_blue,
         water_shore: p.water_shore,
+        elevation_ramp: p.elevation_ramp,
+        elevation_strength: p.elevation_strength,
     }
 }
 

@@ -170,6 +170,13 @@ pub struct PaletteColors {
     /// 与 `deep_ocean_blue` 对偶：那个管最深的一格，这个管贴岸的一圈。
     /// 见 `colors::WATER_SHORE` 注释。
     pub water_shore: Color,
+    /// **海拔色带**（ADR-0067 D3）：8 阶，低 → 高。
+    ///
+    /// 专业制图用它表达山体的高度层次（色带读「高」，晕渲读「坡」）。
+    /// 艺术主题不设（`None`）——它们的边界靠手绘晕 / 等值线表达，不需要色带。
+    pub elevation_ramp: Option<[[u8; 3]; 8]>,
+    /// 海拔色带的混入强度（0..=1）。
+    pub elevation_strength: f32,
 }
 
 impl PaletteColors {
@@ -249,6 +256,9 @@ impl PaletteColors {
         line_on_dark: super::colors_google::GOOGLE_LINE_ON_DARK,
         deep_ocean_blue: super::colors_google::GOOGLE_DEEP_OCEAN_BLUE,
         water_shore: super::colors_google::GOOGLE_WATER_SHORE,
+        // 海拔色带：专业制图专有（ADR-0067 D3）。
+        elevation_ramp: Some(super::colors_google::GOOGLE_ELEVATION_RAMP),
+        elevation_strength: super::colors_google::GOOGLE_ELEVATION_STRENGTH,
     };
 }
 
