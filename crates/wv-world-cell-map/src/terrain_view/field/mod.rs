@@ -34,6 +34,7 @@
 //! T19–T22 域扭曲 / T28–T30 水彩 / T31–T34 缩放自适应属 **P2**，参数位已预留。
 
 pub mod bicubic;
+pub mod biome_sdf;
 pub mod coast_sdf;
 pub mod line_sdf;
 pub mod mask_sdf;
@@ -44,6 +45,9 @@ pub mod stroke;
 pub mod symbol_atlas;
 
 pub use bicubic::{bicubic_grad, bicubic_value, cubic_weights, cubic_weights_deriv};
+pub use biome_sdf::{
+    biome_distance_field, with_cap as biome_field_with_cap, BiomeField, BIOME_FIELD_CAP, NO_FOREIGN,
+};
 pub use coast_sdf::{distance_field, distance_to_coast, FAR};
 pub use line_sdf::{
     bake_line_dash, rivers_from_terrain, LineClass, LineDashPack, LinePoly, DASH_MAX_CELLS,
