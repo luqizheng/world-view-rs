@@ -357,7 +357,8 @@ mod tests {
     }
 
     /// 命名测试 3：经命令链「加路 POI」→ 提交点钩子重建出派生边；
-    /// 派生边**不进脏路径**，保存后 YAML 无新行（serde skip + 增量路由双保险）。
+    /// 派生边**不进脏路径**，save → 重读工程后 YAML / 加载结果中**无 derived
+    /// 边**、且不触发重迁移（重载后 places 数不变）。
     #[test]
     fn derived_edges_are_rebuilt_after_place_edits() {
         // 干净底座：有比例尺的图 + 两个锚定镇，无任何路。
@@ -409,36 +410,62 @@ mod tests {
             dirty
         );
 
-        // 落盘往返（serde 契约，Task 2 钉死的那一半）：derived **标记**永不
-        // 序列化——wv-io 的每实体一文件保存即使把边行写了出去，行内也不得
-        // 出现 derived 字段；加载回来的边一律 derived:false（serde skip 默认）。
+        // 落盘往返完整断言（原计划断言，T9 评审修复后恢复）：save → 重读
+        // 工程 → YAML / 加载结果中**无 derived 边**，且不触发重迁移。
         //
-        // ⚠️ 计划缺口（T9 报告已上报，不在本任务修）：《计划》57 行以为
-        // `#[serde(skip)]` 足以令「推导边永不落盘」，但 wv-io 的
-        // `save_entities` 会把边**行**本身写出（`distances/edges/<id>.yaml`），
-        // 重载后退化成手写边、触发下次加载的一次性重迁移。收敛性由迁移的
-        // 确定性后缀保证（完全重放 → 跳过不重插，不无限增殖），行级过滤
-        // 应在 wv-io 侧补一行 `!e.derived` 过滤。
+        // 契约在 wv-io 侧：`PlaceEdge.derived` 的 `#[serde(skip)]` 只管字段
+        // 序列化，管不了实体是否被写——`save_world` 必须按 `!e.derived`
+        // 过滤列表成员（ADR-0070 D5：推导边是运行时投影，永不落盘）。
+        // 本夹具 0 条手写边、1 条推导边 ⇒ 重载后 edges 应为空、places 数
+        // 不变、`needs_line_migration` 不再为真（若推导边落了盘，重载即
+        // 退化成手写 road 边，下次加载会重迁移补建 `road_mig_*` 实体）。
+        let places_before_save = w.distances.places.len();
         let dir = std::env::temp_dir().join(format!("wv_t9_derived_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let save_result = (|| -> Result<(), String> {
             let mut project = wv_io::Project::create(&dir, "t9").map_err(|e| e.to_string())?;
             project.save_world(&w, &[]).map_err(|e| e.to_string())?;
-            let edge_file = dir.join("distances/edges/road_hamlet_alpha_village_beta.yaml");
-            let yaml = std::fs::read_to_string(&edge_file).unwrap_or_default();
+            // YAML 层：推导边文件不得存在（夹具无手写边，edges 目录应为空）。
+            let edges_dir = dir.join("distances/edges");
+            let leaked: Vec<String> = std::fs::read_dir(&edges_dir)
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .filter_map(|e| {
+                            e.path()
+                                .file_stem()
+                                .map(|s| s.to_string_lossy().into_owned())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             assert!(
-                !yaml.contains("derived"),
-                "derived 标记不得序列化进边文件：{yaml}"
+                leaked.is_empty(),
+                "edges 目录不得有任何落盘边（推导边永不落盘），实得 {leaked:?}"
             );
+            // 加载层：重读工程 → 无 derived 边、places 数不变、不触发重迁移。
             let reopened = wv_io::Project::open(&dir).map_err(|e| e.to_string())?;
             let reloaded = reopened.load_world().map_err(|e| e.to_string())?;
-            for e in &reloaded.distances.edges {
-                assert!(
-                    !e.derived,
-                    "重载边 {} 不得带 derived 标记（serde skip）",
-                    e.id
-                );
-            }
+            assert!(
+                reloaded.distances.edges.is_empty(),
+                "重载不得带任何边（投影边不落盘），实得 {:?}",
+                reloaded
+                    .distances
+                    .edges
+                    .iter()
+                    .map(|e| e.id.as_str())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                reloaded.distances.places.len(),
+                places_before_save,
+                "重载后 places 数不得变（触发重迁移会补建 road_mig_* 实体，{} → {}）",
+                places_before_save,
+                reloaded.distances.places.len()
+            );
+            assert!(
+                !needs_line_migration(&reloaded),
+                "重载不得再触发存量线数据迁移判据"
+            );
             Ok(())
         })();
         let _ = std::fs::remove_dir_all(&dir);
