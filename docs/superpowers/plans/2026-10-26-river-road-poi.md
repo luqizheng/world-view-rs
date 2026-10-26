@@ -36,6 +36,7 @@
 **Files:**
 - Modify: `crates/wv-core/src/map/distance.rs`（`Place` 结构体，~line 223）
 - Test: 同文件 `#[cfg(test)]`（round-trip 先例在同文件）
+- **连带（Rust 穷举字面量）**：`Place` 是全仓 60 处字面量的构造目标，加字段必然波及 wv-core / wv-edit / wv-io / wv-render / wv-app 的兄弟 crate——每处补 `line_kind: None,` 与 `line_width_m: None,`（纯追加，不改任何既有断言）。**这是必然连带，不算 scope 扩张。**
 
 **Interfaces:**
 - Produces: `pub enum LineKind { River, Road }`（`#[serde(rename_all = "snake_case")]`，置于 `PoiKind` 旁）；`Place.line_kind: Option<LineKind>`、`Place.line_width_m: Option<f32>`（serde 缺省不落盘）。后续所有任务的判别口径 =「`line.is_some() ∧ line_kind == Some(Road)` → 路；`line.is_some()` 其余 → 河」。
@@ -53,7 +54,7 @@
 - Test: 同文件测试区
 
 **Interfaces:**
-- Produces: `PlaceEdge.derived: bool`，`#[serde(skip)]` + `Default`（false）。文档注释钉死：推导边**永不落盘**；保存/加载天然往返；`terrain = "road"` 仍是手写边的合法值（YAML 作者可写）。
+- Produces: `PlaceEdge.derived: bool`，`#[serde(skip)]`——serde 对 skip 字段自动取 `Default::default()`（即 `false`），**不手写 `Default` impl**（与 derive 冲突会编译不过）。文档注释钉死：推导边**永不落盘**；保存/加载天然往返；`terrain = "road"` 仍是手写边的合法值（YAML 作者可写）。
 
 - [ ] **Step 1: 写失败测试**：`derived_edge_serializes_without_marker_and_loads_false`（构造 `derived: true` 的边 → serde YAML 断言无 `derived` 字样 → 反序列化回 `derived == false`）。
 - [ ] **Step 2: 确认失败**（编译错）。
@@ -103,6 +104,7 @@
   - `pub fn derive_road_edges(world: &World, tolerance_wu: f32) -> Vec<PlaceEdge>`——遍历 `line_kind == Road ∧ line.is_some() ∧ map 锚定` 的 Place；线两端各找容差内最近锚定 Place（非线 POI）；两端命中 → 一条边 `{ id: "road_<a>_<b>"（字典序）, distance_km: 线长 wu ÷ unit_per_km, terrain: "road", bidirectional: true, rank: None, derived: true }`。`unit_per_km = None` / 端点未命中 → 跳过并计入返回的诊断信息（`pub struct RoadDeriveReport { pub edges: Vec<PlaceEdge>, pub skipped_no_scale: usize, pub skipped_no_anchor: usize }`，函数改返此结构）。
   - `pub fn rebuild_derived_edges(world: &mut World, tolerance_wu: f32) -> RoadDeriveReport`——`edges.retain(|e| !e.derived)` 后追加新推导边（**不进脏路径**：调用方不得因 derived 变化标脏 `distances/edges`）。
   - `pub fn road_line_effective_rank(place: &Place, distance_km: Option<f32>) -> u8`——显式 rank 赢；否则按公里折算 **≥100→3 / ≥30→2 / 否则 1**（与 `PlaceEdge::effective_rank` 同表同注释，冻结契约；`distance_km = None`（无比例尺）→ 1）。
+  - `pub fn effective_line_kind(place: &Place) -> Option<LineKind>`——**线段判别的唯一入口**（T1 评审 Minor 收编）：`place.line.is_none()` → `None`；否则 `line_kind` 缺省或 `Some(River)` → `Some(River)`、`Some(Road)` → `Some(Road)`。后续所有任务（渲染收集、迁移判据、面板回填）一律走此函数，禁止各自重写判别条件。
 - Consumes: `MapNode::km_per_wu`（`crates/wv-core/src/map/mod.rs:462` 一带的换算入口）、Task 1/2 字段。
 
 - [ ] **Step 1: 写失败测试**（手算期望值）：`derived_distance_km_uses_line_length_over_unit_per_km`（线长 100 wu、`unit_per_km = 8.0` → 断言 `distance_km ≈ 12.5`，附实际值）、`derived_rank_folds_by_kilometres_like_place_edge`（100km 线 → 3；30km → 2；5km → 1）、`maps_without_unit_per_km_skip_derivation`（report.skipped_no_scale == 1，edges 空）、`existing_hand_edge_suppresses_derivation`（同端点对手写边在 → 不产推导边）、`line_endpoint_snaps_within_tolerance_only`（容差内/外两例）。
