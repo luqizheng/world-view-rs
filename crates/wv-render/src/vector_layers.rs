@@ -1907,10 +1907,6 @@ mod tests {
             landmark_marker(ViewMode::VectorFlat),
             LandmarkMarker::Illustration
         );
-        assert_eq!(
-            landmark_marker(ViewMode::Schematic),
-            LandmarkMarker::Illustration
-        );
     }
 
     /// rank 尺寸档只作用于专业制图：国都 pin 比市镇大，CellMap 单档。
@@ -2518,7 +2514,7 @@ mod tests {
         world.init_resource::<crate::streets::StreetLayerCache>();
         world.init_resource::<crate::streets::StreetEditorState>();
         world.init_resource::<crate::layer_frame::LayerFrame>();
-        world.insert_resource(schematic_recipe());
+        world.insert_resource(flat_recipe());
 
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);
@@ -2631,10 +2627,11 @@ mod tests {
         );
     }
 
-    /// 对照组（防「全关假绿」）：同一夹具切 Schematic（三 pass 全 true）
+    /// 对照组（防「全关假绿」）：同一夹具切 VectorFlat（三 pass 全 true）
     /// ⇒ mesh 必须产出来。证明上一条的 0 是门控起效，不是夹具坏了。
+    /// （原用 Schematic 作对照；该模式已退役——ADR-0069。）
     #[test]
-    fn schematic_recipe_still_builds_road_street_and_poi_meshes() {
+    fn flat_recipe_still_builds_road_street_and_poi_meshes() {
         use crate::recipe::resolve_render_recipe;
         use crate::state::ViewMode;
 
@@ -2643,7 +2640,7 @@ mod tests {
         world.insert_resource(Assets::<ColorMaterial>::default());
         world.insert_resource(Assets::<Image>::default());
         let view = ViewState {
-            mode: ViewMode::Schematic,
+            mode: ViewMode::VectorFlat,
             ..Default::default()
         };
         let layers = crate::layer_frame::LayerFrame::default();
@@ -2750,7 +2747,7 @@ mod tests {
         });
         world.init_resource::<crate::streets::StreetEditorState>();
         world.init_resource::<crate::layer_frame::LayerFrame>();
-        world.insert_resource(schematic_recipe());
+        world.insert_resource(flat_recipe());
 
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);
@@ -2791,9 +2788,10 @@ mod tests {
     }
 
     /// 合批世界（A2 测试基建）：路网段列 + 全默认资源，跑一次 sync 前的最小装配。
-    /// 测试夹具专用：Schematic 行的 recipe（Roads/Streets/Poi 全开）——
+    /// 测试夹具专用：VectorFlat 行的 recipe（Roads/Streets/Poi 全开）——
     /// 合批/档位/原点换算类测试的意图是「画法」，不是门控。
-    fn schematic_recipe() -> crate::recipe::RenderRecipe {
+    /// （原为 Schematic 行；该模式已退役——ADR-0069，两行三格同值。）
+    fn flat_recipe() -> crate::recipe::RenderRecipe {
         crate::recipe::resolve_render_recipe(
             &ViewState::default(),
             &crate::layer_frame::LayerFrame::default(),
@@ -2833,9 +2831,9 @@ mod tests {
         world.init_resource::<crate::streets::StreetEditorState>();
         world.init_resource::<crate::layer_frame::LayerFrame>();
         // 2026-10-22 内容矩阵后 sync_vector_layers 消费 recipe——夹具按
-        // Schematic 行解析（Roads/Streets/Poi 全 true），保住「合批 / 档位」
+        // VectorFlat 行解析（Roads/Streets/Poi 全 true），保住「合批 / 档位」
         // 类测试的意图；门控行为由本模块新加的两条专测覆盖。
-        world.insert_resource(schematic_recipe());
+        world.insert_resource(flat_recipe());
         world
     }
 
@@ -2916,7 +2914,7 @@ mod tests {
         world.init_resource::<crate::streets::StreetLayerCache>();
         world.init_resource::<crate::streets::StreetEditorState>();
         world.init_resource::<crate::layer_frame::LayerFrame>();
-        world.insert_resource(schematic_recipe());
+        world.insert_resource(flat_recipe());
 
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);

@@ -176,7 +176,7 @@
 | **链装配** | Chain assembly | 把 marching squares 输出的离散线段按端点接成折线链；端点匹配用 `f32::to_bits` 位级精确比对（相邻对偶格共享边交点由同公式算出，位级一致，不需要浮点容差） | 渲染 / 算法 |
 | **等值线叠加层** | Isoline overlay | `VectorFlat` 浏览态在平涂底图之上的几何边界描边（海岸线 + 类型场边界），单 mesh 批量、派生不落盘；实现 `wv-app/render/terrain_view/isoline_overlay.rs`，重算触发 = 结构键 + `chunks_dirty` | 地理 / 渲染 |
 | **矢量地形** | Vector terrain | `VectorFlat` 浏览态的 UI 定名（2026-10-14 用户裁定，此前顶栏叫「等值线」——等值线只是它的描边产物）：Google 地图矢量瓦片式渲染 = 高度场平涂填充（水陆边由双线性高度决定）+ 等值线叠加层描边。浏览态两模式之一（另一个是「色块地形」），见 `ViewMode::BROWSING` | 地理 / 渲染 |
-| **色块画布** | Palette canvas | `Schematic` 浏览态的现 UI 名（2026-10-26 由「色块地形」更名，ADR-0068）：一格一色读地形 kind，取 `kind_core` 十色对照（`conv_palette_terrain` 的 Schematic 分支换色）。**笔刷涂地形 kind 的唯一可视反馈**（专业色板把陆上类折叠为近白，其余模式读不出 kind 差异）。顶栏 Edit 段移除后退居幕后，快捷键 `2` / 命令面板可达 | 地理 / 渲染 |
+| **色块画布** | Palette canvas | ~~`Schematic` 浏览态的 UI 名~~ **已随模式整建制退役**（2026-10-26，ADR-0069 取代 ADR-0068 D2）：`ViewMode::Schematic` 从枚举删除，`kind_core` 十色对照不再有产品入口；笔刷 kind 反馈由 CellMap 统一属性表单（ADR-0058）与笔刷面板 swatch 承担。内部 `ShadeMode::Schematic` 平涂技法名保留（数据视图 crate） | 地理 / 渲染 |
 | **色块地形** | Schematic terrain | 「色块画布」的旧名（2026-10-26 更名，ADR-0068），按 §6.3 保留词条指向新名 | 地理 / 渲染 |
 | **预填充** | prefill | 「新建地图」对话框按选择整图铺满海洋（高度 < 0 + 水系类型）或陆地（高度 ≥ 0 + 陆系类型）的初始栅格；同时写高度与类型——VectorFlat 填充「高度赢过类型」口径下二者必须一致 | 编辑 / 数据 |
 

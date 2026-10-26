@@ -35,11 +35,10 @@ pub fn apply_env_view_mode(mut view: ResMut<ViewState>) {
     let mode = match raw.trim().to_ascii_lowercase().as_str() {
         "map" | "google" | "cartographic" => ViewMode::GoogleMap,
         "browse" | "vector" | "vector_flat" => ViewMode::VectorFlat,
-        "edit" | "schematic" => ViewMode::Schematic,
         "cellmap" | "topographic" => ViewMode::Topographic,
         "faction" => ViewMode::Faction,
         other => {
-            warn!("[wv] WV_MODE={other} 未知（map/browse/edit/cellmap/faction），忽略");
+            warn!("[wv] WV_MODE={other} 未知（map/browse/cellmap/faction），忽略");
             return;
         }
     };

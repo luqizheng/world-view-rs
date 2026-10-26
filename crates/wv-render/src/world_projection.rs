@@ -1054,7 +1054,7 @@ mod region_handles_tests {
 
     #[test]
     fn handles_never_visible_outside_cellmap() {
-        for mode in [ViewMode::VectorFlat, ViewMode::Faction, ViewMode::Schematic] {
+        for mode in [ViewMode::VectorFlat, ViewMode::Faction, ViewMode::GoogleMap] {
             assert!(
                 !region_handles_visible(mode, true),
                 "{mode:?} 不是数据编辑器，不该出手柄"

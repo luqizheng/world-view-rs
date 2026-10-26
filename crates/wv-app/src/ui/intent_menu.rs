@@ -461,9 +461,5 @@ mod tests {
             !cell_workspace_active(ViewMode::VectorFlat),
             "Browse 档照常出菜单（大陆 / 城市等图级意图的入口）"
         );
-        assert!(
-            !cell_workspace_active(ViewMode::Schematic),
-            "Edit 档照常出菜单"
-        );
     }
 }

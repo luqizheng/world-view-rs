@@ -53,11 +53,13 @@ pub(crate) fn hotkeys(
     if cmd && shift && input.key_pressed(bevy_egui::egui::Key::I) {
         panels.immersive = !panels.immersive;
     }
-    // 数字 1–4：切换浏览视图模式（顺序 = `ViewMode::BROWSING`：矢量地形 /
-    // 色块地形 / 势力图 / 普通地图；其余模式不占数字键）。
+    // 数字 1–3：切换浏览视图模式（顺序 = `ViewMode::BROWSING`：矢量地形 /
+    // 普通地图 / 势力图；其余模式不占数字键。2026-10-26 ADR-0069：退役
+    // Schematic 后 GoogleMap 提到键 2，与顶栏前两段 Browse/Map 对齐）。
     //
-    // **为什么数组必须与 `BROWSING` 同长**：索引直接喂 `SetViewMode`，少一项
-    // 就等于该模式没有快捷键（2026-10-25 实测：`BROWSING` 加了普通地图，
+    // **为什么按 `BROWSING.len()` 截断**：索引直接喂 `SetViewMode`，键数
+    // 超过列表长度会按出「静默无效果」的键位（分发器 `.get` 越界忽略）；
+    // 少一项则该模式没有快捷键（2026-10-25 实测：`BROWSING` 加了普通地图，
     // 这里漏加 `Num4`，ADR-0061 的「快捷键 4 可切」验收不成立）。
     for (i, key) in [
         bevy_egui::egui::Key::Num1,
@@ -66,6 +68,7 @@ pub(crate) fn hotkeys(
         bevy_egui::egui::Key::Num4,
     ]
     .iter()
+    .take(crate::state::ViewMode::BROWSING.len())
     .enumerate()
     {
         if input.key_pressed(*key) {

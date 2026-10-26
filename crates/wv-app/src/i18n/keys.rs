@@ -309,8 +309,6 @@ pub enum I18nKey {
     ViewModeGoogleMap,
     /// 「真实地形」RealTerrain
     ViewModeRealTerrain,
-    /// 「色块地形」Schematic
-    ViewModeSchematic,
     /// 「势力图」Faction
     ViewModeFaction,
     /// 「事件图」Event
@@ -895,7 +893,6 @@ pub enum I18nKey {
     /// 「切换到矢量地形视图」（命令 = 动词，与 W1 ViewMode 标签区分）
     CmdSwitchVectorFlatView,
     /// 「切换到色块地形视图」
-    CmdSwitchSchematicView,
     /// 「切换到势力图」（ADR-0027 D6）
     CmdSwitchFactionView,
     /// 「切换到普通地图」（2026-10-25：`ViewMode::GoogleMap` 此前无任何 UI 入口，
@@ -1302,7 +1299,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 520] = [
+    pub const ALL: [I18nKey; 518] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1459,7 +1456,6 @@ impl I18nKey {
         I18nKey::ViewModeVectorFlat,
         I18nKey::ViewModeGoogleMap,
         I18nKey::ViewModeRealTerrain,
-        I18nKey::ViewModeSchematic,
         I18nKey::ViewModeFaction,
         I18nKey::ViewModeEvent,
         I18nKey::ViewModeCoastline,
@@ -1712,7 +1708,6 @@ impl I18nKey {
         I18nKey::CmdExportProject,
         I18nKey::CmdProjectSettings,
         I18nKey::CmdSwitchVectorFlatView,
-        I18nKey::CmdSwitchSchematicView,
         I18nKey::CmdSwitchFactionView,
         I18nKey::CmdSwitchGoogleMapView,
         I18nKey::CmdFitMap,

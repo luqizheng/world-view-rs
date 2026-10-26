@@ -358,20 +358,19 @@ impl CommandRegistry {
             None,
         );
 
-        // 视图（BROWSING 四项：矢量地形 / 色块地形 / 势力图 / 普通地图，与顶栏同源）
+        // 视图（BROWSING 三项：矢量地形 / 普通地图 / 势力图；ADR-0069 后与顶栏 Browse/Map 对齐）
         for (i, mode) in crate::state::ViewMode::BROWSING.iter().enumerate() {
             push(
                 CommandId::SetViewMode(i as u8),
                 CommandGroup::View,
                 match mode {
                     crate::state::ViewMode::VectorFlat => I18nKey::CmdSwitchVectorFlatView,
-                    crate::state::ViewMode::Schematic => I18nKey::CmdSwitchSchematicView,
                     crate::state::ViewMode::Faction => I18nKey::CmdSwitchFactionView,
                     crate::state::ViewMode::GoogleMap => I18nKey::CmdSwitchGoogleMapView,
                     // BROWSING 之外的模式不再注册（枚举变体仍在，见 state.rs）。
                     _ => continue,
                 },
-                Some(["1", "2", "3", "4"][i]),
+                Some(["1", "2", "3"][i]),
             );
         }
         push(
@@ -714,9 +713,9 @@ mod tests {
                 "浏览视图模式 {i} 未注册命令"
             );
         }
-        // BROWSING 之外的模式不占命令面板（四项 → 只有 0/1/2/3；
-        // 2026-10-25 起索引 3 = 普通地图，此前断言 3 不注册）。
-        assert!(!all.iter().any(|c| c.id == CommandId::SetViewMode(4)));
+        // BROWSING 之外的模式不占命令面板（三项 → 只有 0/1/2；
+        // 2026-10-26 ADR-0069 起索引 1 = 普通地图、2 = 势力图）。
+        assert!(!all.iter().any(|c| c.id == CommandId::SetViewMode(3)));
     }
 
     #[test]

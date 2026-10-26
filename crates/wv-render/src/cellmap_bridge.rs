@@ -62,7 +62,6 @@ pub fn shade_mode_of(mode: crate::state::ViewMode) -> ShadeMode {
         crate::state::ViewMode::VectorFlat => ShadeMode::VectorFlat,
         crate::state::ViewMode::GoogleMap => ShadeMode::GoogleMap,
         crate::state::ViewMode::RealTerrain => ShadeMode::RealTerrain,
-        crate::state::ViewMode::Schematic => ShadeMode::Schematic,
         crate::state::ViewMode::Faction => ShadeMode::Faction,
         crate::state::ViewMode::Event => ShadeMode::Event,
         crate::state::ViewMode::Coastline => ShadeMode::Coastline,
@@ -90,13 +89,6 @@ pub fn conv_palette_terrain(
     if mode == crate::state::ViewMode::GoogleMap {
         c.core = wv_default_theme::colors_google::GOOGLE_CORE_TERRAIN;
         c.soften_toward = wv_default_theme::colors_google::GOOGLE_SOFTEN_TOWARD;
-    }
-    // 色块画布（ADR-0068）：`Schematic` 的立身之本是「每种地形一色」的
-    // **对照色**——专业色板把沙/草/丘/山折叠成同一近白，笔刷涂地形 kind
-    // 时在其它模式里读不出差异。`shade_flat` 读 `core`，故在这里把 core
-    // 换成风格层的 `kind_core` 十色（此前该字段自 ADR-0066 起零消费）。
-    if mode == crate::state::ViewMode::Schematic {
-        c.core = p.kind_core;
     }
     c
 }
@@ -2513,7 +2505,6 @@ pub fn sync_cell_flash(
 /// - **CellMap（Topographic）**：只看 `nature_overlay` 开关，且**仅 Nature 类**
 ///   放行（Area 区属内容，CellMap 永远藏）；recipe 格（false）被旁路。
 /// - **其他模式**：走 recipe（RegionLayers 行）∧ 图层。
-///   Schematic 行=false ⇒ 编辑态区域消失（用户裁定：区域有时间性）。
 pub(crate) fn region_layer_visible(
     mode: crate::state::ViewMode,
     nature_overlay: bool,
@@ -2583,9 +2574,9 @@ mod visibility_tests {
             false,
             true
         ));
-        // Schematic：recipe 格=false ⇒ 无论开关都藏（开关只在 CellMap 有意义）
+        // GoogleMap：recipe 格=false ⇒ 无论开关都藏（开关只在 CellMap 有意义）
         assert!(!region_layer_visible(
-            ViewMode::Schematic,
+            ViewMode::GoogleMap,
             true,
             nature,
             false,
@@ -2993,7 +2984,7 @@ mod bridge_tests {
         assert_eq!(count_fades(&mut world), 1, "换图应生成一个淡出精灵");
 
         // 换模式：即时重建是既有行为，不再叠加淡出。
-        world.resource_mut::<ViewState>().mode = crate::state::ViewMode::Schematic;
+        world.resource_mut::<ViewState>().mode = crate::state::ViewMode::GoogleMap;
         schedule.run(&mut world);
         assert_eq!(
             count_fades(&mut world),
@@ -3033,27 +3024,6 @@ mod bridge_tests {
         /// **ADR-0066 更新**：单风格后「普通地图」与「默认风格」是**同一个**
         /// ——不再存在「主题色板 ≠ 专业色板」的对照，故那条 `assert_ne` 撤掉，
         /// 改为断言**两个模式取到同一份**（单风格的直接后果）。
-        /// 色块画布（ADR-0068）：`Schematic` 模式下地形 `core` 换成风格层
-        /// `kind_core` 十色对照——专业色板把陆上类折叠为近白，笔刷涂 kind
-        /// 只有这里读得出。锚点钉住「十色互异」，防止退回与 Map 同源。
-        #[test]
-        fn schematic_canvas_core_is_the_kind_distinct_palette() {
-            let pal = wv_default_theme::palette::PaletteColors::DEFAULT;
-            let c = conv_palette_terrain(&pal, crate::state::ViewMode::Schematic);
-            assert_eq!(c.core, pal.kind_core, "Schematic 画布应读 kind_core");
-            for i in 0..10 {
-                for j in (i + 1)..10 {
-                    assert_ne!(
-                        c.core[i], c.core[j],
-                        "色块画布槽 {i} 与 {j} 必须不同（对照色的立身之本）"
-                    );
-                }
-            }
-            // 对照：Map 模式仍是 Google 折叠色（两者不同源才叫「画布」）。
-            let g = conv_palette_terrain(&pal, crate::state::ViewMode::GoogleMap);
-            assert_ne!(c.core[3], g.core[3], "画布草色不得与专业折叠色同源");
-        }
-
         #[test]
         fn google_mode_terrain_core_is_the_google_palette() {
             let pack = &wv_default_theme::theme_pack::builtin::DEFAULT;
@@ -3411,7 +3381,6 @@ mod bridge_tests {
             let modes = [
                 ViewMode::VectorFlat,
                 ViewMode::RealTerrain,
-                ViewMode::Schematic,
                 ViewMode::GoogleMap,
                 ViewMode::Faction,
                 ViewMode::Event,

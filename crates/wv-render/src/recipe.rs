@@ -202,7 +202,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true, // TerrainDecor
         true, // Rivers
         true, // CellSelection（[ADR-0040]：会话轴,8 mode 默认开,运行时由 selected 控）
-        true, // RegionLayers（= 各行 TerrainDecor 同值；Schematic/Topographic 例外见上）
+        true, // RegionLayers（= 各行 TerrainDecor 同值；Topographic 例外见上）
     ]),
     // 真实地形（plan v0.1 D3 B 类）——与 VectorFlat 同，除等值线（仅 VectorFlat）。
     (ViewMode::RealTerrain, [
@@ -213,18 +213,6 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true, // Rivers
         true, // CellSelection
         true, // RegionLayers（Browse 类模式区域照常显示）
-    ]),
-    // 色块地形（plan v0.1 D3 C 类）——同上。
-    (ViewMode::Schematic, [
-        true, false, true, false, true, false, true, true, true, true,
-        false, true, true, true, true, true, true, false, true, false,
-        //                            ^ EventDots=false（2026-10-22 内容矩阵：
-        //                            事件有时间性，编辑态 Schematic 隐藏——ADR-0051）
-        true, // FeatureOverlay
-        true, // TerrainDecor
-        true, // Rivers
-        true, // CellSelection
-        false, // RegionLayers（装饰 ✓ 而区域 ✗——拆 pass 的全部意义，ADR-0051）
     ]),
     // GoogleMap（专业制图）—— 自带完整观感：氛围族 / 建筑 / 地形装饰不画。
     //
@@ -254,7 +242,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         false, // TerrainDecor
         true, // Rivers：Google 也画河（自有观感但水系照常）
         true, // CellSelection
-        false, // RegionLayers（= 各行 TerrainDecor 同值；Schematic/Topographic 例外见上）
+        false, // RegionLayers（= 各行 TerrainDecor 同值；Topographic 例外见上）
     ]),
     // 势力图 —— 等值线不画，其余与真实地形同。
     (ViewMode::Faction, [
@@ -264,7 +252,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true, // TerrainDecor
         true, // Rivers
         true, // CellSelection
-        true, // RegionLayers（= 各行 TerrainDecor 同值；Schematic/Topographic 例外见上）
+        true, // RegionLayers（= 各行 TerrainDecor 同值；Topographic 例外见上）
     ]),
     // 事件图 —— 极简底图。
     (ViewMode::Event, [
@@ -274,7 +262,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         false, // TerrainDecor
         false, // Rivers：极简底图不画
         true, // CellSelection
-        false, // RegionLayers（= 各行 TerrainDecor 同值；Schematic/Topographic 例外见上）
+        false, // RegionLayers（= 各行 TerrainDecor 同值；Topographic 例外见上）
     ]),
     // 轮廓图（黑底分析视图）—— 大部分装饰关。
     (ViewMode::Coastline, [
@@ -284,7 +272,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         false, // TerrainDecor
         false, // Rivers
         true, // CellSelection
-        false, // RegionLayers（= 各行 TerrainDecor 同值；Schematic/Topographic 例外见上）
+        false, // RegionLayers（= 各行 TerrainDecor 同值；Topographic 例外见上）
     ]),
     // Topographic 分析视图（[ADR-0039]）：水/陆 + height 3 阶着色，关其它装饰族。
     // 仅 Terrain + Isoline + Rivers 留——
@@ -529,27 +517,18 @@ mod tests {
         (view, layers, world, drill, tex)
     }
 
-    /// 模式表覆盖所有 7 个 ViewMode（防新增 mode 时忘加表项）。
-    /// 事件内容层（点 + 标签）在编辑态隐藏（用户裁定：事件有时间性）——
-    /// Schematic 翻 false；Browse（VectorFlat）保持 true。
+    /// 模式表覆盖所有 ViewMode（防新增 mode 时忘加表项；Schematic 行已随
+    /// ADR-0069 退役删除）。
     /// 拆 pass 的全部意义（2026-10-22 内容矩阵）：装饰是地貌演绎、区域是
-    /// 作者内容——Schematic 下「装饰 ✓ 而区域 ✗」必须两格独立；
-    /// Topographic 两格皆关（CellMap 的自然区走 nature_overlay 旁路）。
+    /// 作者内容，两格必须独立；Topographic 两格皆关（CellMap 的自然区走
+    /// nature_overlay 旁路）。原 Schematic 的「装饰 ✓ 区域 ✗ / EventDots ✗」
+    /// 规则随模式退役（ADR-0069）。
     #[test]
-    fn region_layers_hidden_in_schematic_but_decor_visible() {
+    fn region_layers_hidden_in_cellmap_but_visible_in_browse() {
         let row = |m: ViewMode| MODE_TABLE.iter().find(|(mm, _)| *mm == m).unwrap().1;
-        let schematic = row(ViewMode::Schematic);
         let topographic = row(ViewMode::Topographic);
         let vector_flat = row(ViewMode::VectorFlat);
 
-        assert!(
-            schematic[PassId::TerrainDecor as usize],
-            "Schematic 装饰照画"
-        );
-        assert!(
-            !schematic[PassId::RegionLayers as usize],
-            "Schematic 区域隐藏（编辑态不显示区域）"
-        );
         assert!(
             !topographic[PassId::RegionLayers as usize],
             "CellMap 区域默认隐藏（nature_overlay 旁路在系统侧）"
@@ -557,28 +536,6 @@ mod tests {
         assert!(
             vector_flat[PassId::RegionLayers as usize],
             "Browse 区域照常显示"
-        );
-    }
-
-    #[test]
-    fn event_dots_hidden_in_schematic_but_visible_in_vector_flat() {
-        let schematic = MODE_TABLE
-            .iter()
-            .find(|(m, _)| *m == ViewMode::Schematic)
-            .unwrap()
-            .1;
-        let vector_flat = MODE_TABLE
-            .iter()
-            .find(|(m, _)| *m == ViewMode::VectorFlat)
-            .unwrap()
-            .1;
-        assert!(
-            !schematic[PassId::EventDots as usize],
-            "Edit（Schematic）下事件内容层应隐藏"
-        );
-        assert!(
-            vector_flat[PassId::EventDots as usize],
-            "Browse（VectorFlat）下事件内容层照常显示"
         );
     }
 

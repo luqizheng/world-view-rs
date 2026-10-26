@@ -117,8 +117,6 @@ pub enum ViewMode {
     GoogleMap,
     /// A. 真实地形：高度图 + 法线光照 + 贴图。
     RealTerrain,
-    /// B. 色块画布：每种地形一种颜色（`kind_core` 十色对照，ADR-0068）。
-    Schematic,
     /// D. 势力图：颜色 = 势力，底色淡化地形。
     Faction,
     /// E. 事件图：极简底图 + 事件高亮。
@@ -140,11 +138,10 @@ pub enum ViewMode {
 }
 
 impl ViewMode {
-    pub const ALL: [ViewMode; 8] = [
+    pub const ALL: [ViewMode; 7] = [
         ViewMode::VectorFlat,
         ViewMode::GoogleMap,
         ViewMode::RealTerrain,
-        ViewMode::Schematic,
         ViewMode::Faction,
         ViewMode::Event,
         ViewMode::Coastline,
@@ -155,13 +152,15 @@ impl ViewMode {
     ///
     /// - [`ViewMode::VectorFlat`]：**矢量地形**——Google 地图矢量瓦片式渲染
     ///   （等值线描边 + 类型平涂，水陆边由高度场决定，ADR-0012）；
-    /// - [`ViewMode::Schematic`]：**色块画布**——一格一色（`kind_core` 十色对照），
-    ///   笔刷涂地形 kind 时的可视反馈（ADR-0068：Edit 段移除后它退居幕后）；
-    /// - [`ViewMode::Faction`]：**势力图**——分层填色 + 边界 + 声称/实控
-    ///   （ADR-0027 D6，2026-10-18 对「只开放两种」的单点例外）；
     /// - [`ViewMode::GoogleMap`]：**普通地图**——近白陆地 + 淡水 + 公园绿 +
     ///   白路灰缘的专业制图样式（2026-10-25 加入：主理人裁定走「专业制图」
-    ///   范式后，它是该范式唯一入口，此前枚举与色板齐备却没有任何 UI 可达）。
+    ///   范式后，它是该范式唯一入口，此前枚举与色板齐备却没有任何 UI 可达）；
+    /// - [`ViewMode::Faction`]：**势力图**——分层填色 + 边界 + 声称/实控
+    ///   （ADR-0027 D6，2026-10-18 对「只开放两种」的单点例外）。
+    ///
+    /// **Schematic 已整建制退役**（ADR-0069，2026-10-26 用户裁定）：ADR-0066
+    /// 后它与 GoogleMap 取色同源、装饰清空，观感重合；笔刷 kind 反馈由
+    /// CellMap 统一属性表单（ADR-0058）与笔刷面板 swatch 承担。
     ///
     /// 命令面板与数字快捷键都只列这份；其余模式保留在 [`Self::ALL`] 与枚举里
     /// （数据层纹理管线仍支持，随时可重新开放）。
@@ -171,14 +170,12 @@ impl ViewMode {
     /// Browse/CellMap 各有面板编排与工具副作用，不是本数组的纯投影。
     /// 旧注释称「顶栏也列这份」与实况不符，2026-10-25 更正。
     ///
-    /// **顺序即快捷键**：`1/2/3/4` 按此数组下标绑定，新增模式只能**追加**，
-    /// 插到中间会让存量用户的肌肉记忆全错位。
-    pub const BROWSING: [ViewMode; 4] = [
-        ViewMode::VectorFlat,
-        ViewMode::Schematic,
-        ViewMode::Faction,
-        ViewMode::GoogleMap,
-    ];
+    /// **顺序即快捷键**：`1/2/3` 按此数组下标绑定，新增模式只能**追加**，
+    /// 插到中间会让存量用户的肌肉记忆全错位。（2026-10-26 ADR-0069：退役
+    /// Schematic 后 GoogleMap 提到下标 1——与顶栏前两段 Browse/Map 对齐；
+    /// 势力图 2→3。）
+    pub const BROWSING: [ViewMode; 3] =
+        [ViewMode::VectorFlat, ViewMode::GoogleMap, ViewMode::Faction];
 
     // 顶栏显示名（`label(loc)`）留在 wv-app：i18n 文案查表是外壳关注点
     // （AGENTS §2 依赖方向），应用层以扩展 trait `ViewModeLabelExt` 提供
@@ -1309,19 +1306,15 @@ mod tests {
         assert!(ViewMode::ALL.contains(&ViewMode::GoogleMap));
     }
 
-    /// 2026-10-18（ADR-0027 D6）：浏览态开放第三项「势力图」。
-    /// 2026-10-25：追加第四项「普通地图」（`GoogleMap`）——专业制图范式的入口；
-    /// **必须追加在末尾**，前三项的 `1/2/3` 快捷键语义不能动。
+    /// 2026-10-18（ADR-0027 D6）：浏览态开放「势力图」。
+    /// 2026-10-25：追加「普通地图」（`GoogleMap`）——专业制图范式的入口。
+    /// 2026-10-26（ADR-0069）：Schematic 退役后重排为 矢量 → 普通地图 →
+    /// 势力（键 1/2/3，与顶栏前两段 Browse/Map 对齐）。
     #[test]
-    fn browsing_list_offers_vector_flat_schematic_faction_and_google() {
+    fn browsing_list_offers_vector_flat_google_and_faction() {
         assert_eq!(
             ViewMode::BROWSING,
-            [
-                ViewMode::VectorFlat,
-                ViewMode::Schematic,
-                ViewMode::Faction,
-                ViewMode::GoogleMap
-            ]
+            [ViewMode::VectorFlat, ViewMode::GoogleMap, ViewMode::Faction]
         );
         assert!(ViewMode::BROWSING.contains(&ViewMode::default()));
     }
