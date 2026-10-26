@@ -2760,11 +2760,17 @@ mod tests {
         // place_a 参与 edge_1/edge_2 → 级联命中，两类脏路径都应出现。
         assert_eq!(
             dirty,
-            vec!["distances/places".to_string(), "distances/edges".to_string()]
+            vec![
+                "distances/places".to_string(),
+                "distances/edges".to_string()
+            ]
         );
         assert_eq!(w.distances.places.len(), 2);
         assert!(
-            !w.distances.places.iter().any(|p| p.id.as_str() == "place_a"),
+            !w.distances
+                .places
+                .iter()
+                .any(|p| p.id.as_str() == "place_a"),
             "place_a 应已被移除"
         );
         let ids: Vec<_> = w.distances.edges.iter().map(|e| e.id.as_str()).collect();

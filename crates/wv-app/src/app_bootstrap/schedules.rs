@@ -103,10 +103,7 @@ pub(super) fn register(app: &mut App) {
                     // 地标放置（ADR-0071）：Landmark 激活时单击地图创建点状
                     // Place。与点选互斥由 dispatch 的 SelectMapTool 分支保证
                     // （placing 开时 point_select 必关），故两者先后无耦合。
-                    wv_render::perf_timed!(
-                        "commit_landmark_click",
-                        editing::commit_landmark_click
-                    ),
+                    wv_render::perf_timed!("commit_landmark_click", editing::commit_landmark_click),
                     // hover 准星（[ADR-0052] D2 写入侧；ADR-0057：EditCell ∨
                     // PointSelect 共用）：每帧追踪光标压住的格。
                     // 必须排在 `track_cursor_world` 之后（要读 cursor_world）。

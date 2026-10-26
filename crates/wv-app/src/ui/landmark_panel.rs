@@ -83,7 +83,10 @@ pub fn panel_landmark(
                 // `place_kind` 撞（同屏同 scope 同 id 会互相干扰）。
                 let kind_buf = landmark.default_kind.unwrap_or(PoiKind::Other);
                 egui::ComboBox::from_id_salt("landmark_kind")
-                    .selected_text(t_key(&current_loc, super::inspector::place::poi_kind_label_key(kind_buf)))
+                    .selected_text(t_key(
+                        &current_loc,
+                        super::inspector::place::poi_kind_label_key(kind_buf),
+                    ))
                     .show_ui(ui, |ui| {
                         for k in PoiKind::ALL {
                             ui.selectable_value(
@@ -181,7 +184,9 @@ pub fn panel_landmark(
                         "{} · R{}",
                         t_key(
                             &current_loc,
-                            super::inspector::place::poi_kind_label_key(kind.unwrap_or(PoiKind::Other))
+                            super::inspector::place::poi_kind_label_key(
+                                kind.unwrap_or(PoiKind::Other)
+                            )
                         ),
                         rank.unwrap_or(1),
                     );
@@ -231,7 +236,9 @@ fn delete_landmark_now(
     id: &wv_core::Id,
 ) {
     let mut tx = wv_edit::history::Transaction::new();
-    tx.push(Box::new(wv_edit::command::DeletePlaceCommand::new(id.clone())));
+    tx.push(Box::new(wv_edit::command::DeletePlaceCommand::new(
+        id.clone(),
+    )));
     match edit.history.commit(&mut projection.world, tx) {
         Ok(dirty) => {
             edit.record_dirty(dirty);

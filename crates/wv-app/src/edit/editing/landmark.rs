@@ -114,8 +114,10 @@ pub fn commit_landmark_click(
             edit.record_dirty(dirty);
             projection.dirty = true;
             // 创建即选中：Inspector 立刻显示该点的属性表单，改名零跳转。
-            projection.selection =
-                Some(wv_core::SelectedEntity::new(wv_core::EntityKind::Place, place_id));
+            projection.selection = Some(wv_core::SelectedEntity::new(
+                wv_core::EntityKind::Place,
+                place_id,
+            ));
         }
         Err(e) => {
             bevy::log::warn!("地标放置失败: {e}");
@@ -202,10 +204,7 @@ mod tests {
             false,
         );
         let a = a.expect("浏览档只要给光标就应返回锚点");
-        assert!(
-            (a - Vec2::new(23.4, 27.7)).length() < 1e-3,
-            "got {a:?}"
-        );
+        assert!((a - Vec2::new(23.4, 27.7)).length() < 1e-3, "got {a:?}");
     }
 
     #[test]
@@ -264,7 +263,12 @@ mod tests {
             // 无锚点（群系标记形态）：不列。
             mk("no_anchor", Some(m1.clone()), None, None),
             // 折线（小河）：不列。
-            mk("river", Some(m1.clone()), Some(3.0), Some(vec![0.0, 0.0, 9.0, 9.0])),
+            mk(
+                "river",
+                Some(m1.clone()),
+                Some(3.0),
+                Some(vec![0.0, 0.0, 9.0, 9.0]),
+            ),
         ];
         let got: Vec<_> = landmark_candidates(&w, &m1)
             .into_iter()

@@ -1668,11 +1668,12 @@ mod tests {
         }
     }
 
-    // 以下三条 2026-10-26 用户裁定暂时忽略：受限执行环境（agent 派生进程）
-    // 写盘被安全软件门控，`os error 5` 假失败（AGENTS §2.2 环境约束），
-    // 每轮门禁必红且无法在会话内根治。正常桌面终端可 `--ignored` 复核。
+    // 2026-10-26 定性追记：以下三条曾在受限执行环境报 `os error 5` 假失败
+    // ——实测根因是**安全软件按 TEMP 路径门控**（worktree 新建的
+    // `.target/testtmp` 被拦、主 checkout 的老路径放行）。跑测试把
+    // TEMP/TMP 指向主 checkout 的 `.target/testtmp` 即全绿
+    // （AGENTS §2.2 环境约束，非代码缺陷）。
     #[test]
-    #[ignore = "受限环境 temp 写盘 os error 5 假失败（AGENTS §2.2）；桌面终端 --ignored 可跑"]
     fn apply_command_skeleton_rejects_missing_geojson_file() {
         // --geojson 指向不存在的文件 → 拒绝（不在静默创建）。
         let dir =
@@ -1691,7 +1692,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "受限环境 temp 写盘 os error 5 假失败（AGENTS §2.2）；桌面终端 --ignored 可跑"]
     fn apply_command_skeleton_rejects_existing_target() {
         // --target 已含 world.yaml → 拒绝覆盖。
         let dir =
@@ -1726,7 +1726,6 @@ mod tests {
     /// - distances/edges/edge_*.yaml 写入（motorway 段）
     /// - 重开 `Project::open` 成功 = 序列化 round-trip OK
     #[test]
-    #[ignore = "受限环境 temp 写盘 os error 5 假失败（AGENTS §2.2）；桌面终端 --ignored 可跑"]
     fn apply_command_writes_loadable_guangdong_like_project() {
         // 用一个最小但合法的 Overture segment GeoJSON fixture：
         // 2 段 motorway 直线（绕开百度深圳一带），覆盖 4 个 connector。
