@@ -73,6 +73,11 @@ const COAST_BAND_CAP_MAX_PX: f32 = 24.0;
 /// 「一格宽」的世界量，深缩放会糊成几十 px 软边；钳到 ~2 px 全过渡，
 /// 近观保持 Google/百度式锐利 AA 边。
 const COAST_EDGE_HALF_PX: f32 = 1.0;
+/// 轮廓圆角半径（格，追记十五）：对 sd 场做 5 tap 盒式低通的采样偏移。
+/// 直段边界局部线性对称、零平移；凸/凹直角按 ~r 圆角化——格网真边界的
+/// 正交台阶在视觉上近似 Chaikin 圆角，向矢量观感靠拢。墨线（`abs(sd)`）、
+/// 填色过渡（`land_t`）与色带（`wd`）全部自动跟随圆角后的零等值线。
+const COAST_ROUND_CELLS: f32 = 0.6;
 /// biome 界墨线不透明度（比岸线浅一档）。
 const BIOME_INK_ALPHA: f32 = 0.38;
 /// 高度量程（米）= H_MAX(6000) − H_MIN(-4000)，与 pack.rs 同源。
@@ -187,6 +192,29 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var d: f32;  // 到最近异类格的**无符号**距离（色带用它，两模式都成立）
     if (p.pad1.y > 0.5) {
         sd = (coast_raw - 0.5) * 64.0; // pack 编码 (sd + 32) / 64
+        // ── 轮廓圆角（追记十五）─────────────────────────────────────────
+        // 对 sd 做 5 tap 盒式低通（中心 + 四正交方向各偏 r 格）。sd 是
+        // 连续函数，直段局部线性、平均后零点不动；直角拐点两侧符号相反的
+        // 邻居把零等值线「切」进角里——正交台阶圆角化。这正是 Signed 编码
+        // 独有的能力：Unsigned 场在边界是平顶，平均只会把平顶抹宽。
+        let rr = COAST_ROUND_CELLS;
+        let sd_c = sd;
+        let sd_n = (sample_coast_raw(pos + vec2<f32>(rr, 0.0)) - 0.5) * 64.0;
+        let sd_s = (sample_coast_raw(pos - vec2<f32>(rr, 0.0)) - 0.5) * 64.0;
+        let sd_e = (sample_coast_raw(pos + vec2<f32>(0.0, rr)) - 0.5) * 64.0;
+        let sd_w = (sample_coast_raw(pos - vec2<f32>(0.0, rr)) - 0.5) * 64.0;
+        // 四对角 tap：1 格宽的短直段两端角靠得近，只有正交 5 tap 切不干净；
+        // 9 tap 均匀盘各向更同性，斜向台阶的残留最少。
+        let rd = rr * 0.7071;
+        let sd_ne = (sample_coast_raw(pos + vec2<f32>(rd, rd)) - 0.5) * 64.0;
+        let sd_sw = (sample_coast_raw(pos - vec2<f32>(rd, rd)) - 0.5) * 64.0;
+        let sd_se = (sample_coast_raw(pos + vec2<f32>(rd, -rd)) - 0.5) * 64.0;
+        let sd_nw = (sample_coast_raw(pos + vec2<f32>(-rd, rd)) - 0.5) * 64.0;
+        let sd_round = (sd_c + sd_n + sd_s + sd_e + sd_w
+            + sd_ne + sd_sw + sd_se + sd_nw) * (1.0 / 9.0);
+        // 远观渐隐（lod_t→1）：tap 是 raw 场，远观主样本是 box 平均，
+        // 混入会带格频抖动；且远观台阶本就亚像素，圆角无意义。
+        sd = mix(sd_c, sd_round, 1.0 - lod_t);
         d = abs(sd);
     } else {
         d = coast_raw * 32.0; // pack 编码 d / 32
