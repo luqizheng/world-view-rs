@@ -45,6 +45,12 @@ use crate::edit::editing::EditHistory;
 /// 不为省一次扫描做脏路径分流（分流漏一条路径就是陈旧投影，代价更高）。
 ///
 /// **不进脏路径**：见模块文档「不进脏路径」一节。
+///
+/// **接线现状（2026-10-26 T13 收口，修正旧「唯一出口」式的全称表述）**：
+/// wv-app 编辑层 22 处 commit 点 + undo/redo 出口
+/// （`apply_history_command_detailed`）+ 加载完成（`apply_loaded_world`）
+/// 均已接线；**http 桥的 undo 出口为已知未接线**（http feature 另有编译
+/// 问题，暂不可达）——推导边幂等，经下一次接线事件自愈，无须专门补救。
 pub fn sync_derived_road_edges(world: &mut World) -> RoadDeriveReport {
     rebuild_derived_edges(world, ROAD_SNAP_TOLERANCE_WU)
 }

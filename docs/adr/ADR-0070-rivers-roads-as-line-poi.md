@@ -71,3 +71,53 @@
 
 线段 POI、绕行 / 强制改变地形、锥形宽度、链式合并、汇流吸附（已随本 ADR 落
 `GLOSSARY.md`，2026-10-26）。
+
+---
+
+## 追记一（2026-10-26，实施期裁定）
+
+`feat/river-road-poi` 分支（任务 T1–T13）实施与评审过程中的三组留痕。按
+AGENTS §6.3「追写不改」开新节，正文（§1–§5）不再修改。
+
+### ① D5「serde-skip 天然不落盘」表述勘误
+
+正文 D5 原文「推导边注入 `World.distances.edges` 带 serde-skip derived 标记
+（……round-trip 不变）」易被读成「`#[serde(skip)]` 天然保证推导边不落盘」——
+**这是错的**：`skip` 只管**字段**序列化（`PlaceEdge.derived` 这个 bool 不出现在
+YAML 里），管不了**列表成员**是否被写——`Vec<Entry>` 照样把带 `derived` 标记的
+边逐条序列化落盘。正确契约是**保存侧显式过滤**：`wv_io::Project::save_world`
+按 `!e.derived` 过滤边列表成员，推导边永不写进 `edges.yaml`（评审修复
+commit `c62843f`，`wv-io` 侧契约测试 + `wv-app` 侧
+`edit::road_sync::tests::derived_edges_are_rebuilt_after_place_edits` 落盘往返
+双向钉死）。「运行时投影永不落盘」的结论不变，变的是保证手段。
+
+### ② AGENTS §3.3 澄清：`sync_derived_road_edges` 不属「System 直接改世界」禁令范围
+
+`sync_derived_road_edges`（`wv-app/src/edit/road_sync.rs`）写
+`world.distances.edges`，形式上「改世界」，但它是**运行时投影回填**，与
+AGENTS §3.3 禁止的「System 直接改世界数据」不同类：
+
+- **确定性幂等**：全清场上重算（`rebuild_derived_edges`），重复调用结果稳定，
+  不叠加、不漂移；
+- **永不落盘**：见追记一①，`derived` 边被保存侧过滤，不进脏路径
+  （不 `record_dirty`）；
+- **不进撤销栈**：不生成 `EditCommand`、不占 History 条目——作者的撤销语义
+  只关乎作者意志（手写边、地点），投影随下一次接线事件自愈；
+- **调用点在编辑层出口**：wv-app 编辑层 22 处 commit 点 + undo/redo 出口
+  （`apply_history_command_detailed`）+ 加载完成点（`apply_loaded_world`）均已
+  接线，改动时机与编辑事务一一对应，不存在「每帧偷偷重算」的隐式路径。
+  已知未接线：http 桥的 undo 出口（http feature 另有编译问题，暂不可达），
+  经下一次接线事件自愈。
+
+一句话：禁令拦的是「绕过 `EditCommand` 改**作者数据**」；投影回填改的是
+**派生视图**，且纪律更严（不落盘、不入栈、幂等）。
+
+### ③ 实施期裁定索引（正文未定、实施与评审期收敛的口径，各一行带去向）
+
+| 裁定 | 口径 | 去向 |
+|---|---|---|
+| 路下切深度 | `ROAD_CUT_M = 2.0`：路走廊削到**岸高附近**（中轴高 − 2 m 封底），压平走廊不挖深沟 | `wv-terrain/src/line_path.rs`（`ROAD_CUT_M` 常量文档 + `carve_corridor`） |
+| `width_cells` 总宽语义 | `width_cells` 是走廊**总宽格数**（非半宽），`half = (width_cells − 1) / 2`，走廊 = 中轴 ± half 格 | `wv-terrain/src/line_path.rs`（`carve_corridor` / `CarveOutcome` 文档） |
+| 负高度格口径 | 河：走廊内负高度格（海面）下切后**抬回 ≥ 1 m**，宽窄河行为一致；路：遇负高度格**整格跳过**（surface 与 height 都不动） | `wv-terrain/src/line_path.rs`（`carve_corridor` 文档 + 分支注释） |
+| 链 ID 撞名 | 迁移链 Place ID 确定性派生，撞名时追加折线 16-bit 短哈希后缀（`road_mig_<A>_<B>_<h4>`）——撞名的两条链**都落地**，不丢数据，重跑幂等 | `wv-edit/src/command/line_poi.rs`（迁移命令文档「幂等」节 + `chain_id_h4`） |
+| fork 对称公式 | 端点拖拽提交只把 fork 之后的**尾段**喂给下切：`fork_index` 求首/尾首个分歧点作含端切片边界；首端正向小标 `new.len() − i` 与 Last 端 `i − 1` 对称 | `wv-app/src/edit/line_poi_tool.rs`（`fork_index` 文档 + `drag_commit_plan` 测试） |
