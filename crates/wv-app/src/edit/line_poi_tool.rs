@@ -756,6 +756,23 @@ fn closest_point_on_seg(p: Vec2, a: Vec2, b: Vec2) -> (f32, Vec2) {
     (p.distance(foot), foot)
 }
 
+/// 预览**被拖端的顶点**直写为 `point`（I3 · 评审 fix round 1）。
+///
+/// 末点是精确坐标、直写零成本——同格内吸附点出现 / 消失不触发格门
+/// （重规划只依赖格），但末点必须跟住当前目标，否则「看到环、松手不吸」
+/// （反向：环没了末点仍吸在旧环上）。调用方两处：交互系统逐帧对齐当前
+/// 目标（描画与提交同源），[`commit_endpoint_drag`] 入口以会话态 snap
+/// 收口（松手帧不经过交互系统的对齐块，见该处注释）。
+pub fn align_preview_tail(drag: &mut EndpointDrag, point: Vec2) {
+    let slot = match drag.end {
+        DraggedEnd::Last => drag.preview.last_mut(),
+        DraggedEnd::First => drag.preview.first_mut(),
+    };
+    if let Some(tail) = slot {
+        *tail = point;
+    }
+}
+
 /// 拖拽提交计划（纯函数）：整线 + 「分叉点起的新增段」。
 ///
 /// 新增段 = 新折线中**不再与原线重合**的部分（从未动的一端回找最后一致
@@ -771,6 +788,28 @@ pub struct DragCommitPlan {
 
 /// 从拖拽会话出提交计划；`None` = 不可提交（预览退化，或拖回原位无新增段
 /// ——无变化不发命令、不进撤销栈）。
+///
+/// # 公式不变量（评审 C1/I2 防线 · fix round 1）
+///
+/// `fork_index` 的返回值被用作**含端切片**边界（`new[..=fork]` 或
+/// `new[fork..]`），且 `new.len() ≥ 2` 由上方守卫保证。首端（`from_start`）
+/// 分支的两种退出都不得下溢：
+/// - 回找**命中至少一个顶点后**停住（`i ≥ 1`）→ 分叉 = 最后一致的顶点，
+///   正向小标 `new.len() - i`（与 Last 端的 `i - 1` 对称——多 match 了 i 个，
+///   最后一个 match 在 `new.len() - i`；旧公式 `new.len() - 1 - i` 比锚点
+///   少 1，`new_segment` 漏掉「锚点 → 第一个新顶点」段，Carve 模式下第一
+///   段不下切）；
+/// - **原地**（预览 == 原线，循环走满 `i == common`）→ 等长时
+///   `new.len() - i == 0` → 单点段 → 上方 `len < 2` 守卫拦成 `None`
+///   （旧公式在此 usize 下溢，普通「点了没拖」即崩）；
+/// - `i == 0`（固定端第一对就不一致——构造契约外的防御兜底）→
+///   `new.len() - 1`，整线都是「新增段」（保守全切，好过下溢）。
+///
+/// # 与旧走廊的格集关系（评审 M1 记档 · v1 接受）
+///
+/// 新段按**顶点前缀求差**，不是格集求差：新段中途**横穿旧走廊**的格会被
+/// 二次下切（`carve_corridor` 非幂等——只降不升，再过一遍会再挖深）；v1
+/// 接受该偏差，旧走廊 ∩ 新走廊的回填留后续。
 pub fn drag_commit_plan(drag: &EndpointDrag) -> Option<DragCommitPlan> {
     if drag.preview.len() < 2 {
         return None;
@@ -794,8 +833,10 @@ pub fn drag_commit_plan(drag: &EndpointDrag) -> Option<DragCommitPlan> {
 
 /// 分叉点下标：从未动的一端起，新旧折线最后一致的顶点在 `new` 中的下标。
 ///
-/// 预览的构造保证固定端两端逐位一致（[`ensure_drag_preview`] 保留固定段），
-/// 故结果下标两侧都合法；坐标相等按 `1e-3` wu 容差判（Chaikin / f32 噪声）。
+/// 返回值是**含端切片**边界（不变量与退出分析见 [`drag_commit_plan`] 的
+/// 公式不变量一节——评审 C1/I2：首端 `new.len() - i`、原地单点段由调用方
+/// 守卫拦下、`i == 0` 兜底取整线，任何路径都不得下溢）。坐标相等按
+/// `1e-3` wu 容差判（Chaikin / f32 噪声）。
 fn fork_index(old: &[Vec2], new: &[Vec2], from_start: bool) -> usize {
     const EPS2: f32 = 1e-3 * 1e-3;
     let common = old.len().min(new.len());
@@ -812,7 +853,11 @@ fn fork_index(old: &[Vec2], new: &[Vec2], from_start: bool) -> usize {
         i += 1;
     }
     if from_start {
-        new.len() - 1 - i
+        if i == 0 {
+            new.len() - 1 // 防御兜底：整线视为新增段（新.len() ≥ 2 已由调用方守卫）。
+        } else {
+            new.len() - i // 最后一致的顶点 = 锚点；i ≤ common ≤ new.len()，无下溢。
+        }
     } else {
         i.saturating_sub(1)
     }
@@ -949,7 +994,7 @@ impl EditCommand for CarveSegmentCommand {
 /// 提交后走 [`crate::edit::road_sync::sync_derived_road_edges`]（T9）。
 /// 返回是否成功（无变化 / 失败均 `false`，失败已发 notice）。
 pub fn commit_endpoint_drag(
-    drag: &EndpointDrag,
+    drag: &mut EndpointDrag,
     mode: LinePathMode,
     map: &Id,
     edit: &mut crate::edit::editing::EditHistory,
@@ -957,6 +1002,13 @@ pub fn commit_endpoint_drag(
     notice: &mut crate::ui_shell::ShellNotice,
     frame: u64,
 ) -> bool {
+    // I3（评审 fix round 1）：松手帧以**会话态 snap** 为准收口末点——吸附点
+    // 可能落在「上次重算」的同格内，格门不触发，preview 末点还停在旧目标上
+    // （看到环、松手不吸）。直写末点零成本（不绕格门重跑 A*——路径只依赖
+    // 格，末点归零误差）；描画侧的逐帧对齐见交互系统同款直写。
+    if let Some((_, sp)) = drag.snap {
+        align_preview_tail(drag, sp);
+    }
     let Some(plan) = drag_commit_plan(drag) else {
         return false; // 拖回原位 / 预览退化：不发命令、不进撤销栈。
     };
@@ -1112,10 +1164,10 @@ pub fn line_poi_tool_input(
     // ── 松手：拖拽提交（T12）。播放中松手在下面的 gate 已放行到这里，
     //    但提交必须闸（与面板 `panel_can_commit` 同口径）：播放中弃拖拽。──
     if drag_release {
-        if let Some(drag) = line_poi.drag.take() {
+        if let Some(mut drag) = line_poi.drag.take() {
             if !playback.playing {
                 commit_endpoint_drag(
-                    &drag,
+                    &mut drag,
                     line_poi.mode,
                     &map,
                     &mut edit,
@@ -1225,6 +1277,12 @@ pub fn line_poi_tool_input(
         // `ensure_drag_preview` 的缓存门直接短路（零重算）。
         let stale = drag.target_cell != cell_of(target, cell);
         drag.snap = snapped;
+        // I3（描画侧）：末点恒等于当前目标（吸附点或光标）——吸附在同格
+        // 内出现 / 消失时环、线、松手提交三者一致（提交侧的权威收口在
+        // `commit_endpoint_drag` 入口：松手帧不经过本块）。同格内的普通
+        // 拖动因此即时跟手，松手会提交 ≤1 格的端点微移（旧行为是静默
+        // no-op——拖了没反应反而难读）。
+        align_preview_tail(drag, target);
         if stale {
             if let Some(terrain) = terrain_grid_of(&projection.world, &map) {
                 let n = drag.original.len();
@@ -2174,6 +2232,188 @@ mod tests {
         );
     }
 
+    /// 首端原地（评审 C1）：点了一下没拖 / 拖回原位，预览与原线逐位一致
+    /// ——旧公式 `new.len() - 1 - i` 在首端分支循环走满后 usize 下溢
+    /// （debug panic / release 巨下标越界切片），普通操作必崩。
+    #[test]
+    fn drag_commit_plan_first_end_in_place_yields_full_line_no_carve() {
+        let original = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(80.0, 0.0),
+            Vec2::new(160.0, 0.0),
+        ];
+        let drag = begin_endpoint_drag(
+            Id::new_unchecked("river_1"),
+            DraggedEnd::First,
+            original,
+            (0, 0),
+        );
+        // 预览 == 原线（begin 即此态）：无新增段 → 不产命令 / 空 carve 段。
+        assert!(
+            drag_commit_plan(&drag).is_none(),
+            "首端原地不得产出提交计划"
+        );
+    }
+
+    /// 首端改道（评审 I2）：新段必须**含锚点段**——旧公式比锚点少 1，
+    /// `new_segment` 漏掉「锚点 → 第一个新顶点」段，Carve 模式下第一段
+    /// 不下切。
+    #[test]
+    fn first_end_reroute_carve_covers_anchor_segment() {
+        let original = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(80.0, 0.0),
+            Vec2::new(160.0, 0.0),
+        ];
+        let mut drag = begin_endpoint_drag(
+            Id::new_unchecked("river_1"),
+            DraggedEnd::First,
+            original,
+            (0, 0),
+        );
+        let grid = flat_grid();
+        // 首端拖到 (0, 80)：锚点 = original[1] = (80,0)，从锚点向新端规划。
+        assert!(ensure_drag_preview(
+            &mut drag,
+            Vec2::new(0.0, 80.0),
+            &grid,
+            8.0,
+            LinePathMode::Carve,
+            7
+        ));
+        let plan = drag_commit_plan(&drag).expect("首端改道应可出计划");
+        // 固定端（末折点）原样保留在整线尾部。
+        assert_eq!(
+            *plan.new_line.last().expect("整线非空"),
+            (160.0, 0.0),
+            "固定端必须原样"
+        );
+        // 新段末端 = 锚点（与 Last 端「新段起点 = 锚点」对称）：
+        // Carve 模式下锚点 → 第一个新顶点这段必须在切列表里。
+        assert_eq!(
+            *plan.new_segment.last().expect("新段非空"),
+            (80.0, 0.0),
+            "新段必须含锚点段，实得尾点 {:?}",
+            plan.new_segment.last()
+        );
+        assert!(
+            plan.new_segment.len() >= 2,
+            "锚点 → 新端至少一段，实得 {} 点",
+            plan.new_segment.len()
+        );
+    }
+
+    /// 同格吸附（评审 I3）：吸附点出现在「上次重算」的同格内——格门不
+    /// 触发，但松手提交必须落在吸附点（看到环、松手不吸 = 假吸附）。
+    #[test]
+    fn snap_target_in_same_cell_still_lands_on_snapped_point() {
+        let mut edit = crate::edit::editing::EditHistory::default();
+        let mut projection = WorldProjection {
+            world: drag_world(),
+            ..Default::default()
+        };
+        // 目标河：水平短线 y=2；被拖河：二点线（创建态，无下切）。
+        let mk = |id: &str, line: Vec<f32>| Place {
+            id: Id::new_unchecked(id),
+            name: id.to_owned(),
+            feature: None,
+            map: Some(map_id()),
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+            biome: None,
+            envelope: None,
+            rank: None,
+            line: Some(line),
+            kind: None,
+            line_kind: None, // 河（缺省语义）
+            line_width_m: None,
+        };
+        projection
+            .world
+            .distances
+            .places
+            .push(mk("river_target", vec![140.0, 2.0, 160.0, 2.0]));
+        projection
+            .world
+            .distances
+            .places
+            .push(mk("river_drag", vec![40.0, 40.0, 120.0, 40.0]));
+
+        // 拖末端到 (150, 5)：规划一次（目标格 (18,0)）。
+        let original = vec![Vec2::new(40.0, 40.0), Vec2::new(120.0, 40.0)];
+        let mut drag = begin_endpoint_drag(
+            Id::new_unchecked("river_drag"),
+            DraggedEnd::Last,
+            original,
+            (15, 5),
+        );
+        let grid = terrain_grid_of(&projection.world, &map_id()).expect("夹具有地形");
+        assert!(
+            ensure_drag_preview(
+                &mut drag,
+                Vec2::new(150.0, 5.0),
+                &grid,
+                8.0,
+                LinePathMode::Route,
+                7
+            ),
+            "平地应可规划"
+        );
+        // 同格内吸附出现：目标线最近点 (150,2) 与上次目标 (150,5) 同格。
+        let (sid, sp) = river_snap(
+            &projection.world,
+            &map_id(),
+            &Id::new_unchecked("river_drag"),
+            Vec2::new(150.0, 5.0),
+            8.0,
+        )
+        .expect("3 wu 内应吸附");
+        assert_eq!(sid, Id::new_unchecked("river_target"));
+        assert!(
+            sp.distance(Vec2::new(150.0, 2.0)) < 1e-3,
+            "夹具前提：吸附点 = (150,2)，实际 ({},{})",
+            sp.x,
+            sp.y
+        );
+        assert_eq!(
+            cell_of(sp, 8.0),
+            cell_of(Vec2::new(150.0, 5.0), 8.0),
+            "夹具前提：吸附点与上次重算目标同格（格门不触发）"
+        );
+        drag.snap = Some((sid, sp));
+
+        // 松手提交（绕行模式，不下切）：折线末点必须落在吸附点。
+        let mut notice = ShellNotice::default();
+        assert!(
+            commit_endpoint_drag(
+                &mut drag,
+                LinePathMode::Route,
+                &map_id(),
+                &mut edit,
+                &mut projection,
+                &mut notice,
+                1
+            ),
+            "提交应成功，notice = {:?}",
+            notice.text
+        );
+        let p = projection
+            .world
+            .distances
+            .places
+            .iter()
+            .find(|p| p.id.as_str() == "river_drag")
+            .expect("提交不得删地点");
+        let line = p.line.as_ref().expect("提交后仍应有折线");
+        let (lx, ly) = (line[line.len() - 2], line[line.len() - 1]);
+        assert!(
+            ((lx - 150.0).powi(2) + (ly - 2.0).powi(2)).sqrt() < 1e-3,
+            "末点应 = 吸附点 (150,2)，实际 ({lx},{ly})"
+        );
+    }
+
     /// 汇流吸附（计划 Task 12）：拖端点至另一条河的折线容差内 → 端点落
     /// 该线最近点（误差 < 1e-3）；容差外 / 自己 / 道路线都不吸附。
     #[test]
@@ -2329,7 +2569,7 @@ mod tests {
         let mut notice = ShellNotice::default();
         assert!(
             commit_endpoint_drag(
-                &drag,
+                &mut drag,
                 LinePathMode::Carve,
                 &map_id(),
                 &mut edit,
