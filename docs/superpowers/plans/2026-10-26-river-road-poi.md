@@ -73,7 +73,7 @@
 
 - [ ] **Step 1: 写失败测试**（模块内，手造网格）：`routing_mode_detours_around_ridge`（10×10 网格、中部竖山脊高 2000m、两侧 50m；断言 Route 路径任一点不落山脊列，且路径长度 > 直线距离 ×1.3，附实际长度）、`carve_mode_takes_near_direct_path`（同网格 Carve 路径长度 < 直线 ×1.15）、`identical_endpoints_return_empty`、`out_of_bounds_points_return_empty`、`same_seed_same_path`（同 seed 两次结果逐点相等）。
 - [ ] **Step 2: 确认失败**。
-- [ ] **Step 3: 实现**——格坐标换算（wu→cell）；A* 8 邻域，代价 = 步长 ×（1 + `LAMBDA_UP=8.0` × max(0,Δh) + 0.1 × max(0,-Δh)）+ 蜿蜒项 `noise_cost = 0.3 × cell_size × splitmix64(seed, cell) 归一抖动`（Route）；Carve 仅 0.2 × max(0,Δh)（弱坡度权重）。回溯格心 → Chaikin 平滑 2 轮 → wu。
+- [ ] **Step 3: 实现**——格坐标换算（wu→cell）；A* 8 邻域，代价 = 步长 ×（1 + `LAMBDA_UP=8.0` × max(0,Δh) + 0.1 × max(0,-Δh)）+ 蜿蜒项 `noise_cost = 0.3 × cell_size × splitmix64(seed, cell) 归一抖动`（Route）；Carve 仅 0.2 × max(0,Δh公里)（**弱坡度权重，Δh 按公里计**——评审勘误：按米计 0.2×1950=390 会让 Carve 绕山，与近直连测试矛盾；噪声用仓库 `hash.rs` 单一哈希源）。回溯格心 → Chaikin 平滑 2 轮 → wu。
 - [ ] **Step 4: 通过 + clippy**（wv-terrain 零 Bevy 断言：`cargo tree -p wv-terrain | grep -i bevy` 为空）。
 - [ ] **Step 5: Commit**：`wv-terrain: line_path 起终点路径算法——绕行/近直连两模式（ADR-0070 D3）`
 
@@ -86,9 +86,10 @@
 - Produces: `pub fn carve_corridor(grid: &mut TerrainGrid, pts: &[(f32, f32)], strength: f32, cell_size: f32, width_cells: u32, mark_water: bool) -> usize`（返回改动格数）。`mark_water=true` = 河（写 `SURFACE_WATER`）；false = 路（走廊压平不写水面）。
 - Consumes: `intent.rs` 既有 `apply_river`（私有，`width_cells == 1 && mark_water` 时内部直接委托，保证行为逐位不变）。
 
-- [ ] **Step 1: 写失败测试**：`river_carve_descends_monotonically_to_mouth`（平地 + 中段鼓包网格，断言沿链高度严格递减、末段 ≥1m，附实际值）、`road_carve_flattens_without_water_surface`（断言走廊格高度下降且 `surface != SURFACE_WATER`）、`wide_corridor_touches_flanking_cells`（width_cells=3 断言中轴左右各 1 格被改）、`width_one_river_matches_legacy_apply_river`（同输入下与 `apply_intent(Intent::River)` 结果逐格相等）。
+- [ ] **Step 1: 写失败测试**：`river_carve_descends_monotonically_to_mouth`（平地 + 中段鼓包网格，断言沿链高度**单调不增且首尾确有下降**、末段 ≥1m，附实际值——勘误：坡降 0.4m/格+整米取整下逐格严格递减数学上不可能，沿用 `intent.rs` 既有非增口径）、`road_carve_flattens_without_water_surface`（断言走廊格高度**削到岸高附近（ROAD_CUT_M=2.0m）**且 `surface != SURFACE_WATER`）、`wide_corridor_touches_flanking_cells`（width_cells=3 断言中轴左右各 1 格被改——**总宽语义：half=(width_cells-1)/2=1**）、`width_one_river_matches_legacy_apply_river`（同输入下与 `apply_intent(Intent::River)` 结果逐格相等）。
+- [ ] **Step 1b（评审 I3 补）**：`different_seed_yields_different_path`——异 seed 须给出不同路径（照 `intent.rs:1564` 先例；夹具须存在等长候选使噪声可观测）。
 - [ ] **Step 2: 确认失败**。
-- [ ] **Step 3: 实现**——`apply_river` 泛化：主链密采样（同款 step=cell_size/3）；宽度膨胀 = 对链上每格向法线两侧补 `width_cells-1` 格；每格取「两岸最低 − CUT·s、上游 − DROP」下切（常量复用 `RIVER_CUT_M`/`RIVER_DROP_M`）；`mark_water` 决定 surface 写入。
+- [ ] **Step 3: 实现**——`apply_river` 泛化：主链密采样（同款 step=cell_size/3）；宽度膨胀 = **总宽语义：half=(width_cells-1)/2，中轴+两侧各 half 格**（评审裁定 I4：下游按「宽度米÷格宽」换算，半径语义会让实际走廊宽 2 倍）；每格取「两岸最低 − CUT·s、上游 − DROP」下切——**河用 `RIVER_CUT_M`/`RIVER_DROP_M`；路用独立 `ROAD_CUT_M = 2.0`（削到岸高附近不挖深沟，评审裁定 I1）**；`mark_water` 决定 surface 写入；**负高度格（height<0）：路分支不 carve（surface/height 都不动）；河分支按 legacy 规则抬到 ≥1m 与 `apply_river` 一致（评审裁定 I2/I5）**。
 - [ ] **Step 4: 通过 + clippy**。
 - [ ] **Step 5: Commit**：`wv-terrain: carve_corridor——河/路走廊下切与宽度推广（ADR-0070 D3）`
 
