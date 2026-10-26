@@ -166,7 +166,10 @@ impl Default for RenderRecipe {
 /// 为准**（等价迁移，不借机改语义）：
 /// - Isoline 仅 VectorFlat + Topographic + GoogleMap（会话轴另由 `view.isolines`
 ///   单控；GoogleMap 的海岸线例外——见该行注释）；
-/// - Buildings / Atmosphere / Veil / Grain 排除 GoogleMap | Coastline；
+/// - **Atmosphere / Grain / MapFrame 已全模式退役**（2026-10-26 用户裁定，
+///   ADR-0066 追记一：目标用户是专业网文作者与游戏制作人，呈现要专业高效；
+///   雾霭 / 纸纹 / 图框属艺术语汇）——三列全 false，系统代码保留可回退；
+/// - Buildings / Veil 排除 GoogleMap | Coastline；
 /// - Faction 仅 Faction 模式；
 /// - FeatureOverlay 除 Coastline 外全开（主题地界覆盖层，轮廓图只留轮廓）。
 ///
@@ -178,9 +181,9 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true,  // Terrain
         true,  // Isoline
         true,  // GridLines（受 LayerFrame + 会话开关，mode 表不关）
-        true,  // MapFrame
+        false, // MapFrame（2026-10-26 退役，ADR-0066 追记一）
         true,  // Veil
-        true,  // Grain
+        false, // Grain（2026-10-26 退役，ADR-0066 追记一）
         true,  // Roads
         true,  // Streets
         true,  // Poi
@@ -194,7 +197,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         true,  // Tracks
         true,  // EventDots
         true,  // DrillMarkers
-        true,  // Atmosphere
+        false, // Atmosphere（2026-10-26 退役，ADR-0066 追记一）
         true,  // FeatureOverlay
         true, // TerrainDecor
         true, // Rivers
@@ -203,8 +206,8 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
     ]),
     // 真实地形（plan v0.1 D3 B 类）——与 VectorFlat 同，除等值线（仅 VectorFlat）。
     (ViewMode::RealTerrain, [
-        true, false, true, true, true, true, true, true, true, true,
-        false, true, true, true, true, true, true, true, true, true,
+        true, false, true, false, true, false, true, true, true, true,
+        false, true, true, true, true, true, true, true, true, false,
         true,
         true, // TerrainDecor
         true, // Rivers
@@ -213,8 +216,8 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
     ]),
     // 色块地形（plan v0.1 D3 C 类）——同上。
     (ViewMode::Schematic, [
-        true, false, true, true, true, true, true, true, true, true,
-        false, true, true, true, true, true, true, false, true, true,
+        true, false, true, false, true, false, true, true, true, true,
+        false, true, true, true, true, true, true, false, true, false,
         //                            ^ EventDots=false（2026-10-22 内容矩阵：
         //                            事件有时间性，编辑态 Schematic 隐藏——ADR-0051）
         true, // FeatureOverlay
@@ -236,7 +239,11 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
     // 「编辑器网格」）。`sync_map_frame` 现在真的读这一格（此前是死配置），
     // 关掉即外框 + 参考网格一起退场。
     (ViewMode::GoogleMap, [
-        true, true, true, false, false, true, true, true, true, false,
+        // Grain 2026-10-26 由 true 改 false：表头注释一直写着「Grain 排除
+        // GoogleMap」，格值却从未改过——且 `sync_paper_overlay` 当时根本不读
+        // 本表（硬编码 Topographic 判定），纸纹斑驳/晕影实际在 Map 模式也画。
+        // 现该系统已改为读本格（死配置修复，同 ADR-0061 追记二的手法）。
+        true, true, true, false, false, false, true, true, true, false,
         // Faction 2026-10-25 由 false 改 true：专业制图要画「国境线」。
         // pass 开只是让 `sync_faction_overlays` 跑起来；**填色仍不发生**——
         // 该 mode 下 `cartographic_style` 只给 border（无 fill）、只取当前层
@@ -251,8 +258,8 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
     ]),
     // 势力图 —— 等值线不画，其余与真实地形同。
     (ViewMode::Faction, [
-        true, false, true, true, true, true, true, true, true, true,
-        true, true, true, true, true, true, true, true, true, true,
+        true, false, true, false, true, false, true, true, true, true,
+        true, true, true, true, true, true, true, true, true, false,
         true,
         true, // TerrainDecor
         true, // Rivers
@@ -261,8 +268,8 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
     ]),
     // 事件图 —— 极简底图。
     (ViewMode::Event, [
-        true, false, true, true, true, true, true, true, true, true,
-        false, true, true, true, true, true, true, true, true, true,
+        true, false, true, false, true, false, true, true, true, true,
+        false, true, true, true, true, true, true, true, true, false,
         true,
         false, // TerrainDecor
         false, // Rivers：极简底图不画
@@ -271,7 +278,7 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
     ]),
     // 轮廓图（黑底分析视图）—— 大部分装饰关。
     (ViewMode::Coastline, [
-        true, false, true, true, false, false, true, true, true, false,
+        true, false, true, false, false, false, true, true, true, false,
         false, true, true, true, true, true, true, true, true, false,
         false, // FeatureOverlay：轮廓图只留轮廓
         false, // TerrainDecor
@@ -638,7 +645,8 @@ mod tests {
         let r = resolve_render_recipe(&view, &layers, &world, &drill, &tex, None);
         // 默认 fixture = VectorFlat + 全 layers visible = 大部分 pass 应为 true
         assert!(r.enabled(PassId::Terrain));
-        assert!(r.enabled(PassId::MapFrame));
+        // MapFrame 已退役（ADR-0066 追记一）：哪怕全开的默认模式也不画。
+        assert!(!r.enabled(PassId::MapFrame));
         // Faction 在 VectorFlat 默认关
         assert!(!r.enabled(PassId::Faction));
     }
@@ -681,21 +689,35 @@ mod tests {
         }
     }
 
-    /// 专业制图不画图框 / 参考网格（2026-10-26 追记二）：普通地图是满屏
-    /// 画布，外框与 1/4 幅面经纬格都属印刷品 / 编辑器语汇。Topographic
-    /// （CellMap 数据视图）早已关；其余模式保持开。
+    /// 图框 / 参考网格已**全模式退役**（ADR-0066 追记一，2026-10-26 用户
+    /// 裁定）：外框与 1/4 幅面经纬格属印刷品语汇，专业工具不画。原裁定
+    /// 只覆盖 GoogleMap（ADR-0061 追记二），Topographic 早已关——本锚点
+    /// 钉住「8 模式全 false」，防顺手填 true 复活。
     #[test]
-    fn cartographic_mode_hides_map_frame_and_reference_grid() {
+    fn map_frame_is_retired_in_every_mode() {
         let (mut view, layers, world, drill, tex) = fixture();
         for m in ViewMode::ALL {
             view.mode = m;
-            let want = !matches!(m, ViewMode::GoogleMap | ViewMode::Topographic);
             let r = resolve_render_recipe(&view, &layers, &world, &drill, &tex, None);
-            assert_eq!(
-                r.enabled(PassId::MapFrame),
-                want,
-                "{m:?} 下 MapFrame 归属不符"
+            assert!(!r.enabled(PassId::MapFrame), "{m:?} 下 MapFrame 应已退役");
+        }
+    }
+
+    /// 氛围（雾霭 + 纸张噪点）与纸纹（斑驳 + 晕影）已**全模式退役**
+    /// （ADR-0066 追记一）：艺术语汇，与专业呈现的定位冲突。
+    /// Grain 格此前还是死配置（无系统读它），`sync_paper_overlay` 改读
+    /// 本格后此锚点才有真实效力。
+    #[test]
+    fn atmosphere_and_grain_are_retired_in_every_mode() {
+        let (mut view, layers, world, drill, tex) = fixture();
+        for m in ViewMode::ALL {
+            view.mode = m;
+            let r = resolve_render_recipe(&view, &layers, &world, &drill, &tex, None);
+            assert!(
+                !r.enabled(PassId::Atmosphere),
+                "{m:?} 下 Atmosphere 应已退役"
             );
+            assert!(!r.enabled(PassId::Grain), "{m:?} 下 Grain 应已退役");
         }
     }
 

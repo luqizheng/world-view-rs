@@ -171,21 +171,28 @@ pub struct PaperOverlay {
 pub struct PaperOverlayParams<'w, 's> {
     commands: Commands<'w, 's>,
     grid: Res<'w, crate::state::GridConfig>,
-    view: Res<'w, crate::state::ViewState>,
     state: ResMut<'w, PaperOverlay>,
     images: ResMut<'w, Assets<Image>>,
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<ColorMaterial>>,
+    recipe: Res<'w, crate::recipe::RenderRecipe>,
 }
 
 /// 按当前图幅面同步两张全幅纸纹四边形。
 ///
 /// `GridConfig` 值指纹（幅面宽高取整）没变 → 零工作；变了（换图 / 钻取）
 /// → 旧实体下线、按新幅面重建。贴图只生成一次，跨图复用。
+///
+/// **2026-10-26 起读 `PassId::Grain`**（ADR-0066 追记一）：此前本系统
+/// 不读模式表、只硬编码 Topographic 退场——表里的 Grain 格是死配置，
+/// 纸纹斑驳 / 晕影在 Map 模式也一直在画。现改为表驱动（同 ADR-0061
+/// 追记二修 `sync_map_frame` 的手法）；该 pass 已全模式退役，本系统
+/// 实际处于「常关、保留可回退」状态。
 pub fn sync_paper_overlay(mut p: PaperOverlayParams) {
     // 2026-10-22 验收（用户裁定：CellMap 零 theme 影响）：纸纹是主题的
-    // 艺术修饰（斑驳 + 晕影），Topographic 下整体下线。
-    if matches!(p.view.mode, crate::state::ViewMode::Topographic) {
+    // 艺术修饰（斑驳 + 晕影），Topographic 下整体下线——该裁定 2026-10-26
+    // 扩大为全模式退役（ADR-0066 追记一），判定收口到模式表 Grain 格。
+    if !p.recipe.enabled(crate::recipe::PassId::Grain) {
         if let Some(e) = p.state.mottle.take() {
             p.commands.entity(e).despawn();
         }

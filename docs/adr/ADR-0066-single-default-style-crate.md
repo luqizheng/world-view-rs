@@ -174,3 +174,41 @@ treatment、`feature_symbol_alpha` 归零），而「风格数据」住在 `wv-t
   `registry`（`ThemePackRegistry` trait + `MergedThemeRegistry::merge`）
   并把 `builtin::ALL` 从单元素扩回多元素——`switch::resolve_pack` 的签名
   已经为此预留（参数 `_view` 保留）。
+
+## 8. 追记一（2026-10-26 · 装饰退场：氛围 / 纸纹 / 图框全模式退役）
+
+**用户裁定（2026-10-26）**：本工具面对的是**专业的网络写手与游戏制作人**，
+呈现应当专业、高效——**氛围（Atmosphere）/ 纸纹（Grain）/ 图框（MapFrame）
+三个装饰 pass 在全部视图模式退役**。此前只有 GoogleMap（ADR-0061 追记二）与
+Topographic（分析视图语义）关掉它们，Browse / Edit 等艺术浏览模式仍在画。
+
+### 处境
+
+三样东西的实况（核对于退役前）：
+
+| Pass | 画什么 | 退役前的真实状态 |
+|---|---|---|
+| `Atmosphere` | 雾霭 + 纸张噪点（`sync_atmosphere`，读 treatment 旗标） | GoogleMap / Coastline / Topographic 关 |
+| `Grain` | 纸纹斑驳 + 晕影（`sync_paper_overlay`，ADR-0042） | **死配置**——表头注释称「排除 GoogleMap \| Coastline」，但没有任何系统读该格；真系统硬编码只判 Topographic，**Map 模式实际也在画** |
+| `MapFrame` | 印刷品式外框 + 1/4 幅面经纬参考格（`map_frame.rs`） | GoogleMap / Topographic 关（追记二修复后真读该格） |
+
+### 决策与理由
+
+- **三 pass 在 `MODE_TABLE` 全 8 行置 false**；`sync_paper_overlay` 从硬编码
+  Topographic 判定改为**读 `PassId::Grain` 格**（死配置修复，手法同
+  ADR-0061 追记二修 `sync_map_frame`）。表重新成为唯一真相源。
+- **为什么退役而不是「调淡」**：三者的语汇源头是手绘 / 印刷品（纸感、雾感、
+  图框），与「专业地图 / 数据工具」的定位正交；调淡只是把它们藏得更深。
+- **系统代码保留、不删**：三套系统与 pass 枚举留在源码中（表关即零绘制），
+  将来若要「艺术图模式」整建制复活，翻表即可——回退成本最低，符合 §12
+  「待决前选最易回退」的纪律。是否物理删除，留待裁定。
+- **不触及**：treatment 旗标体系（水彩晕开 / 海岸晕 / 陆格颗粒等 VectorFlat
+  手绘语汇）与 `Veil`（底图淡化）不在本轮范围，保持原状。
+
+### 验收
+
+1. 测试锚点：`map_frame_is_retired_in_every_mode` /
+   `atmosphere_and_grain_are_retired_in_every_mode`（8 模式全 false，防复活）、
+   `unknown_mode_yields_all_disabled` 更新；`wv-render` 381 测全绿。
+2. 实机 Browse / Map 截图：图框、经纬参考格、纸纹斑驳 / 晕影、雾霭全部消失，
+   底图要素（等值线 / 群系面 / 道路 / 注记 / POI）不受影响。
