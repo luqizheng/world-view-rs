@@ -1,9 +1,11 @@
 //! 地物符号（Landmark symbols）——世界地图上的地点标记。
 //!
-//! ## 职责（2026-10-23 三轮裁定）
-//! 按**模式分流**：
+//! ## 职责（2026-10-23 三轮裁定，2026-10-26 追记）
+//! 按**模式分流**（`vector_layers::landmark_marker`）：
 //! - **CellMap（Topographic）**：`push_map_pin`——经典 map-pin（圆头 + 尖尾 +
-//!   白芯，Lucide `map-pin` 实心化），数据视图的地点标记；**只用于此模式**；
+//!   白芯，Lucide `map-pin` 实心化），数据视图的地点标记；
+//! - **专业制图（Map / GoogleMap）**：同为 map-pin，但按 rank 分尺寸档
+//!   （国都比市镇大）——普通地图不画插画，城市分量由「符号 + 字级」承载；
 //! - **其余模式（Browse 等）**：`push_citadel` / `push_town`——城堡/小镇
 //!   程序化插画，照旧。
 //!

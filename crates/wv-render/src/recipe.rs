@@ -231,8 +231,12 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
     // GoogleMap 下只取**海岸链**（类型边界由群系面填充承担）、强制 EMPTY
     // treatment、线色走 `GOOGLE_COAST_LINE_COLOR`，并把该模式的海岸视为
     // 常开（不受 `view.isolines` 会话开关支配）。
+    // **MapFrame = false（2026-10-26 追记二）**：普通地图是满屏画布——没有
+    // 印刷品式外框，也没有 1/4 幅面经纬格（那两道淡线在实机截图里被读成
+    // 「编辑器网格」）。`sync_map_frame` 现在真的读这一格（此前是死配置），
+    // 关掉即外框 + 参考网格一起退场。
     (ViewMode::GoogleMap, [
-        true, true, true, true, false, true, true, true, true, false,
+        true, true, true, false, false, true, true, true, true, false,
         // Faction 2026-10-25 由 false 改 true：专业制图要画「国境线」。
         // pass 开只是让 `sync_faction_overlays` 跑起来；**填色仍不发生**——
         // 该 mode 下 `cartographic_style` 只给 border（无 fill）、只取当前层
@@ -673,6 +677,24 @@ mod tests {
                 r.enabled(PassId::Isoline),
                 want,
                 "{m:?} 下 Isoline 应为 {want}"
+            );
+        }
+    }
+
+    /// 专业制图不画图框 / 参考网格（2026-10-26 追记二）：普通地图是满屏
+    /// 画布，外框与 1/4 幅面经纬格都属印刷品 / 编辑器语汇。Topographic
+    /// （CellMap 数据视图）早已关；其余模式保持开。
+    #[test]
+    fn cartographic_mode_hides_map_frame_and_reference_grid() {
+        let (mut view, layers, world, drill, tex) = fixture();
+        for m in ViewMode::ALL {
+            view.mode = m;
+            let want = !matches!(m, ViewMode::GoogleMap | ViewMode::Topographic);
+            let r = resolve_render_recipe(&view, &layers, &world, &drill, &tex, None);
+            assert_eq!(
+                r.enabled(PassId::MapFrame),
+                want,
+                "{m:?} 下 MapFrame 归属不符"
             );
         }
     }

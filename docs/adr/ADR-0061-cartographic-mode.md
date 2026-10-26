@@ -210,3 +210,34 @@ treatment。D3 强制 EMPTY 而 `conv_pack_with` 仍 `conv_sea(&pack.sea)` 透�
 门禁实测：`wv-render` 372 测、`wv-world-cell-map` 299 测、`app-test` 311 测、
 `smoke-gui.sh` PASS。`wv-io` 与 `app` 的 5 条写盘测试在本机报 os error 5，属已知
 执行环境约束（AGENTS §2.2 追记），与本次改动无关。
+
+## 9. 追记二（2026-10-26 · 实机截图两处收口：图框退场 + 一处死配置）
+
+实机对比（Map 档 vs Browse 档）暴露出两处与「普通地图」范式相悖的残留。
+
+### 一、专业制图不画地图外框与 1/4 幅面参考网格
+
+- **现象**：Map 档地图上横贯三道淡线（竖 3 / 横 3 的 1/4 幅面参考网格）外加一圈
+  外框，视觉上被读成「编辑器网格」，与百度式普通地图的满屏画布气质直接冲突。
+- **决策**：`ViewMode::GoogleMap` 的 `PassId::MapFrame` 置 **false** —— 外框与参考
+  网格一起退场。其余模式（VectorFlat / RealTerrain / Schematic / Faction / Event /
+  Coastline）保持原状；Topographic 本来就关。
+- **理由**：外框是**印刷品**语汇（图廓），参考网格是**编辑器**语汇（定位辅助）。
+  专业制图是「满屏画布」——Google / 百度的普通地图两者都没有。定位需求已由
+  状态栏经纬度读数（ADR-0016 时期）承担，不需要画面上的辅助线。
+
+### 二、`PassId::MapFrame` 此前是**死配置**（本追记一并修正）
+
+`map_frame::sync_map_frame` 一直只判 `view.terrain_visible`，从不读渲染配方——
+mode 表里那一格写什么都没人看（与本仓库 2026-10-23 发现的 `PassId::GridLines`
+同类：表在骗人）。本次让系统真正读配方，表才成为唯一真相源。
+
+顺带兜底：`MapRenderPlugin` 内 `init_resource::<RenderRecipe>()`——只装该 Plugin
+的游戏路径不会因缺资源 panic（Default = 全关，fail-safe）。
+
+### 增补验收
+
+| # | 锚点 |
+|---|---|
+| B1 | `cartographic_mode_hides_map_frame_and_reference_grid`（全模式逐行锚定） |
+| B2 | 既有 `unknown_mode_yields_all_disabled` 仍断言 VectorFlat 的 MapFrame 开（对照） |

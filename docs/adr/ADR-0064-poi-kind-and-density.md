@@ -186,3 +186,45 @@ POI 层必须显式写 `kind`。
   `I18nKey::ALL` 508 → 521。
 - **新建地点默认「未分类」**（按推荐）；图层 / 图例按类别分色**未做**（后放，
   见遗留）。
+
+## 10. 追记三（2026-10-26 · rank ≥ 2 的城市符号：插画退场、pin 接管）
+
+### 一、现象：专业制图上「城堡插画」与「分类 pin」叠在一座城上
+
+实机截图（Map 档）里，西境堡 / 东门城等 rank ≥ 2 的地点同时画了两样东西：
+
+1. **手绘城堡 / 小镇插画**——`sync_landmarks` 自 2026-10-23 起只在 CellMap（
+   Topographic）走 map-pin，其余模式一律画插画；
+2. **分类 map-pin**——`PlaceDot` 与 `LandmarkDot` 在两处独立生成，rank ≥ 2 的地点
+   同时进两份数组，`sync_poi` 的 Google 分支又给每颗点发了一颗 pin。
+
+专业制图的语境里插画是「画风」，与「检索地图」的符号语言直接冲突；两颗符号重叠
+在城址上更是纯噪声。
+
+### 二、决策
+
+| # | 决策 | 说明 |
+|---|---|---|
+| D1 | **专业制图的地物符号改为 map-pin** | `landmark_marker(GoogleMap) = Pin`；CellMap 不变；艺术主题（Browse / Edit）继续画城堡 / 小镇插画——那是刻意保留的画风 |
+| D2 | **按 rank 分尺寸档** | `landmark_pin_scale`：rank ≥ 3（Citadel）1.3×，rank 2（Town）1.0×；只作用于专业制图，CellMap 保持单档（数据视图比的是格，不是城市地位） |
+| D3 | **POI 层让位** | Google 分支跳过 `rank ≥ 2` 的点（`poi_pin_owner_is_landmark`）——同一地点只留一颗符号。由 `sync_poi(landmark_pins)` 参数承载，只有地物符号层**确实在画**时才让位，避免 pass 被关时城市整体消失 |
+
+由此得到与百度一致的**分层节奏**：远观（Nation / Region 档）只见城市 pin——因为
+`rank_visible_at_tier` 在这两档只放行 rank ≥ 2/3，分类 pin 自然为空；近档（Edit）
+才出现彩色分类符号。
+
+### 三、代价
+
+- 专业制图没有插画可用，城市的分量只能靠「符号大小 + 字级」两级承载——字级已由
+  ADR-0065 分档（16 / 14 / 13 / 12px），本轮不再动字号。
+- 分类 pin 的 12 种颜色在远档不可见（被 rank 门挡住），图例若要做「按类分色」
+  必须说明「近档才可见」——图例本身仍属遗留。
+
+### 四、验收锚点
+
+| # | 锚点 |
+|---|---|
+| C1 | `cartographic_and_data_views_mark_places_with_pins`（模式 → 画法） |
+| C2 | `citadel_pin_is_larger_only_in_cartography`（尺寸档只在专业制图生效） |
+| C3 | `poi_pins_cede_rank_two_and_up_to_landmarks`（Region 档全数让位、Edit 档分类 pin 回归） |
+| C4 | `landmark_batch_key_changes_when_pin_flips`（形态进指纹——切模式不残留旧 mesh） |

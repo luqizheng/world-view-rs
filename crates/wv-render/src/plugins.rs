@@ -47,6 +47,11 @@ pub struct MapRenderPlugin;
 
 impl Plugin for MapRenderPlugin {
     fn build(&self, app: &mut App) {
+        // 渲染配方资源必须存在：`sync_map_frame` 等系统读它做门（ADR-0021 D1）。
+        // 编辑器路径由 `app_bootstrap::register_recipe_system` 单独求值；这里是
+        // **兜底初始化**，让只装本 Plugin 的游戏 app 不会因缺资源 panic
+        // （Default = 全关，fail-safe：未配置即不画）。
+        app.init_resource::<crate::recipe::RenderRecipe>();
         app.add_systems(
             Update,
             (

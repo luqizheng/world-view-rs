@@ -863,6 +863,25 @@ pub fn sync_vector_layers(
         }
     }
 
+    // 地物符号（rank ≥ 2）的档位先算：POI 层要据此让位（见下）。
+    //
+    // 画法按模式分流（[`landmark_marker`]）：
+    // - **CellMap（Topographic）**：map-pin——数据视图的地点标记，独立于
+    //   FeatureOverlay（该行 pass 是 false，pin 是唯一例外）；
+    // - **专业制图（Map / GoogleMap）**：同样 map-pin，但按 rank 分尺寸档
+    //   （[`landmark_pin_scale`]）——普通地图没有插画可画，城市的分量只能靠
+    //   「符号大小 + 字级」两级承载；
+    // - **其余模式**：城堡 / 小镇程序化插画（艺术主题的观感）。
+    //
+    // place 图层关时都不画。注意**不得**嵌进下面的 POI 门：Topographic 下
+    // Poi=false，嵌进去 pin 永远画不出（首启实测 mesh_count=0 的根因）。
+    let landmark_marker = landmark_marker(view.mode);
+    let landmarks_want = if view.mode == crate::state::ViewMode::Topographic {
+        layers.place.visible
+    } else {
+        layers.place.visible && recipe.enabled(PassId::FeatureOverlay)
+    };
+
     // 2026-10-22 内容矩阵：接 MODE_TABLE(Poi)——Topographic 下不画。
     if !layers.place.visible || !recipe.enabled(PassId::Poi) {
         layer.poi_ring_plain.despawn(&mut commands);
@@ -880,21 +899,11 @@ pub fn sync_vector_layers(
             view.scale,
             &grid,
             place_z,
+            landmarks_want && landmark_marker == LandmarkMarker::Pin,
             &mut layer,
         );
     }
 
-    // 地物符号（rank ≥ 2）。2026-10-23 二轮裁定：map-pin **只用于 CellMap**
-    // （数据视图的地点标记，独立于 FeatureOverlay——Topographic 行该格是
-    // false，主题地界覆盖层不进 CellMap，pin 是唯一例外）；其余
-    // FeatureOverlay 开档模式照旧画城堡/小镇插画。place 图层关时都不画。
-    // 注意**不得**嵌进上面的 POI 门：Topographic 下 Poi=false，嵌进去 pin
-    // 永远画不出（首启实测 mesh_count=0 的根因）。
-    let landmarks_want = if view.mode == crate::state::ViewMode::Topographic {
-        layers.place.visible
-    } else {
-        layers.place.visible && recipe.enabled(PassId::FeatureOverlay)
-    };
     if landmarks_want {
         let white = layer
             .landmark_material
@@ -906,7 +915,7 @@ pub fn sync_vector_layers(
             &mut meshes,
             landmarks,
             &frame.landmark_dots,
-            view.mode == crate::state::ViewMode::Topographic,
+            view.mode,
             view.scale,
             crate::landmark_symbols::LANDMARK_Z + layers.place.z_offset,
             white,
@@ -1319,6 +1328,7 @@ fn sync_poi(
     view_scale: f32,
     grid: &GridConfig,
     z_offset: f32,
+    landmark_pins: bool,
     layer: &mut VectorLayerEntities,
 ) {
     let tier = crate::state::lod_tier(view_scale);
@@ -1364,6 +1374,10 @@ fn sync_poi(
     // 检索地图的「分类符号」= 每类一个颜色。合批 mesh 一个材质只能一种色，
     // 所以类别必须分池。非 Google 模式仍走下面的城市 / 普通两档（艺术主题
     // 刻意不把类别符号化）。
+    //
+    // **rank ≥ 2 让位给地物符号层**（2026-10-26）：城市由
+    // [`sync_landmarks`] 画带尺寸档的 map-pin，此处再画一颗就是双符号。
+    // 由此普通地图的分层与百度一致：远观只见城市，分类符号只在近档出现。
     if mode == crate::state::ViewMode::GoogleMap {
         // 模式切换的残留清理：两档池可能还挂着上一个模式的 mesh。
         layer.poi_ring_plain.despawn(commands);
@@ -1378,6 +1392,10 @@ fn sync_poi(
         let s = landmark_size_tier(view_scale) * view_scale;
         let mut buckets: Vec<Vec<Vec2>> = vec![Vec::new(); PoiKind::COUNT];
         for d in &selected {
+            // rank ≥ 2 的地名已由地物符号层画（更大的 map-pin），这里让位。
+            if landmark_pins && poi_pin_owner_is_landmark(d.rank) {
+                continue;
+            }
             if let Some(b) = buckets.get_mut(d.kind.index()) {
                 b.push(d.pos);
             }
@@ -1583,29 +1601,85 @@ fn sync_poi_pin_batch(
     }
 }
 
+/// 地物符号（rank ≥ 2 的城市）画法（2026-10-26 专业制图收口）。
+///
+/// 三种模式族共用一条合批路径，只有「画什么形状」不同——抽成枚举而不是
+/// 布尔，是为了让「加第四种画法」时编译器把每个 match 都点出来。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LandmarkMarker {
+    /// 城堡 / 小镇程序化插画：艺术主题（Browse / Edit）的观感。
+    Illustration,
+    /// 统一 map-pin：数据视图（CellMap）与专业制图（Map）。
+    Pin,
+}
+
+impl LandmarkMarker {
+    fn is_pin(self) -> bool {
+        matches!(self, Self::Pin)
+    }
+}
+
+/// 模式 → 地物符号画法。
+fn landmark_marker(mode: crate::state::ViewMode) -> LandmarkMarker {
+    use crate::state::ViewMode;
+    match mode {
+        // 数据视图与普通地图都「不要画风」：地点就是一颗 pin。
+        ViewMode::Topographic | ViewMode::GoogleMap => LandmarkMarker::Pin,
+        _ => LandmarkMarker::Illustration,
+    }
+}
+
+/// 专业制图的城市 pin 尺寸档：rank ≥ 3（国都 / 大城）比 rank 2 略大。
+///
+/// 普通地图没有插画可用，城市的分量只能靠「符号大小 + 字级」两级承载
+/// （字级见 ADR-0065）。系数只乘在专业制图的 pin 上；CellMap 的 pin 保持
+/// 单档——数据视图要比的是格，不是城市地位。
+fn landmark_pin_scale(kind: crate::world_projection::LandmarkKind, cartographic: bool) -> f32 {
+    use crate::world_projection::LandmarkKind;
+    if !cartographic {
+        return 1.0;
+    }
+    match kind {
+        LandmarkKind::Citadel => 1.3,
+        LandmarkKind::Town => 1.0,
+    }
+}
+
+/// 专业制图的 POI pin 选点：rank ≥ 2 的地名**归地物符号层**（带尺寸档的
+/// map-pin），POI 层必须让位——否则同一座城市会叠两颗 pin（2026-10-26 实机
+/// 截图发现：城堡插画与分类 pin 同时压在城址上）。
+fn poi_pin_owner_is_landmark(rank: u8) -> bool {
+    rank >= 2
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sync_landmarks(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     landmark: &mut [LandmarkPool; 2],
     frame_landmarks: &[crate::world_projection::LandmarkDot],
-    pin: bool,
+    mode: crate::state::ViewMode,
     view_scale: f32,
     z: f32,
     material: Handle<ColorMaterial>,
 ) {
     use crate::world_projection::LANDMARK_KINDS;
-    // 形状分流（2026-10-23 二轮裁定）：CellMap 用 map-pin；其余模式画
-    // 城堡/小镇插画。PNG 贴图路径已退役，全部走顶点色 mesh。
+    let marker = landmark_marker(mode);
+    let cartographic = mode == crate::state::ViewMode::GoogleMap;
+    // 尺寸口径由派发处一次算定（局部坐标 = 屏幕像素，只乘 `view_scale`）：
+    // 合批函数只拿最终的 `s`，不再自己推——否则「pin 形态 + rank 尺寸档」
+    // 两个系数会散落在两层里。
+    let base = landmark_size_tier(view_scale) * view_scale;
     for (i, kind) in LANDMARK_KINDS.iter().copied().enumerate() {
+        let s = base * landmark_pin_scale(kind, cartographic);
         sync_landmark_mesh_batches(
             commands,
             meshes,
             &mut landmark[i],
             frame_landmarks,
             kind,
-            pin,
-            view_scale,
+            marker,
+            s,
             z,
             material.clone(),
         );
@@ -1659,21 +1733,20 @@ fn sync_landmark_mesh_batches(
     pool: &mut LandmarkPool,
     frame_landmarks: &[crate::world_projection::LandmarkDot],
     kind: crate::world_projection::LandmarkKind,
-    pin: bool,
-    view_scale: f32,
+    marker: LandmarkMarker,
+    s: f32,
     z: f32,
     material: Handle<ColorMaterial>,
 ) {
     use crate::landmark_symbols::{build_landmark_mesh, LandmarkBatch};
-    // 尺寸口径：**屏幕像素恒定**，按 LOD 档微调（档位越近稍大，贴近
-    // Google Maps marker 的恒定手感）。符号局部坐标单位就是屏幕像素，
-    // 缩放系数只乘 `view_scale`——2026-10-23 实测教训：曾在本地坐标外
-    // 再乘一档画布基准（26），符号被放大 26 倍成盖住半个大陆的墨团。
-    let s = landmark_size_tier(view_scale) * view_scale;
+    // 尺寸 `s` 由 [`sync_landmarks`] 统一算定（**屏幕像素恒定** + LOD 档微调
+    // + 专业制图的 rank 尺寸档）。符号局部坐标单位就是屏幕像素，缩放系数只
+    // 乘 `view_scale`——2026-10-23 实测教训：曾在本地坐标外再乘一档画布基准
+    // （26），符号被放大 26 倍成盖住半个大陆的墨团。
     let mut batch = LandmarkBatch::new();
     for d in frame_landmarks {
         if d.kind == kind {
-            if pin {
+            if marker.is_pin() {
                 batch.push_map_pin(d.pos, s);
             } else {
                 match kind {
@@ -1683,7 +1756,7 @@ fn sync_landmark_mesh_batches(
             }
         }
     }
-    let key = landmark_batch_key(frame_landmarks, kind, pin, s, z);
+    let key = landmark_batch_key(frame_landmarks, kind, marker.is_pin(), s, z);
     match pool.batch.take() {
         None => {
             let Some(mesh) = build_landmark_mesh(batch) else {
@@ -1817,6 +1890,79 @@ mod tests {
         let a = landmark_batch_key(&dots, LandmarkKind::Citadel, false, 1.0, 0.0);
         let b = landmark_batch_key(&dots, LandmarkKind::Citadel, true, 1.0, 0.0);
         assert_ne!(a.fingerprint, b.fingerprint);
+    }
+
+    /// 画法分流（2026-10-26 追记三）：数据视图与普通地图都是 pin，艺术主题
+    /// 才画城堡 / 小镇插画。
+    #[test]
+    fn cartographic_and_data_views_mark_places_with_pins() {
+        use crate::state::ViewMode;
+        assert_eq!(
+            landmark_marker(ViewMode::GoogleMap),
+            LandmarkMarker::Pin,
+            "专业制图不许再画手绘城堡"
+        );
+        assert_eq!(landmark_marker(ViewMode::Topographic), LandmarkMarker::Pin);
+        assert_eq!(
+            landmark_marker(ViewMode::VectorFlat),
+            LandmarkMarker::Illustration
+        );
+        assert_eq!(
+            landmark_marker(ViewMode::Schematic),
+            LandmarkMarker::Illustration
+        );
+    }
+
+    /// rank 尺寸档只作用于专业制图：国都 pin 比市镇大，CellMap 单档。
+    #[test]
+    fn citadel_pin_is_larger_only_in_cartography() {
+        use crate::world_projection::LandmarkKind;
+        let cit = landmark_pin_scale(LandmarkKind::Citadel, true);
+        let town = landmark_pin_scale(LandmarkKind::Town, true);
+        assert!(
+            cit > town,
+            "国都 pin 应大于市镇 pin，实得 citadel={cit} town={town}"
+        );
+        assert!(
+            (landmark_pin_scale(LandmarkKind::Citadel, false) - 1.0).abs() < f32::EPSILON,
+            "非专业制图不套 rank 档"
+        );
+        assert!((landmark_pin_scale(LandmarkKind::Town, false) - 1.0).abs() < f32::EPSILON);
+    }
+
+    /// POI 让位规则：rank ≥ 2 归地物符号层。Region 档恰好只放行 rank ≥ 2，
+    /// 故该档下分类 pin 全数让位（远观只看得见城市），Edit 档才轮到分类符号。
+    #[test]
+    fn poi_pins_cede_rank_two_and_up_to_landmarks() {
+        use crate::state::LodTier;
+        assert!(!poi_pin_owner_is_landmark(0), "普通点仍归 POI 层");
+        assert!(!poi_pin_owner_is_landmark(1));
+        assert!(poi_pin_owner_is_landmark(2), "市镇级归地物符号层");
+        assert!(poi_pin_owner_is_landmark(3), "国家级归地物符号层");
+
+        let dot = |rank: u8, x: f32| PlaceDot {
+            pos: Vec2::new(x, 0.0),
+            is_city: true,
+            rank,
+            name_len: 3,
+            kind: wv_core::distance::PoiKind::Settlement,
+        };
+        // 拉开距离，避开 96px 网格配额。
+        let dots = vec![dot(3, 0.0), dot(2, 500.0), dot(1, 1000.0)];
+        let region: Vec<&PlaceDot> = select_pois(&dots, LodTier::Region, 1.0);
+        assert!(
+            region.iter().any(|d| d.rank == 2),
+            "Region 档应放行 rank 2，实得 {region:?}"
+        );
+        assert!(
+            region.iter().all(|d| poi_pin_owner_is_landmark(d.rank)),
+            "Region 档放行的每一点都应让位给地物符号层"
+        );
+        let edit = select_pois(&dots, LodTier::Edit, 1.0);
+        assert!(
+            edit.iter().any(|d| d.rank == 1),
+            "Edit 档应出现分类 pin，实得 {edit:?}"
+        );
     }
 
     use super::*;

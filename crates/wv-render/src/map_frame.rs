@@ -32,6 +32,7 @@
 use bevy::math::primitives::Rectangle;
 use bevy::prelude::*;
 
+use crate::recipe::{PassId, RenderRecipe};
 use crate::state::{GridConfig, ViewState};
 
 /// 屏幕像素描边。
@@ -84,9 +85,16 @@ pub fn sync_map_frame(
     mut materials: ResMut<Assets<ColorMaterial>>,
     grid: Res<GridConfig>,
     view: Res<ViewState>,
+    recipe: Res<RenderRecipe>,
     mut entities: ResMut<MapFrameEntities>,
 ) {
-    if !view.terrain_visible {
+    // 图框 / 参考网格由渲染配方单点裁决（ADR-0021 D1）。此前本系统直接画、
+    // 完全没读 `PassId::MapFrame`——mode 表里那一格是死配置（2026-10-26 发现）。
+    //
+    // 专业制图（Map / GoogleMap）关掉：普通地图是「满屏画布」，百度的普通
+    // 地图既没有印刷品式外框、也没有 1/4 幅面经纬格——那两条淡线在截图里
+    // 被读成「编辑器网格」，正是要退场的东西（ADR-0061 追记二）。
+    if !view.terrain_visible || !recipe.enabled(PassId::MapFrame) {
         entities.despawn_all(&mut commands);
         return;
     }
