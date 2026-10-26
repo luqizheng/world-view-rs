@@ -477,3 +477,10 @@
 - **定义**：作者经地标面板放置或点状存在的 POI——`Place` 满足「有 `x/y` 锚点 + 非折线（`line = None`）」。放置语义：面板选类别（`PoiKind` 12 类）/ 级别（rank）后单击地图即建（Edit 浏览档落点击点，CellMap 工作区吸附格中心）；属性编辑在统一 Inspector 地点表单（ADR-0058 属性段唯一）。**消歧**：与渲染层的地物符号 `LandmarkKind`（wv-render，Citadel/Town 插画，rank≥2 的视觉档）是两个概念——本词条指数据 + 编辑语义，后者指画法。列表口径 = 当前图锚定点状地点；折线（小河）与无锚点群系标记不进地标列表（前者归 ADR-0070 线段 POI）。
 - **首次出现**：2026-10-26 地标面板设计（ADR-0071）
 - **所属维度**：编辑 / 数据（distances）
+
+## biome 距离场（Biome Distance Field）
+
+- **英文名**：Biome Distance Field
+- **定义**：每格两个量——到最近**异类群系**格心的距离 `d`（格，`BIOME_FIELD_CAP=8` 饱和）与该异类格的群系 ID `nb`（argmin 传播，cap 外 = 哨兵 255）。逐类多源 Dijkstra（8 邻定点权）生成、cap 早退。是 ADR-0072 群系填色的数据面：shader 侧 `t = smoothstep(0.5, 0.5+half, d)` 做 own/nb 两套群系色的亚格混合，边界随屏幕封顶收锐、随 9-tap 低通圆角——与海岸距离场同语法的「格网数据的矢量边」。渲染于 `terrain_field.wgsl`（T4），语义权威边界仍是 `cell.biome` 翻转处（P3/P7 不变）。
+- **首次出现**：2026-10-26 ADR-0072（biome 界距离场，推翻 Q3 裁定 A）
+- **所属维度**：渲染（地形场）/ 编辑（地形）

@@ -244,6 +244,16 @@ pub struct TerrainFieldMaterial {
     #[texture(7)]
     #[sampler(8)]
     pub line_dash: Handle<Image>,
+    /// ADR-0072：biome 距离场 **R 通道**（d / 8），`Linear`——距离是连续量。
+    #[texture(9)]
+    #[sampler(10)]
+    pub biome: Handle<Image>,
+    /// ADR-0072：**同一份字节**的 `Nearest` 视图，专供 G/B（本格 / 最近异类
+    /// 群系 ID）。ID 是离散编号，Linear 插值出「群系 5.5」是语义错误
+    /// （同 attr 红线）；距离与 ID 必须各用各的采样器，故同字节绑两次。
+    #[texture(11)]
+    #[sampler(12)]
+    pub biome_ids: Handle<Image>,
 }
 
 /// 与 WGSL `FieldParams` 逐字段对应的 uniform 块。
@@ -334,12 +344,13 @@ impl Material2d for TerrainFieldMaterial {
     }
 }
 
-/// 装配材质（把 [`FieldPack`] 的字节缓冲变成四张 GPU 纹理）。
+/// 装配材质（把 [`FieldPack`] 的字节缓冲变成六张 GPU 纹理——biome 一份字节双采样器视图）。
 ///
 /// 采样器按 P0 锁死：
 /// - height / coast → `Linear`（T1/T3；shader 要在亚格处插值）
 /// - attr → **Nearest**（T2；biome 是 ID，插值即语义错误）
 /// - line_dash → `Linear`（追记九；距离是连续量，同 coast 理由）
+/// - biome → `Linear`（R=距离）+ `Nearest` 视图（G,B=群系 ID，同 attr 红线）
 ///
 /// 全部走 `Images` 手动注入（不经 `AssetServer`）——纹理来自 `FieldPack`
 /// 的内存缓冲，不是磁盘资产；这也是 wv-render「禁文件 IO」红线的必然结果。
@@ -395,16 +406,35 @@ pub fn build_material_with_lines(
         TextureFormat::Rgba8Unorm,
         ImageSamplerDescriptor::linear(),
     ));
+    // ADR-0072：biome 距离场。同一份字节建两张 Image（Linear 给 R=距离 /
+    // Nearest 给 G,B=群系 ID）——多一份 GPU 上传是双采样器语义的代价，
+    // 换来「距离亚格连续、ID 严格分片」两不误。
+    let biome = images.add(data_texture(
+        pack.width,
+        pack.height,
+        &pack.biome_tex,
+        TextureFormat::Rgba8Unorm,
+        ImageSamplerDescriptor::linear(),
+    ));
+    let biome_ids = images.add(data_texture(
+        pack.width,
+        pack.height,
+        &pack.biome_tex,
+        TextureFormat::Rgba8Unorm,
+        ImageSamplerDescriptor::nearest(),
+    ));
     TerrainFieldMaterial {
         params,
         height,
         coast,
         attr,
         line_dash,
+        biome,
+        biome_ids,
     }
 }
 
-/// **增量补丁**：把 `pack` 里 `rect` 覆盖的 texel 写进材质已有的三张数据纹理。
+/// **增量补丁**：把 `pack` 里 `rect` 覆盖的 texel 写进材质已有的数据纹理。
 ///
 /// 返回 `false` = 不能增量（句柄没了 / 幅面不符 / 缓冲长度不符），调用方
 /// **必须**改走 [`build_material`] 全量重建。返回 `true` 时 `rect` 之外
@@ -412,14 +442,14 @@ pub fn build_material_with_lines(
 ///
 /// ## 为什么必须在材质上原地改，而不是「重建材质再换」
 ///
-/// 一笔 brush 走重建路径的代价是：三张 `Image` 全量分配 + 材质全量重建 +
+/// 一笔 brush 走重建路径的代价是：整组 `Image` 全量分配 + 材质全量重建 +
 /// 旧材质 `Assets::remove`（实测 1024² 共 48.4 ms）。而**真正会变的只有
 /// brush 盖住的那几百个 texel**——剩下的 99.97% 是与上次逐字节相同的数据。
 /// 原地补丁只付一次 `Assets::get_mut`（Bevy 会整张重传，见下「已知代价」）。
 ///
 /// ## 三张必须同进同退
 ///
-/// 先对三张**全部**做前置校验，通过了才动手写：半途失败会留下「高度是新的、
+/// 先对**全部**目标做前置校验，通过了才动手写：半途失败会留下「高度是新的、
 /// 海岸是旧的」这种错位画面，比不做补丁更难查。
 ///
 /// ## 已知代价（不属于本函数的职责）
@@ -439,6 +469,8 @@ pub fn patch_material_images(
         (&material.height, 2usize, &pack.height_tex),
         (&material.coast, 2, &pack.coast_tex),
         (&material.attr, 4, &pack.attr_tex),
+        (&material.biome, 4, &pack.biome_tex),
+        (&material.biome_ids, 4, &pack.biome_tex),
     ];
 
     // ── 前置校验：三张全过才写 ──
@@ -513,6 +545,10 @@ fn data_texture(
 ///
 /// 让 demo 与未来笔刷路径有单一构造入口——避免「每处各填一半参数，
 /// 结果 P2 接线时发现某个旋钮没人接」。
+/// 群系填色强度的中性默认（ADR-0072 T3）——demo / 测试路径用；
+/// 主 App 的真源在 `ThemePack.biome_tint`。
+pub const BIOME_TINT_DEFAULT: f32 = 0.5;
+
 pub fn default_params(
     grid: [f32; 2],
     px_per_cell: f32,
@@ -534,7 +570,9 @@ pub fn default_params(
             GRAD_STEP,
         ),
         // T19 域扭曲幅度写进 pad0.x（P1 预留的槽位，P2 接线不改绑定布局）。
-        pad0: Vec4::new(warp_amp(px_per_cell), 0.0, 0.0, 0.0),
+        // pad0.z = 群系填色强度（ADR-0072 T3）：中性默认 0.5，主 App 由
+        // 桥接按 `ThemePack.biome_tint` 覆写。
+        pad0: Vec4::new(warp_amp(px_per_cell), 0.0, BIOME_TINT_DEFAULT, 0.0),
         light_dir: Vec4::new(LIGHT_DIR[0], LIGHT_DIR[1], LIGHT_DIR[2], 0.0),
         pad1: Vec4::ZERO,
         shore_edges: Vec4::new(SHORE_EDGE, SHALLOW_EDGE, DEEP_EDGE, 0.0), // w = wash_amt（P2）

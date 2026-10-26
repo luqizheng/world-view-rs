@@ -979,13 +979,15 @@ pub fn sync_terrain_decor(
                 continue;
             };
             // 阈值抖动：部分格跳过，密度再降一档（森林 100%、平原 35%）。
-            // 格 → 装饰类。水格（OCEAN/LAKE/RIVER，surface==0）单独走
+            // 格 → 装饰类。水格（surface == 0，OCEAN/LAKE/RIVER）单独走
             // OceanWaves：浅海带（-220..0m）白弧，密度随深度衰减。
-            let kind = if wv_terrain::edit::is_water_cell(wv_terrain::TerrainCell {
-                height: c.height,
-                surface: c.surface,
-                biome: c.biome,
-            }) {
+            //
+            // 水陆判定与场管线底图**同源**（ADR-0072 T4 对齐）：权威边界是
+            // `surface` 翻转处（coast_sdf T3 注记「authoring 真值，不由高度
+            // 推断」）。曾经 `is_water_cell`（surface==0 ∨ height<0）——
+            // 海面以下的陆上洼地被判成水，海浪白弧落在场管线画成陆地的
+            // 格子上（2026-10-26 用户实机「陆地上多了很多白点点」）。
+            let kind = if c.surface == 0 {
                 // 离岸驱动（ADR-0048 追记四）：白弧只落在「泡沫带之外、墨线圈
                 // 之内」的空隙带——按绝对深度判定会与新浅滩带 / 泡沫带在同一
                 // 位置叠两套白色元素。深度不再参与（近岸浅滩的白浪花已由烘焙

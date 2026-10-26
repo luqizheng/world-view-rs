@@ -1536,13 +1536,18 @@ fn reclaim_field_material(
     material: Handle<TerrainFieldMaterial>,
     materials: &Assets<TerrainFieldMaterial>,
 ) {
-    let mut textures: [Option<Handle<Image>>; 4] = [const { None }; 4];
+    let mut textures: [Option<Handle<Image>>; 6] = [const { None }; 6];
     if let Some(mat) = materials.get(&material) {
         textures = [
             Some(mat.height.clone()),
             Some(mat.coast.clone()),
             Some(mat.attr.clone()),
             Some(mat.line_dash.clone()),
+            // ADR-0072：biome 距离场（Linear）+ 同字节 Nearest 视图。
+            // 漏回收会被「关场后 Image 资产账目 == 纯 chunk 基线」的验收
+            // 测试当场抓住（15 ≠ 13）。
+            Some(mat.biome.clone()),
+            Some(mat.biome_ids.clone()),
         ];
     }
     commands.queue(move |world: &mut World| {
@@ -1780,6 +1785,8 @@ pub fn sync_terrain_field(
                 branch,
                 FieldPalette::default(),
             );
+            // ADR-0072 T3：群系填色强度随主题（pad0.z，shader 侧 p.pad0.z）。
+            params.pad0.z = view.active_theme.biome_tint;
             // pack 与 shader 的解码开关必须同源（唯一耦合点，见 `set_coast_encoding`）。
             set_coast_encoding(&mut params, pack.encoding);
             // 分层设色（ADR-0056）：内边界 = **绝对地形学阶梯**；窄域图（跨度
