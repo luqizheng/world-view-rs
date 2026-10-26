@@ -104,11 +104,11 @@ pub fn derive_road_edges(world: &World, tolerance_wu: f32) -> RoadDeriveReport {
             report.skipped_no_scale += 1;
             continue;
         };
-        let Some(a) = nearest_anchor(places, line_place, start, tolerance_wu) else {
+        let Some(a) = nearest_anchor(places, map_id, line_place, start, tolerance_wu) else {
             report.skipped_no_anchor += 1;
             continue;
         };
-        let Some(b) = nearest_anchor(places, line_place, end, tolerance_wu) else {
+        let Some(b) = nearest_anchor(places, map_id, line_place, end, tolerance_wu) else {
             report.skipped_no_anchor += 1;
             continue;
         };
@@ -202,10 +202,13 @@ fn line_length_wu(line: &[f32]) -> f32 {
 
 /// 端点在容差内的**最近**锚定非线 POI（ADR-0070 D5）。
 ///
-/// 三个过滤条件都不可省：不吸附线段地点（河不该成为路的端点）、
-/// 不吸附未锚定地点（没落图就无从比距离）、不吸附线自身。
+/// 四个过滤条件都不可省：不吸附线段地点（河不该成为路的端点）、
+/// 不吸附未锚定地点（没落图就无从比距离）、不吸附线自身、
+/// **不吸附别的图上的地点**——Place 坐标是图内局部 wu，跨图同坐标是两套
+/// 坐标系，数值撞进容差只是巧合（评审修复）。
 fn nearest_anchor(
     places: &[Place],
+    map_id: &Id,
     line_place: &Place,
     endpoint: (f32, f32),
     tolerance_wu: f32,
@@ -218,7 +221,8 @@ fn nearest_anchor(
         if effective_line_kind(p).is_some() {
             continue;
         }
-        if p.map.is_none() {
+        // 同图性（含未锚定 = map 为 None）：端点吸附要在同一张图的两点之间比距离。
+        if p.map.as_ref() != Some(map_id) {
             continue;
         }
         let Some((ax, ay)) = p.effective_anchor() else {
@@ -653,6 +657,39 @@ mod tests {
             1,
             "场上恰一条 derived 边"
         );
+    }
+
+    /// 吸附目标只认**与道路线同一张图**的锚定 POI：Place 坐标是图内局部 wu，
+    /// 子图上的同坐标地点与世界图端点在数值上可能撞进容差，但那是两套坐标系
+    /// ——跨图吸附会把毫不相干的子图地点焊进世界图路网（评审 Important 修复：
+    /// 此前只查了「已锚定」，漏查「同一张图」）。
+    #[test]
+    fn anchors_from_other_maps_are_not_snapped() {
+        let mut w = world_with(
+            map_node(Some(8.0)),
+            vec![
+                road_line_place("road_mid", vec![0.0, 0.0, 100.0, 0.0]),
+                // 子图地点恰在道路起点上（数值距离 0 < 32 wu 容差）——
+                // 若实现漏查同图性，必被误吸为端点。
+                Place {
+                    map: Some(vid("island_child")),
+                    ..point_place("isle_harbour", 0.0, 0.0)
+                },
+                point_place("village_beta", 100.0, 0.0),
+            ],
+            vec![],
+        );
+        let mut island = map_node(Some(8.0));
+        island.id = vid("island_child");
+        w.maps.push(island);
+
+        let report = derive_road_edges(&w, ROAD_SNAP_TOLERANCE_WU);
+        assert!(
+            report.edges.is_empty(),
+            "跨图地点不得作端点，实得 {:?}",
+            report.edges
+        );
+        assert_eq!(report.skipped_no_anchor, 1, "起点端无同图锚点，恰计一次");
     }
 
     /// 环形小路两端吸到**同一**地点 → 自环无意义，不产边。
