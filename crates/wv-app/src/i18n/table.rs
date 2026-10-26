@@ -680,7 +680,9 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::LinePoiKindRiver => "河流",
         I18nKey::LinePoiKindRoad => "道路",
         I18nKey::LinePoiPanelTitle => "河流和道路",
-        I18nKey::LinePoiName => "名字",
+        // 2026-10-26（T10 评审 minor ③）：表单字段统一用词「名称」——
+        // 与 NewMapDialogNameLabel / RegionPanelNameLabel 等既有字段一致。
+        I18nKey::LinePoiName => "名称",
         I18nKey::LinePoiWidth => "宽度",
         I18nKey::LinePoiWidthUnitWu => "世界单位",
         I18nKey::LinePoiMode => "模式",

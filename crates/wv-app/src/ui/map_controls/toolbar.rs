@@ -392,6 +392,8 @@ pub fn map_controls(
                         // 作者工具只在放大到可编辑级别才有意义，Nation /
                         // Region 档整枚瓷砖不渲染（而非灰化）。分裂按钮：
                         // 主键 = 河，弹层换类；命令排队后由分发器统一互斥。
+                        // 播放锁对齐 CellMap 工具组（T10 评审 minor ①）：
+                        // 播放中灰化不可点，与写入口工具同一 Gate-1 口径。
                         if line_poi_tile_visible(wv_render::state::lod_tier(view.scale)) {
                             line_poi_split(
                                 ui,
@@ -401,6 +403,12 @@ pub fn map_controls(
                                 loc,
                                 line_poi.kind,
                                 line_poi.tool_active,
+                                if cell_tools_enabled {
+                                    t(loc, I18nKey::LinePoiHint)
+                                } else {
+                                    locked_hint
+                                },
+                                cell_tools_enabled,
                                 &mut params.palette,
                             );
                         }

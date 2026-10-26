@@ -493,10 +493,16 @@ pub(crate) fn apply_pending_commands(
                         // 线段 POI 激活（ADR-0070 D4）：记下当前类（弹层换类
                         // 走到这里 = 换参数），并打开「河流和道路」面板——
                         // 面板内容（新建表单 / 选中属性）由 T11 渲染。
+                        // 播放锁（T10 评审 minor ①）：播放中不可开工具——
+                        // 瓷砖灰化是第一道闸，这里是命令链上的兜底（命令
+                        // 面板 / 快捷键不经瓷砖也能发 SelectMapTool）。锁住时
+                        // 什么都不开（上方「先全关」已把别的工具收掉）。
                         MapToolId::LinePoi(kind) => {
-                            line_poi.kind = kind;
-                            line_poi.tool_active = true;
-                            panels.set_visible(crate::state::Panel::LinePoi, true);
+                            if !playback.playing {
+                                line_poi.kind = kind;
+                                line_poi.tool_active = true;
+                                panels.set_visible(crate::state::Panel::LinePoi, true);
+                            }
                         }
                     }
                 }

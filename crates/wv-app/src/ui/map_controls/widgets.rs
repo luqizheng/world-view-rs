@@ -17,7 +17,8 @@ pub(super) fn line_poi_tile_visible(tier: wv_render::state::LodTier) -> bool {
 /// 类开关线段 POI 工具；点小三角 = 弹层里换类（换类 = 换参数不关工具——
 /// 分发器口径：同类开着 = 关，异类开着 = 换，与 `Select(shape)` 同款）。
 ///
-/// 调用方负责档位门控（[`line_poi_tile_visible`]，仅 Edit 档调用本函数）。
+/// 调用方负责档位门控（[`line_poi_tile_visible`]，仅 Edit 档调用本函数）
+/// 与播放锁（`enabled`，Gate-1 同款：灰化 + 不成命中区，见 `tool_tile`）。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn line_poi_split(
     ui: &mut egui::Ui,
@@ -27,9 +28,27 @@ pub(super) fn line_poi_split(
     loc: Locale,
     kind: wv_core::distance::LineKind,
     active: bool,
+    hint: &str,
+    enabled: bool,
     palette: &mut CommandPalette,
 ) {
     use wv_core::distance::LineKind;
+
+    // 播放锁（T10 评审 minor ①）：与 `tool_tile` 同口径——灰化占位、
+    // `Sense::hover` 不成命中区（不是「点了不响应」，是连误触的机会都不给）。
+    // 底色透明：大框（`float_fill`）已提供底，瓷砖只在 hover / 活动时上色。
+    if !enabled {
+        let (rect, _resp) = ui.allocate_exact_size(metrics.tile, egui::Sense::hover());
+        let icon = match kind {
+            LineKind::River => ICON_RIVER,
+            LineKind::Road => ICON_ROUTE,
+        };
+        icon_image(icon, shell.text_disabled(), metrics.tile_icon).paint_at(
+            ui,
+            egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(metrics.tile_icon)),
+        );
+        return;
+    }
 
     let items = [
         SplitMenuItem::new(ICON_RIVER, t(loc, I18nKey::LinePoiKindRiver)),
@@ -48,7 +67,7 @@ pub(super) fn line_poi_split(
         metrics.split_metrics(vertical),
         icon,
         active,
-        t(loc, I18nKey::LinePoiHint),
+        hint,
         &items,
         usize::from(kind == LineKind::Road),
         || main_cmd = Some(CommandId::SelectMapTool(MapToolId::LinePoi(kind))),

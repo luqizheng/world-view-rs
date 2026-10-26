@@ -44,6 +44,8 @@ pub mod flood_select;
 pub mod inspector_actions;
 #[cfg(feature = "app")]
 pub mod intent_translator;
+#[cfg(feature = "app")]
+pub mod line_poi_tool;
 pub mod nature_region_actions;
 #[cfg(feature = "app")]
 pub mod region_adjust;

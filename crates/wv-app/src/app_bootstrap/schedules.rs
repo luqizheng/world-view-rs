@@ -368,6 +368,9 @@ pub(super) fn register(app: &mut App) {
             wv_render::measurement::reload_measurement_cache.after(camera::track_cursor_world),
             wv_render::measurement::commit_measurement_click
                 .after(wv_render::measurement::reload_measurement_cache),
+            // 线段 POI 钉点交互（ADR-0070 D4）：同一条光标坐标链——
+            // `cursor_world` 就绪后才读（cell_stroke / selection 同款排序）。
+            crate::edit::line_poi_tool::line_poi_tool_input.after(camera::track_cursor_world),
         ),
     );
     // 选择工具（pen 方法）：变图清空 → 点击采集 → 拖动移锚，同一条光标坐标链。
@@ -411,6 +414,8 @@ pub(super) fn register(app: &mut App) {
             world_projection::draw_brush_cursor,
             // 测量顶置渲染——与 gizmos 一起画。
             wv_render::measurement::render_measurements,
+            // 线段 POI 预览 / 选中高亮（ADR-0070 D4）：同层 gizmo 即帧即弃。
+            crate::edit::line_poi_tool::draw_line_poi_preview,
             // 选择工具（草稿折线 + 橡皮筋 / 闭合环 + 选中锚点）。
             wv_render::selection::draw_selection,
         ),
@@ -450,6 +455,9 @@ pub(super) fn register(app: &mut App) {
             // 2026-10-22 统一 Inspector：Cell 编辑器的**内容**已迁入 Inspector
             // 的「属性」页签，独立浮窗不再注册（枚举项暂留，退役见 M4）。
             ui::panel_validation,
+            // 「河流和道路」（ADR-0070 D4）：线段 POI 的新建设置 + 选中属性
+            // 编辑，随工具开关（分发器裁决显隐）。
+            ui::panel_line_poi,
             // 「新建地图」对话框（CommandId::NewMap 打开；居中模态窗）。
             ui::new_map_dialog,
             // 「生成大陆」属性面板（工具条 / 命令面板打开；居中模态窗）。
