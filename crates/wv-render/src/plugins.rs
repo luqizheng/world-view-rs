@@ -72,8 +72,11 @@ impl Plugin for MapRenderPlugin {
                 streets::reload_street_cache,
                 // 矢量叠加层（道路 + POI）
                 vector_layers::sync_vector_layers,
-                // 街道名标注
-                streets::update_street_labels,
+                // 街道名标注。ADR-0073：街名在统一占位池中**最后落位**——
+                // 显式排在钻取标签链（drill::register 的 chain）之后，落位
+                // 次序「地名 → … → 海名 → 街名」由此成立；游戏路径不装钻取
+                // 链时该集合为空，约束自然退化。
+                streets::update_street_labels.after(crate::label_collision::DrillLabelChain),
                 // 势力多边形叠加层
                 faction_overlays::sync_faction_overlays,
                 // 地图外框 + 1/4 幅面参考网格

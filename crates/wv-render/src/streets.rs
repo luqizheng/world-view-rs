@@ -126,18 +126,21 @@ pub fn street_streams(sources: &[(String, wv_core::StreetLayer)]) -> Vec<(u8, Ve
 #[derive(Component)]
 pub struct StreetLabel;
 
-/// 有名字段的中点表（**本图局部坐标** + 段级存在窗口）——标注的取数口径，纯函数可测。
+/// 中点标注行：`(本图局部中点, 段方向单位向量, 街名, 段级存在窗口)`。
+pub type NamedMidpoint = (Vec2, (f32, f32), String, Option<wv_core::TimeSpan>);
+
+/// 有名字段的中点表——标注的取数口径，纯函数可测。
 ///
 /// 第三元 = 该段的 `time_span`（`None` = 跟随子图）。ADR-0015：段窗口外
 /// 街名与街道几何同生共死，过滤在标注系统内做（`label_visible_at`）。
-pub fn named_midpoints(
-    sources: &[(String, wv_core::StreetLayer)],
-) -> Vec<(Vec2, String, Option<wv_core::TimeSpan>)> {
+/// 第二元 = 中点所在折线段的行进方向（单位向量）——沿街旋转标注
+/// （ADR-0073）据此算文字的屏幕倾角。
+pub fn named_midpoints(sources: &[(String, wv_core::StreetLayer)]) -> Vec<NamedMidpoint> {
     let mut out = Vec::new();
     for (_, doc) in sources {
         for seg in &doc.segments {
-            if let (Some(name), Some(mid)) = (&seg.name, seg.polyline_midpoint()) {
-                out.push((Vec2::new(mid.x, mid.y), name.clone(), seg.time_span));
+            if let (Some(name), Some((mid, dir))) = (&seg.name, seg.polyline_midpoint_with_dir()) {
+                out.push((Vec2::new(mid.x, mid.y), dir, name.clone(), seg.time_span));
             }
         }
     }
@@ -158,8 +161,10 @@ const STREET_LABEL_Z: f32 = 0.35;
 /// LOD 口径：街道名只在编辑级视野出现——省/国家级一屏几十条街的名字
 /// 会把图变成字海（Google 地图也是拉近才出街名）。
 ///
-/// **屏幕对齐**（2026-10-14 用户裁定，与地名标注同一口径）：地图随
-/// `MapNode.orientation` 旋转后，街道名文字取相机旋转的**逆**保持水平。
+/// **沿街旋转 + 直立翻转**（ADR-0073）：文字沿中点所在段的方向倾斜，
+/// 朝左（|倾角| > 90°）的段翻 180°，永远头朝上、从左往右读——与水平
+/// 时期的「取相机旋转的逆」在零朝向 + 水平段时同值，零视觉回归。
+/// 占位上街名最后落位（`.after(update_sea_labels)`），让位给地名与面标签。
 ///
 /// 图层归属（ADR-0017 §2.9 Q3 全接管）：
 /// - ADR-0013 §2.2：街名随 Road 图层（`layers.road.visible`）
@@ -180,6 +185,8 @@ pub fn update_street_labels(
     view: Res<ViewState>,
     layers: Res<LayerFrame>,
     playback: Res<crate::state::PlaybackState>,
+    // 统一占位池（ADR-0073）：街名最后落位，让位给地名 / 面标签 / 事件。
+    mut occupancy: ResMut<crate::label_collision::LabelOccupancy>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
     camera: Query<&Transform, With<Camera2d>>,
     mut q: Query<
@@ -203,9 +210,10 @@ pub fn update_street_labels(
         ),
     >,
 ) {
-    // 期望标注集：有名字的段 × 折线中点（本图局部 → 视图空间，走 `map_to_view`）。
-    // 图层不可见 → wanted 为空 → 池全隐藏（尾部的「多余的隐藏」路径）。
-    let mut wanted: Vec<(Vec2, String)> = Vec::new();
+    // 期望标注集：有名字的段 × 折线中点 + 段方向（本图局部 → 视图空间，走
+    // `map_to_view`）。图层不可见 → wanted 为空 → 池全隐藏（尾部的「多余的
+    // 隐藏」路径）。
+    let mut wanted: Vec<(Vec2, (f32, f32), String)> = Vec::new();
     // ADR-0017 §2.9 Q3：街名走 Label 渲染组 + Road 图层（合取）。
     // 去掉 LodTier::Edit 限制——Q3 拍板"全接管"，所有级别都显示街名。
     if layers.road.visible
@@ -217,38 +225,48 @@ pub fn update_street_labels(
         let map_span = drill
             .current_node(&projection.world)
             .and_then(|node| node.time_span.as_ref());
-        for (mid, name, seg_span) in named_midpoints(&cache.sources) {
+        for (mid, dir, name, seg_span) in named_midpoints(&cache.sources) {
             if wv_core::label_visible_at(map_span, seg_span.as_ref(), t) {
-                wanted.push((grid.map_to_view(mid), name));
+                wanted.push((grid.map_to_view(mid), dir, name));
             }
         }
     }
     // 无变化帧也照常对齐：位置/字号随视图每帧都可能变，池对齐本身极轻。
 
-    // ADR-0065：街名纳入 AABB 碰撞过滤。旧实现直接把全部街名铺出去——编辑级
-    // 视野一屏几十条街时字叠字，放大后反而「几乎无法分辨」。街名不参与拾取
-    // （`target = None`），但不影响它们互相让位。
     let unit_scale = view.scale.max(0.05);
-    let mut candidates: Vec<crate::label_collision::LabelCandidate> = wanted
-        .drain(..)
-        .map(|(pos, name)| crate::label_collision::LabelCandidate {
-            font_size_px: STREET_LABEL_PX,
-            priority: crate::label_collision::priority_for(1, &name),
+    let cam_rot = camera
+        .single()
+        .map(|t| t.rotation)
+        .unwrap_or(Quat::IDENTITY);
+    // 相机 x 轴的世界方向角：screen→world = 相机旋转（与拾取同一条已验证
+    // 变换链），街段的世界方向角减去它 = 街段在屏幕上的倾角。
+    let cam_fwd = cam_rot.mul_vec3(Vec3::X);
+    let cam_yaw = cam_fwd.y.atan2(cam_fwd.x);
+
+    // ADR-0065 → ADR-0073：街名纳入统一占位池，沿段方向旋转 + 直立翻转
+    // （朝左的段翻 180°，文字永远头朝上从左往右读）。候选位只有段中点
+    // 原位——街名必须钉在路上，没有备选方位；预算内放不下就让位。
+    let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
+    for (pos, dir, name) in wanted.drain(..) {
+        let phi = crate::label_collision::upright_angle(dir.1.atan2(dir.0) - cam_yaw);
+        let priority = crate::label_collision::priority_for(1, &name);
+        let mut cand = crate::label_collision::LabelCandidate::new(
+            crate::label_collision::LabelPass::Street,
             pos,
             name,
-            target: None,
-        })
-        .collect();
-    let mut filtered = crate::label_collision::filter_collisions(&mut candidates, unit_scale);
-    filtered.truncate(200);
+            STREET_LABEL_PX,
+            priority,
+            None,
+        );
+        cand.angle = Some(phi);
+        candidates.push(cand);
+    }
+    let filtered =
+        crate::label_collision::filter_collisions(&mut candidates, unit_scale, &mut occupancy);
 
     let font_size = STREET_LABEL_PX * unit_scale;
     // ADR-0017 §2.9 Q3：街名走 Label 渲染组的 z 和 opacity。
     let label_z = STREET_LABEL_Z + layers.label.z_offset;
-    let label_rot = camera
-        .single()
-        .map(|t| t.rotation.inverse())
-        .unwrap_or(Quat::IDENTITY);
     let cjk = fonts.label_handle();
     let label_color = match view.mode {
         crate::state::ViewMode::GoogleMap => crate::theme::colors_google::GOOGLE_LABEL_FILL,
@@ -268,9 +286,13 @@ pub fn update_street_labels(
     for c in &filtered {
         let pos = c.pos;
         let name: &str = c.name.as_str();
+        // 沿街文字实体旋转 = rot_z(屏幕倾角) · 相机旋转——倾角已含相机角
+        //（见 cam_yaw），该构造保证文字在屏幕上与街段平行；零朝向 +
+        // 水平段时退化为与旧「相机旋转的逆」同值。
+        let rot = Quat::from_rotation_z(c.angle.unwrap_or(0.0)) * cam_rot;
         if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
             tf.translation = pos.extend(label_z);
-            tf.rotation = label_rot;
+            tf.rotation = rot;
             *text = Text2d::new(name);
             style.font_size = font_size.into();
             if let Some(f) = &cjk {
@@ -302,7 +324,7 @@ pub fn update_street_labels(
                 TextColor(label_color),
                 Transform {
                     translation: pos.extend(label_z),
-                    rotation: label_rot,
+                    rotation: rot,
                     ..Default::default()
                 },
                 Visibility::Visible,
@@ -493,7 +515,7 @@ mod tests {
         )];
         let mids = named_midpoints(&sources);
         assert_eq!(mids.len(), 1, "无名段不产生标注");
-        assert_eq!(mids[0].1, "户部巷");
+        assert_eq!(mids[0].2, "户部巷");
         assert!(
             (mids[0].0.x - 4.0).abs() < 1e-4 && (mids[0].0.y - 5.0).abs() < 1e-4,
             "中点应为 (4, 5)，实得 {:?}",
@@ -523,19 +545,19 @@ mod tests {
         )];
         let mids = named_midpoints(&sources);
         assert_eq!(mids.len(), 2);
-        assert!(mids[0].2.is_none(), "无窗段携带 None");
+        assert!(mids[0].3.is_none(), "无窗段携带 None");
         assert_eq!(
-            mids[1].2,
+            mids[1].3,
             Some(wv_core::TimeSpan::new(1850, 1912).unwrap()),
             "有窗段携带原窗口"
         );
         // 过滤语义与 label_visible_at 一致：窗口外（1912 起）不可见。
         assert!(
-            !wv_core::label_visible_at(None, mids[1].2.as_ref(), 1912),
+            !wv_core::label_visible_at(None, mids[1].3.as_ref(), 1912),
             "段窗口 [1850,1912)：t=1912 不可见（半开不含右）"
         );
         assert!(
-            wv_core::label_visible_at(None, mids[1].2.as_ref(), 1900),
+            wv_core::label_visible_at(None, mids[1].3.as_ref(), 1900),
             "段窗口 [1850,1912)：t=1900 可见"
         );
     }

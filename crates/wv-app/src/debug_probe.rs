@@ -52,3 +52,39 @@ pub fn apply_env_view_mode(mut view: ResMut<ViewState>) {
         info!("[wv] WV_FIELD → field_render = true（GPU 场管线）");
     }
 }
+
+/// `WV_DRILL=<map_id>`：工程加载完成后直接钻到指定图（一次）。
+///
+/// 城市级街名 / 标签摆位的实机验收要求「开机即在城市图」——双击钻入图标
+/// 的手势没法从命令行模拟，这是与 [`apply_env_view_mode`] 同族的图级探针。
+/// 轮询到目标图进入 `WorldProjection` 才动手（异步加载竞态），成败都只试
+/// 一次；`WV_DRILL` 未设置时首帧即永久退出，零开销。
+pub fn apply_env_drill(
+    mut state: Local<Option<String>>,
+    projection: Res<wv_render::state::WorldProjection>,
+    mut drill: ResMut<wv_render::state::DrillState>,
+) {
+    if state.is_none() {
+        *state = Some(
+            std::env::var("WV_DRILL")
+                .map(|raw| raw.trim().to_string())
+                .unwrap_or_default(),
+        );
+    }
+    let Some(target) = state.as_deref() else {
+        return;
+    };
+    if target.is_empty() {
+        return; // 未设置：永久退出（state 保留空串哨兵）
+    }
+    let id = wv_core::id::Id::new_unchecked(target);
+    if !projection.world.maps.iter().any(|m| m.id == id) {
+        return; // 世界还没加载完（后台线程），下一帧再看
+    }
+    if drill.drill_to(&projection.world, &id) {
+        info!("[wv] WV_DRILL → {target}");
+    } else {
+        warn!("[wv] WV_DRILL={target} drill_to 失败（悬空图？），忽略");
+    }
+    *state = Some(String::new());
+}
