@@ -52,4 +52,6 @@ pub mod region_panel_actions;
 #[cfg(feature = "app")]
 pub mod region_select;
 #[cfg(feature = "app")]
+pub mod road_sync;
+#[cfg(feature = "app")]
 pub mod validation_actions;

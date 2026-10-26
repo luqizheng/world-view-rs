@@ -81,6 +81,8 @@ fn push_cmd(
         Ok(dirty) => {
             edit.record_dirty(dirty);
             world.dirty = true;
+            // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+            crate::edit::road_sync::sync_derived_road_edges(&mut world.world);
             let _ = view;
         }
         Err(e) => {

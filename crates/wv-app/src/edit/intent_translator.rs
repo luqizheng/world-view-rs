@@ -56,6 +56,8 @@ pub fn translate_edit_intents(
             Ok(dirty) => {
                 edit.record_dirty(dirty);
                 projection.dirty = true;
+                // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+                crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
                 receipts.commit(seq);
             }
             Err(e) => bevy::log::warn!("街道编辑命令失败: {e}"),
@@ -94,6 +96,8 @@ pub fn translate_edit_intents(
             Ok(dirty) => {
                 edit.record_dirty(dirty);
                 projection.dirty = true;
+                // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+                crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
                 receipts.commit(seq);
             }
             Err(e) => bevy::log::warn!("作者小河命令失败: {e}"),
@@ -111,6 +115,8 @@ pub fn translate_edit_intents(
             Ok(dirty) => {
                 edit.record_dirty(dirty);
                 projection.dirty = true;
+                // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+                crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
                 receipts.commit(seq);
             }
             Err(e) => bevy::log::warn!("测量命令失败: {e}"),

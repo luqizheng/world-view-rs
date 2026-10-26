@@ -311,6 +311,8 @@ pub fn paint_edit_cell_on_drag(
             Ok(dirty) => {
                 edit.record_dirty(dirty);
                 projection.dirty = true;
+                // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+                crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
                 mark_dirty_cells(&mut tex, &changes);
             }
             Err(e) => bevy::log::warn!("连续绘制提交失败: {e}"),

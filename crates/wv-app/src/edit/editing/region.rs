@@ -80,6 +80,8 @@ pub fn commit_region_intent(
         Ok(dirty) => {
             edit.record_dirty(dirty);
             projection.dirty = true;
+            // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+            crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
             let after = projection
                 .world
                 .terrain_of(&map)
@@ -148,6 +150,8 @@ pub fn commit_continent_generation(
         Ok(dirty) => {
             edit.record_dirty(dirty);
             projection.dirty = true;
+            // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+            crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
             let after =
                 wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(&map))
                     .map(|t| (t.width.max(1), t.cells.clone()));

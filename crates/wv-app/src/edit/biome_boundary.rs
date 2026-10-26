@@ -222,6 +222,8 @@ pub fn biome_boundary_input(
                     Ok(dirty) => {
                         edit.record_dirty(dirty);
                         projection.dirty = true;
+                        // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+                        crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
                         for c in &cell_changes {
                             tex.mark_dirty([
                                 c.gx.max(0) as u32,

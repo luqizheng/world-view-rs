@@ -314,6 +314,8 @@ pub fn divide_faction_now(
         Ok(dirty) => {
             edit.record_dirty(dirty);
             world.dirty = true;
+            // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+            crate::edit::road_sync::sync_derived_road_edges(&mut world.world);
             let snapped = snapped_flag
                 .lock()
                 .map(|f| *f)
@@ -340,6 +342,8 @@ fn push_cmd(
         Ok(dirty) => {
             edit.record_dirty(dirty);
             world.dirty = true;
+            // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+            crate::edit::road_sync::sync_derived_road_edges(&mut world.world);
             // 提示：v0.2 暂不写盘（路线图阶段七），但 `dirty` 标记保证下
             // 次手动保存时一切就绪。
             let _ = view;

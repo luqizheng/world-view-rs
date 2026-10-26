@@ -115,6 +115,8 @@ pub fn commit_stroke_on_release(
         Ok(dirty) => {
             edit.record_dirty(dirty);
             projection.dirty = true;
+            // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+            crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
             // 增量重传（优化项 3d）：只标笔触影响矩形为脏，
             // `flush_terrain_texture` 会走 [`wv_render::terrain_view::patch_terrain_image`] 增量 patch。
             tex.mark_dirty(dirty_rect);

@@ -161,6 +161,8 @@ pub fn apply_reset_terrain_to_base(
         Ok(dirty) => {
             edit.record_dirty(dirty);
             projection.dirty = true;
+            // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+            crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
 
             let after =
                 wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(map_id))
@@ -211,6 +213,8 @@ pub fn apply_regen_world(
         Ok(dirty) => {
             edit.record_dirty(dirty);
             projection.dirty = true;
+            // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+            crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
 
             let after =
                 wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(map_id))
@@ -264,6 +268,8 @@ pub fn apply_clear_measurements(
         Ok(dirty) => {
             edit.record_dirty(dirty);
             projection.dirty = true;
+            // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+            crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
             Ok(format!("已清除 {count} 条测量"))
         }
         Err(e) => Err(format!("清除测量失败：{e}")),

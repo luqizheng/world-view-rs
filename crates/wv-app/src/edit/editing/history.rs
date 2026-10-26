@@ -56,6 +56,11 @@ pub fn apply_history_command_detailed(
     match result {
         Ok((true, _dirty_paths)) => {
             projection.dirty = true;
+            // ADR-0070 D5（T9）：撤销/重做会把命令整块回退（`cmd.revert`）或
+            // 重放（事务重 commit），地点与手写边随之回退/重放——推导边是
+            // 运行时投影，必须跟着重建，否则停在上一状态的陈旧投影上。
+            // 不进脏路径：derived 永不落盘（见 road_sync 模块文档）。
+            crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
             let after = wv_render::terrain_view::texture_terrain(tex, &projection.world, None)
                 .map(|t| (t.width.max(1), t.cells.clone()));
             let mut changed_cells = Vec::new();
