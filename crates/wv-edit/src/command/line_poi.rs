@@ -186,7 +186,8 @@ pub struct MigrationReport {
     pub converted_cells: usize,
     /// 链式合并成功落地的道路线 POI 条数。
     pub chains: usize,
-    /// 未能成线的链数（折线退化 / 端点无锚点）；其边仍被消费——见命令文档。
+    /// 未能成线的链数（折线退化 / 端点无锚点 / 自环 road 边 / 撞名完全
+    /// 重放）；其边仍被消费——见命令文档。
     pub chains_skipped: usize,
     /// 模板派生河转出的河线 POI 条数。
     pub rivers: usize,
@@ -249,9 +250,11 @@ pub fn needs_line_migration(world: &World) -> bool {
 /// ② **道路边链式合并**：只吃**手写** road 边（`terrain == "road"` 且
 ///    `!derived`）——derived 是运行时投影，不排除会把每次加载都变成重迁移；
 ///    从度数≠2 的节点出发穿过一切 2 度节点成链，≥3 度路口与端点为线端点；
-///    每链落一个 `Place { id: "road_mig_<端点A>_<端点B>", line_kind: Road }`，
-///    `rank` = 链上原边最高 `effective_rank`；**2 度中间节点保留不删**
-///    （计划钉死：它们是锚定节点，不是垃圾）；
+///    每链落一个 `Place { id: "road_mig_<端点A>_<端点B>", line_kind: Road }`
+///    （撞名时追加折线短哈希后缀，见「幂等」），`rank` = 链上原边最高
+///    `effective_rank`；**2 度中间节点保留不删**（计划钉死：它们是锚定
+///    节点，不是垃圾）；`a == b` 的**自环** road 边不成链（计入
+///    chains_skipped，边仍删除）；
 /// ③ 被合并的边从 `world.distances.edges` 删除（此后由推导边接管）；
 /// ④ **模板派生河转实体**：`meta.template.rivers_seed` 在场 ∧ 全工程无河线
 ///    POI 时，取第一张「有 extent 且有地形」的图跑
@@ -268,11 +271,14 @@ pub fn needs_line_migration(world: &World) -> bool {
 /// 仍在」重跑一遍——同一条路反复落实体。同一命令内原子完成，`needs_line_migration`
 /// 才能在一轮后转假。
 ///
-/// ## 幂等（评审 §2 收编）
+/// ## 幂等（评审 §2 收编；I1 撞名裁定修订）
 ///
-/// 链 / 河 Place 的 ID 确定性派生（端点 ID 字典序 / 模板序号）；apply 遇
-/// 同 ID 已存在 → 跳过不重复插（upsert 语义）。同一数据重导入重跑得到
-/// 同一批实体，不增殖。
+/// 链 / 河 Place 的 ID 确定性派生（端点 ID 字典序 / 模板序号 / 撞名后缀 =
+/// 折线坐标哈希）。apply 遇**基名已存在**（场上已有同 ID Place，如菱形
+/// 平行路的第二条链）→ 追加折线坐标 splitmix 短哈希后缀
+/// `road_mig_<A>_<B>_<h4>` 落实体——撞名的两条链**都落地**，不丢数据；
+/// **加后缀仍撞**（同端点同折线的完全重放）→ 跳过不重复插（upsert 不覆盖
+/// 既有实体；边照删保收敛）。同一数据重导入重跑得到同批实体，不增殖。
 ///
 /// ## 回滚
 ///
@@ -282,8 +288,10 @@ pub fn needs_line_migration(world: &World) -> bool {
 pub struct MigrateLegacyLineDataCommand {
     /// before 快照：被改格（分图）——`(map, gx, gy, old_cell)`。
     before_cells: std::sync::Mutex<Vec<(wv_core::Id, i32, i32, TerrainCellData)>>,
-    /// before 快照：被删的手写 road 边（revert 时原序追加回边表）。
-    before_edges: std::sync::Mutex<Vec<wv_core::map::distance::PlaceEdge>>,
+    /// before 快照：被删的手写 road 边，带**原下标**——revert 按下标升序
+    /// 插回，undo 后边表顺序与迁移前逐位一致（评审 M1；含非 road 边的
+    /// 相对位置）。
+    before_edges: std::sync::Mutex<Vec<(usize, wv_core::map::distance::PlaceEdge)>>,
     /// before 快照：本次 apply **真正新插入**的 Place ID（revert 只删这些，
     /// upsert 跳过的不算）。
     added_places: std::sync::Mutex<Vec<wv_core::Id>>,
@@ -356,6 +364,28 @@ fn walk_chain(
         cur = (*next_node).clone();
     }
     (nodes, edges_used)
+}
+
+/// 链折线坐标的确定性短哈希（16 bit，`{:04x}`）——链 ID 撞名后缀（评审 I1）。
+///
+/// 每个折点的 `(x, y)` 以 f32 位型喂 `wv_terrain::hash::cell_hash01`
+/// （逐格哈希当混入函数，裁定指定），逐点折进单个 u64 累积器，末端
+/// splitmix64 收尾取低 16 位。同折线必同后缀（可重放）；16 bit 空间下
+/// 异折线极小概率同后缀，撞了也只是走「跳过不重插」，无数据损失。
+fn chain_id_h4(pts: &[(f32, f32)]) -> String {
+    let mut acc: u64 = 0x9E37_79B9_7F4A_7C15;
+    for (i, &(x, y)) in pts.iter().enumerate() {
+        let h = wv_terrain::hash::cell_hash01(x.to_bits() as i64, y.to_bits() as i64, i as u64);
+        acc = (acc ^ (h.to_bits() as u64)).rotate_left(17);
+    }
+    // splitmix64 收尾（常量与 wv_terrain::climate 的格哈希同族）。
+    let mut z = acc;
+    z ^= z >> 30;
+    z = z.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z ^= z >> 27;
+    z = z.wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    format!("{:04x}", z & 0xFFFF)
 }
 
 impl EditCommand for MigrateLegacyLineDataCommand {
@@ -432,14 +462,19 @@ impl EditCommand for MigrateLegacyLineDataCommand {
 
         // ── ② 链式合并：先在不可变借用上把链与 Place 候选算完，再动表 ──
         // 只吃手写 road 边（derived 是运行时投影，见类型文档）。
-        let hand_road: Vec<usize> = world
-            .distances
-            .edges
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| e.terrain == "road" && !e.derived)
-            .map(|(i, _)| i)
-            .collect();
+        // 自环（a == b）单独收走（评审 M3）：进邻接表会把端点度数虚增 2、
+        // 走链也会原地打转出零长退化线——不成链，直接消费。
+        let mut hand_road: Vec<usize> = Vec::new();
+        let mut self_loops: Vec<usize> = Vec::new();
+        for (i, e) in world.distances.edges.iter().enumerate() {
+            if e.terrain == "road" && !e.derived {
+                if e.a == e.b {
+                    self_loops.push(i);
+                } else {
+                    hand_road.push(i);
+                }
+            }
+        }
         let mut adj: RoadAdj<'_> = Default::default();
         for &i in &hand_road {
             let e = &world.distances.edges[i];
@@ -491,9 +526,13 @@ impl EditCommand for MigrateLegacyLineDataCommand {
         }
 
         // 链 → 线段 POI 候选（仍在不可变借用里算）。
-        let mut consumed: Vec<usize> = Vec::new();
+        let mut consumed: Vec<usize> = self_loops.clone();
+        report.chains_skipped += self_loops.len();
         let mut new_places: Vec<Place> = Vec::new();
         let mut added_ids: Vec<wv_core::Id> = Vec::new();
+        // 占名判据含**本批已暂存**的候选：同一轮里撞名的第二条链（菱形
+        // 平行路）必须看到第一条链的基名，否则两条会同 ID 双插（评审 I1）。
+        let mut staged_ids: Vec<String> = Vec::new();
         for (nodes, edges) in &chains {
             consumed.extend(edges.iter().copied());
             // 折线 = 途经节点锚点连线（2 度节点即中间折点，effective_anchor）。
@@ -518,16 +557,34 @@ impl EditCommand for MigrateLegacyLineDataCommand {
             } else {
                 (last, first)
             };
-            let id_str = format!("road_mig_{}_{}", lo.as_str(), hi.as_str());
-            // 幂等（评审 §2 收编）：同 ID 已存在 → 跳过不重复插（边照删）。
+            let base_id = format!("road_mig_{}_{}", lo.as_str(), hi.as_str());
+            // 撞名（评审 I1 裁定：数据完整优先）：基名已被占（场上实体或本批
+            // 暂存候选）→ 追加折线短哈希后缀再落实体，两条链都落地不丢数据；
+            // 加后缀仍撞（同端点同折线的完全重放）→ 跳过不重插——upsert 不
+            // 覆盖既有实体，边照删保收敛。
+            let id_str = if world
+                .distances
+                .places
+                .iter()
+                .any(|p| p.id.as_str() == base_id)
+                || staged_ids.iter().any(|s| s == &base_id)
+            {
+                let h4 = chain_id_h4(&pts);
+                format!("{}_{}", base_id, h4)
+            } else {
+                base_id
+            };
             if world
                 .distances
                 .places
                 .iter()
                 .any(|p| p.id.as_str() == id_str)
+                || staged_ids.iter().any(|s| s == &id_str)
             {
+                report.chains_skipped += 1;
                 continue;
             }
+            staged_ids.push(id_str.clone());
             // 链的呈现级别 = 链上原边最高 effective_rank（与 PlaceEdge 同一张
             // 冻结表折算——迁移前后全国/区域档路网显隐零回归）。
             let rank = edges
@@ -550,9 +607,14 @@ impl EditCommand for MigrateLegacyLineDataCommand {
             } else {
                 format!("迁移道路 {}–{}", lo.as_str(), hi.as_str())
             };
-            added_ids.push(wv_core::Id::new_unchecked(id_str.clone()));
+            // M2：走受校验构造。端点均为受校验 Id、后缀是十六进制，字符集
+            // 必合法；带原串的 panic 仅作不变式哨兵（不可达）。
+            let id = wv_core::Id::new(id_str.clone()).unwrap_or_else(|e| {
+                panic!("链 ID `{id_str}` 构造失败：{e:?}（端点为受校验 Id，理应不可能）")
+            });
+            added_ids.push(id.clone());
             new_places.push(Place {
-                id: wv_core::Id::new_unchecked(id_str),
+                id,
                 name,
                 feature: None,
                 map,
@@ -572,7 +634,8 @@ impl EditCommand for MigrateLegacyLineDataCommand {
             report.chains += 1;
         }
 
-        // ── ③ 删除被合并的边（降序删，下标不漂移）+ 记 before ──
+        // ── ③ 删除被合并的边（降序删，下标不漂移）+ 记 before（带原下标，
+        //    revert 按下标升序插回——评审 M1）──
         consumed.sort_unstable();
         consumed.dedup();
         {
@@ -582,7 +645,7 @@ impl EditCommand for MigrateLegacyLineDataCommand {
                 .map_err(|_| EditError::Precondition("命令锁中毒".into()))?;
             for &i in consumed.iter().rev() {
                 if let Some(e) = world.distances.edges.get(i) {
-                    before_edges.push(e.clone());
+                    before_edges.push((i, e.clone()));
                 }
             }
         }
@@ -644,7 +707,10 @@ impl EditCommand for MigrateLegacyLineDataCommand {
                         {
                             continue;
                         }
-                        let id = wv_core::Id::new_unchecked(id_str);
+                        // M2：受校验构造，同链 ID 哨兵语义（`river_tpl_NN`
+                        // 必合法，不可达分支）。
+                        let id = wv_core::Id::new(id_str.clone())
+                            .unwrap_or_else(|e| panic!("河 ID `{id_str}` 构造失败：{e:?}"));
                         added_ids.push(id.clone());
                         world.distances.places.push(Place {
                             id,
@@ -718,13 +784,24 @@ impl EditCommand for MigrateLegacyLineDataCommand {
                 }
             }
         }
-        // ② 恢复被删边（apply 未跑过 → 空 Vec → 原样）。
-        let before_edges = self
+        // ② 恢复被删边（评审 M1）：先摘掉**现存**被删边（防重复 revert 时
+        //    同 ID 双份），再按**原下标**升序插回——undo 后边表与迁移前逐位
+        //    一致（含非 road 边的相对位置）。apply 未跑过 → 空 Vec → 原样。
+        let mut before_edges = self
             .before_edges
             .lock()
             .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
             .clone();
-        world.distances.edges.extend(before_edges);
+        before_edges.sort_by_key(|(i, _)| *i);
+        for (_, e) in &before_edges {
+            if let Some(pos) = world.distances.edges.iter().position(|x| x.id == e.id) {
+                world.distances.edges.remove(pos);
+            }
+        }
+        for (i, e) in before_edges {
+            let at = i.min(world.distances.edges.len());
+            world.distances.edges.insert(at, e);
+        }
         // ③ 删除新增 Place（只删 apply 真正插过的；upsert 跳过的不在此列）。
         let added = self
             .added_places
@@ -1055,6 +1132,21 @@ mod migration_tests {
     #[test]
     fn migration_undo_restores_original_cells_and_edges() {
         let mut w = cross_world();
+        // 夹具增强（评审 M1）：road 边之间插一条非 road 边——undo 后它的
+        // 相对位置也必须逐位复原，不能只看「同集合」。
+        w.distances.edges.insert(
+            2,
+            wv_core::map::distance::PlaceEdge {
+                id: vid("e_sea"),
+                a: vid("north_end"),
+                b: vid("south_end"),
+                distance_km: 200.0,
+                terrain: "sea".into(),
+                bidirectional: true,
+                rank: None,
+                derived: false,
+            },
+        );
         w.terrains.get_mut(&vid(MIG_MAP)).expect("有地形").cells[2].biome = BIOME_RIVER;
         w.terrains.get_mut(&vid(MIG_MAP)).expect("有地形").cells[8].biome = BIOME_ROAD;
         let terrain_before = w.terrains[&vid(MIG_MAP)].clone();
@@ -1085,6 +1177,12 @@ mod migration_tests {
                 e.id
             );
         }
+        // 顺序逐位复原（评审 M1）：整表相等而非仅同集合——含非 road 边的
+        // 相对位置（e_sea 须回到下标 2）。
+        assert_eq!(
+            w.distances.edges, edges_before,
+            "undo 后边表应与迁移前逐位一致"
+        );
     }
 
     /// apply → revert → 再 apply：链 ID 确定性（端点字典序）⇒ 迁移 Place 数
@@ -1111,6 +1209,142 @@ mod migration_tests {
             first,
             "apply→revert→apply 的迁移 Place 数应与首跑相等"
         );
+    }
+
+    /// 菱形平行路（评审 I1）：两枢纽各经不同中继的两条路——链基名撞名时
+    /// 第二条链加折线短哈希后缀落实体，**两条都存活**（旧实现静默跳过 =
+    /// 第二条链的边被删而无线替代）；原 4 条平行路边全删；再跑一遍幂等
+    /// 不增殖。
+    ///
+    /// 夹具注：枢纽各接一条码头支路，使枢纽的路网度数 ≠ 2——纯 4 边菱形
+    /// 全节点度 2，走「纯环」分支（单闭合链，见 ADR-0070 §4.6 TODO），
+    /// 而撞名场景的前提是枢纽成路口。
+    #[test]
+    fn parallel_route_chains_both_survive_migration() {
+        let mut w = flat_world();
+        w.distances.places = vec![
+            mig_point("hub_a", 64.0, 64.0),
+            mig_point("hub_b", 192.0, 192.0),
+            mig_point("relay_n", 192.0, 64.0),
+            mig_point("relay_s", 64.0, 192.0),
+            mig_point("dock_a", 16.0, 64.0),
+            mig_point("dock_b", 192.0, 240.0),
+        ];
+        w.distances.edges = vec![
+            road_edge("e_an", "hub_a", "relay_n", 128.0),
+            road_edge("e_nb", "relay_n", "hub_b", 128.0),
+            road_edge("e_as", "hub_a", "relay_s", 128.0),
+            road_edge("e_sb", "relay_s", "hub_b", 128.0),
+            road_edge("e_da", "dock_a", "hub_a", 48.0),
+            road_edge("e_bd", "hub_b", "dock_b", 48.0),
+        ];
+
+        let rep = migrate(&mut w);
+        assert_eq!(rep.chains, 4, "两平行链 + 两支路链应全落地，实得 {:?}", rep);
+        assert_eq!(
+            rep.chains_skipped, 0,
+            "撞名走后缀，不得跳过，实得 {:?}",
+            rep
+        );
+        assert_eq!(
+            rep.deleted_edges, 6,
+            "六条手写边全消费（含原 4 条平行路边），实得 {:?}",
+            rep
+        );
+        assert!(
+            w.distances.edges.is_empty(),
+            "原 4 条平行路边应全删，实得 {:?}",
+            w.distances.edges
+        );
+
+        // 基名恰一条 + 带后缀恰一条：撞名的两条链都落实体。
+        let base_id = "road_mig_hub_a_hub_b";
+        let base_cnt = w
+            .distances
+            .places
+            .iter()
+            .filter(|p| p.id.as_str() == base_id)
+            .count();
+        assert_eq!(base_cnt, 1, "基名链应恰一条，实得 {}", base_cnt);
+        let base = w
+            .distances
+            .places
+            .iter()
+            .find(|p| p.id.as_str() == base_id)
+            .expect("基名链在场");
+        let suffixed = w
+            .distances
+            .places
+            .iter()
+            .find(|p| p.id.as_str().starts_with(&format!("{}_", base_id)))
+            .expect("第二条链应带哈希后缀落实体");
+        let line_of = |p: &Place| p.line.clone().expect("有折线");
+        let (lb, ls) = (line_of(base), line_of(suffixed));
+        let ends = |l: &[f32]| (l[0], l[1], l[l.len() - 2], l[l.len() - 1]);
+        assert_eq!(ends(&lb), ends(&ls), "两链端点应相同（hub_a/hub_b 锚点）",);
+        assert_ne!(lb, ls, "两链折线应不同（各经不同中继）");
+
+        // 再跑一遍（手写边已清空 → 空转）：幂等不增殖。
+        let before_cnt = w
+            .distances
+            .places
+            .iter()
+            .filter(|p| p.id.as_str().starts_with("road_mig_"))
+            .count();
+        let cmd = MigrateLegacyLineDataCommand::new();
+        let dirty = cmd.apply(&mut w).expect("二次迁移应空转成功");
+        assert!(
+            !dirty.iter().any(|d| d == "distances/places"),
+            "空转不得标脏 places，实得 {:?}",
+            dirty
+        );
+        let after_cnt = w
+            .distances
+            .places
+            .iter()
+            .filter(|p| p.id.as_str().starts_with("road_mig_"))
+            .count();
+        assert_eq!(
+            after_cnt, before_cnt,
+            "幂等：二次迁移不得增殖，实得 {} → {}",
+            before_cnt, after_cnt
+        );
+    }
+
+    /// 自环 road 边（评审 M3）：`a == a` 不成链（零长退化线无意义），计入
+    /// chains_skipped，边仍被删除（留着会让 needs_line_migration 永真）。
+    #[test]
+    fn self_loop_road_edges_are_skipped_and_counted() {
+        let mut w = flat_world();
+        w.distances.places = vec![mig_point("loop_town", 128.0, 128.0)];
+        w.distances.edges = vec![road_edge("e_loop", "loop_town", "loop_town", 5.0)];
+        assert!(needs_line_migration(&w), "自环手写 road 边在场应判定需迁移");
+
+        let rep = migrate(&mut w);
+        assert!(
+            rep.chains_skipped >= 1,
+            "自环应计入 skipped，实得 {:?}",
+            rep
+        );
+        assert_eq!(rep.chains, 0, "自环不得成链，实得 {:?}", rep);
+        assert!(
+            w.distances
+                .places
+                .iter()
+                .all(|p| !p.id.as_str().starts_with("road_mig_")),
+            "不得产 road_mig_a_a 实体，实得 {:?}",
+            w.distances
+                .places
+                .iter()
+                .map(|p| p.id.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            w.distances.edges.is_empty(),
+            "自环边应被删除，实得 {:?}",
+            w.distances.edges
+        );
+        assert!(!needs_line_migration(&w), "迁移后应收敛");
     }
 
     /// `terrain == "sea"` 的边是非道路连接：迁移原样保留。
