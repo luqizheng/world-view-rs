@@ -41,16 +41,16 @@ pub const CORE_TERRAIN: [Color; 10] = [
     hex(0xC8A272), // 9 道路
 ];
 
-/// Google 底图十色（`colors_google::GOOGLE_CORE_TERRAIN` 抄录）。
+/// Google 底图十色（`colors_google::GOOGLE_CORE_TERRAIN` 抄录；2026-10-26 随专业色彩二轮同步）。
 pub const GOOGLE_CORE_TERRAIN: [Color; 10] = [
-    hex(0x9FC7EF), // 0 深水
+    hex(0xA6CFF3), // 0 深水
     hex(0xAADAFF), // 1 浅水
-    hex(0xF8F9FA), // 2 沙（基础陆地）
-    hex(0xF3F2EE), // 3 草原
+    hex(0xF7F5F0), // 2 沙（基础陆地，暖近白）
+    hex(0xF5F3EC), // 3 草原
     hex(0xC9E7C7), // 4 森林
-    hex(0xEFEDE7), // 5 丘陵
-    hex(0xE8E5DE), // 6 山地
-    hex(0xFBFBFA), // 7 雪
+    hex(0xEFECE4), // 5 丘陵
+    hex(0xE8E4DA), // 6 山地
+    hex(0xFBFAF7), // 7 雪
     hex(0xBBDCC9), // 8 沼泽
     hex(0xFFFFFF), // 9 道路
 ];

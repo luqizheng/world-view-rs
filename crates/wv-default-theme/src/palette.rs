@@ -275,6 +275,9 @@ mod tests {
     ///
     /// 这些值取自百度 / Google 普通地图，是「专业制图」的视觉契约——改了它们
     /// 就是改了本软件的默认观感（ADR-0066）。
+    ///
+    /// **2026-10-26 二轮**：陆地 / 纸面由纯白 `#F8F9FA` 改为暖近白 `#F7F5F0`
+    /// （白路与白描边需要一层有温度的底才不糊）；其余六色不变。
     #[test]
     fn professional_palette_user_pinned_hexes_are_stable() {
         let f = |c: Color| -> [u8; 3] {
@@ -289,10 +292,10 @@ mod tests {
         };
         let p = PaletteColors::DEFAULT;
         assert_eq!(f(p.core[1]), [0xAA, 0xDA, 0xFF], "浅水");
-        assert_eq!(f(p.core[2]), [0xF8, 0xF9, 0xFA], "近白陆地");
+        assert_eq!(f(p.core[2]), [0xF7, 0xF5, 0xF0], "暖近白陆地");
         assert_eq!(f(p.core[4]), [0xC9, 0xE7, 0xC7], "公园绿");
         assert_eq!(f(p.core[8]), [0xBB, 0xDC, 0xC9], "湿绿");
-        assert_eq!(f(p.soften_toward), [0xF8, 0xF9, 0xFA], "近白纸面");
+        assert_eq!(f(p.soften_toward), [0xF7, 0xF5, 0xF0], "暖近白纸面");
         assert_eq!(f(p.street_major), [0xFF, 0xFF, 0xFF], "道路白填充");
         assert_eq!(f(p.road_casing), [0xDA, 0xDC, 0xE0], "路缘灰");
         assert_eq!(f(p.label_fill), [0x3C, 0x40, 0x43], "注记深灰");

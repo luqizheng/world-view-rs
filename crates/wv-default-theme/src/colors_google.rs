@@ -18,9 +18,14 @@
 //! ## 色值口径
 //!
 //! 色值取 Google Maps Default Map 的公共视觉特征，而非逐像素提取商标 UI：
-//! 近白陆地 `#f8f9fa`、淡水 `#aadaff`、绿地 `#c9e7c7`、深水略压暗
-//! `#9fc7ef`、道路 fill 白色、道路 casing 浅灰 `#dadce0`、文字灰
-//! `#3c4043`、Google 红 POI `#ea4335`。
+//! **暖近白陆地** `#f7f5f0`（比纯白低一档，白路与注记才有落脚的底）、
+//! 淡水 `#aadaff`、绿地 `#c9e7c7`、深水略压暗 `#a6cff3`、道路 fill 白色、
+//! 道路 casing 浅灰 `#dadce0`、文字灰 `#3c4043`、Google 红 POI `#ea4335`。
+//!
+//! **2026-10-26 专业色彩二轮**：陆地由 `#f8f9fa` 改为暖近白、深水提亮收窄
+//! 深浅差（原 `#9fc7ef` 让海面像一整块色板，岸边一圈发光）、海岸线回到
+//! 样张图例的 `#7FBEEA`。改动的共同目的：让「底图—水面—要素」三层的明度
+//! 关系更像普通地图，而不是三块高饱和色块拼在一起。
 
 use bevy::prelude::*;
 
@@ -38,14 +43,14 @@ const fn hex(rgb: u32) -> Color {
 /// Google 的普通地图不按海拔分带上色；`shade_google` 会把沙 / 草 / 丘 / 山 /
 /// 雪等陆上类折叠到 `[2]`。这里仍为每档给出可辨识值，供未来专题图或调试使用。
 pub const GOOGLE_CORE_TERRAIN: [Color; 10] = [
-    hex(0x9FC7EF), // 0 water_deep     深水（水色压暗）
+    hex(0xA6CFF3), // 0 water_deep     深水（水色压暗，与浅水只差一档）
     hex(0xAADAFF), // 1 water_shallow  浅水
-    hex(0xF8F9FA), // 2 sand           Google Default 的基础陆地
-    hex(0xF3F2EE), // 3 grass          草原（普通地图折叠为基础陆地）
+    hex(0xF7F5F0), // 2 sand           基础陆地（暖近白）
+    hex(0xF5F3EC), // 3 grass          草原（普通地图折叠为基础陆地）
     hex(0xC9E7C7), // 4 forest         公园 / 绿地
-    hex(0xEFEDE7), // 5 hill           丘陵（普通地图折叠为基础陆地）
-    hex(0xE8E5DE), // 6 mountain       山地（普通地图折叠为基础陆地）
-    hex(0xFBFBFA), // 7 snow           雪线（普通地图折叠为基础陆地）
+    hex(0xEFECE4), // 5 hill           丘陵（普通地图折叠为基础陆地）
+    hex(0xE8E4DA), // 6 mountain       山地（普通地图折叠为基础陆地）
+    hex(0xFBFAF7), // 7 snow           雪线（普通地图折叠为基础陆地）
     hex(0xBBDCC9), // 8 marsh          湿地 / 沼泽
     hex(0xFFFFFF), // 9 road           道路基色（矢量层另有 fill/casing）
 ];
@@ -147,8 +152,8 @@ pub const GOOGLE_LABEL_FILL: Color = hex(0x3C4043);
 pub const GOOGLE_LABEL_REGION: Color = hex(0x202124);
 /// 海名文字色：蓝灰（Google 海名带蓝相）。
 pub const GOOGLE_LABEL_WATER: Color = hex(0x4A6B8A);
-/// 底图淡化目标色：近白纸面（专业制图不做「向纸面洗」的旧语汇）。
-pub const GOOGLE_PAPER: Color = hex(0xF8F9FA);
+/// 底图淡化目标色：暖近白纸面（与陆地同色；专业制图不做「向纸面洗」的旧语汇）。
+pub const GOOGLE_PAPER: Color = hex(0xF7F5F0);
 /// 底图淡化保留比例：专业制图几乎不洗（0.96 = 极轻），保留要素可读性。
 pub const GOOGLE_SOFTEN_KEEP: f32 = 0.96;
 /// 等值线 / 类型边界墨色：中性灰（专业制图不画「墨线」，只留结构边）。
@@ -173,42 +178,49 @@ pub const GOOGLE_ICE_SHADOW: Color = hex(0xD2E3FC);
 pub const GOOGLE_LINE_ON_LIGHT: Color = hex(0xDADCE0);
 pub const GOOGLE_LINE_ON_MID: Color = hex(0x9AA0A6);
 pub const GOOGLE_LINE_ON_DARK: Color = hex(0x5F6368);
-/// 事件图极简底图：近白。
-pub const GOOGLE_EVENT_BACKDROP: Color = hex(0xF8F9FA);
-/// 最深水位：比浅水压一档。
-pub const GOOGLE_DEEP_OCEAN_BLUE: Color = hex(0x9FC7EF);
+/// 事件图极简底图：暖近白（与陆地同色）。
+pub const GOOGLE_EVENT_BACKDROP: Color = hex(0xF7F5F0);
+/// 最深水位：比浅水只压一档（原 #9FC7EF 与浅水差过大，岸边会读成一圈光晕）。
+pub const GOOGLE_DEEP_OCEAN_BLUE: Color = hex(0xA6CFF3);
 /// 近岸浅滩色：浅水。
 pub const GOOGLE_WATER_SHORE: Color = hex(0xAADAFF);
 // ── 海拔色带（ADR-0067 D3）──
 //
-// 专业制图的山地表达：8 阶**暖中性灰阶**——从近白陆地（#F8F9FA）逐阶压向
+// 专业制图的山地表达：8 阶**暖岩色**——从暖近白陆地（#F7F5F0）逐阶压向
 // 深岩褐，明度单调下降。
 //
 // 为什么是「近白 → 深褐」而不是 CellMap 的「深绿 → 近纸白」：
 // CellMap 的色带是**数据视图**（低 = 深绿、高 = 近白，因为它要跟「低地=绿」
-// 的直觉对齐）；专业制图的底图是**近白陆地**（Google 普通地图不按海拔分色），
-// 色带若也从深绿起步，整幅图会变成「一片绿的海」——底图的克制被破坏。
+// 的直觉对齐）；专业制图的底图是**暖近白陆地**（Google 普通地图不按海拔
+// 分色），色带若也从深绿起步，整幅图会变成「一片绿的海」——底图的克制被破坏。
 //
 // 所以专业制图取**反方向**：低地仍是近白（与底色一体），越往高处越沉。
 // 这样「山」在图上表现为**离陆地色更远的一块**，而不是另一片彩色。
+//
+// **2026-10-26 二轮**：旧色带偏中性灰（末阶 #6B645E），叠在暖白底上读成
+// 「脏灰抹痕」；改为同明度的暖岩褐（末阶 #877053），与底图同色温。
 
-/// 专业制图海拔色带（sRGB，低 → 高 = 近白 → 深岩褐）。8 阶。
+/// 专业制图海拔色带（sRGB，低 → 高 = 暖近白 → 深岩褐）。8 阶。
+///
+/// **实际混入量 = `GOOGLE_ELEVATION_STRENGTH × 阶权重`**（权重见
+/// `wv_world_cell_map::terrain_view::hypsometric::BAND_WEIGHT`）：第 0 阶
+/// 完全不混，低地保持群系本色（公园绿不被洗白）。
 pub const GOOGLE_ELEVATION_RAMP: [[u8; 3]; 8] = [
-    [0xF8, 0xF9, 0xFA], // 0 < 200m    近白（与底色同）
-    [0xEF, 0xEE, 0xEA], // 1 200–500
-    [0xE3, 0xE0, 0xD8], // 2 500–1000
-    [0xD4, 0xCF, 0xC4], // 3 1000–1500
-    [0xC2, 0xBB, 0xAE], // 4 1500–2500
-    [0xAB, 0xA2, 0x95], // 5 2500–4000
-    [0x8E, 0x86, 0x7C], // 6 4000–6000
-    [0x6B, 0x64, 0x5E], // 7 ≥6000m    深岩褐
+    [0xF7, 0xF5, 0xF0], // 0 < 200m    暖近白（与底色同）
+    [0xF2, 0xEE, 0xE5], // 1 200–500
+    [0xE9, 0xE1, 0xD2], // 2 500–1000
+    [0xDD, 0xD1, 0xBA], // 3 1000–1500
+    [0xCD, 0xBB, 0x9F], // 4 1500–2500
+    [0xB9, 0xA3, 0x84], // 5 2500–4000
+    [0xA1, 0x89, 0x6A], // 6 4000–6000
+    [0x87, 0x70, 0x53], // 7 ≥6000m    深岩褐
 ];
 
 /// 海拔色带混入底色的强度上限（ADR-0067 D3）。
 ///
-/// 色带是**辅助**信息——底图仍以「近白陆地 + 要素」为主。强度过高会让地图
-/// 变成地形图，要素（道路 / 注记 / POI）被压掉。0.62 = 高地能读出是山，
-/// 但要素仍然压在它上面。
+/// 色带是**辅助**信息——底图仍以「暖近白陆地 + 要素」为主。强度过高会让地图
+/// 变成地形图，要素（道路 / 注记 / POI）被压掉。0.62 是最高阶的上限；
+/// 低阶按 `BAND_WEIGHT` 递减到 0（见色带常量的说明）。
 pub const GOOGLE_ELEVATION_STRENGTH: f32 = 0.62;
 
 /// 地图控件底色：白卡片。它是地图体验的一部分，不跟随暗色软件壳。
@@ -223,9 +235,12 @@ pub const GOOGLE_CONTROL_ACTIVE: Color = hex(0xE8F0FE);
 /// Google 式浅色轮廓图水面。
 pub const GOOGLE_COAST_WATER: Color = hex(0xAADAFF);
 /// Google 式浅色轮廓图陆地。
-pub const GOOGLE_COAST_LAND: Color = hex(0xF8F9FA);
-/// Google 式浅色轮廓图海岸线。
-pub const GOOGLE_COAST_LINE_COLOR: Color = hex(0x9AA0A6);
+pub const GOOGLE_COAST_LAND: Color = hex(0xF7F5F0);
+/// Google 式浅色轮廓图海岸线（样张图例「水 · 面 #AADAFF / 线 7FBEEA」）。
+///
+/// 2026-10-26 由中性灰 `#9AA0A6` 改回图例的蓝：普通地图的水岸线是**水色
+/// 加深一档**，灰线读起来像行政边界而不是水陆分界。
+pub const GOOGLE_COAST_LINE_COLOR: Color = hex(0x7FBEEA);
 
 /// 专业制图的行政 / 势力边界线（样张图例「边界 · 虚线 #C4C4C4」）。
 ///
@@ -260,7 +275,7 @@ pub const GOOGLE_POI_EDUCATION: Color = hex(0x3949AB);
 pub const GOOGLE_POI_SHOP: Color = hex(0xC2185B);
 
 /// 兼容旧调用的淡化目标色；Google 模式实际会忽略淡化开关，避免洗掉水色。
-pub const GOOGLE_SOFTEN_TOWARD: Color = hex(0xF8F9FA);
+pub const GOOGLE_SOFTEN_TOWARD: Color = hex(0xF7F5F0);
 
 /// 取地形基色；越界回退湿地色，可辨识且不 panic。
 pub fn google_core_terrain(kind: u8) -> Color {
@@ -289,7 +304,7 @@ mod tests {
     #[test]
     fn hex_values_match_google_default_map() {
         // 抽查 Default Map 关键色是否落到位（防手工输错 hex 的回归）：
-        //   water = #aadaff,  land = #f8f9fa,  park = #c9e7c7,  road fill = #ffffff
+        //   water = #aadaff,  land = #f7f5f0,  park = #c9e7c7,  road fill = #ffffff
         let expect = |c: Color, rgb: u32| -> [f32; 3] {
             let Color::Srgba(s) = c else {
                 panic!("应为 Srgba")
@@ -306,7 +321,7 @@ mod tests {
             ]
         };
         let water = expect(GOOGLE_CORE_TERRAIN[1], 0xAADAFF);
-        let land = expect(GOOGLE_CORE_TERRAIN[2], 0xF8F9FA);
+        let land = expect(GOOGLE_CORE_TERRAIN[2], 0xF7F5F0);
         let park = expect(GOOGLE_CORE_TERRAIN[4], 0xC9E7C7);
         let road = expect(GOOGLE_ROAD_FILL, 0xFFFFFF);
         for (name, err) in [

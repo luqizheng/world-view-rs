@@ -192,6 +192,18 @@ pub struct ElevationBand {
     pub strength: f32,
 }
 
+/// 各阶的**混入权重**（`strength` 的倍率，低 → 高）。
+///
+/// 第 0 阶必须是 `0.0`：色带首色与专业制图的近白底图同色，若照样按
+/// `strength` 混入，会把**低地上的群系色**（公园绿 `#C9E7C7` / 湿绿）整体
+/// 洗向近白——2026-10-26 实机截图里绿地退成 `#E6F2E6` 正是这个原因
+/// （0.62 的近白混入 = 绿地只剩 38% 本色）。色带只该在「真山」上出现，
+/// 低地保持群系本色。
+///
+/// 中段略高于线性（约 `band/7` 的 0.8 次幂），让丘陵带仍有可读的起伏；
+/// 写成常量表是为了避开逐格 `powf`（烘焙是百万格级的热循环）。
+const BAND_WEIGHT: [f32; BANDS] = [0.0, 0.26, 0.41, 0.55, 0.67, 0.79, 0.90, 1.0];
+
 impl ElevationBand {
     /// 某一阶的色（sRGB 0–1）。
     fn ramp_rgb(&self, band: usize) -> [f32; 3] {
@@ -203,13 +215,21 @@ impl ElevationBand {
         ]
     }
 
-    /// 把色带色按 `strength` 叠到基色上（sRGB 空间混合，同 [`tint_rgba`] 口径）。
+    /// 把色带色按 `strength × 阶权重` 叠到基色上（sRGB 空间混合，同
+    /// [`tint_rgba`] 口径）。
+    ///
+    /// 权重见 [`BAND_WEIGHT`]：低地权重为 0（原色不动），越高越接近
+    /// `strength`——「色带读高」与「低地读群系」互不干扰。
     pub fn tint(&self, base: [f32; 4], height: i16) -> [f32; 4] {
-        let t = self.strength.clamp(0.0, 1.0);
-        if t == 0.0 {
+        let strength = self.strength.clamp(0.0, 1.0);
+        if strength == 0.0 {
             return base;
         }
         let band = band_of(height, &self.cuts);
+        let t = strength * BAND_WEIGHT[band];
+        if t == 0.0 {
+            return base;
+        }
         let ramp = self.ramp_rgb(band);
         [
             base[0] + (ramp[0] - base[0]) * t,
@@ -371,6 +391,74 @@ mod tests {
         for i in 0..3 {
             let expect = base[i] + (want[i] - base[i]) * 0.5;
             assert!((mid[i] - expect).abs() < 1e-6);
+        }
+    }
+
+    /// 风格色带的低地（第 0 阶）**原色不动**：色带首色与底图同色，
+    /// 若按 `strength` 直接混入，公园绿会被洗成 `#E6F2E6` 的灰绿
+    /// （2026-10-26 实机发现的色彩缺陷）。
+    #[test]
+    fn elevation_band_leaves_lowland_biome_color_untouched() {
+        let band = ElevationBand {
+            ramp: [
+                [0xF8, 0xF9, 0xFA],
+                [0xF2, 0xEE, 0xE5],
+                [0xE9, 0xE1, 0xD2],
+                [0xDD, 0xD1, 0xBA],
+                [0xCD, 0xBB, 0x9F],
+                [0xB9, 0xA3, 0x84],
+                [0xA1, 0x89, 0x6A],
+                [0x87, 0x70, 0x53],
+            ],
+            cuts: DOMAIN_CUTS,
+            strength: 0.62,
+        };
+        let park = [
+            0xC9 as f32 / 255.0,
+            0xE7 as f32 / 255.0,
+            0xC7 as f32 / 255.0,
+            1.0,
+        ];
+        assert_eq!(
+            band.tint(park, 50),
+            park,
+            "50 m 低地属第 0 阶，色带不得改动群系本色"
+        );
+    }
+
+    /// 混入量随阶单调增大：越高越接近色带色，且第 0 阶严格不混。
+    #[test]
+    fn elevation_band_tint_grows_with_band() {
+        let ramp = [
+            [0xF8, 0xF9, 0xFA],
+            [0xF2, 0xEE, 0xE5],
+            [0xE9, 0xE1, 0xD2],
+            [0xDD, 0xD1, 0xBA],
+            [0xCD, 0xBB, 0x9F],
+            [0xB9, 0xA3, 0x84],
+            [0xA1, 0x89, 0x6A],
+            [0x87, 0x70, 0x53],
+        ];
+        let band = ElevationBand {
+            ramp,
+            cuts: DOMAIN_CUTS,
+            strength: 0.62,
+        };
+        let base = [1.0, 1.0, 1.0, 1.0];
+        assert_eq!(band.tint(base, 50), base, "第 0 阶必须完全不混");
+        let mut last = 0.0;
+        for (i, h) in [400, 800, 1200, 2000, 3000, 5000, 7000]
+            .into_iter()
+            .enumerate()
+        {
+            let out = band.tint(base, h);
+            let drift = (1.0 - out[0]) + (1.0 - out[1]) + (1.0 - out[2]);
+            assert!(
+                drift > last,
+                "第 {} 阶（{h} m）混入量应大于上一阶：{drift:.4} <= {last:.4}",
+                i + 1
+            );
+            last = drift;
         }
     }
 
