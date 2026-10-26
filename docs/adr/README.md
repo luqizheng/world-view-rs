@@ -228,6 +228,7 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
 | [ADR-0066](ADR-0066-single-default-style-crate.md) | 单一默认风格层——`wv-default-theme` 取代多主题机制（删 `wv-theme` / `chinese-ink` / 注册表 / 主题切换 UI；默认风格 = 专业制图；`core` 风格色与 `kind_core` 逐格技术色分离） | 已接受（2026-10-25，随 `refactor/default-theme-crate` 落地） |
 | [ADR-0067](ADR-0067-cartographic-relief.md) | 专业制图的山地表达——晕渲接线（0.90~1.12 轻钳制）+ 风格层 8 阶海拔色带（近白→深岩褐）；等高线不列入普通地图 | 已接受（2026-10-26，随 `feat/cartography-relief` 落地；补 ADR-0066 关符号留下的空洞） |
 | [ADR-0065](ADR-0065-map-label-legibility.md) | 地图标签可读性——画布标签默认改 Noto Sans SC、地点按呈现级别分字号（16/14/13/12px）、晕圈随字号成比例、碰撞优先级改「级别 → 字符长度」、街名 12px 并入碰撞过滤 | 已接受（2026-10-25，用户裁定「要修复字体，zoom in 或者地图上几乎无法分别 POI 的字体」；**修正 ADR-0042 D4**，文楷保留为可选） |
+| [ADR-0068](ADR-0068-topbar-three-segments-palette-canvas.md) | 顶栏三段化——Edit 段并入 Map（Schematic 与 GoogleMap 同源后观感重合），`Schematic` 降级「色块画布」（`conv_palette_terrain` 换 `kind_core` 十色对照，笔刷涂 kind 的可视反馈） | 已接受（2026-10-26，用户裁定「Map 和 Edit 几乎一样」） |
 
 ---
 > **⚠️ 编号撞号备注（2026-10-20 追加）**：`ADR-0044` 已被 ADR-0042 的「追记三」占用（civ-atlas 方法论落地，commit `eef816c`，索引行指向 ADR-0042 文件），故本次两份新 ADR 从 **0045** 起（ADR-0045 自然区域 / ADR-0046 亚格线状作者数据）。上文 0042 那条备注的「后续新 ADR 从 0042 起」已过时，按 §6.3 只增不改、保留原文。引用时务必带文件名全称。

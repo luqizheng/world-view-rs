@@ -180,15 +180,22 @@ fn identity_segment(
     }
 }
 
-/// Browse / Map / Edit / CellMap 四段：`Browse` → `ViewMode::VectorFlat`
-/// （艺术主题浏览）、`Map` → `ViewMode::GoogleMap`（专业制图 / 普通地图）、
-/// `Edit` → `ViewMode::Schematic`（色块格子）、`CellMap` → 单格编辑工作区
-/// （2026-10-20 用户提案：等高分析底图 + EditCell 工具 + 只留相关面板）。
+/// Browse / Map / CellMap 三段：`Browse` → `ViewMode::VectorFlat`
+/// （矢量浏览）、`Map` → `ViewMode::GoogleMap`（专业制图 / 普通地图）、
+/// `CellMap` → 单格编辑工作区（2026-10-20 用户提案：等高分析底图 +
+/// EditCell 工具 + 只留相关面板）。
 ///
 /// **`Map` 段 2026-10-25 追加**（ADR-0061 D6 的落地缺口）：此前普通地图只能
 /// 从命令面板切到，顶栏不可见——把一个「目标范式」藏在 Ctrl+K 里等于没有。
-/// 追加而非插队：前三段的顺序与肌肉记忆不动，`Map` 放在 `Browse` 右侧，
-/// 因为两者是同一件事的两种画法（艺术 / 专业）。
+/// 追加而非插队：前两段的顺序与肌肉记忆不动，`Map` 放在 `Browse` 右侧，
+/// 因为两者是同一件事的两种画法（矢量 / 专业）。
+///
+/// **`Edit` 段 2026-10-26 移除**（ADR-0068，用户裁定「Map 和 Edit 几乎一样」）：
+/// ADR-0066 单一默认风格后，`Schematic` 的地形取色与 `GoogleMap` 同源（读同一
+/// 份 core），装饰亦已清空——两段观感几乎重合，顶栏不再为它设独立工作区。
+/// `Schematic` 降级为「色块画布」：保留在 `BROWSING`（快捷键 `2`）与命令面板，
+/// `conv_palette_terrain` 在该模式换用 `kind_core` 十色对照，作笔刷涂地形
+/// kind 时的可视反馈（专业色折叠后只有它能看清 kind）。
 ///
 /// `Faction` 已从顶栏移除（2026-10-19 用户裁定），但 `ViewMode::Faction`
 /// 本身仍在——命令面板「视图」组 + 快捷键 `3` 可切（见
@@ -219,11 +226,10 @@ fn browse_edit_segment(
 
     // 段名与目标模式**成对**声明：按下标取模式，不靠「第几段 = 什么」的
     // 隐式约定（CellMap 的进出逻辑按 `target == Topographic` 判定）。
-    let labels = ["Browse", "Map", "Edit", "CellMap"];
+    let labels = ["Browse", "Map", "CellMap"];
     let modes = [
         ViewMode::VectorFlat,
         ViewMode::GoogleMap,
-        ViewMode::Schematic,
         ViewMode::Topographic,
     ];
     // 当前若是 Faction 等段外模式，`usize::MAX` 让各段都不高亮，
@@ -235,7 +241,7 @@ fn browse_edit_segment(
     // **Gate-2**（[ADR-0052] §9.4）：没有当前地图时 `CellMap` 段灰化不可点——
     // 进去了也没有格可编辑。`Browse` / `Map` / `Edit` 不受影响（它们是看图档，
     // 且 MapTree 仍要能选图）。
-    let seg_disabled = [false, false, false, !can_enter_cellmap];
+    let seg_disabled = [false, false, !can_enter_cellmap];
 
     let seg_resp = crate::ui::widgets::segmented_control::segmented_with_disabled(
         ui,
@@ -259,7 +265,9 @@ fn browse_edit_segment(
                         }
                     }
                     palette.pending = Some(CommandId::SelectMapTool(MapToolId::EditCell));
-                    view.mode = ViewMode::Schematic;
+                    // 2026-10-26（ADR-0068）：Edit 段移除，退出回落到 Map
+                    // （原回落 Schematic，该段已不在顶栏）。
+                    view.mode = ViewMode::GoogleMap;
                 } else {
                     // 进入：快照面板 → 只开笔刷窗 → 排 EditCell 工具。
                     let backup = Panel::ALL

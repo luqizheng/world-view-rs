@@ -91,6 +91,13 @@ pub fn conv_palette_terrain(
         c.core = wv_default_theme::colors_google::GOOGLE_CORE_TERRAIN;
         c.soften_toward = wv_default_theme::colors_google::GOOGLE_SOFTEN_TOWARD;
     }
+    // 色块画布（ADR-0068）：`Schematic` 的立身之本是「每种地形一色」的
+    // **对照色**——专业色板把沙/草/丘/山折叠成同一近白，笔刷涂地形 kind
+    // 时在其它模式里读不出差异。`shade_flat` 读 `core`，故在这里把 core
+    // 换成风格层的 `kind_core` 十色（此前该字段自 ADR-0066 起零消费）。
+    if mode == crate::state::ViewMode::Schematic {
+        c.core = p.kind_core;
+    }
     c
 }
 
@@ -3026,6 +3033,27 @@ mod bridge_tests {
         /// **ADR-0066 更新**：单风格后「普通地图」与「默认风格」是**同一个**
         /// ——不再存在「主题色板 ≠ 专业色板」的对照，故那条 `assert_ne` 撤掉，
         /// 改为断言**两个模式取到同一份**（单风格的直接后果）。
+        /// 色块画布（ADR-0068）：`Schematic` 模式下地形 `core` 换成风格层
+        /// `kind_core` 十色对照——专业色板把陆上类折叠为近白，笔刷涂 kind
+        /// 只有这里读得出。锚点钉住「十色互异」，防止退回与 Map 同源。
+        #[test]
+        fn schematic_canvas_core_is_the_kind_distinct_palette() {
+            let pal = wv_default_theme::palette::PaletteColors::DEFAULT;
+            let c = conv_palette_terrain(&pal, crate::state::ViewMode::Schematic);
+            assert_eq!(c.core, pal.kind_core, "Schematic 画布应读 kind_core");
+            for i in 0..10 {
+                for j in (i + 1)..10 {
+                    assert_ne!(
+                        c.core[i], c.core[j],
+                        "色块画布槽 {i} 与 {j} 必须不同（对照色的立身之本）"
+                    );
+                }
+            }
+            // 对照：Map 模式仍是 Google 折叠色（两者不同源才叫「画布」）。
+            let g = conv_palette_terrain(&pal, crate::state::ViewMode::GoogleMap);
+            assert_ne!(c.core[3], g.core[3], "画布草色不得与专业折叠色同源");
+        }
+
         #[test]
         fn google_mode_terrain_core_is_the_google_palette() {
             let pack = &wv_default_theme::theme_pack::builtin::DEFAULT;
