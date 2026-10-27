@@ -27,6 +27,7 @@
 //! 纯函数、零第三方依赖（与 crate 同规）；不感知 Bevy / Undo / 选区状态。
 
 use crate::isoline::{simplify_dp, Pt};
+use crate::TerrainGrid;
 use std::collections::{BTreeMap, HashSet};
 
 /// 格集 → 包络环（栅格局部 wu）。
@@ -324,4 +325,304 @@ mod tests {
             1.0,
         );
     }
+}
+
+#[cfg(test)]
+mod land_outline_tests {
+    //! 海陆掩膜 → 陆地外环（ADR-0074 T6 / `land_outlines`）。
+    //!
+    //! 坐标 = **栅格局部 wu**（`cell_set_outline` 同口径，见上文坐标契约）。
+    //! 湿判定 = `crate::edit::is_water_cell`（surface==水 ∨ height<0）。
+
+    use super::*;
+    use crate::{TerrainCell, SURFACE_LAND, SURFACE_WATER};
+    use crate::{TerrainCell, SURFACE_LAND, SURFACE_WATER};
+
+    fn grid_from(rows: &[(i32, i32)]) -> TerrainGrid {
+        let mut g = TerrainGrid::new(8, 8);
+        for &(x, y) in rows {
+            g.set(
+                x,
+                y,
+                TerrainCell {
+                    height: 100,
+                    surface: SURFACE_LAND,
+                    biome: 0,
+                },
+            );
+        }
+        g
+    }
+
+    fn all_sea() -> TerrainGrid {
+        let mut g = TerrainGrid::new(8, 8);
+        for y in 0..8 {
+            for x in 0..8 {
+                g.set(
+                    x,
+                    y,
+                    TerrainCell {
+                        height: -100,
+                        surface: SURFACE_WATER,
+                        biome: 0,
+                    },
+                );
+            }
+        }
+        g
+    }
+
+    #[test]
+    fn single_land_cell_produces_unit_square_ring() {
+        // 1 格陆地 @ (3,2)，cell=10 → 外环 = 该格四角（10,20)..(40,50)。
+        let g = grid_from(&[(3, 2)]);
+        let outlines = crate::outline::land_outlines(&g, 10.0);
+        assert_eq!(outlines.len(), 1, "1 格陆地应出 1 环: {:?}", outlines);
+        let ring = &outlines[0].outer;
+        assert_eq!(ring.len(), 4, "单格环 4 角: {:?}", ring);
+        for (x, y) in [(30.0, 20.0), (40.0, 20.0), (40.0, 30.0), (30.0, 30.0)] {
+            assert!(
+                ring.iter()
+                    .any(|&(rx, ry)| (rx - x).abs() < 1e-4 && (ry - y).abs() < 1e-4),
+                "缺角 ({x},{y}): {ring:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn island_with_lake_emits_outer_ring_and_hole() {
+        // 3×3 陆块中心 (4,4) 是湖（水）→ 外环 1 + 洞 1。
+        let mut cells = Vec::new();
+        for y in 3..6 {
+            for x in 3..6 {
+                cells.push((x, y));
+            }
+        }
+        let mut g = grid_from(&cells);
+        g.set(
+            4,
+            4,
+            TerrainCell {
+                height: -10,
+                surface: SURFACE_WATER,
+                biome: 0,
+            },
+        );
+        let outlines = crate::outline::land_outlines(&g, 10.0);
+        assert_eq!(outlines.len(), 1, "一块陆地应出 1 组环: {:?}", outlines);
+        let group = &outlines[0];
+        // 外环 = 3×3 块的四角（抽稀后 4 点）；洞 = 中心格四角。
+        assert_eq!(group.outer.len(), 4, "外环应抽稀到 4 角: {:?}", group.outer);
+        assert_eq!(group.holes.len(), 1, "湖应出一个洞: {:?}", group.holes);
+        assert_eq!(group.holes[0].len(), 4, "单格洞 4 角: {:?}", group.holes[0]);
+        // 洞角坐标 = (4,4) 格四角（40,40)-(50,50)。
+        for (x, y) in [(40.0, 40.0), (50.0, 40.0), (50.0, 50.0), (40.0, 50.0)] {
+            assert!(
+                group.holes[0]
+                    .iter()
+                    .any(|&(rx, ry)| (rx - x).abs() < 1e-4 && (ry - y).abs() < 1e-4),
+                "洞缺角 ({x},{y}): {:?}",
+                group.holes[0]
+            );
+        }
+    }
+
+    #[test]
+    fn all_sea_yields_empty() {
+        let g = all_sea();
+        assert!(
+            crate::outline::land_outlines(&g, 10.0).is_empty(),
+            "全海无陆地环"
+        );
+    }
+
+    #[test]
+    fn height_below_zero_counts_as_water_even_with_land_surface() {
+        // surface=陆 但 height<0 → 湿判定为水（is_water_cell 口径）。
+        let mut g = grid_from(&[(3, 3)]);
+        g.set(
+            3,
+            3,
+            TerrainCell {
+                height: -5,
+                surface: SURFACE_LAND,
+                biome: 0,
+            },
+        );
+        assert!(
+            crate::outline::land_outlines(&g, 10.0).is_empty(),
+            "height<0 的格按湿判定是水，不出环"
+        );
+    }
+
+    #[test]
+    fn two_disjoint_islands_emit_two_rings() {
+        let g = grid_from(&[(1, 1), (6, 6)]);
+        let outlines = crate::outline::land_outlines(&g, 10.0);
+        assert_eq!(outlines.len(), 2, "两块不相连陆地各出 1 组: {outlines:?}");
+    }
+}
+
+/// 陆地外环组（ADR-0074 T6）：一块连通陆地的外环 + 它的洞（湖）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct LandOutline {
+    /// 外环：栅格局部 wu 坐标，首尾不重复。
+    pub outer: Vec<(f32, f32)>,
+    /// 洞环列表（湖面），坐标口径同外环。
+    pub holes: Vec<Vec<(f32, f32)>>,
+}
+
+/// 海陆掩膜 → 陆地外环（含洞）——势力图切蛋糕的「整块地」（ADR-0074 D1）。
+///
+/// 湿判定走 [`crate::edit::is_water_cell`]（surface==水 ∨ height<0，唯一
+/// 入口，**不**在此重复公式）。坐标 = **栅格局部 wu**（`cell_set_outline`
+/// 同口径——terrain.bin 的格 (0,0) 为原点；wv-core 的 `BeginPartitionSpan`
+/// 会在存进分区数据前做栅格局部 → map-local 的平移）。
+///
+/// 与 [`cell_set_outline`] 的两点差异：
+/// - **洞保留**：分区语义下湖是「不可分配的地」，必须成为脸的洞环——
+///   大陆配方的「洞填掉」不适用；
+/// - 输入是整张栅格而非格集（掩膜 = 该格不湿）。
+///
+/// 输出按外环最小角点排序（确定性，同输入逐位同输出）。
+pub fn land_outlines(grid: &TerrainGrid, cell_size: f32) -> Vec<LandOutline> {
+    if !(cell_size > 0.0 && cell_size.is_finite()) {
+        return Vec::new();
+    }
+    // 收集陆格集合（湿判定唯一入口）。
+    let land: Vec<(i32, i32)> = (0..grid.height())
+        .flat_map(|y| (0..grid.width()).map(move |x| (x as i32, y as i32)))
+        .filter(|&(x, y)| {
+            grid.get(x, y)
+                .map(|c| !crate::edit::is_water_cell(c))
+                .unwrap_or(false)
+        })
+        .collect();
+    if land.is_empty() {
+        return Vec::new();
+    }
+    let set: HashSet<(i32, i32)> = land.into_iter().collect();
+
+    // 边界有向边：与 cell_set_outline 同一约定「内域在行进方向左侧」——
+    // 外环面积为正、洞为负。
+    let mut edges: BTreeMap<(i32, i32), Vec<(i32, i32)>> = BTreeMap::new();
+    for &(x, y) in &set {
+        if !set.contains(&(x, y - 1)) {
+            edges.entry((x, y)).or_default().push((x + 1, y));
+        }
+        if !set.contains(&(x + 1, y)) {
+            edges.entry((x + 1, y)).or_default().push((x + 1, y + 1));
+        }
+        if !set.contains(&(x, y + 1)) {
+            edges.entry((x + 1, y + 1)).or_default().push((x, y + 1));
+        }
+        if !set.contains(&(x - 1, y)) {
+            edges.entry((x, y + 1)).or_default().push((x, y));
+        }
+    }
+
+    // 走环（最左转配对，与 cell_set_outline 同法）。
+    let mut loops_int: Vec<Vec<(i32, i32)>> = Vec::new();
+    let starts: Vec<(i32, i32)> = edges.keys().copied().collect();
+    for start in starts {
+        while edges.get(&start).is_some_and(|v| !v.is_empty()) {
+            let mut loop_pts = vec![start];
+            let mut cur = start;
+            let mut dir = (0i32, 0i32);
+            while let Some(ends) = edges.get_mut(&cur) {
+                let idx = if ends.len() == 1 {
+                    0
+                } else {
+                    pick_leftmost(ends, dir)
+                };
+                let next = ends.remove(idx);
+                if next == start {
+                    break;
+                }
+                dir = (next.0 - cur.0, next.1 - cur.1);
+                cur = next;
+                loop_pts.push(next);
+            }
+            if loop_pts.len() >= 3 {
+                loops_int.push(loop_pts);
+            }
+        }
+    }
+
+    // 面积分拣：正 = 外环（新组），负 = 洞（并入**包含它的最小外环**组——
+    // 「湖属于最小的那块陆」：岛中湖不该归到大陆头上）。整数域算面积（精确）。
+    // 先收全外环再分派洞：环序任意，外环可能晚于洞出现。
+    let mut outers: Vec<(Vec<(i32, i32)>, i64)> = Vec::new();
+    let mut holes: Vec<Vec<(i32, i32)>> = Vec::new();
+    for pts in loops_int {
+        let area2 = shoelace2(&pts);
+        if area2 > 0 {
+            outers.push((pts, area2));
+        } else if area2 < 0 {
+            holes.push(pts);
+        }
+    }
+    outers.sort_by_key(|(outer, _)| *outer.iter().min().unwrap());
+    /// 组 = (外环, 面积×2, 洞列表)。
+    type HoleGroup = (Vec<(i32, i32)>, i64, Vec<Vec<(i32, i32)>>);
+    let mut groups: Vec<HoleGroup> = outers
+        .iter()
+        .map(|(o, a)| (o.clone(), *a, Vec::new()))
+        .collect();
+    for hole in holes {
+        let probe = hole[0];
+        // 包含探针点的外环里取面积最小者（岛中湖归岛不归大陆）。
+        let best = groups
+            .iter()
+            .enumerate()
+            .filter(|(_, (outer, _, _))| point_in_ring(probe, outer))
+            .min_by_key(|(_, (_, a2, _))| *a2);
+        if let Some((gi, ..)) = best {
+            groups[gi].2.push(hole);
+        }
+        // 洞不属于任何外环（不可能——环必由边界面围出）→ 丢弃。
+    }
+
+    // 抽稀 + wu。洞与外环同容差（0.25 格，只坍缩共线）。外环序已在分拣时定。
+    groups
+        .into_iter()
+        .map(|(outer, _, holes)| {
+            let to_ring = |pts: &[(i32, i32)]| -> Vec<(f32, f32)> {
+                let wu: Vec<Pt> = pts
+                    .iter()
+                    .map(|&(x, y)| Pt {
+                        x: x as f32 * cell_size,
+                        y: y as f32 * cell_size,
+                    })
+                    .collect();
+                let simplified = simplify_dp(&wu, true, 0.25 * cell_size);
+                if simplified.len() >= 3 {
+                    simplified.iter().map(|p| (p.x, p.y)).collect()
+                } else {
+                    wu.iter().map(|p| (p.x, p.y)).collect()
+                }
+            };
+            LandOutline {
+                outer: to_ring(&outer),
+                holes: holes.iter().map(|h| to_ring(h)).collect(),
+            }
+        })
+        .collect()
+}
+
+/// 射线法：整数点是否在整数环内（环顶点 ≥3；边界情形取「在」——洞探针
+/// 是洞环自己的顶点，它恰落在外环边界内侧一格，不触边）。
+fn point_in_ring(p: (i32, i32), ring: &[(i32, i32)]) -> bool {
+    let mut inside = false;
+    let n = ring.len();
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = ring[i];
+        let (xj, yj) = ring[j];
+        if ((yi > p.1) != (yj > p.1)) && (p.0 < (xj - xi) * (p.1 - yi) / (yj - yi) + xi) {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
 }
