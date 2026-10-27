@@ -354,6 +354,77 @@ mod tests {
         );
     }
 
+    // ── UpdateLayerCommand::ensure_terrain_visibility（ADR-0074 T4：
+    //    自然图开关声明化——图无 terrain 声明层时插入，有则改 visible）──
+
+    #[test]
+    fn ensure_terrain_visibility_inserts_declaration_when_absent() {
+        let mut world = world_with_layers(); // 只有 roads 层，无 terrain 声明
+        let cmd = EnsureTerrainLayerCommand::new(test_map(), false);
+        let dirty = cmd.apply(&mut world).expect("apply");
+        assert_eq!(
+            dirty,
+            vec![format!("maps/{TEST_MAP}/index.yaml")],
+            "声明层内联图索引，脏路径必须是 index.yaml"
+        );
+        let node = &world.maps[0];
+        let terrain = node
+            .layers
+            .iter()
+            .find(|l| l.kind == wv_core::map::LayerKind::Terrain)
+            .expect("应插入 terrain 声明层");
+        assert!(!terrain.visible, "插入的 terrain 层应带目标可见性 false");
+        cmd.revert(&mut world).expect("revert");
+        let node = &world.maps[0];
+        assert!(
+            node.layers
+                .iter()
+                .all(|l| l.kind != wv_core::map::LayerKind::Terrain),
+            "revert 应移除插入的 terrain 声明层"
+        );
+    }
+
+    #[test]
+    fn ensure_terrain_visibility_updates_existing_row() {
+        let mut world = world_with_layers();
+        // 先造一条 terrain 声明（visible=true）。
+        world.maps[0].layers.push(wv_core::map::Layer {
+            id: Id::new_unchecked("layer_terrain"),
+            name: "自然图".into(),
+            kind: wv_core::map::LayerKind::Terrain,
+            visible: true,
+            locked: false,
+            opacity: 1.0,
+            z: 0,
+            source: None,
+        });
+        let cmd = EnsureTerrainLayerCommand::new(test_map(), false);
+        cmd.apply(&mut world).expect("apply");
+        let terrain = world.maps[0]
+            .layers
+            .iter()
+            .find(|l| l.kind == wv_core::map::LayerKind::Terrain)
+            .expect("既有 terrain 层应被复用而非新增");
+        assert_eq!(terrain.id, Id::new_unchecked("layer_terrain"), "应改既有行");
+        assert!(!terrain.visible, "可见性应更新为 false");
+        let node = &world.maps[0];
+        assert_eq!(
+            node.layers
+                .iter()
+                .filter(|l| l.kind == wv_core::map::LayerKind::Terrain)
+                .count(),
+            1,
+            "不得插入第二条 terrain 声明"
+        );
+        cmd.revert(&mut world).expect("revert");
+        let terrain = world.maps[0]
+            .layers
+            .iter()
+            .find(|l| l.kind == wv_core::map::LayerKind::Terrain)
+            .expect("既有行 revert 后仍在");
+        assert!(terrain.visible, "revert 应还原既有行可见性");
+    }
+
     #[test]
     fn paint_command_writes_surface_and_biome_then_revert_restores() {
         let mut world = world_with_terrain(32);

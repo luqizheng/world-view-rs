@@ -282,3 +282,127 @@ impl EditCommand for ResetTerrainToBaseCommand {
         Ok(())
     }
 }
+
+/// 自然图声明化（ADR-0074 T4）：把「自然图可见性」落成图的 **terrain 声明层**。
+///
+/// 图层管理面板的自然图行写回入口。两形态：
+/// - 图**无** `LayerKind::Terrain` 声明 → 插入一行（`visible` = 目标值），
+///   revert 移除该行；
+/// - 图**已有** terrain 声明 → 只改它的 `visible`，revert 还原（与
+///   [`UpdateLayerCommand`] 同款三元组语义，但不牵连 locked / opacity）。
+///
+/// **为什么不是 `UpdateLayerCommand` 的构造器**（Task 4 Ruling）：
+/// 插入形态的撤销是「移除整行」，`layer_mut` 对不存在的层直接
+/// `TargetMissing`、`before` 三元组也装不下插入/移除——独立命令两种
+/// 形态各自干净。
+///
+/// 层 id 固定 `layer_terrain`：渲染侧按 `kind` 找层（不按 id），id 只为
+/// YAML 可读与命令寻址兜底。
+#[derive(Debug)]
+pub struct EnsureTerrainLayerCommand {
+    /// 目标地图 ID。
+    pub map: wv_core::Id,
+    /// 目标可见性。
+    pub visible: bool,
+    /// `apply` 缓存：`None` = 插入了新行（revert 移除）；`Some((index, prev_visible, prev_full))`
+    /// = 更新了既有行（revert 还原整行，防帧间被其它命令改过）。
+    before: std::sync::Mutex<Option<EnsureBefore>>,
+}
+
+#[derive(Debug)]
+enum EnsureBefore {
+    Inserted,
+    Updated(wv_core::map::Layer),
+}
+
+impl EnsureTerrainLayerCommand {
+    /// 构造：目标可见性 `visible`（true = 显示自然图，false = 政治图集页）。
+    pub fn new(map: wv_core::Id, visible: bool) -> Self {
+        Self {
+            map,
+            visible,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn node_mut<'w>(&self, world: &'w mut World) -> EditResult<&'w mut wv_core::map::MapNode> {
+        world
+            .maps
+            .iter_mut()
+            .find(|m| m.id == self.map)
+            .ok_or_else(|| EditError::TargetMissing(format!("地图 {}", self.map)))
+    }
+}
+
+impl EditCommand for EnsureTerrainLayerCommand {
+    fn label(&self) -> String {
+        format!(
+            "自然图{}（声明层）",
+            if self.visible { "显示" } else { "隐藏" }
+        )
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let node = self.node_mut(world)?;
+        let existing = node
+            .layers
+            .iter()
+            .position(|l| l.kind == wv_core::map::LayerKind::Terrain);
+        match existing {
+            Some(i) => {
+                let mut prev = node.layers[i].clone();
+                std::mem::swap(&mut prev.visible, &mut node.layers[i].visible);
+                node.layers[i].visible = self.visible;
+                *self
+                    .before
+                    .lock()
+                    .map_err(|_| EditError::Precondition("命令锁中毒".into()))? =
+                    Some(EnsureBefore::Updated(prev));
+            }
+            None => {
+                node.layers.push(wv_core::map::Layer {
+                    id: wv_core::Id::new_unchecked("layer_terrain"),
+                    name: "自然图".into(),
+                    kind: wv_core::map::LayerKind::Terrain,
+                    visible: self.visible,
+                    locked: false,
+                    opacity: 1.0,
+                    z: 0,
+                    source: None,
+                });
+                *self
+                    .before
+                    .lock()
+                    .map_err(|_| EditError::Precondition("命令锁中毒".into()))? =
+                    Some(EnsureBefore::Inserted);
+            }
+        }
+        Ok(vec![format!("maps/{}/index.yaml", self.map)])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let prev = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
+            .take()
+            .ok_or_else(|| EditError::Precondition("EnsureTerrainLayer 尚未 apply".into()))?;
+        let node = self.node_mut(world)?;
+        match prev {
+            EnsureBefore::Inserted => {
+                node.layers
+                    .retain(|l| l.kind != wv_core::map::LayerKind::Terrain);
+            }
+            EnsureBefore::Updated(layer) => {
+                if let Some(i) = node
+                    .layers
+                    .iter()
+                    .position(|l| l.kind == wv_core::map::LayerKind::Terrain)
+                {
+                    node.layers[i] = layer;
+                }
+            }
+        }
+        Ok(())
+    }
+}

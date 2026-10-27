@@ -337,6 +337,10 @@ pub enum I18nKey {
     PanelLayersOpacity,
     /// 图层面板会话开关段小节标题
     PanelLayersSession,
+    /// 图层面板势力图层组小节标题（ADR-0074）
+    PanelLayersFactionGroup,
+    /// 图层面板自然图行标签（ADR-0074 政治图集页开关）
+    PanelLayersNaturalMap,
     /// 图层面板空态标题（本图未声明图层）
     PanelLayersEmptyTitle,
     /// 图层面板空态提示（去 index.yaml 的 layers: 段声明）
@@ -1349,7 +1353,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 535] = [
+    pub const ALL: [I18nKey; 537] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1513,6 +1517,8 @@ impl I18nKey {
         I18nKey::PanelLayersDrawOrder,
         I18nKey::PanelLayersOpacity,
         I18nKey::PanelLayersSession,
+        I18nKey::PanelLayersFactionGroup,
+        I18nKey::PanelLayersNaturalMap,
         I18nKey::PanelLayersEmptyTitle,
         I18nKey::PanelLayersEmptyHint,
         I18nKey::PanelLayerTerrain,

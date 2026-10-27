@@ -292,7 +292,110 @@ pub fn panel_layers(
                 _ => {}
             }
 
-            // 会话开关段（v0.3 的 8 个 toggle 原样保留；会话轴 ≠ 声明轴）。
+            // 势力图层组（ADR-0074）：每层一行「名字 + 眼睛」，经既有
+            // `UpdateFactionLayerCommand`（全字段快照命令，先读现值再改
+            // `new_visible`）写回落盘。会话总开关 `factions_visible` 仍留在
+            // 会话段——组内眼睛是**声明轴**（跨会话），总开关是**会话轴**。
+            ui.add_space(LAYER_BLOCK_GAP);
+            divider(ui, &shell);
+            ui.add_space(LAYER_BLOCK_GAP);
+            caption_row(
+                ui,
+                &shell,
+                t_key(&current_loc, I18nKey::PanelLayersFactionGroup),
+            );
+            let faction_layers = wv_core::resolved_faction_layers(&projection.world);
+            if faction_layers.is_empty() {
+                caption_row(
+                    ui,
+                    &shell,
+                    t_key(&current_loc, I18nKey::PanelLayersEmptyHint),
+                );
+            } else {
+                for layer in &faction_layers {
+                    let mut visible = layer.visible;
+                    // 层行：icon 占位 + 名字 + 弹性 + 眼睛 toggle（28px 行高）。
+                    ui.horizontal(|ui| {
+                        let resp = ui.allocate_ui(egui::vec2(ui.available_width(), 22.0), |ui| {
+                            ui.horizontal(|ui| {
+                                ui.add_space(18.0);
+                                ui.label(
+                                    egui::RichText::new(layer.name.as_str())
+                                        .font(proportional(shell.scale.base))
+                                        .color(shell.t2()),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui.add(egui::Checkbox::new(&mut visible, "")).changed()
+                                            && visible != layer.visible
+                                        {
+                                            commit_faction_layer_visibility(
+                                                &mut projection,
+                                                &mut edit,
+                                                layer,
+                                                visible,
+                                            );
+                                        }
+                                    },
+                                );
+                            });
+                        });
+                        resp.response.on_hover_text(layer.id.as_str());
+                    });
+                }
+            }
+
+            // 自然图行（ADR-0074 政治图集页开关）：声明级落盘——当前图无
+            // terrain 声明层时 `EnsureTerrainLayerCommand` 插入一行，有则改
+            // visible。取代旧会话轴 Terrain toggle（会话轴不落盘，重启即忘）。
+            let terrain_declared = projection
+                .world
+                .maps
+                .iter()
+                .find(|m| m.id == map_id)
+                .map(|m| {
+                    m.layers
+                        .iter()
+                        .find(|l| l.kind == wv_core::map::LayerKind::Terrain)
+                        .map(|l| l.visible)
+                })
+                .unwrap_or(None);
+            let mut natural_visible = terrain_declared.unwrap_or(true);
+            ui.horizontal(|ui| {
+                ui.allocate_ui(egui::vec2(ui.available_width(), 22.0), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_space(18.0);
+                        ui.label(
+                            egui::RichText::new(t_key(
+                                &current_loc,
+                                I18nKey::PanelLayersNaturalMap,
+                            ))
+                            .font(proportional(shell.scale.base))
+                            .color(shell.t2()),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add(egui::Checkbox::new(&mut natural_visible, ""))
+                                .changed()
+                                && natural_visible != terrain_declared.unwrap_or(true)
+                            {
+                                commit_layer2(
+                                    &mut projection,
+                                    &mut edit,
+                                    wv_edit::EnsureTerrainLayerCommand::new(
+                                        map_id.clone(),
+                                        natural_visible,
+                                    ),
+                                );
+                            }
+                        });
+                    });
+                });
+            });
+
+            // 会话开关段（v0.3 的 toggle 保留；Terrain 行已升级为上面的声明级
+            // 自然图行，`terrain_soften` 留会话轴）。
             ui.add_space(LAYER_BLOCK_GAP);
             divider(ui, &shell);
             caption_row(ui, &shell, t_key(&current_loc, I18nKey::PanelLayersSession));
@@ -300,12 +403,11 @@ pub fn panel_layers(
                 .num_columns(2)
                 .spacing([space::MD, 2.0])
                 .show(ui, |ui| {
-                    // 一次性借走 8 个互不相同的字段（先降为普通 `&mut ViewState`，
+                    // 一次性借走 7 个互不相同的字段（先降为普通 `&mut ViewState`，
                     // borrowck 才允许不相交字段的并列可变借用——ResMut 每次 DerefMut
                     // 都是整结构体借用），按 web 顺序排 2 列。
                     let view_state: &mut ViewState = &mut view;
                     let mut flags = [
-                        ("Terrain", &mut view_state.terrain_visible),
                         ("Terrain Smooth", &mut view_state.terrain_soften),
                         ("Location", &mut view_state.places_visible),
                         ("Event", &mut view_state.events_visible),
@@ -343,6 +445,45 @@ fn commit_layer(
         }
         Err(e) => bevy::log::warn!("图层面板提交失败: {e}"),
     }
+}
+
+/// 同 [`commit_layer`] 但收任意 `EditCommand`（`EnsureTerrainLayerCommand`
+/// 等非 `UpdateLayerCommand` 家族共用）。
+fn commit_layer2(
+    projection: &mut WorldProjection,
+    edit: &mut EditHistory,
+    cmd: impl wv_edit::EditCommand + 'static,
+) {
+    let mut tx = wv_edit::Transaction::new();
+    tx.push(Box::new(cmd));
+    match edit.history.commit(&mut projection.world, tx) {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
+            projection.dirty = true;
+        }
+        Err(e) => bevy::log::warn!("图层面板提交失败: {e}"),
+    }
+}
+
+/// 势力层眼睛写回：`UpdateFactionLayerCommand` 是全字段快照命令——先读
+/// 该层现值再改 `new_visible`（ADR-0074 T4）。
+fn commit_faction_layer_visibility(
+    projection: &mut WorldProjection,
+    edit: &mut EditHistory,
+    layer: &wv_core::FactionLayer,
+    visible: bool,
+) {
+    commit_layer2(
+        projection,
+        edit,
+        wv_edit::UpdateFactionLayerCommand::new(
+            layer.id.clone(),
+            layer.name.clone(),
+            layer.z,
+            layer.color_mode,
+            visible,
+        ),
+    );
 }
 
 /// 从当前图节点克隆图层行（名称空白 → 按 kind 取 i18n 默认名）。

@@ -1117,6 +1117,7 @@ fn build_world(
     };
 
     wv_core::World {
+        partitions: Vec::new(),
         meta: Some(meta),
         maps,
         timeline: None,
