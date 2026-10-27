@@ -31,6 +31,7 @@ use crate::brush_cursor;
 use crate::buildings;
 use crate::cell_selection;
 use crate::faction_overlays;
+use crate::faction_partition;
 use crate::layer_frame;
 use crate::map_frame;
 use crate::measurement;
@@ -79,6 +80,9 @@ impl Plugin for MapRenderPlugin {
                 streets::update_street_labels.after(crate::label_collision::DrillLabelChain),
                 // 势力多边形叠加层
                 faction_overlays::sync_faction_overlays,
+                // 切蛋糕分区渲染（ADR-0074 T10）：压势力叠加之后
+                faction_partition::sync_partition_overlays
+                    .after(faction_overlays::sync_faction_overlays),
                 // 地图外框 + 1/4 幅面参考网格
                 map_frame::sync_map_frame,
             )
@@ -91,6 +95,7 @@ impl Plugin for MapRenderPlugin {
         )
         // 地点缓存索引（A1）：compute_projection 的端点解析 / POI 收集查表用。
         .init_resource::<world_projection::PlaceIndex>()
+        .init_resource::<faction_partition::PartitionOverlayEntities>()
         // CellMap 未命名候选高亮的缓存（2026-10-22 内容矩阵 T11）：
         // draw_map_gizmos ResMut 它——漏 init 即启动期 panic（同 EditCellState 教训）。
         .init_resource::<crate::region_overlay::CandidateOverlayCache>()

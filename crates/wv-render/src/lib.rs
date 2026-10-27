@@ -56,6 +56,7 @@ pub mod drill;
 pub mod editing_bridge;
 #[cfg(feature = "app")]
 pub mod faction_overlays;
+pub mod faction_partition;
 #[cfg(feature = "app")]
 pub mod feature_overlays;
 #[cfg(feature = "app")]

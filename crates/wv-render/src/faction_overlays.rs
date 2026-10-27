@@ -1061,3 +1061,41 @@ mod tests {
         assert_eq!(overlays[0].relation, Some("claim"));
     }
 }
+
+/// Vec2 版多边形填充 mesh（分区渲染 T10 用——分区环已是 Vec2 视图坐标）。
+pub(crate) fn build_polygon_mesh_flat(outer: &[Vec2]) -> Mesh {
+    let flat: Vec<f32> = outer.iter().flat_map(|v| [v.x, v.y]).collect();
+    build_polygon_mesh(&flat)
+}
+
+/// Vec2 版带洞填充 mesh。
+pub(crate) fn build_polygon_with_holes_mesh_flat(outer: &[Vec2], holes: &[Vec<Vec2>]) -> Mesh {
+    let flat: Vec<f32> = outer.iter().flat_map(|v| [v.x, v.y]).collect();
+    let owned: Vec<Vec<f32>> = holes
+        .iter()
+        .map(|h| h.iter().flat_map(|v| [v.x, v.y]).collect())
+        .collect();
+    let refs: Vec<&[f32]> = owned.iter().map(|h| h.as_slice()).collect();
+    build_polygon_with_holes_mesh(&flat, &refs)
+}
+
+/// 两点线段矩形 mesh（宽 = 世界单位）。
+pub(crate) fn build_line_mesh_flat(a: Vec2, b: Vec2, width: f32) -> Mesh {
+    let dir = (b - a).normalize_or_zero();
+    let n = Vec2::new(-dir.y, dir.x) * width * 0.5;
+    let mut mesh = Mesh::new(
+        bevy::render::mesh::PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+    );
+    mesh.insert_attribute(
+        bevy::render::mesh::Mesh::ATTRIBUTE_POSITION,
+        vec![
+            [a.x + n.x, a.y + n.y, 0.0],
+            [b.x + n.x, b.y + n.y, 0.0],
+            [b.x - n.x, b.y - n.y, 0.0],
+            [a.x - n.x, a.y - n.y, 0.0],
+        ],
+    );
+    mesh.insert_indices(bevy::render::mesh::Indices::U32(vec![0, 1, 2, 0, 2, 3]));
+    mesh
+}
