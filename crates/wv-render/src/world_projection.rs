@@ -137,6 +137,25 @@ pub fn river_rank_from_length_frac(frac: f32) -> u8 {
     }
 }
 
+/// 拖动中图钉的**预览位**（视图空间）；非激活或非该钉 → `None`。
+///
+/// 帧构建（点标 [`ProjectionFrame::place_dots`] / 图钉
+/// [`ProjectionFrame::landmark_dots`]）与标签系统（`drill.rs` 的
+/// `update_place_labels`）共用这一入口——三处渲染读同一个预览，
+/// 拖动时钉、点、标签一起走（[ADR-0074] 追记三）。世界锚点在松手
+/// 提交前不动，预览只活在渲染侧。
+pub fn pin_preview_view(
+    drag: &crate::state::PinDragState,
+    place: &wv_core::Id,
+    grid: &GridConfig,
+) -> Option<Vec2> {
+    if !drag.active || drag.place.as_ref() != Some(place) {
+        return None;
+    }
+    drag.preview_local
+        .map(|(x, y)| grid.map_to_view(Vec2::new(x, y)))
+}
+
 /// 折线总长（相邻顶点距离和）。
 fn polyline_len(pts: &[Vec2]) -> f32 {
     pts.windows(2).map(|w| w[0].distance(w[1])).sum()
@@ -313,6 +332,8 @@ pub fn compute_projection(
     drill: Res<crate::state::DrillState>,
     projection: Res<WorldProjection>,
     layers: Res<LayerFrame>,
+    // 图钉拖动预览（ADR-0074 追记三）：active 时点标/图钉按预览位出。
+    drag: Res<crate::state::PinDragState>,
     mut place_index: ResMut<PlaceIndex>,
     mut frame: ResMut<ProjectionFrame>,
 ) {
@@ -553,9 +574,13 @@ pub fn compute_projection(
                 let (cx, cy) = (view.camera_center.x, view.camera_center.y);
                 if let Some(idxs) = place_index.anchored_by_map.get(&current.id) {
                     for i in idxs {
-                        if let Some(dot) =
-                            place_dot_for(&world.distances.places[*i as usize], &grid)
-                        {
+                        let p = &world.distances.places[*i as usize];
+                        // 拖动预览（ADR-0074 追记三）：激活时钉/点按预览位。
+                        let preview = pin_preview_view(&drag, &p.id, &grid);
+                        if let Some(mut dot) = place_dot_for(p, &grid) {
+                            if let Some(prev) = preview {
+                                dot.pos = prev;
+                            }
                             if (dot.pos.x - cx).abs() <= half.x && (dot.pos.y - cy).abs() <= half.y
                             {
                                 frame.place_dots.push(dot);
@@ -565,12 +590,12 @@ pub fn compute_projection(
                         // rank 3 永远画国家级，rank 2 全档都画（参考图期望：全球档可见城市符号）。
                         // 线状地点（作者河）不是聚落，不画城市符号——与 `place_dot_for`
                         // 同一条排除口径，避免「河上长出一座城」。
-                        let p = &world.distances.places[*i as usize];
                         if p.line.is_none() {
                             if let Some((x, y)) = p.effective_anchor() {
                                 let rank = p.effective_rank();
                                 if rank >= 2 {
-                                    let pos = grid.map_to_view(Vec2::new(x, y));
+                                    let pos = preview
+                                        .unwrap_or_else(|| grid.map_to_view(Vec2::new(x, y)));
                                     if (pos.x - cx).abs() <= half.x && (pos.y - cy).abs() <= half.y
                                     {
                                         let kind = if rank >= 3 {
@@ -1958,6 +1983,8 @@ mod tests {
         app.insert_resource(LayerFrame::default());
         app.insert_resource(ProjectionFrame::default());
         app.init_resource::<PlaceIndex>();
+        // 图钉拖动预览（ADR-0074 追记三）：compute_projection 新增的 Res。
+        app.init_resource::<crate::state::PinDragState>();
         let mut schedule = Schedule::default();
         schedule.add_systems(compute_projection);
         (app, schedule)
@@ -2462,6 +2489,7 @@ mod tests {
         app.insert_resource(LayerFrame::default());
         app.insert_resource(ProjectionFrame::default());
         app.init_resource::<PlaceIndex>();
+        app.init_resource::<crate::state::PinDragState>();
         let mut schedule = Schedule::default();
         schedule.add_systems(compute_projection);
 

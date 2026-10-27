@@ -902,10 +902,16 @@ pub fn update_place_labels(
     projection: Res<WorldProjection>,
     place_index: Res<crate::world_projection::PlaceIndex>,
     drill: Res<DrillState>,
-    grid: Res<GridConfig>,
-    view: Res<ViewState>,
-    layers: Res<LayerFrame>,
-    playback: Res<PlaybackState>,
+    // 呈现参数折元组（Bevy 单系统 16 参数上限：本系统原有 15 个，加
+    // 图钉拖动预览即触顶——元组算 1 个参数，仓内既有手法）。
+    (grid, view, layers, playback, drag): (
+        Res<GridConfig>,
+        Res<ViewState>,
+        Res<LayerFrame>,
+        Res<PlaybackState>,
+        // 图钉拖动预览（ADR-0074 追记三）：拖动中的钉，标签跟预览位走。
+        Res<crate::state::PinDragState>,
+    ),
     mut hits: ResMut<crate::label_pick::LabelHits>,
     // 统一占位池（ADR-0073）：与其他五类标签互相避让。
     mut occupancy: ResMut<crate::label_collision::LabelOccupancy>,
@@ -978,7 +984,9 @@ pub fn update_place_labels(
                 }
                 if let Some((x, y)) = p.effective_anchor() {
                     // 地点坐标是本图局部 → 视图空间（`map_to_view`，非栅格原点）。
-                    let pos = grid.map_to_view(Vec2::new(x, y));
+                    // 拖动预览（ADR-0074 追记三）：激活的钉，标签跟预览位。
+                    let pos = crate::world_projection::pin_preview_view(&drag, &p.id, &grid)
+                        .unwrap_or_else(|| grid.map_to_view(Vec2::new(x, y)));
                     if (pos.x - cx).abs() > half.x || (pos.y - cy).abs() > half.y {
                         continue;
                     }
@@ -2080,6 +2088,8 @@ mod tests {
         bevy_world.insert_resource(view);
         bevy_world.insert_resource(layers);
         bevy_world.insert_resource(playback);
+        // 图钉拖动预览（ADR-0074 追记三）：update_place_labels 新增的 Res。
+        bevy_world.init_resource::<crate::state::PinDragState>();
         bevy_world.insert_resource(grid);
         bevy_world.insert_resource(recipe);
         bevy_world.insert_resource(crate::theme::fonts::LoadedFonts::default());
