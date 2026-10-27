@@ -722,6 +722,9 @@ pub const ICON_MINUS: egui::ImageSource<'static> =
 /// 窗口最大化还原 —— Lucide `copy`（无边框窗顶栏窗控的 restore 形态）。
 pub const ICON_COPY: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/copy.svg");
+/// 粘贴 —— Lucide `clipboard-paste`（地图树右键「粘贴」与工具栏粘贴钮）。
+pub const ICON_PASTE: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/clipboard-paste.svg");
 /// 窗口关闭 —— Lucide `x`（无边框窗顶栏窗控）。
 pub const ICON_X: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/x.svg");

@@ -331,6 +331,30 @@ pub enum I18nKey {
     PanelMapTree,
     /// 「图层管理」面板标题
     PanelLayers,
+    /// 地图树：复制
+    MapTreeActionCopy,
+    /// 地图树：粘贴
+    MapTreeActionPaste,
+    /// 地图树：删除
+    MapTreeActionDelete,
+    /// 地图树：垃圾桶
+    MapTreeTrashSection,
+    /// 地图树：垃圾桶是空的
+    MapTreeTrashEmpty,
+    /// 地图树：恢复
+    MapTreeActionRestore,
+    /// 地图树：彻底删除
+    MapTreeActionPurge,
+    /// 地图树：彻底删除后无法恢复，确定删除吗？
+    MapTreePurgeConfirmText,
+    /// 地图树：清空垃圾桶
+    MapTreeActionEmptyTrash,
+    /// 地图树：清空后无法恢复，确定清空吗？
+    MapTreeEmptyTrashConfirmText,
+    /// 地图树：先恢复父图后才能恢复此项
+    MapTreeRestoreBlockedHint,
+    /// 地图树：仅剩一张世界图，无法删除
+    MapTreeLastWorldHint,
     /// 图层面板动作行小标题（Figma `DRAW ORDER · TOP TO BOTTOM`）
     PanelLayersDrawOrder,
     /// 图层面板不透明度行标签
@@ -1353,7 +1377,6 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 537] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1511,6 +1534,19 @@ impl I18nKey {
         I18nKey::ViewModeFaction,
         I18nKey::ViewModeEvent,
         I18nKey::ViewModeCoastline,
+        // 地图树面板（2026-10-27 地图树增强 spec）
+        I18nKey::MapTreeActionCopy,
+        I18nKey::MapTreeActionPaste,
+        I18nKey::MapTreeActionDelete,
+        I18nKey::MapTreeTrashSection,
+        I18nKey::MapTreeTrashEmpty,
+        I18nKey::MapTreeActionRestore,
+        I18nKey::MapTreeActionPurge,
+        I18nKey::MapTreePurgeConfirmText,
+        I18nKey::MapTreeActionEmptyTrash,
+        I18nKey::MapTreeEmptyTrashConfirmText,
+        I18nKey::MapTreeRestoreBlockedHint,
+        I18nKey::MapTreeLastWorldHint,
         // 图层面板（13 + 14：Figma `3:20892` 接线 2026-10-23）
         I18nKey::PanelMapTree,
         I18nKey::PanelLayers,
@@ -1933,3 +1969,5 @@ impl I18nKey {
         I18nKey::LinePoiHint,
     ];
 }
+    pub const ALL: [I18nKey; 549] = [
+    pub const ALL: [I18nKey; 549] = [

@@ -371,7 +371,9 @@ impl Panel {
     pub fn default_size(self) -> [f32; 2] {
         match self {
             // v0.3-B：宽度对齐 web（.w-tree/.w-layers 204 / .w-brush 274）。
-            Panel::MapTree => [204.0, 330.0],
+            // 2026-10-27 地图树增强：工具栏 + 树 + 垃圾桶分区需要更高；
+            // 上限 = Minimap 顶 396 − 本面板顶 56 − 4 间隙，防两浮窗相叠。
+            Panel::MapTree => [204.0, 336.0],
             // Figma `3:20892` 面板宽 268；高 480 = 头 30 + 动作行/列表/滑条
             // （≈313）+ 会话开关段（≈120）+ 边距，列表超 6 行内部滚动。
             Panel::Layers => [268.0, 480.0],
