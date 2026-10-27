@@ -53,9 +53,11 @@ pub fn terrain_swatch(kind: u8) -> egui::Color32 {
 /// 不是数据通道；设计稿 `2026-10-18-world-from-zero-map-design.md` D12/D19
 /// 与计划 Task 6）。
 ///
-/// 9 档（ADR-0070 D1 退役后 10 → 9）：水板写水面（无群系，层次由显示层按
-/// 海拔渐变）；丘陵/山地/雪原按群系落库（与「中央山」标记同语义，D9）——
-/// 它们也可不写群系靠高度派生显示，两路并存即 D16。
+/// 9 档（ADR-0070 D1 退役后 10 → 9）：水板写水面 + **咸水**群系（2026-10-27
+/// 用户裁定 B 案：涂水自动带盐度群系——原名 BIOME_NONE 让涂出的水挂「无群
+/// 系」，是水陆群系错配的来源之一；湖面淡水走湖意图 / 群系面板手涂）；丘陵/
+/// 山地/雪原按群系落库（与「中央山」标记同语义，D9）——它们也可不写群系靠
+/// 高度派生显示，两路并存即 D16。
 ///
 /// 「道路」档（旧 swatch 9）已退役：路改由线段 POI 承载（ADR-0070 D1），
 /// 分支删除后 swatch 9 落 `_ => WATER` 兜底——存量 `BIOME_ROAD` 格的读取
@@ -63,12 +65,12 @@ pub fn terrain_swatch(kind: u8) -> egui::Color32 {
 pub fn brush_target(swatch: u8) -> wv_terrain::edit::PaintTarget {
     use wv_terrain::edit::PaintTarget;
     use wv_terrain::{
-        BIOME_DESERT, BIOME_FOREST, BIOME_GRASSLAND, BIOME_HILLS, BIOME_MOUNTAINS, BIOME_NONE,
+        BIOME_DESERT, BIOME_FOREST, BIOME_GRASSLAND, BIOME_HILLS, BIOME_MOUNTAINS, BIOME_OCEAN,
         BIOME_SNOWFIELD, BIOME_SWAMP, SURFACE_LAND, SURFACE_WATER,
     };
     const WATER: PaintTarget = PaintTarget {
         surface: SURFACE_WATER,
-        biome: BIOME_NONE,
+        biome: BIOME_OCEAN,
     };
     const LAND: fn(u8) -> PaintTarget = |biome| PaintTarget {
         surface: SURFACE_LAND,
@@ -181,7 +183,11 @@ mod tests {
                     wv_terrain::SURFACE_WATER,
                     "色板 {swatch} 应为水面"
                 );
-                assert_eq!(target.biome, wv_terrain::BIOME_NONE);
+                assert_eq!(
+                    target.biome,
+                    wv_terrain::BIOME_OCEAN,
+                    "水面色板 {swatch} 应带咸水（2026-10-27 B 案）"
+                );
             } else {
                 assert_eq!(
                     target.surface,
@@ -213,8 +219,8 @@ mod tests {
         );
         assert_eq!(
             fallback.biome,
-            wv_terrain::BIOME_NONE,
-            "swatch 9 兜底不应带群系，实得 biome={}",
+            wv_terrain::BIOME_OCEAN,
+            "swatch 9 兜底是 WATER 档，按 2026-10-27 B 案应带咸水，实得 biome={}",
             fallback.biome
         );
         for swatch in 0..9u8 {

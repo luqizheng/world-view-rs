@@ -207,8 +207,57 @@ pub fn derive_diagnostics(world: &World, theme: &ThemePack) -> Diagnostics {
         ));
     }
 
+    // 水陆群系错配（2026-10-27 用户裁定 B 案）——**提示级**，不阻止保存（V1）。
+    // 逐图扫地形栅格；地形笔触提交后 `needs_diagnose` 会触发重算，计数自动跟随。
+    for (map_id, data) in &world.terrains {
+        let n = count_water_biome_mismatch(data.cells.iter());
+        if n == 0 {
+            continue;
+        }
+        let name = world
+            .maps
+            .iter()
+            .find(|m| &m.id == map_id)
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| map_id.to_string());
+        d.items.push(diagnostics::hint(
+            format!("water-biome-mismatch:{map_id}"),
+            format!(
+                "地图「{name}」水陆群系错配：{n} 格——水格配了陆生群系，或陆格配了水域群系（选中格后在群系面板手改）"
+            ),
+        ));
+    }
+
     d.dedup_by_fingerprint();
     d
+}
+
+/// 水陆群系错配计数（2026-10-27 B 案 · 纯函数）。
+///
+/// 判据（湿判定与 [`wv_terrain::edit::is_water_cell`] 同一口径）：
+/// - 湿格（水面或海拔 <0）配了**陆生群系**——非 `BIOME_NONE` 且非水域族；
+/// - 干格配了**水域族**（咸水 14 / 淡水 15 / 河流 16）。
+///
+/// `BIOME_NONE` 是中性态（显示按 surface 回退），不计错配。
+pub fn count_water_biome_mismatch<'a>(
+    cells: impl Iterator<Item = &'a wv_core::terrain::TerrainCellData>,
+) -> usize {
+    use wv_terrain::biome::{family_of, BiomeFamily, BIOME_NONE};
+    cells
+        .filter(|c| {
+            let wet = wv_terrain::edit::is_water_cell(wv_terrain::TerrainCell {
+                height: c.height,
+                surface: c.surface,
+                biome: c.biome,
+            });
+            let water_family = family_of(c.biome) == Some(BiomeFamily::Water);
+            if wet {
+                c.biome != BIOME_NONE && !water_family
+            } else {
+                water_family
+            }
+        })
+        .count()
 }
 
 #[cfg(test)]
@@ -369,6 +418,97 @@ mod tests {
         assert!(
             !d.hints().iter().any(|h| h.message.contains("conifer")),
             "可解析的键不应产生提示"
+        );
+    }
+
+    /// 水陆群系错配计数（2026-10-27 B 案）：湿格配陆生群系 / 干格配水域族
+    /// 各计 1；NONE 中性格与水陆一致格不计。
+    #[test]
+    fn water_biome_mismatch_counts_both_directions() {
+        use wv_core::terrain::TerrainCellData;
+        let cells = [
+            TerrainCellData {
+                height: -50,
+                surface: 0,
+                biome: 12,
+            }, // 湿格+丘陵 → 错配
+            TerrainCellData {
+                height: -50,
+                surface: 0,
+                biome: 14,
+            }, // 湿格+咸水 → 一致
+            TerrainCellData {
+                height: -50,
+                surface: 0,
+                biome: 0,
+            }, // 湿格+NONE → 中性
+            TerrainCellData {
+                height: 80,
+                surface: 1,
+                biome: 14,
+            }, // 干格+咸水 → 错配
+            TerrainCellData {
+                height: 80,
+                surface: 1,
+                biome: 3,
+            }, // 干格+草原 → 一致
+        ];
+        assert_eq!(count_water_biome_mismatch(cells.iter()), 2);
+    }
+
+    /// derive_diagnostics 给有错配的图推提示（指纹按图 id 稳定）；无错配
+    /// 的图不推——面板提示计数随之自动涨落。
+    #[test]
+    fn derive_diagnostics_reports_water_biome_mismatch_per_map() {
+        use wv_core::terrain::{TerrainCellData, TerrainData};
+        let mut w = World::default();
+        let map = Id::new_unchecked("map_mismatch");
+        w.maps.push(wv_core::map::MapNode {
+            id: map.clone(),
+            name: "演示图".into(),
+            ..Default::default()
+        });
+        w.set_terrain(
+            map,
+            TerrainData {
+                width: 2,
+                height: 1,
+                cells: vec![
+                    TerrainCellData {
+                        height: -50,
+                        surface: 0,
+                        biome: 12,
+                    }, // 湿格+丘陵 → 错配
+                    TerrainCellData {
+                        height: 80,
+                        surface: 1,
+                        biome: 3,
+                    }, // 干格+草原 → 一致
+                ],
+            },
+        );
+        let theme = wv_render::theme::theme_pack::builtin::DEFAULT;
+        let d = derive_diagnostics(&w, &theme);
+        assert!(
+            d.hints()
+                .iter()
+                .any(|h| h.fingerprint == "water-biome-mismatch:map_mismatch"
+                    && h.message.contains('1')),
+            "错配图应推一条指纹稳定的提示"
+        );
+
+        // 修完（湿格改回咸水）后提示消失。
+        w.terrains
+            .get_mut(&Id::new_unchecked("map_mismatch"))
+            .unwrap()
+            .cells[0]
+            .biome = 14;
+        let d = derive_diagnostics(&w, &theme);
+        assert!(
+            !d.hints()
+                .iter()
+                .any(|h| h.fingerprint.starts_with("water-biome-mismatch")),
+            "无错配不应推提示"
         );
     }
 }

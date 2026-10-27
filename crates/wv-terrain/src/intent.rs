@@ -33,8 +33,8 @@ use std::collections::HashSet;
 use crate::edit::is_water_cell;
 use crate::generate::Perlin;
 use crate::{
-    Height, TerrainCell, TerrainGrid, BIOME_GRASSLAND, BIOME_HILLS, BIOME_MOUNTAINS, BIOME_NONE,
-    SURFACE_LAND, SURFACE_WATER,
+    Height, TerrainCell, TerrainGrid, BIOME_GRASSLAND, BIOME_HILLS, BIOME_LAKE, BIOME_MOUNTAINS,
+    BIOME_NONE, SURFACE_LAND, SURFACE_WATER,
 };
 
 // ---------------------------------------------------------------------------
@@ -886,7 +886,9 @@ fn apply_lake(
         let new_cell = TerrainCell {
             height: to_height((cell0.height as f32).min(target)),
             surface: SURFACE_WATER,
-            biome: BIOME_NONE,
+            // 淹没格写「淡水」（2026-10-27 B 案：意图工具把 biome 活干完；
+            // 原写 BIOME_NONE 让湖面挂「无群系」，是水陆群系错配的来源之一）。
+            biome: BIOME_LAKE,
         };
         if new_cell != cell0 {
             grid.set(gx, gy, new_cell);
@@ -1248,7 +1250,8 @@ fn apply_lake_region(grid: &mut TerrainGrid, polygon: &[(f32, f32)], cell_size: 
             let new_cell = TerrainCell {
                 height: to_height((cell0.height as f32).min(target)),
                 surface: SURFACE_WATER,
-                biome: BIOME_NONE,
+                // 淡水：与单点 [`apply_lake`] 同口径（2026-10-27 B 案）。
+                biome: BIOME_LAKE,
             };
             if new_cell != cell0 {
                 grid.set(gx, gy, new_cell);
@@ -1266,7 +1269,7 @@ fn apply_lake_region(grid: &mut TerrainGrid, polygon: &[(f32, f32)], cell_size: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BIOME_NONE, SURFACE_LAND, SURFACE_WATER};
+    use crate::{BIOME_GRASSLAND, BIOME_LAKE, BIOME_NONE, SURFACE_LAND, SURFACE_WATER};
 
     /// 平坦陆地网格：高度 `h`、陆面草原。
     fn flat_land(w: u32, h: u32, height: i16) -> TerrainGrid {
@@ -1495,6 +1498,46 @@ mod tests {
         assert_eq!(g.get(2, 2).unwrap().height, 100, "碗外不动");
 
         // 湖心在海上：无操作。
+        let mut sea = flat_sea(40, 40, -50);
+        let n = apply_intent(
+            &mut sea,
+            &Intent::Lake {
+                center: (20.5, 20.5),
+                radius: 8.0,
+                strength: 1.0,
+            },
+            13,
+            1.0,
+        );
+        assert_eq!(n, 0, "海上点湖应无操作");
+    }
+
+    /// 湖 intent 把淹没格群系写「淡水」（2026-10-27 B 案：意图工具把 biome
+    /// 活干完）；碗外陆地群系原样不动；海上点湖仍无操作。
+    #[test]
+    fn lake_intent_writes_freshwater_biome_on_flooded_cells() {
+        let mut g = flat_land(40, 40, 100);
+        let touched = apply_intent(
+            &mut g,
+            &Intent::Lake {
+                center: (20.5, 20.5),
+                radius: 8.0,
+                strength: 1.0,
+            },
+            13,
+            1.0,
+        );
+        assert!(touched > 20, "碗应触及大量格，实得 {touched}");
+        let bottom = g.get(20, 20).unwrap();
+        assert_eq!(bottom.surface, SURFACE_WATER, "碗内是水面");
+        assert_eq!(bottom.biome, BIOME_LAKE, "湖面格应写淡水");
+        assert_eq!(
+            g.get(2, 2).unwrap().biome,
+            BIOME_GRASSLAND,
+            "碗外陆地群系不动"
+        );
+
+        // 海上点湖：无操作，海面群系也不被改写。
         let mut sea = flat_sea(40, 40, -50);
         let n = apply_intent(
             &mut sea,

@@ -49,9 +49,10 @@ pub const BIOME_TROPICAL_RAINFOREST: Biome = 11;
 pub const BIOME_HILLS: Biome = 12;
 /// 山地。
 pub const BIOME_MOUNTAINS: Biome = 13;
-/// 海洋。
+/// 海洋。显示名「咸水」（2026-10-27 用户裁定：水域群系表盐度不表岸体，
+/// 原名「海洋」留档——编号与色值不变，改名仅显示层）。
 pub const BIOME_OCEAN: Biome = 14;
-/// 湖泊。
+/// 湖泊。显示名「淡水」（改名口径同 [`BIOME_OCEAN`]，原名「湖泊」留档）。
 pub const BIOME_LAKE: Biome = 15;
 /// 河流。
 pub const BIOME_RIVER: Biome = 16;

@@ -187,7 +187,10 @@ impl MapBase {
             MapBase::Ocean => TerrainCellData {
                 height: -3500,
                 surface: 0,
-                biome: 0,
+                // 咸水（群系 14；2026-10-27 B 案：水域群系表盐度，海洋底图
+                // 整格带咸水——与陆地底图带草原(3)对称）。wv-core 零依赖
+                // 不引 wv-terrain，编号按冻结表字面量。
+                biome: 14,
             },
             MapBase::Land => TerrainCellData {
                 height: 80,
