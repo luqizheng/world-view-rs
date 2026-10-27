@@ -336,7 +336,6 @@ mod land_outline_tests {
 
     use super::*;
     use crate::{TerrainCell, SURFACE_LAND, SURFACE_WATER};
-    use crate::{TerrainCell, SURFACE_LAND, SURFACE_WATER};
 
     fn grid_from(rows: &[(i32, i32)]) -> TerrainGrid {
         let mut g = TerrainGrid::new(8, 8);
