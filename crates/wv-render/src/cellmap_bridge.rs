@@ -52,7 +52,8 @@ use crate::state::{BrushState, DrillState, ViewState, WorldProjection};
 // （`field::paper::TERRAIN_Z` = 纸面层 Z，与本层无关），glob 会把名字撞在一起。
 use wv_world_cell_map::terrain_view::field::{
     apply_hypsometric, build_material, default_params, patch_material_images, set_coast_encoding,
-    warp_amp, CellRect, FieldPack, FieldPalette, TerrainFieldMaterial, ViewBranch, H_MAX, H_MIN,
+    warp_amp, CellRect, CoastEncoding, FieldPack, FieldPalette, TerrainFieldMaterial, ViewBranch,
+    H_MAX, H_MIN,
 };
 use wv_world_cell_map::terrain_view::hypsometric;
 
@@ -1535,13 +1536,18 @@ fn reclaim_field_material(
     material: Handle<TerrainFieldMaterial>,
     materials: &Assets<TerrainFieldMaterial>,
 ) {
-    let mut textures: [Option<Handle<Image>>; 4] = [const { None }; 4];
+    let mut textures: [Option<Handle<Image>>; 6] = [const { None }; 6];
     if let Some(mat) = materials.get(&material) {
         textures = [
             Some(mat.height.clone()),
             Some(mat.coast.clone()),
             Some(mat.attr.clone()),
             Some(mat.line_dash.clone()),
+            // ADR-0072：biome 距离场（Linear）+ 同字节 Nearest 视图。
+            // 漏回收会被「关场后 Image 资产账目 == 纯 chunk 基线」的验收
+            // 测试当场抓住（15 ≠ 13）。
+            Some(mat.biome.clone()),
+            Some(mat.biome_ids.clone()),
         ];
     }
     commands.queue(move |world: &mut World| {
@@ -1766,13 +1772,21 @@ pub fn sync_terrain_field(
 
         if !patched {
             // ── ② 全量重打：三张数据纹理全量重建（1024² = 12 MB）──
-            let pack = FieldPack::from_terrain(data);
+            // 海岸编码显式取 **Signed**（SPEC §3.8.4 追记一）：Unsigned 的
+            // 符号取自 per-texel 掩码，水陆交界是逐格硬切——深缩放下是
+            // 一格宽的正交台阶。Signed 让 sd 经双线性插值在岸线处穿过 0，
+            // 配合 shader 的屏幕封顶过渡（`COAST_EDGE_HALF_PX`）得到
+            // 亚格连续的锐利 AA 边。增量补丁路径经 `patch_region` 沿用
+            // `self.encoding`，无需另改。
+            let pack = FieldPack::from_terrain_with(data, CoastEncoding::Signed);
             let mut params = default_params(
                 [pack.width as f32, pack.height as f32],
                 px_per_cell,
                 branch,
                 FieldPalette::default(),
             );
+            // ADR-0072 T3：群系填色强度随主题（pad0.z，shader 侧 p.pad0.z）。
+            params.pad0.z = view.active_theme.biome_tint;
             // pack 与 shader 的解码开关必须同源（唯一耦合点，见 `set_coast_encoding`）。
             set_coast_encoding(&mut params, pack.encoding);
             // 分层设色（ADR-0056）：内边界 = **绝对地形学阶梯**；窄域图（跨度

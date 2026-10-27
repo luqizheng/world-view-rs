@@ -92,7 +92,11 @@ fn menu_visible(selection: &wv_render::state::SelectionState) -> bool {
 /// 每圈一次都要手动关一次。图级意图（大陆 / 城市 / 标记 / 划分势力 /
 /// 地形四意图）在 Browse / Edit 档照常可得。经命令面板切到 Topographic
 /// 的边角情形同样适用：等高底图档就是 cell 级编辑语境。
-fn cell_workspace_active(mode: wv_render::state::ViewMode) -> bool {
+///
+/// `pub(crate)`：大陆生成对话框的确认路径用同一谓词分流包络来源
+/// （工作台 = 统一选区格集；Browse/Edit = V 工具闭合环）——两处分叉
+/// 各写一遍迟早漂移。
+pub(crate) fn cell_workspace_active(mode: wv_render::state::ViewMode) -> bool {
     mode == wv_render::state::ViewMode::Topographic
 }
 

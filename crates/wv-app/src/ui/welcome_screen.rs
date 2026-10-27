@@ -21,8 +21,14 @@
 //!   **Header**（地球图标 + 主副标题）/ **ActionGroup**（主+次 CTA）/
 //!   **RecentProjects**（小标题 + 列表 + 时间水印待补）/ **Footer**（状态
 //!   说明 + 版本水印）。
-//! - **无标题栏 / 无关闭按钮**：Figma 没有 × 与拖动条；用户只能经由
-//!   「新建工程…」「打开工程…」或点击最近工程离开本页。
+//! - **无标题栏**：Figma 没有拖动条，本页不画。
+//! - **关闭按钮（2026-10-26 追加，偏离 Figma）**：原结论「无关闭按钮，用户
+//!   只能经由新建/打开/最近工程离开本页」被修正——无边框窗
+//!   （`decorations: false`，2026-10-25 裁定）之下本页没有任何原生窗控，
+//!   无工程时唯一关闭途径只剩 Alt+F4。经用户反馈补**视口右上角**窗控
+//!   关闭键，视觉与顶栏窗控同源（[`crate::ui::top_bar`] 的
+//!   `window_controls::close_button`）；离开本页仍以新建/打开/最近工程
+//!   为主路径，× 只兜「就此离开」。
 //! - 颜色全部走 [`crate::theme::ui_tokens::ShellPalette`] 令牌，未写裸 hex
 //!   （除了一次性白色 `Color32::WHITE` 用在主 CTA 的图标+文字——
 //!   Figma `#FFFFFF` 与暗色 `text_on_accent` `#0B0D11` 在「主 CTA」上对比度
@@ -71,6 +77,7 @@ use crate::ui_command_palette::{CommandId, CommandPalette};
 use crate::ui_shell::{DialogPurpose, OpenProjectTask};
 
 use super::shell::UiShell;
+use super::top_bar::close_button;
 
 /// 卡片窗口 id（也是 egui 里它的 Area/Layer id）。
 ///
@@ -91,6 +98,9 @@ const APP_ICON_BOX: f32 = 56.0;
 const APP_ICON_BOX_RADIUS: u8 = 12;
 /// AppIcon 内地球图标尺寸（Figma `globe 28×28`）。
 const APP_ICON_GLOBE: f32 = 28.0;
+/// 视口右上角窗控关闭键边长（与顶栏窗控键同宽 30，见
+/// `top_bar::window_controls::BTN_W`；命中区饱满，Windows 关闭键惯例位）。
+const CLOSE_BTN: f32 = 30.0;
 
 /// 主标题（与 Figma `AppTitle = "World-View"` 一致；品牌名两语统一，不本地化）。
 const APP_TITLE: &str = "World-View";
@@ -124,6 +134,9 @@ pub fn welcome_screen(
     // 应用屏状态（2026-10-22 B 档）：「该不该显示欢迎页」由它一句话决定，
     // 不再在本页拼 `has_open_project || 加载中 || 出错` 三个条件。
     screen: Res<AppScreen>,
+    // 无边框窗之下本页是「无工程」时唯一的 UI，关闭键直写退出
+    // （与顶栏窗控同语义：单窗口编辑器，关窗即退出）。
+    mut exit: MessageWriter<AppExit>,
 ) {
     if !screen.shows_welcome() {
         return;
@@ -148,6 +161,20 @@ pub fn welcome_screen(
             let (rect, _) = ui.allocate_exact_size(viewport.size(), egui::Sense::click());
             ui.painter()
                 .rect_filled(rect, 0.0, shell.palette.bg_app.to_color32());
+        });
+
+    // ── 窗控关闭键（视口右上角；理由见模块文档「关闭按钮」段）─────────
+    // 注册在暗层之后，同 Foreground order 内初始即在暗层之上；层级随暗层
+    // 点击上浮的问题在函数尾部随卡片一起钉顶解决。
+    egui::Area::new(egui::Id::new("wv_welcome_close"))
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::RIGHT_TOP, [0.0, 0.0])
+        .interactable(true)
+        .show(ctx, |ui| {
+            let rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(CLOSE_BTN, CLOSE_BTN));
+            if close_button(ui, &shell, rect).clicked() {
+                exit.write(AppExit::Success);
+            }
         });
 
     // 居中卡片——`title_bar(false)` 拿掉 egui 默认标题栏与 × 按钮；自定义
@@ -246,6 +273,10 @@ pub fn welcome_screen(
     // 也拍到只剩底色）。层级顺序在帧末统一结算，所以这里在画完卡片后显式把它
     // 钉回顶层：同帧即生效，下一帧的命中测试也仍从卡片开始。
     pin_card_on_top(ctx);
+    // 关闭键最后钉：置于卡片之上（视口极窄与卡片重叠时，窗控键恒在最上——
+    // Windows 惯例）。不钉的话，暗层被按一下就浮到它之上——× 被不透明的
+    // 暗层盖住，既看不见也点不到（同 `pin_card_on_top` 的回归机理）。
+    ctx.move_to_top(close_button_layer());
 }
 
 /// 把欢迎卡片钉回 Foreground 顶层（见 [`welcome_screen`] 尾部回归说明）。
@@ -260,6 +291,14 @@ fn pin_card_on_top(ctx: &egui::Context) {
 /// `Id::new(name)`。两者哈希不同，钉错了层就会「看起来改完还是盖住」。
 fn card_layer() -> egui::LayerId {
     egui::LayerId::new(egui::Order::Foreground, egui::Id::new(Some(CARD_ID)))
+}
+
+/// 关闭键在 egui 里的层 id。
+///
+/// 与 [`card_layer`] 不同：`Area::new(Id::new(name))`（非 `egui::Window`）
+/// 的层 id 就是传入的 Id 本身，没有 `Some(...)` 包装。
+fn close_button_layer() -> egui::LayerId {
+    egui::LayerId::new(egui::Order::Foreground, egui::Id::new("wv_welcome_close"))
 }
 
 /// 56×56 accent 圆角方块 + 28×28 地球图标（Figma `AppIcon`）。
@@ -432,6 +471,82 @@ mod tests {
             ctx.layer_id_at(center),
             Some(card_layer()),
             "点击全屏暗层后，卡片必须仍在 Foreground 顶层（否则暗底会盖住卡片）"
+        );
+    }
+
+    /// 回归（2026-10-26）：视口右上角的窗控关闭键与暗层同在 Foreground
+    /// order——暗层被按下会 `move_to_top` 浮到其上（上一测试同款机理）。
+    /// 关闭键若不随卡片一起钉回顶层，用户点一下空白 × 就被不透明的暗层
+    /// 盖住：看不见也点不到，无边框窗下无从关闭。
+    ///
+    /// headless 驱动真实点击链：按下暗层（卡片与关闭键之外）→ 抬起，断言
+    /// 关闭键中心的顶层 layer 仍是关闭键层。
+    #[test]
+    fn clicking_the_dim_keeps_the_close_button_on_top() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+        let close_pos = egui::pos2(screen.max.x - CLOSE_BTN / 2.0, CLOSE_BTN / 2.0);
+        // 卡片 520 宽居中 → x∈[380,900]；取左下角空白处，确保点在暗层上。
+        let dim_pos = egui::pos2(100.0, 700.0);
+
+        let draw = |events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ctx| {
+                egui::Area::new(egui::Id::new("wv_welcome_dim"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(screen.min)
+                    .interactable(true)
+                    .show(ctx, |ui| {
+                        let (rect, _) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
+                        ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
+                    });
+                // 与 welcome_screen 同构：右上角 30×30 命中格（视觉略去——
+                // 本测试只关心层级，不关心笔刷）。
+                egui::Area::new(egui::Id::new("wv_welcome_close"))
+                    .order(egui::Order::Foreground)
+                    .anchor(egui::Align2::RIGHT_TOP, [0.0, 0.0])
+                    .interactable(true)
+                    .show(ctx, |ui| {
+                        let rect = egui::Rect::from_min_size(
+                            ui.cursor().min,
+                            egui::vec2(CLOSE_BTN, CLOSE_BTN),
+                        );
+                        let _ = ui.allocate_rect(rect, egui::Sense::click());
+                    });
+                egui::Window::new(CARD_ID)
+                    .order(egui::Order::Foreground)
+                    .title_bar(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        ui.label("card");
+                    });
+                pin_card_on_top(ctx);
+                ctx.move_to_top(close_button_layer());
+            });
+            output.textures_delta.clear();
+        };
+
+        // 暖机三帧：Area 首帧是 sizing pass（不可交互、也不计入层级），
+        // 与真实运行（欢迎页已稳定显示数帧）一致。
+        for _ in 0..3 {
+            draw(vec![]);
+        }
+        draw(vec![egui::Event::PointerMoved(dim_pos)]);
+        draw(vec![egui::Event::PointerButton {
+            pos: dim_pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::default(),
+        }]);
+
+        assert_eq!(
+            ctx.layer_id_at(close_pos),
+            Some(close_button_layer()),
+            "点击全屏暗层后，视口右上角的关闭键必须仍是顶层（否则暗层盖住 ×，无从关闭）"
         );
     }
 }

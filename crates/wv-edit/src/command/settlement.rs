@@ -224,6 +224,106 @@ impl EditCommand for AddPlaceEdgeCommand {
     }
 }
 
+/// 删除一个 `Place`，并**级联删除**以它为端点的 `PlaceEdge`。
+///
+/// 删点会让 `distances/edges` 里 `a` / `b` 指向它的边变成悬空引用——
+/// 与其留一圈断线让校验面板逐条报（V1 只提示不阻止，但断边本身已无
+/// 修复路径：端点没了），不如随点一并清掉。级联范围仅止于边：地界环
+/// （`place_geometry`）与折线归属的清理是各自命令族的职责，不在本命令
+/// 扩张（删掉有环地点留下的悬空 owner 交由校验面板列出，V1）。
+///
+/// `apply` 缓存被删实体与其原索引（边按原顺序成组缓存），`revert` 按
+/// 原索引插回——undo 后 `places.yaml` / `edges.yaml` 的条目顺序不变，
+/// Git diff 干净。
+#[derive(Debug)]
+pub struct DeletePlaceCommand {
+    /// 要删除的地点 ID。
+    pub id: wv_core::Id,
+    /// `apply` 时缓存的 `(原索引, 被删 Place)`：revert 时插回。
+    before: std::sync::Mutex<Option<(usize, wv_core::distance::Place)>>,
+    /// `apply` 时缓存的原顺序 `(原索引, 被级联删边)`：revert 时按序插回。
+    before_edges: std::sync::Mutex<Vec<(usize, wv_core::distance::PlaceEdge)>>,
+}
+
+impl DeletePlaceCommand {
+    pub fn new(id: wv_core::Id) -> Self {
+        Self {
+            id,
+            before: std::sync::Mutex::new(None),
+            before_edges: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn lock_before(
+        &self,
+    ) -> EditResult<std::sync::MutexGuard<'_, Option<(usize, wv_core::distance::Place)>>> {
+        self.before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))
+    }
+
+    fn lock_before_edges(
+        &self,
+    ) -> EditResult<std::sync::MutexGuard<'_, Vec<(usize, wv_core::distance::PlaceEdge)>>> {
+        self.before_edges
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))
+    }
+}
+
+impl EditCommand for DeletePlaceCommand {
+    fn label(&self) -> String {
+        format!("删除地点 `{}`", self.id)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let pos = world
+            .distances
+            .places
+            .iter()
+            .position(|p| p.id == self.id)
+            .ok_or_else(|| EditError::Precondition(format!("地点 `{}` 不存在", self.id)))?;
+        let removed = world.distances.places.remove(pos);
+        // 级联：端点含本点的边一并移除，按原顺序缓存（含原索引）。
+        let mut edges = Vec::new();
+        let mut i = 0usize;
+        world.distances.edges.retain(|e| {
+            let hit = e.a == self.id || e.b == self.id;
+            if hit {
+                edges.push((i, e.clone()));
+            }
+            i += 1;
+            !hit
+        });
+        *self.lock_before()? = Some((pos, removed));
+        *self.lock_before_edges()? = edges;
+        let mut dirty = vec!["distances/places".to_string()];
+        if !self.lock_before_edges()?.is_empty() {
+            dirty.push("distances/edges".to_string());
+        }
+        Ok(dirty)
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let (pos, place) = self
+            .lock_before()?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("DeletePlace 尚未 apply".into()))?;
+        world
+            .distances
+            .places
+            .insert(pos.min(world.distances.places.len()), place);
+        // 按原索引升序插回（每次 min(len) 兜底），恢复原相对顺序。
+        for (index, edge) in self.lock_before_edges()?.clone() {
+            world
+                .distances
+                .edges
+                .insert(index.min(world.distances.edges.len()), edge);
+        }
+        Ok(())
+    }
+}
+
 // 建筑编辑命令（ADR-0016 §6 落地项，2026-10-14）
 // ---------------------------------------------------------------------------
 

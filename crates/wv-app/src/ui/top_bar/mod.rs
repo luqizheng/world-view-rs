@@ -73,7 +73,7 @@ mod window_controls;
 
 pub use bar::top_bar;
 pub use status::status_bar;
-pub(crate) use window_controls::WindowChromeState;
+pub(crate) use window_controls::{close_button, WindowChromeState};
 
 /// 顶栏高度（web `.topbar` 38px）。
 pub(crate) const TOP_BAR_H: f32 = 38.0;

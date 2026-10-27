@@ -90,6 +90,8 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     .init_resource::<editing::EditHistory>()
     // 泛洪选择工具会话态（[ADR-0052] D6）：判据 + 激活态。
     .init_resource::<crate::state::FloodSelectState>()
+    // 地标放置会话态（ADR-0071）：placing + 默认类别/级别。
+    .init_resource::<crate::state::LandmarkToolState>()
     // 派生运算请求（[ADR-0052] D6 · M3）：平滑 / 量化的参数与意图。
     // 面板写、`edit::derived_op::apply_derived_op` 消费。
     .init_resource::<crate::edit::derived_op::DerivedOpRequest>()

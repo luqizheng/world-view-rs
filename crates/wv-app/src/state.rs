@@ -114,6 +114,42 @@ pub struct LinePoiState {
     pub drag: Option<EndpointDrag>,
 }
 
+// ---------------------------------------------------------------------------
+// 地标放置（ADR-0071：地标面板 + 单击地图创建点状 Place）
+// ---------------------------------------------------------------------------
+
+/// 地标放置会话态（ADR-0071）。
+///
+/// 只在应用侧流转：激活/关闭由 `dispatch` 的 `SelectMapTool(Landmark)`
+/// 互斥分支翻转（复用「左键唯一消费者」机制，与 Pan/Select/EditCell 同款），
+/// 消费者是 [`crate::edit::editing::commit_landmark_click`]；类别与级别是
+/// 面板写、落点读的「先名词后动词」默认值。**不需要** wv-render 感知——
+/// 放置反馈走 `projection.dirty` → 重投影 → POI 桶重画，零渲染层改动。
+#[derive(Resource, Debug, Clone)]
+pub struct LandmarkToolState {
+    /// 放置模式是否激活（true 时单击地图创建地标）。
+    pub placing: bool,
+    /// 新地标的默认类别（`None` = 未分类，`Place.kind` 不落 kind 行，
+    /// 渲染折算 `PoiKind::Other`——与 Inspector 类别下拉的清空语义一致）。
+    pub default_kind: Option<wv_core::distance::PoiKind>,
+    /// 新地标的默认呈现级别（0–3）。
+    ///
+    /// 缺省 3 而不是 1：rank 门（Nation ≥ 3 / Region ≥ 2 / Edit 全见）下，
+    /// 低级别新点在远档位**看不见**——「点了没反应」比「级别偏高」更伤
+    /// 放置反馈；作者随后可在 Inspector 调低。
+    pub default_rank: u8,
+}
+
+impl Default for LandmarkToolState {
+    fn default() -> Self {
+        Self {
+            placing: false,
+            default_kind: None,
+            default_rank: 3,
+        }
+    }
+}
+
 // 2026-10-18（ADR-0033）：`ContinentGenerationStash` / `ContinentGenerationState`
 // 已删除。意图生效不再消费选区，撤销/重做无需把意图圈「还回来」——
 // 选区自始至终留在 `SelectionState`。
@@ -222,6 +258,10 @@ pub enum Panel {
     /// 河流和道路面板（ADR-0070 D4）：一浮窗两段设置，兼任线段 POI 的
     /// 新建设置与选中属性编辑（T11 渲染内容）。随工具开关（分发器裁决）。
     LinePoi,
+    /// 地标面板（ADR-0071）：选类别/级别 → 单击地图放置点状 Place（POI），
+    /// 并列出当前图全部点状地点供选中与删除。Edit 浏览档与 CellMap
+    /// 工作区两用。
+    Landmark,
 }
 
 impl Panel {
@@ -236,7 +276,7 @@ impl Panel {
     ///
     /// 枚举变体本身**暂留**——存量工程的 `ui-layout.yaml` 里有对应键，
     /// 删枚举会让旧文件的该项变成孤儿。
-    pub const ALL: [Panel; 11] = [
+    pub const ALL: [Panel; 12] = [
         Panel::MapTree,
         Panel::Layers,
         Panel::Minimap,
@@ -245,6 +285,7 @@ impl Panel {
         Panel::Event,
         Panel::Character,
         Panel::Region,
+        Panel::Landmark,
         Panel::Inspector,
         Panel::Validation,
         Panel::LinePoi,
@@ -268,6 +309,7 @@ impl Panel {
             Panel::Event => t(loc, I18nKey::PanelEvent),
             Panel::CellEditor => t(loc, I18nKey::PanelCellEditor),
             Panel::LinePoi => t(loc, I18nKey::LinePoiPanelTitle),
+            Panel::Landmark => t(loc, I18nKey::PanelLandmark),
         }
     }
 
@@ -311,6 +353,12 @@ impl Panel {
             // 底 876 < 880），x 652..932 与 Region（右缘 612）/ Character
             // （左缘 992）互不相交。
             Panel::LinePoi => [652.0, 696.0],
+            // 地标面板（ADR-0071）：中列上半空档（Event 底 368 与 LinePoi 顶
+            // 696 之间）——500+170=670 ≤ 696，与 Event（底 368）、LinePoi
+            // （顶 696）、Region（右缘 612）、Character（x≥992）均不相交。
+            // 合并注（2026-10-26）：原 700 与 LinePoi 的 696 重叠（两分支各
+            // 自占了中列下半），互斥验收据此上移。
+            Panel::Landmark => [652.0, 500.0],
             // 底部通栏（§3.3 P-5）。
             Panel::Timeline => [12.0, 880.0],
         }
@@ -348,6 +396,10 @@ impl Panel {
             // 河流和道路：两段设置（河段：名字/宽度/模式；路段：名字/级别/模式）
             // 各 ~150 高，取 280×180 与默认位配套（互不重叠验收见 ui_layout 测试）。
             Panel::LinePoi => [280.0, 180.0],
+            // 地标面板（ADR-0071）：宽对齐同列 Event/Inspector（300）；
+            // 高 170 = 放置段（类别/级别/toggle ≈ 100）+ 列表头部 + 边距，
+            // 列表超出内部滚动。
+            Panel::Landmark => [300.0, 170.0],
             // v0.3：Validation 改成 240 高（默认隐藏，validation 触发时才出现）
             Panel::Validation => [300.0, 60.0],
         }
@@ -370,6 +422,7 @@ impl Panel {
             Panel::Event => "event",
             Panel::CellEditor => "cell_editor",
             Panel::LinePoi => "line_poi",
+            Panel::Landmark => "landmark",
         }
     }
 
@@ -399,6 +452,9 @@ impl Panel {
             Panel::Event => ICON_CALENDAR,
             Panel::CellEditor => ICON_MAP_PIN,
             Panel::LinePoi => ICON_ROUTE,
+            // 地标 = map-pin（POI 点标语义；退役的 CellEditor 同图不碍事——
+            // 它不再渲染）。
+            Panel::Landmark => ICON_MAP_PIN,
         })
     }
 
@@ -406,7 +462,7 @@ impl Panel {
     pub fn data_opt(self) -> bool {
         matches!(
             self,
-            Panel::Brush | Panel::Layers | Panel::Region | Panel::Validation
+            Panel::Brush | Panel::Layers | Panel::Region | Panel::Validation | Panel::Landmark
         )
     }
 

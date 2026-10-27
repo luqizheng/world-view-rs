@@ -512,8 +512,12 @@ pub(crate) fn band_surface_biome(
 
 /// 与既有地形融合：海岸带内按 `falloff_weight` 过渡，内部只增不减。
 ///
-/// - `d ∈ [0, 6 格)`：`h = existing + (new − existing) × w`，`w` 从海岸的 1
+/// - `d ∈ [0, 6 格)`：`h = base + (new − base) × w`，`w` 从海岸的 1
 ///   衰减到 6 格处的 0——海岸线交给新配方，内陆交给既有作者地形。
+///   `base = max(existing, 0)`：**海底深度不参与调和**（2026-10-26 实机
+///   回归）——深海 −3500 作端点会把带内高度拉到海平面以下，贴海岸内侧
+///   积出 ~6 格宽的「护城河」水环；水下地形不是要保留的作者意图，
+///   端点钳到海平面后带内只向陆爬升（`h ≥ 0`）。
 /// - `d ≥ 6 格`：高度取 `max`，**既有陆地不被压低**（海洋世界打底，
 ///   但图上可能已有作者先画的岛）。
 pub(crate) fn blended(
@@ -531,7 +535,8 @@ pub(crate) fn blended(
         } else {
             crate::edit::falloff_weight(d, band, 0.5)
         };
-        let h = (existing.height as f32 + (new_height as f32 - existing.height as f32) * w)
+        let base = existing.height.max(0);
+        let h = (base as f32 + (new_height as f32 - base as f32) * w)
             .round()
             .clamp(i16::MIN as f32, i16::MAX as f32) as i16;
         let (surface, biome) = if h == new_height {
@@ -822,6 +827,68 @@ mod tests {
             out.height >= 800,
             "内部（d=100 ≥ 6 格=48）既有陆地 800 不得被压低，got {}",
             out.height
+        );
+    }
+
+    /// 2026-10-26 实机回归（三角包络内陆「护城河」）：深海（−3500）上生成时，
+    /// 海岸带调和（d ∈ [0, 6 格)，权重 1→0）以海底为端点，带内高度被拉到
+    /// 海平面以下 → 贴海岸内侧积出 ~6 格宽水环（实测 −816 m）。包络内
+    /// 每一格都必须是陆（含高 ≥ 0）——海岸带只该向陆爬升，不许向海塌。
+    /// 参数/种子取自用户实机截图（600 m 起伏 + 40% 蜿蜒 + 6 octaves）。
+    #[test]
+    fn generation_over_deep_ocean_keeps_envelope_interior_above_sea_level() {
+        let cell_size = 8.0f32;
+        let (w, h) = (96u32, 96u32);
+        let ocean = TerrainCell {
+            height: -3500,
+            surface: SURFACE_WATER,
+            biome: BIOME_NONE,
+        };
+        let mut grid =
+            TerrainGrid::from_cells(w, h, vec![ocean; (w * h) as usize]).expect("深海网格");
+        let tri = vec![(160.0f32, 96.0), (560.0, 128.0), (280.0, 480.0)];
+        let params = ContinentParams {
+            coast_wiggle: 0.40,
+            coast_octaves: 6,
+            relief: ReliefLevel::Hills,
+            forest_cover: 0.30,
+            desert_cover: 0.15,
+            shelf_cells: 8,
+            islands: IslandDensity::Off,
+        };
+        let touched = generate_continents(
+            &mut grid,
+            std::slice::from_ref(&tri),
+            &params,
+            1442695040888963407,
+            cell_size,
+        );
+        assert!(touched > 0, "生成应有改动");
+
+        let mut land_inside = 0usize;
+        for gy in 0..h as i32 {
+            for gx in 0..w as i32 {
+                let center = ((gx as f32 + 0.5) * cell_size, (gy as f32 + 0.5) * cell_size);
+                if !point_in_polygon(center, &tri) {
+                    continue;
+                }
+                land_inside += 1;
+                let cell = grid.get(gx, gy).expect("格必在");
+                assert_eq!(
+                    cell.surface, SURFACE_LAND,
+                    "包络内 ({gx},{gy}) 应为陆，got {:?}",
+                    cell
+                );
+                assert!(
+                    cell.height >= 0,
+                    "包络内 ({gx},{gy}) 高度不得低于海平面，got {}",
+                    cell.height
+                );
+            }
+        }
+        assert!(
+            land_inside > 200,
+            "包络内格数应可观（三角约 900 格），got {land_inside}"
         );
     }
 

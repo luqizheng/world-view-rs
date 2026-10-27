@@ -59,6 +59,7 @@
 
 use wv_core::terrain::{TerrainCellData, TerrainData};
 
+use super::biome_sdf;
 use super::coast_sdf;
 
 /// 高度归一化下界（米）。T1 硬编码常量。
@@ -104,6 +105,16 @@ fn encode_coast(d: f32, cell: &TerrainCellData, encoding: CoastEncoding) -> u16 
         }
     };
     encode_unorm16(norm)
+}
+
+/// 单格 → ADR-0072 biome 距离场 texel（`R,G,B,A`）。
+///
+/// R = `min(d, cap) / cap`：shader 侧乘回 cap 得格距离（Linear 采样，
+/// 亚格连续与 coast 同理）；G/B 存裸 ID 字节——**消费侧必须 Nearest**，
+/// ID 线性插值出「群系 5.5」是语义错误（同 attr 红线）。
+fn encode_biome_field(d: f32, cell: &TerrainCellData, nb: u8, cap: f32) -> [u8; 4] {
+    let r = ((d.min(cap) / cap).clamp(0.0, 1.0) * 255.0).round() as u8;
+    [r, cell.biome, nb, 0]
 }
 
 /// 单格 → T2 属性 texel（`R,G,B,A`）。
@@ -237,9 +248,9 @@ impl CellRect {
     }
 }
 
-/// 三张数据纹理打包好的原始像素缓冲（**未**转成 Bevy `Image`）。
+/// 四张数据纹理打包好的原始像素缓冲（**未**转成 Bevy `Image`）。
 ///
-/// 三张纹理的分辨率一致：宽 = `TerrainData::width`，高 = `TerrainData::height`。
+/// 四张纹理的分辨率一致：宽 = `TerrainData::width`，高 = `TerrainData::height`。
 #[derive(Debug, Clone)]
 pub struct FieldPack {
     /// 纹理宽（= 地形格宽）。
@@ -258,14 +269,19 @@ pub struct FieldPack {
     /// R = 水陆（1 陆 / 0 水，**湿判定**口径）、G = biome（裸字节）、
     /// B = 湿度预留（0）、A = 覆盖物键预留（0）。
     pub attr_tex: Vec<u8>,
+    /// ADR-0072 T2：biome 距离场，`Rgba8Unorm`。
+    /// R = `min(d, cap) / cap`（**Linear** 采样，亚格连续）、G = 本格 biome
+    /// （裸字节）、B = 最近异类群系 ID（裸字节，cap 外 = `NO_FOREIGN`）、A = 0。
+    /// G/B 语义是 ID：消费侧必须 **Nearest** 采样（同 attr 红线）。
+    pub biome_tex: Vec<u8>,
 }
 
 impl FieldPack {
-    /// 主入口：把一份地形数据压成三张数据纹理的原始像素缓冲。
+    /// 主入口：把一份地形数据压成四张数据纹理的原始像素缓冲。
     ///
     /// 契约：
-    /// - 三张纹理分辨率**完全一致**，都等于 `data.width × data.height`；
-    /// - 空地形（`width == 0` 或 `height == 0`）返回三个空缓冲、
+    /// - 四张纹理分辨率**完全一致**，都等于 `data.width × data.height`；
+    /// - 空地形（`width == 0` 或 `height == 0`）返回四个空缓冲、
     ///   尺寸为原样的 pack（不 panic）；
     /// - 同一份输入压两次**逐字节一致**（无随机、无时间依赖）；
     /// - `height` / `coast` 字节序为小端 `u16`；`attr` 字节序为
@@ -290,6 +306,7 @@ impl FieldPack {
                 height_tex: Vec::new(),
                 coast_tex: Vec::new(),
                 attr_tex: Vec::new(),
+                biome_tex: Vec::new(),
             };
         }
 
@@ -327,6 +344,16 @@ impl FieldPack {
         let mut coast_tex = Vec::with_capacity(n * 2);
         let mut attr_tex = Vec::with_capacity(n * 4);
 
+        // ADR-0072 T2：biome 距离场（d + argmin 异类 ID）。cap 取
+        // `BIOME_FIELD_CAP`；`cell_at` 闭包天然消化畸形输入的 padding。
+        let biome_field = biome_sdf::with_cap(
+            w,
+            h,
+            |x, y| cell_at(y * w + x).biome,
+            biome_sdf::BIOME_FIELD_CAP,
+        );
+        let mut biome_tex = Vec::with_capacity(n * 4);
+
         for i in 0..n {
             let cell = cell_at(i);
 
@@ -343,6 +370,24 @@ impl FieldPack {
 
             // T2：R = 水陆（湿判定口径），G = 裸 biome 字节，B/A 预留为 0。
             attr_tex.extend_from_slice(&encode_attr(&cell));
+
+            // ADR-0072：R = d / cap，G = 本格 biome，B = 最近异类 ID，A = 0。
+            let bd = biome_field
+                .d
+                .get(i)
+                .copied()
+                .unwrap_or(biome_sdf::BIOME_FIELD_CAP);
+            let bnb = biome_field
+                .nb
+                .get(i)
+                .copied()
+                .unwrap_or(biome_sdf::NO_FOREIGN);
+            biome_tex.extend_from_slice(&encode_biome_field(
+                bd,
+                &cell,
+                bnb,
+                biome_sdf::BIOME_FIELD_CAP,
+            ));
         }
 
         Self {
@@ -352,6 +397,7 @@ impl FieldPack {
             height_tex,
             coast_tex,
             attr_tex,
+            biome_tex,
         }
     }
 
@@ -370,19 +416,25 @@ impl FieldPack {
         &self.attr_tex
     }
 
+    /// ADR-0072 biome 距离场纹理的字节缓冲（`R,G,B,A` 逐字节，行主序）。
+    pub fn biome_bytes(&self) -> &[u8] {
+        &self.biome_tex
+    }
+
     /// **增量补丁**：按 `data` 重算本次编辑影响到的 texel，结果与
     /// [`Self::from_terrain_with`] 全量重打**逐字节一致**（整张缓冲，不只是脏区）。
     ///
     /// 返回 `false` = 本 pack 不能用于增量（幅面不符 / 缓冲长度不符），
     /// 调用方**必须**改走全量重打。
     ///
-    /// ## 三张纹理的传播半径不一样（本函数唯一的难点）
+    /// ## 四张纹理的传播半径不一样（本函数唯一的难点）
     ///
     /// | 纹理 | 回写范围 | 理由 |
     /// |---|---|---|
     /// | `height` | `rect` | 每 texel 只由自己的 `height` 决定 |
     /// | `attr` | `rect` | 每 texel 只由自己的 `surface` / `biome` 决定 |
     /// | `coast` | **`rect ⊕ 32`** | EDT 把「岸线搬家」传播出去，但编码在 32 格饱和 |
+    /// | `biome`（ADR-0072） | **`rect ⊕ 8`** | 距离场在 `BIOME_FIELD_CAP`（8）格饱和，证明结构与 coast 同构 |
     ///
     /// 只回写 `rect` 是**错的**（第一版这么写，被单测抓住）：改一格地表，
     /// 周围 32 格内的海岸距离全变；只补 rect 会让岸线色带（T7–T9）与岸线墨线
@@ -413,6 +465,7 @@ impl FieldPack {
             || self.height_tex.len() != n * 2
             || self.coast_tex.len() != n * 2
             || self.attr_tex.len() != n * 4
+            || self.biome_tex.len() != n * 4
         {
             return false;
         }
@@ -470,6 +523,45 @@ impl FieldPack {
             let row0 = (y as usize) * (w as usize);
             let at = (row0 + out.x0 as usize) * 2;
             self.coast_tex[at..at + out_cols * 2].copy_from_slice(&c_row);
+        }
+
+        // ── biome 距离场（ADR-0072 T2）：窗口 Dijkstra（回写 `rect ⊕ 8`，
+        //    窗口 `rect ⊕ 16`）──
+        //
+        // 传播半径 = `BIOME_FIELD_CAP`（8），证明结构与 coast 同构：某格的
+        // 编码字节会变 ⇒ 它的新旧最近异类格至少有一个在 `rect` 内，且只有
+        // `d < 8` 才可能改字节（`d ≥ 8` 两种情形都饱和）⇒ 该格必在
+        // `rect ⊕ 8` 内；种子又在回写区 8 格内 ⇒ 窗口 `⊕ 16` 保证
+        // 「窗口 Dijkstra = 全图 Dijkstra」。窗口格数 ≈ `(w+32)×(h+32)`，
+        // 一笔 brush 的脏区下是亚毫秒级（Dijkstra 带 cap 早退）。
+        let bcap = biome_sdf::BIOME_FIELD_CAP;
+        let bwin = r.expand((bcap * 2.0) as u32, w, h);
+        let (bww, bwh) = (bwin.x1 - bwin.x0, bwin.y1 - bwin.y0);
+        let mut bcells = Vec::with_capacity((bww as usize) * (bwh as usize));
+        for y in bwin.y0..bwin.y1 {
+            let row0 = (y as usize) * (w as usize);
+            bcells.extend_from_slice(&data.cells[row0 + bwin.x0 as usize..row0 + bwin.x1 as usize]);
+        }
+        let bwindow = TerrainData {
+            width: bww,
+            height: bwh,
+            cells: bcells,
+        };
+        let bfield = biome_sdf::biome_distance_field(&bwindow);
+        let bout = r.expand(bcap as u32, w, h); // 回写区
+        let bout_cols = (bout.x1 - bout.x0) as usize;
+        for y in bout.y0..bout.y1 {
+            let mut b_row = Vec::with_capacity(bout_cols * 4);
+            for x in bout.x0..bout.x1 {
+                let wi = ((y - bwin.y0) as usize) * (bww as usize) + (x - bwin.x0) as usize;
+                let cell = data.cells[(y as usize) * (w as usize) + x as usize];
+                let bd = bfield.d.get(wi).copied().unwrap_or(bcap);
+                let bnb = bfield.nb.get(wi).copied().unwrap_or(biome_sdf::NO_FOREIGN);
+                b_row.extend_from_slice(&encode_biome_field(bd, &cell, bnb, bcap));
+            }
+            let row0 = (y as usize) * (w as usize);
+            let at = (row0 + bout.x0 as usize) * 4;
+            self.biome_tex[at..at + bout_cols * 4].copy_from_slice(&b_row);
         }
 
         true
@@ -1027,6 +1119,10 @@ mod tests {
             assert_eq!(patched.height_tex, full.height_tex, "height 不一致：{ctx}");
             assert_eq!(patched.attr_tex, full.attr_tex, "attr 不一致：{ctx}");
             assert_eq!(patched.coast_tex, full.coast_tex, "coast 不一致：{ctx}");
+            assert_eq!(
+                patched.biome_tex, full.biome_tex,
+                "biome 距离场不一致（ADR-0072）：{ctx}"
+            );
         }
     }
 

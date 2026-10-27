@@ -44,7 +44,10 @@ pub(super) fn register(app: &mut App) {
         )
             .chain(),
     );
-    // 实机验收：`WV_MODE` 启动即切模式（截图探针已有全局版，见 widget_preview）。
+    // `WV_DRILL` 图级探针（ADR-0073 验收）：等后台工程加载完成后钻到指定图
+    // ——城市级街名 / 标签摆位截图必须「开机即在城市图」，双击手势没法从
+    // 命令行模拟。探针自带「未设置即退出」，缺省零开销。
+    app.add_systems(Update, crate::debug_probe::apply_env_drill);
     // 主题包同步（ADR-0023 M2）：`ViewState.theme_pack_id` → `ViewState.active_theme`。
     // **必须先于所有消费点**——挂在 PreUpdate 最前；渲染消费点在 Update（PreUpdate
     // 一定先于 Update），唯一同在 PreUpdate 的消费者（`poll_open_project_dialog`）
@@ -100,6 +103,10 @@ pub(super) fn register(app: &mut App) {
                         "commit_point_select_on_click",
                         editing::commit_point_select_on_click
                     ),
+                    // 地标放置（ADR-0071）：Landmark 激活时单击地图创建点状
+                    // Place。与点选互斥由 dispatch 的 SelectMapTool 分支保证
+                    // （placing 开时 point_select 必关），故两者先后无耦合。
+                    wv_render::perf_timed!("commit_landmark_click", editing::commit_landmark_click),
                     // hover 准星（[ADR-0052] D2 写入侧；ADR-0057：EditCell ∨
                     // PointSelect 共用）：每帧追踪光标压住的格。
                     // 必须排在 `track_cursor_world` 之后（要读 cursor_world）。
@@ -449,6 +456,9 @@ pub(super) fn register(app: &mut App) {
             // panel_cell_editor 均已退役——内容分别成为 Inspector 的
             // 「事态」「势力层」「属性（Cell）」页签。
             ui::panel_region,
+            // 地标面板（ADR-0071）：放置 toggle + 当前图点状地点列表。
+            // 同链纪律：读 ResMut<PanelState>，必须 chain 在其余面板之间。
+            ui::panel_landmark,
             // v0.3：Inspector 整体右移后绘在最后（右上角，离顶栏最近），
             // 避免被左列 / 中列面板遮挡。
             ui::panel_inspector,

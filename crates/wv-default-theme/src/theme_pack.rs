@@ -67,6 +67,11 @@ pub struct ThemePack {
     /// 离岸墨线波纹、墨色。**数值配方住主题层**（与 [`Self::overlays`] 同构）——
     /// 渲染层只做执行器，换风格不改渲染源码（ADR-0043）。
     pub sea: SeaRecipe,
+    /// 群系填色的覆盖强度（ADR-0072 T3）：场管线 Themed 分支陆格的
+    /// 「海拔三阶为底、冻结群系表色覆盖」混合强度。`0` = 纯海拔三阶
+    /// （无群系色，转正前的样子）、`1` = 群系色完全替代。专业制图默认
+    /// `0.5`——雪原回白、森林回绿，同时保住三阶的地形读感。
+    pub biome_tint: f32,
     /// 覆盖物演绎规则：feature 词汇 → 远 / 近带规则（晕、符号集、密度、采样参数）。
     ///
     /// v1 为代码常量（内置两包各一套、外部主题 crate 自带一本），YAML 化随
@@ -310,6 +315,7 @@ pub mod builtin {
         treatment: TreatmentFlags::EMPTY,
         atlas: None,
         sea: PROFESSIONAL,
+        biome_tint: 0.5,
         decor: DECOR_PROFESSIONAL,
         // 森林族（ADR-0032 D2 规则键 = 族）：**只留地界晕**。
         //

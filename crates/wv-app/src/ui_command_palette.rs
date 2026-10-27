@@ -231,6 +231,15 @@ pub enum MapToolId {
     /// 是同一绘制工具的两个类，工具条分裂按钮换类时**不关工具**（分发器
     /// already_on 判据 = `tool_active` ∧ 同类）。
     LinePoi(wv_core::distance::LineKind),
+    /// **地标放置**（ADR-0071）：激活后单击地图创建点状 `Place`（POI）——
+    /// Edit 浏览档落点击点，CellMap 工作区吸附格中心。默认类别 / 级别
+    /// 在地标面板选（先名词后动词，与笔刷同心智）。
+    ///
+    /// **无工具条瓷砖、无快捷键**：唯一入口是地标面板的「放置」toggle
+    /// （排 `SelectMapTool(Landmark)`）。保留 `MapToolId` 身份是为了白拿
+    /// dispatch 的互斥机制——激活时自动关闭选择 / 点选 / EditCell 等
+    /// 一切左键消费者，反之进 CellMap 时也会被 EditCell 关掉。
+    Landmark,
 }
 
 /// 一条命令：注册表的条目。
@@ -500,6 +509,7 @@ impl CommandRegistry {
                 Panel::Character => I18nKey::CmdTogglePanelCharacter,
                 Panel::Faction => I18nKey::CmdTogglePanelFaction,
                 Panel::Region => I18nKey::CmdTogglePanelRegion,
+                Panel::Landmark => I18nKey::CmdTogglePanelLandmark,
                 Panel::Inspector => I18nKey::CmdTogglePanelInspector,
                 Panel::CellEditor => I18nKey::CmdTogglePanelCellEditor,
                 Panel::Validation => I18nKey::CmdTogglePanelValidation,

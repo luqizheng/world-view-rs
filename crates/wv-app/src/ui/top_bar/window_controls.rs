@@ -81,6 +81,15 @@ pub(super) fn window_controls_segment(
     }
 }
 
+/// 关闭键单键（`ICON_X` + danger 红底 hover），rect 由 caller 算。
+///
+/// 顶栏走 [`window_controls_segment`] 三键整段；本页之外的场景（欢迎页等
+/// 无顶栏界面）经此复用**同一个视觉出处**——应用的关闭键长什么样，只在这一
+/// 处定义，避免两份 hover 红底配方各自漂移。
+pub(crate) fn close_button(ui: &mut egui::Ui, shell: &UiShell, rect: egui::Rect) -> egui::Response {
+    control_button(ui, shell, rect, ICON_X, true)
+}
+
 /// 单个窗控键：全高命中格 + 居中图标 + hover 底色。`danger` = 关闭键红底。
 fn control_button(
     ui: &mut egui::Ui,

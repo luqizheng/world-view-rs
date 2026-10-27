@@ -145,6 +145,8 @@ fn dispatcher_world(project_dir: Option<&str>, dirty: bool, pending: CommandId) 
     // 线段 POI 工具会话态（ADR-0070 D4）：分发器 SelectMapTool(LinePoi)
     // 分支读写（漏 init 同上）。
     world.init_resource::<crate::state::LinePoiState>();
+    // ADR-0071：地标放置会话态——分发器 SelectMapTool(Landmark) 分支要写。
+    world.init_resource::<crate::state::LandmarkToolState>();
     world.resource_mut::<CommandPalette>().pending = Some(pending);
     world
 }
@@ -435,7 +437,10 @@ fn project_menu_pending_command_reaches_the_dispatcher() {
     // ADR-0057：点选工具会话态 + 统一选区位图（分发器互斥分支要读写）。
     world.init_resource::<crate::state::PointSelectState>();
     world.init_resource::<crate::state::CellSelection>();
+    // 线段 POI 工具会话态（ADR-0070 D4）+ 地标放置会话态（ADR-0071）：
+    // 分发器 SelectMapTool 两分支各写各的（漏 init 即 SystemParamValidationError）。
     world.init_resource::<crate::state::LinePoiState>();
+    world.init_resource::<crate::state::LandmarkToolState>();
     world.resource_mut::<ProjectMenuState>().pending = Some(CommandId::CloseProject);
 
     world

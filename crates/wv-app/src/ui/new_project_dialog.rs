@@ -652,6 +652,12 @@ mod tests {
 
     /// 磁盘 round-trip：initial_world → create + 全量保存 → 重新打开，
     /// 世界形状原样读回（首图 / 栅格 / meta）。这是「新建工程即落盘」的主链路。
+    ///
+    /// 2026-10-26 定性追记：曾在受限执行环境报 `os error 5` 假失败——
+    /// 实测根因是**安全软件按 TEMP 路径门控**（worktree 新建的
+    /// `.target/testtmp` 被拦、主 checkout 的老路径放行；同一测试 exe
+    /// 只换 TEMP 路径结果即翻转）。跑测试把 TEMP/TMP 指向主 checkout 的
+    /// `.target/testtmp` 即全绿（AGENTS §2.2 环境约束，非代码缺陷）。
     #[test]
     fn initial_world_round_trips_through_disk() {
         let dir = std::env::temp_dir().join(format!(
@@ -731,6 +737,8 @@ mod tests {
     }
 
     /// 冷北模板的 meta（含 seed）必须能过磁盘 round-trip。
+    ///
+    /// 根因追记同 [`initial_world_round_trips_through_disk`]（TEMP 路径门控）。
     #[test]
     fn cold_north_template_round_trips_through_disk() {
         let dir = std::env::temp_dir().join(format!(

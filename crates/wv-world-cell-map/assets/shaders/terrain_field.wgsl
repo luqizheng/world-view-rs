@@ -23,6 +23,13 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(6) var attr_smp: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(7) var dash_tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(8) var dash_smp: sampler;
+// ADR-0072：biome 距离场。同一份字节的两个采样器视图——
+// Linear 给 R（d / 8，亚格连续），Nearest 给 G/B（本格 / 最近异类群系 ID，
+// ID 插值出「群系 5.5」是语义错误）。
+@group(#{MATERIAL_BIND_GROUP}) @binding(9) var biome_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(10) var biome_lin_smp: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(11) var biome_ids: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(12) var biome_near_smp: sampler;
 
 // vec3 在 std140 下补到 16 字节；这里用 vec4 分组避免隐式 padding 错位。
 struct FieldParams {
@@ -48,8 +55,15 @@ struct FieldParams {
 
 /// T11：岸线墨线宽（**屏幕像素**，SPEC §3.8.1 口径）。
 const COAST_LINE_PX: f32 = 1.2;
-/// T24：biome 边界线宽（屏幕像素）。地貌交界是「暗示」不是「划线」。
-const BIOME_LINE_PX: f32 = 0.8;
+/// ADR-0072：biome 距离场编码上限（格）——与 pack.rs / biome_sdf.rs 三方同源，
+/// 改动必须三边对齐。
+const BIOME_FIELD_CAP: f32 = 8.0;
+/// ADR-0072：群系边界的过渡带屏幕半宽（px）——与海岸
+/// `COAST_EDGE_HALF_PX` 同语法：远观一格宽 AA，近观 ~2px 锐利边。
+const BIOME_EDGE_HALF_PX: f32 = 1.0;
+/// ADR-0072（T3）：Themed 分支的群系色覆盖强度已收进 uniform
+/// `p.pad0.z`（真源 = `ThemePack.biome_tint`，桥接写入）。
+/// 冻结群系表色仍住在 `biome_raw_approx`（T3 色表主题化另议）。
 /// T25：河流墨线宽（屏幕像素）。线状要素比边界重（追记九）。
 const RIVER_LINE_PX: f32 = 1.8;
 /// T26：道路主干 / 次级墨线宽（屏幕像素）。
@@ -63,8 +77,21 @@ const RIVER_INK_ALPHA: f32 = 0.62;
 const ROAD_INK_ALPHA: f32 = 0.5;
 /// 岸线墨线不透明度（SPEC §1.5「描线 −45% 明度」的落地强度）。
 const COAST_INK_ALPHA: f32 = 0.55;
-/// biome 界墨线不透明度（比岸线浅一档）。
-const BIOME_INK_ALPHA: f32 = 0.38;
+/// 三段色带屏幕封顶（SPEC §3.8.4 追记一）：色带整体淡出的 px/格 区间。
+/// 色带宽度按世界格定义，屏幕宽 = 格数 × px_per_cell，近观线性变粗——
+/// 1 格 ≳ 6 px 时饱和浅水环已读作「粗海岸线」（2026-10-26 用户实测反馈），
+/// 24 px/格 全收。远观（< 6 px/格）不受影响。
+const COAST_BAND_CAP_MIN_PX: f32 = 6.0;
+const COAST_BAND_CAP_MAX_PX: f32 = 24.0;
+/// 水陆过渡带的屏幕半宽（px，追记一）。Signed 场的亚格过渡天然是
+/// 「一格宽」的世界量，深缩放会糊成几十 px 软边；钳到 ~2 px 全过渡，
+/// 近观保持 Google/百度式锐利 AA 边。
+const COAST_EDGE_HALF_PX: f32 = 1.0;
+/// 轮廓圆角半径（格，追记十五）：对 sd 场做 5 tap 盒式低通的采样偏移。
+/// 直段边界局部线性对称、零平移；凸/凹直角按 ~r 圆角化——格网真边界的
+/// 正交台阶在视觉上近似 Chaikin 圆角，向矢量观感靠拢。墨线（`abs(sd)`）、
+/// 填色过渡（`land_t`）与色带（`wd`）全部自动跟随圆角后的零等值线。
+const COAST_ROUND_CELLS: f32 = 0.6;
 /// 高度量程（米）= H_MAX(6000) − H_MIN(-4000)，与 pack.rs 同源。
 const H_RANGE_M: f32 = 10000.0;
 
@@ -177,27 +204,87 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var d: f32;  // 到最近异类格的**无符号**距离（色带用它，两模式都成立）
     if (p.pad1.y > 0.5) {
         sd = (coast_raw - 0.5) * 64.0; // pack 编码 (sd + 32) / 64
+        // ── 轮廓圆角（追记十五）─────────────────────────────────────────
+        // 对 sd 做 5 tap 盒式低通（中心 + 四正交方向各偏 r 格）。sd 是
+        // 连续函数，直段局部线性、平均后零点不动；直角拐点两侧符号相反的
+        // 邻居把零等值线「切」进角里——正交台阶圆角化。这正是 Signed 编码
+        // 独有的能力：Unsigned 场在边界是平顶，平均只会把平顶抹宽。
+        let rr = COAST_ROUND_CELLS;
+        let sd_c = sd;
+        let sd_n = (sample_coast_raw(pos + vec2<f32>(rr, 0.0)) - 0.5) * 64.0;
+        let sd_s = (sample_coast_raw(pos - vec2<f32>(rr, 0.0)) - 0.5) * 64.0;
+        let sd_e = (sample_coast_raw(pos + vec2<f32>(0.0, rr)) - 0.5) * 64.0;
+        let sd_w = (sample_coast_raw(pos - vec2<f32>(0.0, rr)) - 0.5) * 64.0;
+        // 四对角 tap：1 格宽的短直段两端角靠得近，只有正交 5 tap 切不干净；
+        // 9 tap 均匀盘各向更同性，斜向台阶的残留最少。
+        let rd = rr * 0.7071;
+        let sd_ne = (sample_coast_raw(pos + vec2<f32>(rd, rd)) - 0.5) * 64.0;
+        let sd_sw = (sample_coast_raw(pos - vec2<f32>(rd, rd)) - 0.5) * 64.0;
+        let sd_se = (sample_coast_raw(pos + vec2<f32>(rd, -rd)) - 0.5) * 64.0;
+        let sd_nw = (sample_coast_raw(pos + vec2<f32>(-rd, rd)) - 0.5) * 64.0;
+        let sd_round = (sd_c + sd_n + sd_s + sd_e + sd_w
+            + sd_ne + sd_sw + sd_se + sd_nw) * (1.0 / 9.0);
+        // 远观渐隐（lod_t→1）：tap 是 raw 场，远观主样本是 box 平均，
+        // 混入会带格频抖动；且远观台阶本就亚像素，圆角无意义。
+        // 追记十七：圆角**只属于 Themed**（Map/Browse 的「看世界」语法）。
+        // CellMap / Topographic（BiomeRaw）是方格数据视图——海岸保持格边
+        // 直角，作者的操作对象就是格子，轮廓必须忠实格网。
+        sd = mix(sd_c, sd_round, select(0.0, 1.0 - lod_t, p.shape.y >= 0.5));
         d = abs(sd);
     } else {
         d = coast_raw * 32.0; // pack 编码 d / 32
         sd = select(-(d - 0.5), d - 0.5, is_land);
     }
-    let land_t = smoothstep(-0.5, 0.5, sd);
+    // 过渡半宽的屏幕封顶（追记一）：远观保持一格宽 AA（half_t = 0.5），
+    // 近观钳到 ~2 px 全过渡。Unsigned 模式 sd 本是逐格阶跃，此钳制无感；
+    // Signed 模式下它把一格宽软边收成锐利 AA 边。
+    let half_t = min(0.5, COAST_EDGE_HALF_PX / px_per_cell);
+    let land_t = smoothstep(-half_t, half_t, sd);
 
     var base: vec3<f32>;
     if (p.shape.y < 0.5) {
-        // CellMap / Topographic：群系固定色块，**不随主题**（ADR-0051 §5）。
+        // CellMap / Topographic：**方格数据视图**（追记十七）——own 色直出，
+        // 无距离场混合、无轮廓圆角；方格边界 + 全程深浅色带是本分支契约。
+        // 分层设色（ADR-0055）照旧：群系色仍是底，陆格按海拔 8 阶向固定
+        // 色带混合；水格不叠（海拔色带只对陆面有意义）。
         base = biome_raw_approx(biome_id);
-        // 分层设色（ADR-0055）：群系色仍是底，陆格再按海拔 8 阶向固定色带
-        // 混合。色带读「高」、下方 hillshade 读「坡」，两者正交互补。
-        // 水格不叠（海拔色带只对陆面有意义）。
-        let strength = p.elev_cuts[1].w;
+        let strength = clamp(p.elev_cuts[1].w, 0.0, 1.0);
         if (is_land && strength > 0.0) {
             let ramp = elev_ramp_color(elev_band(h));
-            base = mix(base, ramp, clamp(strength, 0.0, 1.0));
+            base = mix(base, ramp, strength);
         }
     } else {
-        base = themed_land(is_land, h);
+        // ── 群系填色（ADR-0072 T4，**Themed 专属**）：own / nb 两套
+        // 「应显示色」按距离场亚格混合。d 先做 9-tap 低通（追记十五同款）
+        // 圆角化；过渡带屏幕封顶与海岸同语法。nb 为水系群系（冻结表
+        // 14/15/16）时跳过混合——水陆边界由 land_t / 海岸语法负责，两套
+        // 过渡叠加会把滩涂二次染成海色。
+        let bf_c = textureSampleLevel(biome_tex, biome_lin_smp, uv, 0.0).r;
+        let rb = COAST_ROUND_CELLS / grid;
+        let bf_n = textureSampleLevel(biome_tex, biome_lin_smp, uv + vec2<f32>(rb.x, 0.0), 0.0).r;
+        let bf_s = textureSampleLevel(biome_tex, biome_lin_smp, uv - vec2<f32>(rb.x, 0.0), 0.0).r;
+        let bf_e = textureSampleLevel(biome_tex, biome_lin_smp, uv + vec2<f32>(0.0, rb.y), 0.0).r;
+        let bf_w = textureSampleLevel(biome_tex, biome_lin_smp, uv - vec2<f32>(0.0, rb.y), 0.0).r;
+        let rd_b = rb * 0.7071;
+        let bf_ne = textureSampleLevel(biome_tex, biome_lin_smp, uv + vec2<f32>(rd_b.x, rd_b.y), 0.0).r;
+        let bf_sw = textureSampleLevel(biome_tex, biome_lin_smp, uv - vec2<f32>(rd_b.x, rd_b.y), 0.0).r;
+        let bf_se = textureSampleLevel(biome_tex, biome_lin_smp, uv + vec2<f32>(rd_b.x, -rd_b.y), 0.0).r;
+        let bf_nw = textureSampleLevel(biome_tex, biome_lin_smp, uv + vec2<f32>(-rd_b.x, rd_b.y), 0.0).r;
+        let biome_d = (bf_c + bf_n + bf_s + bf_e + bf_w + bf_ne + bf_sw + bf_se + bf_nw)
+            * (1.0 / 9.0)
+            * BIOME_FIELD_CAP;
+        let nb_id = u32(round(textureSampleLevel(biome_ids, biome_near_smp, uv, 0.0).b * 255.0));
+        let nb_is_water = nb_id >= 14u && nb_id <= 16u;
+        let half_b = min(0.5, BIOME_EDGE_HALF_PX / px_per_cell);
+        let biome_t = smoothstep(0.5, 0.5 + half_b, biome_d);
+        let biome_mix = select(1.0, biome_t, is_land && !nb_is_water);
+        if (is_land) {
+            let own = mix(themed_land(true, h), biome_raw_approx(biome_id), p.pad0.z);
+            let nb_col = mix(themed_land(true, h), biome_raw_approx(nb_id), p.pad0.z);
+            base = mix(nb_col, own, biome_mix);
+        } else {
+            base = themed_land(false, h);
+        }
     }
     // 明暗只作用于陆面。水面用深度量程表达 —— 海面跟着地形一起明暗是
     // 现行烘焙路径最刺眼的 bug 之一。
@@ -213,8 +300,21 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let shallow_c = mix(p.theme[0].rgb, p.theme[1].rgb, 0.55);
     let deep_c = p.theme[0].rgb * 0.82;
     var water_col = mix(mix(p.theme[0].rgb, shallow_c, t_shallow), deep_c, t_deep);
+    // 色带屏幕封顶（追记一）：色带是**远观**制图暗示，不是线。近观把
+    // 三段偏差整体收敛回平色水，海岸呈现退化为 AA 边界 + 岸线墨线
+    // （两者已是屏幕口径）——与 Google/百度近观水面一致。
+    // 追记十七：深浅色带的屏幕封顶**只属于 Themed**（近观平色水是
+    // 「看世界」的语法）。CellMap / Topographic 全程保留三段色带——
+    // 「海洋深浅（颜色深浅变化）」是方格数据视图的契约之一。
+    let band_gate = select(
+        1.0,
+        1.0 - smoothstep(COAST_BAND_CAP_MIN_PX, COAST_BAND_CAP_MAX_PX, px_per_cell),
+        p.shape.y >= 0.5,
+    );
+    water_col = mix(p.theme[0].rgb, water_col, band_gate);
     // 近岸白滩（t_shore 最高处向纸色偏一点，给水线一个视觉落点）
-    water_col = mix(water_col, p.paper.rgb, 0.18 * t_shore * (1.0 - t_shallow));
+    // ——白滩缘同属色带装饰，随门控一起收。
+    water_col = mix(water_col, p.paper.rgb, 0.18 * t_shore * (1.0 - t_shallow) * band_gate);
 
     // 亚格混合：一格宽的软过渡替代逐格硬切。
     var rgb = mix(water_col, land_col, land_t);
@@ -285,28 +385,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     rgb = mix(rgb, p.ink.rgb, clamp(coast_ink, 0.0, 1.0) * COAST_INK_ALPHA * ink_gate);
 
-    // biome 边界（T27：4 邻 + 中心比较，ID 只比较不插值）。
-    //
-    // **已知限制（Q3 裁定 A：不做 biome SDF，P4 复评）**：
-    // 4 邻比较只能给出「整格」级的判定，天然渲成**一格宽**的带。
-    // 一格在屏幕上的宽度是 `px_per_cell`，故：
-    // - 远观（px_per_cell < 1）：一格 ≈ 1px，带子接近 T24 的 0.8px 目标值 ✓
-    // - 近观（px_per_cell 大）：带子会涨到几十 px，读起来是「色块」而非「线」
-    //
-    // 因此按 T24 的精神（边界是暗示不是划线）做**淡出**：
-    // 当一格已明显宽于目标线宽若干倍时把线收掉——那时作者看的是 biome 色块本身，
-    // 一条 1 格宽的假线只会误导。精确的亚格边界需要 biome SDF，属 P4。
-    if (p.shape.y >= 0.5 && is_land) {
-        let band_px = px_per_cell; // 4 邻检测的天然带子宽度（1 格 = px_per_cell px）
-        let fade = 1.0 - smoothstep(BIOME_LINE_PX * 3.0, BIOME_LINE_PX * 8.0, band_px);
-        // 再乘缩放门控：T33 要求**远观墨线全关只留色域**——否则 1 px/格
-        // 以下时 biome 界会变成彩色噪点并随缩放闪烁。
-        let total = fade * ink_gate;
-        if (total > 0.01) {
-            let is_edge = biome_boundary(uv, grid, biome_id);
-            rgb = mix(rgb, p.ink.rgb, is_edge * BIOME_INK_ALPHA * total);
-        }
-    }
+    // biome 边界（T27 4-邻墨线）**已退役**（ADR-0072 / SPEC 追记十六）：
+    // 群系色块边界现在由 biome 距离场亚格混合承担（连续 + 屏幕封顶），
+    // 4 邻检测的「一格宽假线」连同它的近观淡出门控一并下线。
 
     // ── 河流 / 道路墨线（T25 / T26，追记九）────────────────────────────────
     //
@@ -617,22 +698,8 @@ fn sample_coast_raw(pos: vec2<f32>) -> f32 {
     return textureSampleLevel(coast_tex, coast_smp, uv, 0.0).r;
 }
 
-/// biome 边界检测（T27）：中心与 4 邻比较，ID 只比较不插值。
-/// 返回 1 = 四邻中有异类（本格落在边界上），0 = 四邻同类。
-fn biome_boundary(uv: vec2<f32>, grid: vec2<f32>, center_id: u32) -> f32 {
-    let t = 1.0 / grid;
-    var is_edge = 0.0;
-    let s1 = textureSampleLevel(attr_tex, attr_smp, uv + vec2<f32>(t.x, 0.0), 0.0);
-    if (u32(round(s1.g * 255.0)) != center_id) { is_edge = 1.0; }
-    let s2 = textureSampleLevel(attr_tex, attr_smp, uv - vec2<f32>(t.x, 0.0), 0.0);
-    if (u32(round(s2.g * 255.0)) != center_id) { is_edge = 1.0; }
-    let s3 = textureSampleLevel(attr_tex, attr_smp, uv + vec2<f32>(0.0, t.y), 0.0);
-    if (u32(round(s3.g * 255.0)) != center_id) { is_edge = 1.0; }
-    let s4 = textureSampleLevel(attr_tex, attr_smp, uv - vec2<f32>(0.0, t.y), 0.0);
-    if (u32(round(s4.g * 255.0)) != center_id) { is_edge = 1.0; }
-    // 1 = 本格贴边界，0 = 内部格
-    return is_edge;
-}
+// biome 边界检测（T27 的 4 邻比较）已随 ADR-0072 退役：群系边界改由
+// biome 距离场（biome_tex/biome_ids）亚格混合承担，逐格硬切判定不再需要。
 
 /// 主题分支陆面底色（Topographic 四阶）。
 fn themed_land(is_land: bool, h: f32) -> vec3<f32> {

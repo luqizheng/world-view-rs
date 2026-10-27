@@ -1673,6 +1673,11 @@ mod tests {
         }
     }
 
+    // 2026-10-26 定性追记：以下三条曾在受限执行环境报 `os error 5` 假失败
+    // ——实测根因是**安全软件按 TEMP 路径门控**（worktree 新建的
+    // `.target/testtmp` 被拦、主 checkout 的老路径放行）。跑测试把
+    // TEMP/TMP 指向主 checkout 的 `.target/testtmp` 即全绿
+    // （AGENTS §2.2 环境约束，非代码缺陷）。
     #[test]
     fn apply_command_skeleton_rejects_missing_geojson_file() {
         // --geojson 指向不存在的文件 → 拒绝（不在静默创建）。

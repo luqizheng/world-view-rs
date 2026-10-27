@@ -283,6 +283,10 @@ fn browse_edit_segment(
                     // 一起，Inspector 回归通用属性检查。故工作区开的
                     // 是 Brush 而不是 Inspector。
                     panels.set_visible(Panel::Brush, true);
+                    // 地标面板（ADR-0071）随行开启：CellMap 工作区是地标
+                    // 放置的两用场景之一（吸附格中心），没有它工作区内
+                    // 无放置入口。退出时随快照还原。
+                    panels.set_visible(Panel::Landmark, true);
                     palette.pending = Some(CommandId::SelectMapTool(MapToolId::EditCell));
                     view.mode = ViewMode::Topographic;
                 }

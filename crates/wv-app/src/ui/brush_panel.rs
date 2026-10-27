@@ -71,6 +71,9 @@ pub fn panel_brush(
     mut paint_session: ResMut<wv_world_cell_map::cell_paint::CellPaintSession>,
     mut flood_select: ResMut<crate::state::FloodSelectState>,
     mut derived: ResMut<crate::edit::derived_op::DerivedOpRequest>,
+    // 批量区「生成大陆」按钮的目标面板（2026-10-26）——只置 open，确认
+    // 提交在 continent_dialog_system（§3.3：UI 不碰 History 的例外同款）。
+    mut continent: ResMut<crate::ui::ContinentDialog>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -148,6 +151,7 @@ pub fn panel_brush(
                     &mut paint_session,
                     &mut flood_select,
                     &mut derived,
+                    &mut continent,
                     playback.playing,
                     &mut cell_sel,
                     drill.current(),

@@ -159,6 +159,9 @@ fn chunk_app(terrain_visible: bool, scale: f32) -> App {
         .insert_resource(ViewState {
             scale,
             camera_center: Vec2::splat(MAP_CELLS as f32 * CELL_SIZE * 0.5),
+            // 本 harness 名叫 chunk app：**显式钉死 chunk 路径**，不随
+            // `field_render` 默认值漂移（追记十四转正后默认是场管线）。
+            field_render: false,
             ..Default::default()
         })
         .insert_resource(GridConfig {
@@ -467,21 +470,22 @@ fn neg_terrain_layer_hidden_yields_zero_chunks() {
 
 /// REQ-0（默认值）：`field_render` **默认 false** —— 开箱走现行烘焙路径。
 ///
-/// ADR-0053 §3 的「一行回退保险」只有在默认关时才算保险：默认开 = 用户第一次
-/// 打开看到的是新管线，回退变成「用户自己去找开关」。
+/// ADR-0053 §3 的「一行回退保险」语义随转正更新：默认开 = 用户第一次打开
+/// 看到的就是 GPU 场画面；回退 = 「用户自己去找开关」（命令面板可切）。
+/// 翻转依据：SPEC 追记十四（2026-10-26 用户实机验收后拍板转正）。
 #[test]
-fn req_field_render_defaults_to_off() {
+fn req_field_render_defaults_to_on() {
     assert!(
-        !ViewState::default().field_render,
-        "`ViewState::default().field_render` 必须是 false（回退保险的默认态）"
+        ViewState::default().field_render,
+        "`ViewState::default().field_render` 必须是 true（追记十四转正后的默认态）"
     );
     let app = field_app(true, FIT_SCALE, false);
     assert!(
         !iface::field_render(&app),
-        "harness 置 false 后应读到 false"
+        "harness 置 false 后应读到 false（回退路径仍可达）"
     );
     assert!(
-        !ViewState::default().field_render,
+        ViewState::default().field_render,
         "同一事实的第二条陈述必须一致"
     );
 }
