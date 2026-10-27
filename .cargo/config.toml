@@ -11,6 +11,12 @@
 # 若 ICE 复发，恢复手段：在 [build] 段加回 `incremental = false`。
 
 [build]
+# 2026-10-27 用户裁定（feat/faction-partition-map 施工期）：**target 隔离到
+# worktree 内 `.target/`**——共享全局 CARGO_TARGET_DIR 与并行 worktree 撞车
+# （map-tree 分支的 wv-core rmeta 带本分支没有的字段，本分支测试读到幽灵
+# E0063，反之亦然）。编译缓存仍由上行 sccache 兜底（跨目录复用），独立
+# 目录的全量重编成本秒级。`.target/` 已在 .gitignore（§13 回退方案同款）。
+target-dir = ".target"
 # sccache rustc 包装器（2026-10-25 用户裁定恢复——d5ef2b9 曾移除）：
 # worktree 独立 target 目录（AGENTS §13 回退方案）只免「产物串味」，
 # 编译本身仍要重来；sccache 按「编译器 + 输入哈希」跨 target 目录复用
