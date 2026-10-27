@@ -177,10 +177,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     //
     // ## 符号锚点（与 `shading.rs::normal_world` 互指，两侧不许各改各的）
     //
-    // CPU 侧 `normal_world` 写 `normalize(−s·hx, +s·hy, 1)`，`+s·hy` 那一次
-    // 「数据行向南 → 世界 +y 向北」的翻转发生在**世界坐标系**里；本 shader
-    // 全程住在**纹理坐标系**——v 与数据行同向（+v = 南），梯度在纹理空间取，
-    // 那次翻转已隐含在「纹理系 → 世界系」的变换里，故此处写 `−zy` **不再翻**。
+    // 纹理系 +v = 南、世界系 +y = 北；法线在**构造处翻 y**（`+s·zy`，与
+    // `normal_world` 的 `+s·hy` 逐字同形——zy/hy 同为「行向 / +v 向南」
+    // 梯度），之后才可与世界系 LIGHT_* 直接点积。旧 GPU 路线（≤T33）写
+    // `−zy` 漏翻、受光等效西南——ADR-0077 起两管线统一为**西北受光**。
     // 两侧若同时翻或不翻，南北光照镜像，视觉验收立刻可察。
     //
     // 梯度 = Horn 3×3（米/格，见 `horn_grad_detail`）；`s = Z_EXAG / 米每格`
@@ -191,7 +191,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // 但 NaN > 0.0 恒为 false，同样落进回落分支——三种非正常值一并兜住。
     let mpc = select(1.0, p.light_dir.w, p.light_dir.w > 0.0);
     let s = p.shape.z / mpc;
-    let n = normalize(vec3<f32>(-grad.x * s, -grad.y * s, 1.0));
+    let n = normalize(vec3<f32>(-grad.x * s, grad.y * s, 1.0));
     // 双光源单尺度：`0.4 + 0.48·max(0, N·L₁) + 0.12·max(0, N·L₂)`（镜像
     // shading::AMBIENT / DIFFUSE_MAIN / DIFFUSE_AUX，和 = 1）。LIGHT_MAIN /
     // LIGHT_AUX 是真 45° 单位向量，直接 dot 无需 normalize；单位光向量下
