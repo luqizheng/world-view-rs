@@ -210,10 +210,11 @@ pub(crate) fn apply_pending_commands(
     // 在对话框自身的系统里提交，见 `ui::new_map_dialog`）。
     // 「新建工程」对话框的开关同源（CommandId::NewProject / 欢迎页 → open）。
     // 两个 ResMut 折成一层元组：单系统参数上限 16，拆元组后每层元组算 1 个。
-    (mut new_map_dialog, mut new_project_dialog, mut continent_dialog): (
+    (mut new_map_dialog, mut new_project_dialog, mut continent_dialog, mut map_props_dialog): (
         ResMut<crate::ui::NewMapDialog>,
         ResMut<crate::ui::NewProjectDialog>,
         ResMut<crate::ui::ContinentDialog>,
+        ResMut<crate::ui::MapPropertiesDialog>,
     ),
     // 换世界接管（adopt_world_snapshot）所需：瓦片图集可缺席（纯色平涂回退）。
     (atlas, mut images): (
@@ -227,13 +228,15 @@ pub(crate) fn apply_pending_commands(
     mut boundary: ResMut<wv_render::state::BiomeBoundaryState>,
     // 泛洪选择工具会话态（[ADR-0052] D6）：与 EditCell 同款粒度的互斥工具。
     // 撤销白闪会话态（[ADR-0052] D8-A）：撤销/重做后对受影响格做 250ms
-    // 白色脉冲；点选工具会话态（ADR-0057 补记 6）——三者同属 CellMap
-    // 会话域，折成一层元组（元组算 1 个参数，单系统上限 16）。
-    // 地标放置会话态（ADR-0071）：应用侧自有工具态，与上述同粒度互斥。
-    (mut flood_select, mut flash, mut point_select, mut landmark): (
+    // 白色脉冲；点选工具会话态（ADR-0057 补记 6）——同属 CellMap
+    // 会话域；线段 POI 会话态（ADR-0070 D4）非 CellMap 域但同为互斥工具
+    // 会话态；地标放置会话态（ADR-0071）同粒度互斥——四者为单系统
+    // 16 参数上限折进同层元组。
+    (mut flood_select, mut flash, mut point_select, mut line_poi, mut landmark): (
         ResMut<crate::state::FloodSelectState>,
         ResMut<wv_world_cell_map::cell_flash::CellFlashState>,
         ResMut<crate::state::PointSelectState>,
+        ResMut<crate::state::LinePoiState>,
         ResMut<crate::state::LandmarkToolState>,
     ),
     current_loc: Res<CurrentLocale>,
@@ -261,6 +264,7 @@ pub(crate) fn apply_pending_commands(
     if matches!(
         id,
         CommandId::NewMap
+            | CommandId::MapProperties
             | CommandId::Save
             | CommandId::SaveProjectAs
             | CommandId::ExportProject
@@ -318,6 +322,13 @@ pub(crate) fn apply_pending_commands(
         // 新建地图：只负责把对话框打开（默认值按世界现状预填）；创建动作
         // 在对话框自身的系统里经 `AddMapCommand` 提交（见 `ui::new_map_dialog`）。
         CommandId::NewMap => new_map_dialog.open_for(&projection.world),
+        // 地图属性：对**当前图**（钻取栈顶）出框；没有当前图（无工程）时
+        // 闸门已挡，这里只是防御。
+        CommandId::MapProperties => {
+            if let Some(node) = drill.current_node(&projection.world) {
+                map_props_dialog.open_for_node(node);
+            }
+        }
         CommandId::ToggleTheme => cfg.theme = cfg.theme.toggled(),
         CommandId::ToggleDensity => cfg.density = cfg.density.toggled(),
         CommandId::ToggleImmersive => panels.immersive = !panels.immersive,
@@ -398,6 +409,9 @@ pub(crate) fn apply_pending_commands(
                 MapToolId::PointSelect => point_select.tool_active,
                 MapToolId::BiomeBoundary => boundary.line.is_some(),
                 MapToolId::FloodSelect => flood_select.tool_active,
+                // 线段 POI（ADR-0070 D4）：「同款」= 工具开着 ∧ 同一类——
+                // 河开着点路 = 换类不关工具（与 Select(shape) 换形状同口径）。
+                MapToolId::LinePoi(kind) => line_poi.tool_active && line_poi.kind == kind,
                 MapToolId::Landmark => landmark.placing,
             };
 
@@ -432,6 +446,11 @@ pub(crate) fn apply_pending_commands(
                 flood_select.close_tool();
                 // 切走分界线工具：线是会话工具，一并清（ADR-0051）。
                 boundary.clear();
+                // 线段 POI 的面板**随工具走**（ADR-0070 D4）：无论「切走」还是
+                // 「同款再点关闭」，工具一关面板就收；若本命令是开 LinePoi，
+                // 下方「按需打开」段会再开它（设置承载在 T11 的面板里）。
+                line_poi.tool_active = false;
+                panels.set_visible(crate::state::Panel::LinePoi, false);
                 // 切走地标放置：纯开关，无草稿可清（ADR-0071）。
                 landmark.placing = false;
 
@@ -484,6 +503,29 @@ pub(crate) fn apply_pending_commands(
                         // segmented 里改（[ADR-0052] D6）。
                         MapToolId::FloodSelect => {
                             flood_select.tool_active = true;
+                        }
+                        // 线段 POI 激活（ADR-0070 D4）：记下当前类（弹层换类
+                        // 走到这里 = 换参数），并打开「河流和道路」面板——
+                        // 面板内容（新建表单 / 选中属性）由 T11 渲染。
+                        // 播放锁（T10 评审 minor ①）：播放中不可开工具——
+                        // 瓷砖灰化是第一道闸，这里是命令链上的兜底（命令
+                        // 面板 / 快捷键不经瓷砖也能发 SelectMapTool）。锁住时
+                        // 什么都不开（上方「先全关」已把别的工具收掉）。
+                        // 档位兜底（T10 评审 minor ②）：瓷砖仅在 Edit 档渲染
+                        // （`line_poi_tile_visible`，T10 已落），命令面板 /
+                        // 快捷键同样不经瓷砖——非 Edit 档在此拒绝激活。静默
+                        // 早退与同分支播放锁同口径（不引入一次性回执：非 Edit
+                        // 档下瓷砖本就不可见，入口状态与回执一致；关工具不受
+                        // 此限——`already_on` 走不到本分支，缩小地图也能收）。
+                        MapToolId::LinePoi(kind) => {
+                            if !playback.playing
+                                && wv_render::state::lod_tier(view.scale)
+                                    == wv_render::state::LodTier::Edit
+                            {
+                                line_poi.kind = kind;
+                                line_poi.tool_active = true;
+                                panels.set_visible(crate::state::Panel::LinePoi, true);
+                            }
                         }
                         // 地标放置激活：单击地图创建点状 Place（见
                         // `edit::editing::commit_landmark_click`）。默认类别 /
@@ -613,6 +655,24 @@ pub(crate) fn apply_pending_commands(
                 seed,
                 rivers_seed: seed ^ 0x9E37_79B9_7F4A_7C15,
             };
+            // 生成器河实体（ADR-0070 D3 生成器统一 · 计划 Task 12）：种子河
+            // 的「生成期唯一定义点」——新地形 + rivers_seed 折线 → 无下切的
+            // 河线 POI，与地形同一事务落账（渲染期 seed 派生已在 T8 删除）。
+            // 上一轮生成器河由 commit_regen_world 同事务下架（换血）。
+            let extent = projection
+                .world
+                .maps
+                .iter()
+                .find(|m| m.id == map_id)
+                .and_then(|m| m.extent.as_ref())
+                .map(|e| (e.width, e.height))
+                .unwrap_or((terrain.width as f32, terrain.height as f32));
+            let river_places = crate::edit::river_gen::generator_river_places(
+                &map_id,
+                &terrain,
+                template.rivers_seed,
+                extent,
+            );
             if let Some(dir) = projection.project_dir.clone() {
                 backup_terrain_before_regen(&dir, &map_id, &projection.world);
             }
@@ -620,6 +680,7 @@ pub(crate) fn apply_pending_commands(
                 &map_id,
                 terrain,
                 template,
+                river_places,
                 &mut edit,
                 &mut projection,
                 &mut tex,

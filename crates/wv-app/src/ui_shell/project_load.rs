@@ -75,6 +75,20 @@ pub(crate) fn apply_loaded_world(
     // 历史也清空——切工程后旧撤销栈没有意义（V2 守约：作者是新工程的主人）。
     edit.history = Default::default();
     edit.clear_dirty();
+    // ADR-0070 §4.6（T9）：加载期自动迁移——**必须紧跟 History 清空之后**：
+    // 迁移事务要落进新工程的干净撤销栈，且「全零报告 → 不入栈」的等价性
+    // 依赖此刻栈里只有本事务这一事实（见 migrate_legacy_lines_on_load 文档）。
+    // IO/解析虽在后台线程，迁移改的是世界工作副本 + EditHistory（二者都是
+    // 主线程所有权），在 WorldProjection 装配后的首帧做是安全的。
+    let migration =
+        crate::edit::road_sync::migrate_legacy_lines_on_load(&mut projection.world, edit);
+    if migration.is_some() {
+        // 迁移改了涂格 / 删了手写边 / 落了链实体——工作副本与磁盘分叉了。
+        projection.dirty = true;
+    }
+    // ADR-0070 D5（T9）：加载完成后重建推导边（无论是否迁移）——新工程
+    // 首帧即有正确路网投影；重建不进脏路径（derived 永不落盘）。
+    crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
     // §A：切工程要重置地图层级并清访问痕迹（`reset_to_world` 两者都做）。
     drill.reset_to_world();
     drill.ensure_root(&projection.world);
@@ -96,6 +110,11 @@ pub(crate) fn apply_loaded_world(
         ),
         frame,
     );
+    // 迁移回执后置（V1：迁移可见）：ShellNotice 是单槽，后写的覆盖先写的
+    // ——链计数 / chains_skipped 比通用「已加载」更值得留在状态栏。
+    if let Some(report) = migration.as_ref() {
+        notice.info(crate::edit::road_sync::migration_notice_text(report), frame);
+    }
     adopt_world_snapshot(
         projection, drill, playback, view, tex, atlas, images, cameras,
     );

@@ -67,6 +67,8 @@ pub fn place_biome_marker_now(
         w: None,
         h: None,
         rank: None,
+        line_kind: None,
+        line_width_m: None,
     };
     let before_cells = world.world.terrain_of(&map).map(|t| t.cells.clone());
     let cmd = wv_edit::command::PlaceBiomeMarkerCommand::new(
@@ -82,6 +84,8 @@ pub fn place_biome_marker_now(
         Ok(dirty) => {
             edit.record_dirty(dirty);
             world.dirty = true;
+            // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+            crate::edit::road_sync::sync_derived_road_edges(&mut world.world);
             // 纹理脏区：生成分支改了格子才需要重传。
             if let (Some(before), Some(after)) = (
                 before_cells,
@@ -143,6 +147,8 @@ pub fn regenerate_marker_now(
         Ok(dirty) => {
             edit.record_dirty(dirty);
             world.dirty = true;
+            // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+            crate::edit::road_sync::sync_derived_road_edges(&mut world.world);
             // 纹理脏区：生成分支改了格子才需要重传（识别分支 diff 为空）。
             if let (Some(before), Some(after)) = (
                 before_cells,

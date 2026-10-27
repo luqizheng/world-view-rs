@@ -1,8 +1,9 @@
 //! 零依赖（serde_json 之外）GeoJSON 工具（wv-gen-demo 专用）。
 //!
-//! 只支持本工具需要的子集：FeatureCollection + Polygon / MultiPolygon /
-//! LineString / MultiLineString。另附栅格化小工具（扫描线填充 / 点到折线
-//! 距离 / 折线刷写），与解析同放此处。
+//! 只支持本工具需要的子集：FeatureCollection + Polygon / MultiPolygon
+//! （LineString / MultiLineString 随「河流不再涂格」一并移除——
+//! ADR-0070 D3 · 计划 Task 12：河走实体，rivers.geojson 不再解析）。
+//! 另附栅格化小工具（扫描线填充 / 点到折线距离），与解析同放此处。
 
 use std::path::Path;
 
@@ -23,8 +24,6 @@ struct Feature {
 enum Geometry {
     Polygon(Vec<Vec<[f64; 2]>>),
     MultiPolygon(Vec<Vec<Vec<[f64; 2]>>>),
-    LineString(Vec<[f64; 2]>),
-    MultiLineString(Vec<Vec<[f64; 2]>>),
 }
 
 pub struct F {
@@ -34,8 +33,6 @@ pub struct F {
 pub enum G {
     Polygon(Vec<Vec<[f64; 2]>>),
     MultiPolygon(Vec<Vec<Vec<[f64; 2]>>>),
-    LineString(Vec<[f64; 2]>),
-    MultiLineString(Vec<Vec<[f64; 2]>>),
 }
 
 /// 读 GeoJSON FeatureCollection → 几何列表（null geometry 的 feature 跳过）。
@@ -51,8 +48,6 @@ pub fn read(path: &Path) -> Result<Vec<F>, String> {
             let geom = match f.geometry? {
                 Geometry::Polygon(rs) => G::Polygon(rs),
                 Geometry::MultiPolygon(rs) => G::MultiPolygon(rs),
-                Geometry::LineString(ls) => G::LineString(ls),
-                Geometry::MultiLineString(ls) => G::MultiLineString(ls),
             };
             Some(F { geom })
         })
@@ -117,60 +112,6 @@ fn point_to_seg_dist(px: i32, py: i32, a: [i32; 2], b: [i32; 2]) -> i32 {
     ((px - qx).powi(2) + (py - qy).powi(2)).sqrt() as i32
 }
 
-/// 折线刷写（i16 通道：val < 0 时取更低值——河床语义）。
-pub fn draw_line_i16(buf: &mut [i16], val: i16, a: [i32; 2], b: [i32; 2], w: i32, h: i32) {
-    let (x0, y0) = (a[0], a[1]);
-    let (x1, y1) = (b[0], b[1]);
-    let radius = 1;
-    let steps = (x0 - x1).abs().max((y0 - y1).abs());
-    if steps == 0 {
-        return;
-    }
-    for s in 0..=steps {
-        let t = s as f32 / steps as f32;
-        let x = (x0 as f32 * (1.0 - t) + x1 as f32 * t).round() as i32;
-        let y = (y0 as f32 * (1.0 - t) + y1 as f32 * t).round() as i32;
-        for dy in -radius..=radius {
-            for dx in -radius..=radius {
-                let (xx, yy) = (x + dx, y + dy);
-                if xx < 0 || xx >= w || yy < 0 || yy >= h {
-                    continue;
-                }
-                let idx = (yy as u32 * w as u32 + xx as u32) as usize;
-                if val < 0 {
-                    if buf[idx] > val {
-                        buf[idx] = val;
-                    }
-                } else {
-                    buf[idx] = val;
-                }
-            }
-        }
-    }
-}
-
-/// 折线刷写（u8 通道：biome 覆盖）。
-pub fn draw_line_u8(buf: &mut [u8], val: u8, a: [i32; 2], b: [i32; 2], w: i32, h: i32) {
-    let (x0, y0) = (a[0], a[1]);
-    let (x1, y1) = (b[0], b[1]);
-    let radius = 1;
-    let steps = (x0 - x1).abs().max((y0 - y1).abs());
-    if steps == 0 {
-        return;
-    }
-    for s in 0..=steps {
-        let t = s as f32 / steps as f32;
-        let x = (x0 as f32 * (1.0 - t) + x1 as f32 * t).round() as i32;
-        let y = (y0 as f32 * (1.0 - t) + y1 as f32 * t).round() as i32;
-        for dy in -radius..=radius {
-            for dx in -radius..=radius {
-                let (xx, yy) = (x + dx, y + dy);
-                if xx < 0 || xx >= w || yy < 0 || yy >= h {
-                    continue;
-                }
-                let idx = (yy as u32 * w as u32 + xx as u32) as usize;
-                buf[idx] = val;
-            }
-        }
-    }
-}
+// 折线刷写（draw_line_i16 / draw_line_u8）已随「河流不再涂格」删除
+// （ADR-0070 D3 · 计划 Task 12：河走实体，加载期迁移把种子河转为河线
+// POI；河床下切改由线 POI 的下切命令承担）。

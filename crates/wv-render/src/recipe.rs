@@ -56,7 +56,8 @@ pub enum PassId {
     Atmosphere,
     FeatureOverlay,
     TerrainDecor,
-    /// 河流折线（ADR-0037 D5）：模板世界由 terrain+rivers_seed 派生的水系。
+    /// 河流折线（ADR-0037 D5 建制；ADR-0070 T8 起唯一供给源 = 河线 Place，
+    /// 作者手绘与迁移落地的模板河同池，不再读 `rivers_seed` 派生）。
     /// 与 TerrainDecor 同口径（VectorFlat/RealTerrain/Schematic/Faction 开）。
     Rivers,
     /// CellMap 统一选区高亮（ADR-0057）：选区面（金色半透脉动）+ 蚂蚁线。

@@ -2152,6 +2152,8 @@ mod tests {
             w: Some(4.0),
             h: Some(6.0),
             rank: Some(1),
+            line_kind: None,
+            line_width_m: None,
         }
     }
 
@@ -2667,6 +2669,7 @@ mod tests {
             distance_km: 12.5,
             terrain: "road".into(),
             bidirectional: true,
+            derived: false,
         }
     }
 
@@ -2725,6 +2728,8 @@ mod tests {
         wv_core::distance::Place {
             kind: None,
             line: None,
+            line_kind: None,
+            line_width_m: None,
             id: wv_core::Id::new_unchecked(id),
             name: format!("地点{id}"),
             feature: None,
@@ -2937,6 +2942,8 @@ mod tests {
             w: None,
             h: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 
@@ -2973,6 +2980,8 @@ mod tests {
             w: None,
             h: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 
@@ -3861,5 +3870,271 @@ mod tests {
             .and_then(|m| m.template)
             .expect("模板记录");
         assert_eq!(t.seed, 1, "模板记录也必须还原");
+    }
+
+    // ── UpdateMapPropsCommand（地图属性对话框写回）────────────────────
+
+    fn world_with_named_map() -> World {
+        use wv_core::map::MapNode;
+        let mut world = World::default();
+        world.maps.push(MapNode {
+            id: test_map(),
+            name: "演示大陆".into(),
+            unit_per_km: Some(4.0),
+            ..MapNode::default()
+        });
+        world
+    }
+
+    #[test]
+    fn update_map_props_renames_and_sets_scale_with_index_dirty() {
+        let mut world = world_with_named_map();
+        let cmd = UpdateMapPropsCommand::new(test_map(), "新名字".into(), Some(100.0));
+
+        let dirty = cmd.apply(&mut world).expect("apply");
+        assert_eq!(
+            dirty,
+            vec![format!("maps/{TEST_MAP}/index.yaml")],
+            "节点字段内联在图索引，脏路径必须是 index.yaml"
+        );
+        assert_eq!(world.maps[0].name, "新名字");
+        assert_eq!(world.maps[0].unit_per_km, Some(100.0));
+
+        cmd.revert(&mut world).expect("revert");
+        assert_eq!(world.maps[0].name, "演示大陆", "revert 必须还原名字");
+        assert_eq!(
+            world.maps[0].unit_per_km,
+            Some(4.0),
+            "revert 必须还原尺度声明"
+        );
+    }
+
+    #[test]
+    fn update_map_props_can_clear_scale_declaration_and_revert_restores_it() {
+        let mut world = world_with_named_map();
+        // 传 None = 未声明（比例尺静默不显示）。
+        let cmd = UpdateMapPropsCommand::new(test_map(), "演示大陆".into(), None);
+        cmd.apply(&mut world).expect("apply");
+        assert_eq!(world.maps[0].unit_per_km, None, "None 应清掉声明");
+        cmd.revert(&mut world).expect("revert");
+        assert_eq!(world.maps[0].unit_per_km, Some(4.0), "revert 应还原声明");
+    }
+
+    #[test]
+    fn update_map_props_missing_map_errors_and_changes_nothing() {
+        let mut world = world_with_named_map();
+        let cmd = UpdateMapPropsCommand::new(Id::new_unchecked("map_nope"), "x".into(), None);
+        let err = cmd.apply(&mut world).expect_err("missing must fail");
+        assert!(matches!(err, EditError::TargetMissing(_)), "got {err:?}");
+        assert_eq!(world.maps[0].name, "演示大陆", "失败不得改动任何字段");
+    }
+}
+
+#[cfg(test)]
+mod line_poi_tests {
+    use crate::command::*;
+    use wv_core::distance::{LineKind, Place};
+    use wv_terrain::{SURFACE_LAND, SURFACE_WATER};
+
+    const TEST_MAP: &str = "world_main";
+
+    fn test_map() -> Id {
+        Id::new_unchecked(TEST_MAP)
+    }
+
+    /// 32×32 全陆地地形（100 m，陆地表面）。
+    fn world_with_land() -> World {
+        let land: Vec<TerrainCellData> = vec![
+            TerrainCellData {
+                height: 100,
+                surface: SURFACE_LAND,
+                biome: 3,
+            };
+            32 * 32
+        ];
+        let mut w = World::default();
+        w.set_terrain(
+            test_map(),
+            TerrainData {
+                width: 32,
+                height: 32,
+                cells: land,
+            },
+        );
+        w
+    }
+
+    /// 两点线段地点（4 个浮点 = 2 点，恰过 `line.len() >= 4` 门槛）。
+    fn line_place() -> Place {
+        Place {
+            id: Id::new_unchecked("river_line"),
+            name: "小河".into(),
+            feature: None,
+            map: Some(test_map()),
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+            biome: None,
+            envelope: None,
+            rank: None,
+            line: Some(vec![2.0, 5.0, 18.0, 5.0]),
+            kind: None,
+            line_kind: Some(LineKind::River),
+            line_width_m: Some(12.0),
+        }
+    }
+
+    /// 沿折线中轴的下切规格（宽 1 格、写水面 = 既有涂格河语义）。
+    fn carve_spec() -> CarveSpec {
+        CarveSpec {
+            pts: vec![(2.5, 5.5), (18.5, 5.5)],
+            strength: 1.0,
+            width_cells: 1,
+            mark_water: true,
+        }
+    }
+
+    fn cell_at(w: &World, gx: usize, gy: usize) -> TerrainCellData {
+        w.terrain_of(&test_map()).unwrap().cells[gy * 32 + gx]
+    }
+
+    /// 一次命令同时干两件事：Place 入表 + 沿线下切（ADR-0070：线段 POI 的
+    /// 「创建即下切」是一个作者意图，撤销粒度也应当是它）。
+    #[test]
+    fn create_line_poi_adds_place_and_carves_in_one_command() {
+        let mut w = world_with_land();
+        let cmd = CreateLinePoiCommand::new(test_map(), line_place(), Some(carve_spec()), 1.0);
+        let dirty = cmd.apply(&mut w).expect("apply");
+        assert_eq!(
+            dirty,
+            vec![
+                "distances/places".to_string(),
+                format!("maps/{TEST_MAP}/terrain.bin")
+            ],
+            "脏路径 = 地点表 + 目标图地形（IntentTerrainCommand 同款拼法）"
+        );
+        assert!(
+            w.distances
+                .places
+                .iter()
+                .any(|p| p.id.as_str() == "river_line"),
+            "线段地点应入表"
+        );
+        // 中轴格被下切：高度从 100 m 降、写水面（河语义）。
+        let c = cell_at(&w, 10, 5);
+        assert!(
+            c.height < 100,
+            "中轴格 (10,5) 应被下切，实得 {} m",
+            c.height
+        );
+        assert_eq!(c.surface, SURFACE_WATER, "河走廊应写水面");
+        // 走廊外不动。
+        assert_eq!(cell_at(&w, 10, 1).height, 100, "走廊外格不应被改动");
+    }
+
+    /// 撤销 = 删地点 + 地形逐格还原（一次撤销含下切，ADR-0070）。
+    #[test]
+    fn undo_restores_both_place_and_carved_cells() {
+        let mut w = world_with_land();
+        let terrain_before = w.terrain_of(&test_map()).unwrap().clone();
+        let cmd = CreateLinePoiCommand::new(test_map(), line_place(), Some(carve_spec()), 1.0);
+        cmd.apply(&mut w).expect("apply");
+        assert!(w
+            .distances
+            .places
+            .iter()
+            .any(|p| p.id.as_str() == "river_line"));
+
+        cmd.revert(&mut w).expect("revert");
+        assert!(
+            !w.distances
+                .places
+                .iter()
+                .any(|p| p.id.as_str() == "river_line"),
+            "撤销后地点应从表里消失"
+        );
+        assert_eq!(
+            w.terrain_of(&test_map()).unwrap().cells,
+            terrain_before.cells,
+            "撤销后地形逐格等于快照"
+        );
+    }
+
+    /// 折线不足两点（`line.len() < 4`）→ `Precondition`，世界一个格都不动。
+    #[test]
+    fn create_rejects_degenerate_line() {
+        let mut w = world_with_land();
+        let terrain_before = w.terrain_of(&test_map()).unwrap().clone();
+        let mut degenerate = line_place();
+        degenerate.line = Some(vec![1.0, 1.0]);
+        let cmd = CreateLinePoiCommand::new(test_map(), degenerate, Some(carve_spec()), 1.0);
+        let err = cmd.apply(&mut w).expect_err("退化折线必须被拒收");
+        assert!(matches!(err, EditError::Precondition(_)), "实得 {err:?}");
+        assert!(
+            !w.distances
+                .places
+                .iter()
+                .any(|p| p.id.as_str() == "river_line"),
+            "拒收后不得入表"
+        );
+        assert_eq!(
+            w.terrain_of(&test_map()).unwrap().cells,
+            terrain_before.cells,
+            "拒收后地形不动"
+        );
+    }
+
+    /// `None` = 不改：全 None 的属性命令 apply 后地点逐字段不变；
+    /// 部分 Some 只动指定字段（改名不牵连基准宽 / 呈现级别）。
+    #[test]
+    fn update_line_poi_none_leaves_field_untouched() {
+        let mut w = world_with_land();
+        w.distances.places.push(line_place());
+        let all_none = UpdateLinePoiCommand::new(Id::new_unchecked("river_line"), None, None, None);
+        all_none.apply(&mut w).expect("apply");
+        assert_eq!(w.distances.places[0].name, "小河", "None 不改名称");
+        assert_eq!(
+            w.distances.places[0].line_width_m,
+            Some(12.0),
+            "None 不改基准宽"
+        );
+        assert_eq!(w.distances.places[0].rank, None, "None 不改级别");
+
+        // Some 只动指定字段：改名不牵连宽 / rank。
+        let rename = UpdateLinePoiCommand::new(
+            Id::new_unchecked("river_line"),
+            Some("清河".into()),
+            None,
+            None,
+        );
+        rename.apply(&mut w).expect("apply");
+        assert_eq!(w.distances.places[0].name, "清河", "显式改名应生效");
+        assert_eq!(
+            w.distances.places[0].line_width_m,
+            Some(12.0),
+            "改名不得牵连基准宽"
+        );
+        assert_eq!(w.distances.places[0].rank, None, "改名不得牵连级别");
+
+        // revert 回到改名前（快照是「窄命令面」之外的整 Place，与
+        // UpdatePlaceCommand 同款）。
+        rename.revert(&mut w).expect("revert");
+        assert_eq!(w.distances.places[0].name, "小河", "revert 回到改名前");
+    }
+
+    /// 不带下切的创建（`carve = None`）不依赖地形栅格——纯矢量线段 POI
+    /// 可以先画线、回头再下切。
+    #[test]
+    fn create_without_carve_needs_no_terrain() {
+        let mut w = World::default(); // 无任何地形栅格
+        let cmd = CreateLinePoiCommand::new(test_map(), line_place(), None, 1.0);
+        let dirty = cmd.apply(&mut w).expect("无下切不依赖地形");
+        assert_eq!(dirty, vec!["distances/places".to_string()]);
+        assert!(w
+            .distances
+            .places
+            .iter()
+            .any(|p| p.id.as_str() == "river_line"));
     }
 }

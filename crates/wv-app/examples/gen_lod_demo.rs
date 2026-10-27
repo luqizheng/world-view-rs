@@ -167,6 +167,8 @@ fn build_world(meta: WorldMeta) -> World {
         biome: None,
         envelope: None,
         rank: None,
+        line_kind: None,
+        line_width_m: None,
     };
     let dot = |id: &str, name: &str, x: f32, y: f32| Place {
         kind: None,
@@ -182,6 +184,8 @@ fn build_world(meta: WorldMeta) -> World {
         biome: None,
         envelope: None,
         rank: None,
+        line_kind: None,
+        line_width_m: None,
     };
     world.distances.places = vec![
         city("place_west_city", "西陵城", 400.0, 600.0),
@@ -205,6 +209,7 @@ fn build_world(meta: WorldMeta) -> World {
         distance_km: km,
         terrain: terrain.into(),
         bidirectional: true,
+        derived: false,
     };
     world.distances.edges = vec![
         edge(

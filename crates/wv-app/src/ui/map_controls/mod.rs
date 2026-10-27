@@ -32,6 +32,7 @@
 //! | 10 | 网格开关（开启高亮） | `G` |
 //! | 10.5 | 等值线开关（VectorFlat / CellMap） | — |
 //! | 10.75 | 海拔分层设色强度滑条（仅 CellMap，ADR-0055） | — |
+//! | 14 | 线段 POI：河流（默认）/ 道路（**仅 Edit 档渲染**，ADR-0070 D4） | — |
 //!
 //! ## 与 v0.6 的差异（ADR-0043 裁定）
 //!
@@ -88,8 +89,8 @@ use super::shell::UiShell;
 use super::widgets::icon_image;
 use super::widgets::{
     ICON_ELLIPSE, ICON_MOUSE_POINTER, ICON_MOVE_HORIZONTAL, ICON_MOVE_VERTICAL, ICON_PAINT_BUCKET,
-    ICON_RULER_DIMENSION_LINE, ICON_SQUARES_UNITE, ICON_SQUARE_MOUSE_POINTER, ICON_TRASH,
-    ICON_VECTOR_POLYGON, ICON_VECTOR_SQUARE,
+    ICON_RIVER, ICON_ROUTE, ICON_RULER_DIMENSION_LINE, ICON_SQUARES_UNITE,
+    ICON_SQUARE_MOUSE_POINTER, ICON_TRASH, ICON_VECTOR_POLYGON, ICON_VECTOR_SQUARE,
 };
 use super::{
     ICON_BRUSH, ICON_ERASER, ICON_GRID, ICON_HAND, ICON_REDO, ICON_TREES, ICON_UNDO, ICON_WAVES,
@@ -103,6 +104,19 @@ mod widgets;
 
 pub use dock_state::{DockParams, MapDockOrientation, MapDockPos, MapDockState};
 pub use toolbar::map_controls;
+
+/// 工具活动态的会话资源束（`map_controls` 的第 13 参）。
+///
+/// 折成一层元组是给 Bevy 的单系统 16 参数上限让路（元组算 1 个参数）；
+/// 单独提出类型别名是给 clippy 的 `type_complexity` 让路——五元组内联写
+/// 会超复杂度阈值（2026-10-26 线段 POI 入列时实锤）。
+type ToolSessionStates<'w> = (
+    Res<'w, wv_render::state::EditCellState>,
+    Res<'w, crate::state::PointSelectState>,
+    Res<'w, crate::state::FloodSelectState>,
+    Res<'w, crate::state::PlaybackState>,
+    Res<'w, crate::state::LinePoiState>,
+);
 
 /// 贴边距离（原型 `right: 18px`）。
 const EDGE_OFFSET: f32 = 18.0;

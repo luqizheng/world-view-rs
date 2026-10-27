@@ -561,6 +561,8 @@ pub enum I18nKey {
     ProjectMenuCloseProject,
     /// 「项目设置」按钮
     ProjectMenuProjectSettings,
+    /// 「地图属性…」按钮（2026-10-27：查看 / 修改当前图名称与尺度声明）
+    ProjectMenuMapProperties,
     /// 「工程」分组
     ProjectMenuProjectSection,
 
@@ -1026,6 +1028,14 @@ pub enum I18nKey {
     CmdResetTerrainToBase,
     /// 「重新生成世界地形」（ADR-0037 D4）
     CmdRegenWorld,
+    /// 「地图属性…」（2026-10-27：命令面板 / 工程菜单同源）
+    CmdMapProperties,
+    /// 比例尺悬浮提示·条长语义（2026-10-27 用户反馈：不理解条长与数字的关系）
+    ScaleBarTipBar,
+    /// 比例尺悬浮提示·每格尺寸前缀（拼接 `format_km_flexible` 的结果）
+    ScaleBarTipCellPrefix,
+    /// 比例尺悬浮提示·每格尺寸后缀（分辨率语义）
+    ScaleBarTipCellSuffix,
     /// 「增大笔刷半径」
     CmdBrushRadiusUp,
     /// 「减小笔刷半径」
@@ -1316,11 +1326,36 @@ pub enum I18nKey {
     CellScopeSelectedCount,
     /// 批量作用域说明「整体调整选中的所有格」
     CellScopeBatchHint,
+    // ── 线段 POI（ADR-0070 D4）─────────────────────────────────
+    /// 「线段 POI」工具（命令面板条目；河 / 路两类线共用的绘制工具）
+    LinePoiTool,
+    /// 线的种类「河流」（分裂按钮菜单项）
+    LinePoiKindRiver,
+    /// 线的种类「道路」（分裂按钮菜单项）
+    LinePoiKindRoad,
+    /// 「河流和道路」面板标题（一浮窗两段设置，兼任新建设置与选中属性）
+    LinePoiPanelTitle,
+    /// 面板字段「名字」（T11 承载；河 / 路共用）
+    LinePoiName,
+    /// 面板字段「宽度」（河段；基准宽）
+    LinePoiWidth,
+    /// 宽度单位「世界单位」（地图无 `unit_per_km` 时标注 wu）
+    LinePoiWidthUnitWu,
+    /// 面板字段「模式」（路径求法：绕行 / 下切）
+    LinePoiMode,
+    /// 模式「绕行」（沿地形走，不改地形）
+    LinePoiModeRoute,
+    /// 模式「下切」（走廊内改写地形）
+    LinePoiModeCarve,
+    /// 面板字段「级别」（路段 rank，描画宽度按级别折算）
+    LinePoiRank,
+    /// 工具条瓷砖悬停提示（仅编辑档视野出现）
+    LinePoiHint,
 }
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 521] = [
+    pub const ALL: [I18nKey; 538] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1564,6 +1599,7 @@ impl I18nKey {
         I18nKey::ProjectMenuExportProject,
         I18nKey::ProjectMenuCloseProject,
         I18nKey::ProjectMenuProjectSettings,
+        I18nKey::ProjectMenuMapProperties,
         I18nKey::ProjectMenuProjectSection,
         // 区间（4）
         I18nKey::SpanDayPrefix,
@@ -1763,6 +1799,11 @@ impl I18nKey {
         I18nKey::CmdForceRebuildTexture,
         I18nKey::CmdResetTerrainToBase,
         I18nKey::CmdRegenWorld,
+        I18nKey::CmdMapProperties,
+        // 比例尺悬浮提示（2026-10-27）
+        I18nKey::ScaleBarTipBar,
+        I18nKey::ScaleBarTipCellPrefix,
+        I18nKey::ScaleBarTipCellSuffix,
         I18nKey::CmdBrushRadiusUp,
         I18nKey::CmdBrushRadiusDown,
         // 笔刷工具 7 条 + 参照网格（2026-10-16）
@@ -1880,5 +1921,18 @@ impl I18nKey {
         I18nKey::CellScopePaint,
         I18nKey::CellScopeSelectedCount,
         I18nKey::CellScopeBatchHint,
+        // 线段 POI（12）
+        I18nKey::LinePoiTool,
+        I18nKey::LinePoiKindRiver,
+        I18nKey::LinePoiKindRoad,
+        I18nKey::LinePoiPanelTitle,
+        I18nKey::LinePoiName,
+        I18nKey::LinePoiWidth,
+        I18nKey::LinePoiWidthUnitWu,
+        I18nKey::LinePoiMode,
+        I18nKey::LinePoiModeRoute,
+        I18nKey::LinePoiModeCarve,
+        I18nKey::LinePoiRank,
+        I18nKey::LinePoiHint,
     ];
 }

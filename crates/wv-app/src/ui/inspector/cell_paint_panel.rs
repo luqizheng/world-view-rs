@@ -313,9 +313,14 @@ pub fn render_flood_criterion_section(
     ui.add_space(4.0);
 }
 
-/// **群系 7 组排列序**（ADR-0058 D5）：swatch 网格的展示顺序，全部引用
-/// `wv_terrain` 冻结编号。这是全面板群系的**唯一**排列定义——落笔 / 单格 /
-/// 批量三处共用。注意含**山地**（旧单格 radio 漏了它，本次补上）。
+/// **群系 6 组排列序**（ADR-0058 D5；ADR-0070 D1 退役后 7 → 6）：swatch
+/// 网格的展示顺序，全部引用 `wv_terrain` 冻结编号。这是全面板群系的**唯一**
+/// 排列定义——落笔 / 单格 / 批量三处共用。注意含**山地**（旧单格 radio
+/// 漏了它，本次补上）。
+///
+/// **河 / 路（16 / 20）已退役**（ADR-0070 D1）：线性地物归线段 POI，不再
+/// 入作者涂抹集合；编号保留不复用，`wv_terrain` 的常量与 `family_of` 照旧
+/// 供存量数据读取防御。
 pub const BIOME_GROUP_ORDER: &[&[u8]] = &[
     &[
         wv_terrain::BIOME_FOREST,
@@ -342,7 +347,6 @@ pub const BIOME_GROUP_ORDER: &[&[u8]] = &[
         wv_terrain::BIOME_SNOWFIELD,
     ],
     &[wv_terrain::BIOME_OCEAN, wv_terrain::BIOME_LAKE],
-    &[wv_terrain::BIOME_ROAD, wv_terrain::BIOME_RIVER],
     &[wv_terrain::BIOME_NONE],
 ];
 
@@ -554,10 +558,13 @@ pub fn render_derived_section(
 mod tests {
     use super::*;
 
-    /// **ADR-0058 验收 A5**：群系 7 组序覆盖全部 21 个冻结编号，不重不漏。
+    /// **ADR-0058 验收 A5**（ADR-0070 D1 修订）：群系 6 组序覆盖除退役
+    /// 河 / 路外的全部 19 个冻结编号，不重不漏——16（河）/ 20（路）已退出
+    /// 作者涂抹入口（编号保留不复用，读取防御在 wv-terrain）。
     /// （旧单格 radio 的 7 组漏了「山地」，本测试防回归。）
     #[test]
-    fn biome_group_order_covers_all_frozen_biomes_exactly_once() {
+    fn biome_group_order_covers_all_non_retired_frozen_biomes_exactly_once() {
+        const RETIRED: [u8; 2] = [wv_terrain::BIOME_RIVER, wv_terrain::BIOME_ROAD];
         let mut seen = [false; 21];
         for group in BIOME_GROUP_ORDER {
             assert!(!group.is_empty(), "空组无意义");
@@ -570,10 +577,34 @@ mod tests {
         let missing: Vec<usize> = seen
             .iter()
             .enumerate()
-            .filter(|(_, &s)| !s)
+            .filter(|(i, &s)| !s && !RETIRED.contains(&(*i as u8)))
             .map(|(i, _)| i)
             .collect();
-        assert!(missing.is_empty(), "有冻结编号未入 7 组序：{missing:?}");
+        assert!(
+            missing.is_empty(),
+            "有未退役冻结编号未入 6 组序：{missing:?}"
+        );
+    }
+
+    /// 河路退役（ADR-0070 D1）：群系 16（河）/ 20（路）退出 swatch 网格——
+    /// 作者涂抹入口从此选不出这两个编号（wv-terrain 常量与 `family_of`
+    /// 保留，开放集读取防御不退役）。
+    #[test]
+    fn biome_swatch_grid_contains_no_river_or_road() {
+        for group in BIOME_GROUP_ORDER {
+            for &b in group.iter() {
+                assert_ne!(
+                    b,
+                    wv_terrain::BIOME_RIVER,
+                    "河（16）已退役，不得再入 swatch 网格"
+                );
+                assert_ne!(
+                    b,
+                    wv_terrain::BIOME_ROAD,
+                    "路（20）已退役，不得再入 swatch 网格"
+                );
+            }
+        }
     }
 
     /// 名称与色表同长（swatch 按 BIOME_GROUP_ORDER 下标双读，错位即越界）。

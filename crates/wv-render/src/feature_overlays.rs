@@ -677,6 +677,8 @@ mod tests {
             w: None,
             h: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         };
         assert_eq!(
             overlay_family_for_place(&p),
@@ -719,6 +721,8 @@ mod tests {
             w: None,
             h: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         };
         let family = overlay_family_for_place(&p).expect("沙漠应归族（进入渲染）");
         assert_eq!(family, wv_terrain::biome::BiomeFamily::Desert);

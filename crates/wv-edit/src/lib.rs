@@ -25,7 +25,7 @@ pub use command::{
     DeleteBuildingCommand, DeleteStreetSegmentCommand, EditCommand, EditError, EditResult,
     GenerateContinentCommand, MoveCityCommand, RemoveMeasurementCommand, RemoveRegionCommand,
     SetCityOutlineCommand, SetMapOrientationCommand, UpdateEventCommand, UpdateLayerCommand,
-    UpdatePlaceCommand, UpdateRegionCommand,
+    UpdateMapPropsCommand, UpdatePlaceCommand, UpdateRegionCommand,
 };
 pub use history::{History, Transaction};
 pub use nature_region::{

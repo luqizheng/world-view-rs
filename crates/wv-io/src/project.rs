@@ -963,13 +963,29 @@ impl Project {
             )?;
         }
         if wants("distances/edges") {
+            // **契约：推导边（`derived == true`）永不落盘**（ADR-0070 D5）。
+            // 推导边是「线即路网」的运行时投影，真值在道路线 POI 上——若把
+            // 边写出，重载会退化成手写边，下次加载再触发迁移补建重复的
+            // `road_mig_*` 实体（哈希后缀兜底能收敛，但仍是垃圾数据）。
+            //
+            // 为什么过滤必须在这一层：`PlaceEdge.derived` 的 `#[serde(skip)]`
+            // 只管**字段**序列化（行内不出现 derived 标记），管不了**实体**
+            // 是否被写——`save_entities` 是逐实体写文件的，列表成员级过滤
+            // 只能在这里做。
+            //
+            // 顺带自愈：修复前版本落过盘的推导边文件不在保留集里，会被
+            // `save_entities` 的删除传播清掉——旧工程存一次即净。
+            let hand_edges: Vec<&wv_core::distance::PlaceEdge> = world
+                .distances
+                .edges
+                .iter()
+                .filter(|e| !e.derived)
+                .collect();
             // PlaceEdge 有 id 字段（自 ADR-0004 后），每实体一文件——与 §4.5 一致。
             // 旧单文件 distances/edges.yaml 由 loader 的 read_single_file_list 回退。
-            save_entities(
-                &self.root.join("distances/edges"),
-                &world.distances.edges,
-                |e| e.id.as_str().to_string(),
-            )?;
+            save_entities(&self.root.join("distances/edges"), &hand_edges, |e| {
+                e.id.as_str().to_string()
+            })?;
             // 旧单文件清理：一旦开始写新格式，就把同名的旧单文件删掉，
             // 避免留 cruft。下次 loader 不再走 fallback，路径彻底稳定。
             let legacy = self.root.join("distances/edges.yaml");

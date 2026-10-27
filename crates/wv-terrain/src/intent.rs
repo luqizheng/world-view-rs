@@ -81,9 +81,15 @@ const LAKE_LIP_M: f32 = 6.0;
 const LAKE_DEPTH_M: f32 = 50.0;
 
 /// 河：河床比两岸最低格再低多少（米 × strength）。
-const RIVER_CUT_M: f32 = 12.0;
+///
+/// `pub(crate)`：走廊下切（[`crate::line_path::carve_corridor`]）的**河**分支
+/// 复用同一常量（与 [`RIVER_DROP_M`] 一起同 legacy 挖河同源）。道路走廊用
+/// 独立的 `ROAD_CUT_M`（削到岸高附近，不挖深沟——ADR-0070 评审裁定 I1）。
+pub(crate) const RIVER_CUT_M: f32 = 12.0;
 /// 河：沿链向下游每格至少再降多少（米）。
-const RIVER_DROP_M: f32 = 0.4;
+///
+/// `pub(crate)`：同 [`RIVER_CUT_M`]——走廊下切复用，不重定义。
+pub(crate) const RIVER_DROP_M: f32 = 0.4;
 
 // ---------------------------------------------------------------------------
 // 公开 API
@@ -407,11 +413,13 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-fn clamp_strength(s: f32) -> f32 {
+/// 强度夹取（`pub(crate)`：走廊下切复用同款夹取口径）。
+pub(crate) fn clamp_strength(s: f32) -> f32 {
     s.clamp(STRENGTH_MIN, STRENGTH_MAX)
 }
 
-fn to_height(v: f32) -> Height {
+/// 浮点高度 → 整米高度（`pub(crate)`：走廊下切复用同款取整口径）。
+pub(crate) fn to_height(v: f32) -> Height {
     v.round().clamp(i16::MIN as f32, i16::MAX as f32) as Height
 }
 
@@ -892,7 +900,17 @@ fn apply_lake(
 // 河
 // ---------------------------------------------------------------------------
 
-fn apply_river(grid: &mut TerrainGrid, pts: &[(f32, f32)], strength: f32, cell_size: f32) -> usize {
+/// 挖一条一格宽的河（既有「涂格河」实现）。
+///
+/// `pub(crate)`：走廊下切 [`crate::line_path::carve_corridor`] 在
+/// 「一格宽 + 写水面」时**直接委托**本函数，保证与既有涂格河行为**逐位
+/// 相同**（测试 `width_one_river_matches_legacy_apply_river` 钉死）。
+pub(crate) fn apply_river(
+    grid: &mut TerrainGrid,
+    pts: &[(f32, f32)],
+    strength: f32,
+    cell_size: f32,
+) -> usize {
     if pts.is_empty() || cell_size <= 0.0 {
         return 0;
     }

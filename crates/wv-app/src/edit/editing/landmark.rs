@@ -105,6 +105,8 @@ pub fn commit_landmark_click(
         envelope: None,
         rank: Some(landmark.default_rank),
         line: None,
+        line_kind: None,
+        line_width_m: None,
         kind: landmark.default_kind,
     };
     let mut tx = wv_edit::history::Transaction::new();
@@ -253,6 +255,8 @@ mod tests {
                 envelope: None,
                 rank: None,
                 line,
+                line_kind: None,
+                line_width_m: None,
                 kind: None,
             }
         };

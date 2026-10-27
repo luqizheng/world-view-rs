@@ -531,6 +531,8 @@ mod tests {
             biome: None,
             envelope: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         });
         w.distances.places.push(wv_core::distance::Place {
             kind: None,
@@ -545,6 +547,8 @@ mod tests {
             biome: None,
             envelope: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         });
         let f = Filter::parse("name ~ '青'").unwrap();
         let reply = handle_read(
@@ -583,6 +587,8 @@ mod tests {
                 biome: None,
                 envelope: None,
                 rank: None,
+                line_kind: None,
+                line_width_m: None,
             });
         }
         let reply = handle_read(
@@ -620,6 +626,8 @@ mod tests {
                 biome: None,
                 envelope: None,
                 rank: None,
+                line_kind: None,
+                line_width_m: None,
             });
         }
         // 第一页
@@ -678,6 +686,8 @@ mod tests {
             biome: None,
             envelope: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         };
         // 同步入队（apply_send 不 poll future，消息直接进 mpsc）。
         let cmd: Box<dyn EditCommand> = Box::new(wv_edit::AddPlaceCommand::new(place));
@@ -714,6 +724,8 @@ mod tests {
             biome: None,
             envelope: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         };
         let cmd: Box<dyn EditCommand> = Box::new(wv_edit::AddPlaceCommand::new(place));
         let apply_reply = bridge.apply_send(cmd);

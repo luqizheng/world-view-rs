@@ -824,6 +824,8 @@ mod tests {
             envelope: None,
             rank: None,
             line: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 

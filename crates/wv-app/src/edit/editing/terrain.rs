@@ -1,6 +1,9 @@
 //! 地形命令：增量落盘、重置到底图、重新生成、清除测量。
 
 use super::*;
+use crate::edit::river_gen::ClearGeneratorRiversCommand;
+use wv_core::distance::Place;
+use wv_edit::command::CreateLinePoiCommand;
 
 /// 把脏标记变为实际纹理更新（增量重传的出口）。
 ///
@@ -161,6 +164,8 @@ pub fn apply_reset_terrain_to_base(
         Ok(dirty) => {
             edit.record_dirty(dirty);
             projection.dirty = true;
+            // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+            crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
 
             let after =
                 wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(map_id))
@@ -179,16 +184,24 @@ pub fn apply_reset_terrain_to_base(
     }
 }
 
-/// 重生成世界地形（ADR-0037 D4）：整图替换 + 模板记录更新，单事务可撤销。
+/// 重生成世界地形（ADR-0037 D4）：整图替换 + 模板记录更新 + **生成器河
+/// 实体换血**（ADR-0070 D3 生成器统一 · 计划 Task 12），单事务可撤销。
 ///
 /// 与 [`apply_reset_terrain_to_base`] 同款：前后 cells diff 出脏矩形，
 /// 避免 `mark_all_dirty` 的整图重建。磁盘备份（`terrain.bin.bak.<ts>`）
 /// 由调用方在提交前做——本函数只负责世界数据与纹理。
+///
+/// `river_places` 是本轮 Regen 要上架的生成器河（
+/// [`crate::edit::river_gen::generator_river_places`] 的产物；可为空——
+/// 低地生成不出河源头）。事务 = `RegenWorldTerrainCommand` +
+/// `ClearGeneratorRiversCommand`（上一轮下架）+ 逐条 `CreateLinePoiCommand`
+/// （无下切）——**一次撤销 = 地形、模板、河实体整体回到 Regen 前**。
 #[allow(clippy::too_many_arguments)]
 pub fn apply_regen_world(
     map_id: &wv_core::Id,
     new_terrain: wv_core::terrain::TerrainData,
     new_template: wv_core::WorldTemplate,
+    river_places: Vec<Place>,
     edit: &mut EditHistory,
     projection: &mut WorldProjection,
     tex: &mut TerrainTexture,
@@ -201,29 +214,75 @@ pub fn apply_regen_world(
     let before = wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(map_id))
         .map(|t| t.cells.clone());
 
+    let river_count = river_places.len();
+    commit_regen_world(
+        map_id,
+        new_terrain,
+        new_template,
+        river_places,
+        edit,
+        projection,
+    )?;
+
+    let after = wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(map_id))
+        .map(|t| (t.width.max(1), t.cells.clone()));
+    match (before, after) {
+        (Some(b), Some((w, a))) if b.len() == a.len() => {
+            if let Some(rect) = terrain_diff_bbox(&b, &a, w) {
+                tex.mark_dirty(rect);
+            }
+        }
+        _ => tex.mark_all_dirty(),
+    }
+    Ok(if river_count > 0 {
+        format!("已重生成世界地形（河流 {river_count} 条）")
+    } else {
+        "已重生成世界地形".into()
+    })
+}
+
+/// RegenWorld 的事务本体（无纹理副作用——测试锚点）：地形替换 + 上一轮
+/// 生成器河下架 + 本轮生成器河上架，一次撤销全回。
+///
+/// 为什么下架必须在同一事务：二次 Regen 时旧生成器河还在表里，`Create`
+/// 会因 ID 撞名整体失败；且旧河折线锚着**旧地形**（本事务已换图），留在
+/// 场上就是幽灵河。顺序刻意为 Regen → Clear → Create×N（Clear 先于
+/// Create 才不撞名）；撤销按逆序回放，恰好先撤新河、再还旧河、最后回滚
+/// 地形与模板。提交后重建推导边（T9，不进脏路径）。
+pub fn commit_regen_world(
+    map_id: &wv_core::Id,
+    new_terrain: wv_core::terrain::TerrainData,
+    new_template: wv_core::WorldTemplate,
+    river_places: Vec<Place>,
+    edit: &mut EditHistory,
+    projection: &mut WorldProjection,
+) -> Result<(), String> {
+    // CreateLinePoi 的 cell_size 只在下切分支消费（本轮全为无下切创建），
+    // 无比例尺时取 1.0 占位即可。
+    let cell_size =
+        crate::edit::line_poi_tool::grid_cell_size(&projection.world, map_id).unwrap_or(1.0);
     let mut tx = Transaction::new();
     tx.push(Box::new(RegenWorldTerrainCommand::new(
         map_id.clone(),
         new_terrain,
         new_template,
     )));
+    tx.push(Box::new(ClearGeneratorRiversCommand::new(map_id.clone())));
+    for place in river_places {
+        tx.push(Box::new(CreateLinePoiCommand::new(
+            map_id.clone(),
+            place,
+            None,
+            cell_size,
+        )));
+    }
     match edit.history.commit(&mut projection.world, tx) {
         Ok(dirty) => {
             edit.record_dirty(dirty);
             projection.dirty = true;
-
-            let after =
-                wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(map_id))
-                    .map(|t| (t.width.max(1), t.cells.clone()));
-            match (before, after) {
-                (Some(b), Some((w, a))) if b.len() == a.len() => {
-                    if let Some(rect) = terrain_diff_bbox(&b, &a, w) {
-                        tex.mark_dirty(rect);
-                    }
-                }
-                _ => tex.mark_all_dirty(),
-            }
-            Ok("已重生成世界地形".into())
+            // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+            crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
+            Ok(())
         }
         Err(e) => Err(format!("重生成失败：{e}")),
     }
@@ -264,6 +323,8 @@ pub fn apply_clear_measurements(
         Ok(dirty) => {
             edit.record_dirty(dirty);
             projection.dirty = true;
+            // ADR-0070 D5（T9）：提交后重建推导边（不进脏路径）。
+            crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
             Ok(format!("已清除 {count} 条测量"))
         }
         Err(e) => Err(format!("清除测量失败：{e}")),

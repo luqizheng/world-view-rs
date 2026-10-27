@@ -76,6 +76,10 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     .init_resource::<GridConfig>()
     // 「新建地图」对话框状态（ui_shell 分发器与对话框系统共用）。
     .init_resource::<ui::NewMapDialog>()
+    // 「地图属性」对话框状态（ui_shell 分发器与对话框系统共用）。
+    // 2026-10-27 曾漏注册：全测试闸门绿（fixture 手动 init 掩盖）、首次
+    // `wv gui` 即 panic——smoke 闸门存在的理由，见 §7.1。
+    .init_resource::<ui::MapPropertiesDialog>()
     // 「新建工程」对话框状态（欢迎页 / 分发器 / 目录轮询三方共用；
     // 资源本体在 ui_shell::register 里也有 init，幂等，这里注册是就近可读）。
     .init_resource::<ui::NewProjectDialog>()
@@ -149,6 +153,10 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     .init_resource::<wv_render::state::CellSelection>()
     // 点选工具会话态（ADR-0057 补记 6）：与 EditCell 平级的独立 Resource。
     .init_resource::<wv_render::state::PointSelectState>()
+    // 线段 POI 工具会话态（ADR-0070 D4）：工具条分裂按钮、分发器互斥分支
+    // 与（T11 的）地图交互系统都读写它——漏 init 即启动期 panic
+    // （同 EditCellState 的教训：测试 fixture 手动 init 会掩盖装配遗漏）。
+    .init_resource::<crate::state::LinePoiState>()
     // 套索活链接（ADR-0057 补记 5）：sync_region_cells ResMut 它。
     .init_resource::<crate::edit::editing::LassoLiveLink>()
     // 群系分界线工具会话态（2026-10-22 内容矩阵 / ADR-0051）：输入系统与

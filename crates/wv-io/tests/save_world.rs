@@ -905,6 +905,8 @@ fn place_edges_round_trip_per_file_format() {
         biome: None,
         envelope: None,
         rank: None,
+        line_kind: None,
+        line_width_m: None,
     });
     world.distances.places.push(Place {
         kind: None,
@@ -920,6 +922,8 @@ fn place_edges_round_trip_per_file_format() {
         biome: None,
         envelope: None,
         rank: None,
+        line_kind: None,
+        line_width_m: None,
     });
     world.distances.vehicles.push(Vehicle {
         id: Id::new_unchecked("v_walk"),
@@ -940,6 +944,7 @@ fn place_edges_round_trip_per_file_format() {
             distance_km: 100.0,
             terrain: "plain".into(),
             bidirectional: true,
+            derived: false,
         },
         PlaceEdge {
             rank: None,
@@ -949,6 +954,7 @@ fn place_edges_round_trip_per_file_format() {
             distance_km: 105.0,
             terrain: "road".into(),
             bidirectional: true,
+            derived: false,
         },
     ];
     world.distances.edges = edges.clone();
@@ -985,6 +991,112 @@ fn place_edges_round_trip_per_file_format() {
         .unwrap();
     assert_eq!(ab.distance_km, 100.0);
     assert_eq!(ab.terrain, "plain");
+}
+
+/// 推导边（`derived == true`）永不落盘（ADR-0070 D5 契约，评审修复钉死）。
+///
+/// 缺陷史：`PlaceEdge.derived` 的 `#[serde(skip)]` 只管**字段**序列化，管不了
+/// **实体**是否被写——`save_entities` 逐实体写文件，会把推导边整行写出；
+/// 重载后退化成手写边，下次加载再触发迁移补建重复 `road_mig_*` 实体。
+/// 正确契约：保存时按 `!e.derived` 过滤列表成员（wv-io 侧）。
+///
+/// 断言三层：① derived 边的 YAML 文件不存在；② 手写边文件在且字段完整
+/// （round-trip 不受损）；③ 重载后世界只有手写边、且都不带 derived 标记。
+#[test]
+fn derived_edges_are_not_persisted() {
+    use wv_core::distance::{Place, PlaceEdge};
+    let tmp = TempDir::new("edges_derived_filtered");
+    let dir = tmp.path();
+    let mut proj = build_min_project(dir, &[]).expect("建工程");
+    let mut world = proj.load_world().expect("load");
+    // 端点地点（加载侧引用完整性无校验也不影响本断言，但保持夹具诚实）。
+    for (id, name) in [("p_a", "A"), ("p_b", "B")] {
+        world.distances.places.push(Place {
+            kind: None,
+            line: None,
+            id: Id::new_unchecked(id),
+            name: name.into(),
+            map: None,
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+            feature: None,
+            biome: None,
+            envelope: None,
+            rank: None,
+            line_kind: None,
+            line_width_m: None,
+        });
+    }
+    // 1 条手写边 + 1 条 derived 边（内存直构，模拟道路线推导产物）。
+    world.distances.edges = vec![
+        PlaceEdge {
+            rank: None,
+            id: Id::new_unchecked("e_hand"),
+            a: Id::new_unchecked("p_a"),
+            b: Id::new_unchecked("p_b"),
+            distance_km: 42.0,
+            terrain: "plain".into(),
+            bidirectional: true,
+            derived: false,
+        },
+        PlaceEdge {
+            rank: None,
+            id: Id::new_unchecked("e_derived"),
+            a: Id::new_unchecked("p_a"),
+            b: Id::new_unchecked("p_b"),
+            distance_km: 42.0,
+            terrain: "road".into(),
+            bidirectional: true,
+            derived: true,
+        },
+    ];
+    proj.save_world(&world, &[]).expect("save");
+
+    // ① 按 ID 断言：手写边文件在，derived 边文件不在。
+    assert!(
+        dir.join("distances")
+            .join("edges")
+            .join("e_hand.yaml")
+            .is_file(),
+        "手写边 e_hand 应落盘"
+    );
+    assert!(
+        !dir.join("distances")
+            .join("edges")
+            .join("e_derived.yaml")
+            .is_file(),
+        "推导边 e_derived 不得落盘（运行时投影，ADR-0070 D5）"
+    );
+
+    // ② 手写边 round-trip 不受损：字段原样。
+    let hand_yaml =
+        std::fs::read_to_string(dir.join("distances").join("edges").join("e_hand.yaml"))
+            .expect("读手写边 YAML");
+    assert!(
+        hand_yaml.contains("id: e_hand") && hand_yaml.contains("distance_km: 42"),
+        "手写边字段应完整保留：{hand_yaml}"
+    );
+
+    // ③ 重载：只有手写边，且无任何边带 derived 标记（serde skip 默认 false）。
+    let proj2 = Project::open(dir).expect("重开");
+    let w2 = proj2.load_world().expect("重载");
+    assert_eq!(
+        w2.distances.edges.len(),
+        1,
+        "重载应只剩 1 条手写边，实得 {:?}",
+        w2.distances
+            .edges
+            .iter()
+            .map(|e| e.id.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(w2.distances.edges[0].id.as_str(), "e_hand");
+    assert!(
+        !w2.distances.edges.iter().any(|e| e.derived),
+        "重载的边不得带 derived 标记"
+    );
 }
 
 /// 旧工程兼容性：手写一个 `distances/edges.yaml`（单文件旧格式），

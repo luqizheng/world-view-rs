@@ -1044,6 +1044,8 @@ fn build_world(
             w: Some(wu_radius * 2.0),
             h: Some(wu_radius * 2.0),
             rank: Some(3),
+            line_kind: None,
+            line_width_m: None,
         };
         places.push(place);
     }
@@ -1066,6 +1068,8 @@ fn build_world(
             w: None,
             h: None,
             rank: Some(0),
+            line_kind: None,
+            line_width_m: None,
         });
     }
 
@@ -1092,6 +1096,7 @@ fn build_world(
             distance_km: s.distance_km,
             terrain: s.terrain.clone(),
             bidirectional: true,
+            derived: false,
         });
     }
 

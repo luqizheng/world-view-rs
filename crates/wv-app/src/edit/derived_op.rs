@@ -159,6 +159,8 @@ pub fn apply_derived_op(
         Ok(dirty) => {
             edit.record_dirty(dirty);
             projection.dirty = true;
+            // ADR-0070 D5（T9）：提交后重建推导边（幂等亚毫秒；不进脏路径）。
+            crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
             mark_dirty_cells(&mut tex, &cell_changes);
             let label = match op {
                 DerivedOp::Smooth => "已平滑",

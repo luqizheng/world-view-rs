@@ -25,6 +25,8 @@ use std::collections::HashMap;
 use crate::layer_frame::LayerFrame;
 use crate::state::{BrushState, GridConfig, PlaybackState, ViewState, WorldProjection};
 use crate::theme::colors;
+use wv_core::map::distance::LineKind;
+use wv_core::map::road_derive::{effective_line_kind, road_line_effective_rank};
 use wv_core::time::TimeSpan;
 use wv_core::time::TimelineQuery;
 
@@ -39,12 +41,21 @@ pub struct ProjectionFrame {
     pub track_heads: Vec<Vec2>,
     /// 本帧轨迹「空心起点」标记（推算 / 粗轨迹用空心，动画 §1.3）。
     pub track_hollow_starts: Vec<Vec2>,
-    /// 本帧道路层（矢量叠加）：每条地点边 `(PlaceEdge)` 的一段线（世界坐标端点对）。
+    /// 本帧道路层（矢量叠加）：一段线（世界坐标端点对）。
     ///
-    /// 只画**两端都锚定在当前地图**的边（`Place.map == 当前图 id` 且 `x/y` 齐备），
+    /// **供给源（ADR-0070 T8 起）**：
+    /// ① 当前图上 `effective_line_kind == Road` 的线段 POI——折线切段，
+    ///    每线一个 rank（[`road_line_effective_rank`]，km = 线长 × 图比例尺，
+    ///    无比例尺 → 1）；
+    /// ② `terrain != "road"` 的手写 `PlaceEdge`（海路等）——两端锚定的
+    ///    直连段，rank 走 `PlaceEdge::effective_rank`。
+    ///    `terrain == "road"` 的边**不再渲染**：道路唯一供给源是路 POI 线，
+    ///    存量 road 边由加载期迁移转线（ADR-0070 D5）。
+    ///
+    /// 只画**锚定在当前地图**的内容（`Place.map == 当前图 id` 且坐标齐备），
     /// 与 [`crate::drill::resolve_markers`] 的「只画当前层级」口径一致。
     ///
-    /// **已按 `PlaceEdge::effective_rank` 降序排序**（ADR-0047 D4）：每档视野
+    /// **已按 rank 降序排序**（ADR-0047 D4）：每档视野
     /// 可见的段集 = 降序前缀，切片见 [`Self::road_slice_at`]；消费者不得依赖
     /// 段顺序之外的任何排列语义（同 mesh 内顶点序不影响绘制结果）。
     pub road_segments: Vec<(Vec2, Vec2)>,
@@ -74,37 +85,40 @@ pub struct ProjectionFrame {
     /// 不随相机平移/缩放变——只有世界编辑、钻取换图、栅格换图或 Road 图层
     /// 可见性翻转才需要重算段列与指纹，其余帧这一步是零工作。
     pub road_key: Option<bool>,
-    /// 本帧河流折线（ADR-0037 D5）：`terrain + rivers_seed` 的确定性派生，
-    /// 视图空间坐标（同 [`Self::road_segments`] 的换算口径）。
+    /// 本帧河流折线（ADR-0070 T8 单池化）：**唯一供给源 = 当前图上
+    /// `effective_line_kind == River` 的线段 POI**——作者手绘（ADR-0046）与
+    /// 迁移落地的模板河（ADR-0070 D5）同池，视图空间坐标（同
+    /// [`Self::road_segments`] 的换算口径）。
     ///
-    /// **派生数据不落盘**（AGENTS 4.2 只存参数）：种子在 `WorldMeta.template`，
-    /// 高度场在 `terrain.bin`，两者齐备即可逐点复现；重生成换种子河流自动跟随。
-    /// 每条折线带派生呈现级别（ADR-0047 D5，[`RiverLine::rank`]）。
+    /// 每条折线带呈现级别（ADR-0047 D5 长度占比折算，[`RiverLine::rank`]）
+    /// 与基准宽（[`RiverLine::width_wu`]，`line_width_m` 经图比例尺折算）。
+    /// 旧的 `terrain + rivers_seed` 确定性派生已删——种子河在加载期由
+    /// wv-edit 迁移转成河线 Place，渲染侧不再读种子（双供给至此收单池）。
     pub river_polylines: Vec<RiverLine>,
-    /// 河流派生缓存键：`(当前图 id, rivers_seed)`。`None` = 失效。
+    /// 河池缓存键 = 当前图 id。`None` = 失效。
     /// 世界编辑 / 钻取换图 / 栅格换图都会重算；纯相机运动零工作。
-    pub river_key: Option<(String, u64)>,
+    /// （旧键含 `rivers_seed`；种子派生删除后只剩图 id 一项。）
+    pub river_key: Option<String>,
     /// 本帧地物符号（rank ≥ 2 的地点，视图空间坐标）：国家档与更近档都画，
     /// 靠视口裁剪防密集点（参照 `place_dots` A1 索引）。
     pub landmark_dots: Vec<LandmarkDot>,
-    /// 本帧**作者手绘**河流折线（ADR-0046 D4 双供给的作者那一路）。
-    ///
-    /// 视图空间坐标（同 [`Self::river_polylines`] 口径）。来源 = 当前图上
-    /// 带 `Place.line` 的地点（亚格线状作者数据）；与派生的 `rivers_seed`
-    /// 水系**并存**——派生是模板世界的确定性资产，作者河是补充，不是替代。
-    /// 呈现级别与派生河同折算（长度占比，ADR-0047 D5）；图幅未知时归 rank 1
-    /// （亚格数据本质是局部细节，宁可少显示）。
-    pub author_river_polylines: Vec<RiverLine>,
 }
 
-/// 一条河流折线的渲染数据（ADR-0047 D5）：顶点 + 派生呈现级别。
+/// 一条河流折线的渲染数据（ADR-0047 D5 定级 + ADR-0070 D4 定宽）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct RiverLine {
-    /// 派生呈现级别（[`river_rank_from_length_frac`] 折算）；绘制侧过统一
+    /// 呈现级别（[`river_rank_from_length_frac`] 折算）；绘制侧过统一
     /// 门槛 [`crate::state::rank_visible_at_tier`]。
     pub rank: u8,
     /// 视图空间顶点（≥ 2 个才构成可见折线）。
     pub pts: Vec<Vec2>,
+    /// 基准宽（**世界单位**）：`Place.line_width_m`（米）经图比例尺折算，
+    /// 绘制侧沿弧长锥形插值（源头 30% → 河口 100%，ADR-0070 D4）。
+    ///
+    /// `0.0` = 未声明 `line_width_m`（存量夹具 / 缺省语义）→ 绘制侧退回
+    /// 旧屏幕像素缺省宽。宽在**收集时**折算好而不是绘制时换算：图比例尺
+    /// 是投影输入，绘制侧不该再摸世界数据。
+    pub width_wu: f32,
 }
 
 /// 河流呈现级别折算（ADR-0047 D5）：折线长度 ÷ 图幅宽度 ≥ 0.40 → 3（横贯级
@@ -126,6 +140,25 @@ pub fn river_rank_from_length_frac(frac: f32) -> u8 {
 /// 折线总长（相邻顶点距离和）。
 fn polyline_len(pts: &[Vec2]) -> f32 {
     pts.windows(2).map(|w| w[0].distance(w[1])).sum()
+}
+
+/// 河流锥形宽的逐段系数（ADR-0070 D4）：返回与 `pts.windows(2)` 平行的
+/// 系数列，第 i 段宽 = 基准宽 × 系数[i]；系数 = `lerp(0.3, 1.0, 弧长占比)`，
+/// 弧长占比 = 段起点累计弧长 ÷ 总线长（源头 30% → 河口 100%）。
+///
+/// 放投影侧而非绘制侧：纯函数无头可测（计划 T8 的锥形宽测试落在
+/// world_projection 测试区），绘制侧只消费——「构建」与「断言」同一实现，
+/// 不留两套真相（先例：[`build_road_tier_view`]）。
+pub(crate) fn river_taper_factors(pts: &[Vec2]) -> Vec<f32> {
+    let total = polyline_len(pts).max(f32::EPSILON);
+    let mut acc = 0.0;
+    pts.windows(2)
+        .map(|w| {
+            let f = 0.3 + 0.7 * (acc / total);
+            acc += w[0].distance(w[1]);
+            f
+        })
+        .collect()
 }
 
 impl ProjectionFrame {
@@ -289,7 +322,6 @@ pub fn compute_projection(
     frame.track_hollow_starts.clear();
     frame.place_dots.clear();
     frame.landmark_dots.clear();
-    frame.author_river_polylines.clear();
 
     // 路段列缓存门（ADR-0030 D5a）：段坐标在根图帧系，不随相机平移/缩放变，
     // 只有世界编辑 / 钻取换图 / 栅格换图 / Road 图层可见性翻转才重算。
@@ -307,19 +339,11 @@ pub fn compute_projection(
         frame.road_fingerprint = segments_fingerprint(&frame.road_segments);
     }
 
-    // 河流派生缓存（ADR-0037 D5）：键 = (当前图, rivers_seed)；世界编辑 /
-    // 钻取换图 / 栅格换图即重算，纯相机运动零工作（与路网缓存同款纪律）。
-    let river_seed = projection
-        .world
-        .meta
-        .as_ref()
-        .and_then(|m| m.template.as_ref())
-        .map(|t| t.rivers_seed);
+    // 河池缓存门（ADR-0037 D5 的纪律，ADR-0070 T8 收单池后键只剩图 id）：
+    // 世界编辑 / 钻取换图 / 栅格换图即重算，纯相机运动零工作（与路网缓存
+    // 同款——**不是**每帧无条件重建，合批 mesh 的资产泄漏坑见 AGENTS 历史）。
     let current_for_river = drill.current().cloned();
-    let river_wanted = match (&current_for_river, river_seed) {
-        (Some(map_id), Some(seed)) => Some((map_id.as_str().to_owned(), seed)),
-        _ => None,
-    };
+    let river_wanted = current_for_river.as_ref().map(|m| m.as_str().to_owned());
     let river_stale = frame.river_key != river_wanted
         || projection.is_changed()
         || drill.is_changed()
@@ -336,24 +360,31 @@ pub fn compute_projection(
         *place_index = PlaceIndex::build(&projection.world);
     }
 
-    // 作者手绘河（ADR-0046 D4）：当前图上带 `Place.line` 的地点 → 折线。
-    // 与派生水系**双供给**（先例：街道的手绘 YAML / Overture 双供给）。
-    // 坐标：折线是**图内局部 wu** → `map_to_view` 转视图空间（同 POI 口径）。
-    // 级别（ADR-0047 D5）：与派生河同折算（长度 ÷ 图幅宽）；图幅未知归 1。
+    // 河流收集（ADR-0070 T8 单池）：当前图上 `effective_line_kind == River`
+    // 的线段 POI → 折线。坐标：折线是**图内局部 wu** → `map_to_view` 转视图
+    // 空间（同 POI 口径）。级别（ADR-0047 D5）：折线长度 ÷ 图幅宽；图幅未知
+    // 归 1（亚格数据本质是局部细节，宁可少显示）。
+    // 基准宽（ADR-0070 D4）：`line_width_m`（米）→ wu——`km_per_wu` 是
+    // 「1 wu 有多少 km」，故 1 wu = 1000 × km_per_wu **米**，
+    // `width_wu = width_m ÷ 1000 ÷ km_per_wu`；无比例尺 → 数字按 wu 直读
+    // （V1 只提示不阻止，宁画勿丢）；未声明 → 0（绘制侧退旧缺省宽）。
+    // `line_kind == Road` 的线不进河池——归路池（见下方道路层收集）。
+    // 河流重算放在图层早退之前：河流属地形族（terrain 图层在渲染侧 gate），
+    // 关掉全部矢量图层再重新打开的第一帧就要有河可画。
     if river_stale {
-        let extent_w = current_for_river.as_ref().and_then(|map_id| {
-            projection
-                .world
-                .maps
-                .iter()
-                .find(|m| &m.id == map_id)
-                .and_then(|n| n.extent)
-                .map(|e| e.width)
-        });
+        let node = current_for_river
+            .as_ref()
+            .and_then(|map_id| projection.world.maps.iter().find(|m| &m.id == map_id));
+        let extent_w = node.as_ref().and_then(|n| n.extent).map(|e| e.width);
+        let km_per_wu = node.and_then(|n| n.km_per_wu()).map(|(kx, _)| kx as f32);
         if let Some(map_id) = &current_for_river {
             if let Some(idxs) = place_index.anchored_by_map.get(map_id) {
                 for i in idxs {
                     let place = &projection.world.distances.places[*i as usize];
+                    // 判别唯一入口（ADR-0070 D2）：缺省（None）与显式 River 同归河。
+                    if effective_line_kind(place) != Some(LineKind::River) {
+                        continue;
+                    }
                     let Some(line) = place.line.as_ref() else {
                         continue;
                     };
@@ -366,48 +397,19 @@ pub fn compute_projection(
                         let rank = extent_w
                             .map(|w| river_rank_from_length_frac(polyline_len(&pts) / w.max(1.0)))
                             .unwrap_or(1);
-                        frame.author_river_polylines.push(RiverLine { rank, pts });
+                        let width_wu = place
+                            .line_width_m
+                            .map(|m| match km_per_wu {
+                                Some(k) => m / 1000.0 / k,
+                                None => m,
+                            })
+                            .unwrap_or(0.0);
+                        frame.river_polylines.push(RiverLine {
+                            rank,
+                            pts,
+                            width_wu,
+                        });
                     }
-                }
-            }
-        }
-    }
-
-    // 河流重算放在图层早退之前：河流属地形族（terrain 图层在渲染侧 gate），
-    // 关掉全部矢量图层再重新打开的第一帧就要有河可画。
-    if river_stale {
-        let world = &projection.world;
-        if let (Some(map_id), Some(seed)) = (&current_for_river, river_seed) {
-            if let Some(node) = world.maps.iter().find(|m| &m.id == map_id) {
-                if let (Some(extent), Some(terrain)) = (node.extent, world.terrain_of(map_id)) {
-                    let heights: Vec<i16> = terrain.cells.iter().map(|c| c.height).collect();
-                    let polys = wv_terrain::climate::generate_rivers(
-                        terrain.width,
-                        terrain.height,
-                        &heights,
-                        seed,
-                        12,
-                    );
-                    // 级别（ADR-0047 D5）：折线长度 ÷ 图幅宽。视图空间长度 ==
-                    // 图内 wu 长度（map_to_view 只平移），占比口径与图幅无关。
-                    frame.river_polylines = polys
-                        .into_iter()
-                        .map(|pts| {
-                            let pts: Vec<Vec2> = pts
-                                .into_iter()
-                                .map(|[nx, ny]| {
-                                    grid.map_to_view(Vec2::new(
-                                        nx * extent.width,
-                                        ny * extent.height,
-                                    ))
-                                })
-                                .collect();
-                            let rank = river_rank_from_length_frac(
-                                polyline_len(&pts) / extent.width.max(1.0),
-                            );
-                            RiverLine { rank, pts }
-                        })
-                        .collect();
                 }
             }
         }
@@ -483,12 +485,50 @@ pub fn compute_projection(
                 Some(grid.map_to_view(Vec2::new(x, y)))
             };
             if layers.road.visible && road_stale {
-                // 带级别收集（ADR-0047 D4）：`effective_rank`（显式 rank 或
-                // 距离折算）→ 降序排序 → 三档前缀切割位与各自指纹一次算齐。
+                // 带级别收集（ADR-0047 D4）→ 降序排序 → 三档前缀切割位与
+                // 各自指纹一次算齐。供给源两路（ADR-0070 T8）：
+                //
+                // ① 路 POI 线：折线切段，每线一个 rank。km = 线长(wu) ×
+                //    km_per_wu（视图长度 == 图内 wu 长度，map_to_view 只平移）；
+                //    无比例尺 → None → 折算归 1（显式 `place.rank` 仍赢）。
+                // ② `terrain != "road"` 的手写边（海路等）照旧直连段。
+                //    `terrain == "road"` 的边**不收**：道路唯一供给源是路
+                //    POI 线（含推导边——它 terrain 也是 road，同样不画；
+                //    推导边只服务路径搜索 / 行程时间，ADR-0070 D5）。
                 let mut ranked: Vec<(u8, Vec2, Vec2)> = Vec::new();
-                for edge in &world.distances.edges {
-                    if let (Some(a), Some(b)) = (find_place(&edge.a), find_place(&edge.b)) {
-                        ranked.push((edge.effective_rank(), a, b));
+                if let Some(idxs) = place_index.anchored_by_map.get(&current.id) {
+                    for i in idxs {
+                        let place = &world.distances.places[*i as usize];
+                        // 判别唯一入口（ADR-0070 D2）：只有显式 Road 是路。
+                        if effective_line_kind(place) != Some(LineKind::Road) {
+                            continue;
+                        }
+                        let Some(line) = place.line.as_ref() else {
+                            continue;
+                        };
+                        let pts: Vec<Vec2> = line
+                            .chunks(2)
+                            .filter(|p| p.len() == 2)
+                            .map(|p| grid.map_to_view(Vec2::new(p[0], p[1])))
+                            .collect();
+                        if pts.len() < 2 {
+                            continue;
+                        }
+                        let km = current
+                            .km_per_wu()
+                            .map(|(kx, _)| polyline_len(&pts) * kx as f32);
+                        let rank = road_line_effective_rank(place, km);
+                        for pair in pts.windows(2) {
+                            ranked.push((rank, pair[0], pair[1]));
+                        }
+                    }
+                }
+                for e in &world.distances.edges {
+                    if e.terrain == "road" {
+                        continue;
+                    }
+                    if let (Some(a), Some(b)) = (find_place(&e.a), find_place(&e.b)) {
+                        ranked.push((e.effective_rank(), a, b));
                     }
                 }
                 let (segments, cuts, fingerprints) = build_road_tier_view(ranked);
@@ -1701,6 +1741,8 @@ mod tests {
             w: Some(10.0),
             h: Some(10.0),
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 
@@ -1772,6 +1814,8 @@ mod tests {
             biome: None,
             envelope: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         });
         let index = PlaceIndex::build(&world);
         assert_eq!(
@@ -1800,6 +1844,8 @@ mod tests {
             biome: None,
             envelope: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         });
         let index = PlaceIndex::build(&world);
         assert_eq!(index.anchored_by_map.get(&map).map(Vec::len), None);
@@ -1844,6 +1890,8 @@ mod tests {
             w: Some(10.0),
             h: Some(10.0),
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 
@@ -1863,6 +1911,8 @@ mod tests {
             w: None,
             h: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 
@@ -1873,8 +1923,13 @@ mod tests {
             a: Id::new_unchecked(a),
             b: Id::new_unchecked(b),
             distance_km: 1.0,
-            terrain: "road".to_owned(),
+            // ADR-0070 T8 后直连路径只服务**非 road** 手写边（海路等）：
+            // terrain == "road" 的边不再渲染（道路唯一供给源 = 路 POI 线），
+            // 夹具因此用海路地形——既有断言（段数 / 端点坐标）原样保留；
+            // road 边不渲染由 `legacy_edge_only_world_renders_no_roads` 钉住。
+            terrain: "sea".to_owned(),
             bidirectional: true,
+            derived: false,
         }
     }
 
@@ -2191,6 +2246,184 @@ mod tests {
         // 预算 250ms：单跑 ~10ms，但全量并行跑测试时会被机器负载击穿
         // （曾 100ms 假失败）。守的意义是「毫秒级而非秒级」（无裁剪时 17s+）。
         assert!(dt.as_millis() < 250, "8.1 万点投影应在毫秒级，实得 {dt:?}");
+    }
+
+    // ---- ADR-0070 T8：河池单源 / 锥形宽 / 路 = 线 POI ----
+
+    /// 线段 POI 夹具：折线（图内局部 wu）+ 类别 + 基准宽（米）。
+    fn line_place(
+        id: &str,
+        map_id: &str,
+        line: Vec<f32>,
+        kind: Option<wv_core::distance::LineKind>,
+        width_m: Option<f32>,
+    ) -> Place {
+        Place {
+            kind: None,
+            line: Some(line),
+            id: Id::new_unchecked(id),
+            name: id.to_owned(),
+            feature: None,
+            biome: None,
+            envelope: None,
+            map: Some(Id::new_unchecked(map_id)),
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+            rank: None,
+            line_kind: kind,
+            line_width_m: width_m,
+        }
+    }
+
+    /// 河池单源（ADR-0070 T8）：无模板 world、两条河线 Place → 恰 2 条
+    /// RiverLine；`meta.template`（含 `rivers_seed`）在场也**不得**派生出
+    /// 第三条——种子河已由加载期迁移转成河线 Place（wv-edit T7），渲染侧
+    /// 不再读种子，双供给（ADR-0046 D4）至此收成单池。
+    #[test]
+    fn river_pool_sources_from_line_places_only() {
+        let mut world = wv_core::World::default();
+        world.maps.push(map("m1"));
+        world.distances.places = vec![
+            // line_kind 缺省（None）= 河（ADR-0070 D2 判别口径）。
+            line_place("rv_a", "m1", vec![0.0, 0.0, 30.0, 0.0], None, None),
+            line_place(
+                "rv_b",
+                "m1",
+                vec![0.0, 20.0, 30.0, 20.0],
+                Some(wv_core::distance::LineKind::River),
+                Some(24.0),
+            ),
+        ];
+        world.meta = Some(wv_core::WorldMeta {
+            name: "模板世界".into(),
+            version: "0.1".into(),
+            schema_version: 2,
+            root_map: Id::new_unchecked("m1"),
+            timeline_range: wv_core::time::TimeSpan { from: 0, to: None },
+            template: Some(wv_core::WorldTemplate {
+                kind: wv_core::WorldTemplateKind::Ocean,
+                seed: 1,
+                rivers_seed: 42,
+            }),
+        });
+
+        let (mut app, mut schedule) = projection_app(world);
+        let frame = run_once(&mut app, &mut schedule);
+        assert_eq!(
+            frame.river_polylines.len(),
+            2,
+            "河池只收河线 Place（种子不派生），实得 {}",
+            frame.river_polylines.len()
+        );
+        // 显式宽度折算在场：rv_b 带基准宽，rv_a 缺省 → width_wu == 0（旧缺省宽）。
+        assert_eq!(frame.river_polylines[0].width_wu, 0.0, "未声明宽度 → 0");
+        assert!(
+            frame.river_polylines[1].width_wu > 0.0,
+            "声明了 line_width_m 的河线必须带正基准宽，实得 {}",
+            frame.river_polylines[1].width_wu
+        );
+    }
+
+    /// 锥形宽（ADR-0070 D4）：源头段系数恰 0.3（弧长占比 0），沿弧长单调
+    /// 增至河口；首段宽/末段宽 ≈ 0.3（±0.05）。10 段等长折线时末段起点
+    /// 占比 0.9 → 系数 0.93，比值 0.3/0.93 ≈ 0.323。
+    #[test]
+    fn river_taper_reaches_thirty_percent_at_source() {
+        let pts: Vec<Vec2> = (0..=10).map(|i| Vec2::new(i as f32 * 10.0, 0.0)).collect();
+        let f = river_taper_factors(&pts);
+        assert_eq!(f.len(), 10, "系数列与段数平行，实得 {}", f.len());
+        let first = f[0];
+        let last = f[9];
+        assert!(
+            (first - 0.3).abs() < 1e-6,
+            "源头段（弧长占比 0）系数应恰为 0.3，实得 {first}"
+        );
+        let ratio = first / last;
+        assert!(
+            (ratio - 0.3).abs() <= 0.05,
+            "首段宽/末段宽应 ≈ 0.3（±0.05），实得 {ratio}（first={first}, last={last}）"
+        );
+        for (i, w) in f.windows(2).enumerate() {
+            assert!(
+                w[1] > w[0],
+                "锥形系数应沿弧长单调递增（第 {i} 段 {} → {}）",
+                w[0],
+                w[1]
+            );
+        }
+    }
+
+    /// 路 = 线 POI（ADR-0070 T8）：1 条路线 Place（4 点折线）→ 段数 = 3 =
+    /// 点数 − 1，且 rank 走 `road_line_effective_rank` 的公里折算。
+    /// `unit_per_km = 0.1`（0.1 wu/km）→ 1 wu = 10 km，线长 40 wu = 400 km
+    /// ≥ 100 → rank 3；折算方向写反（×unit_per_km）会得 4 km → rank 1，本
+    /// 测试即红——钉死 wu→km 是**乘 km_per_wu**。
+    #[test]
+    fn road_segments_source_from_road_line_places() {
+        let grid = GridConfig::default();
+        let mut world = wv_core::World::default();
+        let mut m1 = map("m1");
+        m1.unit_per_km = Some(0.1);
+        world.maps.push(m1);
+        world.distances.places = vec![line_place(
+            "road_1",
+            "m1",
+            vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 20.0, 10.0],
+            Some(wv_core::distance::LineKind::Road),
+            None,
+        )];
+
+        let (mut app, mut schedule) = projection_app(world);
+        let frame = run_once(&mut app, &mut schedule);
+        assert_eq!(
+            frame.road_segments.len(),
+            3,
+            "段数 = 点数 − 1，实得 {}",
+            frame.road_segments.len()
+        );
+        assert_eq!(
+            frame.road_rank_cuts,
+            [3, 3, 3],
+            "400 km 线 → rank 3，三档全见，实得 {:?}",
+            frame.road_rank_cuts
+        );
+        assert_eq!(
+            frame.road_segments[0],
+            (
+                grid.map_to_view(Vec2::new(0.0, 0.0)),
+                grid.map_to_view(Vec2::new(10.0, 0.0))
+            ),
+            "段几何 = 折线相邻点对的视图空间坐标"
+        );
+    }
+
+    /// 只有手写 road 边的存量世界（ADR-0070 之前的形态）→ road_segments
+    /// **空**：道路唯一供给源是路 POI 线，手写 road 边不再直连渲染（存量
+    /// 边由加载期迁移转线，wv-app T9）；海路等非 road 边才走直连路径
+    /// （阳性对照见 `edge_between_anchored_places_becomes_one_road_segment`）。
+    #[test]
+    fn legacy_edge_only_world_renders_no_roads() {
+        let mut world = wv_core::World::default();
+        world.maps.push(map("m1"));
+        world.distances.places = vec![
+            anchored_place("pa", "m1", 10.0, 20.0),
+            anchored_place("pb", "m1", 30.0, 20.0),
+        ];
+        world.distances.edges = vec![PlaceEdge {
+            terrain: "road".to_owned(),
+            ..edge("e1", "pa", "pb")
+        }];
+
+        let (mut app, mut schedule) = projection_app(world);
+        let frame = run_once(&mut app, &mut schedule);
+        assert!(
+            frame.road_segments.is_empty(),
+            "road 边不再直连渲染，实得 {} 段",
+            frame.road_segments.len()
+        );
+        assert_eq!(frame.road_rank_cuts, [0; 3], "无段则三档切割位全零");
     }
 
     /// 路段列缓存（ADR-0030 D5a）：缩放/平移（只动 ViewState）不触发重算，

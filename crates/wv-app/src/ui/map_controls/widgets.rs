@@ -2,6 +2,89 @@
 
 use super::*;
 
+/// 线段 POI 瓷砖的档位门控（ADR-0070 D4）：**仅 Edit 档渲染**。
+///
+/// 纯函数——「该档显不显」的口径收在这里，工具条渲染与单测共用一条，
+/// 避免门控逻辑散落在 UI 闭包里没法断言（ADR-0043 弹层测试的教训）。
+pub(super) fn line_poi_tile_visible(tier: wv_render::state::LodTier) -> bool {
+    matches!(tier, wv_render::state::LodTier::Edit)
+}
+
+/// 槽 14 —— 线段 POI 分裂按钮（ADR-0070 D4）。
+///
+/// 主键 = 河（Lucide `river`），菜单两项 = 河 / 路（Lucide `route`）。
+/// 主区图标**跟着当前类走**：河显 `river`、路显 `route`。点主区 = 用当前
+/// 类开关线段 POI 工具；点小三角 = 弹层里换类（换类 = 换参数不关工具——
+/// 分发器口径：同类开着 = 关，异类开着 = 换，与 `Select(shape)` 同款）。
+///
+/// 调用方负责档位门控（[`line_poi_tile_visible`]，仅 Edit 档调用本函数）
+/// 与播放锁（`enabled`，Gate-1 同款：灰化 + 不成命中区，见 `tool_tile`）。
+#[allow(clippy::too_many_arguments)]
+pub(super) fn line_poi_split(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    metrics: DockMetrics,
+    vertical: bool,
+    loc: Locale,
+    kind: wv_core::distance::LineKind,
+    active: bool,
+    hint: &str,
+    enabled: bool,
+    palette: &mut CommandPalette,
+) {
+    use wv_core::distance::LineKind;
+
+    // 播放锁（T10 评审 minor ①）：与 `tool_tile` 同口径——灰化占位、
+    // `Sense::hover` 不成命中区（不是「点了不响应」，是连误触的机会都不给）。
+    // 底色透明：大框（`float_fill`）已提供底，瓷砖只在 hover / 活动时上色。
+    if !enabled {
+        let (rect, _resp) = ui.allocate_exact_size(metrics.tile, egui::Sense::hover());
+        let icon = match kind {
+            LineKind::River => ICON_RIVER,
+            LineKind::Road => ICON_ROUTE,
+        };
+        icon_image(icon, shell.text_disabled(), metrics.tile_icon).paint_at(
+            ui,
+            egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(metrics.tile_icon)),
+        );
+        return;
+    }
+
+    let items = [
+        SplitMenuItem::new(ICON_RIVER, t(loc, I18nKey::LinePoiKindRiver)),
+        SplitMenuItem::new(ICON_ROUTE, t(loc, I18nKey::LinePoiKindRoad)),
+    ];
+    let icon = match kind {
+        LineKind::River => ICON_RIVER,
+        LineKind::Road => ICON_ROUTE,
+    };
+    let mut main_cmd: Option<CommandId> = None;
+    let mut pick_cmd: Option<CommandId> = None;
+    split_button(
+        ui,
+        shell,
+        "wv_split_line_poi",
+        metrics.split_metrics(vertical),
+        icon,
+        active,
+        hint,
+        &items,
+        usize::from(kind == LineKind::Road),
+        || main_cmd = Some(CommandId::SelectMapTool(MapToolId::LinePoi(kind))),
+        |i| {
+            let picked = if i == 1 {
+                LineKind::Road
+            } else {
+                LineKind::River
+            };
+            pick_cmd = Some(CommandId::SelectMapTool(MapToolId::LinePoi(picked)));
+        },
+    );
+    if let Some(c) = main_cmd.or(pick_cmd) {
+        palette.pending = Some(c);
+    }
+}
+
 /// 槽 3 —— 选择组的分裂按钮（ADR-0043）。
 ///
 /// 主区图标**跟着当前形状走**：多边形显示 `vector-polygon`、矩形显示

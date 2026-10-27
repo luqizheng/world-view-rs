@@ -462,6 +462,11 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CellFloodByHeight => "按海拔",
         I18nKey::StatusBarStrokeProgress => "笔触进行中 · 已落",
         I18nKey::StatusBarStrokeCells => " 格",
+        I18nKey::ScaleBarTipBar => "比例尺：条的一整段长度 = 标注的真实距离（图上就是这么大），随缩放联动",
+        I18nKey::ScaleBarTipCellPrefix => "当前图每格 ≈",
+        I18nKey::ScaleBarTipCellSuffix => "（数据分辨率：小于一格的地物无法表达）",
+        I18nKey::CmdMapProperties => "地图属性…",
+        I18nKey::ProjectMenuMapProperties => "地图属性…",
         I18nKey::MapControlsPlaybackLocked => "时间轴播放中，暂停后可编辑",
         I18nKey::MapControlsNeedMap => "请先打开一张地图",
 
@@ -685,6 +690,21 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CellScopePaint => "落笔 · 下一笔",
         I18nKey::CellScopeSelectedCount => "选中 {n} 格",
         I18nKey::CellScopeBatchHint => "整体调整选中的所有格",
+        // ── 线段 POI（ADR-0070 D4）──
+        I18nKey::LinePoiTool => "线段 POI（画河流与道路）",
+        I18nKey::LinePoiKindRiver => "河流",
+        I18nKey::LinePoiKindRoad => "道路",
+        I18nKey::LinePoiPanelTitle => "河流和道路",
+        // 2026-10-26（T10 评审 minor ③）：表单字段统一用词「名称」——
+        // 与 NewMapDialogNameLabel / RegionPanelNameLabel 等既有字段一致。
+        I18nKey::LinePoiName => "名称",
+        I18nKey::LinePoiWidth => "宽度",
+        I18nKey::LinePoiWidthUnitWu => "世界单位",
+        I18nKey::LinePoiMode => "模式",
+        I18nKey::LinePoiModeRoute => "绕行",
+        I18nKey::LinePoiModeCarve => "下切",
+        I18nKey::LinePoiRank => "级别",
+        I18nKey::LinePoiHint => "画河流或道路（仅编辑档视野）",
     }
 }
 
@@ -1153,6 +1173,11 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CellFloodByHeight => "By height",
         I18nKey::StatusBarStrokeProgress => "Stroking ·",
         I18nKey::StatusBarStrokeCells => " cells",
+        I18nKey::ScaleBarTipBar => "Scale bar: the whole bar spans exactly the labeled distance on the map, linked to zoom",
+        I18nKey::ScaleBarTipCellPrefix => "Each cell \u{2248}",
+        I18nKey::ScaleBarTipCellSuffix => "(data resolution: smaller features cannot be represented)",
+        I18nKey::CmdMapProperties => "Map Properties\u{2026}",
+        I18nKey::ProjectMenuMapProperties => "Map Properties\u{2026}",
         I18nKey::MapControlsPlaybackLocked => "Timeline is playing — pause to edit",
         I18nKey::MapControlsNeedMap => "Open a map first",
 
@@ -1380,5 +1405,18 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CellScopePaint => "Paint · next stroke",
         I18nKey::CellScopeSelectedCount => "{n} cells selected",
         I18nKey::CellScopeBatchHint => "Adjusts every selected cell",
+        // ── Line POI (ADR-0070 D4) ──
+        I18nKey::LinePoiTool => "Line POI (draw rivers & roads)",
+        I18nKey::LinePoiKindRiver => "River",
+        I18nKey::LinePoiKindRoad => "Road",
+        I18nKey::LinePoiPanelTitle => "Rivers & Roads",
+        I18nKey::LinePoiName => "Name",
+        I18nKey::LinePoiWidth => "Width",
+        I18nKey::LinePoiWidthUnitWu => "world units",
+        I18nKey::LinePoiMode => "Mode",
+        I18nKey::LinePoiModeRoute => "Detour",
+        I18nKey::LinePoiModeCarve => "Carve",
+        I18nKey::LinePoiRank => "Rank",
+        I18nKey::LinePoiHint => "Draw a river or road (Edit zoom only)",
     }
 }

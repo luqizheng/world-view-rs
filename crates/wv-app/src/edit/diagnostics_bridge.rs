@@ -138,6 +138,75 @@ pub fn derive_diagnostics(world: &World, theme: &ThemePack) -> Diagnostics {
         }
     }
 
+    // ── ADR-0070 §4.6 / D5（T9）：存量线数据与推导边跳过的可见性 ──
+    // 都是**提示级**（V1 只提示不阻止）：迁移由加载期自动完成（见
+    // `edit::road_sync::migrate_legacy_lines_on_load`），这里的职责是让
+    // 「为什么路上没线 / 为什么还没迁移」在校验面板有处可查。
+    if wv_edit::command::needs_line_migration(world) {
+        // 待迁移明细计数（从世界数据可直接 recover 的三判据，逐条列出）。
+        let painted_cells: usize = world
+            .terrains
+            .values()
+            .map(|t| {
+                t.cells
+                    .iter()
+                    .filter(|c| {
+                        c.biome == wv_terrain::BIOME_RIVER || c.biome == wv_terrain::BIOME_ROAD
+                    })
+                    .count()
+            })
+            .sum();
+        let hand_roads = world
+            .distances
+            .edges
+            .iter()
+            .filter(|e| e.terrain == "road" && !e.derived)
+            .count();
+        let template_pending = world
+            .meta
+            .as_ref()
+            .and_then(|m| m.template)
+            .is_some_and(|_| {
+                // 与迁移判据同口径：只认河线 POI（缺省与显式 River 同归河）。
+                !world.distances.places.iter().any(|p| {
+                    wv_core::map::road_derive::effective_line_kind(p)
+                        == Some(wv_core::map::distance::LineKind::River)
+                })
+            });
+        let mut parts: Vec<String> = Vec::new();
+        if painted_cells > 0 {
+            parts.push(format!("旧河/旧路涂格 {painted_cells} 格"));
+        }
+        if hand_roads > 0 {
+            parts.push(format!("手写路网边 {hand_roads} 条"));
+        }
+        if template_pending {
+            parts.push("未转实体的模板河".into());
+        }
+        d.items.push(diagnostics::hint(
+            "line-data-pending-migration",
+            format!(
+                "世界还带存量线数据（{}），下次加载时将自动迁移为线段 POI（可整体撤销）",
+                parts.join("、")
+            ),
+        ));
+    }
+    // 道路线因**所在图无比例尺**被推导跳过（D5：只显示 wu，不产边）——
+    // 按当前世界现算一次 derive 取计数（纯函数，亚毫秒）。
+    let road_report = wv_core::map::road_derive::derive_road_edges(
+        world,
+        wv_core::map::road_derive::ROAD_SNAP_TOLERANCE_WU,
+    );
+    if road_report.skipped_no_scale > 0 {
+        d.items.push(diagnostics::hint(
+            "road-derive-no-scale",
+            format!(
+                "{} 条道路线因所在地图没有比例尺（km_per_wu），未生成路网边，只显示线本身",
+                road_report.skipped_no_scale
+            ),
+        ));
+    }
+
     d.dedup_by_fingerprint();
     d
 }

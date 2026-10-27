@@ -452,6 +452,11 @@ impl MapNode {
     ///
     /// **不**进任何坐标链 / 距离换算（与 `Extent` / `PlaceEdge` / `Track` 的
     /// 单位无关），仅供「测量标签」的展示使用。
+    ///
+    /// **ADR-0070 追记（2026-10-26，§6.3 追写不改）**：上句结论已被 ADR-0070
+    /// D5 收窄——线 POI 推导边的 `distance_km` 换算（线长 ÷ `unit_per_km`）
+    /// 与渲染宽度换算亦经本入口；正文结论的修订记录见
+    /// `docs/adr/ADR-0070-rivers-roads-as-line-poi.md` 追记一。
     pub fn km_per_wu(&self) -> Option<(f64, f64)> {
         if let Some(src) = &self.geographic_source {
             // 真图：用 bbox + extent 折算（已实现，见 geographic_source 模块）。
@@ -578,6 +583,7 @@ impl GeometryData {
 
 pub mod coord;
 pub mod distance;
+pub mod road_derive;
 pub mod scale_hint;
 pub mod sea;
 pub mod unit;

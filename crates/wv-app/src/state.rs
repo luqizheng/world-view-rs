@@ -33,6 +33,87 @@ pub use wv_world_cell_map::state::{FloodCriterion, FloodSelectState};
 /// 同款经 `wv_render::state` re-export 链暴露，应用侧 `crate::state::X` 直用。
 pub use wv_render::state::{CellSelection, PointSelectState};
 
+/// 钉点会话的**待定线**（T11 预览态）。
+///
+/// `preview` 是 [`wv_terrain::line_path::plan_polyline`] 的结果（图内局部
+/// wu，首尾已替换为作者精确钉点）；**仅在 `end_cell` 或模式变化时重算**——
+/// 预览跟着光标走，但以格为缓存粒度，光标在同一格内挪动不触发 A*
+/// （防每帧寻路，计划 Task 11 点名）。空 `Vec` = 尚未规划；单点 `Vec` =
+/// 已规划但不可达 / 起终点同格（占位防重算风暴）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingLinePoi {
+    /// 起点（图内局部 wu；第一击的精确位置）。
+    pub start: Vec2,
+    /// 预览折线（图内局部 wu）。首点 = `start`，末点 = 终点精确位置。
+    pub preview: Vec<Vec2>,
+    /// 终点所在格（栅格坐标）——预览重算的缓存键。
+    pub end_cell: (i32, i32),
+}
+
+/// 端点拖拽拖的是哪一端（T12：改道 / 延伸的对称两侧）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DraggedEnd {
+    /// 首顶点（折线起点）。
+    First,
+    /// 末顶点（折线终点）。
+    Last,
+}
+
+/// 端点拖拽会话的**纯数据投影**（ADR-0070 D4 · 计划 Task 12）。
+///
+/// 与 [`PendingLinePoi`] 同款落在 state（会话态，**不落盘**）：拖拽只改
+/// `preview`，世界数据在松手提交时经命令链一次性落账。字段面里要记住
+/// 三件事——拖的是谁（`id`）、拖的哪端（`end`）、原线长什么样
+/// （`original`，分叉段计算与「拖回原位 = 无变化不提交」都靠它）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct EndpointDrag {
+    /// 被拖的线段 POI（= 当时的 `selected`）。
+    pub id: wv_core::id::Id,
+    /// 拖的是首端还是末端。
+    pub end: DraggedEnd,
+    /// 拖拽开始时的原始折线（图内局部 wu；只读基准，不随拖动变）。
+    pub original: Vec<Vec2>,
+    /// 拖动中的预览折线（图内局部 wu；末点 = 光标 / 吸附点）。
+    pub preview: Vec<Vec2>,
+    /// 预览重算的缓存键：目标点所在格（格变才重算，T11 同语义）。
+    pub target_cell: (i32, i32),
+    /// 汇流吸附目标：`(另一条河的 ID, 吸附点)`。`Some` = 预览高亮该线。
+    pub snap: Option<(wv_core::id::Id, Vec2)>,
+}
+
+/// 线段 POI 工具会话态（ADR-0070 D4）。
+///
+/// T10 只立「工具激活 + 当前线的种类」让工具条与分发器可写；T11 在此扩展
+/// 面板表单参数与钉点会话。互斥的裁决在 `ui_shell::apply_pending_commands`
+/// （与其它 `SelectMapTool` 同一条链），本结构不自带开关逻辑。
+#[derive(Resource, Debug, Default)]
+pub struct LinePoiState {
+    /// 工具是否激活。`true` 时地图点击/拖拽由线段 POI 的交互系统消费。
+    pub tool_active: bool,
+    /// 当前线的种类：河 / 路（工具条分裂按钮菜单切换；`Default` = 河，
+    /// 与 `LineKind` 的 serde 缺省口径一致）。
+    pub kind: wv_core::distance::LineKind,
+    /// 路径规划模式（ADR-0070 D3「同」语义）：绕行（默认）/ 强制下切。
+    /// 河与路**同款两模式**，只差缺省性格——河默认绕行、路默认下切，
+    /// 但作者随时可换，工具不替他决定。
+    pub mode: wv_terrain::line_path::LinePathMode,
+    /// 宽度草稿（新建态 = 创建参数；选中态 = 写回草稿）。
+    ///
+    /// **显示单位**：图有比例尺（`km_per_wu`）时为**米**，无比例尺时按
+    /// **wu 原值**（面板单位标注切 [`crate::i18n::I18nKey::LinePoiWidthUnitWu`]）。
+    /// `0` = 未声明（创建时 `line_width_m: None`，渲染退缺省宽）。
+    pub width_m: f32,
+    /// 名称草稿（新建态 = 创建名称；选中态 = 属性写回缓冲——浮窗闭包与
+    /// 面板资源互斥借用，跨帧输入文本必须有处放，同 [`NatureRegionUiState`]）。
+    pub name: String,
+    /// 进行中的钉点（`None` = 没有在画的线）。
+    pub pending: Option<PendingLinePoi>,
+    /// 选中的既有线段 POI（工具开着点中既有线；Esc / 点空白清除）。
+    pub selected: Option<wv_core::id::Id>,
+    /// 进行中的端点拖拽（T12：改道 / 延伸 / 汇流吸附）。会话态，不落盘。
+    pub drag: Option<EndpointDrag>,
+}
+
 // ---------------------------------------------------------------------------
 // 地标放置（ADR-0071：地标面板 + 单击地图创建点状 Place）
 // ---------------------------------------------------------------------------
@@ -174,6 +255,9 @@ pub enum Panel {
     Event,
     /// Cell 编辑器（[ADR-0040]，2026-10-20 独立面板化）：单格水陆/海拔/群系编辑。
     CellEditor,
+    /// 河流和道路面板（ADR-0070 D4）：一浮窗两段设置，兼任线段 POI 的
+    /// 新建设置与选中属性编辑（T11 渲染内容）。随工具开关（分发器裁决）。
+    LinePoi,
     /// 地标面板（ADR-0071）：选类别/级别 → 单击地图放置点状 Place（POI），
     /// 并列出当前图全部点状地点供选中与删除。Edit 浏览档与 CellMap
     /// 工作区两用。
@@ -192,7 +276,7 @@ impl Panel {
     ///
     /// 枚举变体本身**暂留**——存量工程的 `ui-layout.yaml` 里有对应键，
     /// 删枚举会让旧文件的该项变成孤儿。
-    pub const ALL: [Panel; 11] = [
+    pub const ALL: [Panel; 12] = [
         Panel::MapTree,
         Panel::Layers,
         Panel::Minimap,
@@ -204,6 +288,7 @@ impl Panel {
         Panel::Landmark,
         Panel::Inspector,
         Panel::Validation,
+        Panel::LinePoi,
     ];
 
     /// 菜单 / 标题显示名（ADR-0018：locale-dependent 文案查表）。
@@ -223,6 +308,7 @@ impl Panel {
             Panel::Character => t(loc, I18nKey::PanelCharacter),
             Panel::Event => t(loc, I18nKey::PanelEvent),
             Panel::CellEditor => t(loc, I18nKey::PanelCellEditor),
+            Panel::LinePoi => t(loc, I18nKey::LinePoiPanelTitle),
             Panel::Landmark => t(loc, I18nKey::PanelLandmark),
         }
     }
@@ -262,10 +348,17 @@ impl Panel {
             // 310+198=508 ≤ Character 顶 520，右列三面板互不重叠。
             Panel::CellEditor => [992.0, 310.0],
             Panel::Character => [992.0, 520.0],
-            // 地标面板（ADR-0071）：Event 列下方——退役的 Situation（底 688）
-            // 之后、时间轴带 880 之前，700+170=870 ≤ 880；与 Event（底 368）、
-            // Region（右缘 612）、Character（x≥992）均不相交。
-            Panel::Landmark => [652.0, 700.0],
+            // 河流和道路（ADR-0070 D4）：中列 Situation（底 688）与底部通栏
+            // （顶 880）之间的空档。280×180 → y 696..876（顶 696 > 688、
+            // 底 876 < 880），x 652..932 与 Region（右缘 612）/ Character
+            // （左缘 992）互不相交。
+            Panel::LinePoi => [652.0, 696.0],
+            // 地标面板（ADR-0071）：中列上半空档（Event 底 368 与 LinePoi 顶
+            // 696 之间）——500+170=670 ≤ 696，与 Event（底 368）、LinePoi
+            // （顶 696）、Region（右缘 612）、Character（x≥992）均不相交。
+            // 合并注（2026-10-26）：原 700 与 LinePoi 的 696 重叠（两分支各
+            // 自占了中列下半），互斥验收据此上移。
+            Panel::Landmark => [652.0, 500.0],
             // 底部通栏（§3.3 P-5）。
             Panel::Timeline => [12.0, 880.0],
         }
@@ -300,6 +393,9 @@ impl Panel {
             // （2026-10-22 设计），**不再单独渲染**。枚举项与默认位暂留，
             // 兼容存量 `ui-layout.yaml` 的 `cell_editor` 键；退役见 M4。
             Panel::CellEditor => [288.0, 210.0],
+            // 河流和道路：两段设置（河段：名字/宽度/模式；路段：名字/级别/模式）
+            // 各 ~150 高，取 280×180 与默认位配套（互不重叠验收见 ui_layout 测试）。
+            Panel::LinePoi => [280.0, 180.0],
             // 地标面板（ADR-0071）：宽对齐同列 Event/Inspector（300）；
             // 高 170 = 放置段（类别/级别/toggle ≈ 100）+ 列表头部 + 边距，
             // 列表超出内部滚动。
@@ -325,6 +421,7 @@ impl Panel {
             Panel::Character => "character",
             Panel::Event => "event",
             Panel::CellEditor => "cell_editor",
+            Panel::LinePoi => "line_poi",
             Panel::Landmark => "landmark",
         }
     }
@@ -337,7 +434,8 @@ impl Panel {
     pub fn icon(self) -> wv_ui::widgets::HeadIcon {
         use wv_ui::widgets::{
             HeadIcon, ICON_ALERT, ICON_BRUSH, ICON_CALENDAR, ICON_CLOCK, ICON_FLAG, ICON_GLOBE,
-            ICON_LANDMARK, ICON_LAYERS, ICON_LIST, ICON_MAP, ICON_MAP_PIN, ICON_SLIDERS, ICON_USER,
+            ICON_LANDMARK, ICON_LAYERS, ICON_LIST, ICON_MAP, ICON_MAP_PIN, ICON_ROUTE,
+            ICON_SLIDERS, ICON_USER,
         };
         HeadIcon::Svg(match self {
             Panel::MapTree => ICON_GLOBE,
@@ -353,6 +451,7 @@ impl Panel {
             Panel::Character => ICON_USER,
             Panel::Event => ICON_CALENDAR,
             Panel::CellEditor => ICON_MAP_PIN,
+            Panel::LinePoi => ICON_ROUTE,
             // 地标 = map-pin（POI 点标语义；退役的 CellEditor 同图不碍事——
             // 它不再渲染）。
             Panel::Landmark => ICON_MAP_PIN,

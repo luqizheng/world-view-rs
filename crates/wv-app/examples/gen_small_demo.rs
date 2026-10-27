@@ -473,6 +473,8 @@ fn build_world(meta: WorldMeta) -> World {
             biome: None,
             envelope: None,
             rank: Some(3),
+            line_kind: None,
+            line_width_m: None,
         });
     }
 
@@ -639,6 +641,8 @@ fn build_road_map(world: &mut World) {
         biome: None,
         envelope: None,
         rank: Some(rank),
+        line_kind: None,
+        line_width_m: None,
     };
     world.distances.places.extend(vec![
         p("rd_west_city", "西口城", 550.0, 1900.0, 3, true),
@@ -660,6 +664,7 @@ fn build_road_map(world: &mut World) {
         distance_km: km,
         terrain: terrain.into(),
         bidirectional: true,
+        derived: false,
     };
     world.distances.edges.extend(vec![
         e(
@@ -778,6 +783,8 @@ fn build_river_map(world: &mut World) {
             biome: None,
             envelope: None,
             rank: Some(0),
+            line_kind: None,
+            line_width_m: None,
         }
     };
 
@@ -853,6 +860,8 @@ fn build_poi_map(world: &mut World) {
                 biome: None,
                 envelope: None,
                 rank: Some(rank),
+                line_kind: None,
+                line_width_m: None,
             });
         }
     }
@@ -911,6 +920,8 @@ fn build_combo_map(world: &mut World) {
         biome: None,
         envelope: None,
         rank: Some(rank),
+        line_kind: None,
+        line_width_m: None,
     };
     world.distances.places.extend(vec![
         p("cb_port", "潮口港", 700.0, 2200.0, 3, true),
@@ -928,6 +939,7 @@ fn build_combo_map(world: &mut World) {
         distance_km: km,
         terrain: terrain.into(),
         bidirectional: true,
+        derived: false,
     };
     world.distances.edges.extend(vec![
         e("cb_e_trunk", "cb_port", "cb_junction", 210.0, "plain", 3),
@@ -954,6 +966,8 @@ fn build_combo_map(world: &mut World) {
             biome: None,
             envelope: None,
             rank: Some(0),
+            line_kind: None,
+            line_width_m: None,
         }
     };
     world.distances.places.extend(vec![

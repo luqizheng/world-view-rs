@@ -90,6 +90,29 @@ pub struct PlaceEdge {
     /// 改动它等于改旧工程的可视行为。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rank: Option<u8>,
+    /// **运行时**标记：这条边是「线即路网」推导出来的，不是作者手写的
+    /// （ADR-0070 D5）。
+    ///
+    /// 道路不再是手存的 `edges.yaml` 条目，而是道路线（[`Place::line`] 且
+    /// `line_kind == Some(LineKind::Road)`）两端吸附到地点后**推导**出的
+    /// 投影边。投影必须可辨认——否则推导边会与作者手写边在 `edges.yaml`
+    /// 里争夺同一份真值（同一对端点两份边），迁移器也无法算清「该删哪些
+    /// 手写边」。
+    ///
+    /// **永不落盘**（`serde(skip)`）：序列化不写、读入取默认 `false`。理由：
+    ///
+    /// 1. **AGENTS §4.2（距离只存参数）**：推导边的 `distance_km` 是
+    ///    「线长 ÷ 比例尺」的**计算结论**，落盘即固化结论（比例尺一改就过期）；
+    /// 2. **单一真值**：作者手写的边才是真值，推导边每次由线重算，
+    ///    保存 / 加载天然往返（`edges.yaml` 不多一行、不少一行）。
+    ///
+    /// 因此 `terrain = "road"` 依然是**手写边的合法值**（YAML 作者可写）——
+    /// 本字段只回答「谁算出来的」，不约束「能写什么」。
+    ///
+    /// `serde` 对 `skip` 字段自动取 `Default::default()`（即 `false`），故
+    /// **不手写 `Default` impl**（会与 derive 冲突，编译不过）。
+    #[serde(skip)]
+    pub derived: bool,
 }
 
 impl PlaceEdge {
@@ -210,6 +233,35 @@ impl PoiKind {
     }
 }
 
+/// 线段 POI 的**类别**（ADR-0070 D2）。
+///
+/// 与 [`PoiKind`] **正交**：`kind` 说「这个**点**代表什么」（餐饮 / 医疗 /
+/// 车站），`line_kind` 说「这条**线**是什么」（河 / 路）。ADR-0070 明确否决了
+/// 「给 `PoiKind` 加 `River` / `Road` 变体」的方案——点分类与线判别混载会让
+/// 「这是个港口」和「这是一条河」互相污染（港口可以是线，河也可以是点标记）。
+///
+/// **封闭枚举而非自由字符串**：河与路是两种语义迥异的线（河随地形绕行、宽度
+/// 沿弧长锥形；路按 rank 折算描画），自由串只会带来拼错与静默回退。
+///
+/// 缺省（`None`，即 YAML 无 `line_kind` 键）= **河流**：ADR-0046 存量的手绘
+/// 折线全是作者的小溪 / 小河，旧工程零迁移——判别口径为
+/// 「`line.is_some()` ∧ `line_kind == Some(Road)` → 路；`line.is_some()` 其余 → 河」。
+///
+/// **注意**：本枚举只回答「是什么」，不回答「画多宽」（那是
+/// [`Place::line_width_m`]）、不回答「往哪走」（那是 [`Place::line`]）。
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum LineKind {
+    /// 河流：宽度沿弧长**锥形**插值（源头窄、河口宽），基准宽取
+    /// [`Place::line_width_m`]。
+    #[default]
+    River,
+    /// 道路：宽度按 `rank` 折算描画，**不**依赖 `line_width_m`。
+    Road,
+}
+
 /// 地点节点。对应 `distances/places.yaml`。
 ///
 /// ## 双重身份（2026-01 修订）
@@ -286,6 +338,29 @@ pub struct Place {
     /// YAML 是作者手读的，空字段是噪音。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<PoiKind>,
+    /// 线段 POI 的类别（ADR-0070 D2）。`None` = 河流（缺省语义）。
+    ///
+    /// 判别口径（后续所有任务共用）：**`line.is_some()` ∧
+    /// `line_kind == Some(Road)` → 道路；`line.is_some()` ∧ `line_kind` 为
+    /// `None` 或 `Some(River)` → 河流**；`line` 为 `None` → 不是线段 POI
+    /// （点状地点，`line_kind` 此时无意义）。
+    ///
+    /// 缺省 `None` 而不是 `Some(River)`：ADR-0046 存量的手绘折线全是作者的小溪 /
+    /// 小河，写入侧不落盘 = 旧工程零迁移（读入 `None` 即河流），且 YAML 是作者
+    /// 手读的格式，多一行 `line_kind: river` 就是噪音。
+    ///
+    /// 与 [`Self::kind`]（点分类）**正交**，不混载。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_kind: Option<LineKind>,
+    /// 线段的**基准宽度**（米）。
+    ///
+    /// 河流 = 河口基准宽（渲染沿弧长**锥形**插值：源头约基准的 30% → 河口 =
+    /// 基准，ADR-0070 D4）；道路 = **不落盘**（宽度按 `rank` 折算描画，写了
+    /// 也是噪音，故道路不填此字段）。
+    ///
+    /// 缺省 `None`：宽度由渲染层按类别 / `rank` 折算，零迁移。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_width_m: Option<f32>,
 }
 
 impl Place {
@@ -685,6 +760,8 @@ mod tests {
                     biome: None,
                     envelope: None,
                     rank: None,
+                    line_kind: None,
+                    line_width_m: None,
                 },
                 Place {
                     kind: None,
@@ -700,6 +777,8 @@ mod tests {
                     biome: None,
                     envelope: None,
                     rank: None,
+                    line_kind: None,
+                    line_width_m: None,
                 },
                 Place {
                     kind: None,
@@ -715,6 +794,8 @@ mod tests {
                     biome: None,
                     envelope: None,
                     rank: None,
+                    line_kind: None,
+                    line_width_m: None,
                 },
             ],
             edges: vec![
@@ -725,6 +806,7 @@ mod tests {
                     distance_km: 300.0,
                     terrain: "road".into(),
                     bidirectional: true,
+                    derived: false,
                     rank: None,
                 },
                 PlaceEdge {
@@ -734,6 +816,7 @@ mod tests {
                     distance_km: 120.0,
                     terrain: "mountain".into(),
                     bidirectional: true,
+                    derived: false,
                     rank: None,
                 },
             ],
@@ -885,6 +968,110 @@ mod tests {
         assert_eq!(back.kind, Some(PoiKind::Medical));
     }
 
+    // ---- 线段 POI：LineKind 与 line_width_m（ADR-0070 D2）----
+
+    /// 线段类别按 snake_case 落盘并可读回（作者手写 / 渲染判别同一拼写）。
+    ///
+    /// 两个变体的拼写都逐字钉死：`river` / `road`——下游任务（迁移器、渲染层、
+    /// 推导边）都按这两个字面量读 YAML，拼写漂移会让「作者写 road、代码查
+    /// River」静默失配（旧工程里的河反而被当成路）。
+    #[test]
+    fn line_kind_round_trips_as_snake_case() {
+        assert_eq!(
+            serde_yaml::to_string(&LineKind::River)
+                .expect("应可序列化")
+                .trim(),
+            "river",
+            "LineKind::River 的 serde 拼写应为 river"
+        );
+        assert_eq!(
+            serde_yaml::to_string(&LineKind::Road)
+                .expect("应可序列化")
+                .trim(),
+            "road",
+            "LineKind::Road 的 serde 拼写应为 road"
+        );
+
+        let mut p = line_place();
+        p.line_kind = Some(LineKind::Road);
+        p.line_width_m = Some(12.5);
+        let yaml = serde_yaml::to_string(&p).expect("应可序列化");
+        assert!(
+            yaml.contains("line_kind: road"),
+            "线段类别应为 snake_case：\n{yaml}"
+        );
+        assert!(
+            yaml.contains("line_width_m: 12.5"),
+            "基准宽应落盘：\n{yaml}"
+        );
+        let back: Place = serde_yaml::from_str(&yaml).expect("应可反序列化");
+        assert_eq!(back.line_kind, Some(LineKind::Road));
+        assert_eq!(back.line_width_m, Some(12.5));
+        assert_eq!(back, p, "带线段字段的 Place YAML round-trip 应无损");
+    }
+
+    /// 旧工程（无 `line_kind` / `line_width_m`）读写都不该被塞进这两行。
+    ///
+    /// YAML 是作者手读的格式，多一个空字段就是噪音；同时反向读入必须成功
+    /// （`serde(default)`），否则一次保存就会让旧工程读不回来。
+    #[test]
+    fn place_without_line_fields_round_trips_without_emitting_them() {
+        let p = point_place();
+        let yaml = serde_yaml::to_string(&p).expect("应可序列化");
+        assert!(
+            !yaml.contains("line_kind"),
+            "缺省 line_kind 不应落盘：\n{yaml}"
+        );
+        assert!(
+            !yaml.contains("line_width_m"),
+            "缺省 line_width_m 不应落盘：\n{yaml}"
+        );
+        let back: Place = serde_yaml::from_str(&yaml).expect("应可反序列化");
+        assert_eq!(back, p);
+    }
+
+    /// 旧工程（ADR-0046 存量的手绘折线）无 `line_kind` 键：读入为 `None`，
+    /// 语义上等同河流（ADR-0070 D2「缺省 = River」零迁移）。
+    ///
+    /// 这条是**兼容契约**：旧折线全是作者手绘的小溪 / 小河，若缺省被当成道路，
+    /// 存量工程一夜之间所有河都变成路。
+    #[test]
+    fn legacy_line_place_defaults_to_river_semantics() {
+        let yaml = "id: river_legacy
+name: 旧河
+line:
+  - 0.0
+  - 0.0
+  - 10.0
+  - 10.0
+";
+        let p: Place = serde_yaml::from_str(yaml).expect("旧 YAML 必须照常加载");
+        assert_eq!(p.line_kind, None, "旧工程缺省为 None（语义 = 河流）");
+        assert_eq!(p.line_width_m, None, "旧工程缺省无基准宽");
+        assert_eq!(p.line.as_ref().map(|l| l.len()), Some(4), "旧折线仍在");
+    }
+
+    /// 线状地点夹具：两点折线（ADR-0046 的 `line` 约定 = 图内局部 wu 扁平点列）。
+    fn line_place() -> Place {
+        Place {
+            kind: None,
+            line: Some(vec![0.0, 0.0, 10.0, 10.0]),
+            line_kind: None,
+            line_width_m: None,
+            id: vid("river_line"),
+            name: "line river".into(),
+            map: Some(vid("map_world")),
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+            feature: None,
+            biome: None,
+            envelope: None,
+            rank: None,
+        }
+    }
+
     /// 矩形地点：中心 (100, 200)，宽 40、高 20 → x ∈ [80, 120]，y ∈ [190, 210]。
     fn rect_place() -> Place {
         Place {
@@ -901,6 +1088,8 @@ mod tests {
             biome: None,
             envelope: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 
@@ -919,6 +1108,8 @@ mod tests {
             biome: None,
             envelope: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 
@@ -937,6 +1128,8 @@ mod tests {
             biome: None,
             envelope: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 
@@ -1016,6 +1209,7 @@ mod tests {
             distance_km: km,
             terrain: "road".into(),
             bidirectional: true,
+            derived: false,
             rank: None,
         };
         assert_eq!(edge(100.0).effective_rank(), 3, "100 km 恰在干线门槛上");
@@ -1036,12 +1230,54 @@ mod tests {
             distance_km: 500.0,
             terrain: "road".into(),
             bidirectional: true,
+            derived: false,
             rank: Some(1),
         };
         assert_eq!(e.effective_rank(), 1, "显式 rank 把长边降为局部道路");
         e.rank = Some(0);
         e.distance_km = 5.0;
         assert_eq!(e.effective_rank(), 0, "显式 0 = 仅编辑级可见");
+    }
+
+    /// 推导边的 `derived` 标记**永不落盘**（ADR-0070 D5）。
+    ///
+    /// 推导边 = 「线即路网」的运行时投影：道路线两端吸附到地点后临时算出
+    /// 一条边注入 `World.distances.edges`。它是**投影**不是真值——落盘就会
+    /// 与作者手写边争夺同一份 `edges.yaml`（同一对端点两份边），且把
+    /// 「距离」这一计算结论固化进数据（违反 AGENTS §4.2「距离只存参数」）。
+    ///
+    /// 因此 `derived` 用 `#[serde(skip)]`：序列化不写、读入取默认 `false`，
+    /// 手写边读回来仍是手写边。`terrain = "road"` 依然是作者手写边的**合法**
+    /// 值（YAML 作者可写）——`derived` 只标记「谁算出来的」，不约束能写什么。
+    #[test]
+    fn derived_edge_serializes_without_marker_and_loads_false() {
+        let e = PlaceEdge {
+            id: Id::new_unchecked("road_city_a_city_b"),
+            a: Id::new_unchecked("city_a"),
+            b: Id::new_unchecked("city_b"),
+            distance_km: 12.5,
+            terrain: "road".into(),
+            bidirectional: true,
+            rank: None,
+            derived: true,
+        };
+        let text = serde_yaml::to_string(&e).expect("序列化");
+        assert!(
+            !text.contains("derived"),
+            "推导边标记不得落盘（ADR-0070 D5），实得:\n{text}"
+        );
+        let back: PlaceEdge = serde_yaml::from_str(&text).expect("反序列化");
+        assert!(
+            !back.derived,
+            "读回后 derived 应为 false（serde skip 字段取默认值），实得: {}",
+            back.derived
+        );
+        // 手写边的其余字段原样往返；`terrain = "road"` 仍是合法手写值。
+        assert_eq!(back.terrain, "road", "terrain = \"road\" 仍是手写边合法值");
+        assert_eq!(back.distance_km, 12.5, "距离原样往返");
+        assert_eq!(back.id, e.id);
+        assert_eq!(back.a, e.a);
+        assert_eq!(back.b, e.b);
     }
 
     /// PlaceEdge.rank 的 YAML 惯例与 Place.rank 同款：None 不写键、Some 写键。
@@ -1054,6 +1290,7 @@ mod tests {
             distance_km: 42.0,
             terrain: "road".into(),
             bidirectional: true,
+            derived: false,
             rank: Some(3),
         };
         let text = serde_yaml::to_string(&e).expect("序列化");
@@ -1156,6 +1393,8 @@ mod tests {
             biome: None,
             envelope: None,
             rank: None,
+            line_kind: None,
+            line_width_m: None,
         }
     }
 

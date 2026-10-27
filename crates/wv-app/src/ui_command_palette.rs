@@ -155,6 +155,9 @@ pub enum CommandId {
     ForceRebuildTexture,
     /// 重新生成世界地形（ADR-0037 D4）：按新种子重跑模板生成。
     RegenWorld,
+    /// 地图属性…（2026-10-27）：对当前图弹「名称 / 尺度声明」属性对话框，
+    /// 工程菜单与命令面板双入口同源。
+    MapProperties,
     /// 重置当前图的地形到底图（2026-10-16 用户需求）。
     /// 「底图」= `MapNode.base`，旧地图无 `base` 时按 `MapBase::Ocean` 兜底。
     /// 由 [`crate::edit::editing::apply_reset_terrain_to_base`] 执行。
@@ -224,6 +227,13 @@ pub enum MapToolId {
     ///
     /// 判据（按地表 / 按群系 / 按海拔容差）在 CellMap 面板做 segmented。
     FloodSelect,
+    /// **线段 POI**（ADR-0070 D4）：在地图上画河流 / 道路——一条线就是一个
+    /// 地点实体（`Place::line` + `line_kind`）。载荷 = 线的种类（河 / 路）。
+    ///
+    /// 与 `Select(shape)` 同款「一类工具多个笔尖」建模：河与路不是两件工具，
+    /// 是同一绘制工具的两个类，工具条分裂按钮换类时**不关工具**（分发器
+    /// already_on 判据 = `tool_active` ∧ 同类）。
+    LinePoi(wv_core::distance::LineKind),
     /// **地标放置**（ADR-0071）：激活后单击地图创建点状 `Place`（POI）——
     /// Edit 浏览档落点击点，CellMap 工作区吸附格中心。默认类别 / 级别
     /// 在地标面板选（先名词后动词，与笔刷同心智）。
@@ -366,6 +376,12 @@ impl CommandRegistry {
             I18nKey::CmdProjectSettings,
             None,
         );
+        push(
+            CommandId::MapProperties,
+            CommandGroup::Project,
+            I18nKey::CmdMapProperties,
+            None,
+        );
 
         // 视图（BROWSING 三项：矢量地形 / 普通地图 / 势力图；ADR-0069 后与顶栏 Browse/Map 对齐）
         for (i, mode) in crate::state::ViewMode::BROWSING.iter().enumerate() {
@@ -453,6 +469,15 @@ impl CommandRegistry {
             I18nKey::CmdToolBiomeBoundary,
             None,
         );
+        // 线段 POI（ADR-0070 D4）：工具条分裂按钮（仅 Edit 档出现）与命令
+        // 面板同源。面板只登记河（默认类）一条——路是同一命令的另一个载荷，
+        // 入口在工具条弹层，不另立可搜索条目。
+        push(
+            CommandId::SelectMapTool(MapToolId::LinePoi(wv_core::distance::LineKind::River)),
+            CommandGroup::Edit,
+            I18nKey::LinePoiTool,
+            None,
+        );
         push(
             CommandId::Save,
             CommandGroup::Edit,
@@ -497,6 +522,10 @@ impl CommandRegistry {
                 Panel::Inspector => I18nKey::CmdTogglePanelInspector,
                 Panel::CellEditor => I18nKey::CmdTogglePanelCellEditor,
                 Panel::Validation => I18nKey::CmdTogglePanelValidation,
+                // 线段 POI 面板（ADR-0070 D4）：工具Owned——随工具开关，但
+                // 也允许作者从菜单/设置直接显隐，标签复用面板标题键（不再
+                // 另立 CmdTogglePanelLinePoi 键）。
+                Panel::LinePoi => I18nKey::LinePoiPanelTitle,
             };
             push(
                 CommandId::TogglePanel(p),

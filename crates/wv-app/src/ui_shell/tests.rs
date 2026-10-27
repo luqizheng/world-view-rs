@@ -94,6 +94,8 @@ fn dispatcher_world(project_dir: Option<&str>, dirty: bool, pending: CommandId) 
     world.init_resource::<crate::state::EditCellState>();
     world.init_resource::<wv_render::state::BiomeBoundaryState>();
     world.init_resource::<crate::ui::ContinentDialog>();
+    // 「地图属性」对话框（2026-10-27）：分发器签名新增依赖，fixture 同款补齐。
+    world.init_resource::<crate::ui::MapPropertiesDialog>();
     // ADR-0018：UI 文案语言；默认 `Locale::Zh`（与 GUI 启动默认值一致）。
     world.init_resource::<crate::i18n::CurrentLocale>();
     world.init_resource::<LayoutFile>();
@@ -142,6 +144,9 @@ fn dispatcher_world(project_dir: Option<&str>, dirty: bool, pending: CommandId) 
     // 选区保留测试都要读写它们（漏 init 即 SystemParamValidationError）。
     world.init_resource::<crate::state::PointSelectState>();
     world.init_resource::<crate::state::CellSelection>();
+    // 线段 POI 工具会话态（ADR-0070 D4）：分发器 SelectMapTool(LinePoi)
+    // 分支读写（漏 init 同上）。
+    world.init_resource::<crate::state::LinePoiState>();
     // ADR-0071：地标放置会话态——分发器 SelectMapTool(Landmark) 分支要写。
     world.init_resource::<crate::state::LandmarkToolState>();
     world.resource_mut::<CommandPalette>().pending = Some(pending);
@@ -393,6 +398,8 @@ fn project_menu_pending_command_reaches_the_dispatcher() {
     world.init_resource::<crate::state::EditCellState>();
     world.init_resource::<wv_render::state::BiomeBoundaryState>();
     world.init_resource::<crate::ui::ContinentDialog>();
+    // 「地图属性」对话框（2026-10-27）：分发器签名新增依赖，fixture 同款补齐。
+    world.init_resource::<crate::ui::MapPropertiesDialog>();
     // ADR-0018：UI 文案语言；默认 `Locale::Zh`（与 GUI 启动默认值一致）。
     world.init_resource::<crate::i18n::CurrentLocale>();
     world.init_resource::<LayoutFile>();
@@ -434,7 +441,9 @@ fn project_menu_pending_command_reaches_the_dispatcher() {
     // ADR-0057：点选工具会话态 + 统一选区位图（分发器互斥分支要读写）。
     world.init_resource::<crate::state::PointSelectState>();
     world.init_resource::<crate::state::CellSelection>();
-    // ADR-0071：地标放置会话态（分发器 SelectMapTool(Landmark) 分支要写）。
+    // 线段 POI 工具会话态（ADR-0070 D4）+ 地标放置会话态（ADR-0071）：
+    // 分发器 SelectMapTool 两分支各写各的（漏 init 即 SystemParamValidationError）。
+    world.init_resource::<crate::state::LinePoiState>();
     world.init_resource::<crate::state::LandmarkToolState>();
     world.resource_mut::<ProjectMenuState>().pending = Some(CommandId::CloseProject);
 
@@ -616,6 +625,148 @@ fn point_select_and_edit_cell_are_independent_tools() {
             .resource::<wv_render::state::EditCellState>()
             .tool_active,
         "再次点击当前工具应关闭"
+    );
+}
+
+/// 线段 POI 分裂按钮的换类语义（ADR-0070 D4，与 `Select(shape)` 同口径）：
+/// 同类开着再点 = 关；异类开着再点 = 换类**不关工具**；面板随工具开关
+/// （开 = 开 `Panel::LinePoi`，关 = 关面板——设置承载在 T11 的面板里）。
+#[test]
+fn line_poi_split_menu_switches_kind() {
+    use crate::state::Panel;
+    use crate::ui_command_palette::MapToolId;
+    use bevy::ecs::system::RunSystemOnce;
+    use wv_core::distance::LineKind;
+
+    // 开「河」：tool_active + kind=River + 面板开。
+    let mut world = dispatcher_world(
+        None,
+        false,
+        CommandId::SelectMapTool(MapToolId::LinePoi(LineKind::River)),
+    );
+    // 档位前置（T10 评审 minor ② 兜底落地后）：线段 POI 仅 Edit 档可激活，
+    // 缺省 ViewState scale=1.0 是 Region 档——本测激活语义，先放大进 Edit 档。
+    world.resource_mut::<ViewState>().scale = 0.5;
+    world
+        .run_system_once(apply_pending_commands)
+        .expect("系统运行失败");
+    {
+        let lp = world.resource::<crate::state::LinePoiState>();
+        assert!(lp.tool_active, "选河应激活线段 POI 工具");
+        assert_eq!(lp.kind, LineKind::River, "默认类 = 河");
+    }
+    assert!(
+        world.resource::<PanelState>().is_visible(Panel::LinePoi),
+        "开工具应打开河流和道路面板"
+    );
+
+    // 弹层选「道路」：换类 = 换参数，工具保持开启（分发器 already_on 判据
+    // 是「同款才关」）。
+    world.resource_mut::<CommandPalette>().pending =
+        Some(CommandId::SelectMapTool(MapToolId::LinePoi(LineKind::Road)));
+    world
+        .run_system_once(apply_pending_commands)
+        .expect("系统运行失败");
+    {
+        let lp = world.resource::<crate::state::LinePoiState>();
+        assert!(lp.tool_active, "河→路换类不得关掉工具");
+        assert_eq!(lp.kind, LineKind::Road, "弹层选路应把 kind 切到 Road");
+    }
+    assert!(
+        world.resource::<PanelState>().is_visible(Panel::LinePoi),
+        "换类后面板应保持打开"
+    );
+
+    // 同款（路）再点：关闭工具，面板随关。
+    world.resource_mut::<CommandPalette>().pending =
+        Some(CommandId::SelectMapTool(MapToolId::LinePoi(LineKind::Road)));
+    world
+        .run_system_once(apply_pending_commands)
+        .expect("系统运行失败");
+    assert!(
+        !world.resource::<crate::state::LinePoiState>().tool_active,
+        "同类再点应关闭工具"
+    );
+    assert!(
+        !world.resource::<PanelState>().is_visible(Panel::LinePoi),
+        "关工具应关闭河流和道路面板"
+    );
+
+    // 互斥：再开河后切抓手，线段 POI 工具与面板一并收掉。
+    world.resource_mut::<CommandPalette>().pending = Some(CommandId::SelectMapTool(
+        MapToolId::LinePoi(LineKind::River),
+    ));
+    world
+        .run_system_once(apply_pending_commands)
+        .expect("系统运行失败");
+    world.resource_mut::<CommandPalette>().pending = Some(CommandId::SelectMapTool(MapToolId::Pan));
+    world
+        .run_system_once(apply_pending_commands)
+        .expect("系统运行失败");
+    assert!(
+        !world.resource::<crate::state::LinePoiState>().tool_active,
+        "切抓手应关掉线段 POI 工具（互斥）"
+    );
+    assert!(
+        !world.resource::<PanelState>().is_visible(Panel::LinePoi),
+        "切走工具应关闭河流和道路面板"
+    );
+}
+
+/// 命令面板 / 快捷键路径的档位兜底（T10 评审 minor ②）：非 Edit 档发
+/// `SelectMapTool(LinePoi)` **不得**激活工具——瓷砖门控（T10，仅 Edit 档
+/// 渲染）之外的命令链第二道闸。Edit 档放行、关工具不受档位限制。
+#[test]
+fn line_poi_command_rejected_outside_edit_tier() {
+    use crate::state::Panel;
+    use crate::ui_command_palette::MapToolId;
+    use bevy::ecs::system::RunSystemOnce;
+    use wv_core::distance::LineKind;
+
+    let cmd = || CommandId::SelectMapTool(MapToolId::LinePoi(LineKind::River));
+    let mut world = dispatcher_world(None, false, cmd());
+    // 缺省 scale=1.0 = Region 档：激活必须被拒（工具不开、面板不开）。
+    world
+        .run_system_once(apply_pending_commands)
+        .expect("系统运行失败");
+    assert!(
+        !world.resource::<crate::state::LinePoiState>().tool_active,
+        "Region 档（scale=1.0）不得激活线段 POI 工具"
+    );
+    assert!(
+        !world.resource::<PanelState>().is_visible(Panel::LinePoi),
+        "Region 档被拒时河流和道路面板不得打开"
+    );
+
+    // 放大到 Edit 档（scale < 1.0）：同一条命令即可激活。
+    world.resource_mut::<ViewState>().scale = 0.5;
+    world.resource_mut::<CommandPalette>().pending = Some(cmd());
+    world
+        .run_system_once(apply_pending_commands)
+        .expect("系统运行失败");
+    assert!(
+        world.resource::<crate::state::LinePoiState>().tool_active,
+        "Edit 档（scale=0.5）应激活线段 POI 工具"
+    );
+    assert!(
+        world.resource::<PanelState>().is_visible(Panel::LinePoi),
+        "Edit 档激活应打开河流和道路面板"
+    );
+
+    // 缩回 Region 档再发同款命令：关工具不受档位限制（already_on 走不到
+    // 激活分支）。
+    world.resource_mut::<ViewState>().scale = 1.0;
+    world.resource_mut::<CommandPalette>().pending = Some(cmd());
+    world
+        .run_system_once(apply_pending_commands)
+        .expect("系统运行失败");
+    assert!(
+        !world.resource::<crate::state::LinePoiState>().tool_active,
+        "非 Edit 档的关闭命令应照常生效"
+    );
+    assert!(
+        !world.resource::<PanelState>().is_visible(Panel::LinePoi),
+        "关工具后面板应收起"
     );
 }
 
