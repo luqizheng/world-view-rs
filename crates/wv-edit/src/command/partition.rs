@@ -212,6 +212,266 @@ impl EditCommand for BeginPartitionSpanCommand {
     }
 }
 
+/// 切刀几何（ADR-0074 D4）：一笔从边到边，把脸一分为二。
+///
+/// **切完点选归属**（D7）：`assign_at` 落在哪一半，那半 owner = `new_owner`，
+/// 另一半保持原 owner。笔画两端必须落在该脸 ring 边上（吸附容差
+/// [`CUT_SNAP_PX`] map-local px；命中已有顶点复用其 id）。
+///
+/// **就地改选中 span**（改旧语义，V2）：`span_from` 定位段。
+pub const CUT_SNAP_PX: f32 = 4.0;
+
+#[derive(Debug)]
+pub struct CutPartitionFaceCommand {
+    /// 目标地图。
+    pub map: Id,
+    /// 目标势力层。
+    pub layer: Id,
+    /// 被切的历史段（`span.from`）。
+    pub span_from: i64,
+    /// 被切的脸 id。
+    pub face: u32,
+    /// 切割笔画：map-local 扁平坐标 `[x0,y0,x1,y1,...]`（≥2 点 = 1 段）。
+    pub stroke: Vec<f32>,
+    /// 归属点选位：落在哪一半，那半归 `new_owner`。
+    pub assign_at: [f32; 2],
+    /// 点选半的新归属；`None` = 无主。
+    pub new_owner: Option<Id>,
+    /// `apply` 缓存的整个分区快照。
+    before: std::sync::Mutex<Option<wv_core::model::faction_partition::FactionPartition>>,
+}
+
+/// 笔画端点到边的吸附：返回 (环边序号 i, 边上参数 t ∈ [0,1])。
+/// 端点到线段的最短距离 ≤ [`CUT_SNAP_PX`] 才算命中。
+fn snap_endpoint_to_ring(ring_xy: &[(f32, f32)], endpoint: (f32, f32)) -> Option<(usize, f32)> {
+    let mut best: Option<(usize, f32, f32)> = None; // (seg_i, t, dist2)
+    let n = ring_xy.len();
+    for i in 0..n {
+        let a = ring_xy[i];
+        let b = ring_xy[(i + 1) % n];
+        let ab = (b.0 - a.0, b.1 - a.1);
+        let ap = (endpoint.0 - a.0, endpoint.1 - a.1);
+        let ab2 = ab.0 * ab.0 + ab.1 * ab.1;
+        let t = if ab2 < 1e-12 {
+            0.0
+        } else {
+            ((ap.0 * ab.0 + ap.1 * ab.1) / ab2).clamp(0.0, 1.0)
+        };
+        let cx = a.0 + ab.0 * t;
+        let cy = a.1 + ab.1 * t;
+        let d2 = (endpoint.0 - cx).powi(2) + (endpoint.1 - cy).powi(2);
+        if d2 <= CUT_SNAP_PX * CUT_SNAP_PX && best.is_none_or(|(_, _, bd)| d2 < bd) {
+            best = Some((i, t, d2));
+        }
+    }
+    best.map(|(i, t, _)| (i, t))
+}
+
+impl CutPartitionFaceCommand {
+    /// 构造（`before` 锁不外露）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        map: Id,
+        layer: Id,
+        span_from: i64,
+        face: u32,
+        stroke: Vec<f32>,
+        assign_at: [f32; 2],
+        new_owner: Option<Id>,
+    ) -> Self {
+        Self {
+            map,
+            layer,
+            span_from,
+            face,
+            stroke,
+            assign_at,
+            new_owner,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn partition_mut<'w>(
+        &self,
+        world: &'w mut World,
+    ) -> EditResult<&'w mut wv_core::model::faction_partition::FactionPartition> {
+        world
+            .partitions
+            .iter_mut()
+            .find(|p| p.map == self.map && p.layer == self.layer)
+            .ok_or_else(|| {
+                EditError::TargetMissing(format!("分区（{} × {}）", self.map, self.layer))
+            })
+    }
+
+    /// 笔画端点吸附（首末交点）。
+    fn stroke_endpoints(&self, ring_xy: &[(f32, f32)]) -> EditResult<[(usize, f32); 2]> {
+        if self.stroke.len() < 4 {
+            return Err(EditError::Precondition("笔画至少两点".into()));
+        }
+        let pts: Vec<(f32, f32)> = self.stroke.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+        let start = snap_endpoint_to_ring(ring_xy, pts[0]).ok_or_else(|| {
+            EditError::Precondition("笔画起点不在脸边界上（吸附 4px 内无交）".into())
+        })?;
+        let end = snap_endpoint_to_ring(ring_xy, *pts.last().expect("≥2 点")).ok_or_else(|| {
+            EditError::Precondition("笔画终点不在脸边界上（吸附 4px 内无交）".into())
+        })?;
+        Ok([start, end])
+    }
+}
+
+impl EditCommand for CutPartitionFaceCommand {
+    fn label(&self) -> String {
+        format!("切分脸 {}（层 {}）", self.face, self.layer)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let snapshot = world
+            .partitions
+            .iter()
+            .find(|p| p.map == self.map && p.layer == self.layer)
+            .cloned();
+        let partition = self.partition_mut(world)?;
+        let span = partition
+            .spans
+            .iter_mut()
+            .find(|s| s.from == self.span_from)
+            .ok_or_else(|| EditError::TargetMissing(format!("历史段 from={}", self.span_from)))?;
+        let face_idx = span
+            .faces
+            .iter()
+            .position(|f| f.id == self.face)
+            .ok_or_else(|| EditError::TargetMissing(format!("脸 {}", self.face)))?;
+        let ring_ids = span.faces[face_idx].ring.clone();
+        let ring_xy: Vec<(f32, f32)> = ring_ids
+            .iter()
+            .map(|id| {
+                span.vertices
+                    .iter()
+                    .find(|v| v.id == *id)
+                    .map(|v| (v.xy[0], v.xy[1]))
+                    .expect("ring 引用存在（validate_topology 保证）")
+            })
+            .collect();
+        let [(i0, t0), (i1, t1)] = self.stroke_endpoints(&ring_xy)?;
+        if (i0, t0) == (i1, t1) {
+            return Err(EditError::Precondition("笔画两端落在同一点".into()));
+        }
+        // 刀口：交点在边中间（0<t<1）时新建顶点（id 续号）；吸附到既有顶点
+        // 则复用其 id（共享顶点=相邻脸零和联动的基础）。
+        let mut next_vid = span.vertices.iter().map(|v| v.id).max().unwrap_or(0) + 1;
+        let mut cut_vertex = |span: &mut PartitionSpan, i: usize, t: f32| -> u32 {
+            let a = ring_ids[i];
+            let b = ring_ids[(i + 1) % ring_ids.len()];
+            if t <= 1e-6 {
+                return a;
+            }
+            if t >= 1.0 - 1e-6 {
+                return b;
+            }
+            let (ax, ay) = span
+                .vertices
+                .iter()
+                .find(|v| v.id == a)
+                .map(|v| (v.xy[0], v.xy[1]))
+                .expect("a 存在");
+            let (bx, by) = span
+                .vertices
+                .iter()
+                .find(|v| v.id == b)
+                .map(|v| (v.xy[0], v.xy[1]))
+                .expect("b 存在");
+            let vid = next_vid;
+            next_vid += 1;
+            span.vertices.push(PartitionVertex {
+                id: vid,
+                xy: [ax + (bx - ax) * t, ay + (by - ay) * t],
+            });
+            vid
+        };
+        let v_start = cut_vertex(span, i0, t0);
+        let v_end = cut_vertex(span, i1, t1);
+        // 两刀口把环切成两条弧。弧 A：从刀口 1 沿环走到刀口 2。
+        let mut arc_a: Vec<u32> = vec![v_start];
+        let mut idx = (i0 + 1) % ring_ids.len();
+        while idx != (i1 + 1) % ring_ids.len() {
+            arc_a.push(ring_ids[idx]);
+            idx = (idx + 1) % ring_ids.len();
+        }
+        arc_a.push(v_end);
+        // 弧 B：从刀口 2 沿环走回刀口 1。
+        let mut arc_b: Vec<u32> = vec![v_end];
+        let mut idx = (i1 + 1) % ring_ids.len();
+        while idx != (i0 + 1) % ring_ids.len() {
+            arc_b.push(ring_ids[idx]);
+            idx = (idx + 1) % ring_ids.len();
+        }
+        arc_b.push(v_start);
+        if arc_a.len() < 3 || arc_b.len() < 3 {
+            return Err(EditError::Precondition("切分退化（某半不足 3 点）".into()));
+        }
+        // 归属点选（D7）：assign_at 落在哪半（射线法）。
+        let in_a = point_in_ring_f32(self.assign_at, &arc_a, span);
+        let old_owner = span.faces[face_idx].owner.clone();
+        let (owner_a, owner_b) = if in_a {
+            (self.new_owner.clone(), old_owner)
+        } else {
+            (old_owner, self.new_owner.clone())
+        };
+        span.faces[face_idx].ring = arc_a;
+        span.faces[face_idx].owner = owner_a;
+        span.faces.push(PartitionFace {
+            id: span.faces.iter().map(|f| f.id).max().unwrap_or(0) + 1,
+            owner: owner_b,
+            ring: arc_b,
+            holes: Vec::new(),
+        });
+        span.validate_topology()
+            .map_err(|e| EditError::Precondition(format!("切后拓扑破损: {e}")))?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))? = snapshot;
+        Ok(vec!["partitions".to_string()])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let snapshot = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("CutPartitionFace 尚未 apply".into()))?;
+        let partition = self.partition_mut(world)?;
+        *partition = snapshot;
+        Ok(())
+    }
+}
+
+/// 射线法（f32 版）：点是否在顶点 id 环内。
+fn point_in_ring_f32(p: [f32; 2], ring_ids: &[u32], span: &PartitionSpan) -> bool {
+    let mut inside = false;
+    let n = ring_ids.len();
+    let at = |i: usize| -> (f32, f32) {
+        span.vertices
+            .iter()
+            .find(|v| v.id == ring_ids[i])
+            .map(|v| (v.xy[0], v.xy[1]))
+            .expect("环顶点存在")
+    };
+    let (px, py) = (p[0], p[1]);
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = at(i);
+        let (xj, yj) = at(j);
+        if ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,5 +662,200 @@ mod tests {
             world.partitions, before,
             "revert 应恢复到 apply 前的分区状态"
         );
+    }
+}
+
+#[cfg(test)]
+mod cut_tests {
+    //! 切刀命令（ADR-0074 T8）——手算坐标钉行为。
+
+    use super::*;
+    use wv_core::model::faction_partition::FactionPartition;
+
+    fn test_map() -> Id {
+        Id::new_unchecked("world_main")
+    }
+
+    /// 单脸方环 (0,0)-(100,0)-(100,100)-(0,100)，无主。
+    fn world_with_square() -> World {
+        let mut world = World::default();
+        world.partitions.push(FactionPartition {
+            map: test_map(),
+            layer: Id::new_unchecked("layer_borders"),
+            spans: vec![PartitionSpan {
+                from: 0,
+                to: None,
+                vertices: vec![
+                    PartitionVertex {
+                        id: 0,
+                        xy: [0.0, 0.0],
+                    },
+                    PartitionVertex {
+                        id: 1,
+                        xy: [100.0, 0.0],
+                    },
+                    PartitionVertex {
+                        id: 2,
+                        xy: [100.0, 100.0],
+                    },
+                    PartitionVertex {
+                        id: 3,
+                        xy: [0.0, 100.0],
+                    },
+                ],
+                faces: vec![PartitionFace {
+                    id: 0,
+                    owner: Some(Id::new_unchecked("faction_a")),
+                    ring: vec![0, 1, 2, 3],
+                    holes: Vec::new(),
+                }],
+            }],
+        });
+        world
+    }
+
+    const LAYER: &str = "layer_borders";
+
+    #[test]
+    fn vertical_cut_splits_square_into_two_rings() {
+        let mut world = world_with_square();
+        // 竖切 x=50：起点 (50,-3) 吸到下边 (0-1 边)，终点 (50,103) 吸到上边 (2-3 边)。
+        let cmd = CutPartitionFaceCommand::new(
+            test_map(),
+            Id::new_unchecked(LAYER),
+            0,
+            0,
+            vec![50.0, -3.0, 50.0, 103.0],
+            [30.0, 50.0],
+            Some(Id::new_unchecked("faction_b")),
+        );
+        let dirty = cmd.apply(&mut world).expect("apply");
+        assert_eq!(dirty, vec!["partitions".to_string()]);
+        let span = &world.partitions[0].spans[0];
+        assert_eq!(span.faces.len(), 2, "一分为二");
+        // 两环共享两个新顶点（id 4=下刀口、5=上刀口）——零和构造基础。
+        let ring_a = &span.faces[0].ring;
+        let ring_b = &span.faces[1].ring;
+        assert_eq!(ring_a.len(), 4, "半方环 4 点: {ring_a:?}");
+        assert_eq!(ring_b.len(), 4, "半方环 4 点: {ring_b:?}");
+        let shared: std::collections::HashSet<_> =
+            ring_a.iter().filter(|id| ring_b.contains(id)).collect();
+        assert_eq!(shared.len(), 2, "两环共享两刀口顶点: {shared:?}");
+        // 点选 (30,50) 在左半（x<50）→ 左半归 faction_b；右半保持 faction_a。
+        // 脸的数组序不保证（faces[0] 是被改的原脸），按环几何判左右。
+        let (xb, yb) = span
+            .vertices
+            .iter()
+            .find(|v| v.id == span.faces[0].ring[0])
+            .map(|v| (v.xy[0], v.xy[1]))
+            .expect("顶点存在");
+        let face0_is_left = xb < 50.0;
+        let face0_owner = &span.faces[0].owner;
+        let face1_owner = &span.faces[1].owner;
+        let picked = Some(Id::new_unchecked("faction_b"));
+        let kept = Some(Id::new_unchecked("faction_a"));
+        assert_eq!(
+            face0_owner,
+            &(if face0_is_left {
+                picked.clone()
+            } else {
+                kept.clone()
+            }),
+            "点选侧（左半）应归 new_owner"
+        );
+        assert_eq!(
+            face1_owner,
+            &(if face0_is_left { kept } else { picked }),
+            "非点选侧保持原归属"
+        );
+        let _ = (yb, 0.0);
+        span.validate_topology().expect("切后拓扑自检");
+    }
+
+    #[test]
+    fn assign_at_decides_owner_side() {
+        let mut world = world_with_square();
+        // 同一笔画，点选换到右半。
+        let cmd = CutPartitionFaceCommand::new(
+            test_map(),
+            Id::new_unchecked(LAYER),
+            0,
+            0,
+            vec![50.0, -3.0, 50.0, 103.0],
+            [70.0, 50.0],
+            Some(Id::new_unchecked("faction_b")),
+        );
+        cmd.apply(&mut world).expect("apply");
+        let span = &world.partitions[0].spans[0];
+        let owners: std::collections::HashSet<_> =
+            span.faces.iter().map(|f| f.owner.clone()).collect();
+        assert!(
+            owners.contains(&Some(Id::new_unchecked("faction_b")))
+                && owners.contains(&Some(Id::new_unchecked("faction_a"))),
+            "两半各归其主: {owners:?}"
+        );
+    }
+
+    #[test]
+    fn stroke_endpoint_inside_face_errors() {
+        let mut world = world_with_square();
+        // 终点 (50,50) 在面内部（距任何边 > 4px）→ Err。
+        let cmd = CutPartitionFaceCommand::new(
+            test_map(),
+            Id::new_unchecked(LAYER),
+            0,
+            0,
+            vec![50.0, -3.0, 50.0, 50.0],
+            [30.0, 50.0],
+            None,
+        );
+        assert!(cmd.apply(&mut world).is_err(), "端点不入边应 Err");
+        assert_eq!(
+            world.partitions[0].spans[0].faces.len(),
+            1,
+            "Err 时脸数不变"
+        );
+    }
+
+    #[test]
+    fn cut_reuses_existing_vertex_id_when_snapped() {
+        let mut world = world_with_square();
+        // 起点吸到既有顶点 1 (100,0)：从顶点 1 切到对边中点。
+        let cmd = CutPartitionFaceCommand::new(
+            test_map(),
+            Id::new_unchecked(LAYER),
+            0,
+            0,
+            vec![100.0, 0.0, 0.0, 50.0],
+            [90.0, 10.0],
+            None,
+        );
+        cmd.apply(&mut world).expect("apply");
+        let span = &world.partitions[0].spans[0];
+        // 顶点数：4 既有 + 1 新刀口（终点吸边中点）。
+        assert_eq!(span.vertices.len(), 5, "只新增一个刀口顶点");
+        // 环 0 含既有顶点 1（复用 id，无重复新建）。
+        assert!(
+            span.faces[0].ring.contains(&1) || span.faces[1].ring.contains(&1),
+            "既有顶点 id 应被复用"
+        );
+    }
+
+    #[test]
+    fn cut_revert_restores_snapshot() {
+        let mut world = world_with_square();
+        let before = world.partitions.clone();
+        let cmd = CutPartitionFaceCommand::new(
+            test_map(),
+            Id::new_unchecked(LAYER),
+            0,
+            0,
+            vec![50.0, -3.0, 50.0, 103.0],
+            [30.0, 50.0],
+            None,
+        );
+        cmd.apply(&mut world).expect("apply");
+        cmd.revert(&mut world).expect("revert");
+        assert_eq!(world.partitions, before, "revert 应整段还原");
     }
 }
