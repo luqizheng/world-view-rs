@@ -233,6 +233,7 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
 | [ADR-0070](ADR-0070-rivers-roads-as-line-poi.md) | 河流与道路=线段 POI——群系 16/20 退役、起终点算法（绕行/强制下切）、工具条线段 POI 按钮 + 河流和道路面板、线即路网（PlaceEdge 陆路边改由 `Place.line` 推导、存量链式合并迁移）；**取代 ADR-0037 D5**、**修订 ADR-0046（双供给→单供给）/ ADR-0054（cell map 职责）** | 已接受（Accepted，2026-10-26，用户批准设计稿「go」；设计稿 `docs/superpowers/specs/2026-10-26-river-road-poi-design.md`、计划 `docs/superpowers/plans/2026-10-26-river-road-poi.md`；**随 `feat/river-road-poi` 落地**（T1–T13，含**追记一**：D5 serde-skip 勘误 / §3.3 投影回填澄清 / 实施期裁定索引）） |
 | [ADR-0071](ADR-0071-landmark-panel.md) | 地标面板——Edit/CellMap 两模式单击放置 POI（即点即建、默认 rank=3）、`DeletePlaceCommand` 级联删边可撤销、放置模式走 `MapToolId::Landmark` 白拿 dispatch 互斥（无瓷砖无快捷键） | 已接受（2026-10-26，用户三项裁定） |
 | [ADR-0073](ADR-0073-label-placement-candidates.md) | 标签候选位摆位——统一占位池（六类标签跨系统避让）、点标签 8 方位候选、面标签区域内约束、街名沿街旋转 + 直立翻转、按档×通路密度预算（替代六处 truncate(200)）、`WV_DRILL` 验收探针 | 提议态（2026-10-26，实机截图初验通过） |
+| [ADR-0074](ADR-0074-faction-partition-cake-cutting.md) | 势力图切蛋糕分区——快照式拓扑（共享顶点表+脸环引用）+ span 历史、四编辑命令（Begin/Cut/Move/Assign）、切后点选归属、整块易主=fork、分区=唯一形态（claim 不再可新建）、自然图关=素底政治图集页、层眼睛进图层面板；**取代 ADR-0028 的「划分势力」UI 入口**（存量 claim 渲染兼容逐步退役） | 已接受（2026-10-27，用户批准设计稿「go」+ D7–D9 追加裁定；设计稿 `docs/superpowers/specs/2026-10-27-faction-map-partition-design.md`） |
 
 ---
 > **⚠️ 编号撞号备注（2026-10-20 追加）**：`ADR-0044` 已被 ADR-0042 的「追记三」占用（civ-atlas 方法论落地，commit `eef816c`，索引行指向 ADR-0042 文件），故本次两份新 ADR 从 **0045** 起（ADR-0045 自然区域 / ADR-0046 亚格线状作者数据）。上文 0042 那条备注的「后续新 ADR 从 0042 起」已过时，按 §6.3 只增不改、保留原文。引用时务必带文件名全称。
