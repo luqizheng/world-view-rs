@@ -21,6 +21,9 @@
 | 行程 | Journey | 从 A 到 B 的一条路径，含各段交通工具 | 距离 |
 | 投影 | Projection | 某时刻对全部时间区间求值后的世界状态 | 时间 |
 | 快照 | Snapshot | 某一时刻工程状态的完整保存 | 编辑 |
+| 垃圾桶 | trash bin | 被删除地图的暂存区（软删状态，可恢复）；真删仅发生在清空或条目彻底删除 | 编辑 |
+| 软删 | soft delete / trashed | 只在子树根节点打 `trashed` 标志、不物理移除；显隐由 `World::map_alive` 派生 | 编辑 |
+| 深拷贝副本 | deep-copy duplicate | 粘贴产出的独立子树（ID 全量重生成、与源零共享）——多对多关系的替代物 | 地理 |
 | 有效日速度 | effective daily speed | `speed_kmh × terrain_mult × (daily_hours / 24)` | 距离 |
 | 换乘 | transfer | 同一地点切换到另一交通工具，零耗时状态转移 | 距离 |
 
