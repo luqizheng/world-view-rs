@@ -19,6 +19,8 @@ use crate::edit::faction_panel_actions;
 use crate::state::{ViewState, WorldProjection};
 use crate::theme::ui_tokens::space;
 use crate::ui::shell::UiShell;
+use crate::ui::widgets::icon_image;
+use crate::ui::ICON_PENCIL;
 
 use crate::ui::faction_panel::{faction_is_selected, faction_selection};
 use crate::ui::widgets::{empty_state, list_item};
@@ -111,9 +113,20 @@ pub fn layers_tab(
                 // 栅格（图级 World/Region 由 Inspector 语境保证）。
                 // ⚠️ 不用 with_layout(right_to_left) 右对齐——收缩 Ui 里它把
                 // 行 min_rect 撑到整屏宽，Inspector 窗被顶成全屏宽（实测）。
-                // 按钮内联跟在层名后即可。
-                if pen_gated && ui.button("✎").on_hover_text("画这张势力图").clicked() {
-                    pen_dialog.open(l.id.clone(), playback_day);
+                // ⚠️ 图标用 Lucide pencil.svg——"✎" 字符在打包字体无字形，
+                // 落豆腐块（AGENTS §8 图标纪律）。
+                if pen_gated {
+                    let pen = ui.add(
+                        egui::Button::image(icon_image(
+                            ICON_PENCIL,
+                            egui::Color32::WHITE,
+                            12.0,
+                        ))
+                        .fill(egui::Color32::TRANSPARENT),
+                    );
+                    if pen.on_hover_text("画这张势力图").clicked() {
+                        pen_dialog.open(l.id.clone(), playback_day);
+                    }
                 }
             });
         }
