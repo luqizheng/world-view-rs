@@ -496,6 +496,42 @@ mod tests {
     }
 
     #[test]
+    fn radius_and_weight_constants_are_pinned() {
+        // 三尺度常量锚点（ADR-0077 D3/D6；T7 审查 minor 的 Rust 侧兜底）：
+        // GPU 侧 `terrain_field.wgsl` 以**字面量**镜像三档盒半径与三权重
+        //（Rust 真源 → WGSL 镜像是人工同步，无编译期检查），本测试钉死
+        // 真源字面值——任何人改常量都会先在这里撞红，从而有意识地同步
+        // WGSL 镜像，不会静默漂移。
+        assert!(
+            (MEDIUM_RADIUS_CELLS - 3.0).abs() < EPS,
+            "got {}",
+            MEDIUM_RADIUS_CELLS
+        );
+        assert!(
+            (MACRO_RADIUS_CELLS - 12.0).abs() < EPS,
+            "got {}",
+            MACRO_RADIUS_CELLS
+        );
+        // DETAIL_RADIUS_CELLS（= 1.0）没有 Rust 常量（只活在 WGSL），其
+        // 概念锚 = detail 权重衰减边界的 smoothstep(1, 3)——两个边界常量
+        // 钉死即钉住「detail 档 r=1、缩放过渡 1–3 px/格」的整套口径。
+        assert!(
+            (DETAIL_FADE_MIN_PX_PER_CELL - 1.0).abs() < EPS,
+            "got {}",
+            DETAIL_FADE_MIN_PX_PER_CELL
+        );
+        assert!(
+            (DETAIL_FADE_MAX_PX_PER_CELL - 3.0).abs() < EPS,
+            "got {}",
+            DETAIL_FADE_MAX_PX_PER_CELL
+        );
+        // 三尺度权重字面值（和 = 1 由权重混合测试另行保证）。
+        assert!((W_MACRO - 0.45).abs() < EPS, "got {}", W_MACRO);
+        assert!((W_MEDIUM - 0.40).abs() < EPS, "got {}", W_MEDIUM);
+        assert!((W_DETAIL - 0.15).abs() < EPS, "got {}", W_DETAIL);
+    }
+
+    #[test]
     fn scale_weights_sum_to_one_and_detail_fades_monotonically() {
         // 手算 smoothstep(1, 3, ·)：t = (ppc−1)/2，s = t²(3−2t)。
         // ppc=2.0 → t=0.5 → fade=0.5 → detail = 0.15·0.5 = 0.075，
