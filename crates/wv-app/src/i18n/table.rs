@@ -136,13 +136,13 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::BrushHintRadiusShortcut => "Ctrl+滚轮改半径",
         I18nKey::BrushModeShort => "笔刷",
         I18nKey::BrushToolNamePaint => "涂抹",
-        I18nKey::BrushToolNameRange => "山脉",
+        I18nKey::BrushToolNameRange => "山系笔",
         I18nKey::BrushToolNamePlateau => "高原",
         I18nKey::BrushToolNameHills => "丘陵",
         I18nKey::BrushToolNameVolcano => "火山",
         I18nKey::BrushToolNameLake => "湖泊",
-        I18nKey::BrushHintPaint => "按住左键拖动，把选中的地形类型涂到格子上",
-        I18nKey::BrushHintRange => "拖一条脊线，山脊走向程序补；单点 = 一座圆山",
+        I18nKey::BrushHintPaint => "微调用：按住左键拖动，把选中的地形类型涂到格子上",
+        I18nKey::BrushHintRange => "拖一条脊线长出山脉，走向与垂直带谱（山脚接周边、雪线积雪）程序补；单点 = 一座圆山",
         I18nKey::BrushHintPlateau => "拖过目标区域，顶面平坦、边缘自收",
         I18nKey::BrushHintHills => "拖过目标区域，只长在陆上",
         I18nKey::BrushHintVolcano => "点一下放置；点在海里自动成岛",
@@ -826,16 +826,18 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::BrushHintRadiusShortcut => "Ctrl + wheel to change radius",
         I18nKey::BrushModeShort => "Brush",
         I18nKey::BrushToolNamePaint => "Paint",
-        I18nKey::BrushToolNameRange => "Mountain range",
+        I18nKey::BrushToolNameRange => "Mountain range pen",
         I18nKey::BrushToolNamePlateau => "Plateau",
         I18nKey::BrushToolNameHills => "Hills",
         I18nKey::BrushToolNameVolcano => "Volcano",
         I18nKey::BrushToolNameLake => "Lake",
         I18nKey::BrushHintPaint => {
-            "Hold left-click and drag to paint the selected terrain type onto cells"
+            "For touch-up: hold left-click and drag to paint the selected terrain type onto cells"
         }
         I18nKey::BrushHintRange => {
-            "Drag a ridge line and the range fills itself in; a single click = one round peak"
+            "Drag a ridge line and the range grows with oriented ridges and an altitudinal band \
+             ladder (foothills follow their surroundings, snow above the snowline); a single \
+             click = one round peak"
         }
         I18nKey::BrushHintPlateau => {
             "Drag over the target area; the top stays flat and the edges settle on their own"
