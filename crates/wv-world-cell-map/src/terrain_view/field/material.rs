@@ -100,7 +100,8 @@ pub const ROAD_INK_ALPHA: f32 = 0.5;
 ///
 /// ⚠️ **死槽**：T13 起解析梯度接管梯度后，本值不再参与任何计算；ADR-0077
 /// D2 起**连解析梯度本身也退役**（Horn 3×3 统一承担，GPU 侧
-/// `horn_grad_detail` / CPU 侧 `crate::shading::horn_gradient`），本槽位保留
+/// `horn_grad_at`（T7 起带半径参数，原 `horn_grad_detail` 是其 r=1 特化）/
+/// CPU 侧 `crate::shading::horn_gradient`），本槽位保留
 /// 只为 uniform 布局稳定（WGSL 侧同注记，见 `terrain_field.wgsl` 该函数文档）。
 pub const GRAD_STEP: f32 = 0.5;
 
