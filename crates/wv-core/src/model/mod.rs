@@ -20,6 +20,7 @@
 pub mod character;
 pub mod event;
 pub mod faction;
+pub mod faction_partition;
 pub mod place_territory;
 pub mod region;
 pub mod relation;

@@ -223,6 +223,14 @@ pub struct World {
     /// `GeometrySpan.owner` 引用 `factions` 中的 `Faction.id`。
     /// 想要「某时刻某地图上所有势力 + 多边形」走 [`crate::factions_at`]。
     pub faction_geometry: Vec<map::GeometrySpan>,
+    /// 势力图切蛋糕分区（ADR-0074）：一张图 × 一个势力层一份
+    /// [`model::faction_partition::FactionPartition`]，历史 span 化（P6/P7）。
+    ///
+    /// 与 `faction_geometry`（独立多边形 + 声称/实控）**并存不混用**：分区
+    /// 是零和拓扑（共享顶点 + 脸环引用），新编辑只走分区；存量几何保留
+    /// 渲染兼容、逐步退役（ADR-0074 §2 D6）。想要「某天某图某层的划分」
+    /// 走 [`crate::model::faction_partition::partition_span_at`]。
+    pub partitions: Vec<model::faction_partition::FactionPartition>,
     /// Place 的地界几何（[`map::GeometrySpan`]，`owner = Place.id`）。
     ///
     /// 与 [`World::faction_geometry`] **同构并列**，不泛化为共用集合（统一
