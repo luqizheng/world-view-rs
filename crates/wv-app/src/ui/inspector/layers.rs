@@ -109,12 +109,11 @@ pub fn layers_tab(
                 }
                 // pen 按钮（ADR-0074 D3/T11）：动刀入口。门控 = 该图有自有
                 // 栅格（图级 World/Region 由 Inspector 语境保证）。
-                if pen_gated {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("✎").on_hover_text("画这张势力图").clicked() {
-                            pen_dialog.open(l.id.clone(), playback_day);
-                        }
-                    });
+                // ⚠️ 不用 with_layout(right_to_left) 右对齐——收缩 Ui 里它把
+                // 行 min_rect 撑到整屏宽，Inspector 窗被顶成全屏宽（实测）。
+                // 按钮内联跟在层名后即可。
+                if pen_gated && ui.button("✎").on_hover_text("画这张势力图").clicked() {
+                    pen_dialog.open(l.id.clone(), playback_day);
                 }
             });
         }
