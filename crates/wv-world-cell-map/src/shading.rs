@@ -118,6 +118,20 @@ pub fn slope_gain_of(meters_per_cell: f32) -> f32 {
     Z_EXAG / meters_per_cell
 }
 
+/// CPU 块烘焙旧签名（`terrain_pixels` / `patch_terrain_image`）委托
+/// `_with_scale` 变体时传入的**过渡缺省格距**（米/格）。
+///
+/// **纯过渡缺省**：wv-app 按 `GridConfig.cell_size + MapNode.unit_per_km`
+/// 经 [`meters_per_cell_of`] 接线 `_with_scale` 后即消失；在那之前，
+/// 未接线的消费方统一按 100 m/格打光（`slope_gain = 2.0/100 = 0.02`，
+/// 对生成图邻格 10–200 m 高差的浮雕观感与旧路径量级相近）。
+///
+/// TODO(阶段: 晕渲): 「100 m/格」是假设不是真值，待决条目见
+/// README §12-53「无比例尺地图的米制假设」。注意它与 [`meters_per_cell_of`]
+/// 的「1 wu = 1 m」回落是**两处不同的假设**——那边是换算入口的回落假设，
+/// 这里是 CPU 烘焙未接线期的占位假设；收敛后两处同步改。
+pub const DEFAULT_METERS_PER_CELL: f32 = 100.0;
+
 /// 光照明度乘子：`AMBIENT + DIFFUSE_MAIN·max(0, N·L₁) + DIFFUSE_AUX·max(0, N·L₂)`。
 ///
 /// ## 接口契约：入参必须是「与归一化后光向量的点积」

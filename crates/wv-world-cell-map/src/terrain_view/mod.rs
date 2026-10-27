@@ -32,7 +32,10 @@ pub mod terrain_texture;
 pub mod tile_atlas;
 
 // ── 路径兼容 re-export（保持 `crate::terrain_view::X` 不变） ─────────────────
-pub use cells::{image_from_terrain, patch_terrain_image, terrain_pixels};
+pub use cells::{
+    image_from_terrain, patch_terrain_image, patch_terrain_image_with_scale, terrain_pixels,
+    terrain_pixels_with_scale,
+};
 pub use grid_lines::GridLinesOverlay;
 pub use isoline_overlay::IsolineOverlay;
 pub use rebuild::{
