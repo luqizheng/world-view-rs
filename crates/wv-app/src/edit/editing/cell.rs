@@ -1,8 +1,10 @@
 //! 点选落笔 + hover 追踪（ADR-0057：点选进统一选区，EditCell 只画不选）。
 //!
 //! [ADR-0074]：CellMap（Topographic）工作区里点选器升级为**三段裁定**——
-//! 图钉（点状 POI）> 群系区（Nature Region）> 格。浏览态不在此列：实体
-//! 选中已由 `drill_pick` 的标签命中承担，本模块不改浏览态行为。
+//! 图钉（点状 POI）> 群系区（Nature Region）> 格。浏览族（其余模式）的
+//! 图钉命中在 `wv_render::drill::drill_pick`（追记一）：那边标签命中之后
+//! 接图钉，两边互不重叠。图钉命中纯函数
+//! [`wv_render::drill::pick_place_pin`] 两边共用。
 
 use super::*;
 use wv_core::model::region::RegionKind;
@@ -10,10 +12,7 @@ use wv_core::{EntityKind, Id, SelectedEntity};
 use wv_render::layer_frame::LayerFrame;
 use wv_render::state::ViewMode;
 
-/// 图钉命中半径（屏幕像素）。比视觉图钉略大一圈——点「图钉旁边一点」也
-/// 算点中，降低小目标瞄准成本；换算世界单位乘 `view.scale`（同
-/// `selection::PICK_TOLERANCE_PX` 口径）。
-const PIN_HIT_PX: f32 = 18.0;
+use wv_render::drill::pick_place_pin;
 
 /// 点在平铺多边形环内（射线法）。`poly` 为 `[x0, y0, x1, y1, …]` 环坐标
 /// （图内局部 wu，与 `Region::polygon` / `Place::envelope` 同一存储形态）。
@@ -35,47 +34,6 @@ pub fn point_in_flat_polygon(px: f32, py: f32, poly: &[f32]) -> bool {
         j = i;
     }
     inside
-}
-
-/// 在当前图的**可见图钉**里命中离光标最近者（[ADR-0074] 裁定第一段）。
-///
-/// 「可见图钉」与 `world_projection` 进 `landmark_dots` 的过滤同一口径：
-/// 锚定本图 + `rank ≥ 2` + 点状（`line.is_none()`——线段 POI 没有图钉）；
-/// 外加 place 图层可见（层关了图钉不画，点「看不见的东西」不该有反应）。
-/// 与 `LabelHits` 不同，本命中不走注册表：点击是单发动作，直接遍历当前
-/// 图锚定桶即可，无每帧注册成本。
-pub fn pick_place_pin(
-    cursor_world: Vec2,
-    world: &wv_core::World,
-    map_id: &Id,
-    grid: &GridConfig,
-    place_layer_visible: bool,
-    scale: f32,
-) -> Option<Id> {
-    if !place_layer_visible {
-        return None;
-    }
-    let radius = PIN_HIT_PX * scale;
-    let r2 = radius * radius;
-    // 最近者胜：`best_d2` 单独存距离（`Option<Id>` 配 `f32::INFINITY` 初值，
-    // 免元组解构与 map_or）。
-    let mut best_d2 = f32::INFINITY;
-    let mut best: Option<Id> = None;
-    for p in &world.distances.places {
-        if p.map.as_ref() != Some(map_id) || p.line.is_some() || p.effective_rank() < 2 {
-            continue;
-        }
-        let Some((x, y)) = p.effective_anchor() else {
-            continue;
-        };
-        let pos = grid.map_to_view(Vec2::new(x, y));
-        let d2 = pos.distance_squared(cursor_world);
-        if d2 <= r2 && d2 < best_d2 {
-            best_d2 = d2;
-            best = Some(p.id.clone());
-        }
-    }
-    best
 }
 
 /// 命中包含该点的群系区（[ADR-0074] 裁定第二段）。
@@ -116,6 +74,10 @@ pub fn pick_nature_region(local: (f32, f32), world: &wv_core::World, map_id: &Id
 /// 作者意图是「选那个钉」，不是「往选区里并一个钉底下的格」。
 /// 单焦点模型：实体选中与格选区互斥——`resolve_form` 里 Cell 表单
 /// 优先于实体选中（设计稿 §11 Q4），不清格选区 = 表单看不见切换。
+///
+/// **浏览族不在此系统**（[ADR-0074] 追记一）：其余模式的图钉命中由
+/// `wv_render::drill::drill_pick` 在标签命中之后接管（单击选钉、双击
+/// 让位下钻），与本系统按模式互斥、无双重处理。
 ///
 /// 修饰键走 Bevy `ButtonInput<KeyCode>`（ShiftLeft/Right、AltLeft/Right）——
 /// **不读 egui 键位链**（2026-10-24 真机 panic 前科：egui 上下文在系统里

@@ -1075,17 +1075,20 @@ fn pick_place_pin_prefers_nearest_pin_within_radius() {
         .push(pin("city_b", &map, 130.0, 100.0));
     let grid = GridConfig::default();
     // 光标在 (108,100)：距 a 8、距 b 22，scale=1 → 半径 18 内只有 a。
-    let got = super::cell::pick_place_pin(Vec2::new(108.0, 100.0), &world, &map, &grid, true, 1.0);
+    let got =
+        wv_render::drill::pick_place_pin(Vec2::new(108.0, 100.0), &world, &map, &grid, true, 1.0);
     assert_eq!(
         got.as_ref().map(|i| i.as_str()),
         Some("city_a"),
         "最近的图钉先被点到"
     );
     // 两钉正中 (115,100)：距各 15 ≤ 18 → 应命中其一。
-    let mid = super::cell::pick_place_pin(Vec2::new(115.0, 100.0), &world, &map, &grid, true, 1.0);
+    let mid =
+        wv_render::drill::pick_place_pin(Vec2::new(115.0, 100.0), &world, &map, &grid, true, 1.0);
     assert!(mid.is_some(), "等距 15 ≤ 18 应命中其一");
     // 远处点击：两钉都在半径外 → None。
-    let far = super::cell::pick_place_pin(Vec2::new(300.0, 300.0), &world, &map, &grid, true, 1.0);
+    let far =
+        wv_render::drill::pick_place_pin(Vec2::new(300.0, 300.0), &world, &map, &grid, true, 1.0);
     assert!(far.is_none(), "半径外不命中");
 }
 
@@ -1111,7 +1114,7 @@ fn pick_place_pin_skips_line_pois_low_rank_and_hidden_layer() {
 
     let cursor = Vec2::new(100.0, 100.0);
     assert!(
-        super::cell::pick_place_pin(cursor, &world, &map, &grid, true, 1.0).is_none(),
+        wv_render::drill::pick_place_pin(cursor, &world, &map, &grid, true, 1.0).is_none(),
         "线段 POI / rank1 / 他图图钉都不该命中"
     );
     // place 图层隐藏 → 图钉不画 → 不命中（即便真图钉在场）。
@@ -1120,7 +1123,7 @@ fn pick_place_pin_skips_line_pois_low_rank_and_hidden_layer() {
         .places
         .push(pin("city_a", &map, 100.0, 100.0));
     assert!(
-        super::cell::pick_place_pin(cursor, &world, &map, &grid, false, 1.0).is_none(),
+        wv_render::drill::pick_place_pin(cursor, &world, &map, &grid, false, 1.0).is_none(),
         "图层隐藏时不命中"
     );
 }

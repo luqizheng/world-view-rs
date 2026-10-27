@@ -14,6 +14,20 @@
 - `crates/wv-app/src/edit/editing/cell.rs`：纯函数 `point_in_flat_polygon` / `pick_place_pin` / `pick_nature_region` + `commit_point_select_on_click` 的 Topographic 裁定分支 + `clear_cell_selection_on_escape` 双清。
 - 测试：`crates/wv-app/src/edit/editing/tests.rs`（夹具 `pin` / `nature_region` / `cellmap_world`，10 条新断言）。
 
+## 追记一：浏览族图钉命中收编进 drill_pick（2026-10-27 实机反馈）
+
+**处境**：首轮把图钉命中只装在 CellMap（Topographic）分支。用户实机在**浏览族模式**点城市图钉无反应——浏览族里点图标本来只认**文字标签**（`LabelHits`），图钉图形本身没有命中区，「这个工具选不中图钉」。
+
+**决策**：`pick_place_pin` 纯函数**下沉到 `wv_render::drill`**（wv-app/wv-render 两边共用，消除双份实现）；`drill_pick` 在**标签命中之后、下钻判定之前**插入图钉段——门控 `!is_double ∧ point_select.tool_active`（外加函数内的 place 层可见）。语义：**单击图钉 = 选中该 Place；双击 = 让位 `marker_hit` 下钻进城**（守住「单击选中 / 双击进入」既有手势约定）。
+
+**理由**：① 浏览族的点击语义归属地就是 `drill_pick`（ADR-0017 §2.7 优先级链的延长线：标签 > 图钉 > 下钻 > 空白清除）；② 若留在 wv-app 侧做，跨插件 schedule 的系统先后序不可控，`drill_pick` 的「空白单击清除选中」可能后写覆盖选中——收进同一系统无竞态；③ CellMap（Topographic）不受影响：`drill_pick` 在 `DrillMarkers=false` 时早退，三段裁定仍在 wv-app，两边按模式互斥。
+
+**工具门控的含义**：笔刷/量测等其他工具激活时，点图钉**不**误选（老行为照旧：点标签文字仍会选中——那是既有语义，不动）。点选工具激活时才多出「图形命中」这条路。
+
+**代价**：① rank < 2 的微点（路网交点等）无图钉命中——在 guangdong 这类 8 万点工程里给每个微点开 18px 命中区会吃掉大量点击，微点仍只认标签文字；② GoogleMap 等 DrillMarkers=false 的浏览变体不走 `drill_pick`，图钉命中在那边暂缺（后续如需，走同函数在别的系统补一段）。
+
+**测试**：`crates/wv-render/src/drill.rs`（`pin_pick_world` 夹具 + 3 条：单击选中 / 双击让位 / 工具未激活不接管）。
+
 ## 关联
 
 - ADR-0057（统一选区）、ADR-0058（统一属性表单，`resolve_form` Cell 优先即本 ADR 单焦点的另一半）、ADR-0017 §2.7（标签命中优先级）、ADR-0045（Nature 区「命名即物化」——无名区不选）、ADR-0030（rank 门槛——rank ≥ 2 才有图钉）。
