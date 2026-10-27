@@ -97,18 +97,35 @@ pub const RIVER_INK_ALPHA: f32 = 0.62;
 pub const ROAD_INK_ALPHA: f32 = 0.5;
 
 /// T14：高度梯度中心差分步长（格）。
+///
+/// ⚠️ **死槽**：T13 起解析梯度（`sample_height_bicubic_grad`，16 tap 一次出
+/// h + 双偏导）接管梯度后，本值不再参与任何计算——槽位保留只为 uniform
+/// 布局稳定（WGSL 侧同注记，见 `terrain_field.wgsl` 该函数文档）。
 pub const GRAD_STEP: f32 = 0.5;
 /// T15：高程夸张系数。不夸张则 2000m 山只占 0.25 格、hillshade 读不出来。
+///
+/// **T6 将切 `crate::shading::Z_EXAG`（2.0）**——米制化后全图统一的
+/// 「纵向夸张旋钮」，旧 0.55 是格空间口径的旧值，届时退役。
 pub const Z_EXAG: f32 = 0.55;
 /// T17：明暗乘子下界（防陡崖压黑）。
+///
+/// **T6 将退役**：切 `crate::shading::` 双光源系数后界内性免费获得
+/// （单位光向量下 `I ∈ [0.4, 1.0]`，见 `shading` 模块文档），钳制对整体下岗。
 pub const RELIEF_LO: f32 = 0.86;
-/// T17：明暗乘子上界（防陡崖过曝）。
+/// T17：明暗乘子上界（防陡崖过曝）。**T6 将退役**（同 [`RELIEF_LO`]）。
 pub const RELIEF_HI: f32 = 1.14;
 
 /// T16：光源方向（**左上 45°**，与全部地物符号/阴影同向）。
 ///
-/// 归一化的 `(-1, 1, 1)/√3`。z 分量 = `1` 表示「光从观察者方向偏上打过来」
-/// ——纯 2D hillshade 的 z=0 会让所有法线与光垂直、整幅图恒定亮度。
+/// 分量 = `(-1, 1, 1)/√2`，**模长 √(3/2) ≈ 1.2247，不是单位向量**——
+/// 此前文档称「归一化的 `(-1,1,1)/√3`」是算术错误（(−1,1,1) 的模是 √3，
+/// 除以 √2 后模为 √(3/2)）；实际高度角仅 atan(1/√2) ≈ 35.26°，与 spec
+/// D1 的 45° 有偏差（2026-10-28 shading 侧已按 spec 改真 45° 单位向量）。
+/// z 分量 > 0 仍表「光从观察者方向偏上打过来」——纯 2D hillshade 的 z=0
+/// 会让所有法线与光垂直、整幅图恒定亮度。
+///
+/// **T6 将整体切 `crate::shading::LIGHT_MAIN`**（方位 315°、高度角 45° 的
+/// 真单位向量），本常量随公式切换退役；在那之前维持旧值旧义（行为零变化）。
 pub const LIGHT_DIR: [f32; 3] = [
     -std::f32::consts::FRAC_1_SQRT_2,
     std::f32::consts::FRAC_1_SQRT_2,
@@ -321,6 +338,18 @@ pub struct FieldParams {
     /// 不进 ThemePack——ADR-0051 §5 / ADR-0054 D2）。搬进 uniform 而不是烧进
     /// WGSL，是为了让 CPU 烘焙路径与 GPU 场路径共用**唯一一份**色表。
     pub elev_ramp: [Vec4; 8],
+    /// 辅光方向 xyz（ADR-0077 双光源 L₂，= `crate::shading::LIGHT_AUX` 单位
+    /// 向量）；w 预留。
+    ///
+    /// **追加在末尾是刻意的**：std140 布局下只有尾部追加才不扰动既有字段的
+    /// 偏移——往中间插字段会把后面全部错位，且编译期不报错、运行期上传
+    /// uniform 才炸（见本结构体顶部的布局警告）。WGSL 侧 `FieldParams`
+    /// 同提交镜像追加。
+    ///
+    /// **惰性预载槽**：本任务只加容量，现 shader 不读它——旧 WGSL 公式会把
+    /// 新值误读（`relief.xy` 被当钳制对、`shape.z` 被当夸张系数），接公式
+    /// （T6/T7 切双光源晕渲）时只改 WGSL 函数体，不再动绑定布局。
+    pub light_aux: Vec4,
 }
 
 /// 场 shader 的**静态句柄**（编译期内联，不经 AssetServer）。
@@ -573,10 +602,14 @@ pub fn default_params(
         // pad0.z = 群系填色强度（ADR-0072 T3）：中性默认 0.5，主 App 由
         // 桥接按 `ThemePack.biome_tint` 覆写。
         pad0: Vec4::new(warp_amp(px_per_cell), 0.0, BIOME_TINT_DEFAULT, 0.0),
+        // T16 旧主光方向（非单位向量，见常量区文档）维持旧值旧义；w = T5
+        // 预载槽：**0 = 无效，T6 起填 meters_per_cell**（0 / 非有限 = 无比例尺，
+        // shader 侧届时回落 1.0）。本任务不接语义——旧公式读 w 会误判。
         light_dir: Vec4::new(LIGHT_DIR[0], LIGHT_DIR[1], LIGHT_DIR[2], 0.0),
         pad1: Vec4::ZERO,
         shore_edges: Vec4::new(SHORE_EDGE, SHALLOW_EDGE, DEEP_EDGE, 0.0), // w = wash_amt（P2）
-        relief: Vec4::new(RELIEF_LO, RELIEF_HI, 0.0, 0.0),                // z = lod_blend（P2）
+        // 维持旧值旧义（明暗钳制对 + lod_blend 预留）；T6 才切 shading:: 三光系数。
+        relief: Vec4::new(RELIEF_LO, RELIEF_HI, 0.0, 0.0), // z = lod_blend（P2）
         theme: [
             rgba4(pal.water),
             rgba4(pal.land_low),
@@ -590,6 +623,14 @@ pub fn default_params(
         // `apply_hypsometric` 在整图重打时按逐图百分位写入（ADR-0055）。
         elev_cuts: equal_cuts_uniform(),
         elev_ramp: ramp_uniform(),
+        // T5 预载槽：辅光单位向量（ADR-0077 L₂ = shading::LIGHT_AUX，真 45°），
+        // w 预留 0。现 shader 不读（惰性）——T6/T7 切双光源公式时启用。
+        light_aux: Vec4::new(
+            crate::shading::LIGHT_AUX[0],
+            crate::shading::LIGHT_AUX[1],
+            crate::shading::LIGHT_AUX[2],
+            0.0,
+        ),
     }
 }
 
@@ -722,5 +763,51 @@ mod tests {
         for v in p.elev_ramp {
             assert!(v.is_finite(), "分层设色色带出现非有限值: {v:?}");
         }
+        assert!(
+            p.light_aux.is_finite(),
+            "light_aux 出现非有限值: {:?}",
+            p.light_aux
+        );
+    }
+
+    /// T5「行为零变化」锚：uniform 通道只**加容量**——新槽 `light_aux` 载
+    /// 辅光单位向量（`shading::LIGHT_AUX`），其余槽位维持旧值旧义
+    /// （relief = 钳制对、shape.z = 0.55、light_dir = 旧光向 + w = 0）。
+    /// 任何一项漂移都说明公式语义被提前接了线（那会让旧 WGSL 误读、画面变）。
+    #[test]
+    fn field_params_default_carries_light_aux_slot() {
+        let p = default_params([512.0, 512.0], 6.0, ViewBranch::Themed, Default::default());
+        // 新槽：xyz = 辅光单位向量（shading::LIGHT_AUX），w 预留 0。
+        for k in 0..3 {
+            assert!(
+                (p.light_aux[k] - crate::shading::LIGHT_AUX[k]).abs() < 1e-6,
+                "light_aux[{k}] = {} 应为 {}",
+                p.light_aux[k],
+                crate::shading::LIGHT_AUX[k]
+            );
+        }
+        assert_eq!(p.light_aux.w, 0.0, "light_aux.w 预留槽应填 0");
+        // 旧槽零变化：relief 仍是明暗钳制对（T6 才切三光系数）。
+        assert_eq!(
+            p.relief,
+            Vec4::new(RELIEF_LO, RELIEF_HI, 0.0, 0.0),
+            "relief 应维持旧钳制对 ({}, {})",
+            RELIEF_LO,
+            RELIEF_HI
+        );
+        // shape.z 仍是旧夸张系数 0.55（不是 shading::Z_EXAG 的 2.0）。
+        assert_eq!(p.shape.z, Z_EXAG, "shape.z 应维持旧值 {}", Z_EXAG);
+        assert!(
+            (p.shape.z - 0.55).abs() < 1e-6,
+            "shape.z = {} 应为旧值 0.55（T6 才切 2.0）",
+            p.shape.z
+        );
+        // light_dir 仍是旧光向；w = 0（预载 mpc 槽位，0 = 无效，T6 起填）。
+        assert_eq!(
+            p.light_dir,
+            Vec4::new(LIGHT_DIR[0], LIGHT_DIR[1], LIGHT_DIR[2], 0.0),
+            "light_dir 应维持旧光向 {:?}",
+            LIGHT_DIR
+        );
     }
 }

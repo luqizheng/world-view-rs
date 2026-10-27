@@ -1556,8 +1556,9 @@ fn a_tile(atlas: Option<&TileAtlas>, kind: u8) -> Option<[u32; 2]> {
 /// `soften` = 底图淡化（`ViewState.terrain_soften`）；`palette` = 地图主题
 /// （ADR-0014：切主题 = 按新色板整图重建）。
 ///
-/// 浮雕暂按过渡缺省格距 [`crate::shading::DEFAULT_METERS_PER_CELL`] 打光
-/// （内部走 [`terrain_pixels`] 旧签名）；oblique 烘焙是 Topographic 数据
+/// 浮雕在**未接线期**统一走过渡缺省格距 [`crate::shading::DEFAULT_METERS_PER_CELL`]
+/// 打光（内部走 [`terrain_pixels`] 旧签名；wv-app 经 `meters_per_cell_of`
+/// 接线 `_with_scale` 后本假设消失）；oblique 烘焙是 Topographic 数据
 /// 视图（无浮雕），故本入口未开 `_with_scale` 变体。
 ///
 /// **oblique 烘焙**（[ADR-0041] §3 texture-bake 方案）：仅在 Topographic

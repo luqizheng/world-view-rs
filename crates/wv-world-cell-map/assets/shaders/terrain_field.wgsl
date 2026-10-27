@@ -36,7 +36,7 @@ struct FieldParams {
     grid: vec4<f32>,        // xy = 格宽/格高
     shape: vec4<f32>,       // x = px_per_cell, y = branch, z = z_exag, w = grad_step
     pad0: vec4<f32>,
-    light_dir: vec4<f32>,   // xyz = 光源方向, w = 预留
+    light_dir: vec4<f32>,   // xyz = 旧主光方向（T6 切 shading::LIGHT_MAIN）, w = 预载槽：0 = 无效，T6 起填 meters_per_cell
     pad1: vec4<f32>,
     shore_edges: vec4<f32>, // x = 1（滩）, y = 3（浅）, z = 9（深）, w = wash_amt
     relief: vec4<f32>,      // xy = 明暗钳制, z = lod_blend, w = 预留
@@ -49,6 +49,12 @@ struct FieldParams {
     elev_cuts: array<vec4<f32>, 2>,
     // 8 阶固定色带（低 → 高，线性空间；sRGB 真源在 Rust 侧 hypsometric）
     elev_ramp: array<vec4<f32>, 8>,
+    // T5 预载槽：辅光方向 xyz（= Rust 侧 shading::LIGHT_AUX 单位向量），w 预留。
+    // **现公式不读它（惰性预载）**：旧 relief.xy 仍按明暗钳制对解读、shape.z
+    // 仍按夸张系数解读，此刻写入新语义值会被旧公式误读、画面即变。追加在
+    // 尾部是刻意的——std140 下只有尾部追加才不扰动既有字段偏移；与 Rust
+    // 侧 FieldParams 同提交镜像，T6/T7 切双光源公式时只改函数体。
+    light_aux: vec4<f32>,
 };
 
 // ── 常量（与 material.rs 同源）───────────────────────────────────────────
