@@ -21,11 +21,15 @@
 //! 一致——`World` 是工作副本，**只**在主帧写。
 
 use bevy::prelude::*;
+use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 
 use crate::edit::editing::EditHistory;
-use crate::http::bridge::{drain_messages, HttpBridge, HttpMessage};
+use crate::http::bridge::{
+    drain_messages_with, HttpBridge, HttpMessage, ScreenshotPayload, UiReply, UiRequest,
+};
 use crate::http::server::start_mcp_server;
-use crate::state::WorldProjection;
+use crate::http::skills::ui;
+use crate::state::{PanelState, WorldProjection};
 
 /// MCP server 启动配置。
 ///
@@ -117,9 +121,32 @@ impl Plugin for HttpServerPlugin {
         // （v0.2 修：此前本模块自定义了一个带 `Arc<Mutex>` 的同名 Resource 且
         // 从未插入，真机 smoke 抓到 `Res<EditHistory> does not exist` 每帧 panic
         // ——drain 只在主帧跑，`ResMut` 本身就是正确且足够的访问形态，锁是多余的。）
-        app.add_systems(Update, drain_http_commands);
+        app.insert_resource(PendingShots::default());
+        // `.chain()`：两系统都持 `ResMut<PendingShots>`，显式钉序（入队 → 轮询），
+        // 不靠调度器对歧义系统的隐式顺序。
+        app.add_systems(Update, (drain_http_commands, poll_pending_shots).chain());
     }
 }
+
+/// 等待落盘的截图请求（ADR-0078 D3）。主帧 spawn `Screenshot` 后入此表，
+/// [`poll_pending_shots`] 每帧轮询文件出现 → base64 → 回执。
+#[derive(Resource, Default)]
+pub struct PendingShots(Vec<PendingShot>);
+
+struct PendingShot {
+    path: std::path::PathBuf,
+    /// `Option` 是为了能在 `&mut PendingShot` 上 `take()` 出来发回执
+    /// （oneshot sender 不可 Copy，直接 move 字段过不了借用检查）。
+    /// 发送前必然 Some——发送即取走，取走即移除条目。
+    reply: Option<tokio::sync::oneshot::Sender<UiReply>>,
+    /// 轮询过的帧数——超过 [`SHOT_MAX_WAIT_FRAMES`] 仍未落盘即报错回收，
+    /// 不让 handler 吊死到 handler 侧 10s 超时（双保险，主帧侧先撤）。
+    frames_waited: u32,
+}
+
+/// 落盘等待的帧数上限。渲染器正常 1–2 帧产出；60 帧（60 FPS 下 1 秒）
+/// 还没出 = 窗口最小化 / 后台挂起，明确报错比静默等待好。
+const SHOT_MAX_WAIT_FRAMES: u32 = 60;
 
 /// 每帧从 `HttpReceiver` 排空消息，apply 到 WorldProjection.world + GUI 的 History。
 ///
@@ -130,10 +157,21 @@ impl Plugin for HttpServerPlugin {
 /// ## 与 GUI 撤销栈的关系
 /// `edit.history` 就是 Ctrl+Z 用的那一个栈：LLM 的 `create_place` 之后
 /// 用户按 Ctrl+Z 撤掉的是它，`undo` skill 撤掉的是 GUI 笔刷——同一时间线。
+///
+/// ## UI 操控消息（ADR-0078 D2）
+/// UI 状态（`ViewState` / `PanelState`）与 World 一样**只在主帧读写**：
+/// 世界数据类消息走 [`drain_messages`] 的既有路径，UI 类消息经
+/// [`drain_messages_with`] 的钩子在本帧同步处理；截图特殊——本帧只
+/// spawn `Screenshot` 组件并入 [`PendingShots`]，回执由 [`poll_pending_shots`]
+/// 在落盘后发（渲染器要跑完这一帧才有图）。
 pub fn drain_http_commands(
     mut receiver: ResMut<HttpReceiver>,
     mut projection: ResMut<WorldProjection>,
     mut edit: ResMut<EditHistory>,
+    mut view: ResMut<wv_render::state::ViewState>,
+    mut panels: ResMut<PanelState>,
+    mut commands: Commands,
+    mut pending: ResMut<PendingShots>,
 ) {
     // 把 save_dir 拷成 owned，先结束 `projection.project_dir` 的不可变借用，
     // 然后才能用 `&mut projection.world`（§3.3）。
@@ -142,11 +180,22 @@ pub fn drain_http_commands(
         .as_deref()
         .map(std::path::Path::new)
         .map(|p| p.to_path_buf());
-    let processed = drain_messages(
+    let mut ui_hook = |req: UiRequest, reply_tx: tokio::sync::oneshot::Sender<UiReply>| match req {
+        UiRequest::Screenshot { save_to } => {
+            begin_screenshot(save_to.as_deref(), &mut commands, &mut pending, reply_tx);
+        }
+        other => {
+            let reply = ui::handle_ui_request(other, &mut view, &mut panels)
+                .unwrap_or_else(|| UiReply::Error("内部错误：非截图请求无回执".into()));
+            let _ = reply_tx.send(reply);
+        }
+    };
+    let processed = drain_messages_with(
         &mut receiver.rx,
         &mut projection.world,
         &mut edit.history,
         save_dir.as_deref(),
+        &mut ui_hook,
     );
     // 本帧处理过消息 = 有未落盘的编辑，点亮顶栏 `●`（与 GUI 编辑同语义）。
     if processed {
@@ -154,12 +203,147 @@ pub fn drain_http_commands(
     }
 }
 
+/// `screenshot` 请求的主帧入口（ADR-0078 D3）：解出落盘路径 → spawn
+/// `Screenshot::primary_window()` + `save_to_disk` observer（与 `WV_SHOT`
+/// 探针同款）→ 入 [`PendingShots`] 等轮询。路径解不出（父目录不存在等）
+/// 当帧直接回 Error——连组件都不必 spawn。
+fn begin_screenshot(
+    save_to: Option<&str>,
+    commands: &mut Commands,
+    pending: &mut PendingShots,
+    reply_tx: tokio::sync::oneshot::Sender<UiReply>,
+) {
+    let path = match ui::shot_path(save_to) {
+        Ok(p) => p,
+        Err(msg) => {
+            let _ = reply_tx.send(UiReply::Error(msg));
+            return;
+        }
+    };
+    commands
+        .spawn(Screenshot::primary_window())
+        .observe(save_to_disk(path.clone()));
+    pending.0.push(PendingShot {
+        path,
+        reply: Some(reply_tx),
+        frames_waited: 0,
+    });
+}
+
+/// 每帧轮询等落盘的截图：文件出现（且 PNG 头可解析）→ 读字节 → base64 →
+/// 回执并移除；超过 [`SHOT_MAX_WAIT_FRAMES`] → 回 Error 并移除。
+/// 文件半写（读到了但头不完整）按未出现处理，下一帧再看。
+pub fn poll_pending_shots(mut pending: ResMut<PendingShots>) {
+    poll_pending_vec(&mut pending.0);
+}
+
+/// [`poll_pending_shots`] 的纯函数形态（测试友好）：对等待表做一轮轮询，
+/// 不依赖 Bevy 运行时。
+fn poll_pending_vec(pending: &mut Vec<PendingShot>) {
+    pending.retain_mut(|shot| {
+        match std::fs::read(&shot.path)
+            .ok()
+            .and_then(|b| ui::png_dimensions(&b).map(|(w, h)| (b, w, h)))
+        {
+            Some((bytes, width, height)) => {
+                if let Some(reply) = shot.reply.take() {
+                    let _ = reply.send(UiReply::Shot(ScreenshotPayload {
+                        saved_path: shot.path.display().to_string(),
+                        width,
+                        height,
+                        base64_png: ui::encode_base64(&bytes),
+                    }));
+                }
+                false
+            }
+            None => {
+                shot.frames_waited += 1;
+                if shot.frames_waited > SHOT_MAX_WAIT_FRAMES {
+                    if let Some(reply) = shot.reply.take() {
+                        let _ = reply.send(UiReply::Error(format!(
+                            "截图落盘超时（{SHOT_MAX_WAIT_FRAMES} 帧无产出）：{}",
+                            shot.path.display()
+                        )));
+                    }
+                    false
+                } else {
+                    true
+                }
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::bridge::{HttpBridge, ReadReply, ReadRequest};
+    use crate::http::bridge::{drain_messages, HttpBridge, ReadReply, ReadRequest};
     use wv_core::map::{Extent, MapLevel, MapNode};
     use wv_core::Id;
+
+    /// 造一个最小合法 PNG 头（签名 + IHDR + 1920×1080），给 poll 测试当
+    /// 「已落盘」的假截图。
+    fn fake_png(width: u32, height: u32) -> Vec<u8> {
+        let mut b = vec![0x89u8, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        b.extend_from_slice(&[0, 0, 0, 13]);
+        b.extend_from_slice(b"IHDR");
+        b.extend_from_slice(&width.to_be_bytes());
+        b.extend_from_slice(&height.to_be_bytes());
+        b.extend_from_slice(&[8, 6, 0, 0, 0]);
+        b
+    }
+
+    /// poll 纯函数三态：文件未出现 → 保留且不回执；出现 → Shot 回执并清表；
+    /// 超帧数 → Error 回执并清表。落盘目录走系统临时目录（受限环境跑测试
+    /// 须按 AGENTS §2.2 追记改 TEMP/TMP）。
+    #[test]
+    fn poll_pending_vec_replies_shot_when_file_appears_and_errors_on_timeout() {
+        let dir = std::env::temp_dir().join("wv-http-ui-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("poll-test.png");
+        let _ = std::fs::remove_file(&path);
+
+        let (tx, mut rx) = tokio::sync::oneshot::channel::<UiReply>();
+        let mut pending = vec![PendingShot {
+            path: path.clone(),
+            reply: Some(tx),
+            frames_waited: 0,
+        }];
+
+        // ① 文件未出现：保留待轮询，不回执
+        poll_pending_vec(&mut pending);
+        assert_eq!(pending.len(), 1, "文件未出现应保留");
+        assert!(rx.try_recv().is_err(), "不应提前回执");
+
+        // ② 落盘后：Shot 回执 + 表清空
+        std::fs::write(&path, fake_png(800, 600)).unwrap();
+        poll_pending_vec(&mut pending);
+        assert!(pending.is_empty(), "回执后应移除");
+        match rx.try_recv().unwrap() {
+            UiReply::Shot(p) => {
+                assert_eq!(p.width, 800, "IHDR 宽");
+                assert_eq!(p.height, 600, "IHDR 高");
+                assert!(!p.base64_png.is_empty());
+                assert_eq!(p.saved_path, path.display().to_string());
+            }
+            other => panic!("应为 Shot，got {other:?}"),
+        }
+
+        // ③ 超帧数：Error 回执 + 表清空（新请求，文件永不出现）
+        let (tx2, mut rx2) = tokio::sync::oneshot::channel::<UiReply>();
+        let mut stale = vec![PendingShot {
+            path: dir.join("never-appears.png"),
+            reply: Some(tx2),
+            frames_waited: SHOT_MAX_WAIT_FRAMES,
+        }];
+        poll_pending_vec(&mut stale);
+        assert!(stale.is_empty());
+        match rx2.try_recv().unwrap() {
+            UiReply::Error(msg) => assert!(msg.contains("超时"), "raw = {msg}"),
+            other => panic!("应为 Error，got {other:?}"),
+        }
+        let _ = std::fs::remove_file(&path);
+    }
 
     /// 直接构造 drain 路径，避免起 Plugin 整盘——单元测试用更稳。
     #[test]
@@ -184,6 +368,8 @@ mod tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            trashed: false,
+            trashed_at: None,
         });
 
         let place = wv_core::distance::Place {
@@ -201,6 +387,7 @@ mod tests {
             rank: None,
             line_kind: None,
             line_width_m: None,
+            line: None,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();

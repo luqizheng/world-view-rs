@@ -234,6 +234,7 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
 | [ADR-0071](ADR-0071-landmark-panel.md) | 地标面板——Edit/CellMap 两模式单击放置 POI（即点即建、默认 rank=3）、`DeletePlaceCommand` 级联删边可撤销、放置模式走 `MapToolId::Landmark` 白拿 dispatch 互斥（无瓷砖无快捷键） | 已接受（2026-10-26，用户三项裁定） |
 | [ADR-0073](ADR-0073-label-placement-candidates.md) | 标签候选位摆位——统一占位池（六类标签跨系统避让）、点标签 8 方位候选、面标签区域内约束、街名沿街旋转 + 直立翻转、按档×通路密度预算（替代六处 truncate(200)）、`WV_DRILL` 验收探针 | 提议态（2026-10-26，实机截图初验通过） |
 | [ADR-0076](ADR-0076-mountain-range-pen-altitudinal-zonation.md) | 山系笔与山脉垂直带谱——山脉作为结构化对象（不引入板块实体），`apply_mountain_range` kind 赋值改双判据带谱（增量 ≥500m 门槛保既有地貌 + 绝对高度落带 300/1200/2600，雪原封顶），山系笔为主力、手涂降微调语义零改 | 已接受（2026-10-27，用户批准设计稿「就这么定」+「go」；设计稿 `docs/superpowers/specs/2026-10-27-mountain-range-pen-design.md`） |
+| [ADR-0078](ADR-0078-http-ui-control-tools.md) | HTTP UI 操控工具——扩展 ADR-0014 MCP server 的工具面（9→13）：get_ui_state / set_view_mode（与 WV_MODE 探针同源词表）/ set_panel_visible（Panel::ALL 词表）/ screenshot（MCP image content 回传 base64 PNG + 落盘）；UI 状态与 World 同纪律只在主帧读写 | 已接受（2026-10-28，用户委托裁量落地；spec `docs/superpowers/specs/2026-10-28-http-ui-control-design.md`、计划 `docs/superpowers/plans/2026-10-28-http-ui-control.md`；编号取 0078——0077 已被并行轮次 cellmap-relief-shading 的 spec 预留） |
 
 > **⚠️ 编号撞号备注（2026-10-27 追加）**：`ADR-0074` 与 `ADR-0075` 被并行会话的三个分支同时占用
 > （`feat/faction-partition-map` 势力图切蛋糕 / `feat/map-tree-enhancement` 地图树垃圾桶

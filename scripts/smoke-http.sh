@@ -8,8 +8,8 @@
 # 编辑器」，这条链路只有真机 smoke 才验证得到：HttpServerPlugin 是否真的
 # 在 Startup 起了 tokio 线程、axum 是否真的绑上端口、curl 是否真能调通。
 #
-# 本脚本补最低保证：**启动 GUI → 真实 curl POST /mcp → tools/list 返 9 个
-# skill → tools/call list_maps 走通**。
+# 本脚本补最低保证：**启动 GUI → 真实 curl POST /mcp → tools/list 返 13 个
+# skill → tools/call list_maps / set_view_mode / screenshot 走通**。
 #
 # ## 用法
 #   bash scripts/smoke-http.sh              # 默认端口 18732（避开默认 8732，
@@ -17,12 +17,14 @@
 #   SMOKE_PORT=9000 bash scripts/smoke-http.sh
 #
 # ## 退出码
-#   0 = 9 skill schema + list_maps 调用全部通过；1 = 任一环节失败
+#   0 = 13 skill schema + list_maps / set_view_mode / screenshot 调用全部通过；
+#   1 = 任一环节失败
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
 PORT="${SMOKE_PORT:-18732}"
 URL="http://127.0.0.1:${PORT}/mcp"
+TARGET_DIR="${CARGO_TARGET_DIR:-./target}"
 
 echo "[smoke] cargo build -p wv-app --features http --bin wv"
 if ! cargo build -q -p wv-app --features http --bin wv; then
@@ -30,7 +32,7 @@ if ! cargo build -q -p wv-app --features http --bin wv; then
     exit 1
 fi
 
-BIN="./target/debug/wv.exe"
+BIN="$TARGET_DIR/debug/wv.exe"
 if [ ! -f "$BIN" ]; then
     echo "[smoke] FAIL: 二进制未找到 $BIN"
     exit 1
@@ -79,7 +81,7 @@ if [ "$READY" != "yes" ]; then
 fi
 echo "[smoke] 端口 ${PORT} 已就绪"
 
-# ① tools/list：应返 9 个 skill，顺序与 ADR-0014 §2.5 一致。
+# ① tools/list：应返 13 个 skill，顺序与 ADR-0014 §2.5 + ADR-0078 一致。
 TOOLS_JSON=$(curl -s --max-time 5 "$URL" -X POST \
     -H 'content-type: application/json' \
     -d '{"jsonrpc":"2.0","method":"tools/list","id":1}')
@@ -89,13 +91,14 @@ r = json.load(sys.stdin)
 tools = r['result']['tools']
 names = [t['name'] for t in tools]
 expected = ['list_maps','get_map','list_places','get_place','get_state_at_time',
-            'create_map','create_place','undo','save_project']
+            'create_map','create_place','undo','save_project',
+            'get_ui_state','set_view_mode','set_panel_visible','screenshot']
 assert names == expected, f'skill 列表/顺序错: {names}'
 assert all(t['inputSchema']['type'] == 'object' for t in tools), 'inputSchema.type != object'
 print(len(names))
 ")
-if [ "$NAMES" = "9" ]; then
-    echo "[smoke] PASS ①: tools/list 返 9 个 skill，顺序正确"
+if [ "$NAMES" = "13" ]; then
+    echo "[smoke] PASS ①: tools/list 返 13 个 skill，顺序正确"
 else
     echo "[smoke] FAIL ①: tools/list 异常："
     echo "$TOOLS_JSON" | head -3
@@ -136,7 +139,75 @@ else
     FAIL=1
 fi
 
+# ④ set_view_mode（ADR-0078）：UI 操控经真实 TCP 链路走通，echo 快照带新模式。
+MODE_JSON=$(curl -s --max-time 5 "$URL" -X POST \
+    -H 'content-type: application/json' \
+    -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"set_view_mode","arguments":{"mode":"cellmap"}},"id":4}')
+MODE=$(echo "$MODE_JSON" | python3 -c "
+import json,sys
+r = json.load(sys.stdin)
+assert r['result']['isError'] == False, f'isError=true: {r}'
+payload = json.loads(r['result']['content'][0]['text'])
+assert payload['view_mode'] == 'cellmap', f'echo 快照不带新模式: {payload}'
+print(payload['view_mode'])
+")
+if [ "$MODE" = "cellmap" ]; then
+    echo "[smoke] PASS ④: set_view_mode(cellmap) 走通并 echo 新快照"
+else
+    echo "[smoke] FAIL ④: set_view_mode 异常："
+    echo "$MODE_JSON" | head -3
+    FAIL=1
+fi
+
+# ⑤ get_ui_state：面板快照列全量用户可见面板。
+STATE_JSON=$(curl -s --max-time 5 "$URL" -X POST \
+    -H 'content-type: application/json' \
+    -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_ui_state","arguments":{}},"id":5}')
+PN=$(echo "$STATE_JSON" | python3 -c "
+import json,sys
+r = json.load(sys.stdin)
+assert r['result']['isError'] == False, f'isError=true: {r}'
+payload = json.loads(r['result']['content'][0]['text'])
+panels = payload['panels']
+assert any(p['panel'] == 'brush' for p in panels), f'快照缺 brush: {payload}'
+print(len(panels))
+")
+if [ -n "$PN" ] && [ "$PN" -ge 10 ] 2>/dev/null; then
+    echo "[smoke] PASS ⑤: get_ui_state 返 $PN 个面板快照"
+else
+    echo "[smoke] FAIL ⑤: get_ui_state 异常："
+    echo "$STATE_JSON" | head -3
+    FAIL=1
+fi
+
+# ⑥ screenshot（ADR-0078）：image content 回传 + 落盘文件真实存在。
+SHOT_JSON=$(curl -s --max-time 15 "$URL" -X POST \
+    -H 'content-type: application/json' \
+    -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"screenshot","arguments":{}},"id":6}')
+SHOT=$(echo "$SHOT_JSON" | python3 -c "
+import json,sys,base64,os
+r = json.load(sys.stdin)
+assert r['result']['isError'] == False, f'isError=true: {str(r)[:300]}'
+img = r['result']['content'][0]
+assert img['type'] == 'image', f'content[0] 不是 image: {img[\"type\"]}'
+assert img['mimeType'] == 'image/png', 'mimeType != image/png'
+raw = base64.b64decode(img['data'])
+assert raw[:4] == b'\x89PNG', '解码后不是 PNG'
+assert len(raw) > 1000, f'PNG 小得可疑: {len(raw)}B'
+meta = json.loads(r['result']['content'][1]['text'])
+p = meta['saved_path']
+assert os.path.exists(p), f'落盘文件不存在: {p}'
+print(f'{meta[\"width\"]}x{meta[\"height\"]} {len(raw)}B -> {p}')
+")
+if [ -n "$SHOT" ]; then
+    echo "[smoke] PASS ⑥: screenshot 回传 image content：$SHOT"
+else
+    echo "[smoke] FAIL ⑥: screenshot 异常："
+    echo "$SHOT_JSON" | head -3
+    FAIL=1
+fi
+
 if [ "$FAIL" = "0" ]; then
-    echo "[smoke] PASS: MCP server 真机链路（TCP 绑定 + HTTP 解析 + 9 skill + 读路径 + 错误路径）全通"
+    echo "[smoke] PASS: MCP server 真机链路（TCP 绑定 + HTTP 解析 + 13 skill + 读路径 + UI 操控 + 截图回传 + 错误路径）全通"
 fi
 exit "$FAIL"

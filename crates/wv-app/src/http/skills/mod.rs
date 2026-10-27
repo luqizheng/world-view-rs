@@ -1,4 +1,5 @@
-//! v0.1 的 9 个 skill（ADR-0014 §2.5）。
+//! v0.1 的 9 个世界数据 skill（ADR-0014 §2.5）+ v0.2 的 4 个 UI 操控
+//! skill（ADR-0078）。
 //!
 //! ## 入口
 //! 每个 skill 一个公开函数 `pub async fn handler(bridge, input) -> Result<Value, JsonRpcError>`。
@@ -6,12 +7,14 @@
 //!
 //! ## 输入 / 输出
 //! - 输入：`serde_json::Value`，由本模块按 tool 的 schema 解析为强类型 struct。
-//! - 输出：`serde_json::Value`（成功）或 [`JsonRpcError`]（失败）。
+//! - 输出：`serde_json::Value`（成功）或 [`JsonRpcError`]（失败）；
+//!   UI 类的 `screenshot` 经 [`crate::http::tools::ToolOutput`] 产 image content。
 //!
 //! ## 测试
-//! 9 个 skill 各有 1 个 happy-path round-trip 测试；详见各模块底部。
+//! 每个 skill 至少 1 个 happy-path round-trip 测试；详见各模块底部。
 
 pub mod read;
+pub mod ui;
 pub mod write;
 
 pub use read::{dispatch_read, read_tool_schemas};

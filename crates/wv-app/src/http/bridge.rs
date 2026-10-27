@@ -32,6 +32,62 @@ pub enum HttpMessage {
     Undo(tokio::sync::oneshot::Sender<EditResult<(bool, Vec<String>)>>),
     /// 写：保存工程到磁盘，回执为脏路径集合 + 错误。
     Save(tokio::sync::oneshot::Sender<Result<SaveOutcome, wv_io::IoError>>),
+    /// UI 操控（ADR-0078）：视图切换 / 面板开关 / 截图。与 World 类消息
+    /// 同一条 mpsc——**UI 状态也只在主帧读写**，纪律与 §2.3 一致。
+    /// 截图的回执可能晚几帧（渲染器落盘后才轮询到），见 `PendingShots`。
+    Ui(UiRequest, tokio::sync::oneshot::Sender<UiReply>),
+}
+
+/// UI 操控请求（ADR-0078 §3.1）。词表解析在 `skills::ui`，桥只搬运。
+#[derive(Debug, Clone)]
+pub enum UiRequest {
+    /// 当前 UI 快照（视图模式 + 当前图 + 全量面板显隐）。
+    GetState,
+    /// 切换视图模式（词表与 `WV_MODE` 探针同源）。
+    SetViewMode { mode: String },
+    /// 开关面板（词表 = `Panel` 枚举 snake_case）。
+    SetPanelVisible { panel: String, visible: bool },
+    /// 截图。`save_to` 缺省落 OS 临时目录 `wv-screenshots/`。
+    Screenshot { save_to: Option<String> },
+}
+
+/// UI 操控回执（ADR-0078 §3.1）。
+#[derive(Debug, Clone)]
+pub enum UiReply {
+    /// get / set 的回执（set = echo 新快照，调用方免二次查询）。
+    State(UiStateSnapshot),
+    /// 截图回执：落盘路径 + PNG 宽高 + base64。
+    Shot(ScreenshotPayload),
+    /// skill 语义层失败（未知词表项、落盘父目录不存在、截图兜底超时……）。
+    Error(String),
+}
+
+/// `get_ui_state` / set 类工具 echo 的快照（ADR-0078 §2.1）。
+///
+/// `panels` 是**全量**用户可见面板（`Panel::ALL`）的显隐——调用方要能关掉
+/// 一个已开的面板，只列可见的没有用。对象形态（非二元组数组）方便 LLM 读。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UiStateSnapshot {
+    pub view_mode: String,
+    pub current_map: String,
+    pub panels: Vec<PanelVis>,
+}
+
+/// 快照里的单面板显隐。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PanelVis {
+    pub panel: String,
+    pub visible: bool,
+}
+
+/// `screenshot` 回执载荷（ADR-0078 §2.4）。宽高从 PNG IHDR 解析，
+/// `base64_png` 无 `data:` 前缀（MCP image content 直接可用）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ScreenshotPayload {
+    pub saved_path: String,
+    pub width: u32,
+    pub height: u32,
+    pub base64_png: String,
 }
 
 /// 读请求的细节。命名按 §2.5.1 「list 返摘要 / get 返详情」契约。
@@ -208,6 +264,15 @@ impl HttpBridge {
         let _ = self.tx.send(HttpMessage::Save(reply_tx));
         reply_rx
     }
+
+    /// 同步入队一条 UI 操控消息（ADR-0078）。返回 receiver 供 caller 自由
+    /// 选择 await 时机——screenshot 的回执要等渲染器落盘，handler 侧应
+    /// `tokio::time::timeout` 包裹（窗口最小化时可能长时间无帧）。
+    pub fn ui_send(&self, req: UiRequest) -> tokio::sync::oneshot::Receiver<UiReply> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let _ = self.tx.send(HttpMessage::Ui(req, reply_tx));
+        reply_rx
+    }
 }
 
 /// drain 一次 mpsc 队列中的所有消息，按顺序 apply。
@@ -224,15 +289,42 @@ impl HttpBridge {
 /// ## save_dir
 /// `save_project` 需要工程根目录；handler 不直接知道（WorldProjection
 /// 才有）。drain 的调用方把 `WorldProjection.project_dir` 传进来。
+///
+/// ## UI 消息（ADR-0078）
+/// 本函数**没有** UI 状态可碰——UI 消息回「UI 桥未接入」错误（不 panic、
+/// 不丢消息）。要处理 UI 消息用 [`drain_messages_with`]；Bevy 侧
+/// `drain_http_commands` 持 `ResMut<ViewState>` 等资源，走后者。
 pub fn drain_messages(
     receiver: &mut tokio::sync::mpsc::UnboundedReceiver<HttpMessage>,
     world: &mut World,
     history: &mut History,
     save_dir: Option<&Path>,
 ) -> bool {
+    drain_messages_with(receiver, world, history, save_dir, &mut |_, reply| {
+        let _ = reply.send(UiReply::Error(
+            "UI 桥未接入：drain_messages 无 UI 状态（用 drain_messages_with / GUI 主帧）".into(),
+        ));
+    })
+}
+
+/// [`drain_messages`] 的全功能形态：UI 类消息交给 `ui` 钩子（Bevy 系统把
+/// `ResMut<ViewState>` / `ResMut<PanelState>` 的处理闭包传进来），World 类
+/// 消息仍由本函数按序 apply。钩子在**主帧上下文**同步执行——UI 状态与
+/// World 一样只在主帧读写（ADR-0014 §2.3 纪律延伸，ADR-0078 D2）。
+pub fn drain_messages_with(
+    receiver: &mut tokio::sync::mpsc::UnboundedReceiver<HttpMessage>,
+    world: &mut World,
+    history: &mut History,
+    save_dir: Option<&Path>,
+    ui: &mut dyn FnMut(UiRequest, tokio::sync::oneshot::Sender<UiReply>),
+) -> bool {
     let mut processed = false;
     loop {
         match receiver.try_recv() {
+            Ok(HttpMessage::Ui(req, reply)) => {
+                processed = true;
+                ui(req, reply);
+            }
             Ok(msg) => {
                 processed = true;
                 handle_message(msg, world, history, save_dir);
@@ -268,6 +360,14 @@ fn handle_message(
         HttpMessage::Save(reply) => {
             let r = handle_save(world, save_dir);
             let _ = reply.send(r);
+        }
+        // 防御性兜底：drain_messages_with 会把 UI 消息截走才轮到 handle_message，
+        // 这里理论上不可达；真到达（有人绕过 _with 直调）也不丢消息、不 panic。
+        HttpMessage::Ui(_, reply) => {
+            let _ = reply.send(UiReply::Error(
+                "UI 桥未接入：handle_message 无 UI 状态（用 drain_messages_with / GUI 主帧）"
+                    .into(),
+            ));
         }
     }
 }
@@ -453,6 +553,8 @@ mod tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            trashed: false,
+            trashed_at: None,
         });
         w.maps.push(MapNode {
             id: Id::new_unchecked("city_a"),
@@ -470,6 +572,8 @@ mod tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            trashed: false,
+            trashed_at: None,
         });
         w.meta = Some(WorldMeta {
             name: "测试".into(),
@@ -533,6 +637,7 @@ mod tests {
             rank: None,
             line_kind: None,
             line_width_m: None,
+            line: None,
         });
         w.distances.places.push(wv_core::distance::Place {
             kind: None,
@@ -549,6 +654,7 @@ mod tests {
             rank: None,
             line_kind: None,
             line_width_m: None,
+            line: None,
         });
         let f = Filter::parse("name ~ '青'").unwrap();
         let reply = handle_read(
@@ -589,6 +695,7 @@ mod tests {
                 rank: None,
                 line_kind: None,
                 line_width_m: None,
+                line: None,
             });
         }
         let reply = handle_read(
@@ -628,6 +735,7 @@ mod tests {
                 rank: None,
                 line_kind: None,
                 line_width_m: None,
+                line: None,
             });
         }
         // 第一页
@@ -688,6 +796,7 @@ mod tests {
             rank: None,
             line_kind: None,
             line_width_m: None,
+            line: None,
         };
         // 同步入队（apply_send 不 poll future，消息直接进 mpsc）。
         let cmd: Box<dyn EditCommand> = Box::new(wv_edit::AddPlaceCommand::new(place));
@@ -726,6 +835,7 @@ mod tests {
             rank: None,
             line_kind: None,
             line_width_m: None,
+            line: None,
         };
         let cmd: Box<dyn EditCommand> = Box::new(wv_edit::AddPlaceCommand::new(place));
         let apply_reply = bridge.apply_send(cmd);
@@ -775,5 +885,79 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(save_reply).unwrap();
         assert!(result.is_err(), "无 project_dir 应拒绝保存");
+    }
+
+    /// ADR-0078：无 UI 钩子的 [`drain_messages`] 收到 UI 消息必须回明确
+    /// 错误——不 panic、不静默丢弃，调用方能看出「这条路径没接 UI」。
+    #[test]
+    fn drain_without_ui_hook_replies_unavailable_not_panic() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let bridge = HttpBridge::new(tx);
+        let mut world = World::default();
+        let mut history = History::default();
+
+        let reply_rx = bridge.ui_send(UiRequest::GetState);
+        drain_messages(&mut rx, &mut world, &mut history, None);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let reply = rt.block_on(reply_rx).unwrap();
+        match reply {
+            UiReply::Error(msg) => {
+                assert!(msg.contains("UI 桥未接入"), "错误信息应点名未接入：{msg}")
+            }
+            other => panic!("无钩子时应为 Error，got {other:?}"),
+        }
+    }
+
+    /// [`drain_messages_with`] 把 UI 消息路由给钩子；World 类消息照旧走
+    /// 既有路径——同一帧两类消息混排不互吞。
+    #[test]
+    fn drain_with_ui_hook_routes_ui_messages_and_keeps_world_path() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let bridge = HttpBridge::new(tx);
+        let mut world = World::default();
+        world.maps.push(MapNode {
+            id: Id::new_unchecked("world_main"),
+            name: "主世界".into(),
+            level: MapLevel::World,
+            parent: None,
+            children: vec![],
+            icons: vec![],
+            layers: vec![],
+            extent: None,
+            raster: None,
+            geographic_source: None,
+            time_span: None,
+            unit_per_km: None,
+            orientation: 0.0,
+            base: None,
+            outline_polygon: None,
+            trashed: false,
+            trashed_at: None,
+        });
+        let mut history = History::default();
+
+        let ui_reply = bridge.ui_send(UiRequest::SetViewMode {
+            mode: "cellmap".into(),
+        });
+        let read_reply = bridge.read_send(ReadRequest::ListMaps);
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen2 = seen.clone();
+        let mut hook = move |req: UiRequest, reply: tokio::sync::oneshot::Sender<UiReply>| {
+            seen2.borrow_mut().push(format!("{req:?}"));
+            let _ = reply.send(UiReply::Error("handled-by-hook".into()));
+        };
+        drain_messages_with(&mut rx, &mut world, &mut history, None, &mut hook);
+
+        assert_eq!(seen.borrow().len(), 1, "钩子应恰好收到 1 条 UI 消息");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ui = rt.block_on(ui_reply).unwrap();
+        assert!(
+            matches!(ui, UiReply::Error(ref m) if m == "handled-by-hook"),
+            "UI 回执应来自钩子：{ui:?}"
+        );
+        match rt.block_on(read_reply).unwrap() {
+            ReadReply::MapSummaries(v) => assert_eq!(v.len(), 1, "World 读路径不受 UI 消息影响"),
+            other => panic!("应为 MapSummaries，got {other:?}"),
+        }
     }
 }

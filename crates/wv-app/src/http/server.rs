@@ -71,13 +71,32 @@ async fn call_tool(
 ) -> JsonRpcResponse {
     let args = params.arguments.unwrap_or(Value::Null);
     match tools::dispatch(bridge, &params.name, args).await {
-        Ok(value) => {
-            // MCP `2025-03-26` 把 skill 输出塞进 `content: [{type:"text", text:"..."}]`。
-            // 复杂结构走 JSON 字符串——LLM 客户端会自动 decode。
-            let text = serde_json::to_string(&value)
-                .unwrap_or_else(|e| format!("{{\"serialize_error\":\"{e}\"}}"));
+        Ok(output) => {
+            let content = match output {
+                // MCP `2025-03-26` 把 skill 输出塞进 `content: [{type:"text", text:"..."}]`。
+                // 复杂结构走 JSON 字符串——LLM 客户端会自动 decode。
+                tools::ToolOutput::Json(value) => {
+                    let text = serde_json::to_string(&value)
+                        .unwrap_or_else(|e| format!("{{\"serialize_error\":\"{e}\"}}"));
+                    vec![ToolContent::text(text)]
+                }
+                // ADR-0078：截图以 image content 为主条目（LLM 客户端按图渲染，
+                // 不进文本上下文），meta JSON 为次条目供程序化读取。
+                tools::ToolOutput::Image {
+                    data_base64,
+                    mime,
+                    meta,
+                } => {
+                    let meta_text = serde_json::to_string(&meta)
+                        .unwrap_or_else(|e| format!("{{\"serialize_error\":\"{e}\"}}"));
+                    vec![
+                        ToolContent::image(data_base64, mime),
+                        ToolContent::text(meta_text),
+                    ]
+                }
+            };
             let result = serde_json::json!({
-                "content": [ToolContent::text(text)],
+                "content": content,
                 "isError": false,
             });
             JsonRpcResponse::ok(id, result)
@@ -210,7 +229,7 @@ mod tests {
     /// 都会被这条用例捕到。生产路径的端口绑定走 `start_mcp_server`，
     /// 已在另外的测试覆盖（绑定失败 stderr + 退出）。
     #[tokio::test]
-    async fn end_to_end_post_mcp_tools_list_returns_nine_skills() {
+    async fn end_to_end_post_mcp_tools_list_returns_thirteen_skills() {
         use axum::body::Body;
         use axum::http::{Request, StatusCode};
         use tower::util::ServiceExt;
@@ -254,7 +273,7 @@ mod tests {
         assert_eq!(resp["jsonrpc"], "2.0");
         assert_eq!(resp["id"], 1);
         let tools = resp["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 9, "应暴露 9 个 skill");
+        assert_eq!(tools.len(), 13, "应暴露 13 个 skill（9 数据 + 4 UI）");
 
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert_eq!(
@@ -269,6 +288,10 @@ mod tests {
                 "create_place",
                 "undo",
                 "save_project",
+                "get_ui_state",
+                "set_view_mode",
+                "set_panel_visible",
+                "screenshot",
             ]
         );
 
@@ -277,6 +300,86 @@ mod tests {
             assert!(t["description"].is_string());
             assert_eq!(t["inputSchema"]["type"], "object");
         }
+
+        drain.abort();
+    }
+
+    /// ADR-0078 端到端：`set_view_mode` 经 handler → bridge.ui_send →
+    /// 带 UI 钩子的 drain（就地改 `ViewState`）→ echo 快照回 JSON text。
+    /// 这条链路在真机上是 drain_http_commands 的资源形态；测试里用等价的
+    /// 本地 `ViewState`/`PanelState` 替身。
+    #[tokio::test]
+    async fn end_to_end_post_mcp_tools_call_set_view_mode_routes_through_ui_hook() {
+        use crate::http::bridge::{drain_messages_with, UiReply};
+        use crate::state::PanelState;
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::util::ServiceExt;
+        use wv_render::state::ViewState;
+
+        let (state, mut rx) = app_state();
+        let drain = tokio::spawn(async move {
+            let mut world = wv_core::World::default();
+            let mut history = wv_edit::History::default();
+            let mut view = ViewState::default();
+            let mut panels = PanelState::default();
+            for _ in 0..100_000 {
+                drain_messages_with(
+                    &mut rx,
+                    &mut world,
+                    &mut history,
+                    None,
+                    &mut |req, reply| {
+                        let r =
+                            crate::http::skills::ui::handle_ui_request(req, &mut view, &mut panels)
+                                .unwrap_or_else(|| {
+                                    UiReply::Error("内部错误：非截图请求无回执".into())
+                                });
+                        let _ = reply.send(r);
+                    },
+                );
+                tokio::task::yield_now().await;
+            }
+        });
+
+        let app = Router::new()
+            .route("/mcp", post(mcp_handler))
+            .with_state(state.clone());
+
+        let body = serde_json::to_string(&json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "set_view_mode",
+                "arguments": {"mode": "cellmap"}
+            },
+            "id": 9
+        }))
+        .unwrap();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let resp: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(
+            resp["result"]["isError"].as_bool(),
+            Some(false),
+            "set_view_mode(cellmap) 应成功；raw = {resp}"
+        );
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let payload: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(
+            payload["view_mode"], "cellmap",
+            "echo 快照应带新模式；raw = {payload}"
+        );
 
         drain.abort();
     }
@@ -345,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_nine_tools() {
+    fn tools_list_returns_thirteen_tools() {
         let (state, _rx) = app_state();
         let (_status, AxJson(resp)) = rt().block_on(mcp_handler(
             State(state.clone()),
@@ -359,7 +462,7 @@ mod tests {
         assert!(resp.result.is_some());
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().unwrap().clone();
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 13);
     }
 
     #[test]

@@ -535,6 +535,45 @@ impl PanelState {
 }
 
 // ---------------------------------------------------------------------------
+// 视图模式词表（ADR-0078 D6：单一真源）
+// ---------------------------------------------------------------------------
+
+/// 词 → [`wv_render::state::ViewMode`]。
+///
+/// **为什么在 state 不在 http/skills/ui**：词表的第二个消费者是 `WV_MODE`
+/// 验收探针（`debug_probe`），它随 `app` feature 编译、不在 `http` 门内——
+/// 放这里两个消费者（探针 / HTTP 工具）才永远说同一套话。词形以探针的
+/// 历史词表为基准（browse / map / cellmap / faction），本轮按 spec §2.2
+/// 补齐 7 模式的全词表。
+pub fn parse_view_mode(raw: &str) -> Option<wv_render::state::ViewMode> {
+    use wv_render::state::ViewMode;
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "browse" | "vector" | "vector_flat" => Some(ViewMode::VectorFlat),
+        "map" | "google" | "cartographic" => Some(ViewMode::GoogleMap),
+        "cellmap" | "topographic" => Some(ViewMode::Topographic),
+        "faction" => Some(ViewMode::Faction),
+        "realterrain" | "real_terrain" => Some(ViewMode::RealTerrain),
+        "event" => Some(ViewMode::Event),
+        "coastline" => Some(ViewMode::Coastline),
+        _ => None,
+    }
+}
+
+/// [`wv_render::state::ViewMode`] 的规范词（快照回显 / 日志用；取主词）。
+pub fn view_mode_name(m: wv_render::state::ViewMode) -> &'static str {
+    use wv_render::state::ViewMode;
+    match m {
+        ViewMode::VectorFlat => "browse",
+        ViewMode::GoogleMap => "map",
+        ViewMode::Topographic => "cellmap",
+        ViewMode::Faction => "faction",
+        ViewMode::RealTerrain => "realterrain",
+        ViewMode::Event => "event",
+        ViewMode::Coastline => "coastline",
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 地图三级钻取（v0.2 §B）
 // ---------------------------------------------------------------------------
 
