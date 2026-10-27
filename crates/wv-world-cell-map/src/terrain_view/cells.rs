@@ -558,7 +558,8 @@ struct CellRenderer<'a> {
     blocks: [Option<Vec<u8>>; 10],
     /// `kind` 是否已尝试过建块（避免无映射 kind 被反复查）。
     tried: [bool; 10],
-    /// Topographic mode 专用：7 条海拔内边界（米，逐图百分位；ADR-0055）。
+    /// Topographic mode 专用：7 条海拔内边界（米，绝对阶梯 + 窄域兜底，
+    /// `cuts_for_cells` 产物；ADR-0056 修正 ADR-0055 原案「逐图百分位」）。
     /// 非 Topographic mode 为 `None`（着色路径零开销）。
     topographic: Option<super::hypsometric::Cuts>,
     /// **专业制图的海拔色带**（ADR-0067 D3）：8 阶 + 混入强度 + 7 条内边界。
@@ -1257,14 +1258,16 @@ impl<'a> CellRenderer<'a> {
             return;
         };
         // Topographic 早返回（ADR-0051 §5 的 per-cell 着色 + ADR-0055 叠色）：
-        // 群系固定色块为底，陆格再按 8 阶海拔百分位向固定色带混合。
+        // 群系固定色块为底，陆格再按海拔色带**段内连续渐变**向固定色带混合
+        // （切点 = 绝对阶梯 + 窄域兜底，ADR-0056；渐变 = ADR-0077）。
         // res 恒 1（new 里已定），一像素直铺；无边界/揉边/淡化/浮雕——
         // 数据视图要的是逐格可读，任何后处理都是污染。
         if let Some(cuts) = self.topographic.as_ref() {
             // 2026-10-22 三模式内容矩阵（spec §2.5）：CellMap = 群系固定色块
             // ——颜色编码 biome，固定色板不随 CellPack/TreatmentFlags（ADR-0051）。
             // 2026-10-24（ADR-0055）：再叠一层**海拔分层设色**——群系色仍是底，
-            // 海拔按 8 阶百分位向固定色带混合，强度由会话开关控制。
+            // 海拔向固定色带混合，强度由会话开关控制（当日口径为 8 阶离散，
+            // 已被下方 2026-10-28 条目修正）。
             // 水格不叠：海拔色带只对陆面有意义，水面仍由群系水色表达。
             let mut rgba = crate::terrain_view::biome_raw::pick(cell.biome, cell.surface);
             if self.hypsometric > 0.0 && !super::hypsometric::is_water_cell(cell) {

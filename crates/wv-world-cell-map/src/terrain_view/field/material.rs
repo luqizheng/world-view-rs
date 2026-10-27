@@ -612,7 +612,9 @@ pub fn default_params(
         river_ink: rgba4(pal.river_ink),
         paper: rgba4(pal.paper),
         // 分层设色默认关（强度 0）；内边界先按等分占位，真实值由
-        // `apply_hypsometric` 在整图重打时按逐图百分位写入（ADR-0055）。
+        // `apply_hypsometric` 在整图重打时写入——口径为「绝对阶梯 +
+        // 窄域兜底」（ADR-0056，修正 ADR-0055 原案「逐图百分位」）；GPU
+        // 取色按段内连续渐变（ADR-0077，镜像 CPU `tint_continuous`）。
         elev_cuts: equal_cuts_uniform(),
         elev_ramp: ramp_uniform(),
         // 辅光 L₂（ADR-0077 L₂ = shading::LIGHT_AUX，真 45° 单位向量），

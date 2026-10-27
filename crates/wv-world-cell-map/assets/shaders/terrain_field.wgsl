@@ -294,13 +294,14 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if (p.shape.y < 0.5) {
         // CellMap / Topographic：**方格数据视图**（追记十七）——own 色直出，
         // 无距离场混合、无轮廓圆角；方格边界 + 全程深浅色带是本分支契约。
-        // 分层设色（ADR-0055）照旧：群系色仍是底，陆格按海拔 8 阶向固定
-        // 色带混合；水格不叠（海拔色带只对陆面有意义）。
+        // 分层设色：群系色仍是底，陆格按海拔向固定色带做**段内连续渐变**
+        // 混合（ADR-0077 对 ADR-0055「8 阶离散」的 CellMap 数据视图修正，
+        // 见 [`elev_ramp_continuous`]）；水格不叠（海拔色带只对陆面有意义，
+        // `is_land` 门已挡）。
         base = biome_raw_approx(biome_id);
         let strength = clamp(p.elev_cuts[1].w, 0.0, 1.0);
         if (is_land && strength > 0.0) {
-            let ramp = elev_ramp_color(elev_band(h));
-            base = mix(base, ramp, strength);
+            base = mix(base, elev_ramp_continuous(h), strength);
         }
     } else {
         // ── 群系填色（ADR-0072 T4，**Themed 专属**）：own / nb 两套
@@ -902,30 +903,83 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3<f32>(0.04045));
 }
 
-// ── 分层设色（ADR-0055）─────────────────────────────────────────────────
+// ── 分层设色（ADR-0055 → ADR-0077 段内连续渐变）─────────────────────────
 
-/// 高度落在第几阶（0..8）。
+/// 归一化域的**海平面锚**：0 m 在 `R16Unorm` 高度纹理域的位置
+/// `= (0 − H_MIN) / H_RANGE = 4000 / 10000 = 0.4`（H_MIN / H_RANGE 与
+/// pack.rs 同源，量程见 `H_RANGE_M`）。CPU 真源 `segment_of` 的低地段
+/// （b = 0）等宽外推以**海平面**为段 0 下界（米制 `t = height / cuts[0]`，
+/// 0 m → t = 0）；归一化是仿射换算，锚点随之平移到本常量——注意它
+/// **不是**纹理域下界 0（那是 −4000 m）。
+const SEA_LEVEL_NORM: f32 = 0.4;
+
+/// 段界锚表取值：锚[0] = 海平面（段 0 下界），锚[1..7] = 7 条归一化内边界
+/// （cuts[0..6]）。段 b ∈ [0, 6] 占据 `[锚[b], 锚[b+1])`，段 7 无上界。
 ///
-/// 7 条内边界挤在两组 `vec4` 里（`.xyzw` / `.xyz`）。**按分量逐个比较而不是
-/// 动态索引 `vec4`**：边界升序，故「大于等于几条」就等于阶号，写法最稳，
-/// 也避开 WGSL 动态取向量分量的可读性坑。
-fn elev_band(h: f32) -> u32 {
+/// 7 条 cuts 挤在两组 `vec4` 里（`.xyzw` / `.xyz`）；向量分量动态下标在
+/// 部分驱动上退化，统一走 [`pick4`] 展开分支（与权重取分量同一套既定写法）。
+fn elev_anchor(a: vec4<f32>, c: vec4<f32>, k: i32) -> f32 {
+    if (k <= 0) { return SEA_LEVEL_NORM; }
+    if (k <= 4) { return pick4(a, k - 1); }
+    return pick4(c, k - 5);
+}
+
+/// 段内连续渐变取色（ADR-0077）：**CPU 真源
+/// `hypsometric::{segment_of, tint_continuous}` 的高程纹理域逐式镜像**
+/// （注释互指，改任何一边必须同步另一边）。8 个锚点色不变，段内按高度
+/// 在 `ramp[b]` 与 `ramp[b+1]` 间线性过渡——低地 0–200 m 段内即有渐变
+/// （离散口径下不可分，这是修正的动因）；`p.elev_cuts` / `p.elev_ramp`
+/// uniform 布局不动。
+///
+/// ## 段扫描（归一化域）
+///
+/// 段号 `b` = 「`h_norm` ≥ 几条 cuts」，逐分量比较不动态索引（边界升序，
+/// 「大于等于几条」即段号；与退役的离散段号判定 `elev_band` 同口径，该
+/// 函数已随本修正一并删除——段号判定原样保留，只是不再单独成函数）。
+/// **边界语义不变：恰在阈值上进下一段且段内分数 t = 0**，故锚点处本函数
+/// 与旧离散取色 `elev_ramp_color(elev_band(h))` **逐位一致**——连续渐变是
+/// 离散色带的超集（CPU 侧测试 `continuous_tint_matches_discrete_at_band_anchors`
+/// 钉过同一性质，两侧 uniform 色表同源自 `RAMP_SRGB`；GPU 侧无单测，靠此
+/// 同构论证 + T9 实机验收兜底）。
+///
+/// ## 段内分数 t（`segment_of` 同式，米制 → 归一化仿射换算）
+///
+/// - `1 ≤ b ≤ 6`：`t = (h − cuts[b−1]) / (cuts[b] − cuts[b−1])`；
+/// - `b = 0`：下界按海平面锚等宽外推（`elev_anchor` 的锚[0]，即米制
+///   `t = height / cuts[0]` 的镜像）；`h_norm` 低于锚（负米高程，正常调用
+///   已被水域门挡住，此处防御）得负 t，钳回 0；
+/// - `b = 7`：无上界，t 恒 0（纯 `ramp[7]`）；
+/// - 分母 ≤ 0（`normalized_cuts` 越界钳到 [0,1] 可能产生的退化 cuts；
+///   米制侧 `cuts[0] ≤ 0` 同样映射到 `锚[1] ≤ 锚[0]`）记 t = 0；
+///   上界按构造 < 1（越过 cuts[b] 的高度会先升段），钳 [0,1] 只防退化。
+fn elev_ramp_continuous(h_norm: f32) -> vec3<f32> {
     let a = p.elev_cuts[0];
     let c = p.elev_cuts[1];
     var b = 0u;
-    if (h >= a.x) { b = b + 1u; }
-    if (h >= a.y) { b = b + 1u; }
-    if (h >= a.z) { b = b + 1u; }
-    if (h >= a.w) { b = b + 1u; }
-    if (h >= c.x) { b = b + 1u; }
-    if (h >= c.y) { b = b + 1u; }
-    if (h >= c.z) { b = b + 1u; }
-    return min(b, 7u);
-}
+    if (h_norm >= a.x) { b = b + 1u; }
+    if (h_norm >= a.y) { b = b + 1u; }
+    if (h_norm >= a.z) { b = b + 1u; }
+    if (h_norm >= a.w) { b = b + 1u; }
+    if (h_norm >= c.x) { b = b + 1u; }
+    if (h_norm >= c.y) { b = b + 1u; }
+    if (h_norm >= c.z) { b = b + 1u; }
+    b = min(b, 7u);
 
-/// 第 `band` 阶的色带色（线性空间，已是 uniform 口径）。
-fn elev_ramp_color(band: u32) -> vec3<f32> {
-    return p.elev_ramp[min(band, 7u)].rgb;
+    var t = 0.0;
+    if (b < 7u) {
+        let i = i32(b);
+        let lo = elev_anchor(a, c, i);
+        let hi = elev_anchor(a, c, i + 1);
+        let denom = hi - lo;
+        if (denom > 0.0) {
+            t = clamp((h_norm - lo) / denom, 0.0, 1.0);
+        }
+    }
+    // uniform 数组运行期下标沿用旧 `elev_ramp_color` 的写法（uniform 存储
+    // 允许动态索引；b = 7 时两侧同取 ramp[7]、t = 0，mix 原样退化）。
+    let lo_c = p.elev_ramp[b].rgb;
+    let hi_c = p.elev_ramp[min(b + 1u, 7u)].rgb;
+    return mix(lo_c, hi_c, t);
 }
 
 /// CellMap 分支：群系固定色块的 P1 占位色板。
