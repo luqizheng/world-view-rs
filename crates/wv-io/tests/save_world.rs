@@ -1321,3 +1321,97 @@ fn legacy_yaml_without_outline_polygon_loads_with_none() {
         "旧 YAML 加载后 outline_polygon 应为 None（Option 缺省兼容）"
     );
 }
+
+// ====== 地图树垃圾桶（2026-10-27 spec）：trashed 持久化 + 目录删除传播 ======
+
+/// 世界图 + 城市子图（含 terrain）的落盘底座。
+#[allow(dead_code)]
+fn world_with_city(dir: &std::path::Path) -> IoResult<(Project, World)> {
+    let mut proj = build_min_project_with_root_map(dir, &[])?;
+    let mut world = proj.load_world().expect("初始加载");
+    let city = MapNode {
+        id: Id::new_unchecked("map_city_a"),
+        name: "青州城".into(),
+        level: MapLevel::City,
+        parent: Some(Id::new_unchecked("map_main")),
+        ..MapNode::default()
+    };
+    world.maps[0].children.push(city.id.clone());
+    world.set_terrain(
+        Id::new_unchecked("map_city_a"),
+        TerrainData {
+            width: 2,
+            height: 2,
+            cells: vec![TerrainCellData::default(); 4],
+        },
+    );
+    world.maps.push(city);
+    proj.save_world(&world, &[]).expect("全量落盘");
+    Ok((proj, world))
+}
+
+#[test]
+fn trashed_map_survives_save_reload_as_trashed() {
+    let tmp = TempDir::new("trash_round_trip");
+    let dir = tmp.path();
+    let (mut proj, mut world) = world_with_city(dir).expect("底座");
+    world.maps[1].trashed = true;
+    world.maps[1].trashed_at = Some("2026-10-27 15:00".into());
+    proj.save_world(&world, &["maps".into()]).expect("保存");
+
+    let world2 = Project::open(dir)
+        .expect("重开")
+        .load_world()
+        .expect("重载");
+    assert_eq!(
+        world2.maps.len(),
+        2,
+        "软删条目仍占目录，got {}",
+        world2.maps.len()
+    );
+    let city = world2
+        .maps
+        .iter()
+        .find(|m| m.id.as_str() == "map_city_a")
+        .expect("城市在");
+    assert!(city.trashed, "trashed 必须跨保存/重开存活");
+    assert_eq!(city.trashed_at.as_deref(), Some("2026-10-27 15:00"));
+    // 目录也还在（软删不动目录）。
+    assert!(dir.join("maps/map_city_a/index.yaml").is_file());
+}
+
+#[test]
+fn purged_map_directory_removed_on_save() {
+    let tmp = TempDir::new("purge_propagation");
+    let dir = tmp.path();
+    let (mut proj, mut world) = world_with_city(dir).expect("底座");
+    // 模拟 trash → purge 之后的内存态：节点移除 + 父 children 摘除。
+    world.maps[0].children.clear();
+    world.maps.remove(1);
+    world.terrains.clear();
+    proj.save_world(&world, &["maps".into()]).expect("保存");
+    assert!(
+        !dir.join("maps/map_city_a").exists(),
+        "purge 后保存应物理删除整个图目录"
+    );
+    assert!(
+        dir.join("maps/map_main/index.yaml").is_file(),
+        "根图目录保留"
+    );
+}
+
+#[test]
+fn save_clears_stale_directories_not_in_world() {
+    let tmp = TempDir::new("stale_dir_sweep");
+    let dir = tmp.path();
+    let (mut proj, world) = world_with_city(dir).expect("底座");
+    // 手工塞一个内存里不存在的幽灵目录。
+    let ghost = dir.join("maps/ghost");
+    std::fs::create_dir_all(&ghost).expect("造幽灵");
+    std::fs::write(ghost.join("index.yaml"), "id: ghost\n").expect("写");
+    proj.save_world(&world, &["maps".into()]).expect("保存");
+    assert!(
+        !ghost.exists(),
+        "不在内存 keep-set 的图目录应被清除（v0.1 简化正式退役）"
+    );
+}

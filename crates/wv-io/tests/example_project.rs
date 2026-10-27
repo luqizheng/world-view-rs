@@ -106,6 +106,8 @@ fn map_node_yaml_round_trips() {
         orientation: 0.0,
         base: None,
         outline_polygon: None,
+        trashed: false,
+        trashed_at: None,
     };
 
     let text = serde_yaml::to_string(&node).unwrap();
@@ -159,6 +161,8 @@ fn map_node_orientation_round_trips_and_defaults_to_zero() {
         orientation: 45.0,
         base: None,
         outline_polygon: None,
+        trashed: false,
+        trashed_at: None,
     };
     let yaml2 = serde_yaml::to_string(&with_orient).unwrap();
     assert!(

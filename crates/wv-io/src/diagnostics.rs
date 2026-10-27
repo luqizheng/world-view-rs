@@ -1142,6 +1142,8 @@ mod tests {
                 orientation: 0.0,
                 base: None,
                 outline_polygon: None,
+                trashed: false,
+                trashed_at: None,
             });
             w.set_terrain(
                 map.clone(),
