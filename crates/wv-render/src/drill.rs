@@ -335,6 +335,13 @@ pub fn resolve_markers(
     // `children` 保持 `Vec<Id>` 不动，改动面可控。
     for icon in &current.icons {
         let target = icon.drill_into.clone();
+        // 垃圾桶派生显隐（spec §10 追记 1）：目标子图被软删 → 图标整体不画
+        // 也不可点（marker_hit 走同一份 markers）。恢复即自动回来。
+        if let Some(t) = &target {
+            if !world.map_alive(t) {
+                continue;
+            }
+        }
         let target_level = level_of(target.as_ref());
         // 尺寸优先级：显式 `size` > 目标层级缺省 > 注释标记缺省。
         let half = match icon.size {
@@ -365,7 +372,7 @@ pub fn resolve_markers(
     // 强制声明，收敛点就是下面这个循环（连同 `marker_local` 一起删除），
     // 改动面可控。
     for child in drill.child_nodes(world) {
-        if claimed.iter().any(|c| c == &child.id) {
+        if claimed.iter().any(|c| c == &child.id) || !world.map_alive(&child.id) {
             continue;
         }
         out.push(Marker {
@@ -2143,6 +2150,8 @@ mod tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            trashed: false,
+            trashed_at: None,
         }
     }
 
@@ -2755,6 +2764,70 @@ mod tests {
             (view.scale - inner).abs() <= inner * 1e-3,
             "缩放必须停在内界，got {} (inner = {inner})",
             view.scale
+        );
+    }
+
+    // ====== 垃圾桶派生显隐（2026-10-27 spec §10 追记 1）======================
+
+    #[test]
+    fn trashed_child_marker_is_hidden_and_unclickable() {
+        let spec = icon("icon_city_a", Some([0.5, 0.5]), Some("city_a"));
+        let mut world = World {
+            maps: vec![
+                node_with_icons(
+                    "world_main",
+                    MapLevel::World,
+                    None,
+                    &["city_a", "city_b"],
+                    &[spec],
+                ),
+                node("city_a", MapLevel::City, Some("world_main"), &[]),
+                node("city_b", MapLevel::City, Some("world_main"), &[]),
+            ],
+            ..Default::default()
+        };
+        // city_a 入垃圾桶：显式图标隐藏；city_b 存活 → 哈希回退入口保留。
+        world.maps[1].trashed = true;
+        let mut drill = DrillState::default();
+        drill.ensure_root(&world);
+        let grid = GridConfig::default();
+        let markers = resolve_markers(&world, &drill, &grid, 1.0);
+        assert!(
+            !markers
+                .iter()
+                .any(|m| m.target.as_ref().is_some_and(|t| t.as_str() == "city_a")),
+            "被删子图的钻取图标必须隐藏"
+        );
+        assert!(
+            markers
+                .iter()
+                .any(|m| m.target.as_ref().is_some_and(|t| t.as_str() == "city_b")),
+            "存活子图的回退入口保留"
+        );
+    }
+
+    #[test]
+    fn marker_hit_refuses_trashed_city() {
+        let spec = icon("icon_city_a", Some([0.5, 0.5]), Some("city_a"));
+        let mut world = World {
+            maps: vec![
+                node_with_icons("world_main", MapLevel::World, None, &["city_a"], &[spec]),
+                node("city_a", MapLevel::City, Some("world_main"), &[]),
+            ],
+            ..Default::default()
+        };
+        let mut drill = DrillState::default();
+        drill.ensure_root(&world);
+        let grid = GridConfig::default();
+        let center = resolve_markers(&world, &drill, &grid, 1.0)[0].center;
+        assert!(
+            marker_hit(&world, &drill, &grid, center, 1.0).is_some(),
+            "未删时图标应可命中"
+        );
+        world.maps[1].trashed = true;
+        assert!(
+            marker_hit(&world, &drill, &grid, center, 1.0).is_none(),
+            "已删子图不可双击钻入"
         );
     }
 }
