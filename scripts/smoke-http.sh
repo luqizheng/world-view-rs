@@ -30,7 +30,7 @@ if ! cargo build -q -p wv-app --features http --bin wv; then
     exit 1
 fi
 
-BIN="./target/debug/wv.exe"
+BIN="./.target/debug/wv.exe"
 if [ ! -f "$BIN" ]; then
     echo "[smoke] FAIL: 二进制未找到 $BIN"
     exit 1

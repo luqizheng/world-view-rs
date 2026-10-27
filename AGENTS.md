@@ -434,6 +434,8 @@ assert!((j.total_days - 224.0).abs() < 1e-3, "got {}", j.total_days);
 - **先分支，再 worktree，后写码。**（2026-10-20 用户裁定）任何涉及代码改动的任务，动工顺序固定为：① 创建分支 `git branch <feat|wip>/<主题>`；② 在该分支上落 worktree：`git worktree add .worktrees/<分支名> <分支名>`——**worktree 目录名 = 分支名**，统一收在仓库根 `.worktrees/` 下（仓库既有约定，已入 `.gitignore`）；③ 之后才在 worktree 内编写代码，主 checkout 不直接改码。worktree 须使用**独立构建目录**（勿跨 worktree 共享 `CARGO_TARGET_DIR`），避免并行会话互相污染出 stale rlib（2026-10-18 实测教训）。
 
   > **2026-10-25 追记（用户裁定，修正上条末句）**：「worktree 须使用独立构建目录」修正为——**构建目录以全局共享 `CARGO_TARGET_DIR=d:\compil_world_view_cache\target` 为准**，worktree 内构建**不再**覆盖该变量，配合 `.cargo/config.toml` 的 sccache rustc 包装器共享编译产物。理由：每个 worktree 独立 target 意味着每次全量重编，成本远超 stale rlib 风险；sccache 已提供跨目录的编译缓存层。若并行会话 stale rlib 问题复现，再回退本条。
+
+  > **2026-10-27 追记（用户裁定，执行上条预留的回退）**：「全局共享 `CARGO_TARGET_DIR`」**退役**——当日并行会话污染复发（他分支带新字段的 `wv-core` 产物串进共享目录，`E0063` 假错两度阻塞构建，且脚本缺省路径与实际产物位置脱节）。新规：**构建产物隔离到各 checkout 自身目录内 `.target`**——落点在 `.cargo/config.toml` 的 `[build] target-dir = ".target"`（相对路径逐 checkout 解析，主 checkout 与 worktree 天然各归各）；**跨目录编译缓存交 sccache**（rustc-wrapper 已在位：registry 依赖近乎全命中，工作区 crate 因源路径不同各 checkout 首编一次后入缓存）。`.gitignore` 的 `/.target/` 即为此设；`scripts/smoke-gui.sh` / `smoke-http.sh` 缺省路径同步改 `.target`。 **临时目录同步收口（2026-10-28）**：`scripts/cargo-test.sh` 的 `TEMP`/`TMP` 从固定 `.target/testtmp` 改为**每次运行 mktemp 随机子目录、退出即清**——多 worktree 并行跑测试不再互踩（用户裁定）；smoke-gui/http 的日志本就是 `mktemp -t` 随机名，维持。
 - **不越权提交。** 涉及文档落盘、架构决议的动作，先列出方案，等明确确认后再执行。
 - **结论先行。** 回复先给结论，再给依据；用表格承载对比，按严重度排序。
 - **多方案并列。** 存在多种合理路径时，给出 A/B 选项与各自代价，而非单方面推荐。

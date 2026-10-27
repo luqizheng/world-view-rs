@@ -14,7 +14,10 @@
 # `cargo test` 全绿**。故这是环境约束，不是代码缺陷，**不应**用 `#[ignore]`
 # 掩盖（那会永久损失集成覆盖）。
 #
-# 本脚本把 `TEMP` / `TMP` 指向工作区内的 `.target/testtmp`，一次性解决。
+# 本脚本把 `TEMP` / `TMP` 指向工作区 `.target/testtmp` 下的**每次运行独享的
+# 随机子目录**（mktemp），跑完即清——2026-10-28 用户裁定：多个 worktree
+# 并行跑任务时固定同名 temp 会互相踩（与共享 target 同类撞车），随机子目录
+# 让并行运行天然互不相干。
 #
 # ## 用法
 #   bash scripts/cargo-test.sh                  # 等价 cargo test --workspace
@@ -26,8 +29,12 @@
 set -uo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-tmp_dir="$repo_root/.target/testtmp"
-mkdir -p "$tmp_dir"
+tmp_root="$repo_root/.target/testtmp"
+mkdir -p "$tmp_root"
+# 每次运行一个独享随机子目录；mktemp -d 即权限安全（0700）。
+tmp_dir="$(mktemp -d "$tmp_root/run-XXXXXXXX")"
+# 跑完清场（exit 透传 cargo 退出码，清理只兜底）。
+trap 'rm -rf "$tmp_dir"' EXIT
 
 # Windows API（GetTempPathW）只认 Win32 路径，MSYS 路径需转换。
 if command -v cygpath >/dev/null 2>&1; then
