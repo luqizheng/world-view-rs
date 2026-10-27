@@ -868,35 +868,38 @@ fn req_patch_works_for_rects_at_every_corner() {
     }
 }
 
-/// REQ-5（AC4 · 负向）：`layers.terrain.visible = false` ∧ `field_render = true`
-/// ⇒ quad **0**，且 chunk 实体也 **0**（两边都不画）。
+/// REQ-5（AC4 · **ADR-0074 T5 修订**）：`layers.terrain.visible = false`
+/// ∧ `field_render = true` ⇒ quad **1**（`ViewBranch::Flat` 素底政治页），
+/// chunk 实体 **0**（独占性不变）。
 ///
-/// 意义：开关是「用哪条管线」，图层可见性是「画不画地形」——两者正交。
-/// 若 quad 不看图层开关，作者关掉地形层后整块底图仍留在屏幕上。
+/// 意义：开关是「用哪条管线」，图层可见性是「画哪种底图」——隐藏地形层
+/// 不再是「不画」，而是**换素底**（平面海陆 + 海岸线），势力填色要压在它
+/// 上面（spec D2：政治图集页）。旧语义「隐藏 = 全退场、地图空白」由
+/// ADR-0074 显式推翻。
 #[test]
-fn neg_terrain_layer_hidden_yields_zero_quads() {
+fn neg_terrain_layer_hidden_yields_flat_branch_quad() {
     let mut app = field_app(false, FIT_SCALE, true);
     app.update();
     assert_eq!(
         iface::quads(&mut app),
-        0,
-        "地形图层隐藏 + 场开关开着 ⇒ quad 必须 0（实得 {}）",
+        1,
+        "地形图层隐藏 + 场开关开着 ⇒ 素底 quad 应为 1（实得 {}）",
         iface::quads(&mut app)
     );
     assert_eq!(
         chunk_entities(&mut app),
         0,
-        "同时 chunk 实体也必须 0（不是二选一）"
+        "chunk 实体必须 0（独占性：素底走场 quad）"
     );
-    assert_eq!(mesh_assets(&app), 0, "两条路径都退场 ⇒ 不得留 mesh 资产");
 
-    // 反向：把图层打开，quad 必须回来 —— 否则上面那条「恒 0」也能过。
+    // 反向：把图层打开，quad 仍是 1 但分支换回 Themed——否则上面那条
+    // 「恒 1」也能过。分支读材质 uniform。
     app.world_mut().resource_mut::<LayerFrame>().terrain.visible = true;
     app.update();
     assert_eq!(
         iface::quads(&mut app),
         1,
-        "图层打开后 quad 必须恢复为 1（否则负向断言是恒真的假绿）"
+        "图层打开后 quad 必须仍为 1（分支切换不增删 quad）"
     );
 }
 

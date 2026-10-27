@@ -1593,6 +1593,23 @@ fn teardown_field(
 
 /// 主 App 的场渲染同步（ADR-0053 D1，Phase 1 接线 2026-10-24）。
 ///
+/// 取色分支的唯一选择点（ADR-0074 T5）。
+///
+/// - Topographic（CellMap）恒走 [`ViewBranch::BiomeRaw`]——方格数据视图，
+///   自然图开关不介入（ADR-0051 §5）；
+/// - 其余模式：地形层可见 → [`ViewBranch::Themed`]（主题色板）；
+///   **不可见 → [`ViewBranch::Flat`]（政治图集页素底）**——不退场，
+///   地图全空则势力填色无处可压。
+pub fn field_branch_of(mode: crate::state::ViewMode, terrain_visible: bool) -> ViewBranch {
+    if mode == crate::state::ViewMode::Topographic {
+        ViewBranch::BiomeRaw
+    } else if terrain_visible {
+        ViewBranch::Themed
+    } else {
+        ViewBranch::Flat
+    }
+}
+
 /// ## 职责
 /// 把「当前活动地形 + 视图状态」翻译成一张场 quad：数据变了重打纹理，视图变了
 /// 只改 uniform。**不自己做任何画法决策**——颜色公式全在 WGSL 与 `FieldParams`。
@@ -1644,7 +1661,11 @@ pub fn sync_terrain_field(
     // 故这里读到的就是「这一帧结束时还活着几块」。
     stats.field_render_on_chunk_entities = chunk_entities.len();
 
-    if !(view.field_render && layers.terrain.visible) {
+    // 素底政治页（ADR-0074 T5）：地形层**隐藏**不退场——Flat 分支的平面
+    // 海陆底就是这一层的替身，势力填色要压在它上面。退场只听
+    // `field_render` 回退开关（真关场渲染 = chunk 路径接管，chunk 系统
+    // 会在隐藏时 despawn——政治页随之真空白，与旧行为一致）。
+    if !view.field_render {
         teardown_field(&mut commands, &mut field, &materials, &mut stats);
         return;
     }
@@ -1655,12 +1676,8 @@ pub fn sync_terrain_field(
         return;
     };
 
-    // ── 分支：CellMap 看原始群系色（ADR-0051 §5），其余看主题色板 ──
-    let branch = if view.mode == crate::state::ViewMode::Topographic {
-        ViewBranch::BiomeRaw
-    } else {
-        ViewBranch::Themed
-    };
+    // ── 分支：CellMap 看原始群系色 / 其余按地形层可见否选主题或素底 ──
+    let branch = field_branch_of(view.mode, layers.terrain.visible);
     let map = Some(source.id.clone());
     let palette_id: &'static str = view.active_theme.id;
 
@@ -1882,10 +1899,7 @@ pub fn sync_terrain_field(
             // shape: x = px_per_cell / y = 分支 / z = z_exag / w = grad_step（后两者
             // 由 `default_params` 填锁值 T15/T14，缩放不动它们）。
             material.params.shape[0] = px_per_cell;
-            material.params.shape[1] = match branch {
-                ViewBranch::BiomeRaw => 0.0,
-                ViewBranch::Themed => 1.0,
-            };
+            material.params.shape[1] = branch.code();
             // T19 域扭曲幅度（P1 预留槽 `pad0.x`）：随缩放重算。
             material.params.pad0[0] = warp_amp(px_per_cell);
             // 主题色板（T35）：P1 用 `TopographicPalette` 四色的默认转录——
@@ -3010,6 +3024,50 @@ mod bridge_tests {
     mod tests {
         use super::*;
         use bevy::render::mesh::MeshVertexAttribute;
+
+        // ── 政治图集页素底分支选择（ADR-0074 T5）──────────────────────
+        //
+        // 「自然图关」= 素底政治页：不退场（地图全空则势力填色无处可压），
+        // 改走 `ViewBranch::Flat` 分支——平面海陆两色 + 海岸线。
+        //
+        // 判据顺序：CellMap（Topographic）恒走 BiomeRaw（那是方格数据视图，
+        // 自然图开关不介入）；其余模式按「地形层可见否」选 Themed / Flat。
+
+        #[test]
+        fn branch_is_flat_when_natural_map_hidden_outside_topographic() {
+            assert_eq!(
+                field_branch_of(crate::state::ViewMode::VectorFlat, false),
+                ViewBranch::Flat,
+                "自然图关 → 素底政治页分支"
+            );
+            assert_eq!(
+                field_branch_of(crate::state::ViewMode::GoogleMap, false),
+                ViewBranch::Flat,
+                "任何非 Topographic 模式都走素底"
+            );
+        }
+
+        #[test]
+        fn branch_is_themed_when_natural_map_visible() {
+            assert_eq!(
+                field_branch_of(crate::state::ViewMode::VectorFlat, true),
+                ViewBranch::Themed,
+                "自然图开 → 主题色板"
+            );
+        }
+
+        #[test]
+        fn topographic_mode_always_uses_biome_raw() {
+            // CellMap 是方格数据视图——自然图开关不介入（ADR-0051 §5）。
+            assert_eq!(
+                field_branch_of(crate::state::ViewMode::Topographic, true),
+                ViewBranch::BiomeRaw
+            );
+            assert_eq!(
+                field_branch_of(crate::state::ViewMode::Topographic, false),
+                ViewBranch::BiomeRaw
+            );
+        }
 
         fn view(grid_lines: bool) -> ViewState {
             ViewState {

@@ -166,6 +166,29 @@ pub enum ViewBranch {
     BiomeRaw,
     /// Browse / Edit：主题色板。
     Themed,
+    /// 政治图集页素底（ADR-0074 T5）：「自然图关」时的呈现——
+    /// **平面海陆两色 + 海岸线**，不画地形纹理 / 群系填色 / 晕渲。
+    ///
+    /// 势力填色要压在这层素底上，故它必须**平**：山体明暗会与势力色打架。
+    /// 编码 `shape.y = 2.0`（WGSL 侧按阈值比较，见 `code()`）。
+    Flat,
+}
+
+/// 政治页素底分支的 `shape.y` 编码值。
+pub const FLAT_BRANCH_CODE: f32 = 2.0;
+
+impl ViewBranch {
+    /// 该分支在 uniform `shape.y` 里的编码值。
+    ///
+    /// 0 = BiomeRaw / 1 = Themed / 2 = Flat。**WGSL 侧按阈值比较**，
+    /// 改值必须同步 `terrain_field.wgsl`。
+    pub fn code(self) -> f32 {
+        match self {
+            ViewBranch::BiomeRaw => 0.0,
+            ViewBranch::Themed => 1.0,
+            ViewBranch::Flat => FLAT_BRANCH_CODE,
+        }
+    }
 }
 
 /// P1 的主题侧输入（数值来自现行 CPU 路径，已在 wv-theme 定过值）。
@@ -560,15 +583,7 @@ pub fn default_params(
         // 全部 `Vec4`——`[f32; 4]` 会被 encase 当 `array<f32, 4>`，
         // 运行期 panic「array stride must be a multiple of 16」。
         grid: Vec4::new(grid[0], grid[1], 0.0, 0.0),
-        shape: Vec4::new(
-            px_per_cell,
-            match branch {
-                ViewBranch::BiomeRaw => 0.0,
-                ViewBranch::Themed => 1.0,
-            },
-            Z_EXAG,
-            GRAD_STEP,
-        ),
+        shape: Vec4::new(px_per_cell, branch.code(), Z_EXAG, GRAD_STEP),
         // T19 域扭曲幅度写进 pad0.x（P1 预留的槽位，P2 接线不改绑定布局）。
         // pad0.z = 群系填色强度（ADR-0072 T3）：中性默认 0.5，主 App 由
         // 桥接按 `ThemePack.biome_tint` 覆写。
@@ -576,7 +591,22 @@ pub fn default_params(
         light_dir: Vec4::new(LIGHT_DIR[0], LIGHT_DIR[1], LIGHT_DIR[2], 0.0),
         pad1: Vec4::ZERO,
         shore_edges: Vec4::new(SHORE_EDGE, SHALLOW_EDGE, DEEP_EDGE, 0.0), // w = wash_amt（P2）
-        relief: Vec4::new(RELIEF_LO, RELIEF_HI, 0.0, 0.0),                // z = lod_blend（P2）
+        // 素底分支（ADR-0074 T5）**不画晕渲**：政治页是平色面，山体明暗
+        // 会与势力填色打架。relief 钳制上下限都置 1.0 = 无明暗。
+        relief: Vec4::new(
+            if branch == ViewBranch::Flat {
+                1.0
+            } else {
+                RELIEF_LO
+            },
+            if branch == ViewBranch::Flat {
+                1.0
+            } else {
+                RELIEF_HI
+            },
+            0.0,
+            0.0,
+        ), // z = lod_blend（P2）
         theme: [
             rgba4(pal.water),
             rgba4(pal.land_low),
@@ -722,5 +752,51 @@ mod tests {
         for v in p.elev_ramp {
             assert!(v.is_finite(), "分层设色色带出现非有限值: {v:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod political_page_tests {
+    //! 政治图集页素底分支（ADR-0074 T5）。
+    //!
+    //! 「自然图关」= 素底上只看势力填色的政治地图页（spec D2）。素底是 field
+    //! 材质的**第三个取色分支** `Flat`：不画地形纹理 / 不画群系填色 / 不画
+    //! 晕渲，只留**平面海陆两色 + 海岸线**。
+
+    use super::*;
+
+    /// `shape.y` 编码：0 = BiomeRaw / 1 = Themed / 2 = Flat。
+    ///
+    /// 编码值写死断言——uniform 布局的对外契约（WGSL 侧按阈值比较），
+    /// 改值即改 WGSL 分支判据，必须同步。
+    #[test]
+    fn view_branch_codes_are_stable() {
+        assert_eq!(ViewBranch::BiomeRaw.code(), 0.0, "BiomeRaw 编码");
+        assert_eq!(ViewBranch::Themed.code(), 1.0, "Themed 编码");
+        assert_eq!(ViewBranch::Flat.code(), 2.0, "Flat（政治页素底）编码");
+    }
+
+    /// `default_params` 把分支编码写进 `shape.y`——uniform 装配走这条路径。
+    #[test]
+    fn default_params_encodes_flat_branch_in_shape_y() {
+        let p = default_params([512.0, 512.0], 6.0, ViewBranch::Flat, Default::default());
+        assert!(
+            (p.shape[1] - 2.0).abs() < 1e-6,
+            "Flat 分支的 shape.y 应为 2.0，got {}",
+            p.shape[1]
+        );
+    }
+
+    /// 素底分支**不画晕渲**（`relief` 收敛到 1.0）——政治页是平色面，
+    /// 山体明暗会与势力填色打架。`relief.x/y` 是钳制上下限，两值都置 1.0
+    /// 即「无明暗」。
+    #[test]
+    fn flat_branch_disables_relief_shading() {
+        let p = default_params([512.0, 512.0], 6.0, ViewBranch::Flat, Default::default());
+        assert!(
+            (p.relief[0] - 1.0).abs() < 1e-6 && (p.relief[1] - 1.0).abs() < 1e-6,
+            "素底分支的 relief 应为 1.0（无晕渲），got {:?}",
+            p.relief
+        );
     }
 }

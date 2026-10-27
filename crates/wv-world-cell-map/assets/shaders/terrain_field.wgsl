@@ -242,7 +242,17 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let land_t = smoothstep(-half_t, half_t, sd);
 
     var base: vec3<f32>;
-    if (p.shape.y < 0.5) {
+    if (p.shape.y > 1.5) {
+        // ── 政治图集页素底（ADR-0074 T5，`shape.y = 2.0`）─────────────
+        // 「自然图关」= 素底上只看势力填色的政治地图页（spec D2）。
+        // 素底 = **平面海陆两色**：陆一色、海一色，不画地形纹理 / 群系填色 /
+        // 晕渲（relief 由 uniform 置 1.0）。海岸线墨线照旧（下方墨线段
+        // 与分支无关）——作者仍需海陆判读。
+        //
+        // 陆色取 theme[1]（land_low，最浅的一阶）：政治页是「纸上」观感，
+        // 势力填色压在上面要够跳。
+        base = select(p.theme[0].rgb, p.theme[1].rgb, is_land);
+    } else if (p.shape.y < 0.5) {
         // CellMap / Topographic：**方格数据视图**（追记十七）——own 色直出，
         // 无距离场混合、无轮廓圆角；方格边界 + 全程深浅色带是本分支契约。
         // 分层设色（ADR-0055）照旧：群系色仍是底，陆格按海拔 8 阶向固定
@@ -311,7 +321,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         1.0 - smoothstep(COAST_BAND_CAP_MIN_PX, COAST_BAND_CAP_MAX_PX, px_per_cell),
         p.shape.y >= 0.5,
     );
-    water_col = mix(p.theme[0].rgb, water_col, band_gate);
+    // 素底分支（ADR-0074 T5）：海面**完全平色**——不叠深浅色带。
+    // 政治页要的是「纸上」观感，深度色带属于地形语汇。
+    if (p.shape.y > 1.5) {
+        water_col = p.theme[0].rgb;
+    } else {
+        water_col = mix(p.theme[0].rgb, water_col, band_gate);
+    }
     // 近岸白滩（t_shore 最高处向纸色偏一点，给水线一个视觉落点）
     // ——白滩缘同属色带装饰，随门控一起收。
     water_col = mix(water_col, p.paper.rgb, 0.18 * t_shore * (1.0 - t_shallow) * band_gate);
@@ -323,7 +339,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // 只调**明度**，不动色相——SPEC §1.6 禁令的边界：是水彩晕染，
     // 不是往画面上铺噪声纹理。
     // 水面**不叠**（T30）：海的呼吸感走 SeaRecipe 的连续量，叠两层会脏。
-    if (land_t > 0.5 && p.shore_edges.w > 0.0) {
+    if (land_t > 0.5 && p.shore_edges.w > 0.0 && p.shape.y < 1.5) {
         // 频率锚在格空间（随内容走，不随屏幕走——否则缩放时颗粒会「沸腾」）。
         let wash_n = fbm3(g, 733.0, WASH_FREQ);
         // 特殊面减免：沙漠(5)/雪原(9)/盐碱(19) 是大地色系，呼吸位小一些。

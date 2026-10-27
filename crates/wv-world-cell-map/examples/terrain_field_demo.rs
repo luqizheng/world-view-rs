@@ -865,10 +865,7 @@ fn sync_material(
     };
     // shape: x = px_per_cell, y = branch, z = z_exag, w = grad_step
     mat.params.shape[0] = state.px_per_cell;
-    mat.params.shape[1] = match state.branch {
-        ViewBranch::BiomeRaw => 0.0,
-        ViewBranch::Themed => 1.0,
-    };
+    mat.params.shape[1] = state.branch.code();
     // T19 域扭曲幅度：随缩放重算（远观 0.45 格手绘起伏 / 近观 0.05 格保点选精度）。
     // 写进 `pad0.x`——P1 就预留好的槽位，接线不改绑定布局。
     mat.params.pad0[0] = wv_world_cell_map::terrain_view::field::warp_amp(state.px_per_cell);
