@@ -566,6 +566,8 @@ fn point_select_on_click_writes_hit_into_unified_selection() {
     world.insert_resource(crate::app_screen::AppScreen::default());
     // 系统签名含 LayerFrame gate（ADR-0074 图钉命中要读 place 层可见性）。
     world.insert_resource(wv_render::layer_frame::LayerFrame::default());
+    // 系统签名含 FloodSelectState（追记四：CellMap 默认点击=泛洪判据）。
+    world.insert_resource(crate::state::FloodSelectState::default());
     world.init_resource::<super::region::LassoLiveLink>();
 
     world.insert_resource(PointSelectState { tool_active: true });
@@ -644,6 +646,8 @@ fn point_select_click_shift_unions_and_alt_subtracts() {
     world.insert_resource(crate::app_screen::AppScreen::default());
     // 系统签名含 LayerFrame gate（ADR-0074 图钉命中要读 place 层可见性）。
     world.insert_resource(wv_render::layer_frame::LayerFrame::default());
+    // 系统签名含 FloodSelectState（追记四：CellMap 默认点击=泛洪判据）。
+    world.insert_resource(crate::state::FloodSelectState::default());
     world.init_resource::<super::region::LassoLiveLink>();
     world.insert_resource(PointSelectState { tool_active: true });
     // 既有选区含命中格 (3,4) 与另一格 (0,0)。
@@ -871,6 +875,8 @@ fn point_select_on_click_noop_when_tool_inactive() {
     world.insert_resource(crate::app_screen::AppScreen::default());
     // 系统签名含 LayerFrame gate（ADR-0074 图钉命中要读 place 层可见性）。
     world.insert_resource(wv_render::layer_frame::LayerFrame::default());
+    // 系统签名含 FloodSelectState（追记四：CellMap 默认点击=泛洪判据）。
+    world.insert_resource(crate::state::FloodSelectState::default());
     world.init_resource::<super::region::LassoLiveLink>();
     world.insert_resource(ButtonInput::<KeyCode>::default());
 
@@ -1232,6 +1238,8 @@ fn cellmap_world(cursor: Vec2, nature_overlay: bool) -> bevy::prelude::World {
     world.insert_resource(wv_render::camera::PointerOverUi::default());
     world.insert_resource(crate::app_screen::AppScreen::default());
     world.insert_resource(wv_render::layer_frame::LayerFrame::default());
+    // 泛洪判据（ADR-0074 追记四）：点选器默认点击=泛洪，判据共用此资源。
+    world.insert_resource(crate::state::FloodSelectState::default());
     world.init_resource::<super::region::LassoLiveLink>();
     world
 }
@@ -1312,9 +1320,10 @@ fn point_select_in_cellmap_picks_nature_region_when_overlay_on() {
     );
 }
 
-/// 群系 overlay 关 → 同一点回落到格裁定（裁定第二段整体让位）。
+/// 群系 overlay 关 → 默认点击 = **泛洪**（ADR-0074 追记四：与泛洪选择
+/// 同逻辑）。夹具 8×8 全同群系 → 点 (35,45) 淹出全图 64 格。
 #[test]
-fn point_select_falls_back_to_cell_when_overlay_off() {
+fn point_select_plain_click_floods_when_overlay_off() {
     let mut world = cellmap_world(Vec2::new(35.0, 45.0), false);
     let map = wv_core::Id::new_unchecked("world_main");
     {
@@ -1335,15 +1344,49 @@ fn point_select_falls_back_to_cell_when_overlay_off() {
     schedule.run(&mut world);
 
     let sel = world.resource::<crate::state::CellSelection>();
-    assert!(sel.contains(3, 4), "overlay 关 → 点 (35,45) 落格 (3,4)");
+    assert_eq!(
+        sel.len(),
+        64,
+        "overlay 关 → 默认点击泛洪全图同群系连通区，实际 {}",
+        sel.len()
+    );
+    assert!(sel.contains(3, 4), "落点格 (3,4) 在泛洪区内");
     let projection = world.resource::<crate::state::WorldProjection>();
-    assert!(projection.selection.is_none(), "格裁定不带出实体选中");
+    assert!(projection.selection.is_none(), "泛洪不带出实体选中");
 }
 
-/// 单焦点另一面：选格清实体选中——否则 Cell 表单恒优先（`resolve_form`），
-/// 实体会变成看不见的悬挂选中。
+/// [ADR-0074 追记四] Alt+左键 = 直选单格：即便群系 overlay 关（默认点击
+/// 是泛洪），Alt 也强制「只要那一格」。
 #[test]
-fn point_select_clears_entity_selection_when_picking_cell() {
+fn alt_click_grabs_single_cell_when_overlay_off() {
+    let mut world = cellmap_world(Vec2::new(35.0, 45.0), false);
+    world.insert_resource(crate::state::PointSelectState { tool_active: true });
+    world.insert_resource(crate::state::CellSelection::default());
+    let mut keys = ButtonInput::<KeyCode>::default();
+    keys.press(KeyCode::AltLeft);
+    world.insert_resource(keys);
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    buttons.press(MouseButton::Left);
+    world.insert_resource(buttons);
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_point_select_on_click);
+    schedule.run(&mut world);
+
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert!(
+        sel.contains(3, 4) && sel.len() == 1,
+        "Alt+左键 = 单格 (3,4)，实际 {}",
+        sel.len()
+    );
+    let projection = world.resource::<crate::state::WorldProjection>();
+    assert!(projection.selection.is_none(), "抓格不带实体选中");
+}
+
+/// 单焦点另一面：泛洪写格清实体选中——否则 Cell 表单恒优先
+/// （`resolve_form`），实体会变成看不见的悬挂选中。
+#[test]
+fn point_select_clears_entity_selection_when_flooding() {
     let mut world = cellmap_world(Vec2::new(35.0, 45.0), true);
     let map = wv_core::Id::new_unchecked("world_main");
     {
@@ -1374,10 +1417,10 @@ fn point_select_clears_entity_selection_when_picking_cell() {
     );
 }
 
-/// [ADR-0074 追记二] Ctrl+右键 = 直接选格：光标压在图钉上，抓的是钉底下
-/// 那格（替换语义、清实体选中）——逃生舱优先级压过图钉裁定。
+/// [ADR-0074 追记四] Alt+左键 = 直接选格（追记二的 Ctrl+右键由用户改口
+/// 为 Alt）：光标压在图钉上，抓的是钉底下那格——逃生舱优先级压过图钉。
 #[test]
-fn ctrl_right_click_grabs_the_cell_even_over_a_pin() {
+fn alt_click_grabs_the_cell_even_over_a_pin() {
     let mut world = cellmap_world(Vec2::new(35.0, 45.0), true);
     let map = wv_core::Id::new_unchecked("world_main");
     {
@@ -1390,10 +1433,10 @@ fn ctrl_right_click_grabs_the_cell_even_over_a_pin() {
     world.insert_resource(crate::state::PointSelectState { tool_active: true });
     world.insert_resource(crate::state::CellSelection::default());
     let mut keys = ButtonInput::<KeyCode>::default();
-    keys.press(KeyCode::ControlLeft);
+    keys.press(KeyCode::AltLeft);
     world.insert_resource(keys);
     let mut buttons = ButtonInput::<MouseButton>::default();
-    buttons.press(MouseButton::Right);
+    buttons.press(MouseButton::Left);
     world.insert_resource(buttons);
 
     let mut schedule = Schedule::default();
@@ -1411,9 +1454,9 @@ fn ctrl_right_click_grabs_the_cell_even_over_a_pin() {
     assert!(projection.selection.is_none(), "抓格 = 实体选中让位");
 }
 
-/// [ADR-0074 追记二] Ctrl+右键压在群系区上同样抓格（群系裁定让位）。
+/// [ADR-0074 追记四] Alt+左键压在群系区上同样抓格（群系裁定让位）。
 #[test]
-fn ctrl_right_click_grabs_the_cell_even_inside_a_nature_region() {
+fn alt_click_grabs_the_cell_even_inside_a_nature_region() {
     let mut world = cellmap_world(Vec2::new(35.0, 45.0), true);
     let map = wv_core::Id::new_unchecked("world_main");
     {
@@ -1425,10 +1468,10 @@ fn ctrl_right_click_grabs_the_cell_even_inside_a_nature_region() {
     world.insert_resource(crate::state::PointSelectState { tool_active: true });
     world.insert_resource(crate::state::CellSelection::default());
     let mut keys = ButtonInput::<KeyCode>::default();
-    keys.press(KeyCode::ControlRight);
+    keys.press(KeyCode::AltRight);
     world.insert_resource(keys);
     let mut buttons = ButtonInput::<MouseButton>::default();
-    buttons.press(MouseButton::Right);
+    buttons.press(MouseButton::Left);
     world.insert_resource(buttons);
 
     let mut schedule = Schedule::default();
@@ -1436,15 +1479,18 @@ fn ctrl_right_click_grabs_the_cell_even_inside_a_nature_region() {
     schedule.run(&mut world);
 
     let sel = world.resource::<crate::state::CellSelection>();
-    assert!(sel.contains(3, 4), "群系区内 Ctrl+右键抓格 (3,4)");
+    assert!(
+        sel.contains(3, 4) && sel.len() == 1,
+        "群系区内 Alt+左键抓单格 (3,4)"
+    );
     let projection = world.resource::<crate::state::WorldProjection>();
     assert!(projection.selection.is_none(), "抓格不得带出 Region 选中");
 }
 
-/// Ctrl+右键（不带 Ctrl / 点在图外）不产生任何选择动作——误触右键
-/// 不该清空既有选区。
+/// 右键已完全不绑定（追记四废除 Ctrl+右键）；Alt+左键点在图外
+/// 不动选区（显式指令不误清）。
 #[test]
-fn plain_right_click_and_ctrl_right_off_map_do_nothing() {
+fn right_click_and_alt_click_off_map_do_nothing() {
     let mut world = cellmap_world(Vec2::new(35.0, 45.0), true);
     let map = wv_core::Id::new_unchecked("world_main");
     world.insert_resource(crate::state::PointSelectState { tool_active: true });
@@ -1453,7 +1499,7 @@ fn plain_right_click_and_ctrl_right_off_map_do_nothing() {
     sel.replace([(0, 0)]);
     world.insert_resource(sel);
     world.insert_resource(ButtonInput::<KeyCode>::default());
-    // 裸右键（无 Ctrl）。
+    // 裸右键：不归本系统。
     let mut buttons = ButtonInput::<MouseButton>::default();
     buttons.press(MouseButton::Right);
     world.insert_resource(buttons);
@@ -1461,19 +1507,19 @@ fn plain_right_click_and_ctrl_right_off_map_do_nothing() {
     schedule.add_systems(commit_point_select_on_click);
     schedule.run(&mut world);
     let sel = world.resource::<crate::state::CellSelection>();
-    assert!(sel.contains(0, 0), "裸右键不动选区");
+    assert!(sel.contains(0, 0), "右键不动选区");
 
-    // Ctrl+右键但光标在图外（-50,-50）：不动选区。
+    // Alt+左键但光标在图外（-50,-50）：不动选区（不误清）。
     world.resource_mut::<crate::state::ViewState>().cursor_world = Some(Vec2::new(-50.0, -50.0));
     let mut keys = ButtonInput::<KeyCode>::default();
-    keys.press(KeyCode::ControlLeft);
+    keys.press(KeyCode::AltLeft);
     world.insert_resource(keys);
     let mut buttons = ButtonInput::<MouseButton>::default();
-    buttons.press(MouseButton::Right);
+    buttons.press(MouseButton::Left);
     world.insert_resource(buttons);
     let mut schedule = Schedule::default();
     schedule.add_systems(commit_point_select_on_click);
     schedule.run(&mut world);
     let sel = world.resource::<crate::state::CellSelection>();
-    assert!(sel.contains(0, 0), "Ctrl+右键点图外不动选区（不误清）");
+    assert!(sel.contains(0, 0), "Alt+左键点图外不动选区（不误清）");
 }

@@ -67,21 +67,21 @@ pub fn pick_nature_region(local: (f32, f32), world: &wv_core::World, map_id: &Id
 ///    [`CellSelection`]：**无修饰 = 替换、Shift = 并、Alt = 差**；
 /// 4. 点在地图外（无修饰）= 清空选区（「点空白 = 取消当前选」）。
 ///
-/// **CellMap 三段裁定**（[ADR-0074]，仅 `Topographic` 档生效）：格之上
-/// 先试实体命中——**图钉 > 群系区 > 格**。命中图钉或群系区 → 写
-/// `WorldProjection.selection`（Place / Region）并清空格选区。实体命中
-/// **不吃修饰键**：Shift/Alt 的并/差语义只对格有意义，压着修饰点图钉的
-/// 作者意图是「选那个钉」，不是「往选区里并一个钉底下的格」。
+/// **CellMap 裁定**（[ADR-0074] 追记四，仅 `Topographic` 档生效）：
+/// **Alt+左键 = 直选单格**（替换语义，优先级最高——「我就要那格」的
+/// 显式指令，压过图钉/群系区/泛洪一切裁定；点图外不动选区）＞
+/// **图钉**（选 Place）＞ **群系区**（`nature_overlay` 开时选 Region）＞
+/// **默认 = 泛洪**：点谁淹谁，同判据连通区进格选区（判据读泛洪工具的
+/// `FloodSelectState`——面板「泛洪判据」两工具共用；Shift = 并入）。
 /// 单焦点模型：实体选中与格选区互斥——`resolve_form` 里 Cell 表单
 /// 优先于实体选中（设计稿 §11 Q4），不清格选区 = 表单看不见切换。
+/// （追记二的 Ctrl+右键由用户改口为 Alt+左键，已废除；实体命中不吃
+/// 修饰键的口径由「Alt 分支在最前」替代。）
 ///
-/// **Ctrl + 右键 = 直接选格**（[ADR-0074] 追记二，用户裁定）：万能选择器
-/// 的逃生舱——替换式抓取光标那一格，**优先级压过图钉/群系区**（显式指令
-/// 高于命中裁定）；全模式可用（格选区本就不分模式）。
-///
-/// **浏览族不在此系统**（[ADR-0074] 追记一）：其余模式的图钉命中由
-/// `wv_render::drill::drill_pick` 在标签命中之后接管（单击选钉、双击
-/// 让位下钻），与本系统按模式互斥、无双重处理。
+/// **非 Topographic（浏览族）**：保留原格裁定（无修饰=替换 / Shift=并 /
+/// Alt=差 / 点图外清空）。浏览族的图钉命中在
+/// `wv_render::drill::drill_pick`（追记一）：单击选钉、双击让位下钻，
+/// 与本系统按模式互斥、无双重处理。
 ///
 /// 修饰键走 Bevy `ButtonInput<KeyCode>`（ShiftLeft/Right、AltLeft/Right）——
 /// **不读 egui 键位链**（2026-10-24 真机 panic 前科：egui 上下文在系统里
@@ -99,17 +99,17 @@ pub fn commit_point_select_on_click(
     drill: Res<DrillState>,
     mut projection: ResMut<WorldProjection>,
     layers: Res<LayerFrame>,
+    // 泛洪判据（追记四）：CellMap 默认点击=泛洪，判据与泛洪工具共用。
+    flood_select: Res<crate::state::FloodSelectState>,
     ui: Res<wv_render::camera::PointerOverUi>,
     point_select: Res<crate::state::PointSelectState>,
     mut sel: ResMut<crate::state::CellSelection>,
     screen: Res<crate::app_screen::AppScreen>,
     mut link: ResMut<super::region::LassoLiveLink>,
 ) {
-    // 入口：左键单击，或 Ctrl+右键（直选格，见下方分支）——其余点击不归本系统。
-    let left_clicked = buttons.just_pressed(MouseButton::Left);
-    let ctrl_right = buttons.just_pressed(MouseButton::Right)
-        && (keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight));
-    if !left_clicked && !ctrl_right {
+    // 入口：左键单击（含修饰）。右键不归本系统（追记二的 Ctrl+右键已被
+    // Alt+左键取代，见追记四）。
+    if !buttons.just_pressed(MouseButton::Left) {
         return;
     }
     // 加载期间不选格：选中的格来自旧世界，对不上新世界。
@@ -146,22 +146,23 @@ pub fn commit_point_select_on_click(
     // 新选择动作 → 断开套索活链接（ADR-0057 补记 5）。
     link.deactivate();
 
-    // ── **Ctrl + 右键 = 直接选格**（[ADR-0074] 追记二）────────────────
-    // 万能选择器的逃生舱：哪怕点在图钉/群系区上，也把那一格抓进选区
-    // （替换语义）。放在三段裁定**之前**——它是「我就要那格」的显式指令，
-    // 优先级压过一切实体命中。点在图外不动选区（误触右键不该清空）。
-    if ctrl_right {
-        if let Some(pick) = cell_pick::pick_at((cursor.x, cursor.y), &grid, terrain) {
-            sel.replace([(pick.gx, pick.gy)]);
-            projection.selection = None;
-        }
-        return;
-    }
-
-    // ── CellMap 三段裁定（[ADR-0074]）：图钉 > 群系区 > 格 ──────────
-    // 仅 Topographic 档：浏览态的实体选中由 `drill_pick` 标签命中承担，
-    // 这里重复做会跟它抢点击。
+    // ── CellMap 裁定（[ADR-0074] 追记四）：Alt 单格 > 图钉 > 群系区 > 泛洪 ──
+    // 仅 Topographic 档。默认点击 = **泛洪**（与泛洪选择同逻辑同判据——
+    // 用户裁定「点击是群系」）；Alt+左键 = 直选单格（追记二的 Ctrl+右键
+    // 由用户改口为 Alt，旧手势废除）。
     if view.mode == ViewMode::Topographic {
+        let alt = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
+
+        // Alt = 直选单格（替换语义）。显式指令优先级压过一切实体命中；
+        // 点在图外不动选区（误触不该清空）。
+        if alt {
+            if let Some(pick) = cell_pick::pick_at((cursor.x, cursor.y), &grid, terrain) {
+                sel.replace([(pick.gx, pick.gy)]);
+                projection.selection = None;
+            }
+            return;
+        }
+
         if let Some(id) = pick_place_pin(
             cursor,
             &projection.world,
@@ -186,8 +187,40 @@ pub fn commit_point_select_on_click(
                 return;
             }
         }
+
+        // 默认 = 泛洪：点谁淹谁（同群系/同地表连通区进格选区）。判据读
+        // 泛洪工具的 `FloodSelectState`——面板上的「泛洪判据」两工具共用。
+        let Some(pick) = cell_pick::pick_at((cursor.x, cursor.y), &grid, terrain) else {
+            return; // 点在图外不动选区
+        };
+        let grid_terrain = crate::edit::flood_select::to_terrain_grid(terrain);
+        let criterion = match flood_select.criterion {
+            wv_world_cell_map::state::FloodCriterion::Surface => {
+                wv_terrain::cellops::FloodCriterion::Surface
+            }
+            wv_world_cell_map::state::FloodCriterion::Biome => {
+                wv_terrain::cellops::FloodCriterion::Biome
+            }
+            wv_world_cell_map::state::FloodCriterion::HeightTolerance(tol) => {
+                wv_terrain::cellops::FloodCriterion::HeightTolerance(tol)
+            }
+        };
+        let cells = wv_terrain::cellops::flood_region(&grid_terrain, pick.gx, pick.gy, criterion);
+        if cells.is_empty() {
+            return;
+        }
+        let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+        if shift {
+            sel.union(cells);
+        } else {
+            sel.replace(cells);
+        }
+        // 单焦点：写格即让出实体焦点（同格裁定口径）。
+        projection.selection = None;
+        return;
     }
 
+    // ── 非 Topographic（浏览族）：原格裁定不变 ─────────────────────
     let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     let alt = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
 
