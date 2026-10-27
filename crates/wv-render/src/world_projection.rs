@@ -218,6 +218,21 @@ pub fn draw_pin_highlight(
     );
 }
 
+/// gizmo 线宽 = 1 **屏幕像素**（每帧随缩放同步）。
+///
+/// Bevy 2D gizmo 默认线宽按**世界单位**计（2.0）——CellMap 深缩放下
+/// （1 屏幕像素 ≈ 数世界单位）线会细到亚像素，选中环/选区环整个隐形
+/// （2026-10-27 实机：选中图钉无高亮）。全局生效：选区金环
+/// （`draw_selection`）等 gizmo 画出的一并回到可见线宽。
+pub fn sync_gizmo_line_width(
+    mut store: ResMut<bevy::gizmos::config::GizmoConfigStore>,
+    view: Res<ViewState>,
+) {
+    let (cfg, _) = store.config_mut::<bevy::gizmos::config::DefaultGizmoConfigGroup>();
+    cfg.line.width = view.scale.max(0.05);
+    cfg.enabled = true;
+}
+
 /// 折线总长（相邻顶点距离和）。
 fn polyline_len(pts: &[Vec2]) -> f32 {
     pts.windows(2).map(|w| w[0].distance(w[1])).sum()
