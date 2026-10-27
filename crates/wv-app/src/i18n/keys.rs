@@ -774,6 +774,8 @@ pub enum I18nKey {
     MapControlsPanHint,
     /// 地形橡皮刷瓷砖 tooltip（ADR-0043）
     MapControlsEraserHint,
+    /// 地形笔刷瓷砖 tooltip（2026-10-27 补：涂/擦同族，涂一直缺 dock 入口）
+    MapControlsBrushHint,
     /// 选择组主区 tooltip（ADR-0043）
     MapControlsSelectGroupHint,
     /// 选择组·多边形（默认项）
@@ -1318,7 +1320,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 520] = [
+    pub const ALL: [I18nKey; 521] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1668,6 +1670,7 @@ impl I18nKey {
         I18nKey::MapControlsFitMap,
         I18nKey::MapControlsPanHint,
         I18nKey::MapControlsEraserHint,
+        I18nKey::MapControlsBrushHint,
         I18nKey::MapControlsSelectGroupHint,
         I18nKey::MapControlsSelectPolygon,
         I18nKey::MapControlsSelectRect,

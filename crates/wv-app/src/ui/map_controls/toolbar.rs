@@ -50,6 +50,9 @@ pub fn map_controls(
     let select_active = selection.enabled;
     let pan_active = view.pan_tool;
     let eraser_active = brush.enabled && brush.tool == BrushTool::Eraser;
+    // 涂抹笔刷活动态：橡皮以外都算「涂」（含意图工具——分派闸 `already_on`
+    // 同口径，dispatch.rs `MapToolId::Brush`）。
+    let brush_active = brush.enabled && brush.tool != BrushTool::Eraser;
     let measure_active = measure.mode.is_active();
     // 清除按钮的可用态：当前图真有测量才点得动（空图按下去只会弹「没有测量」）。
     let has_measurements = drill
@@ -188,6 +191,29 @@ pub fn map_controls(
                             selection.shape,
                             select_active,
                             &mut params.palette,
+                        );
+
+                        // ── 槽 3.5：地形笔刷（2026-10-27 补）─────────────
+                        // 「涂」与「擦」同族贴放。历史上**涂**一直没有 dock 入口
+                        // （原笔刷浮窗承载，浮窗裁撤后只剩 B / 命令面板）——多选
+                        // 等互斥工具切走笔刷后，界面上没有任何鼠标入口能回去。
+                        // 本瓷砖即回程入口，点它 = 按 B（同一 `MapToolId::Brush`）。
+                        // Gate-1：播放中灰化（写入口）。编号取 3.5 不重排后续
+                        // 槽位（ADR-0043 槽位号纪律，同「槽 6.5」先例）。
+                        tool_tile(
+                            ui,
+                            &shell,
+                            metrics,
+                            ICON_BRUSH,
+                            if cell_tools_enabled {
+                                t(loc, I18nKey::MapControlsBrushHint)
+                            } else {
+                                locked_hint
+                            },
+                            brush_active,
+                            cell_tools_enabled,
+                            &mut params.palette,
+                            MapToolId::Brush,
                         );
 
                         // ── 槽 4：地形橡皮刷 ─────────────────────────────
