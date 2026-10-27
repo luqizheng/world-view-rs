@@ -619,9 +619,11 @@ impl CommandRegistry {
             I18nKey::CmdBrushRadiusDown,
             Some("["),
         );
-        // 笔刷工具 8 条（索引 = BrushTool::ALL 下标，命令面板与面板瓷砖同一口径）。
-        // **顺序必须与 `BrushTool::ALL` 逐项对齐**——按下标索引，插队会让后面
-        // 所有工具的命令面板条目指向错误的工具。
+        // 笔刷工具 7 条（索引 = BrushTool::ALL 下标，命令面板与选项条瓷砖同一
+        // 口径）。**顺序必须与 `BrushTool::ALL` 逐项对齐**——按下标索引，插队
+        // 会让后面所有工具的命令面板条目指向错误的工具。
+        // （原 8 条含河流；2026-10-27 河流退役改线 POI（ADR-0070），与 ALL
+        // 同批同位删除。）
         for (i, key) in [
             I18nKey::CmdSelectBrushToolPaint,
             I18nKey::CmdSelectBrushToolRange,
@@ -629,7 +631,6 @@ impl CommandRegistry {
             I18nKey::CmdSelectBrushToolHills,
             I18nKey::CmdSelectBrushToolVolcano,
             I18nKey::CmdSelectBrushToolLake,
-            I18nKey::CmdSelectBrushToolRiver,
             I18nKey::CmdSelectBrushToolErase,
         ]
         .into_iter()

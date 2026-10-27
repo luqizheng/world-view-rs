@@ -531,10 +531,14 @@ mod lod_tests {
     }
 }
 
-/// 笔刷工具（意图笔刷 plan v0.1）：直接涂类型、六种「给意图、程序生成」，
+/// 笔刷工具（意图笔刷 plan v0.1）：直接涂类型、五种「给意图、程序生成」，
 /// 或地形橡皮刷。
 ///
 /// 会话态，不写盘；工具选择不跨会话保留。
+///
+/// **River 已退役**（2026-10-27 用户裁定）：河流改走线 POI（ADR-0070），
+/// 河床挖掘逻辑保留在 `wv_terrain::intent::Intent::River` 供 POI 路径复用；
+/// 本枚举不再承载河流笔刷。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BrushTool {
     /// 直接涂抹地形类型（原有行为，默认）。
@@ -550,8 +554,6 @@ pub enum BrushTool {
     Volcano,
     /// 意图：点一下挖一个碗形湖（碗底低于溢出口）。
     Lake,
-    /// 意图：从源头拖到河口，程序拓扑挖出河床。
-    River,
     /// 地形橡皮刷（ADR-0043）：把笔下格子**整格回填成本图的底图态**——
     /// 底图是海洋就擦成海洋，底图是陆地就擦成陆地。
     ///
@@ -565,15 +567,15 @@ pub enum BrushTool {
 }
 
 impl BrushTool {
-    /// 命令面板注册用。顺序即 `CommandId::SelectBrushTool` 的下标，**只增不改**。
-    pub const ALL: [BrushTool; 8] = [
+    /// 命令面板注册用。顺序即 `CommandId::SelectBrushTool` 的下标，**只增不改**
+    /// （删项须与命令面板的 `CmdSelectBrushTool*` 列表同批同位）。
+    pub const ALL: [BrushTool; 7] = [
         BrushTool::PaintKind,
         BrushTool::MountainRange,
         BrushTool::Plateau,
         BrushTool::Hills,
         BrushTool::Volcano,
         BrushTool::Lake,
-        BrushTool::River,
         BrushTool::Eraser,
     ];
 
@@ -594,7 +596,7 @@ pub struct BrushState {
     pub kind: u8,
     /// 当前工具（直接涂类型 / 意图生成）。
     pub tool: BrushTool,
-    /// 笔刷半径（世界单位）。River 不用半径（河宽固定一格）。
+    /// 笔刷半径（世界单位）。
     pub radius: f32,
     /// 衰减软度 0..=1（与 `wv_terrain::edit::falloff_weight` 同一参数；仅 Paint 工具用）。
     pub softness: f32,
@@ -1340,7 +1342,6 @@ mod tests {
             BrushTool::MountainRange,
             BrushTool::Plateau,
             BrushTool::Hills,
-            BrushTool::River,
             BrushTool::Volcano,
             BrushTool::Lake,
         ] {

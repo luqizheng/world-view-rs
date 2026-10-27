@@ -124,14 +124,6 @@ fn intent_from_stroke_maps_each_tool_correctly() {
         Some(Intent::Lake { center, .. }) => assert_eq!(center, (10.0, 20.0)),
         other => panic!("应为 Lake，实得 {other:?}"),
     }
-    // 河：不带半径（河宽固定一格）。
-    match intent_from_stroke(BrushTool::River, &pts, 8.0, 1.2) {
-        Some(Intent::River { pts: p, strength }) => {
-            assert_eq!(p, pts);
-            assert_eq!(strength, 1.2);
-        }
-        other => panic!("应为 River，实得 {other:?}"),
-    }
     // Paint 工具不产生意图（防御兜底）。
     assert_eq!(
         intent_from_stroke(BrushTool::PaintKind, &pts, 8.0, 1.0),

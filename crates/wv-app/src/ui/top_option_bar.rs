@@ -13,13 +13,12 @@
 //!   不变。2026-10-25「笔刷浮窗只服务 CellMap 结构编辑」随之**更成立**——
 //!   笔画调参的家是本条，浮窗不再需要回头。
 //!
-//! ## 内容矩阵（按 [`BrushTool`] 切换，判据纯函数见下方四个 `shows_*`）
+//! ## 内容矩阵（按 [`BrushTool`] 切换，判据纯函数见下方三个 `shows_*`）
 //!
 //! | 工具 | 材料格 | 半径 | 软度 | 强度 |
 //! |---|---|---|---|---|
 //! | PaintKind | ✓ | ✓ | ✓ | |
-//! | 意图（除 River） | | ✓ | | ✓ |
-//! | River | | | | ✓（河宽固定一格） |
+//! | 意图（山脉/高原/丘陵/火山/湖） | | ✓ | | ✓ |
 //! | Eraser | | ✓ | ✓ |（条尾常显「擦回底图」提示） |
 //!
 //! ## 边界（不做什么）
@@ -45,8 +44,7 @@ use wv_ui::widgets::rect_stroke;
 
 use super::{
     slider, terrain_name_at, terrain_swatch, ToolButton, ToolIcon, UiShell, ICON_BRUSH,
-    ICON_ERASER, ICON_HILLS, ICON_LAKE, ICON_MOUNTAIN_RANGE, ICON_PLATEAU, ICON_RIVER,
-    ICON_VOLCANO,
+    ICON_ERASER, ICON_HILLS, ICON_LAKE, ICON_MOUNTAIN_RANGE, ICON_PLATEAU, ICON_VOLCANO,
 };
 
 /// 条高：与顶栏 [`super::top_bar::TOP_BAR_H`] 同韵（38px，内容 shell.hit=28）。
@@ -70,11 +68,6 @@ pub(crate) fn bar_visible(brush_enabled: bool) -> bool {
 /// 照常画出来就是「一边显示当前材质一边忽略材质」的谎话（旧笔刷面板教训）。
 pub(crate) fn shows_material(tool: BrushTool) -> bool {
     tool == BrushTool::PaintKind
-}
-
-/// 半径：River 河宽固定一格，永远不给（[`BrushState::radius`] 文档口径）。
-pub(crate) fn shows_radius(tool: BrushTool) -> bool {
-    tool != BrushTool::River
 }
 
 /// 软度（衰减权重）只在涂 / 擦两档出现。
@@ -178,7 +171,7 @@ pub fn top_option_bar(
                             );
                         });
                     }
-                    // 意图：强度 + 半径（River 河宽固定一格，无半径）。
+                    // 意图：强度 + 半径。
                     tool if shows_strength(tool) => {
                         compact_slider(
                             ui,
@@ -189,9 +182,7 @@ pub fn top_option_bar(
                             false,
                             |n| format!("×{:.2}", n),
                         );
-                        if shows_radius(tool) {
-                            radius_slider(ui, &shell, &mut brush.radius, &grid, loc);
-                        }
+                        radius_slider(ui, &shell, &mut brush.radius, &grid, loc);
                     }
                     _ => {}
                 }
@@ -224,7 +215,7 @@ fn brush_pill(ui: &mut egui::Ui, shell: &UiShell, brush: &mut BrushState, loc: L
     }
 }
 
-/// 工具瓷砖行：平铺 [`BrushTool::ALL`] 8 块（分组控件已退役，不复活）。
+/// 工具瓷砖行：平铺 [`BrushTool::ALL`] 7 块（分组控件已退役，不复活）。
 ///
 /// 点瓷砖 = 选工具 + 激活笔刷（与分发器 `CommandId::SelectBrushTool` 同语义）。
 fn tool_tiles(ui: &mut egui::Ui, shell: &UiShell, brush: &mut BrushState, loc: Locale) {
@@ -340,7 +331,6 @@ fn tool_icon(tool: BrushTool) -> &'static egui::ImageSource<'static> {
         BrushTool::Hills => &ICON_HILLS,
         BrushTool::Volcano => &ICON_VOLCANO,
         BrushTool::Lake => &ICON_LAKE,
-        BrushTool::River => &ICON_RIVER,
         BrushTool::Eraser => &ICON_ERASER,
     }
 }
@@ -354,7 +344,6 @@ fn tool_name_key(tool: BrushTool) -> I18nKey {
         BrushTool::Hills => I18nKey::BrushToolNameHills,
         BrushTool::Volcano => I18nKey::BrushToolNameVolcano,
         BrushTool::Lake => I18nKey::BrushToolNameLake,
-        BrushTool::River => I18nKey::BrushToolNameRiver,
         BrushTool::Eraser => I18nKey::BrushToolNameErase,
     }
 }
@@ -368,7 +357,6 @@ fn tool_hint_key(tool: BrushTool) -> I18nKey {
         BrushTool::Hills => I18nKey::BrushHintHills,
         BrushTool::Volcano => I18nKey::BrushHintVolcano,
         BrushTool::Lake => I18nKey::BrushHintLake,
-        BrushTool::River => I18nKey::BrushHintRiver,
         BrushTool::Eraser => I18nKey::BrushHintErase,
     }
 }
@@ -376,52 +364,34 @@ fn tool_hint_key(tool: BrushTool) -> I18nKey {
 #[cfg(test)]
 mod tests {
     use super::{
-        bar_visible, shows_material, shows_radius, shows_softness, shows_strength, tool_hint_key,
-        tool_name_key,
+        bar_visible, shows_material, shows_softness, shows_strength, tool_hint_key, tool_name_key,
     };
     use crate::i18n::{t, Locale};
     use crate::state::BrushTool;
 
     /// 涂抹档：材料 / 半径 / 软度全给，强度不给（强度是意图参数）。
     #[test]
-    fn paint_kind_shows_material_radius_softness_but_not_strength() {
+    fn paint_kind_shows_material_and_softness_but_not_strength() {
         let tool = BrushTool::PaintKind;
         assert!(shows_material(tool));
-        assert!(shows_radius(tool));
         assert!(shows_softness(tool));
         assert!(!shows_strength(tool));
     }
 
-    /// River 河宽固定一格（`BrushState::radius` 文档口径）：强度给，半径永不给。
+    /// 橡皮：软度有，无材料（写底图态，kind 不参与）、无强度。
     #[test]
-    fn river_shows_strength_but_never_radius() {
-        let tool = BrushTool::River;
-        assert!(shows_strength(tool));
-        assert!(!shows_radius(tool), "River 不显示半径");
-        assert!(!shows_material(tool));
-        assert!(!shows_softness(tool));
-    }
-
-    /// 橡皮：半径 + 软度，无材料（写底图态，kind 不参与）、无强度。
-    #[test]
-    fn eraser_shows_radius_and_softness_neither_material_nor_strength() {
+    fn eraser_shows_softness_neither_material_nor_strength() {
         let tool = BrushTool::Eraser;
-        assert!(shows_radius(tool));
         assert!(shows_softness(tool));
         assert!(!shows_material(tool));
         assert!(!shows_strength(tool));
     }
 
-    /// 全体意图工具：强度必给；除 River 外半径也给；材料 / 软度都不给。
+    /// 全体意图工具：强度必给；材料 / 软度都不给。
     #[test]
-    fn every_intent_tool_shows_strength_and_radius_except_river() {
+    fn every_intent_tool_shows_strength_only() {
         for &tool in BrushTool::ALL.iter().filter(|t| t.is_intent()) {
             assert!(shows_strength(tool), "{tool:?} 应显示强度");
-            assert_eq!(
-                shows_radius(tool),
-                tool != BrushTool::River,
-                "{tool:?} 半径判据"
-            );
             assert!(!shows_material(tool), "{tool:?} 不应显示材料");
             assert!(!shows_softness(tool), "{tool:?} 不应显示软度");
         }
@@ -434,7 +404,7 @@ mod tests {
         assert!(bar_visible(true));
     }
 
-    /// 8 个工具的名称 / 提示 Key 全覆盖：中英双语都非空——瓷砖纯图标，
+    /// 7 个工具的名称 / 提示 Key 全覆盖：中英双语都非空——瓷砖纯图标，
     /// tooltip 是这些名字的唯一入口，漏译 = 悬停出一个空泡。
     #[test]
     fn every_tool_resolves_name_and_hint_in_both_locales() {

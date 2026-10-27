@@ -267,8 +267,6 @@ pub enum I18nKey {
     BrushToolNameVolcano,
     /// 「湖泊」
     BrushToolNameLake,
-    /// 「河流」
-    BrushToolNameRiver,
     /// 涂抹工具交互提示（瓷砖 tooltip 第二行 + 面板提示行）
     BrushHintPaint,
     /// 山脉工具交互提示
@@ -281,8 +279,6 @@ pub enum I18nKey {
     BrushHintVolcano,
     /// 湖泊工具交互提示
     BrushHintLake,
-    /// 河流工具交互提示
-    BrushHintRiver,
     /// 「地形材料」段标题（旁附当前选中材质名）
     BrushMaterialHeader,
     /// 工具名「橡皮」（地形橡皮刷，ADR-0043）
@@ -1052,9 +1048,7 @@ pub enum I18nKey {
     CmdSelectBrushToolVolcano,
     /// 「笔刷：湖泊」
     CmdSelectBrushToolLake,
-    /// 「笔刷：河流」
-    CmdSelectBrushToolRiver,
-    /// 「笔刷：橡皮」（索引 7 = `BrushTool::Eraser`，ADR-0043）
+    /// 「笔刷：橡皮」（索引 6 = `BrushTool::Eraser`，ADR-0043）
     CmdSelectBrushToolErase,
     /// 「显示参照网格」（地图工具条瓷砖同源）
     CmdToggleGrid,
@@ -1355,7 +1349,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 538] = [
+    pub const ALL: [I18nKey; 535] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1491,14 +1485,12 @@ impl I18nKey {
         I18nKey::BrushToolNameHills,
         I18nKey::BrushToolNameVolcano,
         I18nKey::BrushToolNameLake,
-        I18nKey::BrushToolNameRiver,
         I18nKey::BrushHintPaint,
         I18nKey::BrushHintRange,
         I18nKey::BrushHintPlateau,
         I18nKey::BrushHintHills,
         I18nKey::BrushHintVolcano,
         I18nKey::BrushHintLake,
-        I18nKey::BrushHintRiver,
         I18nKey::BrushMaterialHeader,
         I18nKey::BrushToolNameErase,
         I18nKey::BrushHintErase,
@@ -1813,7 +1805,6 @@ impl I18nKey {
         I18nKey::CmdSelectBrushToolHills,
         I18nKey::CmdSelectBrushToolVolcano,
         I18nKey::CmdSelectBrushToolLake,
-        I18nKey::CmdSelectBrushToolRiver,
         I18nKey::CmdSelectBrushToolErase,
         I18nKey::CmdToggleGrid,
         I18nKey::CmdToggleFieldRender,

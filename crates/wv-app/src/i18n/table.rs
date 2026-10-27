@@ -141,14 +141,12 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::BrushToolNameHills => "丘陵",
         I18nKey::BrushToolNameVolcano => "火山",
         I18nKey::BrushToolNameLake => "湖泊",
-        I18nKey::BrushToolNameRiver => "河流",
         I18nKey::BrushHintPaint => "按住左键拖动，把选中的地形类型涂到格子上",
         I18nKey::BrushHintRange => "拖一条脊线，山脊走向程序补；单点 = 一座圆山",
         I18nKey::BrushHintPlateau => "拖过目标区域，顶面平坦、边缘自收",
         I18nKey::BrushHintHills => "拖过目标区域，只长在陆上",
         I18nKey::BrushHintVolcano => "点一下放置；点在海里自动成岛",
         I18nKey::BrushHintLake => "点一下挖湖；湖心必须在陆上",
-        I18nKey::BrushHintRiver => "从源头拖到河口；两端都在陆上时高端是源头",
         I18nKey::BrushMaterialHeader => "地形材料",
         I18nKey::BrushToolNameErase => "橡皮",
         I18nKey::BrushHintErase => "按住拖拽，把笔下地形擦回本图底图",
@@ -555,7 +553,6 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CmdSelectBrushToolHills => "笔刷：丘陵",
         I18nKey::CmdSelectBrushToolVolcano => "笔刷：火山",
         I18nKey::CmdSelectBrushToolLake => "笔刷：湖泊",
-        I18nKey::CmdSelectBrushToolRiver => "笔刷：河流",
         I18nKey::CmdSelectBrushToolErase => "笔刷：橡皮",
         I18nKey::CmdToggleGrid => "显示参照网格",
         I18nKey::CmdToggleFieldRender => "显示地形场渲染（GPU）",
@@ -834,7 +831,6 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::BrushToolNameHills => "Hills",
         I18nKey::BrushToolNameVolcano => "Volcano",
         I18nKey::BrushToolNameLake => "Lake",
-        I18nKey::BrushToolNameRiver => "River",
         I18nKey::BrushHintPaint => {
             "Hold left-click and drag to paint the selected terrain type onto cells"
         }
@@ -847,9 +843,6 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::BrushHintHills => "Drag over the target area; hills grow on land only",
         I18nKey::BrushHintVolcano => "Click to place; dropping it in the sea grows an island",
         I18nKey::BrushHintLake => "Click to dig a lake; the center must be on land",
-        I18nKey::BrushHintRiver => {
-            "Drag from source to mouth; when both ends are on land the higher one is the source"
-        }
         I18nKey::BrushMaterialHeader => "Terrain material",
         I18nKey::BrushToolNameErase => "Eraser",
         I18nKey::BrushHintErase => "Drag to erase the terrain back to this map's base",
@@ -1266,7 +1259,6 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CmdSelectBrushToolHills => "Brush: Hills",
         I18nKey::CmdSelectBrushToolVolcano => "Brush: Volcano",
         I18nKey::CmdSelectBrushToolLake => "Brush: Lake",
-        I18nKey::CmdSelectBrushToolRiver => "Brush: River",
         I18nKey::CmdSelectBrushToolErase => "Brush: Eraser",
         I18nKey::CmdToggleGrid => "Toggle reference grid",
         I18nKey::CmdToggleFieldRender => "Toggle GPU terrain field",

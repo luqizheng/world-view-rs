@@ -199,10 +199,6 @@ pub(super) fn intent_from_stroke(
             radius,
             strength,
         },
-        BrushTool::River => Intent::River {
-            pts: pts.to_vec(),
-            strength,
-        },
         BrushTool::PaintKind | BrushTool::Eraser => return None,
     })
 }
