@@ -792,12 +792,12 @@ mod tests {
             );
         }
         assert!(all.iter().any(|c| c.id == CommandId::ToggleGrid));
-        // 中文子串搜到具体工具（ALL[1] = 山脉）。
-        let hits = CommandRegistry::search("山脉", &[]);
+        // 中文子串搜到具体工具（ALL[1] = 山系笔，ADR-0074 D3 改名后按新名可搜）。
+        let hits = CommandRegistry::search("山系", &[]);
         assert!(
             hits.iter()
                 .any(|c| matches!(c.id, CommandId::SelectBrushTool(1))),
-            "搜「山脉」应命中笔刷工具"
+            "搜「山系」应命中笔刷工具（山系笔）"
         );
     }
 
