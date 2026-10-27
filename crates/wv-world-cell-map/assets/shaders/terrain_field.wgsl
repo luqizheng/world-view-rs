@@ -192,13 +192,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let mpc = select(1.0, p.light_dir.w, p.light_dir.w > 0.0);
     let s = p.shape.z / mpc;
     let n = normalize(vec3<f32>(-grad.x * s, grad.y * s, 1.0));
-    // 双光源单尺度：`0.4 + 0.48·max(0, N·L₁) + 0.12·max(0, N·L₂)`（镜像
-    // shading::AMBIENT / DIFFUSE_MAIN / DIFFUSE_AUX，和 = 1）。LIGHT_MAIN /
-    // LIGHT_AUX 是真 45° 单位向量，直接 dot 无需 normalize；单位光向量下
-    // I ∈ [0.4, 1.0] 界内免费获得——旧 T17 明暗钳制对随界内性退役。
-    let relief = 0.4
-        + 0.48 * max(0.0, dot(n, p.light_dir.xyz))
-        + 0.12 * max(0.0, dot(n, p.light_aux.xyz));
+    // 双光源单尺度：`I = A + D₁·max(0, N·L₁) + D₂·max(0, N·L₂)`。系数
+    // **真源 = shading::{AMBIENT, DIFFUSE_MAIN, DIFFUSE_AUX}，经
+    // `FieldParams.relief` 传入**（x/y/z = A/D₁/D₂；demo 的 H 键晕渲开关
+    // 即改写本槽——WGSL 若写回字面量，本槽成死数据、开关静默失效）。
+    // LIGHT_MAIN / LIGHT_AUX 是真 45° 单位向量，直接 dot 无需 normalize；
+    // 单位光向量 + 三系数和 = 1 时 I ∈ [0.4, 1.0] 界内免费——旧 T17
+    // 明暗钳制对随界内性退役。
+    let relief = p.relief.x
+        + p.relief.y * max(0.0, dot(n, p.light_dir.xyz))
+        + p.relief.z * max(0.0, dot(n, p.light_aux.xyz));
     //
     // ## T33「远观关灯」退役（ADR-0077 D3，有意推翻）
     //
@@ -684,7 +687,8 @@ fn height_at(pos: vec2<f32>) -> f32 {
 /// 坐标约定：入参 `pos` 是格坐标（边界空间）；`gy` 沿纹理行向下（**南**）
 /// 增大——`gy > 0` = 高度向南增大，与 CPU 侧行号约定一致。每点走
 /// [`height_at`]（双线性，纹素域自动钳界），边缘不越界、结果有限。
-/// 9 个采样点各取一次（四角共享），一次 9 tap；高度**取值**仍走
+/// **8 次采样**：3×3 窗口的中心点在行、列两个和式里权重各 ×2 后相互
+/// 抵消（不出现于任何差分），只采 8 邻域；高度**取值**仍走
 /// [`sample_height_bicubic_grad`]（C1 连续），两者分工见 ADR-0077 D2。
 fn horn_grad_detail(pos: vec2<f32>) -> vec2<f32> {
     let tl = height_at(pos + vec2<f32>(-1.0, -1.0));
