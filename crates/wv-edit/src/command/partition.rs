@@ -472,6 +472,230 @@ fn point_in_ring_f32(p: [f32; 2], ring_ids: &[u32], span: &PartitionSpan) -> boo
     inside
 }
 
+/// 零和拖边界（ADR-0074 D4/D2）：刚体平移共享边链上的顶点。
+///
+/// **每个被移动顶点必须被 ≥2 张脸引用**（共享顶点=零和构造保证，ADR-0074
+/// D1）——单脸顶点被移动会在它与邻接边之间拉出缝/重叠，Err 拒绝。
+///
+/// **就地改选中 span**（改旧语义，V2）。
+#[derive(Debug)]
+pub struct MovePartitionVerticesCommand {
+    /// 目标地图。
+    pub map: Id,
+    /// 目标势力层。
+    pub layer: Id,
+    /// 被改的历史段（`span.from`）。
+    pub span_from: i64,
+    /// 移动表：`(顶点 id, 新位置)`。
+    pub moves: Vec<(u32, [f32; 2])>,
+    /// `apply` 缓存的整个分区快照。
+    pub before: std::sync::Mutex<Option<wv_core::model::faction_partition::FactionPartition>>,
+}
+
+/// 整块易主（ADR-0074 D8）：几何零改动，某脸自 `from` 天起换归属。
+///
+/// **fork 型**：在 `from` 处 fork 命中段（同 [`BeginPartitionSpanCommand`]
+/// 的 fork 配方），fork 段中该脸 owner 换新值；前段求值不变、后段不受传染
+/// （每段是独立快照——改旧不重放，V2）。
+#[derive(Debug)]
+pub struct AssignPartitionFaceCommand {
+    /// 目标地图。
+    pub map: Id,
+    /// 目标势力层。
+    pub layer: Id,
+    /// 生效日（fork 点）。
+    pub from: i64,
+    /// 被易主的脸。
+    pub face: u32,
+    /// 新归属；`None` = 无主。
+    pub owner: Option<Id>,
+    /// `apply` 缓存的整个分区快照。
+    pub before: std::sync::Mutex<Option<wv_core::model::faction_partition::FactionPartition>>,
+}
+
+/// 顶点 id → 引用它的脸数（一个 span 内）。
+fn face_ref_count(span: &PartitionSpan, vid: u32) -> usize {
+    span.faces
+        .iter()
+        .filter(|f| f.ring.contains(&vid) || f.holes.iter().any(|h| h.contains(&vid)))
+        .count()
+}
+
+impl MovePartitionVerticesCommand {
+    fn partition_mut<'w>(
+        &self,
+        world: &'w mut World,
+    ) -> EditResult<&'w mut wv_core::model::faction_partition::FactionPartition> {
+        world
+            .partitions
+            .iter_mut()
+            .find(|p| p.map == self.map && p.layer == self.layer)
+            .ok_or_else(|| {
+                EditError::TargetMissing(format!("分区（{} × {}）", self.map, self.layer))
+            })
+    }
+}
+
+impl EditCommand for MovePartitionVerticesCommand {
+    fn label(&self) -> String {
+        format!("拖边界（{} 个顶点）", self.moves.len())
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let snapshot = world
+            .partitions
+            .iter()
+            .find(|p| p.map == self.map && p.layer == self.layer)
+            .cloned();
+        // 零和预检：全部顶点都须是共享顶点（≥2 脸引用），一票否决。
+        {
+            let partition = snapshot.as_ref().ok_or_else(|| {
+                EditError::TargetMissing(format!("分区（{} × {}）", self.map, self.layer))
+            })?;
+            let span = partition
+                .spans
+                .iter()
+                .find(|s| s.from == self.span_from)
+                .ok_or_else(|| {
+                    EditError::TargetMissing(format!("历史段 from={}", self.span_from))
+                })?;
+            for (vid, _) in &self.moves {
+                if face_ref_count(span, *vid) < 2 {
+                    return Err(EditError::Precondition(format!(
+                        "顶点 {vid} 只被 1 张脸引用——移动它会拉出缝（零和被破坏）"
+                    )));
+                }
+            }
+        }
+        let partition = self.partition_mut(world)?;
+        let span = partition
+            .spans
+            .iter_mut()
+            .find(|s| s.from == self.span_from)
+            .ok_or_else(|| EditError::TargetMissing(format!("历史段 from={}", self.span_from)))?;
+        for (vid, xy) in &self.moves {
+            let v = span
+                .vertices
+                .iter_mut()
+                .find(|v| v.id == *vid)
+                .ok_or_else(|| EditError::TargetMissing(format!("顶点 {vid}")))?;
+            v.xy = *xy;
+        }
+        span.validate_topology()
+            .map_err(|e| EditError::Precondition(format!("移动后拓扑破损: {e}")))?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))? = snapshot;
+        Ok(vec!["partitions".to_string()])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let snapshot = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("MovePartitionVertices 尚未 apply".into()))?;
+        let partition = self.partition_mut(world)?;
+        *partition = snapshot;
+        Ok(())
+    }
+}
+
+impl AssignPartitionFaceCommand {
+    fn partition_mut<'w>(
+        &self,
+        world: &'w mut World,
+    ) -> EditResult<&'w mut wv_core::model::faction_partition::FactionPartition> {
+        world
+            .partitions
+            .iter_mut()
+            .find(|p| p.map == self.map && p.layer == self.layer)
+            .ok_or_else(|| {
+                EditError::TargetMissing(format!("分区（{} × {}）", self.map, self.layer))
+            })
+    }
+}
+
+impl EditCommand for AssignPartitionFaceCommand {
+    fn label(&self) -> String {
+        format!("脸 {} 易主（自第 {} 天）", self.face, self.from)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let snapshot = world
+            .partitions
+            .iter()
+            .find(|p| p.map == self.map && p.layer == self.layer)
+            .cloned();
+        let existing = snapshot
+            .as_ref()
+            .ok_or_else(|| {
+                EditError::TargetMissing(format!("分区（{} × {}）", self.map, self.layer))
+            })?
+            .clone();
+        let hit = existing
+            .spans
+            .iter()
+            .position(|s| self.from >= s.from && s.to.is_none_or(|to| self.from < to))
+            .ok_or_else(|| {
+                EditError::Precondition(format!("生效日 {} 不在任何历史段内", self.from))
+            })?;
+        // 几何在 fork 副本上改，最后一次性写回（避免双可变借世界）。
+        let mut new_spans = existing.spans.clone();
+        if existing.spans[hit].from == self.from {
+            // 恰在段起点：直接改该段（不开零长度段）。
+            let face = new_spans[hit]
+                .faces
+                .iter_mut()
+                .find(|f| f.id == self.face)
+                .ok_or_else(|| EditError::TargetMissing(format!("脸 {}", self.face)))?;
+            face.owner = self.owner.clone();
+        } else {
+            // fork：旧段收口、fork 段换归属。
+            let mut old = new_spans[hit].clone();
+            let mut fork = old.clone();
+            old.to = Some(self.from);
+            fork.from = self.from;
+            fork.to = new_spans[hit].to;
+            let face = fork
+                .faces
+                .iter_mut()
+                .find(|f| f.id == self.face)
+                .ok_or_else(|| EditError::TargetMissing(format!("脸 {}", self.face)))?;
+            face.owner = self.owner.clone();
+            new_spans[hit] = old;
+            new_spans.insert(hit + 1, fork);
+        }
+        let partition = self.partition_mut(world)?;
+        partition.spans = new_spans;
+        partition
+            .spans
+            .last()
+            .unwrap()
+            .validate_topology()
+            .map_err(|e| EditError::Precondition(format!("易主后拓扑破损: {e}")))?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))? = snapshot;
+        Ok(vec!["partitions".to_string()])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let snapshot = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("AssignPartitionFace 尚未 apply".into()))?;
+        let partition = self.partition_mut(world)?;
+        *partition = snapshot;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -857,5 +1081,188 @@ mod cut_tests {
         cmd.apply(&mut world).expect("apply");
         cmd.revert(&mut world).expect("revert");
         assert_eq!(world.partitions, before, "revert 应整段还原");
+    }
+}
+
+#[cfg(test)]
+mod move_assign_tests {
+    //! 零和拖顶点 + 整块易主（ADR-0074 T9）。
+
+    use super::*;
+    use wv_core::model::faction_partition::FactionPartition;
+
+    fn test_map() -> Id {
+        Id::new_unchecked("world_main")
+    }
+
+    /// 方环被竖切成两半（复用 T8 的拓扑结果，直接手摆）：
+    /// 脸 R：[1,2,5,4]（右半）；脸 L：[4,5,3,0]（左半）。共享 4、5。
+    fn world_with_halves() -> World {
+        let mut world = World::default();
+        world.partitions.push(FactionPartition {
+            map: test_map(),
+            layer: Id::new_unchecked("layer_borders"),
+            spans: vec![PartitionSpan {
+                from: 0,
+                to: None,
+                vertices: vec![
+                    PartitionVertex {
+                        id: 0,
+                        xy: [0.0, 0.0],
+                    },
+                    PartitionVertex {
+                        id: 1,
+                        xy: [100.0, 0.0],
+                    },
+                    PartitionVertex {
+                        id: 2,
+                        xy: [100.0, 100.0],
+                    },
+                    PartitionVertex {
+                        id: 3,
+                        xy: [0.0, 100.0],
+                    },
+                    PartitionVertex {
+                        id: 4,
+                        xy: [50.0, 0.0],
+                    },
+                    PartitionVertex {
+                        id: 5,
+                        xy: [50.0, 100.0],
+                    },
+                ],
+                faces: vec![
+                    PartitionFace {
+                        id: 0,
+                        owner: Some(Id::new_unchecked("faction_a")),
+                        ring: vec![4, 5, 3, 0],
+                        holes: Vec::new(),
+                    },
+                    PartitionFace {
+                        id: 1,
+                        owner: Some(Id::new_unchecked("faction_b")),
+                        ring: vec![1, 2, 5, 4],
+                        holes: Vec::new(),
+                    },
+                ],
+            }],
+        });
+        world
+    }
+
+    const LAYER: &str = "layer_borders";
+
+    #[test]
+    fn moving_shared_vertex_moves_both_faces_rings() {
+        let mut world = world_with_halves();
+        // 拖共享顶点 4（底刀口）到 (60, 0)。
+        let cmd = MovePartitionVerticesCommand {
+            map: test_map(),
+            layer: Id::new_unchecked(LAYER),
+            span_from: 0,
+            moves: vec![(4, [60.0, 0.0])],
+            before: std::sync::Mutex::new(None),
+        };
+        let dirty = cmd.apply(&mut world).expect("apply");
+        assert_eq!(dirty, vec!["partitions".to_string()]);
+        let span = &world.partitions[0].spans[0];
+        let v4 = span.vertices.iter().find(|v| v.id == 4).expect("顶点 4");
+        assert_eq!(v4.xy, [60.0, 0.0], "顶点本体移动");
+        // 两环引用同一 id → 两侧同时生效（零和：面积一侧增一侧减，无缝）。
+        assert!(span.faces[0].ring.contains(&4) && span.faces[1].ring.contains(&4));
+        span.validate_topology().expect("移动不改拓扑");
+    }
+
+    #[test]
+    fn moving_single_face_vertex_errors() {
+        let mut world = world_with_halves();
+        // 顶点 2 只被脸 1 引用（右上角）——单侧移动会拉出缝。
+        let cmd = MovePartitionVerticesCommand {
+            map: test_map(),
+            layer: Id::new_unchecked(LAYER),
+            span_from: 0,
+            moves: vec![(2, [120.0, 100.0])],
+            before: std::sync::Mutex::new(None),
+        };
+        assert!(cmd.apply(&mut world).is_err(), "单脸顶点移动应 Err");
+        let v2 = world.partitions[0].spans[0]
+            .vertices
+            .iter()
+            .find(|v| v.id == 2)
+            .expect("顶点 2");
+        assert_eq!(v2.xy, [100.0, 100.0], "Err 不落盘");
+    }
+
+    #[test]
+    fn assign_forks_span_and_changes_owner_only() {
+        let mut world = world_with_halves();
+        // 三段历史：再 fork 出 [20,None) 便于验证「改中段不传染后段」。
+        let cmd0 = BeginPartitionSpanCommand::new(test_map(), Id::new_unchecked(LAYER), 20, None);
+        cmd0.apply(&mut world).expect("fork 中间段");
+        // 整块易主：脸 0（左半）自第 10 天归 faction_c。
+        let cmd = AssignPartitionFaceCommand {
+            map: test_map(),
+            layer: Id::new_unchecked(LAYER),
+            from: 10,
+            face: 0,
+            owner: Some(Id::new_unchecked("faction_c")),
+            before: std::sync::Mutex::new(None),
+        };
+        let dirty = cmd.apply(&mut world).expect("apply");
+        assert_eq!(dirty, vec!["partitions".to_string()]);
+        let p = &world.partitions[0];
+        assert_eq!(p.spans.len(), 3, "fork 后三段");
+        // 前段 [0,10)：脸 0 仍 faction_a。
+        assert_eq!(
+            p.spans[0].faces[0].owner,
+            Some(Id::new_unchecked("faction_a")),
+            "fork 前段求值不变"
+        );
+        // 中段 [10,20)：脸 0 → faction_c（易主生效）。
+        assert_eq!(
+            p.spans[1].faces[0].owner,
+            Some(Id::new_unchecked("faction_c")),
+            "fork 段换归属"
+        );
+        // 后段 [20,None)：仍 faction_a（改中段不传染后段——Review Focus 1）。
+        assert_eq!(
+            p.spans[2].faces[0].owner,
+            Some(Id::new_unchecked("faction_a")),
+            "改中段不得传染后段"
+        );
+        // 几何零改动。
+        assert_eq!(p.spans[0].vertices, p.spans[1].vertices, "几何不动");
+    }
+
+    #[test]
+    fn assign_before_first_span_errors() {
+        let mut world = world_with_halves();
+        // 早于首段（首段自 0 起）无历史可承 → Err（与 Begin fork 同判）。
+        let cmd = AssignPartitionFaceCommand {
+            map: test_map(),
+            layer: Id::new_unchecked(LAYER),
+            from: -5,
+            face: 0,
+            owner: None,
+            before: std::sync::Mutex::new(None),
+        };
+        assert!(cmd.apply(&mut world).is_err(), "早于首段应 Err");
+        assert_eq!(world.partitions[0].spans.len(), 1, "Err 不落盘");
+    }
+
+    #[test]
+    fn assign_at_far_future_hits_open_ended_span() {
+        let mut world = world_with_halves();
+        // to=None = 至今：from=999 命中该段并 fork（合理语义，非错误）。
+        let cmd = AssignPartitionFaceCommand {
+            map: test_map(),
+            layer: Id::new_unchecked(LAYER),
+            from: 999,
+            face: 0,
+            owner: Some(Id::new_unchecked("faction_c")),
+            before: std::sync::Mutex::new(None),
+        };
+        cmd.apply(&mut world).expect("开放段内随时可 fork");
+        assert_eq!(world.partitions[0].spans.len(), 2);
     }
 }
