@@ -36,15 +36,15 @@ use wv_ui::shell::UiShell;
 use wv_ui::ui_tokens::{font_size, space, UiDensity, UiTheme};
 use wv_ui::widgets::{
     badge, breadcrumb, button, checkbox_state, divider, dropdown_box, empty_state, icon_button,
-    inline_alert, keycap, layer_panel, layer_row, list_item, loading, menu_item, numeric_input,
-    option_menu, progress, radio, search_input, segmented_control::segmented, slider_row,
-    slider_row_brush, slider_row_disabled, tabs, text_area, toolbar_tool, tree_row, value_box,
-    value_unit, AlertKind, BadgeKind, ButtonContent, ButtonStyle, CheckState, ColorPicker,
-    DialogWindow, FieldInput, FieldSelect, FloatWindow, HeadIcon, LayerEntry, LayerPanelAction,
-    LayerPanelState, MenuState, PropertyRow, Switch, ICON_BRUSH, ICON_CHECK, ICON_GRID, ICON_IMAGE,
-    ICON_LANDMARK, ICON_LAYERS, ICON_MAP_PIN, ICON_MAXIMIZE, ICON_MOUNTAIN, ICON_MOUSE_POINTER,
-    ICON_PLAY, ICON_PLUS, ICON_ROUTE, ICON_RULER, ICON_TRASH, ICON_TYPE, ICON_WAVES,
-    ICON_ZOOM_IN as ICON_TOOL_ZOOM_IN, ICON_ZOOM_OUT as ICON_TOOL_ZOOM_OUT,
+    inline_alert, keycap, layer_panel, layer_row, list_item, loading, menu_item,
+    numeric_input_salted, option_menu, progress, radio, search_input, segmented_control::segmented,
+    slider_row, slider_row_brush, slider_row_disabled, tabs, text_area, toolbar_tool, tree_row,
+    value_box, value_unit, AlertKind, BadgeKind, ButtonContent, ButtonStyle, CheckState,
+    ColorPicker, DialogWindow, FieldInput, FieldSelect, FloatWindow, HeadIcon, LayerEntry,
+    LayerPanelAction, LayerPanelState, MenuState, PropertyRow, Switch, ICON_BRUSH, ICON_CHECK,
+    ICON_GRID, ICON_IMAGE, ICON_LANDMARK, ICON_LAYERS, ICON_MAP_PIN, ICON_MAXIMIZE, ICON_MOUNTAIN,
+    ICON_MOUSE_POINTER, ICON_PLAY, ICON_PLUS, ICON_ROUTE, ICON_RULER, ICON_TRASH, ICON_TYPE,
+    ICON_WAVES, ICON_ZOOM_IN as ICON_TOOL_ZOOM_IN, ICON_ZOOM_OUT as ICON_TOOL_ZOOM_OUT,
 };
 
 /// 首次运行时若给了 `WV_THEME`，用它决定初始主题（便于双主题截图）。
@@ -325,7 +325,16 @@ fn draw_gallery(mut contexts: EguiContexts, cfg: Res<UiShellConfig>, mut st: Loc
                     ui.add_space(space::XS);
                     let _ = search_input(ui, &shell, &mut st.search, "Find a place…", "Ctrl+K");
                     ui.add_space(space::XS);
-                    let _ = numeric_input(ui, &shell, &mut st.numeric, "m", 1.0);
+                    let _ = numeric_input_salted(
+                        ui,
+                        &shell,
+                        "gallery_numeric",
+                        &mut st.numeric,
+                        "m",
+                        1.0,
+                        f32::MIN,
+                        f32::MAX,
+                    );
                     ui.add_space(space::XS);
                     let _ = dropdown_box(ui, &shell, "Government");
                     ui.add_space(space::XS);
