@@ -768,6 +768,82 @@ pub fn derive_faction_diagnostics(world: &wv_core::World) -> Diagnostics {
 
 // ====== ADR-0022 M3 D4 · 跨级一致性 V1 提示 =================================
 
+/// 分区诊断（ADR-0074 T13，V1：只提示不阻止）：
+///
+/// - **悬空 owner**：脸归属引用不存在的势力；
+/// - **层引用缺失**：分区指向不存在的势力层；
+/// - **拓扑破损**：环引用缺失顶点 / span 区间重叠（`validate_topology`）；
+/// - **海陆错配**：改地形挪海岸线后快照与当前掩膜偏差（脸首顶点落海）。
+pub fn derive_partition_diagnostics(world: &wv_core::World) -> Diagnostics {
+    let mut d = Diagnostics::default();
+    let faction_ids: std::collections::HashSet<&str> =
+        world.factions.iter().map(|f| f.id.as_str()).collect();
+    let layer_ids: std::collections::HashSet<&str> =
+        world.faction_layers.iter().map(|l| l.id.as_str()).collect();
+    let terrain_of = |map: &wv_core::Id| world.terrain_of(map).cloned();
+
+    for p in &world.partitions {
+        let key = format!("{} × {}", p.map, p.layer);
+        if !layer_ids.contains(p.layer.as_str()) {
+            d.items.push(hint(
+                format!("partition:layer_missing:{}:{}", p.map, p.layer),
+                format!("分区 {key} 指向不存在的势力层 {}", p.layer),
+            ));
+        }
+        for span in &p.spans {
+            if let Err(e) = span.validate_topology() {
+                d.items.push(error(
+                    format!("partition:topology:{}:{}:{}", p.map, p.layer, span.from),
+                    format!("分区 {key}（自第 {} 天）拓扑破损: {e}", span.from),
+                ));
+            }
+            for face in &span.faces {
+                if let Some(owner) = &face.owner {
+                    if !faction_ids.contains(owner.as_str()) {
+                        d.items.push(hint(
+                            format!("partition:owner_dangling:{}:{}:{}", p.map, p.layer, owner),
+                            format!(
+                                "分区 {key} 的脸 {} 归属势力 {owner} 不存在（悬空引用）",
+                                face.id
+                            ),
+                        ));
+                    }
+                }
+            }
+            // 海陆错配（Review Focus 5）：脸外环首顶点落海 = 海岸线漂移
+            //（快照不重切，提示作者该分区已过时）。
+            if let Some(terrain) = terrain_of(&p.map) {
+                let cell = |x: f32, y: f32| -> Option<char> {
+                    let gx = (x / 1.0).floor() as i32;
+                    let gy = (y / 1.0).floor() as i32;
+                    let w = terrain.width as i32;
+                    let h = terrain.height as i32;
+                    if gx < 0 || gy < 0 || gx >= w || gy >= h {
+                        return None;
+                    }
+                    terrain
+                        .cells
+                        .get(gy as usize * w as usize + gx as usize)
+                        .map(|c| if c.surface == 0 { 'w' } else { 'l' })
+                };
+                for face in &span.faces {
+                    if let Some(v) = span.vertices.iter().find(|v| v.id == face.ring[0]) {
+                        if cell(v.xy[0], v.xy[1]) == Some('w') {
+                            d.items.push(hint(
+                                format!("partition:coast_drift:{}:{}:{}", p.map, p.layer, face.id),
+                                format!(
+                                    "分区 {key} 的脸 {} 起始顶点已落水——地形改动后分区未重切（快照语义，ADR-0074）",
+                                    face.id
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    d
+}
 #[cfg(test)]
 mod cross_level_scale_tests {
     use super::*;
@@ -1381,6 +1457,88 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod partition_diag_tests {
+    //! 分区诊断（ADR-0074 T13）：悬空 owner / 拓扑破损 / 海陆错配。
+
+    use super::*;
+    use wv_core::model::faction_partition::*;
+    use wv_core::{Id, World};
+
+    fn world_with_partition(vertex_xy: [f32; 2]) -> World {
+        let mut world = World::default();
+        world.partitions.push(FactionPartition {
+            map: Id::new_unchecked("map_a"),
+            layer: Id::new_unchecked("layer_borders"),
+            spans: vec![PartitionSpan {
+                from: 0,
+                to: None,
+                vertices: vec![PartitionVertex {
+                    id: 0,
+                    xy: vertex_xy,
+                }],
+                faces: vec![PartitionFace {
+                    id: 0,
+                    owner: Some(Id::new_unchecked("nope")),
+                    ring: vec![0],
+                    holes: Vec::new(),
+                }],
+            }],
+        });
+        world
+    }
+
+    #[test]
+    fn dangling_owner_lists_hint_without_blocking() {
+        let world = world_with_partition([0.0, 0.0]);
+        let d = derive_partition_diagnostics(&world);
+        let hits: Vec<_> = d
+            .items
+            .iter()
+            .filter(|x| x.fingerprint.contains("owner_dangling"))
+            .collect();
+        assert_eq!(hits.len(), 1, "悬空 owner 应列一条: {:?}", d.items);
+        assert_eq!(hits[0].level, DiagLevel::Hint, "V1：只提示");
+    }
+
+    #[test]
+    fn missing_layer_lists_hint() {
+        let world = world_with_partition([0.0, 0.0]); // 无 faction_layers
+        let d = derive_partition_diagnostics(&world);
+        assert!(
+            d.items
+                .iter()
+                .any(|x| x.fingerprint.contains("layer_missing")),
+            "层引用缺失应列一条: {:?}",
+            d.items
+        );
+    }
+
+    #[test]
+    fn coastline_drift_lists_hint() {
+        // 地图带 4×4 栅格，分区脸的顶点 (5,5) 落在 (5,5) 格——全海栅格里
+        // 是水 → 错配提示。
+        // 顶点 (2,2) 落在 4×4 栅格内（格面全水 → 错配）。
+        let mut world = world_with_partition([2.0, 2.0]);
+        let mut grid = wv_core::terrain::TerrainData {
+            width: 4,
+            height: 4,
+            cells: vec![Default::default(); 16],
+        };
+        for c in &mut grid.cells {
+            c.surface = 0; // 全水
+        }
+        world.set_terrain(Id::new_unchecked("map_a"), grid);
+        let d = derive_partition_diagnostics(&world);
+        assert!(
+            d.items
+                .iter()
+                .any(|x| x.fingerprint.contains("coast_drift")),
+            "顶点落海应列海陆错配提示: {:?}",
+            d.items
+        );
+    }
+}
 #[cfg(test)]
 mod faction_diag_tests {
     use super::*;

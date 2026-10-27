@@ -308,6 +308,174 @@ pub struct CutPickDialog {
     /// 势力 id 字符串（空 = 无主）。
     pub owner: String,
 }
+
+/// 拖边界（T13/D4）：命中**共享顶点**（≤8px 容差）→ 拖动 → 松手提交
+/// `MovePartitionVerticesCommand`（零和由命令侧预检保证）。
+#[allow(clippy::too_many_arguments)]
+pub fn partition_drag_gesture(
+    buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    view: Res<ViewState>,
+    grid: Res<GridConfig>,
+    playback: Res<PlaybackState>,
+    edit_state: Res<PartitionEditState>,
+    mut session: ResMut<DragSession>,
+    mut projection: ResMut<WorldProjection>,
+    mut edit: ResMut<EditHistory>,
+    pointer: Res<wv_render::camera::PointerOverUi>,
+) {
+    let Some((layer_id, span_from)) = edit_state.active.clone() else {
+        return;
+    };
+    if edit_state.tool != PartitionTool::DragBoundary || playback.playing || pointer.wants_pointer {
+        return;
+    }
+    if keys.just_pressed(KeyCode::Escape) && session.dragging.is_some() {
+        session.dragging = None;
+        return;
+    }
+    let Some(cursor) = view.cursor_world else {
+        return;
+    };
+    let p = cursor_to_partition(cursor, &grid);
+    let map_id = wv_core::Id::new_unchecked(view.current_map.clone());
+    let span = || -> Option<wv_core::model::faction_partition::PartitionSpan> {
+        wv_core::partition_span_at(&projection.world, &map_id, &layer_id, playback.current_day)
+            .cloned()
+    };
+
+    if buttons.just_pressed(MouseButton::Left) {
+        // 命中最近的共享顶点（被 ≥2 脸引用）。
+        if let Some(span) = span() {
+            let hit = span
+                .vertices
+                .iter()
+                .filter(|v| span.faces.iter().filter(|f| f.ring.contains(&v.id)).count() >= 2)
+                .min_by(|a, b| {
+                    let da = (a.xy[0] - p.x).powi(2) + (a.xy[1] - p.y).powi(2);
+                    let db = (b.xy[0] - p.x).powi(2) + (b.xy[1] - p.y).powi(2);
+                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .filter(|v| {
+                    let d2 = (v.xy[0] - p.x).powi(2) + (v.xy[1] - p.y).powi(2);
+                    d2 <= DRAG_GRAB_PX * DRAG_GRAB_PX
+                });
+            if let Some(v) = hit {
+                session.dragging = Some(v.id);
+            }
+        }
+    } else if buttons.just_released(MouseButton::Left) {
+        if let Some(vid) = session.dragging.take() {
+            let Some(sp) = span() else { return };
+            // 零和预检同款：仅当仍被 ≥2 脸引用才提交（数据可能已变）。
+            let shared = sp.faces.iter().filter(|f| f.ring.contains(&vid)).count() >= 2;
+            if !shared {
+                return;
+            }
+            let cmd = wv_edit::MovePartitionVerticesCommand {
+                map: map_id,
+                layer: layer_id,
+                span_from,
+                moves: vec![(vid, [p.x, p.y])],
+                before: std::sync::Mutex::new(None),
+            };
+            let mut tx = wv_edit::Transaction::new();
+            tx.push(Box::new(cmd));
+            match edit.history.commit(&mut projection.world, tx) {
+                Ok(dirty) => {
+                    edit.record_dirty(dirty);
+                    projection.dirty = true;
+                }
+                Err(e) => bevy::log::warn!("拖边界提交失败: {e}"),
+            }
+        }
+    }
+}
+
+/// 拖动会话（DragBoundary 工具）。
+#[derive(Resource, Default)]
+pub struct DragSession {
+    /// 正在拖的顶点 id。
+    pub dragging: Option<u32>,
+}
+
+/// 拖动命中容差（分区坐标 px；HUD 缩放下约屏幕 8px）。
+pub const DRAG_GRAB_PX: f32 = 8.0;
+
+/// 整块易主手势（T13/D8）：Assign 工具下点脸 → 立即 fork 提交
+/// （生效日 = 当前时间轴日；归属 = CutPickDialog 的输入）。
+#[allow(clippy::too_many_arguments)]
+pub fn partition_assign_gesture(
+    buttons: Res<ButtonInput<MouseButton>>,
+    view: Res<ViewState>,
+    grid: Res<GridConfig>,
+    playback: Res<PlaybackState>,
+    edit_state: Res<PartitionEditState>,
+    pick: Res<CutPickDialog>,
+    mut session: ResMut<CutStrokeSession>,
+    mut projection: ResMut<WorldProjection>,
+    mut edit: ResMut<EditHistory>,
+    pointer: Res<wv_render::camera::PointerOverUi>,
+) {
+    let Some((layer_id, _)) = edit_state.active.clone() else {
+        return;
+    };
+    if edit_state.tool != PartitionTool::Assign || playback.playing || pointer.wants_pointer {
+        return;
+    }
+    if !buttons.just_released(MouseButton::Left) {
+        return;
+    }
+    let Some(cursor) = view.cursor_world else {
+        return;
+    };
+    let p = cursor_to_partition(cursor, &grid);
+    let map_id = wv_core::Id::new_unchecked(view.current_map.clone());
+    let Some(span) =
+        wv_core::partition_span_at(&projection.world, &map_id, &layer_id, playback.current_day)
+    else {
+        return;
+    };
+    let Some(face) = pick_face_at([p.x, p.y], span) else {
+        return;
+    };
+    let owner = if pick.owner.trim().is_empty() {
+        None
+    } else {
+        Some(wv_core::Id::new_unchecked(pick.owner.trim()))
+    };
+    let cmd = wv_edit::AssignPartitionFaceCommand {
+        map: map_id,
+        layer: layer_id,
+        from: playback.current_day,
+        face,
+        owner,
+        before: std::sync::Mutex::new(None),
+    };
+    let mut tx = wv_edit::Transaction::new();
+    tx.push(Box::new(cmd));
+    match edit.history.commit(&mut projection.world, tx) {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
+            projection.dirty = true;
+        }
+        Err(e) => bevy::log::warn!("易主提交失败: {e}"),
+    }
+    session.reset();
+}
+
+#[cfg(test)]
+mod drag_assign_tests {
+    //! T13 手势纯函数。
+
+    use super::*;
+
+    #[test]
+    fn drag_grab_tolerance_bounds() {
+        // 容差常量钉死（≤8px 命中）。
+        assert_eq!(DRAG_GRAB_PX, 8.0);
+    }
+}
 #[cfg(test)]
 mod tests {
     //! T12 手势数学纯函数。

@@ -29,8 +29,7 @@ use crate::ui::city_intent::{prefill, CityIntentDialog};
 use super::shell::UiShell;
 use super::widgets::icon_image;
 use super::{
-    ICON_GLOBE, ICON_HILLS, ICON_LAKE, ICON_LAYERS, ICON_MAP_PIN, ICON_MOUNTAIN_RANGE,
-    ICON_PLATEAU, ICON_TREES,
+    ICON_GLOBE, ICON_HILLS, ICON_LAKE, ICON_MAP_PIN, ICON_MOUNTAIN_RANGE, ICON_PLATEAU, ICON_TREES,
 };
 use crate::theme::ui_tokens::radius;
 
@@ -48,7 +47,8 @@ fn terrain_intents_available(world: &wv_core::World, map: &wv_core::Id) -> bool 
 /// {World, Region}）。M4 起目录含「森林」：大陆 + 城市 + 森林 + 地形四意图。
 fn intent_count_for(level: wv_core::map::MapLevel) -> usize {
     match level {
-        wv_core::map::MapLevel::World | wv_core::map::MapLevel::Region => 8,
+        // ADR-0074 T13：「划分势力」入口退役（切蛋糕 pen 取代）→ 8 意图变 7。
+        wv_core::map::MapLevel::World | wv_core::map::MapLevel::Region => 7,
         wv_core::map::MapLevel::City | wv_core::map::MapLevel::Interior => 0,
     }
 }
@@ -64,16 +64,7 @@ pub struct IntentMenuDialogs<'w> {
     pub continent: ResMut<'w, crate::ui::ContinentDialog>,
     pub city: ResMut<'w, CityIntentDialog>,
     pub feature: ResMut<'w, crate::ui::FeaturePlaceDialog>,
-    pub divide: ResMut<'w, crate::ui::FactionDivisionDialog>,
     pub dock: Res<'w, crate::ui::map_controls::MapDockState>,
-}
-
-/// 划分势力按钮的可用性：当前图有自有地形栅格（与地形意图同门）。
-fn terrain_ok_for_divide(world: &wv_core::World, drill: &DrillState) -> bool {
-    drill
-        .current()
-        .map(|m| terrain_intents_available(world, m))
-        .unwrap_or(false)
 }
 
 /// 菜单可见性：工具**启用**且选区已闭合。`enabled` 门必不可少——
@@ -245,44 +236,6 @@ pub fn intent_menu(
                                     );
                                 }
                             }
-                            // 划分势力（ADR-0028）：把闭合环 + 当前图 + 解析出的宿主
-                            // 搬进对话框；宿主解析只认实控、取面积最小的含入势力。
-                            let icon = icon_image(
-                                ICON_LAYERS,
-                                egui::Color32::WHITE,
-                                TILE_SIZE - ICON_INSET,
-                            );
-                            if ui
-                                .add_enabled(
-                                    terrain_ok_for_divide(&projection.world, &drill),
-                                    egui::Button::image_and_text(
-                                        icon,
-                                        t(loc, I18nKey::IntentMenuDivideFaction),
-                                    )
-                                    .fill(shell.accent())
-                                    .corner_radius(egui::CornerRadius::from(radius::PANEL)),
-                                )
-                                .clicked()
-                            {
-                                if let (Some(map), Some(ring)) =
-                                    (drill.current().cloned(), selection.closed.clone())
-                                {
-                                    let host = crate::ui::faction_divide_dialog::resolve_host(
-                                        &projection.world,
-                                        &map,
-                                        &ring,
-                                        playback.current_day,
-                                    );
-                                    dialogs.divide.open_with(
-                                        map,
-                                        ring,
-                                        host,
-                                        grid.cell_size,
-                                        playback.current_day,
-                                        dialogs.dock.snapping,
-                                    );
-                                }
-                            }
                             // 地形按钮栅格门（spec §4：有**自有**地形栅格才可用，
                             // 终审 Important 1——无栅格图的预检/提交口径不一致）。
                             let terrain_ok = drill
@@ -373,12 +326,12 @@ mod tests {
     fn intent_catalog_nonempty_for_world_and_region() {
         assert_eq!(
             intent_count_for(MapLevel::World),
-            8,
-            "世界级：大陆 + 城市 + 森林（M4）+ 划分势力（ADR-0028）+ 地形四意图（M3）"
+            7,
+            "世界级：大陆 + 城市 + 森林（M4）+ 地形四意图（M3）；划分势力入口已随 ADR-0074 T13 退役"
         );
         assert_eq!(
             intent_count_for(MapLevel::Region),
-            8,
+            7,
             "区域级同世界级（spec §4 裁定）"
         );
     }

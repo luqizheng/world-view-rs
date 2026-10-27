@@ -506,7 +506,6 @@ pub(super) fn register(app: &mut App) {
         bevy_egui::EguiPrimaryContextPass,
         (
             ui::feature_place_dialog.after(ui::status_bar),
-            ui::faction_divide_dialog.after(ui::feature_place_dialog),
             // 应用设置（顶栏 settings-2）：与状态栏同帧、压在所有面板之上
             // （`DialogWindow` 走 `Order::Foreground`）。
             ui::settings_dialog.after(ui::status_bar),
@@ -565,6 +564,8 @@ pub(super) fn register(app: &mut App) {
         (
             crate::ui::partition_edit::partition_edit_hud,
             crate::ui::partition_edit::partition_cut_gesture,
+            crate::ui::partition_edit::partition_drag_gesture,
+            crate::ui::partition_edit::partition_assign_gesture,
         ),
     );
 }

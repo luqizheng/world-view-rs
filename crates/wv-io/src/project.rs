@@ -1252,6 +1252,7 @@ impl Project {
         d.extend(derive_hints(&world));
         // 势力层 / 归属边诊断（ADR-0027 D10）：只列出，不阻止保存（V1）。
         d.extend(crate::diagnostics::derive_faction_diagnostics(&world));
+        d.extend(crate::diagnostics::derive_partition_diagnostics(&world));
         d.dedup_by_fingerprint();
         Ok(d)
     }
