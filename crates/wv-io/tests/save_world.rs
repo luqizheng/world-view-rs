@@ -1347,6 +1347,9 @@ fn world_with_city(dir: &std::path::Path) -> IoResult<(Project, World)> {
     );
     world.maps.push(city);
     proj.save_world(&world, &[]).expect("全量落盘");
+    // 返回**重载后**的世界（raster 等落盘产物回填）——模拟真实编辑会话
+    // 「打开工程 → 改 → 再增量保存」的内存起点。
+    let world = proj.load_world()?;
     Ok((proj, world))
 }
 
@@ -1355,8 +1358,14 @@ fn trashed_map_survives_save_reload_as_trashed() {
     let tmp = TempDir::new("trash_round_trip");
     let dir = tmp.path();
     let (mut proj, mut world) = world_with_city(dir).expect("底座");
-    world.maps[1].trashed = true;
-    world.maps[1].trashed_at = Some("2026-10-27 15:00".into());
+    // reload 后 maps 是目录字典序——按 id 定位，不按位置。
+    let city = world
+        .maps
+        .iter_mut()
+        .find(|m| m.id.as_str() == "map_city_a")
+        .expect("城市在");
+    city.trashed = true;
+    city.trashed_at = Some("2026-10-27 15:00".into());
     proj.save_world(&world, &["maps".into()]).expect("保存");
 
     let world2 = Project::open(dir)
@@ -1386,8 +1395,14 @@ fn purged_map_directory_removed_on_save() {
     let dir = tmp.path();
     let (mut proj, mut world) = world_with_city(dir).expect("底座");
     // 模拟 trash → purge 之后的内存态：节点移除 + 父 children 摘除。
-    world.maps[0].children.clear();
-    world.maps.remove(1);
+    // （reload 后 maps 是字典序——全部按 id 操作。）
+    let root = world
+        .maps
+        .iter_mut()
+        .find(|m| m.id.as_str() == "map_main")
+        .expect("根图在");
+    root.children.clear();
+    world.maps.retain(|m| m.id.as_str() != "map_city_a");
     world.terrains.clear();
     proj.save_world(&world, &["maps".into()]).expect("保存");
     assert!(
@@ -1414,4 +1429,65 @@ fn save_clears_stale_directories_not_in_world() {
         !ghost.exists(),
         "不在内存 keep-set 的图目录应被清除（v0.1 简化正式退役）"
     );
+}
+
+/// 终审 C1 回归钉：副本图的 terrain 必须经精确脏路径落成**自己的** bin、
+/// raster 重写指向自己——而不是共享/指向源图的 terrain.bin。
+/// （wv-io 不能依赖 wv-edit，这里手工构造 paste 之后的等价内存态 +
+/// PasteMapCommand 应产出的精确脏路径。）
+#[test]
+fn pasted_copy_terrain_lands_on_disk_with_own_raster_via_dirty_save() {
+    let tmp = TempDir::new("paste_terrain_round_trip");
+    let dir = tmp.path();
+    let (mut proj, mut world) = world_with_city(dir).expect("底座");
+    // 模拟 paste：新图 map_city_b 克隆了 map_city_a 的 terrain（新键）。
+    let copy = MapNode {
+        id: Id::new_unchecked("map_city_b"),
+        name: "青州城 2".into(),
+        level: MapLevel::City,
+        parent: Some(Id::new_unchecked("map_main")),
+        ..MapNode::default()
+    };
+    world.maps[0].children.push(copy.id.clone());
+    world.set_terrain(
+        copy.id.clone(),
+        world
+            .terrain_of(&Id::new_unchecked("map_city_a"))
+            .cloned()
+            .expect("源地形在"),
+    );
+    world.maps.push(copy);
+    // PasteMapCommand 应产出的精确脏路径（粗粒度 `maps` 只写 index.yaml）。
+    let dirty = vec!["maps".to_owned(), "maps/map_city_b/terrain.bin".to_owned()];
+    proj.save_world(&world, &dirty).expect("增量保存");
+
+    // 磁盘：两个 bin 各自存在。
+    assert!(dir.join("maps/map_city_a/terrain.bin").is_file());
+    assert!(
+        dir.join("maps/map_city_b/terrain.bin").is_file(),
+        "副本地形必须有自己的 bin"
+    );
+    // 重开：两图 raster 各指各的 bin，且都能读（校验和有效）。
+    let world2 = Project::open(dir)
+        .expect("重开")
+        .load_world()
+        .expect("重载");
+    let ra = world2
+        .maps
+        .iter()
+        .find(|m| m.id.as_str() == "map_city_a")
+        .expect("在")
+        .raster
+        .as_ref()
+        .expect("源 raster 在");
+    let rb = world2
+        .maps
+        .iter()
+        .find(|m| m.id.as_str() == "map_city_b")
+        .expect("在")
+        .raster
+        .as_ref()
+        .expect("副本 raster 在");
+    assert_ne!(ra.path, rb.path, "raster 路径必须各指各的 bin");
+    assert!(rb.path.contains("map_city_b"), "got {}", rb.path);
 }

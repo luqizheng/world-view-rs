@@ -167,6 +167,14 @@ fn delete_menu_enabled(world: &World, id: &Id) -> bool {
     }
 }
 
+/// 删除后的自动切换兜底根（spec §6「删除当前图 → 自动切回第一张世界图」）。
+///
+/// **必须排除被删的图本身**（终审 I1）：`alive_roots().first()` 在提交删除
+/// 前取，被删根图自己往往就是第一项——拿它兜底等于哪儿都不切。
+fn fallback_root_after_trash(world: &World, trashing: &Id) -> Option<Id> {
+    world.alive_roots().into_iter().find(|r| r != trashing)
+}
+
 /// 恢复菜单门控（spec §6 嵌套守卫）：原父图存活才放行。
 fn restore_menu_enabled(world: &World, id: &Id) -> bool {
     match world.maps.iter().find(|m| &m.id == id) {
@@ -447,12 +455,15 @@ pub fn panel_map_tree(
                 }
             }
             TreeAction::Trash(id) => {
-                // 删除的子树若含当前图 → 先切回存活首根，再提交删除。
+                // 删除的子树若含当前图 → 先切到幸存根（排除被删者），再提交删除。
                 let subtree = projection.world.subtree_ids(&id);
                 if subtree.contains(&current) {
-                    if let Some(first) = projection.world.alive_roots().first() {
-                        let first = first.clone();
-                        drill.drill_to(&projection.world, &first);
+                    if let Some(first) = fallback_root_after_trash(&projection.world, &id) {
+                        // 幸存根可能是兄弟根（钻取轨迹到不了）→ drill_to 失败
+                        // 就 settle_on 直接落地。
+                        if !drill.drill_to(&projection.world, &first.clone()) {
+                            drill.settle_on(first);
+                        }
                     }
                 }
                 commit_map(
@@ -750,6 +761,40 @@ mod tests {
         } else {
             (false, true)
         }
+    }
+
+    #[test]
+    fn fallback_root_excludes_the_map_being_trashed() {
+        let mut w = World::default();
+        w.maps = vec![
+            node("world_a", None, MapLevel::World),
+            node("world_b", None, MapLevel::World),
+        ];
+        // 删 A → 兜底 B；删 B → 兜底 A（I1：first 永远不该是被删图自己）。
+        assert_eq!(
+            fallback_root_after_trash(&w, &Id::new_unchecked("world_a"))
+                .expect("应有兜底")
+                .as_str(),
+            "world_b"
+        );
+        assert_eq!(
+            fallback_root_after_trash(&w, &Id::new_unchecked("world_b"))
+                .expect("应有兜底")
+                .as_str(),
+            "world_a"
+        );
+        // 删子图：任何存活根都行（首根即可），不受排除影响。
+        w.maps.push(node("city_x", Some("world_a"), MapLevel::City));
+        assert_eq!(
+            fallback_root_after_trash(&w, &Id::new_unchecked("city_x"))
+                .expect("应有兜底")
+                .as_str(),
+            "world_a"
+        );
+        // 单根删自己 → None（命令层本来就拒绝，这里是纯函数契约）。
+        let mut solo = World::default();
+        solo.maps = vec![node("world_solo", None, MapLevel::World)];
+        assert!(fallback_root_after_trash(&solo, &Id::new_unchecked("world_solo")).is_none());
     }
 
     #[test]

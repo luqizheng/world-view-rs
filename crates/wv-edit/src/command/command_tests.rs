@@ -4623,6 +4623,36 @@ mod paste_map_tests {
     }
 
     #[test]
+    fn paste_emits_per_id_dirty_paths_for_copied_data() {
+        // C1（终审）：wv-io 的逐项落盘过滤器要精确路径——`maps/<id>/terrain.bin`
+        // / `streets/<layer>` / `buildings/<layer>` / `measurements/<map>`。
+        // 粗粒度 `maps` 只触发 index.yaml 重写，副本数据静默丢盘。
+        let mut w = fixture();
+        let cmd = PasteMapCommand::new(
+            Id::new_unchecked("map_city_a"),
+            Some(Id::new_unchecked("world_main")),
+            wv_core::Point::new(500.0, 500.0),
+        );
+        let dirty = cmd.apply(&mut w).expect("apply");
+        let rid = cmd.created_root().expect("root");
+        let new_layer = w.maps.iter().find(|m| m.id == rid).expect("新城在").layers[0]
+            .id
+            .clone();
+        assert!(
+            dirty.contains(&format!("maps/{}/terrain.bin", rid.as_str())),
+            "副本地形必须给精确脏路径，got {dirty:?}"
+        );
+        assert!(
+            dirty.contains(&format!("measurements/{}", rid.as_str())),
+            "副本测量必须给精确脏路径，got {dirty:?}"
+        );
+        assert!(
+            dirty.contains(&format!("streets/{}", new_layer.as_str())),
+            "副本街道文档必须给精确脏路径，got {dirty:?}"
+        );
+    }
+
+    #[test]
     fn paste_anchor_clamped_into_target_extent_and_shifts_outline() {
         let mut w = fixture();
         let cmd = PasteMapCommand::new(

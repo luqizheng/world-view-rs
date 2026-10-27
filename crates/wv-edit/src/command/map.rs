@@ -1132,17 +1132,23 @@ impl EditCommand for PasteMapCommand {
         world.faction_geometry.append(&mut new_fg);
 
         let layer_ids: Vec<Id> = layer_map.values().cloned().collect();
+        let map_ids: Vec<Id> = id_map.values().cloned().collect();
         *self.ledger.lock().expect("paste ledger 锁") = Some(PasteLedger {
             root: new_root,
-            map_ids: id_map.values().cloned().collect(),
-            layer_ids,
+            map_ids: map_ids.clone(),
+            layer_ids: layer_ids.clone(),
             place_ids,
             edge_ids,
             region_ids,
             sea_ids,
             span_keys,
         });
-        Ok(vec![
+        // C1（终审）：wv-io 的逐项落盘过滤器要求**精确**脏路径——
+        // `terrain_is_dirty` 要 `maps/<id>` 前缀（命中即重写该图的
+        // terrain.bin 并更新 raster 引用，副本从此指自己的 bin），
+        // streets/buildings/measurements 要各自的虚拟命名空间路径。
+        // 粗粒度 `maps` 只重写 index.yaml，副本数据会静默丢盘。
+        let mut dirty: Vec<String> = vec![
             "maps".to_owned(),
             "distances/places".to_owned(),
             "distances/edges".to_owned(),
@@ -1150,7 +1156,24 @@ impl EditCommand for PasteMapCommand {
             "geometry/faction".to_owned(),
             "regions".to_owned(),
             "seas".to_owned(),
-        ])
+        ];
+        for mid in &map_ids {
+            if world.terrains.contains_key(mid) {
+                dirty.push(format!("maps/{}/terrain.bin", mid.as_str()));
+            }
+            if world.measurements.contains_key(mid) {
+                dirty.push(format!("measurements/{}", mid.as_str()));
+            }
+        }
+        for lid in &layer_ids {
+            if world.streets.contains_key(lid) {
+                dirty.push(format!("streets/{}", lid.as_str()));
+            }
+            if world.buildings.contains_key(lid) {
+                dirty.push(format!("buildings/{}", lid.as_str()));
+            }
+        }
+        Ok(dirty)
     }
 
     fn revert(&self, world: &mut World) -> EditResult<()> {
