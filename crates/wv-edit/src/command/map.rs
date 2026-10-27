@@ -96,7 +96,7 @@ impl EditCommand for AddMapCommand {
 // ---------------------------------------------------------------------------
 
 use wv_core::base::geometry::Point;
-use wv_core::map::{GeometryData, IconShape, IconSpec, MapNode};
+use wv_core::map::{GeometryData, IconShape, IconSpec, MapLevel, MapNode};
 use wv_core::Id;
 
 /// 新建城市子图（ADR-0022 D5 · `AddCityCommand`）。
@@ -642,6 +642,551 @@ impl EditCommand for RestoreMapCommand {
         // 回到垃圾桶态；时间戳丢失可接受（垃圾桶按次存放，撤销恢复本就罕见）。
         node.trashed = true;
         node.trashed_at = None;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PasteMapCommand（深拷贝粘贴 · 2026-10-27 spec §5 D2–D4 / §7 深拷贝要点）
+// ---------------------------------------------------------------------------
+
+/// 粘贴产物账本（revert 用）：记录本次新建的全部键。
+/// ID 在创建时即唯一，revert 按 ID 移除即可完整回退。
+#[derive(Debug, Default)]
+struct PasteLedger {
+    root: Id,
+    map_ids: Vec<Id>,
+    layer_ids: Vec<Id>,
+    place_ids: Vec<Id>,
+    edge_ids: Vec<Id>,
+    region_ids: Vec<Id>,
+    sea_ids: Vec<Id>,
+    /// 追加的几何 span 身份键 `(map, owner, span.from)`——span 无 ID，按三元组对账。
+    span_keys: Vec<(Id, Id, i64)>,
+}
+
+/// 在 `reserved` 之外找第一个空闲的 `<base>_<n>`（n 从 2 起），并把它登记进 reserved。
+///
+/// 批量换新 ID 时，后续候选不能撞上**同批**已取的名字——world 里查不到
+/// 同批新 ID，只有 reserved 集合兜得住。
+fn fresh_suffixed_id(base: &str, reserved: &mut std::collections::HashSet<String>) -> Id {
+    for n in 2u32.. {
+        let cand = format!("{base}_{n}");
+        if reserved.insert(cand.clone()) {
+            return Id::new_unchecked(cand);
+        }
+    }
+    unreachable!("u32 序列不可能穷尽")
+}
+
+/// 兄弟内名字唯一化：无冲突保原名，有冲突依次 `名 2`、`名 3`（spec D4）。
+fn unique_sibling_name(siblings: &[String], name: &str) -> String {
+    if !siblings.iter().any(|s| s == name) {
+        return name.to_owned();
+    }
+    for n in 2u32.. {
+        let cand = format!("{name} {n}");
+        if !siblings.iter().any(|s| s == &cand) {
+            return cand;
+        }
+    }
+    unreachable!()
+}
+
+/// 平移扁平点列（`[x0, y0, x1, y1, ...]`）。
+fn shift_points(pts: &[f32], delta: &Point) -> Vec<f32> {
+    let mut out = Vec::with_capacity(pts.len());
+    for pair in pts.chunks(2) {
+        out.push(pair[0] + delta.x);
+        if let Some(y) = pair.get(1) {
+            out.push(y + delta.y);
+        }
+    }
+    out
+}
+
+/// 把 `GeometryData` 的全部顶点平移 `delta`（Polygon 变体；Points/Ref 原样）。
+fn shift_geometry(geo: &GeometryData, delta: &Point) -> GeometryData {
+    match geo {
+        GeometryData::Polygon(pts) => GeometryData::Polygon(shift_points(pts, delta)),
+        GeometryData::PolygonWithHoles { outer, holes } => GeometryData::PolygonWithHoles {
+            outer: shift_points(outer, delta),
+            holes: holes.iter().map(|h| shift_points(h, delta)).collect(),
+        },
+        other => other.clone(),
+    }
+}
+
+/// 轮廓质心（outline 无 extent.origin 时的锚定参照）。仅 Polygon/Points。
+fn outline_centroid(geo: Option<&GeometryData>) -> Option<Point> {
+    let pts = match geo? {
+        GeometryData::Polygon(p) => p,
+        GeometryData::Points(p) => p,
+        _ => return None,
+    };
+    if pts.is_empty() {
+        return None;
+    }
+    let (mut sx, mut sy, mut n) = (0.0f32, 0.0f32, 0usize);
+    for pair in pts.chunks(2) {
+        sx += pair[0];
+        sy += pair.get(1).copied().unwrap_or(0.0);
+        n += 1;
+    }
+    Some(Point::new(sx / n as f32, sy / n as f32))
+}
+
+/// 深拷贝粘贴整棵子树（spec §5 D2–D4）。
+///
+/// - ID 全量重生成（地图 / 图层），名字仅根节点按兄弟补号；
+/// - 根节点按 `anchor` 锚定（先夹进目标图 extent），outline 随 delta 平移，
+///   后代 LOCAL 数据不动（`MoveCityCommand` 同款平移语义）；
+/// - 逐图数据（terrain / streets / buildings / measurements）按新键整份克隆；
+/// - 副本与源**零共享**：任何 ID 不复用（撞车即覆盖 BTreeMap 键）。
+///
+/// ## 层级门控
+///
+/// `World → None`（独立新根）、`Region|City → World`、`Interior → City`；
+/// 不匹配报 `Precondition`。
+///
+/// ## revert
+///
+/// 一次性命令：`apply` 后再 `apply` 报错；`revert` 按账本移除全部新建键。
+#[derive(Debug)]
+pub struct PasteMapCommand {
+    pub source_id: Id,
+    /// 粘贴落点父图；`None` = 世界图源落为独立新根。
+    pub target_parent: Option<Id>,
+    /// 落点锚（目标图局部坐标；目标图有 extent 时先夹进范围）。
+    pub anchor: Point,
+    ledger: std::sync::Mutex<Option<PasteLedger>>,
+}
+
+impl PasteMapCommand {
+    pub fn new(source_id: Id, target_parent: Option<Id>, anchor: Point) -> Self {
+        Self {
+            source_id,
+            target_parent,
+            anchor,
+            ledger: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// `apply` 后新建子树的根 ID（`revert` 后回 `None`）——粘贴后导航用。
+    pub fn created_root(&self) -> Option<Id> {
+        self.ledger
+            .lock()
+            .expect("paste ledger 锁")
+            .as_ref()
+            .map(|l| l.root.clone())
+    }
+}
+
+impl EditCommand for PasteMapCommand {
+    fn label(&self) -> String {
+        format!("粘贴地图「{}」", self.source_id.as_str())
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        if self.ledger.lock().expect("paste ledger 锁").is_some() {
+            return Err(EditError::Precondition(
+                "粘贴命令已应用（一次性命令）".into(),
+            ));
+        }
+        let Some(source) = world.maps.iter().find(|m| m.id == self.source_id).cloned() else {
+            return Err(EditError::TargetMissing(format!(
+                "地图 `{}`",
+                self.source_id
+            )));
+        };
+        if !world.map_alive(&self.source_id) {
+            return Err(EditError::Precondition(
+                "源图在垃圾桶中，先恢复再复制".into(),
+            ));
+        }
+
+        // 目标图（Some 时必须存在）+ 层级门控。
+        let target = match &self.target_parent {
+            Some(t) => {
+                let node = world
+                    .maps
+                    .iter()
+                    .find(|m| &m.id == t)
+                    .ok_or_else(|| EditError::TargetMissing(format!("目标图 `{t}`")))?;
+                Some(node.clone())
+            }
+            None => None,
+        };
+        let level_ok = match source.level {
+            MapLevel::World => target.is_none(),
+            MapLevel::Region | MapLevel::City => {
+                target.as_ref().is_some_and(|t| t.level == MapLevel::World)
+            }
+            MapLevel::Interior => target.as_ref().is_some_and(|t| t.level == MapLevel::City),
+        };
+        if !level_ok {
+            let (src, allowed) = match source.level {
+                MapLevel::World => ("世界图", "独立根位置"),
+                MapLevel::Region => ("区域图", "世界图下"),
+                MapLevel::City => ("城市图", "世界图下"),
+                MapLevel::Interior => ("内部图", "城市图下"),
+            };
+            return Err(EditError::Precondition(format!(
+                "层级不匹配：{src} 只能粘贴到{allowed}"
+            )));
+        }
+
+        // 锚点夹进目标图 extent（origin 缺省按 (0,0)；独立新根不夹）。
+        let mut anchor = self.anchor;
+        if let Some(ext) = target.as_ref().and_then(|t| t.extent.as_ref()) {
+            let (ox, oy) = match ext.origin {
+                Some(p) => (p.x, p.y),
+                None => (0.0, 0.0),
+            };
+            anchor.x = anchor.x.clamp(ox, ox + ext.width);
+            anchor.y = anchor.y.clamp(oy, oy + ext.height);
+        }
+
+        // 平移量 = 锚点 − 源根当前位置（extent.origin → outline 质心 → 零位移）。
+        let src_pos = source
+            .extent
+            .as_ref()
+            .and_then(|e| e.origin)
+            .or_else(|| outline_centroid(source.outline_polygon.as_ref()))
+            .unwrap_or(anchor);
+        let delta = Point::new(anchor.x - src_pos.x, anchor.y - src_pos.y);
+
+        // ID 换新：地图批 + 图层批（图层名空间 = 全部图的 layers ∪ streets/buildings 键）。
+        let subtree = world.subtree_ids(&self.source_id);
+        let mut reserved: std::collections::HashSet<String> = world
+            .maps
+            .iter()
+            .map(|m| m.id.as_str().to_owned())
+            .collect();
+        let mut layer_reserved: std::collections::HashSet<String> = world
+            .maps
+            .iter()
+            .flat_map(|m| m.layers.iter().map(|l| l.id.as_str().to_owned()))
+            .collect();
+        for k in world.streets.keys().chain(world.buildings.keys()) {
+            layer_reserved.insert(k.as_str().to_owned());
+        }
+        let mut id_map: std::collections::HashMap<Id, Id> = std::collections::HashMap::new();
+        for old in &subtree {
+            let fresh = fresh_suffixed_id(old.as_str(), &mut reserved);
+            id_map.insert(old.clone(), fresh);
+        }
+        let new_root = id_map
+            .get(&self.source_id)
+            .expect("根必在子树映射中")
+            .clone();
+
+        // 根名字补号（兄弟 = 目标父的 children；独立根 = 全部根）。
+        let siblings: Vec<String> = match &target {
+            Some(t) => t
+                .children
+                .iter()
+                .filter_map(|c| world.maps.iter().find(|m| &m.id == c))
+                .map(|m| m.name.clone())
+                .collect(),
+            None => world
+                .maps
+                .iter()
+                .filter(|m| m.parent.is_none())
+                .map(|m| m.name.clone())
+                .collect(),
+        };
+        let root_name = unique_sibling_name(&siblings, &source.name);
+
+        // 逐节点克隆（先备好后提交，避免在遍历中改 world.maps）。
+        let mut layer_map: std::collections::HashMap<(Id, Id), Id> =
+            std::collections::HashMap::new();
+        let mut new_nodes: Vec<MapNode> = Vec::with_capacity(subtree.len());
+        for old in &subtree {
+            let node = world
+                .maps
+                .iter()
+                .find(|m| &m.id == old)
+                .expect("子树节点必在");
+            let new_id = id_map.get(old).expect("映射必在").clone();
+            let mut nn = node.clone();
+            nn.id = new_id.clone();
+            nn.parent = if old == &self.source_id {
+                self.target_parent.clone()
+            } else {
+                node.parent
+                    .as_ref()
+                    .map(|p| id_map.get(p).cloned().unwrap_or_else(|| p.clone()))
+            };
+            nn.children = node
+                .children
+                .iter()
+                .map(|c| id_map.get(c).cloned().unwrap_or_else(|| c.clone()))
+                .collect();
+            if old == &self.source_id {
+                nn.name = root_name.clone();
+            }
+            // 图层：ID 换新 + source 路径前缀改写到新图目录。
+            let mut new_layers = Vec::with_capacity(node.layers.len());
+            for layer in &node.layers {
+                let mut nl = layer.clone();
+                let key = (node.id.clone(), layer.id.clone());
+                let new_lid = match layer_map.get(&key) {
+                    Some(prev) => prev.clone(),
+                    None => {
+                        let fresh = fresh_suffixed_id(layer.id.as_str(), &mut layer_reserved);
+                        layer_map.insert(key, fresh.clone());
+                        fresh
+                    }
+                };
+                nl.id = new_lid;
+                if let Some(src) = &nl.source {
+                    let old_prefix = format!("maps/{}/", node.id.as_str());
+                    if let Some(rest) = src.strip_prefix(&old_prefix) {
+                        nl.source = Some(format!("maps/{}/{rest}", new_id.as_str()));
+                    }
+                }
+                new_layers.push(nl);
+            }
+            nn.layers = new_layers;
+            // 钻取图标重映射到新后代。
+            for icon in &mut nn.icons {
+                if let Some(d) = &icon.drill_into {
+                    if let Some(m) = id_map.get(d) {
+                        icon.drill_into = Some(m.clone());
+                    }
+                }
+            }
+            // 根锚定：extent.origin 落锚点，outline 随 delta 平移。
+            if old == &self.source_id {
+                if let Some(ext) = &mut nn.extent {
+                    ext.origin = Some(anchor);
+                }
+                if let Some(geo) = &nn.outline_polygon {
+                    nn.outline_polygon = Some(shift_geometry(geo, &delta));
+                }
+            }
+            new_nodes.push(nn);
+        }
+
+        // 逐图数据搬家（terrain / measurements 按图 ID；streets / buildings 按图层 ID）。
+        for old in &subtree {
+            let new_id = id_map.get(old).expect("映射必在");
+            if let Some(t) = world.terrains.get(old).cloned() {
+                world.set_terrain(new_id.clone(), t);
+            }
+            if let Some(m) = world.measurements.get(old).cloned() {
+                world.measurements.insert(new_id.clone(), m);
+            }
+            let old_layers: Vec<Id> = world
+                .maps
+                .iter()
+                .find(|m| &m.id == old)
+                .expect("在")
+                .layers
+                .iter()
+                .map(|l| l.id.clone())
+                .collect();
+            for old_layer in old_layers {
+                let new_layer = layer_map
+                    .get(&(old.clone(), old_layer.clone()))
+                    .expect("图层映射必在");
+                if let Some(doc) = world.streets.get(&old_layer).cloned() {
+                    world.streets.insert(new_layer.clone(), doc);
+                }
+                if let Some(doc) = world.buildings.get(&old_layer).cloned() {
+                    world.buildings.insert(new_layer.clone(), doc);
+                }
+            }
+        }
+
+        // 提交节点 + 父图 children 回填。
+        for nn in new_nodes {
+            world.maps.push(nn);
+        }
+        if let Some(t) = self.target_parent.clone() {
+            if let Some(p) = world.maps.iter_mut().find(|m| m.id == t) {
+                p.children.push(new_root.clone());
+            }
+        }
+
+        // —— 实体深拷贝（spec §7：按 map 归属收集，Id 全量重生成）——
+        let subtree_set: std::collections::HashSet<Id> = subtree.iter().cloned().collect();
+        let remap_map = |m: &Id| id_map.get(m).cloned().unwrap_or_else(|| m.clone());
+
+        // Place：map ∈ 子树 → 克隆 + 新 id + map 重映射（本图局部坐标不动）。
+        let mut place_map: std::collections::HashMap<Id, Id> = std::collections::HashMap::new();
+        let mut place_ids: Vec<Id> = Vec::new();
+        let mut place_reserved: std::collections::HashSet<String> = world
+            .distances
+            .places
+            .iter()
+            .map(|p| p.id.as_str().to_owned())
+            .collect();
+        let mut new_places = Vec::new();
+        for p in world
+            .distances
+            .places
+            .iter()
+            .filter(|p| p.map.as_ref().is_some_and(|m| subtree_set.contains(m)))
+        {
+            let mut np = p.clone();
+            np.id = fresh_suffixed_id(p.id.as_str(), &mut place_reserved);
+            np.map = p.map.as_ref().map(&remap_map);
+            place_map.insert(p.id.clone(), np.id.clone());
+            place_ids.push(np.id.clone());
+            new_places.push(np);
+        }
+        world.distances.places.append(&mut new_places);
+
+        // Edge：两端都在复制集内才跟随（端点重映射）；跨界边属于源世界距离图，不搬。
+        let mut edge_ids: Vec<Id> = Vec::new();
+        let mut edge_reserved: std::collections::HashSet<String> = world
+            .distances
+            .edges
+            .iter()
+            .map(|e| e.id.as_str().to_owned())
+            .collect();
+        let mut new_edges = Vec::new();
+        for e in world.distances.edges.iter() {
+            if let (Some(a), Some(b)) = (place_map.get(&e.a), place_map.get(&e.b)) {
+                let mut ne = e.clone();
+                ne.id = fresh_suffixed_id(e.id.as_str(), &mut edge_reserved);
+                ne.a = a.clone();
+                ne.b = b.clone();
+                edge_ids.push(ne.id.clone());
+                new_edges.push(ne);
+            }
+        }
+        world.distances.edges.append(&mut new_edges);
+
+        // Region / Sea：克隆 + id 换新 + map 重映射。
+        let mut region_ids: Vec<Id> = Vec::new();
+        let mut region_reserved: std::collections::HashSet<String> = world
+            .regions
+            .iter()
+            .map(|r| r.id.as_str().to_owned())
+            .collect();
+        let mut new_regions = Vec::new();
+        for r in world
+            .regions
+            .iter()
+            .filter(|r| subtree_set.contains(&r.map))
+        {
+            let mut nr = r.clone();
+            nr.id = fresh_suffixed_id(r.id.as_str(), &mut region_reserved);
+            nr.map = remap_map(&r.map);
+            region_ids.push(nr.id.clone());
+            new_regions.push(nr);
+        }
+        world.regions.append(&mut new_regions);
+
+        let mut sea_ids: Vec<Id> = Vec::new();
+        let mut sea_reserved: std::collections::HashSet<String> = world
+            .seas
+            .iter()
+            .map(|s| s.id.as_str().to_owned())
+            .collect();
+        let mut new_seas = Vec::new();
+        for sea in world.seas.iter().filter(|s| subtree_set.contains(&s.map)) {
+            let mut ns = sea.clone();
+            ns.id = fresh_suffixed_id(sea.id.as_str(), &mut sea_reserved);
+            ns.map = remap_map(&sea.map);
+            sea_ids.push(ns.id.clone());
+            new_seas.push(ns);
+        }
+        world.seas.append(&mut new_seas);
+
+        // 几何 span：map ∈ 子树 → 克隆 + map 重映射；place_geometry 的 owner
+        // 随 Place 换新，faction_geometry 的 owner（全局势力实体）保留。
+        let mut span_keys: Vec<(Id, Id, i64)> = Vec::new();
+        let mut new_pg = Vec::new();
+        for g in world
+            .place_geometry
+            .iter()
+            .filter(|g| subtree_set.contains(&g.map))
+        {
+            let mut ng = g.clone();
+            ng.map = remap_map(&g.map);
+            ng.owner = place_map
+                .get(&g.owner)
+                .cloned()
+                .unwrap_or_else(|| g.owner.clone());
+            span_keys.push((ng.map.clone(), ng.owner.clone(), ng.span.from));
+            new_pg.push(ng);
+        }
+        world.place_geometry.append(&mut new_pg);
+        let mut new_fg = Vec::new();
+        for g in world
+            .faction_geometry
+            .iter()
+            .filter(|g| subtree_set.contains(&g.map))
+        {
+            let mut ng = g.clone();
+            ng.map = remap_map(&g.map);
+            span_keys.push((ng.map.clone(), ng.owner.clone(), ng.span.from));
+            new_fg.push(ng);
+        }
+        world.faction_geometry.append(&mut new_fg);
+
+        let layer_ids: Vec<Id> = layer_map.values().cloned().collect();
+        *self.ledger.lock().expect("paste ledger 锁") = Some(PasteLedger {
+            root: new_root,
+            map_ids: id_map.values().cloned().collect(),
+            layer_ids,
+            place_ids,
+            edge_ids,
+            region_ids,
+            sea_ids,
+            span_keys,
+        });
+        Ok(vec![
+            "maps".to_owned(),
+            "distances/places".to_owned(),
+            "distances/edges".to_owned(),
+            "geometry/place".to_owned(),
+            "geometry/faction".to_owned(),
+            "regions".to_owned(),
+            "seas".to_owned(),
+        ])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let Some(l) = self.ledger.lock().expect("paste ledger 锁").take() else {
+            return Err(EditError::Precondition("粘贴尚未应用，无法撤销".into()));
+        };
+        world.maps.retain(|m| !l.map_ids.contains(&m.id));
+        if let Some(t) = &self.target_parent {
+            if let Some(p) = world.maps.iter_mut().find(|m| &m.id == t) {
+                p.children.retain(|c| c != &l.root);
+            }
+        }
+        for id in &l.map_ids {
+            world.terrains.remove(id);
+            world.measurements.remove(id);
+        }
+        for id in &l.layer_ids {
+            world.streets.remove(id);
+            world.buildings.remove(id);
+        }
+        world
+            .distances
+            .places
+            .retain(|p| !l.place_ids.contains(&p.id));
+        world
+            .distances
+            .edges
+            .retain(|e| !l.edge_ids.contains(&e.id));
+        world.regions.retain(|r| !l.region_ids.contains(&r.id));
+        world.seas.retain(|s| !l.sea_ids.contains(&s.id));
+        world.place_geometry.retain(|g| {
+            !l.span_keys
+                .contains(&(g.map.clone(), g.owner.clone(), g.span.from))
+        });
+        world.faction_geometry.retain(|g| {
+            !l.span_keys
+                .contains(&(g.map.clone(), g.owner.clone(), g.span.from))
+        });
         Ok(())
     }
 }

@@ -4409,3 +4409,472 @@ mod trash_map_tests {
         assert!(err.to_string().contains("彻底删除"), "got: {err}");
     }
 }
+
+#[cfg(test)]
+mod paste_map_tests {
+    use crate::command::*;
+    use wv_core::map::{Extent, GeometryData, Layer, LayerKind, MapLevel, MapNode};
+    use wv_core::{Id, World};
+
+    fn node(id: &str, parent: Option<&str>, level: MapLevel, name: &str) -> MapNode {
+        MapNode {
+            id: Id::new_unchecked(id),
+            name: name.into(),
+            level,
+            parent: parent.map(Id::new_unchecked),
+            extent: Some(Extent {
+                width: 200.0,
+                height: 200.0,
+                origin: Some(wv_core::Point::new(100.0, 100.0)),
+            }),
+            ..MapNode::default()
+        }
+    }
+
+    /// 世界 W（extent 1000×1000）+ 城 C（路网图层 + 街道文档 + 地形 + 测量
+    /// + 内部图 I）。粘贴测试的标准底座。
+    fn fixture() -> World {
+        let mut city = node("map_city_a", Some("world_main"), MapLevel::City, "青州城");
+        city.layers.push(Layer {
+            id: Id::new_unchecked("layer_roads_a"),
+            name: "路网".into(),
+            kind: LayerKind::Road,
+            visible: true,
+            locked: false,
+            opacity: 1.0,
+            z: 0,
+            source: Some("maps/map_city_a/roads.yaml".into()),
+        });
+        city.outline_polygon = Some(GeometryData::Polygon(vec![
+            100.0, 100.0, 140.0, 100.0, 140.0, 140.0, 100.0, 140.0,
+        ]));
+        city.children.push(Id::new_unchecked("map_interior_a"));
+        let mut world = World {
+            maps: vec![
+                {
+                    let mut w = node("world_main", None, MapLevel::World, "主世界");
+                    w.extent = Some(Extent {
+                        width: 1000.0,
+                        height: 1000.0,
+                        origin: None,
+                    });
+                    w.children.push(Id::new_unchecked("map_city_a"));
+                    w
+                },
+                city,
+                node(
+                    "map_interior_a",
+                    Some("map_city_a"),
+                    MapLevel::Interior,
+                    "市政厅",
+                ),
+            ],
+            ..World::default()
+        };
+        world.set_terrain(
+            Id::new_unchecked("map_city_a"),
+            wv_core::terrain::TerrainData {
+                width: 4,
+                height: 4,
+                cells: vec![wv_core::terrain::TerrainCellData::default(); 16],
+            },
+        );
+        world.streets.insert(
+            Id::new_unchecked("layer_roads_a"),
+            wv_core::source::street::StreetLayer::default(),
+        );
+        world
+            .measurements
+            .insert(Id::new_unchecked("map_city_a"), Default::default());
+        world
+    }
+
+    #[test]
+    fn paste_city_clones_nodes_layers_and_terrain_with_new_ids() {
+        let mut w = fixture();
+        let cmd = PasteMapCommand::new(
+            Id::new_unchecked("map_city_a"),
+            Some(Id::new_unchecked("world_main")),
+            wv_core::Point::new(500.0, 500.0),
+        );
+        let dirty = cmd.apply(&mut w).expect("apply");
+        let new_id = cmd.created_root().expect("created_root 应可读");
+        assert_ne!(new_id.as_str(), "map_city_a", "ID 必须换新");
+        assert_eq!(
+            w.maps.len(),
+            5,
+            "3 张原图 + 城 + 内部图，got {}",
+            w.maps.len()
+        );
+        let parent = w
+            .maps
+            .iter()
+            .find(|m| m.id.as_str() == "world_main")
+            .expect("父图在");
+        assert_eq!(parent.children.len(), 2, "世界 children 应含新旧两城");
+        let new_city = w.maps.iter().find(|m| m.id == new_id).expect("新城在");
+        assert_eq!(new_city.name, "青州城 2", "got {}", new_city.name);
+        assert_eq!(new_city.level, MapLevel::City);
+        assert_eq!(new_city.children.len(), 1, "内部图应跟随");
+        let new_interior = w
+            .maps
+            .iter()
+            .find(|m| Some(m.id.clone()) == new_city.children.first().cloned())
+            .expect("新内部图在");
+        assert_eq!(new_interior.level, MapLevel::Interior);
+        assert_eq!(new_interior.parent.as_ref(), Some(&new_id));
+        assert_eq!(new_interior.name, "市政厅", "后代同名保留");
+        // 图层：新 ID + source 路径改写到新图目录；街道文档挂新键。
+        let new_layer = &new_city.layers[0];
+        assert_ne!(new_layer.id.as_str(), "layer_roads_a", "图层 ID 必须换新");
+        let src = new_layer.source.as_deref().unwrap_or("");
+        assert!(
+            src.starts_with(&format!("maps/{}/", new_id.as_str())),
+            "source 应改写进新图目录，got {src}"
+        );
+        assert!(
+            w.streets.contains_key(&new_layer.id),
+            "街道文档应挂新图层键"
+        );
+        assert!(
+            w.streets.contains_key(&Id::new_unchecked("layer_roads_a")),
+            "原图层文档应保留"
+        );
+        assert!(w.terrains.contains_key(&new_id), "地形应按新图 ID 克隆");
+        assert!(
+            w.measurements.contains_key(&new_id),
+            "测量叠加应按新图 ID 克隆"
+        );
+        assert!(dirty.contains(&"maps".to_owned()));
+    }
+
+    #[test]
+    fn paste_numbers_name_on_subsequent_collisions() {
+        let mut w = fixture();
+        for expected in ["青州城 2", "青州城 3"] {
+            let cmd = PasteMapCommand::new(
+                Id::new_unchecked("map_city_a"),
+                Some(Id::new_unchecked("world_main")),
+                wv_core::Point::new(10.0, 10.0),
+            );
+            cmd.apply(&mut w).expect("apply");
+            let new_id = cmd.created_root().expect("root");
+            let name = w
+                .maps
+                .iter()
+                .find(|m| m.id == new_id)
+                .expect("在")
+                .name
+                .clone();
+            assert_eq!(name, expected, "连续粘贴应依次补号，got {name}");
+        }
+    }
+
+    #[test]
+    fn paste_world_lands_as_independent_root() {
+        let mut w = fixture();
+        let cmd = PasteMapCommand::new(
+            Id::new_unchecked("world_main"),
+            None,
+            wv_core::Point::new(0.0, 0.0),
+        );
+        cmd.apply(&mut w).expect("apply");
+        let new_id = cmd.created_root().expect("root");
+        let new_root = w.maps.iter().find(|m| m.id == new_id).expect("在");
+        assert!(new_root.parent.is_none(), "世界源粘贴 = 新独立根");
+        assert_eq!(new_root.level, MapLevel::World);
+        assert_eq!(new_root.name, "主世界 2", "根同级重名也补号");
+        assert!(w.alive_roots().contains(&new_id), "新根应出现在存活根列表");
+        // 新根下带走整套子树（青州城 + 市政厅）。
+        assert_eq!(new_root.children.len(), 1);
+        assert_eq!(w.maps.len(), 6, "3 原图 + 3 副本，got {}", w.maps.len());
+    }
+
+    #[test]
+    fn paste_level_gating_rejects_wrong_target() {
+        let mut w = fixture();
+        // City 贴 City。
+        let err = PasteMapCommand::new(
+            Id::new_unchecked("map_city_a"),
+            Some(Id::new_unchecked("map_city_a")),
+            wv_core::Point::new(0.0, 0.0),
+        )
+        .apply(&mut w)
+        .expect_err("城市图只能贴世界图");
+        assert!(err.to_string().contains("层级"), "got: {err}");
+        // Interior 贴 World。
+        let err = PasteMapCommand::new(
+            Id::new_unchecked("map_interior_a"),
+            Some(Id::new_unchecked("world_main")),
+            wv_core::Point::new(0.0, 0.0),
+        )
+        .apply(&mut w)
+        .expect_err("内部图只能贴城市图");
+        assert!(err.to_string().contains("层级"), "got: {err}");
+        // World 贴在别的图下（必须落为独立根）。
+        let err = PasteMapCommand::new(
+            Id::new_unchecked("world_main"),
+            Some(Id::new_unchecked("world_main")),
+            wv_core::Point::new(0.0, 0.0),
+        )
+        .apply(&mut w)
+        .expect_err("世界图只能贴为新根");
+        assert!(err.to_string().contains("层级"), "got: {err}");
+    }
+
+    #[test]
+    fn paste_anchor_clamped_into_target_extent_and_shifts_outline() {
+        let mut w = fixture();
+        let cmd = PasteMapCommand::new(
+            Id::new_unchecked("map_city_a"),
+            Some(Id::new_unchecked("world_main")),
+            wv_core::Point::new(9999.0, -50.0),
+        );
+        cmd.apply(&mut w).expect("apply");
+        let rid = cmd.created_root().expect("root");
+        let new_city = w.maps.iter().find(|m| m.id == rid).expect("在");
+        let origin = new_city
+            .extent
+            .as_ref()
+            .and_then(|e| e.origin.as_ref())
+            .expect("锚定后应有 origin");
+        // 目标 extent 1000×1000、origin 缺省按 (0,0)：x 夹到 1000，y 夹到 0。
+        assert!(
+            (origin.x - 1000.0).abs() < 1e-3,
+            "x 应夹进目标图，got {}",
+            origin.x
+        );
+        assert!(
+            (origin.y - 0.0).abs() < 1e-3,
+            "y 应夹进目标图，got {}",
+            origin.y
+        );
+        // outline 随 delta=(900,-100) 平移：首顶点 (100,100) → (1000,0)。
+        let GeometryData::Polygon(pts) = new_city.outline_polygon.as_ref().expect("outline 在")
+        else {
+            panic!("应仍是 Polygon");
+        };
+        assert!(
+            (pts[0] - 1000.0).abs() < 1e-3 && (pts[1] - 0.0).abs() < 1e-3,
+            "outline 应随锚点平移，got ({}, {})",
+            pts[0],
+            pts[1]
+        );
+    }
+    /// 实体版底座：城市图上挂 Place×2 + 内部边 + 跨界边 + Region + Sea +
+    /// place_geometry + faction_geometry；世界图上挂外部 Place（跨界边的另一端）。
+    fn entity_fixture() -> World {
+        let mut w = fixture();
+        let place = |id: &str, map: Option<&str>| wv_core::distance::Place {
+            kind: None,
+            line: None,
+            line_kind: None,
+            line_width_m: None,
+            id: Id::new_unchecked(id),
+            name: format!("地点{id}"),
+            feature: None,
+            biome: None,
+            envelope: None,
+            map: map.map(Id::new_unchecked),
+            x: Some(1.0),
+            y: Some(2.0),
+            w: None,
+            h: None,
+            rank: None,
+        };
+        let edge = |id: &str, a: &str, b: &str| wv_core::distance::PlaceEdge {
+            rank: None,
+            id: Id::new_unchecked(id),
+            a: Id::new_unchecked(a),
+            b: Id::new_unchecked(b),
+            distance_km: 12.5,
+            terrain: "road".into(),
+            bidirectional: true,
+            derived: false,
+        };
+        w.distances.places = vec![
+            place("p_in_1", Some("map_city_a")),
+            place("p_in_2", Some("map_city_a")),
+            place("p_ext", Some("world_main")),
+        ];
+        // edge_in 两端都在城内（跟随）；edge_out 一端在外（丢弃）。
+        w.distances.edges = vec![
+            edge("edge_in", "p_in_1", "p_in_2"),
+            edge("edge_out", "p_in_1", "p_ext"),
+        ];
+        w.regions.push(wv_core::model::region::Region {
+            id: Id::new_unchecked("region_r1"),
+            name: "东境".into(),
+            map: Id::new_unchecked("map_city_a"),
+            polygon: vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0],
+            holes: Vec::new(),
+            kind: wv_core::model::region::RegionKind::default(),
+            parent: None,
+            overlay: None,
+        });
+        w.seas.push(wv_core::map::sea::Sea {
+            id: Id::new_unchecked("sea_s1"),
+            name: "雾海".into(),
+            map: Id::new_unchecked("map_city_a"),
+            x: 5.0,
+            y: 5.0,
+        });
+        let span = |map: &str, owner: &str| wv_core::map::GeometrySpan {
+            map: Id::new_unchecked(map),
+            owner: Id::new_unchecked(owner),
+            span: wv_core::time::TimeSpan { from: 0, to: None },
+            geometry: wv_core::map::GeometryData::Polygon(vec![0.0, 0.0, 4.0, 0.0, 4.0, 4.0]),
+            relation: None,
+        };
+        w.place_geometry.push(span("map_city_a", "p_in_1"));
+        w.faction_geometry.push(span("map_city_a", "faction_f"));
+        w
+    }
+
+    #[test]
+    fn paste_copies_places_regions_seas_and_geometry_with_remapped_ids() {
+        let mut w = entity_fixture();
+        let cmd = PasteMapCommand::new(
+            Id::new_unchecked("map_city_a"),
+            Some(Id::new_unchecked("world_main")),
+            wv_core::Point::new(300.0, 300.0),
+        );
+        let dirty = cmd.apply(&mut w).expect("apply");
+        let rid = cmd.created_root().expect("root");
+        // Place：城内 2 个跟随（新 id、map 重映射、坐标保留），外部 1 个不动。
+        let on_new: Vec<_> = w
+            .distances
+            .places
+            .iter()
+            .filter(|p| p.map.as_ref() == Some(&rid))
+            .collect();
+        assert_eq!(on_new.len(), 2, "got {}", on_new.len());
+        for p in &on_new {
+            assert!(
+                !["p_in_1", "p_in_2"].contains(&p.id.as_str()),
+                "Place ID 必须换新"
+            );
+            assert_eq!(p.x, Some(1.0), "本图局部坐标不动");
+        }
+        assert!(
+            w.distances.places.iter().any(|p| p.id.as_str() == "p_ext"),
+            "外部 Place 不动"
+        );
+        // Region / Sea：克隆 + map 重映射 + id 换新。
+        let region = w
+            .regions
+            .iter()
+            .find(|r| r.map == rid)
+            .expect("Region 应克隆");
+        assert_ne!(region.id.as_str(), "region_r1", "Region ID 必须换新");
+        let sea = w.seas.iter().find(|s| s.map == rid).expect("Sea 应克隆");
+        assert_ne!(sea.id.as_str(), "sea_s1", "Sea ID 必须换新");
+        // place_geometry：map + owner 双重映射；faction_geometry：map 映射、owner（全局势力）保留。
+        assert_eq!(
+            w.place_geometry.iter().filter(|g| g.map == rid).count(),
+            1,
+            "地界 span 应跟随"
+        );
+        let fg: Vec<_> = w.faction_geometry.iter().filter(|g| g.map == rid).collect();
+        assert_eq!(fg.len(), 1, "势力几何应跟随");
+        assert_eq!(
+            fg[0].owner.as_str(),
+            "faction_f",
+            "势力是全局实体，owner 保留"
+        );
+        // 原侧全部保留。
+        assert!(w
+            .place_geometry
+            .iter()
+            .any(|g| g.map.as_str() == "map_city_a"));
+        assert!(w.regions.iter().any(|r| r.id.as_str() == "region_r1"));
+        // 脏路径覆盖实体分支。
+        for p in [
+            "distances/places",
+            "distances/edges",
+            "geometry/place",
+            "geometry/faction",
+            "regions",
+            "seas",
+        ] {
+            assert!(dirty.contains(&p.to_owned()), "脏路径缺 {p}");
+        }
+    }
+
+    #[test]
+    fn paste_drops_edges_touching_places_outside_copy_set() {
+        let mut w = entity_fixture();
+        let cmd = PasteMapCommand::new(
+            Id::new_unchecked("map_city_a"),
+            Some(Id::new_unchecked("world_main")),
+            wv_core::Point::new(300.0, 300.0),
+        );
+        cmd.apply(&mut w).expect("apply");
+        let rid = cmd.created_root().expect("root");
+        // 新侧端点集合 = 新 Place 集合 → 只有内部边（1 条），跨界边被丢弃。
+        let new_places: std::collections::HashSet<Id> = w
+            .distances
+            .places
+            .iter()
+            .filter(|p| p.map.as_ref() == Some(&rid))
+            .map(|p| p.id.clone())
+            .collect();
+        let new_edges: Vec<_> = w
+            .distances
+            .edges
+            .iter()
+            .filter(|e| new_places.contains(&e.a) || new_places.contains(&e.b))
+            .collect();
+        assert_eq!(new_edges.len(), 1, "只应有内部边，got {}", new_edges.len());
+        assert!(
+            new_places.contains(&new_edges[0].a) && new_places.contains(&new_edges[0].b),
+            "跟随边的端点必须都在复制集内"
+        );
+        // 原侧两条边不动。
+        assert_eq!(w.distances.edges.len(), 3, "2 原 + 1 跟随");
+    }
+
+    #[test]
+    fn revert_paste_removes_every_created_entity() {
+        let mut w = entity_fixture();
+        let cmd = PasteMapCommand::new(
+            Id::new_unchecked("map_city_a"),
+            Some(Id::new_unchecked("world_main")),
+            wv_core::Point::new(300.0, 300.0),
+        );
+        cmd.apply(&mut w).expect("apply");
+        cmd.revert(&mut w).expect("revert");
+        assert_eq!(w.maps.len(), 3, "got {}", w.maps.len());
+        assert_eq!(
+            w.distances.places.len(),
+            3,
+            "got {}",
+            w.distances.places.len()
+        );
+        assert_eq!(
+            w.distances.edges.len(),
+            2,
+            "got {}",
+            w.distances.edges.len()
+        );
+        assert_eq!(w.regions.len(), 1, "got {}", w.regions.len());
+        assert_eq!(w.seas.len(), 1, "got {}", w.seas.len());
+        assert_eq!(w.place_geometry.len(), 1, "got {}", w.place_geometry.len());
+        assert_eq!(
+            w.faction_geometry.len(),
+            1,
+            "got {}",
+            w.faction_geometry.len()
+        );
+        assert_eq!(w.terrains.len(), 1, "got {}", w.terrains.len());
+        assert_eq!(w.streets.len(), 1, "got {}", w.streets.len());
+        assert_eq!(w.measurements.len(), 1, "got {}", w.measurements.len());
+        assert_eq!(cmd.created_root(), None, "revert 后 root 回 None");
+        let parent = w
+            .maps
+            .iter()
+            .find(|m| m.id.as_str() == "world_main")
+            .expect("在");
+        assert_eq!(parent.children.len(), 1, "父 children 应回原状");
+    }
+}
