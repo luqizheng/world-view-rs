@@ -765,11 +765,13 @@ mod tests {
 
     #[test]
     fn fallback_root_excludes_the_map_being_trashed() {
-        let mut w = World::default();
-        w.maps = vec![
-            node("world_a", None, MapLevel::World),
-            node("world_b", None, MapLevel::World),
-        ];
+        let mut w = World {
+            maps: vec![
+                node("world_a", None, MapLevel::World),
+                node("world_b", None, MapLevel::World),
+            ],
+            ..Default::default()
+        };
         // 删 A → 兜底 B；删 B → 兜底 A（I1：first 永远不该是被删图自己）。
         assert_eq!(
             fallback_root_after_trash(&w, &Id::new_unchecked("world_a"))
@@ -792,8 +794,10 @@ mod tests {
             "world_a"
         );
         // 单根删自己 → None（命令层本来就拒绝，这里是纯函数契约）。
-        let mut solo = World::default();
-        solo.maps = vec![node("world_solo", None, MapLevel::World)];
+        let solo = World {
+            maps: vec![node("world_solo", None, MapLevel::World)],
+            ..Default::default()
+        };
         assert!(fallback_root_after_trash(&solo, &Id::new_unchecked("world_solo")).is_none());
     }
 
