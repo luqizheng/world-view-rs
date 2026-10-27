@@ -112,6 +112,7 @@ pub fn partition_pen_dialog(
     view: Res<ViewState>,
     mut playback: ResMut<PlaybackState>,
     mut edit: ResMut<EditHistory>,
+    mut edit_state: ResMut<PartitionEditState>,
 ) {
     let Some(layer_id) = dialog.open_for.clone() else {
         return;
@@ -211,14 +212,18 @@ pub fn partition_pen_dialog(
                     Ok(dirty) => {
                         edit.record_dirty(dirty);
                         projection.dirty = true;
+                        // 开段成功 → 进入该段编辑态（切刀默认工具）。
+                        edit_state.active = Some((layer_id.clone(), from));
+                        edit_state.tool = PartitionTool::Cut;
                     }
                     Err(e) => bevy::log::warn!("分区开段失败: {e}"),
                 }
             }
             PenDecision::Modify { span_from } => {
-                // 修改 = 跳全局时间轴（单时钟，设计默认 3）。
+                // 修改 = 跳全局时间轴（单时钟，设计默认 3）+ 进入编辑态。
                 playback.current_day = span_from;
-                // T12：置 PartitionEditState 进入编辑态。
+                edit_state.active = Some((layer_id.clone(), span_from));
+                edit_state.tool = PartitionTool::Cut;
             }
             PenDecision::Cancel => {}
         }
@@ -238,6 +243,27 @@ fn world_partition<'w>(
         .partitions
         .iter()
         .find(|p| p.map == map && &p.layer == layer)
+}
+
+/// 分区编辑态（T12 消费）：「正在编辑哪层的哪段 + 用哪把子工具」。
+#[derive(Resource, Default)]
+pub struct PartitionEditState {
+    /// 编辑中：`(层 id, 段 from)`；`None` = 非编辑态。
+    pub active: Option<(wv_core::Id, i64)>,
+    /// 当前子工具。
+    pub tool: PartitionTool,
+}
+
+/// 编辑态三子工具（ADR-0074 D4）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PartitionTool {
+    /// 切刀（边到边一笔，切后点选归属）。
+    #[default]
+    Cut,
+    /// 拖边界（零和，T13）。
+    DragBoundary,
+    /// 整块易主（点脸改归属，T13）。
+    Assign,
 }
 
 #[cfg(test)]

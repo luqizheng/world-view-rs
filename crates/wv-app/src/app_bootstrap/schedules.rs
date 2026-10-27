@@ -560,4 +560,11 @@ pub(super) fn register(app: &mut App) {
     // 切蛋糕 pen 弹框（ADR-0074 T11）：独立注册——面板链 tuple 已顶满 16，
     // 本系统无链内次序约束（egui Window 自管层序）。
     app.add_systems(Update, crate::ui::partition_pen::partition_pen_dialog);
+    app.add_systems(
+        Update,
+        (
+            crate::ui::partition_edit::partition_edit_hud,
+            crate::ui::partition_edit::partition_cut_gesture,
+        ),
+    );
 }

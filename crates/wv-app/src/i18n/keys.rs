@@ -357,6 +357,8 @@ pub enum I18nKey {
     PartitionPenOwnerHint,
     /// 分区 pen 弹框：修改提示
     PartitionPenModifyHint,
+    /// 分区编辑 HUD 标题（ADR-0074 T12）
+    PartitionEditHudTitle,
     /// 图层面板空态标题（本图未声明图层）
     PanelLayersEmptyTitle,
     /// 图层面板空态提示（去 index.yaml 的 layers: 段声明）
@@ -1369,7 +1371,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 545] = [
+    pub const ALL: [I18nKey; 546] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1543,6 +1545,7 @@ impl I18nKey {
         I18nKey::PartitionPenOwner,
         I18nKey::PartitionPenOwnerHint,
         I18nKey::PartitionPenModifyHint,
+        I18nKey::PartitionEditHudTitle,
         I18nKey::PanelLayersEmptyTitle,
         I18nKey::PanelLayersEmptyHint,
         I18nKey::PanelLayerTerrain,

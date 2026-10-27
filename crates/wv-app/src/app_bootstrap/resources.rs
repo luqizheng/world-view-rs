@@ -170,6 +170,8 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     // 漏 init 即启动期 panic(同 EditCellState 的教训)。
     .init_resource::<crate::ui::inspector::InspectorState>()
     .init_resource::<crate::ui::partition_pen::PartitionPenDialog>()
+    .init_resource::<crate::ui::partition_edit::CutStrokeSession>()
+    .init_resource::<crate::ui::partition_edit::CutPickDialog>()
     // CellMap 未命名候选缓存（2026-10-22 内容矩阵 T11）：渲染主链在本 crate
     // 直装（不走 MapRenderPlugin），draw_map_gizmos ResMut 它——漏 init 即
     // 启动期 panic（实机已踩：plugins.rs 里的 init 在 GUI 路径不运行）。
