@@ -564,6 +564,8 @@ fn point_select_on_click_writes_hit_into_unified_selection() {
     world.insert_resource(wv_render::camera::PointerOverUi::default());
     // 系统签名含 AppScreen gate（2026-10-22 异步加载：加载期不选格）。
     world.insert_resource(crate::app_screen::AppScreen::default());
+    // 系统签名含 LayerFrame gate（ADR-0074 图钉命中要读 place 层可见性）。
+    world.insert_resource(wv_render::layer_frame::LayerFrame::default());
     world.init_resource::<super::region::LassoLiveLink>();
 
     world.insert_resource(PointSelectState { tool_active: true });
@@ -640,6 +642,8 @@ fn point_select_click_shift_unions_and_alt_subtracts() {
     world.insert_resource(crate::state::PlaybackState::default());
     world.insert_resource(wv_render::camera::PointerOverUi::default());
     world.insert_resource(crate::app_screen::AppScreen::default());
+    // 系统签名含 LayerFrame gate（ADR-0074 图钉命中要读 place 层可见性）。
+    world.insert_resource(wv_render::layer_frame::LayerFrame::default());
     world.init_resource::<super::region::LassoLiveLink>();
     world.insert_resource(PointSelectState { tool_active: true });
     // 既有选区含命中格 (3,4) 与另一格 (0,0)。
@@ -865,6 +869,8 @@ fn point_select_on_click_noop_when_tool_inactive() {
     world.insert_resource(CellSelection::default());
     world.insert_resource(wv_render::camera::PointerOverUi::default());
     world.insert_resource(crate::app_screen::AppScreen::default());
+    // 系统签名含 LayerFrame gate（ADR-0074 图钉命中要读 place 层可见性）。
+    world.insert_resource(wv_render::layer_frame::LayerFrame::default());
     world.init_resource::<super::region::LassoLiveLink>();
     world.insert_resource(ButtonInput::<KeyCode>::default());
 
@@ -955,4 +961,412 @@ fn undo_flash_is_active_for_250ms_after_undo() {
     assert!(flash.is_active(10.0), "触发即活跃");
     assert!(flash.is_active(10.249), "249ms 仍活跃");
     assert!(!flash.is_active(10.25), "250ms 到期");
+}
+
+// ═══ ADR-0074：CellMap 点选三段裁定（图钉 > 群系区 > 格）═══
+
+/// 点状图钉夹具：锚定 `map`、rank 3、无折线。
+fn pin(id: &str, map: &wv_core::Id, x: f32, y: f32) -> wv_core::distance::Place {
+    wv_core::distance::Place {
+        id: wv_core::Id::new_unchecked(id),
+        name: id.into(),
+        map: Some(map.clone()),
+        x: Some(x),
+        y: Some(y),
+        rank: Some(3),
+        ..empty_place()
+    }
+}
+
+/// 除 id/name 外全空的 Place（其余字段全 Option，`None` 即旧工程缺省语义）。
+fn empty_place() -> wv_core::distance::Place {
+    wv_core::distance::Place {
+        id: wv_core::Id::new_unchecked("_"),
+        name: String::new(),
+        feature: None,
+        map: None,
+        x: None,
+        y: None,
+        w: None,
+        h: None,
+        biome: None,
+        envelope: None,
+        rank: None,
+        line: None,
+        kind: None,
+        line_kind: None,
+        line_width_m: None,
+    }
+}
+
+/// Nature 区夹具：本图、已命名、方形轮廓 `[x0,y0]-[x1,y1]`。
+fn nature_region(
+    id: &str,
+    map: &wv_core::Id,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+) -> wv_core::model::region::Region {
+    wv_core::model::region::Region {
+        id: wv_core::Id::new_unchecked(id),
+        name: id.into(),
+        map: map.clone(),
+        polygon: vec![x0, y0, x1, y0, x1, y1, x0, y1],
+        kind: wv_core::model::region::RegionKind::Nature,
+        ..empty_region()
+    }
+}
+
+fn empty_region() -> wv_core::model::region::Region {
+    wv_core::model::region::Region {
+        id: wv_core::Id::new_unchecked("_"),
+        name: String::new(),
+        map: wv_core::Id::new_unchecked("_"),
+        polygon: Vec::new(),
+        holes: Vec::new(),
+        kind: wv_core::model::region::RegionKind::default(),
+        parent: None,
+        overlay: None,
+    }
+}
+
+#[test]
+fn point_in_flat_polygon_hits_inside_and_misses_outside() {
+    let square = [0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0];
+    assert!(
+        super::cell::point_in_flat_polygon(5.0, 5.0, &square),
+        "环内应命中"
+    );
+    assert!(
+        !super::cell::point_in_flat_polygon(15.0, 5.0, &square),
+        "环外不应命中"
+    );
+    assert!(
+        !super::cell::point_in_flat_polygon(-1.0, -1.0, &square),
+        "环外（负侧）不应命中"
+    );
+}
+
+#[test]
+fn point_in_flat_polygon_rejects_degenerate_rings() {
+    assert!(!super::cell::point_in_flat_polygon(0.0, 0.0, &[]), "空环");
+    assert!(
+        !super::cell::point_in_flat_polygon(0.0, 0.0, &[1.0, 1.0]),
+        "单点环"
+    );
+    assert!(
+        !super::cell::point_in_flat_polygon(0.0, 0.0, &[0.0, 0.0, 4.0, 4.0]),
+        "两点共线环"
+    );
+}
+
+#[test]
+fn pick_place_pin_prefers_nearest_pin_within_radius() {
+    let map = wv_core::Id::new_unchecked("world_main");
+    let mut world = wv_core::World::default();
+    world
+        .distances
+        .places
+        .push(pin("city_a", &map, 100.0, 100.0));
+    world
+        .distances
+        .places
+        .push(pin("city_b", &map, 130.0, 100.0));
+    let grid = GridConfig::default();
+    // 光标在 (108,100)：距 a 8、距 b 22，scale=1 → 半径 18 内只有 a。
+    let got = super::cell::pick_place_pin(Vec2::new(108.0, 100.0), &world, &map, &grid, true, 1.0);
+    assert_eq!(
+        got.as_ref().map(|i| i.as_str()),
+        Some("city_a"),
+        "最近的图钉先被点到"
+    );
+    // 两钉正中 (115,100)：距各 15 ≤ 18 → 应命中其一。
+    let mid = super::cell::pick_place_pin(Vec2::new(115.0, 100.0), &world, &map, &grid, true, 1.0);
+    assert!(mid.is_some(), "等距 15 ≤ 18 应命中其一");
+    // 远处点击：两钉都在半径外 → None。
+    let far = super::cell::pick_place_pin(Vec2::new(300.0, 300.0), &world, &map, &grid, true, 1.0);
+    assert!(far.is_none(), "半径外不命中");
+}
+
+#[test]
+fn pick_place_pin_skips_line_pois_low_rank_and_hidden_layer() {
+    let map = wv_core::Id::new_unchecked("world_main");
+    let mut world = wv_core::World::default();
+    // 线段 POI：rank 3 但带折线 → 无图钉。
+    let mut river = pin("river_x", &map, 100.0, 100.0);
+    river.line = Some(vec![0.0, 0.0, 200.0, 200.0]);
+    world.distances.places.push(river);
+    // 低级别地点：rank 1 → 无图钉。
+    let mut dot = pin("dot_y", &map, 100.0, 100.0);
+    dot.rank = Some(1);
+    world.distances.places.push(dot);
+    // 其他图的图钉：不参与本图命中。
+    let other_map = wv_core::Id::new_unchecked("other");
+    world
+        .distances
+        .places
+        .push(pin("other_city", &other_map, 100.0, 100.0));
+    let grid = GridConfig::default();
+
+    let cursor = Vec2::new(100.0, 100.0);
+    assert!(
+        super::cell::pick_place_pin(cursor, &world, &map, &grid, true, 1.0).is_none(),
+        "线段 POI / rank1 / 他图图钉都不该命中"
+    );
+    // place 图层隐藏 → 图钉不画 → 不命中（即便真图钉在场）。
+    world
+        .distances
+        .places
+        .push(pin("city_a", &map, 100.0, 100.0));
+    assert!(
+        super::cell::pick_place_pin(cursor, &world, &map, &grid, false, 1.0).is_none(),
+        "图层隐藏时不命中"
+    );
+}
+
+#[test]
+fn pick_nature_region_hits_only_named_nature_regions_of_this_map() {
+    let map = wv_core::Id::new_unchecked("world_main");
+    let mut world = wv_core::World::default();
+    world
+        .regions
+        .push(nature_region("forest", &map, 0.0, 0.0, 40.0, 40.0));
+    // 无名 Nature 区：不画 → 选不到。
+    let mut unnamed = nature_region("unnamed", &map, 50.0, 50.0, 80.0, 80.0);
+    unnamed.name = String::new();
+    world.regions.push(unnamed);
+    // 非 Nature 区（缺省 Area）：群系裁定不碰它。
+    let mut area = nature_region("area_z", &map, 90.0, 90.0, 120.0, 120.0);
+    area.kind = wv_core::model::region::RegionKind::Area;
+    world.regions.push(area);
+    // 他图 Nature 区。
+    let other_map = wv_core::Id::new_unchecked("other");
+    world.regions.push(nature_region(
+        "other_forest",
+        &other_map,
+        0.0,
+        0.0,
+        40.0,
+        40.0,
+    ));
+
+    let hit = super::cell::pick_nature_region((20.0, 20.0), &world, &map);
+    assert_eq!(
+        hit.as_ref().map(|i| i.as_str()),
+        Some("forest"),
+        "环内命中本图已命名 Nature 区"
+    );
+    // 无名区环内 → 不命中它（也不命中别的）。
+    assert!(
+        super::cell::pick_nature_region((60.0, 60.0), &world, &map).is_none(),
+        "无名区不可选"
+    );
+    assert!(
+        super::cell::pick_nature_region((100.0, 100.0), &world, &map).is_none(),
+        "Area 区不参与群系裁定"
+    );
+    // map 过滤的正向证据：同一点 (20,20) 以他图身份查询 → 命中他图区
+    // （而不是本图的 forest）。
+    let cross = super::cell::pick_nature_region((20.0, 20.0), &world, &other_map);
+    assert_eq!(
+        cross.as_ref().map(|i| i.as_str()),
+        Some("other_forest"),
+        "按查询图命中他图区，本图 forest 不掺进来"
+    );
+}
+
+/// 夹具世界：1 图 + 8×8 地形 + drill 落地 + CellMap（Topographic）视图。
+fn cellmap_world(cursor: Vec2, nature_overlay: bool) -> bevy::prelude::World {
+    let mut world = bevy::prelude::World::new();
+    world.init_resource::<Assets<Image>>();
+    let map = wv_core::Id::new_unchecked("world_main");
+    let mut projection = crate::state::WorldProjection::default();
+    projection.world.meta = Some(wv_core::WorldMeta {
+        name: "test".into(),
+        version: "0.1".into(),
+        schema_version: 2,
+        root_map: map.clone(),
+        timeline_range: wv_core::time::TimeSpan { from: 0, to: None },
+        template: None,
+    });
+    projection.world.maps.push(wv_core::map::MapNode {
+        id: map.clone(),
+        level: wv_core::map::MapLevel::World,
+        ..Default::default()
+    });
+    projection.world.set_terrain(
+        map.clone(),
+        wv_core::terrain::TerrainData {
+            width: 8,
+            height: 8,
+            cells: vec![wv_core::terrain::TerrainCellData::default(); 64],
+        },
+    );
+    world.insert_resource(projection);
+
+    let mut drill = crate::state::DrillState::default();
+    drill.drill_to(
+        &world.resource::<crate::state::WorldProjection>().world,
+        &map,
+    );
+    world.insert_resource(drill);
+
+    world.insert_resource(crate::state::GridConfig {
+        cell_size: 10.0,
+        raster_origin: Vec2::ZERO,
+        map_origin: Vec2::ZERO,
+        map_size: Vec2::new(80.0, 80.0),
+    });
+    world.insert_resource(crate::state::ViewState {
+        mode: wv_render::state::ViewMode::Topographic,
+        cursor_world: Some(cursor),
+        scale: 1.0,
+        nature_overlay,
+        ..Default::default()
+    });
+    world.insert_resource(crate::state::PlaybackState::default());
+    world.insert_resource(wv_render::camera::PointerOverUi::default());
+    world.insert_resource(crate::app_screen::AppScreen::default());
+    world.insert_resource(wv_render::layer_frame::LayerFrame::default());
+    world.init_resource::<super::region::LassoLiveLink>();
+    world
+}
+
+/// CellMap 三段裁定第一段：点在图钉上 → 选 Place 实体、清格选区（不写格）。
+#[test]
+fn point_select_in_cellmap_picks_place_pin_over_cell() {
+    let mut world = cellmap_world(Vec2::new(35.0, 45.0), true);
+    let map = wv_core::Id::new_unchecked("world_main");
+    {
+        let mut p = world.resource_mut::<crate::state::WorldProjection>();
+        p.world
+            .distances
+            .places
+            .push(pin("city_qingyun", &map, 35.0, 45.0));
+    }
+    world.insert_resource(crate::state::PointSelectState { tool_active: true });
+    let mut sel = crate::state::CellSelection::default();
+    sel.bind_map(&map, 8, 8);
+    sel.replace([(0, 0)]);
+    world.insert_resource(sel);
+    world.insert_resource(ButtonInput::<KeyCode>::default());
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    buttons.press(MouseButton::Left);
+    world.insert_resource(buttons);
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_point_select_on_click);
+    schedule.run(&mut world);
+
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert!(sel.is_empty(), "选实体 = 清格选区（单焦点）");
+    let projection = world.resource::<crate::state::WorldProjection>();
+    let got = projection
+        .selection
+        .as_ref()
+        .map(|s| (s.kind, s.id.as_str()));
+    assert_eq!(
+        got,
+        Some((wv_core::EntityKind::Place, "city_qingyun")),
+        "图钉命中优先于格（cursor 同格也应选钉），got={got:?}"
+    );
+}
+
+/// CellMap 三段裁定第二段：无图钉 + 群系 overlay 开 + 点在 Nature 区内 → 选 Region。
+#[test]
+fn point_select_in_cellmap_picks_nature_region_when_overlay_on() {
+    let mut world = cellmap_world(Vec2::new(35.0, 45.0), true);
+    let map = wv_core::Id::new_unchecked("world_main");
+    {
+        let mut p = world.resource_mut::<crate::state::WorldProjection>();
+        p.world
+            .regions
+            .push(nature_region("forest_south", &map, 20.0, 20.0, 60.0, 60.0));
+    }
+    world.insert_resource(crate::state::PointSelectState { tool_active: true });
+    world.insert_resource(crate::state::CellSelection::default());
+    world.insert_resource(ButtonInput::<KeyCode>::default());
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    buttons.press(MouseButton::Left);
+    world.insert_resource(buttons);
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_point_select_on_click);
+    schedule.run(&mut world);
+
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert!(sel.is_empty(), "选群系区 = 不写格");
+    let projection = world.resource::<crate::state::WorldProjection>();
+    let got = projection
+        .selection
+        .as_ref()
+        .map(|s| (s.kind, s.id.as_str()));
+    assert_eq!(
+        got,
+        Some((wv_core::EntityKind::Region, "forest_south")),
+        "got={got:?}"
+    );
+}
+
+/// 群系 overlay 关 → 同一点回落到格裁定（裁定第二段整体让位）。
+#[test]
+fn point_select_falls_back_to_cell_when_overlay_off() {
+    let mut world = cellmap_world(Vec2::new(35.0, 45.0), false);
+    let map = wv_core::Id::new_unchecked("world_main");
+    {
+        let mut p = world.resource_mut::<crate::state::WorldProjection>();
+        p.world
+            .regions
+            .push(nature_region("forest_south", &map, 20.0, 20.0, 60.0, 60.0));
+    }
+    world.insert_resource(crate::state::PointSelectState { tool_active: true });
+    world.insert_resource(crate::state::CellSelection::default());
+    world.insert_resource(ButtonInput::<KeyCode>::default());
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    buttons.press(MouseButton::Left);
+    world.insert_resource(buttons);
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_point_select_on_click);
+    schedule.run(&mut world);
+
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert!(sel.contains(3, 4), "overlay 关 → 点 (35,45) 落格 (3,4)");
+    let projection = world.resource::<crate::state::WorldProjection>();
+    assert!(projection.selection.is_none(), "格裁定不带出实体选中");
+}
+
+/// 单焦点另一面：选格清实体选中——否则 Cell 表单恒优先（`resolve_form`），
+/// 实体会变成看不见的悬挂选中。
+#[test]
+fn point_select_clears_entity_selection_when_picking_cell() {
+    let mut world = cellmap_world(Vec2::new(35.0, 45.0), true);
+    let map = wv_core::Id::new_unchecked("world_main");
+    {
+        let mut p = world.resource_mut::<crate::state::WorldProjection>();
+        p.selection = Some(wv_core::SelectedEntity::new(
+            wv_core::EntityKind::Place,
+            wv_core::Id::new_unchecked("city_old"),
+        ));
+    }
+    world.insert_resource(crate::state::PointSelectState { tool_active: true });
+    let mut sel = crate::state::CellSelection::default();
+    sel.bind_map(&map, 8, 8);
+    sel.replace([(0, 0)]);
+    world.insert_resource(sel);
+    world.insert_resource(ButtonInput::<KeyCode>::default());
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    buttons.press(MouseButton::Left);
+    world.insert_resource(buttons);
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_point_select_on_click);
+    schedule.run(&mut world);
+
+    let projection = world.resource::<crate::state::WorldProjection>();
+    assert!(
+        projection.selection.is_none(),
+        "选格 = 实体选中让位（单焦点模型）"
+    );
 }
