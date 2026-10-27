@@ -473,16 +473,12 @@ fn commit_faction_layer_visibility(
     layer: &wv_core::FactionLayer,
     visible: bool,
 ) {
+    // 终审 I4：upsert 命令——合成默认层不在 world.faction_layers，旧
+    // UpdateFactionLayerCommand 对它 TargetMissing（眼睛翻一帧即弹回）。
     commit_layer2(
         projection,
         edit,
-        wv_edit::UpdateFactionLayerCommand::new(
-            layer.id.clone(),
-            layer.name.clone(),
-            layer.z,
-            layer.color_mode,
-            visible,
-        ),
+        wv_edit::EnsureFactionLayerVisibleCommand::new(layer.id.clone(), visible),
     );
 }
 

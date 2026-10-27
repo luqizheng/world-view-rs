@@ -1147,3 +1147,95 @@ impl EditCommand for DivideFactionCommand {
         Ok(())
     }
 }
+
+/// 势力层可见性 **upsert**（终审 I4）：目标层不在 `world.faction_layers`
+/// （= 默认层，[`wv_core::resolved_faction_layers`] 内存合成不写盘）时，
+/// **物化**该层行再写 visible；已存在则与 [`UpdateFactionLayerCommand`]
+/// 同款只改 visible。
+///
+/// 为什么不是改 `UpdateFactionLayerCommand`：它的 `apply` 对不存在的层
+/// `TargetMissing`（ADR-0027 契约），revert 语义也随之不同——物化形态的
+/// 撤销是「移除物化的行」。图层面板势力组眼睛走本命令。
+#[derive(Debug)]
+pub struct EnsureFactionLayerVisibleCommand {
+    /// 目标层。
+    pub id: wv_core::Id,
+    /// 目标可见性。
+    pub visible: bool,
+    /// `apply` 缓存：`None` = 物化了新行（revert 移除）；`Some` = 更新既有行
+    /// （revert 还原）。
+    before: std::sync::Mutex<Option<EnsureLayerBefore>>,
+}
+
+#[derive(Debug)]
+enum EnsureLayerBefore {
+    Inserted,
+    Updated(FactionLayer),
+}
+
+impl EnsureFactionLayerVisibleCommand {
+    /// 构造。
+    pub fn new(id: wv_core::Id, visible: bool) -> Self {
+        Self {
+            id,
+            visible,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for EnsureFactionLayerVisibleCommand {
+    fn label(&self) -> String {
+        format!(
+            "势力层「{}」{}",
+            self.id,
+            if self.visible { "显示" } else { "隐藏" }
+        )
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        if let Some(i) = world.faction_layers.iter().position(|l| l.id == self.id) {
+            let prev = world.faction_layers[i].clone();
+            world.faction_layers[i].visible = self.visible;
+            *self
+                .before
+                .lock()
+                .map_err(|_| EditError::Precondition("锁中毒".into()))? =
+                Some(EnsureLayerBefore::Updated(prev));
+        } else {
+            // 物化：默认层合成口径（default_faction_layer）+ 目标 id/可见性。
+            let mut layer = wv_core::default_faction_layer();
+            layer.id = self.id.clone();
+            layer.visible = self.visible;
+            world.faction_layers.push(layer);
+            *self
+                .before
+                .lock()
+                .map_err(|_| EditError::Precondition("锁中毒".into()))? =
+                Some(EnsureLayerBefore::Inserted);
+        }
+        Ok(faction_layer_dirty_paths())
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let prev = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("锁中毒".into()))?
+            .take()
+            .ok_or_else(|| {
+                EditError::Precondition("EnsureFactionLayerVisible 尚未 apply".into())
+            })?;
+        match prev {
+            EnsureLayerBefore::Inserted => {
+                world.faction_layers.retain(|l| l.id != self.id);
+            }
+            EnsureLayerBefore::Updated(layer) => {
+                if let Some(i) = world.faction_layers.iter().position(|l| l.id == self.id) {
+                    world.faction_layers[i] = layer;
+                }
+            }
+        }
+        Ok(())
+    }
+}

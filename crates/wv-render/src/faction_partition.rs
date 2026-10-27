@@ -86,6 +86,7 @@ pub fn sync_partition_overlays(
     projection: Res<WorldProjection>,
     layers: Res<LayerFrame>,
     grid: Res<GridConfig>,
+    display: Res<crate::faction_overlays::FactionDisplay>,
     mut layer: ResMut<PartitionOverlayEntities>,
 ) {
     layer.despawn_all(&mut commands);
@@ -102,8 +103,9 @@ pub fn sync_partition_overlays(
     if visible_layers.is_empty() {
         return;
     }
-    // 活动层 = 第一个可见层（活动层填色语义的分区版；T11 起由编辑态指定）。
-    let active_id = visible_layers.first().map(|l| l.id.clone());
+    // 活动层（终审 I5）：沿用 faction_overlays 的 `active_layer_id` 口径——
+    // 作者在 Inspector 选的活动层优先，否则第一个可见层。
+    let active_id = crate::faction_overlays::active_layer_id(world, display.active_layer.as_ref());
     let z_base = 0.086 + layers.influence.z_offset; // 制图国境线之上（ADR-0063）
 
     for (order, layer_def) in visible_layers.iter().enumerate() {
@@ -116,21 +118,32 @@ pub fn sync_partition_overlays(
         // 同 z 层间微偏移防 z-fight（faction_overlays 同法）。
         let z = z_base + order as f32 * 0.0001;
         for face in &span.faces {
-            // 环顶点（栅格局部 → 视图）。
-            let at = |vid: u32| -> Vec2 {
-                let v = span
-                    .vertices
-                    .iter()
-                    .find(|v| v.id == vid)
-                    .expect("ring 引用存在（validate_topology 保证）");
-                Vec2::new(v.xy[0], v.xy[1]) + offset
+            // 环顶点（栅格局部 → 视图）。终审 I6：手写 YAML 可带悬空环引用
+            // （V1 加载不阻止）——缺顶点的脸**整脸跳过**（诊断面板已列
+            // Error），不再 expect 打崩渲染。
+            let mut face_broken = false;
+            let at = |vid: u32, broken: &mut bool| -> Vec2 {
+                match span.vertices.iter().find(|v| v.id == vid) {
+                    Some(v) => Vec2::new(v.xy[0], v.xy[1]) + offset,
+                    None => {
+                        *broken = true;
+                        Vec2::ZERO
+                    }
+                }
             };
-            let outer: Vec<Vec2> = face.ring.iter().map(|id| at(*id)).collect();
+            let outer: Vec<Vec2> = face
+                .ring
+                .iter()
+                .map(|id| at(*id, &mut face_broken))
+                .collect();
             let holes: Vec<Vec<Vec2>> = face
                 .holes
                 .iter()
-                .map(|h| h.iter().map(|id| at(*id)).collect())
+                .map(|h| h.iter().map(|id| at(*id, &mut face_broken)).collect())
                 .collect();
+            if face_broken {
+                continue;
+            }
 
             if is_active {
                 // 活动层：填色。

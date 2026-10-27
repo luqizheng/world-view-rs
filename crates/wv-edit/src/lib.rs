@@ -24,8 +24,8 @@ pub use command::{
     AddPlaceEdgeCommand, AddRegionCommand, AddStreetSegmentCommand, AssignPartitionFaceCommand,
     BeginPartitionSpanCommand, ClearMeasurementsCommand, CutPartitionFaceCommand,
     DeleteBuildingCommand, DeleteStreetSegmentCommand, EditCommand, EditError, EditResult,
-    EnsureTerrainLayerCommand, GenerateContinentCommand, MoveCityCommand,
-    MovePartitionVerticesCommand, RemoveMeasurementCommand, RemoveRegionCommand,
+    EnsureFactionLayerVisibleCommand, EnsureTerrainLayerCommand, GenerateContinentCommand,
+    MoveCityCommand, MovePartitionVerticesCommand, RemoveMeasurementCommand, RemoveRegionCommand,
     SetCityOutlineCommand, SetMapOrientationCommand, UpdateEventCommand, UpdateFactionLayerCommand,
     UpdateLayerCommand, UpdateMapPropsCommand, UpdatePlaceCommand, UpdateRegionCommand,
 };

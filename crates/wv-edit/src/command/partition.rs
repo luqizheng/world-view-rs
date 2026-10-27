@@ -74,6 +74,11 @@ impl BeginPartitionSpanCommand {
     }
 
     /// 造首段：整块地（最大外环）+ 湖洞。
+    ///
+    /// 坐标 = **栅格局部 wu**（终审 C1 修正：此前存 cell 索引、渲染侧少乘
+    /// `cell_size` 画成缩微——正解是在存储侧就用真尺寸，渲染/手势/诊断三处
+    /// 天然对齐同一 wu 口径）。`cell_size = MapNode.extent.width / 栅格宽`；
+    /// 无 extent（测试 fixture / 老工程）回退 1.0。
     fn first_span(
         &self,
         world: &World,
@@ -82,17 +87,30 @@ impl BeginPartitionSpanCommand {
             .terrain_of(&self.map)
             .ok_or_else(|| EditError::TargetMissing(format!("地图「{}」无地形栅格", self.map)))?;
         let grid = to_grid(data)?;
-        // 取最大面积外环为蛋糕主体（碎屑小岛不进首段；作者要多块可后续再切）。
-        let mut outlines = wv_terrain::outline::land_outlines(&grid, 1.0);
-        outlines.sort_by_key(|o| {
-            let n = o.outer.len();
-            let mut s = 0.0f64;
-            for i in 0..n {
-                let (x1, y1) = o.outer[i];
-                let (x2, y2) = o.outer[(i + 1) % n];
-                s += x1 as f64 * y2 as f64 - x2 as f64 * y1 as f64;
-            }
-            std::cmp::Reverse(s.partial_cmp(&0.0).unwrap_or(std::cmp::Ordering::Equal))
+        let cell_size = world
+            .maps
+            .iter()
+            .find(|m| m.id == self.map)
+            .and_then(|m| m.extent.as_ref())
+            .map(|e| e.width / data.width.max(1) as f32)
+            .unwrap_or(1.0);
+        // 取**面积最大**的外环为蛋糕主体（终审 I1 修正：此前只比面积符号，
+        // 等于没比——多岛地图拿的是左上角的岛不是最大的）。
+        let mut outlines = wv_terrain::outline::land_outlines(&grid, cell_size);
+        outlines.sort_by(|a, b| {
+            let area = |o: &wv_terrain::outline::LandOutline| -> f64 {
+                let n = o.outer.len();
+                let mut s = 0.0f64;
+                for i in 0..n {
+                    let (x1, y1) = o.outer[i];
+                    let (x2, y2) = o.outer[(i + 1) % n];
+                    s += x1 as f64 * y2 as f64 - x2 as f64 * y1 as f64;
+                }
+                s
+            };
+            area(b)
+                .partial_cmp(&area(a))
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
         let Some(group) = outlines.first() else {
             return Err(EditError::TargetMissing(format!(
@@ -172,6 +190,12 @@ impl EditCommand for BeginPartitionSpanCommand {
                 })?;
             if existing.spans[hit].from == self.from {
                 // 恰在段起点 = 幂等：直接复用该段（不开零长度段）。
+                // before 也要缓存（M1）——命令已入历史栈，revert 恢复同状
+                // 态即可；不缓存会让 undo 时 revert Err。
+                *self
+                    .before
+                    .lock()
+                    .map_err(|_| EditError::Precondition("命令锁中毒".into()))? = snapshot;
                 return Ok(vec!["partitions".to_string()]);
             }
             let mut old = existing.spans[hit].clone();
@@ -359,38 +383,40 @@ impl EditCommand for CutPartitionFaceCommand {
         }
         // 刀口：交点在边中间（0<t<1）时新建顶点（id 续号）；吸附到既有顶点
         // 则复用其 id（共享顶点=相邻脸零和联动的基础）。
+        //
+        // 终审 I3 修正：全部几何在**副本**上算，所有校验过了才一次性写回——
+        // 此前 cut_vertex 先 push 顶点、退化检查后置，Err 路径留下孤儿顶点
+        // 落盘（违反「Err 不落盘」契约）。
         let mut next_vid = span.vertices.iter().map(|v| v.id).max().unwrap_or(0) + 1;
-        let mut cut_vertex = |span: &mut PartitionSpan, i: usize, t: f32| -> u32 {
-            let a = ring_ids[i];
-            let b = ring_ids[(i + 1) % ring_ids.len()];
-            if t <= 1e-6 {
-                return a;
-            }
-            if t >= 1.0 - 1e-6 {
-                return b;
-            }
-            let (ax, ay) = span
-                .vertices
-                .iter()
-                .find(|v| v.id == a)
-                .map(|v| (v.xy[0], v.xy[1]))
-                .expect("a 存在");
-            let (bx, by) = span
-                .vertices
-                .iter()
-                .find(|v| v.id == b)
-                .map(|v| (v.xy[0], v.xy[1]))
-                .expect("b 存在");
-            let vid = next_vid;
-            next_vid += 1;
-            span.vertices.push(PartitionVertex {
-                id: vid,
-                xy: [ax + (bx - ax) * t, ay + (by - ay) * t],
-            });
-            vid
-        };
-        let v_start = cut_vertex(span, i0, t0);
-        let v_end = cut_vertex(span, i1, t1);
+        let mut new_vertices: Vec<PartitionVertex> = Vec::new();
+        let mut cut_vertex =
+            |new_vertices: &mut Vec<PartitionVertex>, i: usize, t: f32| -> Result<u32, EditError> {
+                let a = ring_ids[i];
+                let b = ring_ids[(i + 1) % ring_ids.len()];
+                if t <= 1e-6 {
+                    return Ok(a);
+                }
+                if t >= 1.0 - 1e-6 {
+                    return Ok(b);
+                }
+                let Some(v_a) = span.vertices.iter().find(|v| v.id == a) else {
+                    return Err(EditError::TargetMissing(format!("环顶点 {a} 不存在")));
+                };
+                let (ax, ay) = (v_a.xy[0], v_a.xy[1]);
+                let Some(v_b) = span.vertices.iter().find(|v| v.id == b) else {
+                    return Err(EditError::TargetMissing(format!("环顶点 {b} 不存在")));
+                };
+                let (bx, by) = (v_b.xy[0], v_b.xy[1]);
+                let vid = next_vid;
+                next_vid += 1;
+                new_vertices.push(PartitionVertex {
+                    id: vid,
+                    xy: [ax + (bx - ax) * t, ay + (by - ay) * t],
+                });
+                Ok(vid)
+            };
+        let v_start = cut_vertex(&mut new_vertices, i0, t0)?;
+        let v_end = cut_vertex(&mut new_vertices, i1, t1)?;
         // 两刀口把环切成两条弧。弧 A：从刀口 1 沿环走到刀口 2。
         let mut arc_a: Vec<u32> = vec![v_start];
         let mut idx = (i0 + 1) % ring_ids.len();
@@ -411,20 +437,52 @@ impl EditCommand for CutPartitionFaceCommand {
             return Err(EditError::Precondition("切分退化（某半不足 3 点）".into()));
         }
         // 归属点选（D7）：assign_at 落在哪半（射线法）。
-        let in_a = point_in_ring_f32(self.assign_at, &arc_a, span);
+        // 终审 C2 根因修复：刀口顶点还在 new_vertices 里没写回——环坐标
+        // 必须从「span ∪ new_vertices」解析，否则射线法丢边、归属判反。
+        let resolve = |id: u32| -> (f32, f32) {
+            span.vertices
+                .iter()
+                .chain(new_vertices.iter())
+                .find(|v| v.id == id)
+                .map(|v| (v.xy[0], v.xy[1]))
+                .unwrap_or((f32::NAN, f32::NAN))
+        };
+        let arc_a_xy: Vec<(f32, f32)> = arc_a.iter().map(|id| resolve(*id)).collect();
+        let in_a = point_in_ring_coords(self.assign_at, &arc_a_xy);
         let old_owner = span.faces[face_idx].owner.clone();
         let (owner_a, owner_b) = if in_a {
             (self.new_owner.clone(), old_owner)
         } else {
             (old_owner, self.new_owner.clone())
         };
+        // 终审 I2 修正：洞按首顶点落点**重派**到所属半——此前全留在被改的
+        // 原脸，洞在外半 → earcut 乱织 + 湖面变成领土（违反海不参与切分）。
+        let old_holes = span.faces[face_idx].holes.clone();
+        let mut holes_a: Vec<Vec<u32>> = Vec::new();
+        let mut holes_b: Vec<Vec<u32>> = Vec::new();
+        for hole in &old_holes {
+            let probe = span
+                .vertices
+                .iter()
+                .find(|v| v.id == hole[0])
+                .map(|v| [v.xy[0], v.xy[1]])
+                .unwrap_or([f32::NAN; 2]);
+            if point_in_ring_coords(probe, &arc_a_xy) {
+                holes_a.push(hole.clone());
+            } else {
+                holes_b.push(hole.clone());
+            }
+        }
+        // ── 全部校验已过，一次性写回 ──
+        span.vertices.extend(new_vertices);
         span.faces[face_idx].ring = arc_a;
         span.faces[face_idx].owner = owner_a;
+        span.faces[face_idx].holes = holes_a;
         span.faces.push(PartitionFace {
             id: span.faces.iter().map(|f| f.id).max().unwrap_or(0) + 1,
             owner: owner_b,
             ring: arc_b,
-            holes: Vec::new(),
+            holes: holes_b,
         });
         span.validate_topology()
             .map_err(|e| EditError::Precondition(format!("切后拓扑破损: {e}")))?;
@@ -448,22 +506,19 @@ impl EditCommand for CutPartitionFaceCommand {
     }
 }
 
-/// 射线法（f32 版）：点是否在顶点 id 环内。
-fn point_in_ring_f32(p: [f32; 2], ring_ids: &[u32], span: &PartitionSpan) -> bool {
+/// 射线法（f32 版）：点是否在**坐标环**内（终审 C2 修复的根基——环的
+/// 坐标由调用方解析好传入，刀口顶点尚未写回 span 也能正确求值）。
+fn point_in_ring_coords(p: [f32; 2], ring_xy: &[(f32, f32)]) -> bool {
     let mut inside = false;
-    let n = ring_ids.len();
-    let at = |i: usize| -> (f32, f32) {
-        span.vertices
-            .iter()
-            .find(|v| v.id == ring_ids[i])
-            .map(|v| (v.xy[0], v.xy[1]))
-            .expect("环顶点存在")
-    };
+    let n = ring_xy.len();
+    if n < 3 {
+        return false;
+    }
     let (px, py) = (p[0], p[1]);
     let mut j = n - 1;
     for i in 0..n {
-        let (xi, yi) = at(i);
-        let (xj, yj) = at(j);
+        let (xi, yi) = ring_xy[i];
+        let (xj, yj) = ring_xy[j];
         if ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
             inside = !inside;
         }
@@ -1063,6 +1118,82 @@ mod cut_tests {
             span.faces[0].ring.contains(&1) || span.faces[1].ring.contains(&1),
             "既有顶点 id 应被复用"
         );
+    }
+
+    #[test]
+    fn cut_reassigns_holes_to_the_side_they_land_in() {
+        // 终审 I2：湖在右半 → 切后洞必须跟去右半（左半无洞）。
+        let mut world = World::default();
+        world.partitions.push(FactionPartition {
+            map: test_map(),
+            layer: Id::new_unchecked(LAYER),
+            spans: vec![PartitionSpan {
+                from: 0,
+                to: None,
+                vertices: vec![
+                    PartitionVertex {
+                        id: 0,
+                        xy: [0.0, 0.0],
+                    },
+                    PartitionVertex {
+                        id: 1,
+                        xy: [100.0, 0.0],
+                    },
+                    PartitionVertex {
+                        id: 2,
+                        xy: [100.0, 100.0],
+                    },
+                    PartitionVertex {
+                        id: 3,
+                        xy: [0.0, 100.0],
+                    },
+                    PartitionVertex {
+                        id: 4,
+                        xy: [75.0, 40.0],
+                    },
+                    PartitionVertex {
+                        id: 5,
+                        xy: [85.0, 50.0],
+                    },
+                    PartitionVertex {
+                        id: 6,
+                        xy: [75.0, 60.0],
+                    },
+                ],
+                faces: vec![PartitionFace {
+                    id: 0,
+                    owner: Some(Id::new_unchecked("faction_a")),
+                    ring: vec![0, 1, 2, 3],
+                    holes: vec![vec![4, 5, 6]], // 湖在 x∈[75,85] —— 右半
+                }],
+            }],
+        });
+        let cmd = CutPartitionFaceCommand::new(
+            test_map(),
+            Id::new_unchecked(LAYER),
+            0,
+            0,
+            vec![50.0, -3.0, 50.0, 103.0],
+            [30.0, 50.0], // 点选左半 → 右半保持 faction_a
+            Some(Id::new_unchecked("faction_b")),
+        );
+        cmd.apply(&mut world).expect("apply");
+        let span = &world.partitions[0].spans[0];
+        let with_holes: Vec<_> = span.faces.iter().filter(|f| !f.holes.is_empty()).collect();
+        assert_eq!(with_holes.len(), 1, "恰有一张脸带洞: {:?}", span.faces);
+        // 带洞脸必须是右半（含 x=75..85 的顶点）。
+        let ring_max_x = with_holes[0]
+            .ring
+            .iter()
+            .filter_map(|id| span.vertices.iter().find(|v| v.id == *id))
+            .map(|v| v.xy[0])
+            .fold(f32::MIN, f32::max);
+        assert!(
+            ring_max_x > 60.0,
+            "洞应跟去右半（ring max x={}）",
+            ring_max_x
+        );
+        span.validate_topology().expect("洞重派后拓扑自检");
     }
 
     #[test]

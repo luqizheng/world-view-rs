@@ -566,6 +566,7 @@ pub(super) fn register(app: &mut App) {
             crate::ui::partition_edit::partition_cut_gesture,
             crate::ui::partition_edit::partition_drag_gesture,
             crate::ui::partition_edit::partition_assign_gesture,
+            crate::ui::partition_edit::partition_pick_dialog,
         ),
     );
 }

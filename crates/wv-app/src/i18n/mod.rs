@@ -194,10 +194,10 @@ mod tests {
         }
         assert_eq!(
             I18nKey::ALL.len(),
-            546,
+            553,
             "ALL 应为 535 项；加新键时同步更新数组长度与元素（got {})",
             I18nKey::ALL.len()
         );
-        assert_eq!(seen.len(), 546, "去重后应仍为 546 项");
+        assert_eq!(seen.len(), 553, "去重后应仍为 553 项");
     }
 }

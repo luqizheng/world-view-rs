@@ -380,7 +380,7 @@ fn draw_border_ring(
 }
 
 /// 当前填色层：请求的层可见则用之，否则第一个可见层。
-fn active_layer_id(world: &World, requested: Option<&Id>) -> Option<Id> {
+pub(crate) fn active_layer_id(world: &World, requested: Option<&Id>) -> Option<Id> {
     let layers = resolved_faction_layers(world);
     if let Some(id) = requested {
         if layers.iter().any(|l| &l.id == id && l.visible) {

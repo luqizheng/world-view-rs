@@ -813,6 +813,22 @@ pub fn derive_partition_diagnostics(world: &wv_core::World) -> Diagnostics {
             // 海陆错配（Review Focus 5）：脸外环首顶点落海 = 海岸线漂移
             //（快照不重切，提示作者该分区已过时）。
             if let Some(terrain) = terrain_of(&p.map) {
+                // 终审 I7：span 区间重叠/乱序（validate_topology 只查单段
+                // 拓扑，跨段区间在此查）。
+                for pair in p.spans.windows(2) {
+                    let (a, b) = (&pair[0], &pair[1]);
+                    if b.from < a.from || a.to.is_some_and(|to| b.from < to) {
+                        d.items.push(hint(
+                            format!("partition:span_overlap:{}:{}", p.map, p.layer),
+                            format!(
+                                "分区 {key} 历史段区间重叠/乱序（…{}→{}, {}→…）",
+                                a.from,
+                                a.to.map(|t| t.to_string()).unwrap_or("∞".into()),
+                                b.from
+                            ),
+                        ));
+                    }
+                }
                 let cell = |x: f32, y: f32| -> Option<char> {
                     let gx = (x / 1.0).floor() as i32;
                     let gy = (y / 1.0).floor() as i32;
@@ -824,7 +840,15 @@ pub fn derive_partition_diagnostics(world: &wv_core::World) -> Diagnostics {
                     terrain
                         .cells
                         .get(gy as usize * w as usize + gx as usize)
-                        .map(|c| if c.surface == 0 { 'w' } else { 'l' })
+                        // M2：湿判定对齐 is_water_cell（surface==水 ∨
+                        // height<0）——surface=陆但压到海下的格也是水。
+                        .map(|c| {
+                            if c.surface == 0 || c.height < 0 {
+                                'w'
+                            } else {
+                                'l'
+                            }
+                        })
                 };
                 for face in &span.faces {
                     if let Some(v) = span.vertices.iter().find(|v| v.id == face.ring[0]) {
