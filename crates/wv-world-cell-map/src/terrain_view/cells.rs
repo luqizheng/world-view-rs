@@ -205,31 +205,14 @@ fn shade_coast(_data: &TerrainData, kind: u8, _pal: &CellPalette) -> Color {
 
 // ---------------------------------------------------------------------------
 // 坡度浮雕（ADR-0077 D6）：公式真源在 `crate::shading`——Horn 米制梯度、
-// 世界法线、双光源光照明度全部只认那一处；本文件只保留 CPU 热路径的
-// 预归一化光向常量与乘子入口（`CellRenderer::relief_intensity`）。
+// 世界法线、双光源光照明度（含 LIGHT_* 常量）全部只认那一处，本文件
+// 零光照字面量；乘子入口 = `CellRenderer::relief_intensity`。
 // 旧「逐格差分 × 0.0012 + 0.84~1.16 / 0.90~1.12 双套钳制」
 //（RELIEF_PER_METER / RELIEF_MIN / RELIEF_MAX / RELIEF_*_CARTOGRAPHIC、
 // relief_mul / relief_mul_clamped）随界内性免费获得而整体退役。
+// 2026-10-28 spec D1 修正：LIGHT_* 改存真 45° 高度角**单位向量**，CPU
+// 直接 dot，早期临时的预归一化副本（LIGHT_*_UNIT）随之取消。
 // ---------------------------------------------------------------------------
-
-/// 1/√3 的 f32 近似。`std::f32::consts::FRAC_1_SQRT_3` 在本仓工具链
-/// （rust-version 1.80）上仍属 unstable `more_float_constants`，不可用；
-/// 数值正确性由测试 `unit_light_constants_match_normalized_shading_lights`
-/// 对 `normalize(LIGHT_*)` 的运行时比较锚定。
-const FRAC_1_SQRT_3_F32: f32 = 0.577_350_26;
-
-/// [`crate::shading::LIGHT_MAIN`] 的**预归一化**方向。
-///
-/// `LIGHT_*` 沿仓库既有约定存**非归一化**方向（模长 √(3/2)），而
-/// [`crate::shading::lighting_intensity`] 的入参契约要求「与归一化光向的
-/// 点积」——拿原始常量直接点积会越界、亮部溢出（反例见其文档）。烘焙是
-/// 百万格级热循环，归一化在编译期做一次（−1/√2 ÷ √(3/2) = −1/√3），
-/// 不逐格 sqrt。
-const LIGHT_MAIN_UNIT: [f32; 3] = [-FRAC_1_SQRT_3_F32, FRAC_1_SQRT_3_F32, FRAC_1_SQRT_3_F32];
-
-/// [`crate::shading::LIGHT_AUX`] 的预归一化方向（与 [`LIGHT_MAIN_UNIT`]
-/// 只差 x 符号，同一次性归一化口径）。
-const LIGHT_AUX_UNIT: [f32; 3] = [FRAC_1_SQRT_3_F32, FRAC_1_SQRT_3_F32, FRAC_1_SQRT_3_F32];
 
 /// 水域按高度的渐变色——lerp `water_shallow → water_deep`，并对深色带
 /// 提一点蓝饱和（海沟观感）。所有视图模式下的水域**内部格**都走这条；
@@ -744,11 +727,11 @@ impl<'a> CellRenderer<'a> {
     ///
     /// VectorFlat / RealTerrain / GoogleMap 三模式共走这一个入口：旧「艺术
     /// 0.84~1.16 / 专业制图 0.90~1.12 两套钳制」随 `I ∈ [0.4, 1.0]` 界内性
-    /// 免费获得而退役（`lighting_intensity` 契约：入参须为与**归一化**光向
-    /// 的点积，见 [`LIGHT_MAIN_UNIT`]）。与旧 `relief_mul` 的受光方向逐轴
+    /// 免费获得而退役。`LIGHT_*` 自 2026-10-28 起为单位向量（spec D1 修正），
+    /// 直接 `dot(n, LIGHT_*)` 即合法入参。与旧 `relief_mul` 的受光方向逐轴
     /// 相反是**既定修正**——旧 CPU 路径方向本来就反（见
-    /// `shading::normal_world` 文档），切换后 CPU/GPU 统一到 material.rs
-    /// 的「左上受光」口径。
+    /// `shading::normal_world` 文档），切换后 CPU/GPU 统一到「左上受光」
+    /// 口径。
     ///
     /// 纯函数、只读高度场：同一格在任何渲染路径（全图烘焙 / 笔刷 patch）
     /// 得到同一乘子，不需要额外的缓存或随机种子。
@@ -756,7 +739,10 @@ impl<'a> CellRenderer<'a> {
         let (hx, hy) = crate::shading::horn_gradient(self.data, cx as i64, gy as i64);
         let n = crate::shading::normal_world(hx, hy, self.slope_gain);
         let dot = |l: [f32; 3]| n[0] * l[0] + n[1] * l[1] + n[2] * l[2];
-        crate::shading::lighting_intensity(dot(LIGHT_MAIN_UNIT), dot(LIGHT_AUX_UNIT))
+        crate::shading::lighting_intensity(
+            dot(crate::shading::LIGHT_MAIN),
+            dot(crate::shading::LIGHT_AUX),
+        )
     }
 
     /// `kind` 的预采样瓦片块（按需建，整图共享）。
@@ -2141,43 +2127,20 @@ mod tests {
     }
 
     /// 平地光照明度（浮雕乘子的「零点」）：梯度恒零 → 法线 (0,0,1) →
-    /// 与两盏归一化灯的点积各 = 灯的 z 分量 = 1/√3 →
-    /// `I = 0.4 + 0.6/√3 ≈ 0.7464`。
+    /// 与两盏 45° 高度角单位灯的点积各 = sin45° = 1/√2 →
+    /// `I = 0.4 + 0.6/√2 ≈ 0.8243`（spec D1 口径）。
     ///
-    /// **钳制已退役**：不再钳回 1.0——平地整幅统一乘 0.7464 是公式语义
-    /// （`I ∈ [0.4, 1]` 界内免费获得），与 GPU 侧同源（WGSL 同样归一化
-    /// `LIGHT_*`）。（计划 brief 曾按「灯 z = 1/√2」估 0.8243——那是
-    /// `LIGHT_*` 未按模长 √(3/2) 归一化的口径，与归一化契约冲突，弃用。）
+    /// **钳制已退役**：不再钳回 1.0——平地整幅统一乘 0.8243 是公式语义
+    ///（`I ∈ [0.4, 1]` 界内免费获得），与 GPU 侧同源（WGSL 直接 dot 同一
+    /// 单位向量常量）。
     fn flat_ground_intensity() -> f32 {
-        crate::shading::lighting_intensity(FRAC_1_SQRT_3_F32, FRAC_1_SQRT_3_F32)
+        crate::shading::lighting_intensity(
+            std::f32::consts::FRAC_1_SQRT_2,
+            std::f32::consts::FRAC_1_SQRT_2,
+        )
     }
 
-    /// 预归一化光向常量必须等于 `normalize(LIGHT_*)`：LIGHT_* 存非归一化
-    /// 方向（模长 √(3/2)），烘焙热路径消费预归一化副本——两者漂移即
-    /// CPU/GPU 光照分叉（归一化契约的 CPU 侧锚点）。
-    #[test]
-    fn unit_light_constants_match_normalized_shading_lights() {
-        let norm = |l: [f32; 3]| {
-            let len = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt();
-            [l[0] / len, l[1] / len, l[2] / len]
-        };
-        for (unit, raw) in [
-            (LIGHT_MAIN_UNIT, crate::shading::LIGHT_MAIN),
-            (LIGHT_AUX_UNIT, crate::shading::LIGHT_AUX),
-        ] {
-            let want = norm(raw);
-            for k in 0..3 {
-                assert!(
-                    (unit[k] - want[k]).abs() < 1e-6,
-                    "分量 {k}: got {} want {}",
-                    unit[k],
-                    want[k]
-                );
-            }
-        }
-    }
-
-    /// 平地任意格浮雕乘子 = 平地光照明度（≈0.7464）：无坡即无明暗**差**，
+    /// 平地任意格浮雕乘子 = 平地光照明度（≈0.8243）：无坡即无明暗**差**，
     /// 全图统一乘子（绝对变暗由公式环境光项承担，GPU 侧同源）。
     #[test]
     fn flat_ground_mul_equals_flat_intensity_everywhere() {
@@ -2196,27 +2159,34 @@ mod tests {
         }
     }
 
-    /// 受光方向新口径（`shading::normal_world`，与 GPU/material.rs 同源）：
+    /// 受光方向新口径（`shading::normal_world` + spec D1 的 45° 单位灯）：
     /// **北坡 / 西坡受光（亮于平地）、南坡 / 东坡背光（暗于平地）**。
     /// 行号向下增大 = 南；台阶在东列（x=2 高）时中心格坡面朝西。
-    /// 与旧 `relief_mul` 的 `lit = −(dx+dy)` 逐轴相反是**既定修正**——旧
-    /// CPU 路径受光方向本来就反（见 `shading::normal_world` 文档）。
+    /// fixture 用 100 m 步阶（默认格距 100 m → s·梯度 = 1，45° 坡）：
+    /// 300 m 步阶的 71.6° 陡坡在 45° 灯高下会越过「与平地比亮暗」的
+    /// 分界（陡坡的 z 分量损失超过受光面收益，四向都暗于平地），受光/
+    /// 背光的学名语义由本 fixture 钉住。与旧 `relief_mul` 的
+    /// `lit = −(dx+dy)` 逐轴相反是**既定修正**——旧 CPU 路径受光方向
+    /// 本来就反（见 `shading::normal_world` 文档）。
     #[test]
     fn north_and_west_facing_slopes_are_lit_south_and_east_shaded() {
-        let data_west = relief_fixture(|x, _| if x == 2 { 300 } else { 0 });
-        let data_east = relief_fixture(|x, _| if x == 0 { 300 } else { 0 });
-        let data_north = relief_fixture(|_, y| if y == 2 { 300 } else { 0 });
-        let data_south = relief_fixture(|_, y| if y == 0 { 300 } else { 0 });
+        let data_west = relief_fixture(|x, _| if x == 2 { 100 } else { 0 });
+        let data_east = relief_fixture(|x, _| if x == 0 { 100 } else { 0 });
+        let data_north = relief_fixture(|_, y| if y == 2 { 100 } else { 0 });
+        let data_south = relief_fixture(|_, y| if y == 0 { 100 } else { 0 });
         let pack = CellPack::fixture();
         let mpc = crate::shading::DEFAULT_METERS_PER_CELL;
         let flat = flat_ground_intensity();
-        // 手算锚点（s = 0.02，台阶梯度 150 m/格 → s·梯度 = 3）：
-        // 西/北向坡 N·L₁ = 0.7303 > 平地 1/√3 → I = 0.7505 / 0.8382 > 0.7464。
+        // 手算锚点（s = 0.02，台阶梯度 50 m/格 → s·梯度 = 1，45° 坡）：
+        // 45° 坡法线 (±1/√2, ±1/√2, 1/√2)，与灯的点积 ∈ {0.8536, 0.1464}：
+        // 西向坡 I = 0.4+0.48·0.8536+0.12·0.1464 = 0.8273 > 平地 0.8243；
+        // 北向坡 I = 0.4+0.6·0.8536 = 0.9121（两灯同照）；东向坡
+        // I = 0.4+0.48·0.1464+0.12·0.8536 = 0.5727；南向坡 I = 0.4879。
         let m = relief_renderer(&data_west, &pack, mpc).relief_intensity(1, 1);
         assert!(m > flat, "西向坡应亮于平地 {flat}，实得 {m}");
         let m = relief_renderer(&data_north, &pack, mpc).relief_intensity(1, 1);
         assert!(m > flat, "北向坡应亮于平地 {flat}，实得 {m}");
-        // 东/南向坡：主光点积为负截断 → I = 0.4876 / 0.4 < 0.7464。
+        // 东/南向坡：受光点积为负/弱 → 明显暗于平地。
         let m = relief_renderer(&data_east, &pack, mpc).relief_intensity(1, 1);
         assert!(m < flat, "东向坡应暗于平地 {flat}，实得 {m}");
         let m = relief_renderer(&data_south, &pack, mpc).relief_intensity(1, 1);
@@ -2225,7 +2195,7 @@ mod tests {
 
     /// 极端断崖（±9000 m 邻格高差）：钳制已退役，但 `lighting_intensity`
     /// 的界内性契约保证乘子**有限**且落在 `[0.4, 1.0]`
-    ///（s·hx = −180 → 法线贴地 → 只剩辅光项 0.4 + 0.12·0.574 ≈ 0.469）。
+    ///（s·hx = −180 → 法线贴地 → 只剩辅光项 0.4 + 0.12·0.504 ≈ 0.460）。
     #[test]
     fn extreme_cliff_mul_stays_finite() {
         let cliff = relief_fixture(|x, _| if x == 0 { 9000 } else { -9000 });

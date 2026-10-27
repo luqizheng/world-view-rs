@@ -9,15 +9,16 @@
 //! 用户明示：晕渲的目标是**让山体可读**（山脊受光 / 背光分明、宽缓地形
 //! 有体量），不是渲染真实日照。因此三光系数（[`AMBIENT`] /
 //! [`DIFFUSE_MAIN`] / [`DIFFUSE_AUX`]）是**美术调参**，和恒为 1：
-//! `I = 0.4 + 0.48·max(0, N·L₁) + 0.12·max(0, N·L₂)` 的入参必须是法线与
-//! **归一化后**光向量的点积（[`LIGHT_MAIN`] / [`LIGHT_AUX`] 沿仓库既有
-//! 约定存**非归一化**方向，先例 = `field/material.rs` 的 `LIGHT_DIR`，
-//! WGSL 消费侧 normalize）——此时 `I ∈ [0.4, 1.0]`（三系数和为 1，
-//! `max(0,·)` 非负）**界内性免费获得，明暗钳制（RELIEF_LO/HI）整体
-//! 退役**，少一个调参自由度（ADR-0077 D1）。归一化是调用方义务
-//! （T4 CPU / T6 WGSL 均照此）；拿非归一化方向直接点积会越界
-//! （反例见 [`lighting_intensity`] 文档）。
-//! 辅光 L₂ 治「山脉走向恰与主光平行时受光/背光面同时消失」的盲区。
+//! `I = 0.4 + 0.48·max(0, N·L₁) + 0.12·max(0, N·L₂)`，入参 = 法线与
+//! 光向量的点积。[`LIGHT_MAIN`] / [`LIGHT_AUX`] 自 2026-10-28 起按
+//! spec/ADR-0077 D1 的字面存**真 45° 高度角单位向量**——`dot(n, LIGHT_*)`
+//! 即合法入参，无需归一化（此前沿用的 `(−1/√2, 1/√2, 1/√2)` 模长 √(3/2)、
+//! 实际高度角只有 atan(1/√2) ≈ 35.26°，与 spec 矛盾，已修正）。单位光向
+//! 下 `I ∈ [0.4, 1.0]`（三系数和为 1，`max(0,·)` 非负）**界内性免费获得，
+//! 明暗钳制（RELIEF_LO/HI）整体退役**，少一个调参自由度（ADR-0077 D1；
+//! 若拿非单位光向量直接点积则可越界，见 [`lighting_intensity`] 文档的
+//! 历史注记）。辅光 L₂ 治「山脉走向恰与主光平行时受光/背光面同时消失」
+//! 的盲区。
 //!
 //! ## 量纲纪律
 //!
@@ -73,15 +74,19 @@ pub const MEDIUM_RADIUS_CELLS: f32 = 3.0;
 /// 宏观盒平均足迹（格）：宏观档的盒式低通半径。
 pub const MACRO_RADIUS_CELLS: f32 = 12.0;
 
-/// 主光 L₁：方位 315°（西北）、高度角 45°（与现行
-/// `terrain_view::field::material::LIGHT_DIR` 同向同值——「左上受光」
-/// 与全部地物符号/阴影同向的既有约定）。z 分量 = 1/√2 表示「光从
-/// 观察者方向偏上打过来」——纯 2D hillshade 的 z=0 会让所有法线与光
-/// 垂直、整幅图恒定亮度（`material.rs` 同款理由）。
-pub const LIGHT_MAIN: [f32; 3] = [-FRAC_1_SQRT_2, FRAC_1_SQRT_2, FRAC_1_SQRT_2];
+/// 主光 L₁：方位 315°（西北）、**高度角 45°**（spec D1 字面；「左上受光」
+/// 与全部地物符号/阴影同向——方位沿 `field/material.rs::LIGHT_DIR` 的既有
+/// 惯例，高度角 D1 修正为真 45°）。**单位向量**：水平模 cos45° = 1/√2
+/// 均分到西北两轴（各 0.5），z = sin45° = 1/√2 表示「光从观察者方向偏上
+/// 打过来」——纯 2D hillshade 的 z=0 会让所有法线与光垂直、整幅图恒定
+/// 亮度。2026-10-28 前沿用的 `(−1/√2, 1/√2, 1/√2)` 模长 √(3/2)、实际
+/// 高度角仅 35.26°，与 spec 矛盾，随归一化契约取消一并修正——**消费侧
+/// （T4 CPU / T6 WGSL）直接 dot 即可，无需再 normalize**（多 normalize
+/// 也无害，单位向量不动）。
+pub const LIGHT_MAIN: [f32; 3] = [-0.5, 0.5, FRAC_1_SQRT_2];
 /// 辅光 L₂：方位 45°（东北）、高度角 45°。与主光**只差 x 符号**——
 /// 正交的受光盲区互补：任一走向的山脉，两面至少被一盏灯看见。
-pub const LIGHT_AUX: [f32; 3] = [FRAC_1_SQRT_2, FRAC_1_SQRT_2, FRAC_1_SQRT_2];
+pub const LIGHT_AUX: [f32; 3] = [0.5, 0.5, FRAC_1_SQRT_2];
 
 /// detail 权重衰减曲线起点（px/格）：低于此分辨率细纹理全是噪点，
 /// detail 权重归零。
@@ -134,25 +139,29 @@ pub const DEFAULT_METERS_PER_CELL: f32 = 100.0;
 
 /// 光照明度乘子：`AMBIENT + DIFFUSE_MAIN·max(0, N·L₁) + DIFFUSE_AUX·max(0, N·L₂)`。
 ///
-/// ## 接口契约：入参必须是「与归一化后光向量的点积」
+/// ## 接口契约：入参 = `dot(n, LIGHT_*)`
 ///
-/// `n_dot_l1 / n_dot_l2` 须为 `dot(n, normalize(LIGHT_MAIN))` /
-/// `dot(n, normalize(LIGHT_AUX))`。[`LIGHT_MAIN`] / [`LIGHT_AUX`] 沿仓库既有
-/// 约定存**非归一化**方向（先例 = `field/material.rs` 的 `LIGHT_DIR`，
-/// 模长 √(3/2)，WGSL 消费侧 normalize），**归一化是调用方义务**
-/// （T4 CPU 块烘焙 / T6 WGSL 均照此；本函数按 ADR-0077 D1 锁死为纯
-/// 公式，不做隐式归一化）。
+/// [`LIGHT_MAIN`] / [`LIGHT_AUX`] 自 2026-10-28 起是**单位向量**（spec D1：
+/// 方位 315°/45°、高度角 45°），`n_dot_l1 / n_dot_l2` 直接取
+/// `dot(n, LIGHT_MAIN)` / `dot(n, LIGHT_AUX)` 即可，无需归一化
+///（2026-10-28 前常量存模长 √(3/2) 方向、归一化是调用方义务——契约随
+/// 常量单位化取消；本函数始终按 ADR-0077 D1 锁死为纯公式，不做隐式
+/// 归一化）。
 ///
-/// 对归一化点积入参，`I ∈ [0.4, 1.0]`（三系数和为 1，`max(0,·)` 非负）
-/// ——**界内性免费获得，调用方不许再钳制**。
+/// 对单位光向量点积入参，`I ∈ [0.4, 1.0]`（三系数和为 1，`max(0,·)` 非负）
+/// ——**界内性免费获得，调用方不许再钳制**。上界不紧：全定义域实际
+/// max = `0.4 + |0.48·L₁ + 0.12·L₂|`，其中 `L₁·L₂ = 0.5`，故
+/// `|0.48L₁ + 0.12L₂| = √(0.48² + 0.12² + 2·0.48·0.12·0.5) = √0.3024
+/// ≈ 0.5499`，即 max ≈ 0.9499（取得于 `n ∝ 0.48L₁ + 0.12L₂`）；下界 0.4
+/// 可达（n 与两灯点积同时 ≤ 0，如 n = (0, −1, 0)）。
 ///
-/// ## ⚠️ 反例警告：非归一化入参可越界
+/// ## ⚠️ 历史注记：非单位光向量入参可越界
 ///
-/// 拿未归一化的 [`LIGHT_MAIN`] 直接点积：`n = normalize(−1,1,1)` 时
-/// `N·L₁ = √(3/2) ≈ 1.2247`、`N·L₂ = 1/√6 ≈ 0.4082`，
-/// `I ≈ 0.4 + 0.48·1.2247 + 0.12·0.4082 ≈ 1.037 > 1.0`（全定义域实际
-/// 上界 ≈ 1.0518，在 n ∝ (−0.36, 0.6, 0.6) 处取得）。越界即亮部溢出，
-/// 事后钳制救不回层次——归一化必须在点积之前。
+/// 若调用方拿**非单位**光向量直接点积（2026-10-28 前的常量口径），
+/// `I` 可超 1（旧常量下全定义域上界 ≈ 1.0518，在 n ∝ (−0.36, 0.6, 0.6)
+/// 处取得）——越界即亮部溢出，事后钳制救不回层次。现常量已单位化，
+/// 此坑只在未来改光向时需要警惕：**改常量必须保持模长 1**（锚点测试
+/// `lighting_constants_are_unit_vectors_at_45_degree_elevation`）。
 pub fn lighting_intensity(n_dot_l1: f32, n_dot_l2: f32) -> f32 {
     AMBIENT + DIFFUSE_MAIN * n_dot_l1.max(0.0) + DIFFUSE_AUX * n_dot_l2.max(0.0)
 }
@@ -195,8 +204,8 @@ pub fn horn_gradient(data: &TerrainData, x: i64, y: i64) -> (f32, f32) {
 ///
 /// 数据行号向下增大（南），世界坐标 **+y = 北**——法线的 y 分量在
 /// 此**翻转一次**。这样「高度向南增大」的坡（`hy > 0`）法线朝北
-/// （`normal[1] > 0`），被东北—西北方向的主/辅光（`L.y = +1/√2`）
-/// 照亮：**山影倒向南方、坡面朝左上受光**。本公式的受光方向锚点 =
+///（`normal[1] > 0`），被东北—西北方向的主/辅光（`L.y = +0.5`）照亮：
+/// **山影倒向南方、坡面朝左上受光**。本公式的受光方向锚点 =
 /// `field/material.rs` 的 `LIGHT_DIR` + 纹理空间法线（GPU 路径，制图学
 /// 西北受光惯例）。注意：`cells.rs::relief_mul` 的 `lit = −(dx + dy)`
 /// 与本公式**逐轴相反**——其最亮分支（dx < 0 且 dy < 0）恰是本公式的
@@ -344,6 +353,28 @@ mod tests {
     }
 
     #[test]
+    fn lighting_constants_are_unit_vectors_at_45_degree_elevation() {
+        // spec D1：方位 315°/45°、高度角 45° ⇒ 单位向量 (±0.5, 0.5, 1/√2)，
+        // 模长 1（0.25 + 0.25 + 0.5 = 1）——`lighting_intensity` 的「直接
+        // dot」契约以此为前提，模长漂移即界内性失效（见该函数历史注记）。
+        for l in [LIGHT_MAIN, LIGHT_AUX] {
+            let len2 = l[0] * l[0] + l[1] * l[1] + l[2] * l[2];
+            assert!((len2 - 1.0).abs() < EPS, "模长² = {len2} 应为 1");
+            assert!(
+                (l[2] - FRAC_1_SQRT_2).abs() < EPS,
+                "z = {:?} 应为 sin45°",
+                l[2]
+            );
+            assert!((l[1] - 0.5).abs() < EPS, "y = {:?} 应为 0.5", l[1]);
+        }
+        assert!((LIGHT_MAIN[0] + 0.5).abs() < EPS, "主光从西北（x = −0.5）");
+        assert!((LIGHT_AUX[0] - 0.5).abs() < EPS, "辅光从东北（x = +0.5）");
+        // 两灯只差 x 符号（盲区互补的结构前提）。
+        assert_eq!(LIGHT_MAIN[1], LIGHT_AUX[1]);
+        assert_eq!(LIGHT_MAIN[2], LIGHT_AUX[2]);
+    }
+
+    #[test]
     fn normal_world_north_facing_slope_is_lit_by_main_light() {
         // 高度向南增大（hy > 0）→ 坡面朝北 → normal[1] > 0（y 翻转锚点）。
         // 45° 坡：normalize(0, 1, 1) = (0, 1/√2, 1/√2)。
@@ -352,19 +383,25 @@ mod tests {
         assert!((n[1] - FRAC_1_SQRT_2).abs() < EPS, "got {}", n[1]);
         let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
         assert!((len - 1.0).abs() < EPS, "got {}", len);
-        // 主光点积（几何事实，未归一化常量的原始点积）：
-        // 0·(−1/√2) + ½ + ½ = 1.0；n·LIGHT_AUX 同理 = 1.0。
-        // 两者恰落在合法入参域 [−1,1] 内（等价于归一化点积为 1 的满光
-        // 情形），lighting_intensity(1,1) = 1.0 = 公式上界——界内性契约
-        // 以「归一化点积入参」为前提，见 lighting_intensity 文档。
+        // 单位光向量的原始点积即合法入参：
+        // 0·(−0.5) + (1/√2)·0.5 + (1/√2)·(1/√2) = 0.5/√2 + 0.5 = 0.8535533；
+        // 北向坡正对两灯的公共 y/z 锥，n·LIGHT_AUX 同值。
         let dot = n[0] * LIGHT_MAIN[0] + n[1] * LIGHT_MAIN[1] + n[2] * LIGHT_MAIN[2];
         assert!(dot > 0.0, "got {}", dot);
-        assert!((dot - 1.0).abs() < EPS, "got {}", dot);
+        assert!(
+            (dot - (0.5 + FRAC_1_SQRT_2 / 2.0)).abs() < EPS,
+            "got {}",
+            dot
+        );
         let i = lighting_intensity(
             dot,
             n[0] * LIGHT_AUX[0] + n[1] * LIGHT_AUX[1] + n[2] * LIGHT_AUX[2],
         );
-        assert!((i - 1.0).abs() < EPS, "got {}", i);
+        assert!(
+            (i - (0.4 + 0.6 * (0.5 + FRAC_1_SQRT_2 / 2.0))).abs() < EPS,
+            "got {}",
+            i
+        );
     }
 
     #[test]
