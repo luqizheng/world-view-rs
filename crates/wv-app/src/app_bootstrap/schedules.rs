@@ -556,4 +556,8 @@ pub(super) fn register(app: &mut App) {
         Update,
         ui::hover_tooltip::hover_tooltip_system.after(wv_render::drill::update_sea_labels),
     );
+
+    // 切蛋糕 pen 弹框（ADR-0074 T11）：独立注册——面板链 tuple 已顶满 16，
+    // 本系统无链内次序约束（egui Window 自管层序）。
+    app.add_systems(Update, crate::ui::partition_pen::partition_pen_dialog);
 }

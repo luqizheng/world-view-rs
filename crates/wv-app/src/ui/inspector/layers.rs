@@ -34,8 +34,14 @@ pub fn layers_tab(
     edit: &mut editing::EditHistory,
     display: &mut FactionDisplay,
     inspector: &mut super::InspectorState,
+    pen_dialog: &mut crate::ui::partition_pen::PartitionPenDialog,
+    playback_day: i64,
 ) {
     let layers = wv_core::resolved_faction_layers(&projection.world);
+    let pen_gated = crate::ui::partition_pen::pen_available_for(
+        &projection.world,
+        &wv_core::Id::new_unchecked(view.current_map.clone()),
+    );
     let mut factions: Vec<wv_core::Faction> = projection.world.factions.clone();
     factions.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
 
@@ -94,12 +100,23 @@ pub fn layers_tab(
         }
         let selected = display.active_layer.clone();
         for l in &layers {
-            if ui
-                .selectable_label(selected.as_ref() == Some(&l.id), l.name.as_str())
-                .clicked()
-            {
-                display.active_layer = Some(l.id.clone());
-            }
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(selected.as_ref() == Some(&l.id), l.name.as_str())
+                    .clicked()
+                {
+                    display.active_layer = Some(l.id.clone());
+                }
+                // pen 按钮（ADR-0074 D3/T11）：动刀入口。门控 = 该图有自有
+                // 栅格（图级 World/Region 由 Inspector 语境保证）。
+                if pen_gated {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("✎").on_hover_text("画这张势力图").clicked() {
+                            pen_dialog.open(l.id.clone(), playback_day);
+                        }
+                    });
+                }
+            });
         }
     });
     ui.horizontal(|ui| {

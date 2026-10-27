@@ -38,6 +38,7 @@ pub mod map_scale_bar;
 pub mod minimap_panel;
 pub mod new_map_dialog;
 pub mod new_project_dialog;
+pub mod partition_pen;
 pub mod project_menu;
 pub mod region_panel;
 pub mod settings_dialog;

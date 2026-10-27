@@ -193,10 +193,11 @@ pub fn panel_inspector(
         ResMut<crate::edit::editing::EditHistory>,
     ),
     (mut panels, mut inspector): (ResMut<PanelState>, ResMut<InspectorState>),
-    (view, playback, grid): (
+    (view, playback, grid, mut pen_dialog): (
         Res<crate::state::ViewState>,
         Res<crate::state::PlaybackState>,
         Res<wv_render::state::GridConfig>,
+        ResMut<crate::ui::partition_pen::PartitionPenDialog>,
     ),
     (mut edit_cell, mut display, mut nature): (
         ResMut<wv_render::state::EditCellState>,
@@ -303,6 +304,8 @@ pub fn panel_inspector(
                         &mut edit,
                         &mut display,
                         &mut inspector,
+                        &mut pen_dialog,
+                        playback.current_day,
                     );
                 }
                 InspectorTab::Situations => {

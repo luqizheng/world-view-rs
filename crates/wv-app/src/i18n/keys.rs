@@ -341,6 +341,22 @@ pub enum I18nKey {
     PanelLayersFactionGroup,
     /// 图层面板自然图行标签（ADR-0074 政治图集页开关）
     PanelLayersNaturalMap,
+    /// 分区 pen 弹框标题（ADR-0074 T11）
+    PartitionPenTitle,
+    /// 分区 pen 弹框：层名标签
+    PartitionPenLayer,
+    /// 分区 pen 弹框：新增模式
+    PartitionPenCreate,
+    /// 分区 pen 弹框：修改模式
+    PartitionPenModify,
+    /// 分区 pen 弹框：生效日标签
+    PartitionPenEffectiveDay,
+    /// 分区 pen 弹框：归属标签
+    PartitionPenOwner,
+    /// 分区 pen 弹框：归属提示（空 = 无主）
+    PartitionPenOwnerHint,
+    /// 分区 pen 弹框：修改提示
+    PartitionPenModifyHint,
     /// 图层面板空态标题（本图未声明图层）
     PanelLayersEmptyTitle,
     /// 图层面板空态提示（去 index.yaml 的 layers: 段声明）
@@ -1353,7 +1369,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 537] = [
+    pub const ALL: [I18nKey; 545] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1519,6 +1535,14 @@ impl I18nKey {
         I18nKey::PanelLayersSession,
         I18nKey::PanelLayersFactionGroup,
         I18nKey::PanelLayersNaturalMap,
+        I18nKey::PartitionPenTitle,
+        I18nKey::PartitionPenLayer,
+        I18nKey::PartitionPenCreate,
+        I18nKey::PartitionPenModify,
+        I18nKey::PartitionPenEffectiveDay,
+        I18nKey::PartitionPenOwner,
+        I18nKey::PartitionPenOwnerHint,
+        I18nKey::PartitionPenModifyHint,
         I18nKey::PanelLayersEmptyTitle,
         I18nKey::PanelLayersEmptyHint,
         I18nKey::PanelLayerTerrain,

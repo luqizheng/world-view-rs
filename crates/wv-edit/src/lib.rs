@@ -21,12 +21,13 @@ pub mod nature_region;
 
 pub use command::{
     AddBuildingCommand, AddCityCommand, AddMapCommand, AddMeasurementCommand, AddPlaceCommand,
-    AddPlaceEdgeCommand, AddRegionCommand, AddStreetSegmentCommand, ClearMeasurementsCommand,
+    AddPlaceEdgeCommand, AddRegionCommand, AddStreetSegmentCommand, AssignPartitionFaceCommand,
+    BeginPartitionSpanCommand, ClearMeasurementsCommand, CutPartitionFaceCommand,
     DeleteBuildingCommand, DeleteStreetSegmentCommand, EditCommand, EditError, EditResult,
-    EnsureTerrainLayerCommand, GenerateContinentCommand, MoveCityCommand, RemoveMeasurementCommand,
-    RemoveRegionCommand, SetCityOutlineCommand, SetMapOrientationCommand, UpdateEventCommand,
-    UpdateFactionLayerCommand, UpdateLayerCommand, UpdateMapPropsCommand, UpdatePlaceCommand,
-    UpdateRegionCommand,
+    EnsureTerrainLayerCommand, GenerateContinentCommand, MoveCityCommand,
+    MovePartitionVerticesCommand, RemoveMeasurementCommand, RemoveRegionCommand,
+    SetCityOutlineCommand, SetMapOrientationCommand, UpdateEventCommand, UpdateFactionLayerCommand,
+    UpdateLayerCommand, UpdateMapPropsCommand, UpdatePlaceCommand, UpdateRegionCommand,
 };
 pub use history::{History, Transaction};
 pub use nature_region::{
