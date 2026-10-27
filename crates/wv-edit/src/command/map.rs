@@ -475,3 +475,110 @@ impl EditCommand for UpdateMapPropsCommand {
         Ok(())
     }
 }
+
+// ---------------------------------------------------------------------------
+// 地图树垃圾桶（2026-10-27 spec §5 D5 / §10 追记 1）
+// ---------------------------------------------------------------------------
+
+/// 软删整棵子树进垃圾桶。
+///
+/// 只在**被删子树的根**上打 `trashed` + `trashed_at`；children 引用与父图
+/// 钻取图标**原样保留**，显隐由渲染层按 [`World::map_alive`] 派生——
+/// 保存/重启后（Undo 栈不持久）「恢复」依然完整，彻底删除时才物理清理。
+///
+/// ## root_map 改写
+///
+/// 被删的恰是 `meta.root_map` 时，顺带把 root_map 改写为幸存的第一张根图
+/// （`World::alive_roots` 序）——这是**首条改动 `meta` 的 EditCommand**：
+/// 不改写的话，下次启动 `ensure_root` 会把钻取轨迹钉在一张隐形图上。
+///
+/// ## 守卫
+///
+/// 最后一张存活根图不可删（工程至少保留一张地图）。
+///
+/// ## 与 Undo 的关系
+///
+/// `revert` 完整可逆——Ctrl+Z 撤销删除与垃圾桶面板「恢复」是等效的两条
+/// 回家路（spec §6）。
+#[derive(Debug)]
+pub struct TrashMapCommand {
+    pub map_id: Id,
+    pub trashed_at: String,
+    /// root_map 改写前的旧值（仅当 apply 发生了改写才非空）。
+    before_root_map: std::sync::Mutex<Option<Id>>,
+}
+
+impl TrashMapCommand {
+    pub fn new(map_id: Id, trashed_at: impl Into<String>) -> Self {
+        Self {
+            map_id,
+            trashed_at: trashed_at.into(),
+            before_root_map: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for TrashMapCommand {
+    fn label(&self) -> String {
+        format!("删除地图「{}」", self.map_id.as_str())
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        // 借用分趟：alive_roots 计算需要 &world，先取只读事实再改。
+        let (is_root, already_trashed) = {
+            let Some(node) = world.maps.iter().find(|m| m.id == self.map_id) else {
+                return Err(EditError::TargetMissing(format!("地图 `{}`", self.map_id)));
+            };
+            (node.parent.is_none(), node.trashed)
+        };
+        if already_trashed {
+            return Err(EditError::Precondition(format!(
+                "地图 `{}` 已在垃圾桶中",
+                self.map_id
+            )));
+        }
+        if is_root && world.alive_roots().len() <= 1 {
+            return Err(EditError::Precondition("最后一张地图不可删除".into()));
+        }
+        if let Some(node) = world.maps.iter_mut().find(|m| m.id == self.map_id) {
+            node.trashed = true;
+            node.trashed_at = Some(self.trashed_at.clone());
+        }
+        // root_map 改写：此时目标已打标，alive_roots 自动排除它。
+        if world
+            .meta
+            .as_ref()
+            .is_some_and(|m| m.root_map == self.map_id)
+        {
+            let next = world.alive_roots().into_iter().next().ok_or_else(|| {
+                EditError::Precondition("没有幸存根图可改写 root_map".into())
+            })?;
+            if let Some(meta) = world.meta.as_mut() {
+                let old =
+                    std::mem::replace(&mut meta.root_map, next);
+                *self.before_root_map.lock().expect("before_root_map 锁") = Some(old);
+            }
+        }
+        Ok(vec!["maps".to_owned()])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let Some(node) = world.maps.iter_mut().find(|m| m.id == self.map_id) else {
+            return Err(EditError::TargetMissing(format!("地图 `{}`", self.map_id)));
+        };
+        node.trashed = false;
+        node.trashed_at = None;
+        drop(node);
+        if let Some(old) = self
+            .before_root_map
+            .lock()
+            .expect("before_root_map 锁")
+            .take()
+        {
+            if let Some(meta) = world.meta.as_mut() {
+                meta.root_map = old;
+            }
+        }
+        Ok(())
+    }
+}
