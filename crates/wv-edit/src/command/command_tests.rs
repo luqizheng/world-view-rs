@@ -4168,11 +4168,17 @@ mod trash_map_tests {
     // -----------------------------------------------------------------------
 
     fn trash_world() -> World {
-        let mut w = World::default();
-        w.maps = vec![
-            map_node("world_main", None, wv_core::map::MapLevel::World),
-            map_node("map_city_a", Some("world_main"), wv_core::map::MapLevel::City),
-        ];
+        let mut w = World {
+            maps: vec![
+                map_node("world_main", None, wv_core::map::MapLevel::World),
+                map_node(
+                    "map_city_a",
+                    Some("world_main"),
+                    wv_core::map::MapLevel::City,
+                ),
+            ],
+            ..World::default()
+        };
         w.maps[0].children.push(Id::new_unchecked("map_city_a"));
         w.maps[0].icons.push(wv_core::map::IconSpec {
             id: Id::new_unchecked("icon_a"),
@@ -4186,17 +4192,18 @@ mod trash_map_tests {
     }
 
     fn world_with_meta(root: &str, maps: Vec<wv_core::map::MapNode>) -> World {
-        let mut w = World::default();
-        w.meta = Some(wv_core::WorldMeta {
-            name: "测试工程".into(),
-            version: "0.1".into(),
-            schema_version: 2,
-            root_map: Id::new_unchecked(root),
-            timeline_range: wv_core::time::TimeSpan { from: 0, to: None },
-            template: None,
-        });
-        w.maps = maps;
-        w
+        World {
+            meta: Some(wv_core::WorldMeta {
+                name: "测试工程".into(),
+                version: "0.1".into(),
+                schema_version: 2,
+                root_map: Id::new_unchecked(root),
+                timeline_range: wv_core::time::TimeSpan { from: 0, to: None },
+                template: None,
+            }),
+            maps,
+            ..World::default()
+        }
     }
 
     #[test]
@@ -4224,7 +4231,10 @@ mod trash_map_tests {
         // spec §10 追记 1：children 引用与钻取图标原样保留，显隐由渲染派生。
         assert_eq!(parent.children.len(), 1, "children 引用应保留");
         assert_eq!(parent.icons.len(), 1, "钻取图标应保留");
-        assert!(!w.map_alive(&Id::new_unchecked("map_city_a")), "子城应不可见");
+        assert!(
+            !w.map_alive(&Id::new_unchecked("map_city_a")),
+            "子城应不可见"
+        );
         assert_eq!(dirty, vec!["maps".to_string()]);
     }
 
@@ -4243,14 +4253,13 @@ mod trash_map_tests {
 
     #[test]
     fn trash_last_alive_root_is_rejected() {
-        let mut w = World::default();
-        w.maps = vec![map_node("world_solo", None, wv_core::map::MapLevel::World)];
+        let mut w = World {
+            maps: vec![map_node("world_solo", None, wv_core::map::MapLevel::World)],
+            ..World::default()
+        };
         let cmd = TrashMapCommand::new(Id::new_unchecked("world_solo"), "t0");
         let err = cmd.apply(&mut w).expect_err("最后一张地图不可删");
-        assert!(
-            err.to_string().contains("最后一张"),
-            "got: {err}"
-        );
+        assert!(err.to_string().contains("最后一张"), "got: {err}");
     }
 
     #[test]
@@ -4260,7 +4269,11 @@ mod trash_map_tests {
             map_node("world_b", None, wv_core::map::MapLevel::World),
         ];
         maps[0].children.push(Id::new_unchecked("map_city_a"));
-        maps.push(map_node("map_city_a", Some("world_a"), wv_core::map::MapLevel::City));
+        maps.push(map_node(
+            "map_city_a",
+            Some("world_a"),
+            wv_core::map::MapLevel::City,
+        ));
         let mut w = world_with_meta("world_a", maps);
         let cmd = TrashMapCommand::new(Id::new_unchecked("world_a"), "t0");
         cmd.apply(&mut w).expect("apply");
@@ -4275,12 +4288,13 @@ mod trash_map_tests {
             "world_a",
             "revert 应还原 root_map"
         );
-        assert!(!w
-            .maps
-            .iter()
-            .find(|m| m.id.as_str() == "world_a")
-            .expect("在")
-            .trashed);
+        assert!(
+            !w.maps
+                .iter()
+                .find(|m| m.id.as_str() == "world_a")
+                .expect("在")
+                .trashed
+        );
     }
 
     #[test]
@@ -4290,12 +4304,108 @@ mod trash_map_tests {
         cmd.apply(&mut w).expect("apply");
         assert!(!w.map_alive(&Id::new_unchecked("map_city_a")));
         cmd.revert(&mut w).expect("revert");
-        assert!(w.map_alive(&Id::new_unchecked("map_city_a")), "撤销删除=恢复");
+        assert!(
+            w.map_alive(&Id::new_unchecked("map_city_a")),
+            "撤销删除=恢复"
+        );
         let city = w
             .maps
             .iter()
             .find(|m| m.id.as_str() == "map_city_a")
             .expect("在");
         assert_eq!(city.trashed_at, None, "revert 应清掉时间戳");
+    }
+
+    // -----------------------------------------------------------------------
+    // RestoreMapCommand（垃圾桶恢复 · spec §5 D5）
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn restore_unmarks_trashed_root_and_descendants_alive() {
+        let mut w = trash_world();
+        TrashMapCommand::new(Id::new_unchecked("map_city_a"), "t0")
+            .apply(&mut w)
+            .expect("trash");
+        let cmd = RestoreMapCommand::new(Id::new_unchecked("map_city_a"));
+        let dirty = cmd.apply(&mut w).expect("restore");
+        assert!(
+            w.map_alive(&Id::new_unchecked("map_city_a")),
+            "恢复后应存活"
+        );
+        let city = w
+            .maps
+            .iter()
+            .find(|m| m.id.as_str() == "map_city_a")
+            .expect("在");
+        assert!(!city.trashed);
+        assert_eq!(city.trashed_at, None);
+        assert_eq!(dirty, vec!["maps".to_string()]);
+        // 恢复也可撤销：revert 回到垃圾桶态。
+        cmd.revert(&mut w).expect("revert");
+        assert!(
+            !w.map_alive(&Id::new_unchecked("map_city_a")),
+            "撤销恢复=回到垃圾桶"
+        );
+    }
+
+    #[test]
+    fn restore_rejects_map_not_in_trash() {
+        let mut w = trash_world();
+        let err = RestoreMapCommand::new(Id::new_unchecked("map_city_a"))
+            .apply(&mut w)
+            .expect_err("未删除的图不可恢复");
+        assert!(err.to_string().contains("垃圾桶"), "got: {err}");
+    }
+
+    #[test]
+    fn restore_blocked_while_parent_still_trashed() {
+        // 世界→城：先删城、再删世界，然后直接恢复城 → 必须先恢复父图。
+        let mut maps = vec![
+            map_node("world_main", None, wv_core::map::MapLevel::World),
+            map_node(
+                "map_city_a",
+                Some("world_main"),
+                wv_core::map::MapLevel::City,
+            ),
+        ];
+        maps[0].children.push(Id::new_unchecked("map_city_a"));
+        let mut w = World {
+            maps: vec![
+                map_node("world_b", None, wv_core::map::MapLevel::World), // 陪跑根，让删世界能过守卫
+            ],
+            ..World::default()
+        };
+        w.maps.extend(maps);
+        TrashMapCommand::new(Id::new_unchecked("map_city_a"), "t1")
+            .apply(&mut w)
+            .expect("trash city");
+        TrashMapCommand::new(Id::new_unchecked("world_main"), "t2")
+            .apply(&mut w)
+            .expect("trash world");
+        let err = RestoreMapCommand::new(Id::new_unchecked("map_city_a"))
+            .apply(&mut w)
+            .expect_err("父图在垃圾桶时应拒绝");
+        assert!(err.to_string().contains("先恢复父图"), "got: {err}");
+        // 恢复父图后，子图恢复放行。
+        RestoreMapCommand::new(Id::new_unchecked("world_main"))
+            .apply(&mut w)
+            .expect("restore world");
+        RestoreMapCommand::new(Id::new_unchecked("map_city_a"))
+            .apply(&mut w)
+            .expect("父图存活后子图可恢复");
+    }
+
+    #[test]
+    fn restore_blocked_when_parent_was_purged() {
+        let mut w = trash_world();
+        TrashMapCommand::new(Id::new_unchecked("map_city_a"), "t0")
+            .apply(&mut w)
+            .expect("trash");
+        // 模拟父图被彻底删除：节点从 maps 移除。
+        w.maps.retain(|m| m.id.as_str() != "world_main");
+        let err = RestoreMapCommand::new(Id::new_unchecked("map_city_a"))
+            .apply(&mut w)
+            .expect_err("父图不存在时应拒绝");
+        assert!(err.to_string().contains("彻底删除"), "got: {err}");
     }
 }

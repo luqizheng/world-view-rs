@@ -550,12 +550,13 @@ impl EditCommand for TrashMapCommand {
             .as_ref()
             .is_some_and(|m| m.root_map == self.map_id)
         {
-            let next = world.alive_roots().into_iter().next().ok_or_else(|| {
-                EditError::Precondition("没有幸存根图可改写 root_map".into())
-            })?;
+            let next = world
+                .alive_roots()
+                .into_iter()
+                .next()
+                .ok_or_else(|| EditError::Precondition("没有幸存根图可改写 root_map".into()))?;
             if let Some(meta) = world.meta.as_mut() {
-                let old =
-                    std::mem::replace(&mut meta.root_map, next);
+                let old = std::mem::replace(&mut meta.root_map, next);
                 *self.before_root_map.lock().expect("before_root_map 锁") = Some(old);
             }
         }
@@ -563,12 +564,13 @@ impl EditCommand for TrashMapCommand {
     }
 
     fn revert(&self, world: &mut World) -> EditResult<()> {
-        let Some(node) = world.maps.iter_mut().find(|m| m.id == self.map_id) else {
-            return Err(EditError::TargetMissing(format!("地图 `{}`", self.map_id)));
-        };
-        node.trashed = false;
-        node.trashed_at = None;
-        drop(node);
+        {
+            let Some(node) = world.maps.iter_mut().find(|m| m.id == self.map_id) else {
+                return Err(EditError::TargetMissing(format!("地图 `{}`", self.map_id)));
+            };
+            node.trashed = false;
+            node.trashed_at = None;
+        }
         if let Some(old) = self
             .before_root_map
             .lock()
@@ -579,6 +581,67 @@ impl EditCommand for TrashMapCommand {
                 meta.root_map = old;
             }
         }
+        Ok(())
+    }
+}
+
+/// 从垃圾桶整条还原（spec §5 D5 + §6「嵌套恢复守卫」）。
+///
+/// 软删只动了根上的标志（children/图标从未被动过），恢复 = 翻回标志；
+/// 守卫：原父图必须**存活**——父图仍在垃圾桶 → 提示先恢复父图，
+/// 父图已被彻底删除 → 明确拒绝。不产生挂在已删父图下的僵尸节点。
+///
+/// 恢复本身可撤销（revert 翻回垃圾桶态）。
+#[derive(Debug)]
+pub struct RestoreMapCommand {
+    pub map_id: Id,
+}
+
+impl RestoreMapCommand {
+    pub fn new(map_id: Id) -> Self {
+        Self { map_id }
+    }
+}
+
+impl EditCommand for RestoreMapCommand {
+    fn label(&self) -> String {
+        format!("恢复地图「{}」", self.map_id.as_str())
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let Some(node) = world.maps.iter().find(|m| m.id == self.map_id) else {
+            return Err(EditError::TargetMissing(format!("地图 `{}`", self.map_id)));
+        };
+        if !node.trashed {
+            return Err(EditError::Precondition(format!(
+                "地图 `{}` 不在垃圾桶中",
+                self.map_id
+            )));
+        }
+        if let Some(parent_id) = &node.parent {
+            if !world.maps.iter().any(|m| &m.id == parent_id) {
+                return Err(EditError::Precondition(format!(
+                    "原父图 `{parent_id}` 已被彻底删除，无法恢复"
+                )));
+            }
+            if !world.map_alive(parent_id) {
+                return Err(EditError::Precondition("先恢复父图".into()));
+            }
+        }
+        if let Some(node) = world.maps.iter_mut().find(|m| m.id == self.map_id) {
+            node.trashed = false;
+            node.trashed_at = None;
+        }
+        Ok(vec!["maps".to_owned()])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let Some(node) = world.maps.iter_mut().find(|m| m.id == self.map_id) else {
+            return Err(EditError::TargetMissing(format!("地图 `{}`", self.map_id)));
+        };
+        // 回到垃圾桶态；时间戳丢失可接受（垃圾桶按次存放，撤销恢复本就罕见）。
+        node.trashed = true;
+        node.trashed_at = None;
         Ok(())
     }
 }
