@@ -75,6 +75,10 @@ pub fn pick_nature_region(local: (f32, f32), world: &wv_core::World, map_id: &Id
 /// 单焦点模型：实体选中与格选区互斥——`resolve_form` 里 Cell 表单
 /// 优先于实体选中（设计稿 §11 Q4），不清格选区 = 表单看不见切换。
 ///
+/// **Ctrl + 右键 = 直接选格**（[ADR-0074] 追记二，用户裁定）：万能选择器
+/// 的逃生舱——替换式抓取光标那一格，**优先级压过图钉/群系区**（显式指令
+/// 高于命中裁定）；全模式可用（格选区本就不分模式）。
+///
 /// **浏览族不在此系统**（[ADR-0074] 追记一）：其余模式的图钉命中由
 /// `wv_render::drill::drill_pick` 在标签命中之后接管（单击选钉、双击
 /// 让位下钻），与本系统按模式互斥、无双重处理。
@@ -101,7 +105,11 @@ pub fn commit_point_select_on_click(
     screen: Res<crate::app_screen::AppScreen>,
     mut link: ResMut<super::region::LassoLiveLink>,
 ) {
-    if !buttons.just_pressed(MouseButton::Left) {
+    // 入口：左键单击，或 Ctrl+右键（直选格，见下方分支）——其余点击不归本系统。
+    let left_clicked = buttons.just_pressed(MouseButton::Left);
+    let ctrl_right = buttons.just_pressed(MouseButton::Right)
+        && (keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight));
+    if !left_clicked && !ctrl_right {
         return;
     }
     // 加载期间不选格：选中的格来自旧世界，对不上新世界。
@@ -137,6 +145,18 @@ pub fn commit_point_select_on_click(
     sel.bind_map(target_map, terrain.width, terrain.height);
     // 新选择动作 → 断开套索活链接（ADR-0057 补记 5）。
     link.deactivate();
+
+    // ── **Ctrl + 右键 = 直接选格**（[ADR-0074] 追记二）────────────────
+    // 万能选择器的逃生舱：哪怕点在图钉/群系区上，也把那一格抓进选区
+    // （替换语义）。放在三段裁定**之前**——它是「我就要那格」的显式指令，
+    // 优先级压过一切实体命中。点在图外不动选区（误触右键不该清空）。
+    if ctrl_right {
+        if let Some(pick) = cell_pick::pick_at((cursor.x, cursor.y), &grid, terrain) {
+            sel.replace([(pick.gx, pick.gy)]);
+            projection.selection = None;
+        }
+        return;
+    }
 
     // ── CellMap 三段裁定（[ADR-0074]）：图钉 > 群系区 > 格 ──────────
     // 仅 Topographic 档：浏览态的实体选中由 `drill_pick` 标签命中承担，

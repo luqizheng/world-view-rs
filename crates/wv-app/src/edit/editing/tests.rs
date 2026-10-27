@@ -1373,3 +1373,107 @@ fn point_select_clears_entity_selection_when_picking_cell() {
         "选格 = 实体选中让位（单焦点模型）"
     );
 }
+
+/// [ADR-0074 追记二] Ctrl+右键 = 直接选格：光标压在图钉上，抓的是钉底下
+/// 那格（替换语义、清实体选中）——逃生舱优先级压过图钉裁定。
+#[test]
+fn ctrl_right_click_grabs_the_cell_even_over_a_pin() {
+    let mut world = cellmap_world(Vec2::new(35.0, 45.0), true);
+    let map = wv_core::Id::new_unchecked("world_main");
+    {
+        let mut p = world.resource_mut::<crate::state::WorldProjection>();
+        p.world
+            .distances
+            .places
+            .push(pin("city_qingyun", &map, 35.0, 45.0));
+    }
+    world.insert_resource(crate::state::PointSelectState { tool_active: true });
+    world.insert_resource(crate::state::CellSelection::default());
+    let mut keys = ButtonInput::<KeyCode>::default();
+    keys.press(KeyCode::ControlLeft);
+    world.insert_resource(keys);
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    buttons.press(MouseButton::Right);
+    world.insert_resource(buttons);
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_point_select_on_click);
+    schedule.run(&mut world);
+
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert!(
+        sel.contains(3, 4),
+        "Ctrl+右键压图钉也应抓格 (3,4)，实际 {}",
+        sel.len()
+    );
+    assert_eq!(sel.len(), 1, "替换语义：单格");
+    let projection = world.resource::<crate::state::WorldProjection>();
+    assert!(projection.selection.is_none(), "抓格 = 实体选中让位");
+}
+
+/// [ADR-0074 追记二] Ctrl+右键压在群系区上同样抓格（群系裁定让位）。
+#[test]
+fn ctrl_right_click_grabs_the_cell_even_inside_a_nature_region() {
+    let mut world = cellmap_world(Vec2::new(35.0, 45.0), true);
+    let map = wv_core::Id::new_unchecked("world_main");
+    {
+        let mut p = world.resource_mut::<crate::state::WorldProjection>();
+        p.world
+            .regions
+            .push(nature_region("forest_south", &map, 20.0, 20.0, 60.0, 60.0));
+    }
+    world.insert_resource(crate::state::PointSelectState { tool_active: true });
+    world.insert_resource(crate::state::CellSelection::default());
+    let mut keys = ButtonInput::<KeyCode>::default();
+    keys.press(KeyCode::ControlRight);
+    world.insert_resource(keys);
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    buttons.press(MouseButton::Right);
+    world.insert_resource(buttons);
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_point_select_on_click);
+    schedule.run(&mut world);
+
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert!(sel.contains(3, 4), "群系区内 Ctrl+右键抓格 (3,4)");
+    let projection = world.resource::<crate::state::WorldProjection>();
+    assert!(projection.selection.is_none(), "抓格不得带出 Region 选中");
+}
+
+/// Ctrl+右键（不带 Ctrl / 点在图外）不产生任何选择动作——误触右键
+/// 不该清空既有选区。
+#[test]
+fn plain_right_click_and_ctrl_right_off_map_do_nothing() {
+    let mut world = cellmap_world(Vec2::new(35.0, 45.0), true);
+    let map = wv_core::Id::new_unchecked("world_main");
+    world.insert_resource(crate::state::PointSelectState { tool_active: true });
+    let mut sel = crate::state::CellSelection::default();
+    sel.bind_map(&map, 8, 8);
+    sel.replace([(0, 0)]);
+    world.insert_resource(sel);
+    world.insert_resource(ButtonInput::<KeyCode>::default());
+    // 裸右键（无 Ctrl）。
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    buttons.press(MouseButton::Right);
+    world.insert_resource(buttons);
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_point_select_on_click);
+    schedule.run(&mut world);
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert!(sel.contains(0, 0), "裸右键不动选区");
+
+    // Ctrl+右键但光标在图外（-50,-50）：不动选区。
+    world.resource_mut::<crate::state::ViewState>().cursor_world = Some(Vec2::new(-50.0, -50.0));
+    let mut keys = ButtonInput::<KeyCode>::default();
+    keys.press(KeyCode::ControlLeft);
+    world.insert_resource(keys);
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    buttons.press(MouseButton::Right);
+    world.insert_resource(buttons);
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_point_select_on_click);
+    schedule.run(&mut world);
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert!(sel.contains(0, 0), "Ctrl+右键点图外不动选区（不误清）");
+}
