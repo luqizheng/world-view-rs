@@ -770,9 +770,11 @@ mod trash_flag_tests {
 
     #[test]
     fn trashed_flag_round_trips_through_yaml() {
-        let mut node = MapNode::default();
-        node.trashed = true;
-        node.trashed_at = Some("2026-10-27 15:00".into());
+        let node = MapNode {
+            trashed: true,
+            trashed_at: Some("2026-10-27 15:00".into()),
+            ..MapNode::default()
+        };
         let text = serde_yaml::to_string(&node).unwrap();
         assert!(text.contains("trashed: true"), "got:\n{text}");
         assert!(

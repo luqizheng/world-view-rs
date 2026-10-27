@@ -752,14 +752,16 @@ fn outline_centroid(geo: Option<&GeometryData>) -> Option<Point> {
 /// ## revert
 ///
 /// 一次性命令：`apply` 后再 `apply` 报错；`revert` 按账本移除全部新建键。
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PasteMapCommand {
     pub source_id: Id,
     /// 粘贴落点父图；`None` = 世界图源落为独立新根。
     pub target_parent: Option<Id>,
     /// 落点锚（目标图局部坐标；目标图有 extent 时先夹进范围）。
     pub anchor: Point,
-    ledger: std::sync::Mutex<Option<PasteLedger>>,
+    /// `Arc` 共享：提交方克隆一份，apply 后仍能读 `created_root` 导航
+    /// （命令本体已被 `Box` 进 History，拿不回来）。
+    ledger: std::sync::Arc<std::sync::Mutex<Option<PasteLedger>>>,
 }
 
 impl PasteMapCommand {
@@ -768,7 +770,7 @@ impl PasteMapCommand {
             source_id,
             target_parent,
             anchor,
-            ledger: std::sync::Mutex::new(None),
+            ledger: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 

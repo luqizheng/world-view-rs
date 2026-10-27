@@ -497,13 +497,15 @@ mod map_tree_trash_tests {
 
     #[test]
     fn subtree_ids_collects_all_descendants_without_duplicates() {
-        let mut world = World::default();
         // 三层链 + 手工造环（i.children 回指 w）——防环/防重复是本方法的契约。
-        world.maps = vec![
-            node("w", None, &["c"]),
-            node("c", Some("w"), &["i"]),
-            node("i", Some("c"), &["w"]),
-        ];
+        let world = World {
+            maps: vec![
+                node("w", None, &["c"]),
+                node("c", Some("w"), &["i"]),
+                node("i", Some("c"), &["w"]),
+            ],
+            ..World::default()
+        };
         let ids = world.subtree_ids(&Id::new_unchecked("w"));
         let mut seen = std::collections::HashSet::new();
         for id in &ids {
@@ -514,8 +516,10 @@ mod map_tree_trash_tests {
 
     #[test]
     fn map_alive_false_inside_trashed_subtree() {
-        let mut world = World::default();
-        world.maps = vec![node("w", None, &["c"]), node("c", Some("w"), &[])];
+        let mut world = World {
+            maps: vec![node("w", None, &["c"]), node("c", Some("w"), &[])],
+            ..World::default()
+        };
         assert!(world.map_alive(&Id::new_unchecked("w")));
         assert!(world.map_alive(&Id::new_unchecked("c")));
         // 根被删 → 整棵子树不可见。
@@ -527,15 +531,23 @@ mod map_tree_trash_tests {
         // 仅子城被删 → 根不受影响。
         world.maps[0].trashed = false;
         world.maps[1].trashed = true;
-        assert!(world.map_alive(&Id::new_unchecked("w")), "仅子城被删不影响根");
+        assert!(
+            world.map_alive(&Id::new_unchecked("w")),
+            "仅子城被删不影响根"
+        );
         assert!(!world.map_alive(&Id::new_unchecked("c")));
-        assert!(!world.map_alive(&Id::new_unchecked("ghost")), "不存在的图 = 不可见");
+        assert!(
+            !world.map_alive(&Id::new_unchecked("ghost")),
+            "不存在的图 = 不可见"
+        );
     }
 
     #[test]
     fn alive_roots_follow_declaration_order_and_skip_trashed() {
-        let mut world = World::default();
-        world.maps = vec![node("w1", None, &[]), node("w2", None, &[])];
+        let mut world = World {
+            maps: vec![node("w1", None, &[]), node("w2", None, &[])],
+            ..World::default()
+        };
         assert_eq!(
             world.alive_roots(),
             vec![Id::new_unchecked("w1"), Id::new_unchecked("w2")]
