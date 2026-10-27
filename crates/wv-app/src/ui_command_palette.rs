@@ -155,6 +155,9 @@ pub enum CommandId {
     ForceRebuildTexture,
     /// 重新生成世界地形（ADR-0037 D4）：按新种子重跑模板生成。
     RegenWorld,
+    /// 地图属性…（2026-10-27）：对当前图弹「名称 / 尺度声明」属性对话框，
+    /// 工程菜单与命令面板双入口同源。
+    MapProperties,
     /// 重置当前图的地形到底图（2026-10-16 用户需求）。
     /// 「底图」= `MapNode.base`，旧地图无 `base` 时按 `MapBase::Ocean` 兜底。
     /// 由 [`crate::edit::editing::apply_reset_terrain_to_base`] 执行。
@@ -371,6 +374,12 @@ impl CommandRegistry {
             CommandId::ProjectSettings,
             CommandGroup::Project,
             I18nKey::CmdProjectSettings,
+            None,
+        );
+        push(
+            CommandId::MapProperties,
+            CommandGroup::Project,
+            I18nKey::CmdMapProperties,
             None,
         );
 

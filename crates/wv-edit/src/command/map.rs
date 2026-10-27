@@ -399,3 +399,79 @@ impl EditCommand for SetCityOutlineCommand {
         Ok(())
     }
 }
+
+// ---------------------------------------------------------------------------
+// 地图属性编辑（2026-10-27：地图属性对话框的落点）
+// ---------------------------------------------------------------------------
+
+/// 修改地图基本属性（名称 / `unit_per_km` 尺度声明）。
+///
+/// ## 为什么只有这两个字段
+/// 作者日常要改的「地图属性」就是名字与尺度声明（视口比例尺、陆地尺度
+/// 提示都依 `unit_per_km` 换算）；extent / raster / geographic_source 属于
+/// 结构性数据，改它们等于换一张图（各有专属命令或重导入路径），不混进
+/// 本命令。后续要扩字段时 revert 快照改成整节点即可，调用方零改动。
+///
+/// ## revert
+/// apply 前快照 `(name, unit_per_km)` 原子还原；其余字段不参与同步
+/// （同 [`MoveCityCommand`] 的字段隔离策略：撤回期间他人的改动不被覆盖）。
+#[derive(Debug)]
+pub struct UpdateMapPropsCommand {
+    /// 目标地图。
+    pub map_id: Id,
+    /// 新显示名（可中文；**不改** `id`——ID 是 YAML/Git 引用锚，改名不改号）。
+    pub new_name: String,
+    /// 新尺度声明；`None` = 未声明（比例尺静默不显示，V1）。
+    pub new_unit_per_km: Option<f32>,
+    before: std::sync::Mutex<Option<(String, Option<f32>)>>,
+}
+
+impl UpdateMapPropsCommand {
+    pub fn new(map_id: Id, new_name: String, new_unit_per_km: Option<f32>) -> Self {
+        Self {
+            map_id,
+            new_name,
+            new_unit_per_km,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for UpdateMapPropsCommand {
+    fn label(&self) -> String {
+        format!("修改地图「{}」属性", self.map_id)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let node = world
+            .maps
+            .iter_mut()
+            .find(|m| m.id == self.map_id)
+            .ok_or_else(|| EditError::TargetMissing(format!("地图 {}", self.map_id)))?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))? =
+            Some((node.name.clone(), node.unit_per_km));
+        node.name = self.new_name.clone();
+        node.unit_per_km = self.new_unit_per_km;
+        Ok(vec![format!("maps/{}/index.yaml", self.map_id)])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let (name, unit_per_km) = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
+            .take()
+            .ok_or_else(|| EditError::Precondition("UpdateMapProps 尚未 apply".into()))?;
+        let node = world
+            .maps
+            .iter_mut()
+            .find(|m| m.id == self.map_id)
+            .ok_or_else(|| EditError::TargetMissing(format!("地图 {}", self.map_id)))?;
+        node.name = name;
+        node.unit_per_km = unit_per_km;
+        Ok(())
+    }
+}

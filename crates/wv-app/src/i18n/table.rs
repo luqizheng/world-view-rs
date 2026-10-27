@@ -461,6 +461,11 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CellFloodByHeight => "按海拔",
         I18nKey::StatusBarStrokeProgress => "笔触进行中 · 已落",
         I18nKey::StatusBarStrokeCells => " 格",
+        I18nKey::ScaleBarTipBar => "比例尺：条的一整段长度 = 标注的真实距离（图上就是这么大），随缩放联动",
+        I18nKey::ScaleBarTipCellPrefix => "当前图每格 ≈",
+        I18nKey::ScaleBarTipCellSuffix => "（数据分辨率：小于一格的地物无法表达）",
+        I18nKey::CmdMapProperties => "地图属性…",
+        I18nKey::ProjectMenuMapProperties => "地图属性…",
         I18nKey::MapControlsPlaybackLocked => "时间轴播放中，暂停后可编辑",
         I18nKey::MapControlsNeedMap => "请先打开一张地图",
 
@@ -1166,6 +1171,11 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CellFloodByHeight => "By height",
         I18nKey::StatusBarStrokeProgress => "Stroking ·",
         I18nKey::StatusBarStrokeCells => " cells",
+        I18nKey::ScaleBarTipBar => "Scale bar: the whole bar spans exactly the labeled distance on the map, linked to zoom",
+        I18nKey::ScaleBarTipCellPrefix => "Each cell \u{2248}",
+        I18nKey::ScaleBarTipCellSuffix => "(data resolution: smaller features cannot be represented)",
+        I18nKey::CmdMapProperties => "Map Properties\u{2026}",
+        I18nKey::ProjectMenuMapProperties => "Map Properties\u{2026}",
         I18nKey::MapControlsPlaybackLocked => "Timeline is playing — pause to edit",
         I18nKey::MapControlsNeedMap => "Open a map first",
 

@@ -166,18 +166,20 @@ pub(crate) fn project_menu_inner(
             id: CommandId::OpenRecentProject(i as u8),
         });
     }
-    let lbls: [&str; 7] = [
+    let lbls: [&str; 8] = [
         crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuNewProject),
         crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuNewMap),
+        crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuMapProperties),
         crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuOpenProject),
         crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuSaveProjectAs),
         crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuExportProject),
         crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuCloseProject),
         crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuProjectSettings),
     ];
-    let ids: [CommandId; 7] = [
+    let ids: [CommandId; 8] = [
         CommandId::NewProject,
         CommandId::NewMap,
+        CommandId::MapProperties,
         CommandId::OpenProject,
         CommandId::SaveProjectAs,
         CommandId::ExportProject,
@@ -185,8 +187,9 @@ pub(crate) fn project_menu_inner(
         CommandId::ProjectSettings,
     ];
     let sect: &'static str = crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuProjectSection);
-    let keys_arr: [Option<&str>; 7] = [
+    let keys_arr: [Option<&str>; 8] = [
         Some("Ctrl+Shift+N"),
+        None,
         None,
         Some("Ctrl+O"),
         Some("Ctrl+Shift+S"),

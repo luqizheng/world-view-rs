@@ -184,7 +184,7 @@ mod tests {
     /// 真正的硬闸是编译器：`ALL: [I18nKey; N]` 的 N 与初始化元素数不符、或
     /// 漏写变体都直接编译失败。本测试把「预期条数」钉成显式断言并防**重复项**
     /// （元素数凑对但某变体被写了两次、另一个被挤掉——这种编译器不报）。
-    /// 当前 532 = 518 + main 并入 2 键 + 线段 POI 12 键（ADR-0070 D4，2026-10-26 合并解算）。
+    /// 当前 537 = 518 + 两次并入 main（2+5）+ 线段 POI 12 键（ADR-0070 D4，2026-10-26 合并解算）。
     #[test]
     fn i18n_all_length_matches_key_count() {
         let mut seen = std::collections::HashSet::new();
@@ -193,10 +193,10 @@ mod tests {
         }
         assert_eq!(
             I18nKey::ALL.len(),
-            532,
-            "ALL 应为 530 项；加新键时同步更新数组长度与元素（got {})",
+            537,
+            "ALL 应为 537 项；加新键时同步更新数组长度与元素（got {})",
             I18nKey::ALL.len()
         );
-        assert_eq!(seen.len(), 532, "去重后应仍为 532 项");
+        assert_eq!(seen.len(), 537, "去重后应仍为 537 项");
     }
 }
