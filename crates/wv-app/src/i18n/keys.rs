@@ -257,7 +257,7 @@ pub enum I18nKey {
     BrushModeShort,
     /// 工具名「涂抹」（面板当前工具行 + 命令面板共用）
     BrushToolNamePaint,
-    /// 「山脉」
+    /// 「山系笔」
     BrushToolNameRange,
     /// 「高原」
     BrushToolNamePlateau,
@@ -269,7 +269,7 @@ pub enum I18nKey {
     BrushToolNameLake,
     /// 涂抹工具交互提示（瓷砖 tooltip 第二行 + 面板提示行）
     BrushHintPaint,
-    /// 山脉工具交互提示
+    /// 山系笔工具交互提示
     BrushHintRange,
     /// 高原工具交互提示
     BrushHintPlateau,
@@ -1042,7 +1042,7 @@ pub enum I18nKey {
     CmdBrushRadiusDown,
     /// 「笔刷：涂抹」——选中即激活笔刷
     CmdSelectBrushToolPaint,
-    /// 「笔刷：山脉」
+    /// 「笔刷：山系笔」
     CmdSelectBrushToolRange,
     /// 「笔刷：高原」
     CmdSelectBrushToolPlateau,
