@@ -488,6 +488,7 @@ fn create_map(
         orientation: 0.0,
         base: Some(dialog.prefill),
         outline_polygon: None,
+        ..Default::default()
     };
     let w = dialog.grid_cells_w();
     let h = dialog.grid_cells_h();
@@ -534,6 +535,7 @@ mod tests {
                 orientation: 0.0,
                 base: None,
                 outline_polygon: None,
+                ..Default::default()
             });
         }
         let dialog = NewMapDialog::default();
@@ -908,6 +910,7 @@ mod tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            ..Default::default()
         });
         let mut dialog = NewMapDialog::default();
         dialog.open_for(&world);

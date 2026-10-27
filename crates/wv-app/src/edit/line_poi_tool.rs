@@ -2044,6 +2044,7 @@ mod tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            ..Default::default()
         };
         world.maps.push(node.clone());
         node.extent = None;
@@ -2082,6 +2083,7 @@ mod tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            ..Default::default()
         });
         let cells = vec![
             wv_core::terrain::TerrainCellData {

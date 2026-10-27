@@ -1190,3 +1190,245 @@ impl EditCommand for PasteMapCommand {
         Ok(())
     }
 }
+
+// ---------------------------------------------------------------------------
+// PurgeMapCommand（彻底删除 · 2026-10-27 spec §5 D7 / §10 追记 2）
+// ---------------------------------------------------------------------------
+
+/// 彻底删除的完整快照（revert 兜底用）。
+///
+/// 正常路径下本命令经 wv-app 的「直应用」通道提交（不进 Undo 栈，
+/// spec §10 追记 2），快照永远不会被读到；但实现完整 revert，万一误入
+/// 栈也不崩——这是防御性兜底，不是功能承诺。
+#[derive(Debug, Default)]
+struct PurgeSnapshot {
+    /// 被移除的全部节点（原声明顺序，含 trashed 标志原样）。
+    maps: Vec<MapNode>,
+    /// 父图信息：`(父 id, map_id 原在 children 中的下标, 被摘除的钻取图标)`。
+    parent: Option<(Id, usize, Vec<IconSpec>)>,
+    terrains: Vec<(Id, wv_core::terrain::TerrainData)>,
+    streets: Vec<(Id, wv_core::source::street::StreetLayer)>,
+    buildings: Vec<(Id, wv_core::source::building::BuildingLayer)>,
+    measurements: Vec<(Id, wv_core::source::measurement::MeasurementOverlay)>,
+    places: Vec<wv_core::distance::Place>,
+    edges: Vec<wv_core::distance::PlaceEdge>,
+    regions: Vec<wv_core::model::region::Region>,
+    seas: Vec<wv_core::map::sea::Sea>,
+    place_geometry: Vec<GeometrySpan>,
+    faction_geometry: Vec<GeometrySpan>,
+}
+
+/// 彻底删除整棵子树（真删：内存移除 + 脏路径全量标记，保存时物理删目录）。
+///
+/// ## 前置
+///
+/// 只接受**已在垃圾桶**的图（软删是硬删的必经之路，防止误触直接蒸发）。
+///
+/// ## 清理范围
+///
+/// 子树全部节点 + 挂在世父图上的 children 引用与钻取图标（此时才物理清理，
+/// 软删期间它们靠派生显隐活着）+ 逐图数据（terrain/streets/buildings/
+/// measurements）+ 实体（places/regions/seas/双几何 span）+ 端点落在被删
+/// places 上的边。
+#[derive(Debug)]
+pub struct PurgeMapCommand {
+    pub map_id: Id,
+    snapshot: std::sync::Mutex<Option<PurgeSnapshot>>,
+}
+
+impl PurgeMapCommand {
+    pub fn new(map_id: Id) -> Self {
+        Self {
+            map_id,
+            snapshot: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for PurgeMapCommand {
+    fn label(&self) -> String {
+        format!("彻底删除地图「{}」", self.map_id.as_str())
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        if self.snapshot.lock().expect("purge snapshot 锁").is_some() {
+            return Err(EditError::Precondition("命令已应用（一次性命令）".into()));
+        }
+        let Some(node) = world.maps.iter().find(|m| m.id == self.map_id) else {
+            return Err(EditError::TargetMissing(format!("地图 `{}`", self.map_id)));
+        };
+        if !node.trashed {
+            return Err(EditError::Precondition(format!(
+                "地图 `{}` 不在垃圾桶中——只有垃圾桶内的图才能彻底删除",
+                self.map_id
+            )));
+        }
+        let parent_id = node.parent.clone();
+        let subtree = world.subtree_ids(&self.map_id);
+        let set: std::collections::HashSet<Id> = subtree.iter().cloned().collect();
+
+        let mut snap = PurgeSnapshot::default();
+
+        // 父图：摘 children + 清悬空钻取图标（物理清理只在此时发生）。
+        if let Some(pid) = &parent_id {
+            if let Some(pos) = world.maps.iter().position(|m| &m.id == pid) {
+                let p = &mut world.maps[pos];
+                let idx = p.children.iter().position(|c| c == &self.map_id);
+                p.children.retain(|c| !set.contains(c));
+                let mut removed_icons = Vec::new();
+                p.icons.retain(|ic| match &ic.drill_into {
+                    Some(d) if set.contains(d) => {
+                        removed_icons.push(ic.clone());
+                        false
+                    }
+                    _ => true,
+                });
+                snap.parent = Some((pid.clone(), idx.unwrap_or(p.children.len()), removed_icons));
+            }
+        }
+
+        // 收集被删节点的图层 ID（streets/buildings 的键）。
+        let layer_ids: Vec<Id> = world
+            .maps
+            .iter()
+            .filter(|m| set.contains(&m.id))
+            .flat_map(|m| m.layers.iter().map(|l| l.id.clone()))
+            .collect();
+
+        // 节点移除。
+        snap.maps = world
+            .maps
+            .iter()
+            .filter(|m| set.contains(&m.id))
+            .cloned()
+            .collect();
+        world.maps.retain(|m| !set.contains(&m.id));
+
+        // 逐图数据。
+        for id in &set {
+            if let Some(t) = world.terrains.remove(id) {
+                snap.terrains.push((id.clone(), t));
+            }
+            if let Some(m) = world.measurements.remove(id) {
+                snap.measurements.push((id.clone(), m));
+            }
+        }
+        for lid in layer_ids {
+            if let Some(doc) = world.streets.remove(&lid) {
+                snap.streets.push((lid.clone(), doc));
+            }
+            if let Some(doc) = world.buildings.remove(&lid) {
+                snap.buildings.push((lid.clone(), doc));
+            }
+        }
+
+        // 实体：按 map 归属收集后移除；边按「端点 ∈ 被删 places」级联。
+        let removed_place_ids: std::collections::HashSet<Id> = world
+            .distances
+            .places
+            .iter()
+            .filter(|p| p.map.as_ref().is_some_and(|m| set.contains(m)))
+            .map(|p| p.id.clone())
+            .collect();
+        let mut kept_places = Vec::new();
+        for p in std::mem::take(&mut world.distances.places) {
+            if removed_place_ids.contains(&p.id) {
+                snap.places.push(p);
+            } else {
+                kept_places.push(p);
+            }
+        }
+        world.distances.places = kept_places;
+        let mut kept_edges = Vec::new();
+        for e in std::mem::take(&mut world.distances.edges) {
+            if removed_place_ids.contains(&e.a) || removed_place_ids.contains(&e.b) {
+                snap.edges.push(e);
+            } else {
+                kept_edges.push(e);
+            }
+        }
+        world.distances.edges = kept_edges;
+        let mut kept_regions = Vec::new();
+        for r in std::mem::take(&mut world.regions) {
+            if set.contains(&r.map) {
+                snap.regions.push(r);
+            } else {
+                kept_regions.push(r);
+            }
+        }
+        world.regions = kept_regions;
+        let mut kept_seas = Vec::new();
+        for s in std::mem::take(&mut world.seas) {
+            if set.contains(&s.map) {
+                snap.seas.push(s);
+            } else {
+                kept_seas.push(s);
+            }
+        }
+        world.seas = kept_seas;
+        let mut kept_pg = Vec::new();
+        for g in std::mem::take(&mut world.place_geometry) {
+            if set.contains(&g.map) {
+                snap.place_geometry.push(g);
+            } else {
+                kept_pg.push(g);
+            }
+        }
+        world.place_geometry = kept_pg;
+        let mut kept_fg = Vec::new();
+        for g in std::mem::take(&mut world.faction_geometry) {
+            if set.contains(&g.map) {
+                snap.faction_geometry.push(g);
+            } else {
+                kept_fg.push(g);
+            }
+        }
+        world.faction_geometry = kept_fg;
+
+        *self.snapshot.lock().expect("purge snapshot 锁") = Some(snap);
+        Ok(vec![
+            "maps".to_owned(),
+            "distances/places".to_owned(),
+            "distances/edges".to_owned(),
+            "geometry/place".to_owned(),
+            "geometry/faction".to_owned(),
+            "regions".to_owned(),
+            "seas".to_owned(),
+        ])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let Some(snap) = self.snapshot.lock().expect("purge snapshot 锁").take() else {
+            return Err(EditError::Precondition("命令尚未应用，无法回退".into()));
+        };
+        for node in snap.maps {
+            world.maps.push(node);
+        }
+        if let Some((pid, idx, icons)) = snap.parent {
+            if let Some(p) = world.maps.iter_mut().find(|m| m.id == pid) {
+                let idx = idx.min(p.children.len());
+                p.children.insert(idx, self.map_id.clone());
+                p.icons.extend(icons);
+            }
+        }
+        for (id, t) in snap.terrains {
+            world.set_terrain(id, t);
+        }
+        for (id, doc) in snap.streets {
+            world.streets.insert(id, doc);
+        }
+        for (id, doc) in snap.buildings {
+            world.buildings.insert(id, doc);
+        }
+        for (id, doc) in snap.measurements {
+            world.measurements.insert(id, doc);
+        }
+        world.distances.places.extend(snap.places);
+        world.distances.edges.extend(snap.edges);
+        world.regions.extend(snap.regions);
+        world.seas.extend(snap.seas);
+        world.place_geometry.extend(snap.place_geometry);
+        world.faction_geometry.extend(snap.faction_geometry);
+        Ok(())
+    }
+}

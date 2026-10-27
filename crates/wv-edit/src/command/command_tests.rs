@@ -4878,3 +4878,224 @@ mod paste_map_tests {
         assert_eq!(parent.children.len(), 1, "父 children 应回原状");
     }
 }
+
+#[cfg(test)]
+mod purge_map_tests {
+    use crate::command::*;
+    use wv_core::map::{GeometryData, IconShape, IconSpec, MapLevel, MapNode};
+    use wv_core::{Id, World};
+
+    fn node(id: &str, parent: Option<&str>, level: MapLevel) -> MapNode {
+        MapNode {
+            id: Id::new_unchecked(id),
+            name: format!("图{id}"),
+            level,
+            parent: parent.map(Id::new_unchecked),
+            ..MapNode::default()
+        }
+    }
+
+    /// 世界 W（icon→C）+ 城 C（place + region + sea + 双几何 + 内部图 I + 地形）
+    /// + 外部 place p_ext + 跨界 edge。
+    fn fixture() -> World {
+        let mut city = node("map_city_a", Some("world_main"), MapLevel::City);
+        city.children.push(Id::new_unchecked("map_interior_a"));
+        let mut world_main = node("world_main", None, MapLevel::World);
+        world_main.children.push(Id::new_unchecked("map_city_a"));
+        world_main.icons.push(IconSpec {
+            id: Id::new_unchecked("icon_a"),
+            anchor: Some([0.5, 0.5]),
+            shape: IconShape::Diamond,
+            size: None,
+            color: None,
+            drill_into: Some(Id::new_unchecked("map_city_a")),
+        });
+        let mut w = World {
+            maps: vec![
+                world_main,
+                city,
+                node("map_interior_a", Some("map_city_a"), MapLevel::Interior),
+            ],
+            ..World::default()
+        };
+        w.distances.places = vec![
+            wv_core::distance::Place {
+                id: Id::new_unchecked("p_in"),
+                name: "城内".into(),
+                map: Some(Id::new_unchecked("map_city_a")),
+                x: Some(1.0),
+                y: Some(2.0),
+                ..place_rest()
+            },
+            wv_core::distance::Place {
+                id: Id::new_unchecked("p_ext"),
+                name: "外部".into(),
+                map: Some(Id::new_unchecked("world_main")),
+                x: Some(3.0),
+                y: Some(4.0),
+                ..place_rest()
+            },
+        ];
+        w.distances.edges = vec![wv_core::distance::PlaceEdge {
+            id: Id::new_unchecked("edge_x"),
+            a: Id::new_unchecked("p_in"),
+            b: Id::new_unchecked("p_ext"),
+            distance_km: 5.0,
+            terrain: "road".into(),
+            bidirectional: true,
+            ..edge_rest()
+        }];
+        w.regions.push(wv_core::model::region::Region {
+            id: Id::new_unchecked("region_r"),
+            name: "东境".into(),
+            map: Id::new_unchecked("map_city_a"),
+            polygon: vec![0.0, 0.0, 4.0, 0.0],
+            holes: Vec::new(),
+            kind: wv_core::model::region::RegionKind::default(),
+            parent: None,
+            overlay: None,
+        });
+        w.seas.push(wv_core::map::sea::Sea {
+            id: Id::new_unchecked("sea_s"),
+            name: "雾海".into(),
+            map: Id::new_unchecked("map_city_a"),
+            x: 1.0,
+            y: 1.0,
+        });
+        let span = |map: &str, owner: &str| wv_core::map::GeometrySpan {
+            map: Id::new_unchecked(map),
+            owner: Id::new_unchecked(owner),
+            span: wv_core::time::TimeSpan { from: 0, to: None },
+            geometry: GeometryData::Polygon(vec![0.0, 0.0, 2.0, 0.0, 2.0, 2.0]),
+            relation: None,
+        };
+        w.place_geometry.push(span("map_city_a", "p_in"));
+        w.faction_geometry.push(span("map_city_a", "faction_f"));
+        w.set_terrain(
+            Id::new_unchecked("map_city_a"),
+            wv_core::terrain::TerrainData {
+                width: 2,
+                height: 2,
+                cells: vec![wv_core::terrain::TerrainCellData::default(); 4],
+            },
+        );
+        w.measurements
+            .insert(Id::new_unchecked("map_city_a"), Default::default());
+        w
+    }
+
+    fn place_rest() -> wv_core::distance::Place {
+        wv_core::distance::Place {
+            kind: None,
+            line: None,
+            line_kind: None,
+            line_width_m: None,
+            id: Id::new_unchecked("_"),
+            name: String::new(),
+            feature: None,
+            biome: None,
+            envelope: None,
+            map: None,
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+            rank: None,
+        }
+    }
+
+    fn edge_rest() -> wv_core::distance::PlaceEdge {
+        wv_core::distance::PlaceEdge {
+            rank: None,
+            id: Id::new_unchecked("_"),
+            a: Id::new_unchecked("_"),
+            b: Id::new_unchecked("_"),
+            distance_km: 0.0,
+            terrain: String::new(),
+            bidirectional: true,
+            derived: false,
+        }
+    }
+
+    #[test]
+    fn purge_removes_subtree_entities_and_dangling_drill_icons() {
+        let mut w = fixture();
+        TrashMapCommand::new(Id::new_unchecked("map_city_a"), "t0")
+            .apply(&mut w)
+            .expect("先入垃圾桶");
+        let dirty = PurgeMapCommand::new(Id::new_unchecked("map_city_a"))
+            .apply(&mut w)
+            .expect("purge");
+        assert_eq!(w.maps.len(), 1, "只剩世界图，got {}", w.maps.len());
+        let world_main = &w.maps[0];
+        assert!(world_main.children.is_empty(), "children 应摘除");
+        assert!(world_main.icons.is_empty(), "悬空钻取图标应清理");
+        assert_eq!(w.distances.places.len(), 1, "只剩外部 place");
+        assert!(w.distances.edges.is_empty(), "跨界边随之消失");
+        assert!(w.regions.is_empty());
+        assert!(w.seas.is_empty());
+        assert!(w.place_geometry.is_empty());
+        assert!(w.faction_geometry.is_empty());
+        assert!(w.terrains.is_empty());
+        assert!(w.measurements.is_empty());
+        for p in [
+            "maps",
+            "distances/places",
+            "distances/edges",
+            "geometry/place",
+            "geometry/faction",
+            "regions",
+            "seas",
+        ] {
+            assert!(dirty.contains(&p.to_owned()), "脏路径缺 {p}");
+        }
+    }
+
+    #[test]
+    fn purge_rejects_alive_map() {
+        let mut w = fixture();
+        let err = PurgeMapCommand::new(Id::new_unchecked("map_city_a"))
+            .apply(&mut w)
+            .expect_err("未入垃圾桶的图不可彻底删除");
+        assert!(err.to_string().contains("垃圾桶"), "got: {err}");
+    }
+
+    #[test]
+    fn revert_purge_restores_everything() {
+        let mut w = fixture();
+        TrashMapCommand::new(Id::new_unchecked("map_city_a"), "t0")
+            .apply(&mut w)
+            .expect("trash");
+        let cmd = PurgeMapCommand::new(Id::new_unchecked("map_city_a"));
+        cmd.apply(&mut w).expect("purge");
+        cmd.revert(&mut w).expect("revert 快照兜底");
+        assert_eq!(w.maps.len(), 3, "got {}", w.maps.len());
+        let world_main = w
+            .maps
+            .iter()
+            .find(|m| m.id.as_str() == "world_main")
+            .expect("在");
+        assert_eq!(world_main.children.len(), 1, "children 应还原");
+        assert_eq!(world_main.icons.len(), 1, "图标应还原");
+        assert_eq!(
+            w.distances.places.len(),
+            2,
+            "got {}",
+            w.distances.places.len()
+        );
+        assert_eq!(w.distances.edges.len(), 1);
+        assert_eq!(w.regions.len(), 1);
+        assert_eq!(w.seas.len(), 1);
+        assert_eq!(w.place_geometry.len(), 1);
+        assert_eq!(w.faction_geometry.len(), 1);
+        assert_eq!(w.terrains.len(), 1);
+        assert_eq!(w.measurements.len(), 1);
+        // 还原后的城仍在垃圾桶（purge 快照按原样保存，含 trashed 标志）。
+        let city = w
+            .maps
+            .iter()
+            .find(|m| m.id.as_str() == "map_city_a")
+            .expect("在");
+        assert!(city.trashed, "还原后应保持垃圾桶态");
+    }
+}

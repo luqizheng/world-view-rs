@@ -310,6 +310,7 @@ mod tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            ..Default::default()
         }
     }
 
