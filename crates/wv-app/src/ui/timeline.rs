@@ -6,9 +6,13 @@
 //!   生效（`collapsed` 字段仍被消费）——也就没有「落盘坐标把面板丢在
 //!   视口外」一类问题，`snap_into_central` 越界回拉随之退役。
 //! - **可缩小成播放条**：折叠态只剩「播放钮 + 细进度轨 + 日期药丸」单行
-//!   （[`compact_bar`]）；折叠开关挂 egui `CollapsingState`
-//!   （`win_id.with("collapsing")`），与 `persist_layout_on_change` 的读取
-//!   键同源，折叠手感经 `ui-layout.yaml` 的 `collapsed` 字段跨会话记忆。
+//!   （[`compact_bar`]）；折叠态是独立会话缓存（[`timeline_collapsed`]，
+//!   egui persisted bool），跨会话真相在 `ui-layout.yaml` 的 `collapsed`
+//!   字段——工程打开时由 `load_layout_on_project_open` 回灌、切换时由
+//!   `persist_layout_on_change`（Timeline 特判）落盘。
+//!   ⚠️ 不能借用窗口同 Id 的 `"collapsing"` 子位：直连 `egui::Window` 把
+//!   它当**窗体内容的闸门**（`show_body_unindented` 在关闭态整个不渲染
+//!   body），折叠会变成「窗口消失」。
 //!
 //! ## 职责
 //! - `TimelineLayer` —— Day / Situation / Character / Century 四层枚举；
@@ -184,6 +188,22 @@ fn playback_leaves_browse(prev: ViewMode, next: ViewMode) -> bool {
     prev.timeline_shows() && !next.timeline_shows()
 }
 
+/// 折叠态会话缓存的存储位（egui persisted bool，进程内跨帧）。
+///
+/// 刻意**避开**窗口同 Id 的 `"collapsing"` 子位——那是直连 `egui::Window`
+/// 自己的窗体内容闸门（借它会「折叠 = 整窗消失」，见模块文档）。跨会话
+/// 真相在 `ui-layout.yaml` 的 `collapsed`：工程打开时
+/// `load_layout_on_project_open` 回灌本缓存，切换时
+/// `persist_layout_on_change` 对 Timeline 特判读取并落盘。
+pub(crate) fn timeline_collapse_id() -> egui::Id {
+    egui::Id::new(("wv_panel", Panel::Timeline)).with("playbar_collapsed")
+}
+
+/// 读播放条折叠态；`None` = 本会话尚未初始化（调用方回退落盘值）。
+pub(crate) fn timeline_collapsed(ctx: &egui::Context) -> Option<bool> {
+    ctx.data_mut(|d| d.get_persisted::<bool>(timeline_collapse_id()))
+}
+
 /// 播放器停靠矩形（2026-10-27 用户裁定：默认占满宽度、贴状态栏上方）。
 ///
 /// 横向 = 整个视口；纵向 = 底边贴在状态栏上沿（`vp.bottom − STATUS_BAR_H`），
@@ -233,16 +253,11 @@ pub fn panel_timeline(
     let layout = crate::ui_layout::current_layout(&layouts, &panels, Panel::Timeline);
     let win_id = egui::Id::new(("wv_panel", Panel::Timeline));
 
-    // 折叠态（完整播放器 ↔ 播放条）：挂在 `win_id.with("collapsing")` 的
-    // egui `CollapsingState`——与 `persist_layout_on_change` 的读取键同源
-    // （写进 `ui-layout.yaml` 的 `collapsed` 字段），折叠手感跨会话记忆，
-    // persist 侧零改动；会话首帧从落盘值引导。
-    let mut collapsing = egui::collapsing_header::CollapsingState::load_with_default_open(
-        ctx,
-        win_id.with("collapsing"),
-        !layout.collapsed,
-    );
-    let collapsed = !collapsing.is_open();
+    // 折叠态（完整播放器 ↔ 播放条，2026-10-27）：会话缓存优先
+    //（[`timeline_collapsed`]），缓存缺失（本会话首帧）回退落盘值——
+    // 工程打开时 `load_layout_on_project_open` 会把落盘值回灌进缓存，
+    // 这里只是兜底时序。
+    let mut collapsed = timeline_collapsed(ctx).unwrap_or(layout.collapsed);
 
     // 底部停靠（2026-10-27 用户裁定）：几何每帧由视口重推（[`dock_rect`]），
     // `fixed_rect` 同时关掉拖动与拖角缩放——「缩小」由折叠钮承担。旧的自由
@@ -266,7 +281,7 @@ pub fn panel_timeline(
         .show(ctx, |ui| {
             ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
             if collapsed {
-                compact_bar(ui, &shell, &mut playback, loc, &mut collapsing);
+                compact_bar(ui, &shell, &mut playback, loc, &mut collapsed);
             } else {
                 timeline_top_row(
                     ui,
@@ -276,11 +291,17 @@ pub fn panel_timeline(
                     &projection,
                     loc,
                     &mut open_event,
-                    &mut collapsing,
+                    &mut collapsed,
                 );
                 timeline_track(ui, &shell, &mut playback, &projection, *layer, loc);
             }
         });
+
+    // 会话缓存写回：本帧 chevron 翻转过才写（persist 对 Timeline 特判读本
+    // 缓存并落盘 `ui-layout.yaml` 的 `collapsed` 字段）。
+    if timeline_collapsed(ctx) != Some(collapsed) {
+        ctx.data_mut(|d| d.insert_persisted(timeline_collapse_id(), collapsed));
+    }
 
     if *open_event {
         panels.set_visible(Panel::Event, true);
@@ -300,7 +321,7 @@ fn timeline_top_row(
     projection: &WorldProjection,
     loc: Locale,
     open_event: &mut bool,
-    collapsing: &mut egui::collapsing_header::CollapsingState,
+    collapsed: &mut bool,
 ) {
     let row_rect =
         egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), TOP_ROW_H));
@@ -327,7 +348,7 @@ fn timeline_top_row(
             //（web `.button.primary`：accent 实底 + 白字 + plus 图标）。
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(TOP_PAD_X);
-                collapse_chevron(ui, shell, collapsing, loc);
+                collapse_chevron(ui, shell, collapsed, loc);
                 ui.add_space(space::XS);
                 let label = t(loc, I18nKey::TimelineRegisterEventBtn);
                 let resp = button(
@@ -362,7 +383,7 @@ fn compact_bar(
     shell: &UiShell,
     playback: &mut PlaybackState,
     loc: Locale,
-    collapsing: &mut egui::collapsing_header::CollapsingState,
+    collapsed: &mut bool,
 ) {
     let row_rect =
         egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), COMPACT_H));
@@ -376,7 +397,7 @@ fn compact_bar(
             ui.add_space(space::SM);
             compact_track(ui, shell, playback, loc);
             ui.add_space(space::SM);
-            collapse_chevron(ui, shell, collapsing, loc);
+            collapse_chevron(ui, shell, collapsed, loc);
             ui.add_space(TOP_PAD_X);
         },
     );
@@ -436,17 +457,11 @@ fn compact_track(ui: &mut egui::Ui, shell: &UiShell, playback: &mut PlaybackStat
 
 /// 折叠 / 展开切换钮（Lucide chevron 对偶：展开态显 `chevron-down` =
 /// 收成播放条；播放条态显 `chevron-up` = 展回完整播放器）。返回是否被点击。
-fn collapse_chevron(
-    ui: &mut egui::Ui,
-    shell: &UiShell,
-    collapsing: &mut egui::collapsing_header::CollapsingState,
-    loc: Locale,
-) -> bool {
-    let expanded = collapsing.is_open();
-    let (icon, hint) = if expanded {
-        (ICON_CHEVRON_DOWN, I18nKey::TimelineCollapseHint)
-    } else {
+fn collapse_chevron(ui: &mut egui::Ui, shell: &UiShell, collapsed: &mut bool, loc: Locale) -> bool {
+    let (icon, hint) = if *collapsed {
         (ICON_CHEVRON_UP, I18nKey::TimelineExpandHint)
+    } else {
+        (ICON_CHEVRON_DOWN, I18nKey::TimelineCollapseHint)
     };
     let resp = button(
         ui,
@@ -458,8 +473,7 @@ fn collapse_chevron(
     )
     .on_hover_text(t(loc, hint));
     if resp.clicked() {
-        collapsing.set_open(!expanded);
-        ui.ctx().request_repaint();
+        *collapsed = !*collapsed;
     }
     resp.clicked()
 }

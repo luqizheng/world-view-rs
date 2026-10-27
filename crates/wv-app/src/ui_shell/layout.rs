@@ -31,7 +31,9 @@ use crate::ui_layout::LayoutFile;
 /// 待单独裁定。
 ///
 /// 面板几何由 egui 自带的窗口记忆按 panel id 接管，不属于本函数职责。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn load_layout_on_project_open(
+    mut contexts: EguiContexts,
     project: Res<WorldProjection>,
     mut layout: ResMut<LayoutFile>,
     mut view: ResMut<ViewState>,
@@ -50,6 +52,17 @@ pub(crate) fn load_layout_on_project_open(
         return;
     };
     let file = LayoutFile::load(&path);
+    // 播放条折叠态回灌（2026-10-27 停靠化）：`collapsed` 的跨会话真相在
+    // ui-layout.yaml，egui 侧的会话缓存（`timeline_collapse_id`）在工程打开
+    // 的这一刻强制对齐——若不回灌，时间轴首帧会以「缓存缺失→落盘值（还没
+    // 装进资源）→默认展开」抢跑，且随后 persist 会把缓存里的 false 写回盘，
+    // 折叠记忆就丢了（实测回归）。
+    if let Ok(ctx) = contexts.ctx_mut() {
+        let collapsed = file.get(Panel::Timeline).collapsed;
+        ctx.data_mut(|d| {
+            d.insert_persisted(crate::ui::timeline::timeline_collapse_id(), collapsed)
+        });
+    }
     if let Some(theme) = file.theme.as_deref().and_then(UiTheme::from_key) {
         shell_cfg.theme = theme;
     }
@@ -136,12 +149,23 @@ pub(crate) fn persist_layout_on_change(
         let rect = ctx
             .memory(|m| m.area_rect(id))
             .map(|r| [r.min.x, r.min.y, r.width(), r.height()]);
-        // egui 的窗口折叠态与 `Window` 同 Id，另挂一个 "collapsing" 子 Id。
-        let collapsed =
-            bevy_egui::egui::collapsing_header::CollapsingState::load(ctx, id.with("collapsing"))
-                .map(|s| !s.is_open())
-                .unwrap_or(false);
         let before = file.get(p);
+        // egui 的窗口折叠态与 `Window` 同 Id，另挂一个 "collapsing" 子 Id。
+        // 例外（2026-10-27 播放器停靠化）：Timeline 的折叠是「播放条」开关，
+        // 会话缓存在独立位（`timeline_collapse_id`）——它直连的 Window 无
+        // 标题栏，`"collapsing"` 子位被 egui 窗口本体占用（恒开，只作窗体
+        // 内容闸门，读它恒得展开）。缓存缺失时保留落盘值，不强制回 false。
+        let collapsed = match p {
+            Panel::Timeline => {
+                crate::ui::timeline::timeline_collapsed(ctx).unwrap_or(before.collapsed)
+            }
+            _ => bevy_egui::egui::collapsing_header::CollapsingState::load(
+                ctx,
+                id.with("collapsing"),
+            )
+            .map(|s| !s.is_open())
+            .unwrap_or(false),
+        };
         crate::ui_layout::record_layout(&mut file, p, rect, collapsed, panels.is_visible(p));
         if file.get(p) != before {
             changed = true;
