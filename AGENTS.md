@@ -304,6 +304,15 @@ bash scripts/smoke-gui.sh        # 启动 wv gui 观察 5s，进程存活 + 日�
 判定口径：**进程 5 秒存活 + 日志干净 = PASS**；渲染正确性（画面好不好看）不在此范围，
 仍属人工验收。涉及渲染系统签名 / Plugin 装配 / 新增 Resource 的改动，提交前必跑。
 
+**手动启动 GUI**（实机走查 / 交互验收；2026-10-27 用户裁定入文）：
+
+```bash
+cargo run -p wv-app --features app --bin wv -- gui    # 无工程 → 欢迎页；加 `-m examples/jrpg-world` 直开演示工程
+```
+
+> wv-app 的渲染 / UI 模块全部在 `#[cfg(feature = "app")]` 门后（本节上文），启动命令
+> **必须带 `--features app`**——不带 feature 的 `cargo run -p wv-app` 编译不到 GUI 二进制。
+
 ### 7.2 必须写测试的场景
 
 | 场景 | 要求 |
