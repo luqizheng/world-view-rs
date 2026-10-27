@@ -117,12 +117,8 @@ pub fn layers_tab(
                 // 落豆腐块（AGENTS §8 图标纪律）。
                 if pen_gated {
                     let pen = ui.add(
-                        egui::Button::image(icon_image(
-                            ICON_PENCIL,
-                            egui::Color32::WHITE,
-                            12.0,
-                        ))
-                        .fill(egui::Color32::TRANSPARENT),
+                        egui::Button::image(icon_image(ICON_PENCIL, egui::Color32::WHITE, 12.0))
+                            .fill(egui::Color32::TRANSPARENT),
                     );
                     if pen.on_hover_text("画这张势力图").clicked() {
                         pen_dialog.open(l.id.clone(), playback_day);

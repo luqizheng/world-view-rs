@@ -556,12 +556,14 @@ pub(super) fn register(app: &mut App) {
         ui::hover_tooltip::hover_tooltip_system.after(wv_render::drill::update_sea_labels),
     );
 
-    // 切蛋糕 pen 弹框（ADR-0074 T11）：独立注册——面板链 tuple 已顶满 16，
-    // 本系统无链内次序约束（egui Window 自管层序）。
-    app.add_systems(Update, crate::ui::partition_pen::partition_pen_dialog);
+    // 切蛋糕 pen/编辑（ADR-0074 T11–T13）：**必须进 `EguiPrimaryContextPass`**
+    // ——bevy_egui 0.42 起画 egui 的系统一律在该调度内执行；挂裸 `Update`
+    // 会在 pass 外画（形状上屏但 widget 不进交互快照，整窗点不动——
+    // 2026-10-28 实机抓的回归，pen 弹框按钮全灭即此）。
     app.add_systems(
-        Update,
+        bevy_egui::EguiPrimaryContextPass,
         (
+            crate::ui::partition_pen::partition_pen_dialog,
             crate::ui::partition_edit::partition_edit_hud,
             crate::ui::partition_edit::partition_cut_gesture,
             crate::ui::partition_edit::partition_drag_gesture,
