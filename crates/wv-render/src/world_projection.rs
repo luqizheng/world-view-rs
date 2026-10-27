@@ -640,8 +640,16 @@ fn grown_polyline(track: &wv_core::track::Track, day: i64) -> Vec<Vec2> {
 }
 
 /// 播放推进：每帧 `current_day += speed * dt`（视图状态推进，基线 §2.14 / 动画 §1.1）。
-pub fn advance_playback(time: Res<Time>, mut playback: ResMut<PlaybackState>) {
-    if !playback.playing {
+///
+/// 只在 Browse 推进（`ViewMode::timeline_shows`，2026-10-27 用户裁定）：
+/// 播放器是时间推进的唯一可见表针，表针不在场时时间冻结——否则 Map/CellMap
+/// 里时间静走却无处暂停，播放锁（§9.4 Gate-1）也无从解开。
+pub fn advance_playback(
+    time: Res<Time>,
+    view: Res<ViewState>,
+    mut playback: ResMut<PlaybackState>,
+) {
+    if !playback.playing || !view.mode.timeline_shows() {
         return;
     }
     let dt = time.delta_secs();

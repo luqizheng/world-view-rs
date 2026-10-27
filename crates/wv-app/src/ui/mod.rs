@@ -77,7 +77,9 @@ pub use region_panel::panel_region;
 pub use settings_dialog::{settings_dialog, SettingsDialog};
 pub use shell::{terrain_name_at, terrain_swatch, UiShell};
 pub use situation_panel::panel_situation;
-pub use timeline::{panel_timeline, undo_last_street_segment, TimelineLayer};
+pub use timeline::{
+    panel_timeline, pause_playback_off_browse, undo_last_street_segment, TimelineLayer,
+};
 pub use top_bar::{status_bar, top_bar, ValidationCount};
 pub use top_option_bar::top_option_bar;
 pub use validation_panel::panel_validation;

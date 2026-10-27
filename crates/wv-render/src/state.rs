@@ -177,6 +177,16 @@ impl ViewMode {
     pub const BROWSING: [ViewMode; 3] =
         [ViewMode::VectorFlat, ViewMode::GoogleMap, ViewMode::Faction];
 
+    /// 播放器（时间轴浮窗）只在 Browse 在场——2026-10-27 用户裁定：
+    /// CellMap 不应有、Map 不需要有。
+    ///
+    /// 判据单一来源落在数据层：wv-app 的面板呈现/工具条让位与本 crate 的
+    /// `advance_playback`（播放推进）共用本方法——播放器不在场，时间不走，
+    /// 否则会出现「顶栏没有播放器可暂停、播放锁却灰着全部写入口」的死锁态。
+    pub fn timeline_shows(self) -> bool {
+        matches!(self, ViewMode::VectorFlat)
+    }
+
     // 顶栏显示名（`label(loc)`）留在 wv-app：i18n 文案查表是外壳关注点
     // （AGENTS §2 依赖方向），应用层以扩展 trait `ViewModeLabelExt` 提供
     // 同名方法，调用点语法不变（ADR-0020 §2.3 落地注记）。
@@ -466,6 +476,20 @@ mod lod_tests {
             (mid - 0.740).abs() < 1e-3,
             "阈值处 smoothstep(2/3)≈0.740，得 {mid}"
         );
+    }
+
+    /// 播放器只在 Browse 在场（2026-10-27 用户裁定）：判据本体在此 crate，
+    /// 面板呈现（wv-app）与播放推进（advance_playback）两侧共用，这里钉住
+    /// BROWSING 三档与 CellMap 的口径。
+    #[test]
+    fn timeline_shows_only_in_browse_mode() {
+        assert!(ViewMode::VectorFlat.timeline_shows());
+        assert!(!ViewMode::GoogleMap.timeline_shows(), "Map 段不需要播放器");
+        assert!(
+            !ViewMode::Topographic.timeline_shows(),
+            "CellMap 段不应有播放器"
+        );
+        assert!(!ViewMode::Faction.timeline_shows(), "段外模式同口径");
     }
 
     #[test]

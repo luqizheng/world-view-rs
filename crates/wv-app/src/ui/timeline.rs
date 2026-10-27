@@ -40,7 +40,7 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::i18n::{t, I18nKey, Locale};
-use crate::state::{Panel, PanelState, PlaybackState, WorldProjection};
+use crate::state::{Panel, PanelState, PlaybackState, ViewMode, ViewState, WorldProjection};
 use crate::theme::ui_theme::{color32, color32_alpha, mono, proportional, UiShellConfig};
 use crate::theme::ui_tokens::{radius, space, BadgeTone};
 use crate::ui_layout::LayoutFile;
@@ -144,6 +144,30 @@ impl TimelineLayer {
     pub const ALL: [TimelineLayer; 4] = TimelineLayer::VISIBLE;
 }
 
+/// 离开 Browse 时自动暂停播放——「播放器只在 Browse」裁定（2026-10-27）的
+/// 行为侧兜底。判据本体在 `ViewMode::timeline_shows`（wv-render，与
+/// `advance_playback` 共用）；这里补的是**跳变暂停**：播放器不在场时时间
+/// 冻结已由推进侧门控保证，但 `playing` 旗标若仍亮着，播放锁（§9.4 Gate-1）
+/// 会灰着全部写入口工具——一个用户既看不见也解不开的锁。在 Browse 按下
+/// 播放、切到 Map/CellMap 即暂停，切回不自动续播（是否续播由作者再按）。
+pub fn pause_playback_off_browse(
+    view: Res<ViewState>,
+    mut playback: ResMut<PlaybackState>,
+    mut prev_mode: Local<Option<ViewMode>>,
+) {
+    if let Some(prev) = *prev_mode {
+        if playback_leaves_browse(prev, view.mode) {
+            playback.playing = false;
+        }
+    }
+    *prev_mode = Some(view.mode);
+}
+
+/// 纯判定：从 Browse 切往其他模式的那一跳才暂停（进入/逗留 Browse 不动）。
+fn playback_leaves_browse(prev: ViewMode, next: ViewMode) -> bool {
+    prev.timeline_shows() && !next.timeline_shows()
+}
+
 /// 时间轴底部通栏浮窗（v0.4 web 对位）。
 ///
 /// Bevy 系统的参数即「依赖声明」，宽签名是框架惯例而非坏味道（同 `editing.rs`）。
@@ -155,6 +179,7 @@ pub fn panel_timeline(
     mut panels: ResMut<PanelState>,
     mut playback: ResMut<PlaybackState>,
     projection: Res<WorldProjection>,
+    view: Res<ViewState>,
     mut layer: Local<TimelineLayer>,
     mut open_event: Local<bool>,
     current_loc: Res<crate::i18n::CurrentLocale>,
@@ -163,7 +188,7 @@ pub fn panel_timeline(
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
-    if !panels.is_visible(Panel::Timeline) {
+    if !panels.is_visible(Panel::Timeline) || !view.mode.timeline_shows() {
         return;
     }
 
@@ -808,5 +833,45 @@ mod tests {
         assert!((pill_center_x(1000.0, w, min_x, max_x) - 978.0).abs() < 1e-3);
         // 中间不动。
         assert!((pill_center_x(500.0, w, min_x, max_x) - 500.0).abs() < 1e-3);
+    }
+
+    /// 播放器是 Browse 专属（2026-10-27 用户裁定）：VectorFlat 在场，
+    /// Map / CellMap / Faction 等一切段外模式不在场。判据本体在
+    /// `ViewMode::timeline_shows`（wv-render），这里钉应用侧消费口径。
+    #[test]
+    fn timeline_shows_only_in_browse_mode() {
+        assert!(ViewMode::VectorFlat.timeline_shows());
+        assert!(!ViewMode::GoogleMap.timeline_shows(), "Map 段不需要播放器");
+        assert!(
+            !ViewMode::Topographic.timeline_shows(),
+            "CellMap 段不应有播放器"
+        );
+        assert!(!ViewMode::Faction.timeline_shows(), "段外模式同口径");
+    }
+
+    /// 自动暂停只发生在「离开 Browse」的那一跳：段间互切、逗留、进入
+    /// Browse 都不动播放态——否则在 Browse 点播放会被误停。
+    #[test]
+    fn playback_pauses_only_when_leaving_browse() {
+        assert!(playback_leaves_browse(
+            ViewMode::VectorFlat,
+            ViewMode::GoogleMap
+        ));
+        assert!(playback_leaves_browse(
+            ViewMode::VectorFlat,
+            ViewMode::Topographic
+        ));
+        assert!(
+            !playback_leaves_browse(ViewMode::GoogleMap, ViewMode::Topographic),
+            "非 Browse 之间互切不碰播放态（已因离开而暂停）"
+        );
+        assert!(!playback_leaves_browse(
+            ViewMode::VectorFlat,
+            ViewMode::VectorFlat
+        ));
+        assert!(
+            !playback_leaves_browse(ViewMode::GoogleMap, ViewMode::VectorFlat),
+            "切回 Browse 是恢复播放的场景，不是暂停"
+        );
     }
 }

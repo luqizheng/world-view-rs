@@ -169,6 +169,10 @@ pub(super) fn register(app: &mut App) {
                     // `ui_shell::hotkeys` 收（那里已经处理了「输入框聚焦时失效」），
                     // 两处都听会导致一次按键应用两次。
                     wv_render::perf_timed!("flush_terrain_texture", editing::flush_terrain_texture),
+                    // 离开 Browse 自动暂停（2026-10-27「播放器只在 Browse」裁定
+                    // 的行为侧）：必须排在 advance_playback 之前——切走的那一帧
+                    // 时间就不许再走。ui/panel_timeline 只门控呈现，这里门控行为。
+                    ui::pause_playback_off_browse,
                     // 播放推进（时间 → 当前时刻）
                     wv_render::perf_timed!("advance_playback", world_projection::advance_playback),
                     // 纹理先于网格几何：`grid.cell_size` 取自纹理的来源图与格数。

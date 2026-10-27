@@ -79,7 +79,10 @@ pub fn map_controls(
         )
     } else {
         let content = ctx.content_rect();
-        let bottom_lift = if panels.is_visible(Panel::Timeline) {
+        // 让位判据与 `ViewMode::timeline_shows` 同源（2026-10-27 裁定：
+        // 播放器只在 Browse）——Map/CellMap 里面板 visible 位即使为 true，
+        // 浮窗也不在场，工具条不为不存在的窗抬升出一段空白。
+        let bottom_lift = if panels.is_visible(Panel::Timeline) && view.mode.timeline_shows() {
             ctx.memory(|m| m.area_rect(egui::Id::new(("wv_panel", Panel::Timeline))))
                 .filter(|r| r.top() > content.center().y)
                 .map(|r| (content.bottom() - r.top()).max(0.0) + EDGE_OFFSET)
