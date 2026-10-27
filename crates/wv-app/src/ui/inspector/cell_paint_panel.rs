@@ -21,7 +21,7 @@ use crate::i18n::{t, I18nKey};
 use crate::theme::ui_theme::proportional;
 use crate::theme::ui_tokens::font_size;
 use crate::ui::shell::UiShell;
-use crate::ui::widgets::divider;
+use crate::ui::widgets::{divider, numeric_texts};
 
 use wv_render::state::{CellSelection, EditCellState};
 use wv_world_cell_map::cell_paint::{CellPaintSession, MAX_STROKE_RADIUS};
@@ -191,6 +191,7 @@ pub fn render_paint_fields(
                 ui,
                 shell,
                 "cell_paint_delta",
+                numeric_texts(loc),
                 &mut delta,
                 "m",
                 10.0,
@@ -216,6 +217,7 @@ pub fn render_paint_fields(
                 ui,
                 shell,
                 "cell_paint_radius",
+                numeric_texts(loc),
                 &mut r,
                 t(loc, I18nKey::CellPaintRadiusUnit),
                 1.0,
@@ -300,6 +302,7 @@ pub fn render_flood_criterion_section(
                     ui,
                     shell,
                     "cell_flood_tolerance",
+                    numeric_texts(loc),
                     &mut tol_f,
                     "m",
                     5.0,
@@ -507,6 +510,7 @@ pub fn render_derived_section(
                 ui,
                 shell,
                 "derived_smooth_strength",
+                numeric_texts(loc),
                 &mut strength_pct,
                 "%",
                 5.0,
@@ -542,6 +546,7 @@ pub fn render_derived_section(
                 ui,
                 shell,
                 "derived_quantize_step",
+                numeric_texts(loc),
                 &mut step,
                 "m",
                 5.0,

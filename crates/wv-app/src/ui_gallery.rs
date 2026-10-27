@@ -41,10 +41,10 @@ use wv_ui::widgets::{
     slider_row, slider_row_brush, slider_row_disabled, tabs, text_area, toolbar_tool, tree_row,
     value_box, value_unit, AlertKind, BadgeKind, ButtonContent, ButtonStyle, CheckState,
     ColorPicker, DialogWindow, FieldInput, FieldSelect, FloatWindow, HeadIcon, LayerEntry,
-    LayerPanelAction, LayerPanelState, MenuState, PropertyRow, Switch, ICON_BRUSH, ICON_CHECK,
-    ICON_GRID, ICON_IMAGE, ICON_LANDMARK, ICON_LAYERS, ICON_MAP_PIN, ICON_MAXIMIZE, ICON_MOUNTAIN,
-    ICON_MOUSE_POINTER, ICON_PLAY, ICON_PLUS, ICON_ROUTE, ICON_RULER, ICON_TRASH, ICON_TYPE,
-    ICON_WAVES, ICON_ZOOM_IN as ICON_TOOL_ZOOM_IN, ICON_ZOOM_OUT as ICON_TOOL_ZOOM_OUT,
+    LayerPanelAction, LayerPanelState, MenuState, NumericTexts, PropertyRow, Switch, ICON_BRUSH,
+    ICON_CHECK, ICON_GRID, ICON_IMAGE, ICON_LANDMARK, ICON_LAYERS, ICON_MAP_PIN, ICON_MAXIMIZE,
+    ICON_MOUNTAIN, ICON_MOUSE_POINTER, ICON_PLAY, ICON_PLUS, ICON_ROUTE, ICON_RULER, ICON_TRASH,
+    ICON_TYPE, ICON_WAVES, ICON_ZOOM_IN as ICON_TOOL_ZOOM_IN, ICON_ZOOM_OUT as ICON_TOOL_ZOOM_OUT,
 };
 
 /// 首次运行时若给了 `WV_THEME`，用它决定初始主题（便于双主题截图）。
@@ -329,6 +329,7 @@ fn draw_gallery(mut contexts: EguiContexts, cfg: Res<UiShellConfig>, mut st: Loc
                         ui,
                         &shell,
                         "gallery_numeric",
+                        NumericTexts::default(),
                         &mut st.numeric,
                         "m",
                         1.0,

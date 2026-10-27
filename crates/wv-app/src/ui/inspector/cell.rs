@@ -55,6 +55,7 @@ use crate::state::WorldProjection;
 use crate::theme::ui_tokens::font_size;
 
 use crate::ui::shell::UiShell;
+use crate::ui::widgets::numeric_texts;
 use crate::ui::widgets::{divider, empty_state, ButtonContent, ButtonStyle};
 use wv_render::state::{CellSelection, EditCellState};
 use wv_ui::widgets::controls::{numeric_input_salted, numeric_input_salted_report};
@@ -297,6 +298,7 @@ fn render_fields(
                 ui,
                 shell,
                 "cell_height",
+                numeric_texts(loc),
                 &mut height_f,
                 "m",
                 1.0,
@@ -548,6 +550,7 @@ fn render_batch_section(
                 ui,
                 shell,
                 "batch_height_delta",
+                numeric_texts(loc),
                 &mut delta,
                 "m",
                 10.0,

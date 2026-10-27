@@ -28,7 +28,7 @@ use bevy_egui::egui;
 use crate::edit::editing::EditHistory;
 use crate::state::{ViewState, WorldProjection};
 use crate::ui::shell::UiShell;
-use crate::ui::widgets::{numeric_input_salted, value_box};
+use crate::ui::widgets::{numeric_input_salted, numeric_texts, value_box, NumericTexts};
 
 use wv_core::distance::{Place, PoiKind};
 use wv_core::Id;
@@ -202,11 +202,17 @@ fn value_slot(ui: &mut egui::Ui, shell: &UiShell, text: &str) {
 /// `salt` 必须由调用方逐字段给语义名（`place_x` / `place_y`）：legacy 的
 /// `numeric_input_bounded` 固定盐 `"legacy_ptr"`，同面板两个实例 egui id
 /// 必撞——x/y 曾共享手势态与 TextEdit 焦点互抢（2026-10-28 评审 P1）。
-fn numeric_slot(ui: &mut egui::Ui, shell: &UiShell, salt: &str, value: &mut f32) -> egui::Response {
+fn numeric_slot(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    salt: &str,
+    texts: NumericTexts,
+    value: &mut f32,
+) -> egui::Response {
     let mut resp = None;
     ui.allocate_ui(egui::vec2(110.0, 28.0), |ui| {
         resp = Some(numeric_input_salted(
-            ui, shell, salt, value, "", 1.0, -100_000.0, 100_000.0,
+            ui, shell, salt, texts, value, "", 1.0, -100_000.0, 100_000.0,
         ));
     });
     resp.expect("allocate_ui 闭包必然执行一次")
@@ -316,8 +322,20 @@ pub fn place_form(
             // 重开），那一刻 available 是屏幕级宽 → 内容期望宽撑到全屏 →
             // Resize 只扩不缩，窗口永久变成全屏宽（2026-10-22 实机 bug）。
             // cell_editor 的既有用法（allocate_ui(96×28 / 168×28)）就是这层。
-            let x_resp = numeric_slot(ui, shell, "place_x", &mut x_buf);
-            let y_resp = numeric_slot(ui, shell, "place_y", &mut y_buf);
+            let x_resp = numeric_slot(
+                ui,
+                shell,
+                "place_x",
+                numeric_texts(current_loc.0),
+                &mut x_buf,
+            );
+            let y_resp = numeric_slot(
+                ui,
+                shell,
+                "place_y",
+                numeric_texts(current_loc.0),
+                &mut y_buf,
+            );
             if x_resp.changed() || y_resp.changed() {
                 update_place_now(
                     projection,

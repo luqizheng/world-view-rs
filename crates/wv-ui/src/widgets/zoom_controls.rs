@@ -85,6 +85,8 @@ impl Default for ZoomControlsState {
 /// - `scale` —— 当前 `ViewState.scale`；用于显示百分比与判定「到位」。
 /// - `can_zoom_in` / `can_zoom_out` —— 上 / 下限钳制（来自 `LevelZoom`）。
 ///   `false` 时对应按钮用 `text_disabled` 灰，**不可点**。
+/// - `grip_hint` —— grip 悬停提示文案（**调用方注入**，wv-ui 无 i18n）；
+///   空串 = 不挂 tooltip（grip 本身由 `show_grip` 关闭的调用点传空即可）。
 /// - `on_zoom_in` / `on_zoom_out` / `on_fit` —— 三个按钮的回调；本函数
 ///   只在「按钮确实被点击」时调一次，**不**做实际写状态（caller 改
 ///   `ViewState.scale`，下一帧回灌）。
@@ -99,6 +101,7 @@ pub fn zoom_controls(
     scale: f32,
     can_zoom_in: bool,
     can_zoom_out: bool,
+    grip_hint: &str,
     on_zoom_in: impl FnOnce(),
     on_zoom_out: impl FnOnce(),
     on_fit: impl FnOnce(),
@@ -163,9 +166,13 @@ pub fn zoom_controls(
                 } else {
                     egui::CursorIcon::Grab
                 };
-                grip_resp
-                    .on_hover_cursor(cursor)
-                    .on_hover_text("拖动移动 / − ／ ＋ 缩放 / 适配全图");
+                let hover = grip_resp.on_hover_cursor(cursor);
+                // 文案由调用方注入（2026-10-28 评审 P2：crate 不持有用户可见文字）。
+                let _ = if grip_hint.is_empty() {
+                    hover
+                } else {
+                    hover.on_hover_text(grip_hint)
+                };
             }
 
             // ── −（缩小） ─────────────────────────────────────────────
