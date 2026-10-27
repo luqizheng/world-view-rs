@@ -156,6 +156,68 @@ pub fn pin_preview_view(
         .map(|(x, y)| grid.map_to_view(Vec2::new(x, y)))
 }
 
+/// 选中图钉**高亮环**的位置（视图空间）；不该亮时 `None`。
+///
+/// 亮的条件（全部满足）：选中态是 Place ∧ 该钉锚定当前图 ∧ 是点状
+/// （线段 POI 无钉）∧ 锚点齐备。拖动中跟预览位（[`pin_preview_view`]）。
+/// 供 [`draw_pin_highlight`] 消费——纯函数便于断言。
+pub fn pin_highlight_pos(
+    world: &wv_core::World,
+    selection: Option<&wv_core::SelectedEntity>,
+    current_map: Option<&wv_core::Id>,
+    grid: &GridConfig,
+    drag: &crate::state::PinDragState,
+) -> Option<Vec2> {
+    use wv_core::EntityKind;
+    let sel = selection?;
+    if sel.kind != EntityKind::Place {
+        return None;
+    }
+    let cur = current_map?;
+    let p = world.distances.places.iter().find(|p| p.id == sel.id)?;
+    if p.map.as_ref() != Some(cur) || p.line.is_some() {
+        return None;
+    }
+    let (x, y) = p.effective_anchor()?;
+    let base = grid.map_to_view(Vec2::new(x, y));
+    Some(pin_preview_view(drag, &p.id, grid).unwrap_or(base))
+}
+
+/// 选中图钉的**高亮环**（金 = 本仓库「选中」语义色，与格选区金环同族）：
+/// 双圈——外圈实、内圈淡，在图钉与点标外缘一圈，屏幕像素恒定
+/// （半径乘 `view.scale`）。拖动中跟预览位走（世界锚点未动也亮在新位）。
+pub fn draw_pin_highlight(
+    mut gizmos: Gizmos,
+    projection: Res<WorldProjection>,
+    drill: Res<crate::state::DrillState>,
+    grid: Res<GridConfig>,
+    view: Res<ViewState>,
+    layers: Res<LayerFrame>,
+    drag: Res<crate::state::PinDragState>,
+) {
+    // place 层关 = 钉不画 = 不亮（点「看不见的东西」不该有反光）。
+    if !layers.place.visible {
+        return;
+    }
+    let Some(pos) = pin_highlight_pos(
+        &projection.world,
+        projection.selection.as_ref(),
+        drill.current(),
+        &grid,
+        &drag,
+    ) else {
+        return;
+    };
+    let r = crate::drill::PIN_HIT_PX * view.scale.max(0.05);
+    let gold = Color::srgb(1.0, 0.78, 0.18);
+    gizmos.circle_2d(Isometry2d::from_translation(pos), r, gold.with_alpha(0.95));
+    gizmos.circle_2d(
+        Isometry2d::from_translation(pos),
+        r * 0.72,
+        gold.with_alpha(0.5),
+    );
+}
+
 /// 折线总长（相邻顶点距离和）。
 fn polyline_len(pts: &[Vec2]) -> f32 {
     pts.windows(2).map(|w| w[0].distance(w[1])).sum()
@@ -2530,5 +2592,75 @@ mod tests {
         let f3 = app.resource::<ProjectionFrame>();
         assert_eq!(f3.road_segments.len(), 2, "世界替换后重算段列");
         assert_ne!(f3.road_fingerprint, fp1);
+    }
+
+    /// [ADR-0074 追记三 followup] 高亮环定位：过滤（非 Place/他图/线段）
+    /// + 拖动跟预览位。
+    #[test]
+    fn pin_highlight_pos_filters_and_follows_drag_preview() {
+        let map = Id::new_unchecked("m1");
+        let _other = Id::new_unchecked("m2");
+        let mut world = wv_core::World::default();
+        world.maps.push(wv_core::map::MapNode {
+            id: map.clone(),
+            level: wv_core::map::MapLevel::World,
+            ..Default::default()
+        });
+        world
+            .distances
+            .places
+            .push(anchored_place("p1", "m1", 10.0, 20.0));
+        world
+            .distances
+            .places
+            .push(anchored_place("p2", "m2", 30.0, 40.0));
+        let mut river = anchored_place("riv", "m1", 50.0, 60.0);
+        river.line = Some(vec![0.0, 0.0, 10.0, 10.0]);
+        world.distances.places.push(river);
+        let grid = GridConfig::default();
+        let drag = crate::state::PinDragState::default();
+
+        // 本图 Place → 锚点视图位。
+        let sel_p1 =
+            wv_core::SelectedEntity::new(wv_core::EntityKind::Place, Id::new_unchecked("p1"));
+        assert_eq!(
+            pin_highlight_pos(&world, Some(&sel_p1), Some(&map), &grid, &drag),
+            Some(Vec2::new(10.0, 20.0)),
+            "本图点状钉在锚点亮"
+        );
+        // 他图 Place → 不亮。
+        let sel_p2 =
+            wv_core::SelectedEntity::new(wv_core::EntityKind::Place, Id::new_unchecked("p2"));
+        assert!(pin_highlight_pos(&world, Some(&sel_p2), Some(&map), &grid, &drag).is_none());
+        // 线段 POI → 不亮（无钉）。
+        let sel_riv =
+            wv_core::SelectedEntity::new(wv_core::EntityKind::Place, Id::new_unchecked("riv"));
+        assert!(pin_highlight_pos(&world, Some(&sel_riv), Some(&map), &grid, &drag).is_none());
+        // 非 Place（Region/Faction）→ 不亮。
+        let sel_region =
+            wv_core::SelectedEntity::new(wv_core::EntityKind::Region, Id::new_unchecked("p1"));
+        assert!(pin_highlight_pos(&world, Some(&sel_region), Some(&map), &grid, &drag).is_none());
+        // 无选中 → 不亮。
+        assert!(pin_highlight_pos(&world, None, Some(&map), &grid, &drag).is_none());
+        // 拖动中 → 跟预览位（世界锚点未动也亮在新位）。
+        let mut dragging = crate::state::PinDragState {
+            place: Some(Id::new_unchecked("p1")),
+            map: Some(map.clone()),
+            start_world: Some(Vec2::new(10.0, 20.0)),
+            active: true,
+            preview_local: Some((70.0, 80.0)),
+            last_click: None,
+        };
+        assert_eq!(
+            pin_highlight_pos(&world, Some(&sel_p1), Some(&map), &grid, &dragging),
+            Some(Vec2::new(70.0, 80.0)),
+            "拖动中高亮跟预览位"
+        );
+        dragging.active = false;
+        assert_eq!(
+            pin_highlight_pos(&world, Some(&sel_p1), Some(&map), &grid, &dragging),
+            Some(Vec2::new(10.0, 20.0)),
+            "未激活回落世界锚点"
+        );
     }
 }

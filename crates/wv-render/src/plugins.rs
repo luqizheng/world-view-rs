@@ -155,6 +155,8 @@ impl Plugin for EditorOverlayPlugin {
                     crate::selection::drag_selected_anchor
                         .after(crate::selection::commit_selection_click),
                     crate::selection::draw_selection,
+                    // 选中图钉高亮环（ADR-0074 追记三 followup）：选谁亮谁。
+                    world_projection::draw_pin_highlight,
                 )
                     .after(crate::camera::track_cursor_world),
             );
