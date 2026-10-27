@@ -781,6 +781,12 @@ impl Project {
         let place_geometry: Vec<wv_core::map::GeometrySpan> =
             load_dir(&self.root, "geometry/place")?;
 
+        // 势力图切蛋糕分区（ADR-0074）：`partitions/` 每份分区一个 YAML，
+        // 文件名 = `{map}__{layer}`（分区无独立 id 的 IO 层合成，与
+        // `geometry/place` 同一妥协）。目录可缺失——旧工程得空 Vec（零迁移）。
+        let partitions: Vec<wv_core::model::faction_partition::FactionPartition> =
+            load_dir(&self.root, "partitions")?;
+
         // 命名区域（ADR-0017 §2.2）：`regions/` 每区域一个 YAML，几何内联。
         // 目录可缺失——旧工程直接得空 Vec（零迁移）。
         // 海名（手绘地图 #13）：每实体一文件，落 `seas/<id>.yaml`，
@@ -804,6 +810,7 @@ impl Project {
             faction_layers,
             faction_geometry,
             place_geometry,
+            partitions,
             regions,
             seas,
             terrains,
@@ -907,6 +914,12 @@ impl Project {
                 &world.place_geometry,
                 |g| format!("{}__{}__{}", g.map.as_str(), g.owner.as_str(), g.span.from),
             )?;
+        }
+        // 势力图切蛋糕分区（ADR-0074）：每份分区一个 YAML，键 = map__layer。
+        if wants("partitions") {
+            save_entities(&self.root.join("partitions"), &world.partitions, |p| {
+                format!("{}__{}", p.map.as_str(), p.layer.as_str())
+            })?;
         }
         if wants("characters") {
             save_entities(&self.root.join("characters"), &world.characters, |c| {
