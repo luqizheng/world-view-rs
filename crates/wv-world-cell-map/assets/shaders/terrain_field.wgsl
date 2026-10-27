@@ -34,12 +34,12 @@
 // vec3 在 std140 下补到 16 字节；这里用 vec4 分组避免隐式 padding 错位。
 struct FieldParams {
     grid: vec4<f32>,        // xy = 格宽/格高
-    shape: vec4<f32>,       // x = px_per_cell, y = branch, z = z_exag, w = grad_step
+    shape: vec4<f32>,       // x = px_per_cell, y = branch, z = z_exag（= shading::Z_EXAG，米制口径）, w = grad_step（死槽）
     pad0: vec4<f32>,
-    light_dir: vec4<f32>,   // xyz = 旧主光方向（T6 切 shading::LIGHT_MAIN）, w = 预载槽：0 = 无效，T6 起填 meters_per_cell
+    light_dir: vec4<f32>,   // xyz = 主光 L₁（= shading::LIGHT_MAIN 真 45° 单位向量）, w = 米/格（桥接填 meters_per_cell_of；≤0 回落 1.0）
     pad1: vec4<f32>,
     shore_edges: vec4<f32>, // x = 1（滩）, y = 3（浅）, z = 9（深）, w = wash_amt
-    relief: vec4<f32>,      // xy = 明暗钳制, z = lod_blend, w = 预留
+    relief: vec4<f32>,      // x = AMBIENT, y = DIFFUSE_MAIN, z = DIFFUSE_AUX（= shading:: 三光系数，和 = 1）, w 预留
     // 主题四阶色：[0]=water [1]=land_low [2]=land_mid [3]=land_high
     theme: array<vec4<f32>, 4>,
     ink: vec4<f32>,
@@ -49,11 +49,9 @@ struct FieldParams {
     elev_cuts: array<vec4<f32>, 2>,
     // 8 阶固定色带（低 → 高，线性空间；sRGB 真源在 Rust 侧 hypsometric）
     elev_ramp: array<vec4<f32>, 8>,
-    // T5 预载槽：辅光方向 xyz（= Rust 侧 shading::LIGHT_AUX 单位向量），w 预留。
-    // **现公式不读它（惰性预载）**：旧 relief.xy 仍按明暗钳制对解读、shape.z
-    // 仍按夸张系数解读，此刻写入新语义值会被旧公式误读、画面即变。追加在
-    // 尾部是刻意的——std140 下只有尾部追加才不扰动既有字段偏移；与 Rust
-    // 侧 FieldParams 同提交镜像，T6/T7 切双光源公式时只改函数体。
+    // T5 预载槽 → T6 起正式启用：辅光方向 xyz（= Rust 侧 shading::LIGHT_AUX
+    // 真 45° 单位向量），w 预留。双光源明暗公式在下方（常量镜像 shading.rs，
+    // 注释互指）；std140 尾部追加的布局纪律见 material.rs 同名注释。
     light_aux: vec4<f32>,
 };
 
@@ -166,24 +164,50 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // T32/T33：`1 = 纯面积平均（远观）`，`0 = 纯双三次（近观）`。
     let lod_t = 1.0 - smoothstep(1.0, 3.0, px_per_cell);
 
-    // ── 亚格高度 + 明暗梯度：一次 4×4 采样出三者（P5，T13/T14–T17）──────
-    // `hg.x` 是高度（与旧双三次逐位同值），`hg.yz` 是解析偏导（米/格）。
+    // ── 亚格高度（取值仍双三次）────────────────────────────────────────
+    // `hg.x` 是高度（与旧双三次逐位同值）。`hg.yz`（解析偏导）已退役不再读
+    // ——梯度改由下方 Horn 3×3 承担（`sample_height_bicubic_grad` 保留值通道）。
     let hg = sample_height_bicubic_grad(pos);
     let h = mix(hg.x, box_avg_height(pos, footprint), lod_t);
 
-    // ── 明暗：解析梯度 × 光源（T14–T17）──────────────────────────────────
-    // 旧写法为中心差分 `(h(p+e) − h(p−e)) / 2e`，为 dx 与 dy 各重取两次
-    // 双三次 = 64 tap；解析偏导与 `h` 共享同一次16 tap，省去全部重采样。
-    let zx = hg.y * H_RANGE_M * p.shape.z;
-    let zy = hg.z * H_RANGE_M * p.shape.z;
-    let n = normalize(vec3<f32>(-zx, -zy, 1.0));
-    let lambert = clamp(dot(n, normalize(p.light_dir.xyz)), 0.0, 1.0);
-
-    // T17：明暗乘子钳制 —— 陡崖不压黑也不过曝。
-    // 远观把明暗向 1.0 收敛：梯度必须靠双三次算（插值要连续性），但那个
-    // 空间频率在小于 1 px/格 时已超出屏幕能表现的范围，留着只会闪成噪点。
-    // 这与 T33「远观只留色域」一致——山体仍靠三阶色阶读出层次。
-    let relief = mix(mix(p.relief.x, p.relief.y, lambert), 1.0, lod_t);
+    // ── 明暗：Horn 米制梯度 × 双光源（ADR-0077 D1/D2）────────────────────
+    // 公式真源 = `shading.rs`（AMBIENT / DIFFUSE_MAIN / DIFFUSE_AUX /
+    // LIGHT_MAIN / LIGHT_AUX / horn_gradient），此处常量与其逐值镜像，两侧
+    // 注释互指——改任何一边必须同步另一边。
+    //
+    // ## 符号锚点（与 `shading.rs::normal_world` 互指，两侧不许各改各的）
+    //
+    // CPU 侧 `normal_world` 写 `normalize(−s·hx, +s·hy, 1)`，`+s·hy` 那一次
+    // 「数据行向南 → 世界 +y 向北」的翻转发生在**世界坐标系**里；本 shader
+    // 全程住在**纹理坐标系**——v 与数据行同向（+v = 南），梯度在纹理空间取，
+    // 那次翻转已隐含在「纹理系 → 世界系」的变换里，故此处写 `−zy` **不再翻**。
+    // 两侧若同时翻或不翻，南北光照镜像，视觉验收立刻可察。
+    //
+    // 梯度 = Horn 3×3（米/格，见 `horn_grad_detail`）；`s = Z_EXAG / 米每格`
+    // （shading::slope_gain_of 同式）——米制化后同物理坡跨图幅同法线。
+    let grad = horn_grad_detail(pos);
+    // 米/格槽：桥接按 `meters_per_cell_of(cell_size, unit_per_km)` 填
+    // `light_dir.w`；≤ 0（未接线 / 无比例尺）回落 1.0。WGSL 无 isFinite，
+    // 但 NaN > 0.0 恒为 false，同样落进回落分支——三种非正常值一并兜住。
+    let mpc = select(1.0, p.light_dir.w, p.light_dir.w > 0.0);
+    let s = p.shape.z / mpc;
+    let n = normalize(vec3<f32>(-grad.x * s, -grad.y * s, 1.0));
+    // 双光源单尺度：`0.4 + 0.48·max(0, N·L₁) + 0.12·max(0, N·L₂)`（镜像
+    // shading::AMBIENT / DIFFUSE_MAIN / DIFFUSE_AUX，和 = 1）。LIGHT_MAIN /
+    // LIGHT_AUX 是真 45° 单位向量，直接 dot 无需 normalize；单位光向量下
+    // I ∈ [0.4, 1.0] 界内免费获得——旧 T17 明暗钳制对随界内性退役。
+    let relief = 0.4
+        + 0.48 * max(0.0, dot(n, p.light_dir.xyz))
+        + 0.12 * max(0.0, dot(n, p.light_aux.xyz));
+    //
+    // ## T33「远观关灯」退役（ADR-0077 D3，有意推翻）
+    //
+    // 旧写法在此把 relief 向 1.0 收敛（`mix(..., 1.0, lod_t)`）：远观梯度
+    // 是噪点，留着会闪。ADR-0077 的裁定是**晕渲靠米制化生存**而非关灯——
+    // 米制梯度让「同物理坡 → 同法线」跨缩放成立，远观不再需要把明暗整体
+    // 拉平；detail 档权重衰减（shading::scale_weights）接管「噪声预算换给
+    // 宏观结构」的职责。`lod_t` 对高度 `h` 与 coast 的混合**保留**（那是
+    // 采样口径，不是光照）——只删对 relief 的收敛这一处。
 
     // ── 海岸距离场（T3）──────────────────────────────────────────────────
     // 取**原始归一化值**，解码留给下面按编码模式做（`p.pad1.y`）。
@@ -564,9 +588,12 @@ fn pick4(v: vec4<f32>, i: i32) -> f32 {
     return v.w;
 }
 
-/// Catmull-Rom 双三次（T13）的值与**解析偏导**，一次 4×4 采样同时给出（P5）。
+/// Catmull-Rom 双三次（T13）的高度取值（16 tap，P5 起）。
 ///
-/// 返回 `vec3(h, dh/dx, dh/dy)`，导数单位是「归一化高度 / 格」。
+/// 返回 `vec3(h, dh/dx, dh/dy)`，但**只有 `.x`（值通道）仍在用**——导数通道
+/// 已由 Horn 3×3（[`horn_grad_detail`]，ADR-0077 D2）接管，T33/T14 的解析
+/// 梯度口径退役（见下）。值通道保留双三次的理由不变： hillshade 之外的
+/// 高度取值（色带 / 三阶色）要 C1 连续，双线性插值的格边界折痕照样难看。
 ///
 /// ## 坐标约定（**唯一权威，改前先读**）
 ///
@@ -588,26 +615,18 @@ fn pick4(v: vec4<f32>, i: i32) -> f32 {
 /// `gw − 0.5`、attr 落在 `gw`——三套不同配准。fbm 地形平滑，肉眼难判，
 /// 属静默缺陷；现统一为全部在 `gw` 采样。
 ///
-/// ## 为什么能一次采样出三个量
+/// ## 导数通道已退役（ADR-0077）
 ///
-/// 值与两个偏导共享同一个 4×4 窗口与同一次 `height_texel` 取样：
-///   h    = Σᵢⱼ texel(i,j) · wxᵢ(f.x) · wyⱼ(f.y)
-///   ∂h/∂x = Σᵢⱼ texel(i,j) · wx′ᵢ(f.x) · wyⱼ(f.y)
-///   ∂h/∂y = Σᵢⱼ texel(i,j) · wxᵢ(f.x) · wy′ⱼ(f.y)
-/// 旧写法为 h 取 16 tap、再为 dh/dx 中心差分取 2×16、再为 dh/dy 取 2×16，
-/// 共 **80 tap**；现在一次 **16 tap** 同时给出三者。
+/// 函数体仍按 P5 一次 16 tap 算出 `h + 双偏导`（三者共享同一窗口），但调用方
+/// 只取 `.x`：梯度自 ADR-0077 D2 起由 Horn 3×3（[`horn_grad_detail`]）统一
+/// 承担——CPU 烘焙与 GPU 场路径共用同一加权核，且 Horn 的中心 4 / 直邻 2 /
+/// 对角 1 平滑对手绘台阶毛刺更稳。`dh/dx / dh/dy` 两通道留在返回值里只为
+/// 不动函数体（导数累加是廉价 ALU，多扫一遍 16 tap 才是贵的那部分，而那
+/// 16 tap 值通道本来就要付）。
 ///
-/// ## 与旧中心差分的差异（**不是等价替换**）
-///
-/// 旧式 `(h(p+e) − h(p−e)) / 2e` 是**数值近似**，误差 O(e²)，且在 `f`
-/// 靠近 0 或 1（格边界）时精度最差：`fract()` 的不连续让 e 附近的
-/// 两点可能落在不同四点窗口，差分实际跨了窗口边界。解析导数没有这个坑——
-/// 它在窗口内处处成立，这正是 T13 买 C1 连续性时想要的东西。
-///
-/// 代价：梯度不再受 `GRAD_STEP`（T14）控制。T14 的作用是让差分步长
-/// 可调以滤高频噪声；解析导数对 16 tap 窗口内的全频段一视同仁。
-/// 远观档的噪声抑制仍由 T33 的 `lod_t → 1` 把 relief 收敛到 1.0 承担，
-/// 故 T14 的意图未被绕过，`grad_step` 槽位保留但不再参与梯度计算。
+/// 旧解析梯度相对中心差分的精度论证（窗口内处处成立、无 fract 跨窗差分坑）
+/// 随 T33/T14 口径一并退役留档；`grad_step`（T14）槽位早已是死槽，现在连
+/// 「梯度不受 GRAD_STEP 控制」的注记对象本身都不再参与晕渲。
 fn sample_height_bicubic_grad(pos: vec2<f32>) -> vec3<f32> {
     let tc = pos - vec2<f32>(0.5);
     let f = fract(tc);
@@ -651,6 +670,34 @@ fn height_texel(idx: vec2<f32>) -> f32 {
 fn height_at(pos: vec2<f32>) -> f32 {
     let g = p.grid.xy;
     return textureSampleLevel(height_tex, height_smp, clamp(pos, vec2<f32>(0.0), g) / g, 0.0).r;
+}
+
+/// Horn 3×3 梯度（ADR-0077 D2）——**晕渲法线的唯一梯度来源**（GPU 侧）。
+///
+/// 公式真源 = `shading.rs::horn_gradient`（CPU 烘焙同款加权核，两侧注释互指，
+/// 换核必须同步）：`[1,2,1]ᵀ·[1,2,1]/8` 加权隔格差分，中心权重 4、直邻 2、
+/// 对角 1 的加权平滑抑制单格噪声（手绘/生成数据的台阶毛刺）。
+///
+/// 返回 `(gx, gy)`，**米/格**（归一化高度差 × `H_RANGE_M` ÷ 8）——与 CPU 侧
+/// 契约同口径，调用方直接 `s = shape.z / 米每格` 进法线公式。
+///
+/// 坐标约定：入参 `pos` 是格坐标（边界空间）；`gy` 沿纹理行向下（**南**）
+/// 增大——`gy > 0` = 高度向南增大，与 CPU 侧行号约定一致。每点走
+/// [`height_at`]（双线性，纹素域自动钳界），边缘不越界、结果有限。
+/// 9 个采样点各取一次（四角共享），一次 9 tap；高度**取值**仍走
+/// [`sample_height_bicubic_grad`]（C1 连续），两者分工见 ADR-0077 D2。
+fn horn_grad_detail(pos: vec2<f32>) -> vec2<f32> {
+    let tl = height_at(pos + vec2<f32>(-1.0, -1.0));
+    let tc = height_at(pos + vec2<f32>(0.0, -1.0));
+    let tr = height_at(pos + vec2<f32>(1.0, -1.0));
+    let ml = height_at(pos + vec2<f32>(-1.0, 0.0));
+    let mr = height_at(pos + vec2<f32>(1.0, 0.0));
+    let bl = height_at(pos + vec2<f32>(-1.0, 1.0));
+    let bc = height_at(pos + vec2<f32>(0.0, 1.0));
+    let br = height_at(pos + vec2<f32>(1.0, 1.0));
+    let gx = (tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl);
+    let gy = (bl + 2.0 * bc + br) - (tl + 2.0 * tc + tr);
+    return vec2<f32>(gx, gy) * (H_RANGE_M / 8.0);
 }
 
 // ── T32/T33 缩小采样：手工 8 tap 盒式平均 ─────────────────────────────────
