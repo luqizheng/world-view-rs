@@ -410,6 +410,8 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::TimelineSpeedPillSuffix => "天/秒",
         I18nKey::TimelineSpeedPillSuffixPlural => "天/秒",
         I18nKey::TimelineRegisterEventBtn => "登记事件",
+        I18nKey::TimelineCollapseHint => "收起为播放条",
+        I18nKey::TimelineExpandHint => "展开完整播放器",
 
         // ── 校验 ──
         I18nKey::ValidationBadgeErrCountPrefix => "错误 ",
@@ -1108,6 +1110,8 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::TimelineSpeedPillSuffix => " day / sec",
         I18nKey::TimelineSpeedPillSuffixPlural => " days / sec",
         I18nKey::TimelineRegisterEventBtn => "Register event",
+        I18nKey::TimelineCollapseHint => "Collapse to playbar",
+        I18nKey::TimelineExpandHint => "Expand player",
 
         // ── Validation panel ──
         I18nKey::ValidationBadgeErrCountPrefix => "Errors ",

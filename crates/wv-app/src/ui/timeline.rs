@@ -1,9 +1,19 @@
 //! 时间轴底部通栏（v0.4 · 逐项对位 web 原型 `index.css .timeline`）+ 街道撤销。
 //!
+//! ## v0.5 停靠化（2026-10-27 用户裁定）
+//! - **默认占满宽度、贴状态栏上方**：浮窗几何每帧由视口重推
+//!   （[`dock_rect`]），`ui-layout.yaml` 的 x/y/width/height 对播放器不再
+//!   生效（`collapsed` 字段仍被消费）——也就没有「落盘坐标把面板丢在
+//!   视口外」一类问题，`snap_into_central` 越界回拉随之退役。
+//! - **可缩小成播放条**：折叠态只剩「播放钮 + 细进度轨 + 日期药丸」单行
+//!   （[`compact_bar`]）；折叠开关挂 egui `CollapsingState`
+//!   （`win_id.with("collapsing")`），与 `persist_layout_on_change` 的读取
+//!   键同源，折叠手感经 `ui-layout.yaml` 的 `collapsed` 字段跨会话记忆。
+//!
 //! ## 职责
 //! - `TimelineLayer` —— Day / Situation / Character / Century 四层枚举；
 //!   顶栏四枚徽标与 web `.track-toggles` 一一对应，点击切层。
-//! - `panel_timeline` —— 时间轴浮窗；通栏位置由 [`crate::ui_layout`] 持久化。
+//! - `panel_timeline` —— 时间轴浮窗；停靠几何见 [`dock_rect`]。
 //! - `undo_last_street_segment` —— 撤销街道段（UI → `wv-edit::History`，见 §3.3）。
 //!
 //! ## v0.4 对位表（web `index.css` → 本文件常量）
@@ -47,7 +57,9 @@ use crate::ui_layout::LayoutFile;
 use crate::ui_time;
 
 use super::shell::UiShell;
-use super::widgets::{button, rect_stroke, ButtonContent, ButtonStyle, ICON_PLUS};
+use super::widgets::{
+    button, rect_stroke, ButtonContent, ButtonStyle, ICON_CHEVRON_DOWN, ICON_CHEVRON_UP, ICON_PLUS,
+};
 
 // ── 设计量（web `index.css` 常量，1 CSS px = 1 egui pt）─────────────────
 
@@ -78,6 +90,10 @@ const PLAYHEAD_TOP: f32 = 22.0;
 const PLAYHEAD_LABEL_TOP: f32 = 72.0;
 /// 播放头药丸最小宽（web `span{width:44px}`）。
 const PLAYHEAD_LABEL_MIN_W: f32 = 44.0;
+/// 展开态（完整播放器）高度——web `.timeline{height:164px}` 同口径。
+const EXPANDED_H: f32 = 164.0;
+/// 折叠态（播放条）高度：32px 播放钮 + 上下各 6px 呼吸。
+const COMPACT_H: f32 = 44.0;
 
 /// 播放速率三档（基线 §1.8）。
 const SPEED_STEPS: [f32; 3] = [1.0, 5.0, 30.0];
@@ -168,7 +184,26 @@ fn playback_leaves_browse(prev: ViewMode, next: ViewMode) -> bool {
     prev.timeline_shows() && !next.timeline_shows()
 }
 
-/// 时间轴底部通栏浮窗（v0.4 web 对位）。
+/// 播放器停靠矩形（2026-10-27 用户裁定：默认占满宽度、贴状态栏上方）。
+///
+/// 横向 = 整个视口；纵向 = 底边贴在状态栏上沿（`vp.bottom − STATUS_BAR_H`），
+/// 高度按折叠态取档（展开 [`EXPANDED_H`] / 播放条 [`COMPACT_H`]）。每帧从
+/// 视口重推：窗口跟随主窗缩放，落盘的 x/y/width/height 对播放器不再生效
+/// （`ui-layout.yaml` 仍记录几何，但只有 `collapsed` 被消费）。
+///
+/// 抽出为纯函数供单测；唯一消费方是 [`panel_timeline`]。
+fn dock_rect(vp: egui::Rect, collapsed: bool) -> (egui::Pos2, egui::Vec2) {
+    let h = if collapsed { COMPACT_H } else { EXPANDED_H };
+    (
+        egui::pos2(
+            vp.left(),
+            vp.bottom() - crate::ui::top_bar::STATUS_BAR_H - h,
+        ),
+        egui::vec2(vp.width(), h),
+    )
+}
+
+/// 时间轴底部停靠条（v0.5 停靠化；展开态 = v0.4 web 对位的完整播放器）。
 ///
 /// Bevy 系统的参数即「依赖声明」，宽签名是框架惯例而非坏味道（同 `editing.rs`）。
 #[allow(clippy::too_many_arguments)]
@@ -198,14 +233,25 @@ pub fn panel_timeline(
     let layout = crate::ui_layout::current_layout(&layouts, &panels, Panel::Timeline);
     let win_id = egui::Id::new(("wv_panel", Panel::Timeline));
 
-    // 越界回拉（2026-10-25）：时间轴是直连 `egui::Window` 的游离浮窗
-    // （不走 `float_window`），上一会话拖到贴视口底会盖住常驻状态栏——
-    // 见 `snap_into_central` 文档。越界帧强制回位。
-    let mut win = egui::Window::new("")
+    // 折叠态（完整播放器 ↔ 播放条）：挂在 `win_id.with("collapsing")` 的
+    // egui `CollapsingState`——与 `persist_layout_on_change` 的读取键同源
+    // （写进 `ui-layout.yaml` 的 `collapsed` 字段），折叠手感跨会话记忆，
+    // persist 侧零改动；会话首帧从落盘值引导。
+    let mut collapsing = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ctx,
+        win_id.with("collapsing"),
+        !layout.collapsed,
+    );
+    let collapsed = !collapsing.is_open();
+
+    // 底部停靠（2026-10-27 用户裁定）：几何每帧由视口重推（[`dock_rect`]），
+    // `fixed_rect` 同时关掉拖动与拖角缩放——「缩小」由折叠钮承担。旧的自由
+    // 浮窗 + 越界回拉（`snap_into_central`）随停靠化退役：位置不再来自记忆，
+    // 也就不存在拖丢 / 盖住状态栏的问题。
+    let (pos, size) = dock_rect(ctx.viewport_rect(), collapsed);
+    egui::Window::new("")
         .id(win_id)
-        .default_pos(egui::pos2(layout.x, layout.y))
-        .default_size(egui::vec2(layout.width, layout.height))
-        .resizable(true)
+        .fixed_rect(egui::Rect::from_min_size(pos, size))
         .title_bar(false)
         .frame(
             // 跟随应用当前日夜模式（面板底仍由 shell 令牌决定）。
@@ -216,23 +262,25 @@ pub fn panel_timeline(
                 // 间隔由各段自管（下方 `item_spacing = 0`）。
                 .inner_margin(crate::theme::ui_theme::margin_all(0.0))
                 .corner_radius(radius::PANEL),
-        );
-    if let Some(p) = crate::ui::top_bar::snap_into_central(ctx, win_id) {
-        win = win.current_pos(p);
-    }
-    win.show(ctx, |ui| {
-        ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-        timeline_top_row(
-            ui,
-            &shell,
-            &mut playback,
-            &mut layer,
-            &projection,
-            loc,
-            &mut open_event,
-        );
-        timeline_track(ui, &shell, &mut playback, &projection, *layer, loc);
-    });
+        )
+        .show(ctx, |ui| {
+            ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+            if collapsed {
+                compact_bar(ui, &shell, &mut playback, loc, &mut collapsing);
+            } else {
+                timeline_top_row(
+                    ui,
+                    &shell,
+                    &mut playback,
+                    &mut layer,
+                    &projection,
+                    loc,
+                    &mut open_event,
+                    &mut collapsing,
+                );
+                timeline_track(ui, &shell, &mut playback, &projection, *layer, loc);
+            }
+        });
 
     if *open_event {
         panels.set_visible(Panel::Event, true);
@@ -243,6 +291,7 @@ pub fn panel_timeline(
 /// 顶排（web `.timeline-top`，50px）：播放圆钮 + 日期块 + 速度下拉 + 层徽标 + 登记事件。
 ///
 /// 底线画在整排之下、**通栏到面板两缘**（web 是 `.timeline-top` 的 border-bottom）。
+#[allow(clippy::too_many_arguments)]
 fn timeline_top_row(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -251,6 +300,7 @@ fn timeline_top_row(
     projection: &WorldProjection,
     loc: Locale,
     open_event: &mut bool,
+    collapsing: &mut egui::collapsing_header::CollapsingState,
 ) {
     let row_rect =
         egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), TOP_ROW_H));
@@ -273,9 +323,12 @@ fn timeline_top_row(
                 }
                 ui.add_space(space::XS);
             }
-            // 右端：Register event（web `.button.primary`：accent 实底 + 白字 + plus 图标）。
+            // 右端：折叠钮（最右缘，收起 = 缩成播放条）+ Register event
+            //（web `.button.primary`：accent 实底 + 白字 + plus 图标）。
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(TOP_PAD_X);
+                collapse_chevron(ui, shell, collapsing, loc);
+                ui.add_space(space::XS);
                 let label = t(loc, I18nKey::TimelineRegisterEventBtn);
                 let resp = button(
                     ui,
@@ -297,6 +350,130 @@ fn timeline_top_row(
         [egui::pos2(row_rect.min.x, y), egui::pos2(row_rect.max.x, y)],
         egui::Stroke::new(1.0_f32, shell.border_subtle()),
     );
+}
+
+/// 折叠态播放条（2026-10-27「可以缩小，变为只有播放条」）：单行 44px——
+/// 播放钮 + 细进度轨 + 展开钮。
+///
+/// 日期药丸随播放头悬浮在轨上方；层徽标 / 速度 / 登记事件 / 年份行 / 层
+/// 内容都只属于展开态（完整播放器）。
+fn compact_bar(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    playback: &mut PlaybackState,
+    loc: Locale,
+    collapsing: &mut egui::collapsing_header::CollapsingState,
+) {
+    let row_rect =
+        egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), COMPACT_H));
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(row_rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        |ui| {
+            ui.add_space(TOP_PAD_X);
+            play_button(ui, shell, playback);
+            ui.add_space(space::SM);
+            compact_track(ui, shell, playback, loc);
+            ui.add_space(space::SM);
+            collapse_chevron(ui, shell, collapsing, loc);
+            ui.add_space(TOP_PAD_X);
+        },
+    );
+}
+
+/// 播放条细轨：基线 + 已播进度（focus 金）+ 播放头圆点 + 悬浮日期药丸。
+///
+/// 点 / 拖定位与主轨同语义（[`seek_to_pointer`]）；药丸横向夹进轨道
+///（[`pill_center_x`]，与主轨同款）。
+fn compact_track(ui: &mut egui::Ui, shell: &UiShell, playback: &mut PlaybackState, loc: Locale) {
+    // 右侧让位：展开钮（`shell.hit` 方块）+ 间距 + 右缘内边距。
+    let reserve = shell.hit + space::SM + TOP_PAD_X;
+    let w = (ui.available_width() - reserve).max(120.0);
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(w, COMPACT_H), egui::Sense::click_and_drag());
+    let painter = ui.painter_at(rect);
+    let frac = day_to_frac(playback.current_day, playback.range_from, playback.range_to);
+    let cx = rect.min.x + frac * rect.width();
+    let line_y = rect.center().y + 6.0; // 基线略低，给药丸留出上方空间
+                                        // 基线（暗）+ 已播段（金）+ 播放头圆点。
+    painter.line_segment(
+        [
+            egui::pos2(rect.min.x, line_y),
+            egui::pos2(rect.max.x, line_y),
+        ],
+        egui::Stroke::new(2.0_f32, shell.border_subtle()),
+    );
+    painter.line_segment(
+        [egui::pos2(rect.min.x, line_y), egui::pos2(cx, line_y)],
+        egui::Stroke::new(3.0_f32, shell.focus()),
+    );
+    painter.circle_filled(egui::pos2(cx, line_y), DOT_R, shell.focus());
+    // 日期药丸：悬浮在基线上方（紧凑日计，与主轨播放头同一入口）。
+    let on_gold = shell.text_on_accent();
+    let galley = painter.layout_no_wrap(
+        ui_time::format_date(playback.current_day, loc),
+        proportional(shell.scale.micro),
+        on_gold,
+    );
+    let pill_w = (galley.size().x + space::SM).max(PLAYHEAD_LABEL_MIN_W);
+    let pill_h = galley.size().y + space::XS;
+    let pill = egui::Rect::from_min_size(
+        egui::pos2(
+            pill_center_x(cx, pill_w, rect.min.x, rect.max.x) - pill_w / 2.0,
+            (line_y - 6.0 - pill_h).max(rect.min.y + DATE_LINE_GAP),
+        ),
+        egui::vec2(pill_w, pill_h),
+    );
+    painter.rect_filled(pill, 3.0, shell.focus());
+    painter.galley(
+        egui::pos2(pill.min.x + space::XS, pill.min.y + DATE_LINE_GAP),
+        galley,
+        on_gold,
+    );
+    seek_to_pointer(&resp, rect, playback);
+}
+
+/// 折叠 / 展开切换钮（Lucide chevron 对偶：展开态显 `chevron-down` =
+/// 收成播放条；播放条态显 `chevron-up` = 展回完整播放器）。返回是否被点击。
+fn collapse_chevron(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    collapsing: &mut egui::collapsing_header::CollapsingState,
+    loc: Locale,
+) -> bool {
+    let expanded = collapsing.is_open();
+    let (icon, hint) = if expanded {
+        (ICON_CHEVRON_DOWN, I18nKey::TimelineCollapseHint)
+    } else {
+        (ICON_CHEVRON_UP, I18nKey::TimelineExpandHint)
+    };
+    let resp = button(
+        ui,
+        shell,
+        ButtonContent::Image(icon),
+        ButtonStyle::Ghost,
+        None,
+        true,
+    )
+    .on_hover_text(t(loc, hint));
+    if resp.clicked() {
+        collapsing.set_open(!expanded);
+        ui.ctx().request_repaint();
+    }
+    resp.clicked()
+}
+
+/// 点 / 拨轨道 → 当前时刻（主轨与播放条共用；web 用底部隐形 slider，
+/// 本实现把命中区扩到全轨，可视结果一致、操作更容易）。
+fn seek_to_pointer(resp: &egui::Response, rect: egui::Rect, playback: &mut PlaybackState) {
+    if resp.dragged() || resp.clicked() {
+        if let Some(p) = resp.interact_pointer_pos() {
+            let frac = ((p.x - rect.min.x) / rect.width()).clamp(0.0, 1.0);
+            let days = (playback.range_to - playback.range_from).max(1);
+            playback.current_day = playback.range_from + (frac * days as f32) as i64;
+        }
+    }
 }
 
 /// 圆形播放 / 暂停钮（web `.timeline-top .play`：32×32 圆、accent 底、白 glyph）。
@@ -470,8 +647,7 @@ fn track_chip(
 
 /// 主轨道（web `.timeline-track`）：10% 竖网格 + 年份行 + 层内容 + 播放头。
 ///
-/// 整轨可点可拖：位置 → `current_day`（web 用底部隐形 slider，本实现把命中区
-/// 扩到全轨，可视结果一致、操作更容易）。
+/// 整轨可点可拖（[`seek_to_pointer`]：位置 → `current_day`）。
 fn timeline_track(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -617,13 +793,7 @@ fn timeline_track(
     );
 
     // ── 整轨定位（点 / 拖 → 当前时刻）──
-    if resp.dragged() || resp.clicked() {
-        if let Some(p) = resp.interact_pointer_pos() {
-            let frac = ((p.x - rect.min.x) / rect.width()).clamp(0.0, 1.0);
-            let days = (playback.range_to - playback.range_from).max(1);
-            playback.current_day = playback.range_from + (frac * days as f32) as i64;
-        }
-    }
+    seek_to_pointer(&resp, rect, playback);
 }
 
 /// 单个事件块（web `.event-block`：深底 + 语义色描边 + 语义色文字 + 4 圆角）。
@@ -872,6 +1042,43 @@ mod tests {
         assert!(
             !playback_leaves_browse(ViewMode::GoogleMap, ViewMode::VectorFlat),
             "切回 Browse 是恢复播放的场景，不是暂停"
+        );
+    }
+
+    /// 停靠几何（2026-10-27 裁定）：展开态占满视口宽、底边贴状态栏上沿。
+    #[test]
+    fn dock_rect_spans_viewport_and_sits_above_status_bar() {
+        let vp = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, 800.0));
+        let (pos, size) = dock_rect(vp, false);
+        assert_eq!(
+            (pos.x, pos.y),
+            (0.0, 800.0 - crate::ui::top_bar::STATUS_BAR_H - EXPANDED_H),
+            "展开态左上角应贴视口左缘、高度让出状态栏: got {pos:?}"
+        );
+        assert_eq!(
+            (size.x, size.y),
+            (1280.0, EXPANDED_H),
+            "展开态应占满视口宽: got {size:?}"
+        );
+        assert!(
+            (pos.y + size.y - (vp.bottom() - crate::ui::top_bar::STATUS_BAR_H)).abs() < 1e-3,
+            "底边必须贴状态栏上沿"
+        );
+    }
+
+    /// 播放条档：高度收成 44、仍占满宽度、仍贴状态栏（收起不改停靠语义）。
+    #[test]
+    fn dock_rect_collapsed_is_full_width_playbar() {
+        let vp = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1920.0, 1080.0));
+        let (pos, size) = dock_rect(vp, true);
+        assert_eq!(
+            (size.x, size.y),
+            (1920.0, COMPACT_H),
+            "播放条仍应占满宽度、高度为播放条档: got {size:?}"
+        );
+        assert!(
+            (pos.y + size.y - (vp.bottom() - crate::ui::top_bar::STATUS_BAR_H)).abs() < 1e-3,
+            "播放条底边同样贴状态栏上沿"
         );
     }
 }

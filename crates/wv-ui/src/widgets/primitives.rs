@@ -743,6 +743,9 @@ pub const ICON_CHEVRON_RIGHT: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/chevron-right.svg");
 pub const ICON_CHEVRON_DOWN: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/chevron-down.svg");
+/// 展开播放器 —— Lucide `chevron-up`（时间轴播放条的收起/展开对偶，2026-10-27）。
+pub const ICON_CHEVRON_UP: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/chevron-up.svg");
 pub const ICON_PLAY: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/play.svg");
 pub const ICON_REFRESH: egui::ImageSource<'static> =

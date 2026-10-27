@@ -718,6 +718,10 @@ pub enum I18nKey {
     TimelineSpeedPillSuffixPlural,
     /// 「+ Register event」按钮（加号由 `ICON_PLUS` 图标提供，文案不含加号）
     TimelineRegisterEventBtn,
+    /// 时间轴折叠钮提示（完整播放器 → 播放条）
+    TimelineCollapseHint,
+    /// 时间轴展开钮提示（播放条 → 完整播放器）
+    TimelineExpandHint,
 
     // ── 校验面板 ─────────────────────────────────────────────────────
     /// 「错误 N」徽标前缀（数字前缀拼接）
@@ -1349,7 +1353,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 535] = [
+    pub const ALL: [I18nKey; 537] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1671,6 +1675,8 @@ impl I18nKey {
         I18nKey::TimelineSpeedPillSuffix,
         I18nKey::TimelineSpeedPillSuffixPlural,
         I18nKey::TimelineRegisterEventBtn,
+        I18nKey::TimelineCollapseHint,
+        I18nKey::TimelineExpandHint,
         // 校验（8）
         I18nKey::ValidationBadgeErrCountPrefix,
         I18nKey::ValidationBadgeWarnCountPrefix,
