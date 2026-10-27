@@ -2678,4 +2678,23 @@ mod tests {
             "未激活回落世界锚点"
         );
     }
-}
+
+    /// 行为探针（临时）：sync_gizmo_line_width 真的把线宽写成 view.scale？
+    #[test]
+    fn probe_gizmo_line_width_sync() {
+        use bevy::gizmos::config::{DefaultGizmoConfigGroup, GizmoConfigStore};
+        let mut app = App::new();
+        app.insert_resource(ViewState { scale: 0.25, ..Default::default() });
+        app.init_resource::<crate::state::PinDragState>();
+        app.init_gizmo_group::<DefaultGizmoConfigGroup>();
+        app.add_systems(Update, crate::world_projection::sync_gizmo_line_width);
+        app.update();
+        let store = app.world().resource::<GizmoConfigStore>();
+        let (cfg, _) = store.config::<DefaultGizmoConfigGroup>();
+        assert!(
+            (cfg.line.width - 0.25).abs() < 1e-4,
+            "line_width 应=scale 0.25，实际 {}",
+            cfg.line.width
+        );
+    }
+
