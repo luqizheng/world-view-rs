@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust（workspace，edition 2021）、现有 cargo test 门禁；无新依赖。
 
-**Spec:** `docs/superpowers/specs/2026-10-27-mountain-range-pen-design.md`（决策依据）＋ `docs/adr/ADR-0074-mountain-range-pen-altitudinal-zonation.md`（已接受）
+**Spec:** `docs/superpowers/specs/2026-10-27-mountain-range-pen-design.md`（决策依据）＋ `docs/adr/ADR-0076-mountain-range-pen-altitudinal-zonation.md`（已接受）
 
 ## Global Constraints
 
@@ -34,7 +34,7 @@
 
 **Files:**
 - Create: 分支 `feat/mountain-range-pen`、worktree `.worktrees/feat/mountain-range-pen`
-- 迁移（主 checkout 现有未提交文档）: `docs/superpowers/specs/2026-10-27-mountain-range-pen-design.md`、`docs/adr/ADR-0074-mountain-range-pen-altitudinal-zonation.md`、`docs/superpowers/plans/2026-10-27-mountain-range-pen.md`（三个 untracked）；`docs/adr/README.md`、`GLOSSARY.md`（两个已修改）
+- 迁移（主 checkout 现有未提交文档）: `docs/superpowers/specs/2026-10-27-mountain-range-pen-design.md`、`docs/adr/ADR-0076-mountain-range-pen-altitudinal-zonation.md`、`docs/superpowers/plans/2026-10-27-mountain-range-pen.md`（三个 untracked）；`docs/adr/README.md`、`GLOSSARY.md`（两个已修改）
 
 - [ ] **Step 1: 建分支与 worktree（AGENTS §13，worktree 目录名 = 分支名）**
 
@@ -50,7 +50,7 @@ git worktree add .worktrees/feat/mountain-range-pen feat/mountain-range-pen
 git diff docs/adr/README.md GLOSSARY.md > .target/mrp-docs.patch
 mkdir -p .worktrees/feat/mountain-range-pen/docs/superpowers/specs .worktrees/feat/mountain-range-pen/docs/superpowers/plans
 mv docs/superpowers/specs/2026-10-27-mountain-range-pen-design.md .worktrees/feat/mountain-range-pen/docs/superpowers/specs/
-mv docs/adr/ADR-0074-mountain-range-pen-altitudinal-zonation.md .worktrees/feat/mountain-range-pen/docs/adr/
+mv docs/adr/ADR-0076-mountain-range-pen-altitudinal-zonation.md .worktrees/feat/mountain-range-pen/docs/adr/
 mv docs/superpowers/plans/2026-10-27-mountain-range-pen.md .worktrees/feat/mountain-range-pen/docs/superpowers/plans/
 git -C .worktrees/feat/mountain-range-pen apply .target/mrp-docs.patch
 git restore docs/adr/README.md GLOSSARY.md
@@ -60,7 +60,7 @@ git restore docs/adr/README.md GLOSSARY.md
 
 ```bash
 git -C .worktrees/feat/mountain-range-pen add -A docs
-git -C .worktrees/feat/mountain-range-pen commit -m "docs: ADR-0074 山系笔与垂直带谱——设计稿/索引/术语登记/实施计划"
+git -C .worktrees/feat/mountain-range-pen commit -m "docs: ADR-0076 山系笔与垂直带谱——设计稿/索引/术语登记/实施计划"
 ```
 
 ### Task 1: wv-terrain 带谱（TDD）
@@ -200,7 +200,7 @@ Expected: FAIL——`band_biome_for_height` 未定义 / ladder 断言不成立�
 
 ```rust
 /// 带谱落带：只对实质抬升格调用；阈值与 `display_kind` 的 NONE 回退、
-/// 大陆分带同源（ADR-0074 D1），禁止在此之外再写 300/1200/2600 字面量。
+/// 大陆分带同源（ADR-0076 D1），禁止在此之外再写 300/1200/2600 字面量。
 fn band_biome_for_height(new_h: f32) -> u8 {
     if new_h >= SNOW_LINE_M as f32 { BIOME_SNOWFIELD }
     else if new_h >= MOUNTAIN_MIN_M as f32 { BIOME_MOUNTAINS }
@@ -221,7 +221,7 @@ Expected: PASS（intent 模块全部 + 原有 suite）。
 
 ```bash
 git add crates/wv-terrain/src/intent.rs
-git commit -m "wv-terrain: 山脉意图 kind 改双判据垂直带谱——500m 实质抬升门槛 + 绝对高度落带（ADR-0074 D1/D2）"
+git commit -m "wv-terrain: 山脉意图 kind 改双判据垂直带谱——500m 实质抬升门槛 + 绝对高度落带（ADR-0076 D1/D2）"
 ```
 
 ### Task 2: wv-app 文案（山系笔 / 微调标注）
@@ -246,7 +246,7 @@ Expected: PASS（7 工具名称/提示中英非空全覆盖测试不加改动即
 
 ```bash
 git add crates/wv-app/src/i18n/table.rs
-git commit -m "wv-app: 山系笔文案——山脉→山系笔、涂抹标注微调用（ADR-0074 D3）"
+git commit -m "wv-app: 山系笔文案——山脉→山系笔、涂抹标注微调用（ADR-0076 D3）"
 ```
 
 ### Task 3: 门禁 + 实机验收

@@ -792,7 +792,7 @@ mod tests {
             );
         }
         assert!(all.iter().any(|c| c.id == CommandId::ToggleGrid));
-        // 中文子串搜到具体工具（ALL[1] = 山系笔，ADR-0074 D3 改名后按新名可搜）。
+        // 中文子串搜到具体工具（ALL[1] = 山系笔，ADR-0076 D3 改名后按新名可搜）。
         let hits = CommandRegistry::search("山系", &[]);
         assert!(
             hits.iter()

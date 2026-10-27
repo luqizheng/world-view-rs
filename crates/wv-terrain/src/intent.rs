@@ -57,7 +57,7 @@ const RANGE_RIDGE_SCALE: f32 = 60.0;
 const RANGE_VAR_BASE: f32 = 0.78;
 const RANGE_VAR_AMP: f32 = 0.32;
 /// 山系笔带谱的实质抬升门槛：增量达到此值才落带（写 kind）；
-/// 门槛之下一律不写——既有地貌标签原样不动（山脚衔接周边环境由此免费获得，ADR-0074 D1）。
+/// 门槛之下一律不写——既有地貌标签原样不动（山脚衔接周边环境由此免费获得，ADR-0076 D1）。
 const RANGE_KIND_ADD_M: f32 = 500.0;
 
 /// 高原顶面高度（米 × strength），顶面 85% 平坦 + 15% 起伏。
@@ -438,7 +438,7 @@ fn range_add(t: f32, taper: f32, variation: f32, strength: f32) -> f32 {
     RANGE_PEAK_M * strength * taper * variation * (-1.4 * t * t).exp()
 }
 
-/// 带谱落带（ADR-0074 D1）：只对实质抬升（增量 ≥ `RANGE_KIND_ADD_M`）的格子调用。
+/// 带谱落带（ADR-0076 D1）：只对实质抬升（增量 ≥ `RANGE_KIND_ADD_M`）的格子调用。
 /// 阈值与 `display_kind` 的 NONE 回退、大陆分带同源（`continent.rs` 三常数），
 /// 禁止在此之外再写 300/1200/2600 字面量。
 fn band_biome_for_height(new_h: f32) -> u8 {
@@ -1417,7 +1417,7 @@ mod tests {
         }
     }
 
-    // ---- ADR-0074 山系笔垂直带谱：双判据（实质抬升门槛 + 绝对高度落带） ----
+    // ---- ADR-0076 山系笔垂直带谱：双判据（实质抬升门槛 + 绝对高度落带） ----
 
     /// 带谱阶梯的六个手工边界值：299/300、1199/1200、2599/2600。
     #[test]

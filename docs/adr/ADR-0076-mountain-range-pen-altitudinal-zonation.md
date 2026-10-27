@@ -1,4 +1,4 @@
-# ADR-0074: 山系笔与山脉垂直带谱——山脉作为结构化对象，群系按高度落带
+# ADR-0076: 山系笔与山脉垂直带谱——山脉作为结构化对象，群系按高度落带
 
 - 状态：**已接受**（Accepted，2026-10-27，用户批准设计稿「就这么定」+「go」起草 ADR 与计划）
 - 设计稿：`docs/superpowers/specs/2026-10-27-mountain-range-pen-design.md`（builder check 已过）
