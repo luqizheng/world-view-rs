@@ -410,6 +410,21 @@ impl Panel {
         }
     }
 
+    /// 浮窗宽度界 `(min, max)`——「窗不被内容撑爆」的壳层保证（2026-10-28 A 案）。
+    ///
+    /// egui 自适应测量 pass 里 `available_width()` 是屏幕级，整宽控件会吃满
+    /// 它把窗撑爆且 Resize 只扩不缩（仓库四次同族实锤，机制详见 wv-ui
+    /// [`FloatWindow::max_width`] 文档）。策略：列面板 min ≈ 缺省 −15%、
+    /// max = 缺省 + 120（够拖宽一档、挡无界撑爆）；Timeline 通栏只保轨道
+    /// 可读下界、上界不设（随视口）。`f32::INFINITY` = 不设上界。
+    pub fn width_bounds(self) -> (f32, f32) {
+        let [w, _] = self.default_size();
+        match self {
+            Panel::Timeline => (560.0, f32::INFINITY),
+            _ => ((w * 0.85).round(), w + 120.0),
+        }
+    }
+
     /// 面板 id（`ui-layout.yaml` 的键）。
     pub fn key(self) -> &'static str {
         match self {
@@ -790,6 +805,39 @@ mod tests {
         assert_eq!(
             map_level_label(MapLevel::Interior, crate::i18n::Locale::default()),
             "建筑内"
+        );
+    }
+
+    /// 宽度界（A 案）必须包住缺省宽：min ≤ 缺省 ≤ max，min 不窄到不可读，
+    /// 列面板必须有有限上界（防撑爆），Timeline 通栏例外。
+    #[test]
+    fn width_bounds_bracket_default_and_column_panels_are_capped() {
+        for p in Panel::ALL {
+            let (min_w, max_w) = p.width_bounds();
+            let [w, _] = p.default_size();
+            assert!(
+                min_w <= w,
+                "{p:?} min({min_w}) 应 ≤ 缺省宽({w})，否则首帧即被顶宽"
+            );
+            assert!(
+                max_w >= w,
+                "{p:?} max({max_w}) 应 ≥ 缺省宽({w})，否则缺省形态被夹窄"
+            );
+            assert!(
+                min_w >= 160.0,
+                "{p:?} min({min_w}) 过窄，标题行/表单两列放不下"
+            );
+            if p != Panel::Timeline {
+                assert!(
+                    max_w.is_finite(),
+                    "{p:?} 列面板必须有有限上界（A 案：挡无界测量撑爆）"
+                );
+            }
+        }
+        assert_eq!(
+            Panel::Timeline.width_bounds().1,
+            f32::INFINITY,
+            "通栏不设上界（随视口拖宽）"
         );
     }
 
