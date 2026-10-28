@@ -63,9 +63,8 @@ pub use controls::{
     check_row, checkbox_state, dropdown_box, numeric_input, numeric_input_bounded,
     numeric_input_salted, numeric_input_salted_report, option_menu, progress, radio, search_input,
     slider, slider_row, slider_row_brush, slider_row_disabled, tabs, text_area, value_box,
-    value_unit, CheckState, DialogWindow, FieldInput, FieldSelect, NumericEditReport,
-    NumericTexts, PropertyRow,
-    SliderTone, Switch,
+    value_unit, CheckState, DialogWindow, FieldInput, FieldSelect, NumericEditReport, NumericTexts,
+    PropertyRow, SliderTone, Switch,
 };
 pub use floater::{FloatWindow, HeadIcon};
 pub use layer_panel::{
