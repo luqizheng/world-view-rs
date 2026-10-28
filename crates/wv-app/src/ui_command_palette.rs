@@ -245,6 +245,73 @@ pub enum MapToolId {
     Landmark,
 }
 
+impl MapToolId {
+    /// 工具的**工作区白名单**（2026-10-28 用户裁定·方案 A：声明式单表）。
+    ///
+    /// 三工作区功能分区的唯一过滤源——工具条瓷砖灰化、快捷键拦截、命令
+    /// 面板隐藏、分发器终审四处置共用本表，不各自重拼：
+    ///
+    /// - **Browse / Map**（叙事与政治图档）：选择、抓手、点选（万能选择器）、
+    ///   测量（Map 是距离主场）；
+    /// - **CellMap**（Topographic 地形工作台）：地形编辑全家（笔刷/橡皮/
+    ///   单格/泛洪/群系分界/大陆生成）+ 地标放置（POI 编辑主场）；
+    /// - **LinePoi**（河/路绘制）：Map 档——CellMap 只**看**线不画线
+    ///   （2026-10-28 裁定②：CellMap 道路/河流可见属渲染层，编辑入口在 Map）。
+    pub fn available_in(self, mode: crate::state::ViewMode) -> bool {
+        use crate::state::ViewMode;
+        match self {
+            // 公共：导航与选择（点选 = 万能选择器，Browse 选图钉也靠它，
+            // ADR-0074 追记一；「POI 浏览处处有」的载体）。
+            Self::Select(_) | Self::Pan | Self::PointSelect => true,
+            Self::MeasureLine | Self::MeasureRect | Self::MeasureEraser => {
+                matches!(mode, ViewMode::VectorFlat | ViewMode::GoogleMap)
+            }
+            Self::LinePoi(_) => mode == ViewMode::GoogleMap,
+            Self::Brush
+            | Self::BrushErase
+            | Self::EditCell
+            | Self::FloodSelect
+            | Self::BiomeBoundary
+            | Self::Continent
+            | Self::Landmark => mode == ViewMode::Topographic,
+        }
+    }
+}
+
+/// 退出 CellMap 工作区（2026-10-28 修：旁路泄漏根修）。
+///
+/// 进 CellMap 时顶栏会把全部面板可见性快照进
+/// [`crate::state::PanelState::cell_workspace_backup`] 再只开笔刷/地标窗；
+/// 退出必须还原快照并关 EditCell 工具。此前**只有顶栏三段按钮**走这套编排
+/// ——快捷键 1/2、命令面板、HTTP `set_view_mode` 直接写 `view.mode` 绕过
+/// 退出，快照泄漏：Inspector 保持隐藏、工作区旗标立着（势力层/事态页签
+/// 持续禁用）、EditCell 工具不关。本助手是退出的**单一入口**，各路径共用。
+///
+/// `palette: Option` —— HTTP 路径拿不到面板队列时传 `None`（工具关闭留待
+/// 用户下一次切工具；面板还原是主要修复面）。
+pub fn exit_cellmap_workspace(
+    panels: &mut crate::state::PanelState,
+    palette: Option<&mut CommandPalette>,
+) {
+    if let Some(backup) = panels.cell_workspace_backup.take() {
+        for (p, v) in backup {
+            panels.set_visible(p, v);
+        }
+        if let Some(palette) = palette {
+            palette.pending = Some(CommandId::SelectMapTool(MapToolId::EditCell));
+        }
+    }
+}
+
+/// 工具类命令条目在当前工作区是否列出（非工具命令恒 true）——
+/// [`CommandPalette::results`] / [`CommandPalette::results_with_locale`] 共用。
+fn tool_entry_available(id: &CommandId, mode: crate::state::ViewMode) -> bool {
+    match id {
+        CommandId::SelectMapTool(t) => t.available_in(mode),
+        _ => true,
+    }
+}
+
 /// 一条命令：注册表的条目。
 #[derive(Debug, Clone)]
 pub struct Command {
@@ -699,18 +766,27 @@ impl CommandPalette {
     }
 
     /// 当前查询的命中项。
-    pub fn results(&self, recent: &[RecentProject]) -> Vec<Command> {
+    pub fn results(&self, recent: &[RecentProject], mode: crate::state::ViewMode) -> Vec<Command> {
         CommandRegistry::search(&self.query, recent)
+            .into_iter()
+            .filter(|c| tool_entry_available(&c.id, mode))
+            .collect()
     }
 
     /// 当前查询的命中项，按 Locale 查表（ADR-0018）。
+    ///
+    /// `mode` 过滤工作区外工具（[`MapToolId::available_in`]，2026-10-28
+    /// 裁定⑤）：命令面板「零隐藏功能」原则不变——条目没消失，只是**当前
+    /// 工作区用不了的不列出**（切到对应工作区即出现）。
     pub fn results_with_locale(
         &self,
         recent: &[RecentProject],
         locale: crate::i18n::Locale,
+        mode: crate::state::ViewMode,
     ) -> Vec<Command> {
         CommandRegistry::all_with_locale(locale, recent)
             .into_iter()
+            .filter(|c| tool_entry_available(&c.id, mode))
             .filter(|c| {
                 if self.query.is_empty() {
                     return true;
@@ -724,8 +800,8 @@ impl CommandPalette {
     }
 
     /// 执行高亮项。
-    pub fn run_selected(&mut self, recent: &[RecentProject]) {
-        let results = self.results(recent);
+    pub fn run_selected(&mut self, recent: &[RecentProject], mode: crate::state::ViewMode) {
+        let results = self.results(recent, mode);
         if let Some(cmd) = results.get(self.selected) {
             self.pending = Some(cmd.id);
         }
@@ -917,11 +993,117 @@ mod tests {
         let mut p = CommandPalette::default();
         p.open();
         p.query = "钻回世界".into();
-        let results = p.results(&sample_recent());
+        let results = p.results(&sample_recent(), crate::state::ViewMode::VectorFlat);
         assert!(!results.is_empty());
         p.selected = 0;
-        p.run_selected(&sample_recent());
+        p.run_selected(&sample_recent(), crate::state::ViewMode::VectorFlat);
         assert_eq!(p.pending, Some(CommandId::DrillToRoot));
         assert!(!p.open, "执行后应关闭面板");
+    }
+
+    #[test]
+    fn workspace_whitelist_routes_tools_to_their_workspaces() {
+        // 2026-10-28 裁定⑤守点：白名单单表——地形编辑族只在 CellMap
+        // （Topographic），测量在 Browse/Map，LinePoi 只在 Map，选择/抓手/
+        // 点选三档公共（点选 = 万能选择器，ADR-0074）。
+        use crate::state::ViewMode;
+        use wv_core::distance::LineKind;
+        let cellmap = [
+            MapToolId::Brush,
+            MapToolId::BrushErase,
+            MapToolId::EditCell,
+            MapToolId::FloodSelect,
+            MapToolId::BiomeBoundary,
+            MapToolId::Continent,
+            MapToolId::Landmark,
+        ];
+        for t in cellmap {
+            assert!(
+                t.available_in(ViewMode::Topographic),
+                "{t:?} 应在 CellMap 可用"
+            );
+            assert!(
+                !t.available_in(ViewMode::VectorFlat) && !t.available_in(ViewMode::GoogleMap),
+                "{t:?} 是 CellMap 工具，Browse/Map 不可用"
+            );
+        }
+        for t in [
+            MapToolId::MeasureLine,
+            MapToolId::MeasureRect,
+            MapToolId::MeasureEraser,
+        ] {
+            assert!(t.available_in(ViewMode::VectorFlat) && t.available_in(ViewMode::GoogleMap));
+            assert!(
+                !t.available_in(ViewMode::Topographic),
+                "CellMap 不要测量叠加"
+            );
+        }
+        assert!(MapToolId::LinePoi(LineKind::River).available_in(ViewMode::GoogleMap));
+        assert!(!MapToolId::LinePoi(LineKind::River).available_in(ViewMode::VectorFlat));
+        assert!(!MapToolId::LinePoi(LineKind::Road).available_in(ViewMode::Topographic));
+        for m in [
+            ViewMode::VectorFlat,
+            ViewMode::GoogleMap,
+            ViewMode::Topographic,
+        ] {
+            assert!(MapToolId::Pan.available_in(m), "抓手是导航，三档公共");
+            assert!(
+                MapToolId::PointSelect.available_in(m),
+                "点选=万能选择器，三档公共"
+            );
+            assert!(MapToolId::Select(SelectionShape::Polygon).available_in(m));
+        }
+    }
+
+    #[test]
+    fn palette_hides_cellmap_only_tools_outside_cellmap() {
+        // 命令面板过滤守点：Browse 档搜不到单格编辑；CellMap 档搜得到。
+        let mut p = CommandPalette::default();
+        p.open();
+        p.query = "单格".into();
+        let hits = p.results_with_locale(
+            &[],
+            crate::i18n::Locale::default(),
+            crate::state::ViewMode::VectorFlat,
+        );
+        assert!(
+            hits.iter()
+                .all(|c| c.id != CommandId::SelectMapTool(MapToolId::EditCell)),
+            "Browse 档不应列出 CellMap 专属工具"
+        );
+        let hits = p.results_with_locale(
+            &[],
+            crate::i18n::Locale::default(),
+            crate::state::ViewMode::Topographic,
+        );
+        assert!(
+            hits.iter()
+                .any(|c| c.id == CommandId::SelectMapTool(MapToolId::EditCell)),
+            "CellMap 档应能搜到单格编辑"
+        );
+    }
+
+    #[test]
+    fn exit_cellmap_workspace_restores_panel_snapshot() {
+        // 2026-10-28 旁路泄漏根修守点：退出助手还原面板快照 + 清工作区旗标。
+        // （排 EditCell 关闭动作需要 palette——由调用方持有，此处钉还原语义。）
+        let mut panels = crate::state::PanelState::default();
+        panels.set_visible(crate::state::Panel::Inspector, false);
+        panels.set_visible(crate::state::Panel::Brush, false);
+        let backup = vec![
+            (crate::state::Panel::Inspector, false),
+            (crate::state::Panel::Brush, true),
+        ];
+        panels.cell_workspace_backup = Some(backup);
+        exit_cellmap_workspace(&mut panels, None);
+        assert!(
+            panels.cell_workspace_backup.is_none(),
+            "退出后工作区旗标必须落下（否则 Inspector 页签持续禁用）"
+        );
+        assert!(!panels.is_visible(crate::state::Panel::Inspector));
+        assert!(panels.is_visible(crate::state::Panel::Brush));
+        // 幂等：非工作区态再退出是无操作。
+        exit_cellmap_workspace(&mut panels, None);
+        assert!(panels.is_visible(crate::state::Panel::Brush));
     }
 }

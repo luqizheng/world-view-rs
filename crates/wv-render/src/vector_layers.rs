@@ -2748,10 +2748,12 @@ mod tests {
         );
     }
 
-    /// 门控（2026-10-22 内容矩阵 T4）：Topographic 下 Roads/Streets/Poi 三 pass
-    /// 全 false ⇒ 街网/道路/POI **不产任何 mesh**（含既有池被清）。
+    /// 门控（2026-10-22 内容矩阵 T4，**2026-10-28 修订**）：Topographic 下
+    /// **Roads 开**（用户裁定②：CellMap 要看道路和河流——改地形要有线网
+    /// 参照，修订 ADR-0039 关灯表）⇒ 道路产 mesh；Streets/Poi 仍 false ⇒
+    /// 街网/POI 标签不产 mesh，地物符号只留 landmark pin 合批。
     #[test]
-    fn topographic_recipe_builds_no_road_street_or_poi_meshes() {
+    fn topographic_recipe_builds_road_but_no_street_or_poi_meshes() {
         use crate::recipe::resolve_render_recipe;
         use crate::state::ViewMode;
 
@@ -2836,8 +2838,9 @@ mod tests {
 
         let mesh_count = world.resource::<Assets<Mesh>>().iter().count();
         assert_eq!(
-            mesh_count, 1,
-            "Topographic 下道路/街网/POI 不得产 mesh；地物符号只留 1 个 map-pin 合批"
+            mesh_count, 2,
+            "Topographic 下道路 1 条 mesh + 地物符号 1 个 map-pin 合批（2026-10-28 \
+             裁定②后 Roads 开灯；街网/POI 标签仍不得产 mesh）"
         );
     }
 

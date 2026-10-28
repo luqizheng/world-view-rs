@@ -68,6 +68,13 @@ pub fn map_controls(
     // 禁工具而非禁面板——播放中看读数条是合法只读操作。
     let cell_tools_enabled = !playback.playing;
     let locked_hint = t(loc, I18nKey::MapControlsPlaybackLocked);
+    // **工作区白名单**（2026-10-28 裁定⑤）：编辑类工具只在所属工作区可用，
+    // 声明表 = `MapToolId::available_in`（快捷键/命令面板/分发器同源）。
+    // 灰化 + 悬停说明而非隐藏——作者看得到工具在哪，切档即亮。
+    // （`view` 后文还有可变用法，这里按值快照模式，避免借用冲突。）
+    let mode_now = view.mode;
+    let ws = move |tool: MapToolId| tool.available_in(mode_now);
+    let ws_hint = t(loc, I18nKey::MapControlsWorkspaceLocked);
 
     let vertical = params.dock.orientation == MapDockOrientation::Vertical;
     let metrics = DockMetrics::for_orientation(vertical);
@@ -197,38 +204,44 @@ pub fn map_controls(
                         // （原笔刷浮窗承载，浮窗裁撤后只剩 B / 命令面板）——多选
                         // 等互斥工具切走笔刷后，界面上没有任何鼠标入口能回去。
                         // 本瓷砖即回程入口，点它 = 按 B（同一 `MapToolId::Brush`）。
-                        // Gate-1：播放中灰化（写入口）。编号取 3.5 不重排后续
-                        // 槽位（ADR-0043 槽位号纪律，同「槽 6.5」先例）。
+                        // Gate-1：播放中灰化（写入口）；CellMap 工作区外灰化（白名单）。
+                        // 编号取 3.5 不重排后续槽位（ADR-0043 槽位号纪律）。
+                        let brush_ok = cell_tools_enabled && ws(MapToolId::Brush);
                         tool_tile(
                             ui,
                             &shell,
                             metrics,
                             ICON_BRUSH,
-                            if cell_tools_enabled {
-                                t(loc, I18nKey::MapControlsBrushHint)
-                            } else {
+                            if !cell_tools_enabled {
                                 locked_hint
+                            } else if !ws(MapToolId::Brush) {
+                                ws_hint
+                            } else {
+                                t(loc, I18nKey::MapControlsBrushHint)
                             },
                             brush_active,
-                            cell_tools_enabled,
+                            brush_ok,
                             &mut params.palette,
                             MapToolId::Brush,
                         );
 
                         // ── 槽 4：地形橡皮刷 ─────────────────────────────
-                        // Gate-1：播放中灰化（写入口）。
+                        // Gate-1：播放中灰化（写入口）；CellMap 工作区外灰化（白名单）。
+                        let eraser_ok = cell_tools_enabled && ws(MapToolId::BrushErase);
                         tool_tile(
                             ui,
                             &shell,
                             metrics,
                             ICON_ERASER,
-                            if cell_tools_enabled {
-                                t(loc, I18nKey::MapControlsEraserHint)
-                            } else {
+                            if !cell_tools_enabled {
                                 locked_hint
+                            } else if !ws(MapToolId::BrushErase) {
+                                ws_hint
+                            } else {
+                                t(loc, I18nKey::MapControlsEraserHint)
                             },
                             eraser_active,
-                            cell_tools_enabled,
+                            eraser_ok,
                             &mut params.palette,
                             MapToolId::BrushErase,
                         );
@@ -386,13 +399,15 @@ pub fn map_controls(
                             &shell,
                             metrics,
                             ICON_SQUARE_MOUSE_POINTER,
-                            if cell_tools_enabled {
-                                t(loc, I18nKey::MapControlsEditCellHint)
-                            } else {
+                            if !cell_tools_enabled {
                                 locked_hint
+                            } else if !ws(MapToolId::EditCell) {
+                                ws_hint
+                            } else {
+                                t(loc, I18nKey::MapControlsEditCellHint)
                             },
                             edit_cell_active,
-                            cell_tools_enabled,
+                            cell_tools_enabled && ws(MapToolId::EditCell),
                             &mut params.palette,
                             MapToolId::EditCell,
                         );
@@ -405,13 +420,15 @@ pub fn map_controls(
                             &shell,
                             metrics,
                             ICON_PAINT_BUCKET,
-                            if cell_tools_enabled {
-                                t(loc, I18nKey::MapControlsFloodSelectHint)
-                            } else {
+                            if !cell_tools_enabled {
                                 locked_hint
+                            } else if !ws(MapToolId::FloodSelect) {
+                                ws_hint
+                            } else {
+                                t(loc, I18nKey::MapControlsFloodSelectHint)
                             },
                             flood_select_active,
-                            cell_tools_enabled,
+                            cell_tools_enabled && ws(MapToolId::FloodSelect),
                             &mut params.palette,
                             MapToolId::FloodSelect,
                         );
@@ -424,6 +441,7 @@ pub fn map_controls(
                         // 播放锁对齐 CellMap 工具组（T10 评审 minor ①）：
                         // 播放中灰化不可点，与写入口工具同一 Gate-1 口径。
                         if line_poi_tile_visible(wv_render::state::lod_tier(view.scale)) {
+                            let lp = MapToolId::LinePoi(line_poi.kind);
                             line_poi_split(
                                 ui,
                                 &shell,
@@ -432,12 +450,14 @@ pub fn map_controls(
                                 loc,
                                 line_poi.kind,
                                 line_poi.tool_active,
-                                if cell_tools_enabled {
-                                    t(loc, I18nKey::LinePoiHint)
-                                } else {
+                                if !cell_tools_enabled {
                                     locked_hint
+                                } else if !ws(lp) {
+                                    ws_hint
+                                } else {
+                                    t(loc, I18nKey::LinePoiHint)
                                 },
-                                cell_tools_enabled,
+                                cell_tools_enabled && ws(lp),
                                 &mut params.palette,
                             );
                         }

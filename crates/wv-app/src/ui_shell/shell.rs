@@ -18,6 +18,7 @@ pub(crate) fn hotkeys(
     mut palette: ResMut<CommandPalette>,
     mut cfg: ResMut<UiShellConfig>,
     mut panels: ResMut<PanelState>,
+    view: Res<crate::state::ViewState>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
@@ -165,7 +166,9 @@ pub(crate) fn hotkeys(
         ]
         .into_iter()
         .find(|(key, _)| input.key_pressed(*key));
-        if let Some((_, tool)) = tool {
+        // 工作区白名单（2026-10-28 裁定⑤）：白名单外的热键不排队（分发器
+        // 有终审闸门，这里拦掉免得弹报错打扰）。
+        if let Some((_, tool)) = tool.filter(|(_, t)| t.available_in(view.mode)) {
             palette.pending = Some(CommandId::SelectMapTool(tool));
         }
         // G：参照网格开关（ADR-0043 把网格瓷砖留在工具条末位，给它配同款

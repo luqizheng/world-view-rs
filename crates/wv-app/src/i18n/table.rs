@@ -470,6 +470,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CmdMapProperties => "地图属性…",
         I18nKey::ProjectMenuMapProperties => "地图属性…",
         I18nKey::MapControlsPlaybackLocked => "时间轴播放中，暂停后可编辑",
+        I18nKey::MapControlsWorkspaceLocked => "在 CellMap 工作区可用",
         I18nKey::MapControlsNeedMap => "请先打开一张地图",
 
         // ── ui_shell 通知 ──
@@ -1184,6 +1185,7 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CmdMapProperties => "Map Properties\u{2026}",
         I18nKey::ProjectMenuMapProperties => "Map Properties\u{2026}",
         I18nKey::MapControlsPlaybackLocked => "Timeline is playing — pause to edit",
+        I18nKey::MapControlsWorkspaceLocked => "Available in the CellMap workspace",
         I18nKey::MapControlsNeedMap => "Open a map first",
 
         // ── ui_shell toasts ──

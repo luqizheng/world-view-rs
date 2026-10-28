@@ -299,7 +299,11 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         false, // MapFrame
         false, // Veil
         false, // Grain
-        false, // Roads
+        // Roads **2026-10-28 由 false 改 true**（用户裁定②：CellMap 要看
+        // 道路和河流——改地形时要有线网参照。**修订 ADR-0039** 的关灯表；
+        // 河流 Rivers 本行本就 true，POI 走 landmark pin 合批不占本格，
+        // Streets/标签维持关。）
+        true,  // Roads
         false, // Streets
         false, // Poi
         false, // Buildings

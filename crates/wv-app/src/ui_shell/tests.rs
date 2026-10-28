@@ -579,6 +579,9 @@ fn point_select_and_edit_cell_are_independent_tools() {
         false,
         CommandId::SelectMapTool(MapToolId::PointSelect),
     );
+    // 工作区白名单（ADR-0080）：EditCell 是 CellMap 工具，夹具进 Topographic
+    // 档（点选三档公共，不受影响）。
+    world.resource_mut::<ViewState>().mode = wv_render::state::ViewMode::Topographic;
     world
         .run_system_once(apply_pending_commands)
         .expect("系统运行失败");
@@ -644,6 +647,8 @@ fn line_poi_split_menu_switches_kind() {
         false,
         CommandId::SelectMapTool(MapToolId::LinePoi(LineKind::River)),
     );
+    // 工作区白名单（ADR-0080）：LinePoi 只在 Map 档可激活——夹具进 GoogleMap。
+    world.resource_mut::<ViewState>().mode = wv_render::state::ViewMode::GoogleMap;
     // 档位前置（T10 评审 minor ② 兜底落地后）：线段 POI 仅 Edit 档可激活，
     // 缺省 ViewState scale=1.0 是 Region 档——本测激活语义，先放大进 Edit 档。
     world.resource_mut::<ViewState>().scale = 0.5;
@@ -725,6 +730,9 @@ fn line_poi_command_rejected_outside_edit_tier() {
 
     let cmd = || CommandId::SelectMapTool(MapToolId::LinePoi(LineKind::River));
     let mut world = dispatcher_world(None, false, cmd());
+    // 工作区白名单（ADR-0080）：LinePoi 属 Map 档——夹具进 GoogleMap，让
+    // 本测继续专测**档位闸**（scale），与工作区闸正交。
+    world.resource_mut::<ViewState>().mode = wv_render::state::ViewMode::GoogleMap;
     // 缺省 scale=1.0 = Region 档：激活必须被拒（工具不开、面板不开）。
     world
         .run_system_once(apply_pending_commands)
@@ -801,4 +809,24 @@ fn switching_from_point_select_to_edit_cell_keeps_selection() {
     let sel = world.resource::<crate::state::CellSelection>();
     assert_eq!(sel.len(), 3, "切工具不得清掉统一选区");
     assert!(sel.contains(7, 9) && sel.contains(0, 0) && sel.contains(1, 0));
+}
+
+/// 工作区白名单闸（ADR-0080 裁定⑤）：Browse 档发 CellMap 工具（EditCell）
+/// 必须被拒——工具不开、发 notice；白名单闸与播放/档位闸正交叠加。
+#[test]
+fn workspace_whitelist_rejects_cellmap_tool_in_browse() {
+    use crate::ui_command_palette::MapToolId;
+    use bevy::ecs::system::RunSystemOnce;
+
+    // dispatcher_world 缺省 mode = VectorFlat（Browse 档）。
+    let mut world = dispatcher_world(None, false, CommandId::SelectMapTool(MapToolId::EditCell));
+    world
+        .run_system_once(apply_pending_commands)
+        .expect("系统运行失败");
+    assert!(
+        !world
+            .resource::<wv_render::state::EditCellState>()
+            .tool_active,
+        "Browse 档不得激活 CellMap 专属工具（白名单闸）"
+    );
 }

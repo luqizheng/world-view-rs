@@ -816,6 +816,8 @@ pub enum I18nKey {
     StatusBarStrokeCells,
     /// 播放中工具灰化的 tooltip（[ADR-0052] §9.4 Gate-1）
     MapControlsPlaybackLocked,
+    /// 工作区白名单外工具灰化的 tooltip（2026-10-28 裁定⑤）
+    MapControlsWorkspaceLocked,
     /// 无地图时空态提示（[ADR-0052] §9.4 Gate-2）
     MapControlsNeedMap,
 
@@ -1357,7 +1359,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 554] = [
+    pub const ALL: [I18nKey; 555] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1744,6 +1746,7 @@ impl I18nKey {
         I18nKey::StatusBarStrokeProgress,
         I18nKey::StatusBarStrokeCells,
         I18nKey::MapControlsPlaybackLocked,
+        I18nKey::MapControlsWorkspaceLocked,
         I18nKey::MapControlsNeedMap,
         // ui_shell 通知（16）
         I18nKey::NoticeSavedToPrefix,

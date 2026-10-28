@@ -313,8 +313,19 @@ pub(crate) fn apply_pending_commands(
     match id {
         CommandId::SetViewMode(i) => {
             // 索引对 `BROWSING` 而不是 `ALL`：命令面板 / 快捷键只开放两种浏览模式
-            // （2026-10-14 用户裁定），索引语义必须与列表来源一致。
+            // （2026-10-14 用户裁定；2026-10-28 Faction 退出后 BROWSING=Browse/Map
+            // 两项），索引语义必须与列表来源一致。
             if let Some(m) = crate::state::ViewMode::BROWSING.get(i as usize) {
+                // 若在 CellMap 工作区，先走**统一退出**（还原面板快照 + 关
+                // EditCell）再切模式——2026-10-28 修：此前直写 `view.mode`
+                // 绕过编排，快照泄漏（Inspector 持续隐藏、势力层/事态页签
+                // 持续禁用，实机「回来势力选择器没了」根因）。
+                if *m != wv_render::state::ViewMode::Topographic {
+                    crate::ui_command_palette::exit_cellmap_workspace(
+                        &mut panels,
+                        Some(&mut palette),
+                    );
+                }
                 view.mode = *m;
             }
         }
@@ -414,6 +425,19 @@ pub(crate) fn apply_pending_commands(
                 MapToolId::LinePoi(kind) => line_poi.tool_active && line_poi.kind == kind,
                 MapToolId::Landmark => landmark.placing,
             };
+
+            // 工作区白名单终审（2026-10-28 裁定⑤）：工具条灰化 / 快捷键拦截 /
+            // 命令面板隐藏只是 UX 层，这里才是闸门——白名单外的工具**开启**
+            // 一律拒绝并提示（防 HTTP 探针 / 旧布局残留绕过）。**关闭不拦**：
+            // 工作区退出编排排的 `SelectMapTool(EditCell)` 就是关动作，拦了
+            // 它会把退出搞成半残 + 弹一条无端报错。
+            if !tool.available_in(view.mode) && !already_on {
+                notice.error(
+                    "该工具不在当前工作区（CellMap 编辑工具请先切到 CellMap）",
+                    240,
+                );
+                return;
+            }
 
             if matches!(tool, MapToolId::Continent) {
                 // 「生成大陆」是开门动作，不是互斥工具：沿用旧语义——只开面板 +

@@ -151,3 +151,13 @@ tests                                :: mode 表测 +1;percentile 求值 +1;topo
 
 - 用户在对话中明确复述「同意 ADR-0039，按此实施」即转 §状态为「已接受」
 - 转「已接受」后，本 ADR 正文**不再修改**；后续推翻需新开 ADR（AGENTS §6.4）
+
+## 8. 追记（2026-10-28，只增不改）：关灯表修订——CellMap 开道路
+
+用户裁定（2026-10-28 实机验收轮「②可以」）：**CellMap 要看道路和河流**——
+改地形时要有线网参照。`MODE_TABLE` 的 Topographic 行 **Roads 由 false 改
+true**（`crates/wv-render/src/recipe.rs`）；河流 `Rivers` 本行原本就 true，
+POI 不占 `Poi` 格（走 landmark map-pin 合批），`Streets` / 标签 / 测量维持关。
+伴随修订：`vector_layers` 的行为测试由「道路/街网/POI 零 mesh」改为
+「道路 1 mesh + pin 合批；街网/POI 标签仍零 mesh」。本追记与
+ADR-0080（工作区功能分区与工具白名单）同轮。

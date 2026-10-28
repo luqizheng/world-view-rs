@@ -167,6 +167,12 @@ pub fn handle_ui_request(
         UiRequest::GetState => Some(UiReply::State(ui_snapshot(view, panels))),
         UiRequest::SetViewMode { mode } => match parse_view_mode(&mode) {
             Some(m) => {
+                // 从 CellMap 工作区切走：还原面板快照（2026-10-28 旁路泄漏
+                // 根修——与顶栏/快捷键/命令面板同一退出入口；palette 传
+                // None，EditCell 工具关闭由用户下一次切工具时的互斥全关兜底）。
+                if m != wv_render::state::ViewMode::Topographic {
+                    crate::ui_command_palette::exit_cellmap_workspace(panels, None);
+                }
                 view.mode = m;
                 Some(UiReply::State(ui_snapshot(view, panels)))
             }

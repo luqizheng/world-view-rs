@@ -17,7 +17,7 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use crate::i18n::CurrentLocale;
-use crate::state::{RecentProjects, WorldProjection};
+use crate::state::{RecentProjects, ViewState, WorldProjection};
 use crate::theme::ui_theme::{mono, UiShellConfig};
 use crate::theme::ui_tokens::{radius, space};
 use crate::ui_command_palette::CommandPalette;
@@ -33,6 +33,7 @@ pub fn command_palette(
     recents_res: Res<RecentProjects>,
     mut palette: ResMut<CommandPalette>,
     current_loc: Res<CurrentLocale>,
+    view: Res<ViewState>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     // 「最近工程」是动态命令，每次绘制时按当前工程展开（v0.2 §C）。
@@ -86,7 +87,7 @@ pub fn command_palette(
                 .show(ui, &shell);
             ui.add_space(space::SM);
 
-            let results = palette.results_with_locale(&recents, current_loc.0);
+            let results = palette.results_with_locale(&recents, current_loc.0, view.mode);
             if results.is_empty() {
                 ui.label(
                     egui::RichText::new("无匹配命令")
@@ -105,7 +106,7 @@ pub fn command_palette(
                             );
                             if row.clicked() {
                                 palette.selected = i;
-                                palette.run_selected(&recents);
+                                palette.run_selected(&recents, view.mode);
                             }
                             // 快捷键（右侧等宽小字）。
                             if let Some(k) = cmd.keys {
@@ -133,7 +134,7 @@ pub fn command_palette(
             } else if input.key_pressed(egui::Key::ArrowUp) {
                 palette.selected = palette.selected.saturating_sub(1);
             } else if input.key_pressed(egui::Key::Enter) {
-                palette.run_selected(&recents);
+                palette.run_selected(&recents, view.mode);
             }
         });
 }

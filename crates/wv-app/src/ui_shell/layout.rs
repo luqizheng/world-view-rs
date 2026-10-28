@@ -145,6 +145,13 @@ pub(crate) fn persist_layout_on_change(
         changed = true;
     }
     for p in Panel::ALL {
+        // CellMap 工作区守卫（2026-10-28 修）：进工作区时全部面板被编排性
+        // 隐藏（快照在 `cell_workspace_backup`）——隐藏态是**临时**的，不得
+        // 记盘（否则退出后一重启，Inspector 等面板就永久消失）。工作区内
+        // 仍可见的面板（笔刷/地标窗）照常记几何。
+        if panels.cell_workspace_backup.is_some() && !panels.is_visible(p) {
+            continue;
+        }
         let id = bevy_egui::egui::Id::new(("wv_panel", p));
         let rect = ctx
             .memory(|m| m.area_rect(id))

@@ -257,13 +257,9 @@ fn browse_edit_segment(
                 // ── CellMap：进/出工作区 ──
                 if view.mode == ViewMode::Topographic {
                     // 已在工作区 → 退出：还原面板快照 + 关 EditCell 工具
-                    // （排 toggle 语义的 SelectMapTool，分发器统一关）。
-                    if let Some(backup) = panels.cell_workspace_backup.take() {
-                        for (p, v) in backup {
-                            panels.set_visible(p, v);
-                        }
-                    }
-                    palette.pending = Some(CommandId::SelectMapTool(MapToolId::EditCell));
+                    // （统一走 `exit_cellmap_workspace`——快捷键/命令面板/HTTP
+                    // 同一入口，2026-10-28 旁路泄漏根修）。
+                    crate::ui_command_palette::exit_cellmap_workspace(panels, Some(palette));
                     // 2026-10-26（ADR-0068）：Edit 段移除，退出回落到 Map
                     // （原回落 Schematic，该段已不在顶栏）。
                     view.mode = ViewMode::GoogleMap;
@@ -292,13 +288,7 @@ fn browse_edit_segment(
                 }
             } else {
                 // ── Browse / Map / Edit：先退工作区（若在），再切底图模式 ──
-                if let Some(backup) = panels.cell_workspace_backup.take() {
-                    for (p, v) in backup {
-                        panels.set_visible(p, v);
-                    }
-                    // 从 CellMap 切走：关 EditCell 工具（toggle）。
-                    palette.pending = Some(CommandId::SelectMapTool(MapToolId::EditCell));
-                }
+                crate::ui_command_palette::exit_cellmap_workspace(panels, Some(palette));
                 view.mode = target;
             }
         },
