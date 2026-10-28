@@ -2837,10 +2837,14 @@ mod tests {
         schedule.run(&mut world);
 
         let mesh_count = world.resource::<Assets<Mesh>>().iter().count();
+        // 道路天生 casing + fill 双层（文件头「道路 casing/fill」——双层是
+        // 「粗细差即路缘」的口径，非 Google 主题也是双层），故 3 = 路 casing
+        // + 路 fill + pin。20f48d8 写「道路 1 条 mesh」数漏了一层；本测试
+        // 当时被 20 处编译债挡着从未运行，2026-10-29 清债首跑即暴露。
         assert_eq!(
-            mesh_count, 2,
-            "Topographic 下道路 1 条 mesh + 地物符号 1 个 map-pin 合批（2026-10-28 \
-             裁定②后 Roads 开灯；街网/POI 标签仍不得产 mesh）"
+            mesh_count, 3,
+            "Topographic 下道路 casing+fill 2 条 mesh + 地物符号 1 个 map-pin 合批 \
+             （2026-10-28 裁定②后 Roads 开灯；街网/POI 标签仍不得产 mesh）"
         );
     }
 
