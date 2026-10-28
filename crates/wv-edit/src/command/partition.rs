@@ -344,12 +344,21 @@ impl CutPartitionFaceCommand {
             return Err(EditError::Precondition("笔画至少两点".into()));
         }
         let pts: Vec<(f32, f32)> = self.stroke.chunks_exact(2).map(|c| (c[0], c[1])).collect();
-        let start = snap_endpoint_to_ring(ring_xy, pts[0], self.snap_tol).ok_or_else(|| {
-            EditError::Precondition("笔画起点不在脸边界上（吸附容差内无交）".into())
-        })?;
-        let end = snap_endpoint_to_ring(ring_xy, *pts.last().expect("≥2 点"), self.snap_tol)
+        // 两级吸附：① 严格（snap_tol 内）直接用；② 失败则**投影**到最近的
+        // 边界边（上限 snap_tol×20 = 调用方 4px 时的 80px）——切割工具的
+        // 标准交互：作者画「从边到边」的意图线，端点不必精确压线。
+        let project = |endpoint: (f32, f32)| -> Option<(usize, f32)> {
+            snap_endpoint_to_ring(ring_xy, endpoint, self.snap_tol * 20.0)
+        };
+        let start = snap_endpoint_to_ring(ring_xy, pts[0], self.snap_tol)
+            .or_else(|| project(pts[0]))
             .ok_or_else(|| {
-                EditError::Precondition("笔画终点不在脸边界上（吸附容差内无交）".into())
+                EditError::Precondition("笔画起点离地块边界太远（80px 内无边界可吸）".into())
+            })?;
+        let end = snap_endpoint_to_ring(ring_xy, *pts.last().expect("≥2 点"), self.snap_tol)
+            .or_else(|| project(*pts.last().expect("≥2 点")))
+            .ok_or_else(|| {
+                EditError::Precondition("笔画终点离地块边界太远（80px 内无边界可吸）".into())
             })?;
         Ok([start, end])
     }
@@ -1108,6 +1117,47 @@ mod cut_tests {
             1,
             "Err 时脸数不变"
         );
+    }
+
+    #[test]
+    fn endpoint_inside_face_projects_to_nearest_edge() {
+        // 端点在面内部 30px（>4px 严格容差，<80px 投影上限）→ 自动吸到
+        // 最近边界，切分成功。
+        let mut world = world_with_square();
+        let cmd = CutPartitionFaceCommand::new(
+            test_map(),
+            Id::new_unchecked(LAYER),
+            0,
+            0,
+            vec![30.0, 10.0, 70.0, 90.0],
+            [40.0, 50.0],
+            Some(Id::new_unchecked("faction_b")),
+            4.0,
+        );
+        let dirty = cmd.apply(&mut world).expect("投影后应切分成功");
+        assert_eq!(dirty, vec!["partitions".to_string()]);
+        let span = &world.partitions[0].spans[0];
+        assert_eq!(span.faces.len(), 2, "一分为二");
+        span.validate_topology().expect("投影切分后拓扑自检");
+    }
+
+    #[test]
+    fn endpoint_far_beyond_project_limit_errors() {
+        // 端点深入面内部超过投影上限（snap_tol=1 → 上限 20px；端点距边
+        // 45px+）→ 仍 Err。
+        let mut world = world_with_square();
+        let cmd = CutPartitionFaceCommand::new(
+            test_map(),
+            Id::new_unchecked(LAYER),
+            0,
+            0,
+            vec![50.0, 45.0, 52.0, 55.0],
+            [50.0, 50.0],
+            None,
+            1.0,
+        );
+        assert!(cmd.apply(&mut world).is_err(), "超出投影上限应 Err");
+        assert_eq!(world.partitions[0].spans[0].faces.len(), 1);
     }
 
     #[test]

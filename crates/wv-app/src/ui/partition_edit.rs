@@ -203,6 +203,8 @@ pub fn partition_edit_hud(
 /// 就行；命令侧 Err 是兜底不是 UX）。
 #[allow(clippy::too_many_arguments)]
 pub fn partition_cut_gesture(
+    mut gizmos: bevy::prelude::Gizmos,
+    time: Res<bevy::prelude::Time>,
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     view: Res<ViewState>,
@@ -311,6 +313,48 @@ pub fn partition_cut_gesture(
             }
         }
     }
+
+    // ── 笔迹预览：采集中画当前折线（世界坐标 gizmo——可见反馈，作者才
+    // 知道系统在采集、两端是否贴到了边界）。
+    // 编辑态常显：当前层所有脸的边界用**闪烁红线**描出——作者要先看见
+    // 「能切的地方」，才知道笔画两端该压在哪。
+    {
+        let map_id = wv_core::Id::new_unchecked(view.current_map.clone());
+        if let Some(span) =
+            wv_core::partition_span_at(&projection.world, &map_id, &layer_id, playback.current_day)
+        {
+            let t = time.elapsed_secs_f64();
+            // 1Hz 方波闪烁（亮 0.5s / 暗 0.5s），亮度在两档间插值。
+            let blink = ((t * 2.0).sin() * 0.5 + 0.5) as f32; // 0..1 平滑
+            let alpha = 0.35 + 0.65 * blink;
+            let color = bevy::color::Color::srgba(1.0, 0.15, 0.15, alpha);
+            for face in &span.faces {
+                let ring_xy: Vec<Vec2> = face
+                    .ring
+                    .iter()
+                    .filter_map(|id| span.vertices.iter().find(|v| v.id == *id))
+                    .map(|v| Vec2::new(v.xy[0], v.xy[1]) + grid.raster_origin)
+                    .collect();
+                for pair in ring_xy.windows(2) {
+                    gizmos.line_2d(pair[0], pair[1], color);
+                }
+                // 闭合段。
+                if let (Some(first), Some(last)) = (ring_xy.first(), ring_xy.last()) {
+                    gizmos.line_2d(*last, *first, color);
+                }
+            }
+        }
+    }
+
+    if session.active && session.pts.len() >= 4 {
+        for seg in session.pts.chunks_exact(4) {
+            gizmos.line_2d(
+                Vec2::new(seg[0], seg[1]) + grid.raster_origin,
+                Vec2::new(seg[2], seg[3]) + grid.raster_origin,
+                bevy::color::Color::srgb(1.0, 0.78, 0.16),
+            );
+        }
+    }
 }
 
 /// 切后归属小窗状态（D7：点选半 → 弹窗选既有势力 / 新建 / 无主）。
@@ -341,6 +385,9 @@ pub fn partition_pick_dialog(
     view: Res<ViewState>,
     mut projection: ResMut<WorldProjection>,
     mut edit: ResMut<EditHistory>,
+    mut notice: ResMut<crate::ui_shell::ShellNotice>,
+    playback: Res<PlaybackState>,
+    time: Res<bevy::prelude::Time>,
 ) {
     if !pick.open {
         return;
@@ -465,8 +512,16 @@ pub fn partition_pick_dialog(
             Ok(dirty) => {
                 edit.record_dirty(dirty);
                 projection.dirty = true;
+                notice.info("切分成功", (time.elapsed_secs() * 60.0) as u64);
             }
-            Err(e) => bevy::log::warn!("切分提交失败: {e}"),
+            Err(e) => {
+                // V1-UX：失败必须可见——静默丢弃让作者以为工具坏了。
+                notice.error(
+                    format!("切分失败：{e}（笔画两端须落在地块边界线上）"),
+                    (time.elapsed_secs() * 60.0) as u64,
+                );
+                bevy::log::warn!("切分提交失败: {e}");
+            }
         }
         pick.open = false;
         pick.pending_face = None;
