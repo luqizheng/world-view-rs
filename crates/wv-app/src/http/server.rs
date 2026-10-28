@@ -249,7 +249,7 @@ mod tests {
     /// 都会被这条用例捕到。生产路径的端口绑定走 `start_mcp_server`，
     /// 已在另外的测试覆盖（绑定失败 stderr + 退出）。
     #[tokio::test]
-    async fn end_to_end_post_mcp_tools_list_returns_thirteen_skills() {
+    async fn end_to_end_post_mcp_tools_list_returns_fifteen_skills() {
         use axum::body::Body;
         use axum::http::{Request, StatusCode};
         use tower::util::ServiceExt;
@@ -308,10 +308,12 @@ mod tests {
                 "list_places",
                 "get_place",
                 "get_state_at_time",
+                "get_naming_context",
                 "create_map",
                 "create_place",
                 "undo",
                 "save_project",
+                "set_nature_names",
                 "get_ui_state",
                 "set_view_mode",
                 "set_panel_visible",
@@ -472,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_thirteen_tools() {
+    fn tools_list_returns_fifteen_tools() {
         let (state, _rx) = app_state();
         let (_status, AxJson(resp)) = rt().block_on(mcp_handler(
             State(state.clone()),
