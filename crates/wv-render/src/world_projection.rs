@@ -2690,7 +2690,10 @@ mod tests {
     fn probe_gizmo_line_width_sync() {
         use bevy::gizmos::config::{DefaultGizmoConfigGroup, GizmoConfigStore};
         let mut app = App::new();
-        app.insert_resource(ViewState { scale: 0.25, ..Default::default() });
+        app.insert_resource(ViewState {
+            scale: 0.25,
+            ..Default::default()
+        });
         app.init_resource::<crate::state::PinDragState>();
         app.init_gizmo_group::<DefaultGizmoConfigGroup>();
         app.add_systems(Update, crate::world_projection::sync_gizmo_line_width);
@@ -2703,4 +2706,4 @@ mod tests {
             cfg.line.width
         );
     }
-
+}
