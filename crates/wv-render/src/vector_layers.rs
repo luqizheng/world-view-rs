@@ -1967,6 +1967,12 @@ fn points_fingerprint_dots(
             hash ^= u64::from(v.to_bits());
             hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
         }
+        // 选中态入指纹（[ADR-0074] 追记三 followup）：选中/取消选中必须
+        // 触发重批——否则金色钉要等位置变化（拖动）才换上（2026-10-28 实机）。
+        if d.selected {
+            hash ^= 0xFF00_FF00_FF00_FF00;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
     }
     hash
 }
@@ -2026,11 +2032,60 @@ mod tests {
         moved[0].pos = Vec2::new(11.0, 20.0);
         assert_ne!(
             plain.fingerprint,
-            landmark_batch_key(&moved, LandmarkKind::Citadel, false, 1.0, 5.0).fingerprint
+            landmark_batch_key(
+                &moved,
+                crate::world_projection::LandmarkKind::Citadel,
+                false,
+                1.0,
+                5.0
+            )
+            .fingerprint
         );
         assert_ne!(
             plain.world_thickness,
             landmark_batch_key(&dots, LandmarkKind::Citadel, false, 2.0, 5.0).world_thickness
+        );
+    }
+    /// [ADR-0074 追记三 followup] selected 翻转必须改 batch key——否则金色
+    /// 选中钉要等位置变化才出现（2026-10-28 实机症状的回归守点）。
+    #[test]
+    fn landmark_batch_key_changes_when_selection_flips() {
+        use crate::world_projection::LandmarkDot;
+        let mk = |selected: bool| LandmarkDot {
+            pos: Vec2::new(10.0, 20.0),
+            kind: crate::world_projection::LandmarkKind::Citadel,
+            selected,
+        };
+        let dots_plain = vec![mk(false)];
+        let dots_selected = vec![mk(true)];
+        let a = landmark_batch_key(
+            &dots_plain,
+            crate::world_projection::LandmarkKind::Citadel,
+            false,
+            1.0,
+            0.0,
+        );
+        let b = landmark_batch_key(
+            &dots_selected,
+            crate::world_projection::LandmarkKind::Citadel,
+            false,
+            1.0,
+            0.0,
+        );
+        assert_ne!(a, b, "选中翻转应改变 batch key");
+        // 位置也要参与（既有语义不回退）。
+        let mut moved = dots_selected.clone();
+        moved[0].pos = Vec2::new(99.0, 99.0);
+        assert_ne!(
+            b,
+            landmark_batch_key(
+                &moved,
+                crate::world_projection::LandmarkKind::Citadel,
+                false,
+                1.0,
+                0.0
+            ),
+            "位置变化仍须改 key"
         );
     }
 
