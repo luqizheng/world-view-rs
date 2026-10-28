@@ -56,6 +56,8 @@ use wv_world_cell_map::terrain_view::field::{
     H_MAX, H_MIN,
 };
 use wv_world_cell_map::terrain_view::hypsometric;
+// ADR-0077：晕渲法线的米制换算唯一入口（格距 + 比例尺 → 米/格）。
+use wv_world_cell_map::shading::meters_per_cell_of;
 
 /// `ViewMode → ShadeMode` 唯一映射点。
 pub fn shade_mode_of(mode: crate::state::ViewMode) -> ShadeMode {
@@ -1408,6 +1410,10 @@ pub struct TerrainFieldRender {
     /// 上次写进 uniform 的 `px_per_cell`——用来判断「要不要重传 uniform」。
     /// **只做比较、不进 [`FieldKey`]**。
     last_ppc: Option<f32>,
+    /// 上次写进 uniform 的「米/格」（ADR-0077 晕渲米制槽 `light_dir.w`）。
+    /// 同 `last_ppc`：只做比较、不进键——比例尺（换图）或格距变化只改
+    /// uniform，不必重打 12 MB 数据纹理。
+    last_mpc: Option<f32>,
     /// 上次写进 uniform 的分层设色强度（ADR-0055）。同 `last_ppc`：只做比较，
     /// **不进键**——拖滑条只改 uniform，不重打 12 MB 数据纹理。
     last_hypsometric: Option<f32>,
@@ -1583,12 +1589,24 @@ fn teardown_field(
     }
     field.key = None;
     field.last_ppc = None;
+    field.last_mpc = None;
     field.last_hypsometric = None;
     field.cuts = None;
     // 12 MB 的 CPU 影子副本随场一起释放：关掉场还攥着上一张图的字节，
     // 既白占内存，也会让「下次开场的第一次补丁」用上过期数据。
     field.pack = None;
     stats.field_quads = 0;
+}
+
+/// 桥接侧「格距 + 比例尺 → 米/格」的纯缝（ADR-0077 D2）。
+///
+/// 从 [`sync_terrain_field`] 的内联填充抽出——本体委托 [`meters_per_cell_of`]：
+/// 比例尺（`unit_per_km`，地图声明的 km/wu）精确换算，未声明走「1 wu = 1 m」
+/// 回落（README §12-53 待决）。抽这一层不引入新语义，为的是让「桥接用的是
+/// 哪条入口、喂的是**来源图**的比例尺」这件事不经 Bevy App 就能被测试锁住
+/// （终审 M-1 修法 A / plan T5 声明的 bridge mpc 测试落点）。
+fn bridge_meters_per_cell(cell_size: f32, unit_per_km: Option<f32>) -> f32 {
+    meters_per_cell_of(cell_size, unit_per_km)
 }
 
 /// 主 App 的场渲染同步（ADR-0053 D1，Phase 1 接线 2026-10-24）。
@@ -1695,6 +1713,14 @@ pub fn sync_terrain_field(
     // 屏幕像素 / 格：`ViewState.scale` 的语义是「世界单位 / 屏幕像素」，
     // 故 ppc = 格的世界尺寸 / scale（demo 里一格 = 1 世界单位，同一个式子）。
     let px_per_cell = (cell_size / view.scale.max(1e-6)).max(1e-4);
+    // ── 米/格（ADR-0077 D2）：晕渲法线米制换算的唯一入口 ──
+    // 地形来源图（`active_terrain` 沿 parent 向上继承的那张，`source` 即其
+    // MapNode）声明了比例尺 → 精确换算；未声明走「1 wu = 1 m」回落
+    // （README §12-53 待决；与 CPU 烘焙路径同一条入口、同一回落假设）。
+    let meters_per_cell = bridge_meters_per_cell(cell_size, source.unit_per_km);
+    let mpc_changed = field
+        .last_mpc
+        .is_none_or(|last| (last - meters_per_cell).abs() > 1e-6);
 
     let content_changed =
         cached_hash != Some(terrain_hash) || field.key.as_ref().is_some_and(|k| k.map != map);
@@ -1803,6 +1829,9 @@ pub fn sync_terrain_field(
                 [0.0; 7]
             };
             apply_hypsometric(&mut params, &cuts_norm, view.hypsometric_tint);
+            // ADR-0077 D2：米/格写进 `light_dir.w`（WGSL 侧 `mpc` 槽；≤ 0 = 未
+            // 接线回落 1.0——`default_params` 的 0 占位在此被真值替换）。
+            params.light_dir.w = meters_per_cell;
             let material = materials.add(build_material(&mut images, &pack, params));
 
             if let Some(entity) = field.quad {
@@ -1836,6 +1865,7 @@ pub fn sync_terrain_field(
             field.pack = Some(pack);
             // uniform 已随新材质写入，记下当前 ppc 免得下面再传一次。
             field.last_ppc = Some(px_per_cell);
+            field.last_mpc = Some(meters_per_cell);
             field.last_hypsometric = Some(view.hypsometric_tint);
             field.cuts = Some(cuts_norm);
 
@@ -1876,7 +1906,8 @@ pub fn sync_terrain_field(
     let hyps_changed = field
         .last_hypsometric
         .is_none_or(|last| (last - view.hypsometric_tint).abs() > 1e-6);
-    if (ppc_changed || structure_changed || hyps_changed) && field.material.is_some() {
+    if (ppc_changed || structure_changed || hyps_changed || mpc_changed) && field.material.is_some()
+    {
         let handle = field.material.clone().expect("刚判过 is_some");
         if let Some(mut material) = materials.get_mut(&handle) {
             // shape: x = px_per_cell / y = 分支 / z = z_exag / w = grad_step（后两者
@@ -1886,6 +1917,10 @@ pub fn sync_terrain_field(
                 ViewBranch::BiomeRaw => 0.0,
                 ViewBranch::Themed => 1.0,
             };
+            // ADR-0077 D2：米/格槽随格距 / 比例尺变化重写（真源与重打路径
+            // 同一条 `meters_per_cell_of`；增量补丁路径不动 uniform，槽值
+            // 沿用建材质时的真值，无需重填）。
+            material.params.light_dir.w = meters_per_cell;
             // T19 域扭曲幅度（P1 预留槽 `pad0.x`）：随缩放重算。
             material.params.pad0[0] = warp_amp(px_per_cell);
             // 主题色板（T35）：P1 用 `TopographicPalette` 四色的默认转录——
@@ -1909,6 +1944,7 @@ pub fn sync_terrain_field(
             }
             field.last_hypsometric = Some(view.hypsometric_tint);
             field.last_ppc = Some(px_per_cell);
+            field.last_mpc = Some(meters_per_cell);
         }
     }
 
@@ -3008,6 +3044,24 @@ mod bridge_tests {
             "换模式（换眼镜）不应生成第二个淡出精灵"
         );
     }
+
+    /// 桥接的米/格填充（ADR-0077 D2）：比例尺精确换算 + 未声明回落。
+    ///
+    /// `sync_terrain_field` 把「来源图比例尺 + 格距」经
+    /// [`bridge_meters_per_cell`] 算出的米/格写进 uniform `light_dir.w`
+    /// （WGSL 侧 `mpc` 槽）。本测试锁两个口径：
+    /// 声明比例尺走精确换算；未声明回落「1 wu = 1 m」（README §12-53 待决，
+    /// 口径若静默更改，此测试应当先红）。
+    #[test]
+    fn bridge_fills_meters_per_cell_from_map_scale() {
+        // `Some(8.0)` = 「1 km = 8 wu」→ 1 wu = 125 m → 100 wu 格 = 12500 m/格。
+        let scaled = bridge_meters_per_cell(100.0, Some(8.0));
+        assert!((scaled - 12500.0).abs() < 1e-6, "got {scaled}");
+        // 未声明比例尺 → 回落：100 wu 格 = 100 m/格（「1 wu = 1 m」假设）。
+        let fallback = bridge_meters_per_cell(100.0, None);
+        assert!((fallback - 100.0).abs() < 1e-6, "got {fallback}");
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;

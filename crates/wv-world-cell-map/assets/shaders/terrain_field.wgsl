@@ -34,12 +34,12 @@
 // vec3 在 std140 下补到 16 字节；这里用 vec4 分组避免隐式 padding 错位。
 struct FieldParams {
     grid: vec4<f32>,        // xy = 格宽/格高
-    shape: vec4<f32>,       // x = px_per_cell, y = branch, z = z_exag, w = grad_step
+    shape: vec4<f32>,       // x = px_per_cell, y = branch, z = z_exag（= shading::Z_EXAG，米制口径）, w = grad_step（死槽）
     pad0: vec4<f32>,
-    light_dir: vec4<f32>,   // xyz = 光源方向, w = 预留
+    light_dir: vec4<f32>,   // xyz = 主光 L₁（= shading::LIGHT_MAIN 真 45° 单位向量）, w = 米/格（桥接填 meters_per_cell_of；≤0 回落 1.0）
     pad1: vec4<f32>,
     shore_edges: vec4<f32>, // x = 1（滩）, y = 3（浅）, z = 9（深）, w = wash_amt
-    relief: vec4<f32>,      // xy = 明暗钳制, z = lod_blend, w = 预留
+    relief: vec4<f32>,      // x = AMBIENT, y = DIFFUSE_MAIN, z = DIFFUSE_AUX（= shading:: 三光系数，和 = 1）, w 预留
     // 主题四阶色：[0]=water [1]=land_low [2]=land_mid [3]=land_high
     theme: array<vec4<f32>, 4>,
     ink: vec4<f32>,
@@ -49,6 +49,10 @@ struct FieldParams {
     elev_cuts: array<vec4<f32>, 2>,
     // 8 阶固定色带（低 → 高，线性空间；sRGB 真源在 Rust 侧 hypsometric）
     elev_ramp: array<vec4<f32>, 8>,
+    // T5 预载槽 → T6 起正式启用：辅光方向 xyz（= Rust 侧 shading::LIGHT_AUX
+    // 真 45° 单位向量），w 预留。双光源明暗公式在下方（常量镜像 shading.rs，
+    // 注释互指）；std140 尾部追加的布局纪律见 material.rs 同名注释。
+    light_aux: vec4<f32>,
 };
 
 // ── 常量（与 material.rs 同源）───────────────────────────────────────────
@@ -94,6 +98,28 @@ const COAST_EDGE_HALF_PX: f32 = 1.0;
 const COAST_ROUND_CELLS: f32 = 0.6;
 /// 高度量程（米）= H_MAX(6000) − H_MIN(-4000)，与 pack.rs 同源。
 const H_RANGE_M: f32 = 10000.0;
+
+// ── 三尺度晕渲常量（Task 7 · ADR-0077 D3；逐值镜像 `shading.rs`，注释互指，
+//    改任何一边必须同步另一边——禁散落字面量，ADR-0077 D2）───────────────────
+/// detail 档 Horn 半径（格）：`r ≤ 1` 经 [`height_blur_at`] 退化为单点
+/// 双线性，即 T6 单尺度口径（无额外低通，Horn 自身的加权平滑负责压噪）。
+/// `shading.rs` 无对应常量——detail 档 = 不低通，是语义锚不是参数。
+const DETAIL_RADIUS_CELLS: f32 = 1.0;
+/// 中观档盒平均半径（格）= `shading::MEDIUM_RADIUS_CELLS`。
+const MEDIUM_RADIUS_CELLS: f32 = 3.0;
+/// 宏观档盒平均半径（格）= `shading::MACRO_RADIUS_CELLS`。
+const MACRO_RADIUS_CELLS: f32 = 12.0;
+/// 宏观档权重 = `shading::W_MACRO`。三权重和 = 1，混合后免钳制
+///（与三光系数同一「和=1 免钳制」纪律，见 shading.rs 模块文档）。
+const W_MACRO: f32 = 0.45;
+/// 中观档权重 = `shading::W_MEDIUM`。
+const W_MEDIUM: f32 = 0.40;
+/// detail 档权重（随缩放衰减）= `shading::W_DETAIL`。
+const W_DETAIL: f32 = 0.15;
+/// detail 衰减起点（px/格）= `shading::DETAIL_FADE_MIN_PX_PER_CELL`。
+const DETAIL_FADE_MIN_PX_PER_CELL: f32 = 1.0;
+/// detail 衰减终点（px/格）= `shading::DETAIL_FADE_MAX_PX_PER_CELL`。
+const DETAIL_FADE_MAX_PX_PER_CELL: f32 = 3.0;
 
 /// T28：水彩幅度（±7% 明度）。< 0.05 看不出，> 0.12 破坏「色块可辨」。
 const WASH_AMT: f32 = 0.07;
@@ -160,24 +186,47 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // T32/T33：`1 = 纯面积平均（远观）`，`0 = 纯双三次（近观）`。
     let lod_t = 1.0 - smoothstep(1.0, 3.0, px_per_cell);
 
-    // ── 亚格高度 + 明暗梯度：一次 4×4 采样出三者（P5，T13/T14–T17）──────
-    // `hg.x` 是高度（与旧双三次逐位同值），`hg.yz` 是解析偏导（米/格）。
+    // ── 亚格高度（取值仍双三次）────────────────────────────────────────
+    // `hg.x` 是高度（与旧双三次逐位同值）。`hg.yz`（解析偏导）已退役不再读
+    // ——梯度改由下方 Horn 3×3 承担（`sample_height_bicubic_grad` 保留值通道）。
     let hg = sample_height_bicubic_grad(pos);
     let h = mix(hg.x, box_avg_height(pos, footprint), lod_t);
 
-    // ── 明暗：解析梯度 × 光源（T14–T17）──────────────────────────────────
-    // 旧写法为中心差分 `(h(p+e) − h(p−e)) / 2e`，为 dx 与 dy 各重取两次
-    // 双三次 = 64 tap；解析偏导与 `h` 共享同一次16 tap，省去全部重采样。
-    let zx = hg.y * H_RANGE_M * p.shape.z;
-    let zy = hg.z * H_RANGE_M * p.shape.z;
-    let n = normalize(vec3<f32>(-zx, -zy, 1.0));
-    let lambert = clamp(dot(n, normalize(p.light_dir.xyz)), 0.0, 1.0);
-
-    // T17：明暗乘子钳制 —— 陡崖不压黑也不过曝。
-    // 远观把明暗向 1.0 收敛：梯度必须靠双三次算（插值要连续性），但那个
-    // 空间频率在小于 1 px/格 时已超出屏幕能表现的范围，留着只会闪成噪点。
-    // 这与 T33「远观只留色域」一致——山体仍靠三阶色阶读出层次。
-    let relief = mix(mix(p.relief.x, p.relief.y, lambert), 1.0, lod_t);
+    // ── 明暗：三尺度混合（ADR-0077 D1/D2/D3 · Task 7）────────────────────
+    // 公式真源 = `shading.rs`（horn_gradient / lighting_intensity /
+    // scale_weights / 三档常量），本文件内常量与函数与其逐值镜像，两侧
+    // 注释互指——改任何一边必须同步另一边。三档合成落点 = [`tri_scale_relief`]。
+    //
+    // ## 符号锚点（与 `shading.rs::normal_world` 互指，两侧不许各改各的）
+    //
+    // 纹理系 +v = 南、世界系 +y = 北；法线在**构造处翻 y**（`+s·zy`，与
+    // `normal_world` 的 `+s·hy` 逐字同形——zy/hy 同为「行向 / +v 向南」
+    // 梯度），之后才可与世界系 LIGHT_* 直接点积。旧 GPU 路线（≤T33）写
+    // `−zy` 漏翻、受光等效西南——ADR-0077 起两管线统一为**西北受光**。
+    // 两侧若同时翻或不翻，南北光照镜像，视觉验收立刻可察。
+    // 三档法线共用此约定，落点在 [`horn_lighting`]。
+    //
+    // 梯度 = Horn 3×3（米/格，见 [`horn_grad_at`]）；`s = Z_EXAG / 米每格`
+    // （shading::slope_gain_of 同式）——米制化后同物理坡跨图幅同法线。
+    //
+    // 米/格槽：桥接按 `meters_per_cell_of(cell_size, unit_per_km)` 填
+    // `light_dir.w`；≤ 0（未接线 / 无比例尺）回落 1.0。WGSL 无 isFinite，
+    // 但 NaN > 0.0 恒为 false，同样落进回落分支——三种非正常值一并兜住。
+    let mpc = select(1.0, p.light_dir.w, p.light_dir.w > 0.0);
+    let s = p.shape.z / mpc;
+    let relief = tri_scale_relief(pos, s, px_per_cell);
+    //
+    // ## T33「远观关灯」退役 + T6 单尺度的替代（ADR-0077 D3，有意推翻）
+    //
+    // 旧写法（≤T33）在此把 relief 向 1.0 收敛（`mix(..., 1.0, lod_t)`）：
+    // 远观梯度是噪点，留着会闪。ADR-0077 的裁定是**晕渲靠米制化生存**而非
+    // 关灯——米制梯度让「同物理坡 → 同法线」跨缩放成立，远观不再需要把
+    // 明暗整体拉平；T6 曾以单尺度 detail 顶替（只为接通双光公式），Task 7
+    // 起三尺度混合接管「噪声预算换给宏观结构」：detail 权重随 px_per_cell
+    // 衰减、衰减量回流宏观/中观（[`scale_weights`]，曲线与 shading.rs
+    // 同源），远观自然只剩宏观山脉明暗（「缩放到整个州仍见山脉结构」=
+    // 本任务的验收口径）。`lod_t` 对高度 `h` 与 coast 的混合**保留**（那是
+    // 采样口径，不是光照）——relief 与 lod_t 解耦。
 
     // ── 海岸距离场（T3）──────────────────────────────────────────────────
     // 取**原始归一化值**，解码留给下面按编码模式做（`p.pad1.y`）。
@@ -245,13 +294,14 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if (p.shape.y < 0.5) {
         // CellMap / Topographic：**方格数据视图**（追记十七）——own 色直出，
         // 无距离场混合、无轮廓圆角；方格边界 + 全程深浅色带是本分支契约。
-        // 分层设色（ADR-0055）照旧：群系色仍是底，陆格按海拔 8 阶向固定
-        // 色带混合；水格不叠（海拔色带只对陆面有意义）。
+        // 分层设色：群系色仍是底，陆格按海拔向固定色带做**段内连续渐变**
+        // 混合（ADR-0077 对 ADR-0055「8 阶离散」的 CellMap 数据视图修正，
+        // 见 [`elev_ramp_continuous`]）；水格不叠（海拔色带只对陆面有意义，
+        // `is_land` 门已挡）。
         base = biome_raw_approx(biome_id);
         let strength = clamp(p.elev_cuts[1].w, 0.0, 1.0);
         if (is_land && strength > 0.0) {
-            let ramp = elev_ramp_color(elev_band(h));
-            base = mix(base, ramp, strength);
+            base = mix(base, elev_ramp_continuous(h), strength);
         }
     } else {
         // ── 群系填色（ADR-0072 T4，**Themed 专属**）：own / nb 两套
@@ -558,9 +608,12 @@ fn pick4(v: vec4<f32>, i: i32) -> f32 {
     return v.w;
 }
 
-/// Catmull-Rom 双三次（T13）的值与**解析偏导**，一次 4×4 采样同时给出（P5）。
+/// Catmull-Rom 双三次（T13）的高度取值（16 tap，P5 起）。
 ///
-/// 返回 `vec3(h, dh/dx, dh/dy)`，导数单位是「归一化高度 / 格」。
+/// 返回 `vec3(h, dh/dx, dh/dy)`，但**只有 `.x`（值通道）仍在用**——导数通道
+/// 已由 Horn 3×3（[`horn_grad_at`]，ADR-0077 D2）接管，T33/T14 的解析
+/// 梯度口径退役（见下）。值通道保留双三次的理由不变： hillshade 之外的
+/// 高度取值（色带 / 三阶色）要 C1 连续，双线性插值的格边界折痕照样难看。
 ///
 /// ## 坐标约定（**唯一权威，改前先读**）
 ///
@@ -582,26 +635,18 @@ fn pick4(v: vec4<f32>, i: i32) -> f32 {
 /// `gw − 0.5`、attr 落在 `gw`——三套不同配准。fbm 地形平滑，肉眼难判，
 /// 属静默缺陷；现统一为全部在 `gw` 采样。
 ///
-/// ## 为什么能一次采样出三个量
+/// ## 导数通道已退役（ADR-0077）
 ///
-/// 值与两个偏导共享同一个 4×4 窗口与同一次 `height_texel` 取样：
-///   h    = Σᵢⱼ texel(i,j) · wxᵢ(f.x) · wyⱼ(f.y)
-///   ∂h/∂x = Σᵢⱼ texel(i,j) · wx′ᵢ(f.x) · wyⱼ(f.y)
-///   ∂h/∂y = Σᵢⱼ texel(i,j) · wxᵢ(f.x) · wy′ⱼ(f.y)
-/// 旧写法为 h 取 16 tap、再为 dh/dx 中心差分取 2×16、再为 dh/dy 取 2×16，
-/// 共 **80 tap**；现在一次 **16 tap** 同时给出三者。
+/// 函数体仍按 P5 一次 16 tap 算出 `h + 双偏导`（三者共享同一窗口），但调用方
+/// 只取 `.x`：梯度自 ADR-0077 D2 起由 Horn 3×3（[`horn_grad_at`]）统一
+/// 承担——CPU 烘焙与 GPU 场路径共用同一加权核，且 Horn 的中心 4 / 直邻 2 /
+/// 对角 1 平滑对手绘台阶毛刺更稳。`dh/dx / dh/dy` 两通道留在返回值里只为
+/// 不动函数体（导数累加是廉价 ALU，多扫一遍 16 tap 才是贵的那部分，而那
+/// 16 tap 值通道本来就要付）。
 ///
-/// ## 与旧中心差分的差异（**不是等价替换**）
-///
-/// 旧式 `(h(p+e) − h(p−e)) / 2e` 是**数值近似**，误差 O(e²)，且在 `f`
-/// 靠近 0 或 1（格边界）时精度最差：`fract()` 的不连续让 e 附近的
-/// 两点可能落在不同四点窗口，差分实际跨了窗口边界。解析导数没有这个坑——
-/// 它在窗口内处处成立，这正是 T13 买 C1 连续性时想要的东西。
-///
-/// 代价：梯度不再受 `GRAD_STEP`（T14）控制。T14 的作用是让差分步长
-/// 可调以滤高频噪声；解析导数对 16 tap 窗口内的全频段一视同仁。
-/// 远观档的噪声抑制仍由 T33 的 `lod_t → 1` 把 relief 收敛到 1.0 承担，
-/// 故 T14 的意图未被绕过，`grad_step` 槽位保留但不再参与梯度计算。
+/// 旧解析梯度相对中心差分的精度论证（窗口内处处成立、无 fract 跨窗差分坑）
+/// 随 T33/T14 口径一并退役留档；`grad_step`（T14）槽位早已是死槽，现在连
+/// 「梯度不受 GRAD_STEP 控制」的注记对象本身都不再参与晕渲。
 fn sample_height_bicubic_grad(pos: vec2<f32>) -> vec3<f32> {
     let tc = pos - vec2<f32>(0.5);
     let f = fract(tc);
@@ -647,6 +692,50 @@ fn height_at(pos: vec2<f32>) -> f32 {
     return textureSampleLevel(height_tex, height_smp, clamp(pos, vec2<f32>(0.0), g) / g, 0.0).r;
 }
 
+/// Horn 3×3 梯度（ADR-0077 D2）——**晕渲法线的唯一梯度来源**（GPU 侧）。
+///
+/// 公式真源 = `shading.rs::horn_gradient`（CPU 烘焙同款加权核，两侧注释互指，
+/// 换核必须同步）：`[1,2,1]ᵀ·[1,2,1]/8` 加权隔格差分，中心权重 4、直邻 2、
+/// 对角 1 的加权平滑抑制单格噪声（手绘/生成数据的台阶毛刺）。
+///
+/// 返回 `(gx, gy)`，**米/格**（归一化高度差 × `H_RANGE_M` ÷ 8）——与 CPU 侧
+/// 契约同口径，调用方直接 `s = shape.z / 米每格` 进法线公式。
+///
+/// 坐标约定：入参 `pos` 是格坐标（边界空间）；`gy` 沿纹理行向下（**南**）
+/// 增大——`gy > 0` = 高度向南增大，与 CPU 侧行号约定一致。每点走
+/// [`height_blur_at`]（`r ≤ 1` 即 [`height_at`] 双线性、纹素域自动钳界），
+/// 边缘不越界、结果有限。
+///
+/// ## 半径参数 `r`（Task 7 三尺度 · ADR-0077 D3）
+///
+/// `r` = 该档的高度低通半径（格），三档取值见 `DETAIL_RADIUS_CELLS` /
+/// `MEDIUM_RADIUS_CELLS` / `MACRO_RADIUS_CELLS`（镜像
+/// `shading::{MEDIUM,MACRO}_RADIUS_CELLS`；detail 档在 shading.rs 无常量
+/// ——不低通即 detail，语义锚见常量处注释）。
+///
+/// ## `r = 1` 档 ≡ T6 的 `horn_grad_detail`（两套 Horn 并存是审查红线）
+///
+/// T6 的单尺度实现是本函数 `r = DETAIL_RADIUS_CELLS` 的**逐位特化**——
+/// `height_blur_at(·, r ≤ 1)` 恒等于 [`height_at`]，8 邻域与加权核原样。
+/// Task 7 三尺度化后只保留这一份 Horn 实现，原 `horn_grad_detail` 删除
+///（全仓引用同步改指本函数）。**8 次采样**：3×3 窗口的中心点在行、列两个
+/// 和式里权重各 ×2 后相互抵消（不出现于任何差分），只采 8 邻域；高度
+/// **取值**仍走 [`sample_height_bicubic_grad`]（C1 连续），两者分工见
+/// ADR-0077 D2。
+fn horn_grad_at(pos: vec2<f32>, r: f32) -> vec2<f32> {
+    let tl = height_blur_at(pos + vec2<f32>(-1.0, -1.0), r);
+    let tc = height_blur_at(pos + vec2<f32>(0.0, -1.0), r);
+    let tr = height_blur_at(pos + vec2<f32>(1.0, -1.0), r);
+    let ml = height_blur_at(pos + vec2<f32>(-1.0, 0.0), r);
+    let mr = height_blur_at(pos + vec2<f32>(1.0, 0.0), r);
+    let bl = height_blur_at(pos + vec2<f32>(-1.0, 1.0), r);
+    let bc = height_blur_at(pos + vec2<f32>(0.0, 1.0), r);
+    let br = height_blur_at(pos + vec2<f32>(1.0, 1.0), r);
+    let gx = (tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl);
+    let gy = (bl + 2.0 * bc + br) - (tl + 2.0 * tc + tr);
+    return vec2<f32>(gx, gy) * (H_RANGE_M / 8.0);
+}
+
 // ── T32/T33 缩小采样：手工 8 tap 盒式平均 ─────────────────────────────────
 //
 // **为什么必须手工做**：T4 规定零 mip 链。没有 mip，`px_per_cell < 1` 时
@@ -668,6 +757,95 @@ fn box_avg_height(pos: vec2<f32>, footprint: f32) -> f32 {
         }
     }
     return sum / 8.0;
+}
+
+/// 三尺度高度低通取值（Task 7 · ADR-0077 D3）：`r ≤ 1` 单点双线性
+///（[`height_at`]，detail 档——Horn 自身的加权平滑已负责压噪，不再叠低通）；
+/// `r > 1` 复用 [`box_avg_height`]（3×3 去中心 8 tap 盒平均，覆盖 `r` 格
+/// 见方）。`r ≤ 1` 必须走 identity 分支：[`box_avg_height`] 哪怕
+/// `footprint = 1` 也在 ±0.5 格取邻点（是真低通不是恒等），而 detail 档
+/// 的语义锚恰是「与 T6 单尺度逐位同值」。
+///
+/// ⚠️ `r = 12`（宏观档）时 8 tap 是对 12 格见方的**欠采样**——**可接受**：
+/// 低通的目标场（宽尺度概括后的地形）本身平滑，欠采样只损失盒平均的
+/// 均匀性、不引入高频伪影；tap 预算优化（mip 链 / 级联盒平均）留 §8 tap
+/// 预算议题另行裁量（ADR-0077 D3 注记）。
+fn height_blur_at(pos: vec2<f32>, r: f32) -> f32 {
+    if (r <= 1.0) {
+        return height_at(pos);
+    }
+    return box_avg_height(pos, r);
+}
+
+// ── 三尺度晕渲合成（Task 7 · ADR-0077 D3）────────────────────────────────
+//
+// `I_final = w_macro·I_macro + w_medium·I_medium + w_detail·I_detail`：
+// 三档各以自己的低通半径取 Horn 梯度 → 法线 → 双光 dot → `p.relief` 系数
+// 合成单档 I，再按随缩放变化的权重加权（权重和恒 1，混合后免钳制）。
+// 公式与常量真源 = `shading.rs`，本节函数与其**逐式镜像**（注释互指，
+// 改任何一边必须同步另一边）。
+
+/// 单档明暗 = `shading.rs::lighting_intensity` 同式（注释互指）。
+///
+/// 法线构造的符号锚点与 `shading.rs::normal_world` 逐字同形（fragment
+/// 明暗段注释）：`−s·zx / +s·zy`——**`+` 号是 y 翻转锚点，两侧不许各改
+/// 各的**。三光系数**真源 = `FieldParams.relief`**（x/y/z = AMBIENT /
+/// DIFFUSE_MAIN / DIFFUSE_AUX，桥接写入；demo 的 H 键晕渲开关即改写本槽
+/// ——WGSL 若写回字面量，本槽成死数据、开关静默失效）。LIGHT_MAIN /
+/// LIGHT_AUX 是真 45° 单位向量（经 uniform 槽），直接 dot 无需 normalize；
+/// 三系数和 = 1 时 I ∈ [0.4, 1.0] 界内免费。
+fn horn_lighting(grad: vec2<f32>, s: f32) -> f32 {
+    let n = normalize(vec3<f32>(-grad.x * s, grad.y * s, 1.0));
+    return p.relief.x
+        + p.relief.y * max(0.0, dot(n, p.light_dir.xyz))
+        + p.relief.z * max(0.0, dot(n, p.light_aux.xyz));
+}
+
+/// detail 权重衰减 = `shading.rs::detail_weight_fade` 的**逐式镜像**
+/// （注释互指；smoothstep 曲线手写展开以保两侧逐行可对照——与 WGSL 内建
+/// `smoothstep(lo, hi, x)` 同式：t = clamp((x−lo)/(hi−lo)) 后 t²(3−2t)）。
+/// 衰减曲线与 shading.rs 同源：远观（< 1 px/格）细纹理全是噪点 → 归零，
+/// 近观（≥ 3 px/格）细部可信 → 全额。
+fn detail_weight_fade(px_per_cell: f32) -> f32 {
+    let t = clamp(
+        (px_per_cell - DETAIL_FADE_MIN_PX_PER_CELL)
+            / (DETAIL_FADE_MAX_PX_PER_CELL - DETAIL_FADE_MIN_PX_PER_CELL),
+        0.0,
+        1.0,
+    );
+    return t * t * (3.0 - 2.0 * t);
+}
+
+/// 三尺度权重 = `shading.rs::scale_weights` 的**逐式镜像**（注释互指，
+/// 改任何一边必须同步另一边）。返回 `xyz = (w_macro, w_medium, w_detail)`，
+/// **和恒为 1**：detail 份额 = `W_DETAIL` × [`detail_weight_fade`]，衰减量
+/// 按宏观 : 中观（45 : 40）既有比例回流两档——衰减是「把噪声预算换给
+/// 宏观结构」，不是整体减光（ADR-0077 D3 取代 T33 关灯的理由）。
+fn scale_weights(px_per_cell: f32) -> vec3<f32> {
+    let detail = W_DETAIL * detail_weight_fade(px_per_cell);
+    let back = W_DETAIL - detail; // 衰减量，按既有比例回流
+    let base = W_MACRO + W_MEDIUM;
+    let macro_w = W_MACRO + back * (W_MACRO / base);
+    let medium_w = W_MEDIUM + back * (W_MEDIUM / base);
+    return vec3<f32>(macro_w, medium_w, detail);
+}
+
+/// 三尺度晕渲合成（Task 7 · ADR-0077 D3）：
+/// `I_final = w_macro·I_macro + w_medium·I_medium + w_detail·I_detail`。
+///
+/// 三档半径 1 / 3 / 12 格（常量镜像 shading.rs）各自 [`horn_grad_at`] →
+/// [`horn_lighting`]，再按 [`scale_weights`] 加权；权重随 `px_per_cell`
+/// 变化，远观 detail 趋零、宏观档全额顶上（替换 T6 的单尺度 relief）。
+/// tap 账（每像素）：detail 档 8 tap（`r ≤ 1` 走 [`height_at`] 直采）+
+/// 中观 / 宏观各 8 邻域 × 8 tap 盒平均 = 8×8，合计 **136 tap/像素**
+///（brief 估的 72 按 4 tap 盒平均计；实际 [`box_avg_height`] 是 8 tap。
+/// 帧时间 A/B 实测见 task-7 报告，tap 预算优化留 §8）。
+fn tri_scale_relief(pos: vec2<f32>, s: f32, px_per_cell: f32) -> f32 {
+    let i_macro = horn_lighting(horn_grad_at(pos, MACRO_RADIUS_CELLS), s);
+    let i_medium = horn_lighting(horn_grad_at(pos, MEDIUM_RADIUS_CELLS), s);
+    let i_detail = horn_lighting(horn_grad_at(pos, DETAIL_RADIUS_CELLS), s);
+    let w = scale_weights(px_per_cell);
+    return w.x * i_macro + w.y * i_medium + w.z * i_detail;
 }
 
 /// 同 [`box_avg_height`]，作用于海岸距离场。
@@ -725,30 +903,83 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3<f32>(0.04045));
 }
 
-// ── 分层设色（ADR-0055）─────────────────────────────────────────────────
+// ── 分层设色（ADR-0055 → ADR-0077 段内连续渐变）─────────────────────────
 
-/// 高度落在第几阶（0..8）。
+/// 归一化域的**海平面锚**：0 m 在 `R16Unorm` 高度纹理域的位置
+/// `= (0 − H_MIN) / H_RANGE = 4000 / 10000 = 0.4`（H_MIN / H_RANGE 与
+/// pack.rs 同源，量程见 `H_RANGE_M`）。CPU 真源 `segment_of` 的低地段
+/// （b = 0）等宽外推以**海平面**为段 0 下界（米制 `t = height / cuts[0]`，
+/// 0 m → t = 0）；归一化是仿射换算，锚点随之平移到本常量——注意它
+/// **不是**纹理域下界 0（那是 −4000 m）。
+const SEA_LEVEL_NORM: f32 = 0.4;
+
+/// 段界锚表取值：锚[0] = 海平面（段 0 下界），锚[1..7] = 7 条归一化内边界
+/// （cuts[0..6]）。段 b ∈ [0, 6] 占据 `[锚[b], 锚[b+1])`，段 7 无上界。
 ///
-/// 7 条内边界挤在两组 `vec4` 里（`.xyzw` / `.xyz`）。**按分量逐个比较而不是
-/// 动态索引 `vec4`**：边界升序，故「大于等于几条」就等于阶号，写法最稳，
-/// 也避开 WGSL 动态取向量分量的可读性坑。
-fn elev_band(h: f32) -> u32 {
+/// 7 条 cuts 挤在两组 `vec4` 里（`.xyzw` / `.xyz`）；向量分量动态下标在
+/// 部分驱动上退化，统一走 [`pick4`] 展开分支（与权重取分量同一套既定写法）。
+fn elev_anchor(a: vec4<f32>, c: vec4<f32>, k: i32) -> f32 {
+    if (k <= 0) { return SEA_LEVEL_NORM; }
+    if (k <= 4) { return pick4(a, k - 1); }
+    return pick4(c, k - 5);
+}
+
+/// 段内连续渐变取色（ADR-0077）：**CPU 真源
+/// `hypsometric::{segment_of, tint_continuous}` 的高程纹理域逐式镜像**
+/// （注释互指，改任何一边必须同步另一边）。8 个锚点色不变，段内按高度
+/// 在 `ramp[b]` 与 `ramp[b+1]` 间线性过渡——低地 0–200 m 段内即有渐变
+/// （离散口径下不可分，这是修正的动因）；`p.elev_cuts` / `p.elev_ramp`
+/// uniform 布局不动。
+///
+/// ## 段扫描（归一化域）
+///
+/// 段号 `b` = 「`h_norm` ≥ 几条 cuts」，逐分量比较不动态索引（边界升序，
+/// 「大于等于几条」即段号；与退役的离散段号判定 `elev_band` 同口径，该
+/// 函数已随本修正一并删除——段号判定原样保留，只是不再单独成函数）。
+/// **边界语义不变：恰在阈值上进下一段且段内分数 t = 0**，故锚点处本函数
+/// 与旧离散取色 `elev_ramp_color(elev_band(h))` **逐位一致**——连续渐变是
+/// 离散色带的超集（CPU 侧测试 `continuous_tint_matches_discrete_at_band_anchors`
+/// 钉过同一性质，两侧 uniform 色表同源自 `RAMP_SRGB`；GPU 侧无单测，靠此
+/// 同构论证 + T9 实机验收兜底）。
+///
+/// ## 段内分数 t（`segment_of` 同式，米制 → 归一化仿射换算）
+///
+/// - `1 ≤ b ≤ 6`：`t = (h − cuts[b−1]) / (cuts[b] − cuts[b−1])`；
+/// - `b = 0`：下界按海平面锚等宽外推（`elev_anchor` 的锚[0]，即米制
+///   `t = height / cuts[0]` 的镜像）；`h_norm` 低于锚（负米高程，正常调用
+///   已被水域门挡住，此处防御）得负 t，钳回 0；
+/// - `b = 7`：无上界，t 恒 0（纯 `ramp[7]`）；
+/// - 分母 ≤ 0（`normalized_cuts` 越界钳到 [0,1] 可能产生的退化 cuts；
+///   米制侧 `cuts[0] ≤ 0` 同样映射到 `锚[1] ≤ 锚[0]`）记 t = 0；
+///   上界按构造 < 1（越过 cuts[b] 的高度会先升段），钳 [0,1] 只防退化。
+fn elev_ramp_continuous(h_norm: f32) -> vec3<f32> {
     let a = p.elev_cuts[0];
     let c = p.elev_cuts[1];
     var b = 0u;
-    if (h >= a.x) { b = b + 1u; }
-    if (h >= a.y) { b = b + 1u; }
-    if (h >= a.z) { b = b + 1u; }
-    if (h >= a.w) { b = b + 1u; }
-    if (h >= c.x) { b = b + 1u; }
-    if (h >= c.y) { b = b + 1u; }
-    if (h >= c.z) { b = b + 1u; }
-    return min(b, 7u);
-}
+    if (h_norm >= a.x) { b = b + 1u; }
+    if (h_norm >= a.y) { b = b + 1u; }
+    if (h_norm >= a.z) { b = b + 1u; }
+    if (h_norm >= a.w) { b = b + 1u; }
+    if (h_norm >= c.x) { b = b + 1u; }
+    if (h_norm >= c.y) { b = b + 1u; }
+    if (h_norm >= c.z) { b = b + 1u; }
+    b = min(b, 7u);
 
-/// 第 `band` 阶的色带色（线性空间，已是 uniform 口径）。
-fn elev_ramp_color(band: u32) -> vec3<f32> {
-    return p.elev_ramp[min(band, 7u)].rgb;
+    var t = 0.0;
+    if (b < 7u) {
+        let i = i32(b);
+        let lo = elev_anchor(a, c, i);
+        let hi = elev_anchor(a, c, i + 1);
+        let denom = hi - lo;
+        if (denom > 0.0) {
+            t = clamp((h_norm - lo) / denom, 0.0, 1.0);
+        }
+    }
+    // uniform 数组运行期下标沿用旧 `elev_ramp_color` 的写法（uniform 存储
+    // 允许动态索引；b = 7 时两侧同取 ramp[7]、t = 0，mix 原样退化）。
+    let lo_c = p.elev_ramp[b].rgb;
+    let hi_c = p.elev_ramp[min(b + 1u, 7u)].rgb;
+    return mix(lo_c, hi_c, t);
 }
 
 /// CellMap 分支：群系固定色块的 P1 占位色板。

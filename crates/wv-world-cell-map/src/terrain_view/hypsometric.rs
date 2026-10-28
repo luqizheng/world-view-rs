@@ -172,6 +172,86 @@ pub fn tint_rgba(base: [f32; 4], band: usize, strength: f32) -> [f32; 4] {
     ]
 }
 
+// ── 段内连续插值（对 ADR-0055「8 阶离散」的 CellMap 数据视图修正）──
+
+/// 把高度换算成 `(段号 b, 段内分数 t)`，供 [`tint_continuous`] 做段内渐变。
+///
+/// **对 ADR-0055 的修正**：ADR-0055 裁定的是「8 阶离散色带（用户裁定）」，
+/// 实机暴露出「低地 0–200 m 一刀同色」——200 m 以内的缓丘与海岸平原在
+/// 离散口径下不可分。CellMap 数据视图路径据此修正为「**8 锚点连续渐变**」：
+/// 段号沿用 [`band_of`]（边界语义不变：`height >= cut` 进下一段），段内再给
+/// 一个连续位置 `t ∈ [0, 1)`，颜色在 `ramp[b]` 与 `ramp[b+1]` 间线性过渡。
+/// **`ElevationBand` / `BAND_WEIGHT` 的阶梯语义不动**——两者定义于**本文件**
+/// （`ElevationBand` 约 :265 / `BAND_WEIGHT` 约 :284），接线在
+/// `terrain_view/cells.rs`（wv-render 是下游消费方，不持语义）；
+/// 那条路径刻意让低地零混入，见 [`BAND_WEIGHT`]。
+///
+/// 段内分数 `t` 的口径：
+///
+/// - `b = 0`（低地段）：下界按 `cuts[0]` 的**等宽外推**，`t = height / cuts[0]`。
+///   正常调用里 `height < 0` 已被 [`is_water_cell`] 水域门挡住，负值在此仅
+///   防御性钳回 0；`cuts[0] <= 0` 的退化输入无法外推，同样记 0。
+/// - `1 <= b < BANDS − 1`：`t = (height − cuts[b−1]) / (cuts[b] − cuts[b−1])`。
+/// - `b = BANDS − 1`（最高段）：无上界，`t` 恒 0（即纯 `ramp[BANDS − 1]`）。
+pub fn segment_of(height: i16, cuts: &Cuts) -> (usize, f32) {
+    let b = band_of(height, cuts);
+    let t = if b == 0 {
+        let c0 = cuts[0] as f32;
+        if c0 > 0.0 {
+            height as f32 / c0
+        } else {
+            0.0
+        }
+    } else if b < BANDS - 1 {
+        let lo = cuts[b - 1] as f32;
+        let hi = cuts[b] as f32;
+        if hi > lo {
+            (height as f32 - lo) / (hi - lo)
+        } else {
+            0.0
+        }
+    } else {
+        // 最高段没有上界：t 恒 0（纯 ramp[BANDS-1]）。
+        0.0
+    };
+    // t 钳 [0, 1)：负值（水上溯防御）钳 0；上界按构造即 < 1（越过 cuts[b]
+    // 的高度会先被 band_of 升段），钳位只防御手造的退化 cuts。
+    (b, t.clamp(0.0, 1.0 - f32::EPSILON))
+}
+
+/// 段内连续版的高程叠色：**8 锚点连续渐变**（sRGB 直混，与 [`tint_rgba`]
+/// 同口径）。
+///
+/// `ramp[b]` 与 `ramp[b+1]` 按段内分数 `t` lerp（`b = BANDS − 1` 时 `t` 恒 0，
+/// 即纯 `ramp[BANDS − 1]`），再按 `strength` 混入 `base`。混合仍在 **sRGB
+/// 空间**——理由见 [`tint_rgba`]：取色器口径的 sRGB 值在别的空间混会偏亮
+/// （本项目踩过这坑）。
+///
+/// 对 ADR-0055 的修正关系见 [`segment_of`]：锚点（恰在 `cuts` 各条边界上）
+/// 处 `t = 0`，本函数逐通道退化为 [`tint_rgba`]——连续渐变是离散色带的
+/// 超集，锚点处两者相等。
+pub fn tint_continuous(base: [f32; 4], height: i16, cuts: &Cuts, strength: f32) -> [f32; 4] {
+    let s = strength.clamp(0.0, 1.0);
+    if s == 0.0 {
+        return base;
+    }
+    let (b, t) = segment_of(height, cuts);
+    let lo = ramp_rgba(b);
+    let hi = ramp_rgba((b + 1).min(BANDS - 1));
+    let lerped = [
+        lo[0] + (hi[0] - lo[0]) * t,
+        lo[1] + (hi[1] - lo[1]) * t,
+        lo[2] + (hi[2] - lo[2]) * t,
+        1.0,
+    ];
+    [
+        base[0] + (lerped[0] - base[0]) * s,
+        base[1] + (lerped[1] - base[1]) * s,
+        base[2] + (lerped[2] - base[2]) * s,
+        base[3],
+    ]
+}
+
 // ── 专业制图的海拔色带（ADR-0067 D3）──
 
 /// **风格自带的**海拔色带（与本模块的固定 8 阶同结构，不同数据源）。
@@ -489,5 +569,117 @@ mod tests {
         let out = normalized_cuts(&[-9999, 1, 2, 3, 4, 5, 9999], -4000.0, 10_000.0);
         assert_eq!(out[0], 0.0);
         assert_eq!(out[CUTS - 1], 1.0);
+    }
+
+    /// 段锚点处连续插值必须退化为离散色带：恰在 `cuts` 各条边界上的高度
+    /// 段内分数为 0，结果与 `tint_rgba(base, b+1, …)` 逐通道相等；
+    /// 高度 0 是段 0 的锚点，与 `tint_rgba(base, 0, …)` 相等。
+    #[test]
+    fn continuous_tint_matches_discrete_at_band_anchors() {
+        let base = [0.2, 0.4, 0.6, 1.0];
+        let strength = 0.7;
+
+        // 高度 0：低地段锚点（t = 0/200 = 0）。
+        let got0 = tint_continuous(base, 0, &DOMAIN_CUTS, strength);
+        let want0 = tint_rgba(base, 0, strength);
+        for c in 0..3 {
+            assert!(
+                (got0[c] - want0[c]).abs() < 1e-6,
+                "height 0 ch {c}: got {} want {}",
+                got0[c],
+                want0[c]
+            );
+        }
+
+        // 7 条内边界：恰在 cut 上 → 升段且 t = 0。
+        for (i, cut) in DOMAIN_CUTS.iter().enumerate() {
+            let (b, t) = segment_of(*cut, &DOMAIN_CUTS);
+            assert_eq!(b, i + 1, "cut {i}（{cut} m）应落在第 {} 段起点", i + 1);
+            assert!(t.abs() < 1e-6, "cut {i} 段内分数应为 0：got {t}");
+            let got = tint_continuous(base, *cut, &DOMAIN_CUTS, strength);
+            let want = tint_rgba(base, i + 1, strength);
+            for c in 0..3 {
+                assert!(
+                    (got[c] - want[c]).abs() < 1e-6,
+                    "cut {i}（{cut} m）ch {c}: got {} want {}",
+                    got[c],
+                    want[c]
+                );
+            }
+        }
+    }
+
+    /// 段内插值：350 m 落在缓丘段（200–500），手算 t = (350−200)/(500−200) = 0.5，
+    /// strength = 1 时结果 = `ramp[1]` 与 `ramp[2]` 的中点色
+    /// （[120.5, 153.5, 101.5]/255）。
+    #[test]
+    fn continuous_tint_interpolates_within_band() {
+        let base = [1.0, 0.0, 0.5, 1.0];
+        let got = tint_continuous(base, 350, &DOMAIN_CUTS, 1.0);
+
+        let (b, t) = segment_of(350, &DOMAIN_CUTS);
+        assert_eq!(b, 1, "350 m 应在缓丘段");
+        assert!((t - 0.5).abs() < 1e-6, "got {t} want 0.5");
+
+        let lo = ramp_rgba(1);
+        let hi = ramp_rgba(2);
+        for c in 0..3 {
+            let want = lo[c] + (hi[c] - lo[c]) * 0.5;
+            assert!(
+                (got[c] - want).abs() < 1e-6,
+                "ch {c}: got {} want {}",
+                got[c],
+                want
+            );
+        }
+    }
+
+    /// 低地绿不被洗白：公园绿 + 50 m（段 0，t = 0.25，向 ramp[1] 过渡
+    /// 仍是绿系）+ strength = 1 → 结果 g 通道仍为最大分量。
+    #[test]
+    fn continuous_tint_keeps_lowland_green_not_washed() {
+        let park = [
+            0xC9 as f32 / 255.0,
+            0xE7 as f32 / 255.0,
+            0xC7 as f32 / 255.0,
+            1.0,
+        ];
+        let got = tint_continuous(park, 50, &DOMAIN_CUTS, 1.0);
+        assert!(
+            got[1] > got[0] && got[1] > got[2],
+            "50 m 低地绿：g 通道必须仍是最大分量，got {:?}",
+            got
+        );
+    }
+
+    /// 强度 0 = 关闭：任何高度都原色不动（沿用 `tint_rgba` 的口径）。
+    #[test]
+    fn continuous_tint_strength_zero_returns_base() {
+        let base = [0.2, 0.4, 0.6, 1.0];
+        assert_eq!(
+            tint_continuous(base, 3500, &DOMAIN_CUTS, 0.0),
+            base,
+            "strength 0 必须原样返回 base"
+        );
+    }
+
+    /// 段内分数在段内严格递增：低地段（0–200 m）取 0/50/100/150/199，
+    /// t = h/200 = 0 / 0.25 / 0.5 / 0.75 / 0.995，且全部落在 [0, 1)。
+    #[test]
+    fn segment_fraction_is_monotonic_within_band() {
+        let mut last = -1.0_f32;
+        for h in [0, 50, 100, 150, 199] {
+            let (b, t) = segment_of(h, &DOMAIN_CUTS);
+            assert_eq!(b, 0, "{h} m 应仍在低地段");
+            assert!(
+                t > last,
+                "{h} m 的段内分数应严格递增：got {t} 上一值 {last}"
+            );
+            assert!(
+                (0.0..1.0).contains(&t),
+                "段内分数必须落在 [0, 1)：{h} m → {t}"
+            );
+            last = t;
+        }
     }
 }
