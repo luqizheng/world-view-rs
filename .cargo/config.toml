@@ -27,6 +27,25 @@ target-dir = ".target"
 rustc-wrapper = "sccache"
 # incremental = false  # 2026-10-24 复测通过后停用，原因见上
 
+# rust-lld 链接器（2026-10-29 实测裁定）。
+#
+# 处境：日常开发循环 20–27s 里，最终 `wv` bin 单元的链接固定占 11–12s
+# （50–60%）。拆 wv-app 治不了这一段——exe 代码量与链接输入都不变。
+#
+# 实测（同一 .target、同一份源码，`cargo rustc -- -C linker=…` 单变量对照）：
+#   | 场景                   | link.exe   | rust-lld  |
+#   | 只改 main.rs 的增量     | 11.1–11.3s | 7.2–7.8s  |  ← 省 ~35%
+#   | 全量重建的 bin 单元     | 22.4s      | 14.5s     |
+#   lld 产物烟测：启动 8s 存活、日志零 panic/ERROR、GPU 与窗口正常。
+#
+# 代价（一次性）：切换 linker 改变 cargo 的 config 指纹，**全部 501 单元
+# 重编一次**（实测 87 分钟；sccache 对 lld key 全 miss，因为 -C linker
+# 进了缓存键）。这是迁移成本，不是长期成本。
+#
+# 回退：删掉下面两行（同样触发一次全量重编）。
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
+
 # 渲染层检查别名（AGENTS §7.1，2026-10-13 用户裁定）：
 # `#[cfg(feature = "app")]` 的渲染/UI 模块**不在** §7.1 的三条闸门命令的
 # 编译范围内（`cargo test --workspace` 等对 wv-app 跑出 0 个测试目标），
