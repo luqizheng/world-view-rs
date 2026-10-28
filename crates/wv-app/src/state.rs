@@ -205,6 +205,24 @@ pub struct ProjectDiagnostics {
     pub needs_diagnose: bool,
 }
 
+/// 世界图尺度提示的缓存（2026-10-29，重构 P0-3）。
+///
+/// **为什么需要**：`wv_core::map::scale_hint::scale_hint_texts` 内部对
+/// `TerrainData.cells` 做全量扫描求陆地包围盒（512×288 图 ≈ 14.7 万格，
+/// 随图幅平方增长）。校验面板常开时它此前**每帧**被调用一次。
+///
+/// **失效口径**：缓存键是 `(图 id, cell_size bits)`，另叠加
+/// `WorldProjection::is_changed()`——后者覆盖「同一张图里地形/图属性被
+/// 编辑过」的情况（Bevy 的变更检测，只在资源被 `ResMut` 写过的帧为真）。
+/// 宁可多算一帧，不会漏算：键变化与资源变更任一成立就重算。
+#[derive(Resource, Default)]
+pub struct ScaleHintCache {
+    /// 上次计算时的 `(图 id, cell_size 的位模式)`。
+    pub key: Option<(wv_core::Id, u32)>,
+    /// 与 `key` 同帧算出的文案；`None` = 前提缺失（面板不显示）。
+    pub lines: Option<Vec<String>>,
+}
+
 /// 自然区域面板的**会话态**（ADR-0045 D4「命名即物化」）。
 ///
 /// 面板是无状态的渲染函数，跨帧的输入文本必须有处放——独立 Resource 而非
