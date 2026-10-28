@@ -64,6 +64,11 @@ pub fn float_window(
     // 越界回拉（2026-10-25）：egui 的 `constrain_to` 不钳位置（只钳尺寸 /
     // 锚点 / move 命中区），上一会话拖进 chrome 的 `ui-layout.yaml` 坐标
     // 会原样复现。见 [`crate::ui::top_bar::snap_into_central`] 文档。
+    //
+    // 宽度界（2026-10-28 A 案）：所有面板统一吃 `width_bounds` 策略——
+    // 自适应测量 / 用户拖拽 / yaml 记忆尺寸三路都被钳，窗不会再被
+    // 整宽内容撑爆（机制见 wv-ui `FloatWindow::max_width` 文档）。
+    let (min_w, max_w) = panel.width_bounds();
     let mut fw = FloatWindow::new(id, panel.title(loc))
         .icon(panel.icon())
         .tag(tag)
@@ -71,7 +76,11 @@ pub fn float_window(
         .default_size(egui::vec2(layout.width, layout.height))
         .default_open(!layout.collapsed)
         .alpha(alpha)
-        .constrain_to(crate::ui::top_bar::central_area(ctx));
+        .constrain_to(crate::ui::top_bar::central_area(ctx))
+        .min_width(min_w);
+    if max_w.is_finite() {
+        fw = fw.max_width(max_w);
+    }
     if let Some(p) = crate::ui::top_bar::snap_into_central(ctx, id) {
         fw = fw.current_pos(p);
     }

@@ -74,6 +74,8 @@ pub struct FloatWindow<'a> {
     order: egui::Order,
     constrain: Option<egui::Rect>,
     current_pos: Option<egui::Pos2>,
+    min_width: Option<f32>,
+    max_width: Option<f32>,
 }
 
 /// 面板内容内边距（Figma `3:20892` Panel content `padding: 12`）。
@@ -109,6 +111,8 @@ impl<'a> FloatWindow<'a> {
             order: egui::Order::Middle,
             constrain: None,
             current_pos: None,
+            min_width: None,
+            max_width: None,
         }
     }
 
@@ -181,6 +185,26 @@ impl<'a> FloatWindow<'a> {
         self
     }
 
+    /// 宽度下界：窗（含用户拖窄）不塌缩到此以下。
+    pub fn min_width(mut self, w: f32) -> Self {
+        self.min_width = Some(w);
+        self
+    }
+
+    /// 宽度上界：窗（含内容自适应测量）不撑开到此以上。
+    ///
+    /// 「窗不被内容撑爆」的壳层保证（2026-10-28 用户裁定 A 案）：egui 的
+    /// 自适应测量 pass 里 `available_width()` 是屏幕级，整宽控件（wv-ui 的
+    /// `row_rect` 家族 / `value_box` / `tabs` 等）会吃满它把窗撑到全屏，且
+    /// egui Resize **只扩不缩**——撑开一次就回不来。仓库四次同族实锤均按
+    /// 调用点打补丁（place 表单固定宽槽位 / 地标 min-clamp / 势力层行内联 /
+    /// zoom 条改 padding）；上界收口在壳层，无界反馈环在这里断掉，面板
+    /// 内容无需各自设防。
+    pub fn max_width(mut self, w: f32) -> Self {
+        self.max_width = Some(w);
+        self
+    }
+
     /// 装配并落地。`body` 在折叠态不执行。
     pub fn show<F: FnOnce(&mut egui::Ui)>(self, ctx: &egui::Context, shell: &UiShell, body: F) {
         let head_id = self.id.with("head");
@@ -215,6 +239,14 @@ impl<'a> FloatWindow<'a> {
         }
         if let Some(p) = self.current_pos {
             win = win.current_pos(p);
+        }
+        // 宽度界（A 案）：min/max 先于 default_size 落——egui Resize 的
+        // 约束对「自适应测量 + 用户拖拽 + yaml 记忆尺寸」三路都生效。
+        if let Some(w) = self.min_width {
+            win = win.min_width(w);
+        }
+        if let Some(w) = self.max_width {
+            win = win.max_width(w);
         }
 
         let icon = self.icon;
@@ -488,6 +520,10 @@ mod tests {
         assert!(fw.default_pos.is_none(), "位置缺省交给 egui 级联");
         assert!(fw.default_size.is_none(), "尺寸缺省交给 egui 级联");
         assert!(fw.constrain.is_none(), "活动范围缺省交给 egui 整视口");
+        assert!(
+            fw.min_width.is_none() && fw.max_width.is_none(),
+            "宽度界缺省不设（策略由 wv-app 包装层给，A 案）"
+        );
     }
 
     #[test]
@@ -525,6 +561,24 @@ mod tests {
         // `impl Hash` 入参：&str 与现成 Id 都能喂（float_window 走元组 Id）。
         let _a = FloatWindow::new("plain_str", "a");
         let _b = FloatWindow::new(egui::Id::new(("wv_panel", 1)), "b");
+    }
+
+    /// 宽度界（A 案）：builder 存储 + 定宽形态（min = max）可达。
+    #[test]
+    fn float_window_width_bounds_store_values() {
+        let fw = FloatWindow::new("test_width_bounds", "标题")
+            .min_width(220.0)
+            .max_width(420.0);
+        assert_eq!(fw.min_width, Some(220.0), "got {:?}", fw.min_width);
+        assert_eq!(fw.max_width, Some(420.0), "got {:?}", fw.max_width);
+        // 定宽形态 = min 与 max 同值（Inspector 类列面板）。
+        let fixed = FloatWindow::new("test_width_fixed", "标题")
+            .min_width(300.0)
+            .max_width(300.0);
+        assert_eq!(
+            fixed.min_width, fixed.max_width,
+            "定宽 = 双界同值，无需独立 API"
+        );
     }
 
     #[test]
