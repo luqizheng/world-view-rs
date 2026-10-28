@@ -113,12 +113,21 @@ const EMBEDDED_TEXTURES: &[(&str, &[u8])] = &[
 /// 与 `FactionOverlayEntities` 同族：资源只持有实体句柄；地界随
 /// (图, 日, 缩放, 主题) 全变，几何 / 材质缓存复用得不偿失。**例外是贴图**：
 /// 解码成本远高于重建 mesh，句柄按规则键跨帧缓存。
+///
+/// **本帧资产必须记账**（2026-10-29）：每帧重建意味着每帧新 `meshes.add` /
+/// `materials.add`；`Assets` 没有自动 GC，只 despawn 实体不 `remove` 句柄
+/// 会**无界增长**（事实地点 20 个 × 60fps ≈ 每分钟 2400 个 Mesh + Material）。
+/// 实体与资产在同一次 `despawn_all` 里成对释放。
 #[derive(Resource, Default)]
 pub struct FeatureOverlayEntities {
     /// 本帧全部远带地界晕实体。
     pub halos: Vec<Entity>,
     /// 本帧全部近带符号实体（每个事实地点合并成一个 mesh）。
     pub symbols: Vec<Entity>,
+    /// 本帧建出的 Mesh 句柄（与上面的实体一一对应，随 `despawn_all` 回收）。
+    frame_meshes: Vec<Handle<Mesh>>,
+    /// 本帧建出的材质句柄（同上）。
+    frame_materials: Vec<Handle<ColorMaterial>>,
     /// 解码后的贴图句柄：规则路径 → `Assets<Image>` 句柄（跨帧复用）。
     texture_cache: HashMap<&'static str, Handle<Image>>,
     /// 解码失败 / 未知的键（`warn!` 只发一次，之后静默走纯色回退）。
@@ -133,6 +142,29 @@ impl FeatureOverlayEntities {
         for e in self.symbols.drain(..) {
             commands.entity(e).despawn();
         }
+        // 资产回收必须在实体 despawn 之后（否则句柄仍被引用计数持有，
+        // `remove` 只是解绑资源，不会真正掉落——先断实体再删资产）。
+        let meshes: Vec<Handle<Mesh>> = self.frame_meshes.drain(..).collect();
+        let materials: Vec<Handle<ColorMaterial>> = self.frame_materials.drain(..).collect();
+        if meshes.is_empty() && materials.is_empty() {
+            return;
+        }
+        commands.queue(move |world: &mut World| {
+            let mut mesh_assets = world.resource_mut::<Assets<Mesh>>();
+            for handle in &meshes {
+                mesh_assets.remove(handle);
+            }
+            let mut material_assets = world.resource_mut::<Assets<ColorMaterial>>();
+            for handle in &materials {
+                material_assets.remove(handle);
+            }
+        });
+    }
+
+    /// 登记本帧新建的一对资产句柄，供下一次 `despawn_all` 回收。
+    fn record_assets(&mut self, mesh: Handle<Mesh>, material: Handle<ColorMaterial>) {
+        self.frame_meshes.push(mesh);
+        self.frame_materials.push(material);
     }
 
     /// 规则里的贴图键 → 已解码句柄；未知键 / 解码失败返回 `None`（纯色回退）。
@@ -296,7 +328,7 @@ pub fn sync_feature_overlays(
             .and_then(|rule| rule.halo_texture)
             .and_then(|key| layer.texture(key, &mut images));
         if halo_alpha > 0.0 {
-            let entity = match halo_texture {
+            let (entity, mesh_handle, material_handle) = match halo_texture {
                 Some(texture) => spawn_textured_mesh(
                     &mut commands,
                     &mut meshes,
@@ -325,6 +357,7 @@ pub fn sync_feature_overlays(
                 ),
             };
             layer.halos.push(entity);
+            layer.record_assets(mesh_handle, material_handle);
         }
 
         // 近带符号：只有拿到规则的事实才画；远带（alpha < 0.05）不画。
@@ -352,7 +385,7 @@ pub fn sync_feature_overlays(
         let symbol_texture = rule
             .symbol_texture
             .and_then(|key| layer.texture(key, &mut images));
-        let entity = match symbol_texture {
+        let (entity, mesh_handle, material_handle) = match symbol_texture {
             Some(texture) => {
                 // 每地点一个合批 mesh：变体由 (地点种子, site 序号) 决定。
                 let (mesh, _variants) =
@@ -379,10 +412,13 @@ pub fn sync_feature_overlays(
             ),
         };
         layer.symbols.push(entity);
+        layer.record_assets(mesh_handle, material_handle);
     }
 }
 
 /// spawn 一个「单色 mesh」实体（`Mesh2d` + `ColorMaterial`），返回实体句柄。
+/// 返回 `(实体, mesh 句柄, 材质句柄)`：调用方必须把后两者记进
+/// `FeatureOverlayEntities`，否则每帧新建的资产无人回收（见该结构的文档）。
 fn spawn_colored_mesh(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -391,7 +427,7 @@ fn spawn_colored_mesh(
     rgb: [u8; 3],
     alpha: f32,
     translation: Vec3,
-) -> Entity {
+) -> (Entity, Handle<Mesh>, Handle<ColorMaterial>) {
     let mesh = meshes.add(mesh);
     let material = materials.add(ColorMaterial {
         color: Color::srgba(
@@ -402,13 +438,14 @@ fn spawn_colored_mesh(
         ),
         ..default()
     });
-    commands
+    let entity = commands
         .spawn((
-            Mesh2d(mesh),
-            MeshMaterial2d(material),
+            Mesh2d(mesh.clone()),
+            MeshMaterial2d(material.clone()),
             Transform::from_translation(translation),
         ))
-        .id()
+        .id();
+    (entity, mesh, material)
 }
 
 /// spawn 一个「带贴图 mesh」实体（`ColorMaterial { color: WHITE, texture }`），
@@ -424,7 +461,7 @@ fn spawn_textured_mesh(
     texture: Handle<Image>,
     alpha: f32,
     translation: Vec3,
-) -> Entity {
+) -> (Entity, Handle<Mesh>, Handle<ColorMaterial>) {
     let mesh = meshes.add(mesh);
     let material = materials.add(ColorMaterial {
         color: Color::WHITE.with_alpha(alpha),
@@ -432,13 +469,14 @@ fn spawn_textured_mesh(
         alpha_mode: bevy::sprite_render::AlphaMode2d::Blend,
         ..default()
     });
-    commands
+    let entity = commands
         .spawn((
-            Mesh2d(mesh),
-            MeshMaterial2d(material),
+            Mesh2d(mesh.clone()),
+            MeshMaterial2d(material.clone()),
             Transform::from_translation(translation),
         ))
-        .id()
+        .id();
+    (entity, mesh, material)
 }
 
 /// 地界多边形的**带 UV** 扇形 mesh（晕贴图专用）。

@@ -88,12 +88,21 @@ impl Default for FactionDisplay {
 }
 
 /// 势力层实体集合（每帧 despawn + spawn，不跨帧复用）。
+///
+/// **本帧资产必须记账**（2026-10-29）：每帧重建意味着每帧新 `meshes.add` /
+/// `materials.add`；`Assets` 没有自动 GC，只 despawn 实体不 `remove` 句柄
+/// 会**无界增长**（领土数 × 每帧 × 60fps）。实体与资产在同一次 `despawn_all`
+/// 里成对释放。
 #[derive(Resource, Default)]
 pub struct FactionOverlayEntities {
     /// 当前帧所有填充多边形实体。
     pub polygons: Vec<Entity>,
     /// 当前帧所有边界实体（casing + inner 各一条）。
     pub borders: Vec<Entity>,
+    /// 本帧建出的 Mesh 句柄（随 `despawn_all` 回收）。
+    frame_meshes: Vec<Handle<Mesh>>,
+    /// 本帧建出的材质句柄（同上）。
+    frame_materials: Vec<Handle<ColorMaterial>>,
 }
 
 impl FactionOverlayEntities {
@@ -101,6 +110,27 @@ impl FactionOverlayEntities {
         for e in self.polygons.drain(..).chain(self.borders.drain(..)) {
             commands.entity(e).despawn();
         }
+        let meshes: Vec<Handle<Mesh>> = self.frame_meshes.drain(..).collect();
+        let materials: Vec<Handle<ColorMaterial>> = self.frame_materials.drain(..).collect();
+        if meshes.is_empty() && materials.is_empty() {
+            return;
+        }
+        commands.queue(move |world: &mut World| {
+            let mut mesh_assets = world.resource_mut::<Assets<Mesh>>();
+            for handle in &meshes {
+                mesh_assets.remove(handle);
+            }
+            let mut material_assets = world.resource_mut::<Assets<ColorMaterial>>();
+            for handle in &materials {
+                material_assets.remove(handle);
+            }
+        });
+    }
+
+    /// 登记本帧新建的一对资产句柄，供下一次 `despawn_all` 回收。
+    fn record_assets(&mut self, mesh: Handle<Mesh>, material: Handle<ColorMaterial>) {
+        self.frame_meshes.push(mesh);
+        self.frame_materials.push(material);
     }
 }
 
@@ -253,12 +283,13 @@ pub fn sync_faction_overlays(
             });
             let entity = commands
                 .spawn((
-                    Mesh2d(mesh),
-                    MeshMaterial2d(material),
+                    Mesh2d(mesh.clone()),
+                    MeshMaterial2d(material.clone()),
                     Transform::from_translation(Vec3::new(0.0, 0.0, z)),
                 ))
                 .id();
             layer.polygons.push(entity);
+            layer.record_assets(mesh, material);
         }
 
         if let Some(border_alpha) = style.border_alpha {
@@ -347,12 +378,13 @@ fn draw_border_ring(
             });
             let casing_entity = commands
                 .spawn((
-                    Mesh2d(casing),
-                    MeshMaterial2d(casing_mat),
+                    Mesh2d(casing.clone()),
+                    MeshMaterial2d(casing_mat.clone()),
                     Transform::from_translation(Vec3::new(0.0, 0.0, z + 0.001)),
                 ))
                 .id();
             layer.borders.push(casing_entity);
+            layer.record_assets(casing, casing_mat);
         }
 
         let inner = meshes.add(build_stroke_batch_mesh(
@@ -370,12 +402,13 @@ fn draw_border_ring(
         });
         let inner_entity = commands
             .spawn((
-                Mesh2d(inner),
-                MeshMaterial2d(inner_mat),
+                Mesh2d(inner.clone()),
+                MeshMaterial2d(inner_mat.clone()),
                 Transform::from_translation(Vec3::new(0.0, 0.0, z + 0.002)),
             ))
             .id();
         layer.borders.push(inner_entity);
+        layer.record_assets(inner, inner_mat);
     }
 }
 

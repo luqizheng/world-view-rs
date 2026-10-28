@@ -31,10 +31,18 @@ use crate::layer_frame::LayerFrame;
 use crate::state::{PlaybackState, ViewState, WorldProjection};
 
 /// 每帧的分区渲染实体账目。
+///
+/// **本帧资产必须记账**（2026-10-29）：每帧重建意味着每帧新 `meshes.add` /
+/// `materials.add`；`Assets` 没有自动 GC，只 despawn 实体不 `remove` 句柄
+/// 会**无界增长**。本层的边界是逐段一个 mesh，资产数 = O(顶点数) × 60fps。
 #[derive(Resource, Default)]
 pub struct PartitionOverlayEntities {
     /// 当前帧所有填充 / 描边实体。
     pub entities: Vec<Entity>,
+    /// 本帧建出的 Mesh 句柄（随 `despawn_all` 回收）。
+    frame_meshes: Vec<Handle<Mesh>>,
+    /// 本帧建出的材质句柄（同上）。
+    frame_materials: Vec<Handle<ColorMaterial>>,
 }
 
 impl PartitionOverlayEntities {
@@ -42,6 +50,27 @@ impl PartitionOverlayEntities {
         for e in self.entities.drain(..) {
             commands.entity(e).despawn();
         }
+        let meshes: Vec<Handle<Mesh>> = self.frame_meshes.drain(..).collect();
+        let materials: Vec<Handle<ColorMaterial>> = self.frame_materials.drain(..).collect();
+        if meshes.is_empty() && materials.is_empty() {
+            return;
+        }
+        commands.queue(move |world: &mut World| {
+            let mut mesh_assets = world.resource_mut::<Assets<Mesh>>();
+            for handle in &meshes {
+                mesh_assets.remove(handle);
+            }
+            let mut material_assets = world.resource_mut::<Assets<ColorMaterial>>();
+            for handle in &materials {
+                material_assets.remove(handle);
+            }
+        });
+    }
+
+    /// 登记本帧新建的一对资产句柄，供下一次 `despawn_all` 回收。
+    fn record_assets(&mut self, mesh: Handle<Mesh>, material: Handle<ColorMaterial>) {
+        self.frame_meshes.push(mesh);
+        self.frame_materials.push(material);
     }
 }
 
@@ -195,12 +224,13 @@ pub fn sync_partition_overlays(
                 });
                 let e = commands
                     .spawn((
-                        Mesh2d(mesh),
-                        MeshMaterial2d(material),
+                        Mesh2d(mesh.clone()),
+                        MeshMaterial2d(material.clone()),
                         Transform::from_translation(Vec3::new(0.0, 0.0, z)),
                     ))
                     .id();
                 layer.entities.push(e);
+                layer.record_assets(mesh, material);
             }
             // 边界线（活动层与非活动层都描；活动层粗些）。
             let rings: Vec<Vec<Vec2>> = std::iter::once(outer)
@@ -219,12 +249,13 @@ pub fn sync_partition_overlays(
                     });
                     let e = commands
                         .spawn((
-                            Mesh2d(mesh),
-                            MeshMaterial2d(material),
+                            Mesh2d(mesh.clone()),
+                            MeshMaterial2d(material.clone()),
                             Transform::from_translation(Vec3::new(0.0, 0.0, z + 0.001)),
                         ))
                         .id();
                     layer.entities.push(e);
+                    layer.record_assets(mesh, material);
                 }
             }
         }
