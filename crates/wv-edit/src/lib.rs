@@ -20,14 +20,15 @@ pub mod history;
 pub mod nature_region;
 
 pub use command::{
-    AddBuildingCommand, AddCityCommand, AddMapCommand, AddMeasurementCommand, AddPlaceCommand,
-    AddPlaceEdgeCommand, AddRegionCommand, AddStreetSegmentCommand, AssignPartitionFaceCommand,
-    BeginPartitionSpanCommand, ClearMeasurementsCommand, CutPartitionFaceCommand,
-    DeleteBuildingCommand, DeleteStreetSegmentCommand, EditCommand, EditError, EditResult,
-    EnsureFactionLayerVisibleCommand, EnsureTerrainLayerCommand, GenerateContinentCommand,
-    MoveCityCommand, MovePartitionVerticesCommand, RemoveMeasurementCommand, RemoveRegionCommand,
-    SetCityOutlineCommand, SetMapOrientationCommand, UpdateEventCommand, UpdateFactionLayerCommand,
-    UpdateLayerCommand, UpdateMapPropsCommand, UpdatePlaceCommand, UpdateRegionCommand,
+    AddBuildingCommand, AddCityCommand, AddFactionCommand, AddMapCommand, AddMeasurementCommand,
+    AddPlaceCommand, AddPlaceEdgeCommand, AddRegionCommand, AddStreetSegmentCommand,
+    AssignPartitionFaceCommand, BeginPartitionSpanCommand, ClearMeasurementsCommand,
+    CutPartitionFaceCommand, DeleteBuildingCommand, DeleteStreetSegmentCommand, EditCommand,
+    EditError, EditResult, EnsureFactionLayerVisibleCommand, EnsureTerrainLayerCommand,
+    GenerateContinentCommand, MoveCityCommand, MovePartitionVerticesCommand,
+    RemoveMeasurementCommand, RemoveRegionCommand, SetCityOutlineCommand, SetMapOrientationCommand,
+    UpdateEventCommand, UpdateFactionLayerCommand, UpdateLayerCommand, UpdateMapPropsCommand,
+    UpdatePlaceCommand, UpdateRegionCommand,
 };
 pub use history::{History, Transaction};
 pub use nature_region::{

@@ -306,6 +306,7 @@ pub fn partition_cut_gesture(
             if let Some(face) = clicked {
                 // 点选侧定了 → 开归属小窗（D7：既有/新建/无主）。
                 pick.pending_face = Some(face);
+                pick.pick_pos = [p.x, p.y];
                 pick.open = true;
             }
         }
@@ -319,6 +320,9 @@ pub struct CutPickDialog {
     pub open: bool,
     /// 点选中的脸 id。
     pub pending_face: Option<u32>,
+    /// 点选时的分区坐标（命令 `assign_at` 用——决定哪半拿新归属，
+    /// 必须落在点选的那半里）。
+    pub pick_pos: [f32; 2],
     /// 新建势力的名字输入（空 = 走既有列表 / 无主）。
     pub owner: String,
 }
@@ -359,7 +363,13 @@ pub fn partition_pick_dialog(
     let shell = crate::ui::shell::UiShell::new(&shell_cfg);
     let loc = current_loc.0;
     let _ = shell;
-    let mut commit: Option<Option<wv_core::Id>> = None;
+    /// 归属选择的三种来源（新建 = 真建势力实体，同事务一次撤销）。
+    enum PickChoice {
+        Existing(wv_core::Id),
+        Unclaimed,
+        New(String),
+    }
+    let mut commit: Option<PickChoice> = None;
     egui::Window::new(t(loc, crate::i18n::I18nKey::PartitionPickTitle))
         .id(egui::Id::new("wv_partition_pick"))
         .order(bevy_egui::egui::Order::Foreground)
@@ -371,7 +381,7 @@ pub fn partition_pick_dialog(
             // 既有势力列表。
             for f in &projection.world.factions {
                 if ui.button(f.name.as_str()).clicked() {
-                    commit = Some(Some(f.id.clone()));
+                    commit = Some(PickChoice::Existing(f.id.clone()));
                 }
             }
             ui.separator();
@@ -380,7 +390,7 @@ pub fn partition_pick_dialog(
                 .button(t(loc, crate::i18n::I18nKey::PartitionPickUnclaimed))
                 .clicked()
             {
-                commit = Some(None);
+                commit = Some(PickChoice::Unclaimed);
             }
             ui.separator();
             // 新建：名字输入 + 确认（id 即名字，可读 ID 约束由 Id::new 校验）。
@@ -396,7 +406,7 @@ pub fn partition_pick_dialog(
                     )
                     .clicked()
                 {
-                    commit = Some(Some(wv_core::Id::new_unchecked(pick.owner.trim())));
+                    commit = Some(PickChoice::New(pick.owner.trim().to_string()));
                 }
             });
             // 取消 = 丢弃整笔（重新画）。
@@ -410,19 +420,46 @@ pub fn partition_pick_dialog(
             }
         });
 
-    if let Some(owner) = commit {
+    if let Some(choice) = commit {
+        let mut tx = wv_edit::Transaction::new();
+        let owner = match choice {
+            PickChoice::Existing(id) => Some(id),
+            PickChoice::Unclaimed => None,
+            PickChoice::New(name) => {
+                // 新建势力**真建实体**（只挂 Id 不建实体 = 悬空引用，渲染
+                // 灰上灰，作者看不到任何变化——实机教训 2026-10-28）。
+                // id 用 `faction_<Unix 毫秒>`（faction_panel_actions 同款）：
+                // 唯一且过 Id 字符集校验；显示名才是作者输的名字。
+                // AddFaction 与 Cut 同事务 = 一次撤销。
+                let ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0);
+                let id = wv_core::Id::new_unchecked(format!("faction_{ms}"));
+                let palette = [
+                    "#C05A4E", "#4E79C0", "#5A9E6F", "#B07FD8", "#D8A94E", "#4EB8C0", "#C04E9E",
+                    "#7F8F4E",
+                ];
+                let color =
+                    wv_core::Color(palette[projection.world.factions.len() % palette.len()].into());
+                tx.push(Box::new(wv_edit::AddFactionCommand::new(
+                    wv_core::Faction::new(id.clone(), name, color),
+                )));
+                Some(id)
+            }
+        };
         let cmd = wv_edit::CutPartitionFaceCommand::new(
             wv_core::Id::new_unchecked(view.current_map.clone()),
             layer_id,
             span_from,
             face,
             pending.stroke,
-            // assign_at 语义已由 face 参数承担（点选哪半归属哪半——
-            // 命令侧以 face 为被切脸、assign_at 定点选侧；此处点选即归属）。
-            [f32::NAN, f32::NAN],
+            // assign_at = 点选位：哪半含它，哪半拿新归属（D7）。
+            pick.pick_pos,
             owner,
+            // 吸附容差按当前缩放折算成 wu（4 屏幕像素）。
+            4.0 * view.scale,
         );
-        let mut tx = wv_edit::Transaction::new();
         tx.push(Box::new(cmd));
         match edit.history.commit(&mut projection.world, tx) {
             Ok(dirty) => {

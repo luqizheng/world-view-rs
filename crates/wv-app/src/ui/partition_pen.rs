@@ -200,13 +200,36 @@ pub fn partition_pen_dialog(
     if let Some(decision) = commit {
         match decision {
             PenDecision::Create { from, owner } => {
+                let mut tx = wv_edit::Transaction::new();
+                // 归属名输入 = **新建势力实体**（同 Begin 一个事务）——
+                // 只挂 Id 不建实体是悬空引用，首脸渲染灰上灰（实机教训）。
+                // id = `faction_<Unix 毫秒>`（faction_panel_actions 同款）。
+                let owner = if let Some(name) = owner.as_ref() {
+                    let ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0);
+                    let id = wv_core::Id::new_unchecked(format!("faction_{ms}"));
+                    let palette = [
+                        "#C05A4E", "#4E79C0", "#5A9E6F", "#B07FD8", "#D8A94E", "#4EB8C0",
+                        "#C04E9E", "#7F8F4E",
+                    ];
+                    let color = wv_core::Color(
+                        palette[projection.world.factions.len() % palette.len()].into(),
+                    );
+                    tx.push(Box::new(wv_edit::AddFactionCommand::new(
+                        wv_core::Faction::new(id.clone(), name.as_str(), color),
+                    )));
+                    Some(id)
+                } else {
+                    None
+                };
                 let cmd = wv_edit::BeginPartitionSpanCommand::new(
                     wv_core::Id::new_unchecked(view.current_map.clone()),
                     layer_id.clone(),
                     from,
                     owner,
                 );
-                let mut tx = wv_edit::Transaction::new();
                 tx.push(Box::new(cmd));
                 match edit.history.commit(&mut projection.world, tx) {
                     Ok(dirty) => {

@@ -261,13 +261,21 @@ pub struct CutPartitionFaceCommand {
     pub assign_at: [f32; 2],
     /// 点选半的新归属；`None` = 无主。
     pub new_owner: Option<Id>,
+    /// 端点吸附容差（**分区单位 = wu**）。屏幕 px 容差由调用方按当前缩放
+    /// 折算（`px × view.scale`）——写死世界单位会在缩放下失效（实机教训：
+    /// 4 wu 在 1px≈10wu 的缩放下比一个像素还小，永远吸不上）。
+    pub snap_tol: f32,
     /// `apply` 缓存的整个分区快照。
     before: std::sync::Mutex<Option<wv_core::model::faction_partition::FactionPartition>>,
 }
 
 /// 笔画端点到边的吸附：返回 (环边序号 i, 边上参数 t ∈ [0,1])。
 /// 端点到线段的最短距离 ≤ [`CUT_SNAP_PX`] 才算命中。
-fn snap_endpoint_to_ring(ring_xy: &[(f32, f32)], endpoint: (f32, f32)) -> Option<(usize, f32)> {
+fn snap_endpoint_to_ring(
+    ring_xy: &[(f32, f32)],
+    endpoint: (f32, f32),
+    snap_tol: f32,
+) -> Option<(usize, f32)> {
     let mut best: Option<(usize, f32, f32)> = None; // (seg_i, t, dist2)
     let n = ring_xy.len();
     for i in 0..n {
@@ -284,7 +292,7 @@ fn snap_endpoint_to_ring(ring_xy: &[(f32, f32)], endpoint: (f32, f32)) -> Option
         let cx = a.0 + ab.0 * t;
         let cy = a.1 + ab.1 * t;
         let d2 = (endpoint.0 - cx).powi(2) + (endpoint.1 - cy).powi(2);
-        if d2 <= CUT_SNAP_PX * CUT_SNAP_PX && best.is_none_or(|(_, _, bd)| d2 < bd) {
+        if d2 <= snap_tol * snap_tol && best.is_none_or(|(_, _, bd)| d2 < bd) {
             best = Some((i, t, d2));
         }
     }
@@ -302,6 +310,7 @@ impl CutPartitionFaceCommand {
         stroke: Vec<f32>,
         assign_at: [f32; 2],
         new_owner: Option<Id>,
+        snap_tol: f32,
     ) -> Self {
         Self {
             map,
@@ -311,6 +320,7 @@ impl CutPartitionFaceCommand {
             stroke,
             assign_at,
             new_owner,
+            snap_tol,
             before: std::sync::Mutex::new(None),
         }
     }
@@ -334,12 +344,13 @@ impl CutPartitionFaceCommand {
             return Err(EditError::Precondition("笔画至少两点".into()));
         }
         let pts: Vec<(f32, f32)> = self.stroke.chunks_exact(2).map(|c| (c[0], c[1])).collect();
-        let start = snap_endpoint_to_ring(ring_xy, pts[0]).ok_or_else(|| {
-            EditError::Precondition("笔画起点不在脸边界上（吸附 4px 内无交）".into())
+        let start = snap_endpoint_to_ring(ring_xy, pts[0], self.snap_tol).ok_or_else(|| {
+            EditError::Precondition("笔画起点不在脸边界上（吸附容差内无交）".into())
         })?;
-        let end = snap_endpoint_to_ring(ring_xy, *pts.last().expect("≥2 点")).ok_or_else(|| {
-            EditError::Precondition("笔画终点不在脸边界上（吸附 4px 内无交）".into())
-        })?;
+        let end = snap_endpoint_to_ring(ring_xy, *pts.last().expect("≥2 点"), self.snap_tol)
+            .ok_or_else(|| {
+                EditError::Precondition("笔画终点不在脸边界上（吸附容差内无交）".into())
+            })?;
         Ok([start, end])
     }
 }
@@ -1007,6 +1018,7 @@ mod cut_tests {
             vec![50.0, -3.0, 50.0, 103.0],
             [30.0, 50.0],
             Some(Id::new_unchecked("faction_b")),
+            4.0,
         );
         let dirty = cmd.apply(&mut world).expect("apply");
         assert_eq!(dirty, vec!["partitions".to_string()]);
@@ -1063,6 +1075,7 @@ mod cut_tests {
             vec![50.0, -3.0, 50.0, 103.0],
             [70.0, 50.0],
             Some(Id::new_unchecked("faction_b")),
+            4.0,
         );
         cmd.apply(&mut world).expect("apply");
         let span = &world.partitions[0].spans[0];
@@ -1087,6 +1100,7 @@ mod cut_tests {
             vec![50.0, -3.0, 50.0, 50.0],
             [30.0, 50.0],
             None,
+            4.0,
         );
         assert!(cmd.apply(&mut world).is_err(), "端点不入边应 Err");
         assert_eq!(
@@ -1108,6 +1122,7 @@ mod cut_tests {
             vec![100.0, 0.0, 0.0, 50.0],
             [90.0, 10.0],
             None,
+            4.0,
         );
         cmd.apply(&mut world).expect("apply");
         let span = &world.partitions[0].spans[0];
@@ -1176,6 +1191,7 @@ mod cut_tests {
             vec![50.0, -3.0, 50.0, 103.0],
             [30.0, 50.0], // 点选左半 → 右半保持 faction_a
             Some(Id::new_unchecked("faction_b")),
+            4.0,
         );
         cmd.apply(&mut world).expect("apply");
         let span = &world.partitions[0].spans[0];
@@ -1208,6 +1224,7 @@ mod cut_tests {
             vec![50.0, -3.0, 50.0, 103.0],
             [30.0, 50.0],
             None,
+            4.0,
         );
         cmd.apply(&mut world).expect("apply");
         cmd.revert(&mut world).expect("revert");
