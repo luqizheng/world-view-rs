@@ -386,7 +386,6 @@ pub fn partition_pick_dialog(
     mut projection: ResMut<WorldProjection>,
     mut edit: ResMut<EditHistory>,
     mut notice: ResMut<crate::ui_shell::ShellNotice>,
-    playback: Res<PlaybackState>,
     time: Res<bevy::prelude::Time>,
 ) {
     if !pick.open {
