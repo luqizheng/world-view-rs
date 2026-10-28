@@ -193,6 +193,24 @@ pub fn partition_edit_hud(
                             session.reset();
                         }
                     });
+                    // 阶段提示行：随切刀状态实时变化（可见反馈闭环）。
+                    let stage = if session.pending_pick.is_some() {
+                        "✔ 已切开 —— 点选一块（青/橙描边）决定归属；Esc 取消"
+                    } else if session.active {
+                        "✎ 采集中 —— 松手完成这一刀"
+                    } else if edit_state.tool == PartitionTool::Cut {
+                        "从地块一边拖到另一边（红圈 = 可切边界）"
+                    } else if edit_state.tool == PartitionTool::DragBoundary {
+                        "拖动共享边界（两侧零和变形）"
+                    } else {
+                        "点一块地 → 改归属 + 生效时间"
+                    };
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new(stage)
+                            .small()
+                            .color(egui::Color32::from_rgb(255, 210, 120)),
+                    );
                 });
         });
 }
@@ -204,6 +222,7 @@ pub fn partition_edit_hud(
 #[allow(clippy::too_many_arguments)]
 pub fn partition_cut_gesture(
     mut gizmos: bevy::prelude::Gizmos,
+    mut notice: ResMut<crate::ui_shell::ShellNotice>,
     time: Res<bevy::prelude::Time>,
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -223,6 +242,9 @@ pub fn partition_cut_gesture(
     if playback.playing || pointer.wants_pointer {
         return;
     }
+    let mut pick_notice = |msg: &str| {
+        notice.error(msg, (time.elapsed_secs_f64() * 60.0) as u64);
+    };
     // Esc / 右键 = 丢弃整笔。
     if (keys.just_pressed(KeyCode::Escape) || buttons.just_pressed(MouseButton::Right))
         && (session.active || session.pending_pick.is_some())
@@ -236,6 +258,12 @@ pub fn partition_cut_gesture(
     let p = cursor_to_partition(cursor, &grid);
 
     if buttons.just_pressed(MouseButton::Left) && edit_state.tool == PartitionTool::Cut {
+        if session.pending_pick.is_some() {
+            // 待点选期间禁起新笔——否则新刀静默覆盖待选状态（实机教训：
+            // 作者不知道松手后要先点选，连画 N 刀全被覆盖）。
+            pick_notice("先点选归属侧（点一块地），或按 Esc 取消");
+            return;
+        }
         session.active = true;
         session.pts.clear();
         stroke_push(&mut session, [p.x, p.y]);
@@ -276,40 +304,37 @@ pub fn partition_cut_gesture(
             side_b: face_b,
         });
         session.pts.clear();
-        session.pick_wait_release = true;
+        // 松手即弹归属窗（实机教训：等第二次点选的流程被右键平移/Esc
+        // 静默清掉，永远走不到弹窗）。窗内先选侧（青=弧A / 橙=弧B）再选归属。
+        pick.pending_face = Some(face_a);
+        pick.pick_pos = [mid[0], mid[1]];
+        pick.open = true;
     }
 
-    // ── 点选归属（切完点选，D7；终审 C2 修复）──────────────────────
-    //
-    // 松手那帧的 `just_released` 仍为真——直接读会把「落笔松手」误判成
-    // 「点选」，切完立即以无主提交。帧闸：pending_pick 置起后等松手信号
-    // 消失才接受点选（`pick_wait_release`）。
-    if session.pending_pick.is_some() {
-        if session.pick_wait_release {
-            if buttons.just_released(MouseButton::Left) {
-                // 还在松手帧，等它过去。
-            } else {
-                session.pick_wait_release = false;
-            }
-        } else {
-            let Some(span) = wv_core::partition_span_at(
-                &projection.world,
-                &wv_core::Id::new_unchecked(view.current_map.clone()),
-                &layer_id,
-                playback.current_day,
-            ) else {
-                session.reset();
-                return;
-            };
-            let clicked = buttons
-                .just_pressed(MouseButton::Left)
-                .then(|| pick_face_at([p.x, p.y], span))
-                .flatten();
-            if let Some(face) = clicked {
-                // 点选侧定了 → 开归属小窗（D7：既有/新建/无主）。
-                pick.pending_face = Some(face);
-                pick.pick_pos = [p.x, p.y];
-                pick.open = true;
+    // ── 待点选高亮：两半环分别青/橙描边（作者能看到切出的两块）──
+    if let Some(pending) = &session.pending_pick {
+        let map_id = wv_core::Id::new_unchecked(view.current_map.clone());
+        if let Some(span) =
+            wv_core::partition_span_at(&projection.world, &map_id, &layer_id, playback.current_day)
+        {
+            for (face_id, color) in [
+                (pending.side_a, bevy::color::Color::srgb(0.2, 0.9, 0.9)),
+                (pending.side_b, bevy::color::Color::srgb(1.0, 0.6, 0.1)),
+            ] {
+                if let Some(face) = span.faces.iter().find(|f| f.id == face_id) {
+                    let ring: Vec<Vec2> = face
+                        .ring
+                        .iter()
+                        .filter_map(|id| span.vertices.iter().find(|v| v.id == *id))
+                        .map(|v| Vec2::new(v.xy[0], v.xy[1]) + grid.raster_origin)
+                        .collect();
+                    for pair in ring.windows(2) {
+                        gizmos.line_2d(pair[0], pair[1], color);
+                    }
+                    if let (Some(a), Some(b)) = (ring.first(), ring.last()) {
+                        gizmos.line_2d(*b, *a, color);
+                    }
+                }
             }
         }
     }
@@ -415,6 +440,8 @@ pub fn partition_pick_dialog(
         Unclaimed,
         New(String),
     }
+    // 新归属给哪半：青 = 弧 A，橙 = 弧 B（与地图上的描边同色）。
+    let mut side_a = true;
     let mut commit: Option<PickChoice> = None;
     egui::Window::new(t(loc, crate::i18n::I18nKey::PartitionPickTitle))
         .id(egui::Id::new("wv_partition_pick"))
@@ -424,6 +451,11 @@ pub fn partition_pick_dialog(
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
             ui.label(t(loc, crate::i18n::I18nKey::PartitionPickHint));
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut side_a, true, "青侧");
+                ui.selectable_value(&mut side_a, false, "橙侧");
+            });
+            ui.separator();
             // 既有势力列表。
             for f in &projection.world.factions {
                 if ui.button(f.name.as_str()).clicked() {
@@ -500,8 +532,7 @@ pub fn partition_pick_dialog(
             span_from,
             face,
             pending.stroke,
-            // assign_at = 点选位：哪半含它，哪半拿新归属（D7）。
-            pick.pick_pos,
+            side_a,
             owner,
             // 吸附容差按当前缩放折算成 wu（4 屏幕像素）。
             4.0 * view.scale,

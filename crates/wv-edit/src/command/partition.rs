@@ -258,7 +258,10 @@ pub struct CutPartitionFaceCommand {
     /// 切割笔画：map-local 扁平坐标 `[x0,y0,x1,y1,...]`（≥2 点 = 1 段）。
     pub stroke: Vec<f32>,
     /// 归属点选位：落在哪一半，那半归 `new_owner`。
-    pub assign_at: [f32; 2],
+    /// 新归属给哪一半：`true` = 弧 A（环上从刀口 1 到刀口 2 的那半），
+    /// `false` = 弧 B。（实机再修：弹窗直接选侧，比点位判定稳——环顶点
+    /// 上射线法不稳定。）
+    pub assign_side_a: bool,
     /// 点选半的新归属；`None` = 无主。
     pub new_owner: Option<Id>,
     /// 端点吸附容差（**分区单位 = wu**）。屏幕 px 容差由调用方按当前缩放
@@ -308,7 +311,7 @@ impl CutPartitionFaceCommand {
         span_from: i64,
         face: u32,
         stroke: Vec<f32>,
-        assign_at: [f32; 2],
+        assign_side_a: bool,
         new_owner: Option<Id>,
         snap_tol: f32,
     ) -> Self {
@@ -318,7 +321,7 @@ impl CutPartitionFaceCommand {
             span_from,
             face,
             stroke,
-            assign_at,
+            assign_side_a,
             new_owner,
             snap_tol,
             before: std::sync::Mutex::new(None),
@@ -350,15 +353,44 @@ impl CutPartitionFaceCommand {
         let project = |endpoint: (f32, f32)| -> Option<(usize, f32)> {
             snap_endpoint_to_ring(ring_xy, endpoint, self.snap_tol * 20.0)
         };
+        let dist_to_ring = |endpoint: (f32, f32)| -> f32 {
+            let mut best = f32::INFINITY;
+            let n = ring_xy.len();
+            for i in 0..n {
+                let a = ring_xy[i];
+                let b = ring_xy[(i + 1) % n];
+                let ab = (b.0 - a.0, b.1 - a.1);
+                let ap = (endpoint.0 - a.0, endpoint.1 - a.1);
+                let ab2 = ab.0 * ab.0 + ab.1 * ab.1;
+                let t = if ab2 < 1e-12 {
+                    0.0
+                } else {
+                    ((ap.0 * ab.0 + ap.1 * ab.1) / ab2).clamp(0.0, 1.0)
+                };
+                let cx = a.0 + ab.0 * t;
+                let cy = a.1 + ab.1 * t;
+                best = best.min(((endpoint.0 - cx).powi(2) + (endpoint.1 - cy).powi(2)).sqrt());
+            }
+            best
+        };
         let start = snap_endpoint_to_ring(ring_xy, pts[0], self.snap_tol)
             .or_else(|| project(pts[0]))
             .ok_or_else(|| {
-                EditError::Precondition("笔画起点离地块边界太远（80px 内无边界可吸）".into())
+                EditError::Precondition(format!(
+                    "笔画起点离地块边界太远（最近 {:.0} wu > 上限 {:.0} wu；scale 折算容差 {} wu）",
+                    dist_to_ring(pts[0]),
+                    self.snap_tol * 20.0,
+                    self.snap_tol
+                ))
             })?;
         let end = snap_endpoint_to_ring(ring_xy, *pts.last().expect("≥2 点"), self.snap_tol)
             .or_else(|| project(*pts.last().expect("≥2 点")))
             .ok_or_else(|| {
-                EditError::Precondition("笔画终点离地块边界太远（80px 内无边界可吸）".into())
+                EditError::Precondition(format!(
+                    "笔画终点离地块边界太远（最近 {:.0} wu > 上限 {:.0} wu）",
+                    dist_to_ring(*pts.last().expect("≥2 点")),
+                    self.snap_tol * 20.0,
+                ))
             })?;
         Ok([start, end])
     }
@@ -456,7 +488,7 @@ impl EditCommand for CutPartitionFaceCommand {
         if arc_a.len() < 3 || arc_b.len() < 3 {
             return Err(EditError::Precondition("切分退化（某半不足 3 点）".into()));
         }
-        // 归属点选（D7）：assign_at 落在哪半（射线法）。
+        // 归属点选（D7）：弹窗直接指定哪半（assign_side_a）。
         // 终审 C2 根因修复：刀口顶点还在 new_vertices 里没写回——环坐标
         // 必须从「span ∪ new_vertices」解析，否则射线法丢边、归属判反。
         let resolve = |id: u32| -> (f32, f32) {
@@ -468,7 +500,7 @@ impl EditCommand for CutPartitionFaceCommand {
                 .unwrap_or((f32::NAN, f32::NAN))
         };
         let arc_a_xy: Vec<(f32, f32)> = arc_a.iter().map(|id| resolve(*id)).collect();
-        let in_a = point_in_ring_coords(self.assign_at, &arc_a_xy);
+        let in_a = self.assign_side_a;
         let old_owner = span.faces[face_idx].owner.clone();
         let (owner_a, owner_b) = if in_a {
             (self.new_owner.clone(), old_owner)
@@ -1025,7 +1057,7 @@ mod cut_tests {
             0,
             0,
             vec![50.0, -3.0, 50.0, 103.0],
-            [30.0, 50.0],
+            false,
             Some(Id::new_unchecked("faction_b")),
             4.0,
         );
@@ -1082,7 +1114,7 @@ mod cut_tests {
             0,
             0,
             vec![50.0, -3.0, 50.0, 103.0],
-            [70.0, 50.0],
+            true,
             Some(Id::new_unchecked("faction_b")),
             4.0,
         );
@@ -1107,7 +1139,7 @@ mod cut_tests {
             0,
             0,
             vec![50.0, -3.0, 50.0, 50.0],
-            [30.0, 50.0],
+            false,
             None,
             4.0,
         );
@@ -1130,7 +1162,7 @@ mod cut_tests {
             0,
             0,
             vec![30.0, 10.0, 70.0, 90.0],
-            [40.0, 50.0],
+            false,
             Some(Id::new_unchecked("faction_b")),
             4.0,
         );
@@ -1152,7 +1184,7 @@ mod cut_tests {
             0,
             0,
             vec![50.0, 45.0, 52.0, 55.0],
-            [50.0, 50.0],
+            true,
             None,
             1.0,
         );
@@ -1170,7 +1202,7 @@ mod cut_tests {
             0,
             0,
             vec![100.0, 0.0, 0.0, 50.0],
-            [90.0, 10.0],
+            true,
             None,
             4.0,
         );
@@ -1239,7 +1271,7 @@ mod cut_tests {
             0,
             0,
             vec![50.0, -3.0, 50.0, 103.0],
-            [30.0, 50.0], // 点选左半 → 右半保持 faction_a
+            false, // 弧 B（左半）拿新归属 → 右半保持 faction_a
             Some(Id::new_unchecked("faction_b")),
             4.0,
         );
@@ -1272,7 +1304,7 @@ mod cut_tests {
             0,
             0,
             vec![50.0, -3.0, 50.0, 103.0],
-            [30.0, 50.0],
+            false,
             None,
             4.0,
         );
