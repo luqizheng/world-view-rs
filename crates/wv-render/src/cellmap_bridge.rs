@@ -2714,6 +2714,7 @@ mod bridge_tests {
             outline_polygon: None,
             trashed: false,
             trashed_at: None,
+            comment: None,
         }
     }
 

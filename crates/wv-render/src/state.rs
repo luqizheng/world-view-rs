@@ -1378,12 +1378,12 @@ mod tests {
     /// 2026-10-25：追加「普通地图」（`GoogleMap`）——专业制图范式的入口。
     /// 2026-10-26（ADR-0069）：Schematic 退役后重排为 矢量 → 普通地图 →
     /// 势力（键 1/2/3，与顶栏前两段 Browse/Map 对齐）。
+    /// 2026-10-28：Faction 退出 BROWSING（`state.rs:180` 注释），断言随行——
+    /// 快捷键与命令面板都按 `BROWSING.len()` 动态适配，2 档即终态。
     #[test]
-    fn browsing_list_offers_vector_flat_google_and_faction() {
-        assert_eq!(
-            ViewMode::BROWSING,
-            [ViewMode::VectorFlat, ViewMode::GoogleMap, ViewMode::Faction]
-        );
+    fn browsing_list_offers_vector_flat_and_google() {
+        assert_eq!(ViewMode::BROWSING, [ViewMode::VectorFlat, ViewMode::GoogleMap]);
+        assert!(!ViewMode::BROWSING.contains(&ViewMode::Faction));
         assert!(ViewMode::BROWSING.contains(&ViewMode::default()));
     }
 
@@ -1437,6 +1437,7 @@ mod tests {
             outline_polygon: None,
             trashed: false,
             trashed_at: None,
+            comment: None,
         }
     }
 
@@ -1452,6 +1453,7 @@ mod tests {
                 root_map: Id::new_unchecked("world_main"),
                 timeline_range: TimeSpan::new(1, 180_001).expect("测试区间合法"),
                 template: None,
+                comment: None,
             }),
             ..World::default()
         };

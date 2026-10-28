@@ -108,6 +108,7 @@ fn map_node() -> MapNode {
         outline_polygon: None,
         trashed: false,
         trashed_at: None,
+        comment: None,
     }
 }
 

@@ -1272,6 +1272,7 @@ mod region_handles_tests {
             outline_polygon: None,
             trashed: false,
             trashed_at: None,
+            comment: None,
         });
         projection.world.regions.push(Region {
             id: region_id.clone(),
@@ -1395,6 +1396,7 @@ mod region_handles_tests {
             outline_polygon: None,
             trashed: false,
             trashed_at: None,
+            comment: None,
         });
         projection.world.regions.push(Region {
             id: wv_core::Id::new_unchecked("nr_a"),
@@ -2006,6 +2008,7 @@ mod tests {
             outline_polygon: None,
             trashed: false,
             trashed_at: None,
+            comment: None,
         }
     }
 
@@ -2443,6 +2446,7 @@ mod tests {
                 seed: 1,
                 rivers_seed: 42,
             }),
+            comment: None,
         });
 
         let (mut app, mut schedule) = projection_app(world);

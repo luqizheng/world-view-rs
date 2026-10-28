@@ -862,6 +862,7 @@ mod steady_state_tests {
             outline_polygon: None,
             trashed: false,
             trashed_at: None,
+            comment: None,
         });
         for i in 0..n {
             let x = (i % 16) as f32 * 200.0;

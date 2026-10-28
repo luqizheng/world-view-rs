@@ -689,6 +689,7 @@ mod tests {
             outline_polygon: None,
             trashed: false,
             trashed_at: None,
+            comment: None,
         };
         let mut city = wv_core::map::MapNode {
             orientation: 0.0,
@@ -797,6 +798,7 @@ mod tests {
             outline_polygon: None,
             trashed: false,
             trashed_at: None,
+            comment: None,
         };
         world.maps = vec![city];
 
@@ -886,6 +888,7 @@ mod tests {
                 outline_polygon: None,
                 trashed: false,
                 trashed_at: None,
+            comment: None,
             }],
             ..wv_core::World::default()
         };

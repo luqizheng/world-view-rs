@@ -2387,6 +2387,7 @@ mod tests {
             outline_polygon: None,
             trashed: false,
             trashed_at: None,
+            comment: None,
         }
     }
 

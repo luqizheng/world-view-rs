@@ -858,6 +858,7 @@ mod tests {
             z,
             color_mode: FactionColorMode::Own,
             visible,
+            usage: wv_core::model::faction::LayerUsage::Political,
         }
     }
 
