@@ -115,7 +115,7 @@ impl FactionOverlayEntities {
         if meshes.is_empty() && materials.is_empty() {
             return;
         }
-        commands.queue(move |world: &mut World| {
+        commands.queue(move |world: &mut bevy::ecs::world::World| {
             let mut mesh_assets = world.resource_mut::<Assets<Mesh>>();
             for handle in &meshes {
                 mesh_assets.remove(handle);

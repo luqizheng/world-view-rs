@@ -220,7 +220,10 @@ pub struct ScaleHintCache {
     /// 上次计算时的 `(图 id, cell_size 的位模式)`。
     pub key: Option<(wv_core::Id, u32)>,
     /// 与 `key` 同帧算出的文案；`None` = 前提缺失（面板不显示）。
-    pub lines: Option<Vec<String>>,
+    ///
+    /// 类型跟随 `wv_core::map::scale_hint::scale_hint_texts` 的固定三行
+    /// （宽 / 高 / 对角线），不是任意长度列表。
+    pub lines: Option<[String; 3]>,
 }
 
 /// 自然区域面板的**会话态**（ADR-0045 D4「命名即物化」）。

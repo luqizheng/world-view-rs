@@ -202,12 +202,8 @@ pub fn panel_validation(
             if let Some(map_id) = drill.current().cloned() {
                 let key = (map_id.clone(), grid.cell_size.to_bits());
                 if scale_hint.key.as_ref() != Some(&key) || projection.is_changed() {
-                    scale_hint.lines = scale_hint_texts(
-                        &projection.world,
-                        &map_id,
-                        grid.cell_size,
-                        current_loc.0,
-                    );
+                    scale_hint.lines =
+                        scale_hint_texts(&projection.world, &map_id, grid.cell_size, current_loc.0);
                     scale_hint.key = Some(key);
                 }
                 if let Some(lines) = &scale_hint.lines {
