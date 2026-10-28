@@ -269,12 +269,28 @@ fn world_partition<'w>(
 }
 
 /// 分区编辑态（T12 消费）：「正在编辑哪层的哪段 + 用哪把子工具」。
-#[derive(Resource, Default)]
+///
+/// `Default` 手写而非 derive：`show_boundaries` 缺省 **true**（红圈是作者
+/// 要先看见「能切的地方」的引导，2026-10-28 改可选时保默认开）。
+#[derive(Resource)]
 pub struct PartitionEditState {
     /// 编辑中：`(层 id, 段 from)`；`None` = 非编辑态。
     pub active: Option<(wv_core::Id, i64)>,
     /// 当前子工具。
     pub tool: PartitionTool,
+    /// 边界红圈（编辑态常显的当前层脸环闪烁红线）是否显示——2026-10-28
+    /// 由常显改可选（HUD 勾选框，会话级不落盘）。
+    pub show_boundaries: bool,
+}
+
+impl Default for PartitionEditState {
+    fn default() -> Self {
+        Self {
+            active: None,
+            tool: PartitionTool::default(),
+            show_boundaries: true,
+        }
+    }
 }
 
 /// 编辑态三子工具（ADR-0079 D4）。

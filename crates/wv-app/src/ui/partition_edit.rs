@@ -187,6 +187,13 @@ pub fn partition_edit_hud(
                         ui.label(t(loc, crate::i18n::I18nKey::PartitionPenEffectiveDay));
                         ui.add(egui::DragValue::new(&mut playback.current_day).speed(1.0));
                         ui.separator();
+                        // 边界红圈开关（2026-10-28 由常显改可选；默认开——
+                        // 红圈是「先看见能切的地方」的引导）。
+                        ui.checkbox(
+                            &mut edit_state.show_boundaries,
+                            t(loc, crate::i18n::I18nKey::PartitionShowBoundaries),
+                        );
+                        ui.separator();
                         if ui
                             .button(t(loc, crate::i18n::I18nKey::CommonCancel))
                             .clicked()
@@ -201,7 +208,7 @@ pub fn partition_edit_hud(
                     } else if edit_state.tool == PartitionTool::Cut {
                         "从地块一边拖到另一边（红圈 = 可切边界）"
                     } else if edit_state.tool == PartitionTool::DragBoundary {
-                        "拖动共享边界（两侧零和变形）"
+                        "拖动共享边界——青色预览 = 松手后的两侧落位"
                     } else {
                         "点一块地 → 改归属 + 生效时间"
                     };
@@ -336,9 +343,9 @@ pub fn partition_cut_gesture(
 
     // ── 笔迹预览：采集中画当前折线（世界坐标 gizmo——可见反馈，作者才
     // 知道系统在采集、两端是否贴到了边界）。
-    // 编辑态常显：当前层所有脸的边界用**闪烁红线**描出——作者要先看见
-    // 「能切的地方」，才知道笔画两端该压在哪。
-    {
+    // 边界红圈（当前层所有脸的**闪烁红线**）：作者要先看见「能切的地方」，
+    // 才知道笔画两端该压在哪。2026-10-28 由常显改可选（HUD 勾选框，默认开）。
+    if edit_state.show_boundaries {
         let map_id = wv_core::Id::new_unchecked(view.current_map.clone());
         if let Some(span) =
             wv_core::partition_span_at(&projection.world, &map_id, &layer_id, playback.current_day)
@@ -533,10 +540,12 @@ pub fn partition_assign_dialog(
     }
 }
 
-/// 拖边界（T13/D4）：命中**共享顶点**（≤8px 容差）→ 拖动 → 松手提交
+/// 拖边界（T13/D4）：命中**共享顶点**（≤8px 容差）→ 拖动（青色预览环跟随
+/// 光标 = 松手落位，2026-10-28 补预览）→ 松手提交
 /// `MovePartitionVerticesCommand`（零和由命令侧预检保证）。
 #[allow(clippy::too_many_arguments)]
 pub fn partition_drag_gesture(
+    mut gizmos: bevy::prelude::Gizmos,
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     view: Res<ViewState>,
@@ -613,7 +622,70 @@ pub fn partition_drag_gesture(
                 Err(e) => bevy::log::warn!("拖边界提交失败: {e}"),
             }
         }
+    } else if buttons.pressed(MouseButton::Left) {
+        // ── 拖动预览（2026-10-28 下一站候选落地）：拖动期间把被拖顶点跟随
+        // 光标画**预览环**（引用它的每张脸的边界形状 = 松手后的落位，两侧
+        // 同画 = 零和联动的可见反馈），原位 → 光标画一条暗色位移参考线。
+        // 此前拖动全程零反馈，松手提交了才知道边界去了哪。
+        if let Some(vid) = session.dragging {
+            if let Some(span) = span() {
+                let color = bevy::color::Color::srgb(0.2, 0.9, 0.95);
+                for face in &span.faces {
+                    if !face.ring.contains(&vid) {
+                        continue;
+                    }
+                    let ring = preview_ring_xy(&span, face, vid, [p.x, p.y]);
+                    for pair in ring.windows(2) {
+                        gizmos.line_2d(
+                            pair[0] + grid.raster_origin,
+                            pair[1] + grid.raster_origin,
+                            color,
+                        );
+                    }
+                    if let (Some(first), Some(last)) = (ring.first(), ring.last()) {
+                        gizmos.line_2d(
+                            *last + grid.raster_origin,
+                            *first + grid.raster_origin,
+                            color,
+                        );
+                    }
+                }
+                if let Some(orig) = span.vertices.iter().find(|v| v.id == vid) {
+                    gizmos.line_2d(
+                        Vec2::new(orig.xy[0], orig.xy[1]) + grid.raster_origin,
+                        cursor,
+                        bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.35),
+                    );
+                }
+            }
+        }
     }
+}
+
+/// 预览环（纯函数）：`face` 的环坐标，其中顶点 `vid` 换成 `p`（map-local）。
+///
+/// 拖边界预览用——引用 `vid` 的每张脸各画一遍，两侧边界一起动 = 零和
+/// 联动的可见反馈。未引用 `vid` 的环不受影响（调用方过滤）。
+pub fn preview_ring_xy(
+    span: &wv_core::model::faction_partition::PartitionSpan,
+    face: &wv_core::model::faction_partition::PartitionFace,
+    vid: u32,
+    p: [f32; 2],
+) -> Vec<Vec2> {
+    face.ring
+        .iter()
+        .map(|id| {
+            if *id == vid {
+                Vec2::new(p[0], p[1])
+            } else {
+                span.vertices
+                    .iter()
+                    .find(|v| v.id == *id)
+                    .map(|v| Vec2::new(v.xy[0], v.xy[1]))
+                    .unwrap_or(Vec2::NAN)
+            }
+        })
+        .collect()
 }
 
 /// 拖动会话（DragBoundary 工具）。
@@ -766,6 +838,27 @@ mod tests {
             "首点命中优先"
         );
         assert_eq!(stroke_face(&[150.0, 50.0, 180.0, 60.0], &span), None);
+    }
+
+    #[test]
+    fn preview_ring_moves_dragged_vertex_only() {
+        // 拖边界预览守点（2026-10-28）：预览环只有被拖顶点跟随光标，其余
+        // 顶点原位——两侧脸各引用一次 = 零和联动的可见反馈。
+        let span = demo_span();
+        // 脸 0 的环 [4,5,3,0]：拖顶点 4 (50,0) 到 (60,-10)。
+        let ring = preview_ring_xy(&span, &span.faces[0], 4, [60.0, -10.0]);
+        assert_eq!(ring.len(), 4, "环长度不变");
+        assert_eq!(ring[0], Vec2::new(60.0, -10.0), "被拖顶点跟随光标");
+        assert_eq!(ring[1], Vec2::new(50.0, 100.0), "其余顶点原位（5）");
+        assert_eq!(ring[2], Vec2::new(0.0, 100.0), "其余顶点原位（3）");
+        assert_eq!(ring[3], Vec2::new(0.0, 0.0), "其余顶点原位（0）");
+        // 不含被拖顶点的环完全不变。
+        let ring1 = preview_ring_xy(&span, &span.faces[1], 4, [60.0, -10.0]);
+        assert_eq!(
+            ring1[0],
+            Vec2::new(100.0, 0.0),
+            "未引用被拖顶点的环不受影响"
+        );
     }
 
     #[test]
