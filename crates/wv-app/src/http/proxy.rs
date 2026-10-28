@@ -139,9 +139,42 @@ pub async fn handle_line(line: &str, port: u16) -> Option<Value> {
     }
     let params = msg.get("params").cloned().unwrap_or(Value::Null);
     match http_post_json(port, &forward_body(id.clone(), method, params)).await {
-        Ok(upstream) => Some(upstream),
-        Err(_) => Some(unreachable_error(id, port)),
+        Ok(upstream) => {
+            // tools/list 成功 → 刷新缓存（GUI 关掉后重启会话，工具仍可注册）。
+            if method == "tools/list" {
+                cache_write(&upstream);
+            }
+            Some(upstream)
+        }
+        Err(_) => {
+            // 上游不可达：tools/list 回**缓存**（ADR-0083 追记——MCP 客户端
+            // 在会话启动时列工具，GUI 往往还没开；无缓存才报 -32000）。
+            // tools/call 不吃缓存（执行必须 GUI 在线），照旧 -32000。
+            if method == "tools/list" {
+                if let Some(cached) = cache_read() {
+                    return Some(cached);
+                }
+            }
+            Some(unreachable_error(id, port))
+        }
     }
+}
+
+/// tools/list 缓存文件（temp 目录，best-effort 读写失败静默——缓存是
+/// 可用性增强不是正确性依赖）。
+fn cache_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("wv_mcp_tools_cache.json")
+}
+
+/// 缓存 tools/list 回执（last-write-wins）。
+fn cache_write(resp: &Value) {
+    let _ = std::fs::write(cache_path(), resp.to_string());
+}
+
+/// 读缓存的 tools/list 回执。
+fn cache_read() -> Option<Value> {
+    let raw = std::fs::read_to_string(cache_path()).ok()?;
+    serde_json::from_str(&raw).ok()
 }
 
 /// stdio 主循环：stdin 每行一条 JSON-RPC，回包写 stdout（每行一条）。
@@ -200,6 +233,18 @@ mod tests {
         );
         assert!(is_local_method("notifications/cancelled"));
         assert!(!is_local_method("tools/list"), "tools/* 必须转发");
+    }
+
+    #[test]
+    fn tools_list_cache_roundtrip_and_fallback() {
+        // 缓存回执：写→读 roundtrip；坏 JSON / 缺文件 → None（静默降级）。
+        let resp = json!({"id": 2, "result": {"tools": [{"name": "get_ui_state"}]}});
+        cache_write(&resp);
+        assert_eq!(cache_read(), Some(resp), "缓存读回应与写回一致");
+        std::fs::write(cache_path(), "not json").unwrap();
+        assert_eq!(cache_read(), None, "坏缓存静默忽略");
+        let _ = std::fs::remove_file(cache_path());
+        assert_eq!(cache_read(), None, "无缓存 → None");
     }
 
     #[test]

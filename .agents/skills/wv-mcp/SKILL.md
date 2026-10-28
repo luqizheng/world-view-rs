@@ -15,8 +15,11 @@ description: 通过 wv 的 MCP 工具面驱动 World View——GUI 验收、UI �
 
    默认监听 `127.0.0.1:8732`（`--http-port` 可改）。**先杀残留 wv.exe 再启动**（`taskkill //F //IM wv.exe`）——旧实例会锁构建产物、串日志。
 
-2. **MCP server 注册**：本仓库 `.mcp.json` 已注册 `wv`（stdio 代理 `wv mcp`）。
-   会话启动时自动生效；若未生效，重启会话或手动用 bash 调 HTTP（见文末兜底）。
+2. **MCP server 注册**：经 ZCode **Settings → MCP** 注册（stdio，command=
+   `cargo.exe`，args=`run --manifest-path <repo>\Cargo.toml -p wv-app
+   --features http --bin wv -- mcp`）——详见仓库根 **`mcp.md`**。ZCode 不读
+   `.mcp.json`；GUI 开过一次后工具列表有缓存，GUI 关着也能注册。未注册时用
+   文末 curl 兜底。
 
 ## 工具面（15 个，全部经 `wv` server）
 
@@ -69,9 +72,11 @@ description: 通过 wv 的 MCP 工具面驱动 World View——GUI 验收、UI �
 | 构建报 os error 5 | wv.exe 残留锁产物——taskkill 后重试 |
 | initialize 成功但 tools/call 超时 | GUI 主帧卡死（弹窗等输入）——看 GUI 窗口 |
 
-## 兜底（MCP 未注册时）
+## 无 MCP 时的主路径（零注册）
 
-直接 bash 打 HTTP（同一端点、同一 payload 形态）：
+本 skill 的定位：**随软件分发给「下载 wv 的用户」**——agent 读了即可驱动，
+不需要任何客户端注册。GUI 常驻 `127.0.0.1:8732/mcp`（JSON-RPC over POST），
+没有 MCP 注册时本节就是**主路径**而非兜底：
 
 ```bash
 curl -s http://127.0.0.1:8732/mcp -H "Content-Type: application/json" \

@@ -63,3 +63,20 @@ agent 驱动验收走的是「bash 抓屏脚本 + Read 图片 + grep 日志」�
 - **补全** ADR-0014 的传输面（HTTP → stdio 代理桥）；
 - **不动** ADR-0078/0082 的工具面与语义（15 个工具原样）；
 - skill 是 `.agents/skills/` 仓库惯例的第一个 MCP 驱动类条目。
+
+## 7. 追记（2026-10-28，只增不改）：ZCode 注册实测修正
+
+- **ZCode 不读 `.mcp.json`**（Claude Code 系格式）——注册面是
+  **Settings → MCP**（落 `~/.zcode/cli/config.json` 或 workspace
+  `.zcode/config.json` 的 `mcp.servers`，后者 gitignore）。根目录
+  `.mcp.json` 已删，注册说明收口到仓库根 **`mcp.md`**。
+- **tools/list 缓存**：MCP 客户端在会话启动时列工具，而 GUI 往往还没开
+  ——代理把成功的 tools/list 回执缓存到 `%TEMP%/wv_mcp_tools_cache.json`，
+  上游不可达时 tools/list 回缓存（tools/call 不吃缓存，照旧 -32000）。
+  GUI 开过一次后，注册与 GUI 启动顺序解耦。
+
+- **接入定位裁定（2026-10-28 用户拍板「用户下载软件→agent 使用→通信」）**：
+  **skill+HTTP 是第一入口**（零注册、随软件分发、任何有 shell 的 agent 可
+  用——GUI 端点本就是 JSON-RPC over POST），MCP 注册降为可选增强（图片直
+  回 / schema 化）。`mcp.md` 重构为「两种接入方式」；分发路线待办记入该文
+  （A=Releases 预编译 exe + 随附 skill；B=npm 包装器，代理可 Node 重写）。
