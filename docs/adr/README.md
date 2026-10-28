@@ -233,6 +233,7 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
 | [ADR-0070](ADR-0070-rivers-roads-as-line-poi.md) | 河流与道路=线段 POI——群系 16/20 退役、起终点算法（绕行/强制下切）、工具条线段 POI 按钮 + 河流和道路面板、线即路网（PlaceEdge 陆路边改由 `Place.line` 推导、存量链式合并迁移）；**取代 ADR-0037 D5**、**修订 ADR-0046（双供给→单供给）/ ADR-0054（cell map 职责）** | 已接受（Accepted，2026-10-26，用户批准设计稿「go」；设计稿 `docs/superpowers/specs/2026-10-26-river-road-poi-design.md`、计划 `docs/superpowers/plans/2026-10-26-river-road-poi.md`；**随 `feat/river-road-poi` 落地**（T1–T13，含**追记一**：D5 serde-skip 勘误 / §3.3 投影回填澄清 / 实施期裁定索引）） |
 | [ADR-0071](ADR-0071-landmark-panel.md) | 地标面板——Edit/CellMap 两模式单击放置 POI（即点即建、默认 rank=3）、`DeletePlaceCommand` 级联删边可撤销、放置模式走 `MapToolId::Landmark` 白拿 dispatch 互斥（无瓷砖无快捷键） | 已接受（2026-10-26，用户三项裁定） |
 | [ADR-0073](ADR-0073-label-placement-candidates.md) | 标签候选位摆位——统一占位池（六类标签跨系统避让）、点标签 8 方位候选、面标签区域内约束、街名沿街旋转 + 直立翻转、按档×通路密度预算（替代六处 truncate(200)）、`WV_DRILL` 验收探针 | 提议态（2026-10-26，实机截图初验通过） |
+| [ADR-0074](ADR-0074-cellmap-point-select-arbitration.md) | CellMap 点选三段裁定——图钉（rank≥2 点状 POI，18px 半径最近者）> 群系区（nature_overlay 开时 Nature 区多边形内）> 格（ADR-0057 原行为）；单焦点模型（实体选中与格选区互斥）、实体命中不吃修饰键、浏览态零改动 | 提议态（2026-10-27，用户裁定「先解决 cell map：能够选择 POI 和群系」） |
 | [ADR-0076](ADR-0076-mountain-range-pen-altitudinal-zonation.md) | 山系笔与山脉垂直带谱——山脉作为结构化对象（不引入板块实体），`apply_mountain_range` kind 赋值改双判据带谱（增量 ≥500m 门槛保既有地貌 + 绝对高度落带 300/1200/2600，雪原封顶），山系笔为主力、手涂降微调语义零改 | 已接受（2026-10-27，用户批准设计稿「就这么定」+「go」；设计稿 `docs/superpowers/specs/2026-10-27-mountain-range-pen-design.md`） |
 | [ADR-0078](ADR-0078-http-ui-control-tools.md) | HTTP UI 操控工具——扩展 ADR-0014 MCP server 的工具面（9→13）：get_ui_state / set_view_mode（与 WV_MODE 探针同源词表）/ set_panel_visible（Panel::ALL 词表）/ screenshot（MCP image content 回传 base64 PNG + 落盘）；UI 状态与 World 同纪律只在主帧读写 | 已接受（2026-10-28，用户委托裁量落地；spec `docs/superpowers/specs/2026-10-28-http-ui-control-design.md`、计划 `docs/superpowers/plans/2026-10-28-http-ui-control.md`；编号取 0078——0077 已被并行轮次 cellmap-relief-shading 的 spec 预留） |
 
@@ -244,6 +245,7 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
 > 解法按既有惯例——**两边都留**；ADR 正文与索引行号以文件名为准，引用时带全称。
 
 | [ADR-0075](ADR-0075-map-tree-trash-and-deep-copy.md) | 地图树垃圾桶与深拷贝复制粘贴——多对多被否决维持单亲树；软删只打标（显隐派生，跨重启可恢复）；purge 直应用豁免撤销 + save_maps 目录删除传播；首条改 meta 的命令（删 root_map 顺带改写）；粘贴层级门控 + 视野中心锚定 + ID/名字全量换新 | 已接受（2026-10-27，用户批准设计稿「go」+ 实机验收通过；spec `docs/superpowers/specs/2026-10-27-map-tree-enhancement-design.md`（含 §10 追记）、计划 `plans/2026-10-27-map-tree-enhancement.md`；**编号按上备注取缓冲号 0075**——原分支内编 0074，与山系笔（0076）撞号） |
+>>>>>>> wip/wv-ui-review-p1p2
 
 ---
 > **⚠️ 编号撞号备注（2026-10-20 追加）**：`ADR-0044` 已被 ADR-0042 的「追记三」占用（civ-atlas 方法论落地，commit `eef816c`，索引行指向 ADR-0042 文件），故本次两份新 ADR 从 **0045** 起（ADR-0045 自然区域 / ADR-0046 亚格线状作者数据）。上文 0042 那条备注的「后续新 ADR 从 0042 起」已过时，按 §6.3 只增不改、保留原文。引用时务必带文件名全称。

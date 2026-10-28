@@ -49,6 +49,7 @@ use wv_terrain::intent::Intent;
 mod cell;
 mod history;
 mod landmark;
+mod pin_drag;
 mod region;
 mod stroke;
 mod terrain;
@@ -63,6 +64,7 @@ pub use history::{
     HistoryOutcome,
 };
 pub use landmark::{commit_landmark_click, landmark_anchor, landmark_candidates};
+pub use pin_drag::drag_place_pin_on_hold;
 pub use region::{
     commit_continent_generation, commit_region_intent, sync_region_cells, LassoLiveLink,
 };

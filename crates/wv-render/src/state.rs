@@ -775,6 +775,43 @@ impl ShapeDrag {
     }
 }
 
+/// 图钉拖动的会话态（[ADR-0074] 追记三：点选器「按住拖动 = 挪钉」）。
+///
+/// 生命周期：左键按下命中图钉 → **候选**；位移超门槛 → **激活**
+/// （`preview_local` 每帧跟随光标）；松手 → wv-app 侧组
+/// `UpdatePlaceCommand` **一次性**提交并清空。世界数据在松手前**不动**
+/// （§3.3：System 不直接改世界）——渲染侧（帧构建的点标/图钉、标签）
+/// 在 `active` 时用 `preview_local` 覆盖世界锚点，实现拖动预览。
+///
+/// `last_click` 是**点击史**不是拖动态：`cancel()` 刻意保留它，
+/// 「单击-单击」的双击检测跨拖动候选存续。
+#[derive(Resource, Debug, Default, Clone, PartialEq)]
+pub struct PinDragState {
+    /// 拖动候选 / 目标地点。
+    pub place: Option<wv_core::Id>,
+    /// 候选建立时的图（换图即弃——预览坐标属于旧图）。
+    pub map: Option<wv_core::Id>,
+    /// 按下时的光标世界位（位移门槛的基准）。
+    pub start_world: Option<bevy::math::Vec2>,
+    /// 已超位移门槛、正式拖动中。
+    pub active: bool,
+    /// 预览位（图内局部 wu）；`active` 时每帧更新。
+    pub preview_local: Option<(f32, f32)>,
+    /// 上次左键按下（双击检测：时刻 + 世界位）。
+    pub last_click: Option<(f64, bevy::math::Vec2)>,
+}
+
+impl PinDragState {
+    /// 清空拖动态（松手提交后 / 中止时调用）；保留 `last_click`。
+    pub fn cancel(&mut self) {
+        let last_click = self.last_click.take();
+        *self = Self {
+            last_click,
+            ..Default::default()
+        };
+    }
+}
+
 /// 选择工具会话态（2026-10-17 选择工具 spec §3；M1 Task 1；ADR-0043 增形状）。
 ///
 /// pen 方法的数据底座：草稿锚点（Drawing）和闭合选区（Closed）二态互斥——

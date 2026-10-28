@@ -1373,11 +1373,15 @@ pub enum I18nKey {
     LinePoiRank,
     /// 工具条瓷砖悬停提示（仅编辑档视野出现）
     LinePoiHint,
+    /// 数值输入非法提示（D1-B 红闪 tooltip，wv-ui NumericTexts 注入）
+    NumericInvalidInput,
+    /// 数值输入越界钳制提示前缀（拼接「{前缀} {值}」）
+    NumericClampedTo,
 }
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 549] = [
+    pub const ALL: [I18nKey; 551] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1968,5 +1972,8 @@ impl I18nKey {
         I18nKey::LinePoiModeCarve,
         I18nKey::LinePoiRank,
         I18nKey::LinePoiHint,
+        // 数值输入（2）
+        I18nKey::NumericInvalidInput,
+        I18nKey::NumericClampedTo,
     ];
 }

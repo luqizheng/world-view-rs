@@ -11,6 +11,14 @@
 # 若 ICE 复发，恢复手段：在 [build] 段加回 `incremental = false`。
 
 [build]
+# 构建产物隔离到各 checkout 自身的 `.target`（2026-10-27 用户裁定）：
+# 相对路径逐 checkout 解析——主 checkout 落 `<repo>/.target`、worktree 落
+# `.worktrees/<分支>/.target`，**天然免疫并行会话产物串味**（当日实证：
+# 他分支带新字段的 wv-core rmeta 串进共享目录，E0063 假错两度阻塞构建，
+# AGENTS §13 的「全局共享 CARGO_TARGET_DIR」就此退役）。跨目录编译缓存
+# 交给下面的 sccache（registry 依赖近乎全命中；工作区 crate 因源路径
+# 不同各 checkout 首编一次后入缓存）。
+target-dir = ".target"
 # sccache rustc 包装器（2026-10-25 用户裁定恢复——d5ef2b9 曾移除）：
 # worktree 独立 target 目录（AGENTS §13 回退方案）只免「产物串味」，
 # 编译本身仍要重来；sccache 按「编译器 + 输入哈希」跨 target 目录复用

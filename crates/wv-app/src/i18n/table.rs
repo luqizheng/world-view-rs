@@ -716,6 +716,8 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::LinePoiModeCarve => "下切",
         I18nKey::LinePoiRank => "级别",
         I18nKey::LinePoiHint => "画河流或道路（仅编辑档视野）",
+        I18nKey::NumericInvalidInput => "非法输入，已恢复原值",
+        I18nKey::NumericClampedTo => "已钳制到",
     }
 }
 
@@ -1440,5 +1442,7 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::LinePoiModeCarve => "Carve",
         I18nKey::LinePoiRank => "Rank",
         I18nKey::LinePoiHint => "Draw a river or road (Edit zoom only)",
+        I18nKey::NumericInvalidInput => "Invalid input, reverted",
+        I18nKey::NumericClampedTo => "Clamped to",
     }
 }

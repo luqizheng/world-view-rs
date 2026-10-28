@@ -155,6 +155,8 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     .init_resource::<wv_render::state::CellSelection>()
     // 点选工具会话态（ADR-0057 补记 6）：与 EditCell 平级的独立 Resource。
     .init_resource::<wv_render::state::PointSelectState>()
+    // 图钉拖动会话态（ADR-0074 追记三）：按住拖动改坐标的候选/预览。
+    .init_resource::<wv_render::state::PinDragState>()
     // 线段 POI 工具会话态（ADR-0070 D4）：工具条分裂按钮、分发器互斥分支
     // 与（T11 的）地图交互系统都读写它——漏 init 即启动期 panic
     // （同 EditCellState 的教训：测试 fixture 手动 init 会掩盖装配遗漏）。

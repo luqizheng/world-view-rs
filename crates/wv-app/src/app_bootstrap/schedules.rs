@@ -103,6 +103,13 @@ pub(super) fn register(app: &mut App) {
                         "commit_point_select_on_click",
                         editing::commit_point_select_on_click
                     ),
+                    // 图钉拖动 + 双击属性（ADR-0074 追记三）：按住挪钉
+                    // （松手一次性 UpdatePlaceCommand）、双击弹 Inspector
+                    // 地点表单（仅 CellMap；浏览族双击归下钻）。
+                    wv_render::perf_timed!(
+                        "drag_place_pin_on_hold",
+                        editing::drag_place_pin_on_hold
+                    ),
                     // 地标放置（ADR-0071）：Landmark 激活时单击地图创建点状
                     // Place。与点选互斥由 dispatch 的 SelectMapTool 分支保证
                     // （placing 开时 point_select 必关），故两者先后无耦合。

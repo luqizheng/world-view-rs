@@ -31,7 +31,7 @@ pub use wv_world_cell_map::state::{FloodCriterion, FloodSelectState};
 
 /// ADR-0057：CellMap 统一选区位图 + 点选工具会话态——与 `EditCellState`
 /// 同款经 `wv_render::state` re-export 链暴露，应用侧 `crate::state::X` 直用。
-pub use wv_render::state::{CellSelection, PointSelectState};
+pub use wv_render::state::{CellSelection, PinDragState, PointSelectState};
 
 /// 钉点会话的**待定线**（T11 预览态）。
 ///

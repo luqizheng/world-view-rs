@@ -21,9 +21,10 @@ cd "$(dirname "$0")/.."
 
 DURATION="${SMOKE_SECS:-5}"
 
-# 2026-10-25 追记（AGENTS §13 裁定）：构建目录以全局共享 `CARGO_TARGET_DIR`
-# 为准，二进制不再落在 `./target`——脚本跟随该变量，缺省仍回退 `./target`。
-TARGET_DIR="${CARGO_TARGET_DIR:-./target}"
+# 2026-10-27 追记（AGENTS §13 裁定修正）：构建目录隔离到各 checkout 自身
+# 的 `.target`（`.cargo/config.toml` 的 `[build] target-dir`），脚本跟随
+# `CARGO_TARGET_DIR` 环境变量，缺省回退 `.target`。
+TARGET_DIR="${CARGO_TARGET_DIR:-.target}"
 
 echo "[smoke] cargo build -p wv-app --features app --bin wv"
 if ! cargo build -q -p wv-app --features app --bin wv; then
@@ -37,7 +38,7 @@ if [ ! -f "$BIN" ]; then
     exit 1
 fi
 
-LOG="$(mktemp -t wv-smoke-XXXXXX.log)"
+LOG="$(mktemp -t wv-smoke-XXXXXX.log)"  # %TEMP%（mktemp 自带随机后缀，运行间互不相干）
 echo "[smoke] 启动 wv gui，观察 ${DURATION}s ..."
 "$BIN" gui >"$LOG" 2>&1 &
 PID=$!

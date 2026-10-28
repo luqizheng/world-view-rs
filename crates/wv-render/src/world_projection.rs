@@ -137,6 +137,102 @@ pub fn river_rank_from_length_frac(frac: f32) -> u8 {
     }
 }
 
+/// 拖动中图钉的**预览位**（视图空间）；非激活或非该钉 → `None`。
+///
+/// 帧构建（点标 [`ProjectionFrame::place_dots`] / 图钉
+/// [`ProjectionFrame::landmark_dots`]）与标签系统（`drill.rs` 的
+/// `update_place_labels`）共用这一入口——三处渲染读同一个预览，
+/// 拖动时钉、点、标签一起走（[ADR-0074] 追记三）。世界锚点在松手
+/// 提交前不动，预览只活在渲染侧。
+pub fn pin_preview_view(
+    drag: &crate::state::PinDragState,
+    place: &wv_core::Id,
+    grid: &GridConfig,
+) -> Option<Vec2> {
+    if !drag.active || drag.place.as_ref() != Some(place) {
+        return None;
+    }
+    drag.preview_local
+        .map(|(x, y)| grid.map_to_view(Vec2::new(x, y)))
+}
+
+/// 选中图钉**高亮环**的位置（视图空间）；不该亮时 `None`。
+///
+/// 亮的条件（全部满足）：选中态是 Place ∧ 该钉锚定当前图 ∧ 是点状
+/// （线段 POI 无钉）∧ 锚点齐备。拖动中跟预览位（[`pin_preview_view`]）。
+/// 供 [`draw_pin_highlight`] 消费——纯函数便于断言。
+pub fn pin_highlight_pos(
+    world: &wv_core::World,
+    selection: Option<&wv_core::SelectedEntity>,
+    current_map: Option<&wv_core::Id>,
+    grid: &GridConfig,
+    drag: &crate::state::PinDragState,
+) -> Option<Vec2> {
+    use wv_core::EntityKind;
+    let sel = selection?;
+    if sel.kind != EntityKind::Place {
+        return None;
+    }
+    let cur = current_map?;
+    let p = world.distances.places.iter().find(|p| p.id == sel.id)?;
+    if p.map.as_ref() != Some(cur) || p.line.is_some() {
+        return None;
+    }
+    let (x, y) = p.effective_anchor()?;
+    let base = grid.map_to_view(Vec2::new(x, y));
+    Some(pin_preview_view(drag, &p.id, grid).unwrap_or(base))
+}
+
+/// 选中图钉的**高亮环**（金 = 本仓库「选中」语义色，与格选区金环同族）：
+/// 双圈——外圈实、内圈淡，在图钉与点标外缘一圈，屏幕像素恒定
+/// （半径乘 `view.scale`）。拖动中跟预览位走（世界锚点未动也亮在新位）。
+pub fn draw_pin_highlight(
+    mut gizmos: Gizmos,
+    projection: Res<WorldProjection>,
+    drill: Res<crate::state::DrillState>,
+    grid: Res<GridConfig>,
+    view: Res<ViewState>,
+    layers: Res<LayerFrame>,
+    drag: Res<crate::state::PinDragState>,
+) {
+    // place 层关 = 钉不画 = 不亮（点「看不见的东西」不该有反光）。
+    if !layers.place.visible {
+        return;
+    }
+    let Some(pos) = pin_highlight_pos(
+        &projection.world,
+        projection.selection.as_ref(),
+        drill.current(),
+        &grid,
+        &drag,
+    ) else {
+        return;
+    };
+    let r = crate::drill::PIN_HIT_PX * view.scale.max(0.05);
+    let gold = Color::srgb(1.0, 0.78, 0.18);
+    gizmos.circle_2d(Isometry2d::from_translation(pos), r, gold.with_alpha(0.95));
+    gizmos.circle_2d(
+        Isometry2d::from_translation(pos),
+        r * 0.72,
+        gold.with_alpha(0.5),
+    );
+}
+
+/// gizmo 线宽 = 1 **屏幕像素**（每帧随缩放同步）。
+///
+/// Bevy 2D gizmo 默认线宽按**世界单位**计（2.0）——CellMap 深缩放下
+/// （1 屏幕像素 ≈ 数世界单位）线会细到亚像素，选中环/选区环整个隐形
+/// （2026-10-27 实机：选中图钉无高亮）。全局生效：选区金环
+/// （`draw_selection`）等 gizmo 画出的一并回到可见线宽。
+pub fn sync_gizmo_line_width(
+    mut store: ResMut<bevy::gizmos::config::GizmoConfigStore>,
+    view: Res<ViewState>,
+) {
+    let (cfg, _) = store.config_mut::<bevy::gizmos::config::DefaultGizmoConfigGroup>();
+    cfg.line.width = view.scale.max(0.05);
+    cfg.enabled = true;
+}
+
 /// 折线总长（相邻顶点距离和）。
 fn polyline_len(pts: &[Vec2]) -> f32 {
     pts.windows(2).map(|w| w[0].distance(w[1])).sum()
@@ -313,6 +409,8 @@ pub fn compute_projection(
     drill: Res<crate::state::DrillState>,
     projection: Res<WorldProjection>,
     layers: Res<LayerFrame>,
+    // 图钉拖动预览（ADR-0074 追记三）：active 时点标/图钉按预览位出。
+    drag: Res<crate::state::PinDragState>,
     mut place_index: ResMut<PlaceIndex>,
     mut frame: ResMut<ProjectionFrame>,
 ) {
@@ -553,9 +651,13 @@ pub fn compute_projection(
                 let (cx, cy) = (view.camera_center.x, view.camera_center.y);
                 if let Some(idxs) = place_index.anchored_by_map.get(&current.id) {
                     for i in idxs {
-                        if let Some(dot) =
-                            place_dot_for(&world.distances.places[*i as usize], &grid)
-                        {
+                        let p = &world.distances.places[*i as usize];
+                        // 拖动预览（ADR-0074 追记三）：激活时钉/点按预览位。
+                        let preview = pin_preview_view(&drag, &p.id, &grid);
+                        if let Some(mut dot) = place_dot_for(p, &grid) {
+                            if let Some(prev) = preview {
+                                dot.pos = prev;
+                            }
                             if (dot.pos.x - cx).abs() <= half.x && (dot.pos.y - cy).abs() <= half.y
                             {
                                 frame.place_dots.push(dot);
@@ -565,12 +667,12 @@ pub fn compute_projection(
                         // rank 3 永远画国家级，rank 2 全档都画（参考图期望：全球档可见城市符号）。
                         // 线状地点（作者河）不是聚落，不画城市符号——与 `place_dot_for`
                         // 同一条排除口径，避免「河上长出一座城」。
-                        let p = &world.distances.places[*i as usize];
                         if p.line.is_none() {
                             if let Some((x, y)) = p.effective_anchor() {
                                 let rank = p.effective_rank();
                                 if rank >= 2 {
-                                    let pos = grid.map_to_view(Vec2::new(x, y));
+                                    let pos = preview
+                                        .unwrap_or_else(|| grid.map_to_view(Vec2::new(x, y)));
                                     if (pos.x - cx).abs() <= half.x && (pos.y - cy).abs() <= half.y
                                     {
                                         let kind = if rank >= 3 {
@@ -1964,6 +2066,8 @@ mod tests {
         app.insert_resource(LayerFrame::default());
         app.insert_resource(ProjectionFrame::default());
         app.init_resource::<PlaceIndex>();
+        // 图钉拖动预览（ADR-0074 追记三）：compute_projection 新增的 Res。
+        app.init_resource::<crate::state::PinDragState>();
         let mut schedule = Schedule::default();
         schedule.add_systems(compute_projection);
         (app, schedule)
@@ -2468,6 +2572,7 @@ mod tests {
         app.insert_resource(LayerFrame::default());
         app.insert_resource(ProjectionFrame::default());
         app.init_resource::<PlaceIndex>();
+        app.init_resource::<crate::state::PinDragState>();
         let mut schedule = Schedule::default();
         schedule.add_systems(compute_projection);
 
@@ -2508,5 +2613,97 @@ mod tests {
         let f3 = app.resource::<ProjectionFrame>();
         assert_eq!(f3.road_segments.len(), 2, "世界替换后重算段列");
         assert_ne!(f3.road_fingerprint, fp1);
+    }
+
+    /// [ADR-0074 追记三 followup] 高亮环定位：过滤（非 Place/他图/线段）
+    /// + 拖动跟预览位。
+    #[test]
+    fn pin_highlight_pos_filters_and_follows_drag_preview() {
+        let map = Id::new_unchecked("m1");
+        let _other = Id::new_unchecked("m2");
+        let mut world = wv_core::World::default();
+        world.maps.push(wv_core::map::MapNode {
+            id: map.clone(),
+            level: wv_core::map::MapLevel::World,
+            ..Default::default()
+        });
+        world
+            .distances
+            .places
+            .push(anchored_place("p1", "m1", 10.0, 20.0));
+        world
+            .distances
+            .places
+            .push(anchored_place("p2", "m2", 30.0, 40.0));
+        let mut river = anchored_place("riv", "m1", 50.0, 60.0);
+        river.line = Some(vec![0.0, 0.0, 10.0, 10.0]);
+        world.distances.places.push(river);
+        let grid = GridConfig::default();
+        let drag = crate::state::PinDragState::default();
+
+        // 本图 Place → 锚点视图位。
+        let sel_p1 =
+            wv_core::SelectedEntity::new(wv_core::EntityKind::Place, Id::new_unchecked("p1"));
+        assert_eq!(
+            pin_highlight_pos(&world, Some(&sel_p1), Some(&map), &grid, &drag),
+            Some(Vec2::new(10.0, 20.0)),
+            "本图点状钉在锚点亮"
+        );
+        // 他图 Place → 不亮。
+        let sel_p2 =
+            wv_core::SelectedEntity::new(wv_core::EntityKind::Place, Id::new_unchecked("p2"));
+        assert!(pin_highlight_pos(&world, Some(&sel_p2), Some(&map), &grid, &drag).is_none());
+        // 线段 POI → 不亮（无钉）。
+        let sel_riv =
+            wv_core::SelectedEntity::new(wv_core::EntityKind::Place, Id::new_unchecked("riv"));
+        assert!(pin_highlight_pos(&world, Some(&sel_riv), Some(&map), &grid, &drag).is_none());
+        // 非 Place（Region/Faction）→ 不亮。
+        let sel_region =
+            wv_core::SelectedEntity::new(wv_core::EntityKind::Region, Id::new_unchecked("p1"));
+        assert!(pin_highlight_pos(&world, Some(&sel_region), Some(&map), &grid, &drag).is_none());
+        // 无选中 → 不亮。
+        assert!(pin_highlight_pos(&world, None, Some(&map), &grid, &drag).is_none());
+        // 拖动中 → 跟预览位（世界锚点未动也亮在新位）。
+        let mut dragging = crate::state::PinDragState {
+            place: Some(Id::new_unchecked("p1")),
+            map: Some(map.clone()),
+            start_world: Some(Vec2::new(10.0, 20.0)),
+            active: true,
+            preview_local: Some((70.0, 80.0)),
+            last_click: None,
+        };
+        assert_eq!(
+            pin_highlight_pos(&world, Some(&sel_p1), Some(&map), &grid, &dragging),
+            Some(Vec2::new(70.0, 80.0)),
+            "拖动中高亮跟预览位"
+        );
+        dragging.active = false;
+        assert_eq!(
+            pin_highlight_pos(&world, Some(&sel_p1), Some(&map), &grid, &dragging),
+            Some(Vec2::new(10.0, 20.0)),
+            "未激活回落世界锚点"
+        );
+    }
+
+    /// 行为探针（临时）：sync_gizmo_line_width 真的把线宽写成 view.scale？
+    #[test]
+    fn probe_gizmo_line_width_sync() {
+        use bevy::gizmos::config::{DefaultGizmoConfigGroup, GizmoConfigStore};
+        let mut app = App::new();
+        app.insert_resource(ViewState {
+            scale: 0.25,
+            ..Default::default()
+        });
+        app.init_resource::<crate::state::PinDragState>();
+        app.init_gizmo_group::<DefaultGizmoConfigGroup>();
+        app.add_systems(Update, crate::world_projection::sync_gizmo_line_width);
+        app.update();
+        let store = app.world().resource::<GizmoConfigStore>();
+        let (cfg, _) = store.config::<DefaultGizmoConfigGroup>();
+        assert!(
+            (cfg.line.width - 0.25).abs() < 1e-4,
+            "line_width 应=scale 0.25，实际 {}",
+            cfg.line.width
+        );
     }
 }

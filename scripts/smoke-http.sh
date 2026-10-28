@@ -24,7 +24,7 @@ cd "$(dirname "$0")/.."
 
 PORT="${SMOKE_PORT:-18732}"
 URL="http://127.0.0.1:${PORT}/mcp"
-TARGET_DIR="${CARGO_TARGET_DIR:-./target}"
+TARGET_DIR="${CARGO_TARGET_DIR:-.target}"
 
 echo "[smoke] cargo build -p wv-app --features http --bin wv"
 if ! cargo build -q -p wv-app --features http --bin wv; then
