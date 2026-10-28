@@ -25,6 +25,9 @@
 //!   随 README §12-30（ThemePack M3）后继。
 //! - **不做选中态**：选中高亮走既有 POI/Inspector 路径，符号层只管「画」。
 
+/// 选中钉的针体色（金 = 本仓库「选中」语义色；白芯不变）。
+pub const SELECTED_PIN_BODY: [f32; 4] = [1.0, 0.78, 0.18, 1.0];
+
 use bevy::asset::RenderAssetUsages;
 use bevy::math::Vec2;
 use bevy::prelude::*;

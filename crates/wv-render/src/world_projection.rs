@@ -167,6 +167,7 @@ pub fn pin_highlight_pos(
     current_map: Option<&wv_core::Id>,
     grid: &GridConfig,
     drag: &crate::state::PinDragState,
+    pin_mode: bool,
 ) -> Option<Vec2> {
     use wv_core::EntityKind;
     let sel = selection?;
@@ -176,6 +177,11 @@ pub fn pin_highlight_pos(
     let cur = current_map?;
     let p = world.distances.places.iter().find(|p| p.id == sel.id)?;
     if p.map.as_ref() != Some(cur) || p.line.is_some() {
+        return None;
+    }
+    // pin 模式 ∧ rank≥2：选中钉**换金色版本**（用户裁定「换一个颜色的
+    // map-pin」），环只兜底点标（rank<2）与插画形态。
+    if pin_mode && p.effective_rank() >= 2 {
         return None;
     }
     let (x, y) = p.effective_anchor()?;
@@ -199,12 +205,14 @@ pub fn draw_pin_highlight(
     if !layers.place.visible {
         return;
     }
+    let pin_mode = crate::vector_layers::landmark_marker(view.mode).is_pin();
     let Some(pos) = pin_highlight_pos(
         &projection.world,
         projection.selection.as_ref(),
         drill.current(),
         &grid,
         &drag,
+        pin_mode,
     ) else {
         return;
     };
@@ -315,6 +323,8 @@ pub const LANDMARK_KINDS: [LandmarkKind; 2] = [LandmarkKind::Citadel, LandmarkKi
 pub struct LandmarkDot {
     pub pos: Vec2,
     pub kind: LandmarkKind,
+    /// 选中态（[ADR-0074] 追记三 followup）：绘制侧把钉染金（换色优先于环）。
+    pub selected: bool,
 }
 
 /// 一个 POI 点标的渲染数据。
@@ -650,6 +660,10 @@ pub fn compute_projection(
                 let half = view.window_size * view.scale * 0.5 + Vec2::splat(margin);
                 let (cx, cy) = (view.camera_center.x, view.camera_center.y);
                 if let Some(idxs) = place_index.anchored_by_map.get(&current.id) {
+                    let sel_place = match projection.selection.as_ref() {
+                        Some(s) if s.kind == wv_core::EntityKind::Place => Some(&s.id),
+                        _ => None,
+                    };
                     for i in idxs {
                         let p = &world.distances.places[*i as usize];
                         // 拖动预览（ADR-0074 追记三）：激活时钉/点按预览位。
@@ -680,7 +694,11 @@ pub fn compute_projection(
                                         } else {
                                             LandmarkKind::Town
                                         };
-                                        frame.landmark_dots.push(LandmarkDot { pos, kind });
+                                        frame.landmark_dots.push(LandmarkDot {
+                                            pos,
+                                            kind,
+                                            selected: sel_place == Some(&p.id),
+                                        });
                                     }
                                 }
                             }
@@ -2645,24 +2663,30 @@ mod tests {
         let sel_p1 =
             wv_core::SelectedEntity::new(wv_core::EntityKind::Place, Id::new_unchecked("p1"));
         assert_eq!(
-            pin_highlight_pos(&world, Some(&sel_p1), Some(&map), &grid, &drag),
+            pin_highlight_pos(&world, Some(&sel_p1), Some(&map), &grid, &drag, false),
             Some(Vec2::new(10.0, 20.0)),
             "本图点状钉在锚点亮"
         );
         // 他图 Place → 不亮。
         let sel_p2 =
             wv_core::SelectedEntity::new(wv_core::EntityKind::Place, Id::new_unchecked("p2"));
-        assert!(pin_highlight_pos(&world, Some(&sel_p2), Some(&map), &grid, &drag).is_none());
+        assert!(
+            pin_highlight_pos(&world, Some(&sel_p2), Some(&map), &grid, &drag, false).is_none()
+        );
         // 线段 POI → 不亮（无钉）。
         let sel_riv =
             wv_core::SelectedEntity::new(wv_core::EntityKind::Place, Id::new_unchecked("riv"));
-        assert!(pin_highlight_pos(&world, Some(&sel_riv), Some(&map), &grid, &drag).is_none());
+        assert!(
+            pin_highlight_pos(&world, Some(&sel_riv), Some(&map), &grid, &drag, false).is_none()
+        );
         // 非 Place（Region/Faction）→ 不亮。
         let sel_region =
             wv_core::SelectedEntity::new(wv_core::EntityKind::Region, Id::new_unchecked("p1"));
-        assert!(pin_highlight_pos(&world, Some(&sel_region), Some(&map), &grid, &drag).is_none());
+        assert!(
+            pin_highlight_pos(&world, Some(&sel_region), Some(&map), &grid, &drag, false).is_none()
+        );
         // 无选中 → 不亮。
-        assert!(pin_highlight_pos(&world, None, Some(&map), &grid, &drag).is_none());
+        assert!(pin_highlight_pos(&world, None, Some(&map), &grid, &drag, false).is_none());
         // 拖动中 → 跟预览位（世界锚点未动也亮在新位）。
         let mut dragging = crate::state::PinDragState {
             place: Some(Id::new_unchecked("p1")),
@@ -2673,15 +2697,85 @@ mod tests {
             last_click: None,
         };
         assert_eq!(
-            pin_highlight_pos(&world, Some(&sel_p1), Some(&map), &grid, &dragging),
+            pin_highlight_pos(&world, Some(&sel_p1), Some(&map), &grid, &dragging, false),
             Some(Vec2::new(70.0, 80.0)),
             "拖动中高亮跟预览位"
         );
         dragging.active = false;
         assert_eq!(
-            pin_highlight_pos(&world, Some(&sel_p1), Some(&map), &grid, &dragging),
+            pin_highlight_pos(&world, Some(&sel_p1), Some(&map), &grid, &dragging, false),
             Some(Vec2::new(10.0, 20.0)),
             "未激活回落世界锚点"
+        );
+    }
+
+    /// [ADR-0074 追记三 followup] pin 模式（Topographic/GoogleMap）∧ rank≥2
+    /// 的选中钉：环让位给「换金色 pin」——定位返 None；rank<2 点标仍亮环。
+    #[test]
+    fn pin_mode_rank_two_plus_pin_gets_no_ring() {
+        let map = Id::new_unchecked("m1");
+        let mut world = wv_core::World::default();
+        world.maps.push(wv_core::map::MapNode {
+            id: map.clone(),
+            level: wv_core::map::MapLevel::World,
+            ..Default::default()
+        });
+        world
+            .distances
+            .places
+            .push(anchored_place("p1", "m1", 10.0, 20.0));
+        let grid = GridConfig::default();
+        let drag = crate::state::PinDragState::default();
+        let sel = wv_core::SelectedEntity::new(wv_core::EntityKind::Place, Id::new_unchecked("p1"));
+        // p1 有 w/h → rank 3：pin 模式不画环（换色钉接管），插画模式画环。
+        assert!(pin_highlight_pos(&world, Some(&sel), Some(&map), &grid, &drag, true).is_none());
+        assert_eq!(
+            pin_highlight_pos(&world, Some(&sel), Some(&map), &grid, &drag, false),
+            Some(Vec2::new(10.0, 20.0)),
+            "插画模式保留环"
+        );
+        // rank<2 点标：pin 模式也画环（点标不换色）。
+        let dot = world
+            .distances
+            .places
+            .iter_mut()
+            .find(|p| p.id.as_str() == "p1")
+            .unwrap();
+        dot.w = None;
+        dot.h = None;
+        dot.rank = Some(1);
+        assert_eq!(
+            pin_highlight_pos(&world, Some(&sel), Some(&map), &grid, &drag, true),
+            Some(Vec2::new(10.0, 20.0)),
+            "rank<2 点标在 pin 模式仍亮环"
+        );
+    }
+
+    /// compute_projection 按选中态给 landmark_dots.selected 置位。
+    #[test]
+    fn projection_marks_the_selected_pin() {
+        let map = Id::new_unchecked("m1");
+        let mut world = wv_core::World::default();
+        world.maps.push(wv_core::map::MapNode {
+            id: map.clone(),
+            level: wv_core::map::MapLevel::World,
+            ..Default::default()
+        });
+        world
+            .distances
+            .places
+            .push(anchored_place("p1", "m1", 10.0, 20.0));
+        let (mut app, mut schedule) = projection_app(world);
+        app.resource_mut::<crate::state::WorldProjection>()
+            .selection = Some(wv_core::SelectedEntity::new(
+            wv_core::EntityKind::Place,
+            Id::new_unchecked("p1"),
+        ));
+        schedule.run(&mut app);
+        let frame = app.resource::<ProjectionFrame>();
+        assert!(
+            frame.landmark_dots.iter().any(|d| d.selected),
+            "选中钉应被标记 selected"
         );
     }
 
@@ -2696,8 +2790,9 @@ mod tests {
         });
         app.init_resource::<crate::state::PinDragState>();
         app.init_gizmo_group::<DefaultGizmoConfigGroup>();
-        app.add_systems(Update, crate::world_projection::sync_gizmo_line_width);
-        app.update();
+        let mut schedule = Schedule::default();
+        schedule.add_systems(crate::world_projection::sync_gizmo_line_width);
+        schedule.run(app.world_mut());
         let store = app.world().resource::<GizmoConfigStore>();
         let (cfg, _) = store.config::<DefaultGizmoConfigGroup>();
         assert!(
