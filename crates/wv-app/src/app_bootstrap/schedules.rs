@@ -332,6 +332,18 @@ pub(super) fn register(app: &mut App) {
             .after(terrain_view::sync_grid_config)
             .after(camera::track_cursor_world),
     );
+    // 选中图钉高亮环 + gizmo 线宽（[ADR-0074] 追记三 followup）——同上：
+    // `EditorOverlayPlugin` 注册了它们但本 crate 从未装配该插件，须在此
+    // 显式注册（2026-10-24 单格 outline 不可见的同一坑二次踩）。
+    app.add_systems(
+        Update,
+        (
+            wv_render::world_projection::sync_gizmo_line_width,
+            wv_render::world_projection::draw_pin_highlight
+                .after(wv_render::world_projection::sync_gizmo_line_width),
+        )
+            .after(camera::track_cursor_world),
+    );
     // 编辑意图翻译（ADR-0020 §2.5）：渲染 commit_* 产意图 → 翻译器提交 wv-edit
     // → 渲染 apply_*_receipts 回填本地。必须晚于两个 commit 系统（同帧闭环）。
     app.add_systems(
