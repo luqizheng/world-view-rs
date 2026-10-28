@@ -195,7 +195,7 @@ pub fn partition_edit_hud(
                     });
                     // 阶段提示行：随切刀状态实时变化（可见反馈闭环）。
                     let stage = if session.pending_pick.is_some() {
-                        "✔ 已切开 —— 点选一块（青/橙描边）决定归属；Esc 取消"
+                        "✔ 已切开"
                     } else if session.active {
                         "✎ 采集中 —— 松手完成这一刀"
                     } else if edit_state.tool == PartitionTool::Cut {
@@ -231,11 +231,11 @@ pub fn partition_cut_gesture(
     playback: Res<PlaybackState>,
     edit_state: ResMut<PartitionEditState>,
     mut session: ResMut<CutStrokeSession>,
-    mut pick: ResMut<CutPickDialog>,
-    projection: Res<WorldProjection>,
+    mut projection: ResMut<WorldProjection>,
+    mut edit: ResMut<EditHistory>,
     pointer: Res<wv_render::camera::PointerOverUi>,
 ) {
-    let Some((layer_id, _span_from)) = edit_state.active.clone() else {
+    let Some((layer_id, span_from)) = edit_state.active.clone() else {
         return;
     };
     // 播放中 / UI 抢占：不采样（沿用意图菜单门 + PointerOverUi 门）。
@@ -286,57 +286,54 @@ pub fn partition_cut_gesture(
         };
         let mid_n = session.pts.len() / 4 * 2;
         let mid = [session.pts[mid_n], session.pts[mid_n + 1]];
-        let (face_a, face_b) = {
-            let others: Vec<u32> = span
-                .faces
-                .iter()
-                .map(|f| f.id)
-                .filter(|id| Some(*id) != pick_face_at(mid, span))
-                .collect();
-            (
-                pick_face_at(mid, span).unwrap_or(0),
-                others.first().copied().unwrap_or(0),
-            )
-        };
-        session.pending_pick = Some(PendingCut {
-            stroke: session.pts.clone(),
-            side_a: face_a,
-            side_b: face_b,
-        });
-        session.pts.clear();
-        // 松手即弹归属窗（实机教训：等第二次点选的流程被右键平移/Esc
-        // 静默清掉，永远走不到弹窗）。窗内先选侧（青=弧A / 橙=弧B）再选归属。
-        pick.pending_face = Some(face_a);
-        pick.pick_pos = [mid[0], mid[1]];
-        pick.open = true;
-    }
-
-    // ── 待点选高亮：两半环分别青/橙描边（作者能看到切出的两块）──
-    if let Some(pending) = &session.pending_pick {
-        let map_id = wv_core::Id::new_unchecked(view.current_map.clone());
-        if let Some(span) =
-            wv_core::partition_span_at(&projection.world, &map_id, &layer_id, playback.current_day)
-        {
-            for (face_id, color) in [
-                (pending.side_a, bevy::color::Color::srgb(0.2, 0.9, 0.9)),
-                (pending.side_b, bevy::color::Color::srgb(1.0, 0.6, 0.1)),
-            ] {
-                if let Some(face) = span.faces.iter().find(|f| f.id == face_id) {
-                    let ring: Vec<Vec2> = face
-                        .ring
-                        .iter()
-                        .filter_map(|id| span.vertices.iter().find(|v| v.id == *id))
-                        .map(|v| Vec2::new(v.xy[0], v.xy[1]) + grid.raster_origin)
-                        .collect();
-                    for pair in ring.windows(2) {
-                        gizmos.line_2d(pair[0], pair[1], color);
-                    }
-                    if let (Some(a), Some(b)) = (ring.first(), ring.last()) {
-                        gizmos.line_2d(*b, *a, color);
-                    }
-                }
+        let face_a = pick_face_at(mid, span).unwrap_or(0);
+        let pending_stroke = session.pts.clone();
+        // 松手**立即提交**（用户裁定 2026-10-28：一刀下去红线先出现，归属
+        // 自动给占位势力「无名N」，不打断——归属错了用易主改）。
+        let n_existing = projection.world.factions.len();
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let new_id = wv_core::Id::new_unchecked(format!("faction_{ms}"));
+        let new_name = format!("无名{}", n_existing + 1);
+        let palette = [
+            "#C05A4E", "#4E79C0", "#5A9E6F", "#B07FD8", "#D8A94E", "#4EB8C0", "#C04E9E", "#7F8F4E",
+        ];
+        let color = wv_core::Color(palette[n_existing % palette.len()].into());
+        let mut tx = wv_edit::Transaction::new();
+        tx.push(Box::new(wv_edit::AddFactionCommand::new(
+            wv_core::Faction::new(new_id.clone(), new_name.clone(), color),
+        )));
+        tx.push(Box::new(wv_edit::CutPartitionFaceCommand::new(
+            wv_core::Id::new_unchecked(view.current_map.clone()),
+            layer_id.clone(),
+            span_from,
+            face_a,
+            pending_stroke,
+            // 新块 = 弧 A（笔行进方向的左半）；归属错了走「易主」。
+            true,
+            Some(new_id),
+            4.0 * view.scale,
+        )));
+        match edit.history.commit(&mut projection.world, tx) {
+            Ok(dirty) => {
+                edit.record_dirty(dirty);
+                projection.dirty = true;
+                notice.info(
+                    format!("已切分，新块归「{new_name}」"),
+                    (time.elapsed_secs_f64() * 60.0) as u64,
+                );
+            }
+            Err(e) => {
+                notice.error(
+                    format!("切分失败：{e}"),
+                    (time.elapsed_secs_f64() * 60.0) as u64,
+                );
+                bevy::log::warn!("切分提交失败: {e}");
             }
         }
+        session.pts.clear();
     }
 
     // ── 笔迹预览：采集中画当前折线（世界坐标 gizmo——可见反馈，作者才
