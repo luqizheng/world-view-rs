@@ -137,6 +137,8 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     // 校验面板 / 笔触提交 / 撤销重做 / 打开工程都读写它（`ResMut` 访问
     // 不存在的资源会在首帧 panic → 窗口无法显示）。`derive(Default)` 起步。
     .init_resource::<crate::state::ProjectDiagnostics>()
+    // 尺度提示缓存（重构 P0-3）：面板常开时避免每帧全扫地形栅格求陆地包围盒。
+    .init_resource::<crate::state::ScaleHintCache>()
     .init_resource::<VectorLayerEntities>()
     .init_resource::<buildings::BuildingOverlays>()
     .init_resource::<terrain_view::atmosphere::AtmosphereLayer>()

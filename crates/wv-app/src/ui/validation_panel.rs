@@ -19,7 +19,8 @@ use bevy_egui::{egui, EguiContexts};
 use crate::edit::validation_actions;
 use crate::i18n::{t_key, CurrentLocale, I18nKey};
 use crate::state::{
-    Panel, PanelState, PlaybackState, ProjectDiagnostics, ViewState, WorldProjection,
+    Panel, PanelState, PlaybackState, ProjectDiagnostics, ScaleHintCache, ViewState,
+    WorldProjection,
 };
 use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::space;
@@ -128,6 +129,7 @@ pub fn panel_validation(
     mut panels: ResMut<PanelState>,
     diagnostics: Res<ProjectDiagnostics>,
     projection: Res<WorldProjection>,
+    mut scale_hint: ResMut<ScaleHintCache>,
     mut drill: ResMut<crate::state::DrillState>,
     mut view: ResMut<ViewState>,
     mut playback: ResMut<PlaybackState>,
@@ -193,10 +195,22 @@ pub fn panel_validation(
                     .color(shell.t3()),
             );
             // 世界图尺度只读提示（README §12-39）：有 unit_per_km 且有陆地才出现。
+            //
+            // 缓存 + 变更检测（重构 P0-3）：`scale_hint_texts` 会全量扫描地形栅格
+            // 求陆地包围盒（512×288 ≈ 14.7 万格）。只在「换图 / 改 cell_size」
+            // 或世界被写过（`is_changed`）时重算——面板常开不再每帧白扫。
             if let Some(map_id) = drill.current().cloned() {
-                if let Some(lines) =
-                    scale_hint_texts(&projection.world, &map_id, grid.cell_size, current_loc.0)
-                {
+                let key = (map_id.clone(), grid.cell_size.to_bits());
+                if scale_hint.key.as_ref() != Some(&key) || projection.is_changed() {
+                    scale_hint.lines = scale_hint_texts(
+                        &projection.world,
+                        &map_id,
+                        grid.cell_size,
+                        current_loc.0,
+                    );
+                    scale_hint.key = Some(key);
+                }
+                if let Some(lines) = &scale_hint.lines {
                     ui.add_space(space::SM);
                     for line in lines {
                         ui.label(
