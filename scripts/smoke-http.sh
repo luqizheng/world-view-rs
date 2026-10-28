@@ -8,8 +8,9 @@
 # 编辑器」，这条链路只有真机 smoke 才验证得到：HttpServerPlugin 是否真的
 # 在 Startup 起了 tokio 线程、axum 是否真的绑上端口、curl 是否真能调通。
 #
-# 本脚本补最低保证：**启动 GUI → 真实 curl POST /mcp → tools/list 返 13 个
-# skill → tools/call list_maps / set_view_mode / screenshot 走通**。
+# 本脚本补最低保证：**启动 GUI → 真实 curl POST /mcp → tools/list 返全部
+# skill（现 15 个，ADR-0078 十三 + ADR-0082 二）→ tools/call list_maps /
+# set_view_mode / screenshot 走通**。
 #
 # ## 用法
 #   bash scripts/smoke-http.sh              # 默认端口 18732（避开默认 8732，
@@ -17,7 +18,7 @@
 #   SMOKE_PORT=9000 bash scripts/smoke-http.sh
 #
 # ## 退出码
-#   0 = 13 skill schema + list_maps / set_view_mode / screenshot 调用全部通过；
+#   0 = 全部 skill schema + list_maps / set_view_mode / screenshot 调用通过；
 #   1 = 任一环节失败
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -81,7 +82,8 @@ if [ "$READY" != "yes" ]; then
 fi
 echo "[smoke] 端口 ${PORT} 已就绪"
 
-# ① tools/list：应返 13 个 skill，顺序与 ADR-0014 §2.5 + ADR-0078 一致。
+# ① tools/list：应返 15 个 skill，顺序与 ADR-0014 §2.5 + ADR-0078 + ADR-0082
+# （自然区命名两接口 2026-10-28 追加；当时单测已更 15、本脚本漏更致假红）一致。
 TOOLS_JSON=$(curl -s --max-time 5 "$URL" -X POST \
     -H 'content-type: application/json' \
     -d '{"jsonrpc":"2.0","method":"tools/list","id":1}')
@@ -91,14 +93,16 @@ r = json.load(sys.stdin)
 tools = r['result']['tools']
 names = [t['name'] for t in tools]
 expected = ['list_maps','get_map','list_places','get_place','get_state_at_time',
+            'get_naming_context',
             'create_map','create_place','undo','save_project',
+            'set_nature_names',
             'get_ui_state','set_view_mode','set_panel_visible','screenshot']
 assert names == expected, f'skill 列表/顺序错: {names}'
 assert all(t['inputSchema']['type'] == 'object' for t in tools), 'inputSchema.type != object'
 print(len(names))
 ")
-if [ "$NAMES" = "13" ]; then
-    echo "[smoke] PASS ①: tools/list 返 13 个 skill，顺序正确"
+if [ "$NAMES" = "15" ]; then
+    echo "[smoke] PASS ①: tools/list 返 15 个 skill，顺序正确"
 else
     echo "[smoke] FAIL ①: tools/list 异常："
     echo "$TOOLS_JSON" | head -3
