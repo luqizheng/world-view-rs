@@ -768,7 +768,7 @@ pub fn derive_faction_diagnostics(world: &wv_core::World) -> Diagnostics {
 
 // ====== ADR-0022 M3 D4 · 跨级一致性 V1 提示 =================================
 
-/// 分区诊断（ADR-0074 T13，V1：只提示不阻止）：
+/// 分区诊断（ADR-0079 T13，V1：只提示不阻止）：
 ///
 /// - **悬空 owner**：脸归属引用不存在的势力；
 /// - **层引用缺失**：分区指向不存在的势力层；
@@ -856,7 +856,7 @@ pub fn derive_partition_diagnostics(world: &wv_core::World) -> Diagnostics {
                             d.items.push(hint(
                                 format!("partition:coast_drift:{}:{}:{}", p.map, p.layer, face.id),
                                 format!(
-                                    "分区 {key} 的脸 {} 起始顶点已落水——地形改动后分区未重切（快照语义，ADR-0074）",
+                                    "分区 {key} 的脸 {} 起始顶点已落水——地形改动后分区未重切（快照语义，ADR-0079）",
                                     face.id
                                 ),
                             ));
@@ -1242,6 +1242,8 @@ mod tests {
                 orientation: 0.0,
                 base: None,
                 outline_polygon: None,
+                trashed: false,
+                trashed_at: None,
             });
             w.set_terrain(
                 map.clone(),
@@ -1483,7 +1485,7 @@ mod tests {
 
 #[cfg(test)]
 mod partition_diag_tests {
-    //! 分区诊断（ADR-0074 T13）：悬空 owner / 拓扑破损 / 海陆错配。
+    //! 分区诊断（ADR-0079 T13）：悬空 owner / 拓扑破损 / 海陆错配。
 
     use super::*;
     use wv_core::model::faction_partition::*;

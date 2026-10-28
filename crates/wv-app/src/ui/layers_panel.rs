@@ -8,7 +8,7 @@
 //!   （可撤销、驱动脏路径）——《MAP_LAYER_RENDERING_SPEC》§8 缺口 #4 收口。
 //!   面板尾部保留 v0.3 的 8 个**会话开关**（`ViewState::*_visible`）：会话轴
 //!   与声明轴在 `LayerFrame::resolve` 是**合取**关系，二者并存不冗余。
-//! - `panel_map_tree` —— 4 行树形占位（真实层级数据对接由后续任务推进）。
+//! - 地图树已迁至 [`crate::ui::map_tree`]（2026-10-27 地图树增强 spec）。
 //!
 //! ## 边界
 //! - **不**直接改世界 —— 眼睛 / 锁 / 滑条生成 `EditCommand` 交给
@@ -36,7 +36,7 @@ use crate::theme::ui_tokens::{radius, space};
 use crate::ui_layout::LayoutFile;
 
 use super::shell::UiShell;
-use super::widgets::{float_window, ICON_CHEVRON_RIGHT};
+use super::widgets::float_window;
 use wv_ui::widgets::{
     divider, empty_state, layer_actions, layer_list, opacity_row, LayerEntry, LayerPanelAction,
     LAYER_BLOCK_GAP,
@@ -61,103 +61,6 @@ struct LayerRow {
     locked: bool,
     opacity: f32,
     count: Option<u32>,
-}
-
-/// 世界树（v0.3 · web `.tree` 对齐：4 行、缩进 18/30/44、选中 accent 18% 底）。
-pub fn panel_map_tree(
-    mut contexts: EguiContexts,
-    shell_cfg: Res<UiShellConfig>,
-    layouts: Res<LayoutFile>,
-    mut panels: ResMut<PanelState>,
-    _view: Res<ViewState>,
-    current_loc: Res<CurrentLocale>,
-) {
-    let shell = UiShell::new(&shell_cfg);
-    let Ok(ctx) = contexts.ctx_mut() else {
-        return;
-    };
-    float_window(
-        ctx,
-        &shell,
-        &layouts,
-        &mut panels,
-        Panel::MapTree,
-        None,
-        current_loc.0,
-        |ui| {
-            // 4 行：World / Region / City / Interior（web App.tsx 静态树；
-            // 真实层级数据对接走后续任务）。(label, 缩进 px, 是否选中)
-            let rows: [(&str, f32, bool); 4] = [
-                ("World", 0.0, false),
-                ("Region · Eastern Reach", 18.0, false),
-                ("City · Zunyi", 30.0, false),
-                ("Interior · Government Office", 44.0, true),
-            ];
-            for (label, indent, selected) in rows.iter() {
-                tree_row(ui, &shell, label, *indent, *selected);
-            }
-        },
-    );
-}
-
-/// 单行树节点（web `.tree > div`：高 27、圆角 5、内边距 6）。
-fn tree_row(ui: &mut egui::Ui, shell: &UiShell, label: &str, indent: f32, selected: bool) {
-    let row_h = 27.0;
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), row_h),
-        egui::Sense::click(),
-    );
-    // 底色：选中 = accent 18%（web `color-mix(accent 18%)`）；hover = hover_bg。
-    {
-        let painter = ui.painter();
-        if selected {
-            painter.rect_filled(rect, 5.0, shell.accent().linear_multiply(0.18));
-        } else if resp.hovered() {
-            painter.rect_filled(rect, 5.0, shell.hover_bg());
-        }
-    }
-    let _ = resp;
-    // 行首符号：前三级是折叠 chevron；选中行是金框方点（web `.tree-dot`：
-    // 6×6、1px focus 金边、圆角 1）。
-    let icon_x = rect.min.x + 6.0 + indent;
-    if selected {
-        let painter = ui.painter();
-        let dot = egui::Rect::from_min_size(
-            egui::pos2(icon_x, rect.center().y - 3.0),
-            egui::vec2(6.0, 6.0),
-        );
-        painter.rect_filled(
-            dot,
-            1.0,
-            crate::theme::ui_theme::color32(shell.palette.bg_panel),
-        );
-        painter.rect_stroke(
-            dot,
-            1.0,
-            egui::Stroke::new(1.0, shell.gold()),
-            egui::StrokeKind::Inside,
-        );
-    } else {
-        let chevron_rect = egui::Rect::from_min_size(
-            egui::pos2(icon_x, rect.center().y - 6.0),
-            egui::vec2(12.0, 12.0),
-        );
-        let _ = ui.put(
-            chevron_rect,
-            egui::Image::new(ICON_CHEVRON_RIGHT)
-                .tint(shell.t3())
-                .fit_to_exact_size(egui::vec2(12.0, 12.0)),
-        );
-    }
-    // 文本（web：选中行 text_1，其余 text_2）
-    let text_x = icon_x + 18.0;
-    ui.painter().text(
-        egui::pos2(text_x, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        proportional(shell.scale.base),
-        if selected { shell.t1() } else { shell.t2() },
-    );
 }
 
 /// 图层面板（Figma `3:20892`：动作行 + 图层列表 + 不透明度行 + 会话开关段）。
@@ -292,7 +195,7 @@ pub fn panel_layers(
                 _ => {}
             }
 
-            // 势力图层组（ADR-0074）：每层一行「名字 + 眼睛」，经既有
+            // 势力图层组（ADR-0079）：每层一行「名字 + 眼睛」，经既有
             // `UpdateFactionLayerCommand`（全字段快照命令，先读现值再改
             // `new_visible`）写回落盘。会话总开关 `factions_visible` 仍留在
             // 会话段——组内眼睛是**声明轴**（跨会话），总开关是**会话轴**。
@@ -346,7 +249,7 @@ pub fn panel_layers(
                 }
             }
 
-            // 自然图行（ADR-0074 政治图集页开关）：声明级落盘——当前图无
+            // 自然图行（ADR-0079 政治图集页开关）：声明级落盘——当前图无
             // terrain 声明层时 `EnsureTerrainLayerCommand` 插入一行，有则改
             // visible。取代旧会话轴 Terrain toggle（会话轴不落盘，重启即忘）。
             let terrain_declared = projection
@@ -466,7 +369,7 @@ fn commit_layer2(
 }
 
 /// 势力层眼睛写回：`UpdateFactionLayerCommand` 是全字段快照命令——先读
-/// 该层现值再改 `new_visible`（ADR-0074 T4）。
+/// 该层现值再改 `new_visible`（ADR-0079 T4）。
 fn commit_faction_layer_visibility(
     projection: &mut WorldProjection,
     edit: &mut EditHistory,

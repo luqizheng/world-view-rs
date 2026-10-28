@@ -1,4 +1,4 @@
-//! 势力层 pen 入口 + 新增/修改弹框（ADR-0074 D3/T11）。
+//! 势力层 pen 入口 + 新增/修改弹框（ADR-0079 D3/T11）。
 //!
 //! ## 流程（spec D4/D5）
 //!
@@ -277,7 +277,7 @@ pub struct PartitionEditState {
     pub tool: PartitionTool,
 }
 
-/// 编辑态三子工具（ADR-0074 D4）。
+/// 编辑态三子工具（ADR-0079 D4）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PartitionTool {
     /// 切刀（边到边一笔，切后点选归属）。

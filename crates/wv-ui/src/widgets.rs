@@ -60,9 +60,10 @@ pub use button::{
 };
 pub use color_picker::{hex_to_rgba, rgba_to_hex, ColorPicker};
 pub use controls::{
-    check_row, checkbox_state, dropdown_box, numeric_input, numeric_input_bounded, option_menu,
-    progress, radio, search_input, slider, slider_row, slider_row_brush, slider_row_disabled, tabs,
-    text_area, value_box, value_unit, CheckState, DialogWindow, FieldInput, FieldSelect,
+    check_row, checkbox_state, dropdown_box, numeric_input, numeric_input_bounded,
+    numeric_input_salted, numeric_input_salted_report, option_menu, progress, radio, search_input,
+    slider, slider_row, slider_row_brush, slider_row_disabled, tabs, text_area, value_box,
+    value_unit, CheckState, DialogWindow, FieldInput, FieldSelect, NumericEditReport, NumericTexts,
     PropertyRow, SliderTone, Switch,
 };
 pub use floater::{FloatWindow, HeadIcon};
@@ -96,6 +97,7 @@ pub use primitives::{
     ICON_CHECK,
     ICON_CHEVRON_DOWN,
     ICON_CHEVRON_RIGHT,
+    ICON_CHEVRON_UP,
     ICON_CLOCK,
     ICON_COMMAND,
     ICON_COPY,
@@ -132,6 +134,7 @@ pub use primitives::{
     ICON_MOVE_HORIZONTAL,
     ICON_MOVE_VERTICAL,
     ICON_PAINT_BUCKET,
+    ICON_PASTE,
     ICON_PEN,
     ICON_PENCIL,
     ICON_PLATEAU,

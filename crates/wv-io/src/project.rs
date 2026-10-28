@@ -89,21 +89,39 @@ fn fnv1a(s: &str) -> u32 {
 ///
 /// 地图天然有子目录（约定），与 `save_entities` 路径形态不同——单独一个函数。
 fn save_maps(dir: &Path, maps: &[wv_core::map::MapNode]) -> IoResult<()> {
-    if maps.is_empty() {
-        // 删除传播：空 maps 列表 → 清空 maps/ 下所有子目录的 index.yaml。
-        // v0.1 简化：不主动 rm 子目录，留给作者手动。
-        return Ok(());
+    // keep-set = 内存中的全部地图（含垃圾桶条目——软删仍占目录，恢复才完整）。
+    let keep: std::collections::HashSet<String> =
+        maps.iter().map(|m| m.id.as_str().to_owned()).collect();
+    if !maps.is_empty() {
+        std::fs::create_dir_all(dir)?;
+        for m in maps {
+            let map_dir = dir.join(m.id.as_str());
+            std::fs::create_dir_all(&map_dir)?;
+            let path = map_dir.join("index.yaml");
+            let text = serde_yaml::to_string(m).map_err(|source| IoError::Yaml {
+                path: path.display().to_string(),
+                source,
+            })?;
+            std::fs::write(&path, text)?;
+        }
     }
-    std::fs::create_dir_all(dir)?;
-    for m in maps {
-        let map_dir = dir.join(m.id.as_str());
-        std::fs::create_dir_all(&map_dir)?;
-        let path = map_dir.join("index.yaml");
-        let text = serde_yaml::to_string(m).map_err(|source| IoError::Yaml {
-            path: path.display().to_string(),
-            source,
-        })?;
-        std::fs::write(&path, text)?;
+    // 删除传播（2026-10-27 地图树垃圾桶 spec）：扫 maps/ 下的子目录，
+    // 不在 keep 的整目录移除——purge 后的保存即物理删除。v0.1
+    // 「不主动 rm 子目录，留给作者手动」的简化正式退役。
+    if dir.is_dir() {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|x| x.to_str()) else {
+                continue;
+            };
+            if !keep.contains(name) {
+                std::fs::remove_dir_all(&path)?;
+            }
+        }
     }
     Ok(())
 }
@@ -781,7 +799,7 @@ impl Project {
         let place_geometry: Vec<wv_core::map::GeometrySpan> =
             load_dir(&self.root, "geometry/place")?;
 
-        // 势力图切蛋糕分区（ADR-0074）：`partitions/` 每份分区一个 YAML，
+        // 势力图切蛋糕分区（ADR-0079）：`partitions/` 每份分区一个 YAML，
         // 文件名 = `{map}__{layer}`（分区无独立 id 的 IO 层合成，与
         // `geometry/place` 同一妥协）。目录可缺失——旧工程得空 Vec（零迁移）。
         let partitions: Vec<wv_core::model::faction_partition::FactionPartition> =
@@ -915,7 +933,7 @@ impl Project {
                 |g| format!("{}__{}__{}", g.map.as_str(), g.owner.as_str(), g.span.from),
             )?;
         }
-        // 势力图切蛋糕分区（ADR-0074）：每份分区一个 YAML，键 = map__layer。
+        // 势力图切蛋糕分区（ADR-0079）：每份分区一个 YAML，键 = map__layer。
         if wants("partitions") {
             save_entities(&self.root.join("partitions"), &world.partitions, |p| {
                 format!("{}__{}", p.map.as_str(), p.layer.as_str())

@@ -305,6 +305,55 @@ pub fn map_origin(world: &wv_core::World, node: &MapNode, grid: &GridConfig) -> 
     }
 }
 
+/// 图钉命中半径（屏幕像素）。比视觉图钉略大一圈——点「图钉旁边一点」也
+/// 算点中，降低小目标瞄准成本；换算世界单位乘 `view.scale`（同
+/// [`crate::selection::PICK_TOLERANCE_PX`] 口径）。
+pub const PIN_HIT_PX: f32 = 18.0;
+
+/// 在当前图的**可见图钉**里命中离光标最近者（[ADR-0074] 裁定第一段）。
+///
+/// 「可见图钉」与 `world_projection` 进 `landmark_dots` 的过滤同一口径：
+/// 锚定本图 + `rank ≥ 2` + 点状（`line.is_none()`——线段 POI 没有图钉）；
+/// 外加 place 图层可见（层关了图钉不画，点「看不见的东西」不该有反应）。
+/// 与 [`crate::label_pick::LabelHits`] 不同，本命中不走注册表：点击是
+/// 单发动作，直接遍历当前图锚定桶即可，无每帧注册成本。
+///
+/// CellMap（Topographic）与浏览族共用（ADR-0074 追记一）：前者由
+/// `wv-app` 的点选系统调用，后者由 [`drill_pick`] 在标签命中之后调用。
+pub fn pick_place_pin(
+    cursor_world: Vec2,
+    world: &wv_core::World,
+    map_id: &Id,
+    grid: &GridConfig,
+    place_layer_visible: bool,
+    scale: f32,
+) -> Option<Id> {
+    if !place_layer_visible {
+        return None;
+    }
+    let radius = PIN_HIT_PX * scale;
+    let r2 = radius * radius;
+    // 最近者胜：`best_d2` 单独存距离（`Option<Id>` 配 `f32::INFINITY` 初值，
+    // 免元组解构与 map_or）。
+    let mut best_d2 = f32::INFINITY;
+    let mut best: Option<Id> = None;
+    for p in &world.distances.places {
+        if p.map.as_ref() != Some(map_id) || p.line.is_some() || p.effective_rank() < 2 {
+            continue;
+        }
+        let Some((x, y)) = p.effective_anchor() else {
+            continue;
+        };
+        let pos = grid.map_to_view(Vec2::new(x, y));
+        let d2 = pos.distance_squared(cursor_world);
+        if d2 <= r2 && d2 < best_d2 {
+            best_d2 = d2;
+            best = Some(p.id.clone());
+        }
+    }
+    best
+}
+
 /// 当前层级下所有标记（显式图标 + 没有图标的子图）。
 ///
 /// 顺序 = 先**父图 `icons` 的声明顺序**，再**`children` 顺序里还没被图标覆盖的子图**。
@@ -335,6 +384,13 @@ pub fn resolve_markers(
     // `children` 保持 `Vec<Id>` 不动，改动面可控。
     for icon in &current.icons {
         let target = icon.drill_into.clone();
+        // 垃圾桶派生显隐（spec §10 追记 1）：目标子图被软删 → 图标整体不画
+        // 也不可点（marker_hit 走同一份 markers）。恢复即自动回来。
+        if let Some(t) = &target {
+            if !world.map_alive(t) {
+                continue;
+            }
+        }
         let target_level = level_of(target.as_ref());
         // 尺寸优先级：显式 `size` > 目标层级缺省 > 注释标记缺省。
         let half = match icon.size {
@@ -365,7 +421,7 @@ pub fn resolve_markers(
     // 强制声明，收敛点就是下面这个循环（连同 `marker_local` 一起删除），
     // 改动面可控。
     for child in drill.child_nodes(world) {
-        if claimed.iter().any(|c| c == &child.id) {
+        if claimed.iter().any(|c| c == &child.id) || !world.map_alive(&child.id) {
             continue;
         }
         out.push(Marker {
@@ -512,6 +568,10 @@ pub fn drill_pick(
     view: Res<ViewState>,
     hits: Res<crate::label_pick::LabelHits>,
     sel: Res<crate::state::SelectionState>,
+    // ADR-0074 追记一：点选工具态 + 图层帧——图钉命中只在「点选工具激活 ∧
+    // place 层可见」时接管单击；笔刷/量测等工具下点图钉旁不该误选。
+    point_select: Res<crate::state::PointSelectState>,
+    layers: Res<LayerFrame>,
     mut drill: ResMut<DrillState>,
     mut clicks: ResMut<DrillClick>,
 ) {
@@ -573,6 +633,30 @@ pub fn drill_pick(
         projection.selection = Some(target);
         clicks.last = None;
         return;
+    }
+
+    // [ADR-0074 追记一] 点选工具下的**图钉命中**（浏览族）：单击图钉 =
+    // 选中该 Place。优先级居标签之后（文字是更精确的靶子）、下钻之前——
+    // **双击不接管**（`!is_double`）：双击图钉仍归 `marker_hit` 下钻进城，
+    // 与「单击选中 / 双击进入」的既有手势约定一致。CellMap（Topographic）
+    // 不经过这里（DrillMarkers=false 已早退），那边的三段裁定在
+    // `wv-app::edit::editing::cell`。
+    if !is_double && point_select.tool_active {
+        if let Some(current) = drill.current() {
+            if let Some(id) = crate::drill::pick_place_pin(
+                world_pos,
+                &projection.world,
+                current,
+                &grid,
+                layers.place.visible,
+                view.scale,
+            ) {
+                projection.selection =
+                    Some(wv_core::SelectedEntity::new(wv_core::EntityKind::Place, id));
+                clicks.last = None;
+                return;
+            }
+        }
     }
 
     if !is_double {
@@ -825,10 +909,16 @@ pub fn update_place_labels(
     projection: Res<WorldProjection>,
     place_index: Res<crate::world_projection::PlaceIndex>,
     drill: Res<DrillState>,
-    grid: Res<GridConfig>,
-    view: Res<ViewState>,
-    layers: Res<LayerFrame>,
-    playback: Res<PlaybackState>,
+    // 呈现参数折元组（Bevy 单系统 16 参数上限：本系统原有 15 个，加
+    // 图钉拖动预览即触顶——元组算 1 个参数，仓内既有手法）。
+    (grid, view, layers, playback, drag): (
+        Res<GridConfig>,
+        Res<ViewState>,
+        Res<LayerFrame>,
+        Res<PlaybackState>,
+        // 图钉拖动预览（ADR-0074 追记三）：拖动中的钉，标签跟预览位走。
+        Res<crate::state::PinDragState>,
+    ),
     mut hits: ResMut<crate::label_pick::LabelHits>,
     // 统一占位池（ADR-0073）：与其他五类标签互相避让。
     mut occupancy: ResMut<crate::label_collision::LabelOccupancy>,
@@ -901,7 +991,9 @@ pub fn update_place_labels(
                 }
                 if let Some((x, y)) = p.effective_anchor() {
                     // 地点坐标是本图局部 → 视图空间（`map_to_view`，非栅格原点）。
-                    let pos = grid.map_to_view(Vec2::new(x, y));
+                    // 拖动预览（ADR-0074 追记三）：激活的钉，标签跟预览位。
+                    let pos = crate::world_projection::pin_preview_view(&drag, &p.id, &grid)
+                        .unwrap_or_else(|| grid.map_to_view(Vec2::new(x, y)));
                     if (pos.x - cx).abs() > half.x || (pos.y - cy).abs() > half.y {
                         continue;
                     }
@@ -2003,6 +2095,8 @@ mod tests {
         bevy_world.insert_resource(view);
         bevy_world.insert_resource(layers);
         bevy_world.insert_resource(playback);
+        // 图钉拖动预览（ADR-0074 追记三）：update_place_labels 新增的 Res。
+        bevy_world.init_resource::<crate::state::PinDragState>();
         bevy_world.insert_resource(grid);
         bevy_world.insert_resource(recipe);
         bevy_world.insert_resource(crate::theme::fonts::LoadedFonts::default());
@@ -2099,6 +2193,154 @@ mod tests {
         );
     }
 
+    /// [ADR-0074 追记一] 图钉命中夹具：VectorFlat recipe（DrillMarkers 开）、
+    /// 一枚 rank3 图钉锚在 (100,100)、相机对准 (100,100)、光标在 1280×720
+    /// 窗口正中（= 世界坐标 (100,100) = 图钉位）。
+    fn pin_pick_world(point_select_on: bool) -> bevy::prelude::World {
+        let map_id = wv_core::Id::new_unchecked("world_main");
+        let mut world = wv_core::World::default();
+        world
+            .maps
+            .push(node("world_main", MapLevel::World, None, &[]));
+        world.distances.places.push(wv_core::distance::Place {
+            kind: None,
+            line: None,
+            id: wv_core::Id::new_unchecked("p1"),
+            name: "青云城".into(),
+            feature: None,
+            biome: None,
+            envelope: None,
+            map: Some(map_id),
+            x: Some(100.0),
+            y: Some(100.0),
+            w: Some(12.0),
+            h: Some(8.0),
+            rank: None, // w/h 齐备 → effective_rank 3
+            line_kind: None,
+            line_width_m: None,
+        });
+        let projection = crate::state::WorldProjection {
+            world,
+            ..Default::default()
+        };
+
+        let mut drill = DrillState::default();
+        drill.ensure_root(&projection.world);
+
+        let view = ViewState {
+            scale: 1.0,
+            ..Default::default()
+        };
+        let layers = crate::layer_frame::LayerFrame::default();
+        let tex = crate::terrain_view::terrain_texture::TerrainTexture {
+            handle: bevy::asset::Handle::default(),
+            size: 4,
+            height: 4,
+            res: 1,
+            dirty: None,
+            chunks_dirty: None,
+            field_dirty: None,
+            last_mode: None,
+            last_soften: false,
+            last_theme_id: "",
+            last_hypsometric: 0.0,
+            last_map: None,
+        };
+        let recipe =
+            crate::recipe::resolve_render_recipe(&view, &layers, &projection, &drill, &tex, None);
+
+        let mut bevy_world = bevy::prelude::World::default();
+        bevy_world.insert_resource(projection);
+        bevy_world.insert_resource(drill);
+        bevy_world.insert_resource(view);
+        bevy_world.insert_resource(layers);
+        bevy_world.insert_resource(recipe);
+        bevy_world.insert_resource(GridConfig::default());
+        bevy_world.insert_resource(PlaybackState::default());
+        bevy_world.insert_resource(crate::camera::PointerOverUi::default());
+        bevy_world.insert_resource(crate::state::SelectionState::default());
+        bevy_world.insert_resource(crate::state::PointSelectState {
+            tool_active: point_select_on,
+        });
+        bevy_world.init_resource::<crate::label_pick::LabelHits>();
+        bevy_world.init_resource::<DrillClick>();
+        bevy_world.init_resource::<bevy::input::ButtonInput<bevy::input::mouse::MouseButton>>();
+        bevy_world.insert_resource::<bevy::time::Time>(bevy::time::Time::default());
+        // 相机对准图钉 (100,100)；光标在窗口正中 → 世界坐标 = 图钉位。
+        bevy_world.spawn((
+            Camera2d,
+            Transform::from_xyz(100.0, 100.0, 0.0),
+            Projection::Orthographic(OrthographicProjection::default_2d()),
+        ));
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(640.0, 360.0)));
+        bevy_world.spawn(window);
+        bevy_world
+    }
+
+    fn run_drill_pick(world: &mut bevy::prelude::World) {
+        let mut schedule = bevy::ecs::schedule::Schedule::default();
+        schedule.add_systems(drill_pick);
+        schedule.run(world);
+    }
+
+    fn press_left(world: &mut bevy::prelude::World) {
+        world
+            .resource_mut::<bevy::input::ButtonInput<bevy::input::mouse::MouseButton>>()
+            .press(bevy::input::mouse::MouseButton::Left);
+    }
+
+    /// [ADR-0074 追记一] 点选工具激活 + 单击图钉 = 选中该 Place。
+    #[test]
+    fn point_select_single_click_on_pin_selects_the_place() {
+        let mut w = pin_pick_world(true);
+        press_left(&mut w);
+        run_drill_pick(&mut w);
+        let got = w
+            .resource::<WorldProjection>()
+            .selection
+            .as_ref()
+            .map(|s| s.id.as_str());
+        assert_eq!(
+            got,
+            Some("p1"),
+            "点选工具单击图钉 = 选中该地点，got {got:?}"
+        );
+    }
+
+    /// [ADR-0074 追记一] 双击不归图钉分支——让位下钻（`!is_double` 门）。
+    #[test]
+    fn double_click_on_pin_does_not_select() {
+        let mut w = pin_pick_world(true);
+        // 预置上一击（同位、100ms 前）→ 本击判为双击。
+        w.resource_mut::<DrillClick>().last = Some((0.0, Vec2::new(100.0, 100.0)));
+        w.resource_mut::<bevy::time::Time>()
+            .advance_by(std::time::Duration::from_millis(100));
+        press_left(&mut w);
+        run_drill_pick(&mut w);
+        let sel = &w.resource::<WorldProjection>().selection;
+        assert!(sel.is_none(), "双击让位下钻，图钉分支不得选中，got {sel:?}");
+    }
+
+    /// [ADR-0074 追记一] 点选工具未激活：图钉分支不接管——单击按
+    /// 「空白清除选中」老路走（预置的旧选中应被清掉，而不是换成 p1）。
+    #[test]
+    fn pin_hit_requires_the_point_select_tool() {
+        let mut w = pin_pick_world(false);
+        w.resource_mut::<WorldProjection>().selection = Some(wv_core::SelectedEntity::new(
+            wv_core::EntityKind::Place,
+            wv_core::Id::new_unchecked("p_old"),
+        ));
+        press_left(&mut w);
+        run_drill_pick(&mut w);
+        let got = w
+            .resource::<WorldProjection>()
+            .selection
+            .as_ref()
+            .map(|s| s.id.as_str());
+        assert_eq!(got, None, "工具未激活时图钉分支不得接管，got {got:?}");
+    }
+
     fn node(id: &str, level: MapLevel, parent: Option<&str>, children: &[&str]) -> MapNode {
         node_with_icons(id, level, parent, children, &[])
     }
@@ -2143,6 +2385,8 @@ mod tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            trashed: false,
+            trashed_at: None,
         }
     }
 
@@ -2755,6 +2999,70 @@ mod tests {
             (view.scale - inner).abs() <= inner * 1e-3,
             "缩放必须停在内界，got {} (inner = {inner})",
             view.scale
+        );
+    }
+
+    // ====== 垃圾桶派生显隐（2026-10-27 spec §10 追记 1）======================
+
+    #[test]
+    fn trashed_child_marker_is_hidden_and_unclickable() {
+        let spec = icon("icon_city_a", Some([0.5, 0.5]), Some("city_a"));
+        let mut world = World {
+            maps: vec![
+                node_with_icons(
+                    "world_main",
+                    MapLevel::World,
+                    None,
+                    &["city_a", "city_b"],
+                    &[spec],
+                ),
+                node("city_a", MapLevel::City, Some("world_main"), &[]),
+                node("city_b", MapLevel::City, Some("world_main"), &[]),
+            ],
+            ..Default::default()
+        };
+        // city_a 入垃圾桶：显式图标隐藏；city_b 存活 → 哈希回退入口保留。
+        world.maps[1].trashed = true;
+        let mut drill = DrillState::default();
+        drill.ensure_root(&world);
+        let grid = GridConfig::default();
+        let markers = resolve_markers(&world, &drill, &grid, 1.0);
+        assert!(
+            !markers
+                .iter()
+                .any(|m| m.target.as_ref().is_some_and(|t| t.as_str() == "city_a")),
+            "被删子图的钻取图标必须隐藏"
+        );
+        assert!(
+            markers
+                .iter()
+                .any(|m| m.target.as_ref().is_some_and(|t| t.as_str() == "city_b")),
+            "存活子图的回退入口保留"
+        );
+    }
+
+    #[test]
+    fn marker_hit_refuses_trashed_city() {
+        let spec = icon("icon_city_a", Some([0.5, 0.5]), Some("city_a"));
+        let mut world = World {
+            maps: vec![
+                node_with_icons("world_main", MapLevel::World, None, &["city_a"], &[spec]),
+                node("city_a", MapLevel::City, Some("world_main"), &[]),
+            ],
+            ..Default::default()
+        };
+        let mut drill = DrillState::default();
+        drill.ensure_root(&world);
+        let grid = GridConfig::default();
+        let center = resolve_markers(&world, &drill, &grid, 1.0)[0].center;
+        assert!(
+            marker_hit(&world, &drill, &grid, center, 1.0).is_some(),
+            "未删时图标应可命中"
+        );
+        world.maps[1].trashed = true;
+        assert!(
+            marker_hit(&world, &drill, &grid, center, 1.0).is_none(),
+            "已删子图不可双击钻入"
         );
     }
 }

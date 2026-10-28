@@ -166,7 +166,7 @@ pub enum ViewBranch {
     BiomeRaw,
     /// Browse / Edit：主题色板。
     Themed,
-    /// 政治图集页素底（ADR-0074 T5）：「自然图关」时的呈现——
+    /// 政治图集页素底（ADR-0079 T5）：「自然图关」时的呈现——
     /// **平面海陆两色 + 海岸线**，不画地形纹理 / 群系填色 / 晕渲。
     ///
     /// 势力填色要压在这层素底上，故它必须**平**：山体明暗会与势力色打架。
@@ -591,7 +591,7 @@ pub fn default_params(
         light_dir: Vec4::new(LIGHT_DIR[0], LIGHT_DIR[1], LIGHT_DIR[2], 0.0),
         pad1: Vec4::ZERO,
         shore_edges: Vec4::new(SHORE_EDGE, SHALLOW_EDGE, DEEP_EDGE, 0.0), // w = wash_amt（P2）
-        // 素底分支（ADR-0074 T5）**不画晕渲**：政治页是平色面，山体明暗
+        // 素底分支（ADR-0079 T5）**不画晕渲**：政治页是平色面，山体明暗
         // 会与势力填色打架。relief 钳制上下限都置 1.0 = 无明暗。
         relief: Vec4::new(
             if branch == ViewBranch::Flat {
@@ -757,7 +757,7 @@ mod tests {
 
 #[cfg(test)]
 mod political_page_tests {
-    //! 政治图集页素底分支（ADR-0074 T5）。
+    //! 政治图集页素底分支（ADR-0079 T5）。
     //!
     //! 「自然图关」= 素底上只看势力填色的政治地图页（spec D2）。素底是 field
     //! 材质的**第三个取色分支** `Flat`：不画地形纹理 / 不画群系填色 / 不画

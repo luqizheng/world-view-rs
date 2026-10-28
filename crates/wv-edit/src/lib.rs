@@ -25,10 +25,11 @@ pub use command::{
     AssignPartitionFaceCommand, BeginPartitionSpanCommand, ClearMeasurementsCommand,
     CutPartitionFaceCommand, DeleteBuildingCommand, DeleteStreetSegmentCommand, EditCommand,
     EditError, EditResult, EnsureFactionLayerVisibleCommand, EnsureTerrainLayerCommand,
-    GenerateContinentCommand, MoveCityCommand, MovePartitionVerticesCommand,
-    RemoveMeasurementCommand, RemoveRegionCommand, SetCityOutlineCommand, SetMapOrientationCommand,
-    UpdateEventCommand, UpdateFactionLayerCommand, UpdateLayerCommand, UpdateMapPropsCommand,
-    UpdatePlaceCommand, UpdateRegionCommand,
+    GenerateContinentCommand, MoveCityCommand, MovePartitionVerticesCommand, PasteMapCommand,
+    PurgeMapCommand, RemoveMeasurementCommand, RemoveRegionCommand, RestoreMapCommand,
+    SetCityOutlineCommand, SetMapOrientationCommand, TrashMapCommand, UpdateEventCommand,
+    UpdateFactionLayerCommand, UpdateLayerCommand, UpdateMapPropsCommand, UpdatePlaceCommand,
+    UpdateRegionCommand,
 };
 pub use history::{History, Transaction};
 pub use nature_region::{

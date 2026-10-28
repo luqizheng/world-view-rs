@@ -49,6 +49,7 @@ use wv_terrain::intent::Intent;
 mod cell;
 mod history;
 mod landmark;
+mod pin_drag;
 mod region;
 mod stroke;
 mod terrain;
@@ -63,6 +64,7 @@ pub use history::{
     HistoryOutcome,
 };
 pub use landmark::{commit_landmark_click, landmark_anchor, landmark_candidates};
+pub use pin_drag::drag_place_pin_on_hold;
 pub use region::{
     commit_continent_generation, commit_region_intent, sync_region_cells, LassoLiveLink,
 };
@@ -113,5 +115,20 @@ impl EditHistory {
     /// 不取，只清空（用于「加载新工程」之类的整体重置）。
     pub fn clear_dirty(&mut self) {
         self.dirty_set.clear();
+    }
+
+    /// 直应用通道（地图树垃圾桶 spec §10 追记 2，2026-10-27）：
+    /// `apply` + 记脏路径，**不 commit 进 Undo 栈**。
+    ///
+    /// 「彻底删除」是用户确认过的永久动作——不该被 Ctrl+Z 复活；但脏路径
+    /// 必须照记，否则下次保存不会物理删除目录。返回值即已记录的脏路径。
+    pub fn apply_detached(
+        &mut self,
+        world: &mut wv_core::World,
+        cmd: Box<dyn wv_edit::EditCommand>,
+    ) -> wv_edit::EditResult<Vec<String>> {
+        let dirty = cmd.apply(world)?;
+        self.record_dirty(dirty.clone());
+        Ok(dirty)
     }
 }

@@ -1,4 +1,4 @@
-//! 势力图切蛋糕分区渲染（ADR-0074 T10）。
+//! 势力图切蛋糕分区渲染（ADR-0079 T10）。
 //!
 //! ## 职责
 //!
@@ -147,7 +147,7 @@ pub fn sync_partition_overlays(
 
             if is_active {
                 // 活动层：填色。
-                // TODO(ADR-0074 后续轮): Inherit 配色走 memberships 上级链
+                // TODO(ADR-0079 后续轮): Inherit 配色走 memberships 上级链
                 // （faction_overlays::inherited_color 同款）；v1 先势力本色。
                 let color = face_fill_color(face.owner.as_ref(), |id| {
                     world

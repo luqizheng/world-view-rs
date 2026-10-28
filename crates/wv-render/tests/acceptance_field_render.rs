@@ -106,6 +106,8 @@ fn map_node() -> MapNode {
         orientation: 0.0,
         base: None,
         outline_polygon: None,
+        trashed: false,
+        trashed_at: None,
     }
 }
 
@@ -868,14 +870,14 @@ fn req_patch_works_for_rects_at_every_corner() {
     }
 }
 
-/// REQ-5（AC4 · **ADR-0074 T5 修订**）：`layers.terrain.visible = false`
+/// REQ-5（AC4 · **ADR-0079 T5 修订**）：`layers.terrain.visible = false`
 /// ∧ `field_render = true` ⇒ quad **1**（`ViewBranch::Flat` 素底政治页），
 /// chunk 实体 **0**（独占性不变）。
 ///
 /// 意义：开关是「用哪条管线」，图层可见性是「画哪种底图」——隐藏地形层
 /// 不再是「不画」，而是**换素底**（平面海陆 + 海岸线），势力填色要压在它
 /// 上面（spec D2：政治图集页）。旧语义「隐藏 = 全退场、地图空白」由
-/// ADR-0074 显式推翻。
+/// ADR-0079 显式推翻。
 #[test]
 fn neg_terrain_layer_hidden_yields_flat_branch_quad() {
     let mut app = field_app(false, FIT_SCALE, true);

@@ -184,8 +184,8 @@ mod tests {
     /// 真正的硬闸是编译器：`ALL: [I18nKey; N]` 的 N 与初始化元素数不符、或
     /// 漏写变体都直接编译失败。本测试把「预期条数」钉成显式断言并防**重复项**
     /// （元素数凑对但某变体被写了两次、另一个被挤掉——这种编译器不报）。
-    /// 当前 535 = 537 − 3（河流笔刷退役：BrushToolNameRiver / BrushHintRiver /
-    /// CmdSelectBrushToolRiver，2026-10-27 用户裁定，河流改线 POI（ADR-0070））。
+    /// 当前 569 = main 551（含数值输入 2 键）+ 势力分区 18 键（feat/faction-partition-map 合并并集）；更早 551 = 549 基线 + 数值输入 2 键（2026-10-28 评审 P2）；549 = 535 基线 + 地图树 12 键 + 播放条 2 键等既有增减
+    /// − 河流退役 3 键等既有增减；以 ALL 数组实际长度为准，漏写/重复都会在此暴露。
     #[test]
     fn i18n_all_length_matches_key_count() {
         let mut seen = std::collections::HashSet::new();
@@ -194,10 +194,10 @@ mod tests {
         }
         assert_eq!(
             I18nKey::ALL.len(),
-            553,
-            "ALL 应为 535 项；加新键时同步更新数组长度与元素（got {})",
+            569,
+            "ALL 应为 569 项（合并并集：main 551 + 分区 18）；加新键时同步更新数组长度与元素（got {})",
             I18nKey::ALL.len()
         );
-        assert_eq!(seen.len(), 553, "去重后应仍为 553 项");
+        assert_eq!(seen.len(), 569, "去重后应仍为 569 项");
     }
 }

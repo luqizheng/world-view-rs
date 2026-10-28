@@ -31,7 +31,7 @@ pub use wv_world_cell_map::state::{FloodCriterion, FloodSelectState};
 
 /// ADR-0057：CellMap 统一选区位图 + 点选工具会话态——与 `EditCellState`
 /// 同款经 `wv_render::state` re-export 链暴露，应用侧 `crate::state::X` 直用。
-pub use wv_render::state::{CellSelection, PointSelectState};
+pub use wv_render::state::{CellSelection, PinDragState, PointSelectState};
 
 /// 钉点会话的**待定线**（T11 预览态）。
 ///
@@ -359,7 +359,10 @@ impl Panel {
             // 合并注（2026-10-26）：原 700 与 LinePoi 的 696 重叠（两分支各
             // 自占了中列下半），互斥验收据此上移。
             Panel::Landmark => [652.0, 500.0],
-            // 底部通栏（§3.3 P-5）。
+            // 底部通栏（§3.3 P-5）。2026-10-27 停靠化：播放器实际几何每帧由
+            // 视口推导（`ui/timeline.rs` 的 `dock_rect`——占满宽、贴状态栏上方），
+            // 本静态值只是设计画布口径 + `ui-layout.yaml` 缺项时的表驱动兜底，
+            // 不再进入窗口定位。
             Panel::Timeline => [12.0, 880.0],
         }
     }
@@ -368,7 +371,9 @@ impl Panel {
     pub fn default_size(self) -> [f32; 2] {
         match self {
             // v0.3-B：宽度对齐 web（.w-tree/.w-layers 204 / .w-brush 274）。
-            Panel::MapTree => [204.0, 330.0],
+            // 2026-10-27 地图树增强：工具栏 + 树 + 垃圾桶分区需要更高；
+            // 上限 = Minimap 顶 396 − 本面板顶 56 − 4 间隙，防两浮窗相叠。
+            Panel::MapTree => [204.0, 336.0],
             // Figma `3:20892` 面板宽 268；高 480 = 头 30 + 动作行/列表/滑条
             // （≈313）+ 会话开关段（≈120）+ 边距，列表超 6 行内部滚动。
             Panel::Layers => [268.0, 480.0],
@@ -530,6 +535,45 @@ impl PanelState {
 }
 
 // ---------------------------------------------------------------------------
+// 视图模式词表（ADR-0078 D6：单一真源）
+// ---------------------------------------------------------------------------
+
+/// 词 → [`wv_render::state::ViewMode`]。
+///
+/// **为什么在 state 不在 http/skills/ui**：词表的第二个消费者是 `WV_MODE`
+/// 验收探针（`debug_probe`），它随 `app` feature 编译、不在 `http` 门内——
+/// 放这里两个消费者（探针 / HTTP 工具）才永远说同一套话。词形以探针的
+/// 历史词表为基准（browse / map / cellmap / faction），本轮按 spec §2.2
+/// 补齐 7 模式的全词表。
+pub fn parse_view_mode(raw: &str) -> Option<wv_render::state::ViewMode> {
+    use wv_render::state::ViewMode;
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "browse" | "vector" | "vector_flat" => Some(ViewMode::VectorFlat),
+        "map" | "google" | "cartographic" => Some(ViewMode::GoogleMap),
+        "cellmap" | "topographic" => Some(ViewMode::Topographic),
+        "faction" => Some(ViewMode::Faction),
+        "realterrain" | "real_terrain" => Some(ViewMode::RealTerrain),
+        "event" => Some(ViewMode::Event),
+        "coastline" => Some(ViewMode::Coastline),
+        _ => None,
+    }
+}
+
+/// [`wv_render::state::ViewMode`] 的规范词（快照回显 / 日志用；取主词）。
+pub fn view_mode_name(m: wv_render::state::ViewMode) -> &'static str {
+    use wv_render::state::ViewMode;
+    match m {
+        ViewMode::VectorFlat => "browse",
+        ViewMode::GoogleMap => "map",
+        ViewMode::Topographic => "cellmap",
+        ViewMode::Faction => "faction",
+        ViewMode::RealTerrain => "realterrain",
+        ViewMode::Event => "event",
+        ViewMode::Coastline => "coastline",
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 地图三级钻取（v0.2 §B）
 // ---------------------------------------------------------------------------
 
@@ -687,6 +731,7 @@ mod tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            ..Default::default()
         }
     }
 

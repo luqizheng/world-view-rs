@@ -145,11 +145,28 @@ pub enum ToolContent {
     /// 文本载荷。Skill 的 JSON 输出以单字符串塞进这里（最简形态，
     /// 大多数 LLM 客户端会再 decode JSON；v0.1 不发明自定义 content type）。
     Text { text: String },
+    /// 图片载荷（ADR-0078）：`screenshot` 工具把整张 PNG 以 base64 回传，
+    /// MCP 客户端按图片渲染——这正是 2026-10-19 复议定下的「感知质量缺口」的补法。
+    /// 字段名按 MCP 规范是驼峰 `mimeType`，故显式 rename（tag 层的
+    /// `rename_all` 管不到字段名）。
+    Image {
+        /// base64 编码的图片字节（无 `data:` 前缀，裸 base64）。
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
 }
 
 impl ToolContent {
     pub fn text(s: impl Into<String>) -> Self {
         ToolContent::Text { text: s.into() }
+    }
+
+    pub fn image(data_base64: impl Into<String>, mime: impl Into<String>) -> Self {
+        ToolContent::Image {
+            data: data_base64.into(),
+            mime_type: mime.into(),
+        }
     }
 }
 
@@ -190,5 +207,16 @@ mod tests {
         assert!(s.contains("\"type\":\"text\""));
         assert!(s.contains("\"text\":\"hi\""));
         assert!(s.contains("\"isError\":false"));
+    }
+
+    /// ADR-0078：image content 的 serde 形态必须合 MCP 规范——`type: "image"`
+    /// 与驼峰 `mimeType`。字段名错了 LLM 客户端会静默降级成乱码文本。
+    #[test]
+    fn image_content_serializes_with_mcp_mime_type_field() {
+        let c = ToolContent::image("aGk=", "image/png");
+        let s = serde_json::to_string(&c).unwrap();
+        assert!(s.contains("\"type\":\"image\""), "raw = {s}");
+        assert!(s.contains("\"mimeType\":\"image/png\""), "raw = {s}");
+        assert!(s.contains("\"data\":\"aGk=\""), "raw = {s}");
     }
 }

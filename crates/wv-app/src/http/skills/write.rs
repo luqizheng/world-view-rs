@@ -166,6 +166,10 @@ pub async fn dispatch_write(
                 // v0.1 不声明底图；后续 skill 可单独设，或直接「重置到底图」（按 Ocean 兜底）。
                 base: None,
                 outline_polygon: None,
+                // ADR-0075 软删字段：新建图天然未删。该构造点此前漏补，致
+                // `--features http` 整体编译不过——http 不在标准门禁内的盲区实证。
+                trashed: false,
+                trashed_at: None,
             };
             // v0.1 不带预填充栅格；地形由后续 skill 单独填。
             let cmd: Box<dyn wv_edit::EditCommand> =
@@ -370,6 +374,8 @@ mod tests {
                     orientation: 0.0,
                     base: None,
                     outline_polygon: None,
+                    trashed: false,
+                    trashed_at: None,
                 });
                 dispatch_write_with_drain(
                     bridge,

@@ -103,6 +103,13 @@ pub(super) fn register(app: &mut App) {
                         "commit_point_select_on_click",
                         editing::commit_point_select_on_click
                     ),
+                    // 图钉拖动 + 双击属性（ADR-0074 追记三）：按住挪钉
+                    // （松手一次性 UpdatePlaceCommand）、双击弹 Inspector
+                    // 地点表单（仅 CellMap；浏览族双击归下钻）。
+                    wv_render::perf_timed!(
+                        "drag_place_pin_on_hold",
+                        editing::drag_place_pin_on_hold
+                    ),
                     // 地标放置（ADR-0071）：Landmark 激活时单击地图创建点状
                     // Place。与点选互斥由 dispatch 的 SelectMapTool 分支保证
                     // （placing 开时 point_select 必关），故两者先后无耦合。
@@ -323,6 +330,18 @@ pub(super) fn register(app: &mut App) {
             cellmap_bridge::sync_cell_flash,
         )
             .after(terrain_view::sync_grid_config)
+            .after(camera::track_cursor_world),
+    );
+    // 选中图钉高亮环 + gizmo 线宽（[ADR-0074] 追记三 followup）——同上：
+    // `EditorOverlayPlugin` 注册了它们但本 crate 从未装配该插件，须在此
+    // 显式注册（2026-10-24 单格 outline 不可见的同一坑二次踩）。
+    app.add_systems(
+        Update,
+        (
+            wv_render::world_projection::sync_gizmo_line_width,
+            wv_render::world_projection::draw_pin_highlight
+                .after(wv_render::world_projection::sync_gizmo_line_width),
+        )
             .after(camera::track_cursor_world),
     );
     // 编辑意图翻译（ADR-0020 §2.5）：渲染 commit_* 产意图 → 翻译器提交 wv-edit
@@ -556,7 +575,7 @@ pub(super) fn register(app: &mut App) {
         ui::hover_tooltip::hover_tooltip_system.after(wv_render::drill::update_sea_labels),
     );
 
-    // 切蛋糕 pen/编辑（ADR-0074 T11–T13）：**必须进 `EguiPrimaryContextPass`**
+    // 切蛋糕 pen/编辑（ADR-0079 T11–T13）：**必须进 `EguiPrimaryContextPass`**
     // ——bevy_egui 0.42 起画 egui 的系统一律在该调度内执行；挂裸 `Update`
     // 会在 pass 外画（形状上屏但 widget 不进交互快照，整窗点不动——
     // 2026-10-28 实机抓的回归，pen 弹框按钮全灭即此）。

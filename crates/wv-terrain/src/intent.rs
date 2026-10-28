@@ -30,6 +30,8 @@
 
 use std::collections::HashSet;
 
+use crate::biome::BIOME_SNOWFIELD;
+use crate::continent::{HILL_MIN_M, MOUNTAIN_MIN_M, SNOW_LINE_M};
 use crate::edit::is_water_cell;
 use crate::generate::Perlin;
 use crate::{
@@ -54,7 +56,8 @@ const RANGE_RIDGE_SCALE: f32 = 60.0;
 /// 山脊噪声的调幅范围中心与半幅：`v = 0.78 + 0.32·n`（n ∈ [-1,1]）。
 const RANGE_VAR_BASE: f32 = 0.78;
 const RANGE_VAR_AMP: f32 = 0.32;
-/// 高度增量超过此值（米）才写山地 kind——低肩保持原类型。
+/// 山系笔带谱的实质抬升门槛：增量达到此值才落带（写 kind）；
+/// 门槛之下一律不写——既有地貌标签原样不动（山脚衔接周边环境由此免费获得，ADR-0076 D1）。
 const RANGE_KIND_ADD_M: f32 = 500.0;
 
 /// 高原顶面高度（米 × strength），顶面 85% 平坦 + 15% 起伏。
@@ -435,6 +438,21 @@ fn range_add(t: f32, taper: f32, variation: f32, strength: f32) -> f32 {
     RANGE_PEAK_M * strength * taper * variation * (-1.4 * t * t).exp()
 }
 
+/// 带谱落带（ADR-0076 D1）：只对实质抬升（增量 ≥ `RANGE_KIND_ADD_M`）的格子调用。
+/// 阈值与 `display_kind` 的 NONE 回退、大陆分带同源（`continent.rs` 三常数），
+/// 禁止在此之外再写 300/1200/2600 字面量。
+fn band_biome_for_height(new_h: f32) -> u8 {
+    if new_h >= SNOW_LINE_M as f32 {
+        BIOME_SNOWFIELD
+    } else if new_h >= MOUNTAIN_MIN_M as f32 {
+        BIOME_MOUNTAINS
+    } else if new_h >= HILL_MIN_M as f32 {
+        BIOME_HILLS
+    } else {
+        BIOME_GRASSLAND
+    }
+}
+
 fn apply_mountain_range(
     grid: &mut TerrainGrid,
     pts: &[(f32, f32)],
@@ -510,7 +528,7 @@ fn apply_mountain_range(
             if new_h >= 0.0 {
                 if add >= RANGE_KIND_ADD_M {
                     surface = SURFACE_LAND;
-                    biome = BIOME_MOUNTAINS;
+                    biome = band_biome_for_height(new_h);
                 } else if water0 {
                     surface = SURFACE_LAND;
                     biome = BIOME_GRASSLAND; // 新露出水面的低肩是草原
@@ -1269,7 +1287,9 @@ fn apply_lake_region(grid: &mut TerrainGrid, polygon: &[(f32, f32)], cell_size: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BIOME_GRASSLAND, BIOME_LAKE, BIOME_NONE, SURFACE_LAND, SURFACE_WATER};
+    use crate::{
+        BIOME_GRASSLAND, BIOME_LAKE, BIOME_NONE, BIOME_PLAINS, SURFACE_LAND, SURFACE_WATER,
+    };
 
     /// 平坦陆地网格：高度 `h`、陆面草原。
     fn flat_land(w: u32, h: u32, height: i16) -> TerrainGrid {
@@ -1391,6 +1411,150 @@ mod tests {
                         c.surface == SURFACE_LAND,
                         "露出的格 ({x},20) surface={} 应为陆面",
                         c.surface
+                    );
+                }
+            }
+        }
+    }
+
+    // ---- ADR-0076 山系笔垂直带谱：双判据（实质抬升门槛 + 绝对高度落带） ----
+
+    /// 带谱阶梯的六个手工边界值：299/300、1199/1200、2599/2600。
+    #[test]
+    fn band_biome_ladder_matches_absolute_thresholds() {
+        assert_eq!(band_biome_for_height(299.0), BIOME_GRASSLAND);
+        assert_eq!(band_biome_for_height(300.0), BIOME_HILLS);
+        assert_eq!(band_biome_for_height(1199.0), BIOME_HILLS);
+        assert_eq!(band_biome_for_height(1200.0), BIOME_MOUNTAINS);
+        assert_eq!(band_biome_for_height(2599.0), BIOME_MOUNTAINS);
+        assert_eq!(band_biome_for_height(2600.0), BIOME_SNOWFIELD);
+    }
+
+    /// 实质抬升格按绝对高度落带：山腰是丘陵、山脊是山地，门槛外不写 kind。
+    #[test]
+    fn range_kinds_follow_absolute_ladder_on_raised_cells() {
+        let mut g = flat_land(40, 40, 0);
+        let intent = Intent::MountainRange {
+            pts: vec![(8.5, 20.5), (32.5, 20.5)],
+            radius: 5.0,
+            strength: 1.0,
+        };
+        apply_intent(&mut g, &intent, 7, 1.0);
+        let (mut hills, mut mountains) = (0, 0);
+        for y in 0..40 {
+            for x in 0..40 {
+                let c = g.get(x, y).unwrap();
+                match c.biome {
+                    BIOME_HILLS => {
+                        hills += 1;
+                        assert!(
+                            c.height >= 300 - 1,
+                            "丘陵格 ({x},{y}) 高度 {} 应 ≥300（±1 取整容差）",
+                            c.height
+                        );
+                        assert!(
+                            c.height < 1200,
+                            "丘陵格 ({x},{y}) 高度 {} 应 <1200",
+                            c.height
+                        );
+                    }
+                    BIOME_MOUNTAINS => {
+                        mountains += 1;
+                        assert!(
+                            c.height >= 1200 - 1,
+                            "山地格 ({x},{y}) 高度 {} 应 ≥1200（±1 取整容差）",
+                            c.height
+                        );
+                    }
+                    BIOME_SNOWFIELD => {
+                        assert!(
+                            c.height >= 2600 - 1,
+                            "雪原格 ({x},{y}) 高度 {} 应 ≥2600（±1 取整容差）",
+                            c.height
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(hills > 0, "低地山肩应出现丘陵格，实得 {hills}");
+        assert!(mountains > 0, "山脊应出现山地格，实得 {mountains}");
+    }
+
+    /// 弱笔触（strength 0.2 → 最大增量 2400×0.2=480 < 500 门槛）掠过既有高原：
+    /// 高度可被抬，但作者标签一个都不许动。
+    #[test]
+    fn weak_stroke_leaves_existing_highland_labels_untouched() {
+        let mut g = flat_land(40, 40, 0);
+        for y in 18..=22 {
+            for x in 18..=22 {
+                let mut c = g.get(x, y).unwrap();
+                c.height = 1500;
+                c.biome = BIOME_PLAINS;
+                g.set(x, y, c);
+            }
+        }
+        let intent = Intent::MountainRange {
+            pts: vec![(10.5, 20.5), (30.5, 20.5)],
+            radius: 5.0,
+            strength: 0.2,
+        };
+        apply_intent(&mut g, &intent, 7, 1.0);
+        for y in 18..=22 {
+            for x in 18..=22 {
+                let c = g.get(x, y).unwrap();
+                assert_eq!(
+                    c.biome, BIOME_PLAINS,
+                    "高原格 ({x},{y}) 标签被山系笔改写（应保持 PLAINS）"
+                );
+            }
+        }
+    }
+
+    /// 出水低肩维持现状先例：新露出水面的低肩是草原。
+    #[test]
+    fn emerged_shallow_shoulder_is_grassland() {
+        let mut g = flat_sea(40, 40, -200);
+        let intent = Intent::MountainRange {
+            pts: vec![(5.5, 20.5), (35.5, 20.5)],
+            radius: 6.0,
+            strength: 1.0,
+        };
+        apply_intent(&mut g, &intent, 11, 1.0);
+        for x in 5..=35 {
+            if let Some(c) = g.get(x, 20) {
+                if c.height > 0 && c.height < 300 {
+                    assert_eq!(
+                        c.biome, BIOME_GRASSLAND,
+                        "出水低肩 ({x},20) 高度 {} 应为草原",
+                        c.height
+                    );
+                }
+            }
+        }
+    }
+
+    /// MountainMassif 走同一 apply_mountain_range，带谱自动同享。
+    #[test]
+    fn massif_kinds_follow_same_ladder() {
+        let mut g = flat_land(40, 40, 0);
+        let intent = Intent::MountainMassif {
+            polygon: vec![(10.0, 10.0), (30.0, 10.0), (30.0, 30.0), (10.0, 30.0)],
+        };
+        apply_intent(&mut g, &intent, 5, 1.0);
+        let mountains = (0..40)
+            .flat_map(|x| (0..40).map(move |y| (x, y)))
+            .filter(|&(x, y)| g.get(x, y).unwrap().biome == BIOME_MOUNTAINS)
+            .count();
+        assert!(mountains > 0, "高山群应出现山地格，实得 {mountains}");
+        for y in 0..40 {
+            for x in 0..40 {
+                let c = g.get(x, y).unwrap();
+                if c.biome == BIOME_HILLS {
+                    assert!(
+                        c.height < 1200,
+                        "高山群丘陵格 ({x},{y}) 高度 {} 应 <1200",
+                        c.height
                     );
                 }
             }

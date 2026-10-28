@@ -1755,7 +1755,7 @@ fn sync_poi_pin_batch(
 /// 三种模式族共用一条合批路径，只有「画什么形状」不同——抽成枚举而不是
 /// 布尔，是为了让「加第四种画法」时编译器把每个 match 都点出来。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LandmarkMarker {
+pub(crate) enum LandmarkMarker {
     /// 城堡 / 小镇程序化插画：艺术主题（Browse / Edit）的观感。
     Illustration,
     /// 统一 map-pin：数据视图（CellMap）与专业制图（Map）。
@@ -1763,13 +1763,13 @@ enum LandmarkMarker {
 }
 
 impl LandmarkMarker {
-    fn is_pin(self) -> bool {
+    pub(crate) fn is_pin(self) -> bool {
         matches!(self, Self::Pin)
     }
 }
 
 /// 模式 → 地物符号画法。
-fn landmark_marker(mode: crate::state::ViewMode) -> LandmarkMarker {
+pub(crate) fn landmark_marker(mode: crate::state::ViewMode) -> LandmarkMarker {
     use crate::state::ViewMode;
     match mode {
         // 数据视图与普通地图都「不要画风」：地点就是一颗 pin。
@@ -1896,7 +1896,13 @@ fn sync_landmark_mesh_batches(
     for d in frame_landmarks {
         if d.kind == kind {
             if marker.is_pin() {
-                batch.push_map_pin(d.pos, s);
+                if d.selected {
+                    // 选中钉 = 金色版本（[ADR-0074] 追记三 followup，用户裁定
+                    // 「换一个颜色的 map-pin」），形状不变、白芯保留。
+                    batch.push_map_pin_tinted(d.pos, s, crate::landmark_symbols::SELECTED_PIN_BODY);
+                } else {
+                    batch.push_map_pin(d.pos, s);
+                }
             } else {
                 match kind {
                     crate::world_projection::LandmarkKind::Citadel => batch.push_citadel(d.pos, s),
@@ -1961,6 +1967,12 @@ fn points_fingerprint_dots(
             hash ^= u64::from(v.to_bits());
             hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
         }
+        // 选中态入指纹（[ADR-0074] 追记三 followup）：选中/取消选中必须
+        // 触发重批——否则金色钉要等位置变化（拖动）才换上（2026-10-28 实机）。
+        if d.selected {
+            hash ^= 0xFF00_FF00_FF00_FF00;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
     }
     hash
 }
@@ -2001,10 +2013,12 @@ mod tests {
             LandmarkDot {
                 pos: Vec2::new(10.0, 20.0),
                 kind: LandmarkKind::Citadel,
+                selected: false,
             },
             LandmarkDot {
                 pos: Vec2::new(30.0, 40.0),
                 kind: LandmarkKind::Town,
+                selected: false,
             },
         ];
         let plain = landmark_batch_key(&dots, LandmarkKind::Citadel, false, 1.0, 5.0);
@@ -2018,11 +2032,60 @@ mod tests {
         moved[0].pos = Vec2::new(11.0, 20.0);
         assert_ne!(
             plain.fingerprint,
-            landmark_batch_key(&moved, LandmarkKind::Citadel, false, 1.0, 5.0).fingerprint
+            landmark_batch_key(
+                &moved,
+                crate::world_projection::LandmarkKind::Citadel,
+                false,
+                1.0,
+                5.0
+            )
+            .fingerprint
         );
         assert_ne!(
             plain.world_thickness,
             landmark_batch_key(&dots, LandmarkKind::Citadel, false, 2.0, 5.0).world_thickness
+        );
+    }
+    /// [ADR-0074 追记三 followup] selected 翻转必须改 batch key——否则金色
+    /// 选中钉要等位置变化才出现（2026-10-28 实机症状的回归守点）。
+    #[test]
+    fn landmark_batch_key_changes_when_selection_flips() {
+        use crate::world_projection::LandmarkDot;
+        let mk = |selected: bool| LandmarkDot {
+            pos: Vec2::new(10.0, 20.0),
+            kind: crate::world_projection::LandmarkKind::Citadel,
+            selected,
+        };
+        let dots_plain = vec![mk(false)];
+        let dots_selected = vec![mk(true)];
+        let a = landmark_batch_key(
+            &dots_plain,
+            crate::world_projection::LandmarkKind::Citadel,
+            false,
+            1.0,
+            0.0,
+        );
+        let b = landmark_batch_key(
+            &dots_selected,
+            crate::world_projection::LandmarkKind::Citadel,
+            false,
+            1.0,
+            0.0,
+        );
+        assert_ne!(a, b, "选中翻转应改变 batch key");
+        // 位置也要参与（既有语义不回退）。
+        let mut moved = dots_selected.clone();
+        moved[0].pos = Vec2::new(99.0, 99.0);
+        assert_ne!(
+            b,
+            landmark_batch_key(
+                &moved,
+                crate::world_projection::LandmarkKind::Citadel,
+                false,
+                1.0,
+                0.0
+            ),
+            "位置变化仍须改 key"
         );
     }
 
@@ -2035,6 +2098,7 @@ mod tests {
         let dots = vec![LandmarkDot {
             pos: Vec2::new(1.0, 1.0),
             kind: LandmarkKind::Town,
+            selected: false,
         }];
         let a = landmark_batch_key(&dots, LandmarkKind::Citadel, false, 1.0, 0.0);
         let b = landmark_batch_key(&dots, LandmarkKind::Citadel, true, 1.0, 0.0);
@@ -2744,6 +2808,7 @@ mod tests {
             .push(crate::world_projection::LandmarkDot {
                 pos: Vec2::new(30.0, 30.0),
                 kind: crate::world_projection::LandmarkKind::Citadel,
+                selected: false,
             });
         world.insert_resource(frame);
         // 街道缓存**有数据**——门控必须让它在 Topographic 下画不出来。
@@ -3222,6 +3287,7 @@ mod tests {
         let mut world = world_with_landmarks(vec![crate::world_projection::LandmarkDot {
             pos: Vec2::ZERO,
             kind: crate::world_projection::LandmarkKind::Citadel,
+            selected: false,
         }]);
         let mut schedule = Schedule::default();
         schedule.add_systems(sync_vector_layers);

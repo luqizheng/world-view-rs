@@ -21,14 +21,10 @@ cd "$(dirname "$0")/.."
 
 DURATION="${SMOKE_SECS:-5}"
 
-# 2026-10-25 追记（AGENTS §13 裁定）：构建目录以全局共享 `CARGO_TARGET_DIR`
-# 为准，二进制不再落在 `./target`——脚本跟随该变量，缺省仍回退 `./target`。
-# 2026-10-27 追记（feat/faction-partition-map 施工期裁定）：worktree 用
-# `.cargo/config.toml` 的 `target-dir = ".target"` 隔离——脚本跟随 cargo
-# 的解析序：环境变量 > worktree config > `./target` 缺省。此处用
-# `cargo metadata` 单点询问，不再各自猜测路径。
-TARGET_DIR="$(cargo metadata --format-version 1 --no-deps 2>/dev/null | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p' | tr '\\' '/')"
-TARGET_DIR="${TARGET_DIR:-./target}"
+# 2026-10-27 追记（AGENTS §13 裁定修正）：构建目录隔离到各 checkout 自身
+# 的 `.target`（`.cargo/config.toml` 的 `[build] target-dir`），脚本跟随
+# `CARGO_TARGET_DIR` 环境变量，缺省回退 `.target`。
+TARGET_DIR="${CARGO_TARGET_DIR:-.target}"
 
 echo "[smoke] cargo build -p wv-app --features app --bin wv"
 if ! cargo build -q -p wv-app --features app --bin wv; then
@@ -42,7 +38,7 @@ if [ ! -f "$BIN" ]; then
     exit 1
 fi
 
-LOG="$(mktemp -t wv-smoke-XXXXXX.log)"
+LOG="$(mktemp -t wv-smoke-XXXXXX.log)"  # %TEMP%（mktemp 自带随机后缀，运行间互不相干）
 echo "[smoke] 启动 wv gui，观察 ${DURATION}s ..."
 "$BIN" gui >"$LOG" 2>&1 &
 PID=$!

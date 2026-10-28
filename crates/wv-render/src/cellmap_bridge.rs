@@ -1593,7 +1593,7 @@ fn teardown_field(
 
 /// 主 App 的场渲染同步（ADR-0053 D1，Phase 1 接线 2026-10-24）。
 ///
-/// 取色分支的唯一选择点（ADR-0074 T5）。
+/// 取色分支的唯一选择点（ADR-0079 T5）。
 ///
 /// - Topographic（CellMap）恒走 [`ViewBranch::BiomeRaw`]——方格数据视图，
 ///   自然图开关不介入（ADR-0051 §5）；
@@ -1661,7 +1661,7 @@ pub fn sync_terrain_field(
     // 故这里读到的就是「这一帧结束时还活着几块」。
     stats.field_render_on_chunk_entities = chunk_entities.len();
 
-    // 素底政治页（ADR-0074 T5）：地形层**隐藏**不退场——Flat 分支的平面
+    // 素底政治页（ADR-0079 T5）：地形层**隐藏**不退场——Flat 分支的平面
     // 海陆底就是这一层的替身，势力填色要压在它上面。退场只听
     // `field_render` 回退开关（真关场渲染 = chunk 路径接管，chunk 系统
     // 会在隐藏时 despawn——政治页随之真空白，与旧行为一致）。
@@ -2659,6 +2659,8 @@ mod bridge_tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            trashed: false,
+            trashed_at: None,
         }
     }
 
@@ -3025,7 +3027,7 @@ mod bridge_tests {
         use super::*;
         use bevy::render::mesh::MeshVertexAttribute;
 
-        // ── 政治图集页素底分支选择（ADR-0074 T5）──────────────────────
+        // ── 政治图集页素底分支选择（ADR-0079 T5）──────────────────────
         //
         // 「自然图关」= 素底政治页：不退场（地图全空则势力填色无处可压），
         // 改走 `ViewBranch::Flat` 分支——平面海陆两色 + 海岸线。

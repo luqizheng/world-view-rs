@@ -283,7 +283,7 @@ impl EditCommand for ResetTerrainToBaseCommand {
     }
 }
 
-/// 自然图声明化（ADR-0074 T4）：把「自然图可见性」落成图的 **terrain 声明层**。
+/// 自然图声明化（ADR-0079 T4）：把「自然图可见性」落成图的 **terrain 声明层**。
 ///
 /// 图层管理面板的自然图行写回入口。两形态：
 /// - 图**无** `LayerKind::Terrain` 声明 → 插入一行（`visible` = 目标值），

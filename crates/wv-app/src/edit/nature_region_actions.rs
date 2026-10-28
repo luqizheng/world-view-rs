@@ -526,6 +526,7 @@ mod tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            ..Default::default()
         });
         world.world.set_terrain(
             Id::new_unchecked("map_world"),
@@ -674,6 +675,7 @@ mod tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            ..Default::default()
         });
         let terrain = TerrainData {
             width: SIDE,

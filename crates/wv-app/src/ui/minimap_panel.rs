@@ -178,6 +178,8 @@ pub fn panel_minimap(
                     view.scale,
                     can_zoom_in,
                     can_zoom_out,
+                    // grip 已由 show_grip=false 关闭，无需提示文案。
+                    "",
                     || zoom_in_clicked = true,
                     || zoom_out_clicked = true,
                     || fit_clicked = true,

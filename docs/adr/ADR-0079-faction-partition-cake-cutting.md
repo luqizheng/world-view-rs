@@ -1,6 +1,7 @@
-# ADR-0074：势力图切蛋糕分区（partition）
+# ADR-0079：势力图切蛋糕分区（partition）
 
 - **状态**：已接受（Accepted，2026-10-27，用户批准设计稿「go」并拍板 D7–D9）
+- **编号说明**（2026-10-28 合并 main 时改号）：本 ADR 原编 **0074**，与并行三分支（CellMap 点选 / 地图树 / 山系笔）撞号——0074 归 CellMap 点选（ADR-0074-cellmap-point-select-arbitration.md）、0075 地图树、0076 山系笔、0077 已被 cellmap-relief-shading 的 spec 预留，本 ADR 取 **0079**。正文结论零改动，仅文件名与引用编号替换。
 - **决策者**：用户对话拍板（2026-10-27 brainstorming 会话，五轮收敛）
 - **设计稿**：`docs/superpowers/specs/2026-10-27-faction-map-partition-design.md`
 - **实施计划**：`docs/superpowers/plans/2026-10-27-faction-map-partition.md`

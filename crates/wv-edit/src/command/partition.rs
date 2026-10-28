@@ -1,4 +1,4 @@
-//! 势力图切蛋糕分区命令（ADR-0074）。
+//! 势力图切蛋糕分区命令（ADR-0079）。
 //!
 //! [`BeginPartitionSpanCommand`] 是动刀的第 0 步：该层无任何历史段时，
 //! 用 `land_outlines` 造**首段**（整块地 + 湖洞，初始归属可空=无主）；
@@ -12,7 +12,7 @@ use crate::command::*;
 use wv_core::model::faction_partition::{PartitionFace, PartitionSpan, PartitionVertex};
 use wv_core::{Id, World};
 
-/// 动刀第 0 步（ADR-0074 D2）：开一段新的划分历史。
+/// 动刀第 0 步（ADR-0079 D2）：开一段新的划分历史。
 ///
 /// 两分支：
 /// - 该层（map × layer）**无任何历史段** → 用 [`wv_terrain::outline::land_outlines`]
@@ -236,7 +236,7 @@ impl EditCommand for BeginPartitionSpanCommand {
     }
 }
 
-/// 切刀几何（ADR-0074 D4）：一笔从边到边，把脸一分为二。
+/// 切刀几何（ADR-0079 D4）：一笔从边到边，把脸一分为二。
 ///
 /// **切完点选归属**（D7）：`assign_at` 落在哪一半，那半 owner = `new_owner`，
 /// 另一半保持原 owner。笔画两端必须落在该脸 ring 边上（吸附容差
@@ -579,9 +579,9 @@ fn point_in_ring_coords(p: [f32; 2], ring_xy: &[(f32, f32)]) -> bool {
     inside
 }
 
-/// 零和拖边界（ADR-0074 D4/D2）：刚体平移共享边链上的顶点。
+/// 零和拖边界（ADR-0079 D4/D2）：刚体平移共享边链上的顶点。
 ///
-/// **每个被移动顶点必须被 ≥2 张脸引用**（共享顶点=零和构造保证，ADR-0074
+/// **每个被移动顶点必须被 ≥2 张脸引用**（共享顶点=零和构造保证，ADR-0079
 /// D1）——单脸顶点被移动会在它与邻接边之间拉出缝/重叠，Err 拒绝。
 ///
 /// **就地改选中 span**（改旧语义，V2）。
@@ -599,7 +599,7 @@ pub struct MovePartitionVerticesCommand {
     pub before: std::sync::Mutex<Option<wv_core::model::faction_partition::FactionPartition>>,
 }
 
-/// 整块易主（ADR-0074 D8）：几何零改动，某脸自 `from` 天起换归属。
+/// 整块易主（ADR-0079 D8）：几何零改动，某脸自 `from` 天起换归属。
 ///
 /// **fork 型**：在 `from` 处 fork 命中段（同 [`BeginPartitionSpanCommand`]
 /// 的 fork 配方），fork 段中该脸 owner 换新值；前段求值不变、后段不受传染
@@ -998,7 +998,7 @@ mod tests {
 
 #[cfg(test)]
 mod cut_tests {
-    //! 切刀命令（ADR-0074 T8）——手算坐标钉行为。
+    //! 切刀命令（ADR-0079 T8）——手算坐标钉行为。
 
     use super::*;
     use wv_core::model::faction_partition::FactionPartition;
@@ -1316,7 +1316,7 @@ mod cut_tests {
 
 #[cfg(test)]
 mod move_assign_tests {
-    //! 零和拖顶点 + 整块易主（ADR-0074 T9）。
+    //! 零和拖顶点 + 整块易主（ADR-0079 T9）。
 
     use super::*;
     use wv_core::model::faction_partition::FactionPartition;

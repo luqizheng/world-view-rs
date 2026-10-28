@@ -1,4 +1,4 @@
-//! 势力图切蛋糕分区（ADR-0074）的落盘 / 读回验证。
+//! 势力图切蛋糕分区（ADR-0079）的落盘 / 读回验证。
 //!
 //! 存储形态与势力几何（`geometry/faction/`）同构：每份
 //! [`FactionPartition`] 一个 YAML，落 `partitions/<map>__<layer>.yaml`

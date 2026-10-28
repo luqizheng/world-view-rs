@@ -224,12 +224,12 @@ pub struct World {
     /// `GeometrySpan.owner` 引用 `factions` 中的 `Faction.id`。
     /// 想要「某时刻某地图上所有势力 + 多边形」走 [`crate::factions_at`]。
     pub faction_geometry: Vec<map::GeometrySpan>,
-    /// 势力图切蛋糕分区（ADR-0074）：一张图 × 一个势力层一份
+    /// 势力图切蛋糕分区（ADR-0079）：一张图 × 一个势力层一份
     /// [`model::faction_partition::FactionPartition`]，历史 span 化（P6/P7）。
     ///
     /// 与 `faction_geometry`（独立多边形 + 声称/实控）**并存不混用**：分区
     /// 是零和拓扑（共享顶点 + 脸环引用），新编辑只走分区；存量几何保留
-    /// 渲染兼容、逐步退役（ADR-0074 §2 D6）。想要「某天某图某层的划分」
+    /// 渲染兼容、逐步退役（ADR-0079 §2 D6）。想要「某天某图某层的划分」
     /// 走 [`crate::model::faction_partition::partition_span_at`]。
     pub partitions: Vec<model::faction_partition::FactionPartition>,
     /// Place 的地界几何（[`map::GeometrySpan`]，`owner = Place.id`）。
@@ -364,6 +364,60 @@ impl World {
     ) -> Option<source::measurement::MeasurementOverlay> {
         self.measurements.insert(map, doc)
     }
+
+    /// 收集一张图**整棵子树**的 ID（含根；垃圾桶/复制/真删共用的口径）。
+    ///
+    /// BFS 走 `children`，visited 集合防环与防重复——手工编辑的 YAML 可能
+    /// 造出回指环，工具方法不能因此死循环。
+    pub fn subtree_ids(&self, root: &Id) -> Vec<Id> {
+        let by_id = |id: &Id| self.maps.iter().find(|m| &m.id == id);
+        let mut queue = std::collections::VecDeque::from([root.clone()]);
+        let mut seen = std::collections::HashSet::from([root.clone()]);
+        let mut out = Vec::new();
+        while let Some(id) = queue.pop_front() {
+            out.push(id.clone());
+            if let Some(node) = by_id(&id) {
+                for child in &node.children {
+                    if seen.insert(child.clone()) {
+                        queue.push_back(child.clone());
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// 一张图是否**存活**（未被扔进垃圾桶）。
+    ///
+    /// 判据：节点存在，且沿 `parent` 链上溯没有任何 `trashed` 祖先、自身也
+    /// 未打标（spec §10 追记 1：删除只在被删子树根上打标，存活是派生值）。
+    pub fn map_alive(&self, id: &Id) -> bool {
+        let mut cursor = id.clone();
+        loop {
+            let Some(node) = self.maps.iter().find(|m| m.id == cursor) else {
+                return false;
+            };
+            if node.trashed {
+                return false;
+            }
+            match &node.parent {
+                Some(p) if p != &node.id => cursor = p.clone(),
+                // None 根到顶；自指环防死循环。
+                _ => return true,
+            }
+        }
+    }
+
+    /// 存活根图列表（`parent` 为 None 且未删），按 `maps` 声明序。
+    ///
+    /// 「最后一张地图不可删」守卫与删除当前图后的自动切换都以它为口径。
+    pub fn alive_roots(&self) -> Vec<Id> {
+        self.maps
+            .iter()
+            .filter(|m| m.parent.is_none() && !m.trashed)
+            .map(|m| m.id.clone())
+            .collect()
+    }
 }
 
 /// 栅格地形的**中立数据表示**（与 `wv-terrain` 解耦的桥）。
@@ -432,5 +486,82 @@ mod tests {
         set.insert(SelectedEntity::new(EntityKind::Place, id.clone()));
         set.insert(SelectedEntity::new(EntityKind::Place, id));
         assert_eq!(set.len(), 1, "同 kind+id 应去重为 1");
+    }
+}
+
+/// 地图树垃圾桶的子树/存活工具（spec 2026-10-27 §5 D5/§10 追记 1）。
+#[cfg(test)]
+mod map_tree_trash_tests {
+    use super::*;
+
+    fn node(id: &str, parent: Option<&str>, children: &[&str]) -> crate::map::MapNode {
+        crate::map::MapNode {
+            id: Id::new_unchecked(id),
+            name: id.into(),
+            parent: parent.map(Id::new_unchecked),
+            children: children.iter().map(|c| Id::new_unchecked(*c)).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn subtree_ids_collects_all_descendants_without_duplicates() {
+        // 三层链 + 手工造环（i.children 回指 w）——防环/防重复是本方法的契约。
+        let world = World {
+            maps: vec![
+                node("w", None, &["c"]),
+                node("c", Some("w"), &["i"]),
+                node("i", Some("c"), &["w"]),
+            ],
+            ..World::default()
+        };
+        let ids = world.subtree_ids(&Id::new_unchecked("w"));
+        let mut seen = std::collections::HashSet::new();
+        for id in &ids {
+            assert!(seen.insert(id.clone()), "重复 id: {id}");
+        }
+        assert_eq!(ids.len(), 3, "got {} ids", ids.len());
+    }
+
+    #[test]
+    fn map_alive_false_inside_trashed_subtree() {
+        let mut world = World {
+            maps: vec![node("w", None, &["c"]), node("c", Some("w"), &[])],
+            ..World::default()
+        };
+        assert!(world.map_alive(&Id::new_unchecked("w")));
+        assert!(world.map_alive(&Id::new_unchecked("c")));
+        // 根被删 → 整棵子树不可见。
+        world.maps[0].trashed = true;
+        assert!(
+            !world.map_alive(&Id::new_unchecked("c")),
+            "根被删后子城应不可见"
+        );
+        // 仅子城被删 → 根不受影响。
+        world.maps[0].trashed = false;
+        world.maps[1].trashed = true;
+        assert!(
+            world.map_alive(&Id::new_unchecked("w")),
+            "仅子城被删不影响根"
+        );
+        assert!(!world.map_alive(&Id::new_unchecked("c")));
+        assert!(
+            !world.map_alive(&Id::new_unchecked("ghost")),
+            "不存在的图 = 不可见"
+        );
+    }
+
+    #[test]
+    fn alive_roots_follow_declaration_order_and_skip_trashed() {
+        let mut world = World {
+            maps: vec![node("w1", None, &[]), node("w2", None, &[])],
+            ..World::default()
+        };
+        assert_eq!(
+            world.alive_roots(),
+            vec![Id::new_unchecked("w1"), Id::new_unchecked("w2")]
+        );
+        world.maps[1].trashed = true;
+        assert_eq!(world.alive_roots(), vec![Id::new_unchecked("w1")]);
     }
 }

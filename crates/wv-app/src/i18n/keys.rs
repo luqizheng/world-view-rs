@@ -257,7 +257,7 @@ pub enum I18nKey {
     BrushModeShort,
     /// 工具名「涂抹」（面板当前工具行 + 命令面板共用）
     BrushToolNamePaint,
-    /// 「山脉」
+    /// 「山系笔」
     BrushToolNameRange,
     /// 「高原」
     BrushToolNamePlateau,
@@ -269,7 +269,7 @@ pub enum I18nKey {
     BrushToolNameLake,
     /// 涂抹工具交互提示（瓷砖 tooltip 第二行 + 面板提示行）
     BrushHintPaint,
-    /// 山脉工具交互提示
+    /// 山系笔工具交互提示
     BrushHintRange,
     /// 高原工具交互提示
     BrushHintPlateau,
@@ -331,17 +331,41 @@ pub enum I18nKey {
     PanelMapTree,
     /// 「图层管理」面板标题
     PanelLayers,
+    /// 地图树：复制
+    MapTreeActionCopy,
+    /// 地图树：粘贴
+    MapTreeActionPaste,
+    /// 地图树：删除
+    MapTreeActionDelete,
+    /// 地图树：垃圾桶
+    MapTreeTrashSection,
+    /// 地图树：垃圾桶是空的
+    MapTreeTrashEmpty,
+    /// 地图树：恢复
+    MapTreeActionRestore,
+    /// 地图树：彻底删除
+    MapTreeActionPurge,
+    /// 地图树：彻底删除后无法恢复，确定删除吗？
+    MapTreePurgeConfirmText,
+    /// 地图树：清空垃圾桶
+    MapTreeActionEmptyTrash,
+    /// 地图树：清空后无法恢复，确定清空吗？
+    MapTreeEmptyTrashConfirmText,
+    /// 地图树：先恢复父图后才能恢复此项
+    MapTreeRestoreBlockedHint,
+    /// 地图树：仅剩一张世界图，无法删除
+    MapTreeLastWorldHint,
     /// 图层面板动作行小标题（Figma `DRAW ORDER · TOP TO BOTTOM`）
     PanelLayersDrawOrder,
     /// 图层面板不透明度行标签
     PanelLayersOpacity,
     /// 图层面板会话开关段小节标题
     PanelLayersSession,
-    /// 图层面板势力图层组小节标题（ADR-0074）
+    /// 图层面板势力图层组小节标题（ADR-0079）
     PanelLayersFactionGroup,
-    /// 图层面板自然图行标签（ADR-0074 政治图集页开关）
+    /// 图层面板自然图行标签（ADR-0079 政治图集页开关）
     PanelLayersNaturalMap,
-    /// 分区 pen 弹框标题（ADR-0074 T11）
+    /// 分区 pen 弹框标题（ADR-0079 T11）
     PartitionPenTitle,
     /// 分区 pen 弹框：层名标签
     PartitionPenLayer,
@@ -357,7 +381,7 @@ pub enum I18nKey {
     PartitionPenOwnerHint,
     /// 分区 pen 弹框：修改提示
     PartitionPenModifyHint,
-    /// 分区编辑 HUD 标题（ADR-0074 T12）
+    /// 分区编辑 HUD 标题（ADR-0079 T12）
     PartitionEditHudTitle,
     /// 分区子工具：切刀（终审 C3）
     PartitionToolCut,
@@ -754,6 +778,10 @@ pub enum I18nKey {
     TimelineSpeedPillSuffixPlural,
     /// 「+ Register event」按钮（加号由 `ICON_PLUS` 图标提供，文案不含加号）
     TimelineRegisterEventBtn,
+    /// 时间轴折叠钮提示（完整播放器 → 播放条）
+    TimelineCollapseHint,
+    /// 时间轴展开钮提示（播放条 → 完整播放器）
+    TimelineExpandHint,
 
     // ── 校验面板 ─────────────────────────────────────────────────────
     /// 「错误 N」徽标前缀（数字前缀拼接）
@@ -1074,7 +1102,7 @@ pub enum I18nKey {
     CmdBrushRadiusDown,
     /// 「笔刷：涂抹」——选中即激活笔刷
     CmdSelectBrushToolPaint,
-    /// 「笔刷：山脉」
+    /// 「笔刷：山系笔」
     CmdSelectBrushToolRange,
     /// 「笔刷：高原」
     CmdSelectBrushToolPlateau,
@@ -1381,11 +1409,15 @@ pub enum I18nKey {
     LinePoiRank,
     /// 工具条瓷砖悬停提示（仅编辑档视野出现）
     LinePoiHint,
+    /// 数值输入非法提示（D1-B 红闪 tooltip，wv-ui NumericTexts 注入）
+    NumericInvalidInput,
+    /// 数值输入越界钳制提示前缀（拼接「{前缀} {值}」）
+    NumericClampedTo,
 }
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 553] = [
+    pub const ALL: [I18nKey; 569] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1543,6 +1575,19 @@ impl I18nKey {
         I18nKey::ViewModeFaction,
         I18nKey::ViewModeEvent,
         I18nKey::ViewModeCoastline,
+        // 地图树面板（2026-10-27 地图树增强 spec）
+        I18nKey::MapTreeActionCopy,
+        I18nKey::MapTreeActionPaste,
+        I18nKey::MapTreeActionDelete,
+        I18nKey::MapTreeTrashSection,
+        I18nKey::MapTreeTrashEmpty,
+        I18nKey::MapTreeActionRestore,
+        I18nKey::MapTreeActionPurge,
+        I18nKey::MapTreePurgeConfirmText,
+        I18nKey::MapTreeActionEmptyTrash,
+        I18nKey::MapTreeEmptyTrashConfirmText,
+        I18nKey::MapTreeRestoreBlockedHint,
+        I18nKey::MapTreeLastWorldHint,
         // 图层面板（13 + 14：Figma `3:20892` 接线 2026-10-23）
         I18nKey::PanelMapTree,
         I18nKey::PanelLayers,
@@ -1725,6 +1770,8 @@ impl I18nKey {
         I18nKey::TimelineSpeedPillSuffix,
         I18nKey::TimelineSpeedPillSuffixPlural,
         I18nKey::TimelineRegisterEventBtn,
+        I18nKey::TimelineCollapseHint,
+        I18nKey::TimelineExpandHint,
         // 校验（8）
         I18nKey::ValidationBadgeErrCountPrefix,
         I18nKey::ValidationBadgeWarnCountPrefix,
@@ -1979,5 +2026,8 @@ impl I18nKey {
         I18nKey::LinePoiModeCarve,
         I18nKey::LinePoiRank,
         I18nKey::LinePoiHint,
+        // 数值输入（2）
+        I18nKey::NumericInvalidInput,
+        I18nKey::NumericClampedTo,
     ];
 }

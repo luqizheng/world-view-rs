@@ -329,7 +329,7 @@ mod tests {
 
 #[cfg(test)]
 mod land_outline_tests {
-    //! 海陆掩膜 → 陆地外环（ADR-0074 T6 / `land_outlines`）。
+    //! 海陆掩膜 → 陆地外环（ADR-0079 T6 / `land_outlines`）。
     //!
     //! 坐标 = **栅格局部 wu**（`cell_set_outline` 同口径，见上文坐标契约）。
     //! 湿判定 = `crate::edit::is_water_cell`（surface==水 ∨ height<0）。
@@ -462,7 +462,7 @@ mod land_outline_tests {
     }
 }
 
-/// 陆地外环组（ADR-0074 T6）：一块连通陆地的外环 + 它的洞（湖）。
+/// 陆地外环组（ADR-0079 T6）：一块连通陆地的外环 + 它的洞（湖）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct LandOutline {
     /// 外环：栅格局部 wu 坐标，首尾不重复。
@@ -471,7 +471,7 @@ pub struct LandOutline {
     pub holes: Vec<Vec<(f32, f32)>>,
 }
 
-/// 海陆掩膜 → 陆地外环（含洞）——势力图切蛋糕的「整块地」（ADR-0074 D1）。
+/// 海陆掩膜 → 陆地外环（含洞）——势力图切蛋糕的「整块地」（ADR-0079 D1）。
 ///
 /// 湿判定走 [`crate::edit::is_water_cell`]（surface==水 ∨ height<0，唯一
 /// 入口，**不**在此重复公式）。坐标 = **栅格局部 wu**（`cell_set_outline`

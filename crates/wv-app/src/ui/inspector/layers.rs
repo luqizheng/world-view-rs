@@ -109,7 +109,7 @@ pub fn layers_tab(
                 {
                     display.active_layer = Some(l.id.clone());
                 }
-                // pen 按钮（ADR-0074 D3/T11）：动刀入口。门控 = 该图有自有
+                // pen 按钮（ADR-0079 D3/T11）：动刀入口。门控 = 该图有自有
                 // 栅格（图级 World/Region 由 Inspector 语境保证）。
                 // ⚠️ 不用 with_layout(right_to_left) 右对齐——收缩 Ui 里它把
                 // 行 min_rect 撑到整屏宽，Inspector 窗被顶成全屏宽（实测）。

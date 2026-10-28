@@ -285,6 +285,8 @@ mod tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            trashed: false,
+            trashed_at: None,
         });
         world.maps.push(MapNode {
             id: Id::new_unchecked("city_a"),
@@ -302,6 +304,8 @@ mod tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            trashed: false,
+            trashed_at: None,
         });
         world.distances.places.push(wv_core::distance::Place {
             kind: None,
@@ -318,6 +322,7 @@ mod tests {
             rank: None,
             line_kind: None,
             line_width_m: None,
+            line: None,
         });
         (bridge, rx, world, wv_edit::History::default())
     }

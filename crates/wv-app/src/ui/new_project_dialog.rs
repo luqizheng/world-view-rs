@@ -200,6 +200,7 @@ fn initial_world(name: &str, template: WorldTemplateKind, seed: u64) -> wv_core:
         // 2026-10-16：空海洋模板写 base（重置到底图可用）；生成模板不写 base。
         base: (template == WorldTemplateKind::Ocean).then_some(MapBase::Ocean),
         outline_polygon: None,
+        ..Default::default()
     });
     let mut city_sites: Option<(Vec<[f32; 2]>, u32, u32)> = None;
     let terrain = match template {

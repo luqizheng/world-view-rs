@@ -22,7 +22,7 @@
 //! 不写盘、不改任何默认行为。
 
 use bevy::prelude::*;
-use wv_render::state::{ViewMode, ViewState};
+use wv_render::state::ViewState;
 
 /// `WV_MODE` → 启动即切模式（一次）。
 ///
@@ -32,15 +32,13 @@ pub fn apply_env_view_mode(mut view: ResMut<ViewState>) {
     let Ok(raw) = std::env::var("WV_MODE") else {
         return;
     };
-    let mode = match raw.trim().to_ascii_lowercase().as_str() {
-        "map" | "google" | "cartographic" => ViewMode::GoogleMap,
-        "browse" | "vector" | "vector_flat" => ViewMode::VectorFlat,
-        "cellmap" | "topographic" => ViewMode::Topographic,
-        "faction" => ViewMode::Faction,
-        other => {
-            warn!("[wv] WV_MODE={other} 未知（map/browse/cellmap/faction），忽略");
-            return;
-        }
+    // 词表单一真源在 `crate::state::parse_view_mode`（ADR-0078 D6）：HTTP
+    // `set_view_mode` 工具与本探针共用同一映射，不会各说各话。
+    let Some(mode) = crate::state::parse_view_mode(&raw) else {
+        warn!(
+            "[wv] WV_MODE={raw} 未知（browse/map/cellmap/faction/realterrain/event/coastline），忽略"
+        );
+        return;
     };
     view.mode = mode;
     info!("[wv] WV_MODE → {mode:?}");

@@ -21,6 +21,9 @@
 | 行程 | Journey | 从 A 到 B 的一条路径，含各段交通工具 | 距离 |
 | 投影 | Projection | 某时刻对全部时间区间求值后的世界状态 | 时间 |
 | 快照 | Snapshot | 某一时刻工程状态的完整保存 | 编辑 |
+| 垃圾桶 | trash bin | 被删除地图的暂存区（软删状态，可恢复）；真删仅发生在清空或条目彻底删除 | 编辑 |
+| 软删 | soft delete / trashed | 只在子树根节点打 `trashed` 标志、不物理移除；显隐由 `World::map_alive` 派生 | 编辑 |
+| 深拷贝副本 | deep-copy duplicate | 粘贴产出的独立子树（ID 全量重生成、与源零共享）——多对多关系的替代物 | 地理 |
 | 有效日速度 | effective daily speed | `speed_kmh × terrain_mult × (daily_hours / 24)` | 距离 |
 | 换乘 | transfer | 同一地点切换到另一交通工具，零耗时状态转移 | 距离 |
 
@@ -509,9 +512,30 @@
 - **首次出现**：2026-10-27 用户会话（feat/top-option-bar 分支）
 - **所属维度**：编辑（地形 / 群系）/ 数据
 
-## 势力图切蛋糕分区（2026-10-27 · ADR-0074）
+## 播放条（2026-10-27 · 播放器停靠化）
 
-> 来源：2026-10-27「layout 不够用」brainstorm 五轮收敛。设计稿：`docs/superpowers/specs/2026-10-27-faction-map-partition-design.md`，ADR：`docs/adr/ADR-0074-faction-partition-cake-cutting.md`。
+- **英文名**：Playbar（折叠态播放器；模块 `ui::timeline`，`COMPACT_H=44`）
+- **定义**：时间轴播放器收起后的**单行形态**：播放 / 暂停钮 + 细进度轨（基线 + 已播段 + 播放头圆点）+ 悬浮日期药丸 + 展开钮。停靠语义与其上的完整播放器同款——**横向占满视口、底边贴状态栏上沿**（`dock_rect`，每帧由视口重推）；折叠态的会话缓存是独立 egui persisted bool（`timeline_collapse_id`，刻意避开窗口同 Id 的 `"collapsing"` 子位——那是直连 `egui::Window` 的窗体内容闸门，借它会「折叠=整窗消失」）；经 `ui-layout.yaml` 的 `collapsed` 字段跨会话记忆（工程打开回灌、persist 对 Timeline 特判落盘）。与「播放」（Playback，时间推进语义）不同：播放条是**呈现形态**词，播放是**行为**词。完整播放器的层徽标 / 速度下拉 / 登记事件 / 年份行 / 层内容只在展开态在场。
+- **首次出现**：2026-10-27 用户裁定「默认占满宽度、贴 status bar 上方；可以缩小，变为只有播放条」（feat/player-dock-playbar）
+- **所属维度**：界面（时间轴）
+
+## 山系笔与垂直带谱（2026-10-27 · ADR-0076）
+
+- **英文名**：Mountain-Range Pen / Altitudinal Zonation（工具 = 既有 `BrushTool::MountainRange`）
+- **定义**：**山系笔** = 主力山脉创作工具：按住拖一条线（山系轴线），沿线由 `Intent::MountainRange` 以 ridged 噪声长出走向连贯、两头收尖的山脊，一次拖画 = 一个可撤销事务；与「涂抹」（`PaintKind`，降为微调）分工。**垂直带谱** = 山脉群系沿高度的垂直分带：增量 ≥500 m（实质抬升门槛 `RANGE_KIND_ADD_M`）的格子按绝对高度落带——`<300` 草原（出水低肩）/ `300–1200` 丘陵 / `1200–2600` 山地 / `≥2600`（`SNOW_LINE_M`）雪原，常数同源 `continent.rs`；门槛之下既有地貌标签原样不动（山脚衔接周边环境由此免费获得）。裁定动机：逐格涂抹产出「补丁 + 整片同群系」，用户提议引入板块系统；ADR-0076 裁定不引入板块实体，采纳其本质（轴线走向 / 剖面起伏 / 高度带谱），雪原封顶不扩群系词汇。
+- **首次出现**：2026-10-27 用户会话（brainstorm：山脉涂抹乱套 + 板块提议）
+- **所属维度**：编辑（地形 / 群系）/ 数据
+
+## UI 操控工具（2026-10-28 · ADR-0078）
+
+- **术语**：UI 操控工具
+- **英文名**：UI control tools（MCP skills：get_ui_state / set_view_mode / set_panel_visible / screenshot）
+- **定义**：MCP HTTP server 的第二组 skill 面（ADR-0014 的 9 个世界数据工具之外）：面向**UI 会话态**的语义化操控——取快照、切视图模式、开关用户可见面板、截主窗口并以 MCP image content 回传 base64 PNG。词表单一真源：视图模式词 = `crate::state::parse_view_mode`（与 `WV_MODE` 验收探针共用）；面板词 = `Panel::ALL` 的 snake_case。**不入撤销栈**（GUI 同款语义）；安全面与 ADR-0014 v0.1 同水位（loopback、无鉴权）。首次出现：2026-10-28 用户会话（「把我们整天测试的功能做进 HTTP 服务」）；ADR-0078 + `crates/wv-app/src/http/skills/ui.rs`
+- **所属维度**：架构（MCP 工具面）/ 工具链
+
+## 势力图切蛋糕分区（2026-10-27 · ADR-0079）
+
+> 来源：2026-10-27「layout 不够用」brainstorm 五轮收敛。设计稿：`docs/superpowers/specs/2026-10-27-faction-map-partition-design.md`，ADR：`docs/adr/ADR-0079-faction-partition-cake-cutting.md`（原编号 0074，与 CellMap 点选 / 地图树 / 山系笔三方撞号，合并 main 时按索引备注让位改 0079）。
 
 | 术语 | 英文 / 拼音 | 定义 | 所属维度 |
 |---|---|---|---|

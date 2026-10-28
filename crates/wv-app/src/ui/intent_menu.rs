@@ -47,7 +47,7 @@ fn terrain_intents_available(world: &wv_core::World, map: &wv_core::Id) -> bool 
 /// {World, Region}）。M4 起目录含「森林」：大陆 + 城市 + 森林 + 地形四意图。
 fn intent_count_for(level: wv_core::map::MapLevel) -> usize {
     match level {
-        // ADR-0074 T13：「划分势力」入口退役（切蛋糕 pen 取代）→ 8 意图变 7。
+        // ADR-0079 T13：「划分势力」入口退役（切蛋糕 pen 取代）→ 8 意图变 7。
         wv_core::map::MapLevel::World | wv_core::map::MapLevel::Region => 7,
         wv_core::map::MapLevel::City | wv_core::map::MapLevel::Interior => 0,
     }
@@ -327,7 +327,7 @@ mod tests {
         assert_eq!(
             intent_count_for(MapLevel::World),
             7,
-            "世界级：大陆 + 城市 + 森林（M4）+ 地形四意图（M3）；划分势力入口已随 ADR-0074 T13 退役"
+            "世界级：大陆 + 城市 + 森林（M4）+ 地形四意图（M3）；划分势力入口已随 ADR-0079 T13 退役"
         );
         assert_eq!(
             intent_count_for(MapLevel::Region),

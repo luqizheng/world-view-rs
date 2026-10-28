@@ -264,6 +264,7 @@ mod marker_action_tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            ..Default::default()
         });
         world.world.set_terrain(
             wv_core::Id::new_unchecked("world_main"),

@@ -31,18 +31,18 @@
 
 ---
 
-### Task 1: ADR-0074 + GLOSSARY 术语
+### Task 1: ADR-0079 + GLOSSARY 术语
 
 **Files:**
-- Create: `docs/adr/ADR-0074-faction-partition-cake-cutting.md`
+- Create: `docs/adr/ADR-0079-faction-partition-cake-cutting.md`
 - Modify: `docs/adr/README.md`（索引；标注 ADR-0028 的划分势力入口被本 ADR 取代）
 - Modify: `GLOSSARY.md`
 
 **Interfaces:** 无代码。后续任务的术语以本 ADR 为准。
 
-- [ ] **Step 1: 写 ADR-0074**：处境（ADR-0027 层已有、无画图工具、独立多边形无零和语义）/ 决策（快照式分区 = 共享顶点表+脸环引用；五命令；切后点选归属；整块易主=关旧 span 开新 span；claim 不再可新建；ADR-0028 入口退役）/ 理由 / 代价 + 被否决备选（操作日志式 span、独立多边形+几何吸附、显式边表 DCEL、编辑态第二时钟）。落 spec 的 D1–D9 与设计默认。
+- [ ] **Step 1: 写 ADR-0079**：处境（ADR-0027 层已有、无画图工具、独立多边形无零和语义）/ 决策（快照式分区 = 共享顶点表+脸环引用；五命令；切后点选归属；整块易主=关旧 span 开新 span；claim 不再可新建；ADR-0028 入口退役）/ 理由 / 代价 + 被否决备选（操作日志式 span、独立多边形+几何吸附、显式边表 DCEL、编辑态第二时钟）。落 spec 的 D1–D9 与设计默认。
 - [ ] **Step 2: GLOSSARY 登记**：分区（partition）、脸（face）、边界网络（共享顶点）、切蛋糕、政治图集页、整块易主、生效时间。
-- [ ] **Step 3: Commit** `git add docs && git commit -m "docs: ADR-0074 势力图切蛋糕分区 + 术语登记"`
+- [ ] **Step 3: Commit** `git add docs && git commit -m "docs: ADR-0079 势力图切蛋糕分区 + 术语登记"`
 
 ### Task 2: wv-core 分区数据模型 + 求值查询
 

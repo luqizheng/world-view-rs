@@ -102,7 +102,7 @@ pub fn flood_select_on_click(
 /// **为什么要转**：泛洪的连通性判定在 `wv_terrain::cellops` 里（地形域
 /// 的纯函数），而世界数据是 `wv_core::TerrainData`（序列化格式）。
 /// 这里做一次**结构转换**（不复制语义），代价 O(格数)。
-fn to_terrain_grid(terrain: &wv_core::terrain::TerrainData) -> wv_terrain::TerrainGrid {
+pub(crate) fn to_terrain_grid(terrain: &wv_core::terrain::TerrainData) -> wv_terrain::TerrainGrid {
     let cells = terrain
         .cells
         .iter()
