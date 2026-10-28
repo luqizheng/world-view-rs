@@ -1506,6 +1506,7 @@ mod partition_diag_tests {
                 faces: vec![PartitionFace {
                     id: 0,
                     owner: Some(Id::new_unchecked("nope")),
+                    kind: None,
                     ring: vec![0],
                     holes: Vec::new(),
                 }],
@@ -1589,6 +1590,7 @@ mod faction_diag_tests {
             z: 0,
             color_mode: FactionColorMode::Own,
             visible: true,
+            usage: wv_core::model::faction::LayerUsage::Political,
         }
     }
 

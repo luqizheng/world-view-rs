@@ -82,6 +82,8 @@ impl Faction {
 ///
 /// 国界 / 行政区 / 贵族领 / 派系 / 教团 / 行会都是本结构的实例；
 /// 层是数据，不是枚举——新增一种政治维度不需要改代码。
+/// ADR-0081 起 `usage = Nature` 的层承载**自然蛋糕**（脸的群系族），
+/// 与政治层共用同一套分区引擎。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FactionLayer {
     pub id: Id,
@@ -96,6 +98,27 @@ pub struct FactionLayer {
     /// 数据级可见性（与会话总开关 `ViewState.factions_visible` 合取）。
     #[serde(default = "default_true")]
     pub visible: bool,
+    /// 层用途（ADR-0081）：Political = 政治蛋糕（脸 `owner` = 势力）；
+    /// Nature = 自然蛋糕（脸 `kind` = 群系族，`owner` 恒空）。存量层零
+    /// 迁移（serde 缺省 = Political）。
+    #[serde(default)]
+    pub usage: LayerUsage,
+}
+
+/// 势力层的用途（ADR-0081 自然图层分区）。
+///
+/// **为什么不另起 NatureLayer 实体**：层模型（命名 / z / 可见性 / 眼睛 /
+/// 分区挂载）完全同构，差异只在「脸携带什么属性」——一个判别字段比两套
+/// 平行实体便宜；渲染与手势按本字段分派填色与编辑语义。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LayerUsage {
+    /// 政治蛋糕：脸 `owner` = 势力 Id（可空 = 无主）。
+    #[default]
+    Political,
+    /// 自然蛋糕：脸 `kind` = 群系族下标（`wv-terrain::BIOME_FAMILY_ORDER`
+    /// 序即契约），`owner` 恒空——「草原N / 沙漠N」的草原 / 沙漠即 kind。
+    Nature,
 }
 
 /// 势力层配色策略（ADR-0027 D6）。闭合的渲染策略，不是世界内容。
@@ -205,6 +228,7 @@ pub fn default_faction_layer() -> FactionLayer {
         z: 0,
         color_mode: FactionColorMode::Own,
         visible: true,
+        usage: crate::model::faction::LayerUsage::Political,
     }
 }
 
@@ -737,6 +761,7 @@ mod tests {
             z: 1,
             color_mode: FactionColorMode::Own,
             visible: true,
+            usage: crate::model::faction::LayerUsage::Political,
         });
         w.faction_geometry.push(GeometrySpan {
             map: Id::new_unchecked("map_world"),

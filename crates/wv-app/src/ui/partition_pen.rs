@@ -73,8 +73,27 @@ pub enum PenMode {
     Off,
 }
 
+/// 层用途解析（ADR-0081）：编辑态各手势 / 弹框按它分派语义——自然蛋糕
+/// 不加势力（owner 恒空）、归属输入换群系下拉。层查不到（悬空）按政治层
+/// 兜底（既有行为最小扰动）。
+pub fn layer_usage(
+    world: &wv_core::World,
+    layer: &wv_core::Id,
+) -> wv_core::model::faction::LayerUsage {
+    world
+        .faction_layers
+        .iter()
+        .find(|l| &l.id == layer)
+        .map(|l| l.usage)
+        .unwrap_or_default()
+}
+
+/// 参与自然蛋糕的族下标（序 = `wv_terrain::BIOME_FAMILY_ORDER` 前 6 个
+/// 陆面族；水域 / 道路族不是「地块的群系」）。
+pub const NATURE_LAND_FAMILIES: [u8; 6] = [0, 1, 2, 3, 4, 5];
+
 /// pen 弹框的跨帧状态。
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct PartitionPenDialog {
     /// 弹框开着（某层行 pen 点下）。
     pub open_for: Option<wv_core::Id>,
@@ -82,8 +101,22 @@ pub struct PartitionPenDialog {
     pub mode: PenMode,
     /// 生效日输入（预填当前日）。
     pub from: i64,
-    /// 起始归属（势力 id 字符串，空 = 无主）。
+    /// 起始归属（势力 id 字符串，空 = 无主；政治层）。
     pub owner: String,
+    /// 初始群系族下标（自然层 Create 用；默认 1 = 草原族）。
+    pub kind: u8,
+}
+
+impl Default for PartitionPenDialog {
+    fn default() -> Self {
+        Self {
+            open_for: None,
+            mode: PenMode::default(),
+            from: 0,
+            owner: String::new(),
+            kind: 1,
+        }
+    }
 }
 
 impl PartitionPenDialog {
@@ -93,6 +126,7 @@ impl PartitionPenDialog {
         self.mode = PenMode::Create;
         self.from = current_day;
         self.owner.clear();
+        self.kind = 1;
     }
 
     /// 关闭。
@@ -121,6 +155,9 @@ pub fn partition_pen_dialog(
         return;
     };
     let loc = current_loc.0;
+    // 层用途（ADR-0081）：窗体与提交段共用。
+    let nature =
+        layer_usage(&projection.world, &layer_id) == wv_core::model::faction::LayerUsage::Nature;
     let mut commit: Option<PenDecision> = None;
     egui::Window::new(t(loc, crate::i18n::I18nKey::PartitionPenTitle))
         .id(egui::Id::new("wv_partition_pen"))
@@ -149,7 +186,28 @@ pub fn partition_pen_dialog(
                 );
             });
             ui.add_space(8.0);
+            // 层用途分派（ADR-0081）：自然层的「起始归属」= 初始群系族下拉
+            // （`nature` 在窗体闭包前算好，提交段共用）。
             match dialog.mode {
+                PenMode::Create if nature => {
+                    ui.horizontal(|ui| {
+                        ui.label(t(loc, crate::i18n::I18nKey::PartitionPenEffectiveDay));
+                        ui.add(egui::DragValue::new(&mut dialog.from));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(t(loc, crate::i18n::I18nKey::PartitionKindTitle));
+                        let names = wv_terrain::biome::BIOME_FAMILY_NAMES_ZH;
+                        egui::ComboBox::from_id_salt("wv_partition_initial_kind")
+                            .selected_text(names.get(dialog.kind as usize).copied().unwrap_or("?"))
+                            .show_ui(ui, |ui| {
+                                for k in NATURE_LAND_FAMILIES {
+                                    let label = names.get(k as usize).copied().unwrap_or("?");
+                                    ui.selectable_value(&mut dialog.kind, k, label);
+                                }
+                            });
+                    });
+                    ui.small(t(loc, crate::i18n::I18nKey::PartitionKindHint));
+                }
                 PenMode::Create => {
                     ui.horizontal(|ui| {
                         ui.label(t(loc, crate::i18n::I18nKey::PartitionPenEffectiveDay));
@@ -181,7 +239,7 @@ pub fn partition_pen_dialog(
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if ui.button(t(loc, crate::i18n::I18nKey::CommonOk)).clicked() {
-                    let owner = if dialog.owner.trim().is_empty() {
+                    let owner = if nature || dialog.owner.trim().is_empty() {
                         None
                     } else {
                         Some(wv_core::Id::new_unchecked(dialog.owner.trim()))
@@ -199,6 +257,27 @@ pub fn partition_pen_dialog(
 
     if let Some(decision) = commit {
         match decision {
+            PenDecision::Create { from, owner } if nature => {
+                // 自然层（ADR-0081）：开段带初始群系族，不建势力实体。
+                let cmd = wv_edit::BeginPartitionSpanCommand::new_nature(
+                    wv_core::Id::new_unchecked(view.current_map.clone()),
+                    layer_id.clone(),
+                    from,
+                    dialog.kind,
+                );
+                let mut tx = wv_edit::Transaction::new();
+                tx.push(Box::new(cmd));
+                match edit.history.commit(&mut projection.world, tx) {
+                    Ok(dirty) => {
+                        edit.record_dirty(dirty);
+                        projection.dirty = true;
+                        edit_state.active = Some((layer_id.clone(), from));
+                        edit_state.tool = PartitionTool::Cut;
+                    }
+                    Err(e) => bevy::log::warn!("自然层开段失败: {e}"),
+                }
+                let _ = owner; // 自然层无归属语义（decide 恒传 None）。
+            }
             PenDecision::Create { from, owner } => {
                 let mut tx = wv_edit::Transaction::new();
                 // 归属名输入 = **新建势力实体**（同 Begin 一个事务）——

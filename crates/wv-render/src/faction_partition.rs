@@ -58,17 +58,40 @@ pub fn partition_layer_decision(
     span.map(|_| ())
 }
 
-/// 脸的填色（纯函数）：无主 = 中性灰；其余按势力色。
-/// 势力查不到（悬空引用）→ 中性灰（V1：校验面板列出，渲染不崩）。
+/// 脸的填色（纯函数）：自然脸（`kind`）按群系族色；政治脸无主 = 中性灰、
+/// 其余按势力色。势力查不到（悬空引用）→ 中性灰（V1：校验面板列出，渲染不崩）。
+///
+/// 族色是一张**软色固定表**（wv-render 侧，ADR-0081 V1）：自然蛋糕的色
+/// 语义是「族可辨」，不是主题演绎——主题化（族色入 ThemePack）留未来轮。
 pub fn face_fill_color(
     owner: Option<&Id>,
+    kind: Option<u8>,
     faction_color_of: impl Fn(&Id) -> Option<[u8; 3]>,
 ) -> [u8; 3] {
+    if let Some(k) = kind {
+        return NATURE_FAMILY_FILL
+            .get(k as usize)
+            .copied()
+            .unwrap_or([128, 128, 128]);
+    }
     match owner {
         None => [128, 128, 128],
         Some(id) => faction_color_of(id).unwrap_or([128, 128, 128]),
     }
 }
+
+/// 自然蛋糕的族填色（序 = `wv_terrain::BIOME_FAMILY_ORDER`：森林/草原/
+/// 干旱/湿地/寒带/高地/水域/道路——水域/道路族不参与自然蛋糕但占位保序）。
+const NATURE_FAMILY_FILL: [[u8; 3]; 8] = [
+    [106, 153, 78],  // 森林
+    [154, 178, 92],  // 草原
+    [214, 177, 106], // 干旱
+    [110, 158, 155], // 湿地
+    [186, 204, 214], // 寒带
+    [166, 138, 110], // 高地
+    [118, 148, 186], // 水域（占位）
+    [150, 143, 138], // 道路（占位）
+];
 
 /// 栅格局部 → 视图坐标平移量（`raster_origin`）。
 pub fn partition_offset(grid: &GridConfig) -> Vec2 {
@@ -149,7 +172,7 @@ pub fn sync_partition_overlays(
                 // 活动层：填色。
                 // TODO(ADR-0079 后续轮): Inherit 配色走 memberships 上级链
                 // （faction_overlays::inherited_color 同款）；v1 先势力本色。
-                let color = face_fill_color(face.owner.as_ref(), |id| {
+                let color = face_fill_color(face.owner.as_ref(), face.kind, |id| {
                     world
                         .factions
                         .iter()
@@ -227,6 +250,7 @@ mod tests {
             z: 0,
             color_mode: FactionColorMode::Own,
             visible: false,
+            usage: wv_core::model::faction::LayerUsage::Political,
         };
         assert!(partition_layer_decision(&l, None).is_none(), "隐藏层不画");
     }
@@ -239,6 +263,7 @@ mod tests {
             z: 0,
             color_mode: FactionColorMode::Own,
             visible: true,
+            usage: wv_core::model::faction::LayerUsage::Political,
         };
         assert!(
             partition_layer_decision(&l, None).is_none(),
@@ -250,18 +275,29 @@ mod tests {
     #[test]
     fn unowned_face_fills_neutral_grey() {
         assert_eq!(
-            face_fill_color(None, |_| Some([255, 0, 0])),
+            face_fill_color(None, None, |_| Some([255, 0, 0])),
             [128, 128, 128],
-            "无主 = 中性灰"
+            "无主政治脸 = 中性灰"
         );
         assert_eq!(
-            face_fill_color(Some(&Id::new_unchecked("f")), |_| None),
+            face_fill_color(Some(&Id::new_unchecked("f")), None, |_| None),
             [128, 128, 128],
             "悬空势力引用 → 灰（不崩，V1）"
         );
         assert_eq!(
-            face_fill_color(Some(&Id::new_unchecked("f")), |_| Some([10, 20, 30])),
+            face_fill_color(Some(&Id::new_unchecked("f")), None, |_| Some([10, 20, 30])),
             [10, 20, 30]
+        );
+        // 自然脸（ADR-0081）：kind 优先于 owner——草原族(1)取族色软绿。
+        assert_eq!(
+            face_fill_color(None, Some(1), |_| Some([255, 0, 0])),
+            [154, 178, 92],
+            "自然脸按群系族填色"
+        );
+        assert_eq!(
+            face_fill_color(None, Some(99), |_| None),
+            [128, 128, 128],
+            "kind 越界（坏 YAML）→ 灰，不崩"
         );
     }
 
@@ -298,6 +334,7 @@ mod tests {
             faces: vec![PartitionFace {
                 id: 0,
                 owner: None,
+                kind: None,
                 ring: vec![0, 1, 2],
                 holes: Vec::new(),
             }],

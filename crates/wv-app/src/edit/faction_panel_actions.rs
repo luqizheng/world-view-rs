@@ -133,13 +133,14 @@ pub fn remove_geometry_now(
     );
 }
 
-/// 新建一个势力层（ADR-0027）。
+/// 新建一个势力层（ADR-0027；ADR-0081 起 `usage` 可选自然蛋糕）。
 pub fn add_layer_now(
     world: &mut WorldProjection,
     edit: &mut EditHistory,
     view: &ViewState,
     name: String,
     z: i32,
+    usage: wv_core::model::faction::LayerUsage,
 ) {
     let id_str = format!("faction_layer_{}", current_unix_ms());
     let layer = FactionLayer {
@@ -148,6 +149,7 @@ pub fn add_layer_now(
         z,
         color_mode: FactionColorMode::Own,
         visible: true,
+        usage,
     };
     push_cmd(
         world,

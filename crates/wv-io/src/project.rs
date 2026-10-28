@@ -1339,6 +1339,7 @@ mod faction_layer_io_tests {
             z: 3,
             color_mode: FactionColorMode::Inherit,
             visible: false,
+            usage: wv_core::model::faction::LayerUsage::Political,
         });
         p.save_world(&w, &[]).expect("save");
         let loaded = p.load_world().expect("load");

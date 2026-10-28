@@ -102,6 +102,7 @@ pub fn panel_faction(
                     &view,
                     "新势力层".into(),
                     layers.len() as i32,
+                    wv_core::model::faction::LayerUsage::Political,
                 );
             }
             ui.add_space(space::MD);

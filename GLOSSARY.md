@@ -582,3 +582,10 @@
 - **定义**：CellMap 分层设色的取色方式修订：8 个锚点色不变，**阶内按高度在相邻锚点色间线性插值**（此前 `elev_band(h)` 离散取色，0–200 m 一刀同色、低地内部高度差零分辨）。DOMAIN_CUTS 绝对阶梯与窄域兜底（ADR-0056）原样不动——「阈值不随数据漂移」的性质保留，改的只是段内取色；GPU uniform 布局不变、仅 shader 取色逻辑改动。专业制图 `ElevationBand` / `BAND_WEIGHT`（定义于本文件、接线在 `terrain_view/cells.rs`，wv-render 消费）不跟随，连续插值只落 CellMap 数据视图路径。对 ADR-0055「8 阶」的 CellMap 路径语义修正（索引已标注）。
 - **首次出现**：ADR-0077 D5（2026-10-28）
 - **所属维度**：渲染（地形设色）
+
+## 自然蛋糕（2026-10-28 · ADR-0081）
+
+- **术语**：自然蛋糕 / 自然图层分区
+- **英文名**：nature cake / nature layer partition（`FactionLayer.usage = Nature`）
+- **定义**：用势力图切蛋糕引擎（ADR-0079）承载**自然区域**：层 `usage=Nature` 时脸的属性 = 群系族（`PartitionFace.kind`，wv-terrain `BIOME_FAMILY_ORDER` 序即契约只增不改），显示名「草原N / 干旱N」（N=同族脸按 face id 升序序号，跨会话稳定）；切刀 kind 随脸两分（切草原出两块草原）、Assign=改群系 fork（`SetPartitionFaceKindCommand`，与政治层易主同配方——火山掩草原从某天生效即白拿的 span 能力）。与政治蛋糕的差异只在脸属性（owner 恒空 vs kind），引擎/命令/校验/诊断全部共用。`NatureRegion` 实体本轮并存不迁移（统一几何留后续 ADR）。首次出现：2026-10-28 用户「继续」放行立项五问（数据归属/关系/命名/时间/入口全按推荐）。
+- **所属维度**：地理 / 编辑

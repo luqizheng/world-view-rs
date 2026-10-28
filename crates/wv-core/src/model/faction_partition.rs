@@ -47,7 +47,13 @@ pub struct PartitionFace {
     /// span 内唯一脸 id。
     pub id: u32,
     /// 归属势力；`None` = 无主（渲染灰；不因建层造合成实体，ADR-0079 §2 D1）。
+    /// 自然层（ADR-0081）恒 `None`——脸属性走 `kind`。
     pub owner: Option<Id>,
+    /// **自然蛋糕专用**（ADR-0081）：脸的群系族下标（`wv-terrain::
+    /// BIOME_FAMILY_ORDER` 序即契约，跨 crate 的 u8 交汇）。政治层恒
+    /// `None`。命名「草原N」的前缀 = 族显示名。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<u8>,
     /// 外环：顶点 id 序列，首尾不重复，≥3 点。
     pub ring: Vec<u32>,
     /// 洞环列表（如湖），每个都是顶点 id 序列、首尾不重复。
@@ -178,6 +184,7 @@ pub fn whole_land_span(outer: &[f32], from: i64, to: Option<i64>) -> (PartitionS
             faces: vec![PartitionFace {
                 id: 0,
                 owner: None,
+                kind: None,
                 ring,
                 holes: Vec::new(),
             }],
@@ -290,6 +297,7 @@ mod tests {
             faces: vec![PartitionFace {
                 id: 0,
                 owner: None,
+                kind: None,
                 ring: vec![0, 1],
                 holes: Vec::new(),
             }],

@@ -35,6 +35,8 @@ pub struct BeginPartitionSpanCommand {
     pub from: i64,
     /// 首段初始归属；`None` = 无主（不造合成势力实体）。
     pub initial_owner: Option<Id>,
+    /// 首脸的群系族下标（自然层 ADR-0081；政治层恒 `None`）。
+    pub initial_kind: Option<u8>,
     /// `apply` 缓存的整个分区快照（revert 原样写回）。
     before: std::sync::Mutex<Option<wv_core::model::faction_partition::FactionPartition>>,
 }
@@ -47,6 +49,19 @@ impl BeginPartitionSpanCommand {
             layer,
             from,
             initial_owner,
+            initial_kind: None,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// 自然层构造（ADR-0081）：首脸带群系族、owner 恒空。
+    pub fn new_nature(map: Id, layer: Id, from: i64, initial_kind: u8) -> Self {
+        Self {
+            map,
+            layer,
+            from,
+            initial_owner: None,
+            initial_kind: Some(initial_kind),
             before: std::sync::Mutex::new(None),
         }
     }
@@ -150,6 +165,8 @@ impl BeginPartitionSpanCommand {
             faces: vec![PartitionFace {
                 id: 0,
                 owner: self.initial_owner.clone(),
+                // 自然层（ADR-0081）：首脸的群系族由开段参数携带。
+                kind: self.initial_kind,
                 ring,
                 holes,
             }],
@@ -570,9 +587,13 @@ impl EditCommand for CutPartitionFaceCommand {
         span.faces[face_idx].ring = arc_a;
         span.faces[face_idx].owner = owner_a;
         span.faces[face_idx].holes = holes_a;
+        // kind 随脸两分（ADR-0081）：切草原出两块 = 两块草原；改种走
+        // SetPartitionFaceKindCommand（与政治层易主同语义）。
+        let kind_split = span.faces[face_idx].kind;
         span.faces.push(PartitionFace {
             id: span.faces.iter().map(|f| f.id).max().unwrap_or(0) + 1,
             owner: owner_b,
+            kind: kind_split,
             ring: arc_b,
             holes: holes_b,
         });
@@ -843,6 +864,120 @@ impl EditCommand for AssignPartitionFaceCommand {
     }
 }
 
+/// 改群系（ADR-0081 自然蛋糕）：几何零改动，某脸自 `from` 天起换群系族。
+///
+/// **fork 型**（与 [`AssignPartitionFaceCommand`] 同配方——自然层的「易主」
+/// 就是改 kind：face.kind = `Some(new_kind)`，owner 不参与）。前段求值不变、
+/// 后段不受传染（每段是独立快照——改旧不重放，V2）。
+#[derive(Debug)]
+pub struct SetPartitionFaceKindCommand {
+    /// 目标地图。
+    pub map: Id,
+    /// 目标势力层（usage = Nature）。
+    pub layer: Id,
+    /// 生效日（fork 点）。
+    pub from: i64,
+    /// 被改种的脸。
+    pub face: u32,
+    /// 新群系族下标（wv-terrain `BIOME_FAMILY_ORDER` 契约）。
+    pub new_kind: u8,
+    /// `apply` 缓存的整个分区快照。
+    pub before: std::sync::Mutex<Option<wv_core::model::faction_partition::FactionPartition>>,
+}
+
+impl SetPartitionFaceKindCommand {
+    fn partition_mut<'w>(
+        &self,
+        world: &'w mut World,
+    ) -> EditResult<&'w mut wv_core::model::faction_partition::FactionPartition> {
+        world
+            .partitions
+            .iter_mut()
+            .find(|p| p.map == self.map && p.layer == self.layer)
+            .ok_or_else(|| {
+                EditError::TargetMissing(format!("分区（{} × {}）", self.map, self.layer))
+            })
+    }
+}
+
+impl EditCommand for SetPartitionFaceKindCommand {
+    fn label(&self) -> String {
+        format!("脸 {} 改群系（自第 {} 天）", self.face, self.from)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let snapshot = world
+            .partitions
+            .iter()
+            .find(|p| p.map == self.map && p.layer == self.layer)
+            .cloned();
+        let existing = snapshot
+            .as_ref()
+            .ok_or_else(|| {
+                EditError::TargetMissing(format!("分区（{} × {}）", self.map, self.layer))
+            })?
+            .clone();
+        let hit = existing
+            .spans
+            .iter()
+            .position(|s| self.from >= s.from && s.to.is_none_or(|to| self.from < to))
+            .ok_or_else(|| {
+                EditError::Precondition(format!("生效日 {} 不在任何历史段内", self.from))
+            })?;
+        // 几何在 fork 副本上改，最后一次性写回（与 Assign 同款）。
+        let mut new_spans = existing.spans.clone();
+        if existing.spans[hit].from == self.from {
+            // 恰在段起点：直接改该段（不开零长度段）。
+            let face = new_spans[hit]
+                .faces
+                .iter_mut()
+                .find(|f| f.id == self.face)
+                .ok_or_else(|| EditError::TargetMissing(format!("脸 {}", self.face)))?;
+            face.kind = Some(self.new_kind);
+        } else {
+            // fork：旧段收口、fork 段换 kind。
+            let mut old = new_spans[hit].clone();
+            let mut fork = old.clone();
+            old.to = Some(self.from);
+            fork.from = self.from;
+            fork.to = new_spans[hit].to;
+            let face = fork
+                .faces
+                .iter_mut()
+                .find(|f| f.id == self.face)
+                .ok_or_else(|| EditError::TargetMissing(format!("脸 {}", self.face)))?;
+            face.kind = Some(self.new_kind);
+            new_spans[hit] = old;
+            new_spans.insert(hit + 1, fork);
+        }
+        let partition = self.partition_mut(world)?;
+        partition.spans = new_spans;
+        partition
+            .spans
+            .last()
+            .unwrap()
+            .validate_topology()
+            .map_err(|e| EditError::Precondition(format!("改群系后拓扑破损: {e}")))?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))? = snapshot;
+        Ok(vec!["partitions".to_string()])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let snapshot = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("SetPartitionFaceKind 尚未 apply".into()))?;
+        let partition = self.partition_mut(world)?;
+        *partition = snapshot;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -911,6 +1046,7 @@ mod tests {
                     faces: vec![PartitionFace {
                         id: 0,
                         owner: Some(Id::new_unchecked("faction_a")),
+                        kind: None,
                         ring: vec![0, 1, 2],
                         holes: Vec::new(),
                     }],
@@ -1077,6 +1213,7 @@ mod cut_tests {
                 faces: vec![PartitionFace {
                     id: 0,
                     owner: Some(Id::new_unchecked("faction_a")),
+                    kind: None,
                     ring: vec![0, 1, 2, 3],
                     holes: Vec::new(),
                 }],
@@ -1356,6 +1493,7 @@ mod cut_tests {
                 faces: vec![PartitionFace {
                     id: 0,
                     owner: Some(Id::new_unchecked("faction_a")),
+                    kind: None,
                     ring: vec![0, 1, 2, 3],
                     holes: vec![vec![4, 5, 6]], // 湖在 x∈[75,85] —— 右半
                 }],
@@ -1461,12 +1599,14 @@ mod move_assign_tests {
                     PartitionFace {
                         id: 0,
                         owner: Some(Id::new_unchecked("faction_a")),
+                        kind: None,
                         ring: vec![4, 5, 3, 0],
                         holes: Vec::new(),
                     },
                     PartitionFace {
                         id: 1,
                         owner: Some(Id::new_unchecked("faction_b")),
+                        kind: None,
                         ring: vec![1, 2, 5, 4],
                         holes: Vec::new(),
                     },
@@ -1590,5 +1730,139 @@ mod move_assign_tests {
         };
         cmd.apply(&mut world).expect("开放段内随时可 fork");
         assert_eq!(world.partitions[0].spans.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod nature_kind_tests {
+    //! ADR-0081 自然蛋糕：kind 随脸两分 + 改群系 fork。手算坐标钉行为。
+
+    use super::*;
+
+    const TEST_MAP: &str = "world_main";
+    const LAYER: &str = "layer_nature";
+
+    /// 单脸方环自然脸：kind = 1（草原族）。
+    fn world_with_grassland_face() -> World {
+        let mut world = World::default();
+        world
+            .partitions
+            .push(wv_core::model::faction_partition::FactionPartition {
+                map: Id::new_unchecked(TEST_MAP),
+                layer: Id::new_unchecked(LAYER),
+                spans: vec![PartitionSpan {
+                    from: 0,
+                    to: None,
+                    vertices: vec![
+                        PartitionVertex {
+                            id: 0,
+                            xy: [0.0, 0.0],
+                        },
+                        PartitionVertex {
+                            id: 1,
+                            xy: [100.0, 0.0],
+                        },
+                        PartitionVertex {
+                            id: 2,
+                            xy: [100.0, 100.0],
+                        },
+                        PartitionVertex {
+                            id: 3,
+                            xy: [0.0, 100.0],
+                        },
+                    ],
+                    faces: vec![PartitionFace {
+                        id: 0,
+                        owner: None,
+                        kind: Some(1),
+                        ring: vec![0, 1, 2, 3],
+                        holes: Vec::new(),
+                    }],
+                }],
+            });
+        world
+    }
+
+    #[test]
+    fn nature_cut_splits_kind_to_both_halves() {
+        // 切草原出两块 = 两块草原：kind 随脸两分（ADR-0081）。
+        let mut world = world_with_grassland_face();
+        let cmd = CutPartitionFaceCommand::new(
+            Id::new_unchecked(TEST_MAP),
+            Id::new_unchecked(LAYER),
+            0,
+            0,
+            vec![50.0, -3.0, 50.0, 103.0],
+            true,
+            None, // 自然层不加势力
+            4.0,
+        );
+        cmd.apply(&mut world).expect("apply");
+        let span = &world.partitions[0].spans[0];
+        assert_eq!(span.faces.len(), 2);
+        for f in &span.faces {
+            assert_eq!(f.kind, Some(1), "切后每块都保持草原族: {:?}", f);
+            assert_eq!(f.owner, None, "自然层脸无 owner");
+        }
+    }
+
+    #[test]
+    fn set_face_kind_forks_at_from_day() {
+        // 改群系 = fork：前段草原、后段干旱（P6/P7——时间轴拨回前段不变）。
+        let mut world = world_with_grassland_face();
+        let cmd = SetPartitionFaceKindCommand {
+            map: Id::new_unchecked(TEST_MAP),
+            layer: Id::new_unchecked(LAYER),
+            from: 10,
+            face: 0,
+            new_kind: 2, // 干旱族
+            before: std::sync::Mutex::new(None),
+        };
+        cmd.apply(&mut world).expect("apply");
+        let p = &world.partitions[0];
+        assert_eq!(p.spans.len(), 2, "fork 出两段");
+        assert_eq!((p.spans[0].from, p.spans[0].to), (0, Some(10)));
+        assert_eq!(p.spans[0].faces[0].kind, Some(1), "前段保持草原");
+        assert_eq!(p.spans[1].faces[0].kind, Some(2), "后段改干旱");
+        // revert 整份快照还原。
+        cmd.revert(&mut world).expect("revert");
+        assert_eq!(world.partitions[0].spans.len(), 1);
+        assert_eq!(world.partitions[0].spans[0].faces[0].kind, Some(1));
+    }
+
+    #[test]
+    fn begin_nature_span_seeds_first_face_kind() {
+        // 自然层开段：首脸带群系族（草原族），owner 恒空（new_nature 构造）。
+        let mut world = World::default();
+        world.set_terrain(
+            Id::new_unchecked(TEST_MAP),
+            from_grid({
+                let mut g = wv_terrain::TerrainGrid::new(4, 4);
+                for y in 1..3 {
+                    for x in 1..3 {
+                        g.set(
+                            x,
+                            y,
+                            wv_terrain::TerrainCell {
+                                height: 100,
+                                surface: wv_terrain::SURFACE_LAND,
+                                biome: 0,
+                            },
+                        );
+                    }
+                }
+                g
+            }),
+        );
+        let cmd = BeginPartitionSpanCommand::new_nature(
+            Id::new_unchecked(TEST_MAP),
+            Id::new_unchecked(LAYER),
+            5,
+            1, // 草原族
+        );
+        cmd.apply(&mut world).expect("apply");
+        let face = &world.partitions[0].spans[0].faces[0];
+        assert_eq!(face.kind, Some(1), "首脸 = 草原族");
+        assert_eq!(face.owner, None, "自然层不建势力实体");
     }
 }

@@ -120,6 +120,26 @@ pub fn stroke_face(
     None
 }
 
+/// 自然脸显示名（ADR-0081 命名规则）：`<族名><N>`——N = 同 kind 脸中按
+/// face id 升序的序号。**id 随 YAML 持久化 → 名字跨会话稳定**；非自然脸
+/// （kind `None`）或脸不存在 → `None`。
+pub fn nature_face_name(
+    span: &wv_core::model::faction_partition::PartitionSpan,
+    face_id: u32,
+) -> Option<String> {
+    let face = span.faces.iter().find(|f| f.id == face_id)?;
+    let kind = face.kind?;
+    let names = wv_terrain::biome::BIOME_FAMILY_NAMES_ZH;
+    let prefix = names.get(kind as usize).copied().unwrap_or("?");
+    let n = span
+        .faces
+        .iter()
+        .filter(|f| f.kind == Some(kind) && f.id < face_id)
+        .count()
+        + 1;
+    Some(format!("{prefix}{n}"))
+}
+
 /// 采样一点进折线（与上一点距离 ≥ [`STROKE_MIN_SEG`] 才记）。
 pub fn stroke_push(session: &mut CutStrokeSession, p: [f32; 2]) {
     if let Some(last) = session.pts.chunks_exact(2).last() {
@@ -138,19 +158,22 @@ pub fn partition_edit_hud(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,
     current_loc: Res<CurrentLocale>,
+    projection: Res<WorldProjection>,
     mut edit_state: ResMut<PartitionEditState>,
     mut session: ResMut<CutStrokeSession>,
     mut playback: ResMut<PlaybackState>,
 ) {
-    let Some(state) = edit_state.active.clone() else {
+    let Some((layer_id, _)) = edit_state.active.clone() else {
         return;
     };
-    let _ = state;
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
     let shell = crate::ui::shell::UiShell::new(&shell_cfg);
     let loc = current_loc.0;
+    // 层用途（ADR-0081）：自然层的 Assign 工具 = 改群系（文案与语义都换）。
+    let nature = crate::ui::partition_pen::layer_usage(&projection.world, &layer_id)
+        == wv_core::model::faction::LayerUsage::Nature;
 
     // ── HUD：顶部居中浮条 ──
     egui::Area::new(egui::Id::new("wv_partition_edit_hud"))
@@ -180,7 +203,14 @@ pub fn partition_edit_hud(
                         ui.selectable_value(
                             &mut edit_state.tool,
                             PartitionTool::Assign,
-                            t(loc, crate::i18n::I18nKey::PartitionToolAssign),
+                            t(
+                                loc,
+                                if nature {
+                                    crate::i18n::I18nKey::PartitionToolSetKind
+                                } else {
+                                    crate::i18n::I18nKey::PartitionToolAssign
+                                },
+                            ),
                         );
                         ui.separator();
                         // 当前时间选择器（D5 地图属性）：写全局时间轴。
@@ -209,6 +239,8 @@ pub fn partition_edit_hud(
                         "从地块一边拖到另一边（红圈 = 可切边界）"
                     } else if edit_state.tool == PartitionTool::DragBoundary {
                         "拖动共享边界——青色预览 = 松手后的两侧落位"
+                    } else if nature {
+                        "点一块地 → 改群系 + 生效时间"
                     } else {
                         "点一块地 → 改归属 + 生效时间"
                     };
@@ -293,42 +325,59 @@ pub fn partition_cut_gesture(
             return;
         };
         let pending_stroke = session.pts.clone();
-        // 松手**立即提交**（用户裁定 2026-10-28：一刀下去红线先出现，归属
-        // 自动给占位势力「无名N」，不打断——归属错了用易主改）。
-        let n_existing = projection.world.factions.len();
-        let ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let new_id = wv_core::Id::new_unchecked(format!("faction_{ms}"));
-        let new_name = format!("无名{}", n_existing + 1);
-        let palette = [
-            "#C05A4E", "#4E79C0", "#5A9E6F", "#B07FD8", "#D8A94E", "#4EB8C0", "#C04E9E", "#7F8F4E",
-        ];
-        let color = wv_core::Color(palette[n_existing % palette.len()].into());
+        // 松手**立即提交**（用户裁定 2026-10-28：一刀下去红线先出现，不打断）。
+        // 层用途分派（ADR-0081）：政治层新块自动归占位势力「无名N」（归属
+        // 错了用易主改）；自然层不加势力——kind 随脸两分（切草原出两块
+        // 草原），改种走 Assign 工具（SetPartitionFaceKindCommand）。
+        let nature = crate::ui::partition_pen::layer_usage(&projection.world, &layer_id)
+            == wv_core::model::faction::LayerUsage::Nature;
         let mut tx = wv_edit::Transaction::new();
-        tx.push(Box::new(wv_edit::AddFactionCommand::new(
-            wv_core::Faction::new(new_id.clone(), new_name.clone(), color),
-        )));
-        tx.push(Box::new(wv_edit::CutPartitionFaceCommand::new(
-            wv_core::Id::new_unchecked(view.current_map.clone()),
-            layer_id.clone(),
-            span_from,
-            face_a,
-            pending_stroke,
-            // 新块 = 弧 A（笔行进方向的左半）；归属错了走「易主」。
-            true,
-            Some(new_id),
-            4.0 * view.scale,
-        )));
+        let notice_ok = if nature {
+            tx.push(Box::new(wv_edit::CutPartitionFaceCommand::new(
+                wv_core::Id::new_unchecked(view.current_map.clone()),
+                layer_id.clone(),
+                span_from,
+                face_a,
+                pending_stroke,
+                true,
+                None,
+                4.0 * view.scale,
+            )));
+            "已切分（两块同群系）".to_string()
+        } else {
+            let n_existing = projection.world.factions.len();
+            let ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let new_id = wv_core::Id::new_unchecked(format!("faction_{ms}"));
+            let new_name = format!("无名{}", n_existing + 1);
+            let palette = [
+                "#C05A4E", "#4E79C0", "#5A9E6F", "#B07FD8", "#D8A94E", "#4EB8C0", "#C04E9E",
+                "#7F8F4E",
+            ];
+            let color = wv_core::Color(palette[n_existing % palette.len()].into());
+            tx.push(Box::new(wv_edit::AddFactionCommand::new(
+                wv_core::Faction::new(new_id.clone(), new_name.clone(), color),
+            )));
+            tx.push(Box::new(wv_edit::CutPartitionFaceCommand::new(
+                wv_core::Id::new_unchecked(view.current_map.clone()),
+                layer_id.clone(),
+                span_from,
+                face_a,
+                pending_stroke,
+                // 新块 = 弧 A（笔行进方向的左半）；归属错了走「易主」。
+                true,
+                Some(new_id),
+                4.0 * view.scale,
+            )));
+            format!("已切分，新块归「{new_name}」")
+        };
         match edit.history.commit(&mut projection.world, tx) {
             Ok(dirty) => {
                 edit.record_dirty(dirty);
                 projection.dirty = true;
-                notice.info(
-                    format!("已切分，新块归「{new_name}」"),
-                    (time.elapsed_secs_f64() * 60.0) as u64,
-                );
+                notice.info(notice_ok, (time.elapsed_secs_f64() * 60.0) as u64);
             }
             Err(e) => {
                 notice.error(
@@ -430,68 +479,156 @@ pub fn partition_assign_dialog(
     let shell = crate::ui::shell::UiShell::new(&shell_cfg);
     let loc = current_loc.0;
     let _ = shell;
-    /// 归属选择的三种来源（新建 = 真建势力实体，同事务一次撤销）。
+    // 层用途分派（ADR-0081）：自然层的 Assign 工具 = 改群系族（kind 选择，
+    // 不涉势力）；政治层 = 选既有势力 / 新建 / 无主。
+    let nature = crate::ui::partition_pen::layer_usage(&projection.world, &layer_id)
+        == wv_core::model::faction::LayerUsage::Nature;
+    /// 归属/群系选择的来源（新建 = 真建势力实体，同事务一次撤销）。
     enum PickChoice {
         Existing(wv_core::Id),
         Unclaimed,
         New(String),
+        /// 自然层：新群系族下标。
+        Kind(u8),
     }
     let mut commit: Option<PickChoice> = None;
-    egui::Window::new(t(loc, crate::i18n::I18nKey::PartitionPickTitle))
-        .id(egui::Id::new("wv_partition_assign"))
-        .order(bevy_egui::egui::Order::Foreground)
-        .resizable(false)
-        .collapsible(false)
-        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .show(ctx, |ui| {
-            ui.label(t(loc, crate::i18n::I18nKey::PartitionPickHint));
+    egui::Window::new(t(
+        loc,
+        if nature {
+            crate::i18n::I18nKey::PartitionKindTitle
+        } else {
+            crate::i18n::I18nKey::PartitionPickTitle
+        },
+    ))
+    .id(egui::Id::new("wv_partition_assign"))
+    .order(bevy_egui::egui::Order::Foreground)
+    .resizable(false)
+    .collapsible(false)
+    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+    .show(ctx, |ui| {
+        if nature {
+            // ── 自然层：群系族选择（六个陆面族；当前族标记）──
+            let span = wv_core::partition_span_at(
+                &projection.world,
+                &wv_core::Id::new_unchecked(view.current_map.clone()),
+                &layer_id,
+                playback.current_day,
+            );
+            let cur_kind = span
+                .and_then(|s| s.faces.iter().find(|f| f.id == assign.face))
+                .and_then(|f| f.kind);
+            let cur_name = span.and_then(|s| nature_face_name(s, assign.face));
+            if let Some(name) = cur_name {
+                ui.label(format!("当前：{name}"));
+            }
+            ui.label(t(loc, crate::i18n::I18nKey::PartitionKindHint));
             ui.separator();
-            // 既有势力列表。
-            for f in &projection.world.factions {
-                if ui.button(f.name.as_str()).clicked() {
-                    commit = Some(PickChoice::Existing(f.id.clone()));
+            let names = wv_terrain::biome::BIOME_FAMILY_NAMES_ZH;
+            for k in crate::ui::partition_pen::NATURE_LAND_FAMILIES {
+                let label = names.get(k as usize).copied().unwrap_or("?");
+                let mark = if cur_kind == Some(k) { " ●" } else { "" };
+                if ui.button(format!("{label}{mark}")).clicked() {
+                    commit = Some(PickChoice::Kind(k));
                 }
             }
-            ui.separator();
-            // 无主。
-            if ui
-                .button(t(loc, crate::i18n::I18nKey::PartitionPickUnclaimed))
-                .clicked()
-            {
-                commit = Some(PickChoice::Unclaimed);
-            }
-            ui.separator();
-            // 新建：名字输入 + 确认（id = faction_<Unix 毫秒>，可读 ID 由
-            // Id::new 校验；AddFaction 与 Assign 同事务 = 一次撤销）。
-            ui.horizontal(|ui| {
-                egui::TextEdit::singleline(&mut assign.owner)
-                    .hint_text(t(loc, crate::i18n::I18nKey::PartitionPickNewHint))
-                    .show(ui);
-                let ok = !assign.owner.trim().is_empty();
-                if ui
-                    .add_enabled(
-                        ok,
-                        egui::Button::new(t(loc, crate::i18n::I18nKey::CommonOk)),
-                    )
-                    .clicked()
-                {
-                    commit = Some(PickChoice::New(assign.owner.trim().to_string()));
-                }
-            });
-            // 取消 = 只关窗（易主是纯属性改，无笔画可丢）。
             if ui
                 .button(t(loc, crate::i18n::I18nKey::CommonCancel))
                 .clicked()
             {
                 assign.open = false;
             }
+            return;
+        }
+        ui.label(t(loc, crate::i18n::I18nKey::PartitionPickHint));
+        ui.separator();
+        // 既有势力列表。
+        for f in &projection.world.factions {
+            if ui.button(f.name.as_str()).clicked() {
+                commit = Some(PickChoice::Existing(f.id.clone()));
+            }
+        }
+        ui.separator();
+        // 无主。
+        if ui
+            .button(t(loc, crate::i18n::I18nKey::PartitionPickUnclaimed))
+            .clicked()
+        {
+            commit = Some(PickChoice::Unclaimed);
+        }
+        ui.separator();
+        // 新建：名字输入 + 确认（id = faction_<Unix 毫秒>，可读 ID 由
+        // Id::new 校验；AddFaction 与 Assign 同事务 = 一次撤销）。
+        ui.horizontal(|ui| {
+            egui::TextEdit::singleline(&mut assign.owner)
+                .hint_text(t(loc, crate::i18n::I18nKey::PartitionPickNewHint))
+                .show(ui);
+            let ok = !assign.owner.trim().is_empty();
+            if ui
+                .add_enabled(
+                    ok,
+                    egui::Button::new(t(loc, crate::i18n::I18nKey::CommonOk)),
+                )
+                .clicked()
+            {
+                commit = Some(PickChoice::New(assign.owner.trim().to_string()));
+            }
         });
+        // 取消 = 只关窗（易主是纯属性改，无笔画可丢）。
+        if ui
+            .button(t(loc, crate::i18n::I18nKey::CommonCancel))
+            .clicked()
+        {
+            assign.open = false;
+        }
+    });
 
     if let Some(choice) = commit {
+        // 自然层（ADR-0081）：改群系族 = fork 换 kind（SetPartitionFaceKind），
+        // 与政治层易主同配方；不涉势力实体。
+        if let PickChoice::Kind(k) = choice {
+            let cmd = wv_edit::SetPartitionFaceKindCommand {
+                map: wv_core::Id::new_unchecked(view.current_map.clone()),
+                layer: layer_id,
+                from: playback.current_day,
+                face: assign.face,
+                new_kind: k,
+                before: std::sync::Mutex::new(None),
+            };
+            let mut tx = wv_edit::Transaction::new();
+            tx.push(Box::new(cmd));
+            match edit.history.commit(&mut projection.world, tx) {
+                Ok(dirty) => {
+                    edit.record_dirty(dirty);
+                    projection.dirty = true;
+                    notice.info(
+                        format!(
+                            "已改群系为「{}」",
+                            wv_terrain::biome::BIOME_FAMILY_NAMES_ZH
+                                .get(k as usize)
+                                .copied()
+                                .unwrap_or("?")
+                        ),
+                        (time.elapsed_secs() * 60.0) as u64,
+                    );
+                }
+                Err(e) => {
+                    notice.error(
+                        format!("改群系失败：{e}"),
+                        (time.elapsed_secs() * 60.0) as u64,
+                    );
+                    bevy::log::warn!("改群系提交失败: {e}");
+                }
+            }
+            assign.open = false;
+            return;
+        }
         let mut tx = wv_edit::Transaction::new();
         let owner = match choice {
             PickChoice::Existing(id) => Some(id),
             PickChoice::Unclaimed => None,
+            // Kind 臂不可达：上面 `if let PickChoice::Kind` 已提前 return
+            // （自然层改群系走 SetPartitionFaceKind 分支）——此处只为穷尽。
+            PickChoice::Kind(_) => None,
             PickChoice::New(name) => {
                 // 新建势力**真建实体**（只挂 Id 不建实体 = 悬空引用，渲染
                 // 灰上灰，作者看不到任何变化——实机教训 2026-10-28）。
@@ -805,12 +942,14 @@ mod tests {
                 PartitionFace {
                     id: 0,
                     owner: None,
+                    kind: None,
                     ring: vec![4, 5, 3, 0], // 左半
                     holes: Vec::new(),
                 },
                 PartitionFace {
                     id: 1,
                     owner: None,
+                    kind: None,
                     ring: vec![1, 2, 5, 4], // 右半
                     holes: Vec::new(),
                 },
@@ -838,6 +977,32 @@ mod tests {
             "首点命中优先"
         );
         assert_eq!(stroke_face(&[150.0, 50.0, 180.0, 60.0], &span), None);
+    }
+
+    #[test]
+    fn nature_face_name_counts_per_kind_by_face_id() {
+        // ADR-0081 命名规则守点：<族名><N>——N = 同 kind 按 face id 升序的
+        // 序号（id 持久化 → 名字跨会话稳定）；政治脸（kind None）无名。
+        let mut span = demo_span();
+        // 两张脸改自然：脸 0 = 草原(1)，脸 1 = 草原(1)→改后是 id 顺序第二；
+        // 再造一张 id 更大的干旱脸。
+        span.faces[0].kind = Some(1);
+        span.faces[1].kind = Some(1);
+        span.faces
+            .push(wv_core::model::faction_partition::PartitionFace {
+                id: 9,
+                owner: None,
+                kind: Some(2), // 干旱族
+                ring: vec![0, 1, 2],
+                holes: Vec::new(),
+            });
+        assert_eq!(nature_face_name(&span, 0).as_deref(), Some("草原1"));
+        assert_eq!(nature_face_name(&span, 1).as_deref(), Some("草原2"));
+        assert_eq!(nature_face_name(&span, 9).as_deref(), Some("干旱1"));
+        // 政治脸（kind None）→ None；不存在的脸 → None。
+        span.faces[0].kind = None;
+        assert_eq!(nature_face_name(&span, 0), None);
+        assert_eq!(nature_face_name(&span, 4242), None);
     }
 
     #[test]

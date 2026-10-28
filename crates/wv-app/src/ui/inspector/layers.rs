@@ -61,7 +61,7 @@ pub fn layers_tab(
     });
     ui.add_space(space::MD);
 
-    // 新建势力层。
+    // 新建层：政治层（切蛋糕=势力归属）+ 自然层（ADR-0081，切蛋糕=群系族）。
     let add_w = ui.available_width();
     let (rect, r) = ui.allocate_exact_size(egui::vec2(add_w, shell.hit), egui::Sense::click());
     ui.painter().rect_stroke(
@@ -84,6 +84,32 @@ pub fn layers_tab(
             view,
             "新势力层".into(),
             layers.len() as i32,
+            wv_core::model::faction::LayerUsage::Political,
+        );
+    }
+    // 自然层（ADR-0081）：Map 档「画 region」主职的切蛋糕载体——半高次入口。
+    let (rect_n, r_n) = ui.allocate_exact_size(egui::vec2(add_w, shell.hit), egui::Sense::click());
+    ui.painter().rect_stroke(
+        rect_n,
+        crate::theme::ui_tokens::radius::CONTROL,
+        egui::Stroke::new(1.0, shell.border_strong()),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().text(
+        rect_n.center(),
+        egui::Align2::CENTER_CENTER,
+        "+ Add nature layer",
+        crate::theme::ui_theme::proportional(shell.scale.base),
+        shell.t3(),
+    );
+    if r_n.clicked() {
+        faction_panel_actions::add_layer_now(
+            projection,
+            edit,
+            view,
+            "自然层".into(),
+            layers.len() as i32,
+            wv_core::model::faction::LayerUsage::Nature,
         );
     }
     ui.add_space(space::MD);

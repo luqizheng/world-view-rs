@@ -129,6 +129,39 @@ pub fn is_forest_family(b: Biome) -> bool {
     matches!(family_of(b), Some(BiomeFamily::Forest))
 }
 
+/// 族序表（ADR-0081 自然蛋糕）：`PartitionFace.kind` 跨 crate 存**本表下标**
+/// （wv-core 不依赖 wv-terrain，u8 是两边唯一的交汇类型——序即契约，
+/// **只增不改**；新族必须追加到表尾）。
+pub const BIOME_FAMILY_ORDER: [BiomeFamily; 8] = [
+    BiomeFamily::Forest,
+    BiomeFamily::Grassland,
+    BiomeFamily::Desert,
+    BiomeFamily::Wetland,
+    BiomeFamily::Cold,
+    BiomeFamily::Highland,
+    BiomeFamily::Water,
+    BiomeFamily::Road,
+];
+
+/// 族显示名（与 [`BIOME_FAMILY_ORDER`] 同序）：自然蛋糕的「草原N / 沙漠N」
+/// 命名前缀取自本表。
+pub const BIOME_FAMILY_NAMES_ZH: [&str; 8] = [
+    "森林", "草原", "干旱", "湿地", "寒带", "高地", "水域", "道路",
+];
+
+/// 下标 → 族；越界（坏 YAML）返回 `None`。
+pub fn family_at(index: u8) -> Option<BiomeFamily> {
+    BIOME_FAMILY_ORDER.get(index as usize).copied()
+}
+
+/// 族 → 下标（[`BIOME_FAMILY_ORDER`] 的反查）。
+pub fn family_index(f: BiomeFamily) -> u8 {
+    BIOME_FAMILY_ORDER
+        .iter()
+        .position(|&x| x == f)
+        .expect("族序表穷尽 BiomeFamily（编译期保证）") as u8
+}
+
 /// 群系的默认地表：海洋/湖泊/河流是水，其余（含 `NONE`）按陆处理。
 pub fn surface_for_biome(b: Biome) -> Surface {
     match b {
@@ -187,6 +220,21 @@ mod tests {
         BIOME_ROAD, BIOME_SALT_FLAT, BIOME_SAVANNA, BIOME_SNOWFIELD, BIOME_SWAMP, BIOME_TUNDRA,
         BIOME_WETLAND, SURFACE_LAND, SURFACE_WATER,
     };
+
+    /// 族序表契约（ADR-0081 自然蛋糕）：PartitionFace.kind 存本表下标——
+    /// 序即契约只增不改；roundtrip 与名称表同长必须钉死。
+    #[test]
+    fn family_order_index_roundtrip_and_names_align() {
+        assert_eq!(BIOME_FAMILY_ORDER.len(), 8);
+        assert_eq!(BIOME_FAMILY_NAMES_ZH.len(), BIOME_FAMILY_ORDER.len());
+        for (i, &f) in BIOME_FAMILY_ORDER.iter().enumerate() {
+            assert_eq!(family_index(f), i as u8, "族 {f:?} 的下标应为 {i}");
+            assert_eq!(family_at(i as u8), Some(f));
+        }
+        assert_eq!(family_at(8), None, "越界 = 坏 YAML → None");
+        // 命名前缀锚点：「草原N / 沙漠N」的草原=1、干旱族显示名含「干旱」。
+        assert_eq!(BIOME_FAMILY_NAMES_ZH[1], "草原");
+    }
 
     #[test]
     fn display_kind_maps_each_land_biome_to_legacy_palette_slot() {

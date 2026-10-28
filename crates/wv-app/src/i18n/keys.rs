@@ -401,6 +401,12 @@ pub enum I18nKey {
     PartitionPickUnclaimed,
     /// 归属小窗：新建势力名字占位
     PartitionPickNewHint,
+    /// 改群系小窗标题（自然层 ADR-0081）
+    PartitionKindTitle,
+    /// 改群系小窗提示（自然层）
+    PartitionKindHint,
+    /// 分区子工具：改群系（自然层的 Assign 语义）
+    PartitionToolSetKind,
     /// 图层面板空态标题（本图未声明图层）
     PanelLayersEmptyTitle,
     /// 图层面板空态提示（去 index.yaml 的 layers: 段声明）
@@ -1361,7 +1367,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 556] = [
+    pub const ALL: [I18nKey; 559] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1558,6 +1564,9 @@ impl I18nKey {
         I18nKey::PartitionPickHint,
         I18nKey::PartitionPickUnclaimed,
         I18nKey::PartitionPickNewHint,
+        I18nKey::PartitionKindTitle,
+        I18nKey::PartitionKindHint,
+        I18nKey::PartitionToolSetKind,
         I18nKey::PanelLayersEmptyTitle,
         I18nKey::PanelLayersEmptyHint,
         I18nKey::PanelLayerTerrain,

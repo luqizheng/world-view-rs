@@ -58,12 +58,14 @@ fn sample_partition() -> FactionPartition {
                     PartitionFace {
                         id: 0,
                         owner: None,
+                        kind: None,
                         ring: vec![0, 1, 2, 3],
                         holes: vec![vec![4, 5, 6]],
                     },
                     PartitionFace {
                         id: 1,
                         owner: Some(Id::new_unchecked("faction_a")),
+                        kind: None,
                         ring: vec![0, 1, 2],
                         holes: Vec::new(),
                     },
@@ -94,6 +96,7 @@ fn sample_partition() -> FactionPartition {
                 faces: vec![PartitionFace {
                     id: 0,
                     owner: Some(Id::new_unchecked("faction_b")),
+                    kind: None,
                     ring: vec![0, 1, 2, 3],
                     holes: Vec::new(),
                 }],
