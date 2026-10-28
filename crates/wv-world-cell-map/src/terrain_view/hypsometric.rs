@@ -181,8 +181,9 @@ pub fn tint_rgba(base: [f32; 4], band: usize, strength: f32) -> [f32; 4] {
 /// 离散口径下不可分。CellMap 数据视图路径据此修正为「**8 锚点连续渐变**」：
 /// 段号沿用 [`band_of`]（边界语义不变：`height >= cut` 进下一段），段内再给
 /// 一个连续位置 `t ∈ [0, 1)`，颜色在 `ramp[b]` 与 `ramp[b+1]` 间线性过渡。
-/// **`ElevationBand` / `BAND_WEIGHT` 的阶梯语义不动**——两者定义并接线于
-/// **本 crate** `terrain_view/cells.rs`（wv-render 是下游消费方，不持语义）；
+/// **`ElevationBand` / `BAND_WEIGHT` 的阶梯语义不动**——两者定义于**本文件**
+/// （`ElevationBand` 约 :265 / `BAND_WEIGHT` 约 :284），接线在
+/// `terrain_view/cells.rs`（wv-render 是下游消费方，不持语义）；
 /// 那条路径刻意让低地零混入，见 [`BAND_WEIGHT`]。
 ///
 /// 段内分数 `t` 的口径：

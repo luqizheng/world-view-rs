@@ -1274,8 +1274,9 @@ impl<'a> CellRenderer<'a> {
                 // 2026-10-28（CellMap 数据视图对 ADR-0055「8 阶离散」的修正）：
                 // 换 8 锚点**段内连续渐变**——离散口径下低地 0–200 m 一刀同色，
                 // 缓丘与海岸平原不可分；`tint_continuous` 在锚点处退化为
-                // `tint_rgba`，是离散色带的超集（wv-render 专业制图侧的
-                // `ElevationBand` 阶梯语义不动，见 hypsometric::segment_of）。
+                // `tint_rgba`，是离散色带的超集（本 crate
+                // `hypsometric::ElevationBand` 阶梯语义不动，wv-render 消费；
+                // 见 hypsometric::segment_of）。
                 rgba =
                     super::hypsometric::tint_continuous(rgba, cell.height, cuts, self.hypsometric);
             }

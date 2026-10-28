@@ -1598,6 +1598,17 @@ fn teardown_field(
     stats.field_quads = 0;
 }
 
+/// 桥接侧「格距 + 比例尺 → 米/格」的纯缝（ADR-0077 D2）。
+///
+/// 从 [`sync_terrain_field`] 的内联填充抽出——本体委托 [`meters_per_cell_of`]：
+/// 比例尺（`unit_per_km`，地图声明的 km/wu）精确换算，未声明走「1 wu = 1 m」
+/// 回落（README §12-53 待决）。抽这一层不引入新语义，为的是让「桥接用的是
+/// 哪条入口、喂的是**来源图**的比例尺」这件事不经 Bevy App 就能被测试锁住
+/// （终审 M-1 修法 A / plan T5 声明的 bridge mpc 测试落点）。
+fn bridge_meters_per_cell(cell_size: f32, unit_per_km: Option<f32>) -> f32 {
+    meters_per_cell_of(cell_size, unit_per_km)
+}
+
 /// 主 App 的场渲染同步（ADR-0053 D1，Phase 1 接线 2026-10-24）。
 ///
 /// ## 职责
@@ -1706,7 +1717,7 @@ pub fn sync_terrain_field(
     // 地形来源图（`active_terrain` 沿 parent 向上继承的那张，`source` 即其
     // MapNode）声明了比例尺 → 精确换算；未声明走「1 wu = 1 m」回落
     // （README §12-53 待决；与 CPU 烘焙路径同一条入口、同一回落假设）。
-    let meters_per_cell = meters_per_cell_of(cell_size, source.unit_per_km);
+    let meters_per_cell = bridge_meters_per_cell(cell_size, source.unit_per_km);
     let mpc_changed = field
         .last_mpc
         .is_none_or(|last| (last - meters_per_cell).abs() > 1e-6);
@@ -3033,6 +3044,24 @@ mod bridge_tests {
             "换模式（换眼镜）不应生成第二个淡出精灵"
         );
     }
+
+    /// 桥接的米/格填充（ADR-0077 D2）：比例尺精确换算 + 未声明回落。
+    ///
+    /// `sync_terrain_field` 把「来源图比例尺 + 格距」经
+    /// [`bridge_meters_per_cell`] 算出的米/格写进 uniform `light_dir.w`
+    /// （WGSL 侧 `mpc` 槽）。本测试锁两个口径：
+    /// 声明比例尺走精确换算；未声明回落「1 wu = 1 m」（README §12-53 待决，
+    /// 口径若静默更改，此测试应当先红）。
+    #[test]
+    fn bridge_fills_meters_per_cell_from_map_scale() {
+        // `Some(8.0)` = 「1 km = 8 wu」→ 1 wu = 125 m → 100 wu 格 = 12500 m/格。
+        let scaled = bridge_meters_per_cell(100.0, Some(8.0));
+        assert!((scaled - 12500.0).abs() < 1e-6, "got {scaled}");
+        // 未声明比例尺 → 回落：100 wu 格 = 100 m/格（「1 wu = 1 m」假设）。
+        let fallback = bridge_meters_per_cell(100.0, None);
+        assert!((fallback - 100.0).abs() < 1e-6, "got {fallback}");
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
