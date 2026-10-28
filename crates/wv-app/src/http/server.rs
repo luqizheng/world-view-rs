@@ -134,7 +134,10 @@ pub async fn start_mcp_server(
         .parse::<SocketAddr>()
         .map_err(|e| ServerError::BadAddress(e.to_string()))?;
 
-    let app = mcp_router(bridge);
+    let state = Arc::new(AppState { bridge });
+    let app = Router::new()
+        .route("/mcp", post(mcp_handler))
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
         // 端口占用的 stderr 消息：给出可操作的指引（用户可换端口），
@@ -159,15 +162,6 @@ pub async fn start_mcp_server(
     axum::serve(listener, app)
         .await
         .map_err(|e| ServerError::Serve(e.to_string()))
-}
-
-/// 生产 MCP 路由（ADR-0083 提取）：`POST /mcp` 单端点。
-/// `start_mcp_server` 与 `wv mcp` 代理的端到端测试共用——路由表单一真源。
-pub(crate) fn mcp_router(bridge: HttpBridge) -> Router {
-    let state = Arc::new(AppState { bridge });
-    Router::new()
-        .route("/mcp", post(mcp_handler))
-        .with_state(state)
 }
 
 #[derive(Debug)]
@@ -235,7 +229,7 @@ mod tests {
     /// 都会被这条用例捕到。生产路径的端口绑定走 `start_mcp_server`，
     /// 已在另外的测试覆盖（绑定失败 stderr + 退出）。
     #[tokio::test]
-    async fn end_to_end_post_mcp_tools_list_returns_fifteen_skills() {
+    async fn end_to_end_post_mcp_tools_list_returns_thirteen_skills() {
         use axum::body::Body;
         use axum::http::{Request, StatusCode};
         use tower::util::ServiceExt;
@@ -294,12 +288,10 @@ mod tests {
                 "list_places",
                 "get_place",
                 "get_state_at_time",
-                "get_naming_context",
                 "create_map",
                 "create_place",
                 "undo",
                 "save_project",
-                "set_nature_names",
                 "get_ui_state",
                 "set_view_mode",
                 "set_panel_visible",
@@ -460,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_fifteen_tools() {
+    fn tools_list_returns_thirteen_tools() {
         let (state, _rx) = app_state();
         let (_status, AxJson(resp)) = rt().block_on(mcp_handler(
             State(state.clone()),
