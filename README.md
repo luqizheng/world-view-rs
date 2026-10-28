@@ -318,9 +318,18 @@ cargo run -p wv-app -- validate examples/minimal-world
 cargo run -p wv-app --features app -- gui
 ```
 
-### 10.1 用 LLM 控制编辑器（MCP，ADR-0014 + ADR-0078）
+### 10.1 用 LLM 控制编辑器（MCP，ADR-0014 + ADR-0078 + ADR-0085）
 
 编辑器内置一个 **MCP `2025-03-26` HTTP server**（仅 `127.0.0.1`，默认端口 `8732`），让 Claude Desktop / Cursor / Zed / Continue 等支持 MCP 的 LLM 客户端能**读取、修改、保存**当前打开的世界，并**操控 UI 会话态**（切视图 / 开关面板 / 截图回传，ADR-0078）。设计决策见 [`docs/adr/ADR-0014-mcp-http-server.md`](docs/adr/ADR-0014-mcp-http-server.md) 与 [`docs/adr/ADR-0078-http-ui-control-tools.md`](docs/adr/ADR-0078-http-ui-control-tools.md)。
+
+**标配入口 = skill + HTTP 直驱（零注册，ADR-0085）**：任何有 shell 的 AI agent 都能直接用——把驱动指南交给它即可，两种取法：
+
+```bash
+wv skill                 # 打印 agent 驱动指南全文（含 curl 配方 / 15 工具表 / 省 token 用法）
+wv skill --out skill.md  # 或落盘成文件
+```
+
+GUI 里等价入口：设置 → HTTP 服务 → **复制 agent skill**（进剪贴板，粘给你的 AI 助手）。指南单一真源在 `.agents/skills/wv-http/SKILL.md`，与上面两处输出 `include_str!` 同源。下方 MCP 客户端配置是**可选增强**（schema 自动发现 / 图片直回上下文），不装也能用。发布构建统一 `cargo build -p wv-app --features app,http --release`（`http` 隐含 `app`）。
 
 **① 启动带 MCP 服务的编辑器**（`http` feature 隐含 `app`，窗口照常打开）：
 
@@ -354,7 +363,7 @@ cargo run -p wv-app --features http -- gui --http-bind 127.0.0.1 --http-port 900
 - **curl 直接调**（调试 / 脚本）：
 
   ```bash
-  # 列出 13 个 skill 的 schema
+  # 列出 15 个 skill 的 schema
   curl -s http://127.0.0.1:8732/mcp -X POST -H 'content-type: application/json' \
     -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
 
@@ -375,7 +384,7 @@ cargo run -p wv-app --features http -- gui --http-bind 127.0.0.1 --http-port 900
   bash scripts/smoke-http.sh        # 默认用 18732 端口，避开你可能已在跑的 8732
   ```
 
-**③ 13 个 skill**（`tools/list` 会给出完整入参 schema）：
+**③ 15 个 skill**（`tools/list` 会给出完整入参 schema）：
 
 | 读（不修改世界） | 写（经撤销栈，可 Ctrl+Z 撤销） | UI 操控（ADR-0078，会话态不入撤销栈） |
 |---|---|---|
@@ -384,6 +393,7 @@ cargo run -p wv-app --features http -- gui --http-bind 127.0.0.1 --http-port 900
 | `list_places` — 地点摘要（支持过滤） | `undo` — 撤销最后一次事务 | `set_panel_visible` — 开关一个用户可见面板 |
 | `get_place` — 单地点详情 | `save_project` — 全量保存到工程目录 | `screenshot` — 截主窗口，**以 MCP image content（base64 PNG）回传** + 落盘 |
 | `get_state_at_time` — 某时刻的世界快照 | | |
+| `get_naming_context` — 工程与地图两级备注 + 自然脸清单（ADR-0082） | `set_nature_names` — 批量命名自然脸（空串=清名） | |
 
 列表类 skill 返回**轻量摘要**、`limit ≤ 100` 超出分页；详情用 `get_*` 单条取——避免撑爆 LLM 上下文（ADR-0014 §2.5.1）。UI 操控词表与 `WV_MODE` / `WV_SHOT` 验收探针同源（ADR-0078 D6），实机验收循环可以直接交给 LLM：`get_ui_state` 定位 → `set_view_mode` / `set_panel_visible` 操控 → `screenshot` 观察。
 

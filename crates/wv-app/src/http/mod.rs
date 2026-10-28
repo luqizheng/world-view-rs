@@ -53,3 +53,13 @@ pub const DEFAULT_PORT: u16 = 8732;
 
 /// 默认绑定地址（仅 loopback）。
 pub const DEFAULT_BIND: &str = "127.0.0.1";
+
+/// agent 驱动 skill 全文（ADR-0085 标配入口）——单一真源在仓库根
+/// `.agents/skills/wv-http/SKILL.md`，本常量 `include_str!` 同源编译进二进制：
+/// `wv skill` 子命令（stdout / `--out`）与设置对话框「复制 agent skill」
+/// 按钮都从这里取文——**改 skill 只改那个文件，三处输出同步**。
+///
+/// 仓储外路径说明：include 跨出 crate 目录到仓库根，是刻意的（skill 的
+/// 权威位置按 agent 生态惯例放 `.agents/skills/`，且必须与仓库同版本流转）；
+/// 本 workspace 不发布 crates.io，无打包剥离风险。
+pub const AGENT_SKILL_MD: &str = include_str!("../../../../.agents/skills/wv-http/SKILL.md");

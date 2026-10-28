@@ -242,6 +242,7 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
 | [ADR-0082](ADR-0082-nature-naming-and-comments.md) | 自然层单例与 CellMap 编辑 + comment 字段 + LLM 命名——自然层全工程唯一（UI 级守卫）；编辑归 CellMap（笔刷窗自然区段），Map 层行只留眼睛；WorldMeta/MapNode 加 comment（零迁移）+ 地图属性弹框多行录入；HTTP 工具面 13→15（get_naming_context / set_nature_names，确认流程内嵌工具描述）；PartitionFace.name 存名优先 + 派生名兜底（face_display_name 唯一口径） | 已接受（2026-10-28，用户四连裁定：单例/CellMap 编辑/comment/LLM 命名接口） |
 | [ADR-0083](ADR-0083-mcp-stdio-proxy-and-skill.md) | wv mcp stdio 代理 + .mcp.json 注册 + wv-mcp skill——本地答 initialize/ping、tools/list 与 tools/call 转发 GUI HTTP 面；代理零工具表（单一真源在 GUI 侧） | **已撤回（Withdrawn，2026-10-28，被 [ADR-0084](ADR-0084-withdraw-mcp-stdio-proxy.md) 取代；正文按 §6.4 留档不删）** |
 | [ADR-0084](ADR-0084-withdraw-mcp-stdio-proxy.md) | 撤回 wv mcp stdio 代理轮（ADR-0083）——revert 1835b4a+04d7974 单提交落盘（回退树与 039b10a 逐字节一致）；注册摩擦（ZCode 不读 .mcp.json、须手工 Settings 注册）大于协议价值，产品定位「skill+HTTP=标配入口、MCP=可选增强」；GUI HTTP 服务与 15 工具面、ADR-0082 自然层命名均不受影响；重做细案留后续 ADR | 已接受（2026-10-28，用户裁定「放弃这次，重新重做」+ 范围拍板「只弃 MCP 轮」） |
+| [ADR-0085](ADR-0085-agent-skill-http-standard-entry.md) | agent 驱动标配入口=skill+HTTP 直驱——单一真源 `.agents/skills/wv-http/SKILL.md` 经 `include_str!`（`http::AGENT_SKILL_MD`）同源三处输出：`wv skill` 子命令（stdout / `--out`）+ 设置→HTTP 服务→「复制 agent skill」按钮（i18n 572→574）；零注册零依赖，发布配方 `--features app,http`；内容哨兵测试钉 15 工具名防文档漂移；MCP 客户端配置降为可选增强 | 已接受（2026-10-28，用户选 C 完整闭环；承接 ADR-0084 定调；随行合入 settings-http-toggle 52b1b7e） |
 
 > **⚠️ 编号撞号备注（2026-10-27 追加）**：`ADR-0074` 与 `ADR-0075` 被并行会话的三个分支同时占用
 > （`feat/faction-partition-map` 势力图切蛋糕 / `feat/map-tree-enhancement` 地图树垃圾桶

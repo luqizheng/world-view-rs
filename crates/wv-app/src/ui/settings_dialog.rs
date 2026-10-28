@@ -229,6 +229,36 @@ fn http_section(
             HttpAction::Restart => restart_http_service(svc, desired),
         }
     }
+
+    // 「复制 agent skill」按钮（ADR-0085 标配入口）：把驱动指南全文塞进
+    // 剪贴板，用户粘给自己的 AI 助手即得 15 工具直驱能力——与 `wv skill`
+    // 子命令同源（crate::http::AGENT_SKILL_MD）。
+    ui.add_space(space::SM);
+    if button(
+        ui,
+        shell,
+        ButtonContent::Text(t(loc, I18nKey::SettingsHttpSkillCopy)),
+        ButtonStyle::Raised,
+        Some(egui::vec2(ui.available_width(), shell.hit)),
+        true,
+    )
+    .clicked()
+    {
+        ui.ctx().copy_text(crate::http::AGENT_SKILL_MD.to_owned());
+        // 瞬时反馈：记时间戳，2s 内在按钮下显示「已复制」——不需要常驻
+        // 状态字段（对话框没有可变的本地状态槽，temp 存储随 egui memory 走）。
+        ui.data_mut(|d| d.insert_temp(ui.id(), std::time::Instant::now()));
+    }
+    let copied_at: Option<std::time::Instant> = ui.data_mut(|d| d.get_temp(ui.id()));
+    if let Some(t0) = copied_at {
+        if t0.elapsed().as_secs() < 2 {
+            ui.label(
+                egui::RichText::new(t(loc, I18nKey::SettingsHttpSkillCopied))
+                    .size(font_size::MICRO)
+                    .color(shell.t3()),
+            );
+        }
+    }
 }
 
 /// [`http_section`] 的动作枚举（局部；文本已定，动作随状态判定）。

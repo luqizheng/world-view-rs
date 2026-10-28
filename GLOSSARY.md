@@ -596,3 +596,10 @@
 - **英文名**：LLM naming for nature regions（HTTP 工具 get_naming_context / set_nature_names）
 - **定义**：外部 LLM 给自然蛋糕脸命名的闭环：①代理调 `get_naming_context` 拿**风格来源**（工程 `meta.comment` + 地图 `comment` 两级备注，2026-10-28 新增的零迁移字段）与全部脸（face_id/族名/存名/派生名）；②**把备注展示给用户确认**（确认闸内嵌工具描述）；③按风格提案名字调 `set_nature_names`（`[{face_id,name}]` 批量，空串=清名回退派生名「草原N」）。命名是呈现元数据：`SetNatureFaceNamesCommand` 就地写全部含该脸的 span（不经 fork，跨时间一致）；显示名唯一口径 `PartitionSpan::face_display_name`（存名优先）。伴随裁定：自然层全工程唯一、编辑归 CellMap（Map 只留眼睛）。首次出现：2026-10-28 用户四连裁定。
 - **所属维度**：数据 / 工具链（MCP）/ 编辑
+
+## 标配入口（2026-10-28 · ADR-0085）
+
+- **术语**：标配入口 / skill+HTTP 直驱
+- **英文名**：standard entry（skill + HTTP direct-drive；`wv skill` / `http::AGENT_SKILL_MD`）
+- **定义**：agent 驱动 wv 的**零注册路径**（与「MCP 客户端注册=可选增强」相对）：GUI 运行即有 JSON-RPC 端点（127.0.0.1:8732，仅 tools/list 与 tools/call、无握手），agent 拿到驱动指南（`.agents/skills/wv-http/SKILL.md` 单一真源，`wv skill` 打印 / 设置对话框复制按钮，三者 `include_str!` 同源）即具备全部 15 工具驱动能力。指南内含 curl 配方、15 工具表、省 token 纪律（screenshot 必须 jq+base64 管道落盘、禁响应体进上下文）、验收/命名/抽查三流程与故障表。首次出现：2026-10-28 ADR-0084 撤回 stdio 代理时的定位讨论，ADR-0085 落地。
+- **所属维度**：工具链（agent 接入）

@@ -59,6 +59,8 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::SettingsHttpStart => "启动服务",
         I18nKey::SettingsHttpStop => "停止服务",
         I18nKey::SettingsHttpRestart => "换端口重启",
+        I18nKey::SettingsHttpSkillCopy => "复制 agent skill（给 AI 的驱动指南）",
+        I18nKey::SettingsHttpSkillCopied => "已复制——粘给你的 AI 助手即可",
 
         // ── 顶栏右侧计数（拆为纯片段） ──
         I18nKey::TopBarCountUnits => "Unit",
@@ -776,6 +778,8 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::SettingsHttpStart => "Start server",
         I18nKey::SettingsHttpStop => "Stop server",
         I18nKey::SettingsHttpRestart => "Restart with new port",
+        I18nKey::SettingsHttpSkillCopy => "Copy agent skill (AI driving guide)",
+        I18nKey::SettingsHttpSkillCopied => "Copied — paste it to your AI assistant",
 
         // ── Top bar status counts (split into plain fragments) ──
         I18nKey::TopBarCountUnits => "Unit",

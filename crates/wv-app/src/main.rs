@@ -136,6 +136,41 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         }
+        Some("skill") => {
+            // wv skill（ADR-0085 标配入口）：把 agent 驱动 skill 全文交出去
+            // （stdout 或 --out <path>）——内容与设置对话框「复制」按钮同源
+            //（crate::http::AGENT_SKILL_MD，include_str 仓库根 skill 文件）。
+            #[cfg(feature = "http")]
+            {
+                match skill_out_path(&args[1..]) {
+                    Ok(Some(path)) => match std::fs::write(&path, wv_app::http::AGENT_SKILL_MD) {
+                        Ok(()) => {
+                            println!("{}", path.display());
+                            ExitCode::SUCCESS
+                        }
+                        Err(e) => {
+                            eprintln!("wv skill: 写 {} 失败：{e}", path.display());
+                            ExitCode::from(2)
+                        }
+                    },
+                    Ok(None) => {
+                        print!("{}", wv_app::http::AGENT_SKILL_MD);
+                        ExitCode::SUCCESS
+                    }
+                    Err(msg) => {
+                        eprintln!("wv skill: {msg}");
+                        ExitCode::from(2)
+                    }
+                }
+            }
+            #[cfg(not(feature = "http"))]
+            {
+                eprintln!(
+                    "wv skill 需要 --features http 编译（cargo run -p wv-app --features http --bin wv -- skill）"
+                );
+                ExitCode::from(2)
+            }
+        }
         Some("--help") | Some("-h") | None => {
             print_help();
             ExitCode::SUCCESS
@@ -176,6 +211,27 @@ fn print_help() {
         lang = t(wv_app::i18n::I18nKey::CliLanguageFlagHelp),
         help = t(wv_app::i18n::I18nKey::CliHelpHelp),
     );
+    // skill 子命令（ADR-0085）：i18n 键暂不加（CLI 帮助直写先例——技术性
+    // 一行说明，随 mcp 子命令当年同款裁量）。
+    #[cfg(feature = "http")]
+    println!("  skill [--out <path>]   输出 agent 驱动 skill 全文（HTTP 直驱指南；缺省打 stdout）");
+}
+
+/// `wv skill` 的参数解析（纯函数，供测试）：只认可选的 `--out <path>`，
+/// 其余一律报错（skill 全文没有参数可言之有理，宽容解析只会掩盖手滑）。
+#[cfg(feature = "http")]
+fn skill_out_path(args: &[String]) -> Result<Option<std::path::PathBuf>, String> {
+    let usage = "用法：wv skill [--out <path>]";
+    let mut it = args.iter();
+    match it.next() {
+        None => Ok(None),
+        Some(a) if a == "--out" => match it.next() {
+            Some(path) if it.next().is_none() => Ok(Some(std::path::PathBuf::from(path))),
+            Some(_) => Err(format!("多余参数（{usage}）")),
+            None => Err(format!("--out 需要一个路径参数（{usage}）")),
+        },
+        Some(a) => Err(format!("未知参数 {a}（{usage}）")),
+    }
 }
 
 /// 底图切片（README §12-24）：把来源图栅格中被子图覆盖的那块采样落盘。
@@ -579,5 +635,84 @@ mod gui_args_tests {
     #[test]
     fn http_bind_without_value_is_rejected_with_usage_hint() {
         assert!(parse_gui_args(&args(&["--http-bind"])).is_err());
+    }
+}
+
+/// `wv skill` 子命令（ADR-0085）：参数解析 + 单一真源内容哨兵。
+#[cfg(all(test, feature = "http"))]
+mod skill_tests {
+    use super::skill_out_path;
+
+    fn args(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn no_args_prints_to_stdout() {
+        assert!(skill_out_path(&args(&[])).unwrap().is_none());
+    }
+
+    #[test]
+    fn out_flag_yields_path() {
+        let got = skill_out_path(&args(&["--out", "skill.md"]))
+            .unwrap()
+            .expect("--out 应产出路径");
+        assert_eq!(got, std::path::PathBuf::from("skill.md"));
+    }
+
+    #[test]
+    fn out_without_path_is_rejected() {
+        assert!(skill_out_path(&args(&["--out"])).is_err());
+    }
+
+    #[test]
+    fn unknown_flag_is_rejected() {
+        assert!(skill_out_path(&args(&["--stdout"])).is_err());
+    }
+
+    #[test]
+    fn extra_args_after_out_are_rejected() {
+        assert!(skill_out_path(&args(&["--out", "a.md", "b.md"])).is_err());
+    }
+
+    /// 单一真源哨兵：include 进二进制的 skill 全文必须仍是完整指南——
+    /// 文件被清空 / 误删 / 换成占位内容时在这里爆，而不是到用户手里。
+    #[test]
+    fn bundled_skill_keeps_core_sections_and_all_fifteen_tools() {
+        let md = wv_app::http::AGENT_SKILL_MD;
+        for section in [
+            "wv-http",
+            "tools/list",
+            "tools/call",
+            "127.0.0.1:8732",
+            "故障表",
+        ] {
+            assert!(
+                md.contains(section),
+                "skill 应含「{section}」段——单一真源文件是否被误改？"
+            );
+        }
+        for tool in [
+            "list_maps",
+            "get_map",
+            "list_places",
+            "get_place",
+            "get_state_at_time",
+            "get_naming_context",
+            "create_map",
+            "create_place",
+            "undo",
+            "save_project",
+            "set_nature_names",
+            "get_ui_state",
+            "set_view_mode",
+            "set_panel_visible",
+            "screenshot",
+        ] {
+            assert!(
+                md.contains(tool),
+                "skill 应提工具 {tool}——工具面变了请同步 SKILL.md"
+            );
+        }
     }
 }

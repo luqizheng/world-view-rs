@@ -104,6 +104,10 @@ pub enum I18nKey {
     SettingsHttpStop,
     /// 「换端口重启」按钮（运行中且输入框端口 ≠ 运行端口时）
     SettingsHttpRestart,
+    /// 「复制 agent skill」按钮（ADR-0085 标配入口：驱动指南进剪贴板）
+    SettingsHttpSkillCopy,
+    /// 复制成功瞬时反馈（2s 内显示）
+    SettingsHttpSkillCopied,
 
     // ── 顶栏右侧计数（拆为不带占位符的纯片段，按 ADR-0018 用户裁定
     //    「调用点负责 format!」）────────────────────────────────
@@ -1393,7 +1397,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 572] = [
+    pub const ALL: [I18nKey; 574] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1454,6 +1458,8 @@ impl I18nKey {
         I18nKey::SettingsHttpStart,
         I18nKey::SettingsHttpStop,
         I18nKey::SettingsHttpRestart,
+        I18nKey::SettingsHttpSkillCopy,
+        I18nKey::SettingsHttpSkillCopied,
         // 顶栏右侧计数（拆为不带占位符的纯片段，6）
         I18nKey::TopBarCountUnits,
         I18nKey::TopBarCountCharacters,
