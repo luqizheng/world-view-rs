@@ -22,6 +22,7 @@
 
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
+use std::sync::Arc;
 
 use crate::edit::editing::EditHistory;
 use crate::http::bridge::{
@@ -65,40 +66,138 @@ impl Default for HttpReceiver {
     }
 }
 
-/// 把 MCP server 装到 Bevy App 的 Plugin。
-#[derive(Default)]
-pub struct HttpServerPlugin {
-    pub config: HttpServerConfig,
+/// HTTP 服务的运行期状态（设置对话框「HTTP 服务」分组展示用，2026-10-28）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HttpServiceStatus {
+    /// 未启动 / 已停止。
+    Stopped,
+    /// 服务线程已拉起，等绑定结果（`poll_http_service` 每帧轮询）。
+    Starting,
+    /// 监听中。`addr` 为真实绑定地址（含 OS 分配端口），`port` 供
+    /// 「输入框端口 ≠ 运行端口 → 换端口重启」的判定。
+    Running { addr: String, port: u16 },
+    /// 启动失败（端口占用 / 地址非法 / tokio 起不来）——`message` 为
+    /// 原始错误串，设置对话框原样展示。
+    Failed { message: String },
 }
 
-impl Plugin for HttpServerPlugin {
-    fn build(&self, app: &mut App) {
-        // 1) 建通道对：sender 给 server，receiver 给主帧。
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let bridge = HttpBridge::new(tx);
+/// 服务线程 → 主帧的绑定结果槽位：`Ok((真实地址, 端口))` = 已监听；
+/// `Err` = 绑定失败或 serve 异常退出。（别名只为压 type_complexity。）
+type BindResultSlot = Arc<std::sync::Mutex<Option<Result<(String, u16), String>>>>;
 
-        // 2) 启独立线程跑 tokio runtime（不动 GUI 主线程——Bevy 自己跑）。
-        let cfg = self.config.clone();
-        std::thread::spawn(move || {
-            let rt = match tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .worker_threads(2)
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(e) => {
-                    eprintln!(
-                        "{}{e}",
-                        crate::i18n::t(
-                            crate::i18n::cli_locale(),
-                            crate::i18n::I18nKey::HttpTokioStartFailed,
-                        )
-                    );
-                    return;
-                }
-            };
-            rt.block_on(async move {
-                if let Err(e) = start_mcp_server(bridge, &cfg.bind, cfg.port).await {
+/// HTTP 服务的运行时控制面：设置对话框 ↔ 服务线程。
+///
+/// ## 为什么存在
+/// ADR-0014 的服务只在 `Startup` 拉起一次、无停机通道；设置里要「点按钮
+/// 启动 / 停止 / 换端口重启」，就需要一个跨帧 Resource 持有停机信号与
+/// 绑定结果槽位。自动启动与手动启停共用 [`start_http_service`] 一条路径。
+///
+/// ## 生命周期
+/// - `Stopped/Failed` → [`start_http_service`]（拉线程，置 `Starting`）
+///   → [`poll_http_service`] 轮询槽位 → `Running` / `Failed`。
+/// - `Starting/Running` → [`stop_http_service`]（发优雅停机，置 `Stopped`）。
+/// - 换端口 = stop + start（[`restart_http_service`]）。
+///
+/// `bridge` 跨重启复用：mpsc sender 克隆即得，`HttpReceiver` 的 receiver
+/// 端全程只有一份，重启不换命令通道。
+#[derive(Resource)]
+pub struct HttpService {
+    pub status: HttpServiceStatus,
+    /// 绑定地址（CLI `--http-bind` 或默认 `127.0.0.1`）。启动后不可改
+    /// （UI 只开端口；改绑定地址走 CLI flag 重启进程）。
+    pub bind: String,
+    /// 最近一次启动所用端口（`Starting/Running` 时即服务端口）。
+    pub port: u16,
+    /// 端口输入框的编辑缓冲（f32 适配 `numeric_input_salted`；初始 =
+    /// 启动配置端口，跨对话框开关保留）。
+    pub port_edit: f32,
+    /// 跨重启复用的命令桥（sender 端克隆；receiver 端在 `HttpReceiver`）。
+    bridge: HttpBridge,
+    /// 优雅停机信号。`Some` = 服务线程在跑；`send(())` 即停机。
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    /// 服务线程 → 主帧的绑定结果槽位（`poll_http_service` 每帧取走）。
+    /// `Ok((真实地址, 端口))` = 已监听；`Err` = 绑定失败或 serve 异常退出。
+    bind_result: Option<BindResultSlot>,
+}
+
+impl HttpService {
+    /// 从启动配置构造（`HttpServerPlugin` 用）。初始 `Stopped`，是否立即
+    /// 拉起由 caller 调 [`start_http_service`] 决定。
+    pub fn new(config: &HttpServerConfig, bridge: HttpBridge) -> Self {
+        Self {
+            status: HttpServiceStatus::Stopped,
+            bind: config.bind.clone(),
+            port: config.port,
+            port_edit: f32::from(config.port),
+            bridge,
+            shutdown: None,
+            bind_result: None,
+        }
+    }
+}
+
+/// 拉起 HTTP 服务线程（启动期自动拉起与设置对话框手动启动共用）。
+///
+/// 线程内起独立 tokio runtime（不动 GUI 主线程）跑 [`start_mcp_server`]；
+/// 绑定成功经 `on_listen` 写槽位，失败 / serve 异常退出写 `Err`。状态置
+/// `Starting`，由 [`poll_http_service`] 每帧轮询落定。
+///
+/// 已在 `Starting/Running` 时**不作为**（防双线程抢同端口）。
+pub fn start_http_service(svc: &mut HttpService, port: u16) {
+    if matches!(
+        svc.status,
+        HttpServiceStatus::Starting | HttpServiceStatus::Running { .. }
+    ) {
+        return;
+    }
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let slot: BindResultSlot = Arc::new(std::sync::Mutex::new(None));
+    let thread_slot = slot.clone();
+    let bridge = svc.bridge.clone();
+    let bind = svc.bind.clone();
+
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .worker_threads(2)
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!(
+                    "{}{e}",
+                    crate::i18n::t(
+                        crate::i18n::cli_locale(),
+                        crate::i18n::I18nKey::HttpTokioStartFailed,
+                    )
+                );
+                *thread_slot.lock().expect("槽位锁未中毒") = Some(Err(e.to_string()));
+                return;
+            }
+        };
+        rt.block_on(async move {
+            // on_listen 回调与 Err 回写各持一份槽位句柄（回调 `move` 捕获）。
+            let listen_slot = thread_slot.clone();
+            let result = start_mcp_server(
+                bridge,
+                &bind,
+                port,
+                async move {
+                    // sender drop（资源被清 / 进程退出）同样触发停机。
+                    let _ = shutdown_rx.await;
+                },
+                move |addr| {
+                    *listen_slot.lock().expect("槽位锁未中毒") =
+                        Some(Ok((addr.to_string(), addr.port())));
+                },
+            )
+            .await;
+            // 绑定失败 / serve 中途异常：写 Err 供主帧展示（正常停机走
+            // `Ok`，但那时主帧已置 `Stopped`、槽位已撤，此写入被丢弃）。
+            // stderr 日志与 ADR-0014 同款：绑定失败已在 server 内报，
+            // 这里只报 serve 阶段的异常退出。
+            if let Err(e) = &result {
+                if !matches!(e, crate::http::server::ServerError::Bind(_)) {
                     eprintln!(
                         "{}{e}",
                         crate::i18n::t(
@@ -107,8 +206,90 @@ impl Plugin for HttpServerPlugin {
                         )
                     );
                 }
-            });
+                *thread_slot.lock().expect("槽位锁未中毒") = Some(Err(e.to_string()));
+            }
         });
+    });
+
+    svc.shutdown = Some(shutdown_tx);
+    svc.bind_result = Some(slot);
+    svc.port = port;
+    svc.status = HttpServiceStatus::Starting;
+}
+
+/// 停止 HTTP 服务：发优雅停机信号（axum 排空在途请求后线程自然退出），
+/// 状态立置 `Stopped`。线程退出是异步的——紧接着在同端口重启可能撞
+/// `EADDRINUSE`（Windows 上表现为绑定失败 → UI 显示 Failed），属已知
+/// 取舍：不阻塞主帧等线程 join。
+pub fn stop_http_service(svc: &mut HttpService) {
+    if let Some(tx) = svc.shutdown.take() {
+        let _ = tx.send(());
+    }
+    // 撤槽位：线程退出时的迟到 `Ok` 写入随 Arc 一起被丢弃。
+    if let Some(slot) = svc.bind_result.take() {
+        if let Ok(mut guard) = slot.lock() {
+            *guard = None;
+        }
+    }
+    svc.status = HttpServiceStatus::Stopped;
+}
+
+/// 换端口重启 = 停止 + 以新端口启动（设置对话框「换端口重启」按钮）。
+pub fn restart_http_service(svc: &mut HttpService, port: u16) {
+    stop_http_service(svc);
+    start_http_service(svc, port);
+}
+
+/// 每帧轮询绑定结果槽位，把 `Starting` 落定为 `Running` / `Failed`。
+///
+/// `Running` 中收到 `Err`（serve 中途崩溃，极罕见）也转 `Failed`——
+/// 否则 UI 会永远显示运行中。`Stopped`/`Failed` 态的迟到写入直接丢弃。
+pub fn poll_http_service(mut svc: ResMut<HttpService>) {
+    poll_http_service_inner(&mut svc);
+}
+
+/// [`poll_http_service`] 的纯函数形态（测试友好）：不依赖 Bevy 资源。
+fn poll_http_service_inner(svc: &mut HttpService) {
+    let Some(slot) = svc.bind_result.as_ref() else {
+        return;
+    };
+    let taken = slot.lock().expect("槽位锁未中毒").take();
+    match (&svc.status, taken) {
+        (HttpServiceStatus::Starting, Some(Ok((addr, port)))) => {
+            svc.status = HttpServiceStatus::Running { addr, port };
+        }
+        (HttpServiceStatus::Starting, Some(Err(message))) => {
+            svc.status = HttpServiceStatus::Failed { message };
+            // 线程已退出，停机句柄作废，回收以免残留「可停」假象。
+            let _ = svc.shutdown.take();
+        }
+        (HttpServiceStatus::Running { .. }, Some(Err(message))) => {
+            svc.status = HttpServiceStatus::Failed { message };
+            let _ = svc.shutdown.take();
+        }
+        _ => {}
+    }
+}
+
+/// 把 MCP server 装到 Bevy App 的 Plugin。
+#[derive(Default)]
+pub struct HttpServerPlugin {
+    pub config: HttpServerConfig,
+}
+
+impl Plugin for HttpServerPlugin {
+    fn build(&self, app: &mut App) {
+        // 1) 建通道对：sender 给 server（经 HttpService 持有，跨重启复用），
+        //    receiver 给主帧。
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let bridge = HttpBridge::new(tx);
+
+        // 2) 控制面资源 + 启动期自动拉起（ADR-0014 行为不变：CLI
+        //    `--http-port` 依旧生效，smoke-http.sh 依赖此默认）。
+        //    运行中手动启停见设置对话框「HTTP 服务」分组。
+        let mut svc = HttpService::new(&self.config, bridge);
+        start_http_service(&mut svc, self.config.port);
+        app.insert_resource(svc);
 
         // 3) receiver 端入 Bevy。
         app.insert_resource(HttpReceiver { rx });
@@ -125,6 +306,8 @@ impl Plugin for HttpServerPlugin {
         // `.chain()`：两系统都持 `ResMut<PendingShots>`，显式钉序（入队 → 轮询），
         // 不靠调度器对歧义系统的隐式顺序。
         app.add_systems(Update, (drain_http_commands, poll_pending_shots).chain());
+        // 启停状态轮询：与 drain 无共享资源，独立注册即可。
+        app.add_systems(Update, poll_http_service);
     }
 }
 
@@ -280,6 +463,138 @@ mod tests {
     use crate::http::bridge::{drain_messages, HttpBridge, ReadReply, ReadRequest};
     use wv_core::map::{Extent, MapLevel, MapNode};
     use wv_core::Id;
+
+    /// 轮询落定状态机（2026-10-28 设置对话框启停）：Starting+Ok → Running；
+    /// Starting/Running+Err → Failed 且回收停机句柄；Stopped 态迟到写入丢弃。
+    #[test]
+    fn poll_http_service_lands_starting_into_running_and_failed() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut svc = HttpService::new(&HttpServerConfig::default(), HttpBridge::new(tx));
+        assert_eq!(svc.status, HttpServiceStatus::Stopped);
+
+        // ① Starting + 槽位 Ok → Running（地址/端口来自 on_listen 回报）
+        svc.status = HttpServiceStatus::Starting;
+        let slot = Arc::new(std::sync::Mutex::new(None));
+        *slot.lock().unwrap() = Some(Ok(("127.0.0.1:12345".into(), 12345)));
+        svc.bind_result = Some(slot);
+        poll_http_service_inner(&mut svc);
+        assert_eq!(
+            svc.status,
+            HttpServiceStatus::Running {
+                addr: "127.0.0.1:12345".into(),
+                port: 12345
+            }
+        );
+
+        // ② Starting + 槽位 Err → Failed，且停机句柄被回收（线程已死）
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        svc.shutdown = Some(shutdown_tx);
+        svc.status = HttpServiceStatus::Starting;
+        svc.bind_result = Some(Arc::new(std::sync::Mutex::new(Some(
+            Err("绑定失败".into()),
+        ))));
+        poll_http_service_inner(&mut svc);
+        assert_eq!(
+            svc.status,
+            HttpServiceStatus::Failed {
+                message: "绑定失败".into()
+            }
+        );
+        assert!(svc.shutdown.is_none(), "Failed 萆定时应回收停机句柄");
+
+        // ③ Running 中 serve 崩溃（迟到 Err）→ Failed，不留「假运行中」
+        svc.status = HttpServiceStatus::Running {
+            addr: "127.0.0.1:1".into(),
+            port: 1,
+        };
+        svc.bind_result = Some(Arc::new(std::sync::Mutex::new(Some(Err(
+            "serve 崩溃".into()
+        )))));
+        poll_http_service_inner(&mut svc);
+        assert_eq!(
+            svc.status,
+            HttpServiceStatus::Failed {
+                message: "serve 崩溃".into()
+            }
+        );
+
+        // ④ Stopped 态的迟到 Ok 写入（停机后线程正常退出）→ 保持 Stopped
+        svc.status = HttpServiceStatus::Stopped;
+        svc.bind_result = Some(Arc::new(std::sync::Mutex::new(Some(Ok((
+            "127.0.0.1:1".into(),
+            1,
+        ))))));
+        poll_http_service_inner(&mut svc);
+        assert_eq!(svc.status, HttpServiceStatus::Stopped, "迟到写入应被丢弃");
+    }
+
+    /// 真线程生命周期（2026-10-28 设置对话框启停）：port 0 启动 → OS 分配
+    /// 端口 → Running 且可 TCP 连接 → 停止 → 状态立落 Stopped、端口释放；
+    /// Running 中重复 start 不作为；重启后再次 Running（bridge 复用路径）。
+    #[test]
+    fn http_service_start_stop_lifecycle_binds_then_frees_port() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let cfg = HttpServerConfig {
+            bind: "127.0.0.1".into(),
+            port: 0,
+        };
+        let mut svc = HttpService::new(&cfg, HttpBridge::new(tx));
+
+        // ① 启动 → Starting → 轮询至 Running（绑定毫秒级，余量 5s）
+        start_http_service(&mut svc, 0);
+        assert_eq!(svc.status, HttpServiceStatus::Starting);
+        let bound = poll_until_running(&mut svc, 500);
+        let port = bound.expect("5s 内应进入 Running");
+        assert_ne!(port, 0, "端口 0 应由 OS 分配真实端口");
+
+        // ② Running 态该端口可建立 TCP 连接（真实监听存在）
+        assert!(
+            std::net::TcpStream::connect(("127.0.0.1", port)).is_ok(),
+            "Running 态应可 TCP 连接 port={port}"
+        );
+
+        // ③ Running 中重复 start：不作为（状态与端口不变，防双线程抢端口）
+        start_http_service(&mut svc, 9999);
+        assert_eq!(
+            svc.status,
+            HttpServiceStatus::Running {
+                addr: format!("127.0.0.1:{port}"),
+                port
+            }
+        );
+
+        // ④ 停止 → 状态立落 Stopped；线程退出后端口释放（连接被拒）
+        stop_http_service(&mut svc);
+        assert_eq!(svc.status, HttpServiceStatus::Stopped);
+        let mut freed = false;
+        for _ in 0..200 {
+            if std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+                freed = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(freed, "停机后 2s 内端口应释放 port={port}");
+
+        // ⑤ 重启（port 0 再来一次）：bridge 复用路径走通，再次 Running
+        restart_http_service(&mut svc, 0);
+        assert_eq!(svc.status, HttpServiceStatus::Starting);
+        let rebound = poll_until_running(&mut svc, 500);
+        assert!(rebound.is_some(), "重启后 5s 内应再次 Running");
+        stop_http_service(&mut svc);
+    }
+
+    /// 轮询至 Running 的测试辅助：最多 `max_polls` 次、每次 10ms。
+    fn poll_until_running(svc: &mut HttpService, max_polls: u32) -> Option<u16> {
+        for _ in 0..max_polls {
+            poll_http_service_inner(svc);
+            if let HttpServiceStatus::Running { port, .. } = &svc.status {
+                return Some(*port);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        None
+    }
 
     /// 造一个最小合法 PNG 头（签名 + IHDR + 1920×1080），给 poll 测试当
     /// 「已落盘」的假截图。

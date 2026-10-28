@@ -121,6 +121,16 @@ async fn call_tool(
 /// `wv-app --features http` 启动 GUI 时由 `app_bootstrap` 在一个独立
 /// `tokio::runtime` 里调 [`start_mcp_server`]；它阻塞在 `axum::serve`
 /// 的 `.await`，主帧的 Bevy 调度继续跑（`axum::serve` 不占 GUI 主线程）。
+/// 2026-10-28 追：设置对话框也可在运行中手动停止 / 换端口重启（经
+/// `crate::http_integration::HttpService`），与启动期自动拉起共用本函数。
+///
+/// ## 参数
+/// - `shutdown`：**优雅停机信号**——future 完成即停止 accept 并排空在途
+///   请求（axum `with_graceful_shutdown`）。调用方传 `oneshot` 接收端；
+///   sender 被 drop 同样视为停机信号（「持有者没了 = 该停」）。
+/// - `on_listen`：绑定成功后的**一次性回调**（拿到真实 `SocketAddr`——
+///   测试传端口 0 时由 OS 分配实际端口）。运行时启停用它向主帧回报
+///   「已监听」，设置对话框据此把状态切到 Running。
 ///
 /// ## 失败
 /// 绑定失败（端口占用 / 无权限）→ stderr 报错 + 返回 `Err`，由 caller 决定
@@ -129,6 +139,8 @@ pub async fn start_mcp_server(
     bridge: HttpBridge,
     bind: &str,
     port: u16,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    on_listen: impl FnOnce(SocketAddr) + Send + 'static,
 ) -> Result<(), ServerError> {
     let addr: SocketAddr = format!("{bind}:{port}")
         .parse::<SocketAddr>()
@@ -152,14 +164,22 @@ pub async fn start_mcp_server(
         ServerError::Bind(e.to_string())
     })?;
 
+    // 实际绑定地址（端口 0 时由 OS 分配真实端口；生命周期测试与运行时
+    // 启停的 Running 状态都以它为准，不能拿请求的 addr 糊弄）。
+    let bound = listener
+        .local_addr()
+        .expect("刚 bind 成功的 listener 必然可取 local_addr");
+
     let loc = crate::i18n::cli_locale();
     eprintln!(
         "{}",
         crate::i18n::t(loc, crate::i18n::I18nKey::HttpListening)
-            .replace("<addr>", &addr.to_string())
+            .replace("<addr>", &bound.to_string())
     );
+    on_listen(bound);
 
     axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
         .await
         .map_err(|e| ServerError::Serve(e.to_string()))
 }

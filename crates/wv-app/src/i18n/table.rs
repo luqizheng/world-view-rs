@@ -48,6 +48,17 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::SettingsPanelsSection => "浮动窗口",
         I18nKey::SettingsPanelsHint => "勾选要在工作区显示的窗口",
         I18nKey::SettingsResetPanels => "重置浮动窗口位置",
+        // HTTP 服务分组（2026-10-28，仅 --features http 构建可见）
+        I18nKey::SettingsHttpSection => "HTTP 服务",
+        I18nKey::SettingsHttpHint => "在本机开放 MCP 接口（仅 127.0.0.1），供 LLM 客户端读写当前世界。",
+        I18nKey::SettingsHttpPortLabel => "端口",
+        I18nKey::SettingsHttpStatusStopped => "未启动",
+        I18nKey::SettingsHttpStatusStarting => "启动中…",
+        I18nKey::SettingsHttpStatusRunning => "运行中：",
+        I18nKey::SettingsHttpStatusFailed => "启动失败：",
+        I18nKey::SettingsHttpStart => "启动服务",
+        I18nKey::SettingsHttpStop => "停止服务",
+        I18nKey::SettingsHttpRestart => "换端口重启",
 
         // ── 顶栏右侧计数（拆为纯片段） ──
         I18nKey::TopBarCountUnits => "Unit",
@@ -752,6 +763,19 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::SettingsPanelsSection => "Floating windows",
         I18nKey::SettingsPanelsHint => "Choose which windows to show in the workspace",
         I18nKey::SettingsResetPanels => "Reset floating window positions",
+        // HTTP service section (2026-10-28, visible only in --features http builds)
+        I18nKey::SettingsHttpSection => "HTTP Service",
+        I18nKey::SettingsHttpHint => {
+            "Exposes an MCP endpoint on 127.0.0.1 so LLM clients can read and edit the open world."
+        }
+        I18nKey::SettingsHttpPortLabel => "Port",
+        I18nKey::SettingsHttpStatusStopped => "Not running",
+        I18nKey::SettingsHttpStatusStarting => "Starting…",
+        I18nKey::SettingsHttpStatusRunning => "Running: ",
+        I18nKey::SettingsHttpStatusFailed => "Start failed: ",
+        I18nKey::SettingsHttpStart => "Start server",
+        I18nKey::SettingsHttpStop => "Stop server",
+        I18nKey::SettingsHttpRestart => "Restart with new port",
 
         // ── Top bar status counts (split into plain fragments) ──
         I18nKey::TopBarCountUnits => "Unit",

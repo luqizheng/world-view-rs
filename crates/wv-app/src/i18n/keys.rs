@@ -84,6 +84,26 @@ pub enum I18nKey {
     SettingsPanelsHint,
     /// 「重置浮动窗口位置」按钮
     SettingsResetPanels,
+    /// 「HTTP 服务」分组标题（仅 `--features http` 构建，2026-10-28）
+    SettingsHttpSection,
+    /// HTTP 服务分组说明（本机 MCP 接口，供 LLM 客户端读写当前世界）
+    SettingsHttpHint,
+    /// HTTP 端口输入行标签
+    SettingsHttpPortLabel,
+    /// HTTP 状态：未启动
+    SettingsHttpStatusStopped,
+    /// HTTP 状态：启动中
+    SettingsHttpStatusStarting,
+    /// HTTP 状态：运行中（调用点拼接真实地址）
+    SettingsHttpStatusRunning,
+    /// HTTP 状态：启动失败（调用点拼接错误串）
+    SettingsHttpStatusFailed,
+    /// 「启动服务」按钮
+    SettingsHttpStart,
+    /// 「停止服务」按钮
+    SettingsHttpStop,
+    /// 「换端口重启」按钮（运行中且输入框端口 ≠ 运行端口时）
+    SettingsHttpRestart,
 
     // ── 顶栏右侧计数（拆为不带占位符的纯片段，按 ADR-0018 用户裁定
     //    「调用点负责 format!」）────────────────────────────────
@@ -1373,7 +1393,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 562] = [
+    pub const ALL: [I18nKey; 572] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1423,6 +1443,17 @@ impl I18nKey {
         I18nKey::SettingsPanelsSection,
         I18nKey::SettingsPanelsHint,
         I18nKey::SettingsResetPanels,
+        // 应用设置对话框 · HTTP 服务分组（10，2026-10-28）
+        I18nKey::SettingsHttpSection,
+        I18nKey::SettingsHttpHint,
+        I18nKey::SettingsHttpPortLabel,
+        I18nKey::SettingsHttpStatusStopped,
+        I18nKey::SettingsHttpStatusStarting,
+        I18nKey::SettingsHttpStatusRunning,
+        I18nKey::SettingsHttpStatusFailed,
+        I18nKey::SettingsHttpStart,
+        I18nKey::SettingsHttpStop,
+        I18nKey::SettingsHttpRestart,
         // 顶栏右侧计数（拆为不带占位符的纯片段，6）
         I18nKey::TopBarCountUnits,
         I18nKey::TopBarCountCharacters,
