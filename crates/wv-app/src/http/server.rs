@@ -273,7 +273,11 @@ mod tests {
         assert_eq!(resp["jsonrpc"], "2.0");
         assert_eq!(resp["id"], 1);
         let tools = resp["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 13, "应暴露 13 个 skill（9 数据 + 4 UI）");
+        assert_eq!(
+            tools.len(),
+            15,
+            "应暴露 15 个 skill（9 数据 + 4 UI + 2 命名）"
+        );
 
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert_eq!(
@@ -462,7 +466,7 @@ mod tests {
         assert!(resp.result.is_some());
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().unwrap().clone();
-        assert_eq!(tools.len(), 13);
+        assert_eq!(tools.len(), 15);
     }
 
     #[test]

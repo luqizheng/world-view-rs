@@ -169,6 +169,7 @@ fn initial_world(name: &str, template: WorldTemplateKind, seed: u64) -> wv_core:
     let id = Id::new_unchecked(FIRST_MAP_ID);
     let mut world = wv_core::World {
         meta: Some(wv_core::WorldMeta {
+            comment: None,
             name: name.to_owned(),
             version: "0.1".to_owned(),
             schema_version: wv_io::CURRENT_SCHEMA_VERSION,

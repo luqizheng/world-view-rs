@@ -127,17 +127,7 @@ pub fn nature_face_name(
     span: &wv_core::model::faction_partition::PartitionSpan,
     face_id: u32,
 ) -> Option<String> {
-    let face = span.faces.iter().find(|f| f.id == face_id)?;
-    let kind = face.kind?;
-    let names = wv_terrain::biome::BIOME_FAMILY_NAMES_ZH;
-    let prefix = names.get(kind as usize).copied().unwrap_or("?");
-    let n = span
-        .faces
-        .iter()
-        .filter(|f| f.kind == Some(kind) && f.id < face_id)
-        .count()
-        + 1;
-    Some(format!("{prefix}{n}"))
+    span.face_display_name(face_id, &wv_terrain::biome::BIOME_FAMILY_NAMES_ZH)
 }
 
 /// 采样一点进折线（与上一点距离 ≥ [`STROKE_MIN_SEG`] 才记）。
@@ -943,6 +933,7 @@ mod tests {
                     id: 0,
                     owner: None,
                     kind: None,
+                    name: None,
                     ring: vec![4, 5, 3, 0], // 左半
                     holes: Vec::new(),
                 },
@@ -950,6 +941,7 @@ mod tests {
                     id: 1,
                     owner: None,
                     kind: None,
+                    name: None,
                     ring: vec![1, 2, 5, 4], // 右半
                     holes: Vec::new(),
                 },
@@ -990,6 +982,7 @@ mod tests {
         span.faces[1].kind = Some(1);
         span.faces
             .push(wv_core::model::faction_partition::PartitionFace {
+                name: None,
                 id: 9,
                 owner: None,
                 kind: Some(2), // 干旱族

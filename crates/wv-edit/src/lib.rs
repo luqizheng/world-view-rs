@@ -27,9 +27,9 @@ pub use command::{
     EditError, EditResult, EnsureFactionLayerVisibleCommand, EnsureTerrainLayerCommand,
     GenerateContinentCommand, MoveCityCommand, MovePartitionVerticesCommand, PasteMapCommand,
     PurgeMapCommand, RemoveMeasurementCommand, RemoveRegionCommand, RestoreMapCommand,
-    SetCityOutlineCommand, SetMapOrientationCommand, SetPartitionFaceKindCommand, TrashMapCommand,
-    UpdateEventCommand, UpdateFactionLayerCommand, UpdateLayerCommand, UpdateMapPropsCommand,
-    UpdatePlaceCommand, UpdateRegionCommand,
+    SetCityOutlineCommand, SetMapOrientationCommand, SetNatureFaceNamesCommand,
+    SetPartitionFaceKindCommand, TrashMapCommand, UpdateEventCommand, UpdateFactionLayerCommand,
+    UpdateLayerCommand, UpdateMapPropsCommand, UpdatePlaceCommand, UpdateRegionCommand,
 };
 pub use history::{History, Transaction};
 pub use nature_region::{

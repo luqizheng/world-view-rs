@@ -315,6 +315,7 @@ mod tests {
             level,
             parent: parent.map(Id::new_unchecked),
             children: Vec::new(),
+            comment: None,
             icons,
             layers: Vec::new(),
             extent,

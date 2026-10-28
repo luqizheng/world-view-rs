@@ -167,6 +167,7 @@ fn map_node_with_geographic_source_round_trips() {
     use wv_core::Id;
 
     let node = MapNode {
+        comment: None,
         id: Id::new_unchecked("seattle_modern"),
         name: "西雅图（现代）".into(),
         level: MapLevel::City,
@@ -215,6 +216,7 @@ fn map_node_without_geographic_source_omits_field() {
     use wv_core::Id;
 
     let node = MapNode {
+        comment: None,
         id: Id::new_unchecked("fictional_world"),
         name: "虚构世界".into(),
         level: MapLevel::World,
@@ -254,6 +256,7 @@ fn map_node_round_trip_preserves_presence_signal() {
     use wv_core::Id;
 
     let real = MapNode {
+        comment: None,
         id: Id::new_unchecked("real_map"),
         name: "real".into(),
         level: MapLevel::World,

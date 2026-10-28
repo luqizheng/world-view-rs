@@ -29,6 +29,7 @@ fn main() {
     std::fs::create_dir_all(&root).expect("create project dir");
 
     let meta = WorldMeta {
+        comment: None,
         name: "LOD 演示世界".into(),
         version: "0.1".into(),
         schema_version: 2,
@@ -78,6 +79,7 @@ fn build_world(meta: WorldMeta) -> World {
 
     // ---- 地图树：单张世界图 4096² --------------------------------------
     world.maps.push(MapNode {
+        comment: None,
         id: Id::new("map_world").unwrap(),
         name: "主世界".into(),
         level: MapLevel::World,

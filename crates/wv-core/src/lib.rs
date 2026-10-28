@@ -167,6 +167,11 @@ pub struct WorldMeta {
     /// 世界模板生成记录（ADR-0037）。`None` = 旧工程 / 空海洋模板。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<WorldTemplate>,
+    /// 工程备注（ADR-0082 LLM 命名）：作者对世界基调 / 风格的自由描述——
+    /// 外部 LLM 给自然区域命名时的**风格来源**之一（与地图 `comment` 并读）。
+    /// `None` = 未填（存量工程零迁移）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
 }
 
 fn default_version() -> String {

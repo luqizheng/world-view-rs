@@ -353,6 +353,7 @@ mod tests {
 
         let mut world = wv_core::World::default();
         world.maps.push(MapNode {
+            comment: None,
             id: Id::new_unchecked("world_main"),
             name: "主世界".into(),
             level: MapLevel::World,

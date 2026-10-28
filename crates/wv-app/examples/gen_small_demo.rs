@@ -55,6 +55,7 @@ fn main() {
     std::fs::create_dir_all(&root).expect("create project dir");
 
     let meta = WorldMeta {
+        comment: None,
         name: "小样张（内容轴 × 模式矩阵）".into(),
         version: "0.1".into(),
         schema_version: 2,
@@ -349,6 +350,7 @@ fn label_layer(map: &str) -> Layer {
 
 fn node(id: &str, name: &str, level: MapLevel, parent: Option<&str>) -> MapNode {
     MapNode {
+        comment: None,
         id: Id::new(id).unwrap(),
         name: name.into(),
         level,

@@ -47,6 +47,7 @@ fn main() {
     std::fs::create_dir_all(&root).expect("create project dir");
 
     let meta = WorldMeta {
+        comment: None,
         name: "图层演示世界".into(),
         version: "0.1".into(),
         schema_version: 2,
@@ -146,6 +147,7 @@ fn build_world(meta: WorldMeta) -> World {
     let mut l = layer("layer_terrain", "地形", LayerKind::Terrain);
     l.source = Some("maps/map_world/terrain.bin".into());
     world.maps.push(MapNode {
+        comment: None,
         id: map_world.clone(),
         name: "澜野九州".into(),
         level: MapLevel::World,
@@ -261,6 +263,7 @@ fn build_world(meta: WorldMeta) -> World {
     let mut city_labels = layer("layer_city_labels", "标注", LayerKind::Label);
     city_labels.source = Some("maps/map_city_dongang/labels.yaml".into());
     world.maps.push(MapNode {
+        comment: None,
         id: map_city.clone(),
         name: "东港城".into(),
         level: MapLevel::City,

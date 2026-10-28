@@ -52,6 +52,8 @@ pub struct MapPropertiesDialog {
     pub name: String,
     /// 比例声明草稿（每公里多少世界单位；**空串 = 未声明**）。
     pub unit_per_km_text: String,
+    /// 地图备注草稿（ADR-0082 LLM 命名风格来源；多行长文本）。
+    pub comment: String,
     /// 上次保存失败的错误（留在框内，作者改完再试；成功即清）。
     pub error: Option<String>,
 }
@@ -63,6 +65,7 @@ impl MapPropertiesDialog {
         self.map_id = Some(node.id.clone());
         self.name = node.name.clone();
         self.unit_per_km_text = node.unit_per_km.map(|v| v.to_string()).unwrap_or_default();
+        self.comment = node.comment.clone().unwrap_or_default();
         self.error = None;
     }
 
@@ -209,6 +212,19 @@ pub fn map_properties_dialog(
                     confirmed = true;
                 }
             });
+            ui.add_space(4.0);
+            // 备注（ADR-0082）：多行长文本——LLM 给本图自然区域命名的风格
+            // 来源之一（与工程 meta.comment 并读）；存进 maps/<id>/index.yaml。
+            ui.label(egui::RichText::new("备注").size(11.0).color(shell.t3()))
+                .on_hover_text("这张图的基调 / 风格 / 语境自由描述——AI 命名自然区域时会参考它");
+            let mut comment = dialog.comment.clone();
+            ui.add(
+                egui::TextEdit::multiline(&mut comment)
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(3)
+                    .hint_text("例：东亚风，多山，河谷文明……"),
+            );
+            dialog.comment = comment;
 
             if let Some(err) = &dialog.error {
                 ui.add_space(4.0);
@@ -251,10 +267,11 @@ pub fn map_properties_dialog(
         let mut commit = || -> Result<Vec<String>, String> {
             let unit = dialog.parsed_unit_per_km()?;
             let mut tx = wv_edit::Transaction::new();
-            tx.push(Box::new(wv_edit::UpdateMapPropsCommand::new(
+            tx.push(Box::new(wv_edit::UpdateMapPropsCommand::with_comment(
                 map_id.clone(),
                 name.clone(),
                 unit,
+                Some(dialog.comment.trim().to_owned()).filter(|c| !c.is_empty()),
             )));
             edit.history
                 .commit(&mut projection.world, tx)

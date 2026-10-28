@@ -589,3 +589,10 @@
 - **英文名**：nature cake / nature layer partition（`FactionLayer.usage = Nature`）
 - **定义**：用势力图切蛋糕引擎（ADR-0079）承载**自然区域**：层 `usage=Nature` 时脸的属性 = 群系族（`PartitionFace.kind`，wv-terrain `BIOME_FAMILY_ORDER` 序即契约只增不改），显示名「草原N / 干旱N」（N=同族脸按 face id 升序序号，跨会话稳定）；切刀 kind 随脸两分（切草原出两块草原）、Assign=改群系 fork（`SetPartitionFaceKindCommand`，与政治层易主同配方——火山掩草原从某天生效即白拿的 span 能力）。与政治蛋糕的差异只在脸属性（owner 恒空 vs kind），引擎/命令/校验/诊断全部共用。`NatureRegion` 实体本轮并存不迁移（统一几何留后续 ADR）。首次出现：2026-10-28 用户「继续」放行立项五问（数据归属/关系/命名/时间/入口全按推荐）。
 - **所属维度**：地理 / 编辑
+
+## 自然区 LLM 命名（2026-10-28 · ADR-0082）
+
+- **术语**：自然区 LLM 命名 / 命名上下文
+- **英文名**：LLM naming for nature regions（HTTP 工具 get_naming_context / set_nature_names）
+- **定义**：外部 LLM 给自然蛋糕脸命名的闭环：①代理调 `get_naming_context` 拿**风格来源**（工程 `meta.comment` + 地图 `comment` 两级备注，2026-10-28 新增的零迁移字段）与全部脸（face_id/族名/存名/派生名）；②**把备注展示给用户确认**（确认闸内嵌工具描述）；③按风格提案名字调 `set_nature_names`（`[{face_id,name}]` 批量，空串=清名回退派生名「草原N」）。命名是呈现元数据：`SetNatureFaceNamesCommand` 就地写全部含该脸的 span（不经 fork，跨时间一致）；显示名唯一口径 `PartitionSpan::face_display_name`（存名优先）。伴随裁定：自然层全工程唯一、编辑归 CellMap（Map 只留眼睛）。首次出现：2026-10-28 用户四连裁定。
+- **所属维度**：数据 / 工具链（MCP）/ 编辑

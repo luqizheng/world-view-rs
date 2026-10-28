@@ -167,6 +167,7 @@ impl BeginPartitionSpanCommand {
                 owner: self.initial_owner.clone(),
                 // 自然层（ADR-0081）：首脸的群系族由开段参数携带。
                 kind: self.initial_kind,
+                name: None,
                 ring,
                 holes,
             }],
@@ -594,6 +595,7 @@ impl EditCommand for CutPartitionFaceCommand {
             id: span.faces.iter().map(|f| f.id).max().unwrap_or(0) + 1,
             owner: owner_b,
             kind: kind_split,
+            name: None,
             ring: arc_b,
             holes: holes_b,
         });
@@ -978,6 +980,90 @@ impl EditCommand for SetPartitionFaceKindCommand {
     }
 }
 
+/// 批量命名自然脸（ADR-0082 LLM 命名）：`names = [(face_id, name)]`。
+///
+/// 命名是**呈现元数据非历史**——就地写（不经 fork），且**跨全部含该脸的
+/// span**（face id 在 fork 链上恒定，名字跨时间一致）。空串名字 = 清名
+/// （回退派生名「草原N」）。
+#[derive(Debug)]
+pub struct SetNatureFaceNamesCommand {
+    /// 目标地图。
+    pub map: Id,
+    /// 目标势力层（usage = Nature）。
+    pub layer: Id,
+    /// 命名表。
+    pub names: Vec<(u32, String)>,
+    /// `apply` 缓存的整个分区快照。
+    pub before: std::sync::Mutex<Option<wv_core::model::faction_partition::FactionPartition>>,
+}
+
+impl SetNatureFaceNamesCommand {
+    fn partition_mut<'w>(
+        &self,
+        world: &'w mut World,
+    ) -> EditResult<&'w mut wv_core::model::faction_partition::FactionPartition> {
+        world
+            .partitions
+            .iter_mut()
+            .find(|p| p.map == self.map && p.layer == self.layer)
+            .ok_or_else(|| {
+                EditError::TargetMissing(format!("分区（{} × {}）", self.map, self.layer))
+            })
+    }
+}
+
+impl EditCommand for SetNatureFaceNamesCommand {
+    fn label(&self) -> String {
+        format!("自然区命名（{} 块）", self.names.len())
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let snapshot = world
+            .partitions
+            .iter()
+            .find(|p| p.map == self.map && p.layer == self.layer)
+            .cloned();
+        let partition = self.partition_mut(world)?;
+        for (face_id, name) in &self.names {
+            let clean = name.trim();
+            let hits = partition
+                .spans
+                .iter_mut()
+                .flat_map(|s| s.faces.iter_mut())
+                .filter(|f| f.id == *face_id);
+            let mut any = false;
+            for f in hits {
+                f.name = if clean.is_empty() {
+                    None
+                } else {
+                    Some(clean.to_string())
+                };
+                any = true;
+            }
+            if !any {
+                return Err(EditError::TargetMissing(format!("脸 {}", face_id)));
+            }
+        }
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))? = snapshot;
+        Ok(vec!["partitions".to_string()])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let snapshot = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("SetNatureFaceNames 尚未 apply".into()))?;
+        let partition = self.partition_mut(world)?;
+        *partition = snapshot;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1047,6 +1133,7 @@ mod tests {
                         id: 0,
                         owner: Some(Id::new_unchecked("faction_a")),
                         kind: None,
+                        name: None,
                         ring: vec![0, 1, 2],
                         holes: Vec::new(),
                     }],
@@ -1214,6 +1301,7 @@ mod cut_tests {
                     id: 0,
                     owner: Some(Id::new_unchecked("faction_a")),
                     kind: None,
+                    name: None,
                     ring: vec![0, 1, 2, 3],
                     holes: Vec::new(),
                 }],
@@ -1494,6 +1582,7 @@ mod cut_tests {
                     id: 0,
                     owner: Some(Id::new_unchecked("faction_a")),
                     kind: None,
+                    name: None,
                     ring: vec![0, 1, 2, 3],
                     holes: vec![vec![4, 5, 6]], // 湖在 x∈[75,85] —— 右半
                 }],
@@ -1600,6 +1689,7 @@ mod move_assign_tests {
                         id: 0,
                         owner: Some(Id::new_unchecked("faction_a")),
                         kind: None,
+                        name: None,
                         ring: vec![4, 5, 3, 0],
                         holes: Vec::new(),
                     },
@@ -1607,6 +1697,7 @@ mod move_assign_tests {
                         id: 1,
                         owner: Some(Id::new_unchecked("faction_b")),
                         kind: None,
+                        name: None,
                         ring: vec![1, 2, 5, 4],
                         holes: Vec::new(),
                     },
@@ -1775,6 +1866,7 @@ mod nature_kind_tests {
                         id: 0,
                         owner: None,
                         kind: Some(1),
+                        name: None,
                         ring: vec![0, 1, 2, 3],
                         holes: Vec::new(),
                     }],
@@ -1864,5 +1956,125 @@ mod nature_kind_tests {
         let face = &world.partitions[0].spans[0].faces[0];
         assert_eq!(face.kind, Some(1), "首脸 = 草原族");
         assert_eq!(face.owner, None, "自然层不建势力实体");
+    }
+}
+
+#[cfg(test)]
+mod naming_tests {
+    //! ADR-0082：批量命名（就地跨 span）+ 显示名存名优先。
+
+    use super::*;
+
+    #[test]
+    fn set_names_writes_all_spans_and_reverts() {
+        // 命名就地写全部含该脸的 span（fork 链上 id 恒定，名字跨时间一致）。
+        let mut world = World::default();
+        let face = |name: Option<String>| PartitionFace {
+            id: 0,
+            owner: None,
+            kind: Some(1),
+            name,
+            ring: vec![0, 1, 2],
+            holes: Vec::new(),
+        };
+        let span_a = PartitionSpan {
+            from: 0,
+            to: Some(10),
+            vertices: vec![PartitionVertex {
+                id: 0,
+                xy: [0.0, 0.0],
+            }],
+            faces: vec![face(None)],
+        };
+        let mut span_b = span_a.clone();
+        span_b.from = 10;
+        span_b.to = None;
+        world
+            .partitions
+            .push(wv_core::model::faction_partition::FactionPartition {
+                map: Id::new_unchecked("m"),
+                layer: Id::new_unchecked("nature"),
+                spans: vec![span_a, span_b],
+            });
+        let cmd = SetNatureFaceNamesCommand {
+            map: Id::new_unchecked("m"),
+            layer: Id::new_unchecked("nature"),
+            names: vec![(0, "翠草原".into())],
+            before: std::sync::Mutex::new(None),
+        };
+        cmd.apply(&mut world).expect("apply");
+        let p = &world.partitions[0];
+        for s in &p.spans {
+            assert_eq!(s.faces[0].name.as_deref(), Some("翠草原"), "两段同改名");
+        }
+        // 显示名：存名优先。
+        assert_eq!(
+            p.spans[0].face_display_name(0, &["森林", "草原"]),
+            Some("翠草原".to_string()),
+        );
+        // 派生名：无存名 → 草原1。
+        assert_eq!(
+            p.spans[0].face_display_name(42, &["森林", "草原"]),
+            None,
+            "脸不存在 → None"
+        );
+        cmd.revert(&mut world).expect("revert");
+        assert_eq!(
+            world.partitions[0].spans[0].faces[0].name, None,
+            "revert 清名"
+        );
+    }
+
+    #[test]
+    fn empty_name_clears_to_derived() {
+        let mut world = World::default();
+        world
+            .partitions
+            .push(wv_core::model::faction_partition::FactionPartition {
+                map: Id::new_unchecked("m"),
+                layer: Id::new_unchecked("nature"),
+                spans: vec![PartitionSpan {
+                    from: 0,
+                    to: None,
+                    vertices: vec![PartitionVertex {
+                        id: 0,
+                        xy: [0.0, 0.0],
+                    }],
+                    faces: vec![PartitionFace {
+                        id: 3,
+                        owner: None,
+                        kind: Some(1),
+                        name: Some("旧名".into()),
+                        ring: vec![0, 1, 2],
+                        holes: Vec::new(),
+                    }],
+                }],
+            });
+        let cmd = SetNatureFaceNamesCommand {
+            map: Id::new_unchecked("m"),
+            layer: Id::new_unchecked("nature"),
+            names: vec![(3, "  ".into())],
+            before: std::sync::Mutex::new(None),
+        };
+        cmd.apply(&mut world).expect("apply");
+        let span = &world.partitions[0].spans[0];
+        assert_eq!(span.faces[0].name, None, "空白名 = 清名");
+        assert_eq!(
+            span.face_display_name(3, &["森林", "草原"]),
+            Some("草原1".to_string()),
+            "清名后回退派生名"
+        );
+    }
+
+    #[test]
+    fn unknown_face_errors() {
+        let mut world = World::default();
+        let cmd = SetNatureFaceNamesCommand {
+            map: Id::new_unchecked("m"),
+            layer: Id::new_unchecked("nature"),
+            names: vec![(9, "X".into())],
+            before: std::sync::Mutex::new(None),
+        };
+        assert!(cmd.apply(&mut world).is_err(), "脸不存在应 Err（不落盘）");
     }
 }

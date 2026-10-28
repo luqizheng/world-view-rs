@@ -54,6 +54,11 @@ pub struct PartitionFace {
     /// `None`。命名「草原N」的前缀 = 族显示名。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<u8>,
+    /// 脸显示名（ADR-0082 LLM 命名）：外部 LLM 经 HTTP 写回的命名；`None`
+    /// = 走派生名（`<族名><N>`，ADR-0081）。命名是**呈现元数据**非历史——
+    /// 写入命令就地改全部含此脸的 span（名字跨时间一致），不经 fork。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// 外环：顶点 id 序列，首尾不重复，≥3 点。
     pub ring: Vec<u32>,
     /// 洞环列表（如湖），每个都是顶点 id 序列、首尾不重复。
@@ -185,6 +190,7 @@ pub fn whole_land_span(outer: &[f32], from: i64, to: Option<i64>) -> (PartitionS
                 id: 0,
                 owner: None,
                 kind: None,
+                name: None,
                 ring,
                 holes: Vec::new(),
             }],
@@ -192,6 +198,30 @@ pub fn whole_land_span(outer: &[f32], from: i64, to: Option<i64>) -> (PartitionS
         n as u32,
         1,
     )
+}
+
+impl PartitionSpan {
+    /// 脸显示名（ADR-0081/0082 共用口径）：**存名优先**（LLM 命名），
+    /// 否则派生名 `<族名><N>`（N = 同 kind 脸按 face id 升序的序号——id
+    /// 随 YAML 持久化 → 名字跨会话稳定）。族名表由调用方传入（wv-core
+    /// 不认识具体语言）。无 kind 且无存名 → `None`。
+    pub fn face_display_name(&self, face_id: u32, kind_names: &[&str]) -> Option<String> {
+        let face = self.faces.iter().find(|f| f.id == face_id)?;
+        if let Some(n) = face.name.as_deref() {
+            if !n.is_empty() {
+                return Some(n.to_string());
+            }
+        }
+        let kind = face.kind?;
+        let prefix = kind_names.get(kind as usize).copied().unwrap_or("?");
+        let n = self
+            .faces
+            .iter()
+            .filter(|f| f.kind == Some(kind) && f.id < face_id)
+            .count()
+            + 1;
+        Some(format!("{prefix}{n}"))
+    }
 }
 
 /// `TimeSpan` 的区段口径在这里复述一次以保持单测自足（与
@@ -298,6 +328,7 @@ mod tests {
                 id: 0,
                 owner: None,
                 kind: None,
+                name: None,
                 ring: vec![0, 1],
                 holes: Vec::new(),
             }],

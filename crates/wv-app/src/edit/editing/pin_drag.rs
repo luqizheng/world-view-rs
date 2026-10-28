@@ -166,6 +166,7 @@ mod tests {
         let map = wv_core::Id::new_unchecked("world_main");
         let mut projection = crate::state::WorldProjection::default();
         projection.world.meta = Some(wv_core::WorldMeta {
+            comment: None,
             name: "test".into(),
             version: "0.1".into(),
             schema_version: 2,

@@ -518,6 +518,7 @@ fn point_select_on_click_writes_hit_into_unified_selection() {
     let map = wv_core::Id::new_unchecked("world_main");
     let mut projection = crate::state::WorldProjection::default();
     projection.world.meta = Some(wv_core::WorldMeta {
+        comment: None,
         name: "test".into(),
         version: "0.1".into(),
         schema_version: 2,
@@ -604,6 +605,7 @@ fn point_select_click_shift_unions_and_alt_subtracts() {
     let map = wv_core::Id::new_unchecked("world_main");
     let mut projection = crate::state::WorldProjection::default();
     projection.world.meta = Some(wv_core::WorldMeta {
+        comment: None,
         name: "test".into(),
         version: "0.1".into(),
         schema_version: 2,
@@ -721,6 +723,7 @@ fn lasso_world(base: &[(i32, i32)], modifiers: &[KeyCode], ring: Vec<(f32, f32)>
     let mut world = World::new();
     let mut projection = crate::state::WorldProjection::default();
     projection.world.meta = Some(wv_core::WorldMeta {
+        comment: None,
         name: "test".into(),
         version: "0.1".into(),
         schema_version: 2,
@@ -1192,6 +1195,7 @@ fn cellmap_world(cursor: Vec2, nature_overlay: bool) -> bevy::prelude::World {
     let map = wv_core::Id::new_unchecked("world_main");
     let mut projection = crate::state::WorldProjection::default();
     projection.world.meta = Some(wv_core::WorldMeta {
+        comment: None,
         name: "test".into(),
         version: "0.1".into(),
         schema_version: 2,

@@ -2950,6 +2950,7 @@ mod tests {
         use bevy::prelude::*;
         let mut world = wv_core::World::default();
         world.maps.push(wv_core::map::MapNode {
+            comment: None,
             id: Id::new_unchecked("world_main"),
             name: "世界".into(),
             level: wv_core::map::MapLevel::World,
@@ -3106,6 +3107,7 @@ mod tests {
         use bevy::image::Image;
         let mut world_core = wv_core::World::default();
         world_core.maps.push(wv_core::map::MapNode {
+            comment: None,
             id: Id::new_unchecked("world_main"),
             name: "世界".into(),
             level: wv_core::map::MapLevel::World,

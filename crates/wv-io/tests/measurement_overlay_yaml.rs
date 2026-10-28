@@ -12,6 +12,7 @@ use wv_core::{
 /// 造一张最小地图节点——`Project::open` 不会凭空造图，必须手工给 `world.maps` 塞一份。
 fn stub_map_node(id: &str) -> MapNode {
     MapNode {
+        comment: None,
         id: wv_core::Id::new_unchecked(id),
         name: format!("图{id}"),
         level: MapLevel::World,

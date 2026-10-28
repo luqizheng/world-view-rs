@@ -741,6 +741,7 @@ mod tests {
     fn demo_world() -> World {
         let mut w = World {
             meta: Some(WorldMeta {
+                comment: None,
                 name: "四渡赤水".into(),
                 version: "0.1".into(),
                 schema_version: 2,

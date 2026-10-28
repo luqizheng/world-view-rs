@@ -44,7 +44,23 @@ pub fn read_tool_schemas() -> Vec<(&'static str, &'static str, Value)> {
             "P7 入口：返回指定图在指定时刻的「所有要素投影」（characters / events / places 摘要）。",
             get_state_at_time_schema(),
         ),
+        (
+            "get_naming_context",
+            "取自然区命名上下文（ADR-0082）：工程备注 + 地图备注（命名的风格来源）+ 该图自然层全部脸（face_id / 族名 / 现名 / 派生名）。先把它展示给用户确认风格，再按风格提案名字并用 set_nature_names 写回。",
+            get_naming_context_schema(),
+        ),
     ]
+}
+
+pub fn get_naming_context_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["map_id"],
+        "properties": {
+            "map_id": {"type": "string", "description": "目标地图 id（get_ui_state 的 current_map）"}
+        },
+        "additionalProperties": false,
+    })
 }
 
 pub fn list_maps_schema() -> Value {
@@ -246,6 +262,21 @@ pub async fn dispatch_read(
                 _ => unreachable!("GetStateAtTime 应回 StateAtTime"),
             })
         }
+        "get_naming_context" => {
+            let raw = args.get("map_id").and_then(|v| v.as_str()).ok_or_else(|| {
+                JsonRpcError::invalid_params("get_naming_context 缺 map_id".to_string())
+            })?;
+            let map_id = wv_core::Id::new(raw)
+                .map_err(|e| JsonRpcError::invalid_params(format!("map_id 非法: {e}")))?;
+            let reply = bridge
+                .read(ReadRequest::NatureNamingContext { map_id })
+                .await;
+            Ok(match reply {
+                ReadReply::NatureNamingContext(ctx) => serde_json::to_value(&ctx)
+                    .map_err(|e| JsonRpcError::internal_error(e.to_string()))?,
+                _ => unreachable!("NatureNamingContext 应回同名回执"),
+            })
+        }
         other => Err(JsonRpcError::method_not_found(other)),
     }
 }
@@ -270,6 +301,7 @@ mod tests {
         let bridge = HttpBridge::new(tx);
         let mut world = wv_core::World::default();
         world.maps.push(MapNode {
+            comment: None,
             id: Id::new_unchecked("world_main"),
             name: "主世界".into(),
             level: MapLevel::World,
@@ -289,6 +321,7 @@ mod tests {
             trashed_at: None,
         });
         world.maps.push(MapNode {
+            comment: None,
             id: Id::new_unchecked("city_a"),
             name: "城市甲".into(),
             level: MapLevel::City,

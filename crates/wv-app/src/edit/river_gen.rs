@@ -222,6 +222,7 @@ mod tests {
         });
         w.set_terrain(vid(M), high_terrain(800));
         w.meta = Some(WorldMeta {
+            comment: None,
             name: "t".into(),
             version: "1".into(),
             schema_version: 2,

@@ -335,6 +335,7 @@ mod tests {
                 id: 0,
                 owner: None,
                 kind: None,
+                name: None,
                 ring: vec![0, 1, 2],
                 holes: Vec::new(),
             }],

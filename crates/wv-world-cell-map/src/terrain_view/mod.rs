@@ -817,6 +817,7 @@ mod tests {
         extent: Option<wv_core::map::Extent>,
     ) -> wv_core::map::MapNode {
         wv_core::map::MapNode {
+            comment: None,
             id: wv_core::Id::new_unchecked(id),
             name: id.to_owned(),
             level: wv_core::map::MapLevel::City,

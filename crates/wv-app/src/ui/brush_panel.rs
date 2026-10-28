@@ -55,10 +55,10 @@ pub fn panel_brush(
         Res<DrillState>,
         ResMut<editing::EditHistory>,
     ),
-    (mut tex, playback, view): (
+    (mut tex, playback, mut view): (
         ResMut<TerrainTexture>,
         Res<PlaybackState>,
-        Res<crate::state::ViewState>,
+        ResMut<crate::state::ViewState>,
     ),
     (mut notice, time, current_loc): (ResMut<ShellNotice>, Res<Time>, Res<CurrentLocale>),
     // ── CellMap 编辑段（2026-10-24 自 Inspector 迁入）──
@@ -74,6 +74,8 @@ pub fn panel_brush(
     // 批量区「生成大陆」按钮的目标面板（2026-10-26）——只置 open，确认
     // 提交在 continent_dialog_system（§3.3：UI 不碰 History 的例外同款）。
     mut continent: ResMut<crate::ui::ContinentDialog>,
+    // 自然区划分段（ADR-0082）：CellMap 里的自然蛋糕编辑开关。
+    mut partition_edit: ResMut<crate::ui::partition_pen::PartitionEditState>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -119,6 +121,60 @@ pub fn panel_brush(
                         Ok(msg) => notice.info(msg, frame),
                         Err(msg) => notice.error(msg, frame),
                     }
+                }
+            }
+
+            // ══ 自然区划分段（ADR-0082，用户裁定 2026-10-28）══
+            // 自然层编辑在 **CellMap**（Map 只留眼睛）；层全工程唯一。
+            // 「划分自然区」= 打开分区编辑态（HUD + 切/拖/改群系三工具，
+            // 与政治层同一套手势），顺带开会话势力可见性让分区叠加画出。
+            if view.mode == wv_render::state::ViewMode::Topographic {
+                let nature_layer = projection
+                    .world
+                    .faction_layers
+                    .iter()
+                    .find(|l| l.usage == wv_core::model::faction::LayerUsage::Nature);
+                if let Some(nl) = nature_layer {
+                    ui.add_space(space::SM);
+                    ui.separator();
+                    ui.add_space(space::XS);
+                    let editing = partition_edit.active.as_ref().map(|(id, _)| id) == Some(&nl.id);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(t_key(&current_loc, I18nKey::NaturePartitionTitle))
+                                .small()
+                                .color(shell.t2()),
+                        );
+                        let map_id = wv_core::Id::new_unchecked(view.current_map.clone());
+                        let span_from = wv_core::partition_span_at(
+                            &projection.world,
+                            &map_id,
+                            &nl.id,
+                            playback.current_day,
+                        )
+                        .map(|s| s.from)
+                        .unwrap_or(playback.current_day);
+                        let label = t_key(
+                            &current_loc,
+                            if editing {
+                                I18nKey::NaturePartitionExit
+                            } else {
+                                I18nKey::NaturePartitionEnter
+                            },
+                        );
+                        if ui
+                            .add_enabled(!playback.playing, egui::Button::new(label))
+                            .clicked()
+                        {
+                            if editing {
+                                partition_edit.active = None;
+                            } else {
+                                partition_edit.active = Some((nl.id.clone(), span_from));
+                                partition_edit.tool = crate::ui::partition_pen::PartitionTool::Cut;
+                                view.factions_visible = true;
+                            }
+                        }
+                    });
                 }
             }
 

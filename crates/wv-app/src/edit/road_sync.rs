@@ -487,6 +487,7 @@ mod tests {
         // 全图高 100：generate_rivers 源头门槛 700，一条河也生成不出。
         w.set_terrain(vid(M), flat_terrain(&[]));
         w.meta = Some(wv_core::WorldMeta {
+            comment: None,
             name: "t9".into(),
             version: "1".into(),
             schema_version: 2,

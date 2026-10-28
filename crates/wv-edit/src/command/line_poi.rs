@@ -1403,6 +1403,7 @@ mod migration_tests {
             },
         );
         w.meta = Some(wv_core::WorldMeta {
+            comment: None,
             name: "t".into(),
             version: "1".into(),
             schema_version: 2,

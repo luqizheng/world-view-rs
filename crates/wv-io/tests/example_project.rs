@@ -65,6 +65,7 @@ fn world_meta_yaml_round_trips() {
 #[test]
 fn map_node_yaml_round_trips() {
     let node = MapNode {
+        comment: None,
         id: wv_core::Id::new_unchecked("world_main"),
         name: "主世界".into(),
         level: MapLevel::World,
@@ -146,6 +147,7 @@ fn map_node_orientation_round_trips_and_defaults_to_zero() {
 
     // 显式声明 orientation 的 round-trip。
     let with_orient = MapNode {
+        comment: None,
         id: Id::new_unchecked("world_main"),
         name: "主世界".into(),
         level: MapLevel::World,

@@ -407,6 +407,12 @@ pub enum I18nKey {
     PartitionKindHint,
     /// 分区子工具：改群系（自然层的 Assign 语义）
     PartitionToolSetKind,
+    /// 笔刷窗自然区段标题（ADR-0082）
+    NaturePartitionTitle,
+    /// 笔刷窗「划分自然区」按钮
+    NaturePartitionEnter,
+    /// 笔刷窗「退出划分」按钮
+    NaturePartitionExit,
     /// 图层面板空态标题（本图未声明图层）
     PanelLayersEmptyTitle,
     /// 图层面板空态提示（去 index.yaml 的 layers: 段声明）
@@ -1367,7 +1373,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 559] = [
+    pub const ALL: [I18nKey; 562] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1567,6 +1573,9 @@ impl I18nKey {
         I18nKey::PartitionKindTitle,
         I18nKey::PartitionKindHint,
         I18nKey::PartitionToolSetKind,
+        I18nKey::NaturePartitionTitle,
+        I18nKey::NaturePartitionEnter,
+        I18nKey::NaturePartitionExit,
         I18nKey::PanelLayersEmptyTitle,
         I18nKey::PanelLayersEmptyHint,
         I18nKey::PanelLayerTerrain,

@@ -39,7 +39,37 @@ pub fn write_tool_schemas() -> Vec<(&'static str, &'static str, Value)> {
             "把当前世界全量保存到 `WorldProjection.project_dir`。无工程目录时报错。",
             save_project_schema(),
         ),
+        (
+            "set_nature_names",
+            "批量命名自然区域（ADR-0082）：names = [{face_id, name}]。先把 get_naming_context 的两级备注（风格来源）展示给用户、用户确认后再提案名字调用本工具。空串名字 = 清名（回退派生名「草原N」）。命名就地生效且跨时间一致；保存工程用 save_project。",
+            set_nature_names_schema(),
+        ),
     ]
+}
+
+pub fn set_nature_names_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["map_id", "layer_id", "names"],
+        "properties": {
+            "map_id": {"type": "string", "description": "目标地图 id"},
+            "layer_id": {"type": "string", "description": "自然层 id（get_naming_context 返回的 layer_id）"},
+            "names": {
+                "type": "array",
+                "description": "命名表",
+                "items": {
+                    "type": "object",
+                    "required": ["face_id", "name"],
+                    "properties": {
+                        "face_id": {"type": "integer", "description": "脸 id（get_naming_context 的 faces[].face_id）"},
+                        "name": {"type": "string", "description": "新名字；空串 = 清名"}
+                    },
+                    "additionalProperties": false
+                }
+            }
+        },
+        "additionalProperties": false,
+    })
 }
 
 pub fn create_map_schema() -> Value {
@@ -151,6 +181,7 @@ pub async fn dispatch_write(
             let level = parse_level(&input.level)?;
             let node = wv_core::map::MapNode {
                 id: id.clone(),
+                comment: None,
                 name: input.name.clone(),
                 level,
                 parent,
@@ -250,6 +281,42 @@ pub async fn dispatch_write(
             Ok(json!({
                 "saved": true,
                 "dirty_paths": outcome.dirty_paths,
+            }))
+        }
+        "set_nature_names" => {
+            #[derive(serde::Deserialize)]
+            struct NameEntry {
+                face_id: u32,
+                name: String,
+            }
+            #[derive(serde::Deserialize)]
+            struct SetNamesInput {
+                map_id: String,
+                layer_id: String,
+                names: Vec<NameEntry>,
+            }
+            let input: SetNamesInput = serde_json::from_value(args)
+                .map_err(|e| JsonRpcError::invalid_params(format!("set_nature_names: {e}")))?;
+            let map = wv_core::Id::new(&input.map_id)
+                .map_err(|e| JsonRpcError::invalid_params(format!("map_id 非法: {e}")))?;
+            let layer = wv_core::Id::new(&input.layer_id)
+                .map_err(|e| JsonRpcError::invalid_params(format!("layer_id 非法: {e}")))?;
+            let cmd = wv_edit::SetNatureFaceNamesCommand {
+                map,
+                layer,
+                names: input
+                    .names
+                    .into_iter()
+                    .map(|n| (n.face_id, n.name))
+                    .collect(),
+                before: std::sync::Mutex::new(None),
+            };
+            let dirty = bridge.apply(Box::new(cmd)).await.map_err(|e| {
+                JsonRpcError::internal_error(format!("set_nature_names 失败: {e:?}"))
+            })?;
+            Ok(json!({
+                "named": true,
+                "dirty_paths": dirty,
             }))
         }
         other => Err(JsonRpcError::method_not_found(other)),
@@ -359,6 +426,7 @@ mod tests {
                 use wv_core::Id;
                 let (bridge, rx, mut world, history) = setup();
                 world.maps.push(MapNode {
+                    comment: None,
                     id: Id::new_unchecked("world_main"),
                     name: "主世界".into(),
                     level: MapLevel::World,

@@ -1673,6 +1673,7 @@ mod tests {
 
         let mut w = World::default();
         w.maps.push(MapNode {
+            comment: None,
             id: Id::new_unchecked("map_city"),
             name: "城".into(),
             level: MapLevel::City,
@@ -1724,6 +1725,7 @@ mod tests {
 
         let mut w = World::default();
         w.maps.push(MapNode {
+            comment: None,
             id: Id::new_unchecked("world_main"),
             name: "主世界".into(),
             level: MapLevel::World,
@@ -1776,6 +1778,7 @@ mod tests {
         level: wv_core::map::MapLevel,
     ) -> wv_core::map::MapNode {
         wv_core::map::MapNode {
+            comment: None,
             id: Id::new_unchecked(id),
             name: format!("地图{id}"),
             level,
@@ -3233,6 +3236,7 @@ mod tests {
         w.maps
             .push(map_with_extent("root_map", Some((2048.0, 2048.0))));
         w.meta = Some(wv_core::WorldMeta {
+            comment: None,
             name: "t".into(),
             version: "1".into(),
             schema_version: 2,
@@ -3887,6 +3891,7 @@ mod tests {
         ];
         let mut world = World {
             meta: Some(wv_core::WorldMeta {
+                comment: None,
                 name: "t".into(),
                 version: "0.1".into(),
                 schema_version: 2,
@@ -4266,6 +4271,7 @@ mod trash_map_tests {
     fn world_with_meta(root: &str, maps: Vec<wv_core::map::MapNode>) -> World {
         World {
             meta: Some(wv_core::WorldMeta {
+                comment: None,
                 name: "测试工程".into(),
                 version: "0.1".into(),
                 schema_version: 2,

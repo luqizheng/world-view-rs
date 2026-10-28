@@ -415,6 +415,9 @@ impl EditCommand for SetCityOutlineCommand {
 /// ## revert
 /// apply 前快照 `(name, unit_per_km)` 原子还原；其余字段不参与同步
 /// （同 [`MoveCityCommand`] 的字段隔离策略：撤回期间他人的改动不被覆盖）。
+/// `UpdateMapPropsCommand.before` 的快照三元组（名称 / 尺度声明 / 备注）。
+type MapPropsBefore = (String, Option<f32>, Option<String>);
+
 #[derive(Debug)]
 pub struct UpdateMapPropsCommand {
     /// 目标地图。
@@ -423,7 +426,9 @@ pub struct UpdateMapPropsCommand {
     pub new_name: String,
     /// 新尺度声明；`None` = 未声明（比例尺静默不显示，V1）。
     pub new_unit_per_km: Option<f32>,
-    before: std::sync::Mutex<Option<(String, Option<f32>)>>,
+    /// 新地图备注（ADR-0082 LLM 命名风格来源）；`None` = 清空。
+    pub new_comment: Option<String>,
+    before: std::sync::Mutex<Option<MapPropsBefore>>,
 }
 
 impl UpdateMapPropsCommand {
@@ -432,6 +437,23 @@ impl UpdateMapPropsCommand {
             map_id,
             new_name,
             new_unit_per_km,
+            new_comment: None,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// 带备注的构造（ADR-0082；`comment` 传 `Some` 才动备注字段）。
+    pub fn with_comment(
+        map_id: Id,
+        new_name: String,
+        new_unit_per_km: Option<f32>,
+        new_comment: Option<String>,
+    ) -> Self {
+        Self {
+            map_id,
+            new_name,
+            new_unit_per_km,
+            new_comment,
             before: std::sync::Mutex::new(None),
         }
     }
@@ -452,14 +474,17 @@ impl EditCommand for UpdateMapPropsCommand {
             .before
             .lock()
             .map_err(|_| EditError::Precondition("命令锁中毒".into()))? =
-            Some((node.name.clone(), node.unit_per_km));
+            Some((node.name.clone(), node.unit_per_km, node.comment.clone()));
         node.name = self.new_name.clone();
         node.unit_per_km = self.new_unit_per_km;
+        if self.new_comment.is_some() {
+            node.comment = self.new_comment.clone();
+        }
         Ok(vec![format!("maps/{}/index.yaml", self.map_id)])
     }
 
     fn revert(&self, world: &mut World) -> EditResult<()> {
-        let (name, unit_per_km) = self
+        let (name, unit_per_km, comment) = self
             .before
             .lock()
             .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
@@ -472,6 +497,7 @@ impl EditCommand for UpdateMapPropsCommand {
             .ok_or_else(|| EditError::TargetMissing(format!("地图 {}", self.map_id)))?;
         node.name = name;
         node.unit_per_km = unit_per_km;
+        node.comment = comment;
         Ok(())
     }
 }

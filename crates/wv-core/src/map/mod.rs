@@ -153,6 +153,12 @@ pub struct MapNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outline_polygon: Option<GeometryData>,
 
+    /// 地图备注（ADR-0082 LLM 命名）：这张图的基调 / 风格 / 语境自由描述——
+    /// 外部 LLM 给本图自然区域命名时的**风格来源**（与工程 `meta.comment`
+    /// 并读）。`None` = 未填（存量零迁移）；编辑入口在地图属性对话框。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+
     /// 垃圾桶标志（地图树增强，2026-10-27 spec §5 D5 + §10 追记 1）：
     /// 仅**被删子树的根**打 `true`，后代不打标——「处于被删根之下」由
     /// [`crate::World::map_alive`] 沿 parent 链派生。

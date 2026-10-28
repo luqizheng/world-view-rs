@@ -112,6 +112,9 @@ pub enum ReadRequest {
     /// 投影约 200 KB），若 LLM 报告「上下文爆炸」再开 ADR 加 `place_ids`
     /// 过滤 + 硬顶（ADR §2.5.1 注脚）。
     GetStateAtTime { map_id: wv_core::Id, day: i64 },
+    /// 自然区命名上下文（ADR-0082 LLM 命名）：工程备注 + 地图备注 + 该图
+    /// 自然层的全部脸（id / 族 / 存名 / 派生名）——LLM 据此提案名字。
+    NatureNamingContext { map_id: wv_core::Id },
 }
 
 /// 读请求的回执。读路径 1（read by request kind）——不允许直接返回 World，
@@ -137,6 +140,33 @@ pub enum ReadReply {
     Place(Option<wv_core::distance::Place>),
     /// `get_state_at_time` 的返回：JSON 序列化形式（TimelineQuery::at 的投影）。
     StateAtTime(serde_json::Value),
+    /// `get_naming_context` 的返回（ADR-0082）。
+    NatureNamingContext(NatureNamingContext),
+}
+
+/// 自然区命名上下文（ADR-0082）：命名的**风格来源**（两级备注）+ 待命名的脸。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NatureNamingContext {
+    /// 工程备注（`world.yaml` meta.comment；`None` = 未填）。
+    pub project_comment: Option<String>,
+    /// 地图备注（`maps/<id>/index.yaml` comment；`None` = 未填）。
+    pub map_comment: Option<String>,
+    /// 自然层 id（该图 usage=Nature 的唯一层；`None` = 尚未建自然层）。
+    pub layer_id: Option<wv_core::Id>,
+    /// 全部脸（含 id / 族名 / 存名 / 派生名）。
+    pub faces: Vec<NatureFaceInfo>,
+}
+
+/// 单张自然脸的命名信息。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NatureFaceInfo {
+    pub face_id: u32,
+    /// 群系族显示名（如「草原」；无 kind = "?"）。
+    pub kind_name: String,
+    /// LLM 存名（`None` = 未命名，显示走派生名）。
+    pub name: Option<String>,
+    /// 派生名（`<族名><N>`；无 kind = `None`）。
+    pub derived_name: Option<String>,
 }
 
 /// `list_maps` 单条。**轻量**——`size_w` / `size_h` 由 `MapNode.extent` 派生；
@@ -399,6 +429,60 @@ fn handle_read(req: &ReadRequest, world: &World) -> ReadReply {
             ReadReply::Place(place)
         }
         ReadRequest::GetStateAtTime { map_id, day } => handle_state_at_time(world, map_id, *day),
+        ReadRequest::NatureNamingContext { map_id } => {
+            ReadReply::NatureNamingContext(handle_naming_context(world, map_id))
+        }
+    }
+}
+
+/// 命名上下文组装（ADR-0082）：两级备注 + 自然层全部脸。
+fn handle_naming_context(world: &World, map_id: &wv_core::Id) -> NatureNamingContext {
+    let project_comment = world.meta.as_ref().and_then(|m| m.comment.clone());
+    let map_comment = world
+        .maps
+        .iter()
+        .find(|m| &m.id == map_id)
+        .and_then(|m| m.comment.clone());
+    let layer_id = world
+        .faction_layers
+        .iter()
+        .find(|l| l.usage == wv_core::model::faction::LayerUsage::Nature)
+        .map(|l| l.id.clone());
+    let faces = layer_id
+        .as_ref()
+        .and_then(|lid| {
+            world
+                .partitions
+                .iter()
+                .find(|p| &p.map == map_id && &p.layer == lid)
+        })
+        .and_then(|p| wv_core::partition_span_at(world, map_id, &p.layer, i64::MAX))
+        .map(|span| {
+            span.faces
+                .iter()
+                .map(|f| NatureFaceInfo {
+                    face_id: f.id,
+                    kind_name: f
+                        .kind
+                        .and_then(|k| {
+                            wv_terrain::biome::BIOME_FAMILY_NAMES_ZH
+                                .get(k as usize)
+                                .copied()
+                        })
+                        .unwrap_or("?")
+                        .to_string(),
+                    name: f.name.clone(),
+                    derived_name: span
+                        .face_display_name(f.id, &wv_terrain::biome::BIOME_FAMILY_NAMES_ZH),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    NatureNamingContext {
+        project_comment,
+        map_comment,
+        layer_id,
+        faces,
     }
 }
 
@@ -538,6 +622,7 @@ mod tests {
     fn world_with_two_maps() -> World {
         let mut w = World::default();
         w.maps.push(MapNode {
+            comment: None,
             id: Id::new_unchecked("world_main"),
             name: "主世界".into(),
             level: MapLevel::World,
@@ -557,6 +642,7 @@ mod tests {
             trashed_at: None,
         });
         w.maps.push(MapNode {
+            comment: None,
             id: Id::new_unchecked("city_a"),
             name: "城市甲".into(),
             level: MapLevel::City,
@@ -576,6 +662,7 @@ mod tests {
             trashed_at: None,
         });
         w.meta = Some(WorldMeta {
+            comment: None,
             name: "测试".into(),
             version: "0.1".into(),
             schema_version: 2,
@@ -916,6 +1003,7 @@ mod tests {
         let bridge = HttpBridge::new(tx);
         let mut world = World::default();
         world.maps.push(MapNode {
+            comment: None,
             id: Id::new_unchecked("world_main"),
             name: "主世界".into(),
             level: MapLevel::World,

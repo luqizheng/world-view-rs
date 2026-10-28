@@ -1103,6 +1103,7 @@ fn build_world(
 
     // ---- 6) WorldMeta ----------------------------------------------------
     let meta = wv_core::WorldMeta {
+        comment: None,
         name: args.name.clone(),
         version: "0.1".into(),
         schema_version: wv_io::CURRENT_SCHEMA_VERSION,

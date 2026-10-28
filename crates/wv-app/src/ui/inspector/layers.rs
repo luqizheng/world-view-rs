@@ -87,22 +87,38 @@ pub fn layers_tab(
             wv_core::model::faction::LayerUsage::Political,
         );
     }
-    // 自然层（ADR-0081）：Map 档「画 region」主职的切蛋糕载体——半高次入口。
+    // 自然层（ADR-0081/0082）：**全工程唯一**——建过即灰（用户裁定
+    // 2026-10-28）。编辑入口在 CellMap（笔刷窗自然区段）；本列表的自然层
+    // 行只留眼睛（Map 只看不管，见下方层循环）。
+    let nature_exists = layers
+        .iter()
+        .any(|l| l.usage == wv_core::model::faction::LayerUsage::Nature);
     let (rect_n, r_n) = ui.allocate_exact_size(egui::vec2(add_w, shell.hit), egui::Sense::click());
     ui.painter().rect_stroke(
         rect_n,
         crate::theme::ui_tokens::radius::CONTROL,
-        egui::Stroke::new(1.0, shell.border_strong()),
+        egui::Stroke::new(
+            1.0,
+            if nature_exists {
+                shell.border_subtle()
+            } else {
+                shell.border_strong()
+            },
+        ),
         egui::StrokeKind::Inside,
     );
     ui.painter().text(
         rect_n.center(),
         egui::Align2::CENTER_CENTER,
-        "+ Add nature layer",
+        if nature_exists {
+            "Nature layer exists (unique)"
+        } else {
+            "+ Add nature layer"
+        },
         crate::theme::ui_theme::proportional(shell.scale.base),
         shell.t3(),
     );
-    if r_n.clicked() {
+    if r_n.clicked() && !nature_exists {
         faction_panel_actions::add_layer_now(
             projection,
             edit,
@@ -111,6 +127,9 @@ pub fn layers_tab(
             layers.len() as i32,
             wv_core::model::faction::LayerUsage::Nature,
         );
+    }
+    if nature_exists {
+        r_n.on_hover_text("自然层全工程唯一；在 CellMap 笔刷窗里编辑划分");
     }
     ui.add_space(space::MD);
 
@@ -142,7 +161,9 @@ pub fn layers_tab(
                 // 行 min_rect 撑到整屏宽，Inspector 窗被顶成全屏宽（实测）。
                 // ⚠️ 图标用 Lucide pencil.svg——"✎" 字符在打包字体无字形，
                 // 落豆腐块（AGENTS §8 图标纪律）。
-                if pen_gated {
+                // ADR-0082：**自然层不出 pen**——Map 只看不管，编辑在
+                // CellMap 笔刷窗自然区段（用户裁定 2026-10-28）。
+                if pen_gated && l.usage != wv_core::model::faction::LayerUsage::Nature {
                     let pen = ui.add(
                         egui::Button::image(icon_image(ICON_PENCIL, egui::Color32::WHITE, 12.0))
                             .fill(egui::Color32::TRANSPARENT),
