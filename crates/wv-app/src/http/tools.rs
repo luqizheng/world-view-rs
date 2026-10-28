@@ -112,11 +112,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_tools_exposes_exactly_thirteen_skills_in_stable_order() {
+    fn all_tools_exposes_exactly_fifteen_skills_in_stable_order() {
         let tools = all_tools();
         assert_eq!(tools.len(), 15);
         let names: Vec<&str> = tools.iter().map(|t| t.name).collect();
-        // 顺序：先 5 个读，再 4 个写，再 4 个 UI 操控（ADR-0078）
+        // 顺序：先 5 个读，再 4 个写，再 4 个 UI 操控（ADR-0078），末尾 2 个命名（ADR-0082）
         assert_eq!(
             names,
             vec![
@@ -125,10 +125,12 @@ mod tests {
                 "list_places",
                 "get_place",
                 "get_state_at_time",
+                "get_naming_context",
                 "create_map",
                 "create_place",
                 "undo",
                 "save_project",
+                "set_nature_names",
                 "get_ui_state",
                 "set_view_mode",
                 "set_panel_visible",

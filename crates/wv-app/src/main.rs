@@ -124,6 +124,38 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         }
+        Some("mcp") => {
+            // wv mcp（ADR-0083）：MCP stdio 代理——本地答 initialize/ping，
+            // tools/* 转发 GUI 内嵌 HTTP 服务（默认 127.0.0.1:8732）。
+            #[cfg(feature = "http")]
+            {
+                let mut port = wv_app::http::DEFAULT_PORT;
+                let mut it = args.iter().skip(1);
+                while let Some(a) = it.next() {
+                    if a == "--port" {
+                        match it.next().and_then(|v| v.parse::<u16>().ok()) {
+                            Some(n) => port = n,
+                            None => {
+                                eprintln!("wv mcp: --port 需要 1..=65535 的整数");
+                                return ExitCode::from(2);
+                            }
+                        }
+                    } else {
+                        eprintln!("wv mcp: 未知参数 {a}（用法：wv mcp [--port <N>]）");
+                        return ExitCode::from(2);
+                    }
+                }
+                let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+                ExitCode::from(rt.block_on(wv_app::http::proxy::run_stdio(port)) as u8)
+            }
+            #[cfg(not(feature = "http"))]
+            {
+                eprintln!(
+                    "wv mcp 需要 --features http 编译（cargo run -p wv-app --features http --bin wv -- mcp）"
+                );
+                ExitCode::from(2)
+            }
+        }
         Some("gallery") => {
             #[cfg(feature = "app")]
             {
@@ -176,6 +208,9 @@ fn print_help() {
         lang = t(wv_app::i18n::I18nKey::CliLanguageFlagHelp),
         help = t(wv_app::i18n::I18nKey::CliHelpHelp),
     );
+    // mcp 子命令（ADR-0083）：i18n 键暂不加（CLI 帮助直写先例——本项目
+    // CLI 文案多数走 i18n，此处一行技术性说明直写可接受）。
+    println!("  wv mcp [--port <N>]        MCP stdio proxy -> wv gui's HTTP MCP (needs `wv gui` running with --features http, default port 8732)");
 }
 
 /// 底图切片（README §12-24）：把来源图栅格中被子图覆盖的那块采样落盘。

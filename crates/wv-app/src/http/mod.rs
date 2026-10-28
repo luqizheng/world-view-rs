@@ -37,6 +37,7 @@
 //!   字段一致）。
 
 pub mod filter;
+pub mod proxy;
 pub mod server;
 pub mod tools;
 
