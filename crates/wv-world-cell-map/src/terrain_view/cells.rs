@@ -1560,10 +1560,10 @@ fn a_tile(atlas: Option<&TileAtlas>, kind: u8) -> Option<[u32; 2]> {
 /// `soften` = 底图淡化（`ViewState.terrain_soften`）；`palette` = 地图主题
 /// （ADR-0014：切主题 = 按新色板整图重建）。
 ///
-/// 浮雕在**未接线期**统一走过渡缺省格距 [`crate::shading::DEFAULT_METERS_PER_CELL`]
-/// 打光（内部走 [`terrain_pixels`] 旧签名；wv-app 经 `meters_per_cell_of`
-/// 接线 `_with_scale` 后本假设消失）；oblique 烘焙是 Topographic 数据
-/// 视图（无浮雕），故本入口未开 `_with_scale` 变体。
+/// 浮雕比例：旧签名 = 带 [`crate::shading::DEFAULT_METERS_PER_CELL`] 过渡缺省的
+/// [`image_from_terrain_with_scale`] 委托（wv-app 已接线真实比例，本缺省只剩
+/// examples 等无世界上下文的调用方）；oblique 烘焙是 Topographic 数据
+/// 视图（无浮雕），`compression` 与晕渲无关。
 ///
 /// **oblique 烘焙**（[ADR-0041] §3 texture-bake 方案）：仅在 Topographic
 /// mode 下把生成的 RGBA 像素沿 x 方向按行斜切 `(y − h/2) × compression`，
@@ -1578,7 +1578,32 @@ pub fn image_from_terrain(
     pack: &CellPack,
     compression: f32,
 ) -> Image {
-    let (mut pixels, res) = terrain_pixels(data, mode, atlas, soften, pack);
+    image_from_terrain_with_scale(
+        data,
+        mode,
+        atlas,
+        soften,
+        pack,
+        compression,
+        crate::shading::DEFAULT_METERS_PER_CELL,
+    )
+}
+
+/// [`image_from_terrain`] 的带比例变体（ADR-0077 D2 CPU 接线）：`meters_per_cell`
+/// 交给晕渲法线做米制换算，与 GPU 场路径共用同一条换算入口；其余口径与旧
+/// 函数逐位一致。调用侧用 [`crate::shading::meters_per_cell_of`]（或桥接封装
+/// `bake_meters_per_cell`）从「来源图比例尺 + 格距」算出，禁止第二份换算公式。
+pub fn image_from_terrain_with_scale(
+    data: &TerrainData,
+    mode: ShadeMode,
+    atlas: Option<&TileAtlas>,
+    soften: bool,
+    pack: &CellPack,
+    compression: f32,
+    meters_per_cell: f32,
+) -> Image {
+    let (mut pixels, res) =
+        terrain_pixels_with_scale(data, mode, atlas, soften, pack, meters_per_cell);
     let (w, h) = (data.width.max(1), data.height.max(1));
     if mode == ShadeMode::Topographic && compression > 0.0 {
         oblique_skew_pixels(&mut pixels, w * res, h * res, compression);

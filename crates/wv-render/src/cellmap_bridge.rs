@@ -1609,6 +1609,23 @@ fn bridge_meters_per_cell(cell_size: f32, unit_per_km: Option<f32>) -> f32 {
     meters_per_cell_of(cell_size, unit_per_km)
 }
 
+/// CPU 烘焙路径的米/格接线（ADR-0077 T4 遗留项落地）：给 wv-app 的
+/// `image_from_terrain_with_scale` / `patch_terrain_image_with_scale` 用。
+/// 来源图（`tex.last_map`，否则 `active_terrain` 沿 parent 链解析出的那张）的
+/// `unit_per_km` 精确换算，未声明走「1 wu = 1 m」回落（README §12-53）——
+/// 与 [`sync_terrain_field`] 的 GPU 填充同一条入口 [`meters_per_cell_of`]，
+/// 两管线同一假设、同一公式，禁止第二份换算。
+pub fn bake_meters_per_cell(
+    world: &wv_core::World,
+    source_map: Option<&wv_core::id::Id>,
+    cell_size: f32,
+) -> f32 {
+    let unit_per_km = source_map
+        .and_then(|id| world.maps.iter().find(|n| &n.id == id))
+        .and_then(|n| n.unit_per_km);
+    bridge_meters_per_cell(cell_size, unit_per_km)
+}
+
 /// 主 App 的场渲染同步（ADR-0053 D1，Phase 1 接线 2026-10-24）。
 ///
 /// ## 职责
