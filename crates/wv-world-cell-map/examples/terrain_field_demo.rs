@@ -20,7 +20,7 @@
 //! | `1` | 切 Themed 分支（主题四阶 + hillshade） | T7–T18 |
 //! | `2` | 切 BiomeRaw 分支（群系色块，**主题无关**） | ADR-0051 §5 |
 //! | `Space` | 暂停/继续自动缩放 | 观察墨线粗细是否恒定 |
-//! | `H` | 开关 hillshade 对比 | T15–T17 |
+//! | `H` | 开关 hillshade 对比（写 `FieldParams.relief`：开 = 三光系数，关 = (1,0,0) 平光全亮） | ADR-0077 D1 |
 //! | `Esc` | 退出 | — |
 //!
 //! ## 自检点（对应 P1 验收）
@@ -871,9 +871,20 @@ fn sync_material(
     mat.params.pad0[0] = wv_world_cell_map::terrain_view::field::warp_amp(state.px_per_cell);
     // T28 水彩幅度：pw 槽 `shore_edges.w`（P1 预留位）。
     mat.params.shore_edges[3] = 1.0;
-    // relief: xy = 明暗钳制。H 键把它压成 1.0 = 关掉 hillshade（对比观察用）
-    mat.params.relief[0] = if state.hillshade_on { 0.86 } else { 1.0 };
-    mat.params.relief[1] = if state.hillshade_on { 1.14 } else { 1.0 };
+    // relief = 三光系数（ADR-0077，T6 语义翻转：x = AMBIENT / y = DIFFUSE_MAIN
+    // / z = DIFFUSE_AUX，镜像 shading.rs，和 = 1 界内免费）。H 键关掉
+    // hillshade = 漫反射两系数归零、环境抬到 1.0 → 平光全亮（与旧
+    // 「钳制对压 1.0」的关灯观感一致；切回即恢复默认三光）。
+    mat.params.relief = if state.hillshade_on {
+        Vec4::new(
+            wv_world_cell_map::shading::AMBIENT,
+            wv_world_cell_map::shading::DIFFUSE_MAIN,
+            wv_world_cell_map::shading::DIFFUSE_AUX,
+            0.0,
+        )
+    } else {
+        Vec4::new(1.0, 0.0, 0.0, 0.0)
+    };
 
     // quad 世界尺寸**恒定**（1 世界单位/格）——缩放只动相机，不动 quad。
     //

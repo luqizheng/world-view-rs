@@ -23,6 +23,9 @@
 //!
 //! ## 模块
 //! - [`palette`]——冻结色包与常量（固定色的唯一取值点）。
+//! - [`shade`]——地形着色档位（`ViewMode` 收窄而来的纯着色维度）。
+//! - [`shading`]——晕渲公式唯一真源（ADR-0077：双光源 / Horn 米制梯度 /
+//!   三尺度权重，CPU·GPU·WGSL 三处消费的常量与纯函数）。
 //! - [`state`]——CellMap 会话态（`EditCellState` / **`CellSelection` 统一选区，
 //!   ADR-0057** / `GridConfig`，自 wv-render 迁入；wv-render 侧 re-export
 //!   保旧路径）。
@@ -45,6 +48,10 @@ pub mod cell_selection;
 pub mod palette;
 pub mod region_overlay;
 pub mod shade;
+/// 晕渲公式唯一真源（ADR-0077 D6）：双光源美术光照 + Horn 米制梯度 +
+/// 三尺度权重——CPU 块烘焙、GPU uniform、WGSL 三处只准消费这里的
+/// 签名与常量，禁散落字面量。
+pub mod shading;
 pub mod state;
 pub mod terrain_chunks;
 pub mod terrain_view;

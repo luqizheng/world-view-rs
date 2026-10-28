@@ -49,13 +49,26 @@ pub(super) fn setup_terrain_texture_after_world(
     // 原型默认 512×512 占位（基线 §2.19：1024² 亦轻松 60 FPS）。
     let (map, data) =
         terrain_view::active_terrain_or_placeholder(&mut projection.world, drill.current(), 512);
-    let image = terrain_view::image_from_terrain(
+    // ── 米/格接线（ADR-0077 T4 遗留项）：格距 = 来源图幅宽 / 格数（与
+    // `sync_grid_config` 同一条兜底链：本图 extent → 根图 extent → 4096），
+    // 比例尺未声明走「1 wu = 1 m」回落。本函数只负责启动首帧，此后每次
+    // 重建都走 `flush_terrain_texture` 的同款接线。
+    let node = map
+        .as_ref()
+        .and_then(|id| projection.world.maps.iter().find(|n| &n.id == id));
+    let extent = node
+        .and_then(|n| n.extent.as_ref())
+        .map(|e| e.width)
+        .unwrap_or(4096.0);
+    let cell_size = (extent / data.width.max(1) as f32).max(0.01);
+    let image = terrain_view::image_from_terrain_with_scale(
         &data,
         cellmap_bridge::shade_mode_of(view.mode),
         atlas.as_ref(),
         view.terrain_soften,
         &cellmap_bridge::conv_pack_with(view.active_theme, view.hypsometric_tint, view.mode),
         0.0,
+        terrain_view::bake_meters_per_cell(&projection.world, map.as_ref(), cell_size),
     );
     commands.insert_resource(terrain_view::new_terrain_texture(
         &mut images,

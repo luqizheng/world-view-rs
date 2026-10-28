@@ -41,7 +41,7 @@ use wv_edit::history::Transaction;
 use wv_edit::History;
 use wv_render::camera::ActiveStroke;
 use wv_render::state::EditCellState;
-use wv_render::terrain_view::{image_from_terrain, TerrainTexture, TileAtlas};
+use wv_render::terrain_view::{TerrainTexture, TileAtlas};
 use wv_terrain::continent::ContinentParams;
 use wv_terrain::edit::{Brush, Stroke as TerrainStroke};
 use wv_terrain::intent::Intent;

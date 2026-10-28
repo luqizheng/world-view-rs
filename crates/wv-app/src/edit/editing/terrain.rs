@@ -23,6 +23,7 @@ pub fn flush_terrain_texture(
     drill: Res<DrillState>,
     view: Res<ViewState>,
     atlas: Option<Res<TileAtlas>>,
+    grid: Res<wv_render::state::GridConfig>,
     mut images: ResMut<Assets<Image>>,
 ) {
     let Some(rect) = tex.dirty else { return };
@@ -33,12 +34,26 @@ pub fn flush_terrain_texture(
         tex.dirty = None;
         return;
     };
+    // ── 米/格接线（ADR-0077 T4 遗留项）：与 GPU 场路径同一条入口 ──
+    // 来源图优先 `tex.last_map`（纹理正在显示的那张），否则沿 parent 链解析；
+    // 比例尺未声明走「1 wu = 1 m」回落（README §12-53 待决）。
+    let source_map: Option<wv_core::Id> = tex.last_map.clone().or_else(|| {
+        drill.current().and_then(|cur| {
+            wv_render::terrain_view::active_terrain(&projection.world, Some(cur))
+                .map(|(n, _)| n.id.clone())
+        })
+    });
+    let meters_per_cell = wv_render::terrain_view::bake_meters_per_cell(
+        &projection.world,
+        source_map.as_ref(),
+        grid.cell_size,
+    );
     let w = data.width.max(1);
     let h = data.height.max(1);
     // dirty 矩形 = 整图 → 走全图重建（模式切换 / 全图标记脏的场景）。
     let is_full = rect == [0, 0, w, h];
     if is_full {
-        let image = image_from_terrain(
+        let image = wv_render::terrain_view::image_from_terrain_with_scale(
             data,
             wv_render::cellmap_bridge::shade_mode_of(view.mode),
             atlas.as_deref(),
@@ -49,6 +64,7 @@ pub fn flush_terrain_texture(
                 view.mode,
             ),
             0.0,
+            meters_per_cell,
         );
         if let Some(mut img) = images.get_mut(&tex.handle) {
             *img = image;
@@ -59,7 +75,7 @@ pub fn flush_terrain_texture(
     // 增量 patch：只重算 dirty 矩形内的 cell，原地写进 `image.data`。
     let res = tex.res;
     if let Some(mut img) = images.get_mut(&tex.handle) {
-        wv_render::terrain_view::patch_terrain_image(
+        wv_render::terrain_view::patch_terrain_image_with_scale(
             &mut img,
             data,
             wv_render::cellmap_bridge::shade_mode_of(view.mode),
@@ -72,6 +88,7 @@ pub fn flush_terrain_texture(
                 view.hypsometric_tint,
                 view.mode,
             ),
+            meters_per_cell,
         );
     }
     tex.dirty = None;

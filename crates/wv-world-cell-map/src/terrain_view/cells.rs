@@ -203,51 +203,16 @@ fn shade_coast(_data: &TerrainData, kind: u8, _pal: &CellPalette) -> Color {
 // 水域按高度的渐变（2026-10-15，手绘地图呈现改进 #1）
 // ---------------------------------------------------------------------------
 
-/// 坡度浮雕强度：每米高差对应的明度增量。
-///
-/// 1024² 栅格上相邻格高差通常 10–200m；0.0012 让 100m 坡面增减约 12%，
-/// 正好落在「看得出山、不变成灰噪点」的区间（ADR-0036）。
-const RELIEF_PER_METER: f32 = 0.0012;
-/// 浮雕明度乘子下限 / 上限（钳制，防陡崖把颜色压黑或打爆）。
-const RELIEF_MIN: f32 = 0.84;
-const RELIEF_MAX: f32 = 1.16;
-
-/// **专业制图**的浮雕钳制（ADR-0067 D2）——比艺术主题**更轻**。
-///
-/// 艺术主题的 0.84~1.16 是「让山有体积」的强浮雕；普通地图要的是「暗示坡」，
-/// 不是「立体渲染」——底图上一旦阴影过重，地图会从「专业制图」滑向「3D 地形图」。
-/// ADR-0060 §4 定的是 0.90~1.12（预览期校准值），此处照此实现。
-const RELIEF_MIN_CARTOGRAPHIC: f32 = 0.90;
-const RELIEF_MAX_CARTOGRAPHIC: f32 = 1.12;
-
-/// 坡度浮雕系数：邻格高差 → 明度乘子，光源固定在**左上 45°**
-/// （与 ART_STYLE_SPEC §1.5 的主光方向一致）。
-///
-/// 纯函数、只读高度场：同一格在任何渲染路径（全图烘焙 / 笔刷 patch）
-/// 得到同一乘子，不需要额外的缓存或随机种子。
-fn relief_mul(data: &TerrainData, cx: u32, cy: u32) -> f32 {
-    relief_mul_clamped(data, cx, cy, RELIEF_MIN, RELIEF_MAX)
-}
-
-/// 同 [`relief_mul`]，但钳制区间由调用方给（专业制图用更轻的区间）。
-fn relief_mul_clamped(data: &TerrainData, cx: u32, cy: u32, lo: f32, hi: f32) -> f32 {
-    let w = data.width as i64;
-    let h = data.height as i64;
-    if w < 2 || h < 2 {
-        return 1.0;
-    }
-    let at = |x: i64, y: i64| -> f32 {
-        let xi = x.clamp(0, w - 1) as usize;
-        let yi = y.clamp(0, h - 1) as usize;
-        data.cells[yi * w as usize + xi].height as f32
-    };
-    let (x, y) = (cx as i64, cy as i64);
-    let dx = (at(x + 1, y) - at(x - 1, y)) * 0.5;
-    let dy = (at(x, y + 1) - at(x, y - 1)) * 0.5;
-    // 数据行号向下增大；坡面朝左上（dx < 0 且 dy < 0）受光最亮。
-    let lit = -(dx + dy);
-    (1.0 + lit * RELIEF_PER_METER).clamp(lo, hi)
-}
+// ---------------------------------------------------------------------------
+// 坡度浮雕（ADR-0077 D6）：公式真源在 `crate::shading`——Horn 米制梯度、
+// 世界法线、双光源光照明度（含 LIGHT_* 常量）全部只认那一处，本文件
+// 零光照字面量；乘子入口 = `CellRenderer::relief_intensity`。
+// 旧「逐格差分 × 0.0012 + 0.84~1.16 / 0.90~1.12 双套钳制」
+//（RELIEF_PER_METER / RELIEF_MIN / RELIEF_MAX / RELIEF_*_CARTOGRAPHIC、
+// relief_mul / relief_mul_clamped）随界内性免费获得而整体退役。
+// 2026-10-28 spec D1 修正：LIGHT_* 改存真 45° 高度角**单位向量**，CPU
+// 直接 dot，早期临时的预归一化副本（LIGHT_*_UNIT）随之取消。
+// ---------------------------------------------------------------------------
 
 /// 水域按高度的渐变色——lerp `water_shallow → water_deep`，并对深色带
 /// 提一点蓝饱和（海沟观感）。所有视图模式下的水域**内部格**都走这条；
@@ -593,7 +558,8 @@ struct CellRenderer<'a> {
     blocks: [Option<Vec<u8>>; 10],
     /// `kind` 是否已尝试过建块（避免无映射 kind 被反复查）。
     tried: [bool; 10],
-    /// Topographic mode 专用：7 条海拔内边界（米，逐图百分位；ADR-0055）。
+    /// Topographic mode 专用：7 条海拔内边界（米，绝对阶梯 + 窄域兜底，
+    /// `cuts_for_cells` 产物；ADR-0056 修正 ADR-0055 原案「逐图百分位」）。
     /// 非 Topographic mode 为 `None`（着色路径零开销）。
     topographic: Option<super::hypsometric::Cuts>,
     /// **专业制图的海拔色带**（ADR-0067 D3）：8 阶 + 混入强度 + 7 条内边界。
@@ -604,6 +570,13 @@ struct CellRenderer<'a> {
     /// 分层设色强度（`CellPack.hypsometric` 的镜像；ADR-0055）：0 = 纯群系色，
     /// 1 = 海拔色带完全替代群系色。
     hypsometric: f32,
+    /// 浮雕的梯度无量纲化增益（`s = Z_EXAG / 米每格`，ADR-0077 D2/D6）。
+    ///
+    /// 由合成入口的 `meters_per_cell` 经 [`crate::shading::slope_gain_of`]
+    /// 一次算出——米制化后「同物理坡 → 同法线」跨图幅成立；旧
+    /// `RELIEF_PER_METER` 的「每米高差 × 固定系数」口径随路径退役。
+    /// 全图合成与增量 patch 必须传同一值，否则同格两路径浮雕分叉。
+    slope_gain: f32,
     /// 近岸浅滩带用的离岸距离场（S2；行优先，长度 = w×h）。`None` =
     /// 旗标关 / 模式不参与——着色路径零开销。由驱动方（`terrain_pixels`
     /// / `patch_terrain_image`）**整场算一次**后共享给各带 renderer
@@ -619,6 +592,7 @@ impl<'a> CellRenderer<'a> {
         soften: bool,
         pack: &'a CellPack,
         shore: Option<&'a [u16]>,
+        meters_per_cell: f32,
     ) -> Self {
         let palette = &pack.palette;
         let treatment = pack.treatment;
@@ -709,6 +683,7 @@ impl<'a> CellRenderer<'a> {
             topographic,
             elevation,
             hypsometric: pack.hypsometric.clamp(0.0, 1.0),
+            slope_gain: crate::shading::slope_gain_of(meters_per_cell),
             shore,
             sea: pack.sea.clone(),
             water_detail_enabled: !matches!(
@@ -745,6 +720,30 @@ impl<'a> CellRenderer<'a> {
         };
         let tinted = band.tint([c.red, c.green, c.blue, 1.0], cell.height);
         Color::srgb(tinted[0], tinted[1], tinted[2])
+    }
+
+    /// 坡度浮雕乘子（ADR-0077 D6）：`crate::shading` 真源的**双光源单尺度**
+    /// 公式——Horn 米制梯度 → 世界法线 → 光照明度乘子。三尺度权重在此路径
+    /// 退化为 detail 全额 1.0（D4 例外：烘焙纹理无 mip 链可衰减）。
+    ///
+    /// VectorFlat / RealTerrain / GoogleMap 三模式共走这一个入口：旧「艺术
+    /// 0.84~1.16 / 专业制图 0.90~1.12 两套钳制」随 `I ∈ [0.4, 1.0]` 界内性
+    /// 免费获得而退役。`LIGHT_*` 自 2026-10-28 起为单位向量（spec D1 修正），
+    /// 直接 `dot(n, LIGHT_*)` 即合法入参。与旧 `relief_mul` 的受光方向逐轴
+    /// 相反是**既定修正**——旧 CPU 路径方向本来就反（见
+    /// `shading::normal_world` 文档），切换后 CPU/GPU 统一到「左上受光」
+    /// 口径。
+    ///
+    /// 纯函数、只读高度场：同一格在任何渲染路径（全图烘焙 / 笔刷 patch）
+    /// 得到同一乘子，不需要额外的缓存或随机种子。
+    fn relief_intensity(&self, cx: u32, gy: u32) -> f32 {
+        let (hx, hy) = crate::shading::horn_gradient(self.data, cx as i64, gy as i64);
+        let n = crate::shading::normal_world(hx, hy, self.slope_gain);
+        let dot = |l: [f32; 3]| n[0] * l[0] + n[1] * l[1] + n[2] * l[2];
+        crate::shading::lighting_intensity(
+            dot(crate::shading::LIGHT_MAIN),
+            dot(crate::shading::LIGHT_AUX),
+        )
     }
 
     /// `kind` 的预采样瓦片块（按需建，整图共享）。
@@ -1259,19 +1258,27 @@ impl<'a> CellRenderer<'a> {
             return;
         };
         // Topographic 早返回（ADR-0051 §5 的 per-cell 着色 + ADR-0055 叠色）：
-        // 群系固定色块为底，陆格再按 8 阶海拔百分位向固定色带混合。
+        // 群系固定色块为底，陆格再按海拔色带**段内连续渐变**向固定色带混合
+        // （切点 = 绝对阶梯 + 窄域兜底，ADR-0056；渐变 = ADR-0077）。
         // res 恒 1（new 里已定），一像素直铺；无边界/揉边/淡化/浮雕——
         // 数据视图要的是逐格可读，任何后处理都是污染。
         if let Some(cuts) = self.topographic.as_ref() {
             // 2026-10-22 三模式内容矩阵（spec §2.5）：CellMap = 群系固定色块
             // ——颜色编码 biome，固定色板不随 CellPack/TreatmentFlags（ADR-0051）。
             // 2026-10-24（ADR-0055）：再叠一层**海拔分层设色**——群系色仍是底，
-            // 海拔按 8 阶百分位向固定色带混合，强度由会话开关控制。
+            // 海拔向固定色带混合，强度由会话开关控制（当日口径为 8 阶离散，
+            // 已被下方 2026-10-28 条目修正）。
             // 水格不叠：海拔色带只对陆面有意义，水面仍由群系水色表达。
             let mut rgba = crate::terrain_view::biome_raw::pick(cell.biome, cell.surface);
             if self.hypsometric > 0.0 && !super::hypsometric::is_water_cell(cell) {
-                let band = super::hypsometric::band_of(cell.height, cuts);
-                rgba = super::hypsometric::tint_rgba(rgba, band, self.hypsometric);
+                // 2026-10-28（CellMap 数据视图对 ADR-0055「8 阶离散」的修正）：
+                // 换 8 锚点**段内连续渐变**——离散口径下低地 0–200 m 一刀同色，
+                // 缓丘与海岸平原不可分；`tint_continuous` 在锚点处退化为
+                // `tint_rgba`，是离散色带的超集（本 crate
+                // `hypsometric::ElevationBand` 阶梯语义不动，wv-render 消费；
+                // 见 hypsometric::segment_of）。
+                rgba =
+                    super::hypsometric::tint_continuous(rgba, cell.height, cuts, self.hypsometric);
             }
             let o = ((out_row * stride + cx) as usize) * 4;
             pixels[o] = (rgba[0] * 255.0) as u8;
@@ -1374,30 +1381,21 @@ impl<'a> CellRenderer<'a> {
                     (c.blue * mul).clamp(0.0, 1.0),
                 );
             }
-            // 坡度浮雕：全局 / 区域档靠明暗读出山脉体积（ADR-0036）。
+            // 坡度浮雕（ADR-0077 D6）：全局 / 区域档靠明暗读出山脉体积。
             // 只在陆格生效——水域已有深度渐变，再叠坡度会脏。
             //
-            // **GoogleMap（专业制图）自 2026-10-26 接入**（ADR-0067 D2）：山符号
-            // 已随 ADR-0066 整体退场（「山 = 符号，不是颜色」的旧口径被推翻），
-            // 若此处不补晕渲，山地会彻底失语——只剩一片近白底色。晕渲读「坡」，
-            // 是专业地图表达起伏的唯一手段（百度 / Google 的地形图也是这么做的）。
+            // 三模式（VectorFlat / RealTerrain / GoogleMap）共走
+            // [`Self::relief_intensity`] 的同一公式、同一 slope_gain：旧
+            // GoogleMap 特判钳制分支（0.90~1.12）删除——界内性由公式免费
+            // 保证，两套钳制常量整体退役。与旧 relief_mul 的受光方向逐轴
+            // 相反是**既定修正**（旧 CPU 路径方向本来就反，见
+            // `shading::normal_world` 文档）——切换后 CPU/GPU 统一。
             if matches!(
                 self.mode,
                 ShadeMode::VectorFlat | ShadeMode::RealTerrain | ShadeMode::GoogleMap
             ) && cell.height >= 0
             {
-                let mul = if self.mode == ShadeMode::GoogleMap {
-                    // 专业制图：更轻的钳制区间（0.90~1.12，ADR-0060 §4 校准值）。
-                    relief_mul_clamped(
-                        self.data,
-                        cx,
-                        gy,
-                        RELIEF_MIN_CARTOGRAPHIC,
-                        RELIEF_MAX_CARTOGRAPHIC,
-                    )
-                } else {
-                    relief_mul(self.data, cx, gy)
-                };
+                let mul = self.relief_intensity(cx, gy);
                 let Color::Srgba(c) = color else { return };
                 color = Color::srgb(
                     (c.red * mul).clamp(0.0, 1.0),
@@ -1449,6 +1447,11 @@ impl<'a> CellRenderer<'a> {
 /// 缓存——纯缓存，不影响输出。因此按行带切成不相交切片、每带独立 renderer
 /// 并行渲染，输出与串行**逐字节一致**（测试 `banded_rendering_matches_serial`）。
 /// 1024² 图整图合成实测 317ms → 多核下接近带宽封顶。
+/// 全图合成的**旧签名**（源兼容；wv-app 经 wv-render re-export 消费）。
+///
+/// 浮雕按过渡缺省格距 [`crate::shading::DEFAULT_METERS_PER_CELL`] 打光；
+/// 有图上下文的调用方应改走 [`terrain_pixels_with_scale`]（wv-app 接线后
+/// 本函数的缺省假设消失，见该常量文档）。
 pub fn terrain_pixels(
     data: &TerrainData,
     mode: ShadeMode,
@@ -1456,13 +1459,38 @@ pub fn terrain_pixels(
     soften: bool,
     pack: &CellPack,
 ) -> (Vec<u8>, u32) {
+    terrain_pixels_with_scale(
+        data,
+        mode,
+        atlas,
+        soften,
+        pack,
+        crate::shading::DEFAULT_METERS_PER_CELL,
+    )
+}
+
+/// [`terrain_pixels`] 的**米制比例透传版**（ADR-0077 D6 的 CPU 接线点）。
+///
+/// 末位 `meters_per_cell` = 该图的米/格换算——唯一换算入口是
+/// [`crate::shading::meters_per_cell_of`]（`GridConfig.cell_size` +
+/// `MapNode.unit_per_km` 进、米/格出，禁第二份硬编码），它决定浮雕的
+/// `slope_gain`（`shading::slope_gain_of`）。米制化后「同物理坡 → 同法线」
+/// 跨图幅成立。
+pub fn terrain_pixels_with_scale(
+    data: &TerrainData,
+    mode: ShadeMode,
+    atlas: Option<&TileAtlas>,
+    soften: bool,
+    pack: &CellPack,
+    meters_per_cell: f32,
+) -> (Vec<u8>, u32) {
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
-    terrain_pixels_banded(data, mode, atlas, soften, pack, threads)
+    terrain_pixels_banded(data, mode, atlas, soften, pack, threads, meters_per_cell)
 }
 
-/// [`write_terrain_pixels`] 的带数参数化版本（测试注入带数用）。
+/// [`terrain_pixels_with_scale`] 的带数参数化版本（测试注入带数用）。
 ///
 /// `bands` 只是调度参数：任意带数下输出必须逐字节一致。
 fn terrain_pixels_banded(
@@ -1472,6 +1500,7 @@ fn terrain_pixels_banded(
     soften: bool,
     pack: &CellPack,
     bands: usize,
+    meters_per_cell: f32,
 ) -> (Vec<u8>, u32) {
     // 近岸浅滩场（S2）整场算一次，共享给全部带 renderer——它与带数无关，
     // 任意切分下逐字节一致（行带并行契约）。
@@ -1480,7 +1509,7 @@ fn terrain_pixels_banded(
     let shore_ref = shore.as_deref();
     // 先建一个 renderer 只为推导 w/h/res（RealTerrain 的 hmin 折叠在它里面
     // 做一次；各带的新 renderer 会重复这次纯比较折叠，代价每带亚毫秒）。
-    let probe = CellRenderer::new(data, mode, atlas, soften, pack, shore_ref);
+    let probe = CellRenderer::new(data, mode, atlas, soften, pack, shore_ref, meters_per_cell);
     let (w, h, res) = (probe.w, probe.h, probe.res);
     let stride = w * res;
     let mut pixels = vec![0u8; (stride * h * res * 4) as usize];
@@ -1501,7 +1530,8 @@ fn terrain_pixels_banded(
         for (bi, band) in pixels.chunks_mut(rows_per_band * row_bytes).enumerate() {
             let y0 = (bi * rows_per_band) as u32;
             s.spawn(move || {
-                let mut r = CellRenderer::new(data, mode, atlas, soften, pack, shore_ref);
+                let mut r =
+                    CellRenderer::new(data, mode, atlas, soften, pack, shore_ref, meters_per_cell);
                 let band_rows = (band.len() / row_bytes) as u32;
                 for ly in 0..band_rows {
                     let gy = y0 + ly;
@@ -1530,6 +1560,11 @@ fn a_tile(atlas: Option<&TileAtlas>, kind: u8) -> Option<[u32; 2]> {
 /// `soften` = 底图淡化（`ViewState.terrain_soften`）；`palette` = 地图主题
 /// （ADR-0014：切主题 = 按新色板整图重建）。
 ///
+/// 浮雕比例：旧签名 = 带 [`crate::shading::DEFAULT_METERS_PER_CELL`] 过渡缺省的
+/// [`image_from_terrain_with_scale`] 委托（wv-app 已接线真实比例，本缺省只剩
+/// examples 等无世界上下文的调用方）；oblique 烘焙是 Topographic 数据
+/// 视图（无浮雕），`compression` 与晕渲无关。
+///
 /// **oblique 烘焙**（[ADR-0041] §3 texture-bake 方案）：仅在 Topographic
 /// mode 下把生成的 RGBA 像素沿 x 方向按行斜切 `(y − h/2) × compression`，
 /// 矩形纹理烘焙成平行四边形——视觉上等同 oblique projection，且不引入 Camera3d。
@@ -1543,7 +1578,32 @@ pub fn image_from_terrain(
     pack: &CellPack,
     compression: f32,
 ) -> Image {
-    let (mut pixels, res) = terrain_pixels(data, mode, atlas, soften, pack);
+    image_from_terrain_with_scale(
+        data,
+        mode,
+        atlas,
+        soften,
+        pack,
+        compression,
+        crate::shading::DEFAULT_METERS_PER_CELL,
+    )
+}
+
+/// [`image_from_terrain`] 的带比例变体（ADR-0077 D2 CPU 接线）：`meters_per_cell`
+/// 交给晕渲法线做米制换算，与 GPU 场路径共用同一条换算入口；其余口径与旧
+/// 函数逐位一致。调用侧用 [`crate::shading::meters_per_cell_of`]（或桥接封装
+/// `bake_meters_per_cell`）从「来源图比例尺 + 格距」算出，禁止第二份换算公式。
+pub fn image_from_terrain_with_scale(
+    data: &TerrainData,
+    mode: ShadeMode,
+    atlas: Option<&TileAtlas>,
+    soften: bool,
+    pack: &CellPack,
+    compression: f32,
+    meters_per_cell: f32,
+) -> Image {
+    let (mut pixels, res) =
+        terrain_pixels_with_scale(data, mode, atlas, soften, pack, meters_per_cell);
     let (w, h) = (data.width.max(1), data.height.max(1));
     if mode == ShadeMode::Topographic && compression > 0.0 {
         oblique_skew_pixels(&mut pixels, w * res, h * res, compression);
@@ -1653,6 +1713,10 @@ pub fn oblique_skew_pixels(pixels: &mut [u8], w: u32, h: u32, compression: f32) 
 
 /// 把 `data` 的 dirty 矩形 patch 进**已有 Image**（原地改 `image.data` 切片）。
 ///
+/// 浮雕按过渡缺省格距 [`crate::shading::DEFAULT_METERS_PER_CELL`] 打光；
+/// 有图上下文的调用方应改走 [`patch_terrain_image_with_scale`]（与全图
+/// 合成传同一 `meters_per_cell`，否则笔刷 patch 区与区外浮雕分叉）。
+///
 /// **优化项 3d**（笔刷增量重传）：原 [`flush_terrain_texture`] 走全图重建，
 /// 笔刷每改一格都重算 512² = 262144 格的 shader + blit_tile，
 /// 每次提交笔触都卡 30–80 ms。本函数只重算 `dirty_cell_rect` 内**几十到几百格**，
@@ -1682,6 +1746,36 @@ pub fn patch_terrain_image(
     soften: bool,
     pack: &CellPack,
 ) {
+    patch_terrain_image_with_scale(
+        image,
+        data,
+        mode,
+        atlas,
+        dirty_cell_rect,
+        res,
+        soften,
+        pack,
+        crate::shading::DEFAULT_METERS_PER_CELL,
+    )
+}
+
+/// [`patch_terrain_image`] 的**米制比例透传版**（ADR-0077 D6 的 CPU 接线点）。
+///
+/// 末位 `meters_per_cell` 语义同 [`terrain_pixels_with_scale`]：唯一换算入口
+/// [`crate::shading::meters_per_cell_of`]。**必须与全图合成传同一值**——
+/// 否则增量 patch 的浮雕与周边整图烘焙不一致（笔刷区拼裂缝的浮雕版）。
+#[allow(clippy::too_many_arguments)] // 同上：正交输入
+pub fn patch_terrain_image_with_scale(
+    image: &mut Image,
+    data: &TerrainData,
+    mode: ShadeMode,
+    atlas: Option<&TileAtlas>,
+    dirty_cell_rect: [u32; 4],
+    res: u32,
+    soften: bool,
+    pack: &CellPack,
+    meters_per_cell: f32,
+) {
     let (w, h) = (data.width.max(1), data.height.max(1));
     let stride = w * res; // 像素 stride
     let [gx0, gy0, gx1, gy1] = dirty_cell_rect;
@@ -1709,7 +1803,15 @@ pub fn patch_terrain_image(
     };
 
     // 与全图合成共用一个渲染器（边界扰动必须一致，否则笔刷区出现拼接裂缝）。
-    let mut renderer = CellRenderer::new(data, mode, atlas, soften, pack, shore.as_deref());
+    let mut renderer = CellRenderer::new(
+        data,
+        mode,
+        atlas,
+        soften,
+        pack,
+        shore.as_deref(),
+        meters_per_cell,
+    );
     // 调用方传入的 res 与渲染器推导的 res 必须一致（同一张纹理）。
     debug_assert_eq!(
         renderer.res, res,
@@ -1977,41 +2079,197 @@ mod tests {
         assert_eq!(on, off, "soften=true 与 false 输出必须逐位一致");
     }
 
+    /// Topographic 色带 = 8 锚点**段内连续渐变**（CellMap 数据视图对
+    /// ADR-0055「8 阶离散」的修正）：块烘焙像素与 `tint_continuous` 直接
+    /// 调用逐通道一致。fixture 陆高 10..140 → 窄域兜底 cuts = [25,50,…
+    /// 175]：50 m 恰在 cuts[1] 段锚（t = 0，退化为离散档色）；60 m 段内
+    /// t = 0.4，是离散色带**给不出**的连续混色——换回 `band_of+tint_rgba`
+    /// 本测试立刻翻红。
     #[test]
-    fn relief_is_flat_on_flat_ground() {
+    fn topographic_lowland_uses_continuous_tint() {
+        use super::super::hypsometric;
+        let data = topographic_fixture();
+        let cuts = hypsometric::cuts_for_cells(&data.cells);
+        let pack = CellPack {
+            hypsometric: 1.0,
+            ..CellPack::fixture()
+        };
+        let (pixels, res) = terrain_pixels(&data, ShadeMode::Topographic, None, true, &pack);
+        assert_eq!(res, 1, "Topographic 每格 1 像素（锐利方格）");
+        // idx6 = (2,1) 高 50 m、idx7 = (3,1) 高 60 m（皆草地陆格，见 fixture）。
+        let to_bytes = |rgba: [f32; 4]| -> [u8; 3] {
+            [
+                (rgba[0] * 255.0) as u8,
+                (rgba[1] * 255.0) as u8,
+                (rgba[2] * 255.0) as u8,
+            ]
+        };
+        for idx in [6usize, 7] {
+            let c = &data.cells[idx];
+            let o = idx * 4;
+            let got = [pixels[o], pixels[o + 1], pixels[o + 2]];
+            let want = to_bytes(hypsometric::tint_continuous(
+                crate::terrain_view::biome_raw::pick(c.biome, c.surface),
+                c.height,
+                &cuts,
+                1.0,
+            ));
+            assert_eq!(
+                got, want,
+                "格 {idx}（{} m）烘焙应与 tint_continuous 直接调用一致",
+                c.height
+            );
+        }
+        // 连续性是真的：60 m（t = 0.4）必须不同于任何一档离散档色。
+        let c = &data.cells[7];
+        let discrete = to_bytes(hypsometric::tint_rgba(
+            crate::terrain_view::biome_raw::pick(c.biome, c.surface),
+            hypsometric::band_of(c.height, &cuts),
+            1.0,
+        ));
+        assert_ne!(
+            discrete,
+            [pixels[7 * 4], pixels[7 * 4 + 1], pixels[7 * 4 + 2]],
+            "60 m 段内混色不应等于离散档色"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // 坡度浮雕（ADR-0077 D6：CPU 烘焙接 shading 真源——双光源单尺度）
+    // -------------------------------------------------------------------
+
+    /// 建一个带米制比例的 renderer（直接驱动浮雕乘子；VectorFlat 无关紧要
+    /// ——`relief_intensity` 只读高度场与 slope_gain）。
+    fn relief_renderer<'a>(
+        data: &'a wv_core::terrain::TerrainData,
+        pack: &'a CellPack,
+        meters_per_cell: f32,
+    ) -> CellRenderer<'a> {
+        CellRenderer::new(
+            data,
+            ShadeMode::VectorFlat,
+            None,
+            false,
+            pack,
+            None,
+            meters_per_cell,
+        )
+    }
+
+    /// 平地光照明度（浮雕乘子的「零点」）：梯度恒零 → 法线 (0,0,1) →
+    /// 与两盏 45° 高度角单位灯的点积各 = sin45° = 1/√2 →
+    /// `I = 0.4 + 0.6/√2 ≈ 0.8243`（spec D1 口径）。
+    ///
+    /// **钳制已退役**：不再钳回 1.0——平地整幅统一乘 0.8243 是公式语义
+    ///（`I ∈ [0.4, 1]` 界内免费获得），与 GPU 侧同源（WGSL 直接 dot 同一
+    /// 单位向量常量）。
+    fn flat_ground_intensity() -> f32 {
+        crate::shading::lighting_intensity(
+            std::f32::consts::FRAC_1_SQRT_2,
+            std::f32::consts::FRAC_1_SQRT_2,
+        )
+    }
+
+    /// 平地任意格浮雕乘子 = 平地光照明度（≈0.8243）：无坡即无明暗**差**，
+    /// 全图统一乘子（绝对变暗由公式环境光项承担，GPU 侧同源）。
+    #[test]
+    fn flat_ground_mul_equals_flat_intensity_everywhere() {
         let data = relief_fixture(|_, _| 100);
-        assert!(
-            (relief_mul(&data, 1, 1) - 1.0).abs() < 1e-6,
-            "平地不得有任何明暗偏移"
-        );
+        let pack = CellPack::fixture();
+        let r = relief_renderer(&data, &pack, crate::shading::DEFAULT_METERS_PER_CELL);
+        let want = flat_ground_intensity();
+        for gy in 0..3u32 {
+            for cx in 0..3u32 {
+                let got = r.relief_intensity(cx, gy);
+                assert!(
+                    (got - want).abs() < 1e-6,
+                    "平地格 ({cx},{gy}) 应得 {want}，实得 {got}"
+                );
+            }
+        }
     }
 
+    /// 受光方向新口径（`shading::normal_world` + spec D1 的 45° 单位灯）：
+    /// **北坡 / 西坡受光（亮于平地）、南坡 / 东坡背光（暗于平地）**。
+    /// 行号向下增大 = 南；台阶在东列（x=2 高）时中心格坡面朝西。
+    /// fixture 用 100 m 步阶（默认格距 100 m → s·梯度 = 1，45° 坡）：
+    /// 300 m 步阶的 71.6° 陡坡在 45° 灯高下会越过「与平地比亮暗」的
+    /// 分界（陡坡的 z 分量损失超过受光面收益，四向都暗于平地），受光/
+    /// 背光的学名语义由本 fixture 钉住。与旧 `relief_mul` 的
+    /// `lit = −(dx+dy)` 逐轴相反是**既定修正**——旧 CPU 路径受光方向
+    /// 本来就反（见 `shading::normal_world` 文档）。
     #[test]
-    fn relief_brightens_left_top_slopes_and_darkens_the_opposite() {
-        // 左列高、右列低 → 坡面朝左上（受光）→ 变亮。
-        let lit = relief_fixture(|x, _| if x == 0 { 300 } else { 0 });
-        assert!(
-            relief_mul(&lit, 1, 1) > 1.0,
-            "朝左上的坡面应亮于 1.0，得 {}",
-            relief_mul(&lit, 1, 1)
-        );
-        // 右列高、左列低 → 坡面朝右下（背光）→ 变暗。
-        let shade = relief_fixture(|x, _| if x == 2 { 300 } else { 0 });
-        assert!(
-            relief_mul(&shade, 1, 1) < 1.0,
-            "朝右下的坡面应暗于 1.0，得 {}",
-            relief_mul(&shade, 1, 1)
-        );
-        // 上排高、下排低且横向平 → 朝上受光，但 y 轴单独也要成立。
-        let north = relief_fixture(|_, y| if y == 0 { 300 } else { 0 });
-        assert!(relief_mul(&north, 1, 1) > 1.0, "朝上的坡面应受光");
+    fn north_and_west_facing_slopes_are_lit_south_and_east_shaded() {
+        let data_west = relief_fixture(|x, _| if x == 2 { 100 } else { 0 });
+        let data_east = relief_fixture(|x, _| if x == 0 { 100 } else { 0 });
+        let data_north = relief_fixture(|_, y| if y == 2 { 100 } else { 0 });
+        let data_south = relief_fixture(|_, y| if y == 0 { 100 } else { 0 });
+        let pack = CellPack::fixture();
+        let mpc = crate::shading::DEFAULT_METERS_PER_CELL;
+        let flat = flat_ground_intensity();
+        // 手算锚点（s = 0.02，台阶梯度 50 m/格 → s·梯度 = 1，45° 坡）：
+        // 45° 坡法线 (±1/√2, ±1/√2, 1/√2)，与灯的点积 ∈ {0.8536, 0.1464}：
+        // 西向坡 I = 0.4+0.48·0.8536+0.12·0.1464 = 0.8273 > 平地 0.8243；
+        // 北向坡 I = 0.4+0.6·0.8536 = 0.9121（两灯同照）；东向坡
+        // I = 0.4+0.48·0.1464+0.12·0.8536 = 0.5727；南向坡 I = 0.4879。
+        let m = relief_renderer(&data_west, &pack, mpc).relief_intensity(1, 1);
+        assert!(m > flat, "西向坡应亮于平地 {flat}，实得 {m}");
+        let m = relief_renderer(&data_north, &pack, mpc).relief_intensity(1, 1);
+        assert!(m > flat, "北向坡应亮于平地 {flat}，实得 {m}");
+        // 东/南向坡：受光点积为负/弱 → 明显暗于平地。
+        let m = relief_renderer(&data_east, &pack, mpc).relief_intensity(1, 1);
+        assert!(m < flat, "东向坡应暗于平地 {flat}，实得 {m}");
+        let m = relief_renderer(&data_south, &pack, mpc).relief_intensity(1, 1);
+        assert!(m < flat, "南向坡应暗于平地 {flat}，实得 {m}");
     }
 
+    /// 极端断崖（±9000 m 邻格高差）：钳制已退役，但 `lighting_intensity`
+    /// 的界内性契约保证乘子**有限**且落在 `[0.4, 1.0]`
+    ///（s·hx = −180 → 法线贴地 → 只剩辅光项 0.4 + 0.12·0.504 ≈ 0.460）。
     #[test]
-    fn relief_is_clamped_for_extreme_cliffs() {
+    fn extreme_cliff_mul_stays_finite() {
         let cliff = relief_fixture(|x, _| if x == 0 { 9000 } else { -9000 });
-        let m = relief_mul(&cliff, 1, 1);
-        assert!((RELIEF_MIN..=RELIEF_MAX).contains(&m), "必须钳制，得 {m}");
+        let pack = CellPack::fixture();
+        let r = relief_renderer(&cliff, &pack, crate::shading::DEFAULT_METERS_PER_CELL);
+        let m = r.relief_intensity(1, 1);
+        assert!(m.is_finite(), "断崖乘子必须有限，得 {m}");
+        assert!(
+            (0.4..=1.0).contains(&m),
+            "断崖乘子必须落在公式界内 [0.4, 1.0]，得 {m}"
+        );
+    }
+
+    /// slope_gain 透传链（ADR-0077 D6 CPU 接线点）：同一坡面在两种米制比例
+    /// 下（1 km = 8 wu → 500 m/格；无比例尺回落 → 4 m/格）浮雕乘子**不同**
+    /// 且都有限——米制换算错一格距，浮雕就整体错。pub 入口
+    ///（`terrain_pixels_with_scale`）到像素全链钉住。
+    #[test]
+    fn relief_applies_single_scale_on_cpu_path() {
+        let data = relief_fixture(|x, _| if x == 2 { 300 } else { 0 });
+        let cell_size_wu = 4.0f32;
+        let scaled = crate::shading::meters_per_cell_of(cell_size_wu, Some(8.0)); // 500 m/格
+        let fallback = crate::shading::meters_per_cell_of(cell_size_wu, None); // 4 m/格
+        let pack = CellPack::fixture();
+        let a = relief_renderer(&data, &pack, scaled).relief_intensity(1, 1);
+        let b = relief_renderer(&data, &pack, fallback).relief_intensity(1, 1);
+        assert!(
+            a.is_finite() && (0.4..=1.0).contains(&a),
+            "500 m/格 乘子应有限且界内，得 {a}"
+        );
+        assert!(
+            b.is_finite() && (0.4..=1.0).contains(&b),
+            "4 m/格 乘子应有限且界内，得 {b}"
+        );
+        assert_ne!(a, b, "两种格距的坡面乘子必须不同（透传生效）: {a} vs {b}");
+        // pub 入口全链：两种格距烘焙出**不同**像素。
+        let (px_scaled, _) =
+            terrain_pixels_with_scale(&data, ShadeMode::VectorFlat, None, false, &pack, scaled);
+        let (px_fallback, _) =
+            terrain_pixels_with_scale(&data, ShadeMode::VectorFlat, None, false, &pack, fallback);
+        assert_ne!(
+            px_scaled, px_fallback,
+            "像素级透传链应生效：格距不同 → 浮雕不同"
+        );
     }
 
     /// 像素颜色是否接近目标 sRGB 色（±2/255，吸收 u8 舍入）。
@@ -2172,8 +2430,11 @@ mod tests {
             cells,
         };
         let pack = &CellPack::fixture();
-        let (p1, res1) = terrain_pixels_banded(&data, ShadeMode::Coastline, None, false, pack, 1);
-        let (p4, res4) = terrain_pixels_banded(&data, ShadeMode::Coastline, None, false, pack, 4);
+        let mpc = crate::shading::DEFAULT_METERS_PER_CELL;
+        let (p1, res1) =
+            terrain_pixels_banded(&data, ShadeMode::Coastline, None, false, pack, 1, mpc);
+        let (p4, res4) =
+            terrain_pixels_banded(&data, ShadeMode::Coastline, None, false, pack, 4, mpc);
         assert_eq!(res1, res4, "带数不得影响 res 推导");
         assert_eq!(p1.len(), p4.len(), "输出长度应一致");
         assert_eq!(p1, p4, "带数不同 → 像素逐字节一致");
@@ -2467,15 +2728,10 @@ mod tests {
         );
     }
 
-    /// 晕渲（ADR-0067 D2）：专业制图的浮雕区间比艺术主题**更轻**。
-    #[test]
-    fn cartographic_relief_is_clamped_lighter_than_artistic_one() {
-        // 常量比较用 `const {}` 块——clippy 会把裸 `assert!` 当「恒真断言」。
-        const {
-            assert!(RELIEF_MIN_CARTOGRAPHIC > RELIEF_MIN);
-            assert!(RELIEF_MAX_CARTOGRAPHIC < RELIEF_MAX);
-        }
-    }
+    // 晕渲（ADR-0067 D2 的「专业制图更轻钳制」口径）已随 ADR-0077 D6 退役：
+    // 三模式共走 `shading::lighting_intensity` 单公式，界内性 [0.4, 1] 由
+    // 公式免费保证——旧 RELIEF_*_CARTOGRAPHIC / RELIEF_MIN/MAX 常量与
+    // `cartographic_relief_is_clamped_lighter_than_artistic_one` 一并删除。
 
     // ---------------------------------------------------------------------------
     // 底图海洋渲染（2026-10-16 用户反馈「选了海洋但颜色没变蓝」）
