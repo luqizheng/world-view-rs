@@ -38,6 +38,7 @@ pub fn layers_tab(
     inspector: &mut super::InspectorState,
     pen_dialog: &mut crate::ui::partition_pen::PartitionPenDialog,
     playback_day: i64,
+    loc: crate::i18n::Locale,
 ) {
     let layers = wv_core::resolved_faction_layers(&projection.world);
     let pen_gated = crate::ui::partition_pen::pen_available_for(
@@ -120,7 +121,13 @@ pub fn layers_tab(
                         egui::Button::image(icon_image(ICON_PENCIL, egui::Color32::WHITE, 12.0))
                             .fill(egui::Color32::TRANSPARENT),
                     );
-                    if pen.on_hover_text("画这张势力图").clicked() {
+                    if pen
+                        .on_hover_text(crate::i18n::t(
+                            loc,
+                            crate::i18n::I18nKey::PartitionPenButtonHover,
+                        ))
+                        .clicked()
+                    {
                         pen_dialog.open(l.id.clone(), playback_day);
                     }
                 }

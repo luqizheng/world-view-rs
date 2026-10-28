@@ -306,6 +306,7 @@ pub fn panel_inspector(
                         &mut inspector,
                         &mut pen_dialog,
                         playback.current_day,
+                        current_loc.0,
                     );
                 }
                 InspectorTab::Situations => {

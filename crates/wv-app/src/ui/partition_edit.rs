@@ -5,13 +5,14 @@
 //! ```text
 //! 编辑态开（pen 弹框「修改」/「新增」确认）──▶ HUD 常驻
 //!   └─ Cut 工具：press ──▶ 采样折线 ──▶ release：两端都在边上？
-//!        ├─ 否 → 丢弃（不出高亮、不提交）
-//!        └─ 是 → 两半高亮 ──▶ 点选一半 ──▶ 归属小弹窗 ──▶ 提交 Cut
+//!        ├─ 否 → 丢弃（notice 报错，不提交）
+//!        └─ 是 → 松手即提交（新块自动归占位势力「无名N」；归属错了走易主）
+//!   └─ Assign 工具：点脸 ──▶ 归属小弹窗 ──▶ 提交 AssignPartition
 //! ```
 //!
 //! ## 铁律
 //!
-//! - **不改世界**：手势只采样坐标，提交一律 `CutPartitionFaceCommand`
+//! - **不改世界**：手势只采样坐标，提交一律 `EditCommand`
 //!   （AGENTS §3.3）；
 //! - **编辑态必显示当前时间**（D5 地图属性）：HUD 常驻时间选择器，写
 //!   `PlaybackState.current_day`（单时钟）；
@@ -92,21 +93,6 @@ pub struct CutStrokeSession {
     pub active: bool,
     /// 采样点（map-local 扁平）。
     pub pts: Vec<f32>,
-    /// 待归属确认：笔画快照 + 两半候选脸。
-    pub pending_pick: Option<PendingCut>,
-    /// 帧闸（终审 C2）：pending_pick 置起的同帧 `just_released` 仍为真，
-    /// 该旗标等松手信号消失后才接受点选。
-    pub pick_wait_release: bool,
-}
-
-/// 提交前的点选确认态。
-#[derive(Debug, Clone)]
-pub struct PendingCut {
-    /// 笔画快照（提交用）。
-    pub stroke: Vec<f32>,
-    /// 笔画中点两侧候选脸（点选其一）。
-    pub side_a: u32,
-    pub side_b: u32,
 }
 
 impl CutStrokeSession {
@@ -114,8 +100,24 @@ impl CutStrokeSession {
     pub fn reset(&mut self) {
         self.active = false;
         self.pts.clear();
-        self.pending_pick = None;
     }
+}
+
+/// 笔画落在哪张脸：沿采样点逐点找**第一张命中脸**。
+///
+/// 终审遗留修（2026-10-28）：此前只取笔画中点、落脸外（贴边 / 画在湖洞
+/// 上）盲兜底脸 0——切错对象且无提示。现逐点探测；全程不入任何脸 →
+/// `None`（调用方 notice 报错并丢弃，不提交）。
+pub fn stroke_face(
+    stroke: &[f32],
+    span: &wv_core::model::faction_partition::PartitionSpan,
+) -> Option<u32> {
+    for c in stroke.chunks_exact(2) {
+        if let Some(f) = pick_face_at([c[0], c[1]], span) {
+            return Some(f);
+        }
+    }
+    None
 }
 
 /// 采样一点进折线（与上一点距离 ≥ [`STROKE_MIN_SEG`] 才记）。
@@ -194,9 +196,7 @@ pub fn partition_edit_hud(
                         }
                     });
                     // 阶段提示行：随切刀状态实时变化（可见反馈闭环）。
-                    let stage = if session.pending_pick.is_some() {
-                        "✔ 已切开"
-                    } else if session.active {
+                    let stage = if session.active {
                         "✎ 采集中 —— 松手完成这一刀"
                     } else if edit_state.tool == PartitionTool::Cut {
                         "从地块一边拖到另一边（红圈 = 可切边界）"
@@ -215,10 +215,11 @@ pub fn partition_edit_hud(
         });
 }
 
-/// 切刀手势系统：press 起笔 → 拖动采样 → release 校验两端 → 点选归属 → 提交。
+/// 切刀手势系统：press 起笔 → 拖动采样 → release **松手即提交**（新块自动
+/// 归占位势力「无名N」，不打断；归属错了走易主）。
 ///
-/// **校验失败（端点不入边）静默丢弃**——不出高亮、不弹窗（V1：作者重画
-/// 就行；命令侧 Err 是兜底不是 UX）。
+/// 失败可见（V1-UX）：笔画不入任何脸 / 命令侧 Err（端点离边太远等）都出
+/// notice，不静默——静默丢弃会让作者以为工具坏了。
 #[allow(clippy::too_many_arguments)]
 pub fn partition_cut_gesture(
     mut gizmos: bevy::prelude::Gizmos,
@@ -247,7 +248,7 @@ pub fn partition_cut_gesture(
     };
     // Esc / 右键 = 丢弃整笔。
     if (keys.just_pressed(KeyCode::Escape) || buttons.just_pressed(MouseButton::Right))
-        && (session.active || session.pending_pick.is_some())
+        && session.active
     {
         session.reset();
         return;
@@ -258,12 +259,6 @@ pub fn partition_cut_gesture(
     let p = cursor_to_partition(cursor, &grid);
 
     if buttons.just_pressed(MouseButton::Left) && edit_state.tool == PartitionTool::Cut {
-        if session.pending_pick.is_some() {
-            // 待点选期间禁起新笔——否则新刀静默覆盖待选状态（实机教训：
-            // 作者不知道松手后要先点选，连画 N 刀全被覆盖）。
-            pick_notice("先点选归属侧（点一块地），或按 Esc 取消");
-            return;
-        }
         session.active = true;
         session.pts.clear();
         stroke_push(&mut session, [p.x, p.y]);
@@ -276,7 +271,8 @@ pub fn partition_cut_gesture(
             session.pts.clear();
             return;
         }
-        // 找当前 span、定中点两侧候选脸（点选 UI 需要）。
+        // 找当前 span、沿笔画逐点定被切脸（终审遗留修：中点落脸外曾盲兜
+        // 底脸 0——切错对象；全程不入脸 → notice 报错丢弃）。
         let map_id = wv_core::Id::new_unchecked(view.current_map.clone());
         let Some(span) =
             wv_core::partition_span_at(&projection.world, &map_id, &layer_id, playback.current_day)
@@ -284,9 +280,11 @@ pub fn partition_cut_gesture(
             session.pts.clear();
             return;
         };
-        let mid_n = session.pts.len() / 4 * 2;
-        let mid = [session.pts[mid_n], session.pts[mid_n + 1]];
-        let face_a = pick_face_at(mid, span).unwrap_or(0);
+        let Some(face_a) = stroke_face(&session.pts, span) else {
+            session.pts.clear();
+            pick_notice("笔画没落在任何地块上——从地块一边画到另一边");
+            return;
+        };
         let pending_stroke = session.pts.clone();
         // 松手**立即提交**（用户裁定 2026-10-28：一刀下去红线先出现，归属
         // 自动给占位势力「无名N」，不打断——归属错了用易主改）。
@@ -379,50 +377,44 @@ pub fn partition_cut_gesture(
     }
 }
 
-/// 切后归属小窗状态（D7：点选半 → 弹窗选既有势力 / 新建 / 无主）。
+/// 易主小窗状态（Assign 工具：点脸 → 弹窗选既有势力 / 新建 / 无主）。
+///
+/// 终审遗留修（2026-10-28）：此前这套弹窗挂在已被「松手即提交」取代的
+/// 切后点选流上，`open` 无人置起——弹窗死、易主手势读死字段 `owner` 恒空
+/// → 易主实际只能设无主。现改由 Assign 手势开窗、提交
+/// [`wv_edit::AssignPartitionFaceCommand`]（生效日 = 当前时间轴日）。
 #[derive(Resource, Default)]
-pub struct CutPickDialog {
-    /// 归属弹窗开着（点选侧后置 true；确认/取消后回 false）。
+pub struct PartitionAssignDialog {
+    /// 弹窗开着（Assign 手势点脸后置 true；确认/取消后回 false）。
     pub open: bool,
-    /// 点选中的脸 id。
-    pub pending_face: Option<u32>,
-    /// 点选时的分区坐标（命令 `assign_at` 用——决定哪半拿新归属，
-    /// 必须落在点选的那半里）。
-    pub pick_pos: [f32; 2],
+    /// 被易主的脸 id。
+    pub face: u32,
     /// 新建势力的名字输入（空 = 走既有列表 / 无主）。
     pub owner: String,
 }
 
-/// 归属小窗 + 提交（D7：点选半 → 弹窗选既有势力 / 新建 / 无主）。
+/// 易主小窗 + 提交（T13/D8：整块换归属，几何零改动）。
 ///
-/// 悬停 UI 时手势侧已让位（PointerOverUi 门）；取消 = 丢弃整笔重画。
+/// 悬停 UI 时手势侧已让位（PointerOverUi 门）；取消 = 只关窗（脸不动）。
 #[allow(clippy::too_many_arguments)]
-pub fn partition_pick_dialog(
+pub fn partition_assign_dialog(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,
     current_loc: Res<CurrentLocale>,
-    mut pick: ResMut<CutPickDialog>,
-    mut session: ResMut<CutStrokeSession>,
+    mut assign: ResMut<PartitionAssignDialog>,
     edit_state: Res<PartitionEditState>,
     view: Res<ViewState>,
+    playback: Res<PlaybackState>,
     mut projection: ResMut<WorldProjection>,
     mut edit: ResMut<EditHistory>,
     mut notice: ResMut<crate::ui_shell::ShellNotice>,
     time: Res<bevy::prelude::Time>,
 ) {
-    if !pick.open {
+    if !assign.open {
         return;
     }
-    let Some((layer_id, span_from)) = edit_state.active.clone() else {
-        pick.open = false;
-        return;
-    };
-    let Some(pending) = session.pending_pick.clone() else {
-        pick.open = false;
-        return;
-    };
-    let Some(face) = pick.pending_face else {
-        pick.open = false;
+    let Some((layer_id, _)) = edit_state.active.clone() else {
+        assign.open = false;
         return;
     };
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -437,21 +429,15 @@ pub fn partition_pick_dialog(
         Unclaimed,
         New(String),
     }
-    // 新归属给哪半：青 = 弧 A，橙 = 弧 B（与地图上的描边同色）。
-    let mut side_a = true;
     let mut commit: Option<PickChoice> = None;
     egui::Window::new(t(loc, crate::i18n::I18nKey::PartitionPickTitle))
-        .id(egui::Id::new("wv_partition_pick"))
+        .id(egui::Id::new("wv_partition_assign"))
         .order(bevy_egui::egui::Order::Foreground)
         .resizable(false)
         .collapsible(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
             ui.label(t(loc, crate::i18n::I18nKey::PartitionPickHint));
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut side_a, true, "青侧");
-                ui.selectable_value(&mut side_a, false, "橙侧");
-            });
             ui.separator();
             // 既有势力列表。
             for f in &projection.world.factions {
@@ -468,12 +454,13 @@ pub fn partition_pick_dialog(
                 commit = Some(PickChoice::Unclaimed);
             }
             ui.separator();
-            // 新建：名字输入 + 确认（id 即名字，可读 ID 约束由 Id::new 校验）。
+            // 新建：名字输入 + 确认（id = faction_<Unix 毫秒>，可读 ID 由
+            // Id::new 校验；AddFaction 与 Assign 同事务 = 一次撤销）。
             ui.horizontal(|ui| {
-                egui::TextEdit::singleline(&mut pick.owner)
+                egui::TextEdit::singleline(&mut assign.owner)
                     .hint_text(t(loc, crate::i18n::I18nKey::PartitionPickNewHint))
                     .show(ui);
-                let ok = !pick.owner.trim().is_empty();
+                let ok = !assign.owner.trim().is_empty();
                 if ui
                     .add_enabled(
                         ok,
@@ -481,17 +468,15 @@ pub fn partition_pick_dialog(
                     )
                     .clicked()
                 {
-                    commit = Some(PickChoice::New(pick.owner.trim().to_string()));
+                    commit = Some(PickChoice::New(assign.owner.trim().to_string()));
                 }
             });
-            // 取消 = 丢弃整笔（重新画）。
+            // 取消 = 只关窗（易主是纯属性改，无笔画可丢）。
             if ui
                 .button(t(loc, crate::i18n::I18nKey::CommonCancel))
                 .clicked()
             {
-                pick.open = false;
-                pick.pending_face = None;
-                session.reset();
+                assign.open = false;
             }
         });
 
@@ -503,9 +488,6 @@ pub fn partition_pick_dialog(
             PickChoice::New(name) => {
                 // 新建势力**真建实体**（只挂 Id 不建实体 = 悬空引用，渲染
                 // 灰上灰，作者看不到任何变化——实机教训 2026-10-28）。
-                // id 用 `faction_<Unix 毫秒>`（faction_panel_actions 同款）：
-                // 唯一且过 Id 字符集校验；显示名才是作者输的名字。
-                // AddFaction 与 Cut 同事务 = 一次撤销。
                 let ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis())
@@ -523,37 +505,31 @@ pub fn partition_pick_dialog(
                 Some(id)
             }
         };
-        let cmd = wv_edit::CutPartitionFaceCommand::new(
-            wv_core::Id::new_unchecked(view.current_map.clone()),
-            layer_id,
-            span_from,
-            face,
-            pending.stroke,
-            side_a,
+        let cmd = wv_edit::AssignPartitionFaceCommand {
+            map: wv_core::Id::new_unchecked(view.current_map.clone()),
+            layer: layer_id,
+            from: playback.current_day,
+            face: assign.face,
             owner,
-            // 吸附容差按当前缩放折算成 wu（4 屏幕像素）。
-            4.0 * view.scale,
-        );
+            before: std::sync::Mutex::new(None),
+        };
         tx.push(Box::new(cmd));
         match edit.history.commit(&mut projection.world, tx) {
             Ok(dirty) => {
                 edit.record_dirty(dirty);
                 projection.dirty = true;
-                notice.info("切分成功", (time.elapsed_secs() * 60.0) as u64);
+                notice.info("已易主", (time.elapsed_secs() * 60.0) as u64);
             }
             Err(e) => {
-                // V1-UX：失败必须可见——静默丢弃让作者以为工具坏了。
                 notice.error(
-                    format!("切分失败：{e}（笔画两端须落在地块边界线上）"),
+                    format!("易主失败：{e}"),
                     (time.elapsed_secs() * 60.0) as u64,
                 );
-                bevy::log::warn!("切分提交失败: {e}");
+                bevy::log::warn!("易主提交失败: {e}");
             }
         }
-        pick.open = false;
-        pick.pending_face = None;
-        pick.owner.clear();
-        session.reset();
+        assign.open = false;
+        assign.owner.clear();
     }
 }
 
@@ -650,8 +626,10 @@ pub struct DragSession {
 /// 拖动命中容差（分区坐标 px；HUD 缩放下约屏幕 8px）。
 pub const DRAG_GRAB_PX: f32 = 8.0;
 
-/// 整块易主手势（T13/D8）：Assign 工具下点脸 → 立即 fork 提交
-/// （生效日 = 当前时间轴日；归属 = CutPickDialog 的输入）。
+/// 整块易主手势（T13/D8）：Assign 工具下点脸 → 开归属小窗
+/// （`PartitionAssignDialog`）——窗内选既有 / 新建 / 无主后提交 fork。
+///
+/// 生效日 = 当前时间轴日（弹窗确认时的 `playback.current_day`）。
 #[allow(clippy::too_many_arguments)]
 pub fn partition_assign_gesture(
     buttons: Res<ButtonInput<MouseButton>>,
@@ -659,16 +637,18 @@ pub fn partition_assign_gesture(
     grid: Res<GridConfig>,
     playback: Res<PlaybackState>,
     edit_state: Res<PartitionEditState>,
-    pick: Res<CutPickDialog>,
-    mut session: ResMut<CutStrokeSession>,
-    mut projection: ResMut<WorldProjection>,
-    mut edit: ResMut<EditHistory>,
+    mut assign: ResMut<PartitionAssignDialog>,
+    projection: Res<WorldProjection>,
     pointer: Res<wv_render::camera::PointerOverUi>,
 ) {
     let Some((layer_id, _)) = edit_state.active.clone() else {
         return;
     };
-    if edit_state.tool != PartitionTool::Assign || playback.playing || pointer.wants_pointer {
+    if edit_state.tool != PartitionTool::Assign
+        || playback.playing
+        || pointer.wants_pointer
+        || assign.open
+    {
         return;
     }
     if !buttons.just_released(MouseButton::Left) {
@@ -687,29 +667,8 @@ pub fn partition_assign_gesture(
     let Some(face) = pick_face_at([p.x, p.y], span) else {
         return;
     };
-    let owner = if pick.owner.trim().is_empty() {
-        None
-    } else {
-        Some(wv_core::Id::new_unchecked(pick.owner.trim()))
-    };
-    let cmd = wv_edit::AssignPartitionFaceCommand {
-        map: map_id,
-        layer: layer_id,
-        from: playback.current_day,
-        face,
-        owner,
-        before: std::sync::Mutex::new(None),
-    };
-    let mut tx = wv_edit::Transaction::new();
-    tx.push(Box::new(cmd));
-    match edit.history.commit(&mut projection.world, tx) {
-        Ok(dirty) => {
-            edit.record_dirty(dirty);
-            projection.dirty = true;
-        }
-        Err(e) => bevy::log::warn!("易主提交失败: {e}"),
-    }
-    session.reset();
+    assign.open = true;
+    assign.face = face;
 }
 
 #[cfg(test)]
@@ -717,24 +676,6 @@ mod drag_assign_tests {
     //! T13 手势纯函数。
 
     use super::*;
-
-    #[test]
-    fn pending_pick_waits_for_release_frame_gate() {
-        // 终审 C2/I8：帧闸语义——置起 pick_wait_release 后，纯状态机
-        // （无输入时）不进入点选接受态。
-        let mut s = CutStrokeSession {
-            pending_pick: Some(PendingCut {
-                stroke: vec![0.0, 0.0, 50.0, 100.0],
-                side_a: 0,
-                side_b: 1,
-            }),
-            pick_wait_release: true,
-            ..CutStrokeSession::default()
-        };
-        assert!(s.pick_wait_release, "闸落下：本帧不接受点选");
-        s.pick_wait_release = false;
-        assert!(!s.pick_wait_release, "闸抬起：下一按才点选");
-    }
 
     #[test]
     fn assign_day_follows_global_timeline() {
@@ -811,6 +752,20 @@ mod tests {
         assert_eq!(pick_face_at([25.0, 50.0], &span), Some(0), "左半");
         assert_eq!(pick_face_at([75.0, 50.0], &span), Some(1), "右半");
         assert_eq!(pick_face_at([150.0, 50.0], &span), None, "脸外");
+    }
+
+    #[test]
+    fn stroke_face_finds_first_hit_and_none_outside() {
+        // 终审遗留修守点：沿笔画逐点找脸——首点命中即返回；全程不入脸
+        // （贴边 / 画在脸外）返回 None（此前取中点 + 盲兜底脸 0，切错对象）。
+        let span = demo_span();
+        // 首点在左半（25,50）→ 左半，即便后面点飘出脸外。
+        assert_eq!(
+            stroke_face(&[25.0, 50.0, 999.0, 999.0], &span),
+            Some(0),
+            "首点命中优先"
+        );
+        assert_eq!(stroke_face(&[150.0, 50.0, 180.0, 60.0], &span), None);
     }
 
     #[test]

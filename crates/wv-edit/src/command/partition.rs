@@ -469,6 +469,42 @@ impl EditCommand for CutPartitionFaceCommand {
             };
         let v_start = cut_vertex(&mut new_vertices, i0, t0)?;
         let v_end = cut_vertex(&mut new_vertices, i1, t1)?;
+        // 折线中段入刀（终审遗留修，2026-10-28）：此前只取两端点、切痕 =
+        // 直线弦，作者画的折线中段纯装饰。现把笔画**内部点**逐点建为共享
+        // 顶点，两弧各引用一次（方向相反）——切痕即笔迹，拖刀口中段任一
+        // 点两侧零和联动照旧（共享顶点 = 零和的构造基础，ADR-0079 D1）。
+        // 与相邻保留点 / 刀口近于 ε 的点跳过，防零长边坏 earcut。
+        let find_xy = |id: u32| -> (f32, f32) {
+            span.vertices
+                .iter()
+                .chain(new_vertices.iter())
+                .find(|v| v.id == id)
+                .map(|v| (v.xy[0], v.xy[1]))
+                .expect("刀口顶点刚建/刚定位")
+        };
+        let near = |a: (f32, f32), b: (f32, f32)| -> bool {
+            (a.0 - b.0).powi(2) + (a.1 - b.1).powi(2) < 1e-6
+        };
+        let stroke_pts: Vec<(f32, f32)> =
+            self.stroke.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+        let mut interior: Vec<u32> = Vec::new();
+        if stroke_pts.len() > 2 {
+            let (end_xy, mut last_xy) = (find_xy(v_end), find_xy(v_start));
+            for &(x, y) in &stroke_pts[1..stroke_pts.len() - 1] {
+                let p = (x, y);
+                if near(p, last_xy) || near(p, end_xy) {
+                    continue;
+                }
+                let vid = next_vid;
+                next_vid += 1;
+                new_vertices.push(PartitionVertex {
+                    id: vid,
+                    xy: [x, y],
+                });
+                interior.push(vid);
+                last_xy = p;
+            }
+        }
         // 两刀口把环切成两条弧。弧 A：从刀口 1 沿环走到刀口 2。
         let mut arc_a: Vec<u32> = vec![v_start];
         let mut idx = (i0 + 1) % ring_ids.len();
@@ -477,6 +513,8 @@ impl EditCommand for CutPartitionFaceCommand {
             idx = (idx + 1) % ring_ids.len();
         }
         arc_a.push(v_end);
+        // 弧 A 的闭合沿笔迹**反向**走（v_end → 内点倒序 → v_start）。
+        arc_a.extend(interior.iter().rev());
         // 弧 B：从刀口 2 沿环走回刀口 1。
         let mut arc_b: Vec<u32> = vec![v_end];
         let mut idx = (i1 + 1) % ring_ids.len();
@@ -485,6 +523,8 @@ impl EditCommand for CutPartitionFaceCommand {
             idx = (idx + 1) % ring_ids.len();
         }
         arc_b.push(v_start);
+        // 弧 B 的闭合沿笔迹**正向**走（v_start → 内点顺序 → v_end）。
+        arc_b.extend(interior.iter());
         if arc_a.len() < 3 || arc_b.len() < 3 {
             return Err(EditError::Precondition("切分退化（某半不足 3 点）".into()));
         }
@@ -1102,6 +1142,62 @@ mod cut_tests {
         );
         let _ = (yb, 0.0);
         span.validate_topology().expect("切后拓扑自检");
+    }
+
+    #[test]
+    fn polyline_cut_interior_points_become_shared_boundary() {
+        // 终审遗留修：折线中段入刀——带拐点的笔画切出的边界必须**沿笔迹**
+        // 走（此前只连两端直线弦，中段是装饰）。内部点建共享顶点、两弧各
+        // 引用一次（拖它两侧零和联动）。
+        let mut world = world_with_square();
+        // 竖切 x=50 带右拐：中段点 (70,50) 应成为边界顶点。
+        let cmd = CutPartitionFaceCommand::new(
+            test_map(),
+            Id::new_unchecked(LAYER),
+            0,
+            0,
+            vec![50.0, -3.0, 70.0, 50.0, 50.0, 103.0],
+            true,
+            Some(Id::new_unchecked("faction_b")),
+            4.0,
+        );
+        cmd.apply(&mut world).expect("apply");
+        let span = &world.partitions[0].spans[0];
+        assert_eq!(span.faces.len(), 2, "一分为二");
+        // 拐点 (70,50) 成为新顶点。
+        let kink = span
+            .vertices
+            .iter()
+            .find(|v| (v.xy[0] - 70.0).abs() < 1e-3 && (v.xy[1] - 50.0).abs() < 1e-3)
+            .expect("折线中段 (70,50) 应入顶点表");
+        // 两弧都引用它（共享 → 拖动零和）。
+        let in_a = span.faces[0].ring.contains(&kink.id);
+        let in_b = span.faces[1].ring.contains(&kink.id);
+        assert!(
+            in_a && in_b,
+            "折线内部点须被两环共享（零和构造保证）: {:?} vs {:?}",
+            span.faces[0].ring,
+            span.faces[1].ring
+        );
+        // 几何判别：拐点把 y=50 处的边界推到 x=70——(65,50) 须落**弧 B**
+        // （带拐点那半的外侧）；若仍是直线弦 x=50，该点会在弧 A 里。
+        let resolve_all = |ids: &[u32]| -> Vec<(f32, f32)> {
+            ids.iter()
+                .map(|id| {
+                    span.vertices
+                        .iter()
+                        .find(|v| v.id == *id)
+                        .map(|v| (v.xy[0], v.xy[1]))
+                        .expect("环引用存在")
+                })
+                .collect()
+        };
+        let arc_a_xy = resolve_all(&span.faces[0].ring);
+        assert!(
+            !point_in_ring_coords([65.0, 50.0], &arc_a_xy),
+            "拐点切痕下 (65,50) 不在弧 A（直线弦下会在）——边界须沿笔迹拐弯"
+        );
+        span.validate_topology().expect("折线切后拓扑自检");
     }
 
     #[test]

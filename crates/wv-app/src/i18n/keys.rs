@@ -381,6 +381,8 @@ pub enum I18nKey {
     PartitionPenOwnerHint,
     /// 分区 pen 弹框：修改提示
     PartitionPenModifyHint,
+    /// 势力层行 pen 按钮悬停提示（动刀入口）
+    PartitionPenButtonHover,
     /// 分区编辑 HUD 标题（ADR-0079 T12）
     PartitionEditHudTitle,
     /// 分区子工具：切刀（终审 C3）
@@ -485,34 +487,6 @@ pub enum I18nKey {
     FeaturePlaceNameLabel,
     /// 命名对话框的「创建」按钮
     FeaturePlaceCreate,
-
-    // ── 势力划分（ADR-0028 / 势力交互 M1） ─────────────────────────
-    /// 选区意图菜单「划分势力」按钮
-    IntentMenuDivideFaction,
-    /// 「划分势力」对话框标题
-    FactionDivisionDialogTitle,
-    /// 对话框「名称」标签
-    DivisionNameLabel,
-    /// 对话框「宿主」标签
-    DivisionHostLabel,
-    /// 无宿主（空势力陆地）
-    DivisionHostNone,
-    /// 对话框「边界」标签
-    DivisionModeLabel,
-    /// 边界模式：贴地（沿河流/山脊/湖岸）
-    DivisionModeSnap,
-    /// 边界模式：越地（无视地貌）
-    DivisionModeStraight,
-    /// 对话框「创建」按钮
-    DivisionCreate,
-    /// 成功回执（有宿主）：已从 {host} 划分出「{name}」
-    DivisionNoticeCreatedFromHost,
-    /// 成功回执（空势力）：已创建势力「{name}」
-    DivisionNoticeCreated,
-    /// 贴地退化提示：窗口内没找到地物，边界按直线生成
-    DivisionNoticeSnapDegraded,
-    /// 重叠提示（空势力路径）：该范围与既有势力重叠
-    DivisionNoticeOverlap,
 
     // ── 地图层级（state::map_level_label） ──────────────────────────
     /// 「世界」MapLevel
@@ -669,40 +643,6 @@ pub enum I18nKey {
     RegionPanelMarkerEmpty,
     /// 「重生成边界」按钮（标记行）
     RegionPanelMarkerRegenBtn,
-
-    // ── 势力面板 ─────────────────────────────────────────────────────
-    /// 「+ 新建势力」按钮
-    FactionPanelAddBtn,
-    /// 「+ 新建疆界」按钮
-    FactionPanelAddBoundaryBtn,
-    /// 默认新建势力名
-    FactionPanelDefaultName,
-    /// 尚无势力空态标题
-    FactionPanelEmptyTitle,
-    /// 尚无势力空态提示
-    FactionPanelEmptyHint,
-    /// 尚无势力空态动作
-    FactionPanelEmptyAction,
-    /// 「当前地图：」前缀
-    FactionPanelCurrentMapPrefix,
-    /// 「当前地图几何：」前缀
-    FactionPanelCurrentMapGeomPrefix,
-    /// 「名称：」字段标签
-    FactionPanelFieldNameLabel,
-    /// 「颜色：」字段标签
-    FactionPanelFieldColorLabel,
-    /// 「起 day：」字段标签
-    FactionPanelFieldStartDayLabel,
-    /// 「止（留空=至今）：」字段标签
-    FactionPanelFieldEndDayLabel,
-    /// 「删除」单段按钮
-    FactionPanelDeleteBoundaryBtn,
-    /// 「删除整个势力」按钮
-    FactionPanelDeleteEntireBtn,
-    /// 「 顶点」后缀（无前缀）
-    FactionPanelPointCountSuffix,
-    /// 「（无几何）」占位
-    FactionPanelNoGeometry,
 
     // ── 检视器面板（2026-10-22 统一 Inspector 追加）──────────────────
     /// 页签：属性
@@ -1417,7 +1357,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 569] = [
+    pub const ALL: [I18nKey; 554] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1604,6 +1544,7 @@ impl I18nKey {
         I18nKey::PartitionPenOwner,
         I18nKey::PartitionPenOwnerHint,
         I18nKey::PartitionPenModifyHint,
+        I18nKey::PartitionPenButtonHover,
         I18nKey::PartitionEditHudTitle,
         I18nKey::PartitionToolCut,
         I18nKey::PartitionToolDrag,
@@ -1717,22 +1658,6 @@ impl I18nKey {
         I18nKey::RegionPanelMarkerEmpty,
         I18nKey::RegionPanelMarkerRegenBtn,
         // 势力（15）
-        I18nKey::FactionPanelAddBtn,
-        I18nKey::FactionPanelAddBoundaryBtn,
-        I18nKey::FactionPanelDefaultName,
-        I18nKey::FactionPanelEmptyTitle,
-        I18nKey::FactionPanelEmptyHint,
-        I18nKey::FactionPanelEmptyAction,
-        I18nKey::FactionPanelCurrentMapPrefix,
-        I18nKey::FactionPanelCurrentMapGeomPrefix,
-        I18nKey::FactionPanelFieldNameLabel,
-        I18nKey::FactionPanelFieldColorLabel,
-        I18nKey::FactionPanelFieldStartDayLabel,
-        I18nKey::FactionPanelFieldEndDayLabel,
-        I18nKey::FactionPanelDeleteBoundaryBtn,
-        I18nKey::FactionPanelDeleteEntireBtn,
-        I18nKey::FactionPanelPointCountSuffix,
-        I18nKey::FactionPanelNoGeometry,
         // 检视器（3 + 统一 Inspector 追加 16）
         I18nKey::InspectorTabProperties,
         I18nKey::InspectorTabFactionLayers,
