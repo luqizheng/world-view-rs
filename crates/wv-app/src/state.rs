@@ -359,7 +359,10 @@ impl Panel {
             // 合并注（2026-10-26）：原 700 与 LinePoi 的 696 重叠（两分支各
             // 自占了中列下半），互斥验收据此上移。
             Panel::Landmark => [652.0, 500.0],
-            // 底部通栏（§3.3 P-5）。
+            // 底部通栏（§3.3 P-5）。2026-10-27 停靠化：播放器实际几何每帧由
+            // 视口推导（`ui/timeline.rs` 的 `dock_rect`——占满宽、贴状态栏上方），
+            // 本静态值只是设计画布口径 + `ui-layout.yaml` 缺项时的表驱动兜底，
+            // 不再进入窗口定位。
             Panel::Timeline => [12.0, 880.0],
         }
     }
@@ -368,7 +371,9 @@ impl Panel {
     pub fn default_size(self) -> [f32; 2] {
         match self {
             // v0.3-B：宽度对齐 web（.w-tree/.w-layers 204 / .w-brush 274）。
-            Panel::MapTree => [204.0, 330.0],
+            // 2026-10-27 地图树增强：工具栏 + 树 + 垃圾桶分区需要更高；
+            // 上限 = Minimap 顶 396 − 本面板顶 56 − 4 间隙，防两浮窗相叠。
+            Panel::MapTree => [204.0, 336.0],
             // Figma `3:20892` 面板宽 268；高 480 = 头 30 + 动作行/列表/滑条
             // （≈313）+ 会话开关段（≈120）+ 边距，列表超 6 行内部滚动。
             Panel::Layers => [268.0, 480.0],
@@ -687,6 +692,7 @@ mod tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            ..Default::default()
         }
     }
 

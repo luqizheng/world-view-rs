@@ -232,11 +232,11 @@ pub fn numeric_input(
 /// stepper 与任何写入都会被钳到 `[min, max]`——Cell 编辑器海拔（i16 米）
 /// 等有真实值域的字段用这个，调用方不再需要事后 clamp。
 ///
-/// **id 派发的坑（2026-10-24 真机修复「点击后不停抖动」）**：本控件用
-/// `value as *mut f32 as usize`（**栈地址**）当 id 盐——Cell 编辑器的
-/// `height_f` / `delta` 都是**每帧新建的局部变量**，编译器复用同一栈槽时
-/// 两个输入框拿到**同一 id**：点进文本编辑态后两个 TextEdit 互抢焦点，
-/// 表现为「点击之后不停抖动」。新代码一律用 [`numeric_input_salted`]。
+/// **两处坑（生产勿用，仅存量兼容）**：
+/// - **id 必撞**：固定盐 `"legacy_ptr"`——同一 Ui 作用域两个实例共享手势态
+///   与 TextEdit id，互抢焦点（2026-10-24 修的 bug 形态；2026-10-28 评审 P1
+///   确认 place 表单 x/y 曾中招）。新代码一律 [`numeric_input_salted`]。
+/// - **文案固定中文**：提示文字取 [`NumericTexts::FALLBACK`]，不随应用语言。
 pub fn numeric_input_bounded(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -246,7 +246,46 @@ pub fn numeric_input_bounded(
     min: f32,
     max: f32,
 ) -> egui::Response {
-    numeric_input_salted(ui, shell, "legacy_ptr", value, unit, step, min, max)
+    numeric_input_salted(
+        ui,
+        shell,
+        "legacy_ptr",
+        NumericTexts::FALLBACK,
+        value,
+        unit,
+        step,
+        min,
+        max,
+    )
+}
+
+/// 数值输入的提示文案（D1-B 红闪 tooltip）：本 crate 无 i18n（ADR-0026），
+/// 用户可见文字由调用方注入——wv-app 侧经 i18n 表取词（`numeric_texts`
+/// helper），英文界面才不会闪出中文提示。
+///
+/// `clamped_to` 是**前缀**：实际消息为 `{clamped_to} {值}`
+/// （中「已钳制到 120」/ 英 "Clamped to 120" 词序皆成立）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NumericTexts {
+    /// 非法输入提示（提交非法文本后持续显示，直到下一次成功提交）。
+    pub invalid: &'static str,
+    /// 越界钳制提示前缀。
+    pub clamped_to: &'static str,
+}
+
+impl NumericTexts {
+    /// 中文兜底：legacy 入口（[`numeric_input`] / [`numeric_input_bounded`]）与
+    /// 测试用；生产路径应经 salted 变体注入本地化文案（2026-10-28 评审 P2）。
+    pub const FALLBACK: Self = Self {
+        invalid: "非法输入，已恢复原值",
+        clamped_to: "已钳制到",
+    };
+}
+
+impl Default for NumericTexts {
+    fn default() -> Self {
+        Self::FALLBACK
+    }
 }
 
 /// [`numeric_input_salted_report`] 的返回值：把「值动了」与「手势结束」
@@ -278,6 +317,7 @@ pub fn numeric_input_salted_report(
     ui: &mut egui::Ui,
     shell: &UiShell,
     id_salt: &str,
+    texts: NumericTexts,
     value: &mut f32,
     unit: &str,
     step: f32,
@@ -287,7 +327,7 @@ pub fn numeric_input_salted_report(
     let mut out: Option<(egui::Response, NumericEditReport)> = None;
     ui.push_id(id_salt, |ui| {
         out = Some(numeric_input_bounded_inner(
-            ui, shell, value, unit, step, min, max,
+            ui, shell, texts, value, unit, step, min, max,
         ));
     });
     out.expect("push_id 闭包必然执行一次")
@@ -298,18 +338,21 @@ pub fn numeric_input_salted_report(
 /// `id_salt` 由**调用方**给一个跨帧稳定的语义名（如 `"cell_height"`、
 /// `"paint_delta"`）——不再依赖栈地址，同一面板里多个数值输入互不干扰。
 /// 这是 Cell 编辑器等「每帧重建局部值」场景的唯一正确用法。
+///
+/// `texts` 注入提示文案（wv-ui 无 i18n，见 [`NumericTexts`]）。
 #[allow(clippy::too_many_arguments)] // 控件参数即布局声明，与 bounded 变体同宽
 pub fn numeric_input_salted(
     ui: &mut egui::Ui,
     shell: &UiShell,
     id_salt: &str,
+    texts: NumericTexts,
     value: &mut f32,
     unit: &str,
     step: f32,
     min: f32,
     max: f32,
 ) -> egui::Response {
-    numeric_input_salted_report(ui, shell, id_salt, value, unit, step, min, max).0
+    numeric_input_salted_report(ui, shell, id_salt, texts, value, unit, step, min, max).0
 }
 
 // ── 数值输入手势状态机（D1 / D1-A / D1-B · ADR-0052 §9.2）──────────────
@@ -474,7 +517,7 @@ fn numeric_scrub_multiplier(m: egui::Modifiers) -> f32 {
 /// 数值输入的错误态（D1-B）：红闪 200ms + tooltip 持续到下次成功提交。
 #[derive(Clone, Debug, Default)]
 struct NumericError {
-    /// 提示文案（tooltip 持续显示，直到下一次成功提交）。
+    /// 提示文案（hover tooltip 持续显示，直到下一次成功提交清空）。
     message: String,
     /// 红闪截止时刻（egui 时钟秒）。
     flash_until: f64,
@@ -540,6 +583,8 @@ fn numeric_scrub_value(
 /// **且不写 0**（D1-B 硬约束）。
 ///
 /// 返回 `true` = 提交成功（错误态应清），`false` = 非法已回滚。
+/// 提示文案来自 `texts`（wv-ui 无 i18n，调用方注入）。
+#[allow(clippy::too_many_arguments)] // 纯函数入参即规格（D1/D1-B 各判定量），与 salted 变体同宽
 fn numeric_commit_text(
     text: &str,
     orig: f32,
@@ -548,6 +593,7 @@ fn numeric_commit_text(
     max: f32,
     now: f64,
     error: &mut NumericError,
+    texts: NumericTexts,
 ) -> bool {
     let parsed = text.trim().parse::<f32>().ok().filter(|v| v.is_finite());
     match parsed {
@@ -555,7 +601,7 @@ fn numeric_commit_text(
             let clamped = v.clamp(min, max);
             *value = clamped;
             if (clamped - v).abs() > f32::EPSILON {
-                error.message = format!("已钳制到 {clamped:.0}");
+                error.message = format!("{} {clamped:.0}", texts.clamped_to);
             } else {
                 error.message.clear();
             }
@@ -565,7 +611,7 @@ fn numeric_commit_text(
         None => {
             // 非法：回滚原值，**不写 0**（D1-B）。
             *value = orig;
-            error.message = "非法输入，已恢复原值".to_string();
+            error.message = texts.invalid.to_string();
             error.flash_until = now + 0.2;
             false
         }
@@ -576,9 +622,11 @@ fn numeric_commit_text(
 ///
 /// 返回 `(Response, NumericEditReport)`：报告区分「本帧写值」与
 /// 「手势进行中」，供手势完成帧落盘的表单使用（见 [`NumericEditReport`]）。
+#[allow(clippy::too_many_arguments)] // 控件参数即布局声明，与 salted 变体同宽
 fn numeric_input_bounded_inner(
     ui: &mut egui::Ui,
     shell: &UiShell,
+    texts: NumericTexts,
     value: &mut f32,
     unit: &str,
     step: f32,
@@ -688,7 +736,7 @@ fn numeric_input_bounded_inner(
         });
 
         if key_enter || key_tab {
-            numeric_commit_text(text, orig, value, min, max, now, &mut error);
+            numeric_commit_text(text, orig, value, min, max, now, &mut error, texts);
             gesture = NumericGesture::Idle;
             ui.memory_mut(|m| m.surrender_focus(text_id));
         } else if key_esc {
@@ -700,7 +748,7 @@ fn numeric_input_bounded_inner(
             // 箭头点击：先提交当前文本（非法则回滚），再按步进写值并退出
             // 编辑态——两条写值路径汇到同一出口，不会出现「箭头加了值、
             // 文本里的非法串又把它回滚」的互相打架。
-            numeric_commit_text(text, orig, value, min, max, now, &mut error);
+            numeric_commit_text(text, orig, value, min, max, now, &mut error, texts);
             *value = (*value + dir * step).clamp(min, max);
             error.message.clear();
             error.flash_until = 0.0;
@@ -708,7 +756,7 @@ fn numeric_input_bounded_inner(
             ui.memory_mut(|m| m.surrender_focus(text_id));
         } else if resp.lost_focus() && !just_entered {
             // 失焦：合法则提交，非法则回滚（D1）
-            numeric_commit_text(text, orig, value, min, max, now, &mut error);
+            numeric_commit_text(text, orig, value, min, max, now, &mut error, texts);
             gesture = NumericGesture::Idle;
         }
 
@@ -883,10 +931,18 @@ fn numeric_input_bounded_inner(
     }
 
     let gesture_active = gesture != NumericGesture::Idle;
+    // D1-B：错误提示以 hover tooltip 持续显示，直到下一次成功提交清空
+    // （2026-10-28 评审 P2a——此前 message 只写不画，规格半拉子）。
+    let tooltip = (!error.message.is_empty()).then(|| error.message.clone());
     ui.memory_mut(|m| m.data.insert_temp(gesture_id, gesture));
     ui.memory_mut(|m| m.data.insert_temp(error_id, error));
+    let resp = ui.interact(rect, ui.id().with("numeric_body"), egui::Sense::hover());
+    let resp = match tooltip {
+        Some(msg) => resp.on_hover_text(msg),
+        None => resp,
+    };
     (
-        ui.interact(rect, ui.id().with("numeric_body"), egui::Sense::hover()),
+        resp,
         NumericEditReport {
             changed: *value != value_at_entry,
             gesture_active,
@@ -1931,7 +1987,16 @@ mod tests {
         let mut error = NumericError::default();
         for bad in ["", "  ", "abc", "NaN", "inf", "-inf"] {
             let mut v = 1200.0;
-            let ok = numeric_commit_text(bad, 1200.0, &mut v, -1000.0, 8848.0, 0.0, &mut error);
+            let ok = numeric_commit_text(
+                bad,
+                1200.0,
+                &mut v,
+                -1000.0,
+                8848.0,
+                0.0,
+                &mut error,
+                NumericTexts::default(),
+            );
             assert!(!ok, "「{bad}」应判非法");
             assert_eq!(v, 1200.0, "「{bad}」应回滚原值（不得写 0）");
             assert!(!error.message.is_empty(), "非法应有提示文案");
@@ -1945,20 +2010,41 @@ mod tests {
         // 合法 → 写入
         let mut v = 0.0;
         assert!(numeric_commit_text(
-            "1200", 0.0, &mut v, -1000.0, 8848.0, 0.0, &mut error
+            "1200",
+            0.0,
+            &mut v,
+            -1000.0,
+            8848.0,
+            0.0,
+            &mut error,
+            NumericTexts::default()
         ));
         assert_eq!(v, 1200.0);
         assert!(error.message.is_empty(), "成功后应清错误提示");
         // 越上界 → 钳制到 max
         let mut v = 0.0;
         assert!(numeric_commit_text(
-            "99999", 0.0, &mut v, -1000.0, 8848.0, 0.0, &mut error
+            "99999",
+            0.0,
+            &mut v,
+            -1000.0,
+            8848.0,
+            0.0,
+            &mut error,
+            NumericTexts::default()
         ));
         assert_eq!(v, 8848.0);
         // 越下界 → 钳制到 min
         let mut v = 0.0;
         assert!(numeric_commit_text(
-            "-99999", 0.0, &mut v, -1000.0, 8848.0, 0.0, &mut error
+            "-99999",
+            0.0,
+            &mut v,
+            -1000.0,
+            8848.0,
+            0.0,
+            &mut error,
+            NumericTexts::default()
         ));
         assert_eq!(v, -1000.0);
     }
@@ -1968,12 +2054,51 @@ mod tests {
     fn numeric_error_flash_window_is_200ms() {
         let mut error = NumericError::default();
         let mut v = 42.0;
-        numeric_commit_text("xx", 42.0, &mut v, -100.0, 100.0, 10.0, &mut error);
+        numeric_commit_text(
+            "xx",
+            42.0,
+            &mut v,
+            -100.0,
+            100.0,
+            10.0,
+            &mut error,
+            NumericTexts::default(),
+        );
         assert_eq!(error.flash_until, 10.2, "红闪窗口 = 提交时刻 + 0.2s");
         // 下一次成功提交 → 清错误态
-        numeric_commit_text("50", 42.0, &mut v, -100.0, 100.0, 11.0, &mut error);
+        numeric_commit_text(
+            "50",
+            42.0,
+            &mut v,
+            -100.0,
+            100.0,
+            11.0,
+            &mut error,
+            NumericTexts::default(),
+        );
         assert_eq!(error.flash_until, 0.0);
         assert!(error.message.is_empty());
+    }
+
+    /// **P2 文案注入**：调用方注入的文案进入错误态——wv-ui 无 i18n，
+    /// 生产路径由 wv-app 传 `t_key` 结果，英文界面不得闪出中文提示。
+    #[test]
+    fn numeric_commit_uses_injected_texts_for_messages() {
+        let texts = NumericTexts {
+            invalid: "Invalid input, reverted",
+            clamped_to: "Clamped to",
+        };
+        let mut error = NumericError::default();
+        let mut v = 1200.0;
+        assert!(!numeric_commit_text(
+            "abc", 1200.0, &mut v, -1000.0, 8848.0, 0.0, &mut error, texts
+        ));
+        assert_eq!(error.message, "Invalid input, reverted");
+        let mut v2 = 0.0;
+        assert!(numeric_commit_text(
+            "99999", 0.0, &mut v2, -1000.0, 8848.0, 0.0, &mut error, texts
+        ));
+        assert_eq!(error.message, "Clamped to 8848");
     }
 
     /// **D1 · scrub 值钳制**：写值不越界（`min`/`max` 是唯一出口）。
@@ -2142,8 +2267,17 @@ mod tests {
     impl StagingCaller {
         fn frame(&mut self, ui: &mut egui::Ui, sh: &UiShell, salt: &str) {
             let mut vf = self.pending.unwrap_or(self.world);
-            let (_, report) =
-                numeric_input_salted_report(ui, sh, salt, &mut vf, "m", 10.0, -1000.0, 1000.0);
+            let (_, report) = numeric_input_salted_report(
+                ui,
+                sh,
+                salt,
+                NumericTexts::default(),
+                &mut vf,
+                "m",
+                10.0,
+                -1000.0,
+                1000.0,
+            );
             if report.gesture_active {
                 self.pending = Some(vf);
             } else if report.changed {

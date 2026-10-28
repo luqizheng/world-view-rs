@@ -218,6 +218,7 @@ mod tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            ..Default::default()
         });
         w.set_terrain(vid(M), high_terrain(800));
         w.meta = Some(WorldMeta {

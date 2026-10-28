@@ -73,6 +73,8 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     .init_resource::<crate::state::NatureRegionUiState>()
     // 图层面板的会话态（选中层 + 不透明度拖动中值，Figma `3:20892` 接线）。
     .init_resource::<ui::layers_panel::LayerPanelUiState>()
+    .init_resource::<ui::map_tree::MapClipboard>()
+    .init_resource::<ui::map_tree::MapTreeUiState>()
     .init_resource::<GridConfig>()
     // 「新建地图」对话框状态（ui_shell 分发器与对话框系统共用）。
     .init_resource::<ui::NewMapDialog>()

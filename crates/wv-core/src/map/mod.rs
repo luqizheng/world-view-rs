@@ -152,6 +152,23 @@ pub struct MapNode {
     /// 描述子图**在父图上呈现的形状**。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outline_polygon: Option<GeometryData>,
+
+    /// 垃圾桶标志（地图树增强，2026-10-27 spec §5 D5 + §10 追记 1）：
+    /// 仅**被删子树的根**打 `true`，后代不打标——「处于被删根之下」由
+    /// [`crate::World::map_alive`] 沿 parent 链派生。
+    ///
+    /// 子图在父图 `children` 中的引用与本图的钻取图标**原样保留**（显隐由
+    /// 渲染层按存活派生）——保存/重启后（Undo 栈不持久）恢复依然完整；
+    /// 彻底删除时才物理清理这些引用。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub trashed: bool,
+
+    /// 进垃圾桶的时间（展示用字符串，如 "2026-10-27 15:00"）。
+    ///
+    /// 垃圾桶是**编辑器工作台状态**而非世界内事件——不区间化（P7 管的是
+    /// 世界内容随时间演变），仅随 `trashed` 一起写读。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trashed_at: Option<String>,
 }
 
 /// 每张地图的「底图」语义（2026-10-16）。
@@ -216,6 +233,12 @@ impl MapBase {
 /// Serde `skip_serializing_if` 谓词：f32 零值不写出，保持既有 YAML 干净。
 fn is_zero_f32(v: &f32) -> bool {
     *v == 0.0
+}
+
+/// Serde `skip_serializing_if` 谓词：false 的 `trashed` 不写出——未删工程
+/// 的序列化不因新字段产生 diff（老 YAML round-trip 零噪声）。
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 /// 地图图标的形状。
@@ -729,5 +752,52 @@ mod km_per_wu_tests {
         };
         let (kx, _) = node.km_per_wu().expect("应退回 unit_per_km");
         assert!((kx - 0.125).abs() < 1e-9);
+    }
+}
+
+/// 垃圾桶标志的 YAML 兼容性（spec 2026-10-27 §6：老工程零迁移）。
+#[cfg(test)]
+mod trash_flag_tests {
+    use super::*;
+
+    #[test]
+    fn old_yaml_without_trashed_field_loads_as_alive() {
+        let node: MapNode =
+            serde_yaml::from_str("id: city_a\nname: 青州城\nlevel: city\n").unwrap();
+        assert!(!node.trashed, "缺省字段应为未删");
+        assert_eq!(node.trashed_at, None, "got {:?}", node.trashed_at);
+    }
+
+    #[test]
+    fn trashed_flag_round_trips_through_yaml() {
+        let node = MapNode {
+            trashed: true,
+            trashed_at: Some("2026-10-27 15:00".into()),
+            ..MapNode::default()
+        };
+        let text = serde_yaml::to_string(&node).unwrap();
+        assert!(text.contains("trashed: true"), "got:\n{text}");
+        assert!(
+            !text.contains("trashed_at: null"),
+            "skip_serializing_if 应跳过空值，got:\n{text}"
+        );
+        let back: MapNode = serde_yaml::from_str(&text).unwrap();
+        assert!(back.trashed);
+        assert_eq!(back.trashed_at.as_deref(), Some("2026-10-27 15:00"));
+    }
+
+    #[test]
+    fn alive_node_yaml_contains_no_trashed_field() {
+        // 未删节点的序列化不因新字段产生 diff（老工程保存无噪声）。
+        let node = MapNode {
+            id: Id::new_unchecked("city_a"),
+            name: "青州城".into(),
+            ..Default::default()
+        };
+        let text = serde_yaml::to_string(&node).unwrap();
+        assert!(
+            !text.contains("trashed"),
+            "未删不应写出 trashed 字段，got:\n{text}"
+        );
     }
 }

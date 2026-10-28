@@ -243,6 +243,8 @@ fn build_world(meta: WorldMeta) -> World {
         orientation: 0.0,
         base: None,
         outline_polygon: None,
+        trashed: false,
+        trashed_at: None,
     });
 
     // ---- 城市子图：声明全量接管 ------------------------------------------
@@ -280,6 +282,8 @@ fn build_world(meta: WorldMeta) -> World {
         orientation: 0.0,
         base: None,
         outline_polygon: None,
+        trashed: false,
+        trashed_at: None,
     });
 
     // ---- 世界图地形：1024² 确定性 Perlin（西陆东海）-----------------------

@@ -234,6 +234,17 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
 | [ADR-0071](ADR-0071-landmark-panel.md) | 地标面板——Edit/CellMap 两模式单击放置 POI（即点即建、默认 rank=3）、`DeletePlaceCommand` 级联删边可撤销、放置模式走 `MapToolId::Landmark` 白拿 dispatch 互斥（无瓷砖无快捷键） | 已接受（2026-10-26，用户三项裁定） |
 | [ADR-0073](ADR-0073-label-placement-candidates.md) | 标签候选位摆位——统一占位池（六类标签跨系统避让）、点标签 8 方位候选、面标签区域内约束、街名沿街旋转 + 直立翻转、按档×通路密度预算（替代六处 truncate(200)）、`WV_DRILL` 验收探针 | 提议态（2026-10-26，实机截图初验通过） |
 | [ADR-0074](ADR-0074-cellmap-point-select-arbitration.md) | CellMap 点选三段裁定——图钉（rank≥2 点状 POI，18px 半径最近者）> 群系区（nature_overlay 开时 Nature 区多边形内）> 格（ADR-0057 原行为）；单焦点模型（实体选中与格选区互斥）、实体命中不吃修饰键、浏览态零改动 | 提议态（2026-10-27，用户裁定「先解决 cell map：能够选择 POI 和群系」） |
+| [ADR-0076](ADR-0076-mountain-range-pen-altitudinal-zonation.md) | 山系笔与山脉垂直带谱——山脉作为结构化对象（不引入板块实体），`apply_mountain_range` kind 赋值改双判据带谱（增量 ≥500m 门槛保既有地貌 + 绝对高度落带 300/1200/2600，雪原封顶），山系笔为主力、手涂降微调语义零改 | 已接受（2026-10-27，用户批准设计稿「就这么定」+「go」；设计稿 `docs/superpowers/specs/2026-10-27-mountain-range-pen-design.md`） |
+
+> **⚠️ 编号撞号备注（2026-10-27 追加）**：`ADR-0074` 与 `ADR-0075` 被并行会话的三个分支同时占用
+> （`feat/faction-partition-map` 势力图切蛋糕 / `feat/map-tree-enhancement` 地图树垃圾桶
+> / `feat/cellmap-pointselect-poi-biome` CellMap 点选仲裁，三者**彼此也撞 0074**）。
+> 故山系笔这份 ADR 取 **0076**，把 0075 留作缓冲，避免五方撞同一文件名（同名文件＝硬冲突）。
+> 合并时：本索引表与 `GLOSSARY.md` 的**表尾追加行必冲突**（并行会话共性），
+> 解法按既有惯例——**两边都留**；ADR 正文与索引行号以文件名为准，引用时带全称。
+
+| [ADR-0075](ADR-0075-map-tree-trash-and-deep-copy.md) | 地图树垃圾桶与深拷贝复制粘贴——多对多被否决维持单亲树；软删只打标（显隐派生，跨重启可恢复）；purge 直应用豁免撤销 + save_maps 目录删除传播；首条改 meta 的命令（删 root_map 顺带改写）；粘贴层级门控 + 视野中心锚定 + ID/名字全量换新 | 已接受（2026-10-27，用户批准设计稿「go」+ 实机验收通过；spec `docs/superpowers/specs/2026-10-27-map-tree-enhancement-design.md`（含 §10 追记）、计划 `plans/2026-10-27-map-tree-enhancement.md`；**编号按上备注取缓冲号 0075**——原分支内编 0074，与山系笔（0076）撞号） |
+>>>>>>> wip/wv-ui-review-p1p2
 
 ---
 > **⚠️ 编号撞号备注（2026-10-20 追加）**：`ADR-0044` 已被 ADR-0042 的「追记三」占用（civ-atlas 方法论落地，commit `eef816c`，索引行指向 ADR-0042 文件），故本次两份新 ADR 从 **0045** 起（ADR-0045 自然区域 / ADR-0046 亚格线状作者数据）。上文 0042 那条备注的「后续新 ADR 从 0042 起」已过时，按 §6.3 只增不改、保留原文。引用时务必带文件名全称。

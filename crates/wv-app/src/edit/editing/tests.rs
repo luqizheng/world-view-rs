@@ -1523,3 +1523,37 @@ fn right_click_and_alt_click_off_map_do_nothing() {
     let sel = world.resource::<crate::state::CellSelection>();
     assert!(sel.contains(0, 0), "Alt+左键点图外不动选区（不误清）");
 }
+#[test]
+fn apply_detached_records_dirty_without_pushing_history() {
+    use wv_core::map::{MapLevel, MapNode};
+
+    let node = |id: &str| MapNode {
+        id: wv_core::Id::new_unchecked(id),
+        name: id.into(),
+        level: MapLevel::World,
+        ..MapNode::default()
+    };
+    let mut edit = crate::edit::editing::EditHistory::default();
+    let mut world = wv_core::World::default();
+    // 普通提交一条（入栈）。
+    let mut tx = wv_edit::Transaction::new();
+    tx.push(Box::new(wv_edit::AddMapCommand::new(node("m1"), None)));
+    edit.history.commit(&mut world, tx).expect("commit");
+    let len_before = edit.history.len();
+    // 直应用一条（不入栈，只记脏路径）。
+    edit.apply_detached(
+        &mut world,
+        Box::new(wv_edit::AddMapCommand::new(node("m2"), None)),
+    )
+    .expect("detached");
+    assert_eq!(edit.history.len(), len_before, "直应用不得进 Undo 栈");
+    assert!(
+        world.maps.iter().any(|m| m.id.as_str() == "m2"),
+        "世界应已生效"
+    );
+    assert!(
+        edit.dirty_set.contains("maps"),
+        "脏路径应被记录，got {:?}",
+        edit.dirty_set
+    );
+}

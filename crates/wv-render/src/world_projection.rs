@@ -1252,6 +1252,8 @@ mod region_handles_tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            trashed: false,
+            trashed_at: None,
         });
         projection.world.regions.push(Region {
             id: region_id.clone(),
@@ -1373,6 +1375,8 @@ mod region_handles_tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            trashed: false,
+            trashed_at: None,
         });
         projection.world.regions.push(Region {
             id: wv_core::Id::new_unchecked("nr_a"),
@@ -1982,6 +1986,8 @@ mod tests {
             orientation: 0.0,
             base: None,
             outline_polygon: None,
+            trashed: false,
+            trashed_at: None,
         }
     }
 

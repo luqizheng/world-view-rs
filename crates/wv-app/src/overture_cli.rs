@@ -1013,6 +1013,7 @@ fn build_world(
             orientation: 0.0,
             base: Some(wv_core::map::MapBase::Land),
             outline_polygon: Some(poly),
+            ..Default::default()
         });
 
         // 挂 IconSpec 到 root.icons + children

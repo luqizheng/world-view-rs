@@ -116,4 +116,19 @@ impl EditHistory {
     pub fn clear_dirty(&mut self) {
         self.dirty_set.clear();
     }
+
+    /// 直应用通道（地图树垃圾桶 spec §10 追记 2，2026-10-27）：
+    /// `apply` + 记脏路径，**不 commit 进 Undo 栈**。
+    ///
+    /// 「彻底删除」是用户确认过的永久动作——不该被 Ctrl+Z 复活；但脏路径
+    /// 必须照记，否则下次保存不会物理删除目录。返回值即已记录的脏路径。
+    pub fn apply_detached(
+        &mut self,
+        world: &mut wv_core::World,
+        cmd: Box<dyn wv_edit::EditCommand>,
+    ) -> wv_edit::EditResult<Vec<String>> {
+        let dirty = cmd.apply(world)?;
+        self.record_dirty(dirty.clone());
+        Ok(dirty)
+    }
 }

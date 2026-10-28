@@ -39,6 +39,7 @@ use crate::edit::line_poi_tool::{
 use crate::i18n::{t, CurrentLocale, I18nKey, Locale};
 use crate::state::{DrillState, LinePoiState, Panel, PanelState, PlaybackState, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
+use crate::ui::widgets::numeric_texts;
 use crate::ui_layout::LayoutFile;
 use crate::ui_shell::ShellNotice;
 
@@ -344,6 +345,7 @@ fn render_selected(
                             ui,
                             shell,
                             "line_poi_width_sel",
+                            numeric_texts(loc),
                             &mut w,
                             unit,
                             WIDTH_STEP,
@@ -525,6 +527,7 @@ fn render_new(
                     ui,
                     shell,
                     "line_poi_width_new",
+                    numeric_texts(loc),
                     &mut w,
                     unit,
                     WIDTH_STEP,

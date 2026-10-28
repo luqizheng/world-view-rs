@@ -78,6 +78,8 @@ fn map_node() -> MapNode {
         orientation: 0.0,
         base: None,
         outline_polygon: None,
+        trashed: false,
+        trashed_at: None,
     }
 }
 
