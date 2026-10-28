@@ -881,16 +881,27 @@ mod political_page_tests {
         );
     }
 
-    /// 素底分支**不画晕渲**（`relief` 收敛到 1.0）——政治页是平色面，
-    /// 山体明暗会与势力填色打架。`relief.x/y` 是钳制上下限，两值都置 1.0
-    /// 即「无明暗」。
+    /// 素底分支**不画晕渲**——政治页是平色面，山体明暗会与势力填色打架。
+    /// 语义随 ADR-0077 三光照模型改写（合并 main 时）：`relief` = 三光系数
+    /// `(AMBIENT, DIFFUSE_MAIN, DIFFUSE_AUX)`，素底置 `(1, 0, 0)` = 纯环境光、
+    /// 强度恒 1（旧 RELIEF_LO/HI 钳制对已随晕渲轮退役）。
     #[test]
     fn flat_branch_disables_relief_shading() {
-        let p = default_params([512.0, 512.0], 6.0, ViewBranch::Flat, Default::default());
+        let flat = default_params([512.0, 512.0], 6.0, ViewBranch::Flat, Default::default());
         assert!(
-            (p.relief[0] - 1.0).abs() < 1e-6 && (p.relief[1] - 1.0).abs() < 1e-6,
-            "素底分支的 relief 应为 1.0（无晕渲），got {:?}",
-            p.relief
+            (flat.relief[0] - 1.0).abs() < 1e-6
+                && flat.relief[1].abs() < 1e-6
+                && flat.relief[2].abs() < 1e-6,
+            "素底分支三光系数应为 (1, 0, 0)（纯环境光），got {:?}",
+            flat.relief
+        );
+        // 对照：非素底分支保留正常三光系数（和 = 1）。
+        let themed = default_params([512.0, 512.0], 6.0, ViewBranch::Themed, Default::default());
+        assert!(
+            (themed.relief[0] - crate::shading::AMBIENT).abs() < 1e-6
+                && (themed.relief[1] - crate::shading::DIFFUSE_MAIN).abs() < 1e-6,
+            "非素底分支保留 ADR-0077 三光系数，got {:?}",
+            themed.relief
         );
     }
 }
