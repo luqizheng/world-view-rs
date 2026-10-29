@@ -20,7 +20,7 @@ use std::path::PathBuf;
 
 use wv_core::map::{Extent, MapLevel, MapNode};
 use wv_core::{Id, World};
-use wv_edit::command::{CreateSceneBaseGridCommand, EditCommand, PaintTerrainCommand};
+use wv_edit::command::{CreateSceneBaseGridCommand, PaintTerrainCommand};
 use wv_edit::history::Transaction;
 use wv_terrain::biome::{DISTRICT_FIRST, DISTRICT_NAMES_ZH};
 use wv_terrain::edit::{Brush, PaintTarget, Stroke};

@@ -104,13 +104,21 @@ pub fn top_option_bar(
         return;
     };
     let loc = current_loc.0;
+    // 当前图是不是**场景图**（City / Interior 级）——决定画哪条材料条：
+    // 场景图画分区条、世界图画地形材料条。两者共用 `brush.kind` 一个选择位，
+    // 同时显示会互相抢（且在场景图上选「草原」会刷出群系色、破坏分区带）。
+    let is_scene_map = drill
+        .current_node(&projection.world)
+        .is_some_and(|n| n.level != wv_core::map::MapLevel::World);
     // 不能用 `root_ui`：egui 0.36 的 Panel::top 只认父 Ui 剩余空间、无跨系统
     // 堆叠——fresh 全视口 Ui 会让本条叠回 y 0..38 盖住顶栏（2026-10-29 实机
     // 缺陷，见 `top_bar::root_ui_below_top_bar` 文档）。显式从顶栏下缘起。
     let mut root = super::top_bar::root_ui_below_top_bar(ctx);
     // 场景分区条：独立面板，落在**选项条下缘**（同一理由——它也是一条 top
     // Panel，若与选项条同起点会叠在一起）。
-    district_strip_panel(ctx, &shell, &mut brush, loc, &projection, &drill);
+    if is_scene_map {
+        district_strip_panel(ctx, &shell, &mut brush, loc, &projection, &drill);
+    }
     egui::Panel::top("wv_top_option_bar")
         .exact_size(BAR_H)
         .frame(
@@ -129,7 +137,14 @@ pub fn top_option_bar(
                 match brush.tool {
                     // 涂抹：材料 + 半径 + 软度。
                     tool if shows_material(tool) && shows_softness(tool) => {
-                        material_strip(ui, &shell, &mut brush.kind, loc);
+                        // 场景图上**不画地形材料条**——那里画的是分区条
+                        // （`district_strip_panel`）。两条共用 `brush.kind`
+                        // 一个选择位，同时显示会互相抢高亮；且在场景图上选
+                        // 「草原」会刷出群系色（biome=3），既不是分区、又把
+                        // 格子踢出分区带。
+                        if !is_scene_map {
+                            material_strip(ui, &shell, &mut brush.kind, loc);
+                        }
                         radius_slider(ui, &shell, &mut brush.radius, &grid, loc);
                         compact_slider(
                             ui,
@@ -285,6 +300,23 @@ fn material_strip(ui: &mut egui::Ui, shell: &UiShell, kind: &mut u8, loc: Locale
     );
 }
 
+/// 把材料选择位收进**分区保留带**。
+///
+/// `brush.kind` 是地形材料与分区**共用**的一个 u8：世界图上它是群系槽位
+/// （0..=8），场景图上它是分区码（21..=32）。进场景图时它多半还停在世界图
+/// 的取值上（缺省 3 = 草原）——作者第一笔就会刷出群系色，既不是分区，又把
+/// 格子踢出分区带（分区判定看 biome 码）。
+///
+/// 故：**不在分区带内的选择位一律收编到「未分区」**（= 场景基底）。
+/// 已在带内的原样保留——作者选了「商业区」再切图再回来，不该被重置。
+pub(crate) fn district_selection(kind: u8) -> u8 {
+    if wv_terrain::biome::is_district(kind) {
+        kind
+    } else {
+        wv_terrain::biome::DISTRICT_FIRST
+    }
+}
+
 /// 分区条专用 root Ui：max_rect 从「顶栏 + 选项条」下缘起。
 ///
 /// **为什么不能复用 `top_bar::root_ui_below_top_bar`**：那个 root Ui 的
@@ -349,6 +381,11 @@ fn district_strip_panel(
     if node.level == wv_core::map::MapLevel::World {
         return;
     }
+    // **接管选择位**：`brush.kind` 是地形材料与分区共用的一个 u8。进场景图
+    // 时它多半还停在世界图的取值上（默认 3 = 草原）——作者第一笔就会刷出
+    // 群系色（biome=3），既不是分区、又把格子踢出分区带。故场景图上一律
+    // 把选择位收到分区带内（无选择时落在「未分区」= 基底）。
+    brush.kind = district_selection(brush.kind);
     let mut root = root_ui_below_option_bar(ctx);
     egui::Panel::top("wv_top_option_bar_district")
         .exact_size(BAR_H)
@@ -491,7 +528,8 @@ fn tool_hint_key(tool: BrushTool) -> I18nKey {
 #[cfg(test)]
 mod tests {
     use super::{
-        bar_visible, shows_material, shows_softness, shows_strength, tool_hint_key, tool_name_key,
+        bar_visible, district_selection, shows_material, shows_softness, shows_strength,
+        tool_hint_key, tool_name_key,
     };
     use crate::i18n::{t, Locale};
     use crate::state::BrushTool;
@@ -529,6 +567,34 @@ mod tests {
     fn bar_visible_iff_brush_enabled() {
         assert!(!bar_visible(false));
         assert!(bar_visible(true));
+    }
+
+    /// 场景图上的材料选择位必须落在**分区带**内。
+    ///
+    /// 回归护栏：`brush.kind` 是地形材料与分区共用的一个 u8，缺省是 3
+    /// （草原）。若场景图上不把它收进分区带，作者第一笔就会刷出群系色
+    /// （biome=3）——既不是分区，又把格子踢出分区带（分区判定看 biome 码）。
+    #[test]
+    fn scene_map_selection_stays_inside_the_district_band() {
+        // 缺省选择位（3 = 草原）**不在**分区带内 → 被收编到「未分区」。
+        assert_eq!(
+            district_selection(3),
+            wv_terrain::biome::DISTRICT_FIRST,
+            "世界图的选择位进场景图要被收编"
+        );
+        // 已在带内的原样保留——作者选了「商业区」再切图回来不该被重置。
+        let commercial = wv_terrain::biome::DISTRICT_FIRST + 4;
+        assert_eq!(district_selection(commercial), commercial);
+        // 带外的其他取值（深水 0 / 越界 200）同样收编。
+        assert_eq!(district_selection(0), wv_terrain::biome::DISTRICT_FIRST);
+        assert_eq!(district_selection(200), wv_terrain::biome::DISTRICT_FIRST);
+        // 分区材料表本身必须都在带内。
+        for &k in crate::ui::shell::DISTRICT_MATERIALS {
+            assert!(
+                wv_terrain::biome::is_district(k),
+                "分区材料 {k} 必须落在分区保留带内"
+            );
+        }
     }
 
     /// 7 个工具的名称 / 提示 Key 全覆盖：中英双语都非空——瓷砖纯图标，
