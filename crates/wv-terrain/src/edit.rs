@@ -237,12 +237,21 @@ fn apply_brush(grid: &mut TerrainGrid, brush: &Brush, cell_size: f32) -> usize {
                 if w >= 0.5 {
                     cell.surface = target.surface;
                     cell.biome = target.biome;
-                    if target.surface == SURFACE_WATER {
-                        if cell.height >= 0 {
-                            cell.height = PAINT_SEA_DEPTH;
+                    // 场景分区（biome 落在 21..=32 保留带）**只改分区码，
+                    // 不动高度**——分区是同一张基底图上的涂色，作者标
+                    // 「这块是贫民区」不该凭空多出一座 40 m 的山包。
+                    //
+                    // 高度域规则是为「涂抹自然地表」设计的：海涂成陆要推过
+                    // 海平面，否则等值线视图下完全看不见笔刷生效。分区不
+                    // 涉及水陆切换（永远写陆面），故整段跳过。
+                    if !crate::biome::is_district(target.biome) {
+                        if target.surface == SURFACE_WATER {
+                            if cell.height >= 0 {
+                                cell.height = PAINT_SEA_DEPTH;
+                            }
+                        } else if cell.height < 0 {
+                            cell.height = PAINT_LAND_HEIGHT;
                         }
-                    } else if cell.height < 0 {
-                        cell.height = PAINT_LAND_HEIGHT;
                     }
                 }
             }
@@ -315,7 +324,10 @@ pub fn raise_region(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BIOME_DESERT, BIOME_FOREST, BIOME_GRASSLAND, BIOME_NONE, SURFACE_LAND};
+    use crate::{
+        BIOME_DESERT, BIOME_FOREST, BIOME_GRASSLAND, BIOME_NONE, BIOME_OCEAN, SURFACE_LAND,
+        SURFACE_WATER,
+    };
 
     #[test]
     fn falloff_is_one_at_center_and_zero_outside() {
@@ -398,6 +410,79 @@ mod tests {
             cell.height >= 0,
             "海格涂陆后高度应 ≥ 0（海平面），实得 {}",
             cell.height
+        );
+    }
+
+    /// 场景分区笔刷**绝不改高度**——分区是同一张基底图上的涂色，
+    /// 作者只想标「这块是贫民区」，不该凭空多出一座 40 m 的山包。
+    #[test]
+    fn painting_a_district_never_changes_height() {
+        let mut g = TerrainGrid::new(20, 20);
+        for gy in 0..20 {
+            for gx in 0..20 {
+                g.set(
+                    gx,
+                    gy,
+                    TerrainCell {
+                        height: -3500,
+                        surface: SURFACE_WATER,
+                        biome: BIOME_OCEAN,
+                    },
+                );
+            }
+        }
+        let b = Brush::paint(
+            (10.5, 10.5),
+            5.0,
+            PaintTarget {
+                surface: SURFACE_LAND,
+                biome: crate::biome::DISTRICT_FIRST + 1,
+            },
+        );
+        paint(&mut g, &b, 1.0);
+        let cell = g.get(10, 10).unwrap();
+        assert_eq!(
+            cell.height, -3500,
+            "刷分区不得改高度（实得 {}）",
+            cell.height
+        );
+        assert_eq!(
+            cell.biome,
+            crate::biome::DISTRICT_FIRST + 1,
+            "分区码应写入"
+        );
+        assert_eq!(cell.surface, SURFACE_LAND, "分区笔刷写陆面");
+    }
+
+    /// 回归护栏：非分区笔刷的「跨域推高度」旧行为必须逐字不变。
+    #[test]
+    fn painting_a_normal_biome_still_pushes_height_across_sea_level() {
+        let mut g = TerrainGrid::new(20, 20);
+        for gy in 0..20 {
+            for gx in 0..20 {
+                g.set(
+                    gx,
+                    gy,
+                    TerrainCell {
+                        height: -3500,
+                        surface: SURFACE_WATER,
+                        biome: BIOME_OCEAN,
+                    },
+                );
+            }
+        }
+        let b = Brush::paint(
+            (10.5, 10.5),
+            5.0,
+            PaintTarget {
+                surface: SURFACE_LAND,
+                biome: BIOME_FOREST,
+            },
+        );
+        paint(&mut g, &b, 1.0);
+        assert!(
+            g.get(10, 10).unwrap().height >= 0,
+            "非分区笔刷仍应推过海平面"
         );
     }
 
