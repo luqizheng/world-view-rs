@@ -1,0 +1,499 @@
+From e215b87fd55fda9fdddb7342f3b9b2b26e4a123a Mon Sep 17 00:00:00 2001
+From: luqizheng <luqizheng@126.com>
+Date: Wed, 28 Oct 2026 16:58:32 +0800
+Subject: [PATCH 2/2] =?UTF-8?q?wv-render:=20=E5=9C=BA=E7=AE=A1=E7=BA=BF?=
+ =?UTF-8?q?=E6=8C=89=E6=A8=A1=E5=BC=8F=E8=B7=AF=E7=94=B1=E2=80=94=E2=80=94?=
+ =?UTF-8?q?CPU=20=E7=95=99=E5=AE=88=E6=A1=A3=E4=B8=8D=E5=86=8D=E9=94=99?=
+ =?UTF-8?q?=E7=94=BB=20Themed=EF=BC=8Coblique=20=E5=9B=9E=E8=90=BD=20CPU?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+ADR-0082 Task 2。新增桥接侧唯一判据 should_render_field（= field_render
+意愿 × supports_field 支持档 × !oblique_active）；sync_terrain_chunks 整层
+早退与 sync_terrain_field 的 gate 改为同消费该函数（双底图红线）。真值表
+测试 4 条 + 系统级互斥测试 1 条（routing_flip_leaves_exactly_one_base_layer）。
+
+顺手修：
+- wv-app debug_probe.rs 过时注释（field_render 默认已 true 转正，非 false）；
+- 基底 gate-blocking 测试编译债两处（此前 wv-render 测试目标整体编不过）：
+  faction_overlays 测试夹具补 ADR-0081 增列的 FactionLayer.usage 字段；
+  state.rs BROWSING 过期断言对齐 2026-10-28 Faction 退出裁定（枚举仍保留）。
+
+已知基底债（不修只注明，另行处置）：vector_layers 的
+topographic_recipe_builds_road_but_no_street_or_poi_meshes 在基底即失败
+（3≠2，2026-10-28 裁定②遗留，已被上述编译债掩盖），本改动前已用
+基底+编译债修复复现证实与本次改动无关。
+---
+ crates/wv-app/src/debug_probe.rs         |  10 +-
+ crates/wv-render/src/cellmap_bridge.rs   | 353 ++++++++++++++++++++++-
+ crates/wv-render/src/faction_overlays.rs |   3 +
+ crates/wv-render/src/state.rs            |  14 +-
+ 4 files changed, 364 insertions(+), 16 deletions(-)
+
+diff --git a/crates/wv-app/src/debug_probe.rs b/crates/wv-app/src/debug_probe.rs
+index ef26996..d5acb54 100644
+--- a/crates/wv-app/src/debug_probe.rs
++++ b/crates/wv-app/src/debug_probe.rs
+@@ -42,9 +42,13 @@ pub fn apply_env_view_mode(mut view: ResMut<ViewState>) {
+     };
+     view.mode = mode;
+     info!("[wv] WV_MODE → {mode:?}");
+-    // `WV_FIELD=1`：启动即开 GPU 场渲染（`ViewState::field_render`，默认 false 走
+-    // chunk 烘焙路径）。与 WV_MODE 同族的验收探针——两条底图管线 A/B 对照、
+-    // 场管线的截图验收都必须能从命令行钉死路径，缺省零开销。
++    // `WV_FIELD=1`：启动即开 GPU 场渲染（`ViewState::field_render`）。默认
++    // **true 已转正**（2026-10-26 用户实机验收后拍板，SPEC 追记十四）——本
++    // 探针留作显式钉死路径用（老工程脚本 / A/B 对照时防止误关）。关闭走命令
++    // 面板「显示地形场渲染（GPU）」；是否真的上场由 wv-render 的
++    // `should_render_field` 按模式路由（ADR-0082），本开关只是意愿位。
++    // 与 WV_MODE 同族的验收探针——两条底图管线 A/B 对照、场管线的截图验收
++    // 都必须能从命令行钉死路径，缺省零开销。
+     if std::env::var_os("WV_FIELD").is_some() {
+         view.field_render = true;
+         info!("[wv] WV_FIELD → field_render = true（GPU 场管线）");
+diff --git a/crates/wv-render/src/cellmap_bridge.rs b/crates/wv-render/src/cellmap_bridge.rs
+index 735d8b5..5009f1e 100644
+--- a/crates/wv-render/src/cellmap_bridge.rs
++++ b/crates/wv-render/src/cellmap_bridge.rs
+@@ -1071,15 +1071,21 @@ pub fn sync_terrain_chunks(
+     mut chunk_entities: ResMut<TerrainChunkEntities>,
+     mut q_chunks: Query<(&mut TerrainChunk, &Mesh2d)>,
+ ) {
+-    // ── ADR-0053 回退开关（2026-10-24 Phase 1 接线）────────────────────────
+-    // 场渲染开着 = 底图由 `sync_terrain_field` 的 GPU quad 负责。两条路径并存，
++    // ── 底图载体路由（ADR-0053 回退开关 + ADR-0082 模式路由）────────────────
++    // 场 quad 上屏 = 底图由 `sync_terrain_field` 的 GPU quad 负责。两条路径并存，
+     // 但**同时只能有一条上屏**：整图烘焙纹理与场 quad 叠在一起就是双重底图。
+     // 故这里整层退场（回退路径本身一行不动，见下方全部逻辑）。
+     //
++    // 判据只有一份（`should_render_field`，ADR-0082 D2）：意愿开关 × 模式
++    // 支持档 × 非 oblique。CPU 留守档（Faction/Event/Coastline）与
++    // Topographic+oblique 都落到这里**不**早退、chunk 正常铺——ADR-0082 之前
++    // 本层只读 `view.field_render` 一位，切 CPU 留守档会错画成 Themed 场、
++    // oblique 会被平放场 quad 吃掉（两个现行活缺陷）。
++    //
+     // `chunks_dirty` 照旧在这里消费清零（语义不变）：`sync_terrain_field` 排在
+     // **本系统之后**，它用的编辑信号是变更戳而不是这个旗标，故不需要抢。
+     // 关回场时块按最新像素 spawn（与下方 `!visible` 分支同口径）。
+-    if view.field_render {
++    if should_render_field(&view) {
+         let entities: Vec<Entity> = chunk_entities.by_coord.drain().map(|(_, e)| e).collect();
+         for entity in entities {
+             despawn_chunk(&mut commands, entity, &q_chunks);
+@@ -1626,6 +1632,55 @@ pub fn bake_meters_per_cell(
+     bridge_meters_per_cell(cell_size, unit_per_km)
+ }
+ 
++// ══════ ADR-0082 Task 2：场管线的模式路由（底图载体选择的唯一判据）══════
++
++/// 本模式是否属于场管线（GPU 逐像素求值）的支持档（ADR-0082 D2）。
++///
++/// 支持集 = { VectorFlat, GoogleMap, RealTerrain, Topographic }；
++/// **CPU 留守档** = { Faction, Event, Coastline }——三档的地表语义（势力
++/// 填色 / 事件高亮 / 黑底水陆轮廓）只有 CPU 烘焙管线实现了对应 `ShadeMode`
++/// 分支，GPU 场 quad 在这些模式下只会错画成 Themed 场（ADR-0082 §1 缺陷①）。
++///
++/// 独立 pub：真值表测试与将来的调试面板复用同一份词表，**禁止**消费点
++/// 各写 `matches!`（判据漂移 = 双底图红线的开口）。
++pub fn supports_field(mode: crate::state::ViewMode) -> bool {
++    matches!(
++        mode,
++        crate::state::ViewMode::VectorFlat
++            | crate::state::ViewMode::GoogleMap
++            | crate::state::ViewMode::RealTerrain
++            | crate::state::ViewMode::Topographic
++    )
++}
++
++/// 2.5D oblique 是否生效（ADR-0041 的顶点 Z 挤压）：仅 Topographic 且
++/// compression > 0 时成立。
++///
++/// `topographic_compression` 是**全局字段**（默认 0.3，与 mode 无关）——
++/// 判据若不与 `mode == Topographic` 合取，非 Topographic 档会被全局默认值
++/// 误拖回 CPU（ADR-0082 §1 缺陷②的对偶坑）。oblique 生效时，平放的场
++/// quad 吃不到顶点斜切（oblique 只在 CPU 侧的 chunk mesh 顶点 Z 上存在），
++/// 底图必须整层回落 CPU 路径。
++fn oblique_active(view: &ViewState) -> bool {
++    view.mode == crate::state::ViewMode::Topographic && view.topographic_compression > 0.0
++}
++
++/// 本帧场 quad 是否该上屏（ADR-0082 D2：模式路由的**唯一判据**）。
++///
++/// 三层合取：
++/// 1. **意愿开关** `view.field_render`（`ToggleFieldRender` 命令写的那一位，
++///    ADR-0053 回退开关）——路由只能在其之上**进一步**收回，不能替用户打开；
++/// 2. **模式支持档** [`supports_field`]——CPU 留守档不上场；
++/// 3. **非 oblique** [`oblique_active`]——Topographic + compression > 0 回落
++///    CPU（平放 quad 吃掉斜切）。
++///
++/// **双底图红线**：[`sync_terrain_chunks`] 的整层早退与 [`sync_terrain_field`]
++/// 的 gate **必须消费同一个函数**——两处各写布尔式，加档位时迟早漂移成
++/// 「两条底图同帧上屏」（ADR-0053 以来的红线，本函数是其客观兜底）。
++pub fn should_render_field(view: &ViewState) -> bool {
++    view.field_render && supports_field(view.mode) && !oblique_active(view)
++}
++
+ /// 主 App 的场渲染同步（ADR-0053 D1，Phase 1 接线 2026-10-24）。
+ ///
+ /// 取色分支的唯一选择点（ADR-0079 T5）。
+@@ -1650,7 +1705,8 @@ pub fn field_branch_of(mode: crate::state::ViewMode, terrain_visible: bool) -> V
+ /// 只改 uniform。**不自己做任何画法决策**——颜色公式全在 WGSL 与 `FieldParams`。
+ ///
+ /// ## 关键流程
+-/// 1. gate：`view.field_render && layers.terrain.visible`，不满足 → [`teardown_field`]；
++/// 1. gate：[`should_render_field`]（ADR-0082 模式路由 = 意愿开关 × 支持档 ×
++///    非 oblique），不满足 → [`teardown_field`]；
+ /// 2. 取 `active_terrain`（沿 `parent` 向上继承，与 chunk 路径同源）；
+ /// 3. 算 [`FieldKey`]：结构量直接读，内容指纹**只在可能有变化的帧**算
+ ///    （`chunks_dirty` 待消费 / 结构变了 / 首次）——与 `sync_isoline_overlay`
+@@ -1696,11 +1752,16 @@ pub fn sync_terrain_field(
+     // 故这里读到的就是「这一帧结束时还活着几块」。
+     stats.field_render_on_chunk_entities = chunk_entities.len();
+ 
+-    // 素底政治页（ADR-0079 T5）：地形层**隐藏**不退场——Flat 分支的平面
+-    // 海陆底就是这一层的替身，势力填色要压在它上面。退场只听
+-    // `field_render` 回退开关（真关场渲染 = chunk 路径接管，chunk 系统
+-    // 会在隐藏时 despawn——政治页随之真空白，与旧行为一致）。
+-    if !view.field_render {
++    // 底图载体路由（ADR-0082 Task 2）：与 chunk 侧整层早退消费**同一个**
++    // `should_render_field`（双底图红线）。为假的三种情形都走既有退场——
++    // ① 意愿开关关（`field_render` 回退，真关场渲染 = chunk 路径接管，chunk
++    // 系统会在隐藏时 despawn——政治页随之真空白，与旧行为一致）；
++    // ② CPU 留守档（Faction/Event/Coastline，吃主题色板是语义错误）；
++    // ③ Topographic+oblique（平放的场 quad 吃掉 2.5D 顶点斜切）。
++    //
++    // 素底政治页（ADR-0079 T5）：地形层**隐藏**不在此列——那只是把场切到
++    // Flat 分支（下方 `field_branch_of`），场照常上屏，势力填色才有底可压。
++    if !should_render_field(&view) {
+         teardown_field(&mut commands, &mut field, &materials, &mut stats);
+         return;
+     }
+@@ -2684,6 +2745,280 @@ mod visibility_tests {
+     }
+ }
+ 
++// ══════ ADR-0082 Task 2：场管线的模式路由（`should_render_field` 真值表）══════
++
++#[cfg(test)]
++mod field_routing_tests {
++    use super::*;
++    use crate::state::ViewMode;
++    use wv_core::terrain::TerrainData;
++
++    /// 构造只差三个路由字段的 `ViewState`（其余全默认：`field_render` 意愿、
++    /// `mode`、`topographic_compression`——三者的组合即路由真值表的全集）。
++    fn view_at(mode: ViewMode, field_render: bool, compression: f32) -> ViewState {
++        ViewState {
++            mode,
++            field_render,
++            topographic_compression: compression,
++            ..ViewState::default()
++        }
++    }
++
++    /// 真值表行（ADR-0082 D2）：场支持档 + 意愿开 + 默认 compression 0.3。
++    ///
++    /// Topographic 在 oblique（compression > 0）下必须回落 CPU——平放的场
++    /// quad 吃不到 2.5D 顶点斜切（活缺陷②）；其余三支持档照常上 GPU 场。
++    #[test]
++    fn field_supported_modes_route_to_field() {
++        assert!(
++            !should_render_field(&view_at(ViewMode::Topographic, true, 0.3)),
++            "Topographic + compression 0.3：oblique 生效，场 quad 会吃掉斜切 → CPU"
++        );
++        for mode in [
++            ViewMode::VectorFlat,
++            ViewMode::RealTerrain,
++            ViewMode::GoogleMap,
++        ] {
++            assert!(
++                should_render_field(&view_at(mode, true, 0.3)),
++                "{mode:?} 属场支持档且无 oblique → GPU 场"
++            );
++        }
++    }
++
++    /// CPU 留守档（Faction / Event / Coastline）任何 compression 都不上场。
++    ///
++    /// 活缺陷①的回归守点：转正后没有模式路由，切这三档曾错画成 Themed 场
++    /// （三档的地表语义——势力填色 / 事件高亮 / 黑底轮廓——只有 CPU 烘焙
++    /// 管线实现了对应 ShadeMode）。
++    #[test]
++    fn cpu_reserved_modes_never_route_to_field() {
++        for mode in [ViewMode::Faction, ViewMode::Event, ViewMode::Coastline] {
++            for compression in [0.0, 0.3] {
++                assert!(
++                    !should_render_field(&view_at(mode, true, compression)),
++                    "{mode:?} + compression {compression}：CPU 留守档不得路由到场 quad"
++                );
++            }
++        }
++    }
++
++    /// oblique 判据必须与 mode 合取（ADR-0082 D2）：`topographic_compression`
++    /// 是**全局字段**（默认 0.3，与 mode 无关），非 Topographic 档带着 0.3 也
++    /// 必须照常上场；Topographic 把 compression 归零（纯 2D，无斜切）则留在
++    /// GPU 场。
++    #[test]
++    fn oblique_only_pulls_topographic_back_to_cpu() {
++        assert!(
++            should_render_field(&view_at(ViewMode::VectorFlat, true, 0.3)),
++            "VectorFlat + compression 0.3：判据与 mode 合取，不得被全局 compression 误拖回 CPU"
++        );
++        assert!(
++            should_render_field(&view_at(ViewMode::Topographic, true, 0.0)),
++            "Topographic + compression 0.0：纯 2D 无斜切，场 quad 照常上屏"
++        );
++    }
++
++    /// 意愿开关（`ToggleFieldRender` 命令写的那一位，ADR-0053 的回退开关）
++    /// 压过一切路由：关即全表 false——路由只能在其之上**进一步**收回，
++    /// 不能替用户打开。
++    #[test]
++    fn field_render_wish_gates_everything() {
++        for mode in ViewMode::ALL {
++            for compression in [0.0, 0.3] {
++                assert!(
++                    !should_render_field(&view_at(mode, false, compression)),
++                    "{mode:?} + compression {compression}：field_render=false 必须全场 false"
++                );
++            }
++        }
++    }
++
++    // ── 系统级互斥（ADR-0082 D2 验收行）：路由翻转后两条底图路径只活一条 ──
++
++    fn small_terrain(biome: u8) -> TerrainData {
++        TerrainData {
++            width: 4,
++            height: 4,
++            cells: vec![
++                wv_core::terrain::TerrainCellData {
++                    height: 7,
++                    surface: 1,
++                    biome,
++                };
++                16
++            ],
++        }
++    }
++
++    /// 单根图 + 4×4 栅格地形：`active_terrain` 的最小真源。
++    fn root_terrain_world() -> wv_core::World {
++        let mut core = wv_core::World::default();
++        core.maps.push(wv_core::map::MapNode {
++            id: wv_core::Id::new_unchecked("map_world"),
++            name: "map_world".into(),
++            level: wv_core::map::MapLevel::World,
++            parent: None,
++            children: Vec::new(),
++            layers: Vec::new(),
++            icons: Vec::new(),
++            extent: None,
++            raster: None,
++            geographic_source: None,
++            time_span: None,
++            unit_per_km: None,
++            orientation: 0.0,
++            base: None,
++            outline_polygon: None,
++            trashed: false,
++            trashed_at: None,
++        });
++        core.set_terrain(wv_core::Id::new_unchecked("map_world"), small_terrain(3));
++        core
++    }
++
++    /// 只装 `sync_terrain_chunks` + `sync_terrain_field` 的最小 World：资源按
++    /// 两系统实际参数表列全（少一个就是 panic，不是「静默不路由」）。
++    fn routing_world(mode: ViewMode) -> World {
++        let core = root_terrain_world();
++        let mut world = World::new();
++        world.insert_resource(Assets::<Mesh>::default());
++        world.insert_resource(Assets::<ColorMaterial>::default());
++        world.insert_resource(Assets::<TerrainFieldMaterial>::default());
++        world.insert_resource(Assets::<Image>::default());
++        world.insert_resource(TerrainTexture {
++            handle: Handle::default(),
++            size: 4,
++            height: 4,
++            res: 1,
++            dirty: None,
++            // 预置全图脏：场路由帧早退分支会消费清零（又一处可观测差分）。
++            chunks_dirty: Some([0, 0, 4, 4]),
++            field_dirty: None,
++            last_mode: None,
++            last_soften: false,
++            last_theme_id: "fixture",
++            last_hypsometric: 0.0,
++            last_map: Some(wv_core::Id::new_unchecked("map_world")),
++        });
++        world.insert_resource(GridConfig::default());
++        world.insert_resource(ViewState {
++            mode,
++            ..ViewState::default()
++        });
++        let mut layers = LayerFrame::default();
++        layers.terrain.visible = true;
++        world.insert_resource(layers);
++        let mut drill = DrillState::default();
++        drill.ensure_root(&core);
++        world.insert_resource(drill);
++        world.insert_resource(WorldProjection {
++            world: core,
++            ..Default::default()
++        });
++        world.insert_resource(TerrainChunkEntities::default());
++        world.insert_resource(TerrainFieldRender::default());
++        world.insert_resource(FieldRenderStats::default());
++        world
++    }
++
++    /// 预植一个**真** chunk 实体（组件齐全，`despawn_chunk` 的查询能命中）。
++    /// 它是「chunk 路径在场」的替身——headless 无 Window，spawn 拣选跑不了，
++    /// 但路由决策的两侧差异（早退 drain 与否）用它就足够观测。
++    fn seed_chunk(world: &mut World) {
++        let entity = world
++            .spawn((
++                TerrainChunk {
++                    _coord: [0, 0],
++                    current_mip: 0,
++                    mip_handles: vec![Handle::default(), Handle::default(), Handle::default()],
++                    material: Handle::default(),
++                    linear_filter: false,
++                },
++                Mesh2d(Handle::<Mesh>::default()),
++            ))
++            .id();
++        world
++            .resource_mut::<TerrainChunkEntities>()
++            .by_coord
++            .insert([0, 0], entity);
++    }
++
++    /// 注册序照生产（wv-app schedules.rs）：chunk 在前、field 在后——
++    /// `field_render_on_chunk_entities` 的「帧末口径」依赖这个顺序。Bevy 的
++    /// tuple 不自带顺序约束，**必须** `.chain()`，否则 field 可能先跑、读到
++    /// 帧初而非帧末的块数（首跑就抓出来的口径陷阱）。
++    fn run_routing(world: &mut World) {
++        let mut schedule = Schedule::default();
++        schedule.add_systems((sync_terrain_chunks, sync_terrain_field).chain());
++        schedule.run(world);
++    }
++
++    /// 场 quad 的存在性：资源里记着实体且实体真活着（teardown 是延迟 despawn，
++    /// 只看 `quad.is_some()` 会在「同帧已退场」上误报）。
++    fn quad_alive(world: &World) -> bool {
++        world
++            .resource::<TerrainFieldRender>()
++            .quad
++            .is_some_and(|e| world.get_entity(e).is_ok())
++    }
++
++    /// 互斥验收（ADR-0082 D2）：场 quad 存在性与 `field_render_on_chunk_entities`
++    /// （帧末 chunk 残留口径）逐帧互补，翻转前后**各自恰好一条底图在场**。
++    ///
++    /// 帧 1（VectorFlat，场路由）：chunk 整层早退必须清空预植块，场 quad 上屏；
++    /// 帧 2（切 Faction，CPU 留守）：早退分支必须被**跳过**（重植的块原样
++    /// 保留），场 quad 走既有 `teardown_field` 退场。
++    #[test]
++    fn routing_flip_leaves_exactly_one_base_layer() {
++        let mut world = routing_world(ViewMode::VectorFlat);
++        seed_chunk(&mut world);
++
++        // 帧 1：场路由。
++        run_routing(&mut world);
++        {
++            let chunks = world.resource::<TerrainChunkEntities>().len();
++            let stat = world
++                .resource::<FieldRenderStats>()
++                .field_render_on_chunk_entities;
++            let quads = world.resource::<FieldRenderStats>().field_quads;
++            assert!(quad_alive(&world), "场路由帧：场 quad 应上屏");
++            assert_eq!(chunks, 0, "场路由帧：整层早退必须清空预植块");
++            assert_eq!(stat, 0, "帧末口径：场上屏时 chunk 残留必须为 0");
++            assert_eq!(quads, 1, "场路由帧：恰好 1 个场 quad");
++            assert_eq!(
++                usize::from(quad_alive(&world)) + chunks,
++                1,
++                "场路由帧：底图在场数必须恰为 1"
++            );
++        }
++
++        // 帧 2：翻到 CPU 留守档（Faction），chunk 侧重新预植。
++        world.resource_mut::<ViewState>().mode = ViewMode::Faction;
++        seed_chunk(&mut world);
++        run_routing(&mut world);
++        {
++            let chunks = world.resource::<TerrainChunkEntities>().len();
++            let stat = world
++                .resource::<FieldRenderStats>()
++                .field_render_on_chunk_entities;
++            let quads = world.resource::<FieldRenderStats>().field_quads;
++            assert!(
++                !quad_alive(&world),
++                "CPU 路由帧：场 quad 必须走 teardown 退场"
++            );
++            assert_eq!(chunks, 1, "CPU 路由帧：早退分支必须被跳过（预植块保留）");
++            assert_eq!(stat, 1, "帧末口径应读到保留的 chunk");
++            assert_eq!(quads, 0, "CPU 路由帧：场 quad 计数归零");
++            assert_eq!(
++                usize::from(quad_alive(&world)) + chunks,
++                1,
++                "翻转后仍恰好一条底图在场"
++            );
++        }
++    }
++}
++
+ // ══════ 自新 crate 迁来的呈现态测试（它们测桥接系统） ══════
+ 
+ #[cfg(test)]
+diff --git a/crates/wv-render/src/faction_overlays.rs b/crates/wv-render/src/faction_overlays.rs
+index 444fd31..4114e26 100644
+--- a/crates/wv-render/src/faction_overlays.rs
++++ b/crates/wv-render/src/faction_overlays.rs
+@@ -825,6 +825,9 @@ mod tests {
+             z,
+             color_mode: FactionColorMode::Own,
+             visible,
++            // ADR-0081 给 FactionLayer 增列 `usage` 后补齐（政治蛋糕 = 既有语义，
++            // 与 serde 缺省一致；本模块纯函数测试不分支自然蛋糕）。
++            usage: wv_core::model::faction::LayerUsage::Political,
+         }
+     }
+ 
+diff --git a/crates/wv-render/src/state.rs b/crates/wv-render/src/state.rs
+index 5c61dd3..7cc6497 100644
+--- a/crates/wv-render/src/state.rs
++++ b/crates/wv-render/src/state.rs
+@@ -1376,15 +1376,21 @@ mod tests {
+ 
+     /// 2026-10-18（ADR-0027 D6）：浏览态开放「势力图」。
+     /// 2026-10-25：追加「普通地图」（`GoogleMap`）——专业制图范式的入口。
+-    /// 2026-10-26（ADR-0069）：Schematic 退役后重排为 矢量 → 普通地图 →
+-    /// 势力（键 1/2/3，与顶栏前两段 Browse/Map 对齐）。
++    /// 2026-10-26（ADR-0069）：Schematic 退役后重排 矢量 → 普通地图。
++    /// 2026-10-28 用户裁定：Faction 退出本数组（势力改为 Map/Browse 两段里
++    /// 随时开关的图层关注点，ADR-0079），浏览面板只剩 矢量 → 普通地图。
++    /// （原断言「三档含 Faction」随裁定过期，2026-10-28 修正为本条；旧名
++    /// `browsing_list_offers_vector_flat_google_and_faction` 作废。）
+     #[test]
+-    fn browsing_list_offers_vector_flat_google_and_faction() {
++    fn browsing_list_offers_vector_flat_and_google_only() {
+         assert_eq!(
+             ViewMode::BROWSING,
+-            [ViewMode::VectorFlat, ViewMode::GoogleMap, ViewMode::Faction]
++            [ViewMode::VectorFlat, ViewMode::GoogleMap]
+         );
+         assert!(ViewMode::BROWSING.contains(&ViewMode::default()));
++        // Faction 退出浏览面板但枚举保留（HTTP 词表 / 数据管线兼容）。
++        assert!(ViewMode::ALL.contains(&ViewMode::Faction));
++        assert!(!ViewMode::BROWSING.contains(&ViewMode::Faction));
+     }
+ 
+     #[test]
+-- 
+2.55.0.windows.2
+

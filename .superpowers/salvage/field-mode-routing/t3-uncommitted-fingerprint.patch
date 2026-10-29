@@ -1,0 +1,948 @@
+diff --git a/crates/wv-app/src/app_bootstrap/schedules.rs b/crates/wv-app/src/app_bootstrap/schedules.rs
+index 76dcc78..b0e7449 100644
+--- a/crates/wv-app/src/app_bootstrap/schedules.rs
++++ b/crates/wv-app/src/app_bootstrap/schedules.rs
+@@ -213,7 +213,7 @@ pub(super) fn register(app: &mut App) {
+             // 编辑态逐格网格（plan v0.1 D4）：与等值线同管线族，先于 chunk 层。
+             wv_render::perf_timed!("sync_grid_lines", terrain_view::sync_grid_lines),
+             // 地形分块 + mip + 视口拣选（优化项 3a/3b/3c）。
+-            // `view.field_render` 开启时整层早退——见函数开头的回退开关。
++            // `should_render_field` 为真时整层早退——见函数开头的模式路由（ADR-0082 D2）。
+             wv_render::perf_timed!("sync_terrain_chunks", cellmap_bridge::sync_terrain_chunks),
+             // 地形场渲染（ADR-0053 D1，Phase 1 接线）：**必须排在 chunk 层之后**。
+             // 两个理由：① `field_render_on_chunk_entities` 要报**帧末**的块数，
+diff --git a/crates/wv-render/src/cellmap_bridge.rs b/crates/wv-render/src/cellmap_bridge.rs
+index 5009f1e..c4ff0f9 100644
+--- a/crates/wv-render/src/cellmap_bridge.rs
++++ b/crates/wv-render/src/cellmap_bridge.rs
+@@ -52,8 +52,8 @@ use crate::state::{BrushState, DrillState, ViewState, WorldProjection};
+ // （`field::paper::TERRAIN_Z` = 纸面层 Z，与本层无关），glob 会把名字撞在一起。
+ use wv_world_cell_map::terrain_view::field::{
+     apply_hypsometric, build_material, default_params, patch_material_images, set_coast_encoding,
+-    warp_amp, CellRect, CoastEncoding, FieldPack, FieldPalette, TerrainFieldMaterial, ViewBranch,
+-    H_MAX, H_MIN,
++    warp_amp, BlockFingerprint, CellRect, CoastEncoding, FieldPack, FieldPalette,
++    TerrainFieldMaterial, ViewBranch, H_MAX, H_MIN,
+ };
+ use wv_world_cell_map::terrain_view::hypsometric;
+ // ADR-0077：晕渲法线的米制换算唯一入口（格距 + 比例尺 → 米/格）。
+@@ -1390,8 +1390,10 @@ pub fn sync_terrain_chunks(
+ pub struct FieldKey {
+     /// 栅格来源图（`active_terrain` 给出的图，沿 `parent` 向上继承）。
+     pub map: Option<wv_core::Id>,
+-    /// 地形内容指纹（[`terrain_data_hash`]，与等值线 / 装饰缓存同源）。
+-    /// 只有**编辑提交**（或换图）才会变。
++    /// 地形内容指纹——ADR-0082 D3 起为 [`BlockFingerprint::total`] 的
++    /// **分块折叠值**（不再是旧 `pack_content_hash` 的全链值；值域切换的
++    /// 当帧会触发一次全量重打包，之后语义不变：只有**编辑提交**（或换图）
++    /// 才会变）。敏感性等价由 fingerprint 模块的 property 测试对拍钉住。
+     pub terrain_hash: u64,
+     /// 取色分支：`Topographic → BiomeRaw`（ADR-0051 §5），其余 → `Themed`。
+     pub branch: ViewBranch,
+@@ -1444,6 +1446,18 @@ pub struct TerrainFieldRender {
+     /// 换图 / 幅面变化 / 编码变化时**必须整份替换**（见 `sync_terrain_field`
+     /// 的「可增量」判据）——拿上一张图的字节去补这一张，是错位的静默画错。
+     pack: Option<wv_world_cell_map::terrain_view::field::FieldPack>,
++    /// 编辑帧内容指纹的**分块缓存**（ADR-0082 D3）。
++    ///
++    /// `new_full` 全量建（≈3 ms @1M 格，与旧全量指纹同价），之后每个编辑帧
++    /// 只用 `field_dirty` 矩形重算覆盖到的块（<0.5 ms）；`total()` 折叠后填进
++    /// [`FieldKey::terrain_hash`]。与 `pack` 同寿命语义：
++    /// - 换图 / 换分支 / 换色板（`structure_changed`）→ **整份丢弃**重建
++    ///   （旧结构的格–块账本对新结构没有意义，同 `pack` 的「幅面不符必须
++    ///   整份替换」纪律；`update_region` 的幅面守卫是第二道防线）；
++    /// - 本帧无可信脏矩形（载档 / 撤销全表 / 首次）→ 全量重建，不猜矩形。
++    ///
++    /// 会话态运行时结构：不落盘、不进序列化格式（P3/P6/P7 原样）。
++    fingerprint: Option<wv_world_cell_map::terrain_view::field::BlockFingerprint>,
+ }
+ 
+ /// 场渲染的计数器（QA 断言口径：跨机器同值、只增不减）。
+@@ -1601,6 +1615,10 @@ fn teardown_field(
+     // 12 MB 的 CPU 影子副本随场一起释放：关掉场还攥着上一张图的字节，
+     // 既白占内存，也会让「下次开场的第一次补丁」用上过期数据。
+     field.pack = None;
++    // 分块指纹随场一起丢（ADR-0082 D3）：字节本身只有 KB 级，但退场期数据
++    // 可能整幅变化（隐藏时载档 / 换图），下次开场经 `key = None` →
++    // `structure_changed` 反正也要重建——这里顺手清掉，不留过期账本。
++    field.fingerprint = None;
+     stats.field_quads = 0;
+ }
+ 
+@@ -1709,8 +1727,9 @@ pub fn field_branch_of(mode: crate::state::ViewMode, terrain_visible: bool) -> V
+ ///    非 oblique），不满足 → [`teardown_field`]；
+ /// 2. 取 `active_terrain`（沿 `parent` 向上继承，与 chunk 路径同源）；
+ /// 3. 算 [`FieldKey`]：结构量直接读，内容指纹**只在可能有变化的帧**算
+-///    （`chunks_dirty` 待消费 / 结构变了 / 首次）——与 `sync_isoline_overlay`
+-///    同款纪律，稳态零成本；
++///    （编辑信号 / 结构变了 / 首次）——与 `sync_isoline_overlay` 同款纪律，
++///    稳态零成本；且指纹本身走分块缓存（ADR-0082 D3）：编辑帧只重算
++///    `field_dirty` 矩形覆盖的块（<0.5 ms），不再全量扫 1M 格（≈3 ms）；
+ /// 4. 键的内容部分变了 → 重打 [`FieldPack`] + 换材质（`Instant` 计量毫秒）；
+ ///    只有分支 / 色板变了 → 只重写 uniform；
+ /// 5. quad 的变换每帧校正（`raster_origin` / `cell_size` 随图变）。
+@@ -1786,14 +1805,46 @@ pub fn sync_terrain_field(
+     // （`flush_terrain_texture` 的 patch、整图重建）。
+     // **不用 `tex.chunks_dirty`**：本系统排在 chunk 之后，那旗标已被消费。
+     let edit_signal = projection.is_changed() || tex.is_changed();
+-    // 内容指纹 1M 格 ≈3 ms：只在「可能会有变化」的帧算（与 `sync_isoline_overlay`
+-    // 同款纪律），稳态零成本。
++    // 内容指纹只在「可能会有变化」的帧算（与 `sync_isoline_overlay` 同款纪律），
++    // 稳态零成本；算本身走分块缓存（ADR-0082 D3），编辑帧 <0.5 ms。
+     let needs_hash = structure_changed || edit_signal || cached_hash.is_none();
++    // 场渲染的脏矩形：**一次取用、两处消费**（ADR-0082 D3）——分块指纹的增量
++    // 重算与下方 `FieldPack` 的增量补丁必须拿到**同一个**矩形（`take_field_dirty`
++    // 是一次性消费，取两次第二次必拿空：指纹白付一次全量、或补丁漏走增量）。
++    // `bypass_change_detection`：消费脏区**不是**「纹理内容变了」，若照常标记
++    // changed，下一帧 `edit_signal` 会假真一次、白算一遍内容指纹（N1 那次
++    // 「一次编辑打两遍」就是同款误信号）。
++    let field_dirty = if needs_hash {
++        tex.bypass_change_detection().take_field_dirty()
++    } else {
++        None
++    };
+     let terrain_hash = if needs_hash {
+-        // **必须用 `pack_content_hash`（裸 height/surface/biome），不能用
+-        // `terrain_data_hash`**：后者折叠的是 `display_kind` 显示槽位，而 attr
+-        // 纹理 G 通道存的是裸 biome 字节——两者不同源，会漏打（详见该函数文档）。
+-        wv_world_cell_map::terrain_view::field::pack_content_hash(data)
++        // ADR-0082 D3：指纹改走**分块缓存**——
++        // - `structure_changed`（换图 / 换分支 / 换色板）：旧缓存的格–块账本对
++        //   新结构没有意义，**整份丢弃**强制全量重建（Review Focus：这是硬纪律，
++        //   不是优化机会——就地补丁会留下半新半旧的静默错账）；
++        // - 有缓存且本帧有可信脏矩形：只重算矩形覆盖的块（<0.5 ms @1M 格）；
++        // - 其余（首次 / 无缓存 / 无可信脏区）：全量建（≈3 ms @1M 格）。
++        // 与旧 `pack_content_hash` 的关系：同字段口径（裸 height/surface/biome
++        // 序贯 FNV-1a），**值域不同**（分块折叠 ≠ 全链折叠，数学上不可通约）
++        // ——敏感性等价由 fingerprint 模块的 property 测试对拍钉住；重打判据
++        // 消费的是「变没变」，值域切换的当帧只会多付一次全量重打包。
++        if structure_changed {
++            field.fingerprint = None;
++        }
++        // 无缓存或本帧无可信脏区（载档 / 撤销全表 / 首次）→ 全量建，不猜矩形；
++        // 有缓存 + 有可信脏矩形 → 只重算矩形覆盖的块（幅面若已变——同图换栅格
++        // 这类结构差——`update_region` 内部自愈为全量重建，见其前置条件文档）。
++        // 不写成 `match (field.fingerprint.as_mut(), field_dirty)`：scrutinee 的
++        // 可变借用会横跨整个 match，`None` 臂里再赋值 `field.fingerprint` 是
++        // E0506（Polonius 才放行的形态）。
++        if field.fingerprint.is_none() || field_dirty.is_none() {
++            field.fingerprint = Some(BlockFingerprint::new_full(data));
++        } else if let Some(fp) = field.fingerprint.as_mut() {
++            fp.update_region(data, field_dirty.expect("上一分支刚排除 is_none"));
++        }
++        field.fingerprint.as_ref().map_or(0, |fp| fp.total())
+     } else {
+         cached_hash.unwrap_or_default()
+     };
+@@ -1851,16 +1902,13 @@ pub fn sync_terrain_field(
+         // 3. **脏区不太大**：超过全场 1/4 时窗口 EDT 已接近全场规模，重建材质
+         //    反而更省，也少一条「半新半旧」的路径。
+         //
+-        // `bypass_change_detection`：消费脏区**不是**「纹理内容变了」，若照常
+-        // 标记 changed，下一帧 `edit_signal` 会假真一次、白算一遍内容指纹
+-        // （N1 那次「一次编辑打两遍」就是同款误信号）。
++        // 脏矩形已在上方 `needs_hash` 段取走（ADR-0082 D3：指纹与补丁同帧
++        // 同源，一次取用两处消费；`bypass_change_detection` 的理由也记在那边）
++        // ——这里只做格式换算，不再碰 `tex`。
+         let mut patched = false;
+         if content_changed && field.material.is_some() {
+             let same_map = field.key.as_ref().is_some_and(|k| k.map == map);
+-            let rect = tex
+-                .bypass_change_detection()
+-                .take_field_dirty()
+-                .map(CellRect::from_bounds);
++            let rect = field_dirty.map(CellRect::from_bounds);
+             let full_area = u64::from(data.width.max(1)) * u64::from(data.height.max(1));
+             if let (true, Some(rect)) = (same_map, rect) {
+                 if !rect.is_empty() && rect.area() * 4 <= full_area {
+@@ -3017,6 +3065,165 @@ mod field_routing_tests {
+             );
+         }
+     }
++
++    // ── 编辑帧分块指纹（ADR-0082 Task 3 / D3）：结构变更丢弃 + 编辑帧一致 ──
++
++    /// 场路由帧应建立分块指纹缓存，且 `total()` 与数据全量重建逐位一致。
++    #[test]
++    fn field_fingerprint_is_established_on_first_routed_frame() {
++        let mut world = routing_world(ViewMode::VectorFlat);
++        run_routing(&mut world);
++        let fp = world
++            .resource::<TerrainFieldRender>()
++            .fingerprint
++            .as_ref()
++            .expect("首个场路由帧应建立分块指纹缓存");
++        let data = world
++            .resource::<WorldProjection>()
++            .world
++            .terrain_of(&wv_core::Id::new_unchecked("map_world"))
++            .expect("routing_world 已预植栅格")
++            .clone();
++        assert_eq!(
++            fp.total(),
++            BlockFingerprint::new_full(&data).total(),
++            "首次帧的指纹应与数据的全量重建逐位一致"
++        );
++    }
++
++    /// 结构变更（换分支 Themed → BiomeRaw）必须**整份丢弃**指纹缓存强制全量
++    /// 重建（Review Focus 3）——即使本帧只标了一小块脏矩形。构造「换分支 +
++    /// 整幅换数据 + 只标一角脏」：若缓存没被丢弃，矩形外的块仍是旧数据的账，
++    /// total 就对不上新数据的全量（半新半旧的静默错账被当场抓住）。
++    #[test]
++    fn field_fingerprint_rebuilds_on_structure_change() {
++        let mut world = routing_world(ViewMode::VectorFlat);
++        run_routing(&mut world);
++        assert!(
++            world
++                .resource::<TerrainFieldRender>()
++                .fingerprint
++                .is_some(),
++            "前置：首个场路由帧应已建立缓存"
++        );
++
++        // 结构变更帧：mode 切 Topographic + compression 0（场照常上屏，
++        // 分支 Themed → BiomeRaw = structure_changed）；同时整幅换地形数据、
++        // 只标一小块脏（模拟撤销 / 载档类整幅替换只留局部信号）。
++        {
++            let mut view = world.resource_mut::<ViewState>();
++            view.mode = ViewMode::Topographic;
++            view.topographic_compression = 0.0;
++        }
++        let map = wv_core::Id::new_unchecked("map_world");
++        {
++            let mut projection = world.resource_mut::<WorldProjection>();
++            let mut cells = vec![
++                wv_core::terrain::TerrainCellData {
++                    height: 50,
++                    surface: 1,
++                    biome: 7,
++                };
++                16
++            ];
++            cells[0] = wv_core::terrain::TerrainCellData {
++                height: -80,
++                surface: 0,
++                biome: 2,
++            };
++            projection.world.set_terrain(
++                map.clone(),
++                TerrainData {
++                    width: 4,
++                    height: 4,
++                    cells,
++                },
++            );
++        }
++        world.resource_mut::<TerrainTexture>().field_dirty = Some([1, 1, 2, 2]);
++
++        run_routing(&mut world);
++        let fp = world
++            .resource::<TerrainFieldRender>()
++            .fingerprint
++            .as_ref()
++            .expect("结构变更帧后缓存应已重建");
++        let data = world
++            .resource::<WorldProjection>()
++            .world
++            .terrain_of(&map)
++            .expect("刚 set_terrain")
++            .clone();
++        assert_eq!(
++            fp.total(),
++            BlockFingerprint::new_full(&data).total(),
++            "换分支必须丢缓存整份重建：total 应等于新数据的全量，而非旧账补一块"
++        );
++    }
++
++    /// 稳态编辑帧（结构不变 + 单格脏矩形）走增量重算，指纹与数据保持一致——
++    /// 这是分块路径的端到端不变量（单元测试已证 `update_region` 自身正确，
++    /// 这里钉桥接取用同一矩形、填同一 `terrain_hash` 槽的接线）。
++    #[test]
++    fn field_fingerprint_tracks_edit_frame_incrementally() {
++        let mut world = routing_world(ViewMode::VectorFlat);
++        run_routing(&mut world);
++        let before = world
++            .resource::<TerrainFieldRender>()
++            .fingerprint
++            .as_ref()
++            .expect("前置：首帧已建缓存")
++            .total();
++
++        // 编辑帧：改一格（其余与旧数据逐格相同），只标该格的脏矩形。
++        let map = wv_core::Id::new_unchecked("map_world");
++        {
++            let mut projection = world.resource_mut::<WorldProjection>();
++            let mut data = projection
++                .world
++                .terrain_of(&map)
++                .expect("routing_world 已预植栅格")
++                .clone();
++            data.cells[5].height = 999; // (1,1)，与下方脏矩形一致
++            projection.world.set_terrain(map.clone(), data);
++        }
++        world.resource_mut::<TerrainTexture>().field_dirty = Some([1, 1, 2, 2]);
++
++        run_routing(&mut world);
++        let fp = world
++            .resource::<TerrainFieldRender>()
++            .fingerprint
++            .as_ref()
++            .expect("编辑帧后缓存应在场");
++        let data = world
++            .resource::<WorldProjection>()
++            .world
++            .terrain_of(&map)
++            .expect("刚 set_terrain")
++            .clone();
++        assert_eq!(
++            fp.total(),
++            BlockFingerprint::new_full(&data).total(),
++            "编辑帧增量重算后，指纹必须与数据的全量重建逐位一致"
++        );
++        assert_ne!(
++            fp.total(),
++            before,
++            "单格编辑必须翻转指纹（敏感性：编辑必被看见）"
++        );
++        // terrain_hash 槽应与指纹 total 同值（重打判据消费的就是它）。
++        let key_hash = world
++            .resource::<TerrainFieldRender>()
++            .key
++            .as_ref()
++            .expect("场上屏后键应在场")
++            .terrain_hash;
++        assert_eq!(
++            key_hash,
++            fp.total(),
++            "FieldKey.terrain_hash 必须取指纹 total（ADR-0082 D3 槽位约定）"
++        );
++    }
+ }
+ 
+ // ══════ 自新 crate 迁来的呈现态测试（它们测桥接系统） ══════
+diff --git a/crates/wv-world-cell-map/src/terrain_view/field/fingerprint.rs b/crates/wv-world-cell-map/src/terrain_view/field/fingerprint.rs
+new file mode 100644
+index 0000000..c78fea3
+--- /dev/null
++++ b/crates/wv-world-cell-map/src/terrain_view/field/fingerprint.rs
+@@ -0,0 +1,568 @@
++//! 编辑帧分块指纹（ADR-0082 D3）：把场路径的内容指纹从「每编辑帧全量扫
++//! 1M 格 ≈3 ms」改成「256² 分块缓存 + 脏块增量重算」（<0.5 ms）。
++//!
++//! ## 做什么
++//!
++//! [`super::pack::pack_content_hash`] 每次都对整幅地形逐格折叠 FNV-1a——
++//! 增量补丁把**重打包**省到亚毫秒后，指纹成了编辑帧剩下的最大头（1024²
++//! 实测 ≈3 ms）。本模块把指纹拆成 [`FP_BLOCK]² 格一块的**块 hash 缓存**
++//! （[`BlockFingerprint`]）：
++//!
++//! - [`BlockFingerprint::new_full`]：全量建（与旧全量指纹同价，一次性）；
++//! - [`BlockFingerprint::update_region`]：编辑帧只重算 `field_dirty` 矩形
++//!   覆盖到的块——一笔 brush 的脏区 ~12² 格，重算量从 1M 格跌到千格级；
++//! - [`BlockFingerprint::total`]：按块行序把块 hash 序贯折叠成一个 `u64`，
++//!   填进 wv-render 侧 `FieldKey.terrain_hash` 槽（重打判据**一行不动**，
++//!   N1 教训：只比内容，不比通知）。
++//!
++//! ## 等价判据（为什么不是「与旧 hash 值相等」）
++//!
++//! FNV 是**链式**的：全量 hash 的每个中间位都依赖前面所有格。要「增量值
++//! ≡ 旧全量值」就得保留全链依赖，就得放弃块缓存——两者数学上互斥（ADR-0082
++//! 「验收口径修正」）。故判据钉两条，**敏感性等价**而非值等价：
++//!
++//! 1. **自身一致**：随机编辑序列下「增量 `update_region` 后的 `total()`」
++//!    与「`new_full` 全量重建的 `total()`」逐位相等（property 测试）；
++//! 2. **敏感性对拍**：同一编辑序列下「新 total 是否翻转」与旧
++//!    `pack_content_hash` 是否翻转逐轮一致——编辑必被看见、未编辑必不误报。
++//!
++//! 值域切换的一次性后果只是迁移瞬间 `terrain_hash` 对不上、当帧触发一次
++//! 全量重打包（用户无感）。
++//!
++//! ## 与 `pack_content_hash` 的口径关系
++//!
++//! 块 hash 折叠的字段与顺序**照抄** [`super::pack::pack_content_hash`]：
++//! 每格 `height`（u16 零扩展）/ `surface` / `biome` 三字段序贯 FNV-1a——
++//! 打包真正消费的字段（attr 的 R 湿判定读 surface、G 读裸 biome；height/coast
++//! 读 height），判据必须与产物同源（该函数文档里记着 `display_kind` 那次漏打）。
++//! `pack_content_hash` 保留 pub，职责收窄为**对账基准**（见其文档注记）。
++//!
++//! ## `update_region` 的前置条件（结构一致性）
++//!
++//! 缓存的格–块映射必须与传入数据同幅面。不同幅面 = 结构已变（换图 / 同图
++//! 换栅格），旧块账本对新结构没有意义——就地补一个矩形只会留下「半新半旧」
++//! 的静默错账，故**自愈为等价的全量重建**（本函数无返回值可拒，与
++//! `FieldPack::patch_region`「幅面不符必须拒绝、调用方改走全量」同一纪律的
++//! 无返回值变体）。调用方（wv-render `sync_terrain_field`）另在
++//! `structure_changed`（换图 / 换分支 / 换色板）时**整份丢弃**缓存。
++//!
++//! ## 脏矩形的来源纪律
++//!
++//! 与 GPU 补丁共用 `TerrainTexture::field_dirty` 的**同一个**矩形（一次取用、
++//! 两处消费，ADR-0082 D3）——不引入第二份脏区追踪。该矩形自带编码裕量
++//! （coast ±32 / biome ±8 的外扩由上游写入时决定），指纹重算「多算不错算」：
++//! 矩形盖到的块一律从**当前**数据重算，与全量重建逐位一致。
++
++/// 分块边长（格）。256² = 65536 格/块；1024² 图 = 4×4 = 16 块、4096² 图 =
++/// 16×16 = 256 块——块数远小于格数，`total()` 的折叠成本可忽略。
++///
++/// 取 256 的理由：一笔 brush 的典型脏区（~12² 格）永远落在 1–4 个块内，
++/// 增量重算量与块粒度的权衡在 256 处最划算（更小 → 块多、total 折叠贵、
++/// 缓存条目碎；更大 → 单块重算贵）。
++use wv_core::terrain::{TerrainCellData, TerrainData};
++
++pub const FP_BLOCK: u32 = 256;
++
++const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
++const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
++
++/// 编辑帧地形内容指纹的**分块缓存**（ADR-0082 D3）。
++///
++/// 会话态运行时结构（不落盘、不进任何序列化格式——P3/P6/P7 原样），
++/// 消费方只有 wv-render 的 `sync_terrain_field`：`total()` 折叠值填
++/// `FieldKey.terrain_hash`。
++///
++/// 块 hash 按块**行序**存（`index = by * blocks_x + bx`，与地形数据的
++/// 行主序同构）；`grid_w/grid_h` 记录建缓存时的幅面，供 [`Self::update_region`]
++/// 做结构一致性守卫（见模块文档「前置条件」）。
++pub struct BlockFingerprint {
++    /// 各块的 FNV-1a hash（行序）。
++    block_hashes: Vec<u64>,
++    /// 横向块数（`ceil(grid_w / FP_BLOCK)`）。
++    blocks_x: u32,
++    /// 纵向块数（`ceil(grid_h / FP_BLOCK)`）。
++    blocks_y: u32,
++    /// 建缓存时的地形幅面（宽）——结构一致性的守卫依据。
++    grid_w: u32,
++    /// 建缓存时的地形幅面（高）——结构一致性的守卫依据。
++    grid_h: u32,
++}
++
++impl BlockFingerprint {
++    /// 全量建：对整幅地形逐块算 hash（成本与旧全量指纹同价，≈3 ms @1M 格，
++    /// 每个编辑帧只该付一次的那个「首次 / 结构变更 / 无可信脏区」价）。
++    ///
++    /// 畸形输入（`cells` 长度与幅面不符）按缺省格补齐再建——与
++    /// `FieldPack::from_terrain` 的 padding 同款防御，保证索引不越界。
++    pub fn new_full(data: &TerrainData) -> Self {
++        let (w, h) = (data.width, data.height);
++        let n = w as usize * h as usize;
++        if data.cells.len() != n {
++            let mut cells = data.cells.clone();
++            cells.resize(n, TerrainCellData::default());
++            return Self::new_full(&TerrainData {
++                width: w,
++                height: h,
++                cells,
++            });
++        }
++        let blocks_x = (w + FP_BLOCK - 1) / FP_BLOCK;
++        let blocks_y = (h + FP_BLOCK - 1) / FP_BLOCK;
++        let mut block_hashes = Vec::with_capacity((blocks_x * blocks_y) as usize);
++        for by in 0..blocks_y {
++            for bx in 0..blocks_x {
++                block_hashes.push(block_hash(data, bx, by));
++            }
++        }
++        Self {
++            block_hashes,
++            blocks_x,
++            blocks_y,
++            grid_w: w,
++            grid_h: h,
++        }
++    }
++
++    /// 增量重算：只更新 `rect`（格坐标**半开**区间 `[x0,y0,x1,y1)`，与
++    /// `TerrainTexture::field_dirty` 同约定）覆盖到的块；越界部分钳制，
++    /// 空矩形 = 合法无事。
++    ///
++    /// ## 前置条件：结构一致（见模块文档）
++    ///
++    /// 缓存幅面与 `data` 幅面不符时**自愈为全量重建**——绝不就地补丁
++    /// （半新半旧的错账比慢更糟：指纹漏翻 → 画面陈旧且无报错）。
++    ///
++    /// 块覆盖判定：格 → 块 = 坐标 / [`FP_BLOCK`]；半开上界的最后一个格是
++    /// `x1−1`，其所在块即需重算的最后一块。
++    pub fn update_region(&mut self, data: &TerrainData, rect: [u32; 4]) {
++        let blocks_x = (data.width + FP_BLOCK - 1) / FP_BLOCK;
++        let blocks_y = (data.height + FP_BLOCK - 1) / FP_BLOCK;
++        if self.grid_w != data.width
++            || self.grid_h != data.height
++            || self.blocks_x != blocks_x
++            || self.blocks_y != blocks_y
++        {
++            *self = Self::new_full(data);
++            return;
++        }
++        let x0 = rect[0].min(data.width);
++        let y0 = rect[1].min(data.height);
++        let x1 = rect[2].min(data.width);
++        let y1 = rect[3].min(data.height);
++        if x1 <= x0 || y1 <= y0 {
++            return;
++        }
++        let bx0 = x0 / FP_BLOCK;
++        let bx1 = (x1 - 1) / FP_BLOCK + 1;
++        let by0 = y0 / FP_BLOCK;
++        let by1 = (y1 - 1) / FP_BLOCK + 1;
++        for by in by0..by1 {
++            for bx in bx0..bx1 {
++                let idx = (by * self.blocks_x + bx) as usize;
++                self.block_hashes[idx] = block_hash(data, bx, by);
++            }
++        }
++    }
++
++    /// 总 hash：按块行序把块 hash 序贯 FNV-1a 折叠（`h = (h ^ bh) * PRIME`，
++    /// 起始 [`FNV_OFFSET`]）。
++    ///
++    /// **值域与旧 `pack_content_hash` 不可通约**（分块折叠 ≠ 全链折叠）——
++    /// 敏感性等价由模块文档的判据 ② 钉住；重打判据消费的是「变没变」，
++    /// 不是具体值。
++    pub fn total(&self) -> u64 {
++        let mut h = FNV_OFFSET;
++        for &bh in &self.block_hashes {
++            h ^= bh;
++            h = h.wrapping_mul(FNV_PRIME);
++        }
++        h
++    }
++}
++
++/// 单块 hash：块内 cells 的 `height`（u16 零扩展）/ `surface` / `biome`
++/// 三字段按 [`super::pack::pack_content_hash`] 的同一顺序序贯 FNV-1a
++/// （同字段口径、同序——对账基准就是它）。
++fn block_hash(data: &TerrainData, bx: u32, by: u32) -> u64 {
++    let x0 = bx * FP_BLOCK;
++    let y0 = by * FP_BLOCK;
++    let x1 = (x0 + FP_BLOCK).min(data.width);
++    let y1 = (y0 + FP_BLOCK).min(data.height);
++    let w = data.width as usize;
++    let mut h = FNV_OFFSET;
++    for y in y0..y1 {
++        let row = y as usize * w;
++        for x in x0..x1 {
++            let c = &data.cells[row + x as usize];
++            h ^= (c.height as u16) as u64;
++            h = h.wrapping_mul(FNV_PRIME);
++            h ^= c.surface as u64;
++            h = h.wrapping_mul(FNV_PRIME);
++            h ^= c.biome as u64;
++            h = h.wrapping_mul(FNV_PRIME);
++        }
++    }
++    h
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use super::super::pack::pack_content_hash;
++    use std::time::Instant;
++    use wv_terrain::{SURFACE_LAND, SURFACE_WATER};
++
++    /// 确定性 PRNG（xorshift64*）：property 测试的「随机」必须**可复现**——
++    /// 固定种子逐位复现同一序列，失败时可重放定位。不引入 `rand` 依赖
++    /// （AGENTS §9：默认拒绝新依赖）。
++    struct Xorshift(u64);
++
++    impl Xorshift {
++        fn new(seed: u64) -> Self {
++            Self(seed | 1) // 种子非零化
++        }
++        fn next_u32(&mut self) -> u32 {
++            let mut x = self.0;
++            x ^= x >> 12;
++            x ^= x << 25;
++            x ^= x >> 27;
++            self.0 = x;
++            (x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 32) as u32
++        }
++        /// `[0, n)` 内的均匀值（测试用，n 远小于 2¹⁶，模偏差可忽略）。
++        fn below(&mut self, n: u32) -> u32 {
++            self.next_u32() % n
++        }
++    }
++
++    /// 夹具地形：水为底（−100 m），按确定性花纹铺约 40% 陆格
++    /// （100–106 m，biome 0–4）——同时有同质大片与水陆交界，
++    /// 让高度 / surface / biome 三类编辑都有落点。
++    fn fixture(w: u32, h: u32) -> TerrainData {
++        let mut cells = vec![
++            TerrainCellData {
++                height: -100,
++                surface: SURFACE_WATER,
++                biome: 0,
++            };
++            (w * h) as usize
++        ];
++        for y in 0..h {
++            for x in 0..w {
++                if (x * 7 + y * 13 + x * y) % 5 < 2 {
++                    let i = (y * w + x) as usize;
++                    cells[i] = TerrainCellData {
++                        height: 100 + (x % 7) as i16,
++                        surface: SURFACE_LAND,
++                        biome: (x % 5) as u8,
++                    };
++                }
++            }
++        }
++        TerrainData {
++            width: w,
++            height: h,
++            cells,
++        }
++    }
++
++    fn cell(height: i16, surface: u8, biome: u8) -> TerrainCellData {
++        TerrainCellData {
++            height,
++            surface,
++            biome,
++        }
++    }
++
++    /// 一次「编辑」：随机挑一个字段改（三类字段都覆盖）；~1/10 概率把原值
++    /// 写回（无操作编辑）——钉「未编辑必不误报」的另一半敏感性口径。
++    fn mutate_cell(data: &mut TerrainData, x: u32, y: u32, rng: &mut Xorshift) {
++        let i = (y * data.width + x) as usize;
++        if rng.below(10) == 0 {
++            return; // 原值写回 = 无操作编辑
++        }
++        let c = &mut data.cells[i];
++        match rng.below(3) {
++            // 夹具高度 ∈ [−100, 106]，saturating_add(1..=200) 必然改值。
++            0 => c.height = c.height.saturating_add(1 + rng.below(200) as i16),
++            1 => {
++                c.surface = if c.surface == SURFACE_WATER {
++                    SURFACE_LAND
++                } else {
++                    SURFACE_WATER
++                };
++            }
++            _ => c.biome = c.biome.wrapping_add(1),
++        }
++    }
++
++    // ══════ 判据 ①：自身一致——增量 ≡ 全量（逐位） ══════
++
++    /// 随机编辑序列 property 测试（brief 指定）：32×24 小栅格 × 50 轮随机改格，
++    /// 每轮 `update_region(编辑格)` 后 `total()` 与 `new_full(...).total()`
++    /// 逐位相等。
++    ///
++    /// 随机序列设计：xorshift64* 固定种子 `0x5EED_2026_1028`——「随机」覆盖
++    /// 三类字段 × 有操作 / 无操作 × 矩形贴边（x=w−1 时 `x+1` 越界，练钳制），
++    /// 「确定」保证失败可重放。50 轮覆盖同一格被反复编辑、编辑后改回等轨迹。
++    #[test]
++    fn incremental_total_equals_full_recompute_bitwise() {
++        let mut rng = Xorshift::new(0x5EED_2026_1028);
++        let (w, h) = (32u32, 24u32);
++        let mut data = fixture(w, h);
++        let mut fp = BlockFingerprint::new_full(&data);
++        for round in 0..50u32 {
++            let (x, y) = (rng.below(w), rng.below(h));
++            mutate_cell(&mut data, x, y, &mut rng);
++            fp.update_region(&data, [x, y, x + 1, y + 1]);
++            let want = BlockFingerprint::new_full(&data).total();
++            assert_eq!(
++                fp.total(),
++                want,
++                "第 {round} 轮编辑 ({x},{y}) 后：增量 total 与全量重建不等"
++            );
++        }
++    }
++
++    /// 跨块边界版（判据 ① 的多块覆盖）：32×24 全落在一个块里，这里的
++    /// 600×300 = 3×2 = 6 块，编辑落在块角（列 254–257 跨 255/256 边界）与
++    /// 带多格裕量的矩形也要与全量逐位一致。
++    #[test]
++    fn incremental_total_matches_full_across_block_boundaries() {
++        let mut rng = Xorshift::new(0xFEED_C0DE);
++        let (w, h) = (600u32, 300u32);
++        let mut data = fixture(w, h);
++        let mut fp = BlockFingerprint::new_full(&data);
++        assert_eq!(fp.total(), BlockFingerprint::new_full(&data).total());
++        for round in 0..40u32 {
++            let (x, y) = (rng.below(w), rng.below(h));
++            mutate_cell(&mut data, x, y, &mut rng);
++            // 带 2 格裕量的矩形（上游 mark_dirty 会并出这种形状）。
++            let rect = [
++                x.saturating_sub(2),
++                y.saturating_sub(2),
++                (x + 3).min(w),
++                (y + 3).min(h),
++            ];
++            fp.update_region(&data, rect);
++            assert_eq!(
++                fp.total(),
++                BlockFingerprint::new_full(&data).total(),
++                "第 {round} 轮编辑 ({x},{y}) rect={rect:?} 后：增量与全量不等"
++            );
++        }
++        // 块边界角落：列 255/256 是块 0 与块 1 的分界，任一侧的单格编辑
++        // 都必须只动所在块也对上全量。
++        for x in [254u32, 255, 256, 257] {
++            let i = (100 * w + x) as usize;
++            data.cells[i].biome = data.cells[i].biome.wrapping_add(3);
++            fp.update_region(&data, [x, 100, x + 1, 101]);
++            assert_eq!(
++                fp.total(),
++                BlockFingerprint::new_full(&data).total(),
++                "列 {x}（块分界附近）单格编辑后：增量与全量不等"
++            );
++        }
++    }
++
++    // ══════ 单格敏感性 + 可逆性 ══════
++
++    /// 任一格的三字段任一改动 → total 变；同格改回 → total 逐位恢复。
++    /// 「改回恢复」是分块折叠下「编辑必被看见」的反向保证（改回 = 内容
++    /// 还原 = 指纹还原），顺带钉住 total 的确定性。
++    #[test]
++    fn fingerprint_distinguishes_any_single_cell_edit() {
++        let (w, h) = (5u32, 4u32);
++        let data = fixture(w, h);
++        let baseline = BlockFingerprint::new_full(&data).total();
++        for y in 0..h {
++            for x in 0..w {
++                let i = (y * w + x) as usize;
++                // ── height：全量路径 ──
++                let mut edited = data.clone();
++                edited.cells[i].height += 7;
++                assert_ne!(
++                    BlockFingerprint::new_full(&edited).total(),
++                    baseline,
++                    "({x},{y}) height 改 → 指纹必须变"
++                );
++                // ── surface：增量路径（先改 → 变，再改回 → 恢复）──
++                let mut surface_flipped = data.clone();
++                surface_flipped.cells[i].surface = if data.cells[i].surface == SURFACE_WATER {
++                    SURFACE_LAND
++                } else {
++                    SURFACE_WATER
++                };
++                let mut fp = BlockFingerprint::new_full(&data);
++                fp.update_region(&surface_flipped, [x, y, x + 1, y + 1]);
++                assert_ne!(
++                    fp.total(),
++                    baseline,
++                    "({x},{y}) surface 翻转 → 指纹必须变（湿判定与海岸场都会变）"
++                );
++                fp.update_region(&data, [x, y, x + 1, y + 1]);
++                assert_eq!(
++                    fp.total(),
++                    baseline,
++                    "({x},{y}) surface 改回 → 指纹必须逐位恢复"
++                );
++                // ── biome：增量路径 ──
++                let mut biome_bumped = data.clone();
++                biome_bumped.cells[i].biome = biome_bumped.cells[i].biome.wrapping_add(1);
++                let mut fp = BlockFingerprint::new_full(&data);
++                fp.update_region(&biome_bumped, [x, y, x + 1, y + 1]);
++                assert_ne!(
++                    fp.total(),
++                    baseline,
++                    "({x},{y}) biome 改 → 指纹必须变（attr G 通道会变）"
++                );
++                fp.update_region(&data, [x, y, x + 1, y + 1]);
++                assert_eq!(
++                    fp.total(),
++                    baseline,
++                    "({x},{y}) biome 改回 → 指纹必须逐位恢复"
++                );
++            }
++        }
++    }
++
++    // ══════ 退化输入 ══════
++
++    /// 0×0 / 1×1 / 全水 5×5：不 panic，`total()` 与全量重建一致；越界矩形
++    /// 在退化幅面上也只是钳制后无事。
++    #[test]
++    fn fingerprint_handles_degenerate_grids() {
++        // 0×0：无块，total = 纯 offset 基值；越界矩形不动任何东西。
++        let empty = TerrainData {
++            width: 0,
++            height: 0,
++            cells: Vec::new(),
++        };
++        let mut fp = BlockFingerprint::new_full(&empty);
++        let before = fp.total();
++        fp.update_region(&empty, [0, 0, 10, 10]);
++        assert_eq!(fp.total(), before, "0×0 上 update_region 不该有任何效果");
++        assert_eq!(fp.total(), BlockFingerprint::new_full(&empty).total());
++
++        // 1×1：单格单块，改一格即翻指纹。
++        let mut one = TerrainData {
++            width: 1,
++            height: 1,
++            cells: vec![cell(5, SURFACE_LAND, 3)],
++        };
++        let mut fp = BlockFingerprint::new_full(&one);
++        let before = fp.total();
++        one.cells[0].height = 99;
++        fp.update_region(&one, [0, 0, 1, 1]);
++        assert_eq!(fp.total(), BlockFingerprint::new_full(&one).total());
++        assert_ne!(fp.total(), before, "1×1 的唯一格被改 → 指纹必须变");
++
++        // 全水 5×5：同质图不 panic、确定性成立。
++        let sea = TerrainData {
++            width: 5,
++            height: 5,
++            cells: vec![cell(-100, SURFACE_WATER, 0); 25],
++        };
++        let fp = BlockFingerprint::new_full(&sea);
++        assert_eq!(fp.total(), BlockFingerprint::new_full(&sea).total());
++    }
++
++    // ══════ 判据 ②：敏感性对拍（与旧 pack_content_hash 等价） ══════
++
++    /// 同一随机编辑序列下，「新 total 是否翻转」与「旧 `pack_content_hash`
++    /// 是否翻转」逐轮一致（**敏感性等价，非值等价**——两个口径的值域数学上
++    /// 不可通约，见模块文档）。无操作编辑轮两边都必须**不**翻转。
++    #[test]
++    fn sensitivity_matches_legacy_content_hash() {
++        let mut rng = Xorshift::new(0xABCD_1234);
++        let (w, h) = (32u32, 24u32);
++        let mut data = fixture(w, h);
++        let mut fp = BlockFingerprint::new_full(&data);
++        let mut fp_prev = fp.total();
++        let mut legacy_prev = pack_content_hash(&data);
++        for round in 0..60u32 {
++            let (x, y) = (rng.below(w), rng.below(h));
++            mutate_cell(&mut data, x, y, &mut rng);
++            fp.update_region(&data, [x, y, x + 1, y + 1]);
++            let fp_now = fp.total();
++            let legacy_now = pack_content_hash(&data);
++            assert_eq!(
++                fp_now != fp_prev,
++                legacy_now != legacy_prev,
++                "第 {round} 轮编辑 ({x},{y})：新指纹{}而旧 hash{}——敏感性等价破坏",
++                if fp_now != fp_prev { "翻转" } else { "未翻转" },
++                if legacy_now != legacy_prev {
++                    "翻转"
++                } else {
++                    "未翻转"
++                }
++            );
++            fp_prev = fp_now;
++            legacy_prev = legacy_now;
++        }
++    }
++
++    // ══════ 结构变更：缓存整份重建（纯函数部分） ══════
++
++    /// 结构不一致的前置条件（换图 / 同图换栅格）：缓存与传入数据幅面不符时，
++    /// `update_region` 必须**整份重建**而不是拿旧块账就地补——只补一小块矩形
++    /// 会留下「半新半旧」的错账。桥接侧（wv-render `sync_terrain_field`）的
++    /// `structure_changed` 丢弃逻辑由该 crate 的集成测试覆盖。
++    #[test]
++    fn fingerprint_cache_rebuilds_on_structure_change() {
++        let a = fixture(32, 24);
++        let mut fp = BlockFingerprint::new_full(&a);
++        // 幅面不同 = 格–块结构已变（32×24 → 1 块；16×48 → 1 块但格映射不同）。
++        let b = fixture(16, 48);
++        fp.update_region(&b, [0, 0, 4, 4]); // 只盖一角
++        assert_eq!(
++            fp.total(),
++            BlockFingerprint::new_full(&b).total(),
++            "结构不一致时必须整份重建：total 应等于新数据的全量，而非旧账补一块"
++        );
++        // 更彻底的形状差（块数都变）：同样必须重建。
++        let c = fixture(600, 300);
++        fp.update_region(&c, [0, 0, 4, 4]);
++        assert_eq!(fp.total(), BlockFingerprint::new_full(&c).total());
++    }
++
++    // ══════ 手动性能探针（不进门禁） ══════
++
++    /// 手动跑：`cargo test -p wv-world-cell-map fingerprint -- --ignored --nocapture`
++    ///
++    /// 1024² 全量建 vs 一笔 brush 脏区的增量重算（debug 构建的墙钟，量级对比用
++    /// ——验收口径 <0.5 ms 指 release 编辑帧；debug 下比值仍应有 2–3 个数量级差）。
++    #[test]
++    #[ignore = "手动性能探针：--ignored --nocapture"]
++    fn perf_full_vs_dirty_region_on_1024_grid() {
++        let data = fixture(1024, 1024);
++        let t0 = Instant::now();
++        let mut fp = BlockFingerprint::new_full(&data);
++        let full_ms = t0.elapsed().as_secs_f32() * 1000.0;
++
++        let mut edited = data.clone();
++        let rect = [500u32, 500, 512, 510]; // 一笔 brush 的典型脏区（12×10 格）
++        for y in rect[1]..rect[3] {
++            for x in rect[0]..rect[2] {
++                edited.cells[(y * 1024 + x) as usize].height =
++                    edited.cells[(y * 1024 + x) as usize].height.saturating_add(5);
++            }
++        }
++        let t1 = Instant::now();
++        fp.update_region(&edited, rect);
++        let region_ms = t1.elapsed().as_secs_f32() * 1000.0;
++
++        let t2 = Instant::now();
++        let _ = BlockFingerprint::new_full(&edited);
++        let full_again_ms = t2.elapsed().as_secs_f32() * 1000.0;
++
++        assert_eq!(
++            fp.total(),
++            BlockFingerprint::new_full(&edited).total(),
++            "探针同时复核一致性"
++        );
++        println!(
++            "1024²：new_full = {full_ms:.2} ms；update_region(12×10) = {region_ms:.4} ms；全量对照 = {full_again_ms:.2} ms"
++        );
++    }
++}
+diff --git a/crates/wv-world-cell-map/src/terrain_view/field/mod.rs b/crates/wv-world-cell-map/src/terrain_view/field/mod.rs
+index c6aaede..de879c6 100644
+--- a/crates/wv-world-cell-map/src/terrain_view/field/mod.rs
++++ b/crates/wv-world-cell-map/src/terrain_view/field/mod.rs
+@@ -17,6 +17,7 @@
+ //! |---|---|---|---|
+ //! | [`bicubic`] | 数据 | Catmull-Rom 核的宿主镜像 + 解析导数（P5） | 纯 Rust |
+ //! | [`coast_sdf`] | 数据 | 海岸距离场（Felzenszwalb EDT） | 纯 Rust |
++//! | [`fingerprint`] | 数据 | 编辑帧分块指纹（ADR-0082 D3） | 纯 Rust |
+ //! | [`mask_sdf`] | 数据 | 掩码 → 符号距离场（群系矢量面的输入场） | 纯 Rust |
+ //! | [`line_sdf`] | 数据 | 折线距离场（T25 河流 / T26 道路，追记九） | wv-core / wv-terrain |
+ //! | [`pack`] | 数据 | 三张数据纹理打包（height/coast/attr） | 纯 Rust |
+@@ -36,6 +37,7 @@
+ pub mod bicubic;
+ pub mod biome_sdf;
+ pub mod coast_sdf;
++pub mod fingerprint;
+ pub mod line_sdf;
+ pub mod mask_sdf;
+ pub mod material;
+@@ -49,6 +51,7 @@ pub use biome_sdf::{
+     biome_distance_field, with_cap as biome_field_with_cap, BiomeField, BIOME_FIELD_CAP, NO_FOREIGN,
+ };
+ pub use coast_sdf::{distance_field, distance_to_coast, FAR};
++pub use fingerprint::{BlockFingerprint, FP_BLOCK};
+ pub use line_sdf::{
+     bake_line_dash, rivers_from_terrain, LineClass, LineDashPack, LinePoly, DASH_MAX_CELLS,
+ };
+diff --git a/crates/wv-world-cell-map/src/terrain_view/field/pack.rs b/crates/wv-world-cell-map/src/terrain_view/field/pack.rs
+index 470a429..8758c20 100644
+--- a/crates/wv-world-cell-map/src/terrain_view/field/pack.rs
++++ b/crates/wv-world-cell-map/src/terrain_view/field/pack.rs
+@@ -570,6 +570,18 @@ impl FieldPack {
+ 
+ /// 数据纹理的**内容指纹**（FNV-1a，进程内比较用，不落盘）。
+ ///
++/// ## 对账基准（ADR-0082 Task 3 起）
++///
++/// 运行时消费面已由 [`super::fingerprint::BlockFingerprint`] 的分块缓存接管
++/// （编辑帧不再全量扫 1M 格）。本函数**保留 pub**，职责收窄为**对账基准**：
++/// - 块 hash 与 `total` 折叠的**字段口径**（`height`（u16 零扩展）/
++///   `surface` / `biome` 序贯 FNV-1a，同字段同序）以本函数为权威出处；
++/// - fingerprint 模块的敏感性对拍测试（同一编辑序列下「新 total 是否翻转」
++///   ≡「本函数是否翻转」）逐轮比对。
++///
++/// 两个口径**值域不同**（分块折叠 ≠ 全链折叠，数学上不可通约）——不做也不应
++/// 做值等价，判据是敏感性等价（见 fingerprint 模块文档）。
++///
+ /// ## 为什么不能复用 `isoline_overlay::terrain_data_hash`
+ /// 那个指纹折叠的是 `biome::display_kind(...)`（三通道 → 0..9 的**显示槽位**），
+ /// 因为等值线只关心「视觉上是不是同一类」。但 [`FieldPack`] 的 `attr` 纹理
