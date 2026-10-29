@@ -220,7 +220,8 @@ pub fn marker_local(extent: Option<Extent>, id: &Id) -> Vec2 {
 ///
 /// v0.2 §B.2 给的 14 / 12 是**屏幕像素**，而 gizmo 画在世界空间；默认 1 世界单位 =
 /// 1 像素（`TILE_BASE = 32`、`cell_size = 8` 时一格 = 8 像素），故用 `cell_size` 换算，
-/// 与 [`crate::world_projection::draw_brush_cursor`] 的既有约定一致。
+/// 与 [`crate::brush_cursor::sync_brush_cursor`] 的既有约定一致
+/// （笔刷光标现役实现；原 `draw_brush_cursor` Gizmos 死壳 2026-10-29 已删）。
 pub fn half_from_px(px: f32, cell_size: f32) -> f32 {
     px * 0.5 * (cell_size / 8.0)
 }

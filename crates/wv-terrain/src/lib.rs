@@ -201,7 +201,8 @@ impl TerrainGrid {
     /// 全零高度格（默认网格）两个分位都返 `0`。
     ///
     /// 排序 O(N log N)；对 1024² ≈ 1 ms 量级，大图调用点
-    /// 缓存结果（`ViewState::topographic_thresholds`，[ADR-0039] 决策 5）。
+    /// 缓存结果（`CellRenderer::topographic_thresholds`，[ADR-0039] 决策 5；
+    /// 历史上曾放 `ViewState`，该镜像 2026-10-29 已删）。
     ///
     /// [ADR-0039]: ../docs/adr/ADR-0039-topographic-viewmode.md
     pub fn compute_height_percentiles(&self, p_low: f32, p_high: f32) -> (i16, i16) {

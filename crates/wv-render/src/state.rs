@@ -298,18 +298,6 @@ pub struct ViewState {
     pub window_size: Vec2,
     /// 当前地图 ID。
     pub current_map: String,
-    /// Topographic viewmode 百分位阈值缓存（[ADR-0039] 决策 5）。
-    ///
-    /// Key = map id（与 `current_map` 同口径字符串）；Value = (`p33`, `p66`) 两个
-    /// height 阈值（米）。**首次进入 Topographic mode 时按图填一次**，
-    /// `data_hash` 变化时（编辑/地形重构）才重算。
-    ///
-    /// biome 通道不参与计算（[ADR-0039] X 路线）。
-    /// 用 `String` key 而非 `wv_core::Id` 是为了与 `current_map` 同款（避免
-    /// 跨 crate 的 `Id` 耦合；map id 在 wv-render 是字符串口径）。
-    ///
-    /// [ADR-0039]: ../docs/adr/ADR-0039-topographic-viewmode.md
-    pub topographic_thresholds: std::collections::HashMap<String, (i16, i16)>,
     /// 2.5D vertex Z 挤压开关（[ADR-0039] 决策 6 / [ADR-0041]）。
     ///
     /// **本字段是预埋**——本 PR-1 仅声明不写行为；由 PR-3 ([ADR-0041]) 在
@@ -321,20 +309,6 @@ pub struct ViewState {
     ///
     /// [ADR-0041]: ../docs/adr/ADR-0041-topographic-2-5d-vertex-z.md
     pub terrain_2_5d_enabled: bool,
-    /// 2.5D vertex Z 挤压系数（[ADR-0041] 决策 2）。
-    ///
-    /// mesh 顶点 z = `cell.height × compression × effective_scale`。
-    ///
-    /// - 默认 `0.3`（长途跨度地形专用，[ADR-0041] §3 推荐），
-    ///   而非 [ART_STYLE_SPEC §1.1](docs/ART_STYLE_SPEC_v0.1.md) 默认的
-    ///   `0.5×`——后者适合 32× 起步的城市子图，前者适合 guangdong 级（50km 跨度）
-    ///   长途地形（避免山峰过度耸立遮挡背后内容）。
-    /// - 范围 `[0.0, 1.0]`：>1.0 时画面像城市场景，与 Topographic 语义不符；
-    ///   `0.0` 即纯 2D（无立体感）。
-    /// - 切换即触发 chunk mesh rebuild（`data_hash` 联动 + compression cache key）。
-    ///
-    /// 后续 v2 留口:per-mode 自适应（子图用 0.5，长途用 0.3，DrillState.zoom_level 联动）。
-    pub topographic_compression: f32,
 }
 
 impl Default for ViewState {
@@ -363,9 +337,7 @@ impl Default for ViewState {
             cursor_world: None,
             window_size: Vec2::new(1280.0, 800.0),
             current_map: "world_main".into(),
-            topographic_thresholds: std::collections::HashMap::new(),
             terrain_2_5d_enabled: false,
-            topographic_compression: 0.3,
         }
     }
 }

@@ -45,9 +45,11 @@ pub struct SynthCtx {
     /// Topographic mode 专用：(p33, p66) 两个 height 阈值（米）。
     ///
     /// **仅 Topographic mode 有效**；其它 mode = `(0, 0)` 哨兵。
-    /// 任务提交时由 [`rebuild_texture_on_mode_change`] 计算（先查
-    /// `ViewState::topographic_thresholds` 缓存，未命中按本图 cell heights
+    /// 任务提交时由 [`rebuild_texture_on_mode_change`] 计算（命中
+    /// `CellRenderer` 自身的同名字段缓存，未命中按本图 cell heights
     /// 临时求一次）；本字段保证后台着色纯函数无资源依赖。
+    /// （2026-10-29 追记：缓存本体在本 crate 的 `CellRenderer`；历史上的
+    /// `ViewState::topographic_thresholds` 镜像已删——死字段，无消费方。）
     ///
     /// [ADR-0039]: ../../../../docs/adr/ADR-0039-topographic-viewmode.md
     pub topographic_thresholds: (i16, i16),

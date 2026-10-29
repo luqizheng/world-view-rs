@@ -450,7 +450,6 @@ pub(super) fn register(app: &mut App) {
             // 地图绘制必须在所有浮动面板**之前**执行，
             // 保证地图是最底层、面板浮在其上（基线 §1.11 R1）。
             wv_render::perf_timed!("draw_map_gizmos", world_projection::draw_map_gizmos),
-            world_projection::draw_brush_cursor,
             // 测量顶置渲染——与 gizmos 一起画。
             wv_render::measurement::render_measurements,
             // 线段 POI 预览 / 选中高亮（ADR-0070 D4）：同层 gizmo 即帧即弃。

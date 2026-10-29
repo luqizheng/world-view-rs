@@ -116,8 +116,8 @@ fn shade_for_mode(mode: ShadeMode) -> Shader {
         // `fn(&TerrainData, u8, &CellPalette) -> Color`——无法在着色路径里
         // 查 `data.cells[gy * w + cx]` 拿到 cell.height + cell.surface；
         // cell-by-cell 着色需 `write_cell_split` 早返回分支，依赖
-        // `CellRenderer` 持有百分位阈值（PR-1b 在 `state.rs::topographic_thresholds`
-        // 上加 ResMut 写回，仍是 fixable）。
+        // `CellRenderer` 持有百分位阈值（阈值缓存现归本 crate `CellRenderer`；
+        // 历史上的 `ViewState::topographic_thresholds` 镜像已于 2026-10-29 删除）。
         ShadeMode::Topographic => shade_topographic,
     }
 }
