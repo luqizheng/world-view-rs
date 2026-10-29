@@ -101,6 +101,8 @@ pub fn top_option_bar(
         return;
     };
     let loc = current_loc.0;
+    // 场景分区条：独立面板（显示门控在函数内——场景图才出）。
+    district_strip_panel(ctx, &shell, &mut brush, loc, &projection, &drill);
     let mut root = super::top_bar::root_ui(ctx);
     egui::Panel::top("wv_top_option_bar")
         .exact_size(BAR_H)
@@ -234,15 +236,19 @@ fn tool_tiles(ui: &mut egui::Ui, shell: &UiShell, brush: &mut BrushState, loc: L
     }
 }
 
-/// 涂抹档材料条：单行 10 块（浮窗旧网格是 5×2，横条里放不下两行）。
+/// 涂抹档材料条：单行（浮窗旧网格是 5×2，横条里放不下两行）。
 /// 选中 = 金描边 + 段尾常显名称；悬停 tooltip = 地形名。
+///
+/// **遍历 [`MATERIALS`] 而非写死区间**：ADR-0070 D1 退役道路档时漏改
+/// 循环上界，材质条多画了一块「?」僵尸砖（点了还涂出海）。
+/// 单一权威表在 `shell::MATERIALS`，两处不再各写各的。
 fn material_strip(ui: &mut egui::Ui, shell: &UiShell, kind: &mut u8, loc: Locale) {
     ui.label(
         egui::RichText::new(t(loc, I18nKey::BrushMaterialHeader))
             .size(shell.scale.micro)
             .color(shell.t2()),
     );
-    for k in 0u8..10 {
+    for &k in crate::ui::shell::MATERIALS {
         let name = terrain_name_at(loc, k as usize);
         let (rect, resp) =
             ui.allocate_exact_size(egui::vec2(SWATCH_HIT, shell.hit), egui::Sense::click());
@@ -270,6 +276,89 @@ fn material_strip(ui: &mut egui::Ui, shell: &UiShell, kind: &mut u8, loc: Locale
             .size(shell.scale.micro)
             .color(shell.t1()),
     );
+}
+
+/// 场景分区材料条：**独立顶栏面板**（不是主条的第二行）。
+///
+/// ## 为什么另起一个面板
+///
+/// 主条是 `exact_size(BAR_H)` 的**单行**固定高度横条（38px），已经装了
+/// 笔刷胶囊 + 工具瓷砖 + 9 块地形材料 + 半径滑条 + 软度滑条。再塞 6 块
+/// 分区（6×20=120px）会把 1280 宽的窗口挤爆，而 `exact_size` 意味着面板
+/// **不会自动增高**——想换行就得改顶层布局，影响面远大于收益。
+///
+/// ## 显示门控
+///
+/// 「当前图是场景图」才出现——分区是场景图的概念，世界图上没有分区。
+/// 门控天然落在「面板出不出来」上，不需要额外的开关状态。
+///
+/// ## 判定按「图级 ≠ World」
+///
+/// 不按语义（城市 / 地下城）——语义要落数据（`MapNode.scene_type`），而那
+/// 是后续里程碑的事；本轮先按图级判，场景图都给出分区条。
+fn district_strip_panel(
+    ctx: &egui::Context,
+    shell: &UiShell,
+    brush: &mut BrushState,
+    loc: Locale,
+    projection: &WorldProjection,
+    drill: &DrillState,
+) {
+    if !brush.enabled || !shows_material(brush.tool) {
+        return;
+    }
+    let Some(node) = drill.current_node(&projection.world) else {
+        return;
+    };
+    if node.level == wv_core::map::MapLevel::World {
+        return;
+    }
+    let mut root = super::top_bar::root_ui(ctx);
+    egui::Panel::top("wv_top_option_bar_district")
+        .exact_size(BAR_H)
+        .frame(
+            egui::Frame::NONE
+                .fill(color32(shell.palette.bg_app).gamma_multiply(0.96))
+                .stroke(egui::Stroke::new(1.0, color32(shell.palette.border_subtle)))
+                .inner_margin(margin_xy(space::SM, (BAR_H - shell.hit) * 0.5)),
+        )
+        .show(&mut root, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("场景分区")
+                        .size(shell.scale.micro)
+                        .color(shell.t2()),
+                );
+                for &k in crate::ui::shell::DISTRICT_MATERIALS {
+                    let name = terrain_name_at(loc, k as usize);
+                    let (rect, resp) = ui
+                        .allocate_exact_size(egui::vec2(SWATCH_HIT, shell.hit), egui::Sense::click());
+                    let p = ui.painter();
+                    if brush.kind == k {
+                        p.rect_filled(rect, radius::CONTROL, shell.active_bg());
+                        rect_stroke(
+                            p,
+                            rect,
+                            radius::CONTROL,
+                            egui::Stroke::new(1.5_f32, shell.focus()),
+                        );
+                    } else if resp.hovered() {
+                        p.rect_filled(rect, radius::CONTROL, shell.hover_bg());
+                    }
+                    let sw = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(12.0));
+                    p.rect_filled(sw, radius::BADGE, terrain_swatch(k));
+                    if resp.clicked() {
+                        brush.kind = k;
+                    }
+                    resp.on_hover_text(name);
+                }
+                ui.label(
+                    egui::RichText::new(format!("· {}", terrain_name_at(loc, brush.kind as usize)))
+                        .size(shell.scale.micro)
+                        .color(shell.t1()),
+                );
+            });
+        });
 }
 
 /// 半径滑条（世界单位 → 米显示；量程与换算沿用旧笔刷段口径）。

@@ -28,8 +28,41 @@ const TERRAIN_KEYS: [I18nKey; 9] = [
     I18nKey::TerrainKindSwamp,
 ];
 
+/// 笔刷材料条的**唯一权威表**（地形档序号 = 笔刷色板序号）。
+///
+/// **为什么要有这张表**：材质条（`ui/top_option_bar.rs` 的 `material_strip`）
+/// 与显示名表（`TERRAIN_KEYS`）曾各写各的循环上界——材质条画 10 块而名字表
+/// 只有 9 项，多出的第 10 块 tooltip 是 `"?"`、点了还会涂出海（`brush_target`
+/// 对越界档落 `_ => WATER`）。ADR-0070 D1 退役道路档时漏改了循环上界。
+/// 两处都改成遍历本表，漂移无处可生。
+pub const MATERIALS: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8];
+
+/// 场景分区材料（biome 保留带 21..=32 的**人类城市词表**）。
+///
+/// **本轮只开放人类聚落**：未分区 + 贫民 / 富人 / 普通住宅 / 商业 / 工业。
+/// 地下城（房间 / 走廊 / 大殿）、森林（密林 / 空地）、农田的码位与名字
+/// 已在 `wv_terrain::biome::DISTRICT_NAMES_ZH` 登记（12 个全在），
+/// 扩展只需往本表加码——词表是数据，不是代码。
+pub const DISTRICT_MATERIALS: &[u8] = &[
+    wv_terrain::biome::DISTRICT_FIRST,     // 未分区（基底）
+    wv_terrain::biome::DISTRICT_FIRST + 1, // 贫民区
+    wv_terrain::biome::DISTRICT_FIRST + 2, // 富人区
+    wv_terrain::biome::DISTRICT_FIRST + 3, // 普通住宅
+    wv_terrain::biome::DISTRICT_FIRST + 4, // 商业区
+    wv_terrain::biome::DISTRICT_FIRST + 5, // 工业区
+];
+
 /// 按索引返回本地化后的地形名。索引越界时返回 `"?"`（防御性兜底，绝不在 UI 字符串里 panic）。
+///
+/// 场景分区码（21..=32）走 [`wv_terrain::biome::DISTRICT_NAMES_ZH`] 直查中文——
+/// 分区名当前只有中文一种形态，与 CellMap 侧 `biome_name()` 的现状一致。
 pub fn terrain_name_at(loc: Locale, idx: usize) -> &'static str {
+    if idx >= wv_terrain::biome::DISTRICT_FIRST as usize {
+        return match wv_terrain::biome::district_index(idx as u8) {
+            Some(i) => wv_terrain::biome::DISTRICT_NAMES_ZH[i as usize],
+            None => "?",
+        };
+    }
     match TERRAIN_KEYS.get(idx) {
         Some(k) => t(loc, *k),
         None => "?",
@@ -38,6 +71,18 @@ pub fn terrain_name_at(loc: Locale, idx: usize) -> &'static str {
 
 /// 地形色块索引 → `palette::CORE_TERRAIN` 同序（§4.5：色块就是地形本色）。
 pub fn terrain_swatch(kind: u8) -> egui::Color32 {
+    // 场景分区走旁挂分区色表（主题侧），不经旧槽位投影。
+    if let Some(idx) = wv_terrain::biome::district_index(kind) {
+        let c = crate::theme::palette::PaletteColors::DEFAULT.district[idx as usize];
+        let bevy::prelude::Color::Srgba(s) = c else {
+            return egui::Color32::GRAY;
+        };
+        return egui::Color32::from_rgb(
+            (s.red * 255.0) as u8,
+            (s.green * 255.0) as u8,
+            (s.blue * 255.0) as u8,
+        );
+    }
     let c = crate::theme::colors::core_terrain(kind);
     let bevy::prelude::Color::Srgba(s) = c else {
         return egui::Color32::GRAY;
@@ -76,6 +121,14 @@ pub fn brush_target(swatch: u8) -> wv_terrain::edit::PaintTarget {
         surface: SURFACE_LAND,
         biome,
     };
+    // 场景分区：写陆面 + 分区码。高度由 `wv_terrain::apply_brush` 的
+    // 「分区不改高度」规则保证（分区是同一张基底图上的涂色）。
+    if let Some(idx) = wv_terrain::biome::district_index(swatch) {
+        return PaintTarget {
+            surface: SURFACE_LAND,
+            biome: wv_terrain::biome::DISTRICT_FIRST + idx,
+        };
+    }
     match swatch {
         0 | 1 => WATER,             // 深水 / 浅水
         2 => LAND(BIOME_DESERT),    // 海滩
@@ -122,6 +175,50 @@ pub fn eraser_base_cell(world: &wv_core::World, map: &wv_core::Id) -> wv_terrain
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 材质条不得再画「僵尸砖」。
+    ///
+    /// 现状 bug（ADR-0070 D1 退役道路档时漏改循环上界）：材质条画 10 块，
+    /// 而名字表只有 9 项 → 第 10 块 tooltip 是 `"?"`；且 `brush_target` 对
+    /// 越界档落 `_ => WATER` → 点它会**涂出海**。
+    #[test]
+    fn materials_table_has_no_zombie_swatch() {
+        assert_eq!(MATERIALS.len(), 9, "退役道路档后材料表应是 9 项");
+        assert!(
+            !MATERIALS.contains(&9),
+            "kind 9（道路）已退役，不得出现在材料表"
+        );
+        for &k in MATERIALS {
+            assert_ne!(
+                terrain_name_at(Locale::Zh, k as usize),
+                "?",
+                "材料 {k} 无显示名"
+            );
+        }
+    }
+
+    /// 本轮只做人类城市词表：未分区 + 贫民 / 富人 / 住宅 / 商业 / 工业。
+    ///
+    /// 12 个分区码位与名字已在 `wv_terrain::biome` 登记（扩展只需加本表）。
+    #[test]
+    fn district_materials_cover_city_vocabulary() {
+        assert_eq!(DISTRICT_MATERIALS.len(), 6);
+        assert!(
+            DISTRICT_MATERIALS
+                .iter()
+                .all(|k| wv_terrain::biome::is_district(*k)),
+            "分区材料必须都在保留带内"
+        );
+        assert_eq!(
+            terrain_name_at(Locale::Zh, 30),
+            "房间",
+            "分区名走 DISTRICT_NAMES_ZH 直查（12 个全可查）"
+        );
+        // 分区笔刷写陆面 + 分区码——高度由 apply_brush 的分区规则保持不变。
+        let t = brush_target(wv_terrain::biome::DISTRICT_FIRST + 1);
+        assert_eq!(t.surface, wv_terrain::SURFACE_LAND);
+        assert_eq!(t.biome, wv_terrain::biome::DISTRICT_FIRST + 1);
+    }
 
     /// 橡皮擦的三态：`base` 海洋 / 陆地 / 缺省（老工程），各擦出正确整格。
     ///
