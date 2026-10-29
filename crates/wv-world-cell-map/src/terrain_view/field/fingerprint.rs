@@ -53,14 +53,14 @@
 //! （coast ±32 / biome ±8 的外扩由上游写入时决定），指纹重算「多算不错算」：
 //! 矩形盖到的块一律从**当前**数据重算，与全量重建逐位一致。
 
+use wv_core::terrain::{TerrainCellData, TerrainData};
+
 /// 分块边长（格）。256² = 65536 格/块；1024² 图 = 4×4 = 16 块、4096² 图 =
 /// 16×16 = 256 块——块数远小于格数，`total()` 的折叠成本可忽略。
 ///
 /// 取 256 的理由：一笔 brush 的典型脏区（~12² 格）永远落在 1–4 个块内，
 /// 增量重算量与块粒度的权衡在 256 处最划算（更小 → 块多、total 折叠贵、
 /// 缓存条目碎；更大 → 单块重算贵）。
-use wv_core::terrain::{TerrainCellData, TerrainData};
-
 pub const FP_BLOCK: u32 = 256;
 
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;

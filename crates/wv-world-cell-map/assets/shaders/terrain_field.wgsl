@@ -420,9 +420,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // 不是往画面上铺噪声纹理。
     // 水面**不叠**（T30）：海的呼吸感走 SeaRecipe 的连续量，叠两层会脏。
     // WV_STRIP bit2 置 1 = 剥掉 wash（仅 Themed 分支；BiomeRaw 的 wash 仍归
-    // `p.shore_edges.w` 门控，探针不得越支）。
+    // `p.shore_edges.w` 门控，探针不得越支）。`shape.y < 1.5` 复原 Flat 素底
+    // 的旧排除（终审 I-1）：素底平色面本无水彩，mask=0 时也不得被并入 wash
+    // 域——短路求值下 Flat/BiomeRaw 两分支照旧不读 strip。
     if (land_t > 0.5
         && p.shore_edges.w > 0.0
+        && p.shape.y < 1.5
         && (p.shape.y < 0.5 || (strip & 4u) == 0u))
     {
         // 频率锚在格空间（随内容走，不随屏幕走——否则缩放时颗粒会「沸腾」）。
