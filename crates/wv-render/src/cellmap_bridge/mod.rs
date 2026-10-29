@@ -52,8 +52,8 @@ use crate::state::{BrushState, DrillState, ViewState, WorldProjection};
 // （`field::paper::TERRAIN_Z` = 纸面层 Z，与本层无关），glob 会把名字撞在一起。
 use wv_world_cell_map::terrain_view::field::{
     apply_hypsometric, build_material, default_params, patch_material_images, set_coast_encoding,
-    warp_amp, CellRect, CoastEncoding, FieldPack, FieldPalette, TerrainFieldMaterial, ViewBranch,
-    H_MAX, H_MIN,
+    warp_amp, BlockFingerprint, CellRect, CoastEncoding, FieldPack, FieldPalette,
+    TerrainFieldMaterial, ViewBranch, H_MAX, H_MIN,
 };
 use wv_world_cell_map::terrain_view::hypsometric;
 // ADR-0077：晕渲法线的米制换算唯一入口（格距 + 比例尺 → 米/格）。

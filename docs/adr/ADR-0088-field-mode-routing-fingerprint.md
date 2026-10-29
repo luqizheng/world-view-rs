@@ -132,3 +132,9 @@
 - 旧全量 `pack_content_hash` 的去留：由实施按消费面（仅 cellmap_bridge 一处）裁定。
 - Themed 观感调参候选系数初始值：待 Task 4 剥离帧结论。
 - CPU 块烘焙路径退役、三 CPU 留守档的场等价移植、2.5D oblique 场等价、GPU 子资源局部上传：各自另行立项。
+
+---
+
+## 追记（勘误，2026-10-29）：D2 的 oblique 判据项作废
+
+D2 原文 `should_render_field = field_render ∧ mode ∈ 场支持集 ∧ ¬(oblique 生效)` 的第三合取项**作废**：`ViewState.topographic_compression` 已被 `cdb4e17`（ViewState 死字段清理）删除——该字段自 `02dbedf` 引入起全历史零消费、全部烘焙点恒传字面量 `0.0`，2.5D 斜切（`oblique_skew_pixels`）在主 App 任何路径都不渲染，缺陷②「平放场 quad 吃掉斜切」的前提在 trunk 上不成立。现行实现为 `should_render_field = field_render ∧ supports_field(mode)`（commit `faeeaf9`）；待 oblique 机制（§8 非目标）另行立项复活时，再补第三合取项与真值表的 compression 轴（salvage 存档 `0002-wv-render-CPU-Themed-oblique-CPU.patch` 备着完整形态）。
