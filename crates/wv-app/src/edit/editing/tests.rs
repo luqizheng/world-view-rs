@@ -1562,32 +1562,31 @@ fn apply_detached_records_dirty_without_pushing_history() {
         "脏路径应被记录，got {:?}",
         edit.dirty_set
     );
+}
 
-    }
-
-    /// 场景编辑器 M1：首次在场景图上刷色要**先铺基底网格**。
-    ///
-    /// 三条判定各钉一条：
-    /// - 场景图无栅格 → 引导（作者「进图就画」）；
-    /// - 场景图已有栅格 → 不引导（不覆盖作者画过的地形）；
-    /// - 世界图 → 永不引导（世界地形由大陆生成器负责，铺满是毁数据）。
-    #[test]
-    fn first_paint_on_scene_map_needs_base_grid() {
-        use wv_core::map::MapLevel;
-        assert!(
-            needs_scene_base_grid(MapLevel::Interior, false),
-            "场景图无栅格 → 应先铺基底"
-        );
-        assert!(
-            needs_scene_base_grid(MapLevel::City, false),
-            "城市图无栅格 → 应先铺基底"
-        );
-        assert!(
-            !needs_scene_base_grid(MapLevel::City, true),
-            "已有栅格 → 不该覆盖"
-        );
-        assert!(
-            !needs_scene_base_grid(MapLevel::World, false),
-            "世界图永不引导"
-        );
-    }
+/// 场景编辑器 M1：首次在场景图上刷色要**先铺基底网格**。
+///
+/// 三条判定各钉一条：
+/// - 场景图无栅格 → 引导（作者「进图就画」）；
+/// - 场景图已有栅格 → 不引导（不覆盖作者画过的地形）；
+/// - 世界图 → 永不引导（世界地形由大陆生成器负责，铺满是毁数据）。
+#[test]
+fn first_paint_on_scene_map_needs_base_grid() {
+    use wv_core::map::MapLevel;
+    assert!(
+        needs_scene_base_grid(MapLevel::Interior, false),
+        "场景图无栅格 → 应先铺基底"
+    );
+    assert!(
+        needs_scene_base_grid(MapLevel::City, false),
+        "城市图无栅格 → 应先铺基底"
+    );
+    assert!(
+        !needs_scene_base_grid(MapLevel::City, true),
+        "已有栅格 → 不该覆盖"
+    );
+    assert!(
+        !needs_scene_base_grid(MapLevel::World, false),
+        "世界图永不引导"
+    );
+}

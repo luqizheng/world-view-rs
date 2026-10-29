@@ -53,7 +53,11 @@ impl CreateSceneBaseGridCommand {
     /// 目标图的格数（宽, 高）：extent ÷ 格边长，带兜底。
     fn grid_dims(&self, world: &World) -> (u32, u32) {
         const FALLBACK_CELLS: u32 = 256;
-        let cell_size = if self.cell_size > 0.0 { self.cell_size } else { 8.0 };
+        let cell_size = if self.cell_size > 0.0 {
+            self.cell_size
+        } else {
+            8.0
+        };
         let extent = world
             .maps
             .iter()
@@ -153,7 +157,9 @@ mod tests {
         assert_eq!(dirty, vec!["maps/city_a/terrain.bin".to_string()]);
         cmd.revert(&mut world).unwrap();
         assert!(
-            world.terrain_of(&wv_core::Id::new_unchecked("city_a")).is_none(),
+            world
+                .terrain_of(&wv_core::Id::new_unchecked("city_a"))
+                .is_none(),
             "revert 必须移除本次网格"
         );
     }
@@ -167,7 +173,9 @@ mod tests {
         });
         let cmd = CreateSceneBaseGridCommand::new(wv_core::Id::new_unchecked("world_main"), 8.0);
         assert!(cmd.apply(&mut world).is_err(), "世界图不该铺场景基底");
-        assert!(world.terrain_of(&wv_core::Id::new_unchecked("world_main")).is_none());
+        assert!(world
+            .terrain_of(&wv_core::Id::new_unchecked("world_main"))
+            .is_none());
 
         // 已有栅格 → 拒绝，不覆盖作者画好的地形。
         let mut world = World::default();
@@ -181,8 +189,17 @@ mod tests {
             },
         );
         let cmd = CreateSceneBaseGridCommand::new(wv_core::Id::new_unchecked("city_b"), 8.0);
-        assert!(matches!(cmd.apply(&mut world), Err(EditError::SceneGridExists(_))));
-        assert_eq!(world.terrain_of(&wv_core::Id::new_unchecked("city_b")).unwrap().width, 2);
+        assert!(matches!(
+            cmd.apply(&mut world),
+            Err(EditError::SceneGridExists(_))
+        ));
+        assert_eq!(
+            world
+                .terrain_of(&wv_core::Id::new_unchecked("city_b"))
+                .unwrap()
+                .width,
+            2
+        );
     }
 
     #[test]
@@ -194,7 +211,9 @@ mod tests {
         });
         let cmd = CreateSceneBaseGridCommand::new(wv_core::Id::new_unchecked("city_c"), 8.0);
         cmd.apply(&mut world).unwrap();
-        let g = world.terrain_of(&wv_core::Id::new_unchecked("city_c")).unwrap();
+        let g = world
+            .terrain_of(&wv_core::Id::new_unchecked("city_c"))
+            .unwrap();
         assert_eq!((g.width, g.height), (256, 256), "无 extent 时兜底 256×256");
     }
 }

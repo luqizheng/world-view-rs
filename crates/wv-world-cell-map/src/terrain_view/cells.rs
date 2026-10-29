@@ -2096,7 +2096,8 @@ mod tests {
         let got = [pixels[o], pixels[o + 1], pixels[o + 2]];
         let raw = crate::terrain_view::biome_raw::DISTRICT_RAW_COLORS[4];
         assert_eq!(
-            got, [raw[0], raw[1], raw[2]],
+            got,
+            [raw[0], raw[1], raw[2]],
             "Topographic 下分区格应取分区固定色"
         );
 
@@ -2150,10 +2151,7 @@ mod tests {
             display_slot(&data.cells[6]),
             "前置：两个分区的 display 槽位相同"
         );
-        assert!(
-            renderer.is_boundary(1, 1),
-            "相邻的两个不同分区应判为边界"
-        );
+        assert!(renderer.is_boundary(1, 1), "相邻的两个不同分区应判为边界");
     }
 
     /// 群系色块底图（2026-10-22 spec §2.5，修正 ADR-0039 的 3 阶高度画法）：

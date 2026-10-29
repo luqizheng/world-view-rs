@@ -622,7 +622,7 @@ mod tests {
     #[test]
     fn world_dialog_keeps_ocean_prefill_unchanged() {
         let mut projection = WorldProjection::default();
-        let mut drill = crate::state::DrillState::default();
+        let drill = crate::state::DrillState::default();
         let mut edit = crate::edit::editing::EditHistory::default();
         let mut dialog = NewMapDialog {
             open: true,
@@ -637,7 +637,9 @@ mod tests {
             .terrain_of(&new_id)
             .expect("世界图应预填栅格");
         assert!(
-            g.cells.iter().all(|c| c.surface == wv_terrain::SURFACE_WATER && c.height == -3500),
+            g.cells
+                .iter()
+                .all(|c| c.surface == wv_terrain::SURFACE_WATER && c.height == -3500),
             "默认海洋裁定不得回归"
         );
         let node = projection

@@ -331,8 +331,10 @@ fn district_strip_panel(
                 );
                 for &k in crate::ui::shell::DISTRICT_MATERIALS {
                     let name = terrain_name_at(loc, k as usize);
-                    let (rect, resp) = ui
-                        .allocate_exact_size(egui::vec2(SWATCH_HIT, shell.hit), egui::Sense::click());
+                    let (rect, resp) = ui.allocate_exact_size(
+                        egui::vec2(SWATCH_HIT, shell.hit),
+                        egui::Sense::click(),
+                    );
                     let p = ui.painter();
                     if brush.kind == k {
                         p.rect_filled(rect, radius::CONTROL, shell.active_bg());

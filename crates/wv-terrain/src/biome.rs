@@ -423,7 +423,10 @@ mod tests {
             assert!(!DISTRICT_NAMES_ZH[i as usize].is_empty(), "分区 {b} 缺名");
         }
         assert!(!is_district(DISTRICT_FIRST - 1), "20 是道路群系，不是分区");
-        assert!(!is_district(DISTRICT_FIRST + DISTRICT_COUNT), "带外不是分区");
+        assert!(
+            !is_district(DISTRICT_FIRST + DISTRICT_COUNT),
+            "带外不是分区"
+        );
         assert_eq!(district_index(255), None);
         assert_eq!(district_index(0), None);
     }

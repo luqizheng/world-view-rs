@@ -446,11 +446,7 @@ mod tests {
             "刷分区不得改高度（实得 {}）",
             cell.height
         );
-        assert_eq!(
-            cell.biome,
-            crate::biome::DISTRICT_FIRST + 1,
-            "分区码应写入"
-        );
+        assert_eq!(cell.biome, crate::biome::DISTRICT_FIRST + 1, "分区码应写入");
         assert_eq!(cell.surface, SURFACE_LAND, "分区笔刷写陆面");
     }
 

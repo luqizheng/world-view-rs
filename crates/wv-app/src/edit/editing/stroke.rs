@@ -17,10 +17,7 @@ use super::*;
 /// - **已有栅格不引导**：作者画过的地形不能被覆盖；
 /// - **非场景图不引导**：场景图 = City / Interior 级（判定按「图级 ≠ World」，
 ///   与渲染层的格级判定口径一致）。
-pub(crate) fn needs_scene_base_grid(
-    level: wv_core::map::MapLevel,
-    has_terrain: bool,
-) -> bool {
+pub(crate) fn needs_scene_base_grid(level: wv_core::map::MapLevel, has_terrain: bool) -> bool {
     level != wv_core::map::MapLevel::World && !has_terrain
 }
 
@@ -128,8 +125,7 @@ pub fn commit_stroke_on_release(
                 target_map.clone(),
                 stroke,
                 grid.cell_size,
-            ))
-                as Box<dyn EditCommand>,
+            )) as Box<dyn EditCommand>,
             dirty_rect,
         )
     };
