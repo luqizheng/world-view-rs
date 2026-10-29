@@ -213,7 +213,8 @@ pub(super) fn register(app: &mut App) {
             // 编辑态逐格网格（plan v0.1 D4）：与等值线同管线族，先于 chunk 层。
             wv_render::perf_timed!("sync_grid_lines", terrain_view::sync_grid_lines),
             // 地形分块 + mip + 视口拣选（优化项 3a/3b/3c）。
-            // `view.field_render` 开启时整层早退——见函数开头的回退开关。
+            // `should_render_field` 为真时整层早退（ADR-0088 模式路由，与
+            // field 侧同消费一个函数）——见函数开头的底图载体路由。
             wv_render::perf_timed!("sync_terrain_chunks", cellmap_bridge::sync_terrain_chunks),
             // 地形场渲染（ADR-0053 D1，Phase 1 接线）：**必须排在 chunk 层之后**。
             // 两个理由：① `field_render_on_chunk_entities` 要报**帧末**的块数，
