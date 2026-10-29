@@ -34,8 +34,9 @@ use crate::state::{
 };
 use crate::ui::cell_pick;
 use wv_edit::command::{
-    ClearMeasurementsCommand, EditCommand, GenerateContinentCommand, IntentTerrainCommand,
-    PaintTerrainCommand, RegenWorldTerrainCommand, ResetTerrainToBaseCommand,
+    ClearMeasurementsCommand, CreateSceneBaseGridCommand, EditCommand, GenerateContinentCommand,
+    IntentTerrainCommand, PaintTerrainCommand, RegenWorldTerrainCommand,
+    ResetTerrainToBaseCommand,
 };
 use wv_edit::history::Transaction;
 use wv_edit::History;
