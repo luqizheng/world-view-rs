@@ -52,6 +52,20 @@ fn slot_is_water(kind: u8) -> bool {
     kind <= 1
 }
 
+/// 场景分区的显示色（biome 落在 21..=32 保留带 → 旁挂分区色表）。
+///
+/// **为什么绕过 `display_slot`**：分区的 biome 编号不在冻结群系表里，
+/// `display_kind` 对未登记编号落 `_ => 3`（草原兜底）——分区会被渲成草绿。
+/// 分区色按 biome 编号**直查**，不经槽位投影。
+///
+/// **为什么判定是格级而非图级**：`active_terrain` 沿父链继承（场景图可能
+/// 借用父图地形），「当前图」≠「正在渲的那张图」。格级判定天然正确：
+/// 世界图的格子里不会有分区编号。
+fn district_color(c: &TerrainCellData, pal: &CellPalette) -> Option<Color> {
+    let idx = wv_terrain::biome::district_index(c.biome)?;
+    pal.district.get(idx as usize).copied()
+}
+
 /// Topographic viewmode 百分位阈值（[ADR-0039] 决策 4 / 5）。
 ///
 /// 在 `&[TerrainCellData]` 上按 `p_low` / `p_high` 切两个高度阈值；
@@ -305,7 +319,13 @@ fn base_color_of(
     sea: &SeaRecipe,
 ) -> Color {
     let cell = &data.cells[(cy as usize) * data.width as usize + cx as usize];
-    let mut color = shade_for_mode(mode)(data, kind, pal);
+    // 场景分区：直查分区色表，**不走 shader**——shader 拿到的 display 槽位
+    // 对分区恒为 3（草原兜底），会被渲成草绿。分支放在 shader 调用之前，
+    // `shade_google` 的同色折叠也就绕开了。
+    let mut color = match district_color(cell, pal) {
+        Some(c) => c,
+        None => shade_for_mode(mode)(data, kind, pal),
+    };
     if treatment.water_gradient && slot_is_water(kind) && mode != ShadeMode::Coastline {
         color = water_shade_at(cell.height, pal, sea);
     }
@@ -385,6 +405,14 @@ fn blended_base(
 ) -> Color {
     let w = data.width;
     let h = data.height;
+    // 场景分区**不参与水彩晕开**：分区是人为功能区，作者要能清楚区分。
+    // 5×5 邻域平均会把分区色稀释成周围自然地形的颜色（实测商业区赭黄被
+    // 草原绿冲淡到几乎看不出）。故分区格直取自身分区色，不进平均；
+    // 邻域里的分区格也不被平均进自然地形（否则草地会被染成分区色）。
+    let cell = &data.cells[(cy as usize) * w as usize + cx as usize];
+    if let Some(dc) = district_color(cell, pal) {
+        return dc;
+    }
     let (x0, y0) = (
         cx.saturating_sub(BLEED_RADIUS),
         cy.saturating_sub(BLEED_RADIUS),
@@ -399,7 +427,12 @@ fn blended_base(
     let mut n = 0u32;
     for y in y0..=y1 {
         for x in x0..=x1 {
-            let kind = display_slot(&data.cells[(y * w + x) as usize]);
+            let nb = &data.cells[(y * w + x) as usize];
+            // 邻域里的分区格：计入平均会把它染到自然地形上——跳过。
+            if district_color(nb, pal).is_some() {
+                continue;
+            }
+            let kind = display_slot(nb);
             let Color::Srgba(c) = base_color_of(data, kind, x, y, pal, treatment, mode, shore, sea)
             else {
                 continue;
@@ -913,8 +946,17 @@ impl<'a> CellRenderer<'a> {
     /// ——填充的水陆边由双线性高度决定（D2），哪怕全邻域同类型，
     /// 只要高度穿零就得逐像素采。
     fn is_boundary(&self, cx: u32, cy: u32) -> bool {
-        let kind0 = display_slot(&self.data.cells[(cy * self.w + cx) as usize]);
-        let differs = |a: u8, b: u8| {
+        let center = &self.data.cells[(cy * self.w + cx) as usize];
+        let kind0 = display_slot(center);
+        // 场景分区：两个**不同分区**必是边界——它们的 display 槽位都是 3
+        // （草原兜底），靠槽位比不出来。不改这一条的话分区交界没有揉边/
+        // 抗锯齿，与自然群系边界视觉割裂（场景图是平图，割裂一眼可见）。
+        let district0 = wv_terrain::biome::district_index(center.biome);
+        let differs = |a: u8, b: u8, da: Option<u8>, db: Option<u8>| {
+            // 分区不同 → 边界；一个是分区另一个不是 → 也是边界。
+            if da != db {
+                return true;
+            }
             if self.mode == ShadeMode::Coastline {
                 slot_is_water(a) != slot_is_water(b)
             } else if self.mode == ShadeMode::GoogleMap {
@@ -947,7 +989,12 @@ impl<'a> CellRenderer<'a> {
                     hmin = hmin.min(cell.height);
                     hmax = hmax.max(cell.height);
                 }
-                if differs(kind0, display_slot(cell)) {
+                if differs(
+                    kind0,
+                    display_slot(cell),
+                    district0,
+                    wv_terrain::biome::district_index(cell.biome),
+                ) {
                     return true;
                 }
             }
@@ -1002,7 +1049,8 @@ impl<'a> CellRenderer<'a> {
         // 最近格的类型（钳边）。
         let cx = (gx.floor() as i32).clamp(0, self.w as i32 - 1) as u32;
         let cy = (gy.floor() as i32).clamp(0, self.h as i32 - 1) as u32;
-        let kind = display_slot(&self.data.cells[(cy * self.w + cx) as usize]);
+        let cell = &self.data.cells[(cy * self.w + cx) as usize];
+        let kind = display_slot(cell);
         let land = height >= 0.0;
         // 类型 ↔ 高度矛盾时高度赢（D2）；回退色取「岸」语义的沙滩 / 深水。
         let kind = if land && kind <= 1 {
@@ -1026,7 +1074,11 @@ impl<'a> CellRenderer<'a> {
                 &self.sea,
             )
         } else {
-            (self.shader)(self.data, kind, self.palette)
+            // 场景分区直查分区色表（绕过 display 槽位的草原兜底）。
+            match district_color(cell, self.palette) {
+                Some(c) => c,
+                None => (self.shader)(self.data, kind, self.palette),
+            }
         };
         let Color::Srgba(c) = c else {
             return;
@@ -1078,9 +1130,18 @@ impl<'a> CellRenderer<'a> {
             out[1] = block[o + 1] as f32 * mul * g;
             out[2] = block[o + 2] as f32 * mul * g;
         } else {
-            let base = (self.shader)(self.data, kind, self.palette);
+            // 场景分区直查分区色表（绕过 display 槽位的草原兜底）。
+            let base = match district_color(cell, self.palette) {
+                Some(c) => c,
+                None => (self.shader)(self.data, kind, self.palette),
+            };
             // 海拔色带（ADR-0067）：专业制图专用，先叠色带再乘浮雕。
-            let base = self.apply_elevation_band(cell, base);
+            // 分区格跳过——与 `write_cell_split` 同一闸口，两条路径同色。
+            let base = if district_color(cell, self.palette).is_none() {
+                self.apply_elevation_band(cell, base)
+            } else {
+                base
+            };
             if let Color::Srgba(c) = base {
                 let g = if self.grain {
                     land_grain(kind, gx, gy)
@@ -1290,7 +1351,12 @@ impl<'a> CellRenderer<'a> {
         if !self.is_boundary(cx, gy) {
             // 内部格：与旧行为一致——整块直铺（快路径）。
             let kind = display_slot(cell);
-            if self.block_for(kind).is_some() {
+            // 场景分区**不进瓦片图集**：分区格的 display 槽位恒为 3（草原
+            // 兜底），走图集路径会被贴上草原瓦片块——分区色根本不出现。
+            // tile atlas 按槽位索引，槽位空间已被群系占满，分区无处安放，
+            // 故分区一律走下面的纯色路径。
+            let is_district = district_color(cell, self.palette).is_some();
+            if !is_district && self.block_for(kind).is_some() {
                 let tint = if self.mode == ShadeMode::RealTerrain {
                     TileTint::Height(self.height_mul(cell.height))
                 } else {
@@ -1329,10 +1395,17 @@ impl<'a> CellRenderer<'a> {
                     &self.sea,
                 )
             } else {
-                (self.shader)(self.data, kind, self.palette)
+                // 场景分区直查分区色表（绕过 display 槽位的草原兜底）。
+                match district_color(cell, self.palette) {
+                    Some(c) => c,
+                    None => (self.shader)(self.data, kind, self.palette),
+                }
             };
             // 海拔色带（ADR-0067）：与 `sample_kind` 同一闸口，两条路径同色。
-            color = self.apply_elevation_band(cell, color);
+            // 分区格跳过——场景图是平图，海拔色带会把分区色整体偏移。
+            if district_color(cell, self.palette).is_none() {
+                color = self.apply_elevation_band(cell, color);
+            }
             // 水域按高度渐变（手绘地图 #1）：kind 0/1 的内部格从单色水变
             // height 调度的水彩带；轮廓图模式不进这里。
             // （bleed 开时模糊基色已含水深渐变——邻域各格都过了 water_shade_at。）
@@ -1999,6 +2072,88 @@ mod tests {
         );
         assert_eq!(res, 1, "Topographic 分析视图 = 每格 1 像素(锐利方格)");
         pixels
+    }
+
+    /// 场景分区格必须渲成分区色，**不得**落进群系槽位兜底（草原绿）。
+    ///
+    /// 覆盖两条取色路径：
+    /// - Topographic（方格视图）：走 `biome_raw::pick` 的分区固定色；
+    /// - VectorFlat（平涂视图）：走 `CellPalette.district` 的主题色。
+    ///
+    /// 判据是「像素色 ≠ 草原色」且「= 预期色表值」——分区色必须真的出现，
+    /// 不能只是「没崩」。
+    #[test]
+    fn district_cell_renders_with_district_color_not_grassland() {
+        let mut data = topographic_fixture();
+        let district = wv_terrain::biome::DISTRICT_FIRST + 4; // 商业区（25）
+        data.cells[5].biome = district;
+        data.cells[5].surface = wv_terrain::SURFACE_LAND;
+        data.cells[5].height = 0;
+
+        // ① Topographic：分区固定色。
+        let pixels = topographic_pixels(&data);
+        let o = ((4 + 1) * 4) as usize; // (x=1, y=1)，4×4 网格 stride=4
+        let got = [pixels[o], pixels[o + 1], pixels[o + 2]];
+        let raw = crate::terrain_view::biome_raw::DISTRICT_RAW_COLORS[4];
+        assert_eq!(
+            got, [raw[0], raw[1], raw[2]],
+            "Topographic 下分区格应取分区固定色"
+        );
+
+        // ② VectorFlat：主题分区色。
+        let pack = CellPack::fixture();
+        let (px, res) = terrain_pixels(&data, ShadeMode::VectorFlat, None, false, &pack);
+        // 平涂视图是亚像素分辨率——取格心那个像素。
+        // stride = 格宽 × res（不是 4）。
+        let stride = 4 * res;
+        let cx = res + res / 2;
+        let cy = res + res / 2;
+        let o = ((cy * stride + cx) * 4) as usize;
+        let got = [px[o], px[o + 1], px[o + 2]];
+        let Color::Srgba(c) = pack.palette.district[4] else {
+            panic!("应为 Srgba")
+        };
+        let want = [
+            (c.red * 255.0).round() as u8,
+            (c.green * 255.0).round() as u8,
+            (c.blue * 255.0).round() as u8,
+        ];
+        // 陆格颗粒（ADR-0042）会让色值有 ±4.5% 抖动——容差比较。
+        for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+            assert!(
+                (*g as i32 - *w as i32).abs() <= 6,
+                "平涂视图下分区格应取主题分区色（通道 {i}：得 {g} 期望 {w}）"
+            );
+        }
+        // 并且必须显著区别于草原色——分区色真的出现了，不是「没崩」。
+        let Color::Srgba(gr) = pack.palette.core[3] else {
+            panic!("应为 Srgba")
+        };
+        let gd = (got[0] as i32 - (gr.red * 255.0) as i32).abs()
+            + (got[1] as i32 - (gr.green * 255.0) as i32).abs()
+            + (got[2] as i32 - (gr.blue * 255.0) as i32).abs();
+        assert!(gd > 60, "分区色不得接近草原色（实测差 {gd}）");
+    }
+
+    /// 相邻的两个不同分区必须被判为**边界**——否则分区交界没有揉边/抗锯齿，
+    /// 与自然群系边界视觉割裂（场景图是平图，边界割裂一眼可见）。
+    #[test]
+    fn adjacent_districts_are_detected_as_boundary() {
+        let mut data = topographic_fixture();
+        data.cells[5].biome = wv_terrain::biome::DISTRICT_FIRST + 1; // 贫民区
+        data.cells[6].biome = wv_terrain::biome::DISTRICT_FIRST + 4; // 商业区
+        let pack = CellPack::fixture();
+        let renderer = relief_renderer(&data, &pack, 8.0);
+        // 两个分区格的 display_kind 都是 3（草原兜底）——必须靠 biome 区分。
+        assert_eq!(
+            display_slot(&data.cells[5]),
+            display_slot(&data.cells[6]),
+            "前置：两个分区的 display 槽位相同"
+        );
+        assert!(
+            renderer.is_boundary(1, 1),
+            "相邻的两个不同分区应判为边界"
+        );
     }
 
     /// 群系色块底图（2026-10-22 spec §2.5，修正 ADR-0039 的 3 阶高度画法）：
