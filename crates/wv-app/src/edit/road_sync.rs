@@ -537,4 +537,42 @@ mod tests {
         assert_eq!(BIOME_ROAD, 20);
         assert_eq!(BIOME_NONE, 0);
     }
+
+    /// UX-012 回归（2026-10-29）：迁移的脏路径**按集合保存后，重载不得再
+    /// 触发迁移**。此前迁移结果从不落盘 → 模板世界每次打开都重迁移一次、
+    /// 顶栏永远「未保存」（应用层已改为迁移后自动增量保存，本测试钉住
+    /// 「按 dirty 路径保存 → 重载免迁移」这一环）。
+    #[test]
+    fn migrated_dirty_paths_saved_reload_skips_migration() {
+        let mut w = legacy_world();
+        let mut edit = EditHistory::default();
+        assert!(needs_line_migration(&w), "夹具应命中迁移前置");
+        migrate_legacy_lines_on_load(&mut w, &mut edit).expect("应发生迁移");
+        assert!(
+            edit.dirty_set.contains("maps/map_world/terrain.bin"),
+            "迁移应把地形栅格记脏，got {:?}",
+            edit.dirty_set
+        );
+
+        let dir = std::env::temp_dir().join(format!(
+            "wv_ux012_migrate_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let dirty: Vec<String> = edit.dirty_set.iter().cloned().collect();
+        wv_io::Project::create(&dir, "ux012").expect("create 骨架");
+        let mut project = wv_io::Project::open(&dir).expect("open 骨架");
+        project
+            .save_world(&w, &dirty)
+            .expect("按迁移脏路径增量保存");
+        let reloaded = project.load_world().expect("重载");
+        assert!(
+            !needs_line_migration(&reloaded),
+            "迁移结果已落盘——重载不得再触发迁移（否则打开即脏）"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

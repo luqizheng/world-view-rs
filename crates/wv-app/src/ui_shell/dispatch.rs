@@ -56,6 +56,7 @@ fn dispatch_project_command(
     images: &mut Assets<Image>,
     cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     pending: &mut PendingProjectLoad,
+    close_confirm: &mut crate::ui_shell::close_confirm::CloseConfirm,
     frame: u64,
     current_loc: &crate::i18n::CurrentLocale,
 ) -> bool {
@@ -85,27 +86,37 @@ fn dispatch_project_command(
             true
         }
         CommandId::CloseProject => {
-            projection.world = wv_core::World::default();
-            projection.project_dir = None;
-            projection.dirty = false;
-            projection.load_error = None;
-            drill.reset_to_world();
-            // 关闭工程：与新建同样清诊断。
-            diagnostics.diagnostics = wv_io::diagnostics::Diagnostics::default();
-            diagnostics.last_count = 0;
-            diagnostics.needs_diagnose = true;
-            edit.history = Default::default();
-            edit.clear_dirty();
-            // 关闭 = 换成空世界：底图 / 相机 / 播放必须跟着归位，否则旧工程的
-            // 地图永远挂在屏上（回归 2026-10-14「关了像没关」，见 adopt 文档）。
-            adopt_world_snapshot(
-                projection, drill, playback, view, tex, atlas, images, cameras,
-            );
-            notice.info(
-                crate::i18n::t_key(current_loc, crate::i18n::I18nKey::NoticeProjectClosed),
-                frame,
-            );
-            true
+            // UX-001 最小版（2026-10-29）：dirty 时关闭先过确认框——
+            // 「保存并关闭 / 不保存 / 取消」。`force_close` 是「不保存」的
+            // 单次放行（确认框置位，此处消费）；干净态与放行态直接关。
+            if projection.dirty && !close_confirm.force_close {
+                close_confirm.pending =
+                    Some(crate::ui_shell::close_confirm::CloseAction::CloseProject);
+                false
+            } else {
+                close_confirm.force_close = false;
+                projection.world = wv_core::World::default();
+                projection.project_dir = None;
+                projection.dirty = false;
+                projection.load_error = None;
+                drill.reset_to_world();
+                // 关闭工程：与新建同样清诊断。
+                diagnostics.diagnostics = wv_io::diagnostics::Diagnostics::default();
+                diagnostics.last_count = 0;
+                diagnostics.needs_diagnose = true;
+                edit.history = Default::default();
+                edit.clear_dirty();
+                // 关闭 = 换成空世界：底图 / 相机 / 播放必须跟着归位，否则旧工程的
+                // 地图永远挂在屏上（回归 2026-10-14「关了像没关」，见 adopt 文档）。
+                adopt_world_snapshot(
+                    projection, drill, playback, view, tex, atlas, images, cameras,
+                );
+                notice.info(
+                    crate::i18n::t_key(current_loc, crate::i18n::I18nKey::NoticeProjectClosed),
+                    frame,
+                );
+                true
+            }
         }
         CommandId::OpenProject => {
             // 排队「打开工程」对话框意图（不阻塞）；下一帧由
@@ -210,11 +221,18 @@ pub(crate) fn apply_pending_commands(
     // 在对话框自身的系统里提交，见 `ui::new_map_dialog`）。
     // 「新建工程」对话框的开关同源（CommandId::NewProject / 欢迎页 → open）。
     // 两个 ResMut 折成一层元组：单系统参数上限 16，拆元组后每层元组算 1 个。
-    (mut new_map_dialog, mut new_project_dialog, mut continent_dialog, mut map_props_dialog): (
+    (
+        mut new_map_dialog,
+        mut new_project_dialog,
+        mut continent_dialog,
+        mut map_props_dialog,
+        mut close_confirm,
+    ): (
         ResMut<crate::ui::NewMapDialog>,
         ResMut<crate::ui::NewProjectDialog>,
         ResMut<crate::ui::ContinentDialog>,
         ResMut<crate::ui::MapPropertiesDialog>,
+        ResMut<crate::ui_shell::close_confirm::CloseConfirm>,
     ),
     // 换世界接管（adopt_world_snapshot）所需：瓦片图集可缺席（纯色平涂回退）。
     (atlas, mut images): (
@@ -303,6 +321,7 @@ pub(crate) fn apply_pending_commands(
         &mut images,
         &mut cameras,
         &mut pending,
+        &mut close_confirm,
         frame,
         &current_loc,
     ) {
@@ -769,7 +788,9 @@ fn open_map_tool(
 /// 只重写 dirty 目录。`take_dirty` 原子取空集合；空 Vec 走全量路径（首次保存、
 /// 刚加载、刚撤销等场景）。失败不排空——脏标记仍在，下次保存能补上。
 /// 无目录时排队「选保存位置」对话框（补「新建 → 首次保存」断链，v0.3 §B）。
-fn dispatch_save_command(
+/// `pub(crate)`：UX-012 的加载期迁移自动保存也走它（迁移是机械格式转换，
+/// 结果必须立即落盘，否则每次打开都重迁移、顶栏永远「未保存」）。
+pub(crate) fn dispatch_save_command(
     projection: &mut WorldProjection,
     edit: &mut crate::edit::editing::EditHistory,
     open_task: &mut OpenProjectTask,

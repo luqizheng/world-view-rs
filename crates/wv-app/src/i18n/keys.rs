@@ -871,6 +871,28 @@ pub enum I18nKey {
     MapControlsNoTerrain,
     /// 撤销栈逐出最早事务的状态栏回执（UX-034）
     HistoryTrimmedNotice,
+    /// 关闭确认标题（UX-001 最小版）
+    CloseConfirmTitle,
+    /// 关闭确认正文
+    CloseConfirmMessage,
+    /// 「保存并关闭」
+    CloseConfirmSaveAndClose,
+    /// 「不保存」
+    CloseConfirmDiscard,
+    /// 「登记事件」对话框标题（UX-002）
+    EventCreateTitle,
+    /// 事件名输入框 hint（UX-002）
+    EventCreateNameHint,
+    /// 「起始日」（UX-002）
+    EventCreateFromDay,
+    /// 「结束日」（UX-002）
+    EventCreateToDay,
+    /// 「地点与参与者可在检查器补填」（UX-002）
+    EventCreateHint,
+    /// 「已登记事件 」前缀（后接名称，UX-002）
+    NoticeEventCreatedPrefix,
+    /// 登记失败回执前缀（UX-002）
+    NoticeEventCreateFailed,
 
     // ── W3：ui_shell 通知 toast 文本 ────────────────────────────────
     /// 「已保存到 」前缀（后接 dir）
@@ -1410,7 +1432,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 580] = [
+    pub const ALL: [I18nKey; 591] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1825,6 +1847,17 @@ impl I18nKey {
         I18nKey::MapControlsViewModeLocked,
         I18nKey::MapControlsNoTerrain,
         I18nKey::HistoryTrimmedNotice,
+        I18nKey::CloseConfirmTitle,
+        I18nKey::CloseConfirmMessage,
+        I18nKey::CloseConfirmSaveAndClose,
+        I18nKey::CloseConfirmDiscard,
+        I18nKey::EventCreateTitle,
+        I18nKey::EventCreateNameHint,
+        I18nKey::EventCreateFromDay,
+        I18nKey::EventCreateToDay,
+        I18nKey::EventCreateHint,
+        I18nKey::NoticeEventCreatedPrefix,
+        I18nKey::NoticeEventCreateFailed,
         // ui_shell 通知（16）
         I18nKey::NoticeSavedToPrefix,
         I18nKey::NoticeSavedScopePrefix,

@@ -237,6 +237,8 @@ pub fn panel_timeline(
     view: Res<ViewState>,
     mut layer: Local<TimelineLayer>,
     mut open_event: Local<bool>,
+    // UX-002：「+ 登记事件」从「只开只读列表」升级为打开创建对话框。
+    mut event_create: ResMut<crate::ui::event_create_dialog::EventCreateDialog>,
     current_loc: Res<crate::i18n::CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
@@ -292,6 +294,7 @@ pub fn panel_timeline(
                     loc,
                     &mut open_event,
                     &mut collapsed,
+                    &mut event_create,
                 );
                 timeline_track(ui, &shell, &mut playback, &projection, *layer, loc);
             }
@@ -322,6 +325,7 @@ fn timeline_top_row(
     loc: Locale,
     open_event: &mut bool,
     collapsed: &mut bool,
+    event_create: &mut crate::ui::event_create_dialog::EventCreateDialog,
 ) {
     let row_rect =
         egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), TOP_ROW_H));
@@ -360,6 +364,12 @@ fn timeline_top_row(
                     true,
                 );
                 if resp.clicked() {
+                    // UX-002：打开创建对话框（按当前播放日预填跨度）；
+                    // 只读列表照旧亮出，登记完成后也能立刻看到结果。
+                    crate::ui::event_create_dialog::open_with_playback_defaults(
+                        event_create,
+                        playback,
+                    );
                     *open_event = true;
                 }
             });

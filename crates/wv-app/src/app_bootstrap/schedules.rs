@@ -539,6 +539,12 @@ pub(super) fn register(app: &mut App) {
             // 应用设置（顶栏 settings-2）：与状态栏同帧、压在所有面板之上
             // （`DialogWindow` 走 `Order::Foreground`）。
             ui::settings_dialog.after(ui::status_bar),
+            // UX-002「登记事件」对话框（时间轴按钮 / 命令面板打开）：同族
+            // 居中模态窗，压在状态栏之后。
+            ui::event_create_dialog::event_create_dialog_system.after(ui::status_bar),
+            // UX-001 关闭确认框：必须压在一切之上（挡住「正在丢弃工作」的
+            // 误触路径），且在 dispatch（Update）之后读当帧保存结果。
+            crate::ui_shell::close_confirm::close_confirm_dialog.after(ui::status_bar),
         ),
     );
     // 「地图属性」对话框（CommandId::MapProperties 打开；居中模态窗）。

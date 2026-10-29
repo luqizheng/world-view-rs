@@ -18,6 +18,8 @@ pub fn top_bar(
     mut palette: ResMut<crate::ui_command_palette::CommandPalette>,
     mut view: ResMut<ViewState>,
     mut panels: ResMut<crate::state::PanelState>,
+    // UX-001 最小版：窗控 × 的 dirty 关闭确认状态机（确认框在 ui_shell）。
+    mut close_confirm: ResMut<crate::ui_shell::CloseConfirm>,
     mut settings: ResMut<SettingsDialog>,
     mut current_loc: ResMut<CurrentLocale>,
     // Gate-2（[ADR-0052] §9.4）：无当前地图时顶栏 CellMap 段灰化。
@@ -95,7 +97,15 @@ pub fn top_bar(
                 );
                 // ── 最右上角：窗控三键（最小化/最大化/关闭，关闭键贴右缘）──
                 // 首轮裁定放最左上，2026-10-25 二轮改裁右上（Windows 惯例位）。
-                window_controls_segment(ui, &shell, &mut window, &mut chrome, &mut exit);
+                window_controls_segment(
+                    ui,
+                    &shell,
+                    &mut window,
+                    &mut chrome,
+                    projection.dirty,
+                    &mut close_confirm,
+                    &mut exit,
+                );
             });
             drag_resp = Some(drag);
         });
