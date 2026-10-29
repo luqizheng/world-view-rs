@@ -60,27 +60,27 @@ use wv_world_cell_map::terrain_view::hypsometric;
 use wv_world_cell_map::shading::meters_per_cell_of;
 
 // ── 子模块（P1-1 拆分，2026-10-29）：外部路径经下方 pub use 零改动 ──
-mod theme_conv;
-mod terrain_texture;
-mod isoline;
 mod atmosphere;
-mod edit_overlays;
 mod chunks;
+mod edit_overlays;
 mod field;
-mod overlays;
-mod grid_lines;
 mod grid_config;
+mod grid_lines;
+mod isoline;
+mod overlays;
+mod terrain_texture;
+mod theme_conv;
 
-pub use theme_conv::*;
-pub use terrain_texture::*;
-pub use isoline::*;
 pub use atmosphere::*;
-pub use edit_overlays::*;
 pub use chunks::*;
+pub use edit_overlays::*;
 pub use field::*;
-pub use overlays::*;
-pub use grid_lines::*;
 pub use grid_config::*;
+pub use grid_lines::*;
+pub use isoline::*;
+pub use overlays::*;
+pub use terrain_texture::*;
+pub use theme_conv::*;
 
 // ── 测试（原样保留；`use super::*` 经重导出仍可见全部符号）──
 #[cfg(test)]

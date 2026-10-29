@@ -8,7 +8,6 @@
 
 use super::*;
 
-
 /// `ViewMode → ShadeMode` 唯一映射点。
 pub fn shade_mode_of(mode: crate::state::ViewMode) -> ShadeMode {
     match mode {

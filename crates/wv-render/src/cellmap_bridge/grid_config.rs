@@ -8,7 +8,6 @@
 
 use super::*;
 
-
 /// 网格同步（自 wv-render `terrain_view/grid_sync.rs` 迁入 bridge；ADR-0054 D5）：
 /// 维护 `GridConfig` 的两套原点——`raster_origin` / `cell_size` 取**纹理实际来源图**，
 /// `map_origin` / `map_size` 取**当前图**。早退条件里的 `drill.is_changed()` 不可省：

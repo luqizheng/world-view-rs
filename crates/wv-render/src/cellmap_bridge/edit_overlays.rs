@@ -545,3 +545,4 @@ pub(crate) fn region_layer_visible(
         return nature_overlay && matches!(kind, RegionKind::Nature);
     }
     recipe_enabled
+}
