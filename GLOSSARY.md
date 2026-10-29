@@ -603,3 +603,15 @@
 - **英文名**：standard entry（skill + HTTP direct-drive；`wv skill` / `http::AGENT_SKILL_MD`）
 - **定义**：agent 驱动 wv 的**零注册路径**（与「MCP 客户端注册=可选增强」相对）：GUI 运行即有 JSON-RPC 端点（127.0.0.1:8732，仅 tools/list 与 tools/call、无握手），agent 拿到驱动指南（`.agents/skills/wv-http/SKILL.md` 单一真源，`wv skill` 打印 / 设置对话框复制按钮，三者 `include_str!` 同源）即具备全部 15 工具驱动能力。指南内含 curl 配方、15 工具表、省 token 纪律（screenshot 必须 jq+base64 管道落盘、禁响应体进上下文）、验收/命名/抽查三流程与故障表。首次出现：2026-10-28 ADR-0084 撤回 stdio 代理时的定位讨论，ADR-0085 落地。
 - **所属维度**：工具链（agent 接入）
+
+## 场景分区带（2026-10-29 · 场景编辑器 M1 落地）
+
+- **术语**：场景分区带 / District Band
+- **英文名**：district band
+- **定义**：biome 通道的 **21..=32 保留带**，承载场景分区码（未分区 / 贫民区 / 富人区 / 普通住宅 / 商业区 / 工业区 / 农田 / 密林 / 空地 / 房间 / 走廊 / 大殿）。载体是每图一张 `TerrainGrid` 的 **biome 通道**（`wv_terrain::biome::DISTRICT_FIRST` / `DISTRICT_COUNT`）——**不是 kind 通道**：kind 已于 2026-10-18 随三通道改造（height / surface / biome）退役。**分区不属任何群系族**（`family_of` 对带内编号返 `None`），主题覆盖物规则（ADR-0032 D2）不会误触发。颜色走**旁挂色表**（主题侧 `PaletteColors.district` + CellMap 固定侧 `biome_raw::DISTRICT_RAW_COLORS`），**不经旧槽位投影**——旧 0..=9 槽位空间被 `shade_google` 折叠规则 / `is_boundary` 边界判定 / tile atlas 三处共同依赖，不能扩。**分区格不参与水彩晕开**（5×5 邻域平均会把分区色稀释成周围自然地形色）。**分区笔刷不改高度**（分区是同一张基底图上的涂色，不该凭空造出地形起伏）。首次出现：2026-10-29 场景编辑器 M1 实施。
+- **所属维度**：地理 / 编辑
+
+### 订正：既有词条里的过时表述（2026-10-29）
+
+- **「分区 / District」词条**（本文件「应用外壳与场景编辑器术语」小节）原文写「走每图一张 `TerrainGrid` 的 **kind 通道**；kind 编号须 > 1（水域判定 `kind <= 1` 是唯一入口，跨水陆会改写高度）」——**该表述已于 2026-10-18 失效**：kind 通道退役为三通道（height / surface / biome），水域判定改为 `wv_terrain::edit::is_water_cell`（`surface == WATER || height < 0`），分区实际走 **biome 通道的 21..=32 保留带**（见上）。按 §6.3「追写不改机制」保留原条目并在此追记。
+- **「场景 / Scene」词条**里「自己的 `TerrainGrid`（分区走 kind 通道）」同一处过时，一并以上条为准。
