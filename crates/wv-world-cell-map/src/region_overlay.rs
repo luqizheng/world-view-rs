@@ -855,7 +855,11 @@ fn point_in_triangle(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> bool
 }
 
 fn flat_to_ring(flat: &[f32]) -> Vec<[f32; 2]> {
-    flat.chunks_exact(2).map(|c| [c[0], c[1]]).collect()
+    flat.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| [c[0], c[1]])
+        .collect()
 }
 
 /// 环的有符号面积（shoelace）；正 = 逆时针。

@@ -74,7 +74,7 @@ pub fn fill_polygon(buf: &mut [u8], val: u8, ring: &[[i32; 2]], w: i32, h: i32) 
             }
         }
         xs.sort_unstable();
-        for pair in xs.chunks_exact(2) {
+        for pair in xs.as_chunks::<2>().0 {
             for x in pair[0]..=pair[1] {
                 if x >= 0 && x < w && y >= 0 && y < h {
                     let idx = (y as u32 * w as u32 + x as u32) as usize;

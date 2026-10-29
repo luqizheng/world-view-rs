@@ -274,7 +274,12 @@ pub fn blit_block_tinted(
             dst_row.copy_from_slice(src_row);
             continue;
         }
-        for (d, s) in dst_row.chunks_exact_mut(4).zip(src_row.chunks_exact(4)) {
+        for (d, s) in dst_row
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(src_row.as_chunks::<4>().0)
+        {
             for ch in 0..3 {
                 let v = ((s[ch] as u32 * mul_q + add_q) >> 8).min(255);
                 d[ch] = ((v * keep_q2 + add2[ch]) >> 8).min(255) as u8;

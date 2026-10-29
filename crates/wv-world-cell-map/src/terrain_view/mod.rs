@@ -152,8 +152,8 @@ mod tests {
             0,
         );
         // 实心格子盒式平均后仍是原色。
-        for px in dst.chunks_exact(4) {
-            assert_eq!(px, [200, 100, 0, 255]);
+        for px in dst.as_chunks::<4>().0 {
+            assert_eq!(*px, [200, 100, 0, 255]);
         }
     }
 
@@ -176,8 +176,8 @@ mod tests {
             0,
         );
         // 黑 × keep 0.45 + 灰 0.7×0.55 = 0.385 → 98。
-        for px in dst.chunks_exact(4) {
-            assert_eq!(px, [98, 98, 98, 255]);
+        for px in dst.as_chunks::<4>().0 {
+            assert_eq!(*px, [98, 98, 98, 255]);
         }
     }
 
@@ -239,7 +239,8 @@ mod tests {
             .data
             .as_ref()
             .expect("地形图必须有像素数据")
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
         {
             let is_a = px[0] == 200 && px[2] == 0;
             let is_b = px[0] == 0 && px[2] == 200;
@@ -497,7 +498,8 @@ mod tests {
             .data
             .as_ref()
             .expect("地形图必须有像素数据")
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
         {
             let near = |t: bevy::color::Srgba| {
                 (px[0] as f32 / 255.0 - t.red).abs() < 0.02
@@ -749,12 +751,15 @@ mod tests {
             .data
             .as_ref()
             .expect("地形图必须有像素数据")
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .zip(
                 soft.data
                     .as_ref()
                     .expect("地形图必须有像素数据")
-                    .chunks_exact(4),
+                    .as_chunks::<4>()
+                    .0,
             )
         {
             if r == s {

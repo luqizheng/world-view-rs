@@ -763,7 +763,11 @@ mod tests {
                 other => panic!("unexpected vertex format: {other:?}"),
             };
             // 每个 quad 的第 0、1 顶点沿边方向——x 差即段长。
-            pos.chunks_exact(4).map(|q| q[1][0] - q[0][0]).sum()
+            pos.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|q| q[1][0] - q[0][0])
+                .sum()
         };
         let total = len_of(&ma) + len_of(&mb);
         assert!(

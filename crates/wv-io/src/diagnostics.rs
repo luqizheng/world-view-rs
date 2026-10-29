@@ -390,7 +390,7 @@ fn ring_has_feature_cell(
     let mut min_y = f32::INFINITY;
     let mut max_x = f32::NEG_INFINITY;
     let mut max_y = f32::NEG_INFINITY;
-    for p in ring.chunks_exact(2) {
+    for p in ring.as_chunks::<2>().0 {
         if !p[0].is_finite() || !p[1].is_finite() {
             return false;
         }

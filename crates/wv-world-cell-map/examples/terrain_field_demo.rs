@@ -556,7 +556,15 @@ fn setup(
     );
     // 烘焙自检：统计各通道「距线 < 1 格」的 texel 数。为 0 说明折线没进
     // 距离场（坐标/通道接错），全图级别说明编码方向反了。
-    let near = |ch: usize| dash_pack.tex.chunks_exact(4).filter(|p| p[ch] < 32).count();
+    let near = |ch: usize| {
+        dash_pack
+            .tex
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[ch] < 32)
+            .count()
+    };
     info!(
         "  近线 texel 数（<1 格）：河 {} / 主干 {} / 次级 {}",
         near(0),

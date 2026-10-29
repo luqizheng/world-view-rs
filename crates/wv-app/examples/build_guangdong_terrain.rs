@@ -70,7 +70,9 @@ fn main() {
     println!("dem {w}x{h}");
 
     let cells: Vec<TerrainCellData> = bytes[4..]
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| {
             let height = i16::from_le_bytes([c[0], c[1]]);
             let (surface, biome) = classify(height);
