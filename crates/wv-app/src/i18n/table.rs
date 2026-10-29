@@ -509,6 +509,18 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::EventCreateHint => "地点与参与者可在检查器的「属性」页签补填",
         I18nKey::NoticeEventCreatedPrefix => "已登记事件：",
         I18nKey::NoticeEventCreateFailed => "登记失败",
+        I18nKey::CharacterLevelTitle => "编辑等级",
+        I18nKey::CharacterLevelFrom => "自",
+        I18nKey::CharacterLevelTo => "至",
+        I18nKey::CharacterLevelOngoing => "至今",
+        I18nKey::CharacterLevelPower => "等级",
+        I18nKey::CharacterLevelAddRow => "＋ 添加等级",
+        I18nKey::CharacterLevelSpanCountUnit => "段",
+        I18nKey::CharacterLevelHint => {
+            "确定后整单写回（可一次撤销）；「至今」表示开放区间；只列出带等级的段；区间重叠由校验面板提示，不阻止保存"
+        }
+        I18nKey::NoticeCharacterLevelSavedPrefix => "已更新等级：",
+        I18nKey::NoticeCharacterLevelSaveFailed => "等级保存失败",
 
         // ── ui_shell 通知 ──
         I18nKey::NoticeSavedToPrefix => "已保存到 ",
@@ -1265,6 +1277,18 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::EventCreateHint => "Set location & participants in the Inspector afterwards",
         I18nKey::NoticeEventCreatedPrefix => "Event registered: ",
         I18nKey::NoticeEventCreateFailed => "Failed to register event",
+        I18nKey::CharacterLevelTitle => "Edit levels",
+        I18nKey::CharacterLevelFrom => "From",
+        I18nKey::CharacterLevelTo => "To",
+        I18nKey::CharacterLevelOngoing => "ongoing",
+        I18nKey::CharacterLevelPower => "Level",
+        I18nKey::CharacterLevelAddRow => "+ Add level",
+        I18nKey::CharacterLevelSpanCountUnit => "spans",
+        I18nKey::CharacterLevelHint => {
+            "Commits as one undoable step on OK; \"ongoing\" marks an open span; only power-bearing spans are listed; overlaps are surfaced by the validation panel, never blocking"
+        }
+        I18nKey::NoticeCharacterLevelSavedPrefix => "Levels updated: ",
+        I18nKey::NoticeCharacterLevelSaveFailed => "Failed to save levels",
 
         // ── ui_shell toasts ──
         I18nKey::NoticeSavedToPrefix => "Saved to ",

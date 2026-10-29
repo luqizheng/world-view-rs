@@ -92,6 +92,8 @@ pub fn register(app: &mut App) {
         .init_resource::<close_confirm::CloseConfirm>()
         // UX-002：「登记事件」对话框跨帧状态（时间轴按钮 / 命令面板入口）。
         .init_resource::<crate::ui::event_create_dialog::EventCreateDialog>()
+        // 人物等级列表编辑器（人物面板行点击入口）。
+        .init_resource::<crate::ui::character_level_dialog::CharacterLevelEditor>()
         .init_resource::<DrillState>()
         .init_resource::<RecentProjects>()
         .init_resource::<LayoutFile>()

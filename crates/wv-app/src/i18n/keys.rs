@@ -893,6 +893,26 @@ pub enum I18nKey {
     NoticeEventCreatedPrefix,
     /// 登记失败回执前缀（UX-002）
     NoticeEventCreateFailed,
+    /// 「编辑等级」对话框标题（后接「 — 人物名」，2026-10-30 人物等级列表编辑器）
+    CharacterLevelTitle,
+    /// 「自」（行内起始日标签）
+    CharacterLevelFrom,
+    /// 「至」（行内结束日标签）
+    CharacterLevelTo,
+    /// 「至今」（开放区间勾选框）
+    CharacterLevelOngoing,
+    /// 「等级」（行内数值标签）
+    CharacterLevelPower,
+    /// 「＋ 添加等级」按钮
+    CharacterLevelAddRow,
+    /// 「段」（人物列表元信息的等级段数单位）
+    CharacterLevelSpanCountUnit,
+    /// 「确定后整单写回…」操作提示
+    CharacterLevelHint,
+    /// 「已更新等级：」前缀（后接名称）
+    NoticeCharacterLevelSavedPrefix,
+    /// 等级保存失败回执前缀
+    NoticeCharacterLevelSaveFailed,
 
     // ── W3：ui_shell 通知 toast 文本 ────────────────────────────────
     /// 「已保存到 」前缀（后接 dir）
@@ -1432,7 +1452,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 591] = [
+    pub const ALL: [I18nKey; 601] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1858,6 +1878,17 @@ impl I18nKey {
         I18nKey::EventCreateHint,
         I18nKey::NoticeEventCreatedPrefix,
         I18nKey::NoticeEventCreateFailed,
+        // 人物等级列表编辑器（10）
+        I18nKey::CharacterLevelTitle,
+        I18nKey::CharacterLevelFrom,
+        I18nKey::CharacterLevelTo,
+        I18nKey::CharacterLevelOngoing,
+        I18nKey::CharacterLevelPower,
+        I18nKey::CharacterLevelAddRow,
+        I18nKey::CharacterLevelSpanCountUnit,
+        I18nKey::CharacterLevelHint,
+        I18nKey::NoticeCharacterLevelSavedPrefix,
+        I18nKey::NoticeCharacterLevelSaveFailed,
         // ui_shell 通知（16）
         I18nKey::NoticeSavedToPrefix,
         I18nKey::NoticeSavedScopePrefix,

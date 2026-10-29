@@ -16,7 +16,7 @@ use bevy::prelude::*;
 use bevy_egui::EguiContexts;
 
 use crate::i18n::{t_key, CurrentLocale, I18nKey};
-use crate::state::{Panel, PanelState, WorldProjection};
+use crate::state::{Panel, PanelState, PlaybackState, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
 use crate::ui_layout::LayoutFile;
 
@@ -24,6 +24,7 @@ use super::shell::UiShell;
 use super::widgets::{empty_state, float_window, list_item, BadgeKind};
 
 /// 人物登记（P-9）。
+#[allow(clippy::too_many_arguments)]
 pub fn panel_character(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,
@@ -31,6 +32,8 @@ pub fn panel_character(
     mut panels: ResMut<PanelState>,
     projection: Res<WorldProjection>,
     current_loc: Res<CurrentLocale>,
+    playback: Res<PlaybackState>,
+    mut level_editor: ResMut<crate::ui::character_level_dialog::CharacterLevelEditor>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -63,7 +66,22 @@ pub fn panel_character(
                 );
             } else {
                 for c in chars {
-                    list_item(ui, &shell, shell.accent(), &c.name, "", false);
+                    // 元信息 = 等级段数（存储计数，非时刻投影，不经 TimelineQuery）。
+                    let meta = format!(
+                        "{} {}",
+                        c.state_spans.len(),
+                        t_key(&current_loc, I18nKey::CharacterLevelSpanCountUnit)
+                    );
+                    let resp = list_item(ui, &shell, shell.accent(), &c.name, &meta, false);
+                    // 行点击 = 打开该人物的等级列表编辑器（草稿从当前表克隆）。
+                    if resp.clicked() {
+                        level_editor.open_for(
+                            c.id.clone(),
+                            c.name.clone(),
+                            c.state_spans.clone(),
+                            playback.current_day,
+                        );
+                    }
                 }
             }
         },

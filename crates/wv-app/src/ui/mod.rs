@@ -19,6 +19,7 @@
 
 pub mod brush_panel;
 pub mod cell_pick;
+pub mod character_level_dialog;
 pub mod city_intent;
 pub mod command_palette_window;
 pub mod continent_dialog;

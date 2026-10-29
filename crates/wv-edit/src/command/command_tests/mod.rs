@@ -389,6 +389,7 @@ fn create_marker(
 }
 
 // ── 按命令族的子模块 ──
+mod character;
 mod city;
 mod city_map;
 mod continent_marker;
