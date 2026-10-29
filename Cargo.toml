@@ -48,7 +48,28 @@ zstd = "0.13"
 # Bevy 体系体积大，阶段一/阶段二未开始前不应阻塞数据层开发。
 # 注意：workspace.dependencies 不支持 optional，optional 在各成员 crate 上声明。
 # 2026-10-13：0.15.3 -> 0.19，理由与代价见 docs/adr/ADR-0011。
-bevy = "0.19"
+#
+# ## Feature 裁剪（2026-10-29，用户提案 + 使用面勘察修正）
+# 依据「wv 实际用到哪些 Bevy 面」勘察（grep 全库）：无音频（AudioPlugin 已禁）、
+# 无 3D / glTF / 动画、无 bevy_ui（UI 全走 bevy_egui）。default 集里的
+# bevy_pbr / bevy_animation / gltf / symphonia 音频栈 / bevy_ui+taffy 全是
+# 纯编译负担——lld 全量重建里 bevy_pbr 单元墙钟 1816s、bevy_ui 族 ~2300s。
+# 裁后清单：
+# - `2d`：2D 渲染剖面（sprite / Mesh2d / ColorMaterial / Material2d 着色器，
+#   wv 的网格线与地形场自定义材质走这条）；含资产与窗口系统。
+# - `multi_threaded`：**必加**——用户提案里没有它；缺了 Bevy 用单线程执行器，
+#   编辑器 FPS 塌方（多核机上的并行 system 执行全没）。
+# - `default_font`：Text2d 标签的兜底字体。
+# - `png`：内嵌图集（`Image::from_buffer` PNG 解码）与图片资产。
+# 用户提案中的 `ui` **不采纳**：wv 零 bevy_ui 使用，裁掉白省 taffy +
+# bevy_ui + bevy_ui_render 三个编译单元；egui 渲染走 bevy_egui 自带管线。
+# 若编译报缺 feature（如 gizmos），以报错为准逐个补回。
+bevy = { version = "0.19", default-features = false, features = [
+    "2d",
+    "multi_threaded",
+    "default_font",
+    "png",
+] }
 bevy_egui = "0.42"
 
 # egui 图像解码器（SVG → 像素）。仅 wv-app 用，`app` feature 才会拉。
@@ -89,7 +110,7 @@ serde_json = "1"
 # 已在依赖树内（axum 传递），此处只是显式声明——零新增传递依赖。
 base64 = "0.22"
 
-# ── 构建档位（2026-10-23，迭代档缺陷修复 B 项）─────────────────────────────
+# ── 构建档位（2026-10-23，迭代档缺陷修复 B 项；2026-10-29 按「提速新提案」调整）──
 #
 # ## 为什么动这里
 # 用户报「cell-map 里 zoom in/out 只有个位数 FPS」。此前只有两条包级例外，
@@ -108,12 +129,16 @@ base64 = "0.22"
 # 换主题」时的整秒卡顿来源。故按「谁热谁优化」分三档，而不是一刀切：
 #
 # ## 三档分工
-# - `[profile.dev]` = 1：**本工作区成员**的默认档。成员代码主要是搭线、状态机、
-#   UI 贴合，opt-level 1 拿到大部分收益而增量编译代价最小（实测整工程首次
-#   编译 1m40s → 见施工报告；增量 ~10–20s）。
+# - `[profile.dev]`：**本工作区成员**的默认档。成员代码主要是搭线、状态机、
+#   UI 贴合。2026-10-29 调整：1 → 0（用户提速提案）——数据层四 crate
+#   （wv-core / wv-edit / wv-io / wv-ui）不在逐帧热路径上，opt 0 换最快的
+#   增量编译；**热点 crate 的包级 override 优先于本基线**（见下方各自条目），
+#   否则 2026-10-23 表里的 34.9× 热点直接回到 opt 0 = 编辑器再次个位数 FPS。
 # - `[profile.dev.package."*"]` = 2：**第三方依赖**（bevy / wgpu / egui / image…）。
-#   通配只覆盖依赖，不覆盖工作区成员（Cargo 的 `*` 语义），所以两条互不冲突。
-#   依赖很少改动，一次编译长期受益，给到 2 是「启动/首帧」性价比最高的一档。
+#   通配只覆盖依赖，不覆盖工作区成员（Cargo 的 `*` 语义）。依赖很少改动，
+#   一次编译长期受益。2026-10-29 追加 `debug = false`（用户提案）：依赖内部
+#   panic 回溯丢行号（原 line-tables-only 保留文件:行）——排查 bevy 内部
+#   panic 时临时给那一个包加 `debug = 1`。
 # - 三个**像素 / 几何 / DP 热点 crate** = 3：`wv-world-cell-map`（整图合成 +
 #   网格 + 等值线几何）、`wv-terrain`（marching squares / DP 纯算法）、
 #   `wv-render`（桥接层里逐帧消费的那些循环）。给到 3 而非 2 的理由：这三个
@@ -137,11 +162,19 @@ base64 = "0.22"
 # 砍掉变量级 DWARF——那是体积与链接时间的大头，而作者调编辑器基本不用 debugger
 # 看 bevy 内部变量。要逐变量调试某个依赖时，临时给那**一个**包开 `debug = 2`。
 [profile.dev]
-opt-level = 1
-debug = "line-tables-only"
+# 2026-10-29（用户提速提案）：工作区基线 opt 1→0、debug 收敛为 1（行表，
+# 与原 line-tables-only 等价）、incremental 显式声明（本就是默认值，写出
+# 来是给「为什么增量生效」一个可 grep 的锚点）。热点 crate 不走本基线——
+# 包级 override 在下面，别在这里调它们。
+opt-level = 0
+debug = 1
+incremental = true
 
 [profile.dev.package."*"]
 opt-level = 2
+# 2026-10-29（用户提速提案）：依赖不带调试信息。panic 回溯进 bevy/wgpu 内部
+# 只有地址没有行号；要逐帧排查时给具体包临时加 debug = 1。
+debug = false
 
 [profile.dev.package.wv-world-cell-map]
 opt-level = 3
