@@ -199,10 +199,10 @@ mod tests {
         }
         assert_eq!(
             I18nKey::ALL.len(),
-            579,
-            "ALL 应为 579 项（… + 复制 agent skill 两键 + UX quick-wins 五键：菜单面板分组/缩放档锁定/视图模式锁定/无地形网格/撤销栈逐出）；加新键时同步更新数组长度与元素（got {})",
+            580,
+            "ALL 应为 580 项（… + UX quick-wins 五键 + ADR-0088：删 MapControlsFloodSelectHint、增 HypsometricTint 两键）；加新键时同步更新数组长度与元素（got {})",
             I18nKey::ALL.len()
         );
-        assert_eq!(seen.len(), 579, "去重后应仍为 579 项");
+        assert_eq!(seen.len(), 580, "去重后应仍为 580 项");
     }
 }

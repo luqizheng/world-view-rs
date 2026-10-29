@@ -842,8 +842,11 @@ pub enum I18nKey {
     MapControlsEditCellHint,
     /// 点选工具瓷砖 tooltip（ADR-0057 补记 6：点选进统一选区，不落笔）
     MapControlsPointSelectHint,
-    /// 泛洪选择（FloodSelect）瓷砖 tooltip（[ADR-0052] D6）
-    MapControlsFloodSelectHint,
+    // （MapControlsFloodSelectHint 已随泛洪工具退役删除，ADR-0086。）
+    /// 海拔分层设色强度·标签（ADR-0055；ADR-0086 起在 topOptionBar）
+    HypsometricTintLabel,
+    /// 海拔分层设色强度·tooltip（ADR-0055；ADR-0086 起在 topOptionBar）
+    HypsometricTintHint,
     /// 泛洪判据·按地表（[ADR-0052] D6）
     CellFloodBySurface,
     /// 泛洪判据·按群系（[ADR-0052] D6）
@@ -1407,7 +1410,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 579] = [
+    pub const ALL: [I18nKey; 580] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1808,7 +1811,8 @@ impl I18nKey {
         I18nKey::MapControlsClearMeasurements,
         I18nKey::MapControlsEditCellHint,
         I18nKey::MapControlsPointSelectHint,
-        I18nKey::MapControlsFloodSelectHint,
+        I18nKey::HypsometricTintLabel,
+        I18nKey::HypsometricTintHint,
         I18nKey::CellFloodBySurface,
         I18nKey::CellFloodByBiome,
         I18nKey::CellFloodByHeight,

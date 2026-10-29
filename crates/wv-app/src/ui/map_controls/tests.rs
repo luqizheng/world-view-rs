@@ -48,6 +48,8 @@ fn dock_orientation_round_trips_through_key() {
 /// 2026-10-23：「清除全部测量」图标钮插在测量组右侧（槽 6.5），
 /// 图标钮 3 → 4、槽位 11 → 12。
 /// 2026-10-26（ADR-0070 D4）：线段 POI 分裂按钮入列（槽 14），槽位 12 → 13。
+/// 2026-10-29（ADR-0086）：泛洪瓷砖与海拔滑条出列——13 是收紧前的最坏
+/// 排布口径，实际更少，两条断言只会更宽裕，不改数。
 #[test]
 fn horizontal_dock_fits_a_1280_window() {
     let m = DockMetrics::for_orientation(false);
@@ -73,26 +75,8 @@ fn vertical_dock_fits_above_the_timeline() {
     );
 }
 
-/// 纵向工具条的宽度由**最宽槽位**决定：海拔分层设色滑条在竖排里必须收进
-/// 一个瓷砖列。横条的 3 槽宽会把整条从 34px 撑到约 116px，右侧留一片空底
-/// （2026-10-24 用户反馈）。
-#[test]
-fn vertical_tint_slider_stays_within_one_tile_column() {
-    let vertical = DockMetrics::for_orientation(true);
-    let slot = vertical.tint_slider_slot(true);
-    assert!(
-        slot.x <= vertical.tile.x,
-        "竖排滑条槽宽 {} 超过瓷砖宽 {}，会把工具条撑宽",
-        slot.x,
-        vertical.tile.x
-    );
-    assert_eq!(slot.y, vertical.tile.y * 2.0, "竖排滑条占 2 个槽高");
-
-    let horizontal = DockMetrics::for_orientation(false);
-    let slot = horizontal.tint_slider_slot(false);
-    assert_eq!(slot.y, horizontal.tile.y, "横排滑条不应改变工具条高度");
-    assert!(slot.x > horizontal.tile.x, "横排滑条维持 3 槽长条");
-}
+// （「竖排滑条收进一个瓷砖列」守点已随槽 10.75 挪 topOptionBar 退役
+// （ADR-0086）——滑条不再是本工具条的槽位，宽度约束由顶条单行布局自担。）
 
 /// 线段 POI 瓷砖只在 Edit 档渲染（ADR-0070 D4）：Nation / Region 档作者
 /// 看不到入口——「线」是放大到可编辑级别才画的东西。

@@ -133,11 +133,10 @@ fn dispatcher_world(project_dir: Option<&str>, dirty: bool, pending: CommandId) 
         last_map: None,
     });
     world.insert_resource(Time::<()>::default());
-    // CellMap 工具会话态（[ADR-0052] D6/D8-A）：`apply_pending_commands`
-    // 的 `SelectMapTool(FloodSelect)` 与撤销/重做白闪分支都要读写它们。
-    // 生产端在 `app_bootstrap` 注册；测试 fixture 必须同款补齐，否则
-    // `SystemParamValidationError { Resource does not exist }`。
-    world.init_resource::<crate::state::FloodSelectState>();
+    // CellMap 工具会话态（[ADR-0052] D8-A）：`apply_pending_commands`
+    // 的撤销/重做白闪分支要读写它。生产端在 `app_bootstrap` 注册；测试
+    // fixture 必须同款补齐，否则 `SystemParamValidationError { Resource
+    // does not exist }`。（泛洪工具态已随 ADR-0086 退役，不再进分发器。）
     world.init_resource::<wv_world_cell_map::cell_flash::CellFlashState>();
     // ADR-0057：点选工具会话态 + 统一选区位图——分发器互斥分支与
     // 选区保留测试都要读写它们（漏 init 即 SystemParamValidationError）。
@@ -433,9 +432,8 @@ fn project_menu_pending_command_reaches_the_dispatcher() {
         last_map: None,
     });
     world.insert_resource(Time::<()>::default());
-    // CellMap 工具会话态（[ADR-0052] D6/D8-A）：与 `dispatcher_world`
+    // CellMap 工具会话态（[ADR-0052] D8-A）：与 `dispatcher_world`
     // 同款补齐——`apply_pending_commands` 现在读写这些资源。
-    world.init_resource::<crate::state::FloodSelectState>();
     world.init_resource::<wv_world_cell_map::cell_flash::CellFlashState>();
     // ADR-0057：点选工具会话态 + 统一选区位图（分发器互斥分支要读写）。
     world.init_resource::<crate::state::PointSelectState>();

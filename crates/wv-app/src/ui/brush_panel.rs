@@ -63,10 +63,12 @@ pub fn panel_brush(
     (mut notice, time, current_loc): (ResMut<ShellNotice>, Res<Time>, Res<CurrentLocale>),
     // ── CellMap 编辑段（2026-10-24 自 Inspector 迁入）──
     // 第三个是统一选区（ADR-0057：Cell 表单的唯一编辑对象，可写——批量区
-    // 「取消」按钮 = 清空选区）。
-    (mut edit_cell, mut cell_sel): (
+    // 「取消」按钮 = 清空选区）；第四个是点选工具激活态（ADR-0086：泛洪
+    // 判据段跟随点选工具显示）。
+    (mut edit_cell, mut cell_sel, point_select): (
         ResMut<wv_render::state::EditCellState>,
         ResMut<wv_render::state::CellSelection>,
+        Res<crate::state::PointSelectState>,
     ),
     mut paint_session: ResMut<wv_world_cell_map::cell_paint::CellPaintSession>,
     mut flood_select: ResMut<crate::state::FloodSelectState>,
@@ -181,15 +183,25 @@ pub fn panel_brush(
             // ══ CellMap 编辑段（2026-10-24 自 Inspector「属性」页签迁入；
             // ADR-0058 统一属性表单）══
             //
-            // **显示判据**（ADR-0058 D2 扩展自 ADR-0057 D6）：落笔工具激活
-            // （Brush(PaintKind) / EditCell——只画不选），或 FloodSelect 激活，
-            // 或 Topographic 档下**选区非空**。三态覆盖属性段的全部作用域。
+            // **显示判据**（ADR-0058 D2，ADR-0086 修正）：EditCell 激活（落笔
+            // 表单唯一合法作用域），或笔刷（Brush）激活（读数条 / 单格批量
+            // 表单仍有效），或 Topographic 档下**选区非空**，或点选工具激活
+            // （泛洪判据段跟随它显示）。
+            //
+            // **ADR-0086 修正**：落笔表单（落笔地表/群系/增减/半径）的值源
+            // `CellPaintSession` **只被 EditCell 硬边拖绘消费**——笔刷（软边，
+            // `commit_stroke_on_release`）读的是 `BrushState`（材料/半径/软度
+            // 在 topOptionBar 调）。旧判据把 Brush(PaintKind) 也算落笔作用域，
+            // 等于给作者看一组**调了没反应**的死控件（2026-10-28 实机反馈
+            // 「笔刷大小调不动」的根因）。
             let paint_tool_active =
                 brush.enabled && brush.tool == crate::state::BrushTool::PaintKind;
-            let paint_scope = paint_tool_active || edit_cell.tool_active;
+            let paint_scope = edit_cell.tool_active;
+            let flood_criterion_scope =
+                point_select.tool_active && view.mode == wv_render::state::ViewMode::Topographic;
             let cell_seg_active = paint_tool_active
-                || edit_cell.tool_active
-                || flood_select.tool_active
+                || paint_scope
+                || flood_criterion_scope
                 || (view.mode == wv_render::state::ViewMode::Topographic && !cell_sel.is_empty());
             if cell_seg_active {
                 ui.add_space(space::SM);
@@ -212,6 +224,7 @@ pub fn panel_brush(
                     &mut cell_sel,
                     drill.current(),
                     paint_scope,
+                    flood_criterion_scope,
                 );
             }
         },

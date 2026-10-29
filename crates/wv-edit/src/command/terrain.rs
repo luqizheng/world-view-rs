@@ -19,6 +19,11 @@ pub struct PaintTerrainCommand {
     pub stroke: Stroke,
     /// 每格世界边长。
     pub cell_size: f32,
+    /// **选区蒙版**（ADR-0086，2026-10-29）：`Some` 时只有表内的格允许被
+    /// 笔触改动（升序去重，`binary_search` 可查）。统一选区非空时，CellMap
+    /// 的涂抹 / 橡皮只落选区内——「软边在边界保权重、选区外一格不动」。
+    /// 意图笔刷不走本蒙版（整段生成地形，裁切会产生半座山）。
+    mask: Option<Vec<(i32, i32)>>,
     /// `apply` 时缓存的受影响格旧值：`(gx, gy, before_cell)`。
     ///
     /// 用 `Mutex` 而非 `RefCell`，使命令可跨线程（Bevy 系统是并行的）。
@@ -31,6 +36,27 @@ impl PaintTerrainCommand {
             map,
             stroke,
             cell_size,
+            mask: None,
+            before: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// 带选区蒙版的构造（ADR-0086）：`mask` 内的格才允许被笔触改动。
+    ///
+    /// 蒙版在构造时排序去重，`apply` 侧按 `binary_search` 判定。
+    pub fn new_masked(
+        map: wv_core::Id,
+        stroke: Stroke,
+        cell_size: f32,
+        mut mask: Vec<(i32, i32)>,
+    ) -> Self {
+        mask.sort_unstable();
+        mask.dedup();
+        Self {
+            map,
+            stroke,
+            cell_size,
+            mask: Some(mask),
             before: std::sync::Mutex::new(Vec::new()),
         }
     }
@@ -62,6 +88,19 @@ impl EditCommand for PaintTerrainCommand {
         let snapshot: Vec<TerrainCell> = grid.cells().to_vec();
         // ② 施加笔触（wv-terrain 的职责）
         apply_stroke(&mut grid, stroke, cell_size);
+        // ②' 选区蒙版（ADR-0086）：蒙版外的受影响格**回滚快照值**——
+        // 软边笔刷只改蒙版内，边界外一格不动。回滚发生在 ③ 收集 `before`
+        // 之前，`before` / `revert` 天然只见蒙版内的真实改动。
+        if let Some(mask) = &self.mask {
+            let width = grid.width() as usize;
+            for (idx, old) in snapshot.iter().enumerate() {
+                let gx = (idx % width) as i32;
+                let gy = (idx / width) as i32;
+                if mask.binary_search(&(gx, gy)).is_err() {
+                    grid.set(gx, gy, *old);
+                }
+            }
+        }
         // ③ 收集差异格作为 `before`（用于 revert）
         let mut before = self
             .before

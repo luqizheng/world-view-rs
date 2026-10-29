@@ -218,15 +218,6 @@ pub enum MapToolId {
     /// 一个群系，拖动推移分界——扫过格「退让侧→推进侧」互转（第三方不动）。
     /// 仅 Topographic 可用；线是会话工具不落盘。
     BiomeBoundary,
-    /// **泛洪选择**（[ADR-0052] D6 / D6-A）：点一下，把与该格「同值」的
-    /// 连通区选进统一选区。
-    ///
-    /// 与 `Select(shape)` 的分工：`Select` 是**圈出作者指定的形状**；
-    /// `FloodSelect` 是**按判据自动圈出同值连通区**（如「点一片森林，
-    /// 选中整片森林」）。
-    ///
-    /// 判据（按地表 / 按群系 / 按海拔容差）在 CellMap 面板做 segmented。
-    FloodSelect,
     /// **线段 POI**（ADR-0070 D4）：在地图上画河流 / 道路——一条线就是一个
     /// 地点实体（`Place::line` + `line_kind`）。载荷 = 线的种类（河 / 路）。
     ///
@@ -254,7 +245,7 @@ impl MapToolId {
     /// - **Browse / Map**（叙事与政治图档）：选择、抓手、点选（万能选择器）、
     ///   测量（Map 是距离主场）；
     /// - **CellMap**（Topographic 地形工作台）：地形编辑全家（笔刷/橡皮/
-    ///   单格/泛洪/群系分界/大陆生成）+ 地标放置（POI 编辑主场）；
+    ///   单格/群系分界/大陆生成）+ 地标放置（POI 编辑主场）；
     /// - **LinePoi**（河/路绘制）：Map 档——CellMap 只**看**线不画线
     ///   （2026-10-28 裁定②：CellMap 道路/河流可见属渲染层，编辑入口在 Map）。
     pub fn available_in(self, mode: crate::state::ViewMode) -> bool {
@@ -270,7 +261,6 @@ impl MapToolId {
             Self::Brush
             | Self::BrushErase
             | Self::EditCell
-            | Self::FloodSelect
             | Self::BiomeBoundary
             | Self::Continent
             | Self::Landmark => mode == ViewMode::Topographic,
@@ -1018,7 +1008,6 @@ mod tests {
             MapToolId::Brush,
             MapToolId::BrushErase,
             MapToolId::EditCell,
-            MapToolId::FloodSelect,
             MapToolId::BiomeBoundary,
             MapToolId::Continent,
             MapToolId::Landmark,

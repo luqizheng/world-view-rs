@@ -21,13 +21,13 @@ pub fn map_controls(
     edit: Res<EditHistory>,
     panels: Res<PanelState>,
     // CellMap 工具活动态（ADR-0057 补记 6：EditCell 第 12 槽 / PointSelect
-    // 槽 1 / FloodSelect 第 13 槽）——瓷砖按各自 Resource 的 `tool_active`
+    // 槽 1）——瓷砖按各自 Resource 的 `tool_active`
     // 画选中态。时间轴播放态（§9.4 Gate-1）：播放中 CellMap 编辑类瓷砖灰化。
     // 线段 POI 会话态（ADR-0070 D4，槽 14）同折进来。
     //
     // **折成一层元组**：Bevy 单系统参数上限 16，本函数原有 15 个，五个
     // `Res` 分开写会到 20（编译报「not a system set」）。元组算 1 个参数。
-    (edit_cell, point_select, flood_select, playback, line_poi): ToolSessionStates,
+    (edit_cell, point_select, playback, line_poi): ToolSessionStates,
 ) {
     // 无工程闸门（图片规格 §首页不可见）：与 `welcome_screen` 共用同一信号。
     // 2026-10-22（B 档）：改读 `AppScreen`——「首页不可见」的口径由屏状态
@@ -62,8 +62,6 @@ pub fn map_controls(
     // Resource，判据各读各的 `tool_active`——不再共用 `allow_drag` 形态位。
     let edit_cell_active = edit_cell.tool_active;
     let point_select_active = point_select.tool_active;
-    // 泛洪活动态（[ADR-0052] D6）：判据 = `tool_active`。
-    let flood_select_active = flood_select.tool_active;
     // **Gate-1**（[ADR-0052] §9.4）：时间轴播放中，CellMap 写入口工具灰化。
     // 禁工具而非禁面板——播放中看读数条是合法只读操作。
     let cell_tools_enabled = !playback.playing;
@@ -370,37 +368,9 @@ pub fn map_controls(
                             view.isolines = !view.isolines;
                         }
 
-                        // ── 槽 10.75：海拔分层设色强度（ADR-0055）────────────
-                        // 仅 CellMap 可用：数据视图用颜色读海拔。0 = 纯群系色块，
-                        // 1 = 8 阶海拔色带完全替代群系色。会话态、不落盘。
-                        // 槽位尺寸见 [`DockMetrics::tint_slider_slot`]：竖排就地
-                        // 转竖（1 列 × 2 槽），否则横条的 3 槽宽会把纵向工具条
-                        // 整条撑宽（2026-10-24 用户反馈）。
-                        // UX-030：其他模式恒渲染、`set_enabled` 灰化而非消失。
-                        let tint_ok = matches!(view.mode, ViewMode::Topographic);
-                        let slot = metrics.tint_slider_slot(vertical);
-                        // Slider 的长度取 `spacing().slider_width`（默认
-                        // 100），与 `add_sized` 的 max_size 不同源；竖排不
-                        // 同步改它，滑条会按 100px 长把框再撑高。
-                        if vertical {
-                            ui.spacing_mut().slider_width = slot.y;
-                        }
-                        let tint_hint = if tint_ok {
-                            "海拔分层设色强度（0 = 只看群系色，1 = 只看海拔）".to_owned()
-                        } else {
-                            format!(
-                                "海拔分层设色强度（{}）",
-                                t(loc, I18nKey::MapControlsViewModeLocked)
-                            )
-                        };
-                        // `add_enabled_ui`（egui 0.36 无 `set_enabled`）：禁用态
-                        // 滑条灰化、不可拖。
-                        ui.add_enabled_ui(tint_ok, |ui| {
-                            let slider = egui::Slider::new(&mut view.hypsometric_tint, 0.0..=1.0)
-                                .show_value(false);
-                            let slider = if vertical { slider.vertical() } else { slider };
-                            ui.add_sized(slot, slider).on_hover_text(tint_hint);
-                        });
+                        // （槽 10.75 海拔分层设色滑条已挪 topOptionBar
+                        //（ADR-0086，2026-10-29 用户裁定）：它是当前视图的
+                        // 读色参数，与笔刷参数同条更顺乎手。）
 
                         // ── 槽 11：自然区（2026-10-22 内容矩阵 §2.6）──────
                         // CellMap 里显示 Nature 类区域 + 未命名候选高亮。
@@ -459,26 +429,9 @@ pub fn map_controls(
                             MapToolId::EditCell,
                         );
 
-                        // ── 槽 13：FloodSelect（泛洪选择）────────────
-                        // [ADR-0052] D6：点一下 = 按判据自动圈出同值连通区。
-                        // 与槽 12 同属「CellMap 编辑」组，不另加分隔条。
-                        tool_tile(
-                            ui,
-                            &shell,
-                            metrics,
-                            ICON_PAINT_BUCKET,
-                            if !cell_tools_enabled {
-                                locked_hint
-                            } else if !ws(MapToolId::FloodSelect) {
-                                ws_hint
-                            } else {
-                                t(loc, I18nKey::MapControlsFloodSelectHint)
-                            },
-                            flood_select_active,
-                            cell_tools_enabled && ws(MapToolId::FloodSelect),
-                            &mut params.palette,
-                            MapToolId::FloodSelect,
-                        );
+                        // （槽 13 泛洪选择瓷砖已随 ADR-0086 退役：CellMap 里
+                        // 点选工具的**默认点击 = 泛洪**（ADR-0074 追记四），
+                        // 同一行为不需要第二枚入口。）
 
                         // ── 槽 14：线段 POI（河流 / 道路，ADR-0070 D4）──
                         // 作者工具只在放大到可编辑级别（Edit 档）才有意义——

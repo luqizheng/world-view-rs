@@ -204,6 +204,73 @@ fn paint_command_writes_surface_and_biome_then_revert_restores() {
     );
 }
 
+/// 选区蒙版（ADR-0086，2026-10-28 实机反馈「多选后笔刷不该到处生效」）：
+/// 带蒙版的涂抹只落蒙版内的格——软边笔刷扫过的选区外格**一格不动**，
+/// `before` 只记蒙版内的真实改动，revert 完整还原。
+///
+/// 手算口径：无蒙版时半径 2 笔刷（世界单位，cell_size=1）在 (4.5,4.5)
+/// 覆盖 (4,4) 周围约 5×5 ——先断言无蒙版改动 > 1 格（证明蒙版外确有
+/// 笔触落点，下面的「只有一格变」才有牙齿），再断言带蒙版后恰 (4,4) 一格变。
+#[test]
+fn masked_paint_only_changes_cells_inside_the_mask() {
+    let paint_stroke = || {
+        let mut stroke = Stroke::new();
+        stroke.push(wv_terrain::edit::Brush::paint(
+            (4.5, 4.5),
+            2.0,
+            wv_terrain::edit::PaintTarget {
+                surface: wv_terrain::SURFACE_LAND,
+                biome: wv_terrain::BIOME_GRASSLAND,
+            },
+        ));
+        stroke
+    };
+    let changed_cells = |world: &World| -> Vec<(i32, i32)> {
+        let after = world.terrain_of(&test_map()).cloned().unwrap();
+        (0usize..64)
+            .filter(|&idx| after.cells[idx] != wv_core::terrain::TerrainCellData::default())
+            .map(|idx| ((idx % 8) as i32, (idx / 8) as i32))
+            .collect()
+    };
+
+    // 对照组：无蒙版 → 笔刷 footprint 内全部落色（必须 > 1 格）。
+    let mut unmasked = world_with_terrain(8);
+    PaintTerrainCommand::new(test_map(), paint_stroke(), 1.0)
+        .apply(&mut unmasked)
+        .unwrap();
+    let footprint = changed_cells(&unmasked);
+    assert!(
+        footprint.len() > 1,
+        "半径 2 笔刷应覆盖多格，实际只动了 {:?}——蒙版断言失去前提",
+        footprint
+    );
+
+    // 蒙版组：只放 (4,4) 一格 → apply 后恰这一格变。
+    let mut world = world_with_terrain(8);
+    let before_snapshot = world.terrain_of(&test_map()).cloned().unwrap();
+    let cmd = PaintTerrainCommand::new_masked(test_map(), paint_stroke(), 1.0, vec![(4, 4)]);
+    let dirty = cmd.apply(&mut world).unwrap();
+    assert_eq!(dirty, vec![format!("maps/{TEST_MAP}/terrain.bin")]);
+    assert_eq!(
+        changed_cells(&world),
+        vec![(4, 4)],
+        "蒙版外不得有任何格被改动"
+    );
+    assert_eq!(
+        world.terrain_of(&test_map()).unwrap().cells[4 * 8 + 4].biome,
+        wv_terrain::BIOME_GRASSLAND,
+        "蒙版内格应写入目标群系"
+    );
+
+    // 蒙版不影响可撤销性：revert 只回滚蒙版内的真实改动。
+    cmd.revert(&mut world).unwrap();
+    assert_eq!(
+        world.terrain_of(&test_map()).cloned().unwrap(),
+        before_snapshot,
+        "revert 应完全还原"
+    );
+}
+
 /// 域对齐不回退（设计稿 D19/Review Focus 3）：画水把高度推过海平面下方。
 #[test]
 fn water_target_pushes_height_below_sea_level() {

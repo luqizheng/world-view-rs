@@ -311,13 +311,14 @@ pub fn dash_segments(length: f32, pitch: f32) -> Vec<(f32, f32)> {
         .collect()
 }
 
-/// **泛洪选择工具**的会话态（[ADR-0052] D6 / D6-A）。
+/// **泛洪判据**的会话态（[ADR-0052] D6；ADR-0086 收窄）。
 ///
-/// 与 [`EditCellState`] 同级——两者是**互斥工具**（同一时刻只有一个 active）。
+/// 历史上它是「泛洪选择工具」的工具态（带 `tool_active`）；ADR-0086 退役
+/// 该工具后，本结构只剩**判据**一份——CellMap 里点选工具的**默认点击 =
+/// 泛洪**（ADR-0074 追记四）仍按此判据圈同值连通区，浮窗「泛洪判据」
+/// 段编辑的也是它。
 #[derive(Resource, Debug, Default, Clone, PartialEq)]
 pub struct FloodSelectState {
-    /// 泛洪工具是否激活。
-    pub tool_active: bool,
     /// **判据**：按地表 / 按群系 / 按海拔容差。
     ///
     /// 默认按**群系**——CellMap 的主要用途是「选出一片同群系的地」，
@@ -325,19 +326,9 @@ pub struct FloodSelectState {
     pub criterion: FloodCriterion,
 }
 
-impl FloodSelectState {
-    /// 关工具（切走时调用）——只翻 `tool_active`，不清选区
-    /// （选区在 [`CellSelection`]，跨工具保留；ADR-0057 D1 / D5）。
-    pub fn close_tool(&mut self) {
-        self.tool_active = false;
-    }
-}
-
 /// **点选工具**的会话态（ADR-0057 补记 6：原 `MapToolId::CellSelect`
 /// 改名 `PointSelect`，激活态独立为小 Resource，不再与 EditCell 共用
 /// `tool_active`——D3 职责分野在状态层的落实）。
-///
-/// 形态仿 [`FloodSelectState`]：只携带「是否激活」，无附加参数。
 #[derive(Resource, Debug, Default, Clone, PartialEq)]
 pub struct PointSelectState {
     /// 点选工具是否激活。

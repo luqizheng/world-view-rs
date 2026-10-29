@@ -479,7 +479,8 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::MapControlsClearMeasurements => "清除全部测量（Del 删除光标下的一条）",
         I18nKey::MapControlsEditCellHint => "单格编辑：点选一格改高度 / 地表 / 群系；按住拖动可连续涂画",
         I18nKey::MapControlsPointSelectHint => "点选：点一格进选区查看属性；Shift 加选 / Alt 减选；不落笔",
-        I18nKey::MapControlsFloodSelectHint => "泛洪选择：点一下，自动选中与该格同类的连通区域",
+        I18nKey::HypsometricTintLabel => "海拔分层",
+        I18nKey::HypsometricTintHint => "海拔分层设色强度（0 = 只看群系色，1 = 只看海拔）",
         I18nKey::CellFloodBySurface => "按地表",
         I18nKey::CellFloodByBiome => "按群系",
         I18nKey::CellFloodByHeight => "按海拔",
@@ -1219,8 +1220,9 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::MapControlsPointSelectHint => {
             "Point select: click cells into the selection to inspect; Shift adds / Alt subtracts; no painting"
         }
-        I18nKey::MapControlsFloodSelectHint => {
-            "Flood select: click once to select the connected area of the same kind"
+        I18nKey::HypsometricTintLabel => "Hypsometric",
+        I18nKey::HypsometricTintHint => {
+            "Elevation banding strength (0 = biome colors only, 1 = elevation only)"
         }
         I18nKey::CellFloodBySurface => "By surface",
         I18nKey::CellFloodByBiome => "By biome",

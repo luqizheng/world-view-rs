@@ -226,14 +226,13 @@ pub(crate) fn apply_pending_commands(
     // 单格编辑工具会话态（[ADR-0040]）：跟 selection 同款粒度。
     mut edit_cell: ResMut<crate::state::EditCellState>,
     mut boundary: ResMut<wv_render::state::BiomeBoundaryState>,
-    // 泛洪选择工具会话态（[ADR-0052] D6）：与 EditCell 同款粒度的互斥工具。
     // 撤销白闪会话态（[ADR-0052] D8-A）：撤销/重做后对受影响格做 250ms
     // 白色脉冲；点选工具会话态（ADR-0057 补记 6）——同属 CellMap
     // 会话域；线段 POI 会话态（ADR-0070 D4）非 CellMap 域但同为互斥工具
     // 会话态；地标放置会话态（ADR-0071）同粒度互斥——四者为单系统
-    // 16 参数上限折进同层元组。
-    (mut flood_select, mut flash, mut point_select, mut line_poi, mut landmark): (
-        ResMut<crate::state::FloodSelectState>,
+    // 16 参数上限折进同层元组。（泛洪工具态已随 ADR-0086 退役：工具与
+    // 点选默认点击重复；判据资源仍初始化，供默认点击读。）
+    (mut flash, mut point_select, mut line_poi, mut landmark): (
         ResMut<wv_world_cell_map::cell_flash::CellFlashState>,
         ResMut<crate::state::PointSelectState>,
         ResMut<crate::state::LinePoiState>,
@@ -411,7 +410,6 @@ pub(crate) fn apply_pending_commands(
                 &edit_cell,
                 &point_select,
                 &boundary,
-                &flood_select,
                 &line_poi,
                 &landmark,
             );
@@ -443,7 +441,6 @@ pub(crate) fn apply_pending_commands(
                     &mut measure,
                     &mut edit_cell,
                     &mut point_select,
-                    &mut flood_select,
                     &mut boundary,
                     &mut line_poi,
                     &mut panels,
@@ -459,7 +456,6 @@ pub(crate) fn apply_pending_commands(
                         &mut edit_cell,
                         &mut point_select,
                         &mut boundary,
-                        &mut flood_select,
                         &mut line_poi,
                         &mut panels,
                         &mut landmark,
@@ -618,7 +614,6 @@ fn map_tool_is_on(
     edit_cell: &crate::state::EditCellState,
     point_select: &crate::state::PointSelectState,
     boundary: &wv_render::state::BiomeBoundaryState,
-    flood_select: &crate::state::FloodSelectState,
     line_poi: &crate::state::LinePoiState,
     landmark: &crate::state::LandmarkToolState,
 ) -> bool {
@@ -637,7 +632,6 @@ fn map_tool_is_on(
         MapToolId::EditCell => edit_cell.tool_active,
         MapToolId::PointSelect => point_select.tool_active,
         MapToolId::BiomeBoundary => boundary.line.is_some(),
-        MapToolId::FloodSelect => flood_select.tool_active,
         // 线段 POI（ADR-0070 D4）：「同款」= 工具开着 ∧ 同一类——
         // 河开着点路 = 换类不关工具（与 Select(shape) 换形状同口径）。
         MapToolId::LinePoi(kind) => line_poi.tool_active && line_poi.kind == kind,
@@ -648,7 +642,7 @@ fn map_tool_is_on(
 /// 全关所有互斥地图工具（P1-2 拆解段 ②）。
 ///
 /// 从 `SelectMapTool` 分支原样迁出。切走时清掉草稿 / 半边选区，避免
-/// 「看不见的手」；EditCell / PointSelect / FloodSelect **只关工具不清选区**
+/// 「看不见的手」；EditCell / PointSelect **只关工具不清选区**
 /// （已提交的 `CellSelection` 保留，切图清空由 `sync_cell_region` 的
 /// `bind_map` 承担）；分界线的线是会话工具一并清；线段 POI 面板随工具收。
 #[allow(clippy::too_many_arguments)]
@@ -660,7 +654,6 @@ fn close_all_map_tools(
     measure: &mut crate::state::MeasureState,
     edit_cell: &mut crate::state::EditCellState,
     point_select: &mut crate::state::PointSelectState,
-    flood_select: &mut crate::state::FloodSelectState,
     boundary: &mut wv_render::state::BiomeBoundaryState,
     line_poi: &mut crate::state::LinePoiState,
     panels: &mut PanelState,
@@ -685,8 +678,6 @@ fn close_all_map_tools(
     edit_cell.close_tool();
     // 点选工具同款：只关工具，不动选区（ADR-0057 补记 6）。
     point_select.close_tool();
-    // 关掉泛洪工具：同样只关工具，不清选区（D6-A）。
-    flood_select.close_tool();
     // 切走分界线工具：线是会话工具，一并清（ADR-0051）。
     boundary.clear();
     // 线段 POI 的面板**随工具走**（ADR-0070 D4）：若本命令是开 LinePoi，
@@ -713,7 +704,6 @@ fn open_map_tool(
     edit_cell: &mut crate::state::EditCellState,
     point_select: &mut crate::state::PointSelectState,
     boundary: &mut wv_render::state::BiomeBoundaryState,
-    flood_select: &mut crate::state::FloodSelectState,
     line_poi: &mut crate::state::LinePoiState,
     panels: &mut PanelState,
     landmark: &mut crate::state::LandmarkToolState,
@@ -746,16 +736,15 @@ fn open_map_tool(
             measure.mode = MeasureMode::Eraser;
         }
         // EditCell 工具激活：ADR-0057 后**只画不选**——点击/拖动累积笔触
-        // （见 edit::cell_stroke），选区写入全归 PointSelect / 框选 / 套索 /
-        // 泛洪四个落笔点。
+        // （见 edit::cell_stroke），选区写入全归 PointSelect / 框选 / 套索
+        // 三个落笔点（泛洪工具已随 ADR-0086 退役，默认点击泛洪在
+        // `commit_point_select_on_click` 内）。
         MapToolId::EditCell => edit_cell.tool_active = true,
         // 点选工具（ADR-0057 补记 6）：独立 `PointSelectState`。落笔写
         // `CellSelection`（见 editing::commit_edit_cell_on_click 的点选分支）。
         MapToolId::PointSelect => point_select.tool_active = true,
         // 分界线工具激活：线要等用户在地图上拖出（见 edit::biome_boundary_input）。
         MapToolId::BiomeBoundary => boundary.tool_active = true,
-        // 泛洪选择激活：点一下即泛洪，结果入统一选区（见 `edit::flood_select`）。
-        MapToolId::FloodSelect => flood_select.tool_active = true,
         // 线段 POI 激活（ADR-0070 D4）：记下当前类（弹层换类走到这里 = 换参数），
         // 并打开「河流和道路」面板。播放锁（T10 minor ①）+ Edit 档兜底
         // （T10 minor ②）：锁住 / 非 Edit 档静默早退（原注释口径不变）。
