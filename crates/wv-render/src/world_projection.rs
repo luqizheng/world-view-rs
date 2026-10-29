@@ -23,7 +23,7 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 use crate::layer_frame::LayerFrame;
-use crate::state::{BrushState, GridConfig, PlaybackState, ViewState, WorldProjection};
+use crate::state::{GridConfig, PlaybackState, ViewState, WorldProjection};
 use crate::theme::colors;
 use wv_core::map::distance::LineKind;
 use wv_core::map::road_derive::{effective_line_kind, road_line_effective_rank};

@@ -823,6 +823,111 @@ pub fn draw_drill_markers(
 #[derive(Component)]
 pub struct PlaceLabel;
 
+/// 六类文字标签共享的池对齐尾部（P1-3，2026-10-29 收敛）。
+///
+/// place / faction / event / region / sea（本文件）与 street（`streets.rs`）
+/// 六个系统此前各持一份**逐字相同**的「wanted → 池对齐 → 晕边同步 → 多余隐藏」
+/// 尾巴（~100 行 × 6）。差异只有 marker 与各系统的同名局部量——但因
+/// `macro_rules!` 卫生规则（宏体引用调用方局部量会在定义点解析失败），这些量
+/// 全部以**片段参数**显式传入：`align_label_pool!(Marker, &candidates, commands,
+/// q, &children_q, halo_q, cjk, label_z, <旋转>, label_color, halo_color,
+/// unit_scale)`。旋转逐候选求值：drill 五类传 `label_rot`（屏幕水平）；
+/// street 传沿街角（`Quat::from_rotation_z(c.angle…) * cam_rot`，ADR-0073
+/// 直立翻转）。
+///
+/// **候选构建不在宏内**——各标签的数据来源与摆位偏好（ADR-0073 八方位、
+/// 面标签环约束等）才是六系统真正的分叉点，留在各自系统函数里。
+///
+/// 语义与被替换的六份实现逐字一致：复用池实体（改写 Transform / 文本 / 字号 /
+/// 颜色 / 可见），不够补生（带 marker + `HALO_DIRS` 个晕边子实体），多余隐藏
+/// （保留复用，不 despawn——对象池哲学，与纹理增量更新同一理由）。
+macro_rules! align_label_pool {
+    // **全参数透传**（macro_rules 卫生规则：宏体对局部量的引用在**定义点**
+    // 解析，看不见调用方作用域——q / wanted / 颜色等必须以片段传入，展开后
+    // 等价于调用方原地写这段代码）。
+    // 参数序：marker、候选切片、Commands、标签池查询、children 查询、
+    // 晕边查询、CJK 字体、z、旋转、字色、晕色、单位缩放。
+    // 旋转逐候选求值：drill 五类传 `label_rot`（屏幕水平）；street 传
+    // `Quat::from_rotation_z(c.angle.unwrap_or(0.0)) * cam_rot`（沿街旋转，
+    // ADR-0073 直立翻转）。`$marker:ident`：六类 marker 都是单元结构体，
+    // ident 在类型位与表达式位（spawn 的组件值）都合法。
+    // `$c:ident`：候选循环变量也由调用方命名——`$tf_rot` 表达式（street 的
+    // 沿街角）引用 `c.angle`，卫生规则下只有「调用方传入的同一 ident」才能
+    // 同时在旋转表达式与循环体里可见。
+    ($marker:ident, $c:ident, $candidates:expr, $commands:expr, $q:expr,
+     $children_q:expr, $halo_q:expr, $cjk:expr, $label_z:expr, $tf_rot:expr,
+     $label_color:expr, $halo_color:expr, $unit_scale:expr $(,)?) => {{
+        let mut iter = $q.iter_mut();
+        for $c in $candidates {
+            let pos = $c.pos;
+            let name = &$c.name;
+            // 该标签自己的字号（屏幕像素 → 世界单位）与成比例的晕边偏移。
+            let font_size = $c.font_size_px * $unit_scale;
+            let halo_offset = crate::label_halo::halo_offset_world($c.font_size_px, $unit_scale);
+            let tf_rot = $tf_rot;
+            if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
+                tf.translation = pos.extend($label_z);
+                tf.rotation = tf_rot;
+                // Bevy 0.19：字号是 `TextFont.font_size: FontSize`、字体是 `font: FontSource`。
+                *text = Text2d::new(name.as_str());
+                style.font_size = font_size.into();
+                // TextFont.font 非 Option：缺 CJK 时回落内置字体（拉丁可用，中文方块）。
+                if let Some(f) = &$cjk {
+                    style.font = f.clone().into();
+                }
+                *color = TextColor($label_color);
+                *vis = Visibility::Visible;
+                // 晕边子实体随字同步（8 向纸色副本，绿地/水面上托出文字）。
+                if let Ok(children) = $children_q.get(e) {
+                    crate::label_halo::sync_halo(
+                        children,
+                        &mut $halo_q,
+                        name.as_str(),
+                        font_size,
+                        $cjk.as_ref(),
+                        $halo_color,
+                        halo_offset,
+                    );
+                }
+            } else {
+                let mut cmd = $commands.spawn((
+                    $marker,
+                    Text2d::new(name.as_str()),
+                    TextFont {
+                        font_size: font_size.into(),
+                        font: $cjk.clone().unwrap_or_default().into(),
+                        ..Default::default()
+                    },
+                    TextColor($label_color),
+                    Transform {
+                        translation: pos.extend($label_z),
+                        rotation: tf_rot,
+                        ..Default::default()
+                    },
+                    Visibility::Visible,
+                ));
+                let (text_owned, font_ref, fs, hc) =
+                    (name.clone(), $cjk.as_ref(), font_size, $halo_color);
+                cmd.with_children(move |c| {
+                    for _ in 0..crate::label_halo::HALO_DIRS.len() {
+                        c.spawn(crate::label_halo::halo_bundle(
+                            &text_owned,
+                            font_ref,
+                            fs,
+                            hc,
+                        ));
+                    }
+                });
+            }
+        }
+        // 池里多出来的实体隐藏（保留复用，不 despawn）。
+        for (_, mut _tf, mut _text, mut _style, mut _color, mut vis) in iter {
+            *vis = Visibility::Hidden;
+        }
+    }};
+}
+pub(crate) use align_label_pool;
+
 /// 地名文字的**最小一级**屏幕字号（微点 / rank 0）。
 ///
 /// ADR-0065：12px 是可读下限（`ART_STYLE_SPEC` §4.2 硬约束 3），更高级别的
@@ -1066,72 +1171,21 @@ pub fn update_place_labels(
     }
     .with_alpha(layers.place.opacity);
 
-    let mut iter = q.iter_mut();
-    for c in &wanted {
-        let pos = c.pos;
-        let name = &c.name;
-        // 该标签自己的字号（屏幕像素 → 世界单位）与成比例的晕边偏移。
-        let font_size = c.font_size_px * unit_scale;
-        let halo_offset = crate::label_halo::halo_offset_world(c.font_size_px, unit_scale);
-        if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
-            tf.translation = pos.extend(label_z);
-            tf.rotation = label_rot;
-            // Bevy 0.19：字号是 `TextFont.font_size: FontSize`、字体是 `font: FontSource`。
-            *text = Text2d::new(name.as_str());
-            style.font_size = font_size.into();
-            // TextFont.font 非 Option：缺 CJK 时回落内置字体（拉丁可用，中文方块）。
-            if let Some(f) = &cjk {
-                style.font = f.clone().into();
-            }
-            *color = TextColor(label_color);
-            *vis = Visibility::Visible;
-            // 晕边子实体随字同步（8 向纸色副本，绿地/水面上托出文字）。
-            if let Ok(children) = children_q.get(e) {
-                crate::label_halo::sync_halo(
-                    children,
-                    &mut halo_q,
-                    name,
-                    font_size,
-                    cjk.as_ref(),
-                    halo_color,
-                    halo_offset,
-                );
-            }
-        } else {
-            let mut cmd = commands.spawn((
-                PlaceLabel,
-                Text2d::new(name.as_str()),
-                TextFont {
-                    font_size: font_size.into(),
-                    font: cjk.clone().unwrap_or_default().into(),
-                    ..Default::default()
-                },
-                TextColor(label_color),
-                Transform {
-                    translation: pos.extend(label_z),
-                    rotation: label_rot,
-                    ..Default::default()
-                },
-                Visibility::Visible,
-            ));
-            let (text_owned, font_ref, fs, hc) =
-                (name.clone(), cjk.as_ref(), font_size, halo_color);
-            cmd.with_children(move |c| {
-                for _ in 0..crate::label_halo::HALO_DIRS.len() {
-                    c.spawn(crate::label_halo::halo_bundle(
-                        &text_owned,
-                        font_ref,
-                        fs,
-                        hc,
-                    ));
-                }
-            });
-        }
-    }
-    // 池里多出来的实体隐藏（保留复用，不 despawn）。
-    for (_, mut _tf, mut _text, mut _style, mut _color, mut vis) in iter {
-        *vis = Visibility::Hidden;
-    }
+    align_label_pool!(
+        PlaceLabel,
+        c,
+        &wanted,
+        commands,
+        q,
+        &children_q,
+        halo_q,
+        cjk,
+        label_z,
+        label_rot,
+        label_color,
+        halo_color,
+        unit_scale,
+    );
 }
 
 /// 扁平环对（本图局部）→ 视图空间逐点平移（`map_to_view` 同一条口径）。
@@ -1307,69 +1361,21 @@ pub fn update_faction_labels(
     };
     let halo_color = crate::theme::colors_google::GOOGLE_COAST_LAND;
 
-    let mut iter = q.iter_mut();
-    for c in &wanted {
-        let pos = c.pos;
-        let name = &c.name;
-        // 该标签自己的字号与成比例的晕边偏移——池复用分支与新建分支同源，
-        // 不再出现「首帧大字、之后变回小字」的回归（ADR-0065 顺手修复）。
-        let font_size = c.font_size_px * unit_scale;
-        let halo_offset = crate::label_halo::halo_offset_world(c.font_size_px, unit_scale);
-        if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
-            tf.translation = pos.extend(label_z);
-            tf.rotation = label_rot;
-            *text = Text2d::new(name.as_str());
-            style.font_size = font_size.into();
-            if let Some(f) = &cjk {
-                style.font = f.clone().into();
-            }
-            *color = TextColor(label_color);
-            *vis = Visibility::Visible;
-            if let Ok(children) = children_q.get(e) {
-                crate::label_halo::sync_halo(
-                    children,
-                    &mut halo_q,
-                    name.as_str(),
-                    font_size,
-                    cjk.as_ref(),
-                    halo_color,
-                    halo_offset,
-                );
-            }
-        } else {
-            let mut cmd = commands.spawn((
-                FactionLabel,
-                Text2d::new(name.as_str()),
-                TextFont {
-                    font_size: font_size.into(),
-                    font: cjk.clone().unwrap_or_default().into(),
-                    ..Default::default()
-                },
-                TextColor(label_color),
-                Transform {
-                    translation: pos.extend(label_z),
-                    rotation: label_rot,
-                    ..Default::default()
-                },
-                Visibility::Visible,
-            ));
-            let (text_owned, font_ref, fs, hc) =
-                (name.to_string(), cjk.as_ref(), font_size, halo_color);
-            cmd.with_children(move |c| {
-                for _ in 0..crate::label_halo::HALO_DIRS.len() {
-                    c.spawn(crate::label_halo::halo_bundle(
-                        &text_owned,
-                        font_ref,
-                        fs,
-                        hc,
-                    ));
-                }
-            });
-        }
-    }
-    for (_, mut _tf, mut _text, mut _style, mut _color, mut vis) in iter {
-        *vis = Visibility::Hidden;
-    }
+    align_label_pool!(
+        FactionLabel,
+        c,
+        &wanted,
+        commands,
+        q,
+        &children_q,
+        halo_q,
+        cjk,
+        label_z,
+        label_rot,
+        label_color,
+        halo_color,
+        unit_scale,
+    );
 }
 
 /// 更新当前层级的事件标签池（ADR-0017 §2.2 · EntityKind::Event）。
@@ -1495,69 +1501,21 @@ pub fn update_event_labels(
         crate::theme::colors_google::GOOGLE_CONTROL_TEXT.with_alpha(layers.label.opacity);
     let halo_color = crate::theme::colors_google::GOOGLE_COAST_LAND;
 
-    let mut iter = q.iter_mut();
-    for c in &wanted {
-        let pos = c.pos;
-        let name = &c.name;
-        let font_size = c.font_size_px * unit_scale;
-        let halo_offset = crate::label_halo::halo_offset_world(c.font_size_px, unit_scale);
-        if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
-            tf.translation = pos.extend(label_z);
-            tf.rotation = label_rot;
-            *text = Text2d::new(name.as_str());
-            style.font_size = font_size.into();
-            if let Some(f) = &cjk {
-                style.font = f.clone().into();
-            }
-            *color = TextColor(label_color);
-            *vis = Visibility::Visible;
-            if let Ok(children) = children_q.get(e) {
-                crate::label_halo::sync_halo(
-                    children,
-                    &mut halo_q,
-                    name.as_str(),
-                    font_size,
-                    cjk.as_ref(),
-                    halo_color,
-                    halo_offset,
-                );
-            }
-        } else {
-            let mut cmd = commands.spawn((
-                // ADR-0065 顺手修复：原先错挂 `FactionLabel`，事件标签会被势力
-                // 系统的池回收/复用，与「看不见的标签也不可点」自相矛盾。
-                EventLabel,
-                Text2d::new(name.as_str()),
-                TextFont {
-                    font_size: font_size.into(),
-                    font: cjk.clone().unwrap_or_default().into(),
-                    ..Default::default()
-                },
-                TextColor(label_color),
-                Transform {
-                    translation: pos.extend(label_z),
-                    rotation: label_rot,
-                    ..Default::default()
-                },
-                Visibility::Visible,
-            ));
-            let (text_owned, font_ref, fs, hc) =
-                (name.to_string(), cjk.as_ref(), font_size, halo_color);
-            cmd.with_children(move |c| {
-                for _ in 0..crate::label_halo::HALO_DIRS.len() {
-                    c.spawn(crate::label_halo::halo_bundle(
-                        &text_owned,
-                        font_ref,
-                        fs,
-                        hc,
-                    ));
-                }
-            });
-        }
-    }
-    for (_, mut _tf, mut _text, mut _style, mut _color, mut vis) in iter {
-        *vis = Visibility::Hidden;
-    }
+    align_label_pool!(
+        EventLabel,
+        c,
+        &wanted,
+        commands,
+        q,
+        &children_q,
+        halo_q,
+        cjk,
+        label_z,
+        label_rot,
+        label_color,
+        halo_color,
+        unit_scale,
+    );
 }
 
 /// 更新当前层级的区域标签池（ADR-0017 §2.2 · EntityKind::Region）。
@@ -1713,68 +1671,21 @@ pub fn update_region_labels(
     };
     let halo_color = crate::theme::colors_google::GOOGLE_COAST_LAND;
 
-    let mut iter = q.iter_mut();
-    for c in &wanted {
-        let pos = c.pos;
-        let name = &c.name;
-        // 池复用分支与新建分支同一字号（ADR-0065 修「首帧大字」回归）。
-        let font_size = c.font_size_px * unit_scale;
-        let halo_offset = crate::label_halo::halo_offset_world(c.font_size_px, unit_scale);
-        if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
-            tf.translation = pos.extend(label_z);
-            tf.rotation = label_rot;
-            *text = Text2d::new(name.as_str());
-            style.font_size = font_size.into();
-            if let Some(f) = &cjk {
-                style.font = f.clone().into();
-            }
-            *color = TextColor(label_color);
-            *vis = Visibility::Visible;
-            if let Ok(children) = children_q.get(e) {
-                crate::label_halo::sync_halo(
-                    children,
-                    &mut halo_q,
-                    name.as_str(),
-                    font_size,
-                    cjk.as_ref(),
-                    halo_color,
-                    halo_offset,
-                );
-            }
-        } else {
-            let mut cmd = commands.spawn((
-                RegionLabel,
-                Text2d::new(name.as_str()),
-                TextFont {
-                    font_size: font_size.into(),
-                    font: cjk.clone().unwrap_or_default().into(),
-                    ..Default::default()
-                },
-                TextColor(label_color),
-                Transform {
-                    translation: pos.extend(label_z),
-                    rotation: label_rot,
-                    ..Default::default()
-                },
-                Visibility::Visible,
-            ));
-            let (text_owned, font_ref, fs, hc) =
-                (name.to_string(), cjk.as_ref(), font_size, halo_color);
-            cmd.with_children(move |c| {
-                for _ in 0..crate::label_halo::HALO_DIRS.len() {
-                    c.spawn(crate::label_halo::halo_bundle(
-                        &text_owned,
-                        font_ref,
-                        fs,
-                        hc,
-                    ));
-                }
-            });
-        }
-    }
-    for (_, mut _tf, mut _text, mut _style, mut _color, mut vis) in iter {
-        *vis = Visibility::Hidden;
-    }
+    align_label_pool!(
+        RegionLabel,
+        c,
+        &wanted,
+        commands,
+        q,
+        &children_q,
+        halo_q,
+        cjk,
+        label_z,
+        label_rot,
+        label_color,
+        halo_color,
+        unit_scale,
+    );
 }
 
 /// 更新当前层级的海名标签池（手绘地图呈现 #14，2026-10-16 · 接续 #13）。
@@ -1890,67 +1801,21 @@ pub fn update_sea_labels(
     }
     .with_alpha(layers.label.opacity);
 
-    let mut iter = q.iter_mut();
-    for c in &wanted {
-        let pos = c.pos;
-        let name = &c.name;
-        let font_size = c.font_size_px * unit_scale;
-        let halo_offset = crate::label_halo::halo_offset_world(c.font_size_px, unit_scale);
-        if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
-            tf.translation = pos.extend(label_z);
-            tf.rotation = label_rot;
-            *text = Text2d::new(name.as_str());
-            style.font_size = font_size.into();
-            if let Some(f) = &cjk {
-                style.font = f.clone().into();
-            }
-            *color = TextColor(label_color);
-            *vis = Visibility::Visible;
-            if let Ok(children) = children_q.get(e) {
-                crate::label_halo::sync_halo(
-                    children,
-                    &mut halo_q,
-                    name.as_str(),
-                    font_size,
-                    cjk.as_ref(),
-                    halo_color,
-                    halo_offset,
-                );
-            }
-        } else {
-            let mut cmd = commands.spawn((
-                SeaLabel,
-                Text2d::new(name.as_str()),
-                TextFont {
-                    font_size: font_size.into(),
-                    font: cjk.clone().unwrap_or_default().into(),
-                    ..Default::default()
-                },
-                TextColor(label_color),
-                Transform {
-                    translation: pos.extend(label_z),
-                    rotation: label_rot,
-                    ..Default::default()
-                },
-                Visibility::Visible,
-            ));
-            let (text_owned, font_ref, fs, hc) =
-                (name.to_string(), cjk.as_ref(), font_size, halo_color);
-            cmd.with_children(move |c| {
-                for _ in 0..crate::label_halo::HALO_DIRS.len() {
-                    c.spawn(crate::label_halo::halo_bundle(
-                        &text_owned,
-                        font_ref,
-                        fs,
-                        hc,
-                    ));
-                }
-            });
-        }
-    }
-    for (_, mut _tf, mut _text, mut _style, mut _color, mut vis) in iter {
-        *vis = Visibility::Hidden;
-    }
+    align_label_pool!(
+        SeaLabel,
+        c,
+        &wanted,
+        commands,
+        q,
+        &children_q,
+        halo_q,
+        cjk,
+        label_z,
+        label_rot,
+        label_color,
+        halo_color,
+        unit_scale,
+    );
 }
 
 /// 按形状分发绘制。五种形状共用同一套「中心 + 半边长」口径——命中测试不关心形状。

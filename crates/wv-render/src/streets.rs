@@ -126,6 +126,9 @@ pub fn street_streams(sources: &[(String, wv_core::StreetLayer)]) -> Vec<(u8, Ve
 #[derive(Component)]
 pub struct StreetLabel;
 
+// 池对齐尾巴宏单一真源在 `drill.rs`（P1-3 收敛），此处导入使用。
+use crate::drill::align_label_pool;
+
 /// 中点标注行：`(本图局部中点, 段方向单位向量, 街名, 段级存在窗口)`。
 pub type NamedMidpoint = (Vec2, (f32, f32), String, Option<wv_core::TimeSpan>);
 
@@ -264,7 +267,6 @@ pub fn update_street_labels(
     let filtered =
         crate::label_collision::filter_collisions(&mut candidates, unit_scale, &mut occupancy);
 
-    let font_size = STREET_LABEL_PX * unit_scale;
     // ADR-0017 §2.9 Q3：街名走 Label 渲染组的 z 和 opacity。
     let label_z = STREET_LABEL_Z + layers.label.z_offset;
     let cjk = fonts.label_handle();
@@ -280,73 +282,22 @@ pub fn update_street_labels(
         _ => view.active_theme.palette.halo_fill,
     }
     .with_alpha(layers.label.opacity);
-    let halo_offset = crate::label_halo::halo_offset_world(STREET_LABEL_PX, unit_scale);
-
-    let mut iter = q.iter_mut();
-    for c in &filtered {
-        let pos = c.pos;
-        let name: &str = c.name.as_str();
-        // 沿街文字实体旋转 = rot_z(屏幕倾角) · 相机旋转——倾角已含相机角
-        //（见 cam_yaw），该构造保证文字在屏幕上与街段平行；零朝向 +
-        // 水平段时退化为与旧「相机旋转的逆」同值。
-        let rot = Quat::from_rotation_z(c.angle.unwrap_or(0.0)) * cam_rot;
-        if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
-            tf.translation = pos.extend(label_z);
-            tf.rotation = rot;
-            *text = Text2d::new(name);
-            style.font_size = font_size.into();
-            if let Some(f) = &cjk {
-                style.font = f.clone().into();
-            }
-            *color = TextColor(label_color);
-            *vis = Visibility::Visible;
-            // 晕边子实体随字同步（8 向纸色副本）。
-            if let Ok(children) = children_q.get(e) {
-                crate::label_halo::sync_halo(
-                    children,
-                    &mut halo_q,
-                    name,
-                    font_size,
-                    cjk.as_ref(),
-                    halo_color,
-                    halo_offset,
-                );
-            }
-        } else {
-            let mut cmd = commands.spawn((
-                StreetLabel,
-                Text2d::new(name.to_string()),
-                TextFont {
-                    font_size: font_size.into(),
-                    font: cjk.clone().unwrap_or_default().into(),
-                    ..Default::default()
-                },
-                TextColor(label_color),
-                Transform {
-                    translation: pos.extend(label_z),
-                    rotation: rot,
-                    ..Default::default()
-                },
-                Visibility::Visible,
-            ));
-            let (text_owned, font_ref, fs, hc) =
-                (name.to_string(), cjk.as_ref(), font_size, halo_color);
-            cmd.with_children(move |c| {
-                for _ in 0..crate::label_halo::HALO_DIRS.len() {
-                    c.spawn(crate::label_halo::halo_bundle(
-                        &text_owned,
-                        font_ref,
-                        fs,
-                        hc,
-                    ));
-                }
-            });
-        }
-    }
-    // 池里多出来的实体隐藏（复用不 despawn，与 PlaceLabel 同哲学）。
-    for (_, mut _tf, mut _text, mut _style, mut _color, mut vis) in iter {
-        *vis = Visibility::Hidden;
-    }
+    // 沿街旋转（ADR-0073）：段倾角直立翻转后的屏幕角 × 相机旋转。
+    align_label_pool!(
+        StreetLabel,
+        c,
+        &filtered,
+        commands,
+        q,
+        &children_q,
+        halo_q,
+        cjk,
+        label_z,
+        Quat::from_rotation_z(c.angle.unwrap_or(0.0)) * cam_rot,
+        label_color,
+        halo_color,
+        unit_scale,
+    );
 }
 
 /// 街道手绘编辑器的**会话状态**（ADR-0010 第 3 项的 GUI 侧）。
