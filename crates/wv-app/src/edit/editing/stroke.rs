@@ -5,6 +5,11 @@ use super::*;
 /// 松手时把笔触转成命令并提交。
 ///
 /// Bevy 系统的参数即「依赖声明」，宽签名是框架惯例而非坏味道。
+///
+/// **选区蒙版**（ADR-0086，2026-10-28 实机反馈）：CellMap 工作区里统一
+/// 选区非空时，涂抹 / 橡皮只落选区内的格——与 EditCell 硬边拖绘的
+/// D4 蒙版同语义（软边在选区边界保权重、选区外一格不动）。意图工具
+/// （山脉 / 高原 / …）不蒙版：整段生成地形，裁切会产生半座山。
 #[allow(clippy::too_many_arguments)]
 pub fn commit_stroke_on_release(
     buttons: Res<ButtonInput<MouseButton>>,
@@ -23,6 +28,9 @@ pub fn commit_stroke_on_release(
     // 应用屏状态（2026-10-22 C 档）：加载期间禁写——世界即将被替换，
     // 此刻的笔迹会被整份覆盖丢弃（旧实现加载是同步的，不存在这个窗口）。
     screen: Res<crate::app_screen::AppScreen>,
+    // 统一选区（ADR-0057）：蒙版数据源。与 `paint_edit_cell_on_drag` 的
+    // D4 蒙版读同一份 Resource。
+    cell_sel: Res<crate::state::CellSelection>,
 ) {
     if !buttons.just_released(MouseButton::Left) {
         return;
@@ -67,6 +75,12 @@ pub fn commit_stroke_on_release(
     };
 
     // 按工具分派：意图工具 → IntentTerrainCommand；涂 / 擦 → PaintTerrainCommand。
+    // 选区蒙版（ADR-0086）：CellMap 工作区 ∧ 统一选区非空 → 涂抹/橡皮只落
+    // 选区内的格。浏览族不蒙版——笔刷本就只在 CellMap 可用
+    // （`MapToolId::available_in`），此处判据为语义自明 + 防御。
+    let mask = (view.mode == wv_render::state::ViewMode::Topographic && !cell_sel.is_empty())
+        .then(|| cell_sel.iter_cells().collect::<Vec<_>>());
+
     let (cmd, dirty_rect) = if brush.tool.is_intent() {
         let Some(intent) = intent_from_stroke(brush.tool, &pts_local, brush.radius, brush.strength)
         else {
@@ -101,11 +115,17 @@ pub fn commit_stroke_on_release(
         }
         // 笔触世界包围盒（在构造 `cmd` 之前算——`stroke` move 给 cmd 后不可用）。
         let dirty_rect = stroke_bbox_in_cells(&stroke, &grid);
-        (
-            Box::new(PaintTerrainCommand::new(target_map, stroke, grid.cell_size))
-                as Box<dyn EditCommand>,
-            dirty_rect,
-        )
+        let cmd: Box<dyn EditCommand> = match mask {
+            // 蒙版在构造时排序去重（`new_masked`），apply 侧 binary_search 判定。
+            Some(mask) => Box::new(PaintTerrainCommand::new_masked(
+                target_map,
+                stroke,
+                grid.cell_size,
+                mask,
+            )),
+            None => Box::new(PaintTerrainCommand::new(target_map, stroke, grid.cell_size)),
+        };
+        (cmd, dirty_rect)
     };
 
     // 提交到 History（一次笔触 = 一个事务 = 一次可撤销单位）。

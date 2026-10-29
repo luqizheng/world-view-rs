@@ -72,7 +72,7 @@ pub(super) fn register(app: &mut App) {
             // 主链已顶满 20 参上限，拆一层嵌套元组（内层先 chain 成一个整体）。
             //
             // 2026-10-24 再拆一层：M1/M2 加入 `track_edit_cell_hover`、
-            // `paint_edit_cell_on_drag`、`flood_select_on_click` 后内层达 23 个
+            // `paint_edit_cell_on_drag` 后内层达 23 个
             // 系统，超出 `all_tuples` 的 20 上限（报「chain 的 trait bounds
             // 不满足」）。按「输入/编辑」与「纹理/几何」两个语义段拆成
             // 两个各自 chain 的子链，外层再 chain 保证跨段顺序不变。
@@ -126,11 +126,9 @@ pub(super) fn register(app: &mut App) {
                         crate::edit::cell_stroke::paint_edit_cell_on_drag
                     )
                     .after(wv_render::camera::track_cursor_world),
-                    // 泛洪选择（[ADR-0052] D6-A）：点一下即泛洪，结果写统一选区。
-                    wv_render::perf_timed!(
-                        "flood_select_on_click",
-                        crate::edit::flood_select::flood_select_on_click
-                    ),
+                    // （泛洪选择系统已随 ADR-0086 退役：点选工具的默认点击
+                    // 即泛洪（ADR-0074 追记四），在 `commit_point_select_on_click`
+                    // 内执行，不再需要第二个入口。）
                     // 派生运算（[ADR-0052] D6 · M3）：平滑 / 量化 → 1 条批命令。
                     // 排在面板绘制之后的下一帧消费请求（面板在 EguiPrimaryContextPass，
                     // 早于它的 Update 系统只会看到上一帧排的请求——一帧延迟与工具

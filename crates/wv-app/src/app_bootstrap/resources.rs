@@ -94,7 +94,8 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     .init_resource::<camera::ActiveStroke>()
     .init_resource::<camera::PointerOverUi>()
     .init_resource::<editing::EditHistory>()
-    // 泛洪选择工具会话态（[ADR-0052] D6）：判据 + 激活态。
+    // 泛洪判据会话态（[ADR-0052] D6；ADR-0086 起仅为判据）：点选工具的
+    // 默认点击（= 泛洪，ADR-0074 追记四）按此判据圈同值连通区。
     .init_resource::<crate::state::FloodSelectState>()
     // 地标放置会话态（ADR-0071）：placing + 默认类别/级别。
     .init_resource::<crate::state::LandmarkToolState>()

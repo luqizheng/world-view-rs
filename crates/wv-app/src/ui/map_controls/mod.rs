@@ -31,8 +31,10 @@
 //! | 8/9 | 重做 / 撤销 | `Ctrl+Shift+Z` / `Ctrl+Z` |
 //! | 10 | 网格开关（开启高亮） | `G` |
 //! | 10.5 | 等值线开关（VectorFlat / CellMap） | — |
-//! | 10.75 | 海拔分层设色强度滑条（仅 CellMap，ADR-0055） | — |
 //! | 14 | 线段 POI：河流（默认）/ 道路（**仅 Edit 档渲染**，ADR-0070 D4） | — |
+//!
+//! （槽 10.75 海拔分层设色滑条已挪 topOptionBar、槽 13 泛洪选择瓷砖已退役，
+//! 均 ADR-0086。）
 //!
 //! ## 与 v0.6 的差异（ADR-0043 裁定）
 //!
@@ -88,9 +90,9 @@ use wv_ui::widgets::{split_button, SplitButtonMetrics, SplitMenuItem};
 use super::shell::UiShell;
 use super::widgets::icon_image;
 use super::widgets::{
-    ICON_ELLIPSE, ICON_MOUSE_POINTER, ICON_MOVE_HORIZONTAL, ICON_MOVE_VERTICAL, ICON_PAINT_BUCKET,
-    ICON_RIVER, ICON_ROUTE, ICON_RULER_DIMENSION_LINE, ICON_SQUARES_UNITE,
-    ICON_SQUARE_MOUSE_POINTER, ICON_TRASH, ICON_VECTOR_POLYGON, ICON_VECTOR_SQUARE,
+    ICON_ELLIPSE, ICON_MOUSE_POINTER, ICON_MOVE_HORIZONTAL, ICON_MOVE_VERTICAL, ICON_RIVER,
+    ICON_ROUTE, ICON_RULER_DIMENSION_LINE, ICON_SQUARES_UNITE, ICON_SQUARE_MOUSE_POINTER,
+    ICON_TRASH, ICON_VECTOR_POLYGON, ICON_VECTOR_SQUARE,
 };
 use super::{
     ICON_BRUSH, ICON_ERASER, ICON_GRID, ICON_HAND, ICON_REDO, ICON_TREES, ICON_UNDO, ICON_WAVES,
@@ -108,12 +110,11 @@ pub use toolbar::map_controls;
 /// 工具活动态的会话资源束（`map_controls` 的第 13 参）。
 ///
 /// 折成一层元组是给 Bevy 的单系统 16 参数上限让路（元组算 1 个参数）；
-/// 单独提出类型别名是给 clippy 的 `type_complexity` 让路——五元组内联写
+/// 单独提出类型别名是给 clippy 的 `type_complexity` 让路——四元组内联写
 /// 会超复杂度阈值（2026-10-26 线段 POI 入列时实锤）。
 type ToolSessionStates<'w> = (
     Res<'w, wv_render::state::EditCellState>,
     Res<'w, crate::state::PointSelectState>,
-    Res<'w, crate::state::FloodSelectState>,
     Res<'w, crate::state::PlaybackState>,
     Res<'w, crate::state::LinePoiState>,
 );
@@ -178,21 +179,6 @@ impl DockMetrics {
                 pad_y: 7.0,
                 chevron_hit: 13.0,
             }
-        }
-    }
-
-    /// 槽 10.75（ADR-0055 海拔分层设色滑条）的槽位尺寸。
-    ///
-    /// **竖排必须就地转竖**（2026-10-24 用户反馈：纵向工具条过宽）：纵向
-    /// 工具条的宽度由**最宽子项**决定，滑条原先按横排写死 `tile.x * 3`，
-    /// 纵排里照样占 3 个瓷砖宽，把整条从 34px 撑到约 116px、右侧空出一大
-    /// 片底。竖排改用 1 列宽 × 2 槽高的竖滑条；横排维持 3 槽横条（横排下
-    /// 它只影响长度，不影响框高）。
-    fn tint_slider_slot(&self, vertical: bool) -> egui::Vec2 {
-        if vertical {
-            egui::vec2(self.tile.x, self.tile.y * 2.0)
-        } else {
-            egui::vec2(self.tile.x * 3.0, self.tile.y)
         }
     }
 

@@ -25,8 +25,12 @@
 //! ## 边界（不做什么）
 //! - 会话态只读写 [`BrushState`]（与被裁撤的旧笔刷段同款数据流；**非世界
 //!   数据**，不涉 §3.3）。选工具语义与分发器一致：`tool = t; enabled = true`。
+//!   ADR-0086 起另写 `ViewState.hypsometric_tint`
+//!   （海拔分层设色强度，自 map_controls 槽 10.75 迁入——视图读色参数，
+//!   随 CellMap 常驻条常在）。
 //! - **不是浮动窗**——不进 `PanelState` / `ui-layout.yaml`；显隐由
-//!   [`bar_visible`] 决定（笔刷开着才出现，关掉整条隐没、地图不吃掉一行）。
+//!   [`bar_visible`] 决定（CellMap 工作区常驻；其他工作区笔刷开着才出现
+//!   ，关掉整条隐没、地图不吃掉一行）。
 //! - 不复活「涂 / 塑 / 放」三段分组控件（2026-10-24 裁定退役，本条平铺 8 块）。
 //!
 //! ## 主要导出
@@ -60,9 +64,14 @@ const SLIDER_W: f32 = 168.0;
 /// 材料色块的命中区宽（12px 色块 + 呼吸位）。
 const SWATCH_HIT: f32 = 20.0;
 
-/// 条显隐判据（纯函数供单测）：笔刷开着才出现。
-pub(crate) fn bar_visible(brush_enabled: bool) -> bool {
-    brush_enabled
+/// 条显隐判据（纯函数供单测）。
+///
+/// ADR-0086（2026-10-28 用户裁定「笔刷功能常开」）：**CellMap 工作区
+/// （Topographic）常驻**——海拔分层设色滑条是视图读色参数，随条常在，
+/// 不该等作者先开笔刷才出现；其他工作区维持「笔刷开着才出现」（那里
+/// 没有常驻参数，空条只会白吃一行）。
+pub(crate) fn bar_visible(cellmap: bool, brush_enabled: bool) -> bool {
+    cellmap || brush_enabled
 }
 
 /// 材料格只在涂抹档出现——橡皮写的是本图底图态（`MapBase`），`kind` 不参与；
@@ -87,16 +96,24 @@ pub(crate) fn shows_strength(tool: BrushTool) -> bool {
 /// 显式保证（root Ui 从顶栏下缘起）——与 `ui::top_bar` 同链 `.chain()`
 /// （`app_bootstrap/schedules.rs`）的注册顺序**不**决定落位（egui 0.36
 /// Panel 无跨系统堆叠）。
+#[allow(clippy::too_many_arguments)]
 pub fn top_option_bar(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,
     mut brush: ResMut<BrushState>,
-    grid: Res<GridConfig>,
     current_loc: Res<CurrentLocale>,
-    projection: Res<WorldProjection>,
-    drill: Res<DrillState>,
+    // 折层元组（单系统 16 参上限同款手法）：世界侧只读三件 + 海拔分层
+    // 设色强度（ADR-0055）落本条后要写的视图态（ADR-0086，`mode` 兼读
+    // 常驻判据）。
+    (grid, projection, drill, mut view): (
+        Res<GridConfig>,
+        Res<WorldProjection>,
+        Res<DrillState>,
+        ResMut<crate::state::ViewState>,
+    ),
 ) {
-    if !bar_visible(brush.enabled) {
+    let cellmap = view.mode == crate::state::ViewMode::Topographic;
+    if !bar_visible(cellmap, brush.enabled) {
         return;
     }
     let shell = UiShell::new(&shell_cfg);
@@ -120,83 +137,114 @@ pub fn top_option_bar(
         .show(&mut root, |ui| {
             ui.horizontal(|ui| {
                 brush_pill(ui, &shell, &mut brush, loc);
-                ui.separator();
-                tool_tiles(ui, &shell, &mut brush, loc);
-                ui.separator();
-                match brush.tool {
-                    // 涂抹：材料 + 半径 + 软度。
-                    tool if shows_material(tool) && shows_softness(tool) => {
-                        material_strip(ui, &shell, &mut brush.kind, loc);
-                        radius_slider(ui, &shell, &mut brush.radius, &grid, loc);
-                        compact_slider(
-                            ui,
-                            &shell,
-                            t(loc, I18nKey::BrushSoftnessLabel),
-                            &mut brush.softness,
-                            0.0..=1.0,
-                            false,
-                            |n| format!("{}%", (n * 100.0).round() as i32),
-                        );
-                    }
-                    // 橡皮：半径 + 软度 + 条尾「擦回底图」提示。
-                    tool if shows_softness(tool) => {
-                        radius_slider(ui, &shell, &mut brush.radius, &grid, loc);
-                        compact_slider(
-                            ui,
-                            &shell,
-                            t(loc, I18nKey::BrushSoftnessLabel),
-                            &mut brush.softness,
-                            0.0..=1.0,
-                            false,
-                            |n| format!("{}%", (n * 100.0).round() as i32),
-                        );
-                        // 「擦成什么」随图而变（切子图就可能变），作者下笔前
-                        // 必须知道——贴条右缘常显（旧笔刷段文案沿用）。
-                        let base_zh = drill
-                            .current()
-                            .and_then(|id| {
-                                projection
-                                    .world
-                                    .maps
-                                    .iter()
-                                    .find(|m| Some(&m.id) == Some(id))
-                            })
-                            .and_then(|m| m.base)
-                            .unwrap_or(wv_core::map::MapBase::Ocean)
-                            .zh_label();
-                        let hint = format!(
-                            "{} · {}",
-                            t(loc, I18nKey::BrushHintErase),
-                            t(loc, I18nKey::BrushBaseNow).replace("{base}", base_zh)
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new(hint)
-                                    .size(shell.scale.small)
-                                    .color(shell.t3()),
+                // ── 笔刷参数段：只在笔刷开着时画 ──
+                // ADR-0086 后条在 CellMap 常驻，笔刷关着时工具瓷砖与各滑条
+                // 若照常画出就是「一边显示参数一边不生效」的谎话（旧笔刷
+                // 面板教训）——关 = 药丸熄灭 + 参数段整体让位。
+                if brush.enabled {
+                    ui.separator();
+                    tool_tiles(ui, &shell, &mut brush, loc);
+                    ui.separator();
+                    match brush.tool {
+                        // 涂抹：材料 + 半径 + 软度。
+                        tool if shows_material(tool) && shows_softness(tool) => {
+                            material_strip(ui, &shell, &mut brush.kind, loc);
+                            radius_slider(ui, &shell, &mut brush.radius, &grid, loc);
+                            compact_slider(
+                                ui,
+                                &shell,
+                                t(loc, I18nKey::BrushSoftnessLabel),
+                                &mut brush.softness,
+                                0.0..=1.0,
+                                false,
+                                |n| format!("{}%", (n * 100.0).round() as i32),
                             );
-                        });
+                        }
+                        // 橡皮：半径 + 软度 + 条尾「擦回底图」提示。
+                        tool if shows_softness(tool) => {
+                            radius_slider(ui, &shell, &mut brush.radius, &grid, loc);
+                            compact_slider(
+                                ui,
+                                &shell,
+                                t(loc, I18nKey::BrushSoftnessLabel),
+                                &mut brush.softness,
+                                0.0..=1.0,
+                                false,
+                                |n| format!("{}%", (n * 100.0).round() as i32),
+                            );
+                            // 「擦成什么」随图而变（切子图就可能变），作者下笔前
+                            // 必须知道——贴条右缘常显（旧笔刷段文案沿用）。
+                            let base_zh = drill
+                                .current()
+                                .and_then(|id| {
+                                    projection
+                                        .world
+                                        .maps
+                                        .iter()
+                                        .find(|m| Some(&m.id) == Some(id))
+                                })
+                                .and_then(|m| m.base)
+                                .unwrap_or(wv_core::map::MapBase::Ocean)
+                                .zh_label();
+                            let hint = format!(
+                                "{} · {}",
+                                t(loc, I18nKey::BrushHintErase),
+                                t(loc, I18nKey::BrushBaseNow).replace("{base}", base_zh)
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new(hint)
+                                            .size(shell.scale.small)
+                                            .color(shell.t3()),
+                                    );
+                                },
+                            );
+                        }
+                        // 意图：强度 + 半径。
+                        tool if shows_strength(tool) => {
+                            compact_slider(
+                                ui,
+                                &shell,
+                                t(loc, I18nKey::BrushStrengthLabel),
+                                &mut brush.strength,
+                                0.2..=2.0,
+                                false,
+                                |n| format!("×{:.2}", n),
+                            );
+                            radius_slider(ui, &shell, &mut brush.radius, &grid, loc);
+                        }
+                        _ => {}
                     }
-                    // 意图：强度 + 半径。
-                    tool if shows_strength(tool) => {
-                        compact_slider(
-                            ui,
-                            &shell,
-                            t(loc, I18nKey::BrushStrengthLabel),
-                            &mut brush.strength,
-                            0.2..=2.0,
-                            false,
-                            |n| format!("×{:.2}", n),
-                        );
-                        radius_slider(ui, &shell, &mut brush.radius, &grid, loc);
-                    }
-                    _ => {}
+                }
+                // ── 海拔分层设色强度（ADR-0055；槽 10.75 → 本条，ADR-0086）──
+                // 仅 CellMap（Topographic）：数据视图用颜色读海拔，0 = 纯群系
+                // 色块，1 = 8 阶海拔色带完全替代群系色。**视图读色参数**，不是
+                // 笔刷参数——随 CellMap 常驻条常在，笔刷关着也可调（2026-10-28
+                // 用户裁定「放到 top option bar 上面，笔刷功能常开」）。会话态、
+                // 不落盘。
+                if cellmap {
+                    ui.separator();
+                    compact_slider(
+                        ui,
+                        &shell,
+                        t(loc, I18nKey::HypsometricTintLabel),
+                        &mut view.hypsometric_tint,
+                        0.0..=1.0,
+                        false,
+                        |n| format!("{}%", (n * 100.0).round() as i32),
+                    )
+                    .on_hover_text(t(loc, I18nKey::HypsometricTintHint));
                 }
             });
         });
 }
 
-/// 左端「笔刷」药丸：点亮 = 笔刷开着（金底），再点 = 关笔刷（整条随之隐没）。
+/// 左端「笔刷」药丸：点亮 = 笔刷开着（金底），再点 = 关笔刷。
+///
+/// ADR-0086 后 CellMap 工作区里条**常驻**（海拔分层滑条不受笔刷开关影
+/// 响），关笔刷只收起参数段；其他工作区关笔刷仍整条隐没。
 fn brush_pill(ui: &mut egui::Ui, shell: &UiShell, brush: &mut BrushState, loc: Locale) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(PILL_W, shell.hit), egui::Sense::hover());
     let p = ui.painter();
@@ -301,6 +349,7 @@ fn radius_slider(
 ///
 /// wv-ui 的 `slider_row_brush` 是「两行」结构（标签行 + 整宽轨行），塞不进
 /// 38px 横条；这里借 wv-ui 裸 [`slider`] 自拼单行版，视觉令牌同源。
+/// 返回整组的 hover Response（海拔分层滑条靠它挂 tooltip）。
 fn compact_slider<T: egui::emath::Numeric>(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -309,7 +358,7 @@ fn compact_slider<T: egui::emath::Numeric>(
     range: std::ops::RangeInclusive<T>,
     logarithmic: bool,
     formatter: impl Fn(f32) -> String,
-) {
+) -> egui::Response {
     ui.allocate_ui(egui::vec2(SLIDER_W, shell.hit), |ui| {
         ui.horizontal(|ui| {
             ui.label(
@@ -323,9 +372,11 @@ fn compact_slider<T: egui::emath::Numeric>(
                     .size(shell.scale.micro)
                     .color(shell.t1())
                     .monospace(),
-            );
-        });
-    });
+            )
+        })
+        .inner
+    })
+    .inner
 }
 
 /// 工具 → 图标（`ICON_*` 与旧笔刷浮窗瓷砖同源，wv-ui 资产）。
@@ -403,11 +454,17 @@ mod tests {
         }
     }
 
-    /// 条只在笔刷开着时出现。
+    /// CellMap 工作区条常驻（ADR-0086「笔刷功能常开」：海拔分层滑条是视图
+    /// 参数，不随笔刷开关隐没）；其他工作区维持「笔刷开着才出现」。
     #[test]
-    fn bar_visible_iff_brush_enabled() {
-        assert!(!bar_visible(false));
-        assert!(bar_visible(true));
+    fn bar_visible_in_cellmap_even_with_brush_off() {
+        assert!(
+            !bar_visible(false, false),
+            "浏览族 + 笔刷关 = 无参数可调，不显条"
+        );
+        assert!(bar_visible(false, true), "浏览族 + 笔刷开 = 显条");
+        assert!(bar_visible(true, false), "CellMap 常驻：笔刷关也显条");
+        assert!(bar_visible(true, true));
     }
 
     /// 7 个工具的名称 / 提示 Key 全覆盖：中英双语都非空——瓷砖纯图标，

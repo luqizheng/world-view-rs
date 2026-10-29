@@ -38,10 +38,11 @@
 //!
 //! ## 统一属性表单（ADR-0058，2026-10-25）——上文「分派」的呈现层重构
 //!
-//! 面板骨架改为四段：读数条（常驻）→ 泛洪判据（FloodSelect 激活）→
+//! 面板骨架改为四段：读数条（常驻）→ 泛洪判据（点选工具激活，ADR-0086）→
 //! **属性段**（全浮窗唯一一份地表 / 群系 / 海拔控件）→ 派生运算（仅选区
-//! 非空）。作用域由**激活工具**决定（D2，无模式控件）：`Brush(PaintKind)` /
-//! `EditCell`（只画不选）激活 = 落笔作用域；其余按选区分派 0 / 1 / N。
+//! 非空）。作用域由**激活工具**决定（D2，无模式控件）：`EditCell` 激活 =
+//! 落笔作用域（ADR-0086 修正：笔刷调参在 topOptionBar，不再进本表单）；
+//! 其余按选区分派 0 / 1 / N。
 //! 单格「位置」只读区退役（D6，坐标入作用域头）；群系 radio 退役
 //! （D5，与落笔共用 swatch）；海拔提交时机三档不变（D4）。
 
@@ -68,8 +69,9 @@ use wv_ui::widgets::segmented_control::segmented;
 /// 2026-10-24 起CellMap 工作区里圈选确认后（V 工具激活）也直出——
 /// 见 `mod.rs` 的 `cell_form_active` 谓词。
 ///
-/// **作用域**（ADR-0058 D2）：`paint_scope` = 落笔工具激活（`Brush(PaintKind)`
-/// / `EditCell`，只画不选）→ 落笔表单；否则按统一选区格数分派——
+/// **作用域**（ADR-0058 D2，ADR-0086 修正）：`paint_scope` = EditCell 激活
+/// → 落笔表单（值源 `CellPaintSession` 只被 EditCell 拖绘消费；笔刷的
+/// 调参在 topOptionBar，不再进本表单）；否则按统一选区格数分派——
 /// 0 → 空态；1 → 单格表单（绝对设值）；N → 批量表单（相对增减）。
 #[allow(clippy::too_many_arguments)]
 pub fn cell_form(
@@ -88,6 +90,7 @@ pub fn cell_form(
     sel: &mut CellSelection,
     map: Option<&wv_core::Id>,
     paint_scope: bool,
+    flood_criterion_scope: bool,
 ) {
     // ── 读数条（D8）：面板顶部固定双段 ──
     // 左段永远读 hover、右段永远读选区；任一段无数据显 `—`，
@@ -108,9 +111,10 @@ pub fn cell_form(
         super::cell_paint_panel::render_readout_bar(ui, shell, loc, edit_cell, sel, read_cell);
     }
 
-    // ── 泛洪判据区（D6）：仅 FloodSelect 工具激活时显示 ──
-    // 判据是**工具参数**（改变泛洪行为），不是落笔值——故独立成段。
-    if flood.tool_active {
+    // ── 泛洪判据区（D6；ADR-0086 起跟随**点选工具**显示）──
+    // 判据是**工具参数**（改变 CellMap 默认点击的泛洪行为，ADR-0074 追记四），
+    // 不是落笔值——故独立成段。原宿主泛洪工具已退役（与默认点击重复）。
+    if flood_criterion_scope {
         super::cell_paint_panel::render_flood_criterion_section(ui, shell, flood, loc);
         divider(ui, shell);
     }
