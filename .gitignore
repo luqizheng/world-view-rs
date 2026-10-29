@@ -68,3 +68,6 @@ patch_*.py
 
 # worktree 本地构建目录（共享 target 的 stale rlib 回退方案，AGENTS §13）
 /.target/
+
+# 截图验收工作目录（各轮 WV_SHOT 探针产物，只供人工比对，不入仓）
+.arts/
