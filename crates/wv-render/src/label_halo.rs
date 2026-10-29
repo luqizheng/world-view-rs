@@ -9,7 +9,8 @@
 //! 全仓第一个 shader，成本高。8 向偏移副本是经典纸面做法：晕色 = 该主题纸面
 //! 色（[`PaletteColors::halo_fill`]），在绿地 / 水面 / 等值线密集处把文字「托」出
 //! 来。子实体继承父标注的屏幕对齐旋转——偏移量定义在**父局部系**（即屏幕系），
-//! 地图怎么转晕都贴着字走。
+//! 地图怎么转晕都贴着字走；世界缩放同理由父 `Transform.scale` 承担（drill.rs
+//! `align_label_pool!` 的字号不变式），晕边在任何缩放档都与主字同分辨率。
 //!
 //! ## 边界（不做什么）
 //! - **不池化晕边**——晕边随父标注生灭（父池已防 spawn 抖动，子实体只是
@@ -32,11 +33,13 @@ pub const HALO_PX: f32 = 1.1;
 /// 在 16px 大字上显得过细、在 12px 上又偏粗。
 pub const HALO_RATIO: f32 = HALO_PX / 12.0;
 
-/// 由标签的**屏幕字号**换算晕边偏移的**世界单位**值。
+/// 由标签的**屏幕字号**换算晕边偏移的**父局部**值（= 屏幕像素）。
 ///
-/// `unit_scale` = 世界单位 / 屏幕像素（`ViewState::scale` 的生效值）。
-pub fn halo_offset_world(font_size_px: f32, unit_scale: f32) -> f32 {
-    HALO_RATIO * font_size_px * unit_scale
+/// 晕边子实体继承父标注的 `Transform.scale`（世界缩放，drill.rs
+/// `align_label_pool!` 的字号不变式），局部 px 乘缩放恰为屏幕像素——
+/// 缩放不再参与偏移本身的计算。
+pub fn halo_offset_px(font_size_px: f32) -> f32 {
+    HALO_RATIO * font_size_px
 }
 /// 晕边相对父标注的 Z 后撤（同 Z 绘制序不定，后撤保证晕在下、字在上）。
 pub const HALO_LOCAL_Z: f32 = -0.005;
@@ -78,8 +81,10 @@ pub fn halo_bundle(
 
 /// 每帧同步一个标注的晕边子实体（池的逐标注同步分支调用）。
 ///
-/// 偏移量写在**父局部系**：父变换已含屏幕对齐旋转，局部 x/y 即屏幕方向，
-/// 地图旋转不影响晕的屏幕观感。`halo_color` 与字号随主题 / 缩放每帧对齐。
+/// 偏移量写在**父局部系**：父变换已含屏幕对齐旋转与 `Transform.scale`（世界
+/// 缩放，见 drill.rs `align_label_pool!` 字号不变式），局部 x/y 即屏幕方向、
+/// 局部值即屏幕像素，地图旋转 / 缩放都不影响晕的屏幕观感。字号恒 px，
+/// `halo_color` 随主题每帧对齐。
 pub fn sync_halo<F>(
     children: &Children,
     halos: &mut Query<(&mut Transform, &mut Text2d, &mut TextFont, &mut TextColor), F>,
@@ -87,7 +92,7 @@ pub fn sync_halo<F>(
     font_size: f32,
     font: Option<&Handle<Font>>,
     halo_color: Color,
-    offset_world: f32,
+    offset_px: f32,
 ) where
     F: bevy::ecs::query::QueryFilter,
 {
@@ -99,7 +104,7 @@ pub fn sync_halo<F>(
         if synced < HALO_DIRS.len() {
             // 值门控（P2，2026-10-29）：与标签池主体同一纪律——每标签 8 份
             // 晕边副本若每帧无条件置脏，文本管线与变换传播会成倍空转。
-            let d = HALO_DIRS[synced] * offset_world;
+            let d = HALO_DIRS[synced] * offset_px;
             let translation = Vec3::new(d.x, d.y, HALO_LOCAL_Z);
             if tf.translation != translation {
                 tf.translation = translation;
@@ -147,14 +152,14 @@ mod tests {
     }
 
     /// ADR-0065 D3：晕边偏移随字号成比例——12px 回到 1.1 屏幕像素的参考值，
-    /// 16px 的晕圈不被同一固定值压细。
+    /// 16px 的晕圈不被同一固定值压细。偏移本身是父局部 px（世界换算由父
+    /// `Transform.scale` 承担），不再吃缩放参数。
     #[test]
     fn halo_offset_scales_with_font_size() {
-        let unit_scale = 2.0; // 世界单位 / 像素
-        let at_12 = halo_offset_world(12.0, unit_scale);
-        let at_16 = halo_offset_world(16.0, unit_scale);
+        let at_12 = halo_offset_px(12.0);
+        let at_16 = halo_offset_px(16.0);
         assert!(
-            (at_12 - HALO_PX * unit_scale).abs() < 1e-6,
+            (at_12 - HALO_PX).abs() < 1e-6,
             "12px 应回到 HALO_PX 参考值，got {at_12}"
         );
         assert!(at_16 > at_12, "16px 的晕边应更大：{at_16} vs {at_12}");

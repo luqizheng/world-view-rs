@@ -850,6 +850,13 @@ pub struct PlaceLabel;
 /// 语义与被替换的六份实现逐字一致：复用池实体（改写 Transform / 文本 / 字号 /
 /// 颜色 / 可见），不够补生（带 marker + `HALO_DIRS` 个晕边子实体），多余隐藏
 /// （保留复用，不 despawn——对象池哲学，与纹理增量更新同一理由）。
+///
+/// **字号不变式（2026-10-30 放大发糊根修）**：`TextFont::font_size` 写**恒定的
+/// 屏幕像素**（候选的 `font_size_px`），世界缩放由 `Transform.scale`
+/// （x/y = `unit_scale`，z 恒 1——晕边 `HALO_LOCAL_Z` 的层级语义不随缩放漂移）
+/// 承担。Bevy 文字按 `font_size` 光栅化进图集且**不感知相机缩放**：把缩放乘进
+/// 字号的话，放大时图集位图小于屏幕尺寸被拉伸发糊，且平滑缩放每帧产生一个
+/// 新字号 → 图集逐档重烘并永久缓存。恒 px 后全库只有字号分档那几个光栅尺寸。
 macro_rules! align_label_pool {
     // **全参数透传**（macro_rules 卫生规则：宏体对局部量的引用在**定义点**
     // 解析，看不见调用方作用域——q / wanted / 颜色等必须以片段传入，展开后
@@ -870,9 +877,10 @@ macro_rules! align_label_pool {
         for $c in $candidates {
             let pos = $c.pos;
             let name = &$c.name;
-            // 该标签自己的字号（屏幕像素 → 世界单位）与成比例的晕边偏移。
-            let font_size = $c.font_size_px * $unit_scale;
-            let halo_offset = crate::label_halo::halo_offset_world($c.font_size_px, $unit_scale);
+            // 字号恒为屏幕像素（见宏文档字号不变式）；晕边偏移同口径——父局部
+            // px，随父 scale 折回世界。世界缩放走下方 Transform.scale。
+            let font_px = $c.font_size_px;
+            let halo_offset = crate::label_halo::halo_offset_px(font_px);
             let tf_rot = $tf_rot;
             if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
                 // 值门控（P2，2026-10-29）：Bevy 变更检测按 DerefMut 置脏，
@@ -885,13 +893,18 @@ macro_rules! align_label_pool {
                 if tf.rotation != tf_rot {
                     tf.rotation = tf_rot;
                 }
+                // 世界缩放进变换（字号不变式）：x/y 随缩放，z 恒 1 保晕边层级。
+                let want_scale = Vec3::new($unit_scale, $unit_scale, 1.0);
+                if tf.scale != want_scale {
+                    tf.scale = want_scale;
+                }
                 if text.0 != *name {
                     text.0 = name.clone();
                 }
                 // TextFont 整体比较（FontSize 无 PartialEq，逐字段比不了；
                 // CJK 缺席时 wanted.font 取当前值 = 维持原「不动 font」语义）。
                 let wanted_font = TextFont {
-                    font_size: font_size.into(),
+                    font_size: font_px.into(),
                     font: match &$cjk {
                         Some(f) => f.clone().into(),
                         None => style.font.clone(),
@@ -913,7 +926,7 @@ macro_rules! align_label_pool {
                         children,
                         &mut $halo_q,
                         name.as_str(),
-                        font_size,
+                        font_px,
                         $cjk.as_ref(),
                         $halo_color,
                         halo_offset,
@@ -924,7 +937,7 @@ macro_rules! align_label_pool {
                     $marker,
                     Text2d::new(name.as_str()),
                     TextFont {
-                        font_size: font_size.into(),
+                        font_size: font_px.into(),
                         font: $cjk.clone().unwrap_or_default().into(),
                         ..Default::default()
                     },
@@ -932,12 +945,12 @@ macro_rules! align_label_pool {
                     Transform {
                         translation: pos.extend($label_z),
                         rotation: tf_rot,
-                        ..Default::default()
+                        scale: Vec3::new($unit_scale, $unit_scale, 1.0),
                     },
                     Visibility::Visible,
                 ));
                 let (text_owned, font_ref, fs, hc) =
-                    (name.clone(), $cjk.as_ref(), font_size, $halo_color);
+                    (name.clone(), $cjk.as_ref(), font_px, $halo_color);
                 cmd.with_children(move |c| {
                     for _ in 0..crate::label_halo::HALO_DIRS.len() {
                         c.spawn(crate::label_halo::halo_bundle(
@@ -2086,6 +2099,140 @@ mod tests {
             ladder[0] >= 12.0,
             "最小一级 {0}px 违反中文 ≥12px 可读下限",
             ladder[0]
+        );
+    }
+
+    /// 放大发糊根修（2026-10-30）：标签 `TextFont::font_size` 必须恒为屏幕像素
+    /// （不随缩放变），世界缩放由 `Transform.scale`（x/y）承担。Bevy 文字按
+    /// 字号光栅化且不感知相机缩放——字号吃缩放会让放大时图集位图小于屏幕
+    /// 尺寸被拉伸发糊，且平滑缩放每帧一个新字号 → 图集逐档重烘并永久缓存。
+    #[test]
+    fn place_label_font_stays_px_and_zoom_lives_in_transform_scale() {
+        use crate::label_pick::LabelHits;
+        use crate::recipe::{resolve_render_recipe, PassId};
+        use crate::state::ViewMode;
+        use bevy::text::FontSize;
+
+        let map_id = wv_core::Id::new_unchecked("m1");
+        // 世界：根图 + 一个锚定地点（w/h 齐备 → effective_rank 3，Region/Edit 档可见）。
+        let mut world = World::default();
+        world.maps.push(node("m1", MapLevel::World, None, &[]));
+        world.distances.places.push(wv_core::distance::Place {
+            kind: None,
+            line: None,
+            id: wv_core::Id::new_unchecked("p1"),
+            name: "青云城".into(),
+            feature: None,
+            biome: None,
+            envelope: None,
+            map: Some(map_id),
+            x: Some(10.0),
+            y: Some(10.0),
+            w: Some(12.0),
+            h: Some(8.0),
+            rank: None,
+            line_kind: None,
+            line_width_m: None,
+        });
+        let projection = crate::state::WorldProjection {
+            world,
+            ..Default::default()
+        };
+        let mut drill = DrillState::default();
+        drill.ensure_root(&projection.world);
+        assert!(drill.current().is_some(), "夹具前提：当前图已定");
+
+        let grid = GridConfig::default();
+        let view = crate::state::ViewState {
+            mode: ViewMode::VectorFlat,
+            scale: 1.0,
+            window_size: bevy::math::Vec2::new(800.0, 600.0),
+            camera_center: grid.map_to_view(bevy::math::Vec2::new(10.0, 10.0)),
+            ..Default::default()
+        };
+        let layers = crate::layer_frame::LayerFrame::default();
+        let playback = crate::state::PlaybackState::default();
+        let tex = crate::terrain_view::terrain_texture::TerrainTexture {
+            handle: bevy::asset::Handle::default(),
+            size: 4,
+            height: 4,
+            res: 1,
+            dirty: None,
+            chunks_dirty: None,
+            field_dirty: None,
+            last_mode: None,
+            last_soften: false,
+            last_theme_id: "",
+            last_hypsometric: 0.0,
+            last_map: None,
+        };
+        let recipe = resolve_render_recipe(&view, &layers, &projection, &drill, &tex, None);
+        assert!(
+            recipe.enabled(PassId::PlaceLabels),
+            "夹具前提：VectorFlat 行 PlaceLabels=true"
+        );
+
+        let mut bevy_world = bevy::prelude::World::default();
+        let place_index = crate::world_projection::PlaceIndex::build(&projection.world);
+        bevy_world.insert_resource(projection);
+        bevy_world.insert_resource(place_index);
+        bevy_world.insert_resource(drill);
+        bevy_world.insert_resource(view);
+        bevy_world.insert_resource(layers);
+        bevy_world.insert_resource(playback);
+        bevy_world.init_resource::<crate::state::PinDragState>();
+        bevy_world.insert_resource(grid);
+        bevy_world.insert_resource(recipe);
+        bevy_world.insert_resource(crate::theme::fonts::LoadedFonts::default());
+        bevy_world.insert_resource(crate::label_collision::LabelOccupancy::default());
+        bevy_world.insert_resource(LabelHits::default());
+
+        let mut schedule = bevy::ecs::schedule::Schedule::default();
+        schedule.add_systems(update_place_labels);
+        schedule.run(&mut bevy_world);
+
+        // 缩放前：字号恒 px（rank 3 → 16px），scale = 单位缩放（1.0）。
+        let mut q = bevy_world.query::<(&PlaceLabel, &TextFont, &Transform, &Visibility)>();
+        let (_, font, tf, vis) = q
+            .single(&bevy_world)
+            .expect("VectorFlat 下应有一个地名标签");
+        assert!(matches!(vis, Visibility::Visible), "标签应可见");
+        let FontSize::Px(px) = font.font_size else {
+            panic!("字号应为 Px 档，got {:?}", font.font_size);
+        };
+        assert!(
+            (px - 16.0).abs() < 1e-4,
+            "rank3 字号应恒为 16px（光栅化分辨率），got {px}"
+        );
+        assert!(
+            (tf.scale.x - 1.0).abs() < 1e-6 && (tf.scale.y - 1.0).abs() < 1e-6,
+            "unit_scale=1 时变换 scale 应为 1，got {:?}",
+            tf.scale
+        );
+
+        // 缩放（view.scale 1.0 → 0.25，视野放大 4×）：字号必须原封不动，
+        // 世界缩放迁移进 Transform.scale。
+        bevy_world.resource_mut::<crate::state::ViewState>().scale = 0.25;
+        schedule.run(&mut bevy_world);
+
+        let mut q = bevy_world.query::<(&PlaceLabel, &TextFont, &Transform)>();
+        let (_, font, tf) = q.single(&bevy_world).expect("缩放后标签应复用池实体仍在");
+        let FontSize::Px(px) = font.font_size else {
+            panic!("字号应仍为 Px 档，got {:?}", font.font_size);
+        };
+        assert!(
+            (px - 16.0).abs() < 1e-4,
+            "缩放后字号必须恒 px 不重烘（图集稳定），got {px}"
+        );
+        assert!(
+            (tf.scale.x - 0.25).abs() < 1e-6 && (tf.scale.y - 0.25).abs() < 1e-6,
+            "世界缩放应迁移到 Transform.scale（x/y），got {:?}",
+            tf.scale
+        );
+        assert!(
+            (tf.scale.z - 1.0).abs() < 1e-6,
+            "z 恒 1（晕边 HALO_LOCAL_Z 层级语义不随缩放漂移），got {:?}",
+            tf.scale.z
         );
     }
 
