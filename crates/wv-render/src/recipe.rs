@@ -308,7 +308,11 @@ const MODE_TABLE: &[(ViewMode, [bool; PassId::COUNT])] = &[
         false, // Poi
         false, // Buildings
         false, // Faction
-        false, // PlaceLabels
+        // PlaceLabels **2026-10-29 由 false 改 true**（用户裁定：CellMap 的
+        // 地标 pin 要有名字，否则认不出那颗钉是什么——ADR-0051 §7 追记）。
+        // pass 开档后候选集在 `update_place_labels` 里收窄为「有 pin 的
+        // 地点」（rank ≥ 2，与 pin 同口径、不吃档位门）；街名仍关。
+        true,  // PlaceLabels
         false, // StreetLabels
         true,  // SeaLabels（2026-10-22 内容矩阵：海名属地貌呈现，CellMap 保留——ADR-0051）
         false, // Measurement（不要测量叠加）

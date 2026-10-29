@@ -7,6 +7,9 @@
 > 再叠一层**海拔分层设色**（8 阶、逐图百分位、强度 `0..1` 连续可调）。
 > 「CellMap 颜色不随主题」这条**不变**（色带是固定 crate 常量）。
 > 正文按只增不改保留。
+>
+> **2026-10-29 追记**：§7——Topographic 翻 `PlaceLabels=true`
+> （用户裁定：地标 pin 要有名字；候选收窄为 rank ≥ 2 与钉同口径）。
 **日期**：2026-10-22
 **决策者**：用户（对话拍板三分法 + 三格补充 + 群系色块 + Nature 开关 + 分界线）
 **关联**：**修正 [ADR-0021](ADR-0021-render-recipe-and-treatment.md) 两格表语义与 [ADR-0039](ADR-0039-topographic-viewmode.md) 的 Topographic 视觉语义**（正文均不改，头部标注）；[ADR-0017](ADR-0017-label-layer.md)、[ADR-0030](ADR-0030-poi-rank-and-density-budget.md)、[ADR-0045](ADR-0045-nature-region-model.md)、[ADR-0050](ADR-0050-unified-inspector-panel.md)（同分支前置）、[设计稿](../superpowers/specs/2026-10-22-mode-content-matrix-design.md) v1.4
@@ -94,3 +97,24 @@ MODE_TABLE 两行（VectorFlat / Topographic）恢复 `true`（模式轴开档�
    `s = tier(1.0/1.25/1.5) × view_scale`。旧 PNG Sprite 路径无此 bug
    （`custom_size` 只用 side_wu），mesh 兜底路径生产环境从未走过，故
    PNG 退役后才暴露。`BASE_H_PX` 常量随之退役。
+
+## 7. 追记（2026-10-29）：Topographic 开档地名——地标要有名字
+
+**用户裁定**（实机反馈）：CellMap 的地标 pin 要有名字呈现，否则认不出
+那颗钉是什么。
+
+§2-1 接线时 Topographic 行 `PlaceLabels=false`（「CellMap 只关注自然」的
+推论）被**部分修正**：该格翻 `true`，但候选集在 `update_place_labels` 里
+收窄为**与 landmark pin 同一口径**——rank ≥ 2 全量出标签、不吃档位门
+（pin 收集本就不吃档位；档位门会让 Nation 档的 rank-2 钉「有钉无名」，
+正是本条要修的缺陷）。rank 1 / 微点无钉 ⇒ 也无名，CellMap 不出现「浮名
+无钉」。街名（StreetLabels）维持关；时间轴图级 veto（ADR-0017）照常生效；
+label / place 两渲染组任一关即整体退场（wanted 置空 → 既有隐藏尾部）。
+
+被否决的备选：**新开 `LandmarkLabels` 通路**——PlaceLabels 已有碰撞池 /
+晕边 / 字级阶梯 / 拾取全套，重复一套只多一条要互相避让的通路；GoogleMap
+的 Faction 同款「pass 开档 + 系统内按模式分流」是既有先例。
+
+代价：CellMap 观感从「纯地形」变为「地形 + 钉 + 钉名」——这是裁定本身
+要的效果；碰撞占位池在 CellMap 与 SeaLabels 同场，密度预算按档位共用。
+

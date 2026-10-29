@@ -1107,9 +1107,10 @@ pub fn update_place_labels(
         .unwrap_or(Quat::IDENTITY);
     let label_rot = cam_rot.inverse();
     let mut candidates: Vec<crate::label_collision::LabelCandidate> = Vec::new();
-    // 2026-10-22 三模式内容矩阵：MODE_TABLE 门（Topographic ⇒ PlaceLabels
-    // = false ⇒ wanted 置空 → 既有隐藏尾部把池全部隐藏；`hits.clear()` 在
-    // 门外照常跑——链首清场不得跳过）。
+    // MODE_TABLE 门（ADR-0021 接线，ADR-0051 §2-1）：place 层 ∧ label 层 ∧
+    // 表格 PlaceLabels 格。Topographic 2026-10-29 起开档（用户裁定：CellMap
+    // 的地标 pin 要有名字——ADR-0051 §7）；关档时 wanted 置空 → 既有隐藏
+    // 尾部把池全部隐藏；`hits.clear()` 在门外照常跑——链首清场不得跳过。
     if layers.place.visible
         && layers.label.visible
         && recipe.enabled(crate::recipe::PassId::PlaceLabels)
@@ -1127,9 +1128,15 @@ pub fn update_place_labels(
             for i in anchored {
                 let p = &projection.world.distances.places[*i as usize];
                 let rank = p.effective_rank();
-                if !crate::state::poi_visible_at_rank(rank, tier)
-                    || !wv_core::label_visible_at(map_span, None, t)
-                {
+                if !wv_core::label_visible_at(map_span, None, t) {
+                    continue;
+                }
+                // CellMap（Topographic）与 landmark pin 同一口径：pin 画
+                // rank ≥ 2 全量、不吃档位门（`world_projection` 收集
+                // landmark_dots 的那条 `rank >= 2`），名字必须跟钉同集合——
+                // 否则 Nation 档下的 rank-2 钉「有钉无名」，正是要修的缺陷。
+                let pin_grade = view.mode == crate::state::ViewMode::Topographic && rank >= 2;
+                if !pin_grade && !crate::state::poi_visible_at_rank(rank, tier) {
                     continue;
                 }
                 if let Some((x, y)) = p.effective_anchor() {
@@ -1919,14 +1926,16 @@ mod tests {
     use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
     use wv_core::World;
 
-    /// 标签门槛与 POI 点标同一把尺（ADR-0030 D6）：旧两档工程（无 rank）经
-    /// `effective_rank` 折算后，Nation 档只留城市（w/h）标签的行为不回归。
-    /// 门控（2026-10-22 三模式内容矩阵 Review Focus #1/#2）：Topographic 下
-    /// recipe.enabled(PlaceLabels)=false ⇒ **池实体全部 Hidden 且命中表清空**。
-    /// 门控必须走「wanted 置空 → 既有隐藏尾部」——若只跳过注册，旧标签会
-    /// 冻结在屏上；`hits.clear()` 归链首照常跑（否则别家追加的命中成 stale）。
+    /// 机制守点（ADR-0017 §2.6）：wanted 置空 ⇒ **池实体全部 Hidden 且命中表
+    /// 清空**——若只跳过注册，旧标签会冻结在屏上；`hits.clear()` 归链首照常
+    /// 跑（否则别家追加的命中成 stale）。
+    ///
+    /// 驱动门用 label 层关（`layers.label.visible=false`，经
+    /// `resolve_render_recipe` 折进 PlaceLabels 位）。原夹具「Topographic 行
+    /// PlaceLabels=false」已被 ADR-0051 §7（2026-10-29）推翻——CellMap 开档
+    /// 地名（地标见名），但「wanted 置空 → 隐藏尾部」的机制语义不变。
     #[test]
-    fn place_labels_pool_hidden_and_hits_cleared_under_topographic() {
+    fn label_layer_off_hides_place_label_pool_and_clears_hits() {
         use crate::label_pick::LabelHits;
         use crate::recipe::{resolve_render_recipe, PassId};
         use crate::state::ViewMode;
@@ -1967,7 +1976,9 @@ mod tests {
             window_size: bevy::math::Vec2::new(800.0, 600.0),
             ..Default::default()
         };
-        let layers = crate::layer_frame::LayerFrame::default();
+        // 驱动门：label 渲染组关（ADR-0017 Q1）。
+        let mut layers = crate::layer_frame::LayerFrame::default();
+        layers.label.visible = false;
         let playback = crate::state::PlaybackState::default();
         let grid = GridConfig::default();
         let tex = crate::terrain_view::terrain_texture::TerrainTexture {
@@ -1987,7 +1998,7 @@ mod tests {
         let recipe = resolve_render_recipe(&view, &layers, &projection, &drill, &tex, None);
         assert!(
             !recipe.enabled(PassId::PlaceLabels),
-            "夹具前提：Topographic 行 PlaceLabels=false"
+            "夹具前提：label 层关 ⇒ PlaceLabels 位折叠为 false"
         );
 
         let mut bevy_world = bevy::prelude::World::default();
@@ -2036,7 +2047,7 @@ mod tests {
         let hits = bevy_world.resource::<LabelHits>();
         assert!(
             hits.items.is_empty(),
-            "Topographic 下命中表必须清空（链首清场照常）"
+            "label 层关时命中表必须清空（链首清场照常）"
         );
         let mut q = bevy_world.query::<(&PlaceLabel, &bevy::prelude::Visibility)>();
         let vis: Vec<_> = q.iter(&bevy_world).map(|(_, v)| *v).collect();
@@ -2044,7 +2055,132 @@ mod tests {
         assert!(
             vis.iter()
                 .all(|v| matches!(v, bevy::prelude::Visibility::Hidden)),
-            "Topographic 下池实体必须全部 Hidden（走隐藏尾部，不得冻结在屏上）"
+            "wanted 置空时池实体必须全部 Hidden（走隐藏尾部，不得冻结在屏上）"
+        );
+    }
+
+    /// CellMap（Topographic）的地名集合与 landmark pin 同口径（ADR-0051 §7，
+    /// 2026-10-29 用户裁定「地标要有名字」）：rank ≥ 2 全量出标签、**不吃档位
+    /// 门**（pin 收集本就不吃）；rank 1 无钉 ⇒ 也无名。
+    #[test]
+    fn topographic_place_labels_follow_landmark_pin_set() {
+        use crate::label_pick::LabelHits;
+        use crate::recipe::{resolve_render_recipe, PassId};
+        use crate::state::ViewMode;
+
+        let place =
+            |id: &str, name: &str, x: f32, y: f32, rank: Option<u8>| wv_core::distance::Place {
+                kind: None,
+                line: None,
+                id: wv_core::Id::new_unchecked(id),
+                name: name.into(),
+                feature: None,
+                biome: None,
+                envelope: None,
+                map: None,
+                x: Some(x),
+                y: Some(y),
+                w: None,
+                h: None,
+                rank,
+                line_kind: None,
+                line_width_m: None,
+            };
+
+        let map_id = wv_core::Id::new_unchecked("m1");
+        let mut world = World::default();
+        world.maps.push(node("m1", MapLevel::World, None, &[]));
+        // rank 3：w/h 齐备折算；rank 2 / rank 1：显式声明。
+        let mut p1 = place("p1", "青岚城", 10.0, 10.0, None);
+        p1.map = Some(map_id.clone());
+        p1.w = Some(12.0);
+        p1.h = Some(8.0);
+        assert_eq!(p1.effective_rank(), 3, "夹具前提：w/h 折算 rank 3");
+        let mut p2 = place("p2", "灰港镇", 90.0, 90.0, Some(2));
+        p2.map = Some(map_id.clone());
+        let mut p3 = place("p3", "无名点", 170.0, 170.0, Some(1));
+        p3.map = Some(map_id.clone());
+        world.distances.places.push(p1);
+        world.distances.places.push(p2);
+        world.distances.places.push(p3);
+        let projection = crate::state::WorldProjection {
+            world,
+            ..Default::default()
+        };
+
+        let mut drill = DrillState::default();
+        drill.ensure_root(&projection.world);
+
+        let view = crate::state::ViewState {
+            mode: ViewMode::Topographic,
+            scale: 1.0,
+            window_size: bevy::math::Vec2::new(800.0, 600.0),
+            ..Default::default()
+        };
+        let layers = crate::layer_frame::LayerFrame::default();
+        assert!(
+            layers.label.visible && layers.place.visible,
+            "夹具前提：place/label 层默认可见"
+        );
+        let tex = crate::terrain_view::terrain_texture::TerrainTexture {
+            handle: bevy::asset::Handle::default(),
+            size: 4,
+            height: 4,
+            res: 1,
+            dirty: None,
+            chunks_dirty: None,
+            field_dirty: None,
+            last_mode: None,
+            last_soften: false,
+            last_theme_id: "",
+            last_hypsometric: 0.0,
+            last_map: None,
+        };
+        let recipe = resolve_render_recipe(&view, &layers, &projection, &drill, &tex, None);
+        assert!(
+            recipe.enabled(PassId::PlaceLabels),
+            "夹具前提：Topographic 行 PlaceLabels=true（ADR-0051 §7）"
+        );
+
+        let mut bevy_world = bevy::prelude::World::default();
+        let place_index = crate::world_projection::PlaceIndex::build(&projection.world);
+        bevy_world.insert_resource(projection);
+        bevy_world.insert_resource(place_index);
+        bevy_world.insert_resource(drill);
+        bevy_world.insert_resource(view);
+        bevy_world.insert_resource(layers);
+        bevy_world.insert_resource(crate::state::PlaybackState::default());
+        bevy_world.init_resource::<crate::state::PinDragState>();
+        // 命中表（ResMut 缺资源时系统 panic——必须预置）。
+        bevy_world.init_resource::<LabelHits>();
+        bevy_world.insert_resource(GridConfig::default());
+        bevy_world.insert_resource(recipe);
+        bevy_world.insert_resource(crate::theme::fonts::LoadedFonts::default());
+        bevy_world.insert_resource(crate::label_collision::LabelOccupancy::default());
+
+        let mut schedule = bevy::ecs::schedule::Schedule::default();
+        schedule.add_systems(update_place_labels);
+        schedule.run(&mut bevy_world);
+
+        let hits = bevy_world.resource::<LabelHits>();
+        let mut hit_ids: Vec<&str> = hits.items.iter().map(|h| h.target.id.as_str()).collect();
+        hit_ids.sort_unstable();
+        assert_eq!(
+            hit_ids,
+            vec!["p1", "p2"],
+            "Topographic 标签 = 钉集合：rank 3/2 入命中表，rank 1 无钉无名"
+        );
+
+        let mut q = bevy_world.query::<(&PlaceLabel, &Text2d, &bevy::prelude::Visibility)>();
+        let mut texts: Vec<(String, bool)> = q
+            .iter(&bevy_world)
+            .map(|(_, t, v)| (t.0.clone(), *v == bevy::prelude::Visibility::Visible))
+            .collect();
+        texts.sort();
+        assert_eq!(
+            texts,
+            vec![("灰港镇".to_string(), true), ("青岚城".to_string(), true),],
+            "池实体按 wanted 落字且可见；rank 1 的「无名点」不得出现"
         );
     }
 
