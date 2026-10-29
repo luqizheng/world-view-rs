@@ -423,7 +423,10 @@
 | **蒙版裁剪** | mask clipping | 拖绘笔与统一选区的关系：选区非空时，落笔格 = 笔刷 footprint **∩ 选区**；选区空 = 自由涂（现状）。Esc 取消选区即恢复自由涂。借 Photoshop 蒙版语义。首次出现：ADR-0057 D4 | 编辑 |
 | **蚂蚁线** | marching ants | 统一选区的边界视觉：沿选中格**外围边界**的白色虚线——轴对齐阶梯线，沿方格边贴线，**不做曲线化 / 圆角**；Alt 减选挖出的空洞其内边界同画。动画 = **两相位互换**（相位 A/B 两套 mesh 按 ≈0.3 s 计时整组切换可见性，每帧零重建；非连续滚动）。与「待落色块」（红橙 = 未提交）、「悬停准星」（瞬时态）视觉分工不变。首次出现：ADR-0057 D8 | 渲染 / 编辑 |
 | **活链接** | live link | 套索（V）闭合后锚点拖动期间选区与多边形的实时运算关系（ADR-0057 补记 5，B 方案）：闭合那刻**快照基座选区 + 修饰键 op**（无修饰时基座 = 空）；拖锚期间每帧 选区 = 基座 ∪/− 当前多边形格集；任何新选择动作 / 取消 / 切工具**断开活链接**并把最后结果钉进 `CellSelection`。承载点 = `sync_region_cells` 改造。首次出现：ADR-0057 补记 5 | 编辑 |
-| **点选工具** | PointSelect | 原 `MapToolId::CellSelect` 的改名（ADR-0057 补记 6）：S 键单格点选，写 `CellSelection`（带修饰键运算）。激活态独立为小 Resource（仿 `FloodSelectState`），**不再与 EditCell 共用 `tool_active`**；hover 准星 gate 扩为「EditCell ∨ PointSelect」。首次出现：ADR-0057 补记 6 | 编辑 |
+| **点选工具** | PointSelect | 原 `MapToolId::CellSelect` 的改名（ADR-0057 补记 6）：S 键单格点选，写 `CellSelection`（带修饰键运算）。激活态独立为小 Resource（仿 `FloodSelectState`），**不再与 EditCell 共用 `tool_active`**；hover 准星 gate 扩为「EditCell ∨ PointSelect」。首次出现：ADR-0057 补记 6。**ADR-0090 D2 再定职责**：转纯实体选择器（POI/Place > 群系；河/路仅 Map LinePoi 激活时最高；Browse 只读），不再选格子（格子归圈选，Alt 退役） | 编辑 |
+| **格子选择器** | cell-area selector | CellMap 专用区域选择工具 = `MapToolId::Select(SelectionShape)`（UI 名「圈选」，ADR-0089 槽 3 改名）在 ADR-0090 D3 后的新职责：拖拽成形（多边形/矩形/椭圆）选格子集合，**单击无位移 = 选单格**；Browse/Map 不再可用（白名单收 Topographic-only）；Alt 单格修饰退役。首次出现：ADR-0090 D3 | 编辑 |
+| **群系闸门** | biome selection gate | Map 中群系默认不可选的开关机制：仅当图层面板进入**势力层编辑态**且「群系」checkbox 勾选（默认勾）时群系可选；此时 Ctrl 多选群系 = **替换式**赋给该势力（多群系并集一次写入）。Browse 无编辑态，闸门恒闭（见 ADR-0090 被否决备选）。首次出现：ADR-0090 D4 | 编辑 |
+| **贴近群系** | snap-to-biome | 切蛋糕（势力划分）的 checkbox（默认勾）：切线自动吸附群系分界（几何源 = `biome_boundary` / `BiomeField`），使国境贴自然地貌；不勾 = 自由切（ADR-0081 现状行为）。首次出现：ADR-0090 D5 | 编辑 |
 
 ## 地图渲染实施方案（2026-10-22 · 方案文档落盘）
 
@@ -604,7 +607,6 @@
 - **定义**：agent 驱动 wv 的**零注册路径**（与「MCP 客户端注册=可选增强」相对）：GUI 运行即有 JSON-RPC 端点（127.0.0.1:8732，仅 tools/list 与 tools/call、无握手），agent 拿到驱动指南（`.agents/skills/wv-http/SKILL.md` 单一真源，`wv skill` 打印 / 设置对话框复制按钮，三者 `include_str!` 同源）即具备全部 15 工具驱动能力。指南内含 curl 配方、15 工具表、省 token 纪律（screenshot 必须 jq+base64 管道落盘、禁响应体进上下文）、验收/命名/抽查三流程与故障表。首次出现：2026-10-28 ADR-0084 撤回 stdio 代理时的定位讨论，ADR-0085 落地。
 - **所属维度**：工具链（agent 接入）
 
-<<<<<<< HEAD
 ## 场景分区带（2026-10-29 · 场景编辑器 M1 落地）
 
 - **术语**：场景分区带 / District Band
@@ -616,7 +618,6 @@
 
 - **「分区 / District」词条**（本文件「应用外壳与场景编辑器术语」小节）原文写「走每图一张 `TerrainGrid` 的 **kind 通道**；kind 编号须 > 1（水域判定 `kind <= 1` 是唯一入口，跨水陆会改写高度）」——**该表述已于 2026-10-18 失效**：kind 通道退役为三通道（height / surface / biome），水域判定改为 `wv_terrain::edit::is_water_cell`（`surface == WATER || height < 0`），分区实际走 **biome 通道的 21..=32 保留带**（见上）。按 §6.3「追写不改机制」保留原条目并在此追记。
 - **「场景 / Scene」词条**里「自己的 `TerrainGrid`（分区走 kind 通道）」同一处过时，一并以上条为准。
-=======
 ## 场管线收尾：模式路由与分块指纹（2026-10-29 · ADR-0088）
 
 > 来源：`docs/adr/ADR-0088-field-mode-routing-fingerprint.md`（场管线转正后的收尾轮，**重做版**——v1 留痕件随 2026-10-28 分支因 main 结构漂移放弃，未合入）。设计稿：`docs/superpowers/specs/2026-10-28-field-incremental-and-default-on-design.md`（v2）；计划：`docs/superpowers/plans/2026-10-28-field-mode-routing-fingerprint.md`。本节术语随 ADR 落盘同步登记（AGENTS §6.1）。
@@ -628,4 +629,25 @@
 | **分块指纹** | block fingerprint | 编辑帧地形内容指纹的增量方案（ADR-0088 D3）：256×256 格一块，块 hash（FNV-1a，与旧 `pack_content_hash` 同字段同序：height/surface/biome）就地缓存，总 hash 按块序确定性折叠；编辑只重算 `field_dirty` 矩形覆盖的块（与 GPU 补丁共用同一脏矩形）。把编辑帧指纹从全量扫 1M 格 ≈3ms 降到 <0.5ms。**验收口径**：FNV 链式折叠下「增量总 hash ≡ 旧全量 hash」数学上不可达（块缓存与链式传播互斥），判据改两条——①新方案自身「增量 ≡ 全量」逐位等价（property 测试，随机编辑序列）；②新旧口径敏感性对拍（同一编辑集合下同翻转、未编辑同不翻）。首次出现：2026-10-28 场管线收尾设计稿 v2 §4 D3 | 渲染 / 性能 |
 | **剥离对照** | layered strip comparison | 全称「Themed 观感剥离对照」——定位 Themed 分支浮雕观感冲淡源的核查法（ADR-0088 D4）：同一张图同机位，把 Themed 加工链**逐层剥离**出对比帧组（裸浮雕 → +色板 → +soften → +wash → +veil），外加 BiomeRaw/Themed × 近观/远观对照——「浮雕对比度被哪一层吃掉」由帧组客观定位，「调多少好看」交用户目验拍板（数字不裁定观感）。实现 = `WV_STRIP` 环境探针经 `ViewState.strip_mask` 位域控 shader 各层，mask 缺省 0 = 生产路径逐位不变（会话态不落盘，沿 `field_render` 先例）。首次出现：2026-10-28 场管线收尾设计稿 v2 §4 D4 | 渲染 / 验收 |
 
->>>>>>> feat/field-finalize
+
+## 地图交互语法（2026-10-29 · ADR-0089）
+
+- **术语**：地图交互语法 / 交互语法
+- **英文名**：map interaction grammar
+- **定义**：跨全部工作区（Browse / Map / CellMap / 场景编辑）统一的输入语义单表，**两级仲裁**：「手势进行中 > 通用语义」——手势（画多边形 / 落笔 / 收线 / 拖锚 / 拖钉等）进行中三键全归手势，否则走通用语义：左键单击=选择、双击=一律属性窗体、右键单击=取消选择（点空白 / Esc 等价）、右键拖拽=平移、左键拖拽=归当前激活 control。既有 6 处右键分工具占用（撤锚 / 丢笔 / 收线 / 退模式 / 取消选中 / 平移）收编归层，行为不变。双击与拖拽的时长 / 位移阈值收口单点常量。首次出现：2026-10-29 交互语法 brainstorm（ADR-0089）。
+- **所属维度**：编辑 / 交互
+
+- **术语**：两层进入 / two-tier entry
+- **英文名**：two-tier entry（浏览进来看，按钮进去改）
+- **定义**：「进入地图」按意图分两层：**浏览性进入**（切视图 / 开工程 / 关属性窗体回地图）= 全工具复位、默认激活槽 1 点选；**编辑性进入**（属性窗体「编辑城市」按钮进城）= 显式编辑意图、默认激活该场景编辑工具（场景分区笔刷就位，无需再点）。顶栏点 CellMap 段归浏览性进入（EditCell 不再自动开）。工具状态会话态不落盘，每次进入即复位。首次出现：2026-10-29 交互语法 brainstorm（ADR-0089 D3）。
+- **所属维度**：编辑 / 交互
+
+- **术语**：属性窗体 / property window
+- **英文名**：property window
+- **定义**：双击任何地图对象统一弹出的属性面板，无例外（CellMap 双击图钉开 Inspector 的既有行为是其特例合规）。带子图的实体（城 / 场景 Place）窗体内显示「编辑城市 / 编辑地图」主按钮；无子图实体只有属性无按钮。Browse / Map 的「双击直接下钻进城」随 ADR-0089 退役，进城改道此窗体；滚轮 ZoomCross 与地图树仍是独立导航旁路。CellMap 格子 / 群系区双击开属性窗体为新增能力（窗体内容留实施定义）。首次出现：2026-10-29 交互语法 brainstorm（ADR-0089 D2）。
+- **所属维度**：编辑 / 交互
+
+### 订正：槽 3「选择工具」改名「圈选」（2026-10-29 · ADR-0089 D5）
+
+- 既有词条「**选择工具** / Selection tool」所述工具（`MapToolId::Select(SelectionShape)`，圈选 + 意图菜单）的 UI 文案改为「**圈选**」，让出「选择」一名——「选择」归槽 1 点选（PointSelect，进入地图的默认工具）。词条描述的「统一圈选手势入口」行为不变；「两把工具维持分离不合并」（用户裁定「槽 1」，统一选择器 Q③ 的合并选项被否）。按 §6.3 保留原词条，以本节为准。
+
