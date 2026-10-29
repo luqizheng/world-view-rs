@@ -34,7 +34,7 @@ use crate::ui_layout::LayoutFile;
 
 use super::shell::UiShell;
 use super::widgets::float_window;
-use wv_ui::widgets::{ICON_CHEVRON_DOWN, ICON_CHEVRON_RIGHT, ICON_PASTE, ICON_PLUS};
+use wv_ui::widgets::{icon_button, ICON_CHEVRON_DOWN, ICON_CHEVRON_RIGHT, ICON_PASTE, ICON_PLUS};
 
 /// 地图树会话内 UI 状态（不落盘、不属于世界数据，P7 不受影响）。
 #[derive(Resource, Default)]
@@ -249,24 +249,19 @@ fn toolbar(
     actions: &mut Vec<TreeAction>,
 ) {
     ui.horizontal(|ui| {
-        let plus = ui.add(egui::Button::new(
-            egui::Image::new(ICON_PLUS).fit_to_exact_size(egui::vec2(14.0, 14.0)),
-        ));
+        // 走 wv-ui 目录件 `icon_button`：图标 tint 随日/夜令牌（t1/禁用灰），
+        // 手写 `egui::Image` 漏 tint 会落回默认 WHITE——日间浅底上图标隐形
+        // （2026-10-29 用户报告的日间模式 bug）。
+        let plus = icon_button(ui, shell, ICON_PLUS, true);
         if plus.clicked() {
             actions.push(TreeAction::OpenNewMap);
         }
         // 世界图作源：粘贴 = 新独立根（多版本世界的生成路径，spec §6）。
         let world_src = clipboard_level == Some(MapLevel::World);
-        let paste = ui.add_enabled(
-            world_src,
-            egui::Button::new(
-                egui::Image::new(ICON_PASTE).fit_to_exact_size(egui::vec2(14.0, 14.0)),
-            ),
-        );
+        let paste = icon_button(ui, shell, ICON_PASTE, world_src);
         if world_src && paste.clicked() {
             actions.push(TreeAction::PasteAsRoot);
         }
-        let _ = shell;
     });
 }
 
