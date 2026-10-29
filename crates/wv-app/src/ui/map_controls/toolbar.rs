@@ -73,13 +73,16 @@ pub fn map_controls(
     let mode_now = view.mode;
     let ws = move |tool: MapToolId| tool.available_in(mode_now);
     let ws_hint = t(loc, I18nKey::MapControlsWorkspaceLocked);
-    // UX-029①（round-2 审计）：地形笔刷只落**自有**地形栅格——当前图没有
-    // `terrain_of` 时（子图继承父图底图）入口即灰。此前这个前置条件只在
-    // 松手提交时报错（「笔刷未生效：地图无地形网格」），作者得先画一笔
-    // 才知道画不了。
+    // UX-029①（round-2 审计）：地形笔刷写不进去时入口即灰——判据用
+    // `World::map_is_brush_writable` **单真源**（场景编辑器 M1 收敛版）：
+    // 有自有栅格 → 可写；无栅格 + 非 World（场景图）→ **仍可写**（首次刷色
+    // 自动铺基底网格，这一笔不会报错）；无栅格 + World → 禁（世界地形由
+    // 大陆生成器负责）。旧判据「无 `terrain_of` 即灰」对场景图过宽——新建
+    // 的城市图本来就没有栅格，灰化等于场景编辑永远开不了笔刷。光标侧
+    // （`brush_cursor`）与提交侧（`stroke.rs`）读同一判据，三处一个口径。
     let brush_writable = drill
         .current()
-        .is_some_and(|id| projection.world.terrain_of(id).is_some());
+        .is_some_and(|id| projection.world.map_is_brush_writable(id));
     let no_terrain_hint = t(loc, I18nKey::MapControlsNoTerrain);
 
     let vertical = params.dock.orientation == MapDockOrientation::Vertical;
