@@ -22,6 +22,7 @@ pub mod cell_pick;
 pub mod city_intent;
 pub mod command_palette_window;
 pub mod continent_dialog;
+pub mod event_create_dialog;
 pub mod faction_panel;
 pub mod feature_place_dialog;
 pub mod hover_tooltip;

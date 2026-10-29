@@ -498,6 +498,17 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::MapControlsViewModeLocked => "当前视图模式下不可用",
         I18nKey::MapControlsNoTerrain => "当前地图没有地形网格，不可笔刷",
         I18nKey::HistoryTrimmedNotice => "撤销栈已满：最早的编辑记录已被移除，无法再撤销到更早",
+        I18nKey::CloseConfirmTitle => "未保存的改动",
+        I18nKey::CloseConfirmMessage => "关闭前要保存这些改动吗？",
+        I18nKey::CloseConfirmSaveAndClose => "保存并关闭",
+        I18nKey::CloseConfirmDiscard => "不保存",
+        I18nKey::EventCreateTitle => "登记事件",
+        I18nKey::EventCreateNameHint => "给事件起个名字",
+        I18nKey::EventCreateFromDay => "起始日",
+        I18nKey::EventCreateToDay => "结束日",
+        I18nKey::EventCreateHint => "地点与参与者可在检查器的「属性」页签补填",
+        I18nKey::NoticeEventCreatedPrefix => "已登记事件：",
+        I18nKey::NoticeEventCreateFailed => "登记失败",
 
         // ── ui_shell 通知 ──
         I18nKey::NoticeSavedToPrefix => "已保存到 ",
@@ -1243,6 +1254,17 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::HistoryTrimmedNotice => {
             "Undo stack full: oldest edits were dropped and can no longer be undone"
         }
+        I18nKey::CloseConfirmTitle => "Unsaved changes",
+        I18nKey::CloseConfirmMessage => "Save your changes before closing?",
+        I18nKey::CloseConfirmSaveAndClose => "Save && close",
+        I18nKey::CloseConfirmDiscard => "Don't save",
+        I18nKey::EventCreateTitle => "Register event",
+        I18nKey::EventCreateNameHint => "Name this event",
+        I18nKey::EventCreateFromDay => "From day",
+        I18nKey::EventCreateToDay => "To day",
+        I18nKey::EventCreateHint => "Set location & participants in the Inspector afterwards",
+        I18nKey::NoticeEventCreatedPrefix => "Event registered: ",
+        I18nKey::NoticeEventCreateFailed => "Failed to register event",
 
         // ── ui_shell toasts ──
         I18nKey::NoticeSavedToPrefix => "Saved to ",

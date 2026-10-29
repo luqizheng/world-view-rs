@@ -42,6 +42,7 @@ use crate::theme::ui_theme::UiShellConfig;
 use crate::ui_command_palette::CommandPalette;
 use crate::ui_layout::LayoutFile;
 
+pub(crate) mod close_confirm;
 mod dispatch;
 mod drill_state;
 mod layout;
@@ -52,6 +53,7 @@ mod shell;
 #[cfg(test)]
 mod tests;
 
+pub use close_confirm::{CloseAction, CloseConfirm};
 pub use notice::ShellNotice;
 pub use project_io::{DialogPurpose, OpenProjectTask};
 pub use project_load::StartupLoadRequest;
@@ -86,6 +88,10 @@ pub fn register(app: &mut App) {
         .init_resource::<CommandPalette>()
         .init_resource::<crate::ui::ProjectMenuState>()
         .init_resource::<ShellNotice>()
+        // UX-001 最小版：dirty 关闭确认状态机（dispatch 守卫 + 本模块确认框共用）。
+        .init_resource::<close_confirm::CloseConfirm>()
+        // UX-002：「登记事件」对话框跨帧状态（时间轴按钮 / 命令面板入口）。
+        .init_resource::<crate::ui::event_create_dialog::EventCreateDialog>()
         .init_resource::<DrillState>()
         .init_resource::<RecentProjects>()
         .init_resource::<LayoutFile>()

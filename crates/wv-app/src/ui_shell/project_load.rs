@@ -12,6 +12,7 @@ use crate::state::{DrillState, PlaybackState, RecentProjects, ViewState, WorldPr
 use wv_render::terrain_view::{TerrainTexture, TileAtlas};
 
 use super::notice::ShellNotice;
+use super::OpenProjectTask;
 
 /// CLI `-m <目录>` 带来的启动加载请求。
 ///
@@ -58,6 +59,7 @@ pub(crate) fn apply_loaded_world(
     atlas: Option<&TileAtlas>,
     images: &mut Assets<Image>,
     cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+    open_task: &mut OpenProjectTask,
     frame: u64,
     current_loc: &crate::i18n::CurrentLocale,
 ) {
@@ -85,6 +87,19 @@ pub(crate) fn apply_loaded_world(
     if migration.is_some() {
         // 迁移改了涂格 / 删了手写边 / 落了链实体——工作副本与磁盘分叉了。
         projection.dirty = true;
+        // UX-012（2026-10-29 根因钉死）：迁移是**机械格式转换**而非创作，
+        // 结果必须立即增量落盘——否则模板世界（`meta.template` + 栅格河/路
+        // biome 码恒真触发迁移）每次打开都重迁移一次，顶栏永远「未保存」，
+        // 警戒信号被训练成背景噪音。保存失败（V1）不阻塞：dirty 保持，
+        // 作者 Ctrl+S 可补。复用保存执行体保证与 Ctrl+S 完全同路径。
+        crate::ui_shell::dispatch::dispatch_save_command(
+            projection,
+            edit,
+            open_task,
+            notice,
+            current_loc,
+            frame,
+        );
     }
     // ADR-0070 D5（T9）：加载完成后重建推导边（无论是否迁移）——新工程
     // 首帧即有正确路网投影；重建不进脏路径（derived 永不落盘）。
@@ -275,7 +290,9 @@ pub(crate) fn drive_project_load(
     mut diagnostics: ResMut<crate::state::ProjectDiagnostics>,
     mut edit: ResMut<crate::edit::editing::EditHistory>,
     (mut playback, mut view): (ResMut<PlaybackState>, ResMut<ViewState>),
-    mut tex: ResMut<TerrainTexture>,
+    // UX-012：迁移自动保存走 `dispatch_save_command`，需要它的 SaveAs 兜底口
+    // （open_task 折进同层元组——单系统 16 参数上限）。
+    (mut tex, mut open_task): (ResMut<TerrainTexture>, ResMut<OpenProjectTask>),
     atlas: Option<Res<TileAtlas>>,
     mut images: ResMut<Assets<Image>>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
@@ -317,6 +334,7 @@ pub(crate) fn drive_project_load(
                 atlas.as_deref(),
                 &mut images,
                 &mut cameras,
+                &mut open_task,
                 frame,
                 &current_loc,
             ),

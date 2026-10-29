@@ -199,10 +199,10 @@ mod tests {
         }
         assert_eq!(
             I18nKey::ALL.len(),
-            580,
-            "ALL 应为 580 项（… + UX quick-wins 五键 + ADR-0088：删 MapControlsFloodSelectHint、增 HypsometricTint 两键）；加新键时同步更新数组长度与元素（got {})",
+            591,
+            "ALL 应为 591 项（… + ADR-0088 两键净增 + UX batch2 十一键：关闭确认四键 + 登记事件七键）；加新键时同步更新数组长度与元素（got {})",
             I18nKey::ALL.len()
         );
-        assert_eq!(seen.len(), 580, "去重后应仍为 580 项");
+        assert_eq!(seen.len(), 591, "去重后应仍为 591 项");
     }
 }

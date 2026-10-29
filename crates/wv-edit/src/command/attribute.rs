@@ -6,6 +6,53 @@ use super::*;
 
 use wv_core::model::event::EventLocation;
 
+/// 登记事件（UX-002 / round-2 审计 P0：事件此前只能手编 YAML 创建）。
+///
+/// 整个 [`Event`] 由调用方构造好传入（对话框负责字段与 ID 生成），
+/// 本命令只做**登记**这件事：查重 → 追加 → 报脏路径。
+/// `revert` 按 ID 移除——只删本命令追加的那一条，不动其他事件。
+///
+/// ## 为什么整实体传入而非逐字段
+///
+/// 与 [`UpdateEventCommand`] 的「窄快照逐字段」相反：创建没有「改动面」
+/// 可言——新实体的全部字段都是本命令引入的，整实体进、整实体出，
+/// 撤销即完全消失（登记过 = 没登记过），不存在误退别人改动的可能。
+#[derive(Debug, Clone)]
+pub struct AddEventCommand {
+    /// 待登记的事件（含 ID；与既有事件撞 ID 时 `apply` 报错）。
+    pub event: wv_core::model::event::Event,
+}
+
+impl AddEventCommand {
+    pub fn new(event: wv_core::model::event::Event) -> Self {
+        Self { event }
+    }
+}
+
+impl EditCommand for AddEventCommand {
+    fn label(&self) -> String {
+        format!("登记事件「{}」", self.event.id)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        if world.events.iter().any(|e| e.id == self.event.id) {
+            return Err(EditError::Precondition(format!(
+                "事件 ID 已存在：{}",
+                self.event.id
+            )));
+        }
+        world.events.push(self.event.clone());
+        Ok(vec!["timeline/events".into()])
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let before = world.events.len();
+        world.events.retain(|e| e.id != self.event.id);
+        if world.events.len() == before {
+            return Err(EditError::TargetMissing(format!("Event {}", self.event.id)));
+        }
+        Ok(())
+    }
+}
+
 /// 事件属性的**逐字段**快照。
 ///
 /// 只含本命令会改的六个字段——**不含** `effects` / `narrations`。

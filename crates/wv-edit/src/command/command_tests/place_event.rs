@@ -254,3 +254,44 @@ fn update_event_dirty_path_is_events_prefix() {
     .unwrap();
     assert_eq!(dirty, vec!["timeline/events".to_string()]);
 }
+
+// ====== 登记事件命令（UX-002 · 2026-10-29）==============================
+
+#[test]
+fn add_event_appends_reports_dirty_path_and_reverts_to_empty() {
+    let mut w = World::default();
+    let cmd = AddEventCommand::new(sample_event("e_new", "新事件"));
+    let dirty = cmd.apply(&mut w).expect("登记应成功");
+    assert_eq!(
+        dirty,
+        vec!["timeline/events".to_string()],
+        "脏路径应指向事件目录"
+    );
+    assert_eq!(w.events.len(), 1, "事件应已入列");
+    assert_eq!(w.events[0].name, "新事件");
+
+    cmd.revert(&mut w).expect("撤销登记应成功");
+    assert!(
+        w.events.is_empty(),
+        "撤销后事件应完全消失（登记过 = 没登记过）"
+    );
+}
+
+#[test]
+fn add_event_rejects_duplicate_id_without_touching_the_world() {
+    let mut w = World::default();
+    w.events.push(sample_event("e_dup", "既有"));
+    let cmd = AddEventCommand::new(sample_event("e_dup", "重名"));
+    let err = cmd.apply(&mut w).expect_err("撞 ID 应报错");
+    assert!(err.to_string().contains("已存在"), "got {err}");
+    assert_eq!(w.events.len(), 1, "失败不得改动世界");
+    assert_eq!(w.events[0].name, "既有", "既有事件不得被触碰");
+}
+
+#[test]
+fn add_event_revert_without_apply_reports_missing_target() {
+    let mut w = World::default();
+    let cmd = AddEventCommand::new(sample_event("ghost", "未登记"));
+    let err = cmd.revert(&mut w).expect_err("未 apply 先 revert 应报错");
+    assert!(err.to_string().contains("ghost"), "got {err}");
+}

@@ -52,6 +52,8 @@ pub(super) fn window_controls_segment(
     shell: &UiShell,
     window: &mut Window,
     chrome: &mut WindowChromeState,
+    dirty: bool,
+    close_confirm: &mut crate::ui_shell::CloseConfirm,
     exit: &mut MessageWriter<AppExit>,
 ) {
     let bar = ui.max_rect();
@@ -77,7 +79,12 @@ pub(super) fn window_controls_segment(
     }
     if control_button(ui, shell, rect_at(right - BTN_W), ICON_X, true).clicked() {
         // 关闭主窗口 = 退出应用（单窗口编辑器，无「其余窗口存活」语义）。
-        exit.write(AppExit::Success);
+        // UX-001 最小版：dirty 时先过关闭确认框，不直接丢工作。
+        if dirty {
+            close_confirm.pending = Some(crate::ui_shell::CloseAction::ExitApp);
+        } else {
+            exit.write(AppExit::Success);
+        }
     }
 }
 

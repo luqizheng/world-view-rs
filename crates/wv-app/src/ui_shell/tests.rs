@@ -65,6 +65,30 @@ fn open_project_task_does_not_block_when_dialog_is_still_open() {
 /// `AsyncComputeTaskPool::get_or_init`：分发器走对话框路径时会 `get()`，
 /// 裸单测没有 TaskPoolPlugin 未初始化会 panic；应用运行时 Bevy 已初始化，
 /// 这里 init 是幂等的。
+///
+/// UX-001（2026-10-29）：dirty 的 CloseProject 在守卫处被拦——命令不入
+/// 分发、确认框接管（`CloseConfirm::pending` 置位），工程原样保留。
+#[test]
+fn dirty_close_project_is_intercepted_into_confirm_dialog() {
+    use bevy::ecs::system::RunSystemOnce;
+    let mut world = dispatcher_world(Some("D:/old/project"), true, CommandId::CloseProject);
+    world
+        .run_system_once(apply_pending_commands)
+        .expect("系统运行失败");
+
+    let confirm = world.resource::<crate::ui_shell::close_confirm::CloseConfirm>();
+    assert_eq!(
+        confirm.pending,
+        Some(crate::ui_shell::close_confirm::CloseAction::CloseProject),
+        "dirty 关闭应转入确认框"
+    );
+    let projection = world.resource::<WorldProjection>();
+    assert!(
+        projection.project_dir.is_some() && projection.dirty,
+        "守卫拦截后工程必须原样保留（不得静默丢弃）"
+    );
+}
+
 #[allow(dead_code)] // helper used by tests; warnings emitted in non-test lib build
 fn dispatcher_world(project_dir: Option<&str>, dirty: bool, pending: CommandId) -> World {
     AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
@@ -81,6 +105,8 @@ fn dispatcher_world(project_dir: Option<&str>, dirty: bool, pending: CommandId) 
     world.init_resource::<ShellNotice>();
     world.init_resource::<crate::edit::editing::EditHistory>();
     world.init_resource::<OpenProjectTask>();
+    // UX-001：dispatch 的 CloseProject 守卫读它——测试世界同样要装配。
+    world.init_resource::<crate::ui_shell::close_confirm::CloseConfirm>();
     world.init_resource::<crate::state::ProjectDiagnostics>();
     world.init_resource::<crate::ui::NewMapDialog>();
     world.init_resource::<crate::ui::NewProjectDialog>();
@@ -384,6 +410,8 @@ fn project_menu_pending_command_reaches_the_dispatcher() {
     world.init_resource::<ShellNotice>();
     world.init_resource::<crate::edit::editing::EditHistory>();
     world.init_resource::<OpenProjectTask>();
+    // UX-001：dispatch 的 CloseProject 守卫读它——测试世界同样要装配。
+    world.init_resource::<crate::ui_shell::close_confirm::CloseConfirm>();
     world.init_resource::<crate::state::ProjectDiagnostics>();
     world.init_resource::<crate::ui::NewMapDialog>();
     world.init_resource::<crate::ui::NewProjectDialog>();
@@ -409,6 +437,11 @@ fn project_menu_pending_command_reaches_the_dispatcher() {
         load_error: None,
         selection: None,
     });
+    // UX-001：dirty 的 CloseProject 会被确认框守卫拦下——本测试的靶子是
+    // 「菜单队列命令到达分发器并执行 adopt」，故预置「不保存」的单次放行。
+    world
+        .resource_mut::<crate::ui_shell::close_confirm::CloseConfirm>()
+        .force_close = true;
     // 应用屏状态与加载排队（2026-10-22）：分发器签名新增的依赖。
     world.insert_resource(crate::app_screen::AppScreen {
         has_project: true,
@@ -527,7 +560,9 @@ fn new_map_is_blocked_until_a_project_is_open() {
 #[test]
 fn adopt_world_syncs_view_current_map_to_drill_current() {
     use bevy::ecs::system::RunSystemOnce;
-    let mut world = dispatcher_world(Some("D:/old/project"), true, CommandId::CloseProject);
+    // dirty=false：本测试的靶子是 adopt 的镜像同步，不是关闭确认（后者有
+    // 专门测试）。dirty=true 的执行路径见 force_close 放行测试。
+    let mut world = dispatcher_world(Some("D:/old/project"), false, CommandId::CloseProject);
     // 预置陈旧镜像：关闭工程后世界为空，正确的同步结果是把它清空。
     world.resource_mut::<ViewState>().current_map = "stale_map".into();
     world
