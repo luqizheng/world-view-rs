@@ -165,9 +165,16 @@ impl BlockFingerprint {
     }
 
     /// 总 hash：按块行序把块 hash 序贯 FNV-1a 折叠（`h = (h ^ bh) * PRIME`，
-    /// 起始 [`FNV_OFFSET`]）。
+    /// 起始 [`FNV_OFFSET`]），尾部再折入建缓存时的幅面（`grid_w` / `grid_h`，
+    /// 与 [`super::pack::pack_content_hash`] 同款收尾）。
     ///
-    /// **值域与旧 `pack_content_hash` 不可通约**（分块折叠 ≠ 全链折叠）——
+    /// 幅面必须参与折叠：≤256² 的**单块图**换幅面（同图换栅格 / RasterRef
+    /// 尺寸元数据改了而格子字节序列不变）时，行主序字节逐格相同 → 只折块
+    /// hash 会把「同字节不同形状」折成同一个 total——换幅面不重打、旧布局
+    /// 材质按新幅面拉伸上屏（task-3-review I-1；旧口径的形状敏感性由
+    /// `total_distinguishes_same_bytes_different_shapes` 钉住）。
+    ///
+    /// **值域与旧 `pack_content_hash` 仍不可通约**（分块折叠 ≠ 全链折叠）——
     /// 敏感性等价由模块文档的判据 ② 钉住；重打判据消费的是「变没变」，
     /// 不是具体值。
     pub fn total(&self) -> u64 {
@@ -176,7 +183,11 @@ impl BlockFingerprint {
             h ^= bh;
             h = h.wrapping_mul(FNV_PRIME);
         }
-        h
+        // 幅面折进尾部（同 `pack_content_hash` 的收尾形状）。
+        h ^= self.grid_w as u64;
+        h = h.wrapping_mul(FNV_PRIME);
+        h ^= (self.grid_h as u64) << 32;
+        h.wrapping_mul(FNV_PRIME)
     }
 }
 
@@ -528,6 +539,64 @@ mod tests {
         let c = fixture(600, 300);
         fp.update_region(&c, [0, 0, 4, 4]);
         assert_eq!(fp.total(), BlockFingerprint::new_full(&c).total());
+    }
+
+    // ══════ 形状敏感性（task-3-review I-1） ══════
+
+    /// 同一格字节序列、不同幅面 → total 必不相等（对照 `pack.rs` 既有测试
+    /// 「幅面折进指纹：同序列不同形状不得共享」的形态）。
+    ///
+    /// 触发面：≤256² 的**单块图**换幅面时行主序字节逐格相同（6×4 与 4×6 与
+    /// 8×3 读的是同一份 cells 序列），块 hash 逐位相同——`total()` 若不折幅面，
+    /// 三者共享指纹 ⇒ 换幅面不重打、旧布局材质拉伸上屏。幅面折尾后：
+    /// 形状不同 ⇒ total 必不同；同形状同数据 ⇒ total 逐位相等（确定性）；
+    /// 增量路径自愈重建后的 total 携带**新**幅面（与 new_full 一致）。
+    #[test]
+    fn total_distinguishes_same_bytes_different_shapes() {
+        let cells: Vec<TerrainCellData> = (0..24)
+            .map(|i| cell(100 + (i % 7) as i16, SURFACE_LAND, (i % 5) as u8))
+            .collect();
+        let wide = TerrainData {
+            width: 6,
+            height: 4,
+            cells: cells.clone(),
+        };
+        let tall = TerrainData {
+            width: 4,
+            height: 6,
+            cells: cells.clone(),
+        };
+        let squat = TerrainData {
+            width: 8,
+            height: 3,
+            cells,
+        };
+        // 三种幅面各自单块（≤256²），块 hash 逐位相同——区分只能来自幅面折尾。
+        let wide_total = BlockFingerprint::new_full(&wide).total();
+        assert_ne!(
+            wide_total,
+            BlockFingerprint::new_full(&tall).total(),
+            "6×4 与 4×6（同字节序列）不得共享指纹"
+        );
+        assert_ne!(
+            wide_total,
+            BlockFingerprint::new_full(&squat).total(),
+            "6×4 与 8×3（同字节序列）不得共享指纹"
+        );
+        // 同形状同数据 → 逐位相等（确定性）。
+        assert_eq!(
+            wide_total,
+            BlockFingerprint::new_full(&wide).total(),
+            "同形状同数据的两次全量建必须逐位相等"
+        );
+        // 增量路径：幅面不符自愈重建后，total 携带新幅面（与 new_full 一致）。
+        let mut fp = BlockFingerprint::new_full(&wide);
+        fp.update_region(&tall, [0, 0, 1, 1]);
+        assert_eq!(
+            fp.total(),
+            BlockFingerprint::new_full(&tall).total(),
+            "自愈重建后的 total 必须携带新幅面（与 new_full(tall) 一致）"
+        );
     }
 
     // ══════ 手动性能探针（不进门禁） ══════

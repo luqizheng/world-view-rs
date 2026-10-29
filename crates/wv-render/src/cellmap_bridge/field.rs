@@ -1024,26 +1024,38 @@ mod field_routing_tests {
 
     // ── 编辑帧分块指纹（ADR-0088 Task 3 / D3）：结构变更丢弃 + 编辑帧一致 ──
 
-    /// 场路由帧应建立分块指纹缓存，且 `total()` 与数据全量重建逐位一致。
+    /// 场路由帧应建立分块指纹缓存，且缓存的 total 具备确定性（同数据重建逐位
+    /// 相等）与敏感性（任一格改动即翻转）。
     #[test]
     fn field_fingerprint_is_established_on_first_routed_frame() {
         let mut world = routing_world(ViewMode::VectorFlat);
         run_routing(&mut world);
-        let fp = world
+        let fp_total = world
             .resource::<TerrainFieldRender>()
             .fingerprint
             .as_ref()
-            .expect("首个场路由帧应建立分块指纹缓存");
+            .expect("首个场路由帧应建立分块指纹缓存")
+            .total();
         let data = world
             .resource::<WorldProjection>()
             .world
             .terrain_of(&wv_core::Id::new_unchecked("map_world"))
             .expect("routing_world 已预植栅格")
             .clone();
+        // 原断言 `fp.total() == new_full(&data).total()` 因 fp 本就由
+        // new_full(data) 建立而恒真（task-3-review Minor ③）——改为钉两个
+        // 有信息量的方向：同数据重建的**确定性** + 异数据的**敏感性**。
         assert_eq!(
-            fp.total(),
+            fp_total,
             BlockFingerprint::new_full(&data).total(),
-            "首次帧的指纹应与数据的全量重建逐位一致"
+            "同数据两次全量建必须逐位相等（确定性）"
+        );
+        let mut other = data.clone();
+        other.cells[0].height = other.cells[0].height.wrapping_add(1);
+        assert_ne!(
+            fp_total,
+            BlockFingerprint::new_full(&other).total(),
+            "任一格改动必须翻转指纹（敏感性）"
         );
     }
 
