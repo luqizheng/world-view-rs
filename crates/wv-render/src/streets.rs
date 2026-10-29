@@ -888,7 +888,7 @@ mod tests {
                 outline_polygon: None,
                 trashed: false,
                 trashed_at: None,
-            comment: None,
+                comment: None,
             }],
             ..wv_core::World::default()
         };

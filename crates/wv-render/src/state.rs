@@ -1382,7 +1382,10 @@ mod tests {
     /// 快捷键与命令面板都按 `BROWSING.len()` 动态适配，2 档即终态。
     #[test]
     fn browsing_list_offers_vector_flat_and_google() {
-        assert_eq!(ViewMode::BROWSING, [ViewMode::VectorFlat, ViewMode::GoogleMap]);
+        assert_eq!(
+            ViewMode::BROWSING,
+            [ViewMode::VectorFlat, ViewMode::GoogleMap]
+        );
         assert!(!ViewMode::BROWSING.contains(&ViewMode::Faction));
         assert!(ViewMode::BROWSING.contains(&ViewMode::default()));
     }
