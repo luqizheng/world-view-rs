@@ -472,6 +472,18 @@ fn create_map(
     } else {
         dialog.level
     };
+    // **世界图预填海洋，非世界图不预填**（场景编辑器 M1，2026-10-29）。
+    //
+    // 「默认海洋」是 2026-10-16 用户对**世界图**的裁定——世界图该是海洋，
+    // 作者再自己生成大陆。对城市 / 地下城 / 区域图预填海洋是另一回事：
+    // ① 场景图的城市分区要刷在**自己的**基底网格上，预填的 -3500 m 深水
+    //    会让「刷分区」把格子从海底抬起来（虽然分区笔刷不改高度，但底图
+    //    本身是深海，视觉与语义都不对）；
+    // ② 场景图首次刷色时由 `CreateSceneBaseGridCommand` 自动铺基底，
+    //    作者不必先做一遍隐藏的技术准备；
+    // ③ 城市图「沿父链继承父图底图」是既有契约（`active_terrain`）——
+    //    不预填栅格，钻进去看到的是父图的地形，与父图一致。
+    let is_world = level == MapLevel::World;
     let node = MapNode {
         id: id.clone(),
         name,
@@ -486,20 +498,23 @@ fn create_map(
         time_span: None,
         unit_per_km: None,
         orientation: 0.0,
-        base: Some(dialog.prefill),
+        base: is_world.then_some(dialog.prefill),
         outline_polygon: None,
         ..Default::default()
     };
-    let w = dialog.grid_cells_w();
-    let h = dialog.grid_cells_h();
-    let terrain = TerrainData {
-        width: w,
-        height: h,
-        cells: vec![dialog.prefill.cell(); (w * h) as usize],
-    };
+    // 世界图预填栅格（海洋 / 陆地的底图态）；非世界图不预填（None = 沿用父图底图）。
+    let terrain = is_world.then(|| {
+        let w = dialog.grid_cells_w();
+        let h = dialog.grid_cells_h();
+        TerrainData {
+            width: w,
+            height: h,
+            cells: vec![dialog.prefill.cell(); (w * h) as usize],
+        }
+    });
 
     let mut tx = wv_edit::Transaction::new();
-    tx.push(Box::new(wv_edit::AddMapCommand::new(node, Some(terrain))));
+    tx.push(Box::new(wv_edit::AddMapCommand::new(node, terrain)));
     match edit.history.commit(&mut projection.world, tx) {
         Ok(dirty) => {
             edit.record_dirty(dirty.clone());
@@ -557,6 +572,81 @@ mod tests {
             "Ocean 单格高度必须 < 0（海平面 = 0），得 {}",
             MapBase::Ocean.cell().height
         );
+    }
+
+    /// 场景编辑器 M1：**非世界图不预填栅格**（城市 / 地下城 / 区域图）。
+    ///
+    /// 「默认海洋」是 2026-10-16 用户对**世界图**的裁定，不是对场景图的。
+    /// 场景图首次刷分区时由 `CreateSceneBaseGridCommand` 自动铺基底，
+    /// 不该让作者先做一遍隐藏的技术准备。
+    #[test]
+    fn non_world_dialog_omits_terrain_prefill() {
+        let mut projection = WorldProjection::default();
+        let root = Id::new_unchecked("map_root");
+        projection.world.maps.push(MapNode {
+            id: root.clone(),
+            name: "世界".into(),
+            level: MapLevel::World,
+            extent: Some(Extent::sized(512.0, 512.0)),
+            base: Some(MapBase::Ocean),
+            ..Default::default()
+        });
+        let mut drill = crate::state::DrillState::default();
+        drill.ensure_root(&projection.world);
+        let mut edit = crate::edit::editing::EditHistory::default();
+        let mut dialog = NewMapDialog {
+            open: true,
+            level: MapLevel::Interior,
+            ..Default::default()
+        };
+        let new_id = create_map(&mut dialog, &mut projection, &drill, &mut edit)
+            .expect("创建")
+            .0;
+        assert!(
+            projection.world.terrain_of(&new_id).is_none(),
+            "非世界图不该预填栅格（首次刷色时自动铺基底）"
+        );
+        let node = projection
+            .world
+            .maps
+            .iter()
+            .find(|m| m.id == new_id)
+            .expect("新图");
+        assert!(
+            node.base.is_none(),
+            "非世界图不该设底图锚点（否则橡皮会擦成海洋）"
+        );
+    }
+
+    /// 世界图**仍**预填海洋——2026-10-16 用户裁定不得回归。
+    #[test]
+    fn world_dialog_keeps_ocean_prefill_unchanged() {
+        let mut projection = WorldProjection::default();
+        let mut drill = crate::state::DrillState::default();
+        let mut edit = crate::edit::editing::EditHistory::default();
+        let mut dialog = NewMapDialog {
+            open: true,
+            level: MapLevel::World,
+            ..Default::default()
+        };
+        let new_id = create_map(&mut dialog, &mut projection, &drill, &mut edit)
+            .expect("创建")
+            .0;
+        let g = projection
+            .world
+            .terrain_of(&new_id)
+            .expect("世界图应预填栅格");
+        assert!(
+            g.cells.iter().all(|c| c.surface == wv_terrain::SURFACE_WATER && c.height == -3500),
+            "默认海洋裁定不得回归"
+        );
+        let node = projection
+            .world
+            .maps
+            .iter()
+            .find(|m| m.id == new_id)
+            .expect("新图");
+        assert_eq!(node.base, Some(MapBase::Ocean), "世界图保留底图锚点");
     }
 
     /// 新建地图并钻入后，底图纹理必须换成新图（旧图不得留在主画面）。
