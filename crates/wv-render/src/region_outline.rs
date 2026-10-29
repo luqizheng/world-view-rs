@@ -29,6 +29,7 @@
 
 #![cfg(feature = "app")]
 
+use crate::fp::grid_bits;
 use bevy::prelude::*;
 
 use wv_core::model::region::Region;
@@ -522,19 +523,6 @@ pub fn sync_region_outlines(
         input.ring.as_deref(),
         &mut pool,
     );
-}
-
-/// `GridConfig` 的身份位模式（视空间坐标的全部输入）。
-fn grid_bits(grid: &GridConfig) -> [u64; 7] {
-    [
-        u64::from(grid.cell_size.to_bits()),
-        u64::from(grid.raster_origin.x.to_bits()),
-        u64::from(grid.raster_origin.y.to_bits()),
-        u64::from(grid.map_origin.x.to_bits()),
-        u64::from(grid.map_origin.y.to_bits()),
-        u64::from(grid.map_size.x.to_bits()),
-        u64::from(grid.map_size.y.to_bits()),
-    ]
 }
 
 /// 区域多边形集合的内容指纹（外环 + 洞环的裸 `f32::to_bits`，**不分配**）。

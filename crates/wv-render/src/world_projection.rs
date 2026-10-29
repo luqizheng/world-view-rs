@@ -18,6 +18,7 @@
 //! - `apply_projection_refresh` — 每帧把 `ProjectionFrame` 推给渲染系统。
 //! - `PlaceDot` / `PlaceDotKind` — POI 红点组件（含可见性标记）。
 
+use crate::fp::grid_bits;
 use bevy::prelude::*;
 
 use std::collections::HashMap;
@@ -881,19 +882,6 @@ impl AnchorKey {
             origin: [u64::from(origin.x.to_bits()), u64::from(origin.y.to_bits())],
         }
     }
-}
-
-/// `GridConfig` 的身份位模式。
-fn grid_bits(grid: &GridConfig) -> [u64; 7] {
-    [
-        u64::from(grid.cell_size.to_bits()),
-        u64::from(grid.raster_origin.x.to_bits()),
-        u64::from(grid.raster_origin.y.to_bits()),
-        u64::from(grid.map_origin.x.to_bits()),
-        u64::from(grid.map_origin.y.to_bits()),
-        u64::from(grid.map_size.x.to_bits()),
-        u64::from(grid.map_size.y.to_bits()),
-    ]
 }
 
 /// 多边形顶点（扁平 `[x, y, …]`，图内局部 wu）的位模式指纹。

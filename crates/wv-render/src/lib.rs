@@ -54,11 +54,12 @@ pub use wv_world_cell_map::{biome_boundary, cell_selection, region_overlay, terr
 pub mod drill;
 #[cfg(feature = "app")]
 pub mod editing_bridge;
-#[cfg(feature = "app")]
 pub mod faction_overlays;
 pub mod faction_partition;
 #[cfg(feature = "app")]
 pub mod feature_overlays;
+#[cfg(feature = "app")]
+mod fp;
 #[cfg(feature = "app")]
 pub mod label_collision;
 #[cfg(feature = "app")]

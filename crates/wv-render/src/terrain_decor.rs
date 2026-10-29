@@ -22,6 +22,7 @@
 
 #![cfg(feature = "app")]
 
+use crate::fp::splitmix64;
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::mesh::Mesh;
@@ -193,14 +194,6 @@ impl DecorBand {
             DecorBand::Edit => recipe.size_mul_edit,
         }
     }
-}
-
-/// splitmix64（与 `theme::overlays` 同族）：落点抖动 / 变体选择的确定性来源。
-fn splitmix64(state: u64) -> u64 {
-    let mut z = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
 }
 
 fn hash01(x: i64, y: i64, seed: u64) -> f32 {

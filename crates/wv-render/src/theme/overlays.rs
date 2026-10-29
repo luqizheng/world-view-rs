@@ -11,6 +11,7 @@
 
 #![cfg(feature = "app")]
 
+use crate::fp::splitmix64;
 use wv_core::geometry::point_in_ring;
 use wv_core::terrain::{TerrainCellData, TerrainData};
 
@@ -169,16 +170,6 @@ fn cell_at(
 /// 32 位无符号整数 → `[-1, 1]` 的确定性有符号单位值（抖动分量）。
 fn signed_unit(bits: u32) -> f32 {
     bits as f32 / u32::MAX as f32 * 2.0 - 1.0
-}
-
-/// splitmix64（Steele / Lea / Flood）—— 一次性雪崩哈希，作确定性抖动的唯一
-/// 熵源。**不引入 `rand`**：跨进程 / 跨平台结果只由 `seed` 与格坐标决定，
-/// 重开工程树冠布局不跳变。
-fn splitmix64(state: u64) -> u64 {
-    let mut z = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
 }
 
 #[cfg(test)]
