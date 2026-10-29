@@ -472,7 +472,7 @@ impl Place {
         let (mut sx, mut sy) = (0.0_f32, 0.0_f32);
         let (mut min_x, mut min_y) = (f32::INFINITY, f32::INFINITY);
         let (mut max_x, mut max_y) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
-        for pair in ring.chunks_exact(2) {
+        for pair in ring.as_chunks::<2>().0 {
             let (px, py) = (pair[0], pair[1]);
             sx += px;
             sy += py;
