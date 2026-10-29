@@ -102,6 +102,13 @@ pub struct PaletteColors {
     pub core: [Color; 10],
     /// 逐格技术色：色块 / 编辑视图用的「一格一色」对照色（同索引语义）。
     pub kind_core: [Color; 10],
+    /// 场景分区色：索引即 `wv_terrain::biome::district_index` 的返回值（21..=32 → 0..=11）。
+    ///
+    /// **为什么旁挂而不扩 `core`**：`core` 的十槽是「群系 → 旧槽位」投影的
+    /// 目标空间，槽位语义被 `shade_google` 折叠规则 / `is_boundary` 边界判定
+    /// / tile atlas 三处共同依赖，扩槽位会连带炸这三处。分区色按 biome
+    /// 编号直查、不经投影，故独立成表。
+    pub district: [Color; 12],
     /// 底图淡化保留比例（混合公式见 [`Self::soften_color`]）。
     pub soften_keep: f32,
     /// 底图淡化目标色（= 该主题的纸面色）。
@@ -220,6 +227,7 @@ impl PaletteColors {
     pub const DEFAULT: PaletteColors = PaletteColors {
         core: super::colors_google::GOOGLE_CORE_TERRAIN,
         kind_core: colors::CORE_TERRAIN,
+        district: colors::DISTRICT_COLORS,
         soften_keep: super::colors_google::GOOGLE_SOFTEN_KEEP,
         soften_toward: super::colors_google::GOOGLE_PAPER,
         poi_dot: super::colors_google::GOOGLE_PLACE_DOT,
@@ -320,6 +328,28 @@ mod tests {
                     p.kind_core[i], p.kind_core[j],
                     "逐格技术色槽 {i} 与 {j} 必须不同（色块视图靠差异读地形）"
                 );
+            }
+        }
+    }
+
+    /// 场景分区色板：12 槽对应分区保留带 21..=32。
+    ///
+    /// 为什么旁挂一张表而不扩 `core`：`core` / `kind_core` 的十槽空间已被
+    /// 「群系 → 旧调色板槽位」投影占满，槽位语义被 `shade_google` 折叠规则、
+    /// `is_boundary` 边界判定、tile atlas 三处共同依赖——扩槽位会连带炸这三处。
+    #[test]
+    fn district_palette_has_one_slot_per_district() {
+        let p = PaletteColors::DEFAULT;
+        assert_eq!(p.district.len(), 12, "分区色板须与分区带等长");
+        // 不得落进 `core[8]`（沼泽）——那是越界回退色，落进去等于分区没色。
+        let fallback = p.core[8];
+        for (i, c) in p.district.iter().enumerate() {
+            assert_ne!(*c, fallback, "分区色槽 {i} 落进回退色");
+        }
+        // 分区之间必须彼此可辨——作者靠色差读分区。
+        for i in 0..p.district.len() {
+            for j in (i + 1)..p.district.len() {
+                assert_ne!(p.district[i], p.district[j], "分区色槽 {i} 与 {j} 必须不同");
             }
         }
     }
