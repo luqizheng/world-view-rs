@@ -14,6 +14,7 @@
 #   http-clippy 全部等价复刻；
 # - 测试执行器用 cargo-nextest（2026-10-29）：跨测试二进制全局并行调度，
 #   运行期快于逐二进制串行的 cargo test；本地 scripts/cargo-test.sh 同轨。
+#   0.9.x 默认遇失败提前收工（漏报后续失败），故一律显式 --no-fail-fast。
 #   偏差：nextest 不跑 doctest——workspace 测试步骤在 nextest 之后补
 #   `cargo test --workspace --doc` 保持与旧门禁等价（当前全工作区仅 1 条
 #   可执行 doctest：wv-ui widgets/color_picker 的 no_run 示例，2026-10-29
@@ -99,7 +100,7 @@ jobs:
 
       - name: cargo nextest run --workspace (+ doctest)
         run: |
-          cargo nextest run --workspace
+          cargo nextest run --workspace --no-fail-fast
           cargo test --workspace --doc
 
       - name: cargo clippy --workspace
@@ -108,8 +109,8 @@ jobs:
       # ── 渲染层双闸（feature 门后，基础命令编译不到）──
       - name: wv-render / wv-app tests (features app)
         run: |
-          cargo nextest run -p wv-render --features app
-          cargo nextest run -p wv-app --features app
+          cargo nextest run -p wv-render --features app --no-fail-fast
+          cargo nextest run -p wv-app --features app --no-fail-fast
 
       - name: app-clippy
         run: cargo clippy -p wv-app --all-targets --features app -- -D warnings
@@ -117,7 +118,7 @@ jobs:
       # ── HTTP/MCP 双闸（ADR-0014）──
       - name: http tests + clippy (features http)
         run: |
-          cargo nextest run -p wv-app --features http
+          cargo nextest run -p wv-app --features http --no-fail-fast
           cargo clippy -p wv-app --all-targets --features http -- -D warnings
 
       - name: sccache stats

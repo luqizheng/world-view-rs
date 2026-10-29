@@ -26,7 +26,9 @@
 # ## 2026-10-29 追记：执行器 cargo test → cargo nextest
 # cargo test 逐个测试二进制**串行**执行；nextest 用全局并行池跨测试二进制
 # 调度，对本仓库多测试目标形态（wv-io 一家 50+ 条集成测试）运行期提速
-# 明显，且天然「不 fail-fast」（等价旧别名里的 --no-fail-fast）。
+# 明显。注意：nextest 0.9.x **默认遇失败提前收工**（2026-10-29 实测 2 条
+# 失败即跳过 829 条未跑），全量模式显式带 --no-fail-fast 才能一次报全
+# 所有失败——门禁要的是完整失败清单，不是最快失败。
 # 与 cargo test 的两处偏差：
 #   1. nextest 不跑 doctest——全量模式（无参数）会在 nextest 之后自动补
 #      `cargo test --workspace --doc`；带过滤参数的内环用法不跑 doc。
@@ -58,8 +60,9 @@ export TMP="$tmp_win"
 
 cd "$repo_root" || exit 1
 if [ "$#" -eq 0 ]; then
-  # 全量模式：nextest 跑全部测试二进制，随后补 doctest（nextest 不覆盖）。
-  cargo nextest run --workspace && cargo test --workspace --doc
+  # 全量模式：nextest 跑全部测试二进制（--no-fail-fast 报全失败清单），
+  # 随后补 doctest（nextest 不覆盖）。
+  cargo nextest run --workspace --no-fail-fast && cargo test --workspace --doc
   exit $?
 fi
 exec cargo nextest run "$@"
