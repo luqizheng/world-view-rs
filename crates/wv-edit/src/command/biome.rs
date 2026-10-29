@@ -243,7 +243,13 @@ fn envelope_points(flat: &[f32]) -> Option<Vec<(f32, f32)>> {
     if flat.len() < 6 || !flat.len().is_multiple_of(2) {
         return None;
     }
-    Some(flat.chunks_exact(2).map(|c| (c[0], c[1])).collect())
+    Some(
+        flat.as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| (c[0], c[1]))
+            .collect(),
+    )
 }
 
 impl EditCommand for RegenerateBiomeMarkerCommand {

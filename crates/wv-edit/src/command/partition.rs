@@ -364,7 +364,13 @@ impl CutPartitionFaceCommand {
         if self.stroke.len() < 4 {
             return Err(EditError::Precondition("笔画至少两点".into()));
         }
-        let pts: Vec<(f32, f32)> = self.stroke.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+        let pts: Vec<(f32, f32)> = self
+            .stroke
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| (c[0], c[1]))
+            .collect();
         // 两级吸附：① 严格（snap_tol 内）直接用；② 失败则**投影**到最近的
         // 边界边（上限 snap_tol×20 = 调用方 4px 时的 80px）——切割工具的
         // 标准交互：作者画「从边到边」的意图线，端点不必精确压线。
@@ -503,8 +509,13 @@ impl EditCommand for CutPartitionFaceCommand {
         let near = |a: (f32, f32), b: (f32, f32)| -> bool {
             (a.0 - b.0).powi(2) + (a.1 - b.1).powi(2) < 1e-6
         };
-        let stroke_pts: Vec<(f32, f32)> =
-            self.stroke.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+        let stroke_pts: Vec<(f32, f32)> = self
+            .stroke
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| (c[0], c[1]))
+            .collect();
         let mut interior: Vec<u32> = Vec::new();
         if stroke_pts.len() > 2 {
             let (end_xy, mut last_xy) = (find_xy(v_end), find_xy(v_start));

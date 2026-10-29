@@ -280,18 +280,18 @@ impl EditCommand for MoveCityCommand {
         if let Some(poly) = node.outline_polygon.as_mut() {
             match poly {
                 GeometryData::Polygon(v) => {
-                    for chunk in v.chunks_exact_mut(2) {
+                    for chunk in v.as_chunks_mut::<2>().0 {
                         chunk[0] += self.delta.x;
                         chunk[1] += self.delta.y;
                     }
                 }
                 GeometryData::PolygonWithHoles { outer, holes } => {
-                    for chunk in outer.chunks_exact_mut(2) {
+                    for chunk in outer.as_chunks_mut::<2>().0 {
                         chunk[0] += self.delta.x;
                         chunk[1] += self.delta.y;
                     }
                     for hole in holes {
-                        for chunk in hole.chunks_exact_mut(2) {
+                        for chunk in hole.as_chunks_mut::<2>().0 {
                             chunk[0] += self.delta.x;
                             chunk[1] += self.delta.y;
                         }
@@ -1060,7 +1060,7 @@ impl EditCommand for PasteMapCommand {
         {
             let mut np = p.clone();
             np.id = fresh_suffixed_id(p.id.as_str(), &mut place_reserved);
-            np.map = p.map.as_ref().map(&remap_map);
+            np.map = p.map.as_ref().map(remap_map);
             place_map.insert(p.id.clone(), np.id.clone());
             place_ids.push(np.id.clone());
             new_places.push(np);

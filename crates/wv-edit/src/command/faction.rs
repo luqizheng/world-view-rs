@@ -893,7 +893,11 @@ fn divide_edit_error(e: wv_terrain::divide::DivideError) -> EditError {
 }
 
 fn flat_to_pts(flat: &[f32]) -> Vec<(f32, f32)> {
-    flat.chunks_exact(2).map(|c| (c[0], c[1])).collect()
+    flat.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| (c[0], c[1]))
+        .collect()
 }
 
 /// 扁平点列的环（wu）。
