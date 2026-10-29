@@ -15,6 +15,20 @@ description = "World View 应用层：Bevy 渲染、UI、输入，转发编辑�
 default = []
 app = ["wv-render/app", "dep:bevy", "dep:bevy_egui", "dep:egui_extras", "dep:rfd", "dep:icu_provider"]
 http = ["app", "dep:axum", "dep:tokio", "dep:async-trait", "dep:base64"]
+# bevy 动态链接（2026-10-29 用户提速提案，**严格 dev-only**）：
+# `cargo build -p wv-app --features dev-dynamic` 把 bevy 编成 dylib，
+# 最终 wv.exe 只链工作区代码——链接时间大幅下降（bevy 树占链接输入的大头）。
+# feature 统一（Cargo 语义）让整个依赖图的 bevy 都走 dylib，无需四个
+# bevy 消费 crate 各自透传。
+#
+# ⚠️ 三条使用纪律：
+# 1. **切换 = 一次全量重编**（feature 集变化改变全部指纹，实测量级 ~50min，
+#    同换 linker）。选定一种模式就固定用；别在 static/dynamic 间反复横跳。
+# 2. **测试与发布保持静态**：门禁命令（app-test / app-clippy）不带本 feature，
+#    `--release` 也不带——dynamic 只用于日常 `wv gui` 迭代。
+# 3. 运行需 DLL 在 exe 旁（cargo 自动落位 `target/debug/bevy_dylib…`），
+#    用 `cargo run` 启动即可；直接双击 exe 前先确认 DLL 就位。
+dev-dynamic = ["app", "bevy/dynamic_linking"]
 
 # dev-only：axum `Router::oneshot` 走 `tower::ServiceExt`，与 `body::to_bytes`、
 # `Body::from` 配对做端到端 smoke（HTTP 测试模块 `server.rs`）。
