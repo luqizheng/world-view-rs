@@ -323,6 +323,14 @@ impl World {
         self.terrains.insert(map, data)
     }
 
+    /// 移除某张图的地形栅格，返回被移除的旧值（本来没有则 `None`）。
+    ///
+    /// 撤销路径用：场景基底网格这类「由命令新建」的栅格，revert 时要能把
+    /// 图恢复到「本来就没有栅格」的状态——只写不删会留下一张空壳图。
+    pub fn remove_terrain(&mut self, map: &Id) -> Option<terrain::TerrainData> {
+        self.terrains.remove(map)
+    }
+
     /// 取某个街道图层的文档（未加载/未声明则 `None`）。
     pub fn street_of(&self, layer: &Id) -> Option<&source::street::StreetLayer> {
         self.streets.get(layer)

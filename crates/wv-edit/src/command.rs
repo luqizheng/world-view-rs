@@ -26,6 +26,7 @@ mod measurement;
 mod overlay;
 mod partition;
 mod region;
+mod scene;
 mod settlement;
 mod terrain;
 pub use attribute::*;
@@ -38,6 +39,7 @@ pub use measurement::*;
 pub use overlay::*;
 pub use partition::*;
 pub use region::*;
+pub use scene::*;
 pub use settlement::*;
 pub use terrain::*;
 
@@ -135,6 +137,9 @@ pub enum EditError {
 
     #[error("地形网格不存在或尺寸不符: {0}")]
     TerrainMismatch(String),
+
+    #[error("地形网格已存在: {0}")]
+    SceneGridExists(String),
 }
 
 /// 编辑命令 trait。
