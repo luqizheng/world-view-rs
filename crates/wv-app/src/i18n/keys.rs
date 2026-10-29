@@ -923,8 +923,12 @@ pub enum I18nKey {
     NoticeRecentsChanged,
     /// 「已关闭工程」整段
     NoticeProjectClosed,
-    /// 「导出尚未实现：需要先定导出格式（PNG / SVG），见 v0.2 §G」整段
-    NoticeExportPending,
+    /// 「导出中（重复 Ctrl+E）」提示（UX-003：导出已实现，原 Pending 键退役）
+    NoticeExportBusy,
+    /// 「已导出 PNG 」前缀（后接路径，UX-003）
+    NoticeExportSavedPrefix,
+    /// 「导出失败：」前缀（UX-003）
+    NoticeExportFailedPrefix,
     /// 「项目设置面板待 v0.3」整段
     NoticeSettingsPendingV03,
     /// 「已在世界地图，无法再钻出」整段
@@ -1432,7 +1436,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 591] = [
+    pub const ALL: [I18nKey; 593] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1873,7 +1877,9 @@ impl I18nKey {
         I18nKey::NoticeNoProjectNeed,
         I18nKey::NoticeRecentsChanged,
         I18nKey::NoticeProjectClosed,
-        I18nKey::NoticeExportPending,
+        I18nKey::NoticeExportBusy,
+        I18nKey::NoticeExportSavedPrefix,
+        I18nKey::NoticeExportFailedPrefix,
         I18nKey::NoticeSettingsPendingV03,
         I18nKey::NoticeAlreadyWorldMap,
         I18nKey::NoticeAlreadyAtLevel,

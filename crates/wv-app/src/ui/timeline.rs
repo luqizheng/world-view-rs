@@ -34,7 +34,6 @@
 //! | `.timeline-track` 10% 竖网格 | [`timeline_track`] 首段循环 |
 //! | `.years{height:26px;border-bottom}` | [`YEARS_ROW_H`] |
 //! | `.event-block{top:38px;height:20px;padding:3px 7px}` | [`BLOCK_TOP`] / [`BLOCK_H`] / [`BLOCK_PAD_X`] |
-//! | `.event-dot{top:69px;8px + 25% 光环}` | [`DOT_TOP`] / `DOT_R` |
 //! | `.playhead{top:22px}` + 下三角 + `top:72px` 药丸 | [`PLAYHEAD_TOP`] / [`PLAYHEAD_LABEL_TOP`] |
 //!
 //! ## 边界（不做什么）
@@ -86,8 +85,7 @@ const BLOCK_H: f32 = 20.0;
 const BLOCK_PAD_X: f32 = 7.0;
 /// 真实事态多行堆叠的行距。
 const BLOCK_ROW_GAP: f32 = 6.0;
-/// 事件点顶距（web `.event-dot{top:69px}`；圆直径 8 → 半径 4）。
-const DOT_TOP: f32 = 69.0;
+/// 播放头药丸半径（web `span` 药丸的圆角当量；线本身 1px）。
 const DOT_R: f32 = 4.0;
 /// 播放头线顶与药丸顶（web `.playhead{top:22px}` / `span{top:72px}`，均相对轨道顶）。
 const PLAYHEAD_TOP: f32 = 22.0;
@@ -101,23 +99,6 @@ const COMPACT_H: f32 = 44.0;
 
 /// 播放速率三档（基线 §1.8）。
 const SPEED_STEPS: [f32; 3] = [1.0, 5.0, 30.0];
-
-/// 季节段文案（Figma mock，逐字保留；M2 接 `Calendar` 后按 range 派生）。
-const YEAR_SEGMENTS: [&str; 4] = [
-    "Y213 · Winter",
-    "Y214 · Spring",
-    "Y214 · Summer",
-    "Y214 · Autumn",
-];
-
-/// 无真实事态时的两块 mock（web `App.tsx` `.event-a/.event-b`；M3 接真实数据后删除）。
-/// 元组 =（起点 frac，宽度 frac，标题，语义色）。
-const MOCK_BLOCKS: [(f32, f32, &str, BadgeTone); 2] = [
-    (0.12, 0.25, "Border dispute", BadgeTone::Warn),
-    (0.57, 0.16, "Market opens", BadgeTone::Event),
-];
-/// 事件点横位置（web `.event-dot{left:45%}`）。
-const MOCK_DOT_AT: f32 = 0.45;
 
 /// 时间轴轨道层。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -553,10 +534,14 @@ fn date_block(
     loc: Locale,
 ) {
     let main = ui_time::current_date(projection, playback, loc);
+    // UX-011：季节从历法真实月份派生（此前 90 天等分是 mock，与真实历法月份错位）。
     let sub = format!(
         "Day {} · {}",
         playback.current_day,
-        season_of_day(playback.current_day)
+        season_of_day(
+            crate::ui_time::calendar_of(projection),
+            playback.current_day
+        )
     );
     let painter = ui.painter();
     let g_main = painter.layout_no_wrap(main, proportional(shell.scale.small), shell.t1());
@@ -695,16 +680,20 @@ fn timeline_track(
         );
     }
 
-    // ── 年份行（web `.years`：26px、四段均分、底线；文字是 Figma mock）──
-    let seg_w = rect.width() / YEAR_SEGMENTS.len() as f32;
-    for (i, s) in YEAR_SEGMENTS.iter().enumerate() {
+    // ── 年份行（web `.years`：26px + 底线）──
+    // UX-011：刻度按播放区间与历法**真实派生**（此前是 Y213·Winter 等 Figma
+    // mock 串，与「无仙 1 年」的真实日期同屏自相矛盾）。
+    let years = year_segments(
+        playback.range_from,
+        playback.range_to,
+        crate::ui_time::calendar_of(projection),
+        loc,
+    );
+    for (label, frac) in &years {
         painter.text(
-            egui::pos2(
-                rect.min.x + seg_w * (i as f32 + 0.5),
-                rect.min.y + YEARS_ROW_H / 2.0,
-            ),
+            egui::pos2(x_at(*frac), rect.min.y + YEARS_ROW_H / 2.0),
             egui::Align2::CENTER_CENTER,
-            *s,
+            label,
             proportional(shell.scale.micro),
             shell.t3(),
         );
@@ -736,22 +725,23 @@ fn timeline_track(
         TimelineLayer::Situation => {
             let block_y = rect.min.y + BLOCK_TOP;
             if projection.world.situations.is_empty() {
-                // Figma mock（web `App.tsx` `.event-a/.event-b/.event-dot`）。
-                for (start, width, name, tone) in MOCK_BLOCKS {
-                    event_block(
-                        &painter,
-                        shell,
-                        x_at(start),
-                        x_at(start + width),
-                        block_y,
-                        name,
-                        tone,
-                    );
-                }
-                let dot = shell.palette.badge(BadgeTone::Event).fill;
-                let dot_p = egui::pos2(x_at(MOCK_DOT_AT), rect.min.y + DOT_TOP + DOT_R);
-                painter.circle_filled(dot_p, DOT_R + 3.0, color32_alpha(dot, 0.25));
-                painter.circle_filled(dot_p, DOT_R, color32(dot));
+                // UX-011：空态引导替代 Figma mock（此前画假块，作者会当成
+                // 真实数据做创作决策）。
+                let cx = rect.center();
+                painter.text(
+                    egui::pos2(cx.x, cx.y - 8.0),
+                    egui::Align2::CENTER_CENTER,
+                    t(loc, I18nKey::SituationPanelEmptyTitle),
+                    proportional(shell.scale.small),
+                    shell.t2(),
+                );
+                painter.text(
+                    egui::pos2(cx.x, cx.y + 12.0),
+                    egui::Align2::CENTER_CENTER,
+                    t(loc, I18nKey::SituationPanelEmptyHint),
+                    proportional(shell.scale.micro),
+                    shell.t3(),
+                );
             } else {
                 // 真实事态：与 mock 同一视觉语言（Event 语义色），按 span 定位、逐行堆叠。
                 for (i, s) in projection.world.situations.iter().enumerate() {
@@ -865,6 +855,52 @@ fn day_to_frac(day: i64, from: i64, to: i64) -> f32 {
     ((day - from) as f32 / span).clamp(0.0, 1.0)
 }
 
+/// UX-011：年份行刻度——按播放区间与历法**真实派生**。
+///
+/// 返回 `(标签, 区间内中点 frac)`。有历法时逐「年」出段（年首日经
+/// `Calendar::to_day` 求逆，跨年段与区间端点取交）；年份多于 10 个时按
+/// 步长抽稀（`ceil(n/10)`），保证 26px 行内放得下。无历法回退四等分
+/// 「第 N 天」标签（与 `Calendar::format` 的无历法输出同语言）。
+///
+/// 纯函数：单测钉住「简单历法跨 2 年出 2 段 / 抽稀 / 无历法回退」三个面。
+fn year_segments(
+    from: i64,
+    to: i64,
+    calendar: Option<&wv_core::Calendar>,
+    locale: Locale,
+) -> Vec<(String, f32)> {
+    let span = (to - from).max(1);
+    let Some(cal) = calendar else {
+        return [0.125_f32, 0.375, 0.625, 0.875]
+            .iter()
+            .map(|f| {
+                let day = from + (span as f32 * f) as i64;
+                (ui_time::format_date(day, locale), *f)
+            })
+            .collect();
+    };
+    let y0 = cal.to_ymd(from).0;
+    let y1 = cal.to_ymd((to - 1).max(from)).0;
+    let years = (y1 - y0 + 1).max(1);
+    let step = (((years as f32) / 10.0).ceil() as i32).max(1);
+    let mut out = Vec::new();
+    for y in (y0..=y1).step_by(step as usize) {
+        let d_start = cal.to_day(y, 1, 1).unwrap_or(from).max(from);
+        let d_end = cal.to_day(y + 1, 1, 1).unwrap_or(to).min(to);
+        if d_end <= d_start {
+            continue;
+        }
+        let mid = (d_start + d_end) as f32 / 2.0;
+        let frac = ((mid - from as f32) / span as f32).clamp(0.0, 1.0);
+        let label = match &cal.prefix {
+            Some(p) if !p.is_empty() => format!("{p} {y} 年"),
+            _ => format!("{y}"),
+        };
+        out.push((label, frac));
+    }
+    out
+}
+
 /// 播放头药丸的横向中心：默认与线同 x，贴近两端时整体夹进轨道内。
 ///
 /// web 的 day 从 1 起、播放头永远到不了 0%（药丸不会出界）；本应用
@@ -873,14 +909,21 @@ fn pill_center_x(line_x: f32, pill_w: f32, track_min_x: f32, track_max_x: f32) -
     line_x.clamp(track_min_x + pill_w / 2.0, track_max_x - pill_w / 2.0)
 }
 
-/// `Day N · 季节` 的次行 mock（v0.3 占位）；M2 接 `wv_core::Calendar` 后替换。
-fn season_of_day(day: i64) -> &'static str {
-    // 90 天一个季节，从 1 起的 day index 决定。
-    let bucket = (day - 1).rem_euclid(360) / 90;
-    match bucket {
-        0 => "Early Spring",
-        1 => "Summer",
-        2 => "Autumn",
+/// `Day N · 季节` 的季节段（UX-011：从历法**真实月份**派生——此前 90 天
+/// 等分是 mock，与历法月长/闰月都错位）。月份取 `Calendar::to_ymd`；
+/// 无历法回退按 360 天整除历法的月份（等价于 Simple 缺省口径）。
+fn season_of_day(calendar: Option<&wv_core::Calendar>, day: i64) -> &'static str {
+    let month = match calendar {
+        Some(cal) => cal.to_ymd(day).1,
+        None => {
+            let n = (day - 1).max(0);
+            n % 360 / 30 + 1
+        }
+    };
+    match month {
+        3..=5 => "Spring",
+        6..=8 => "Summer",
+        9..=11 => "Autumn",
         _ => "Winter",
     }
 }
@@ -953,18 +996,68 @@ mod tests {
         assert!(f.is_finite(), "degenerate range must stay finite, got {f}");
     }
 
-    /// 季节划分的边界（90 天一格，360 天回卷）。
+    /// 季节划分（UX-011）：按历法真实月份——3-5 春 / 6-8 夏 / 9-11 秋 / 其余冬；
+    /// 无历法回退 360 天整除历法的月份口径。
     #[test]
-    fn season_of_day_spans_ninety_day_buckets() {
-        assert_eq!(season_of_day(1), "Early Spring", "day 1");
-        assert_eq!(season_of_day(90), "Early Spring", "last day of bucket 0");
-        assert_eq!(season_of_day(91), "Summer", "first day of bucket 1");
-        assert_eq!(season_of_day(180), "Summer");
-        assert_eq!(season_of_day(181), "Autumn");
-        assert_eq!(season_of_day(270), "Autumn");
-        assert_eq!(season_of_day(271), "Winter");
-        assert_eq!(season_of_day(360), "Winter");
-        assert_eq!(season_of_day(361), "Early Spring", "wraps into next year");
+    fn season_of_day_follows_calendar_months() {
+        let cal = wv_core::Calendar::default();
+        // Simple 缺省：360 天/年、30 天/月 → 月 = ((day-1)%360)/30+1。
+        assert_eq!(season_of_day(Some(&cal), 1), "Winter", "day 1 = 1 月");
+        assert_eq!(season_of_day(Some(&cal), 31), "Winter", "day 31 = 2 月");
+        assert_eq!(season_of_day(Some(&cal), 61), "Spring", "day 61 = 3 月");
+        assert_eq!(season_of_day(Some(&cal), 149), "Spring", "day 149 = 5 月");
+        assert_eq!(
+            season_of_day(Some(&cal), 150),
+            "Spring",
+            "day 150 = 5 月（n=149）"
+        );
+        assert_eq!(
+            season_of_day(Some(&cal), 151),
+            "Summer",
+            "day 151 = 6 月（n=150）"
+        );
+        assert_eq!(season_of_day(Some(&cal), 181), "Summer", "day 181 = 6 月");
+        assert_eq!(season_of_day(Some(&cal), 271), "Autumn", "day 271 = 9 月");
+        assert_eq!(season_of_day(Some(&cal), 331), "Winter", "day 331 = 11 月");
+        // 无历法回退 = 同一 Simple 缺省口径。
+        assert_eq!(season_of_day(None, 61), season_of_day(Some(&cal), 61));
+    }
+
+    /// 年份行刻度（UX-011）：按区间与历法真实派生。
+    #[test]
+    fn year_segments_derive_from_calendar_and_thin_out() {
+        use crate::i18n::Locale;
+        let cal = wv_core::Calendar::default();
+        // 跨 2 个历年（Simple：360 天/年，start_year 缺省 1）：360+1 天跨 Y1..Y2。
+        let segs = year_segments(1, 362, Some(&cal), Locale::Zh);
+        assert_eq!(segs.len(), 2, "跨 2 年应出 2 段，got {segs:?}");
+        assert!(
+            segs[0].0.contains('1') && segs[1].0.contains('2'),
+            "标签含真实年号 {segs:?}"
+        );
+        // 第二段中点落在区间后半（frac > 0.5）。
+        assert!(
+            segs[1].1 > 0.5,
+            "第二段中点应在区间后半，got {:?}",
+            segs[1].1
+        );
+        // 区间内同一年 → 1 段。
+        let segs1 = year_segments(1, 180, Some(&cal), Locale::Zh);
+        assert_eq!(segs1.len(), 1, "同年区间应出 1 段");
+        // 抽稀：300 年跨度的 301 个段被压到 ≤10。
+        let segs_many = year_segments(1, 360 * 300 + 1, Some(&cal), Locale::Zh);
+        assert!(
+            segs_many.len() <= 10,
+            "抽稀后 ≤10 段，got {}",
+            segs_many.len()
+        );
+        // 无历法回退：4 段天数值标签。
+        let segs_plain = year_segments(1, 100, None, Locale::Zh);
+        assert_eq!(segs_plain.len(), 4, "无历法回退 4 段");
+        assert!(
+            segs_plain[0].0.starts_with("第"),
+            "回退标签应是「第 N 天」口径"
+        );
     }
 
     /// 层名走 i18n 查表：zh / en 两表都得有值。
@@ -983,21 +1076,6 @@ mod tests {
         assert_eq!(TimelineLayer::Situation.chip_tone(), BadgeTone::Warn);
         assert_eq!(TimelineLayer::Character.chip_tone(), BadgeTone::Event);
         assert_eq!(TimelineLayer::Century.chip_tone(), BadgeTone::Neutral);
-    }
-
-    /// mock 事件块必须完整落在轨道内（web `.event-a{left:12%;width:25%}` 等）。
-    #[test]
-    fn mock_blocks_sit_inside_track_bounds() {
-        for (start, width, name, _) in MOCK_BLOCKS {
-            assert!(
-                start >= 0.0 && start + width <= 1.0,
-                "mock block {name} out of track: {start}+{width}"
-            );
-        }
-        assert!(
-            (0.0..=1.0).contains(&MOCK_DOT_AT),
-            "dot at {MOCK_DOT_AT} outside track"
-        );
     }
 
     /// 播放头药丸的底边永不越过轨道下沿（保证 114 轨道内可读）。
