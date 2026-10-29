@@ -69,6 +69,62 @@ pub const BIOME_ROAD: Biome = 20;
 /// 生物群系编号。
 pub type Biome = u8;
 
+// ---------------------------------------------------------------------------
+// 场景分区保留带（2026-10-29 · 场景编辑器 M1）
+// ---------------------------------------------------------------------------
+
+/// 场景分区编号带起点。
+///
+/// **为什么占用 biome 通道**：分区是「这张格子在城市里是什么功能区」，
+/// 与群系一样是**格级自描述**的一维属性，且随 `TerrainCell` 一起走完整条
+/// 链路（存盘 → CPU 烘焙 → GPU 场）。另起一条通道要改 `terrain.bin` 版本、
+/// 加 254 处结构体字面量，收益远小于代价。
+///
+/// **为什么落在冻结表 21 之上**：0..=20 是冻结的生物群系编号表
+/// （含唯一的工程扩展「道路」），分区不挤占它。
+///
+/// **为什么不归任何族**：分区是人为功能区，不是自然群系。`family_of` 对
+/// 21..=32 返回 `None`——主题覆盖物规则（ADR-0032 D2）以族为键，分区不
+/// 落族即不会被「森林规则」「道路规则」误触发。
+pub const DISTRICT_FIRST: Biome = 21;
+/// 场景分区数量（带内码位数）。
+pub const DISTRICT_COUNT: u8 = 12;
+
+/// 场景分区中文名（索引 = [`district_index`] 的返回值）。
+///
+/// 只放中文：分区名当前只有中文一种形态，UI 直查本表
+/// （与 `biome_raw::BIOME_NAMES_ZH` 的现状一致），不进 i18n 体系。
+pub const DISTRICT_NAMES_ZH: [&str; DISTRICT_COUNT as usize] = [
+    "未分区",   // 21
+    "贫民区",   // 22
+    "富人区",   // 23
+    "普通住宅", // 24
+    "商业区",   // 25
+    "工业区",   // 26
+    "农田",     // 27
+    "密林",     // 28
+    "空地",     // 29
+    "房间",     // 30
+    "走廊",     // 31
+    "大殿",     // 32
+];
+
+/// 该编号是否落在场景分区保留带内。
+pub fn is_district(b: Biome) -> bool {
+    (DISTRICT_FIRST..DISTRICT_FIRST + DISTRICT_COUNT).contains(&b)
+}
+
+/// 分区编号 → 带内索引（0..=11）；非分区编号返 `None`。
+///
+/// 索引即色表索引——主题色表与 CellMap 固定色表都按这个顺序排。
+pub fn district_index(b: Biome) -> Option<u8> {
+    if is_district(b) {
+        Some(b - DISTRICT_FIRST)
+    } else {
+        None
+    }
+}
+
 /// 浅水与深水的显示分界（米）：原 `continent.rs` 的 Q5 兜底口径，随分带
 /// 迁入本模块（三通道后分带不再需要它，显示投影仍需要）。
 const SHALLOW_WATER_MAX_DEPTH_M: i16 = -200;
@@ -347,6 +403,29 @@ mod tests {
         for b in [21u8, 42, 100, 255] {
             assert_eq!(family_of(b), None, "编号 {b} 应无族");
         }
+        // 21..=32 是**场景分区保留带**（见 [`DISTRICT_FIRST`]）：分区同样无族——
+        // 分区是人为功能区，不是生物群系，主题覆盖物规则不应误触发。
+        for b in DISTRICT_FIRST..DISTRICT_FIRST + DISTRICT_COUNT {
+            assert_eq!(family_of(b), None, "分区 {b} 不应落任何群系族");
+        }
+    }
+
+    /// 场景分区保留带：从冻结群系表 21 之上起，12 个码位，带外不入。
+    #[test]
+    fn district_band_is_reserved_above_frozen_biomes() {
+        assert_eq!(DISTRICT_FIRST, 21, "分区带必须从冻结表 20 之上起");
+        assert_eq!(DISTRICT_COUNT, 12);
+        assert_eq!(DISTRICT_NAMES_ZH.len(), 12);
+        for i in 0..DISTRICT_COUNT {
+            let b = DISTRICT_FIRST + i;
+            assert!(is_district(b), "{b} 应是分区");
+            assert_eq!(district_index(b), Some(i));
+            assert!(!DISTRICT_NAMES_ZH[i as usize].is_empty(), "分区 {b} 缺名");
+        }
+        assert!(!is_district(DISTRICT_FIRST - 1), "20 是道路群系，不是分区");
+        assert!(!is_district(DISTRICT_FIRST + DISTRICT_COUNT), "带外不是分区");
+        assert_eq!(district_index(255), None);
+        assert_eq!(district_index(0), None);
     }
 
     /// 森林族判定与 `family_of` 单源一致：全编号域上
