@@ -1,0 +1,111 @@
+# GitHub Actions 门禁（2026-10-29）：把本地最耗时的「全量测试 + clippy」外移。
+#
+# ## 为什么存在
+# 本地热缓存跑一轮 wv-render / wv-app 测试 ≈ 1.5–3 分钟，大头是工作区 crate
+# 的 opt2/3 codegen + 每个测试二进制的整树链接（lld 后每次数秒）——这部分
+# 与「改了什么」无关，纯机械成本。分层方案：
+#
+#   本地内环（秒级）：cargo fmt + cargo check / clippy -p <改动的 crate>
+#        ↓ 提交推送（需本地代理 10808 在线）
+#   CI 外环（异步，不阻塞本地）：本文件的全量门禁 → 绿了再合并
+#
+# ## 范围与偏差（对照 AGENTS §7.1）
+# - ✅ fmt / workspace test / clippy / app-test / http-test / app-clippy /
+#   http-clippy 全部等价复刻；
+# - ⛔ **smoke-gui 不在 CI**：GitHub runner 无 GPU，Bevy 起不了真窗口。
+#   GUI 启动烟测留在本地，作为合并前的人工仪式（改动渲染系统签名 /
+#   Plugin 装配 / 新增 Resource 时必跑，见 §7.1）。
+# - 工具链用 stable + 仓库自带 `.cargo/config.toml`（rust-lld 链接器在
+#   runner 上同样生效，无需额外安装）。
+#
+# ## 缓存
+# - Swatinem/rust-cache：整目录缓存 `.target`（含 fingerprint），第二次起
+#   大部分单元 fresh，不再重编；键随 Cargo.lock 自动失效。
+# - mozilla-actions/sccache-action：`.cargo/config.toml` 配了
+#   `rustc-wrapper = "sccache"`（AGENTS §13），CI 上没有这个二进制 cargo
+#   会直接失败——本 action 把 sccache 装上 PATH 并用 GHA 缓存兜底，
+#   与本地同一份 config 无需特判。
+#
+# ## 成本
+# windows-latest 4 核。首次冷跑 40–70 分钟；缓存命中后预计 15–25 分钟。
+# 公开仓库免 Actions 分钟数；私有仓库注意 Windows 计 2× 配额。
+
+name: gates
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".agents/**"
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".agents/**"
+  workflow_dispatch: {}
+
+concurrency:
+  # 同分支新推 cancel 旧跑（省分钟数；本地开发节奏是攒提交再推）。
+  group: gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-gates:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Restore cargo / target cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          # 与本仓库 feature 门禁同轨（app/http 两档），锁变化自动失效。
+          key: gates-v1
+
+      - name: Install sccache (config.toml 的 rustc-wrapper 需要)
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Show versions
+        run: |
+          cargo --version
+          rustc --version
+          sccache --version
+
+      # ── §7.1 三基础 ──
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
+      - name: cargo clippy --workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # ── 渲染层双闸（feature 门后，基础命令编译不到）──
+      - name: wv-render / wv-app tests (features app)
+        run: |
+          cargo test -p wv-render --features app
+          cargo test -p wv-app --features app
+
+      - name: app-clippy
+        run: cargo clippy -p wv-app --all-targets --features app -- -D warnings
+
+      # ── HTTP/MCP 双闸（ADR-0014）──
+      - name: http tests + clippy (features http)
+        run: |
+          cargo test -p wv-app --features http
+          cargo clippy -p wv-app --all-targets --features http -- -D warnings
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
