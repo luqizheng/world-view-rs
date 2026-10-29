@@ -6,8 +6,9 @@
 //!   （`map_controls`，**选工具**）分工——本条**调当前工具的参数**。
 //! - **动机**：地形笔刷 8 把工具与各自参数散在命令面板 / 快捷键与（已裁撤的）
 //!   笔刷浮窗段里，作者「工具太多看不全」。本条把工具切换与参数调节收进一条
-//!   常驻水平条；egui top Panel 按注册序向下堆叠，在 `wv_top_bar` 之后注册即
-//!   天然贴在其正下方，无需手算坐标。
+//!   常驻水平条；落位 = root Ui 显式从顶栏下缘起（`root_ui_below_top_bar`）
+//!   ——egui 0.36 的 top Panel **没有**跨系统注册序堆叠（2026-10-29 修正，
+//!   见该函数文档），原「天然贴在其正下方」的假设不成立。
 //! - **对 2026-10-24 裁定的修正**（AGENTS §6.3 追记）：「工具切换只走命令
 //!   面板 / 快捷键」修正为「**亦**可走本条头部瓷砖行」；命令面板与快捷键入口
 //!   不变。2026-10-25「笔刷浮窗只服务 CellMap 结构编辑」随之**更成立**——
@@ -82,8 +83,10 @@ pub(crate) fn shows_strength(tool: BrushTool) -> bool {
 
 /// 工具选项条（贴 topbar 正下方）。
 ///
-/// 注册顺序即落位：egui top Panel 按调用序堆叠，本系统必须在
-/// `ui::top_bar` **之后**、同一 `.chain()` 链上（`app_bootstrap/schedules.rs`）。
+/// 落位由 [`top_bar::root_ui_below_top_bar`](crate::ui::top_bar::root_ui_below_top_bar)
+/// 显式保证（root Ui 从顶栏下缘起）——与 `ui::top_bar` 同链 `.chain()`
+/// （`app_bootstrap/schedules.rs`）的注册顺序**不**决定落位（egui 0.36
+/// Panel 无跨系统堆叠）。
 pub fn top_option_bar(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,
@@ -101,7 +104,10 @@ pub fn top_option_bar(
         return;
     };
     let loc = current_loc.0;
-    let mut root = super::top_bar::root_ui(ctx);
+    // 不能用 `root_ui`：egui 0.36 的 Panel::top 只认父 Ui 剩余空间、无跨系统
+    // 堆叠——fresh 全视口 Ui 会让本条叠回 y 0..38 盖住顶栏（2026-10-29 实机
+    // 缺陷，见 `top_bar::root_ui_below_top_bar` 文档）。显式从顶栏下缘起。
+    let mut root = super::top_bar::root_ui_below_top_bar(ctx);
     egui::Panel::top("wv_top_option_bar")
         .exact_size(BAR_H)
         .frame(
