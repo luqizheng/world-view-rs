@@ -57,6 +57,10 @@ pub struct TerrainFieldRender {
     /// 上次写进 uniform 的分层设色强度（ADR-0055）。同 `last_ppc`：只做比较，
     /// **不进键**——拖滑条只改 uniform，不重打 12 MB 数据纹理。
     last_hypsometric: Option<f32>,
+    /// 上次写进 uniform 的 WV_STRIP 掩码（ADR-0088 Task 4）。同 `last_ppc`：
+    /// 只做比较、**不进键**——掩码是会话常量（env 启动读一次），这里兜住
+    /// 「将来运行时可改」：改了只重传 uniform，不重打数据纹理。
+    last_strip: Option<u32>,
     /// 上次算出的分层设色内边界（归一化，7 条；ADR-0055 / ADR-0056）。
     ///
     /// 绝大数图是**绝对阶梯常量**，但窄域图（陆地跨度 < 300 m）会兜底为自己
@@ -243,6 +247,7 @@ fn teardown_field(
     field.last_ppc = None;
     field.last_mpc = None;
     field.last_hypsometric = None;
+    field.last_strip = None;
     field.cuts = None;
     // 12 MB 的 CPU 影子副本随场一起释放：关掉场还攥着上一张图的字节，
     // 既白占内存，也会让「下次开场的第一次补丁」用上过期数据。
@@ -604,6 +609,10 @@ pub fn sync_terrain_field(
             params.pad0.z = view.active_theme.biome_tint;
             // pack 与 shader 的解码开关必须同源（唯一耦合点，见 `set_coast_encoding`）。
             set_coast_encoding(&mut params, pack.encoding);
+            // WV_STRIP 剥离探针（ADR-0088 Task 4）：掩码写 `pad1.x` 未用槽
+            // （0 = 全开 = 恒等）。只动 uniform、不进键；`pad1.y` 海岸编码
+            // 不得被波及（`apply_strip_mask` 只写 `.x`）。
+            apply_strip_mask(&mut params, view.strip_mask);
             // 分层设色（ADR-0056）：内边界 = **绝对地形学阶梯**；窄域图（跨度
             // < 300 m）兜底为自身区间等分。与 CPU 烘焙路径同一函数——同一张图
             // 两条路径必须得出同一组阶。归一化口径与 height 纹理同源
@@ -656,6 +665,7 @@ pub fn sync_terrain_field(
             field.last_ppc = Some(px_per_cell);
             field.last_mpc = Some(meters_per_cell);
             field.last_hypsometric = Some(view.hypsometric_tint);
+            field.last_strip = Some(view.strip_mask);
             field.cuts = Some(cuts_norm);
 
             stats.field_repacks += 1;
@@ -695,7 +705,10 @@ pub fn sync_terrain_field(
     let hyps_changed = field
         .last_hypsometric
         .is_none_or(|last| (last - view.hypsometric_tint).abs() > 1e-6);
-    if (ppc_changed || structure_changed || hyps_changed || mpc_changed) && field.material.is_some()
+    // WV_STRIP 掩码（ADR-0088 Task 4）：同上——只许动 uniform。
+    let strip_changed = field.last_strip.is_none_or(|last| last != view.strip_mask);
+    if (ppc_changed || structure_changed || hyps_changed || mpc_changed || strip_changed)
+        && field.material.is_some()
     {
         let handle = field.material.clone().expect("刚判过 is_some");
         if let Some(mut material) = materials.get_mut(&handle) {
@@ -709,6 +722,9 @@ pub fn sync_terrain_field(
             material.params.light_dir.w = meters_per_cell;
             // T19 域扭曲幅度（P1 预留槽 `pad0.x`）：随缩放重算。
             material.params.pad0[0] = warp_amp(px_per_cell);
+            // WV_STRIP 掩码（ADR-0088 Task 4）：`pad1.x` 未用槽，随掩码变化
+            // 重写（0 = 全开 = 恒等）；`pad1.y` 海岸编码归重打路径管。
+            apply_strip_mask(&mut material.params, view.strip_mask);
             // 主题色板（T35）：P1 用 `TopographicPalette` 四色的默认转录——
             // 与 CPU 回退路径同色族，不同色就是回归（`FieldPalette::default` 的
             // 文档写着逐值抄录日期与出处）。
@@ -731,6 +747,7 @@ pub fn sync_terrain_field(
             field.last_hypsometric = Some(view.hypsometric_tint);
             field.last_ppc = Some(px_per_cell);
             field.last_mpc = Some(meters_per_cell);
+            field.last_strip = Some(view.strip_mask);
         }
     }
 
@@ -1185,6 +1202,66 @@ mod field_routing_tests {
             key_hash,
             fp.total(),
             "FieldKey.terrain_hash 必须取指纹 total（ADR-0088 D3 槽位约定）"
+        );
+    }
+
+    // ── WV_STRIP 剥离探针（ADR-0088 Task 4）：掩码 → uniform 的接线 ──
+
+    /// 掩码接线两条不变式：
+    /// 1. 重打路径把掩码写进 `pad1.x`，且**不波及** `pad1.y`（海岸编码开关）；
+    /// 2. 掩码变化只重传 uniform（`last_strip` 跟踪），`field_repacks` 不动
+    ///    ——探针永远不许触发 12 MB 数据纹理重打。
+    #[test]
+    fn strip_mask_flows_to_uniform_without_repack() {
+        let mut world = routing_world(ViewMode::VectorFlat);
+        world.resource_mut::<ViewState>().strip_mask = 0b00001;
+        run_routing(&mut world);
+        {
+            let handle = world
+                .resource::<TerrainFieldRender>()
+                .material
+                .clone()
+                .expect("场上屏应已建材质");
+            let mat = world
+                .resource::<Assets<TerrainFieldMaterial>>()
+                .get(&handle)
+                .expect("材质应在资产表");
+            assert_eq!(
+                mat.params.pad1[0], 1.0,
+                "重打路径必须把 strip 掩码写进 pad1.x，got {}",
+                mat.params.pad1[0]
+            );
+            assert_eq!(
+                mat.params.pad1[1], 1.0,
+                "pad1.y 海岸编码（Signed）不得被探针波及"
+            );
+        }
+        let repacks_after_first = world.resource::<FieldRenderStats>().field_repacks;
+        assert_eq!(repacks_after_first, 1, "前置：首帧恰好重打一次");
+
+        // 掩码变化（env 探针一次性写；这里模拟运行期改写）：只许重传 uniform。
+        world.resource_mut::<ViewState>().strip_mask = 0b10111;
+        run_routing(&mut world);
+        {
+            let handle = world
+                .resource::<TerrainFieldRender>()
+                .material
+                .clone()
+                .expect("材质仍在");
+            let mat = world
+                .resource::<Assets<TerrainFieldMaterial>>()
+                .get(&handle)
+                .expect("材质应在资产表");
+            assert_eq!(
+                mat.params.pad1[0], 23.0,
+                "掩码变化必须落到 uniform（0b10111 = 23），got {}",
+                mat.params.pad1[0]
+            );
+        }
+        assert_eq!(
+            world.resource::<FieldRenderStats>().field_repacks,
+            repacks_after_first,
+            "掩码变化只许重传 uniform，不得重打数据纹理"
         );
     }
 }

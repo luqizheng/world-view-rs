@@ -241,6 +241,19 @@ pub struct ViewState {
     /// 追记十四。`false` = CPU 烘焙回退路径，运行时可翻（命令面板
     /// 「显示地形场渲染（GPU）」），改完当帧生效。
     pub field_render: bool,
+    /// **WV_STRIP 剥离探针**（ADR-0088 Task 4）：Themed 加工链逐层关断位域。
+    ///
+    /// 位语义真源 = wv-world-cell-map `field::material` 的 `STRIP_BIT_*` 常量
+    /// （Rust 镜像 fn + 真值表测试在那边；WGSL 同步解码）。**位置 1 = 剥掉
+    /// 该层**：bit0 色板 / bit1 soften（保留位，场路径无此层）/ bit2 wash /
+    /// bit3 veil / bit4 浮雕；**0 = 全开 = 恒等**——探针缺省零行为变化。
+    /// 只影响场管线 Themed 分支与 veil 叠层；BiomeRaw/Flat 分支与水面/墨线
+    /// 不受影响。由 wv-app 的 `WV_STRIP` 环境探针在启动时写入（0..=31），
+    /// 经桥接写 `FieldParams.pad1.x` 未用槽（只改 uniform，永不触发重打）。
+    ///
+    /// 会话态、**不落盘**（同 [`Self::field_render`] 先例）：探针是一次性
+    /// 验收通道，不进任何序列化格式。
+    pub strip_mask: u32,
     /// 事件点图层是否可见。
     pub events_visible: bool,
     /// 轨迹图层是否可见。
@@ -322,6 +335,7 @@ impl Default for ViewState {
             terrain_visible: true,
             terrain_soften: true,
             field_render: true,
+            strip_mask: 0,
             events_visible: true,
             tracks_visible: true,
             roads_visible: true,

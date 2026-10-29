@@ -57,10 +57,12 @@ pub use line_sdf::{
 };
 pub use mask_sdf::signed_mask_distance;
 pub use material::{
-    apply_hypsometric, build_material, build_material_with_lines, default_params,
-    patch_material_images, set_coast_encoding, warp_amp, FieldPalette, FieldParams,
-    TerrainFieldMaterial, TerrainFieldMaterialPlugin, ViewBranch, RIVER_LINE_PX, ROAD_MAJOR_PX,
-    ROAD_MINOR_PX, WARP_AMP_MAX, WARP_AMP_MIN,
+    apply_hypsometric, apply_strip_mask, build_material, build_material_with_lines, default_params,
+    patch_material_images, set_coast_encoding, strip_layer_on, strip_mask_sane, strip_palette_on,
+    strip_relief_on, strip_soften_on, strip_veil_on, strip_wash_on, warp_amp, FieldPalette,
+    FieldParams, TerrainFieldMaterial, TerrainFieldMaterialPlugin, ViewBranch, RIVER_LINE_PX,
+    ROAD_MAJOR_PX, ROAD_MINOR_PX, STRIP_BIT_PALETTE, STRIP_BIT_RELIEF, STRIP_BIT_SOFTEN,
+    STRIP_BIT_VEIL, STRIP_BIT_WASH, STRIP_MASK_MAX, WARP_AMP_MAX, WARP_AMP_MIN,
 };
 pub use pack::{
     pack_content_hash, CellRect, CoastEncoding, FieldPack, COAST_MAX_CELLS, H_MAX, H_MIN,
