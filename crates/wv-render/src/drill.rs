@@ -62,9 +62,13 @@ const HIT_CELLS: f32 = 3.0;
 /// 子图没有 `extent` 时的兜底尺寸（与示例工程的 4096×4096 一致）。
 pub const FALLBACK_EXTENT: Extent = Extent::sized(4096.0, 4096.0);
 
-/// 双击判定的时间窗（秒）与位移容差（世界单位）。
+/// 双击判定的时间窗（秒）与位移容差。
+///
+/// 位移容差按**屏幕像素**定义（UX-024 / round-2 审计：旧值 6.0 是世界单位——
+/// 世界级 scale≈5.12 时只合 1.2px，双击几乎必须原地不动；深放大时又宽达
+/// 数百像素形成误判窗）。使用处以 `view.scale` 换算成世界单位。
 const DOUBLE_CLICK_SECS: f64 = 0.40;
-const DOUBLE_CLICK_SLOP: f32 = 6.0;
+const DOUBLE_CLICK_SLOP_PX: f32 = 12.0;
 
 /// 上次左键点击的时间与位置，用于自建双击判定。
 ///
@@ -624,9 +628,12 @@ pub fn drill_pick(
     }
 
     let now = time.elapsed_secs_f64();
+    // UX-024：位移容差按屏幕像素（12px），随缩放换算成世界单位——任何缩放
+    // 档下双击的「手抖余量」一致。
+    let double_slop_world = DOUBLE_CLICK_SLOP_PX * view.scale;
     let is_double = clicks
         .last
-        .map(|(t, p)| now - t <= DOUBLE_CLICK_SECS && p.distance(world_pos) <= DOUBLE_CLICK_SLOP)
+        .map(|(t, p)| now - t <= DOUBLE_CLICK_SECS && p.distance(world_pos) <= double_slop_world)
         .unwrap_or(false);
     // 无论是否双击都要记下这一次，否则「三连击」会被判成两段双击。
     clicks.last = if is_double {

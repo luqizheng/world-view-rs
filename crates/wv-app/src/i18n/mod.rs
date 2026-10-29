@@ -199,10 +199,10 @@ mod tests {
         }
         assert_eq!(
             I18nKey::ALL.len(),
-            591,
-            "ALL 应为 591 项（… + ADR-0088 两键净增 + UX batch2 十一键：关闭确认四键 + 登记事件七键）；加新键时同步更新数组长度与元素（got {})",
+            593,
+            "ALL 应为 593 项（… + UX batch2 十一键 + batch3 净增两键：删 NoticeExportPending、增导出三键）；加新键时同步更新数组长度与元素（got {})",
             I18nKey::ALL.len()
         );
-        assert_eq!(seen.len(), 591, "去重后应仍为 591 项");
+        assert_eq!(seen.len(), 593, "去重后应仍为 593 项");
     }
 }
