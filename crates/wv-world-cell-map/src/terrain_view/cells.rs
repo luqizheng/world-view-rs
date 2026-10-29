@@ -953,9 +953,16 @@ impl<'a> CellRenderer<'a> {
         // 抗锯齿，与自然群系边界视觉割裂（场景图是平图，割裂一眼可见）。
         let district0 = wv_terrain::biome::district_index(center.biome);
         let differs = |a: u8, b: u8, da: Option<u8>, db: Option<u8>| {
-            // 分区不同 → 边界；一个是分区另一个不是 → 也是边界。
-            if da != db {
-                return true;
+            // 分区不同 → 边界；一个是分区另一个不是 → **不是**边界。
+            //
+            // **为什么分区边缘不触发边界路径**：边界格路径做 4×4 超采样，
+            // 会把相邻格的颜色混进来——分区外围就会出现一圈柔边白晕
+            // （分区看起来像「贴纸浮在地形上」）。分区是功能标注，
+            // 边界该是干净的硬线，故「普通格 ↔ 分区格」的交界**不算**
+            // 边界：普通格走内部格快路径（整块直铺自己的底色），
+            // 分区格走自己的硬涂路径。两边各管各的，交界自然干净。
+            if da.is_some() || db.is_some() {
+                return false;
             }
             if self.mode == ShadeMode::Coastline {
                 slot_is_water(a) != slot_is_water(b)
@@ -1346,6 +1353,38 @@ impl<'a> CellRenderer<'a> {
             pixels[o + 1] = (rgba[1] * 255.0) as u8;
             pixels[o + 2] = (rgba[2] * 255.0) as u8;
             pixels[o + 3] = 255;
+            return;
+        }
+        // 场景分区格：**整格平涂，边界是硬的**。
+        //
+        // 分区是人为功能区，作者标的是「这一片是贫民区」——边界就该是
+        // 一条干净的线。若走下面的「边界格扰动路径」，4×4 超采样会把
+        // 相邻格（未分区底色）混进来，分区外围出现一圈白晕（实测：
+        // 商业区赭黄外围一圈米白），看起来像「贴纸浮在地形上」。
+        //
+        // 自然群系走柔边是对的（手绘水彩的湿岸），但那是**美术选择**；
+        // 分区是**功能标注**，该硬。
+        if let Some(dc) = district_color(cell, self.palette) {
+            let Color::Srgba(c) = dc else {
+                return;
+            };
+            // 陆格颗粒（ADR-0042）：与内部格同一口径——分区也是陆格。
+            let g = if self.grain {
+                land_grain(display_slot(cell), cx, gy)
+            } else {
+                1.0
+            };
+            let res = self.res;
+            for ty in 0..res {
+                let o = ((out_row * res + ty) * stride + cx * res) as usize * 4;
+                for tx in 0..res {
+                    let o = o + tx as usize * 4;
+                    pixels[o] = (c.red * 255.0 * g).round().clamp(0.0, 255.0) as u8;
+                    pixels[o + 1] = (c.green * 255.0 * g).round().clamp(0.0, 255.0) as u8;
+                    pixels[o + 2] = (c.blue * 255.0 * g).round().clamp(0.0, 255.0) as u8;
+                    pixels[o + 3] = 255;
+                }
+            }
             return;
         }
         if !self.is_boundary(cx, gy) {
@@ -2134,6 +2173,59 @@ mod tests {
             + (got[1] as i32 - (gr.green * 255.0) as i32).abs()
             + (got[2] as i32 - (gr.blue * 255.0) as i32).abs();
         assert!(gd > 60, "分区色不得接近草原色（实测差 {gd}）");
+    }
+
+    /// 分区边界必须是**硬的**——分区外围不得出现柔边白晕。
+    ///
+    /// 回归护栏：分区格若走「边界格扰动路径」，4×4 超采样会把相邻格
+    /// （未分区底色）混进来，分区看起来像「贴纸浮在地形上」（实测：
+    /// 商业区赭黄外围一圈米白）。分区是功能标注，边界该是干净的线。
+    #[test]
+    fn district_edge_has_no_bleed_halo() {
+        let mut data = topographic_fixture();
+        // (1,1) 是商业区，(2,1) 是未分区底色 → 两者交界处是分区边缘。
+        data.cells[5].biome = wv_terrain::biome::DISTRICT_FIRST + 4;
+        data.cells[5].surface = wv_terrain::SURFACE_LAND;
+        data.cells[5].height = 0;
+        let pack = CellPack::fixture();
+        let (px, res) = terrain_pixels(&data, ShadeMode::VectorFlat, None, false, &pack);
+        let stride = 4 * res;
+        let at = |gx: u32, gy: u32| -> [u8; 3] {
+            let cx = gx * res + res / 2;
+            let cy = gy * res + res / 2;
+            let o = ((cy * stride + cx) * 4) as usize;
+            [px[o], px[o + 1], px[o + 2]]
+        };
+        // 分区格中心：显著区别于底色。
+        let d = at(1, 1);
+        let base = at(3, 3);
+        let diff = (d[0] as i32 - base[0] as i32).abs()
+            + (d[1] as i32 - base[1] as i32).abs()
+            + (d[2] as i32 - base[2] as i32).abs();
+        assert!(diff > 60, "分区格应显著区别于底色（实测差 {diff}）");
+        // 分区边缘（紧邻分区的底色格）不得被染成分区色——那才是「白晕」。
+        let edge = at(2, 1);
+        let edge_diff = (edge[0] as i32 - base[0] as i32).abs()
+            + (edge[1] as i32 - base[1] as i32).abs()
+            + (edge[2] as i32 - base[2] as i32).abs();
+        // 判据是「边缘格**不得接近分区色**」——若边缘被分区色污染，
+        // 它会跟分区中心的颜色拉近。（边缘与底色之间的差是陆格颗粒抖动
+        // ±4.5%，不是污染，故不能拿边缘-底色当判据。）
+        let to_district = |a: [u8; 3], b: [u8; 3]| -> i32 {
+            (a[0] as i32 - b[0] as i32).abs()
+                + (a[1] as i32 - b[1] as i32).abs()
+                + (a[2] as i32 - b[2] as i32).abs()
+        };
+        let edge_to_district = to_district(edge, d);
+        assert!(
+            edge_to_district > 60,
+            "分区边缘不得被分区色污染（与分区色差 {edge_to_district}，应 > 60）"
+        );
+        // 顺带确认边缘确实是底色（与分区中心的差足够大）。
+        assert!(
+            edge_diff > 0 || diff > 60,
+            "边缘格既不是分区色也不该是别的颜色（edge={edge:?}）"
+        );
     }
 
     /// 相邻的两个不同分区必须被判为**边界**——否则分区交界没有揉边/抗锯齿，
