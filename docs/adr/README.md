@@ -243,6 +243,7 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
 | [ADR-0083](ADR-0083-mcp-stdio-proxy-and-skill.md) | wv mcp stdio 代理 + .mcp.json 注册 + wv-mcp skill——本地答 initialize/ping、tools/list 与 tools/call 转发 GUI HTTP 面；代理零工具表（单一真源在 GUI 侧） | **已撤回（Withdrawn，2026-10-28，被 [ADR-0084](ADR-0084-withdraw-mcp-stdio-proxy.md) 取代；正文按 §6.4 留档不删）** |
 | [ADR-0084](ADR-0084-withdraw-mcp-stdio-proxy.md) | 撤回 wv mcp stdio 代理轮（ADR-0083）——revert 1835b4a+04d7974 单提交落盘（回退树与 039b10a 逐字节一致）；注册摩擦（ZCode 不读 .mcp.json、须手工 Settings 注册）大于协议价值，产品定位「skill+HTTP=标配入口、MCP=可选增强」；GUI HTTP 服务与 15 工具面、ADR-0082 自然层命名均不受影响；重做细案留后续 ADR | 已接受（2026-10-28，用户裁定「放弃这次，重新重做」+ 范围拍板「只弃 MCP 轮」） |
 | [ADR-0085](ADR-0085-agent-skill-http-standard-entry.md) | agent 驱动标配入口=skill+HTTP 直驱——单一真源 `.agents/skills/wv-http/SKILL.md` 经 `include_str!`（`http::AGENT_SKILL_MD`）同源三处输出：`wv skill` 子命令（stdout / `--out`）+ 设置→HTTP 服务→「复制 agent skill」按钮（i18n 572→574）；零注册零依赖，发布配方 `--features app,http`；内容哨兵测试钉 15 工具名防文档漂移；MCP 客户端配置降为可选增强 | 已接受（2026-10-28，用户选 C 完整闭环；承接 ADR-0084 定调；随行合入 settings-http-toggle 52b1b7e） |
+| [ADR-0086](ADR-0086-render-dual-track-assembly.md) | 渲染系统双轨装配分界收口——编辑器权威=`app_bootstrap/schedules.rs`（perf_timed!+精确排序）、游戏消费=`plugins` 三 Plugin（game_consumer）；保留双轨不收编（收编排序重建风险大、删 Plugin 砍外部宿主出口），plugins.rs 头注释写死同步纪律；编辑器侧补三处顺序缺口（`update_street_labels.after(DrillLabelChain)`、cellmap 四系统 `.chain()`、gizmo 六系统 `.chain()`） | 已接受（2026-10-29，重构 P0-4；ADR-0023 D5 实施偏差修正） |
 
 > **⚠️ 编号撞号备注（2026-10-27 追加）**：`ADR-0074` 与 `ADR-0075` 被并行会话的三个分支同时占用
 > （`feat/faction-partition-map` 势力图切蛋糕 / `feat/map-tree-enhancement` 地图树垃圾桶

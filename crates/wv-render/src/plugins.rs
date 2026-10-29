@@ -4,6 +4,24 @@
 //! Plugin 拆分（ADR-0023 D5）—— 把 wv-render 的系统按"游戏可复用 / 编辑器专属 / 装饰族"
 //! 三类分组，让游戏 app 只装想要的（§1.2 差距 4）。
 //!
+//! ## **双轨装配的现状与分界（ADR-0086，必读）**
+//!
+//! 本仓库存在**两份系统装配清单**，服务两个不同宿主：
+//!
+//! | 路径 | 权威装配点 | 宿主 |
+//! |---|---|---|
+//! | **编辑器**（`wv gui`） | `wv-app::app_bootstrap::schedules.rs`（系统直装，带 `perf_timed!` 与精确排序） | 唯一日常入口 |
+//! | **游戏外挂消费**（`game_consumer` example） | 本文件三 Plugin | 非 Bevy 原生宿主复用的演示/出口 |
+//!
+//! **编辑器从不装配本文件三 Plugin**（`resources.rs:90` 明载）。历史教训：
+//! `EditorOverlayPlugin` 注册的系统以为"装了"实际没装，ADR-0040 单格金色
+//! outline 不出现（2026-10-24 二次踩，见 schedules.rs 注释）。因此**任何
+//! 新系统必须同时在两处装配**（或明确只属其一），且顺序约束（`.after` /
+//! `.chain` / set）两处都要落——P0-4 已修的三处缺口
+//! （`DrillLabelChain` / cellmap 四系统 / gizmo 六系统）即漏网实例。
+//!
+//! 改本文件清单时，`grep schedules.rs` 对应系统名核对编辑器侧是否同步。
+//!
 //! ## 三组分工
 //!
 //! - [`MapRenderPlugin`] —— 地图本体渲染（**游戏可用**）：
@@ -14,11 +32,6 @@
 //! - [`MapShellPlugin`] —— 装饰族系统（**受 `TreatmentFlags` 控制**，游戏按需装）：
 //!   纸面氛围（雾霭 + 纸张噪点）；M2 阶段该 Plugin **恒装载所有装饰系统**，
 //!   开关逻辑 M3 推进（接入 `TreatmentFlags` 后）。
-//!
-//! ## 不重新实现逻辑
-//! 三 Plugin 都只调 `add_systems` —— 当前 `app_bootstrap.rs` 的系统链**字面照搬**，
-//! 只是搬到 Plugin 内。M1 行内调用的"350 行系统链"在 M2 验收时**未动**——
-//! Plugin 是**新增装配入口**，**不**替代 bootstrap 的顺序链。
 //!
 //! ## 边界
 //! - **不**做 Plugin 间的执行顺序约束（`chain()` 留在 bootstrap 内）；

@@ -238,7 +238,12 @@ pub(super) fn register(app: &mut App) {
             // 矢量叠加层（道路 + POI）：在 compute_projection 之后跑。
             wv_render::perf_timed!("sync_vector_layers", vector_layers::sync_vector_layers),
             // 街道名标注：消费同一份 StreetLayerCache，在街道画完之后对齐标签。
-            wv_render::perf_timed!("update_street_labels", streets::update_street_labels),
+            // **必须 `.after(DrillLabelChain)`**（P0-4 排序缺口，2026-10-29）：
+            // 统一标签占位池的落位次序是「地名→…→海名→街名」（ADR-0073），
+            // 该约束在游戏路径由 plugins.rs:80 声明，本编辑器主链此前缺失——
+            // 街名与海名对占位池的竞争顺序不定，摆位帧间可漂移。
+            wv_render::perf_timed!("update_street_labels", streets::update_street_labels)
+                .after(wv_render::label_collision::DrillLabelChain),
             // 势力多边形叠加层（S12 v0.1）：在矢量层之后、地图外框之前。
             wv_render::perf_timed!(
                 "sync_faction_overlays",
@@ -329,6 +334,10 @@ pub(super) fn register(app: &mut App) {
             cellmap_bridge::sync_cell_hover.after(cellmap_bridge::sync_cell_region),
             cellmap_bridge::sync_cell_flash,
         )
+            // **`.chain()`**（P0-4 排序缺口，2026-10-29）：上面注释声明的
+            // 「区域 → 笔触 → hover → 闪视觉」此前只是文档——stroke/flash 与
+            // region 之间无序，靠 z 常量兜底才没出视觉 bug。显式定序。
+            .chain()
             .after(terrain_view::sync_grid_config)
             .after(camera::track_cursor_world),
     );
@@ -448,7 +457,12 @@ pub(super) fn register(app: &mut App) {
             crate::edit::line_poi_tool::draw_line_poi_preview,
             // 选择工具（草稿折线 + 橡皮筋 / 闭合环 + 选中锚点）。
             wv_render::selection::draw_selection,
-        ),
+        )
+            // **`.chain()`**（P0-4 排序缺口，2026-10-29）：六者全写 `Gizmos`
+            // （互斥资源），调度器此前任意定序、gizmo 提交序帧间不定。
+            // 数组序即绘制层序：区域装饰（mesh 非路 gizmo）→ 地图 → 笔刷
+            // 准星 → 测量 → line-POI 预览 → 选区。
+            .chain(),
     );
     app.add_systems(
         // bevy_egui 0.42 起 pass 是独立调度（在 PostUpdate 的 EndPass 里
