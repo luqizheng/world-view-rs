@@ -41,6 +41,25 @@ pub const CORE_TERRAIN: [Color; 10] = [
     hex(0xC8A272), // 9 道路
 ];
 
+/// 场景分区色（`CellPalette.district` 的值源；索引 = `biome::district_index`）。
+///
+/// 与 `terrain_view::biome_raw::DISTRICT_RAW_COLORS` 同值不同形（`Color`
+/// vs `[u8;3]`）——前者供渲染层取色，后者供 CellMap 方格视图直查。
+pub const DISTRICT_TERRAIN: [Color; 12] = [
+    hex(0xB8B09A), // 0 未分区
+    hex(0x8A7A5F), // 1 贫民区
+    hex(0xCBB27A), // 2 富人区
+    hex(0xD8C9A3), // 3 普通住宅
+    hex(0xC98A4B), // 4 商业区
+    hex(0x8F8577), // 5 工业区
+    hex(0xB5B356), // 6 农田
+    hex(0x4F7A3A), // 7 密林
+    hex(0xA3A86E), // 8 空地
+    hex(0xA89A8A), // 9 房间
+    hex(0x7D7268), // 10 走廊
+    hex(0xB39A6B), // 11 大殿
+];
+
 /// Google 底图十色（`colors_google::GOOGLE_CORE_TERRAIN` 抄录；2026-10-26 随专业色彩二轮同步）。
 pub const GOOGLE_CORE_TERRAIN: [Color; 10] = [
     hex(0xA6CFF3), // 0 深水
@@ -98,6 +117,12 @@ pub const TOPOGRAPHIC_P_HIGH: f32 = 0.66;
 pub struct CellPalette {
     /// 地形基色（索引即 `TerrainKind` 0..10）。
     pub core: [Color; 10],
+    /// 场景分区色（索引 = `wv_terrain::biome::district_index` 的返回值）。
+    ///
+    /// **为什么独立于 `core`**：`core` 的十槽是「群系 → 旧槽位」投影的目标
+    /// 空间，被折叠规则 / 边界判定 / tile atlas 三处共同依赖，不能扩；
+    /// 分区色按 biome 编号直查、不经投影。
+    pub district: [Color; 12],
     /// 底图淡化保留比例。
     pub soften_keep: f32,
     /// 底图淡化目标色（= 纸面色）。
@@ -178,6 +203,14 @@ impl CellPalette {
             .get(kind as usize)
             .copied()
             .unwrap_or(self.core[8])
+    }
+
+    /// 场景分区色取值（索引 = `biome::district_index`；越界回退未分区色）。
+    pub fn district_color(&self, index: u8) -> Color {
+        self.district
+            .get(index as usize)
+            .copied()
+            .unwrap_or(self.district[0])
     }
 
     /// 底图淡化混合（公式同源不二写：`out = base*k + toward*(1-k)`）。
@@ -425,6 +458,7 @@ impl CellPack {
         CellPack {
             palette: CellPalette {
                 core: CORE_TERRAIN,
+                district: DISTRICT_TERRAIN,
                 // 固定色夹具不带海拔色带（ADR-0054 D4：数据视图不随风格变）。
                 elevation_ramp: None,
                 elevation_strength: 0.0,

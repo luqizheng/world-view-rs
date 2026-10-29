@@ -36,8 +36,39 @@ pub fn pick(biome: u8, surface: u8) -> [f32; 4] {
         };
         return rgb_to_rgba(rgb);
     }
-    rgb_to_rgba(BIOME_RAW_COLORS[biome as usize])
+    // 场景分区（biome 21..=32）：走独立固定色表，不挤占冻结群系表。
+    if let Some(i) = biome::district_index(biome) {
+        return rgb_to_rgba(DISTRICT_RAW_COLORS[i as usize]);
+    }
+    // 开放集兜底：未登记编号（主题包自定群系）不得越界崩。
+    match BIOME_RAW_COLORS.get(biome as usize) {
+        Some(rgb) => rgb_to_rgba(*rgb),
+        None => rgb_to_rgba(FALLBACK_LAND),
+    }
 }
+
+/// 场景分区的固定色（索引 = `biome::district_index` 的返回值）。
+///
+/// **为什么另起一张表**：[`BIOME_RAW_COLORS`] 的 21 项是「冻结群系表」的
+/// 固定色，语义上每一项对应一个**生物群系**；分区是人为功能区，混进去会
+/// 让这张表的职责失焦（且图例覆盖测试按 21 项穷举）。
+///
+/// **为什么不随主题**：同本模块的固定色原则——数据视图要诚实，切任何
+/// ThemePack 输出逐位不变。
+pub const DISTRICT_RAW_COLORS: [[u8; 3]; 12] = [
+    [0xB8, 0xB0, 0x9A], // 0 未分区（中性土色）
+    [0x8A, 0x7A, 0x5F], // 1 贫民区（暗褐）
+    [0xCB, 0xB2, 0x7A], // 2 富人区（亮金）
+    [0xD8, 0xC9, 0xA3], // 3 普通住宅（米黄）
+    [0xC9, 0x8A, 0x4B], // 4 商业区（赭黄）
+    [0x8F, 0x85, 0x77], // 5 工业区（灰褐）
+    [0xB5, 0xB3, 0x56], // 6 农田（黄绿）
+    [0x4F, 0x7A, 0x3A], // 7 密林（深林绿）
+    [0xA3, 0xA8, 0x6E], // 8 空地（浅草绿）
+    [0xA8, 0x9A, 0x8A], // 9 房间（暖灰）
+    [0x7D, 0x72, 0x68], // 10 走廊（深暖灰）
+    [0xB3, 0x9A, 0x6B], // 11 大殿（亮赭金）
+];
 
 /// 冻结群系表的固定色（索引 = `wv_terrain::biome` 编号 0–20）。
 ///
@@ -134,6 +165,29 @@ mod tests {
     fn biome_raw_colors_cover_all_21_frozen_biomes() {
         assert_eq!(BIOME_RAW_COLORS.len(), 21, "冻结群系表 21 编号必须全覆盖");
         assert_eq!(BIOME_NAMES_ZH.len(), 21, "名称表必须与色板同长");
+    }
+
+    /// 场景分区（biome 21..=32）走**独立固定色表**，不进群系色表。
+    ///
+    /// 回归护栏两条：
+    /// 1. 分区色不得等于草原色——否则分区与自然地形混作一谈；
+    /// 2. 越界编号不得 panic——`BIOME_RAW_COLORS[biome]` 直查会越界崩，
+    ///    开放集里未登记编号是常态（主题包自定群系）。
+    #[test]
+    fn pick_returns_district_color_instead_of_panicking() {
+        let d = biome::DISTRICT_FIRST;
+        assert_eq!(DISTRICT_RAW_COLORS.len(), 12);
+        for i in 0..biome::DISTRICT_COUNT {
+            let rgba = pick(d + i, wv_terrain::SURFACE_LAND);
+            assert_eq!(
+                rgba,
+                rgb_to_rgba(DISTRICT_RAW_COLORS[i as usize]),
+                "分区 {i} 应取分区固定色"
+            );
+        }
+        // 越界不得 panic
+        let out = pick(200, wv_terrain::SURFACE_LAND);
+        assert_eq!(out.len(), 4, "越界应回退而非崩");
     }
 
     #[test]

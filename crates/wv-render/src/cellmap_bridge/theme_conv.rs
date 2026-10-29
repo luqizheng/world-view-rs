@@ -48,6 +48,7 @@ pub fn conv_palette_terrain(
 pub fn conv_palette(p: &wv_default_theme::palette::PaletteColors) -> CellPalette {
     CellPalette {
         core: p.core,
+        district: p.district,
         soften_keep: p.soften_keep,
         soften_toward: p.soften_toward,
         poi_dot: p.poi_dot,
