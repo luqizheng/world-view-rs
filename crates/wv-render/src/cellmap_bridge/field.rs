@@ -243,7 +243,7 @@ fn teardown_field(
 /// 回落（README §12-53 待决）。抽这一层不引入新语义，为的是让「桥接用的是
 /// 哪条入口、喂的是**来源图**的比例尺」这件事不经 Bevy App 就能被测试锁住
 /// （终审 M-1 修法 A / plan T5 声明的 bridge mpc 测试落点）。
-fn bridge_meters_per_cell(cell_size: f32, unit_per_km: Option<f32>) -> f32 {
+pub(crate) fn bridge_meters_per_cell(cell_size: f32, unit_per_km: Option<f32>) -> f32 {
     meters_per_cell_of(cell_size, unit_per_km)
 }
 
