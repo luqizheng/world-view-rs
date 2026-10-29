@@ -394,37 +394,27 @@ pub(crate) fn apply_pending_commands(
         // 工具条瓷砖与 V/H/B/E/L/M/P 快捷键都排到这里，先关掉所有工具再开目标，
         // 保证「左键」永远只有一个消费者（相机平移 / 选区 / 笔刷 / 测量 / 街道）。
         CommandId::SelectMapTool(tool) => {
-            use crate::state::MeasureMode;
-            use crate::ui_command_palette::MapToolId;
-
-            // 目标工具当前是否已启用（再次点击 = 关闭）。
+            // 地图工具条单选工具（2026-10-19）：**互斥的唯一实现**。三段式拆解
+            // （P1-2，2026-10-29）：[`map_tool_is_on`] 读判据 → 白名单闸门 →
+            // [`close_all_map_tools`] 全关 → [`open_map_tool`] 按需开启。
+            // 「再次点击 = 关闭」：已启用则全关后不再开（见下）。
             //
             // `Select(shape)` 的口径是「同形状开着 = 关；不同形状开着 = 换形状」
             // ——三个形状是同一把选择工具的三种笔尖，V 快捷键在多边形 / 矩形 /
             // 椭圆之间走一圈时不应出现「先关再开把选区弄丢」的顿挫。
-            let already_on = match tool {
-                MapToolId::Select(shape) => selection.enabled && selection.shape == shape,
-                MapToolId::Pan => view.pan_tool,
-                MapToolId::Brush => brush.enabled && brush.tool != crate::state::BrushTool::Eraser,
-                MapToolId::BrushErase => {
-                    brush.enabled && brush.tool == crate::state::BrushTool::Eraser
-                }
-                MapToolId::MeasureLine => measure.mode == MeasureMode::Line,
-                MapToolId::MeasureRect => measure.mode == MeasureMode::Rect,
-                MapToolId::MeasureEraser => measure.mode == MeasureMode::Eraser,
-                MapToolId::Continent => false,
-                // EditCell 的「已开」判据 = `tool_active`（[ADR-0052] §9.1 S0-1）。
-                // ADR-0057 补记 6：PointSelect 与 EditCell 拆成两件工具两个状态，
-                // 不再共用 `tool_active` / `allow_drag`——判据各读各的 Resource。
-                MapToolId::EditCell => edit_cell.tool_active,
-                MapToolId::PointSelect => point_select.tool_active,
-                MapToolId::BiomeBoundary => boundary.line.is_some(),
-                MapToolId::FloodSelect => flood_select.tool_active,
-                // 线段 POI（ADR-0070 D4）：「同款」= 工具开着 ∧ 同一类——
-                // 河开着点路 = 换类不关工具（与 Select(shape) 换形状同口径）。
-                MapToolId::LinePoi(kind) => line_poi.tool_active && line_poi.kind == kind,
-                MapToolId::Landmark => landmark.placing,
-            };
+            let already_on = map_tool_is_on(
+                &tool,
+                &selection,
+                view.pan_tool,
+                &brush,
+                &measure,
+                &edit_cell,
+                &point_select,
+                &boundary,
+                &flood_select,
+                &line_poi,
+                &landmark,
+            );
 
             // 工作区白名单终审（2026-10-28 裁定⑤）：工具条灰化 / 快捷键拦截 /
             // 命令面板隐藏只是 UX 层，这里才是闸门——白名单外的工具**开启**
@@ -439,125 +429,42 @@ pub(crate) fn apply_pending_commands(
                 return;
             }
 
-            if matches!(tool, MapToolId::Continent) {
+            if matches!(tool, crate::ui_command_palette::MapToolId::Continent) {
                 // 「生成大陆」是开门动作，不是互斥工具：沿用旧语义——只开面板 +
                 // 顺手启用选择工具（圈出意图包络）。
                 continent_dialog.open = true;
                 selection.enabled = true;
             } else {
-                // ① 先全关：互斥。切走时清掉草稿/半边选区，避免「看不见的手」。
-                let had_selection = selection.enabled;
-                let had_measure = measure.mode != MeasureMode::Off;
-                selection.enabled = false;
-                view.pan_tool = false;
-                brush.enabled = false;
-                streets.enabled = false;
-                measure.mode = MeasureMode::Off;
-                if had_selection {
-                    selection.cancel();
-                }
-                if had_measure {
-                    measure.clear_draft();
-                }
-                // 关掉 EditCell 时**只关工具，不清选区**（[ADR-0052] §9.1 S0-1 +
-                // ADR-0057 D1）：`CellSelection` 是已提交的选区态，切工具后仍保留，
-                // 「框选一片 → 切 EditCell」不丢选区（§5 M1 验收 ④）。
-                // 切图清空由 `sync_cell_region` 的 `bind_map` 承担；Esc 走清空入口。
-                edit_cell.close_tool();
-                // 点选工具同款：只关工具，不动选区（ADR-0057 补记 6）。
-                point_select.close_tool();
-                // 关掉泛洪工具：同样只关工具，不清选区（D6-A）。
-                flood_select.close_tool();
-                // 切走分界线工具：线是会话工具，一并清（ADR-0051）。
-                boundary.clear();
-                // 线段 POI 的面板**随工具走**（ADR-0070 D4）：无论「切走」还是
-                // 「同款再点关闭」，工具一关面板就收；若本命令是开 LinePoi，
-                // 下方「按需打开」段会再开它（设置承载在 T11 的面板里）。
-                line_poi.tool_active = false;
-                panels.set_visible(crate::state::Panel::LinePoi, false);
-                // 切走地标放置：纯开关，无草稿可清（ADR-0071）。
-                landmark.placing = false;
-
-                // ② 再按需打开（已启用 → 保持全关，即切换关闭）。
+                close_all_map_tools(
+                    &mut selection,
+                    &mut view,
+                    &mut brush,
+                    &mut streets,
+                    &mut measure,
+                    &mut edit_cell,
+                    &mut point_select,
+                    &mut flood_select,
+                    &mut boundary,
+                    &mut line_poi,
+                    &mut panels,
+                    &mut landmark,
+                );
                 if !already_on {
-                    match tool {
-                        MapToolId::Select(shape) => {
-                            selection.shape = shape;
-                            selection.enabled = true;
-                        }
-                        MapToolId::Pan => view.pan_tool = true,
-                        MapToolId::Brush => brush.enabled = true,
-                        // 橡皮与涂抹共用 `BrushState`，只差 `tool` 指到哪把。
-                        MapToolId::BrushErase => {
-                            brush.tool = crate::state::BrushTool::Eraser;
-                            brush.enabled = true;
-                        }
-                        MapToolId::MeasureLine => {
-                            measure.clear_draft();
-                            measure.mode = MeasureMode::Line;
-                        }
-                        MapToolId::MeasureRect => {
-                            measure.clear_draft();
-                            measure.mode = MeasureMode::Rect;
-                        }
-                        MapToolId::MeasureEraser => {
-                            measure.clear_draft();
-                            measure.mode = MeasureMode::Eraser;
-                        }
-                        MapToolId::Continent => unreachable!("Continent 已在上方分支处理"),
-                        // EditCell 工具激活：ADR-0057 后**只画不选**——点击/拖动
-                        // 累积笔触（见 edit::cell_stroke），选区写入全归
-                        // PointSelect / 框选 / 套索 / 泛洪四个落笔点。
-                        MapToolId::EditCell => {
-                            edit_cell.tool_active = true;
-                        }
-                        // 点选工具（ADR-0057 补记 6）：独立 `PointSelectState`。
-                        // 落笔写 `CellSelection`（见 editing::commit_edit_cell_on_click
-                        // 的点选分支），hover 准星与 EditCell 共用。
-                        MapToolId::PointSelect => {
-                            point_select.tool_active = true;
-                        }
-                        // 分界线工具激活：线要等用户在地图上拖出（见
-                        // edit::biome_boundary_input）。
-                        MapToolId::BiomeBoundary => {
-                            boundary.tool_active = true;
-                        }
-                        // 泛洪选择激活：点一下即泛洪，结果入统一选区
-                        // （见 `edit::flood_select`）。判据在 CellMap 面板的
-                        // segmented 里改（[ADR-0052] D6）。
-                        MapToolId::FloodSelect => {
-                            flood_select.tool_active = true;
-                        }
-                        // 线段 POI 激活（ADR-0070 D4）：记下当前类（弹层换类
-                        // 走到这里 = 换参数），并打开「河流和道路」面板——
-                        // 面板内容（新建表单 / 选中属性）由 T11 渲染。
-                        // 播放锁（T10 评审 minor ①）：播放中不可开工具——
-                        // 瓷砖灰化是第一道闸，这里是命令链上的兜底（命令
-                        // 面板 / 快捷键不经瓷砖也能发 SelectMapTool）。锁住时
-                        // 什么都不开（上方「先全关」已把别的工具收掉）。
-                        // 档位兜底（T10 评审 minor ②）：瓷砖仅在 Edit 档渲染
-                        // （`line_poi_tile_visible`，T10 已落），命令面板 /
-                        // 快捷键同样不经瓷砖——非 Edit 档在此拒绝激活。静默
-                        // 早退与同分支播放锁同口径（不引入一次性回执：非 Edit
-                        // 档下瓷砖本就不可见，入口状态与回执一致；关工具不受
-                        // 此限——`already_on` 走不到本分支，缩小地图也能收）。
-                        MapToolId::LinePoi(kind) => {
-                            if !playback.playing
-                                && wv_render::state::lod_tier(view.scale)
-                                    == wv_render::state::LodTier::Edit
-                            {
-                                line_poi.kind = kind;
-                                line_poi.tool_active = true;
-                                panels.set_visible(crate::state::Panel::LinePoi, true);
-                            }
-                        }
-                        // 地标放置激活：单击地图创建点状 Place（见
-                        // `edit::editing::commit_landmark_click`）。默认类别 /
-                        // 级别在地标面板改（ADR-0071）。
-                        MapToolId::Landmark => {
-                            landmark.placing = true;
-                        }
-                    }
+                    open_map_tool(
+                        &tool,
+                        &mut selection,
+                        &mut view,
+                        &mut brush,
+                        &mut measure,
+                        &mut edit_cell,
+                        &mut point_select,
+                        &mut boundary,
+                        &mut flood_select,
+                        &mut line_poi,
+                        &mut panels,
+                        &mut landmark,
+                        &playback,
+                    );
                 }
             }
         }
@@ -647,162 +554,30 @@ pub(crate) fn apply_pending_commands(
         // 重新生成世界地形（ADR-0037 D4）：新种子重跑冷北模板，单事务可撤销。
         // 备份文件在提交前落盘——重生成是破坏性的，必须给作者退路。
         CommandId::RegenWorld => {
-            let Some(map_id) = drill.current().cloned() else {
-                notice.error(
-                    crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::NoticeRegenNoMap),
-                    frame,
-                );
-                return;
-            };
-            let (w, h) = projection
-                .world
-                .terrain_of(&map_id)
-                .map(|t| (t.width.max(2), t.height.max(2)))
-                .unwrap_or((512, 288));
-            let seed = crate::ui::new_project_dialog::seed_from_clock();
-            let generated = wv_terrain::climate::generate_cold_north(w, h, seed);
-            let terrain = wv_core::terrain::TerrainData {
-                width: generated.width,
-                height: generated.height,
-                cells: generated
-                    .cells
-                    .into_iter()
-                    .map(|c| wv_core::terrain::TerrainCellData {
-                        height: c.height,
-                        surface: c.surface,
-                        biome: c.biome,
-                    })
-                    .collect(),
-            };
-            let template = wv_core::WorldTemplate {
-                kind: wv_core::WorldTemplateKind::ColdNorth,
-                seed,
-                rivers_seed: seed ^ 0x9E37_79B9_7F4A_7C15,
-            };
-            // 生成器河实体（ADR-0070 D3 生成器统一 · 计划 Task 12）：种子河
-            // 的「生成期唯一定义点」——新地形 + rivers_seed 折线 → 无下切的
-            // 河线 POI，与地形同一事务落账（渲染期 seed 派生已在 T8 删除）。
-            // 上一轮生成器河由 commit_regen_world 同事务下架（换血）。
-            let extent = projection
-                .world
-                .maps
-                .iter()
-                .find(|m| m.id == map_id)
-                .and_then(|m| m.extent.as_ref())
-                .map(|e| (e.width, e.height))
-                .unwrap_or((terrain.width as f32, terrain.height as f32));
-            let river_places = crate::edit::river_gen::generator_river_places(
-                &map_id,
-                &terrain,
-                template.rivers_seed,
-                extent,
-            );
-            if let Some(dir) = projection.project_dir.clone() {
-                backup_terrain_before_regen(&dir, &map_id, &projection.world);
-            }
-            match crate::edit::editing::apply_regen_world(
-                &map_id,
-                terrain,
-                template,
-                river_places,
-                &mut edit,
+            dispatch_regen_world(
                 &mut projection,
+                &mut edit,
                 &mut tex,
                 &playback,
-            ) {
-                Ok(msg) => {
-                    diagnostics.needs_diagnose = true;
-                    notice.info(msg, frame);
-                }
-                Err(msg) => notice.error(msg, frame),
-            }
+                drill.current().cloned(),
+                &mut diagnostics,
+                &mut notice,
+                frame,
+                &current_loc,
+            );
         }
         // 保存（阶段七 v0.2）：走 `wv_io::Project::save_world`，只重写 dirty
         // 目录。`take_dirty` 原子取空集合；空 Vec 走全量路径（首次保存、
         // 刚加载、刚撤销等场景）。失败不排空——脏标记仍在，下次保存能补上。
         CommandId::Save => {
-            let Some(dir) = projection.project_dir.clone() else {
-                // 新建工程还没目录：不再报死错，而是排队「选保存位置」对话框
-                // 意图（v0.3 §B，下一帧由 `poll_open_project_dialog` 发起）。
-                // 这补上了「新建 → 首次保存」的断链。
-                open_task.request(DialogPurpose::SaveAs);
-                return;
-            };
-            let dirty = edit.take_dirty();
-            let n = dirty.len();
-            match wv_io::Project::open(&dir) {
-                Ok(mut project) => match project.save_world(&projection.world, &dirty) {
-                    Ok(()) => {
-                        projection.dirty = false;
-                        let scope = if n == 0 {
-                            crate::i18n::t_key(
-                                &current_loc,
-                                crate::i18n::I18nKey::NoticeSavedScopeFull,
-                            )
-                            .to_owned()
-                        } else {
-                            format!(
-                                "{}{}{}",
-                                crate::i18n::t_key(
-                                    &current_loc,
-                                    crate::i18n::I18nKey::NoticeSavedScopePartialCountPrefix
-                                ),
-                                n,
-                                crate::i18n::t_key(
-                                    &current_loc,
-                                    crate::i18n::I18nKey::NoticeSavedScopePartialCountSuffix
-                                )
-                            )
-                        };
-                        notice.info(
-                            format!(
-                                "{}{}{}{}{}",
-                                crate::i18n::t_key(
-                                    &current_loc,
-                                    crate::i18n::I18nKey::NoticeSavedToPrefix
-                                ),
-                                dir,
-                                crate::i18n::t_key(
-                                    &current_loc,
-                                    crate::i18n::I18nKey::NoticeSavedScopePrefix
-                                ),
-                                scope,
-                                crate::i18n::t_key(
-                                    &current_loc,
-                                    crate::i18n::I18nKey::NoticeSavedScopeSuffix
-                                )
-                            ),
-                            frame,
-                        );
-                    }
-                    Err(e) => {
-                        // 失败时把 dirty 放回，让下次保存能再试。
-                        edit.record_dirty(dirty);
-                        notice.error(
-                            format!(
-                                "{}{}",
-                                crate::i18n::t_key(
-                                    &current_loc,
-                                    crate::i18n::I18nKey::NoticeSaveFailedPrefix
-                                ),
-                                e
-                            ),
-                            frame,
-                        );
-                    }
-                },
-                Err(e) => notice.error(
-                    format!(
-                        "{}{}",
-                        crate::i18n::t_key(
-                            &current_loc,
-                            crate::i18n::I18nKey::NoticeOpenProjectDirFailedPrefix
-                        ),
-                        e
-                    ),
-                    frame,
-                ),
-            }
+            dispatch_save_command(
+                &mut projection,
+                &mut edit,
+                &mut open_task,
+                &mut notice,
+                &current_loc,
+                frame,
+            );
         }
         // 强制重画地形纹理（2026-10-14 用户需求：怀疑数据已改、画面没跟上时点 ↻）。
         // 不动世界数据；只清 `last_mode/last_map` 让下一帧必然全图重建。
@@ -824,5 +599,330 @@ pub(crate) fn apply_pending_commands(
         | CommandId::DrillUp
         | CommandId::DrillToRoot
         | CommandId::DrillToSegment(_) => {}
+    }
+}
+
+/// 地图工具「当前是否已启用」的读判据（P1-2 拆解段 ①）。
+///
+/// 从 `SelectMapTool` 分支原样迁出：`Select(shape)` 同形状才算开（换形状 =
+/// 换笔尖不关）；`LinePoi(kind)` 同类才算开；`Continent` 是开门动作恒 false。
+/// 判据各读各的 Resource（EditCell / PointSelect 不共用 `tool_active`，
+/// ADR-0057 补记 6）。
+#[allow(clippy::too_many_arguments)]
+fn map_tool_is_on(
+    tool: &crate::ui_command_palette::MapToolId,
+    selection: &crate::state::SelectionState,
+    pan_tool: bool,
+    brush: &crate::state::BrushState,
+    measure: &crate::state::MeasureState,
+    edit_cell: &crate::state::EditCellState,
+    point_select: &crate::state::PointSelectState,
+    boundary: &wv_render::state::BiomeBoundaryState,
+    flood_select: &crate::state::FloodSelectState,
+    line_poi: &crate::state::LinePoiState,
+    landmark: &crate::state::LandmarkToolState,
+) -> bool {
+    use crate::state::MeasureMode;
+    use crate::ui_command_palette::MapToolId;
+    match *tool {
+        MapToolId::Select(shape) => selection.enabled && selection.shape == shape,
+        MapToolId::Pan => pan_tool,
+        MapToolId::Brush => brush.enabled && brush.tool != crate::state::BrushTool::Eraser,
+        MapToolId::BrushErase => brush.enabled && brush.tool == crate::state::BrushTool::Eraser,
+        MapToolId::MeasureLine => measure.mode == MeasureMode::Line,
+        MapToolId::MeasureRect => measure.mode == MeasureMode::Rect,
+        MapToolId::MeasureEraser => measure.mode == MeasureMode::Eraser,
+        MapToolId::Continent => false,
+        // EditCell 的「已开」判据 = `tool_active`（[ADR-0052] §9.1 S0-1）。
+        MapToolId::EditCell => edit_cell.tool_active,
+        MapToolId::PointSelect => point_select.tool_active,
+        MapToolId::BiomeBoundary => boundary.line.is_some(),
+        MapToolId::FloodSelect => flood_select.tool_active,
+        // 线段 POI（ADR-0070 D4）：「同款」= 工具开着 ∧ 同一类——
+        // 河开着点路 = 换类不关工具（与 Select(shape) 换形状同口径）。
+        MapToolId::LinePoi(kind) => line_poi.tool_active && line_poi.kind == kind,
+        MapToolId::Landmark => landmark.placing,
+    }
+}
+
+/// 全关所有互斥地图工具（P1-2 拆解段 ②）。
+///
+/// 从 `SelectMapTool` 分支原样迁出。切走时清掉草稿 / 半边选区，避免
+/// 「看不见的手」；EditCell / PointSelect / FloodSelect **只关工具不清选区**
+/// （已提交的 `CellSelection` 保留，切图清空由 `sync_cell_region` 的
+/// `bind_map` 承担）；分界线的线是会话工具一并清；线段 POI 面板随工具收。
+#[allow(clippy::too_many_arguments)]
+fn close_all_map_tools(
+    selection: &mut crate::state::SelectionState,
+    view: &mut ViewState,
+    brush: &mut crate::state::BrushState,
+    streets: &mut wv_render::streets::StreetEditorState,
+    measure: &mut crate::state::MeasureState,
+    edit_cell: &mut crate::state::EditCellState,
+    point_select: &mut crate::state::PointSelectState,
+    flood_select: &mut crate::state::FloodSelectState,
+    boundary: &mut wv_render::state::BiomeBoundaryState,
+    line_poi: &mut crate::state::LinePoiState,
+    panels: &mut PanelState,
+    landmark: &mut crate::state::LandmarkToolState,
+) {
+    use crate::state::MeasureMode;
+    let had_selection = selection.enabled;
+    let had_measure = measure.mode != MeasureMode::Off;
+    selection.enabled = false;
+    view.pan_tool = false;
+    brush.enabled = false;
+    streets.enabled = false;
+    measure.mode = MeasureMode::Off;
+    if had_selection {
+        selection.cancel();
+    }
+    if had_measure {
+        measure.clear_draft();
+    }
+    // 关掉 EditCell 时**只关工具，不清选区**（[ADR-0052] §9.1 S0-1 +
+    // ADR-0057 D1）：「框选一片 → 切 EditCell」不丢选区（§5 M1 验收 ④）。
+    edit_cell.close_tool();
+    // 点选工具同款：只关工具，不动选区（ADR-0057 补记 6）。
+    point_select.close_tool();
+    // 关掉泛洪工具：同样只关工具，不清选区（D6-A）。
+    flood_select.close_tool();
+    // 切走分界线工具：线是会话工具，一并清（ADR-0051）。
+    boundary.clear();
+    // 线段 POI 的面板**随工具走**（ADR-0070 D4）：若本命令是开 LinePoi，
+    // `open_map_tool` 会再开它。
+    line_poi.tool_active = false;
+    panels.set_visible(crate::state::Panel::LinePoi, false);
+    // 切走地标放置：纯开关，无草稿可清（ADR-0071）。
+    landmark.placing = false;
+}
+
+/// 按需打开目标地图工具（P1-2 拆解段 ③）。`already_on` 已由调用方保证 false。
+///
+/// 从 `SelectMapTool` 分支原样迁出。LinePoi 带播放锁 + Edit 档兜底（T10
+/// 评审 minor ①②）：锁住 / 非 Edit 档时静默早退——全关已在
+/// [`close_all_map_tools`] 完成，等于「关掉旧工具但新工具没开」，与原
+/// 行为逐字一致。
+#[allow(clippy::too_many_arguments)]
+fn open_map_tool(
+    tool: &crate::ui_command_palette::MapToolId,
+    selection: &mut crate::state::SelectionState,
+    view: &mut ViewState,
+    brush: &mut crate::state::BrushState,
+    measure: &mut crate::state::MeasureState,
+    edit_cell: &mut crate::state::EditCellState,
+    point_select: &mut crate::state::PointSelectState,
+    boundary: &mut wv_render::state::BiomeBoundaryState,
+    flood_select: &mut crate::state::FloodSelectState,
+    line_poi: &mut crate::state::LinePoiState,
+    panels: &mut PanelState,
+    landmark: &mut crate::state::LandmarkToolState,
+    playback: &crate::state::PlaybackState,
+) {
+    use crate::state::MeasureMode;
+    use crate::ui_command_palette::MapToolId;
+    match *tool {
+        MapToolId::Select(shape) => {
+            selection.shape = shape;
+            selection.enabled = true;
+        }
+        MapToolId::Pan => view.pan_tool = true,
+        MapToolId::Brush => brush.enabled = true,
+        // 橡皮与涂抹共用 `BrushState`，只差 `tool` 指到哪把。
+        MapToolId::BrushErase => {
+            brush.tool = crate::state::BrushTool::Eraser;
+            brush.enabled = true;
+        }
+        MapToolId::MeasureLine => {
+            measure.clear_draft();
+            measure.mode = MeasureMode::Line;
+        }
+        MapToolId::MeasureRect => {
+            measure.clear_draft();
+            measure.mode = MeasureMode::Rect;
+        }
+        MapToolId::MeasureEraser => {
+            measure.clear_draft();
+            measure.mode = MeasureMode::Eraser;
+        }
+        // EditCell 工具激活：ADR-0057 后**只画不选**——点击/拖动累积笔触
+        // （见 edit::cell_stroke），选区写入全归 PointSelect / 框选 / 套索 /
+        // 泛洪四个落笔点。
+        MapToolId::EditCell => edit_cell.tool_active = true,
+        // 点选工具（ADR-0057 补记 6）：独立 `PointSelectState`。落笔写
+        // `CellSelection`（见 editing::commit_edit_cell_on_click 的点选分支）。
+        MapToolId::PointSelect => point_select.tool_active = true,
+        // 分界线工具激活：线要等用户在地图上拖出（见 edit::biome_boundary_input）。
+        MapToolId::BiomeBoundary => boundary.tool_active = true,
+        // 泛洪选择激活：点一下即泛洪，结果入统一选区（见 `edit::flood_select`）。
+        MapToolId::FloodSelect => flood_select.tool_active = true,
+        // 线段 POI 激活（ADR-0070 D4）：记下当前类（弹层换类走到这里 = 换参数），
+        // 并打开「河流和道路」面板。播放锁（T10 minor ①）+ Edit 档兜底
+        // （T10 minor ②）：锁住 / 非 Edit 档静默早退（原注释口径不变）。
+        MapToolId::LinePoi(kind) => {
+            if !playback.playing
+                && wv_render::state::lod_tier(view.scale) == wv_render::state::LodTier::Edit
+            {
+                line_poi.kind = kind;
+                line_poi.tool_active = true;
+                panels.set_visible(crate::state::Panel::LinePoi, true);
+            }
+        }
+        // 地标放置激活：单击地图创建点状 Place（见
+        // `edit::editing::commit_landmark_click`）。默认类别 / 级别在地标面板改。
+        MapToolId::Landmark => landmark.placing = true,
+        // Continent 不是互斥工具（开门动作），编排层已分流。
+        MapToolId::Continent => {}
+    }
+}
+
+/// `CommandId::Save` 的执行体（P1-2 拆解）：走 `wv_io::Project::save_world`，
+/// 只重写 dirty 目录。`take_dirty` 原子取空集合；空 Vec 走全量路径（首次保存、
+/// 刚加载、刚撤销等场景）。失败不排空——脏标记仍在，下次保存能补上。
+/// 无目录时排队「选保存位置」对话框（补「新建 → 首次保存」断链，v0.3 §B）。
+fn dispatch_save_command(
+    projection: &mut WorldProjection,
+    edit: &mut crate::edit::editing::EditHistory,
+    open_task: &mut OpenProjectTask,
+    notice: &mut ShellNotice,
+    current_loc: &CurrentLocale,
+    frame: u64,
+) {
+    use crate::i18n::{t_key, I18nKey};
+    let Some(dir) = projection.project_dir.clone() else {
+        open_task.request(DialogPurpose::SaveAs);
+        return;
+    };
+    let dirty = edit.take_dirty();
+    let n = dirty.len();
+    match wv_io::Project::open(&dir) {
+        Ok(mut project) => match project.save_world(&projection.world, &dirty) {
+            Ok(()) => {
+                projection.dirty = false;
+                let scope = if n == 0 {
+                    t_key(current_loc, I18nKey::NoticeSavedScopeFull).to_owned()
+                } else {
+                    format!(
+                        "{}{}{}",
+                        t_key(current_loc, I18nKey::NoticeSavedScopePartialCountPrefix),
+                        n,
+                        t_key(current_loc, I18nKey::NoticeSavedScopePartialCountSuffix)
+                    )
+                };
+                notice.info(
+                    format!(
+                        "{}{}{}{}{}",
+                        t_key(current_loc, I18nKey::NoticeSavedToPrefix),
+                        dir,
+                        t_key(current_loc, I18nKey::NoticeSavedScopePrefix),
+                        scope,
+                        t_key(current_loc, I18nKey::NoticeSavedScopeSuffix)
+                    ),
+                    frame,
+                );
+            }
+            Err(e) => {
+                // 失败时把 dirty 放回，让下次保存能再试。
+                edit.record_dirty(dirty);
+                notice.error(
+                    format!(
+                        "{}{}",
+                        t_key(current_loc, I18nKey::NoticeSaveFailedPrefix),
+                        e
+                    ),
+                    frame,
+                );
+            }
+        },
+        Err(e) => notice.error(
+            format!(
+                "{}{}",
+                t_key(current_loc, I18nKey::NoticeOpenProjectDirFailedPrefix),
+                e
+            ),
+            frame,
+        ),
+    }
+}
+
+/// `CommandId::RegenWorld` 的执行体（P1-2 拆解，ADR-0037 D4）：新种子重跑
+/// 冷北模板，单事务可撤销。备份文件在提交前落盘——重生成是破坏性的，
+/// 必须给作者退路。生成器河（ADR-0070 D3）与地形同一事务落账。
+#[allow(clippy::too_many_arguments)]
+fn dispatch_regen_world(
+    projection: &mut WorldProjection,
+    edit: &mut crate::edit::editing::EditHistory,
+    tex: &mut TerrainTexture,
+    playback: &crate::state::PlaybackState,
+    map_id: Option<wv_core::Id>,
+    diagnostics: &mut crate::state::ProjectDiagnostics,
+    notice: &mut ShellNotice,
+    frame: u64,
+    current_loc: &CurrentLocale,
+) {
+    use crate::i18n::{t_key, I18nKey};
+    let Some(map_id) = map_id else {
+        notice.error(t_key(current_loc, I18nKey::NoticeRegenNoMap), frame);
+        return;
+    };
+    let (w, h) = projection
+        .world
+        .terrain_of(&map_id)
+        .map(|t| (t.width.max(2), t.height.max(2)))
+        .unwrap_or((512, 288));
+    let seed = crate::ui::new_project_dialog::seed_from_clock();
+    let generated = wv_terrain::climate::generate_cold_north(w, h, seed);
+    let terrain = wv_core::terrain::TerrainData {
+        width: generated.width,
+        height: generated.height,
+        cells: generated
+            .cells
+            .into_iter()
+            .map(|c| wv_core::terrain::TerrainCellData {
+                height: c.height,
+                surface: c.surface,
+                biome: c.biome,
+            })
+            .collect(),
+    };
+    let template = wv_core::WorldTemplate {
+        kind: wv_core::WorldTemplateKind::ColdNorth,
+        seed,
+        rivers_seed: seed ^ 0x9E37_79B9_7F4A_7C15,
+    };
+    // 生成器河实体（ADR-0070 D3 生成器统一）：种子河的「生成期唯一定义点」。
+    // 上一轮生成器河由 commit_regen_world 同事务下架（换血）。
+    let extent = projection
+        .world
+        .maps
+        .iter()
+        .find(|m| m.id == map_id)
+        .and_then(|m| m.extent.as_ref())
+        .map(|e| (e.width, e.height))
+        .unwrap_or((terrain.width as f32, terrain.height as f32));
+    let river_places = crate::edit::river_gen::generator_river_places(
+        &map_id,
+        &terrain,
+        template.rivers_seed,
+        extent,
+    );
+    if let Some(dir) = projection.project_dir.clone() {
+        backup_terrain_before_regen(&dir, &map_id, &projection.world);
+    }
+    match crate::edit::editing::apply_regen_world(
+        &map_id,
+        terrain,
+        template,
+        river_places,
+        edit,
+        projection,
+        tex,
+        playback,
+    ) {
+        Ok(msg) => {
+            diagnostics.needs_diagnose = true;
+            notice.info(msg, frame);
+        }
+        Err(msg) => notice.error(msg, frame),
     }
 }
