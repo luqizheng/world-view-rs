@@ -39,8 +39,7 @@ pub(super) fn configure(app: &mut App) {
         visible: false,
         ..Default::default()
     };
-    #[allow(unused_mut)] // 音频 feature 开启时才发生可变借用（下方 cfg 块）
-    let mut group = DefaultPlugins
+    let group = DefaultPlugins
         .set(WindowPlugin {
             primary_window: Some(primary_window),
             ..Default::default()
@@ -62,13 +61,10 @@ pub(super) fn configure(app: &mut App) {
     // 被无预警关窗。拔掉这个永不使用的插件即整类崩溃源消失。
     //
     // 2026-10-29 feature 裁剪：`bevy_audio` 不再启用，`bevy::audio` 模块整体
-    // 缺席——AudioPlugin 无从存在也无需禁用。**未来若重新启用音频 feature**，
-    // 这里必须补回 `.disable::<bevy::audio::AudioPlugin>()` 或正面处理设备
-    // 热切换；两条路都开 ADR。
-    #[cfg(feature = "bevy_audio")]
-    {
-        group = group.build().disable::<bevy::audio::AudioPlugin>();
-    }
+    // 缺席——AudioPlugin 无从存在也无需禁用，原 `#[cfg(feature = "bevy_audio")]`
+    // 禁用块随之删除（unexpected_cfgs clippy 报错）。**未来若重新启用音频
+    // feature**，这里必须补回 `.disable::<bevy::audio::AudioPlugin>()` 或正面
+    // 处理设备热切换；两条路都开 ADR。
     app.add_plugins(group)
         .add_plugins(EguiPlugin::default())
         // 逐格网格材质（2026-10-23）：单 quad + WGSL 双档网格，缩放零重建。

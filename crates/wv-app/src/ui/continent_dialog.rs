@@ -58,12 +58,21 @@ fn next_seed(seed: u64) -> u64 {
 }
 
 /// 绘制面板；「生成」确认时调用 `on_generate`。
+///
+/// `has_envelope = false` 时「生成」按钮禁用并在按钮旁内联提示缺什么
+/// （UX-029② / round-2 审计：前置条件在**入口**披露，而不是点了生成、
+/// 框已关、错误才落在通知区）。
+///
+/// `on_generate` 返回 `true` 才关框——生成失败（如提交被拒）时框留在原地，
+/// 作者可改参数重试，不必重开对话框再走一遍。
 pub fn continent_dialog(
     ctx: &egui::Context,
     shell: &UiShell,
     dialog: &mut ContinentDialog,
     loc: Locale,
-    on_generate: impl FnOnce(ContinentParams, u64),
+    has_envelope: bool,
+    envelope_hint: &str,
+    on_generate: impl FnOnce(ContinentParams, u64) -> bool,
 ) {
     if !dialog.open {
         return;
@@ -169,11 +178,18 @@ pub fn continent_dialog(
                 if ui.button(t(loc, I18nKey::ContinentCancel)).clicked() {
                     cancel = true;
                 }
-                if ui
-                    .button(egui::RichText::new(t(loc, I18nKey::ContinentGenerate)).strong())
-                    .clicked()
-                {
+                let generate_btn = ui.add_enabled(
+                    has_envelope,
+                    egui::Button::new(
+                        egui::RichText::new(t(loc, I18nKey::ContinentGenerate)).strong(),
+                    ),
+                );
+                if generate_btn.clicked() {
                     generate = true;
+                }
+                if !has_envelope {
+                    // 内联前置提示：弱色小字紧贴按钮，原因与出路一句话说清。
+                    ui.label(egui::RichText::new(envelope_hint).small().weak());
                 }
             });
         });
@@ -182,8 +198,11 @@ pub fn continent_dialog(
         dialog.open = false;
     }
     if generate {
-        dialog.open = false;
-        on_generate(dialog.params, dialog.seed);
+        // UX-029②：先回调、成功才关框——旧实现先置 `open = false` 再回调，
+        // 无包络的错误落在已经看不见框的通知区，作者还得重开重选。
+        if on_generate(dialog.params, dialog.seed) {
+            dialog.open = false;
+        }
     }
 }
 
@@ -231,60 +250,88 @@ pub fn continent_dialog_system(
     let cell_size = grid.cell_size;
     let frame = (time.elapsed_secs() * 60.0) as u64;
 
-    continent_dialog(ctx, &shell, &mut dialog, loc, |params, seed| {
-        let Some(map) = map else {
-            notice.error(t(loc, I18nKey::ContinentNoticeNoMap), frame);
-            return;
-        };
-        if playback.playing {
-            // 面板开着时进入播放的边角兜底（入口按钮已按 Gate-1 禁用）。
-            notice.error("播放中为只读：先暂停再生成大陆", frame);
-            return;
-        }
-        // 包络两源：工作台从统一选区提取环（多连通域各一环）；
-        // Browse/Edit 用 V 工具闭合环（spec D5）。成功/失败都不消费选区
-        // （ADR-0033：作者可继续调选区 / 加锚点再生成）。
-        //
-        // ⚠️ 口径不变量（2026-10-26 复核钉死，勿「修」）：环存 map-local、
-        // 配方吃 raster-local，但**这里不需要补帧原点**——`raster_origin`
-        // 在 `sync_grid_config` 里 = 纹理来源图帧原点，而纹理来源 =
-        // `active_terrain` 从当前图向上找的最近自有地形图；生成命令
-        // `apply` 对无自有地形的图直接报错（V1 只提示）。故凡能落笔，
-        // 来源图 == 当前图 ⇒ map-local == raster-local，修正量恒为 0。
-        // 继承父图底图的显示分歧下编辑命令落不了笔，不存在错位路径。
-        let envelopes: Vec<Vec<(f32, f32)>> =
-            if crate::ui::intent_menu::cell_workspace_active(view.mode) {
-                let cells: Vec<(i32, i32)> = cell_sel.iter_cells().collect();
-                let env = wv_terrain::outline::cell_set_outline(&cells, cell_size);
-                if env.is_empty() {
-                    notice.error(t(loc, I18nKey::BatchContinentNoOutline), frame);
-                    return;
-                }
-                env
-            } else {
-                let Some(ring) = selection.closed.clone() else {
-                    notice.error(t(loc, I18nKey::ContinentNoticeNoEnvelopes), frame);
-                    return;
-                };
-                vec![ring]
+    // 包络可用性在**入口**判定（UX-029②）：工作台路径 = 统一选区非空
+    // （非空格集必能提出轮廓），Browse/Edit 路径 = V 工具已有闭合环。
+    let workspace = crate::ui::intent_menu::cell_workspace_active(view.mode);
+    let has_envelope = if workspace {
+        cell_sel.iter_cells().next().is_some()
+    } else {
+        selection.closed.is_some()
+    };
+    let envelope_hint = if workspace {
+        t(loc, I18nKey::BatchContinentNoOutline).to_string()
+    } else {
+        t(loc, I18nKey::ContinentNoticeNoEnvelopes).to_string()
+    };
+
+    continent_dialog(
+        ctx,
+        &shell,
+        &mut dialog,
+        loc,
+        has_envelope,
+        &envelope_hint,
+        |params, seed| {
+            let Some(map) = map else {
+                notice.error(t(loc, I18nKey::ContinentNoticeNoMap), frame);
+                return false;
             };
-        match crate::edit::editing::commit_continent_generation(
-            map,
-            envelopes,
-            params,
-            seed,
-            cell_size,
-            &mut edit,
-            &mut projection,
-            &mut tex,
-        ) {
-            Ok(()) => notice.info(t(loc, I18nKey::ContinentNoticeGenerated), frame),
-            Err(e) => notice.error(
-                format!("{}: {e}", t(loc, I18nKey::ContinentNoticeGenerateFailed)),
-                frame,
-            ),
-        }
-    });
+            if playback.playing {
+                // 面板开着时进入播放的边角兜底（入口按钮已按 Gate-1 禁用）。
+                notice.error("播放中为只读：先暂停再生成大陆", frame);
+                return false;
+            }
+            // 包络两源：工作台从统一选区提取环（多连通域各一环）；
+            // Browse/Edit 用 V 工具闭合环（spec D5）。成功/失败都不消费选区
+            // （ADR-0033：作者可继续调选区 / 加锚点再生成）。
+            //
+            // ⚠️ 口径不变量（2026-10-26 复核钉死，勿「修」）：环存 map-local、
+            // 配方吃 raster-local，但**这里不需要补帧原点**——`raster_origin`
+            // 在 `sync_grid_config` 里 = 纹理来源图帧原点，而纹理来源 =
+            // `active_terrain` 从当前图向上找的最近自有地形图；生成命令
+            // `apply` 对无自有地形的图直接报错（V1 只提示）。故凡能落笔，
+            // 来源图 == 当前图 ⇒ map-local == raster-local，修正量恒为 0。
+            // 继承父图底图的显示分歧下编辑命令落不了笔，不存在错位路径。
+            let envelopes: Vec<Vec<(f32, f32)>> =
+                if crate::ui::intent_menu::cell_workspace_active(view.mode) {
+                    let cells: Vec<(i32, i32)> = cell_sel.iter_cells().collect();
+                    let env = wv_terrain::outline::cell_set_outline(&cells, cell_size);
+                    if env.is_empty() {
+                        notice.error(t(loc, I18nKey::BatchContinentNoOutline), frame);
+                        return false;
+                    }
+                    env
+                } else {
+                    let Some(ring) = selection.closed.clone() else {
+                        notice.error(t(loc, I18nKey::ContinentNoticeNoEnvelopes), frame);
+                        return false;
+                    };
+                    vec![ring]
+                };
+            match crate::edit::editing::commit_continent_generation(
+                map,
+                envelopes,
+                params,
+                seed,
+                cell_size,
+                &mut edit,
+                &mut projection,
+                &mut tex,
+            ) {
+                Ok(()) => {
+                    notice.info(t(loc, I18nKey::ContinentNoticeGenerated), frame);
+                    true
+                }
+                Err(e) => {
+                    notice.error(
+                        format!("{}: {e}", t(loc, I18nKey::ContinentNoticeGenerateFailed)),
+                        frame,
+                    );
+                    false
+                }
+            }
+        },
+    );
 }
 
 #[cfg(test)]

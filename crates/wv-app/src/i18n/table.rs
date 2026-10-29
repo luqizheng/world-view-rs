@@ -364,6 +364,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::ProjectMenuCloseProject => "关闭工程",
         I18nKey::ProjectMenuProjectSettings => "项目设置",
         I18nKey::ProjectMenuProjectSection => "工程",
+        I18nKey::ProjectMenuPanelsSection => "面板",
 
         // ── 区间 ──
         I18nKey::SpanDayPrefix => "第 ",
@@ -492,6 +493,10 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::MapControlsPlaybackLocked => "时间轴播放中，暂停后可编辑",
         I18nKey::MapControlsWorkspaceLocked => "在 CellMap 工作区可用",
         I18nKey::MapControlsNeedMap => "请先打开一张地图",
+        I18nKey::MapControlsLodLocked => "当前缩放档不可用：放大到可编辑档再试",
+        I18nKey::MapControlsViewModeLocked => "当前视图模式下不可用",
+        I18nKey::MapControlsNoTerrain => "当前地图没有地形网格，不可笔刷",
+        I18nKey::HistoryTrimmedNotice => "撤销栈已满：最早的编辑记录已被移除，无法再撤销到更早",
 
         // ── ui_shell 通知 ──
         I18nKey::NoticeSavedToPrefix => "已保存到 ",
@@ -1091,6 +1096,7 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::ProjectMenuCloseProject => "Close project",
         I18nKey::ProjectMenuProjectSettings => "Project settings",
         I18nKey::ProjectMenuProjectSection => "Project",
+        I18nKey::ProjectMenuPanelsSection => "Panels",
 
         // ── Span fragments (W2: timeline / list_panels date strings) ──
         I18nKey::SpanDayPrefix => "Day ",
@@ -1229,6 +1235,12 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::MapControlsPlaybackLocked => "Timeline is playing — pause to edit",
         I18nKey::MapControlsWorkspaceLocked => "Available in the CellMap workspace",
         I18nKey::MapControlsNeedMap => "Open a map first",
+        I18nKey::MapControlsLodLocked => "Unavailable at this zoom — zoom in to the edit level",
+        I18nKey::MapControlsViewModeLocked => "Unavailable in this view mode",
+        I18nKey::MapControlsNoTerrain => "No terrain grid on this map — brush unavailable",
+        I18nKey::HistoryTrimmedNotice => {
+            "Undo stack full: oldest edits were dropped and can no longer be undone"
+        }
 
         // ── ui_shell toasts ──
         I18nKey::NoticeSavedToPrefix => "Saved to ",

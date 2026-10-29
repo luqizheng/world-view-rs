@@ -38,3 +38,23 @@ impl ShellNotice {
         self.text.is_some() && now.saturating_sub(self.frame) < 360
     }
 }
+
+/// 撤销栈逐出回执（UX-034 / round-2 审计）。
+///
+/// `History` 在 wv-edit（零 Bevy 依赖），只能计数不能发通知——这里每帧
+/// 轮询 [`wv_edit::History::take_trimmed`]，把「最早事务被顶掉」转成一条
+/// 状态栏回执。没有它，「撤销不到更早」就是静默的能力损失，用户只会
+/// 觉得撤销坏了。取数即清零：同一批逐出只提示一次。
+pub fn notify_history_trimmed(
+    mut edit: ResMut<crate::edit::editing::EditHistory>,
+    mut notice: ResMut<ShellNotice>,
+    loc: Res<crate::i18n::CurrentLocale>,
+    time: Res<Time>,
+) {
+    if edit.history.take_trimmed() > 0 {
+        notice.info(
+            crate::i18n::t(loc.0, crate::i18n::I18nKey::HistoryTrimmedNotice),
+            (time.elapsed_secs() * 60.0) as u64,
+        );
+    }
+}
