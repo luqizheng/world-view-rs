@@ -1084,32 +1084,53 @@ fn pick_place_pin_prefers_nearest_pin_within_radius() {
         .push(pin("city_b", &map, 130.0, 100.0));
     let grid = GridConfig::default();
     // 光标在 (108,100)：距 a 8、距 b 22，scale=1 → 半径 18 内只有 a。
-    let got =
-        wv_render::drill::pick_place_pin(Vec2::new(108.0, 100.0), &world, &map, &grid, true, 1.0);
+    let got = wv_render::drill::pick_place_pin(
+        Vec2::new(108.0, 100.0),
+        &world,
+        &map,
+        &grid,
+        true,
+        1.0,
+        wv_render::state::LodTier::Edit,
+    );
     assert_eq!(
         got.as_ref().map(|i| i.as_str()),
         Some("city_a"),
         "最近的图钉先被点到"
     );
     // 两钉正中 (115,100)：距各 15 ≤ 18 → 应命中其一。
-    let mid =
-        wv_render::drill::pick_place_pin(Vec2::new(115.0, 100.0), &world, &map, &grid, true, 1.0);
+    let mid = wv_render::drill::pick_place_pin(
+        Vec2::new(115.0, 100.0),
+        &world,
+        &map,
+        &grid,
+        true,
+        1.0,
+        wv_render::state::LodTier::Edit,
+    );
     assert!(mid.is_some(), "等距 15 ≤ 18 应命中其一");
     // 远处点击：两钉都在半径外 → None。
-    let far =
-        wv_render::drill::pick_place_pin(Vec2::new(300.0, 300.0), &world, &map, &grid, true, 1.0);
+    let far = wv_render::drill::pick_place_pin(
+        Vec2::new(300.0, 300.0),
+        &world,
+        &map,
+        &grid,
+        true,
+        1.0,
+        wv_render::state::LodTier::Edit,
+    );
     assert!(far.is_none(), "半径外不命中");
 }
 
 #[test]
-fn pick_place_pin_skips_line_pois_low_rank_and_hidden_layer() {
+fn pick_place_pin_follows_render_visibility_single_source() {
     let map = wv_core::Id::new_unchecked("world_main");
     let mut world = wv_core::World::default();
     // 线段 POI：rank 3 但带折线 → 无图钉。
     let mut river = pin("river_x", &map, 100.0, 100.0);
     river.line = Some(vec![0.0, 0.0, 200.0, 200.0]);
     world.distances.places.push(river);
-    // 低级别地点：rank 1 → 无图钉。
+    // 低级别地点：rank 1 → 渲染随 LOD 档显隐，拾取同门（UX-032 单真源）。
     let mut dot = pin("dot_y", &map, 100.0, 100.0);
     dot.rank = Some(1);
     world.distances.places.push(dot);
@@ -1122,9 +1143,34 @@ fn pick_place_pin_skips_line_pois_low_rank_and_hidden_layer() {
     let grid = GridConfig::default();
 
     let cursor = Vec2::new(100.0, 100.0);
+    // rank-1 在 Edit 档渲染 → 可拾取（旧实现自写 rank<2 硬门，点不中看得见的）。
+    let got_edit = wv_render::drill::pick_place_pin(
+        cursor,
+        &world,
+        &map,
+        &grid,
+        true,
+        1.0,
+        wv_render::state::LodTier::Edit,
+    );
+    assert_eq!(
+        got_edit.as_ref().map(|i| i.as_str()),
+        Some("dot_y"),
+        "Edit 档可见的 rank-1 点应可拾取"
+    );
+    // Nation 档 rank-1 已隐藏 → 不可拾取（旧实现点得中看不见的）。
+    let got_nation = wv_render::drill::pick_place_pin(
+        cursor,
+        &world,
+        &map,
+        &grid,
+        true,
+        1.0,
+        wv_render::state::LodTier::Nation,
+    );
     assert!(
-        wv_render::drill::pick_place_pin(cursor, &world, &map, &grid, true, 1.0).is_none(),
-        "线段 POI / rank1 / 他图图钉都不该命中"
+        got_nation.is_none(),
+        "Nation 档已隐藏的 rank-1 点不可拾取，线段 POI / 他图图钉也不命中"
     );
     // place 图层隐藏 → 图钉不画 → 不命中（即便真图钉在场）。
     world
@@ -1132,7 +1178,16 @@ fn pick_place_pin_skips_line_pois_low_rank_and_hidden_layer() {
         .places
         .push(pin("city_a", &map, 100.0, 100.0));
     assert!(
-        wv_render::drill::pick_place_pin(cursor, &world, &map, &grid, false, 1.0).is_none(),
+        wv_render::drill::pick_place_pin(
+            cursor,
+            &world,
+            &map,
+            &grid,
+            false,
+            1.0,
+            wv_render::state::LodTier::Edit,
+        )
+        .is_none(),
         "图层隐藏时不命中"
     );
 }

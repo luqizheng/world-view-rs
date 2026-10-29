@@ -633,6 +633,8 @@ pub enum I18nKey {
     ProjectMenuMapProperties,
     /// 「工程」分组
     ProjectMenuProjectSection,
+    /// 「面板」分组（ADR-0087：面板开关回填工程菜单，取代 2026-10-19 裁定）
+    ProjectMenuPanelsSection,
 
     // ── 时段 / 区间（公共：第 N 天、跨越时间段） ──────────────────────
     /// 「第 」时段前缀
@@ -858,6 +860,14 @@ pub enum I18nKey {
     MapControlsWorkspaceLocked,
     /// 无地图时空态提示（[ADR-0052] §9.4 Gate-2）
     MapControlsNeedMap,
+    /// 当前缩放档不可用的灰化 tooltip（UX-030：工具入口恒渲染、灰化而非隐藏）
+    MapControlsLodLocked,
+    /// 当前视图模式下不可用的灰化 tooltip（UX-030：同上，按视图模式门控）
+    MapControlsViewModeLocked,
+    /// 当前地图没有自有地形网格的灰化 tooltip（UX-029①：前置条件入口披露）
+    MapControlsNoTerrain,
+    /// 撤销栈逐出最早事务的状态栏回执（UX-034）
+    HistoryTrimmedNotice,
 
     // ── W3：ui_shell 通知 toast 文本 ────────────────────────────────
     /// 「已保存到 」前缀（后接 dir）
@@ -1397,7 +1407,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 574] = [
+    pub const ALL: [I18nKey; 579] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1693,6 +1703,7 @@ impl I18nKey {
         I18nKey::ProjectMenuProjectSettings,
         I18nKey::ProjectMenuMapProperties,
         I18nKey::ProjectMenuProjectSection,
+        I18nKey::ProjectMenuPanelsSection,
         // 区间（4）
         I18nKey::SpanDayPrefix,
         I18nKey::SpanDaySuffix,
@@ -1806,6 +1817,10 @@ impl I18nKey {
         I18nKey::MapControlsPlaybackLocked,
         I18nKey::MapControlsWorkspaceLocked,
         I18nKey::MapControlsNeedMap,
+        I18nKey::MapControlsLodLocked,
+        I18nKey::MapControlsViewModeLocked,
+        I18nKey::MapControlsNoTerrain,
+        I18nKey::HistoryTrimmedNotice,
         // ui_shell 通知（16）
         I18nKey::NoticeSavedToPrefix,
         I18nKey::NoticeSavedScopePrefix,

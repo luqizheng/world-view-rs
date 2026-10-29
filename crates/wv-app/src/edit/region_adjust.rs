@@ -132,7 +132,9 @@ pub fn region_adjust_input(
     if buttons.just_pressed(MouseButton::Left) {
         let spacing = wv_render::biome_boundary::anchor_spacing(view.scale, grid.cell_size, 24.0);
         let poly_pairs: Vec<(f32, f32)> = stored_polygon
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| (c[0], c[1]))
             .collect();
         let anchors = wv_render::biome_boundary::decimate_poly(&poly_pairs, spacing);
@@ -245,7 +247,12 @@ fn drag_anchors(
     press_world: &mut Option<Vec2>,
     mut on_release: impl FnMut(Vec<f32>),
 ) {
-    let poly_pairs: Vec<(f32, f32)> = poly.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+    let poly_pairs: Vec<(f32, f32)> = poly
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| (c[0], c[1]))
+        .collect();
     let spacing = wv_render::biome_boundary::anchor_spacing(view.scale, grid.cell_size, 24.0);
     let anchors = wv_render::biome_boundary::decimate_poly(&poly_pairs, spacing);
     let near = spacing * 0.35;

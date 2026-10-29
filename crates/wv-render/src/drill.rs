@@ -328,6 +328,7 @@ pub fn pick_place_pin(
     grid: &GridConfig,
     place_layer_visible: bool,
     scale: f32,
+    tier: crate::state::LodTier,
 ) -> Option<Id> {
     if !place_layer_visible {
         return None;
@@ -339,7 +340,14 @@ pub fn pick_place_pin(
     let mut best_d2 = f32::INFINITY;
     let mut best: Option<Id> = None;
     for p in &world.distances.places {
-        if p.map.as_ref() != Some(map_id) || p.line.is_some() || p.effective_rank() < 2 {
+        // 可拾取 = 渲染上可见（单真源，UX-032 / round-2 审计）：rank≥2 的
+        // 城市符号全档都画（world_projection 的 landmark_dots），其余点标
+        // 随 `poi_visible_at_rank` 的 LOD 硬门。此前这里自写 `rank < 2` 硬门
+        // 且不看 tier——Edit 档渲染出来的 rank-1 村庄点不可点、Nation 档
+        // 已隐藏的点标反而可点，「看得见点不中 / 点得中看不见」。
+        let rank = p.effective_rank();
+        let visible = rank >= 2 || crate::state::poi_visible_at_rank(rank, tier);
+        if p.map.as_ref() != Some(map_id) || p.line.is_some() || !visible {
             continue;
         }
         let Some((x, y)) = p.effective_anchor() else {
@@ -651,6 +659,7 @@ pub fn drill_pick(
                 &grid,
                 layers.place.visible,
                 view.scale,
+                lod_tier(view.scale),
             ) {
                 projection.selection =
                     Some(wv_core::SelectedEntity::new(wv_core::EntityKind::Place, id));

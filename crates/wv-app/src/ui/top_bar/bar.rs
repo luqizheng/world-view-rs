@@ -77,6 +77,7 @@ pub fn top_bar(
                     &view,
                     &recents,
                     &mut menu,
+                    &panels,
                     &current_loc,
                 );
                 // ── 右区：保存态 / 分隔线 / 日夜 / 语言 / Rebuild / 设置 ──
@@ -143,10 +144,11 @@ fn identity_segment(
     view: &ViewState,
     recents: &[RecentProject],
     menu: &mut ProjectMenuState,
+    panels: &crate::state::PanelState,
     current_loc: &CurrentLocale,
 ) {
     // 项目按钮（logo + 粗体名 + chevron，见 project_menu）+ 组间距。
-    project_menu_inner(ui, shell, projection, recents, menu, current_loc.0);
+    project_menu_inner(ui, shell, projection, recents, menu, panels, current_loc.0);
     ui.add_space(space::MD);
 
     // 面包屑（web .breadcrumbs：gap 4、上级 text_3、**末级 text_2**）。
@@ -385,8 +387,17 @@ fn readout_segment(
     vsep_h_at(ui, shell.border_subtle(), 16.0, egui::pos2(right, cy));
     right -= GAP;
 
-    // ── 保存态：绿点 + Saved / 橙点 + Unsaved。未加载工程时整段不画 ──
+    // ── 保存态：绿点 + Saved / 橙点 + Unsaved（dirty 时可点=保存，UX-021）。
+    // 未加载工程时整段不画 ──
     if projection.project_dir.is_some() {
-        save_indicator(ui, shell, projection.dirty, current_loc.0, right, cy);
+        save_indicator(
+            ui,
+            shell,
+            projection.dirty,
+            current_loc.0,
+            right,
+            cy,
+            palette,
+        );
     }
 }

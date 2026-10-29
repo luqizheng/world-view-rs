@@ -60,10 +60,13 @@ struct MenuRow {
 /// 规格明确要求「**不用固定菜单栏**」——那会破坏顶栏的三段式密度（§3.2）。
 /// 于是入口就是身份段的工程名本身：点它展开，焦点落在当前项上。
 ///
-/// 菜单内容顺序（与原型一致）：最近工程 → 工程操作。
+/// 菜单内容顺序（与原型一致）：最近工程 → 工程操作 → 面板。
 /// **保存 / 撤销不进这个菜单**：它们已有独立位置（§A）。
-/// **面板显隐 / 重置位置也不在这里**（2026-10-19 用户裁定）：工作区窗口属于
-/// 应用设置，入口是顶栏最右 `settings-2`（见 [`super::settings_dialog`]）。
+/// ~~**面板显隐 / 重置位置也不在这里**（2026-10-19 用户裁定）~~——
+/// **已被 ADR-0087 推翻**（2026-10-29，UX-009 / round-2 审计修正版）：
+/// 设置对话框三步入口 + 命令面板对新用户不可见，构成「图层面板（P5）入口
+/// 最难找」的信息架构缺陷；面板显隐以 ✓ 前缀行回填本菜单（重置位置仍在
+/// 设置与命令面板）。见 `docs/adr/ADR-0087-project-menu-panels-section.md`。
 ///
 /// 开合状态存放在 egui memory（`Popup` 的 `OpenKind::Memory`）里，**只在点击工程名时打开**；
 /// 它不是一个「常驻浮层」——常驻会盖住左上角的面包屑（当前图名）。
@@ -73,6 +76,7 @@ pub(crate) fn project_menu_inner(
     projection: &WorldProjection,
     recents: &[RecentProject],
     state: &mut ProjectMenuState,
+    panels: &crate::state::PanelState,
     loc: crate::i18n::Locale,
 ) {
     let name = projection
@@ -203,6 +207,28 @@ pub(crate) fn project_menu_inner(
             label: label.to_owned(),
             keys: keys_arr[idx],
             id: ids[idx],
+        });
+    }
+
+    // ── 面板分组（ADR-0087 / UX-009 round-2 修正版）──
+    // 与命令面板「面板」组同一真源（`Panel::ALL` + `panel_toggle_label_key`），
+    // 点击排 `TogglePanel` 走同一分发；可见性以 ✓ 前缀行内标注。重置位置
+    // 不回填（仍走设置对话框 / 命令面板 `ResetPanelLayout`）。
+    let panel_sect: &'static str =
+        crate::i18n::t(loc, crate::i18n::I18nKey::ProjectMenuPanelsSection);
+    for p in crate::state::Panel::ALL {
+        let visible = panels.is_visible(p);
+        let label_key = crate::ui_command_palette::panel_toggle_label_key(p);
+        let label = if visible {
+            format!("✓ {}", crate::i18n::t(loc, label_key))
+        } else {
+            crate::i18n::t(loc, label_key).to_string()
+        };
+        rows.push(MenuRow {
+            section: panel_sect,
+            label,
+            keys: None,
+            id: CommandId::TogglePanel(p),
         });
     }
 

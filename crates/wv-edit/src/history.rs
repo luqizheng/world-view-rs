@@ -82,15 +82,30 @@ impl Default for Transaction {
 ///
 /// 只保存**已提交**的事务。命令栈是编辑历史的权威来源，
 /// 快照只是它的性能优化产物，不是替代品。
+///
+/// ## 深度上限（UX-034，2026-10-29 round-2 审计）
+///
+/// 事务缓存的是逐格 before/after 快照：一次 1024² 全图级操作（量化/平滑/
+/// 重涂/重生成）≈ 12–17 MB/事务，而长会话会不断混入这类操作——无上限的
+/// undo 栈内存会线性涨到 GB 级。上限取 [`History::MAX_UNDO`]：顶掉的是
+/// **最早**的事务（FIFO），顶掉数经 [`History::take_trimmed`] 报给应用层
+/// （wv-app 用它发一次状态栏回执，让「撤不到更早」有明确原因而非静默）。
 #[derive(Default)]
 pub struct History {
     undo: Vec<Transaction>,
     redo: Vec<Transaction>,
     /// 下一个事务序号（单调递增；undo/redo 不重排）。
     next_seq: u64,
+    /// 自上次 [`History::take_trimmed`] 以来被逐出的最早事务数。
+    trimmed_since_poll: usize,
 }
 
 impl History {
+    /// Undo 栈深度上限（事务数）。300 条普通笔刷绰绰有余；
+    /// 内存上界由全图级操作的 12–17 MB/事务主导，300 条封顶 ≈ 数 GB 最坏
+    /// 情况在真实会话中不可达（全图级操作一次就要数十秒）。
+    pub const MAX_UNDO: usize = 300;
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -105,7 +120,24 @@ impl History {
         self.next_seq += 1;
         self.undo.push(tx);
         self.redo.clear();
+        self.enforce_cap();
         Ok(dirty)
+    }
+
+    /// 自上次取走以来被逐出的最早事务数（取后清零）。
+    ///
+    /// 应用层（wv-app）每帧轮询它发「撤销栈已满」回执——`History` 在
+    /// wv-edit，不能依赖 egui/Bevy，所以只计数不发通知。
+    pub fn take_trimmed(&mut self) -> usize {
+        std::mem::take(&mut self.trimmed_since_poll)
+    }
+
+    /// FIFO 逐出超出 [`Self::MAX_UNDO`] 的最早事务。
+    fn enforce_cap(&mut self) {
+        while self.undo.len() > Self::MAX_UNDO {
+            self.undo.remove(0);
+            self.trimmed_since_poll += 1;
+        }
     }
 
     /// 已提交（在 Undo 栈上）的事务数。
@@ -378,5 +410,34 @@ mod tests {
         assert!(err.to_string().contains("apply 失败"), "got {err}");
         assert_eq!(value.load(Ordering::SeqCst), 0, "已 apply 的命令必须被回滚");
         assert!(!history.can_undo(), "失败事务不得入 undo 栈");
+    }
+
+    #[test]
+    fn undo_stack_trims_oldest_beyond_cap_and_reports_the_count() {
+        let value = Arc::new(AtomicI32::new(0));
+        let mut world = World::default();
+        let mut history = History::new();
+        // 提交 MAX+2 个单命令事务：累计世界值 = MAX+2。
+        for _ in 0..History::MAX_UNDO + 2 {
+            let mut tx = Transaction::new();
+            tx.push(Box::new(MockCommand::new("tick", 1, &value)));
+            history.commit(&mut world, tx).expect("测试事务应提交成功");
+        }
+        assert_eq!(history.len(), History::MAX_UNDO, "undo 栈必须封顶");
+        assert_eq!(history.take_trimmed(), 2, "应报告逐出了 2 条最早事务");
+        assert_eq!(history.take_trimmed(), 0, "取走后计数清零");
+        // 逐出的是最早两条：撤到底只能回到累计值 MAX+2-MAX = 2（第 3 条事务的起点）。
+        let mut undos = 0;
+        while history.can_undo() {
+            history.undo(&mut world).expect("栈内事务撤销应成功");
+            undos += 1;
+        }
+        assert_eq!(undos, History::MAX_UNDO, "栈内事务数即可撤销步数");
+        assert_eq!(
+            value.load(Ordering::SeqCst),
+            2,
+            "撤到底应停在第 3 条事务之后，got {}",
+            value.load(Ordering::SeqCst)
+        );
     }
 }
