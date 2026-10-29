@@ -79,7 +79,7 @@ fn region_contains(region: &Region, p: (f32, f32)) -> bool {
 fn bbox_area(ring: &[f32]) -> f32 {
     let mut min = (f32::INFINITY, f32::INFINITY);
     let mut max = (f32::NEG_INFINITY, f32::NEG_INFINITY);
-    for c in ring.chunks_exact(2) {
+    for c in ring.as_chunks::<2>().0 {
         min = (min.0.min(c[0]), min.1.min(c[1]));
         max = (max.0.max(c[0]), max.1.max(c[1]));
     }

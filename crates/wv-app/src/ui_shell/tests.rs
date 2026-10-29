@@ -2,7 +2,6 @@
 
 use std::path::PathBuf;
 
-use bevy::prelude::*;
 use bevy::tasks::AsyncComputeTaskPool;
 
 use super::*;

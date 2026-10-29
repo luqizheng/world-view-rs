@@ -112,7 +112,7 @@ pub fn stroke_face(
     stroke: &[f32],
     span: &wv_core::model::faction_partition::PartitionSpan,
 ) -> Option<u32> {
-    for c in stroke.chunks_exact(2) {
+    for c in stroke.as_chunks::<2>().0 {
         if let Some(f) = pick_face_at([c[0], c[1]], span) {
             return Some(f);
         }
@@ -132,7 +132,7 @@ pub fn nature_face_name(
 
 /// 采样一点进折线（与上一点距离 ≥ [`STROKE_MIN_SEG`] 才记）。
 pub fn stroke_push(session: &mut CutStrokeSession, p: [f32; 2]) {
-    if let Some(last) = session.pts.chunks_exact(2).last() {
+    if let Some(last) = session.pts.as_chunks::<2>().0.last() {
         let dx = p[0] - last[0];
         let dy = p[1] - last[1];
         if (dx * dx + dy * dy) < STROKE_MIN_SEG * STROKE_MIN_SEG {
@@ -413,7 +413,7 @@ pub fn partition_cut_gesture(
     }
 
     if session.active && session.pts.len() >= 4 {
-        for seg in session.pts.chunks_exact(4) {
+        for seg in session.pts.as_chunks::<4>().0 {
             gizmos.line_2d(
                 Vec2::new(seg[0], seg[1]) + grid.raster_origin,
                 Vec2::new(seg[2], seg[3]) + grid.raster_origin,

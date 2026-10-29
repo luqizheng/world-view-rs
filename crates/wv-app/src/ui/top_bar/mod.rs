@@ -110,6 +110,27 @@ pub(crate) fn root_ui(ctx: &egui::Context) -> egui::Ui {
     )
 }
 
+/// 选项条专用 root Ui：max_rect 从**顶栏下缘**起。
+///
+/// ⚠️ 为什么不能用 [`root_ui`]（2026-10-29 实机缺陷，topOptionBar 落地
+/// 64c13ff 即潜伏）：egui 0.36 的 `Panel::top` 只从**父 Ui 的剩余空间**
+/// 取位（`available_rect_before_wrap`），不存在「跨系统按注册序堆叠」——
+/// 两个系统各自 `root_ui` 的剩余空间都是全视口，选项条永远叠回 y 0..38
+/// 盖住顶栏，而顶栏中段的 Browse/Map/CellMap（`Order::Middle` 独立 Area）
+/// 反而浮在选项条之上挡住软度滑条。状态栏（bottom Panel）锚视口底恰好
+/// 无恙；唯一受害者是第二条 top Panel。
+pub(crate) fn root_ui_below_top_bar(ctx: &egui::Context) -> egui::Ui {
+    let mut vp = ctx.viewport_rect();
+    vp.min.y += TOP_BAR_H;
+    egui::Ui::new(
+        ctx.clone(),
+        "wv_root_option_bar".into(),
+        egui::UiBuilder::new()
+            .layer_id(egui::LayerId::background())
+            .max_rect(vp),
+    )
+}
+
 /// 浮动面板的活动范围：视口挖去顶栏与状态栏（无边框窗 2026-10-25）。
 ///
 /// 由 [`crate::ui::widgets::float_window`] 统一喂给

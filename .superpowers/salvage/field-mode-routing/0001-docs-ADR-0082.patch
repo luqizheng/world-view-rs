@@ -1,0 +1,243 @@
+From 0db0dee71f88731b74f9d44877c721ab59a0ceda Mon Sep 17 00:00:00 2001
+From: luqizheng <luqizheng@126.com>
+Date: Wed, 28 Oct 2026 16:17:14 +0800
+Subject: [PATCH 1/2] =?UTF-8?q?docs:=20ADR-0082=20=E5=9C=BA=E7=AE=A1?=
+ =?UTF-8?q?=E7=BA=BF=E6=A8=A1=E5=BC=8F=E8=B7=AF=E7=94=B1+=E5=88=86?=
+ =?UTF-8?q?=E5=9D=97=E6=8C=87=E7=BA=B9+=E8=A7=82=E6=84=9F=E6=A0=B8?=
+ =?UTF-8?q?=E6=9F=A5=E7=AB=8B=E9=A1=B9?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ GLOSSARY.md                                   |  11 ++
+ docs/TERRAIN_FIELD_P0_SPEC_LOCK_v1.0.md       |  44 +++++++
+ ...ADR-0082-field-mode-routing-fingerprint.md | 123 ++++++++++++++++++
+ docs/adr/README.md                            |   3 +-
+ 4 files changed, 180 insertions(+), 1 deletion(-)
+ create mode 100644 docs/adr/ADR-0082-field-mode-routing-fingerprint.md
+
+diff --git a/GLOSSARY.md b/GLOSSARY.md
+index 578e79e..1d8bd72 100644
+--- a/GLOSSARY.md
++++ b/GLOSSARY.md
+@@ -589,3 +589,14 @@
+ - **英文名**：nature cake / nature layer partition（`FactionLayer.usage = Nature`）
+ - **定义**：用势力图切蛋糕引擎（ADR-0079）承载**自然区域**：层 `usage=Nature` 时脸的属性 = 群系族（`PartitionFace.kind`，wv-terrain `BIOME_FAMILY_ORDER` 序即契约只增不改），显示名「草原N / 干旱N」（N=同族脸按 face id 升序序号，跨会话稳定）；切刀 kind 随脸两分（切草原出两块草原）、Assign=改群系 fork（`SetPartitionFaceKindCommand`，与政治层易主同配方——火山掩草原从某天生效即白拿的 span 能力）。与政治蛋糕的差异只在脸属性（owner 恒空 vs kind），引擎/命令/校验/诊断全部共用。`NatureRegion` 实体本轮并存不迁移（统一几何留后续 ADR）。首次出现：2026-10-28 用户「继续」放行立项五问（数据归属/关系/命名/时间/入口全按推荐）。
+ - **所属维度**：地理 / 编辑
++
++## 场管线收尾：模式路由与分块指纹（2026-10-28 · ADR-0082）
++
++> 来源：`docs/adr/ADR-0082-field-mode-routing-fingerprint.md`（场管线转正后的收尾轮）。设计稿：`docs/superpowers/specs/2026-10-28-field-incremental-and-default-on-design.md`（v2）；计划：`docs/superpowers/plans/2026-10-28-field-mode-routing-fingerprint.md`。本节术语随 ADR 落盘同步登记（AGENTS §6.1）。
++
++| 术语 | 英文 / 拼音 | 定义 | 所属维度 |
++|---|---|---|---|
++| **场支持集** | field-supported modes | 允许走 GPU 场管线的视图模式集合（ADR-0082 D2）：初始提案 {Topographic, VectorFlat, RealTerrain, GoogleMap}；**CPU 留守** {Coastline, Event, Faction}——三档的语义（海岸线 / 事件 / 势力填色）是 CPU 侧呈现，不该吃主题色板。Schematic 已整建制退役（ADR-0069）故不在集合。**P2 核查后定稿**，定稿前按初始提案实现。首次出现：2026-10-28 场管线收尾设计稿 v2 §4 D2 | 渲染 |
++| **模式路由** | mode routing | 场管线转正后补上的「哪些模式画场、哪些模式画 CPU」单一裁决（ADR-0082 D2）：判据收在桥接侧单一纯函数 `should_render_field(view) = field_render ∧ mode ∈ 场支持集 ∧ ¬oblique_active`，`sync_terrain_field` 与 `sync_terrain_chunks` **同消费**——场 quad 与 chunk 纹理互相排斥上屏的既有红线不破。oblique 回落 CPU 的判据必须与 Topographic 模式**合取**（`topographic_compression` 是全局字段，不合取会误伤其他档）。当场修两个活缺陷：CPU 留守档错画 Themed 场、oblique 斜切被平放场 quad 吃掉。真值表测试钉全集（7 模式 × oblique × field_render）。首次出现：2026-10-28 场管线收尾设计稿 v2 §4 D2 | 渲染 |
++| **分块指纹** | block fingerprint | 编辑帧地形内容指纹的增量方案（ADR-0082 D3）：256×256 格一块，块 hash（FNV-1a，与旧 `pack_content_hash` 同字段同序：height/surface/biome）就地缓存，总 hash 按块序确定性折叠；编辑只重算 `field_dirty` 矩形覆盖的块（与 GPU 补丁共用同一脏矩形）。把编辑帧指纹从全量扫 1M 格 ≈3ms 降到 <0.5ms。**验收口径**：FNV 链式折叠下「增量总 hash ≡ 旧全量 hash」数学上不可达（块缓存与链式传播互斥），判据改两条——①新方案自身「增量 ≡ 全量」逐位等价（property 测试，随机编辑序列）；②新旧口径敏感性对拍（同一编辑集合下同翻转、未编辑同不翻）。首次出现：2026-10-28 场管线收尾设计稿 v2 §4 D3 | 渲染 / 性能 |
++| **剥离对照** | layered strip comparison | 全称「Themed 观感剥离对照」——定位 Themed 分支浮雕观感冲淡源的核查法（ADR-0082 D4）：同一张图同机位，把 Themed 加工链**逐层剥离**出对比帧组（裸浮雕 → +色板 → +soften → +wash → +veil），外加 BiomeRaw/Themed × 近观/远观对照——「浮雕对比度被哪一层吃掉」由帧组客观定位，「调多少好看」交用户目验拍板（数字不裁定观感）。实现 = `WV_STRIP` 环境探针经 `ViewState.strip_mask` 位域控 shader 各层，mask 缺省 0 = 生产路径逐位不变（会话态不落盘，沿 `field_render` 先例）。首次出现：2026-10-28 场管线收尾设计稿 v2 §4 D4 | 渲染 / 验收 |
+diff --git a/docs/TERRAIN_FIELD_P0_SPEC_LOCK_v1.0.md b/docs/TERRAIN_FIELD_P0_SPEC_LOCK_v1.0.md
+index 8634a76..c8aca61 100644
+--- a/docs/TERRAIN_FIELD_P0_SPEC_LOCK_v1.0.md
++++ b/docs/TERRAIN_FIELD_P0_SPEC_LOCK_v1.0.md
+@@ -1049,3 +1049,47 @@ BiomeRaw；③ 追记十三的色带屏幕封顶把 CellMap 深缩放的海洋
+ `.target/cellmap-v3.png` / `map-v3.png`）。310+7 全过，fmt 净。
+ 
+ （完）
++
++---
++
++## 二十二、追记十八：场管线收尾立项——模式路由 + 分块指纹 + Themed 观感核查（ADR-0082，2026-10-28）
++
++> 按 AGENTS §6.3「追写不改机制」追加。§一–§二十一正文一字未改（本节是唯一新增）。
++
++**处境**：追记十四转正后，真实剩余缺口浮出四项——① **无模式路由（活缺陷，
++最急）**：`ViewBranch` 只有 BiomeRaw/Themed 二分，切 Coastline / Event /
++Faction 画的是 Themed 场（三档语义是 CPU 侧呈现，吃主题色板是语义错误），
++Topographic + 2.5D oblique（`topographic_compression > 0`）时平放的场 quad
++直接吃掉 CPU 侧独有的斜切——两者都是默认路径上的用户可见缺陷；② 编辑帧
++全量指纹 `pack_content_hash` 每帧扫 1M 格 ≈3ms（增量补丁把重打包省了，
++指纹没省）；③ Themed 分支浮雕观感——同图同角度 BiomeRaw 分支浮雕明显、
++Themed 分支看不出（加工链某层冲淡对比度，即用户实报「Browse 看不出来」的
++正主）；④ 转正与增量补丁均无预算数字与 ADR 决策记录。
++
++**决策**：用户裁定 A 案「场管线收尾两步走」（否决 B 高质量模式开关）后，
++设计稿 `docs/superpowers/specs/2026-10-28-field-incremental-and-default-on-design.md`
++（v2，含修订记录——v1 的「重做式增量」前提已被 trunk 证伪作废）定案，
++**ADR-0082** 留痕，实施计划
++`docs/superpowers/plans/2026-10-28-field-mode-routing-fingerprint.md`（T1–T5）：
++
++- **D2 模式路由**：判据单一函数 `should_render_field = field_render ∧
++  mode ∈ 场支持集 ∧ ¬(oblique 生效)`，`sync_terrain_field` 与
++  `sync_terrain_chunks` 同消费（互相排斥上屏红线不破）；场支持集初始
++  {Topographic, VectorFlat, RealTerrain, GoogleMap}、CPU 留守
++  {Coastline, Event, Faction}（P2 核查后定稿），真值表测试钉全集。
++- **D3 分块指纹**：256×256 格一块、块 hash（FNV-1a，同旧口径字段序）就地
++  缓存、总 hash 按块序确定性折叠，编辑只重算 `field_dirty` 矩形覆盖块
++  （与补丁同源）；验收 = 新方案自身「增量 ≡ 全量」逐位（property 测试）+
++  新旧口径敏感性对拍——链式折叠下「增量总 hash ≡ 旧全量 hash」数学上
++  不可达（builder Q2 裁定的判据修正）。
++- **D4 Themed 观感核查**：`WV_STRIP` 探针（shader 位域逐层剥离：
++  色板 / soften / wash / veil / 浮雕）出对比帧组，定位冲淡源后给调参
++  候选——**数字不裁定观感**，交用户目验拍板后再落参。
++- **D5 核查预算**（可改）：编辑单帧（1024²）≤8ms / 4096² 单笔 patch
++  全链 ≤16ms / VRAM（guangdong 实图）≤1.5GB / 默认保持无条件开
++  （回退开关已存在，不落盘）。
++
++**影响面**：`wv-render`（cellmap_bridge / state）+ `wv-world-cell-map`
++（fingerprint 模块 / terrain_field.wgsl）+ `wv-app`（debug_probe 探针）；
++零数据层改动、零新第三方依赖；`field_render` 回退开关语义不变。本追记仅
++为**立项登记**，核查数字、支持集定稿与观感结论由后续落地追记回本文。
+diff --git a/docs/adr/ADR-0082-field-mode-routing-fingerprint.md b/docs/adr/ADR-0082-field-mode-routing-fingerprint.md
+new file mode 100644
+index 0000000..3f10b82
+--- /dev/null
++++ b/docs/adr/ADR-0082-field-mode-routing-fingerprint.md
+@@ -0,0 +1,123 @@
++# ADR-0082：场管线收尾——按模式路由 + 分块指纹 + Themed 浮雕观感核查
++
++- 状态：**已接受**（2026-10-28，用户上游裁定 A 案「场管线收尾两步走」、否决 B「高质量模式开关」与 C「蛮翻默认」后，按实施计划 `docs/superpowers/plans/2026-10-28-field-mode-routing-fingerprint.md`（T1–T5）立项；本文即该计划 Task 1 的留痕件）
++- 日期：2026-10-28
++- 决策者：用户（A/B/C 三案裁定 + spec v2 决策 D1–D6；分块指纹验收口径修正经 planning builder check 裁定）
++- 设计稿：`docs/superpowers/specs/2026-10-28-field-incremental-and-default-on-design.md`（v2，含修订记录；冲突时以 spec 为准）
++- 编号说明：本 ADR 原拟编 **0080**（计划起草时 0079 势力图切蛋糕为最后占用），起草与落地之间并行轮次占用了 0080（工作区分区与工具白名单）与 0081（自然图层分区），按「`ls docs/adr/` 现场核实取下一空位、顺延并在索引注明」规则改取 **0082**
++- 关联：[ADR-0053](ADR-0053-terrain-gpu-field-rendering.md)（GPU 场管线地基与转正——本 ADR 是其转正后的收尾轮）、[ADR-0054](ADR-0054-world-cell-map-crate.md)（改动落点 crate 与固定色禁令）、[ADR-0069](ADR-0069-retire-schematic-mode.md)（Schematic 退役——场支持集据此为七模式口径）、`docs/TERRAIN_FIELD_P0_SPEC_LOCK_v1.0.md` 追记十四（转正）/ 追记十八（本 ADR 立项登记）
++
++---
++
++## 1. 处境（Context）
++
++场管线已转正（`field_render` 默认 `true`，SPEC LOCK 追记十四，2026-10-26），增量补丁已就位（`field_dirty` + `FieldPack::patch_region`，coast ±32 / biome ±8 裕量、`patch_region_matches_full_repack_*` 逐位等价 property 测试，commit `92302ce`）。转正只回答了「默认画不画场」，没有回答「**哪些模式该画场**」——真实剩余缺口四项：
++
++| # | 缺口 | 性质 |
++|---|---|---|
++| 1 | **无模式路由（两个活缺陷，最急）** | 转正后无任何按模式路由：`ViewBranch` 只有 BiomeRaw/Themed 二分（`cellmap_bridge.rs:1694`），切 Coastline / Event / Faction 画的是 Themed 场——这三档的语义（海岸线 / 事件 / 势力填色）是 CPU 侧呈现，吃主题色板是**语义错误**；Topographic + 2.5D oblique（`topographic_compression > 0`）时平放的场 quad 直接吃掉斜切——oblique 只在 CPU `cells.rs` 烘焙侧存在。两者都是**当前默认路径上的用户可见缺陷**，不是假想风险 |
++| 2 | **编辑帧全量指纹** | `pack_content_hash` 每编辑帧全量扫 1M 格 ≈3ms（`pack.rs`）——增量补丁把重打包省了，指纹还在全量扫 |
++| 3 | **Themed 分支浮雕观感（用户实报问题的头号嫌疑）** | 同图同角度，BiomeRaw 分支（裸群系色 + 海拔色带）浮雕明显，Themed 分支（主题色板 + soften/wash/veil 加工链）看不出。需定位冲淡源并调参裁定 |
++| 4 | **无核查数字、无 ADR** | 转正与增量补丁都没有留下预算数字与决策记录 |
++
++**v1 草稿作废勘误（spec 修订记录）**：v1 建立在「`field_render` 默认 false、增量补丁不存在」的前提上，builder check 对照 trunk 证伪——增量补丁与默认翻转（`9dbd1e0`）均已落地；连带诊断勘误：「Browse 走 CPU 回退路径所以晕渲弱」错误（依据 `debug_probe.rs` 过时注释），Browse 自转正起就是场管线 Themed 分支。本 ADR 以「用户实报：同图小地图（BiomeRaw 分支）浮雕明显、Browse（Themed 分支）看不出」为出发点。
++
++---
++
++## 2. 决策（Decision）
++
++### D1 顺序：路由先行（活缺陷 > 性能 > 观感 > 留痕）
++
++路由（D2）→ 分块指纹（D3）→ Themed 观感核查调参（D4）→ 核查报告 + 留痕（D5）。路由提前的理由：它是默认路径上的现行语义错误，每多活一轮用户就多撞一次；性能与观感是「更好」，路由错画是「不对」。
++
++### D2 按模式路由（修两个活缺陷）
++
++- **判据单一函数** `should_render_field(view: &ViewState) -> bool` = `field_render ∧ mode ∈ 场支持集 ∧ ¬(oblique 生效)`，收在桥接侧；`sync_terrain_field` 与 `sync_terrain_chunks` **同消费**——场 quad 与 chunk 纹理互相排斥上屏的既有红线（ADR-0053 回退开关注释）不破，不许两系统各写各的布尔式。
++- **场支持集（初始提案，P2 核查后定稿）**：`{Topographic, VectorFlat, RealTerrain, GoogleMap}`；**CPU 留守** `{Coastline, Event, Faction}`。spec 初稿曾列 Schematic，该模式已整建制退役（ADR-0069，8→7），七模式下实为四场三 CPU。
++- **oblique 判据与模式合取**：`oblique_active(v) = v.mode == Topographic ∧ v.topographic_compression > 0`——compression 是全局字段，不合取会让非 Topographic 档被误拉回 CPU。
++- **真值表测试钉全集**（7 模式 × oblique 开关 × field_render 开关），外加系统级「翻转瞬间恰一条底图上屏」互斥测试。
++
++### D3 分块指纹（验收口径修正）
++
++- 256×256 格一块，块 hash（FNV-1a，与旧 `pack_content_hash` 同字段同序：height/surface/biome）就地缓存，总 hash 按块序确定性折叠；编辑只重算脏块（脏块集合取自与补丁同源的 `field_dirty` 矩形——一次取用两处消费，不引入第二份脏区追踪）。目标：编辑帧指纹 3ms → <0.5ms@1M 格。
++- **验收口径（builder Q2 裁定）**：FNV 链式折叠下「增量总 hash ≡ 旧全量 hash」**数学上不可达**（块缓存与链式传播互斥——缓存的前提是旧块哈希不因他块编辑而变，链式折叠恰恰要求总 hash 依赖全部字节序）。判据改为两条：
++  1. **新方案自身**「增量重算 ≡ 全量重算」逐位等价（property 测试，随机编辑序列）；
++  2. 新旧口径**敏感性**对拍——同一编辑集合下两者都翻转、未编辑都不翻转。
++  迁移期双跑一轮；钉死后旧全量 `pack_content_hash` 是否退役由实施按消费面（仅 cellmap_bridge 一处）裁定。
++- 代码现值的大编辑阈值（约 1/4 幅面直接全量重打包）维持不动。
++
++### D4 Themed 分支浮雕观感核查（剥离对照）
++
++- **核查法**：同一张图（jrpg-world map_1）同机位 WV_SHOT × {BiomeRaw, Themed} × {近观, 远观}，外加把 Themed 加工链**逐层剥离**出对比帧（裸浮雕 → +色板 → +soften → +wash → +veil），定位浮雕对比度被吃掉的是哪一层。
++- **实现**：`WV_STRIP` 环境探针 → `ViewState.strip_mask: u32`（会话态不落盘，沿 `field_render` 先例）→ `FieldParams` 预留槽 → WGSL 位域逐层关闭（mask 缺省 0 = 生产路径逐位不变）。
++- **产出**：冲淡源结论 + 调参候选（Themed 分支浮雕混合系数上调 / soften 对浮雕通道豁免 / veil 强度分档）。**数字不裁定观感**——对比帧交用户目验拍板后再落参，落参后 WV_SHOT 复验。
++
++### D5 核查预算（本轮裁定，可改）
++
++| 项 | 预算 | 超标处置 |
++|---|---|---|
++| 编辑路径单帧（1024²，含指纹+补丁+上传） | ≤8ms | 超标→D3 指纹/补丁再剖 |
++| 4096² 合成图单笔 patch 全链 | ≤16ms | 超标→GPU 子资源上传专项（另 ADR） |
++| VRAM（场纹理集，guangdong 实图） | ≤1.5GB | 超标→按图幅条件路由（`should_render_field` 加幅面参数）作为后备案 |
++| 默认翻转形态 | **无条件默认开**（回退开关已存在，不落盘） | —— |
++
++- 4096² fixture：无现成工程——用既有生成器合成一张（生成参数入核查报告）；guangdong（最大实图）必测。
++- 非目标（另行立项）：CPU 块烘焙路径退役；Coastline / Event / Faction 三档的场等价移植；2.5D oblique 的场等价；GPU 子资源局部上传。
++
++---
++
++## 3. 理由（Rationale）
++
++- **单一判据函数是双底图红线的客观兜底**：场 quad 与 chunk 纹理同时只能有一条上屏是 ADR-0053 以来的红线；两个系统若各写布尔式，判断漂移只是时间问题。收成桥接侧单一纯函数 + 真值表测试，错一处即红。
++- **路由先行是缺陷分级**：错画不是性能损耗，是**语义错误**——Coastline/Event/Faction 每切一次错一次，oblique 斜切（作者明确设置的视角语言）被静默吃掉。修复成本极低（一个纯函数 + 两处 gate 替换），收益立现。
++- **分块指纹的等价判据让步是数学必然，不是放松要求**：要「增量值 ≡ 旧全量值」就得保留全链式依赖，就得放弃块缓存——两者互斥。改钉「自身一致 + 敏感性等价」两条，保住的恰是指纹的**语义**（编辑必被看见、未编辑必不误报），且 property 测试可自动化；值域变化的一次性后果只是迁移瞬间触发一次全量重打包（当帧完成，用户无感）。
++- **脏块与补丁同源**：`field_dirty` 矩形已带编码裕量（coast ±32 / biome ±8），指纹重算与 GPU 补丁共用同一矩形——增量正确性的证明（窗口读全量、只写区域）对两者同构，不新增正确性论证负担。
++- **观感不落参**：「冲淡源是哪层」可由剥离帧组客观定位；「调到多少算好看」是审美裁定。把客观部分做穷（定位 + 候选），把主观部分交还用户——与 V1「工具让作者看见问题」同一分工哲学。
++- **预算表先行**：转正欠下的「数字账」（缺口 4）用显式预算 + 超标处置闭环；超标路径全部预登记（再剖 / 专项另 ADR / 幅面路由后备案），实施期不临场扩 scope。
++
++---
++
++## 4. 代价与风险（Consequences）
++
++- **路由翻转瞬间的双底图风险**：切进场支持集档时 chunk 实体必须全退场、切出时场 quad 必须完全 teardown——任何一侧残留即双重底图叠加。真值表之外加系统级互斥测试钉住（沿 `field_render_on_chunk_entities` 既有统计口径）。
++- **迁移期双跑**：新旧指纹口径并行一轮，编辑帧多一次旧全量计算（≈3ms），属一次性过渡成本；迁移瞬间 `FieldKey.terrain_hash` 值域切换触发一次全量重打包。
++- **WV_STRIP 探针的零行为要求**：mask=0 时 WGSL 必须走完整 Themed 管线逐位不变——探针若在缺省态泄漏任何差异，等于给所有用户加了隐形开关。以 `strip_mask_zero_is_identity` 逐字段断言 + smoke 双保险。
++- **预算可能超标**：三条超标处置都是预登记路径，不构成本 ADR 决策的推翻；VRAM 超标的后备案（按图幅条件路由）会扩大 `should_render_field` 签名，届时另议。
++- **场支持集定稿悬置**：初始提案到 P2 核查定稿之间，实现按初始提案走；若核查推翻某档归属，属参数修订而非决策修订。
++
++---
++
++## 5. 被否决的备选（Alternatives）
++
++| # | 备选 | 否决理由 |
++|---|---|---|
++| 1 | **v1 重做式增量**（推翻 `92302ce` 补丁链，按 v1 草稿重做增量方案） | **前提证伪**：builder check 对照 trunk 证实增量补丁（`field_dirty` + `patch_region` + 逐位等价 property 测试）与默认翻转（`9dbd1e0`）均已落地——重做是无中生有；v1 的 D2/D3/G5 作废（spec 修订记录）。真实剩余的只是「指纹还在全量扫」这一段，由 D3 分块指纹承接 |
++| 2 | **高质量模式开关（B 案）**：场管线只在高画质档启用，低档回 CPU 烘焙 | 治标不治本：两套管线的**语义边界**（哪些模式该画什么）依旧不存在，开关只把错画推迟到高画质档；且与转正裁定直接冲突——场管线已是默认渲染器（追记十四），再加一档「低质回退」等于给已定案的默认态配一个永不再调的旋钮 |
++| 3 | **无路由维持现状**：转正即终态，错画与 oblique 被吃不修 | 两个活缺陷都在**默认路径**上：Coastline/Event/Faction 语义错误每切一次错一次；oblique 是作者显式设置的视角语言，被平放场 quad 静默吃掉。「维持现状」= 让语义错误常驻默认路径，与 D1「路由先行」裁定直接对立 |
++
++---
++
++## 6. 涉及与不涉及（AGENTS §10 自检）
++
++**触及**：§6.4（本文即留痕；与 ADR-0053 / SPEC LOCK 追记十四的承接关系入索引）；§7.1 渲染层门禁（改动落渲染 crate，T2–T5 各自跑 `cargo app-test` / `app-clippy` + `smoke-gui.sh`）。
++
++**未触及**：P1–P7（零新增存储字段、零格式变更——`strip_mask` 与指纹块缓存均为**会话态**运行时结构，`field_render` 保持不落盘，P3/P6/P7 原样）；分层（改动落 `wv-world-cell-map`（fingerprint 模块 / terrain_field.wgsl）+ `wv-render`（cellmap_bridge / state）+ `wv-app`（debug_probe 探针）；wv-core / wv-terrain / wv-io / wv-edit 零改动；固定色 crate 级禁令不破——剥离探针控的是既有加工链开关，不引入色值）；§3.3（零新命令）；§7.5 V1/V2（无交叉）。
++
++---
++
++## 7. 验收（Acceptance）
++
++1. 路由真值表测试绿；切 Coastline / Event / Faction 恢复 CPU 语义（与转正前对齐）；Topographic + oblique 恢复斜切观感；翻转瞬间恰一条底图上屏（系统级互斥测试）。
++2. 指纹 property 测试绿（自身增量 ≡ 全量逐位）+ 敏感性对拍报告；退化输入（0×0 / 1×1 / 全水）不 panic。
++3. Themed 观感对比帧组 + 用户目验结论入档；若落参，落参后 WV_SHOT 复验。
++4. 核查报告：预算表逐项数字（编辑单帧 / 4096² patch / VRAM）；guangdong + 4096² 合成图实测；支持集逐档 WV_SHOT 与转正前语义比对。
++5. 全门禁（test / clippy / fmt / app-test / app-clippy / smoke-gui）。
++
++---
++
++## 8. 遗留（不构成本 ADR 决策）
++
++- 场支持集定稿：P2 核查后回填（spec D2 初始提案为 {Topographic, VectorFlat, RealTerrain, GoogleMap}）。
++- 旧全量 `pack_content_hash` 的去留：由实施按消费面（仅 cellmap_bridge 一处）裁定。
++- Themed 观感调参候选系数初始值：待 T4 剥离帧结论。
++- CPU 块烘焙路径退役、三 CPU 留守档的场等价移植、2.5D oblique 场等价、GPU 子资源局部上传：各自另行立项。
+diff --git a/docs/adr/README.md b/docs/adr/README.md
+index 447ee0a..8b54814 100644
+--- a/docs/adr/README.md
++++ b/docs/adr/README.md
+@@ -213,7 +213,7 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
+ | [ADR-0046](ADR-0046-sub-cell-author-line-data.md)（追记一） | 亚格线状作者数据——手绘小河（小溪 / 小河） | 已接受（Accepted，2026-10-20，用户拍板立项） | `Place` 加 `line: Option<Vec<f32>>`（图内局部 wu 内联折线，**不新开 `rivers/` 集合**、**不给 `GeometryData` 加线变体**——untagged 裸数组匹配坑 + 面语义稀释）；锚点 `x/y` 缺省取折线中点（沿用 `polyline_midpoint` 先例）；亚格**不占格不写 biome**，与一格宽的 `Intent::River` 并存；渲染走**双供给**（派生 `rivers_seed` ∪ 作者，仿街道双供给）；河岸覆盖物归 ADR-0045 的 region 声明；三个编辑命令照街道形状；v1 线不带 span。**追记一（2026-10-20）**：实现落点表（D1–D8 全部落地）+ 三条遗留项（手绘交互 / 不融合 / 样式不可区分）| P2 / P3 / P4 / P5 / P6 / P7、ADR-0037 D5（不取代）/ 0010（双供给先例）/ 0045 |
+ | [ADR-0047](ADR-0047-uniform-presentation-rank.md) | 全要素统一呈现级别——道路与河流接入「rank × 档位」体系 | 已接受（Accepted，2026-10-20，用户裁定「按照你的推荐把」） | **D1** `PlaceEdge.rank: Option<u8>`（serde 缺省零迁移；`None` 按 distance_km 折算 ≥100→3 / ≥30→2 / 否则 1，冻结契约测试钉死，显式永远赢）；**D2** 统一门槛 `rank_visible_at_tier`（Nation ≥3 / Region ≥2 / Edit 全见）——ADR-0030 词表**扩表**非新表，`poi_visible_at_rank` 降级为别名；**D3** 街道经 `presentation_rank_from_lod`（0–2→3 / 3–5→2 / 6–7→1）委托统一门槛，8 lod × 3 档与旧阈值逐位等价（行为零变化）；**D4** 世界道路段列按 rank 降序 + 三档前缀切割位 + 分档指纹（缩放零重算，跨档 O(1) 切片）；**D5** 河流按折线长 ÷ 图幅宽折算（≥0.40→3 / ≥0.15→2 / 否则 1），派生河与作者河（ADR-0046 双供给）同折算同门槛。顺手修三处带病测试（cells 未关晕开 / decor 缺 RegionOverlayIndex / world_projection 夹具丢 rank 字段的合并回归） | P3 / P7、AGENTS §4.2 / §7.5 V1、ADR-0030（扩表不取代）/ 0010（阈值收口）/ 0021（模式轴正交）/ 0037 D5 / 0046、README §12-48（道路半边关闭） |
+ | [ADR-0052](ADR-0052-cellmap-terrain-workbench.md) | CellMap 地形编辑工作台——从「单格属性表单」到「可连续绘制的地形编辑器」 | 已接受（Accepted，2026-10-24 用户「接收 go」；同日 M1/M2/M3 全部实施并过三道闸门，见 ADR §10） | 判据单一化：**以「把地形形状落进 `terrain.bin`」为任务，每步是否够快 / 够准 / 可后悔**。**D1** `numeric_input_bounded` 正文区升级为「拖拽 scrub（Shift ×10 / Alt ×100）+ 点击转 `TextEdit`」，↑↓ 与钳制行为不变、签名不变；**D2** `EditCellState.hover` 落地（写入系统 + `CellHoverEntities` 独立于 selected：1 px 细框 + 十字准星、不脉动）；**D3** 连续绘制 = 按下-拖动-松手**一次提交 1 条 `BatchEditCellsCommand`**（Bresenham 补间防漏格；拖拽期只画待落色块，**不实时改地形**）；**D4** 落笔值 `CellPaintValue`：surface / biome **绝对**、height **相对**（延续 2026-10-20「批量不提供绝对设值」的裁定）；**D5** 硬边 1 格、不引入半径与 falloff、不复用 `BrushState`；**D6** `wv-terrain` 新增 `flood_region` / `smooth_cells` / `quantize_heights` **纯函数只返变更集**；**D7** 补 EditCell dock 瓷砖 + 修 S0 两处既有缺陷（`SelectMapTool` 每次分派 `edit_cell.clear()` 杀选区；`already_on` 判据错用 `selected.is_some()`）；**D8** 面板常驻读数条。**数据层零迁移**。**待裁 Q4**（方向键 nudge 与相机键冲突）/ **Q7**（泛洪默认判据） | P6 / P7、AGENTS §2.1 / §3.3 / §6.4 / §7.1、ADR-0040（扩展：补决策 2 工具瓷砖 + 决策 5 的 hover 半边，**不推翻**）/ 0043（框选**复用**不重造）/ 0033（切工具不丢选区）/ 0025 / 0026（wv-ui 契约不变）、GLOSSARY（单格填涂 / 落笔值 / 同值泛洪选择 / 邻域平滑 / 拖拽 scrub） |
+-| [ADR-0053](ADR-0053-terrain-gpu-field-rendering.md)（追记一） | 地形底图管线改 GPU 逐像素求值——T0 裁定（甲案），CPU 烘焙主路径退役为回退 | 已接受（Accepted，2026-10-22 22:36 用户确认 P0 规格锁「按照你的」，Q1/Q2/Q3 均按 A；数值总表 `TERRAIN_FIELD_P0_SPEC_LOCK_v1.0.md` 已锁定为施工图，SPEC §3.8 已追记） | 诊断（可复算）：近观 4px/格 ×8 放大（`tile_res_for(1024)=4`）、远观 1.56px/格——位图分辨率上限是架构问题，调参三轮已证修不动。**D1** 底图默认路径改 GPU 逐像素（3 张数据纹理 8MB + `TerrainFieldMaterial` WGSL，无分辨率上限）；**D2** 边界改 SDF 距离场 + 世界坐标域扭曲（近观收敛保编辑精度）；**D3** 地物改图集 Sprite 实例化，**双轨修正**（程序化 `_default` 保留，图集为位图 pack 能力，与 T1 一致）；**D4–D7** 数据三通道 / 色板令牌 / ViewMode / 主题可换**全保留**（只换求值位置，SeaRecipe 等已定值原样搬 uniform）；**D8** 新增区域层 + 纸材质层（远观构图）；**D9** SPEC 增补 §3.8 渲染实现契约（屏幕像素口径，原文不改）。回退 = `FieldRender` 一行开关。**编号修正**（2026-10-23）：原取 0051，与 feat/mode-content-matrix 的 ADR-0051 撞号，改取 0053（用户裁定甲方案，既有分支编号不动）；配套 CellMap 工作台 ADR 由 0050 改取 0052。阶段 P0 规格锁（已完成）→P1 最小 shader（~900 行）→P2 手绘化→P3 图集→P4 构图+纸面→P5 低配档；每阶段固定机位截图验收 | P3 / P5 / P7、AGENTS §2.2 / §6.4、`RENDER_IMPLEMENTATION_PLAN_v0.1.md`（柯章 §3.1 主管线**让位**，其余部分存活）/ `TERRAIN_VISUAL_OVERHAUL_PLAN_v1.0.md`（方案源）/ `TERRAIN_FIELD_P0_SPEC_LOCK_v1.0.md`（施工图）、ADR-0042 / 0048（已定值不推翻）/ 0043 / 0023 / 0049（ThemePack 不动）、README §12（T0–T6 待裁基线） |
++| [ADR-0053](ADR-0053-terrain-gpu-field-rendering.md)（追记一） | 地形底图管线改 GPU 逐像素求值——T0 裁定（甲案），CPU 烘焙主路径退役为回退 | 已接受（Accepted，2026-10-22 22:36 用户确认 P0 规格锁「按照你的」，Q1/Q2/Q3 均按 A；数值总表 `TERRAIN_FIELD_P0_SPEC_LOCK_v1.0.md` 已锁定为施工图，SPEC §3.8 已追记） | 诊断（可复算）：近观 4px/格 ×8 放大（`tile_res_for(1024)=4`）、远观 1.56px/格——位图分辨率上限是架构问题，调参三轮已证修不动。**D1** 底图默认路径改 GPU 逐像素（3 张数据纹理 8MB + `TerrainFieldMaterial` WGSL，无分辨率上限）；**D2** 边界改 SDF 距离场 + 世界坐标域扭曲（近观收敛保编辑精度）；**D3** 地物改图集 Sprite 实例化，**双轨修正**（程序化 `_default` 保留，图集为位图 pack 能力，与 T1 一致）；**D4–D7** 数据三通道 / 色板令牌 / ViewMode / 主题可换**全保留**（只换求值位置，SeaRecipe 等已定值原样搬 uniform）；**D8** 新增区域层 + 纸材质层（远观构图）；**D9** SPEC 增补 §3.8 渲染实现契约（屏幕像素口径，原文不改）。回退 = `FieldRender` 一行开关。**编号修正**（2026-10-23）：原取 0051，与 feat/mode-content-matrix 的 ADR-0051 撞号，改取 0053（用户裁定甲方案，既有分支编号不动）；配套 CellMap 工作台 ADR 由 0050 改取 0052。阶段 P0 规格锁（已完成）→P1 最小 shader（~900 行）→P2 手绘化→P3 图集→P4 构图+纸面→P5 低配档；每阶段固定机位截图验收 | P3 / P5 / P7、AGENTS §2.2 / §6.4、`RENDER_IMPLEMENTATION_PLAN_v0.1.md`（柯章 §3.1 主管线**让位**，其余部分存活）/ `TERRAIN_VISUAL_OVERHAUL_PLAN_v1.0.md`（方案源）/ `TERRAIN_FIELD_P0_SPEC_LOCK_v1.0.md`（施工图）、ADR-0042 / 0048（已定值不推翻）/ 0043 / 0023 / 0049（ThemePack 不动）、README §12（T0–T6 待裁基线）；**承接（2026-10-28）**：[ADR-0082](ADR-0082-field-mode-routing-fingerprint.md) 承接其转正后的收尾轮（按模式路由 + 分块指纹 + Themed 观感核查三笔欠账，SPEC LOCK 追记十八立项登记） |
+ | [ADR-0054](ADR-0054-world-cell-map-crate.md) | 抽取 wv-world-cell-map crate——世界级地形工作台独立成 crate（地图工作台 crate 族第一块） | 已接受（Accepted，2026-10-23 用户「go」；同日 feat/terrain-field-p1 已合 main，D7 前置满足） | **修订 AGENTS §2 架构**：cell map 渲染（`terrain_view/` 含 field 管线 + chunks + selection + region_overlay + biome_boundary + `EditCellState`/`GridConfig`，main ≈10.4k 行 + field 分支 +5,750 行）整建制迁出 wv-render 成平行 crate `wv-world-cell-map`。**D1** 搬迁清单与 ViewState 留守；**D2** 红线：只许 wv-core / wv-terrain / bevy，**禁 wv-theme / wv-edit / wv-app / wv-render**，wv-render → 新 crate 单向，§2.2 加 `cargo tree` 断言；**D3** bevy 非 optional（标准门禁天然覆盖——服务「独立被 AI 优化」）；**D4** 固定色口径 = 色值是数据（`CellPalette` 平面结构 + 冻结群系表默认源 + `ThemePack→CellPalette` 换算在 wv-render 侧 + `ViewMode→ShadeMode` 映射），**不烧 shader 常量**（否则与 ADR-0053 D5/D7 共用管线冲突）；**D5** crate 零 wv-render import，视图态经 `CellViewInfo` 平面数据由 adapter systems 投影，旧路径 re-export 保 wv-app 零改动；**D6** 族克制：不建 wv-map-common、共享基础设施留 wv-render（浏览居中 + 每层一工作台）；**D7** 时序 = **先合 feat/terrain-field-p1 再抽**（不在飞行分支上搬路径），ADR-0052 增强实施落点改新 crate（两 ADR 正文均零改动）；**D8** AGENTS §2/§2.1/§2.2 同步修订。待裁：wv-city-map 与场景编辑器设计（2026-10-17）关系、POI/河流薄 pass 迁移时机 | 分层纪律 AGENTS §2、P5、ADR-0020（同法先例）/ 0026 / 0043（bevy 非 optional 口径）/ 0039 / 0051 / 0052（增强落点迁移）/ 0053（field 管线随迁）、`docs/superpowers/specs/2026-10-17-scene-editor-design.md`（待裁关系） |
+ | [ADR-0055](ADR-0055-cellmap-hypsometric-tint.md) | CellMap 海拔分层设色——用颜色在平面上读出高度（不引入 3D） | 已接受（Accepted，2026-10-24 用户三问裁定：A 叠层 / 8 阶 / 百分位；决策 3 的「百分位」同日被 ADR-0056 修正） | **修正 ADR-0051 §5「高度不参与颜色」**（正文不改，头部标注）。**A 叠层**：`color = mix(群系色, 色带[band], strength)`，`strength ∈ [0,1]`（0 纯群系 / 0.35 双读默认 / 1 纯海拔）；**8 阶固定色带**（crate 常量，不进 ThemePack——守 ADR-0051 §5 / ADR-0054 D2）；**逐图百分位** 7 条内边界（`i/8` 分位，样本只含陆格），推翻 ADR-0039 的等分 p33/p66；只叠陆格（水走海岸色带）；与 hillshade 相乘（色带读「高」、晕渲读「坡」）。**双路径同时接线**：CPU 烘焙（当前默认，强度变重烘整图）+ GPU 场（ADR-0053 目标路径，强度只改 uniform，cuts 缓存在 `TerrainFieldRender`）。数据层零改动（P3/P6/P7）。否决：真 3D（撕投影栈）/ 2.5D vertex-Z（GPU 底图无顶点）/ 严格单选档 / 等分绝对高度 / 色带进 ThemePack / 只做单条路径。**⚠️ 其「8 阶」在 CellMap 数据视图路径已被 [ADR-0077](ADR-0077-cellmap-relief-shading.md) 部分修正**（2026-10-28）——「8 阶离散取色」改「**8 锚点连续渐变**」（阶内按高度在相邻锚点色间 lerp，锚点色本身不变）；DOMAIN_CUTS 绝对阶梯与窄域兜底（ADR-0056）原样不动，A 叠层 / 固定色带 / 双路径 / 强度会话态等其余决策不变 | P3 / P6 / P7、AGENTS §2.1 / §6.4 / §7.1、ADR-0051（修正 §5）/ 0039（口径改）/ 0053（双路径）/ 0054（固定色禁令）/ 0041（2.5D 不在范围） |
+ | [ADR-0057](ADR-0057-cellmap-unified-selection.md) | CellMap 统一选区——从「工具即模式」到「选区优先（先名词后动词）」 | 已接受（Accepted，2026-10-25 评审修订后转正：位图容量数字改正；EditCell 只画不选锁死；新增验收标准 A1–A9） | **推翻 ADR-0040 补 B**（Single/Batch 两态互斥 + `BatchModeAutoLand` 退役）；**修正 ADR-0052 D5 前半句**（笔刷半径可调 R∈1–8 硬边，falloff 维持不引入）。**D1** 统一选区 `CellSelection`（`Vec<u64>` 位图按图幅定容，512² 格 ≈ 32 KB，零新依赖；单格 = 1 格选区，`selected`/`region_cells`/`region_fingerprint`/`allow_drag` 退役）；**D2** 无修饰=替换 / Shift=并 / Alt=差，四选择工具语义一致；**D3** 框选 R 复用 ADR-0043 手势直写选区，EditCell 只画不选；**D4** 拖绘蒙版裁剪（footprint ∩ 选区，空 = 自由涂）；**D5** 选区会话态：不进撤销栈、不落盘，Esc/切图清空、切工具保留；**D6** 面板简化 = 选区非空即读数条 + 调整表单；**D7** 第二批登记（按属性选择 / 反选 / 扩缩，本批不实施）；**D8** 蚂蚁线（外围边界白虚线、沿方格边不曲线化、两相位 mesh 互换计时切换，hover 准星不动）；**D9** 半径可调（格心距圆盘硬边）。验收 A1–A9。否决：一步完整模型 / 只合数据不动交互 / 互不影响 / Figma 对象模型 / 选区入撤销栈 / 逐格四边全画 / 曲线化 / 连续滚动 shader / Gizmos / 软边 falloff | P6 / P7（选区为会话态，不入存储层）、AGENTS §2.1 / §3.3 / §6.4 / §7.1、ADR-0040（**推翻补 B**）/ 0052（在其上重构选区层；**修正 D5 前半句**）/ 0043（框选复用）/ 0033（切工具保留选区）/ 0054（选区态落 wv-world-cell-map）/ 0025（选择优先彻底化）、GLOSSARY（统一选区 / 选区加减法 / 蒙版裁剪 / 蚂蚁线） |
+@@ -251,6 +251,7 @@ ADR 一旦定为「已接受」，其正文**不再修改**。若决策被推翻
+ 
+ | [ADR-0075](ADR-0075-map-tree-trash-and-deep-copy.md) | 地图树垃圾桶与深拷贝复制粘贴——多对多被否决维持单亲树；软删只打标（显隐派生，跨重启可恢复）；purge 直应用豁免撤销 + save_maps 目录删除传播；首条改 meta 的命令（删 root_map 顺带改写）；粘贴层级门控 + 视野中心锚定 + ID/名字全量换新 | 已接受（2026-10-27，用户批准设计稿「go」+ 实机验收通过；spec `docs/superpowers/specs/2026-10-27-map-tree-enhancement-design.md`（含 §10 追记）、计划 `plans/2026-10-27-map-tree-enhancement.md`；**编号按上备注取缓冲号 0075**——原分支内编 0074，与山系笔（0076）撞号） |
+ | [ADR-0077](ADR-0077-cellmap-relief-shading.md) | CellMap 真实地形晕渲——双光源 + Horn 米制梯度 + 多尺度概括 + 低地色带连续渐变 | 已接受（2026-10-28，设计稿经用户批准后按实施计划 T1–T9 立项；spec `docs/superpowers/specs/2026-10-28-cellmap-relief-shading-design.md`、计划 `docs/superpowers/plans/2026-10-28-cellmap-relief-shading.md`，本文为 Task 1 留痕件） | **D1** 双光源美术光照 `I = 0.4 + 0.48·max(0,N·L₁) + 0.12·max(0,N·L₂)`（三系数和 = 1 → I 天然界内 [0.4,1.0]，明暗钳制退役；**修正 ADR-0067 D2「调轻钳制」路线**）；**D2** Horn 3×3 梯度 + 米制量纲 `s = Z_EXAG / meters_per_cell`（Z_EXAG 初始 2.0、双三次解析梯度与 CPU 中心差分退役、无比例尺图按 1 wu = 1 m 回落）；**D3** 多尺度概括 = 同一高度纹理三个 mip 级加权 `0.45/0.40/0.15`，detail 权重随缩放衰减——**取代 T33 远观浮雕整体关灯**；**D4** CPU/GPU 同公式带声明例外（CPU 块烘焙单尺度）；**D5** 低地色带 0–200 m 段内连续插值（8 锚点色不变；**修正 ADR-0055「8 阶」CellMap 路径语义**；ADR-0056 绝对阶梯与窄域兜底不动）；**D6** 公式唯一真源收 `wv-world-cell-map/src/shading.rs` crate 常量（固定色禁令不破，主题化留未来 ADR）。零数据层改动 | P3 / P5 / P7、AGENTS §6.3 / §6.4、ADR-0053（场管线地基）/ 0054（落点 crate 与固定色禁令）/ 0055（D5 修正关系）/ 0056（阶梯语义保留）/ 0067（D2 修正关系）、README §12-53（无比例尺米制假设待决）、GLOSSARY（多尺度晕渲 / 双光源 / Horn 算子 / 垂直夸张 / 连续色带） |
++| [ADR-0082](ADR-0082-field-mode-routing-fingerprint.md) | 场管线收尾——按模式路由 + 分块指纹 + Themed 浮雕观感核查（转正后三笔欠账） | 已接受（2026-10-28，用户上游裁定 A 案「场管线收尾两步走」、否决 B「高质量模式开关」与 C「蛮翻默认」，按实施计划 T1–T5 立项；spec `docs/superpowers/specs/2026-10-28-field-incremental-and-default-on-design.md`（v2）、计划 `docs/superpowers/plans/2026-10-28-field-mode-routing-fingerprint.md`，本文为 Task 1 留痕件；**编号顺延**——原拟 0080，0080/0081 已被并行轮次占用（工作区分区与工具白名单 / 自然图层分区），现场核实后取 0082） | **D1** 顺序路由→指纹→观感→核查（活缺陷 > 性能 > 观感 > 留痕）；**D2** 模式路由判据单一函数 `should_render_field = field_render ∧ mode ∈ 场支持集 ∧ ¬(oblique 生效)`，场/chunk 两系统同消费（互相排斥上屏红线不破），场支持集初始 {Topographic, VectorFlat, RealTerrain, GoogleMap}、CPU 留守 {Coastline, Event, Faction}（P2 核查定稿），真值表测试钉全集——当场修两个活缺陷：CPU 留守档错画 Themed 场、Topographic+oblique 斜切被平放场 quad 吃掉；**D3** 分块指纹 256² 块 FNV-1a 缓存 + 块序折叠，编辑只重算 `field_dirty` 矩形覆盖块（与补丁同源），验收口径修正：链式折叠下「增量值 ≡ 旧全量值」数学不可达，改钉自身增量≡全量逐位（property）+ 新旧敏感性对拍；**D4** WV_STRIP 剥离探针出 Themed 加工链逐层对比帧，定位冲淡源、调参候选交用户目验（数字不裁定观感）；**D5** 预算表：编辑单帧 ≤8ms / 4096² patch ≤16ms / VRAM ≤1.5GB / 无条件默认开。被否决：v1 重做式增量（前提已被 trunk 证伪）/ B 案高质量模式开关（语义边界仍缺）/ 无路由维持现状（语义错误常驻默认路径） | P3 / P5 / P7、AGENTS §2.1 / §6.4 / §7.1、ADR-0053（场管线转正——本 ADR 是其收尾轮）/ 0054（落点 crate）/ 0069（Schematic 退役，支持集据此七模式）、SPEC LOCK 追记十四（转正）/ 追记十八（本 ADR 立项）、GLOSSARY（场支持集 / 模式路由 / 分块指纹 / 剥离对照） |
+ 
+ ---
+ > **⚠️ 编号撞号备注（2026-10-20 追加）**：`ADR-0044` 已被 ADR-0042 的「追记三」占用（civ-atlas 方法论落地，commit `eef816c`，索引行指向 ADR-0042 文件），故本次两份新 ADR 从 **0045** 起（ADR-0045 自然区域 / ADR-0046 亚格线状作者数据）。上文 0042 那条备注的「后续新 ADR 从 0042 起」已过时，按 §6.3 只增不改、保留原文。引用时务必带文件名全称。
+-- 
+2.55.0.windows.2
+

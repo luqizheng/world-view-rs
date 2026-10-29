@@ -40,6 +40,11 @@ pub(super) fn theme_parts(cfg: &UiShellConfig) -> (egui::ImageSource<'static>, I
 ///
 /// 设计稿示例带时刻（`Saved 14:32`），但工程目前**不持久化保存时间戳**；
 /// 不拿「当前时钟」冒充保存时刻（会骗人），只报已保存 / 未保存。
+///
+/// **dirty 时可点 = 保存**（UX-021 / round-2 审计修正版）：此前这枚 pill
+/// 是纯 painter、不可交互，「保存」全 UI 无鼠标入口。只在 dirty 时给命中区
+/// ——干净态点击会走 `save_world(空脏集)` 的**全量重写**路径，不能让用户
+/// 一手滑触发它；干净态保持纯展示。
 pub(super) fn save_indicator(
     ui: &mut egui::Ui,
     shell: &UiShell,
@@ -47,6 +52,7 @@ pub(super) fn save_indicator(
     loc: crate::i18n::Locale,
     right: f32,
     cy: f32,
+    palette: &mut crate::ui_command_palette::CommandPalette,
 ) {
     let (dot, key) = if dirty {
         (color32(shell.palette.badge_warn), I18nKey::TopBarUnsaved)
@@ -59,13 +65,39 @@ pub(super) fn save_indicator(
         shell.t3(),
     );
     let text_x = right - galley.size().x;
+    let dot_center = egui::pos2(text_x - space::XS - 2.5, cy);
+    if !dirty {
+        ui.painter().galley(
+            egui::pos2(text_x, cy - galley.size().y * 0.5),
+            galley,
+            shell.t3(),
+        );
+        ui.painter().circle_filled(dot_center, 2.5, dot);
+        return;
+    }
+    // dirty：整段（圆点+文本）是保存按钮。
+    let hit_rect = egui::Rect::from_min_max(
+        egui::pos2(dot_center.x - 4.0, cy - 10.0),
+        egui::pos2(right, cy + 10.0),
+    );
+    let resp = ui.allocate_rect(hit_rect, egui::Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(hit_rect, 4.0, shell.hover_bg());
+    }
     ui.painter().galley(
         egui::pos2(text_x, cy - galley.size().y * 0.5),
         galley,
         shell.t3(),
     );
-    let dot_center = egui::pos2(text_x - space::XS - 2.5, cy);
     ui.painter().circle_filled(dot_center, 2.5, dot);
+    if resp.clicked() {
+        palette.pending = Some(crate::ui_command_palette::CommandId::Save);
+    }
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(format!(
+            "{} (Ctrl+S)",
+            crate::i18n::t(loc, I18nKey::CommonSave)
+        ));
 }
 
 /// 偏好控件尾随内容（Figma：快捷键文本 / 下翻 chevron）。

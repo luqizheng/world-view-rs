@@ -2,25 +2,6 @@
 
 use super::*;
 
-/// 这次笔触要不要**先铺场景基底网格**？
-///
-/// ## 场景编辑器 M1（2026-10-29）
-///
-/// 一张新建的城市图没有自己的地形栅格，而笔刷要求「这张图有栅格」才生效
-/// （`PaintTerrainCommand` 查不到就报 `TerrainMismatch`）。作者的心智是
-/// 「进图就画」——故首次刷色时自动补一张基底网格（全「未分区」分区码），
-/// 让第一笔直接落在可画的东西上。
-///
-/// ## 三条判定
-///
-/// - **世界图不引导**：世界图的地形由大陆生成器负责，铺满是毁数据；
-/// - **已有栅格不引导**：作者画过的地形不能被覆盖；
-/// - **非场景图不引导**：场景图 = City / Interior 级（判定按「图级 ≠ World」，
-///   与渲染层的格级判定口径一致）。
-pub(crate) fn needs_scene_base_grid(level: wv_core::map::MapLevel, has_terrain: bool) -> bool {
-    level != wv_core::map::MapLevel::World && !has_terrain
-}
-
 /// 松手时把笔触转成命令并提交。
 ///
 /// Bevy 系统的参数即「依赖声明」，宽签名是框架惯例而非坏味道。
@@ -137,20 +118,13 @@ pub fn commit_stroke_on_release(
     // **两条命令同事务**——作者一步 Ctrl+Z 就该把「格子和笔迹」一起退掉，
     // 而不是退完格子还剩一笔、或退完笔还剩一张空网格。事务失败时整体
     // 回滚（`Transaction::commit` 的补偿逻辑），不会留半张图。
-    let map_level = projection
-        .world
-        .maps
-        .iter()
-        .find(|m| m.id == target_map)
-        .map(|m| m.level);
-    let has_terrain = projection.world.terrain_of(&target_map).is_some();
-    if let Some(level) = map_level {
-        if needs_scene_base_grid(level, has_terrain) {
-            tx.push(Box::new(CreateSceneBaseGridCommand::new(
-                target_map.clone(),
-                grid.cell_size,
-            )));
-        }
+    // 判据用 `World::map_needs_base_grid` 单真源（wv-core）——与光标侧的
+    // `map_is_brush_writable` 同源，两者不会给出矛盾答案。
+    if projection.world.map_needs_base_grid(&target_map) {
+        tx.push(Box::new(CreateSceneBaseGridCommand::new(
+            target_map.clone(),
+            grid.cell_size,
+        )));
     }
     tx.push(cmd);
     match edit.history.commit(&mut projection.world, tx) {

@@ -6,8 +6,9 @@
 //!   （`map_controls`，**选工具**）分工——本条**调当前工具的参数**。
 //! - **动机**：地形笔刷 8 把工具与各自参数散在命令面板 / 快捷键与（已裁撤的）
 //!   笔刷浮窗段里，作者「工具太多看不全」。本条把工具切换与参数调节收进一条
-//!   常驻水平条；egui top Panel 按注册序向下堆叠，在 `wv_top_bar` 之后注册即
-//!   天然贴在其正下方，无需手算坐标。
+//!   常驻水平条；落位 = root Ui 显式从顶栏下缘起（`root_ui_below_top_bar`）
+//!   ——egui 0.36 的 top Panel **没有**跨系统注册序堆叠（2026-10-29 修正，
+//!   见该函数文档），原「天然贴在其正下方」的假设不成立。
 //! - **对 2026-10-24 裁定的修正**（AGENTS §6.3 追记）：「工具切换只走命令
 //!   面板 / 快捷键」修正为「**亦**可走本条头部瓷砖行」；命令面板与快捷键入口
 //!   不变。2026-10-25「笔刷浮窗只服务 CellMap 结构编辑」随之**更成立**——
@@ -82,8 +83,10 @@ pub(crate) fn shows_strength(tool: BrushTool) -> bool {
 
 /// 工具选项条（贴 topbar 正下方）。
 ///
-/// 注册顺序即落位：egui top Panel 按调用序堆叠，本系统必须在
-/// `ui::top_bar` **之后**、同一 `.chain()` 链上（`app_bootstrap/schedules.rs`）。
+/// 落位由 [`top_bar::root_ui_below_top_bar`](crate::ui::top_bar::root_ui_below_top_bar)
+/// 显式保证（root Ui 从顶栏下缘起）——与 `ui::top_bar` 同链 `.chain()`
+/// （`app_bootstrap/schedules.rs`）的注册顺序**不**决定落位（egui 0.36
+/// Panel 无跨系统堆叠）。
 pub fn top_option_bar(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,
@@ -101,9 +104,13 @@ pub fn top_option_bar(
         return;
     };
     let loc = current_loc.0;
-    // 场景分区条：独立面板（显示门控在函数内——场景图才出）。
+    // 不能用 `root_ui`：egui 0.36 的 Panel::top 只认父 Ui 剩余空间、无跨系统
+    // 堆叠——fresh 全视口 Ui 会让本条叠回 y 0..38 盖住顶栏（2026-10-29 实机
+    // 缺陷，见 `top_bar::root_ui_below_top_bar` 文档）。显式从顶栏下缘起。
+    let mut root = super::top_bar::root_ui_below_top_bar(ctx);
+    // 场景分区条：独立面板，落在**选项条下缘**（同一理由——它也是一条 top
+    // Panel，若与选项条同起点会叠在一起）。
     district_strip_panel(ctx, &shell, &mut brush, loc, &projection, &drill);
-    let mut root = super::top_bar::root_ui(ctx);
     egui::Panel::top("wv_top_option_bar")
         .exact_size(BAR_H)
         .frame(
@@ -278,6 +285,23 @@ fn material_strip(ui: &mut egui::Ui, shell: &UiShell, kind: &mut u8, loc: Locale
     );
 }
 
+/// 分区条专用 root Ui：max_rect 从「顶栏 + 选项条」下缘起。
+///
+/// **为什么不能复用 `top_bar::root_ui_below_top_bar`**：那个 root Ui 的
+/// 剩余空间从**顶栏**下缘起，选项条就占着 y 38..76——分区条用同一个 root Ui
+/// 会与选项条**完全重叠**。本条再往下让一个选项条高，落在选项条正下方。
+fn root_ui_below_option_bar(ctx: &egui::Context) -> egui::Ui {
+    let mut vp = ctx.viewport_rect();
+    vp.min.y += super::top_bar::TOP_BAR_H + BAR_H;
+    egui::Ui::new(
+        ctx.clone(),
+        "wv_root_district_strip".into(),
+        egui::UiBuilder::new()
+            .layer_id(egui::LayerId::background())
+            .max_rect(vp),
+    )
+}
+
 /// 场景分区材料条：**独立顶栏面板**（不是主条的第二行）。
 ///
 /// ## 为什么另起一个面板
@@ -286,6 +310,18 @@ fn material_strip(ui: &mut egui::Ui, shell: &UiShell, kind: &mut u8, loc: Locale
 /// 笔刷胶囊 + 工具瓷砖 + 9 块地形材料 + 半径滑条 + 软度滑条。再塞 6 块
 /// 分区（6×20=120px）会把 1280 宽的窗口挤爆，而 `exact_size` 意味着面板
 /// **不会自动增高**——想换行就得改顶层布局，影响面远大于收益。
+///
+/// ## 落位：选项条下缘
+///
+/// egui 0.36 的 `Panel::top` 只从**父 Ui 的剩余空间**取位，**没有跨系统
+/// 堆叠**（2026-10-29 实机缺陷，详见 `top_bar::root_ui_below_top_bar` 文档）。
+/// 故本条不能复用选项条那个 root Ui——那会让两条**叠在同一处**
+/// （都在 y 38..76）。本条用 [`root_ui_below_option_bar`]：从「顶栏 + 选项条」
+/// 下缘起，即紧贴选项条正下方。
+///
+/// 选项条与本条的显示条件都含 `brush.enabled`（选项条：`bar_visible`；
+/// 本条：门控），故两条总是同时出现或同时不出现——偏移量恒定，不需要
+/// 按「选项条在不在」分支。
 ///
 /// ## 显示门控
 ///
@@ -313,7 +349,7 @@ fn district_strip_panel(
     if node.level == wv_core::map::MapLevel::World {
         return;
     }
-    let mut root = super::top_bar::root_ui(ctx);
+    let mut root = root_ui_below_option_bar(ctx);
     egui::Panel::top("wv_top_option_bar_district")
         .exact_size(BAR_H)
         .frame(

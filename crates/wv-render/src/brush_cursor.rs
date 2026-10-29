@@ -45,7 +45,7 @@ use bevy::math::primitives::{Annulus, Rectangle};
 use bevy::prelude::*;
 
 use crate::camera::{screen_to_world, PointerOverUi};
-use crate::state::{BrushState, BrushTool, DrillState, ViewState};
+use crate::state::{BrushState, BrushTool, DrillState, ViewState, WorldProjection};
 use crate::theme::colors;
 
 /// 屏幕像素描边（外环 / 十字线宽）。
@@ -63,6 +63,9 @@ const CROSS_PX: f32 = 12.0;
 /// 内圈 = `radius × INNER_RADIUS_RATIO`。civ-atlas 笔刷 cursor 双环——
 /// 外环"将要影响"、内环"已下笔"——内圈比外圈小一圈、alpha 较暗对比。
 const INNER_RADIUS_RATIO: f32 = 0.7;
+
+/// 禁止符圆环半径（屏幕像素，UX-029①）。屏幕恒定：世界半径 = px × view.scale。
+const FORBID_PX: f32 = 11.0;
 
 /// Z 偏移：光标永远在所有矢量层之上、egui 面板之下。
 const CURSOR_Z: f32 = 0.9;
@@ -84,6 +87,11 @@ pub struct BrushCursorEntities {
     pub cross_h: Option<Entity>,
     /// 纵臂。
     pub cross_v: Option<Entity>,
+    /// 上一帧是否处于**禁止符**模式（UX-029①：当前图没有自有地形网格时，
+    /// 笔刷光标切换为「禁止符」）。模式切换时整组 despawn 重建——只重建
+    /// 一次，不是每帧（每帧重建 mesh/material 是本项目已定性的资产泄漏
+    /// 反模式）。
+    pub forbid: bool,
 }
 
 impl BrushCursorEntities {
@@ -118,6 +126,7 @@ pub fn sync_brush_cursor(
     view: Res<ViewState>,
     brush: Res<BrushState>,
     drill: Res<DrillState>,
+    projection: Res<WorldProjection>,
     pointer_over_ui: Res<PointerOverUi>,
     mut entities: ResMut<BrushCursorEntities>,
 ) {
@@ -150,6 +159,66 @@ pub fn sync_brush_cursor(
     let stroke_world = (STROKE_PX * view.scale).max(f32::EPSILON);
     let dash_world = (DASH_PX * view.scale).max(f32::EPSILON);
     let cross_world = (CROSS_PX * view.scale).max(f32::EPSILON);
+
+    // ---- UX-029①（round-2 审计）：笔刷不能写时，光标从笔刷双环切换为
+    // 禁止符——前置条件事前披露，不等松手后的报错。
+    //
+    // **判据是「这一笔真会不会被拒」，不是「有没有栅格」**：判据由
+    // `World::map_is_brush_writable` 单真源给出（wv-core），提交侧
+    // （wv-app 的笔触提交）用的是同一口径——否则会出现「光标说不能写、
+    // 松手却写进去了」的割裂。
+    //
+    // 该判据同时覆盖两种「不能写」：
+    // - 世界图没有栅格 → 笔刷不铺世界图（地形由大陆生成器负责）；
+    // - 图不存在 → 无从写起。
+    // 而场景图（城市 / 地下城）没有栅格时**仍可写**——首次刷色会自动铺
+    // 一张场景基底网格（场景编辑器 M1），这一笔不会报错。
+    //
+    // 模式切换才整组重建（见 [`BrushCursorEntities::forbid`]）。----
+    let brush_writable = drill
+        .current()
+        .is_some_and(|id| projection.world.map_is_brush_writable(id));
+    let forbid = !brush_writable;
+    if entities.forbid != forbid {
+        entities.despawn_all(&mut commands);
+        entities.forbid = forbid;
+    }
+    if forbid {
+        let radius = (FORBID_PX * view.scale).max(f32::EPSILON);
+        let mat_forbid = materials.add(colors::ACCENT_CURSOR);
+        // 圆环（复用外环槽位）。
+        let ring_handle = meshes.add(
+            Annulus::new((radius - stroke_world).max(f32::EPSILON), radius)
+                .mesh()
+                .resolution(48),
+        );
+        let ring_tf = Transform::from_translation(cursor_world.extend(CURSOR_Z));
+        if let Some(e) = entities.outer {
+            commands.entity(e).insert((Mesh2d(ring_handle), ring_tf));
+        } else {
+            let e = commands
+                .spawn((
+                    Mesh2d(ring_handle),
+                    MeshMaterial2d(mat_forbid.clone()),
+                    ring_tf,
+                ))
+                .id();
+            entities.outer = Some(e);
+        }
+        // 斜杠（复用横臂槽位）：竖长矩形转 45°，左上→右下。
+        let slash_handle = meshes.add(Rectangle::new(stroke_world, radius * 1.4));
+        let slash_tf = Transform::from_translation(cursor_world.extend(CURSOR_Z + 0.01))
+            .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4));
+        if let Some(e) = entities.cross_h {
+            commands.entity(e).insert((Mesh2d(slash_handle), slash_tf));
+        } else {
+            let e = commands
+                .spawn((Mesh2d(slash_handle), MeshMaterial2d(mat_forbid), slash_tf))
+                .id();
+            entities.cross_h = Some(e);
+        }
+        return;
+    }
 
     // 地形橡皮刷（ADR-0043）用危险色画环：光标是「这一下会擦掉东西」的唯一
     // 事前提示，颜色是最省字的差别。涂抹仍是金色——两者的手感和后果都不同，

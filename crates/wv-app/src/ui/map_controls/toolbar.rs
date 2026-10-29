@@ -75,6 +75,14 @@ pub fn map_controls(
     let mode_now = view.mode;
     let ws = move |tool: MapToolId| tool.available_in(mode_now);
     let ws_hint = t(loc, I18nKey::MapControlsWorkspaceLocked);
+    // UX-029①（round-2 审计）：地形笔刷只落**自有**地形栅格——当前图没有
+    // `terrain_of` 时（子图继承父图底图）入口即灰。此前这个前置条件只在
+    // 松手提交时报错（「笔刷未生效：地图无地形网格」），作者得先画一笔
+    // 才知道画不了。
+    let brush_writable = drill
+        .current()
+        .is_some_and(|id| projection.world.terrain_of(id).is_some());
+    let no_terrain_hint = t(loc, I18nKey::MapControlsNoTerrain);
 
     let vertical = params.dock.orientation == MapDockOrientation::Vertical;
     let metrics = DockMetrics::for_orientation(vertical);
@@ -206,7 +214,7 @@ pub fn map_controls(
                         // 本瓷砖即回程入口，点它 = 按 B（同一 `MapToolId::Brush`）。
                         // Gate-1：播放中灰化（写入口）；CellMap 工作区外灰化（白名单）。
                         // 编号取 3.5 不重排后续槽位（ADR-0043 槽位号纪律）。
-                        let brush_ok = cell_tools_enabled && ws(MapToolId::Brush);
+                        let brush_ok = cell_tools_enabled && ws(MapToolId::Brush) && brush_writable;
                         tool_tile(
                             ui,
                             &shell,
@@ -216,6 +224,8 @@ pub fn map_controls(
                                 locked_hint
                             } else if !ws(MapToolId::Brush) {
                                 ws_hint
+                            } else if !brush_writable {
+                                no_terrain_hint
                             } else {
                                 t(loc, I18nKey::MapControlsBrushHint)
                             },
@@ -227,7 +237,8 @@ pub fn map_controls(
 
                         // ── 槽 4：地形橡皮刷 ─────────────────────────────
                         // Gate-1：播放中灰化（写入口）；CellMap 工作区外灰化（白名单）。
-                        let eraser_ok = cell_tools_enabled && ws(MapToolId::BrushErase);
+                        let eraser_ok =
+                            cell_tools_enabled && ws(MapToolId::BrushErase) && brush_writable;
                         tool_tile(
                             ui,
                             &shell,
@@ -237,6 +248,8 @@ pub fn map_controls(
                                 locked_hint
                             } else if !ws(MapToolId::BrushErase) {
                                 ws_hint
+                            } else if !brush_writable {
+                                no_terrain_hint
                             } else {
                                 t(loc, I18nKey::MapControlsEraserHint)
                             },
@@ -319,6 +332,7 @@ pub fn map_controls(
                             metrics,
                             ICON_GRID,
                             grid_active,
+                            true,
                             "显示参照网格（G）",
                         )
                         .clicked()
@@ -329,56 +343,89 @@ pub fn map_controls(
                         // ── 槽 10.5：等值线（2026-10-23 验收裁定）────────
                         // 会话开关（`view.isolines`，默认关）：等值线默认是
                         // 「海面黑线修饰」，要时再开。仅在 pass 有产出的两
-                        // 模式显示（VectorFlat 分析参照 / Topographic 数据视图）。
-                        if matches!(view.mode, ViewMode::VectorFlat | ViewMode::Topographic)
-                            && icon_tile(
-                                ui,
-                                &shell,
-                                metrics,
-                                ICON_WAVES,
-                                view.isolines,
-                                "显示等值线",
+                        // 模式可用（VectorFlat 分析参照 / Topographic 数据视
+                        // 图）——其他模式**恒渲染灰化**而非隐藏（UX-030 /
+                        // round-2 审计：入口消失会让作者以为功能丢了）。
+                        let isolines_ok =
+                            matches!(view.mode, ViewMode::VectorFlat | ViewMode::Topographic);
+                        let isolines_hint = if isolines_ok {
+                            "显示等值线".to_owned()
+                        } else {
+                            format!(
+                                "显示等值线（{}）",
+                                t(loc, I18nKey::MapControlsViewModeLocked)
                             )
-                            .clicked()
+                        };
+                        if icon_tile(
+                            ui,
+                            &shell,
+                            metrics,
+                            ICON_WAVES,
+                            view.isolines,
+                            isolines_ok,
+                            &isolines_hint,
+                        )
+                        .clicked()
                         {
                             view.isolines = !view.isolines;
                         }
 
                         // ── 槽 10.75：海拔分层设色强度（ADR-0055）────────────
-                        // 仅 CellMap：数据视图用颜色读海拔。0 = 纯群系色块，
+                        // 仅 CellMap 可用：数据视图用颜色读海拔。0 = 纯群系色块，
                         // 1 = 8 阶海拔色带完全替代群系色。会话态、不落盘。
                         // 槽位尺寸见 [`DockMetrics::tint_slider_slot`]：竖排就地
                         // 转竖（1 列 × 2 槽），否则横条的 3 槽宽会把纵向工具条
                         // 整条撑宽（2026-10-24 用户反馈）。
-                        if matches!(view.mode, ViewMode::Topographic) {
-                            let slot = metrics.tint_slider_slot(vertical);
-                            // Slider 的长度取 `spacing().slider_width`（默认
-                            // 100），与 `add_sized` 的 max_size 不同源；竖排不
-                            // 同步改它，滑条会按 100px 长把框再撑高。
-                            if vertical {
-                                ui.spacing_mut().slider_width = slot.y;
-                            }
+                        // UX-030：其他模式恒渲染、`set_enabled` 灰化而非消失。
+                        let tint_ok = matches!(view.mode, ViewMode::Topographic);
+                        let slot = metrics.tint_slider_slot(vertical);
+                        // Slider 的长度取 `spacing().slider_width`（默认
+                        // 100），与 `add_sized` 的 max_size 不同源；竖排不
+                        // 同步改它，滑条会按 100px 长把框再撑高。
+                        if vertical {
+                            ui.spacing_mut().slider_width = slot.y;
+                        }
+                        let tint_hint = if tint_ok {
+                            "海拔分层设色强度（0 = 只看群系色，1 = 只看海拔）".to_owned()
+                        } else {
+                            format!(
+                                "海拔分层设色强度（{}）",
+                                t(loc, I18nKey::MapControlsViewModeLocked)
+                            )
+                        };
+                        // `add_enabled_ui`（egui 0.36 无 `set_enabled`）：禁用态
+                        // 滑条灰化、不可拖。
+                        ui.add_enabled_ui(tint_ok, |ui| {
                             let slider = egui::Slider::new(&mut view.hypsometric_tint, 0.0..=1.0)
                                 .show_value(false);
                             let slider = if vertical { slider.vertical() } else { slider };
-                            ui.add_sized(slot, slider)
-                                .on_hover_text("海拔分层设色强度（0 = 只看群系色，1 = 只看海拔）");
-                        }
+                            ui.add_sized(slot, slider).on_hover_text(tint_hint);
+                        });
 
                         // ── 槽 11：自然区（2026-10-22 内容矩阵 §2.6）──────
-                        // CellMap 里显示 Nature 类区域 + 未命名候选高亮；
-                        // 仅 CellMap（Topographic 工作区）显示本按钮——
-                        // 其他模式区域层不受开关控制（用户裁定：只在 cell map）。
-                        if matches!(view.mode, ViewMode::Topographic)
-                            && icon_tile(
-                                ui,
-                                &shell,
-                                metrics,
-                                ICON_TREES,
-                                view.nature_overlay,
-                                "显示自然区与候选（CellMap）",
+                        // CellMap 里显示 Nature 类区域 + 未命名候选高亮。
+                        // 仅 CellMap（Topographic 工作区）可用——其他模式区域
+                        // 层不受开关控制（用户裁定：只在 cell map）；UX-030
+                        // 后恒渲染灰化而非整枚消失。
+                        let nature_ok = matches!(view.mode, ViewMode::Topographic);
+                        let nature_hint = if nature_ok {
+                            "显示自然区与候选（CellMap）".to_owned()
+                        } else {
+                            format!(
+                                "显示自然区与候选（{}）",
+                                t(loc, I18nKey::MapControlsViewModeLocked)
                             )
-                            .clicked()
+                        };
+                        if icon_tile(
+                            ui,
+                            &shell,
+                            metrics,
+                            ICON_TREES,
+                            view.nature_overlay,
+                            nature_ok,
+                            &nature_hint,
+                        )
+                        .clicked()
                         {
                             view.nature_overlay = !view.nature_overlay;
                         }
@@ -434,33 +481,38 @@ pub fn map_controls(
                         );
 
                         // ── 槽 14：线段 POI（河流 / 道路，ADR-0070 D4）──
-                        // **仅 Edit 档渲染**（`line_poi_tile_visible`）：线的
-                        // 作者工具只在放大到可编辑级别才有意义，Nation /
-                        // Region 档整枚瓷砖不渲染（而非灰化）。分裂按钮：
-                        // 主键 = 河，弹层换类；命令排队后由分发器统一互斥。
-                        // 播放锁对齐 CellMap 工具组（T10 评审 minor ①）：
-                        // 播放中灰化不可点，与写入口工具同一 Gate-1 口径。
-                        if line_poi_tile_visible(wv_render::state::lod_tier(view.scale)) {
-                            let lp = MapToolId::LinePoi(line_poi.kind);
-                            line_poi_split(
-                                ui,
-                                &shell,
-                                metrics,
-                                vertical,
-                                loc,
-                                line_poi.kind,
-                                line_poi.tool_active,
-                                if !cell_tools_enabled {
-                                    locked_hint
-                                } else if !ws(lp) {
-                                    ws_hint
-                                } else {
-                                    t(loc, I18nKey::LinePoiHint)
-                                },
-                                cell_tools_enabled && ws(lp),
-                                &mut params.palette,
-                            );
-                        }
+                        // 作者工具只在放大到可编辑级别（Edit 档）才有意义——
+                        // 旧实现整枚瓷砖不渲染（而非灰化），作者拉远半档工具
+                        // 就「消失」，以为功能丢了（UX-030 / round-2 审计）。
+                        // 现恒渲染：Edit 档亮，其余灰化 + 悬停说明。
+                        // 分裂按钮：主键 = 河，弹层换类；命令排队后由分发器
+                        // 统一互斥。播放锁对齐 CellMap 工具组（T10 评审
+                        // minor ①）：播放中灰化不可点，与写入口工具同一
+                        // Gate-1 口径。
+                        let lp = MapToolId::LinePoi(line_poi.kind);
+                        let lp_lod_ok =
+                            line_poi_tile_visible(wv_render::state::lod_tier(view.scale));
+                        let lp_hint = if !cell_tools_enabled {
+                            locked_hint
+                        } else if !ws(lp) {
+                            ws_hint
+                        } else if !lp_lod_ok {
+                            t(loc, I18nKey::MapControlsLodLocked)
+                        } else {
+                            t(loc, I18nKey::LinePoiHint)
+                        };
+                        line_poi_split(
+                            ui,
+                            &shell,
+                            metrics,
+                            vertical,
+                            loc,
+                            line_poi.kind,
+                            line_poi.tool_active,
+                            lp_hint,
+                            cell_tools_enabled && ws(lp) && lp_lod_ok,
+                            &mut params.palette,
+                        );
                     };
 
                     // **不用**交叉轴 `Align::Center`（2026-10-20 教训）：大框的

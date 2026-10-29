@@ -149,6 +149,8 @@ pub fn register(app: &mut App) {
                 // 就是它自己刚写坏的默认值（打开工程永远回不到用户上次的日夜模式）。
                 (load_layout_on_project_open, persist_layout_on_change).chain(),
                 sync_window_clear_color,
+                // 撤销栈逐出回执（UX-034）：与命令分发无依赖，进同组即可。
+                notice::notify_history_trimmed,
             ),
         )
         // bevy_egui 0.42：UI 系统进 pass 调度（见 gui.rs 同款注释）。

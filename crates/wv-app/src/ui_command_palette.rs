@@ -303,6 +303,31 @@ pub fn exit_cellmap_workspace(
     }
 }
 
+/// 面板显隐条目的标签键——命令面板「面板」组与工程菜单「面板」分组共用
+/// （ADR-0087），不再各写一份 match 漂移。
+pub fn panel_toggle_label_key(p: Panel) -> I18nKey {
+    match p {
+        Panel::MapTree => I18nKey::CmdTogglePanelMapTree,
+        Panel::Layers => I18nKey::CmdTogglePanelLayers,
+        Panel::Brush => I18nKey::CmdTogglePanelBrush,
+        Panel::Minimap => I18nKey::CmdTogglePanelMinimap,
+        Panel::Timeline => I18nKey::CmdTogglePanelTimeline,
+        Panel::Event => I18nKey::CmdTogglePanelEvent,
+        Panel::Situation => I18nKey::CmdTogglePanelSituation,
+        Panel::Character => I18nKey::CmdTogglePanelCharacter,
+        Panel::Faction => I18nKey::CmdTogglePanelFaction,
+        Panel::Region => I18nKey::CmdTogglePanelRegion,
+        Panel::Landmark => I18nKey::CmdTogglePanelLandmark,
+        Panel::Inspector => I18nKey::CmdTogglePanelInspector,
+        Panel::CellEditor => I18nKey::CmdTogglePanelCellEditor,
+        Panel::Validation => I18nKey::CmdTogglePanelValidation,
+        // 线段 POI 面板（ADR-0070 D4）：工具Owned——随工具开关，但
+        // 也允许作者从菜单/设置直接显隐，标签复用面板标题键（不再
+        // 另立 CmdTogglePanelLinePoi 键）。
+        Panel::LinePoi => I18nKey::LinePoiPanelTitle,
+    }
+}
+
 /// 工具类命令条目在当前工作区是否列出（非工具命令恒 true）——
 /// [`CommandPalette::results`] / [`CommandPalette::results_with_locale`] 共用。
 fn tool_entry_available(id: &CommandId, mode: crate::state::ViewMode) -> bool {
@@ -574,26 +599,7 @@ impl CommandRegistry {
 
         // 面板
         for p in Panel::ALL {
-            let label_key = match p {
-                Panel::MapTree => I18nKey::CmdTogglePanelMapTree,
-                Panel::Layers => I18nKey::CmdTogglePanelLayers,
-                Panel::Brush => I18nKey::CmdTogglePanelBrush,
-                Panel::Minimap => I18nKey::CmdTogglePanelMinimap,
-                Panel::Timeline => I18nKey::CmdTogglePanelTimeline,
-                Panel::Event => I18nKey::CmdTogglePanelEvent,
-                Panel::Situation => I18nKey::CmdTogglePanelSituation,
-                Panel::Character => I18nKey::CmdTogglePanelCharacter,
-                Panel::Faction => I18nKey::CmdTogglePanelFaction,
-                Panel::Region => I18nKey::CmdTogglePanelRegion,
-                Panel::Landmark => I18nKey::CmdTogglePanelLandmark,
-                Panel::Inspector => I18nKey::CmdTogglePanelInspector,
-                Panel::CellEditor => I18nKey::CmdTogglePanelCellEditor,
-                Panel::Validation => I18nKey::CmdTogglePanelValidation,
-                // 线段 POI 面板（ADR-0070 D4）：工具Owned——随工具开关，但
-                // 也允许作者从菜单/设置直接显隐，标签复用面板标题键（不再
-                // 另立 CmdTogglePanelLinePoi 键）。
-                Panel::LinePoi => I18nKey::LinePoiPanelTitle,
-            };
+            let label_key = panel_toggle_label_key(p);
             push(
                 CommandId::TogglePanel(p),
                 CommandGroup::Panel,

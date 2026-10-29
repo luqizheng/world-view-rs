@@ -12,6 +12,13 @@
 # ## 范围与偏差（对照 AGENTS §7.1）
 # - ✅ fmt / workspace test / clippy / app-test / http-test / app-clippy /
 #   http-clippy 全部等价复刻；
+# - 测试执行器用 cargo-nextest（2026-10-29）：跨测试二进制全局并行调度，
+#   运行期快于逐二进制串行的 cargo test；本地 scripts/cargo-test.sh 同轨。
+#   0.9.x 默认遇失败提前收工（漏报后续失败），故一律显式 --no-fail-fast。
+#   偏差：nextest 不跑 doctest——workspace 测试步骤在 nextest 之后补
+#   `cargo test --workspace --doc` 保持与旧门禁等价（当前全工作区仅 1 条
+#   可执行 doctest：wv-ui widgets/color_picker 的 no_run 示例，2026-10-29
+#   围栏 grep 核查；app/http feature 集内零可执行 doctest，无需另补）。
 # - ⛔ **smoke-gui 不在 CI**：GitHub runner 无 GPU，Bevy 起不了真窗口。
 #   GUI 启动烟测留在本地，作为合并前的人工仪式（改动渲染系统签名 /
 #   Plugin 装配 / 新增 Resource 时必跑，见 §7.1）。
@@ -75,18 +82,26 @@ jobs:
       - name: Install sccache (config.toml 的 rustc-wrapper 需要)
         uses: mozilla-actions/sccache-action@v0.0.9
 
+      - name: Install cargo-nextest（测试执行器，本地脚本同轨）
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
       - name: Show versions
         run: |
           cargo --version
           rustc --version
           sccache --version
+          cargo nextest --version
 
       # ── §7.1 三基础 ──
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
-      - name: cargo test --workspace
-        run: cargo test --workspace
+      - name: cargo nextest run --workspace (+ doctest)
+        run: |
+          cargo nextest run --workspace --no-fail-fast
+          cargo test --workspace --doc
 
       - name: cargo clippy --workspace
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -94,8 +109,8 @@ jobs:
       # ── 渲染层双闸（feature 门后，基础命令编译不到）──
       - name: wv-render / wv-app tests (features app)
         run: |
-          cargo test -p wv-render --features app
-          cargo test -p wv-app --features app
+          cargo nextest run -p wv-render --features app --no-fail-fast
+          cargo nextest run -p wv-app --features app --no-fail-fast
 
       - name: app-clippy
         run: cargo clippy -p wv-app --all-targets --features app -- -D warnings
@@ -103,7 +118,7 @@ jobs:
       # ── HTTP/MCP 双闸（ADR-0014）──
       - name: http tests + clippy (features http)
         run: |
-          cargo test -p wv-app --features http
+          cargo nextest run -p wv-app --features http --no-fail-fast
           cargo clippy -p wv-app --all-targets --features http -- -D warnings
 
       - name: sccache stats

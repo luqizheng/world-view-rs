@@ -298,16 +298,25 @@ pub(super) fn tool_tile(
 }
 
 /// 图标瓷砖：仅图标、无字母（视图 / 导航组）。
+///
+/// `enabled=false` 时图标压暗、不可点（UX-030 / round-2 审计：工具入口
+/// **恒渲染、灰化而非隐藏**——作者随时知道工具在哪，条件满足即亮）。
 pub(super) fn icon_tile(
     ui: &mut egui::Ui,
     shell: &UiShell,
     metrics: DockMetrics,
     icon: egui::ImageSource<'static>,
     active: bool,
+    enabled: bool,
     hint: &str,
 ) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(metrics.tile, egui::Sense::click());
-    let hovered = resp.hovered();
+    let sense = if enabled {
+        egui::Sense::click()
+    } else {
+        egui::Sense::hover()
+    };
+    let (rect, resp) = ui.allocate_exact_size(metrics.tile, sense);
+    let hovered = enabled && resp.hovered();
     let fill = if active {
         shell.gold_soft()
     } else if hovered {
@@ -322,7 +331,10 @@ pub(super) fn icon_tile(
     };
     ui.painter()
         .rect(rect, TILE_RADIUS, fill, stroke, egui::StrokeKind::Inside);
-    let tint = if active {
+    let tint = if !enabled {
+        // 禁用态：压暗到与背景可分但不成主导（与 icon_button 禁用色同思路）。
+        shell.t3().gamma_multiply(0.45)
+    } else if active {
         shell.gold()
     } else if hovered {
         shell.t1()
@@ -334,6 +346,10 @@ pub(super) fn icon_tile(
         egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(metrics.tile_icon)),
     );
 
+    if !enabled {
+        // 禁用态不给手型光标——避免「看起来能点」的误判（与 `icon_button` 同口径）。
+        return resp.on_hover_text(hint);
+    }
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(hint)
 }

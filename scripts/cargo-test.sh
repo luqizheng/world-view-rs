@@ -20,12 +20,25 @@
 # 让并行运行天然互不相干。
 #
 # ## 用法
-#   bash scripts/cargo-test.sh                  # 等价 cargo test --workspace
-#   bash scripts/cargo-test.sh -p wv-theme      # 透传参数
-#   bash scripts/cargo-test.sh -- --nocapture   # 透传 cargo test 的其余参数
+#   bash scripts/cargo-test.sh                  # 等价 cargo nextest run --workspace
+#   bash scripts/cargo-test.sh -p wv-theme      # 透传 nextest/cargo 参数
+#
+# ## 2026-10-29 追记：执行器 cargo test → cargo nextest
+# cargo test 逐个测试二进制**串行**执行；nextest 用全局并行池跨测试二进制
+# 调度，对本仓库多测试目标形态（wv-io 一家 50+ 条集成测试）运行期提速
+# 明显。注意：nextest 0.9.x **默认遇失败提前收工**（2026-10-29 实测 2 条
+# 失败即跳过 829 条未跑），全量模式显式带 --no-fail-fast 才能一次报全
+# 所有失败——门禁要的是完整失败清单，不是最快失败。
+# 与 cargo test 的两处偏差：
+#   1. nextest 不跑 doctest——全量模式（无参数）会在 nextest 之后自动补
+#      `cargo test --workspace --doc`；带过滤参数的内环用法不跑 doc。
+#      当前全工作区仅 1 条可执行 doctest（wv-ui widgets/color_picker 的
+#      no_run 用例示例，2026-10-29 围栏 grep 核查），补这条成本可忽略。
+#   2. `-- --nocapture` 不再适用——nextest 默认失败即打印捕获输出，
+#      想成功用例也即时输出用 `--success-output immediate`。
 #
 # ## 退出码
-#   透传 cargo test 的退出码（0 = 全绿）。
+#   透传 cargo nextest 的退出码（0 = 全绿）。
 set -uo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -47,6 +60,9 @@ export TMP="$tmp_win"
 
 cd "$repo_root" || exit 1
 if [ "$#" -eq 0 ]; then
-  exec cargo test --workspace
+  # 全量模式：nextest 跑全部测试二进制（--no-fail-fast 报全失败清单），
+  # 随后补 doctest（nextest 不覆盖）。
+  cargo nextest run --workspace --no-fail-fast && cargo test --workspace --doc
+  exit $?
 fi
-exec cargo test "$@"
+exec cargo nextest run "$@"

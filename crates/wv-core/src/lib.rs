@@ -331,6 +331,51 @@ impl World {
         self.terrains.remove(map)
     }
 
+    /// 这张图上的地形笔刷**能不能写**？
+    ///
+    /// ## 为什么是「单真源」而不是两处各判
+    ///
+    /// 笔刷的**光标**（wv-render 的 `brush_cursor`）与**提交**（wv-app 的
+    /// `stroke.rs`）必须对同一件事给同一答案，否则会出现「光标说不能写、
+    /// 松手却写进去了」或反过来的割裂。
+    ///
+    /// ## 判据（2026-10-29 合并 UX-029① 与场景编辑器 M1 后的收敛）
+    ///
+    /// - **有自己的栅格** → 可写（任何图）；
+    /// - **没有栅格但图级 ≠ World**（场景图：城市 / 地下城 / 区域）→ 可写——
+    ///   首次刷色时编辑器会自动铺一张场景基底网格（`CreateSceneBaseGridCommand`），
+    ///   这一笔**不会**被拒；
+    /// - **没有栅格且是世界图** → 不可写。世界地形由大陆生成器负责，
+    ///   笔刷不铺世界图。
+    ///
+    /// UX-029① 原本的判据是「`terrain_of` 为 `None` 即禁止」——那对**世界图**
+    /// 正确，对**场景图**过宽：新建的场景图本来就没有栅格（新建地图对话框
+    /// 对非 World 级不预填），按旧判据会显示禁止符，作者永远画不了分区。
+    /// UX-029 自己的验收标准是「三处事后报错路径全部消失」——本判据让城市图
+    /// 那一条**根本不会报错**，比「事前告知写不了」更彻底。
+    pub fn map_is_brush_writable(&self, map: &Id) -> bool {
+        if self.terrains.contains_key(map) {
+            return true;
+        }
+        self.maps
+            .iter()
+            .find(|m| m.id == *map)
+            .is_some_and(|m| m.level != map::MapLevel::World)
+    }
+
+    /// 这张图上的地形笔刷**是否需要先铺场景基底网格**？
+    ///
+    /// 真值是 [`Self::map_is_brush_writable`] 的反面（无栅格 + 非世界图）。
+    /// 提交侧用它决定「本次笔触要不要在前面插一条基底网格命令」。
+    pub fn map_needs_base_grid(&self, map: &Id) -> bool {
+        !self.terrains.contains_key(map)
+            && self
+                .maps
+                .iter()
+                .find(|m| m.id == *map)
+                .is_some_and(|m| m.level != map::MapLevel::World)
+    }
+
     /// 取某个街道图层的文档（未加载/未声明则 `None`）。
     pub fn street_of(&self, layer: &Id) -> Option<&source::street::StreetLayer> {
         self.streets.get(layer)
@@ -468,6 +513,66 @@ pub mod terrain {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ─── 笔刷可写判据（场景编辑器 M1 × UX-029① 收敛）────────────────────
+
+    /// 场景图没有栅格时**笔刷仍可写**——首次刷色会自动铺基底网格。
+    ///
+    /// UX-029① 原判据是「`terrain_of` 为 `None` 即禁止」，那对世界图正确、
+    /// 对场景图过宽（新建的城市图本来就没有栅格，按旧判据永远画不了）。
+    /// 本测试钉住收敛后的口径。
+    #[test]
+    fn brush_writable_covers_scene_maps_without_their_own_grid() {
+        use crate::map::{MapLevel, MapNode};
+
+        let city = Id::new("city_a").unwrap();
+        let world_map = Id::new("world_main").unwrap();
+        let mut w = World::default();
+        w.maps.push(MapNode {
+            id: city.clone(),
+            level: MapLevel::City,
+            ..MapNode::default()
+        });
+        w.maps.push(MapNode {
+            id: world_map.clone(),
+            level: MapLevel::World,
+            ..MapNode::default()
+        });
+
+        // 场景图无栅格 → 可写（会自动铺基底）
+        assert!(w.map_is_brush_writable(&city), "场景图无栅格仍应可写");
+        assert!(w.map_needs_base_grid(&city), "场景图无栅格应需铺基底");
+        // 世界图无栅格 → 不可写（地形由大陆生成器负责）
+        assert!(!w.map_is_brush_writable(&world_map), "世界图无栅格不可写");
+        assert!(!w.map_needs_base_grid(&world_map), "世界图不铺基底");
+        // 图不存在 → 不可写
+        assert!(!w.map_is_brush_writable(&Id::new("nope").unwrap()));
+    }
+
+    /// 有自己的栅格 → 任何图级都可写，且不需要铺基底。
+    #[test]
+    fn brush_writable_is_true_when_the_map_has_its_own_grid() {
+        use crate::map::{MapLevel, MapNode};
+        use crate::terrain::{TerrainCellData, TerrainData};
+
+        let city = Id::new("city_b").unwrap();
+        let mut w = World::default();
+        w.maps.push(MapNode {
+            id: city.clone(),
+            level: MapLevel::City,
+            ..MapNode::default()
+        });
+        w.set_terrain(
+            city.clone(),
+            TerrainData {
+                width: 1,
+                height: 1,
+                cells: vec![TerrainCellData::default()],
+            },
+        );
+        assert!(w.map_is_brush_writable(&city));
+        assert!(!w.map_needs_base_grid(&city), "已有栅格不该再铺基底");
+    }
 
     // ─── ADR-0017 §2.7：SelectedEntity ────────────────────────────────────
 
