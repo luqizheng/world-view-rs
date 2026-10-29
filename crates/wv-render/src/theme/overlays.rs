@@ -134,7 +134,7 @@ fn ring_bounds(ring: &[f32]) -> Option<(f32, f32, f32, f32)> {
     let mut min_y = f32::INFINITY;
     let mut max_x = f32::NEG_INFINITY;
     let mut max_y = f32::NEG_INFINITY;
-    for point in ring.chunks_exact(2) {
+    for point in ring.as_chunks::<2>().0 {
         if !point[0].is_finite() || !point[1].is_finite() {
             return None;
         }

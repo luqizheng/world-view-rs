@@ -144,8 +144,8 @@ impl FeatureOverlayEntities {
         }
         // 资产回收必须在实体 despawn 之后（否则句柄仍被引用计数持有，
         // `remove` 只是解绑资源，不会真正掉落——先断实体再删资产）。
-        let meshes: Vec<Handle<Mesh>> = self.frame_meshes.drain(..).collect();
-        let materials: Vec<Handle<ColorMaterial>> = self.frame_materials.drain(..).collect();
+        let meshes = std::mem::take(&mut self.frame_meshes);
+        let materials = std::mem::take(&mut self.frame_materials);
         if meshes.is_empty() && materials.is_empty() {
             return;
         }
@@ -536,7 +536,7 @@ fn build_polygon_mesh_uv_with_holes(outer: &[f32], holes: &[&[f32]]) -> Mesh {
     let tris = earcut_with_holes(outer, holes);
     let (mut min_x, mut min_y) = (f32::INFINITY, f32::INFINITY);
     let (mut max_x, mut max_y) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
-    for point in outer.chunks_exact(2) {
+    for point in outer.as_chunks::<2>().0 {
         min_x = min_x.min(point[0]);
         min_y = min_y.min(point[1]);
         max_x = max_x.max(point[0]);

@@ -866,17 +866,38 @@ macro_rules! align_label_pool {
             let halo_offset = crate::label_halo::halo_offset_world($c.font_size_px, $unit_scale);
             let tf_rot = $tf_rot;
             if let Some((e, mut tf, mut text, mut style, mut color, mut vis)) = iter.next() {
-                tf.translation = pos.extend($label_z);
-                tf.rotation = tf_rot;
-                // Bevy 0.19：字号是 `TextFont.font_size: FontSize`、字体是 `font: FontSource`。
-                *text = Text2d::new(name.as_str());
-                style.font_size = font_size.into();
-                // TextFont.font 非 Option：缺 CJK 时回落内置字体（拉丁可用，中文方块）。
-                if let Some(f) = &$cjk {
-                    style.font = f.clone().into();
+                // 值门控（P2，2026-10-29）：Bevy 变更检测按 DerefMut 置脏，
+                // 无条件重写会让全池标签每帧重跑文本测量/布局与变换传播。
+                // 稳态帧（相机/数据都没动）各分量值相等 → 零置脏。
+                let translation = pos.extend($label_z);
+                if tf.translation != translation {
+                    tf.translation = translation;
                 }
-                *color = TextColor($label_color);
-                *vis = Visibility::Visible;
+                if tf.rotation != tf_rot {
+                    tf.rotation = tf_rot;
+                }
+                if text.0 != *name {
+                    text.0 = name.clone();
+                }
+                // TextFont 整体比较（FontSize 无 PartialEq，逐字段比不了；
+                // CJK 缺席时 wanted.font 取当前值 = 维持原「不动 font」语义）。
+                let wanted_font = TextFont {
+                    font_size: font_size.into(),
+                    font: match &$cjk {
+                        Some(f) => f.clone().into(),
+                        None => style.font.clone(),
+                    },
+                    ..Default::default()
+                };
+                if *style != wanted_font {
+                    *style = wanted_font;
+                }
+                if color.0 != $label_color {
+                    *color = TextColor($label_color);
+                }
+                if *vis != Visibility::Visible {
+                    *vis = Visibility::Visible;
+                }
                 // 晕边子实体随字同步（8 向纸色副本，绿地/水面上托出文字）。
                 if let Ok(children) = $children_q.get(e) {
                     crate::label_halo::sync_halo(
@@ -1282,7 +1303,7 @@ pub fn update_faction_labels(
                             .any(|h| wv_core::geometry::point_in_ring(h, center.x, center.y));
                         if in_hole {
                             let mut far = (coords[0], coords[1], -1.0f32);
-                            for pair in coords.chunks_exact(2) {
+                            for pair in coords.as_chunks::<2>().0 {
                                 let d = (pair[0] - center.x).powi(2) + (pair[1] - center.y).powi(2);
                                 if d > far.2 {
                                     far = (pair[0], pair[1], d);

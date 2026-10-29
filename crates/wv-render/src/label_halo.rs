@@ -97,14 +97,30 @@ pub fn sync_halo<F>(
             continue;
         };
         if synced < HALO_DIRS.len() {
+            // 值门控（P2，2026-10-29）：与标签池主体同一纪律——每标签 8 份
+            // 晕边副本若每帧无条件置脏，文本管线与变换传播会成倍空转。
             let d = HALO_DIRS[synced] * offset_world;
-            tf.translation = Vec3::new(d.x, d.y, HALO_LOCAL_Z);
-            *txt = Text2d::new(text.to_string());
-            style.font_size = font_size.into();
-            if let Some(f) = font {
-                style.font = f.clone().into();
+            let translation = Vec3::new(d.x, d.y, HALO_LOCAL_Z);
+            if tf.translation != translation {
+                tf.translation = translation;
             }
-            *color = TextColor(halo_color);
+            if txt.0 != text {
+                txt.0 = text.to_string();
+            }
+            let wanted = TextFont {
+                font_size: font_size.into(),
+                font: match font {
+                    Some(f) => f.clone().into(),
+                    None => style.font.clone(),
+                },
+                ..Default::default()
+            };
+            if *style != wanted {
+                *style = wanted;
+            }
+            if color.0 != halo_color {
+                *color = TextColor(halo_color);
+            }
         }
         synced += 1;
     }

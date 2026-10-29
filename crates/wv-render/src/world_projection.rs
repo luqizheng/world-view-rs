@@ -950,7 +950,12 @@ fn selected_region_decor(
     };
     if decor.key.as_ref() != Some(&key) {
         let raster_to_map = grid_cfg.map_origin - grid_cfg.raster_origin;
-        let poly_pairs: Vec<(f32, f32)> = poly.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+        let poly_pairs: Vec<(f32, f32)> = poly
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| (c[0], c[1]))
+            .collect();
         let cells = crate::cell_selection::rasterize_polygon_cells(
             &poly_pairs,
             raster_to_map,
@@ -1097,7 +1102,7 @@ pub fn plan_region_handles<'a>(
             };
             if decor.cand_key.as_ref() != Some(&cand_key) {
                 let pairs: Vec<(f32, f32)> = match candidate_ctx.polygon.as_deref() {
-                    Some(p) => p.chunks_exact(2).map(|c| (c[0], c[1])).collect(),
+                    Some(p) => p.as_chunks::<2>().0.iter().map(|c| (c[0], c[1])).collect(),
                     None => {
                         decor.candidate_derivations += 1;
                         let raster_to_map = grid_cfg.map_origin - grid_cfg.raster_origin;
@@ -1127,7 +1132,9 @@ pub fn plan_region_handles<'a>(
                                     .collect::<Vec<f32>>()
                             })
                             .unwrap_or_default()
-                            .chunks_exact(2)
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
                             .map(|c| (c[0], c[1]))
                             .collect()
                     }

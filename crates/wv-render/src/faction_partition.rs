@@ -50,8 +50,8 @@ impl PartitionOverlayEntities {
         for e in self.entities.drain(..) {
             commands.entity(e).despawn();
         }
-        let meshes: Vec<Handle<Mesh>> = self.frame_meshes.drain(..).collect();
-        let materials: Vec<Handle<ColorMaterial>> = self.frame_materials.drain(..).collect();
+        let meshes = std::mem::take(&mut self.frame_meshes);
+        let materials = std::mem::take(&mut self.frame_materials);
         if meshes.is_empty() && materials.is_empty() {
             return;
         }

@@ -110,8 +110,8 @@ impl FactionOverlayEntities {
         for e in self.polygons.drain(..).chain(self.borders.drain(..)) {
             commands.entity(e).despawn();
         }
-        let meshes: Vec<Handle<Mesh>> = self.frame_meshes.drain(..).collect();
-        let materials: Vec<Handle<ColorMaterial>> = self.frame_materials.drain(..).collect();
+        let meshes = std::mem::take(&mut self.frame_meshes);
+        let materials = std::mem::take(&mut self.frame_materials);
         if meshes.is_empty() && materials.is_empty() {
             return;
         }
@@ -600,7 +600,11 @@ fn ring_signed_area(ring: &[[f32; 2]]) -> f32 {
 }
 
 fn flat_to_ring(flat: &[f32]) -> Vec<[f32; 2]> {
-    flat.chunks_exact(2).map(|c| [c[0], c[1]]).collect()
+    flat.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| [c[0], c[1]])
+        .collect()
 }
 
 /// 点是否在三角形**严格内部**（不含边界）。耳剪的 contains 测试必须用
