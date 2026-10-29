@@ -604,6 +604,7 @@
 - **定义**：agent 驱动 wv 的**零注册路径**（与「MCP 客户端注册=可选增强」相对）：GUI 运行即有 JSON-RPC 端点（127.0.0.1:8732，仅 tools/list 与 tools/call、无握手），agent 拿到驱动指南（`.agents/skills/wv-http/SKILL.md` 单一真源，`wv skill` 打印 / 设置对话框复制按钮，三者 `include_str!` 同源）即具备全部 15 工具驱动能力。指南内含 curl 配方、15 工具表、省 token 纪律（screenshot 必须 jq+base64 管道落盘、禁响应体进上下文）、验收/命名/抽查三流程与故障表。首次出现：2026-10-28 ADR-0084 撤回 stdio 代理时的定位讨论，ADR-0085 落地。
 - **所属维度**：工具链（agent 接入）
 
+<<<<<<< HEAD
 ## 场景分区带（2026-10-29 · 场景编辑器 M1 落地）
 
 - **术语**：场景分区带 / District Band
@@ -615,3 +616,16 @@
 
 - **「分区 / District」词条**（本文件「应用外壳与场景编辑器术语」小节）原文写「走每图一张 `TerrainGrid` 的 **kind 通道**；kind 编号须 > 1（水域判定 `kind <= 1` 是唯一入口，跨水陆会改写高度）」——**该表述已于 2026-10-18 失效**：kind 通道退役为三通道（height / surface / biome），水域判定改为 `wv_terrain::edit::is_water_cell`（`surface == WATER || height < 0`），分区实际走 **biome 通道的 21..=32 保留带**（见上）。按 §6.3「追写不改机制」保留原条目并在此追记。
 - **「场景 / Scene」词条**里「自己的 `TerrainGrid`（分区走 kind 通道）」同一处过时，一并以上条为准。
+=======
+## 场管线收尾：模式路由与分块指纹（2026-10-29 · ADR-0088）
+
+> 来源：`docs/adr/ADR-0088-field-mode-routing-fingerprint.md`（场管线转正后的收尾轮，**重做版**——v1 留痕件随 2026-10-28 分支因 main 结构漂移放弃，未合入）。设计稿：`docs/superpowers/specs/2026-10-28-field-incremental-and-default-on-design.md`（v2）；计划：`docs/superpowers/plans/2026-10-28-field-mode-routing-fingerprint.md`。本节术语随 ADR 落盘同步登记（AGENTS §6.1）。
+
+| 术语 | 英文 / 拼音 | 定义 | 所属维度 |
+|---|---|---|---|
+| **场支持集** | field-supported modes | 允许走 GPU 场管线的视图模式集合（ADR-0088 D2）：初始提案 {Topographic, VectorFlat, RealTerrain, GoogleMap}；**CPU 留守** {Coastline, Event, Faction}——三档的语义（海岸线 / 事件 / 势力填色）是 CPU 侧呈现，不该吃主题色板。七模式现值口径（ADR-0069，8→7）：spec v2 §4 D2 的初始提案误列 Schematic（退役前旧口径），本词条按修正后口径登记。**P2 核查后定稿**，定稿前按初始提案实现。首次出现：2026-10-28 场管线收尾设计稿 v2 §4 D2 | 渲染 |
+| **模式路由** | mode routing | 场管线转正后补上的「哪些模式画场、哪些模式画 CPU」单一裁决（ADR-0088 D2）：判据收在桥接侧单一纯函数 `should_render_field(view) = field_render ∧ mode ∈ 场支持集 ∧ ¬oblique_active`，`sync_terrain_field` 与 `sync_terrain_chunks` **同消费**——场 quad 与 chunk 纹理互相排斥上屏的既有红线不破。与既有分支级取色路由 `field_branch_of`（Topographic→BiomeRaw / 其余按地形层可见→Themed、不可见→Flat 素底，ADR-0079 T5）分工：后者答「场用哪个色分支」，前者答「该不该画场」。oblique 回落 CPU 的判据必须与 Topographic 模式**合取**（`topographic_compression` 是全局字段，不合取会误伤其他档）。当场修两个活缺陷：CPU 留守档错画 Themed 场、oblique 斜切被平放场 quad 吃掉。真值表测试钉全集（7 模式 × oblique × field_render）。首次出现：2026-10-28 场管线收尾设计稿 v2 §4 D2。〔勘误 2026-10-29〕oblique 判据（`¬oblique_active` 及其 `topographic_compression` 合取纪律）已随 `cdb4e17` 删除死字段而作废——现行实现为 `should_render_field = field_render ∧ supports_field(mode)`，见 ADR-0088 文内勘误追记；oblique 机制另行立项复活时再补第三合取项。 | 渲染 |
+| **分块指纹** | block fingerprint | 编辑帧地形内容指纹的增量方案（ADR-0088 D3）：256×256 格一块，块 hash（FNV-1a，与旧 `pack_content_hash` 同字段同序：height/surface/biome）就地缓存，总 hash 按块序确定性折叠；编辑只重算 `field_dirty` 矩形覆盖的块（与 GPU 补丁共用同一脏矩形）。把编辑帧指纹从全量扫 1M 格 ≈3ms 降到 <0.5ms。**验收口径**：FNV 链式折叠下「增量总 hash ≡ 旧全量 hash」数学上不可达（块缓存与链式传播互斥），判据改两条——①新方案自身「增量 ≡ 全量」逐位等价（property 测试，随机编辑序列）；②新旧口径敏感性对拍（同一编辑集合下同翻转、未编辑同不翻）。首次出现：2026-10-28 场管线收尾设计稿 v2 §4 D3 | 渲染 / 性能 |
+| **剥离对照** | layered strip comparison | 全称「Themed 观感剥离对照」——定位 Themed 分支浮雕观感冲淡源的核查法（ADR-0088 D4）：同一张图同机位，把 Themed 加工链**逐层剥离**出对比帧组（裸浮雕 → +色板 → +soften → +wash → +veil），外加 BiomeRaw/Themed × 近观/远观对照——「浮雕对比度被哪一层吃掉」由帧组客观定位，「调多少好看」交用户目验拍板（数字不裁定观感）。实现 = `WV_STRIP` 环境探针经 `ViewState.strip_mask` 位域控 shader 各层，mask 缺省 0 = 生产路径逐位不变（会话态不落盘，沿 `field_render` 先例）。首次出现：2026-10-28 场管线收尾设计稿 v2 §4 D4 | 渲染 / 验收 |
+
+>>>>>>> feat/field-finalize

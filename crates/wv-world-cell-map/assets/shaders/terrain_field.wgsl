@@ -37,7 +37,7 @@ struct FieldParams {
     shape: vec4<f32>,       // x = px_per_cell, y = branch, z = z_exag（= shading::Z_EXAG，米制口径）, w = grad_step（死槽）
     pad0: vec4<f32>,
     light_dir: vec4<f32>,   // xyz = 主光 L₁（= shading::LIGHT_MAIN 真 45° 单位向量）, w = 米/格（桥接填 meters_per_cell_of；≤0 回落 1.0）
-    pad1: vec4<f32>,
+    pad1: vec4<f32>,        // .x = WV_STRIP 剥离探针位域（0=全开；Rust 镜像 material.rs STRIP_BIT_*，注释互指）, .y = 海岸编码开关（0=无符号/1=有符号）
     shore_edges: vec4<f32>, // x = 1（滩）, y = 3（浅）, z = 9（深）, w = wash_amt
     relief: vec4<f32>,      // x = AMBIENT, y = DIFFUSE_MAIN, z = DIFFUSE_AUX（= shading:: 三光系数，和 = 1）, w 预留
     // 主题四阶色：[0]=water [1]=land_low [2]=land_mid [3]=land_high
@@ -186,6 +186,21 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // T32/T33：`1 = 纯面积平均（远观）`，`0 = 纯双三次（近观）`。
     let lod_t = 1.0 - smoothstep(1.0, 3.0, px_per_cell);
 
+    // ── WV_STRIP 剥离探针（ADR-0088 Task 4）─────────────────────────────
+    // `pad1.x` = 5 位掩码，**位置 1 = 剥掉该层；0 = 全开 = 恒等**（缺省零
+    // 行为变化的锚点；采集计划 mask {0,1,2,4,8,16} 每个幂恰剥一层）。
+    // 位语义 Rust 镜像 = material.rs 的 STRIP_BIT_* / strip_*_on（真值表
+    // 测试在那边；改任何一边必须同步另一边）：
+    //   bit0 剥色板（themed_land → biome_raw_approx）
+    //   bit1 剥 soften（**保留位**：场路径无此层，置 1 无画面变化）
+    //   bit2 剥 wash（T28 水彩）
+    //   bit3 剥 veil（**不在本 shader**——atmosphere 桥的雾 quad 消费）
+    //   bit4 剥浮雕（tri_scale_relief 恒 1.0）
+    // **只影响 Themed 分支**（shape.y ∈ [0.5, 1.5]）；BiomeRaw/Flat 分支、
+    // 水面与墨线一律不读。掩码 ≤ 31 经 f32 精确表示，u32() 无损解码。
+    let strip = u32(p.pad1.x);
+    let strip_themed = p.shape.y >= 0.5 && p.shape.y <= 1.5;
+
     // ── 亚格高度（取值仍双三次）────────────────────────────────────────
     // `hg.x` 是高度（与旧双三次逐位同值）。`hg.yz`（解析偏导）已退役不再读
     // ——梯度改由下方 Horn 3×3 承担（`sample_height_bicubic_grad` 保留值通道）。
@@ -214,7 +229,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // 但 NaN > 0.0 恒为 false，同样落进回落分支——三种非正常值一并兜住。
     let mpc = select(1.0, p.light_dir.w, p.light_dir.w > 0.0);
     let s = p.shape.z / mpc;
-    let relief = tri_scale_relief(pos, s, px_per_cell);
+    // WV_STRIP bit4 置 1 = relief 恒 1.0（平光）——只对 Themed 分支生效
+    // （BiomeRaw 的晕渲是数据视图契约，探针不得越支）。
+    let relief = select(
+        tri_scale_relief(pos, s, px_per_cell),
+        1.0,
+        strip_themed && (strip & 16u) != 0u,
+    );
     //
     // ## T33「远观关灯」退役 + T6 单尺度的替代（ADR-0077 D3，有意推翻）
     //
@@ -339,8 +360,17 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let biome_t = smoothstep(0.5, 0.5 + half_b, biome_d);
         let biome_mix = select(1.0, biome_t, is_land && !nb_is_water);
         if (is_land) {
-            let own = mix(themed_land(true, h), biome_raw_approx(biome_id), p.pad0.z);
-            let nb_col = mix(themed_land(true, h), biome_raw_approx(nb_id), p.pad0.z);
+            // WV_STRIP bit0 置 1 = 剥掉色板，退回冻结群系表近似色
+            // （biome_raw_approx）——此时下方 pad0.z 混合两端同色，恒等退化。
+            // 水面不走本支路（themed_land(false,·) 只返主题水色，不受探针影响）。
+            var own_pal = themed_land(true, h);
+            var nb_pal = themed_land(true, h);
+            if ((strip & 1u) != 0u) {
+                own_pal = biome_raw_approx(biome_id);
+                nb_pal = biome_raw_approx(nb_id);
+            }
+            let own = mix(own_pal, biome_raw_approx(biome_id), p.pad0.z);
+            let nb_col = mix(nb_pal, biome_raw_approx(nb_id), p.pad0.z);
             base = mix(nb_col, own, biome_mix);
         } else {
             base = themed_land(false, h);
@@ -389,7 +419,15 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // 只调**明度**，不动色相——SPEC §1.6 禁令的边界：是水彩晕染，
     // 不是往画面上铺噪声纹理。
     // 水面**不叠**（T30）：海的呼吸感走 SeaRecipe 的连续量，叠两层会脏。
-    if (land_t > 0.5 && p.shore_edges.w > 0.0 && p.shape.y < 1.5) {
+    // WV_STRIP bit2 置 1 = 剥掉 wash（仅 Themed 分支；BiomeRaw 的 wash 仍归
+    // `p.shore_edges.w` 门控，探针不得越支）。`shape.y < 1.5` 复原 Flat 素底
+    // 的旧排除（终审 I-1）：素底平色面本无水彩，mask=0 时也不得被并入 wash
+    // 域——短路求值下 Flat/BiomeRaw 两分支照旧不读 strip。
+    if (land_t > 0.5
+        && p.shore_edges.w > 0.0
+        && p.shape.y < 1.5
+        && (p.shape.y < 0.5 || (strip & 4u) == 0u))
+    {
         // 频率锚在格空间（随内容走，不随屏幕走——否则缩放时颗粒会「沸腾」）。
         let wash_n = fbm3(g, 733.0, WASH_FREQ);
         // 特殊面减免：沙漠(5)/雪原(9)/盐碱(19) 是大地色系，呼吸位小一些。

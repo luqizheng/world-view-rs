@@ -39,6 +39,9 @@ pub(super) fn register(app: &mut App) {
         // 就该用目标模式的着色器（否则会先闪一帧水彩）。
         (
             crate::debug_probe::apply_env_view_mode,
+            // `WV_STRIP` 剥离探针（ADR-0088 Task 4）：启动读一次，先于首帧
+            // 场同步（Startup 全部先于 Update），首帧 uniform 即带掩码。
+            crate::debug_probe::apply_env_strip,
             setup_camera,
             setup_terrain_texture_after_world,
         )
@@ -47,7 +50,10 @@ pub(super) fn register(app: &mut App) {
     // `WV_DRILL` 图级探针（ADR-0073 验收）：等后台工程加载完成后钻到指定图
     // ——城市级街名 / 标签摆位截图必须「开机即在城市图」，双击手势没法从
     // 命令行模拟。探针自带「未设置即退出」，缺省零开销。
+    // `WV_SCALE` 机位探针（ADR-0088 Task 4 对比帧）：等钻入过渡结束后每帧
+    // 幂等钉死缩放（同机位两档），同样「未设置即退出」。
     app.add_systems(Update, crate::debug_probe::apply_env_drill);
+    app.add_systems(Update, crate::debug_probe::apply_env_scale);
     // 主题包同步（ADR-0023 M2）：`ViewState.theme_pack_id` → `ViewState.active_theme`。
     // **必须先于所有消费点**——挂在 PreUpdate 最前；渲染消费点在 Update（PreUpdate
     // 一定先于 Update），唯一同在 PreUpdate 的消费者（`poll_open_project_dialog`）
@@ -211,7 +217,8 @@ pub(super) fn register(app: &mut App) {
             // 编辑态逐格网格（plan v0.1 D4）：与等值线同管线族，先于 chunk 层。
             wv_render::perf_timed!("sync_grid_lines", terrain_view::sync_grid_lines),
             // 地形分块 + mip + 视口拣选（优化项 3a/3b/3c）。
-            // `view.field_render` 开启时整层早退——见函数开头的回退开关。
+            // `should_render_field` 为真时整层早退（ADR-0088 模式路由，与
+            // field 侧同消费一个函数）——见函数开头的底图载体路由。
             wv_render::perf_timed!("sync_terrain_chunks", cellmap_bridge::sync_terrain_chunks),
             // 地形场渲染（ADR-0053 D1，Phase 1 接线）：**必须排在 chunk 层之后**。
             // 两个理由：① `field_render_on_chunk_entities` 要报**帧末**的块数，

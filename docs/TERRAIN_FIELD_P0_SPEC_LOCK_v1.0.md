@@ -1049,3 +1049,128 @@ BiomeRaw；③ 追记十三的色带屏幕封顶把 CellMap 深缩放的海洋�
 `.target/cellmap-v3.png` / `map-v3.png`）。310+7 全过，fmt 净。
 
 （完）
+
+---
+
+## 二十二、追记十八：场管线收尾立项——模式路由 + 分块指纹 + Themed 观感核查（ADR-0088，2026-10-29）
+
+> 按 AGENTS §6.3「追写不改机制」追加。§一–§二十一正文一字未改（本节是唯一新增）。
+
+**处境**：追记十四转正后，真实剩余缺口浮出四项——① **无模式路由（活缺陷，
+最急）**：分支级取色路由 `field_branch_of`（Topographic→BiomeRaw / 其余按
+地形层可见→Themed、不可见→Flat 素底）只回答「场用哪个色分支」，不回答
+「该不该画场」——切 Coastline / Event / Faction 仍画 Themed 场（三档语义
+是 CPU 侧呈现，吃主题色板是语义错误），Topographic + 2.5D oblique
+（`topographic_compression > 0`）时平放的场 quad 直接吃掉 CPU 侧独有的
+斜切——两者都是默认路径上的用户可见缺陷；② 编辑帧全量指纹
+`pack_content_hash` 每帧扫 1M 格 ≈3ms（增量补丁把重打包省了，指纹没省）；
+③ Themed 分支浮雕观感——同图同角度 BiomeRaw 分支浮雕明显、Themed 分支
+看不出（加工链某层冲淡对比度，即用户实报「Browse 看不出来」的正主）；
+④ 转正与增量补丁均无预算数字与 ADR 决策记录。
+
+**决策**：用户裁定 A 案「场管线收尾两步走」（否决 B 高质量模式开关）后，
+设计稿 `docs/superpowers/specs/2026-10-28-field-incremental-and-default-on-design.md`
+（v2，含修订记录——v1 的「重做式增量」前提已被 trunk 证伪作废）定案，
+**ADR-0088** 留痕（**重做版**——本追记的 v1 留痕件拟编 0082，随其分支因
+main 结构漂移——cellmap_bridge 单体拆子模块、ViewBranch 三分迁
+wv-world-cell-map——放弃未合入；重做时 0082 已被占用，编号现场顺延），
+实施计划
+`docs/superpowers/plans/2026-10-28-field-mode-routing-fingerprint.md`
+（Task 1–5）：
+
+- **D2 模式路由**：判据单一函数 `should_render_field = field_render ∧
+  mode ∈ 场支持集 ∧ ¬(oblique 生效)`，`sync_terrain_field` 与
+  `sync_terrain_chunks` 同消费（互相排斥上屏红线不破）；场支持集初始
+  {Topographic, VectorFlat, RealTerrain, GoogleMap}、CPU 留守
+  {Faction, Event, Coastline}（七模式口径，修正 spec v2 D2 误列的
+  Schematic；P2 核查后定稿），真值表测试钉全集。
+- **D3 分块指纹**：256×256 格一块、块 hash（FNV-1a，同旧口径字段序）就地
+  缓存、总 hash 按块序确定性折叠，编辑只重算 `field_dirty` 矩形覆盖块
+  （与补丁同源）；验收 = 新方案自身「增量 ≡ 全量」逐位（property 测试）+
+  新旧口径敏感性对拍——链式折叠下「增量总 hash ≡ 旧全量 hash」数学上
+  不可达（builder Q2 裁定的判据修正）。
+- **D4 Themed 观感核查**：`WV_STRIP` 探针（shader 位域逐层剥离：
+  色板 / soften / wash / veil / 浮雕）出对比帧组，定位冲淡源后给调参
+  候选——**数字不裁定观感**，交用户目验拍板后再落参。
+- **D5 核查预算**（可改）：编辑单帧（1024²）≤8ms / 4096² 单笔 patch
+  全链 ≤16ms / VRAM（guangdong 实图）≤1.5GB / 默认保持无条件开
+  （回退开关已存在，不落盘）。
+
+**影响面**：`wv-render`（cellmap_bridge / state）+ `wv-world-cell-map`
+（fingerprint 模块 / terrain_field.wgsl）+ `wv-app`（debug_probe 探针）；
+零数据层改动、零新第三方依赖；`field_render` 回退开关语义不变。本追记仅
+为**立项登记**，核查数字、支持集定稿与观感结论由后续落地追记回本文。
+
+---
+
+## 二十三、追记十九：场管线转正后核查报告——预算实测 / 支持集定稿 / 观感结论（ADR-0088 D5 收口，2026-10-29）
+
+> 按 AGENTS §6.3「追写不改机制」追加。§一–§二十二正文一字未改（本节是唯一新增）。
+> 数字采集环境：本机 dev（debug）构建、i9-13900H / RTX 4060 Laptop（Vulkan）；
+> 与追记十八立项时 T3/T4 探针同口径（release 只会更快）。
+
+**处境**：追记十八立项时留下「数字账」——预算无实测、支持集待 P2 定稿、
+Themed 观感无结论。本追记回填（实施计划 Task 5）。
+
+### 一、D5 预算表逐项实测
+
+测量器：新增 example `crates/wv-app/examples/perf_field_patch_chain.rs`
+（headless，编辑帧三段消费与 `sync_terrain_field` **同三个生产函数同序**：
+指纹 `update_region` → `FieldPack::patch_region` → `patch_material_images`）。
+4096² 夹具 = 仓库既有生成器 `wv_terrain::climate::generate_cold_north(4096,
+4096, DEFAULT_SEED)` 合成（无现成 4096² 工程，生成参数即此）；笔刷脏区缺省
+24×24 格（T3 探针 12×10 口径的邻域）。**GPU 整张重上传不在 CPU 数字内**
+（Bevy 无局部纹理更新公开路径——D5 预登记的「GPU 子资源上传专项（另
+ADR）」维持，本轮无新证据要求提前）。
+
+| 项 | 预算 | 实测（debug，30 轮取中位） | 判定 |
+|---|---|---|---|
+| 编辑单帧（1024²，指纹+补丁+上传的 CPU 侧） | ≤8 ms | jrpg-world **真图** 24×24 笔刷：**3.76 ms**（min 2.74 / max 5.16）；分段：指纹增量 1.11 + pack 补丁 2.82 + 行段拷贝 0.005 | ✅（47%） |
+| 指纹增量（T3 探针口径引用） | <0.5 ms @1M 格 | **0.218 ms**（12×10 脏区，T3 报告 §5） | ✅ |
+| 4096² 合成图单笔 patch 全链 | ≤16 ms | 24×24 笔刷：**1.76 ms**（min 1.67 / max 2.95）；分段：1.23 + 1.41 + 0.004 | ✅（11%） |
+| （最坏参考，非「单笔」口径）4096² 256×256 矩形 | —— | 中位 37.8 ms，pack 补丁段 38.0 主导 | 观察项 |
+| VRAM（场纹理集，guangdong 实图） | ≤1.5 GB | wv 进程 GPU 专用内存 **611–624 MiB**（`GPU Process Memory\Dedicated Usage` 计数器）；场纹理集字节账 20.0 MB @1024² / 320 MB @4096² | ✅（41%） |
+| 默认翻转形态 | 无条件默认开 | 未动（`field_render` 默认 true 不落盘） | ✅ |
+
+一次性建场对照（非编辑帧）：`FieldPack` 全量 1024² = 315 ms / 4096² =
+11.1 s（debug）；与转正实机重打日志 243–916 ms（追记十四后多次实测）同量。
+
+实机佐证（`WV_PERF=1`，jrpg-world）：重打帧 `sync_terrain_field` 666 ms
+（首帧一次性）；此后稳态窗口（93 帧）top5 **无** `sync_terrain_field`
+（在 4 ms 慢线之下）——「稳态零成本、编辑帧付一次」的口径成立。
+
+**超预算处置建议**：三项预算全部达标，预登记处置均未触发。备案不变：
+① 若未来大脏区（256² 级）成为常态操作（大半径笔刷），先剖 pack 补丁段
+（本轮分段显示其主导）；② GPU 子资源上传沿 D5 预登记另开 ADR；③ 附带
+观察：guangdong 工程 debug 构建全量加载超长（>1 h 未完成、全程 122 FPS
+渲染无 panic——瓶颈在工程数据加载而非场管线，实机验收走桌面既有构建，
+加载性能另行立项）。
+
+### 二、场支持集定稿（D2 遗留回填）
+
+**定稿：场支持集 {Topographic, VectorFlat, RealTerrain, GoogleMap}；CPU
+留守 {Faction, Event, Coastline}**——七模式口径（`ViewMode` 无 Schematic
+变体，spec v2 D2 误列已由 T2 修正）。逐档 WV_SHOT 实证（jrpg-world 默认
+机位，截图 `.target/finalize-shots/mode_*.png`，日志同目录 logs/）：
+
+- 支持集四档：全部出现 `地形场：重打 1024×1024` 行——cellmap → BiomeRaw
+  分支，browse / map / realterrain → Themed 分支，场渲染画面正常；
+- 留守三档：日志零场行（场 quad 不 spawn）+ 画面为 CPU 语义（faction =
+  CPU 底图 + 阵营覆盖 / event = 纸面 + 事件图标 / coastline = 暗色海图）；
+- 缺陷① A/B 实证：路由前基线 `804178b` 实测 Faction 档**仍重打 Themed 场**
+  （`分支=Themed` 重打行 + 截图 `baseline_804178b_faction.png`），与现行
+  faction 截图（CPU 底图）对照——「切留守档错画 Themed 场」确认修复；
+- 全集判据由 T2 真值表测试钉住（`should_render_field`）。
+
+### 三、Themed 观感结论（D4 收口，引 Task 4 报告）
+
+`WV_STRIP` 逐层剥离（12 帧，`.target/strip-shots/`）字节比对结论：**「加工
+链冲淡浮雕」假设证伪**——veil/soften/wash 三层在该场景合计只动 ~2 万字节
+（0.3% 像素），浮雕开关一项 23.5 万字节（~4% 像素），浮雕在参与；「看不出
+来」的真实解释是**浮雕绝对对比度低于肉眼阈值**（与 T9 Z_EXAG=2.0 实图 ΔI
+1.8% 互证）+ 默认机位多海/平原无坡可显。**调参提案（交用户目验拍板，本轮
+未落参）**：首选 **Z_EXAG 4–6**（`shading::Z_EXAG`，界内性免费）；次选
+Themed 分支浮雕混合系数单独上调。目验方法：strip_0 vs strip_16 对比帧 +
+对准小地图群岛灰色山地区域复采（默认机位无山，见 Task 5 报告手跑清单）。
+
+（完）

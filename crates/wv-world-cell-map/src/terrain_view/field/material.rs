@@ -284,7 +284,7 @@ pub struct TerrainFieldMaterial {
 /// 这个错误**编译期完全看不出来**——`cargo check` 过、clippy 过、单测过，
 /// 只有真跑起来、`prepare_assets` 上传 uniform 时才炸。故本结构体的每个
 /// 字段一律 `Vec4`，与 WGSL 的 `vec4<f32>` 严格一一对应。
-#[derive(Debug, Clone, Copy, Default, ShaderType)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, ShaderType)]
 pub struct FieldParams {
     /// xy = 格宽 / 格高；zw 预留。
     pub grid: Vec4,
@@ -302,7 +302,9 @@ pub struct FieldParams {
     /// shader 侧回落 1.0。WGSL 注释与本字段互指。
     pub light_dir: Vec4,
     /// 预留槽（P2 水彩开关）。
-    /// - `.x` — 未用
+    /// - `.x` — **WV_STRIP 剥离探针位域**（ADR-0088 Task 4）：5 位掩码，
+    ///   `0` = 全开 = 恒等；位语义见下方 [`STRIP_BIT_PALETTE`] 等常量与
+    ///   [`apply_strip_mask`]。WGSL 侧 `u32(p.pad1.x)` 解码，双边注释互指。
     /// - `.y` — **海岸纹理编码开关**：`0` = 无符号距离（T3 原值），
     ///   `1` = 有符号距离（[`CoastEncoding::Signed`]）。shader 必须与
     ///   `pack` 用同一约定解码，否则距离整体偏移一格。
@@ -704,6 +706,88 @@ pub fn set_coast_encoding(params: &mut FieldParams, encoding: CoastEncoding) {
     };
 }
 
+// ══════ WV_STRIP 剥离探针（ADR-0088 Task 4）═══════════════════════════════
+//
+// Themed 分支的画面加工链逐层关断位域——定位「浮雕对比度被哪层吃掉」的
+// 诊断通道。**只做探针，不做观感调参**。
+//
+// **位极性（双边契约，勿读反）**：`置 1 = 剥掉该层`，`0 = 全开 = 恒等`
+// ——采集计划 `mask {0(全开), 1, 2, 4, 8, 16}` 中每个 2 的幂恰剥一层
+// （帧名 `strip_<mask>_<zoom>.png` 的语义即「strip 掉 bit 对应层」）。
+
+/// 掩码合法值域上限（bit0..bit4 共 5 层；env 侧 `WV_STRIP=<0-31>` 同域）。
+pub const STRIP_MASK_MAX: u32 = 0x1F;
+
+/// bit0：**色板**——Themed 分支陆面的 `themed_land` 四阶色板。
+/// 置 1 = 剥掉色板，退回冻结群系表近似色 `biome_raw_approx`（此时
+/// `p.pad0.z` 的混合两端同色，恒等退化）。水面不走 `themed_land(true, …)`
+/// 支路，不受影响。
+pub const STRIP_BIT_PALETTE: u32 = 1 << 0;
+/// bit1：**soften**——CPU 烘焙路径的 `terrain_soften`（`palette::soften_color`）。
+/// ⚠️ **GPU 场路径没有这一层**：`terrain_soften` 从未被场桥接消费（场分支
+/// 取色只经 `themed_land` / `biome_raw_approx`），故本位置 1 后画面无变化
+/// ——这本身即「soften 不是场路径冲淡源」的代码级证据。**保留位**，为
+/// 「掩码位 ↔ 加工链层」的一一对应留位。
+pub const STRIP_BIT_SOFTEN: u32 = 1 << 1;
+/// bit2：**wash**——T28 水彩颗粒（WGSL `WASH_AMT`/`WASH_FREQ`，既有门控
+/// `p.shore_edges.w > 0.0`）。置 1 = 剥掉 wash 叠加。**只影响 Themed 分支**：
+/// BiomeRaw 分支的 wash 归 `shore_edges.w` 管，探针不得越支。
+pub const STRIP_BIT_WASH: u32 = 1 << 2;
+/// bit3：**veil**——纸面雾霭。⚠️ **不在场 shader 里**：它是 atmosphere 桥的
+/// 独立 `ColorMaterial` quad（`wv-render/cellmap_bridge/atmosphere.rs` 逐帧写
+/// alpha）。置 1 = veil alpha 恒 0，**仅当 Themed 分支在场**（分支判据与场
+/// 桥接同一条 `field_branch_of`，不另写布尔式）。
+pub const STRIP_BIT_VEIL: u32 = 1 << 3;
+/// bit4：**浮雕**——三尺度晕渲（WGSL `tri_scale_relief`，系数 = `p.relief`
+/// 三光槽）。置 1 = relief 恒 1.0（平光）。**只影响 Themed 分支**；
+/// BiomeRaw/Flat 分支与水面（明暗只乘陆面）不受影响。
+pub const STRIP_BIT_RELIEF: u32 = 1 << 4;
+
+/// 掩码收口：越界位（bit5+）清掉。位域语义的 Rust 镜像（WGSL
+/// `terrain_field.wgsl` fragment 的 strip 解码与此**逐位对应**——shader 无
+/// 单测，本组函数及其真值表测试是位语义的唯一定位点；改任何一边必须
+/// 同步另一边）。
+pub fn strip_mask_sane(mask: u32) -> u32 {
+    mask & STRIP_MASK_MAX
+}
+
+/// 单层判定（`true` = 该层在场/未被剥掉）。极性见模块注释：**位置 1 = 剥层**
+/// ，故判定是 `== 0` 而不是 `!= 0`。`bit` 必须是本模块 `STRIP_BIT_*`。
+pub fn strip_layer_on(mask: u32, bit: u32) -> bool {
+    (strip_mask_sane(mask) & bit) == 0
+}
+
+/// bit0 色板是否开启（见 [`STRIP_BIT_PALETTE`]）。
+pub fn strip_palette_on(mask: u32) -> bool {
+    strip_layer_on(mask, STRIP_BIT_PALETTE)
+}
+/// bit1 soften 是否开启（见 [`STRIP_BIT_SOFTEN`]；GPU 场路径无此层，恒等位）。
+pub fn strip_soften_on(mask: u32) -> bool {
+    strip_layer_on(mask, STRIP_BIT_SOFTEN)
+}
+/// bit2 wash 是否开启（见 [`STRIP_BIT_WASH`]）。
+pub fn strip_wash_on(mask: u32) -> bool {
+    strip_layer_on(mask, STRIP_BIT_WASH)
+}
+/// bit3 veil 是否开启（见 [`STRIP_BIT_VEIL`]；消费点在 atmosphere 桥）。
+pub fn strip_veil_on(mask: u32) -> bool {
+    strip_layer_on(mask, STRIP_BIT_VEIL)
+}
+/// bit4 浮雕是否开启（见 [`STRIP_BIT_RELIEF`]）。
+pub fn strip_relief_on(mask: u32) -> bool {
+    strip_layer_on(mask, STRIP_BIT_RELIEF)
+}
+
+/// 把 strip 掩码写进 uniform 的 `pad1.x` 槽（**0 = 全开 = 恒等**）。
+///
+/// 只动 `.x`：`.y` 是海岸编码开关（[`set_coast_encoding`]），探针不得波及
+/// ——掩码 ≤ 31 经 f32 精确表示，WGSL 侧 `u32(p.pad1.x)` 无损解码。
+/// 只改 uniform、不进任何缓存键（wv-render 桥接的 `FieldKey` 不含掩码），
+/// 掩码变化永不触发数据纹理重打。
+pub fn apply_strip_mask(params: &mut FieldParams, mask: u32) {
+    params.pad1[0] = strip_mask_sane(mask) as f32;
+}
+
 /// 插件注册（材质是资源类型，必须显式注册才有资产管线）。
 pub struct TerrainFieldMaterialPlugin;
 
@@ -846,6 +930,108 @@ mod tests {
             );
         }
         assert_eq!(p.light_aux.w, 0.0, "light_aux.w 预留槽应填 0");
+    }
+
+    /// WV_STRIP 掩码 0 必须是恒等：`pad1.x == 0` 且默认 params **其余字段
+    /// 逐项不变**——探针「缺省零行为变化」的锚点（ADR-0088 Task 4 Step 1）。
+    #[test]
+    fn strip_mask_zero_is_identity() {
+        let pristine = default_params([512.0, 512.0], 6.0, ViewBranch::Themed, {
+            FieldPalette::default()
+        });
+        let mut masked = pristine;
+        apply_strip_mask(&mut masked, 0);
+        assert_eq!(
+            masked.pad1[0], 0.0,
+            "mask 0 → pad1.x 必须是 0.0，got {}",
+            masked.pad1[0]
+        );
+        assert_eq!(
+            masked, pristine,
+            "mask 0 不得改动任何默认参数字段（逐项恒等）"
+        );
+
+        // 满掩码只许写 pad1.x 一处：pad1.y（海岸编码开关）与其余字段不得波及。
+        let mut full = pristine;
+        apply_strip_mask(&mut full, STRIP_MASK_MAX);
+        assert_eq!(
+            full.pad1[0], STRIP_MASK_MAX as f32,
+            "mask 31 → pad1.x = 31.0，got {}",
+            full.pad1[0]
+        );
+        assert_eq!(
+            full.pad1[1], pristine.pad1[1],
+            "pad1.y 海岸编码不得被探针波及"
+        );
+        let mut whole_pad1_reset = full;
+        whole_pad1_reset.pad1 = pristine.pad1;
+        assert_eq!(
+            whole_pad1_reset, pristine,
+            "除 pad1 外其余字段必须逐项不变（探针只许写 pad1.x）"
+        );
+        // 越界位收口：写入前钳到 bit0..bit4。
+        let mut over = pristine;
+        apply_strip_mask(&mut over, 0xFF);
+        assert_eq!(over.pad1[0], 31.0, "越界位必须被钳掉（0xFF → 31.0）");
+    }
+
+    /// WGSL 位域语义的 Rust 镜像真值表：**位置 1 = 剥掉该层**（极性见模块
+    /// 注释，勿读反）——单 bit 恰剥自己那一层；组合位逐位对应；越界位被收口。
+    /// 语义真源注释见各 `STRIP_BIT_*` 常量；shader 侧无单测，本测试是位语义
+    /// 的唯一定位点（双边镜像纪律）。
+    #[test]
+    fn strip_mask_decode_truth_table() {
+        // 全 0 = 全部层在场（恒等，采集计划的「全开」基准帧）。
+        assert!(
+            strip_palette_on(0)
+                && strip_soften_on(0)
+                && strip_wash_on(0)
+                && strip_veil_on(0)
+                && strip_relief_on(0),
+            "mask 0 = 全开"
+        );
+        // 单 bit：恰剥自己那一层，其余层保持在场。
+        type StripProbe = (u32, fn(u32) -> bool, &'static str);
+        let layers: [StripProbe; 5] = [
+            (STRIP_BIT_PALETTE, strip_palette_on, "palette"),
+            (STRIP_BIT_SOFTEN, strip_soften_on, "soften"),
+            (STRIP_BIT_WASH, strip_wash_on, "wash"),
+            (STRIP_BIT_VEIL, strip_veil_on, "veil"),
+            (STRIP_BIT_RELIEF, strip_relief_on, "relief"),
+        ];
+        for mask in [1u32, 2, 4, 8, 16] {
+            for (bit, probe, name) in layers {
+                assert_eq!(
+                    probe(mask),
+                    bit != mask,
+                    "mask {mask}：{name} 层应{}（bit={bit}）",
+                    if bit == mask { "剥" } else { "开" }
+                );
+            }
+        }
+        // 组合位：31 = 全剥；0b101（bit0+bit2）恰剥 palette 与 wash、其余三层保留。
+        assert!(
+            !strip_palette_on(31)
+                && !strip_soften_on(31)
+                && !strip_wash_on(31)
+                && !strip_veil_on(31)
+                && !strip_relief_on(31),
+            "mask 31 = 全剥"
+        );
+        assert!(
+            !strip_palette_on(0b101) && !strip_wash_on(0b101),
+            "0b101 应剥 palette 与 wash"
+        );
+        assert!(
+            strip_soften_on(0b101) && strip_veil_on(0b101) && strip_relief_on(0b101),
+            "0b101 应保留 soften / veil / relief"
+        );
+        // 越界位收口：bit5+ 不参与语义（32 → 0 → 全开）。
+        assert!(
+            strip_palette_on(32) && strip_relief_on(32),
+            "越界位必须被钳掉（32 → 全开）"
+        );
+        assert_eq!(strip_mask_sane(u32::MAX), STRIP_MASK_MAX, "收口上限 0x1F");
     }
 }
 
