@@ -528,6 +528,16 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
             "换一个工程：顶栏工程菜单 → 打开工程…（Ctrl+O），或命令行 `wv gui -m <工程目录>`。"
         }
         I18nKey::LoadErrorDismiss => "知道了",
+        I18nKey::CharacterCreateTitle => "登记人物",
+        I18nKey::CharacterCreateNameHint => "给人物起个名字",
+        I18nKey::CharacterCreateHint => "别名 / 生卒 / 等级段可稍后在等级编辑器与 YAML 补填",
+        I18nKey::NoticeCharacterCreatedPrefix => "已登记人物：",
+        I18nKey::NoticeCharacterCreateFailed => "登记人物失败",
+        I18nKey::SituationCreateTitle => "登记事态",
+        I18nKey::SituationCreateNameHint => "给事态起个名字",
+        I18nKey::SituationCreateHint => "步骤与参与单位可稍后在 YAML / 后续编辑面补填",
+        I18nKey::NoticeSituationCreatedPrefix => "已登记事态：",
+        I18nKey::NoticeSituationCreateFailed => "登记事态失败",
         I18nKey::CharacterLevelTitle => "编辑等级",
         I18nKey::CharacterLevelFrom => "自",
         I18nKey::CharacterLevelTo => "至",
@@ -1317,6 +1327,16 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
             "Try another project: top bar project menu → Open project… (Ctrl+O), or `wv gui -m <project dir>`."
         }
         I18nKey::LoadErrorDismiss => "Got it",
+        I18nKey::CharacterCreateTitle => "Register character",
+        I18nKey::CharacterCreateNameHint => "Name this character",
+        I18nKey::CharacterCreateHint => "Alias / dates / level spans can be filled in later",
+        I18nKey::NoticeCharacterCreatedPrefix => "Character registered: ",
+        I18nKey::NoticeCharacterCreateFailed => "Failed to register character",
+        I18nKey::SituationCreateTitle => "Register situation",
+        I18nKey::SituationCreateNameHint => "Name this situation",
+        I18nKey::SituationCreateHint => "Steps and units can be filled in later",
+        I18nKey::NoticeSituationCreatedPrefix => "Situation registered: ",
+        I18nKey::NoticeSituationCreateFailed => "Failed to register situation",
         I18nKey::CharacterLevelTitle => "Edit levels",
         I18nKey::CharacterLevelFrom => "From",
         I18nKey::CharacterLevelTo => "To",

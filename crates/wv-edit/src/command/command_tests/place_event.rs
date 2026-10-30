@@ -295,3 +295,73 @@ fn add_event_revert_without_apply_reports_missing_target() {
     let err = cmd.revert(&mut w).expect_err("未 apply 先 revert 应报错");
     assert!(err.to_string().contains("ghost"), "got {err}");
 }
+
+// ====== 登记人物 / 事态命令（UX-002 batch6 · 2026-10-30）=================
+
+fn sample_character(id: &str, name: &str) -> wv_core::model::character::Character {
+    wv_core::model::character::Character {
+        id: Id::new_unchecked(id),
+        name: name.into(),
+        alias: None,
+        traits: Vec::new(),
+        attributes: std::collections::HashMap::new(),
+        born_at: None,
+        died_at: None,
+        state_spans: Vec::new(),
+    }
+}
+
+fn sample_situation(id: &str, name: &str) -> wv_core::derived::situation::Situation {
+    wv_core::derived::situation::Situation {
+        id: Id::new_unchecked(id),
+        name: name.into(),
+        summary: None,
+        steps: Vec::new(),
+        span: TimeSpan {
+            from: 10,
+            to: Some(50),
+        },
+        units: Vec::new(),
+        narrative_order: None,
+        maps: Vec::new(),
+        protagonist: None,
+    }
+}
+
+#[test]
+fn add_character_appends_reverts_and_rejects_duplicates() {
+    let mut w = World::default();
+    let cmd = AddCharacterCommand::new(sample_character("c_new", "新人物"));
+    let dirty = cmd.apply(&mut w).expect("登记应成功");
+    assert_eq!(dirty, vec!["characters".to_string()]);
+    assert_eq!(w.characters.len(), 1);
+    cmd.revert(&mut w).expect("撤销登记应成功");
+    assert!(w.characters.is_empty(), "撤销后人物应完全消失");
+
+    // 撞 ID：报错且不动世界。
+    let mut w2 = World::default();
+    w2.characters.push(sample_character("c_dup", "既有"));
+    let err = AddCharacterCommand::new(sample_character("c_dup", "重名"))
+        .apply(&mut w2)
+        .expect_err("撞 ID 应报错");
+    assert!(err.to_string().contains("已存在"), "got {err}");
+    assert_eq!(w2.characters.len(), 1);
+}
+
+#[test]
+fn add_situation_appends_reverts_and_rejects_duplicates() {
+    let mut w = World::default();
+    let cmd = AddSituationCommand::new(sample_situation("s_new", "新事态"));
+    let dirty = cmd.apply(&mut w).expect("登记应成功");
+    assert_eq!(dirty, vec!["timeline/situations".to_string()]);
+    assert_eq!(w.situations.len(), 1);
+    cmd.revert(&mut w).expect("撤销登记应成功");
+    assert!(w.situations.is_empty(), "撤销后事态应完全消失");
+
+    let mut w2 = World::default();
+    w2.situations.push(sample_situation("s_dup", "既有"));
+    let err2 = AddSituationCommand::new(sample_situation("s_dup", "重名"))
+        .apply(&mut w2)
+        .expect_err("撞 ID 应报错");
+    assert!(err2.to_string().contains("已存在"), "got {err2}");
+}

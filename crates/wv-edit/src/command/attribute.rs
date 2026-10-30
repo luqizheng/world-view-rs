@@ -70,6 +70,90 @@ struct EventFields {
     outcome: Option<String>,
 }
 
+/// 登记人物（UX-002 batch6：人物此前 GUI 无法创建，只能手编 YAML）。
+///
+/// 与 [`AddEventCommand`] 同款纪律：整实体传入，查重 → 追加 → 报脏路径
+/// `characters`；revert 按 ID 移除（登记过 = 没登记过）。
+#[derive(Debug, Clone)]
+pub struct AddCharacterCommand {
+    pub character: wv_core::model::character::Character,
+}
+
+impl AddCharacterCommand {
+    pub fn new(character: wv_core::model::character::Character) -> Self {
+        Self { character }
+    }
+}
+
+impl EditCommand for AddCharacterCommand {
+    fn label(&self) -> String {
+        format!("登记人物「{}」", self.character.id)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        if world.characters.iter().any(|c| c.id == self.character.id) {
+            return Err(EditError::Precondition(format!(
+                "人物 ID 已存在：{}",
+                self.character.id
+            )));
+        }
+        world.characters.push(self.character.clone());
+        Ok(vec!["characters".into()])
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let before = world.characters.len();
+        world.characters.retain(|c| c.id != self.character.id);
+        if world.characters.len() == before {
+            return Err(EditError::TargetMissing(format!(
+                "Character {}",
+                self.character.id
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// 登记事态（UX-002 batch6：事态此前同样无创建入口）。
+///
+/// 整实体传入（steps/units 初始为空，登记后在 Inspector 补编辑），
+/// 脏路径 `timeline/situations`；revert 按 ID 移除。
+#[derive(Debug, Clone)]
+pub struct AddSituationCommand {
+    pub situation: wv_core::derived::situation::Situation,
+}
+
+impl AddSituationCommand {
+    pub fn new(situation: wv_core::derived::situation::Situation) -> Self {
+        Self { situation }
+    }
+}
+
+impl EditCommand for AddSituationCommand {
+    fn label(&self) -> String {
+        format!("登记事态「{}」", self.situation.id)
+    }
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        if world.situations.iter().any(|x| x.id == self.situation.id) {
+            return Err(EditError::Precondition(format!(
+                "事态 ID 已存在：{}",
+                self.situation.id
+            )));
+        }
+        world.situations.push(self.situation.clone());
+        Ok(vec!["timeline/situations".into()])
+    }
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let before = world.situations.len();
+        world.situations.retain(|x| x.id != self.situation.id);
+        if world.situations.len() == before {
+            return Err(EditError::TargetMissing(format!(
+                "Situation {}",
+                self.situation.id
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// 改事件属性（名称 / 时间跨度 / 地点 / 参与者 / 叙述 / 结果）。
 ///
 /// 统一 Inspector 的「属性」页签用它写回事件字段

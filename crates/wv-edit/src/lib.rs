@@ -20,11 +20,11 @@ pub mod history;
 pub mod nature_region;
 
 pub use command::{
-    AddBuildingCommand, AddCityCommand, AddEventCommand, AddFactionCommand, AddMapCommand,
-    AddMeasurementCommand, AddPlaceCommand, AddPlaceEdgeCommand, AddRegionCommand,
-    AddStreetSegmentCommand, AssignPartitionFaceCommand, BeginPartitionSpanCommand,
-    ClearMeasurementsCommand, CutPartitionFaceCommand, DeleteBuildingCommand,
-    DeleteStreetSegmentCommand, EditCommand, EditError, EditResult,
+    AddBuildingCommand, AddCharacterCommand, AddCityCommand, AddEventCommand, AddFactionCommand,
+    AddMapCommand, AddMeasurementCommand, AddPlaceCommand, AddPlaceEdgeCommand, AddRegionCommand,
+    AddSituationCommand, AddStreetSegmentCommand, AssignPartitionFaceCommand,
+    BeginPartitionSpanCommand, ClearMeasurementsCommand, CutPartitionFaceCommand,
+    DeleteBuildingCommand, DeleteStreetSegmentCommand, EditCommand, EditError, EditResult,
     EnsureFactionLayerVisibleCommand, EnsureTerrainLayerCommand, GenerateContinentCommand,
     MoveCityCommand, MovePartitionVerticesCommand, PasteMapCommand, PurgeMapCommand,
     RemoveMeasurementCommand, RemoveRegionCommand, ReplaceFactionFacesCommand, RestoreMapCommand,
