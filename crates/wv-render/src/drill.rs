@@ -340,13 +340,14 @@ pub fn pick_place_pin(
     let mut best_d2 = f32::INFINITY;
     let mut best: Option<Id> = None;
     for p in &world.distances.places {
-        // 可拾取 = 渲染上可见（单真源，UX-032 / round-2 审计）：rank≥2 的
-        // 城市符号全档都画（world_projection 的 landmark_dots），其余点标
-        // 随 `poi_visible_at_rank` 的 LOD 硬门。此前这里自写 `rank < 2` 硬门
-        // 且不看 tier——Edit 档渲染出来的 rank-1 村庄点不可点、Nation 档
-        // 已隐藏的点标反而可点，「看得见点不中 / 点得中看不见」。
+        // 可拾取 = 渲染上可见（单真源，UX-032 / round-2 审计）：符号并集门槛
+        // [`crate::state::place_visible_at_rank`]——rank≥2 城市符号全档都画
+        // （world_projection 的 landmark_dots），其余点标随 `poi_visible_at_rank`
+        // 的 LOD 硬门。此前这里自写 `rank < 2` 硬门且不看 tier——Edit 档渲染
+        // 出来的 rank-1 村庄点不可点、Nation 档已隐藏的点标反而可点，
+        // 「看得见点不中 / 点得中看不见」。
         let rank = p.effective_rank();
-        let visible = rank >= 2 || crate::state::poi_visible_at_rank(rank, tier);
+        let visible = crate::state::place_visible_at_rank(rank, tier);
         if p.map.as_ref() != Some(map_id) || p.line.is_some() || !visible {
             continue;
         }
@@ -1133,7 +1134,10 @@ pub fn update_place_labels(
             for i in anchored {
                 let p = &projection.world.distances.places[*i as usize];
                 let rank = p.effective_rank();
-                if !crate::state::poi_visible_at_rank(rank, tier)
+                // 符号在场 ⇒ 标签在场（ADR-0091）：与拾取门同一单真源
+                // [`crate::state::place_visible_at_rank`]——rank≥2 的城远观
+                // 「有图标必有名字」，rank<2 点标仍随档位硬门。
+                if !crate::state::place_visible_at_rank(rank, tier)
                     || !wv_core::label_visible_at(map_span, None, t)
                 {
                     continue;
@@ -1925,8 +1929,10 @@ mod tests {
     use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
     use wv_core::World;
 
-    /// 标签门槛与 POI 点标同一把尺（ADR-0030 D6）：旧两档工程（无 rank）经
-    /// `effective_rank` 折算后，Nation 档只留城市（w/h）标签的行为不回归。
+    /// 标签门槛与符号在场同一把尺（ADR-0030 D6 建尺、ADR-0091 对齐）：旧两档
+    /// 工程（无 rank）经 `effective_rank` 折算后，Nation 档只留城市（w/h）标签
+    /// 的行为不回归；ADR-0091 起 rank ≥ 2 显式级别在 Nation 档也放行（对齐
+    /// landmark_dots 城市符号），rank < 2 仍随档位硬门。
     /// 门控（2026-10-22 三模式内容矩阵 Review Focus #1/#2）：Topographic 下
     /// recipe.enabled(PlaceLabels)=false ⇒ **池实体全部 Hidden 且命中表清空**。
     /// 门控必须走「wanted 置空 → 既有隐藏尾部」——若只跳过注册，旧标签会
@@ -2074,7 +2080,7 @@ mod tests {
             line_width_m: None,
         };
         let gate = |p: &wv_core::distance::Place, tier: LodTier| {
-            crate::state::poi_visible_at_rank(p.effective_rank(), tier)
+            crate::state::place_visible_at_rank(p.effective_rank(), tier)
         };
         // 旧两档：Nation 档只留城市标签（w/h 齐备）。
         assert!(gate(&place(Some(12.0), Some(8.0), None), LodTier::Nation));
@@ -2085,6 +2091,10 @@ mod tests {
         assert!(gate(&place(None, None, Some(3)), LodTier::Nation));
         assert!(!gate(&place(None, None, Some(0)), LodTier::Region));
         assert!(gate(&place(None, None, Some(0)), LodTier::Edit));
+        // ADR-0091：rank 2 市镇标签对齐城市符号（landmark_dots 全档都画）——
+        // Nation 档「有图标必有名字」；rank 1 村庄仍随档位硬门。
+        assert!(gate(&place(None, None, Some(2)), LodTier::Nation));
+        assert!(!gate(&place(None, None, Some(1)), LodTier::Nation));
     }
 
     /// ADR-0065 D2：字号随呈现级别单调递增，最小一级不跌破 12px 可读下限。

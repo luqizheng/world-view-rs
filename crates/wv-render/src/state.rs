@@ -416,6 +416,22 @@ pub fn poi_visible_at_rank(rank: u8, tier: LodTier) -> bool {
     rank_visible_at_tier(rank, tier)
 }
 
+/// 地点**符号在场**门槛（ADR-0091，2026-10-30 用户拍板）：标签与拾取共用的
+/// 单真源——「渲染上看得见符号」的并集口径。
+///
+/// 两支构成：
+/// - rank ≥ 2 的聚落**城市符号**全档都画（`compute_projection` 的
+///   `landmark_dots`，ADR-0047 D2「全球档可见城市符号」）；
+/// - rank < 2 的**点标**随 [`poi_visible_at_rank`] 的档位硬门（ADR-0030 D2）。
+///
+/// 标签此前只走 [`poi_visible_at_rank`]（Nation 档只要 rank ≥ 3），rank ≥ 2
+/// 的城「有图标无名字」；本函数把标签/拾取对齐到符号并集。**点标绘制门槛
+/// 不变**（`select_pois` 仍走 [`poi_visible_at_rank`]）——改的是标签随行，
+/// 不是符号显隐。
+pub fn place_visible_at_rank(rank: u8, tier: LodTier) -> bool {
+    rank >= 2 || rank_visible_at_tier(rank, tier)
+}
+
 /// 统一呈现门槛（ADR-0047 D2）：视野档位 × 最低级别，**硬门**，全要素共用。
 ///
 /// 词表即 GLOSSARY「呈现级别」：`3` 国家级、`2` 区域/市镇级、`1` 局部、
@@ -526,6 +542,35 @@ mod lod_tests {
         assert!(rank_visible_at_tier(2, LodTier::Region));
         assert!(!rank_visible_at_tier(1, LodTier::Region));
         assert!(rank_visible_at_tier(0, LodTier::Edit));
+    }
+
+    /// 符号在场门槛（ADR-0091）：rank ≥ 2 全档放行（城市符号随行），
+    /// rank < 2 仍随档位硬门——rank1 村庄 Nation/Region 不出、Edit 出。
+    #[test]
+    fn place_symbol_gate_admits_rank2_at_every_tier() {
+        for tier in [LodTier::Edit, LodTier::Region, LodTier::Nation] {
+            assert!(
+                place_visible_at_rank(2, tier),
+                "rank 2 × {tier:?}：城市符号档，标签必须随行"
+            );
+            assert!(place_visible_at_rank(3, tier), "rank 3 × {tier:?} 恒可见");
+        }
+        assert!(
+            !place_visible_at_rank(1, LodTier::Nation),
+            "rank 1 村庄 Nation 档不入场"
+        );
+        assert!(
+            !place_visible_at_rank(1, LodTier::Region),
+            "rank 1 村庄 Region 档不入场"
+        );
+        assert!(
+            place_visible_at_rank(1, LodTier::Edit),
+            "rank 1 村庄 Edit 档入场"
+        );
+        assert!(
+            !place_visible_at_rank(0, LodTier::Nation),
+            "rank 0 微点 Nation 档不入场"
+        );
     }
 }
 
