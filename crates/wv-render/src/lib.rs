@@ -61,6 +61,8 @@ pub mod feature_overlays;
 #[cfg(feature = "app")]
 mod fp;
 #[cfg(feature = "app")]
+pub mod input;
+#[cfg(feature = "app")]
 pub mod label_collision;
 #[cfg(feature = "app")]
 pub mod label_halo;

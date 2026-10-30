@@ -352,8 +352,8 @@ pub(crate) fn apply_pending_commands(
             // （2026-10-14 用户裁定；2026-10-28 Faction 退出后 BROWSING=Browse/Map
             // 两项），索引语义必须与列表来源一致。
             if let Some(m) = crate::state::ViewMode::BROWSING.get(i as usize) {
-                // 若在 CellMap 工作区，先走**统一退出**（还原面板快照 + 关
-                // EditCell）再切模式——2026-10-28 修：此前直写 `view.mode`
+                // 若在 CellMap 工作区，先走**统一退出**（还原面板快照 + 复位
+                // 工具到浏览默认）再切模式——2026-10-28 修：此前直写 `view.mode`
                 // 绕过编排，快照泄漏（Inspector 持续隐藏、势力层/事态页签
                 // 持续禁用，实机「回来势力选择器没了」根因）。
                 if *m != wv_render::state::ViewMode::Topographic {
@@ -363,6 +363,9 @@ pub(crate) fn apply_pending_commands(
                     );
                 }
                 view.mode = *m;
+                // 浏览性进入（ADR-0089 D5）：切视图 = 全工具复位 + 默认点选。
+                // 退工作区路径上面已排过同一条命令（pending 单槽覆盖无害）。
+                crate::ui_shell::property_window::queue_reset_to_default_tool(&mut palette);
             }
         }
         CommandId::OpenCommandPalette => palette.open(),
@@ -500,6 +503,39 @@ pub(crate) fn apply_pending_commands(
                     );
                 }
             }
+        }
+        // 工具复位到浏览默认（ADR-0089 D5）：全关 + 开点选，**无翻转语义**。
+        // 浏览性进入（切视图 / 退工作区 / 开工程 / 顶栏 CellMap 段）排这条——
+        // 与 SelectMapTool(PointSelect) 的差别见该变体文档（退出/进入时点选
+        // 常已开着，翻转语义会把默认工具关掉）。
+        CommandId::ResetToolsToDefault => {
+            close_all_map_tools(
+                &mut selection,
+                &mut view,
+                &mut brush,
+                &mut streets,
+                &mut measure,
+                &mut edit_cell,
+                &mut point_select,
+                &mut boundary,
+                &mut line_poi,
+                &mut panels,
+                &mut landmark,
+            );
+            open_map_tool(
+                &crate::ui_command_palette::MapToolId::PointSelect,
+                &mut selection,
+                &mut view,
+                &mut brush,
+                &mut measure,
+                &mut edit_cell,
+                &mut point_select,
+                &mut boundary,
+                &mut line_poi,
+                &mut panels,
+                &mut landmark,
+                &playback,
+            );
         }
         // 大陆生成属性面板（面板本身只收参数；生成在 continent_dialog_system）。
         CommandId::GenerateContinent => {

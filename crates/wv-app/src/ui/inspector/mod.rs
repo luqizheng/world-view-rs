@@ -215,6 +215,12 @@ pub fn panel_inspector(
     mut paint_session: ResMut<wv_world_cell_map::cell_paint::CellPaintSession>,
     // 泛洪选择工具会话态（[ADR-0052] D6）：判据 segmented。
     mut flood_select: ResMut<crate::state::FloodSelectState>,
+    // 「编辑城市」穿线（ADR-0089 D2/D3）：地点表单主按钮要读钻取栈顶的
+    // children 判「有无子图」，点击置编辑性进入请求。
+    (mut drill, mut city_edit): (
+        ResMut<crate::state::DrillState>,
+        ResMut<crate::ui_shell::property_window::CityEditRequest>,
+    ),
     // 派生运算请求（[ADR-0052] D6 · M3）：平滑 / 量化的参数与意图。
     mut derived: ResMut<crate::edit::derived_op::DerivedOpRequest>,
     // 表单暂存输入缓冲（egui TextEdit 是调用方持有文本）。
@@ -293,6 +299,8 @@ pub fn panel_inspector(
                         &mut notice,
                         &time,
                         current_loc.0,
+                        &mut drill,
+                        &mut city_edit,
                     );
                 }
                 InspectorTab::FactionLayers => {
@@ -362,6 +370,8 @@ fn render_properties(
     notice: &mut crate::ui_shell::ShellNotice,
     time: &Time,
     loc: crate::i18n::Locale,
+    drill: &mut crate::state::DrillState,
+    city_edit: &mut crate::ui_shell::property_window::CityEditRequest,
 ) {
     use crate::i18n::{t_key, I18nKey};
     // Cell 表单的可达面（ADR-0057 D6 收口口径）：EditCell 工具激活之外，
@@ -474,6 +484,8 @@ fn render_properties(
                 time,
                 playback,
                 &CurrentLocale(loc),
+                drill,
+                city_edit,
             );
         }
         FormKind::Region => {

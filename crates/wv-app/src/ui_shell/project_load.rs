@@ -13,6 +13,7 @@ use wv_render::terrain_view::{TerrainTexture, TileAtlas};
 
 use super::notice::ShellNotice;
 use super::OpenProjectTask;
+use crate::ui_command_palette::CommandPalette;
 
 /// CLI `-m <目录>` 带来的启动加载请求。
 ///
@@ -62,6 +63,7 @@ pub(crate) fn apply_loaded_world(
     open_task: &mut OpenProjectTask,
     frame: u64,
     current_loc: &crate::i18n::CurrentLocale,
+    palette: &mut CommandPalette,
 ) {
     let name = world
         .meta
@@ -107,6 +109,9 @@ pub(crate) fn apply_loaded_world(
     // §A：切工程要重置地图层级并清访问痕迹（`reset_to_world` 两者都做）。
     drill.reset_to_world();
     drill.ensure_root(&projection.world);
+    // 浏览性进入（ADR-0089 D5）：开工程 = 全工具复位 + 默认点选（工具状态
+    // 会话态不落盘，加载落地即浏览默认态）。
+    crate::ui_shell::property_window::queue_reset_to_default_tool(palette);
     // 加载成功：立刻灌一次诊断，避免面板首帧空白。
     // 系统链上 `refresh_project_diagnostics` 也会重算（并清 `needs_diagnose`），
     // 但本帧若不立刻灌，UI 会先看到旧工程的诊断，视觉闪烁。
@@ -312,7 +317,13 @@ pub(crate) fn drive_project_load(
     atlas: Option<Res<TileAtlas>>,
     mut images: ResMut<Assets<Image>>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
-    (time, current_loc): (Res<Time>, Res<crate::i18n::CurrentLocale>),
+    // palette 与 time 同层折叠（ADR-0089 D5：加载完成排「工具复位到浏览
+    // 默认」；系统已顶 16 参上限，只能折进既有元组）。
+    (time, current_loc, mut palette): (
+        Res<Time>,
+        Res<crate::i18n::CurrentLocale>,
+        ResMut<CommandPalette>,
+    ),
 ) {
     *frames += 1;
     // 1) CLI `-m` 的请求**只消费一次**（转成排队意图）。
@@ -353,6 +364,7 @@ pub(crate) fn drive_project_load(
                 &mut open_task,
                 frame,
                 &current_loc,
+                &mut palette,
             ),
             Err(message) => {
                 apply_load_failure(&message, &mut projection, &mut notice, frame, &current_loc)

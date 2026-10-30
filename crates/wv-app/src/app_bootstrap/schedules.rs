@@ -391,26 +391,42 @@ pub(super) fn register(app: &mut App) {
         Update,
         cellmap_bridge::sync_atmosphere.after(map_frame::sync_map_frame),
     );
-    // 自然区选择手势（2026-10-24 用户裁定）：左键点在自然区内 ⇒ 选中该区域；
-    // 右键**单击**（松手位移 <4px）⇒ 取消选中。
+    // 自然区选择手势（2026-10-24 用户裁定）：左键点在自然区内 ⇒ 选中该区域。
+    // 「右键单击取消选中」已升格为跨工作区通用语义，见下方
+    // `cancel_selection::cancel_selection_on_right_click`（ADR-0089 D1）。
     //
-    // 单独注册而不是塞进主链：这两条要挂在 `drill_pick`（空白单击清选中）与
+    // 单独注册而不是塞进主链：这条要挂在 `drill_pick`（空白单击清选中）与
     // `region_adjust_input`（拽锚点优先）**之后**——主链是一整条 `.chain()`，
     // 混进 `.after()` 会让整条链的调度约束求不出来（实测编译失败）。
     app.add_systems(
         Update,
+        wv_render::perf_timed!(
+            "select_nature_region_on_click",
+            crate::edit::region_select::select_nature_region_on_click
+        )
+        .after(wv_render::drill::drill_pick)
+        .after(crate::edit::region_adjust::region_adjust_input),
+    );
+    // 右键单击 = 取消选择（ADR-0089 D1 通用层，收编原 nature-only 版）：
+    // 右键拖拽 = 平移照旧（camera_pan 并行），手势在场时让位。只读按键 +
+    // 光标，不依赖任何输入系统的先后。
+    app.add_systems(
+        Update,
+        wv_render::perf_timed!(
+            "cancel_selection_on_right_click",
+            crate::edit::cancel_selection::cancel_selection_on_right_click
+        ),
+    );
+    // 属性窗体与编辑性进入的请求消费（ADR-0089 D2/D3）：双击一律属性窗体
+    // （wv-render `drill_pick` 与 cell 点选只置请求）+「编辑城市」按钮的
+    // 编辑性进入（drill.enter + 工作区编排 + 默认笔刷）。前者排 `drill_pick`
+    // 之后同帧拉起；后者只在 UI 置请求，先后无关。
+    app.add_systems(
+        Update,
         (
-            wv_render::perf_timed!(
-                "select_nature_region_on_click",
-                crate::edit::region_select::select_nature_region_on_click
-            )
-            .after(wv_render::drill::drill_pick)
-            .after(crate::edit::region_adjust::region_adjust_input),
-            // 右键取消选中：只读按键 + 光标，不依赖任何输入系统的先后。
-            wv_render::perf_timed!(
-                "cancel_selection_on_right_click",
-                crate::edit::region_select::cancel_selection_on_right_click
-            ),
+            crate::ui_shell::property_window::open_property_window_on_request
+                .after(wv_render::drill::drill_pick),
+            crate::ui_shell::property_window::apply_city_edit_request,
         ),
     );
     // 2.5D 建筑挤出（ADR-0016 §6）：独立注册，消费主链产出的 LayerFrame。

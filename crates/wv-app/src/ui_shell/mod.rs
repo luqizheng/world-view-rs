@@ -49,6 +49,7 @@ mod layout;
 mod notice;
 mod project_io;
 mod project_load;
+pub mod property_window;
 mod shell;
 #[cfg(test)]
 mod tests;
@@ -57,6 +58,7 @@ pub use close_confirm::{CloseAction, CloseConfirm};
 pub use notice::ShellNotice;
 pub use project_io::{DialogPurpose, OpenProjectTask};
 pub use project_load::StartupLoadRequest;
+pub use property_window::{apply_city_edit_request, CityEditRequest, OpenInspectorRequest};
 
 // `ui/*` / `app_bootstrap` 等模块的文档以 `crate::ui_shell::X` 链接这些系统。
 // 拆模块是实现细节，保持既有入口路径不变，避免文档链接与调用方路径失效。
@@ -97,6 +99,8 @@ pub fn register(app: &mut App) {
         // 人物等级列表编辑器（人物面板行点击入口）。
         .init_resource::<crate::ui::character_level_dialog::CharacterLevelEditor>()
         .init_resource::<DrillState>()
+        .init_resource::<property_window::OpenInspectorRequest>()
+        .init_resource::<property_window::CityEditRequest>()
         .init_resource::<RecentProjects>()
         .init_resource::<LayoutFile>()
         // 无边框窗（2026-10-25）：最大化态镜像（bevy 0.19 无 is_maximized 查询）。

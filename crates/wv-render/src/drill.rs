@@ -62,13 +62,9 @@ const HIT_CELLS: f32 = 3.0;
 /// 子图没有 `extent` 时的兜底尺寸（与示例工程的 4096×4096 一致）。
 pub const FALLBACK_EXTENT: Extent = Extent::sized(4096.0, 4096.0);
 
-/// 双击判定的时间窗（秒）与位移容差。
-///
-/// 位移容差按**屏幕像素**定义（UX-024 / round-2 审计：旧值 6.0 是世界单位——
-/// 世界级 scale≈5.12 时只合 1.2px，双击几乎必须原地不动；深放大时又宽达
-/// 数百像素形成误判窗）。使用处以 `view.scale` 换算成世界单位。
-const DOUBLE_CLICK_SECS: f64 = 0.40;
-const DOUBLE_CLICK_SLOP_PX: f32 = 12.0;
+/// 双击判定常量收口 [`crate::input`]（ADR-0089 D1 单点定义；位移容差按
+/// 屏幕像素、使用处以 `view.scale` 换算成世界单位——UX-024）。
+use crate::input::{DOUBLE_CLICK_SECS, DOUBLE_CLICK_SLOP_PX};
 
 /// 上次左键点击的时间与位置，用于自建双击判定。
 ///
@@ -79,9 +75,32 @@ pub struct DrillClick {
     last: Option<(f64, Vec2)>,
 }
 
+/// 「双击 → 弹属性窗体」的跨层请求（ADR-0089 D2）。
+///
+/// 双击的判定与选中发生在 [`drill_pick`]（wv-render），而**拉起 Inspector
+/// 面板**是应用层关注点（`PanelState` 在 wv-app）——wv-render 反向依赖
+/// wv-app 是红线，故经本请求交接：本侧只置请求，消费方 `take` 后开面板。
+#[derive(Resource, Default)]
+pub struct PropertyWindowRequest {
+    pending: Option<wv_core::SelectedEntity>,
+}
+
+impl PropertyWindowRequest {
+    /// 请求打开 `target` 的属性窗体（重复请求覆盖——双击只会有一个目标）。
+    pub fn request(&mut self, target: wv_core::SelectedEntity) {
+        self.pending = Some(target);
+    }
+
+    /// 取走待处理请求（无请求返回 `None`）。
+    pub fn take(&mut self) -> Option<wv_core::SelectedEntity> {
+        self.pending.take()
+    }
+}
+
 /// 把钻取相关的资源与系统注册进 `App`。
 pub fn register(app: &mut App) {
     app.init_resource::<DrillClick>()
+        .init_resource::<PropertyWindowRequest>()
         .init_resource::<DrillMarkerPalette>()
         .init_resource::<crate::label_pick::LabelHits>()
         // 统一标签占位池（ADR-0073）：六类标签跨系统互相避让的记账本。
@@ -628,6 +647,26 @@ fn extent_center(node: &MapNode) -> Vec2 {
 // 输入：双击钻入
 // ---------------------------------------------------------------------------
 
+/// `drill_pick` 的拾取上下文参数包（[ADR-0089] 合并引入）。
+///
+/// `drill_pick` 原 16 个参数已贴 Bevy `SystemParam` 元组上限，语法分支的
+/// `PropertyWindowRequest` 成为第 17 个即超限（`IntoSystem` 不满足、连带
+/// 整条系统链报界，rustc 的 dump 不点名——2026-10-30 合并事故根因）。
+/// 按「命中判定要读的会话/图层态」打包成派生 SystemParam，参数数降到 13。
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct DrillPickPicks<'w> {
+    /// 标签命中表（上一帧注册）。
+    pub hits: Res<'w, crate::label_pick::LabelHits>,
+    /// 选择工具会话态（让位守卫）。
+    pub sel: Res<'w, crate::state::SelectionState>,
+    /// 点选工具激活态。
+    pub point_select: Res<'w, crate::state::PointSelectState>,
+    /// 线段 POI 工具态（激活时线命中让位其交互系统）。
+    pub line_poi: Res<'w, crate::state::LinePoiState>,
+    /// 图层帧（hidden 图层不可选）。
+    pub layers: Res<'w, LayerFrame>,
+}
+
 /// 双击钻入标记（v0.2 §B：双击菱形钻入）。
 ///
 /// 命名上只管「双击之后钻进去」这一件事；**该不该吃这次点击归笔刷那一侧判**
@@ -649,17 +688,10 @@ pub fn drill_pick(
     mut projection: ResMut<WorldProjection>,
     grid: Res<GridConfig>,
     view: Res<ViewState>,
-    hits: Res<crate::label_pick::LabelHits>,
-    sel: Res<crate::state::SelectionState>,
-    // ADR-0074 追记一：点选工具态 + 图层帧——图钉命中只在「点选工具激活 ∧
-    // place 层可见」时接管单击；笔刷/量测等工具下点图钉旁不该误选。
-    point_select: Res<crate::state::PointSelectState>,
-    // ADR-0090 M2：线段 POI 工具态——激活时其交互系统独占点击（命中优先级
-    // 最高），本系统的线命中分支让位，避免同一击双消费。
-    line_poi: Res<crate::state::LinePoiState>,
-    layers: Res<LayerFrame>,
     mut drill: ResMut<DrillState>,
     mut clicks: ResMut<DrillClick>,
+    mut property_requests: ResMut<PropertyWindowRequest>,
+    picks: DrillPickPicks,
 ) {
     // 2026-10-22 内容矩阵：DrillMarkers 关（Topographic）⇒ 钻入入口整体
     // 禁用——标记不画，双击也不应钻（中途钻子图还会打断 EditCell 的图绑定）。
@@ -681,11 +713,11 @@ pub fn drill_pick(
     // 选择工具让位守卫（2026-10-17 选择工具 spec §3 命中优先级：锚点/边 > 图标下钻
     // > 空白）——画中吞掉全部点击语义（防「图标旁收笔」被误判成下钻、草稿随切图
     // 蒸发）；Closed 态只在锚点/边命中时让位，其余照旧走标签 / 下钻。
-    if sel.enabled {
-        if sel.is_drawing() {
+    if picks.sel.enabled {
+        if picks.sel.is_drawing() {
             return;
         }
-        if let Some(ring) = &sel.closed {
+        if let Some(ring) = &picks.sel.closed {
             if let Some(node) = drill.current_node(&projection.world) {
                 let origin = crate::drill::map_origin(&projection.world, node, &grid);
                 let local = world_pos - origin;
@@ -716,37 +748,42 @@ pub fn drill_pick(
     };
 
     // ADR-0017 §2.7：标签命中优先于一切点击语义——命中即选中该实体并
-    // 吃掉这次点击（不参与双击钻取计数）。命中表是上一帧注册的（本系统
-    // 在标签系统之前跑），但按下那一刻相机尚未移动，包围盒仍然有效。
+    // 吃掉这次点击。ADR-0089 D2：标签点击**参与**双击计数（双击=属性窗体
+    // 后，标签双击同样弹属性）。命中表是上一帧注册的（本系统在标签系统
+    // 之前跑），但按下那一刻相机尚未移动，包围盒仍然有效。
     // [ADR-0090 D2] hidden 图层不可选：label 层关掉时命中表整体不参与。
-    if layers.label.visible {
-        if let Some(target) = crate::label_pick::hit_test(world_pos, &hits.items) {
-            projection.selection = Some(target);
-            clicks.last = None;
+    if picks.layers.label.visible {
+        if let Some(target) = crate::label_pick::hit_test(world_pos, &picks.hits.items) {
+            projection.selection = Some(target.clone());
+            if is_double {
+                property_requests.request(target);
+            }
             return;
         }
     }
 
-    // [ADR-0074 追记一] 点选工具下的**图钉命中**（浏览族）：单击图钉 =
-    // 选中该 Place。优先级居标签之后（文字是更精确的靶子）、下钻之前——
-    // **双击不接管**（`!is_double`）：双击图钉仍归 `marker_hit` 下钻进城，
-    // 与「单击选中 / 双击进入」的既有手势约定一致。CellMap（Topographic）
-    // 不经过这里（DrillMarkers=false 已早退），那边的三段裁定在
-    // `wv-app::edit::editing::cell`。
-    if !is_double && point_select.tool_active {
+    // [ADR-0074 追记一 / ADR-0089 D2] 点选工具下的**图钉命中**（浏览族）：
+    // 单击图钉 = 选中该 Place；**双击图钉 = 属性窗体**（原先让位下钻的门
+    // 随「双击一律属性窗体」退役——进城改道属性窗体按钮）。优先级居标签
+    // 之后（文字是更精确的靶子）。CellMap（Topographic）不经过这里
+    // （DrillMarkers=false 已早退），那边的双击在
+    // `wv-app::edit::editing::{cell,pin_drag}`。
+    if picks.point_select.tool_active {
         if let Some(current) = drill.current() {
             if let Some(id) = crate::drill::pick_place_pin(
                 world_pos,
                 &projection.world,
                 current,
                 &grid,
-                layers.place.visible,
+                picks.layers.place.visible,
                 view.scale,
                 lod_tier(view.scale),
             ) {
                 projection.selection =
                     Some(wv_core::SelectedEntity::new(wv_core::EntityKind::Place, id));
-                clicks.last = None;
+                if is_double {
+                    property_requests.request(projection.selection.clone().expect("刚写入"));
+                }
                 return;
             }
         }
@@ -757,8 +794,10 @@ pub fn drill_pick(
     // 居图钉之后（点状靶更小更精确）、空白清除之前；**road 层 hidden 不可选**
     // （D2：hidden 图层不可选）；LinePoi 工具激活时其交互系统独占点击
     // （那边对既有线的命中优先级最高，ADR-0090 D2），本分支让位防双消费；
-    // 单击才选（`!is_double`），双击让位下钻——与图钉同款手势约定。
-    if !is_double && point_select.tool_active && !line_poi.tool_active && layers.road.visible {
+    // [ADR-0089 D2 合并后] 双击 = 选中 + 属性窗体（原「让位下钻」的门随
+    // 「双击一律属性窗体」退役，与图钉同款）；点击计数不吞——交给入口处
+    // 的统一簿记，双击检测才能成立。
+    if picks.point_select.tool_active && !picks.line_poi.tool_active && picks.layers.road.visible {
         let picked = drill.current().and_then(|current| {
             crate::drill::line_poi_hit(
                 &projection.world,
@@ -770,7 +809,9 @@ pub fn drill_pick(
         if let Some(id) = picked {
             projection.selection =
                 Some(wv_core::SelectedEntity::new(wv_core::EntityKind::Place, id));
-            clicks.last = None;
+            if is_double {
+                property_requests.request(projection.selection.clone().expect("刚写入"));
+            }
             return;
         }
     }
@@ -780,8 +821,24 @@ pub fn drill_pick(
         projection.selection = None;
         return;
     }
+    // 双击（ADR-0089 D2）：一律属性窗体，**双击直接下钻退役**——进城改道
+    // 属性窗体「编辑城市」按钮。子图 id 与 Place 同 id（AddCityCommand 同建）
+    // 时选中该 Place 并请求弹属性；无 Place 对应的子图（Interior 等没有
+    // 属性实体的图）保留下钻——属性窗体没有可弹的对象，导航是它唯一入口。
     if let Some(child) = marker_hit(&projection.world, &drill, &grid, world_pos, view.scale) {
-        drill.enter(&projection.world, &child);
+        let has_place = projection
+            .world
+            .distances
+            .places
+            .iter()
+            .any(|p| p.id == child);
+        if has_place {
+            let target = wv_core::SelectedEntity::new(wv_core::EntityKind::Place, child);
+            projection.selection = Some(target.clone());
+            property_requests.request(target);
+        } else {
+            drill.enter(&projection.world, &child);
+        }
     }
 }
 
@@ -2560,6 +2617,7 @@ mod tests {
         bevy_world.insert_resource(crate::state::LinePoiState::default());
         bevy_world.init_resource::<crate::label_pick::LabelHits>();
         bevy_world.init_resource::<DrillClick>();
+        bevy_world.init_resource::<PropertyWindowRequest>();
         bevy_world.init_resource::<bevy::input::ButtonInput<bevy::input::mouse::MouseButton>>();
         bevy_world.insert_resource::<bevy::time::Time>(bevy::time::Time::default());
         // 相机对准图钉 (100,100)；光标在窗口正中 → 世界坐标 = 图钉位。
@@ -2572,6 +2630,109 @@ mod tests {
         window.set_cursor_position(Some(Vec2::new(640.0, 360.0)));
         bevy_world.spawn(window);
         bevy_world
+    }
+
+    /// 双击标记夹具：父图 200×200 + 图标锚 (0.5,0.5) → 标记中心 (100,100)，
+    /// 相机对准该点（与 [`pin_pick_world`] 同款光标布置；点选工具**关**——
+    /// 图钉分支不接管，走标记分支）。`with_place` = 是否放与子图同 id 的 Place。
+    fn marker_pick_world_at(
+        child: &str,
+        level: MapLevel,
+        with_place: bool,
+    ) -> bevy::prelude::World {
+        let spec = icon(&format!("icon_{child}"), Some([0.5, 0.5]), Some(child));
+        let mut world = wv_core::World::default();
+        world.maps.push(node_of_size(
+            "world_main",
+            MapLevel::World,
+            None,
+            &[child],
+            &[spec],
+            Some(Extent::sized(200.0, 200.0)),
+        ));
+        world.maps.push(node(child, level, Some("world_main"), &[]));
+        if with_place {
+            world.distances.places.push(wv_core::distance::Place {
+                kind: None,
+                line: None,
+                id: wv_core::Id::new_unchecked(child),
+                name: child.to_string(),
+                feature: None,
+                biome: None,
+                envelope: None,
+                map: Some(wv_core::Id::new_unchecked("world_main")),
+                x: None,
+                y: None,
+                w: None,
+                h: None,
+                rank: None,
+                line_kind: None,
+                line_width_m: None,
+            });
+        }
+        let projection = crate::state::WorldProjection {
+            world,
+            ..Default::default()
+        };
+
+        let mut drill = DrillState::default();
+        drill.ensure_root(&projection.world);
+
+        let view = ViewState {
+            scale: 1.0,
+            ..Default::default()
+        };
+        let layers = crate::layer_frame::LayerFrame::default();
+        let tex = crate::terrain_view::terrain_texture::TerrainTexture {
+            handle: bevy::asset::Handle::default(),
+            size: 4,
+            height: 4,
+            res: 1,
+            dirty: None,
+            chunks_dirty: None,
+            field_dirty: None,
+            last_mode: None,
+            last_soften: false,
+            last_theme_id: "",
+            last_hypsometric: 0.0,
+            last_map: None,
+        };
+        let recipe =
+            crate::recipe::resolve_render_recipe(&view, &layers, &projection, &drill, &tex, None);
+
+        let mut bevy_world = bevy::prelude::World::default();
+        bevy_world.insert_resource(projection);
+        bevy_world.insert_resource(drill);
+        bevy_world.insert_resource(view);
+        bevy_world.insert_resource(layers);
+        bevy_world.insert_resource(recipe);
+        bevy_world.insert_resource(GridConfig::default());
+        bevy_world.insert_resource(PlaybackState::default());
+        bevy_world.insert_resource(crate::camera::PointerOverUi::default());
+        bevy_world.insert_resource(crate::state::SelectionState::default());
+        bevy_world.insert_resource(crate::state::PointSelectState { tool_active: false });
+        bevy_world.init_resource::<crate::label_pick::LabelHits>();
+        bevy_world.init_resource::<DrillClick>();
+        bevy_world.init_resource::<bevy::input::ButtonInput<bevy::input::mouse::MouseButton>>();
+        bevy_world.insert_resource::<bevy::time::Time>(bevy::time::Time::default());
+        // 相机对准标记 (100,100)；光标在窗口正中 → 世界坐标 = 标记中心。
+        bevy_world.spawn((
+            Camera2d,
+            Transform::from_xyz(100.0, 100.0, 0.0),
+            Projection::Orthographic(OrthographicProjection::default_2d()),
+        ));
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(640.0, 360.0)));
+        bevy_world.spawn(window);
+        bevy_world
+    }
+
+    fn marker_pick_world() -> bevy::prelude::World {
+        marker_pick_world_at("city_a", MapLevel::City, true)
+    }
+
+    fn marker_pick_world_inner() -> bevy::prelude::World {
+        marker_pick_world_at("room_a", MapLevel::Interior, false)
     }
 
     fn run_drill_pick(world: &mut bevy::prelude::World) {
@@ -2604,18 +2765,93 @@ mod tests {
         );
     }
 
-    /// [ADR-0074 追记一] 双击不归图钉分支——让位下钻（`!is_double` 门）。
+    /// [ADR-0089 D2] 双击图钉 = 属性窗体：选中该 Place + 置跨层请求
+    /// （原「双击让位下钻」的门随双击一律属性窗体退役）。
     #[test]
-    fn double_click_on_pin_does_not_select() {
+    fn double_click_on_pin_selects_and_requests_property_window() {
         let mut w = pin_pick_world(true);
+        w.init_resource::<PropertyWindowRequest>();
         // 预置上一击（同位、100ms 前）→ 本击判为双击。
         w.resource_mut::<DrillClick>().last = Some((0.0, Vec2::new(100.0, 100.0)));
         w.resource_mut::<bevy::time::Time>()
             .advance_by(std::time::Duration::from_millis(100));
         press_left(&mut w);
         run_drill_pick(&mut w);
-        let sel = &w.resource::<WorldProjection>().selection;
-        assert!(sel.is_none(), "双击让位下钻，图钉分支不得选中，got {sel:?}");
+        let sel = w
+            .resource::<WorldProjection>()
+            .selection
+            .as_ref()
+            .map(|s| s.id.as_str());
+        assert_eq!(sel, Some("p1"), "双击图钉 = 选中该地点，got {sel:?}");
+        let req = w
+            .resource_mut::<PropertyWindowRequest>()
+            .take()
+            .map(|t| t.id.as_str().to_owned());
+        assert_eq!(
+            req.as_deref(),
+            Some("p1"),
+            "双击图钉必须置属性窗体请求，got {req:?}"
+        );
+        // 下钻不得发生（pin_pick_world 只有一张图，enter 无处可去；这里的
+        // 断言点是「不进下钻分支」——若走了 marker 分支请求不会在场）。
+    }
+
+    /// [ADR-0089 D2] 双击标记：子图 id 与 Place 同 id → 选中该 Place +
+    /// 请求属性窗体，**不下钻**（进城改道属性窗体「编辑城市」按钮）。
+    #[test]
+    fn double_click_on_city_marker_opens_property_window_instead_of_drilling() {
+        let mut w = marker_pick_world();
+        w.init_resource::<PropertyWindowRequest>();
+        // 预置上一击（同位、100ms 前）→ 本击判为双击；光标已对准标记。
+        w.resource_mut::<DrillClick>().last = Some((0.0, Vec2::new(100.0, 100.0)));
+        w.resource_mut::<bevy::time::Time>()
+            .advance_by(std::time::Duration::from_millis(100));
+        press_left(&mut w);
+        run_drill_pick(&mut w);
+        let depth = w.resource::<DrillState>().depth();
+        assert_eq!(depth, 0, "双击标记不得下钻，got depth {depth}");
+        let sel = w
+            .resource::<WorldProjection>()
+            .selection
+            .as_ref()
+            .map(|s| s.id.as_str());
+        assert_eq!(
+            sel,
+            Some("city_a"),
+            "双击标记 = 选中同 id 的 Place，got {sel:?}"
+        );
+        let req = w
+            .resource_mut::<PropertyWindowRequest>()
+            .take()
+            .map(|t| t.id.as_str().to_owned());
+        assert_eq!(
+            req.as_deref(),
+            Some("city_a"),
+            "必须置属性窗体请求，got {req:?}"
+        );
+    }
+
+    /// [ADR-0089 D2 偏差注记] 双击标记：子图无同 id Place（Interior 等
+    /// 无属性实体的图）→ 保留下钻——属性窗体没有可弹的对象。
+    #[test]
+    fn double_click_on_placeless_marker_still_drills_in() {
+        let mut w = marker_pick_world_inner();
+        w.init_resource::<PropertyWindowRequest>();
+        w.resource_mut::<DrillClick>().last = Some((0.0, Vec2::new(100.0, 100.0)));
+        w.resource_mut::<bevy::time::Time>()
+            .advance_by(std::time::Duration::from_millis(100));
+        press_left(&mut w);
+        run_drill_pick(&mut w);
+        assert_eq!(
+            w.resource::<DrillState>().depth(),
+            1,
+            "无 Place 子图的双击保留下钻，got depth {}",
+            w.resource::<DrillState>().depth()
+        );
+        assert!(
+            w.resource_mut::<PropertyWindowRequest>().take().is_none(),
+            "下钻路径不得置属性窗体请求"
+        );
     }
 
     /// [ADR-0074 追记一] 点选工具未激活：图钉分支不接管——单击按

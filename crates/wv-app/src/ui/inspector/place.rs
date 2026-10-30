@@ -234,10 +234,36 @@ pub fn place_form(
     time: &Time,
     playback: &crate::state::PlaybackState,
     current_loc: &crate::i18n::CurrentLocale,
+    drill: &mut crate::state::DrillState,
+    city_edit: &mut crate::ui_shell::property_window::CityEditRequest,
 ) {
     use crate::i18n::{t_key, I18nKey};
     let id = place.id.clone();
     let anchor_editable = place_anchor_editable(place, has_territory);
+
+    // ── 编辑城市（ADR-0089 D2/D3）────────────────────────────────
+    // 「双击一律属性窗体」后进城改道这里：带子图的地点（当前图的直接子图
+    // 与 place.id 同 id——AddCityCommand 同建）显示主按钮，点击 = **编辑性
+    // 进入**（`apply_city_edit_request` 消费：下钻 + 工作区编排 + 默认激活
+    // 场景编辑工具）。无子图的地点不显示——属性窗体只有属性、无按钮。
+    let is_drill_target = drill
+        .current_node(&projection.world)
+        .is_some_and(|n| n.children.iter().any(|c| c == &id));
+    if is_drill_target {
+        if ui
+            .add(
+                egui::Button::new(
+                    egui::RichText::new(t_key(current_loc, I18nKey::InspectorPlaceEditCity))
+                        .strong(),
+                )
+                .min_size(egui::vec2(ui.available_width().min(280.0), 26.0)),
+            )
+            .clicked()
+        {
+            city_edit.request(id.clone());
+        }
+        ui.add_space(4.0);
+    }
 
     // ── 名称 ────────────────────────────────────────────────────────
     let mut name_buf = place.name.clone();

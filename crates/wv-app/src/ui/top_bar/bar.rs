@@ -235,10 +235,12 @@ fn identity_segment(
 /// **CellMap 是 UI 工作区编排**，不是新 ViewMode——渲染技法复用
 /// `ViewMode::Topographic`（ADR-0039），叠加三件事：
 /// ① `view.mode = Topographic`；② 经 `CommandPalette` 排
-/// `SelectMapTool(EditCell)`（互斥/开关语义全在分发器，不重复实现）；
-/// ③ 面板编排——快照全部面板可见性到
-/// `PanelState::cell_workspace_backup`，只开 Brush；退出时还原。
-/// 再点 CellMap = 退出（回快照 + 关工具）；点 Browse/Map/Edit 也退出。
+/// `ResetToolsToDefault`（**浏览性进入**，ADR-0089 D3/D5——默认点选，
+/// EditCell/笔刷手动开；「进去就改」走属性窗体「编辑城市」按钮的
+/// 编辑性进入）；③ 面板编排——快照全部面板可见性到
+/// `PanelState::cell_workspace_backup`，只开 Brush/Landmark；退出时还原。
+/// 再点 CellMap = 退出（回快照 + 工具复位）；点 Browse/Map/Edit 也退出
+/// （同样复位到浏览默认点选）。
 ///
 /// 数据层 `view.mode` 仍按原枚举流转；命令面板 label 来自 `ViewMode::label()`
 /// （中文），不受影响（v0.3 用户拍板：仅顶栏用英文，段名硬编码英文字符串）。
@@ -252,9 +254,6 @@ fn browse_edit_segment(
     loc: crate::i18n::Locale,
     can_enter_cellmap: bool,
 ) {
-    use crate::state::Panel;
-    use crate::ui_command_palette::{CommandId, MapToolId};
-
     // 段名与目标模式**成对**声明：按下标取模式，不靠「第几段 = 什么」的
     // 隐式约定（CellMap 的进出逻辑按 `target == Topographic` 判定）。
     let labels = ["Browse", "Map", "CellMap"];
@@ -288,7 +287,7 @@ fn browse_edit_segment(
             if target == ViewMode::Topographic {
                 // ── CellMap：进/出工作区 ──
                 if view.mode == ViewMode::Topographic {
-                    // 已在工作区 → 退出：还原面板快照 + 关 EditCell 工具
+                    // 已在工作区 → 退出：还原面板快照 + 工具复位到浏览默认
                     // （统一走 `exit_cellmap_workspace`——快捷键/命令面板/HTTP
                     // 同一入口，2026-10-28 旁路泄漏根修）。
                     crate::ui_command_palette::exit_cellmap_workspace(panels, Some(palette));
@@ -296,32 +295,20 @@ fn browse_edit_segment(
                     // （原回落 Schematic，该段已不在顶栏）。
                     view.mode = ViewMode::GoogleMap;
                 } else {
-                    // 进入：快照面板 → 只开笔刷窗 → 排 EditCell 工具。
-                    let backup = Panel::ALL
-                        .iter()
-                        .map(|p| (*p, panels.is_visible(*p)))
-                        .collect();
-                    panels.cell_workspace_backup = Some(backup);
-                    for p in Panel::ALL {
-                        panels.set_visible(p, false);
-                    }
-                    // 2026-10-24 用户裁定：CellMap 的编辑控件（读数条 /
-                    // 落笔值 / 泛洪判据 / 派生运算 / 单格与批量表单）
-                    // 迁入**笔刷浮动窗**——地形编辑的「笔刷语义」聚在
-                    // 一起，Inspector 回归通用属性检查。故工作区开的
-                    // 是 Brush 而不是 Inspector。
-                    panels.set_visible(Panel::Brush, true);
-                    // 地标面板（ADR-0071）随行开启：CellMap 工作区是地标
-                    // 放置的两用场景之一（吸附格中心），没有它工作区内
-                    // 无放置入口。退出时随快照还原。
-                    panels.set_visible(Panel::Landmark, true);
-                    palette.pending = Some(CommandId::SelectMapTool(MapToolId::EditCell));
+                    // **浏览性进入**（ADR-0089 D3/D5）：进 CellMap 也是「看」
+                    // ——编排（快照面板 → 只开笔刷/地标浮窗）照旧，工具默认
+                    // 点选；EditCell / 笔刷由作者手动开（顶栏段不再自动排
+                    // EditCell）。「进去就改」走属性窗体「编辑城市」按钮
+                    // （编辑性进入，见 `apply_city_edit_request`）。
+                    crate::ui_command_palette::enter_cellmap_workspace(panels, palette, false);
                     view.mode = ViewMode::Topographic;
                 }
             } else {
                 // ── Browse / Map / Edit：先退工作区（若在），再切底图模式 ──
                 crate::ui_command_palette::exit_cellmap_workspace(panels, Some(palette));
                 view.mode = target;
+                // 浏览性进入（ADR-0089 D5）：切视图 = 全工具复位 + 默认点选。
+                crate::ui_shell::property_window::queue_reset_to_default_tool(palette);
             }
         },
     );

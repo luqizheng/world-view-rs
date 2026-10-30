@@ -701,6 +701,9 @@ pub enum I18nKey {
     InspectorPlaceRank,
     /// Place 表单：POI 类别（ADR-0064）
     InspectorPlaceKind,
+    /// Place 表单：「编辑城市」主按钮（ADR-0089 D2/D3——双击一律属性窗体，
+    /// 进城改道此按钮的编辑性进入；仅当前图直接子图同 id 时显示）
+    InspectorPlaceEditCity,
     /// POI 类别：未分类
     PoiKindOther,
     /// POI 类别：聚落
@@ -1488,7 +1491,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 619] = [
+    pub const ALL: [I18nKey; 620] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1819,6 +1822,7 @@ impl I18nKey {
         I18nKey::InspectorAnchorDerived,
         I18nKey::InspectorPlaceRank,
         I18nKey::InspectorPlaceKind,
+        I18nKey::InspectorPlaceEditCity,
         I18nKey::PoiKindOther,
         I18nKey::PoiKindSettlement,
         I18nKey::PoiKindPeak,

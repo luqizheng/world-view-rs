@@ -27,6 +27,8 @@
 #[cfg(feature = "app")]
 pub mod biome_boundary;
 #[cfg(feature = "app")]
+pub mod cancel_selection;
+#[cfg(feature = "app")]
 pub mod cell_stroke;
 #[cfg(feature = "app")]
 pub mod derived_op;
