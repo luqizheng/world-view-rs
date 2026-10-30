@@ -742,13 +742,15 @@ impl MeasureState {
     }
 }
 
-/// 选择器的形状（ADR-0043）。
+/// 选择器的形状（ADR-0043；ADR-0090 D3 增「单格」）。
 ///
-/// **三种形状在数据层没有区别**——成形后都只是 `SelectionState::closed` 里的一
-/// 条点环。下游（意图菜单 / 大陆生成 / 城镇 / 地物标记 / 势力划分 / CellMap 批量
-/// 改）读的全都是那条环，因此新增矩形与椭圆对它们**零改动**。
+/// **三种成环形状在数据层没有区别**——成形后都只是 `SelectionState::closed`
+/// 里的一条点环。下游（意图菜单 / 大陆生成 / 城镇 / 地物标记 / 势力划分 /
+/// CellMap 批量改）读的全都是那条环，因此新增矩形与椭圆对它们**零改动**。
 ///
-/// 差别只发生在**交互期**：多边形逐点点击成环，矩形 / 椭圆按住拖拽一次成形。
+/// 差别只发生在**交互期**：多边形逐点点击成环，矩形 / 椭圆按住拖拽一次成形，
+/// **单格不成环**——单击直选一格进 `CellSelection`（写格在 wv-app 侧
+/// `commit_cell_shape_click`，本 crate 只声明形状、不做格子写入）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SelectionShape {
     /// 多边形：逐点点击 + 橡皮筋，锚点可拖 / 双击删 / 点边插（Figma pen）。
@@ -758,6 +760,10 @@ pub enum SelectionShape {
     Rect,
     /// 椭圆：按住拖出内接椭圆框；成形后整体可拖、拖角缩放。
     Ellipse,
+    /// 单格（ADR-0090 D3 / 2026-10-30 用户裁定）：圈选的第四形状——单击
+    /// 直选一格，不产草稿、不成环、无拖拽手势（泛洪判据≠Off 时点击=泛洪，
+    /// 判据在 wv-app 侧消费）。
+    Cell,
 }
 
 impl SelectionShape {
@@ -843,6 +849,93 @@ impl PinDragState {
             ..Default::default()
         };
     }
+}
+
+// ---------------------------------------------------------------------------
+// 线段 POI 工具会话态（ADR-0070 D4；ADR-0090 M2 自 wv-app 下沉——drill_pick
+// 的线命中要读工具激活态，wv-render 禁依赖 wv-app，按 PointSelectState 同款
+// re-export 模式反转归属；wv-app::state 经 shim 保持旧路径）。
+// ---------------------------------------------------------------------------
+
+/// 钉点会话的**待定线**（T11 预览态）。
+///
+/// `preview` 是 [`wv_terrain::line_path::plan_polyline`] 的结果（图内局部
+/// wu，首尾已替换为作者精确钉点）；**仅在 `end_cell` 或模式变化时重算**——
+/// 预览跟着光标走，但以格为缓存粒度，光标在同一格内挪动不触发 A*
+/// （防每帧寻路，计划 Task 11 点名）。空 `Vec` = 尚未规划；单点 `Vec` =
+/// 已规划但不可达 / 起终点同格（占位防重算风暴）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingLinePoi {
+    /// 起点（图内局部 wu；第一击的精确位置）。
+    pub start: Vec2,
+    /// 预览折线（图内局部 wu）。首点 = `start`，末点 = 终点精确位置。
+    pub preview: Vec<Vec2>,
+    /// 终点所在格（栅格坐标）——预览重算的缓存键。
+    pub end_cell: (i32, i32),
+}
+
+/// 端点拖拽拖的是哪一端（T12：改道 / 延伸的对称两侧）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DraggedEnd {
+    /// 首顶点（折线起点）。
+    First,
+    /// 末顶点（折线终点）。
+    Last,
+}
+
+/// 端点拖拽会话的**纯数据投影**（ADR-0070 D4 · 计划 Task 12）。
+///
+/// 与 [`PendingLinePoi`] 同款落在 state（会话态，**不落盘**）：拖拽只改
+/// `preview`，世界数据在松手提交时经命令链一次性落账。字段面里要记住
+/// 三件事——拖的是谁（`id`）、拖的哪端（`end`）、原线长什么样
+/// （`original`，分叉段计算与「拖回原位 = 无变化不提交」都靠它）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct EndpointDrag {
+    /// 被拖的线段 POI（= 当时的 `selected`）。
+    pub id: wv_core::id::Id,
+    /// 拖的是首端还是末端。
+    pub end: DraggedEnd,
+    /// 拖拽开始时的原始折线（图内局部 wu；只读基准，不随拖动变）。
+    pub original: Vec<Vec2>,
+    /// 拖动中的预览折线（图内局部 wu；末点 = 光标 / 吸附点）。
+    pub preview: Vec<Vec2>,
+    /// 预览重算的缓存键：目标点所在格（格变才重算，T11 同语义）。
+    pub target_cell: (i32, i32),
+    /// 汇流吸附目标：`(另一条河的 ID, 吸附点)`。`Some` = 预览高亮该线。
+    pub snap: Option<(wv_core::id::Id, Vec2)>,
+}
+
+/// 线段 POI 工具会话态（ADR-0070 D4）。
+///
+/// T10 只立「工具激活 + 当前线的种类」让工具条与分发器可写；T11 在此扩展
+/// 面板表单参数与钉点会话。互斥的裁决在 `ui_shell::apply_pending_commands`
+/// （与其它 `SelectMapTool` 同一条链），本结构不自带开关逻辑。
+#[derive(Resource, Debug, Default)]
+pub struct LinePoiState {
+    /// 工具是否激活。`true` 时地图点击/拖拽由线段 POI 的交互系统消费。
+    pub tool_active: bool,
+    /// 当前线的种类：河 / 路（工具条分裂按钮菜单切换；`Default` = 河，
+    /// 与 `LineKind` 的 serde 缺省口径一致）。
+    pub kind: wv_core::distance::LineKind,
+    /// 路径规划模式（ADR-0070 D3「同」语义）：绕行（默认）/ 强制下切。
+    /// 河与路**同款两模式**，只差缺省性格——河默认绕行、路默认下切，
+    /// 但作者随时可换，工具不替他决定。
+    pub mode: wv_terrain::line_path::LinePathMode,
+    /// 宽度草稿（新建态 = 创建参数；选中态 = 写回草稿）。
+    ///
+    /// **显示单位**：图有比例尺（`km_per_wu`）时为**米**，无比例尺时按
+    /// **wu 原值**（面板单位标注切 [`crate::i18n::I18nKey::LinePoiWidthUnitWu`]）。
+    /// `0` = 未声明（创建时 `line_width_m: None`，渲染退缺省宽）。
+    pub width_m: f32,
+    /// 名称草稿（新建态 = 创建名称；选中态 = 属性写回缓冲——浮窗闭包与
+    /// 面板资源互斥借用，跨帧输入文本必须有处放，同 [`NatureRegionUiState`]）。
+    pub name: String,
+    /// 进行中的钉点（`None` = 没有在画的线）。
+    pub pending: Option<PendingLinePoi>,
+    /// 选中的既有线段 POI（工具开着点中既有线；Esc / 点空白清除）。
+    pub selected: Option<wv_core::id::Id>,
+    /// 进行中的端点拖拽（T12：改道 / 延伸 / 汇流吸附）。会话态，不落盘。
+    pub drag: Option<EndpointDrag>,
 }
 
 /// 选择工具会话态（2026-10-17 选择工具 spec §3；M1 Task 1；ADR-0043 增形状）。
@@ -1025,7 +1118,8 @@ impl SelectionState {
             SelectionShape::Rect => crate::selection::rect_ring(a, b),
             SelectionShape::Ellipse => crate::selection::ellipse_ring(a, b),
             // 多边形没有「重算边界」这回事——它的边界就是作者逐点敲出来的。
-            SelectionShape::Polygon => return false,
+            // 单格（ADR-0090 D3）不成环，无 Resize 手势可言。
+            SelectionShape::Polygon | SelectionShape::Cell => return false,
         };
         self.closed = Some(ring);
         self.selected_anchor = None;

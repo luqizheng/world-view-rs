@@ -332,61 +332,10 @@ pub fn terrain_grid_of(world: &wv_core::World, map: &Id) -> Option<TerrainGrid> 
     TerrainGrid::from_cells(data.width, data.height, cells)
 }
 
-/// 点到折线的最近距离（wu）。折线不足 2 点 → `f32::INFINITY`。
-pub fn point_polyline_dist(p: Vec2, pts: &[Vec2]) -> f32 {
-    pts.windows(2)
-        .map(|w| point_seg_dist(p, w[0], w[1]))
-        .fold(f32::INFINITY, f32::min)
-}
-
-/// 点到线段的最短距离（经典垂足钳制）。
-fn point_seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f32 {
-    let ab = b - a;
-    let len2 = ab.length_squared();
-    if len2 <= f32::EPSILON {
-        return p.distance(a); // 退化线段 = 点距。
-    }
-    let t = ((p - a).dot(ab) / len2).clamp(0.0, 1.0);
-    let foot = a + ab * t;
-    p.distance(foot)
-}
-
-/// 扁平折线 → 顶点列表（`Place.line` 的 `[x0,y0,x1,y1,…]` 视图）。
-///
-/// 奇偶不齐的脏数据按「能凑几对凑几对」截断（命中 / 拖拽 / 描画三处同款
-/// 容错，单独提出来免得第四份拷贝）。
-pub fn line_pts(line: &[f32]) -> Vec<Vec2> {
-    line.chunks(2)
-        .filter(|c| c.len() == 2)
-        .map(|c| Vec2::new(c[0], c[1]))
-        .collect()
-}
-
-/// 线段 POI 命中：当前图锚定、且是线段 POI（`effective_line_kind` 判别，
-/// ADR-0070 D2 唯一入口）的地点里，点到折线最近距离 ≤ `tol_wu` 者，
-/// 取**最近**的一条。
-pub fn line_poi_hit(world: &wv_core::World, map: &Id, local: Vec2, tol_wu: f32) -> Option<Id> {
-    let mut best: Option<(f32, &Id)> = None;
-    for place in &world.distances.places {
-        if place.map.as_ref() != Some(map) {
-            continue;
-        }
-        if effective_line_kind(place).is_none() {
-            continue; // 点状地点 / 非线段 POI 不参与命中。
-        }
-        let Some(line) = &place.line else { continue };
-        let pts: Vec<Vec2> = line
-            .chunks(2)
-            .filter(|c| c.len() == 2)
-            .map(|c| Vec2::new(c[0], c[1]))
-            .collect();
-        let d = point_polyline_dist(local, &pts);
-        if d <= tol_wu && best.is_none_or(|(bd, _)| d < bd) {
-            best = Some((d, &place.id));
-        }
-    }
-    best.map(|(_, id)| id.clone())
-}
+// 线命中几何三件（[`point_polyline_dist`] / [`line_pts`] / [`line_poi_hit`]）
+// 已随 [ADR-0090 M2] 下沉 `wv_render::drill`——浏览族 drill_pick 与本工具的
+// 选中态命中必须消费同一几何。此 re-export 保持本模块内调用点与测试零改动。
+pub use wv_render::drill::{line_poi_hit, line_pts, point_polyline_dist};
 
 /// 确认钉点的产出：要入表的地点 + 要下切的参数包（`None` = 纯矢量）。
 #[derive(Debug, Clone)]

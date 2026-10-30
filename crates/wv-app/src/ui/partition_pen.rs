@@ -360,6 +360,10 @@ pub struct PartitionEditState {
     /// 边界红圈（编辑态常显的当前层脸环闪烁红线）是否显示——2026-10-28
     /// 由常显改可选（HUD 勾选框，会话级不落盘）。
     pub show_boundaries: bool,
+    /// 贴近群系（[ADR-0090] D5/M4）：切刀采样折线逐点吸附群系锋线
+    /// （`biome_snap::BiomeSnapIndex`），切出的脸边界贴自然地貌。
+    /// **默认 true**（D5「默认勾」；关 = 自由切，现状行为）。
+    pub snap_to_biome: bool,
 }
 
 impl Default for PartitionEditState {
@@ -368,6 +372,31 @@ impl Default for PartitionEditState {
             active: None,
             tool: PartitionTool::default(),
             show_boundaries: true,
+            snap_to_biome: true,
+        }
+    }
+}
+
+/// 疆域替换会话态（[ADR-0090] D4/M3）。
+///
+/// `Default` 手写而非 derive：`biome_gate` 缺省 **true**（D4「群系 checkbox
+/// 默认勾」；`bool::default()` 是 false——同 `LayerFrame` 教训）。
+#[derive(Resource)]
+pub struct PartitionReplaceState {
+    /// 目标势力（HUD 下拉选；`None` = 未选，替换按钮禁用）。
+    pub target: Option<wv_core::Id>,
+    /// 群系闸门（D4）：勾选 = 点脸可选；不勾 = 点脸不选（自由态）。
+    pub biome_gate: bool,
+    /// 多选脸集（单击 = 重置为单脸；Ctrl 单击 = 切换累加）。
+    pub picked: Vec<u32>,
+}
+
+impl Default for PartitionReplaceState {
+    fn default() -> Self {
+        Self {
+            target: None,
+            biome_gate: true,
+            picked: Vec::new(),
         }
     }
 }
@@ -382,6 +411,9 @@ pub enum PartitionTool {
     DragBoundary,
     /// 整块易主（点脸改归属，T13）。
     Assign,
+    /// 疆域替换（[ADR-0090] D4/M3，政治层专用）：Ctrl 单击多选脸 → 一次
+    /// 替换目标势力疆域（多脸并集写入，原持有不在名单的脸转无主）。
+    Replace,
 }
 
 #[cfg(test)]

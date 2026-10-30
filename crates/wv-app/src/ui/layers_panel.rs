@@ -75,6 +75,8 @@ pub fn panel_layers(
     mut edit: ResMut<EditHistory>,
     mut layer_ui: ResMut<LayerPanelUiState>,
     current_loc: Res<CurrentLocale>,
+    playback: Res<crate::state::PlaybackState>,
+    mut partition_edit: ResMut<crate::ui::partition_pen::PartitionEditState>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -160,6 +162,26 @@ pub fn panel_layers(
                     layer_ui.pending_opacity = None;
                 } else if resp.dragged() {
                     layer_ui.pending_opacity = Some(opacity);
+                }
+
+                // [ADR-0090 D4/M3] 势力层选中时给「编辑疆域」入口：
+                // 进分区编辑态（Replace 工具，群系闸门默认勾）。
+                if sel.kind == LayerKind::Influence
+                    && ui
+                        .button(t_key(&current_loc, I18nKey::LayerRowEditTerritory))
+                        .clicked()
+                {
+                    if let Some(from) = wv_core::partition_span_at(
+                        &projection.world,
+                        &map_id,
+                        &sel.id,
+                        playback.current_day,
+                    )
+                    .map(|s| s.from)
+                    {
+                        partition_edit.active = Some((sel.id.clone(), from));
+                        partition_edit.tool = crate::ui::partition_pen::PartitionTool::Replace;
+                    }
                 }
             }
 

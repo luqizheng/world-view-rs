@@ -27,7 +27,7 @@ pub use command::{
     DeleteStreetSegmentCommand, EditCommand, EditError, EditResult,
     EnsureFactionLayerVisibleCommand, EnsureTerrainLayerCommand, GenerateContinentCommand,
     MoveCityCommand, MovePartitionVerticesCommand, PasteMapCommand, PurgeMapCommand,
-    RemoveMeasurementCommand, RemoveRegionCommand, RestoreMapCommand,
+    RemoveMeasurementCommand, RemoveRegionCommand, ReplaceFactionFacesCommand, RestoreMapCommand,
     SetCharacterStateSpansCommand, SetCityOutlineCommand, SetMapOrientationCommand,
     SetNatureFaceNamesCommand, SetPartitionFaceKindCommand, TrashMapCommand, UpdateEventCommand,
     UpdateFactionLayerCommand, UpdateLayerCommand, UpdateMapPropsCommand, UpdatePlaceCommand,

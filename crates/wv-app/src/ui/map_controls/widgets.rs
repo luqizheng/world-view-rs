@@ -114,21 +114,28 @@ pub(super) fn selection_split(
         .with_hint("V"),
         SplitMenuItem::new(ICON_VECTOR_SQUARE, t(loc, I18nKey::MapControlsSelectRect)),
         SplitMenuItem::new(ICON_ELLIPSE, t(loc, I18nKey::MapControlsSelectEllipse)),
+        SplitMenuItem::new(
+            ICON_MOUSE_POINTER_CLICK,
+            t(loc, I18nKey::MapControlsSelectCell),
+        ),
     ];
     let selected = match shape {
         SelectionShape::Polygon => 0,
         SelectionShape::Rect => 1,
         SelectionShape::Ellipse => 2,
+        SelectionShape::Cell => 3,
     };
     let icon = match shape {
         SelectionShape::Polygon => ICON_VECTOR_POLYGON,
         SelectionShape::Rect => ICON_VECTOR_SQUARE,
         SelectionShape::Ellipse => ICON_ELLIPSE,
+        SelectionShape::Cell => ICON_MOUSE_POINTER_CLICK,
     };
     let hint = match shape {
         SelectionShape::Polygon => t(loc, I18nKey::MapControlsSelectGroupHint),
         SelectionShape::Rect => t(loc, I18nKey::MapControlsSelectRectHint),
         SelectionShape::Ellipse => t(loc, I18nKey::MapControlsSelectEllipseHint),
+        SelectionShape::Cell => t(loc, I18nKey::MapControlsSelectCellHint),
     };
     let mut main_cmd: Option<CommandId> = None;
     let mut pick_cmd: Option<CommandId> = None;
@@ -148,6 +155,7 @@ pub(super) fn selection_split(
                 SelectionShape::Polygon,
                 SelectionShape::Rect,
                 SelectionShape::Ellipse,
+                SelectionShape::Cell,
             ][i];
             pick_cmd = Some(CommandId::SelectMapTool(MapToolId::Select(picked)));
         },

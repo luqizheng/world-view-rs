@@ -1075,6 +1075,134 @@ impl EditCommand for SetNatureFaceNamesCommand {
     }
 }
 
+/// **疆域替换**（[ADR-0090] D4 / M3）：政治层某势力的新疆域 = 选中脸集合的
+/// 并集，一次写入、一个撤销单位。
+///
+/// 语义（D4「**替换**」）：
+/// - 选中集合内的脸 → `owner = Some(faction)`；
+/// - 该势力**原持有**但不在集合内的脸 → `owner = None`（无主）——否则不是
+///   替换，势力会同时持有旧地与新手；
+/// - 集合外、他势力持有的脸 → 不动（只替换目标势力的疆域，不抢别人的）。
+///
+/// **fork 型**（与 [`AssignPartitionFaceCommand`] 同配方）：恰在段起点直接改
+/// 该段，否则旧段收口 + fork 段落新归属；撤销 = 整分区快照回填。
+#[derive(Debug)]
+pub struct ReplaceFactionFacesCommand {
+    /// 目标地图。
+    pub map: Id,
+    /// 目标势力层（usage = Political；自然层无疆域，构造方应拒绝）。
+    pub layer: Id,
+    /// 生效日（fork 点）。
+    pub from: i64,
+    /// 目标势力。
+    pub faction: Id,
+    /// 新疆域 = 这些脸的并集（脸 id 集合）。
+    pub faces: Vec<u32>,
+    /// `apply` 缓存的整个分区快照。
+    pub before: std::sync::Mutex<Option<wv_core::model::faction_partition::FactionPartition>>,
+}
+
+impl ReplaceFactionFacesCommand {
+    fn partition_mut<'w>(
+        &self,
+        world: &'w mut World,
+    ) -> EditResult<&'w mut wv_core::model::faction_partition::FactionPartition> {
+        world
+            .partitions
+            .iter_mut()
+            .find(|p| p.map == self.map && p.layer == self.layer)
+            .ok_or_else(|| {
+                EditError::TargetMissing(format!("分区（{} × {}）", self.map, self.layer))
+            })
+    }
+}
+
+impl EditCommand for ReplaceFactionFacesCommand {
+    fn label(&self) -> String {
+        format!(
+            "{} 张脸替换为势力 {}（自第 {} 天）",
+            self.faces.len(),
+            self.faction,
+            self.from
+        )
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let snapshot = world
+            .partitions
+            .iter()
+            .find(|p| p.map == self.map && p.layer == self.layer)
+            .cloned();
+        let existing = snapshot
+            .as_ref()
+            .ok_or_else(|| {
+                EditError::TargetMissing(format!("分区（{} × {}）", self.map, self.layer))
+            })?
+            .clone();
+        let hit = existing
+            .spans
+            .iter()
+            .position(|s| self.from >= s.from && s.to.is_none_or(|to| self.from < to))
+            .ok_or_else(|| {
+                EditError::Precondition(format!("生效日 {} 不在任何历史段内", self.from))
+            })?;
+        // 几何在 fork 副本上改，最后一次性写回（避免双可变借世界）。
+        let mut new_spans = existing.spans.clone();
+        if existing.spans[hit].from == self.from {
+            // 恰在段起点：直接改该段（不开零长度段）。
+            Self::reown(&mut new_spans[hit], self);
+        } else {
+            // fork：旧段收口、fork 段落新归属。
+            let mut old = new_spans[hit].clone();
+            let mut fork = old.clone();
+            old.to = Some(self.from);
+            fork.from = self.from;
+            fork.to = new_spans[hit].to;
+            Self::reown(&mut fork, self);
+            new_spans[hit] = old;
+            new_spans.insert(hit + 1, fork);
+        }
+        let partition = self.partition_mut(world)?;
+        partition.spans = new_spans;
+        partition
+            .spans
+            .last()
+            .unwrap()
+            .validate_topology()
+            .map_err(|e| EditError::Precondition(format!("疆域替换后拓扑破损: {e}")))?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))? = snapshot;
+        Ok(vec!["partitions".to_string()])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let snapshot = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
+            .clone()
+            .ok_or_else(|| EditError::Precondition("ReplaceFactionFaces 尚未 apply".into()))?;
+        let partition = self.partition_mut(world)?;
+        *partition = snapshot;
+        Ok(())
+    }
+}
+
+impl ReplaceFactionFacesCommand {
+    /// 在一段内落替换语义（[`ReplaceFactionFacesCommand`] 文档三条）。
+    fn reown(span: &mut wv_core::model::faction_partition::PartitionSpan, cmd: &Self) {
+        for face in &mut span.faces {
+            if cmd.faces.contains(&face.id) {
+                face.owner = Some(cmd.faction.clone());
+            } else if face.owner.as_ref() == Some(&cmd.faction) {
+                face.owner = None;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1716,6 +1844,76 @@ mod move_assign_tests {
             }],
         });
         world
+    }
+
+    /// [ADR-0090 M3] 疆域替换三语义：选中脸易主；目标势力原持有但不在
+    /// 名单的脸转无主；他势力持有的脸不动。撤销整段回填。
+    #[test]
+    fn replace_faction_faces_swaps_territory_and_reverts() {
+        let mut world = world_with_halves();
+        let faction_a = Id::new_unchecked("faction_a");
+        let cmd = ReplaceFactionFacesCommand {
+            map: test_map(),
+            layer: Id::new_unchecked("layer_borders"),
+            from: 0,
+            faction: faction_a.clone(),
+            faces: vec![1], // 只要右半（原属 faction_b）
+            before: std::sync::Mutex::new(None),
+        };
+        let dirty = cmd.apply(&mut world).expect("apply 应成功");
+        assert_eq!(dirty, vec!["partitions".to_string()]);
+
+        let span = &world.partitions[0].spans[0];
+        let owner_of = |id: u32| {
+            span.faces
+                .iter()
+                .find(|f| f.id == id)
+                .map(|f| f.owner.clone())
+                .unwrap()
+        };
+        // 脸 1 进名单 → 易主 faction_a；
+        assert_eq!(owner_of(1), Some(faction_a.clone()));
+        // 脸 0 = faction_a 原持有但不在名单 → 转无主（「替换」语义）；
+        assert_eq!(owner_of(0), None);
+
+        // 撤销 = 整分区快照回填：两脸各回原主。
+        cmd.revert(&mut world).expect("revert 应成功");
+        let span = &world.partitions[0].spans[0];
+        assert_eq!(
+            span.faces.iter().find(|f| f.id == 0).unwrap().owner,
+            Some(faction_a)
+        );
+        assert_eq!(
+            span.faces.iter().find(|f| f.id == 1).unwrap().owner,
+            Some(Id::new_unchecked("faction_b"))
+        );
+    }
+
+    /// [ADR-0090 M3] 他势力持有的脸不在名单 → 不动（不抢地）。
+    #[test]
+    fn replace_faction_faces_leaves_other_factions_alone() {
+        let mut world = world_with_halves();
+        let faction_c = Id::new_unchecked("faction_c");
+        let cmd = ReplaceFactionFacesCommand {
+            map: test_map(),
+            layer: Id::new_unchecked("layer_borders"),
+            from: 0,
+            faction: faction_c.clone(),
+            faces: vec![0], // 只把左半（faction_a）给 faction_c
+            before: std::sync::Mutex::new(None),
+        };
+        cmd.apply(&mut world).expect("apply 应成功");
+        let span = &world.partitions[0].spans[0];
+        assert_eq!(
+            span.faces.iter().find(|f| f.id == 0).unwrap().owner,
+            Some(faction_c),
+            "名单内脸易主 faction_c"
+        );
+        assert_eq!(
+            span.faces.iter().find(|f| f.id == 1).unwrap().owner,
+            Some(Id::new_unchecked("faction_b")),
+            "faction_b 的脸不在名单也不属目标 → 不动"
+        );
     }
 
     const LAYER: &str = "layer_borders";

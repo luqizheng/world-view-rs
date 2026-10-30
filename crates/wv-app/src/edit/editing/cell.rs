@@ -1,9 +1,10 @@
 //! 点选落笔 + hover 追踪（ADR-0057：点选进统一选区，EditCell 只画不选）。
 //!
-//! [ADR-0074]：CellMap（Topographic）工作区里点选器升级为**三段裁定**——
-//! 图钉（点状 POI）> 群系区（Nature Region）> 格。浏览族（其余模式）的
-//! 图钉命中在 `wv_render::drill::drill_pick`（追记一）：那边标签命中之后
-//! 接图钉，两边互不重叠。图钉命中纯函数
+//! [ADR-0074]：CellMap（Topographic）工作区里点选器是**两段裁定**——
+//! 图钉（点状 POI）> 群系区（Nature Region）；格子选择已随 [ADR-0090] D2
+//! 移交圈选「单格」形状（[`commit_cell_shape_click`]，本文件下方）。
+//! 浏览族（其余模式）的图钉命中在 `wv_render::drill::drill_pick`（追记一）：
+//! 那边标签命中之后接图钉，两边互不重叠。图钉命中纯函数
 //! [`wv_render::drill::pick_place_pin`] 两边共用。
 
 use super::*;
@@ -67,21 +68,16 @@ pub fn pick_nature_region(local: (f32, f32), world: &wv_core::World, map_id: &Id
 ///    [`CellSelection`]：**无修饰 = 替换、Shift = 并、Alt = 差**；
 /// 4. 点在地图外（无修饰）= 清空选区（「点空白 = 取消当前选」）。
 ///
-/// **CellMap 裁定**（[ADR-0074] 追记四，仅 `Topographic` 档生效）：
-/// **Alt+左键 = 直选单格**（替换语义，优先级最高——「我就要那格」的
-/// 显式指令，压过图钉/群系区/泛洪一切裁定；点图外不动选区）＞
-/// **图钉**（选 Place）＞ **群系区**（`nature_overlay` 开时选 Region）＞
-/// **默认 = 泛洪**：点谁淹谁，同判据连通区进格选区（判据读泛洪工具的
-/// `FloodSelectState`——面板「泛洪判据」两工具共用；Shift = 并入）。
-/// 单焦点模型：实体选中与格选区互斥——`resolve_form` 里 Cell 表单
-/// 优先于实体选中（设计稿 §11 Q4），不清格选区 = 表单看不见切换。
-/// （追记二的 Ctrl+右键由用户改口为 Alt+左键，已废除；实体命中不吃
-/// 修饰键的口径由「Alt 分支在最前」替代。）
+/// **CellMap 裁定**（[ADR-0090] D2 修订 [ADR-0074] 追记四，仅 `Topographic`
+/// 档生效）：**图钉**（选 Place）＞ **群系区**（`nature_overlay` 开时选
+/// Region）。格子两档（Alt 单格 / 默认泛洪）已**移交圈选「单格」形状**
+/// （[`commit_cell_shape_click`]，下方）——点选不再碰格子，点空地=不动选区。
+/// 单焦点模型不变：选中实体即清格选区（`resolve_form` 里 Cell 表单优先，
+/// 不清 = 悬挂选中）。
 ///
-/// **非 Topographic（浏览族）**：保留原格裁定（无修饰=替换 / Shift=并 /
-/// Alt=差 / 点图外清空）。浏览族的图钉命中在
-/// `wv_render::drill::drill_pick`（追记一）：单击选钉、双击让位下钻，
-/// 与本系统按模式互斥、无双重处理。
+/// **非 Topographic（浏览族）**：本系统不处理——浏览族的图钉命中在
+/// `wv_render::drill::drill_pick`（追记一）；格子选择按 ADR-0090 D2 随
+/// 浏览族只读语义退役，实体仲裁待 M2 接管。
 ///
 /// 修饰键走 Bevy `ButtonInput<KeyCode>`（ShiftLeft/Right、AltLeft/Right）——
 /// **不读 egui 键位链**（2026-10-24 真机 panic 前科：egui 上下文在系统里
@@ -92,15 +88,12 @@ pub fn pick_nature_region(local: (f32, f32), world: &wv_core::World, map_id: &Id
 #[allow(clippy::too_many_arguments)]
 pub fn commit_point_select_on_click(
     buttons: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
     playback: Res<PlaybackState>,
     view: Res<ViewState>,
     grid: Res<GridConfig>,
     drill: Res<DrillState>,
     mut projection: ResMut<WorldProjection>,
     layers: Res<LayerFrame>,
-    // 泛洪判据（追记四）：CellMap 默认点击=泛洪，判据与泛洪工具共用。
-    flood_select: Res<crate::state::FloodSelectState>,
     ui: Res<wv_render::camera::PointerOverUi>,
     point_select: Res<crate::state::PointSelectState>,
     mut sel: ResMut<crate::state::CellSelection>,
@@ -146,23 +139,10 @@ pub fn commit_point_select_on_click(
     // 新选择动作 → 断开套索活链接（ADR-0057 补记 5）。
     link.deactivate();
 
-    // ── CellMap 裁定（[ADR-0074] 追记四）：Alt 单格 > 图钉 > 群系区 > 泛洪 ──
-    // 仅 Topographic 档。默认点击 = **泛洪**（与泛洪选择同逻辑同判据——
-    // 用户裁定「点击是群系」）；Alt+左键 = 直选单格（追记二的 Ctrl+右键
-    // 由用户改口为 Alt，旧手势废除）。
+    // ── CellMap 裁定（[ADR-0090] D2 修订 [ADR-0074] 追记四）：图钉 > 群系区 ──
+    // 仅 Topographic 档。格子两档（Alt 单格 / 默认泛洪）已移交圈选「单格」
+    // 形状（下方 [`commit_cell_shape_click`]）——点选不再碰格子。
     if view.mode == ViewMode::Topographic {
-        let alt = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
-
-        // Alt = 直选单格（替换语义）。显式指令优先级压过一切实体命中；
-        // 点在图外不动选区（误触不该清空）。
-        if alt {
-            if let Some(pick) = cell_pick::pick_at((cursor.x, cursor.y), &grid, terrain) {
-                sel.replace([(pick.gx, pick.gy)]);
-                projection.selection = None;
-            }
-            return;
-        }
-
         if let Some(id) = pick_place_pin(
             cursor,
             &projection.world,
@@ -185,47 +165,102 @@ pub fn commit_point_select_on_click(
             ) {
                 sel.clear();
                 projection.selection = Some(SelectedEntity::new(EntityKind::Region, id));
-                return;
             }
         }
+    }
+    // （格子两档已移交圈选「单格」形状——点空地到这里 = 不动选区。）
+}
 
-        // 默认 = 泛洪：点谁淹谁（同群系/同地表连通区进格选区）。判据读
-        // 泛洪工具的 `FloodSelectState`——面板上的「泛洪判据」两工具共用。
-        let Some(pick) = cell_pick::pick_at((cursor.x, cursor.y), &grid, terrain) else {
-            return; // 点在图外不动选区
-        };
-        let grid_terrain = crate::edit::flood_select::to_terrain_grid(terrain);
-        let criterion = match flood_select.criterion {
-            wv_world_cell_map::state::FloodCriterion::Surface => {
-                wv_terrain::cellops::FloodCriterion::Surface
-            }
-            wv_world_cell_map::state::FloodCriterion::Biome => {
-                wv_terrain::cellops::FloodCriterion::Biome
-            }
-            wv_world_cell_map::state::FloodCriterion::HeightTolerance(tol) => {
-                wv_terrain::cellops::FloodCriterion::HeightTolerance(tol)
-            }
-        };
-        let cells = wv_terrain::cellops::flood_region(&grid_terrain, pick.gx, pick.gy, criterion);
-        if cells.is_empty() {
-            return;
-        }
-        let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-        if shift {
-            sel.union(cells);
-        } else {
-            sel.replace(cells);
-        }
-        // 单焦点：写格即让出实体焦点（同格裁定口径）。
-        projection.selection = None;
+/// 圈选「单格」形状的点击处理器（[ADR-0090] D3；2026-10-30 用户裁定：单格
+/// 为圈选第四形状变体，与多边形/矩形/椭圆同级——单击直选一格，不产草稿、
+/// 不成环；拖拽手势在 wv-render 侧已被 `SelectionShape::Cell` 排除）。
+///
+/// 判据分工（泛洪裁量，沿 [ADR-0088] D4「执行侧裁量、零能力损失、待实机
+/// 验收」先例）：
+/// - [`wv_world_cell_map::state::FloodCriterion::Off`]（**新默认**）→ 点击 =
+///   直选单格，修饰键走「选区加减法」：无修饰=替换、Shift=并、Alt=差；
+///   点图外不动选区；
+/// - 判据 ≠ Off → 点击 = 泛洪（[ADR-0074] 追记四 / [ADR-0088] 的泛洪手感
+///   由判据档位承载，「泛洪判据」UI 段随本工具显示）。
+///
+/// 单焦点模型同点选器：写格即让出实体选中。仅 Topographic 生效；工具态 =
+/// `SelectionState.enabled ∧ shape == Cell`——wv-render 只声明形状，格子
+/// 写入在 wv-app（ADR-0054 反向依赖红线）。PointerOverUi / 播放中 / 加载中
+/// 守卫与 [`commit_point_select_on_click`] 同口径。
+#[allow(clippy::too_many_arguments)]
+pub fn commit_cell_shape_click(
+    buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    playback: Res<PlaybackState>,
+    view: Res<ViewState>,
+    grid: Res<GridConfig>,
+    drill: Res<DrillState>,
+    mut projection: ResMut<WorldProjection>,
+    select_env: Res<wv_render::state::SelectionState>,
+    flood_select: Res<crate::state::FloodSelectState>,
+    ui: Res<wv_render::camera::PointerOverUi>,
+    mut sel: ResMut<crate::state::CellSelection>,
+    screen: Res<crate::app_screen::AppScreen>,
+    mut link: ResMut<super::region::LassoLiveLink>,
+) {
+    if !buttons.just_pressed(MouseButton::Left) {
         return;
     }
+    if screen.shows_loading_overlay() {
+        return;
+    }
+    // 工具态：圈选激活且形状 = 单格（ADR-0090 D3）。
+    if !(select_env.enabled && select_env.shape == wv_render::state::SelectionShape::Cell) {
+        return;
+    }
+    if view.mode != ViewMode::Topographic {
+        return;
+    }
+    if ui.wants_pointer {
+        return;
+    }
+    if playback.playing {
+        // 时间游标在动 → 当前 world 是投影 → 不要写。
+        return;
+    }
+    let Some(cursor) = view.cursor_world else {
+        return;
+    };
+    let Some(target_map) = drill.current() else {
+        return;
+    };
+    let Some(terrain) = projection.world.terrain_of(target_map) else {
+        // 子图继承父图栅格时 `terrain_of` 会返 None——无地形可选。
+        return;
+    };
+    // 图绑定兜底：正常每帧由 `sync_cell_region` 幂等绑定；本系统跑在渲染
+    // 之前时（首帧 / 测试）也得保证写进的是当前图的位图。
+    sel.bind_map(target_map, terrain.width, terrain.height);
+    // 新选择动作 → 断开套索活链接（ADR-0057 补记 5）。
+    link.deactivate();
 
-    // ── 非 Topographic（浏览族）：原格裁定不变 ─────────────────────
+    let Some(pick) = cell_pick::pick_at((cursor.x, cursor.y), &grid, terrain) else {
+        return; // 点在图外不动选区（误触不该清空）
+    };
     let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     let alt = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
 
-    if let Some(pick) = cell_pick::pick_at((cursor.x, cursor.y), &grid, terrain) {
+    // 判据翻译：Off = 直选单格；其余映射到 wv-terrain 的泛洪判据。
+    let flood_criterion = match flood_select.criterion {
+        wv_world_cell_map::state::FloodCriterion::Off => None,
+        wv_world_cell_map::state::FloodCriterion::Surface => {
+            Some(wv_terrain::cellops::FloodCriterion::Surface)
+        }
+        wv_world_cell_map::state::FloodCriterion::Biome => {
+            Some(wv_terrain::cellops::FloodCriterion::Biome)
+        }
+        wv_world_cell_map::state::FloodCriterion::HeightTolerance(tol) => {
+            Some(wv_terrain::cellops::FloodCriterion::HeightTolerance(tol))
+        }
+    };
+
+    let Some(criterion) = flood_criterion else {
+        // 直选单格（替换 / Shift=并 / Alt=差，「选区加减法」口径）。
         let cell = [(pick.gx, pick.gy)];
         if shift {
             sel.union(cell);
@@ -234,15 +269,24 @@ pub fn commit_point_select_on_click(
         } else {
             sel.replace(cell);
         }
-        // 单焦点（[ADR-0074]）：格选区非空时 `resolve_form` 直出 Cell 表单，
-        // 实体选中会变成看不见的悬挂态——选格即让出实体焦点。
+        // 单焦点：写格即让出实体焦点。
         projection.selection = None;
-    } else if !shift && !alt {
-        // 点在地图外（无修饰）= 清空选区；带修饰时点空白不动既有选区
-        // （Shift/Alt 是「在既有基础上增/减」，空白处无格可增，也不应误清）。
-        sel.clear();
-        projection.selection = None;
+        return;
+    };
+
+    // 泛洪：点谁淹谁（同判据连通区进格选区；Shift = 并入）。
+    let grid_terrain = crate::edit::flood_select::to_terrain_grid(terrain);
+    let cells = wv_terrain::cellops::flood_region(&grid_terrain, pick.gx, pick.gy, criterion);
+    if cells.is_empty() {
+        return;
     }
+    if shift {
+        sel.union(cells);
+    } else {
+        sel.replace(cells);
+    }
+    // 单焦点：写格即让出实体焦点（同格裁定口径）。
+    projection.selection = None;
 }
 
 /// **Esc 清空统一选区**（ADR-0057 补记 3：全新增入口，非沿用）。
