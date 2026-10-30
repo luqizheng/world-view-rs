@@ -176,6 +176,7 @@ pub(crate) fn startup_load_overlay(
     startup_req: Res<StartupLoadRequest>,
     pending: Res<PendingProjectLoad>,
     task: Res<ProjectLoadTask>,
+    current_loc: Res<crate::i18n::CurrentLocale>,
 ) {
     if !screen.shows_loading_overlay() {
         return;
@@ -197,23 +198,26 @@ pub(crate) fn startup_load_overlay(
             ui.painter()
                 .rect_filled(screen_rect, 0.0, egui::Color32::from_black_alpha(150));
         });
-    egui::Window::new("正在加载工程…")
-        .order(egui::Order::Foreground)
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .show(ctx, |ui| {
-            ui.with_layout(
-                egui::Layout::top_down_justified(egui::Align::Center),
-                |ui| {
-                    ui.add(egui::Spinner::new().size(32.0));
-                    ui.add_space(6.0);
-                    if !dir.is_empty() {
-                        ui.label(dir);
-                    }
-                },
-            );
-        });
+    egui::Window::new(crate::i18n::t_key(
+        &current_loc,
+        crate::i18n::I18nKey::LoadOverlayTitle,
+    ))
+    .order(egui::Order::Foreground)
+    .collapsible(false)
+    .resizable(false)
+    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+    .show(ctx, |ui| {
+        ui.with_layout(
+            egui::Layout::top_down_justified(egui::Align::Center),
+            |ui| {
+                ui.add(egui::Spinner::new().size(32.0));
+                ui.add_space(6.0);
+                if !dir.is_empty() {
+                    ui.label(dir);
+                }
+            },
+        );
+    });
 }
 
 /// 加载失败卡片：居中显示失败原因与下一步指引，点「知道了」关闭。
@@ -225,6 +229,7 @@ pub(crate) fn load_error_card(
     mut ctxs: EguiContexts,
     mut projection: ResMut<WorldProjection>,
     screen: Res<AppScreen>,
+    current_loc: Res<crate::i18n::CurrentLocale>,
 ) {
     if !screen.shows_error_card() {
         return;
@@ -235,23 +240,34 @@ pub(crate) fn load_error_card(
     let Ok(ctx) = ctxs.ctx_mut() else {
         return;
     };
-    egui::Window::new("工程加载失败")
-        .order(egui::Order::Foreground)
-        .collapsible(false)
-        .resizable(false)
-        .default_width(560.0)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .show(ctx, |ui| {
-            ui.label(egui::RichText::new(&err).color(egui::Color32::LIGHT_RED));
-            ui.add_space(8.0);
-            ui.label(
-                "换一个工程：顶栏工程菜单 → 打开工程…（Ctrl+O），或命令行 `wv gui -m <工程目录>`。",
-            );
-            ui.add_space(8.0);
-            if ui.button("知道了").clicked() {
-                projection.load_error = None;
-            }
-        });
+    // UX-018：失败卡片三段文案走 i18n（此前硬编码中文，英文界面下同屏混排）。
+    egui::Window::new(crate::i18n::t_key(
+        &current_loc,
+        crate::i18n::I18nKey::LoadErrorTitle,
+    ))
+    .order(egui::Order::Foreground)
+    .collapsible(false)
+    .resizable(false)
+    .default_width(560.0)
+    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+    .show(ctx, |ui| {
+        ui.label(egui::RichText::new(&err).color(egui::Color32::LIGHT_RED));
+        ui.add_space(8.0);
+        ui.label(crate::i18n::t_key(
+            &current_loc,
+            crate::i18n::I18nKey::LoadErrorGuidance,
+        ));
+        ui.add_space(8.0);
+        if ui
+            .button(crate::i18n::t_key(
+                &current_loc,
+                crate::i18n::I18nKey::LoadErrorDismiss,
+            ))
+            .clicked()
+        {
+            projection.load_error = None;
+        }
+    });
 }
 
 /// 工程加载驱动：**派发后台线程 + 主线程轮询结果并应用**（2026-10-22，C 档）。

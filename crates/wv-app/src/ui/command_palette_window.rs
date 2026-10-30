@@ -80,19 +80,28 @@ pub fn command_palette(
                 .corner_radius(radius::MODAL),
         )
         .show(ctx, |ui| {
-            // 输入框（14px）：撑满宽度 + 打开帧抢焦点。
-            FieldInput::new(&mut palette.query, "搜索命令、面板、对象…  例：笔刷 / 撤销")
-                .fill_width(true)
-                .focus_on_add(true)
-                .show(ui, &shell);
+            // 输入框（14px）：撑满宽度 + 打开帧抢焦点。（UX-018：占位符走 i18n）
+            FieldInput::new(
+                &mut palette.query,
+                crate::i18n::t(
+                    current_loc.0,
+                    crate::i18n::I18nKey::CommandPalettePlaceholder,
+                ),
+            )
+            .fill_width(true)
+            .focus_on_add(true)
+            .show(ui, &shell);
             ui.add_space(space::SM);
 
             let results = palette.results_with_locale(&recents, current_loc.0, view.mode);
             if results.is_empty() {
                 ui.label(
-                    egui::RichText::new("无匹配命令")
-                        .size(shell.scale.small)
-                        .color(shell.t3()),
+                    egui::RichText::new(crate::i18n::t(
+                        current_loc.0,
+                        crate::i18n::I18nKey::CommandPaletteNoMatch,
+                    ))
+                    .size(shell.scale.small)
+                    .color(shell.t3()),
                 );
             } else {
                 egui::ScrollArea::vertical()

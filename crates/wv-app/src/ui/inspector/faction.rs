@@ -351,11 +351,23 @@ pub fn faction_form(
         });
 
         ui.add_space(space::XS);
+        // UX-013：两步确认（第一击武装、第二击执行；切选中势力自动解除）。
+        let armed = drafts.faction_delete_armed.as_ref() == Some(&id.clone());
+        let label = if armed {
+            "确认删除？（此操作不可从列表撤销找回）"
+        } else {
+            "删除整个势力"
+        };
         if ui
-            .button(egui::RichText::new("删除整个势力").color(egui::Color32::RED))
+            .button(egui::RichText::new(label).color(egui::Color32::RED))
             .clicked()
         {
-            faction_panel_actions::remove_faction_now(projection, edit, view, id.clone());
+            if armed {
+                drafts.faction_delete_armed = None;
+                faction_panel_actions::remove_faction_now(projection, edit, view, id.clone());
+            } else {
+                drafts.faction_delete_armed = Some(id.clone());
+            }
         }
     }
 }

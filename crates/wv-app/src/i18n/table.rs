@@ -509,6 +509,14 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::EventCreateHint => "地点与参与者可在检查器的「属性」页签补填",
         I18nKey::NoticeEventCreatedPrefix => "已登记事件：",
         I18nKey::NoticeEventCreateFailed => "登记失败",
+        I18nKey::CommandPalettePlaceholder => "搜索命令、面板、对象…  例：笔刷 / 撤销",
+        I18nKey::CommandPaletteNoMatch => "无匹配命令",
+        I18nKey::LoadOverlayTitle => "正在加载工程…",
+        I18nKey::LoadErrorTitle => "工程加载失败",
+        I18nKey::LoadErrorGuidance => {
+            "换一个工程：顶栏工程菜单 → 打开工程…（Ctrl+O），或命令行 `wv gui -m <工程目录>`。"
+        }
+        I18nKey::LoadErrorDismiss => "知道了",
         I18nKey::CharacterLevelTitle => "编辑等级",
         I18nKey::CharacterLevelFrom => "自",
         I18nKey::CharacterLevelTo => "至",
@@ -1279,6 +1287,14 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::EventCreateHint => "Set location & participants in the Inspector afterwards",
         I18nKey::NoticeEventCreatedPrefix => "Event registered: ",
         I18nKey::NoticeEventCreateFailed => "Failed to register event",
+        I18nKey::CommandPalettePlaceholder => "Search commands, panels, objects…  e.g. brush / undo",
+        I18nKey::CommandPaletteNoMatch => "No matching command",
+        I18nKey::LoadOverlayTitle => "Loading project…",
+        I18nKey::LoadErrorTitle => "Failed to load project",
+        I18nKey::LoadErrorGuidance => {
+            "Try another project: top bar project menu → Open project… (Ctrl+O), or `wv gui -m <project dir>`."
+        }
+        I18nKey::LoadErrorDismiss => "Got it",
         I18nKey::CharacterLevelTitle => "Edit levels",
         I18nKey::CharacterLevelFrom => "From",
         I18nKey::CharacterLevelTo => "To",

@@ -263,8 +263,25 @@ pub fn layer_controls(
         {
             changed = true;
         }
-        if ui.button("删除层").clicked() {
-            delete = true;
+        // UX-013：两步确认——第一击武装（按钮变确认文案），第二击执行。
+        // 武装位存 egui memory（键 = 本层 Id）：无签名传染，切换层自动失效。
+        let armed_key = egui::Id::new("wv_faction_layer_delete_armed").with(layer.id.as_str());
+        let armed = ui
+            .ctx()
+            .data(|d| d.get_temp::<bool>(armed_key))
+            .unwrap_or(false);
+        let label = if armed {
+            "确认删除层？"
+        } else {
+            "删除层"
+        };
+        if ui.button(label).clicked() {
+            if armed {
+                ui.ctx().data_mut(|d| d.insert_temp(armed_key, false));
+                delete = true;
+            } else {
+                ui.ctx().data_mut(|d| d.insert_temp(armed_key, true));
+            }
         }
     });
 
