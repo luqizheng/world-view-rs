@@ -242,18 +242,23 @@ impl MapToolId {
     /// 三工作区功能分区的唯一过滤源——工具条瓷砖灰化、快捷键拦截、命令
     /// 面板隐藏、分发器终审四处置共用本表，不各自重拼：
     ///
-    /// - **Browse / Map**（叙事与政治图档）：选择、抓手、点选（万能选择器）、
-    ///   测量（Map 是距离主场）；
-    /// - **CellMap**（Topographic 地形工作台）：地形编辑全家（笔刷/橡皮/
-    ///   单格/群系分界/大陆生成）+ 地标放置（POI 编辑主场）；
+    /// - **Browse / Map**（叙事与政治图档）：抓手、点选（实体选择器，
+    ///   ADR-0090 D2）、测量（Map 是距离主场）——圈选已收编 CellMap；
+    /// - **CellMap**（Topographic 地形工作台）：圈选（格子选择器，ADR-0090
+    ///   D3）+ 地形编辑全家（笔刷/橡皮/单格/群系分界/大陆生成）+ 地标放置
+    ///   （POI 编辑主场）；
     /// - **LinePoi**（河/路绘制）：Map 档——CellMap 只**看**线不画线
     ///   （2026-10-28 裁定②：CellMap 道路/河流可见属渲染层，编辑入口在 Map）。
     pub fn available_in(self, mode: crate::state::ViewMode) -> bool {
         use crate::state::ViewMode;
         match self {
-            // 公共：导航与选择（点选 = 万能选择器，Browse 选图钉也靠它，
+            // 公共：导航与实体选择（点选 = 万能选择器，Browse 选图钉也靠它，
             // ADR-0074 追记一；「POI 浏览处处有」的载体）。
-            Self::Select(_) | Self::Pan | Self::PointSelect => true,
+            Self::Pan | Self::PointSelect => true,
+            // 圈选（ADR-0090 D3）：格子是地形域关注点，收编 CellMap 专用
+            // 格子选择器——Browse/Map 不再有包络圈选（包络意图全属地形/世界域，
+            // 生成大陆本就 Topographic-only、划分势力走独立切手势，收编无断链）。
+            Self::Select(_) => mode == ViewMode::Topographic,
             Self::MeasureLine | Self::MeasureRect | Self::MeasureEraser => {
                 matches!(mode, ViewMode::VectorFlat | ViewMode::GoogleMap)
             }
@@ -1044,10 +1049,13 @@ mod tests {
             assert!(MapToolId::Pan.available_in(m), "抓手是导航，三档公共");
             assert!(
                 MapToolId::PointSelect.available_in(m),
-                "点选=万能选择器，三档公共"
+                "点选=实体选择器，三档公共（ADR-0090 D2）"
             );
-            assert!(MapToolId::Select(SelectionShape::Polygon).available_in(m));
         }
+        // 圈选（ADR-0090 D3）：收编 CellMap 专用格子选择器，Browse/Map 不可用。
+        assert!(MapToolId::Select(SelectionShape::Polygon).available_in(ViewMode::Topographic));
+        assert!(!MapToolId::Select(SelectionShape::Polygon).available_in(ViewMode::VectorFlat));
+        assert!(!MapToolId::Select(SelectionShape::Polygon).available_in(ViewMode::GoogleMap));
     }
 
     #[test]

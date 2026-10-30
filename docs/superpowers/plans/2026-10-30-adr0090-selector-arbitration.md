@@ -46,3 +46,27 @@
 ## 原则声明
 
 触及 P5（图层化编辑：hidden 层不可选=图层语义延伸）、P6 不触及（选区是会话态不写世界）。
+
+## M1 执行勘记（2026-10-30，T1 已落、T2/T3 转 M1b）
+
+T1 白名单收编已随分支首提交落地。T2/T3 勘察发现三个计划未载的硬约束，升格为
+M1b 独立轮次，避免半换防（T3 单落会造成泛洪能力真空）：
+
+1. **多边形手势冲突**：现状多边形=逐点点击成草稿（`wv-render/selection.rs::
+   commit_selection_click`→`handle_click`），「单击无位移=选单格」与之撞——
+   M1b 须先把多边形改成**拖拽手绘成环**（拖拽路径=环点），三形状统一拖拽语义，
+   单击位让给单格。手势级改动，须实机验收。
+2. **写格落点**：`CellSelection` 归 wv-app，圈选手势系统在 wv-render——「单击
+   写单格」必须在 wv-app 侧另立系统读呈现态（wv-render 禁反向依赖/写世界红线），
+   不能顺手塞进 `commit_selection_click`。
+3. **测试面**：T3 牵动 `edit/editing/tests.rs` 13 处 schedule 挂载点（Alt-单格/
+   泛洪断言重写），与 T2 同批落。
+
+## M1b 任务清单（下一轮，T2+T3 同批）
+
+- 多边形改拖拽手绘（wv-render/selection.rs），三形状统一「拖拽成形」；
+- wv-app 新系统：圈选激活 + Topographic + 单击 slop 内 → `CellSelection` 单格
+  （Shift=并/Alt=差）；`FloodCriterion` 增 `Off`（新默认）→ 判据≠Off 时单击=泛洪；
+- 泛洪判据段显示 gate 从 `point_select.tool_active` 迁圈选激活
+  （`brush_panel.rs:201`）；
+- T3 点选减法（cell.rs 两分支 + 13 处测试重写）。
