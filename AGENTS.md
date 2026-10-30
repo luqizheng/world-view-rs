@@ -313,6 +313,25 @@ cargo run -p wv-app --features app --bin wv -- gui    # 无工程 → 欢迎页�
 > wv-app 的渲染 / UI 模块全部在 `#[cfg(feature = "app")]` 门后（本节上文），启动命令
 > **必须带 `--features app`**——不带 feature 的 `cargo run -p wv-app` 编译不到 GUI 二进制。
 
+> **本地内环 clippy 口径（2026-10-30 追加，用户裁定 A+B）**：上面的门槛**语义
+> 不变**（合入前仍须全量通过），但**本地日常不必跑全量**——全量测试与 clippy
+> 已外移 CI（`.github/workflows/gates.yml`，2026-10-29 落地）。本地内环用：
+>
+> ```bash
+> bash scripts/clippy.sh        # 自动只验改动 crate + O0 profile + 自动带 app feature
+> ```
+>
+> 两个加速点，都**不改 lint 结论**：
+> - **A｜只验改动面**：无参数时从 git 工作区提取 `crates/<name>/` 改动的 crate，
+>   只 lint 它们；wv-app / wv-render 自动补 `--features app`（覆盖渲染层盲区）。
+>   `--all` 复刻旧的全量行为。
+> - **B｜O0 profile**：`[profile.clippy]`（根 `Cargo.toml`）一律 O0，等价命令
+>   `cargo lint ...`（别名 = `clippy --profile clippy`）。根因是 clippy 原先继承
+>   dev profile 的 O2/热点 crate O3——那是为**运行时 FPS** 调的，静态分析纯烧时间
+>   （lint 在 HIR/MIR 层，opt-level 不影响结论）。
+>
+> 首次跑会重建 `.target/clippy/` 一次（O0 依赖树）；之后为标准增量速度。
+
 ### 7.2 必须写测试的场景
 
 | 场景 | 要求 |
