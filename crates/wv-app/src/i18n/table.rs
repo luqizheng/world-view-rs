@@ -528,6 +528,11 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
             "换一个工程：顶栏工程菜单 → 打开工程…（Ctrl+O），或命令行 `wv gui -m <工程目录>`。"
         }
         I18nKey::LoadErrorDismiss => "知道了",
+        I18nKey::CrashRecoveryTitle => "上次会话未正常结束",
+        I18nKey::CrashRecoveryNamePrefix => "工程「",
+        I18nKey::CrashRecoveryDirtyPrefix => "」上次没有正常关闭。磁盘上的内容停在最后一次自动保存，此后最多 ",
+        I18nKey::CrashRecoveryDirtySuffix => " 秒的编辑可能丢失（撤销栈也随进程消失了）。",
+        I18nKey::CrashRecoveryCleanBody => "」上次没有正常关闭，但没有未保存的编辑——磁盘内容完整。",
         I18nKey::CharacterCreateTitle => "登记人物",
         I18nKey::CharacterCreateNameHint => "给人物起个名字",
         I18nKey::CharacterCreateHint => "别名 / 生卒 / 等级段可稍后在等级编辑器与 YAML 补填",
@@ -1328,6 +1333,17 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
             "Try another project: top bar project menu → Open project… (Ctrl+O), or `wv gui -m <project dir>`."
         }
         I18nKey::LoadErrorDismiss => "Got it",
+        I18nKey::CrashRecoveryTitle => "Last session did not exit cleanly",
+        I18nKey::CrashRecoveryNamePrefix => "Project \"",
+        I18nKey::CrashRecoveryDirtyPrefix => {
+            "\" did not close normally last time. The files stop at the last auto-save; up to "
+        }
+        I18nKey::CrashRecoveryDirtySuffix => {
+            " seconds of edits since then may be lost (the undo stack is gone too)."
+        }
+        I18nKey::CrashRecoveryCleanBody => {
+            "\" did not close normally, but there were no unsaved edits — the files are complete."
+        }
         I18nKey::CharacterCreateTitle => "Register character",
         I18nKey::CharacterCreateNameHint => "Name this character",
         I18nKey::CharacterCreateHint => "Alias / dates / level spans can be filled in later",

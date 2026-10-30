@@ -928,6 +928,16 @@ pub enum I18nKey {
     LoadErrorGuidance,
     /// 「知道了」（UX-018）
     LoadErrorDismiss,
+    /// 崩溃恢复卡片标题（UX-001 完整版）
+    CrashRecoveryTitle,
+    /// 崩溃恢复正文·工程名前缀（后接工程名）
+    CrashRecoveryNamePrefix,
+    /// 崩溃恢复正文·有未落盘编辑时的前缀（后接自动保存间隔秒数）
+    CrashRecoveryDirtyPrefix,
+    /// 崩溃恢复正文·有未落盘编辑时的后缀
+    CrashRecoveryDirtySuffix,
+    /// 崩溃恢复正文·没有未落盘编辑（内容完整）
+    CrashRecoveryCleanBody,
     /// 「登记人物」标题（UX-002 batch6）
     CharacterCreateTitle,
     /// 人物名 hint（UX-002）
@@ -1513,7 +1523,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 631] = [
+    pub const ALL: [I18nKey; 636] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1956,6 +1966,12 @@ impl I18nKey {
         I18nKey::LoadErrorTitle,
         I18nKey::LoadErrorGuidance,
         I18nKey::LoadErrorDismiss,
+        // 崩溃恢复（UX-001 完整版，5）
+        I18nKey::CrashRecoveryTitle,
+        I18nKey::CrashRecoveryNamePrefix,
+        I18nKey::CrashRecoveryDirtyPrefix,
+        I18nKey::CrashRecoveryDirtySuffix,
+        I18nKey::CrashRecoveryCleanBody,
         I18nKey::CharacterCreateTitle,
         I18nKey::CharacterCreateNameHint,
         I18nKey::CharacterCreateHint,

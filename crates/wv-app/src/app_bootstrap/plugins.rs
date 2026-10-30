@@ -42,6 +42,13 @@ pub(super) fn configure(app: &mut App) {
     let group = DefaultPlugins
         .set(WindowPlugin {
             primary_window: Some(primary_window),
+            // UX-001 崩溃恢复（2026-10-30）：**关掉 Bevy 的自动关窗**。
+            // 默认 true 时 `close_when_requested`（Last）直接销毁窗口 →
+            // `exit_on_all_closed` 退出，Alt+F4 / 任务栏关闭会绕过关闭确认，
+            // dirty 时等于一键丢弃。接管者是
+            // [`crate::ui_shell::close_confirm::intercept_os_close_request`]：
+            // dirty → 弹「保存并关闭 / 不保存 / 取消」；干净 → 直接退出。
+            close_when_requested: false,
             ..Default::default()
         })
         // 全局保持最近邻采样；Google 模式的 chunk 纹理会单独切线性采样。

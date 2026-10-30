@@ -50,6 +50,7 @@ mod notice;
 mod project_io;
 mod project_load;
 pub mod property_window;
+mod session_marker;
 mod shell;
 #[cfg(test)]
 mod tests;
@@ -59,6 +60,7 @@ pub use notice::ShellNotice;
 pub use project_io::{DialogPurpose, OpenProjectTask};
 pub use project_load::StartupLoadRequest;
 pub use property_window::{apply_city_edit_request, CityEditRequest, OpenInspectorRequest};
+pub use session_marker::CrashRecovery;
 
 // `ui/*` / `app_bootstrap` 等模块的文档以 `crate::ui_shell::X` 链接这些系统。
 // 拆模块是实现细节，保持既有入口路径不变，避免文档链接与调用方路径失效。
@@ -92,6 +94,9 @@ pub fn register(app: &mut App) {
         .init_resource::<ShellNotice>()
         // UX-001 最小版：dirty 关闭确认状态机（dispatch 守卫 + 本模块确认框共用）。
         .init_resource::<close_confirm::CloseConfirm>()
+        // UX-001 崩溃恢复：会话标记 + 异常退出报告（标记写在工程根）。
+        .init_resource::<session_marker::SessionMarker>()
+        .init_resource::<session_marker::CrashRecovery>()
         // UX-002：「登记事件」对话框跨帧状态（时间轴按钮 / 命令面板入口）。
         .init_resource::<crate::ui::event_create_dialog::EventCreateDialog>()
         // UX-002 batch6：人物 / 事态创建对话框状态。
@@ -133,6 +138,9 @@ pub fn register(app: &mut App) {
             (
                 seed_drill_state,
                 hotkeys.after(bevy_egui::EguiPreUpdateSet::InitContexts),
+                // UX-001：OS 级关窗（Alt+F4 / 任务栏）也走同一条确认闸门。
+                // `WindowPlugin::close_when_requested` 已关（见 plugins.rs）。
+                close_confirm::intercept_os_close_request,
                 // 主题投影必须晚于 hotkeys（Ctrl+J 同帧生效）、早于所有 UI 绘制。
                 // 只在 `UiShellConfig` 变化时写 egui，避免每帧重建样式。
                 apply_ui_theme.after(hotkeys),
@@ -170,9 +178,19 @@ pub fn register(app: &mut App) {
                 notice::notify_history_trimmed,
                 // UX-001 完整版一半：60s 静默自动保存（复用 dispatch_save_command）。
                 dispatch::auto_save,
+                // UX-001 崩溃恢复：会话标记（换工程收旧写新 / 落盘心跳）。
+                // 必须排在分发器之后——关闭工程与另存为都在那里换 `project_dir`。
+                session_marker::maintain_session_marker.after(dispatch::apply_pending_commands),
                 // UX-003：PNG 导出两拍状态机（离屏相机）。
                 crate::ui::export_png::export_png_system,
             ),
+        )
+        // 退出时收标记：排在 `ExitSystems` 之后，UI（Update / egui pass）写的
+        // `AppExit` 与 `exit_on_all_closed` 同帧写的那条都能看到——正常退出不该
+        // 让下一次打开弹「上次没正常退出」。
+        .add_systems(
+            Last,
+            session_marker::end_session_on_exit.after(bevy::window::ExitSystems),
         )
         // bevy_egui 0.42：UI 系统进 pass 调度（见 gui.rs 同款注释）。
         //
@@ -188,6 +206,8 @@ pub fn register(app: &mut App) {
                 startup_load_overlay,
                 crate::ui::welcome_screen,
                 load_error_card,
+                // UX-001 崩溃恢复卡片：载入完成后告知「上次没正常退出」。
+                session_marker::crash_recovery_card,
             )
                 .chain(),
         );

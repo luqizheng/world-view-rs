@@ -203,10 +203,10 @@ mod tests {
         }
         assert_eq!(
             I18nKey::ALL.len(),
-            631,
-            "ALL 应为 631 项（… ADR-0090 十键 + ADR-0089 一键 + UX batch5 六键 + 山脊纹理一键 + UX batch6 九键）；加新键时同步更新数组长度与元素（got {})",
+            636,
+            "ALL 应为 636 项（… ADR-0090 十键 + ADR-0089 一键 + UX batch5 六键 + 山脊纹理一键 + UX batch6 九键 + 崩溃恢复五键）；加新键时同步更新数组长度与元素（got {})",
             I18nKey::ALL.len()
         );
-        assert_eq!(seen.len(), 631, "去重后应仍为 631 项");
+        assert_eq!(seen.len(), 636, "去重后应仍为 636 项");
     }
 }
