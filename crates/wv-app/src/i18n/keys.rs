@@ -948,6 +948,16 @@ pub enum I18nKey {
     NoticeCharacterCreatedPrefix,
     /// 人物登记失败前缀（UX-002）
     NoticeCharacterCreateFailed,
+    /// 「登记势力」标题（UX-002 收尾）
+    FactionCreateTitle,
+    /// 势力名 hint（UX-002 收尾）
+    FactionCreateNameHint,
+    /// 势力创建补填指引（UX-002 收尾）
+    FactionCreateHint,
+    /// 「已登记势力：」前缀（UX-002 收尾）
+    NoticeFactionCreatedPrefix,
+    /// 势力登记失败前缀（UX-002 收尾）
+    NoticeFactionCreateFailed,
     /// 「登记事态」标题（UX-002）
     SituationCreateTitle,
     /// 事态名 hint（UX-002）
@@ -1523,7 +1533,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 636] = [
+    pub const ALL: [I18nKey; 641] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1977,6 +1987,11 @@ impl I18nKey {
         I18nKey::CharacterCreateHint,
         I18nKey::NoticeCharacterCreatedPrefix,
         I18nKey::NoticeCharacterCreateFailed,
+        I18nKey::FactionCreateTitle,
+        I18nKey::FactionCreateNameHint,
+        I18nKey::FactionCreateHint,
+        I18nKey::NoticeFactionCreatedPrefix,
+        I18nKey::NoticeFactionCreateFailed,
         I18nKey::SituationCreateTitle,
         I18nKey::SituationCreateNameHint,
         I18nKey::SituationCreateHint,

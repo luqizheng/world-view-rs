@@ -102,6 +102,8 @@ pub fn register(app: &mut App) {
         // UX-002 batch6：人物 / 事态创建对话框状态。
         .init_resource::<crate::ui::entity_create_dialog::CharacterCreateDialog>()
         .init_resource::<crate::ui::entity_create_dialog::SituationCreateDialog>()
+        // UX-002 收尾：势力本体创建（Inspector「势力层」页签「+ 新建势力」）。
+        .init_resource::<crate::ui::entity_create_dialog::FactionCreateDialog>()
         // UX-003：PNG 导出两拍状态机。
         .init_resource::<crate::ui::export_png::ExportPng>()
         // 人物等级列表编辑器（人物面板行点击入口）。

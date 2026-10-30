@@ -204,9 +204,12 @@ pub fn panel_inspector(
         ResMut<wv_render::faction_overlays::FactionDisplay>,
         ResMut<crate::state::NatureRegionUiState>,
     ),
-    (mut boundary, mut situation_create): (
+    // 势力创建对话框（UX-002 收尾）随势力层页签进——「+ 新建势力」入口
+    // 在那一页，与 situation_create 同款传线。
+    (mut boundary, mut situation_create, mut faction_create): (
         ResMut<wv_render::state::BiomeBoundaryState>,
         ResMut<crate::ui::entity_create_dialog::SituationCreateDialog>,
+        ResMut<crate::ui::entity_create_dialog::FactionCreateDialog>,
     ),
     // Cell 表单的另两个会话态：多边形选区（V 套索/框选的环）+ 统一选区
     // （ADR-0057：Cell 表单的编辑对象，判据读它）。
@@ -318,6 +321,7 @@ pub fn panel_inspector(
                         &mut pen_dialog,
                         playback.current_day,
                         current_loc.0,
+                        &mut faction_create,
                     );
                 }
                 InspectorTab::Situations => {

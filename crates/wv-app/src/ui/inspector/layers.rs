@@ -39,6 +39,7 @@ pub fn layers_tab(
     pen_dialog: &mut crate::ui::partition_pen::PartitionPenDialog,
     playback_day: i64,
     loc: crate::i18n::Locale,
+    faction_create: &mut crate::ui::entity_create_dialog::FactionCreateDialog,
 ) {
     let layers = wv_core::resolved_faction_layers(&projection.world);
     let pen_gated = crate::ui::partition_pen::pen_available_for(
@@ -130,6 +131,28 @@ pub fn layers_tab(
     }
     if nature_exists {
         r_n.on_hover_text("自然层全工程唯一；在 CellMap 笔刷窗里编辑划分");
+    }
+    ui.add_space(space::MD);
+
+    // 新建势力本体（UX-002 收尾）：空态文案承诺的「+ 新建势力」自此存在。
+    // 恒渲染——势力与层是两个动作：层是画布的分组，本体是政治实体，
+    // 有层没层都该能先登记本体（无层时落默认层，登记后可改归属）。
+    let (rect_f, r_f) = ui.allocate_exact_size(egui::vec2(add_w, shell.hit), egui::Sense::click());
+    ui.painter().rect_stroke(
+        rect_f,
+        crate::theme::ui_tokens::radius::CONTROL,
+        egui::Stroke::new(1.0, shell.border_strong()),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().text(
+        rect_f.center(),
+        egui::Align2::CENTER_CENTER,
+        "+ 新建势力",
+        crate::theme::ui_theme::proportional(shell.scale.base),
+        shell.t2(),
+    );
+    if r_f.clicked() {
+        faction_create.open = true;
     }
     ui.add_space(space::MD);
 
