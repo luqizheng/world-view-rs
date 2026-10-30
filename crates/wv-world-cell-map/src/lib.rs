@@ -42,6 +42,9 @@
 //! [ADR-0054]: ../docs/adr/ADR-0054-world-cell-map-crate.md
 
 pub mod biome_boundary;
+/// 群系吸附索引（[ADR-0090] D5/M4）：切蛋糕「贴近群系」几何内核——
+/// 锋线边掩码 + 共享边投影，切刀采样折线逐点吸附自然地貌。
+pub mod biome_snap;
 pub mod cell_flash;
 pub mod cell_paint;
 pub mod cell_selection;

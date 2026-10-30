@@ -108,6 +108,9 @@ pub struct CutStrokeSession {
     pub active: bool,
     /// 采样点（map-local 扁平）。
     pub pts: Vec<f32>,
+    /// 群系锋线索引（[ADR-0090] D5/M4）：**落笔时构建一次、整笔复用**
+    /// （预览帧零重建；O(格数) 一次性的成本在 just_pressed 付）。
+    pub snap_index: Option<std::sync::Arc<wv_world_cell_map::biome_snap::BiomeSnapIndex>>,
 }
 
 impl CutStrokeSession {
@@ -115,7 +118,34 @@ impl CutStrokeSession {
     pub fn reset(&mut self) {
         self.active = false;
         self.pts.clear();
+        self.snap_index = None;
     }
+}
+
+/// 贴近群系的吸附应用（[ADR-0090] D5/M4 纯辅助）：有索引时对 `new`
+/// 吸附，否则原样返回。`first` 用于落笔首点（此时 pts 尚未含它）。
+fn snapped(
+    session: &CutStrokeSession,
+    pts: &[f32],
+    grid: &GridConfig,
+    scale: f32,
+    first: Option<[f32; 2]>,
+) -> Vec<f32> {
+    let Some(index) = session.snap_index.as_ref() else {
+        let mut v = pts.to_vec();
+        if let Some(f) = first {
+            v.extend_from_slice(&f);
+        }
+        return v;
+    };
+    // 半径 = 屏幕 12px 折格数（至少 1 格）——手抖余量与锋线捕捉范围的
+    // 折中；过大会把笔画硬拽去远处的锋线。
+    let radius = (12.0 * scale / grid.cell_size).max(1.0);
+    let mut base = pts.to_vec();
+    if let Some(f) = first {
+        base.extend_from_slice(&f);
+    }
+    index.snap_polyline(&base, grid.cell_size, radius)
 }
 
 /// 笔画落在哪张脸：沿采样点逐点找**第一张命中脸**。
@@ -239,6 +269,11 @@ pub fn partition_edit_hud(
                         ui.checkbox(
                             &mut edit_state.show_boundaries,
                             t(loc, crate::i18n::I18nKey::PartitionShowBoundaries),
+                        );
+                        // [ADR-0090 D5/M4] 贴近群系（默认勾；关 = 自由切）。
+                        ui.checkbox(
+                            &mut edit_state.snap_to_biome,
+                            t(loc, crate::i18n::I18nKey::PartitionSnapBiome),
                         );
                         ui.separator();
                         if ui
@@ -404,6 +439,21 @@ pub fn partition_cut_gesture(
     if buttons.just_pressed(MouseButton::Left) && edit_state.tool == PartitionTool::Cut {
         session.active = true;
         session.pts.clear();
+        // [ADR-0090 D5/M4] 贴近群系：落笔时构建锋线索引一次（O(格数)），
+        // 整笔预览 / 提交复用——预览帧零重建。
+        session.snap_index = if edit_state.snap_to_biome {
+            projection
+                .world
+                .terrain_of(&wv_core::Id::new_unchecked(view.current_map.clone()))
+                .map(|terrain| {
+                    std::sync::Arc::new(wv_world_cell_map::biome_snap::BiomeSnapIndex::build(
+                        terrain,
+                    ))
+                })
+        } else {
+            None
+        };
+        session.pts = snapped(&session, &session.pts, &grid, view.scale, Some([p.x, p.y]));
         stroke_push(&mut session, [p.x, p.y]);
     } else if buttons.pressed(MouseButton::Left) && session.active {
         stroke_push(&mut session, [p.x, p.y]);
@@ -414,6 +464,9 @@ pub fn partition_cut_gesture(
             session.pts.clear();
             return;
         }
+        // [ADR-0090 D5/M4] 贴近群系：提交笔画 = 采样折线逐点吸附锋线
+        // （半径 = 屏幕 12px 折格数；均匀区内点保持原位不强扭）。
+        let snapped_pts = snapped(&session, &session.pts, &grid, view.scale, None);
         // 找当前 span、沿笔画逐点定被切脸（终审遗留修：中点落脸外曾盲兜
         // 底脸 0——切错对象；全程不入脸 → notice 报错丢弃）。
         let map_id = wv_core::Id::new_unchecked(view.current_map.clone());
@@ -423,12 +476,12 @@ pub fn partition_cut_gesture(
             session.pts.clear();
             return;
         };
-        let Some(face_a) = stroke_face(&session.pts, span) else {
+        let Some(face_a) = stroke_face(&snapped_pts, span) else {
             session.pts.clear();
             pick_notice("笔画没落在任何地块上——从地块一边画到另一边");
             return;
         };
-        let pending_stroke = session.pts.clone();
+        let pending_stroke = snapped_pts;
         // 松手**立即提交**（用户裁定 2026-10-28：一刀下去红线先出现，不打断）。
         // 层用途分派（ADR-0081）：政治层新块自动归占位势力「无名N」（归属
         // 错了用易主改）；自然层不加势力——kind 随脸两分（切草原出两块

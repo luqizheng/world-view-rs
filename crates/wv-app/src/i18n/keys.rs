@@ -871,6 +871,8 @@ pub enum I18nKey {
     PartitionReplaceClear,
     /// 图层面板·势力行「编辑疆域」入口（ADR-0090 D4/M3）
     LayerRowEditTerritory,
+    /// 切蛋糕·贴近群系 checkbox（ADR-0090 D5/M4，默认勾）
+    PartitionSnapBiome,
     /// 底栏笔触进度·前缀「笔触进行中」（[ADR-0052] D8-B）
     StatusBarStrokeProgress,
     /// 底栏笔触进度·格数后缀「已落 N 格」（[ADR-0052] D8-B）
@@ -1486,7 +1488,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 618] = [
+    pub const ALL: [I18nKey; 619] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1901,6 +1903,7 @@ impl I18nKey {
         I18nKey::PartitionReplaceConfirm,
         I18nKey::PartitionReplaceClear,
         I18nKey::LayerRowEditTerritory,
+        I18nKey::PartitionSnapBiome,
         I18nKey::StatusBarStrokeProgress,
         I18nKey::StatusBarStrokeCells,
         I18nKey::MapControlsPlaybackLocked,

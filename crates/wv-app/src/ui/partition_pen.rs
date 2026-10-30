@@ -360,6 +360,10 @@ pub struct PartitionEditState {
     /// 边界红圈（编辑态常显的当前层脸环闪烁红线）是否显示——2026-10-28
     /// 由常显改可选（HUD 勾选框，会话级不落盘）。
     pub show_boundaries: bool,
+    /// 贴近群系（[ADR-0090] D5/M4）：切刀采样折线逐点吸附群系锋线
+    /// （`biome_snap::BiomeSnapIndex`），切出的脸边界贴自然地貌。
+    /// **默认 true**（D5「默认勾」；关 = 自由切，现状行为）。
+    pub snap_to_biome: bool,
 }
 
 impl Default for PartitionEditState {
@@ -368,6 +372,7 @@ impl Default for PartitionEditState {
             active: None,
             tool: PartitionTool::default(),
             show_boundaries: true,
+            snap_to_biome: true,
         }
     }
 }
