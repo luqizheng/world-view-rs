@@ -653,7 +653,9 @@ fn render_count_rows(ui: &mut egui::Ui, shell: &UiShell, projection: &WorldProje
         "Regions",
         (
             BadgeKind::Neutral,
-            format!("{}", projection.world.distances.places.len()),
+            // UX-025（round-2 审计）：此处曾错显示 `distances.places.len()`
+            // ——标签与数据错位。
+            format!("{}", projection.world.regions.len()),
         ),
     );
 }

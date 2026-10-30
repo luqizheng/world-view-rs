@@ -92,6 +92,8 @@ pub fn register(app: &mut App) {
         .init_resource::<close_confirm::CloseConfirm>()
         // UX-002：「登记事件」对话框跨帧状态（时间轴按钮 / 命令面板入口）。
         .init_resource::<crate::ui::event_create_dialog::EventCreateDialog>()
+        // UX-003：PNG 导出两拍状态机。
+        .init_resource::<crate::ui::export_png::ExportPng>()
         // 人物等级列表编辑器（人物面板行点击入口）。
         .init_resource::<crate::ui::character_level_dialog::CharacterLevelEditor>()
         .init_resource::<DrillState>()
@@ -159,6 +161,10 @@ pub fn register(app: &mut App) {
                 sync_window_clear_color,
                 // 撤销栈逐出回执（UX-034）：与命令分发无依赖，进同组即可。
                 notice::notify_history_trimmed,
+                // UX-001 完整版一半：60s 静默自动保存（复用 dispatch_save_command）。
+                dispatch::auto_save,
+                // UX-003：PNG 导出两拍状态机（离屏相机）。
+                crate::ui::export_png::export_png_system,
             ),
         )
         // bevy_egui 0.42：UI 系统进 pass 调度（见 gui.rs 同款注释）。

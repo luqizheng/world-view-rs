@@ -34,15 +34,20 @@ pub fn sync_terrain_chunks(
     mut chunk_entities: ResMut<TerrainChunkEntities>,
     mut q_chunks: Query<(&mut TerrainChunk, &Mesh2d)>,
 ) {
-    // ── ADR-0053 回退开关（2026-10-24 Phase 1 接线）────────────────────────
-    // 场渲染开着 = 底图由 `sync_terrain_field` 的 GPU quad 负责。两条路径并存，
+    // ── 底图载体路由（ADR-0053 回退开关 + ADR-0088 模式路由）────────────────
+    // 场 quad 上屏 = 底图由 `sync_terrain_field` 的 GPU quad 负责。两条路径并存，
     // 但**同时只能有一条上屏**：整图烘焙纹理与场 quad 叠在一起就是双重底图。
     // 故这里整层退场（回退路径本身一行不动，见下方全部逻辑）。
+    //
+    // 判据只有一份（`should_render_field`，ADR-0088 D2）：意愿开关 × 模式
+    // 支持档。CPU 留守档（Faction/Event/Coastline）落到这里**不**早退、chunk
+    // 正常铺——此前本层只读 `view.field_render` 一位，切 CPU 留守档会错画成
+    // Themed 场（ADR-0088 §1 缺陷①，本 gate 与 field 侧同消费一个函数兜底）。
     //
     // `chunks_dirty` 照旧在这里消费清零（语义不变）：`sync_terrain_field` 排在
     // **本系统之后**，它用的编辑信号是变更戳而不是这个旗标，故不需要抢。
     // 关回场时块按最新像素 spawn（与下方 `!visible` 分支同口径）。
-    if view.field_render {
+    if should_render_field(&view) {
         let entities: Vec<Entity> = chunk_entities.by_coord.drain().map(|(_, e)| e).collect();
         for entity in entities {
             despawn_chunk(&mut commands, entity, &q_chunks);

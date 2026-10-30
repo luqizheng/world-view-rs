@@ -57,6 +57,7 @@ fn dispatch_project_command(
     cameras: &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     pending: &mut PendingProjectLoad,
     close_confirm: &mut crate::ui_shell::close_confirm::CloseConfirm,
+    export_png: &mut crate::ui::export_png::ExportPng,
     frame: u64,
     current_loc: &crate::i18n::CurrentLocale,
 ) -> bool {
@@ -132,10 +133,24 @@ fn dispatch_project_command(
             true
         }
         CommandId::ExportProject => {
-            notice.info(
-                crate::i18n::t_key(current_loc, crate::i18n::I18nKey::NoticeExportPending),
-                frame,
-            );
+            // UX-003：干净出图（离屏相机，无面板入镜）到 <工程>/export/。
+            // 无工程弹既有指引（导出的是「当前地图画面」，没有画面就没意义）。
+            let Some(dir) = projection.project_dir.clone() else {
+                notice.info(
+                    crate::i18n::t_key(current_loc, crate::i18n::I18nKey::NoticeNoProjectNeed),
+                    frame,
+                );
+                return true;
+            };
+            let path = crate::ui::export_png::default_export_path(&dir);
+            if export_png.busy() {
+                notice.info(
+                    crate::i18n::t_key(current_loc, crate::i18n::I18nKey::NoticeExportBusy),
+                    frame,
+                );
+                return true;
+            }
+            export_png.request(path);
             true
         }
         CommandId::ProjectSettings => {
@@ -227,12 +242,14 @@ pub(crate) fn apply_pending_commands(
         mut continent_dialog,
         mut map_props_dialog,
         mut close_confirm,
+        mut export_png,
     ): (
         ResMut<crate::ui::NewMapDialog>,
         ResMut<crate::ui::NewProjectDialog>,
         ResMut<crate::ui::ContinentDialog>,
         ResMut<crate::ui::MapPropertiesDialog>,
         ResMut<crate::ui_shell::close_confirm::CloseConfirm>,
+        ResMut<crate::ui::export_png::ExportPng>,
     ),
     // 换世界接管（adopt_world_snapshot）所需：瓦片图集可缺席（纯色平涂回退）。
     (atlas, mut images): (
@@ -322,6 +339,7 @@ pub(crate) fn apply_pending_commands(
         &mut cameras,
         &mut pending,
         &mut close_confirm,
+        &mut export_png,
         frame,
         &current_loc,
     ) {
@@ -934,5 +952,97 @@ fn dispatch_regen_world(
             notice.info(msg, frame);
         }
         Err(msg) => notice.error(msg, frame),
+    }
+}
+
+/// 自动保存的到期判定（纯函数供测试）：dirty ∧ 有工程 ∧ 非播放 ∧ 确认框
+/// 空闲，且距上次尝试 ≥ 间隔。
+fn auto_save_due(
+    now: f64,
+    last_attempt: f64,
+    dirty: bool,
+    has_project: bool,
+    playing: bool,
+    confirm_busy: bool,
+    interval: f64,
+) -> bool {
+    if !dirty || !has_project || playing || confirm_busy {
+        return false;
+    }
+    now - last_attempt >= interval
+}
+
+/// UX-001 完整版的一半：**60 秒静默自动保存**（dirty 增量增量落盘）。
+///
+/// 与关闭确认（[`close_confirm`]）配套：自动保存把「未保存暴露窗」压到
+/// ≤60s，确认框就退化成低频兜底而不是唯一防线。复用 [`dispatch_save_command`]
+/// ——与 Ctrl+S 完全同路径（增量脏路由，成本 = 一次手动保存）。保存失败
+/// 不重试风暴：本次尝试即重置计时，60s 后再试（错误回执由保存路径弹过）。
+#[allow(clippy::too_many_arguments)]
+pub fn auto_save(
+    mut last_attempt: Local<f64>,
+    time: Res<Time>,
+    playback: Res<crate::state::PlaybackState>,
+    confirm: Res<crate::ui_shell::close_confirm::CloseConfirm>,
+    mut projection: ResMut<WorldProjection>,
+    mut edit: ResMut<crate::edit::editing::EditHistory>,
+    mut open_task: ResMut<OpenProjectTask>,
+    mut notice: ResMut<ShellNotice>,
+    current_loc: Res<CurrentLocale>,
+) {
+    const INTERVAL: f64 = 60.0;
+    let now = time.elapsed_secs_f64();
+    let due = auto_save_due(
+        now,
+        *last_attempt,
+        projection.dirty,
+        projection.project_dir.is_some(),
+        playback.playing,
+        confirm.pending.is_some() || confirm.action_after_save.is_some(),
+        INTERVAL,
+    );
+    // 条件不齐 = 重置计时（从条件恢复那一刻重新数 60s，而不是追补）。
+    *last_attempt = now;
+    if due {
+        let frame = (now * 60.0) as u64;
+        dispatch_save_command(
+            &mut projection,
+            &mut edit,
+            &mut open_task,
+            &mut notice,
+            &current_loc,
+            frame,
+        );
+    }
+}
+
+#[cfg(test)]
+mod auto_save_tests {
+    use super::auto_save_due;
+
+    /// 到期矩阵：dirty/有工程/非播放/确认空闲四条件与 60s 间隔。
+    #[test]
+    fn auto_save_due_requires_all_conditions_and_interval() {
+        assert!(auto_save_due(100.0, 30.0, true, true, false, false, 60.0));
+        assert!(
+            !auto_save_due(100.0, 50.0, true, true, false, false, 60.0),
+            "未到间隔不保存"
+        );
+        assert!(
+            !auto_save_due(100.0, 0.0, false, true, false, false, 60.0),
+            "干净不保存"
+        );
+        assert!(
+            !auto_save_due(100.0, 0.0, true, false, false, false, 60.0),
+            "无工程不保存"
+        );
+        assert!(
+            !auto_save_due(100.0, 0.0, true, true, true, false, 60.0),
+            "播放中不保存"
+        );
+        assert!(
+            !auto_save_due(100.0, 0.0, true, true, false, true, 60.0),
+            "确认框/保存并关闭在途不抢跑"
+        );
     }
 }

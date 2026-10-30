@@ -133,6 +133,10 @@ pub fn poll_egui_wants_input(mut contexts: EguiContexts, mut flag: ResMut<Pointe
 
 /// 滚轮缩放：锚点 = 鼠标指针（零惯性）。
 ///
+/// **方向约定（UX-010 / round-2 审计，2026-10-29 统一）**：**上滚 = 拉近**、
+/// 下滚 = 拉远——与小地图、浏览器 / Figma / Blender 的行业惯例对齐。历史上
+/// 主画布是「上滚 = 拉远」，与小地图相反，同一根滚轮两处语义互斥。
+///
 /// 缩放区间按当前级实时算（`crate::zoom_level`），故需要 `projection`（读 `extent`）
 /// 与 `drill`（读「现在在哪一级」）。撞到级**外界**后继续往外滚动表示「回父级」，
 /// 本函数只把意图写进 [`crate::zoom_level::ZoomCrossRequest`]，真正的换级由
@@ -141,10 +145,14 @@ pub fn poll_egui_wants_input(mut contexts: EguiContexts, mut flag: ResMut<Pointe
 /// **撞内界继续往里滚不再进入子图**（ADR-0038）：缩放被夹在内界停住，
 /// 进入子图的唯一手势是双击钻入图标（`drill.rs` 的双击路径）。
 ///
+/// **Ctrl 按下时整体短路**（UX-010：round-2 定案「Ctrl+滚轮双消费」为真）：
+/// 笔刷半径归 [`brush_radius_scroll`]，本系统不碰同一批事件。
+///
 /// Bevy 系统的参数即「依赖声明」，宽签名是框架惯例而非坏味道（同 `drill.rs`）。
 #[allow(clippy::too_many_arguments)]
 pub fn camera_zoom(
     mut scroll: MessageReader<MouseWheel>,
+    keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window>,
     mut camera: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     mut view: ResMut<ViewState>,
@@ -156,6 +164,11 @@ pub fn camera_zoom(
     if ui.wants_pointer {
         // 指针在面板上时不吃滚轮（面板自己可能滚动）。
         scroll.clear();
+        return;
+    }
+    // UX-010：Ctrl = 笔刷半径的滚轮（brush_radius_scroll），相机缩放整体短路。
+    // 此前两个系统各自消费同一批 MouseWheel——Ctrl+滚轮会「一边改半径一边缩放」。
+    if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) {
         return;
     }
     let Ok(window) = windows.single() else {
@@ -180,7 +193,8 @@ pub fn camera_zoom(
     let cam_rot = transform.rotation;
 
     let old_scale = view.scale;
-    let factor = (1.0 + scroll_y * 0.12).clamp(0.5, 2.0);
+    // UX-010：上滚（y>0）= factor<1 = 拉近；下滚 = 拉远（与小地图/行业惯例同向）。
+    let factor = (1.0 - scroll_y * 0.12).clamp(0.5, 2.0);
     let size = window.resolution.size();
     let zoom = crate::zoom_level::level_zoom(
         &projection.world,
@@ -630,7 +644,7 @@ mod tests {
     #[test]
     fn camera_zoom_requests_a_step_out_at_the_outer_limit() {
         let mut app = zoom_app(world_band().max);
-        scroll(&mut app, 1.0); // y > 0 → factor > 1 → 缩小（往外）
+        scroll(&mut app, -1.0); // UX-010 方向翻转：下滚（y<0）= factor>1 = 拉远
         app.update();
         assert_eq!(
             app.world()
@@ -647,7 +661,7 @@ mod tests {
     fn camera_zoom_at_inner_limit_stays_clamped_and_does_not_enter_child() {
         let min = world_band().min;
         let mut app = zoom_app(min);
-        scroll(&mut app, -1.0); // y < 0 → factor < 1 → 放大（往里）
+        scroll(&mut app, 1.0); // UX-010：上滚（y>0）= 拉近（往里）
         app.update();
         assert_eq!(
             app.world()
@@ -669,7 +683,7 @@ mod tests {
     fn camera_zoom_does_not_cross_in_the_middle_of_the_band() {
         let fit = world_band().fit;
         let mut app = zoom_app(fit);
-        scroll(&mut app, -1.0);
+        scroll(&mut app, 1.0); // UX-010：上滚 = 拉近（区间中间只缩放）
         app.update();
         assert_eq!(
             app.world()

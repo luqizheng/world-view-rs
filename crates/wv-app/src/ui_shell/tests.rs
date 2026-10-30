@@ -107,6 +107,7 @@ fn dispatcher_world(project_dir: Option<&str>, dirty: bool, pending: CommandId) 
     world.init_resource::<OpenProjectTask>();
     // UX-001：dispatch 的 CloseProject 守卫读它——测试世界同样要装配。
     world.init_resource::<crate::ui_shell::close_confirm::CloseConfirm>();
+    world.init_resource::<crate::ui::export_png::ExportPng>();
     world.init_resource::<crate::state::ProjectDiagnostics>();
     world.init_resource::<crate::ui::NewMapDialog>();
     world.init_resource::<crate::ui::NewProjectDialog>();
@@ -412,6 +413,7 @@ fn project_menu_pending_command_reaches_the_dispatcher() {
     world.init_resource::<OpenProjectTask>();
     // UX-001：dispatch 的 CloseProject 守卫读它——测试世界同样要装配。
     world.init_resource::<crate::ui_shell::close_confirm::CloseConfirm>();
+    world.init_resource::<crate::ui::export_png::ExportPng>();
     world.init_resource::<crate::state::ProjectDiagnostics>();
     world.init_resource::<crate::ui::NewMapDialog>();
     world.init_resource::<crate::ui::NewProjectDialog>();

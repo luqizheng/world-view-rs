@@ -94,3 +94,9 @@ required-features = ["app"]
 [[example]]
 name = "diag_sea_bake"
 required-features = ["app"]
+
+# ADR-0088 D5 预算核查探针：编辑帧「指纹增量 + 补丁 + 行段拷贝」CPU 全链实测
+# （headless）。用 bevy 的 `Assets<Image>`（app feature 依赖），故同列 required-features。
+[[example]]
+name = "perf_field_patch_chain"
+required-features = ["app"]
