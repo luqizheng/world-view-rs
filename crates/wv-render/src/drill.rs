@@ -665,6 +665,8 @@ pub struct DrillPickPicks<'w> {
     pub line_poi: Res<'w, crate::state::LinePoiState>,
     /// 图层帧（hidden 图层不可选）。
     pub layers: Res<'w, LayerFrame>,
+    /// 播放态（UX-027：势力面按当前播放日求值）。
+    pub playback: Res<'w, PlaybackState>,
 }
 
 /// 双击钻入标记（v0.2 §B：双击菱形钻入）。
@@ -813,6 +815,32 @@ pub fn drill_pick(
                 property_requests.request(projection.selection.clone().expect("刚写入"));
             }
             return;
+        }
+    }
+
+    // [UX-027] 势力面命中（点选工具，浏览族）：点中势力疆界面 = 选中该
+    // 势力——此前只能从列表行选，画布点不到。居线 POI 之后（线是更精确
+    // 的靶）、空白清除之前；gate 与渲染同源（`factions_visible` ∧
+    // influence 层可见，逐层 visible 在拾取函数内判，z 序同源取最上层）。
+    // 双击同属性窗体语义（Faction 有 Inspector 表单）。
+    if picks.point_select.tool_active && view.factions_visible && picks.layers.influence.visible {
+        if let Some(current) = drill.current() {
+            if let Some(id) = crate::faction_overlays::pick_faction_face(
+                &projection.world,
+                current,
+                world_pos,
+                &grid,
+                picks.playback.current_day,
+            ) {
+                projection.selection = Some(wv_core::SelectedEntity::new(
+                    wv_core::EntityKind::Faction,
+                    id,
+                ));
+                if is_double {
+                    property_requests.request(projection.selection.clone().expect("刚写入"));
+                }
+                return;
+            }
         }
     }
 
