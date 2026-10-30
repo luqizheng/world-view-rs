@@ -2711,6 +2711,9 @@ mod tests {
         bevy_world.insert_resource(crate::camera::PointerOverUi::default());
         bevy_world.insert_resource(crate::state::SelectionState::default());
         bevy_world.insert_resource(crate::state::PointSelectState { tool_active: false });
+        // ADR-0090 M2：线段 POI 工具态（drill_pick 的新参数；默认 = 未激活，
+        // 线命中分支让位）——与 pin_pick_world 同款，合并时漏了本夹具。
+        bevy_world.insert_resource(crate::state::LinePoiState::default());
         bevy_world.init_resource::<crate::label_pick::LabelHits>();
         bevy_world.init_resource::<DrillClick>();
         bevy_world.init_resource::<bevy::input::ButtonInput<bevy::input::mouse::MouseButton>>();
