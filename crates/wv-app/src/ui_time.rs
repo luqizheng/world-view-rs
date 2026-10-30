@@ -100,6 +100,37 @@ pub fn format_breadcrumb(projection: &WorldProjection, current_map_id: &str) -> 
     vec!["World".to_string(), name]
 }
 
+/// UX-014（round-2 审计）：面包屑**全链**段。
+///
+/// 旧 [`format_breadcrumb`] 恒两段（World + 当前图名）且纯文本——三级以上
+/// 钻取路径的中间级既看不见也点不了，`DrillToSegment` 命令无 UI 消费点。
+/// 本助手从 `DrillState::trail`（根图→当前图 id 链）派生全链：每段带**钻取
+/// 深度**（= trail 下标），祖先段可点击排 `DrillToSegment(depth)`，末段是
+/// 当前图（不点击）。trail 为空（工程未加载）回退单段 "World"。
+pub fn breadcrumb_segments(
+    projection: &WorldProjection,
+    drill: &wv_render::state::DrillState,
+) -> Vec<(String, usize)> {
+    let trail = drill.trail();
+    if trail.is_empty() {
+        return vec![("World".to_string(), 0)];
+    }
+    trail
+        .iter()
+        .enumerate()
+        .map(|(i, id)| {
+            let name = projection
+                .world
+                .maps
+                .iter()
+                .find(|m| &m.id == id)
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| id.as_str().to_string());
+            (name, i)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +221,50 @@ mod tests {
             outline_polygon: None,
             ..Default::default()
         }
+    }
+
+    /// UX-014：面包屑全链从 trail 派生，段带钻取深度；trail 空回退 World。
+    #[test]
+    fn breadcrumb_segments_follow_drill_trail_with_depths() {
+        use wv_render::state::DrillState;
+        let mut p = WorldProjection::default();
+        p.world.maps.push(wv_core::map::MapNode {
+            id: wv_core::id::Id::new_unchecked("world"),
+            name: "世界".into(),
+            level: wv_core::map::MapLevel::World,
+            parent: None,
+            children: vec![wv_core::id::Id::new_unchecked("city")],
+            ..Default::default()
+        });
+        p.world.maps.push(wv_core::map::MapNode {
+            id: wv_core::id::Id::new_unchecked("city"),
+            name: "青云城".into(),
+            level: wv_core::map::MapLevel::City,
+            parent: Some(wv_core::id::Id::new_unchecked("world")),
+            children: Vec::new(),
+            ..Default::default()
+        });
+        // trail 空 = 未加载 → 回退单段。
+        let empty = DrillState::default();
+        assert_eq!(
+            breadcrumb_segments(&p, &empty),
+            vec![("World".to_string(), 0)],
+            "trail 空应回退 World 单段"
+        );
+        // 两级 trail → 两段，深度 0/1，名字取自地图。
+        let mut drill = DrillState::default();
+        p.world.maps.iter().for_each(|m| {
+            if m.id.as_str() == "world" {
+                drill.ensure_root(&p.world);
+            }
+        });
+        assert!(
+            drill.drill_to(&p.world, &wv_core::id::Id::new_unchecked("city")),
+            "钻入应成功"
+        );
+        let segs = breadcrumb_segments(&p, &drill);
+        assert_eq!(segs.len(), 2, "两级钻取应出两段，got {segs:?}");
+        assert_eq!(segs[0], ("世界".to_string(), 0), "祖先段深度 0");
+        assert_eq!(segs[1], ("青云城".to_string(), 1), "当前段深度 1");
     }
 }

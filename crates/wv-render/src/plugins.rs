@@ -50,6 +50,7 @@ use crate::map_frame;
 use crate::measurement;
 use crate::paper_overlay;
 use crate::streets;
+use crate::stroke_preview;
 use crate::vector_layers;
 use crate::world_projection;
 
@@ -140,6 +141,8 @@ impl Plugin for EditorOverlayPlugin {
             .init_resource::<wv_world_cell_map::cell_flash::CellFlashState>()
             .init_resource::<wv_world_cell_map::cell_flash::CellFlashEntities>()
             .add_systems(Update, brush_cursor::sync_brush_cursor)
+            // UX-004：世界级笔刷拖拽预览（点列半透明足印，与光标同轨注册）。
+            .add_systems(Update, stroke_preview::sync_stroke_preview)
             .add_systems(Update, crate::cellmap_bridge::sync_cell_region)
             .add_systems(Update, crate::cellmap_bridge::sync_cell_stroke)
             // 闪视觉（撤销白闪 / 拒收红闪）画在最顶层。
