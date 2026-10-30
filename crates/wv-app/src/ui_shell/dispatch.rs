@@ -949,7 +949,20 @@ fn dispatch_regen_world(
     ) {
         Ok(msg) => {
             diagnostics.needs_diagnose = true;
-            notice.info(msg, frame);
+            // UX-033：回执附带备份位置与恢复方法——`.bak` 文件此前静默落盘、
+            // 无任何恢复代码，备份是「假出口」；至少让作者知道它在哪、
+            // 怎么用（撤销仍是第一恢复路径，备份是撤销栈被顶掉后的兜底）。
+            let backup_hint = projection
+                .project_dir
+                .as_ref()
+                .map(|dir| {
+                    format!(
+                        "｜旧地形已备份到 {}/maps/{map_id}/terrain.bin.bak.<时间戳>（恢复＝用文件管理器把它改名回 terrain.bin 后重开工程）",
+                        dir.trim_end_matches(['/', '\\'])
+                    )
+                })
+                .unwrap_or_default();
+            notice.info(format!("{msg}{backup_hint}"), frame);
         }
         Err(msg) => notice.error(msg, frame),
     }

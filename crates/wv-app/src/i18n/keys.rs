@@ -893,6 +893,18 @@ pub enum I18nKey {
     NoticeEventCreatedPrefix,
     /// 登记失败回执前缀（UX-002）
     NoticeEventCreateFailed,
+    /// 命令面板搜索占位符（UX-018）
+    CommandPalettePlaceholder,
+    /// 命令面板「无匹配命令」（UX-018）
+    CommandPaletteNoMatch,
+    /// 加载遮罩标题「正在加载工程…」（UX-018）
+    LoadOverlayTitle,
+    /// 加载失败卡片标题（UX-018）
+    LoadErrorTitle,
+    /// 加载失败指引（UX-018）
+    LoadErrorGuidance,
+    /// 「知道了」（UX-018）
+    LoadErrorDismiss,
     /// 「编辑等级」对话框标题（后接「 — 人物名」，2026-10-30 人物等级列表编辑器）
     CharacterLevelTitle,
     /// 「自」（行内起始日标签）
@@ -1456,7 +1468,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 603] = [
+    pub const ALL: [I18nKey; 609] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1882,6 +1894,12 @@ impl I18nKey {
         I18nKey::EventCreateHint,
         I18nKey::NoticeEventCreatedPrefix,
         I18nKey::NoticeEventCreateFailed,
+        I18nKey::CommandPalettePlaceholder,
+        I18nKey::CommandPaletteNoMatch,
+        I18nKey::LoadOverlayTitle,
+        I18nKey::LoadErrorTitle,
+        I18nKey::LoadErrorGuidance,
+        I18nKey::LoadErrorDismiss,
         // 人物等级列表编辑器（10）
         I18nKey::CharacterLevelTitle,
         I18nKey::CharacterLevelFrom,

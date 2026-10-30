@@ -96,6 +96,9 @@ pub struct NewMapDialog {
     pub prefill: MapBase,
     /// 上次创建失败的错误（留在框内，作者改完再试；成功即清）。
     pub error: Option<String>,
+    /// UX-026：作者显式选择的父图 Id（下拉）。`None` = 沿用当前钻取图
+    /// （旧行为）；选中的图被删/进垃圾桶时创建路径回退当前图。
+    pub parent_override: Option<String>,
 }
 
 impl Default for NewMapDialog {
@@ -110,6 +113,7 @@ impl Default for NewMapDialog {
             // 2026-10-16 用户裁定：默认铺海（新建即满图海洋，便于「先画大陆」场景）。
             prefill: MapBase::Ocean,
             error: None,
+            parent_override: None,
         }
     }
 }
@@ -135,6 +139,7 @@ impl NewMapDialog {
             aspect: DEFAULT_ASPECT,
             prefill: MapBase::Ocean,
             error: None,
+            parent_override: None,
         };
     }
 
@@ -311,13 +316,55 @@ pub fn new_map_dialog(
                          不会钻回之前打开的地图",
                     );
             } else {
-                let parent = drill
-                    .current()
-                    .and_then(|id| drill.node(world, id).cloned());
-                match parent {
-                    Some(p) => ui.label(format!("挂在「{}」之下", p.name)),
-                    None => ui.label("（当前没有选中地图，将作为独立根图创建）"),
-                };
+                // UX-026：父图可改选（旧版只显示当前图，想挂别处必须先钻过去）。
+                // 候选 = 全部存活图（含各层级），默认当前钻取图；垃圾桶里的
+                // 图不出现在下拉里。
+                let candidates: Vec<&wv_core::map::MapNode> = world
+                    .maps
+                    .iter()
+                    .filter(|m| world.map_alive(&m.id))
+                    .collect();
+                if candidates.is_empty() {
+                    ui.label("（当前没有选中地图，将作为独立根图创建）");
+                } else {
+                    let current = drill.current().map(|i| i.as_str().to_owned());
+                    let selected = dialog
+                        .parent_override
+                        .clone()
+                        .or_else(|| current.clone())
+                        .unwrap_or_else(|| candidates[0].id.as_str().to_owned());
+                    let selected_name = candidates
+                        .iter()
+                        .find(|m| m.id.as_str() == selected)
+                        .map(|m| {
+                            format!(
+                                "{}（{}）",
+                                m.name,
+                                crate::state::map_level_label(m.level, crate::i18n::Locale::Zh)
+                            )
+                        })
+                        .unwrap_or_else(|| "（无效，将回退当前图）".into());
+                    ui.label("挂在");
+                    egui::ComboBox::from_id_salt("wv_new_map_parent")
+                        .selected_text(selected_name)
+                        .width(220.0)
+                        .show_ui(ui, |ui| {
+                            for m in &candidates {
+                                let label = format!(
+                                    "{}（{}）",
+                                    m.name,
+                                    crate::state::map_level_label(m.level, crate::i18n::Locale::Zh)
+                                );
+                                if ui
+                                    .selectable_label(m.id.as_str() == selected, label)
+                                    .clicked()
+                                {
+                                    dialog.parent_override = Some(m.id.as_str().to_owned());
+                                }
+                            }
+                        });
+                    ui.label("之下");
+                }
             }
             ui.label(
                 egui::RichText::new(format!(
@@ -465,7 +512,16 @@ fn create_map(
     let parent = if first_map || dialog.level == MapLevel::World {
         None
     } else {
-        drill.current().cloned()
+        // UX-026：作者显式选择的父图优先；选中图已不存在（被删/进垃圾桶）
+        // 时回退当前钻取图（V1：只提示不阻止的口径）。
+        dialog
+            .parent_override
+            .as_deref()
+            .and_then(|id| {
+                let id = wv_core::Id::new_unchecked(id);
+                projection.world.map_alive(&id).then_some(id)
+            })
+            .or_else(|| drill.current().cloned())
     };
     let level = if first_map {
         MapLevel::World
@@ -884,6 +940,76 @@ mod tests {
             drill.up(),
             "钻出应回到父图（子图 zoom-out 回父图是设计行为）"
         );
+    }
+
+    /// UX-026：`parent_override` 让新图挂到**作者选的**图下（不必先钻过去）；
+    /// 选中的图失效（如进了垃圾桶）时回退当前钻取图。
+    #[test]
+    fn parent_override_mounts_under_chosen_map_and_falls_back_when_invalid() {
+        // 世界(root) + 一张区域图(region_a)：当前钻在 root。
+        let mut projection = WorldProjection::default();
+        let root = Id::new_unchecked("map_root");
+        let region = Id::new_unchecked("region_a");
+        projection.world.maps.push(MapNode {
+            id: root.clone(),
+            name: "世界".into(),
+            level: MapLevel::World,
+            extent: Some(Extent::sized(512.0, 512.0)),
+            ..Default::default()
+        });
+        projection.world.maps.push(MapNode {
+            id: region.clone(),
+            name: "东区".into(),
+            level: MapLevel::Region,
+            parent: Some(root.clone()),
+            extent: Some(Extent::sized(512.0, 512.0)),
+            ..Default::default()
+        });
+        let mut drill = crate::state::DrillState::default();
+        drill.ensure_root(&projection.world);
+        let mut edit = crate::edit::editing::EditHistory::default();
+
+        // ① override = region_a → 新图挂在 region_a 下（而非当前的 root）。
+        let mut dialog = NewMapDialog {
+            open: true,
+            level: MapLevel::City,
+            parent_override: Some("region_a".into()),
+            ..Default::default()
+        };
+        let new_id = create_map(&mut dialog, &mut projection, &drill, &mut edit)
+            .expect("创建")
+            .0;
+        let parent = projection
+            .world
+            .maps
+            .iter()
+            .find(|m| m.id == new_id)
+            .and_then(|m| m.parent.clone())
+            .expect("新图应有父图");
+        assert_eq!(parent, region, "override 应挂到作者选的 region_a");
+        assert!(
+            root_children_of(&projection.world, &region).contains(&new_id),
+            "region_a 的 children 应含新图"
+        );
+
+        // ② override 指向垃圾桶里的图 → 回退当前钻取图（root）。
+        let mut dialog = NewMapDialog {
+            open: true,
+            level: MapLevel::City,
+            parent_override: Some("ghost_map".into()),
+            ..Default::default()
+        };
+        let new_id2 = create_map(&mut dialog, &mut projection, &drill, &mut edit)
+            .expect("创建")
+            .0;
+        let parent2 = projection
+            .world
+            .maps
+            .iter()
+            .find(|m| m.id == new_id2)
+            .and_then(|m| m.parent.clone())
+            .expect("新图应有父图");
+        assert_eq!(parent2, root, "失效 override 应回退当前钻取图");
     }
 
     /// 从 `world.maps` 里取指定图的 children 克隆（测试辅助）。

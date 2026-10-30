@@ -202,10 +202,10 @@ mod tests {
         }
         assert_eq!(
             I18nKey::ALL.len(),
-            603,
-            "ALL 应为 603 项（… + UX batch2 十一键 + batch3 净增两键 + 人物等级列表编辑器十键）；加新键时同步更新数组长度与元素（got {})",
+            609,
+            "ALL 应为 609 项（… + 人物等级列表编辑器十键 + UX batch5 六键：i18n 残片收口）；加新键时同步更新数组长度与元素（got {})",
             I18nKey::ALL.len()
         );
-        assert_eq!(seen.len(), 603, "去重后应仍为 603 项");
+        assert_eq!(seen.len(), 609, "去重后应仍为 609 项");
     }
 }

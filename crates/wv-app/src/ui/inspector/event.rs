@@ -54,6 +54,10 @@ pub struct InspectorDrafts {
     pub geometry_from: String,
     /// Faction 表单：「新建疆界」止 day。
     pub geometry_to: String,
+    /// UX-013：「删除整个势力」的**两步确认**武装位——第一击把按钮换成
+    /// 确认文案，第二击才真删（垃圾桶 purge 的同款模式）。存势力 Id：
+    /// 切换选中势力时武装自动失效，防「武装了 A 删掉 B」。
+    pub faction_delete_armed: Option<wv_core::Id>,
 }
 
 /// 解析「起 day」输入；解析失败（含空串）返回 `fallback`（= 不改）。
