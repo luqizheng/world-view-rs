@@ -553,7 +553,7 @@ mod tests {
             bevy::render::mesh::Indices::U16(v) => v.iter().map(|i| *i as u32).collect(),
         };
         let mut area = 0.0f32;
-        for t in idx.chunks_exact(3) {
+        for t in idx.as_chunks::<3>().0 {
             let (a, b, c) = (pos[t[0] as usize], pos[t[1] as usize], pos[t[2] as usize]);
             area += ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() * 0.5;
         }
@@ -582,7 +582,7 @@ mod tests {
             bevy::render::mesh::Indices::U16(v) => v.iter().map(|i| *i as u32).collect(),
         };
         let mut area = 0.0f32;
-        for t in idx.chunks_exact(3) {
+        for t in idx.as_chunks::<3>().0 {
             let (a, b, c) = (pos[t[0] as usize], pos[t[1] as usize], pos[t[2] as usize]);
             area += ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() * 0.5;
         }

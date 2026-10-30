@@ -283,7 +283,7 @@ mod tests {
         let d = img.data.as_ref().unwrap();
         let mut max_a = 0u8;
         let mut any_opaque = false;
-        for px in d.chunks_exact(4) {
+        for px in d.as_chunks::<4>().0 {
             max_a = max_a.max(px[3]);
             if px[3] > 200 {
                 any_opaque = true;

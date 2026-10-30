@@ -771,7 +771,9 @@ mod hole_tessellation_tests {
     }
 
     fn triangle_area_sum(tris: &[[f32; 2]]) -> f32 {
-        tris.chunks_exact(3)
+        tris.as_chunks::<3>()
+            .0
+            .iter()
             .map(|t| {
                 let (a, b, c) = (t[0], t[1], t[2]);
                 ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() / 2.0
@@ -788,7 +790,7 @@ mod hole_tessellation_tests {
         assert!((area - 84.0).abs() < 0.5, "三角化总面积应 ≈84，实得 {area}");
         // 洞心不被任何三角形覆盖（点在三角内测试）。
         let hole_center = [4.0f32, 4.0];
-        for t in tris.chunks_exact(3) {
+        for t in tris.as_chunks::<3>().0 {
             let (a, b, c) = (t[0], t[1], t[2]);
             let sign = |p: [f32; 2], q: [f32; 2], r: [f32; 2]| {
                 (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
