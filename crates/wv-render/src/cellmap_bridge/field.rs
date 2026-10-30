@@ -50,10 +50,6 @@ pub struct TerrainFieldRender {
     /// 上次写进 uniform 的 `px_per_cell`——用来判断「要不要重传 uniform」。
     /// **只做比较、不进 [`FieldKey`]**。
     last_ppc: Option<f32>,
-    /// 上次写进 uniform 的「米/格」（ADR-0077 晕渲米制槽 `light_dir.w`）。
-    /// 同 `last_ppc`：只做比较、不进键——比例尺（换图）或格距变化只改
-    /// uniform，不必重打 12 MB 数据纹理。
-    last_mpc: Option<f32>,
     /// 上次写进 uniform 的分层设色强度（ADR-0055）。同 `last_ppc`：只做比较，
     /// **不进键**——拖滑条只改 uniform，不重打 12 MB 数据纹理。
     last_hypsometric: Option<f32>,
@@ -245,7 +241,6 @@ fn teardown_field(
     }
     field.key = None;
     field.last_ppc = None;
-    field.last_mpc = None;
     field.last_hypsometric = None;
     field.last_strip = None;
     field.cuts = None;
@@ -259,32 +254,12 @@ fn teardown_field(
     stats.field_quads = 0;
 }
 
-/// 桥接侧「格距 + 比例尺 → 米/格」的纯缝（ADR-0077 D2）。
-///
-/// 从 [`sync_terrain_field`] 的内联填充抽出——本体委托 [`meters_per_cell_of`]：
-/// 比例尺（`unit_per_km`，地图声明的 km/wu）精确换算，未声明走「1 wu = 1 m」
-/// 回落（README §12-53 待决）。抽这一层不引入新语义，为的是让「桥接用的是
-/// 哪条入口、喂的是**来源图**的比例尺」这件事不经 Bevy App 就能被测试锁住
-/// （终审 M-1 修法 A / plan T5 声明的 bridge mpc 测试落点）。
-pub(crate) fn bridge_meters_per_cell(cell_size: f32, unit_per_km: Option<f32>) -> f32 {
-    meters_per_cell_of(cell_size, unit_per_km)
-}
-
-/// CPU 烘焙路径的米/格接线（ADR-0077 T4 遗留项落地）：给 wv-app 的
-/// `image_from_terrain_with_scale` / `patch_terrain_image_with_scale` 用。
-/// 来源图（`tex.last_map`，否则 `active_terrain` 沿 parent 链解析出的那张）的
-/// `unit_per_km` 精确换算，未声明走「1 wu = 1 m」回落（README §12-53）——
-/// 与 [`sync_terrain_field`] 的 GPU 填充同一条入口 [`meters_per_cell_of`]，
-/// 两管线同一假设、同一公式，禁止第二份换算。
-pub fn bake_meters_per_cell(
-    world: &wv_core::World,
-    source_map: Option<&wv_core::id::Id>,
-    cell_size: f32,
-) -> f32 {
-    let unit_per_km = source_map
-        .and_then(|id| world.maps.iter().find(|n| &n.id == id))
-        .and_then(|n| n.unit_per_km);
-    bridge_meters_per_cell(cell_size, unit_per_km)
+/// CPU 烘焙路径的跨度接线（ADR-0092，取代旧 `bake_meters_per_cell`）：
+/// 给 wv-app 的 `image_from_terrain_with_scale` / `patch_terrain_image_with_scale`
+/// 用——现场算「本图高度实际跨度」（作者单位），与 GPU 场路径同一条入口
+/// [`wv_world_cell_map::shading::height_span_of`]，两管线同一公式，禁止第二份。
+pub fn bake_height_span(data: &wv_core::terrain::TerrainData) -> f32 {
+    wv_world_cell_map::shading::height_span_of(data)
 }
 
 /// 主 App 的场渲染同步（ADR-0053 D1，Phase 1 接线 2026-10-24）。
@@ -510,14 +485,12 @@ pub fn sync_terrain_field(
     // 屏幕像素 / 格：`ViewState.scale` 的语义是「世界单位 / 屏幕像素」，
     // 故 ppc = 格的世界尺寸 / scale（demo 里一格 = 1 世界单位，同一个式子）。
     let px_per_cell = (cell_size / view.scale.max(1e-6)).max(1e-4);
-    // ── 米/格（ADR-0077 D2）：晕渲法线米制换算的唯一入口 ──
-    // 地形来源图（`active_terrain` 沿 parent 向上继承的那张，`source` 即其
-    // MapNode）声明了比例尺 → 精确换算；未声明走「1 wu = 1 m」回落
-    // （README §12-53 待决；与 CPU 烘焙路径同一条入口、同一回落假设）。
-    let meters_per_cell = bridge_meters_per_cell(cell_size, source.unit_per_km);
-    let mpc_changed = field
-        .last_mpc
-        .is_none_or(|last| (last - meters_per_cell).abs() > 1e-6);
+    // ── 高度跨度（ADR-0092）：归一化域夸张的桥接槽 ──
+    // 本图高度实际跨度（作者单位，O(N) 现场算）→ shape.w。WGSL 梯度已乘
+    // H_RANGE_M 回作者单位域，`s = shape.z / shape.w` 即「夸张 ÷ 全图跨度」；
+    // 作者高度单位、格距、比例尺全部与观感脱钩（米/格槽 `light_dir.w`
+    // 随 ADR-0092 退役）。
+    let height_span = wv_world_cell_map::shading::height_span_of(data);
 
     let content_changed =
         cached_hash != Some(terrain_hash) || field.key.as_ref().is_some_and(|k| k.map != map);
@@ -627,9 +600,9 @@ pub fn sync_terrain_field(
                 [0.0; 7]
             };
             apply_hypsometric(&mut params, &cuts_norm, view.hypsometric_tint);
-            // ADR-0077 D2：米/格写进 `light_dir.w`（WGSL 侧 `mpc` 槽；≤ 0 = 未
-            // 接线回落 1.0——`default_params` 的 0 占位在此被真值替换）。
-            params.light_dir.w = meters_per_cell;
+            // ADR-0092：数据跨度写进 `shape.w`（恒等缺省在此被真值替换）；
+            // WGSL 侧 `s = shape.z / shape.w`（米/格槽 `light_dir.w` 退役）。
+            params.shape.w = height_span;
             let material = materials.add(build_material(&mut images, &pack, params));
 
             if let Some(entity) = field.quad {
@@ -663,7 +636,6 @@ pub fn sync_terrain_field(
             field.pack = Some(pack);
             // uniform 已随新材质写入，记下当前 ppc 免得下面再传一次。
             field.last_ppc = Some(px_per_cell);
-            field.last_mpc = Some(meters_per_cell);
             field.last_hypsometric = Some(view.hypsometric_tint);
             field.last_strip = Some(view.strip_mask);
             field.cuts = Some(cuts_norm);
@@ -707,19 +679,16 @@ pub fn sync_terrain_field(
         .is_none_or(|last| (last - view.hypsometric_tint).abs() > 1e-6);
     // WV_STRIP 掩码（ADR-0088 Task 4）：同上——只许动 uniform。
     let strip_changed = field.last_strip.is_none_or(|last| last != view.strip_mask);
-    if (ppc_changed || structure_changed || hyps_changed || mpc_changed || strip_changed)
+    if (ppc_changed || structure_changed || hyps_changed || strip_changed)
         && field.material.is_some()
     {
         let handle = field.material.clone().expect("刚判过 is_some");
         if let Some(mut material) = materials.get_mut(&handle) {
-            // shape: x = px_per_cell / y = 分支 / z = z_exag / w = grad_step（后两者
-            // 由 `default_params` 填锁值 T15/T14，缩放不动它们）。
+            // shape: x = px_per_cell / y = 分支（随缩放重写）；z = 归一化夸张、
+            // w = 跨度比（`default_params` 恒等占位、材质创建时桥接写真值，
+            // 缩放不动它们——数据跨度与会话夸张值都是静态量）。
             material.params.shape[0] = px_per_cell;
             material.params.shape[1] = branch.code();
-            // ADR-0077 D2：米/格槽随格距 / 比例尺变化重写（真源与重打路径
-            // 同一条 `meters_per_cell_of`；增量补丁路径不动 uniform，槽值
-            // 沿用建材质时的真值，无需重填）。
-            material.params.light_dir.w = meters_per_cell;
             // T19 域扭曲幅度（P1 预留槽 `pad0.x`）：随缩放重算。
             material.params.pad0[0] = warp_amp(px_per_cell);
             // WV_STRIP 掩码（ADR-0088 Task 4）：`pad1.x` 未用槽，随掩码变化
@@ -746,8 +715,6 @@ pub fn sync_terrain_field(
             }
             field.last_hypsometric = Some(view.hypsometric_tint);
             field.last_ppc = Some(px_per_cell);
-            field.last_mpc = Some(meters_per_cell);
-            field.last_strip = Some(view.strip_mask);
         }
     }
 
