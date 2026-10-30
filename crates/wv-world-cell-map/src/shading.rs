@@ -54,9 +54,29 @@ pub const DIFFUSE_AUX: f32 = 0.12;
 
 /// 垂直夸张系数：真实地貌按真实比例打光几乎平得看不见（2000 m 山在
 /// 100 m/格图上坡度只有 0.02），专业晕渲惯用夸张量让坡面可读。
-/// 初始 2.0（用户给定；退役旧 `shape.z` 的 0.55），**验收期唯一校准点**
-/// （ADR-0077 §4——校准结论按流程追记回 ADR，不散改）。
-pub const Z_EXAG: f32 = 2.0;
+/// **验收期唯一校准点**（ADR-0077 §4）。初始 2.0（用户给定；退役旧
+/// `shape.z` 的 0.55）；**2026-10-30 校准落参 6.0**——同机位对比帧
+/// （jrpg-world × {browse,map,cellmap} × {2,4,6}，裸浮雕剥离对照）
+/// 用户目验拍板，结论追记于 ADR-0077 §4。运行时可用探针 `WV_Z_EXAG`
+/// 覆盖（[`z_exag()`]），便于后续复校准不重编译。
+pub const Z_EXAG: f32 = 6.0;
+
+/// 运行时纵向夸张：[`Z_EXAG`] 的探针覆盖版——ADR-0077 §4 验收期校准的
+/// 对比帧采集件。环境变量 `WV_Z_EXAG=<正数>` 在进程内首次调用时读定、
+/// 之后恒定；未设置 / 非法值回落 [`Z_EXAG`]。与 WV_MODE / WV_SCALE /
+/// WV_STRIP / WV_DRILL 同族（家族清单见 wv-app `debug_probe` 模块文档）。
+/// GPU 侧经 `FieldParams.shape.z`、CPU 侧经 [`slope_gain_of`] 同走本函数，
+/// 两管线不出现不同夸张。
+pub fn z_exag() -> f32 {
+    static OVERRIDE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *OVERRIDE.get_or_init(|| {
+        std::env::var("WV_Z_EXAG")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<f32>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(Z_EXAG)
+    })
+}
 
 /// 宏观档权重（远观山脉骨架）。
 /// 三尺度权重 [`W_MACRO`] + [`W_MEDIUM`] + [`W_DETAIL`] 和 = 1，
@@ -115,12 +135,12 @@ pub fn meters_per_cell_of(cell_size_wu: f32, unit_per_km: Option<f32>) -> f32 {
     }
 }
 
-/// 梯度无量纲化增益：`s = Z_EXAG / meters_per_cell`。
+/// 梯度无量纲化增益：`s = z_exag() / meters_per_cell`。
 ///
 /// 梯度是米/格，s 把「每格米差」缩回「每格无纲坡度」再进法线公式；
 /// 米制化后同物理坡跨图幅同法线（Z_EXAG 全图统一，见模块文档）。
 pub fn slope_gain_of(meters_per_cell: f32) -> f32 {
-    Z_EXAG / meters_per_cell
+    z_exag() / meters_per_cell
 }
 
 /// CPU 块烘焙旧签名（`terrain_pixels` / `patch_terrain_image`）委托
@@ -415,9 +435,9 @@ mod tests {
     #[test]
     fn same_physical_slope_yields_same_normal_across_maps() {
         // 同一物理坡（垂直 2 : 水平 100，即 2% 坡）：
-        // 甲图 100 m/格 → hx=100, s = 2/100 = 0.02 → s·hx = 2.0
-        // 乙图  50 m/格 → hx=50,  s = 2/50  = 0.04 → s·hx = 2.0
-        // 米制化的全部意义：法线与格距无关。
+        // 甲图 100 m/格 → hx=100, s = Z/100 → s·hx = Z
+        // 乙图  50 m/格 → hx=50,  s = Z/50  → s·hx = Z
+        // （Z = Z_EXAG，校准落参不影响等式）——米制化的全部意义：法线与格距无关。
         let a = normal_world(100.0, 0.0, slope_gain_of(100.0));
         let b = normal_world(50.0, 0.0, slope_gain_of(50.0));
         for k in 0..3 {
@@ -429,10 +449,12 @@ mod tests {
                 b[k]
             );
         }
-        // 手算锚点：normalize(−2, 0, 1) = (−2/√5, 0, 1/√5)
-        let inv_sqrt5 = 1.0 / 5.0f32.sqrt();
-        assert!((a[0] - (-2.0 * inv_sqrt5)).abs() < EPS, "got {}", a[0]);
-        assert!((a[2] - inv_sqrt5).abs() < EPS, "got {}", a[2]);
+        // 手算锚点：normalize(−Z, 0, 1) = (−Z/√(Z²+1), 0, 1/√(Z²+1))；
+        // Z=2 时即 (−2/√5, 0, 1/√5)。锚点随校准落参自动跟随 Z_EXAG。
+        let z = Z_EXAG;
+        let denom = (z * z + 1.0).sqrt();
+        assert!((a[0] - (-z / denom)).abs() < EPS, "got {}", a[0]);
+        assert!((a[2] - (1.0 / denom)).abs() < EPS, "got {}", a[2]);
     }
 
     #[test]

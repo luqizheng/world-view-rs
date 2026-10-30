@@ -2437,7 +2437,9 @@ mod tests {
     /// 受光方向新口径（`shading::normal_world` + spec D1 的 45° 单位灯）：
     /// **北坡 / 西坡受光（亮于平地）、南坡 / 东坡背光（暗于平地）**。
     /// 行号向下增大 = 南；台阶在东列（x=2 高）时中心格坡面朝西。
-    /// fixture 用 100 m 步阶（默认格距 100 m → s·梯度 = 1，45° 坡）：
+    /// fixture 用 100 m 步阶 + `mpc = 50·Z_EXAG`（台阶 Horn 梯度 50 m/格
+    /// → s·梯度 = 1，恒为 45° 坡，随校准落参自动跟随——写死格距会在
+    /// Z_EXAG 校准变化时把 fixture 悄悄变陡坡，四向全暗，2026-10-30 实测）：
     /// 300 m 步阶的 71.6° 陡坡在 45° 灯高下会越过「与平地比亮暗」的
     /// 分界（陡坡的 z 分量损失超过受光面收益，四向都暗于平地），受光/
     /// 背光的学名语义由本 fixture 钉住。与旧 `relief_mul` 的
@@ -2450,7 +2452,7 @@ mod tests {
         let data_north = relief_fixture(|_, y| if y == 2 { 100 } else { 0 });
         let data_south = relief_fixture(|_, y| if y == 0 { 100 } else { 0 });
         let pack = CellPack::fixture();
-        let mpc = crate::shading::DEFAULT_METERS_PER_CELL;
+        let mpc = 50.0 * crate::shading::Z_EXAG;
         let flat = flat_ground_intensity();
         // 手算锚点（s = 0.02，台阶梯度 50 m/格 → s·梯度 = 1，45° 坡）：
         // 45° 坡法线 (±1/√2, ±1/√2, 1/√2)，与灯的点积 ∈ {0.8536, 0.1464}：

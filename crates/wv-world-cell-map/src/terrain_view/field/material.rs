@@ -592,13 +592,14 @@ pub fn default_params(
         // 全部 `Vec4`——`[f32; 4]` 会被 encase 当 `array<f32, 4>`，
         // 运行期 panic「array stride must be a multiple of 16」。
         grid: Vec4::new(grid[0], grid[1], 0.0, 0.0),
-        // shape.z = 米制纵向夸张（ADR-0077 D1/D2，真源 = shading::Z_EXAG）；
+        // shape.z = 米制纵向夸张（ADR-0077 D1/D2，缺省 = shading::Z_EXAG，
+        // 探针 WV_Z_EXAG 可运行时覆盖——校准对比帧采集用）；
         // shape.w = grad_step 死槽（布局稳定，见常量区注记）。
         // shape.y 分支码走 `branch.code()`（含 ADR-0079 T5 的 Flat 支路）。
         shape: Vec4::new(
             px_per_cell,
             branch.code(),
-            crate::shading::Z_EXAG,
+            crate::shading::z_exag(),
             GRAD_STEP,
         ),
         // T19 域扭曲幅度写进 pad0.x（P1 预留的槽位，P2 接线不改绑定布局）。
@@ -913,12 +914,13 @@ mod tests {
                 crate::shading::DIFFUSE_AUX
             ]
         );
-        // shape.z = 米制纵向夸张（shading::Z_EXAG = 2.0；旧格空间 0.55 退役）。
+        // shape.z = 米制纵向夸张（shading::z_exag()，缺省 6.0 = 2026-10-30 校准落参；
+        // 旧格空间 0.55 退役）。
         assert_eq!(
             p.shape.z,
-            crate::shading::Z_EXAG,
+            crate::shading::z_exag(),
             "shape.z 应为米制夸张 {}",
-            crate::shading::Z_EXAG
+            crate::shading::z_exag()
         );
         // 辅光槽（T5 预载、T6 起被公式读取）：xyz = shading::LIGHT_AUX，w 预留 0。
         for k in 0..3 {
