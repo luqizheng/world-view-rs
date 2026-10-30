@@ -538,6 +538,9 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::CharacterCreateHint => "别名 / 生卒 / 等级段可稍后在等级编辑器与 YAML 补填",
         I18nKey::NoticeCharacterCreatedPrefix => "已登记人物：",
         I18nKey::NoticeCharacterCreateFailed => "登记人物失败",
+        I18nKey::LockedLayerWriteBlocked => "该图层已锁定：在图层面板解锁后再编辑",
+        I18nKey::PanelLayersFootnote => "渲染顺序 = 类型槽位 + z 微调；同类型多层只取第一个声明",
+        I18nKey::PanelLayersZLabel => "z 槽位",
         I18nKey::FactionCreateTitle => "登记势力",
         I18nKey::FactionCreateNameHint => "给势力起个名字",
         I18nKey::FactionCreateHint => "层归属 / 驻府 / 归属边可在检查器「属性」页签补填",
@@ -1354,6 +1357,13 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::CharacterCreateHint => "Alias / dates / level spans can be filled in later",
         I18nKey::NoticeCharacterCreatedPrefix => "Character registered: ",
         I18nKey::NoticeCharacterCreateFailed => "Failed to register character",
+        I18nKey::LockedLayerWriteBlocked => {
+            "This layer is locked — unlock it in the Layers panel to edit"
+        }
+        I18nKey::PanelLayersFootnote => {
+            "Draw order = kind slot + z offset; only the first declaration per kind renders"
+        }
+        I18nKey::PanelLayersZLabel => "z offset",
         I18nKey::FactionCreateTitle => "Register faction",
         I18nKey::FactionCreateNameHint => "Name this faction",
         I18nKey::FactionCreateHint => "Layer / seat / memberships can be filled in the Inspector afterwards",

@@ -526,3 +526,82 @@ fn intent_command_without_terrain_reports_mismatch() {
 }
 
 // ---- 势力命令（S12 v0.2） ----
+
+// ── SetLayerZCommand / MoveLayerCommand（UX-007 图层重排）────────────────
+
+/// 三层 fixture（layer_a/b/c，声明序即 Vec 序）。
+fn world_three_layers() -> World {
+    use wv_core::map::{Layer, LayerKind, MapNode};
+    let mut world = World::default();
+    let mk = |name: &str| Layer {
+        id: Id::new_unchecked(name),
+        name: name.into(),
+        kind: LayerKind::Road,
+        visible: true,
+        locked: false,
+        opacity: 1.0,
+        z: 0,
+        source: None,
+    };
+    world.maps.push(MapNode {
+        id: test_map(),
+        layers: vec![mk("layer_a"), mk("layer_b"), mk("layer_c")],
+        ..MapNode::default()
+    });
+    world
+}
+
+/// z 写回与撤销：apply 改 z、revert 还原旧值。
+#[test]
+fn set_layer_z_round_trips() {
+    let mut world = world_with_layers();
+    assert_eq!(roads_layer(&world).z, 4);
+    let cmd = SetLayerZCommand::new(test_map(), Id::new_unchecked("layer_roads"), 2);
+    cmd.apply(&mut world).expect("apply 应成功");
+    assert_eq!(roads_layer(&world).z, 2);
+    cmd.revert(&mut world).expect("revert 应成功");
+    assert_eq!(roads_layer(&world).z, 4, "撤销应还原旧 z");
+}
+
+/// 声明序重排：下移/上移对合、revert（反向再换）还原、首尾越界报错不改序。
+#[test]
+fn move_layer_reorders_and_round_trips() {
+    let mut world = world_three_layers();
+    let order = |world: &World| -> Vec<String> {
+        world.maps[0]
+            .layers
+            .iter()
+            .map(|l| l.id.as_str().to_owned())
+            .collect()
+    };
+    assert_eq!(order(&world), vec!["layer_a", "layer_b", "layer_c"]);
+
+    // 下移首层一格。
+    MoveLayerCommand::new(test_map(), Id::new_unchecked("layer_a"), false)
+        .apply(&mut world)
+        .expect("下移应成功");
+    assert_eq!(
+        order(&world),
+        vec!["layer_b", "layer_a", "layer_c"],
+        "首层下移后应与 b 交换"
+    );
+
+    // revert（反向再换）还原。
+    MoveLayerCommand::new(test_map(), Id::new_unchecked("layer_a"), false)
+        .revert(&mut world)
+        .expect("revert 应成功");
+    assert_eq!(order(&world), vec!["layer_a", "layer_b", "layer_c"]);
+
+    // 首层上移 / 末层下移报 Precondition，且不改序。
+    assert!(
+        MoveLayerCommand::new(test_map(), Id::new_unchecked("layer_a"), true)
+            .apply(&mut world)
+            .is_err()
+    );
+    assert!(
+        MoveLayerCommand::new(test_map(), Id::new_unchecked("layer_c"), false)
+            .apply(&mut world)
+            .is_err()
+    );
+    assert_eq!(order(&world), vec!["layer_a", "layer_b", "layer_c"]);
+}

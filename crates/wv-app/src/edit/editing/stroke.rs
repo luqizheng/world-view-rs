@@ -31,6 +31,8 @@ pub fn commit_stroke_on_release(
     // 统一选区（ADR-0057）：蒙版数据源。与 `paint_edit_cell_on_drag` 的
     // D4 蒙版读同一份 Resource。
     cell_sel: Res<crate::state::CellSelection>,
+    // UX-006：锁拦截回执要 i18n（英文界面不混排中文）。
+    loc: Res<crate::i18n::CurrentLocale>,
 ) {
     if !buttons.just_released(MouseButton::Left) {
         return;
@@ -73,6 +75,20 @@ pub fn commit_stroke_on_release(
         );
         return;
     };
+
+    // UX-006：Terrain 声明层锁定 → 笔刷拒绝并回执（锁此前只有街道编辑
+    // 消费，地形主写路径无视它=假锁）。
+    if super::layer_locked(
+        &projection.world,
+        &target_map,
+        wv_core::map::LayerKind::Terrain,
+    ) {
+        notice.error(
+            crate::i18n::t_key(&loc, crate::i18n::I18nKey::LockedLayerWriteBlocked),
+            (time.elapsed_secs() * 60.0) as u64,
+        );
+        return;
+    }
 
     // 按工具分派：意图工具 → IntentTerrainCommand；涂 / 擦 → PaintTerrainCommand。
     // 选区蒙版（ADR-0086）：CellMap 工作区 ∧ 统一选区非空 → 涂抹/橡皮只落

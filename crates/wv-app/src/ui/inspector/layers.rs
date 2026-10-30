@@ -186,18 +186,30 @@ pub fn layers_tab(
                 // 落豆腐块（AGENTS §8 图标纪律）。
                 // ADR-0082：**自然层不出 pen**——Map 只看不管，编辑在
                 // CellMap 笔刷窗自然区段（用户裁定 2026-10-28）。
+                // UX-006：Influence 声明层锁定 → 动刀入口灰化 + 悬停说明
+                //（锁=防误写；前置披露挂入口端）。
+                let influence_locked = crate::edit::editing::layer_locked(
+                    &projection.world,
+                    &wv_core::Id::new_unchecked(view.current_map.clone()),
+                    wv_core::map::LayerKind::Influence,
+                );
+                let pen_enabled = pen_gated
+                    && l.usage != wv_core::model::faction::LayerUsage::Nature
+                    && !influence_locked;
                 if pen_gated && l.usage != wv_core::model::faction::LayerUsage::Nature {
-                    let pen = ui.add(
+                    let pen = ui.add_enabled(
+                        pen_enabled,
                         egui::Button::image(icon_image(ICON_PENCIL, egui::Color32::WHITE, 12.0))
                             .fill(egui::Color32::TRANSPARENT),
                     );
-                    if pen
-                        .on_hover_text(crate::i18n::t(
-                            loc,
-                            crate::i18n::I18nKey::PartitionPenButtonHover,
-                        ))
-                        .clicked()
-                    {
+                    let hover = if influence_locked {
+                        crate::i18n::t(loc, crate::i18n::I18nKey::LockedLayerWriteBlocked)
+                            .to_owned()
+                    } else {
+                        crate::i18n::t(loc, crate::i18n::I18nKey::PartitionPenButtonHover)
+                            .to_owned()
+                    };
+                    if pen.on_hover_text(hover).clicked() {
                         pen_dialog.open(l.id.clone(), playback_day);
                     }
                 }

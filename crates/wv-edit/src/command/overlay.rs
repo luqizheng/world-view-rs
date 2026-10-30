@@ -200,6 +200,163 @@ impl EditCommand for UpdateLayerCommand {
     }
 }
 
+/// 改图层声明的 z 槽位偏移（UX-007：图层面板此前无任何 z 出口）。
+///
+/// `z` 有意不进 [`UpdateLayerCommand`]（该命令注释明言范围）——显隐 / 锁 /
+/// 不透明度是「状态三元组」，z 是「渲染槽位微调」，语义不同族。渲染侧
+/// 求值 = 内建槽位 + `z × SLOT_STEP`（clamp ±4，[`crate::layer_frame`]），
+/// 命令层不重复钳制（UI 侧 DragValue range 已限）。
+///
+/// ## 脏路径
+///
+/// `maps/{map_id}/index.yaml`（与 [`UpdateLayerCommand`] 同一落点）。
+#[derive(Debug)]
+pub struct SetLayerZCommand {
+    /// 目标地图 ID。
+    pub map: wv_core::Id,
+    /// 目标图层 ID。
+    pub layer: wv_core::Id,
+    /// 新 z（作者槽位格数，-4..=4）。
+    pub new_z: i32,
+    before: std::sync::Mutex<Option<i32>>,
+}
+
+impl SetLayerZCommand {
+    pub fn new(map: wv_core::Id, layer: wv_core::Id, new_z: i32) -> Self {
+        Self {
+            map,
+            layer,
+            new_z,
+            before: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl EditCommand for SetLayerZCommand {
+    fn label(&self) -> String {
+        format!("图层「{}」z → {}", self.layer, self.new_z)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let node = world
+            .maps
+            .iter_mut()
+            .find(|m| m.id == self.map)
+            .ok_or_else(|| EditError::TargetMissing(format!("地图 {}", self.map)))?;
+        let layer = node
+            .layers
+            .iter_mut()
+            .find(|l| l.id == self.layer)
+            .ok_or_else(|| {
+                EditError::TargetMissing(format!("图层 {}（地图 {}）", self.layer, self.map))
+            })?;
+        *self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))? = Some(layer.z);
+        layer.z = self.new_z;
+        Ok(vec![format!("maps/{}/index.yaml", self.map)])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let prev = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?
+            .take()
+            .ok_or_else(|| EditError::Precondition("SetLayerZ 尚未 apply".into()))?;
+        let node = world
+            .maps
+            .iter_mut()
+            .find(|m| m.id == self.map)
+            .ok_or_else(|| EditError::TargetMissing(format!("地图 {}", self.map)))?;
+        let layer = node
+            .layers
+            .iter_mut()
+            .find(|l| l.id == self.layer)
+            .ok_or_else(|| {
+                EditError::TargetMissing(format!("图层 {}（地图 {}）", self.layer, self.map))
+            })?;
+        layer.z = prev;
+        Ok(())
+    }
+}
+
+/// 重排图层声明序（UX-007：↑↓ 相邻交换）。
+///
+/// ## 声明序影响什么
+///
+/// 渲染 z = 内建槽位 + 声明 `z` 微调（ADR-0013），**声明序不直接决定
+/// 渲染序**；它决定的是①同 kind 多个声明**取第一个**生效（[`crate::
+/// layer_frame`]），②面板列表顺序。故「↑↓ + z DragValue」是一对：
+/// 重排换「哪份声明生效」，z 换「渲染谁上谁下」——面板脚注写明两条规则。
+///
+/// ## 回滚
+///
+/// 相邻交换是对合运算：`apply` 换 `(i, i+1)`，`revert` 再换一次即还原
+/// （无需快照）。已在首/尾时 `apply` 报 `Precondition`（UI 侧按钮按
+/// 位置禁用，正常不可达）。
+#[derive(Debug)]
+pub struct MoveLayerCommand {
+    /// 目标地图 ID。
+    pub map: wv_core::Id,
+    /// 目标图层 ID。
+    pub layer: wv_core::Id,
+    /// 移动方向。
+    pub up: bool,
+}
+
+impl MoveLayerCommand {
+    pub fn new(map: wv_core::Id, layer: wv_core::Id, up: bool) -> Self {
+        Self { map, layer, up }
+    }
+}
+
+impl EditCommand for MoveLayerCommand {
+    fn label(&self) -> String {
+        format!(
+            "图层「{}」{}",
+            self.layer,
+            if self.up { "上移" } else { "下移" }
+        )
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let node = world
+            .maps
+            .iter_mut()
+            .find(|m| m.id == self.map)
+            .ok_or_else(|| EditError::TargetMissing(format!("地图 {}", self.map)))?;
+        let pos = node
+            .layers
+            .iter()
+            .position(|l| l.id == self.layer)
+            .ok_or_else(|| {
+                EditError::TargetMissing(format!("图层 {}（地图 {}）", self.layer, self.map))
+            })?;
+        let target = if self.up {
+            if pos == 0 {
+                return Err(EditError::Precondition("已在首位".into()));
+            }
+            pos - 1
+        } else {
+            if pos + 1 >= node.layers.len() {
+                return Err(EditError::Precondition("已在末位".into()));
+            }
+            pos + 1
+        };
+        node.layers.swap(pos, target);
+        Ok(vec![format!("maps/{}/index.yaml", self.map)])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        // 对合：反方向再换一次。
+        Self::new(self.map.clone(), self.layer.clone(), !self.up)
+            .apply(world)
+            .map(|_| ())
+    }
+}
+
 /// 重置当前地形到底图（2026-10-16 用户需求）。
 ///
 /// 把整张图的 `TerrainData.cells` 替换为 [`wv_core::map::MapBase::cell()`]
