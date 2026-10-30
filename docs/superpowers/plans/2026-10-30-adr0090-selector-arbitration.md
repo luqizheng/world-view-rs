@@ -22,10 +22,22 @@
   浏览族分支删单格段（点选在 Browse/Map 暂为 no-op，等 T4 实体命中补位——**中间态
   能力回退：Browse/Map 点格看属性暂不可用**，已在计划显式登记）。
 
-### M2（下一轮）：D2 实体命中（Map z-index 仲裁 + Browse 只读）
+### M2：D2 实体命中（Map z-index 仲裁 + Browse 只读）——已落（2026-10-30）
 
-- T4 Map 实体命中：按 `LayerFrame` 图层序自上而下（hidden 跳过），LinePoi 激活时
-  线 POI 最高；命中 → `SelectedEntity` + 属性卡。Browse 复用同一仲裁去掉编辑入口。
+- T4 落地范围：**线段 POI 命中进浏览族单击仲裁**（`drill_pick`：点选工具下点中
+  河/路折线 = 选中该 Place，`EntityKind::Place` 属性表单同管线；road 层 hidden
+  不可选；双击让位下钻；LinePoi 工具激活时其交互系统独占点击——那边对既有线
+  的命中优先级最高，D2 的「编辑态最高」由既有 `line_poi_hit` 选中路径承载）；
+  **标签层 hidden gate**（label 层关掉时命中表整体不参与）。
+- 归属反转（红线驱动）：线命中几何三件（`point_polyline_dist` / `line_pts` /
+  `line_poi_hit`）+ `LinePoiState` 四件套（`PendingLinePoi` / `DraggedEnd` /
+  `EndpointDrag` / `LinePoiState`）自 wv-app **下沉 wv-render**（drill_pick 要
+  读工具态；wv-render 禁依赖 wv-app），wv-app 经 re-export shim 保持旧路径。
+- **z-index 全层仲裁的未竟部分**：building / event_point / 势力面（faction
+  faces）今日无拾取面，与 M3 群系闸门一起排（届时势力面命中=群系闸门开启态）。
+- 执行记录：rebase 到新 main（并行会话推进 9 提交；i18n 593→**609**，合并后
+  **612**=609+3；camera_zoom 夹具债由 main 32fa27a 顺手带走）。门禁：wv-render
+  428 / app lib 433 / workspace 1431 全绿 + 双 clippy + fmt + smoke-gui PASS。
 
 ### M3：D4 群系闸门 + 替换式赋势力
 

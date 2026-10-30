@@ -206,6 +206,6 @@ mod tests {
             "ALL 应为 612 项（… + 人物等级列表编辑器十键 + UX batch5 六键 + ADR-0090 三键：MapControlsSelectCell/SelectCellHint/CellFloodOff）；加新键时同步更新数组长度与元素（got {})",
             I18nKey::ALL.len()
         );
-        assert_eq!(seen.len(), 612, "去重后应仍为 612 项"); (wv-app,wv-render,wv-ui,wv-world-cell-map: ADR-0090 M1b——圈选增「单格」第四形状（SelectionShape::Cell，用户裁定改道：显式形状替代手势推断）+ commit_cell_shape_click 单格/泛洪判据点击 + 点选减法（图钉>群系区，Alt/泛洪/浏览族格子档退役）+ FloodCriterion::Off 新默认 + 泛洪判据段迁圈选单格 + lucide mouse-pointer-click 图标 + i18n 596)
+        assert_eq!(seen.len(), 612, "去重后应仍为 612 项");
     }
 }

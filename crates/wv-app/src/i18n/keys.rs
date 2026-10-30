@@ -1475,8 +1475,6 @@ pub enum I18nKey {
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
     pub const ALL: [I18nKey; 612] = [
-    pub const ALL: [I18nKey; 609] = [
-    pub const ALL: [I18nKey; 596] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,

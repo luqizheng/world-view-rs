@@ -315,7 +315,6 @@ pub fn map_origin(world: &wv_core::World, node: &MapNode, grid: &GridConfig) -> 
 /// [`crate::selection::PICK_TOLERANCE_PX`] 口径）。
 pub const PIN_HIT_PX: f32 = 18.0;
 
-
 /// 线段 POI 命中的屏幕像素容差（ADR-0090 M2）——与 wv-app
 /// `line_poi_tool::SELECT_TOLERANCE_PX` 同数值口径（8 px × scale），
 /// 两边共用 [`line_poi_hit`] 同一几何，阈值不同会出现「工具选不中 /
@@ -759,20 +758,20 @@ pub fn drill_pick(
     // （D2：hidden 图层不可选）；LinePoi 工具激活时其交互系统独占点击
     // （那边对既有线的命中优先级最高，ADR-0090 D2），本分支让位防双消费；
     // 单击才选（`!is_double`），双击让位下钻——与图钉同款手势约定。
-    if !is_double && point_select.tool_active && !line_poi.tool_active {
-        if layers.road.visible {
-            if let Some(current) = drill.current() {
-                let local = world_pos - grid.map_origin;
-                let tol = LINE_PICK_SLOP_PX * view.scale.max(0.25);
-                if let Some(id) =
-                    crate::drill::line_poi_hit(&projection.world, current, local, tol)
-                {
-                    projection.selection =
-                        Some(wv_core::SelectedEntity::new(wv_core::EntityKind::Place, id));
-                    clicks.last = None;
-                    return;
-                }
-            }
+    if !is_double && point_select.tool_active && !line_poi.tool_active && layers.road.visible {
+        let picked = drill.current().and_then(|current| {
+            crate::drill::line_poi_hit(
+                &projection.world,
+                current,
+                world_pos - grid.map_origin,
+                LINE_PICK_SLOP_PX * view.scale.max(0.25),
+            )
+        });
+        if let Some(id) = picked {
+            projection.selection =
+                Some(wv_core::SelectedEntity::new(wv_core::EntityKind::Place, id));
+            clicks.last = None;
+            return;
         }
     }
 
@@ -3403,10 +3402,11 @@ mod tests {
         let mut world = World::default();
         let map = wv_core::Id::new_unchecked("world_main");
         let other = wv_core::Id::new_unchecked("city_a");
-        world
-            .distances
-            .places
-            .push(place_line_fixture("road_far", &other, &[0.0, 0.0, 100.0, 0.0]));
+        world.distances.places.push(place_line_fixture(
+            "road_far",
+            &other,
+            &[0.0, 0.0, 100.0, 0.0],
+        ));
         assert!(
             line_poi_hit(&world, &map, Vec2::new(50.0, 0.0), 50.0).is_none(),
             "他图折线不得被本图命中"
