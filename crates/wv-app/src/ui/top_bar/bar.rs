@@ -76,10 +76,11 @@ pub fn top_bar(
                     ui,
                     &shell,
                     &projection,
-                    &view,
                     &recents,
                     &mut menu,
                     &panels,
+                    &drill,
+                    &mut palette,
                     &current_loc,
                 );
                 // ── 右区：保存态 / 分隔线 / 日夜 / 语言 / Rebuild / 设置 ──
@@ -151,10 +152,11 @@ fn identity_segment(
     ui: &mut egui::Ui,
     shell: &UiShell,
     projection: &WorldProjection,
-    view: &ViewState,
     recents: &[RecentProject],
     menu: &mut ProjectMenuState,
     panels: &crate::state::PanelState,
+    drill: &DrillState,
+    palette: &mut crate::ui_command_palette::CommandPalette,
     current_loc: &CurrentLocale,
 ) {
     // 项目按钮（logo + 粗体名 + chevron，见 project_menu）+ 组间距。
@@ -162,8 +164,11 @@ fn identity_segment(
     ui.add_space(space::MD);
 
     // 面包屑（web .breadcrumbs：gap 4、上级 text_3、**末级 text_2**）。
-    let crumb = crate::ui_time::format_breadcrumb(projection, &view.current_map);
-    for (i, seg) in crumb.iter().enumerate() {
+    // UX-014：从 drill trail 派生**全链**，祖先段可点（排 DrillToSegment），
+    // 末段（当前图）纯文本——旧版恒两段且不可点，中间级既看不见也点不了。
+    let crumb = crate::ui_time::breadcrumb_segments(projection, drill);
+    let last = crumb.len().saturating_sub(1);
+    for (i, (seg, depth)) in crumb.iter().enumerate() {
         if i > 0 {
             ui.add(
                 egui::Image::new(ICON_CHEVRON_RIGHT)
@@ -172,16 +177,31 @@ fn identity_segment(
             );
             ui.add_space(space::XS);
         }
-        let color = if i + 1 == crumb.len() {
-            shell.t2()
+        let is_current = i == last;
+        let color = if is_current { shell.t2() } else { shell.t3() };
+        if is_current {
+            ui.label(
+                egui::RichText::new(seg.as_str())
+                    .size(shell.scale.base)
+                    .color(color),
+            );
         } else {
-            shell.t3()
-        };
-        ui.label(
-            egui::RichText::new(seg.as_str())
-                .size(shell.scale.base)
-                .color(color),
-        );
+            let resp = ui.add(
+                egui::Button::new(
+                    egui::RichText::new(seg.as_str())
+                        .size(shell.scale.base)
+                        .color(color),
+                )
+                .frame(false)
+                .sense(egui::Sense::click()),
+            );
+            if resp.clicked() {
+                palette.pending = Some(crate::ui_command_palette::CommandId::DrillToSegment(
+                    *depth as u8,
+                ));
+            }
+            resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+        }
         ui.add_space(space::XS);
     }
 

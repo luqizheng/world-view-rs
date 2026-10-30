@@ -94,6 +94,8 @@ pub mod state;
 #[cfg(feature = "app")]
 pub mod streets;
 #[cfg(feature = "app")]
+pub mod stroke_preview;
+#[cfg(feature = "app")]
 pub mod terrain_decor;
 #[cfg(feature = "app")]
 pub mod terrain_view;

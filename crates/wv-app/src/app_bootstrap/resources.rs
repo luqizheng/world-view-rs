@@ -18,6 +18,7 @@ use wv_render::place_line;
 use wv_render::region_outline;
 use wv_render::region_overlay;
 use wv_render::streets;
+use wv_render::stroke_preview;
 use wv_render::terrain_chunks;
 use wv_render::terrain_decor;
 use wv_render::terrain_view;
@@ -235,6 +236,8 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     .init_resource::<place_line::PlaceLineEditorState>()
     .init_resource::<place_line::PlaceLinePreviewPool>()
     .init_resource::<brush_cursor::BrushCursorEntities>()
+    // UX-004：世界级笔刷拖拽预览实体池（点列 → 半透明足印）。
+    .init_resource::<stroke_preview::StrokePreviewState>()
     .init_resource::<map_frame::MapFrameEntities>()
     .init_resource::<terrain_chunks::TerrainChunkEntities>()
     // 地形场渲染（ADR-0053 D1，Phase 1 接线 2026-10-24）：quad 资产缓存 + 计数器。

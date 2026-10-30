@@ -101,6 +101,24 @@ pub struct LayoutFile {
     /// `None` = 贴到地图工具条对侧。
     #[serde(default)]
     pub map_zoom_strip_pos: Option<[f32; 2]>,
+    /// UX-016：笔刷参数（半径/软度/强度/材质/工具）——跨会话保留。
+    ///
+    /// 此前 `BrushState` 是纯会话态，重启回默认——对长会话作者是重复调参
+    /// 成本。`enabled` 刻意**不**持久化：打开工程默认收笔，防止「一进来
+    /// 就在落笔」。缺省 `None` = 用 `BrushState::default`。
+    #[serde(default)]
+    pub brush: Option<BrushPrefs>,
+}
+
+/// 笔刷参数快照（UX-016；`tool` 存 [`wv_render::state::BrushTool::ALL`]
+/// 下标，不可识别下标回退 0 = 涂抹）。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct BrushPrefs {
+    pub radius: f32,
+    pub softness: f32,
+    pub strength: f32,
+    pub kind: u8,
+    pub tool: usize,
 }
 
 /// 布局文件路径：工程目录下的 `ui-layout.yaml`（P2：目录即工程）。

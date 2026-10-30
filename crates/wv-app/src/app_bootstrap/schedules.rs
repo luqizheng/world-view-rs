@@ -19,6 +19,7 @@ use wv_render::map_frame;
 use wv_render::place_line;
 use wv_render::region_outline;
 use wv_render::streets;
+use wv_render::stroke_preview;
 use wv_render::terrain_decor;
 use wv_render::terrain_view;
 use wv_render::vector_layers;
@@ -310,6 +311,13 @@ pub(super) fn register(app: &mut App) {
         Update,
         wv_render::perf_timed!("sync_brush_cursor", brush_cursor::sync_brush_cursor)
             .after(camera::track_cursor_world),
+    );
+    // UX-004：世界级笔刷拖拽预览——必须在 `collect_brush_stroke` 之后
+    // （同帧点列就绪），与光标同款显式排序。
+    app.add_systems(
+        Update,
+        wv_render::perf_timed!("sync_stroke_preview", stroke_preview::sync_stroke_preview)
+            .after(camera::collect_brush_stroke),
     );
     // CellMap 编辑域渲染系统（[ADR-0040] 选中高亮 / [ADR-0052] D2 hover
     // 准星 · D3 待落笔触 · D8-A 白闪）。

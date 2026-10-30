@@ -21,6 +21,9 @@ use crate::ui_layout::LayoutFile;
 /// - `map_theme`（ADR-0016：日间 / 暮色）
 /// - `language`（ADR-0018：zh / en，注入 `CurrentLocale`）
 /// - `map_dock` / `map_snap`（2026-10-19：地图工具条朝向与吸附开关）
+/// - **面板显隐 + 折叠态**（UX-008 / round-2 审计：此前 `visible` 是
+///   write-only 死数据、折叠 id `"head"` vs `"collapsing"` 不一致——重启后
+///   显隐回默认三项、折叠全开。现在两者都真实回灌）
 ///
 /// 界面 theme 与地图 map_theme 是两条独立的线（D2）：前者只影响外壳与 egui
 /// 系统控件，后者只影响地图配色。不可识别值静默保留当前值（V1，不阻塞加载）。
@@ -40,6 +43,10 @@ pub(crate) fn load_layout_on_project_open(
     mut shell_cfg: ResMut<UiShellConfig>,
     mut current_loc: ResMut<CurrentLocale>,
     mut dock: ResMut<crate::ui::map_controls::MapDockState>,
+    // UX-008：面板显隐回灌的落点（此前只写不读，重启回默认三项）。
+    mut panels: ResMut<PanelState>,
+    // UX-016：笔刷参数回灌落点。
+    mut brush: ResMut<wv_render::state::BrushState>,
     mut loaded_dir: Local<Option<String>>,
 ) {
     let Some(dir) = project.project_dir.clone() else {
@@ -62,6 +69,23 @@ pub(crate) fn load_layout_on_project_open(
         ctx.data_mut(|d| {
             d.insert_persisted(crate::ui::timeline::timeline_collapse_id(), collapsed)
         });
+        // UX-008：其余面板显隐 + 折叠态回灌。折叠真相在 `id.with("head")`
+        // （`wv_ui::FloatWindow` 自绘头的 CollapsingState 键——persist 曾读
+        // `"collapsing"` 位，两处 Id 不一致导致折叠永不恢复）。Timeline 例外：
+        // 上面已按播放条专用位回灌。
+        for p in Panel::ALL {
+            let pl = file.get(p);
+            panels.set_visible(p, pl.visible);
+            if p != Panel::Timeline {
+                use bevy_egui::egui::collapsing_header::CollapsingState;
+                let state = CollapsingState::load_with_default_open(
+                    ctx,
+                    bevy_egui::egui::Id::new(("wv_panel", p)).with("head"),
+                    !pl.collapsed,
+                );
+                state.store(ctx);
+            }
+        }
     }
     if let Some(theme) = file.theme.as_deref().and_then(UiTheme::from_key) {
         shell_cfg.theme = theme;
@@ -98,6 +122,15 @@ pub(crate) fn load_layout_on_project_open(
     if let Some([x, y]) = file.map_zoom_strip_pos {
         dock.zoom_strip_pos = Some(crate::ui::map_controls::MapDockPos { x, y });
     }
+    // UX-016：笔刷参数回灌（缺字段保留当前值 = BrushState::default）。
+    if let Some(prefs) = file.brush {
+        use wv_render::state::BrushTool;
+        brush.radius = prefs.radius.max(1.0);
+        brush.softness = prefs.softness.clamp(0.0, 1.0);
+        brush.strength = prefs.strength.clamp(0.2, 2.0);
+        brush.kind = prefs.kind;
+        brush.tool = BrushTool::ALL.get(prefs.tool).copied().unwrap_or_default();
+    }
     *layout = file;
     *loaded_dir = Some(dir);
 }
@@ -112,6 +145,8 @@ pub(crate) fn persist_layout_on_change(
     view: Res<ViewState>,
     current_loc: Res<CurrentLocale>,
     dock: Res<crate::ui::map_controls::MapDockState>,
+    // UX-016：笔刷参数落盘来源。
+    brush: Res<wv_render::state::BrushState>,
 ) {
     let Some(path) = crate::ui_layout::layout_path(project.project_dir.as_deref()) else {
         return;
@@ -130,6 +165,17 @@ pub(crate) fn persist_layout_on_change(
     file.map_snap = Some(dock.snapping);
     file.map_dock_pos = dock.pos.map(|p| [p.x, p.y]);
     file.map_zoom_strip_pos = dock.zoom_strip_pos.map(|p| [p.x, p.y]);
+    // UX-016：笔刷参数（enabled 不持久化——打开工程默认收笔）。
+    file.brush = Some(crate::ui_layout::BrushPrefs {
+        radius: brush.radius,
+        softness: brush.softness,
+        strength: brush.strength,
+        kind: brush.kind,
+        tool: wv_render::state::BrushTool::ALL
+            .iter()
+            .position(|t| *t == brush.tool)
+            .unwrap_or(0),
+    });
 
     let mut changed = false;
     // 语言切换本身就让 layout 跟着变；与面板几何检测并入同一个 `changed` 累加器。
@@ -141,39 +187,39 @@ pub(crate) fn persist_layout_on_change(
         || file.map_snap != layout.map_snap
         || file.map_dock_pos != layout.map_dock_pos
         || file.map_zoom_strip_pos != layout.map_zoom_strip_pos
+        || file.brush != layout.brush
     {
         changed = true;
     }
     for p in Panel::ALL {
-        // CellMap 工作区守卫（2026-10-28 修）：进工作区时全部面板被编排性
-        // 隐藏（快照在 `cell_workspace_backup`）——隐藏态是**临时**的，不得
-        // 记盘（否则退出后一重启，Inspector 等面板就永久消失）。工作区内
-        // 仍可见的面板（笔刷/地标窗）照常记几何。
-        if panels.cell_workspace_backup.is_some() && !panels.is_visible(p) {
-            continue;
-        }
         let id = bevy_egui::egui::Id::new(("wv_panel", p));
         let rect = ctx
             .memory(|m| m.area_rect(id))
             .map(|r| [r.min.x, r.min.y, r.width(), r.height()]);
         let before = file.get(p);
-        // egui 的窗口折叠态与 `Window` 同 Id，另挂一个 "collapsing" 子 Id。
+        // UX-008 修正：折叠真相在 `id.with("head")`（`wv_ui::FloatWindow`
+        // 自绘头的 CollapsingState 键）——旧代码读 `"collapsing"` 子位，
+        // 该位恒缺失 → 折叠态持久化恒 false、恢复恒展开。
         // 例外（2026-10-27 播放器停靠化）：Timeline 的折叠是「播放条」开关，
-        // 会话缓存在独立位（`timeline_collapse_id`）——它直连的 Window 无
-        // 标题栏，`"collapsing"` 子位被 egui 窗口本体占用（恒开，只作窗体
-        // 内容闸门，读它恒得展开）。缓存缺失时保留落盘值，不强制回 false。
+        // 会话缓存在独立位（`timeline_collapse_id`）。
         let collapsed = match p {
             Panel::Timeline => {
                 crate::ui::timeline::timeline_collapsed(ctx).unwrap_or(before.collapsed)
             }
-            _ => bevy_egui::egui::collapsing_header::CollapsingState::load(
-                ctx,
-                id.with("collapsing"),
-            )
-            .map(|s| !s.is_open())
-            .unwrap_or(false),
+            _ => bevy_egui::egui::collapsing_header::CollapsingState::load(ctx, id.with("head"))
+                .map(|s| !s.is_open())
+                .unwrap_or(false),
         };
-        crate::ui_layout::record_layout(&mut file, p, rect, collapsed, panels.is_visible(p));
+        // UX-008 修正：工作区内可见性**冻结在落盘值**——此前守卫只豁免隐藏
+        // 面板，工作区内仍可见的笔刷/地标窗会把 `visible: true` 泄漏进盘，
+        // 与守卫注释「临时态不得记盘」的意图相悖。几何照常记录（隐藏面板
+        // 无 area_rect，rect=None 几何自然不变）。
+        let visible = if panels.cell_workspace_backup.is_some() {
+            before.visible
+        } else {
+            panels.is_visible(p)
+        };
+        crate::ui_layout::record_layout(&mut file, p, rect, collapsed, visible);
         if file.get(p) != before {
             changed = true;
         }
