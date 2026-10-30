@@ -28,6 +28,12 @@
 //! 被本设计修正——Cell 表单并入统一 Inspector；补 B 被 ADR-0057 废止）、
 //! [ADR-0057](../../../../docs/adr/ADR-0057-cellmap-unified-selection.md)。
 //!
+//! ## 地表 / 群系提交时机 = 显式「应用」（UX-017，修正「即改即提交」对地表 / 群系的适用）
+//!
+//! 2026-10-30 round-2 审计 UX-017：地表 / 群系点击此前每击一命令，点 N 格
+//! 要 N 次 Ctrl+Z。现点击只写草稿（`EditCellState::form_draft`），「应用」
+//! 才提交——1 次表单会话 = 1 个撤销单位。
+//!
 //! ## 海拔提交时机 = 手势完成帧（2026-10-25 P0-1 方案 A，修正上文「即改即提交」对海拔的适用）
 //!
 //! scrub 数值框拖动中**每 4px 写一次值**（wv-ui D1），若照搬「即改即提交」
@@ -232,7 +238,20 @@ fn render_fields(
     tex: &mut wv_render::terrain_view::TerrainTexture,
     loc: crate::i18n::Locale,
 ) {
+    // UX-017：地表 / 群系改动先进草稿，「应用」显式提交（海拔手势帧提交
+    // 时若草稿在则并成同一条命令）。换格 / 换图 = 草稿作废（坐标标签）。
+    let draft_valid = edit_cell
+        .form_draft
+        .as_ref()
+        .is_some_and(|d| d.cell == (gx, gy) && map.is_some_and(|m| d.map == m.as_str()));
+    if !draft_valid {
+        edit_cell.form_draft = None;
+    }
     let mut next = before;
+    if let Some(d) = edit_cell.form_draft.as_ref() {
+        next.surface = d.surface;
+        next.biome = d.biome;
+    }
     ui.add_space(6.0);
 
     // ── 地表：heading + 分段（水 / 陆地）──
@@ -251,7 +270,7 @@ fn render_fields(
                 t(loc, I18nKey::CellEditorWater),
                 t(loc, I18nKey::CellEditorLand),
             ],
-            if before.surface == wv_terrain::SURFACE_WATER {
+            if next.surface == wv_terrain::SURFACE_WATER {
                 0
             } else {
                 1
@@ -349,14 +368,35 @@ fn render_fields(
     ui.add_space(4.0);
     super::cell_paint_panel::render_biome_swatch(ui, shell, next.biome, |b| next.biome = b);
 
-    // ── 即改即提交（每格 1 command，[ADR-0040] §决策 8）──
-    // 海拔的手势完成帧提交（P0-1 方案 A）也汇入同一条命令：地表 / 群系
-    // 点击与海拔松手恰在同帧时仍是 1 个撤销单位。
+    // ── 提交时机（UX-017 修正 ADR-0040 决策 8 的适用面）──
+    // 海拔：手势完成帧提交不变（P0-1 方案 A）；草稿若在同帧在场则并成
+    // 同一条命令（1 手势 = 1 撤销单位）。
+    // 地表 / 群系：点击只写草稿，**「应用」显式提交**——此前每击一命令，
+    // 点 N 格要 N 次 Ctrl+Z，与批量区单命令粒度不一致。
     if let Some(h) = height_commit {
         next.height = h;
-    }
-    if next != before {
         push_cell_edit(edit, projection, map, (gx, gy), before, next, tex);
+        edit_cell.form_draft = None;
+        return;
+    }
+    let form_changed = next != before;
+    if form_changed {
+        edit_cell.form_draft = Some(wv_world_cell_map::state::CellFormDraft {
+            map: map.map(|m| m.as_str().to_owned()).unwrap_or_default(),
+            cell: (gx, gy),
+            surface: next.surface,
+            biome: next.biome,
+        });
+    }
+    // 「应用」：草稿在场才可点（下一次点击也 refresh 草稿值）。
+    ui.add_space(8.0);
+    let apply = ui.add_enabled(
+        form_changed,
+        egui::Button::new(egui::RichText::new(t(loc, I18nKey::CellEditorApply)).strong()),
+    );
+    if apply.clicked() {
+        push_cell_edit(edit, projection, map, (gx, gy), before, next, tex);
+        edit_cell.form_draft = None;
     }
 }
 

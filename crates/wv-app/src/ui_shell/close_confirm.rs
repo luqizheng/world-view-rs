@@ -58,6 +58,38 @@ fn save_then_close_timed_out(now: u64, queued_at: u64) -> bool {
     now.saturating_sub(queued_at) > 10
 }
 
+/// OS 级关窗请求（Alt+F4 / 任务栏「关闭窗口」/ 系统关机）→ 同一条确认闸门。
+///
+/// ## 为什么需要它
+///
+/// 无边框窗的 × 是我们自己画的（[`crate::ui::top_bar::window_controls`]），
+/// 但 Windows 还会从别的路径送来 `WindowCloseRequested`。此前
+/// `WindowPlugin::close_when_requested` 默认开着：Bevy 在 `Last` 直接销毁窗口
+/// → `exit_on_all_closed` 退出——**完全绕过**关闭确认与整理，dirty 时等于
+/// 一键丢弃（与 UX-001 同一类事故，只是触发键从鼠标换成了 Alt+F4）。
+///
+/// 现在关掉 Bevy 的自动关窗（`plugins.rs`），所有关窗请求都落到这里：
+/// dirty → 弹「保存并关闭 / 不保存 / 取消」；干净 → 直接退出。
+///
+/// 消息必须在**本帧消费掉**：`WindowCloseRequested` 存活两帧，不消费会让
+/// 作者点「取消」后下一帧又弹一次。
+pub fn intercept_os_close_request(
+    mut requests: MessageReader<bevy::window::WindowCloseRequested>,
+    projection: Res<crate::state::WorldProjection>,
+    mut confirm: ResMut<CloseConfirm>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if requests.is_empty() {
+        return;
+    }
+    requests.clear();
+    if projection.dirty {
+        confirm.pending = Some(CloseAction::ExitApp);
+    } else {
+        exit.write(AppExit::Success);
+    }
+}
+
 /// 确认框系统（egui pass，压在状态栏之后 = 所有面板之上）。
 #[allow(clippy::too_many_arguments)]
 pub fn close_confirm_dialog(

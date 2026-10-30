@@ -76,6 +76,28 @@ pub use terrain::{
     apply_reset_terrain_to_base, commit_regen_world, flush_terrain_texture,
 };
 
+/// UX-006：声明层锁定判定——该图该 kind 的**第一个声明层**是否 `locked`。
+///
+/// 「锁」的真正价值是**防误写**（ADR-0013 声明轴的作者意图）：`streets`
+/// 的街道编辑早已消费它，地形笔刷 / 图钉拖动 / 地标放置此前无视它——
+/// 锁定给出的是虚假安全感。本判定是写路径公共闸门的取数口；调用方
+/// 拒绝时**必须**给回执（toast），不能静默吞手势。
+///
+/// 图未声明该 kind 层 → 未锁（无声明即无作者意图，不拦）。
+pub fn layer_locked(
+    world: &wv_core::World,
+    map_id: &wv_core::Id,
+    kind: wv_core::map::LayerKind,
+) -> bool {
+    world
+        .maps
+        .iter()
+        .find(|m| m.id == *map_id)
+        .and_then(|m| m.layers.iter().find(|l| l.kind == kind))
+        .map(|l| l.locked)
+        .unwrap_or(false)
+}
+
 /// 编辑历史（`wv-edit::History` 的应用层持有者）。
 ///
 /// `dirty_set` 累计自上次 `take_dirty` / `clear_dirty` 以来**所有**已提交命令

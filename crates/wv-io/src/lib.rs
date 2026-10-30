@@ -12,6 +12,7 @@
 //! | 模块 | 用途 |
 //! |---|---|
 //! | [`project`] | `Project` —— 工程入口（开 / 存 / 校验）。 |
+//! | [`atomic`] | 原子写盘（同目录 `.tmp` + rename；崩溃不撕文件）。 |
 //! | [`binary`] | 通用二进制读写工具（与领域无关）。 |
 //! | [`terrain_bin`] | 地形栅格二进制格式（`TERRAIN_FORMAT_VERSION`）。 |
 //! | [`diagnostics`] | 派生诊断（错误 + 提示；含 `derive_hints`）。 |
@@ -19,6 +20,7 @@
 //! | [`situation_io`] | 事态层的 IO 适配（与核心 `Situation` 分离）。 |
 //! | [`error`] | `IoError` / `IoResult`。 |
 
+pub mod atomic;
 pub mod binary;
 pub mod diagnostics;
 pub mod error;

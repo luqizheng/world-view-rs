@@ -26,12 +26,12 @@ pub use command::{
     BeginPartitionSpanCommand, ClearMeasurementsCommand, CutPartitionFaceCommand,
     DeleteBuildingCommand, DeleteStreetSegmentCommand, EditCommand, EditError, EditResult,
     EnsureFactionLayerVisibleCommand, EnsureTerrainLayerCommand, GenerateContinentCommand,
-    MoveCityCommand, MovePartitionVerticesCommand, PasteMapCommand, PurgeMapCommand,
-    RemoveMeasurementCommand, RemoveRegionCommand, ReplaceFactionFacesCommand, RestoreMapCommand,
-    SetCharacterStateSpansCommand, SetCityOutlineCommand, SetMapOrientationCommand,
-    SetNatureFaceNamesCommand, SetPartitionFaceKindCommand, TrashMapCommand, UpdateEventCommand,
-    UpdateFactionLayerCommand, UpdateLayerCommand, UpdateMapPropsCommand, UpdatePlaceCommand,
-    UpdateRegionCommand,
+    MoveCityCommand, MoveLayerCommand, MovePartitionVerticesCommand, PasteMapCommand,
+    PurgeMapCommand, RemoveMeasurementCommand, RemoveRegionCommand, ReplaceFactionFacesCommand,
+    RestoreMapCommand, SetCharacterStateSpansCommand, SetCityOutlineCommand, SetLayerZCommand,
+    SetMapOrientationCommand, SetNatureFaceNamesCommand, SetPartitionFaceKindCommand,
+    TrashMapCommand, UpdateEventCommand, UpdateFactionLayerCommand, UpdateLayerCommand,
+    UpdateMapPropsCommand, UpdatePlaceCommand, UpdateRegionCommand,
 };
 pub use history::{History, Transaction};
 pub use nature_region::{

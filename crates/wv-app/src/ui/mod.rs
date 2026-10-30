@@ -48,6 +48,7 @@ pub mod project_menu;
 pub mod region_panel;
 pub mod settings_dialog;
 pub mod shell;
+pub mod shortcuts_dialog;
 pub mod situation_panel;
 pub mod timeline;
 pub mod top_bar;

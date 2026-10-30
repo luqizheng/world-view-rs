@@ -189,6 +189,21 @@ pub fn sync_faction_overlays(
     let day = playback.current_day;
     let resolved = resolved_faction_layers(world);
     let active = active_layer_id(world, display.active_layer.as_ref());
+    // UX-027：选中势力的画布高亮——「选中即高亮」从列表行推广到画布本体
+    // （金色 = ACCENT_SELECT，与 CellMap 选中钉/蚂蚁线同语言）。
+    let selected_faction = projection
+        .selection
+        .as_ref()
+        .filter(|s| s.kind == wv_core::EntityKind::Faction)
+        .map(|s| s.id.clone());
+    let sel_rgb = {
+        let c = wv_default_theme::colors::ACCENT_SELECT.to_srgba();
+        [
+            (c.red * 255.0).round() as u8,
+            (c.green * 255.0).round() as u8,
+            (c.blue * 255.0).round() as u8,
+        ]
+    };
 
     // focus 集合 = 选中势力 + 直接下级（ADR-0027 D6）。
     let focus_set: Option<HashSet<Id>> = display.focus.as_ref().map(|fid| {
@@ -239,6 +254,23 @@ pub fn sync_faction_overlays(
                 display.show_claims,
                 in_focus,
             )
+        };
+        let is_selected = selected_faction.as_ref() == Some(&t.faction.id);
+        // UX-027：选中态压过其余样式规则（active/claim/focus/制图）——
+        // 「我在看你」必须任何模式下都可见。制图模式维持不填色纪律，
+        // 只上金色描边。
+        let style = if is_selected {
+            Some(TerritoryStyle {
+                fill_alpha: if cartographic {
+                    None
+                } else {
+                    Some(FACTION_ALPHA * 0.6)
+                },
+                border_alpha: Some(1.0),
+                dashed: false,
+            })
+        } else {
+            style
         };
         let Some(style) = style else {
             continue;
@@ -300,6 +332,12 @@ pub fn sync_faction_overlays(
             } else {
                 border_px_for(t.faction.rank.as_deref(), !t.faction.memberships.is_empty())
             };
+            // UX-027：选中势力的边界 = 金色加粗（其余情况沿用势力色）。
+            let (px, ring_color) = if is_selected {
+                (px.max(SELECTED_BORDER_PX), sel_rgb)
+            } else {
+                (px, color)
+            };
             // 外环 + 每个洞环都要描边（国中国的「洞沿」就是内国边界）。
             for ring in territory_rings(t.vertices, &t.holes) {
                 draw_border_ring(
@@ -313,7 +351,7 @@ pub fn sync_faction_overlays(
                     px,
                     border_alpha,
                     opacity,
-                    color,
+                    ring_color,
                     z,
                     cartographic,
                 );
@@ -526,6 +564,151 @@ fn dash_segments(edges: &[(Vec2, Vec2)], dash: f32, gap: f32) -> Vec<(Vec2, Vec2
 }
 
 /// 层 z → 世界 Z：基调 + 层档位 + 图层绑定的槽位偏移。
+/// 选中势力边界线的屏幕像素（UX-027）：比任何 rank 档都粗一档——
+/// 选中态是「我在看你」，不该被帝国 3.0px 的国境线淹没。
+pub(crate) const SELECTED_BORDER_PX: f32 = 4.0;
+
+/// 偶奇规则点含测试（扁平 `[x0, y0, x1, y1, ...]` 环，首尾不重复）。
+///
+/// 与 [`crate::intent`]（wv-terrain）同算法但**不跨 crate 复用**——那是
+/// `pub(crate)`，且本仓库惯例是渲染侧几何小工具留在渲染侧（约 20 行，
+/// 抽公共 crate 反而是新增依赖理由）。
+fn flat_point_in_ring(ring: &[f32], p: Vec2) -> bool {
+    let n = ring.len() / 2;
+    if n < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = (ring[i * 2], ring[i * 2 + 1]);
+        let (xj, yj) = (ring[j * 2], ring[j * 2 + 1]);
+        let crosses = (yi > p.y) != (yj > p.y) && p.x < (xj - xi) * (p.y - yi) / (yj - yi) + xi;
+        if crosses {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// 外环 + 洞环的含点判定：外环内且不在任何洞内。
+fn flat_poly_contains(outer: &[f32], holes: &[&[f32]], p: Vec2) -> bool {
+    flat_point_in_ring(outer, p) && !holes.iter().any(|h| flat_point_in_ring(h, p))
+}
+
+/// UX-027：势力面画布拾取——点选工具下点中势力疆界面 = 选中该势力。
+///
+/// **z 序单真源**（审计前置统一项）：候选按「渲染可见顺序」从上往下取
+/// 第一个命中，与渲染算 z 用的是同一份输入——
+/// - 分区脸（ADR-0045 partition，切蛋糕主路径）：渲染按可见层解析序 +
+///   `order * 0.0001` 微偏移（`faction_partition.rs`），拾取反序扫同一份
+///   `resolved_faction_layers` 的可见子集；
+/// - 旧 territory spans（ADR-0027 `faction_geometry`，多数只剩占位三角形）：
+///   渲染 z 同源（`layer_z + order`），拾取在其后兜底。
+///
+/// hidden 层不可选（与渲染逐层 gate 同源）；`factions_visible` /
+/// `layers.influence` 会话总开关由调用方先判（与渲染早退同门）。
+///
+/// 坐标：`world_pos` 是视图坐标。分区顶点是栅格局部 wu、渲染加
+/// `raster_origin`（`partition_offset`）——拾取先减回去再判；旧 spans
+/// 渲染不加偏移，直接判。无主脸（`owner: None`，含自然层）不产出命中。
+pub fn pick_faction_face(
+    world: &World,
+    map_id: &Id,
+    world_pos: Vec2,
+    grid: &crate::state::GridConfig,
+    day: i64,
+) -> Option<Id> {
+    let resolved = resolved_faction_layers(world);
+    let visible: Vec<_> = resolved.iter().filter(|l| l.visible).collect();
+    let raster_local = world_pos - grid.raster_origin;
+
+    // 主路径：分区脸（渲染顺序 = 可见层序）。
+    for layer_def in visible.iter().rev() {
+        let Some(span) = wv_core::partition_span_at(world, map_id, &layer_def.id, day) else {
+            continue;
+        };
+        for face in &span.faces {
+            let Some(owner) = face.owner.as_ref() else {
+                continue;
+            };
+            if partition_face_contains(span, face, raster_local) {
+                return Some(owner.clone());
+            }
+        }
+    }
+
+    // 兜底：旧 territory spans（渲染顺序 = faction_territories_at 扫描序，
+    // 层序由 z 决定；反序扫描 + 跳 hidden 层与视觉最上层同源）。
+    for t in faction_territories_at(world, map_id, day).iter().rev() {
+        let Some(layer_def) = resolved.iter().find(|l| l.id == t.layer) else {
+            continue;
+        };
+        if !layer_def.visible || t.vertices.len() < 6 {
+            continue;
+        }
+        if flat_poly_contains(t.vertices, &t.holes, world_pos) {
+            return Some(t.faction.id.clone());
+        }
+    }
+    None
+}
+
+/// 分区脸含点判定（栅格局部坐标）：环顶点按 id 解析，悬空引用整脸不命中
+/// （V1：渲染整脸跳过，拾取同口径——「看不见的点不中」）。
+fn partition_face_contains(
+    span: &wv_core::model::faction_partition::PartitionSpan,
+    face: &wv_core::model::faction_partition::PartitionFace,
+    p: Vec2,
+) -> bool {
+    let at = |vid: u32| -> Option<Vec2> {
+        span.vertices
+            .iter()
+            .find(|v| v.id == vid)
+            .map(|v| Vec2::new(v.xy[0], v.xy[1]))
+    };
+    let mut outer = Vec::with_capacity(face.ring.len());
+    for vid in &face.ring {
+        match at(*vid) {
+            Some(v) => outer.push(v),
+            None => return false,
+        }
+    }
+    let mut holes = Vec::with_capacity(face.holes.len());
+    for hole in &face.holes {
+        let mut ring = Vec::with_capacity(hole.len());
+        for vid in hole {
+            match at(*vid) {
+                Some(v) => ring.push(v),
+                None => return false,
+            }
+        }
+        holes.push(ring);
+    }
+    point_in_polygon(outer, p) && !holes.iter().any(|h| point_in_polygon(h.clone(), p))
+}
+
+/// `Vec<Vec2>` 版偶奇含点（与 [`flat_point_in_ring`] 同算法的坐标形态变体）。
+fn point_in_polygon(ring: Vec<Vec2>, p: Vec2) -> bool {
+    let n = ring.len();
+    if n < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = (ring[i].x, ring[i].y);
+        let (xj, yj) = (ring[j].x, ring[j].y);
+        let crosses = (yi > p.y) != (yj > p.y) && p.x < (xj - xi) * (p.y - yi) / (yj - yi) + xi;
+        if crosses {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
 fn layer_z(layer_z: i32, binding_offset: f32) -> f32 {
     FACTION_Z + (layer_z.clamp(-4, 4) as f32) * LAYER_Z_STEP + binding_offset
 }
@@ -1138,4 +1321,248 @@ pub(crate) fn build_line_mesh_flat(a: Vec2, b: Vec2, width: f32) -> Mesh {
     );
     mesh.insert_indices(bevy::render::mesh::Indices::U32(vec![0, 1, 2, 0, 2, 3]));
     mesh
+}
+
+#[cfg(test)]
+mod pick_tests {
+    //! UX-027：势力面拾取（z 序单真源 / hidden 不可选 / 洞环）。
+    use super::*;
+    use crate::state::GridConfig;
+    use wv_core::model::faction_partition::{
+        FactionPartition, PartitionFace, PartitionSpan, PartitionVertex,
+    };
+    use wv_core::{Color, FactionLayer};
+
+    /// 两个层各一势力的最小世界：layer_low（z=0）含 faction_low 全图，
+    /// layer_high（z=1）含 faction_high 全图——同点两层叠放。
+    fn two_layer_world() -> World {
+        let mut w = World::default();
+        w.faction_layers.push(FactionLayer {
+            id: Id::new_unchecked("layer_low"),
+            name: "低层".into(),
+            z: 0,
+            color_mode: Default::default(),
+            visible: true,
+            usage: Default::default(),
+        });
+        w.faction_layers.push(FactionLayer {
+            id: Id::new_unchecked("layer_high"),
+            name: "高层".into(),
+            z: 1,
+            color_mode: Default::default(),
+            visible: true,
+            usage: Default::default(),
+        });
+        w.factions.push(Faction::new(
+            Id::new_unchecked("faction_low"),
+            "低",
+            Color("#111111".into()),
+        ));
+        w.factions.push(Faction::new(
+            Id::new_unchecked("faction_high"),
+            "高",
+            Color("#222222".into()),
+        ));
+        // 每层一张满幅脸（0..100 方形，无洞）。
+        for (layer, owner) in [
+            (
+                Id::new_unchecked("layer_low"),
+                Id::new_unchecked("faction_low"),
+            ),
+            (
+                Id::new_unchecked("layer_high"),
+                Id::new_unchecked("faction_high"),
+            ),
+        ] {
+            w.partitions.push(FactionPartition {
+                map: Id::new_unchecked("map_1"),
+                layer: layer.clone(),
+                spans: vec![PartitionSpan {
+                    from: 0,
+                    to: None,
+                    vertices: vec![
+                        PartitionVertex {
+                            id: 1,
+                            xy: [0.0, 0.0],
+                        },
+                        PartitionVertex {
+                            id: 2,
+                            xy: [100.0, 0.0],
+                        },
+                        PartitionVertex {
+                            id: 3,
+                            xy: [100.0, 100.0],
+                        },
+                        PartitionVertex {
+                            id: 4,
+                            xy: [0.0, 100.0],
+                        },
+                    ],
+                    faces: vec![PartitionFace {
+                        id: 1,
+                        owner: Some(owner),
+                        kind: None,
+                        name: None,
+                        ring: vec![1, 2, 3, 4],
+                        holes: Vec::new(),
+                    }],
+                }],
+            });
+        }
+        w
+    }
+
+    fn grid() -> GridConfig {
+        GridConfig::default()
+    }
+
+    /// 点中叠放的两层 → 视觉最上层（z 大者）的势力。
+    #[test]
+    fn pick_returns_the_topmost_layer_faction() {
+        let w = two_layer_world();
+        let map = Id::new_unchecked("map_1");
+        let hit = pick_faction_face(&w, &map, Vec2::new(50.0, 50.0), &grid(), 1);
+        assert_eq!(
+            hit.map(|i| i.as_str().to_owned()),
+            Some("faction_high".into()),
+            "两层叠放同点，应命中 z 大的高层"
+        );
+    }
+
+    /// hidden 的最上层被跳过 → 命中落到下层（isolate-by-visibility 的
+    /// 「隐藏 → 点不到」半边；显隐驱动选取可达）。
+    #[test]
+    fn hidden_top_layer_is_skipped_and_lower_layer_is_hit() {
+        let mut w = two_layer_world();
+        w.faction_layers
+            .iter_mut()
+            .find(|l| l.id.as_str() == "layer_high")
+            .expect("高层存在")
+            .visible = false;
+        let map = Id::new_unchecked("map_1");
+        let hit = pick_faction_face(&w, &map, Vec2::new(50.0, 50.0), &grid(), 1);
+        assert_eq!(
+            hit.map(|i| i.as_str().to_owned()),
+            Some("faction_low".into()),
+            "高层隐藏后应落到低层"
+        );
+    }
+
+    /// 空白处（所有势力面之外）→ None（不吞空白清除选中的语义）。
+    #[test]
+    fn blank_point_outside_all_faces_misses() {
+        let w = two_layer_world();
+        let map = Id::new_unchecked("map_1");
+        assert!(pick_faction_face(&w, &map, Vec2::new(150.0, 50.0), &grid(), 1).is_none());
+    }
+
+    /// 洞环里的点不命中（湖心不选）。
+    #[test]
+    fn point_inside_a_hole_misses() {
+        let mut w = two_layer_world();
+        w.partitions.clear();
+        w.partitions.push(FactionPartition {
+            map: Id::new_unchecked("map_1"),
+            layer: Id::new_unchecked("layer_high"),
+            spans: vec![PartitionSpan {
+                from: 0,
+                to: None,
+                vertices: vec![
+                    PartitionVertex {
+                        id: 1,
+                        xy: [0.0, 0.0],
+                    },
+                    PartitionVertex {
+                        id: 2,
+                        xy: [100.0, 0.0],
+                    },
+                    PartitionVertex {
+                        id: 3,
+                        xy: [100.0, 100.0],
+                    },
+                    PartitionVertex {
+                        id: 4,
+                        xy: [0.0, 100.0],
+                    },
+                    // 洞：40..60 方形。
+                    PartitionVertex {
+                        id: 5,
+                        xy: [40.0, 40.0],
+                    },
+                    PartitionVertex {
+                        id: 6,
+                        xy: [60.0, 40.0],
+                    },
+                    PartitionVertex {
+                        id: 7,
+                        xy: [60.0, 60.0],
+                    },
+                    PartitionVertex {
+                        id: 8,
+                        xy: [40.0, 60.0],
+                    },
+                ],
+                faces: vec![PartitionFace {
+                    id: 1,
+                    owner: Some(Id::new_unchecked("faction_high")),
+                    kind: None,
+                    name: None,
+                    ring: vec![1, 2, 3, 4],
+                    holes: vec![vec![5, 6, 7, 8]],
+                }],
+            }],
+        });
+        let map = Id::new_unchecked("map_1");
+        assert!(
+            pick_faction_face(&w, &map, Vec2::new(50.0, 50.0), &grid(), 1).is_none(),
+            "洞心不该命中"
+        );
+        assert_eq!(
+            pick_faction_face(&w, &map, Vec2::new(20.0, 20.0), &grid(), 1)
+                .map(|i| i.as_str().to_owned()),
+            Some("faction_high".into()),
+            "洞外仍命中"
+        );
+    }
+
+    /// 悬空环引用（渲染整脸跳过）→ 拾取同口径不命中。
+    #[test]
+    fn dangling_ring_reference_misses_instead_of_panicking() {
+        let mut w = two_layer_world();
+        w.partitions.clear();
+        w.partitions.push(FactionPartition {
+            map: Id::new_unchecked("map_1"),
+            layer: Id::new_unchecked("layer_high"),
+            spans: vec![PartitionSpan {
+                from: 0,
+                to: None,
+                vertices: vec![PartitionVertex {
+                    id: 1,
+                    xy: [0.0, 0.0],
+                }],
+                faces: vec![PartitionFace {
+                    id: 1,
+                    owner: Some(Id::new_unchecked("faction_high")),
+                    kind: None,
+                    name: None,
+                    ring: vec![1, 2, 3], // 2、3 不在顶点表
+                    holes: Vec::new(),
+                }],
+            }],
+        });
+        let map = Id::new_unchecked("map_1");
+        assert!(
+            pick_faction_face(&w, &map, Vec2::new(50.0, 50.0), &grid(), 1).is_none(),
+            "悬空环 = 渲染不画 = 拾取不命中"
+        );
+    }
+
+    /// 偶奇规则环形判定（含点/不含点的边界形态）。
+    #[test]
+    fn flat_point_in_ring_even_odd() {
+        let square = vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0];
+        assert!(flat_point_in_ring(&square, Vec2::new(5.0, 5.0)));
+        assert!(!flat_point_in_ring(&square, Vec2::new(15.0, 5.0)));
+        assert!(!flat_point_in_ring(&square, Vec2::new(-1.0, 5.0)));
+    }
 }

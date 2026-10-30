@@ -228,9 +228,10 @@ fn identity_segment(
 /// 份 core），装饰亦已清空——两段观感几乎重合。笔刷涂地形 kind 的反馈由
 /// CellMap 统一属性表单（ADR-0058）与笔刷面板 swatch 承担。
 ///
-/// `Faction` 已从顶栏移除（2026-10-19 用户裁定），但 `ViewMode::Faction`
-/// 本身仍在——命令面板「视图」组 + 快捷键 `3` 可切（见
-/// [`crate::ui_command_palette`]）。
+/// `Faction` 已从顶栏移除（2026-10-19 用户裁定），且 2026-10-28 起
+/// 退出 `BROWSING`（快捷键数字键按 `BROWSING.len()` 动态绑定，
+/// `Faction` 无快捷键）——`ViewMode::Faction` 本身仍在，仅命令面板
+/// 「视图」组可切（见 [`crate::ui_command_palette`]）。
 ///
 /// **CellMap 是 UI 工作区编排**，不是新 ViewMode——渲染技法复用
 /// `ViewMode::Topographic`（ADR-0039），叠加三件事：

@@ -16,9 +16,12 @@
 //! - 复用 `wv_io::situation_io::collect_situations_and_tracks_dangling`、
 //!   `wv_io::project::collect_map_icons_dangling` 与 `diagnose` 中的
 //!   「事件 → 旁白引用」循环——**单一真相**。
-//! - 错误**无 anchor**（`CoreError::DanglingReference` 不携带 map/day），
-//!   因此 §A 延展的「点击跳转」对错误**不**触发——这与 `Project::diagnose`
-//!   一致，校验面板错误行只会显示成普通 label。
+//! - ~~错误**无 anchor**~~ **UX-019（2026-10-30）修正**：错误行现在也派生
+//!   锚点——[`anchor_for_dangling`] 从 referrer 的 `kind.id` 前缀反查
+//!   referrer 实体在内存世界中的位置（轨迹 / 事态 / 事件 / 地图图标四类；
+//!   反查不到的仍无锚点，退化为不可点的普通 label）。原结论「错误无 anchor
+//!   不可点」自此废止；`Project::diagnose` 的磁盘侧口径不受影响（那边只产
+//!   文案，不产锚点）。
 //! - 提示走 `derive_hints`（已有 anchor），点击跳转继续生效。
 //!
 //! ## 与 `Project::diagnose` 的边界
@@ -83,10 +86,16 @@ pub fn derive_diagnostics(world: &World, theme: &ThemePack) -> Diagnostics {
     for err in dangling {
         // 与 `Project::diagnose` 同源：指纹取自错误文案本身，含 `referrer` 与
         // `missing`，同一处悬空在多次诊断间保持同一指纹，可被「已读/已忽略」认领。
-        d.items.push(diagnostics::error(
-            format!("dangling:{}", err),
-            err.to_string(),
-        ));
+        // UX-019：错误行同样派生锚点（referrer 实体的图 / 坐标 / 起始日），
+        // 校验面板「最需要跳转的悬空引用」自此可点。
+        let anchor = anchor_for_dangling(world, &err);
+        d.items.push(diagnostics::Diagnostic {
+            level: diagnostics::DiagLevel::Error,
+            message: err.to_string(),
+            fingerprint: format!("dangling:{}", err),
+            anchor,
+            severity: None,
+        });
     }
 
     // 派生提示（相遇却未写事件）——**永不**产生 Error。
@@ -358,10 +367,9 @@ mod tests {
         assert_eq!(f1, f2, "指纹应稳定");
     }
 
-    /// 错误无 anchor（与 derive_hints 的 EncounterUnwritten 形态不同）——
-    /// §A 延展的「点击跳转」对错误**不**触发。
+    /// UX-019 修正：悬空引用错误**有 anchor**（referrer 实体反查），可点跳转。
     #[test]
-    fn dangling_errors_have_no_anchor() {
+    fn dangling_errors_carry_an_anchor_now() {
         let mut w = World::default();
         w.maps.push(map_of("map_main"));
         w.tracks.push(track_of("u_ghost", "map_main"));
@@ -370,8 +378,8 @@ mod tests {
         assert!(!errs.is_empty(), "测试前提：应有错误");
         for err in errs {
             assert!(
-                err.anchor.is_none(),
-                "悬空引用错误无 anchor（CoreError 不携带 map/day）"
+                err.anchor.is_some(),
+                "悬空引用错误应有锚点（referrer 实体可反查）"
             );
         }
     }
@@ -511,5 +519,172 @@ mod tests {
                 .any(|h| h.fingerprint.starts_with("water-biome-mismatch")),
             "无错配不应推提示"
         );
+    }
+}
+
+/// UX-019：从悬空引用错误的 referrer 反查 referrer 实体的位置，派生跳转锚点。
+///
+/// referrer 形如「track.t1 (field `unit`)」或「map.m1.icons[3]」——前两段
+/// 「kind.id」足以定位实体（id 在第一个空白或点号处截断）。四类可反查：
+/// 轨迹（图 + 首个带坐标途经点 + 轨迹起点日）、事态（第一张涉及图 + 区间
+/// 起点）、事件（定位地点的图与锚点 + 事件起点日）、地图（图标所在图，
+/// 坐标 (0,0)）。反查不到（实体已被删 / referrer 是未知 kind）→ None，
+/// 错误行退化为不可点的普通 label（旧行为，不阻塞 V1）。
+fn anchor_for_dangling(
+    world: &World,
+    err: &wv_core::CoreError,
+) -> Option<wv_io::diagnostics::DiagAnchor> {
+    use wv_io::diagnostics::DiagAnchor;
+    let wv_core::CoreError::DanglingReference { referrer, .. } = err else {
+        return None;
+    };
+    let (kind, rest) = referrer.split_once('.')?;
+    let id = &rest[..rest.find([' ', '.']).unwrap_or(rest.len())];
+    let at0 = wv_core::geometry::Point { x: 0.0, y: 0.0 };
+    match kind {
+        "track" => {
+            let t = world.tracks.iter().find(|t| t.id.as_str() == id)?;
+            let (x, y) = t
+                .waypoints
+                .iter()
+                .find_map(|w| w.pos.map(|p| (p.x, p.y)))
+                .unwrap_or((0.0, 0.0));
+            Some(DiagAnchor {
+                map: t.map.clone(),
+                at: wv_core::geometry::Point { x, y },
+                day: t.span.from,
+            })
+        }
+        "situation" => {
+            let s = world.situations.iter().find(|s| s.id.as_str() == id)?;
+            Some(DiagAnchor {
+                map: s.maps.first()?.clone(),
+                at: at0,
+                day: s.span.from,
+            })
+        }
+        "event" => {
+            let e = world.events.iter().find(|e| e.id.as_str() == id)?;
+            let loc = e.location.as_ref()?;
+            let place = world.distances.places.iter().find(|p| p.id == loc.place)?;
+            Some(DiagAnchor {
+                map: place.map.clone()?,
+                at: wv_core::geometry::Point {
+                    x: loc.x.or(place.x).unwrap_or(0.0),
+                    y: loc.y.or(place.y).unwrap_or(0.0),
+                },
+                day: e.span.from,
+            })
+        }
+        "map" => {
+            let m = world.maps.iter().find(|m| m.id.as_str() == id)?;
+            Some(DiagAnchor {
+                map: m.id.clone(),
+                at: at0,
+                day: 0,
+            })
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod anchor_tests {
+    use super::*;
+
+    /// 轨迹悬空（unit 不存在）→ 错误行带锚点（轨迹的图 + 起点日 + 首个途经点）。
+    #[test]
+    fn dangling_track_error_derives_an_anchor() {
+        use wv_core::map::{MapLevel, MapNode};
+        let mut world = World::default();
+        world.maps.push(MapNode {
+            id: wv_core::Id::new_unchecked("map_1"),
+            level: MapLevel::World,
+            ..Default::default()
+        });
+        world.tracks.push(wv_core::time::track::Track {
+            id: wv_core::Id::new_unchecked("track_1"),
+            unit: wv_core::Id::new_unchecked("unit_ghost"),
+            map: wv_core::Id::new_unchecked("map_1"),
+            span: wv_core::time::TimeSpan { from: 12, to: None },
+            waypoints: vec![wv_core::time::track::Waypoint {
+                day: Some(12),
+                pos: Some(wv_core::geometry::Point { x: 30.0, y: 40.0 }),
+                place: None,
+            }],
+            path: None,
+        });
+        let d = derive_diagnostics(
+            &world,
+            wv_render::theme::theme_pack::builtin::for_palette(Default::default()),
+        );
+        let err = d
+            .errors()
+            .into_iter()
+            .find(|e| e.fingerprint.starts_with("dangling:"))
+            .expect("应有悬空错误");
+        let anchor = err.anchor.as_ref().expect("UX-019：错误行应有锚点");
+        assert_eq!(anchor.map.as_str(), "map_1");
+        assert_eq!(anchor.day, 12);
+        assert_eq!((anchor.at.x, anchor.at.y), (30.0, 40.0));
+    }
+
+    /// 事件旁白悬空（bridge 自产的 referrer）→ 锚点指向事件定位地点。
+    #[test]
+    fn dangling_narration_error_derives_an_anchor_from_the_event_place() {
+        use wv_core::map::{MapLevel, MapNode};
+        let mut world = World::default();
+        world.maps.push(MapNode {
+            id: wv_core::Id::new_unchecked("map_1"),
+            level: MapLevel::World,
+            ..Default::default()
+        });
+        world.distances.places.push(wv_core::distance::Place {
+            id: wv_core::Id::new_unchecked("place_1"),
+            name: "城".into(),
+            map: Some(wv_core::Id::new_unchecked("map_1")),
+            x: Some(5.0),
+            y: Some(6.0),
+            w: None,
+            h: None,
+            kind: None,
+            feature: None,
+            biome: None,
+            envelope: None,
+            rank: None,
+            line_kind: None,
+            line_width_m: None,
+            line: None,
+        });
+        world.events.push(wv_core::model::event::Event {
+            id: wv_core::Id::new_unchecked("event_1"),
+            name: "战役".into(),
+            span: wv_core::time::TimeSpan { from: 3, to: None },
+            location: Some(wv_core::model::event::EventLocation {
+                place: wv_core::Id::new_unchecked("place_1"),
+                x: None,
+                y: None,
+                w: None,
+                h: None,
+            }),
+            participants: Vec::new(),
+            narrative: None,
+            outcome: None,
+            effects: Vec::new(),
+            narrations: vec![wv_core::Id::new_unchecked("narration_ghost")],
+        });
+        let d = derive_diagnostics(
+            &world,
+            wv_render::theme::theme_pack::builtin::for_palette(Default::default()),
+        );
+        let err = d
+            .errors()
+            .into_iter()
+            .find(|e| e.fingerprint.starts_with("dangling:"))
+            .expect("应有悬空错误");
+        let anchor = err.anchor.as_ref().expect("事件悬空应有锚点");
+        assert_eq!(anchor.map.as_str(), "map_1");
+        assert_eq!(anchor.day, 3);
+        assert_eq!((anchor.at.x, anchor.at.y), (5.0, 6.0));
     }
 }

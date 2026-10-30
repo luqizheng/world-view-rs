@@ -582,6 +582,8 @@ pub(super) fn register(app: &mut App) {
             // UX-002 batch6：人物 / 事态创建对话框（同族居中模态窗）。
             ui::entity_create_dialog::character_create_dialog_system.after(ui::status_bar),
             ui::entity_create_dialog::situation_create_dialog_system.after(ui::status_bar),
+            // UX-002 收尾：势力本体创建对话框（Inspector「势力层」页签入口）。
+            ui::entity_create_dialog::faction_create_dialog_system.after(ui::status_bar),
             // 人物等级列表编辑器（人物面板行点击打开）：同族居中模态窗。
             ui::character_level_dialog::character_level_dialog_system.after(ui::status_bar),
             // UX-001 关闭确认框：必须压在一切之上（挡住「正在丢弃工作」的

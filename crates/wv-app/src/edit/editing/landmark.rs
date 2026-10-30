@@ -36,6 +36,7 @@ use super::*;
 #[allow(clippy::too_many_arguments)] // Bevy 系统参数即依赖声明，宽签名是框架惯例
 pub fn commit_landmark_click(
     buttons: Res<ButtonInput<MouseButton>>,
+    time: Res<Time>,
     playback: Res<PlaybackState>,
     view: Res<ViewState>,
     grid: Res<GridConfig>,
@@ -46,7 +47,10 @@ pub fn commit_landmark_click(
     current_loc: Res<crate::i18n::CurrentLocale>,
     mut projection: ResMut<WorldProjection>,
     mut edit: ResMut<EditHistory>,
+    // UX-006：锁拦截回执。
+    mut notice: ResMut<crate::ui_shell::ShellNotice>,
 ) {
+    let frame = (time.elapsed_secs() * 60.0) as u64;
     if !buttons.just_pressed(MouseButton::Left) {
         return;
     }
@@ -72,6 +76,17 @@ pub fn commit_landmark_click(
         return;
     }
     if projection.project_dir.is_none() {
+        return;
+    }
+    // UX-006：Place 声明层锁定 → 拒绝放置并回执。
+    let Some(map_id) = drill.current().cloned() else {
+        return;
+    };
+    if super::layer_locked(&projection.world, &map_id, wv_core::map::LayerKind::Place) {
+        notice.error(
+            crate::i18n::t_key(&current_loc, crate::i18n::I18nKey::LockedLayerWriteBlocked),
+            frame,
+        );
         return;
     }
     let Some(cursor) = view.cursor_world else {

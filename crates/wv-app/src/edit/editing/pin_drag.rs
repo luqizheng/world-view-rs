@@ -55,6 +55,9 @@ pub fn drag_place_pin_on_hold(
     mut drag: ResMut<PinDragState>,
     mut panels: ResMut<PanelState>,
     mut edit: ResMut<EditHistory>,
+    // UX-006：锁拦截回执。
+    mut notice: ResMut<crate::ui_shell::ShellNotice>,
+    loc: Res<crate::i18n::CurrentLocale>,
 ) {
     // 会话失效族：工具切走 / 播放开始 / 加载中 → 拖动作废。
     if !point_select.tool_active || playback.playing || screen.shows_loading_overlay() {
@@ -106,6 +109,16 @@ pub fn drag_place_pin_on_hold(
         // 双击后清空点击史——「三连击」不得判成两段双击（drill 同口径）。
         drag.last_click = if is_double { None } else { Some((now, cursor)) };
 
+        // UX-006：Place 声明层锁定 → 不建立拖拽候选并回执（锁=防误写；
+        // 此前图钉拖动无视它）。回执只在本帧按住起点发一次（候选未建立，
+        // 不会重复）。
+        if super::layer_locked(&projection.world, map_id, wv_core::map::LayerKind::Place) {
+            notice.error(
+                crate::i18n::t_key(&loc, crate::i18n::I18nKey::LockedLayerWriteBlocked),
+                (time.elapsed_secs() * 60.0) as u64,
+            );
+            return;
+        }
         let pin = pick_place_pin(
             cursor,
             &projection.world,
@@ -230,6 +243,9 @@ mod tests {
         world.insert_resource(wv_render::camera::PointerOverUi::default());
         world.insert_resource(crate::app_screen::AppScreen::default());
         world.insert_resource(wv_render::layer_frame::LayerFrame::default());
+        // UX-006：锁拦截回执的两个资源（无声明层 → 不锁，回执不触发）。
+        world.insert_resource(crate::ui_shell::ShellNotice::default());
+        world.init_resource::<crate::i18n::CurrentLocale>();
         world.insert_resource(crate::state::PointSelectState { tool_active: true });
         world.insert_resource(crate::state::PanelState::default());
         world.init_resource::<crate::state::PinDragState>();

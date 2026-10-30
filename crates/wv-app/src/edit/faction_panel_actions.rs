@@ -181,6 +181,36 @@ pub fn update_layer_now(
     );
 }
 
+/// UX-027：solo 一层（图层面板 Alt+眼）——只显示这层，其余全隐；对
+/// **已 solo 的层**再按一次 = 恢复全显。单事务提交全部层的显隐翻转
+/// （一次撤销），只对实际变化的层发命令（幂等省命令）。
+pub fn solo_layer_now(
+    world: &mut WorldProjection,
+    edit: &mut EditHistory,
+    view: &ViewState,
+    id: &Id,
+) {
+    let resolved = wv_core::resolved_faction_layers(&world.world);
+    // 「这层已 solo」= 可见层恰好只有它。
+    let already_soloed = resolved
+        .iter()
+        .all(|l| if &l.id == id { l.visible } else { !l.visible });
+    let mut tx = Transaction::new();
+    for l in &resolved {
+        let target = if already_soloed { true } else { &l.id == id };
+        if l.visible != target {
+            tx.push(Box::new(UpdateFactionLayerCommand::new(
+                l.id.clone(),
+                l.name.clone(),
+                l.z,
+                l.color_mode,
+                target,
+            )));
+        }
+    }
+    push_tx(world, edit, view, tx);
+}
+
 /// 删除一个势力层（其下势力回落默认层，不删势力本体）。
 pub fn remove_layer_now(
     world: &mut WorldProjection,
@@ -340,6 +370,14 @@ fn push_cmd(
 ) {
     let mut tx = Transaction::new();
     tx.push(cmd);
+    push_tx(world, edit, view, tx);
+}
+
+/// 提交一个已装配好的事务（多命令一次撤销——solo 这类「N 层联动」用）。
+fn push_tx(world: &mut WorldProjection, edit: &mut EditHistory, view: &ViewState, tx: Transaction) {
+    if tx.is_empty() {
+        return;
+    }
     match edit.history.commit(&mut world.world, tx) {
         Ok(dirty) => {
             edit.record_dirty(dirty);

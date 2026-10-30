@@ -12,9 +12,11 @@
 //! - **不画选区几何**——那是 `wv_render::selection::draw_selection`。
 //! - **不隐藏工具**——无意图的图级显示占位文案而非隐藏（spec §12：选择优先
 //!   模型要全图级一致）。
-//! - **不出现在 CellMap 工作区**（2026-10-24 用户裁定）——cell 级的应用条件
-//!   （海拔增减 / 设水陆 / 设群系）在 Inspector 的 Cell 批量区，见
-//!   [`cell_workspace_active`]。
+//! - **CellMap 工作区只出 cell 级子集**（UX-028 统一，取代 2026-10-24
+//!   「整体抑制」裁定——同一手势三个工作区都弹菜单，条目按适用面裁剪）：
+//!   地形四意图本就是逐格写入者，照常可得；图级三意图（大陆 / 城市 /
+//!   森林）在 cell 语境不适用不出；海拔增减 / 设水陆 / 设群系仍在
+//!   Inspector 的 Cell 批量区。见 [`cell_workspace_active`]。
 
 #![cfg(feature = "app")]
 
@@ -77,12 +79,12 @@ fn menu_visible(selection: &wv_render::state::SelectionState) -> bool {
 /// CellMap 工作区判定：底座档为 `ViewMode::Topographic`（顶栏第三段的
 /// 进入 / 退出都落在这个模式，见 `top_bar::browse_edit_segment`）。
 ///
-/// 工作区内**不出意图菜单**（2026-10-24 用户裁定）：作者圈多边形是在选
-/// 「一片格子」，应用条件——海拔增减 / 设水陆 / 设群系——全在 Inspector
-/// 的 Cell 批量区；再弹八意图条等于给同一份选区两套「接下来做什么」，
-/// 每圈一次都要手动关一次。图级意图（大陆 / 城市 / 标记 / 划分势力 /
-/// 地形四意图）在 Browse / Edit 档照常可得。经命令面板切到 Topographic
-/// 的边角情形同样适用：等高底图档就是 cell 级编辑语境。
+/// **UX-028（2026-10-30）取代 2026-10-24「工作区内整体抑制」裁定**：同一
+/// 圈选手势在三个工作区都要弹菜单（条目不同），抑制改成**裁剪**——工作
+/// 区内只出 cell 级子集（地形四意图：本就是逐格写入者），图级三意图
+/// （大陆 / 城市 / 森林）不出。海拔增减 / 设水陆 / 设群系仍在 Inspector
+/// 的 Cell 批量区（那里有参数）。经命令面板切到 Topographic 的边角情形
+/// 同样适用：等高底图档就是 cell 级编辑语境。
 ///
 /// `pub(crate)`：大陆生成对话框的确认路径用同一谓词分流包络来源
 /// （工作台 = 统一选区格集；Browse/Edit = V 工具闭合环）——两处分叉
@@ -121,11 +123,9 @@ pub fn intent_menu(
     if !screen.editor_visible() || !menu_visible(&selection) {
         return;
     }
-    // CellMap 工作区：应用条件在 Inspector 批量区（2026-10-24 裁定，
-    // 见 `cell_workspace_active`）。
-    if cell_workspace_active(view.mode) {
-        return;
-    }
+    // UX-028：CellMap 工作区不再整体抑制——只出 cell 级子集（地形四
+    // 意图），图级三意图在下面按 flag 裁剪。
+    let cell_ws = cell_workspace_active(view.mode);
     let loc = current_loc.0;
     let level = drill
         .current_node(&projection.world)
@@ -154,7 +154,73 @@ pub fn intent_menu(
                 })
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        if intent_count_for(level) == 0 {
+                        if cell_ws {
+                            // Cell 级子集（UX-028）：只出地形四意图。栅格门
+                            // 与浏览档同一把（无自有栅格灰化）。
+                            let terrain_ok = drill
+                                .current()
+                                .map(|m| terrain_intents_available(&projection.world, m))
+                                .unwrap_or(false);
+                            let ring = selection.closed.clone();
+                            let apply_map = drill.current().cloned();
+                            let mut apply = |kind: wv_terrain::intent::Intent| {
+                                if let Some(map) = apply_map.clone() {
+                                    let frame = (time.elapsed_secs() * 60.0) as u64;
+                                    let _ = crate::edit::editing::commit_region_intent(
+                                        map,
+                                        kind,
+                                        grid.cell_size,
+                                        &playback,
+                                        loc,
+                                        &mut edit,
+                                        &mut projection,
+                                        &mut tex,
+                                        &mut notice,
+                                        frame,
+                                    );
+                                }
+                            };
+                            let mut terrain_button =
+                                |icon: egui::ImageSource<'static>, label: &'static str| -> bool {
+                                    ui.add_enabled(
+                                        terrain_ok,
+                                        egui::Button::image_and_text(
+                                            icon_image(
+                                                icon,
+                                                egui::Color32::WHITE,
+                                                TILE_SIZE - ICON_INSET,
+                                            ),
+                                            label,
+                                        )
+                                        .fill(shell.accent())
+                                        .corner_radius(egui::CornerRadius::from(radius::PANEL)),
+                                    )
+                                    .clicked()
+                                };
+                            if terrain_button(
+                                ICON_MOUNTAIN_RANGE,
+                                t(loc, I18nKey::IntentMenuMountains),
+                            ) {
+                                apply(wv_terrain::intent::Intent::MountainMassif {
+                                    polygon: ring.clone().unwrap_or_default(),
+                                });
+                            }
+                            if terrain_button(ICON_HILLS, t(loc, I18nKey::IntentMenuHills)) {
+                                apply(wv_terrain::intent::Intent::HillsRegion {
+                                    polygon: ring.clone().unwrap_or_default(),
+                                });
+                            }
+                            if terrain_button(ICON_PLATEAU, t(loc, I18nKey::IntentMenuPlains)) {
+                                apply(wv_terrain::intent::Intent::PlainsRegion {
+                                    polygon: ring.clone().unwrap_or_default(),
+                                });
+                            }
+                            if terrain_button(ICON_LAKE, t(loc, I18nKey::IntentMenuLake)) {
+                                apply(wv_terrain::intent::Intent::LakeRegion {
+                                    polygon: ring.clone().unwrap_or_default(),
+                                });
+                            }
+                        } else if intent_count_for(level) == 0 {
                             // 无意图图级：占位文案，不误导作者去别的工具。
                             ui.weak(t(loc, I18nKey::IntentMenuNoIntents));
                         } else {
@@ -399,10 +465,10 @@ mod tests {
         assert!(!menu_visible(&drawing), "画中未闭合不弹菜单");
     }
 
-    /// CellMap 工作区（Topographic 档）不出意图菜单：应用条件在 Inspector
-    /// 的 Cell 批量区（2026-10-24 用户裁定）；Browse / Edit 档照常出。
+    /// UX-028：CellMap 工作区不再整体抑制——菜单照常浮现，只裁剪到
+    /// cell 级子集（地形四意图）；Browse / Edit 档出全目录。
     #[test]
-    fn intent_menu_suppressed_in_cell_workspace() {
+    fn intent_menu_shows_cell_subset_in_cell_workspace() {
         use wv_render::state::{SelectionState, ViewMode};
         let closed = SelectionState {
             enabled: true,
@@ -412,11 +478,11 @@ mod tests {
         assert!(menu_visible(&closed), "前置：选区闭合本应可见");
         assert!(
             cell_workspace_active(ViewMode::Topographic),
-            "等高底图档 = CellMap 工作区 → 菜单不出"
+            "等高底图档 = CellMap 工作区 → 裁剪到 cell 子集（菜单仍出）"
         );
         assert!(
             !cell_workspace_active(ViewMode::VectorFlat),
-            "Browse 档照常出菜单（大陆 / 城市等图级意图的入口）"
+            "Browse 档出全目录（大陆 / 城市等图级意图的入口）"
         );
     }
 }

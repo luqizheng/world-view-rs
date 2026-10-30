@@ -90,6 +90,31 @@ fn next_free_id(prefix: &str, existing: &[wv_core::Id]) -> wv_core::Id {
     }
 }
 
+// ── 势力（UX-002 收尾：最后一种只能手编 YAML 的叙事实体）──────────────
+
+/// 势力创建对话框跨帧状态。
+#[derive(bevy::prelude::Resource, Debug, Clone, PartialEq, Default)]
+pub struct FactionCreateDialog {
+    pub open: bool,
+    pub name: String,
+}
+
+/// 新势力默认色的 8 色轮转盘（与 partition 切分自动建势力同源——
+/// 「同一来源的默认色」避免两条路径给同色的势力染出不同色）。
+pub(crate) const FACTION_PALETTE: [&str; 8] = [
+    "#C05A4E", "#4E79C0", "#5A9E6F", "#B07FD8", "#D8A94E", "#4EB8C0", "#C04E9E", "#7F8F4E",
+];
+
+/// 第 `n` 个势力的默认色（`palette[count % 8]`，与 partition_edit 同式）。
+pub(crate) fn faction_palette_at(count: usize) -> wv_core::Color {
+    wv_core::Color(FACTION_PALETTE[count % FACTION_PALETTE.len()].into())
+}
+
+/// 第一个空闲的 `faction_N` 形 ID（纯函数供测试）。
+pub fn next_free_faction_id(existing: &[wv_core::Id]) -> wv_core::Id {
+    next_free_id("faction", existing)
+}
+
 // ── Bevy 系统 ───────────────────────────────────────────────────────—
 
 /// 人物创建对话框（名称单一字段）+ 提交。
@@ -344,6 +369,125 @@ pub fn situation_create_dialog_system(
     let _ = playback; // 预填只在打开入口用（open_situation_with_playback_defaults）
 }
 
+/// 势力创建对话框（名称单一字段）+ 提交（UX-002 收尾：势力本体此前只能
+/// 手编 `factions/*.yaml`，空态文案里的「+ 新建势力」按钮从未存在）。
+///
+/// 色 = 8 色盘按现存势力数轮转（与 partition 切分自动建势力同源）；
+/// ID = `faction_N` 首空闲（partition 用时间戳造 ID，两者互不冲突——
+/// 首空闲查重兜底）。层归属不在此选：`resolve_faction_layer_id` 对
+/// `layer: None` 回退默认层，登记后在 Inspector「属性」页签可改。
+#[allow(clippy::too_many_arguments)]
+pub fn faction_create_dialog_system(
+    mut contexts: bevy_egui::EguiContexts,
+    shell_cfg: Res<UiShellConfig>,
+    mut dialog: ResMut<FactionCreateDialog>,
+    current_loc: Res<CurrentLocale>,
+    mut projection: ResMut<WorldProjection>,
+    mut edit: ResMut<EditHistory>,
+    mut panels: ResMut<crate::state::PanelState>,
+    mut inspector: ResMut<crate::ui::inspector::InspectorState>,
+    mut diagnostics: ResMut<ProjectDiagnostics>,
+    mut notice: ResMut<ShellNotice>,
+    time: Res<Time>,
+) {
+    if !dialog.open {
+        return;
+    }
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
+    let shell = UiShell::new(&shell_cfg);
+    let loc = current_loc.0;
+    let frame = (time.elapsed_secs() * 60.0) as u64;
+    let mut commit = false;
+    let mut cancel = false;
+    // 同人物的借用纪律：闭包内只用局部副本。
+    let mut name = dialog.name.clone();
+    DialogWindow::new(t(loc, I18nKey::FactionCreateTitle), &mut dialog.open)
+        .width(320.0)
+        .show(ctx, &shell, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(t(loc, I18nKey::FeaturePlaceNameLabel));
+                ui.add(
+                    egui::TextEdit::singleline(&mut name)
+                        .desired_width(180.0)
+                        .hint_text(t(loc, I18nKey::FactionCreateNameHint)),
+                );
+            });
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(t(loc, I18nKey::FactionCreateHint))
+                    .small()
+                    .weak(),
+            );
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button(t(loc, I18nKey::CommonCancel)).clicked() {
+                    cancel = true;
+                }
+                let ready = !name.trim().is_empty();
+                if ui
+                    .add_enabled(
+                        ready,
+                        egui::Button::new(
+                            egui::RichText::new(t(loc, I18nKey::FactionCreateTitle)).strong(),
+                        ),
+                    )
+                    .clicked()
+                {
+                    commit = true;
+                }
+            });
+        });
+    dialog.name = name;
+    if cancel {
+        dialog.open = false;
+        return;
+    }
+    if commit {
+        let taken: Vec<wv_core::Id> = projection
+            .world
+            .factions
+            .iter()
+            .map(|f| f.id.clone())
+            .collect();
+        let faction = wv_core::Faction::new(
+            next_free_faction_id(&taken),
+            dialog.name.trim().to_owned(),
+            faction_palette_at(projection.world.factions.len()),
+        );
+        let mut tx = wv_edit::Transaction::new();
+        tx.push(Box::new(wv_edit::AddFactionCommand::new(faction.clone())));
+        match edit.history.commit(&mut projection.world, tx) {
+            Ok(dirty) => {
+                edit.record_dirty(dirty);
+                projection.dirty = true;
+                diagnostics.needs_diagnose = true;
+                // 登记完直接选中它：作者接着要补的就是属性（层归属/驻府）。
+                projection.selection =
+                    Some(crate::ui::faction_panel::faction_selection(&faction.id));
+                inspector.tab = crate::ui::inspector::InspectorTab::Properties;
+                notice.info(
+                    format!(
+                        "{}{}",
+                        t(loc, I18nKey::NoticeFactionCreatedPrefix),
+                        faction.name
+                    ),
+                    frame,
+                );
+                panels.set_visible(Panel::Inspector, true);
+                dialog.open = false;
+            }
+            Err(e) => {
+                notice.error(
+                    format!("{}: {e}", t(loc, I18nKey::NoticeFactionCreateFailed)),
+                    frame,
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,6 +517,27 @@ mod tests {
             next_free_situation_id(&taken_c),
             wv_core::Id::new_unchecked("situation_1")
         );
+        // 势力同款；partition 时间戳 ID（faction_1730…）不与 faction_N 撞。
+        let taken_f = vec![
+            wv_core::Id::new_unchecked("faction_1"),
+            wv_core::Id::new_unchecked("faction_1730000000000"),
+        ];
+        assert_eq!(
+            next_free_faction_id(&taken_f),
+            wv_core::Id::new_unchecked("faction_2")
+        );
+    }
+
+    /// 默认色轮转：同分区切分的 8 色盘，按现存势力数取模。
+    #[test]
+    fn faction_palette_cycles_by_existing_count() {
+        assert_eq!(faction_palette_at(0).0, FACTION_PALETTE[0]);
+        assert_eq!(
+            faction_palette_at(8).0,
+            FACTION_PALETTE[0],
+            "8 色后回到起点"
+        );
+        assert_eq!(faction_palette_at(3).0, FACTION_PALETTE[3]);
     }
 
     /// 事态打开即按当前播放日预填。

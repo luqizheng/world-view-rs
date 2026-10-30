@@ -39,6 +39,7 @@ pub fn layers_tab(
     pen_dialog: &mut crate::ui::partition_pen::PartitionPenDialog,
     playback_day: i64,
     loc: crate::i18n::Locale,
+    faction_create: &mut crate::ui::entity_create_dialog::FactionCreateDialog,
 ) {
     let layers = wv_core::resolved_faction_layers(&projection.world);
     let pen_gated = crate::ui::partition_pen::pen_available_for(
@@ -133,6 +134,28 @@ pub fn layers_tab(
     }
     ui.add_space(space::MD);
 
+    // 新建势力本体（UX-002 收尾）：空态文案承诺的「+ 新建势力」自此存在。
+    // 恒渲染——势力与层是两个动作：层是画布的分组，本体是政治实体，
+    // 有层没层都该能先登记本体（无层时落默认层，登记后可改归属）。
+    let (rect_f, r_f) = ui.allocate_exact_size(egui::vec2(add_w, shell.hit), egui::Sense::click());
+    ui.painter().rect_stroke(
+        rect_f,
+        crate::theme::ui_tokens::radius::CONTROL,
+        egui::Stroke::new(1.0, shell.border_strong()),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().text(
+        rect_f.center(),
+        egui::Align2::CENTER_CENTER,
+        "+ 新建势力",
+        crate::theme::ui_theme::proportional(shell.scale.base),
+        shell.t2(),
+    );
+    if r_f.clicked() {
+        faction_create.open = true;
+    }
+    ui.add_space(space::MD);
+
     // 当前填色层选择器（势力图一次只填一个层）。
     ui.horizontal_wrapped(|ui| {
         ui.label(
@@ -163,18 +186,30 @@ pub fn layers_tab(
                 // 落豆腐块（AGENTS §8 图标纪律）。
                 // ADR-0082：**自然层不出 pen**——Map 只看不管，编辑在
                 // CellMap 笔刷窗自然区段（用户裁定 2026-10-28）。
+                // UX-006：Influence 声明层锁定 → 动刀入口灰化 + 悬停说明
+                //（锁=防误写；前置披露挂入口端）。
+                let influence_locked = crate::edit::editing::layer_locked(
+                    &projection.world,
+                    &wv_core::Id::new_unchecked(view.current_map.clone()),
+                    wv_core::map::LayerKind::Influence,
+                );
+                let pen_enabled = pen_gated
+                    && l.usage != wv_core::model::faction::LayerUsage::Nature
+                    && !influence_locked;
                 if pen_gated && l.usage != wv_core::model::faction::LayerUsage::Nature {
-                    let pen = ui.add(
+                    let pen = ui.add_enabled(
+                        pen_enabled,
                         egui::Button::image(icon_image(ICON_PENCIL, egui::Color32::WHITE, 12.0))
                             .fill(egui::Color32::TRANSPARENT),
                     );
-                    if pen
-                        .on_hover_text(crate::i18n::t(
-                            loc,
-                            crate::i18n::I18nKey::PartitionPenButtonHover,
-                        ))
-                        .clicked()
-                    {
+                    let hover = if influence_locked {
+                        crate::i18n::t(loc, crate::i18n::I18nKey::LockedLayerWriteBlocked)
+                            .to_owned()
+                    } else {
+                        crate::i18n::t(loc, crate::i18n::I18nKey::PartitionPenButtonHover)
+                            .to_owned()
+                    };
+                    if pen.on_hover_text(hover).clicked() {
                         pen_dialog.open(l.id.clone(), playback_day);
                     }
                 }

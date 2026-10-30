@@ -528,11 +528,50 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
             "换一个工程：顶栏工程菜单 → 打开工程…（Ctrl+O），或命令行 `wv gui -m <工程目录>`。"
         }
         I18nKey::LoadErrorDismiss => "知道了",
+        I18nKey::CrashRecoveryTitle => "上次会话未正常结束",
+        I18nKey::CrashRecoveryNamePrefix => "工程「",
+        I18nKey::CrashRecoveryDirtyPrefix => "」上次没有正常关闭。磁盘上的内容停在最后一次自动保存，此后最多 ",
+        I18nKey::CrashRecoveryDirtySuffix => " 秒的编辑可能丢失（撤销栈也随进程消失了）。",
+        I18nKey::CrashRecoveryCleanBody => "」上次没有正常关闭，但没有未保存的编辑——磁盘内容完整。",
         I18nKey::CharacterCreateTitle => "登记人物",
         I18nKey::CharacterCreateNameHint => "给人物起个名字",
         I18nKey::CharacterCreateHint => "别名 / 生卒 / 等级段可稍后在等级编辑器与 YAML 补填",
         I18nKey::NoticeCharacterCreatedPrefix => "已登记人物：",
         I18nKey::NoticeCharacterCreateFailed => "登记人物失败",
+        I18nKey::CellEditorApply => "应用",
+        I18nKey::CheatSheetTitle => "快捷键速查",
+        I18nKey::CheatSheetProject => "工程",
+        I18nKey::CheatSheetProjectBody => {
+            "Ctrl+S 保存 · Ctrl+Shift+S 另存为 · Ctrl+O 打开 · Ctrl+W 关闭工程 · Ctrl+Shift+N 新建 · Ctrl+E 导出 PNG"
+        }
+        I18nKey::CheatSheetTools => "地图工具",
+        I18nKey::CheatSheetToolsBody => {
+            "V 圈选（Shift+V 换形状）· S 点选 · H 抓手 · B 涂抹地形 · E 擦除地形 · L 测距 · M 测面 · P 生成大陆 · C 单格编辑"
+        }
+        I18nKey::CheatSheetView => "视图",
+        I18nKey::CheatSheetViewBody => {
+            "1 Browse · 2 Map · F 全览 · F5 重画地形 · Ctrl+J 日夜主题"
+        }
+        I18nKey::CheatSheetTimeline => "时间轴",
+        I18nKey::CheatSheetTimelineBody => {
+            "Space 播放 / 暂停 · Home 跳到起点 · End 跳到终点 · Backspace 钻回上一级"
+        }
+        I18nKey::CheatSheetBrush => "笔刷",
+        I18nKey::CheatSheetBrushBody => {
+            "[ / ] 笔刷半径增减（笔刷激活时）"
+        }
+        I18nKey::CheatSheetHelp => "帮助",
+        I18nKey::CheatSheetHelpBody => {
+            "Ctrl+K 命令面板（所有命令可搜）· ? 本速查表"
+        }
+        I18nKey::LockedLayerWriteBlocked => "该图层已锁定：在图层面板解锁后再编辑",
+        I18nKey::PanelLayersFootnote => "渲染顺序 = 类型槽位 + z 微调；同类型多层只取第一个声明",
+        I18nKey::PanelLayersZLabel => "z 槽位",
+        I18nKey::FactionCreateTitle => "登记势力",
+        I18nKey::FactionCreateNameHint => "给势力起个名字",
+        I18nKey::FactionCreateHint => "层归属 / 驻府 / 归属边可在检查器「属性」页签补填",
+        I18nKey::NoticeFactionCreatedPrefix => "已登记势力：",
+        I18nKey::NoticeFactionCreateFailed => "登记势力失败",
         I18nKey::SituationCreateTitle => "登记事态",
         I18nKey::SituationCreateNameHint => "给事态起个名字",
         I18nKey::SituationCreateHint => "步骤与参与单位可稍后在 YAML / 后续编辑面补填",
@@ -1328,11 +1367,60 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
             "Try another project: top bar project menu → Open project… (Ctrl+O), or `wv gui -m <project dir>`."
         }
         I18nKey::LoadErrorDismiss => "Got it",
+        I18nKey::CrashRecoveryTitle => "Last session did not exit cleanly",
+        I18nKey::CrashRecoveryNamePrefix => "Project \"",
+        I18nKey::CrashRecoveryDirtyPrefix => {
+            "\" did not close normally last time. The files stop at the last auto-save; up to "
+        }
+        I18nKey::CrashRecoveryDirtySuffix => {
+            " seconds of edits since then may be lost (the undo stack is gone too)."
+        }
+        I18nKey::CrashRecoveryCleanBody => {
+            "\" did not close normally, but there were no unsaved edits — the files are complete."
+        }
         I18nKey::CharacterCreateTitle => "Register character",
         I18nKey::CharacterCreateNameHint => "Name this character",
         I18nKey::CharacterCreateHint => "Alias / dates / level spans can be filled in later",
         I18nKey::NoticeCharacterCreatedPrefix => "Character registered: ",
         I18nKey::NoticeCharacterCreateFailed => "Failed to register character",
+        I18nKey::CellEditorApply => "Apply",
+        I18nKey::CheatSheetTitle => "Keyboard shortcuts",
+        I18nKey::CheatSheetProject => "Project",
+        I18nKey::CheatSheetProjectBody => {
+            "Ctrl+S save · Ctrl+Shift+S save as · Ctrl+O open · Ctrl+W close · Ctrl+Shift+N new · Ctrl+E export PNG"
+        }
+        I18nKey::CheatSheetTools => "Map tools",
+        I18nKey::CheatSheetToolsBody => {
+            "V lasso (Shift+V cycle shape) · S point select · H pan · B paint terrain · E erase terrain · L measure line · M measure area · P continent · C edit cell"
+        }
+        I18nKey::CheatSheetView => "View",
+        I18nKey::CheatSheetViewBody => {
+            "1 Browse · 2 Map · F fit view · F5 repaint terrain · Ctrl+J day/night theme"
+        }
+        I18nKey::CheatSheetTimeline => "Timeline",
+        I18nKey::CheatSheetTimelineBody => {
+            "Space play / pause · Home jump to start · End jump to end · Backspace drill up"
+        }
+        I18nKey::CheatSheetBrush => "Brush",
+        I18nKey::CheatSheetBrushBody => {
+            "[ / ] brush radius down / up (while a brush is active)"
+        }
+        I18nKey::CheatSheetHelp => "Help",
+        I18nKey::CheatSheetHelpBody => {
+            "Ctrl+K command palette (search every command) · ? this cheat sheet"
+        }
+        I18nKey::LockedLayerWriteBlocked => {
+            "This layer is locked — unlock it in the Layers panel to edit"
+        }
+        I18nKey::PanelLayersFootnote => {
+            "Draw order = kind slot + z offset; only the first declaration per kind renders"
+        }
+        I18nKey::PanelLayersZLabel => "z offset",
+        I18nKey::FactionCreateTitle => "Register faction",
+        I18nKey::FactionCreateNameHint => "Name this faction",
+        I18nKey::FactionCreateHint => "Layer / seat / memberships can be filled in the Inspector afterwards",
+        I18nKey::NoticeFactionCreatedPrefix => "Faction registered: ",
+        I18nKey::NoticeFactionCreateFailed => "Failed to register faction",
         I18nKey::SituationCreateTitle => "Register situation",
         I18nKey::SituationCreateNameHint => "Name this situation",
         I18nKey::SituationCreateHint => "Steps and units can be filled in later",

@@ -33,11 +33,13 @@ mod tests {
     #[test]
     fn double_click_slop_is_forgiving_but_bounded() {
         // 双击容差必须宽于拖拽起手——「原地双击」不得被判成拖动起手。
-        assert!(
-            crate::input::DOUBLE_CLICK_SLOP_PX >= crate::input::DRAG_START_SLOP_PX,
-            "double click slop {} < drag start {}",
-            crate::input::DOUBLE_CLICK_SLOP_PX,
-            crate::input::DRAG_START_SLOP_PX
-        );
+        // rustc 1.99 clippy（assertions_on_constants）：常量断言进 const 块——
+        // 编译期即验证两条阈值的相对关系，运行期零成本。
+        const {
+            assert!(
+                crate::input::DOUBLE_CLICK_SLOP_PX >= crate::input::DRAG_START_SLOP_PX,
+                "double click slop < drag start slop",
+            );
+        }
     }
 }

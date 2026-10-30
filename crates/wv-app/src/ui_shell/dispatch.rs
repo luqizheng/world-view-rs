@@ -741,7 +741,12 @@ fn close_all_map_tools(
     streets.enabled = false;
     measure.mode = MeasureMode::Off;
     if had_selection {
-        selection.cancel();
+        // UX-028：选区保留统一「跨工具保留、切图清空」——闭合环跨工具
+        // 存活（与 CellSelection 同生命周期；切图清空本就由
+        // sync_selection_map_change 承担），只丢未闭合草稿。旧实现整环
+        // cancel，作者「圈完切个工具量个距离再回来」环就没了，而格选区
+        // 却能跨工具保留——同一手势两套生死规则（UX-028）。
+        selection.discard_draft();
     }
     if had_measure {
         measure.clear_draft();
@@ -1004,32 +1009,58 @@ fn dispatch_regen_world(
     }
 }
 
-/// 自动保存的到期判定（纯函数供测试）：dirty ∧ 有工程 ∧ 非播放 ∧ 确认框
-/// 空闲，且距上次尝试 ≥ 间隔。
-fn auto_save_due(
-    now: f64,
+/// 自动保存的间隔（秒）。也是崩溃时**编辑暴露窗**的上界：自动保存成功一次
+/// 就把不安全窗口清零，因此「最多丢多久」= 本常数。
+pub(crate) const AUTO_SAVE_INTERVAL_SECS: f64 = 60.0;
+
+/// 自动保存的计时节拍（纯状态，测试里逐帧推进）。
+///
+/// ## 为什么单独成类型
+///
+/// 2026-10-29 batch3 的第一版把计时写在系统里：`last_attempt` **每帧无条件**
+/// 写成本帧时间，于是 `now - last_attempt` 恒等于一帧（≈16ms），60s 永远
+/// 到不了——自动保存**一次都没触发过**。只有纯函数 `auto_save_due` 被测到，
+/// 调用方的记账错误静默存活。现在把记账收进本类型的 [`Self::tick`]，
+/// 单测能逐帧推进时间轴（见 `auto_save_tests`），这类 bug 无处藏身。
+#[derive(Debug, Default)]
+pub(crate) struct AutoSaveClock {
+    /// 上一次「计时起点」：条件齐备时的上一次落盘尝试，或条件不齐时的
+    /// 恢复时刻。
     last_attempt: f64,
-    dirty: bool,
-    has_project: bool,
-    playing: bool,
-    confirm_busy: bool,
-    interval: f64,
-) -> bool {
-    if !dirty || !has_project || playing || confirm_busy {
-        return false;
-    }
-    now - last_attempt >= interval
 }
 
-/// UX-001 完整版的一半：**60 秒静默自动保存**（dirty 增量增量落盘）。
+impl AutoSaveClock {
+    /// 每帧推进一次，返回本帧是否该落盘。
+    ///
+    /// - 条件不齐（干净 / 无工程 / 播放中 / 确认框在途）→ 重置计时：从条件
+    ///   恢复那一刻重新数 60s，而不是清空编辑后立刻补一次保存。
+    /// - 条件齐备 → 满 60s 才落盘；保存失败也**算一次尝试**（错误回执已由
+    ///   保存路径弹过，不重试风暴，60s 后再来）。
+    fn tick(&mut self, now: f64, conditions_met: bool, interval: f64) -> bool {
+        if !conditions_met {
+            self.last_attempt = now;
+            return false;
+        }
+        if now - self.last_attempt >= interval {
+            self.last_attempt = now;
+            return true;
+        }
+        false
+    }
+}
+
+/// UX-001 完整版的一半：**60 秒静默自动保存**（dirty 增量落盘）。
 ///
 /// 与关闭确认（[`close_confirm`]）配套：自动保存把「未保存暴露窗」压到
 /// ≤60s，确认框就退化成低频兜底而不是唯一防线。复用 [`dispatch_save_command`]
-/// ——与 Ctrl+S 完全同路径（增量脏路由，成本 = 一次手动保存）。保存失败
-/// 不重试风暴：本次尝试即重置计时，60s 后再试（错误回执由保存路径弹过）。
+/// ——与 Ctrl+S 完全同路径（增量脏路由，成本 = 一次手动保存）。
+///
+/// 崩溃恢复的另一半在 [`super::session_marker`]：本系统负责把「未落盘窗口」
+/// 压到 60s 以内，那边负责「上次没正常退出」的检测与告知——两者合起来才是
+/// 审计验收的「杀进程 → 重启可恢复 ≤60s 前的全部编辑」。
 #[allow(clippy::too_many_arguments)]
 pub fn auto_save(
-    mut last_attempt: Local<f64>,
+    mut clock: Local<AutoSaveClock>,
     time: Res<Time>,
     playback: Res<crate::state::PlaybackState>,
     confirm: Res<crate::ui_shell::close_confirm::CloseConfirm>,
@@ -1039,59 +1070,72 @@ pub fn auto_save(
     mut notice: ResMut<ShellNotice>,
     current_loc: Res<CurrentLocale>,
 ) {
-    const INTERVAL: f64 = 60.0;
     let now = time.elapsed_secs_f64();
-    let due = auto_save_due(
-        now,
-        *last_attempt,
-        projection.dirty,
-        projection.project_dir.is_some(),
-        playback.playing,
-        confirm.pending.is_some() || confirm.action_after_save.is_some(),
-        INTERVAL,
-    );
-    // 条件不齐 = 重置计时（从条件恢复那一刻重新数 60s，而不是追补）。
-    *last_attempt = now;
-    if due {
-        let frame = (now * 60.0) as u64;
+    let conditions_met = projection.dirty
+        && projection.project_dir.is_some()
+        && !playback.playing
+        && confirm.pending.is_none()
+        && confirm.action_after_save.is_none();
+    if clock.tick(now, conditions_met, AUTO_SAVE_INTERVAL_SECS) {
         dispatch_save_command(
             &mut projection,
             &mut edit,
             &mut open_task,
             &mut notice,
             &current_loc,
-            frame,
+            (now * 60.0) as u64,
         );
     }
 }
 
 #[cfg(test)]
 mod auto_save_tests {
-    use super::auto_save_due;
+    use super::{AutoSaveClock, AUTO_SAVE_INTERVAL_SECS};
 
-    /// 到期矩阵：dirty/有工程/非播放/确认空闲四条件与 60s 间隔。
+    /// 主路径：dirty 期间逐帧推进，满 60s 才落盘一次，之后重新计时。
+    ///
+    /// 这条测试直接钉住 batch3 的回归：旧实现每帧重置计时，`tick` 永假。
     #[test]
-    fn auto_save_due_requires_all_conditions_and_interval() {
-        assert!(auto_save_due(100.0, 30.0, true, true, false, false, 60.0));
-        assert!(
-            !auto_save_due(100.0, 50.0, true, true, false, false, 60.0),
-            "未到间隔不保存"
-        );
-        assert!(
-            !auto_save_due(100.0, 0.0, false, true, false, false, 60.0),
-            "干净不保存"
-        );
-        assert!(
-            !auto_save_due(100.0, 0.0, true, false, false, false, 60.0),
-            "无工程不保存"
-        );
-        assert!(
-            !auto_save_due(100.0, 0.0, true, true, true, false, 60.0),
-            "播放中不保存"
-        );
-        assert!(
-            !auto_save_due(100.0, 0.0, true, true, false, true, 60.0),
-            "确认框/保存并关闭在途不抢跑"
-        );
+    fn auto_save_fires_once_per_interval_while_dirty() {
+        let interval = AUTO_SAVE_INTERVAL_SECS;
+        let mut clock = AutoSaveClock::default();
+        let mut fired_at = Vec::new();
+        for frame in 0..=180 {
+            let now = frame as f64;
+            if clock.tick(now, true, interval) {
+                fired_at.push(now);
+            }
+        }
+        assert_eq!(fired_at, vec![60.0, 120.0, 180.0], "满 60s 各落盘一次");
+    }
+
+    /// 条件不齐（干净 / 播放中 / 确认框在途……由调用方合成布尔）时重置计时：
+    /// 恢复后要重新数满 60s，而不是立刻补一次保存。
+    #[test]
+    fn auto_save_restarts_interval_after_conditions_come_back() {
+        let interval = AUTO_SAVE_INTERVAL_SECS;
+        let mut clock = AutoSaveClock::default();
+        // 0..=50 干净（tick 传 false），最后一次重置钉在第 50 秒。
+        for frame in 0..=50 {
+            assert!(!clock.tick(frame as f64, false, interval));
+        }
+        // 从 50 起重新数：109 差 1 秒，110 才该落盘。
+        assert!(!clock.tick(109.0, true, interval), "50+59 秒不够");
+        assert!(clock.tick(110.0, true, interval), "50+60 秒该落盘");
+    }
+
+    /// 保存失败也计一次尝试：不会每帧重试（重试风暴），60s 后再来。
+    #[test]
+    fn auto_save_does_not_retry_every_frame_after_failure() {
+        let interval = AUTO_SAVE_INTERVAL_SECS;
+        let mut clock = AutoSaveClock::default();
+        assert!(clock.tick(interval, true, interval));
+        for frame in 61..120 {
+            assert!(
+                !clock.tick(frame as f64, true, interval),
+                "失败后 60s 内不应每帧重试（frame {frame}）"
+            );
+        }
+        assert!(clock.tick(120.0, true, interval), "60s 后再试一次");
     }
 }

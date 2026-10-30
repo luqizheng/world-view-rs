@@ -25,6 +25,25 @@ pub struct EditCellState {
     /// 一串撤销命令——暂存区让面板在「手势完成帧」才提交 1 条
     /// `EditCellCommand`。坐标标签用于手势中途换格 / 换图时的失效判定。
     pub pending_height: Option<(i32, i32, i16)>,
+    /// UX-017（2026-10-30）：单格表单「地表 / 群系」的**草稿**——点击只改
+    /// 草稿，「应用」才提交（1 次表单会话 = 1 条命令 = 1 个撤销单位；
+    /// 此前每击一命令，点 N 格要 N 次 Ctrl+Z）。海拔仍走手势完成帧
+    /// （P0-1 方案 A 不变），手势帧提交时若草稿在则并成同一条命令。
+    /// 坐标 / 图标签用于换格 / 换图失效判定（与 `pending_height` 同法）。
+    pub form_draft: Option<CellFormDraft>,
+}
+
+/// 单格表单草稿（见 [`EditCellState::form_draft`]）。
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct CellFormDraft {
+    /// 所属图 id（字符串形态，避免 wv-world-cell-map 依赖core 的 Id 序列化面）。
+    pub map: String,
+    /// 目标格。
+    pub cell: (i32, i32),
+    /// 草稿地表码。
+    pub surface: u8,
+    /// 草稿群系码。
+    pub biome: u8,
 }
 
 impl EditCellState {
@@ -40,6 +59,8 @@ impl EditCellState {
         // 海拔暂存属于单格表单的会话态：表单随工具关闭而消失，残留的
         // 暂存值会在下次打开时把旧值当「当前值」展示并误导提交。
         self.pending_height = None;
+        // UX-017：表单草稿同理——工具关了草稿就没了着落。
+        self.form_draft = None;
     }
 }
 
@@ -416,6 +437,7 @@ mod tests {
     #[test]
     fn close_tool_turns_off_tool_and_clears_hover() {
         let mut s = EditCellState {
+            form_draft: None,
             tool_active: true,
             hover: Some((3, 4)),
             pending_height: Some((3, 4, 100)),

@@ -102,6 +102,36 @@ pub fn panel_layers(
                 t_key(&current_loc, I18nKey::PanelLayersDrawOrder),
                 false,
             );
+            // UX-007：↑↓ 重排声明序（MoveLayerCommand）。声明序决定「同 kind
+            // 取第一个声明」与列表顺序；渲染上下另由下方 z 槽位控制（脚注）。
+            ui.horizontal(|ui| {
+                if let Some(sel) = layer_ui.selected.clone() {
+                    let idx = rows.iter().position(|r| r.id == sel);
+                    if let Some(i) = idx {
+                        if ui
+                            .add_enabled(i > 0, egui::Button::new("\u{2191}"))
+                            .on_hover_text(t_key(&current_loc, I18nKey::PanelLayersFootnote))
+                            .clicked()
+                        {
+                            commit_layer2(
+                                &mut projection,
+                                &mut edit,
+                                wv_edit::MoveLayerCommand::new(map_id.clone(), sel.clone(), true),
+                            );
+                        }
+                        if ui
+                            .add_enabled(i + 1 < rows.len(), egui::Button::new("\u{2193}"))
+                            .clicked()
+                        {
+                            commit_layer2(
+                                &mut projection,
+                                &mut edit,
+                                wv_edit::MoveLayerCommand::new(map_id.clone(), sel, false),
+                            );
+                        }
+                    }
+                }
+            });
             ui.add_space(LAYER_BLOCK_GAP);
 
             if rows.is_empty() {
@@ -164,13 +194,55 @@ pub fn panel_layers(
                     layer_ui.pending_opacity = Some(opacity);
                 }
 
+                // UX-007：选中层的 z 槽位（SetLayerZCommand）。z 是渲染上下
+                // 的真旋钮（内建槽位 ± z×0.05，clamp ±4）；与上方 ↑↓（改
+                // 「哪份声明生效」）分工见脚注。
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(t_key(&current_loc, I18nKey::PanelLayersZLabel))
+                            .small()
+                            .color(shell.t2()),
+                    );
+                    let mut z = sel_z(&projection.world, &map_id, &sel.id);
+                    if ui
+                        .add(egui::DragValue::new(&mut z).speed(0.1).range(-4..=4))
+                        .changed()
+                    {
+                        commit_layer2(
+                            &mut projection,
+                            &mut edit,
+                            wv_edit::SetLayerZCommand::new(map_id.clone(), sel.id.clone(), z),
+                        );
+                    }
+                });
+                // 脚注（UX-007 替代方案落地）：两条规则写明，DRAW ORDER 不再
+                // 是死文案。
+                ui.label(
+                    egui::RichText::new(t_key(&current_loc, I18nKey::PanelLayersFootnote))
+                        .small()
+                        .weak(),
+                );
+
                 // [ADR-0090 D4/M3] 势力层选中时给「编辑疆域」入口：
                 // 进分区编辑态（Replace 工具，群系闸门默认勾）。
-                if sel.kind == LayerKind::Influence
-                    && ui
-                        .button(t_key(&current_loc, I18nKey::LayerRowEditTerritory))
-                        .clicked()
-                {
+                // UX-006：Influence 声明层锁定 → 分区编辑入口灰化 + 悬停说明
+                //（前置披露：闸门挂入口端，不挂提交端——UX-029 哲学）。
+                let influence_locked = crate::edit::editing::layer_locked(
+                    &projection.world,
+                    &map_id,
+                    LayerKind::Influence,
+                );
+                let territory_btn = ui
+                    .add_enabled(
+                        !influence_locked,
+                        egui::Button::new(t_key(&current_loc, I18nKey::LayerRowEditTerritory)),
+                    )
+                    .on_hover_text(if influence_locked {
+                        t_key(&current_loc, I18nKey::LockedLayerWriteBlocked).to_owned()
+                    } else {
+                        String::new()
+                    });
+                if sel.kind == LayerKind::Influence && territory_btn.clicked() {
                     if let Some(from) = wv_core::partition_span_at(
                         &projection.world,
                         &map_id,
@@ -186,18 +258,47 @@ pub fn panel_layers(
             }
 
             // 落地列表动作（眼睛 / 锁 / 选中行）。
+            // UX-027/006：Alt+眼 = solo（该层显示、其余全隐；对已 solo 层再按
+            // = 恢复全显）。单事务一次撤销。
+            let alt_held = ui.input(|i| i.modifiers.alt);
             match action {
                 Some(LayerPanelAction::ToggleVisible(i)) => {
                     let r = &rows[i];
-                    commit_layer(
-                        &mut projection,
-                        &mut edit,
-                        wv_edit::UpdateLayerCommand::visibility(
-                            map_id.clone(),
-                            r.id.clone(),
-                            !r.visible,
-                        ),
-                    );
+                    if alt_held {
+                        let already_soloed =
+                            rows.iter()
+                                .all(|x| if x.id == r.id { x.visible } else { !x.visible });
+                        let mut tx = wv_edit::Transaction::new();
+                        for x in &rows {
+                            let target = if already_soloed { true } else { x.id == r.id };
+                            if x.visible != target {
+                                tx.push(Box::new(wv_edit::UpdateLayerCommand::visibility(
+                                    map_id.clone(),
+                                    x.id.clone(),
+                                    target,
+                                )));
+                            }
+                        }
+                        if !tx.is_empty() {
+                            match edit.history.commit(&mut projection.world, tx) {
+                                Ok(dirty) => {
+                                    edit.record_dirty(dirty);
+                                    projection.dirty = true;
+                                }
+                                Err(e) => bevy::log::warn!("图层 solo 提交失败: {e}"),
+                            }
+                        }
+                    } else {
+                        commit_layer(
+                            &mut projection,
+                            &mut edit,
+                            wv_edit::UpdateLayerCommand::visibility(
+                                map_id.clone(),
+                                r.id.clone(),
+                                !r.visible,
+                            ),
+                        );
+                    }
                 }
                 Some(LayerPanelAction::ToggleLocked(i)) => {
                     let r = &rows[i];
@@ -405,6 +506,17 @@ fn commit_faction_layer_visibility(
         edit,
         wv_edit::EnsureFactionLayerVisibleCommand::new(layer.id.clone(), visible),
     );
+}
+
+/// 选中层当前声明 z（UX-007 DragValue 的初值；未声明 = 0）。
+fn sel_z(world: &World, map_id: &Id, layer: &Id) -> i32 {
+    world
+        .maps
+        .iter()
+        .find(|m| m.id == *map_id)
+        .and_then(|m| m.layers.iter().find(|l| l.id == *layer))
+        .map(|l| l.z)
+        .unwrap_or(0)
 }
 
 /// 从当前图节点克隆图层行（名称空白 → 按 kind 取 i18n 默认名）。

@@ -42,7 +42,7 @@ where
             path: path.display().to_string(),
             source,
         })?;
-        std::fs::write(&path, text)?;
+        crate::atomic::write_text(&path, &text)?;
     }
     // 删除传播：扫目录删不在 keep 里的 yaml。
     if dir.is_dir() {
@@ -102,7 +102,7 @@ fn save_maps(dir: &Path, maps: &[wv_core::map::MapNode]) -> IoResult<()> {
                 path: path.display().to_string(),
                 source,
             })?;
-            std::fs::write(&path, text)?;
+            crate::atomic::write_text(&path, &text)?;
         }
     }
     // 删除传播（2026-10-27 地图树垃圾桶 spec）：扫 maps/ 下的子目录，
@@ -145,7 +145,7 @@ fn save_meta(root: &Path, meta: &WorldMeta) -> IoResult<()> {
         path: path.display().to_string(),
         source,
     })?;
-    std::fs::write(&path, text)?;
+    crate::atomic::write_text(&path, &text)?;
     Ok(())
 }
 
@@ -163,7 +163,7 @@ fn save_timeline(root: &Path, timeline: &wv_core::time::Timeline) -> IoResult<()
         source,
     })?;
     std::fs::create_dir_all(root.join("timeline"))?;
-    std::fs::write(&path, text)?;
+    crate::atomic::write_text(&path, &text)?;
     Ok(())
 }
 
@@ -286,7 +286,7 @@ fn write_streets_at(
         path: path.display().to_string(),
         source,
     })?;
-    std::fs::write(&path, text)?;
+    crate::atomic::write_text(&path, &text)?;
     Ok(())
 }
 
@@ -346,7 +346,7 @@ fn write_buildings_at(
         path: path.display().to_string(),
         source,
     })?;
-    std::fs::write(&path, text)?;
+    crate::atomic::write_text(&path, &text)?;
     Ok(())
 }
 // ---------------------------------------------------------------------------
@@ -405,7 +405,7 @@ fn write_measurements_at(
         path: path.display().to_string(),
         source,
     })?;
-    std::fs::write(&path, text)?;
+    crate::atomic::write_text(&path, &text)?;
     Ok(())
 }
 
@@ -616,7 +616,7 @@ impl Project {
             path: index.display().to_string(),
             source,
         })?;
-        std::fs::write(&index, text)?;
+        crate::atomic::write_text(&index, &text)?;
 
         Ok(Self { root, meta })
     }
@@ -1114,7 +1114,7 @@ impl Project {
             path: path.display().to_string(),
             source,
         })?;
-        std::fs::write(&path, text)?;
+        crate::atomic::write_text(&path, &text)?;
         Ok(path.display().to_string())
     }
 
@@ -1143,7 +1143,7 @@ impl Project {
             path: path.display().to_string(),
             source,
         })?;
-        std::fs::write(&path, text)?;
+        crate::atomic::write_text(&path, &text)?;
         Ok(path.display().to_string())
     }
 
@@ -1180,7 +1180,7 @@ impl Project {
             path: path.display().to_string(),
             source,
         })?;
-        std::fs::write(&path, text)?;
+        crate::atomic::write_text(&path, &text)?;
         Ok(path.display().to_string())
     }
 

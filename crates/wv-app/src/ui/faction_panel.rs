@@ -231,6 +231,8 @@ pub fn layer_controls(
     let mut color_mode = layer.color_mode;
     let mut visible = layer.visible;
     let mut changed = false;
+    // UX-027：Alt+「可见」= solo 的意图旗标（闭包内置位，出块后执行）。
+    let mut solo = false;
 
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("层名：").small().color(shell.t2()));
@@ -244,9 +246,18 @@ pub fn layer_controls(
         {
             changed = true;
         }
-        if ui.checkbox(&mut visible, "可见").changed() {
-            changed = true;
+        // UX-027：Alt+点「可见」= solo（只显示这层，再点恢复全显）——逐层
+        // 隐藏是 N 次操作，solo 是 1 次（QGIS/Photoshop 标准动作，即审计的
+        // 「isolate-by-visibility」）。solo 是**一个意图**，不走本层的单层
+        // 提交（solo 事务统一处理所有层，一次撤销）。
+        let alt_held = ui.input(|i| i.modifiers.alt);
+        let vis = ui.checkbox(&mut visible, "可见");
+        if vis.clicked() && alt_held {
+            solo = true;
+            changed = false;
+            visible = layer.visible; // 撤回本层的半改，交给 solo 事务
         }
+        vis.on_hover_text("显隐本层；Alt+点击 = 只显示这层（solo），再点恢复");
     });
     let mut delete = false;
     ui.horizontal(|ui| {
@@ -285,6 +296,10 @@ pub fn layer_controls(
         }
     });
 
+    if solo {
+        faction_panel_actions::solo_layer_now(projection, edit, view, &layer.id.clone());
+        return false;
+    }
     if delete {
         faction_panel_actions::remove_layer_now(projection, edit, view, layer.id.clone());
         return true;

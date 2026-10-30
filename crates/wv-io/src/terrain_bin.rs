@@ -33,7 +33,6 @@
 //!
 //! 单次栅格 > 16,777,216 格（4096²）→ **拒绝加载并报错**，要求分块。
 
-use std::io::Write;
 use std::path::Path;
 
 use wv_core::map::RasterRef;
@@ -218,6 +217,10 @@ pub fn decode_terrain(bytes: &[u8]) -> IoResult<TerrainData> {
 ///
 /// `RasterRef` 是 `RasterRef` 在索引 YAML 中的体现（`AGENTS.md` §5 第 2 条）：
 /// 元数据只存引用与校验和，不内联数据。
+///
+/// 走 [`crate::atomic::write_bytes`]：地形是自动保存里最大的一块，写到一半被
+/// 杀进程会让整张图连索引一起对不上（校验和是写完后才算的）——原子替换把
+/// 最坏情况钉在「上一版地形」。
 pub fn write_terrain(
     project_root: impl AsRef<Path>,
     map_id: &str,
@@ -228,9 +231,7 @@ pub fn write_terrain(
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("terrain.bin");
 
-    let mut file = std::fs::File::create(&path)?;
-    file.write_all(&bytes)?;
-    file.flush()?;
+    crate::atomic::write_bytes(&path, &bytes)?;
 
     let checksum = crc32(&bytes);
     Ok(RasterRef {
