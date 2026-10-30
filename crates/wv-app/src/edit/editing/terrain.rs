@@ -23,7 +23,6 @@ pub fn flush_terrain_texture(
     drill: Res<DrillState>,
     view: Res<ViewState>,
     atlas: Option<Res<TileAtlas>>,
-    grid: Res<wv_render::state::GridConfig>,
     mut images: ResMut<Assets<Image>>,
 ) {
     let Some(rect) = tex.dirty else { return };
@@ -34,20 +33,10 @@ pub fn flush_terrain_texture(
         tex.dirty = None;
         return;
     };
-    // ── 米/格接线（ADR-0077 T4 遗留项）：与 GPU 场路径同一条入口 ──
-    // 来源图优先 `tex.last_map`（纹理正在显示的那张），否则沿 parent 链解析；
-    // 比例尺未声明走「1 wu = 1 m」回落（README §12-53 待决）。
-    let source_map: Option<wv_core::Id> = tex.last_map.clone().or_else(|| {
-        drill.current().and_then(|cur| {
-            wv_render::terrain_view::active_terrain(&projection.world, Some(cur))
-                .map(|(n, _)| n.id.clone())
-        })
-    });
-    let meters_per_cell = wv_render::terrain_view::bake_meters_per_cell(
-        &projection.world,
-        source_map.as_ref(),
-        grid.cell_size,
-    );
+    // ── 跨度接线（ADR-0092，取代旧米/格接线）：与 GPU 场路径同一条入口 ──
+    // 本图高度实际跨度（作者单位）现场算一笔；作者单位与米脱钩后，
+    // 比例尺/格距不再参与晕渲（README §12-53 的米制假设随之收敛）。
+    let height_span = wv_render::terrain_view::bake_height_span(data);
     let w = data.width.max(1);
     let h = data.height.max(1);
     // dirty 矩形 = 整图 → 走全图重建（模式切换 / 全图标记脏的场景）。
@@ -64,7 +53,7 @@ pub fn flush_terrain_texture(
                 view.mode,
             ),
             0.0,
-            meters_per_cell,
+            height_span,
         );
         if let Some(mut img) = images.get_mut(&tex.handle) {
             *img = image;
@@ -88,7 +77,7 @@ pub fn flush_terrain_texture(
                 view.hypsometric_tint,
                 view.mode,
             ),
-            meters_per_cell,
+            height_span,
         );
     }
     tex.dirty = None;
@@ -198,6 +187,48 @@ pub fn apply_reset_terrain_to_base(
             Ok("已重置到底图".into())
         }
         Err(e) => Err(format!("重置失败：{e}")),
+    }
+}
+
+/// 给当前图陆地叠加山脊纹理（ADR-0092 §9 B1）。
+///
+/// 与 [`apply_reset_terrain_to_base`] 同款：前后 cells diff 出脏矩形，
+/// 撤销栈兜底；播放中只读（基线 V37）。
+pub fn apply_add_ridge_detail(
+    map_id: &wv_core::Id,
+    edit: &mut EditHistory,
+    projection: &mut WorldProjection,
+    tex: &mut TerrainTexture,
+    playback: &PlaybackState,
+) -> Result<String, String> {
+    if playback.playing {
+        return Err("播放中为只读：先暂停再叠加".into());
+    }
+    let before = wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(map_id))
+        .map(|t| t.cells.clone());
+
+    let mut tx = Transaction::new();
+    tx.push(Box::new(AddRidgeDetailCommand::new(map_id.clone())));
+    match edit.history.commit(&mut projection.world, tx) {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
+            projection.dirty = true;
+            crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
+
+            let after =
+                wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(map_id))
+                    .map(|t| (t.width.max(1), t.cells.clone()));
+            match (before, after) {
+                (Some(b), Some((w, a))) if b.len() == a.len() => {
+                    if let Some(rect) = terrain_diff_bbox(&b, &a, w) {
+                        tex.mark_dirty(rect);
+                    }
+                }
+                _ => tex.mark_all_dirty(),
+            }
+            Ok("已叠加山脊纹理".into())
+        }
+        Err(e) => Err(format!("山脊纹理失败：{e}")),
     }
 }
 

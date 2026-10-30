@@ -1281,6 +1281,65 @@ fn apply_lake_region(grid: &mut TerrainGrid, polygon: &[(f32, f32)], cell_size: 
 }
 
 // ---------------------------------------------------------------------------
+// 山脊纹理（ADR-0092 §9 的 B1 落地件：给已有地形叠脊状细节）
+// ---------------------------------------------------------------------------
+
+/// 山脊细节的基准幅度（米）：峰值处最大抬升/下切 ≈ 此值 × 高度占比 t。
+/// 与意图笔刷的量级相称（丘陵 300 m、山脉峰 2400 m 的中间量），实机校准
+/// 可经命令参数调整。
+pub const RIDGE_DETAIL_AMPLITUDE_M: f32 = 1100.0;
+
+/// 山脊细节的高度占比分母（米）：h ≥ 此值的格吃满幅度。
+/// demo 实测山体 1000–3500 m，2500 让主峰区满额、岸线与低地不受扰动。
+pub const RIDGE_DETAIL_HEIGHT_REF_M: f32 = 2500.0;
+
+/// 给已有地形的陆地部分叠**脊状细节**（B1 数据侧：晕渲只能照亮高度场里
+/// 已有的起伏——平缓的生成地形近看是「涂色带」不是山，山脊/河谷高频结构
+/// 才是近看可读的来源；视觉验证见 ADR-0092 §9 引用的对比帧）。
+///
+/// ## 口径
+///
+/// - 只动 `height > 0` 的陆格（水域保持平——海面不该有山纹），surface /
+///   biome 不改（山不是颜色，ADR-0044 D2）；
+/// - 幅度 `dh = (ridged − 0.40) × RIDGE_DETAIL_AMPLITUDE_M × t`，其中
+///   `t = min(h / RIDGE_DETAIL_HEIGHT_REF_M, 1)`——山越高压得越深；
+/// - ridged = 3 阶 `1 − |2·perlin − 1|`（波长 24/48/96 格，与晕渲三尺度的
+///   中/宏观档同量级，hillshade 吃得满）；
+/// - 确定性：`Perlin::new(seed_mix(seed, "ridge_detail"))`，同 seed 逐格相同
+///   （undo/redo 重放不漂移，与本模块其余意图同一纪律）。
+///
+/// 返回改动格数（0 = 全图平地/水域，无变化）。
+pub fn apply_ridge_detail(grid: &mut TerrainGrid, seed: u64) -> usize {
+    let perlin = crate::generate::Perlin::new(seed_mix(seed, "ridge_detail"));
+    let w = grid.width();
+    let h = grid.height();
+    let mut touched = 0usize;
+    for gy in 0..h {
+        for gx in 0..w {
+            let Some(mut cell) = grid.get(gx as i32, gy as i32) else {
+                continue;
+            };
+            if cell.height <= 0 {
+                continue;
+            }
+            // 三阶脊状：每阶 1−|2n−1|（n=0 处成脊），阶越高权重越小。
+            let fx = gx as f64 / 24.0;
+            let fy = gy as f64 / 24.0;
+            let r1 = 1.0 - perlin.noise2d(fx, fy).abs();
+            let r2 = 1.0 - perlin.noise2d(fx * 2.0, fy * 2.0).abs();
+            let r3 = 1.0 - perlin.noise2d(fx * 4.0, fy * 4.0).abs();
+            let ridged = (r1 * 0.55 + r2 * 0.30 + r3 * 0.15) as f32;
+            let t = (cell.height as f32 / RIDGE_DETAIL_HEIGHT_REF_M).min(1.0);
+            let dh = (ridged - 0.40) * RIDGE_DETAIL_AMPLITUDE_M * t;
+            cell.height = to_height(cell.height as f32 + dh);
+            grid.set(gx as i32, gy as i32, cell);
+            touched += 1;
+        }
+    }
+    touched
+}
+
+// ---------------------------------------------------------------------------
 // 测试（AGENTS §7.2：核心公式用手算期望值，集成行为用性质断言）
 // ---------------------------------------------------------------------------
 
@@ -1483,6 +1542,44 @@ mod tests {
 
     /// 弱笔触（strength 0.2 → 最大增量 2400×0.2=480 < 500 门槛）掠过既有高原：
     /// 高度可被抬，但作者标签一个都不许动。
+    #[test]
+    fn ridge_detail_leaves_water_untouched_ridges_land_and_is_deterministic() {
+        // 带一格水域的陆地高原（所有对照网格共用同一构造，保证逐格可比）。
+        let fixture = || {
+            let mut g = flat_land(64, 64, 2000);
+            let mut water = g.get(0, 0).unwrap();
+            water.height = -100;
+            g.set(0, 0, water);
+            g
+        };
+        let mut g = fixture();
+        let water_before = g.get(0, 0).unwrap();
+
+        let touched = apply_ridge_detail(&mut g, 42);
+        assert_eq!(touched, 64 * 64 - 1, "除水域外全图都该被触碰，得 {touched}");
+        assert_eq!(g.get(0, 0).unwrap(), water_before, "水域必须原样");
+
+        // 幅度上界：t=0.8 时 dh ∈ [−0.4, +0.6]×1100×0.8 = [−352, +528]。
+        for c in g.cells() {
+            if c.height <= 0 {
+                continue;
+            }
+            assert!(
+                (1648..=2529).contains(&c.height),
+                "脊状后高度越界: {}",
+                c.height
+            );
+        }
+
+        // 确定性：同 seed 逐格相同；跨 seed 不全同（概率性但 64² 格下必然）。
+        let mut g2 = fixture();
+        apply_ridge_detail(&mut g2, 42);
+        assert_eq!(g.cells(), g2.cells(), "同 seed 必须逐格相同");
+        let mut g3 = fixture();
+        apply_ridge_detail(&mut g3, 43);
+        assert_ne!(g.cells(), g3.cells(), "不同 seed 应给出不同纹理");
+    }
+
     #[test]
     fn weak_stroke_leaves_existing_highland_labels_untouched() {
         let mut g = flat_land(40, 40, 0);

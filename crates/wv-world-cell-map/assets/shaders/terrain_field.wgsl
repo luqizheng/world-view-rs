@@ -34,9 +34,9 @@
 // vec3 在 std140 下补到 16 字节；这里用 vec4 分组避免隐式 padding 错位。
 struct FieldParams {
     grid: vec4<f32>,        // xy = 格宽/格高
-    shape: vec4<f32>,       // x = px_per_cell, y = branch, z = z_exag（= shading::Z_EXAG，米制口径）, w = grad_step（死槽）
+    shape: vec4<f32>,       // x = px_per_cell, y = branch, z = z_exag（= shading::Z_EXAG，归一化域口径 ADR-0092）, w = 本图高度跨度（作者单位，桥接填 height_span_of）
     pad0: vec4<f32>,
-    light_dir: vec4<f32>,   // xyz = 主光 L₁（= shading::LIGHT_MAIN 真 45° 单位向量）, w = 米/格（桥接填 meters_per_cell_of；≤0 回落 1.0）
+    light_dir: vec4<f32>,   // xyz = 主光 L₁（= shading::LIGHT_MAIN 真 45° 单位向量）, w = 历史米/格槽（ADR-0092 起退役，恒 0，布局稳定保留）
     pad1: vec4<f32>,        // .x = WV_STRIP 剥离探针位域（0=全开；Rust 镜像 material.rs STRIP_BIT_*，注释互指）, .y = 海岸编码开关（0=无符号/1=有符号）
     shore_edges: vec4<f32>, // x = 1（滩）, y = 3（浅）, z = 9（深）, w = wash_amt
     relief: vec4<f32>,      // x = AMBIENT, y = DIFFUSE_MAIN, z = DIFFUSE_AUX（= shading:: 三光系数，和 = 1）, w 预留
@@ -221,14 +221,14 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // 两侧若同时翻或不翻，南北光照镜像，视觉验收立刻可察。
     // 三档法线共用此约定，落点在 [`horn_lighting`]。
     //
-    // 梯度 = Horn 3×3（米/格，见 [`horn_grad_at`]）；`s = Z_EXAG / 米每格`
-    // （shading::slope_gain_of 同式）——米制化后同物理坡跨图幅同法线。
+    // 梯度 = Horn 3×3（作者高度单位/格，见 [`horn_grad_at`]）；
+    // `s = Z_EXAG / 本图高度跨度`（shading::slope_gain_of 同式，ADR-0092
+    // 修正 ADR-0077 D2 的米制口径）——归一化后同**相对**高差跨图幅同法线，
+    // 作者单位 / 格距 / 有无比例尺都不影响观感。
     //
-    // 米/格槽：桥接按 `meters_per_cell_of(cell_size, unit_per_km)` 填
-    // `light_dir.w`；≤ 0（未接线 / 无比例尺）回落 1.0。WGSL 无 isFinite，
-    // 但 NaN > 0.0 恒为 false，同样落进回落分支——三种非正常值一并兜住。
-    let mpc = select(1.0, p.light_dir.w, p.light_dir.w > 0.0);
-    let s = p.shape.z / mpc;
+    // 跨度槽：桥接在材质创建时按 `shading::height_span_of` 填 `shape.w`；
+    // max(·, 1.0) 兜平图除零（缺省恒等值即固定域跨度，非法值一并兜住）。
+    let s = p.shape.z / max(p.shape.w, 1.0);
     // WV_STRIP bit4 置 1 = relief 恒 1.0（平光）——只对 Themed 分支生效
     // （BiomeRaw 的晕渲是数据视图契约，探针不得越支）。
     let relief = select(
@@ -240,8 +240,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // ## T33「远观关灯」退役 + T6 单尺度的替代（ADR-0077 D3，有意推翻）
     //
     // 旧写法（≤T33）在此把 relief 向 1.0 收敛（`mix(..., 1.0, lod_t)`）：
-    // 远观梯度是噪点，留着会闪。ADR-0077 的裁定是**晕渲靠米制化生存**而非
-    // 关灯——米制梯度让「同物理坡 → 同法线」跨缩放成立，远观不再需要把
+    // 远观梯度是噪点，留着会闪。ADR-0077 的裁定是**晕渲靠归一化生存**而非
+    // 关灯——归一化让「同相对高差 → 同法线」跨缩放成立，远观不再需要把
     // 明暗整体拉平；T6 曾以单尺度 detail 顶替（只为接通双光公式），Task 7
     // 起三尺度混合接管「噪声预算换给宏观结构」：detail 权重随 px_per_cell
     // 衰减、衰减量回流宏观/中观（[`scale_weights`]，曲线与 shading.rs
@@ -752,8 +752,9 @@ fn height_at(pos: vec2<f32>) -> f32 {
 /// 换核必须同步）：`[1,2,1]ᵀ·[1,2,1]/8` 加权隔格差分，中心权重 4、直邻 2、
 /// 对角 1 的加权平滑抑制单格噪声（手绘/生成数据的台阶毛刺）。
 ///
-/// 返回 `(gx, gy)`，**米/格**（归一化高度差 × `H_RANGE_M` ÷ 8）——与 CPU 侧
-/// 契约同口径，调用方直接 `s = shape.z / 米每格` 进法线公式。
+/// 返回 `(gx, gy)`，**作者高度单位/格**（归一化高度差 × `H_RANGE_M` ÷ 8）
+/// ——与 CPU 侧契约同口径，调用方按 `s = shape.z / shape.w` 进法线公式
+/// （`shape.w` = 本图高度跨度，ADR-0092）。
 ///
 /// 坐标约定：入参 `pos` 是格坐标（边界空间）；`gy` 沿纹理行向下（**南**）
 /// 增大——`gy > 0` = 高度向南增大，与 CPU 侧行号约定一致。每点走

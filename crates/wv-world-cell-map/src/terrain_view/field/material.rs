@@ -96,14 +96,14 @@ pub const RIVER_INK_ALPHA: f32 = 0.62;
 /// 道路墨线不透明度（比 biome 界重、比海岸轻）。
 pub const ROAD_INK_ALPHA: f32 = 0.5;
 
-/// T14：高度梯度中心差分步长（格）。
+/// `shape.w` 跨度槽的**恒等值**（ADR-0092）。
 ///
-/// ⚠️ **死槽**：T13 起解析梯度接管梯度后，本值不再参与任何计算；ADR-0077
-/// D2 起**连解析梯度本身也退役**（Horn 3×3 统一承担，GPU 侧
-/// `horn_grad_at`（T7 起带半径参数，原 `horn_grad_detail` 是其 r=1 特化）/
-/// CPU 侧 `crate::shading::horn_gradient`），本槽位保留
-/// 只为 uniform 布局稳定（WGSL 侧同注记，见 `terrain_field.wgsl` 该函数文档）。
-pub const GRAD_STEP: f32 = 0.5;
+/// 槽位沿革：T14 `grad_step`（死槽）→ ADR-0092 起为**本图高度实际跨度**
+/// （作者单位），WGSL 侧 `s = shape.z / shape.w`。`default_params` 不知道
+/// 数据跨度，写纹理固定域跨度（= [`crate::shading::DEFAULT_HEIGHT_SPAN`]，
+/// 与 `field/pack.rs` 的 H_MAX−H_MIN 同值）；桥接（wv-render
+/// `sync_terrain_field`）在材质创建时覆写为真值（`shading::height_span_of`）。
+pub const SPAN_RATIO_IDENTITY: f32 = crate::shading::DEFAULT_HEIGHT_SPAN;
 
 /// T19：域扭曲幅度下限（格）。近观编辑态——「点到哪就是哪」。
 pub const WARP_AMP_MIN: f32 = 0.05;
@@ -289,17 +289,19 @@ pub struct FieldParams {
     /// xy = 格宽 / 格高；zw 预留。
     pub grid: Vec4,
     /// x = `px_per_cell`（墨线折算基准）、y = 取色分支（0 = BiomeRaw /
-    /// 1 = Themed）、z = **米制纵向夸张**（= `crate::shading::Z_EXAG`，ADR-0077
-    /// D1/D2——同物理坡跨图幅同法线的「纵向夸张旋钮」；旧格空间 0.55 已随
-    /// T6 语义翻转退役）、w = `grad_step`（死槽，见 [`GRAD_STEP`]）。
+    /// 1 = Themed）、z = **归一化域纵向夸张**（= `crate::shading::Z_EXAG`，
+    /// ADR-0092 修正 ADR-0077 D2——「同相对高差跨图同法线」的夸张旋钮，
+    /// 探针 `WV_Z_EXAG` 可运行时覆盖）、w = **本图高度实际跨度**（作者单位；
+    /// 恒等缺省 [`SPAN_RATIO_IDENTITY`] = 纹理固定域跨度，桥接材质创建时
+    /// 按 `shading::height_span_of` 覆写真值——作者高度单位与米脱钩后，
+    /// 跨度把梯度折回「相对全图高差」域）。
     pub shape: Vec4,
     /// 预留（P2 域扭曲开关）。
     pub pad0: Vec4,
     /// **主光 L₁**：xyz = `crate::shading::LIGHT_MAIN`（方位 315°、高度角 45°
-    /// 的真单位向量，直接 dot 无需归一化）；w = **米/格**——桥接按
-    /// `crate::shading::meters_per_cell_of(cell_size, unit_per_km)` 填写
-    /// （ADR-0077 D2 的米制换算唯一入口），`≤ 0` = 未接线 / 无比例尺，
-    /// shader 侧回落 1.0。WGSL 注释与本字段互指。
+    /// 的真单位向量，直接 dot 无需归一化）；w = **历史米/格槽，已退役**
+    /// （ADR-0092 起晕渲不再消费——`default_params` 置 0，桥接不再覆写；
+    /// 保留槽位只为 uniform 布局稳定）。WGSL 注释与本字段互指。
     pub light_dir: Vec4,
     /// 预留槽（P2 水彩开关）。
     /// - `.x` — **WV_STRIP 剥离探针位域**（ADR-0088 Task 4）：5 位掩码，
@@ -592,22 +594,22 @@ pub fn default_params(
         // 全部 `Vec4`——`[f32; 4]` 会被 encase 当 `array<f32, 4>`，
         // 运行期 panic「array stride must be a multiple of 16」。
         grid: Vec4::new(grid[0], grid[1], 0.0, 0.0),
-        // shape.z = 米制纵向夸张（ADR-0077 D1/D2，真源 = shading::Z_EXAG）；
-        // shape.w = grad_step 死槽（布局稳定，见常量区注记）。
+        // shape.z = 归一化域纵向夸张（ADR-0092；缺省 = shading::Z_EXAG，
+        // 探针 WV_Z_EXAG 可运行时覆盖）；shape.w = 跨度比（恒等缺省，
+        // 桥接在材质创建时按「纹理固定域跨度 / 本图数据跨度」覆写）。
         // shape.y 分支码走 `branch.code()`（含 ADR-0079 T5 的 Flat 支路）。
         shape: Vec4::new(
             px_per_cell,
             branch.code(),
-            crate::shading::Z_EXAG,
-            GRAD_STEP,
+            crate::shading::z_exag(),
+            SPAN_RATIO_IDENTITY,
         ),
         // T19 域扭曲幅度写进 pad0.x（P1 预留的槽位，P2 接线不改绑定布局）。
         // pad0.z = 群系填色强度（ADR-0072 T3）：中性默认 0.5，主 App 由
         // 桥接按 `ThemePack.biome_tint` 覆写。
         pad0: Vec4::new(warp_amp(px_per_cell), 0.0, BIOME_TINT_DEFAULT, 0.0),
-        // 主光 L₁（ADR-0077 D1，真 45° 单位向量，直接 dot）；w = 米/格槽：
-        // **0 = 桥接未接线 → shader 回落 1.0**（`meters_per_cell_of` 的
-        // 接线在 wv-render 桥接侧——格距与比例尺是呈现态，本 crate 不知道）。
+        // 主光 L₁（ADR-0077 D1，真 45° 单位向量，直接 dot）；w = 历史
+        // 米/格槽，ADR-0092 起晕渲不再消费——恒 0（布局稳定保留）。
         light_dir: Vec4::new(
             crate::shading::LIGHT_MAIN[0],
             crate::shading::LIGHT_MAIN[1],
@@ -879,7 +881,7 @@ mod tests {
     /// Rust 侧的唯一定位点——任何一项漂移都说明槽位语义被静默改写（会让
     /// shader 误读、画面变）。
     #[test]
-    fn default_params_fill_dual_light_and_metric_exaggeration_slots() {
+    fn default_params_fill_dual_light_and_exaggeration_slots() {
         let p = default_params([512.0, 512.0], 6.0, ViewBranch::Themed, Default::default());
         // 主光槽：xyz = shading::LIGHT_MAIN（真 45° 单位向量，直接 dot）。
         for k in 0..3 {
@@ -890,11 +892,15 @@ mod tests {
                 crate::shading::LIGHT_MAIN[k]
             );
         }
-        // w = 米/格槽：默认 0 = 桥接未接线（shader 回落 1.0）；真值由
-        // wv-render 桥接按 meters_per_cell_of 填。
+        // w = 历史米/格槽：恒 0（ADR-0092 起晕渲不再消费，布局稳定保留）。
         assert_eq!(
             p.light_dir.w, 0.0,
-            "light_dir.w = 0 表示桥接未接线（回落 1.0）"
+            "light_dir.w 应保持 0（退役槽，桥接不再覆写）"
+        );
+        // 跨度槽：default_params 不知道数据跨度 → 纹理固定域缺省。
+        assert_eq!(
+            p.shape.w, SPAN_RATIO_IDENTITY,
+            "shape.w 应为跨度恒等缺省（纹理固定域 10000）"
         );
         // 三光系数槽：relief = (AMBIENT, DIFFUSE_MAIN, DIFFUSE_AUX, 0)，
         // 和 = 1（界内性前提，shading 侧有锚点测试）。
@@ -913,12 +919,13 @@ mod tests {
                 crate::shading::DIFFUSE_AUX
             ]
         );
-        // shape.z = 米制纵向夸张（shading::Z_EXAG = 2.0；旧格空间 0.55 退役）。
+        // shape.z = 米制纵向夸张（shading::z_exag()，缺省 6.0 = 2026-10-30 校准落参；
+        // 旧格空间 0.55 退役）。
         assert_eq!(
             p.shape.z,
-            crate::shading::Z_EXAG,
+            crate::shading::z_exag(),
             "shape.z 应为米制夸张 {}",
-            crate::shading::Z_EXAG
+            crate::shading::z_exag()
         );
         // 辅光槽（T5 预载、T6 起被公式读取）：xyz = shading::LIGHT_AUX，w 预留 0。
         for k in 0..3 {

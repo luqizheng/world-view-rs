@@ -17,7 +17,7 @@ pub use wv_world_cell_map::terrain_view::{
 
 // ── 桥接系统（读 wv-render 呈现态；ADR-0054 D5） ────────────────────────
 pub use crate::cellmap_bridge::{
-    bake_meters_per_cell, conv_pack, conv_palette, conv_sea, conv_treatment, grid_lines_visible,
+    bake_height_span, conv_pack, conv_palette, conv_sea, conv_treatment, grid_lines_visible,
     land_pending_terrain_synth, rebuild_texture_on_mode_change, setup_terrain_texture,
     shade_mode_of, sync_atmosphere, sync_cell_region, sync_grid_config, sync_grid_lines,
     sync_isoline_overlay, sync_missing_overlay_markers, sync_region_overlay_index,

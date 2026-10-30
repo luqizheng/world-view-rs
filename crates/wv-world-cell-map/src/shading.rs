@@ -20,12 +20,19 @@
 //! 历史注记）。辅光 L₂ 治「山脉走向恰与主光平行时受光/背光面同时消失」
 //! 的盲区。
 //!
-//! ## 量纲纪律
+//! ## 量纲纪律（2026-10-30 起：**归一化高度域**，修正 ADR-0077 D2 的米制口径）
 //!
-//! [`horn_gradient`] 返回**米/格**（i16 高度直接作 f32 差分，不乘
-//! H_RANGE）；[`slope_gain_of`] 把它无量纲化（`s = Z_EXAG / 米每格`）。
-//! 米制化后「同物理坡 → 同法线」跨图幅成立（不论一格是多少米），
-//! Z_EXAG 是全图统一的「纵向夸张旋钮」——换图的格距不再改变观感。
+//! [`horn_gradient`] 返回**作者高度单位/格**（i16 差分）；[`slope_gain_of`]
+//! 用**本图高度实际跨度**把它归一化（`s = Z_EXAG / 跨度`）。语义 =「把本图
+//! 最高差按 [`Z_EXAG`] 格起伏打光」——同**相对**高差 → 同法线，与作者的
+//! 高度单位（米 / 抽象格值）、图的格距、有无比例尺全部无关。
+//!
+//! **为什么废弃米制口径**（ADR-0092 §1 证据链）：米制 `s = Z_EXAG / 米每格`
+//! 与 GPU 场管线的**纹理归一化梯度**（h_norm ∈ [0,1]，固定域 −4000..6000）
+//! 相乘，虚构图上有效夸张比可读带小数百倍（法线恒近平，浮雕输出恒定），
+//! CPU raw 域又落在饱和端——同一旋钮在两管线双双失效；且作者高度本就
+//! 不必然是米（README §12-53 的老问题在晕渲侧的显影）。米制机器
+//! （`meters_per_cell_of` / `DEFAULT_METERS_PER_CELL`）随本修正退役。
 //!
 //! ## 三尺度概括
 //!
@@ -52,11 +59,38 @@ pub const DIFFUSE_MAIN: f32 = 0.48;
 /// 辅光漫反射系数（弱辅助，约为主光的 1/4）。
 pub const DIFFUSE_AUX: f32 = 0.12;
 
-/// 垂直夸张系数：真实地貌按真实比例打光几乎平得看不见（2000 m 山在
-/// 100 m/格图上坡度只有 0.02），专业晕渲惯用夸张量让坡面可读。
-/// 初始 2.0（用户给定；退役旧 `shape.z` 的 0.55），**验收期唯一校准点**
-/// （ADR-0077 §4——校准结论按流程追记回 ADR，不散改）。
-pub const Z_EXAG: f32 = 2.0;
+/// 垂直夸张系数（**归一化域，无量纲**）：`s·梯度 = Z_EXAG × 梯度/跨度`，
+/// 语义 =「把本图最高差按 [`Z_EXAG`] 格起伏打光」。**2026-10-30 实机落参
+/// 200.0**——用户逐档目验 {12, 25, 50, 100, 200, 400}（jrpg-world 远近两
+/// 机位）：25 及以下内陆不可读（「跨度÷中位宏观坡度」反推值 ~26 被**海岸
+/// 悬崖**拉高的全图中位失真 ~8×，内陆实际宏观坡度平缓得多），200 起山脉链
+/// 远近皆可读且近距无噪斑，400 过浓。结论追记 ADR-0092 §8。历史沿革：
+/// 初值 2.0（米制口径，ADR-0077 D2）→ 6.0（米制无效校准）→ 25.0（归一化
+/// 域反推，仍欠）→ 200.0（实机目验落参）。运行时探针 `WV_Z_EXAG` 可覆盖
+/// （[`z_exag()`]），复校准不重编译。
+pub const Z_EXAG: f32 = 200.0;
+
+/// 运行时纵向夸张：[`Z_EXAG`] 的探针覆盖版——ADR-0077 §4 验收期校准的
+/// 对比帧采集件。环境变量 `WV_Z_EXAG=<正数>` 在进程内首次调用时读定、
+/// 之后恒定；未设置 / 非法值回落 [`Z_EXAG`]。与 WV_MODE / WV_SCALE /
+/// WV_STRIP / WV_DRILL 同族（家族清单见 wv-app `debug_probe` 模块文档）。
+/// GPU 侧经 `FieldParams.shape.z`、CPU 侧经 [`slope_gain_of`] 同走本函数，
+/// 两管线不出现不同夸张。
+pub fn z_exag() -> f32 {
+    static OVERRIDE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *OVERRIDE.get_or_init(|| {
+        let raw = std::env::var("WV_Z_EXAG").ok();
+        let parsed = raw
+            .as_deref()
+            .and_then(|s| s.trim().parse::<f32>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0);
+        // 探针激活时打一条 stderr 追踪（纯 crate 无 bevy 日志面；缺省零输出）。
+        if let Some(v) = parsed {
+            eprintln!("[wv] WV_Z_EXAG → z_exag = {v}（缺省 {}）", Z_EXAG);
+        }
+        parsed.unwrap_or(Z_EXAG)
+    })
+}
 
 /// 宏观档权重（远观山脉骨架）。
 /// 三尺度权重 [`W_MACRO`] + [`W_MEDIUM`] + [`W_DETAIL`] 和 = 1，
@@ -98,44 +132,38 @@ pub const DETAIL_FADE_MAX_PX_PER_CELL: f32 = 3.0;
 // 纯函数（消费方：CPU 块烘焙 / GPU uniform / WGSL 三处只认这里）
 // ---------------------------------------------------------------------------
 
-/// 地图格距的米制换算——**唯一入口**，禁第二份硬编码（ADR-0077 D2）。
+/// 本图高度实际跨度（作者单位）：`max(h) − min(h)`，下限 1 防平图除零。
 ///
-/// - `Some(k)`（`unit_per_km`：1 k 个世界单位 = 1 km）→
-///   `cell_size_wu × 1000 / k` 米/格；
-/// - `None` 或 `k <= 0` → 按「**1 wu = 1 m**」回落（`cell_size_wu` 原样）。
-///
-/// TODO(阶段: 晕渲): 无比例尺虚构图的「1 wu = 1 m」回落是**假设不是真值**，
-/// 待决条目见 README §12-53「无比例尺地图的米制假设」（虚构图是否引入
-/// 显式比例尺字段、回落是否长期保留）；收敛后此处同步改。
-pub fn meters_per_cell_of(cell_size_wu: f32, unit_per_km: Option<f32>) -> f32 {
-    match unit_per_km {
-        Some(k) if k > 0.0 => cell_size_wu * 1000.0 / k,
-        // None / k <= 0：回落假设，见上方 TODO 与 README §12-53。
-        _ => cell_size_wu,
+/// 归一化夸张的分母——**每次烘焙现场算一遍**（O(N) 一次线性扫），不做缓存：
+/// 笔刷改高度后跨度会变，缓存会让编辑前后的浮雕口径漂移。平图（跨度 0）
+/// 梯度本来就全零，下限只保证 gain 有限、不产生 NaN。
+pub fn height_span_of(data: &TerrainData) -> f32 {
+    let mut lo = i16::MAX;
+    let mut hi = i16::MIN;
+    for c in &data.cells {
+        lo = lo.min(c.height);
+        hi = hi.max(c.height);
     }
+    (hi - lo).max(1) as f32
 }
 
-/// 梯度无量纲化增益：`s = Z_EXAG / meters_per_cell`。
+/// 梯度归一化增益：`s = z_exag() / 本图高度跨度`。
 ///
-/// 梯度是米/格，s 把「每格米差」缩回「每格无纲坡度」再进法线公式；
-/// 米制化后同物理坡跨图幅同法线（Z_EXAG 全图统一，见模块文档）。
-pub fn slope_gain_of(meters_per_cell: f32) -> f32 {
-    Z_EXAG / meters_per_cell
+/// 梯度是「作者高度单位/格」，s 把「每格高差 ÷ 全图跨度」缩成无纲相对坡度
+/// 再进法线公式；归一化后「同**相对**高差 → 同法线」跨图成立——作者的
+/// 高度单位、格距、有无比例尺都不再影响观感（量纲纪律见模块文档）。
+pub fn slope_gain_of(height_span: f32) -> f32 {
+    z_exag() / height_span
 }
 
 /// CPU 块烘焙旧签名（`terrain_pixels` / `patch_terrain_image`）委托
-/// `_with_scale` 变体时传入的**过渡缺省格距**（米/格）。
+/// `_with_scale` 变体时传入的**过渡缺省跨度**（作者单位）。
 ///
-/// **纯过渡缺省**：wv-app 按 `GridConfig.cell_size + MapNode.unit_per_km`
-/// 经 [`meters_per_cell_of`] 接线 `_with_scale` 后即消失；在那之前，
-/// 未接线的消费方统一按 100 m/格打光（`slope_gain = 2.0/100 = 0.02`，
-/// 对生成图邻格 10–200 m 高差的浮雕观感与旧路径量级相近）。
-///
-/// TODO(阶段: 晕渲): 「100 m/格」是假设不是真值，待决条目见
-/// README §12-53「无比例尺地图的米制假设」。注意它与 [`meters_per_cell_of`]
-/// 的「1 wu = 1 m」回落是**两处不同的假设**——那边是换算入口的回落假设，
-/// 这里是 CPU 烘焙未接线期的占位假设；收敛后两处同步改。
-pub const DEFAULT_METERS_PER_CELL: f32 = 100.0;
+/// **纯过渡缺省**：接线方一律现场传 [`height_span_of`]（wv-render 桥接
+/// `bake_height_span` 封装），未接线的消费方统一按纹理固定域跨度
+/// （10000，= `field/pack.rs` 的 H_MAX−H_MIN）打光——该值下 gain 与
+/// 归一化纹理域的梯度天然同量级，旧签名路径不致失真。
+pub const DEFAULT_HEIGHT_SPAN: f32 = 10000.0;
 
 /// 光照明度乘子：`AMBIENT + DIFFUSE_MAIN·max(0, N·L₁) + DIFFUSE_AUX·max(0, N·L₂)`。
 ///
@@ -413,13 +441,13 @@ mod tests {
     }
 
     #[test]
-    fn same_physical_slope_yields_same_normal_across_maps() {
-        // 同一物理坡（垂直 2 : 水平 100，即 2% 坡）：
-        // 甲图 100 m/格 → hx=100, s = 2/100 = 0.02 → s·hx = 2.0
-        // 乙图  50 m/格 → hx=50,  s = 2/50  = 0.04 → s·hx = 2.0
-        // 米制化的全部意义：法线与格距无关。
-        let a = normal_world(100.0, 0.0, slope_gain_of(100.0));
-        let b = normal_world(50.0, 0.0, slope_gain_of(50.0));
+    fn same_relative_slope_yields_same_normal_across_maps() {
+        // 同一**相对**坡（高差占全图跨度同比例）：甲图跨度 10000、hx=250；
+        // 乙图跨度 100、hx=2.5——梯度/跨度同为 0.025。
+        // （Z = Z_EXAG，校准落参不影响等式）——归一化的全部意义：法线与
+        // 作者高度单位、图幅大小无关。
+        let a = normal_world(250.0, 0.0, slope_gain_of(10000.0));
+        let b = normal_world(2.5, 0.0, slope_gain_of(100.0));
         for k in 0..3 {
             assert!(
                 (a[k] - b[k]).abs() < EPS,
@@ -429,21 +457,40 @@ mod tests {
                 b[k]
             );
         }
-        // 手算锚点：normalize(−2, 0, 1) = (−2/√5, 0, 1/√5)
-        let inv_sqrt5 = 1.0 / 5.0f32.sqrt();
-        assert!((a[0] - (-2.0 * inv_sqrt5)).abs() < EPS, "got {}", a[0]);
-        assert!((a[2] - inv_sqrt5).abs() < EPS, "got {}", a[2]);
+        // 手算锚点：s·hx = Z/40 → normalize(−Z/40, 0, 1)；
+        // 分母 = √((Z/40)² + 1)，随校准落参自动跟随 Z_EXAG。
+        let g = Z_EXAG / 40.0;
+        let denom = (g * g + 1.0).sqrt();
+        assert!((a[0] - (-g / denom)).abs() < EPS, "got {}", a[0]);
+        assert!((a[2] - (1.0 / denom)).abs() < EPS, "got {}", a[2]);
+    }
+
+    #[test]
+    fn height_span_of_covers_data_range_with_floor() {
+        // 跨度 = max−min（作者单位）；全平图下限 1 防除零。
+        let data = grid3(3, 1, &[100, -50, 250]);
+        assert!(
+            (height_span_of(&data) - 300.0).abs() < EPS,
+            "got {}",
+            height_span_of(&data)
+        );
+        let flat = grid3(3, 1, &[7, 7, 7]);
+        assert!(
+            (height_span_of(&flat) - 1.0).abs() < EPS,
+            "got {}",
+            height_span_of(&flat)
+        );
     }
 
     #[test]
     fn extreme_cliff_stays_finite_and_in_bounds() {
-        // 邻格 ±9000 m 断崖：hx = (9000·4 − (−9000)·4)/8 = 9000 米/格，
-        // 1 m/格图（s = 2）→ s·hx = 18000，远超 f32 顾虑线但仍有限。
+        // 邻格 ±9000 断崖：hx = (9000·4 − (−9000)·4)/8 = 9000 作者单位/格，
+        // 过渡缺省跨度 10000（s = 25/10000）→ s·hx = 22.5，法线有限且界内。
         let cliff = grid3(3, 3, &[-9000, 0, 9000, -9000, 0, 9000, -9000, 0, 9000]);
         let (hx, hy) = horn_gradient(&cliff, 1, 1);
         assert!((hx - 9000.0).abs() < 1.0, "got {}", hx);
         assert!(hy.is_finite(), "got {}", hy);
-        let n = normal_world(hx, hy, slope_gain_of(meters_per_cell_of(1.0, None)));
+        let n = normal_world(hx, hy, slope_gain_of(DEFAULT_HEIGHT_SPAN));
         let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
         assert!(len.is_finite(), "got {}", len);
         assert!((len - 1.0).abs() < 1e-4, "got {}", len);
@@ -478,21 +525,6 @@ mod tests {
         let water = grid3(3, 3, &[120; 9]);
         let (hx, hy) = horn_gradient(&water, 1, 1);
         assert_eq!((hx, hy), (0.0, 0.0));
-    }
-
-    #[test]
-    fn meters_per_cell_without_scale_falls_back_to_one_wu_one_m() {
-        // None → 1 wu = 1 m 回落：原样返回格距（README §12-53 待决）。
-        let none = meters_per_cell_of(4.0, None);
-        assert!((none - 4.0).abs() < EPS, "got {}", none);
-        // Some(8)：1 km = 8 wu → 1 wu = 125 m → 4 wu = 500 m（= 4×125）。
-        let scaled = meters_per_cell_of(4.0, Some(8.0));
-        assert!((scaled - 500.0).abs() < EPS, "got {}", scaled);
-        // k <= 0 与 None 同待遇（除零 / 负比例尺没有意义）。
-        let zero = meters_per_cell_of(4.0, Some(0.0));
-        let neg = meters_per_cell_of(4.0, Some(-2.0));
-        assert!((zero - 4.0).abs() < EPS, "got {}", zero);
-        assert!((neg - 4.0).abs() < EPS, "got {}", neg);
     }
 
     #[test]

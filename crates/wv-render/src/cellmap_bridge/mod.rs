@@ -57,7 +57,6 @@ use wv_world_cell_map::terrain_view::field::{
 };
 use wv_world_cell_map::terrain_view::hypsometric;
 // ADR-0077：晕渲法线的米制换算唯一入口（格距 + 比例尺 → 米/格）。
-use wv_world_cell_map::shading::meters_per_cell_of;
 
 // ── 子模块（P1-1 拆分，2026-10-29）：外部路径经下方 pub use 零改动 ──
 mod atmosphere;
@@ -557,21 +556,34 @@ mod bridge_tests {
         );
     }
 
-    /// 桥接的米/格填充（ADR-0077 D2）：比例尺精确换算 + 未声明回落。
-    ///
-    /// `sync_terrain_field` 把「来源图比例尺 + 格距」经
-    /// [`bridge_meters_per_cell`] 算出的米/格写进 uniform `light_dir.w`
-    /// （WGSL 侧 `mpc` 槽）。本测试锁两个口径：
-    /// 声明比例尺走精确换算；未声明回落「1 wu = 1 m」（README §12-53 待决，
-    /// 口径若静默更改，此测试应当先红）。
+    /// 跨度桥接（ADR-0092）：`sync_terrain_field` 把「本图高度实际跨度」
+    /// 写进 uniform `shape.w`（WGSL 侧 `s = shape.z / shape.w`）。本测试锁
+    /// 跨度口径与平图下限（桥接封装 `bake_height_span` 与 GPU 填充同源）。
     #[test]
-    fn bridge_fills_meters_per_cell_from_map_scale() {
-        // `Some(8.0)` = 「1 km = 8 wu」→ 1 wu = 125 m → 100 wu 格 = 12500 m/格。
-        let scaled = bridge_meters_per_cell(100.0, Some(8.0));
-        assert!((scaled - 12500.0).abs() < 1e-6, "got {scaled}");
-        // 未声明比例尺 → 回落：100 wu 格 = 100 m/格（「1 wu = 1 m」假设）。
-        let fallback = bridge_meters_per_cell(100.0, None);
-        assert!((fallback - 100.0).abs() < 1e-6, "got {fallback}");
+    fn span_passthrough_matches_height_span_of() {
+        use wv_core::terrain::{TerrainCellData, TerrainData};
+        let cells = |hs: &[i16]| TerrainData {
+            width: hs.len() as u32,
+            height: 1,
+            cells: hs
+                .iter()
+                .map(|&h| TerrainCellData {
+                    height: h,
+                    surface: 0,
+                    biome: 0,
+                })
+                .collect(),
+        };
+        // 跨度 = max−min；与纹理固定域同值时即 `SPAN_RATIO_IDENTITY` 缺省口径。
+        assert!(
+            (wv_world_cell_map::shading::height_span_of(&cells(&[0, 10000])) - 10000.0).abs()
+                < 1e-5,
+            "got {}",
+            wv_world_cell_map::shading::height_span_of(&cells(&[0, 10000]))
+        );
+        // 平图（跨度 0）→ 下限 1，桥接值有限（shader 除法不炸）。
+        let flat = wv_world_cell_map::shading::height_span_of(&cells(&[5, 5]));
+        assert!((flat - 1.0).abs() < 1e-6 && flat.is_finite(), "got {flat}");
     }
 
     #[cfg(test)]

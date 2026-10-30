@@ -144,3 +144,22 @@ I_final = 0.45·I_macro + 0.40·I_medium + 0.15·I_detail
 - 光照参数主题化（风格包换光）：留未来 ADR 走桥接层（D6）。
 - 无比例尺地图的米制假设（1 wu = 1 m 回落）：待决 README §12-53，与 §12-20「地面尺度」同族，收敛时一并裁定。
 - 等值线样式改造 / 计曲线加粗：另一轮。
+
+---
+
+## 9. 追记（2026-10-30）：Z_EXAG 校准落参 6.0
+
+> 本节为 §8 遗留第 1 条「Z_EXAG 终值」的校准结论追记；上文正文按只增不改保留。
+
+**结论**：`Z_EXAG` 2.0 → **6.0**（2026-10-30 用户目验拍板；候选 {4, 6} 取 6）。实报触发：用户「browse / map / cell-map 都没看到（高度）效果」。
+
+**依据**（同机位对比帧组，jrpg-world 演示大陆，工程副本防 GUI 自动保存污染）：
+
+- 三工作区 × {2, 4, 6} 九帧 + `WV_STRIP=15` 裸浮雕对照两帧。z=2 时 Browse / Map（Themed 分支）山体完全平、CellMap（BiomeRaw）仅极弱明暗——用户实报属实；z=4 山体明暗可读；z=6 山脊明显（裁剪拼图 ridge / arc 两组逐档可辨）。
+- 裸浮雕对照（剥色板 / soften / wash / veil，保留浮雕）证明：z=2 时浮雕本体同样弱——**夸张不足是主因**，Themed 加工链冲淡是次因（同 z 下裸帧对比度高于全链帧，饱和度差肉眼可辨）。
+
+**手段**：新增运行时探针 `WV_Z_EXAG`（`wv-world-cell-map::shading::z_exag()`，OnceLock 启动读定；GPU `FieldParams.shape.z` 与 CPU `slope_gain_of` 同走此函数，两管线不出现不同夸张；缺省零行为变化）。本次采帧全程零重编译，探针留作复校准工具（与 WV_MODE / WV_SCALE / WV_STRIP / WV_DRILL 同族，家族清单见 wv-app `debug_probe` 模块文档）。
+
+**连带修订**：跨图幅不变性测试 `same_physical_slope_yields_same_normal_across_maps` 的手算锚点从写死 `2/√5` 改为随 `Z_EXAG` 推导（normalize(−Z,0,1)，Z=2 即旧值）——锚点此后跟随校准落参，公式本身不变。
+
+**残留**（未触发，不在本轮）：若 6.0 在 Themed 全链下仍嫌柔，下一档是 ADR-0088 D4 的调参候选（浮雕混合系数上调 / soften 对浮雕通道豁免 / veil 强度分档）。
