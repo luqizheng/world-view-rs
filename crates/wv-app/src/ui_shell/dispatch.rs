@@ -741,7 +741,12 @@ fn close_all_map_tools(
     streets.enabled = false;
     measure.mode = MeasureMode::Off;
     if had_selection {
-        selection.cancel();
+        // UX-028：选区保留统一「跨工具保留、切图清空」——闭合环跨工具
+        // 存活（与 CellSelection 同生命周期；切图清空本就由
+        // sync_selection_map_change 承担），只丢未闭合草稿。旧实现整环
+        // cancel，作者「圈完切个工具量个距离再回来」环就没了，而格选区
+        // 却能跨工具保留——同一手势两套生死规则（UX-028）。
+        selection.discard_draft();
     }
     if had_measure {
         measure.clear_draft();
