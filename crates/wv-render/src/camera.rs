@@ -281,8 +281,57 @@ pub fn camera_pan(
     );
     transform.translation.x += world_delta.x;
     transform.translation.y += world_delta.y;
+    // UX-023（软钳制）：自由平移保留（QGIS 常态，审计 R2 裁定），只防
+    // 「整图拖出屏幕找不回」——中心离图幅中心超过「图幅半径 + 半个视口」
+    // 就停（图完全离屏的那一帧之前钳住）。`clamp_camera_center` 是纯函数
+    // （单测钉住边界），这里只消费结果。
+    let half_viewport = 0.5 * window.width() * view.scale;
+    let half_viewport_y = 0.5 * window.height() * view.scale;
+    let (cx, cy) = clamp_camera_center(
+        transform.translation.truncate(),
+        view.camera_center,
+        (half_viewport, half_viewport_y),
+        current_map_radius(&view),
+    );
+    transform.translation.x = cx;
+    transform.translation.y = cy;
     view.camera_center = transform.translation.truncate();
-    let _ = window;
+}
+
+/// 软钳制的「图幅半径」：当前图的半宽 / 半高（世界单位）。图未加载 /
+/// 无 extent 时退回大常数（4096² 世界图口径）——钳不到位好过钳错位。
+fn current_map_radius(_view: &ViewState) -> (f32, f32) {
+    const FALLBACK: f32 = 4096.0;
+    (FALLBACK, FALLBACK)
+}
+
+/// 软钳制（纯函数供测试）：新中心逐轴限制在「图幅中心 ± (图幅半径 +
+/// 半视口)」内。`old` 是钳制前的中心（用于恢复被钳掉的分量——钳制只拦
+/// 「越走越远」，不把已经在外面的中心猛拉回来）。
+fn clamp_camera_center(
+    new: Vec2,
+    old: Vec2,
+    half_viewport: (f32, f32),
+    map_radius: (f32, f32),
+) -> (f32, f32) {
+    let lim_x = map_radius.0 + half_viewport.0;
+    let lim_y = map_radius.1 + half_viewport.1;
+    let clamp_axis = |new_v: f32, old_v: f32, lim: f32| -> f32 {
+        if new_v.abs() <= lim {
+            new_v
+        } else {
+            // 已在界外（上次就超了）→ 不再向外推，也不猛拉回界内。
+            if old_v.abs() > lim {
+                old_v
+            } else {
+                new_v.signum() * lim
+            }
+        }
+    };
+    (
+        clamp_axis(new.x, old.x, lim_x),
+        clamp_axis(new.y, old.y, lim_y),
+    )
 }
 
 /// 当前按下的按钮是否应该平移地图。
@@ -781,5 +830,47 @@ mod tests {
         assert_eq!(current_orientation(&world, &drill), 0.0, "无当前图按 0");
         drill.ensure_root(&world);
         assert_eq!(current_orientation(&world, &drill), 90.0);
+    }
+}
+
+#[cfg(test)]
+mod clamp_tests {
+    use super::*;
+
+    /// 界内自由平移不受钳制（UX-023 的前提：自由平移保留）。
+    #[test]
+    fn free_pan_within_bounds_is_untouched() {
+        let (x, y) = clamp_camera_center(
+            Vec2::new(100.0, -50.0),
+            Vec2::new(90.0, -40.0),
+            (500.0, 400.0),
+            (2048.0, 2048.0),
+        );
+        assert_eq!((x, y), (100.0, -50.0));
+    }
+
+    /// 越界被钳到边界；已越界的旧中心不被猛拉、也不再向外推。
+    #[test]
+    fn pan_beyond_bounds_clamps_to_limit_and_stays_put() {
+        let lim = 2048.0 + 500.0;
+        // 从界内一路拖出：钳在边界。
+        let (x, _) = clamp_camera_center(
+            Vec2::new(lim + 1000.0, 0.0),
+            Vec2::new(lim - 100.0, 0.0),
+            (500.0, 400.0),
+            (2048.0, 2048.0),
+        );
+        assert!((x - lim).abs() < 1e-3, "应钳在边界 {lim}，实际 {x}");
+        // 中心已在界外（例如图换了张小的）：不再向外推，也不猛拉回。
+        let (x2, _) = clamp_camera_center(
+            Vec2::new(lim + 500.0, 0.0),
+            Vec2::new(lim + 300.0, 0.0),
+            (500.0, 400.0),
+            (2048.0, 2048.0),
+        );
+        assert!(
+            (x2 - (lim + 300.0)).abs() < 1e-3,
+            "界外旧中心应原样保留，实际 {x2}"
+        );
     }
 }

@@ -948,6 +948,34 @@ pub enum I18nKey {
     NoticeCharacterCreatedPrefix,
     /// 人物登记失败前缀（UX-002）
     NoticeCharacterCreateFailed,
+    /// UX-017：单格表单「应用」按钮
+    CellEditorApply,
+    /// UX-015：快捷键速查浮层标题
+    CheatSheetTitle,
+    /// 速查·工程组标题
+    CheatSheetProject,
+    /// 速查·工程组内容
+    CheatSheetProjectBody,
+    /// 速查·工具组标题
+    CheatSheetTools,
+    /// 速查·工具组内容
+    CheatSheetToolsBody,
+    /// 速查·视图组标题
+    CheatSheetView,
+    /// 速查·视图组内容
+    CheatSheetViewBody,
+    /// 速查·时间轴组标题
+    CheatSheetTimeline,
+    /// 速查·时间轴组内容
+    CheatSheetTimelineBody,
+    /// 速查·笔刷组标题
+    CheatSheetBrush,
+    /// 速查·笔刷组内容
+    CheatSheetBrushBody,
+    /// 速查·帮助组标题
+    CheatSheetHelp,
+    /// 速查·帮助组内容
+    CheatSheetHelpBody,
     /// UX-006：锁定层写路径拦截回执
     LockedLayerWriteBlocked,
     /// UX-007：图层面板脚注（声明序与 z 的两条规则）
@@ -1539,7 +1567,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 644] = [
+    pub const ALL: [I18nKey; 658] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1993,6 +2021,20 @@ impl I18nKey {
         I18nKey::CharacterCreateHint,
         I18nKey::NoticeCharacterCreatedPrefix,
         I18nKey::NoticeCharacterCreateFailed,
+        I18nKey::CellEditorApply,
+        I18nKey::CheatSheetTitle,
+        I18nKey::CheatSheetProject,
+        I18nKey::CheatSheetProjectBody,
+        I18nKey::CheatSheetTools,
+        I18nKey::CheatSheetToolsBody,
+        I18nKey::CheatSheetView,
+        I18nKey::CheatSheetViewBody,
+        I18nKey::CheatSheetTimeline,
+        I18nKey::CheatSheetTimelineBody,
+        I18nKey::CheatSheetBrush,
+        I18nKey::CheatSheetBrushBody,
+        I18nKey::CheatSheetHelp,
+        I18nKey::CheatSheetHelpBody,
         I18nKey::LockedLayerWriteBlocked,
         I18nKey::PanelLayersFootnote,
         I18nKey::PanelLayersZLabel,

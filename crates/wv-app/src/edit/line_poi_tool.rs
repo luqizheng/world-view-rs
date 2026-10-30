@@ -584,8 +584,8 @@ pub fn vertex_hit(pts: &[Vec2], p: Vec2, tol_wu: f32) -> Option<DraggedEnd> {
         return None; // 两点线没有中段顶点。
     }
     let mut best: Option<(f32, usize)> = None;
-    for i in 1..n - 1 {
-        let d = p.distance(pts[i]);
+    for (i, pt) in pts.iter().enumerate().take(n - 1).skip(1) {
+        let d = p.distance(*pt);
         if d <= tol_wu && best.is_none_or(|(bd, _)| d < bd) {
             best = Some((d, i));
         }
@@ -2858,11 +2858,6 @@ mod middle_drag_tests {
             "整线载荷 = 预览"
         );
         // 仅变化段：切片外的前后缀与原线一致。
-        for (i, p) in plan.new_segment.iter().enumerate() {
-            let idx = lo + i;
-            let in_prefix = idx < lo || idx > hi; // 恒假——切片即本段。
-            let _ = in_prefix;
-        }
         // 前缀逐点一致（未动段不下切）。
         for i in 0..lo {
             assert_eq!(

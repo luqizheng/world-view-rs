@@ -18,6 +18,7 @@ pub(crate) fn hotkeys(
     mut palette: ResMut<CommandPalette>,
     mut cfg: ResMut<UiShellConfig>,
     mut panels: ResMut<PanelState>,
+    mut shortcuts: ResMut<crate::ui::shortcuts_dialog::ShortcutsDialog>,
     view: Res<crate::state::ViewState>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -131,6 +132,11 @@ pub(crate) fn hotkeys(
     // F5：强制重画地形（2026-10-14 用户需求）。和 FitMap 的 F 不冲突。
     if input.key_pressed(bevy_egui::egui::Key::F5) {
         palette.pending = Some(CommandId::ForceRebuildTexture);
+    }
+    // `?`（Shift+/）：快捷键速查浮层（UX-015）。? 自带 Shift，走独立的
+    // shift 判定；直写资源不走分发器（速查是纯 UI 开关，无命令语义）。
+    if shift && input.key_pressed(bevy_egui::egui::Key::Slash) {
+        shortcuts.open = !shortcuts.open;
     }
 
     // ── 地图工具条字母键（2026-10-19 Figma `3:21848`） ──────────────────

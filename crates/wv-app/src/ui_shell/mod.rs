@@ -104,6 +104,8 @@ pub fn register(app: &mut App) {
         .init_resource::<crate::ui::entity_create_dialog::SituationCreateDialog>()
         // UX-002 收尾：势力本体创建（Inspector「势力层」页签「+ 新建势力」）。
         .init_resource::<crate::ui::entity_create_dialog::FactionCreateDialog>()
+        // UX-015：快捷键速查浮层（`?` 键开关）。
+        .init_resource::<crate::ui::shortcuts_dialog::ShortcutsDialog>()
         // UX-003：PNG 导出两拍状态机。
         .init_resource::<crate::ui::export_png::ExportPng>()
         // 人物等级列表编辑器（人物面板行点击入口）。
@@ -210,6 +212,8 @@ pub fn register(app: &mut App) {
                 load_error_card,
                 // UX-001 崩溃恢复卡片：载入完成后告知「上次没正常退出」。
                 session_marker::crash_recovery_card,
+                // UX-015 快捷键速查浮层（`?` 键）。
+                crate::ui::shortcuts_dialog::shortcuts_dialog_system,
             )
                 .chain(),
         );
