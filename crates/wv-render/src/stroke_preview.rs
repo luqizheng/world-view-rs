@@ -123,11 +123,14 @@ pub fn register(app: &mut App) {
 mod tests {
     use super::*;
 
+    /// 上限语义：视觉引导足够且实体有界（MAX_PREVIEW 是 const，用编译期断言
+    /// ——运行期 `assert!` 对常量判真，clippy 1.99 起 -D warnings 拒收）。
+    const _: () = assert!(MAX_PREVIEW <= 1024);
+
     /// 预览实体数封顶：超长笔触不得无限涨实体。
     #[test]
     fn preview_cap_is_bounded() {
-        assert!(MAX_PREVIEW <= 1024, "上限语义：视觉引导足够且实体有界");
-        let mut state = StrokePreviewState::default();
+        let state = StrokePreviewState::default();
         assert_eq!(state.entities.len(), 0, "初始无实体");
     }
 }

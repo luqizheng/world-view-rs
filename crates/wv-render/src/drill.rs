@@ -2984,6 +2984,8 @@ mod tests {
             .init_resource::<GridConfig>()
             .init_resource::<crate::zoom_level::ZoomCrossRequest>()
             .init_resource::<crate::camera::PointerOverUi>()
+            // UX-010（batch3）起 `camera_zoom` 读键盘修饰键——夹具须备资源。
+            .init_resource::<ButtonInput<KeyCode>>()
             .add_message::<MouseWheel>()
             .insert_resource(WorldProjection {
                 world,
@@ -3021,7 +3023,10 @@ mod tests {
         app.world_mut().write_message(MouseWheel {
             unit: MouseScrollUnit::Line,
             x: 0.0,
-            y: -1.0,
+            // UX-010 方向翻转：上滚（y>0）= factor<1 = 拉近。此前的 y:-1.0
+            // 在新语义下是「拉远」，缩放离开内界属正确行为——事件方向随新
+            // 惯例改 y:1.0，被测行为（内界夹住、不进城）不变。
+            y: 1.0,
             window: window_id,
             phase: bevy::input::touch::TouchPhase::Moved,
         });

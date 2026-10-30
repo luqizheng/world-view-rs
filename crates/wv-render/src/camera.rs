@@ -592,6 +592,8 @@ mod tests {
         };
         app.init_resource::<PointerOverUi>()
             .init_resource::<crate::zoom_level::ZoomCrossRequest>()
+            // UX-010（batch3）起 `camera_zoom` 读键盘修饰键——夹具须备资源。
+            .init_resource::<ButtonInput<KeyCode>>()
             .add_message::<MouseWheel>()
             .insert_resource(view)
             .insert_resource(drill)
