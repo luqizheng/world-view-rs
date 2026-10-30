@@ -255,11 +255,14 @@ pub fn render_flood_criterion_section(
     );
     ui.add_space(4.0);
 
-    // 三档判据：按地表 / 按群系 / 按海拔容差。
+    // 四档判据（ADR-0090 D3）：关（点击=单格，默认）/ 按地表 / 按群系 /
+    // 按海拔容差——非 Off 档下点击 = 泛洪（ADR-0074 追记四 / ADR-0088 手感
+    // 由判据档位承载）。
     let current = match flood.criterion {
-        FloodCriterion::Surface => 0,
-        FloodCriterion::Biome => 1,
-        FloodCriterion::HeightTolerance(_) => 2,
+        FloodCriterion::Off => 0,
+        FloodCriterion::Surface => 1,
+        FloodCriterion::Biome => 2,
+        FloodCriterion::HeightTolerance(_) => 3,
     };
     crate::ui::widgets::segmented_control::segmented(
         ui,
@@ -267,6 +270,7 @@ pub fn render_flood_criterion_section(
         "cell_flood_criterion",
         60.0,
         &[
+            t(loc, I18nKey::CellFloodOff),
             t(loc, I18nKey::CellFloodBySurface),
             t(loc, I18nKey::CellFloodByBiome),
             t(loc, I18nKey::CellFloodByHeight),
@@ -275,8 +279,9 @@ pub fn render_flood_criterion_section(
         font_size::MICRO,
         |i| {
             flood.criterion = match i {
-                0 => FloodCriterion::Surface,
-                1 => FloodCriterion::Biome,
+                0 => FloodCriterion::Off,
+                1 => FloodCriterion::Surface,
+                2 => FloodCriterion::Biome,
                 _ => {
                     // 切到「按海拔容差」时，保留旧容差（默认 10 m）。
                     let tol = match flood.criterion {

@@ -104,11 +104,17 @@ pub(super) fn register(app: &mut App) {
                         "commit_stroke_on_release",
                         editing::commit_stroke_on_release
                     ),
-                    // 点选工具（ADR-0057 补记 6）：点击 → cell_pick → CellSelection
-                    // （无修饰 = 替换 / Shift = 并 / Alt = 差）。EditCell 只画不选。
+                    // 点选工具（ADR-0057 补记 6；ADR-0090 D2 收纯实体选择器）：
+                    // CellMap 点击 → 图钉 > 群系区，不再碰格子。
                     wv_render::perf_timed!(
                         "commit_point_select_on_click",
                         editing::commit_point_select_on_click
+                    ),
+                    // 圈选「单格」形状（ADR-0090 D3）：点击 → 单格 / 泛洪
+                    // （判据 Off = 单格，≠Off = 泛洪；修饰键 = 选区加减法）。
+                    wv_render::perf_timed!(
+                        "commit_cell_shape_click",
+                        editing::commit_cell_shape_click
                     ),
                     // 图钉拖动 + 双击属性（ADR-0074 追记三）：按住挪钉
                     // （松手一次性 UpdatePlaceCommand）、双击弹 Inspector
@@ -133,9 +139,9 @@ pub(super) fn register(app: &mut App) {
                         crate::edit::cell_stroke::paint_edit_cell_on_drag
                     )
                     .after(wv_render::camera::track_cursor_world),
-                    // （泛洪选择系统已随 ADR-0086 退役：点选工具的默认点击
-                    // 即泛洪（ADR-0074 追记四），在 `commit_point_select_on_click`
-                    // 内执行，不再需要第二个入口。）
+                    // （泛洪选择系统已随 ADR-0086 退役；泛洪点击后来又随
+                    // ADR-0090 D3 从点选迁到圈选「单格」形状，在
+                    // `commit_cell_shape_click` 内执行，不需要第二个入口。）
                     // 派生运算（[ADR-0052] D6 · M3）：平滑 / 量化 → 1 条批命令。
                     // 排在面板绘制之后的下一帧消费请求（面板在 EguiPrimaryContextPass，
                     // 早于它的 Update 系统只会看到上一帧排的请求——一帧延迟与工具

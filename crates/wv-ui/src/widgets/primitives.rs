@@ -833,6 +833,10 @@ pub const ICON_VECTOR_SQUARE: egui::ImageSource<'static> =
 /// 选择组·椭圆（Lucide `ellipse`）。
 pub const ICON_ELLIPSE: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/ellipse.svg");
+/// 选择组·单格（Lucide `mouse-pointer-click`，ADR-0090 D3 第四形状：单击直选一格；
+/// 勿与 EditCell 瓷砖的 `square-mouse-pointer` 混用——那是「单格编辑」，这是「单格选择」）。
+pub const ICON_MOUSE_POINTER_CLICK: egui::ImageSource<'static> =
+    egui::include_image!("../../assets/ui/tool_icons/mouse-pointer-click.svg");
 /// 测量组·线段距离（Lucide `ruler-dimension-line`，ADR-0043 测量组默认项）。
 pub const ICON_RULER_DIMENSION_LINE: egui::ImageSource<'static> =
     egui::include_image!("../../assets/ui/tool_icons/ruler-dimension-line.svg");

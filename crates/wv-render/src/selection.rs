@@ -491,8 +491,10 @@ pub fn commit_selection_shape_drag(
     projection: Res<WorldProjection>,
     mut sel: ResMut<SelectionState>,
 ) {
-    if !sel.enabled || sel.shape.is_polygon() {
-        // 多边形归 `commit_selection_click`。
+    if !sel.enabled || sel.shape.is_polygon() || sel.shape == SelectionShape::Cell {
+        // 多边形归 `commit_selection_click`；单格（ADR-0090 D3）无拖拽手势
+        // ——单击直选一格在 wv-app 侧 `commit_cell_shape_click`，这里绝不能
+        // 把按下起成框选手势（否则松手会按旧手势结算出一个环）。
         // 换回多边形时若残留半个框选手势，必须丢弃——否则松手时会按旧手势结算。
         sel.drag = None;
         return;
@@ -647,7 +649,7 @@ pub fn draw_selection(
         let preview = match sel.shape {
             SelectionShape::Rect => rect_ring(a, b),
             SelectionShape::Ellipse => ellipse_ring(a, b),
-            SelectionShape::Polygon => Vec::new(),
+            SelectionShape::Polygon | SelectionShape::Cell => Vec::new(),
         };
         let pv: Vec<Vec2> = preview.iter().map(|&q| to_view(q)).collect();
         for w in 0..pv.len() {

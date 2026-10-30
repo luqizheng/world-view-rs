@@ -63,12 +63,15 @@ pub fn panel_brush(
     (mut notice, time, current_loc): (ResMut<ShellNotice>, Res<Time>, Res<CurrentLocale>),
     // ── CellMap 编辑段（2026-10-24 自 Inspector 迁入）──
     // 第三个是统一选区（ADR-0057：Cell 表单的唯一编辑对象，可写——批量区
-    // 「取消」按钮 = 清空选区）；第四个是点选工具激活态（ADR-0086：泛洪
-    // 判据段跟随点选工具显示）。
-    (mut edit_cell, mut cell_sel, point_select): (
+    // 「取消」按钮 = 清空选区）；第四个是点选工具激活态；第五个是圈选环境
+    // （ADR-0090 D3：泛洪判据段跟随圈选「单格」形状显示——点选已不再碰格子）。
+    (mut edit_cell, mut cell_sel, _point_select, select_env): (
         ResMut<wv_render::state::EditCellState>,
         ResMut<wv_render::state::CellSelection>,
+        // 点选态仍保留在元组里：判据段显示曾挂在它身上（ADR-0086），ADR-0090
+        // D3 后判据段改随圈选「单格」形状（select_env）；留参数免再动装配。
         Res<crate::state::PointSelectState>,
+        Res<wv_render::state::SelectionState>,
     ),
     mut paint_session: ResMut<wv_world_cell_map::cell_paint::CellPaintSession>,
     mut flood_select: ResMut<crate::state::FloodSelectState>,
@@ -183,10 +186,11 @@ pub fn panel_brush(
             // ══ CellMap 编辑段（2026-10-24 自 Inspector「属性」页签迁入；
             // ADR-0058 统一属性表单）══
             //
-            // **显示判据**（ADR-0058 D2，ADR-0086 修正）：EditCell 激活（落笔
-            // 表单唯一合法作用域），或笔刷（Brush）激活（读数条 / 单格批量
-            // 表单仍有效），或 Topographic 档下**选区非空**，或点选工具激活
-            // （泛洪判据段跟随它显示）。
+            // **显示判据**（ADR-0058 D2，ADR-0086 修正；ADR-0090 D3 再修订）：
+            // EditCell 激活（落笔表单唯一合法作用域），或笔刷（Brush）激活
+            // （读数条 / 单格批量表单仍有效），或 Topographic 档下**选区非空**，
+            // 或圈选「单格」形状激活（泛洪判据段跟随它显示——原「点选工具激活」
+            // 随 D2 点选不再碰格子而迁移）。
             //
             // **ADR-0086 修正**：落笔表单（落笔地表/群系/增减/半径）的值源
             // `CellPaintSession` **只被 EditCell 硬边拖绘消费**——笔刷（软边，
@@ -197,8 +201,9 @@ pub fn panel_brush(
             let paint_tool_active =
                 brush.enabled && brush.tool == crate::state::BrushTool::PaintKind;
             let paint_scope = edit_cell.tool_active;
-            let flood_criterion_scope =
-                point_select.tool_active && view.mode == wv_render::state::ViewMode::Topographic;
+            let flood_criterion_scope = select_env.enabled
+                && select_env.shape == wv_render::state::SelectionShape::Cell
+                && view.mode == wv_render::state::ViewMode::Topographic;
             let cell_seg_active = paint_tool_active
                 || paint_scope
                 || flood_criterion_scope

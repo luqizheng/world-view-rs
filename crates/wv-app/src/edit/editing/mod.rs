@@ -57,7 +57,8 @@ mod terrain;
 mod tests;
 
 pub use cell::{
-    clear_cell_selection_on_escape, commit_point_select_on_click, track_edit_cell_hover,
+    clear_cell_selection_on_escape, commit_cell_shape_click, commit_point_select_on_click,
+    track_edit_cell_hover,
 };
 pub use history::{
     apply_history_command, apply_history_command_detailed, refresh_project_diagnostics,

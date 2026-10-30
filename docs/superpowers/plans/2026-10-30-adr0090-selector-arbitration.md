@@ -64,9 +64,24 @@ M1b 独立轮次，避免半换防（T3 单落会造成泛洪能力真空）：
 
 ## M1b 任务清单（下一轮，T2+T3 同批）
 
-- 多边形改拖拽手绘（wv-render/selection.rs），三形状统一「拖拽成形」；
-- wv-app 新系统：圈选激活 + Topographic + 单击 slop 内 → `CellSelection` 单格
-  （Shift=并/Alt=差）；`FloodCriterion` 增 `Off`（新默认）→ 判据≠Off 时单击=泛洪；
-- 泛洪判据段显示 gate 从 `point_select.tool_active` 迁圈选激活
-  （`brush_panel.rs:201`）；
-- T3 点选减法（cell.rs 两分支 + 13 处测试重写）。
+- ~~多边形改拖拽手绘（wv-render/selection.rs），三形状统一「拖拽成形」~~
+  **2026-10-30 用户裁定改道：不改手势，增「单格」为圈选第四形状变体
+  （`SelectionShape::Cell`，与多边形/矩形/椭圆同级）——单击直选一格归属
+  显式形状而非手势推断，多边形逐点点击保留，手势冲突消解**；
+- ~~wv-app 新系统：单击 slop 内 → 单格~~ → 落地为 `commit_cell_shape_click`
+  （`SelectionState.enabled ∧ shape==Cell` ∧ Topographic 才生效）；
+  `FloodCriterion` 增 `Off`（**新默认**）→ 判据≠Off 时点击=泛洪（ADR-0088
+  手感由判据档位承载，**执行侧裁量待实机验收**）；默认档从 Biome 改 Off
+  =有意行为变化；
+- 泛洪判据段显示 gate 从 `point_select.tool_active` 迁 `select_env.enabled ∧
+  shape==Cell`（brush_panel）+ 判据 segmented 增「关」档（cell_paint_panel）；
+- T3 点选减法已落：cell.rs 删 Alt-单格/泛洪/浏览族三段，点选=图钉>群系区
+  （点空地不动）；**中间态：Browse/Map 点格看属性暂不可用**（M2 实体仲裁
+  接管）；tests.rs 重写 4 + 新增 3 + 删 1（泛洪/Alt 断言迁圈选单格形状）。
+
+### M1b 执行记录（2026-10-30）
+
+门禁：app lib 429/429、workspace 1428/1428、clippy workspace+app `-D warnings`、
+fmt、smoke-gui PASS。新增资产：lucide `mouse-pointer-click.svg`（单格形状图标，
+与 EditCell 瓷砖的 `square-mouse-pointer` 区分）。i18n 593→596（两处定长哨兵
+同步：`ALL` 数组长度 + `seen.len()`）。

@@ -347,12 +347,18 @@ impl PointSelectState {
 /// 与 `wv_terrain::cellops::FloodCriterion` 同款语义——此处独立定义是为了
 /// 让 `wv-world-cell-map` 不依赖 `wv-terrain`（[ADR-0054] D2/D4 的 crate
 /// 分层纪律：地形域的 crate 只依赖 core）。
+///
+/// **Off 为默认**（ADR-0090 D3 实施裁量，2026-10-30）：圈选「单格」形状的
+/// 点击默认**直选单格**；判据切到 Surface/Biome/HeightTolerance 时同一点击
+/// 变成泛洪（ADR-0074 追记四 / ADR-0088 的泛洪手感由判据档位承载）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FloodCriterion {
+    /// 关：点击 = 直选单格（不泛洪）。
+    #[default]
+    Off,
     /// 按**地表**判同（水 / 陆）。
     Surface,
-    /// 按**群系**判同（默认）。
-    #[default]
+    /// 按**群系**判同。
     Biome,
     /// 按**海拔容差**判同（`|h − h₀| ≤ tol`）。
     HeightTolerance(i16),

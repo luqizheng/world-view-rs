@@ -742,13 +742,15 @@ impl MeasureState {
     }
 }
 
-/// 选择器的形状（ADR-0043）。
+/// 选择器的形状（ADR-0043；ADR-0090 D3 增「单格」）。
 ///
-/// **三种形状在数据层没有区别**——成形后都只是 `SelectionState::closed` 里的一
-/// 条点环。下游（意图菜单 / 大陆生成 / 城镇 / 地物标记 / 势力划分 / CellMap 批量
-/// 改）读的全都是那条环，因此新增矩形与椭圆对它们**零改动**。
+/// **三种成环形状在数据层没有区别**——成形后都只是 `SelectionState::closed`
+/// 里的一条点环。下游（意图菜单 / 大陆生成 / 城镇 / 地物标记 / 势力划分 /
+/// CellMap 批量改）读的全都是那条环，因此新增矩形与椭圆对它们**零改动**。
 ///
-/// 差别只发生在**交互期**：多边形逐点点击成环，矩形 / 椭圆按住拖拽一次成形。
+/// 差别只发生在**交互期**：多边形逐点点击成环，矩形 / 椭圆按住拖拽一次成形，
+/// **单格不成环**——单击直选一格进 `CellSelection`（写格在 wv-app 侧
+/// `commit_cell_shape_click`，本 crate 只声明形状、不做格子写入）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SelectionShape {
     /// 多边形：逐点点击 + 橡皮筋，锚点可拖 / 双击删 / 点边插（Figma pen）。
@@ -758,6 +760,10 @@ pub enum SelectionShape {
     Rect,
     /// 椭圆：按住拖出内接椭圆框；成形后整体可拖、拖角缩放。
     Ellipse,
+    /// 单格（ADR-0090 D3 / 2026-10-30 用户裁定）：圈选的第四形状——单击
+    /// 直选一格，不产草稿、不成环、无拖拽手势（泛洪判据≠Off 时点击=泛洪，
+    /// 判据在 wv-app 侧消费）。
+    Cell,
 }
 
 impl SelectionShape {
@@ -1025,7 +1031,8 @@ impl SelectionState {
             SelectionShape::Rect => crate::selection::rect_ring(a, b),
             SelectionShape::Ellipse => crate::selection::ellipse_ring(a, b),
             // 多边形没有「重算边界」这回事——它的边界就是作者逐点敲出来的。
-            SelectionShape::Polygon => return false,
+            // 单格（ADR-0090 D3）不成环，无 Resize 手势可言。
+            SelectionShape::Polygon | SelectionShape::Cell => return false,
         };
         self.closed = Some(ring);
         self.selected_anchor = None;

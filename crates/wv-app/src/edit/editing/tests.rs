@@ -505,10 +505,10 @@ fn commit_region_intent_rejects_during_playback() {
     );
 }
 
-/// 鼠标按下 + 点选工具激活 → cell_pick 命中 → 写入统一选区（无修饰 = 替换）。
-/// ADR-0057 补记 6 / D2。
+/// [ADR-0090 D2] 浏览族的点选不再写格：点击命中格也不动既有选区
+/// （格子选择移交圈选「单格」形状，仅 Topographic）。
 #[test]
-fn point_select_on_click_writes_hit_into_unified_selection() {
+fn point_select_click_in_browse_no_longer_writes_cells() {
     use crate::state::{CellSelection, PointSelectState};
 
     let mut world = World::new();
@@ -589,15 +589,17 @@ fn point_select_on_click_writes_hit_into_unified_selection() {
 
     let sel = world.resource::<CellSelection>();
     assert!(
-        sel.contains(3, 4),
-        "cursor_world=(35,45) + cell_size=10 + origin=0 → 命中 (gx=3, gy=4) 应入选区"
+        sel.contains(0, 0) && sel.len() == 1,
+        "浏览族点击不再写格：旧选区 (0,0) 原样保留，实际 {}",
+        sel.len()
     );
-    assert_eq!(sel.len(), 1, "无修饰点击 = 替换：旧选区 (0,0) 应被清掉");
+    assert!(!sel.contains(3, 4), "命中格 (3,4) 不应被写入选区");
 }
 
-/// 修饰键口径（ADR-0057 D2）：Shift 点击 = 并入既有选区；Alt 点击 = 从选区扣除。
+/// [ADR-0090 D2] 浏览族点击带修饰键同样不碰格子（Shift/Alt 是格子选择的
+/// 「选区加减法」，随格子职责移交圈选「单格」形状）。
 #[test]
-fn point_select_click_shift_unions_and_alt_subtracts() {
+fn point_select_click_in_browse_ignores_modifier_cells() {
     use crate::state::{CellSelection, PointSelectState};
 
     let mut world = World::new();
@@ -670,11 +672,11 @@ fn point_select_click_shift_unions_and_alt_subtracts() {
     schedule.run(&mut world);
     {
         let sel = world.resource::<CellSelection>();
-        assert_eq!(sel.len(), 2, "Shift 并入已选格 = 集合不变");
+        assert_eq!(sel.len(), 2, "浏览族 Shift 点击不写格：集合原样");
         assert!(sel.contains(0, 0) && sel.contains(3, 4));
     }
 
-    // Alt 点击 (3,4)：从选区扣除。
+    // Alt 点击 (3,4)：同样不动选区。
     let mut keys = ButtonInput::<KeyCode>::default();
     keys.press(KeyCode::AltLeft);
     world.insert_resource(keys);
@@ -686,9 +688,11 @@ fn point_select_click_shift_unions_and_alt_subtracts() {
     schedule.run(&mut world);
     {
         let sel = world.resource::<CellSelection>();
-        assert!(!sel.contains(3, 4), "Alt 点击应把命中格扣出选区");
-        assert!(sel.contains(0, 0), "Alt 点击不动其余选区");
-        assert_eq!(sel.len(), 1);
+        assert!(
+            sel.contains(3, 4) && sel.len() == 2,
+            "浏览族 Alt 点击不扣格：集合原样，实际 {}",
+            sel.len()
+        );
     }
 }
 
@@ -1297,7 +1301,7 @@ fn cellmap_world(cursor: Vec2, nature_overlay: bool) -> bevy::prelude::World {
     world.insert_resource(wv_render::camera::PointerOverUi::default());
     world.insert_resource(crate::app_screen::AppScreen::default());
     world.insert_resource(wv_render::layer_frame::LayerFrame::default());
-    // 泛洪判据（ADR-0074 追记四）：点选器默认点击=泛洪，判据共用此资源。
+    // 泛洪判据（ADR-0090 D3：圈选「单格」形状点击的泛洪档，默认 Off = 单格）。
     world.insert_resource(crate::state::FloodSelectState::default());
     world.init_resource::<super::region::LassoLiveLink>();
     world
@@ -1382,7 +1386,7 @@ fn point_select_in_cellmap_picks_nature_region_when_overlay_on() {
 /// 群系 overlay 关 → 默认点击 = **泛洪**（ADR-0074 追记四：与泛洪选择
 /// 同逻辑）。夹具 8×8 全同群系 → 点 (35,45) 淹出全图 64 格。
 #[test]
-fn point_select_plain_click_floods_when_overlay_off() {
+fn point_select_plain_click_no_longer_floods() {
     let mut world = cellmap_world(Vec2::new(35.0, 45.0), false);
     let map = wv_core::Id::new_unchecked("world_main");
     {
@@ -1405,19 +1409,18 @@ fn point_select_plain_click_floods_when_overlay_off() {
     let sel = world.resource::<crate::state::CellSelection>();
     assert_eq!(
         sel.len(),
-        64,
-        "overlay 关 → 默认点击泛洪全图同群系连通区，实际 {}",
+        0,
+        "ADR-0090 D2：点选不再泛洪（泛洪点击归圈选「单格」形状），实际 {}",
         sel.len()
     );
-    assert!(sel.contains(3, 4), "落点格 (3,4) 在泛洪区内");
     let projection = world.resource::<crate::state::WorldProjection>();
-    assert!(projection.selection.is_none(), "泛洪不带出实体选中");
+    assert!(projection.selection.is_none());
 }
 
-/// [ADR-0074 追记四] Alt+左键 = 直选单格：即便群系 overlay 关（默认点击
-/// 是泛洪），Alt 也强制「只要那一格」。
+/// [ADR-0090 D2] 点选的 Alt 直选单格已退役（Alt 随格子职责移交圈选
+/// 「单格」形状的「选区加减法」）：Alt+左键不再抓格。
 #[test]
-fn alt_click_grabs_single_cell_when_overlay_off() {
+fn alt_click_with_point_select_no_longer_grabs_cell() {
     let mut world = cellmap_world(Vec2::new(35.0, 45.0), false);
     world.insert_resource(crate::state::PointSelectState { tool_active: true });
     world.insert_resource(crate::state::CellSelection::default());
@@ -1433,19 +1436,15 @@ fn alt_click_grabs_single_cell_when_overlay_off() {
     schedule.run(&mut world);
 
     let sel = world.resource::<crate::state::CellSelection>();
-    assert!(
-        sel.contains(3, 4) && sel.len() == 1,
-        "Alt+左键 = 单格 (3,4)，实际 {}",
-        sel.len()
-    );
+    assert_eq!(sel.len(), 0, "点选的 Alt 抓格已退役，实际 {}", sel.len());
     let projection = world.resource::<crate::state::WorldProjection>();
-    assert!(projection.selection.is_none(), "抓格不带实体选中");
+    assert!(projection.selection.is_none());
 }
 
 /// 单焦点另一面：泛洪写格清实体选中——否则 Cell 表单恒优先
 /// （`resolve_form`），实体会变成看不见的悬挂选中。
 #[test]
-fn point_select_clears_entity_selection_when_flooding() {
+fn cell_shape_click_floods_and_clears_entity_selection() {
     let mut world = cellmap_world(Vec2::new(35.0, 45.0), true);
     let map = wv_core::Id::new_unchecked("world_main");
     {
@@ -1455,7 +1454,16 @@ fn point_select_clears_entity_selection_when_flooding() {
             wv_core::Id::new_unchecked("city_old"),
         ));
     }
-    world.insert_resource(crate::state::PointSelectState { tool_active: true });
+    // 工具态 = 圈选激活 + 单格形状（ADR-0090 D3）。
+    world.insert_resource(SelectionState {
+        enabled: true,
+        shape: wv_render::state::SelectionShape::Cell,
+        ..Default::default()
+    });
+    // 判据 = 按群系（非 Off 档 → 点击 = 泛洪，ADR-0088 手感由判据档位承载）。
+    world
+        .resource_mut::<crate::state::FloodSelectState>()
+        .criterion = wv_world_cell_map::state::FloodCriterion::Biome;
     let mut sel = crate::state::CellSelection::default();
     sel.bind_map(&map, 8, 8);
     sel.replace([(0, 0)]);
@@ -1466,84 +1474,123 @@ fn point_select_clears_entity_selection_when_flooding() {
     world.insert_resource(buttons);
 
     let mut schedule = Schedule::default();
-    schedule.add_systems(commit_point_select_on_click);
+    schedule.add_systems(commit_cell_shape_click);
     schedule.run(&mut world);
 
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert_eq!(
+        sel.len(),
+        64,
+        "判据=按群系 → 泛洪全图同群系连通区，实际 {}",
+        sel.len()
+    );
+    assert!(sel.contains(3, 4), "落点格 (3,4) 在泛洪区内");
     let projection = world.resource::<crate::state::WorldProjection>();
     assert!(
         projection.selection.is_none(),
-        "选格 = 实体选中让位（单焦点模型）"
+        "泛洪写格 = 实体选中让位（单焦点模型）"
     );
 }
 
-/// [ADR-0074 追记四] Alt+左键 = 直接选格（追记二的 Ctrl+右键由用户改口
-/// 为 Alt）：光标压在图钉上，抓的是钉底下那格——逃生舱优先级压过图钉。
+/// [ADR-0090 D3] 判据 Off（默认档）→ 圈选「单格」形状点击 = 直选单格。
 #[test]
-fn alt_click_grabs_the_cell_even_over_a_pin() {
-    let mut world = cellmap_world(Vec2::new(35.0, 45.0), true);
-    let map = wv_core::Id::new_unchecked("world_main");
-    {
-        let mut p = world.resource_mut::<crate::state::WorldProjection>();
-        p.world
-            .distances
-            .places
-            .push(pin("city_qingyun", &map, 35.0, 45.0));
-    }
-    world.insert_resource(crate::state::PointSelectState { tool_active: true });
+fn cell_shape_click_selects_single_cell_when_criterion_off() {
+    let mut world = cellmap_world(Vec2::new(35.0, 45.0), false);
+    world.insert_resource(SelectionState {
+        enabled: true,
+        shape: wv_render::state::SelectionShape::Cell,
+        ..Default::default()
+    });
+    // 判据默认 = Off（新默认档），无需显式设置。
     world.insert_resource(crate::state::CellSelection::default());
+    world.insert_resource(ButtonInput::<KeyCode>::default());
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    buttons.press(MouseButton::Left);
+    world.insert_resource(buttons);
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_cell_shape_click);
+    schedule.run(&mut world);
+
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert!(
+        sel.contains(3, 4) && sel.len() == 1,
+        "判据 Off = 直选单格 (3,4)，实际 {}",
+        sel.len()
+    );
+    let projection = world.resource::<crate::state::WorldProjection>();
+    assert!(projection.selection.is_none(), "选格 = 实体选中让位");
+}
+
+/// [ADR-0090 D3] 工具态未激活（圈选关）→ 单格点击 no-op。
+#[test]
+fn cell_shape_click_noop_when_select_tool_inactive() {
+    let mut world = cellmap_world(Vec2::new(35.0, 45.0), false);
+    // SelectionState 默认 enabled=false，形状即便默认多边形也无所谓。
+    world.init_resource::<SelectionState>();
+    world.insert_resource(crate::state::CellSelection::default());
+    world.insert_resource(ButtonInput::<KeyCode>::default());
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    buttons.press(MouseButton::Left);
+    world.insert_resource(buttons);
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_cell_shape_click);
+    schedule.run(&mut world);
+
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert_eq!(sel.len(), 0, "工具未激活不得写选区");
+}
+
+/// [ADR-0090 D3] 圈选「单格」形状的修饰键 = 选区加减法：
+/// Shift 点击 = 并入、Alt 点击 = 扣除（判据 Off 档）。
+#[test]
+fn cell_shape_click_shift_unions_and_alt_subtracts() {
+    let mut world = cellmap_world(Vec2::new(35.0, 45.0), false);
+    let map = wv_core::Id::new_unchecked("world_main");
+    world.insert_resource(SelectionState {
+        enabled: true,
+        shape: wv_render::state::SelectionShape::Cell,
+        ..Default::default()
+    });
+    // 既有选区含命中格 (3,4) 与另一格 (0,0)。
+    let mut sel = crate::state::CellSelection::default();
+    sel.bind_map(&map, 8, 8);
+    sel.replace([(0, 0), (3, 4)]);
+    world.insert_resource(sel);
+
+    // Shift 点击 (3,4)：并入（已在 → 集合不变，(0,0) 保留）。
+    let mut keys = ButtonInput::<KeyCode>::default();
+    keys.press(KeyCode::ShiftLeft);
+    world.insert_resource(keys);
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    buttons.press(MouseButton::Left);
+    world.insert_resource(buttons);
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_cell_shape_click);
+    schedule.run(&mut world);
+    {
+        let sel = world.resource::<crate::state::CellSelection>();
+        assert_eq!(sel.len(), 2, "Shift 并入已选格 = 集合不变");
+        assert!(sel.contains(0, 0) && sel.contains(3, 4));
+    }
+
+    // Alt 点击 (3,4)：从选区扣除。
     let mut keys = ButtonInput::<KeyCode>::default();
     keys.press(KeyCode::AltLeft);
     world.insert_resource(keys);
     let mut buttons = ButtonInput::<MouseButton>::default();
     buttons.press(MouseButton::Left);
     world.insert_resource(buttons);
-
     let mut schedule = Schedule::default();
-    schedule.add_systems(commit_point_select_on_click);
+    schedule.add_systems(commit_cell_shape_click);
     schedule.run(&mut world);
-
-    let sel = world.resource::<crate::state::CellSelection>();
-    assert!(
-        sel.contains(3, 4),
-        "Ctrl+右键压图钉也应抓格 (3,4)，实际 {}",
-        sel.len()
-    );
-    assert_eq!(sel.len(), 1, "替换语义：单格");
-    let projection = world.resource::<crate::state::WorldProjection>();
-    assert!(projection.selection.is_none(), "抓格 = 实体选中让位");
-}
-
-/// [ADR-0074 追记四] Alt+左键压在群系区上同样抓格（群系裁定让位）。
-#[test]
-fn alt_click_grabs_the_cell_even_inside_a_nature_region() {
-    let mut world = cellmap_world(Vec2::new(35.0, 45.0), true);
-    let map = wv_core::Id::new_unchecked("world_main");
     {
-        let mut p = world.resource_mut::<crate::state::WorldProjection>();
-        p.world
-            .regions
-            .push(nature_region("forest_south", &map, 20.0, 20.0, 60.0, 60.0));
+        let sel = world.resource::<crate::state::CellSelection>();
+        assert!(!sel.contains(3, 4), "Alt 点击应把命中格扣出选区");
+        assert!(sel.contains(0, 0), "Alt 点击不动其余选区");
+        assert_eq!(sel.len(), 1);
     }
-    world.insert_resource(crate::state::PointSelectState { tool_active: true });
-    world.insert_resource(crate::state::CellSelection::default());
-    let mut keys = ButtonInput::<KeyCode>::default();
-    keys.press(KeyCode::AltRight);
-    world.insert_resource(keys);
-    let mut buttons = ButtonInput::<MouseButton>::default();
-    buttons.press(MouseButton::Left);
-    world.insert_resource(buttons);
-
-    let mut schedule = Schedule::default();
-    schedule.add_systems(commit_point_select_on_click);
-    schedule.run(&mut world);
-
-    let sel = world.resource::<crate::state::CellSelection>();
-    assert!(
-        sel.contains(3, 4) && sel.len() == 1,
-        "群系区内 Alt+左键抓单格 (3,4)"
-    );
-    let projection = world.resource::<crate::state::WorldProjection>();
-    assert!(projection.selection.is_none(), "抓格不得带出 Region 选中");
 }
 
 /// 右键已完全不绑定（追记四废除 Ctrl+右键）；Alt+左键点在图外
