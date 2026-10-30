@@ -204,7 +204,10 @@ pub fn panel_inspector(
         ResMut<wv_render::faction_overlays::FactionDisplay>,
         ResMut<crate::state::NatureRegionUiState>,
     ),
-    (mut boundary,): (ResMut<wv_render::state::BiomeBoundaryState>,),
+    (mut boundary, mut situation_create): (
+        ResMut<wv_render::state::BiomeBoundaryState>,
+        ResMut<crate::ui::entity_create_dialog::SituationCreateDialog>,
+    ),
     // Cell 表单的另两个会话态：多边形选区（V 套索/框选的环）+ 统一选区
     // （ADR-0057：Cell 表单的编辑对象，判据读它）。
     (mut selection, cell_sel): (
@@ -318,7 +321,13 @@ pub fn panel_inspector(
                     );
                 }
                 InspectorTab::Situations => {
-                    situations::situations_tab(ui, &shell, &projection);
+                    situations::situations_tab(
+                        ui,
+                        &shell,
+                        &projection,
+                        &mut situation_create,
+                        &playback,
+                    );
                 }
             }
         },

@@ -579,6 +579,9 @@ pub(super) fn register(app: &mut App) {
             // UX-002「登记事件」对话框（时间轴按钮 / 命令面板打开）：同族
             // 居中模态窗，压在状态栏之后。
             ui::event_create_dialog::event_create_dialog_system.after(ui::status_bar),
+            // UX-002 batch6：人物 / 事态创建对话框（同族居中模态窗）。
+            ui::entity_create_dialog::character_create_dialog_system.after(ui::status_bar),
+            ui::entity_create_dialog::situation_create_dialog_system.after(ui::status_bar),
             // 人物等级列表编辑器（人物面板行点击打开）：同族居中模态窗。
             ui::character_level_dialog::character_level_dialog_system.after(ui::status_bar),
             // UX-001 关闭确认框：必须压在一切之上（挡住「正在丢弃工作」的

@@ -928,6 +928,26 @@ pub enum I18nKey {
     LoadErrorGuidance,
     /// 「知道了」（UX-018）
     LoadErrorDismiss,
+    /// 「登记人物」标题（UX-002 batch6）
+    CharacterCreateTitle,
+    /// 人物名 hint（UX-002）
+    CharacterCreateNameHint,
+    /// 人物创建补填指引（UX-002）
+    CharacterCreateHint,
+    /// 「已登记人物：」前缀（UX-002）
+    NoticeCharacterCreatedPrefix,
+    /// 人物登记失败前缀（UX-002）
+    NoticeCharacterCreateFailed,
+    /// 「登记事态」标题（UX-002）
+    SituationCreateTitle,
+    /// 事态名 hint（UX-002）
+    SituationCreateNameHint,
+    /// 事态创建补填指引（UX-002）
+    SituationCreateHint,
+    /// 「已登记事态：」前缀（UX-002）
+    NoticeSituationCreatedPrefix,
+    /// 事态登记失败前缀（UX-002）
+    NoticeSituationCreateFailed,
     /// 「编辑等级」对话框标题（后接「 — 人物名」，2026-10-30 人物等级列表编辑器）
     CharacterLevelTitle,
     /// 「自」（行内起始日标签）
@@ -1493,7 +1513,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 621] = [
+    pub const ALL: [I18nKey; 631] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1936,6 +1956,16 @@ impl I18nKey {
         I18nKey::LoadErrorTitle,
         I18nKey::LoadErrorGuidance,
         I18nKey::LoadErrorDismiss,
+        I18nKey::CharacterCreateTitle,
+        I18nKey::CharacterCreateNameHint,
+        I18nKey::CharacterCreateHint,
+        I18nKey::NoticeCharacterCreatedPrefix,
+        I18nKey::NoticeCharacterCreateFailed,
+        I18nKey::SituationCreateTitle,
+        I18nKey::SituationCreateNameHint,
+        I18nKey::SituationCreateHint,
+        I18nKey::NoticeSituationCreatedPrefix,
+        I18nKey::NoticeSituationCreateFailed,
         // 人物等级列表编辑器（10）
         I18nKey::CharacterLevelTitle,
         I18nKey::CharacterLevelFrom,

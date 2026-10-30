@@ -23,6 +23,7 @@ pub mod character_level_dialog;
 pub mod city_intent;
 pub mod command_palette_window;
 pub mod continent_dialog;
+pub mod entity_create_dialog;
 pub mod event_create_dialog;
 pub mod export_png;
 pub mod faction_panel;

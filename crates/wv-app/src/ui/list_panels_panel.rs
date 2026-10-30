@@ -18,6 +18,7 @@ use bevy_egui::EguiContexts;
 use crate::i18n::{t_key, CurrentLocale, I18nKey};
 use crate::state::{Panel, PanelState, PlaybackState, WorldProjection};
 use crate::theme::ui_theme::UiShellConfig;
+use crate::theme::ui_tokens::space;
 use crate::ui_layout::LayoutFile;
 
 use super::shell::UiShell;
@@ -34,6 +35,8 @@ pub fn panel_character(
     current_loc: Res<CurrentLocale>,
     playback: Res<PlaybackState>,
     mut level_editor: ResMut<crate::ui::character_level_dialog::CharacterLevelEditor>,
+    // UX-002 batch6：「登记人物」对话框（空态动作 + 列表尾按钮双入口）。
+    mut character_create: ResMut<crate::ui::entity_create_dialog::CharacterCreateDialog>,
 ) {
     let shell = UiShell::new(&shell_cfg);
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -56,14 +59,17 @@ pub fn panel_character(
         |ui| {
             let chars = &projection.world.characters;
             if chars.is_empty() {
-                empty_state(
+                // UX-002：空态动作可点——直接打开「登记人物」对话框。
+                if empty_state(
                     ui,
                     &shell,
                     "◎",
                     t_key(&current_loc, I18nKey::CharacterPanelEmptyTitle),
                     t_key(&current_loc, I18nKey::CharacterPanelEmptyHint),
                     t_key(&current_loc, I18nKey::CharacterPanelEmptyAction),
-                );
+                ) {
+                    character_create.open = true;
+                }
             } else {
                 for c in chars {
                     // 元信息 = 等级段数（存储计数，非时刻投影，不经 TimelineQuery）。
@@ -83,6 +89,14 @@ pub fn panel_character(
                         );
                     }
                 }
+            }
+            ui.add_space(space::XS);
+            // UX-002：常驻登记入口（非空列表也要能加人）。
+            if ui
+                .button(t_key(&current_loc, I18nKey::CharacterCreateTitle))
+                .clicked()
+            {
+                character_create.open = true;
             }
         },
     );

@@ -62,3 +62,9 @@ app-test = "test -p wv-app --features app --no-fail-fast"
 app-clippy = "clippy -p wv-app --all-targets --features app -- -D warnings"
 http-test = "test -p wv-app --features http --no-fail-fast"
 http-clippy = "clippy -p wv-app --all-targets --features http -- -D warnings"
+# clippy 的 O0 profile（2026-10-30 用户裁定 A+B，定义见根 Cargo.toml
+# `[profile.clippy]`）。`cargo lint ...` == `cargo clippy --profile clippy ...`：
+# 门禁语义不变（lint 在 HIR/MIR，与 opt-level 无关），但不再为运行时 FPS
+# 的 O2/O3 设置买单。本地内环推荐走 `bash scripts/clippy.sh`（自动只验
+# 改动面 + 自动带 app feature）；全量 lint 交 CI。
+lint = "clippy --profile clippy"

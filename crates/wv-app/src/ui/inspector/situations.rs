@@ -14,20 +14,32 @@ use crate::ui::shell::UiShell;
 use crate::ui::widgets::{empty_state, list_item};
 
 /// 「事态」页签内容。
-pub fn situations_tab(ui: &mut egui::Ui, shell: &UiShell, projection: &WorldProjection) {
+pub fn situations_tab(
+    ui: &mut egui::Ui,
+    shell: &UiShell,
+    projection: &WorldProjection,
+    situation_create: &mut crate::ui::entity_create_dialog::SituationCreateDialog,
+    playback: &crate::state::PlaybackState,
+) {
     let count = projection.world.situations.len();
     let _ = count;
 
     let sits = &projection.world.situations;
     if sits.is_empty() {
-        empty_state(
+        // UX-002 batch6：空态动作可点——打开「登记事态」对话框（此前是纯文案）。
+        if empty_state(
             ui,
             shell,
             "▣",
             "暂无已登记事态",
             "事态是叙事的骨架：登记一个，把事件串起来",
             "登记事态 →",
-        );
+        ) {
+            crate::ui::entity_create_dialog::open_situation_with_playback_defaults(
+                situation_create,
+                playback,
+            );
+        }
     } else {
         for s in sits {
             let meta = crate::ui::situation_panel::format_span_v03(s.span.from, s.span.to);

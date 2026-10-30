@@ -196,3 +196,48 @@ opt-level = 2
 # 代价仅为 zstd C 代码内部无调试符号（无人在意）。
 [profile.dev.package.zstd-sys]
 debug = false
+
+# clippy 专用 profile（2026-10-30 用户裁定 A+B 方案）。
+#
+# 处境：`cargo clippy --workspace --all-targets` 慢的主因不是 clippy 本身，
+# 而是它**继承了 dev profile 的优化级别**——`[profile.dev.package."*"]`
+# O2、四个热点 crate O2/O3 是为**运行时 FPS** 调的，而 clippy 只做
+# HIR/MIR 静态分析、codegen 产物直接丢弃，O2/O3 纯烧时间。
+#
+# 决策：本 profile 一律 O0。clippy 的 lint 结论与 opt-level 无关（lint 在
+# HIR/MIR 层），因此**门禁语义不变**；`debug-assertions` 等从 dev 继承
+# （`inherits = "dev"`），`#[cfg(debug_assertions)]` 分支的覆盖与 dev 一致。
+#
+# 包级 override 必须**显式逐个列出**：`[profile.dev.package.X]` 会被
+# inheritance 带过来，而具体包 override 优先于 `package."*"` 通配——
+# 只写通配会让四个热点 crate 仍按 O2/O3 跑。
+#
+# 用法：`cargo lint ...`（别名，见 .cargo/config.toml）或
+# `cargo clippy --profile clippy ...`；本地内环走 `scripts/clippy.sh`
+# （只验改动面，全量交 CI）。产物落 `.target/clippy/`，与 dev 产物隔离
+# ——**首次使用会全量重建一次**（O0，比现在的 O2 全量快，但仍是分钟级），
+# 之后热跑为标准增量速度。
+[profile.clippy]
+inherits = "dev"
+opt-level = 0
+debug = 0
+incremental = true
+
+[profile.clippy.package."*"]
+opt-level = 0
+debug = false
+
+[profile.clippy.package.wv-world-cell-map]
+opt-level = 0
+
+[profile.clippy.package.wv-terrain]
+opt-level = 0
+
+[profile.clippy.package.wv-render]
+opt-level = 0
+
+[profile.clippy.package.wv-app]
+opt-level = 0
+
+[profile.clippy.package.zstd-sys]
+debug = false
