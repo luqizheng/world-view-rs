@@ -572,6 +572,27 @@ pub fn endpoint_hit(pts: &[Vec2], p: Vec2, tol_wu: f32) -> Option<DraggedEnd> {
     }
 }
 
+/// 顶点命中（UX-031）：端点优先（[`endpoint_hit`]，两端都中取更近者），
+/// 其次中段顶点（下标 `1..n-1`，取容差内最近者）→ [`DraggedEnd::Middle`]。
+/// 中段可拖后，端点语义不变——点在端点附近永远是拖端点，不会误起中段拖。
+pub fn vertex_hit(pts: &[Vec2], p: Vec2, tol_wu: f32) -> Option<DraggedEnd> {
+    if let Some(end) = endpoint_hit(pts, p, tol_wu) {
+        return Some(end);
+    }
+    let n = pts.len();
+    if n < 3 {
+        return None; // 两点线没有中段顶点。
+    }
+    let mut best: Option<(f32, usize)> = None;
+    for i in 1..n - 1 {
+        let d = p.distance(pts[i]);
+        if d <= tol_wu && best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, i));
+        }
+    }
+    best.map(|(_, i)| DraggedEnd::Middle(i))
+}
+
 /// 起拖（纯函数）：记录原线为只读基准，预览从原线出发。
 ///
 /// `target_cell` 取起拖时光标格——首帧预览 = 原线（光标还没走出起手格
@@ -589,6 +610,7 @@ pub fn begin_endpoint_drag(
         original,
         target_cell: cursor_cell,
         snap: None,
+        middle_span: None,
     }
 }
 
@@ -617,9 +639,16 @@ pub fn ensure_drag_preview(
     if drag.preview.len() >= 2 && drag.target_cell == target_cell {
         return false;
     }
+    // UX-031：中段顶点走独立的双段重规划分支（左右锚点各规划一段），
+    // 不落进下面的单锚点路径。
+    if let DraggedEnd::Middle(i) = drag.end {
+        return ensure_middle_drag_preview(drag, i, target, grid, cell_size, mode, seed);
+    }
     let anchor = match drag.end {
         DraggedEnd::Last => drag.original[n - 2],
         DraggedEnd::First => drag.original[1],
+        // 中段在上面的  已分流到这里不可达（防御性兜底）。
+        DraggedEnd::Middle(_) => return false,
     };
     let raw = plan_polyline(
         grid,
@@ -649,7 +678,78 @@ pub fn ensure_drag_preview(
             line.extend(drag.original[2..].iter().copied());
             line
         }
+        // 中段由 ensure_middle_drag_preview 组装（上方已 early return）。
+        DraggedEnd::Middle(_) => return false,
     };
+    true
+}
+
+/// 中段顶点拖拽的预览重算（UX-031 纯函数）：左右锚点（原线 `i-1` /
+/// `i+1`）各自向被拖顶点的新位置规划一段（地形感知，模式同端点拖拽），
+/// 拼整线 = 前缀 + 左段 + 右段 + 后缀。
+///
+/// 任一段规划失败（不可达 / 与锚同格）→ 保留旧预览返回 `false`（端点
+/// 拖拽同语义：不给孩子「线断进山里」的错觉）。`middle_span` 记录预览中
+/// (左锚, 被拖顶点, 右锚) 三下标——提交计划按它切「仅变化段」下切。
+#[allow(clippy::too_many_arguments)]
+fn ensure_middle_drag_preview(
+    drag: &mut EndpointDrag,
+    i: usize,
+    target: Vec2,
+    grid: &TerrainGrid,
+    cell_size: f32,
+    mode: LinePathMode,
+    seed: u64,
+) -> bool {
+    let n = drag.original.len();
+    if i == 0 || i + 1 >= n || cell_size <= 0.0 {
+        return false;
+    }
+    let target_cell = cell_of(target, cell_size);
+    if drag.preview.len() >= 2 && drag.target_cell == target_cell {
+        return false; // 同格零重算（端点拖拽同门）。
+    }
+    let left_anchor = drag.original[i - 1];
+    let right_anchor = drag.original[i + 1];
+    let raw_left = plan_polyline(
+        grid,
+        cell_size,
+        (left_anchor.x, left_anchor.y),
+        (target.x, target.y),
+        mode,
+        seed,
+    );
+    // 右段换个种子——同格门只看目标格，两段共享会话；种子差异避免两段
+    // 规划器走完全相同的中间格序列（无害但浪费）。
+    let raw_right = plan_polyline(
+        grid,
+        cell_size,
+        (target.x, target.y),
+        (right_anchor.x, right_anchor.y),
+        mode,
+        seed ^ 0x9E37_79B9_7F4A_7C15,
+    );
+    drag.target_cell = target_cell;
+    if raw_left.is_empty() || raw_right.is_empty() {
+        return false; // 不可达 / 同格：保留旧预览。
+    }
+    let mut left: Vec<Vec2> = raw_left.iter().map(|&(x, y)| Vec2::new(x, y)).collect();
+    left[0] = left_anchor;
+    let last = left.len() - 1;
+    left[last] = target;
+    let mut right: Vec<Vec2> = raw_right.iter().map(|&(x, y)| Vec2::new(x, y)).collect();
+    right[0] = target;
+    let last = right.len() - 1;
+    right[last] = right_anchor;
+
+    let mut line: Vec<Vec2> = drag.original[..i - 1].to_vec();
+    line.extend(left[1..].iter().copied());
+    let dragged_idx = line.len() - 1; // 左段末位 = 被拖顶点新位置。
+    line.extend(right[1..].iter().copied());
+    let right_anchor_idx = line.len() - 1; // 右段末位 = 右锚点。
+    line.extend(drag.original[i + 2..].iter().copied());
+    drag.middle_span = Some((i - 1, dragged_idx, right_anchor_idx));
+    drag.preview = line;
     true
 }
 
@@ -716,6 +816,17 @@ pub fn align_preview_tail(drag: &mut EndpointDrag, point: Vec2) {
     let slot = match drag.end {
         DraggedEnd::Last => drag.preview.last_mut(),
         DraggedEnd::First => drag.preview.first_mut(),
+        // UX-031：中段顶点在预览中的下标由重规划时记录（顶点可能因左右
+        // 段插入中间点而移位，不能拿起拖下标硬套）。
+        DraggedEnd::Middle(_) => {
+            let idx = drag.middle_span.map(|(_, dragged, _)| dragged);
+            return match idx {
+                Some(k) if k < drag.preview.len() => {
+                    drag.preview[k] = point;
+                }
+                _ => {}
+            };
+        }
     };
     if let Some(tail) = slot {
         *tail = point;
@@ -764,12 +875,31 @@ pub fn drag_commit_plan(drag: &EndpointDrag) -> Option<DragCommitPlan> {
         return None;
     }
     let new_line: Vec<(f32, f32)> = drag.preview.iter().map(|p| (p.x, p.y)).collect();
-    let from_start = drag.end == DraggedEnd::First;
-    let fork = fork_index(&drag.original, &drag.preview, from_start);
-    let new_segment: Vec<(f32, f32)> = if from_start {
-        drag.preview[..=fork].iter().map(|p| (p.x, p.y)).collect()
+    // UX-031：中段顶点的新增段 = 预览中左右锚点之间（重规划时记录的
+    // span）——只把真正变化的两段喂下切；拖回原位（逐点一致）不出计划。
+    let new_segment: Vec<(f32, f32)> = if let DraggedEnd::Middle(_) = drag.end {
+        let Some((lo, dragged, hi)) = drag.middle_span else {
+            return None; // 未重算过 = 没拖动。
+        };
+        if hi >= new_line.len() || lo >= hi {
+            return None; // 构造契约外的防御兜底。
+        }
+        // 被拖顶点回到原位 = 没拖（规划器重排中间点形态不算真变化——
+        // 逐点比对会把「拖回去」误判成改道）。
+        if let DraggedEnd::Middle(i) = drag.end {
+            if i < drag.original.len() && drag.preview[dragged].distance(drag.original[i]) <= 1e-3 {
+                return None;
+            }
+        }
+        new_line[lo..=hi].to_vec()
     } else {
-        drag.preview[fork..].iter().map(|p| (p.x, p.y)).collect()
+        let from_start = drag.end == DraggedEnd::First;
+        let fork = fork_index(&drag.original, &drag.preview, from_start);
+        if from_start {
+            drag.preview[..=fork].iter().map(|p| (p.x, p.y)).collect()
+        } else {
+            drag.preview[fork..].iter().map(|p| (p.x, p.y)).collect()
+        }
     };
     if new_segment.len() < 2 {
         return None; // 拖回原位 / 预览没动：无可提交的新增段。
@@ -1238,6 +1368,8 @@ pub fn line_poi_tool_input(
                 let anchor = match drag.end {
                     DraggedEnd::Last => drag.original[n.saturating_sub(2)],
                     DraggedEnd::First => drag.original[1.min(n.saturating_sub(1))],
+                    // UX-031：中段锚点 = 左邻顶点（种子与首帧重规划同源）。
+                    DraggedEnd::Middle(i) => drag.original[i.saturating_sub(1).max(1)],
                 };
                 let seed = preview_seed(map.as_str(), cell_of(anchor, cell));
                 ensure_drag_preview(drag, target, &terrain, cell, mode, seed);
@@ -1253,8 +1385,8 @@ pub fn line_poi_tool_input(
     if line_poi.drag.is_some() {
         return;
     }
-    // 端点命中优先（Idle + 已选中）：起拖。拖中段顶点不是本任务的口子，
-    // 命中阈值与选中同源（屏幕 8 px × scale）。
+    // 顶点命中优先（Idle + 已选中）：起拖。UX-031 起中段顶点可拖（双段
+    // 重规划），端点语义不变；命中阈值与选中同源（屏幕 8 px × scale）。
     if session.phase == PinPhase::Idle {
         if let Some(id) = line_poi.selected.clone() {
             let pts = projection
@@ -1267,7 +1399,7 @@ pub fn line_poi_tool_input(
                 .map(line_pts);
             let tol = SELECT_TOLERANCE_PX * view.scale.max(0.25);
             if let Some(pts) = pts {
-                if let Some(end) = endpoint_hit(&pts, local, tol) {
+                if let Some(end) = vertex_hit(&pts, local, tol) {
                     line_poi.drag = Some(begin_endpoint_drag(
                         id,
                         end,
@@ -1444,11 +1576,16 @@ pub fn draw_line_poi_preview(
         }
         // 拖动端点：实心大圆点（哪端在手上要一眼可辨）。
         if let Some(tip) = match drag.end {
-            DraggedEnd::Last => drag.preview.last(),
-            DraggedEnd::First => drag.preview.first(),
+            DraggedEnd::Last => drag.preview.last().copied(),
+            DraggedEnd::First => drag.preview.first().copied(),
+            // UX-031：被拖中段顶点（下标在重规划时记录）。
+            DraggedEnd::Middle(_) => drag
+                .middle_span
+                .map(|(_, dragged, _)| dragged)
+                .and_then(|k| drag.preview.get(k).copied()),
         } {
             gizmos.circle_2d(
-                Isometry2d::from_translation(to_view(*tip)),
+                Isometry2d::from_translation(to_view(tip)),
                 dot_r * 1.5,
                 drag_dot,
             );
@@ -1479,7 +1616,7 @@ mod tests {
     // ── 夹具 ────────────────────────────────────────────────────────
 
     /// 32×32 平地网格（海拔 100，全陆）。
-    fn flat_grid() -> TerrainGrid {
+    pub(super) fn flat_grid() -> TerrainGrid {
         let cells = vec![
             TerrainCell {
                 height: 100,
@@ -2598,6 +2735,179 @@ mod tests {
             c.surface,
             wv_terrain::SURFACE_WATER,
             "撤销后新段格应退出水面"
+        );
+    }
+}
+
+#[cfg(test)]
+mod middle_drag_tests {
+    //! UX-031：中段顶点拖拽（命中 / 双段重规划 / 提交计划）。
+    use super::tests::flat_grid;
+    use super::*;
+
+    /// 五点横线：y=40，x = 20..100 step 20（中段顶点 = 下标 1/2/3）。
+    fn five_point_line() -> Vec<Vec2> {
+        (0..5)
+            .map(|i| Vec2::new(20.0 + 20.0 * i as f32, 40.0))
+            .collect()
+    }
+
+    fn drag_at(index: usize) -> EndpointDrag {
+        begin_endpoint_drag(
+            Id::new_unchecked("river_a"),
+            DraggedEnd::Middle(index),
+            five_point_line(),
+            (1, 2),
+        )
+    }
+
+    /// 命中：中段顶点起拖 → Middle；端点附近仍是端点优先。
+    #[test]
+    fn vertex_hit_returns_middle_for_interior_points() {
+        let pts = five_point_line();
+        assert_eq!(
+            vertex_hit(&pts, Vec2::new(60.0, 42.0), 8.0),
+            Some(DraggedEnd::Middle(2)),
+            "中段顶点容差内命中 Middle(2)"
+        );
+        assert_eq!(
+            vertex_hit(&pts, Vec2::new(20.0, 43.0), 8.0),
+            Some(DraggedEnd::First),
+            "端点优先：首端附近不误起中段拖"
+        );
+        assert_eq!(vertex_hit(&pts, Vec2::new(60.0, 60.0), 8.0), None);
+        // 两点线没有中段——中点两侧的命中只会落在端点上（不会出 Middle）。
+        let two = vec![Vec2::ZERO, Vec2::new(10.0, 0.0)];
+        assert!(!matches!(
+            vertex_hit(&two, Vec2::new(5.0, 0.0), 8.0),
+            Some(DraggedEnd::Middle(_))
+        ));
+    }
+
+    /// 双段重规划：预览 = 前缀 + 左段 + 右段 + 后缀；被拖顶点在目标位置，
+    /// 左右锚点原位；middle_span 三下标有效且切片正确。
+    #[test]
+    fn middle_drag_preview_replans_both_segments() {
+        let grid = flat_grid();
+        let mut drag = drag_at(2);
+        let target = Vec2::new(60.0, 70.0);
+        assert!(
+            ensure_drag_preview(
+                &mut drag,
+                target,
+                &grid,
+                8.0,
+                LinePathMode::Route,
+                preview_seed("river_a", (7, 8)),
+            ),
+            "平地上双段规划应成功"
+        );
+        // 前缀（下标 0..1 = 原线 0..1）原样。
+        assert_eq!(drag.preview[0], Vec2::new(20.0, 40.0), "左锚之前的前缀不动");
+        let (lo, dragged, hi) = drag.middle_span.expect("中段拖拽应记录 span");
+        assert_eq!(lo, 1, "左锚 = 原线 i-1 = 下标 1");
+        assert_eq!(hi, drag.preview.len() - 1 - 1, "右锚 = 后缀前一位");
+        assert!(
+            dragged > lo && dragged < hi,
+            "被拖顶点应夹在两锚之间（lo={lo}, dragged={dragged}, hi={hi}）"
+        );
+        assert!(
+            drag.preview[dragged].distance(target) < 1e-3,
+            "被拖顶点应落在目标位置，实际 {:?}",
+            drag.preview[dragged]
+        );
+        assert_eq!(
+            drag.preview[hi],
+            Vec2::new(80.0, 40.0),
+            "右锚原位（原线下标 3）"
+        );
+        assert_eq!(
+            drag.preview[drag.preview.len() - 1],
+            Vec2::new(100.0, 40.0),
+            "末端（后缀）原样"
+        );
+    }
+
+    /// 提交计划：新增段 = 预览 [左锚..=右锚] 切片；整线 = 全部预览。
+    #[test]
+    fn middle_drag_commit_plan_carves_only_the_changed_span() {
+        let grid = flat_grid();
+        let mut drag = drag_at(2);
+        let target = Vec2::new(60.0, 70.0);
+        ensure_drag_preview(
+            &mut drag,
+            target,
+            &grid,
+            8.0,
+            LinePathMode::Route,
+            preview_seed("river_a", (7, 8)),
+        );
+        let plan = drag_commit_plan(&drag).expect("应有提交计划");
+        let (lo, _, hi) = drag.middle_span.expect("span 应在");
+        let seg_len = plan.new_segment.len();
+        assert_eq!(
+            seg_len,
+            hi - lo + 1,
+            "新增段 = 预览 [lo..=hi] 切片（实际 {} vs {}）",
+            seg_len,
+            hi - lo + 1
+        );
+        assert_eq!(
+            Vec2::new(plan.new_line[0].0, plan.new_line[0].1),
+            drag.preview[0],
+            "整线载荷 = 预览"
+        );
+        // 仅变化段：切片外的前后缀与原线一致。
+        for (i, p) in plan.new_segment.iter().enumerate() {
+            let idx = lo + i;
+            let in_prefix = idx < lo || idx > hi; // 恒假——切片即本段。
+            let _ = in_prefix;
+        }
+        // 前缀逐点一致（未动段不下切）。
+        for i in 0..lo {
+            assert_eq!(
+                plan.new_line[i].0,
+                20.0 + 20.0 * i as f32,
+                "前缀下标 {i} 不动"
+            );
+        }
+    }
+
+    /// 拖回原位 = 无真变化：不出计划（与端点拖拽的「原地不提交」同语义）。
+    #[test]
+    fn middle_drag_back_to_origin_commits_nothing() {
+        let grid = flat_grid();
+        let mut drag = drag_at(2);
+        // 目标 = 原位置 (60, 40)：规划出的左右段与原线逐点一致。
+        ensure_drag_preview(
+            &mut drag,
+            Vec2::new(60.0, 40.0),
+            &grid,
+            8.0,
+            LinePathMode::Route,
+            preview_seed("river_a", (7, 8)),
+        );
+        assert!(drag_commit_plan(&drag).is_none(), "拖回原位不应出提交计划");
+    }
+
+    /// 逐帧对齐：align_preview_tail 直写被拖顶点（下标取自 span）。
+    #[test]
+    fn align_preview_tail_writes_the_dragged_middle_vertex() {
+        let grid = flat_grid();
+        let mut drag = drag_at(2);
+        ensure_drag_preview(
+            &mut drag,
+            Vec2::new(60.0, 70.0),
+            &grid,
+            8.0,
+            LinePathMode::Route,
+            preview_seed("river_a", (7, 8)),
+        );
+        let (_, dragged, _) = drag.middle_span.expect("span 应在");
+        align_preview_tail(&mut drag, Vec2::new(61.0, 71.0));
+        assert!(
+            drag.preview[dragged].distance(Vec2::new(61.0, 71.0)) < 1e-3,
+            "对齐应直写被拖顶点（下标 {dragged}）"
         );
     }
 }

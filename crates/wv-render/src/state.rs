@@ -881,6 +881,9 @@ pub enum DraggedEnd {
     First,
     /// 末顶点（折线终点）。
     Last,
+    /// 中段顶点（UX-031）：`usize` = 起拖时在原线中的下标（`1..n-1`）。
+    /// 拖动 = 左右两锚点间各自重规划（地形感知），非自由平移。
+    Middle(usize),
 }
 
 /// 端点拖拽会话的**纯数据投影**（ADR-0070 D4 · 计划 Task 12）。
@@ -903,6 +906,10 @@ pub struct EndpointDrag {
     pub target_cell: (i32, i32),
     /// 汇流吸附目标：`(另一条河的 ID, 吸附点)`。`Some` = 预览高亮该线。
     pub snap: Option<(wv_core::id::Id, Vec2)>,
+    /// UX-031（仅 [`DraggedEnd::Middle`]）：预览中 `(左锚点下标,
+    /// 被拖顶点下标, 右锚点下标)`——左右锚点间的整段 = 提交计划的新增段
+    /// （只下切变化段），被拖顶点下标给逐帧对齐用。端点拖拽恒 `None`。
+    pub middle_span: Option<(usize, usize, usize)>,
 }
 
 /// 线段 POI 工具会话态（ADR-0070 D4）。
