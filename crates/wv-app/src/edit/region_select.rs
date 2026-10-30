@@ -23,20 +23,17 @@ use wv_render::state::RegionAdjustState;
 
 use wv_core::model::region::Region;
 
-/// 右键位移超过这个像素数就算「拖动平移」，不算单击。
-///
-/// 4px：手抖与触控板轻触的抖动在 1–2px；真拖一定会超过。比双击容差
-/// （`DOUBLE_CLICK_SLOP`）小一档，因为这里判的是「有没有意图」，不是「准不准」。
-const RIGHT_DRAG_SLOP_PX: f32 = 4.0;
-
 /// 右键追迹（起点 + 是否已拖过阈值）。
 ///
+/// 原伴随的「右键单击取消选中」系统已收编进
+/// [`super::cancel_selection`]（ADR-0089 D1 通用层，位移判据单点
+/// [`wv_render::input::CLICK_MAX_PX`]）；本模块只保留左键点选与追迹类型。
 /// `pub` 是必须的：它出现在 pub 系统的 `Local<>` 参数里（同 `CandidateRingCache`
 /// 的教训——`SystemParam` 类型比系统更私有会直接编译失败）。
 #[derive(Default)]
 pub struct RightDragWatch {
-    start: Option<Vec2>,
-    moved: bool,
+    pub start: Option<Vec2>,
+    pub moved: bool,
 }
 
 /// 本系统生效的语境：数据视图（`Topographic` + 群系视图开关）。
@@ -159,47 +156,9 @@ pub fn select_nature_region_on_click(
     }
 }
 
-/// 右键**单击**（松手时位移 < 4px）⇒ 取消选中。
-///
-/// 右键按住拖动 = 平移，不做任何选择操作（`camera_pan` 与此并行，互不干扰：
-/// 它读鼠标增量，本系统只读按下/松开两点的距离）。
-pub fn cancel_selection_on_right_click(
-    buttons: Res<ButtonInput<MouseButton>>,
-    windows: Query<&Window>,
-    view: Res<ViewState>,
-    ui: Res<wv_render::camera::PointerOverUi>,
-    mut projection: ResMut<WorldProjection>,
-    mut watch: Local<RightDragWatch>,
-) {
-    let cursor = windows.single().ok().and_then(|w| w.cursor_position());
-    if buttons.just_pressed(MouseButton::Right) {
-        *watch = RightDragWatch {
-            start: cursor,
-            moved: false,
-        };
-        return;
-    }
-    if buttons.pressed(MouseButton::Right) {
-        if let (Some(start), Some(now)) = (watch.start, cursor) {
-            if now.distance(start) > RIGHT_DRAG_SLOP_PX {
-                watch.moved = true;
-            }
-        }
-        return;
-    }
-    if !buttons.just_released(MouseButton::Right) {
-        return;
-    }
-    let clicked = watch.start.is_some() && !watch.moved;
-    *watch = RightDragWatch::default();
-    if !clicked || ui.wants_pointer || !data_view_active(&view) {
-        return;
-    }
-    // 只在真有东西可选时写（避免每帧把 `is_changed` 打起来）。
-    if projection.selection.is_some() {
-        projection.selection = None;
-    }
-}
+// 「右键单击取消选中」已随 ADR-0089 D1 升格为**跨工作区通用语义**，收编进
+// [`super::cancel_selection::cancel_selection_on_right_click`]（手势让位 +
+// 双选中一并清）；本模块的 [`RightDragWatch`] 追迹类型由那边继续使用。
 
 #[cfg(test)]
 mod tests {

@@ -55,7 +55,18 @@ pub fn pick_nature_region(local: (f32, f32), world: &wv_core::World, map_id: &Id
     hit
 }
 
+/// 点选系统的双击追迹（上次左键时间 + 世界坐标）。
+///
+/// `pub` 是必须的：它出现在 pub 系统的 `Local<>` 参数里（同 `RightDragWatch`
+/// 的教训——`SystemParam` 类型比系统更私有会直接编译失败）。
+#[derive(Default)]
+pub struct DoubleClickWatch(pub Option<(f64, Vec2)>);
+
 /// 点选工具的鼠标点击处理器（ADR-0057 补记 6；原 `commit_edit_cell_on_click`）。
+///
+/// 双击参数束（ADR-0089 D2）用 **Option 口径**：部分单测夹具不装 Time /
+/// 请求资源（只测裁定本身），缺席即跳过双击判定；生产 app 两资源恒注册
+/// （`ui_shell::register`）。
 ///
 /// 只在 [`PointSelectState::tool_active`] 为 true 时生效——
 /// 由 `apply_pending_commands` 的 `SelectMapTool(PointSelect)` 分支翻 on。
@@ -89,7 +100,7 @@ pub fn pick_nature_region(local: (f32, f32), world: &wv_core::World, map_id: &Id
 ///
 /// 播放中只读（基线 §1.8 / V37）：直接跳过,不写选区。
 /// PointerOverUi：面板点击不吃成选格（与 drill / brush_cursor 同口径）。
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn commit_point_select_on_click(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -106,6 +117,16 @@ pub fn commit_point_select_on_click(
     mut sel: ResMut<crate::state::CellSelection>,
     screen: Res<crate::app_screen::AppScreen>,
     mut link: ResMut<super::region::LassoLiveLink>,
+    // 双击跟踪 + 属性窗体请求（ADR-0089 D2：CellMap 双击 = 照常裁定 +
+    // 拉起 Inspector）。time/watch/请求折进元组——系统已顶 16 参上限；
+    // Option 口径见函数文档。
+    (time, (mut dbl, mut inspector_req)): (
+        Option<Res<Time>>,
+        (
+            Local<DoubleClickWatch>,
+            Option<ResMut<crate::ui_shell::property_window::OpenInspectorRequest>>,
+        ),
+    ),
 ) {
     // 入口：左键单击（含修饰）。右键不归本系统（追记二的 Ctrl+右键已被
     // Alt+左键取代，见追记四）。
@@ -140,6 +161,26 @@ pub fn commit_point_select_on_click(
         // 子图继承父图栅格时 `terrain_of` 会返 None——无地形可选。
         return;
     };
+    // 双击跟踪（ADR-0089 D2）：双击 = 照常走下面的裁定（两次单击各自幂等）
+    // + 拉起属性窗体。阈值单点 [`wv_render::input`]，位移按屏幕像素口径乘
+    // `view.scale`（drill 侧 UX-024 同口径）。
+    if let Some(time) = time.as_deref() {
+        let now = time.elapsed_secs_f64();
+        let double_slop_world = wv_render::input::DOUBLE_CLICK_SLOP_PX * view.scale;
+        let is_double = dbl
+            .0
+            .map(|(t, p)| {
+                now - t <= wv_render::input::DOUBLE_CLICK_SECS
+                    && p.distance(cursor) <= double_slop_world
+            })
+            .unwrap_or(false);
+        dbl.0 = if is_double { None } else { Some((now, cursor)) };
+        if is_double {
+            if let Some(req) = inspector_req.as_deref_mut() {
+                req.request();
+            }
+        }
+    }
     // 图绑定兜底：正常每帧由 `sync_cell_region` 幂等绑定；本系统跑在渲染
     // 之前时（首帧 / 测试）也得保证写进的是当前图的位图。
     sel.bind_map(target_map, terrain.width, terrain.height);

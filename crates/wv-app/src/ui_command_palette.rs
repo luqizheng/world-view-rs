@@ -170,6 +170,13 @@ pub enum CommandId {
     /// **唯一入口**：工具条瓷砖与 V/H/B/E/L/M/P 快捷键都排这一条,由分发器
     /// 统一做互斥（开一个工具 = 关掉其它工具），避免两套逻辑漂移。
     SelectMapTool(MapToolId),
+    /// 工具复位到浏览默认（ADR-0089 D5）：全关 + 开点选，**无翻转语义**。
+    ///
+    /// 与 [`CommandId::SelectMapTool`] 的差别在「已开着」分支——瓷砖点击的
+    /// 翻转语义（再点一次 = 关）对程序化复位是错的：退出 CellMap 时点选正
+    /// 开着，翻转落地反而不带工具。浏览性进入（切视图 / 退工作区 / 开工程）
+    /// 一律排本命令，落地即「点选唯一激活」。
+    ResetToolsToDefault,
 }
 
 /// 地图工具条的工具标识（[`CommandId::SelectMapTool`] 的载荷）。
@@ -268,14 +275,56 @@ impl MapToolId {
     }
 }
 
-/// 退出 CellMap 工作区（2026-10-28 修：旁路泄漏根修）。
+/// 进入 CellMap 工作区（顶栏段「浏览性进入」与「编辑城市」按钮的**编辑性进入**
+/// 共用编排，ADR-0089 D3）：快照全部面板可见性 → 只开笔刷/地标浮窗 → 排默认工具。
+///
+/// 工具排队按 `editing` 分流：`false`（浏览性进入）排
+/// [`CommandId::ResetToolsToDefault`]——落地即点选唯一激活；不能排
+/// `SelectMapTool(PointSelect)`，它的「已开着 = 关」翻转语义会把浏览态带过来
+/// 的点选关掉。`true`（编辑性进入）排 `SelectMapTool(Brush)`——场景分区刷色
+/// 的载体，M1「进去即刷」；编辑性进入只能从浏览态发起，笔刷必关，翻转语义
+/// 不会误触。工具语义全在分发器的互斥分支，这里只编排面板与排队。
+pub fn enter_cellmap_workspace(
+    panels: &mut crate::state::PanelState,
+    palette: &mut CommandPalette,
+    editing: bool,
+) {
+    let backup = Panel::ALL
+        .iter()
+        .map(|p| (*p, panels.is_visible(*p)))
+        .collect();
+    panels.cell_workspace_backup = Some(backup);
+    for p in Panel::ALL {
+        panels.set_visible(p, false);
+    }
+    // 2026-10-24 用户裁定：CellMap 的编辑控件（读数条 / 落笔值 / 泛洪判据 /
+    // 派生运算 / 单格与批量表单）迁入**笔刷浮动窗**。故工作区开的是 Brush
+    // 而不是 Inspector。
+    panels.set_visible(Panel::Brush, true);
+    // 地标面板（ADR-0071）随行开启：CellMap 工作区是地标放置的两用场景之一
+    // （吸附格中心），没有它工作区内无放置入口。退出时随快照还原。
+    panels.set_visible(Panel::Landmark, true);
+    palette.pending = Some(if editing {
+        CommandId::SelectMapTool(MapToolId::Brush)
+    } else {
+        CommandId::ResetToolsToDefault
+    });
+}
+
+/// 退出 CellMap 工作区（2026-10-28 修：旁路泄漏根修；ADR-0089 D5 改排点选）。
 ///
 /// 进 CellMap 时顶栏会把全部面板可见性快照进
 /// [`crate::state::PanelState::cell_workspace_backup`] 再只开笔刷/地标窗；
-/// 退出必须还原快照并关 EditCell 工具。此前**只有顶栏三段按钮**走这套编排
+/// 退出必须还原快照并复位工具。此前**只有顶栏三段按钮**走这套编排
 /// ——快捷键 1/2、命令面板、HTTP `set_view_mode` 直接写 `view.mode` 绕过
 /// 退出，快照泄漏：Inspector 保持隐藏、工作区旗标立着（势力层/事态页签
 /// 持续禁用）、EditCell 工具不关。本助手是退出的**单一入口**，各路径共用。
+///
+/// 排队命令 = [`CommandId::ResetToolsToDefault`]（ADR-0089 D5：退出落地即
+/// 浏览态默认点选，全关其余工具）。旧值 `EditCell` 充当关动作依赖「进入必开
+/// EditCell」的前提——D5 后进入默认点选，EditCell 可能根本没开，排它会在
+/// 浏览档撞白名单误报；排 `SelectMapTool(PointSelect)` 又有「已开着 = 关」
+/// 翻转语义（退出时点选正开着，落地反而不带工具）。复位命令两坑都避开。
 ///
 /// `palette: Option` —— HTTP 路径拿不到面板队列时传 `None`（工具关闭留待
 /// 用户下一次切工具；面板还原是主要修复面）。
@@ -288,7 +337,7 @@ pub fn exit_cellmap_workspace(
             panels.set_visible(p, v);
         }
         if let Some(palette) = palette {
-            palette.pending = Some(CommandId::SelectMapTool(MapToolId::EditCell));
+            palette.pending = Some(CommandId::ResetToolsToDefault);
         }
     }
 }

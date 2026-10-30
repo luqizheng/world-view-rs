@@ -29,12 +29,11 @@ use crate::ui::inspector::place::{update_place_now, PlaceFieldPatch};
 
 use super::EditHistory;
 
-/// 位移门槛（屏幕像素）：按下后光标移出此半径才算拖动，否则是单击。
-const DRAG_SLOP_PX: f32 = 4.0;
-
-/// 双击窗口（秒）/ 同点容差（px）——与 `drill.rs` 的下钻双击同数值口径。
-const DOUBLE_CLICK_SECS: f64 = 0.40;
-const DOUBLE_CLICK_SLOP_PX: f32 = 6.0;
+/// 位移/双击阈值单点定义在 [`wv_render::input`]（ADR-0089 D1），按屏幕
+/// 像素口径、使用处乘 `view.scale` 换算成世界单位。原本地 0.40s/6px 与
+/// 「双击容差直接比世界坐标」的口径一并并入（世界级 scale≈5 时 6 wu 只合
+/// 1.2px，双击几乎必须原地不动——drill 侧 UX-024 同款问题）。
+use wv_render::input::{DOUBLE_CLICK_SECS, DOUBLE_CLICK_SLOP_PX, DRAG_START_SLOP_PX};
 
 /// **图钉拖动 + 双击属性**：点选器激活时，按住图钉拖动改坐标、双击弹属性。
 ///
@@ -82,7 +81,7 @@ pub fn drag_place_pin_on_hold(
     // 「键仍按着 ∧ 候选在场」一律先走按住逻辑（else-if 链保证互斥）。
     if buttons.pressed(MouseButton::Left) && drag.place.is_some() {
         if let Some(start) = drag.start_world {
-            if !drag.active && cursor.distance(start) > DRAG_SLOP_PX * view.scale {
+            if !drag.active && cursor.distance(start) > DRAG_START_SLOP_PX * view.scale {
                 drag.active = true;
             }
             if drag.active {
@@ -99,11 +98,10 @@ pub fn drag_place_pin_on_hold(
             return;
         }
         let now = time.elapsed_secs_f64();
+        let double_slop_world = DOUBLE_CLICK_SLOP_PX * view.scale;
         let is_double = drag
             .last_click
-            .map(|(t, p)| {
-                now - t <= DOUBLE_CLICK_SECS && p.distance(cursor) <= DOUBLE_CLICK_SLOP_PX
-            })
+            .map(|(t, p)| now - t <= DOUBLE_CLICK_SECS && p.distance(cursor) <= double_slop_world)
             .unwrap_or(false);
         // 双击后清空点击史——「三连击」不得判成两段双击（drill 同口径）。
         drag.last_click = if is_double { None } else { Some((now, cursor)) };

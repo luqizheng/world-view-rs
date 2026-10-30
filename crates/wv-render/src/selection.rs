@@ -30,16 +30,16 @@ use crate::state::{
 pub const PICK_TOLERANCE_PX: f32 = 8.0;
 /// 首锚闭合吸附半径（屏幕像素）。
 pub const CLOSE_SNAP_PX: f32 = 10.0;
-/// 双击判定窗口（秒）；位移容差见 [`DOUBLE_CLICK_PX`]（按屏幕像素计）。
-pub const DOUBLE_CLICK_SECS: f64 = 0.4;
-/// 双击位移容差（屏幕像素）——调用方按 `view.scale` 换算成 wu 再传入
-/// [`handle_click`]。原 12 wu 世界定长在深缩放下小于像素抖动（M1 终审 minor，
-/// M2 清偿）。
-pub const DOUBLE_CLICK_PX: f32 = 12.0;
 /// 右键点击的最大位移（屏幕像素）——松手时按住期间移动不超过它才算
 /// 「点击」，超过即右键拖拽平移（平移按键口径：右键 / 中键始终保留给
-/// 平移，2026-10-14 裁定；撤锚不得吃掉平移，2026-10-24）。
-pub const RIGHT_CLICK_MAX_PX: f32 = 6.0;
+/// 平移，2026-10-14 裁定；撤锚不得吃掉平移，2026-10-24）。单点定义在
+/// [`crate::input::CLICK_MAX_PX`]（ADR-0089 D1），旧名保留为交互语义别名。
+pub use crate::input::CLICK_MAX_PX as RIGHT_CLICK_MAX_PX;
+/// 双击判定窗口（秒）与位移容差（屏幕像素）——单点定义在 [`crate::input`]
+/// （ADR-0089 D1）；位移容差调用方按 `view.scale` 换算成 wu 再传入
+/// [`handle_click`]。原 12 wu 世界定长在深缩放下小于像素抖动（M1 终审 minor，
+/// M2 清偿）。
+pub use crate::input::{DOUBLE_CLICK_SECS, DOUBLE_CLICK_SLOP_PX as DOUBLE_CLICK_PX};
 
 /// 椭圆选环的分段数（ADR-0043）。
 ///
