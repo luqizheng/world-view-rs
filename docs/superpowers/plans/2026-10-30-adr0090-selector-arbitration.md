@@ -39,10 +39,21 @@
   **612**=609+3；camera_zoom 夹具债由 main 32fa27a 顺手带走）。门禁：wv-render
   428 / app lib 433 / workspace 1431 全绿 + 双 clippy + fmt + smoke-gui PASS。
 
-### M3：D4 群系闸门 + 替换式赋势力
+### M3：D4 群系闸门 + 替换式赋势力——已落（2026-10-30）
 
-- T5 图层面板势力层编辑态 + 「群系」checkbox（默认勾）；Ctrl 多选群系 →
-  `ReplaceFactionTerritoryFromBiomes` 新命令（多群系并集替换疆域，走 EditHistory 可撤销）。
+- T5 落地（命名按数据模型校正：多选对象是**分区脸**，脸 kind 即群系族——
+  ADR-0081「自然蛋糕」的脸本就按群系分界切出，与用户「国家按群系区分」
+  同源）：
+  - **`ReplaceFactionFacesCommand`**（wv-edit，fork 型快照撤销）：三条替换
+    语义——名单内脸易主 / 目标势力原持有不在名单的脸转无主 / 他势力脸不动；
+  - **`PartitionTool::Replace` + `PartitionReplaceState`**（目标势力下拉 +
+    群系闸门 checkbox 默认勾 + Ctrl 多选集，`replace_pick` 纯函数）；
+  - 分区 HUD 加「疆域替换」面板（政治层 only；自然层无疆域不显示）；
+  - **图层面板入口**：选中 Influence 行出现「编辑疆域」按钮 → 进分区编辑态
+    （Replace 工具）——「图层面板进入势力层编辑态」的落地形态；
+  - 手势守卫链与易主同款（播放/UI 抢占/编辑态）+ 群系闸门不勾不选。
+- 执行记录：门禁 app 434 / workspace 1433 全绿 + 双 clippy + fmt + smoke PASS；
+  i18n 612→**618**（六键）；egui 0.36 Button 无 `.enabled`，用 `ui.add_enabled`。
 
 ### M4：D5 贴近群系
 

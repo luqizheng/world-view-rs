@@ -202,10 +202,10 @@ mod tests {
         }
         assert_eq!(
             I18nKey::ALL.len(),
-            612,
-            "ALL 应为 612 项（… + 人物等级列表编辑器十键 + UX batch5 六键 + ADR-0090 三键：MapControlsSelectCell/SelectCellHint/CellFloodOff）；加新键时同步更新数组长度与元素（got {})",
+            618,
+            "ALL 应为 618 项（… + ADR-0090 三键（单格形状）+ M3 六键（疆域替换/群系闸门/编辑疆域））；加新键时同步更新数组长度与元素（got {})",
             I18nKey::ALL.len()
         );
-        assert_eq!(seen.len(), 612, "去重后应仍为 612 项");
+        assert_eq!(seen.len(), 618, "去重后应仍为 618 项");
     }
 }

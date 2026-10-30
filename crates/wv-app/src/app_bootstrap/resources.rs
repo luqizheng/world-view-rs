@@ -179,6 +179,7 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     .init_resource::<crate::ui::inspector::InspectorState>()
     .init_resource::<crate::ui::partition_pen::PartitionPenDialog>()
     .init_resource::<crate::ui::partition_pen::PartitionEditState>()
+    .init_resource::<crate::ui::partition_pen::PartitionReplaceState>()
     .init_resource::<crate::ui::partition_edit::CutStrokeSession>()
     .init_resource::<crate::ui::partition_edit::PartitionAssignDialog>()
     .init_resource::<crate::ui::partition_edit::DragSession>()

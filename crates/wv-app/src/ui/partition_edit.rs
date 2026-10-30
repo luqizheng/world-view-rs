@@ -86,6 +86,21 @@ pub fn pick_face_at(
         .map(|f| f.id)
 }
 
+/// 疆域替换的点选更新（[ADR-0090] D4/M3 纯函数）：
+/// `additive`（Ctrl 按住）= 脸在集合则移除、不在则加入；否则重置为单脸。
+pub fn replace_pick(picked: Vec<u32>, face: u32, additive: bool) -> Vec<u32> {
+    if !additive {
+        return vec![face];
+    }
+    let mut picked = picked;
+    if let Some(i) = picked.iter().position(|&f| f == face) {
+        picked.remove(i);
+    } else {
+        picked.push(face);
+    }
+    picked
+}
+
 /// 切刀折线采集会话。
 #[derive(Resource, Default)]
 pub struct CutStrokeSession {
@@ -148,10 +163,15 @@ pub fn partition_edit_hud(
     mut contexts: EguiContexts,
     shell_cfg: Res<UiShellConfig>,
     current_loc: Res<CurrentLocale>,
-    projection: Res<WorldProjection>,
+    view: Res<ViewState>,
+    mut projection: ResMut<WorldProjection>,
     mut edit_state: ResMut<PartitionEditState>,
     mut session: ResMut<CutStrokeSession>,
     mut playback: ResMut<PlaybackState>,
+    mut replace: ResMut<crate::ui::partition_pen::PartitionReplaceState>,
+    mut edit: ResMut<EditHistory>,
+    mut notice: ResMut<crate::ui_shell::ShellNotice>,
+    time: Res<bevy::prelude::Time>,
 ) {
     let Some((layer_id, _)) = edit_state.active.clone() else {
         return;
@@ -202,6 +222,13 @@ pub fn partition_edit_hud(
                                 },
                             ),
                         );
+                        if !nature {
+                            ui.selectable_value(
+                                &mut edit_state.tool,
+                                PartitionTool::Replace,
+                                t(loc, crate::i18n::I18nKey::PartitionToolReplace),
+                            );
+                        }
                         ui.separator();
                         // 当前时间选择器（D5 地图属性）：写全局时间轴。
                         ui.label(t(loc, crate::i18n::I18nKey::PartitionPenEffectiveDay));
@@ -229,6 +256,8 @@ pub fn partition_edit_hud(
                         "从地块一边拖到另一边（红圈 = 可切边界）"
                     } else if edit_state.tool == PartitionTool::DragBoundary {
                         "拖动共享边界——青色预览 = 松手后的两侧落位"
+                    } else if edit_state.tool == PartitionTool::Replace {
+                        "Ctrl 单击多选脸 → 替换疆域（群系勾选时点击才生效）"
                     } else if nature {
                         "点一块地 → 改群系 + 生效时间"
                     } else {
@@ -240,6 +269,91 @@ pub fn partition_edit_hud(
                             .small()
                             .color(egui::Color32::from_rgb(255, 210, 120)),
                     );
+                    // [ADR-0090 D4/M3] 疆域替换面板（政治层 Replace 工具）：
+                    // 目标势力下拉 + 群系闸门（默认勾）+ 多选计数 + 提交。
+                    if edit_state.tool == PartitionTool::Replace && !nature {
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label(t(loc, crate::i18n::I18nKey::PartitionReplaceTargetLabel));
+                            let factions = &projection.world.factions;
+                            if replace.target.is_none() {
+                                replace.target = factions.first().map(|f| f.id.clone());
+                            }
+                            let cur_name = replace
+                                .target
+                                .as_ref()
+                                .and_then(|id| {
+                                    factions
+                                        .iter()
+                                        .find(|f| &f.id == id)
+                                        .map(|f| f.name.clone())
+                                })
+                                .unwrap_or_else(|| "—".into());
+                            egui::ComboBox::from_id_salt("wv_partition_replace_target")
+                                .selected_text(cur_name)
+                                .show_ui(ui, |ui| {
+                                    for f in factions {
+                                        ui.selectable_value(
+                                            &mut replace.target,
+                                            Some(f.id.clone()),
+                                            f.name.as_str(),
+                                        );
+                                    }
+                                });
+                            ui.checkbox(
+                                &mut replace.biome_gate,
+                                t(loc, crate::i18n::I18nKey::PartitionReplaceBiomeGate),
+                            );
+                            ui.label(format!("已选 {} 脸", replace.picked.len()));
+                            if ui
+                                .button(t(loc, crate::i18n::I18nKey::PartitionReplaceClear))
+                                .clicked()
+                            {
+                                replace.picked.clear();
+                            }
+                            let can = replace.target.is_some() && !replace.picked.is_empty();
+                            if ui
+                                .add_enabled(
+                                    can,
+                                    egui::Button::new(t(
+                                        loc,
+                                        crate::i18n::I18nKey::PartitionReplaceConfirm,
+                                    )),
+                                )
+                                .clicked()
+                            {
+                                let cmd = wv_edit::ReplaceFactionFacesCommand {
+                                    map: wv_core::Id::new_unchecked(view.current_map.clone()),
+                                    layer: layer_id.clone(),
+                                    from: playback.current_day,
+                                    faction: replace.target.clone().expect("按钮禁用时空目标"),
+                                    faces: replace.picked.clone(),
+                                    before: std::sync::Mutex::new(None),
+                                };
+                                let mut tx = wv_edit::Transaction::new();
+                                tx.push(Box::new(cmd));
+                                match edit.history.commit(&mut projection.world, tx) {
+                                    Ok(dirty) => {
+                                        edit.record_dirty(dirty);
+                                        projection.dirty = true;
+                                        let n = replace.picked.len();
+                                        replace.picked.clear();
+                                        notice.info(
+                                            format!("已替换疆域（{n} 张脸）"),
+                                            (time.elapsed_secs_f64() * 60.0) as u64,
+                                        );
+                                    }
+                                    Err(e) => {
+                                        notice.error(
+                                            format!("疆域替换失败：{e}"),
+                                            (time.elapsed_secs_f64() * 60.0) as u64,
+                                        );
+                                        bevy::log::warn!("疆域替换提交失败: {e}");
+                                    }
+                                }
+                            }
+                        });
+                    }
                 });
         });
 }
@@ -870,11 +984,69 @@ pub fn partition_assign_gesture(
     assign.face = face;
 }
 
+/// 疆域替换手势（[ADR-0090] D4/M3）：Replace 工具下点脸进多选集——
+/// Ctrl = 切换累加、无修饰 = 重置单脸；**群系闸门不勾时不选**（D4）。
+/// 与易主手势同款守卫链（播放 / UI 抢占 / 编辑态）。
+#[allow(clippy::too_many_arguments)]
+pub fn partition_replace_gesture(
+    buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    view: Res<ViewState>,
+    grid: Res<GridConfig>,
+    playback: Res<PlaybackState>,
+    edit_state: Res<PartitionEditState>,
+    mut replace: ResMut<crate::ui::partition_pen::PartitionReplaceState>,
+    projection: Res<WorldProjection>,
+    pointer: Res<wv_render::camera::PointerOverUi>,
+) {
+    let Some((layer_id, _)) = edit_state.active.clone() else {
+        return;
+    };
+    if edit_state.tool != PartitionTool::Replace || playback.playing || pointer.wants_pointer {
+        return;
+    }
+    if !buttons.just_released(MouseButton::Left) {
+        return;
+    }
+    // D4 群系闸门：checkbox 不勾 = 点脸不选。
+    if !replace.biome_gate {
+        return;
+    }
+    let Some(cursor) = view.cursor_world else {
+        return;
+    };
+    let p = cursor_to_partition(cursor, &grid);
+    let map_id = wv_core::Id::new_unchecked(view.current_map.clone());
+    let Some(span) =
+        wv_core::partition_span_at(&projection.world, &map_id, &layer_id, playback.current_day)
+    else {
+        return;
+    };
+    let Some(face) = pick_face_at([p.x, p.y], span) else {
+        return;
+    };
+    let additive = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    replace.picked = replace_pick(std::mem::take(&mut replace.picked), face, additive);
+}
+
 #[cfg(test)]
 mod drag_assign_tests {
     //! T13 手势纯函数。
 
     use super::*;
+
+    /// [ADR-0090 M3] 无修饰点击 = 重置为单脸；Ctrl 点击 = 切换累加/移除。
+    #[test]
+    fn replace_pick_resets_without_modifier_and_toggles_with_ctrl() {
+        let picked = replace_pick(Vec::new(), 3, false);
+        assert_eq!(picked, vec![3], "无修饰 = 重置为单脸");
+        let picked = replace_pick(picked, 7, true);
+        assert_eq!(picked, vec![3, 7], "Ctrl = 累加");
+        let picked = replace_pick(picked, 3, true);
+        assert_eq!(picked, vec![7], "Ctrl 再点已选脸 = 移除");
+        let picked = replace_pick(picked, 9, false);
+        assert_eq!(picked, vec![9], "无修饰再点 = 又重置为单脸");
+    }
 
     #[test]
     fn assign_day_follows_global_timeline() {
