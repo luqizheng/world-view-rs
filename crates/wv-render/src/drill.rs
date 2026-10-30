@@ -315,6 +315,76 @@ pub fn map_origin(world: &wv_core::World, node: &MapNode, grid: &GridConfig) -> 
 /// [`crate::selection::PICK_TOLERANCE_PX`] 口径）。
 pub const PIN_HIT_PX: f32 = 18.0;
 
+
+/// 线段 POI 命中的屏幕像素容差（ADR-0090 M2）——与 wv-app
+/// `line_poi_tool::SELECT_TOLERANCE_PX` 同数值口径（8 px × scale），
+/// 两边共用 [`line_poi_hit`] 同一几何，阈值不同会出现「工具选不中 /
+/// 点选能选中」的撕裂。
+pub const LINE_PICK_SLOP_PX: f32 = 8.0;
+
+/// 点到折线的最近距离（wu）。折线不足 2 点 → `f32::INFINITY`。
+///
+/// [ADR-0090 M2] 自 wv-app `line_poi_tool` 下沉：drill_pick 的浏览族线命中
+/// 与 LinePoi 工具的选中态命中必须消费同一几何，否则阈值/判定漂移。
+pub fn point_polyline_dist(p: Vec2, pts: &[Vec2]) -> f32 {
+    pts.windows(2)
+        .map(|w| point_seg_dist(p, w[0], w[1]))
+        .fold(f32::INFINITY, f32::min)
+}
+
+/// 点到线段的最短距离（经典垂足钳制）。
+fn point_seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f32 {
+    let ab = b - a;
+    let len2 = ab.length_squared();
+    if len2 <= f32::EPSILON {
+        return p.distance(a); // 退化线段 = 点距。
+    }
+    let t = ((p - a).dot(ab) / len2).clamp(0.0, 1.0);
+    let foot = a + ab * t;
+    p.distance(foot)
+}
+
+/// 扁平折线 → 顶点列表（`Place.line` 的 `[x0,y0,x1,y1,…]` 视图）。
+///
+/// 奇偶不齐的脏数据按「能凑几对凑几对」截断（命中 / 拖拽 / 描画三处同款
+/// 容错，单独提出来免得第四份拷贝）。
+pub fn line_pts(line: &[f32]) -> Vec<Vec2> {
+    line.chunks(2)
+        .filter(|c| c.len() == 2)
+        .map(|c| Vec2::new(c[0], c[1]))
+        .collect()
+}
+
+/// 线段 POI 命中：当前图锚定、且是线段 POI（`effective_line_kind` 判别，
+/// ADR-0070 D2 唯一入口）的地点里，点到折线最近距离 ≤ `tol_wu` 者，
+/// 取**最近**的一条。
+///
+/// [ADR-0090 M2] 自 wv-app 下沉（理由同 [`point_polyline_dist`]）；wv-app
+/// `line_poi_tool` 经 `pub use` 沿用同一路径。
+pub fn line_poi_hit(
+    world: &wv_core::World,
+    map: &wv_core::Id,
+    local: Vec2,
+    tol_wu: f32,
+) -> Option<wv_core::Id> {
+    let mut best: Option<(f32, &wv_core::Id)> = None;
+    for place in &world.distances.places {
+        if place.map.as_ref() != Some(map) {
+            continue;
+        }
+        if wv_core::map::road_derive::effective_line_kind(place).is_none() {
+            continue; // 点状地点 / 非线段 POI 不参与命中。
+        }
+        let Some(line) = &place.line else { continue };
+        let pts = line_pts(line);
+        let d = point_polyline_dist(local, &pts);
+        if d <= tol_wu && best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, &place.id));
+        }
+    }
+    best.map(|(_, id)| id.clone())
+}
+
 /// 在当前图的**可见图钉**里命中离光标最近者（[ADR-0074] 裁定第一段）。
 ///
 /// 「可见图钉」与 `world_projection` 进 `landmark_dots` 的过滤同一口径：
@@ -585,6 +655,9 @@ pub fn drill_pick(
     // ADR-0074 追记一：点选工具态 + 图层帧——图钉命中只在「点选工具激活 ∧
     // place 层可见」时接管单击；笔刷/量测等工具下点图钉旁不该误选。
     point_select: Res<crate::state::PointSelectState>,
+    // ADR-0090 M2：线段 POI 工具态——激活时其交互系统独占点击（命中优先级
+    // 最高），本系统的线命中分支让位，避免同一击双消费。
+    line_poi: Res<crate::state::LinePoiState>,
     layers: Res<LayerFrame>,
     mut drill: ResMut<DrillState>,
     mut clicks: ResMut<DrillClick>,
@@ -646,10 +719,13 @@ pub fn drill_pick(
     // ADR-0017 §2.7：标签命中优先于一切点击语义——命中即选中该实体并
     // 吃掉这次点击（不参与双击钻取计数）。命中表是上一帧注册的（本系统
     // 在标签系统之前跑），但按下那一刻相机尚未移动，包围盒仍然有效。
-    if let Some(target) = crate::label_pick::hit_test(world_pos, &hits.items) {
-        projection.selection = Some(target);
-        clicks.last = None;
-        return;
+    // [ADR-0090 D2] hidden 图层不可选：label 层关掉时命中表整体不参与。
+    if layers.label.visible {
+        if let Some(target) = crate::label_pick::hit_test(world_pos, &hits.items) {
+            projection.selection = Some(target);
+            clicks.last = None;
+            return;
+        }
     }
 
     // [ADR-0074 追记一] 点选工具下的**图钉命中**（浏览族）：单击图钉 =
@@ -673,6 +749,29 @@ pub fn drill_pick(
                     Some(wv_core::SelectedEntity::new(wv_core::EntityKind::Place, id));
                 clicks.last = None;
                 return;
+            }
+        }
+    }
+
+    // [ADR-0090 D2 / M2] 线段 POI 命中（浏览族）：点选工具下点中河/路折线 =
+    // 选中该 Place——线 POI 就是 Place（ADR-0070），属性表单同管线。
+    // 居图钉之后（点状靶更小更精确）、空白清除之前；**road 层 hidden 不可选**
+    // （D2：hidden 图层不可选）；LinePoi 工具激活时其交互系统独占点击
+    // （那边对既有线的命中优先级最高，ADR-0090 D2），本分支让位防双消费；
+    // 单击才选（`!is_double`），双击让位下钻——与图钉同款手势约定。
+    if !is_double && point_select.tool_active && !line_poi.tool_active {
+        if layers.road.visible {
+            if let Some(current) = drill.current() {
+                let local = world_pos - grid.map_origin;
+                let tol = LINE_PICK_SLOP_PX * view.scale.max(0.25);
+                if let Some(id) =
+                    crate::drill::line_poi_hit(&projection.world, current, local, tol)
+                {
+                    projection.selection =
+                        Some(wv_core::SelectedEntity::new(wv_core::EntityKind::Place, id));
+                    clicks.last = None;
+                    return;
+                }
             }
         }
     }
@@ -2457,6 +2556,9 @@ mod tests {
         bevy_world.insert_resource(crate::state::PointSelectState {
             tool_active: point_select_on,
         });
+        // ADR-0090 M2：线段 POI 工具态（drill_pick 的新参数；默认 = 未激活，
+        // 线命中分支让位）。
+        bevy_world.insert_resource(crate::state::LinePoiState::default());
         bevy_world.init_resource::<crate::label_pick::LabelHits>();
         bevy_world.init_resource::<DrillClick>();
         bevy_world.init_resource::<bevy::input::ButtonInput<bevy::input::mouse::MouseButton>>();
@@ -3265,5 +3367,102 @@ mod tests {
             marker_hit(&world, &drill, &grid, center, 1.0).is_none(),
             "已删子图不可双击钻入"
         );
+    }
+
+    // ── 线段 POI 命中（ADR-0090 M2 下沉的几何三件）──
+
+    /// 折线 [0,0]→[100,0]：线上点距离 0；中垂方向 5 wu 处距离 5；
+    /// 容差 4 wu 不命中、6 wu 命中——阈值口径正确。
+    #[test]
+    fn line_poi_hit_respects_tolerance_and_nearest_wins() {
+        let mut world = World::default();
+        let map = wv_core::Id::new_unchecked("world_main");
+        let mut road = place_line_fixture("road_a", &map, &[0.0, 0.0, 100.0, 0.0]);
+        road.line_width_m = None;
+        let mut road_b = place_line_fixture("road_b", &map, &[0.0, 4.0, 100.0, 4.0]);
+        road_b.line_width_m = None;
+        world.distances.places = vec![road, road_b];
+
+        // 点 (50, 0)：两条线分别距 0 / 4 → 最近者 road_a 胜。
+        let hit = line_poi_hit(&world, &map, Vec2::new(50.0, 0.0), 6.0);
+        assert_eq!(
+            hit.as_ref().map(|i| i.as_str()),
+            Some("road_a"),
+            "两条候选应取距离最近者"
+        );
+        // 容差外不命中：点 (50, 10) 距 road_a 10 / road_b 6，容差 3 全部落空。
+        assert!(
+            line_poi_hit(&world, &map, Vec2::new(50.0, 10.0), 3.0).is_none(),
+            "两条折线均在容差外应无命中"
+        );
+    }
+
+    /// 跨图隔离：折线在另一张图上，本图命中必须为 None。
+    #[test]
+    fn line_poi_hit_is_scoped_to_current_map() {
+        let mut world = World::default();
+        let map = wv_core::Id::new_unchecked("world_main");
+        let other = wv_core::Id::new_unchecked("city_a");
+        world
+            .distances
+            .places
+            .push(place_line_fixture("road_far", &other, &[0.0, 0.0, 100.0, 0.0]));
+        assert!(
+            line_poi_hit(&world, &map, Vec2::new(50.0, 0.0), 50.0).is_none(),
+            "他图折线不得被本图命中"
+        );
+    }
+
+    /// 退化折线（单点 / 空扁平数组）不 panic、不命中。
+    #[test]
+    fn line_poi_hit_tolerates_degenerate_polylines() {
+        let mut world = World::default();
+        let map = wv_core::Id::new_unchecked("world_main");
+        world.distances.places = vec![
+            place_line_fixture("road_dot", &map, &[50.0, 0.0]),
+            place_line_fixture("road_empty", &map, &[]),
+        ];
+        let hit = line_poi_hit(&world, &map, Vec2::new(50.0, 0.0), 10.0);
+        assert!(
+            hit.is_none(),
+            "单点折线无段（point_polyline_dist 契约 = INFINITY）不得命中"
+        );
+    }
+
+    /// 除 id/name 外全空的 Place（其余字段全 Option，`None` 即旧工程缺省语义）。
+    fn empty_place() -> wv_core::map::distance::Place {
+        wv_core::map::distance::Place {
+            id: wv_core::Id::new_unchecked("_"),
+            name: String::new(),
+            feature: None,
+            map: None,
+            x: None,
+            y: None,
+            w: None,
+            h: None,
+            biome: None,
+            envelope: None,
+            rank: None,
+            line: None,
+            kind: None,
+            line_kind: None,
+            line_width_m: None,
+        }
+    }
+
+    /// 线段地点 fixture：`line_kind = Road` + 扁平折线（图内局部 wu）。
+    fn place_line_fixture(
+        id: &str,
+        map: &wv_core::Id,
+        line: &[f32],
+    ) -> wv_core::map::distance::Place {
+        wv_core::map::distance::Place {
+            id: wv_core::Id::new_unchecked(id),
+            name: id.into(),
+            map: Some(map.clone()),
+            line: Some(line.to_vec()),
+            line_kind: Some(wv_core::distance::LineKind::Road),
+            ..empty_place()
+        }
     }
 }
