@@ -50,6 +50,9 @@ pub struct LayerPanelUiState {
     /// 不透明度滑条拖动中的即时值——拖完一次性提交命令，避免按帧碎提交
     /// 撑爆 Undo 栈。
     pub pending_opacity: Option<f32>,
+    /// z 槽位拖动中的即时值（挂层 Id 防切层串值）——同 pending_opacity 口径
+    /// （UX 评审 finding-3：DragValue 每拖动刻提交会把 Undo 栈打碎）。
+    pub pending_z: Option<(Id, i32)>,
 }
 
 /// 面板快照行（进闭包前从 `MapNode.layers` 克隆，规避闭包内与世界借用打架）。
@@ -197,22 +200,32 @@ pub fn panel_layers(
                 // UX-007：选中层的 z 槽位（SetLayerZCommand）。z 是渲染上下
                 // 的真旋钮（内建槽位 ± z×0.05，clamp ±4）；与上方 ↑↓（改
                 // 「哪份声明生效」）分工见脚注。
+                // finding-3：拖动中只记 pending（挂层 Id 防切层串值），拖停 /
+                // 单击跳值才提交——一次拖动 = 一条 Undo 记录（同 opacity 口径）。
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new(t_key(&current_loc, I18nKey::PanelLayersZLabel))
                             .small()
                             .color(shell.t2()),
                     );
-                    let mut z = sel_z(&projection.world, &map_id, &sel.id);
-                    if ui
-                        .add(egui::DragValue::new(&mut z).speed(0.1).range(-4..=4))
-                        .changed()
-                    {
-                        commit_layer2(
-                            &mut projection,
-                            &mut edit,
-                            wv_edit::SetLayerZCommand::new(map_id.clone(), sel.id.clone(), z),
-                        );
+                    let mut z = match &layer_ui.pending_z {
+                        Some((id, z)) if id == &sel.id => *z,
+                        _ => sel_z(&projection.world, &map_id, &sel.id),
+                    };
+                    let z_resp = ui.add(egui::DragValue::new(&mut z).speed(0.1).range(-4..=4));
+                    if z_resp.changed() {
+                        layer_ui.pending_z = Some((sel.id.clone(), z));
+                    }
+                    let settled = z_resp.drag_stopped() || (z_resp.changed() && !z_resp.dragged());
+                    if settled {
+                        if z != sel_z(&projection.world, &map_id, &sel.id) {
+                            commit_layer2(
+                                &mut projection,
+                                &mut edit,
+                                wv_edit::SetLayerZCommand::new(map_id.clone(), sel.id.clone(), z),
+                            );
+                        }
+                        layer_ui.pending_z = None;
                     }
                 });
                 // 脚注（UX-007 替代方案落地）：两条规则写明，DRAW ORDER 不再
@@ -225,34 +238,38 @@ pub fn panel_layers(
 
                 // [ADR-0090 D4/M3] 势力层选中时给「编辑疆域」入口：
                 // 进分区编辑态（Replace 工具，群系闸门默认勾）。
+                // finding-7：按钮只在选中 Influence 层时渲染——旧实现任何层
+                // 选中都画这颗按钮、点击静默无效（外形承诺了不存在的交互）。
                 // UX-006：Influence 声明层锁定 → 分区编辑入口灰化 + 悬停说明
                 //（前置披露：闸门挂入口端，不挂提交端——UX-029 哲学）。
-                let influence_locked = crate::edit::editing::layer_locked(
-                    &projection.world,
-                    &map_id,
-                    LayerKind::Influence,
-                );
-                let territory_btn = ui
-                    .add_enabled(
-                        !influence_locked,
-                        egui::Button::new(t_key(&current_loc, I18nKey::LayerRowEditTerritory)),
-                    )
-                    .on_hover_text(if influence_locked {
-                        t_key(&current_loc, I18nKey::LockedLayerWriteBlocked).to_owned()
-                    } else {
-                        String::new()
-                    });
-                if sel.kind == LayerKind::Influence && territory_btn.clicked() {
-                    if let Some(from) = wv_core::partition_span_at(
+                if sel.kind == LayerKind::Influence {
+                    let influence_locked = crate::edit::editing::layer_locked(
                         &projection.world,
                         &map_id,
-                        &sel.id,
-                        playback.current_day,
-                    )
-                    .map(|s| s.from)
-                    {
-                        partition_edit.active = Some((sel.id.clone(), from));
-                        partition_edit.tool = crate::ui::partition_pen::PartitionTool::Replace;
+                        LayerKind::Influence,
+                    );
+                    let territory_btn = ui
+                        .add_enabled(
+                            !influence_locked,
+                            egui::Button::new(t_key(&current_loc, I18nKey::LayerRowEditTerritory)),
+                        )
+                        .on_hover_text(if influence_locked {
+                            t_key(&current_loc, I18nKey::LockedLayerWriteBlocked).to_owned()
+                        } else {
+                            String::new()
+                        });
+                    if territory_btn.clicked() {
+                        if let Some(from) = wv_core::partition_span_at(
+                            &projection.world,
+                            &map_id,
+                            &sel.id,
+                            playback.current_day,
+                        )
+                        .map(|s| s.from)
+                        {
+                            partition_edit.active = Some((sel.id.clone(), from));
+                            partition_edit.tool = crate::ui::partition_pen::PartitionTool::Replace;
+                        }
                     }
                 }
             }
@@ -338,8 +355,31 @@ pub fn panel_layers(
                     t_key(&current_loc, I18nKey::PanelLayersEmptyHint),
                 );
             } else {
+                // finding-2/10：悬停从裸层 id 换成可读信息（名称 + 用途），
+                // 并在会话总开关「势力」压住时显式告知——声明轴眼睛勾了也
+                // 不会显示，省掉「势力为什么不显示」的三面板试错。
+                let session_suppressed = !view.factions_visible;
+                let usage_label = |usage: wv_core::model::faction::LayerUsage| match usage {
+                    wv_core::model::faction::LayerUsage::Political => {
+                        t_key(&current_loc, I18nKey::FactionLayerUsagePolitical)
+                    }
+                    wv_core::model::faction::LayerUsage::Nature => {
+                        t_key(&current_loc, I18nKey::FactionLayerUsageNature)
+                    }
+                };
                 for layer in &faction_layers {
                     let mut visible = layer.visible;
+                    let usage = usage_label(layer.usage);
+                    let hover = if session_suppressed {
+                        format!(
+                            "{}（{}）\n{}",
+                            layer.name,
+                            usage,
+                            t_key(&current_loc, I18nKey::FactionGroupSessionOffHint)
+                        )
+                    } else {
+                        format!("{}（{}）", layer.name, usage)
+                    };
                     // 层行：icon 占位 + 名字 + 弹性 + 眼睛 toggle（28px 行高）。
                     ui.horizontal(|ui| {
                         let resp = ui.allocate_ui(egui::vec2(ui.available_width(), 22.0), |ui| {
@@ -348,7 +388,11 @@ pub fn panel_layers(
                                 ui.label(
                                     egui::RichText::new(layer.name.as_str())
                                         .font(proportional(shell.scale.base))
-                                        .color(shell.t2()),
+                                        .color(if session_suppressed {
+                                            shell.t3()
+                                        } else {
+                                            shell.t2()
+                                        }),
                                 );
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
@@ -367,7 +411,7 @@ pub fn panel_layers(
                                 );
                             });
                         });
-                        resp.response.on_hover_text(layer.id.as_str());
+                        resp.response.on_hover_text(hover);
                     });
                 }
             }
@@ -432,15 +476,37 @@ pub fn panel_layers(
                     // 一次性借走 7 个互不相同的字段（先降为普通 `&mut ViewState`，
                     // borrowck 才允许不相交字段的并列可变借用——ResMut 每次 DerefMut
                     // 都是整结构体借用），按 web 顺序排 2 列。
+                    // finding-4：标签接 i18n（旧为硬编码英文）。
                     let view_state: &mut ViewState = &mut view;
                     let mut flags = [
-                        ("Terrain Smooth", &mut view_state.terrain_soften),
-                        ("Location", &mut view_state.places_visible),
-                        ("Event", &mut view_state.events_visible),
-                        ("Trail", &mut view_state.tracks_visible),
-                        ("Road", &mut view_state.roads_visible),
-                        ("Building", &mut view_state.buildings_visible),
-                        ("Faction", &mut view_state.factions_visible),
+                        (
+                            t_key(&current_loc, I18nKey::PanelSessionTerrainSmooth),
+                            &mut view_state.terrain_soften,
+                        ),
+                        (
+                            t_key(&current_loc, I18nKey::PanelSessionPlaces),
+                            &mut view_state.places_visible,
+                        ),
+                        (
+                            t_key(&current_loc, I18nKey::PanelSessionEvents),
+                            &mut view_state.events_visible,
+                        ),
+                        (
+                            t_key(&current_loc, I18nKey::PanelSessionTracks),
+                            &mut view_state.tracks_visible,
+                        ),
+                        (
+                            t_key(&current_loc, I18nKey::PanelSessionRoads),
+                            &mut view_state.roads_visible,
+                        ),
+                        (
+                            t_key(&current_loc, I18nKey::PanelSessionBuildings),
+                            &mut view_state.buildings_visible,
+                        ),
+                        (
+                            t_key(&current_loc, I18nKey::PanelSessionFactions),
+                            &mut view_state.factions_visible,
+                        ),
                     ];
                     for pair in flags.chunks_mut(2) {
                         for (name, flag) in pair.iter_mut() {

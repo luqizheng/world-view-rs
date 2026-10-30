@@ -58,6 +58,18 @@ pub struct InspectorDrafts {
     /// 确认文案，第二击才真删（垃圾桶 purge 的同款模式）。存势力 Id：
     /// 切换选中势力时武装自动失效，防「武装了 A 删掉 B」。
     pub faction_delete_armed: Option<wv_core::Id>,
+    /// Faction 表单草稿归属的势力（finding-3：切选势力自动重初始化草稿）。
+    pub faction_drafts_for: Option<wv_core::Id>,
+    /// Faction 表单：名称草稿（失焦提交，不逐击键进 Undo 栈）。
+    pub faction_name_draft: String,
+    /// Faction 表单：颜色草稿（hex 串；取色器浮层关闭 / hex 失焦一次提交）。
+    pub faction_color_draft: String,
+    /// Faction 表单：取色器浮层上帧开合态（关闭沿 = 提交沿）。
+    pub faction_color_open: bool,
+    /// Faction 表单：等级草稿（失焦提交）。
+    pub faction_rank_draft: String,
+    /// Faction 表单：驻地草稿（失焦提交）。
+    pub faction_seat_draft: String,
 }
 
 /// 解析「起 day」输入；解析失败（含空串）返回 `fallback`（= 不改）。

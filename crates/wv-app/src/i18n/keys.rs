@@ -389,6 +389,22 @@ pub enum I18nKey {
     PanelLayersFactionGroup,
     /// 图层面板自然图行标签（ADR-0079 政治图集页开关）
     PanelLayersNaturalMap,
+    /// 会话开关：平滑地形（UX 评审 finding-4：会话段接 i18n）
+    PanelSessionTerrainSmooth,
+    /// 会话开关：地点
+    PanelSessionPlaces,
+    /// 会话开关：事件
+    PanelSessionEvents,
+    /// 会话开关：轨迹
+    PanelSessionTracks,
+    /// 会话开关：道路
+    PanelSessionRoads,
+    /// 会话开关：建筑
+    PanelSessionBuildings,
+    /// 会话开关：势力
+    PanelSessionFactions,
+    /// 势力组行被会话轴压制时的悬停说明（UX 评审 finding-2）
+    FactionGroupSessionOffHint,
     /// 分区 pen 弹框标题（ADR-0079 T11）
     PartitionPenTitle,
     /// 分区 pen 弹框：层名标签
@@ -401,10 +417,20 @@ pub enum I18nKey {
     PartitionPenEffectiveDay,
     /// 分区 pen 弹框：归属标签
     PartitionPenOwner,
-    /// 分区 pen 弹框：归属提示（空 = 无主）
-    PartitionPenOwnerHint,
     /// 分区 pen 弹框：修改提示
     PartitionPenModifyHint,
+    /// 分区 pen 弹框：归属下拉「无主」项（UX 评审 finding-1：归属改显式选择）
+    PartitionPenOwnerNone,
+    /// 分区 pen 弹框：归属下拉「＋ 新建势力…」项
+    PartitionPenOwnerNew,
+    /// 分区 pen 弹框：新建势力的名字标签
+    PartitionPenOwnerNewName,
+    /// 分区 pen 弹框：新建势力语义提示（将真建实体，不静默）
+    PartitionPenOwnerNewHint,
+    /// 分区 pen 弹框：历史段行的脸数单位（"3 块" 的量词）
+    PartitionPenSpanFaces,
+    /// pen 入口在无自有栅格图上的禁用悬停说明（UX 评审 finding-6）
+    PartitionPenNoRaster,
     /// 势力层行 pen 按钮悬停提示（动刀入口）
     PartitionPenButtonHover,
     /// 分区编辑 HUD 标题（ADR-0079 T12）
@@ -431,12 +457,72 @@ pub enum I18nKey {
     PartitionKindHint,
     /// 分区子工具：改群系（自然层的 Assign 语义）
     PartitionToolSetKind,
+    /// 分区编辑 HUD 阶段提示：采集中（UX 评审 finding-8 接 i18n）
+    PartitionStageCapturing,
+    /// 分区编辑 HUD 阶段提示：切刀待命
+    PartitionStageCut,
+    /// 分区编辑 HUD 阶段提示：拖边界待命
+    PartitionStageDrag,
+    /// 分区编辑 HUD 阶段提示：疆域替换待命
+    PartitionStageReplace,
+    /// 分区编辑 HUD 阶段提示：易主（自然层语义）
+    PartitionStageAssignNature,
+    /// 分区编辑 HUD 阶段提示：易主（政治层语义）
+    PartitionStageAssign,
+    /// 疆域替换：目标势力未选时的下拉占位（UX 评审 finding-11）
+    PartitionReplacePickTarget,
     /// 笔刷窗自然区段标题（ADR-0082）
     NaturePartitionTitle,
     /// 笔刷窗「划分自然区」按钮
     NaturePartitionEnter,
     /// 笔刷窗「退出划分」按钮
     NaturePartitionExit,
+    /// 势力层页签：地图标签（UX 评审 finding-4：页签文案接 i18n）
+    FactionTabMap,
+    /// 势力层页签：+ 新建势力层按钮
+    FactionLayerAddPolitical,
+    /// 势力层页签：+ 新建自然层按钮
+    FactionLayerAddNature,
+    /// 势力层页签：自然层已存在（灰化文案）
+    FactionLayerNatureExists,
+    /// 势力层页签：自然层按钮悬停说明
+    FactionLayerNatureHover,
+    /// 势力层页签：+ 新建势力按钮（含空态 CTA，finding-7/9 接线）
+    FactionCreateNew,
+    /// 势力层页签：当前填色层标签
+    FactionTabActiveLayer,
+    /// 势力层页签：当前层「自动」项
+    FactionTabAuto,
+    /// 势力层页签：其他层边界开关
+    FactionTabOtherBorders,
+    /// 势力层页签：声称开关
+    FactionTabClaims,
+    /// 势力层页签：空态标题
+    FactionEmptyTitle,
+    /// 势力层页签：空态提示（finding-9：主 CTA 指向按钮而非 YAML）
+    FactionEmptyHint,
+    /// 层折叠头内空势力提示
+    FactionLayerNoFactions,
+    /// 层用途：政治层（行悬停用）
+    FactionLayerUsagePolitical,
+    /// 层用途：自然层
+    FactionLayerUsageNature,
+    /// 势力层管理：层名标签
+    FactionLayerNameLabel,
+    /// 势力层管理：可见开关
+    FactionLayerVisible,
+    /// 势力层管理：可见开关悬停（含 Alt solo 说明）
+    FactionLayerSoloHint,
+    /// 势力层管理：配色标签
+    FactionLayerColorLabel,
+    /// 配色策略：自身
+    FactionColorOwn,
+    /// 配色策略：继承上级
+    FactionColorInherit,
+    /// 势力层管理：删除层按钮
+    FactionLayerDelete,
+    /// 势力层管理：删除层武装文案（UX-013 两步确认）
+    FactionLayerDeleteArmed,
     /// 图层面板空态标题（本图未声明图层）
     PanelLayersEmptyTitle,
     /// 图层面板空态提示（去 index.yaml 的 layers: 段声明）
@@ -1567,7 +1653,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 658] = [
+    pub const ALL: [I18nKey; 701] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1759,14 +1845,27 @@ impl I18nKey {
         I18nKey::PanelLayersSession,
         I18nKey::PanelLayersFactionGroup,
         I18nKey::PanelLayersNaturalMap,
+        I18nKey::PanelSessionTerrainSmooth,
+        I18nKey::PanelSessionPlaces,
+        I18nKey::PanelSessionEvents,
+        I18nKey::PanelSessionTracks,
+        I18nKey::PanelSessionRoads,
+        I18nKey::PanelSessionBuildings,
+        I18nKey::PanelSessionFactions,
+        I18nKey::FactionGroupSessionOffHint,
         I18nKey::PartitionPenTitle,
         I18nKey::PartitionPenLayer,
         I18nKey::PartitionPenCreate,
         I18nKey::PartitionPenModify,
         I18nKey::PartitionPenEffectiveDay,
         I18nKey::PartitionPenOwner,
-        I18nKey::PartitionPenOwnerHint,
         I18nKey::PartitionPenModifyHint,
+        I18nKey::PartitionPenOwnerNone,
+        I18nKey::PartitionPenOwnerNew,
+        I18nKey::PartitionPenOwnerNewName,
+        I18nKey::PartitionPenOwnerNewHint,
+        I18nKey::PartitionPenSpanFaces,
+        I18nKey::PartitionPenNoRaster,
         I18nKey::PartitionPenButtonHover,
         I18nKey::PartitionEditHudTitle,
         I18nKey::PartitionToolCut,
@@ -1780,9 +1879,39 @@ impl I18nKey {
         I18nKey::PartitionKindTitle,
         I18nKey::PartitionKindHint,
         I18nKey::PartitionToolSetKind,
+        I18nKey::PartitionStageCapturing,
+        I18nKey::PartitionStageCut,
+        I18nKey::PartitionStageDrag,
+        I18nKey::PartitionStageReplace,
+        I18nKey::PartitionStageAssignNature,
+        I18nKey::PartitionStageAssign,
+        I18nKey::PartitionReplacePickTarget,
         I18nKey::NaturePartitionTitle,
         I18nKey::NaturePartitionEnter,
         I18nKey::NaturePartitionExit,
+        I18nKey::FactionTabMap,
+        I18nKey::FactionLayerAddPolitical,
+        I18nKey::FactionLayerAddNature,
+        I18nKey::FactionLayerNatureExists,
+        I18nKey::FactionLayerNatureHover,
+        I18nKey::FactionCreateNew,
+        I18nKey::FactionTabActiveLayer,
+        I18nKey::FactionTabAuto,
+        I18nKey::FactionTabOtherBorders,
+        I18nKey::FactionTabClaims,
+        I18nKey::FactionEmptyTitle,
+        I18nKey::FactionEmptyHint,
+        I18nKey::FactionLayerNoFactions,
+        I18nKey::FactionLayerUsagePolitical,
+        I18nKey::FactionLayerUsageNature,
+        I18nKey::FactionLayerNameLabel,
+        I18nKey::FactionLayerVisible,
+        I18nKey::FactionLayerSoloHint,
+        I18nKey::FactionLayerColorLabel,
+        I18nKey::FactionColorOwn,
+        I18nKey::FactionColorInherit,
+        I18nKey::FactionLayerDelete,
+        I18nKey::FactionLayerDeleteArmed,
         I18nKey::PanelLayersEmptyTitle,
         I18nKey::PanelLayersEmptyHint,
         I18nKey::PanelLayerTerrain,

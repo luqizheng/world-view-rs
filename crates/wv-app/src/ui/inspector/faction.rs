@@ -47,14 +47,35 @@ pub fn faction_form(
 ) {
     let id = faction.id.clone();
     {
-        // 名称 / 颜色（用本地副本 commit，避免可变借用互相打架）。
-        let mut name_buf = faction.name.clone();
-        let mut color_buf = faction.color.as_str().to_string();
-        let mut changed = false;
+        // ── 草稿初始化（finding-3）──
+        // 名称 / 颜色 / 等级 / 驻地全部走草稿 + 失焦提交：egui 文本框每击键
+        // 都 changed，旧实现逐键提交命令 → 改一个名字产生 N 条 Undo 记录。
+        // 草稿挂势力 Id：切换选中势力自动重初始化。
+        if drafts.faction_drafts_for.as_ref() != Some(&id) {
+            drafts.faction_drafts_for = Some(id.clone());
+            drafts.faction_name_draft = faction.name.clone();
+            drafts.faction_color_draft = faction.color.as_str().to_string();
+            drafts.faction_color_open = false;
+            drafts.faction_rank_draft = faction.rank.clone().unwrap_or_default();
+            drafts.faction_seat_draft = faction
+                .seat
+                .as_ref()
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+        }
         ui.horizontal(|ui| {
             ui.label("名称：");
-            if ui.text_edit_singleline(&mut name_buf).changed() {
-                changed = true;
+            let name_resp = ui.text_edit_singleline(&mut drafts.faction_name_draft);
+            // 失焦（含回车）= 一次提交；颜色用已提交值组快照。
+            if name_resp.lost_focus() && drafts.faction_name_draft != faction.name {
+                faction_panel_actions::update_faction_now(
+                    projection,
+                    edit,
+                    view,
+                    id.clone(),
+                    drafts.faction_name_draft.clone(),
+                    faction.color.clone(),
+                );
             }
         });
         ui.horizontal(|ui| {
@@ -63,8 +84,14 @@ pub fn faction_form(
             // 色板 + hex 双向同步都在浮层内完成；非法 hex 宽容处理
             // （§7.5 V1）——输入框危险色提示，色板保持上一个合法值。
             // 势力色是 #RRGGBB 不透明，alpha 条关掉。
-            if let Some(rgb) = wv_core::color::Color(color_buf.clone()).to_rgb() {
-                let mut rgba = egui::Rgba::from_srgba_unmultiplied(rgb[0], rgb[1], rgb[2], 255);
+            // finding-3：拖动/输入期间只写**草稿**，浮层关闭（或 hex 失焦）
+            // 才一次提交——旧实现逐帧提交，拖一次色相条产生几十条 Undo。
+            let picker_id = egui::Id::new(("faction_color", faction.id.as_str()));
+            let draft_valid = wv_core::color::Color(drafts.faction_color_draft.clone())
+                .to_rgb()
+                .map(|rgb| egui::Rgba::from_srgba_unmultiplied(rgb[0], rgb[1], rgb[2], 255))
+                .or_else(|| wv_ui::widgets::hex_to_rgba(&drafts.faction_color_draft));
+            if let Some(mut rgba) = draft_valid {
                 let resp = wv_ui::widgets::ColorPicker::new(
                     ("faction_color", faction.id.as_str()),
                     &mut rgba,
@@ -72,22 +99,21 @@ pub fn faction_form(
                 .with_alpha(false)
                 .show(ui, shell);
                 if resp.changed() {
-                    color_buf = wv_ui::widgets::rgba_to_hex(rgba);
-                    changed = true;
+                    drafts.faction_color_draft = wv_ui::widgets::rgba_to_hex(rgba);
                 }
-            } else if let Some(rgba) = wv_ui::widgets::hex_to_rgba(&color_buf) {
-                // 文本是 8 位等可解析形式：同样走取色器（wv-core 的 to_rgb
-                // 只吃 6/8 位；这里兜住 8 位带 alpha 的情形，提交时仍取 RGB）。
-                let mut rgba = rgba;
-                let resp = wv_ui::widgets::ColorPicker::new(
-                    ("faction_color", faction.id.as_str()),
-                    &mut rgba,
-                )
-                .with_alpha(false)
-                .show(ui, shell);
-                if resp.changed() {
-                    color_buf = wv_ui::widgets::rgba_to_hex(rgba);
-                    changed = true;
+                // 浮层关闭沿 = 提交沿（关闭帧 is_id_open 已翻转）。
+                let open_now = egui::Popup::is_id_open(ui.ctx(), picker_id);
+                let was_open = drafts.faction_color_open;
+                drafts.faction_color_open = open_now;
+                if was_open && !open_now && drafts.faction_color_draft != faction.color.as_str() {
+                    faction_panel_actions::update_faction_now(
+                        projection,
+                        edit,
+                        view,
+                        id.clone(),
+                        faction.name.clone(),
+                        wv_core::Color(drafts.faction_color_draft.clone()),
+                    );
                 }
             } else {
                 // 当前文本解析不出颜色：画一块「无效色」占位（危险色系），
@@ -103,25 +129,28 @@ pub fn faction_form(
                     egui::StrokeKind::Inside,
                 );
             }
-            if ui
-                .add(egui::TextEdit::singleline(&mut color_buf).desired_width(90.0))
-                .changed()
+            // hex 文本框（与取色器同一草稿）：失焦提交。
+            let hex_resp = ui
+                .add(
+                    egui::TextEdit::singleline(&mut drafts.faction_color_draft).desired_width(90.0),
+                )
+                .lost_focus();
+            if hex_resp
+                && wv_core::color::Color(drafts.faction_color_draft.clone())
+                    .to_rgb()
+                    .is_some()
+                && drafts.faction_color_draft != faction.color.as_str()
             {
-                changed = true;
+                faction_panel_actions::update_faction_now(
+                    projection,
+                    edit,
+                    view,
+                    id.clone(),
+                    faction.name.clone(),
+                    wv_core::Color(drafts.faction_color_draft.clone()),
+                );
             }
         });
-        if changed {
-            let color = wv_core::color::Color(color_buf.clone());
-            faction_panel_actions::update_faction_now(
-                projection,
-                edit,
-                view,
-                id.clone(),
-                name_buf,
-                color,
-            );
-        }
-
         // 所属层（None = 默认层）。
         let mut selected_layer = faction.layer.clone();
         let before_layer = selected_layer.clone();
@@ -142,40 +171,54 @@ pub fn faction_form(
             );
         }
 
-        // 等级提示（自由字符串）与驻地。
-        let mut rank_buf = faction.rank.clone().unwrap_or_default();
-        let rank_changed = ui
+        // 等级提示（自由字符串）与驻地——草稿 + 失焦提交（finding-3）。
+        let rank_resp = ui
             .horizontal(|ui| {
                 ui.label("等级：");
-                ui.text_edit_singleline(&mut rank_buf).changed()
+                ui.text_edit_singleline(&mut drafts.faction_rank_draft)
+                    .lost_focus()
             })
             .inner;
-        if rank_changed {
-            let rank = if rank_buf.trim().is_empty() {
+        if rank_resp {
+            let rank = drafts.faction_rank_draft.trim();
+            let new_rank = if rank.is_empty() {
                 None
             } else {
-                Some(rank_buf.trim().to_string())
+                Some(rank.to_string())
             };
-            faction_panel_actions::set_faction_rank_now(projection, edit, view, id.clone(), rank);
+            if new_rank != faction.rank {
+                faction_panel_actions::set_faction_rank_now(
+                    projection,
+                    edit,
+                    view,
+                    id.clone(),
+                    new_rank,
+                );
+            }
         }
-        let mut seat_buf = faction
-            .seat
-            .as_ref()
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-        let seat_changed = ui
+        let seat_resp = ui
             .horizontal(|ui| {
                 ui.label("驻地：");
-                ui.text_edit_singleline(&mut seat_buf).changed()
+                ui.text_edit_singleline(&mut drafts.faction_seat_draft)
+                    .lost_focus()
             })
             .inner;
-        if seat_changed {
-            let seat = if seat_buf.trim().is_empty() {
+        if seat_resp {
+            let seat_text = drafts.faction_seat_draft.trim();
+            let new_seat = if seat_text.is_empty() {
                 None
             } else {
-                Some(Id::new_unchecked(seat_buf.trim()))
+                Some(Id::new_unchecked(seat_text))
             };
-            faction_panel_actions::set_faction_seat_now(projection, edit, view, id.clone(), seat);
+            if new_seat != faction.seat {
+                faction_panel_actions::set_faction_seat_now(
+                    projection,
+                    edit,
+                    view,
+                    id.clone(),
+                    new_seat,
+                );
+            }
         }
 
         // 归属边（ADR-0027：有向、多对多、带时间）。

@@ -166,7 +166,15 @@ pub fn panel_faction(
                 .id_salt(format!("faction_layer_{}", layer.id))
                 .default_open(true)
                 .show(ui, |ui| {
-                    deleted = layer_controls(ui, &shell, layer, &mut projection, &mut edit, &view);
+                    deleted = layer_controls(
+                        ui,
+                        &shell,
+                        current_loc.0,
+                        layer,
+                        &mut projection,
+                        &mut edit,
+                        &view,
+                    );
                     if in_layer.is_empty() {
                         ui.label(
                             egui::RichText::new("（本层暂无势力）")
@@ -218,61 +226,111 @@ pub fn faction_is_selected(selection: Option<&wv_core::SelectedEntity>, id: &Id)
 }
 
 /// 层头：名称 / z / 配色策略 / 可见性 / 删除。返回 true 表示本帧点了删除。
+///
+/// 提交粒度（UX 评审 finding-3）：名称**失焦才提交**、z **拖停才提交**
+/// （egui 文本框每击键 / DragValue 每拖动刻都会 changed——旧实现逐刻度
+/// 提交，改一个名字产生 N 条 Undo 记录）。草稿存 egui memory（键 = 本层
+/// Id），跨帧存活、切层互不串扰；配色 / 可见是离散动作，仍即时提交（用
+/// **已提交**的名称与 z 组快照，不打劫正在输入的草稿）。
 pub fn layer_controls(
     ui: &mut egui::Ui,
     shell: &UiShell,
+    loc: crate::i18n::Locale,
     layer: &FactionLayer,
     projection: &mut WorldProjection,
     edit: &mut editing::EditHistory,
     view: &ViewState,
 ) -> bool {
-    let mut name_buf = layer.name.clone();
-    let mut z = layer.z;
+    use crate::i18n::I18nKey;
+    let key = egui::Id::new("wv_faction_layer_ctrl").with(layer.id.as_str());
+    let mut name_draft = ui
+        .ctx()
+        .data(|d| d.get_temp::<String>(key.with("name")))
+        .unwrap_or_else(|| layer.name.clone());
+    let mut z_draft = ui
+        .ctx()
+        .data(|d| d.get_temp::<Option<i32>>(key.with("z")))
+        .unwrap_or(None);
     let mut color_mode = layer.color_mode;
     let mut visible = layer.visible;
-    let mut changed = false;
     // UX-027：Alt+「可见」= solo 的意图旗标（闭包内置位，出块后执行）。
     let mut solo = false;
+    // 提交意图（出块后执行，避免闭包内与世界借用打架）。
+    let mut commit_name: Option<String> = None;
+    let mut commit_z: Option<i32> = None;
+    let mut commit_attrs = false;
 
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("层名：").small().color(shell.t2()));
-        if ui.text_edit_singleline(&mut name_buf).changed() {
-            changed = true;
+        ui.label(
+            egui::RichText::new(crate::i18n::t(loc, I18nKey::FactionLayerNameLabel))
+                .small()
+                .color(shell.t2()),
+        );
+        let name_resp = ui.text_edit_singleline(&mut name_draft);
+        if name_resp.changed() {
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(key.with("name"), name_draft.clone()));
         }
-        ui.label(egui::RichText::new("z：").small().color(shell.t2()));
-        if ui
-            .add(egui::DragValue::new(&mut z).speed(0.1).range(-4..=4))
-            .changed()
-        {
-            changed = true;
+        // 失焦（含回车）= 一次提交；草稿清掉，下一帧回落到已提交值。
+        if name_resp.lost_focus() && name_draft != layer.name {
+            commit_name = Some(name_draft.clone());
+        }
+        ui.label(egui::RichText::new("z").small().color(shell.t2()));
+        let mut z = z_draft.unwrap_or(layer.z);
+        let z_resp = ui.add(egui::DragValue::new(&mut z).speed(0.1).range(-4..=4));
+        if z_resp.changed() {
+            z_draft = Some(z);
+            ui.ctx().data_mut(|d| d.insert_temp(key.with("z"), Some(z)));
+        }
+        // 拖停 / 单击跳值 = 一次提交（同图层面板 opacity 口径）。
+        if (z_resp.drag_stopped() || (z_resp.changed() && !z_resp.dragged())) && z != layer.z {
+            commit_z = Some(z);
         }
         // UX-027：Alt+点「可见」= solo（只显示这层，再点恢复全显）——逐层
         // 隐藏是 N 次操作，solo 是 1 次（QGIS/Photoshop 标准动作，即审计的
         // 「isolate-by-visibility」）。solo 是**一个意图**，不走本层的单层
         // 提交（solo 事务统一处理所有层，一次撤销）。
         let alt_held = ui.input(|i| i.modifiers.alt);
-        let vis = ui.checkbox(&mut visible, "可见");
+        let vis = ui.checkbox(
+            &mut visible,
+            crate::i18n::t(loc, I18nKey::FactionLayerVisible),
+        );
         if vis.clicked() && alt_held {
             solo = true;
-            changed = false;
             visible = layer.visible; // 撤回本层的半改，交给 solo 事务
+        } else if vis.clicked() {
+            commit_attrs = true;
         }
-        vis.on_hover_text("显隐本层；Alt+点击 = 只显示这层（solo），再点恢复");
+        vis.on_hover_text(crate::i18n::t(loc, I18nKey::FactionLayerSoloHint));
     });
     let mut delete = false;
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("配色：").small().color(shell.t2()));
+        ui.label(
+            egui::RichText::new(crate::i18n::t(loc, I18nKey::FactionLayerColorLabel))
+                .small()
+                .color(shell.t2()),
+        );
         if ui
-            .selectable_value(&mut color_mode, FactionColorMode::Own, "自身")
+            .selectable_value(
+                &mut color_mode,
+                FactionColorMode::Own,
+                crate::i18n::t(loc, I18nKey::FactionColorOwn),
+            )
             .clicked()
+            && layer.color_mode != color_mode
         {
-            changed = true;
+            commit_attrs = true; // 点已选中项 = 无变化，不发空命令
         }
         if ui
-            .selectable_value(&mut color_mode, FactionColorMode::Inherit, "继承上级")
+            .selectable_value(
+                &mut color_mode,
+                FactionColorMode::Inherit,
+                crate::i18n::t(loc, I18nKey::FactionColorInherit),
+            )
             .clicked()
+            && layer.color_mode != color_mode
         {
-            changed = true;
+            commit_attrs = true;
         }
         // UX-013：两步确认——第一击武装（按钮变确认文案），第二击执行。
         // 武装位存 egui memory（键 = 本层 Id）：无签名传染，切换层自动失效。
@@ -282,9 +340,9 @@ pub fn layer_controls(
             .data(|d| d.get_temp::<bool>(armed_key))
             .unwrap_or(false);
         let label = if armed {
-            "确认删除层？"
+            crate::i18n::t(loc, I18nKey::FactionLayerDeleteArmed)
         } else {
-            "删除层"
+            crate::i18n::t(loc, I18nKey::FactionLayerDelete)
         };
         if ui.button(label).clicked() {
             if armed {
@@ -304,14 +362,42 @@ pub fn layer_controls(
         faction_panel_actions::remove_layer_now(projection, edit, view, layer.id.clone());
         return true;
     }
-    if changed {
+    if let Some(name) = commit_name {
+        // 名称提交：其余字段用已提交值组快照（不打劫未定稿的 z / 属性草稿）。
+        ui.ctx().data_mut(|d| d.remove::<String>(key.with("name")));
         faction_panel_actions::update_layer_now(
             projection,
             edit,
             view,
             layer.id.clone(),
-            name_buf,
+            name,
+            layer.z,
+            layer.color_mode,
+            layer.visible,
+        );
+    }
+    if let Some(z) = commit_z {
+        ui.ctx()
+            .data_mut(|d| d.remove::<Option<i32>>(key.with("z")));
+        faction_panel_actions::update_layer_now(
+            projection,
+            edit,
+            view,
+            layer.id.clone(),
+            layer.name.clone(),
             z,
+            layer.color_mode,
+            layer.visible,
+        );
+    }
+    if commit_attrs {
+        faction_panel_actions::update_layer_now(
+            projection,
+            edit,
+            view,
+            layer.id.clone(),
+            layer.name.clone(),
+            layer.z,
             color_mode,
             visible,
         );

@@ -195,6 +195,8 @@ mod tests {
     /// 加「编辑城市」主按钮一键（ADR-0089：双击一律属性窗体，进城改道按钮）= 604。
     /// 另有 13 个「划分势力」Division 族键只进过枚举与译文表、从未入 ALL
     /// （ADR-0028 退役漏清，2026-10-28 一并删除）。
+    /// 加 UX 评审势力层轮 44 键（2026-10-31：pen 归属显式选择六键 + HUD 阶段
+    /// 七键 + 图层会话段八键 + 势力层页签/层管理廿三键）= 701。
     #[test]
     fn i18n_all_length_matches_key_count() {
         let mut seen = std::collections::HashSet::new();
@@ -203,10 +205,10 @@ mod tests {
         }
         assert_eq!(
             I18nKey::ALL.len(),
-            658,
-            "ALL 应为 658 项（… 速查浮层十三键 + 单格应用一键）；加新键时同步更新数组长度与元素（got {})",
+            701,
+            "ALL 应为 701 项（… 速查浮层十三键 + 单格应用一键 + UX 评审势力层轮 43 键）；加新键时同步更新数组长度与元素（got {})",
             I18nKey::ALL.len()
         );
-        assert_eq!(seen.len(), 658, "去重后应仍为 636 项");
+        assert_eq!(seen.len(), 701, "去重后应仍为 701 项");
     }
 }

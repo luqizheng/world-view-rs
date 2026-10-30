@@ -49,15 +49,17 @@ pub fn layers_tab(
     let mut factions: Vec<wv_core::Faction> = projection.world.factions.clone();
     factions.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
 
+    // finding-7：顶行「⋯」按钮（TODO M2 未实现）撤下——死控件不再渲染。
+    // 保留图级标签（作者需要知道本页签看的是哪张图）。
     ui.horizontal(|ui| {
-        if ui.button("⋯").clicked() {
-            // TODO(M2): 弹出势力批量操作菜单（导入 / 导出 / 重命名）
-        }
-        ui.add_space(space::SM);
         ui.label(
-            egui::RichText::new(format!("Map: {}", view.current_map))
-                .size(shell.scale.small)
-                .color(shell.t3()),
+            egui::RichText::new(format!(
+                "{}: {}",
+                crate::i18n::t(loc, crate::i18n::I18nKey::FactionTabMap),
+                view.current_map
+            ))
+            .size(shell.scale.small)
+            .color(shell.t3()),
         );
     });
     ui.add_space(space::MD);
@@ -74,7 +76,7 @@ pub fn layers_tab(
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
-        "+ Add faction layer",
+        crate::i18n::t(loc, crate::i18n::I18nKey::FactionLayerAddPolitical),
         crate::theme::ui_theme::proportional(shell.scale.base),
         shell.t2(),
     );
@@ -112,9 +114,9 @@ pub fn layers_tab(
         rect_n.center(),
         egui::Align2::CENTER_CENTER,
         if nature_exists {
-            "Nature layer exists (unique)"
+            crate::i18n::t(loc, crate::i18n::I18nKey::FactionLayerNatureExists)
         } else {
-            "+ Add nature layer"
+            crate::i18n::t(loc, crate::i18n::I18nKey::FactionLayerAddNature)
         },
         crate::theme::ui_theme::proportional(shell.scale.base),
         shell.t3(),
@@ -130,7 +132,10 @@ pub fn layers_tab(
         );
     }
     if nature_exists {
-        r_n.on_hover_text("自然层全工程唯一；在 CellMap 笔刷窗里编辑划分");
+        r_n.on_hover_text(crate::i18n::t(
+            loc,
+            crate::i18n::I18nKey::FactionLayerNatureHover,
+        ));
     }
     ui.add_space(space::MD);
 
@@ -147,7 +152,7 @@ pub fn layers_tab(
     ui.painter().text(
         rect_f.center(),
         egui::Align2::CENTER_CENTER,
-        "+ 新建势力",
+        crate::i18n::t(loc, crate::i18n::I18nKey::FactionCreateNew),
         crate::theme::ui_theme::proportional(shell.scale.base),
         shell.t2(),
     );
@@ -159,12 +164,18 @@ pub fn layers_tab(
     // 当前填色层选择器（势力图一次只填一个层）。
     ui.horizontal_wrapped(|ui| {
         ui.label(
-            egui::RichText::new("势力图当前层：")
-                .small()
-                .color(shell.t2()),
+            egui::RichText::new(crate::i18n::t(
+                loc,
+                crate::i18n::I18nKey::FactionTabActiveLayer,
+            ))
+            .small()
+            .color(shell.t2()),
         );
         if ui
-            .selectable_label(display.active_layer.is_none(), "自动")
+            .selectable_label(
+                display.active_layer.is_none(),
+                crate::i18n::t(loc, crate::i18n::I18nKey::FactionTabAuto),
+            )
             .clicked()
         {
             display.active_layer = None;
@@ -188,27 +199,29 @@ pub fn layers_tab(
                 // CellMap 笔刷窗自然区段（用户裁定 2026-10-28）。
                 // UX-006：Influence 声明层锁定 → 动刀入口灰化 + 悬停说明
                 //（锁=防误写；前置披露挂入口端）。
-                let influence_locked = crate::edit::editing::layer_locked(
-                    &projection.world,
-                    &wv_core::Id::new_unchecked(view.current_map.clone()),
-                    wv_core::map::LayerKind::Influence,
-                );
-                let pen_enabled = pen_gated
-                    && l.usage != wv_core::model::faction::LayerUsage::Nature
-                    && !influence_locked;
-                if pen_gated && l.usage != wv_core::model::faction::LayerUsage::Nature {
-                    let pen = ui.add_enabled(
-                        pen_enabled,
-                        egui::Button::image(icon_image(ICON_PENCIL, egui::Color32::WHITE, 12.0))
-                            .fill(egui::Color32::TRANSPARENT),
+                // finding-6：无自有栅格的图（City/Interior）铅笔**照渲染但
+                // 禁用** + 悬停解释——入口整颗消失是无反馈的死端。
+                if l.usage != wv_core::model::faction::LayerUsage::Nature {
+                    let influence_locked = crate::edit::editing::layer_locked(
+                        &projection.world,
+                        &wv_core::Id::new_unchecked(view.current_map.clone()),
+                        wv_core::map::LayerKind::Influence,
                     );
-                    let hover = if influence_locked {
+                    let pen_enabled = pen_gated && !influence_locked;
+                    let hover = if !pen_gated {
+                        crate::i18n::t(loc, crate::i18n::I18nKey::PartitionPenNoRaster).to_owned()
+                    } else if influence_locked {
                         crate::i18n::t(loc, crate::i18n::I18nKey::LockedLayerWriteBlocked)
                             .to_owned()
                     } else {
                         crate::i18n::t(loc, crate::i18n::I18nKey::PartitionPenButtonHover)
                             .to_owned()
                     };
+                    let pen = ui.add_enabled(
+                        pen_enabled,
+                        egui::Button::image(icon_image(ICON_PENCIL, egui::Color32::WHITE, 12.0))
+                            .fill(egui::Color32::TRANSPARENT),
+                    );
                     if pen.on_hover_text(hover).clicked() {
                         pen_dialog.open(l.id.clone(), playback_day);
                     }
@@ -217,20 +230,31 @@ pub fn layers_tab(
         }
     });
     ui.horizontal(|ui| {
-        ui.checkbox(&mut display.show_other_borders, "其他层边界");
-        ui.checkbox(&mut display.show_claims, "声称");
+        ui.checkbox(
+            &mut display.show_other_borders,
+            crate::i18n::t(loc, crate::i18n::I18nKey::FactionTabOtherBorders),
+        );
+        ui.checkbox(
+            &mut display.show_claims,
+            crate::i18n::t(loc, crate::i18n::I18nKey::FactionTabClaims),
+        );
     });
     ui.add_space(space::SM);
 
     if factions.is_empty() && layers.is_empty() {
-        empty_state(
+        // finding-7/9：空态 CTA 接线（旧文案「查看势力层说明 →」点击无动作、
+        // hint 指路 YAML）——现在按钮直接开「新建势力」对话框。
+        let cta = empty_state(
             ui,
             shell,
             "◆",
-            "尚未创建势力",
-            "在工程目录下编辑 factions/*.yaml，或点击上方「+ 新建势力」",
-            "查看势力层说明 →",
+            crate::i18n::t(loc, crate::i18n::I18nKey::FactionEmptyTitle),
+            crate::i18n::t(loc, crate::i18n::I18nKey::FactionEmptyHint),
+            crate::i18n::t(loc, crate::i18n::I18nKey::FactionCreateNew),
         );
+        if cta {
+            faction_create.open = true;
+        }
         return;
     }
 
@@ -252,14 +276,18 @@ pub fn layers_tab(
         .id_salt(format!("faction_layer_{}", layer.id))
         .default_open(true)
         .show(ui, |ui| {
-            deleted =
-                crate::ui::faction_panel::layer_controls(ui, shell, layer, projection, edit, view);
+            deleted = crate::ui::faction_panel::layer_controls(
+                ui, shell, loc, layer, projection, edit, view,
+            );
             if in_layer.is_empty() {
                 ui.label(
-                    egui::RichText::new("（本层暂无势力）")
-                        .italics()
-                        .small()
-                        .color(shell.t2()),
+                    egui::RichText::new(crate::i18n::t(
+                        loc,
+                        crate::i18n::I18nKey::FactionLayerNoFactions,
+                    ))
+                    .italics()
+                    .small()
+                    .color(shell.t2()),
                 );
             }
             // 列表项：点击 = 选中（驱动 Inspector 的「属性」页签）。

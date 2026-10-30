@@ -285,18 +285,20 @@ pub fn partition_edit_hud(
                         }
                     });
                     // 阶段提示行：随切刀状态实时变化（可见反馈闭环）。
+                    // finding-8：文案接 i18n，并去掉「✎」——打包字体无该字形
+                    // 会落豆腐块（铅笔图标处已实锤过同款问题）。
                     let stage = if session.active {
-                        "✎ 采集中 —— 松手完成这一刀"
+                        t(loc, crate::i18n::I18nKey::PartitionStageCapturing)
                     } else if edit_state.tool == PartitionTool::Cut {
-                        "从地块一边拖到另一边（红圈 = 可切边界）"
+                        t(loc, crate::i18n::I18nKey::PartitionStageCut)
                     } else if edit_state.tool == PartitionTool::DragBoundary {
-                        "拖动共享边界——青色预览 = 松手后的两侧落位"
+                        t(loc, crate::i18n::I18nKey::PartitionStageDrag)
                     } else if edit_state.tool == PartitionTool::Replace {
-                        "Ctrl 单击多选脸 → 替换疆域（群系勾选时点击才生效）"
+                        t(loc, crate::i18n::I18nKey::PartitionStageReplace)
                     } else if nature {
-                        "点一块地 → 改群系 + 生效时间"
+                        t(loc, crate::i18n::I18nKey::PartitionStageAssignNature)
                     } else {
-                        "点一块地 → 改归属 + 生效时间"
+                        t(loc, crate::i18n::I18nKey::PartitionStageAssign)
                     };
                     ui.separator();
                     ui.label(
@@ -311,9 +313,8 @@ pub fn partition_edit_hud(
                         ui.horizontal(|ui| {
                             ui.label(t(loc, crate::i18n::I18nKey::PartitionReplaceTargetLabel));
                             let factions = &projection.world.factions;
-                            if replace.target.is_none() {
-                                replace.target = factions.first().map(|f| f.id.clone());
-                            }
+                            // finding-11：不做静默默认（旧实现未选时自动取第一个
+                            // 势力）——目标必须显式选，未选时下拉显示占位、确认禁用。
                             let cur_name = replace
                                 .target
                                 .as_ref()
@@ -323,7 +324,10 @@ pub fn partition_edit_hud(
                                         .find(|f| &f.id == id)
                                         .map(|f| f.name.clone())
                                 })
-                                .unwrap_or_else(|| "—".into());
+                                .unwrap_or_else(|| {
+                                    t(loc, crate::i18n::I18nKey::PartitionReplacePickTarget)
+                                        .to_owned()
+                                });
                             egui::ComboBox::from_id_salt("wv_partition_replace_target")
                                 .selected_text(cur_name)
                                 .show_ui(ui, |ui| {
