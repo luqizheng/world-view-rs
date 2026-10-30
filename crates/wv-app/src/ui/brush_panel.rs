@@ -126,6 +126,31 @@ pub fn panel_brush(
                 }
             }
 
+            // ── 「山地叠加山脊纹理」（ADR-0092 §9 B1）──
+            // 同款破坏性放行（撤销栈兜底，不弹确认窗）；同 has_map 置灰。
+            if ui
+                .add_enabled(
+                    has_map,
+                    egui::Button::new(t_key(&current_loc, I18nKey::CmdAddRidgeDetail)),
+                )
+                .on_hover_text(t_key(&current_loc, I18nKey::CmdAddRidgeDetail))
+                .clicked()
+            {
+                if let Some(map_id) = drill.current().cloned() {
+                    let frame = (time.elapsed_secs() * 60.0) as u64;
+                    match editing::apply_add_ridge_detail(
+                        &map_id,
+                        &mut edit,
+                        &mut projection,
+                        &mut tex,
+                        &playback,
+                    ) {
+                        Ok(msg) => notice.info(msg, frame),
+                        Err(msg) => notice.error(msg, frame),
+                    }
+                }
+            }
+
             // ══ 自然区划分段（ADR-0082，用户裁定 2026-10-28）══
             // 自然层编辑在 **CellMap**（Map 只留眼睛）；层全工程唯一。
             // 「划分自然区」= 打开分区编辑态（HUD + 切/拖/改群系三工具，

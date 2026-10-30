@@ -1137,6 +1137,8 @@ pub enum I18nKey {
     CmdForceRebuildTexture,
     /// 「重置当前图地形到底图」（2026-10-16）
     CmdResetTerrainToBase,
+    /// 「山地叠加山脊纹理」（ADR-0092 §9 B1）
+    CmdAddRidgeDetail,
     /// 「重新生成世界地形」（ADR-0037 D4）
     CmdRegenWorld,
     /// 「地图属性…」（2026-10-27：命令面板 / 工程菜单同源）
@@ -1468,7 +1470,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 609] = [
+    pub const ALL: [I18nKey; 610] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1984,6 +1986,7 @@ impl I18nKey {
         I18nKey::CmdToggleDensity,
         I18nKey::CmdForceRebuildTexture,
         I18nKey::CmdResetTerrainToBase,
+        I18nKey::CmdAddRidgeDetail,
         I18nKey::CmdRegenWorld,
         I18nKey::CmdMapProperties,
         // 比例尺悬浮提示（2026-10-27）

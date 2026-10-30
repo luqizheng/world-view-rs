@@ -34,8 +34,9 @@ use crate::state::{
 };
 use crate::ui::cell_pick;
 use wv_edit::command::{
-    ClearMeasurementsCommand, CreateSceneBaseGridCommand, EditCommand, GenerateContinentCommand,
-    IntentTerrainCommand, PaintTerrainCommand, RegenWorldTerrainCommand, ResetTerrainToBaseCommand,
+    AddRidgeDetailCommand, ClearMeasurementsCommand, CreateSceneBaseGridCommand, EditCommand,
+    GenerateContinentCommand, IntentTerrainCommand, PaintTerrainCommand, RegenWorldTerrainCommand,
+    ResetTerrainToBaseCommand,
 };
 use wv_edit::history::Transaction;
 use wv_edit::History;
@@ -70,8 +71,8 @@ pub use region::{
 };
 pub use stroke::commit_stroke_on_release;
 pub use terrain::{
-    apply_clear_measurements, apply_regen_world, apply_reset_terrain_to_base, commit_regen_world,
-    flush_terrain_texture,
+    apply_add_ridge_detail, apply_clear_measurements, apply_regen_world,
+    apply_reset_terrain_to_base, commit_regen_world, flush_terrain_texture,
 };
 
 /// 编辑历史（`wv-edit::History` 的应用层持有者）。

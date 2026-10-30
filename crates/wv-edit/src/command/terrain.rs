@@ -247,6 +247,97 @@ impl EditCommand for IntentTerrainCommand {
     }
 }
 
+/// 山脊纹理命令（ADR-0092 §9 B1）：给当前图陆地叠脊状细节，单命令可撤销。
+///
+/// 与 [`IntentTerrainCommand`] 的差异：不带区域参数（整图陆地），seed 由
+/// 图 ID 派生（同图重复点击 = 同一纹理再叠一层；换图互不影响）；幅度用
+/// `wv-terrain` 的 [`RIDGE_DETAIL_AMPLITUDE_M`] 缺省（实机校准值）。
+///
+/// ## 脏路径
+///
+/// `maps/{id}/terrain.bin`（与 [`IntentTerrainCommand`] 同源）。
+#[derive(Debug)]
+pub struct AddRidgeDetailCommand {
+    /// 目标地图 ID。
+    pub map: wv_core::Id,
+    /// 派生种子（构造时算好，随命令存活——undo 后 redo 重放不漂移）。
+    pub seed: u64,
+    /// `apply` 时缓存的受影响格旧值：`(gx, gy, before_cell)`。
+    before: std::sync::Mutex<Vec<(i32, i32, TerrainCell)>>,
+}
+
+/// 图 ID → 脊状噪声 seed：FNV-1a + 固定盐（与 [`Intent::derive_seed`] 同精神，
+/// 独立实现以免把私有 seed_mix 提为公开 API）。
+fn derive_ridge_seed(map: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325 ^ 0x0072_6964_6765_0101;
+    for byte in map.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+impl AddRidgeDetailCommand {
+    pub fn new(map: wv_core::Id) -> Self {
+        let seed = derive_ridge_seed(map.as_str());
+        Self {
+            map,
+            seed,
+            before: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl EditCommand for AddRidgeDetailCommand {
+    fn label(&self) -> String {
+        format!("山地叠加山脊纹理「{}」", self.map)
+    }
+
+    fn apply(&self, world: &mut World) -> EditResult<Vec<String>> {
+        let data = world
+            .terrain_of(&self.map)
+            .ok_or_else(|| EditError::TerrainMismatch(format!("地图 `{}` 无地形网格", self.map)))?
+            .clone();
+        let mut grid = to_grid(&data)?;
+        let snapshot: Vec<TerrainCell> = grid.cells().to_vec();
+        wv_terrain::intent::apply_ridge_detail(&mut grid, self.seed);
+        let mut before = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?;
+        before.clear();
+        let width = grid.width() as usize;
+        for (idx, (old, new)) in snapshot.iter().zip(grid.cells().iter()).enumerate() {
+            if old != new {
+                let gx = (idx % width) as i32;
+                let gy = (idx / width) as i32;
+                before.push((gx, gy, *old));
+            }
+        }
+        drop(before);
+        world.set_terrain(self.map.clone(), from_grid(grid));
+        Ok(vec![format!("maps/{}/terrain.bin", self.map)])
+    }
+
+    fn revert(&self, world: &mut World) -> EditResult<()> {
+        let before = self
+            .before
+            .lock()
+            .map_err(|_| EditError::Precondition("命令锁中毒".into()))?;
+        let data = world
+            .terrain_of(&self.map)
+            .ok_or_else(|| EditError::TerrainMismatch(format!("地图 `{}` 无地形网格", self.map)))?
+            .clone();
+        let mut grid = to_grid(&data)?;
+        for (gx, gy, cell) in before.iter() {
+            grid.set(*gx, *gy, *cell);
+        }
+        drop(before);
+        world.set_terrain(self.map.clone(), from_grid(grid));
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 大陆生成（大陆生成 UI plan v0.1 Task 1；README §12-40）
 // ---------------------------------------------------------------------------

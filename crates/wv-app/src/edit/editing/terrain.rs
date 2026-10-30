@@ -190,6 +190,48 @@ pub fn apply_reset_terrain_to_base(
     }
 }
 
+/// 给当前图陆地叠加山脊纹理（ADR-0092 §9 B1）。
+///
+/// 与 [`apply_reset_terrain_to_base`] 同款：前后 cells diff 出脏矩形，
+/// 撤销栈兜底；播放中只读（基线 V37）。
+pub fn apply_add_ridge_detail(
+    map_id: &wv_core::Id,
+    edit: &mut EditHistory,
+    projection: &mut WorldProjection,
+    tex: &mut TerrainTexture,
+    playback: &PlaybackState,
+) -> Result<String, String> {
+    if playback.playing {
+        return Err("播放中为只读：先暂停再叠加".into());
+    }
+    let before = wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(map_id))
+        .map(|t| t.cells.clone());
+
+    let mut tx = Transaction::new();
+    tx.push(Box::new(AddRidgeDetailCommand::new(map_id.clone())));
+    match edit.history.commit(&mut projection.world, tx) {
+        Ok(dirty) => {
+            edit.record_dirty(dirty);
+            projection.dirty = true;
+            crate::edit::road_sync::sync_derived_road_edges(&mut projection.world);
+
+            let after =
+                wv_render::terrain_view::texture_terrain(tex, &projection.world, Some(map_id))
+                    .map(|t| (t.width.max(1), t.cells.clone()));
+            match (before, after) {
+                (Some(b), Some((w, a))) if b.len() == a.len() => {
+                    if let Some(rect) = terrain_diff_bbox(&b, &a, w) {
+                        tex.mark_dirty(rect);
+                    }
+                }
+                _ => tex.mark_all_dirty(),
+            }
+            Ok("已叠加山脊纹理".into())
+        }
+        Err(e) => Err(format!("山脊纹理失败：{e}")),
+    }
+}
+
 /// 重生成世界地形（ADR-0037 D4）：整图替换 + 模板记录更新 + **生成器河
 /// 实体换血**（ADR-0070 D3 生成器统一 · 计划 Task 12），单事务可撤销。
 ///
