@@ -1,0 +1,7 @@
+id: teleport_array
+name: 传送阵
+instant: true
+terrain_modifiers: {}
+requires_endpoints: true
+requirements:
+- 地点具有传送阵

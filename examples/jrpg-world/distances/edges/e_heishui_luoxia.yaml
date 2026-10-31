@@ -1,0 +1,6 @@
+id: e_heishui_luoxia
+a: village_heishui
+b: pass_luoxia
+distance_km: 120.0
+terrain: mountain
+bidirectional: true

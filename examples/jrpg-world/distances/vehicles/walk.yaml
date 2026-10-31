@@ -1,0 +1,12 @@
+id: walk
+name: 步行
+instant: false
+speed_kmh: 5.0
+daily_hours: 10.0
+terrain_modifiers:
+  mountain: 0.4
+  forest: 0.7
+  plain: 1.0
+  road: 1.2
+requires_endpoints: false
+requirements: []
