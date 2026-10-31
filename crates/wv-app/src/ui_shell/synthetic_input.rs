@@ -115,6 +115,8 @@ mod tests {
         world.init_resource::<crate::state::ViewState>();
         world.init_resource::<ButtonInput<MouseButton>>();
         world.init_resource::<ButtonInput<KeyCode>>();
+        // 系统签名含 PointerOverUi（UI 抢占门）——夹具缺席即参数校验失败。
+        world.init_resource::<wv_render::camera::PointerOverUi>();
         let mut q = SyntheticInputQueue::default();
         for ev in events {
             q.push(ev);
