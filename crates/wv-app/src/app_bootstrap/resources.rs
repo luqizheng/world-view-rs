@@ -179,6 +179,7 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     // 漏 init 即启动期 panic(同 EditCellState 的教训)。
     .init_resource::<crate::ui::inspector::InspectorState>()
     .init_resource::<crate::ui::partition_pen::PartitionPenDialog>()
+    .init_resource::<crate::ui::cell_edit_dialog::CellEditDialogState>()
     .init_resource::<crate::ui::partition_pen::PartitionEditState>()
     .init_resource::<crate::ui::partition_pen::PartitionReplaceState>()
     .init_resource::<crate::ui::partition_edit::CutStrokeSession>()

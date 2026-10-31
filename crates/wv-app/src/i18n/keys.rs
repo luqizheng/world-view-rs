@@ -824,6 +824,32 @@ pub enum I18nKey {
     PoiKindPortal,
     /// 类别：险地
     PoiKindDanger,
+    /// CellMap 编辑 dialog 标题（ADR-0097）
+    CellDlgTitle,
+    /// 页签：群系（命名物化）
+    CellDlgTabBiome,
+    /// 页签：POI 快改
+    CellDlgTabPoi,
+    /// 页签：单格编辑
+    CellDlgTabCell,
+    /// 页签：批量编辑
+    CellDlgTabBatch,
+    /// 底部：关闭
+    CellDlgClose,
+    /// 群系页签：物化并关闭
+    CellDlgMaterializeClose,
+    /// POI 页签：应用并关闭
+    CellDlgApplyClose,
+    /// POI 页签空态
+    CellDlgPoiEmpty,
+    /// 批量页签空态
+    CellDlgBatchEmpty,
+    /// 群系页签：名称标签
+    CellDlgBiomeName,
+    /// 群系页签：语义提示
+    CellDlgBiomeHint,
+    /// POI 页签：锚定提示（当前编辑对象）
+    CellDlgPoiTarget,
     /// Place 表单：重生成标记按钮
     InspectorPlaceRegenMarker,
     /// Faction 表单：在势力图定位
@@ -1663,7 +1689,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 706] = [
+    pub const ALL: [I18nKey; 719] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -2055,6 +2081,19 @@ impl I18nKey {
         I18nKey::PoiKindShrine,
         I18nKey::PoiKindPortal,
         I18nKey::PoiKindDanger,
+        I18nKey::CellDlgTitle,
+        I18nKey::CellDlgTabBiome,
+        I18nKey::CellDlgTabPoi,
+        I18nKey::CellDlgTabCell,
+        I18nKey::CellDlgTabBatch,
+        I18nKey::CellDlgClose,
+        I18nKey::CellDlgMaterializeClose,
+        I18nKey::CellDlgApplyClose,
+        I18nKey::CellDlgPoiEmpty,
+        I18nKey::CellDlgBatchEmpty,
+        I18nKey::CellDlgBiomeName,
+        I18nKey::CellDlgBiomeHint,
+        I18nKey::CellDlgPoiTarget,
         I18nKey::InspectorPlaceRegenMarker,
         I18nKey::InspectorFactionFocus,
         I18nKey::InspectorFactionClearFocus,

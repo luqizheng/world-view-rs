@@ -18,6 +18,9 @@
 #![cfg(feature = "app")]
 
 pub mod brush_panel;
+// 2026-10-31 认领恢复（原隔离说明见 .superpowers/quarantine-parallel-session/README.txt）：
+// 依赖 wv_edit::SetPlaceKindCommand 已在本分支补齐 re-export，编译恢复。
+pub mod cell_edit_dialog;
 pub mod cell_pick;
 pub mod character_level_dialog;
 pub mod city_intent;
@@ -64,7 +67,6 @@ pub use command_palette_window::command_palette;
 pub use continent_dialog::{continent_dialog, continent_dialog_system, ContinentDialog};
 pub use faction_panel::panel_faction;
 pub use feature_place_dialog::{feature_place_dialog, FeaturePlaceDialog};
-pub use inspector::cell::cell_form;
 pub use inspector::panel_inspector;
 pub use intent_menu::intent_menu;
 pub use landmark_panel::panel_landmark;

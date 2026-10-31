@@ -196,7 +196,7 @@ mod tests {
     /// 另有 13 个「划分势力」Division 族键只进过枚举与译文表、从未入 ALL
     /// （ADR-0028 退役漏清，2026-10-28 一并删除）。
     /// 加 UX 评审势力层轮 44 键（2026-10-31：pen 归属显式选择六键 + HUD 阶段
-    /// 七键 + 图层会话段八键 + 势力层页签/层管理廿三键）= 706。
+    /// 七键 + 图层会话段八键 + 势力层页签/层管理廿三键）= 719。
     #[test]
     fn i18n_all_length_matches_key_count() {
         let mut seen = std::collections::HashSet::new();
@@ -205,10 +205,10 @@ mod tests {
         }
         assert_eq!(
             I18nKey::ALL.len(),
-            706,
-            "ALL 应为 706 项（… 速查浮层十三键 + 单格应用一键 + UX 评审势力层轮 43 键 + POI 类别五键）；加新键时同步更新数组长度与元素（got {})",
+            719,
+            "ALL 应为 719 项（… 速查浮层十三键 + 单格应用一键 + UX 评审势力层轮 43 键 + POI 类别五键）；加新键时同步更新数组长度与元素（got {})",
             I18nKey::ALL.len()
         );
-        assert_eq!(seen.len(), 706, "去重后应仍为 706 项");
+        assert_eq!(seen.len(), 719, "去重后应仍为 719 项");
     }
 }

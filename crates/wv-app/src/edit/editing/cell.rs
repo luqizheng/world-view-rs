@@ -65,7 +65,13 @@ pub fn pick_nature_region(local: (f32, f32), world: &wv_core::World, map_id: &Id
 /// `pub` 是必须的：它出现在 pub 系统的 `Local<>` 参数里（同 `RightDragWatch`
 /// 的教训——`SystemParam` 类型比系统更私有会直接编译失败）。
 #[derive(Default)]
-pub struct DoubleClickWatch(pub Option<(f64, Vec2)>);
+pub struct DoubleClickWatch(
+    pub Option<(f64, Vec2)>,
+    /// 双击序列内的「选区被改写」累计（ADR-0097）：第一击泛洪出新群系、
+    /// 第二击落在泛洪出的选区里（contains 守卫不再置位）——页签裁决要的
+    /// 是**整个序列**是否改写了选区，非单次点击。
+    pub bool,
+);
 
 /// 点选工具的鼠标点击处理器（ADR-0057 补记 6；原 `commit_edit_cell_on_click`）。
 ///
@@ -114,10 +120,6 @@ pub fn commit_point_select_on_click(
     mut sel: ResMut<crate::state::CellSelection>,
     screen: Res<crate::app_screen::AppScreen>,
     mut link: ResMut<super::region::LassoLiveLink>,
-    // 双击群系格 → 打开笔刷面板（ADR-0094 追记：格子编辑框所在，2026-10-24
-    // 自 Inspector 迁入笔刷窗）。Option 口径同双击束：生产恒注册，夹具缺席
-    // 即跳过开面板。
-    mut panels: Option<ResMut<crate::state::PanelState>>,
     // 标签命中表（2026-10-31 修复）：CellMap 里标签可见（ADR-0051 §7
     // Topographic 开档）且命中表照常注册，但消费者只有浏览族 `drill_pick`
     // （那边 Topographic 早退）——点标签文字毫无反应（用户实测）。
@@ -127,11 +129,14 @@ pub fn commit_point_select_on_click(
     // 双击跟踪 + 属性窗体请求（ADR-0089 D2：CellMap 双击 = 照常裁定 +
     // 拉起 Inspector）。time/watch/请求折进元组——系统已顶 16 参上限；
     // Option 口径见函数文档。
-    (time, (mut dbl, mut inspector_req)): (
+    (time, (mut dbl, mut inspector_req, mut cell_dlg)): (
         Option<Res<Time>>,
         (
             Local<DoubleClickWatch>,
             Option<ResMut<crate::ui_shell::property_window::OpenInspectorRequest>>,
+            // ADR-0097：双击群系/选区 → 居中编辑 dialog。Option 口径同上：
+            // 生产恒注册，夹具缺席即跳过。
+            Option<ResMut<crate::ui::cell_edit_dialog::CellEditDialogState>>,
         ),
     ),
 ) {
@@ -172,6 +177,8 @@ pub fn commit_point_select_on_click(
     // ——实体拉 Inspector，群系格开笔刷面板）。两次单击各自幂等。阈值单点
     // [`wv_render::input`]，位移按屏幕像素口径乘 `view.scale`（UX-024 同口径）。
     let mut is_double = false;
+    // 序列累计读入：双击的第二击继承第一击的「选区被改写」位（ADR-0097）。
+    let mut seq_changed = false;
     if let Some(time) = time.as_deref() {
         let now = time.elapsed_secs_f64();
         let double_slop_world = wv_render::input::DOUBLE_CLICK_SLOP_PX * view.scale;
@@ -182,6 +189,7 @@ pub fn commit_point_select_on_click(
                     && p.distance(cursor) <= double_slop_world
             })
             .unwrap_or(false);
+        seq_changed = if is_double { dbl.1 } else { false };
         dbl.0 = if is_double { None } else { Some((now, cursor)) };
     }
     // 图绑定兜底：正常每帧由 `sync_cell_region` 幂等绑定；本系统跑在渲染
@@ -189,6 +197,17 @@ pub fn commit_point_select_on_click(
     sel.bind_map(target_map, terrain.width, terrain.height);
     // 新选择动作 → 断开套索活链接（ADR-0057 补记 5）。
     link.deactivate();
+
+    bevy::log::debug!(
+        "[synth] 裁定入口: mode={:?} cursor={:?} tool={}",
+        view.mode,
+        view.cursor_world,
+        point_select.tool_active
+    );
+    // 双击侧消费（ADR-0097）：本次点击是否泛洪改写了选区 + 锚定格。
+    // 在 Topographic 块内赋值；块外（双击后果段）只读。
+    let mut sel_changed = false;
+    let mut anchor_cell: Option<(i32, i32)> = None;
 
     // ── CellMap 裁定（[ADR-0090] D2 修订 [ADR-0074] 追记四）：标签 > 图钉 > 群系区 ──
     // 仅 Topographic 档。格子两档（Alt 单格 / 默认泛洪）已移交圈选「单格」
@@ -238,36 +257,52 @@ pub fn commit_point_select_on_click(
         // 泛洪，Biome 判据；与圈选「单格」的泛洪同一套机器）。群系区实体
         // 建了就选实体（上一段，可改属性），没建也照样有得选（本段兜底）。
         // 单焦点：写格让出实体选中。
+        // ADR-0097 追记：点在**已选中**的格上不泛洪——保护既有选区（否则
+        // 圈选 N 格后一碰就散，「选完再双击批量编辑」永远不成立）。
         if let Some(pick) = cell_pick::pick_at((cursor.x, cursor.y), &grid, terrain) {
-            let grid_terrain = crate::edit::flood_select::to_terrain_grid(terrain);
-            let cells = wv_terrain::cellops::flood_region(
-                &grid_terrain,
-                pick.gx,
-                pick.gy,
-                wv_terrain::cellops::FloodCriterion::Biome,
-            );
-            if !cells.is_empty() {
-                sel.replace(cells);
-                projection.selection = None;
+            anchor_cell = Some((pick.gx, pick.gy));
+            if !sel.contains(pick.gx, pick.gy) {
+                let grid_terrain = crate::edit::flood_select::to_terrain_grid(terrain);
+                let cells = wv_terrain::cellops::flood_region(
+                    &grid_terrain,
+                    pick.gx,
+                    pick.gy,
+                    wv_terrain::cellops::FloodCriterion::Biome,
+                );
+                if !cells.is_empty() {
+                    sel.replace(cells);
+                    projection.selection = None;
+                    sel_changed = true;
+                    seq_changed = true;
+                }
             }
         }
     }
 
-    // ── 双击后果（裁定之后分流，ADR-0089 D2 + ADR-0094 追记）──
-    // 实体选中 → Inspector（既有语义）；群系格选中 → **打开笔刷面板**：
-    // CellMap 编辑段（统一属性表单）2026-10-24 起住在笔刷窗里，且进
-    // CellMap 工作区时它默认不开——双击把编辑框带上，不让作者猜位置。
+    // ── 双击后果（裁定之后分流，ADR-0089 D2 + ADR-0094/0096 追记）──
+    // 实体选中 → Inspector（既有语义）；群系格/选区 → **居中编辑 dialog**
+    // （ADR-0097：四页签 群系/POI/单格/批量，页签按 decide_tab 裁决——泛洪
+    // 改写选区 = 命名流；点在已选格 = 单格/批量）。
     if is_double {
         if projection.selection.is_some() {
             if let Some(req) = inspector_req.as_deref_mut() {
                 req.request();
             }
         } else if view.mode == ViewMode::Topographic && !sel.is_empty() {
-            if let Some(panels) = panels.as_deref_mut() {
-                panels.visible.insert(crate::state::Panel::Brush, true);
+            if let Some(dlg) = cell_dlg.as_deref_mut() {
+                let tab = crate::ui::cell_edit_dialog::decide_tab(
+                    sel_changed || seq_changed,
+                    sel.len() as usize,
+                    dlg.tab,
+                );
+                if let Some(anchor) = anchor_cell {
+                    dlg.open_at(tab, anchor);
+                }
             }
         }
     }
+    // 序列累计写回（双击已消费/新序列起点均由此归位）。
+    dbl.1 = seq_changed;
 }
 
 /// 圈选「单格」形状的点击处理器（[ADR-0090] D3；2026-10-30 用户裁定：单格

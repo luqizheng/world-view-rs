@@ -77,10 +77,17 @@ pub fn apply_synthetic_input(
     mut view: ResMut<crate::state::ViewState>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
+    // 合成点击独占指针（ADR-0096）：真实 OS 光标可能悬在面板上——那会让
+    // 一切消费方的 `ui.wants_pointer` 让位门把合成点击吞掉。本资源在
+    // PreUpdate 写入、本系统在 Update 消费——此处覆盖即管住当帧全部
+    // Update 侧让位门（点选 / 圈选 / 手势 / drill_pick 同一套门）。
+    mut pointer: ResMut<wv_render::camera::PointerOverUi>,
 ) {
     let Some(ev) = queue.events.pop_front() else {
         return;
     };
+    bevy::log::debug!("[synth] 消费 {:?}", ev);
+    pointer.wants_pointer = false;
     match ev {
         SyntheticEvent::PointerDown { world } => {
             view.cursor_world = Some(world);
@@ -142,11 +149,12 @@ mod tests {
         {
             let view = world.resource::<crate::state::ViewState>();
             assert_eq!(view.cursor_world, Some(Vec2::new(3.0, 4.0)));
-            let mouse = world.resource::<ButtonInput<MouseButton>>();
             // ButtonInput 自身不跨帧清 just_pressed——清场由 Bevy 输入插件
             // 的下帧 PreUpdate 负责（生产调度）；本裸 Schedule 里两帧连跑
             // 会同时看到两次按下，属测试环境差异，非系统缺陷。这里只断言
             // 「第二帧光标已被第二个事件覆盖」= 每帧恰消费一个。
+            // （并行会话 clippy 协作修：原 `let mouse` 绑定未使用，删绑定
+            // 而非加下划线——注释即文档。）
         }
         let queue = world.resource::<SyntheticInputQueue>();
         assert!(queue.is_empty(), "两帧后队列应清空");

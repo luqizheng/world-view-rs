@@ -69,164 +69,15 @@ use wv_ui::widgets::controls::{numeric_input_salted, numeric_input_salted_report
 
 use wv_ui::widgets::segmented_control::segmented;
 
-/// Cell 表单（Inspector「属性」页签 · 地形格分支 → ADR-0058 统一属性表单）。
-///
-/// **何时出现**：`EditCell` 工具激活时（设计稿 §11 Q4——工具即模式）；
-/// 2026-10-24 起CellMap 工作区里圈选确认后（V 工具激活）也直出——
-/// 见 `mod.rs` 的 `cell_form_active` 谓词。
-///
-/// **作用域**（ADR-0058 D2，ADR-0086 修正）：`paint_scope` = EditCell 激活
-/// → 落笔表单（值源 `CellPaintSession` 只被 EditCell 拖绘消费；笔刷的
-/// 调参在 topOptionBar，不再进本表单）；否则按统一选区格数分派——
-/// 0 → 空态；1 → 单格表单（绝对设值）；N → 批量表单（相对增减）。
-#[allow(clippy::too_many_arguments)]
-pub fn cell_form(
-    ui: &mut egui::Ui,
-    shell: &UiShell,
-    projection: &mut WorldProjection,
-    edit_cell: &mut EditCellState,
-    edit: &mut crate::edit::editing::EditHistory,
-    tex: &mut wv_render::terrain_view::TerrainTexture,
-    loc: crate::i18n::Locale,
-    session: &mut wv_world_cell_map::cell_paint::CellPaintSession,
-    flood: &mut wv_world_cell_map::state::FloodSelectState,
-    derived: &mut crate::edit::derived_op::DerivedOpRequest,
-    cont: &mut crate::ui::ContinentDialog,
-    playback_playing: bool,
-    sel: &mut CellSelection,
-    map: Option<&wv_core::Id>,
-    paint_scope: bool,
-    flood_criterion_scope: bool,
-) {
-    // ── 读数条（D8）：面板顶部固定双段 ──
-    // 左段永远读 hover、右段永远读选区；任一段无数据显 `—`，
-    // **绝不回退错位**（把选区的值填到 hover 段会误导作者改错格）。
-    {
-        let world = &projection.world;
-        let read_cell = |gx: i32, gy: i32| -> Option<(i16, u8, u8)> {
-            let terrain = world.terrain_of(map?)?;
-            let w = terrain.width as i32;
-            let h = terrain.height as i32;
-            if gx < 0 || gy < 0 || gx >= w || gy >= h {
-                return None;
-            }
-            let idx = (gy as usize) * (w as usize) + (gx as usize);
-            let c = terrain.cells.get(idx)?;
-            Some((c.height, c.surface, c.biome))
-        };
-        super::cell_paint_panel::render_readout_bar(ui, shell, loc, edit_cell, sel, read_cell);
-    }
-
-    // ── 泛洪判据区（D6；ADR-0086 起跟随**点选工具**显示）──
-    // 判据是**工具参数**（改变 CellMap 默认点击的泛洪行为，ADR-0074 追记四），
-    // 不是落笔值——故独立成段。原宿主泛洪工具已退役（与默认点击重复）。
-    if flood_criterion_scope {
-        super::cell_paint_panel::render_flood_criterion_section(ui, shell, flood, loc);
-        divider(ui, shell);
-    }
-
-    // ── 属性段（ADR-0058 D1/D3）：全浮窗唯一一份地表 / 群系 / 海拔控件，
-    //    作用域头标明当前写入目标 ──
-    if paint_scope {
-        render_scope_header(
-            ui,
-            shell,
-            t(loc, I18nKey::CellScopePaint).to_string(),
-            t(loc, I18nKey::CellPaintSectionHint),
-        );
-        super::cell_paint_panel::render_paint_fields(ui, shell, session, loc);
-    } else {
-        match sel.only_cell() {
-            Some((gx, gy)) => {
-                let Some(before) = read_cell(projection, map, gx, gy) else {
-                    return;
-                };
-                render_scope_header(
-                    ui,
-                    shell,
-                    format!("Cell · {gx}, {gy}"),
-                    t(loc, I18nKey::CellEditorSubtitle),
-                );
-                render_fields(
-                    ui,
-                    shell,
-                    projection,
-                    map,
-                    edit,
-                    edit_cell,
-                    (gx, gy),
-                    before,
-                    tex,
-                    loc,
-                );
-            }
-            None if sel.is_empty() => {
-                empty_state(
-                    ui,
-                    shell,
-                    "▣",
-                    t(loc, I18nKey::CellEditorEmptyTitle),
-                    t(loc, I18nKey::CellEditorEmptyHint),
-                    "",
-                );
-            }
-            None => {
-                render_scope_header(
-                    ui,
-                    shell,
-                    t(loc, I18nKey::CellScopeSelectedCount).replace("{n}", &sel.len().to_string()),
-                    t(loc, I18nKey::CellScopeBatchHint),
-                );
-                // N 格批量：读数 + 整体改（相对增减 / 水陆 / 群系）+ 生成大陆。
-                render_batch_section(
-                    ui,
-                    shell,
-                    projection,
-                    edit,
-                    tex,
-                    loc,
-                    cont,
-                    sel,
-                    map,
-                    playback_playing,
-                );
-            }
-        }
-    }
-
-    // ── 派生运算区（ADR-0058 D7）：平滑 / 量化，作用范围 = 统一选区 ──
-    // 仅选区非空时显示（空选区只有禁用按钮 = 噪音）；播放中保持可见但
-    // 禁用（§9.4 Gate-1：只挡写入，不挡只读查看）。
-    if !sel.is_empty() {
-        divider(ui, shell);
-        super::cell_paint_panel::render_derived_section(
-            ui,
-            shell,
-            loc,
-            derived,
-            sel.len() as usize,
-            playback_playing,
-        );
-    }
-}
-
-/// 作用域头（ADR-0058 D3）：一行标题（SMALL）+ 一行微号说明，
-/// 标明属性段当前写入目标。
-fn render_scope_header(ui: &mut egui::Ui, shell: &UiShell, title: String, hint: &str) {
-    ui.add_space(2.0);
-    ui.label(egui::RichText::new(title).size(13.0).color(shell.t1()));
-    ui.label(
-        egui::RichText::new(hint)
-            .size(font_size::MICRO)
-            .color(shell.accent()),
-    );
-    ui.add_space(4.0);
-}
+// 宿主变迁追记（ADR-0097，2026-10-31）：`cell_form`（读数条 + 0/1/N 分派
+// 宿主）随「地形编辑器不要了」退役——单格/批量子件由 `ui::cell_edit_dialog`
+// 直接复用（`render_fields` / `render_batch_section`，已 pub(crate)）；落笔
+// 表单与泛洪判据留在笔刷面板（工具参数，非编辑器）。
 
 /// 设计稿单格四段（位置 / 地表 / 海拔 / 群系）——ADR-0058 D6 后为三段
 /// （位置退役，坐标在作用域头）。
 #[allow(clippy::too_many_arguments)]
-fn render_fields(
+pub(crate) fn render_fields(
     ui: &mut egui::Ui,
     shell: &UiShell,
     projection: &mut WorldProjection,
@@ -469,7 +320,7 @@ fn region_stats(
 ///
 /// 每次应用 = 1 条 `BatchEditCellsCommand`（N 格 1 个撤销单位）。
 #[allow(clippy::too_many_arguments)]
-fn render_batch_section(
+pub(crate) fn render_batch_section(
     ui: &mut egui::Ui,
     shell: &UiShell,
     projection: &mut WorldProjection,
@@ -851,25 +702,6 @@ fn push_cell_edit(
         }
         Err(e) => bevy::log::warn!("EditCell commit 失败: {e}"),
     }
-}
-
-/// 读格当前值（`map` = 当前图；`None` 无从读）。
-fn read_cell(
-    projection: &WorldProjection,
-    map: Option<&wv_core::Id>,
-    gx: i32,
-    gy: i32,
-) -> Option<wv_core::terrain::TerrainCellData> {
-    let terrain = projection.world.terrain_of(map?)?;
-    let w = terrain.width as i32;
-    let h = terrain.height as i32;
-    if gx < 0 || gy < 0 || gx >= w || gy >= h {
-        return None;
-    }
-    terrain
-        .cells
-        .get((gy as usize) * (w as usize) + (gx as usize))
-        .copied()
 }
 
 /// **海拔提交判定**（P0-1 方案 A 的核心决策，纯函数以便测试锚定）：

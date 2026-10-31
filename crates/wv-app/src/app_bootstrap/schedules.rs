@@ -651,6 +651,7 @@ pub(super) fn register(app: &mut App) {
         bevy_egui::EguiPrimaryContextPass,
         (
             crate::ui::partition_pen::partition_pen_dialog,
+            crate::ui::cell_edit_dialog::cell_edit_dialog,
             crate::ui::partition_edit::partition_edit_hud,
             crate::ui::partition_edit::partition_cut_gesture,
             crate::ui::partition_edit::partition_drag_gesture,

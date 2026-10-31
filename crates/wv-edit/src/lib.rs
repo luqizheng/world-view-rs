@@ -30,8 +30,8 @@ pub use command::{
     PurgeMapCommand, RemoveMeasurementCommand, RemoveRegionCommand, ReplaceFactionFacesCommand,
     RestoreMapCommand, SetCharacterStateSpansCommand, SetCityOutlineCommand, SetLayerZCommand,
     SetMapOrientationCommand, SetNatureFaceNamesCommand, SetPartitionFaceKindCommand,
-    TrashMapCommand, UpdateEventCommand, UpdateFactionLayerCommand, UpdateLayerCommand,
-    UpdateMapPropsCommand, UpdatePlaceCommand, UpdateRegionCommand,
+    SetPlaceKindCommand, TrashMapCommand, UpdateEventCommand, UpdateFactionLayerCommand,
+    UpdateLayerCommand, UpdateMapPropsCommand, UpdatePlaceCommand, UpdateRegionCommand,
 };
 pub use history::{History, Transaction};
 pub use nature_region::{

@@ -1483,37 +1483,32 @@ fn point_select_in_cellmap_picks_nature_region_when_overlay_on() {
     );
 }
 
-/// [ADR-0094 追记] 双击群系格 = 泛洪选中 + **打开笔刷面板**（CellMap 编辑
-/// 段所在——格子表单 2026-10-24 迁入笔刷窗，双击把编辑框带上，不让作者
-/// 猜「编辑框在哪里」）。实体双击仍拉 Inspector（别处已锚定）。
+/// [ADR-0097] 双击群系格 = 泛洪选中 + **打开居中编辑 dialog**（群系页签
+/// ——命名流）。取代 de072a3 的「开笔刷面板」（地形编辑器段已从笔刷窗
+/// 退役，编辑框 = dialog）。实体双击仍拉 Inspector（别处已锚定）。
 #[test]
-fn double_click_on_biome_floods_and_opens_brush_panel() {
+fn double_click_on_biome_floods_and_opens_dialog_biome_tab() {
     let mut world = cellmap_world(Vec2::new(35.0, 45.0), false);
     world.insert_resource(crate::state::PointSelectState { tool_active: true });
     world.insert_resource(crate::state::CellSelection::default());
-    let mut panels = crate::state::PanelState::default();
-    panels.visible.insert(crate::state::Panel::Brush, false);
-    world.insert_resource(panels);
+    world.insert_resource(crate::ui::cell_edit_dialog::CellEditDialogState::default());
     world.insert_resource(bevy::time::Time::<()>::default());
     let mut buttons = ButtonInput::<MouseButton>::default();
     let mut schedule = Schedule::default();
     schedule.add_systems(commit_point_select_on_click);
 
-    // 第一击：泛洪，笔刷面板不动。
+    // 第一击：泛洪，dialog 不动。
     buttons.press(MouseButton::Left);
     world.insert_resource(buttons);
     schedule.run(&mut world);
     assert!(
         !world
-            .resource::<crate::state::PanelState>()
-            .visible
-            .get(&crate::state::Panel::Brush)
-            .copied()
-            .unwrap_or(false),
-        "单击不该开笔刷面板"
+            .resource::<crate::ui::cell_edit_dialog::CellEditDialogState>()
+            .open,
+        "单击不该开 dialog"
     );
 
-    // 第二击（同位同时窗）= 双击：泛洪 + 开笔刷面板。
+    // 第二击（同位同时窗）= 双击：泛洪 + 开 dialog（群系页签）。
     let mut buttons = world
         .remove_resource::<ButtonInput<MouseButton>>()
         .expect("首击按钮应已插入");
@@ -1524,15 +1519,52 @@ fn double_click_on_biome_floods_and_opens_brush_panel() {
 
     let sel = world.resource::<crate::state::CellSelection>();
     assert_eq!(sel.len(), 64, "双击照常泛洪群系");
-    let panels = world.resource::<crate::state::PanelState>();
-    assert!(
-        panels
-            .visible
-            .get(&crate::state::Panel::Brush)
-            .copied()
-            .unwrap_or(false),
-        "双击群系格应打开笔刷面板（编辑框所在）"
+    let dlg = world.resource::<crate::ui::cell_edit_dialog::CellEditDialogState>();
+    assert!(dlg.open, "双击群系格应打开编辑 dialog");
+    assert_eq!(
+        dlg.tab,
+        crate::ui::cell_edit_dialog::CellEditTab::Biome,
+        "泛洪改写选区 = 命名流页签"
     );
+}
+
+/// [ADR-0097] 选区守卫：点/双击**已选中的格**不泛洪（保护既有选区）——
+/// 圈选 N 格后双击其中一格 → dialog 开、选区原样、页签沿用（批量）。
+#[test]
+fn double_click_inside_selection_keeps_cells_and_opens_dialog() {
+    use crate::ui::cell_edit_dialog::CellEditTab;
+    let mut world = cellmap_world(Vec2::new(35.0, 45.0), false);
+    let map = wv_core::Id::new_unchecked("world_main");
+    world.insert_resource(crate::state::PointSelectState { tool_active: true });
+    // 预置选区 = 全图 64 格（圈选结果；落点 (35,45)∈格(3,4) 在其中）。
+    let mut sel = crate::state::CellSelection::default();
+    sel.bind_map(&map, 8, 8);
+    let all: Vec<(i32, i32)> = (0..8).flat_map(|y| (0..8).map(move |x| (x, y))).collect();
+    sel.replace(all);
+    world.insert_resource(sel);
+    world.insert_resource(crate::ui::cell_edit_dialog::CellEditDialogState::default());
+    world.insert_resource(bevy::time::Time::<()>::default());
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_point_select_on_click);
+
+    buttons.press(MouseButton::Left);
+    world.insert_resource(buttons);
+    schedule.run(&mut world);
+    // 第二击 = 双击（同位）。
+    let mut buttons = world
+        .remove_resource::<ButtonInput<MouseButton>>()
+        .expect("首击按钮应已插入");
+    buttons.release(MouseButton::Left);
+    buttons.press(MouseButton::Left);
+    world.insert_resource(buttons);
+    schedule.run(&mut world);
+
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert_eq!(sel.len(), 64, "点已选中的格不泛洪——选区必须原样保留");
+    let dlg = world.resource::<crate::ui::cell_edit_dialog::CellEditDialogState>();
+    assert!(dlg.open, "双击已选格应打开 dialog");
+    assert_eq!(dlg.tab, CellEditTab::Batch, "N 格沿用上次页签（缺省批量）");
 }
 
 /// [ADR-0094] 群系兜底：群系区实体**存在但 overlay 关**（看不见的实体

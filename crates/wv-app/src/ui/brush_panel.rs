@@ -61,13 +61,11 @@ pub fn panel_brush(
         ResMut<crate::state::ViewState>,
     ),
     (mut notice, time, current_loc): (ResMut<ShellNotice>, Res<Time>, Res<CurrentLocale>),
-    // ── CellMap 编辑段（2026-10-24 自 Inspector 迁入）──
-    // 第三个是统一选区（ADR-0057：Cell 表单的唯一编辑对象，可写——批量区
-    // 「取消」按钮 = 清空选区）；第四个是点选工具激活态；第五个是圈选环境
-    // （ADR-0090 D3：泛洪判据段跟随圈选「单格」形状显示——点选已不再碰格子）。
-    (mut edit_cell, mut cell_sel, _point_select, select_env): (
-        ResMut<wv_render::state::EditCellState>,
-        ResMut<wv_render::state::CellSelection>,
+    // ── CellMap 工具参数段（ADR-0097 后：只剩落笔表单 + 泛洪判据）──
+    // 地形编辑（单格/批量/群系命名）全走双击的居中编辑 dialog；统一选区、
+    // 派生运算、「生成大陆」入口随 cell_form 退役出本面板（dialog 承接）。
+    (edit_cell, _point_select, select_env): (
+        Res<wv_render::state::EditCellState>,
         // 点选态仍保留在元组里：判据段显示曾挂在它身上（ADR-0086），ADR-0090
         // D3 后判据段改随圈选「单格」形状（select_env）；留参数免再动装配。
         Res<crate::state::PointSelectState>,
@@ -75,10 +73,6 @@ pub fn panel_brush(
     ),
     mut paint_session: ResMut<wv_world_cell_map::cell_paint::CellPaintSession>,
     mut flood_select: ResMut<crate::state::FloodSelectState>,
-    mut derived: ResMut<crate::edit::derived_op::DerivedOpRequest>,
-    // 批量区「生成大陆」按钮的目标面板（2026-10-26）——只置 open，确认
-    // 提交在 continent_dialog_system（§3.3：UI 不碰 History 的例外同款）。
-    mut continent: ResMut<crate::ui::ContinentDialog>,
     // 自然区划分段（ADR-0082）：CellMap 里的自然蛋糕编辑开关。
     mut partition_edit: ResMut<crate::ui::partition_pen::PartitionEditState>,
 ) {
@@ -229,33 +223,31 @@ pub fn panel_brush(
             let flood_criterion_scope = select_env.enabled
                 && select_env.shape == wv_render::state::SelectionShape::Cell
                 && view.mode == wv_render::state::ViewMode::Topographic;
-            let cell_seg_active = paint_tool_active
-                || paint_scope
-                || flood_criterion_scope
-                || (view.mode == wv_render::state::ViewMode::Topographic && !cell_sel.is_empty());
+            // ADR-0097：地形编辑（单格/批量/群系命名）全走双击的居中编辑
+            // dialog——本面板只剩**工具参数**两段（EditCell 落笔表单 + 泛洪
+            // 判据）。选区非空/圈选单格不再触发任何段。
+            let cell_seg_active = paint_tool_active || paint_scope || flood_criterion_scope;
             if cell_seg_active {
                 ui.add_space(space::SM);
                 ui.separator();
                 ui.add_space(space::XS);
 
-                crate::ui::inspector::cell::cell_form(
-                    ui,
-                    &shell,
-                    &mut projection,
-                    &mut edit_cell,
-                    &mut edit,
-                    &mut tex,
-                    current_loc.0,
-                    &mut paint_session,
-                    &mut flood_select,
-                    &mut derived,
-                    &mut continent,
-                    playback.playing,
-                    &mut cell_sel,
-                    drill.current(),
-                    paint_scope,
-                    flood_criterion_scope,
-                );
+                if paint_scope {
+                    crate::ui::inspector::cell_paint_panel::render_paint_fields(
+                        ui,
+                        &shell,
+                        &mut paint_session,
+                        current_loc.0,
+                    );
+                }
+                if flood_criterion_scope {
+                    crate::ui::inspector::cell_paint_panel::render_flood_criterion_section(
+                        ui,
+                        &shell,
+                        &mut flood_select,
+                        current_loc.0,
+                    );
+                }
             }
         },
     );
