@@ -38,7 +38,7 @@ const SHOT_TIMEOUT_SECS: u64 = 10;
 // 工具 schema（tools/list）
 // ---------------------------------------------------------------------------
 
-/// UI 操控 4 工具的 schema。`tools/list` 直接喂给 LLM（ADR-0078 §2）。
+/// UI 操控 6 工具的 schema（ADR-0095/0096 后：面板开关词表由 Panel::ALL 驱动，新增合成输入与地图工具）。`tools/list` 直接喂给 LLM（ADR-0078 §2）。
 pub fn ui_tool_schemas() -> Vec<(&'static str, &'static str, Value)> {
     vec![
         (
@@ -71,6 +71,43 @@ pub fn ui_tool_schemas() -> Vec<(&'static str, &'static str, Value)> {
                 "properties": {
                     "panel": {"type": "string", "description": "面板名（snake_case）"},
                     "visible": {"type": "boolean", "description": "true=开 false=关"}
+                },
+                "additionalProperties": false,
+            }),
+        ),
+        (
+            "enqueue_ui_input",
+            "向 GUI 注入合成输入（ADR-0096，AI 自驱验收用）：事件按序入队、主帧每帧消费一个。op=down/up 为左键按下/抬起（x,y=世界坐标，根图帧）；op=key 配 key=escape（清选区）。两次独立调用 down+down（同坐标）即成双击；down 后隔若干 down 前先 up = 拖动。返回当前 UI 快照。",
+            json!({
+                "type": "object",
+                "required": ["events"],
+                "properties": {
+                    "events": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["op"],
+                            "properties": {
+                                "op": {"type": "string", "description": "down|up|key"},
+                                "x": {"type": "number", "description": "世界坐标 x（down/up 必填）"},
+                                "y": {"type": "number", "description": "世界坐标 y（down/up 必填）"},
+                                "key": {"type": "string", "description": "escape（op=key 时）"}
+                            },
+                            "additionalProperties": false
+                        }
+                    }
+                },
+                "additionalProperties": false,
+            }),
+        ),
+        (
+            "set_map_tool",
+            "切换地图工具（等价点工具条瓷砖）：point-select=点选、select-rect/polygon/ellipse/cell=圈选四形状、pan、brush=笔刷、eraser、edit-cell=单格编辑、boundary=分界线、landmark=地标放置、measure-*。走与 UI 同一条 SelectMapTool 通路（互斥全关/面板联动一致）。返回切换后的 UI 快照。",
+            json!({
+                "type": "object",
+                "required": ["tool"],
+                "properties": {
+                    "tool": {"type": "string", "description": "point-select|select-rect|select-polygon|select-ellipse|select-cell|pan|brush|eraser|edit-cell|boundary|landmark|measure-line|measure-rect|measure-eraser"}
                 },
                 "additionalProperties": false,
             }),
@@ -119,6 +156,52 @@ pub fn panel_word(p: Panel) -> &'static str {
     }
 }
 
+/// 地图工具词表（ADR-0096）：HTTP 词 → [`MapToolId`]。
+/// `LinePoi(kind)` 不入表——它带类别载荷，验收脚本用不到（面板里点选即可）。
+pub fn parse_map_tool(raw: &str) -> Option<crate::ui_command_palette::MapToolId> {
+    use crate::ui_command_palette::MapToolId;
+    use wv_render::state::SelectionShape;
+    let norm = raw.trim().to_ascii_lowercase();
+    let id = match norm.as_str() {
+        "select-rect" | "rect" => MapToolId::Select(SelectionShape::Rect),
+        "select-polygon" | "polygon" => MapToolId::Select(SelectionShape::Polygon),
+        "select-ellipse" | "ellipse" => MapToolId::Select(SelectionShape::Ellipse),
+        "select-cell" | "cell" => MapToolId::Select(SelectionShape::Cell),
+        "pan" => MapToolId::Pan,
+        "brush" => MapToolId::Brush,
+        "eraser" | "brush-erase" => MapToolId::BrushErase,
+        "measure-line" => MapToolId::MeasureLine,
+        "measure-rect" => MapToolId::MeasureRect,
+        "measure-eraser" => MapToolId::MeasureEraser,
+        "edit-cell" => MapToolId::EditCell,
+        "point-select" | "select" => MapToolId::PointSelect,
+        "boundary" | "biome-boundary" => MapToolId::BiomeBoundary,
+        "landmark" => MapToolId::Landmark,
+        _ => return None,
+    };
+    Some(id)
+}
+
+/// 地图工具词表（回执提示 / SKILL 文档用）。
+pub fn map_tool_vocab() -> Vec<&'static str> {
+    vec![
+        "select-rect",
+        "select-polygon",
+        "select-ellipse",
+        "select-cell",
+        "pan",
+        "brush",
+        "eraser",
+        "measure-line",
+        "measure-rect",
+        "measure-eraser",
+        "edit-cell",
+        "point-select",
+        "boundary",
+        "landmark",
+    ]
+}
+
 /// 用户可见面板词表（= [`Panel::ALL`] 顺序，菜单同序）。
 pub fn panel_vocab() -> Vec<&'static str> {
     Panel::ALL.iter().map(|p| panel_word(*p)).collect()
@@ -164,6 +247,12 @@ pub fn handle_ui_request(
     panels: &mut crate::state::PanelState,
 ) -> Option<UiReply> {
     match req {
+        // ADR-0096：这两类要 World 侧资源（合成队列 / 命令面板），处理在
+        // `http_integration::drain_http_commands` 的 ui_hook——到达本纯函数
+        // 即内部路由错误（与 Screenshot 同款例外，注释见模块头）。
+        UiRequest::EnqueueInput { .. } | UiRequest::SetMapTool { .. } => {
+            Some(UiReply::Error("内部错误：输入/工具请求应走 drain 侧处理".into()))
+        }
         UiRequest::GetState => Some(UiReply::State(ui_snapshot(view, panels))),
         UiRequest::SetViewMode { mode } => match parse_view_mode(&mode) {
             Some(m) => {
@@ -285,6 +374,25 @@ pub async fn dispatch_ui(
                 visible: inp.visible,
             }
         }
+        "enqueue_ui_input" => {
+            #[derive(serde::Deserialize)]
+            struct In {
+                events: Vec<crate::http::bridge::SyntheticEventDto>,
+            }
+            let inp: In = serde_json::from_value(args).map_err(|e| {
+                JsonRpcError::invalid_params(format!("enqueue_ui_input 参数非法: {e}"))
+            })?;
+            UiRequest::EnqueueInput { events: inp.events }
+        }
+        "set_map_tool" => {
+            #[derive(serde::Deserialize)]
+            struct In {
+                tool: String,
+            }
+            let inp: In = serde_json::from_value(args)
+                .map_err(|e| JsonRpcError::invalid_params(format!("set_map_tool 参数非法: {e}")))?;
+            UiRequest::SetMapTool { tool: inp.tool }
+        }
         "screenshot" => {
             #[derive(serde::Deserialize)]
             struct In {
@@ -381,10 +489,11 @@ mod tests {
         assert!(panel_vocab().contains(&"brush"));
         assert!(panel_vocab().contains(&"map_tree"));
         assert!(panel_vocab().contains(&"line_poi"));
-        // 页签变体不进词表（点了没反应的死项，ADR-0078 D6）
+        // 页签变体不进词表（点了没反应的死项，ADR-0078 D6）。
         assert!(!panel_vocab().contains(&"cell_editor"));
-        assert!(!panel_vocab().contains(&"faction"));
-        assert!(!panel_vocab().contains(&"situation"));
+        // ADR-0095：faction / situation 复辟为独立浮窗，词表随之收编。
+        assert!(panel_vocab().contains(&"faction"));
+        assert!(panel_vocab().contains(&"situation"));
     }
 
     #[test]

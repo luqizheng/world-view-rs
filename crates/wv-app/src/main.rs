@@ -707,6 +707,8 @@ mod skill_tests {
             "get_ui_state",
             "set_view_mode",
             "set_panel_visible",
+            "enqueue_ui_input",
+            "set_map_tool",
             "screenshot",
         ] {
             assert!(

@@ -98,6 +98,13 @@ pub(super) fn register(app: &mut App) {
                     wv_render::perf_timed!("camera_pan_keys", camera::camera_pan_keys),
                     wv_render::perf_timed!("brush_radius_scroll", camera::brush_radius_scroll),
                     wv_render::perf_timed!("track_cursor_world", camera::track_cursor_world),
+                    // 合成输入（ADR-0096）：HTTP 工具面注入的点击/按键，每帧
+                    // 至多消费一个——必须晚于光标换算（覆盖它）、早于一切
+                    // just_pressed 消费方（选择 / 笔触 / 手势）。
+                    wv_render::perf_timed!(
+                        "apply_synthetic_input",
+                        crate::ui_shell::synthetic_input::apply_synthetic_input
+                    ),
                     wv_render::perf_timed!("collect_brush_stroke", camera::collect_brush_stroke),
                     // 编辑（笔触 → 命令 → History）
                     wv_render::perf_timed!(

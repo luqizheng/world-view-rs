@@ -249,7 +249,7 @@ mod tests {
     /// 都会被这条用例捕到。生产路径的端口绑定走 `start_mcp_server`，
     /// 已在另外的测试覆盖（绑定失败 stderr + 退出）。
     #[tokio::test]
-    async fn end_to_end_post_mcp_tools_list_returns_fifteen_skills() {
+    async fn end_to_end_post_mcp_tools_list_returns_all_skills() {
         use axum::body::Body;
         use axum::http::{Request, StatusCode};
         use tower::util::ServiceExt;
@@ -295,8 +295,8 @@ mod tests {
         let tools = resp["result"]["tools"].as_array().unwrap();
         assert_eq!(
             tools.len(),
-            15,
-            "应暴露 15 个 skill（9 数据 + 4 UI + 2 命名）"
+            17,
+            "应暴露 17 个 skill（9 数据 + 6 UI + 2 命名；ADR-0096 增合成输入与切工具）"
         );
 
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -317,6 +317,8 @@ mod tests {
                 "get_ui_state",
                 "set_view_mode",
                 "set_panel_visible",
+                "enqueue_ui_input",
+                "set_map_tool",
                 "screenshot",
             ]
         );
@@ -474,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_fifteen_tools() {
+    fn tools_list_returns_all_tools() {
         let (state, _rx) = app_state();
         let (_status, AxJson(resp)) = rt().block_on(mcp_handler(
             State(state.clone()),
@@ -488,7 +490,7 @@ mod tests {
         assert!(resp.result.is_some());
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().unwrap().clone();
-        assert_eq!(tools.len(), 15);
+        assert_eq!(tools.len(), 17);
     }
 
     #[test]

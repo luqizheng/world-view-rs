@@ -52,6 +52,7 @@ mod project_load;
 pub mod property_window;
 mod session_marker;
 mod shell;
+pub mod synthetic_input;
 #[cfg(test)]
 mod tests;
 

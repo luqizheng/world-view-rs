@@ -49,6 +49,27 @@ pub enum UiRequest {
     SetPanelVisible { panel: String, visible: bool },
     /// 截图。`save_to` 缺省落 OS 临时目录 `wv-screenshots/`。
     Screenshot { save_to: Option<String> },
+    /// 合成输入（ADR-0096）：事件按序入队，主帧每帧消费一个。
+    /// 坐标 = 根图帧世界坐标。`down` 与 `up` 分开入队 = 拖动手势。
+    EnqueueInput { events: Vec<SyntheticEventDto> },
+    /// 切地图工具（词表见 skills::ui::parse_map_tool）。走命令面板既有的
+    /// `SelectMapTool` 通路（互斥全关 / 面板联动零重复实现）。
+    SetMapTool { tool: String },
+}
+
+/// 合成输入事件（HTTP DTO；坐标 = 根图帧世界坐标）。
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct SyntheticEventDto {
+    /// `down` / `up` / `key`。
+    pub op: String,
+    /// 世界坐标（down / up 必填）。
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    /// 键名（op = `key` 时必填；当前只收 `escape`）。
+    #[serde(default)]
+    pub key: String,
 }
 
 /// UI 操控回执（ADR-0078 §3.1）。

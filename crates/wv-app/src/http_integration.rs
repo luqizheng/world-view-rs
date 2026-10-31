@@ -355,6 +355,9 @@ pub fn drain_http_commands(
     mut panels: ResMut<PanelState>,
     mut commands: Commands,
     mut pending: ResMut<PendingShots>,
+    // 合成输入（ADR-0096）：队列入队 + 命令面板借道 SelectMapTool。
+    mut synthetic: ResMut<crate::ui_shell::synthetic_input::SyntheticInputQueue>,
+    mut palette: ResMut<crate::ui_command_palette::CommandPalette>,
 ) {
     // 把 save_dir 拷成 owned，先结束 `projection.project_dir` 的不可变借用，
     // 然后才能用 `&mut projection.world`（§3.3）。
@@ -367,6 +370,34 @@ pub fn drain_http_commands(
         UiRequest::Screenshot { save_to } => {
             begin_screenshot(save_to.as_deref(), &mut commands, &mut pending, reply_tx);
         }
+        // 合成输入（ADR-0096）：入队即回执（消费在 apply_synthetic_input，
+        // 每帧一个——调用方要发「两击成双击」就分两次 HTTP 调用）。
+        UiRequest::EnqueueInput { events } => {
+            for ev in events {
+                match crate::ui_shell::synthetic_input::SyntheticEvent::try_from(ev) {
+                    Ok(ev) => synthetic.push(ev),
+                    Err(e) => {
+                        let _ = reply_tx.send(UiReply::Error(e));
+                        return;
+                    }
+                }
+            }
+            let _ = reply_tx.send(UiReply::State(ui::ui_snapshot(&view, &panels)));
+        }
+        // 切地图工具（ADR-0096）：借用命令面板既有 SelectMapTool 通路
+        // （apply_pending_commands 消费，互斥全关 / 面板联动零重复实现）。
+        UiRequest::SetMapTool { tool } => match ui::parse_map_tool(&tool) {
+            Some(id) => {
+                palette.pending = Some(crate::ui_command_palette::CommandId::SelectMapTool(id));
+                let _ = reply_tx.send(UiReply::State(ui::ui_snapshot(&view, &panels)));
+            }
+            None => {
+                let _ = reply_tx.send(UiReply::Error(format!(
+                    "未知地图工具 `{tool}`；合法词表：{}",
+                    ui::map_tool_vocab().join(" / ")
+                )));
+            }
+        },
         other => {
             let reply = ui::handle_ui_request(other, &mut view, &mut panels)
                 .unwrap_or_else(|| UiReply::Error("内部错误：非截图请求无回执".into()));

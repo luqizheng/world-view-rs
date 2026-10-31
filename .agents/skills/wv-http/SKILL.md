@@ -50,10 +50,12 @@ curl -s http://127.0.0.1:8732/mcp \
 | 数据读 | `list_maps` `get_map` `list_places` `get_place` `get_state_at_time` | 查地图树 / 图层与 comment / 地点 / 某天投影 |
 | 数据写 | `create_map` `create_place` `undo` `save_project` | 建图 / 建点 / 撤销 / 保存（写操作落盘前记得 `save_project`） |
 | UI 操控 | `get_ui_state` `set_view_mode` `set_panel_visible` `screenshot` | UI 快照 / 切视图 / 开关面板 / 截图 |
+| 合成输入（ADR-0096） | `enqueue_ui_input` `set_map_tool` | 注入点击/抬起/Esc（世界坐标，每帧消费一个）；切地图工具 |
 | 自然区命名 | `get_naming_context` `set_nature_names` | 取工程与图的 comment + 自然脸清单 / 批量写回名字 |
 
 - `set_view_mode` 词表：`browse` `map` `cellmap` `faction` `realterrain` `event` `coastline`。
-- `set_panel_visible` 词表 = UI 面板菜单里的 12 个面板名（snake_case）。
+- `set_panel_visible` 词表 = UI 面板菜单里的面板名（snake_case，ADR-0095 后含 faction / situation 共 14 个）。
+- **自驱验收（ADR-0096）**：`enqueue_ui_input` 注入合成点击（世界坐标 = 根图帧；两次独立调用同坐标 down 即双击），`set_map_tool` 切工具（point-select / select-* / brush / edit-cell…）——配合 `screenshot`（GPU 回读，被别的窗口挡住也不影响）即可全程无人值守验收。
 - 各工具入参 schema 以 `tools/list` 返回为准（有 `additionalProperties: false`，别猜字段）。
 
 ## 省 token 的用法（本 skill 存在的理由）
